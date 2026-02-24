@@ -83,47 +83,79 @@ export interface AsinCatalogResult {
 }
 
 export async function getPricing(asin: string): Promise<AsinPricingResult> {
+  let lowestFbaPrice: number | null = null;
+  let buyBoxPrice: number | null = null;
+  let lowestPrice: number | null = null;
+  let numberOfSellers: number | null = null;
+
   try {
-    const data = await spApiGet("/products/pricing/v0/competitivePrice", {
+    const offersData = await spApiGet(`/products/pricing/v0/items/${asin}/offers`, {
       MarketplaceId: "ATVPDKIKX0DER",
-      Asins: asin,
-      ItemType: "Asin",
+      ItemCondition: "New",
     });
 
-    let buyBoxPrice: number | null = null;
-    let lowestPrice: number | null = null;
-    let lowestFbaPrice: number | null = null;
-    let numberOfSellers: number | null = null;
-
-    const product = data?.payload?.[0]?.Product;
-    if (product) {
-      const competitivePrices = product.CompetitivePricing?.CompetitivePrices || [];
-      for (const cp of competitivePrices) {
-        const amount = cp.Price?.LandedPrice?.Amount ?? cp.Price?.ListingPrice?.Amount;
-        if (amount != null) {
-          const price = parseFloat(amount);
-          if (cp.CompetitivePriceId === "1") {
-            buyBoxPrice = price;
-          }
-          if (lowestPrice === null || price < lowestPrice) {
-            lowestPrice = price;
+    const summary = offersData?.payload?.Summary;
+    if (summary) {
+      if (summary.BuyBoxPrices) {
+        for (const bp of summary.BuyBoxPrices) {
+          if (bp.condition === "New") {
+            const amt = parseFloat(bp.LandedPrice?.Amount);
+            if (!isNaN(amt)) buyBoxPrice = amt;
           }
         }
-        if (cp.condition === "New" && cp.belongsToRequester === false) {
-          const amt = cp.Price?.LandedPrice?.Amount;
-          if (amt != null) {
-            const p = parseFloat(amt);
-            if (lowestFbaPrice === null || p < lowestFbaPrice) {
-              lowestFbaPrice = p;
+      }
+
+      if (summary.LowestPrices) {
+        for (const lp of summary.LowestPrices) {
+          const amt = parseFloat(lp.LandedPrice?.Amount);
+          if (!isNaN(amt)) {
+            if (lp.fulfillmentChannel === "Amazon") {
+              if (lowestFbaPrice === null || amt < lowestFbaPrice) {
+                lowestFbaPrice = amt;
+              }
+            }
+            if (lowestPrice === null || amt < lowestPrice) {
+              lowestPrice = amt;
             }
           }
         }
       }
 
-      const offerCount = product.CompetitivePricing?.NumberOfOfferListings || [];
-      for (const oc of offerCount) {
-        if (oc.condition === "New") {
-          numberOfSellers = parseInt(oc.Value) || null;
+      if (summary.TotalOfferCount != null) {
+        numberOfSellers = summary.TotalOfferCount;
+      } else if (summary.NumberOfOffers) {
+        let total = 0;
+        for (const entry of summary.NumberOfOffers) {
+          if (entry.condition === "New" || entry.Condition === "New") {
+            total += parseInt(entry.OfferCount ?? entry.Value ?? "0") || 0;
+          }
+        }
+        if (total > 0) numberOfSellers = total;
+      }
+    }
+
+    const offers = offersData?.payload?.Offers;
+    if (offers && Array.isArray(offers)) {
+      if (numberOfSellers === null) {
+        numberOfSellers = offers.length;
+      }
+
+      for (const offer of offers) {
+        const amt = parseFloat(offer.ListingPrice?.Amount);
+        if (isNaN(amt)) continue;
+        const shipping = parseFloat(offer.Shipping?.Amount) || 0;
+        const landed = amt + shipping;
+
+        if (offer.IsFulfilledByAmazon === true || offer.FulfillmentChannel === "Amazon") {
+          if (lowestFbaPrice === null || landed < lowestFbaPrice) {
+            lowestFbaPrice = landed;
+          }
+        }
+        if (lowestPrice === null || landed < lowestPrice) {
+          lowestPrice = landed;
+        }
+        if (offer.IsBuyBoxWinner === true && buyBoxPrice === null) {
+          buyBoxPrice = landed;
         }
       }
     }
@@ -137,43 +169,40 @@ export async function getPricing(asin: string): Promise<AsinPricingResult> {
       numberOfSellers,
     };
   } catch (err: any) {
-    log(`Pricing API error for ${asin}: ${err.message}`, "sp-api");
+    log(`Offers API error for ${asin}: ${err.message}`, "sp-api");
+
     try {
-      const offersData = await spApiGet(`/products/pricing/v0/items/${asin}/offers`, {
+      const data = await spApiGet("/products/pricing/v0/competitivePrice", {
         MarketplaceId: "ATVPDKIKX0DER",
-        ItemCondition: "New",
+        Asins: asin,
+        ItemType: "Asin",
       });
 
-      let lowestFbaPrice: number | null = null;
-      let buyBoxPrice: number | null = null;
-      let lowestPrice: number | null = null;
-      let numberOfSellers: number | null = null;
+      const product = data?.payload?.[0]?.Product;
+      if (product) {
+        const competitivePrices = product.CompetitivePricing?.CompetitivePrices || [];
+        for (const cp of competitivePrices) {
+          const amount = cp.Price?.LandedPrice?.Amount ?? cp.Price?.ListingPrice?.Amount;
+          if (amount != null) {
+            const price = parseFloat(amount);
+            if (cp.CompetitivePriceId === "1") {
+              buyBoxPrice = price;
+            }
+            if (lowestPrice === null || price < lowestPrice) {
+              lowestPrice = price;
+            }
+          }
+        }
 
-      const summary = offersData?.payload?.Summary;
-      if (summary) {
-        if (summary.BuyBoxPrices) {
-          for (const bp of summary.BuyBoxPrices) {
-            if (bp.condition === "New") {
-              buyBoxPrice = parseFloat(bp.LandedPrice?.Amount) || null;
-            }
+        const offerListings = product.CompetitivePricing?.NumberOfOfferListings || [];
+        let total = 0;
+        for (const oc of offerListings) {
+          const cond = oc.condition || oc.Condition || "";
+          if (cond === "New" || cond === "new" || cond === "Any" || cond === "any" || cond === "") {
+            total += parseInt(oc.Value ?? oc.OfferListingCount ?? "0") || 0;
           }
         }
-        if (summary.LowestPrices) {
-          for (const lp of summary.LowestPrices) {
-            const amt = parseFloat(lp.LandedPrice?.Amount);
-            if (!isNaN(amt)) {
-              if (lp.fulfillmentChannel === "Amazon") {
-                if (lowestFbaPrice === null || amt < lowestFbaPrice) {
-                  lowestFbaPrice = amt;
-                }
-              }
-              if (lowestPrice === null || amt < lowestPrice) {
-                lowestPrice = amt;
-              }
-            }
-          }
-        }
-        numberOfSellers = summary.TotalOfferCount ?? null;
+        if (total > 0) numberOfSellers = total;
       }
 
       return {
@@ -185,7 +214,7 @@ export async function getPricing(asin: string): Promise<AsinPricingResult> {
         numberOfSellers,
       };
     } catch (innerErr: any) {
-      log(`Offers API fallback also failed for ${asin}: ${innerErr.message}`, "sp-api");
+      log(`Competitive Pricing fallback also failed for ${asin}: ${innerErr.message}`, "sp-api");
       return {
         lowestFbaPrice: null,
         buyBoxPrice: null,
