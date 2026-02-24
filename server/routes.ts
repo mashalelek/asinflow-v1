@@ -58,6 +58,22 @@ export async function registerRoutes(
   app: Express
 ): Promise<Server> {
 
+  app.post("/api/verify-password", (req: Request, res: Response) => {
+    const { password } = req.body as { password: string };
+    const appPassword = process.env.APP_PASSWORD;
+
+    if (!appPassword) {
+      res.json({ valid: true });
+      return;
+    }
+
+    if (password === appPassword) {
+      res.json({ valid: true });
+    } else {
+      res.status(401).json({ valid: false, message: "Incorrect password" });
+    }
+  });
+
   app.get("/api/credentials-status", (_req: Request, res: Response) => {
     const configured = !!(
       process.env.SP_API_CLIENT_ID &&
