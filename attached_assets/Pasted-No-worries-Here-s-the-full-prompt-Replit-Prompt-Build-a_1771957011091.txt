@@ -1,0 +1,150 @@
+No worries! Here's the full prompt:
+
+---
+
+## Replit Prompt
+
+Build a full-stack Amazon FBA profitability analyzer web app with the following specifications:
+
+---
+
+### Stack
+- **Frontend:** React (with Tailwind CSS, dark mode theme)
+- **Backend:** Node.js / Express
+- **File parsing:** `xlsx` and `papaparse` libraries
+- **Amazon data:** Amazon SP-API (US marketplace — `ASIN1`)
+
+---
+
+### Core Features
+
+#### 1. CSV/Excel Upload
+- Allow the user to upload a `.csv` or `.xlsx` file with exactly 2 columns: `ASIN` and `COGS`
+- Parse the file on the backend and extract the ASIN list
+
+#### 2. SP-API Integration
+For each ASIN, call the following SP-API endpoints:
+- **Pricing API** (`getItemOffers` or `getCompetitivePricing`) to retrieve:
+  - Lowest FBA price
+  - Buy Box price
+  - Lowest overall price
+  - Number of sellers
+- **Product Fees API** (`getMyFeesEstimate`) to retrieve:
+  - FBA fulfillment fee
+  - Referral fee
+- **Catalog Items API** to retrieve:
+  - Item weight in lbs (used for inbound shipping cost calculation)
+
+**Price selection logic (in this order):**
+- User can toggle between **Lowest FBA Price** (default) and **Buy Box Price**
+- If the selected price is unavailable, automatically fall back to **Lowest Price**
+- If Lowest Price is unavailable (no sellers on listing), fall back to **30-day average price**
+- If 30-day average is unavailable, fall back to **90-day average price**
+- If none are available, display `"Not Available"` for that row and skip calculations
+
+#### 3. Profit Calculation (SellerAmp-style)
+```
+Profit = Sale Price
+       − COGS (from uploaded file)
+       − FBA Fulfillment Fee (from SP-API)
+       − Referral Fee (from SP-API)
+       − Inbound Shipping Cost (item weight lbs × inbound $/lb from Settings)
+       − Prep Cost (flat $ per unit from Settings)
+       − Storage Fee (flat $ per unit from Settings)
+
+ROI             = (Profit ÷ COGS) × 100
+Profit Margin   = (Profit ÷ Sale Price) × 100
+Profit per Unit = Profit
+```
+
+---
+
+### Settings Panel
+Build a persistent Settings panel accessible via a gear icon (⚙) in the top navigation. Settings should be saved to `localStorage` so they persist between sessions.
+
+| Setting | Default Value |
+|---|---|
+| Inbound Shipping Cost | $0.50 / lb |
+| Prep Cost | $0.00 / unit |
+| Storage Fee | $0.00 / unit |
+| Minimum ROI threshold | 15% |
+| Minimum Profit Margin threshold | 10% |
+| SP-API Client ID | (user enters) |
+| SP-API Client Secret | (user enters) |
+| SP-API Refresh Token | (user enters) |
+| SP-API Seller ID | (user enters) |
+
+SP-API credentials should be stored securely as environment variables in Replit (`.env`), not in `localStorage`. In the Settings panel, show a field for each credential with a note: *"Store this in your Replit Secrets tab as `SP_API_CLIENT_ID`, etc."*
+
+---
+
+### Output Table
+Display results in a styled dark-mode data table with the following columns:
+
+| Column | Notes |
+|---|---|
+| ASIN | Clickable link to amazon.com/dp/ASIN |
+| COGS | From uploaded file |
+| Sale Price | Price used for calculation, with label showing which source was used (e.g. "Buy Box", "Lowest FBA", "30d Avg") |
+| FBA Fee | From SP-API |
+| Referral Fee | From SP-API |
+| Inbound Shipping | Calculated |
+| Prep Cost | From Settings |
+| Storage Fee | From Settings |
+| Profit per Unit | Calculated |
+| Profit Margin | Calculated, shown as % |
+| ROI | Calculated, shown as % |
+| # of Sellers | From SP-API |
+
+**Conditional row highlighting:**
+- 🟢 Green row: ROI ≥ minimum ROI threshold AND Margin ≥ minimum margin threshold
+- 🔴 Red row: ROI < minimum ROI threshold OR Margin < minimum margin threshold
+- ⚪ Gray / muted row: Sale price is "Not Available"
+
+---
+
+### Price Toggle
+Add a toggle switch at the top of the results table (or above it) labeled:
+**"Price Source: [Lowest FBA] / [Buy Box]"**
+- Switching the toggle should instantly recalculate all rows using the newly selected price source without re-fetching from the API (cache both values per ASIN)
+
+---
+
+### Export Options
+Add two buttons above the results table:
+- **Download CSV** — exports all result rows as a `.csv` file
+- **Download Excel** — exports all result rows as a `.xlsx` file using the `xlsx` library
+
+---
+
+### Error Handling
+- If SP-API returns an error for a specific ASIN, display the error message in that row rather than crashing the whole batch
+- Show a progress indicator (e.g. "Fetching 24 of 100 ASINs...") while the batch is being processed
+- Rate limit SP-API calls to avoid throttling — process ASINs in batches of 10 with a 1-second delay between batches
+
+---
+
+### File & Folder Structure
+```
+/client          → React frontend
+/server          → Express backend
+/server/.env     → SP-API credentials (never committed to git)
+.gitignore       → include .env
+```
+
+---
+
+### Notes for Replit Agent
+- Use `dotenv` on the backend to load SP-API credentials from `.env`
+- Use `amazon-sp-api` npm package for SP-API calls if available, otherwise implement OAuth 2.0 token refresh manually using `axios`
+- The app is for internal use only — no authentication layer needed for now
+- Make sure CORS is configured so the React frontend can call the Express backend
+- Use `concurrently` to run both frontend and backend from a single `npm start` command
+
+---
+
+That should give Replit's agent everything it needs to build the full app in one shot. A few tips when you paste this in:
+
+1. **Add your SP-API credentials to Replit Secrets** (the lock icon in the left sidebar) using the exact key names referenced in the prompt before running the app.
+2. **If the agent gets stuck on SP-API auth**, ask it specifically: *"Implement SP-API OAuth 2.0 LWA token refresh using axios, using the Client ID, Client Secret, and Refresh Token from environment variables."*
+3. **Test with a small file first** (5–10 ASINs) to make sure pricing and fee calculations look right before running a large batch.
