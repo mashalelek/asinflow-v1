@@ -91,6 +91,22 @@ export function SettingsDialog({ onSettingsChange }: SettingsDialogProps) {
                   data-testid="input-storage-fee"
                 />
               </div>
+              <div className="flex items-center justify-between gap-4">
+                <div>
+                  <Label htmlFor="lowInv" className="text-sm whitespace-nowrap">Low-Inventory Surcharge ($/unit)</Label>
+                  <p className="text-[10px] text-muted-foreground mt-0.5">Amazon flat fee not included in SP-API</p>
+                </div>
+                <Input
+                  id="lowInv"
+                  type="number"
+                  step="0.01"
+                  min="0"
+                  value={settings.lowInventorySurcharge}
+                  onChange={(e) => updateField("lowInventorySurcharge", e.target.value)}
+                  className="w-28 text-right"
+                  data-testid="input-low-inventory-surcharge"
+                />
+              </div>
             </div>
           </div>
 

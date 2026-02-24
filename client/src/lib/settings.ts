@@ -6,6 +6,7 @@ export const defaultSettings: Settings = {
   inboundShippingCost: 0.5,
   prepCost: 0,
   storageFee: 0,
+  lowInventorySurcharge: 0.26,
   minRoiThreshold: 15,
   minMarginThreshold: 10,
 };

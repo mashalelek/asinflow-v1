@@ -21,7 +21,7 @@ function buildExportData(results: AsinResult[], priceSource: PriceSource, settin
     const { price, label } = getSelectedPrice(r, priceSource);
     const prep = getEffectivePrep(r, settings);
     const storage = getEffectiveStorage(r, settings);
-    let profit = null, roi = null, margin = null, inboundShipping = null;
+    let profit = null, roi = null, margin = null, inboundShipping = null, totalFbaFee: number | null = null;
 
     let adjustedReferralFee: number | null = r.feesData.referralFee;
     if (price != null && !r.error) {
@@ -40,6 +40,7 @@ function buildExportData(results: AsinResult[], priceSource: PriceSource, settin
       margin = calc.margin;
       inboundShipping = calc.inboundShipping;
       adjustedReferralFee = calc.adjustedReferralFee;
+      totalFbaFee = calc.totalFbaFee;
     }
 
     return {
@@ -51,7 +52,7 @@ function buildExportData(results: AsinResult[], priceSource: PriceSource, settin
       "Profit per Unit": profit != null ? profit.toFixed(2) : "N/A",
       "Profit Margin (%)": margin != null ? margin.toFixed(1) : "N/A",
       "ROI (%)": roi != null ? roi.toFixed(1) : "N/A",
-      "FBA Fee": r.feesData.fbaFulfillmentFee ?? "N/A",
+      "FBA Fee": totalFbaFee ?? (r.feesData.fbaFulfillmentFee ?? "N/A"),
       "Referral Fee": adjustedReferralFee ?? "N/A",
       "Inbound Shipping": inboundShipping ?? "N/A",
       "Prep Cost": prep.value,

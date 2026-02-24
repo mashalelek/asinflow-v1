@@ -74,7 +74,7 @@ function getRowValue(
     case "profit": return profitData?.profit ?? null;
     case "margin": return profitData?.margin ?? null;
     case "roi": return profitData?.roi ?? null;
-    case "fbaFee": return result.feesData.fbaFulfillmentFee;
+    case "fbaFee": return profitData?.totalFbaFee ?? result.feesData.fbaFulfillmentFee;
     case "referralFee": return profitData?.adjustedReferralFee ?? result.feesData.referralFee;
     case "inboundShipping": return profitData?.inboundShipping ?? null;
     case "prep": return prep.value;
@@ -353,7 +353,7 @@ function renderCell(
       );
 
     case "fbaFee":
-      return <span className="font-mono text-sm">{fmt(result.feesData.fbaFulfillmentFee)}</span>;
+      return <span className="font-mono text-sm">{profitData ? fmt(profitData.totalFbaFee) : fmt(result.feesData.fbaFulfillmentFee)}</span>;
 
     case "referralFee":
       return (

@@ -4,6 +4,7 @@ export const settingsSchema = z.object({
   inboundShippingCost: z.number().min(0).default(0.5),
   prepCost: z.number().min(0).default(0),
   storageFee: z.number().min(0).default(0),
+  lowInventorySurcharge: z.number().min(0).default(0.26),
   minRoiThreshold: z.number().min(0).default(15),
   minMarginThreshold: z.number().min(0).default(10),
 });
@@ -134,6 +135,7 @@ export function calculateProfit(
   margin: number;
   inboundShipping: number;
   adjustedReferralFee: number;
+  totalFbaFee: number;
 } {
   let adjustedReferralFee = referralFee;
   if (feesEstimatePrice && feesEstimatePrice > 0 && salePrice !== feesEstimatePrice) {
@@ -142,10 +144,11 @@ export function calculateProfit(
   }
 
   const inboundShipping = weightLbs * settings.inboundShippingCost;
+  const totalFbaFee = fbaFee + settings.lowInventorySurcharge;
   const profit =
     salePrice -
     cogs -
-    fbaFee -
+    totalFbaFee -
     adjustedReferralFee -
     inboundShipping -
     prepCost -
@@ -154,7 +157,7 @@ export function calculateProfit(
   const roi = cogs > 0 ? (profit / cogs) * 100 : 0;
   const margin = salePrice > 0 ? (profit / salePrice) * 100 : 0;
 
-  return { profit, roi, margin, inboundShipping, adjustedReferralFee };
+  return { profit, roi, margin, inboundShipping, adjustedReferralFee, totalFbaFee };
 }
 
 export const DEFAULT_COLUMNS = [
