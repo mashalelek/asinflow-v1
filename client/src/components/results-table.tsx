@@ -57,7 +57,7 @@ export function ResultsTable({ results, priceSource, settings }: ResultsTablePro
                 const referralFee = result.feesData.referralFee ?? 0;
                 const weight = result.catalogData.weightLbs ?? 0;
 
-                profitData = calculateProfit(price, result.cogs, fbaFee, referralFee, weight, settings);
+                profitData = calculateProfit(price, result.cogs, fbaFee, referralFee, result.feesData.feesEstimatePrice, weight, settings);
 
                 const meetsCriteria =
                   profitData.roi >= settings.minRoiThreshold &&
@@ -121,7 +121,7 @@ export function ResultsTable({ results, priceSource, settings }: ResultsTablePro
                     {formatCurrency(result.feesData.fbaFulfillmentFee)}
                   </TableCell>
                   <TableCell className="text-right font-mono text-sm">
-                    {formatCurrency(result.feesData.referralFee)}
+                    {profitData ? formatCurrency(profitData.adjustedReferralFee) : formatCurrency(result.feesData.referralFee)}
                   </TableCell>
                   <TableCell className="text-right font-mono text-sm">
                     {profitData ? formatCurrency(profitData.inboundShipping) : "-"}

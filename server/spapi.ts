@@ -76,6 +76,7 @@ export interface AsinPricingResult {
 export interface AsinFeesResult {
   fbaFulfillmentFee: number | null;
   referralFee: number | null;
+  feesEstimatePrice: number | null;
 }
 
 export interface AsinCatalogResult {
@@ -282,10 +283,10 @@ export async function getFees(asin: string, price: number): Promise<AsinFeesResu
       }
     }
 
-    return { fbaFulfillmentFee, referralFee };
+    return { fbaFulfillmentFee, referralFee, feesEstimatePrice: price };
   } catch (err: any) {
     log(`Fees API error for ${asin}: ${err.message}`, "sp-api");
-    return { fbaFulfillmentFee: null, referralFee: null };
+    return { fbaFulfillmentFee: null, referralFee: null, feesEstimatePrice: null };
   }
 }
 

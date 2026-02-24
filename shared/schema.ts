@@ -28,6 +28,7 @@ export interface PricingData {
 export interface FeesData {
   fbaFulfillmentFee: number | null;
   referralFee: number | null;
+  feesEstimatePrice: number | null;
 }
 
 export interface CatalogData {
@@ -99,6 +100,7 @@ export function calculateProfit(
   cogs: number,
   fbaFee: number,
   referralFee: number,
+  feesEstimatePrice: number | null,
   weightLbs: number,
   settings: Settings
 ): {
@@ -106,13 +108,20 @@ export function calculateProfit(
   roi: number;
   margin: number;
   inboundShipping: number;
+  adjustedReferralFee: number;
 } {
+  let adjustedReferralFee = referralFee;
+  if (feesEstimatePrice && feesEstimatePrice > 0 && salePrice !== feesEstimatePrice) {
+    const referralPct = referralFee / feesEstimatePrice;
+    adjustedReferralFee = parseFloat((referralPct * salePrice).toFixed(2));
+  }
+
   const inboundShipping = weightLbs * settings.inboundShippingCost;
   const profit =
     salePrice -
     cogs -
     fbaFee -
-    referralFee -
+    adjustedReferralFee -
     inboundShipping -
     settings.prepCost -
     settings.storageFee;
@@ -120,7 +129,7 @@ export function calculateProfit(
   const roi = cogs > 0 ? (profit / cogs) * 100 : 0;
   const margin = salePrice > 0 ? (profit / salePrice) * 100 : 0;
 
-  return { profit, roi, margin, inboundShipping };
+  return { profit, roi, margin, inboundShipping, adjustedReferralFee };
 }
 
 export const users = undefined;

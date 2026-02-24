@@ -26,6 +26,7 @@ export function SummaryCards({ results, priceSource, settings }: SummaryCardsPro
       price, r.cogs,
       r.feesData.fbaFulfillmentFee ?? 0,
       r.feesData.referralFee ?? 0,
+      r.feesData.feesEstimatePrice,
       r.catalogData.weightLbs ?? 0,
       settings
     );

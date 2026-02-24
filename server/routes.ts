@@ -146,7 +146,7 @@ export async function registerRoutes(
             avg90DayPrice: null,
             numberOfSellers: null,
           },
-          feesData: { fbaFulfillmentFee: null, referralFee: null },
+          feesData: { fbaFulfillmentFee: null, referralFee: null, feesEstimatePrice: null },
           catalogData: { weightLbs: null, title: null },
           error: err.message || "Unknown error",
         };
