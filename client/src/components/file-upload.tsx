@@ -97,7 +97,7 @@ export function FileUpload({ onFileProcessed, isAnalyzing }: FileUploadProps) {
             <div>
               <p className="text-sm font-medium">Drop your CSV or Excel file here</p>
               <p className="text-xs text-muted-foreground mt-1">
-                File must have ASIN and COGS columns
+                ASIN and COGS required. Prep and Storage optional.
               </p>
             </div>
             <Button

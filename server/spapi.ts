@@ -71,6 +71,8 @@ export interface AsinPricingResult {
   avg30DayPrice: number | null;
   avg90DayPrice: number | null;
   numberOfSellers: number | null;
+  sellersFba: number | null;
+  sellersFbm: number | null;
 }
 
 export interface AsinFeesResult {
@@ -82,6 +84,9 @@ export interface AsinFeesResult {
 export interface AsinCatalogResult {
   weightLbs: number | null;
   title: string | null;
+  imageUrl: string | null;
+  bsrRank: number | null;
+  bsrCategory: string | null;
 }
 
 export async function getPricing(asin: string): Promise<AsinPricingResult> {
@@ -90,6 +95,8 @@ export async function getPricing(asin: string): Promise<AsinPricingResult> {
   let buyBoxFulfillment: "FBA" | "FBM" | null = null;
   let lowestPrice: number | null = null;
   let numberOfSellers: number | null = null;
+  let sellersFba: number | null = null;
+  let sellersFbm: number | null = null;
 
   try {
     const offersData = await spApiGet(`/products/pricing/v0/items/${asin}/offers`, {
@@ -118,15 +125,24 @@ export async function getPricing(asin: string): Promise<AsinPricingResult> {
 
       if (summary.TotalOfferCount != null) {
         numberOfSellers = summary.TotalOfferCount;
-      } else if (summary.NumberOfOffers) {
-        let total = 0;
+      }
+
+      if (summary.NumberOfOffers) {
         for (const entry of summary.NumberOfOffers) {
           const cond = entry.condition || entry.Condition || "";
+          const channel = entry.fulfillmentChannel || entry.FulfillmentChannel || "";
+          const count = parseInt(entry.OfferCount ?? entry.Value ?? "0") || 0;
           if (cond === "New" || cond === "new" || cond === "") {
-            total += parseInt(entry.OfferCount ?? entry.Value ?? "0") || 0;
+            if (channel === "Amazon") {
+              sellersFba = (sellersFba ?? 0) + count;
+            } else if (channel === "Merchant") {
+              sellersFbm = (sellersFbm ?? 0) + count;
+            }
           }
         }
-        if (total > 0) numberOfSellers = total;
+        if (numberOfSellers === null && (sellersFba || sellersFbm)) {
+          numberOfSellers = (sellersFba ?? 0) + (sellersFbm ?? 0);
+        }
       }
     }
 
@@ -135,6 +151,9 @@ export async function getPricing(asin: string): Promise<AsinPricingResult> {
       if (numberOfSellers === null) {
         numberOfSellers = offers.length;
       }
+
+      let fbaCount = 0;
+      let fbmCount = 0;
 
       for (const offer of offers) {
         const amt = parseFloat(offer.ListingPrice?.Amount);
@@ -147,9 +166,12 @@ export async function getPricing(asin: string): Promise<AsinPricingResult> {
           offer.FulfillmentChannel === "Amazon";
 
         if (isFba) {
+          fbaCount++;
           if (lowestFbaPrice === null || landed < lowestFbaPrice) {
             lowestFbaPrice = landed;
           }
+        } else {
+          fbmCount++;
         }
 
         if (lowestPrice === null || landed < lowestPrice) {
@@ -161,6 +183,9 @@ export async function getPricing(asin: string): Promise<AsinPricingResult> {
           buyBoxFulfillment = isFba ? "FBA" : "FBM";
         }
       }
+
+      if (sellersFba === null && fbaCount > 0) sellersFba = fbaCount;
+      if (sellersFbm === null && fbmCount > 0) sellersFbm = fbmCount;
     }
 
     if (buyBoxPrice === null && summary?.BuyBoxPrices) {
@@ -176,7 +201,7 @@ export async function getPricing(asin: string): Promise<AsinPricingResult> {
       }
     }
 
-    log(`Pricing for ${asin}: lowestFba=${lowestFbaPrice}, buyBox=${buyBoxPrice} (${buyBoxFulfillment}), lowest=${lowestPrice}, sellers=${numberOfSellers}`, "sp-api");
+    log(`Pricing for ${asin}: lowestFba=${lowestFbaPrice}, buyBox=${buyBoxPrice} (${buyBoxFulfillment}), lowest=${lowestPrice}, sellers=${numberOfSellers} (FBA:${sellersFba}, FBM:${sellersFbm})`, "sp-api");
 
     return {
       lowestFbaPrice,
@@ -186,6 +211,8 @@ export async function getPricing(asin: string): Promise<AsinPricingResult> {
       avg30DayPrice: null,
       avg90DayPrice: null,
       numberOfSellers,
+      sellersFba,
+      sellersFbm,
     };
   } catch (err: any) {
     log(`Offers API error for ${asin}: ${err.message}`, "sp-api");
@@ -233,6 +260,8 @@ export async function getPricing(asin: string): Promise<AsinPricingResult> {
         avg30DayPrice: null,
         avg90DayPrice: null,
         numberOfSellers,
+        sellersFba,
+        sellersFbm,
       };
     } catch (innerErr: any) {
       log(`Competitive Pricing fallback also failed for ${asin}: ${innerErr.message}`, "sp-api");
@@ -244,6 +273,8 @@ export async function getPricing(asin: string): Promise<AsinPricingResult> {
         avg30DayPrice: null,
         avg90DayPrice: null,
         numberOfSellers: null,
+        sellersFba: null,
+        sellersFbm: null,
       };
     }
   }
@@ -294,17 +325,52 @@ export async function getCatalogData(asin: string): Promise<AsinCatalogResult> {
   try {
     const data = await spApiGet(`/catalog/2022-04-01/items/${asin}`, {
       marketplaceIds: "ATVPDKIKX0DER",
-      includedData: "attributes,dimensions",
+      includedData: "attributes,dimensions,images,salesRanks",
     });
 
     let weightLbs: number | null = null;
     let title: string | null = null;
+    let imageUrl: string | null = null;
+    let bsrRank: number | null = null;
+    let bsrCategory: string | null = null;
 
     if (data?.title) {
       title = data.title;
     }
     if (data?.attributes?.item_name?.[0]?.value) {
       title = data.attributes.item_name[0].value;
+    }
+
+    if (data?.images) {
+      for (const imageSet of Object.values(data.images) as any[]) {
+        if (Array.isArray(imageSet)) {
+          for (const img of imageSet) {
+            if (img.variant === "MAIN" || img.variant === "main") {
+              imageUrl = img.link || img.url || null;
+              break;
+            }
+          }
+          if (!imageUrl && imageSet.length > 0) {
+            imageUrl = imageSet[0].link || imageSet[0].url || null;
+          }
+        }
+      }
+    }
+
+    if (data?.salesRanks) {
+      for (const rankSet of Object.values(data.salesRanks) as any[]) {
+        if (Array.isArray(rankSet)) {
+          for (const rank of rankSet) {
+            if (rank.rank != null) {
+              const r = parseInt(rank.rank);
+              if (!isNaN(r) && (bsrRank === null || r < bsrRank)) {
+                bsrRank = r;
+                bsrCategory = rank.title || rank.productCategoryId || null;
+              }
+            }
+          }
+        }
+      }
     }
 
     const dims = data?.dimensions;
@@ -352,9 +418,9 @@ export async function getCatalogData(asin: string): Promise<AsinCatalogResult> {
       }
     }
 
-    return { weightLbs: weightLbs ?? 1, title };
+    return { weightLbs: weightLbs ?? 1, title, imageUrl, bsrRank, bsrCategory };
   } catch (err: any) {
     log(`Catalog API error for ${asin}: ${err.message}`, "sp-api");
-    return { weightLbs: 1, title: null };
+    return { weightLbs: 1, title: null, imageUrl: null, bsrRank: null, bsrCategory: null };
   }
 }

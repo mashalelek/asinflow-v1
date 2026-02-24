@@ -1,0 +1,23 @@
+Please make the following improvements to the app:
+1. Reorder columns to this exact default sequence:
+ASIN, Product Image, Product Name, COGS, Sale Price, Profit/Unit, Margin, ROI, FBA Fee, Referral Fee, Inbound Ship., Prep, Storage, BSR, Sellers (FBA), Sellers (FBM)
+2. Add Product Name — fetch the product title from the SP-API Catalog Items API (getCatalogItem) for each ASIN and display it in a "Product Name" column. Truncate to 40 characters with ellipsis if too long. Add a tooltip that shows the full name on hover.
+3. Add Product Image thumbnail — fetch the main product image URL from the Catalog Items API and display it as a small thumbnail (40x40px) in the row.
+4. Split Sellers into two columns — "Sellers (FBA)" and "Sellers (FBM)" — pulled from the getItemOffers endpoint filtering by fulfillmentChannel: AFN for FBA and MFN for FBM.
+5. Add BSR (Best Seller Rank) — fetch from the Catalog Items API and display the primary BSR with its category name. Format as "#1,234 in Kitchen". Include BSR in the default column set but allow it to be hidden via the column manager.
+6. Make all columns sortable — clicking any column header should sort the table ascending, clicking again sorts descending. Show a small arrow indicator on the active sort column.
+7. Sticky header row — the column header row should remain visible when scrolling through large result sets.
+8. Column Manager — add a "Columns" button above the results table (next to the CSV/Excel export buttons). Clicking it opens a dropdown or modal where the user can:
+
+Toggle individual columns on/off using checkboxes
+Drag and drop columns to reorder them
+Reset to default column layout with a "Reset to Default" button
+Column visibility and order preferences should be saved to localStorage so they persist between sessions
+
+9. Optional Prep and Storage columns in uploaded CSV — the app should support an optional expanded CSV format with up to 4 columns: ASIN, COGS, Prep, Storage. If the uploaded file contains Prep and/or Storage columns, use those per-ASIN values instead of the global Settings values for those rows. If the columns are not present in the file, fall back to the global Settings values as usual. The Prep and Storage columns should be hidden by default in the column manager but available to toggle on.
+10. Per-ASIN Prep and Storage override logic:
+
+If the uploaded CSV contains a Prep value for a specific ASIN, use that value for that row
+If the uploaded CSV contains a Storage value for a specific ASIN, use that value for that row
+If either value is missing or blank for a row, fall back to the global Settings value
+Show a small indicator (e.g. a dot or asterisk) in the Prep/Storage cell when a per-ASIN override is being used, with a tooltip saying "Per-ASIN value from uploaded file"

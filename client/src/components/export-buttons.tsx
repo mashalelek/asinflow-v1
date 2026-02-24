@@ -1,6 +1,14 @@
 import { Button } from "@/components/ui/button";
 import { Download } from "lucide-react";
-import { type AsinResult, type PriceSource, type Settings, getSelectedPrice, calculateProfit } from "@shared/schema";
+import {
+  type AsinResult,
+  type PriceSource,
+  type Settings,
+  getSelectedPrice,
+  calculateProfit,
+  getEffectivePrep,
+  getEffectiveStorage,
+} from "@shared/schema";
 
 interface ExportButtonsProps {
   results: AsinResult[];
@@ -11,6 +19,8 @@ interface ExportButtonsProps {
 function buildExportData(results: AsinResult[], priceSource: PriceSource, settings: Settings) {
   return results.map((r) => {
     const { price, label } = getSelectedPrice(r, priceSource);
+    const prep = getEffectivePrep(r, settings);
+    const storage = getEffectiveStorage(r, settings);
     let profit = null, roi = null, margin = null, inboundShipping = null;
 
     let adjustedReferralFee: number | null = r.feesData.referralFee;
@@ -21,6 +31,8 @@ function buildExportData(results: AsinResult[], priceSource: PriceSource, settin
         r.feesData.referralFee ?? 0,
         r.feesData.feesEstimatePrice,
         r.catalogData.weightLbs ?? 0,
+        prep.value,
+        storage.value,
         settings
       );
       profit = calc.profit;
@@ -32,18 +44,22 @@ function buildExportData(results: AsinResult[], priceSource: PriceSource, settin
 
     return {
       ASIN: r.asin,
+      "Product Name": r.catalogData.title ?? "",
       COGS: r.cogs,
       "Sale Price": price ?? "N/A",
       "Price Source": label,
+      "Profit per Unit": profit != null ? profit.toFixed(2) : "N/A",
+      "Profit Margin (%)": margin != null ? margin.toFixed(1) : "N/A",
+      "ROI (%)": roi != null ? roi.toFixed(1) : "N/A",
       "FBA Fee": r.feesData.fbaFulfillmentFee ?? "N/A",
       "Referral Fee": adjustedReferralFee ?? "N/A",
       "Inbound Shipping": inboundShipping ?? "N/A",
-      "Prep Cost": settings.prepCost,
-      "Storage Fee": settings.storageFee,
-      "Profit per Unit": profit ?? "N/A",
-      "Profit Margin (%)": margin != null ? margin.toFixed(1) : "N/A",
-      "ROI (%)": roi != null ? roi.toFixed(1) : "N/A",
-      "# Sellers": r.pricingData.numberOfSellers ?? "N/A",
+      "Prep Cost": prep.value,
+      "Storage Fee": storage.value,
+      BSR: r.catalogData.bsrRank ?? "N/A",
+      "BSR Category": r.catalogData.bsrCategory ?? "",
+      "Sellers (FBA)": r.pricingData.sellersFba ?? "N/A",
+      "Sellers (FBM)": r.pricingData.sellersFbm ?? "N/A",
       Error: r.error ?? "",
     };
   });
@@ -59,7 +75,7 @@ function downloadCsv(results: AsinResult[], priceSource: PriceSource, settings: 
     ...data.map((row) =>
       headers.map((h) => {
         const val = String((row as any)[h]);
-        return val.includes(",") ? `"${val}"` : val;
+        return val.includes(",") || val.includes('"') ? `"${val.replace(/"/g, '""')}"` : val;
       }).join(",")
     ),
   ].join("\n");

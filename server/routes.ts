@@ -29,6 +29,8 @@ function parseFileToAsins(buffer: Buffer, filename: string): AsinInput[] {
   for (const row of rows) {
     const asinKey = Object.keys(row).find((k) => k.toLowerCase().trim() === "asin");
     const cogsKey = Object.keys(row).find((k) => k.toLowerCase().trim() === "cogs");
+    const prepKey = Object.keys(row).find((k) => k.toLowerCase().trim() === "prep");
+    const storageKey = Object.keys(row).find((k) => k.toLowerCase().trim() === "storage");
 
     if (!asinKey || !cogsKey) {
       throw new Error('File must contain "ASIN" and "COGS" columns.');
@@ -37,8 +39,20 @@ function parseFileToAsins(buffer: Buffer, filename: string): AsinInput[] {
     const asin = String(row[asinKey]).trim();
     const cogs = parseFloat(String(row[cogsKey]));
 
+    let prepOverride: number | null = null;
+    let storageOverride: number | null = null;
+
+    if (prepKey && row[prepKey] !== undefined && row[prepKey] !== "") {
+      const p = parseFloat(String(row[prepKey]));
+      if (!isNaN(p)) prepOverride = p;
+    }
+    if (storageKey && row[storageKey] !== undefined && row[storageKey] !== "") {
+      const s = parseFloat(String(row[storageKey]));
+      if (!isNaN(s)) storageOverride = s;
+    }
+
     if (asin && !isNaN(cogs)) {
-      asins.push({ asin, cogs });
+      asins.push({ asin, cogs, prepOverride, storageOverride });
     }
   }
 
@@ -91,8 +105,10 @@ export async function registerRoutes(
       }
 
       const asins = parseFileToAsins(req.file.buffer, req.file.originalname);
-      log(`Parsed ${asins.length} ASINs from ${req.file.originalname}`, "parser");
-      res.json({ asins });
+      const hasPrepOverrides = asins.some((a) => a.prepOverride != null);
+      const hasStorageOverrides = asins.some((a) => a.storageOverride != null);
+      log(`Parsed ${asins.length} ASINs from ${req.file.originalname} (prep overrides: ${hasPrepOverrides}, storage overrides: ${hasStorageOverrides})`, "parser");
+      res.json({ asins, hasPrepOverrides, hasStorageOverrides });
     } catch (err: any) {
       res.status(400).json({ message: err.message });
     }
@@ -115,7 +131,7 @@ export async function registerRoutes(
     const BATCH_DELAY = 1000;
 
     for (let i = 0; i < asins.length; i++) {
-      const { asin, cogs } = asins[i];
+      const { asin, cogs, prepOverride, storageOverride } = asins[i];
 
       res.write(
         JSON.stringify({
@@ -143,6 +159,8 @@ export async function registerRoutes(
         result = {
           asin,
           cogs,
+          prepOverride: prepOverride ?? null,
+          storageOverride: storageOverride ?? null,
           pricingData,
           feesData,
           catalogData,
@@ -153,6 +171,8 @@ export async function registerRoutes(
         result = {
           asin,
           cogs,
+          prepOverride: prepOverride ?? null,
+          storageOverride: storageOverride ?? null,
           pricingData: {
             lowestFbaPrice: null,
             buyBoxPrice: null,
@@ -161,9 +181,11 @@ export async function registerRoutes(
             avg30DayPrice: null,
             avg90DayPrice: null,
             numberOfSellers: null,
+            sellersFba: null,
+            sellersFbm: null,
           },
           feesData: { fbaFulfillmentFee: null, referralFee: null, feesEstimatePrice: null },
-          catalogData: { weightLbs: null, title: null },
+          catalogData: { weightLbs: null, title: null, imageUrl: null, bsrRank: null, bsrCategory: null },
           error: err.message || "Unknown error",
         };
       }

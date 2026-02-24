@@ -9,8 +9,10 @@ import { FileUpload } from "@/components/file-upload";
 import { ResultsTable } from "@/components/results-table";
 import { ExportButtons } from "@/components/export-buttons";
 import { SummaryCards } from "@/components/summary-cards";
+import { ColumnManager } from "@/components/column-manager";
 import { useTheme } from "@/components/theme-provider";
 import { loadSettings } from "@/lib/settings";
+import { loadColumnConfig, type ColumnConfig } from "@/lib/columns";
 import { Sun, Moon, BarChart3, Zap, AlertTriangle } from "lucide-react";
 import {
   type AsinInput,
@@ -25,6 +27,7 @@ export default function Home() {
   const { theme, toggleTheme } = useTheme();
   const { toast } = useToast();
   const [settings, setSettings] = useState<Settings>(loadSettings);
+  const [columnConfig, setColumnConfig] = useState<ColumnConfig>(loadColumnConfig);
   const [asins, setAsins] = useState<AsinInput[]>([]);
   const [results, setResults] = useState<AsinResult[]>([]);
   const [priceSource, setPriceSource] = useState<PriceSource>("lowestFba");
@@ -42,10 +45,16 @@ export default function Home() {
   const handleFileProcessed = useCallback((parsed: AsinInput[]) => {
     setAsins(parsed);
     setResults([]);
-    toast({
-      title: "File parsed",
-      description: `Found ${parsed.length} ASINs ready for analysis.`,
-    });
+    const hasPrepOverrides = parsed.some((a) => a.prepOverride != null);
+    const hasStorageOverrides = parsed.some((a) => a.storageOverride != null);
+    let msg = `Found ${parsed.length} ASINs ready for analysis.`;
+    if (hasPrepOverrides || hasStorageOverrides) {
+      const parts: string[] = [];
+      if (hasPrepOverrides) parts.push("Prep");
+      if (hasStorageOverrides) parts.push("Storage");
+      msg += ` Per-ASIN ${parts.join(" and ")} overrides detected.`;
+    }
+    toast({ title: "File parsed", description: msg });
   }, [toast]);
 
   const handleAnalyze = useCallback(async () => {
@@ -208,10 +217,18 @@ export default function Home() {
                 </div>
               </div>
 
-              <ExportButtons results={results} priceSource={priceSource} settings={settings} />
+              <div className="flex items-center gap-2">
+                <ExportButtons results={results} priceSource={priceSource} settings={settings} />
+                <ColumnManager config={columnConfig} onChange={setColumnConfig} />
+              </div>
             </div>
 
-            <ResultsTable results={results} priceSource={priceSource} settings={settings} />
+            <ResultsTable
+              results={results}
+              priceSource={priceSource}
+              settings={settings}
+              columnConfig={columnConfig}
+            />
           </>
         )}
 
@@ -223,6 +240,7 @@ export default function Home() {
             </h2>
             <p className="text-sm text-muted-foreground/70 mt-1 max-w-md">
               Upload a CSV or Excel file with ASIN and COGS columns.
+              Optionally include Prep and Storage columns for per-ASIN overrides.
               The analyzer will fetch pricing data from Amazon SP-API and calculate profitability for each product.
             </p>
           </div>

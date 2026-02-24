@@ -1,6 +1,14 @@
 import { Card } from "@/components/ui/card";
 import { TrendingUp, TrendingDown, Package, DollarSign } from "lucide-react";
-import { type AsinResult, type PriceSource, type Settings, getSelectedPrice, calculateProfit } from "@shared/schema";
+import {
+  type AsinResult,
+  type PriceSource,
+  type Settings,
+  getSelectedPrice,
+  calculateProfit,
+  getEffectivePrep,
+  getEffectiveStorage,
+} from "@shared/schema";
 
 interface SummaryCardsProps {
   results: AsinResult[];
@@ -22,12 +30,17 @@ export function SummaryCards({ results, priceSource, settings }: SummaryCardsPro
     const { price } = getSelectedPrice(r, priceSource);
     if (price == null) return;
 
+    const prep = getEffectivePrep(r, settings);
+    const storage = getEffectiveStorage(r, settings);
+
     const calc = calculateProfit(
       price, r.cogs,
       r.feesData.fbaFulfillmentFee ?? 0,
       r.feesData.referralFee ?? 0,
       r.feesData.feesEstimatePrice,
       r.catalogData.weightLbs ?? 0,
+      prep.value,
+      storage.value,
       settings
     );
 
