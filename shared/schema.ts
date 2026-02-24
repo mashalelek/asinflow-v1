@@ -18,6 +18,7 @@ export interface AsinInput {
 export interface PricingData {
   lowestFbaPrice: number | null;
   buyBoxPrice: number | null;
+  buyBoxFulfillment: "FBA" | "FBM" | null;
   lowestPrice: number | null;
   avg30DayPrice: number | null;
   avg90DayPrice: number | null;
@@ -67,12 +68,20 @@ export function getSelectedPrice(
 ): { price: number | null; label: string } {
   const { pricingData } = result;
 
-  if (priceSource === "buyBox" && pricingData.buyBoxPrice != null) {
-    return { price: pricingData.buyBoxPrice, label: "Buy Box" };
+  if (priceSource === "lowestFba") {
+    if (pricingData.lowestFbaPrice != null) {
+      return { price: pricingData.lowestFbaPrice, label: "Lowest FBA" };
+    }
+  } else if (priceSource === "buyBox") {
+    if (pricingData.buyBoxPrice != null) {
+      const fulfillment = pricingData.buyBoxFulfillment ?? "FBA";
+      return {
+        price: pricingData.buyBoxPrice,
+        label: `BB (${fulfillment})`,
+      };
+    }
   }
-  if (priceSource === "lowestFba" && pricingData.lowestFbaPrice != null) {
-    return { price: pricingData.lowestFbaPrice, label: "Lowest FBA" };
-  }
+
   if (pricingData.lowestPrice != null) {
     return { price: pricingData.lowestPrice, label: "Lowest" };
   }

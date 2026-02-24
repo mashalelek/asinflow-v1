@@ -66,6 +66,7 @@ async function spApiPost(endpoint: string, body: any) {
 export interface AsinPricingResult {
   lowestFbaPrice: number | null;
   buyBoxPrice: number | null;
+  buyBoxFulfillment: "FBA" | "FBM" | null;
   lowestPrice: number | null;
   avg30DayPrice: number | null;
   avg90DayPrice: number | null;
@@ -85,6 +86,7 @@ export interface AsinCatalogResult {
 export async function getPricing(asin: string): Promise<AsinPricingResult> {
   let lowestFbaPrice: number | null = null;
   let buyBoxPrice: number | null = null;
+  let buyBoxFulfillment: "FBA" | "FBM" | null = null;
   let lowestPrice: number | null = null;
   let numberOfSellers: number | null = null;
 
@@ -96,20 +98,12 @@ export async function getPricing(asin: string): Promise<AsinPricingResult> {
 
     const summary = offersData?.payload?.Summary;
     if (summary) {
-      if (summary.BuyBoxPrices) {
-        for (const bp of summary.BuyBoxPrices) {
-          if (bp.condition === "New") {
-            const amt = parseFloat(bp.LandedPrice?.Amount);
-            if (!isNaN(amt)) buyBoxPrice = amt;
-          }
-        }
-      }
-
       if (summary.LowestPrices) {
         for (const lp of summary.LowestPrices) {
           const amt = parseFloat(lp.LandedPrice?.Amount);
           if (!isNaN(amt)) {
-            if (lp.fulfillmentChannel === "Amazon") {
+            const channel = lp.fulfillmentChannel || lp.FulfillmentChannel || "";
+            if (channel === "Amazon") {
               if (lowestFbaPrice === null || amt < lowestFbaPrice) {
                 lowestFbaPrice = amt;
               }
@@ -126,7 +120,8 @@ export async function getPricing(asin: string): Promise<AsinPricingResult> {
       } else if (summary.NumberOfOffers) {
         let total = 0;
         for (const entry of summary.NumberOfOffers) {
-          if (entry.condition === "New" || entry.Condition === "New") {
+          const cond = entry.condition || entry.Condition || "";
+          if (cond === "New" || cond === "new" || cond === "") {
             total += parseInt(entry.OfferCount ?? entry.Value ?? "0") || 0;
           }
         }
@@ -146,23 +141,46 @@ export async function getPricing(asin: string): Promise<AsinPricingResult> {
         const shipping = parseFloat(offer.Shipping?.Amount) || 0;
         const landed = amt + shipping;
 
-        if (offer.IsFulfilledByAmazon === true || offer.FulfillmentChannel === "Amazon") {
+        const isFba =
+          offer.IsFulfilledByAmazon === true ||
+          offer.FulfillmentChannel === "Amazon";
+
+        if (isFba) {
           if (lowestFbaPrice === null || landed < lowestFbaPrice) {
             lowestFbaPrice = landed;
           }
         }
+
         if (lowestPrice === null || landed < lowestPrice) {
           lowestPrice = landed;
         }
-        if (offer.IsBuyBoxWinner === true && buyBoxPrice === null) {
+
+        if (offer.IsBuyBoxWinner === true) {
           buyBoxPrice = landed;
+          buyBoxFulfillment = isFba ? "FBA" : "FBM";
         }
       }
     }
 
+    if (buyBoxPrice === null && summary?.BuyBoxPrices) {
+      for (const bp of summary.BuyBoxPrices) {
+        const cond = bp.condition || bp.Condition || "";
+        if (cond === "New" || cond === "new") {
+          const amt = parseFloat(bp.LandedPrice?.Amount);
+          if (!isNaN(amt)) {
+            buyBoxPrice = amt;
+            buyBoxFulfillment = null;
+          }
+        }
+      }
+    }
+
+    log(`Pricing for ${asin}: lowestFba=${lowestFbaPrice}, buyBox=${buyBoxPrice} (${buyBoxFulfillment}), lowest=${lowestPrice}, sellers=${numberOfSellers}`, "sp-api");
+
     return {
       lowestFbaPrice,
       buyBoxPrice,
+      buyBoxFulfillment,
       lowestPrice,
       avg30DayPrice: null,
       avg90DayPrice: null,
@@ -187,6 +205,7 @@ export async function getPricing(asin: string): Promise<AsinPricingResult> {
             const price = parseFloat(amount);
             if (cp.CompetitivePriceId === "1") {
               buyBoxPrice = price;
+              buyBoxFulfillment = null;
             }
             if (lowestPrice === null || price < lowestPrice) {
               lowestPrice = price;
@@ -208,6 +227,7 @@ export async function getPricing(asin: string): Promise<AsinPricingResult> {
       return {
         lowestFbaPrice,
         buyBoxPrice,
+        buyBoxFulfillment,
         lowestPrice,
         avg30DayPrice: null,
         avg90DayPrice: null,
@@ -218,6 +238,7 @@ export async function getPricing(asin: string): Promise<AsinPricingResult> {
       return {
         lowestFbaPrice: null,
         buyBoxPrice: null,
+        buyBoxFulfillment: null,
         lowestPrice: null,
         avg30DayPrice: null,
         avg90DayPrice: null,

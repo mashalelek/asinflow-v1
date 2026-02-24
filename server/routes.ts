@@ -140,6 +140,7 @@ export async function registerRoutes(
           pricingData: {
             lowestFbaPrice: null,
             buyBoxPrice: null,
+            buyBoxFulfillment: null,
             lowestPrice: null,
             avg30DayPrice: null,
             avg90DayPrice: null,
