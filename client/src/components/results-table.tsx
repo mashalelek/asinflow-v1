@@ -407,10 +407,10 @@ function renderCell(
       );
 
     case "sellersFba":
-      return <span className="font-mono text-sm">{result.pricingData.sellersFba ?? "-"}</span>;
+      return <span className="font-mono text-sm">{result.pricingData.sellersFba != null ? result.pricingData.sellersFba : "-"}</span>;
 
     case "sellersFbm":
-      return <span className="font-mono text-sm">{result.pricingData.sellersFbm ?? "-"}</span>;
+      return <span className="font-mono text-sm">{result.pricingData.sellersFbm != null ? result.pricingData.sellersFbm : "-"}</span>;
 
     default:
       return "-";

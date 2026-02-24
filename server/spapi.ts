@@ -184,9 +184,12 @@ export async function getPricing(asin: string): Promise<AsinPricingResult> {
         }
       }
 
-      if (sellersFba === null && fbaCount > 0) sellersFba = fbaCount;
-      if (sellersFbm === null && fbmCount > 0) sellersFbm = fbmCount;
+      if (sellersFba === null) sellersFba = fbaCount;
+      if (sellersFbm === null) sellersFbm = fbmCount;
     }
+
+    if (sellersFba === null) sellersFba = 0;
+    if (sellersFbm === null) sellersFbm = 0;
 
     if (buyBoxPrice === null && summary?.BuyBoxPrices) {
       for (const bp of summary.BuyBoxPrices) {
@@ -384,37 +387,66 @@ export async function getCatalogData(asin: string): Promise<AsinCatalogResult> {
       title = data.attributes.item_name[0].value;
     }
 
+    log(`Raw images for ${asin}: ${JSON.stringify(data?.images)?.substring(0, 500)}`, "catalog-raw");
+    log(`Raw salesRanks for ${asin}: ${JSON.stringify(data?.salesRanks)?.substring(0, 500)}`, "catalog-raw");
+    log(`Raw summaries for ${asin}: ${JSON.stringify(data?.summaries)?.substring(0, 500)}`, "catalog-raw");
+
     if (data?.images) {
-      for (const imageSet of Object.values(data.images) as any[]) {
-        if (Array.isArray(imageSet)) {
-          for (const img of imageSet) {
+      const imageEntries = Array.isArray(data.images) ? data.images : Object.values(data.images);
+      for (const entry of imageEntries as any[]) {
+        if (imageUrl) break;
+        const imageList = entry?.images || (Array.isArray(entry) ? entry : null);
+        if (imageList && Array.isArray(imageList)) {
+          for (const img of imageList) {
             if (img.variant === "MAIN" || img.variant === "main") {
               imageUrl = img.link || img.url || null;
               break;
             }
           }
-          if (!imageUrl && imageSet.length > 0) {
-            imageUrl = imageSet[0].link || imageSet[0].url || null;
+          if (!imageUrl && imageList.length > 0) {
+            imageUrl = imageList[0].link || imageList[0].url || null;
           }
+        }
+        if (!imageUrl && entry?.link) {
+          imageUrl = entry.link;
+        }
+      }
+    }
+
+    if (!imageUrl && data?.summaries) {
+      const summaries = Array.isArray(data.summaries) ? data.summaries : Object.values(data.summaries);
+      for (const summary of summaries as any[]) {
+        if (summary?.mainImage?.link) {
+          imageUrl = summary.mainImage.link;
+          break;
         }
       }
     }
 
     if (data?.salesRanks) {
-      for (const rankSet of Object.values(data.salesRanks) as any[]) {
-        if (Array.isArray(rankSet)) {
-          for (const rank of rankSet) {
-            if (rank.rank != null) {
-              const r = parseInt(rank.rank);
-              if (!isNaN(r) && (bsrRank === null || r < bsrRank)) {
-                bsrRank = r;
-                bsrCategory = rank.title || rank.productCategoryId || null;
-              }
+      const rankEntries = Array.isArray(data.salesRanks) ? data.salesRanks : Object.values(data.salesRanks);
+      for (const entry of rankEntries as any[]) {
+        const ranks = entry?.displayGroupRanks || entry?.classificationRanks || entry?.ranks || (Array.isArray(entry) ? entry : null);
+        if (ranks && Array.isArray(ranks)) {
+          for (const rank of ranks) {
+            const r = parseInt(rank.rank ?? rank.value);
+            if (!isNaN(r) && r > 0 && (bsrRank === null || r < bsrRank)) {
+              bsrRank = r;
+              bsrCategory = rank.title || rank.link?.split("/")?.pop() || rank.productCategoryId || null;
             }
+          }
+        }
+        if (entry?.rank != null) {
+          const r = parseInt(entry.rank);
+          if (!isNaN(r) && r > 0 && (bsrRank === null || r < bsrRank)) {
+            bsrRank = r;
+            bsrCategory = entry.title || entry.productCategoryId || null;
           }
         }
       }
     }
+
+    log(`Extracted for ${asin}: image=${imageUrl ? "yes" : "null"}, bsr=${bsrRank} in ${bsrCategory}`, "catalog");
 
     function convertWeightToLbs(value: number, unit: string): number {
       const u = unit.toLowerCase();
