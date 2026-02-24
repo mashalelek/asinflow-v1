@@ -301,31 +301,60 @@ export async function getFees(asin: string, price: number): Promise<AsinFeesResu
       body
     );
 
-    let fbaFulfillmentFee: number = 0;
-    let referralFee: number | null = null;
+    log(`Raw fee response for ${asin}: ${JSON.stringify(data?.payload?.FeesEstimateResult, null, 2)}`, "fees-raw");
 
-    const feeDetails = data?.payload?.FeesEstimateResult?.FeesEstimate?.FeeDetailList || [];
-    const totalFee = data?.payload?.FeesEstimateResult?.FeesEstimate?.TotalFeesEstimate?.Amount;
+    const feesEstimate = data?.payload?.FeesEstimateResult?.FeesEstimate;
+    const feeDetails = feesEstimate?.FeeDetailList || [];
+    const totalFeesEstimate = feesEstimate?.TotalFeesEstimate;
+
+    let referralFee: number | null = null;
+    let totalFbaFee: number = 0;
 
     log(`Fee breakdown for ${asin} (price=$${price}):`, "fees");
+
     for (const fee of feeDetails) {
-      const amount = parseFloat(fee.FeeAmount?.Amount) || 0;
       const feeType = fee.FeeType || "Unknown";
-      log(`  ${feeType}: $${amount.toFixed(2)}${fee.FeePromotion ? ` (promo: $${parseFloat(fee.FeePromotion?.Amount || 0).toFixed(2)})` : ""}`, "fees");
+      const feeAmount = parseFloat(fee.FeeAmount?.Amount) || 0;
+      const promoAmount = parseFloat(fee.FeePromotion?.Amount) || 0;
+      const finalFee = parseFloat(fee.FinalFee?.Amount) ?? feeAmount;
+
+      let subFeeInfo = "";
+      if (fee.IncludedFeeDetailList && Array.isArray(fee.IncludedFeeDetailList)) {
+        const subParts = fee.IncludedFeeDetailList.map((sf: any) => {
+          const sfType = sf.FeeType || "Unknown";
+          const sfAmount = parseFloat(sf.FeeAmount?.Amount) || 0;
+          const sfFinal = parseFloat(sf.FinalFee?.Amount) ?? sfAmount;
+          return `${sfType}=$${sfFinal.toFixed(2)}`;
+        });
+        subFeeInfo = ` [includes: ${subParts.join(", ")}]`;
+      }
+
+      log(`  ${feeType}: amount=$${feeAmount.toFixed(2)}, final=$${finalFee.toFixed(2)}${promoAmount ? `, promo=$${promoAmount.toFixed(2)}` : ""}${subFeeInfo}`, "fees");
 
       if (feeType === "ReferralFee") {
-        referralFee = amount;
-      } else if (feeType !== "ReferralFee") {
-        fbaFulfillmentFee += amount;
+        referralFee = finalFee;
+      } else {
+        totalFbaFee += finalFee;
       }
     }
-    if (totalFee) {
-      log(`  Total fees estimate: $${parseFloat(totalFee).toFixed(2)}`, "fees");
+
+    if (totalFeesEstimate) {
+      log(`  TotalFeesEstimate: $${parseFloat(totalFeesEstimate.Amount).toFixed(2)} ${totalFeesEstimate.CurrencyCode}`, "fees");
     }
-    log(`  Captured FBA fee (all non-referral): $${fbaFulfillmentFee.toFixed(2)}, Referral: $${(referralFee ?? 0).toFixed(2)}`, "fees");
+
+    const totalFromApi = totalFeesEstimate ? parseFloat(totalFeesEstimate.Amount) : null;
+    if (totalFromApi != null && referralFee != null) {
+      const expectedFba = totalFromApi - referralFee;
+      if (Math.abs(expectedFba - totalFbaFee) > 0.01) {
+        log(`  WARNING: FBA fee mismatch! Sum of non-referral=$${totalFbaFee.toFixed(2)} vs (total-referral)=$${expectedFba.toFixed(2)}. Using total-based value.`, "fees");
+        totalFbaFee = expectedFba;
+      }
+    }
+
+    log(`  Final captured: FBA=$${totalFbaFee.toFixed(2)}, Referral=$${(referralFee ?? 0).toFixed(2)}`, "fees");
 
     return {
-      fbaFulfillmentFee: fbaFulfillmentFee > 0 ? fbaFulfillmentFee : null,
+      fbaFulfillmentFee: totalFbaFee > 0 ? totalFbaFee : null,
       referralFee,
       feesEstimatePrice: price,
     };
@@ -339,7 +368,7 @@ export async function getCatalogData(asin: string): Promise<AsinCatalogResult> {
   try {
     const data = await spApiGet(`/catalog/2022-04-01/items/${asin}`, {
       marketplaceIds: "ATVPDKIKX0DER",
-      includedData: "attributes,dimensions,images,salesRanks",
+      includedData: "attributes,dimensions,images,salesRanks,summaries",
     });
 
     let weightLbs: number | null = null;
@@ -405,74 +434,165 @@ export async function getCatalogData(asin: string): Promise<AsinCatalogResult> {
       return value;
     }
 
+    function extractWeight(dimObj: any): number | null {
+      if (!dimObj?.weight) return null;
+      const w = parseFloat(dimObj.weight.value);
+      const unit = dimObj.weight.unit || "";
+      if (isNaN(w) || w <= 0) return null;
+      return convertWeightToLbs(w, unit);
+    }
+
+    function extractDims(dimObj: any): { l: number; w: number; h: number } | null {
+      if (!dimObj?.length || !dimObj?.width || !dimObj?.height) return null;
+      const l = parseFloat(dimObj.length.value);
+      const w = parseFloat(dimObj.width.value);
+      const h = parseFloat(dimObj.height.value);
+      if (isNaN(l) || isNaN(w) || isNaN(h) || l <= 0 || w <= 0 || h <= 0) return null;
+      return {
+        l: convertDimToInches(l, dimObj.length.unit || ""),
+        w: convertDimToInches(w, dimObj.width.unit || ""),
+        h: convertDimToInches(h, dimObj.height.unit || ""),
+      };
+    }
+
+    let packageWeightLbs: number | null = null;
     let itemWeightLbs: number | null = null;
-    let shippingWeightLbs: number | null = null;
     let dimWeightLbs: number | null = null;
-    let lengthIn: number | null = null;
-    let widthIn: number | null = null;
-    let heightIn: number | null = null;
+    let packageDims: { l: number; w: number; h: number } | null = null;
+
+    log(`Raw dimensions for ${asin}: ${JSON.stringify(data?.dimensions)}`, "weight-raw");
 
     const dims = data?.dimensions;
     if (dims) {
-      for (const [dimKey, dimSet] of Object.entries(dims) as [string, any][]) {
-        const isPackage = dimKey.toLowerCase().includes("package") || dimKey.toLowerCase().includes("shipping");
+      const dimEntries = Array.isArray(dims) ? dims : Object.values(dims);
+      for (const entry of dimEntries as any[]) {
+        if (entry?.package) {
+          const pw = extractWeight(entry.package);
+          if (pw != null && (packageWeightLbs === null || pw > packageWeightLbs)) {
+            packageWeightLbs = pw;
+          }
+          const pd = extractDims(entry.package);
+          if (pd != null) packageDims = pd;
+        }
 
-        if (dimSet?.weight) {
-          const w = parseFloat(dimSet.weight.value);
-          const unit = dimSet.weight.unit?.toLowerCase() || "";
+        if (entry?.item) {
+          const iw = extractWeight(entry.item);
+          if (iw != null && (itemWeightLbs === null || iw > itemWeightLbs)) {
+            itemWeightLbs = iw;
+          }
+          if (packageDims === null) {
+            const id = extractDims(entry.item);
+            if (id != null) packageDims = id;
+          }
+        }
+
+        const topWeight = extractWeight(entry);
+        if (topWeight != null) {
+          if (itemWeightLbs === null) itemWeightLbs = topWeight;
+        }
+        if (packageDims === null) {
+          const topDims = extractDims(entry);
+          if (topDims != null) packageDims = topDims;
+        }
+      }
+    }
+
+    const attrs = data?.attributes || {};
+
+    if (attrs.item_package_weight?.[0]) {
+      const pw = attrs.item_package_weight[0];
+      const w = parseFloat(pw.value);
+      const unit = (pw.unit || "").toLowerCase();
+      if (!isNaN(w) && w > 0) {
+        const converted = convertWeightToLbs(w, unit);
+        if (packageWeightLbs === null || converted > packageWeightLbs) {
+          packageWeightLbs = converted;
+          log(`Found item_package_weight attribute for ${asin}: ${converted.toFixed(3)} lbs`, "weight");
+        }
+      }
+    }
+
+    if (attrs.item_package_dimensions?.[0]) {
+      const pkgDims = attrs.item_package_dimensions[0];
+      const l = parseFloat(pkgDims.length?.value);
+      const w = parseFloat(pkgDims.width?.value);
+      const h = parseFloat(pkgDims.height?.value);
+      const wt = parseFloat(pkgDims.weight?.value);
+      if (!isNaN(l) && !isNaN(w) && !isNaN(h) && l > 0 && w > 0 && h > 0) {
+        const lUnit = pkgDims.length?.unit || "";
+        const wUnit = pkgDims.width?.unit || "";
+        const hUnit = pkgDims.height?.unit || "";
+        if (packageDims === null) {
+          packageDims = {
+            l: convertDimToInches(l, lUnit),
+            w: convertDimToInches(w, wUnit),
+            h: convertDimToInches(h, hUnit),
+          };
+          log(`Found item_package_dimensions attribute for ${asin}: ${packageDims.l.toFixed(1)}x${packageDims.w.toFixed(1)}x${packageDims.h.toFixed(1)} in`, "weight");
+        }
+      }
+      if (!isNaN(wt) && wt > 0) {
+        const wtUnit = pkgDims.weight?.unit || "";
+        const converted = convertWeightToLbs(wt, wtUnit);
+        if (packageWeightLbs === null || converted > packageWeightLbs) {
+          packageWeightLbs = converted;
+          log(`Found package weight from item_package_dimensions for ${asin}: ${converted.toFixed(3)} lbs`, "weight");
+        }
+      }
+    }
+
+    if (itemWeightLbs === null && attrs.item_weight?.[0]) {
+      const iw = attrs.item_weight[0];
+      const w = parseFloat(iw.value);
+      const unit = (iw.unit || "").toLowerCase();
+      if (!isNaN(w) && w > 0) {
+        itemWeightLbs = convertWeightToLbs(w, unit);
+      }
+    }
+
+    if (data?.summaries) {
+      const summaries = Array.isArray(data.summaries) ? data.summaries : Object.values(data.summaries);
+      for (const summary of summaries as any[]) {
+        if (summary?.packageWeight) {
+          const w = parseFloat(summary.packageWeight.value);
+          const unit = (summary.packageWeight.unit || "").toLowerCase();
           if (!isNaN(w) && w > 0) {
             const converted = convertWeightToLbs(w, unit);
-            if (isPackage) {
-              shippingWeightLbs = converted;
-            } else if (itemWeightLbs === null) {
-              itemWeightLbs = converted;
-            }
-          }
-        }
-
-        if (dimSet?.length && dimSet?.width && dimSet?.height) {
-          const l = parseFloat(dimSet.length.value);
-          const w = parseFloat(dimSet.width.value);
-          const h = parseFloat(dimSet.height.value);
-          const lUnit = dimSet.length.unit || "";
-          const wUnit = dimSet.width.unit || "";
-          const hUnit = dimSet.height.unit || "";
-          if (!isNaN(l) && !isNaN(w) && !isNaN(h) && l > 0 && w > 0 && h > 0) {
-            if (isPackage || lengthIn === null) {
-              lengthIn = convertDimToInches(l, lUnit);
-              widthIn = convertDimToInches(w, wUnit);
-              heightIn = convertDimToInches(h, hUnit);
+            if (packageWeightLbs === null || converted > packageWeightLbs) {
+              packageWeightLbs = converted;
+              log(`Found packageWeight from summaries for ${asin}: ${converted.toFixed(3)} lbs`, "weight");
             }
           }
         }
       }
     }
 
-    if (itemWeightLbs === null && data?.attributes?.item_weight) {
-      const iw = data.attributes.item_weight[0];
-      if (iw) {
-        const w = parseFloat(iw.value);
-        const unit = (iw.unit || "").toLowerCase();
-        if (!isNaN(w) && w > 0) {
-          itemWeightLbs = convertWeightToLbs(w, unit);
-        }
-      }
+    log(`Available weight attributes for ${asin}: ${JSON.stringify({
+      item_package_weight: attrs.item_package_weight,
+      item_weight: attrs.item_weight,
+      item_package_dimensions: attrs.item_package_dimensions ? "[present]" : undefined,
+    })}`, "weight-attrs");
+
+    if (packageDims != null) {
+      dimWeightLbs = (packageDims.l * packageDims.w * packageDims.h) / 139;
     }
 
-    if (lengthIn != null && widthIn != null && heightIn != null) {
-      dimWeightLbs = (lengthIn * widthIn * heightIn) / 139;
+    let weightSource = "default";
+    if (packageWeightLbs != null) {
+      weightLbs = packageWeightLbs;
+      weightSource = "packageWeight";
+    } else if (dimWeightLbs != null && itemWeightLbs != null) {
+      weightLbs = Math.max(dimWeightLbs, itemWeightLbs);
+      weightSource = dimWeightLbs > itemWeightLbs ? "dimWeight" : "itemWeight (dim fallback)";
+    } else if (dimWeightLbs != null) {
+      weightLbs = dimWeightLbs;
+      weightSource = "dimWeight";
+    } else if (itemWeightLbs != null) {
+      weightLbs = itemWeightLbs;
+      weightSource = "itemWeight (last resort)";
     }
 
-    if (shippingWeightLbs != null) {
-      weightLbs = shippingWeightLbs;
-      log(`Weight for ${asin}: using shipping weight = ${shippingWeightLbs.toFixed(3)} lbs (item: ${itemWeightLbs?.toFixed(3) ?? "N/A"}, dim: ${dimWeightLbs?.toFixed(3) ?? "N/A"})`, "weight");
-    } else {
-      const actualWt = itemWeightLbs ?? 0;
-      const dimWt = dimWeightLbs ?? 0;
-      weightLbs = Math.max(actualWt, dimWt);
-      if (weightLbs <= 0) weightLbs = null;
-      log(`Weight for ${asin}: no shipping weight found, using max(item=${actualWt.toFixed(3)}, dim=${dimWt.toFixed(3)}) = ${weightLbs?.toFixed(3) ?? "N/A"} lbs`, "weight");
-    }
+    log(`Weight for ${asin}: Using ${weightSource}: ${weightLbs?.toFixed(3) ?? "1.000 (default)"} lbs | packageWeight=${packageWeightLbs?.toFixed(3) ?? "N/A"}, itemWeight=${itemWeightLbs?.toFixed(3) ?? "N/A"}, dimWeight=${dimWeightLbs?.toFixed(3) ?? "N/A"}${packageDims ? ` (${packageDims.l.toFixed(1)}x${packageDims.w.toFixed(1)}x${packageDims.h.toFixed(1)} in)` : ""}`, "weight");
 
     return { weightLbs: weightLbs ?? 1, title, imageUrl, bsrRank, bsrCategory };
   } catch (err: any) {
