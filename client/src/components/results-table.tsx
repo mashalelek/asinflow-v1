@@ -1,5 +1,4 @@
-import { useState, useMemo } from "react";
-import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
+import { useMemo } from "react";
 import { Badge } from "@/components/ui/badge";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { ExternalLink, AlertTriangle, ArrowUp, ArrowDown } from "lucide-react";
@@ -15,12 +14,19 @@ import {
   getEffectiveStorage,
 } from "@shared/schema";
 import { type ColumnConfig } from "@/lib/columns";
+import { type FilterMode } from "@/components/summary-cards";
 
 interface ResultsTableProps {
   results: AsinResult[];
   priceSource: PriceSource;
   settings: Settings;
   columnConfig: ColumnConfig;
+  activeFilter: FilterMode;
+  buySet: Set<string>;
+  onToggleBuy: (asin: string) => void;
+  sortCol: ColumnId | null;
+  sortDir: "asc" | "desc";
+  onSort: (colId: ColumnId) => void;
 }
 
 function fmt(value: number | null): string {
@@ -38,8 +44,6 @@ function fmtBsr(rank: number | null, category: string | null): string {
   if (category) return `#${formatted} in ${category}`;
   return `#${formatted}`;
 }
-
-type SortDir = "asc" | "desc";
 
 function getRowValue(
   result: AsinResult,
@@ -86,10 +90,28 @@ function getRowValue(
   }
 }
 
-export function ResultsTable({ results, priceSource, settings, columnConfig }: ResultsTableProps) {
-  const [sortCol, setSortCol] = useState<ColumnId | null>(null);
-  const [sortDir, setSortDir] = useState<SortDir>("asc");
+function isProfitable(result: AsinResult, priceSource: PriceSource, settings: Settings): boolean | null {
+  if (result.error) return null;
+  const { price } = getSelectedPrice(result, priceSource);
+  if (price == null) return null;
+  const prep = getEffectivePrep(result, settings);
+  const storage = getEffectiveStorage(result, settings);
+  const calc = calculateProfit(
+    price, result.cogs,
+    result.feesData.fbaFulfillmentFee ?? 0,
+    result.feesData.referralFee ?? 0,
+    result.feesData.feesEstimatePrice,
+    result.catalogData.weightLbs ?? 0,
+    prep.value, storage.value, settings
+  );
+  return calc.roi >= settings.minRoiThreshold && calc.margin >= settings.minMarginThreshold;
+}
 
+export function ResultsTable({
+  results, priceSource, settings, columnConfig,
+  activeFilter, buySet, onToggleBuy,
+  sortCol, sortDir, onSort,
+}: ResultsTableProps) {
   const colMap = useMemo(() => new Map(ALL_COLUMNS.map((c) => [c.id, c])), []);
 
   const visibleCols = useMemo(
@@ -97,9 +119,17 @@ export function ResultsTable({ results, priceSource, settings, columnConfig }: R
     [columnConfig]
   );
 
+  const filteredResults = useMemo(() => {
+    if (activeFilter === "all") return results;
+    if (activeFilter === "buyList") return results.filter((r) => buySet.has(r.asin));
+    if (activeFilter === "profitable") return results.filter((r) => isProfitable(r, priceSource, settings) === true);
+    if (activeFilter === "unprofitable") return results.filter((r) => isProfitable(r, priceSource, settings) === false);
+    return results;
+  }, [results, activeFilter, buySet, priceSource, settings]);
+
   const sortedResults = useMemo(() => {
-    if (!sortCol) return results;
-    const sorted = [...results].sort((a, b) => {
+    if (!sortCol) return filteredResults;
+    const sorted = [...filteredResults].sort((a, b) => {
       const va = getRowValue(a, sortCol, priceSource, settings);
       const vb = getRowValue(b, sortCol, priceSource, settings);
       if (va == null && vb == null) return 0;
@@ -113,56 +143,74 @@ export function ResultsTable({ results, priceSource, settings, columnConfig }: R
       return sortDir === "asc" ? sa.localeCompare(sb) : sb.localeCompare(sa);
     });
     return sorted;
-  }, [results, sortCol, sortDir, priceSource, settings]);
-
-  const handleSort = (colId: ColumnId) => {
-    if (sortCol === colId) {
-      setSortDir((d) => (d === "asc" ? "desc" : "asc"));
-    } else {
-      setSortCol(colId);
-      setSortDir("asc");
-    }
-  };
+  }, [filteredResults, sortCol, sortDir, priceSource, settings]);
 
   if (results.length === 0) return null;
 
+  const frozenColWidth = { rowNum: 40, buy: 40, asin: 120 };
+  const buyLeft = frozenColWidth.rowNum;
+  const asinLeft = buyLeft + frozenColWidth.buy;
+  const asinVisible = visibleCols.includes("asin");
+
   return (
-    <div className="w-full overflow-auto border rounded-md" style={{ maxHeight: "calc(100vh - 280px)" }}>
-      <Table>
-        <TableHeader className="sticky top-0 z-10 bg-background">
-          <TableRow className="border-b border-border">
-            {visibleCols.map((colId) => {
+    <div className="w-full overflow-auto relative border-y border-border" style={{ maxHeight: "calc(100vh - 280px)" }}>
+      <table className="w-full border-collapse text-sm" data-testid="results-table">
+        <thead className="sticky top-0 z-20">
+          <tr className="border-b border-border bg-muted/80 backdrop-blur">
+            <th
+              className="sticky left-0 z-30 bg-muted text-center text-xs font-medium text-muted-foreground px-2 py-2 border-r border-border"
+              style={{ width: frozenColWidth.rowNum, minWidth: frozenColWidth.rowNum }}
+            >
+              #
+            </th>
+            <th
+              className="sticky z-30 bg-muted text-center text-xs font-medium text-muted-foreground px-1 py-2 border-r border-border"
+              style={{ left: buyLeft, width: frozenColWidth.buy, minWidth: frozenColWidth.buy }}
+            >
+              ☑
+            </th>
+            {asinVisible && (
+              <th
+                className="sticky z-30 bg-muted text-left text-xs font-medium px-2 py-2 border-r border-border cursor-pointer select-none hover:bg-muted/70 transition-colors"
+                style={{ left: asinLeft, width: frozenColWidth.asin, minWidth: frozenColWidth.asin }}
+                onClick={() => onSort("asin")}
+                data-testid="header-asin"
+              >
+                <span className="inline-flex items-center gap-1">
+                  ASIN
+                  {sortCol === "asin" && (sortDir === "asc" ? <ArrowUp className="h-3 w-3" /> : <ArrowDown className="h-3 w-3" />)}
+                </span>
+              </th>
+            )}
+            {visibleCols.filter((id) => id !== "asin").map((colId) => {
               const col = colMap.get(colId)!;
               const isActive = sortCol === colId;
               return (
-                <TableHead
+                <th
                   key={colId}
-                  className={`cursor-pointer select-none whitespace-nowrap hover:bg-muted/50 transition-colors ${
-                    col.align === "right" ? "text-right" : ""
+                  className={`cursor-pointer select-none whitespace-nowrap hover:bg-muted/70 transition-colors px-3 py-2 text-xs font-medium ${
+                    col.align === "right" ? "text-right" : "text-left"
                   } ${colId === "image" ? "w-[56px]" : ""}`}
-                  onClick={() => handleSort(colId)}
+                  onClick={() => onSort(colId)}
                   data-testid={`header-${colId}`}
                 >
                   <span className="inline-flex items-center gap-1">
                     {col.label}
-                    {isActive && (
-                      sortDir === "asc"
-                        ? <ArrowUp className="h-3 w-3" />
-                        : <ArrowDown className="h-3 w-3" />
-                    )}
+                    {isActive && (sortDir === "asc" ? <ArrowUp className="h-3 w-3" /> : <ArrowDown className="h-3 w-3" />)}
                   </span>
-                </TableHead>
+                </th>
               );
             })}
-          </TableRow>
-        </TableHeader>
-        <TableBody>
+          </tr>
+        </thead>
+        <tbody>
           {sortedResults.map((result, idx) => {
             const { price, label } = getSelectedPrice(result, priceSource);
             const hasError = !!result.error;
             const notAvailable = price == null && !hasError;
             const prep = getEffectivePrep(result, settings);
             const storage = getEffectiveStorage(result, settings);
+            const isBuy = buySet.has(result.asin);
 
             let rowBg = "";
             let profitData: ReturnType<typeof calculateProfit> | null = null;
@@ -174,9 +222,7 @@ export function ResultsTable({ results, priceSource, settings, columnConfig }: R
                 result.feesData.referralFee ?? 0,
                 result.feesData.feesEstimatePrice,
                 result.catalogData.weightLbs ?? 0,
-                prep.value,
-                storage.value,
-                settings
+                prep.value, storage.value, settings
               );
 
               const meetsCriteria =
@@ -192,30 +238,59 @@ export function ResultsTable({ results, priceSource, settings, columnConfig }: R
               rowBg = "opacity-50";
             }
 
+            const buyHighlight = isBuy ? "!bg-blue-500/8 dark:!bg-blue-500/12" : "";
+            const frozenBg = isBuy ? "bg-blue-50 dark:bg-blue-950/30" : "bg-background";
+
             return (
-              <TableRow
+              <tr
                 key={`${result.asin}-${idx}`}
-                className={`${rowBg} transition-colors`}
+                className={`${rowBg} ${buyHighlight} border-b border-border transition-colors hover:bg-muted/30`}
                 data-testid={`row-result-${result.asin}`}
               >
-                {visibleCols.map((colId) => {
+                <td
+                  className={`sticky left-0 z-10 text-center text-xs text-muted-foreground px-2 py-1.5 border-r border-border ${frozenBg}`}
+                  style={{ width: frozenColWidth.rowNum, minWidth: frozenColWidth.rowNum }}
+                >
+                  {idx + 1}
+                </td>
+                <td
+                  className={`sticky z-10 text-center px-1 py-1.5 border-r border-border ${frozenBg}`}
+                  style={{ left: buyLeft, width: frozenColWidth.buy, minWidth: frozenColWidth.buy }}
+                >
+                  <input
+                    type="checkbox"
+                    checked={isBuy}
+                    onChange={() => onToggleBuy(result.asin)}
+                    className="h-3.5 w-3.5 accent-blue-500 cursor-pointer"
+                    data-testid={`checkbox-buy-${result.asin}`}
+                  />
+                </td>
+                {asinVisible && (
+                  <td
+                    className={`sticky z-10 px-2 py-1.5 border-r border-border ${frozenBg}`}
+                    style={{ left: asinLeft, width: frozenColWidth.asin, minWidth: frozenColWidth.asin }}
+                  >
+                    {renderCell("asin", result, price, label, hasError, profitData, settings, prep, storage)}
+                  </td>
+                )}
+                {visibleCols.filter((id) => id !== "asin").map((colId) => {
                   const col = colMap.get(colId)!;
                   return (
-                    <TableCell
+                    <td
                       key={colId}
-                      className={`${col.align === "right" ? "text-right" : ""} ${
+                      className={`px-3 py-1.5 ${col.align === "right" ? "text-right" : ""} ${
                         colId === "image" ? "p-1" : ""
                       }`}
                     >
                       {renderCell(colId, result, price, label, hasError, profitData, settings, prep, storage)}
-                    </TableCell>
+                    </td>
                   );
                 })}
-              </TableRow>
+              </tr>
             );
           })}
-        </TableBody>
-      </Table>
+        </tbody>
+      </table>
     </div>
   );
 }

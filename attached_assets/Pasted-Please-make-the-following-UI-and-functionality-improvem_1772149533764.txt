@@ -1,0 +1,32 @@
+Please make the following UI and functionality improvements:
+1. Sticky header:
+The table header row should always remain visible when scrolling down through results. Fix the sticky header so column names never scroll out of view.
+2. Full width table:
+The table should fill the entire screen width with no unused margins or padding on the sides. Make the layout edge-to-edge so maximum data is visible without horizontal scrolling where possible.
+3. Row numbers:
+Add a "#" column as the first column showing the row number for each ASIN (1, 2, 3...). This column should be fixed/frozen on the left side so it stays visible when scrolling horizontally. The ASIN column should also be frozen so it's always visible when scrolling horizontally.
+4. Tile filtering:
+The summary tiles at the top (Total ASINs, Profitable, Unprofitable) should act as filters when clicked:
+
+Clicking Total ASINs shows all rows (resets any filter)
+Clicking Profitable filters the table to show only rows that meet both ROI and margin thresholds
+Clicking Unprofitable filters the table to show only rows that fall below ROI or margin thresholds
+The active filter tile should have a highlighted/selected visual state so the user knows which filter is active
+Clicking the same tile again deselects it and resets to show all rows
+
+5. Combined export button:
+Replace the separate CSV and Excel buttons with a single "Export ▾" button. Clicking it opens a small dropdown menu with two options:
+
+Download CSV
+Download Excel
+The dropdown should close when the user clicks outside of it or selects an option.
+
+6. Buy List feature:
+
+Add a new first column (after the # row number column) called "☑" or "Buy" with a checkbox for each row
+Add a "Buy List" filter option — either as a fourth tile next to the existing summary tiles or as a toggle button near the price source toggle
+When the user clicks Buy List, the table filters to show only rows where the checkbox is checked
+Checked rows should have a subtle visual highlight (e.g. a slightly different row background) so they stand out at a glance
+The Buy List filter tile/button should show a count of how many items are checked (e.g. "Buy List (3)")
+Checkboxes and Buy List selections should persist if the user toggles between filters or sorts the table
+Add a "Clear Buy List" option that unchecks all checkboxes at once

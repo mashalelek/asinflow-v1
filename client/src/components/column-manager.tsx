@@ -17,6 +17,7 @@ export function ColumnManager({ config, onChange }: ColumnManagerProps) {
 
   const toggleColumn = useCallback(
     (id: ColumnId) => {
+      if (id === "asin") return;
       const next = { ...config, visible: new Set(config.visible) };
       if (next.visible.has(id)) {
         next.visible.delete(id);
@@ -109,6 +110,7 @@ export function ColumnManager({ config, onChange }: ColumnManagerProps) {
                   checked={config.visible.has(id)}
                   onCheckedChange={() => toggleColumn(id)}
                   id={`col-${id}`}
+                  disabled={id === "asin"}
                   data-testid={`checkbox-column-${id}`}
                 />
                 <label

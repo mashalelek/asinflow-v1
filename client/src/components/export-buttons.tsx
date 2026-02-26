@@ -1,5 +1,6 @@
+import { useState, useRef, useEffect } from "react";
 import { Button } from "@/components/ui/button";
-import { Download } from "lucide-react";
+import { Download, ChevronDown } from "lucide-react";
 import {
   type AsinResult,
   type PriceSource,
@@ -102,28 +103,52 @@ async function downloadExcel(results: AsinResult[], priceSource: PriceSource, se
 }
 
 export function ExportButtons({ results, priceSource, settings }: ExportButtonsProps) {
+  const [open, setOpen] = useState(false);
+  const ref = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    if (!open) return;
+    function handleClick(e: MouseEvent) {
+      if (ref.current && !ref.current.contains(e.target as Node)) {
+        setOpen(false);
+      }
+    }
+    document.addEventListener("mousedown", handleClick);
+    return () => document.removeEventListener("mousedown", handleClick);
+  }, [open]);
+
   if (results.length === 0) return null;
 
   return (
-    <div className="flex items-center gap-2 flex-wrap">
+    <div className="relative" ref={ref}>
       <Button
         variant="secondary"
         size="sm"
-        onClick={() => downloadCsv(results, priceSource, settings)}
-        data-testid="button-export-csv"
+        onClick={() => setOpen((o) => !o)}
+        data-testid="button-export"
       >
         <Download className="h-4 w-4 mr-1.5" />
-        CSV
+        Export
+        <ChevronDown className="h-3 w-3 ml-1" />
       </Button>
-      <Button
-        variant="secondary"
-        size="sm"
-        onClick={() => downloadExcel(results, priceSource, settings)}
-        data-testid="button-export-xlsx"
-      >
-        <Download className="h-4 w-4 mr-1.5" />
-        Excel
-      </Button>
+      {open && (
+        <div className="absolute right-0 top-full mt-1 z-50 bg-popover border border-border rounded-md shadow-md py-1 min-w-[150px]">
+          <button
+            className="w-full text-left px-3 py-1.5 text-sm hover:bg-muted transition-colors"
+            onClick={() => { downloadCsv(results, priceSource, settings); setOpen(false); }}
+            data-testid="button-export-csv"
+          >
+            Download CSV
+          </button>
+          <button
+            className="w-full text-left px-3 py-1.5 text-sm hover:bg-muted transition-colors"
+            onClick={() => { downloadExcel(results, priceSource, settings); setOpen(false); }}
+            data-testid="button-export-xlsx"
+          >
+            Download Excel
+          </button>
+        </div>
+      )}
     </div>
   );
 }

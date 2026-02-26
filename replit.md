@@ -10,7 +10,7 @@ A full-stack web app that analyzes Amazon FBA profitability by uploading a CSV/E
 
 ## Key Files
 - `shared/schema.ts` - TypeScript interfaces, column definitions, and calculation logic (calculateProfit, getSelectedPrice, getEffectivePrep, getEffectiveStorage)
-- `client/src/pages/home.tsx` - Main page with upload, analysis, and results
+- `client/src/pages/home.tsx` - Main page with upload, analysis, results, filter state, buy list state, sort state
 - `client/src/components/` - UI components (file-upload, results-table, settings-dialog, export-buttons, summary-cards, theme-provider, column-manager, login-screen)
 - `client/src/lib/settings.ts` - localStorage settings management
 - `client/src/lib/columns.ts` - Column config (order + visibility) persisted in localStorage
@@ -35,15 +35,29 @@ Required as Replit Secrets:
 - Streaming progress updates during analysis
 - Price source toggle (Lowest FBA / Buy Box) with fallback chain
 - Profit/ROI/Margin calculations with configurable thresholds
+- Low-inventory-level surcharge ($0.26 default, configurable in settings)
+- Full-width edge-to-edge table layout
+- Frozen columns: # (row number), ☑ (buy checkbox), ASIN always visible when scrolling horizontally
 - All columns sortable (click header to toggle asc/desc)
-- Sticky header row for scrolling
+- Sticky header row for vertical scrolling
 - Column Manager (toggle visibility, drag-to-reorder, reset to default, localStorage persistence)
 - Per-ASIN Prep/Storage overrides with asterisk indicator
-- Conditional row highlighting (green/red/gray)
-- CSV and Excel export with all fields
-- Summary cards with aggregate metrics
+- Conditional row highlighting (green/red/gray, blue for buy-list items)
+- Summary tile filters: Total ASINs, Profitable, Unprofitable, Buy List — click to filter, click again to deselect
+- Buy List: checkbox per row, persists in localStorage, "Clear Buy List" button, count shown on tile
+- Combined Export dropdown (CSV / Excel) replacing separate buttons
+- Summary cards with aggregate metrics (Avg ROI, total profit)
 - Dark/light mode toggle
 - Persistent settings via localStorage
 
 ## Column Default Order
 ASIN, Image, Product Name, COGS, Sale Price, Profit/Unit, Margin, ROI, FBA Fee, Referral Fee, Inbound Ship., Prep (hidden), Storage (hidden), BSR, Sellers (FBA), Sellers (FBM)
+
+## localStorage Keys
+- `fba-column-config` - Column order and visibility
+- `fba-analyzer-settings` - Settings (shipping cost, prep, storage, surcharge, thresholds)
+- `fba-auth-token` - Auth session
+- `fba-buy-list` - Checked ASINs for buy list
+
+## GitHub
+Repository: https://github.com/mashalelek/asinflow-v1

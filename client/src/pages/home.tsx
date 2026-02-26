@@ -1,4 +1,4 @@
-import { useState, useCallback, useEffect } from "react";
+import { useState, useCallback, useEffect, useMemo } from "react";
 import { Button } from "@/components/ui/button";
 import { Switch } from "@/components/ui/switch";
 import { Label } from "@/components/ui/label";
@@ -8,20 +8,35 @@ import { SettingsDialog } from "@/components/settings-dialog";
 import { FileUpload } from "@/components/file-upload";
 import { ResultsTable } from "@/components/results-table";
 import { ExportButtons } from "@/components/export-buttons";
-import { SummaryCards } from "@/components/summary-cards";
+import { SummaryCards, type FilterMode } from "@/components/summary-cards";
 import { ColumnManager } from "@/components/column-manager";
 import { useTheme } from "@/components/theme-provider";
 import { loadSettings } from "@/lib/settings";
 import { loadColumnConfig, type ColumnConfig } from "@/lib/columns";
-import { Sun, Moon, BarChart3, Zap, AlertTriangle } from "lucide-react";
+import { Sun, Moon, BarChart3, Zap, AlertTriangle, X } from "lucide-react";
 import {
   type AsinInput,
   type AsinResult,
   type PriceSource,
   type Settings,
   type ProgressUpdate,
+  type ColumnId,
 } from "@shared/schema";
 import { useToast } from "@/hooks/use-toast";
+
+const BUY_LIST_KEY = "fba-buy-list";
+
+function loadBuyList(): Set<string> {
+  try {
+    const stored = localStorage.getItem(BUY_LIST_KEY);
+    if (stored) return new Set(JSON.parse(stored));
+  } catch {}
+  return new Set();
+}
+
+function saveBuyList(set: Set<string>) {
+  localStorage.setItem(BUY_LIST_KEY, JSON.stringify(Array.from(set)));
+}
 
 export default function Home() {
   const { theme, toggleTheme } = useTheme();
@@ -33,6 +48,10 @@ export default function Home() {
   const [priceSource, setPriceSource] = useState<PriceSource>("lowestFba");
   const [isAnalyzing, setIsAnalyzing] = useState(false);
   const [credentialsConfigured, setCredentialsConfigured] = useState<boolean | null>(null);
+  const [activeFilter, setActiveFilter] = useState<FilterMode>("all");
+  const [buySet, setBuySet] = useState<Set<string>>(loadBuyList);
+  const [sortCol, setSortCol] = useState<ColumnId | null>(null);
+  const [sortDir, setSortDir] = useState<"asc" | "desc">("asc");
 
   useEffect(() => {
     fetch("/api/credentials-status")
@@ -116,6 +135,37 @@ export default function Home() {
     }
   }, [asins, toast]);
 
+  const handleToggleBuy = useCallback((asin: string) => {
+    setBuySet((prev) => {
+      const next = new Set(prev);
+      if (next.has(asin)) next.delete(asin);
+      else next.add(asin);
+      saveBuyList(next);
+      return next;
+    });
+  }, []);
+
+  const handleClearBuyList = useCallback(() => {
+    setBuySet(new Set());
+    saveBuyList(new Set());
+    if (activeFilter === "buyList") setActiveFilter("all");
+  }, [activeFilter]);
+
+  const handleSort = useCallback((colId: ColumnId) => {
+    setSortCol((prev) => {
+      if (prev === colId) {
+        setSortDir((d) => (d === "asc" ? "desc" : "asc"));
+        return colId;
+      }
+      setSortDir("asc");
+      return colId;
+    });
+  }, []);
+
+  const buyListCount = useMemo(() => {
+    return results.filter((r) => buySet.has(r.asin)).length;
+  }, [results, buySet]);
+
   const progressPercent = progress
     ? Math.round((progress.current / progress.total) * 100)
     : 0;
@@ -123,7 +173,7 @@ export default function Home() {
   return (
     <div className="min-h-screen bg-background">
       <header className="sticky top-0 z-50 border-b border-border bg-background/95 backdrop-blur supports-[backdrop-filter]:bg-background/60">
-        <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
+        <div className="px-4">
           <div className="flex items-center justify-between gap-4 h-14">
             <div className="flex items-center gap-2.5">
               <BarChart3 className="h-6 w-6 text-primary" />
@@ -144,60 +194,71 @@ export default function Home() {
         </div>
       </header>
 
-      <main className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-6 space-y-6">
-        {credentialsConfigured === false && (
-          <Alert variant="destructive" data-testid="alert-credentials">
-            <AlertTriangle className="h-4 w-4" />
-            <AlertDescription>
-              SP-API credentials are not configured. Add <code className="font-mono text-xs">SP_API_CLIENT_ID</code>, <code className="font-mono text-xs">SP_API_CLIENT_SECRET</code>, and <code className="font-mono text-xs">SP_API_REFRESH_TOKEN</code> to your Replit Secrets for live data. The app will still work but won't fetch real pricing data.
-            </AlertDescription>
-          </Alert>
-        )}
+      <main className="py-6 space-y-6">
+        <div className="px-4">
+          {credentialsConfigured === false && (
+            <Alert variant="destructive" data-testid="alert-credentials" className="mb-6">
+              <AlertTriangle className="h-4 w-4" />
+              <AlertDescription>
+                SP-API credentials are not configured. Add <code className="font-mono text-xs">SP_API_CLIENT_ID</code>, <code className="font-mono text-xs">SP_API_CLIENT_SECRET</code>, and <code className="font-mono text-xs">SP_API_REFRESH_TOKEN</code> to your Replit Secrets for live data. The app will still work but won't fetch real pricing data.
+              </AlertDescription>
+            </Alert>
+          )}
 
-        <div className="grid gap-6 lg:grid-cols-[1fr_auto]">
-          <FileUpload onFileProcessed={handleFileProcessed} isAnalyzing={isAnalyzing} />
+          <div className="grid gap-6 lg:grid-cols-[1fr_auto]">
+            <FileUpload onFileProcessed={handleFileProcessed} isAnalyzing={isAnalyzing} />
 
-          <div className="flex flex-col items-center justify-center gap-3">
-            <Button
-              size="lg"
-              onClick={handleAnalyze}
-              disabled={asins.length === 0 || isAnalyzing}
-              className="min-w-[160px]"
-              data-testid="button-analyze"
-            >
-              <Zap className="h-4 w-4 mr-2" />
-              {isAnalyzing ? "Analyzing..." : `Analyze ${asins.length > 0 ? asins.length : ""} ASINs`}
-            </Button>
-            {asins.length > 0 && !isAnalyzing && (
-              <p className="text-xs text-muted-foreground">
-                {asins.length} ASIN{asins.length !== 1 ? "s" : ""} ready
-              </p>
-            )}
-          </div>
-        </div>
-
-        {isAnalyzing && progress && (
-          <div className="space-y-2">
-            <div className="flex items-center justify-between text-sm">
-              <span className="text-muted-foreground">
-                Fetching {progress.current} of {progress.total} ASINs...
-              </span>
-              <span className="font-mono text-xs">{progressPercent}%</span>
+            <div className="flex flex-col items-center justify-center gap-3">
+              <Button
+                size="lg"
+                onClick={handleAnalyze}
+                disabled={asins.length === 0 || isAnalyzing}
+                className="min-w-[160px]"
+                data-testid="button-analyze"
+              >
+                <Zap className="h-4 w-4 mr-2" />
+                {isAnalyzing ? "Analyzing..." : `Analyze ${asins.length > 0 ? asins.length : ""} ASINs`}
+              </Button>
+              {asins.length > 0 && !isAnalyzing && (
+                <p className="text-xs text-muted-foreground">
+                  {asins.length} ASIN{asins.length !== 1 ? "s" : ""} ready
+                </p>
+              )}
             </div>
-            <Progress value={progressPercent} className="h-2" data-testid="progress-analysis" />
-            {progress.asin && (
-              <p className="text-xs text-muted-foreground font-mono">
-                Current: {progress.asin}
-              </p>
-            )}
           </div>
-        )}
+
+          {isAnalyzing && progress && (
+            <div className="space-y-2 mt-6">
+              <div className="flex items-center justify-between text-sm">
+                <span className="text-muted-foreground">
+                  Fetching {progress.current} of {progress.total} ASINs...
+                </span>
+                <span className="font-mono text-xs">{progressPercent}%</span>
+              </div>
+              <Progress value={progressPercent} className="h-2" data-testid="progress-analysis" />
+              {progress.asin && (
+                <p className="text-xs text-muted-foreground font-mono">
+                  Current: {progress.asin}
+                </p>
+              )}
+            </div>
+          )}
+        </div>
 
         {results.length > 0 && (
           <>
-            <SummaryCards results={results} priceSource={priceSource} settings={settings} />
+            <div className="px-4">
+              <SummaryCards
+                results={results}
+                priceSource={priceSource}
+                settings={settings}
+                activeFilter={activeFilter}
+                onFilterChange={setActiveFilter}
+                buyListCount={buyListCount}
+              />
+            </div>
 
-            <div className="flex items-center justify-between gap-4 flex-wrap">
+            <div className="flex items-center justify-between gap-4 flex-wrap px-4">
               <div className="flex items-center gap-3">
                 <Label className="text-sm text-muted-foreground whitespace-nowrap">Price Source:</Label>
                 <div className="flex items-center gap-2">
@@ -218,6 +279,18 @@ export default function Home() {
               </div>
 
               <div className="flex items-center gap-2">
+                {buySet.size > 0 && (
+                  <Button
+                    variant="ghost"
+                    size="sm"
+                    onClick={handleClearBuyList}
+                    className="text-xs text-muted-foreground"
+                    data-testid="button-clear-buy-list"
+                  >
+                    <X className="h-3 w-3 mr-1" />
+                    Clear Buy List
+                  </Button>
+                )}
                 <ExportButtons results={results} priceSource={priceSource} settings={settings} />
                 <ColumnManager config={columnConfig} onChange={setColumnConfig} />
               </div>
@@ -228,12 +301,18 @@ export default function Home() {
               priceSource={priceSource}
               settings={settings}
               columnConfig={columnConfig}
+              activeFilter={activeFilter}
+              buySet={buySet}
+              onToggleBuy={handleToggleBuy}
+              sortCol={sortCol}
+              sortDir={sortDir}
+              onSort={handleSort}
             />
           </>
         )}
 
         {!isAnalyzing && results.length === 0 && asins.length === 0 && (
-          <div className="flex flex-col items-center justify-center py-20 text-center">
+          <div className="flex flex-col items-center justify-center py-20 text-center px-4">
             <BarChart3 className="h-16 w-16 text-muted-foreground/30 mb-4" />
             <h2 className="text-lg font-medium text-muted-foreground">
               Upload a file to get started
