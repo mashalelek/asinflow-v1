@@ -32,6 +32,7 @@ Required as Replit Secrets:
 - Product Name and Image thumbnails from Catalog Items API
 - BSR (Best Seller Rank) with category name
 - Split seller counts: Sellers (FBA) and Sellers (FBM)
+- Retry logic: ASINs with missing fees/pricing/BSR are retried up to 2 times with 2s delay; only re-fetches failing components; "Retry failed" label shown for exhausted retries
 - Streaming progress updates during analysis
 - Price source toggle (Lowest FBA / Buy Box) with fallback chain
 - Profit/ROI/Margin calculations with configurable thresholds

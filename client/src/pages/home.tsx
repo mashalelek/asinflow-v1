@@ -115,7 +115,15 @@ export default function Home() {
               if (msg.type === "progress") {
                 setProgress(msg.data);
               } else if (msg.type === "result") {
-                setResults((prev) => [...prev, msg.data]);
+                const resultData = msg.data;
+                if (resultData._update) {
+                  delete resultData._update;
+                  setResults((prev) =>
+                    prev.map((r) => (r.asin === resultData.asin ? resultData : r))
+                  );
+                } else {
+                  setResults((prev) => [...prev, resultData]);
+                }
               } else if (msg.type === "complete") {
                 setProgress(null);
               }

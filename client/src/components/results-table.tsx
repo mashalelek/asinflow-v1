@@ -362,12 +362,13 @@ function renderCell(
 
     case "salePrice":
       if (hasError) {
+        const isRetryError = result.error?.includes("retries") || result.error?.includes("retry");
         return (
           <Tooltip>
             <TooltipTrigger>
-              <span className="flex items-center gap-1 justify-end text-destructive text-sm">
+              <span className="flex items-center gap-1 justify-end text-destructive text-sm font-medium">
                 <AlertTriangle className="h-3 w-3" />
-                Error
+                {isRetryError ? "Retry failed" : "Error"}
               </span>
             </TooltipTrigger>
             <TooltipContent side="top" className="max-w-[300px]">

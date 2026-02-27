@@ -67,6 +67,111 @@ function delay(ms: number) {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
+function hasValidFees(result: AsinResult): boolean {
+  const fee = result.feesData.fbaFulfillmentFee;
+  return fee != null && fee > 0;
+}
+
+function hasValidPricing(result: AsinResult): boolean {
+  return (
+    result.pricingData.lowestFbaPrice != null ||
+    result.pricingData.buyBoxPrice != null ||
+    result.pricingData.lowestPrice != null
+  );
+}
+
+function hasValidBsr(result: AsinResult): boolean {
+  return result.catalogData.bsrRank != null;
+}
+
+function needsRetry(result: AsinResult): { fees: boolean; pricing: boolean; catalog: boolean } {
+  return {
+    fees: !hasValidFees(result),
+    pricing: !hasValidPricing(result),
+    catalog: !hasValidBsr(result) && !result.error,
+  };
+}
+
+async function fetchAsinData(
+  asin: string,
+  cogs: number,
+  prepOverride: number | null,
+  storageOverride: number | null,
+  existingResult?: AsinResult,
+  retryParts?: { fees: boolean; pricing: boolean; catalog: boolean },
+): Promise<AsinResult> {
+  const shouldFetchPricing = !retryParts || retryParts.pricing;
+  const shouldFetchCatalog = !retryParts || retryParts.catalog;
+  const shouldFetchFees = !retryParts || retryParts.fees;
+
+  let pricingData = existingResult?.pricingData ?? {
+    lowestFbaPrice: null, buyBoxPrice: null, buyBoxFulfillment: null as "FBA" | "FBM" | null,
+    lowestPrice: null, avg30DayPrice: null, avg90DayPrice: null,
+    numberOfSellers: null, sellersFba: null, sellersFbm: null,
+  };
+  let catalogData = existingResult?.catalogData ?? {
+    weightLbs: null, title: null, imageUrl: null, bsrRank: null, bsrCategory: null,
+  };
+  let feesData = existingResult?.feesData ?? {
+    fbaFulfillmentFee: null, referralFee: null, feesEstimatePrice: null,
+  };
+
+  const parallelCalls: Promise<void>[] = [];
+
+  if (shouldFetchPricing) {
+    parallelCalls.push(
+      getPricing(asin).then((data) => { pricingData = data; }).catch((err) => {
+        log(`Pricing error for ${asin}: ${err.message}`, "analyzer");
+      })
+    );
+  }
+  if (shouldFetchCatalog) {
+    parallelCalls.push(
+      getCatalogData(asin).then((data) => {
+        if (!retryParts) {
+          catalogData = data;
+        } else {
+          if (data.bsrRank != null) {
+            catalogData = { ...catalogData, bsrRank: data.bsrRank, bsrCategory: data.bsrCategory };
+          }
+          if (catalogData.title == null && data.title != null) catalogData.title = data.title;
+          if (catalogData.imageUrl == null && data.imageUrl != null) catalogData.imageUrl = data.imageUrl;
+        }
+      }).catch((err) => {
+        log(`Catalog error for ${asin}: ${err.message}`, "analyzer");
+      })
+    );
+  }
+
+  await Promise.all(parallelCalls);
+
+  if (shouldFetchFees) {
+    const bestPrice =
+      pricingData.lowestFbaPrice ??
+      pricingData.buyBoxPrice ??
+      pricingData.lowestPrice ??
+      15;
+
+    try {
+      feesData = await getFees(asin, bestPrice);
+    } catch (err: any) {
+      log(`Fees error for ${asin}: ${err.message}`, "analyzer");
+    }
+  }
+
+  const error = (!hasValidFees({ feesData } as AsinResult) && !hasValidPricing({ pricingData } as AsinResult))
+    ? "Failed to fetch pricing and fee data"
+    : null;
+
+  return {
+    asin, cogs,
+    prepOverride: prepOverride ?? null,
+    storageOverride: storageOverride ?? null,
+    pricingData, feesData, catalogData,
+    error,
+  };
+}
+
 export async function registerRoutes(
   httpServer: Server,
   app: Express
@@ -129,6 +234,11 @@ export async function registerRoutes(
 
     const BATCH_SIZE = 10;
     const BATCH_DELAY = 1000;
+    const MAX_RETRIES = 2;
+    const RETRY_DELAY = 2000;
+
+    const allResults: Map<string, AsinResult> = new Map();
+    const retryQueue: { input: AsinInput; attempt: number; result: AsinResult }[] = [];
 
     for (let i = 0; i < asins.length; i++) {
       const { asin, cogs, prepOverride, storageOverride } = asins[i];
@@ -143,46 +253,17 @@ export async function registerRoutes(
       let result: AsinResult;
 
       try {
-        const [pricingData, catalogData] = await Promise.all([
-          getPricing(asin),
-          getCatalogData(asin),
-        ]);
-
-        const bestPrice =
-          pricingData.lowestFbaPrice ??
-          pricingData.buyBoxPrice ??
-          pricingData.lowestPrice ??
-          15;
-
-        const feesData = await getFees(asin, bestPrice);
-
-        result = {
-          asin,
-          cogs,
-          prepOverride: prepOverride ?? null,
-          storageOverride: storageOverride ?? null,
-          pricingData,
-          feesData,
-          catalogData,
-          error: null,
-        };
+        result = await fetchAsinData(asin, cogs, prepOverride ?? null, storageOverride ?? null);
       } catch (err: any) {
         log(`Error processing ${asin}: ${err.message}`, "analyzer");
         result = {
-          asin,
-          cogs,
+          asin, cogs,
           prepOverride: prepOverride ?? null,
           storageOverride: storageOverride ?? null,
           pricingData: {
-            lowestFbaPrice: null,
-            buyBoxPrice: null,
-            buyBoxFulfillment: null,
-            lowestPrice: null,
-            avg30DayPrice: null,
-            avg90DayPrice: null,
-            numberOfSellers: null,
-            sellersFba: null,
-            sellersFbm: null,
+            lowestFbaPrice: null, buyBoxPrice: null, buyBoxFulfillment: null,
+            lowestPrice: null, avg30DayPrice: null, avg90DayPrice: null,
+            numberOfSellers: null, sellersFba: null, sellersFbm: null,
           },
           feesData: { fbaFulfillmentFee: null, referralFee: null, feesEstimatePrice: null },
           catalogData: { weightLbs: null, title: null, imageUrl: null, bsrRank: null, bsrCategory: null },
@@ -190,10 +271,99 @@ export async function registerRoutes(
         };
       }
 
-      res.write(JSON.stringify({ type: "result", data: result }) + "\n");
+      const retryNeeded = needsRetry(result);
+      const needsAnyRetry = retryNeeded.fees || retryNeeded.pricing || retryNeeded.catalog;
+      if (needsAnyRetry) {
+        retryQueue.push({ input: asins[i], attempt: 1, result });
+        log(`Queued ${asin} for retry (fees=${retryNeeded.fees}, pricing=${retryNeeded.pricing}, catalog=${retryNeeded.catalog})`, "retry");
+        if (!retryNeeded.fees && !retryNeeded.pricing) {
+          allResults.set(asin, result);
+          res.write(JSON.stringify({ type: "result", data: result }) + "\n");
+        }
+      } else {
+        allResults.set(asin, result);
+        res.write(JSON.stringify({ type: "result", data: result }) + "\n");
+      }
 
       if ((i + 1) % BATCH_SIZE === 0 && i < asins.length - 1) {
         await delay(BATCH_DELAY);
+      }
+    }
+
+    if (retryQueue.length > 0) {
+      log(`Starting retry phase: ${retryQueue.length} ASINs to retry`, "retry");
+
+      for (let attempt = 1; attempt <= MAX_RETRIES; attempt++) {
+        const currentBatch = retryQueue.filter((r) => r.attempt === attempt);
+        if (currentBatch.length === 0) break;
+
+        log(`Retry attempt ${attempt}: ${currentBatch.length} ASINs`, "retry");
+        await delay(RETRY_DELAY);
+
+        res.write(
+          JSON.stringify({
+            type: "progress",
+            data: { current: asins.length, total: asins.length, asin: `Retrying ${currentBatch.length} ASINs (attempt ${attempt})...` },
+          }) + "\n"
+        );
+
+        for (const item of currentBatch) {
+          const { asin, cogs, prepOverride, storageOverride } = item.input;
+          const retryParts = needsRetry(item.result);
+
+          try {
+            log(`Retrying ${asin}: fees=${retryParts.fees}, pricing=${retryParts.pricing}, catalog=${retryParts.catalog}`, "retry");
+            const retried = await fetchAsinData(
+              asin, cogs, prepOverride ?? null, storageOverride ?? null,
+              item.result, retryParts,
+            );
+
+            item.result = retried;
+
+            const stillNeeds = needsRetry(retried);
+            const stillNeedsAny = stillNeeds.fees || stillNeeds.pricing || stillNeeds.catalog;
+            if (stillNeedsAny && attempt < MAX_RETRIES) {
+              item.attempt = attempt + 1;
+              log(`${asin} still needs retry after attempt ${attempt} (fees=${stillNeeds.fees}, pricing=${stillNeeds.pricing}, catalog=${stillNeeds.catalog})`, "retry");
+            } else {
+              const finalResult = (stillNeeds.fees || stillNeeds.pricing)
+                ? { ...retried, error: "Failed after retries - incomplete data" }
+                : retried;
+              if (!allResults.has(asin)) {
+                allResults.set(asin, finalResult);
+                res.write(JSON.stringify({ type: "result", data: finalResult }) + "\n");
+              } else {
+                allResults.set(asin, finalResult);
+                res.write(JSON.stringify({ type: "result", data: { ...finalResult, _update: true } }) + "\n");
+              }
+            }
+          } catch (err: any) {
+            log(`Retry error for ${asin}: ${err.message}`, "retry");
+            if (attempt >= MAX_RETRIES && !allResults.has(asin)) {
+              const errorResult: AsinResult = {
+                ...item.result,
+                error: "Failed after retries - incomplete data",
+              };
+              allResults.set(asin, errorResult);
+              res.write(JSON.stringify({ type: "result", data: errorResult }) + "\n");
+            } else if (attempt < MAX_RETRIES) {
+              item.attempt = attempt + 1;
+            }
+          }
+
+          await delay(500);
+        }
+      }
+
+      for (const item of retryQueue) {
+        if (!allResults.has(item.input.asin)) {
+          const errorResult: AsinResult = {
+            ...item.result,
+            error: "Failed after retries - incomplete data",
+          };
+          allResults.set(item.input.asin, errorResult);
+          res.write(JSON.stringify({ type: "result", data: errorResult }) + "\n");
+        }
       }
     }
 
