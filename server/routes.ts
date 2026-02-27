@@ -118,9 +118,17 @@ async function fetchAsinData(
 
   const parallelCalls: Promise<void>[] = [];
 
+  let pricingRestricted = false;
+
   if (shouldFetchPricing) {
     parallelCalls.push(
-      getPricing(asin).then((data) => { pricingData = data; }).catch((err) => {
+      getPricing(asin).then((data: any) => {
+        if (data._restricted) {
+          pricingRestricted = true;
+          log(`Pricing for ${asin} flagged as restricted`, "analyzer");
+        }
+        pricingData = data;
+      }).catch((err) => {
         log(`Pricing error for ${asin}: ${err.message}`, "analyzer");
       })
     );
@@ -146,22 +154,34 @@ async function fetchAsinData(
   await Promise.all(parallelCalls);
 
   if (shouldFetchFees) {
-    const bestPrice =
+    const realPrice =
       pricingData.lowestFbaPrice ??
       pricingData.buyBoxPrice ??
-      pricingData.lowestPrice ??
-      15;
+      pricingData.lowestPrice;
+    const bestPrice = realPrice ?? 15;
+    const usedFallbackPrice = realPrice == null;
+
+    if (usedFallbackPrice) {
+      log(`No real price available for ${asin}, using fallback price $${bestPrice} for fee estimation`, "fees");
+    }
 
     try {
       feesData = await getFees(asin, bestPrice);
+      if (usedFallbackPrice && feesData.fbaFulfillmentFee != null) {
+        log(`Discarding fee estimate for ${asin} because it was based on fallback price (got FBA=$${feesData.fbaFulfillmentFee})`, "fees");
+        feesData = { fbaFulfillmentFee: null, referralFee: null, feesEstimatePrice: null };
+      }
     } catch (err: any) {
       log(`Fees error for ${asin}: ${err.message}`, "analyzer");
     }
   }
 
-  const error = (!hasValidFees({ feesData } as AsinResult) && !hasValidPricing({ pricingData } as AsinResult))
-    ? "Failed to fetch pricing and fee data"
-    : null;
+  let error: string | null = null;
+  if (pricingRestricted && !hasValidPricing({ pricingData } as AsinResult)) {
+    error = "Restricted - no pricing data available";
+  } else if (!hasValidFees({ feesData } as AsinResult) && !hasValidPricing({ pricingData } as AsinResult)) {
+    error = "No pricing or fee data available";
+  }
 
   return {
     asin, cogs,
@@ -326,8 +346,21 @@ export async function registerRoutes(
               item.attempt = attempt + 1;
               log(`${asin} still needs retry after attempt ${attempt} (fees=${stillNeeds.fees}, pricing=${stillNeeds.pricing}, catalog=${stillNeeds.catalog})`, "retry");
             } else {
-              const finalResult = (stillNeeds.fees || stillNeeds.pricing)
-                ? { ...retried, error: "Failed after retries - incomplete data" }
+              let retryError: string | null = null;
+              if (stillNeeds.fees || stillNeeds.pricing) {
+                const missingParts: string[] = [];
+                if (stillNeeds.fees) missingParts.push("fees");
+                if (stillNeeds.pricing) missingParts.push("pricing");
+                if (stillNeeds.catalog) missingParts.push("BSR");
+                if (retried.error?.includes("Restricted")) {
+                  retryError = "Restricted - no pricing data available";
+                } else {
+                  retryError = `No data after ${attempt} retries (missing: ${missingParts.join(", ")})`;
+                }
+                log(`EXHAUSTED ${asin}: ${retryError} | fees=${retried.feesData.fbaFulfillmentFee}, pricing=[fba=${retried.pricingData.lowestFbaPrice}, bb=${retried.pricingData.buyBoxPrice}, low=${retried.pricingData.lowestPrice}], bsr=${retried.catalogData.bsrRank}, weight=${retried.catalogData.weightLbs}, category=${retried.catalogData.bsrCategory}`, "retry");
+              }
+              const finalResult = retryError
+                ? { ...retried, error: retryError }
                 : retried;
               if (!allResults.has(asin)) {
                 allResults.set(asin, finalResult);
@@ -339,14 +372,28 @@ export async function registerRoutes(
             }
           } catch (err: any) {
             log(`Retry error for ${asin}: ${err.message}`, "retry");
-            if (attempt >= MAX_RETRIES && !allResults.has(asin)) {
+            if (attempt >= MAX_RETRIES) {
+              const failNeeds = needsRetry(item.result);
+              const missingParts: string[] = [];
+              if (failNeeds.fees) missingParts.push("fees");
+              if (failNeeds.pricing) missingParts.push("pricing");
+              if (failNeeds.catalog) missingParts.push("BSR");
+              const errorMsg = item.result.error?.includes("Restricted")
+                ? "Restricted - no pricing data available"
+                : `No data after ${attempt} retries (missing: ${missingParts.join(", ")})`;
+              log(`EXHAUSTED ${asin}: ${errorMsg} | exception=${err.message}`, "retry");
               const errorResult: AsinResult = {
                 ...item.result,
-                error: "Failed after retries - incomplete data",
+                error: errorMsg,
               };
-              allResults.set(asin, errorResult);
-              res.write(JSON.stringify({ type: "result", data: errorResult }) + "\n");
-            } else if (attempt < MAX_RETRIES) {
+              if (!allResults.has(asin)) {
+                allResults.set(asin, errorResult);
+                res.write(JSON.stringify({ type: "result", data: errorResult }) + "\n");
+              } else {
+                allResults.set(asin, errorResult);
+                res.write(JSON.stringify({ type: "result", data: { ...errorResult, _update: true } }) + "\n");
+              }
+            } else {
               item.attempt = attempt + 1;
             }
           }
@@ -355,15 +402,29 @@ export async function registerRoutes(
         }
       }
 
+      const uncalculated: string[] = [];
       for (const item of retryQueue) {
         if (!allResults.has(item.input.asin)) {
+          const failNeeds = needsRetry(item.result);
+          const missingParts: string[] = [];
+          if (failNeeds.fees) missingParts.push("fees");
+          if (failNeeds.pricing) missingParts.push("pricing");
+          if (failNeeds.catalog) missingParts.push("BSR");
+          const errorMsg = item.result.error?.includes("Restricted")
+            ? "Restricted - no pricing data available"
+            : `No data after retries (missing: ${missingParts.join(", ")})`;
+          log(`EXHAUSTED (final sweep) ${item.input.asin}: ${errorMsg}`, "retry");
+          uncalculated.push(item.input.asin);
           const errorResult: AsinResult = {
             ...item.result,
-            error: "Failed after retries - incomplete data",
+            error: errorMsg,
           };
           allResults.set(item.input.asin, errorResult);
           res.write(JSON.stringify({ type: "result", data: errorResult }) + "\n");
         }
+      }
+      if (uncalculated.length > 0) {
+        log(`=== RETRY SUMMARY: ${uncalculated.length} ASINs still uncalculated: ${uncalculated.join(", ")} ===`, "retry");
       }
     }
 

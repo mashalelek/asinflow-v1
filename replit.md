@@ -32,7 +32,10 @@ Required as Replit Secrets:
 - Product Name and Image thumbnails from Catalog Items API
 - BSR (Best Seller Rank) with category name
 - Split seller counts: Sellers (FBA) and Sellers (FBM)
-- Retry logic: ASINs with missing fees/pricing/BSR are retried up to 2 times with 2s delay; only re-fetches failing components; "Retry failed" label shown for exhausted retries
+- Retry logic: ASINs with missing fees/pricing/BSR are retried up to 2 times with 2s delay; only re-fetches failing components
+- Error classification: restricted products show "Restricted", missing data shows "No data", detailed EXHAUSTED logs for each failed ASIN
+- Suspicious weight detection: items < 0.1 lbs fall back to dimensional weight; null weight when no data (no hardcoded default)
+- No fallback FBA fees: fee estimates based on fallback price ($15 default) are discarded to prevent false $3.17 fees
 - Streaming progress updates during analysis
 - Price source toggle (Lowest FBA / Buy Box) with fallback chain
 - Profit/ROI/Margin calculations with configurable thresholds

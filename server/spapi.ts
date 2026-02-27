@@ -218,7 +218,18 @@ export async function getPricing(asin: string): Promise<AsinPricingResult> {
       sellersFbm,
     };
   } catch (err: any) {
-    log(`Offers API error for ${asin}: ${err.message}`, "sp-api");
+    const statusCode = err.response?.status;
+    const apiError = err.response?.data?.errors?.[0]?.code || err.response?.data?.errors?.[0]?.message || "";
+    log(`Offers API error for ${asin} (status=${statusCode}): ${err.message} | apiError=${apiError}`, "sp-api");
+
+    if (statusCode === 403 || apiError.toLowerCase().includes("restricted") || apiError.toLowerCase().includes("unauthorized")) {
+      return {
+        lowestFbaPrice: null, buyBoxPrice: null, buyBoxFulfillment: null,
+        lowestPrice: null, avg30DayPrice: null, avg90DayPrice: null,
+        numberOfSellers: null, sellersFba: null, sellersFbm: null,
+        _restricted: true,
+      } as AsinPricingResult & { _restricted?: boolean };
+    }
 
     try {
       const data = await spApiGet("/products/pricing/v0/competitivePrice", {
@@ -267,7 +278,10 @@ export async function getPricing(asin: string): Promise<AsinPricingResult> {
         sellersFbm,
       };
     } catch (innerErr: any) {
-      log(`Competitive Pricing fallback also failed for ${asin}: ${innerErr.message}`, "sp-api");
+      const innerStatus = innerErr.response?.status;
+      const innerApiError = innerErr.response?.data?.errors?.[0]?.code || innerErr.response?.data?.errors?.[0]?.message || "";
+      log(`Competitive Pricing fallback also failed for ${asin} (status=${innerStatus}): ${innerErr.message} | apiError=${innerApiError}`, "sp-api");
+      const isRestricted = innerStatus === 403 || innerApiError.toLowerCase().includes("restricted");
       return {
         lowestFbaPrice: null,
         buyBoxPrice: null,
@@ -278,7 +292,8 @@ export async function getPricing(asin: string): Promise<AsinPricingResult> {
         numberOfSellers: null,
         sellersFba: null,
         sellersFbm: null,
-      };
+        _restricted: isRestricted || undefined,
+      } as AsinPricingResult & { _restricted?: boolean };
     }
   }
 }
@@ -362,7 +377,9 @@ export async function getFees(asin: string, price: number): Promise<AsinFeesResu
       feesEstimatePrice: price,
     };
   } catch (err: any) {
-    log(`Fees API error for ${asin}: ${err.message}`, "sp-api");
+    const statusCode = err.response?.status;
+    const apiError = err.response?.data?.errors?.[0]?.code || err.response?.data?.errors?.[0]?.message || "";
+    log(`Fees API error for ${asin} (status=${statusCode}): ${err.message} | apiError=${apiError}`, "sp-api");
     return { fbaFulfillmentFee: null, referralFee: null, feesEstimatePrice: null };
   }
 }
@@ -624,11 +641,21 @@ export async function getCatalogData(asin: string): Promise<AsinCatalogResult> {
       weightSource = "itemWeight (last resort)";
     }
 
-    log(`Weight for ${asin}: Using ${weightSource}: ${weightLbs?.toFixed(3) ?? "1.000 (default)"} lbs | packageWeight=${packageWeightLbs?.toFixed(3) ?? "N/A"}, itemWeight=${itemWeightLbs?.toFixed(3) ?? "N/A"}, dimWeight=${dimWeightLbs?.toFixed(3) ?? "N/A"}${packageDims ? ` (${packageDims.l.toFixed(1)}x${packageDims.w.toFixed(1)}x${packageDims.h.toFixed(1)} in)` : ""}`, "weight");
+    const MIN_REASONABLE_WEIGHT = 0.1;
+    if (weightLbs != null && weightLbs < MIN_REASONABLE_WEIGHT && dimWeightLbs != null && dimWeightLbs >= MIN_REASONABLE_WEIGHT) {
+      log(`WARNING: Weight for ${asin} is suspiciously low (${weightLbs.toFixed(3)} lbs via ${weightSource}). Falling back to dimWeight: ${dimWeightLbs.toFixed(3)} lbs`, "weight");
+      weightLbs = dimWeightLbs;
+      weightSource = `dimWeight (suspicious ${weightSource} override)`;
+    } else if (weightLbs != null && weightLbs < MIN_REASONABLE_WEIGHT) {
+      log(`WARNING: Weight for ${asin} is suspiciously low (${weightLbs.toFixed(3)} lbs via ${weightSource}) and no dimensional weight available for fallback`, "weight");
+    }
 
-    return { weightLbs: weightLbs ?? 1, title, imageUrl, bsrRank, bsrCategory };
+    log(`Weight for ${asin}: Using ${weightSource}: ${weightLbs?.toFixed(3) ?? "N/A (no weight found)"} lbs | packageWeight=${packageWeightLbs?.toFixed(3) ?? "N/A"}, itemWeight=${itemWeightLbs?.toFixed(3) ?? "N/A"}, dimWeight=${dimWeightLbs?.toFixed(3) ?? "N/A"}${packageDims ? ` (${packageDims.l.toFixed(1)}x${packageDims.w.toFixed(1)}x${packageDims.h.toFixed(1)} in)` : ""}`, "weight");
+
+    return { weightLbs: weightLbs ?? null, title, imageUrl, bsrRank, bsrCategory };
   } catch (err: any) {
-    log(`Catalog API error for ${asin}: ${err.message}`, "sp-api");
-    return { weightLbs: 1, title: null, imageUrl: null, bsrRank: null, bsrCategory: null };
+    const statusCode = err.response?.status;
+    log(`Catalog API error for ${asin} (status=${statusCode}): ${err.message}`, "sp-api");
+    return { weightLbs: null, title: null, imageUrl: null, bsrRank: null, bsrCategory: null };
   }
 }
