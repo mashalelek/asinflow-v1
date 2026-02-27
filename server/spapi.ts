@@ -298,7 +298,52 @@ export async function getPricing(asin: string): Promise<AsinPricingResult> {
   }
 }
 
-export async function getFees(asin: string, price: number): Promise<AsinFeesResult> {
+const CATEGORY_REFERRAL_PERCENTAGES: Record<string, number> = {
+  "Amazon Device Accessories": 0.45,
+  "Automotive & Powersports": 0.12,
+  "Baby Products": 0.08,
+  "Beauty": 0.08,
+  "Books": 0.15,
+  "Camera & Photo": 0.08,
+  "Cell Phones & Accessories": 0.08,
+  "Clothing & Accessories": 0.17,
+  "Consumer Electronics": 0.08,
+  "Electronics": 0.08,
+  "Grocery & Gourmet Food": 0.08,
+  "Health & Personal Care": 0.08,
+  "Home & Garden": 0.15,
+  "Home Improvement": 0.15,
+  "Industrial & Scientific": 0.12,
+  "Jewelry": 0.20,
+  "Kitchen": 0.15,
+  "Luggage & Travel Accessories": 0.15,
+  "Musical Instruments": 0.15,
+  "Office Products": 0.15,
+  "Outdoors": 0.15,
+  "Pet Supplies": 0.15,
+  "Shoes": 0.15,
+  "Software & Computer Games": 0.15,
+  "Sports": 0.15,
+  "Tools & Home Improvement": 0.15,
+  "Toys & Games": 0.15,
+  "Video Games": 0.15,
+  "Watches": 0.16,
+};
+
+const DEFAULT_REFERRAL_PCT = 0.15;
+
+function getCategoryReferralPercentage(category?: string | null): number {
+  if (category) {
+    for (const [key, pct] of Object.entries(CATEGORY_REFERRAL_PERCENTAGES)) {
+      if (category.toLowerCase().includes(key.toLowerCase()) || key.toLowerCase().includes(category.toLowerCase())) {
+        return pct;
+      }
+    }
+  }
+  return DEFAULT_REFERRAL_PCT;
+}
+
+export async function getFees(asin: string, price: number, category?: string | null): Promise<AsinFeesResult> {
   try {
     const body = {
       FeesEstimateRequest: {
@@ -367,6 +412,13 @@ export async function getFees(asin: string, price: number): Promise<AsinFeesResu
         log(`  WARNING: FBA fee mismatch! Sum of non-referral=$${totalFbaFee.toFixed(2)} vs (total-referral)=$${expectedFba.toFixed(2)}. Using total-based value.`, "fees");
         totalFbaFee = expectedFba;
       }
+    }
+
+    if (referralFee !== null && referralFee <= 0 && price > 0) {
+      const categoryReferralPct = getCategoryReferralPercentage(category);
+      const manualReferralFee = parseFloat((price * categoryReferralPct).toFixed(2));
+      log(`WARNING: SP-API returned $0 referral fee for ${asin} at price $${price}. Using category-based fallback: ${(categoryReferralPct * 100).toFixed(0)}% = $${manualReferralFee}`, "fees");
+      referralFee = manualReferralFee;
     }
 
     log(`  Final captured: FBA=$${totalFbaFee.toFixed(2)}, Referral=$${(referralFee ?? 0).toFixed(2)}`, "fees");

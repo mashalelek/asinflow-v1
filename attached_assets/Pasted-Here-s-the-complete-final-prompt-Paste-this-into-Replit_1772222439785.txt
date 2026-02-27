@@ -1,0 +1,105 @@
+Here's the complete final prompt:
+
+Paste this into Replit Agent:
+
+Please implement the following fixes and new features:
+
+PART 1 — Bug Fixes
+1. "No data" on active listings:
+Several ASINs are showing "No data" despite having active listings, pricing, and sellers on Amazon. The root cause is that the pricing API call is failing for these ASINs even though catalog data is returning successfully. Please implement the following:
+
+For any ASIN where catalog data succeeds but pricing fails, attempt a second pricing strategy: try getCompetitivePricing if getItemOffers fails, and vice versa
+Log the exact error message from SP-API for each "No data" ASIN so we can see why pricing is failing
+If an ASIN has active sellers but pricing fails, display "Price Unavailable" instead of "No data" to distinguish from truly inactive listings
+
+2. $0.00 referral fee:
+Some rows are showing $0.00 referral fee which is almost always incorrect. If SP-API returns $0.00 for referral fee, calculate it manually as follows:
+
+Look up the category from the catalog data
+Apply Amazon's standard referral fee percentage for that category
+Log a warning when falling back to manual calculation
+
+3. $0.00 inbound shipping persisting:
+Some rows still show $0.00 inbound shipping suggesting weight is returning as zero. Add a hard validation: if calculated inbound shipping is less than $0.05, log the raw weight data returned by SP-API for that ASIN and attempt dimensional weight calculation as fallback. Never display $0.00 inbound shipping unless the item is genuinely weightless.
+4. Inconsistent price source labels:
+Standardize all price source labels — "Lowest FBA" should never appear as just "Lowest". Audit all price source label assignments in the code and ensure consistent labeling: "Lowest FBA", "Buy Box", "BB (FBA)", "BB (FBM)", "Lowest", "30d Avg", "90d Avg", "Not Available".
+5. Missing seller counts:
+Many rows show "–" for Sellers (FBA) and Sellers (FBM). If getItemOffers returns any data at all, seller counts should be populated. Display 0 instead of "–" when the API confirms there are zero sellers of that type. Only show "–" when the API call completely failed.
+
+PART 2 — Naming Updates
+6. Rename "Prep" to "Prep Cost" everywhere:
+Replace all instances of "Prep" with "Prep Cost" throughout the entire app — Settings panel, results table column header, column mapping screen, template file, tooltips, backend parsing logic, and any console log messages.
+7. Rename "Storage" to "Additional Fees" everywhere:
+Replace all instances of "Storage" with "Additional Fees" throughout the entire app — Settings panel, results table column header, column mapping screen, template file, tooltips, backend parsing logic, and any console log messages. Update the tooltip/description to say "Any additional per-unit fees not covered by other fields (e.g. storage, misc costs)".
+
+PART 3 — Upload Flow Redesign
+8. Updated upload file column order:
+The upload file columns are now in this exact order:
+
+ASIN — required
+COGS — required
+Buy Link — optional
+Prep Cost — optional
+Additional Fees — optional
+
+9. New upload flow with column mapping:
+Redesign the upload experience as a two-step flow:
+Step 1 — Upload Screen:
+
+Keep the existing drag & drop / browse upload area
+Add a "Download Template" button above the upload area
+Clicking Download Template downloads asinflow_template.xlsx (see point 10 below)
+
+Step 2 — Column Mapping Modal (appears immediately after file upload):
+
+Show a modal titled "Match your columns"
+Display 5 rows, one for each AsinFlow field, with a dropdown on the right showing all column headers detected in the uploaded file:
+
+AsinFlow FieldYour ColumnASIN ✅ required[dropdown]COGS ✅ required[dropdown]Buy Link ⬜ optional[dropdown]Prep Cost ⬜ optional[dropdown]Additional Fees ⬜ optional[dropdown]
+
+Auto-match columns intelligently based on header names:
+
+"asin", "ASIN" → ASIN
+"cogs", "cost", "price paid", "purchase price", "unit cost" → COGS
+"buy link", "url", "link", "supplier url", "buy url" → Buy Link
+"prep", "prep cost", "prep fee" → Prep Cost
+"additional fees", "storage", "extra fees", "misc", "other fees" → Additional Fees
+
+
+User can override any auto-match via the dropdown
+Each dropdown includes a "Not in my file" option for optional fields
+Required fields (ASIN, COGS) must be mapped before the Continue button is enabled
+Show a warning icon next to any required field that hasn't been mapped yet
+Buttons at the bottom: [Cancel] and [Continue →]
+Clicking Continue proceeds to analysis with the mapped columns
+
+10. Downloadable Excel template:
+The asinflow_template.xlsx download should contain:
+
+Row 1: Title row merged across all columns — "AsinFlow Upload Template"
+Row 2: Column descriptions indicating Required/Optional for each column
+Row 3: Bold header row with column names in this exact order: ASIN, COGS, Buy Link, Prep Cost, Additional Fees
+Rows 4-6: Three example rows with realistic sample data including example Buy Link URLs
+Required columns (ASIN, COGS) headers highlighted in green
+Optional columns (Buy Link, Prep Cost, Additional Fees) headers highlighted in yellow
+Column widths auto-fitted to content
+Notes section below sample data explaining each field:
+
+ASIN: Amazon Standard Identification Number (found in product URL after /dp/)
+COGS: Your cost of goods — what you paid for the item
+Buy Link: Full URL to the supplier product page (used to display supplier domain in results)
+Prep Cost: Optional per-item prep cost — overrides the global Settings value for that row
+Additional Fees: Any additional per-unit costs not covered elsewhere (e.g. storage, misc fees) — overrides the global Settings value for that row
+
+
+
+11. Supplier column in results table:
+Add a Supplier column to the results table immediately after the Product Name column. Extract and display only the domain name from the Buy Link URL, stripping the www. prefix. Examples:
+
+https://www.plumbersstock.com/toto-thu500s.html → plumbersstock.com
+https://bulkapothecary.com/product/xyz → bulkapothecary.com
+https://www.amazon.com/dp/B001234 → amazon.com
+If no Buy Link is provided for a row, display "–" in the Supplier column.
+The Supplier value should be a clickable link that opens the original full Buy Link URL in a new tab.
+The Supplier column should be included in the column manager so users can show/hide it.
+The Supplier value should also be included in CSV and Excel exports.

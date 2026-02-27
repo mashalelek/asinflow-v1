@@ -79,7 +79,7 @@ export function SettingsDialog({ onSettingsChange }: SettingsDialogProps) {
                 />
               </div>
               <div className="flex items-center justify-between gap-4">
-                <Label htmlFor="storage" className="text-sm whitespace-nowrap">Storage Fee ($/unit)</Label>
+                <Label htmlFor="storage" className="text-sm whitespace-nowrap">Additional Fees ($/unit)</Label>
                 <Input
                   id="storage"
                   type="number"

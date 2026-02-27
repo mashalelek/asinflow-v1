@@ -69,8 +69,8 @@ export default function Home() {
     let msg = `Found ${parsed.length} ASINs ready for analysis.`;
     if (hasPrepOverrides || hasStorageOverrides) {
       const parts: string[] = [];
-      if (hasPrepOverrides) parts.push("Prep");
-      if (hasStorageOverrides) parts.push("Storage");
+      if (hasPrepOverrides) parts.push("Prep Cost");
+      if (hasStorageOverrides) parts.push("Additional Fees");
       msg += ` Per-ASIN ${parts.join(" and ")} overrides detected.`;
     }
     toast({ title: "File parsed", description: msg });
@@ -327,7 +327,7 @@ export default function Home() {
             </h2>
             <p className="text-sm text-muted-foreground/70 mt-1 max-w-md">
               Upload a CSV or Excel file with ASIN and COGS columns.
-              Optionally include Prep and Storage columns for per-ASIN overrides.
+              Optionally include Prep Cost, Additional Fees, and Buy Link columns for per-ASIN overrides.
               The analyzer will fetch pricing data from Amazon SP-API and calculate profitability for each product.
             </p>
           </div>

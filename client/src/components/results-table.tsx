@@ -12,6 +12,7 @@ import {
   calculateProfit,
   getEffectivePrep,
   getEffectiveStorage,
+  extractDomain,
 } from "@shared/schema";
 import { type ColumnConfig } from "@/lib/columns";
 import { type FilterMode } from "@/components/summary-cards";
@@ -73,6 +74,7 @@ function getRowValue(
     case "asin": return result.asin;
     case "image": return result.catalogData.imageUrl;
     case "name": return result.catalogData.title;
+    case "supplier": return extractDomain(result.buyLink);
     case "cogs": return result.cogs;
     case "salePrice": return price;
     case "profit": return profitData?.profit ?? null;
@@ -357,6 +359,23 @@ function renderCell(
       return <span className="text-sm" data-testid={`text-name-${result.asin}`}>{title}</span>;
     }
 
+    case "supplier": {
+      const domain = extractDomain(result.buyLink);
+      if (!domain) return <span className="text-muted-foreground text-sm">-</span>;
+      return (
+        <a
+          href={result.buyLink!}
+          target="_blank"
+          rel="noopener noreferrer"
+          className="flex items-center gap-1 text-primary text-sm hover:underline"
+          data-testid={`link-supplier-${result.asin}`}
+        >
+          {domain}
+          <ExternalLink className="h-3 w-3" />
+        </a>
+      );
+    }
+
     case "cogs":
       return <span className="font-mono text-sm">{fmt(result.cogs)}</span>;
 
@@ -487,10 +506,10 @@ function renderCell(
       );
 
     case "sellersFba":
-      return <span className="font-mono text-sm">{result.pricingData.sellersFba != null ? result.pricingData.sellersFba : "-"}</span>;
+      return <span className="font-mono text-sm" data-testid={`text-sellersFba-${result.asin}`}>{result.pricingData.sellersFba !== null && result.pricingData.sellersFba !== undefined ? result.pricingData.sellersFba : "-"}</span>;
 
     case "sellersFbm":
-      return <span className="font-mono text-sm">{result.pricingData.sellersFbm != null ? result.pricingData.sellersFbm : "-"}</span>;
+      return <span className="font-mono text-sm" data-testid={`text-sellersFbm-${result.asin}`}>{result.pricingData.sellersFbm !== null && result.pricingData.sellersFbm !== undefined ? result.pricingData.sellersFbm : "-"}</span>;
 
     default:
       return "-";

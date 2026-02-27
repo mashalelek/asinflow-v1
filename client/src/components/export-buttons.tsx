@@ -9,6 +9,7 @@ import {
   calculateProfit,
   getEffectivePrep,
   getEffectiveStorage,
+  extractDomain,
 } from "@shared/schema";
 
 interface ExportButtonsProps {
@@ -44,9 +45,13 @@ function buildExportData(results: AsinResult[], priceSource: PriceSource, settin
       totalFbaFee = calc.totalFbaFee;
     }
 
+    const domain = r.buyLink ? extractDomain(r.buyLink) : "";
+
     return {
       ASIN: r.asin,
       "Product Name": r.catalogData.title ?? "",
+      Supplier: domain ?? "",
+      "Buy Link": r.buyLink ?? "",
       COGS: r.cogs,
       "Sale Price": price ?? "N/A",
       "Price Source": label,
@@ -57,7 +62,7 @@ function buildExportData(results: AsinResult[], priceSource: PriceSource, settin
       "Referral Fee": adjustedReferralFee ?? "N/A",
       "Inbound Shipping": inboundShipping ?? "N/A",
       "Prep Cost": prep.value,
-      "Storage Fee": storage.value,
+      "Additional Fees": storage.value,
       BSR: r.catalogData.bsrRank ?? "N/A",
       "BSR Category": r.catalogData.bsrCategory ?? "",
       "Sellers (FBA)": r.pricingData.sellersFba ?? "N/A",

@@ -5,11 +5,11 @@ import Papa from "papaparse";
 import * as XLSX from "xlsx";
 import { getPricing, getFees, getCatalogData } from "./spapi";
 import { log } from "./index";
-import { type AsinInput, type AsinResult } from "@shared/schema";
+import { type AsinInput, type AsinResult, type ColumnMapping } from "@shared/schema";
 
 const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 10 * 1024 * 1024 } });
 
-function parseFileToAsins(buffer: Buffer, filename: string): AsinInput[] {
+function parseFileToRawRows(buffer: Buffer, filename: string): { headers: string[]; rows: Record<string, any>[] } {
   const ext = filename.toLowerCase().split(".").pop();
   let rows: Record<string, any>[] = [];
 
@@ -25,35 +25,58 @@ function parseFileToAsins(buffer: Buffer, filename: string): AsinInput[] {
     throw new Error("Unsupported file format. Please upload a .csv or .xlsx file.");
   }
 
+  const headers = rows.length > 0 ? Object.keys(rows[0]) : [];
+  return { headers, rows };
+}
+
+const COLUMN_NAME_ALIASES: Record<string, string[]> = {
+  asin: ["asin"],
+  cogs: ["cogs", "cost", "cost of goods", "unit cost", "purchase price", "price paid", "buy cost"],
+  buyLink: ["buy link", "buylink", "buy url", "buyurl", "link", "url", "supplier link", "source link", "source url"],
+  prepCost: ["prep", "prep cost", "prepcost", "prep fee", "prepfee"],
+  additionalFees: ["storage", "storage fee", "storagefee", "additional fees", "additionalfees", "additional fee", "extra fees", "misc", "misc fees", "other fees"],
+};
+
+function matchColumnName(header: string, field: string): boolean {
+  const normalized = header.toLowerCase().trim();
+  const aliases = COLUMN_NAME_ALIASES[field];
+  if (!aliases) return false;
+  return aliases.includes(normalized);
+}
+
+function mapRowsToAsins(rows: Record<string, any>[], mapping: ColumnMapping): AsinInput[] {
   const asins: AsinInput[] = [];
+
   for (const row of rows) {
-    const asinKey = Object.keys(row).find((k) => k.toLowerCase().trim() === "asin");
-    const cogsKey = Object.keys(row).find((k) => k.toLowerCase().trim() === "cogs");
-    const prepKey = Object.keys(row).find((k) => k.toLowerCase().trim() === "prep");
-    const storageKey = Object.keys(row).find((k) => k.toLowerCase().trim() === "storage");
+    if (!mapping.asin || !mapping.cogs) continue;
 
-    if (!asinKey || !cogsKey) {
-      throw new Error('File must contain "ASIN" and "COGS" columns.');
-    }
+    const asinVal = row[mapping.asin];
+    const cogsVal = row[mapping.cogs];
 
-    const asin = String(row[asinKey]).trim();
-    const cogs = parseFloat(String(row[cogsKey]));
+    if (asinVal === undefined || cogsVal === undefined) continue;
 
+    const asin = String(asinVal).trim();
+    const cogs = parseFloat(String(cogsVal));
+
+    if (!asin || isNaN(cogs)) continue;
+
+    let buyLink: string | null = null;
     let prepOverride: number | null = null;
     let storageOverride: number | null = null;
 
-    if (prepKey && row[prepKey] !== undefined && row[prepKey] !== "") {
-      const p = parseFloat(String(row[prepKey]));
+    if (mapping.buyLink && row[mapping.buyLink] !== undefined && row[mapping.buyLink] !== "") {
+      buyLink = String(row[mapping.buyLink]).trim();
+    }
+    if (mapping.prepCost && row[mapping.prepCost] !== undefined && row[mapping.prepCost] !== "") {
+      const p = parseFloat(String(row[mapping.prepCost]));
       if (!isNaN(p)) prepOverride = p;
     }
-    if (storageKey && row[storageKey] !== undefined && row[storageKey] !== "") {
-      const s = parseFloat(String(row[storageKey]));
+    if (mapping.additionalFees && row[mapping.additionalFees] !== undefined && row[mapping.additionalFees] !== "") {
+      const s = parseFloat(String(row[mapping.additionalFees]));
       if (!isNaN(s)) storageOverride = s;
     }
 
-    if (asin && !isNaN(cogs)) {
-      asins.push({ asin, cogs, prepOverride, storageOverride });
-    }
+    asins.push({ asin, cogs, buyLink, prepOverride, storageOverride });
   }
 
   if (asins.length === 0) {
@@ -61,6 +84,35 @@ function parseFileToAsins(buffer: Buffer, filename: string): AsinInput[] {
   }
 
   return asins;
+}
+
+function parseFileToAsins(buffer: Buffer, filename: string): AsinInput[] {
+  const { rows } = parseFileToRawRows(buffer, filename);
+
+  if (rows.length === 0) {
+    throw new Error("No data rows found in the file.");
+  }
+
+  const headers = Object.keys(rows[0]);
+  const asinHeader = headers.find((h) => matchColumnName(h, "asin"));
+  const cogsHeader = headers.find((h) => matchColumnName(h, "cogs"));
+  const prepHeader = headers.find((h) => matchColumnName(h, "prepCost"));
+  const storageHeader = headers.find((h) => matchColumnName(h, "additionalFees"));
+  const buyLinkHeader = headers.find((h) => matchColumnName(h, "buyLink"));
+
+  if (!asinHeader || !cogsHeader) {
+    throw new Error('File must contain "ASIN" and "COGS" columns.');
+  }
+
+  const mapping: ColumnMapping = {
+    asin: asinHeader,
+    cogs: cogsHeader,
+    buyLink: buyLinkHeader ?? null,
+    prepCost: prepHeader ?? null,
+    additionalFees: storageHeader ?? null,
+  };
+
+  return mapRowsToAsins(rows, mapping);
 }
 
 function delay(ms: number) {
@@ -97,6 +149,7 @@ async function fetchAsinData(
   cogs: number,
   prepOverride: number | null,
   storageOverride: number | null,
+  buyLink: string | null,
   existingResult?: AsinResult,
   retryParts?: { fees: boolean; pricing: boolean; catalog: boolean },
 ): Promise<AsinResult> {
@@ -166,7 +219,7 @@ async function fetchAsinData(
     }
 
     try {
-      feesData = await getFees(asin, bestPrice);
+      feesData = await getFees(asin, bestPrice, catalogData.bsrCategory);
       if (usedFallbackPrice && feesData.fbaFulfillmentFee != null) {
         log(`Discarding fee estimate for ${asin} because it was based on fallback price (got FBA=$${feesData.fbaFulfillmentFee})`, "fees");
         feesData = { fbaFulfillmentFee: null, referralFee: null, feesEstimatePrice: null };
@@ -179,12 +232,15 @@ async function fetchAsinData(
   let error: string | null = null;
   if (pricingRestricted && !hasValidPricing({ pricingData } as AsinResult)) {
     error = "Restricted - no pricing data available";
+  } else if (!hasValidPricing({ pricingData } as AsinResult) && catalogData.title != null) {
+    error = "Price unavailable - product found but pricing data could not be retrieved";
   } else if (!hasValidFees({ feesData } as AsinResult) && !hasValidPricing({ pricingData } as AsinResult)) {
     error = "No pricing or fee data available";
   }
 
   return {
     asin, cogs,
+    buyLink: buyLink ?? null,
     prepOverride: prepOverride ?? null,
     storageOverride: storageOverride ?? null,
     pricingData, feesData, catalogData,
@@ -222,6 +278,53 @@ export async function registerRoutes(
     res.json({ configured });
   });
 
+  app.get("/api/download-template", (_req: Request, res: Response) => {
+    try {
+      const wb = XLSX.utils.book_new();
+
+      const titleRow = ["AsinFlow Upload Template"];
+      const blankRow = [""];
+      const headerRow = ["ASIN", "COGS", "Buy Link", "Prep Cost", "Additional Fees"];
+      const exampleRows = [
+        ["B0EXAMPLE01", 5.99, "https://supplier.com/product1", 0.50, 0.25],
+        ["B0EXAMPLE02", 12.49, "https://amazon.com/dp/B0EXAMPLE02", "", ""],
+        ["B0EXAMPLE03", 3.25, "", 1.00, ""],
+      ];
+      const noteRows = [
+        [""],
+        ["Notes:"],
+        ["- ASIN and COGS columns are required"],
+        ["- Buy Link: URL to supplier or source page (optional)"],
+        ["- Prep Cost: Per-unit prep cost override (optional, uses default from settings if blank)"],
+        ["- Additional Fees: Per-unit storage/additional fee override (optional, uses default from settings if blank)"],
+        ["- Delete the example rows above before uploading your data"],
+      ];
+
+      const allRows = [titleRow, blankRow, headerRow, ...exampleRows, ...noteRows];
+      const ws = XLSX.utils.aoa_to_sheet(allRows);
+
+      ws["!merges"] = [{ s: { r: 0, c: 0 }, e: { r: 0, c: 4 } }];
+
+      ws["!cols"] = [
+        { wch: 16 },
+        { wch: 10 },
+        { wch: 40 },
+        { wch: 14 },
+        { wch: 18 },
+      ];
+
+      XLSX.utils.book_append_sheet(wb, ws, "Template");
+      const buf = XLSX.write(wb, { type: "buffer", bookType: "xlsx" });
+
+      res.setHeader("Content-Disposition", "attachment; filename=asinflow_template.xlsx");
+      res.setHeader("Content-Type", "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet");
+      res.send(buf);
+    } catch (err: any) {
+      log(`Template generation error: ${err.message}`, "template");
+      res.status(500).json({ message: "Failed to generate template" });
+    }
+  });
+
   app.post("/api/parse-file", upload.single("file"), (req: Request, res: Response) => {
     try {
       if (!req.file) {
@@ -229,11 +332,55 @@ export async function registerRoutes(
         return;
       }
 
-      const asins = parseFileToAsins(req.file.buffer, req.file.originalname);
+      const { headers, rows } = parseFileToRawRows(req.file.buffer, req.file.originalname);
+      const rowCount = rows.length;
+
+      const autoMapping: Record<string, string | null> = {};
+      for (const field of Object.keys(COLUMN_NAME_ALIASES)) {
+        const matched = headers.find((h) => matchColumnName(h, field));
+        autoMapping[field] = matched ?? null;
+      }
+
+      log(`Parsed ${rowCount} rows with ${headers.length} columns from ${req.file.originalname} (headers: ${headers.join(", ")})`, "parser");
+      res.json({ headers, rowCount, autoMapping });
+    } catch (err: any) {
+      res.status(400).json({ message: err.message });
+    }
+  });
+
+  app.post("/api/parse-mapped", upload.single("file"), (req: Request, res: Response) => {
+    try {
+      if (!req.file) {
+        res.status(400).json({ message: "No file uploaded" });
+        return;
+      }
+
+      let mapping: ColumnMapping;
+      try {
+        const mappingStr = req.body?.mapping;
+        if (!mappingStr) {
+          res.status(400).json({ message: "Column mapping is required" });
+          return;
+        }
+        mapping = JSON.parse(mappingStr);
+      } catch {
+        res.status(400).json({ message: "Invalid column mapping format" });
+        return;
+      }
+
+      if (!mapping.asin || !mapping.cogs) {
+        res.status(400).json({ message: "ASIN and COGS column mappings are required" });
+        return;
+      }
+
+      const { rows } = parseFileToRawRows(req.file.buffer, req.file.originalname);
+      const asins = mapRowsToAsins(rows, mapping);
+
       const hasPrepOverrides = asins.some((a) => a.prepOverride != null);
       const hasStorageOverrides = asins.some((a) => a.storageOverride != null);
-      log(`Parsed ${asins.length} ASINs from ${req.file.originalname} (prep overrides: ${hasPrepOverrides}, storage overrides: ${hasStorageOverrides})`, "parser");
-      res.json({ asins, hasPrepOverrides, hasStorageOverrides });
+      const hasBuyLinks = asins.some((a) => a.buyLink != null);
+      log(`Mapped ${asins.length} ASINs from ${req.file.originalname} (prep: ${hasPrepOverrides}, storage: ${hasStorageOverrides}, buyLinks: ${hasBuyLinks})`, "parser");
+      res.json({ asins, hasPrepOverrides, hasStorageOverrides, hasBuyLinks });
     } catch (err: any) {
       res.status(400).json({ message: err.message });
     }
@@ -261,7 +408,7 @@ export async function registerRoutes(
     const retryQueue: { input: AsinInput; attempt: number; result: AsinResult }[] = [];
 
     for (let i = 0; i < asins.length; i++) {
-      const { asin, cogs, prepOverride, storageOverride } = asins[i];
+      const { asin, cogs, prepOverride, storageOverride, buyLink } = asins[i];
 
       res.write(
         JSON.stringify({
@@ -273,11 +420,12 @@ export async function registerRoutes(
       let result: AsinResult;
 
       try {
-        result = await fetchAsinData(asin, cogs, prepOverride ?? null, storageOverride ?? null);
+        result = await fetchAsinData(asin, cogs, prepOverride ?? null, storageOverride ?? null, buyLink ?? null);
       } catch (err: any) {
         log(`Error processing ${asin}: ${err.message}`, "analyzer");
         result = {
           asin, cogs,
+          buyLink: buyLink ?? null,
           prepOverride: prepOverride ?? null,
           storageOverride: storageOverride ?? null,
           pricingData: {
@@ -328,13 +476,13 @@ export async function registerRoutes(
         );
 
         for (const item of currentBatch) {
-          const { asin, cogs, prepOverride, storageOverride } = item.input;
+          const { asin, cogs, prepOverride, storageOverride, buyLink } = item.input;
           const retryParts = needsRetry(item.result);
 
           try {
             log(`Retrying ${asin}: fees=${retryParts.fees}, pricing=${retryParts.pricing}, catalog=${retryParts.catalog}`, "retry");
             const retried = await fetchAsinData(
-              asin, cogs, prepOverride ?? null, storageOverride ?? null,
+              asin, cogs, prepOverride ?? null, storageOverride ?? null, buyLink ?? null,
               item.result, retryParts,
             );
 

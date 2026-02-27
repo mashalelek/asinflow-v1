@@ -14,6 +14,7 @@ export type Settings = z.infer<typeof settingsSchema>;
 export interface AsinInput {
   asin: string;
   cogs: number;
+  buyLink?: string | null;
   prepOverride?: number | null;
   storageOverride?: number | null;
 }
@@ -47,6 +48,7 @@ export interface CatalogData {
 export interface AsinResult {
   asin: string;
   cogs: number;
+  buyLink: string | null;
   prepOverride: number | null;
   storageOverride: number | null;
   pricingData: PricingData;
@@ -73,6 +75,14 @@ export interface ProgressUpdate {
   asin: string;
 }
 
+export interface ColumnMapping {
+  asin: string;
+  cogs: string;
+  buyLink: string | null;
+  prepCost: string | null;
+  additionalFees: string | null;
+}
+
 export function getSelectedPrice(
   result: AsinResult,
   priceSource: PriceSource
@@ -93,6 +103,12 @@ export function getSelectedPrice(
     }
   }
 
+  if (pricingData.lowestFbaPrice != null) {
+    return { price: pricingData.lowestFbaPrice, label: "Lowest FBA" };
+  }
+  if (pricingData.buyBoxPrice != null) {
+    return { price: pricingData.buyBoxPrice, label: "Buy Box" };
+  }
   if (pricingData.lowestPrice != null) {
     return { price: pricingData.lowestPrice, label: "Lowest" };
   }
@@ -143,7 +159,8 @@ export function calculateProfit(
     adjustedReferralFee = parseFloat((referralPct * salePrice).toFixed(2));
   }
 
-  const inboundShipping = weightLbs * settings.inboundShippingCost;
+  let effectiveWeight = weightLbs;
+  const inboundShipping = effectiveWeight * settings.inboundShippingCost;
   const totalFbaFee = fbaFee + settings.lowInventorySurcharge;
   const profit =
     salePrice -
@@ -160,8 +177,18 @@ export function calculateProfit(
   return { profit, roi, margin, inboundShipping, adjustedReferralFee, totalFbaFee };
 }
 
+export function extractDomain(url: string | null): string | null {
+  if (!url) return null;
+  try {
+    const hostname = new URL(url).hostname;
+    return hostname.replace(/^www\./, "");
+  } catch {
+    return null;
+  }
+}
+
 export const DEFAULT_COLUMNS = [
-  "asin", "image", "name", "cogs", "salePrice", "profit", "margin", "roi",
+  "asin", "image", "name", "supplier", "cogs", "salePrice", "profit", "margin", "roi",
   "fbaFee", "referralFee", "inboundShipping", "prep", "storage", "bsr",
   "sellersFba", "sellersFbm",
 ] as const;
@@ -179,6 +206,7 @@ export const ALL_COLUMNS: ColumnDef[] = [
   { id: "asin", label: "ASIN", defaultVisible: true, align: "left" },
   { id: "image", label: "Image", defaultVisible: true, align: "left" },
   { id: "name", label: "Product Name", defaultVisible: true, align: "left" },
+  { id: "supplier", label: "Supplier", defaultVisible: true, align: "left" },
   { id: "cogs", label: "COGS", defaultVisible: true, align: "right" },
   { id: "salePrice", label: "Sale Price", defaultVisible: true, align: "right" },
   { id: "profit", label: "Profit/Unit", defaultVisible: true, align: "right" },
@@ -187,8 +215,8 @@ export const ALL_COLUMNS: ColumnDef[] = [
   { id: "fbaFee", label: "FBA Fee", defaultVisible: true, align: "right" },
   { id: "referralFee", label: "Referral Fee", defaultVisible: true, align: "right" },
   { id: "inboundShipping", label: "Inbound Ship.", defaultVisible: true, align: "right" },
-  { id: "prep", label: "Prep", defaultVisible: false, align: "right" },
-  { id: "storage", label: "Storage", defaultVisible: false, align: "right" },
+  { id: "prep", label: "Prep Cost", defaultVisible: false, align: "right" },
+  { id: "storage", label: "Additional Fees", defaultVisible: false, align: "right" },
   { id: "bsr", label: "BSR", defaultVisible: true, align: "right" },
   { id: "sellersFba", label: "Sellers (FBA)", defaultVisible: true, align: "right" },
   { id: "sellersFbm", label: "Sellers (FBM)", defaultVisible: true, align: "right" },

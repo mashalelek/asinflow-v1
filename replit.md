@@ -9,13 +9,13 @@ A full-stack web app that analyzes Amazon FBA profitability by uploading a CSV/E
 - **No database** - this is a stateless analysis tool. Settings persist in localStorage.
 
 ## Key Files
-- `shared/schema.ts` - TypeScript interfaces, column definitions, and calculation logic (calculateProfit, getSelectedPrice, getEffectivePrep, getEffectiveStorage)
+- `shared/schema.ts` - TypeScript interfaces, column definitions, and calculation logic (calculateProfit, getSelectedPrice, getEffectivePrep, getEffectiveStorage, extractDomain, ColumnMapping)
 - `client/src/pages/home.tsx` - Main page with upload, analysis, results, filter state, buy list state, sort state
-- `client/src/components/` - UI components (file-upload, results-table, settings-dialog, export-buttons, summary-cards, theme-provider, column-manager, login-screen)
+- `client/src/components/` - UI components (file-upload, results-table, settings-dialog, export-buttons, summary-cards, theme-provider, column-manager, login-screen, column-mapping-modal)
 - `client/src/lib/settings.ts` - localStorage settings management
 - `client/src/lib/columns.ts` - Column config (order + visibility) persisted in localStorage
-- `server/routes.ts` - API routes for file parsing (with optional Prep/Storage columns) and analysis (streaming NDJSON)
-- `server/spapi.ts` - Amazon SP-API integration (OAuth token refresh, pricing, fees, catalog with images/BSR/salesRanks)
+- `server/routes.ts` - API routes for file parsing (two-step: parse-file → parse-mapped), template download, and analysis (streaming NDJSON)
+- `server/spapi.ts` - Amazon SP-API integration (OAuth token refresh, pricing, fees with referral fallback, catalog with images/BSR/salesRanks)
 
 ## SP-API Credentials
 Required as Replit Secrets:
@@ -27,13 +27,18 @@ Required as Replit Secrets:
 
 ## Features
 - Password-protected access (APP_PASSWORD secret)
-- CSV/Excel file upload and parsing (supports optional Prep/Storage columns for per-ASIN overrides)
+- Two-step upload flow: upload file → column mapping modal → analysis
+- Template download (`/api/download-template`) with example data and notes
+- Column mapping modal with auto-match and required/optional field validation
+- CSV/Excel file upload (supports ASIN, COGS, Buy Link, Prep Cost, Additional Fees columns)
 - SP-API integration for pricing, fees, catalog data (title, image, BSR, weight)
+- Supplier column: extracts domain from Buy Link, shown as clickable link
 - Product Name and Image thumbnails from Catalog Items API
 - BSR (Best Seller Rank) with category name
-- Split seller counts: Sellers (FBA) and Sellers (FBM)
+- Split seller counts: Sellers (FBA) and Sellers (FBM) — shows 0 when API confirms, "-" only when null
 - Retry logic: ASINs with missing fees/pricing/BSR are retried up to 2 times with 2s delay; only re-fetches failing components
-- Error classification: restricted products show "Restricted", missing data shows "No data", detailed EXHAUSTED logs for each failed ASIN
+- Error classification: restricted products show "Restricted", missing data shows "No data", "Price unavailable" when catalog succeeds but pricing fails
+- $0.00 referral fee fallback: category-based referral percentage map with manual calculation when SP-API returns $0
 - Suspicious weight detection: items < 0.1 lbs fall back to dimensional weight; null weight when no data (no hardcoded default)
 - No fallback FBA fees: fee estimates based on fallback price ($15 default) are discarded to prevent false $3.17 fees
 - Streaming progress updates during analysis
@@ -45,17 +50,25 @@ Required as Replit Secrets:
 - All columns sortable (click header to toggle asc/desc)
 - Sticky header row for vertical scrolling
 - Column Manager (toggle visibility, drag-to-reorder, reset to default, localStorage persistence)
-- Per-ASIN Prep/Storage overrides with asterisk indicator
+- Per-ASIN Prep Cost/Additional Fees overrides with asterisk indicator
 - Conditional row highlighting (green/red/gray, blue for buy-list items)
 - Summary tile filters: Total ASINs, Profitable, Unprofitable, Buy List — click to filter, click again to deselect
 - Buy List: checkbox per row, persists in localStorage, "Clear Buy List" button, count shown on tile
-- Combined Export dropdown (CSV / Excel) replacing separate buttons
+- Combined Export dropdown (CSV / Excel) with Supplier and Buy Link columns
 - Summary cards with aggregate metrics (Avg ROI, total profit)
 - Dark/light mode toggle
 - Persistent settings via localStorage
 
 ## Column Default Order
-ASIN, Image, Product Name, COGS, Sale Price, Profit/Unit, Margin, ROI, FBA Fee, Referral Fee, Inbound Ship., Prep (hidden), Storage (hidden), BSR, Sellers (FBA), Sellers (FBM)
+ASIN, Image, Product Name, Supplier, COGS, Sale Price, Profit/Unit, Margin, ROI, FBA Fee, Referral Fee, Inbound Ship., Prep Cost (hidden), Additional Fees (hidden), BSR, Sellers (FBA), Sellers (FBM)
+
+## API Endpoints
+- `POST /api/verify-password` - Password verification
+- `GET /api/credentials-status` - Check SP-API credentials
+- `GET /api/download-template` - Download XLSX template with example data
+- `POST /api/parse-file` - Upload file, returns `{ headers, rowCount, autoMapping }`
+- `POST /api/parse-mapped` - Upload file + column mapping, returns `{ asins, hasPrepOverrides, hasStorageOverrides, hasBuyLinks }`
+- `POST /api/analyze` - Streaming NDJSON analysis (progress, results, complete)
 
 ## localStorage Keys
 - `fba-column-config` - Column order and visibility
