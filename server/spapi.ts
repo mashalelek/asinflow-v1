@@ -146,8 +146,23 @@ export async function getPricing(asin: string): Promise<AsinPricingResult> {
       }
     }
 
+    log(`Raw NumberOfOffers for ${asin}: ${JSON.stringify(summary?.NumberOfOffers)}`, "sellers-raw");
+    log(`Raw BuyBoxEligibleOffers for ${asin}: ${JSON.stringify(summary?.BuyBoxEligibleOffers)}`, "sellers-raw");
+
     const offers = offersData?.payload?.Offers;
     if (offers && Array.isArray(offers)) {
+      log(`Raw Offers count for ${asin}: ${offers.length} offers`, "sellers-raw");
+      if (offers.length > 0) {
+        log(`First offer for ${asin}: ${JSON.stringify({
+          IsFulfilledByAmazon: offers[0].IsFulfilledByAmazon,
+          FulfillmentChannel: offers[0].FulfillmentChannel,
+          SubCondition: offers[0].SubCondition,
+          ListingPrice: offers[0].ListingPrice,
+          Shipping: offers[0].Shipping,
+          IsBuyBoxWinner: offers[0].IsBuyBoxWinner,
+        })}`, "sellers-raw");
+      }
+
       if (numberOfSellers === null) {
         numberOfSellers = offers.length;
       }
@@ -156,36 +171,42 @@ export async function getPricing(asin: string): Promise<AsinPricingResult> {
       let fbmCount = 0;
 
       for (const offer of offers) {
-        const amt = parseFloat(offer.ListingPrice?.Amount);
-        if (isNaN(amt)) continue;
-        const shipping = parseFloat(offer.Shipping?.Amount) || 0;
-        const landed = amt + shipping;
-
         const isFba =
           offer.IsFulfilledByAmazon === true ||
           offer.FulfillmentChannel === "Amazon";
 
         if (isFba) {
           fbaCount++;
-          if (lowestFbaPrice === null || landed < lowestFbaPrice) {
-            lowestFbaPrice = landed;
-          }
         } else {
           fbmCount++;
         }
 
-        if (lowestPrice === null || landed < lowestPrice) {
-          lowestPrice = landed;
-        }
+        const amt = parseFloat(offer.ListingPrice?.Amount);
+        if (!isNaN(amt)) {
+          const shipping = parseFloat(offer.Shipping?.Amount) || 0;
+          const landed = amt + shipping;
 
-        if (offer.IsBuyBoxWinner === true) {
-          buyBoxPrice = landed;
-          buyBoxFulfillment = isFba ? "FBA" : "FBM";
+          if (isFba) {
+            if (lowestFbaPrice === null || landed < lowestFbaPrice) {
+              lowestFbaPrice = landed;
+            }
+          }
+
+          if (lowestPrice === null || landed < lowestPrice) {
+            lowestPrice = landed;
+          }
+
+          if (offer.IsBuyBoxWinner === true) {
+            buyBoxPrice = landed;
+            buyBoxFulfillment = isFba ? "FBA" : "FBM";
+          }
         }
       }
 
-      if (sellersFba === null) sellersFba = fbaCount;
-      if (sellersFbm === null) sellersFbm = fbmCount;
+      if (sellersFba === null || fbaCount > sellersFba) sellersFba = fbaCount;
+      if (sellersFbm === null || fbmCount > sellersFbm) sellersFbm = fbmCount;
+
+      log(`Offer-based seller counts for ${asin}: FBA=${fbaCount}, FBM=${fbmCount} (from ${offers.length} offers)`, "sellers-raw");
     }
 
     if (sellersFba === null) sellersFba = 0;
@@ -256,14 +277,30 @@ export async function getPricing(asin: string): Promise<AsinPricingResult> {
         }
 
         const offerListings = product.CompetitivePricing?.NumberOfOfferListings || [];
+        log(`Competitive pricing NumberOfOfferListings for ${asin}: ${JSON.stringify(offerListings)}`, "sellers-raw");
         let total = 0;
+        let cpFba = 0;
+        let cpFbm = 0;
         for (const oc of offerListings) {
           const cond = oc.condition || oc.Condition || "";
+          const channel = oc.fulfillmentChannel || oc.FulfillmentChannel || "";
+          const count = parseInt(oc.Value ?? oc.OfferListingCount ?? oc.Count ?? "0") || 0;
           if (cond === "New" || cond === "new" || cond === "Any" || cond === "any" || cond === "") {
-            total += parseInt(oc.Value ?? oc.OfferListingCount ?? "0") || 0;
+            total += count;
+            if (channel === "Amazon") cpFba += count;
+            else if (channel === "Merchant") cpFbm += count;
           }
         }
-        if (total > 0) numberOfSellers = total;
+        if (total > 0) {
+          numberOfSellers = total;
+          if (cpFba > 0 || cpFbm > 0) {
+            sellersFba = cpFba;
+            sellersFbm = cpFbm;
+          } else {
+            sellersFba = total;
+            sellersFbm = 0;
+          }
+        }
       }
 
       return {
@@ -741,12 +778,29 @@ export async function getCatalogData(asin: string): Promise<AsinCatalogResult> {
       }
     }
 
-    if (itemWeightLbs === null && attrs.item_weight?.[0]) {
+    if (attrs.item_weight?.[0]) {
       const iw = attrs.item_weight[0];
       const w = parseFloat(iw.value);
       const unit = (iw.unit || "").toLowerCase();
       if (!isNaN(w) && w > 0) {
-        itemWeightLbs = convertWeightToLbs(w, unit);
+        const converted = convertWeightToLbs(w, unit);
+        if (itemWeightLbs === null || converted > itemWeightLbs) {
+          itemWeightLbs = converted;
+          log(`Found item_weight attribute for ${asin}: ${converted.toFixed(3)} lbs (raw: ${w} ${unit})`, "weight");
+        }
+      }
+    }
+
+    if (attrs.unit_weight?.[0]) {
+      const uw = attrs.unit_weight[0];
+      const w = parseFloat(uw.value);
+      const unit = (uw.unit || "").toLowerCase();
+      if (!isNaN(w) && w > 0) {
+        const converted = convertWeightToLbs(w, unit);
+        log(`Found unit_weight attribute for ${asin}: ${converted.toFixed(3)} lbs (raw: ${w} ${unit})`, "weight");
+        if (itemWeightLbs === null || converted > itemWeightLbs) {
+          itemWeightLbs = converted;
+        }
       }
     }
 
@@ -764,12 +818,44 @@ export async function getCatalogData(asin: string): Promise<AsinCatalogResult> {
             }
           }
         }
+
+        if (summary?.itemDimensions?.weight) {
+          const idw = summary.itemDimensions.weight;
+          const w = parseFloat(idw.value ?? idw);
+          const unit = (idw.unit || "pounds").toLowerCase();
+          if (!isNaN(w) && w > 0) {
+            const converted = convertWeightToLbs(w, unit);
+            log(`Found itemDimensions.weight from summaries for ${asin}: ${converted.toFixed(3)} lbs (raw: ${w} ${unit})`, "weight");
+            if (itemWeightLbs === null || converted > itemWeightLbs) {
+              itemWeightLbs = converted;
+            }
+          }
+        }
+
+        if (summary?.itemDimensions && !packageDims) {
+          const idims = summary.itemDimensions;
+          const l = parseFloat(idims.length?.value ?? 0);
+          const w = parseFloat(idims.width?.value ?? 0);
+          const h = parseFloat(idims.height?.value ?? 0);
+          if (l > 0 && w > 0 && h > 0) {
+            const lUnit = idims.length?.unit || "inches";
+            const wUnit = idims.width?.unit || "inches";
+            const hUnit = idims.height?.unit || "inches";
+            packageDims = {
+              l: convertDimToInches(l, lUnit),
+              w: convertDimToInches(w, wUnit),
+              h: convertDimToInches(h, hUnit),
+            };
+            log(`Found itemDimensions from summaries for ${asin}: ${packageDims.l.toFixed(1)}x${packageDims.w.toFixed(1)}x${packageDims.h.toFixed(1)} in`, "weight");
+          }
+        }
       }
     }
 
     log(`Available weight attributes for ${asin}: ${JSON.stringify({
       item_package_weight: attrs.item_package_weight,
       item_weight: attrs.item_weight,
+      unit_weight: attrs.unit_weight,
       item_package_dimensions: attrs.item_package_dimensions ? "[present]" : undefined,
     })}`, "weight-attrs");
 
