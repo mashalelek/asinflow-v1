@@ -38,9 +38,11 @@ Required as Replit Secrets:
 - Split seller counts: Sellers (FBA) and Sellers (FBM) — shows 0 when API confirms, "-" only when null
 - Retry logic: ASINs with missing fees/pricing/BSR are retried up to 2 times with 2s delay; only re-fetches failing components
 - Error classification: restricted products show "Restricted", missing data shows "No data", "Price unavailable" when catalog succeeds but pricing fails
-- $0.00 referral fee fallback: category-based referral percentage map with manual calculation when SP-API returns $0
+- $0.00 referral fee fallback: category-based referral percentage map (35+ categories) with manual calculation when SP-API returns $0 or null
 - Suspicious weight detection: items < 0.1 lbs fall back to dimensional weight; null weight when no data (no hardcoded default)
 - No fallback FBA fees: fee estimates based on fallback price ($15 default) are discarded to prevent false $3.17 fees
+- Batch fee estimates: up to 20 ASINs per batch API call (getBatchFees), with individual fallback on error
+- Inbound shipping: shows "?" with warning when weight unavailable instead of $0.00
 - Streaming progress updates during analysis
 - Price source toggle (Lowest FBA / Buy Box) with fallback chain
 - Profit/ROI/Margin calculations with configurable thresholds

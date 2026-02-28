@@ -461,8 +461,24 @@ function renderCell(
         </span>
       );
 
-    case "inboundShipping":
-      return <span className="font-mono text-sm">{profitData ? fmt(profitData.inboundShipping) : "-"}</span>;
+    case "inboundShipping": {
+      const weightMissing = result.catalogData.weightLbs == null || result.catalogData.weightLbs === 0;
+      if (profitData && weightMissing && profitData.inboundShipping < 0.01) {
+        return (
+          <Tooltip>
+            <TooltipTrigger asChild>
+              <span className="font-mono text-sm text-amber-500 cursor-help" data-testid={`text-inboundShipping-${result.asin}`}>
+                ? <AlertTriangle className="inline h-3 w-3" />
+              </span>
+            </TooltipTrigger>
+            <TooltipContent side="top">
+              <p className="text-xs">Weight unavailable — inbound shipping could not be calculated</p>
+            </TooltipContent>
+          </Tooltip>
+        );
+      }
+      return <span className="font-mono text-sm" data-testid={`text-inboundShipping-${result.asin}`}>{profitData ? fmt(profitData.inboundShipping) : "-"}</span>;
+    }
 
     case "prep":
       return (

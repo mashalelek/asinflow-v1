@@ -1,0 +1,35 @@
+The following bugs from the previous prompt were not fully resolved and still need fixing:
+1. $0.00 inbound shipping still appearing:
+Multiple rows still show $0.00 inbound shipping. This means the weight is returning as zero or near-zero for those ASINs. Add a strict validation rule: if the calculated inbound shipping cost is less than $0.05 after all weight lookup attempts, log the complete raw weight-related fields returned by SP-API for that ASIN and try the following fallback chain:
+
+First try packageWeight
+Then try dimensional weight: (length × width × height) / 139
+Then try itemWeight
+If all return zero or null, flag the inbound shipping cell with "?" and a tooltip saying "Weight unavailable — enter manually"
+Never silently display $0.00 for inbound shipping.
+
+2. $0.00 referral fee still appearing:
+Multiple rows still show $0.00 referral fee. If SP-API returns $0.00 for referral fee and the sale price is greater than $0, calculate the referral fee manually using Amazon's standard category referral fee percentages. Use the product category from the catalog data to determine the correct percentage. Log a warning when falling back to manual calculation. The most common referral fee percentages are:
+
+Grocery & Gourmet Food: 8%
+Health & Household: 8%
+Beauty & Personal Care: 8%
+Toys & Games: 15%
+Tools & Home Improvement: 15%
+Home & Kitchen: 15%
+Automotive: 12%
+Office Products: 15%
+Pet Supplies: 15%
+Sports & Outdoors: 15%
+Arts, Crafts & Sewing: 15%
+Books: 15%
+Electronics: 8%
+Clothing: 17%
+Default (unknown category): 15%
+
+3. Missing seller counts still showing "–":
+Many rows still show "–" for Sellers (FBA) and Sellers (FBM) instead of a number. This should only happen when the API call completely failed. Please audit the seller count parsing logic — if getItemOffers returns a response at all, even with zero offers, display 0 instead of "–". Only display "–" when the API call threw an error or timed out.
+4. 6 uncalculated ASINs:
+139 out of 145 ASINs are calculating — 6 are still failing after all retries. Please log the exact SP-API error message for each of these 6 ASINs to the console so we can identify the pattern. Display "Error — [reason]" in the Sale Price cell for failed ASINs rather than leaving them blank.
+5. Batch fee estimates (new):
+The getMyFeesEstimate endpoint supports up to 20 ASINs per request. Currently the app is calling it one ASIN at a time which at 0.1 requests/second means 145 ASINs takes over 24 minutes just for fee estimates. Please refactor the fee estimation calls to use batch requests of 20 ASINs at a time, which will reduce fee estimation time from 24 minutes to under 2 minutes for a 145 ASIN batch.

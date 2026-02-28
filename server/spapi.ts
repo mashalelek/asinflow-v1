@@ -273,9 +273,9 @@ export async function getPricing(asin: string): Promise<AsinPricingResult> {
         lowestPrice,
         avg30DayPrice: null,
         avg90DayPrice: null,
-        numberOfSellers,
-        sellersFba,
-        sellersFbm,
+        numberOfSellers: numberOfSellers ?? 0,
+        sellersFba: sellersFba ?? 0,
+        sellersFbm: sellersFbm ?? 0,
       };
     } catch (innerErr: any) {
       const innerStatus = innerErr.response?.status;
@@ -300,18 +300,24 @@ export async function getPricing(asin: string): Promise<AsinPricingResult> {
 
 const CATEGORY_REFERRAL_PERCENTAGES: Record<string, number> = {
   "Amazon Device Accessories": 0.45,
+  "Arts, Crafts & Sewing": 0.15,
+  "Automotive": 0.12,
   "Automotive & Powersports": 0.12,
   "Baby Products": 0.08,
   "Beauty": 0.08,
+  "Beauty & Personal Care": 0.08,
   "Books": 0.15,
   "Camera & Photo": 0.08,
   "Cell Phones & Accessories": 0.08,
+  "Clothing": 0.17,
   "Clothing & Accessories": 0.17,
   "Consumer Electronics": 0.08,
   "Electronics": 0.08,
   "Grocery & Gourmet Food": 0.08,
+  "Health & Household": 0.08,
   "Health & Personal Care": 0.08,
   "Home & Garden": 0.15,
+  "Home & Kitchen": 0.15,
   "Home Improvement": 0.15,
   "Industrial & Scientific": 0.12,
   "Jewelry": 0.20,
@@ -324,6 +330,7 @@ const CATEGORY_REFERRAL_PERCENTAGES: Record<string, number> = {
   "Shoes": 0.15,
   "Software & Computer Games": 0.15,
   "Sports": 0.15,
+  "Sports & Outdoors": 0.15,
   "Tools & Home Improvement": 0.15,
   "Toys & Games": 0.15,
   "Video Games": 0.15,
@@ -341,6 +348,78 @@ function getCategoryReferralPercentage(category?: string | null): number {
     }
   }
   return DEFAULT_REFERRAL_PCT;
+}
+
+function parseFeeResult(asin: string, feesEstimateResult: any, price: number, category?: string | null): AsinFeesResult {
+  const feesEstimate = feesEstimateResult?.FeesEstimate;
+  const feeDetails = feesEstimate?.FeeDetailList || [];
+  const totalFeesEstimate = feesEstimate?.TotalFeesEstimate;
+  const status = feesEstimateResult?.Status;
+
+  if (status === "ClientError" || status === "ServerError") {
+    const errMsg = feesEstimateResult?.Error?.Message || status;
+    log(`Fee estimate error for ${asin}: ${errMsg}`, "fees");
+    return { fbaFulfillmentFee: null, referralFee: null, feesEstimatePrice: null };
+  }
+
+  let referralFee: number | null = null;
+  let totalFbaFee: number = 0;
+
+  log(`Fee breakdown for ${asin} (price=$${price}):`, "fees");
+
+  for (const fee of feeDetails) {
+    const feeType = fee.FeeType || "Unknown";
+    const feeAmount = parseFloat(fee.FeeAmount?.Amount) || 0;
+    const promoAmount = parseFloat(fee.FeePromotion?.Amount) || 0;
+    const finalFee = parseFloat(fee.FinalFee?.Amount) ?? feeAmount;
+
+    let subFeeInfo = "";
+    if (fee.IncludedFeeDetailList && Array.isArray(fee.IncludedFeeDetailList)) {
+      const subParts = fee.IncludedFeeDetailList.map((sf: any) => {
+        const sfType = sf.FeeType || "Unknown";
+        const sfAmount = parseFloat(sf.FeeAmount?.Amount) || 0;
+        const sfFinal = parseFloat(sf.FinalFee?.Amount) ?? sfAmount;
+        return `${sfType}=$${sfFinal.toFixed(2)}`;
+      });
+      subFeeInfo = ` [includes: ${subParts.join(", ")}]`;
+    }
+
+    log(`  ${feeType}: amount=$${feeAmount.toFixed(2)}, final=$${finalFee.toFixed(2)}${promoAmount ? `, promo=$${promoAmount.toFixed(2)}` : ""}${subFeeInfo}`, "fees");
+
+    if (feeType === "ReferralFee") {
+      referralFee = finalFee;
+    } else {
+      totalFbaFee += finalFee;
+    }
+  }
+
+  if (totalFeesEstimate) {
+    log(`  TotalFeesEstimate: $${parseFloat(totalFeesEstimate.Amount).toFixed(2)} ${totalFeesEstimate.CurrencyCode}`, "fees");
+  }
+
+  const totalFromApi = totalFeesEstimate ? parseFloat(totalFeesEstimate.Amount) : null;
+  if (totalFromApi != null && referralFee != null) {
+    const expectedFba = totalFromApi - referralFee;
+    if (Math.abs(expectedFba - totalFbaFee) > 0.01) {
+      log(`  WARNING: FBA fee mismatch! Sum of non-referral=$${totalFbaFee.toFixed(2)} vs (total-referral)=$${expectedFba.toFixed(2)}. Using total-based value.`, "fees");
+      totalFbaFee = expectedFba;
+    }
+  }
+
+  if ((referralFee === null || referralFee <= 0) && price > 0) {
+    const categoryReferralPct = getCategoryReferralPercentage(category);
+    const manualReferralFee = parseFloat((price * categoryReferralPct).toFixed(2));
+    log(`WARNING: SP-API returned ${referralFee === null ? "null" : "$0"} referral fee for ${asin} at price $${price}. Category=${category ?? "unknown"}. Using category-based fallback: ${(categoryReferralPct * 100).toFixed(0)}% = $${manualReferralFee}`, "fees");
+    referralFee = manualReferralFee;
+  }
+
+  log(`  Final captured: FBA=$${totalFbaFee.toFixed(2)}, Referral=$${(referralFee ?? 0).toFixed(2)}`, "fees");
+
+  return {
+    fbaFulfillmentFee: totalFbaFee > 0 ? totalFbaFee : null,
+    referralFee,
+    feesEstimatePrice: price,
+  };
 }
 
 export async function getFees(asin: string, price: number, category?: string | null): Promise<AsinFeesResult> {
@@ -366,74 +445,94 @@ export async function getFees(asin: string, price: number, category?: string | n
 
     log(`Raw fee response for ${asin}: ${JSON.stringify(data?.payload?.FeesEstimateResult, null, 2)}`, "fees-raw");
 
-    const feesEstimate = data?.payload?.FeesEstimateResult?.FeesEstimate;
-    const feeDetails = feesEstimate?.FeeDetailList || [];
-    const totalFeesEstimate = feesEstimate?.TotalFeesEstimate;
-
-    let referralFee: number | null = null;
-    let totalFbaFee: number = 0;
-
-    log(`Fee breakdown for ${asin} (price=$${price}):`, "fees");
-
-    for (const fee of feeDetails) {
-      const feeType = fee.FeeType || "Unknown";
-      const feeAmount = parseFloat(fee.FeeAmount?.Amount) || 0;
-      const promoAmount = parseFloat(fee.FeePromotion?.Amount) || 0;
-      const finalFee = parseFloat(fee.FinalFee?.Amount) ?? feeAmount;
-
-      let subFeeInfo = "";
-      if (fee.IncludedFeeDetailList && Array.isArray(fee.IncludedFeeDetailList)) {
-        const subParts = fee.IncludedFeeDetailList.map((sf: any) => {
-          const sfType = sf.FeeType || "Unknown";
-          const sfAmount = parseFloat(sf.FeeAmount?.Amount) || 0;
-          const sfFinal = parseFloat(sf.FinalFee?.Amount) ?? sfAmount;
-          return `${sfType}=$${sfFinal.toFixed(2)}`;
-        });
-        subFeeInfo = ` [includes: ${subParts.join(", ")}]`;
-      }
-
-      log(`  ${feeType}: amount=$${feeAmount.toFixed(2)}, final=$${finalFee.toFixed(2)}${promoAmount ? `, promo=$${promoAmount.toFixed(2)}` : ""}${subFeeInfo}`, "fees");
-
-      if (feeType === "ReferralFee") {
-        referralFee = finalFee;
-      } else {
-        totalFbaFee += finalFee;
-      }
-    }
-
-    if (totalFeesEstimate) {
-      log(`  TotalFeesEstimate: $${parseFloat(totalFeesEstimate.Amount).toFixed(2)} ${totalFeesEstimate.CurrencyCode}`, "fees");
-    }
-
-    const totalFromApi = totalFeesEstimate ? parseFloat(totalFeesEstimate.Amount) : null;
-    if (totalFromApi != null && referralFee != null) {
-      const expectedFba = totalFromApi - referralFee;
-      if (Math.abs(expectedFba - totalFbaFee) > 0.01) {
-        log(`  WARNING: FBA fee mismatch! Sum of non-referral=$${totalFbaFee.toFixed(2)} vs (total-referral)=$${expectedFba.toFixed(2)}. Using total-based value.`, "fees");
-        totalFbaFee = expectedFba;
-      }
-    }
-
-    if (referralFee !== null && referralFee <= 0 && price > 0) {
-      const categoryReferralPct = getCategoryReferralPercentage(category);
-      const manualReferralFee = parseFloat((price * categoryReferralPct).toFixed(2));
-      log(`WARNING: SP-API returned $0 referral fee for ${asin} at price $${price}. Using category-based fallback: ${(categoryReferralPct * 100).toFixed(0)}% = $${manualReferralFee}`, "fees");
-      referralFee = manualReferralFee;
-    }
-
-    log(`  Final captured: FBA=$${totalFbaFee.toFixed(2)}, Referral=$${(referralFee ?? 0).toFixed(2)}`, "fees");
-
-    return {
-      fbaFulfillmentFee: totalFbaFee > 0 ? totalFbaFee : null,
-      referralFee,
-      feesEstimatePrice: price,
-    };
+    return parseFeeResult(asin, data?.payload?.FeesEstimateResult, price, category);
   } catch (err: any) {
     const statusCode = err.response?.status;
     const apiError = err.response?.data?.errors?.[0]?.code || err.response?.data?.errors?.[0]?.message || "";
     log(`Fees API error for ${asin} (status=${statusCode}): ${err.message} | apiError=${apiError}`, "sp-api");
     return { fbaFulfillmentFee: null, referralFee: null, feesEstimatePrice: null };
   }
+}
+
+export interface BatchFeeItem {
+  asin: string;
+  price: number;
+  category?: string | null;
+}
+
+export async function getBatchFees(items: BatchFeeItem[]): Promise<Map<string, AsinFeesResult>> {
+  const results = new Map<string, AsinFeesResult>();
+  if (items.length === 0) return results;
+
+  const BATCH_SIZE = 20;
+
+  for (let i = 0; i < items.length; i += BATCH_SIZE) {
+    const batch = items.slice(i, i + BATCH_SIZE);
+
+    const body = batch.map((item) => ({
+      FeesEstimateRequest: {
+        MarketplaceId: "ATVPDKIKX0DER",
+        IsAmazonFulfilled: true,
+        PriceToEstimateFees: {
+          ListingPrice: {
+            CurrencyCode: "USD",
+            Amount: item.price,
+          },
+        },
+        Identifier: item.asin,
+      },
+      IdType: "ASIN",
+      IdValue: item.asin,
+    }));
+
+    try {
+      log(`Batch fee request: ${batch.length} ASINs (${batch.map(b => b.asin).join(", ")})`, "fees-batch");
+
+      const data = await spApiPost("/products/fees/v0/feesEstimate", body);
+      const responseList = data || [];
+
+      for (const resp of responseList) {
+        const respAsin = resp?.IdValue || resp?.FeesEstimateIdentifier?.IdValue;
+        const feesResult = resp?.FeesEstimateResult || resp;
+        if (respAsin) {
+          const item = batch.find(b => b.asin === respAsin);
+          const parsed = parseFeeResult(respAsin, feesResult, item?.price ?? 0, item?.category);
+          results.set(respAsin, parsed);
+        }
+      }
+
+      for (const item of batch) {
+        if (!results.has(item.asin)) {
+          log(`No fee result returned for ${item.asin} in batch response`, "fees-batch");
+          results.set(item.asin, { fbaFulfillmentFee: null, referralFee: null, feesEstimatePrice: null });
+        }
+      }
+
+      log(`Batch fee response: ${results.size} results received`, "fees-batch");
+    } catch (err: any) {
+      const statusCode = err.response?.status;
+      const apiError = err.response?.data?.errors?.[0]?.code || err.response?.data?.errors?.[0]?.message || "";
+      log(`Batch Fees API error (status=${statusCode}): ${err.message} | apiError=${apiError}. Falling back to individual calls.`, "fees-batch");
+
+      for (const item of batch) {
+        if (!results.has(item.asin)) {
+          try {
+            const singleResult = await getFees(item.asin, item.price, item.category);
+            results.set(item.asin, singleResult);
+          } catch (singleErr: any) {
+            log(`Individual fee fallback also failed for ${item.asin}: ${singleErr.message}`, "fees");
+            results.set(item.asin, { fbaFulfillmentFee: null, referralFee: null, feesEstimatePrice: null });
+          }
+        }
+      }
+    }
+
+    if (i + BATCH_SIZE < items.length) {
+      await new Promise(resolve => setTimeout(resolve, 200));
+    }
+  }
+
+  return results;
 }
 
 export async function getCatalogData(asin: string): Promise<AsinCatalogResult> {
