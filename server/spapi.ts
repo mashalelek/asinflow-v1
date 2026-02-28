@@ -129,13 +129,13 @@ export async function getPricing(asin: string): Promise<AsinPricingResult> {
 
       if (summary.NumberOfOffers) {
         for (const entry of summary.NumberOfOffers) {
-          const cond = entry.condition || entry.Condition || "";
+          const cond = (entry.condition || entry.Condition || "").toLowerCase();
           const channel = entry.fulfillmentChannel || entry.FulfillmentChannel || "";
           const count = parseInt(entry.OfferCount ?? entry.Value ?? "0") || 0;
-          if (cond === "New" || cond === "new" || cond === "") {
-            if (channel === "Amazon") {
+          if (cond === "new") {
+            if (channel === "Amazon" || channel === "AFN") {
               sellersFba = (sellersFba ?? 0) + count;
-            } else if (channel === "Merchant") {
+            } else if (channel === "Merchant" || channel === "MFN") {
               sellersFbm = (sellersFbm ?? 0) + count;
             }
           }
@@ -148,32 +148,21 @@ export async function getPricing(asin: string): Promise<AsinPricingResult> {
 
     log(`Raw NumberOfOffers for ${asin}: ${JSON.stringify(summary?.NumberOfOffers)}`, "sellers-raw");
     log(`Raw BuyBoxEligibleOffers for ${asin}: ${JSON.stringify(summary?.BuyBoxEligibleOffers)}`, "sellers-raw");
+    log(`NumberOfOffers parsed for ${asin}: sellersFba=${sellersFba}, sellersFbm=${sellersFbm}, totalFromSummary=${numberOfSellers}`, "sellers-raw");
 
     const offers = offersData?.payload?.Offers;
     if (offers && Array.isArray(offers)) {
-      log(`Raw Offers count for ${asin}: ${offers.length} offers`, "sellers-raw");
-      if (offers.length > 0) {
-        log(`First offer for ${asin}: ${JSON.stringify({
-          IsFulfilledByAmazon: offers[0].IsFulfilledByAmazon,
-          FulfillmentChannel: offers[0].FulfillmentChannel,
-          SubCondition: offers[0].SubCondition,
-          ListingPrice: offers[0].ListingPrice,
-          Shipping: offers[0].Shipping,
-          IsBuyBoxWinner: offers[0].IsBuyBoxWinner,
-        })}`, "sellers-raw");
-      }
-
-      if (numberOfSellers === null) {
-        numberOfSellers = offers.length;
-      }
+      log(`Raw Offers array for ${asin}: ${offers.length} offers`, "sellers-raw");
 
       let fbaCount = 0;
       let fbmCount = 0;
 
       for (const offer of offers) {
+        const channel = offer.FulfillmentChannel || "";
         const isFba =
           offer.IsFulfilledByAmazon === true ||
-          offer.FulfillmentChannel === "Amazon";
+          channel === "Amazon" ||
+          channel === "AFN";
 
         if (isFba) {
           fbaCount++;
@@ -203,10 +192,13 @@ export async function getPricing(asin: string): Promise<AsinPricingResult> {
         }
       }
 
-      if (sellersFba === null || fbaCount > sellersFba) sellersFba = fbaCount;
-      if (sellersFbm === null || fbmCount > sellersFbm) sellersFbm = fbmCount;
+      log(`Offer-based counts for ${asin}: FBA=${fbaCount}, FBM=${fbmCount} (from ${offers.length} offers, first page only)`, "sellers-raw");
 
-      log(`Offer-based seller counts for ${asin}: FBA=${fbaCount}, FBM=${fbmCount} (from ${offers.length} offers)`, "sellers-raw");
+      if (sellersFba === null) sellersFba = fbaCount;
+      if (sellersFbm === null) sellersFbm = fbmCount;
+      if (numberOfSellers === null) {
+        numberOfSellers = (sellersFba ?? 0) + (sellersFbm ?? 0);
+      }
     }
 
     if (sellersFba === null) sellersFba = 0;
