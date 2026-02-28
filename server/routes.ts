@@ -3,7 +3,7 @@ import { createServer, type Server } from "http";
 import multer from "multer";
 import Papa from "papaparse";
 import * as XLSX from "xlsx";
-import { getPricing, getFees, getCatalogData, getBatchFees, type BatchFeeItem, type AsinFeesResult } from "./spapi";
+import { getPricing, getFees, getCatalogData } from "./spapi";
 import { log } from "./index";
 import { type AsinInput, type AsinResult, type ColumnMapping } from "@shared/schema";
 
@@ -396,132 +396,75 @@ export async function registerRoutes(
     const RETRY_DELAY = 2000;
 
     const allResults: Map<string, AsinResult> = new Map();
-    const retryQueue: { input: AsinInput; attempt: number; result: AsinResult; pricingRestricted: boolean; pricingData: AsinResult["pricingData"]; catalogData: AsinResult["catalogData"] }[] = [];
+    const retryQueue: { input: AsinInput; attempt: number; result: AsinResult }[] = [];
 
-    type IntermediateData = {
-      input: AsinInput;
-      pricingData: AsinResult["pricingData"];
-      catalogData: AsinResult["catalogData"];
-      pricingRestricted: boolean;
-      error?: string;
-    };
-
-    for (let batchStart = 0; batchStart < asins.length; batchStart += BATCH_SIZE) {
-      const batchEnd = Math.min(batchStart + BATCH_SIZE, asins.length);
-      const batch = asins.slice(batchStart, batchEnd);
+    for (let i = 0; i < asins.length; i++) {
+      const input = asins[i];
 
       res.write(
         JSON.stringify({
           type: "progress",
-          data: { current: batchStart + 1, total: asins.length, asin: `Processing batch ${Math.floor(batchStart / BATCH_SIZE) + 1}...` },
+          data: { current: i + 1, total: asins.length, asin: input.asin },
         }) + "\n"
       );
 
-      const intermediates: IntermediateData[] = await Promise.all(
-        batch.map(async (input) => {
-          try {
-            const { pricingData, catalogData, pricingRestricted } = await fetchPricingAndCatalog(input.asin);
-            return { input, pricingData, catalogData, pricingRestricted };
-          } catch (err: any) {
-            log(`Error fetching pricing/catalog for ${input.asin}: ${err.message}`, "analyzer");
-            return {
-              input,
-              pricingData: {
-                lowestFbaPrice: null, buyBoxPrice: null, buyBoxFulfillment: null as "FBA" | "FBM" | null,
-                lowestPrice: null, avg30DayPrice: null, avg90DayPrice: null,
-                numberOfSellers: null, sellersFba: null, sellersFbm: null,
-              },
-              catalogData: { weightLbs: null, title: null, imageUrl: null, bsrRank: null, bsrCategory: null },
-              pricingRestricted: false,
-              error: err.message || "Unknown error",
-            };
-          }
-        })
-      );
+      let result: AsinResult;
 
-      const feeItems: BatchFeeItem[] = [];
-      const feeItemFlags: Map<string, boolean> = new Map();
-      for (const item of intermediates) {
-        if (item.error) continue;
-        const { price, isFallback } = getFeePriceForAsin(item.pricingData);
-        feeItemFlags.set(item.input.asin, isFallback);
-        if (isFallback) {
-          log(`No real price available for ${item.input.asin}, using fallback price $${price} for fee estimation`, "fees");
-        }
-        feeItems.push({ asin: item.input.asin, price, category: item.catalogData.bsrCategory });
-      }
+      try {
+        const { pricingData, catalogData, pricingRestricted } = await fetchPricingAndCatalog(input.asin);
 
-      let batchFeeResults = new Map<string, AsinFeesResult>();
-      if (feeItems.length > 0) {
-        try {
-          batchFeeResults = await getBatchFees(feeItems);
-        } catch (err: any) {
-          log(`Batch fee error: ${err.message}. Falling back to individual calls.`, "fees-batch");
-        }
-      }
-
-      for (const item of intermediates) {
+        const { price: feePrice, isFallback } = getFeePriceForAsin(pricingData);
         let feesData: AsinResult["feesData"] = { fbaFulfillmentFee: null, referralFee: null, feesEstimatePrice: null };
 
-        if (!item.error) {
-          const batchFee = batchFeeResults.get(item.input.asin);
-          const isFallback = feeItemFlags.get(item.input.asin) ?? true;
-
-          if (batchFee) {
-            if (isFallback && batchFee.fbaFulfillmentFee != null) {
-              log(`Discarding fee estimate for ${item.input.asin} because it was based on fallback price (got FBA=$${batchFee.fbaFulfillmentFee})`, "fees");
-            } else {
-              feesData = batchFee;
-            }
-          }
-
-          if (!feesData.fbaFulfillmentFee && !isFallback) {
-            try {
-              const { price } = getFeePriceForAsin(item.pricingData);
-              feesData = await getFees(item.input.asin, price, item.catalogData.bsrCategory);
-            } catch (err: any) {
-              log(`Individual fee fallback for ${item.input.asin} failed: ${err.message}`, "fees");
-            }
-          }
+        if (isFallback) {
+          log(`No real price available for ${input.asin}, using fallback price $${feePrice} for fee estimation`, "fees");
         }
 
-        const result = item.error
-          ? {
-              asin: item.input.asin,
-              cogs: item.input.cogs,
-              buyLink: item.input.buyLink ?? null,
-              prepOverride: item.input.prepOverride ?? null,
-              storageOverride: item.input.storageOverride ?? null,
-              pricingData: item.pricingData,
-              feesData,
-              catalogData: item.catalogData,
-              error: item.error,
-            }
-          : buildResult(item.input, item.pricingData, item.catalogData, feesData, item.pricingRestricted);
-
-        const retryNeeded = needsRetry(result);
-        const needsAnyRetry = retryNeeded.fees || retryNeeded.pricing || retryNeeded.catalog;
-        if (needsAnyRetry) {
-          retryQueue.push({ input: item.input, attempt: 1, result, pricingRestricted: item.pricingRestricted, pricingData: item.pricingData, catalogData: item.catalogData });
-          log(`Queued ${item.input.asin} for retry (fees=${retryNeeded.fees}, pricing=${retryNeeded.pricing}, catalog=${retryNeeded.catalog})`, "retry");
-          if (!retryNeeded.fees && !retryNeeded.pricing) {
-            allResults.set(item.input.asin, result);
-            res.write(JSON.stringify({ type: "result", data: result }) + "\n");
+        try {
+          feesData = await getFees(input.asin, feePrice, catalogData.bsrCategory);
+          if (isFallback && feesData.fbaFulfillmentFee != null) {
+            log(`Discarding fee estimate for ${input.asin} because it was based on fallback price (got FBA=$${feesData.fbaFulfillmentFee})`, "fees");
+            feesData = { fbaFulfillmentFee: null, referralFee: null, feesEstimatePrice: null };
           }
-        } else {
-          allResults.set(item.input.asin, result);
-          res.write(JSON.stringify({ type: "result", data: result }) + "\n");
+        } catch (err: any) {
+          log(`Fees error for ${input.asin}: ${err.message}`, "analyzer");
         }
+
+        result = buildResult(input, pricingData, catalogData, feesData, pricingRestricted);
+      } catch (err: any) {
+        log(`Error processing ${input.asin}: ${err.message}\n${err.stack}`, "analyzer");
+        result = {
+          asin: input.asin,
+          cogs: input.cogs,
+          buyLink: input.buyLink ?? null,
+          prepOverride: input.prepOverride ?? null,
+          storageOverride: input.storageOverride ?? null,
+          pricingData: {
+            lowestFbaPrice: null, buyBoxPrice: null, buyBoxFulfillment: null,
+            lowestPrice: null, avg30DayPrice: null, avg90DayPrice: null,
+            numberOfSellers: null, sellersFba: null, sellersFbm: null,
+          },
+          feesData: { fbaFulfillmentFee: null, referralFee: null, feesEstimatePrice: null },
+          catalogData: { weightLbs: null, title: null, imageUrl: null, bsrRank: null, bsrCategory: null },
+          error: err.message || "Unknown error",
+        };
       }
 
-      res.write(
-        JSON.stringify({
-          type: "progress",
-          data: { current: batchEnd, total: asins.length, asin: batch[batch.length - 1].asin },
-        }) + "\n"
-      );
+      const retryNeeded = needsRetry(result);
+      const needsAnyRetry = retryNeeded.fees || retryNeeded.pricing || retryNeeded.catalog;
+      if (needsAnyRetry) {
+        retryQueue.push({ input, attempt: 1, result });
+        log(`Queued ${input.asin} for retry (fees=${retryNeeded.fees}, pricing=${retryNeeded.pricing}, catalog=${retryNeeded.catalog})`, "retry");
+        if (!retryNeeded.fees && !retryNeeded.pricing) {
+          allResults.set(input.asin, result);
+          res.write(JSON.stringify({ type: "result", data: result }) + "\n");
+        }
+      } else {
+        allResults.set(input.asin, result);
+        res.write(JSON.stringify({ type: "result", data: result }) + "\n");
+      }
 
-      if (batchEnd < asins.length) {
+      if ((i + 1) % BATCH_SIZE === 0 && i < asins.length - 1) {
         await delay(BATCH_DELAY);
       }
     }
@@ -543,101 +486,99 @@ export async function registerRoutes(
           }) + "\n"
         );
 
-        const retryIntermediates: { item: typeof currentBatch[0]; pricingData: AsinResult["pricingData"]; catalogData: AsinResult["catalogData"]; pricingRestricted: boolean }[] = [];
-
         for (const item of currentBatch) {
           const retryParts = needsRetry(item.result);
 
           try {
             log(`Retrying ${item.input.asin}: fees=${retryParts.fees}, pricing=${retryParts.pricing}, catalog=${retryParts.catalog}`, "retry");
 
+            let pricingData = item.result.pricingData;
+            let catalogData = item.result.catalogData;
+            let pricingRestricted = false;
+
             if (retryParts.pricing || retryParts.catalog) {
-              const { pricingData, catalogData, pricingRestricted } = await fetchPricingAndCatalog(
-                item.input.asin, item.result, retryParts,
-              );
-              item.pricingData = pricingData;
-              item.catalogData = catalogData;
-              item.pricingRestricted = pricingRestricted || item.pricingRestricted;
+              const fetched = await fetchPricingAndCatalog(item.input.asin, item.result, retryParts);
+              pricingData = fetched.pricingData;
+              catalogData = fetched.catalogData;
+              pricingRestricted = fetched.pricingRestricted;
             }
 
-            retryIntermediates.push({ item, pricingData: item.pricingData, catalogData: item.catalogData, pricingRestricted: item.pricingRestricted });
-          } catch (err: any) {
-            log(`Retry pricing/catalog error for ${item.input.asin}: ${err.message}`, "retry");
-            retryIntermediates.push({ item, pricingData: item.pricingData, catalogData: item.catalogData, pricingRestricted: item.pricingRestricted });
-          }
-        }
-
-        const retryFeeItems: BatchFeeItem[] = [];
-        const retryFeeFlags: Map<string, boolean> = new Map();
-        for (const ri of retryIntermediates) {
-          const retryParts = needsRetry(ri.item.result);
-          if (retryParts.fees) {
-            const { price, isFallback } = getFeePriceForAsin(ri.pricingData);
-            retryFeeFlags.set(ri.item.input.asin, isFallback);
-            retryFeeItems.push({ asin: ri.item.input.asin, price, category: ri.catalogData.bsrCategory });
-          }
-        }
-
-        let retryFeeResults = new Map<string, AsinFeesResult>();
-        if (retryFeeItems.length > 0) {
-          try {
-            retryFeeResults = await getBatchFees(retryFeeItems);
-          } catch (err: any) {
-            log(`Retry batch fee error: ${err.message}`, "fees-batch");
-          }
-        }
-
-        for (const ri of retryIntermediates) {
-          const { item } = ri;
-          const asin = item.input.asin;
-          const retryParts = needsRetry(item.result);
-          let feesData = item.result.feesData;
-
-          if (retryParts.fees) {
-            const batchFee = retryFeeResults.get(asin);
-            const isFallback = retryFeeFlags.get(asin) ?? true;
-            if (batchFee && !(isFallback && batchFee.fbaFulfillmentFee != null)) {
-              feesData = batchFee;
-            } else if (batchFee && isFallback && batchFee.fbaFulfillmentFee != null) {
-              log(`Discarding retry fee estimate for ${asin} because it was based on fallback price`, "fees");
-            }
-          }
-
-          const retried = buildResult(item.input, ri.pricingData, ri.catalogData, feesData, ri.pricingRestricted);
-          item.result = retried;
-
-          const stillNeeds = needsRetry(retried);
-          const stillNeedsAny = stillNeeds.fees || stillNeeds.pricing || stillNeeds.catalog;
-          if (stillNeedsAny && attempt < MAX_RETRIES) {
-            item.attempt = attempt + 1;
-            log(`${asin} still needs retry after attempt ${attempt} (fees=${stillNeeds.fees}, pricing=${stillNeeds.pricing}, catalog=${stillNeeds.catalog})`, "retry");
-          } else {
-            let retryError: string | null = null;
-            if (stillNeeds.fees || stillNeeds.pricing) {
-              const missingParts: string[] = [];
-              if (stillNeeds.fees) missingParts.push("fees");
-              if (stillNeeds.pricing) missingParts.push("pricing");
-              if (stillNeeds.catalog) missingParts.push("BSR");
-              if (retried.error?.includes("Restricted")) {
-                retryError = "Restricted - no pricing data available";
-              } else {
-                retryError = `No data after ${attempt} retries (missing: ${missingParts.join(", ")})`;
+            let feesData = item.result.feesData;
+            if (retryParts.fees) {
+              const { price: feePrice, isFallback } = getFeePriceForAsin(pricingData);
+              try {
+                feesData = await getFees(item.input.asin, feePrice, catalogData.bsrCategory);
+                if (isFallback && feesData.fbaFulfillmentFee != null) {
+                  log(`Discarding retry fee estimate for ${item.input.asin} because it was based on fallback price (got FBA=$${feesData.fbaFulfillmentFee})`, "fees");
+                  feesData = { fbaFulfillmentFee: null, referralFee: null, feesEstimatePrice: null };
+                }
+              } catch (err: any) {
+                log(`Retry fees error for ${item.input.asin}: ${err.message}`, "retry");
               }
-              log(`EXHAUSTED ${asin}: ${retryError} | fees=${retried.feesData.fbaFulfillmentFee}, pricing=[fba=${retried.pricingData.lowestFbaPrice}, bb=${retried.pricingData.buyBoxPrice}, low=${retried.pricingData.lowestPrice}], bsr=${retried.catalogData.bsrRank}, weight=${retried.catalogData.weightLbs}, category=${retried.catalogData.bsrCategory}`, "retry");
             }
-            const finalResult = retryError
-              ? { ...retried, error: retryError }
-              : retried;
-            if (!allResults.has(asin)) {
-              allResults.set(asin, finalResult);
-              res.write(JSON.stringify({ type: "result", data: finalResult }) + "\n");
+
+            const retried = buildResult(item.input, pricingData, catalogData, feesData, pricingRestricted);
+            item.result = retried;
+
+            const stillNeeds = needsRetry(retried);
+            const stillNeedsAny = stillNeeds.fees || stillNeeds.pricing || stillNeeds.catalog;
+            if (stillNeedsAny && attempt < MAX_RETRIES) {
+              item.attempt = attempt + 1;
+              log(`${item.input.asin} still needs retry after attempt ${attempt} (fees=${stillNeeds.fees}, pricing=${stillNeeds.pricing}, catalog=${stillNeeds.catalog})`, "retry");
             } else {
-              allResults.set(asin, finalResult);
-              res.write(JSON.stringify({ type: "result", data: { ...finalResult, _update: true } }) + "\n");
+              let retryError: string | null = null;
+              if (stillNeeds.fees || stillNeeds.pricing) {
+                const missingParts: string[] = [];
+                if (stillNeeds.fees) missingParts.push("fees");
+                if (stillNeeds.pricing) missingParts.push("pricing");
+                if (stillNeeds.catalog) missingParts.push("BSR");
+                if (retried.error?.includes("Restricted")) {
+                  retryError = "Restricted - no pricing data available";
+                } else {
+                  retryError = `No data after ${attempt} retries (missing: ${missingParts.join(", ")})`;
+                }
+                log(`EXHAUSTED ${item.input.asin}: ${retryError} | fees=${retried.feesData.fbaFulfillmentFee}, pricing=[fba=${retried.pricingData.lowestFbaPrice}, bb=${retried.pricingData.buyBoxPrice}, low=${retried.pricingData.lowestPrice}], bsr=${retried.catalogData.bsrRank}, weight=${retried.catalogData.weightLbs}, category=${retried.catalogData.bsrCategory}`, "retry");
+              }
+              const finalResult = retryError
+                ? { ...retried, error: retryError }
+                : retried;
+              if (!allResults.has(item.input.asin)) {
+                allResults.set(item.input.asin, finalResult);
+                res.write(JSON.stringify({ type: "result", data: finalResult }) + "\n");
+              } else {
+                allResults.set(item.input.asin, finalResult);
+                res.write(JSON.stringify({ type: "result", data: { ...finalResult, _update: true } }) + "\n");
+              }
+            }
+          } catch (err: any) {
+            log(`Retry error for ${item.input.asin}: ${err.message}`, "retry");
+            if (attempt >= MAX_RETRIES) {
+              const failNeeds = needsRetry(item.result);
+              const missingParts: string[] = [];
+              if (failNeeds.fees) missingParts.push("fees");
+              if (failNeeds.pricing) missingParts.push("pricing");
+              if (failNeeds.catalog) missingParts.push("BSR");
+              const errorMsg = item.result.error?.includes("Restricted")
+                ? "Restricted - no pricing data available"
+                : `No data after ${attempt} retries (missing: ${missingParts.join(", ")})`;
+              log(`EXHAUSTED ${item.input.asin}: ${errorMsg} | exception=${err.message}`, "retry");
+              const errorResult: AsinResult = {
+                ...item.result,
+                error: errorMsg,
+              };
+              if (!allResults.has(item.input.asin)) {
+                allResults.set(item.input.asin, errorResult);
+                res.write(JSON.stringify({ type: "result", data: errorResult }) + "\n");
+              } else {
+                allResults.set(item.input.asin, errorResult);
+                res.write(JSON.stringify({ type: "result", data: { ...errorResult, _update: true } }) + "\n");
+              }
+            } else {
+              item.attempt = attempt + 1;
             }
           }
 
-          await delay(200);
+          await delay(500);
         }
       }
 
