@@ -517,7 +517,7 @@ export async function registerRoutes(
               }
             }
 
-            const retried = buildResult(item.input, pricingData, catalogData, feesData, pricingRestricted);
+            let retried = buildResult(item.input, pricingData, catalogData, feesData, pricingRestricted);
             item.result = retried;
 
             const stillNeeds = needsRetry(retried);
