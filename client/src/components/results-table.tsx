@@ -63,7 +63,7 @@ function getRowValue(
       result.feesData.fbaFulfillmentFee ?? 0,
       result.feesData.referralFee ?? 0,
       result.feesData.feesEstimatePrice,
-      result.catalogData.weightLbs ?? 0,
+      result.catalogData.weightLbs,
       prep.value,
       storage.value,
       settings
@@ -103,7 +103,7 @@ function isProfitable(result: AsinResult, priceSource: PriceSource, settings: Se
     result.feesData.fbaFulfillmentFee ?? 0,
     result.feesData.referralFee ?? 0,
     result.feesData.feesEstimatePrice,
-    result.catalogData.weightLbs ?? 0,
+    result.catalogData.weightLbs,
     prep.value, storage.value, settings
   );
   return calc.roi >= settings.minRoiThreshold && calc.margin >= settings.minMarginThreshold;
@@ -223,7 +223,7 @@ export function ResultsTable({
                 result.feesData.fbaFulfillmentFee ?? 0,
                 result.feesData.referralFee ?? 0,
                 result.feesData.feesEstimatePrice,
-                result.catalogData.weightLbs ?? 0,
+                result.catalogData.weightLbs,
                 prep.value, storage.value, settings
               );
 
@@ -462,8 +462,7 @@ function renderCell(
       );
 
     case "inboundShipping": {
-      const weightMissing = result.catalogData.weightLbs == null || result.catalogData.weightLbs === 0;
-      if (profitData && weightMissing && profitData.inboundShipping < 0.01) {
+      if (profitData && profitData.inboundShipping == null) {
         return (
           <Tooltip>
             <TooltipTrigger asChild>
@@ -477,7 +476,7 @@ function renderCell(
           </Tooltip>
         );
       }
-      return <span className="font-mono text-sm" data-testid={`text-inboundShipping-${result.asin}`}>{profitData ? fmt(profitData.inboundShipping) : "-"}</span>;
+      return <span className="font-mono text-sm" data-testid={`text-inboundShipping-${result.asin}`}>{profitData ? fmt(profitData.inboundShipping ?? 0) : "-"}</span>;
     }
 
     case "prep":

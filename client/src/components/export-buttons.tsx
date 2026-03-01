@@ -32,7 +32,7 @@ function buildExportData(results: AsinResult[], priceSource: PriceSource, settin
         r.feesData.fbaFulfillmentFee ?? 0,
         r.feesData.referralFee ?? 0,
         r.feesData.feesEstimatePrice,
-        r.catalogData.weightLbs ?? 0,
+        r.catalogData.weightLbs,
         prep.value,
         storage.value,
         settings
@@ -60,7 +60,7 @@ function buildExportData(results: AsinResult[], priceSource: PriceSource, settin
       "ROI (%)": roi != null ? roi.toFixed(1) : "N/A",
       "FBA Fee": totalFbaFee ?? (r.feesData.fbaFulfillmentFee ?? "N/A"),
       "Referral Fee": adjustedReferralFee ?? "N/A",
-      "Inbound Shipping": inboundShipping ?? "N/A",
+      "Inbound Shipping": inboundShipping != null ? inboundShipping.toFixed(2) : "?",
       "Prep Cost": prep.value,
       "Additional Fees": storage.value,
       BSR: r.catalogData.bsrRank ?? "N/A",

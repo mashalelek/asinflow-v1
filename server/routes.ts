@@ -3,7 +3,7 @@ import { createServer, type Server } from "http";
 import multer from "multer";
 import Papa from "papaparse";
 import * as XLSX from "xlsx";
-import { getPricing, getFees, getCatalogData } from "./spapi";
+import { getPricing, getFees, getCatalogData, estimateFeeFallback } from "./spapi";
 import { log } from "./index";
 import { type AsinInput, type AsinResult, type ColumnMapping } from "@shared/schema";
 
@@ -526,12 +526,24 @@ export async function registerRoutes(
               item.attempt = attempt + 1;
               log(`${item.input.asin} still needs retry after attempt ${attempt} (fees=${stillNeeds.fees}, pricing=${stillNeeds.pricing}, catalog=${stillNeeds.catalog})`, "retry");
             } else {
+              if (stillNeeds.fees && hasValidPricing(retried)) {
+                const { price: fallbackPrice } = getFeePriceForAsin(retried.pricingData);
+                const fallbackFees = estimateFeeFallback(
+                  item.input.asin, fallbackPrice,
+                  retried.catalogData.weightLbs,
+                  retried.catalogData.bsrCategory
+                );
+                retried = buildResult(item.input, retried.pricingData, retried.catalogData, fallbackFees, pricingRestricted);
+                log(`Used fee fallback for ${item.input.asin}: FBA=$${fallbackFees.fbaFulfillmentFee}, Referral=$${fallbackFees.referralFee}`, "retry");
+              }
+
+              const updatedNeeds = needsRetry(retried);
               let retryError: string | null = null;
-              if (stillNeeds.fees || stillNeeds.pricing) {
+              if (updatedNeeds.pricing) {
                 const missingParts: string[] = [];
-                if (stillNeeds.fees) missingParts.push("fees");
-                if (stillNeeds.pricing) missingParts.push("pricing");
-                if (stillNeeds.catalog) missingParts.push("BSR");
+                if (updatedNeeds.fees) missingParts.push("fees");
+                if (updatedNeeds.pricing) missingParts.push("pricing");
+                if (updatedNeeds.catalog) missingParts.push("BSR");
                 if (retried.error?.includes("Restricted")) {
                   retryError = "Restricted - no pricing data available";
                 } else {
@@ -553,18 +565,34 @@ export async function registerRoutes(
           } catch (err: any) {
             log(`Retry error for ${item.input.asin}: ${err.message}`, "retry");
             if (attempt >= MAX_RETRIES) {
-              const failNeeds = needsRetry(item.result);
+              let finalItem = item.result;
+              const failNeeds = needsRetry(finalItem);
+
+              if (failNeeds.fees && hasValidPricing(finalItem)) {
+                const { price: fallbackPrice } = getFeePriceForAsin(finalItem.pricingData);
+                const fallbackFees = estimateFeeFallback(
+                  item.input.asin, fallbackPrice,
+                  finalItem.catalogData.weightLbs,
+                  finalItem.catalogData.bsrCategory
+                );
+                finalItem = buildResult(item.input, finalItem.pricingData, finalItem.catalogData, fallbackFees, false);
+                log(`Used fee fallback (exception path) for ${item.input.asin}: FBA=$${fallbackFees.fbaFulfillmentFee}, Referral=$${fallbackFees.referralFee}`, "retry");
+              }
+
+              const updatedFailNeeds = needsRetry(finalItem);
               const missingParts: string[] = [];
-              if (failNeeds.fees) missingParts.push("fees");
-              if (failNeeds.pricing) missingParts.push("pricing");
-              if (failNeeds.catalog) missingParts.push("BSR");
-              const errorMsg = item.result.error?.includes("Restricted")
-                ? "Restricted - no pricing data available"
-                : `No data after ${attempt} retries (missing: ${missingParts.join(", ")})`;
-              log(`EXHAUSTED ${item.input.asin}: ${errorMsg} | exception=${err.message}`, "retry");
+              if (updatedFailNeeds.fees) missingParts.push("fees");
+              if (updatedFailNeeds.pricing) missingParts.push("pricing");
+              if (updatedFailNeeds.catalog) missingParts.push("BSR");
+              const errorMsg = (missingParts.length > 0)
+                ? (finalItem.error?.includes("Restricted")
+                  ? "Restricted - no pricing data available"
+                  : `No data after ${attempt} retries (missing: ${missingParts.join(", ")})`)
+                : null;
+              log(`EXHAUSTED ${item.input.asin}: ${errorMsg ?? "resolved via fallback"} | exception=${err.message}`, "retry");
               const errorResult: AsinResult = {
-                ...item.result,
-                error: errorMsg,
+                ...finalItem,
+                error: errorMsg ?? finalItem.error,
               };
               if (!allResults.has(item.input.asin)) {
                 allResults.set(item.input.asin, errorResult);

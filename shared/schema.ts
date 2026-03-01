@@ -141,7 +141,7 @@ export function calculateProfit(
   fbaFee: number,
   referralFee: number,
   feesEstimatePrice: number | null,
-  weightLbs: number,
+  weightLbs: number | null,
   prepCost: number,
   storageFee: number,
   settings: Settings
@@ -149,7 +149,8 @@ export function calculateProfit(
   profit: number;
   roi: number;
   margin: number;
-  inboundShipping: number;
+  inboundShipping: number | null;
+  weightMissing: boolean;
   adjustedReferralFee: number;
   totalFbaFee: number;
 } {
@@ -159,22 +160,22 @@ export function calculateProfit(
     adjustedReferralFee = parseFloat((referralPct * salePrice).toFixed(2));
   }
 
-  let effectiveWeight = weightLbs;
-  const inboundShipping = effectiveWeight * settings.inboundShippingCost;
+  const weightMissing = weightLbs == null || weightLbs <= 0;
+  const inboundShipping = weightMissing ? null : weightLbs * settings.inboundShippingCost;
   const totalFbaFee = fbaFee + settings.lowInventorySurcharge;
   const profit =
     salePrice -
     cogs -
     totalFbaFee -
     adjustedReferralFee -
-    inboundShipping -
+    (inboundShipping ?? 0) -
     prepCost -
     storageFee;
 
   const roi = cogs > 0 ? (profit / cogs) * 100 : 0;
   const margin = salePrice > 0 ? (profit / salePrice) * 100 : 0;
 
-  return { profit, roi, margin, inboundShipping, adjustedReferralFee, totalFbaFee };
+  return { profit, roi, margin, inboundShipping, weightMissing, adjustedReferralFee, totalFbaFee };
 }
 
 export function extractDomain(url: string | null): string | null {

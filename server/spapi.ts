@@ -270,27 +270,42 @@ export async function getPricing(asin: string): Promise<AsinPricingResult> {
 
         const offerListings = product.CompetitivePricing?.NumberOfOfferListings || [];
         log(`Competitive pricing NumberOfOfferListings for ${asin}: ${JSON.stringify(offerListings)}`, "sellers-raw");
-        let total = 0;
+        let newTotal = 0;
         let cpFba = 0;
         let cpFbm = 0;
+        let hasNewCondition = false;
         for (const oc of offerListings) {
-          const cond = oc.condition || oc.Condition || "";
+          const cond = (oc.condition || oc.Condition || "").toLowerCase();
           const channel = oc.fulfillmentChannel || oc.FulfillmentChannel || "";
           const count = parseInt(oc.Value ?? oc.OfferListingCount ?? oc.Count ?? "0") || 0;
-          if (cond === "New" || cond === "new" || cond === "Any" || cond === "any" || cond === "") {
-            total += count;
+          if (cond === "new") {
+            hasNewCondition = true;
+            newTotal += count;
             if (channel === "Amazon") cpFba += count;
             else if (channel === "Merchant") cpFbm += count;
           }
         }
-        if (total > 0) {
-          numberOfSellers = total;
+        if (!hasNewCondition) {
+          for (const oc of offerListings) {
+            const cond = (oc.condition || oc.Condition || "").toLowerCase();
+            const channel = oc.fulfillmentChannel || oc.FulfillmentChannel || "";
+            const count = parseInt(oc.Value ?? oc.OfferListingCount ?? oc.Count ?? "0") || 0;
+            if (cond === "any" || cond === "") {
+              newTotal += count;
+              if (channel === "Amazon") cpFba += count;
+              else if (channel === "Merchant") cpFbm += count;
+            }
+          }
+        }
+        if (newTotal > 0) {
+          numberOfSellers = newTotal;
           if (cpFba > 0 || cpFbm > 0) {
             sellersFba = cpFba;
             sellersFbm = cpFbm;
           } else {
-            sellersFba = total;
-            sellersFbm = 0;
+            numberOfSellers = newTotal;
+            sellersFba = null;
+            sellersFbm = null;
           }
         }
       }
@@ -302,9 +317,9 @@ export async function getPricing(asin: string): Promise<AsinPricingResult> {
         lowestPrice,
         avg30DayPrice: null,
         avg90DayPrice: null,
-        numberOfSellers: numberOfSellers ?? 0,
-        sellersFba: sellersFba ?? 0,
-        sellersFbm: sellersFbm ?? 0,
+        numberOfSellers,
+        sellersFba,
+        sellersFbm,
       };
     } catch (innerErr: any) {
       const innerStatus = innerErr.response?.status;
@@ -481,6 +496,68 @@ export async function getFees(asin: string, price: number, category?: string | n
     log(`Fees API error for ${asin} (status=${statusCode}): ${err.message} | apiError=${apiError}`, "sp-api");
     return { fbaFulfillmentFee: null, referralFee: null, feesEstimatePrice: null };
   }
+}
+
+export function estimateFeeFallback(
+  asin: string,
+  price: number,
+  weightLbs: number | null,
+  category?: string | null,
+  packageDims?: { l: number; w: number; h: number } | null,
+): AsinFeesResult {
+  const weight = weightLbs ?? 1;
+  const weightOz = weight * 16;
+
+  let isLargeStandard = false;
+  if (packageDims) {
+    const sorted = [packageDims.l, packageDims.w, packageDims.h].sort((a, b) => b - a);
+    isLargeStandard = sorted[0] > 15 || sorted[1] > 12 || sorted[2] > 0.75 || weight > 1;
+  } else {
+    isLargeStandard = weight > 1;
+  }
+
+  let fbaFee: number;
+  if (!isLargeStandard) {
+    if (weightOz <= 2) fbaFee = 3.06;
+    else if (weightOz <= 4) fbaFee = 3.15;
+    else if (weightOz <= 6) fbaFee = 3.24;
+    else if (weightOz <= 8) fbaFee = 3.33;
+    else if (weightOz <= 10) fbaFee = 3.43;
+    else if (weightOz <= 12) fbaFee = 3.53;
+    else if (weightOz <= 14) fbaFee = 3.60;
+    else fbaFee = 3.65;
+  } else {
+    if (weightOz <= 4) fbaFee = 3.68;
+    else if (weightOz <= 8) fbaFee = 3.86;
+    else if (weightOz <= 12) fbaFee = 4.08;
+    else if (weight <= 1) fbaFee = 4.46;
+    else if (weight <= 1.25) fbaFee = 4.95;
+    else if (weight <= 1.5) fbaFee = 5.19;
+    else if (weight <= 2) fbaFee = 5.28;
+    else if (weight <= 2.5) fbaFee = 5.42;
+    else if (weight <= 3) fbaFee = 5.77;
+    else {
+      const extraHalfLbs = Math.ceil((weight - 3) * 2);
+      fbaFee = 5.77 + extraHalfLbs * 0.16;
+    }
+
+    if (packageDims) {
+      const sorted = [packageDims.l, packageDims.w, packageDims.h].sort((a, b) => b - a);
+      if (sorted[0] > 18 || sorted[1] > 14 || sorted[2] > 8 || weight > 20) {
+        fbaFee = 9.73 + Math.max(0, weight - 1) * 0.42;
+      }
+    }
+  }
+
+  fbaFee = parseFloat(fbaFee.toFixed(2));
+
+  const referralPct = getCategoryReferralPercentage(category);
+  const referralFee = parseFloat((price * referralPct).toFixed(2));
+
+  log(`FEE FALLBACK for ${asin}: price=$${price}, weight=${weight.toFixed(2)}lbs, ` +
+    `isLarge=${isLargeStandard}, FBA=$${fbaFee}, referral=$${referralFee} (${(referralPct * 100).toFixed(0)}% for ${category ?? "unknown"})`, "fees");
+
+  return { fbaFulfillmentFee: fbaFee, referralFee, feesEstimatePrice: price };
 }
 
 export interface BatchFeeItem {
