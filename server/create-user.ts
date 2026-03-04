@@ -14,17 +14,20 @@ async function createUser() {
 
   const hash = await bcrypt.hash(password, 10);
 
+  const normalized = email.trim().toLowerCase();
+
   const result = await pool.query(
     `INSERT INTO users (email, password_hash) VALUES ($1, $2)
-     ON CONFLICT (email) DO NOTHING
-     RETURNING id, email`,
-    [email.trim().toLowerCase(), hash]
+     ON CONFLICT (email) DO UPDATE SET password_hash = EXCLUDED.password_hash
+     RETURNING id, email, (xmax = 0) AS inserted`,
+    [normalized, hash]
   );
 
-  if (result.rows.length > 0) {
-    console.log(`User created: ${result.rows[0].email} (id=${result.rows[0].id})`);
+  const row = result.rows[0];
+  if (row.inserted) {
+    console.log(`User created: ${row.email} (id=${row.id})`);
   } else {
-    console.log(`User already exists: ${email}`);
+    console.log(`Password updated for existing user: ${row.email} (id=${row.id})`);
   }
 
   await pool.end();
