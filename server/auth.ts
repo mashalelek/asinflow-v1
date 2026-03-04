@@ -33,6 +33,27 @@ export async function registerUser(
   return result.rows[0];
 }
 
+export async function upsertUser(
+  email: string,
+  password: string
+): Promise<{ user: AuthUser; created: boolean }> {
+  const normalizedEmail = email.toLowerCase().trim();
+  const passwordHash = await bcrypt.hash(password, SALT_ROUNDS);
+
+  const result = await pool.query(
+    `INSERT INTO users (email, password_hash) VALUES ($1, $2)
+     ON CONFLICT (email) DO UPDATE SET password_hash = EXCLUDED.password_hash
+     RETURNING id, email, created_at, (xmax = 0) AS inserted`,
+    [normalizedEmail, passwordHash]
+  );
+
+  const row = result.rows[0];
+  return {
+    user: { id: row.id, email: row.email, created_at: row.created_at },
+    created: row.inserted,
+  };
+}
+
 export async function validateUser(
   email: string,
   password: string

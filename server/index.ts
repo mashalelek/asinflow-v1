@@ -5,7 +5,7 @@ import { registerRoutes } from "./routes";
 import { serveStatic } from "./static";
 import { createServer } from "http";
 import pool, { ensureUsersTable } from "./db";
-import { registerUser } from "./auth";
+import { upsertUser } from "./auth";
 
 declare module "express-session" {
   interface SessionData {
@@ -95,14 +95,10 @@ app.use((req, res, next) => {
       const users: { email: string; password: string }[] = JSON.parse(seedUsers);
       for (const u of users) {
         try {
-          await registerUser(u.email, u.password);
-          log(`Seed user created: ${u.email}`, "auth");
+          const { user, created } = await upsertUser(u.email, u.password);
+          log(`Seed user ${created ? "created" : "password updated"}: ${user.email} (id=${user.id})`, "auth");
         } catch (err: any) {
-          if (err.message?.includes("already exists")) {
-            log(`Seed user already exists: ${u.email}`, "auth");
-          } else {
-            log(`Seed user error for ${u.email}: ${err.message}`, "auth");
-          }
+          log(`Seed user error for ${u.email}: ${err.message}`, "auth");
         }
       }
     } catch {
