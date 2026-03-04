@@ -3,23 +3,15 @@ import { Card } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
-import { BarChart3, Lock, Eye, EyeOff } from "lucide-react";
+import { BarChart3, Lock, Mail, Eye, EyeOff } from "lucide-react";
 
 interface LoginScreenProps {
-  onAuthenticated: () => void;
-}
-
-const AUTH_KEY = "fba-auth-token";
-
-export function getStoredAuth(): boolean {
-  return localStorage.getItem(AUTH_KEY) === "authenticated";
-}
-
-export function clearAuth(): void {
-  localStorage.removeItem(AUTH_KEY);
+  onAuthenticated: (user: { id: number; email: string }) => void;
 }
 
 export function LoginScreen({ onAuthenticated }: LoginScreenProps) {
+  const [mode, setMode] = useState<"login" | "register">("login");
+  const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const [error, setError] = useState("");
   const [loading, setLoading] = useState(false);
@@ -27,30 +19,37 @@ export function LoginScreen({ onAuthenticated }: LoginScreenProps) {
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!password.trim()) return;
+    if (!email.trim() || !password.trim()) return;
 
     setLoading(true);
     setError("");
 
     try {
-      const res = await fetch("/api/verify-password", {
+      const endpoint = mode === "login" ? "/api/login" : "/api/register";
+      const res = await fetch(endpoint, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ password }),
+        body: JSON.stringify({ email: email.trim(), password }),
       });
 
+      const data = await res.json();
+
       if (res.ok) {
-        localStorage.setItem(AUTH_KEY, "authenticated");
-        onAuthenticated();
+        onAuthenticated({ id: data.id, email: data.email });
       } else {
-        setError("Incorrect password. Please try again.");
-        setPassword("");
+        setError(data.message || "Something went wrong");
       }
     } catch {
-      setError("Unable to verify password. Please try again.");
+      setError("Unable to connect. Please try again.");
     } finally {
       setLoading(false);
     }
+  };
+
+  const toggleMode = () => {
+    setMode((m) => (m === "login" ? "register" : "login"));
+    setError("");
+    setPassword("");
   };
 
   return (
@@ -62,11 +61,30 @@ export function LoginScreen({ onAuthenticated }: LoginScreenProps) {
           </div>
           <div className="text-center">
             <h1 className="text-lg font-semibold">FBA Profitability Analyzer</h1>
-            <p className="text-sm text-muted-foreground mt-1">Enter the password to continue</p>
+            <p className="text-sm text-muted-foreground mt-1">
+              {mode === "login" ? "Sign in to your account" : "Create a new account"}
+            </p>
           </div>
         </div>
 
         <form onSubmit={handleSubmit} className="space-y-4">
+          <div className="space-y-2">
+            <Label htmlFor="email">Email</Label>
+            <div className="relative">
+              <Mail className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
+              <Input
+                id="email"
+                type="email"
+                value={email}
+                onChange={(e) => setEmail(e.target.value)}
+                placeholder="you@example.com"
+                className="pl-9"
+                autoFocus
+                data-testid="input-email"
+              />
+            </div>
+          </div>
+
           <div className="space-y-2">
             <Label htmlFor="password">Password</Label>
             <div className="relative">
@@ -76,9 +94,8 @@ export function LoginScreen({ onAuthenticated }: LoginScreenProps) {
                 type={showPassword ? "text" : "password"}
                 value={password}
                 onChange={(e) => setPassword(e.target.value)}
-                placeholder="Enter password"
+                placeholder={mode === "register" ? "Min 6 characters" : "Enter password"}
                 className="pl-9 pr-9"
-                autoFocus
                 data-testid="input-password"
               />
               <button
@@ -93,18 +110,33 @@ export function LoginScreen({ onAuthenticated }: LoginScreenProps) {
           </div>
 
           {error && (
-            <p className="text-sm text-destructive" data-testid="text-login-error">{error}</p>
+            <p className="text-sm text-destructive" data-testid="text-auth-error">{error}</p>
           )}
 
           <Button
             type="submit"
             className="w-full"
-            disabled={loading || !password.trim()}
-            data-testid="button-login"
+            disabled={loading || !email.trim() || !password.trim()}
+            data-testid="button-submit"
           >
-            {loading ? "Verifying..." : "Access App"}
+            {loading
+              ? mode === "login" ? "Signing in..." : "Creating account..."
+              : mode === "login" ? "Sign In" : "Create Account"}
           </Button>
         </form>
+
+        <div className="mt-4 text-center">
+          <button
+            type="button"
+            onClick={toggleMode}
+            className="text-sm text-muted-foreground hover:text-primary transition-colors"
+            data-testid="button-toggle-mode"
+          >
+            {mode === "login"
+              ? "Don't have an account? Register"
+              : "Already have an account? Sign in"}
+          </button>
+        </div>
       </Card>
     </div>
   );

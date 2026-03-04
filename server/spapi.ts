@@ -19,7 +19,7 @@ async function getAccessToken(): Promise<string> {
 
   if (!clientId || !clientSecret || !refreshToken) {
     throw new Error(
-      "SP-API credentials not configured. Add SP_API_CLIENT_ID, SP_API_CLIENT_SECRET, and SP_API_REFRESH_TOKEN to your Replit Secrets."
+      "SP-API credentials not configured. Add SP_API_CLIENT_ID, SP_API_CLIENT_SECRET, and SP_API_REFRESH_TOKEN to your Replit Secrets.",
     );
   }
 
@@ -40,26 +40,33 @@ async function getAccessToken(): Promise<string> {
 
 async function spApiGet(endpoint: string, params?: Record<string, any>) {
   const token = await getAccessToken();
-  const res = await axios.get(`https://sellingpartnerapi-na.amazon.com${endpoint}`, {
-    headers: {
-      Authorization: `Bearer ${token}`,
-      "x-amz-access-token": token,
-      "Content-Type": "application/json",
+  const res = await axios.get(
+    `https://sellingpartnerapi-na.amazon.com${endpoint}`,
+    {
+      headers: {
+        Authorization: `Bearer ${token}`,
+        "x-amz-access-token": token,
+        "Content-Type": "application/json",
+      },
+      params,
     },
-    params,
-  });
+  );
   return res.data;
 }
 
 async function spApiPost(endpoint: string, body: any) {
   const token = await getAccessToken();
-  const res = await axios.post(`https://sellingpartnerapi-na.amazon.com${endpoint}`, body, {
-    headers: {
-      Authorization: `Bearer ${token}`,
-      "x-amz-access-token": token,
-      "Content-Type": "application/json",
+  const res = await axios.post(
+    `https://sellingpartnerapi-na.amazon.com${endpoint}`,
+    body,
+    {
+      headers: {
+        Authorization: `Bearer ${token}`,
+        "x-amz-access-token": token,
+        "Content-Type": "application/json",
+      },
     },
-  });
+  );
   return res.data;
 }
 
@@ -99,10 +106,13 @@ export async function getPricing(asin: string): Promise<AsinPricingResult> {
   let sellersFbm: number | null = null;
 
   try {
-    const offersData = await spApiGet(`/products/pricing/v0/items/${asin}/offers`, {
-      MarketplaceId: "ATVPDKIKX0DER",
-      ItemCondition: "New",
-    });
+    const offersData = await spApiGet(
+      `/products/pricing/v0/items/${asin}/offers`,
+      {
+        MarketplaceId: "ATVPDKIKX0DER",
+        ItemCondition: "New",
+      },
+    );
 
     const summary = offersData?.payload?.Summary;
     if (summary) {
@@ -110,7 +120,8 @@ export async function getPricing(asin: string): Promise<AsinPricingResult> {
         for (const lp of summary.LowestPrices) {
           const amt = parseFloat(lp.LandedPrice?.Amount);
           if (!isNaN(amt)) {
-            const channel = lp.fulfillmentChannel || lp.FulfillmentChannel || "";
+            const channel =
+              lp.fulfillmentChannel || lp.FulfillmentChannel || "";
             if (channel === "Amazon") {
               if (lowestFbaPrice === null || amt < lowestFbaPrice) {
                 lowestFbaPrice = amt;
@@ -130,7 +141,8 @@ export async function getPricing(asin: string): Promise<AsinPricingResult> {
       if (summary.NumberOfOffers) {
         for (const entry of summary.NumberOfOffers) {
           const cond = (entry.condition || entry.Condition || "").toLowerCase();
-          const channel = entry.fulfillmentChannel || entry.FulfillmentChannel || "";
+          const channel =
+            entry.fulfillmentChannel || entry.FulfillmentChannel || "";
           const count = parseInt(entry.OfferCount ?? entry.Value ?? "0") || 0;
           if (cond === "new") {
             if (channel === "Amazon" || channel === "AFN") {
@@ -146,13 +158,25 @@ export async function getPricing(asin: string): Promise<AsinPricingResult> {
       }
     }
 
-    log(`Raw NumberOfOffers for ${asin}: ${JSON.stringify(summary?.NumberOfOffers)}`, "sellers-raw");
-    log(`Raw BuyBoxEligibleOffers for ${asin}: ${JSON.stringify(summary?.BuyBoxEligibleOffers)}`, "sellers-raw");
-    log(`NumberOfOffers parsed for ${asin}: sellersFba=${sellersFba}, sellersFbm=${sellersFbm}, totalFromSummary=${numberOfSellers}`, "sellers-raw");
+    log(
+      `Raw NumberOfOffers for ${asin}: ${JSON.stringify(summary?.NumberOfOffers)}`,
+      "sellers-raw",
+    );
+    log(
+      `Raw BuyBoxEligibleOffers for ${asin}: ${JSON.stringify(summary?.BuyBoxEligibleOffers)}`,
+      "sellers-raw",
+    );
+    log(
+      `NumberOfOffers parsed for ${asin}: sellersFba=${sellersFba}, sellersFbm=${sellersFbm}, totalFromSummary=${numberOfSellers}`,
+      "sellers-raw",
+    );
 
     const offers = offersData?.payload?.Offers;
     if (offers && Array.isArray(offers)) {
-      log(`Raw Offers array for ${asin}: ${offers.length} offers`, "sellers-raw");
+      log(
+        `Raw Offers array for ${asin}: ${offers.length} offers`,
+        "sellers-raw",
+      );
 
       let fbaCount = 0;
       let fbmCount = 0;
@@ -192,7 +216,10 @@ export async function getPricing(asin: string): Promise<AsinPricingResult> {
         }
       }
 
-      log(`Offer-based counts for ${asin}: FBA=${fbaCount}, FBM=${fbmCount} (from ${offers.length} offers, first page only)`, "sellers-raw");
+      log(
+        `Offer-based counts for ${asin}: FBA=${fbaCount}, FBM=${fbmCount} (from ${offers.length} offers, first page only)`,
+        "sellers-raw",
+      );
 
       if (sellersFba === null) sellersFba = fbaCount;
       if (sellersFbm === null) sellersFbm = fbmCount;
@@ -217,7 +244,10 @@ export async function getPricing(asin: string): Promise<AsinPricingResult> {
       }
     }
 
-    log(`Pricing for ${asin}: lowestFba=${lowestFbaPrice}, buyBox=${buyBoxPrice} (${buyBoxFulfillment}), lowest=${lowestPrice}, sellers=${numberOfSellers} (FBA:${sellersFba}, FBM:${sellersFbm})`, "sp-api");
+    log(
+      `Pricing for ${asin}: lowestFba=${lowestFbaPrice}, buyBox=${buyBoxPrice} (${buyBoxFulfillment}), lowest=${lowestPrice}, sellers=${numberOfSellers} (FBA:${sellersFba}, FBM:${sellersFbm})`,
+      "sp-api",
+    );
 
     return {
       lowestFbaPrice,
@@ -232,14 +262,30 @@ export async function getPricing(asin: string): Promise<AsinPricingResult> {
     };
   } catch (err: any) {
     const statusCode = err.response?.status;
-    const apiError = err.response?.data?.errors?.[0]?.code || err.response?.data?.errors?.[0]?.message || "";
-    log(`Offers API error for ${asin} (status=${statusCode}): ${err.message} | apiError=${apiError}`, "sp-api");
+    const apiError =
+      err.response?.data?.errors?.[0]?.code ||
+      err.response?.data?.errors?.[0]?.message ||
+      "";
+    log(
+      `Offers API error for ${asin} (status=${statusCode}): ${err.message} | apiError=${apiError}`,
+      "sp-api",
+    );
 
-    if (statusCode === 403 || apiError.toLowerCase().includes("restricted") || apiError.toLowerCase().includes("unauthorized")) {
+    if (
+      statusCode === 403 ||
+      apiError.toLowerCase().includes("restricted") ||
+      apiError.toLowerCase().includes("unauthorized")
+    ) {
       return {
-        lowestFbaPrice: null, buyBoxPrice: null, buyBoxFulfillment: null,
-        lowestPrice: null, avg30DayPrice: null, avg90DayPrice: null,
-        numberOfSellers: null, sellersFba: null, sellersFbm: null,
+        lowestFbaPrice: null,
+        buyBoxPrice: null,
+        buyBoxFulfillment: null,
+        lowestPrice: null,
+        avg30DayPrice: null,
+        avg90DayPrice: null,
+        numberOfSellers: null,
+        sellersFba: null,
+        sellersFbm: null,
         _restricted: true,
       } as AsinPricingResult & { _restricted?: boolean };
     }
@@ -253,9 +299,11 @@ export async function getPricing(asin: string): Promise<AsinPricingResult> {
 
       const product = data?.payload?.[0]?.Product;
       if (product) {
-        const competitivePrices = product.CompetitivePricing?.CompetitivePrices || [];
+        const competitivePrices =
+          product.CompetitivePricing?.CompetitivePrices || [];
         for (const cp of competitivePrices) {
-          const amount = cp.Price?.LandedPrice?.Amount ?? cp.Price?.ListingPrice?.Amount;
+          const amount =
+            cp.Price?.LandedPrice?.Amount ?? cp.Price?.ListingPrice?.Amount;
           if (amount != null) {
             const price = parseFloat(amount);
             if (cp.CompetitivePriceId === "1") {
@@ -268,8 +316,12 @@ export async function getPricing(asin: string): Promise<AsinPricingResult> {
           }
         }
 
-        const offerListings = product.CompetitivePricing?.NumberOfOfferListings || [];
-        log(`Competitive pricing NumberOfOfferListings for ${asin}: ${JSON.stringify(offerListings)}`, "sellers-raw");
+        const offerListings =
+          product.CompetitivePricing?.NumberOfOfferListings || [];
+        log(
+          `Competitive pricing NumberOfOfferListings for ${asin}: ${JSON.stringify(offerListings)}`,
+          "sellers-raw",
+        );
         let newTotal = 0;
         let cpFba = 0;
         let cpFbm = 0;
@@ -277,7 +329,8 @@ export async function getPricing(asin: string): Promise<AsinPricingResult> {
         for (const oc of offerListings) {
           const cond = (oc.condition || oc.Condition || "").toLowerCase();
           const channel = oc.fulfillmentChannel || oc.FulfillmentChannel || "";
-          const count = parseInt(oc.Value ?? oc.OfferListingCount ?? oc.Count ?? "0") || 0;
+          const count =
+            parseInt(oc.Value ?? oc.OfferListingCount ?? oc.Count ?? "0") || 0;
           if (cond === "new") {
             hasNewCondition = true;
             newTotal += count;
@@ -288,8 +341,11 @@ export async function getPricing(asin: string): Promise<AsinPricingResult> {
         if (!hasNewCondition) {
           for (const oc of offerListings) {
             const cond = (oc.condition || oc.Condition || "").toLowerCase();
-            const channel = oc.fulfillmentChannel || oc.FulfillmentChannel || "";
-            const count = parseInt(oc.Value ?? oc.OfferListingCount ?? oc.Count ?? "0") || 0;
+            const channel =
+              oc.fulfillmentChannel || oc.FulfillmentChannel || "";
+            const count =
+              parseInt(oc.Value ?? oc.OfferListingCount ?? oc.Count ?? "0") ||
+              0;
             if (cond === "any" || cond === "") {
               newTotal += count;
               if (channel === "Amazon") cpFba += count;
@@ -323,9 +379,17 @@ export async function getPricing(asin: string): Promise<AsinPricingResult> {
       };
     } catch (innerErr: any) {
       const innerStatus = innerErr.response?.status;
-      const innerApiError = innerErr.response?.data?.errors?.[0]?.code || innerErr.response?.data?.errors?.[0]?.message || "";
-      log(`Competitive Pricing fallback also failed for ${asin} (status=${innerStatus}): ${innerErr.message} | apiError=${innerApiError}`, "sp-api");
-      const isRestricted = innerStatus === 403 || innerApiError.toLowerCase().includes("restricted");
+      const innerApiError =
+        innerErr.response?.data?.errors?.[0]?.code ||
+        innerErr.response?.data?.errors?.[0]?.message ||
+        "";
+      log(
+        `Competitive Pricing fallback also failed for ${asin} (status=${innerStatus}): ${innerErr.message} | apiError=${innerApiError}`,
+        "sp-api",
+      );
+      const isRestricted =
+        innerStatus === 403 ||
+        innerApiError.toLowerCase().includes("restricted");
       return {
         lowestFbaPrice: null,
         buyBoxPrice: null,
@@ -345,18 +409,18 @@ export async function getPricing(asin: string): Promise<AsinPricingResult> {
 const CATEGORY_REFERRAL_PERCENTAGES: Record<string, number> = {
   "Amazon Device Accessories": 0.45,
   "Arts, Crafts & Sewing": 0.15,
-  "Automotive": 0.12,
+  Automotive: 0.12,
   "Automotive & Powersports": 0.12,
   "Baby Products": 0.08,
-  "Beauty": 0.08,
+  Beauty: 0.08,
   "Beauty & Personal Care": 0.08,
-  "Books": 0.15,
+  Books: 0.15,
   "Camera & Photo": 0.08,
   "Cell Phones & Accessories": 0.08,
-  "Clothing": 0.17,
+  Clothing: 0.17,
   "Clothing & Accessories": 0.17,
   "Consumer Electronics": 0.08,
-  "Electronics": 0.08,
+  Electronics: 0.08,
   "Grocery & Gourmet Food": 0.08,
   "Health & Household": 0.08,
   "Health & Personal Care": 0.08,
@@ -364,21 +428,21 @@ const CATEGORY_REFERRAL_PERCENTAGES: Record<string, number> = {
   "Home & Kitchen": 0.15,
   "Home Improvement": 0.15,
   "Industrial & Scientific": 0.12,
-  "Jewelry": 0.20,
-  "Kitchen": 0.15,
+  Jewelry: 0.2,
+  Kitchen: 0.15,
   "Luggage & Travel Accessories": 0.15,
   "Musical Instruments": 0.15,
   "Office Products": 0.15,
-  "Outdoors": 0.15,
+  Outdoors: 0.15,
   "Pet Supplies": 0.15,
-  "Shoes": 0.15,
+  Shoes: 0.15,
   "Software & Computer Games": 0.15,
-  "Sports": 0.15,
+  Sports: 0.15,
   "Sports & Outdoors": 0.15,
   "Tools & Home Improvement": 0.15,
   "Toys & Games": 0.15,
   "Video Games": 0.15,
-  "Watches": 0.16,
+  Watches: 0.16,
 };
 
 const DEFAULT_REFERRAL_PCT = 0.15;
@@ -386,7 +450,10 @@ const DEFAULT_REFERRAL_PCT = 0.15;
 function getCategoryReferralPercentage(category?: string | null): number {
   if (category) {
     for (const [key, pct] of Object.entries(CATEGORY_REFERRAL_PERCENTAGES)) {
-      if (category.toLowerCase().includes(key.toLowerCase()) || key.toLowerCase().includes(category.toLowerCase())) {
+      if (
+        category.toLowerCase().includes(key.toLowerCase()) ||
+        key.toLowerCase().includes(category.toLowerCase())
+      ) {
         return pct;
       }
     }
@@ -394,7 +461,12 @@ function getCategoryReferralPercentage(category?: string | null): number {
   return DEFAULT_REFERRAL_PCT;
 }
 
-function parseFeeResult(asin: string, feesEstimateResult: any, price: number, category?: string | null): AsinFeesResult {
+function parseFeeResult(
+  asin: string,
+  feesEstimateResult: any,
+  price: number,
+  category?: string | null,
+): AsinFeesResult {
   const feesEstimate = feesEstimateResult?.FeesEstimate;
   const feeDetails = feesEstimate?.FeeDetailList || [];
   const totalFeesEstimate = feesEstimate?.TotalFeesEstimate;
@@ -403,7 +475,11 @@ function parseFeeResult(asin: string, feesEstimateResult: any, price: number, ca
   if (status === "ClientError" || status === "ServerError") {
     const errMsg = feesEstimateResult?.Error?.Message || status;
     log(`Fee estimate error for ${asin}: ${errMsg}`, "fees");
-    return { fbaFulfillmentFee: null, referralFee: null, feesEstimatePrice: null };
+    return {
+      fbaFulfillmentFee: null,
+      referralFee: null,
+      feesEstimatePrice: null,
+    };
   }
 
   let referralFee: number | null = null;
@@ -428,7 +504,10 @@ function parseFeeResult(asin: string, feesEstimateResult: any, price: number, ca
       subFeeInfo = ` [includes: ${subParts.join(", ")}]`;
     }
 
-    log(`  ${feeType}: amount=$${feeAmount.toFixed(2)}, final=$${finalFee.toFixed(2)}${promoAmount ? `, promo=$${promoAmount.toFixed(2)}` : ""}${subFeeInfo}`, "fees");
+    log(
+      `  ${feeType}: amount=$${feeAmount.toFixed(2)}, final=$${finalFee.toFixed(2)}${promoAmount ? `, promo=$${promoAmount.toFixed(2)}` : ""}${subFeeInfo}`,
+      "fees",
+    );
 
     if (feeType === "ReferralFee") {
       referralFee = finalFee;
@@ -438,26 +517,42 @@ function parseFeeResult(asin: string, feesEstimateResult: any, price: number, ca
   }
 
   if (totalFeesEstimate) {
-    log(`  TotalFeesEstimate: $${parseFloat(totalFeesEstimate.Amount).toFixed(2)} ${totalFeesEstimate.CurrencyCode}`, "fees");
+    log(
+      `  TotalFeesEstimate: $${parseFloat(totalFeesEstimate.Amount).toFixed(2)} ${totalFeesEstimate.CurrencyCode}`,
+      "fees",
+    );
   }
 
-  const totalFromApi = totalFeesEstimate ? parseFloat(totalFeesEstimate.Amount) : null;
+  const totalFromApi = totalFeesEstimate
+    ? parseFloat(totalFeesEstimate.Amount)
+    : null;
   if (totalFromApi != null && referralFee != null) {
     const expectedFba = totalFromApi - referralFee;
     if (Math.abs(expectedFba - totalFbaFee) > 0.01) {
-      log(`  WARNING: FBA fee mismatch! Sum of non-referral=$${totalFbaFee.toFixed(2)} vs (total-referral)=$${expectedFba.toFixed(2)}. Using total-based value.`, "fees");
+      log(
+        `  WARNING: FBA fee mismatch! Sum of non-referral=$${totalFbaFee.toFixed(2)} vs (total-referral)=$${expectedFba.toFixed(2)}. Using total-based value.`,
+        "fees",
+      );
       totalFbaFee = expectedFba;
     }
   }
 
   if ((referralFee === null || referralFee <= 0) && price > 0) {
     const categoryReferralPct = getCategoryReferralPercentage(category);
-    const manualReferralFee = parseFloat((price * categoryReferralPct).toFixed(2));
-    log(`WARNING: SP-API returned ${referralFee === null ? "null" : "$0"} referral fee for ${asin} at price $${price}. Category=${category ?? "unknown"}. Using category-based fallback: ${(categoryReferralPct * 100).toFixed(0)}% = $${manualReferralFee}`, "fees");
+    const manualReferralFee = parseFloat(
+      (price * categoryReferralPct).toFixed(2),
+    );
+    log(
+      `WARNING: SP-API returned ${referralFee === null ? "null" : "$0"} referral fee for ${asin} at price $${price}. Category=${category ?? "unknown"}. Using category-based fallback: ${(categoryReferralPct * 100).toFixed(0)}% = $${manualReferralFee}`,
+      "fees",
+    );
     referralFee = manualReferralFee;
   }
 
-  log(`  Final captured: FBA=$${totalFbaFee.toFixed(2)}, Referral=$${(referralFee ?? 0).toFixed(2)}`, "fees");
+  log(
+    `  Final captured: FBA=$${totalFbaFee.toFixed(2)}, Referral=$${(referralFee ?? 0).toFixed(2)}`,
+    "fees",
+  );
 
   return {
     fbaFulfillmentFee: totalFbaFee > 0 ? totalFbaFee : null,
@@ -466,7 +561,11 @@ function parseFeeResult(asin: string, feesEstimateResult: any, price: number, ca
   };
 }
 
-export async function getFees(asin: string, price: number, category?: string | null): Promise<AsinFeesResult> {
+export async function getFees(
+  asin: string,
+  price: number,
+  category?: string | null,
+): Promise<AsinFeesResult> {
   try {
     const body = {
       FeesEstimateRequest: {
@@ -484,17 +583,35 @@ export async function getFees(asin: string, price: number, category?: string | n
 
     const data = await spApiPost(
       `/products/fees/v0/items/${asin}/feesEstimate`,
-      body
+      body,
     );
 
-    log(`Raw fee response for ${asin}: ${JSON.stringify(data?.payload?.FeesEstimateResult, null, 2)}`, "fees-raw");
+    log(
+      `Raw fee response for ${asin}: ${JSON.stringify(data?.payload?.FeesEstimateResult, null, 2)}`,
+      "fees-raw",
+    );
 
-    return parseFeeResult(asin, data?.payload?.FeesEstimateResult, price, category);
+    return parseFeeResult(
+      asin,
+      data?.payload?.FeesEstimateResult,
+      price,
+      category,
+    );
   } catch (err: any) {
     const statusCode = err.response?.status;
-    const apiError = err.response?.data?.errors?.[0]?.code || err.response?.data?.errors?.[0]?.message || "";
-    log(`Fees API error for ${asin} (status=${statusCode}): ${err.message} | apiError=${apiError}`, "sp-api");
-    return { fbaFulfillmentFee: null, referralFee: null, feesEstimatePrice: null };
+    const apiError =
+      err.response?.data?.errors?.[0]?.code ||
+      err.response?.data?.errors?.[0]?.message ||
+      "";
+    log(
+      `Fees API error for ${asin} (status=${statusCode}): ${err.message} | apiError=${apiError}`,
+      "sp-api",
+    );
+    return {
+      fbaFulfillmentFee: null,
+      referralFee: null,
+      feesEstimatePrice: null,
+    };
   }
 }
 
@@ -510,8 +627,11 @@ export function estimateFeeFallback(
 
   let isLargeStandard = false;
   if (packageDims) {
-    const sorted = [packageDims.l, packageDims.w, packageDims.h].sort((a, b) => b - a);
-    isLargeStandard = sorted[0] > 15 || sorted[1] > 12 || sorted[2] > 0.75 || weight > 1;
+    const sorted = [packageDims.l, packageDims.w, packageDims.h].sort(
+      (a, b) => b - a,
+    );
+    isLargeStandard =
+      sorted[0] > 15 || sorted[1] > 12 || sorted[2] > 0.75 || weight > 1;
   } else {
     isLargeStandard = weight > 1;
   }
@@ -524,7 +644,7 @@ export function estimateFeeFallback(
     else if (weightOz <= 8) fbaFee = 3.33;
     else if (weightOz <= 10) fbaFee = 3.43;
     else if (weightOz <= 12) fbaFee = 3.53;
-    else if (weightOz <= 14) fbaFee = 3.60;
+    else if (weightOz <= 14) fbaFee = 3.6;
     else fbaFee = 3.65;
   } else {
     if (weightOz <= 4) fbaFee = 3.68;
@@ -542,7 +662,9 @@ export function estimateFeeFallback(
     }
 
     if (packageDims) {
-      const sorted = [packageDims.l, packageDims.w, packageDims.h].sort((a, b) => b - a);
+      const sorted = [packageDims.l, packageDims.w, packageDims.h].sort(
+        (a, b) => b - a,
+      );
       if (sorted[0] > 18 || sorted[1] > 14 || sorted[2] > 8 || weight > 20) {
         fbaFee = 9.73 + Math.max(0, weight - 1) * 0.42;
       }
@@ -554,8 +676,11 @@ export function estimateFeeFallback(
   const referralPct = getCategoryReferralPercentage(category);
   const referralFee = parseFloat((price * referralPct).toFixed(2));
 
-  log(`FEE FALLBACK for ${asin}: price=$${price}, weight=${weight.toFixed(2)}lbs, ` +
-    `isLarge=${isLargeStandard}, FBA=$${fbaFee}, referral=$${referralFee} (${(referralPct * 100).toFixed(0)}% for ${category ?? "unknown"})`, "fees");
+  log(
+    `FEE FALLBACK for ${asin}: price=$${price}, weight=${weight.toFixed(2)}lbs, ` +
+      `isLarge=${isLargeStandard}, FBA=$${fbaFee}, referral=$${referralFee} (${(referralPct * 100).toFixed(0)}% for ${category ?? "unknown"})`,
+    "fees",
+  );
 
   return { fbaFulfillmentFee: fbaFee, referralFee, feesEstimatePrice: price };
 }
@@ -566,7 +691,9 @@ export interface BatchFeeItem {
   category?: string | null;
 }
 
-export async function getBatchFees(items: BatchFeeItem[]): Promise<Map<string, AsinFeesResult>> {
+export async function getBatchFees(
+  items: BatchFeeItem[],
+): Promise<Map<string, AsinFeesResult>> {
   const results = new Map<string, AsinFeesResult>();
   if (items.length === 0) return results;
 
@@ -592,7 +719,10 @@ export async function getBatchFees(items: BatchFeeItem[]): Promise<Map<string, A
     }));
 
     try {
-      log(`Batch fee request: ${batch.length} ASINs (${batch.map(b => b.asin).join(", ")})`, "fees-batch");
+      log(
+        `Batch fee request: ${batch.length} ASINs (${batch.map((b) => b.asin).join(", ")})`,
+        "fees-batch",
+      );
 
       const data = await spApiPost("/products/fees/v0/feesEstimate", body);
       const responseList = data || [];
@@ -601,40 +731,69 @@ export async function getBatchFees(items: BatchFeeItem[]): Promise<Map<string, A
         const respAsin = resp?.IdValue || resp?.FeesEstimateIdentifier?.IdValue;
         const feesResult = resp?.FeesEstimateResult || resp;
         if (respAsin) {
-          const item = batch.find(b => b.asin === respAsin);
-          const parsed = parseFeeResult(respAsin, feesResult, item?.price ?? 0, item?.category);
+          const item = batch.find((b) => b.asin === respAsin);
+          const parsed = parseFeeResult(
+            respAsin,
+            feesResult,
+            item?.price ?? 0,
+            item?.category,
+          );
           results.set(respAsin, parsed);
         }
       }
 
       for (const item of batch) {
         if (!results.has(item.asin)) {
-          log(`No fee result returned for ${item.asin} in batch response`, "fees-batch");
-          results.set(item.asin, { fbaFulfillmentFee: null, referralFee: null, feesEstimatePrice: null });
+          log(
+            `No fee result returned for ${item.asin} in batch response`,
+            "fees-batch",
+          );
+          results.set(item.asin, {
+            fbaFulfillmentFee: null,
+            referralFee: null,
+            feesEstimatePrice: null,
+          });
         }
       }
 
       log(`Batch fee response: ${results.size} results received`, "fees-batch");
     } catch (err: any) {
       const statusCode = err.response?.status;
-      const apiError = err.response?.data?.errors?.[0]?.code || err.response?.data?.errors?.[0]?.message || "";
-      log(`Batch Fees API error (status=${statusCode}): ${err.message} | apiError=${apiError}. Falling back to individual calls.`, "fees-batch");
+      const apiError =
+        err.response?.data?.errors?.[0]?.code ||
+        err.response?.data?.errors?.[0]?.message ||
+        "";
+      log(
+        `Batch Fees API error (status=${statusCode}): ${err.message} | apiError=${apiError}. Falling back to individual calls.`,
+        "fees-batch",
+      );
 
       for (const item of batch) {
         if (!results.has(item.asin)) {
           try {
-            const singleResult = await getFees(item.asin, item.price, item.category);
+            const singleResult = await getFees(
+              item.asin,
+              item.price,
+              item.category,
+            );
             results.set(item.asin, singleResult);
           } catch (singleErr: any) {
-            log(`Individual fee fallback also failed for ${item.asin}: ${singleErr.message}`, "fees");
-            results.set(item.asin, { fbaFulfillmentFee: null, referralFee: null, feesEstimatePrice: null });
+            log(
+              `Individual fee fallback also failed for ${item.asin}: ${singleErr.message}`,
+              "fees",
+            );
+            results.set(item.asin, {
+              fbaFulfillmentFee: null,
+              referralFee: null,
+              feesEstimatePrice: null,
+            });
           }
         }
       }
     }
 
     if (i + BATCH_SIZE < items.length) {
-      await new Promise(resolve => setTimeout(resolve, 200));
+      await new Promise((resolve) => setTimeout(resolve, 200));
     }
   }
 
@@ -661,15 +820,27 @@ export async function getCatalogData(asin: string): Promise<AsinCatalogResult> {
       title = data.attributes.item_name[0].value;
     }
 
-    log(`Raw images for ${asin}: ${JSON.stringify(data?.images)?.substring(0, 500)}`, "catalog-raw");
-    log(`Raw salesRanks for ${asin}: ${JSON.stringify(data?.salesRanks)?.substring(0, 500)}`, "catalog-raw");
-    log(`Raw summaries for ${asin}: ${JSON.stringify(data?.summaries)?.substring(0, 500)}`, "catalog-raw");
+    log(
+      `Raw images for ${asin}: ${JSON.stringify(data?.images)?.substring(0, 500)}`,
+      "catalog-raw",
+    );
+    log(
+      `Raw salesRanks for ${asin}: ${JSON.stringify(data?.salesRanks)?.substring(0, 500)}`,
+      "catalog-raw",
+    );
+    log(
+      `Raw summaries for ${asin}: ${JSON.stringify(data?.summaries)?.substring(0, 500)}`,
+      "catalog-raw",
+    );
 
     if (data?.images) {
-      const imageEntries = Array.isArray(data.images) ? data.images : Object.values(data.images);
+      const imageEntries = Array.isArray(data.images)
+        ? data.images
+        : Object.values(data.images);
       for (const entry of imageEntries as any[]) {
         if (imageUrl) break;
-        const imageList = entry?.images || (Array.isArray(entry) ? entry : null);
+        const imageList =
+          entry?.images || (Array.isArray(entry) ? entry : null);
         if (imageList && Array.isArray(imageList)) {
           for (const img of imageList) {
             if (img.variant === "MAIN" || img.variant === "main") {
@@ -688,7 +859,9 @@ export async function getCatalogData(asin: string): Promise<AsinCatalogResult> {
     }
 
     if (!imageUrl && data?.summaries) {
-      const summaries = Array.isArray(data.summaries) ? data.summaries : Object.values(data.summaries);
+      const summaries = Array.isArray(data.summaries)
+        ? data.summaries
+        : Object.values(data.summaries);
       for (const summary of summaries as any[]) {
         if (summary?.mainImage?.link) {
           imageUrl = summary.mainImage.link;
@@ -698,15 +871,25 @@ export async function getCatalogData(asin: string): Promise<AsinCatalogResult> {
     }
 
     if (data?.salesRanks) {
-      const rankEntries = Array.isArray(data.salesRanks) ? data.salesRanks : Object.values(data.salesRanks);
+      const rankEntries = Array.isArray(data.salesRanks)
+        ? data.salesRanks
+        : Object.values(data.salesRanks);
       for (const entry of rankEntries as any[]) {
-        const ranks = entry?.displayGroupRanks || entry?.classificationRanks || entry?.ranks || (Array.isArray(entry) ? entry : null);
+        const ranks =
+          entry?.displayGroupRanks ||
+          entry?.classificationRanks ||
+          entry?.ranks ||
+          (Array.isArray(entry) ? entry : null);
         if (ranks && Array.isArray(ranks)) {
           for (const rank of ranks) {
             const r = parseInt(rank.rank ?? rank.value);
             if (!isNaN(r) && r > 0 && (bsrRank === null || r < bsrRank)) {
               bsrRank = r;
-              bsrCategory = rank.title || rank.link?.split("/")?.pop() || rank.productCategoryId || null;
+              bsrCategory =
+                rank.title ||
+                rank.link?.split("/")?.pop() ||
+                rank.productCategoryId ||
+                null;
             }
           }
         }
@@ -720,7 +903,10 @@ export async function getCatalogData(asin: string): Promise<AsinCatalogResult> {
       }
     }
 
-    log(`Extracted for ${asin}: image=${imageUrl ? "yes" : "null"}, bsr=${bsrRank} in ${bsrCategory}`, "catalog");
+    log(
+      `Extracted for ${asin}: image=${imageUrl ? "yes" : "null"}, bsr=${bsrRank} in ${bsrCategory}`,
+      "catalog",
+    );
 
     function convertWeightToLbs(value: number, unit: string): number {
       const u = unit.toLowerCase();
@@ -748,12 +934,15 @@ export async function getCatalogData(asin: string): Promise<AsinCatalogResult> {
       return convertWeightToLbs(w, unit);
     }
 
-    function extractDims(dimObj: any): { l: number; w: number; h: number } | null {
+    function extractDims(
+      dimObj: any,
+    ): { l: number; w: number; h: number } | null {
       if (!dimObj?.length || !dimObj?.width || !dimObj?.height) return null;
       const l = parseFloat(dimObj.length.value);
       const w = parseFloat(dimObj.width.value);
       const h = parseFloat(dimObj.height.value);
-      if (isNaN(l) || isNaN(w) || isNaN(h) || l <= 0 || w <= 0 || h <= 0) return null;
+      if (isNaN(l) || isNaN(w) || isNaN(h) || l <= 0 || w <= 0 || h <= 0)
+        return null;
       return {
         l: convertDimToInches(l, dimObj.length.unit || ""),
         w: convertDimToInches(w, dimObj.width.unit || ""),
@@ -766,7 +955,10 @@ export async function getCatalogData(asin: string): Promise<AsinCatalogResult> {
     let dimWeightLbs: number | null = null;
     let packageDims: { l: number; w: number; h: number } | null = null;
 
-    log(`Raw dimensions for ${asin}: ${JSON.stringify(data?.dimensions)}`, "weight-raw");
+    log(
+      `Raw dimensions for ${asin}: ${JSON.stringify(data?.dimensions)}`,
+      "weight-raw",
+    );
 
     const dims = data?.dimensions;
     if (dims) {
@@ -774,7 +966,10 @@ export async function getCatalogData(asin: string): Promise<AsinCatalogResult> {
       for (const entry of dimEntries as any[]) {
         if (entry?.package) {
           const pw = extractWeight(entry.package);
-          if (pw != null && (packageWeightLbs === null || pw > packageWeightLbs)) {
+          if (
+            pw != null &&
+            (packageWeightLbs === null || pw > packageWeightLbs)
+          ) {
             packageWeightLbs = pw;
           }
           const pd = extractDims(entry.package);
@@ -813,7 +1008,10 @@ export async function getCatalogData(asin: string): Promise<AsinCatalogResult> {
         const converted = convertWeightToLbs(w, unit);
         if (packageWeightLbs === null || converted > packageWeightLbs) {
           packageWeightLbs = converted;
-          log(`Found item_package_weight attribute for ${asin}: ${converted.toFixed(3)} lbs`, "weight");
+          log(
+            `Found item_package_weight attribute for ${asin}: ${converted.toFixed(3)} lbs`,
+            "weight",
+          );
         }
       }
     }
@@ -834,7 +1032,10 @@ export async function getCatalogData(asin: string): Promise<AsinCatalogResult> {
             w: convertDimToInches(w, wUnit),
             h: convertDimToInches(h, hUnit),
           };
-          log(`Found item_package_dimensions attribute for ${asin}: ${packageDims.l.toFixed(1)}x${packageDims.w.toFixed(1)}x${packageDims.h.toFixed(1)} in`, "weight");
+          log(
+            `Found item_package_dimensions attribute for ${asin}: ${packageDims.l.toFixed(1)}x${packageDims.w.toFixed(1)}x${packageDims.h.toFixed(1)} in`,
+            "weight",
+          );
         }
       }
       if (!isNaN(wt) && wt > 0) {
@@ -842,7 +1043,10 @@ export async function getCatalogData(asin: string): Promise<AsinCatalogResult> {
         const converted = convertWeightToLbs(wt, wtUnit);
         if (packageWeightLbs === null || converted > packageWeightLbs) {
           packageWeightLbs = converted;
-          log(`Found package weight from item_package_dimensions for ${asin}: ${converted.toFixed(3)} lbs`, "weight");
+          log(
+            `Found package weight from item_package_dimensions for ${asin}: ${converted.toFixed(3)} lbs`,
+            "weight",
+          );
         }
       }
     }
@@ -855,7 +1059,10 @@ export async function getCatalogData(asin: string): Promise<AsinCatalogResult> {
         const converted = convertWeightToLbs(w, unit);
         if (itemWeightLbs === null || converted > itemWeightLbs) {
           itemWeightLbs = converted;
-          log(`Found item_weight attribute for ${asin}: ${converted.toFixed(3)} lbs (raw: ${w} ${unit})`, "weight");
+          log(
+            `Found item_weight attribute for ${asin}: ${converted.toFixed(3)} lbs (raw: ${w} ${unit})`,
+            "weight",
+          );
         }
       }
     }
@@ -866,7 +1073,10 @@ export async function getCatalogData(asin: string): Promise<AsinCatalogResult> {
       const unit = (uw.unit || "").toLowerCase();
       if (!isNaN(w) && w > 0) {
         const converted = convertWeightToLbs(w, unit);
-        log(`Found unit_weight attribute for ${asin}: ${converted.toFixed(3)} lbs (raw: ${w} ${unit})`, "weight");
+        log(
+          `Found unit_weight attribute for ${asin}: ${converted.toFixed(3)} lbs (raw: ${w} ${unit})`,
+          "weight",
+        );
         if (itemWeightLbs === null || converted > itemWeightLbs) {
           itemWeightLbs = converted;
         }
@@ -874,7 +1084,9 @@ export async function getCatalogData(asin: string): Promise<AsinCatalogResult> {
     }
 
     if (data?.summaries) {
-      const summaries = Array.isArray(data.summaries) ? data.summaries : Object.values(data.summaries);
+      const summaries = Array.isArray(data.summaries)
+        ? data.summaries
+        : Object.values(data.summaries);
       for (const summary of summaries as any[]) {
         if (summary?.packageWeight) {
           const w = parseFloat(summary.packageWeight.value);
@@ -883,7 +1095,10 @@ export async function getCatalogData(asin: string): Promise<AsinCatalogResult> {
             const converted = convertWeightToLbs(w, unit);
             if (packageWeightLbs === null || converted > packageWeightLbs) {
               packageWeightLbs = converted;
-              log(`Found packageWeight from summaries for ${asin}: ${converted.toFixed(3)} lbs`, "weight");
+              log(
+                `Found packageWeight from summaries for ${asin}: ${converted.toFixed(3)} lbs`,
+                "weight",
+              );
             }
           }
         }
@@ -894,7 +1109,10 @@ export async function getCatalogData(asin: string): Promise<AsinCatalogResult> {
           const unit = (idw.unit || "pounds").toLowerCase();
           if (!isNaN(w) && w > 0) {
             const converted = convertWeightToLbs(w, unit);
-            log(`Found itemDimensions.weight from summaries for ${asin}: ${converted.toFixed(3)} lbs (raw: ${w} ${unit})`, "weight");
+            log(
+              `Found itemDimensions.weight from summaries for ${asin}: ${converted.toFixed(3)} lbs (raw: ${w} ${unit})`,
+              "weight",
+            );
             if (itemWeightLbs === null || converted > itemWeightLbs) {
               itemWeightLbs = converted;
             }
@@ -915,18 +1133,26 @@ export async function getCatalogData(asin: string): Promise<AsinCatalogResult> {
               w: convertDimToInches(w, wUnit),
               h: convertDimToInches(h, hUnit),
             };
-            log(`Found itemDimensions from summaries for ${asin}: ${packageDims.l.toFixed(1)}x${packageDims.w.toFixed(1)}x${packageDims.h.toFixed(1)} in`, "weight");
+            log(
+              `Found itemDimensions from summaries for ${asin}: ${packageDims.l.toFixed(1)}x${packageDims.w.toFixed(1)}x${packageDims.h.toFixed(1)} in`,
+              "weight",
+            );
           }
         }
       }
     }
 
-    log(`Available weight attributes for ${asin}: ${JSON.stringify({
-      item_package_weight: attrs.item_package_weight,
-      item_weight: attrs.item_weight,
-      unit_weight: attrs.unit_weight,
-      item_package_dimensions: attrs.item_package_dimensions ? "[present]" : undefined,
-    })}`, "weight-attrs");
+    log(
+      `Available weight attributes for ${asin}: ${JSON.stringify({
+        item_package_weight: attrs.item_package_weight,
+        item_weight: attrs.item_weight,
+        unit_weight: attrs.unit_weight,
+        item_package_dimensions: attrs.item_package_dimensions
+          ? "[present]"
+          : undefined,
+      })}`,
+      "weight-attrs",
+    );
 
     if (packageDims != null) {
       dimWeightLbs = (packageDims.l * packageDims.w * packageDims.h) / 139;
@@ -938,7 +1164,10 @@ export async function getCatalogData(asin: string): Promise<AsinCatalogResult> {
       weightSource = "packageWeight";
     } else if (dimWeightLbs != null && itemWeightLbs != null) {
       weightLbs = Math.max(dimWeightLbs, itemWeightLbs);
-      weightSource = dimWeightLbs > itemWeightLbs ? "dimWeight" : "itemWeight (dim fallback)";
+      weightSource =
+        dimWeightLbs > itemWeightLbs
+          ? "dimWeight"
+          : "itemWeight (dim fallback)";
     } else if (dimWeightLbs != null) {
       weightLbs = dimWeightLbs;
       weightSource = "dimWeight";
@@ -947,21 +1176,30 @@ export async function getCatalogData(asin: string): Promise<AsinCatalogResult> {
       weightSource = "itemWeight (last resort)";
     }
 
-    const MIN_REASONABLE_WEIGHT = 0.1;
-    if (weightLbs != null && weightLbs < MIN_REASONABLE_WEIGHT && dimWeightLbs != null && dimWeightLbs >= MIN_REASONABLE_WEIGHT) {
-      log(`WARNING: Weight for ${asin} is suspiciously low (${weightLbs.toFixed(3)} lbs via ${weightSource}). Falling back to dimWeight: ${dimWeightLbs.toFixed(3)} lbs`, "weight");
-      weightLbs = dimWeightLbs;
-      weightSource = `dimWeight (suspicious ${weightSource} override)`;
-    } else if (weightLbs != null && weightLbs < MIN_REASONABLE_WEIGHT) {
-      log(`WARNING: Weight for ${asin} is suspiciously low (${weightLbs.toFixed(3)} lbs via ${weightSource}) and no dimensional weight available for fallback`, "weight");
-    }
+    log(
+      `Weight for ${asin}: Using ${weightSource}: ${weightLbs?.toFixed(3) ?? "N/A (no weight found)"} lbs | packageWeight=${packageWeightLbs?.toFixed(3) ?? "N/A"}, itemWeight=${itemWeightLbs?.toFixed(3) ?? "N/A"}, dimWeight=${dimWeightLbs?.toFixed(3) ?? "N/A"}${packageDims ? ` (${packageDims.l.toFixed(1)}x${packageDims.w.toFixed(1)}x${packageDims.h.toFixed(1)} in)` : ""}`,
+      "weight",
+    );
 
-    log(`Weight for ${asin}: Using ${weightSource}: ${weightLbs?.toFixed(3) ?? "N/A (no weight found)"} lbs | packageWeight=${packageWeightLbs?.toFixed(3) ?? "N/A"}, itemWeight=${itemWeightLbs?.toFixed(3) ?? "N/A"}, dimWeight=${dimWeightLbs?.toFixed(3) ?? "N/A"}${packageDims ? ` (${packageDims.l.toFixed(1)}x${packageDims.w.toFixed(1)}x${packageDims.h.toFixed(1)} in)` : ""}`, "weight");
-
-    return { weightLbs: weightLbs ?? null, title, imageUrl, bsrRank, bsrCategory };
+    return {
+      weightLbs: weightLbs ?? null,
+      title,
+      imageUrl,
+      bsrRank,
+      bsrCategory,
+    };
   } catch (err: any) {
     const statusCode = err.response?.status;
-    log(`Catalog API error for ${asin} (status=${statusCode}): ${err.message}`, "sp-api");
-    return { weightLbs: null, title: null, imageUrl: null, bsrRank: null, bsrCategory: null };
+    log(
+      `Catalog API error for ${asin} (status=${statusCode}): ${err.message}`,
+      "sp-api",
+    );
+    return {
+      weightLbs: null,
+      title: null,
+      imageUrl: null,
+      bsrRank: null,
+      bsrCategory: null,
+    };
   }
 }

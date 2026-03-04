@@ -13,7 +13,7 @@ import { ColumnManager } from "@/components/column-manager";
 import { useTheme } from "@/components/theme-provider";
 import { loadSettings } from "@/lib/settings";
 import { loadColumnConfig, type ColumnConfig } from "@/lib/columns";
-import { Sun, Moon, BarChart3, Zap, AlertTriangle, X } from "lucide-react";
+import { Sun, Moon, BarChart3, Zap, AlertTriangle, X, LogOut } from "lucide-react";
 import {
   type AsinInput,
   type AsinResult,
@@ -23,6 +23,11 @@ import {
   type ColumnId,
 } from "@shared/schema";
 import { useToast } from "@/hooks/use-toast";
+
+interface HomeProps {
+  user: { id: number; email: string };
+  onLogout: () => void;
+}
 
 const BUY_LIST_KEY = "fba-buy-list";
 
@@ -38,7 +43,7 @@ function saveBuyList(set: Set<string>) {
   localStorage.setItem(BUY_LIST_KEY, JSON.stringify(Array.from(set)));
 }
 
-export default function Home() {
+export default function Home({ user, onLogout }: HomeProps) {
   const { theme, toggleTheme } = useTheme();
   const { toast } = useToast();
   const [settings, setSettings] = useState<Settings>(loadSettings);
@@ -188,6 +193,9 @@ export default function Home() {
               <h1 className="text-base font-semibold tracking-tight">FBA Profitability Analyzer</h1>
             </div>
             <div className="flex items-center gap-1">
+              <span className="text-xs text-muted-foreground mr-1 hidden sm:inline" data-testid="text-user-email">
+                {user.email}
+              </span>
               <SettingsDialog onSettingsChange={setSettings} />
               <Button
                 size="icon"
@@ -196,6 +204,14 @@ export default function Home() {
                 data-testid="button-theme-toggle"
               >
                 {theme === "dark" ? <Sun className="h-5 w-5" /> : <Moon className="h-5 w-5" />}
+              </Button>
+              <Button
+                size="icon"
+                variant="ghost"
+                onClick={onLogout}
+                data-testid="button-logout"
+              >
+                <LogOut className="h-5 w-5" />
               </Button>
             </div>
           </div>

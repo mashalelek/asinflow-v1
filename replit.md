@@ -6,27 +6,39 @@ A full-stack web app that analyzes Amazon FBA profitability by uploading a CSV/E
 ## Architecture
 - **Frontend:** React + Tailwind CSS + shadcn/ui (dark mode default)
 - **Backend:** Express.js with file parsing (multer, xlsx, papaparse) and SP-API integration
-- **No database** - this is a stateless analysis tool. Settings persist in localStorage.
+- **Database:** PostgreSQL (users table for authentication, sessions via connect-pg-simple)
+- **Auth:** Email/password authentication with bcrypt hashing, express-session with PostgreSQL session store
 
 ## Key Files
 - `shared/schema.ts` - TypeScript interfaces, column definitions, and calculation logic (calculateProfit, getSelectedPrice, getEffectivePrep, getEffectiveStorage, extractDomain, ColumnMapping)
-- `client/src/pages/home.tsx` - Main page with upload, analysis, results, filter state, buy list state, sort state
-- `client/src/components/` - UI components (file-upload, results-table, settings-dialog, export-buttons, summary-cards, theme-provider, column-manager, login-screen, column-mapping-modal)
+- `client/src/pages/home.tsx` - Main page with upload, analysis, results, filter state, buy list state, sort state (receives user/onLogout props)
+- `client/src/App.tsx` - Root component with session-based auth check (GET /api/me on load), renders LoginScreen or Router
+- `client/src/components/login-screen.tsx` - Login/Register screen with email+password, toggle between modes
+- `client/src/components/` - UI components (file-upload, results-table, settings-dialog, export-buttons, summary-cards, theme-provider, column-manager, column-mapping-modal)
 - `client/src/lib/settings.ts` - localStorage settings management
 - `client/src/lib/columns.ts` - Column config (order + visibility) persisted in localStorage
-- `server/routes.ts` - API routes for file parsing (two-step: parse-file → parse-mapped), template download, and analysis (streaming NDJSON)
+- `server/index.ts` - Express setup with session middleware (connect-pg-simple store)
+- `server/db.ts` - PostgreSQL connection pool (pg)
+- `server/auth.ts` - registerUser/validateUser functions (bcrypt, salt rounds: 10)
+- `server/routes.ts` - API routes with requireAuth middleware, auth routes, file parsing, analysis (streaming NDJSON)
 - `server/spapi.ts` - Amazon SP-API integration (OAuth token refresh, pricing, fees with referral fallback, catalog with images/BSR/salesRanks)
 
-## SP-API Credentials
+## Environment Secrets
 Required as Replit Secrets:
 - `SP_API_CLIENT_ID`
 - `SP_API_CLIENT_SECRET`
 - `SP_API_REFRESH_TOKEN`
 - `SP_API_SELLER_ID`
-- `APP_PASSWORD` - Password protection for app access
+- `SESSION_SECRET` - Secret for express-session cookie signing
+- `DATABASE_URL` - PostgreSQL connection string (auto-provisioned)
+
+## Database Schema
+- `users` table: id (serial PK), email (unique, not null), password_hash (text, not null), created_at (timestamp default now())
+- `session` table: auto-created by connect-pg-simple for session storage
 
 ## Features
-- Password-protected access (APP_PASSWORD secret)
+- Email/password user authentication (register, login, logout, session-based)
+- All API routes protected with requireAuth middleware
 - Two-step upload flow: upload file → column mapping modal → analysis
 - Template download (`/api/download-template`) with example data and notes
 - Column mapping modal with auto-match and required/optional field validation
@@ -64,7 +76,13 @@ Required as Replit Secrets:
 ASIN, Image, Product Name, Supplier, COGS, Sale Price, Profit/Unit, Margin, ROI, FBA Fee, Referral Fee, Inbound Ship., Prep Cost (hidden), Additional Fees (hidden), BSR, Sellers (FBA), Sellers (FBM)
 
 ## API Endpoints
-- `POST /api/verify-password` - Password verification
+### Auth (public)
+- `POST /api/register` - Create account (email, password) → sets session
+- `POST /api/login` - Sign in (email, password) → sets session
+- `GET /api/me` - Get current user from session (401 if not authenticated)
+- `GET /api/logout` - Destroy session
+
+### Protected (requireAuth)
 - `GET /api/credentials-status` - Check SP-API credentials
 - `GET /api/download-template` - Download XLSX template with example data
 - `POST /api/parse-file` - Upload file, returns `{ headers, rowCount, autoMapping }`
@@ -74,7 +92,6 @@ ASIN, Image, Product Name, Supplier, COGS, Sale Price, Profit/Unit, Margin, ROI,
 ## localStorage Keys
 - `fba-column-config` - Column order and visibility
 - `fba-analyzer-settings` - Settings (shipping cost, prep, storage, surcharge, thresholds)
-- `fba-auth-token` - Auth session
 - `fba-buy-list` - Checked ASINs for buy list
 
 ## GitHub

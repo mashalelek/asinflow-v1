@@ -1,7 +1,17 @@
 import express, { type Request, Response, NextFunction } from "express";
+import session from "express-session";
+import connectPgSimple from "connect-pg-simple";
 import { registerRoutes } from "./routes";
 import { serveStatic } from "./static";
 import { createServer } from "http";
+import pool from "./db";
+
+declare module "express-session" {
+  interface SessionData {
+    userId: number;
+    email: string;
+  }
+}
 
 const app = express();
 const httpServer = createServer(app);
@@ -21,6 +31,22 @@ app.use(
 );
 
 app.use(express.urlencoded({ extended: false }));
+
+const PgStore = connectPgSimple(session);
+app.use(
+  session({
+    store: new PgStore({ pool, createTableIfMissing: true }),
+    secret: process.env.SESSION_SECRET || "dev-fallback-secret",
+    resave: false,
+    saveUninitialized: false,
+    cookie: {
+      secure: false,
+      httpOnly: true,
+      maxAge: 7 * 24 * 60 * 60 * 1000,
+      sameSite: "lax",
+    },
+  }),
+);
 
 export function log(message: string, source = "express") {
   const formattedTime = new Date().toLocaleTimeString("en-US", {
