@@ -7,13 +7,14 @@ A full-stack web app that analyzes Amazon FBA profitability by uploading a CSV/E
 - **Frontend:** React + Tailwind CSS + shadcn/ui (dark mode default)
 - **Backend:** Express.js with file parsing (multer, xlsx, papaparse) and SP-API integration
 - **Database:** PostgreSQL (users table for authentication, sessions via connect-pg-simple)
-- **Auth:** Email/password authentication with bcrypt hashing, express-session with PostgreSQL session store
+- **Auth:** Email/password login-only (registration disabled), bcrypt hashing, express-session with PostgreSQL session store
 
 ## Key Files
 - `shared/schema.ts` - TypeScript interfaces, column definitions, and calculation logic (calculateProfit, getSelectedPrice, getEffectivePrep, getEffectiveStorage, extractDomain, ColumnMapping)
 - `client/src/pages/home.tsx` - Main page with upload, analysis, results, filter state, buy list state, sort state (receives user/onLogout props)
 - `client/src/App.tsx` - Root component with session-based auth check (GET /api/me on load), renders LoginScreen or Router
-- `client/src/components/login-screen.tsx` - Login/Register screen with email+password, toggle between modes
+- `client/src/components/login-screen.tsx` - Login-only screen with email+password (registration disabled)
+- `server/create-user.ts` - One-time script to seed a user (idempotent, uses INSERT ON CONFLICT DO NOTHING)
 - `client/src/components/` - UI components (file-upload, results-table, settings-dialog, export-buttons, summary-cards, theme-provider, column-manager, column-mapping-modal)
 - `client/src/lib/settings.ts` - localStorage settings management
 - `client/src/lib/columns.ts` - Column config (order + visibility) persisted in localStorage

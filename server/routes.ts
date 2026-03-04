@@ -6,7 +6,7 @@ import * as XLSX from "xlsx";
 import { getPricing, getFees, getCatalogData, estimateFeeFallback } from "./spapi";
 import { log } from "./index";
 import { type AsinInput, type AsinResult, type ColumnMapping } from "@shared/schema";
-import { registerUser, validateUser } from "./auth";
+import { validateUser } from "./auth";
 
 const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 10 * 1024 * 1024 } });
 
@@ -252,26 +252,8 @@ export async function registerRoutes(
   app: Express
 ): Promise<Server> {
 
-  app.post("/api/register", async (req: Request, res: Response) => {
-    try {
-      const { email, password } = req.body as { email: string; password: string };
-      if (!email || !password) {
-        res.status(400).json({ message: "Email and password are required" });
-        return;
-      }
-      if (password.length < 6) {
-        res.status(400).json({ message: "Password must be at least 6 characters" });
-        return;
-      }
-      const user = await registerUser(email, password);
-      req.session.userId = user.id;
-      req.session.email = user.email;
-      log(`User registered: ${user.email} (id=${user.id})`, "auth");
-      res.json({ id: user.id, email: user.email });
-    } catch (err: any) {
-      log(`Register error: ${err.message}`, "auth");
-      res.status(400).json({ message: err.message });
-    }
+  app.post("/api/register", (_req: Request, res: Response) => {
+    res.status(403).json({ message: "Registration is closed" });
   });
 
   app.post("/api/login", async (req: Request, res: Response) => {

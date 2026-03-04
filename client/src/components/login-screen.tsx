@@ -10,7 +10,6 @@ interface LoginScreenProps {
 }
 
 export function LoginScreen({ onAuthenticated }: LoginScreenProps) {
-  const [mode, setMode] = useState<"login" | "register">("login");
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const [error, setError] = useState("");
@@ -25,8 +24,7 @@ export function LoginScreen({ onAuthenticated }: LoginScreenProps) {
     setError("");
 
     try {
-      const endpoint = mode === "login" ? "/api/login" : "/api/register";
-      const res = await fetch(endpoint, {
+      const res = await fetch("/api/login", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ email: email.trim(), password }),
@@ -46,12 +44,6 @@ export function LoginScreen({ onAuthenticated }: LoginScreenProps) {
     }
   };
 
-  const toggleMode = () => {
-    setMode((m) => (m === "login" ? "register" : "login"));
-    setError("");
-    setPassword("");
-  };
-
   return (
     <div className="min-h-screen bg-background flex items-center justify-center p-4">
       <Card className="w-full max-w-sm p-8">
@@ -62,7 +54,7 @@ export function LoginScreen({ onAuthenticated }: LoginScreenProps) {
           <div className="text-center">
             <h1 className="text-lg font-semibold">FBA Profitability Analyzer</h1>
             <p className="text-sm text-muted-foreground mt-1">
-              {mode === "login" ? "Sign in to your account" : "Create a new account"}
+              Sign in to your account
             </p>
           </div>
         </div>
@@ -94,7 +86,7 @@ export function LoginScreen({ onAuthenticated }: LoginScreenProps) {
                 type={showPassword ? "text" : "password"}
                 value={password}
                 onChange={(e) => setPassword(e.target.value)}
-                placeholder={mode === "register" ? "Min 6 characters" : "Enter password"}
+                placeholder="Enter password"
                 className="pl-9 pr-9"
                 data-testid="input-password"
               />
@@ -119,24 +111,9 @@ export function LoginScreen({ onAuthenticated }: LoginScreenProps) {
             disabled={loading || !email.trim() || !password.trim()}
             data-testid="button-submit"
           >
-            {loading
-              ? mode === "login" ? "Signing in..." : "Creating account..."
-              : mode === "login" ? "Sign In" : "Create Account"}
+            {loading ? "Signing in..." : "Sign In"}
           </Button>
         </form>
-
-        <div className="mt-4 text-center">
-          <button
-            type="button"
-            onClick={toggleMode}
-            className="text-sm text-muted-foreground hover:text-primary transition-colors"
-            data-testid="button-toggle-mode"
-          >
-            {mode === "login"
-              ? "Don't have an account? Register"
-              : "Already have an account? Sign in"}
-          </button>
-        </div>
       </Card>
     </div>
   );
