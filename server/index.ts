@@ -4,7 +4,8 @@ import connectPgSimple from "connect-pg-simple";
 import { registerRoutes } from "./routes";
 import { serveStatic } from "./static";
 import { createServer } from "http";
-import pool from "./db";
+import pool, { ensureUsersTable } from "./db";
+import { registerUser } from "./auth";
 
 declare module "express-session" {
   interface SessionData {
@@ -86,6 +87,29 @@ app.use((req, res, next) => {
 });
 
 (async () => {
+  await ensureUsersTable();
+
+  const seedUsers = process.env.SEED_USERS;
+  if (seedUsers) {
+    try {
+      const users: { email: string; password: string }[] = JSON.parse(seedUsers);
+      for (const u of users) {
+        try {
+          await registerUser(u.email, u.password);
+          log(`Seed user created: ${u.email}`, "auth");
+        } catch (err: any) {
+          if (err.message?.includes("already exists")) {
+            log(`Seed user already exists: ${u.email}`, "auth");
+          } else {
+            log(`Seed user error for ${u.email}: ${err.message}`, "auth");
+          }
+        }
+      }
+    } catch {
+      log("Failed to parse SEED_USERS env var", "auth");
+    }
+  }
+
   await registerRoutes(httpServer, app);
 
   app.use((err: any, _req: Request, res: Response, next: NextFunction) => {
