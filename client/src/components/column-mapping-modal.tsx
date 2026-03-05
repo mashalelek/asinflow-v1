@@ -177,7 +177,7 @@ export function ColumnMappingModal({
                         Not in my file
                       </SelectItem>
                     )}
-                    {headers.map((header) => (
+                    {headers.filter((h) => h !== "").map((header) => (
                       <SelectItem key={header} value={header} data-testid={`option-header-${field.key}-${header}`}>
                         {header}
                       </SelectItem>
