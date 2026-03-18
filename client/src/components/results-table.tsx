@@ -18,6 +18,58 @@ import {
 import { type ColumnConfig } from "@/lib/columns";
 import { type FilterMode } from "@/components/summary-cards";
 
+function FaviconLink({
+  href,
+  src,
+  fallback,
+  label,
+  testId,
+}: {
+  href: string;
+  src: string;
+  fallback: string;
+  label: string;
+  testId: string;
+}) {
+  return (
+    <Tooltip>
+      <TooltipTrigger asChild>
+        <a
+          href={href}
+          target="_blank"
+          rel="noopener noreferrer"
+          className="flex items-center justify-center w-5 h-5 rounded hover:bg-muted transition-colors"
+          data-testid={testId}
+          onClick={(e) => e.stopPropagation()}
+        >
+          <img
+            src={src}
+            alt={label}
+            width={16}
+            height={16}
+            className="w-4 h-4 object-contain"
+            onError={(e) => {
+              const img = e.currentTarget;
+              img.style.display = "none";
+              const span = img.nextElementSibling as HTMLElement | null;
+              if (span) span.style.display = "inline";
+            }}
+          />
+          <span
+            className="text-[9px] font-bold text-muted-foreground leading-none"
+            style={{ display: "none" }}
+          >
+            {fallback}
+          </span>
+        </a>
+      </TooltipTrigger>
+      <TooltipContent side="right">
+        <p className="text-xs">{label}</p>
+      </TooltipContent>
+    </Tooltip>
+  );
+}
+
 function CopyAsinButton({ asin }: { asin: string }) {
   const [copied, setCopied] = useState(false);
   function handleCopy(e: React.MouseEvent) {
@@ -182,10 +234,11 @@ export function ResultsTable({
 
   if (results.length === 0) return null;
 
-  const frozenColWidth = { rowNum: 40, buy: 40, asin: 120 };
+  const frozenColWidth = { rowNum: 40, buy: 40, asin: 120, tools: 36 };
   const buyLeft = frozenColWidth.rowNum;
   const asinLeft = buyLeft + frozenColWidth.buy;
   const asinVisible = visibleCols.includes("asin");
+  const toolsLeft = asinLeft + (asinVisible ? frozenColWidth.asin : 0);
 
   return (
     <div className="w-full overflow-auto relative border-y border-border" style={{ maxHeight: "calc(100vh - 280px)" }}>
@@ -217,6 +270,10 @@ export function ResultsTable({
                 </span>
               </th>
             )}
+            <th
+              className="sticky z-30 bg-muted px-1 py-2 border-r border-border"
+              style={{ left: toolsLeft, width: frozenColWidth.tools, minWidth: frozenColWidth.tools }}
+            />
             {visibleCols.filter((id) => id !== "asin").map((colId) => {
               const col = colMap.get(colId)!;
               const isActive = sortCol === colId;
@@ -308,6 +365,27 @@ export function ResultsTable({
                     {renderCell("asin", result, price, label, hasError, profitData, settings, prep, storage)}
                   </td>
                 )}
+                <td
+                  className={`sticky z-10 px-1 py-1 border-r border-border ${frozenBg}`}
+                  style={{ left: toolsLeft, width: frozenColWidth.tools, minWidth: frozenColWidth.tools }}
+                >
+                  <div className="flex flex-col items-center gap-0.5">
+                    <FaviconLink
+                      href={`https://sas.selleramp.com/sas/lookup?SasLookup[search_term]=${result.asin}&SasLookup[cost_price]=${result.cogs}&SasLookup[sale_price]=${price ?? ""}`}
+                      src="https://sas.selleramp.com/favicon.ico"
+                      fallback="SA"
+                      label="Open in SellerAmp"
+                      testId={`link-selleramp-${result.asin}`}
+                    />
+                    <FaviconLink
+                      href={`https://keepa.com/#!product/1-${result.asin}`}
+                      src="https://keepa.com/favicon.ico"
+                      fallback="K"
+                      label="Open in Keepa"
+                      testId={`link-keepa-${result.asin}`}
+                    />
+                  </div>
+                </td>
                 {visibleCols.filter((id) => id !== "asin").map((colId) => {
                   const col = colMap.get(colId)!;
                   return (
