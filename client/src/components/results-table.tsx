@@ -137,7 +137,7 @@ function KeepaLink({ asin, testId }: { asin: string; testId: string }) {
             }}
           >
             <img
-              src={`https://graph.keepa.com/pricehistory.png?asin=${asin}&domain=1&bb=1&new=1&used=0&salesrank=1&offers=1&monthly=1&range=365`}
+              src={`https://graph.keepa.com/pricehistory.png?asin=${asin}&domain=1&bb=1&new=1&used=0&salesrank=1&offers=1&monthly=1&range=365&ymin=0`}
               alt="Keepa price history"
               style={{
                 width: 800,
