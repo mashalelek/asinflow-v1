@@ -4,6 +4,8 @@ import { Switch } from "@/components/ui/switch";
 import { Label } from "@/components/ui/label";
 import { Progress } from "@/components/ui/progress";
 import { Alert, AlertDescription } from "@/components/ui/alert";
+import { Input } from "@/components/ui/input";
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { SettingsDialog } from "@/components/settings-dialog";
 import { FileUpload } from "@/components/file-upload";
 import { ResultsTable } from "@/components/results-table";
@@ -13,7 +15,7 @@ import { ColumnManager } from "@/components/column-manager";
 import { useTheme } from "@/components/theme-provider";
 import { loadSettings } from "@/lib/settings";
 import { loadColumnConfig, type ColumnConfig } from "@/lib/columns";
-import { Sun, Moon, BarChart3, Zap, AlertTriangle, X, LogOut } from "lucide-react";
+import { Sun, Moon, BarChart3, Zap, AlertTriangle, X, LogOut, Search } from "lucide-react";
 import {
   type AsinInput,
   type AsinResult,
@@ -21,6 +23,10 @@ import {
   type Settings,
   type ProgressUpdate,
   type ColumnId,
+  getSelectedPrice,
+  calculateProfit,
+  getEffectivePrep,
+  getEffectiveStorage,
 } from "@shared/schema";
 import { useToast } from "@/hooks/use-toast";
 
@@ -57,6 +63,10 @@ export default function Home({ user, onLogout }: HomeProps) {
   const [buySet, setBuySet] = useState<Set<string>>(loadBuyList);
   const [sortCol, setSortCol] = useState<ColumnId | null>(null);
   const [sortDir, setSortDir] = useState<"asc" | "desc">("asc");
+  const [searchQuery, setSearchQuery] = useState("");
+  const [filterEligible, setFilterEligible] = useState("all");
+  const [filterMinMargin, setFilterMinMargin] = useState("0");
+  const [filterMinRoi, setFilterMinRoi] = useState("0");
 
   useEffect(() => {
     fetch("/api/credentials-status")
@@ -178,6 +188,57 @@ export default function Home({ user, onLogout }: HomeProps) {
   const buyListCount = useMemo(() => {
     return results.filter((r) => buySet.has(r.asin)).length;
   }, [results, buySet]);
+
+  const queryFilteredResults = useMemo(() => {
+    let out = results;
+    const q = searchQuery.trim().toLowerCase();
+    if (q) {
+      out = out.filter((r) =>
+        r.asin.toLowerCase().includes(q) ||
+        (r.catalogData.title ?? "").toLowerCase().includes(q) ||
+        (r.catalogData.brand ?? "").toLowerCase().includes(q)
+      );
+    }
+    if (filterEligible !== "all") {
+      out = out.filter((r) => (r.eligibilityData?.status ?? "check") === filterEligible);
+    }
+    const minMargin = parseFloat(filterMinMargin);
+    const minRoi = parseFloat(filterMinRoi);
+    if (minMargin > 0 || minRoi > 0) {
+      out = out.filter((r) => {
+        const { price } = getSelectedPrice(r, priceSource);
+        if (!price) return false;
+        const prep = getEffectivePrep(r, settings);
+        const storage = getEffectiveStorage(r, settings);
+        const p = calculateProfit(
+          price, r.cogs,
+          r.feesData.fbaFulfillmentFee ?? 0,
+          r.feesData.referralFee ?? 0,
+          r.feesData.feesEstimatePrice,
+          r.catalogData.weightLbs,
+          prep.value, storage.value, settings
+        );
+        if (minMargin > 0 && p.margin < minMargin) return false;
+        if (minRoi > 0 && p.roi < minRoi) return false;
+        return true;
+      });
+    }
+    return out;
+  }, [results, searchQuery, filterEligible, filterMinMargin, filterMinRoi, priceSource, settings]);
+
+  const activeFilterCount = [
+    searchQuery.trim() !== "" ? 1 : 0,
+    filterEligible !== "all" ? 1 : 0,
+    parseFloat(filterMinMargin) > 0 ? 1 : 0,
+    parseFloat(filterMinRoi) > 0 ? 1 : 0,
+  ].reduce((a, b) => a + b, 0);
+
+  function clearSearchFilters() {
+    setSearchQuery("");
+    setFilterEligible("all");
+    setFilterMinMargin("0");
+    setFilterMinRoi("0");
+  }
 
   const progressPercent = progress
     ? Math.round((progress.current / progress.total) * 100)
@@ -320,8 +381,73 @@ export default function Home({ user, onLogout }: HomeProps) {
               </div>
             </div>
 
+            <div className="flex flex-wrap items-center gap-2 px-4">
+              <div className="relative flex-1 min-w-[200px]">
+                <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground pointer-events-none" />
+                <Input
+                  placeholder="Search ASIN, name, or brand..."
+                  value={searchQuery}
+                  onChange={(e) => setSearchQuery(e.target.value)}
+                  className="pl-9 h-9"
+                  data-testid="input-search"
+                />
+              </div>
+              <Select value={filterEligible} onValueChange={setFilterEligible}>
+                <SelectTrigger className="w-[148px] h-9" data-testid="select-filter-eligible">
+                  <SelectValue placeholder="Eligibility" />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="all">All Eligibility</SelectItem>
+                  <SelectItem value="yes">Yes (Ungated)</SelectItem>
+                  <SelectItem value="no">No (Gated)</SelectItem>
+                  <SelectItem value="check">Check</SelectItem>
+                </SelectContent>
+              </Select>
+              <Select value={filterMinMargin} onValueChange={setFilterMinMargin}>
+                <SelectTrigger className="w-[148px] h-9" data-testid="select-filter-margin">
+                  <SelectValue placeholder="Min Margin" />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="0">Any Margin</SelectItem>
+                  <SelectItem value="10">≥ 10% Margin</SelectItem>
+                  <SelectItem value="15">≥ 15% Margin</SelectItem>
+                  <SelectItem value="20">≥ 20% Margin</SelectItem>
+                  <SelectItem value="25">≥ 25% Margin</SelectItem>
+                </SelectContent>
+              </Select>
+              <Select value={filterMinRoi} onValueChange={setFilterMinRoi}>
+                <SelectTrigger className="w-[148px] h-9" data-testid="select-filter-roi">
+                  <SelectValue placeholder="Min ROI" />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="0">Any ROI</SelectItem>
+                  <SelectItem value="10">≥ 10% ROI</SelectItem>
+                  <SelectItem value="20">≥ 20% ROI</SelectItem>
+                  <SelectItem value="30">≥ 30% ROI</SelectItem>
+                  <SelectItem value="50">≥ 50% ROI</SelectItem>
+                </SelectContent>
+              </Select>
+              {activeFilterCount > 0 && (
+                <Button
+                  variant="ghost"
+                  size="sm"
+                  onClick={clearSearchFilters}
+                  className="h-9 text-muted-foreground"
+                  data-testid="button-clear-filters"
+                >
+                  <X className="h-3 w-3 mr-1" />
+                  Clear ({activeFilterCount})
+                </Button>
+              )}
+              {queryFilteredResults.length !== results.length && (
+                <span className="text-xs text-muted-foreground ml-1">
+                  {queryFilteredResults.length} of {results.length} shown
+                </span>
+              )}
+            </div>
+
             <ResultsTable
-              results={results}
+              results={queryFilteredResults}
               priceSource={priceSource}
               settings={settings}
               columnConfig={columnConfig}

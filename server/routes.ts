@@ -170,7 +170,7 @@ async function fetchPricingAndCatalog(
     numberOfSellers: null, sellersFba: null, sellersFbm: null,
   };
   let catalogData = existingResult?.catalogData ?? {
-    weightLbs: null, title: null, imageUrl: null, bsrRank: null, bsrCategory: null,
+    weightLbs: null, title: null, brand: null, imageUrl: null, bsrRank: null, bsrCategory: null,
   };
   let pricingRestricted = false;
 
@@ -490,7 +490,7 @@ export async function registerRoutes(
             numberOfSellers: null, sellersFba: null, sellersFbm: null,
           },
           feesData: { fbaFulfillmentFee: null, referralFee: null, feesEstimatePrice: null },
-          catalogData: { weightLbs: null, title: null, imageUrl: null, bsrRank: null, bsrCategory: null },
+          catalogData: { weightLbs: null, title: null, brand: null, imageUrl: null, bsrRank: null, bsrCategory: null },
           eligibilityData: { status: "check" },
           error: err.message || "Unknown error",
         };

@@ -40,6 +40,7 @@ export interface FeesData {
 export interface CatalogData {
   weightLbs: number | null;
   title: string | null;
+  brand: string | null;
   imageUrl: string | null;
   bsrRank: number | null;
   bsrCategory: string | null;
@@ -194,7 +195,7 @@ export function extractDomain(url: string | null): string | null {
 }
 
 export const DEFAULT_COLUMNS = [
-  "asin", "image", "name", "eligible", "supplier", "cogs", "salePrice", "profit", "margin", "roi",
+  "asin", "image", "name", "brand", "eligible", "supplier", "cogs", "salePrice", "profit", "margin", "roi",
   "fbaFee", "referralFee", "inboundShipping", "prep", "storage", "bsr",
   "sellersFba", "sellersFbm",
 ] as const;
@@ -212,6 +213,7 @@ export const ALL_COLUMNS: ColumnDef[] = [
   { id: "asin", label: "ASIN", defaultVisible: true, align: "left" },
   { id: "image", label: "Image", defaultVisible: true, align: "left" },
   { id: "name", label: "Product Name", defaultVisible: true, align: "left" },
+  { id: "brand", label: "Brand", defaultVisible: true, align: "left" },
   { id: "eligible", label: "Eligible", defaultVisible: true, align: "left" },
   { id: "supplier", label: "Supplier", defaultVisible: true, align: "left" },
   { id: "cogs", label: "COGS", defaultVisible: true, align: "right" },

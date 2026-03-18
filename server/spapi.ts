@@ -91,6 +91,7 @@ export interface AsinFeesResult {
 export interface AsinCatalogResult {
   weightLbs: number | null;
   title: string | null;
+  brand: string | null;
   imageUrl: string | null;
   bsrRank: number | null;
   bsrCategory: string | null;
@@ -843,6 +844,7 @@ export async function getCatalogData(asin: string): Promise<AsinCatalogResult> {
 
     let weightLbs: number | null = null;
     let title: string | null = null;
+    let brand: string | null = null;
     let imageUrl: string | null = null;
     let bsrRank: number | null = null;
     let bsrCategory: string | null = null;
@@ -852,6 +854,15 @@ export async function getCatalogData(asin: string): Promise<AsinCatalogResult> {
     }
     if (data?.attributes?.item_name?.[0]?.value) {
       title = data.attributes.item_name[0].value;
+    }
+    if (data?.attributes?.brand?.[0]?.value) {
+      brand = data.attributes.brand[0].value;
+    }
+    if (!brand && data?.summaries) {
+      const summaries = Array.isArray(data.summaries) ? data.summaries : Object.values(data.summaries);
+      for (const summary of summaries as any[]) {
+        if (summary?.brand) { brand = summary.brand; break; }
+      }
     }
 
     log(
@@ -1218,6 +1229,7 @@ export async function getCatalogData(asin: string): Promise<AsinCatalogResult> {
     return {
       weightLbs: weightLbs ?? null,
       title,
+      brand,
       imageUrl,
       bsrRank,
       bsrCategory,
@@ -1231,6 +1243,7 @@ export async function getCatalogData(asin: string): Promise<AsinCatalogResult> {
     return {
       weightLbs: null,
       title: null,
+      brand: null,
       imageUrl: null,
       bsrRank: null,
       bsrCategory: null,

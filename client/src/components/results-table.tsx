@@ -105,6 +105,7 @@ function getRowValue(
     case "asin": return result.asin;
     case "image": return result.catalogData.imageUrl;
     case "name": return result.catalogData.title;
+    case "brand": return result.catalogData.brand;
     case "eligible": return result.eligibilityData?.status ?? "check";
     case "supplier": return extractDomain(result.buyLink);
     case "cogs": return result.cogs;
@@ -392,6 +393,12 @@ function renderCell(
         );
       }
       return <span className="text-sm" data-testid={`text-name-${result.asin}`}>{title}</span>;
+    }
+
+    case "brand": {
+      const brand = result.catalogData.brand;
+      if (!brand) return <span className="text-muted-foreground text-sm">-</span>;
+      return <span className="text-sm" data-testid={`text-brand-${result.asin}`}>{brand}</span>;
     }
 
     case "eligible": {
