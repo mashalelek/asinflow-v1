@@ -1,7 +1,8 @@
-import { useMemo } from "react";
+import { useMemo, useState } from "react";
 import { Badge } from "@/components/ui/badge";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
-import { ExternalLink, AlertTriangle, ArrowUp, ArrowDown } from "lucide-react";
+import { ExternalLink, AlertTriangle, ArrowUp, ArrowDown, Copy, Check } from "lucide-react";
+
 import {
   type AsinResult,
   type PriceSource,
@@ -16,6 +17,36 @@ import {
 } from "@shared/schema";
 import { type ColumnConfig } from "@/lib/columns";
 import { type FilterMode } from "@/components/summary-cards";
+
+function CopyAsinButton({ asin }: { asin: string }) {
+  const [copied, setCopied] = useState(false);
+  function handleCopy(e: React.MouseEvent) {
+    e.preventDefault();
+    e.stopPropagation();
+    navigator.clipboard.writeText(asin).then(() => {
+      setCopied(true);
+      setTimeout(() => setCopied(false), 1500);
+    });
+  }
+  return (
+    <Tooltip>
+      <TooltipTrigger asChild>
+        <button
+          onClick={handleCopy}
+          className="ml-1 text-muted-foreground hover:text-foreground transition-colors"
+          data-testid={`btn-copy-asin-${asin}`}
+        >
+          {copied
+            ? <Check className="h-3 w-3 text-emerald-500" />
+            : <Copy className="h-3 w-3" />}
+        </button>
+      </TooltipTrigger>
+      <TooltipContent side="top">
+        <p className="text-xs">{copied ? "Copied!" : "Copy ASIN"}</p>
+      </TooltipContent>
+    </Tooltip>
+  );
+}
 
 interface ResultsTableProps {
   results: AsinResult[];
@@ -312,16 +343,19 @@ function renderCell(
   switch (colId) {
     case "asin":
       return (
-        <a
-          href={`https://amazon.com/dp/${result.asin}`}
-          target="_blank"
-          rel="noopener noreferrer"
-          className="flex items-center gap-1 text-primary font-mono text-sm"
-          data-testid={`link-asin-${result.asin}`}
-        >
-          {result.asin}
-          <ExternalLink className="h-3 w-3" />
-        </a>
+        <div className="flex items-center gap-1">
+          <a
+            href={`https://amazon.com/dp/${result.asin}`}
+            target="_blank"
+            rel="noopener noreferrer"
+            className="flex items-center gap-1 text-primary font-mono text-sm"
+            data-testid={`link-asin-${result.asin}`}
+          >
+            {result.asin}
+            <ExternalLink className="h-3 w-3" />
+          </a>
+          <CopyAsinButton asin={result.asin} />
+        </div>
       );
 
     case "image":
