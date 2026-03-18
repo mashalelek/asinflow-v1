@@ -807,18 +807,20 @@ export interface EligibilityResult {
 export async function getEligibility(asin: string): Promise<EligibilityResult> {
   try {
     const data = await spApiGet("/fba/inbound/v1/eligibility/itemPreview", {
-      marketplaceIds: "ATVPDKIKX0DER",
       asin,
-      program: "INBOUND",
+      programName: "INBOUND",
+      marketplaceIds: "ATVPDKIKX0DER",
     });
 
     const info: any[] = Array.isArray(data?.payload?.programEligibilityInformation)
       ? data.payload.programEligibilityInformation
       : [];
 
+    log(`Eligibility raw for ${asin}: ${JSON.stringify(data?.payload ?? data)}`, "eligibility");
+
     const entry = info.find((i: any) => i.programName === "INBOUND") ?? info[0];
     if (!entry) {
-      log(`Eligibility ${asin}: no program info returned`, "eligibility");
+      log(`Eligibility ${asin}: no program info in response`, "eligibility");
       return { status: "check" };
     }
 
