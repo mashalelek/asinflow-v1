@@ -45,7 +45,7 @@ Required as Replit Secrets:
 - Column mapping modal with auto-match and required/optional field validation
 - CSV/Excel file upload (supports ASIN, COGS, Buy Link, Prep Cost, Additional Fees columns)
 - SP-API integration for pricing, fees, catalog data (title, image, BSR, weight)
-- Eligibility column: checks FBA inbound eligibility per-ASIN via SP-API `getItemEligibilityPreview` (`/fba/inbound/v1/eligibility/itemPreview`); "Yes" (green) = eligible, "No" (red) = not eligible, "Check" (amber, hover tooltip) = could not be determined; no seller ID required
+- Eligibility column: checks gating status per-ASIN via SP-API Listings Restrictions API (`/listings/2021-08-01/restrictions?conditionType=new_new`); "Yes" (green) = ungated (empty restrictions array), "No" (red) = gated (restrictions present), "Check" (amber) = API error or `SP_API_SELLER_ID` not set
 - Supplier column: extracts domain from Buy Link, shown as clickable link
 - Product Name and Image thumbnails from Catalog Items API
 - BSR (Best Seller Rank) with category name

@@ -805,34 +805,26 @@ export interface EligibilityResult {
 }
 
 export async function getEligibility(asin: string): Promise<EligibilityResult> {
+  const sellerId = process.env.SP_API_SELLER_ID;
+  if (!sellerId) {
+    log(`SP_API_SELLER_ID not set, skipping eligibility for ${asin}`, "eligibility");
+    return { status: "check" };
+  }
+
   try {
-    const data = await spApiGet("/fba/inbound/v1/eligibility/itemPreview", {
+    const data = await spApiGet("/listings/2021-08-01/restrictions", {
       asin,
-      programName: "INBOUND",
+      sellerId,
       marketplaceIds: "ATVPDKIKX0DER",
+      conditionType: "new_new",
     });
 
-    const info: any[] = Array.isArray(data?.payload?.programEligibilityInformation)
-      ? data.payload.programEligibilityInformation
-      : [];
+    const restrictions: any[] = Array.isArray(data?.restrictions) ? data.restrictions : [];
+    log(`Eligibility ${asin}: restrictions=${restrictions.length}`, "eligibility");
 
-    log(`Eligibility raw for ${asin}: ${JSON.stringify(data?.payload ?? data)}`, "eligibility");
-
-    const entry = info.find((i: any) => i.programName === "INBOUND") ?? info[0];
-    if (!entry) {
-      log(`Eligibility ${asin}: no program info in response`, "eligibility");
-      return { status: "check" };
-    }
-
-    if (entry.isEligibleForProgram === true) {
-      log(`Eligibility ${asin}: eligible (yes)`, "eligibility");
+    if (restrictions.length === 0) {
       return { status: "yes" };
     }
-
-    const reasons: string[] = Array.isArray(entry.ineligibilityReasonList)
-      ? entry.ineligibilityReasonList
-      : [];
-    log(`Eligibility ${asin}: not eligible — ${reasons.join(", ") || "no reasons given"}`, "eligibility");
     return { status: "no" };
   } catch (err: any) {
     log(`Eligibility error for ${asin}: ${err.message}`, "eligibility");
