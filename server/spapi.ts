@@ -815,9 +815,11 @@ export async function getEligibility(asin: string): Promise<EligibilityResult> {
     const data = await spApiGet("/listings/2021-08-01/restrictions", {
       asin,
       sellerId,
-      marketplaceIds: "ATVPDKIKX0DER",
+      marketplaceIds: ["ATVPDKIKX0DER"],
       conditionType: "new_new",
     });
+
+    console.log(`[eligibility-raw] ${asin}:`, JSON.stringify(data));
 
     const restrictions: any[] = Array.isArray(data?.restrictions) ? data.restrictions : [];
     log(`Eligibility ${asin}: restrictions=${restrictions.length}`, "eligibility");
