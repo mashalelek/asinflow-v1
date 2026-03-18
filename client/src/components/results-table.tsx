@@ -1,4 +1,5 @@
-import { useMemo, useState } from "react";
+import { useMemo, useState, useRef } from "react";
+import { createPortal } from "react-dom";
 import { Badge } from "@/components/ui/badge";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { ExternalLink, AlertTriangle, ArrowUp, ArrowDown, Copy, Check } from "lucide-react";
@@ -67,6 +68,91 @@ function FaviconLink({
         <p className="text-xs">{label}</p>
       </TooltipContent>
     </Tooltip>
+  );
+}
+
+function KeepaLink({ asin, testId }: { asin: string; testId: string }) {
+  const [show, setShow] = useState(false);
+  const [pos, setPos] = useState({ top: 0, left: 0 });
+  const ref = useRef<HTMLAnchorElement>(null);
+
+  function handleMouseEnter() {
+    if (ref.current) {
+      const rect = ref.current.getBoundingClientRect();
+      const graphWidth = 600;
+      const graphHeight = 200;
+      const gap = 8;
+      let top = rect.top - graphHeight - gap;
+      if (top < 8) top = rect.bottom + gap;
+      let left = rect.left - graphWidth / 2 + rect.width / 2;
+      if (left < 8) left = 8;
+      if (left + graphWidth > window.innerWidth - 8) left = window.innerWidth - graphWidth - 8;
+      setPos({ top, left });
+    }
+    setShow(true);
+  }
+
+  return (
+    <>
+      <a
+        ref={ref}
+        href={`https://keepa.com/#!product/1-${asin}`}
+        target="_blank"
+        rel="noopener noreferrer"
+        className="flex items-center justify-center w-5 h-5 rounded hover:bg-muted transition-colors"
+        data-testid={testId}
+        onClick={(e) => e.stopPropagation()}
+        onMouseEnter={handleMouseEnter}
+        onMouseLeave={() => setShow(false)}
+      >
+        <img
+          src="https://keepa.com/favicon.ico"
+          alt="Keepa"
+          width={16}
+          height={16}
+          className="w-4 h-4 object-contain"
+          onError={(e) => {
+            const img = e.currentTarget;
+            img.style.display = "none";
+            const span = img.nextElementSibling as HTMLElement | null;
+            if (span) span.style.display = "inline";
+          }}
+        />
+        <span
+          className="text-[9px] font-bold text-muted-foreground leading-none"
+          style={{ display: "none" }}
+        >
+          K
+        </span>
+      </a>
+      {show &&
+        createPortal(
+          <div
+            style={{
+              position: "fixed",
+              top: pos.top,
+              left: pos.left,
+              zIndex: 9999,
+              pointerEvents: "none",
+            }}
+          >
+            <img
+              src={`https://graph.keepa.com/pricehistory.png?asin=${asin}&domain=1&salesrank=1&new=1&used=0&range=180`}
+              alt="Keepa price history"
+              style={{
+                width: 600,
+                height: 200,
+                display: "block",
+                borderRadius: 6,
+                border: "1px solid hsl(var(--border))",
+                boxShadow: "0 8px 24px rgba(0,0,0,0.25)",
+                background: "#fff",
+              }}
+            />
+          </div>,
+          document.body
+        )}
+    </>
   );
 }
 
@@ -377,11 +463,8 @@ export function ResultsTable({
                       label="Open in SellerAmp"
                       testId={`link-selleramp-${result.asin}`}
                     />
-                    <FaviconLink
-                      href={`https://keepa.com/#!product/1-${result.asin}`}
-                      src="https://keepa.com/favicon.ico"
-                      fallback="K"
-                      label="Open in Keepa"
+                    <KeepaLink
+                      asin={result.asin}
                       testId={`link-keepa-${result.asin}`}
                     />
                   </div>
