@@ -817,7 +817,7 @@ export async function getEligibility(asin: string): Promise<EligibilityResult> {
       asin,
       sellerId,
       marketplaceIds: "ATVPDKIKX0DER",
-      conditionType: "new_new",
+      conditionType: "new",
     });
 
     console.log(`[eligibility-raw] ${asin}:`, JSON.stringify(data));
