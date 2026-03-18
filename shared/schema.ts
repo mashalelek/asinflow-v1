@@ -46,8 +46,7 @@ export interface CatalogData {
 }
 
 export interface EligibilityData {
-  status: "eligible" | "gated" | "unknown";
-  approvalUrl: string | null;
+  status: "yes" | "no" | "check";
 }
 
 export interface AsinResult {

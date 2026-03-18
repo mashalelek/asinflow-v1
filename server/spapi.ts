@@ -801,56 +801,40 @@ export async function getBatchFees(
 }
 
 export interface EligibilityResult {
-  status: "eligible" | "gated" | "unknown";
-  approvalUrl: string | null;
-}
-
-let lastEligibilityCallAt = 0;
-
-async function throttleEligibility(): Promise<void> {
-  const elapsed = Date.now() - lastEligibilityCallAt;
-  if (elapsed < 1000) {
-    await new Promise((resolve) => setTimeout(resolve, 1000 - elapsed));
-  }
-  lastEligibilityCallAt = Date.now();
+  status: "yes" | "no" | "check";
 }
 
 export async function getEligibility(asin: string): Promise<EligibilityResult> {
-  const sellerId = process.env.SP_API_SELLER_ID;
-  if (!sellerId) {
-    log(`SP_API_SELLER_ID not set, skipping eligibility for ${asin}`, "eligibility");
-    return { status: "unknown", approvalUrl: null };
-  }
-
   try {
-    await throttleEligibility();
-    const data = await spApiGet("/listings/2021-08-01/restrictions", {
-      asin,
-      conditionType: "new_new",
-      sellerId,
+    const data = await spApiGet("/fba/inbound/v1/eligibility/itemPreview", {
       marketplaceIds: "ATVPDKIKX0DER",
+      asin,
+      program: "INBOUND",
     });
 
-    const restrictions: any[] = Array.isArray(data?.restrictions) ? data.restrictions : [];
+    const info: any[] = Array.isArray(data?.payload?.programEligibilityInformation)
+      ? data.payload.programEligibilityInformation
+      : [];
 
-    if (restrictions.length === 0) {
-      log(`Eligibility ${asin}: ungated`, "eligibility");
-      return { status: "eligible", approvalUrl: null };
+    const entry = info.find((i: any) => i.programName === "INBOUND") ?? info[0];
+    if (!entry) {
+      log(`Eligibility ${asin}: no program info returned`, "eligibility");
+      return { status: "check" };
     }
 
-    const approvalRequired = restrictions.find((r: any) => r.reasonCode === "APPROVAL_REQUIRED");
-    if (approvalRequired) {
-      const approvalUrl =
-        approvalRequired.links?.find((l: any) => l.resource)?.resource ?? null;
-      log(`Eligibility ${asin}: gated (APPROVAL_REQUIRED), url=${approvalUrl}`, "eligibility");
-      return { status: "gated", approvalUrl };
+    if (entry.isEligibleForProgram === true) {
+      log(`Eligibility ${asin}: eligible (yes)`, "eligibility");
+      return { status: "yes" };
     }
 
-    log(`Eligibility ${asin}: gated (${restrictions[0]?.reasonCode ?? "unknown reason"})`, "eligibility");
-    return { status: "gated", approvalUrl: null };
+    const reasons: string[] = Array.isArray(entry.ineligibilityReasonList)
+      ? entry.ineligibilityReasonList
+      : [];
+    log(`Eligibility ${asin}: not eligible — ${reasons.join(", ") || "no reasons given"}`, "eligibility");
+    return { status: "no" };
   } catch (err: any) {
     log(`Eligibility error for ${asin}: ${err.message}`, "eligibility");
-    return { status: "unknown", approvalUrl: null };
+    return { status: "check" };
   }
 }
 

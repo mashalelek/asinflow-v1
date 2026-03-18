@@ -491,7 +491,7 @@ export async function registerRoutes(
           },
           feesData: { fbaFulfillmentFee: null, referralFee: null, feesEstimatePrice: null },
           catalogData: { weightLbs: null, title: null, imageUrl: null, bsrRank: null, bsrCategory: null },
-          eligibilityData: { status: "unknown", approvalUrl: null },
+          eligibilityData: { status: "check" },
           error: err.message || "Unknown error",
         };
       }
