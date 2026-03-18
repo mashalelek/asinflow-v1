@@ -372,7 +372,7 @@ export function ResultsTable({
                   <div className="flex flex-col items-center gap-0.5">
                     <FaviconLink
                       href={`https://sas.selleramp.com/sas/lookup?SasLookup[search_term]=${result.asin}&SasLookup[cost_price]=${result.cogs}&SasLookup[sale_price]=${price ?? ""}`}
-                      src="https://sas.selleramp.com/favicon.ico"
+                      src="https://sas.selleramp.com/images/sas_web_logo_32x32.png"
                       fallback="SA"
                       label="Open in SellerAmp"
                       testId={`link-selleramp-${result.asin}`}
