@@ -816,9 +816,9 @@ async function throttleEligibility(): Promise<void> {
 }
 
 export async function getEligibility(asin: string): Promise<EligibilityResult> {
-  const sellerId = process.env.AMAZON_SELLER_ID;
+  const sellerId = process.env.SP_API_SELLER_ID;
   if (!sellerId) {
-    log(`AMAZON_SELLER_ID not set, skipping eligibility for ${asin}`, "eligibility");
+    log(`SP_API_SELLER_ID not set, skipping eligibility for ${asin}`, "eligibility");
     return { status: "unknown", approvalUrl: null };
   }
 

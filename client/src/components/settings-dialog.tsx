@@ -156,7 +156,7 @@ export function SettingsDialog({ onSettingsChange }: SettingsDialogProps) {
                 { key: "SP_API_CLIENT_ID", label: "Client ID" },
                 { key: "SP_API_CLIENT_SECRET", label: "Client Secret" },
                 { key: "SP_API_REFRESH_TOKEN", label: "Refresh Token" },
-                { key: "AMAZON_SELLER_ID", label: "Seller ID (eligibility checks)" },
+                { key: "SP_API_SELLER_ID", label: "Seller ID" },
               ].map(({ key, label }) => (
                 <div key={key} className="flex items-center justify-between gap-4">
                   <Label className="text-sm whitespace-nowrap">{label}</Label>
