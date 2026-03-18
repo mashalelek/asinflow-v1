@@ -829,7 +829,7 @@ export async function getEligibility(asin: string): Promise<EligibilityResult> {
     }
     return { status: "no" };
   } catch (err: any) {
-    log(`Eligibility error for ${asin}: ${err.message}`, "eligibility");
+    log(`Eligibility error for ${asin}: status=${err.response?.status} body=${JSON.stringify(err.response?.data)}`, "eligibility");
     return { status: "check" };
   }
 }
