@@ -79,8 +79,8 @@ function KeepaLink({ asin, testId }: { asin: string; testId: string }) {
   function handleMouseEnter() {
     if (ref.current) {
       const rect = ref.current.getBoundingClientRect();
-      const graphWidth = 600;
-      const graphHeight = 200;
+      const graphWidth = 800;
+      const graphHeight = 300;
       const gap = 8;
       let top = rect.top - graphHeight - gap;
       if (top < 8) top = rect.bottom + gap;
@@ -137,11 +137,11 @@ function KeepaLink({ asin, testId }: { asin: string; testId: string }) {
             }}
           >
             <img
-              src={`https://graph.keepa.com/pricehistory.png?asin=${asin}&domain=1&salesrank=1&new=1&used=0&range=180`}
+              src={`https://graph.keepa.com/pricehistory.png?asin=${asin}&domain=1&bb=1&new=1&used=0&salesrank=1&offers=1&monthly=1&range=365`}
               alt="Keepa price history"
               style={{
-                width: 600,
-                height: 200,
+                width: 800,
+                height: 300,
                 display: "block",
                 borderRadius: 6,
                 border: "1px solid hsl(var(--border))",
