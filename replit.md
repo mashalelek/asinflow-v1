@@ -29,7 +29,7 @@ Required as Replit Secrets:
 - `SP_API_CLIENT_ID`
 - `SP_API_CLIENT_SECRET`
 - `SP_API_REFRESH_TOKEN`
-- `SP_API_SELLER_ID`
+- `AMAZON_SELLER_ID` - Your seller account ID (used for Listings Restrictions eligibility checks)
 - `SESSION_SECRET` - Secret for express-session cookie signing
 - `DATABASE_URL` - PostgreSQL connection string (auto-provisioned)
 
@@ -45,6 +45,7 @@ Required as Replit Secrets:
 - Column mapping modal with auto-match and required/optional field validation
 - CSV/Excel file upload (supports ASIN, COGS, Buy Link, Prep Cost, Additional Fees columns)
 - SP-API integration for pricing, fees, catalog data (title, image, BSR, weight)
+- Eligibility column: checks gating status per-ASIN via SP-API Listings Restrictions API (v2021-08-01); ✅ green = ungated, ⚠️ amber = gated (clickable link to approval page if available), `-` = unknown/error; rate-limited to 1 req/sec; requires `AMAZON_SELLER_ID` secret
 - Supplier column: extracts domain from Buy Link, shown as clickable link
 - Product Name and Image thumbnails from Catalog Items API
 - BSR (Best Seller Rank) with category name
@@ -74,7 +75,7 @@ Required as Replit Secrets:
 - Persistent settings via localStorage
 
 ## Column Default Order
-ASIN, Image, Product Name, Supplier, COGS, Sale Price, Profit/Unit, Margin, ROI, FBA Fee, Referral Fee, Inbound Ship., Prep Cost (hidden), Additional Fees (hidden), BSR, Sellers (FBA), Sellers (FBM)
+ASIN, Image, Product Name, Eligible, Supplier, COGS, Sale Price, Profit/Unit, Margin, ROI, FBA Fee, Referral Fee, Inbound Ship., Prep Cost (hidden), Additional Fees (hidden), BSR, Sellers (FBA), Sellers (FBM)
 
 ## API Endpoints
 ### Auth (public)

@@ -45,6 +45,11 @@ export interface CatalogData {
   bsrCategory: string | null;
 }
 
+export interface EligibilityData {
+  status: "eligible" | "gated" | "unknown";
+  approvalUrl: string | null;
+}
+
 export interface AsinResult {
   asin: string;
   cogs: number;
@@ -54,6 +59,7 @@ export interface AsinResult {
   pricingData: PricingData;
   feesData: FeesData;
   catalogData: CatalogData;
+  eligibilityData: EligibilityData;
   error: string | null;
 }
 
@@ -189,7 +195,7 @@ export function extractDomain(url: string | null): string | null {
 }
 
 export const DEFAULT_COLUMNS = [
-  "asin", "image", "name", "supplier", "cogs", "salePrice", "profit", "margin", "roi",
+  "asin", "image", "name", "eligible", "supplier", "cogs", "salePrice", "profit", "margin", "roi",
   "fbaFee", "referralFee", "inboundShipping", "prep", "storage", "bsr",
   "sellersFba", "sellersFbm",
 ] as const;
@@ -207,6 +213,7 @@ export const ALL_COLUMNS: ColumnDef[] = [
   { id: "asin", label: "ASIN", defaultVisible: true, align: "left" },
   { id: "image", label: "Image", defaultVisible: true, align: "left" },
   { id: "name", label: "Product Name", defaultVisible: true, align: "left" },
+  { id: "eligible", label: "Eligible", defaultVisible: true, align: "left" },
   { id: "supplier", label: "Supplier", defaultVisible: true, align: "left" },
   { id: "cogs", label: "COGS", defaultVisible: true, align: "right" },
   { id: "salePrice", label: "Sale Price", defaultVisible: true, align: "right" },

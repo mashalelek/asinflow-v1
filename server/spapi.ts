@@ -800,6 +800,60 @@ export async function getBatchFees(
   return results;
 }
 
+export interface EligibilityResult {
+  status: "eligible" | "gated" | "unknown";
+  approvalUrl: string | null;
+}
+
+let lastEligibilityCallAt = 0;
+
+async function throttleEligibility(): Promise<void> {
+  const elapsed = Date.now() - lastEligibilityCallAt;
+  if (elapsed < 1000) {
+    await new Promise((resolve) => setTimeout(resolve, 1000 - elapsed));
+  }
+  lastEligibilityCallAt = Date.now();
+}
+
+export async function getEligibility(asin: string): Promise<EligibilityResult> {
+  const sellerId = process.env.AMAZON_SELLER_ID;
+  if (!sellerId) {
+    log(`AMAZON_SELLER_ID not set, skipping eligibility for ${asin}`, "eligibility");
+    return { status: "unknown", approvalUrl: null };
+  }
+
+  try {
+    await throttleEligibility();
+    const data = await spApiGet("/listings/2021-08-01/restrictions", {
+      asin,
+      conditionType: "new_new",
+      sellerId,
+      marketplaceIds: "ATVPDKIKX0DER",
+    });
+
+    const restrictions: any[] = Array.isArray(data?.restrictions) ? data.restrictions : [];
+
+    if (restrictions.length === 0) {
+      log(`Eligibility ${asin}: ungated`, "eligibility");
+      return { status: "eligible", approvalUrl: null };
+    }
+
+    const approvalRequired = restrictions.find((r: any) => r.reasonCode === "APPROVAL_REQUIRED");
+    if (approvalRequired) {
+      const approvalUrl =
+        approvalRequired.links?.find((l: any) => l.resource)?.resource ?? null;
+      log(`Eligibility ${asin}: gated (APPROVAL_REQUIRED), url=${approvalUrl}`, "eligibility");
+      return { status: "gated", approvalUrl };
+    }
+
+    log(`Eligibility ${asin}: gated (${restrictions[0]?.reasonCode ?? "unknown reason"})`, "eligibility");
+    return { status: "gated", approvalUrl: null };
+  } catch (err: any) {
+    log(`Eligibility error for ${asin}: ${err.message}`, "eligibility");
+    return { status: "unknown", approvalUrl: null };
+  }
+}
+
 export async function getCatalogData(asin: string): Promise<AsinCatalogResult> {
   try {
     const data = await spApiGet(`/catalog/2022-04-01/items/${asin}`, {

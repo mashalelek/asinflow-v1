@@ -12,10 +12,42 @@ export function loadColumnConfig(): ColumnConfig {
     const stored = localStorage.getItem(COLUMNS_KEY);
     if (stored) {
       const parsed = JSON.parse(stored);
-      return {
-        order: parsed.order as ColumnId[],
-        visible: new Set(parsed.visible as ColumnId[]),
-      };
+      const savedOrder: ColumnId[] = parsed.order as ColumnId[];
+      const savedVisible: Set<ColumnId> = new Set(parsed.visible as ColumnId[]);
+
+      const allKnownIds = new Set(ALL_COLUMNS.map((c) => c.id));
+      const savedSet = new Set(savedOrder);
+
+      const missingCols = ALL_COLUMNS.filter(
+        (c) => allKnownIds.has(c.id) && !savedSet.has(c.id)
+      );
+
+      if (missingCols.length > 0) {
+        const defaultOrder = [...DEFAULT_COLUMNS];
+        const merged = [...savedOrder];
+
+        for (const col of missingCols) {
+          const defaultIdx = defaultOrder.indexOf(col.id);
+          if (defaultIdx === 0) {
+            merged.unshift(col.id);
+          } else {
+            const prevId = defaultOrder[defaultIdx - 1];
+            const insertAfter = merged.lastIndexOf(prevId);
+            if (insertAfter >= 0) {
+              merged.splice(insertAfter + 1, 0, col.id);
+            } else {
+              merged.push(col.id);
+            }
+          }
+          if (col.defaultVisible) {
+            savedVisible.add(col.id);
+          }
+        }
+
+        return { order: merged, visible: savedVisible };
+      }
+
+      return { order: savedOrder, visible: savedVisible };
     }
   } catch {}
   return getDefaultConfig();

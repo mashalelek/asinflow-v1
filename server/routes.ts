@@ -3,7 +3,7 @@ import { createServer, type Server } from "http";
 import multer from "multer";
 import Papa from "papaparse";
 import * as XLSX from "xlsx";
-import { getPricing, getFees, getCatalogData, estimateFeeFallback } from "./spapi";
+import { getPricing, getFees, getCatalogData, estimateFeeFallback, getEligibility, type EligibilityResult } from "./spapi";
 import { log } from "./index";
 import { type AsinInput, type AsinResult, type ColumnMapping } from "@shared/schema";
 import { validateUser } from "./auth";
@@ -218,6 +218,7 @@ function buildResult(
   catalogData: AsinResult["catalogData"],
   feesData: AsinResult["feesData"],
   pricingRestricted: boolean,
+  eligibilityData: EligibilityResult,
 ): AsinResult {
   let error: string | null = null;
   if (pricingRestricted && !hasValidPricing({ pricingData } as AsinResult)) {
@@ -235,6 +236,7 @@ function buildResult(
     prepOverride: input.prepOverride ?? null,
     storageOverride: input.storageOverride ?? null,
     pricingData, feesData, catalogData,
+    eligibilityData,
     error,
   };
 }
@@ -451,7 +453,10 @@ export async function registerRoutes(
       let result: AsinResult;
 
       try {
-        const { pricingData, catalogData, pricingRestricted } = await fetchPricingAndCatalog(input.asin);
+        const [{ pricingData, catalogData, pricingRestricted }, eligibilityData] = await Promise.all([
+          fetchPricingAndCatalog(input.asin),
+          getEligibility(input.asin),
+        ]);
 
         const { price: feePrice, isFallback } = getFeePriceForAsin(pricingData);
         let feesData: AsinResult["feesData"] = { fbaFulfillmentFee: null, referralFee: null, feesEstimatePrice: null };
@@ -470,7 +475,7 @@ export async function registerRoutes(
           log(`Fees error for ${input.asin}: ${err.message}`, "analyzer");
         }
 
-        result = buildResult(input, pricingData, catalogData, feesData, pricingRestricted);
+        result = buildResult(input, pricingData, catalogData, feesData, pricingRestricted, eligibilityData);
       } catch (err: any) {
         log(`Error processing ${input.asin}: ${err.message}\n${err.stack}`, "analyzer");
         result = {
@@ -486,6 +491,7 @@ export async function registerRoutes(
           },
           feesData: { fbaFulfillmentFee: null, referralFee: null, feesEstimatePrice: null },
           catalogData: { weightLbs: null, title: null, imageUrl: null, bsrRank: null, bsrCategory: null },
+          eligibilityData: { status: "unknown", approvalUrl: null },
           error: err.message || "Unknown error",
         };
       }
@@ -557,7 +563,8 @@ export async function registerRoutes(
               }
             }
 
-            let retried = buildResult(item.input, pricingData, catalogData, feesData, pricingRestricted);
+            const eligibilityData = item.result.eligibilityData;
+            let retried = buildResult(item.input, pricingData, catalogData, feesData, pricingRestricted, eligibilityData);
             item.result = retried;
 
             const stillNeeds = needsRetry(retried);
@@ -573,7 +580,7 @@ export async function registerRoutes(
                   retried.catalogData.weightLbs,
                   retried.catalogData.bsrCategory
                 );
-                retried = buildResult(item.input, retried.pricingData, retried.catalogData, fallbackFees, pricingRestricted);
+                retried = buildResult(item.input, retried.pricingData, retried.catalogData, fallbackFees, pricingRestricted, eligibilityData);
                 log(`Used fee fallback for ${item.input.asin}: FBA=$${fallbackFees.fbaFulfillmentFee}, Referral=$${fallbackFees.referralFee}`, "retry");
               }
 
@@ -615,7 +622,7 @@ export async function registerRoutes(
                   finalItem.catalogData.weightLbs,
                   finalItem.catalogData.bsrCategory
                 );
-                finalItem = buildResult(item.input, finalItem.pricingData, finalItem.catalogData, fallbackFees, false);
+                finalItem = buildResult(item.input, finalItem.pricingData, finalItem.catalogData, fallbackFees, false, finalItem.eligibilityData);
                 log(`Used fee fallback (exception path) for ${item.input.asin}: FBA=$${fallbackFees.fbaFulfillmentFee}, Referral=$${fallbackFees.referralFee}`, "retry");
               }
 

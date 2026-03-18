@@ -1,7 +1,7 @@
 import { useMemo } from "react";
 import { Badge } from "@/components/ui/badge";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
-import { ExternalLink, AlertTriangle, ArrowUp, ArrowDown } from "lucide-react";
+import { ExternalLink, AlertTriangle, ArrowUp, ArrowDown, CheckCircle2 } from "lucide-react";
 import {
   type AsinResult,
   type PriceSource,
@@ -74,6 +74,7 @@ function getRowValue(
     case "asin": return result.asin;
     case "image": return result.catalogData.imageUrl;
     case "name": return result.catalogData.title;
+    case "eligible": return result.eligibilityData?.status ?? "unknown";
     case "supplier": return extractDomain(result.buyLink);
     case "cogs": return result.cogs;
     case "salePrice": return price;
@@ -357,6 +358,59 @@ function renderCell(
         );
       }
       return <span className="text-sm" data-testid={`text-name-${result.asin}`}>{title}</span>;
+    }
+
+    case "eligible": {
+      const elig = result.eligibilityData;
+      if (!elig || elig.status === "unknown") {
+        return <span className="text-muted-foreground text-sm">-</span>;
+      }
+      if (elig.status === "eligible") {
+        return (
+          <Tooltip>
+            <TooltipTrigger asChild>
+              <span data-testid={`icon-eligible-${result.asin}`}>
+                <CheckCircle2 className="h-4 w-4 text-emerald-500" />
+              </span>
+            </TooltipTrigger>
+            <TooltipContent side="top">
+              <p className="text-xs">Ungated — you can list this product</p>
+            </TooltipContent>
+          </Tooltip>
+        );
+      }
+      if (elig.approvalUrl) {
+        return (
+          <Tooltip>
+            <TooltipTrigger asChild>
+              <a
+                href={elig.approvalUrl}
+                target="_blank"
+                rel="noopener noreferrer"
+                className="inline-flex items-center gap-1 text-amber-500 hover:text-amber-600 transition-colors"
+                data-testid={`link-gated-${result.asin}`}
+              >
+                <AlertTriangle className="h-4 w-4" />
+              </a>
+            </TooltipTrigger>
+            <TooltipContent side="top">
+              <p className="text-xs">Gated — approval required. Click to apply.</p>
+            </TooltipContent>
+          </Tooltip>
+        );
+      }
+      return (
+        <Tooltip>
+          <TooltipTrigger asChild>
+            <span data-testid={`icon-gated-${result.asin}`}>
+              <AlertTriangle className="h-4 w-4 text-amber-500" />
+            </span>
+          </TooltipTrigger>
+          <TooltipContent side="top">
+            <p className="text-xs">Gated — approval required to list this product</p>
+          </TooltipContent>
+        </Tooltip>
+      );
     }
 
     case "supplier": {
