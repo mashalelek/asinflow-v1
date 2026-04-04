@@ -1,18 +1,8 @@
+import 'dotenv/config';
 import express, { type Request, Response, NextFunction } from "express";
-import session from "express-session";
-import connectPgSimple from "connect-pg-simple";
 import { registerRoutes } from "./routes";
 import { serveStatic } from "./static";
 import { createServer } from "http";
-import pool, { ensureUsersTable } from "./db";
-import { upsertUser } from "./auth";
-
-declare module "express-session" {
-  interface SessionData {
-    userId: number;
-    email: string;
-  }
-}
 
 const app = express();
 const httpServer = createServer(app);
@@ -32,22 +22,6 @@ app.use(
 );
 
 app.use(express.urlencoded({ extended: false }));
-
-const PgStore = connectPgSimple(session);
-app.use(
-  session({
-    store: new PgStore({ pool, createTableIfMissing: true }),
-    secret: process.env.SESSION_SECRET || "dev-fallback-secret",
-    resave: false,
-    saveUninitialized: false,
-    cookie: {
-      secure: false,
-      httpOnly: true,
-      maxAge: 7 * 24 * 60 * 60 * 1000,
-      sameSite: "lax",
-    },
-  }),
-);
 
 export function log(message: string, source = "express") {
   const formattedTime = new Date().toLocaleTimeString("en-US", {
@@ -87,25 +61,6 @@ app.use((req, res, next) => {
 });
 
 (async () => {
-  await ensureUsersTable();
-
-  const seedUsers = process.env.SEED_USERS;
-  if (seedUsers) {
-    try {
-      const users: { email: string; password: string }[] = JSON.parse(seedUsers);
-      for (const u of users) {
-        try {
-          const { user, created } = await upsertUser(u.email, u.password);
-          log(`Seed user ${created ? "created" : "password updated"}: ${user.email} (id=${user.id})`, "auth");
-        } catch (err: any) {
-          log(`Seed user error for ${u.email}: ${err.message}`, "auth");
-        }
-      }
-    } catch {
-      log("Failed to parse SEED_USERS env var", "auth");
-    }
-  }
-
   await registerRoutes(httpServer, app);
 
   app.use((err: any, _req: Request, res: Response, next: NextFunction) => {
@@ -131,16 +86,11 @@ app.use((req, res, next) => {
     await setupVite(httpServer, app);
   }
 
-  // ALWAYS serve the app on the port specified in the environment variable PORT
-  // Other ports are firewalled. Default to 5000 if not specified.
-  // this serves both the API and the client.
-  // It is the only port that is not firewalled.
   const port = parseInt(process.env.PORT || "5000", 10);
   httpServer.listen(
     {
       port,
       host: "0.0.0.0",
-      reusePort: true,
     },
     () => {
       log(`serving on port ${port}`);

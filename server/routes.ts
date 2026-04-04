@@ -1,4 +1,4 @@
-import type { Express, Request, Response, NextFunction } from "express";
+import type { Express, Request, Response } from "express";
 import { createServer, type Server } from "http";
 import multer from "multer";
 import Papa from "papaparse";
@@ -6,16 +6,8 @@ import * as XLSX from "xlsx";
 import { getPricing, getFees, getCatalogData, estimateFeeFallback, getEligibility, type EligibilityResult } from "./spapi";
 import { log } from "./index";
 import { type AsinInput, type AsinResult, type ColumnMapping } from "@shared/schema";
-import { validateUser } from "./auth";
 
 const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 10 * 1024 * 1024 } });
-
-function requireAuth(req: Request, res: Response, next: NextFunction) {
-  if (req.session && req.session.userId) {
-    return next();
-  }
-  res.status(401).json({ message: "Authentication required" });
-}
 
 function parseFileToRawRows(buffer: Buffer, filename: string): { headers: string[]; rows: Record<string, any>[] } {
   const ext = filename.toLowerCase().split(".").pop();
@@ -254,55 +246,23 @@ export async function registerRoutes(
   app: Express
 ): Promise<Server> {
 
-  app.post("/api/register", (_req: Request, res: Response) => {
-    res.status(403).json({ message: "Registration is closed" });
-  });
+  app.post("/api/verify-password", (req: Request, res: Response) => {
+    const { password } = req.body as { password: string };
+    const appPassword = process.env.APP_PASSWORD;
 
-  app.post("/api/login", async (req: Request, res: Response) => {
-    try {
-      const { email, password } = req.body as { email: string; password: string };
-      if (!email || !password) {
-        res.status(400).json({ message: "Email and password are required" });
-        return;
-      }
-      const user = await validateUser(email, password);
-      if (!user) {
-        res.status(401).json({ message: "Invalid email or password" });
-        return;
-      }
-      req.session.userId = user.id;
-      req.session.email = user.email;
-      log(`User logged in: ${user.email} (id=${user.id})`, "auth");
-      res.json({ id: user.id, email: user.email });
-    } catch (err: any) {
-      log(`Login error: ${err.message}`, "auth");
-      res.status(500).json({ message: "Login failed" });
+    if (!appPassword) {
+      res.json({ valid: true });
+      return;
     }
-  });
 
-  app.get("/api/logout", (req: Request, res: Response) => {
-    const email = req.session.email;
-    req.session.destroy((err) => {
-      if (err) {
-        log(`Logout error: ${err.message}`, "auth");
-        res.status(500).json({ message: "Logout failed" });
-        return;
-      }
-      res.clearCookie("connect.sid");
-      log(`User logged out: ${email}`, "auth");
-      res.json({ message: "Logged out" });
-    });
-  });
-
-  app.get("/api/me", (req: Request, res: Response) => {
-    if (req.session && req.session.userId) {
-      res.json({ id: req.session.userId, email: req.session.email });
+    if (password === appPassword) {
+      res.json({ valid: true });
     } else {
-      res.status(401).json({ message: "Not authenticated" });
+      res.status(401).json({ valid: false, message: "Incorrect password" });
     }
   });
 
-  app.get("/api/credentials-status", requireAuth, (_req: Request, res: Response) => {
+  app.get("/api/credentials-status", (_req: Request, res: Response) => {
     const configured = !!(
       process.env.SP_API_CLIENT_ID &&
       process.env.SP_API_CLIENT_SECRET &&
@@ -311,7 +271,7 @@ export async function registerRoutes(
     res.json({ configured });
   });
 
-  app.get("/api/download-template", requireAuth, (_req: Request, res: Response) => {
+  app.get("/api/download-template", (_req: Request, res: Response) => {
     try {
       const wb = XLSX.utils.book_new();
 
@@ -358,7 +318,7 @@ export async function registerRoutes(
     }
   });
 
-  app.post("/api/parse-file", requireAuth, upload.single("file"), (req: Request, res: Response) => {
+  app.post("/api/parse-file", upload.single("file"), (req: Request, res: Response) => {
     try {
       if (!req.file) {
         res.status(400).json({ message: "No file uploaded" });
@@ -381,7 +341,7 @@ export async function registerRoutes(
     }
   });
 
-  app.post("/api/parse-mapped", requireAuth, upload.single("file"), (req: Request, res: Response) => {
+  app.post("/api/parse-mapped", upload.single("file"), (req: Request, res: Response) => {
     try {
       if (!req.file) {
         res.status(400).json({ message: "No file uploaded" });
@@ -419,7 +379,7 @@ export async function registerRoutes(
     }
   });
 
-  app.post("/api/analyze", requireAuth, async (req: Request, res: Response) => {
+  app.post("/api/analyze", async (req: Request, res: Response) => {
     const { asins } = req.body as { asins: AsinInput[] };
 
     if (!asins || !Array.isArray(asins) || asins.length === 0) {
