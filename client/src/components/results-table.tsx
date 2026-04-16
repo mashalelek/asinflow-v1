@@ -748,6 +748,126 @@ export function ResultsTable({
   );
 }
 
+function CogsEditor({
+  asin,
+  currentCogs,
+  currentSource,
+  onChanged,
+}: {
+  asin: string;
+  currentCogs: number;
+  currentSource: "po_sheet" | "csv" | "manual" | null | undefined;
+  onChanged: (cogs: number | null, source: "po_sheet" | "csv" | "manual" | null) => void;
+}) {
+  const [open, setOpen] = useState(false);
+  const [value, setValue] = useState(String(currentCogs ?? ""));
+  const [saving, setSaving] = useState(false);
+  const [resetting, setResetting] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  async function save() {
+    const parsed = parseFloat(value);
+    if (!isFinite(parsed) || parsed < 0) {
+      setError("Enter a non-negative number");
+      return;
+    }
+    setError(null);
+    setSaving(true);
+    try {
+      const res = await fetch(`/api/asins/${asin}/cogs`, {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ cogs: parsed }),
+      });
+      if (!res.ok) {
+        const err = await res.json().catch(() => ({}));
+        throw new Error(err.message || "Failed to save COGS");
+      }
+      const data = await res.json();
+      onChanged(data.cogs, data.cogsSource);
+      setOpen(false);
+    } catch (e: any) {
+      setError(e.message);
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  async function resetToPo() {
+    setError(null);
+    setResetting(true);
+    try {
+      const res = await fetch(`/api/asins/${asin}/cogs/reset`, { method: "POST" });
+      if (!res.ok) {
+        const err = await res.json().catch(() => ({}));
+        throw new Error(err.message || "Failed to reset COGS");
+      }
+      const data = await res.json();
+      onChanged(data.cogs, data.cogsSource);
+      setOpen(false);
+    } catch (e: any) {
+      setError(e.message);
+    } finally {
+      setResetting(false);
+    }
+  }
+
+  const canReset = currentSource === "manual" || currentSource === "csv";
+
+  return (
+    <Popover open={open} onOpenChange={(v) => { setOpen(v); if (v) { setValue(String(currentCogs ?? "")); setError(null); } }}>
+      <PopoverTrigger asChild>
+        <button
+          className="text-muted-foreground/40 hover:text-muted-foreground p-0 ml-0.5"
+          onClick={(e) => e.stopPropagation()}
+          data-testid={`btn-edit-cogs-${asin}`}
+          title="Edit COGS"
+        >
+          <Pencil className="h-2.5 w-2.5" />
+        </button>
+      </PopoverTrigger>
+      <PopoverContent className="w-64 p-3" align="start" sideOffset={4} onClick={(e) => e.stopPropagation()}>
+        <div className="space-y-2">
+          <label className="text-xs text-muted-foreground">COGS ($)</label>
+          <input
+            type="number"
+            step="0.01"
+            min="0"
+            value={value}
+            onChange={(e) => setValue(e.target.value)}
+            className="w-full text-sm p-2 rounded border border-border bg-background focus:outline-none focus:ring-1 focus:ring-ring"
+            onKeyDown={(e) => e.key === "Enter" && save()}
+            autoFocus
+          />
+          {error && <p className="text-xs text-red-500">{error}</p>}
+          <div className="flex items-center justify-between gap-2 pt-1">
+            {canReset ? (
+              <button
+                className="text-xs text-primary hover:underline disabled:opacity-50"
+                onClick={resetToPo}
+                disabled={resetting || saving}
+                data-testid={`btn-reset-cogs-${asin}`}
+              >
+                {resetting ? "Resetting..." : "Reset to PO"}
+              </button>
+            ) : <span />}
+            <div className="flex gap-2">
+              <button className="text-xs text-muted-foreground hover:text-foreground px-2 py-1" onClick={() => setOpen(false)}>Cancel</button>
+              <button
+                className="text-xs bg-primary text-primary-foreground px-3 py-1 rounded hover:bg-primary/90 disabled:opacity-50"
+                onClick={save}
+                disabled={saving || resetting}
+              >
+                {saving ? "..." : "Save"}
+              </button>
+            </div>
+          </div>
+        </div>
+      </PopoverContent>
+    </Popover>
+  );
+}
+
 function BuyLinkEditor({ asin, currentLink, onChanged }: { asin: string; currentLink: string | null; onChanged: (buyLink: string | null) => void }) {
   const [open, setOpen] = useState(false);
   const [url, setUrl] = useState(currentLink ?? "");
@@ -792,6 +912,49 @@ function BuyLinkEditor({ asin, currentLink, onChanged }: { asin: string; current
         </div>
       </PopoverContent>
     </Popover>
+  );
+}
+
+function CogsDisplay({
+  result,
+  onResultUpdate,
+}: {
+  result: AsinResult;
+  onResultUpdate?: (asin: string, updates: Partial<AsinResult>) => void;
+}) {
+  const source = result.cogsSource;
+  const isManual = source === "manual";
+  const isCsv = source === "csv";
+  const colorClass = isManual ? "text-amber-500" : "";
+  const badge =
+    isManual ? { letter: "M", tip: "Manually entered — PO sync skipped for this ASIN" } :
+    isCsv ? { letter: "C", tip: "From CSV upload" } :
+    null;
+
+  return (
+    <span className="inline-flex items-center gap-1">
+      <span className={colorClass}>COGS: ${result.cogs?.toFixed(2) ?? "0.00"}</span>
+      {badge && (
+        <Tooltip>
+          <TooltipTrigger asChild>
+            <span className="inline-flex items-center justify-center rounded-sm border border-current text-[9px] font-bold px-1 leading-tight cursor-help">
+              {badge.letter}
+            </span>
+          </TooltipTrigger>
+          <TooltipContent side="top"><p className="text-xs">{badge.tip}</p></TooltipContent>
+        </Tooltip>
+      )}
+      {onResultUpdate && (
+        <CogsEditor
+          asin={result.asin}
+          currentCogs={result.cogs}
+          currentSource={source}
+          onChanged={(cogs, nextSource) =>
+            onResultUpdate(result.asin, { cogs: cogs ?? 0, cogsSource: nextSource })
+          }
+        />
+      )}
+    </span>
   );
 }
 
@@ -955,7 +1118,8 @@ function ProductCell({ result, price, settings, onResultUpdate }: { result: Asin
               onChanged={(buyLink) => onResultUpdate(result.asin, { buyLink })}
             />
           )}
-          <span>· COGS: ${result.cogs?.toFixed(2) ?? "0.00"}</span>
+          <span>·</span>
+          <CogsDisplay result={result} onResultUpdate={onResultUpdate} />
           {stock && (
             <Tooltip>
               <TooltipTrigger asChild>

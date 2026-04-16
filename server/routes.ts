@@ -11,6 +11,7 @@ import { syncInventory } from "./inventory-sync";
 import { syncSalesData } from "./sales-sync";
 import { syncSuppressionData } from "./suppression-sync";
 import { fetchSheetData } from "./google-sheets";
+import { refreshPrices } from "./price-sync";
 import fs from "fs";
 
 const TAG_COLORS = ["#3B82F6", "#EF4444", "#10B981", "#F59E0B", "#8B5CF6", "#EC4899", "#14B8A6", "#F97316", "#6366F1", "#84CC16"];
@@ -403,10 +404,17 @@ async function runSheetsSync(): Promise<{ updated: number; skipped: number; erro
 
   for (const [asin, data] of Array.from(sheetData.entries())) {
     try {
+      // Respect manual COGS overrides: skip COGS update (but still sync ordered_qty)
+      // for ASINs where a user has explicitly entered cogs_source = 'manual'.
+      const manualCheck = data.cogs != null
+        ? await query(`SELECT cogs_source FROM asin_estimates WHERE asin = $1`, [asin])
+        : null;
+      const isManualOverride = manualCheck?.rows?.[0]?.cogs_source === "manual";
+
       const setClauses: string[] = [];
       const values: any[] = [];
       let idx = 1;
-      if (data.cogs != null) {
+      if (data.cogs != null && !isManualOverride) {
         setClauses.push(`cogs = $${idx++}`, `cogs_source = $${idx++}`);
         values.push(data.cogs, "po_sheet");
       }
@@ -474,11 +482,12 @@ export async function registerRoutes(
         SELECT
           a.asin, a.title, a.image_url, a.brand, a.category, a.weight_lb, a.buy_link, a.is_active,
           a.primary_sku, a.in_catalog, a.notes, a.is_meltable, a.is_hazmat, a.is_search_suppressed, a.suppression_reasons,
-          e.cogs, e.prep_override, e.storage_override,
+          e.cogs, e.cogs_source, e.prep_override, e.storage_override,
           e.lowest_fba_price, e.buy_box_price, e.buy_box_fulfillment, e.lowest_price,
           e.sellers_fba, e.sellers_fbm,
           e.fba_fee, e.referral_fee, e.fees_estimate_price,
           e.bsr, e.bsr_category, e.eligibility_status, e.error,
+          e.fetched_at,
           e.ordered_qty AS est_ordered_qty
         FROM asins a
         LEFT JOIN asin_estimates e ON e.asin = a.asin
@@ -639,6 +648,8 @@ export async function registerRoutes(
           isHazmat: row.is_hazmat ?? false,
           isSearchSuppressed: row.is_search_suppressed ?? false,
           suppressionReasons: row.suppression_reasons ?? [],
+          cogsSource: (row.cogs_source as "po_sheet" | "csv" | "manual" | null) ?? null,
+          pricesFetchedAt: row.fetched_at ? new Date(row.fetched_at).toISOString() : null,
           sellersDelta: d ? {
             fba_7d: curFba != null && d.fba_7d_old != null ? curFba - parseInt(d.fba_7d_old) : null,
             fba_30d: curFba != null && d.fba_30d_old != null ? curFba - parseInt(d.fba_30d_old) : null,
@@ -1213,19 +1224,11 @@ export async function registerRoutes(
     } catch (err: any) { res.status(500).json({ message: err.message }); }
   });
 
-  app.post("/api/analyze", async (req: Request, res: Response) => {
-    const { asins } = req.body as { asins: AsinInput[] };
-
-    if (!asins || !Array.isArray(asins) || asins.length === 0) {
-      res.status(400).json({ message: "No ASINs provided" });
-      return;
-    }
-
-    res.setHeader("Content-Type", "application/x-ndjson");
-    res.setHeader("Transfer-Encoding", "chunked");
-    res.setHeader("Cache-Control", "no-cache");
-    res.setHeader("Connection", "keep-alive");
-
+  async function runAnalyzeAndStream(
+    asins: AsinInput[],
+    res: Response,
+    progressPrefix: (i: number) => string | null = () => null,
+  ) {
     const BATCH_SIZE = 10;
     const BATCH_DELAY = 1000;
     const MAX_RETRIES = 2;
@@ -1237,10 +1240,12 @@ export async function registerRoutes(
     for (let i = 0; i < asins.length; i++) {
       const input = asins[i];
 
+      const prefix = progressPrefix(i);
+      const progressAsin = prefix ? `${prefix} ${input.asin}` : input.asin;
       res.write(
         JSON.stringify({
           type: "progress",
-          data: { current: i + 1, total: asins.length, asin: input.asin },
+          data: { current: i + 1, total: asins.length, asin: progressAsin },
         }) + "\n"
       );
 
@@ -1471,17 +1476,214 @@ export async function registerRoutes(
         log(`=== RETRY SUMMARY: ${uncalculated.length} ASINs still uncalculated: ${uncalculated.join(", ")} ===`, "retry");
       }
     }
+  }
 
-    res.write(JSON.stringify({ type: "complete" }) + "\n");
-    res.end();
-
-    // Background: PO sheet sync + suppression refresh
+  function runPostAnalyzeBackgroundSyncs() {
     const credPath = process.env.GOOGLE_CREDENTIALS_PATH;
     if (isDbAvailable() && credPath && fs.existsSync(credPath) && process.env.GOOGLE_SHEET_ID) {
       runSheetsSync().catch((err: any) => log(`Post-analysis sheets sync error: ${err.message}`, "sheets"));
     }
     if (isDbAvailable()) {
       syncSuppressionData().catch((err: any) => log(`Post-analysis suppression sync error: ${err.message}`, "suppression-sync"));
+    }
+  }
+
+  // Analyze a user-supplied list of ASINs (typically from a fresh CSV upload).
+  app.post("/api/analyze", async (req: Request, res: Response) => {
+    const { asins } = req.body as { asins: AsinInput[] };
+
+    if (!asins || !Array.isArray(asins) || asins.length === 0) {
+      res.status(400).json({ message: "No ASINs provided" });
+      return;
+    }
+
+    res.setHeader("Content-Type", "application/x-ndjson");
+    res.setHeader("Transfer-Encoding", "chunked");
+    res.setHeader("Cache-Control", "no-cache");
+    res.setHeader("Connection", "keep-alive");
+
+    await runAnalyzeAndStream(asins, res);
+    res.write(JSON.stringify({ type: "complete" }) + "\n");
+    res.end();
+    runPostAnalyzeBackgroundSyncs();
+  });
+
+  // Analyze all active ASINs from the DB in server-side batches of 100.
+  // Used when re-analyzing the full catalog — avoids "request entity too large"
+  // because the ASIN list is never sent in the request body.
+  app.post("/api/analyze/all", async (_req: Request, res: Response) => {
+    if (!isDbAvailable()) { res.status(503).json({ message: "Database not available" }); return; }
+
+    res.setHeader("Content-Type", "application/x-ndjson");
+    res.setHeader("Transfer-Encoding", "chunked");
+    res.setHeader("Cache-Control", "no-cache");
+    res.setHeader("Connection", "keep-alive");
+
+    try {
+      const dbRes = await query(`
+        SELECT a.asin, e.cogs, a.buy_link, e.prep_override, e.storage_override
+        FROM asins a
+        LEFT JOIN asin_estimates e ON e.asin = a.asin
+        WHERE a.is_active = TRUE
+        ORDER BY a.asin
+      `);
+      const allAsins: AsinInput[] = dbRes.rows.map((r: any) => ({
+        asin: r.asin,
+        cogs: r.cogs != null ? parseFloat(r.cogs) : 0,
+        buyLink: r.buy_link ?? null,
+        prepOverride: r.prep_override != null ? parseFloat(r.prep_override) : null,
+        storageOverride: r.storage_override != null ? parseFloat(r.storage_override) : null,
+      }));
+
+      const BATCH_SIZE = 100;
+      const totalBatches = Math.max(1, Math.ceil(allAsins.length / BATCH_SIZE));
+      log(`Full-catalog analyze: ${allAsins.length} ASINs in ${totalBatches} batch(es) of ${BATCH_SIZE}`, "analyzer");
+
+      let succeededTotal = 0;
+      let failedBatches = 0;
+
+      for (let b = 0; b < totalBatches; b++) {
+        const start = b * BATCH_SIZE;
+        const end = Math.min(start + BATCH_SIZE, allAsins.length);
+        const batch = allAsins.slice(start, end);
+        const batchLabel = `Batch ${b + 1} of ${totalBatches} (ASINs ${start + 1}-${end})`;
+
+        try {
+          await runAnalyzeAndStream(batch, res, () => batchLabel);
+          succeededTotal += batch.length;
+        } catch (err: any) {
+          failedBatches++;
+          log(`Batch ${b + 1} failed: ${err.message}`, "analyzer");
+          res.write(JSON.stringify({
+            type: "progress",
+            data: { current: end, total: allAsins.length, asin: `${batchLabel} FAILED — continuing` },
+          }) + "\n");
+        }
+      }
+
+      res.write(JSON.stringify({
+        type: "complete",
+        data: {
+          totalAsins: allAsins.length,
+          updated: succeededTotal,
+          failedBatches,
+        },
+      }) + "\n");
+      res.end();
+      runPostAnalyzeBackgroundSyncs();
+    } catch (err: any) {
+      log(`/api/analyze/all error: ${err.message}`, "analyzer");
+      try {
+        res.write(JSON.stringify({ type: "error", message: err.message }) + "\n");
+        res.end();
+      } catch {}
+    }
+  });
+
+  // === Prices: status (staleness indicator) + on-demand refresh ===
+  app.get("/api/prices/status", async (_req: Request, res: Response) => {
+    if (!isDbAvailable()) { res.json({ lastRefreshedAt: null }); return; }
+    try {
+      const row = await query(
+        `SELECT MAX(e.fetched_at) AS last_refreshed
+         FROM asin_estimates e
+         JOIN asins a ON a.asin = e.asin
+         WHERE a.is_active = TRUE`
+      );
+      const ts = row.rows[0]?.last_refreshed;
+      res.json({ lastRefreshedAt: ts ? new Date(ts).toISOString() : null });
+    } catch (err: any) {
+      res.status(500).json({ message: err.message });
+    }
+  });
+
+  app.post("/api/prices/refresh", async (_req: Request, res: Response) => {
+    if (!isDbAvailable()) { res.status(503).json({ message: "Database not available" }); return; }
+
+    res.setHeader("Content-Type", "application/x-ndjson");
+    res.setHeader("Transfer-Encoding", "chunked");
+    res.setHeader("Cache-Control", "no-cache");
+    res.setHeader("Connection", "keep-alive");
+
+    try {
+      const summary = await refreshPrices(async (p) => {
+        res.write(JSON.stringify({ type: "progress", data: p }) + "\n");
+      });
+      res.write(JSON.stringify({
+        type: "complete",
+        data: { updated: summary.updated, failed: summary.failed },
+      }) + "\n");
+      res.end();
+    } catch (err: any) {
+      log(`Price refresh error: ${err.message}`, "price-sync");
+      try {
+        res.write(JSON.stringify({ type: "error", message: err.message }) + "\n");
+        res.end();
+      } catch {}
+    }
+  });
+
+  // === COGS: manual inline edit + reset to PO sync ===
+  app.put("/api/asins/:asin/cogs", async (req: Request, res: Response) => {
+    const { asin } = req.params;
+    const { cogs } = req.body as { cogs?: number };
+    if (!isDbAvailable()) { res.status(503).json({ message: "Database not available" }); return; }
+    if (cogs == null || typeof cogs !== "number" || !isFinite(cogs) || cogs < 0) {
+      res.status(400).json({ message: "cogs must be a non-negative number" }); return;
+    }
+    try {
+      const existing = await query(`SELECT asin FROM asin_estimates WHERE asin = $1`, [asin]);
+      if (existing.rows.length === 0) {
+        await query(
+          `INSERT INTO asin_estimates (asin, cogs, cogs_source) VALUES ($1, $2, 'manual')`,
+          [asin, cogs],
+        );
+      } else {
+        await query(
+          `UPDATE asin_estimates SET cogs = $2, cogs_source = 'manual' WHERE asin = $1`,
+          [asin, cogs],
+        );
+      }
+      res.json({ cogs, cogsSource: "manual" });
+    } catch (err: any) {
+      log(`COGS update error for ${asin}: ${err.message}`, "cogs");
+      res.status(500).json({ message: err.message });
+    }
+  });
+
+  app.post("/api/asins/:asin/cogs/reset", async (req: Request, res: Response) => {
+    const asin = String(req.params.asin ?? "");
+    if (!isDbAvailable()) { res.status(503).json({ message: "Database not available" }); return; }
+
+    const sheetId = process.env.GOOGLE_SHEET_ID;
+    const credPath = process.env.GOOGLE_CREDENTIALS_PATH;
+    if (!sheetId || !credPath || !fs.existsSync(credPath)) {
+      res.status(400).json({ message: "Google Sheet integration not configured" });
+      return;
+    }
+
+    try {
+      // Clear the manual override first so the PO sync path can write to this ASIN.
+      await query(
+        `UPDATE asin_estimates SET cogs = NULL, cogs_source = NULL WHERE asin = $1`,
+        [asin],
+      );
+
+      // Pull fresh data from the PO sheet and apply the value for this ASIN only.
+      const sheetData = await fetchSheetData(sheetId);
+      const entry = sheetData.get(asin);
+      if (entry?.cogs != null) {
+        await query(
+          `UPDATE asin_estimates SET cogs = $2, cogs_source = 'po_sheet' WHERE asin = $1`,
+          [asin, entry.cogs],
+        );
+        res.json({ cogs: entry.cogs, cogsSource: "po_sheet" });
+      } else {
+        res.json({ cogs: null, cogsSource: null });
+      }
+    } catch (err: any) {
+      log(`COGS reset error for ${asin}: ${err.message}`, "cogs");
+      res.status(500).json({ message: err.message });
     }
   });
 

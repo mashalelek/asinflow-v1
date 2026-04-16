@@ -4,6 +4,8 @@ import { registerRoutes } from "./routes";
 import { serveStatic } from "./static";
 import { createServer } from "http";
 import { ensureExtensionTables } from "./db";
+import { startInventoryCron } from "./inventory-cron";
+import { startPriceSyncCron } from "./price-sync-cron";
 
 const app = express();
 const httpServer = createServer(app);
@@ -89,6 +91,11 @@ app.use((req, res, next) => {
   }
 
   await registerRoutes(httpServer, app);
+
+  if (process.env.DATABASE_URL) {
+    startInventoryCron();
+    startPriceSyncCron();
+  }
 
   app.use((err: any, _req: Request, res: Response, next: NextFunction) => {
     const status = err.status || err.statusCode || 500;

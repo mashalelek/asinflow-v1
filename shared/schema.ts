@@ -96,6 +96,8 @@ export interface AsinResult {
   isHazmat?: boolean;
   isSearchSuppressed?: boolean;
   suppressionReasons?: string[];
+  cogsSource?: "po_sheet" | "csv" | "manual" | null;
+  pricesFetchedAt?: string | null;
   sellersDelta?: {
     fba_7d: number | null;
     fba_30d: number | null;

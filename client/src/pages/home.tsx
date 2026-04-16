@@ -15,7 +15,7 @@ import { ColumnManager } from "@/components/column-manager";
 import { useTheme } from "@/components/theme-provider";
 import { loadSettings } from "@/lib/settings";
 import { loadColumnConfig, type ColumnConfig } from "@/lib/columns";
-import { Sun, Moon, BarChart3, Zap, AlertTriangle, X, Search, RefreshCw, Archive, Sheet, Database, ShoppingCart } from "lucide-react";
+import { Sun, Moon, BarChart3, Zap, AlertTriangle, X, Search, RefreshCw, Archive, Sheet, Database, ShoppingCart, DollarSign } from "lucide-react";
 import { Checkbox } from "@/components/ui/checkbox";
 import {
   type AsinInput,
@@ -111,6 +111,20 @@ function loadIncludeInbound(): boolean {
   return true;
 }
 
+function formatRelativeTime(iso: string | null): string {
+  if (!iso) return "never";
+  const then = new Date(iso).getTime();
+  if (isNaN(then)) return "never";
+  const diffMs = Date.now() - then;
+  const mins = Math.floor(diffMs / 60000);
+  if (mins < 1) return "just now";
+  if (mins < 60) return `${mins} min${mins === 1 ? "" : "s"} ago`;
+  const hours = Math.floor(mins / 60);
+  if (hours < 24) return `${hours} hour${hours === 1 ? "" : "s"} ago`;
+  const days = Math.floor(hours / 24);
+  return `${days} day${days === 1 ? "" : "s"} ago`;
+}
+
 export default function Home() {
   const { theme, toggleTheme } = useTheme();
   const { toast } = useToast();
@@ -151,6 +165,8 @@ export default function Home() {
   const [isSyncing, setIsSyncing] = useState(false);
   const [isSyncingInventory, setIsSyncingInventory] = useState(false);
   const [isSyncingSales, setIsSyncingSales] = useState(false);
+  const [isRefreshingPrices, setIsRefreshingPrices] = useState(false);
+  const [pricesLastRefreshedAt, setPricesLastRefreshedAt] = useState<string | null>(null);
 
   const [datePrefs] = useState(loadDatePrefs);
   const [datePreset, setDatePreset] = useState(datePrefs.preset);
@@ -198,6 +214,15 @@ export default function Home() {
       .then((d) => setCredentialsConfigured(d.configured))
       .catch(() => setCredentialsConfigured(false));
   }, []);
+
+  const fetchPriceStatus = useCallback(() => {
+    fetch("/api/prices/status")
+      .then((r) => r.json())
+      .then((d: { lastRefreshedAt: string | null }) => setPricesLastRefreshedAt(d.lastRefreshedAt))
+      .catch(() => {});
+  }, []);
+
+  useEffect(() => { fetchPriceStatus(); }, [fetchPriceStatus]);
   const [progress, setProgress] = useState<ProgressUpdate | null>(null);
 
   const handleFileProcessed = useCallback((parsed: AsinInput[]) => {
@@ -214,62 +239,95 @@ export default function Home() {
     toast({ title: "File parsed", description: msg });
   }, [toast]);
 
+  // Consume an NDJSON analyze stream (progress / result / complete messages).
+  // Shared between the ASIN-list endpoint and the "analyze all" endpoint.
+  const consumeAnalyzeStream = useCallback(async (res: Response) => {
+    const reader = res.body?.getReader();
+    const decoder = new TextDecoder();
+    let buffer = "";
+    if (!reader) return;
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      buffer += decoder.decode(value, { stream: true });
+      const lines = buffer.split("\n");
+      buffer = lines.pop() || "";
+      for (const line of lines) {
+        if (!line.trim()) continue;
+        try {
+          const msg = JSON.parse(line);
+          if (msg.type === "progress") {
+            setProgress(msg.data);
+          } else if (msg.type === "result") {
+            const resultData = msg.data;
+            if (resultData._update) {
+              delete resultData._update;
+              setResults((prev) =>
+                prev.map((r) => (r.asin === resultData.asin ? resultData : r))
+              );
+            } else {
+              setResults((prev) => {
+                const idx = prev.findIndex((r) => r.asin === resultData.asin);
+                if (idx >= 0) return prev.map((r, i) => i === idx ? resultData : r);
+                setSavedCount((c) => (c ?? 0) + 1);
+                return [...prev, resultData];
+              });
+            }
+          }
+        } catch {}
+      }
+    }
+  }, []);
+
+  const BATCH_SIZE_LIMIT = 200;
+  const FRONTEND_BATCH_SIZE = 100;
+
   const runAnalysis = useCallback(async (asinsToAnalyze: AsinInput[]) => {
     setIsAnalyzing(true);
     setProgress({ current: 0, total: asinsToAnalyze.length, asin: "" });
 
     try {
-      const res = await fetch("/api/analyze", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ asins: asinsToAnalyze }),
-      });
-
-      if (!res.ok) {
-        const err = await res.json();
-        throw new Error(err.message || "Analysis failed");
-      }
-
-      const reader = res.body?.getReader();
-      const decoder = new TextDecoder();
-      let buffer = "";
-
-      if (reader) {
-        while (true) {
-          const { done, value } = await reader.read();
-          if (done) break;
-
-          buffer += decoder.decode(value, { stream: true });
-          const lines = buffer.split("\n");
-          buffer = lines.pop() || "";
-
-          for (const line of lines) {
-            if (!line.trim()) continue;
-            try {
-              const msg = JSON.parse(line);
-              if (msg.type === "progress") {
-                setProgress(msg.data);
-              } else if (msg.type === "result") {
-                const resultData = msg.data;
-                if (resultData._update) {
-                  delete resultData._update;
-                  setResults((prev) =>
-                    prev.map((r) => (r.asin === resultData.asin ? resultData : r))
-                  );
-                } else {
-                  setResults((prev) => {
-                    const idx = prev.findIndex((r) => r.asin === resultData.asin);
-                    if (idx >= 0) return prev.map((r, i) => i === idx ? resultData : r);
-                    setSavedCount((c) => (c ?? 0) + 1);
-                    return [...prev, resultData];
-                  });
-                }
-              } else if (msg.type === "complete") {
-                setProgress(null);
-              }
-            } catch {}
+      // For large CSV-upload flows, split into client-side batches to avoid
+      // "request entity too large" on /api/analyze.
+      if (asinsToAnalyze.length > BATCH_SIZE_LIMIT) {
+        const total = asinsToAnalyze.length;
+        const batches = Math.ceil(total / FRONTEND_BATCH_SIZE);
+        for (let b = 0; b < batches; b++) {
+          const start = b * FRONTEND_BATCH_SIZE;
+          const end = Math.min(start + FRONTEND_BATCH_SIZE, total);
+          const slice = asinsToAnalyze.slice(start, end);
+          setProgress({ current: start, total, asin: `Batch ${b + 1} of ${batches} (ASINs ${start + 1}-${end})` });
+          try {
+            const res = await fetch("/api/analyze", {
+              method: "POST",
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify({ asins: slice }),
+            });
+            if (!res.ok) {
+              const err = await res.json().catch(() => ({}));
+              throw new Error(err.message || `Batch ${b + 1} failed`);
+            }
+            await consumeAnalyzeStream(res);
+          } catch (err: any) {
+            toast({
+              title: `Batch ${b + 1} failed`,
+              description: `${err.message} — continuing with remaining batches`,
+              variant: "destructive",
+            });
           }
         }
+        toast({ title: "Analysis complete", description: `Processed ${total} ASINs in ${batches} batches` });
+      } else {
+        const res = await fetch("/api/analyze", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ asins: asinsToAnalyze }),
+        });
+        if (!res.ok) {
+          const err = await res.json();
+          throw new Error(err.message || "Analysis failed");
+        }
+        await consumeAnalyzeStream(res);
       }
     } catch (err: any) {
       toast({
@@ -280,24 +338,88 @@ export default function Home() {
     } finally {
       setIsAnalyzing(false);
       setProgress(null);
+      fetchPriceStatus();
     }
-  }, [toast]);
+  }, [toast, consumeAnalyzeStream, fetchPriceStatus]);
+
+  const runAnalyzeAllFromDb = useCallback(async (totalEstimate: number) => {
+    setIsAnalyzing(true);
+    setProgress({ current: 0, total: totalEstimate, asin: "Starting full-catalog analysis..." });
+    try {
+      const res = await fetch("/api/analyze/all", { method: "POST" });
+      if (!res.ok) {
+        const err = await res.json().catch(() => ({}));
+        throw new Error(err.message || "Analyze all failed");
+      }
+      await consumeAnalyzeStream(res);
+    } catch (err: any) {
+      toast({ title: "Analysis failed", description: err.message, variant: "destructive" });
+    } finally {
+      setIsAnalyzing(false);
+      setProgress(null);
+      fetchPriceStatus();
+    }
+  }, [toast, consumeAnalyzeStream, fetchPriceStatus]);
 
   const handleAnalyze = useCallback(async () => {
     if (asins.length > 0) {
       await runAnalysis(asins);
     } else if (results.length > 0) {
-      // Re-analyze all DB-loaded ASINs
-      const fromDb: AsinInput[] = results.map((r) => ({
-        asin: r.asin,
-        cogs: r.cogs,
-        buyLink: r.buyLink,
-        prepOverride: r.prepOverride,
-        storageOverride: r.storageOverride,
-      }));
-      await runAnalysis(fromDb);
+      // Re-analyze the full catalog via the DB-backed endpoint — avoids
+      // sending the entire ASIN list in the request body.
+      await runAnalyzeAllFromDb(results.length);
     }
-  }, [asins, results, runAnalysis]);
+  }, [asins, results, runAnalysis, runAnalyzeAllFromDb]);
+
+  const handleRefreshPrices = useCallback(async () => {
+    setIsRefreshingPrices(true);
+    setProgress({ current: 0, total: results.length || 0, asin: "Refreshing prices..." });
+    try {
+      const res = await fetch("/api/prices/refresh", { method: "POST" });
+      if (!res.ok) {
+        const err = await res.json().catch(() => ({}));
+        throw new Error(err.message || "Price refresh failed");
+      }
+
+      const reader = res.body?.getReader();
+      const decoder = new TextDecoder();
+      let buffer = "";
+      let updated = 0;
+      let failed = 0;
+      if (reader) {
+        while (true) {
+          const { done, value } = await reader.read();
+          if (done) break;
+          buffer += decoder.decode(value, { stream: true });
+          const lines = buffer.split("\n");
+          buffer = lines.pop() || "";
+          for (const line of lines) {
+            if (!line.trim()) continue;
+            try {
+              const msg = JSON.parse(line);
+              if (msg.type === "progress") {
+                setProgress(msg.data);
+              } else if (msg.type === "complete") {
+                updated = msg.data?.updated ?? 0;
+                failed = msg.data?.failed ?? 0;
+              }
+            } catch {}
+          }
+        }
+      }
+      toast({
+        title: "Prices refreshed",
+        description: `Updated ${updated} ASIN${updated === 1 ? "" : "s"}${failed > 0 ? `, ${failed} failed` : ""}`,
+      });
+      await fetchAsins(startDate, endDate, showArchived);
+    } catch (err: any) {
+      toast({ title: "Price refresh failed", description: err.message, variant: "destructive" });
+    } finally {
+      setIsRefreshingPrices(false);
+      setProgress(null);
+      fetchPriceStatus();
+    }
+  }, [toast, results.length, fetchAsins, startDate, endDate, showArchived, fetchPriceStatus]);
 
   const handleToggleBuy = useCallback((asin: string) => {
     setBuySet((prev) => {
@@ -656,6 +778,17 @@ export default function Home() {
               <RefreshCw className={`h-3.5 w-3.5 mr-1.5 ${isSyncingSales ? "animate-spin" : ""}`} />
               {isSyncingSales ? "Syncing..." : "Sync Sales"}
             </Button>
+            <Button
+              variant="outline"
+              size="sm"
+              onClick={handleRefreshPrices}
+              disabled={isRefreshingPrices || isAnalyzing}
+              className="h-8 text-xs"
+              data-testid="button-refresh-prices"
+            >
+              <DollarSign className={`h-3.5 w-3.5 mr-1.5 ${isRefreshingPrices ? "animate-pulse" : ""}`} />
+              {isRefreshingPrices ? "Refreshing..." : "Refresh Prices"}
+            </Button>
           </div>
 
           {isAnalyzing && progress && (
@@ -708,6 +841,13 @@ export default function Home() {
                       Buy Box
                     </span>
                   </div>
+                  <span
+                    className="text-xs text-muted-foreground whitespace-nowrap"
+                    title={pricesLastRefreshedAt ? new Date(pricesLastRefreshedAt).toLocaleString() : undefined}
+                    data-testid="text-prices-staleness"
+                  >
+                    · Prices: {formatRelativeTime(pricesLastRefreshedAt)}
+                  </span>
                 </div>
 
                 <DateRangePicker
