@@ -5,7 +5,22 @@ import Papa from "papaparse";
 import * as XLSX from "xlsx";
 import { getPricing, getFees, getCatalogData, estimateFeeFallback, getEligibility, type EligibilityResult } from "./spapi";
 import { log } from "./index";
-import { type AsinInput, type AsinResult, type ColumnMapping } from "@shared/schema";
+import { type AsinInput, type AsinResult, type ColumnMapping, extractDomain } from "@shared/schema";
+import pool, { query, isDbAvailable } from "./db";
+import { syncInventory } from "./inventory-sync";
+import { syncSalesData } from "./sales-sync";
+import { syncSuppressionData } from "./suppression-sync";
+import { fetchSheetData } from "./google-sheets";
+import fs from "fs";
+
+const TAG_COLORS = ["#3B82F6", "#EF4444", "#10B981", "#F59E0B", "#8B5CF6", "#EC4899", "#14B8A6", "#F97316", "#6366F1", "#84CC16"];
+
+function cleanBuyLink(raw: string): string | null {
+  const first = raw.split(/\r?\n/).map((s) => s.trim()).find((s) => s.length > 0);
+  if (!first) return null;
+  const qIdx = first.indexOf("?");
+  return qIdx >= 0 ? first.substring(0, qIdx) : first;
+}
 
 const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 10 * 1024 * 1024 } });
 
@@ -35,6 +50,8 @@ const COLUMN_NAME_ALIASES: Record<string, string[]> = {
   buyLink: ["buy link", "buylink", "buy url", "buyurl", "link", "url", "supplier link", "source link", "source url"],
   prepCost: ["prep", "prep cost", "prepcost", "prep fee", "prepfee"],
   additionalFees: ["storage", "storage fee", "storagefee", "additional fees", "additionalfees", "additional fee", "extra fees", "misc", "misc fees", "other fees"],
+  tags: ["tags", "tag"],
+  notes: ["notes", "note", "comments", "comment"],
 };
 
 function matchColumnName(header: string, field: string): boolean {
@@ -76,7 +93,18 @@ function mapRowsToAsins(rows: Record<string, any>[], mapping: ColumnMapping): As
       if (!isNaN(s)) storageOverride = s;
     }
 
-    asins.push({ asin, cogs, buyLink, prepOverride, storageOverride });
+    let tags: string[] | null = null;
+    if (mapping.tags && row[mapping.tags] !== undefined && row[mapping.tags] !== "") {
+      tags = String(row[mapping.tags]).split(",").map((t) => t.trim()).filter((t) => t.length > 0);
+      if (tags.length === 0) tags = null;
+    }
+
+    let notes: string | null = null;
+    if (mapping.notes && row[mapping.notes] !== undefined && row[mapping.notes] !== "") {
+      notes = String(row[mapping.notes]).trim() || null;
+    }
+
+    asins.push({ asin, cogs, buyLink, prepOverride, storageOverride, tags, notes });
   }
 
   if (asins.length === 0) {
@@ -104,12 +132,17 @@ function parseFileToAsins(buffer: Buffer, filename: string): AsinInput[] {
     throw new Error('File must contain "ASIN" and "COGS" columns.');
   }
 
+  const tagsHeader = headers.find((h) => matchColumnName(h, "tags"));
+  const notesHeader = headers.find((h) => matchColumnName(h, "notes"));
+
   const mapping: ColumnMapping = {
     asin: asinHeader,
     cogs: cogsHeader,
     buyLink: buyLinkHeader ?? null,
     prepCost: prepHeader ?? null,
     additionalFees: storageHeader ?? null,
+    tags: tagsHeader ?? null,
+    notes: notesHeader ?? null,
   };
 
   return mapRowsToAsins(rows, mapping);
@@ -241,6 +274,165 @@ function getFeePriceForAsin(pricingData: AsinResult["pricingData"]): { price: nu
   return { price: realPrice ?? 15, isFallback: realPrice == null };
 }
 
+async function upsertAsinResult(result: AsinResult): Promise<void> {
+  const supplier = extractDomain(result.buyLink);
+
+  await query(
+    `INSERT INTO asins (asin, title, image_url, brand, category, weight_lb, buy_link, supplier, is_meltable, is_hazmat, last_refreshed_at)
+     VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, NOW())
+     ON CONFLICT (asin) DO UPDATE SET
+       title = COALESCE(EXCLUDED.title, asins.title),
+       image_url = COALESCE(EXCLUDED.image_url, asins.image_url),
+       brand = COALESCE(EXCLUDED.brand, asins.brand),
+       category = COALESCE(EXCLUDED.category, asins.category),
+       weight_lb = COALESCE(EXCLUDED.weight_lb, asins.weight_lb),
+       buy_link = COALESCE(EXCLUDED.buy_link, asins.buy_link),
+       supplier = COALESCE(EXCLUDED.supplier, asins.supplier),
+       is_meltable = EXCLUDED.is_meltable OR asins.is_meltable,
+       is_hazmat = EXCLUDED.is_hazmat OR asins.is_hazmat,
+       last_refreshed_at = NOW()`,
+    [
+      result.asin,
+      result.catalogData.title,
+      result.catalogData.imageUrl,
+      result.catalogData.brand,
+      result.catalogData.bsrCategory,
+      result.catalogData.weightLbs,
+      result.buyLink,
+      supplier,
+      (result.catalogData as any).isMeltable ?? false,
+      (result.catalogData as any).isHazmat ?? false,
+    ]
+  );
+
+  await query(
+    `INSERT INTO asin_estimates (
+       asin, cogs, prep_override, storage_override,
+       lowest_fba_price, buy_box_price, buy_box_fulfillment, lowest_price,
+       sellers_fba, sellers_fbm, fba_fee, referral_fee, fees_estimate_price,
+       bsr, bsr_category, eligibility_status, error, fetched_at
+     ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,NOW())
+     ON CONFLICT (asin) DO UPDATE SET
+       cogs = EXCLUDED.cogs,
+       prep_override = EXCLUDED.prep_override,
+       storage_override = EXCLUDED.storage_override,
+       lowest_fba_price = EXCLUDED.lowest_fba_price,
+       buy_box_price = EXCLUDED.buy_box_price,
+       buy_box_fulfillment = EXCLUDED.buy_box_fulfillment,
+       lowest_price = EXCLUDED.lowest_price,
+       sellers_fba = EXCLUDED.sellers_fba,
+       sellers_fbm = EXCLUDED.sellers_fbm,
+       fba_fee = EXCLUDED.fba_fee,
+       referral_fee = EXCLUDED.referral_fee,
+       fees_estimate_price = EXCLUDED.fees_estimate_price,
+       bsr = EXCLUDED.bsr,
+       bsr_category = EXCLUDED.bsr_category,
+       eligibility_status = EXCLUDED.eligibility_status,
+       error = EXCLUDED.error,
+       fetched_at = NOW()`,
+    [
+      result.asin,
+      result.cogs, result.prepOverride, result.storageOverride,
+      result.pricingData.lowestFbaPrice, result.pricingData.buyBoxPrice,
+      result.pricingData.buyBoxFulfillment, result.pricingData.lowestPrice,
+      result.pricingData.sellersFba, result.pricingData.sellersFbm,
+      result.feesData.fbaFulfillmentFee, result.feesData.referralFee, result.feesData.feesEstimatePrice,
+      result.catalogData.bsrRank, result.catalogData.bsrCategory,
+      result.eligibilityData?.status, result.error,
+    ]
+  );
+
+  // Record history snapshot for seller/price/BSR trends
+  const salePrice = result.pricingData.lowestFbaPrice ?? result.pricingData.buyBoxPrice ?? result.pricingData.lowestPrice;
+  const idRow = await query(`SELECT id FROM asins WHERE asin = $1`, [result.asin]);
+  if (idRow.rows.length > 0) {
+    await query(
+      `INSERT INTO asin_estimates_history (asin_id, sellers_fba, sellers_fbm, sale_price, bsr) VALUES ($1, $2, $3, $4, $5)`,
+      [idRow.rows[0].id, result.pricingData.sellersFba, result.pricingData.sellersFbm, salePrice, result.catalogData.bsrRank]
+    ).catch(() => {});
+  }
+}
+
+async function upsertTagsForAsin(asin: string, tagNames: string[]): Promise<void> {
+  const asinRow = await query(`SELECT id FROM asins WHERE asin = $1`, [asin]);
+  if (asinRow.rows.length === 0) return;
+  const asinId = asinRow.rows[0].id;
+
+  for (const name of tagNames) {
+    let tagRes = await query(`SELECT id FROM tags WHERE LOWER(name) = LOWER($1)`, [name]);
+    if (tagRes.rows.length === 0) {
+      tagRes = await query(
+        `INSERT INTO tags (name, color) VALUES ($1, $2) RETURNING id`,
+        [name, TAG_COLORS[Math.floor(Math.random() * TAG_COLORS.length)]]
+      );
+    }
+    await query(
+      `INSERT INTO asin_tags (asin_id, tag_id) VALUES ($1, $2) ON CONFLICT DO NOTHING`,
+      [asinId, tagRes.rows[0].id]
+    );
+  }
+}
+
+async function appendNotesForAsin(asin: string, newNotes: string): Promise<void> {
+  await query(
+    `UPDATE asins SET notes = CASE
+       WHEN notes IS NULL OR notes = '' THEN $2
+       WHEN notes = $2 THEN notes
+       ELSE notes || E'\n' || $2
+     END WHERE asin = $1`,
+    [asin, newNotes]
+  );
+}
+
+function writeResult(res: Response, allResults: Map<string, AsinResult>, asin: string, result: AsinResult, isUpdate = false): void {
+  allResults.set(asin, result);
+  res.write(JSON.stringify({ type: "result", data: isUpdate ? { ...result, _update: true } : result }) + "\n");
+  if (isDbAvailable()) {
+    upsertAsinResult(result).catch((err: any) => log(`DB upsert error for ${asin}: ${err.message}`, "db"));
+  }
+}
+
+async function runSheetsSync(): Promise<{ updated: number; skipped: number; errors: string[] }> {
+  const sheetId = process.env.GOOGLE_SHEET_ID;
+  if (!sheetId) throw new Error("GOOGLE_SHEET_ID not configured");
+
+  const sheetData = await fetchSheetData(sheetId);
+  let updated = 0;
+  let skipped = 0;
+  const errors: string[] = [];
+
+  for (const [asin, data] of Array.from(sheetData.entries())) {
+    try {
+      const setClauses: string[] = [];
+      const values: any[] = [];
+      let idx = 1;
+      if (data.cogs != null) {
+        setClauses.push(`cogs = $${idx++}`, `cogs_source = $${idx++}`);
+        values.push(data.cogs, "po_sheet");
+      }
+      setClauses.push(`ordered_qty = $${idx++}`);
+      values.push(data.orderedQty);
+      values.push(asin);
+
+      const result = await query(
+        `UPDATE asin_estimates SET ${setClauses.join(", ")} WHERE asin = $${idx}`,
+        values
+      );
+      if ((result.rowCount ?? 0) > 0) updated++;
+      else skipped++;
+
+      // Update supplier on asins table if available
+      if (data.supplier) {
+        await query(`UPDATE asins SET supplier = COALESCE(supplier, $2) WHERE asin = $1`, [asin, data.supplier]);
+      }
+    } catch (err: any) {
+      errors.push(`${asin}: ${err.message}`);
+    }
+  }
+
+  return { updated, skipped, errors };
+}
+
 export async function registerRoutes(
   httpServer: Server,
   app: Express
@@ -269,6 +461,383 @@ export async function registerRoutes(
       process.env.SP_API_REFRESH_TOKEN
     );
     res.json({ configured });
+  });
+
+  // Main AsinFlow: load all ASINs joined with estimates, inventory, sales, tags, deltas
+  app.get("/api/asins", async (req: Request, res: Response) => {
+    if (!isDbAvailable()) { res.json([]); return; }
+    try {
+      const { startDate, endDate, includeArchived } = req.query as { startDate?: string; endDate?: string; includeArchived?: string };
+      const activeFilter = includeArchived === "true" ? "TRUE" : "a.is_active = TRUE";
+
+      const result = await query(`
+        SELECT
+          a.asin, a.title, a.image_url, a.brand, a.category, a.weight_lb, a.buy_link, a.is_active,
+          a.primary_sku, a.in_catalog, a.notes, a.is_meltable, a.is_hazmat, a.is_search_suppressed, a.suppression_reasons,
+          e.cogs, e.prep_override, e.storage_override,
+          e.lowest_fba_price, e.buy_box_price, e.buy_box_fulfillment, e.lowest_price,
+          e.sellers_fba, e.sellers_fbm,
+          e.fba_fee, e.referral_fee, e.fees_estimate_price,
+          e.bsr, e.bsr_category, e.eligibility_status, e.error,
+          e.ordered_qty AS est_ordered_qty
+        FROM asins a
+        LEFT JOIN asin_estimates e ON e.asin = a.asin
+        WHERE ${activeFilter}
+        ORDER BY a.last_refreshed_at DESC NULLS LAST
+      `);
+
+      // Latest inventory snapshot per ASIN
+      const invResult = await query(`
+        SELECT DISTINCT ON (i.asin_id)
+          a.asin, i.available_fba, i.reserved, i.inbound_shipped, i.inbound_receiving, i.ordered_qty
+        FROM inventory_snapshots i
+        JOIN asins a ON a.id = i.asin_id
+        ORDER BY i.asin_id, i.snapshot_at DESC
+      `).catch(() => ({ rows: [] as any[] }));
+      const invMap = new Map<string, any>();
+      for (const row of invResult.rows) invMap.set(row.asin, row);
+
+      // Aggregated sales for date range
+      const salesMap = new Map<string, any>();
+      const daysInStockMap = new Map<string, number>();
+      if (startDate && endDate) {
+        const salesResult = await query(`
+          SELECT
+            a.asin,
+            SUM(s.units_sold) AS units_sold,
+            SUM(s.revenue) AS revenue,
+            SUM(s.units_refunded) AS units_refunded,
+            SUM(s.refund_amount) AS refund_amount,
+            COUNT(CASE WHEN s.units_sold > 0 THEN 1 END) AS days_with_sales
+          FROM sales_daily s
+          JOIN asins a ON a.id = s.asin_id
+          WHERE s.sale_date >= $1 AND s.sale_date <= $2
+          GROUP BY a.asin
+        `, [startDate, endDate]).catch(() => ({ rows: [] as any[] }));
+        for (const row of salesResult.rows) salesMap.set(row.asin, row);
+
+        const disResult = await query(`
+          SELECT a.asin, COUNT(DISTINCT DATE(i.snapshot_at)) AS days_in_stock
+          FROM inventory_snapshots i
+          JOIN asins a ON a.id = i.asin_id
+          WHERE i.snapshot_at >= $1::date AND i.snapshot_at <= ($2::date + 1) AND i.available_fba > 0
+          GROUP BY a.asin
+        `, [startDate, endDate]).catch(() => ({ rows: [] as any[] }));
+        for (const row of disResult.rows) daysInStockMap.set(row.asin, parseInt(row.days_in_stock) || 0);
+      }
+
+      // Seller deltas (7d/30d)
+      const deltaResult = await query(`
+        SELECT
+          a.asin,
+          (SELECT sellers_fba FROM asin_estimates_history h WHERE h.asin_id = a.id AND h.fetched_at <= NOW() - INTERVAL '6 days' ORDER BY h.fetched_at DESC LIMIT 1) AS fba_7d_old,
+          (SELECT sellers_fbm FROM asin_estimates_history h WHERE h.asin_id = a.id AND h.fetched_at <= NOW() - INTERVAL '6 days' ORDER BY h.fetched_at DESC LIMIT 1) AS fbm_7d_old,
+          (SELECT sellers_fba FROM asin_estimates_history h WHERE h.asin_id = a.id AND h.fetched_at <= NOW() - INTERVAL '29 days' ORDER BY h.fetched_at DESC LIMIT 1) AS fba_30d_old,
+          (SELECT sellers_fbm FROM asin_estimates_history h WHERE h.asin_id = a.id AND h.fetched_at <= NOW() - INTERVAL '29 days' ORDER BY h.fetched_at DESC LIMIT 1) AS fbm_30d_old
+        FROM asins a WHERE a.is_active = TRUE
+      `).catch(() => ({ rows: [] as any[] }));
+      const deltaMap = new Map<string, any>();
+      for (const row of deltaResult.rows) deltaMap.set(row.asin, row);
+
+      // SKUs per ASIN
+      const skusResult = await query(`
+        SELECT a.asin, s.sku FROM asin_skus s
+        JOIN asins a ON a.id = s.asin_id
+        WHERE a.is_active = TRUE ORDER BY s.is_primary DESC, s.sku
+      `).catch(() => ({ rows: [] as any[] }));
+      const skusMap = new Map<string, string[]>();
+      for (const row of skusResult.rows) {
+        const arr = skusMap.get(row.asin) ?? [];
+        arr.push(row.sku);
+        skusMap.set(row.asin, arr);
+      }
+
+      // Tags per ASIN
+      const tagsResult = await query(`
+        SELECT a.asin, t.name, t.color FROM asin_tags at
+        JOIN tags t ON t.id = at.tag_id
+        JOIN asins a ON a.id = at.asin_id
+        WHERE a.is_active = TRUE
+      `).catch(() => ({ rows: [] as any[] }));
+      const tagsMap = new Map<string, { name: string; color: string }[]>();
+      for (const row of tagsResult.rows) {
+        const arr = tagsMap.get(row.asin) ?? [];
+        arr.push({ name: row.name, color: row.color });
+        tagsMap.set(row.asin, arr);
+      }
+
+      const asinResults: AsinResult[] = result.rows.map((row: any) => {
+        const inv = invMap.get(row.asin);
+        const sales = salesMap.get(row.asin);
+
+        const stock = inv ? {
+          available_fba: parseInt(inv.available_fba) || 0,
+          reserved: parseInt(inv.reserved) || 0,
+          inbound: (parseInt(inv.inbound_shipped) || 0) + (parseInt(inv.inbound_receiving) || 0),
+          ordered: parseInt(row.est_ordered_qty) || 0,
+          total: (parseInt(inv.available_fba) || 0) +
+                 (parseInt(inv.reserved) || 0) +
+                 (parseInt(inv.inbound_shipped) || 0) +
+                 (parseInt(inv.inbound_receiving) || 0) +
+                 (parseInt(row.est_ordered_qty) || 0),
+        } : null;
+
+        const actuals = sales ? {
+          units_sold: parseInt(sales.units_sold) || 0,
+          revenue: parseFloat(sales.revenue) || 0,
+          units_refunded: parseInt(sales.units_refunded) || 0,
+          refund_amount: parseFloat(sales.refund_amount) || 0,
+          days_with_sales: parseInt(sales.days_with_sales) || 0,
+          days_in_stock: daysInStockMap.get(row.asin) ?? 0,
+        } : null;
+
+        const d = deltaMap.get(row.asin);
+        const curFba = row.sellers_fba != null ? parseInt(row.sellers_fba) : null;
+        const curFbm = row.sellers_fbm != null ? parseInt(row.sellers_fbm) : null;
+
+        return {
+          asin: row.asin,
+          cogs: parseFloat(row.cogs) || 0,
+          buyLink: row.buy_link ?? null,
+          prepOverride: row.prep_override != null ? parseFloat(row.prep_override) : null,
+          storageOverride: row.storage_override != null ? parseFloat(row.storage_override) : null,
+          pricingData: {
+            lowestFbaPrice: row.lowest_fba_price != null ? parseFloat(row.lowest_fba_price) : null,
+            buyBoxPrice: row.buy_box_price != null ? parseFloat(row.buy_box_price) : null,
+            buyBoxFulfillment: row.buy_box_fulfillment as "FBA" | "FBM" | null,
+            lowestPrice: row.lowest_price != null ? parseFloat(row.lowest_price) : null,
+            avg30DayPrice: null,
+            avg90DayPrice: null,
+            numberOfSellers: null,
+            sellersFba: curFba,
+            sellersFbm: curFbm,
+          },
+          feesData: {
+            fbaFulfillmentFee: row.fba_fee != null ? parseFloat(row.fba_fee) : null,
+            referralFee: row.referral_fee != null ? parseFloat(row.referral_fee) : null,
+            feesEstimatePrice: row.fees_estimate_price != null ? parseFloat(row.fees_estimate_price) : null,
+          },
+          catalogData: {
+            weightLbs: row.weight_lb != null ? parseFloat(row.weight_lb) : null,
+            title: row.title ?? null,
+            brand: row.brand ?? null,
+            imageUrl: row.image_url ?? null,
+            bsrRank: row.bsr != null ? parseInt(row.bsr) : null,
+            bsrCategory: row.bsr_category ?? null,
+          },
+          eligibilityData: { status: (row.eligibility_status as "yes" | "no" | "check") ?? "check" },
+          error: row.error ?? null,
+          stock,
+          actuals,
+          sku: row.primary_sku ?? null,
+          skus: skusMap.get(row.asin) ?? [],
+          inCatalog: row.in_catalog ?? false,
+          tags: tagsMap.get(row.asin) ?? [],
+          notes: row.notes ?? null,
+          isArchived: row.is_active === false,
+          isMeltable: row.is_meltable ?? false,
+          isHazmat: row.is_hazmat ?? false,
+          isSearchSuppressed: row.is_search_suppressed ?? false,
+          suppressionReasons: row.suppression_reasons ?? [],
+          sellersDelta: d ? {
+            fba_7d: curFba != null && d.fba_7d_old != null ? curFba - parseInt(d.fba_7d_old) : null,
+            fba_30d: curFba != null && d.fba_30d_old != null ? curFba - parseInt(d.fba_30d_old) : null,
+            fbm_7d: curFbm != null && d.fbm_7d_old != null ? curFbm - parseInt(d.fbm_7d_old) : null,
+            fbm_30d: curFbm != null && d.fbm_30d_old != null ? curFbm - parseInt(d.fbm_30d_old) : null,
+          } : null,
+        };
+      });
+
+      res.json(asinResults);
+    } catch (err: any) {
+      log(`GET /api/asins error: ${err.message}`, "db");
+      res.status(500).json({ message: err.message });
+    }
+  });
+
+  // Settings API for Chrome extension
+  app.get("/api/settings", async (_req: Request, res: Response) => {
+    try {
+      const result = await pool.query("SELECT key, value FROM settings");
+      const settings: Record<string, number> = {};
+      for (const row of result.rows) {
+        settings[row.key] = parseFloat(row.value);
+      }
+      res.json(settings);
+    } catch (err: any) {
+      log(`Settings fetch error: ${err.message}`, "api");
+      res.status(500).json({ message: "Failed to fetch settings. Is DATABASE_URL configured?" });
+    }
+  });
+
+  // ASIN existence check for Chrome extension
+  app.get("/api/asins/check/:asin", async (req: Request, res: Response) => {
+    try {
+      const rawAsin = req.params.asin;
+      const asin = (typeof rawAsin === "string" ? rawAsin : "").toUpperCase();
+      if (!/^[A-Z0-9]{10}$/.test(asin)) {
+        res.status(400).json({ message: "Valid 10-character ASIN is required" });
+        return;
+      }
+
+      const asinResult = await pool.query(
+        "SELECT asin FROM asins WHERE asin = $1 LIMIT 1",
+        [asin]
+      );
+
+      if (asinResult.rowCount === 0) {
+        res.json({ exists: false });
+        return;
+      }
+
+      // Look up the most recent non-null COGS for this ASIN. We order by
+      // `id DESC` (UUID insertion order is not strictly chronological but
+      // serves as a stable tiebreaker) — we avoid `updated_at`/`fetched_at`
+      // because the exact timestamp column name varies in production.
+      const cogsResult = await pool.query(
+        `SELECT cogs FROM asin_estimates
+         WHERE asin = $1 AND cogs IS NOT NULL
+         ORDER BY id DESC
+         LIMIT 1`,
+        [asin]
+      );
+
+      const cogs = cogsResult.rows[0]?.cogs != null ? parseFloat(cogsResult.rows[0].cogs) : null;
+      res.json({ exists: true, cogs });
+    } catch (err: any) {
+      log(`ASIN check error: ${err.message}`, "api");
+      res.status(500).json({ message: "Failed to check ASIN. Is DATABASE_URL configured?" });
+    }
+  });
+
+  // ASIN import from Chrome extension
+  app.post("/api/import-asin", async (req: Request, res: Response) => {
+    try {
+      const {
+        asin,
+        title,
+        image_url,
+        brand,
+        category,
+        weight_oz,
+        length_in,
+        width_in,
+        height_in,
+        buy_link,
+        cogs,
+        sale_price,
+        bsr,
+        sellers_fba,
+        sellers_fbm,
+      } = req.body;
+
+      if (!asin || typeof asin !== "string" || !/^[A-Z0-9]{10}$/.test(asin)) {
+        res.status(400).json({ message: "Valid 10-character ASIN is required" });
+        return;
+      }
+
+      // The production schema stores weight in pounds (`weight_lb`), but the
+      // extension scrapes it from Amazon detail pages in ounces. Convert here.
+      const weightLb = weight_oz != null && !isNaN(parseFloat(weight_oz))
+        ? parseFloat(weight_oz) / 16
+        : null;
+
+      // ── Upsert asins ────────────────────────────────────────────────────
+      // Only columns that exist in production's `asins` table. BSR,
+      // seller counts, and prices live in `asin_estimates`, not here.
+      const upsertResult = await pool.query(
+        `INSERT INTO asins (asin, title, brand, image_url, category, weight_lb, length_in, width_in, height_in, buy_link, in_catalog, is_active)
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, false, true)
+         ON CONFLICT (asin) DO UPDATE SET
+           title = COALESCE($2, asins.title),
+           brand = COALESCE($3, asins.brand),
+           image_url = COALESCE($4, asins.image_url),
+           category = COALESCE($5, asins.category),
+           weight_lb = COALESCE($6, asins.weight_lb),
+           length_in = COALESCE($7, asins.length_in),
+           width_in = COALESCE($8, asins.width_in),
+           height_in = COALESCE($9, asins.height_in),
+           buy_link = COALESCE($10, asins.buy_link)
+         RETURNING (xmax = 0) AS inserted`,
+        [
+          asin,
+          title ?? null,
+          brand ?? null,
+          image_url ?? null,
+          category ?? null,
+          weightLb,
+          length_in ?? null,
+          width_in ?? null,
+          height_in ?? null,
+          buy_link ?? null,
+        ]
+      );
+
+      const wasInserted = upsertResult.rows[0]?.inserted;
+
+      // ── Upsert asin_estimates ───────────────────────────────────────────
+      // The production `cogs_source` column has a CHECK constraint that
+      // restricts values to ('po_sheet', 'csv', 'manual'), so the extension
+      // writes as 'manual'. We also can't rely on a unique constraint
+      // existing for ON CONFLICT, so we use an explicit
+      // SELECT → UPDATE-or-INSERT pattern.
+      //
+      // The sale price from the extension maps to `buy_box_price` in
+      // production (the price the user saw on the product page).
+      const hasCogs = cogs != null && !isNaN(parseFloat(cogs));
+      const hasEstimateFields = hasCogs
+        || sale_price != null
+        || bsr != null
+        || sellers_fba != null
+        || sellers_fbm != null;
+
+      if (hasEstimateFields) {
+        const existing = await pool.query(
+          `SELECT id FROM asin_estimates
+           WHERE asin = $1 AND cogs_source = 'manual'
+           ORDER BY id DESC LIMIT 1`,
+          [asin]
+        );
+
+        if ((existing.rowCount ?? 0) > 0) {
+          await pool.query(
+            `UPDATE asin_estimates SET
+               cogs = COALESCE($2, cogs),
+               buy_box_price = COALESCE($3, buy_box_price),
+               bsr = COALESCE($4, bsr),
+               sellers_fba = COALESCE($5, sellers_fba),
+               sellers_fbm = COALESCE($6, sellers_fbm)
+             WHERE id = $1`,
+            [
+              existing.rows[0].id,
+              hasCogs ? parseFloat(cogs) : null,
+              sale_price ?? null,
+              bsr ?? null,
+              sellers_fba ?? null,
+              sellers_fbm ?? null,
+            ]
+          );
+        } else {
+          await pool.query(
+            `INSERT INTO asin_estimates (asin, cogs, cogs_source, buy_box_price, bsr, sellers_fba, sellers_fbm)
+             VALUES ($1, $2, 'manual', $3, $4, $5, $6)`,
+            [
+              asin,
+              hasCogs ? parseFloat(cogs) : null,
+              sale_price ?? null,
+              bsr ?? null,
+              sellers_fba ?? null,
+              sellers_fbm ?? null,
+            ]
+          );
+        }
+      }
+
+      res.json({ success: true, action: wasInserted ? "created" : "updated", asin });
+    } catch (err: any) {
+      log(`Import ASIN error: ${err.message}`, "api");
+      res.status(500).json({ message: "Failed to import ASIN. Is DATABASE_URL configured?" });
+    }
   });
 
   app.get("/api/download-template", (_req: Request, res: Response) => {
@@ -379,6 +948,271 @@ export async function registerRoutes(
     }
   });
 
+  // === Inventory / Sales / Sheets / Suppression sync ===
+  app.get("/api/inventory/sync", async (_req: Request, res: Response) => {
+    if (!isDbAvailable()) { res.status(503).json({ message: "Database not available" }); return; }
+    try {
+      const result = await syncInventory();
+      res.json(result);
+    } catch (err: any) {
+      log(`Inventory sync error: ${err.message}`, "inventory-sync");
+      res.status(500).json({ message: err.message });
+    }
+  });
+
+  app.post("/api/sales/sync", async (req: Request, res: Response) => {
+    if (!isDbAvailable()) { res.status(503).json({ message: "Database not available" }); return; }
+    const { startDate, endDate } = req.body as { startDate?: string; endDate?: string };
+    if (!startDate || !endDate) {
+      res.status(400).json({ message: "startDate and endDate are required" });
+      return;
+    }
+    try {
+      const result = await syncSalesData(startDate, endDate);
+      res.json(result);
+    } catch (err: any) {
+      log(`Sales sync error: ${err.message}`, "sales-sync");
+      res.status(500).json({ message: err.message });
+    }
+  });
+
+  app.get("/api/sheets/sync", async (_req: Request, res: Response) => {
+    if (!isDbAvailable()) { res.status(503).json({ message: "Database not available" }); return; }
+    const credPath = process.env.GOOGLE_CREDENTIALS_PATH;
+    if (!credPath || !fs.existsSync(credPath)) {
+      res.status(400).json({ message: "Google credentials file not found" });
+      return;
+    }
+    try {
+      const result = await runSheetsSync();
+      res.json(result);
+    } catch (err: any) {
+      log(`Sheets sync error: ${err.message}`, "sheets");
+      res.status(500).json({ message: err.message });
+    }
+  });
+
+  app.get("/api/suppression/sync", async (_req: Request, res: Response) => {
+    if (!isDbAvailable()) { res.status(503).json({ message: "Database not available" }); return; }
+    try {
+      const result = await syncSuppressionData();
+      res.json(result);
+    } catch (err: any) {
+      log(`Suppression sync error: ${err.message}`, "suppression-sync");
+      res.status(500).json({ message: err.message });
+    }
+  });
+
+  // === Archive / unarchive ===
+  app.put("/api/asins/archive", async (req: Request, res: Response) => {
+    const { asins: asinList, archive } = req.body as { asins: string[]; archive: boolean };
+    if (!asinList || !Array.isArray(asinList) || asinList.length === 0) {
+      res.status(400).json({ message: "No ASINs provided" });
+      return;
+    }
+    if (!isDbAvailable()) { res.status(503).json({ message: "Database not available" }); return; }
+    try {
+      await query(`UPDATE asins SET is_active = $2 WHERE asin = ANY($1::text[])`, [asinList, !archive]);
+      res.json({ count: asinList.length, archived: archive });
+    } catch (err: any) {
+      res.status(500).json({ message: err.message });
+    }
+  });
+
+  // === Tags ===
+  app.get("/api/tags", async (_req: Request, res: Response) => {
+    if (!isDbAvailable()) { res.json([]); return; }
+    try {
+      const result = await query(`SELECT id, name, color FROM tags ORDER BY name`);
+      res.json(result.rows);
+    } catch (err: any) { res.status(500).json({ message: err.message }); }
+  });
+
+  app.post("/api/tags", async (req: Request, res: Response) => {
+    const { name } = req.body as { name?: string };
+    if (!name || !name.trim()) { res.status(400).json({ message: "Tag name required" }); return; }
+    if (!isDbAvailable()) { res.status(503).json({ message: "Database not available" }); return; }
+    try {
+      const existing = await query(`SELECT id, name, color FROM tags WHERE LOWER(name) = LOWER($1)`, [name.trim()]);
+      if (existing.rows.length > 0) { res.json(existing.rows[0]); return; }
+      const color = TAG_COLORS[Math.floor(Math.random() * TAG_COLORS.length)];
+      const result = await query(
+        `INSERT INTO tags (name, color) VALUES ($1, $2) RETURNING id, name, color`,
+        [name.trim(), color]
+      );
+      res.json(result.rows[0]);
+    } catch (err: any) { res.status(500).json({ message: err.message }); }
+  });
+
+  app.put("/api/asins/:asin/tags", async (req: Request, res: Response) => {
+    const { asin } = req.params;
+    const { tagIds } = req.body as { tagIds?: string[] };
+    if (!isDbAvailable()) { res.status(503).json({ message: "Database not available" }); return; }
+    try {
+      const asinRow = await query(`SELECT id FROM asins WHERE asin = $1`, [asin]);
+      if (asinRow.rows.length === 0) { res.status(404).json({ message: "ASIN not found" }); return; }
+      const asinId = asinRow.rows[0].id;
+      await query(`DELETE FROM asin_tags WHERE asin_id = $1`, [asinId]);
+      if (tagIds && tagIds.length > 0) {
+        for (const tagId of tagIds) {
+          await query(`INSERT INTO asin_tags (asin_id, tag_id) VALUES ($1, $2) ON CONFLICT DO NOTHING`, [asinId, tagId]);
+        }
+      }
+      const tags = await query(
+        `SELECT t.id, t.name, t.color FROM asin_tags at JOIN tags t ON t.id = at.tag_id WHERE at.asin_id = $1 ORDER BY t.name`,
+        [asinId]
+      );
+      res.json(tags.rows);
+    } catch (err: any) { res.status(500).json({ message: err.message }); }
+  });
+
+  // === Notes ===
+  app.put("/api/asins/:asin/notes", async (req: Request, res: Response) => {
+    const { asin } = req.params;
+    const { notes } = req.body as { notes?: string };
+    if (!isDbAvailable()) { res.status(503).json({ message: "Database not available" }); return; }
+    try {
+      await query(`UPDATE asins SET notes = $2 WHERE asin = $1`, [asin, notes ?? null]);
+      res.json({ ok: true });
+    } catch (err: any) { res.status(500).json({ message: err.message }); }
+  });
+
+  // === Buy Link ===
+  app.put("/api/asins/:asin/buy-link", async (req: Request, res: Response) => {
+    const { asin } = req.params;
+    const { buyLink: rawLink } = req.body as { buyLink?: string };
+    if (!isDbAvailable()) { res.status(503).json({ message: "Database not available" }); return; }
+    try {
+      const cleaned = rawLink ? cleanBuyLink(rawLink) : null;
+      const supplier = cleaned ? extractDomain(cleaned) : null;
+      await query(`UPDATE asins SET buy_link = $2, supplier = $3 WHERE asin = $1`, [asin, cleaned, supplier]);
+      res.json({ buyLink: cleaned, supplier });
+    } catch (err: any) { res.status(500).json({ message: err.message }); }
+  });
+
+  // === View Presets ===
+  app.get("/api/view-presets", async (_req: Request, res: Response) => {
+    if (!isDbAvailable()) { res.json([]); return; }
+    try {
+      const result = await query(`SELECT id, name, description, config, is_default, created_by, created_at FROM view_presets ORDER BY is_default DESC, name`);
+      res.json(result.rows);
+    } catch (err: any) { res.status(500).json({ message: err.message }); }
+  });
+
+  app.post("/api/view-presets", async (req: Request, res: Response) => {
+    const { name, config } = req.body as { name?: string; config?: any };
+    if (!name || !config) { res.status(400).json({ message: "name and config required" }); return; }
+    if (!isDbAvailable()) { res.status(503).json({ message: "Database not available" }); return; }
+    try {
+      const result = await query(
+        `INSERT INTO view_presets (name, config, is_default) VALUES ($1, $2, FALSE) RETURNING id, name, config, is_default`,
+        [name, JSON.stringify(config)]
+      );
+      res.json(result.rows[0]);
+    } catch (err: any) { res.status(500).json({ message: err.message }); }
+  });
+
+  app.put("/api/view-presets/:id", async (req: Request, res: Response) => {
+    const { id } = req.params;
+    const { name, config } = req.body as { name?: string; config?: any };
+    if (!isDbAvailable()) { res.status(503).json({ message: "Database not available" }); return; }
+    try {
+      const updates: string[] = [];
+      const params: any[] = [id];
+      if (name) { params.push(name); updates.push(`name = $${params.length}`); }
+      if (config) { params.push(JSON.stringify(config)); updates.push(`config = $${params.length}`); }
+      if (updates.length === 0) { res.status(400).json({ message: "Nothing to update" }); return; }
+      updates.push(`updated_at = NOW()`);
+      await query(`UPDATE view_presets SET ${updates.join(", ")} WHERE id = $1`, params);
+      res.json({ ok: true });
+    } catch (err: any) { res.status(500).json({ message: err.message }); }
+  });
+
+  app.delete("/api/view-presets/:id", async (req: Request, res: Response) => {
+    const { id } = req.params;
+    if (!isDbAvailable()) { res.status(503).json({ message: "Database not available" }); return; }
+    try {
+      await query(`DELETE FROM view_presets WHERE id = $1 AND is_default = FALSE`, [id]);
+      res.json({ ok: true });
+    } catch (err: any) { res.status(500).json({ message: err.message }); }
+  });
+
+  // === Stock/Sales History ===
+  app.get("/api/asins/:asin/history", async (req: Request, res: Response) => {
+    const { asin } = req.params;
+    const { startDate, endDate } = req.query as { startDate?: string; endDate?: string };
+    if (!isDbAvailable()) { res.status(503).json({ message: "Database not available" }); return; }
+    try {
+      const asinRow = await query(`SELECT id FROM asins WHERE asin = $1`, [asin]);
+      if (asinRow.rows.length === 0) { res.status(404).json({ message: "ASIN not found" }); return; }
+      const asinId = asinRow.rows[0].id;
+
+      const salesRes = await query(
+        `SELECT sale_date AS date, units_sold, revenue FROM sales_daily WHERE asin_id = $1 AND sale_date >= $2 AND sale_date <= $3 ORDER BY sale_date`,
+        [asinId, startDate ?? "2020-01-01", endDate ?? "2099-12-31"]
+      );
+
+      const invRes = await query(
+        `SELECT DISTINCT ON (DATE(snapshot_at)) DATE(snapshot_at) AS date, available_fba, reserved,
+           inbound_shipped + inbound_receiving AS inbound
+         FROM inventory_snapshots WHERE asin_id = $1 AND snapshot_at >= $2::date AND snapshot_at <= ($3::date + 1)
+         ORDER BY DATE(snapshot_at), snapshot_at DESC`,
+        [asinId, startDate ?? "2020-01-01", endDate ?? "2099-12-31"]
+      );
+
+      const latestInv = await query(
+        `SELECT available_fba, reserved, inbound_shipped + inbound_receiving AS inbound, ordered_qty FROM inventory_snapshots WHERE asin_id = $1 ORDER BY snapshot_at DESC LIMIT 1`,
+        [asinId]
+      );
+      const estRow = await query(`SELECT cogs, ordered_qty FROM asin_estimates WHERE asin = $1`, [asin]);
+      const inv = latestInv.rows[0];
+      const est = estRow.rows[0];
+      const stock = parseInt(inv?.available_fba) || 0;
+      const cogs = parseFloat(est?.cogs) || 0;
+      const totalSold = salesRes.rows.reduce((s: number, r: any) => s + (parseInt(r.units_sold) || 0), 0);
+      const daysWithSales = salesRes.rows.filter((r: any) => parseInt(r.units_sold) > 0).length;
+      const velocity = daysWithSales > 0 ? totalSold / daysWithSales : 0;
+
+      res.json({
+        sales: salesRes.rows.map((r: any) => ({ date: r.date, units_sold: parseInt(r.units_sold) || 0, revenue: parseFloat(r.revenue) || 0 })),
+        inventory: invRes.rows.map((r: any) => ({ date: r.date, available_fba: parseInt(r.available_fba) || 0, reserved: parseInt(r.reserved) || 0, inbound: parseInt(r.inbound) || 0 })),
+        metrics: {
+          days_left: velocity > 0 ? Math.round(stock / velocity) : null,
+          velocity: Math.round(velocity * 10) / 10,
+          stock_value: Math.round(stock * cogs * 100) / 100,
+          reserved: parseInt(inv?.reserved) || 0,
+          inbound: parseInt(inv?.inbound) || 0,
+          ordered: parseInt(est?.ordered_qty) || 0,
+        },
+      });
+    } catch (err: any) {
+      res.status(500).json({ message: err.message });
+    }
+  });
+
+  // === Hazmat surcharge settings ===
+  app.get("/api/settings/hazmat", async (_req: Request, res: Response) => {
+    if (!isDbAvailable()) { res.json({ shipSurcharge: 0, prepSurcharge: 0 }); return; }
+    try {
+      const ship = await query(`SELECT value FROM settings WHERE key = 'hazmat_ship_surcharge'`);
+      const prep = await query(`SELECT value FROM settings WHERE key = 'hazmat_prep_surcharge'`);
+      res.json({
+        shipSurcharge: parseFloat(ship.rows[0]?.value) || 0,
+        prepSurcharge: parseFloat(prep.rows[0]?.value) || 0,
+      });
+    } catch (err: any) { res.status(500).json({ message: err.message }); }
+  });
+
+  app.put("/api/settings/hazmat", async (req: Request, res: Response) => {
+    const { shipSurcharge, prepSurcharge } = req.body as { shipSurcharge?: number; prepSurcharge?: number };
+    if (!isDbAvailable()) { res.status(503).json({ message: "Database not available" }); return; }
+    try {
+      if (shipSurcharge != null) await query(`UPDATE settings SET value = $1 WHERE key = 'hazmat_ship_surcharge'`, [String(shipSurcharge)]);
+      if (prepSurcharge != null) await query(`UPDATE settings SET value = $1 WHERE key = 'hazmat_prep_surcharge'`, [String(prepSurcharge)]);
+      res.json({ ok: true });
+    } catch (err: any) { res.status(500).json({ message: err.message }); }
+  });
+
   app.post("/api/analyze", async (req: Request, res: Response) => {
     const { asins } = req.body as { asins: AsinInput[] };
 
@@ -462,12 +1296,20 @@ export async function registerRoutes(
         retryQueue.push({ input, attempt: 1, result });
         log(`Queued ${input.asin} for retry (fees=${retryNeeded.fees}, pricing=${retryNeeded.pricing}, catalog=${retryNeeded.catalog})`, "retry");
         if (!retryNeeded.fees && !retryNeeded.pricing) {
-          allResults.set(input.asin, result);
-          res.write(JSON.stringify({ type: "result", data: result }) + "\n");
+          writeResult(res, allResults, input.asin, result);
         }
       } else {
-        allResults.set(input.asin, result);
-        res.write(JSON.stringify({ type: "result", data: result }) + "\n");
+        writeResult(res, allResults, input.asin, result);
+      }
+
+      // Save tags and notes from CSV import (fire-and-forget)
+      if (isDbAvailable()) {
+        if (input.tags && input.tags.length > 0) {
+          upsertTagsForAsin(input.asin, input.tags).catch((err: any) => log(`Tags error for ${input.asin}: ${err.message}`, "db"));
+        }
+        if (input.notes) {
+          appendNotesForAsin(input.asin, input.notes).catch((err: any) => log(`Notes error for ${input.asin}: ${err.message}`, "db"));
+        }
       }
 
       if ((i + 1) % BATCH_SIZE === 0 && i < asins.length - 1) {
@@ -561,13 +1403,7 @@ export async function registerRoutes(
               const finalResult = retryError
                 ? { ...retried, error: retryError }
                 : retried;
-              if (!allResults.has(item.input.asin)) {
-                allResults.set(item.input.asin, finalResult);
-                res.write(JSON.stringify({ type: "result", data: finalResult }) + "\n");
-              } else {
-                allResults.set(item.input.asin, finalResult);
-                res.write(JSON.stringify({ type: "result", data: { ...finalResult, _update: true } }) + "\n");
-              }
+              writeResult(res, allResults, item.input.asin, finalResult, allResults.has(item.input.asin));
             }
           } catch (err: any) {
             log(`Retry error for ${item.input.asin}: ${err.message}`, "retry");
@@ -601,13 +1437,7 @@ export async function registerRoutes(
                 ...finalItem,
                 error: errorMsg ?? finalItem.error,
               };
-              if (!allResults.has(item.input.asin)) {
-                allResults.set(item.input.asin, errorResult);
-                res.write(JSON.stringify({ type: "result", data: errorResult }) + "\n");
-              } else {
-                allResults.set(item.input.asin, errorResult);
-                res.write(JSON.stringify({ type: "result", data: { ...errorResult, _update: true } }) + "\n");
-              }
+              writeResult(res, allResults, item.input.asin, errorResult, allResults.has(item.input.asin));
             } else {
               item.attempt = attempt + 1;
             }
@@ -634,8 +1464,7 @@ export async function registerRoutes(
             ...item.result,
             error: errorMsg,
           };
-          allResults.set(item.input.asin, errorResult);
-          res.write(JSON.stringify({ type: "result", data: errorResult }) + "\n");
+          writeResult(res, allResults, item.input.asin, errorResult);
         }
       }
       if (uncalculated.length > 0) {
@@ -645,6 +1474,15 @@ export async function registerRoutes(
 
     res.write(JSON.stringify({ type: "complete" }) + "\n");
     res.end();
+
+    // Background: PO sheet sync + suppression refresh
+    const credPath = process.env.GOOGLE_CREDENTIALS_PATH;
+    if (isDbAvailable() && credPath && fs.existsSync(credPath) && process.env.GOOGLE_SHEET_ID) {
+      runSheetsSync().catch((err: any) => log(`Post-analysis sheets sync error: ${err.message}`, "sheets"));
+    }
+    if (isDbAvailable()) {
+      syncSuppressionData().catch((err: any) => log(`Post-analysis suppression sync error: ${err.message}`, "suppression-sync"));
+    }
   });
 
   return httpServer;

@@ -113,6 +113,39 @@ export function SettingsDialog({ onSettingsChange }: SettingsDialogProps) {
           <Separator />
 
           <div>
+            <h3 className="text-sm font-medium text-muted-foreground mb-3">Hazmat Surcharges</h3>
+            <p className="text-xs text-muted-foreground mb-3">Per-unit surcharges added to hazmat products on top of standard costs</p>
+            <div className="space-y-3">
+              <div className="flex items-center justify-between gap-4">
+                <Label htmlFor="hazmatShip" className="text-sm whitespace-nowrap">Hazmat Shipping ($)</Label>
+                <Input
+                  id="hazmatShip"
+                  type="number"
+                  step="0.01"
+                  min="0"
+                  value={settings.hazmatShipSurcharge ?? 0}
+                  onChange={(e) => updateField("hazmatShipSurcharge", e.target.value)}
+                  className="w-28 text-right"
+                />
+              </div>
+              <div className="flex items-center justify-between gap-4">
+                <Label htmlFor="hazmatPrep" className="text-sm whitespace-nowrap">Hazmat Prep ($)</Label>
+                <Input
+                  id="hazmatPrep"
+                  type="number"
+                  step="0.01"
+                  min="0"
+                  value={settings.hazmatPrepSurcharge ?? 0}
+                  onChange={(e) => updateField("hazmatPrepSurcharge", e.target.value)}
+                  className="w-28 text-right"
+                />
+              </div>
+            </div>
+          </div>
+
+          <Separator />
+
+          <div>
             <h3 className="text-sm font-medium text-muted-foreground mb-3">Profitability Thresholds</h3>
             <div className="space-y-3">
               <div className="flex items-center justify-between gap-4">

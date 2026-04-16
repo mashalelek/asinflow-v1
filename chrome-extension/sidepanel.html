@@ -1,0 +1,139 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>AsinFlow</title>
+  <link rel="stylesheet" href="sidepanel.css">
+</head>
+<body>
+  <!-- Connection Status Bar -->
+  <div id="status-bar" class="status-bar disconnected">
+    <span class="status-dot"></span>
+    <span id="status-text">Checking connection...</span>
+  </div>
+
+  <!-- Empty State -->
+  <div id="empty-state" class="empty-state">
+    <div class="empty-icon">&#128269;</div>
+    <p>Navigate to an Amazon product page to get started</p>
+  </div>
+
+  <!-- Product Content (hidden until product data arrives) -->
+  <div id="product-content" style="display:none;">
+    <!-- Product Header -->
+    <div class="product-header">
+      <img id="product-image" class="product-image" src="" alt="">
+      <div class="product-info">
+        <a id="product-asin" class="product-asin" href="#" target="_blank"></a>
+        <div id="product-title" class="product-title"></div>
+        <div id="product-brand-cat" class="product-meta"></div>
+      </div>
+    </div>
+
+    <!-- Dimensions/Weight Info -->
+    <div id="dimensions-info" class="dimensions-info" style="display:none;"></div>
+
+    <!-- Input Section -->
+    <div class="input-section">
+      <div class="input-group cogs-group">
+        <label for="cogs-input">COGS (Cost of Goods)</label>
+        <div class="input-prefix">
+          <span>$</span>
+          <input type="number" id="cogs-input" placeholder="0.00" step="0.01" min="0">
+        </div>
+      </div>
+      <div class="input-group">
+        <label for="buy-link-input">Buy Link (optional)</label>
+        <input type="url" id="buy-link-input" placeholder="https://supplier.com/...">
+      </div>
+    </div>
+
+    <!-- Fee Breakdown -->
+    <div id="fee-breakdown" class="fee-breakdown" style="display:none;">
+      <div class="fee-section">
+        <div class="fee-section-title">Sale Price</div>
+        <div class="fee-row sale-price-row">
+          <label for="sale-price-input">Sale Price</label>
+          <div class="sale-price-control">
+            <div class="input-prefix sale-price-prefix">
+              <span>$</span>
+              <input type="number" id="sale-price-input" placeholder="0.00" step="0.01" min="0">
+            </div>
+            <button type="button" id="sale-price-reset" class="sale-price-reset" title="Reset to scraped price" aria-label="Reset to scraped price" style="display:none;">&#8634;</button>
+          </div>
+        </div>
+      </div>
+
+      <div class="fee-divider"></div>
+
+      <div class="fee-section">
+        <div class="fee-section-title">Amazon Fees</div>
+        <div class="fee-row">
+          <span>Referral Fee <span id="fee-referral-pct" class="fee-pct"></span></span>
+          <span id="fee-referral" class="fee-value negative">--</span>
+        </div>
+        <div class="fee-row">
+          <span>FBA Fee</span>
+          <span id="fee-fba" class="fee-value negative">--</span>
+        </div>
+        <div class="fee-row">
+          <span>Low Inventory Surcharge</span>
+          <span id="fee-low-inv" class="fee-value negative">--</span>
+        </div>
+      </div>
+
+      <div class="fee-divider"></div>
+
+      <div class="fee-section">
+        <div class="fee-section-title">Your Costs</div>
+        <div class="fee-row">
+          <span>Inbound Shipping</span>
+          <span id="fee-inbound" class="fee-value negative">--</span>
+        </div>
+        <div class="fee-row">
+          <span>Prep Cost</span>
+          <span id="fee-prep" class="fee-value negative">--</span>
+        </div>
+        <div class="fee-row" id="fee-additional-row" style="display:none;">
+          <span>Additional Fees</span>
+          <span id="fee-additional" class="fee-value negative">--</span>
+        </div>
+        <div class="fee-row">
+          <span>COGS</span>
+          <span id="fee-cogs" class="fee-value negative">--</span>
+        </div>
+      </div>
+
+      <div class="fee-divider thick"></div>
+
+      <div class="fee-section bottom-line">
+        <div class="fee-row profit-row">
+          <span>Profit</span>
+          <span id="fee-profit" class="fee-value">--</span>
+        </div>
+        <div class="fee-row">
+          <span>Margin</span>
+          <span id="fee-margin" class="fee-value">--</span>
+        </div>
+        <div class="fee-row">
+          <span>ROI</span>
+          <span id="fee-roi" class="fee-value">--</span>
+        </div>
+      </div>
+    </div>
+
+    <!-- Profitability Indicator -->
+    <div id="profitability-indicator" class="profitability-indicator" style="display:none;"></div>
+
+    <!-- Import Button -->
+    <div class="import-section">
+      <button id="import-btn" class="import-btn" disabled>Import to AsinFlow</button>
+      <div id="import-feedback" class="import-feedback" style="display:none;"></div>
+    </div>
+  </div>
+
+  <script src="fee-engine/feeEngine.js"></script>
+  <script src="sidepanel.js"></script>
+</body>
+</html>

@@ -13,10 +13,11 @@ export function loadColumnConfig(): ColumnConfig {
     if (stored) {
       const parsed = JSON.parse(stored);
       const savedOrder: ColumnId[] = parsed.order as ColumnId[];
-      const savedVisible: Set<ColumnId> = new Set(parsed.visible as ColumnId[]);
-
       const allKnownIds = new Set(ALL_COLUMNS.map((c) => c.id));
-      const savedSet = new Set(savedOrder);
+      const savedVisible: Set<ColumnId> = new Set((parsed.visible as ColumnId[]).filter((id: ColumnId) => allKnownIds.has(id)));
+      // Remove stale column IDs that no longer exist
+      const cleanedOrder = savedOrder.filter((id: ColumnId) => allKnownIds.has(id));
+      const savedSet = new Set(cleanedOrder);
 
       const missingCols = ALL_COLUMNS.filter(
         (c) => allKnownIds.has(c.id) && !savedSet.has(c.id)
@@ -24,7 +25,7 @@ export function loadColumnConfig(): ColumnConfig {
 
       if (missingCols.length > 0) {
         const defaultOrder = [...DEFAULT_COLUMNS];
-        const merged = [...savedOrder];
+        const merged = [...cleanedOrder];
 
         for (const col of missingCols) {
           const defaultIdx = defaultOrder.indexOf(col.id);
@@ -47,7 +48,7 @@ export function loadColumnConfig(): ColumnConfig {
         return { order: merged, visible: savedVisible };
       }
 
-      return { order: savedOrder, visible: savedVisible };
+      return { order: cleanedOrder, visible: savedVisible };
     }
   } catch {}
   return getDefaultConfig();

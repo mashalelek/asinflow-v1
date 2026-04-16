@@ -8,9 +8,10 @@ import { ColumnMappingModal } from "@/components/column-mapping-modal";
 interface FileUploadProps {
   onFileProcessed: (asins: AsinInput[]) => void;
   isAnalyzing: boolean;
+  compact?: boolean;
 }
 
-export function FileUpload({ onFileProcessed, isAnalyzing }: FileUploadProps) {
+export function FileUpload({ onFileProcessed, isAnalyzing, compact }: FileUploadProps) {
   const [file, setFile] = useState<File | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [isDragOver, setIsDragOver] = useState(false);
@@ -106,6 +107,25 @@ export function FileUpload({ onFileProcessed, isAnalyzing }: FileUploadProps) {
   const handleDownloadTemplate = () => {
     window.open("/api/download-template", "_blank");
   };
+
+  if (compact) {
+    return (
+      <>
+        <Button
+          variant="outline"
+          size="sm"
+          onClick={() => inputRef.current?.click()}
+          disabled={isAnalyzing}
+          className="h-8 text-xs"
+        >
+          <Upload className="h-3.5 w-3.5 mr-1.5" />
+          {file ? file.name : "Upload File"}
+        </Button>
+        <input ref={inputRef} type="file" accept=".csv,.xlsx,.xls" onChange={handleChange} className="hidden" />
+        <ColumnMappingModal open={showMapping} headers={headers} onCancel={handleMappingCancel} onContinue={handleMappingContinue} />
+      </>
+    );
+  }
 
   return (
     <>

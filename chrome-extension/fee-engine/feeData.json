@@ -1,0 +1,112 @@
+{
+  "_meta": {
+    "version": "2026.1",
+    "effectiveDate": "2026-01-15",
+    "lastUpdated": "2026-04-08",
+    "source": "Amazon Seller Central 2026 fee schedule",
+    "notes": "Non-peak, non-apparel rates. Update annually."
+  },
+  "fbaFulfillmentFees": {
+    "Small Standard": {
+      "weightBrackets": [
+        { "maxOz": 2,  "under10": 2.29, "10to50": 2.66, "over50": 3.17 },
+        { "maxOz": 4,  "under10": 2.39, "10to50": 2.76, "over50": 3.27 },
+        { "maxOz": 6,  "under10": 2.49, "10to50": 2.86, "over50": 3.37 },
+        { "maxOz": 8,  "under10": 2.59, "10to50": 2.96, "over50": 3.47 },
+        { "maxOz": 10, "under10": 2.69, "10to50": 3.06, "over50": 3.57 },
+        { "maxOz": 12, "under10": 2.79, "10to50": 3.15, "over50": 3.66 },
+        { "maxOz": 16, "under10": 2.98, "10to50": 3.28, "over50": 3.79 }
+      ]
+    },
+    "Large Standard": {
+      "weightBrackets": [
+        { "maxOz": 4,   "under10": 2.69, "10to50": 3.28, "over50": 3.59 },
+        { "maxOz": 8,   "under10": 2.89, "10to50": 3.42, "over50": 3.73 },
+        { "maxOz": 12,  "under10": 3.15, "10to50": 3.64, "over50": 3.95 },
+        { "maxOz": 16,  "under10": 3.50, "10to50": 4.04, "over50": 4.35 },
+        { "maxOz": 24,  "under10": 4.09, "10to50": 4.44, "over50": 4.75 },
+        { "maxOz": 32,  "under10": 4.34, "10to50": 4.64, "over50": 4.95 },
+        { "maxOz": 40,  "under10": 4.66, "10to50": 4.92, "over50": 5.23 },
+        { "maxOz": 48,  "under10": 4.92, "10to50": 5.08, "over50": 5.39 }
+      ],
+      "overweightSurcharge": {
+        "thresholdOz": 48,
+        "perLbAbove": 0.38,
+        "baseFee": { "under10": 4.92, "10to50": 5.08, "over50": 5.39 }
+      }
+    },
+    "Small Bulky": {
+      "weightBrackets": [
+        { "maxLb": 1,  "under10": 6.49, "10to50": 7.05, "over50": 7.36 },
+        { "maxLb": 2,  "under10": 6.79, "10to50": 7.35, "over50": 7.66 },
+        { "maxLb": 3,  "under10": 7.09, "10to50": 7.55, "over50": 7.86 },
+        { "maxLb": 5,  "under10": 7.69, "10to50": 8.15, "over50": 8.46 }
+      ],
+      "overweightSurcharge": {
+        "thresholdLb": 5,
+        "perLbAbove": 0.38,
+        "baseFee": { "under10": 7.69, "10to50": 8.15, "over50": 8.46 }
+      }
+    },
+    "Large Bulky": {
+      "baseFee": { "under10": 9.33, "10to50": 9.89, "over50": 10.20 },
+      "perLbAboveFirst": 0.38,
+      "firstLbThreshold": 1
+    },
+    "Extra-Large 0-50lb": { "baseFee": 26.33, "perLbAboveFirst": 0.38, "firstLbThreshold": 1 },
+    "Extra-Large 50-70lb": { "baseFee": 40.12, "perLbAboveFirst": 0.75, "firstLbThreshold": 51 },
+    "Extra-Large 70-150lb": { "baseFee": 54.81, "perLbAboveFirst": 0.75, "firstLbThreshold": 71 },
+    "Extra-Large 150+lb": { "baseFee": 194.95, "perLbAboveFirst": 0.19, "firstLbThreshold": 151 }
+  },
+  "referralFees": {
+    "minimumFee": 0.30,
+    "defaultRate": 0.15,
+    "defaultMinFee": 0.30,
+    "categories": {
+      "Amazon Device Accessories": { "rate": 0.45, "minFee": 0.30 },
+      "Appliances - Compact": { "tiers": [{"maxPrice":300,"rate":0.15},{"maxPrice":null,"rate":0.08}], "minFee": 0.30 },
+      "Appliances - Full-size": { "rate": 0.08, "minFee": 0.30 },
+      "Automotive & Powersports": { "rate": 0.12, "minFee": 0.30 },
+      "Baby Products": { "tiers": [{"maxPrice":10,"rate":0.08},{"maxPrice":null,"rate":0.15}], "minFee": 0.30 },
+      "Backpacks, Handbags & Luggage": { "rate": 0.15, "minFee": 0.30 },
+      "Base Equipment Power Tools": { "rate": 0.12, "minFee": 0.30 },
+      "Beauty, Health & Personal Care": { "tiers": [{"maxPrice":10,"rate":0.08},{"maxPrice":null,"rate":0.15}], "minFee": 0.30 },
+      "Books": { "rate": 0.15, "minFee": 0.00, "closingFee": 1.80 },
+      "Business, Industrial & Scientific": { "rate": 0.12, "minFee": 0.30 },
+      "Clothing & Accessories": { "tiers": [{"maxPrice":15,"rate":0.05},{"maxPrice":20,"rate":0.10},{"maxPrice":null,"rate":0.17}], "minFee": 0.30 },
+      "Computers": { "rate": 0.08, "minFee": 0.30 },
+      "Consumer Electronics": { "rate": 0.08, "minFee": 0.30 },
+      "DVD": { "rate": 0.15, "minFee": 0.00, "closingFee": 1.80 },
+      "Electronics Accessories": { "tiers": [{"maxPrice":100,"rate":0.15},{"maxPrice":null,"rate":0.08}], "minFee": 0.30 },
+      "Everything Else": { "rate": 0.15, "minFee": 0.30 },
+      "Eyewear": { "rate": 0.15, "minFee": 0.30 },
+      "Fine Art": { "tiers": [{"maxPrice":100,"rate":0.20},{"maxPrice":1000,"rate":0.15},{"maxPrice":5000,"rate":0.10},{"maxPrice":null,"rate":0.05}], "minFee": 0.00 },
+      "Footwear": { "rate": 0.15, "minFee": 0.30 },
+      "Furniture": { "tiers": [{"maxPrice":200,"rate":0.15},{"maxPrice":null,"rate":0.10}], "minFee": 0.30 },
+      "Gift Cards": { "rate": 0.20, "minFee": 0.00 },
+      "Grocery & Gourmet Food": { "tiers": [{"maxPrice":15,"rate":0.08},{"maxPrice":null,"rate":0.15}], "minFee": 0.30 },
+      "Home & Garden": { "rate": 0.15, "minFee": 0.30 },
+      "Jewelry": { "tiers": [{"maxPrice":250,"rate":0.20},{"maxPrice":null,"rate":0.05}], "minFee": 0.30 },
+      "Kitchen": { "rate": 0.15, "minFee": 0.30 },
+      "Lawn & Garden": { "rate": 0.15, "minFee": 0.30 },
+      "Lawn Mowers & Snow Throwers": { "tiers": [{"maxPrice":500,"rate":0.15},{"maxPrice":null,"rate":0.08}], "minFee": 0.30 },
+      "Mattresses": { "rate": 0.15, "minFee": 0.30 },
+      "Media - Software & Video Games": { "rate": 0.15, "minFee": 0.00, "closingFee": 1.80 },
+      "Media - Music & Video": { "rate": 0.15, "minFee": 0.00, "closingFee": 1.80 },
+      "Musical Instruments & AV Production": { "rate": 0.15, "minFee": 0.30 },
+      "Office Products": { "rate": 0.15, "minFee": 0.30 },
+      "Pet Supplies": { "rate": 0.15, "minFee": 0.30 },
+      "Sports & Outdoors": { "rate": 0.15, "minFee": 0.30 },
+      "Tires": { "rate": 0.10, "minFee": 0.30 },
+      "Televisions": { "rate": 0.08, "minFee": 0.30 },
+      "Tools & Home Improvement": { "rate": 0.15, "minFee": 0.30 },
+      "Toys & Games": { "rate": 0.15, "minFee": 0.30 },
+      "Video Game Consoles": { "rate": 0.08, "minFee": 0.00 },
+      "Watches": { "tiers": [{"maxPrice":1500,"rate":0.16},{"maxPrice":null,"rate":0.03}], "minFee": 0.30 }
+    }
+  },
+  "variableClosingFee": {
+    "amount": 1.80,
+    "appliesTo": ["Books", "DVD", "Media - Software & Video Games", "Media - Music & Video"]
+  }
+}

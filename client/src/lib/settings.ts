@@ -7,6 +7,8 @@ export const defaultSettings: Settings = {
   prepCost: 0,
   storageFee: 0,
   lowInventorySurcharge: 0.26,
+  hazmatShipSurcharge: 0,
+  hazmatPrepSurcharge: 0,
   minRoiThreshold: 15,
   minMarginThreshold: 10,
 };

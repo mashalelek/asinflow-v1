@@ -1,0 +1,137 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>AsinFlow Extension Settings</title>
+  <style>
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+      background: #1a1a2e;
+      color: #e0e0e0;
+      padding: 32px;
+      max-width: 500px;
+      margin: 0 auto;
+    }
+    h1 {
+      font-size: 20px;
+      margin-bottom: 24px;
+      color: #00b4d8;
+    }
+    .form-group {
+      margin-bottom: 16px;
+    }
+    label {
+      display: block;
+      font-size: 12px;
+      font-weight: 600;
+      color: #94a3b8;
+      margin-bottom: 4px;
+      text-transform: uppercase;
+      letter-spacing: 0.5px;
+    }
+    input[type="text"], input[type="url"] {
+      width: 100%;
+      padding: 8px 12px;
+      background: #0f3460;
+      border: 1px solid #1e40af;
+      border-radius: 6px;
+      color: #e0e0e0;
+      font-size: 14px;
+      outline: none;
+    }
+    input:focus {
+      border-color: #0ea5e9;
+    }
+    .checkbox-group {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+    }
+    .checkbox-group input[type="checkbox"] {
+      width: 16px;
+      height: 16px;
+      accent-color: #0ea5e9;
+    }
+    .checkbox-group label {
+      text-transform: none;
+      font-size: 14px;
+      color: #e0e0e0;
+      margin-bottom: 0;
+    }
+    .btn-row {
+      display: flex;
+      gap: 8px;
+      margin-top: 24px;
+    }
+    button {
+      padding: 8px 16px;
+      border: none;
+      border-radius: 6px;
+      font-size: 14px;
+      font-weight: 600;
+      cursor: pointer;
+      transition: background 0.2s;
+    }
+    .btn-primary {
+      background: #0ea5e9;
+      color: #fff;
+    }
+    .btn-primary:hover { background: #0284c7; }
+    .btn-secondary {
+      background: #334155;
+      color: #e0e0e0;
+    }
+    .btn-secondary:hover { background: #475569; }
+    #test-result {
+      margin-top: 12px;
+      font-size: 13px;
+      padding: 8px 12px;
+      border-radius: 6px;
+      display: none;
+    }
+    #test-result.success {
+      background: rgba(74, 222, 128, 0.15);
+      color: #4ade80;
+      display: block;
+    }
+    #test-result.error {
+      background: rgba(248, 113, 113, 0.15);
+      color: #f87171;
+      display: block;
+    }
+    #save-result {
+      margin-top: 8px;
+      font-size: 13px;
+      color: #4ade80;
+      display: none;
+    }
+  </style>
+</head>
+<body>
+  <h1>AsinFlow Settings</h1>
+
+  <div class="form-group">
+    <label for="server-url">AsinFlow Server URL</label>
+    <input type="url" id="server-url" placeholder="http://localhost:3000">
+  </div>
+
+  <div class="form-group">
+    <div class="checkbox-group">
+      <input type="checkbox" id="auto-open" checked>
+      <label for="auto-open">Auto-open side panel on Amazon product pages</label>
+    </div>
+  </div>
+
+  <div class="btn-row">
+    <button class="btn-primary" id="save-btn">Save Settings</button>
+    <button class="btn-secondary" id="test-btn">Test Connection</button>
+  </div>
+
+  <div id="test-result"></div>
+  <div id="save-result">Settings saved!</div>
+
+  <script src="options.js"></script>
+</body>
+</html>

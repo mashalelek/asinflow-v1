@@ -38,7 +38,7 @@ async function getAccessToken(): Promise<string> {
   return cachedTokens.accessToken;
 }
 
-async function spApiGet(endpoint: string, params?: Record<string, any>) {
+export async function spApiGet(endpoint: string, params?: Record<string, any>) {
   const token = await getAccessToken();
   const res = await axios.get(
     `https://sellingpartnerapi-na.amazon.com${endpoint}`,
@@ -54,7 +54,7 @@ async function spApiGet(endpoint: string, params?: Record<string, any>) {
   return res.data;
 }
 
-async function spApiPost(endpoint: string, body: any) {
+export async function spApiPost(endpoint: string, body: any) {
   const token = await getAccessToken();
   const res = await axios.post(
     `https://sellingpartnerapi-na.amazon.com${endpoint}`,
@@ -95,6 +95,8 @@ export interface AsinCatalogResult {
   imageUrl: string | null;
   bsrRank: number | null;
   bsrCategory: string | null;
+  isMeltable?: boolean;
+  isHazmat?: boolean;
 }
 
 export async function getPricing(asin: string): Promise<AsinPricingResult> {
@@ -1226,6 +1228,23 @@ export async function getCatalogData(asin: string): Promise<AsinCatalogResult> {
       "weight",
     );
 
+    // Extract meltable/hazmat from product attributes
+    let isMeltable = false;
+    let isHazmat = false;
+    if (attrs) {
+      // Meltable: temperature_rating containing "chilled"/"frozen", or explicit flags
+      const tempRating = (attrs.temperature_rating?.[0]?.value ?? "").toLowerCase();
+      if (tempRating.includes("chilled") || tempRating.includes("frozen") || tempRating.includes("refriger")) isMeltable = true;
+      if (attrs.is_heat_sensitive?.[0]?.value === true || attrs.is_heat_sensitive?.[0]?.value === "true") isMeltable = true;
+      if (attrs.meltable?.[0]?.value === true || attrs.meltable?.[0]?.value === "true") isMeltable = true;
+      // Hazmat/DG: hazmat attribute, DG regulation, safety data sheet, or GHS classification
+      if (attrs.hazmat && attrs.hazmat.length > 0) isHazmat = true;
+      if (attrs.ghs_classification_category?.[0]?.value) isHazmat = true;
+      if (attrs.safety_data_sheet_url?.[0]?.value) isHazmat = true;
+      const dgReg = (attrs.supplier_declared_dg_hz_regulation?.[0]?.value ?? "").toLowerCase();
+      if (dgReg && dgReg !== "not_applicable") isHazmat = true;
+    }
+
     return {
       weightLbs: weightLbs ?? null,
       title,
@@ -1233,6 +1252,8 @@ export async function getCatalogData(asin: string): Promise<AsinCatalogResult> {
       imageUrl,
       bsrRank,
       bsrCategory,
+      isMeltable,
+      isHazmat,
     };
   } catch (err: any) {
     const statusCode = err.response?.status;

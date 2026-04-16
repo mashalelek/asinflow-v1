@@ -46,7 +46,9 @@ export function SummaryCards({ results, priceSource, settings, activeFilter, onF
       r.catalogData.weightLbs,
       prep.value,
       storage.value,
-      settings
+      settings,
+      true,
+      r.isHazmat ?? false
     );
 
     calculated++;

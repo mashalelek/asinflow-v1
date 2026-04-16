@@ -1,0 +1,447 @@
+* {
+  margin: 0;
+  padding: 0;
+  box-sizing: border-box;
+}
+
+body {
+  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+  background: #1a1a2e;
+  color: #e0e0e0;
+  font-size: 13px;
+  line-height: 1.4;
+  min-width: 320px;
+  max-width: 420px;
+}
+
+/* Status Bar */
+.status-bar {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 12px;
+  font-size: 11px;
+  background: #16213e;
+  border-bottom: 1px solid #0f3460;
+}
+
+.status-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  flex-shrink: 0;
+}
+
+.status-bar.connected .status-dot {
+  background: #4ade80;
+  box-shadow: 0 0 4px #4ade80;
+}
+
+.status-bar.disconnected .status-dot {
+  background: #f87171;
+  box-shadow: 0 0 4px #f87171;
+}
+
+#status-text {
+  color: #94a3b8;
+}
+
+/* Empty State */
+.empty-state {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  padding: 60px 20px;
+  text-align: center;
+  color: #64748b;
+}
+
+.empty-icon {
+  font-size: 48px;
+  margin-bottom: 12px;
+}
+
+.empty-state p {
+  font-size: 14px;
+  max-width: 250px;
+}
+
+/* Product Header */
+.product-header {
+  display: flex;
+  gap: 10px;
+  padding: 12px;
+  background: #16213e;
+  border-bottom: 1px solid #0f3460;
+}
+
+.product-image {
+  width: 60px;
+  height: 60px;
+  object-fit: contain;
+  background: #fff;
+  border-radius: 4px;
+  flex-shrink: 0;
+}
+
+.product-info {
+  min-width: 0;
+  flex: 1;
+}
+
+.product-asin {
+  font-size: 12px;
+  font-weight: 600;
+  color: #00b4d8;
+  text-decoration: none;
+}
+
+.product-asin:hover {
+  text-decoration: underline;
+}
+
+.product-title {
+  font-size: 12px;
+  color: #cbd5e1;
+  margin-top: 2px;
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+
+.product-meta {
+  font-size: 11px;
+  color: #64748b;
+  margin-top: 2px;
+}
+
+/* Dimensions Info */
+.dimensions-info {
+  padding: 6px 12px;
+  font-size: 11px;
+  color: #94a3b8;
+  background: #16213e;
+  border-bottom: 1px solid #0f3460;
+}
+
+.dimensions-info.warning {
+  color: #fbbf24;
+}
+
+/* Input Section */
+.input-section {
+  padding: 12px;
+}
+
+.input-group {
+  margin-bottom: 10px;
+}
+
+.input-group label {
+  display: block;
+  font-size: 11px;
+  font-weight: 600;
+  color: #94a3b8;
+  margin-bottom: 4px;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+}
+
+.cogs-group label {
+  color: #00b4d8;
+}
+
+.input-prefix {
+  display: flex;
+  align-items: center;
+  background: #0f3460;
+  border: 1px solid #1e40af;
+  border-radius: 6px;
+  overflow: hidden;
+}
+
+.input-prefix span {
+  padding: 8px 10px;
+  color: #64748b;
+  font-size: 16px;
+  font-weight: 600;
+  background: #0a1628;
+}
+
+.cogs-group .input-prefix {
+  border-color: #0ea5e9;
+}
+
+.cogs-group input {
+  font-size: 18px;
+  font-weight: 600;
+}
+
+.input-prefix input,
+.input-group > input {
+  flex: 1;
+  background: transparent;
+  border: none;
+  color: #e0e0e0;
+  padding: 8px;
+  font-size: 13px;
+  outline: none;
+  width: 100%;
+}
+
+.input-group > input {
+  background: #0f3460;
+  border: 1px solid #1e40af;
+  border-radius: 6px;
+  padding: 8px 10px;
+}
+
+.input-group > input::placeholder,
+.input-prefix input::placeholder {
+  color: #475569;
+}
+
+input:focus {
+  border-color: #0ea5e9 !important;
+}
+
+/* Fee Breakdown */
+.fee-breakdown {
+  padding: 0 12px 12px;
+}
+
+.fee-section-title {
+  font-size: 10px;
+  font-weight: 700;
+  color: #64748b;
+  text-transform: uppercase;
+  letter-spacing: 0.8px;
+  margin-bottom: 4px;
+  margin-top: 8px;
+}
+
+.fee-row {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 3px 0;
+  font-size: 12px;
+}
+
+.fee-row span:first-child {
+  color: #94a3b8;
+}
+
+.fee-value {
+  font-weight: 500;
+  color: #e0e0e0;
+  font-variant-numeric: tabular-nums;
+}
+
+.fee-value.negative {
+  color: #f87171;
+}
+
+.fee-pct {
+  font-size: 10px;
+  color: #64748b;
+}
+
+.sale-price-row .fee-value {
+  font-weight: 700;
+  color: #e0e0e0;
+  font-size: 14px;
+}
+
+.sale-price-row {
+  align-items: center;
+}
+
+.sale-price-row label {
+  color: #94a3b8;
+  font-size: 12px;
+  cursor: pointer;
+}
+
+.sale-price-control {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.input-prefix.sale-price-prefix {
+  padding: 0;
+  border-color: #1e40af;
+  background: #0f3460;
+  min-width: 110px;
+}
+
+.input-prefix.sale-price-prefix span {
+  padding: 5px 8px;
+  font-size: 13px;
+}
+
+.input-prefix.sale-price-prefix input {
+  padding: 5px 6px;
+  font-size: 14px;
+  font-weight: 700;
+  text-align: right;
+  color: #e0e0e0;
+  width: 70px;
+}
+
+.input-prefix.sale-price-prefix.edited {
+  border-color: #f59e0b;
+}
+
+.sale-price-reset {
+  background: transparent;
+  border: 1px solid #334155;
+  color: #94a3b8;
+  border-radius: 6px;
+  width: 26px;
+  height: 26px;
+  font-size: 14px;
+  line-height: 1;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0;
+  transition: color 0.15s, border-color 0.15s;
+}
+
+.sale-price-reset:hover {
+  color: #f59e0b;
+  border-color: #f59e0b;
+}
+
+.fee-divider {
+  border-top: 1px solid #1e293b;
+  margin: 6px 0;
+}
+
+.fee-divider.thick {
+  border-top: 2px solid #334155;
+}
+
+.bottom-line .fee-row {
+  font-size: 13px;
+}
+
+.profit-row .fee-value {
+  font-size: 16px;
+  font-weight: 700;
+}
+
+.profit-row .fee-value.positive {
+  color: #4ade80;
+}
+
+.profit-row .fee-value.negative {
+  color: #f87171;
+}
+
+/* Profitability Indicator */
+.profitability-indicator {
+  margin: 0 12px 12px;
+  padding: 8px 12px;
+  border-radius: 6px;
+  font-size: 12px;
+  font-weight: 600;
+  text-align: center;
+}
+
+.profitability-indicator.meets {
+  background: rgba(74, 222, 128, 0.15);
+  border: 1px solid rgba(74, 222, 128, 0.3);
+  color: #4ade80;
+}
+
+.profitability-indicator.below {
+  background: rgba(248, 113, 113, 0.15);
+  border: 1px solid rgba(248, 113, 113, 0.3);
+  color: #f87171;
+}
+
+.threshold-detail {
+  font-size: 10px;
+  font-weight: 400;
+  color: #94a3b8;
+  margin-top: 2px;
+}
+
+/* Import Button */
+.import-section {
+  padding: 0 12px 16px;
+}
+
+.import-btn {
+  width: 100%;
+  padding: 10px;
+  border: none;
+  border-radius: 6px;
+  font-size: 14px;
+  font-weight: 600;
+  cursor: pointer;
+  background: #0ea5e9;
+  color: #fff;
+  transition: background 0.2s, transform 0.1s;
+}
+
+.import-btn:hover:not(:disabled) {
+  background: #0284c7;
+}
+
+.import-btn:active:not(:disabled) {
+  transform: scale(0.98);
+}
+
+.import-btn:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.import-btn.update {
+  background: #f59e0b;
+  color: #1a1a2e;
+}
+
+.import-btn.update:hover:not(:disabled) {
+  background: #d97706;
+}
+
+.import-btn.success {
+  background: #16a34a;
+}
+
+.import-btn.error {
+  background: #dc2626;
+}
+
+.import-feedback {
+  font-size: 11px;
+  text-align: center;
+  margin-top: 6px;
+  color: #94a3b8;
+}
+
+/* Scrollbar */
+::-webkit-scrollbar {
+  width: 6px;
+}
+
+::-webkit-scrollbar-track {
+  background: #1a1a2e;
+}
+
+::-webkit-scrollbar-thumb {
+  background: #334155;
+  border-radius: 3px;
+}
+
+::-webkit-scrollbar-thumb:hover {
+  background: #475569;
+}

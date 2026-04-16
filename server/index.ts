@@ -3,6 +3,7 @@ import express, { type Request, Response, NextFunction } from "express";
 import { registerRoutes } from "./routes";
 import { serveStatic } from "./static";
 import { createServer } from "http";
+import { ensureExtensionTables } from "./db";
 
 const app = express();
 const httpServer = createServer(app);
@@ -12,6 +13,21 @@ declare module "http" {
     rawBody: unknown;
   }
 }
+
+// CORS middleware for Chrome extension requests
+app.use((req, res, next) => {
+  const origin = req.headers.origin;
+  if (origin && (origin.startsWith("chrome-extension://") || origin === process.env.CORS_ALLOWED_ORIGIN)) {
+    res.setHeader("Access-Control-Allow-Origin", origin);
+    res.setHeader("Access-Control-Allow-Methods", "GET, POST, OPTIONS");
+    res.setHeader("Access-Control-Allow-Headers", "Content-Type");
+  }
+  if (req.method === "OPTIONS") {
+    res.sendStatus(204);
+    return;
+  }
+  next();
+});
 
 app.use(
   express.json({
@@ -61,6 +77,17 @@ app.use((req, res, next) => {
 });
 
 (async () => {
+  if (process.env.DATABASE_URL) {
+    try {
+      await ensureExtensionTables();
+      log("Extension database tables initialized");
+    } catch (err: any) {
+      log(`Extension table init failed: ${err.message}`, "db");
+    }
+  } else {
+    log("DATABASE_URL not set — extension database features disabled", "db");
+  }
+
   await registerRoutes(httpServer, app);
 
   app.use((err: any, _req: Request, res: Response, next: NextFunction) => {

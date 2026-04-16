@@ -57,6 +57,18 @@ const MAPPING_FIELDS: MappingField[] = [
     required: false,
     matchPatterns: [/additional\s*fees/i, /storage/i, /\bfees\b/i, /\bmisc\b/i, /\bother\s*fees\b/i, /\bextra\b/i],
   },
+  {
+    key: "tags",
+    label: "Tags",
+    required: false,
+    matchPatterns: [/^tags?$/i, /\btags?\b/i],
+  },
+  {
+    key: "notes",
+    label: "Notes",
+    required: false,
+    matchPatterns: [/^notes?$/i, /\bnotes?\b/i, /\bcomments?\b/i],
+  },
 ];
 
 const NOT_IN_FILE = "__not_in_file__";
@@ -114,12 +126,15 @@ export function ColumnMappingModal({
   };
 
   const handleContinue = () => {
+    const optVal = (key: string) => mappings[key] === NOT_IN_FILE || !mappings[key] ? null : mappings[key];
     const mapping: ColumnMapping = {
       asin: mappings.asin || "",
       cogs: mappings.cogs || "",
-      buyLink: mappings.buyLink === NOT_IN_FILE || !mappings.buyLink ? null : mappings.buyLink,
-      prepCost: mappings.prepCost === NOT_IN_FILE || !mappings.prepCost ? null : mappings.prepCost,
-      additionalFees: mappings.additionalFees === NOT_IN_FILE || !mappings.additionalFees ? null : mappings.additionalFees,
+      buyLink: optVal("buyLink"),
+      prepCost: optVal("prepCost"),
+      additionalFees: optVal("additionalFees"),
+      tags: optVal("tags"),
+      notes: optVal("notes"),
     };
     onContinue(mapping);
   };
