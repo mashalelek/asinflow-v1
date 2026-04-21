@@ -79,6 +79,7 @@ const DEFAULT_COL_WIDTHS: Partial<Record<ColumnId, number>> = {
   meltable: 85,
   hazmat: 80,
   suppressed: 90,
+  lastReviewed: 100,
 };
 
 const ACTUALS_COLS = new Set<ColumnId>([
@@ -93,9 +94,16 @@ const ESTIMATES_COLS = new Set<ColumnId>([
 ]);
 import { type ColumnConfig } from "@/lib/columns";
 import { type FilterMode } from "@/components/summary-cards";
-import { ColumnFilterButton, type ColFilter, type FilterMap } from "@/components/column-filter";
+import { ColumnFilterButton, type ColFilter, type FilterMap, type MultiSelectOption } from "@/components/column-filter";
 import { TagEditor } from "@/components/tag-editor";
 import { NoteEditor } from "@/components/note-editor";
+
+function markReviewed(asin: string, onResultUpdate?: (asin: string, updates: Partial<AsinResult>) => void) {
+  fetch(`/api/asins/${asin}/reviewed`, { method: "PUT" }).catch(() => {});
+  if (onResultUpdate) {
+    onResultUpdate(asin, { lastReviewedAt: new Date().toISOString() });
+  }
+}
 
 function FaviconLink({
   href,
@@ -103,12 +111,14 @@ function FaviconLink({
   fallback,
   label,
   testId,
+  onLinkClick,
 }: {
   href: string;
   src: string;
   fallback: string;
   label: string;
   testId: string;
+  onLinkClick?: () => void;
 }) {
   return (
     <Tooltip>
@@ -119,7 +129,7 @@ function FaviconLink({
           rel="noopener noreferrer"
           className="flex items-center justify-center w-5 h-5 rounded hover:bg-muted transition-colors"
           data-testid={testId}
-          onClick={(e) => e.stopPropagation()}
+          onClick={(e) => { e.stopPropagation(); onLinkClick?.(); }}
         >
           <img
             src={src}
@@ -152,7 +162,7 @@ function FaviconLink({
 // Cache Keepa image load status across renders
 const keepaCache = new Map<string, "loading" | "loaded" | "error">();
 
-function KeepaLink({ asin, testId }: { asin: string; testId: string }) {
+function KeepaLink({ asin, testId, onReviewed }: { asin: string; testId: string; onReviewed?: () => void }) {
   const [show, setShow] = useState(false);
   const [imgStatus, setImgStatus] = useState<"loading" | "loaded" | "error">(keepaCache.get(asin) ?? "loading");
   const [pos, setPos] = useState({ top: 0, left: 0 });
@@ -200,7 +210,7 @@ function KeepaLink({ asin, testId }: { asin: string; testId: string }) {
         rel="noopener noreferrer"
         className="flex items-center justify-center w-5 h-5 rounded hover:bg-muted transition-colors"
         data-testid={testId}
-        onClick={(e) => e.stopPropagation()}
+        onClick={(e) => { e.stopPropagation(); markReviewed(asin); onReviewed?.(); }}
         onMouseEnter={handleMouseEnter}
         onMouseLeave={handleMouseLeave}
       >
@@ -300,6 +310,7 @@ function CopyAsinButton({ asin }: { asin: string }) {
 
 interface ResultsTableProps {
   results: AsinResult[];
+  allResults?: AsinResult[];
   priceSource: PriceSource;
   settings: Settings;
   columnConfig: ColumnConfig;
@@ -421,6 +432,7 @@ export function getRowValue(
       return ac.roi;
     }
     case "product": return result.catalogData.title ?? result.asin;
+    case "lastReviewed": return result.lastReviewedAt ?? null;
     default: return null;
   }
 }
@@ -444,7 +456,7 @@ function isProfitable(result: AsinResult, priceSource: PriceSource, settings: Se
 }
 
 export function ResultsTable({
-  results, priceSource, settings, columnConfig,
+  results, allResults: allResultsProp, priceSource, settings, columnConfig,
   activeFilter, buySet, onToggleBuy,
   sortCol, sortDir, onSort,
   includeInboundShipping = true,
@@ -459,7 +471,43 @@ export function ResultsTable({
   onClearSelection,
   onStockClick,
 }: ResultsTableProps) {
+  const allResults = allResultsProp ?? results;
   const colMap = useMemo(() => new Map(ALL_COLUMNS.map((c) => [c.id, c])), []);
+
+  // Compute multi-select options for tags and supplier from ALL results
+  const tagOptions: MultiSelectOption[] = useMemo(() => {
+    const counts = new Map<string, { color: string; count: number }>();
+    let noTagCount = 0;
+    for (const r of allResults) {
+      if (!r.tags || r.tags.length === 0) { noTagCount++; continue; }
+      for (const t of r.tags) {
+        const key = t.name.toLowerCase();
+        const existing = counts.get(key);
+        if (existing) existing.count++;
+        else counts.set(key, { color: t.color, count: 1 });
+      }
+    }
+    const opts: MultiSelectOption[] = [{ value: "__none__", label: "No tags", count: noTagCount }];
+    for (const [key, { color, count }] of Array.from(counts.entries()).sort((a, b) => a[0].localeCompare(b[0]))) {
+      opts.push({ value: key, label: key.charAt(0).toUpperCase() + key.slice(1), color, count });
+    }
+    return opts;
+  }, [allResults]);
+
+  const supplierOptions: MultiSelectOption[] = useMemo(() => {
+    const counts = new Map<string, number>();
+    let noSupplierCount = 0;
+    for (const r of allResults) {
+      const domain = extractDomain(r.buyLink);
+      if (!domain) { noSupplierCount++; continue; }
+      counts.set(domain, (counts.get(domain) ?? 0) + 1);
+    }
+    const opts: MultiSelectOption[] = [{ value: "__none__", label: "No supplier", count: noSupplierCount }];
+    for (const [domain, count] of Array.from(counts.entries()).sort((a, b) => a[0].localeCompare(b[0]))) {
+      opts.push({ value: domain, label: domain, count });
+    }
+    return opts;
+  }, [allResults]);
 
   // Column resize state — persisted in localStorage
   const [colWidths, setColWidths] = useState<Record<string, number>>(() => {
@@ -621,6 +669,7 @@ export function ResultsTable({
                         currentFilter={colFilters[colId]}
                         onApply={onFilterApply}
                         onClear={() => onFilterClear(colId)}
+                        multiSelectOptions={colId === "tags" ? tagOptions : colId === "supplier" ? supplierOptions : undefined}
                       />
                     )}
                   </span>
@@ -989,7 +1038,7 @@ function ProductCell({ result, price, settings, onResultUpdate }: { result: Asin
             target="_blank"
             rel="noopener noreferrer"
             className="text-primary font-mono hover:underline"
-            onClick={(e) => e.stopPropagation()}
+            onClick={(e) => { e.stopPropagation(); markReviewed(result.asin, onResultUpdate); }}
           >
             {result.asin}
           </a>
@@ -1016,8 +1065,9 @@ function ProductCell({ result, price, settings, onResultUpdate }: { result: Asin
             fallback="SA"
             label="Open in SellerAmp"
             testId={`link-selleramp-${result.asin}`}
+            onLinkClick={() => markReviewed(result.asin, onResultUpdate)}
           />
-          <KeepaLink asin={result.asin} testId={`link-keepa-${result.asin}`} />
+          <KeepaLink asin={result.asin} testId={`link-keepa-${result.asin}`} onReviewed={() => onResultUpdate?.(result.asin, { lastReviewedAt: new Date().toISOString() })} />
           {result.isMeltable && (
             <Tooltip>
               <TooltipTrigger asChild>
@@ -1105,7 +1155,7 @@ function ProductCell({ result, price, settings, onResultUpdate }: { result: Asin
         {/* Line 3: Supplier · COGS · Stock */}
         <div className="flex items-center gap-1 text-xs text-muted-foreground">
           {domain ? (
-            <a href={result.buyLink!} target="_blank" rel="noopener noreferrer" className="text-primary hover:underline" onClick={(e) => e.stopPropagation()}>
+            <a href={result.buyLink!} target="_blank" rel="noopener noreferrer" className="text-primary hover:underline" onClick={(e) => { e.stopPropagation(); markReviewed(result.asin, onResultUpdate); }}>
               {domain}
             </a>
           ) : (
@@ -1540,6 +1590,36 @@ function renderCell(
         <span className={`font-mono text-sm ${perUnit.roi >= settings.minRoiThreshold ? "text-emerald-600 dark:text-emerald-400" : "text-red-600 dark:text-red-400"}`}>
           {perUnit.roi.toFixed(1)}%
         </span>
+      );
+    }
+
+    case "lastReviewed": {
+      const ts = result.lastReviewedAt;
+      if (!ts) return <span className="text-muted-foreground text-sm">Never</span>;
+      const d = new Date(ts);
+      const diffMs = Date.now() - d.getTime();
+      const mins = Math.floor(diffMs / 60000);
+      let relative: string;
+      if (mins < 1) relative = "just now";
+      else if (mins < 60) relative = `${mins}m ago`;
+      else {
+        const hrs = Math.floor(mins / 60);
+        if (hrs < 24) relative = `${hrs}h ago`;
+        else {
+          const days = Math.floor(hrs / 24);
+          if (days < 14) relative = `${days}d ago`;
+          else relative = `${Math.floor(days / 7)}w ago`;
+        }
+      }
+      return (
+        <Tooltip>
+          <TooltipTrigger asChild>
+            <span className="text-sm text-muted-foreground cursor-help">{relative}</span>
+          </TooltipTrigger>
+          <TooltipContent side="top">
+            <p className="text-xs">{d.toLocaleString()}</p>
+          </TooltipContent>
+        </Tooltip>
       );
     }
 

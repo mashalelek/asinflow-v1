@@ -1,4 +1,4 @@
-import { useState, useCallback, useEffect, useMemo } from "react";
+import { useState, useCallback, useEffect, useMemo, useRef } from "react";
 import { Button } from "@/components/ui/button";
 import { Switch } from "@/components/ui/switch";
 import { Label } from "@/components/ui/label";
@@ -125,6 +125,149 @@ function formatRelativeTime(iso: string | null): string {
   return `${days} day${days === 1 ? "" : "s"} ago`;
 }
 
+function MultiSearch({
+  results,
+  searchQuery,
+  onSearchQueryChange,
+  selectedAsins,
+  onSelectedAsinsChange,
+}: {
+  results: AsinResult[];
+  searchQuery: string;
+  onSearchQueryChange: (q: string) => void;
+  selectedAsins: Set<string>;
+  onSelectedAsinsChange: (s: Set<string>) => void;
+}) {
+  const [dropdownOpen, setDropdownOpen] = useState(false);
+  const inputRef = useRef<HTMLInputElement>(null);
+
+  const q = searchQuery.trim().toLowerCase();
+
+  const matches = useMemo(() => {
+    if (!q || q.length < 1) return [];
+    return results.filter((r) =>
+      r.asin.toLowerCase().includes(q) ||
+      (r.catalogData.title ?? "").toLowerCase().includes(q) ||
+      (r.catalogData.brand ?? "").toLowerCase().includes(q) ||
+      (r.skus ?? []).some((s) => s.toLowerCase().includes(q)) ||
+      (r.sku ?? "").toLowerCase().includes(q)
+    ).slice(0, 50);
+  }, [results, q]);
+
+  function handleInputChange(value: string) {
+    onSearchQueryChange(value);
+    // Auto-detect pasted multi-ASIN input (comma/newline separated)
+    const parts = value.split(/[\n,]+/).map((s) => s.trim().toUpperCase()).filter((s) => /^[A-Z0-9]{10}$/.test(s));
+    if (parts.length >= 2) {
+      const found = new Set<string>();
+      const asinSet = new Set(results.map((r) => r.asin));
+      for (const p of parts) { if (asinSet.has(p)) found.add(p); }
+      if (found.size > 0) {
+        onSelectedAsinsChange(found);
+        onSearchQueryChange("");
+        setDropdownOpen(false);
+        return;
+      }
+    }
+    setDropdownOpen(value.trim().length > 0);
+  }
+
+  function toggleAsin(asin: string) {
+    const next = new Set(selectedAsins);
+    if (next.has(asin)) next.delete(asin); else next.add(asin);
+    onSelectedAsinsChange(next);
+  }
+
+  function selectAllMatches() {
+    const next = new Set(selectedAsins);
+    for (const r of matches) next.add(r.asin);
+    onSelectedAsinsChange(next);
+    setDropdownOpen(false);
+    onSearchQueryChange("");
+  }
+
+  function clearAll() {
+    onSelectedAsinsChange(new Set());
+    onSearchQueryChange("");
+  }
+
+  return (
+    <div className="relative flex-1 min-w-[200px]">
+      {/* Chips for selected ASINs */}
+      {selectedAsins.size > 0 && (
+        <div className="flex flex-wrap gap-1 mb-1.5">
+          {Array.from(selectedAsins).slice(0, 20).map((asin) => {
+            const r = results.find((r) => r.asin === asin);
+            return (
+              <span key={asin} className="inline-flex items-center gap-1 bg-primary/10 text-primary text-[10px] px-1.5 py-0.5 rounded-full">
+                {asin}
+                {r?.catalogData.title && <span className="text-muted-foreground truncate max-w-[80px]">· {r.catalogData.title}</span>}
+                <button onClick={() => toggleAsin(asin)} className="hover:text-red-500 ml-0.5"><X className="h-2.5 w-2.5" /></button>
+              </span>
+            );
+          })}
+          {selectedAsins.size > 20 && (
+            <span className="text-[10px] text-muted-foreground">+{selectedAsins.size - 20} more</span>
+          )}
+          <button onClick={clearAll} className="text-[10px] text-muted-foreground hover:text-foreground underline ml-1">
+            Clear all
+          </button>
+        </div>
+      )}
+      <div className="relative">
+        <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground pointer-events-none" />
+        <Input
+          ref={inputRef}
+          placeholder={selectedAsins.size > 0 ? "Add more ASINs..." : "Search ASIN, name, brand, or paste multiple ASINs..."}
+          value={searchQuery}
+          onChange={(e) => handleInputChange(e.target.value)}
+          onFocus={() => { if (q.length > 0) setDropdownOpen(true); }}
+          onBlur={() => setTimeout(() => setDropdownOpen(false), 200)}
+          className="pl-9 h-9"
+          data-testid="input-search"
+        />
+      </div>
+      {/* Dropdown */}
+      {dropdownOpen && matches.length > 0 && (
+        <div className="absolute z-50 top-full left-0 right-0 mt-1 bg-background border border-border rounded-md shadow-lg max-h-64 overflow-y-auto">
+          <div className="flex items-center justify-between px-3 py-1.5 border-b border-border text-[10px] text-muted-foreground">
+            <span>{matches.length} match{matches.length !== 1 ? "es" : ""}</span>
+            <button className="hover:text-foreground" onMouseDown={(e) => { e.preventDefault(); selectAllMatches(); }}>
+              Select all
+            </button>
+          </div>
+          {matches.map((r) => (
+            <label
+              key={r.asin}
+              className="flex items-center gap-2 px-3 py-1.5 hover:bg-muted cursor-pointer text-xs"
+              onMouseDown={(e) => e.preventDefault()}
+            >
+              <input
+                type="checkbox"
+                checked={selectedAsins.has(r.asin)}
+                onChange={() => toggleAsin(r.asin)}
+                className="h-3 w-3 accent-blue-500 flex-shrink-0"
+              />
+              {r.catalogData.imageUrl && (
+                <img src={r.catalogData.imageUrl} alt="" className="w-7 h-7 object-contain rounded flex-shrink-0" />
+              )}
+              <div className="min-w-0 flex-1">
+                <div className="flex items-center gap-1">
+                  <span className="font-mono text-primary">{r.asin}</span>
+                  {r.sku && <span className="text-muted-foreground">· {r.sku}</span>}
+                </div>
+                {r.catalogData.title && (
+                  <div className="text-muted-foreground truncate text-[10px]">{r.catalogData.title}</div>
+                )}
+              </div>
+            </label>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
 export default function Home() {
   const { theme, toggleTheme } = useTheme();
   const { toast } = useToast();
@@ -145,6 +288,7 @@ export default function Home() {
     try { const s = localStorage.getItem("fba-sort"); if (s) { const p = JSON.parse(s); return p.dir; } } catch {} return "desc";
   });
   const [searchQuery, setSearchQuery] = useState("");
+  const [selectedSearchAsins, setSelectedSearchAsins] = useState<Set<string>>(new Set());
   const [filterEligible, setFilterEligible] = useState("all");
   const [colFilters, setColFilters] = useState<FilterMap>(loadColFilters);
   const [showArchived, setShowArchived] = useState(false);
@@ -386,6 +530,7 @@ export default function Home() {
       let buffer = "";
       let updated = 0;
       let failed = 0;
+      let skipped = 0;
       if (reader) {
         while (true) {
           const { done, value } = await reader.read();
@@ -402,15 +547,16 @@ export default function Home() {
               } else if (msg.type === "complete") {
                 updated = msg.data?.updated ?? 0;
                 failed = msg.data?.failed ?? 0;
+                skipped = msg.data?.skipped ?? 0;
               }
             } catch {}
           }
         }
       }
-      toast({
-        title: "Prices refreshed",
-        description: `Updated ${updated} ASIN${updated === 1 ? "" : "s"}${failed > 0 ? `, ${failed} failed` : ""}`,
-      });
+      const parts = [`Updated ${updated} ASIN${updated === 1 ? "" : "s"}`];
+      if (skipped > 0) parts.push(`${skipped} still missing`);
+      if (failed > 0) parts.push(`${failed} failed`);
+      toast({ title: "Prices refreshed", description: parts.join(", ") });
       await fetchAsins(startDate, endDate, showArchived);
     } catch (err: any) {
       toast({ title: "Price refresh failed", description: err.message, variant: "destructive" });
@@ -558,6 +704,12 @@ export default function Home() {
     return results.filter((r) => buySet.has(r.asin)).length;
   }, [results, buySet]);
 
+  // Serialize the Set to a stable string key so useMemo detects changes reliably
+  const selectedSearchAsinsKey = useMemo(
+    () => Array.from(selectedSearchAsins).sort().join(","),
+    [selectedSearchAsins],
+  );
+
   const queryFilteredResults = useMemo(() => {
     let out = results;
 
@@ -577,13 +729,20 @@ export default function Home() {
       });
     }
 
-    const q = searchQuery.trim().toLowerCase();
-    if (q) {
-      out = out.filter((r) =>
-        r.asin.toLowerCase().includes(q) ||
-        (r.catalogData.title ?? "").toLowerCase().includes(q) ||
-        (r.catalogData.brand ?? "").toLowerCase().includes(q)
-      );
+    // Multi-select search: if user has explicitly selected ASINs, filter to those
+    if (selectedSearchAsins.size > 0) {
+      out = out.filter((r) => selectedSearchAsins.has(r.asin));
+    } else {
+      const q = searchQuery.trim().toLowerCase();
+      if (q) {
+        out = out.filter((r) =>
+          r.asin.toLowerCase().includes(q) ||
+          (r.catalogData.title ?? "").toLowerCase().includes(q) ||
+          (r.catalogData.brand ?? "").toLowerCase().includes(q) ||
+          (r.skus ?? []).some((s) => s.toLowerCase().includes(q)) ||
+          (r.sku ?? "").toLowerCase().includes(q)
+        );
+      }
     }
     if (filterEligible !== "all") {
       out = out.filter((r) => (r.eligibilityData?.status ?? "check") === filterEligible);
@@ -652,18 +811,38 @@ export default function Home() {
             case "actUnitsSold": return r.actuals?.units_sold ?? null;
             case "actRevenue": return r.actuals?.revenue ?? null;
             case "actRefunds": return r.actuals?.units_refunded ?? null;
+            case "actRefundPct":
+              return r.actuals && r.actuals.units_sold > 0
+                ? (r.actuals.units_refunded / r.actuals.units_sold) * 100 : null;
+            case "actProfit":
+            case "actProfitPerUnit":
+            case "actMargin":
+            case "actRoi": {
+              if (!r.actuals || r.actuals.units_sold === 0) return null;
+              const au = r.actuals.units_sold;
+              const ar = r.actuals.revenue;
+              const ap = getEffectivePrep(r, settings);
+              const as2 = getEffectiveStorage(r, settings);
+              const ac = calculateProfit(ar / au, r.cogs, r.feesData.fbaFulfillmentFee ?? 0, r.feesData.referralFee ?? 0, r.feesData.feesEstimatePrice, r.catalogData.weightLbs, ap.value, as2.value, settings, includeInboundShipping, r.isHazmat ?? false);
+              if (colId === "actProfit") return ac.profit * au;
+              if (colId === "actProfitPerUnit") return ac.profit;
+              if (colId === "actMargin") return ac.margin;
+              return ac.roi;
+            }
             case "tags": return r.tags?.map((t) => t.name).join(", ") ?? null;
             case "notes": return r.notes ?? null;
             case "meltable": return r.isMeltable ? "Yes" : "No";
             case "hazmat": return r.isHazmat ? "Yes" : "No";
             case "suppressed": return r.isSearchSuppressed ? "Yes" : "No";
+            case "lastReviewed": return r.lastReviewedAt ?? null;
             default: return null;
           }
         });
       });
     }
     return out;
-  }, [results, searchQuery, filterEligible, priceSource, settings, includeInboundShipping, colFilters, presetFilter, meltableHidden, activeFilter, buySet]);
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [results, searchQuery, selectedSearchAsinsKey, filterEligible, priceSource, settings, includeInboundShipping, colFilters, presetFilter, meltableHidden, activeFilter, buySet]);
 
   // Sort all filtered results before paginating
   const sortedFilteredResults = useMemo(() => {
@@ -684,7 +863,7 @@ export default function Home() {
   }, [queryFilteredResults, sortCol, sortDir, priceSource, settings]);
 
   // Reset to page 1 when any filter/view changes
-  useEffect(() => { setPage(1); }, [searchQuery, filterEligible, colFilters, presetFilter, activeFilter, meltableHidden, showArchived]);
+  useEffect(() => { setPage(1); }, [searchQuery, selectedSearchAsinsKey, filterEligible, colFilters, presetFilter, activeFilter, meltableHidden, showArchived]);
 
   const totalFiltered = sortedFilteredResults.length;
   const totalPages = Math.max(1, Math.ceil(totalFiltered / pageSize));
@@ -699,13 +878,14 @@ export default function Home() {
   }, [paginatedResults]);
 
   const activeFilterCount = [
-    searchQuery.trim() !== "" ? 1 : 0,
+    searchQuery.trim() !== "" || selectedSearchAsins.size > 0 ? 1 : 0,
     filterEligible !== "all" ? 1 : 0,
     Object.keys(colFilters).length,
   ].reduce((a, b) => a + b, 0);
 
   function clearSearchFilters() {
     setSearchQuery("");
+    setSelectedSearchAsins(new Set());
     setFilterEligible("all");
     setColFilters({});
   }
@@ -933,22 +1113,23 @@ export default function Home() {
                   onColumnConfigChange={setColumnConfig}
                   onSortChange={(col, dir) => { setSortCol(col); setSortDir(dir); localStorage.setItem("fba-sort", JSON.stringify({ col, dir })); }}
                   onPresetFilterChange={setPresetFilter}
+                  sortCol={sortCol}
+                  sortDir={sortDir}
+                  colFilters={colFilters}
+                  onColFiltersChange={setColFilters}
                 />
                 <ColumnManager config={columnConfig} onChange={setColumnConfig} />
               </div>
             </div>
 
             <div className="flex flex-wrap items-center gap-2 px-4">
-              <div className="relative flex-1 min-w-[200px]">
-                <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground pointer-events-none" />
-                <Input
-                  placeholder="Search ASIN, name, or brand..."
-                  value={searchQuery}
-                  onChange={(e) => setSearchQuery(e.target.value)}
-                  className="pl-9 h-9"
-                  data-testid="input-search"
-                />
-              </div>
+              <MultiSearch
+                results={results}
+                searchQuery={searchQuery}
+                onSearchQueryChange={setSearchQuery}
+                selectedAsins={selectedSearchAsins}
+                onSelectedAsinsChange={setSelectedSearchAsins}
+              />
               <Select value={filterEligible} onValueChange={setFilterEligible}>
                 <SelectTrigger className="w-[148px] h-9" data-testid="select-filter-eligible">
                   <SelectValue placeholder="Eligibility" />
@@ -997,6 +1178,7 @@ export default function Home() {
 
             <ResultsTable
               results={paginatedResults}
+              allResults={results}
               priceSource={priceSource}
               settings={settings}
               columnConfig={columnConfig}

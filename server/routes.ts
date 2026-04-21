@@ -317,17 +317,17 @@ async function upsertAsinResult(result: AsinResult): Promise<void> {
        cogs = EXCLUDED.cogs,
        prep_override = EXCLUDED.prep_override,
        storage_override = EXCLUDED.storage_override,
-       lowest_fba_price = EXCLUDED.lowest_fba_price,
-       buy_box_price = EXCLUDED.buy_box_price,
-       buy_box_fulfillment = EXCLUDED.buy_box_fulfillment,
-       lowest_price = EXCLUDED.lowest_price,
-       sellers_fba = EXCLUDED.sellers_fba,
-       sellers_fbm = EXCLUDED.sellers_fbm,
-       fba_fee = EXCLUDED.fba_fee,
-       referral_fee = EXCLUDED.referral_fee,
-       fees_estimate_price = EXCLUDED.fees_estimate_price,
-       bsr = EXCLUDED.bsr,
-       bsr_category = EXCLUDED.bsr_category,
+       lowest_fba_price = COALESCE(EXCLUDED.lowest_fba_price, asin_estimates.lowest_fba_price),
+       buy_box_price = COALESCE(EXCLUDED.buy_box_price, asin_estimates.buy_box_price),
+       buy_box_fulfillment = COALESCE(EXCLUDED.buy_box_fulfillment, asin_estimates.buy_box_fulfillment),
+       lowest_price = COALESCE(EXCLUDED.lowest_price, asin_estimates.lowest_price),
+       sellers_fba = COALESCE(EXCLUDED.sellers_fba, asin_estimates.sellers_fba),
+       sellers_fbm = COALESCE(EXCLUDED.sellers_fbm, asin_estimates.sellers_fbm),
+       fba_fee = COALESCE(EXCLUDED.fba_fee, asin_estimates.fba_fee),
+       referral_fee = COALESCE(EXCLUDED.referral_fee, asin_estimates.referral_fee),
+       fees_estimate_price = COALESCE(EXCLUDED.fees_estimate_price, asin_estimates.fees_estimate_price),
+       bsr = COALESCE(EXCLUDED.bsr, asin_estimates.bsr),
+       bsr_category = COALESCE(EXCLUDED.bsr_category, asin_estimates.bsr_category),
        eligibility_status = EXCLUDED.eligibility_status,
        error = EXCLUDED.error,
        fetched_at = NOW()`,
@@ -481,7 +481,7 @@ export async function registerRoutes(
       const result = await query(`
         SELECT
           a.asin, a.title, a.image_url, a.brand, a.category, a.weight_lb, a.buy_link, a.is_active,
-          a.primary_sku, a.in_catalog, a.notes, a.is_meltable, a.is_hazmat, a.is_search_suppressed, a.suppression_reasons,
+          a.primary_sku, a.in_catalog, a.notes, a.is_meltable, a.is_hazmat, a.is_search_suppressed, a.suppression_reasons, a.last_reviewed_at,
           e.cogs, e.cogs_source, e.prep_override, e.storage_override,
           e.lowest_fba_price, e.buy_box_price, e.buy_box_fulfillment, e.lowest_price,
           e.sellers_fba, e.sellers_fbm,
@@ -650,6 +650,7 @@ export async function registerRoutes(
           suppressionReasons: row.suppression_reasons ?? [],
           cogsSource: (row.cogs_source as "po_sheet" | "csv" | "manual" | null) ?? null,
           pricesFetchedAt: row.fetched_at ? new Date(row.fetched_at).toISOString() : null,
+          lastReviewedAt: row.last_reviewed_at ? new Date(row.last_reviewed_at).toISOString() : null,
           sellersDelta: d ? {
             fba_7d: curFba != null && d.fba_7d_old != null ? curFba - parseInt(d.fba_7d_old) : null,
             fba_30d: curFba != null && d.fba_30d_old != null ? curFba - parseInt(d.fba_30d_old) : null,
@@ -1084,6 +1085,16 @@ export async function registerRoutes(
     if (!isDbAvailable()) { res.status(503).json({ message: "Database not available" }); return; }
     try {
       await query(`UPDATE asins SET notes = $2 WHERE asin = $1`, [asin, notes ?? null]);
+      res.json({ ok: true });
+    } catch (err: any) { res.status(500).json({ message: err.message }); }
+  });
+
+  // === Reviewed timestamp ===
+  app.put("/api/asins/:asin/reviewed", async (req: Request, res: Response) => {
+    const { asin } = req.params;
+    if (!isDbAvailable()) { res.status(503).json({ message: "Database not available" }); return; }
+    try {
+      await query(`UPDATE asins SET last_reviewed_at = NOW() WHERE asin = $1`, [asin]);
       res.json({ ok: true });
     } catch (err: any) { res.status(500).json({ message: err.message }); }
   });

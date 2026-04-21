@@ -2,6 +2,75 @@
 
 This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
 
+# CLAUDE.md — Architecture Section (paste this at the TOP of your existing CLAUDE.md)
+
+## ⚠️ ARCHITECTURE — DO NOT QUESTION OR MODIFY ⚠️
+
+This app runs on the following stack. This is settled. Do not suggest alternatives, do not question whether these exist, do not propose removing any of these. If you survey the codebase and something seems missing, it means there's a bug to fix — not an architecture decision to revisit.
+
+### Stack
+- **Frontend:** React + Tailwind CSS + Recharts (Vite dev server)
+- **Backend:** Node.js + Express (TypeScript via tsx)
+- **Database:** PostgreSQL (local, database name: `asinflow`)
+- **ORM/DB access:** Direct `pg` queries (no Drizzle, no Prisma)
+- **Scheduled jobs:** node-cron (runs in the Express process)
+- **APIs:** Amazon SP-API, Google Sheets API (service account)
+
+### What exists and is working (do NOT rebuild or remove):
+- PostgreSQL persistence — all ASIN data, estimates, sales, inventory, tags, settings stored in DB
+- Schema defined in `docs/SCHEMA.md` — reference this for all table structures
+- Google Sheets API integration — pulls COGS from PO tracker sheet, pulls ordered qty
+- SP-API integrations: catalog data, pricing, inventory (`getInventorySummaries`), sales (flat file orders report), listings restrictions, suppression (FYP report)
+- Daily inventory cron job at 6 AM EST
+- Toolbar buttons: Upload File, Analyze, Sync PO, Sync Inventory, Sync Sales
+- Date range selector with presets
+- Three view presets: Full View, Replenishment, Sourcing
+- Combined Product cell with image, ASIN, SKU, title, icons (SAS, Keepa, meltable, hazmat, suppressed, catalog status)
+- Inline editing for: tags, notes, buy link (with query param stripping and domain extraction)
+- Keepa-style column filters (numeric/text/boolean operators)
+- Pagination with page reset on filter/view changes
+- Archive/unarchive, Buy List cart icon
+- Stock and sales history graph popup (Recharts)
+- Keepa hover graph popup with Buy Box line
+- Smart Replenishment filter with tiered profitability thresholds
+- Scorecard cards (Total ASINs, Profitable, Unprofitable, Buy List, Avg ROI) — clickable to filter table
+- Meltable/hazmat detection from SP-API attributes (temperature_rating, hazmat, supplier_declared_dg_hz_regulation)
+- Meltable seasonal auto-filter (Apr 15 – Sep 15)
+- Search suppressed detection via GET_MERCHANTS_LISTINGS_FYP_REPORT
+- Hazmat surcharge settings applied to profitability calculations
+- Price source toggle (Lowest FBA / Buy Box)
+- Include Inbound Shipping toggle
+- `amzn.gr.*` SKUs excluded from primary SKU selection
+- `in_catalog` flag covers all listing statuses (Active, Inactive, Closed)
+
+### Key files:
+- `server/index.ts` — Express server entry point
+- `server/routes.ts` — API endpoints
+- `server/spapi.ts` — SP-API integration (catalog, pricing, fees, meltable/hazmat detection)
+- `server/sales-sync.ts` — Sales data sync via orders report
+- `server/suppression-sync.ts` — FYP report for search suppressed listings
+- `client/src/pages/home.tsx` — Main page with table, filters, scorecards
+- `client/src/components/results-table.tsx` — Table rendering and column logic
+- `shared/schema.ts` — Column definitions, profit calculation, types
+- `docs/SCHEMA.md` — Database schema documentation
+- `docs/ROADMAP.md` — Feature roadmap
+
+### Dev commands:
+- `npm run dev` — starts both frontend and backend (PORT=3000)
+- `psql asinflow` — connect to the local database
+
+### COGS priority:
+1. Google Sheets PO data (Col Y) → `cogs_source = 'po_sheet'`
+2. CSV upload → `cogs_source = 'csv'`
+3. Manual entry → `cogs_source = 'manual'`
+
+### Settings stored in DB (`settings` table):
+- `default_date_range`, `include_inbound_shipping`, `google_sheet_id`, `default_fulfillment_channel`
+- `hazmat_ship_surcharge`, `hazmat_prep_surcharge`
+- Inbound shipping ($/lb), prep cost ($/unit), additional fees ($/unit), low-inventory surcharge ($/unit)
+- Profitability thresholds (min ROI %, min margin %)
+
+
 ## Commands
 
 ```bash
