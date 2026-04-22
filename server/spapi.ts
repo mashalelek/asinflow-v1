@@ -121,6 +121,8 @@ export async function getPricing(asin: string): Promise<AsinPricingResult> {
     if (summary) {
       if (summary.LowestPrices) {
         for (const lp of summary.LowestPrices) {
+          const cond = (lp.condition || "").toLowerCase();
+          if (cond !== "new") continue; // skip used/refurbished prices
           const amt = parseFloat(lp.LandedPrice?.Amount);
           if (!isNaN(amt)) {
             const channel =
@@ -185,11 +187,10 @@ export async function getPricing(asin: string): Promise<AsinPricingResult> {
       let fbmCount = 0;
 
       for (const offer of offers) {
-        const channel = offer.FulfillmentChannel || "";
-        const isFba =
-          offer.IsFulfilledByAmazon === true ||
-          channel === "Amazon" ||
-          channel === "AFN";
+        // IsFulfilledByAmazon is the authoritative FBA indicator in the
+        // Offers array. The FulfillmentChannel field is NOT present on
+        // individual offers — it only appears in the Summary section.
+        const isFba = offer.IsFulfilledByAmazon === true;
 
         if (isFba) {
           fbaCount++;
@@ -251,7 +252,6 @@ export async function getPricing(asin: string): Promise<AsinPricingResult> {
       `Pricing for ${asin}: lowestFba=${lowestFbaPrice}, buyBox=${buyBoxPrice} (${buyBoxFulfillment}), lowest=${lowestPrice}, sellers=${numberOfSellers} (FBA:${sellersFba}, FBM:${sellersFbm})`,
       "sp-api",
     );
-
     return {
       lowestFbaPrice,
       buyBoxPrice,
