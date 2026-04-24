@@ -80,6 +80,7 @@ const DEFAULT_COL_WIDTHS: Partial<Record<ColumnId, number>> = {
   hazmat: 80,
   suppressed: 90,
   lastReviewed: 100,
+  dateAdded: 95,
 };
 
 const ACTUALS_COLS = new Set<ColumnId>([
@@ -433,6 +434,7 @@ export function getRowValue(
     }
     case "product": return result.catalogData.title ?? result.asin;
     case "lastReviewed": return result.lastReviewedAt ?? null;
+    case "dateAdded": return result.addedAt ?? null;
     default: return null;
   }
 }
@@ -1621,6 +1623,16 @@ function renderCell(
           </TooltipContent>
         </Tooltip>
       );
+    }
+
+    case "dateAdded": {
+      const ts = result.addedAt;
+      if (!ts) return <span className="text-muted-foreground text-sm">-</span>;
+      const d = new Date(ts);
+      const mm = String(d.getMonth() + 1).padStart(2, "0");
+      const dd = String(d.getDate()).padStart(2, "0");
+      const yyyy = d.getFullYear();
+      return <span className="text-sm text-muted-foreground">{`${mm}/${dd}/${yyyy}`}</span>;
     }
 
     default:

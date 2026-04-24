@@ -1,5 +1,5 @@
 import { Card } from "@/components/ui/card";
-import { TrendingUp, TrendingDown, Package, DollarSign, ShoppingCart } from "lucide-react";
+import { TrendingUp, TrendingDown, Package, ShoppingCart } from "lucide-react";
 import {
   type AsinResult,
   type PriceSource,
@@ -19,15 +19,15 @@ interface SummaryCardsProps {
   activeFilter: FilterMode;
   onFilterChange: (filter: FilterMode) => void;
   buyListCount: number;
+  filterUncalculated?: boolean;
+  onFilterUncalculatedChange?: (v: boolean) => void;
 }
 
-export function SummaryCards({ results, priceSource, settings, activeFilter, onFilterChange, buyListCount }: SummaryCardsProps) {
+export function SummaryCards({ results, priceSource, settings, activeFilter, onFilterChange, buyListCount, filterUncalculated, onFilterUncalculatedChange }: SummaryCardsProps) {
   if (results.length === 0) return null;
 
   let profitable = 0;
   let unprofitable = 0;
-  let totalProfit = 0;
-  let totalCogs = 0;
   let calculated = 0;
 
   results.forEach((r) => {
@@ -52,8 +52,6 @@ export function SummaryCards({ results, priceSource, settings, activeFilter, onF
     );
 
     calculated++;
-    totalProfit += calc.profit;
-    totalCogs += r.cogs;
 
     if (calc.roi >= settings.minRoiThreshold && calc.margin >= settings.minMarginThreshold) {
       profitable++;
@@ -61,8 +59,6 @@ export function SummaryCards({ results, priceSource, settings, activeFilter, onF
       unprofitable++;
     }
   });
-
-  const avgRoi = totalCogs > 0 ? (totalProfit / totalCogs) * 100 : 0;
 
   function handleClick(filter: FilterMode) {
     onFilterChange(activeFilter === filter ? "all" : filter);
@@ -72,7 +68,8 @@ export function SummaryCards({ results, priceSource, settings, activeFilter, onF
     {
       label: "Total ASINs",
       value: results.length.toString(),
-      sub: `${calculated} calculated`,
+      sub: null, // rendered custom below
+      _calculated: calculated,
       icon: Package,
       color: "text-primary",
       filter: "all" as FilterMode,
@@ -101,18 +98,10 @@ export function SummaryCards({ results, priceSource, settings, activeFilter, onF
       color: "text-blue-500",
       filter: "buyList" as FilterMode,
     },
-    {
-      label: "Avg ROI",
-      value: `${avgRoi.toFixed(1)}%`,
-      sub: `$${totalProfit.toFixed(2)} total profit`,
-      icon: DollarSign,
-      color: avgRoi >= settings.minRoiThreshold ? "text-emerald-500" : "text-red-500",
-      filter: null,
-    },
   ];
 
   return (
-    <div className="grid grid-cols-2 lg:grid-cols-5 gap-3">
+    <div className="grid grid-cols-2 lg:grid-cols-4 gap-3">
       {cards.map((card) => {
         const isActive = card.filter != null && activeFilter === card.filter;
         const isClickable = card.filter != null;
@@ -134,7 +123,28 @@ export function SummaryCards({ results, priceSource, settings, activeFilter, onF
                 <p className={`text-2xl font-bold mt-0.5 ${card.color}`} data-testid={`text-summary-${card.label.toLowerCase().replace(/\s/g, "-").replace(/[()]/g, "")}`}>
                   {card.value}
                 </p>
-                <p className="text-xs text-muted-foreground mt-0.5">{card.sub}</p>
+                <p className="text-xs text-muted-foreground mt-0.5">
+                  {card.sub != null ? card.sub : card._calculated != null ? (
+                    filterUncalculated ? (
+                      <span className="inline-flex items-center gap-1 text-amber-500">
+                        {results.length - card._calculated} uncalculated
+                        <button
+                          className="text-muted-foreground hover:text-foreground underline"
+                          onClick={(e) => { e.stopPropagation(); onFilterUncalculatedChange?.(false); }}
+                        >
+                          Clear
+                        </button>
+                      </span>
+                    ) : (
+                      <button
+                        className="text-amber-500 hover:text-amber-400"
+                        onClick={(e) => { e.stopPropagation(); onFilterUncalculatedChange?.(true); }}
+                      >
+                        {card._calculated} calculated
+                      </button>
+                    )
+                  ) : null}
+                </p>
               </div>
               <card.icon className={`h-5 w-5 ${card.color} opacity-60`} />
             </div>

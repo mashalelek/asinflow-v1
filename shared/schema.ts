@@ -99,6 +99,7 @@ export interface AsinResult {
   cogsSource?: "po_sheet" | "csv" | "manual" | null;
   pricesFetchedAt?: string | null;
   lastReviewedAt?: string | null;
+  addedAt?: string | null;
   sellersDelta?: {
     fba_7d: number | null;
     fba_30d: number | null;
@@ -258,6 +259,7 @@ export const DEFAULT_COLUMNS = [
   "tags", "notes",
   "meltable", "hazmat", "suppressed",
   "lastReviewed",
+  "dateAdded",
 ] as const;
 
 export type ColumnId = (typeof DEFAULT_COLUMNS)[number];
@@ -310,6 +312,7 @@ export const ALL_COLUMNS: ColumnDef[] = [
   { id: "hazmat", label: "Hazmat", defaultVisible: false, align: "left" },
   { id: "suppressed", label: "Suppressed", defaultVisible: false, align: "left" },
   { id: "lastReviewed", label: "Last Reviewed", defaultVisible: false, align: "left" },
+  { id: "dateAdded", label: "Date Added", defaultVisible: false, align: "left" },
 ];
 
 export const users = undefined;

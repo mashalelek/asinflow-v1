@@ -289,7 +289,9 @@ export default function Home() {
   });
   const [searchQuery, setSearchQuery] = useState("");
   const [selectedSearchAsins, setSelectedSearchAsins] = useState<Set<string>>(new Set());
-  const [filterEligible, setFilterEligible] = useState("all");
+  const [filterEligible, setFilterEligible] = useState(() => {
+    try { return localStorage.getItem("fba-filter-eligible") ?? "yes"; } catch { return "yes"; }
+  });
   const [colFilters, setColFilters] = useState<FilterMap>(loadColFilters);
   const [showArchived, setShowArchived] = useState(false);
   const [presetFilter, setPresetFilter] = useState<string | null>(null);
@@ -311,6 +313,9 @@ export default function Home() {
   const [isSyncingSales, setIsSyncingSales] = useState(false);
   const [isRefreshingPrices, setIsRefreshingPrices] = useState(false);
   const [pricesLastRefreshedAt, setPricesLastRefreshedAt] = useState<string | null>(null);
+  const [lastRefreshFailedCount, setLastRefreshFailedCount] = useState(0);
+  const [filterNoPrices, setFilterNoPrices] = useState(false);
+  const [filterUncalculated, setFilterUncalculated] = useState(false);
 
   const [datePrefs] = useState(loadDatePrefs);
   const [datePreset, setDatePreset] = useState(datePrefs.preset);
@@ -483,8 +488,9 @@ export default function Home() {
       setIsAnalyzing(false);
       setProgress(null);
       fetchPriceStatus();
+      fetchAsins(startDate, endDate, showArchived);
     }
-  }, [toast, consumeAnalyzeStream, fetchPriceStatus]);
+  }, [toast, consumeAnalyzeStream, fetchPriceStatus, fetchAsins, startDate, endDate, showArchived]);
 
   const runAnalyzeAllFromDb = useCallback(async (totalEstimate: number) => {
     setIsAnalyzing(true);
@@ -502,8 +508,9 @@ export default function Home() {
       setIsAnalyzing(false);
       setProgress(null);
       fetchPriceStatus();
+      fetchAsins(startDate, endDate, showArchived);
     }
-  }, [toast, consumeAnalyzeStream, fetchPriceStatus]);
+  }, [toast, consumeAnalyzeStream, fetchPriceStatus, fetchAsins, startDate, endDate, showArchived]);
 
   const handleAnalyze = useCallback(async () => {
     if (asins.length > 0) {
@@ -531,6 +538,8 @@ export default function Home() {
       let updated = 0;
       let failed = 0;
       let skipped = 0;
+      let retried = 0;
+      let recovered = 0;
       if (reader) {
         while (true) {
           const { done, value } = await reader.read();
@@ -548,14 +557,17 @@ export default function Home() {
                 updated = msg.data?.updated ?? 0;
                 failed = msg.data?.failed ?? 0;
                 skipped = msg.data?.skipped ?? 0;
+                retried = msg.data?.retried ?? 0;
+                recovered = msg.data?.recovered ?? 0;
               }
             } catch {}
           }
         }
       }
+      setLastRefreshFailedCount(skipped);
       const parts = [`Updated ${updated} ASIN${updated === 1 ? "" : "s"}`];
+      if (recovered > 0) parts.push(`${recovered} recovered via targeted retry`);
       if (skipped > 0) parts.push(`${skipped} still missing`);
-      if (failed > 0) parts.push(`${failed} failed`);
       toast({ title: "Prices refreshed", description: parts.join(", ") });
       await fetchAsins(startDate, endDate, showArchived);
     } catch (err: any) {
@@ -622,7 +634,8 @@ export default function Home() {
         storageOverride: r.storageOverride,
       }));
     await runAnalysis(toRefresh);
-  }, [selectedSet, results, runAnalysis]);
+    await fetchAsins(startDate, endDate, showArchived);
+  }, [selectedSet, results, runAnalysis, fetchAsins, startDate, endDate, showArchived]);
 
   const handleSyncSheet = useCallback(async () => {
     setIsSyncing(true);
@@ -726,6 +739,24 @@ export default function Home() {
         const p = calculateProfit(price, r.cogs, r.feesData.fbaFulfillmentFee ?? 0, r.feesData.referralFee ?? 0, r.feesData.feesEstimatePrice, r.catalogData.weightLbs, prep.value, storage.value, settings, includeInboundShipping, r.isHazmat ?? false);
         const meets = p.roi >= settings.minRoiThreshold && p.margin >= settings.minMarginThreshold;
         return activeFilter === "profitable" ? meets : !meets;
+      });
+    }
+
+    // "No prices" filter: show only ASINs missing all price data
+    if (filterNoPrices) {
+      out = out.filter((r) =>
+        r.pricingData.lowestFbaPrice == null &&
+        r.pricingData.buyBoxPrice == null &&
+        r.pricingData.lowestPrice == null
+      );
+    }
+
+    // "Uncalculated" filter: ASINs with error OR no selected price
+    if (filterUncalculated) {
+      out = out.filter((r) => {
+        if (r.error) return true;
+        const { price } = getSelectedPrice(r, priceSource);
+        return price == null;
       });
     }
 
@@ -835,6 +866,7 @@ export default function Home() {
             case "hazmat": return r.isHazmat ? "Yes" : "No";
             case "suppressed": return r.isSearchSuppressed ? "Yes" : "No";
             case "lastReviewed": return r.lastReviewedAt ?? null;
+            case "dateAdded": return r.addedAt ?? null;
             default: return null;
           }
         });
@@ -842,7 +874,7 @@ export default function Home() {
     }
     return out;
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [results, searchQuery, selectedSearchAsinsKey, filterEligible, priceSource, settings, includeInboundShipping, colFilters, presetFilter, meltableHidden, activeFilter, buySet]);
+  }, [results, searchQuery, selectedSearchAsinsKey, filterEligible, priceSource, settings, includeInboundShipping, colFilters, presetFilter, meltableHidden, activeFilter, buySet, filterNoPrices, filterUncalculated]);
 
   // Sort all filtered results before paginating
   const sortedFilteredResults = useMemo(() => {
@@ -863,7 +895,7 @@ export default function Home() {
   }, [queryFilteredResults, sortCol, sortDir, priceSource, settings]);
 
   // Reset to page 1 when any filter/view changes
-  useEffect(() => { setPage(1); }, [searchQuery, selectedSearchAsinsKey, filterEligible, colFilters, presetFilter, activeFilter, meltableHidden, showArchived]);
+  useEffect(() => { setPage(1); }, [searchQuery, selectedSearchAsinsKey, filterEligible, colFilters, presetFilter, activeFilter, meltableHidden, showArchived, filterNoPrices, filterUncalculated]);
 
   const totalFiltered = sortedFilteredResults.length;
   const totalPages = Math.max(1, Math.ceil(totalFiltered / pageSize));
@@ -881,6 +913,8 @@ export default function Home() {
     searchQuery.trim() !== "" || selectedSearchAsins.size > 0 ? 1 : 0,
     filterEligible !== "all" ? 1 : 0,
     Object.keys(colFilters).length,
+    filterNoPrices ? 1 : 0,
+    filterUncalculated ? 1 : 0,
   ].reduce((a, b) => a + b, 0);
 
   function clearSearchFilters() {
@@ -888,6 +922,8 @@ export default function Home() {
     setSelectedSearchAsins(new Set());
     setFilterEligible("all");
     setColFilters({});
+    setFilterNoPrices(false);
+    setFilterUncalculated(false);
   }
 
   const progressPercent = progress
@@ -999,6 +1035,8 @@ export default function Home() {
                 activeFilter={activeFilter}
                 onFilterChange={setActiveFilter}
                 buyListCount={buyListCount}
+                filterUncalculated={filterUncalculated}
+                onFilterUncalculatedChange={setFilterUncalculated}
               />
             </div>
 
@@ -1028,6 +1066,25 @@ export default function Home() {
                   >
                     · Prices: {formatRelativeTime(pricesLastRefreshedAt)}
                   </span>
+                  {lastRefreshFailedCount > 0 && !filterNoPrices && (
+                    <button
+                      className="text-xs text-amber-500 hover:text-amber-400 whitespace-nowrap"
+                      onClick={() => setFilterNoPrices(true)}
+                    >
+                      · {lastRefreshFailedCount} missing
+                    </button>
+                  )}
+                  {filterNoPrices && (
+                    <span className="inline-flex items-center gap-1 text-xs text-amber-500 whitespace-nowrap">
+                      · Showing no-price ASINs
+                      <button
+                        className="text-muted-foreground hover:text-foreground underline"
+                        onClick={() => setFilterNoPrices(false)}
+                      >
+                        Clear
+                      </button>
+                    </span>
+                  )}
                 </div>
 
                 <DateRangePicker
@@ -1130,7 +1187,7 @@ export default function Home() {
                 selectedAsins={selectedSearchAsins}
                 onSelectedAsinsChange={setSelectedSearchAsins}
               />
-              <Select value={filterEligible} onValueChange={setFilterEligible}>
+              <Select value={filterEligible} onValueChange={(v) => { setFilterEligible(v); localStorage.setItem("fba-filter-eligible", v); }}>
                 <SelectTrigger className="w-[148px] h-9" data-testid="select-filter-eligible">
                   <SelectValue placeholder="Eligibility" />
                 </SelectTrigger>

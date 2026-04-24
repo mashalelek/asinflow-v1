@@ -12,6 +12,8 @@ export interface PriceRefreshResult {
   updated: number;
   failed: number;
   skipped: number;
+  retried: number;
+  recovered: number;
   errors: string[];
 }
 
@@ -19,6 +21,10 @@ const BATCH_SIZE = 5;
 const BATCH_DELAY_MS = 1500;
 const MAX_RETRIES = 3;
 const RETRY_BASE_DELAY_MS = 2000;
+
+// Targeted retry pass: slower, smaller batches
+const TARGETED_BATCH_SIZE = 3;
+const TARGETED_BATCH_DELAY_MS = 3000;
 
 function hasAnyPrice(data: AsinPricingResult): boolean {
   return (
@@ -29,37 +35,44 @@ function hasAnyPrice(data: AsinPricingResult): boolean {
 }
 
 /**
- * Attempt to fetch pricing for a single ASIN with exponential backoff
- * on 429 / transient errors. Returns null if all retries are exhausted.
+ * Attempt to fetch pricing for a single ASIN with exponential backoff.
+ * Always returns the best response we got (even if prices are null) so
+ * the caller can inspect `numberOfSellers` to distinguish "API returned
+ * offers but parsing failed" from "API call failed entirely".
  */
 async function fetchPricingWithRetry(
   asin: string,
-): Promise<AsinPricingResult | null> {
+): Promise<{ data: AsinPricingResult; offersReported: boolean } | null> {
+  let bestResponse: AsinPricingResult | null = null;
+
   for (let attempt = 0; attempt <= MAX_RETRIES; attempt++) {
     try {
       const data = await getPricing(asin);
-      // getPricing never throws on API errors — it catches internally and
-      // returns all-null fields. Treat "all prices null" as a soft failure
-      // so we can retry.
-      if (hasAnyPrice(data)) return data;
-
-      // If the response was explicitly marked restricted, don't retry.
-      if ((data as any)._restricted) {
-        log(`Price refresh: ${asin} is restricted — skipping`, "price-sync");
-        return null;
+      // Keep track of the best response (prefer one with prices, else with offer counts)
+      if (!bestResponse || hasAnyPrice(data) || (data.numberOfSellers ?? 0) > (bestResponse.numberOfSellers ?? 0)) {
+        bestResponse = data;
       }
 
-      // All nulls but not restricted — might be a transient issue.
+      if (hasAnyPrice(data)) {
+        return { data, offersReported: (data.numberOfSellers ?? 0) > 0 };
+      }
+
+      if ((data as any)._restricted) {
+        log(`Price refresh: ${asin} is restricted — skipping`, "price-sync");
+        return bestResponse
+          ? { data: bestResponse, offersReported: false }
+          : null;
+      }
+
       if (attempt < MAX_RETRIES) {
         const delay = RETRY_BASE_DELAY_MS * Math.pow(2, attempt);
         log(
-          `Price refresh: no prices for ${asin} on attempt ${attempt + 1}, retrying in ${delay}ms`,
+          `Price refresh: no prices for ${asin} on attempt ${attempt + 1} (offers=${data.numberOfSellers ?? "?"}), retrying in ${delay}ms`,
           "price-sync",
         );
         await new Promise((r) => setTimeout(r, delay));
       }
     } catch (err: any) {
-      // getPricing already catches internally, but guard against unexpected throws.
       if (attempt < MAX_RETRIES) {
         const delay = RETRY_BASE_DELAY_MS * Math.pow(2, attempt);
         log(
@@ -72,27 +85,49 @@ async function fetchPricingWithRetry(
           `Price refresh: exhausted retries for ${asin}: ${err.message}`,
           "price-sync",
         );
-        return null;
       }
     }
+  }
+
+  if (bestResponse) {
+    const offersReported = (bestResponse.numberOfSellers ?? 0) > 0;
+    return { data: bestResponse, offersReported };
   }
   return null;
 }
 
+async function writePrice(asin: string, data: AsinPricingResult): Promise<void> {
+  await query(
+    `UPDATE asin_estimates SET
+       lowest_fba_price = COALESCE($2, lowest_fba_price),
+       buy_box_price = COALESCE($3, buy_box_price),
+       buy_box_fulfillment = COALESCE($4, buy_box_fulfillment),
+       lowest_price = COALESCE($5, lowest_price),
+       sellers_fba = COALESCE($6, sellers_fba),
+       sellers_fbm = COALESCE($7, sellers_fbm),
+       fetched_at = NOW()
+     WHERE asin = $1`,
+    [
+      asin,
+      data.lowestFbaPrice,
+      data.buyBoxPrice,
+      data.buyBoxFulfillment,
+      data.lowestPrice,
+      data.sellersFba,
+      data.sellersFbm,
+    ],
+  );
+}
+
 /**
- * Lightweight price-only refresh.
+ * Lightweight price-only refresh with three-pass retry strategy.
  *
- * For each active ASIN: calls SP-API getItemOffers (via getPricing) and
- * updates price columns + fetched_at in asin_estimates. Does NOT re-fetch
- * catalog, fees, or meltable/hazmat data. Client-side profit calculations
- * will automatically reflect the refreshed prices.
+ * Pass 1 (main): batches of 5, 1.5s delay
+ * Pass 2 (gap-fill): retry all failures, same cadence, 5s cooldown first
+ * Pass 3 (targeted): retry only ASINs where the API confirmed offers exist
+ *         but our parsing produced no prices — batches of 3, 3s delay
  *
- * Key safeguards:
- *  - Uses COALESCE so a NULL API response never overwrites an existing price.
- *  - Skips the DB write entirely if the API returned no usable prices.
- *  - Retries with exponential backoff (2s → 4s → 8s) on empty responses.
- *  - After the main pass, does a gap-fill pass for any ASINs that failed.
- *  - Processes in batches of 5 with 1.5s delay to stay within SP-API rate limits.
+ * COALESCE protects existing good values from being overwritten with NULL.
  */
 export async function refreshPrices(
   onProgress?: (p: PriceRefreshProgress) => void | Promise<void>,
@@ -105,43 +140,43 @@ export async function refreshPrices(
   log(`Price refresh starting for ${asins.length} active ASINs`, "price-sync");
 
   let updated = 0;
-  let skipped = 0;
   const failedAsins: string[] = [];
+  // ASINs where the API reported offers exist but we got no prices
+  const offersButNoPrices = new Set<string>();
   const errors: string[] = [];
   let processed = 0;
 
+  /**
+   * Process a single ASIN. Returns true if prices were written.
+   * Populates offersButNoPrices when the API says offers exist but
+   * parsing returned no prices.
+   */
   async function processAsin(asin: string): Promise<boolean> {
-    const pricingData = await fetchPricingWithRetry(asin);
+    const result = await fetchPricingWithRetry(asin);
 
-    if (!pricingData || !hasAnyPrice(pricingData)) {
-      return false;
+    if (!result) return false;
+
+    const { data, offersReported } = result;
+
+    if (hasAnyPrice(data)) {
+      await writePrice(asin, data);
+      offersButNoPrices.delete(asin); // recovered
+      return true;
     }
 
-    // COALESCE on every field: never overwrite a good value with NULL.
-    await query(
-      `UPDATE asin_estimates SET
-         lowest_fba_price = COALESCE($2, lowest_fba_price),
-         buy_box_price = COALESCE($3, buy_box_price),
-         buy_box_fulfillment = COALESCE($4, buy_box_fulfillment),
-         lowest_price = COALESCE($5, lowest_price),
-         sellers_fba = COALESCE($6, sellers_fba),
-         sellers_fbm = COALESCE($7, sellers_fbm),
-         fetched_at = NOW()
-       WHERE asin = $1`,
-      [
-        asin,
-        pricingData.lowestFbaPrice,
-        pricingData.buyBoxPrice,
-        pricingData.buyBoxFulfillment,
-        pricingData.lowestPrice,
-        pricingData.sellersFba,
-        pricingData.sellersFbm,
-      ],
-    );
-    return true;
+    // API returned offer counts but we got no parsed prices
+    if (offersReported) {
+      offersButNoPrices.add(asin);
+      log(
+        `${asin}: API returned ${data.numberOfSellers} offers but parsing produced no prices — flagged for retry`,
+        "price-sync",
+      );
+    }
+
+    return false;
   }
 
-  // ── Main pass ──────────────────────────────────────────────────────
+  // ── Pass 1: Main ──────────────────────────────────────────────────
   for (let i = 0; i < asins.length; i += BATCH_SIZE) {
     const batch = asins.slice(i, i + BATCH_SIZE);
 
@@ -150,16 +185,11 @@ export async function refreshPrices(
         processed++;
         if (onProgress) {
           try {
-            await onProgress({
-              current: processed,
-              total: asins.length,
-              asin,
-            });
+            await onProgress({ current: processed, total: asins.length, asin });
           } catch {}
         }
         try {
-          const ok = await processAsin(asin);
-          if (ok) {
+          if (await processAsin(asin)) {
             updated++;
           } else {
             failedAsins.push(asin);
@@ -177,13 +207,13 @@ export async function refreshPrices(
     }
   }
 
-  // ── Gap-fill pass ──────────────────────────────────────────────────
+  // ── Pass 2: Gap-fill (all failures) ───────────────────────────────
+  let gapFillRecovered = 0;
   if (failedAsins.length > 0) {
     log(
       `Price refresh gap-fill: retrying ${failedAsins.length} failed ASINs`,
       "price-sync",
     );
-    // Wait a bit before the gap-fill to let rate limits cool down.
     await new Promise((r) => setTimeout(r, 5000));
 
     const stillFailed: string[] = [];
@@ -201,13 +231,13 @@ export async function refreshPrices(
             } catch {}
           }
           try {
-            const ok = await processAsin(asin);
-            if (ok) {
+            if (await processAsin(asin)) {
               updated++;
+              gapFillRecovered++;
             } else {
               stillFailed.push(asin);
             }
-          } catch (err: any) {
+          } catch {
             stillFailed.push(asin);
           }
         }),
@@ -217,18 +247,96 @@ export async function refreshPrices(
       }
     }
 
-    skipped = stillFailed.length;
     if (stillFailed.length > 0) {
       log(
-        `Price refresh: ${stillFailed.length} ASINs still without pricing after gap-fill: ${stillFailed.slice(0, 20).join(", ")}${stillFailed.length > 20 ? "..." : ""}`,
+        `Gap-fill: ${stillFailed.length} ASINs still failed, ${gapFillRecovered} recovered`,
         "price-sync",
       );
     }
   }
 
+  // ── Pass 3: Targeted retry (offers exist but no prices) ───────────
+  let targetedRetried = 0;
+  let targetedRecovered = 0;
+
+  if (offersButNoPrices.size > 0) {
+    const targetList = Array.from(offersButNoPrices);
+    targetedRetried = targetList.length;
+    log(
+      `Targeted retry: ${targetList.length} ASINs had offers but no prices — retrying with slower cadence`,
+      "price-sync",
+    );
+    await new Promise((r) => setTimeout(r, 8000)); // longer cooldown
+
+    const stillMissing: string[] = [];
+    for (let i = 0; i < targetList.length; i += TARGETED_BATCH_SIZE) {
+      const batch = targetList.slice(i, i + TARGETED_BATCH_SIZE);
+      await Promise.all(
+        batch.map(async (asin) => {
+          if (onProgress) {
+            try {
+              await onProgress({
+                current: asins.length,
+                total: asins.length,
+                asin: `Targeted retry: ${asin}`,
+              });
+            } catch {}
+          }
+          try {
+            const result = await fetchPricingWithRetry(asin);
+            if (result && hasAnyPrice(result.data)) {
+              await writePrice(asin, result.data);
+              updated++;
+              targetedRecovered++;
+            } else {
+              stillMissing.push(asin);
+              // Log raw data for investigation
+              log(
+                `STILL MISSING ${asin}: API returned numberOfSellers=${result?.data.numberOfSellers ?? "null"}, ` +
+                `lowestFba=${result?.data.lowestFbaPrice}, buyBox=${result?.data.buyBoxPrice}, ` +
+                `lowest=${result?.data.lowestPrice}, sellersFba=${result?.data.sellersFba}, ` +
+                `sellersFbm=${result?.data.sellersFbm}`,
+                "price-sync",
+              );
+            }
+          } catch (err: any) {
+            stillMissing.push(asin);
+            log(`Targeted retry error for ${asin}: ${err.message}`, "price-sync");
+          }
+        }),
+      );
+      if (i + TARGETED_BATCH_SIZE < targetList.length) {
+        await new Promise((r) => setTimeout(r, TARGETED_BATCH_DELAY_MS));
+      }
+    }
+
+    log(
+      `Targeted retry complete: ${targetedRetried} retried, ${targetedRecovered} recovered, ${stillMissing.length} still missing`,
+      "price-sync",
+    );
+    if (stillMissing.length > 0) {
+      log(
+        `Still missing after all passes: ${stillMissing.join(", ")}`,
+        "price-sync",
+      );
+    }
+  }
+
+  const totalMissing = offersButNoPrices.size - targetedRecovered;
+  const skipped = Math.max(0, failedAsins.length - gapFillRecovered - targetedRetried + totalMissing);
+
   log(
-    `Price refresh complete: ${updated} updated, ${failedAsins.length - skipped} recovered in gap-fill, ${skipped} still missing`,
+    `Price refresh complete: ${updated} updated, ${gapFillRecovered} gap-fill recovered, ` +
+    `${targetedRetried} targeted (${targetedRecovered} recovered), ${skipped} still missing`,
     "price-sync",
   );
-  return { updated, failed: skipped, skipped, errors };
+
+  return {
+    updated,
+    failed: skipped,
+    skipped,
+    retried: targetedRetried,
+    recovered: targetedRecovered,
+    errors,
+  };
 }
