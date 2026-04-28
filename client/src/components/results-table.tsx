@@ -15,6 +15,7 @@ import {
   getEffectivePrep,
   getEffectiveStorage,
   extractDomain,
+  calculateMaxCogs,
 } from "@shared/schema";
 
 function ResizeHandle({ onMouseDown }: { onMouseDown: (e: React.MouseEvent) => void }) {
@@ -81,6 +82,8 @@ const DEFAULT_COL_WIDTHS: Partial<Record<ColumnId, number>> = {
   suppressed: 90,
   lastReviewed: 100,
   dateAdded: 95,
+  category: 160,
+  maxCogs: 90,
 };
 
 const ACTUALS_COLS = new Set<ColumnId>([
@@ -435,6 +438,20 @@ export function getRowValue(
     case "product": return result.catalogData.title ?? result.asin;
     case "lastReviewed": return result.lastReviewedAt ?? null;
     case "dateAdded": return result.addedAt ?? null;
+    case "category": return result.category ?? null;
+    case "maxCogs": {
+      const { price } = getSelectedPrice(result, priceSource);
+      const p = getEffectivePrep(result, settings);
+      const s2 = getEffectiveStorage(result, settings);
+      return calculateMaxCogs(
+        price,
+        result.feesData.fbaFulfillmentFee,
+        result.feesData.referralFee,
+        result.feesData.feesEstimatePrice,
+        result.catalogData.weightLbs,
+        p.value, s2.value, settings, true, result.isHazmat ?? false,
+      );
+    }
     default: return null;
   }
 }
@@ -507,6 +524,21 @@ export function ResultsTable({
     const opts: MultiSelectOption[] = [{ value: "__none__", label: "No supplier", count: noSupplierCount }];
     for (const [domain, count] of Array.from(counts.entries()).sort((a, b) => a[0].localeCompare(b[0]))) {
       opts.push({ value: domain, label: domain, count });
+    }
+    return opts;
+  }, [allResults]);
+
+  const categoryOptions: MultiSelectOption[] = useMemo(() => {
+    const counts = new Map<string, number>();
+    let noCatCount = 0;
+    for (const r of allResults) {
+      const cat = r.category;
+      if (!cat) { noCatCount++; continue; }
+      counts.set(cat, (counts.get(cat) ?? 0) + 1);
+    }
+    const opts: MultiSelectOption[] = [{ value: "__none__", label: "No category", count: noCatCount }];
+    for (const [cat, count] of Array.from(counts.entries()).sort((a, b) => a[0].localeCompare(b[0]))) {
+      opts.push({ value: cat.toLowerCase(), label: cat, count });
     }
     return opts;
   }, [allResults]);
@@ -663,7 +695,16 @@ export function ResultsTable({
                   data-testid={`header-${colId}`}
                 >
                   <span className="inline-flex items-center gap-1 pr-2 overflow-hidden">
-                    {col.label}
+                    {colId === "maxCogs" ? (
+                      <Tooltip>
+                        <TooltipTrigger asChild>
+                          <span className="cursor-help">{col.label}</span>
+                        </TooltipTrigger>
+                        <TooltipContent side="bottom">
+                          <p className="text-xs">Max COGS where: margin {"\u2265"} {settings.maxCogsMinMarginPct}%, ROI {"\u2265"} {settings.maxCogsMinRoiPct}%, profit/unit {"\u2265"} ${settings.maxCogsMinProfitUnit}</p>
+                        </TooltipContent>
+                      </Tooltip>
+                    ) : col.label}
                     {isActive && (sortDir === "asc" ? <ArrowUp className="h-3 w-3" /> : <ArrowDown className="h-3 w-3" />)}
                     {onFilterApply && onFilterClear && (
                       <ColumnFilterButton
@@ -671,7 +712,7 @@ export function ResultsTable({
                         currentFilter={colFilters[colId]}
                         onApply={onFilterApply}
                         onClear={() => onFilterClear(colId)}
-                        multiSelectOptions={colId === "tags" ? tagOptions : colId === "supplier" ? supplierOptions : undefined}
+                        multiSelectOptions={colId === "tags" ? tagOptions : colId === "supplier" ? supplierOptions : colId === "category" ? categoryOptions : undefined}
                       />
                     )}
                   </span>
@@ -1633,6 +1674,26 @@ function renderCell(
       const dd = String(d.getDate()).padStart(2, "0");
       const yyyy = d.getFullYear();
       return <span className="text-sm text-muted-foreground">{`${mm}/${dd}/${yyyy}`}</span>;
+    }
+
+    case "category": {
+      const cat = result.category;
+      if (!cat) return <span className="text-muted-foreground text-sm">-</span>;
+      return <span className="text-sm">{cat}</span>;
+    }
+
+    case "maxCogs": {
+      const mc = calculateMaxCogs(
+        price,
+        result.feesData.fbaFulfillmentFee,
+        result.feesData.referralFee,
+        result.feesData.feesEstimatePrice,
+        result.catalogData.weightLbs,
+        prep.value, storage.value, settings, includeInboundShipping, result.isHazmat ?? false,
+      );
+      if (mc == null) return <span className="text-muted-foreground text-sm">—</span>;
+      if (mc < 0) return <span className="font-mono text-sm text-red-500">-${Math.abs(mc).toFixed(2)}</span>;
+      return <span className="font-mono text-sm">${mc.toFixed(2)}</span>;
     }
 
     default:

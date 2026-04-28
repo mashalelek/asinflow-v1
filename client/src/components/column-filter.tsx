@@ -31,6 +31,7 @@ const NUMERIC_COLS = new Set<ColumnId>([
   "fba7d", "fba30d", "fbm7d", "fbm30d",
   "actUnitsSold", "actRevenue", "actRefunds", "actRefundPct",
   "actProfit", "actProfitPerUnit", "actMargin", "actRoi",
+  "maxCogs",
 ]);
 
 const BOOL_COLS = new Set<ColumnId>(["meltable", "hazmat", "suppressed"]);
@@ -40,6 +41,7 @@ function getFilterType(colId: ColumnId): FilterType {
   if (NUMERIC_COLS.has(colId)) return "numeric";
   if (colId === "tags") return "tags";
   if (colId === "supplier") return "supplier";
+  if (colId === "category") return "supplier"; // reuse supplier multi-select type
   if (BOOL_COLS.has(colId)) return "boolean";
   if (REVIEWED_COLS.has(colId)) return "reviewed";
   return "text";

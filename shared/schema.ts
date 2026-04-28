@@ -9,6 +9,9 @@ export const settingsSchema = z.object({
   hazmatPrepSurcharge: z.number().min(0).default(0),
   minRoiThreshold: z.number().min(0).default(15),
   minMarginThreshold: z.number().min(0).default(10),
+  maxCogsMinMarginPct: z.number().min(0).default(12),
+  maxCogsMinRoiPct: z.number().min(0).default(20),
+  maxCogsMinProfitUnit: z.number().min(0).default(3),
 });
 
 export type Settings = z.infer<typeof settingsSchema>;
@@ -100,6 +103,7 @@ export interface AsinResult {
   pricesFetchedAt?: string | null;
   lastReviewedAt?: string | null;
   addedAt?: string | null;
+  category?: string | null;
   sellersDelta?: {
     fba_7d: number | null;
     fba_30d: number | null;
@@ -236,6 +240,57 @@ export function calculateProfit(
   return { profit, roi, margin, inboundShipping, weightMissing, adjustedReferralFee, totalFbaFee };
 }
 
+/**
+ * Calculate the maximum COGS at which all three profitability criteria are
+ * simultaneously met: margin >= M%, ROI >= R%, profit/unit >= $P.
+ *
+ * Returns null if any required input (price, fees) is missing.
+ */
+export function calculateMaxCogs(
+  salePrice: number | null,
+  fbaFee: number | null,
+  referralFee: number | null,
+  feesEstimatePrice: number | null,
+  weightLbs: number | null,
+  prepCost: number,
+  storageFee: number,
+  settings: Settings,
+  includeInboundShipping: boolean,
+  isHazmat: boolean,
+): number | null {
+  if (salePrice == null || salePrice <= 0) return null;
+  if (fbaFee == null || referralFee == null) return null;
+
+  // Adjust referral fee proportionally if the fee estimate was based on a different price
+  let adjReferralFee = referralFee;
+  if (feesEstimatePrice && feesEstimatePrice > 0 && salePrice !== feesEstimatePrice) {
+    adjReferralFee = parseFloat(((referralFee / feesEstimatePrice) * salePrice).toFixed(2));
+  }
+
+  const hazmatShipExtra = isHazmat ? (settings.hazmatShipSurcharge ?? 0) : 0;
+  const hazmatPrepExtra = isHazmat ? (settings.hazmatPrepSurcharge ?? 0) : 0;
+  const totalFbaFee = fbaFee + settings.lowInventorySurcharge;
+  const effectivePrep = prepCost + hazmatPrepExtra;
+  const inboundCost = includeInboundShipping
+    ? ((weightLbs != null && weightLbs > 0) ? weightLbs * settings.inboundShippingCost + hazmatShipExtra : hazmatShipExtra)
+    : 0;
+
+  const totalFees = totalFbaFee + adjReferralFee + inboundCost + effectivePrep + storageFee;
+
+  const M = settings.maxCogsMinMarginPct / 100;
+  const R = settings.maxCogsMinRoiPct / 100;
+  const P = settings.maxCogsMinProfitUnit;
+
+  // Constraint A — margin: cogs <= salePrice * (1 - M) - totalFees
+  const maxA = salePrice * (1 - M) - totalFees;
+  // Constraint B — ROI: cogs <= (salePrice - totalFees) / (1 + R)
+  const maxB = (salePrice - totalFees) / (1 + R);
+  // Constraint C — profit/unit: cogs <= salePrice - totalFees - P
+  const maxC = salePrice - totalFees - P;
+
+  return parseFloat(Math.min(maxA, maxB, maxC).toFixed(2));
+}
+
 export function extractDomain(url: string | null): string | null {
   if (!url) return null;
   try {
@@ -260,6 +315,8 @@ export const DEFAULT_COLUMNS = [
   "meltable", "hazmat", "suppressed",
   "lastReviewed",
   "dateAdded",
+  "category",
+  "maxCogs",
 ] as const;
 
 export type ColumnId = (typeof DEFAULT_COLUMNS)[number];
@@ -313,6 +370,8 @@ export const ALL_COLUMNS: ColumnDef[] = [
   { id: "suppressed", label: "Suppressed", defaultVisible: false, align: "left" },
   { id: "lastReviewed", label: "Last Reviewed", defaultVisible: false, align: "left" },
   { id: "dateAdded", label: "Date Added", defaultVisible: false, align: "left" },
+  { id: "category", label: "Category", defaultVisible: false, align: "left" },
+  { id: "maxCogs", label: "Max COGS", defaultVisible: false, align: "right" },
 ];
 
 export const users = undefined;

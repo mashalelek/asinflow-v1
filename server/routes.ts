@@ -652,6 +652,7 @@ export async function registerRoutes(
           pricesFetchedAt: row.fetched_at ? new Date(row.fetched_at).toISOString() : null,
           lastReviewedAt: row.last_reviewed_at ? new Date(row.last_reviewed_at).toISOString() : null,
           addedAt: row.added_at ? new Date(row.added_at).toISOString() : null,
+          category: row.category ?? null,
           sellersDelta: d ? {
             fba_7d: curFba != null && d.fba_7d_old != null ? curFba - parseInt(d.fba_7d_old) : null,
             fba_30d: curFba != null && d.fba_30d_old != null ? curFba - parseInt(d.fba_30d_old) : null,

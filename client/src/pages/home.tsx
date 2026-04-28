@@ -29,6 +29,7 @@ import {
   getEffectivePrep,
   getEffectiveStorage,
   extractDomain,
+  calculateMaxCogs,
 } from "@shared/schema";
 import { useToast } from "@/hooks/use-toast";
 import { DateRangePicker } from "@/components/date-range-picker";
@@ -867,6 +868,13 @@ export default function Home() {
             case "suppressed": return r.isSearchSuppressed ? "Yes" : "No";
             case "lastReviewed": return r.lastReviewedAt ?? null;
             case "dateAdded": return r.addedAt ?? null;
+            case "category": return r.category ?? null;
+            case "maxCogs": {
+              const { price: mcP } = getSelectedPrice(r, priceSource);
+              const mcPrep = getEffectivePrep(r, settings);
+              const mcStor = getEffectiveStorage(r, settings);
+              return calculateMaxCogs(mcP, r.feesData.fbaFulfillmentFee, r.feesData.referralFee, r.feesData.feesEstimatePrice, r.catalogData.weightLbs, mcPrep.value, mcStor.value, settings, includeInboundShipping, r.isHazmat ?? false);
+            }
             default: return null;
           }
         });
@@ -1164,7 +1172,7 @@ export default function Home() {
                     </Button>
                   </>
                 )}
-                <ExportButtons results={results} priceSource={priceSource} settings={settings} />
+                <ExportButtons results={sortedFilteredResults} priceSource={priceSource} settings={settings} columnConfig={columnConfig} />
                 <ViewPresets
                   columnConfig={columnConfig}
                   onColumnConfigChange={setColumnConfig}

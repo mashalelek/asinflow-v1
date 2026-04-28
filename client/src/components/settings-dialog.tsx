@@ -180,6 +180,51 @@ export function SettingsDialog({ onSettingsChange }: SettingsDialogProps) {
           <Separator />
 
           <div>
+            <h3 className="text-sm font-medium text-muted-foreground mb-3">Max COGS Thresholds</h3>
+            <p className="text-xs text-muted-foreground mb-3">Criteria for the Max COGS column — the maximum cost at which all three are met</p>
+            <div className="space-y-3">
+              <div className="flex items-center justify-between gap-4">
+                <Label htmlFor="mcMargin" className="text-sm whitespace-nowrap">Min Profit Margin (%)</Label>
+                <Input
+                  id="mcMargin"
+                  type="number"
+                  step="1"
+                  min="0"
+                  value={settings.maxCogsMinMarginPct}
+                  onChange={(e) => updateField("maxCogsMinMarginPct", e.target.value)}
+                  className="w-28 text-right"
+                />
+              </div>
+              <div className="flex items-center justify-between gap-4">
+                <Label htmlFor="mcRoi" className="text-sm whitespace-nowrap">Min ROI (%)</Label>
+                <Input
+                  id="mcRoi"
+                  type="number"
+                  step="1"
+                  min="0"
+                  value={settings.maxCogsMinRoiPct}
+                  onChange={(e) => updateField("maxCogsMinRoiPct", e.target.value)}
+                  className="w-28 text-right"
+                />
+              </div>
+              <div className="flex items-center justify-between gap-4">
+                <Label htmlFor="mcProfit" className="text-sm whitespace-nowrap">Min Profit per Unit ($)</Label>
+                <Input
+                  id="mcProfit"
+                  type="number"
+                  step="0.01"
+                  min="0"
+                  value={settings.maxCogsMinProfitUnit}
+                  onChange={(e) => updateField("maxCogsMinProfitUnit", e.target.value)}
+                  className="w-28 text-right"
+                />
+              </div>
+            </div>
+          </div>
+
+          <Separator />
+
+          <div>
             <h3 className="text-sm font-medium text-muted-foreground mb-3">SP-API Credentials</h3>
             <p className="text-xs text-muted-foreground mb-3">
               Store these in your Replit Secrets tab. The app reads them from environment variables on the server.
