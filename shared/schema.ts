@@ -104,6 +104,8 @@ export interface AsinResult {
   lastReviewedAt?: string | null;
   addedAt?: string | null;
   category?: string | null;
+  isWholesale?: boolean;
+  isOa?: boolean;
   sellersDelta?: {
     fba_7d: number | null;
     fba_30d: number | null;
@@ -317,6 +319,7 @@ export const DEFAULT_COLUMNS = [
   "dateAdded",
   "category",
   "maxCogs",
+  "sourcing",
 ] as const;
 
 export type ColumnId = (typeof DEFAULT_COLUMNS)[number];
@@ -372,6 +375,7 @@ export const ALL_COLUMNS: ColumnDef[] = [
   { id: "dateAdded", label: "Date Added", defaultVisible: false, align: "left" },
   { id: "category", label: "Category", defaultVisible: false, align: "left" },
   { id: "maxCogs", label: "Max COGS", defaultVisible: false, align: "right" },
+  { id: "sourcing", label: "Sourcing", defaultVisible: false, align: "left" },
 ];
 
 export const users = undefined;

@@ -869,6 +869,14 @@ export default function Home() {
             case "lastReviewed": return r.lastReviewedAt ?? null;
             case "dateAdded": return r.addedAt ?? null;
             case "category": return r.category ?? null;
+            case "sourcing": {
+              const w = r.isWholesale ?? false;
+              const o = r.isOa ?? false;
+              if (w && o) return "w + oa";
+              if (w) return "w";
+              if (o) return "oa";
+              return null;
+            }
             case "maxCogs": {
               const { price: mcP } = getSelectedPrice(r, priceSource);
               const mcPrep = getEffectivePrep(r, settings);

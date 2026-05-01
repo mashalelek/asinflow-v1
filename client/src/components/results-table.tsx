@@ -84,6 +84,7 @@ const DEFAULT_COL_WIDTHS: Partial<Record<ColumnId, number>> = {
   dateAdded: 95,
   category: 160,
   maxCogs: 90,
+  sourcing: 80,
 };
 
 const ACTUALS_COLS = new Set<ColumnId>([
@@ -101,6 +102,15 @@ import { type FilterMode } from "@/components/summary-cards";
 import { ColumnFilterButton, type ColFilter, type FilterMap, type MultiSelectOption } from "@/components/column-filter";
 import { TagEditor } from "@/components/tag-editor";
 import { NoteEditor } from "@/components/note-editor";
+
+function getSourcingLabel(r: AsinResult): string {
+  const w = r.isWholesale ?? false;
+  const o = r.isOa ?? false;
+  if (w && o) return "W + OA";
+  if (w) return "W";
+  if (o) return "OA";
+  return "";
+}
 
 function markReviewed(asin: string, onResultUpdate?: (asin: string, updates: Partial<AsinResult>) => void) {
   fetch(`/api/asins/${asin}/reviewed`, { method: "PUT" }).catch(() => {});
@@ -339,7 +349,7 @@ interface ResultsTableProps {
 
 function fmt(value: number | null): string {
   if (value == null) return "-";
-  return `$${value.toFixed(2)}`;
+  return `$${value.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
 }
 
 function fmtPct(value: number): string {
@@ -439,6 +449,7 @@ export function getRowValue(
     case "lastReviewed": return result.lastReviewedAt ?? null;
     case "dateAdded": return result.addedAt ?? null;
     case "category": return result.category ?? null;
+    case "sourcing": return getSourcingLabel(result) || null;
     case "maxCogs": {
       const { price } = getSelectedPrice(result, priceSource);
       const p = getEffectivePrep(result, settings);
@@ -541,6 +552,24 @@ export function ResultsTable({
       opts.push({ value: cat.toLowerCase(), label: cat, count });
     }
     return opts;
+  }, [allResults]);
+
+  const sourcingOptions: MultiSelectOption[] = useMemo(() => {
+    let wCount = 0, oCount = 0, bothCount = 0, noneCount = 0;
+    for (const r of allResults) {
+      const w = r.isWholesale ?? false;
+      const o = r.isOa ?? false;
+      if (w && o) bothCount++;
+      else if (w) wCount++;
+      else if (o) oCount++;
+      else noneCount++;
+    }
+    return [
+      { value: "w", label: "Wholesale", count: wCount },
+      { value: "oa", label: "OA", count: oCount },
+      { value: "w + oa", label: "Both (W + OA)", count: bothCount },
+      { value: "__none__", label: "None", count: noneCount },
+    ];
   }, [allResults]);
 
   // Column resize state — persisted in localStorage
@@ -712,7 +741,7 @@ export function ResultsTable({
                         currentFilter={colFilters[colId]}
                         onApply={onFilterApply}
                         onClear={() => onFilterClear(colId)}
-                        multiSelectOptions={colId === "tags" ? tagOptions : colId === "supplier" ? supplierOptions : colId === "category" ? categoryOptions : undefined}
+                        multiSelectOptions={colId === "tags" ? tagOptions : colId === "supplier" ? supplierOptions : colId === "category" ? categoryOptions : colId === "sourcing" ? sourcingOptions : undefined}
                       />
                     )}
                   </span>
@@ -821,6 +850,19 @@ export function ResultsTable({
                         currentNote={result.notes ?? null}
                         onNoteChanged={(notes) => onResultUpdate(result.asin, { notes })}
                       />
+                    );
+                  } else if (colId === "sourcing" && onResultUpdate) {
+                    const sLabel = getSourcingLabel(result);
+                    content = (
+                      <span className="inline-flex items-center gap-1">
+                        <span className="text-sm">{sLabel || "\u2014"}</span>
+                        <SourcingEditor
+                          asin={result.asin}
+                          isWholesale={result.isWholesale ?? false}
+                          isOa={result.isOa ?? false}
+                          onChanged={(w, o) => onResultUpdate(result.asin, { isWholesale: w, isOa: o })}
+                        />
+                      </span>
                     );
                   } else {
                     content = renderCell(colId, result, price, label, hasError, profitData, settings, prep, storage, includeInboundShipping, priceFallback);
@@ -960,6 +1002,61 @@ function CogsEditor({
   );
 }
 
+function SourcingEditor({ asin, isWholesale, isOa, onChanged }: {
+  asin: string;
+  isWholesale: boolean;
+  isOa: boolean;
+  onChanged: (w: boolean, o: boolean) => void;
+}) {
+  const [open, setOpen] = useState(false);
+  const [w, setW] = useState(isWholesale);
+  const [o, setO] = useState(isOa);
+  const [saving, setSaving] = useState(false);
+
+  async function save() {
+    setSaving(true);
+    try {
+      const res = await fetch(`/api/asins/${asin}/sourcing-type`, {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ is_wholesale: w, is_oa: o }),
+      });
+      if (!res.ok) throw new Error("Failed");
+      const data = await res.json();
+      onChanged(data.isWholesale, data.isOa);
+      setOpen(false);
+    } catch {} finally { setSaving(false); }
+  }
+
+  return (
+    <Popover open={open} onOpenChange={(v) => { setOpen(v); if (v) { setW(isWholesale); setO(isOa); } }}>
+      <PopoverTrigger asChild>
+        <button className="text-muted-foreground/40 hover:text-muted-foreground p-0 ml-0.5" onClick={(e) => e.stopPropagation()}>
+          <Pencil className="h-2.5 w-2.5" />
+        </button>
+      </PopoverTrigger>
+      <PopoverContent className="w-48 p-3" align="start" sideOffset={4} onClick={(e) => e.stopPropagation()}>
+        <div className="space-y-2">
+          <label className="flex items-center gap-2 text-sm cursor-pointer">
+            <input type="checkbox" checked={w} onChange={(e) => setW(e.target.checked)} className="h-3.5 w-3.5 accent-blue-500" />
+            Wholesale
+          </label>
+          <label className="flex items-center gap-2 text-sm cursor-pointer">
+            <input type="checkbox" checked={o} onChange={(e) => setO(e.target.checked)} className="h-3.5 w-3.5 accent-blue-500" />
+            Online Arbitrage
+          </label>
+          <div className="flex justify-end gap-2 pt-1">
+            <button className="text-xs text-muted-foreground hover:text-foreground px-2 py-1" onClick={() => setOpen(false)}>Cancel</button>
+            <button className="text-xs bg-primary text-primary-foreground px-3 py-1 rounded hover:bg-primary/90" onClick={save} disabled={saving}>
+              {saving ? "..." : "Save"}
+            </button>
+          </div>
+        </div>
+      </PopoverContent>
+    </Popover>
+  );
+}
+
 function BuyLinkEditor({ asin, currentLink, onChanged }: { asin: string; currentLink: string | null; onChanged: (buyLink: string | null) => void }) {
   const [open, setOpen] = useState(false);
   const [url, setUrl] = useState(currentLink ?? "");
@@ -1025,7 +1122,7 @@ function CogsDisplay({
 
   return (
     <span className="inline-flex items-center gap-1">
-      <span className={colorClass}>COGS: ${result.cogs?.toFixed(2) ?? "0.00"}</span>
+      <span className={colorClass}>COGS: {fmt(result.cogs ?? 0)}</span>
       {badge && (
         <Tooltip>
           <TooltipTrigger asChild>
@@ -1233,7 +1330,7 @@ function ProductCell({ result, price, settings, onResultUpdate }: { result: Asin
   );
 }
 
-function renderCell(
+export function renderCell(
   colId: ColumnId,
   result: AsinResult,
   price: number | null,
@@ -1528,7 +1625,7 @@ function renderCell(
       return <span className="font-mono text-sm">{result.actuals ? result.actuals.units_sold : "-"}</span>;
 
     case "actRevenue":
-      return <span className="font-mono text-sm">{result.actuals ? `$${result.actuals.revenue.toFixed(2)}` : "-"}</span>;
+      return <span className="font-mono text-sm">{result.actuals ? fmt(result.actuals.revenue) : "-"}</span>;
 
     case "actRefunds":
       return <span className="font-mono text-sm">{result.actuals ? result.actuals.units_refunded : "-"}</span>;
@@ -1559,7 +1656,7 @@ function renderCell(
       const total = perUnit.profit * units;
       return (
         <span className={`font-mono text-sm font-semibold ${total >= 0 ? "text-emerald-600 dark:text-emerald-400" : "text-red-600 dark:text-red-400"}`}>
-          ${total.toFixed(2)}
+          {fmt(total)}
         </span>
       );
     }
@@ -1583,7 +1680,7 @@ function renderCell(
       );
       return (
         <span className={`font-mono text-sm ${perUnit.profit >= 0 ? "text-emerald-600 dark:text-emerald-400" : "text-red-600 dark:text-red-400"}`}>
-          ${perUnit.profit.toFixed(2)}
+          {fmt(perUnit.profit)}
         </span>
       );
     }
@@ -1682,6 +1779,12 @@ function renderCell(
       return <span className="text-sm">{cat}</span>;
     }
 
+    case "sourcing": {
+      const sLabel = getSourcingLabel(result);
+      if (!sLabel) return <span className="text-muted-foreground text-sm">{"\u2014"}</span>;
+      return <span className="text-sm">{sLabel}</span>;
+    }
+
     case "maxCogs": {
       const mc = calculateMaxCogs(
         price,
@@ -1692,8 +1795,8 @@ function renderCell(
         prep.value, storage.value, settings, includeInboundShipping, result.isHazmat ?? false,
       );
       if (mc == null) return <span className="text-muted-foreground text-sm">—</span>;
-      if (mc < 0) return <span className="font-mono text-sm text-red-500">-${Math.abs(mc).toFixed(2)}</span>;
-      return <span className="font-mono text-sm">${mc.toFixed(2)}</span>;
+      if (mc < 0) return <span className="font-mono text-sm text-red-500">-{fmt(Math.abs(mc))}</span>;
+      return <span className="font-mono text-sm">{fmt(mc)}</span>;
     }
 
     default:

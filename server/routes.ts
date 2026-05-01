@@ -481,7 +481,7 @@ export async function registerRoutes(
       const result = await query(`
         SELECT
           a.asin, a.title, a.image_url, a.brand, a.category, a.weight_lb, a.buy_link, a.is_active,
-          a.primary_sku, a.in_catalog, a.notes, a.is_meltable, a.is_hazmat, a.is_search_suppressed, a.suppression_reasons, a.last_reviewed_at, a.added_at,
+          a.primary_sku, a.in_catalog, a.notes, a.is_meltable, a.is_hazmat, a.is_search_suppressed, a.suppression_reasons, a.last_reviewed_at, a.added_at, a.is_wholesale, a.is_oa,
           e.cogs, e.cogs_source, e.prep_override, e.storage_override,
           e.lowest_fba_price, e.buy_box_price, e.buy_box_fulfillment, e.lowest_price,
           e.sellers_fba, e.sellers_fbm,
@@ -653,6 +653,8 @@ export async function registerRoutes(
           lastReviewedAt: row.last_reviewed_at ? new Date(row.last_reviewed_at).toISOString() : null,
           addedAt: row.added_at ? new Date(row.added_at).toISOString() : null,
           category: row.category ?? null,
+          isWholesale: row.is_wholesale ?? false,
+          isOa: row.is_oa ?? false,
           sellersDelta: d ? {
             fba_7d: curFba != null && d.fba_7d_old != null ? curFba - parseInt(d.fba_7d_old) : null,
             fba_30d: curFba != null && d.fba_30d_old != null ? curFba - parseInt(d.fba_30d_old) : null,
@@ -1098,6 +1100,25 @@ export async function registerRoutes(
     try {
       await query(`UPDATE asins SET last_reviewed_at = NOW() WHERE asin = $1`, [asin]);
       res.json({ ok: true });
+    } catch (err: any) { res.status(500).json({ message: err.message }); }
+  });
+
+  // === Sourcing type ===
+  app.put("/api/asins/:asin/sourcing-type", async (req: Request, res: Response) => {
+    const { asin } = req.params;
+    const { is_wholesale, is_oa } = req.body as { is_wholesale?: boolean; is_oa?: boolean };
+    if (!isDbAvailable()) { res.status(503).json({ message: "Database not available" }); return; }
+    try {
+      const sets: string[] = [];
+      const vals: any[] = [];
+      let idx = 1;
+      if (is_wholesale !== undefined) { sets.push(`is_wholesale = $${idx++}`); vals.push(!!is_wholesale); }
+      if (is_oa !== undefined) { sets.push(`is_oa = $${idx++}`); vals.push(!!is_oa); }
+      if (sets.length === 0) { res.status(400).json({ message: "No fields to update" }); return; }
+      vals.push(asin);
+      await query(`UPDATE asins SET ${sets.join(", ")} WHERE asin = $${idx}`, vals);
+      const row = await query(`SELECT is_wholesale, is_oa FROM asins WHERE asin = $1`, [asin]);
+      res.json({ isWholesale: row.rows[0]?.is_wholesale ?? false, isOa: row.rows[0]?.is_oa ?? false });
     } catch (err: any) { res.status(500).json({ message: err.message }); }
   });
 

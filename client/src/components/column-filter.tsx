@@ -42,6 +42,7 @@ function getFilterType(colId: ColumnId): FilterType {
   if (colId === "tags") return "tags";
   if (colId === "supplier") return "supplier";
   if (colId === "category") return "supplier"; // reuse supplier multi-select type
+  if (colId === "sourcing") return "supplier"; // reuse supplier multi-select type
   if (BOOL_COLS.has(colId)) return "boolean";
   if (REVIEWED_COLS.has(colId)) return "reviewed";
   return "text";
