@@ -49,28 +49,15 @@ interface GroupedTableProps {
 
 // ── Column helpers ───────────────────────────────────────────────────
 const DEFAULT_COL_WIDTHS: Partial<Record<ColumnId, number>> = {
-  product: 400, brand: 100, supplier: 100, cogs: 80, salePrice: 90,
-  profit: 90, margin: 75, roi: 75, fbaFee: 80, referralFee: 85,
-  inboundShipping: 85, prep: 80, storage: 80, bsr: 90, sellersFba: 80,
-  sellersFbm: 80, fba7d: 75, fba30d: 80, fbm7d: 75, fbm30d: 80,
-  tags: 100, notes: 100, stock: 75, daysLeft: 80, actUnitsSold: 80,
-  actRevenue: 90, actRefunds: 75, actRefundPct: 75, actProfit: 90,
-  actProfitPerUnit: 85, actMargin: 75, actRoi: 75, meltable: 85,
-  hazmat: 80, suppressed: 90, lastReviewed: 100, dateAdded: 95,
-  category: 160, maxCogs: 90,
+  product: 400, category: 160, brand: 100, supplier: 100,
+  stock: 75, availableFba: 80, ordered: 75, reserved: 75, sentToFba: 80, daysLeft: 80,
+  cogs: 90, actPrepCost: 80, actUnitsSold: 80, actRefunds: 75, actRefundPct: 75,
+  actAvgSalePrice: 90, actRevenue: 90, actProfit: 90, actProfitPerUnit: 85, actRoi: 75, actMargin: 75,
+  estCogs: 90, salePrice: 90, profit: 90, margin: 75, roi: 75,
+  fbaFee: 80, referralFee: 85, inboundShipping: 85, prep: 80, storage: 80, maxCogs: 90,
+  sellersFba: 80, sellers: 75, sellers7d: 80, sellers30d: 80, fba7d: 75, fba30d: 80,
+  tags: 100, notes: 100, sourcing: 80, meltable: 85, hazmat: 80, suppressed: 90, dateAdded: 95,
 };
-
-const ESTIMATES_COLS = new Set<ColumnId>([
-  "salePrice", "estCogs", "profit", "margin", "roi",
-  "fbaFee", "referralFee", "inboundShipping", "prep", "storage",
-  "bsr", "sellersFba", "sellersFbm",
-  "fba7d", "fba30d", "fbm7d", "fbm30d",
-]);
-const ACTUALS_COLS = new Set<ColumnId>([
-  "cogs",
-  "actUnitsSold", "actRevenue", "actRefunds", "actRefundPct",
-  "actProfit", "actProfitPerUnit", "actMargin", "actRoi",
-]);
 
 function fmt(value: number | null): string {
   if (value == null) return "\u2014";
@@ -213,9 +200,7 @@ export function GroupedTable({
   );
   const dataCols = visibleCols.filter((id) => id !== "product");
   const productVisible = visibleCols.includes("product");
-  const estimatesCount = dataCols.filter((id) => ESTIMATES_COLS.has(id)).length;
-  const actualsCount = dataCols.filter((id) => ACTUALS_COLS.has(id)).length;
-  const hasGroups = estimatesCount > 0 || actualsCount > 0;
+  // Group band was removed — these are no longer needed
 
   if (groups.length === 0) return null;
 
@@ -263,7 +248,10 @@ export function GroupedTable({
                   onClick={() => onSort(colId)}
                 >
                   <span className="inline-flex items-center gap-1 pr-2 overflow-hidden">
-                    {col.label}
+                    <span className={`flex flex-col leading-tight ${col.qualifier ? "" : "justify-end"}`}>
+                      {col.qualifier && <span className="text-[9px] opacity-60">{col.qualifier}</span>}
+                      <span>{col.label}</span>
+                    </span>
                     {isActive && (sortDir === "asc" ? <ArrowUp className="h-3 w-3" /> : <ArrowDown className="h-3 w-3" />)}
                     <ColumnFilterButton
                       colId={colId}

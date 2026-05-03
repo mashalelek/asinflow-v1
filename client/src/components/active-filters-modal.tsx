@@ -1,23 +1,12 @@
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from "@/components/ui/dialog";
 import { Button } from "@/components/ui/button";
 import { X } from "lucide-react";
-import { type ColumnId, ALL_COLUMNS } from "@shared/schema";
+import { type ColumnId, ALL_COLUMNS, COLUMN_GROUPS } from "@shared/schema";
 import { type ColFilter, type FilterMap } from "./column-filter";
 
-const ESTIMATES_GROUP = new Set<ColumnId>([
-  "salePrice", "estCogs", "profit", "margin", "roi",
-  "fbaFee", "referralFee", "inboundShipping", "prep", "storage",
-  "bsr", "sellersFba", "sellersFbm",
-  "fba7d", "fba30d", "fbm7d", "fbm30d", "maxCogs",
-]);
-const ACTUALS_GROUP = new Set<ColumnId>([
-  "cogs", "actUnitsSold", "actRevenue", "actRefunds", "actRefundPct",
-  "actProfit", "actProfitPerUnit", "actMargin", "actRoi",
-]);
-const STOCK_GROUP = new Set<ColumnId>(["stock", "daysLeft"]);
-const TAGS_GROUP = new Set<ColumnId>(["tags"]);
-
 const colLabelMap = new Map(ALL_COLUMNS.map((c) => [c.id, c.label]));
+const colGroupMap = new Map(ALL_COLUMNS.map((c) => [c.id, c.group]));
+const groupLabelMap = new Map(COLUMN_GROUPS.map((g) => [g.key, g.label]));
 
 function formatFilterValue(f: ColFilter): string {
   const op = f.operator;
@@ -50,11 +39,8 @@ function formatFilterValue(f: ColFilter): string {
 }
 
 function getGroup(colId: ColumnId): string {
-  if (ESTIMATES_GROUP.has(colId)) return "Estimates";
-  if (ACTUALS_GROUP.has(colId)) return "Actuals";
-  if (STOCK_GROUP.has(colId)) return "Stock";
-  if (TAGS_GROUP.has(colId)) return "Tags";
-  return "Other";
+  const group = colGroupMap.get(colId);
+  return group ? (groupLabelMap.get(group) ?? "Other") : "Other";
 }
 
 interface ActiveFiltersModalProps {

@@ -233,10 +233,17 @@ export default function Analytics() {
             case "roi": return profitData?.roi ?? null;
             case "fbaFee": return profitData?.totalFbaFee ?? r.feesData.fbaFulfillmentFee;
             case "referralFee": return profitData?.adjustedReferralFee ?? r.feesData.referralFee;
-            case "bsr": return r.catalogData.bsrRank;
             case "sellersFba": return r.pricingData.sellersFba;
-            case "sellersFbm": return r.pricingData.sellersFbm;
+            case "sellers": return (r.pricingData.sellersFba ?? 0) + (r.pricingData.sellersFbm ?? 0) || null;
             case "stock": return r.stock?.total ?? null;
+            case "availableFba": return r.stock?.available_fba ?? null;
+            case "ordered": return r.stock?.ordered ?? null;
+            case "reserved": return r.stock?.reserved ?? null;
+            case "sentToFba": return r.stock?.inbound ?? null;
+            case "actAvgSalePrice": { const u = r.actuals?.units_sold ?? 0; return u > 0 ? r.actuals!.revenue / u : null; }
+            case "actPrepCost": return r.prepOverride ?? null;
+            case "sellers7d": return r.sellersDelta ? (r.sellersDelta.fba_7d ?? 0) + (r.sellersDelta.fbm_7d ?? 0) : null;
+            case "sellers30d": return r.sellersDelta ? (r.sellersDelta.fba_30d ?? 0) + (r.sellersDelta.fbm_30d ?? 0) : null;
             case "actUnitsSold": return r.actuals?.units_sold ?? null;
             case "actRevenue": return r.actuals?.revenue ?? null;
             case "actRefunds": return r.actuals?.units_refunded ?? null;

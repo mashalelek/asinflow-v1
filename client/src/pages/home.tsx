@@ -824,10 +824,18 @@ export default function Home() {
             case "roi": return profitData?.roi ?? null;
             case "fbaFee": return profitData?.totalFbaFee ?? r.feesData.fbaFulfillmentFee;
             case "referralFee": return profitData?.adjustedReferralFee ?? r.feesData.referralFee;
-            case "bsr": return r.catalogData.bsrRank;
             case "sellersFba": return r.pricingData.sellersFba;
-            case "sellersFbm": return r.pricingData.sellersFbm;
+            case "sellers": return (r.pricingData.sellersFba ?? 0) + (r.pricingData.sellersFbm ?? 0) || null;
             case "stock": return r.stock?.total ?? null;
+            case "availableFba": return r.stock?.available_fba ?? null;
+            case "ordered": return r.stock?.ordered ?? null;
+            case "reserved": return r.stock?.reserved ?? null;
+            case "sentToFba": return r.stock?.inbound ?? null;
+            case "actAvgSalePrice": {
+              const u = r.actuals?.units_sold ?? 0;
+              return u > 0 ? r.actuals!.revenue / u : null;
+            }
+            case "actPrepCost": return r.prepOverride ?? null;
             case "daysLeft": {
               const stk = r.stock?.total ?? 0;
               const us = r.actuals?.units_sold ?? 0;
@@ -839,8 +847,8 @@ export default function Home() {
             }
             case "fba7d": return r.sellersDelta?.fba_7d ?? null;
             case "fba30d": return r.sellersDelta?.fba_30d ?? null;
-            case "fbm7d": return r.sellersDelta?.fbm_7d ?? null;
-            case "fbm30d": return r.sellersDelta?.fbm_30d ?? null;
+            case "sellers7d": return r.sellersDelta ? (r.sellersDelta.fba_7d ?? 0) + (r.sellersDelta.fbm_7d ?? 0) : null;
+            case "sellers30d": return r.sellersDelta ? (r.sellersDelta.fba_30d ?? 0) + (r.sellersDelta.fbm_30d ?? 0) : null;
             case "actUnitsSold": return r.actuals?.units_sold ?? null;
             case "actRevenue": return r.actuals?.revenue ?? null;
             case "actRefunds": return r.actuals?.units_refunded ?? null;
@@ -867,7 +875,6 @@ export default function Home() {
             case "meltable": return r.isMeltable ? "Yes" : "No";
             case "hazmat": return r.isHazmat ? "Yes" : "No";
             case "suppressed": return r.isSearchSuppressed ? "Yes" : "No";
-            case "lastReviewed": return r.lastReviewedAt ?? null;
             case "dateAdded": return r.addedAt ?? null;
             case "category": return r.category ?? null;
             case "sourcing": {

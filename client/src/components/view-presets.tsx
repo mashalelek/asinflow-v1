@@ -9,17 +9,21 @@ import type { FilterMap } from "./column-filter";
 
 const ACTIVE_PRESET_KEY = "fba-active-preset";
 
-// Map old DB column names to current ColumnId
+// Map old DB column names to current ColumnId (handles legacy presets)
 const COL_MAP: Record<string, ColumnId> = {
   image: "product", asin: "product", title: "product", selleramp: "product", keepa: "product",
   buy_link: "supplier", eligible: "product",
   sale_price: "salePrice", est_profit: "profit", est_margin: "margin", est_roi: "roi",
   fba_fee: "fbaFee", referral_fee: "referralFee", inbound_ship: "inboundShipping",
-  prep_cost: "prep", sellers_fba: "sellersFba", sellers_fbm: "sellersFbm",
+  prep_cost: "prep", sellers_fba: "sellersFba",
+  // Removed columns map to closest equivalent
+  sellers_fbm: "sellers", bsr: "sellersFba",
+  fbm7d: "sellers7d", fbm30d: "sellers30d",
+  lastReviewed: "dateAdded",
   stock: "stock", units_sold: "actUnitsSold", revenue: "actRevenue",
   refunds: "actRefunds", actual_profit: "actProfit",
   actual_profit_unit: "actProfitPerUnit", actual_margin: "actMargin", actual_roi: "actRoi",
-  tags: "tags", notes: "notes", brand: "brand", cogs: "cogs", bsr: "bsr",
+  tags: "tags", notes: "notes", brand: "brand", cogs: "cogs",
 };
 
 interface PresetConfig {

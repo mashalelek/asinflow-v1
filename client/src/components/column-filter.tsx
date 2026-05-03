@@ -27,15 +27,17 @@ type FilterType = "numeric" | "text" | "tags" | "supplier" | "boolean" | "review
 const NUMERIC_COLS = new Set<ColumnId>([
   "cogs", "estCogs", "salePrice", "profit", "margin", "roi",
   "fbaFee", "referralFee", "inboundShipping", "prep", "storage",
-  "bsr", "sellersFba", "sellersFbm", "stock", "daysLeft",
-  "fba7d", "fba30d", "fbm7d", "fbm30d",
+  "sellersFba", "sellers", "stock", "daysLeft",
+  "availableFba", "ordered", "reserved", "sentToFba",
+  "fba7d", "fba30d", "sellers7d", "sellers30d",
   "actUnitsSold", "actRevenue", "actRefunds", "actRefundPct",
   "actProfit", "actProfitPerUnit", "actMargin", "actRoi",
+  "actAvgSalePrice", "actPrepCost",
   "maxCogs",
 ]);
 
 const BOOL_COLS = new Set<ColumnId>(["meltable", "hazmat", "suppressed"]);
-const REVIEWED_COLS = new Set<ColumnId>(["lastReviewed", "dateAdded"]);
+const REVIEWED_COLS = new Set<ColumnId>(["dateAdded"]);
 
 function getFilterType(colId: ColumnId): FilterType {
   if (NUMERIC_COLS.has(colId)) return "numeric";

@@ -45,60 +45,15 @@ function ResizeHandle({ onMouseDown }: { onMouseDown: (e: React.MouseEvent) => v
 }
 
 const DEFAULT_COL_WIDTHS: Partial<Record<ColumnId, number>> = {
-  product: 400,
-  brand: 100,
-  supplier: 100,
-  cogs: 90,
-  estCogs: 90,
-  salePrice: 90,
-  profit: 90,
-  margin: 75,
-  roi: 75,
-  fbaFee: 80,
-  referralFee: 85,
-  inboundShipping: 85,
-  prep: 80,
-  storage: 80,
-  bsr: 90,
-  sellersFba: 80,
-  sellersFbm: 80,
-  fba7d: 75,
-  fba30d: 80,
-  fbm7d: 75,
-  fbm30d: 80,
-  tags: 100,
-  notes: 100,
-  stock: 75,
-  daysLeft: 80,
-  actUnitsSold: 80,
-  actRevenue: 90,
-  actRefunds: 75,
-  actRefundPct: 75,
-  actProfit: 90,
-  actProfitPerUnit: 85,
-  actMargin: 75,
-  actRoi: 75,
-  meltable: 85,
-  hazmat: 80,
-  suppressed: 90,
-  lastReviewed: 100,
-  dateAdded: 95,
-  category: 160,
-  maxCogs: 90,
-  sourcing: 80,
+  product: 400, category: 160, brand: 100, supplier: 100,
+  stock: 75, availableFba: 80, ordered: 75, reserved: 75, sentToFba: 80, daysLeft: 80,
+  cogs: 90, actPrepCost: 80, actUnitsSold: 80, actRefunds: 75, actRefundPct: 75,
+  actAvgSalePrice: 90, actRevenue: 90, actProfit: 90, actProfitPerUnit: 85, actRoi: 75, actMargin: 75,
+  estCogs: 90, salePrice: 90, profit: 90, margin: 75, roi: 75,
+  fbaFee: 80, referralFee: 85, inboundShipping: 85, prep: 80, storage: 80, maxCogs: 90,
+  sellersFba: 80, sellers: 75, sellers7d: 80, sellers30d: 80, fba7d: 75, fba30d: 80,
+  tags: 100, notes: 100, sourcing: 80, meltable: 85, hazmat: 80, suppressed: 90, dateAdded: 95,
 };
-
-const ACTUALS_COLS = new Set<ColumnId>([
-  "cogs",
-  "actUnitsSold", "actRevenue", "actRefunds", "actRefundPct",
-  "actProfit", "actProfitPerUnit", "actMargin", "actRoi",
-]);
-const ESTIMATES_COLS = new Set<ColumnId>([
-  "salePrice", "estCogs", "profit", "margin", "roi",
-  "fbaFee", "referralFee", "inboundShipping", "prep", "storage",
-  "bsr", "sellersFba", "sellersFbm",
-  "fba7d", "fba30d", "fbm7d", "fbm30d",
-]);
 import { type ColumnConfig } from "@/lib/columns";
 import { type FilterMode } from "@/components/summary-cards";
 import { ColumnFilterButton, type ColFilter, type FilterMap, type MultiSelectOption } from "@/components/column-filter";
@@ -359,12 +314,6 @@ function fmtPct(value: number): string {
   return `${value.toFixed(1)}%`;
 }
 
-function fmtBsr(rank: number | null, category: string | null): string {
-  if (rank == null) return "-";
-  const formatted = rank.toLocaleString();
-  if (category) return `#${formatted} in ${category}`;
-  return `#${formatted}`;
-}
 
 export function getRowValue(
   result: AsinResult,
@@ -406,19 +355,37 @@ export function getRowValue(
     case "inboundShipping": return profitData?.inboundShipping ?? null;
     case "prep": return prep.value;
     case "storage": return storage.value;
-    case "bsr": return result.catalogData.bsrRank;
     case "sellersFba": return result.pricingData.sellersFba;
-    case "sellersFbm": return result.pricingData.sellersFbm;
+    case "sellers": return (result.pricingData.sellersFba ?? 0) + (result.pricingData.sellersFbm ?? 0) || null;
     case "fba7d": return result.sellersDelta?.fba_7d ?? null;
     case "fba30d": return result.sellersDelta?.fba_30d ?? null;
-    case "fbm7d": return result.sellersDelta?.fbm_7d ?? null;
-    case "fbm30d": return result.sellersDelta?.fbm_30d ?? null;
+    case "sellers7d": {
+      const f7 = result.sellersDelta?.fba_7d ?? null;
+      const m7 = result.sellersDelta?.fbm_7d ?? null;
+      if (f7 == null && m7 == null) return null;
+      return (f7 ?? 0) + (m7 ?? 0);
+    }
+    case "sellers30d": {
+      const f30 = result.sellersDelta?.fba_30d ?? null;
+      const m30 = result.sellersDelta?.fbm_30d ?? null;
+      if (f30 == null && m30 == null) return null;
+      return (f30 ?? 0) + (m30 ?? 0);
+    }
     case "tags": return result.tags?.map((t) => t.name).join(", ") ?? null;
     case "notes": return result.notes ?? null;
     case "meltable": return result.isMeltable ? "Yes" : "No";
     case "hazmat": return result.isHazmat ? "Yes" : "No";
     case "suppressed": return result.isSearchSuppressed ? "Yes" : "No";
     case "stock": return result.stock?.total ?? null;
+    case "availableFba": return result.stock?.available_fba ?? null;
+    case "ordered": return result.stock?.ordered ?? null;
+    case "reserved": return result.stock?.reserved ?? null;
+    case "sentToFba": return result.stock?.inbound ?? null;
+    case "actAvgSalePrice": {
+      const us = result.actuals?.units_sold ?? 0;
+      return us > 0 ? result.actuals!.revenue / us : null;
+    }
+    case "actPrepCost": return result.prepOverride ?? null;
     case "daysLeft": {
       const s = result.stock?.total ?? 0;
       const u = result.actuals?.units_sold ?? 0;
@@ -450,7 +417,6 @@ export function getRowValue(
       return ac.roi;
     }
     case "product": return result.catalogData.title ?? result.asin;
-    case "lastReviewed": return result.lastReviewedAt ?? null;
     case "dateAdded": return result.addedAt ?? null;
     case "category": return result.category ?? null;
     case "sourcing": return getSourcingLabel(result) || null;
@@ -645,9 +611,7 @@ export function ResultsTable({
   // Columns for headers (exclude "product" — it gets special wide rendering, also exclude old frozen cols)
   const dataCols = visibleCols.filter((id) => id !== "product");
   const productVisible = visibleCols.includes("product");
-  const estimatesCount = dataCols.filter((id) => ESTIMATES_COLS.has(id)).length;
-  const actualsCount = dataCols.filter((id) => ACTUALS_COLS.has(id)).length;
-  const hasGroups = estimatesCount > 0 || actualsCount > 0;
+  // Group band was removed — these are no longer needed
 
   return (
     <div className="w-full overflow-auto relative" style={{ maxHeight: "calc(100vh - 280px)" }}>
@@ -702,16 +666,10 @@ export function ResultsTable({
                   data-testid={`header-${colId}`}
                 >
                   <span className="inline-flex items-center gap-1 pr-2 overflow-hidden">
-                    {colId === "maxCogs" ? (
-                      <Tooltip>
-                        <TooltipTrigger asChild>
-                          <span className="cursor-help">{col.label}</span>
-                        </TooltipTrigger>
-                        <TooltipContent side="bottom">
-                          <p className="text-xs">Max COGS where: margin {"\u2265"} {settings.maxCogsMinMarginPct}%, ROI {"\u2265"} {settings.maxCogsMinRoiPct}%, profit/unit {"\u2265"} ${settings.maxCogsMinProfitUnit}</p>
-                        </TooltipContent>
-                      </Tooltip>
-                    ) : col.label}
+                    <span className={`flex flex-col leading-tight ${col.qualifier ? "" : "justify-end"}`}>
+                      {col.qualifier && <span className="text-[9px] opacity-60">{col.qualifier}</span>}
+                      <span>{col.label}</span>
+                    </span>
                     {isActive && (sortDir === "asc" ? <ArrowUp className="h-3 w-3" /> : <ArrowDown className="h-3 w-3" />)}
                     {onFilterApply && onFilterClear && (
                       <ColumnFilterButton
@@ -1202,6 +1160,23 @@ function ProductCell({ result, price, settings, onResultUpdate }: { result: Asin
               <TooltipContent side="top"><p className="text-xs">Create listing on Seller Central</p></TooltipContent>
             </Tooltip>
           )}
+          {/* Last Reviewed timestamp */}
+          {(() => {
+            const ts = result.lastReviewedAt;
+            if (!ts) return <span className="text-[10px] text-muted-foreground/50 ml-auto">{"\u2014"}</span>;
+            const d = new Date(ts);
+            const mm = String(d.getMonth() + 1).padStart(2, "0");
+            const dd = String(d.getDate()).padStart(2, "0");
+            const yyyy = d.getFullYear();
+            return (
+              <Tooltip>
+                <TooltipTrigger asChild>
+                  <span className="text-[10px] text-muted-foreground/50 ml-auto cursor-help">{`${mm}/${dd}/${yyyy}`}</span>
+                </TooltipTrigger>
+                <TooltipContent side="top"><p className="text-xs">Last reviewed: {d.toLocaleString()}</p></TooltipContent>
+              </Tooltip>
+            );
+          })()}
         </div>
 
         {/* Line 2: Title + ungating icon */}
@@ -1447,37 +1422,46 @@ export function renderCell(
         </span>
       );
 
-    case "bsr":
-      return (
-        <span className="text-sm whitespace-nowrap">
-          {fmtBsr(result.catalogData.bsrRank, result.catalogData.bsrCategory)}
-        </span>
-      );
-
     case "sellersFba":
-      return <span className="font-mono text-sm" data-testid={`text-sellersFba-${result.asin}`}>{result.pricingData.sellersFba !== null && result.pricingData.sellersFba !== undefined ? result.pricingData.sellersFba : "-"}</span>;
+      return <span className="font-mono text-sm">{result.pricingData.sellersFba ?? "-"}</span>;
 
-    case "sellersFbm":
-      return <span className="font-mono text-sm" data-testid={`text-sellersFbm-${result.asin}`}>{result.pricingData.sellersFbm !== null && result.pricingData.sellersFbm !== undefined ? result.pricingData.sellersFbm : "-"}</span>;
+    case "sellers": {
+      const totalSellers = (result.pricingData.sellersFba ?? 0) + (result.pricingData.sellersFbm ?? 0);
+      return <span className="font-mono text-sm">{totalSellers || "-"}</span>;
+    }
 
     case "fba7d":
     case "fba30d":
-    case "fbm7d":
-    case "fbm30d": {
-      const deltaMap: Record<string, number | null | undefined> = {
-        fba7d: result.sellersDelta?.fba_7d,
-        fba30d: result.sellersDelta?.fba_30d,
-        fbm7d: result.sellersDelta?.fbm_7d,
-        fbm30d: result.sellersDelta?.fbm_30d,
-      };
-      const v = deltaMap[colId];
-      if (v == null) return <span className="font-mono text-sm text-muted-foreground">–</span>;
-      if (v === 0) return <span className="font-mono text-sm text-muted-foreground">0</span>;
-      // Negative = fewer sellers = good (green ▼), Positive = more sellers = bad (red ▲)
-      const color = v < 0 ? "text-emerald-500" : "text-red-500";
-      const arrow = v < 0 ? "▼" : "▲";
-      return <span className={`font-mono text-sm ${color}`}>{arrow} {Math.abs(v)}</span>;
+    case "sellers7d":
+    case "sellers30d": {
+      let dv: number | null | undefined;
+      if (colId === "fba7d") dv = result.sellersDelta?.fba_7d;
+      else if (colId === "fba30d") dv = result.sellersDelta?.fba_30d;
+      else if (colId === "sellers7d") dv = result.sellersDelta ? (result.sellersDelta.fba_7d ?? 0) + (result.sellersDelta.fbm_7d ?? 0) : null;
+      else dv = result.sellersDelta ? (result.sellersDelta.fba_30d ?? 0) + (result.sellersDelta.fbm_30d ?? 0) : null;
+      if (dv == null) return <span className="font-mono text-sm text-muted-foreground">{"\u2013"}</span>;
+      if (dv === 0) return <span className="font-mono text-sm text-muted-foreground">0</span>;
+      const color = dv < 0 ? "text-emerald-500" : "text-red-500";
+      const arrow = dv < 0 ? "\u25BC" : "\u25B2";
+      return <span className={`font-mono text-sm ${color}`}>{arrow} {Math.abs(dv)}</span>;
     }
+
+    case "availableFba":
+      return <span className="font-mono text-sm">{result.stock?.available_fba ?? "-"}</span>;
+    case "ordered":
+      return <span className="font-mono text-sm">{result.stock?.ordered ?? "-"}</span>;
+    case "reserved":
+      return <span className="font-mono text-sm">{result.stock?.reserved ?? "-"}</span>;
+    case "sentToFba":
+      return <span className="font-mono text-sm">{result.stock?.inbound ?? "-"}</span>;
+
+    case "actAvgSalePrice": {
+      const avgUs = result.actuals?.units_sold ?? 0;
+      return <span className="font-mono text-sm">{avgUs > 0 ? fmt(result.actuals!.revenue / avgUs) : "\u2014"}</span>;
+    }
+
+    case "actPrepCost":
+      return <span className="font-mono text-sm">{fmt(result.prepOverride)}</span>;
 
     case "tags": {
       const tags = result.tags;
@@ -1666,36 +1650,6 @@ export function renderCell(
         <span className={`font-mono text-sm ${perUnit.roi >= settings.minRoiThreshold ? "text-emerald-600 dark:text-emerald-400" : "text-red-600 dark:text-red-400"}`}>
           {perUnit.roi.toFixed(1)}%
         </span>
-      );
-    }
-
-    case "lastReviewed": {
-      const ts = result.lastReviewedAt;
-      if (!ts) return <span className="text-muted-foreground text-sm">Never</span>;
-      const d = new Date(ts);
-      const diffMs = Date.now() - d.getTime();
-      const mins = Math.floor(diffMs / 60000);
-      let relative: string;
-      if (mins < 1) relative = "just now";
-      else if (mins < 60) relative = `${mins}m ago`;
-      else {
-        const hrs = Math.floor(mins / 60);
-        if (hrs < 24) relative = `${hrs}h ago`;
-        else {
-          const days = Math.floor(hrs / 24);
-          if (days < 14) relative = `${days}d ago`;
-          else relative = `${Math.floor(days / 7)}w ago`;
-        }
-      }
-      return (
-        <Tooltip>
-          <TooltipTrigger asChild>
-            <span className="text-sm text-muted-foreground cursor-help">{relative}</span>
-          </TooltipTrigger>
-          <TooltipContent side="top">
-            <p className="text-xs">{d.toLocaleString()}</p>
-          </TooltipContent>
-        </Tooltip>
       );
     }
 

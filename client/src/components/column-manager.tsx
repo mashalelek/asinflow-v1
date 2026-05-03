@@ -1,10 +1,10 @@
-import { useState, useCallback } from "react";
+import { useCallback } from "react";
 import { Button } from "@/components/ui/button";
 import { Checkbox } from "@/components/ui/checkbox";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import { Separator } from "@/components/ui/separator";
-import { Columns3, GripVertical, RotateCcw } from "lucide-react";
-import { ALL_COLUMNS, type ColumnId } from "@shared/schema";
+import { Columns3, RotateCcw } from "lucide-react";
+import { ALL_COLUMNS, COLUMN_GROUPS, type ColumnId } from "@shared/schema";
 import { type ColumnConfig, getDefaultConfig, saveColumnConfig } from "@/lib/columns";
 
 interface ColumnManagerProps {
@@ -13,21 +13,16 @@ interface ColumnManagerProps {
 }
 
 export function ColumnManager({ config, onChange }: ColumnManagerProps) {
-  const [dragIdx, setDragIdx] = useState<number | null>(null);
-
   const toggleColumn = useCallback(
     (id: ColumnId) => {
-      if (id === "product") return; // product column is always visible
+      if (id === "product") return;
       const next = { ...config, visible: new Set(config.visible) };
-      if (next.visible.has(id)) {
-        next.visible.delete(id);
-      } else {
-        next.visible.add(id);
-      }
+      if (next.visible.has(id)) next.visible.delete(id);
+      else next.visible.add(id);
       saveColumnConfig(next);
       onChange(next);
     },
-    [config, onChange]
+    [config, onChange],
   );
 
   const resetToDefault = useCallback(() => {
@@ -36,29 +31,13 @@ export function ColumnManager({ config, onChange }: ColumnManagerProps) {
     onChange(def);
   }, [onChange]);
 
-  const handleDragStart = (idx: number) => {
-    setDragIdx(idx);
-  };
-
-  const handleDragOver = (e: React.DragEvent, idx: number) => {
-    e.preventDefault();
-    if (dragIdx === null || dragIdx === idx) return;
-
-    const newOrder = [...config.order];
-    const [moved] = newOrder.splice(dragIdx, 1);
-    newOrder.splice(idx, 0, moved);
-    setDragIdx(idx);
-
-    const next = { ...config, order: newOrder, visible: new Set(config.visible) };
-    saveColumnConfig(next);
-    onChange(next);
-  };
-
-  const handleDragEnd = () => {
-    setDragIdx(null);
-  };
-
-  const colMap = new Map(ALL_COLUMNS.map((c) => [c.id, c]));
+  // Group columns by their schema-defined group
+  const colsByGroup = new Map<string, typeof ALL_COLUMNS>();
+  for (const col of ALL_COLUMNS) {
+    const arr = colsByGroup.get(col.group) ?? [];
+    arr.push(col);
+    colsByGroup.set(col.group, arr);
+  }
 
   return (
     <Popover>
@@ -68,57 +47,40 @@ export function ColumnManager({ config, onChange }: ColumnManagerProps) {
           Columns
         </Button>
       </PopoverTrigger>
-      <PopoverContent
-        className="w-64 p-0"
-        align="end"
-        side="bottom"
-      >
+      <PopoverContent className="w-64 p-0" align="end" side="bottom">
         <div className="p-3 pb-2">
           <div className="flex items-center justify-between gap-2">
             <span className="text-sm font-medium">Manage Columns</span>
-            <Button
-              variant="ghost"
-              size="sm"
-              onClick={resetToDefault}
-              className="h-7 text-xs"
-              data-testid="button-reset-columns"
-            >
+            <Button variant="ghost" size="sm" onClick={resetToDefault} className="h-7 text-xs" data-testid="button-reset-columns">
               <RotateCcw className="h-3 w-3 mr-1" />
               Reset
             </Button>
           </div>
         </div>
         <Separator />
-        <div className="max-h-[320px] overflow-y-auto p-1">
-          {config.order.map((id, idx) => {
-            const col = colMap.get(id);
-            if (!col) return null;
+        <div className="max-h-[400px] overflow-y-auto p-1">
+          {COLUMN_GROUPS.map((group) => {
+            const cols = colsByGroup.get(group.key) ?? [];
+            if (cols.length === 0) return null;
             return (
-              <div
-                key={id}
-                draggable
-                onDragStart={() => handleDragStart(idx)}
-                onDragOver={(e) => handleDragOver(e, idx)}
-                onDragEnd={handleDragEnd}
-                className={`flex items-center gap-2 px-2 py-1.5 rounded-md cursor-grab active:cursor-grabbing ${
-                  dragIdx === idx ? "bg-accent" : ""
-                }`}
-                data-testid={`column-item-${id}`}
-              >
-                <GripVertical className="h-3.5 w-3.5 text-muted-foreground shrink-0" />
-                <Checkbox
-                  checked={config.visible.has(id)}
-                  onCheckedChange={() => toggleColumn(id)}
-                  id={`col-${id}`}
-                  disabled={id === "product"}
-                  data-testid={`checkbox-column-${id}`}
-                />
-                <label
-                  htmlFor={`col-${id}`}
-                  className="text-sm cursor-pointer flex-1 select-none"
-                >
-                  {col.label}
-                </label>
+              <div key={group.key}>
+                <div className="px-2 pt-2 pb-1">
+                  <span className="text-[10px] font-semibold text-muted-foreground uppercase tracking-wider">{group.label}</span>
+                </div>
+                {cols.map((col) => (
+                  <div key={col.id} className="flex items-center gap-2 px-2 py-1.5 rounded-md" data-testid={`column-item-${col.id}`}>
+                    <Checkbox
+                      checked={config.visible.has(col.id)}
+                      onCheckedChange={() => toggleColumn(col.id)}
+                      id={`col-${col.id}`}
+                      disabled={col.id === "product"}
+                      data-testid={`checkbox-column-${col.id}`}
+                    />
+                    <label htmlFor={`col-${col.id}`} className="text-sm cursor-pointer flex-1 select-none">
+                      {col.qualifier ? `${col.qualifier} ${col.label}` : col.label}
+                    </label>
+                  </div>
+                ))}
               </div>
             );
           })}
