@@ -430,6 +430,11 @@ async function runSheetsSync(): Promise<{ updated: number; skipped: number; erro
           values.push(data.cogs, "po_sheet");
         }
       }
+      // Prep cost from PO sheet (Col AS)
+      if (data.prepCost != null) {
+        setClauses.push(`prep_override = $${idx++}`);
+        values.push(data.prepCost);
+      }
       setClauses.push(`ordered_qty = $${idx++}`);
       values.push(data.orderedQty);
       values.push(asin);

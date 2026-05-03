@@ -8,9 +8,11 @@ const COL_ASIN = 7;     // H
 const COL_SHIPPED = 14; // O — ASIN Qty Shipped FBA
 const COL_QTY = 20;     // U
 const COL_COGS = 24;    // Y
+const COL_PREP = 44;    // AS — Prep cost per unit
 
 export interface SheetAsinData {
   cogs: number | null;
+  prepCost: number | null;
   orderedQty: number;
   supplier: string | null;
 }
@@ -27,7 +29,7 @@ export async function fetchSheetData(sheetId: string): Promise<Map<string, Sheet
   const sheets = google.sheets({ version: "v4", auth });
   const response = await sheets.spreadsheets.values.get({
     spreadsheetId: sheetId,
-    range: "Sheet1!A2:Y",
+    range: "Sheet1!A2:AS",
   });
 
   const rows = response.data.values || [];
@@ -43,18 +45,21 @@ export async function fetchSheetData(sheetId: string): Promise<Map<string, Sheet
 
     const existing = result.get(asin);
 
-    // COGS + supplier: first non-canceled row per ASIN
+    // COGS + prep cost + supplier: first non-canceled row per ASIN
     if (!isCanceled && existing?.cogs == null) {
       const cogsRaw = (row[COL_COGS] ?? "").toString().replace(/[$,]/g, "").trim();
       const cogs = parseFloat(cogsRaw);
+      const prepRaw = (row[COL_PREP] ?? "").toString().replace(/[$,]/g, "").trim();
+      const prepCost = parseFloat(prepRaw);
       const supplier = (row[COL_SUPPLIER] ?? "").toString().trim() || null;
 
       if (!existing) {
-        result.set(asin, { cogs: isNaN(cogs) ? null : cogs, orderedQty: 0, supplier });
+        result.set(asin, { cogs: isNaN(cogs) ? null : cogs, prepCost: isNaN(prepCost) ? null : prepCost, orderedQty: 0, supplier });
       } else {
         result.set(asin, {
           ...existing,
           cogs: isNaN(cogs) ? null : cogs,
+          prepCost: isNaN(prepCost) ? null : prepCost,
           supplier: supplier ?? existing.supplier,
         });
       }
@@ -72,7 +77,7 @@ export async function fetchSheetData(sheetId: string): Promise<Map<string, Sheet
         if (current) {
           result.set(asin, { ...current, orderedQty: current.orderedQty + net });
         } else {
-          result.set(asin, { cogs: null, orderedQty: net, supplier: null });
+          result.set(asin, { cogs: null, prepCost: null, orderedQty: net, supplier: null });
         }
       }
     }

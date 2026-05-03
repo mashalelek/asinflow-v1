@@ -39,8 +39,9 @@ export function SettingsDialog({ onSettingsChange }: SettingsDialogProps) {
   return (
     <Dialog open={open} onOpenChange={setOpen}>
       <DialogTrigger asChild>
-        <Button size="icon" variant="ghost" data-testid="button-settings">
-          <SettingsIcon className="h-5 w-5" />
+        <Button size="sm" variant="outline" className="h-8 text-xs" data-testid="button-settings">
+          <SettingsIcon className="h-3.5 w-3.5 mr-1.5" />
+          Settings
         </Button>
       </DialogTrigger>
       <DialogContent className="sm:max-w-lg max-h-[85vh] overflow-y-auto">
