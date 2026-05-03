@@ -181,10 +181,14 @@ export function getSelectedPrice(
   return { price: null, label: "Not Available", isFallback: false };
 }
 
-export function getEffectivePrep(result: AsinResult, settings: Settings): { value: number; isOverride: boolean } {
-  if (result.prepOverride != null) {
-    return { value: result.prepOverride, isOverride: true };
-  }
+/**
+ * Estimated prep cost — always uses the settings default.
+ * PO-sourced prep cost (prepOverride) is only used for Actual Prep Cost
+ * (read directly via result.prepOverride), not for Estimated calculations.
+ * Rationale: prep cost is operationally-determined (current prep arrangement),
+ * not historical. Old POs may have $0 from self-prepping.
+ */
+export function getEffectivePrep(_result: AsinResult, settings: Settings): { value: number; isOverride: boolean } {
   return { value: settings.prepCost, isOverride: false };
 }
 
