@@ -23,11 +23,13 @@ export function getEstimatedProfit(
   if (result.error) return null;
   const { price } = getSelectedPrice(result, priceSource);
   if (price == null) return null;
+  const cogs = result.estimatedCogs;
+  if (cogs == null) return null;
   const prep = getEffectivePrep(result, settings);
   const storage = getEffectiveStorage(result, settings);
   return calculateProfit(
     price,
-    result.cogs,
+    cogs,
     result.feesData.fbaFulfillmentFee ?? 0,
     result.feesData.referralFee ?? 0,
     result.feesData.feesEstimatePrice,
@@ -65,13 +67,15 @@ export function getActualProfit(
   revenue: number;
 } | null {
   if (!result.actuals || result.actuals.units_sold === 0) return null;
+  const cogs = result.actualCogs;
+  if (cogs == null) return null;
   const au = result.actuals.units_sold;
   const ar = result.actuals.revenue;
   const prep = getEffectivePrep(result, settings);
   const storage = getEffectiveStorage(result, settings);
   const calc = calculateProfit(
     ar / au,
-    result.cogs,
+    cogs,
     result.feesData.fbaFulfillmentFee ?? 0,
     result.feesData.referralFee ?? 0,
     result.feesData.feesEstimatePrice,

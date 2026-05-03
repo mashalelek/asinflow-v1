@@ -258,6 +258,8 @@ function buildResult(
   return {
     asin: input.asin,
     cogs: input.cogs,
+    estimatedCogs: input.cogs,
+    actualCogs: null,
     buyLink: input.buyLink ?? null,
     prepOverride: input.prepOverride ?? null,
     storageOverride: input.storageOverride ?? null,
@@ -415,8 +417,18 @@ async function runSheetsSync(): Promise<{ updated: number; skipped: number; erro
       const values: any[] = [];
       let idx = 1;
       if (data.cogs != null && !isManualOverride) {
-        setClauses.push(`cogs = $${idx++}`, `cogs_source = $${idx++}`);
-        values.push(data.cogs, "po_sheet");
+        // Always update actual_cogs from PO
+        setClauses.push(`cogs = $${idx++}`, `cogs_source = $${idx++}`, `actual_cogs = $${idx++}`);
+        values.push(data.cogs, "po_sheet", data.cogs);
+      }
+      // Est. COGS auto-sync: update if source is 'po_sheet' or null (not manual/csv)
+      if (data.cogs != null) {
+        const estCheck = await query(`SELECT estimated_cogs_source FROM asin_estimates WHERE asin = $1`, [asin]);
+        const estSource = estCheck?.rows?.[0]?.estimated_cogs_source;
+        if (estSource === "po_sheet" || estSource == null) {
+          setClauses.push(`estimated_cogs = $${idx++}`, `estimated_cogs_source = $${idx++}`);
+          values.push(data.cogs, "po_sheet");
+        }
       }
       setClauses.push(`ordered_qty = $${idx++}`);
       values.push(data.orderedQty);
@@ -482,7 +494,7 @@ export async function registerRoutes(
         SELECT
           a.asin, a.title, a.image_url, a.brand, a.category, a.weight_lb, a.buy_link, a.is_active,
           a.primary_sku, a.in_catalog, a.notes, a.is_meltable, a.is_hazmat, a.is_search_suppressed, a.suppression_reasons, a.last_reviewed_at, a.added_at, a.is_wholesale, a.is_oa,
-          e.cogs, e.cogs_source, e.prep_override, e.storage_override,
+          e.cogs, e.cogs_source, e.actual_cogs, e.estimated_cogs, e.estimated_cogs_source, e.prep_override, e.storage_override,
           e.lowest_fba_price, e.buy_box_price, e.buy_box_fulfillment, e.lowest_price,
           e.sellers_fba, e.sellers_fbm,
           e.fba_fee, e.referral_fee, e.fees_estimate_price,
@@ -606,7 +618,10 @@ export async function registerRoutes(
 
         return {
           asin: row.asin,
-          cogs: parseFloat(row.cogs) || 0,
+          cogs: parseFloat(row.cogs) || 0, // deprecated — use estimatedCogs/actualCogs
+          estimatedCogs: row.estimated_cogs != null ? parseFloat(row.estimated_cogs) : null,
+          estimatedCogsSource: row.estimated_cogs_source ?? null,
+          actualCogs: row.actual_cogs != null ? parseFloat(row.actual_cogs) : null,
           buyLink: row.buy_link ?? null,
           prepOverride: row.prep_override != null ? parseFloat(row.prep_override) : null,
           storageOverride: row.storage_override != null ? parseFloat(row.storage_override) : null,
@@ -648,7 +663,7 @@ export async function registerRoutes(
           isHazmat: row.is_hazmat ?? false,
           isSearchSuppressed: row.is_search_suppressed ?? false,
           suppressionReasons: row.suppression_reasons ?? [],
-          cogsSource: (row.cogs_source as "po_sheet" | "csv" | "manual" | null) ?? null,
+          cogsSource: (row.cogs_source as "po_sheet" | "manual" | null) ?? null,
           pricesFetchedAt: row.fetched_at ? new Date(row.fetched_at).toISOString() : null,
           lastReviewedAt: row.last_reviewed_at ? new Date(row.last_reviewed_at).toISOString() : null,
           addedAt: row.added_at ? new Date(row.added_at).toISOString() : null,
@@ -1314,6 +1329,8 @@ export async function registerRoutes(
         result = {
           asin: input.asin,
           cogs: input.cogs,
+          estimatedCogs: input.cogs,
+          actualCogs: null,
           buyLink: input.buyLink ?? null,
           prepOverride: input.prepOverride ?? null,
           storageOverride: input.storageOverride ?? null,
@@ -1555,7 +1572,7 @@ export async function registerRoutes(
 
     try {
       const dbRes = await query(`
-        SELECT a.asin, e.cogs, a.buy_link, e.prep_override, e.storage_override
+        SELECT a.asin, COALESCE(e.actual_cogs, e.estimated_cogs, e.cogs) AS cogs, a.buy_link, e.prep_override, e.storage_override
         FROM asins a
         LEFT JOIN asin_estimates e ON e.asin = a.asin
         WHERE a.is_active = TRUE
@@ -1660,25 +1677,39 @@ export async function registerRoutes(
   // === COGS: manual inline edit + reset to PO sync ===
   app.put("/api/asins/:asin/cogs", async (req: Request, res: Response) => {
     const { asin } = req.params;
-    const { cogs } = req.body as { cogs?: number };
+    const { estimated_cogs, actual_cogs } = req.body as { estimated_cogs?: number; actual_cogs?: number };
     if (!isDbAvailable()) { res.status(503).json({ message: "Database not available" }); return; }
-    if (cogs == null || typeof cogs !== "number" || !isFinite(cogs) || cogs < 0) {
-      res.status(400).json({ message: "cogs must be a non-negative number" }); return;
+    if (estimated_cogs == null && actual_cogs == null) {
+      res.status(400).json({ message: "Provide estimated_cogs and/or actual_cogs" }); return;
     }
     try {
-      const existing = await query(`SELECT asin FROM asin_estimates WHERE asin = $1`, [asin]);
-      if (existing.rows.length === 0) {
-        await query(
-          `INSERT INTO asin_estimates (asin, cogs, cogs_source) VALUES ($1, $2, 'manual')`,
-          [asin, cogs],
-        );
-      } else {
-        await query(
-          `UPDATE asin_estimates SET cogs = $2, cogs_source = 'manual' WHERE asin = $1`,
-          [asin, cogs],
-        );
+      const sets: string[] = [];
+      const vals: any[] = [];
+      let idx = 1;
+      if (estimated_cogs != null) {
+        if (typeof estimated_cogs !== "number" || !isFinite(estimated_cogs) || estimated_cogs < 0) {
+          res.status(400).json({ message: "estimated_cogs must be a non-negative number" }); return;
+        }
+        sets.push(`estimated_cogs = $${idx++}`, `estimated_cogs_source = $${idx++}`);
+        vals.push(estimated_cogs, "manual");
       }
-      res.json({ cogs, cogsSource: "manual" });
+      if (actual_cogs != null) {
+        if (typeof actual_cogs !== "number" || !isFinite(actual_cogs) || actual_cogs < 0) {
+          res.status(400).json({ message: "actual_cogs must be a non-negative number" }); return;
+        }
+        sets.push(`actual_cogs = $${idx++}`, `cogs_source = $${idx++}`, `cogs = $${idx++}`);
+        vals.push(actual_cogs, "manual", actual_cogs);
+      }
+      vals.push(asin);
+      await query(`UPDATE asin_estimates SET ${sets.join(", ")} WHERE asin = $${idx}`, vals);
+      const row = await query(`SELECT estimated_cogs, estimated_cogs_source, actual_cogs, cogs_source FROM asin_estimates WHERE asin = $1`, [asin]);
+      const r = row.rows[0];
+      res.json({
+        estimatedCogs: r?.estimated_cogs != null ? parseFloat(r.estimated_cogs) : null,
+        estimatedCogsSource: r?.estimated_cogs_source ?? null,
+        actualCogs: r?.actual_cogs != null ? parseFloat(r.actual_cogs) : null,
+        cogsSource: r?.cogs_source ?? null,
+      });
     } catch (err: any) {
       log(`COGS update error for ${asin}: ${err.message}`, "cogs");
       res.status(500).json({ message: err.message });
@@ -1708,15 +1739,76 @@ export async function registerRoutes(
       const entry = sheetData.get(asin);
       if (entry?.cogs != null) {
         await query(
-          `UPDATE asin_estimates SET cogs = $2, cogs_source = 'po_sheet' WHERE asin = $1`,
+          `UPDATE asin_estimates SET cogs = $2, actual_cogs = $2, cogs_source = 'po_sheet' WHERE asin = $1`,
           [asin, entry.cogs],
         );
-        res.json({ cogs: entry.cogs, cogsSource: "po_sheet" });
+        res.json({ cogs: entry.cogs, actualCogs: entry.cogs, cogsSource: "po_sheet" });
       } else {
         res.json({ cogs: null, cogsSource: null });
       }
     } catch (err: any) {
       log(`COGS reset error for ${asin}: ${err.message}`, "cogs");
+      res.status(500).json({ message: err.message });
+    }
+  });
+
+  // === Sync Est. COGS from PO — single ASIN ===
+  app.post("/api/asins/:asin/cogs/sync-from-po", async (req: Request, res: Response) => {
+    const asin = String(req.params.asin ?? "");
+    if (!isDbAvailable()) { res.status(503).json({ message: "Database not available" }); return; }
+    const sheetId = process.env.GOOGLE_SHEET_ID;
+    const credPath = process.env.GOOGLE_CREDENTIALS_PATH;
+    if (!sheetId || !credPath || !fs.existsSync(credPath)) {
+      res.status(400).json({ message: "Google Sheet not configured" }); return;
+    }
+    try {
+      const sheetData = await fetchSheetData(sheetId);
+      const entry = sheetData.get(asin);
+      if (entry?.cogs == null) {
+        res.json({ synced: false, message: "No PO data found for this ASIN" }); return;
+      }
+      await query(
+        `UPDATE asin_estimates SET estimated_cogs = $2, estimated_cogs_source = 'po_sheet' WHERE asin = $1`,
+        [asin, entry.cogs],
+      );
+      res.json({ synced: true, estimatedCogs: entry.cogs, estimatedCogsSource: "po_sheet" });
+    } catch (err: any) {
+      res.status(500).json({ message: err.message });
+    }
+  });
+
+  // === Bulk Sync Est. COGS from PO ===
+  app.post("/api/cogs/bulk-sync-from-po", async (req: Request, res: Response) => {
+    if (!isDbAvailable()) { res.status(503).json({ message: "Database not available" }); return; }
+    const { asins: asinList } = req.body as { asins?: string[] };
+    if (!asinList || !Array.isArray(asinList) || asinList.length === 0) {
+      res.status(400).json({ message: "No ASINs provided" }); return;
+    }
+    const sheetId = process.env.GOOGLE_SHEET_ID;
+    const credPath = process.env.GOOGLE_CREDENTIALS_PATH;
+    if (!sheetId || !credPath || !fs.existsSync(credPath)) {
+      res.status(400).json({ message: "Google Sheet not configured" }); return;
+    }
+    try {
+      const sheetData = await fetchSheetData(sheetId);
+      let synced = 0;
+      let skipped = 0;
+      for (const asin of asinList) {
+        const entry = sheetData.get(asin);
+        if (entry?.cogs == null) { skipped++; continue; }
+        // Only overwrite manual/csv sources — po_sheet is already in sync
+        const estCheck = await query(`SELECT estimated_cogs_source FROM asin_estimates WHERE asin = $1`, [asin]);
+        const src = estCheck?.rows?.[0]?.estimated_cogs_source;
+        if (src === "po_sheet") { continue; } // already synced
+        await query(
+          `UPDATE asin_estimates SET estimated_cogs = $2, estimated_cogs_source = 'po_sheet' WHERE asin = $1`,
+          [asin, entry.cogs],
+        );
+        synced++;
+      }
+      res.json({ synced, skipped });
+    } catch (err: any) {
+      log(`Bulk COGS sync error: ${err.message}`, "cogs");
       res.status(500).json({ message: err.message });
     }
   });

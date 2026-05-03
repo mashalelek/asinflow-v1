@@ -33,13 +33,13 @@ export function SummaryCards({ results, priceSource, settings, activeFilter, onF
   results.forEach((r) => {
     if (r.error) return;
     const { price } = getSelectedPrice(r, priceSource);
-    if (price == null) return;
+    if (price == null || r.estimatedCogs == null) return;
 
     const prep = getEffectivePrep(r, settings);
     const storage = getEffectiveStorage(r, settings);
 
     const calc = calculateProfit(
-      price, r.cogs,
+      price, r.estimatedCogs,
       r.feesData.fbaFulfillmentFee ?? 0,
       r.feesData.referralFee ?? 0,
       r.feesData.feesEstimatePrice,
@@ -72,6 +72,8 @@ export function SummaryCards({ results, priceSource, settings, activeFilter, onF
       _calculated: calculated,
       icon: Package,
       color: "text-primary",
+      accent: "#3B82F6",
+      accentDark: "#60A5FA",
       filter: "all" as FilterMode,
     },
     {
@@ -80,6 +82,8 @@ export function SummaryCards({ results, priceSource, settings, activeFilter, onF
       sub: `meets thresholds`,
       icon: TrendingUp,
       color: "text-emerald-500",
+      accent: "#10B981",
+      accentDark: "#34D399",
       filter: "profitable" as FilterMode,
     },
     {
@@ -88,6 +92,8 @@ export function SummaryCards({ results, priceSource, settings, activeFilter, onF
       sub: `below thresholds`,
       icon: TrendingDown,
       color: "text-red-500",
+      accent: "#EF4444",
+      accentDark: "#F87171",
       filter: "unprofitable" as FilterMode,
     },
     {
@@ -96,6 +102,8 @@ export function SummaryCards({ results, priceSource, settings, activeFilter, onF
       sub: "checked items",
       icon: ShoppingCart,
       color: "text-blue-500",
+      accent: "#8B5CF6",
+      accentDark: "#A78BFA",
       filter: "buyList" as FilterMode,
     },
   ];
@@ -109,11 +117,12 @@ export function SummaryCards({ results, priceSource, settings, activeFilter, onF
         return (
           <Card
             key={card.label}
-            className={`p-4 transition-all ${isClickable ? "cursor-pointer hover:shadow-md" : ""} ${
+            className={`p-4 transition-all border-l-[3px] ${isClickable ? "cursor-pointer hover:shadow-md" : ""} ${
               isActive
                 ? "ring-2 ring-primary bg-primary/5 dark:bg-primary/10"
                 : ""
             }`}
+            style={{ borderLeftColor: card.accent }}
             onClick={isClickable ? () => handleClick(card.filter!) : undefined}
             data-testid={`card-filter-${card.filter ?? "avg-roi"}`}
           >

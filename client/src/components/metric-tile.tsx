@@ -31,7 +31,7 @@ interface DualTileProps {
 
 export function MetricTile({ label, value, format }: SingleTileProps) {
   return (
-    <Card className="p-4 overflow-hidden">
+    <Card className="p-4 overflow-hidden border-l-[3px] border-l-muted-foreground/20">
       <p className="text-xs text-muted-foreground">{label}</p>
       <p className="text-2xl font-bold mt-1 text-foreground">
         {formatValue(value, format)}
@@ -42,7 +42,7 @@ export function MetricTile({ label, value, format }: SingleTileProps) {
 
 export function DualMetricTile({ label, estValue, actValue, format }: DualTileProps) {
   return (
-    <Card className="p-4 overflow-hidden">
+    <Card className="p-4 overflow-hidden border-l-[3px] border-l-muted-foreground/20">
       <p className="text-xs text-muted-foreground mb-2">{label}</p>
       <div className="flex items-end gap-4">
         <div className="flex-1">

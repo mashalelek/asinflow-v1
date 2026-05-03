@@ -66,15 +66,16 @@ export function computeAnalyticsMetrics(
     const est = getEstimatedProfit(r, priceSource, settings, includeInboundShipping);
     if (est) {
       estProfitSum += est.profit;
-      estCogsSum += r.cogs;
+      estCogsSum += r.estimatedCogs!;
       const { price } = getSelectedPrice(r, priceSource);
       if (price != null) estSalePriceSum += price;
       estCount++;
     }
 
     // Simple averages (include all rows with valid values, not just "calculated")
-    if (r.cogs != null && r.cogs > 0) {
-      cogsSum += r.cogs;
+    const avgCogsVal = r.actualCogs ?? r.estimatedCogs;
+    if (avgCogsVal != null && avgCogsVal > 0) {
+      cogsSum += avgCogsVal;
       cogsCount++;
     }
     const mc = getMaxCogs(r, priceSource, settings, includeInboundShipping);
@@ -92,7 +93,7 @@ export function computeAnalyticsMetrics(
     const act = getActualProfit(r, settings, includeInboundShipping);
     if (act) {
       actTotalProfit += act.totalProfit;
-      actTotalCogsCost += r.cogs * act.unitsSold;
+      actTotalCogsCost += (r.actualCogs ?? 0) * act.unitsSold;
       actTotalRevenue += act.revenue;
       actTotalUnits += act.unitsSold;
     }

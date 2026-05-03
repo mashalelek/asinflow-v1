@@ -8,11 +8,13 @@ import { SettingsDialog } from "@/components/settings-dialog";
 import { ResultsTable, getRowValue } from "@/components/results-table";
 import { GroupedTable, type GroupData } from "@/components/grouped-table";
 import { ColumnManager } from "@/components/column-manager";
-import { useTheme } from "@/components/theme-provider";
+// Theme toggle is now in the top nav
 import { loadSettings } from "@/lib/settings";
 import { loadColumnConfig, type ColumnConfig } from "@/lib/columns";
-import { Sun, Moon, BarChart3, Search, X } from "lucide-react";
+import { Sun, Moon, BarChart3, Search, X, Filter } from "lucide-react";
 import { Checkbox } from "@/components/ui/checkbox";
+import { VisibilityToggles, loadShowGated, saveShowGated, loadShowMeltable, saveShowMeltable, loadShowArchived, saveShowArchived } from "@/components/visibility-toggles";
+import { ActiveFiltersModal, getActiveFilterCount } from "@/components/active-filters-modal";
 import { Input } from "@/components/ui/input";
 import {
   type AsinResult,
@@ -100,7 +102,7 @@ function loadColFilters(): FilterMap {
 }
 
 export default function Analytics() {
-  const { theme, toggleTheme } = useTheme();
+  // Theme toggle moved to top nav
   const { toast } = useToast();
   const [settings, setSettings] = useState<Settings>(loadSettings);
   const [columnConfig, setColumnConfig] = useState<ColumnConfig>(loadColConfig);
@@ -116,13 +118,10 @@ export default function Analytics() {
   });
   const [searchQuery, setSearchQuery] = useState("");
   const [colFilters, setColFilters] = useState<FilterMap>(loadColFilters);
-  const [showArchived, setShowArchived] = useState(false);
-  const [meltableHidden, setMeltableHidden] = useState(() => {
-    const now = new Date();
-    const m = now.getMonth() + 1;
-    const d = now.getDate();
-    return (m > 4 || (m === 4 && d >= 15)) && (m < 9 || (m === 9 && d <= 15));
-  });
+  const [showGated, setShowGated] = useState(loadShowGated);
+  const [showMeltable, setShowMeltable] = useState(loadShowMeltable);
+  const [showArchived, setShowArchived] = useState(loadShowArchived);
+  const [filtersModalOpen, setFiltersModalOpen] = useState(false);
   const [page, setPage] = useState(1);
   const [pageSize, setPageSize] = useState<number>(() => {
     try { const v = localStorage.getItem(A_PAGE_SIZE_KEY); return v ? parseInt(v) : 100; } catch { return 100; }
@@ -208,7 +207,9 @@ export default function Analytics() {
     }
 
     // Meltable seasonal
-    if (meltableHidden) out = out.filter((r) => !r.isMeltable);
+    // Visibility toggles
+    if (!showGated) out = out.filter((r) => (r.eligibilityData?.status ?? "check") !== "no");
+    if (!showMeltable) out = out.filter((r) => !r.isMeltable);
 
     // Column filters
     if (Object.keys(colFilters).length > 0) {
@@ -218,13 +219,14 @@ export default function Analytics() {
         const storage = getEffectiveStorage(r, settings);
         let profitData: ReturnType<typeof calculateProfit> | null = null;
         if (price != null && !r.error) {
-          profitData = calculateProfit(price, r.cogs, r.feesData.fbaFulfillmentFee ?? 0, r.feesData.referralFee ?? 0, r.feesData.feesEstimatePrice, r.catalogData.weightLbs, prep.value, storage.value, settings, includeInboundShipping, r.isHazmat ?? false);
+          if (r.estimatedCogs != null) profitData = calculateProfit(price, r.estimatedCogs, r.feesData.fbaFulfillmentFee ?? 0, r.feesData.referralFee ?? 0, r.feesData.feesEstimatePrice, r.catalogData.weightLbs, prep.value, storage.value, settings, includeInboundShipping, r.isHazmat ?? false);
         }
         return matchesFilters(r as any, colFilters, (colId) => {
           switch (colId) {
             case "brand": return r.catalogData.brand;
             case "supplier": return r.buyLink ? extractDomain(r.buyLink) : null;
-            case "cogs": return r.cogs;
+            case "cogs": return r.actualCogs ?? null;
+            case "estCogs": return r.estimatedCogs ?? null;
             case "salePrice": return price;
             case "profit": return profitData?.profit ?? null;
             case "margin": return profitData?.margin ?? null;
@@ -260,7 +262,7 @@ export default function Analytics() {
     }
 
     return out;
-  }, [results, searchQuery, meltableHidden, colFilters, priceSource, settings, includeInboundShipping]);
+  }, [results, searchQuery, showGated, showMeltable, colFilters, priceSource, settings, includeInboundShipping]);
 
   // Sorting
   const sortedFilteredResults = useMemo(() => {
@@ -318,7 +320,7 @@ export default function Analytics() {
   }, [groupBy, sortedFilteredResults, priceSource, settings, includeInboundShipping]);
 
   // Page reset
-  useEffect(() => { setPage(1); }, [searchQuery, colFilters, meltableHidden, showArchived]);
+  useEffect(() => { setPage(1); }, [searchQuery, colFilters, showGated, showMeltable, showArchived]);
 
   // Pagination: group-level when grouped, ASIN-level when flat
   const isGrouped = groupBy !== "none";
@@ -338,10 +340,7 @@ export default function Analytics() {
     setSelectedSet(new Set(paginatedResults.map((r) => r.asin)));
   }, [paginatedResults]);
 
-  const activeFilterCount = [
-    searchQuery.trim() !== "" ? 1 : 0,
-    Object.keys(colFilters).length,
-  ].reduce((a, b) => a + b, 0);
+  const activeFilterCount = getActiveFilterCount(colFilters, searchQuery);
 
   function clearFilters() {
     setSearchQuery("");
@@ -349,28 +348,11 @@ export default function Analytics() {
   }
 
   return (
-    <div className="min-h-screen bg-background">
-      {/* Header — matching ASINs page style */}
-      <header className="sticky top-0 z-50 border-b border-border bg-background/95 backdrop-blur supports-[backdrop-filter]:bg-background/60">
-        <div className="px-4">
-          <div className="flex items-center justify-between gap-4 h-14">
-            <div className="flex items-center gap-2.5">
-              <BarChart3 className="h-6 w-6 text-primary" />
-              <h1 className="text-base font-semibold tracking-tight">Analytics</h1>
-            </div>
-            <div className="flex items-center gap-1">
-              <SettingsDialog onSettingsChange={setSettings} />
-              <Button size="icon" variant="ghost" onClick={toggleTheme}>
-                {theme === "dark" ? <Sun className="h-5 w-5" /> : <Moon className="h-5 w-5" />}
-              </Button>
-            </div>
-          </div>
-        </div>
-      </header>
-
+    <div className="bg-background">
       <div className="py-6 space-y-6">
         {/* Controls row */}
         <div className="flex items-center gap-4 flex-wrap px-4">
+          <SettingsDialog onSettingsChange={setSettings} />
           <div className="flex items-center gap-3">
             <Label className="text-sm text-muted-foreground whitespace-nowrap">Price Source:</Label>
             <div className="flex items-center gap-2">
@@ -462,19 +444,23 @@ export default function Analytics() {
                   className="pl-9 h-9"
                 />
               </div>
-              <div className="flex items-center gap-1.5">
-                <Switch id="a-archived" checked={showArchived} onCheckedChange={setShowArchived} />
-                <Label htmlFor="a-archived" className="text-xs text-muted-foreground cursor-pointer whitespace-nowrap">Show Archived</Label>
-              </div>
-              {meltableHidden && (
-                <div className="flex items-center gap-1.5 text-xs text-amber-500 bg-amber-500/10 px-2 py-1 rounded">
-                  <span>Meltable hidden</span>
-                  <button className="underline hover:no-underline" onClick={() => setMeltableHidden(false)}>Show</button>
-                </div>
-              )}
+              <VisibilityToggles
+                showGated={showGated}
+                onShowGatedChange={(v) => { setShowGated(v); saveShowGated(v); }}
+                showMeltable={showMeltable}
+                onShowMeltableChange={(v) => { setShowMeltable(v); saveShowMeltable(v); }}
+                showArchived={showArchived}
+                onShowArchivedChange={(v) => { setShowArchived(v); saveShowArchived(v); }}
+              />
               {activeFilterCount > 0 && (
-                <Button variant="ghost" size="sm" onClick={clearFilters} className="h-9 text-muted-foreground">
-                  <X className="h-3 w-3 mr-1" />Clear ({activeFilterCount})
+                <Button
+                  variant="outline"
+                  size="sm"
+                  onClick={() => setFiltersModalOpen(true)}
+                  className="h-9 text-xs text-amber-600 border-amber-300 hover:bg-amber-50 dark:text-amber-400 dark:border-amber-700 dark:hover:bg-amber-950"
+                >
+                  <Filter className="h-3.5 w-3.5 mr-1.5" />
+                  Active filters ({activeFilterCount})
                 </Button>
               )}
               {filteredResults.length !== results.length && (
@@ -486,6 +472,7 @@ export default function Analytics() {
             {isGrouped ? (
               <GroupedTable
                 groups={paginatedGroups}
+                startIndex={(safePage - 1) * pageSize}
                 priceSource={priceSource}
                 settings={settings}
                 columnConfig={columnConfig}
@@ -517,6 +504,7 @@ export default function Analytics() {
               <ResultsTable
                 results={paginatedResults}
                 allResults={results}
+                startIndex={(safePage - 1) * pageSize}
                 priceSource={priceSource}
                 settings={settings}
                 columnConfig={columnConfig}
@@ -568,6 +556,16 @@ export default function Analytics() {
             </div>
           </>
         )}
+
+        <ActiveFiltersModal
+          open={filtersModalOpen}
+          onOpenChange={setFiltersModalOpen}
+          colFilters={colFilters}
+          searchQuery={searchQuery}
+          onRemoveFilter={(colId) => setColFilters((prev) => { const next = { ...prev }; delete next[colId]; return next; })}
+          onClearSearch={() => setSearchQuery("")}
+          onClearAll={clearFilters}
+        />
 
         {dbLoaded && results.length === 0 && (
           <div className="flex flex-col items-center justify-center py-20 text-center px-4">

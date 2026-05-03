@@ -25,7 +25,7 @@ export interface MultiSelectOption {
 type FilterType = "numeric" | "text" | "tags" | "supplier" | "boolean" | "reviewed";
 
 const NUMERIC_COLS = new Set<ColumnId>([
-  "cogs", "salePrice", "profit", "margin", "roi",
+  "cogs", "estCogs", "salePrice", "profit", "margin", "roi",
   "fbaFee", "referralFee", "inboundShipping", "prep", "storage",
   "bsr", "sellersFba", "sellersFbm", "stock", "daysLeft",
   "fba7d", "fba30d", "fbm7d", "fbm30d",

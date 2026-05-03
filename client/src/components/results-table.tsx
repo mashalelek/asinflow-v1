@@ -48,7 +48,8 @@ const DEFAULT_COL_WIDTHS: Partial<Record<ColumnId, number>> = {
   product: 400,
   brand: 100,
   supplier: 100,
-  cogs: 80,
+  cogs: 90,
+  estCogs: 90,
   salePrice: 90,
   profit: 90,
   margin: 75,
@@ -88,11 +89,12 @@ const DEFAULT_COL_WIDTHS: Partial<Record<ColumnId, number>> = {
 };
 
 const ACTUALS_COLS = new Set<ColumnId>([
+  "cogs",
   "actUnitsSold", "actRevenue", "actRefunds", "actRefundPct",
   "actProfit", "actProfitPerUnit", "actMargin", "actRoi",
 ]);
 const ESTIMATES_COLS = new Set<ColumnId>([
-  "salePrice", "cogs", "profit", "margin", "roi",
+  "salePrice", "estCogs", "profit", "margin", "roi",
   "fbaFee", "referralFee", "inboundShipping", "prep", "storage",
   "bsr", "sellersFba", "sellersFbm",
   "fba7d", "fba30d", "fbm7d", "fbm30d",
@@ -325,6 +327,7 @@ function CopyAsinButton({ asin }: { asin: string }) {
 interface ResultsTableProps {
   results: AsinResult[];
   allResults?: AsinResult[];
+  startIndex?: number;
   priceSource: PriceSource;
   settings: Settings;
   columnConfig: ColumnConfig;
@@ -374,9 +377,9 @@ export function getRowValue(
   const storage = getEffectiveStorage(result, settings);
 
   let profitData: ReturnType<typeof calculateProfit> | null = null;
-  if (price != null && !result.error) {
+  if (price != null && !result.error && result.estimatedCogs != null) {
     profitData = calculateProfit(
-      price, result.cogs,
+      price, result.estimatedCogs,
       result.feesData.fbaFulfillmentFee ?? 0,
       result.feesData.referralFee ?? 0,
       result.feesData.feesEstimatePrice,
@@ -392,7 +395,8 @@ export function getRowValue(
   switch (colId) {
     case "brand": return result.catalogData.brand;
     case "supplier": return extractDomain(result.buyLink);
-    case "cogs": return result.cogs;
+    case "cogs": return result.actualCogs ?? null;
+    case "estCogs": return result.estimatedCogs ?? null;
     case "salePrice": return price;
     case "profit": return profitData?.profit ?? null;
     case "margin": return profitData?.margin ?? null;
@@ -434,12 +438,12 @@ export function getRowValue(
     case "actProfitPerUnit":
     case "actMargin":
     case "actRoi": {
-      if (!result.actuals || result.actuals.units_sold === 0) return null;
+      if (!result.actuals || result.actuals.units_sold === 0 || result.actualCogs == null) return null;
       const au = result.actuals.units_sold;
       const ar = result.actuals.revenue;
       const ap = getEffectivePrep(result, settings);
       const as2 = getEffectiveStorage(result, settings);
-      const ac = calculateProfit(ar / au, result.cogs, result.feesData.fbaFulfillmentFee ?? 0, result.feesData.referralFee ?? 0, result.feesData.feesEstimatePrice, result.catalogData.weightLbs, ap.value, as2.value, settings, true, result.isHazmat ?? false);
+      const ac = calculateProfit(ar / au, result.actualCogs, result.feesData.fbaFulfillmentFee ?? 0, result.feesData.referralFee ?? 0, result.feesData.feesEstimatePrice, result.catalogData.weightLbs, ap.value, as2.value, settings, true, result.isHazmat ?? false);
       if (colId === "actProfit") return ac.profit * au;
       if (colId === "actProfitPerUnit") return ac.profit;
       if (colId === "actMargin") return ac.margin;
@@ -470,11 +474,11 @@ export function getRowValue(
 function isProfitable(result: AsinResult, priceSource: PriceSource, settings: Settings): boolean | null {
   if (result.error) return null;
   const { price } = getSelectedPrice(result, priceSource);
-  if (price == null) return null;
+  if (price == null || result.estimatedCogs == null) return null;
   const prep = getEffectivePrep(result, settings);
   const storage = getEffectiveStorage(result, settings);
   const calc = calculateProfit(
-    price, result.cogs,
+    price, result.estimatedCogs,
     result.feesData.fbaFulfillmentFee ?? 0,
     result.feesData.referralFee ?? 0,
     result.feesData.feesEstimatePrice,
@@ -486,7 +490,7 @@ function isProfitable(result: AsinResult, priceSource: PriceSource, settings: Se
 }
 
 export function ResultsTable({
-  results, allResults: allResultsProp, priceSource, settings, columnConfig,
+  results, allResults: allResultsProp, startIndex = 0, priceSource, settings, columnConfig,
   activeFilter, buySet, onToggleBuy,
   sortCol, sortDir, onSort,
   includeInboundShipping = true,
@@ -636,6 +640,7 @@ export function ResultsTable({
   const frozenColWidth = { rowNum: 36, sel: 32, cart: 32 };
   const selLeft = frozenColWidth.rowNum;
   const cartLeft = selLeft + frozenColWidth.sel;
+  const productLeft = cartLeft + frozenColWidth.cart;
 
   // Columns for headers (exclude "product" — it gets special wide rendering, also exclude old frozen cols)
   const dataCols = visibleCols.filter((id) => id !== "product");
@@ -645,41 +650,14 @@ export function ResultsTable({
   const hasGroups = estimatesCount > 0 || actualsCount > 0;
 
   return (
-    <div className="w-full overflow-auto relative border-y border-border" style={{ maxHeight: "calc(100vh - 280px)" }}>
+    <div className="w-full overflow-auto relative" style={{ maxHeight: "calc(100vh - 280px)" }}>
       <table className="border-collapse text-sm w-full" data-testid="results-table">
         <thead className="sticky top-0 z-20">
-          {hasGroups && (
-            <tr className="border-b border-border bg-muted backdrop-blur">
-              <th className="sticky left-0 z-30 bg-muted border-r border-border" style={{ width: frozenColWidth.rowNum }} />
-              <th className="sticky z-30 bg-muted border-r border-border" style={{ left: selLeft, width: frozenColWidth.sel }} />
-              <th className="sticky z-30 bg-muted border-r border-border" style={{ left: cartLeft, width: frozenColWidth.cart }} />
-              {productVisible && <th className="bg-muted border-r border-border" />}
-              {dataCols.map((colId, i) => {
-                if (ESTIMATES_COLS.has(colId) && (i === 0 || !ESTIMATES_COLS.has(dataCols[i - 1]))) {
-                  return (
-                    <th key={`grp-est-${i}`} colSpan={estimatesCount} className="text-center text-xs font-semibold text-muted-foreground px-3 py-1 border-r border-border bg-blue-500/5">
-                      Estimates
-                    </th>
-                  );
-                }
-                if (ESTIMATES_COLS.has(colId)) return null;
-                if (ACTUALS_COLS.has(colId) && (i === 0 || !ACTUALS_COLS.has(dataCols[i - 1]))) {
-                  return (
-                    <th key={`grp-act-${i}`} colSpan={actualsCount} className="text-center text-xs font-semibold text-muted-foreground px-3 py-1 border-r border-border bg-emerald-500/5">
-                      Actuals{dateRangeLabel ? ` (${dateRangeLabel})` : ""}
-                    </th>
-                  );
-                }
-                if (ACTUALS_COLS.has(colId)) return null;
-                return <th key={`grp-other-${colId}`} className="bg-muted" />;
-              })}
-            </tr>
-          )}
-          <tr className="border-b border-border bg-muted/80 backdrop-blur">
-            <th className="sticky left-0 z-30 bg-muted text-center text-xs font-medium text-muted-foreground px-1 py-2 border-r border-border" style={{ width: frozenColWidth.rowNum, minWidth: frozenColWidth.rowNum }}>
+          <tr className="table-header-stone">
+            <th className="sticky left-0 z-30 table-header-stone text-center text-xs font-medium px-1 py-2" style={{ width: frozenColWidth.rowNum, minWidth: frozenColWidth.rowNum }}>
               #
             </th>
-            <th className="sticky z-30 bg-muted text-center text-xs font-medium text-muted-foreground px-1 py-2 border-r border-border" style={{ left: selLeft, width: frozenColWidth.sel, minWidth: frozenColWidth.sel }}>
+            <th className="sticky z-30 table-header-stone text-center text-xs font-medium px-1 py-2" style={{ left: selLeft, width: frozenColWidth.sel, minWidth: frozenColWidth.sel }}>
               <input
                 type="checkbox"
                 className="h-3.5 w-3.5 accent-blue-500 cursor-pointer"
@@ -700,11 +678,11 @@ export function ResultsTable({
                 }}
               />
             </th>
-            <th className="sticky z-30 bg-muted text-center text-xs font-medium text-muted-foreground px-1 py-2 border-r border-border" style={{ left: cartLeft, width: frozenColWidth.cart, minWidth: frozenColWidth.cart }}>
+            <th className="sticky z-30 table-header-stone text-center text-xs font-medium px-1 py-2" style={{ left: cartLeft, width: frozenColWidth.cart, minWidth: frozenColWidth.cart }}>
               <ShoppingCart className="h-3 w-3 mx-auto text-muted-foreground" />
             </th>
             {productVisible && (
-              <th className="text-left text-xs font-medium px-2 py-2 border-r border-border relative" style={{ width: colWidths["product"] ?? DEFAULT_COL_WIDTHS.product, minWidth: 200 }}>
+              <th className="sticky z-30 table-header-stone text-left text-xs font-medium px-2 py-2 relative" style={{ left: productLeft, width: colWidths["product"] ?? DEFAULT_COL_WIDTHS.product, minWidth: 200, borderRight: "0.5px solid hsl(var(--border))" }}>
                 Product
                 <ResizeHandle onMouseDown={(e) => handleResizeStart(e, "product")} />
               </th>
@@ -716,9 +694,9 @@ export function ResultsTable({
               return (
                 <th
                   key={colId}
-                  className={`relative cursor-pointer select-none whitespace-nowrap hover:bg-muted/70 transition-colors px-3 py-2 text-xs font-medium ${
+                  className={`relative cursor-pointer select-none whitespace-nowrap hover:opacity-80 transition-colors px-3 py-2 text-xs font-medium ${
                     col.align === "right" ? "text-right" : "text-left"
-                  } ${ESTIMATES_COLS.has(colId) ? "bg-blue-500/5" : ACTUALS_COLS.has(colId) ? "bg-emerald-500/5" : ""}`}
+                  }`}
                   style={w ? { width: w, minWidth: w, maxWidth: w } : undefined}
                   onClick={() => onSort(colId)}
                   data-testid={`header-${colId}`}
@@ -763,9 +741,9 @@ export function ResultsTable({
             let rowBg = "";
             let profitData: ReturnType<typeof calculateProfit> | null = null;
 
-            if (!hasError && price != null) {
+            if (!hasError && price != null && result.estimatedCogs != null) {
               profitData = calculateProfit(
-                price, result.cogs,
+                price, result.estimatedCogs,
                 result.feesData.fbaFulfillmentFee ?? 0,
                 result.feesData.referralFee ?? 0,
                 result.feesData.feesEstimatePrice,
@@ -774,12 +752,6 @@ export function ResultsTable({
                 includeInboundShipping,
                 result.isHazmat ?? false
               );
-              const meetsCriteria =
-                profitData.roi >= settings.minRoiThreshold &&
-                profitData.margin >= settings.minMarginThreshold;
-              rowBg = meetsCriteria
-                ? "bg-emerald-500/8 dark:bg-emerald-500/10"
-                : "bg-red-500/8 dark:bg-red-500/10";
             }
 
             if (notAvailable || hasError) {
@@ -795,22 +767,22 @@ export function ResultsTable({
             return (
               <tr
                 key={`${result.asin}-${idx}`}
-                className={`${rowBg} ${buyHighlight} ${archivedStyle} border-b border-border transition-colors hover:bg-muted/30`}
+                className={`${rowBg} ${buyHighlight} ${archivedStyle} transition-colors hover:bg-muted/30 table-zebra-stone`}
                 data-testid={`row-result-${result.asin}`}
               >
-                <td className={`sticky left-0 z-10 text-center text-xs text-muted-foreground px-1 py-1.5 border-r border-border ${frozenBg}`} style={{ width: frozenColWidth.rowNum, minWidth: frozenColWidth.rowNum }}>
-                  {idx + 1}
+                <td className={`sticky left-0 z-10 text-center text-xs text-muted-foreground px-1 py-1.5 ${frozenBg}`} style={{ width: frozenColWidth.rowNum, minWidth: frozenColWidth.rowNum }}>
+                  {startIndex + idx + 1}
                 </td>
-                <td className={`sticky z-10 text-center px-1 py-1.5 border-r border-border ${frozenBg}`} style={{ left: selLeft, width: frozenColWidth.sel, minWidth: frozenColWidth.sel }}>
+                <td className={`sticky z-10 text-center px-1 py-1.5 ${frozenBg}`} style={{ left: selLeft, width: frozenColWidth.sel, minWidth: frozenColWidth.sel }}>
                   <input type="checkbox" checked={selectedSet.has(result.asin)} onChange={() => onToggleSelect?.(result.asin)} className="h-3.5 w-3.5 accent-blue-500 cursor-pointer" data-testid={`checkbox-select-${result.asin}`} />
                 </td>
-                <td className={`sticky z-10 text-center px-1 py-1.5 border-r border-border ${frozenBg}`} style={{ left: cartLeft, width: frozenColWidth.cart, minWidth: frozenColWidth.cart }}>
+                <td className={`sticky z-10 text-center px-1 py-1.5 ${frozenBg}`} style={{ left: cartLeft, width: frozenColWidth.cart, minWidth: frozenColWidth.cart }}>
                   <button onClick={() => onToggleBuy(result.asin)} className="p-0.5" data-testid={`btn-cart-${result.asin}`}>
                     <ShoppingCart className={`h-3.5 w-3.5 ${isBuy ? "text-blue-500 fill-blue-500/20" : "text-muted-foreground/30 hover:text-muted-foreground"} transition-colors`} />
                   </button>
                 </td>
                 {productVisible && (
-                  <td className="px-2 py-1.5 border-r border-border overflow-hidden" style={{ width: colWidths["product"] ?? DEFAULT_COL_WIDTHS.product, minWidth: 200, maxWidth: colWidths["product"] ?? DEFAULT_COL_WIDTHS.product }}>
+                  <td className={`sticky z-10 px-2 py-1.5 overflow-hidden ${frozenBg}`} style={{ left: productLeft, width: colWidths["product"] ?? DEFAULT_COL_WIDTHS.product, minWidth: 200, maxWidth: colWidths["product"] ?? DEFAULT_COL_WIDTHS.product, borderRight: "0.5px solid hsl(var(--border))" }}>
                     <ProductCell result={result} price={price} settings={settings} onResultUpdate={onResultUpdate} />
                   </td>
                 )}
@@ -884,114 +856,85 @@ export function ResultsTable({
 
 function CogsEditor({
   asin,
-  currentCogs,
-  currentSource,
+  estimatedCogs,
+  estimatedCogsSource,
   onChanged,
 }: {
   asin: string;
-  currentCogs: number;
-  currentSource: "po_sheet" | "csv" | "manual" | null | undefined;
-  onChanged: (cogs: number | null, source: "po_sheet" | "csv" | "manual" | null) => void;
+  estimatedCogs: number | null;
+  estimatedCogsSource: string | null | undefined;
+  onChanged: (updates: Partial<AsinResult>) => void;
 }) {
   const [open, setOpen] = useState(false);
-  const [value, setValue] = useState(String(currentCogs ?? ""));
+  const [estVal, setEstVal] = useState(String(estimatedCogs ?? ""));
   const [saving, setSaving] = useState(false);
-  const [resetting, setResetting] = useState(false);
+  const [syncing, setSyncing] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
+  const canSyncFromPo = estimatedCogsSource === "manual";
+
   async function save() {
-    const parsed = parseFloat(value);
-    if (!isFinite(parsed) || parsed < 0) {
-      setError("Enter a non-negative number");
-      return;
-    }
+    const estParsed = parseFloat(estVal);
+    if (!estVal.trim() || !isFinite(estParsed) || estParsed < 0) { setError("Enter a non-negative number"); return; }
     setError(null);
     setSaving(true);
     try {
       const res = await fetch(`/api/asins/${asin}/cogs`, {
         method: "PUT",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ cogs: parsed }),
+        body: JSON.stringify({ estimated_cogs: estParsed }),
       });
-      if (!res.ok) {
-        const err = await res.json().catch(() => ({}));
-        throw new Error(err.message || "Failed to save COGS");
-      }
+      if (!res.ok) { const err = await res.json().catch(() => ({})); throw new Error(err.message || "Failed"); }
       const data = await res.json();
-      onChanged(data.cogs, data.cogsSource);
+      onChanged({
+        estimatedCogs: data.estimatedCogs,
+        estimatedCogsSource: data.estimatedCogsSource,
+        cogs: data.estimatedCogs ?? 0,
+      });
       setOpen(false);
-    } catch (e: any) {
-      setError(e.message);
-    } finally {
-      setSaving(false);
-    }
+    } catch (e: any) { setError(e.message); } finally { setSaving(false); }
   }
 
-  async function resetToPo() {
+  async function syncFromPo() {
     setError(null);
-    setResetting(true);
+    setSyncing(true);
     try {
-      const res = await fetch(`/api/asins/${asin}/cogs/reset`, { method: "POST" });
-      if (!res.ok) {
-        const err = await res.json().catch(() => ({}));
-        throw new Error(err.message || "Failed to reset COGS");
-      }
+      const res = await fetch(`/api/asins/${asin}/cogs/sync-from-po`, { method: "POST" });
+      if (!res.ok) { const err = await res.json().catch(() => ({})); throw new Error(err.message || "Failed"); }
       const data = await res.json();
-      onChanged(data.cogs, data.cogsSource);
+      if (!data.synced) { setError(data.message || "No PO data found"); setSyncing(false); return; }
+      onChanged({
+        estimatedCogs: data.estimatedCogs,
+        estimatedCogsSource: data.estimatedCogsSource,
+        cogs: data.estimatedCogs ?? 0,
+      });
       setOpen(false);
-    } catch (e: any) {
-      setError(e.message);
-    } finally {
-      setResetting(false);
-    }
+    } catch (e: any) { setError(e.message); } finally { setSyncing(false); }
   }
-
-  const canReset = currentSource === "manual" || currentSource === "csv";
 
   return (
-    <Popover open={open} onOpenChange={(v) => { setOpen(v); if (v) { setValue(String(currentCogs ?? "")); setError(null); } }}>
+    <Popover open={open} onOpenChange={(v) => { setOpen(v); if (v) { setEstVal(String(estimatedCogs ?? "")); setError(null); } }}>
       <PopoverTrigger asChild>
-        <button
-          className="text-muted-foreground/40 hover:text-muted-foreground p-0 ml-0.5"
-          onClick={(e) => e.stopPropagation()}
-          data-testid={`btn-edit-cogs-${asin}`}
-          title="Edit COGS"
-        >
+        <button className="text-muted-foreground/40 hover:text-muted-foreground p-0 ml-0.5" onClick={(e) => e.stopPropagation()} title="Edit Estimated COGS">
           <Pencil className="h-2.5 w-2.5" />
         </button>
       </PopoverTrigger>
-      <PopoverContent className="w-64 p-3" align="start" sideOffset={4} onClick={(e) => e.stopPropagation()}>
+      <PopoverContent className="w-56 p-3" align="start" sideOffset={4} onClick={(e) => e.stopPropagation()}>
         <div className="space-y-2">
-          <label className="text-xs text-muted-foreground">COGS ($)</label>
-          <input
-            type="number"
-            step="0.01"
-            min="0"
-            value={value}
-            onChange={(e) => setValue(e.target.value)}
+          <label className="text-xs text-muted-foreground">Edit Estimated COGS ($)</label>
+          <input type="number" step="0.01" min="0" value={estVal} onChange={(e) => setEstVal(e.target.value)}
             className="w-full text-sm p-2 rounded border border-border bg-background focus:outline-none focus:ring-1 focus:ring-ring"
-            onKeyDown={(e) => e.key === "Enter" && save()}
-            autoFocus
-          />
+            onKeyDown={(e) => e.key === "Enter" && save()} autoFocus />
           {error && <p className="text-xs text-red-500">{error}</p>}
           <div className="flex items-center justify-between gap-2 pt-1">
-            {canReset ? (
-              <button
-                className="text-xs text-primary hover:underline disabled:opacity-50"
-                onClick={resetToPo}
-                disabled={resetting || saving}
-                data-testid={`btn-reset-cogs-${asin}`}
-              >
-                {resetting ? "Resetting..." : "Reset to PO"}
+            {canSyncFromPo ? (
+              <button className="text-xs text-primary hover:underline disabled:opacity-50" onClick={syncFromPo} disabled={syncing || saving}>
+                {syncing ? "Syncing..." : "Sync from PO"}
               </button>
             ) : <span />}
             <div className="flex gap-2">
               <button className="text-xs text-muted-foreground hover:text-foreground px-2 py-1" onClick={() => setOpen(false)}>Cancel</button>
-              <button
-                className="text-xs bg-primary text-primary-foreground px-3 py-1 rounded hover:bg-primary/90 disabled:opacity-50"
-                onClick={save}
-                disabled={saving || resetting}
-              >
+              <button className="text-xs bg-primary text-primary-foreground px-3 py-1 rounded hover:bg-primary/90 disabled:opacity-50" onClick={save} disabled={saving || syncing}>
                 {saving ? "..." : "Save"}
               </button>
             </div>
@@ -1111,36 +1054,26 @@ function CogsDisplay({
   result: AsinResult;
   onResultUpdate?: (asin: string, updates: Partial<AsinResult>) => void;
 }) {
-  const source = result.cogsSource;
-  const isManual = source === "manual";
-  const isCsv = source === "csv";
-  const colorClass = isManual ? "text-amber-500" : "";
-  const badge =
-    isManual ? { letter: "M", tip: "Manually entered — PO sync skipped for this ASIN" } :
-    isCsv ? { letter: "C", tip: "From CSV upload" } :
-    null;
+  const displayValue = result.estimatedCogs;
+  const source = result.estimatedCogsSource;
 
   return (
     <span className="inline-flex items-center gap-1">
-      <span className={colorClass}>COGS: {fmt(result.cogs ?? 0)}</span>
-      {badge && (
+      <span>Est. COGS: {displayValue != null ? fmt(displayValue) : "\u2014"}</span>
+      {source === "manual" && (
         <Tooltip>
           <TooltipTrigger asChild>
-            <span className="inline-flex items-center justify-center rounded-sm border border-current text-[9px] font-bold px-1 leading-tight cursor-help">
-              {badge.letter}
-            </span>
+            <span className="inline-flex items-center justify-center rounded-sm border border-current text-[9px] font-bold px-1 leading-tight cursor-help text-muted-foreground">M</span>
           </TooltipTrigger>
-          <TooltipContent side="top"><p className="text-xs">{badge.tip}</p></TooltipContent>
+          <TooltipContent side="top"><p className="text-xs">Manually entered — PO sync skipped</p></TooltipContent>
         </Tooltip>
       )}
       {onResultUpdate && (
         <CogsEditor
           asin={result.asin}
-          currentCogs={result.cogs}
-          currentSource={source}
-          onChanged={(cogs, nextSource) =>
-            onResultUpdate(result.asin, { cogs: cogs ?? 0, cogsSource: nextSource })
-          }
+          estimatedCogs={result.estimatedCogs ?? null}
+          estimatedCogsSource={result.estimatedCogsSource}
+          onChanged={(updates) => onResultUpdate(result.asin, updates)}
         />
       )}
     </span>
@@ -1200,7 +1133,7 @@ function ProductCell({ result, price, settings, onResultUpdate }: { result: Asin
             <span className="text-muted-foreground truncate max-w-[140px]">· {result.sku}</span>
           ) : null}
           <FaviconLink
-            href={`https://sas.selleramp.com/sas/lookup?SasLookup[search_term]=${result.asin}&SasLookup[cost_price]=${result.cogs}&SasLookup[sale_price]=${price ?? ""}`}
+            href={`https://sas.selleramp.com/sas/lookup?SasLookup[search_term]=${result.asin}&SasLookup[cost_price]=${result.actualCogs ?? result.estimatedCogs ?? ""}&SasLookup[sale_price]=${price ?? ""}`}
             src="https://sas.selleramp.com/images/sas_web_logo_32x32.png"
             fallback="SA"
             label="Open in SellerAmp"
@@ -1368,7 +1301,10 @@ export function renderCell(
     }
 
     case "cogs":
-      return <span className="font-mono text-sm">{fmt(result.cogs)}</span>;
+      return <span className="font-mono text-sm">{fmt(result.actualCogs)}</span>;
+
+    case "estCogs":
+      return <span className="font-mono text-sm">{fmt(result.estimatedCogs)}</span>;
 
     case "salePrice":
       if (hasError) {
@@ -1637,14 +1573,14 @@ export function renderCell(
     }
 
     case "actProfit": {
-      if (!result.actuals || result.actuals.units_sold === 0) return <span className="font-mono text-sm">-</span>;
+      if (!result.actuals || result.actuals.units_sold === 0 || result.actualCogs == null) return <span className="font-mono text-sm">-</span>;
       const units = result.actuals.units_sold;
       const rev = result.actuals.revenue;
       const prep2 = getEffectivePrep(result, settings);
       const storage2 = getEffectiveStorage(result, settings);
       const perUnit = calculateProfit(
         rev / units,
-        result.cogs,
+        result.actualCogs,
         result.feesData.fbaFulfillmentFee ?? 0,
         result.feesData.referralFee ?? 0,
         result.feesData.feesEstimatePrice,
@@ -1662,14 +1598,14 @@ export function renderCell(
     }
 
     case "actProfitPerUnit": {
-      if (!result.actuals || result.actuals.units_sold === 0) return <span className="font-mono text-sm">-</span>;
+      if (!result.actuals || result.actuals.units_sold === 0 || result.actualCogs == null) return <span className="font-mono text-sm">-</span>;
       const units = result.actuals.units_sold;
       const rev = result.actuals.revenue;
       const prep2 = getEffectivePrep(result, settings);
       const storage2 = getEffectiveStorage(result, settings);
       const perUnit = calculateProfit(
         rev / units,
-        result.cogs,
+        result.actualCogs,
         result.feesData.fbaFulfillmentFee ?? 0,
         result.feesData.referralFee ?? 0,
         result.feesData.feesEstimatePrice,
@@ -1686,14 +1622,14 @@ export function renderCell(
     }
 
     case "actMargin": {
-      if (!result.actuals || result.actuals.units_sold === 0) return <span className="font-mono text-sm">-</span>;
+      if (!result.actuals || result.actuals.units_sold === 0 || result.actualCogs == null) return <span className="font-mono text-sm">-</span>;
       const units = result.actuals.units_sold;
       const rev = result.actuals.revenue;
       const prep2 = getEffectivePrep(result, settings);
       const storage2 = getEffectiveStorage(result, settings);
       const perUnit = calculateProfit(
         rev / units,
-        result.cogs,
+        result.actualCogs,
         result.feesData.fbaFulfillmentFee ?? 0,
         result.feesData.referralFee ?? 0,
         result.feesData.feesEstimatePrice,
@@ -1710,14 +1646,14 @@ export function renderCell(
     }
 
     case "actRoi": {
-      if (!result.actuals || result.actuals.units_sold === 0) return <span className="font-mono text-sm">-</span>;
+      if (!result.actuals || result.actuals.units_sold === 0 || result.actualCogs == null) return <span className="font-mono text-sm">-</span>;
       const units = result.actuals.units_sold;
       const rev = result.actuals.revenue;
       const prep2 = getEffectivePrep(result, settings);
       const storage2 = getEffectiveStorage(result, settings);
       const perUnit = calculateProfit(
         rev / units,
-        result.cogs,
+        result.actualCogs,
         result.feesData.fbaFulfillmentFee ?? 0,
         result.feesData.referralFee ?? 0,
         result.feesData.feesEstimatePrice,

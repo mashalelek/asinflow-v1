@@ -78,7 +78,10 @@ export interface ActualsData {
 
 export interface AsinResult {
   asin: string;
-  cogs: number;
+  cogs: number; // deprecated — use estimatedCogs / actualCogs
+  estimatedCogs: number | null;
+  estimatedCogsSource?: "manual" | "po_sheet" | null;
+  actualCogs: number | null;
   buyLink: string | null;
   prepOverride: number | null;
   storageOverride: number | null;
@@ -99,7 +102,7 @@ export interface AsinResult {
   isHazmat?: boolean;
   isSearchSuppressed?: boolean;
   suppressionReasons?: string[];
-  cogsSource?: "po_sheet" | "csv" | "manual" | null;
+  cogsSource?: "po_sheet" | "manual" | null;
   pricesFetchedAt?: string | null;
   lastReviewedAt?: string | null;
   addedAt?: string | null;
@@ -304,78 +307,96 @@ export function extractDomain(url: string | null): string | null {
 }
 
 export const DEFAULT_COLUMNS = [
-  "product",
-  "brand", "supplier",
-  "stock", "daysLeft",
-  "salePrice", "cogs", "profit", "margin", "roi",
-  "fbaFee", "referralFee", "inboundShipping", "prep", "storage", "bsr",
-  "sellersFba", "sellersFbm",
-  "fba7d", "fba30d", "fbm7d", "fbm30d",
-  "actUnitsSold", "actRevenue", "actRefunds", "actRefundPct",
-  "actProfit", "actProfitPerUnit", "actMargin", "actRoi",
-  "tags", "notes",
-  "meltable", "hazmat", "suppressed",
-  "lastReviewed",
-  "dateAdded",
-  "category",
-  "maxCogs",
-  "sourcing",
+  // Group 1 — Description
+  "product", "category", "brand", "supplier",
+  // Group 2 — Stock
+  "stock", "availableFba", "ordered", "reserved", "sentToFba", "daysLeft",
+  // Group 3 — Actuals
+  "cogs", "actPrepCost", "actUnitsSold", "actRefunds", "actRefundPct",
+  "actAvgSalePrice", "actRevenue", "actProfit", "actProfitPerUnit", "actRoi", "actMargin",
+  // Group 4 — Estimates
+  "estCogs", "salePrice", "profit", "margin", "roi",
+  "fbaFee", "referralFee", "inboundShipping", "prep", "storage", "maxCogs",
+  // Group 5 — Sellers
+  "sellersFba", "sellers", "sellers7d", "sellers30d", "fba7d", "fba30d",
+  // Group 6 — Additional info
+  "tags", "notes", "sourcing", "meltable", "hazmat", "suppressed", "dateAdded",
 ] as const;
 
 export type ColumnId = (typeof DEFAULT_COLUMNS)[number];
 
+export type ColumnGroup = "description" | "stock" | "actuals" | "estimates" | "sellers" | "additional";
+
 export interface ColumnDef {
   id: ColumnId;
   label: string;
+  qualifier?: "Actual" | "Estimated";
   defaultVisible: boolean;
   align: "left" | "right";
+  group: ColumnGroup;
 }
 
+export const COLUMN_GROUPS: { key: ColumnGroup; label: string }[] = [
+  { key: "description", label: "Description" },
+  { key: "stock", label: "Stock" },
+  { key: "actuals", label: "Actuals" },
+  { key: "estimates", label: "Estimates" },
+  { key: "sellers", label: "Sellers" },
+  { key: "additional", label: "Additional Info" },
+];
+
 export const ALL_COLUMNS: ColumnDef[] = [
-  // No group
-  { id: "product", label: "Product", defaultVisible: true, align: "left" },
-  { id: "brand", label: "Brand", defaultVisible: true, align: "left" },
-  { id: "supplier", label: "Supplier", defaultVisible: true, align: "left" },
-  { id: "stock", label: "Stock", defaultVisible: true, align: "right" },
-  { id: "daysLeft", label: "Days Left", defaultVisible: true, align: "right" },
-  // Estimates group
-  { id: "salePrice", label: "Sale Price", defaultVisible: true, align: "right" },
-  { id: "cogs", label: "COGS", defaultVisible: false, align: "right" },
-  { id: "profit", label: "Profit/Unit", defaultVisible: true, align: "right" },
-  { id: "margin", label: "Margin", defaultVisible: true, align: "right" },
-  { id: "roi", label: "ROI", defaultVisible: true, align: "right" },
-  { id: "fbaFee", label: "FBA Fee", defaultVisible: false, align: "right" },
-  { id: "referralFee", label: "Referral Fee", defaultVisible: false, align: "right" },
-  { id: "inboundShipping", label: "Inbound Ship.", defaultVisible: false, align: "right" },
-  { id: "prep", label: "Prep Cost", defaultVisible: false, align: "right" },
-  { id: "storage", label: "Additional Fees", defaultVisible: false, align: "right" },
-  { id: "bsr", label: "BSR", defaultVisible: false, align: "right" },
-  { id: "sellersFba", label: "Sellers (FBA)", defaultVisible: true, align: "right" },
-  { id: "sellersFbm", label: "Sellers (FBM)", defaultVisible: true, align: "right" },
-  { id: "fba7d", label: "FBA 7d Δ", defaultVisible: true, align: "right" },
-  { id: "fba30d", label: "FBA 30d Δ", defaultVisible: false, align: "right" },
-  { id: "fbm7d", label: "FBM 7d Δ", defaultVisible: false, align: "right" },
-  { id: "fbm30d", label: "FBM 30d Δ", defaultVisible: false, align: "right" },
-  // Actuals group
-  { id: "actUnitsSold", label: "Units Sold", defaultVisible: true, align: "right" },
-  { id: "actRevenue", label: "Revenue", defaultVisible: true, align: "right" },
-  { id: "actRefunds", label: "Refunds", defaultVisible: true, align: "right" },
-  { id: "actRefundPct", label: "Refund %", defaultVisible: false, align: "right" },
-  { id: "actProfit", label: "Total Profit", defaultVisible: true, align: "right" },
-  { id: "actProfitPerUnit", label: "Profit/Unit", defaultVisible: true, align: "right" },
-  { id: "actMargin", label: "Margin %", defaultVisible: true, align: "right" },
-  { id: "actRoi", label: "ROI %", defaultVisible: true, align: "right" },
-  // No group
-  { id: "tags", label: "Tags", defaultVisible: true, align: "left" },
-  { id: "notes", label: "Notes", defaultVisible: true, align: "left" },
-  { id: "meltable", label: "Meltable", defaultVisible: false, align: "left" },
-  { id: "hazmat", label: "Hazmat", defaultVisible: false, align: "left" },
-  { id: "suppressed", label: "Suppressed", defaultVisible: false, align: "left" },
-  { id: "lastReviewed", label: "Last Reviewed", defaultVisible: false, align: "left" },
-  { id: "dateAdded", label: "Date Added", defaultVisible: false, align: "left" },
-  { id: "category", label: "Category", defaultVisible: false, align: "left" },
-  { id: "maxCogs", label: "Max COGS", defaultVisible: false, align: "right" },
-  { id: "sourcing", label: "Sourcing", defaultVisible: false, align: "left" },
+  // Group 1 — Description
+  { id: "product", label: "Product", defaultVisible: true, align: "left", group: "description" },
+  { id: "category", label: "Category", defaultVisible: false, align: "left", group: "description" },
+  { id: "brand", label: "Brand", defaultVisible: true, align: "left", group: "description" },
+  { id: "supplier", label: "Supplier", defaultVisible: true, align: "left", group: "description" },
+  // Group 2 — Stock
+  { id: "stock", label: "Stock", defaultVisible: true, align: "right", group: "stock" },
+  { id: "availableFba", label: "Available (FBA)", defaultVisible: false, align: "right", group: "stock" },
+  { id: "ordered", label: "Ordered", defaultVisible: false, align: "right", group: "stock" },
+  { id: "reserved", label: "Reserved", defaultVisible: false, align: "right", group: "stock" },
+  { id: "sentToFba", label: "Sent to FBA", defaultVisible: false, align: "right", group: "stock" },
+  { id: "daysLeft", label: "Days Left", defaultVisible: true, align: "right", group: "stock" },
+  // Group 3 — Actuals
+  { id: "cogs", label: "COGS", qualifier: "Actual", defaultVisible: false, align: "right", group: "actuals" },
+  { id: "actPrepCost", label: "Prep Cost", qualifier: "Actual", defaultVisible: false, align: "right", group: "actuals" },
+  { id: "actUnitsSold", label: "Units Sold", qualifier: "Actual", defaultVisible: true, align: "right", group: "actuals" },
+  { id: "actRefunds", label: "Refunds", qualifier: "Actual", defaultVisible: true, align: "right", group: "actuals" },
+  { id: "actRefundPct", label: "Refund %", qualifier: "Actual", defaultVisible: false, align: "right", group: "actuals" },
+  { id: "actAvgSalePrice", label: "Avg. Sale Price", qualifier: "Actual", defaultVisible: false, align: "right", group: "actuals" },
+  { id: "actRevenue", label: "Revenue", qualifier: "Actual", defaultVisible: true, align: "right", group: "actuals" },
+  { id: "actProfit", label: "Total Profit", qualifier: "Actual", defaultVisible: true, align: "right", group: "actuals" },
+  { id: "actProfitPerUnit", label: "Profit/Unit", qualifier: "Actual", defaultVisible: true, align: "right", group: "actuals" },
+  { id: "actRoi", label: "ROI", qualifier: "Actual", defaultVisible: true, align: "right", group: "actuals" },
+  { id: "actMargin", label: "Margin", qualifier: "Actual", defaultVisible: true, align: "right", group: "actuals" },
+  // Group 4 — Estimates
+  { id: "estCogs", label: "COGS", qualifier: "Estimated", defaultVisible: false, align: "right", group: "estimates" },
+  { id: "salePrice", label: "Sale Price", qualifier: "Estimated", defaultVisible: true, align: "right", group: "estimates" },
+  { id: "profit", label: "Profit/Unit", qualifier: "Estimated", defaultVisible: true, align: "right", group: "estimates" },
+  { id: "margin", label: "Margin", qualifier: "Estimated", defaultVisible: true, align: "right", group: "estimates" },
+  { id: "roi", label: "ROI", qualifier: "Estimated", defaultVisible: true, align: "right", group: "estimates" },
+  { id: "fbaFee", label: "FBA Fee", qualifier: "Estimated", defaultVisible: false, align: "right", group: "estimates" },
+  { id: "referralFee", label: "Referral Fee", qualifier: "Estimated", defaultVisible: false, align: "right", group: "estimates" },
+  { id: "inboundShipping", label: "Inbound Ship.", qualifier: "Estimated", defaultVisible: false, align: "right", group: "estimates" },
+  { id: "prep", label: "Prep Cost", qualifier: "Estimated", defaultVisible: false, align: "right", group: "estimates" },
+  { id: "storage", label: "Additional Fees", qualifier: "Estimated", defaultVisible: false, align: "right", group: "estimates" },
+  { id: "maxCogs", label: "Max COGS", defaultVisible: false, align: "right", group: "estimates" },
+  // Group 5 — Sellers
+  { id: "sellersFba", label: "FBA Sellers", defaultVisible: true, align: "right", group: "sellers" },
+  { id: "sellers", label: "Sellers", defaultVisible: false, align: "right", group: "sellers" },
+  { id: "sellers7d", label: "Sellers 7d \u0394", defaultVisible: false, align: "right", group: "sellers" },
+  { id: "sellers30d", label: "Sellers 30d \u0394", defaultVisible: false, align: "right", group: "sellers" },
+  { id: "fba7d", label: "FBA 7d \u0394", defaultVisible: true, align: "right", group: "sellers" },
+  { id: "fba30d", label: "FBA 30d \u0394", defaultVisible: false, align: "right", group: "sellers" },
+  // Group 6 — Additional info
+  { id: "tags", label: "Tags", defaultVisible: true, align: "left", group: "additional" },
+  { id: "notes", label: "Notes", defaultVisible: true, align: "left", group: "additional" },
+  { id: "sourcing", label: "Sourcing", defaultVisible: false, align: "left", group: "additional" },
+  { id: "meltable", label: "Meltable", defaultVisible: false, align: "left", group: "additional" },
+  { id: "hazmat", label: "Hazmat", defaultVisible: false, align: "left", group: "additional" },
+  { id: "suppressed", label: "Suppressed", defaultVisible: false, align: "left", group: "additional" },
+  { id: "dateAdded", label: "Date Added", defaultVisible: false, align: "left", group: "additional" },
 ];
 
 export const users = undefined;

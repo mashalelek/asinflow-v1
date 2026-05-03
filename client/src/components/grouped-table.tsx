@@ -28,6 +28,7 @@ export interface GroupData {
 
 interface GroupedTableProps {
   groups: GroupData[];
+  startIndex?: number;
   priceSource: PriceSource;
   settings: Settings;
   columnConfig: ColumnConfig;
@@ -60,12 +61,13 @@ const DEFAULT_COL_WIDTHS: Partial<Record<ColumnId, number>> = {
 };
 
 const ESTIMATES_COLS = new Set<ColumnId>([
-  "salePrice", "cogs", "profit", "margin", "roi",
+  "salePrice", "estCogs", "profit", "margin", "roi",
   "fbaFee", "referralFee", "inboundShipping", "prep", "storage",
   "bsr", "sellersFba", "sellersFbm",
   "fba7d", "fba30d", "fbm7d", "fbm30d",
 ]);
 const ACTUALS_COLS = new Set<ColumnId>([
+  "cogs",
   "actUnitsSold", "actRevenue", "actRefunds", "actRefundPct",
   "actProfit", "actProfitPerUnit", "actMargin", "actRoi",
 ]);
@@ -107,6 +109,7 @@ function getGroupCellValue(colId: ColumnId, m: AnalyticsMetrics): string {
 // ── Component ────────────────────────────────────────────────────────
 export function GroupedTable({
   groups,
+  startIndex = 0,
   priceSource,
   settings,
   columnConfig,
@@ -218,6 +221,7 @@ export function GroupedTable({
 
   const frozenColWidth = { rowNum: 36, sel: 32 };
   const selLeft = frozenColWidth.rowNum;
+  const productLeft = selLeft + frozenColWidth.sel;
 
   function ResizeHandle({ onMouseDown }: { onMouseDown: (e: React.MouseEvent) => void }) {
     const lineRef = useRef<HTMLDivElement>(null);
@@ -233,36 +237,17 @@ export function GroupedTable({
   }
 
   return (
-    <div className="w-full overflow-auto relative border-y border-border" style={{ maxHeight: "calc(100vh - 280px)" }}>
+    <div className="w-full overflow-auto relative" style={{ maxHeight: "calc(100vh - 280px)" }}>
       <table className="border-collapse text-sm w-full">
         <thead className="sticky top-0 z-20">
-          {/* Group header row (Estimates / Actuals labels) */}
-          {hasGroups && (
-            <tr className="border-b border-border bg-muted backdrop-blur">
-              <th className="sticky left-0 z-30 bg-muted border-r border-border" style={{ width: frozenColWidth.rowNum }} />
-              <th className="sticky z-30 bg-muted border-r border-border" style={{ left: selLeft, width: frozenColWidth.sel }} />
-              {productVisible && <th className="bg-muted border-r border-border" />}
-              {dataCols.map((colId, i) => {
-                if (ESTIMATES_COLS.has(colId) && (i === 0 || !ESTIMATES_COLS.has(dataCols[i - 1]))) {
-                  return <th key={`grp-est-${i}`} colSpan={estimatesCount} className="text-center text-xs font-semibold text-muted-foreground px-3 py-1 border-r border-border bg-blue-500/5">Estimates</th>;
-                }
-                if (ESTIMATES_COLS.has(colId)) return null;
-                if (ACTUALS_COLS.has(colId) && (i === 0 || !ACTUALS_COLS.has(dataCols[i - 1]))) {
-                  return <th key={`grp-act-${i}`} colSpan={actualsCount} className="text-center text-xs font-semibold text-muted-foreground px-3 py-1 border-r border-border bg-emerald-500/5">Actuals{dateRangeLabel ? ` (${dateRangeLabel})` : ""}</th>;
-                }
-                if (ACTUALS_COLS.has(colId)) return null;
-                return <th key={`grp-other-${colId}`} className="bg-muted" />;
-              })}
-            </tr>
-          )}
           {/* Column header row */}
-          <tr className="border-b border-border bg-muted/80 backdrop-blur">
-            <th className="sticky left-0 z-30 bg-muted text-center text-xs font-medium text-muted-foreground px-1 py-2 border-r border-border" style={{ width: frozenColWidth.rowNum, minWidth: frozenColWidth.rowNum }}>#</th>
-            <th className="sticky z-30 bg-muted text-center text-xs font-medium text-muted-foreground px-1 py-2 border-r border-border" style={{ left: selLeft, width: frozenColWidth.sel, minWidth: frozenColWidth.sel }}>
+          <tr className="table-header-stone">
+            <th className="sticky left-0 z-30 table-header-stone text-center text-xs font-medium px-1 py-2" style={{ width: frozenColWidth.rowNum, minWidth: frozenColWidth.rowNum }}>#</th>
+            <th className="sticky z-30 table-header-stone text-center text-xs font-medium px-1 py-2" style={{ left: selLeft, width: frozenColWidth.sel, minWidth: frozenColWidth.sel }}>
               <input type="checkbox" className="h-3.5 w-3.5 accent-blue-500 cursor-pointer" disabled />
             </th>
             {productVisible && (
-              <th className="text-left text-xs font-medium px-2 py-2 border-r border-border relative" style={{ width: colWidths["product"] ?? DEFAULT_COL_WIDTHS.product, minWidth: 200 }}>
+              <th className="sticky z-30 table-header-stone text-left text-xs font-medium px-2 py-2 relative" style={{ left: productLeft, width: colWidths["product"] ?? DEFAULT_COL_WIDTHS.product, minWidth: 200, borderRight: "0.5px solid hsl(var(--border))" }}>
                 Product
                 <ResizeHandle onMouseDown={(e) => handleResizeStart(e, "product")} />
               </th>
@@ -273,7 +258,7 @@ export function GroupedTable({
               const w = colWidths[colId] ?? DEFAULT_COL_WIDTHS[colId];
               return (
                 <th key={colId}
-                  className={`relative cursor-pointer select-none whitespace-nowrap hover:bg-muted/70 transition-colors px-3 py-2 text-xs font-medium ${col.align === "right" ? "text-right" : "text-left"} ${ESTIMATES_COLS.has(colId) ? "bg-blue-500/5" : ACTUALS_COLS.has(colId) ? "bg-emerald-500/5" : ""}`}
+                  className={`relative cursor-pointer select-none whitespace-nowrap hover:opacity-80 transition-colors px-3 py-2 text-xs font-medium ${col.align === "right" ? "text-right" : "text-left"}`}
                   style={w ? { width: w, minWidth: w, maxWidth: w } : undefined}
                   onClick={() => onSort(colId)}
                 >
@@ -295,13 +280,14 @@ export function GroupedTable({
           </tr>
         </thead>
         <tbody>
-          {groups.map((group) => {
+          {groups.map((group, groupIdx) => {
             const isExpanded = expandedGroups.has(group.key);
             const m = group.metrics;
             return (
               <GroupRows
                 key={group.key}
                 group={group}
+                groupIndex={startIndex + groupIdx + 1}
                 isExpanded={isExpanded}
                 onToggle={() => onToggleGroup(group.key)}
                 dataCols={dataCols}
@@ -315,6 +301,7 @@ export function GroupedTable({
                 onToggleSelect={onToggleSelect}
                 frozenColWidth={frozenColWidth}
                 selLeft={selLeft}
+                productLeft={productLeft}
               />
             );
           })}
@@ -326,11 +313,12 @@ export function GroupedTable({
 
 // ── Group row + child rows ───────────────────────────────────────────
 function GroupRows({
-  group, isExpanded, onToggle, dataCols, productVisible, colWidths,
+  group, groupIndex, isExpanded, onToggle, dataCols, productVisible, colWidths,
   colMap, priceSource, settings, includeInboundShipping,
-  selectedSet, onToggleSelect, frozenColWidth, selLeft,
+  selectedSet, onToggleSelect, frozenColWidth, selLeft, productLeft,
 }: {
   group: GroupData;
+  groupIndex: number;
   isExpanded: boolean;
   onToggle: () => void;
   dataCols: ColumnId[];
@@ -344,6 +332,7 @@ function GroupRows({
   onToggleSelect: (asin: string) => void;
   frozenColWidth: { rowNum: number; sel: number };
   selLeft: number;
+  productLeft: number;
 }) {
   const m = group.metrics;
   const Chevron = isExpanded ? ChevronDown : ChevronRight;
@@ -352,17 +341,17 @@ function GroupRows({
     <>
       {/* Group summary row */}
       <tr
-        className="border-b border-border bg-muted/40 dark:bg-muted/20 hover:bg-muted/60 cursor-pointer transition-colors"
+        className="bg-muted/40 dark:bg-muted/20 hover:bg-muted/60 cursor-pointer transition-colors table-zebra-stone"
         onClick={onToggle}
       >
-        <td className="sticky left-0 z-10 text-center px-1 py-2 border-r border-border bg-muted/40 dark:bg-muted/20" style={{ width: frozenColWidth.rowNum, minWidth: frozenColWidth.rowNum }}>
+        <td className="sticky left-0 z-10 text-center px-1 py-2 bg-muted/40 dark:bg-muted/20" style={{ width: frozenColWidth.rowNum, minWidth: frozenColWidth.rowNum }}>
           <Chevron className="h-3.5 w-3.5 mx-auto text-muted-foreground" />
         </td>
-        <td className="sticky z-10 text-center px-1 py-2 border-r border-border bg-muted/40 dark:bg-muted/20" style={{ left: selLeft, width: frozenColWidth.sel, minWidth: frozenColWidth.sel }}>
-          <span className="text-xs text-muted-foreground font-semibold">{group.rows.length}</span>
+        <td className="sticky z-10 text-center px-1 py-2 bg-muted/40 dark:bg-muted/20" style={{ left: selLeft, width: frozenColWidth.sel, minWidth: frozenColWidth.sel }}>
+          <span className="text-xs text-muted-foreground font-semibold">{groupIndex}</span>
         </td>
         {productVisible && (
-          <td className="px-2 py-2 border-r border-border" style={{ width: colWidths["product"] ?? (DEFAULT_COL_WIDTHS.product ?? 400), minWidth: 200 }}>
+          <td className="sticky z-10 px-2 py-2 bg-muted/40 dark:bg-muted/20" style={{ left: productLeft, width: colWidths["product"] ?? (DEFAULT_COL_WIDTHS.product ?? 400), minWidth: 200, borderRight: "0.5px solid hsl(var(--border))" }}>
             <span className="font-semibold text-sm">{group.label}</span>
             <span className="text-xs text-muted-foreground ml-2">({group.rows.length} ASINs)</span>
           </td>
@@ -388,10 +377,8 @@ function GroupRows({
         let profitData: ReturnType<typeof calculateProfit> | null = null;
         let rowBg = "";
 
-        if (!hasError && price != null) {
-          profitData = calculateProfit(price, result.cogs, result.feesData.fbaFulfillmentFee ?? 0, result.feesData.referralFee ?? 0, result.feesData.feesEstimatePrice, result.catalogData.weightLbs, prep.value, storage.value, settings, includeInboundShipping, result.isHazmat ?? false);
-          const meets = profitData.roi >= settings.minRoiThreshold && profitData.margin >= settings.minMarginThreshold;
-          rowBg = meets ? "bg-emerald-500/8 dark:bg-emerald-500/10" : "bg-red-500/8 dark:bg-red-500/10";
+        if (!hasError && price != null && result.estimatedCogs != null) {
+          profitData = calculateProfit(price, result.estimatedCogs, result.feesData.fbaFulfillmentFee ?? 0, result.feesData.referralFee ?? 0, result.feesData.feesEstimatePrice, result.catalogData.weightLbs, prep.value, storage.value, settings, includeInboundShipping, result.isHazmat ?? false);
         }
         if (price == null || hasError) rowBg = "opacity-50";
 
@@ -399,15 +386,15 @@ function GroupRows({
         const frozenBg = isSelected ? "bg-blue-50 dark:bg-blue-950/30" : "bg-background";
 
         return (
-          <tr key={`${result.asin}-${idx}`} className={`${rowBg} ${isSelected ? "!bg-blue-500/8 dark:!bg-blue-500/12" : ""} border-b border-border transition-colors hover:bg-muted/30`}>
-            <td className={`sticky left-0 z-10 text-center text-xs text-muted-foreground px-1 py-1.5 border-r border-border ${frozenBg}`} style={{ width: frozenColWidth.rowNum, minWidth: frozenColWidth.rowNum }}>
+          <tr key={`${result.asin}-${idx}`} className={`${rowBg} ${isSelected ? "!bg-blue-500/8 dark:!bg-blue-500/12" : ""} transition-colors hover:bg-muted/30 table-zebra-stone`}>
+            <td className={`sticky left-0 z-10 text-center text-xs text-muted-foreground px-1 py-1.5 ${frozenBg}`} style={{ width: frozenColWidth.rowNum, minWidth: frozenColWidth.rowNum }}>
               {idx + 1}
             </td>
-            <td className={`sticky z-10 text-center px-1 py-1.5 border-r border-border ${frozenBg}`} style={{ left: selLeft, width: frozenColWidth.sel, minWidth: frozenColWidth.sel }}>
+            <td className={`sticky z-10 text-center px-1 py-1.5 ${frozenBg}`} style={{ left: selLeft, width: frozenColWidth.sel, minWidth: frozenColWidth.sel }}>
               <input type="checkbox" checked={isSelected} onChange={() => onToggleSelect(result.asin)} className="h-3.5 w-3.5 accent-blue-500 cursor-pointer" />
             </td>
             {productVisible && (
-              <td className="px-2 py-1.5 border-r border-border overflow-hidden" style={{ width: colWidths["product"] ?? (DEFAULT_COL_WIDTHS.product ?? 400), minWidth: 200, maxWidth: colWidths["product"] ?? (DEFAULT_COL_WIDTHS.product ?? 400) }}>
+              <td className={`sticky z-10 px-2 py-1.5 overflow-hidden ${frozenBg}`} style={{ left: productLeft, width: colWidths["product"] ?? (DEFAULT_COL_WIDTHS.product ?? 400), minWidth: 200, maxWidth: colWidths["product"] ?? (DEFAULT_COL_WIDTHS.product ?? 400), borderRight: "0.5px solid hsl(var(--border))" }}>
                 <div className="flex items-start gap-2">
                   {result.catalogData.imageUrl && (
                     <img src={result.catalogData.imageUrl} alt="" className="w-[40px] h-[40px] object-contain rounded flex-shrink-0" loading="lazy" />

@@ -36,6 +36,10 @@ import { DateRangePicker } from "@/components/date-range-picker";
 import { ViewPresets } from "@/components/view-presets";
 import { StockHistoryModal } from "@/components/stock-history-modal";
 import { type ColFilter, type FilterMap, matchesFilters } from "@/components/column-filter";
+import { VisibilityToggles, loadShowGated, saveShowGated, loadShowMeltable, saveShowMeltable, loadShowArchived, saveShowArchived } from "@/components/visibility-toggles";
+import { getEstimatedProfit } from "@/lib/profit";
+import { ActiveFiltersModal, getActiveFilterCount } from "@/components/active-filters-modal";
+import { Filter } from "lucide-react";
 
 const BUY_LIST_KEY = "fba-buy-list";
 const DATE_PREFS_KEY = "fba-date-prefs";
@@ -270,7 +274,7 @@ function MultiSearch({
 }
 
 export default function Home() {
-  const { theme, toggleTheme } = useTheme();
+  // Theme toggle is now in the top nav
   const { toast } = useToast();
   const [settings, setSettings] = useState<Settings>(loadSettings);
   const [columnConfig, setColumnConfig] = useState<ColumnConfig>(loadColumnConfig);
@@ -290,18 +294,12 @@ export default function Home() {
   });
   const [searchQuery, setSearchQuery] = useState("");
   const [selectedSearchAsins, setSelectedSearchAsins] = useState<Set<string>>(new Set());
-  const [filterEligible, setFilterEligible] = useState(() => {
-    try { return localStorage.getItem("fba-filter-eligible") ?? "yes"; } catch { return "yes"; }
-  });
   const [colFilters, setColFilters] = useState<FilterMap>(loadColFilters);
-  const [showArchived, setShowArchived] = useState(false);
+  const [showGated, setShowGated] = useState(loadShowGated);
+  const [showMeltable, setShowMeltable] = useState(loadShowMeltable);
+  const [showArchived, setShowArchived] = useState(loadShowArchived);
   const [presetFilter, setPresetFilter] = useState<string | null>(null);
-  const [meltableHidden, setMeltableHidden] = useState(() => {
-    const now = new Date();
-    const m = now.getMonth() + 1;
-    const d = now.getDate();
-    return (m > 4 || (m === 4 && d >= 15)) && (m < 9 || (m === 9 && d <= 15));
-  });
+  const [filtersModalOpen, setFiltersModalOpen] = useState(false);
   const [page, setPage] = useState(1);
   const [pageSize, setPageSize] = useState<number>(() => {
     try { const v = localStorage.getItem("fba-page-size"); return v ? parseInt(v) : 100; } catch { return 100; }
@@ -580,6 +578,8 @@ export default function Home() {
     }
   }, [toast, results.length, fetchAsins, startDate, endDate, showArchived, fetchPriceStatus]);
 
+  const [isSyncingCogs, setIsSyncingCogs] = useState(false);
+
   const handleToggleBuy = useCallback((asin: string) => {
     setBuySet((prev) => {
       const next = new Set(prev);
@@ -734,10 +734,10 @@ export default function Home() {
       out = out.filter((r) => {
         if (r.error) return activeFilter === "unprofitable";
         const { price } = getSelectedPrice(r, priceSource);
-        if (price == null) return activeFilter === "unprofitable";
+        if (price == null || r.estimatedCogs == null) return activeFilter === "unprofitable";
         const prep = getEffectivePrep(r, settings);
         const storage = getEffectiveStorage(r, settings);
-        const p = calculateProfit(price, r.cogs, r.feesData.fbaFulfillmentFee ?? 0, r.feesData.referralFee ?? 0, r.feesData.feesEstimatePrice, r.catalogData.weightLbs, prep.value, storage.value, settings, includeInboundShipping, r.isHazmat ?? false);
+        const p = calculateProfit(price, r.estimatedCogs, r.feesData.fbaFulfillmentFee ?? 0, r.feesData.referralFee ?? 0, r.feesData.feesEstimatePrice, r.catalogData.weightLbs, prep.value, storage.value, settings, includeInboundShipping, r.isHazmat ?? false);
         const meets = p.roi >= settings.minRoiThreshold && p.margin >= settings.minMarginThreshold;
         return activeFilter === "profitable" ? meets : !meets;
       });
@@ -776,30 +776,30 @@ export default function Home() {
         );
       }
     }
-    if (filterEligible !== "all") {
-      out = out.filter((r) => (r.eligibilityData?.status ?? "check") === filterEligible);
+    // Visibility toggles (scope controls, not filters)
+    if (!showGated) {
+      out = out.filter((r) => (r.eligibilityData?.status ?? "check") !== "no");
     }
-    // Seasonal meltable auto-filter
-    if (meltableHidden) {
+    if (!showMeltable) {
       out = out.filter((r) => !r.isMeltable);
     }
     // Apply replenishment preset filter
     if (presetFilter === "replenishment") {
       out = out.filter((r) => {
-        const stk = r.stock?.total ?? 0;
-        const us = r.actuals?.units_sold ?? 0;
-        const dws = r.actuals?.days_with_sales ?? 0;
-        if (us === 0 || dws === 0) return false;
-        const adjustedMonthlyVelocity = (us / dws) * 30;
-        const needsRestock = stk < 0.8 * adjustedMonthlyVelocity;
-        if (!needsRestock) return false;
-        // Profitability tiers
-        const { price } = getSelectedPrice(r, priceSource);
-        if (!price || r.error) return false;
-        const prep = getEffectivePrep(r, settings);
-        const storage = getEffectiveStorage(r, settings);
-        const p = calculateProfit(price, r.cogs, r.feesData.fbaFulfillmentFee ?? 0, r.feesData.referralFee ?? 0, r.feesData.feesEstimatePrice, r.catalogData.weightLbs, prep.value, storage.value, settings, includeInboundShipping, r.isHazmat ?? false);
-        return (p.roi > 25 && p.margin > 10) || (p.roi > 20 && p.margin > 12) || (p.roi > 15 && p.margin > 14);
+        // (A) Estimated profitability tiers — uses the same estimatedCogs + current price
+        // computation shown in the Est. ROI / Est. Margin table columns
+        const est = getEstimatedProfit(r, priceSource, settings, includeInboundShipping);
+        if (!est) return false;
+        const passesProfit =
+          (est.roi > 25 && est.margin > 10) ||
+          (est.roi > 20 && est.margin > 12) ||
+          (est.roi > 15 && est.margin > 14);
+        if (!passesProfit) return false;
+        // (B) Minimum profit per unit — $3.00 floor
+        if (est.profit < 3) return false;
+        // (C) Sales gate — must have >0 units sold in the current date range
+        const unitsSold = r.actuals?.units_sold ?? 0;
+        return unitsSold > 0;
       });
     }
     // Apply column filters
@@ -809,14 +809,15 @@ export default function Home() {
         const prep = getEffectivePrep(r, settings);
         const storage = getEffectiveStorage(r, settings);
         let profitData: ReturnType<typeof calculateProfit> | null = null;
-        if (price != null && !r.error) {
-          profitData = calculateProfit(price, r.cogs, r.feesData.fbaFulfillmentFee ?? 0, r.feesData.referralFee ?? 0, r.feesData.feesEstimatePrice, r.catalogData.weightLbs, prep.value, storage.value, settings, includeInboundShipping, r.isHazmat ?? false);
+        if (price != null && !r.error && r.estimatedCogs != null) {
+          profitData = calculateProfit(price, r.estimatedCogs, r.feesData.fbaFulfillmentFee ?? 0, r.feesData.referralFee ?? 0, r.feesData.feesEstimatePrice, r.catalogData.weightLbs, prep.value, storage.value, settings, includeInboundShipping, r.isHazmat ?? false);
         }
         return matchesFilters(r as any, colFilters, (colId) => {
           switch (colId) {
+            case "cogs": return r.actualCogs ?? null;
+            case "estCogs": return r.estimatedCogs ?? null;
             case "brand": return r.catalogData.brand;
             case "supplier": return r.buyLink ? extractDomain(r.buyLink) : null;
-            case "cogs": return r.cogs;
             case "salePrice": return price;
             case "profit": return profitData?.profit ?? null;
             case "margin": return profitData?.margin ?? null;
@@ -850,12 +851,12 @@ export default function Home() {
             case "actProfitPerUnit":
             case "actMargin":
             case "actRoi": {
-              if (!r.actuals || r.actuals.units_sold === 0) return null;
+              if (!r.actuals || r.actuals.units_sold === 0 || r.actualCogs == null) return null;
               const au = r.actuals.units_sold;
               const ar = r.actuals.revenue;
               const ap = getEffectivePrep(r, settings);
               const as2 = getEffectiveStorage(r, settings);
-              const ac = calculateProfit(ar / au, r.cogs, r.feesData.fbaFulfillmentFee ?? 0, r.feesData.referralFee ?? 0, r.feesData.feesEstimatePrice, r.catalogData.weightLbs, ap.value, as2.value, settings, includeInboundShipping, r.isHazmat ?? false);
+              const ac = calculateProfit(ar / au, r.actualCogs, r.feesData.fbaFulfillmentFee ?? 0, r.feesData.referralFee ?? 0, r.feesData.feesEstimatePrice, r.catalogData.weightLbs, ap.value, as2.value, settings, includeInboundShipping, r.isHazmat ?? false);
               if (colId === "actProfit") return ac.profit * au;
               if (colId === "actProfitPerUnit") return ac.profit;
               if (colId === "actMargin") return ac.margin;
@@ -890,7 +891,7 @@ export default function Home() {
     }
     return out;
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [results, searchQuery, selectedSearchAsinsKey, filterEligible, priceSource, settings, includeInboundShipping, colFilters, presetFilter, meltableHidden, activeFilter, buySet, filterNoPrices, filterUncalculated]);
+  }, [results, searchQuery, selectedSearchAsinsKey, showGated, showMeltable, priceSource, settings, includeInboundShipping, colFilters, presetFilter, activeFilter, buySet, filterNoPrices, filterUncalculated]);
 
   // Sort all filtered results before paginating
   const sortedFilteredResults = useMemo(() => {
@@ -911,7 +912,41 @@ export default function Home() {
   }, [queryFilteredResults, sortCol, sortDir, priceSource, settings]);
 
   // Reset to page 1 when any filter/view changes
-  useEffect(() => { setPage(1); }, [searchQuery, selectedSearchAsinsKey, filterEligible, colFilters, presetFilter, activeFilter, meltableHidden, showArchived, filterNoPrices, filterUncalculated]);
+  useEffect(() => { setPage(1); }, [searchQuery, selectedSearchAsinsKey, showGated, showMeltable, showArchived, colFilters, presetFilter, activeFilter, filterNoPrices, filterUncalculated]);
+
+  const handleBulkSyncCogs = useCallback(async () => {
+    const targetAsins = selectedSet.size > 0
+      ? Array.from(selectedSet)
+      : sortedFilteredResults.map((r) => r.asin);
+    const eligible = targetAsins.filter((asin) => {
+      const r = results.find((x) => x.asin === asin);
+      return r && r.estimatedCogsSource === "manual";
+    });
+    if (eligible.length === 0) {
+      toast({ title: "Nothing to sync", description: "No ASINs with manual/CSV Est. COGS in the current view." });
+      return;
+    }
+    const confirmed = window.confirm(
+      `This will overwrite manually-edited Est. COGS values with the latest PO COGS for ${eligible.length} ASIN${eligible.length !== 1 ? "s" : ""}. ASINs without PO data will be left unchanged. Continue?`
+    );
+    if (!confirmed) return;
+    setIsSyncingCogs(true);
+    try {
+      const res = await fetch("/api/cogs/bulk-sync-from-po", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ asins: eligible }),
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.message || "Sync failed");
+      toast({ title: "Est. COGS synced", description: `Synced ${data.synced} ASIN${data.synced !== 1 ? "s" : ""} from PO sheet. ${data.skipped} skipped (no PO data).` });
+      await fetchAsins(startDate, endDate, showArchived);
+    } catch (err: any) {
+      toast({ title: "Sync failed", description: err.message, variant: "destructive" });
+    } finally {
+      setIsSyncingCogs(false);
+    }
+  }, [selectedSet, sortedFilteredResults, results, toast, fetchAsins, startDate, endDate, showArchived]);
 
   const totalFiltered = sortedFilteredResults.length;
   const totalPages = Math.max(1, Math.ceil(totalFiltered / pageSize));
@@ -925,18 +960,11 @@ export default function Home() {
     setSelectedSet(new Set(paginatedResults.map((r) => r.asin)));
   }, [paginatedResults]);
 
-  const activeFilterCount = [
-    searchQuery.trim() !== "" || selectedSearchAsins.size > 0 ? 1 : 0,
-    filterEligible !== "all" ? 1 : 0,
-    Object.keys(colFilters).length,
-    filterNoPrices ? 1 : 0,
-    filterUncalculated ? 1 : 0,
-  ].reduce((a, b) => a + b, 0);
+  const activeFilterCount = getActiveFilterCount(colFilters, searchQuery) + (selectedSearchAsins.size > 0 ? 1 : 0) + (filterNoPrices ? 1 : 0) + (filterUncalculated ? 1 : 0);
 
   function clearSearchFilters() {
     setSearchQuery("");
     setSelectedSearchAsins(new Set());
-    setFilterEligible("all");
     setColFilters({});
     setFilterNoPrices(false);
     setFilterUncalculated(false);
@@ -947,35 +975,8 @@ export default function Home() {
     : 0;
 
   return (
-    <div className="min-h-screen bg-background">
-      <header className="sticky top-0 z-50 border-b border-border bg-background/95 backdrop-blur supports-[backdrop-filter]:bg-background/60">
-        <div className="px-4">
-          <div className="flex items-center justify-between gap-4 h-14">
-            <div className="flex items-center gap-2.5">
-              <BarChart3 className="h-6 w-6 text-primary" />
-              <h1 className="text-base font-semibold tracking-tight">FBA Profitability Analyzer</h1>
-              {dbLoaded && savedCount !== null && savedCount > 0 && (
-                <span className="text-xs text-muted-foreground hidden sm:inline">
-                  · {savedCount.toLocaleString()} saved
-                </span>
-              )}
-            </div>
-            <div className="flex items-center gap-1">
-              <SettingsDialog onSettingsChange={setSettings} />
-              <Button
-                size="icon"
-                variant="ghost"
-                onClick={toggleTheme}
-                data-testid="button-theme-toggle"
-              >
-                {theme === "dark" ? <Sun className="h-5 w-5" /> : <Moon className="h-5 w-5" />}
-              </Button>
-            </div>
-          </div>
-        </div>
-      </header>
-
-      <main className="py-6 space-y-6">
+    <div className="bg-background">
+      <div className="py-6 space-y-6">
         <div className="px-4">
           {credentialsConfigured === false && (
             <Alert variant="destructive" data-testid="alert-credentials" className="mb-6">
@@ -987,6 +988,7 @@ export default function Home() {
           )}
 
           <div className="flex items-center gap-2 flex-wrap">
+            <SettingsDialog onSettingsChange={setSettings} />
             <FileUpload onFileProcessed={handleFileProcessed} isAnalyzing={isAnalyzing} compact />
             <Button
               size="sm"
@@ -1020,6 +1022,16 @@ export default function Home() {
             >
               <DollarSign className={`h-3.5 w-3.5 mr-1.5 ${isRefreshingPrices ? "animate-pulse" : ""}`} />
               {isRefreshingPrices ? "Refreshing..." : "Refresh Prices"}
+            </Button>
+            <Button
+              variant="outline"
+              size="sm"
+              onClick={handleBulkSyncCogs}
+              disabled={isSyncingCogs || isAnalyzing}
+              className="h-8 text-xs"
+            >
+              <Sheet className="h-3.5 w-3.5 mr-1.5" />
+              {isSyncingCogs ? "Syncing..." : "Reset Est. COGS to PO"}
             </Button>
           </div>
 
@@ -1203,43 +1215,23 @@ export default function Home() {
                 selectedAsins={selectedSearchAsins}
                 onSelectedAsinsChange={setSelectedSearchAsins}
               />
-              <Select value={filterEligible} onValueChange={(v) => { setFilterEligible(v); localStorage.setItem("fba-filter-eligible", v); }}>
-                <SelectTrigger className="w-[148px] h-9" data-testid="select-filter-eligible">
-                  <SelectValue placeholder="Eligibility" />
-                </SelectTrigger>
-                <SelectContent>
-                  <SelectItem value="all">All Eligibility</SelectItem>
-                  <SelectItem value="yes">Yes (Ungated)</SelectItem>
-                  <SelectItem value="no">No (Gated)</SelectItem>
-                  <SelectItem value="check">Check</SelectItem>
-                </SelectContent>
-              </Select>
-              <div className="flex items-center gap-1.5">
-                <Switch
-                  id="show-archived"
-                  checked={showArchived}
-                  onCheckedChange={setShowArchived}
-                />
-                <Label htmlFor="show-archived" className="text-xs text-muted-foreground cursor-pointer whitespace-nowrap">
-                  Show Archived
-                </Label>
-              </div>
-              {meltableHidden && (
-                <div className="flex items-center gap-1.5 text-xs text-amber-500 bg-amber-500/10 px-2 py-1 rounded">
-                  <span>Meltable items hidden (summer restriction)</span>
-                  <button className="underline hover:no-underline" onClick={() => setMeltableHidden(false)}>Show anyway</button>
-                </div>
-              )}
+              <VisibilityToggles
+                showGated={showGated}
+                onShowGatedChange={(v) => { setShowGated(v); saveShowGated(v); }}
+                showMeltable={showMeltable}
+                onShowMeltableChange={(v) => { setShowMeltable(v); saveShowMeltable(v); }}
+                showArchived={showArchived}
+                onShowArchivedChange={(v) => { setShowArchived(v); saveShowArchived(v); }}
+              />
               {activeFilterCount > 0 && (
                 <Button
-                  variant="ghost"
+                  variant="outline"
                   size="sm"
-                  onClick={clearSearchFilters}
-                  className="h-9 text-muted-foreground"
-                  data-testid="button-clear-filters"
+                  onClick={() => setFiltersModalOpen(true)}
+                  className="h-9 text-xs text-amber-600 border-amber-300 hover:bg-amber-50 dark:text-amber-400 dark:border-amber-700 dark:hover:bg-amber-950"
                 >
-                  <X className="h-3 w-3 mr-1" />
-                  Clear ({activeFilterCount})
+                  <Filter className="h-3.5 w-3.5 mr-1.5" />
+                  Active filters ({activeFilterCount})
                 </Button>
               )}
               {queryFilteredResults.length !== results.length && (
@@ -1252,6 +1244,7 @@ export default function Home() {
             <ResultsTable
               results={paginatedResults}
               allResults={results}
+              startIndex={(safePage - 1) * pageSize}
               priceSource={priceSource}
               settings={settings}
               columnConfig={columnConfig}
@@ -1311,7 +1304,17 @@ export default function Home() {
             </p>
           </div>
         )}
-      </main>
+      </div>
+
+      <ActiveFiltersModal
+        open={filtersModalOpen}
+        onOpenChange={setFiltersModalOpen}
+        colFilters={colFilters}
+        searchQuery={searchQuery}
+        onRemoveFilter={(colId) => setColFilters((prev) => { const next = { ...prev }; delete next[colId]; return next; })}
+        onClearSearch={() => setSearchQuery("")}
+        onClearAll={clearSearchFilters}
+      />
 
       {historyAsin && (
         <StockHistoryModal

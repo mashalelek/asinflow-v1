@@ -2,42 +2,52 @@
 @tailwind components;
 @tailwind utilities;
 
-/* LIGHT MODE */
+/* LIGHT MODE — Warm Stone palette */
 :root {
-  --button-outline: rgba(0,0,0, .10);
-  --badge-outline: rgba(0,0,0, .05);
+  --button-outline: rgba(120, 113, 108, .15);
+  --badge-outline: rgba(120, 113, 108, .08);
   --opaque-button-border-intensity: -8;
   --elevate-1: rgba(0,0,0, .03);
   --elevate-2: rgba(0,0,0, .08);
-  --background: 0 0% 100%;
-  --foreground: 0 0% 9%;
-  --border: 0 0% 90%;
-  --card: 0 0% 98%;
-  --card-foreground: 0 0% 9%;
-  --card-border: 0 0% 94%;
-  --sidebar: 0 0% 96%;
-  --sidebar-foreground: 0 0% 9%;
-  --sidebar-border: 0 0% 92%;
+  --background: 50 23% 95%;
+  --foreground: 24 10% 10%;
+  --border: 25 5% 45% / 0.15;
+  --card: 0 0% 100%;
+  --card-foreground: 24 10% 10%;
+  --card-border: 25 5% 45% / 0.15;
+  --sidebar: 20 6% 90%;
+  --sidebar-foreground: 24 10% 10%;
+  --sidebar-border: 25 5% 45% / 0.15;
   --sidebar-primary: 217 91% 60%;
   --sidebar-primary-foreground: 0 0% 98%;
-  --sidebar-accent: 0 0% 92%;
-  --sidebar-accent-foreground: 0 0% 9%;
+  --sidebar-accent: 20 6% 90%;
+  --sidebar-accent-foreground: 24 10% 10%;
   --sidebar-ring: 217 91% 60%;
-  --popover: 0 0% 94%;
-  --popover-foreground: 0 0% 9%;
-  --popover-border: 0 0% 90%;
+  --popover: 0 0% 100%;
+  --popover-foreground: 24 10% 10%;
+  --popover-border: 25 5% 45% / 0.15;
   --primary: 217 91% 60%;
   --primary-foreground: 0 0% 98%;
-  --secondary: 0 0% 90%;
-  --secondary-foreground: 0 0% 9%;
-  --muted: 0 0% 92%;
-  --muted-foreground: 0 0% 40%;
-  --accent: 217 15% 92%;
-  --accent-foreground: 0 0% 9%;
+  --secondary: 20 6% 90%;
+  --secondary-foreground: 24 10% 10%;
+  --muted: 20 6% 90%;
+  --muted-foreground: 25 5% 45%;
+  --accent: 20 6% 90%;
+  --accent-foreground: 24 10% 10%;
   --destructive: 0 84% 45%;
   --destructive-foreground: 0 0% 98%;
-  --input: 0 0% 75%;
+  --input: 25 5% 65%;
   --ring: 217 91% 60%;
+  --nav: 12 6% 15%;
+  --nav-foreground: 60 5% 96%;
+  --nav-active: 30 6% 25%;
+  --table-header: 30 6% 25%;
+  --table-header-foreground: 0 0% 100%;
+  --table-zebra: 60 9% 98%;
+  --est-group-bg: 48 96% 89%;
+  --est-group-text: 22 78% 26%;
+  --act-group-bg: 141 84% 93%;
+  --act-group-text: 144 61% 20%;
   --chart-1: 217 91% 45%;
   --chart-2: 173 80% 35%;
   --chart-3: 43 90% 45%;
@@ -93,35 +103,45 @@
   --opaque-button-border-intensity: 9;
   --elevate-1: rgba(255,255,255, .04);
   --elevate-2: rgba(255,255,255, .09);
-  --background: 0 0% 9%;
-  --foreground: 0 0% 98%;
-  --border: 0 0% 18%;
-  --card: 0 0% 11%;
-  --card-foreground: 0 0% 98%;
-  --card-border: 0 0% 14%;
-  --sidebar: 0 0% 13%;
-  --sidebar-foreground: 0 0% 98%;
-  --sidebar-border: 0 0% 16%;
+  --background: 24 10% 10%;
+  --foreground: 60 5% 96%;
+  --border: 25 5% 45% / 0.2;
+  --card: 12 6% 15%;
+  --card-foreground: 60 5% 96%;
+  --card-border: 25 5% 45% / 0.2;
+  --sidebar: 12 6% 15%;
+  --sidebar-foreground: 60 5% 96%;
+  --sidebar-border: 25 5% 45% / 0.2;
   --sidebar-primary: 217 91% 60%;
   --sidebar-primary-foreground: 0 0% 98%;
-  --sidebar-accent: 0 0% 16%;
-  --sidebar-accent-foreground: 0 0% 98%;
+  --sidebar-accent: 12 6% 18%;
+  --sidebar-accent-foreground: 60 5% 96%;
   --sidebar-ring: 217 91% 60%;
-  --popover: 0 0% 15%;
-  --popover-foreground: 0 0% 98%;
-  --popover-border: 0 0% 18%;
+  --popover: 12 6% 15%;
+  --popover-foreground: 60 5% 96%;
+  --popover-border: 25 5% 45% / 0.2;
   --primary: 217 91% 60%;
   --primary-foreground: 0 0% 98%;
-  --secondary: 0 0% 18%;
-  --secondary-foreground: 0 0% 98%;
-  --muted: 0 0% 17%;
-  --muted-foreground: 0 0% 65%;
-  --accent: 217 15% 18%;
-  --accent-foreground: 0 0% 98%;
+  --secondary: 12 6% 18%;
+  --secondary-foreground: 60 5% 96%;
+  --muted: 12 6% 18%;
+  --muted-foreground: 24 5% 64%;
+  --accent: 12 6% 18%;
+  --accent-foreground: 60 5% 96%;
   --destructive: 0 84% 45%;
   --destructive-foreground: 0 0% 98%;
-  --input: 0 0% 30%;
+  --input: 25 5% 35%;
   --ring: 217 91% 60%;
+  --nav: 20 14% 4%;
+  --nav-foreground: 60 5% 96%;
+  --nav-active: 12 6% 15%;
+  --table-header: 30 6% 25%;
+  --table-header-foreground: 60 5% 96%;
+  --table-zebra: 26 13% 11%;
+  --est-group-bg: 22 78% 26%;
+  --est-group-text: 32 98% 83%;
+  --act-group-bg: 144 61% 20%;
+  --act-group-text: 141 79% 85%;
   --chart-1: 217 91% 70%;
   --chart-2: 173 80% 65%;
   --chart-3: 43 90% 70%;
@@ -173,6 +193,42 @@
   body {
     @apply font-sans antialiased bg-background text-foreground;
   }
+}
+
+/* Warm stone table styles */
+.table-header-stone {
+  background-color: hsl(var(--table-header));
+  color: hsl(var(--table-header-foreground));
+}
+
+.table-zebra-stone:nth-child(even) {
+  background-color: hsl(var(--table-zebra));
+}
+
+.table-zebra-stone {
+  border-bottom: 0.5px solid rgba(120, 113, 108, 0.10);
+}
+
+.dark .table-zebra-stone {
+  border-bottom: 0.5px solid rgba(255, 255, 255, 0.06);
+}
+
+.est-group-header {
+  background-color: hsl(var(--est-group-bg));
+  color: hsl(var(--est-group-text));
+}
+
+.act-group-header {
+  background-color: hsl(var(--act-group-bg));
+  color: hsl(var(--act-group-text));
+}
+
+.est-col-tint {
+  background-color: hsl(var(--est-group-bg) / 0.3);
+}
+
+.act-col-tint {
+  background-color: hsl(var(--act-group-bg) / 0.3);
 }
 
 /**
