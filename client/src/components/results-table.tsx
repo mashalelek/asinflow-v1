@@ -385,7 +385,7 @@ export function getRowValue(
       const us = result.actuals?.units_sold ?? 0;
       return us > 0 ? result.actuals!.revenue / us : null;
     }
-    case "actPrepCost": return result.prepOverride ?? null;
+    case "actPrepCost": return result.prepOverride ?? 0; // $0 with warning when no PO data
     case "daysLeft": {
       const s = result.stock?.total ?? 0;
       const u = result.actuals?.units_sold ?? 0;
@@ -1462,8 +1462,22 @@ export function renderCell(
       return <span className="font-mono text-sm">{avgUs > 0 ? fmt(result.actuals!.revenue / avgUs) : "\u2014"}</span>;
     }
 
-    case "actPrepCost":
-      return <span className="font-mono text-sm">{fmt(result.prepOverride)}</span>;
+    case "actPrepCost": {
+      const hasPoPrepCost = result.prepOverride != null;
+      if (hasPoPrepCost) return <span className="font-mono text-sm">{fmt(result.prepOverride)}</span>;
+      return (
+        <Tooltip>
+          <TooltipTrigger asChild>
+            <span className="font-mono text-sm text-amber-500 cursor-help">
+              {fmt(0)} <AlertTriangle className="inline h-3 w-3" />
+            </span>
+          </TooltipTrigger>
+          <TooltipContent side="top" className="max-w-[280px]">
+            <p className="text-xs">No PO prep cost found. This indicates a missing PO record or unmapped sale. Actual profit/margin/ROI may be overstated.</p>
+          </TooltipContent>
+        </Tooltip>
+      );
+    }
 
     case "tags": {
       const tags = result.tags;

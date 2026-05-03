@@ -74,15 +74,15 @@ export function ActiveFiltersModal({
     });
     grouped.set(group, arr);
   }
-  if (hasSearch) {
-    const arr = grouped.get("Search") ?? [];
-    arr.push({ colId: "product" as ColumnId, label: "Search", display: `"${searchQuery.trim()}"` });
-    grouped.set("Search", arr);
-  }
+  // Selected ASINs is the canonical search filter — suppresses the free-text "Search" entry
   if (hasSelectedAsins) {
     const arr = grouped.get("Search") ?? [];
     const asinList = Array.from(selectedAsins!);
     arr.push({ colId: "product" as ColumnId, label: "Selected ASINs", display: `${asinList.length} ASIN${asinList.length !== 1 ? "s" : ""}: ${asinList.slice(0, 3).join(", ")}${asinList.length > 3 ? "..." : ""}` });
+    grouped.set("Search", arr);
+  } else if (hasSearch) {
+    const arr = grouped.get("Search") ?? [];
+    arr.push({ colId: "product" as ColumnId, label: "Search", display: `"${searchQuery.trim()}"` });
     grouped.set("Search", arr);
   }
 
@@ -128,7 +128,9 @@ export function ActiveFiltersModal({
   );
 }
 
-/** Count of active column filters + search + selected ASINs (excludes visibility toggles) */
+/** Count of active column filters + search/selection (excludes visibility toggles).
+ *  Search and selected ASINs count as ONE filter (selection is canonical when present). */
 export function getActiveFilterCount(colFilters: FilterMap, searchQuery: string, selectedAsinsCount = 0): number {
-  return Object.keys(colFilters).length + (searchQuery.trim() ? 1 : 0) + (selectedAsinsCount > 0 ? 1 : 0);
+  const hasSearchOrSelection = selectedAsinsCount > 0 || searchQuery.trim().length > 0;
+  return Object.keys(colFilters).length + (hasSearchOrSelection ? 1 : 0);
 }

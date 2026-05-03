@@ -835,7 +835,7 @@ export default function Home() {
               const u = r.actuals?.units_sold ?? 0;
               return u > 0 ? r.actuals!.revenue / u : null;
             }
-            case "actPrepCost": return r.prepOverride ?? null;
+            case "actPrepCost": return r.prepOverride ?? 0;
             case "daysLeft": {
               const stk = r.stock?.total ?? 0;
               const us = r.actuals?.units_sold ?? 0;

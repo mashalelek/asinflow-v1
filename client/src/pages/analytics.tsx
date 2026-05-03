@@ -241,7 +241,7 @@ export default function Analytics() {
             case "reserved": return r.stock?.reserved ?? null;
             case "sentToFba": return r.stock?.inbound ?? null;
             case "actAvgSalePrice": { const u = r.actuals?.units_sold ?? 0; return u > 0 ? r.actuals!.revenue / u : null; }
-            case "actPrepCost": return r.prepOverride ?? null;
+            case "actPrepCost": return r.prepOverride ?? 0;
             case "sellers7d": return r.sellersDelta ? (r.sellersDelta.fba_7d ?? 0) + (r.sellersDelta.fbm_7d ?? 0) : null;
             case "sellers30d": return r.sellersDelta ? (r.sellersDelta.fba_30d ?? 0) + (r.sellersDelta.fbm_30d ?? 0) : null;
             case "actUnitsSold": return r.actuals?.units_sold ?? null;

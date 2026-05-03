@@ -315,8 +315,8 @@ export const DEFAULT_COLUMNS = [
   "cogs", "actPrepCost", "actUnitsSold", "actRefunds", "actRefundPct",
   "actAvgSalePrice", "actRevenue", "actProfit", "actProfitPerUnit", "actRoi", "actMargin",
   // Group 4 — Estimates
-  "estCogs", "salePrice", "profit", "margin", "roi",
-  "fbaFee", "referralFee", "inboundShipping", "prep", "storage", "maxCogs",
+  "estCogs", "prep", "salePrice", "profit", "margin", "roi",
+  "fbaFee", "referralFee", "inboundShipping", "storage", "maxCogs",
   // Group 5 — Sellers
   "sellersFba", "sellers", "sellers7d", "sellers30d", "fba7d", "fba30d",
   // Group 6 — Additional info
@@ -372,14 +372,14 @@ export const ALL_COLUMNS: ColumnDef[] = [
   { id: "actMargin", label: "Margin", qualifier: "Actual", defaultVisible: true, align: "right", group: "actuals" },
   // Group 4 — Estimates
   { id: "estCogs", label: "COGS", qualifier: "Estimated", defaultVisible: false, align: "right", group: "estimates" },
+  { id: "prep", label: "Prep Cost", qualifier: "Estimated", defaultVisible: false, align: "right", group: "estimates" },
   { id: "salePrice", label: "Sale Price", qualifier: "Estimated", defaultVisible: true, align: "right", group: "estimates" },
   { id: "profit", label: "Profit/Unit", qualifier: "Estimated", defaultVisible: true, align: "right", group: "estimates" },
-  { id: "margin", label: "Margin", qualifier: "Estimated", defaultVisible: true, align: "right", group: "estimates" },
   { id: "roi", label: "ROI", qualifier: "Estimated", defaultVisible: true, align: "right", group: "estimates" },
+  { id: "margin", label: "Margin", qualifier: "Estimated", defaultVisible: true, align: "right", group: "estimates" },
   { id: "fbaFee", label: "FBA Fee", qualifier: "Estimated", defaultVisible: false, align: "right", group: "estimates" },
   { id: "referralFee", label: "Referral Fee", qualifier: "Estimated", defaultVisible: false, align: "right", group: "estimates" },
   { id: "inboundShipping", label: "Inbound Ship.", qualifier: "Estimated", defaultVisible: false, align: "right", group: "estimates" },
-  { id: "prep", label: "Prep Cost", qualifier: "Estimated", defaultVisible: false, align: "right", group: "estimates" },
   { id: "storage", label: "Additional Fees", qualifier: "Estimated", defaultVisible: false, align: "right", group: "estimates" },
   { id: "maxCogs", label: "Max COGS", defaultVisible: false, align: "right", group: "estimates" },
   // Group 5 — Sellers
