@@ -47,11 +47,11 @@ function ResizeHandle({ onMouseDown }: { onMouseDown: (e: React.MouseEvent) => v
 const DEFAULT_COL_WIDTHS: Partial<Record<ColumnId, number>> = {
   product: 400, category: 160, brand: 100, supplier: 100,
   stock: 75, availableFba: 80, ordered: 75, reserved: 75, sentToFba: 80, daysLeft: 80,
-  cogs: 90, actPrepCost: 80, actUnitsSold: 80, actRefunds: 75, actRefundPct: 75,
-  actAvgSalePrice: 90, actRevenue: 90, actProfit: 90, actProfitPerUnit: 85, actRoi: 75, actMargin: 75,
-  estCogs: 90, salePrice: 90, profit: 90, margin: 75, roi: 75,
-  fbaFee: 80, referralFee: 85, inboundShipping: 85, prep: 80, storage: 80, maxCogs: 90,
-  sellersFba: 80, sellers: 75, sellers7d: 80, sellers30d: 80, fba7d: 75, fba30d: 80,
+  cogs: 90, actPrepCost: 85, actUnitsSold: 85, actRefunds: 80, actRefundPct: 80,
+  actAvgSalePrice: 100, actRevenue: 95, actProfit: 100, actProfitPerUnit: 90, actRoi: 80, actMargin: 80,
+  estCogs: 90, salePrice: 95, profit: 90, margin: 80, roi: 80,
+  fbaFee: 85, referralFee: 95, inboundShipping: 100, prep: 85, storage: 105, maxCogs: 90,
+  sellersFba: 85, sellers: 80, sellers7d: 85, sellers30d: 90, fba7d: 80, fba30d: 85,
   tags: 100, notes: 100, sourcing: 80, meltable: 85, hazmat: 80, suppressed: 90, dateAdded: 95,
 };
 import { type ColumnConfig } from "@/lib/columns";
@@ -592,7 +592,9 @@ export function ResultsTable({
   }, []);
 
   const visibleCols = useMemo(
-    () => columnConfig.order.filter((id) => columnConfig.visible.has(id) && colMap.has(id)),
+    // Column order is locked to schema definition (COLUMN_GROUPS order).
+    // User controls visibility only, not ordering.
+    () => ALL_COLUMNS.map((c) => c.id).filter((id) => columnConfig.visible.has(id) && colMap.has(id)),
     [columnConfig, colMap]
   );
 
@@ -658,7 +660,7 @@ export function ResultsTable({
               return (
                 <th
                   key={colId}
-                  className={`relative cursor-pointer select-none whitespace-nowrap hover:opacity-80 transition-colors px-3 py-2 text-xs font-medium ${
+                  className={`relative cursor-pointer select-none hover:opacity-80 transition-colors px-2 py-2 text-xs font-medium overflow-hidden ${
                     col.align === "right" ? "text-right" : "text-left"
                   }`}
                   style={w ? { width: w, minWidth: w, maxWidth: w } : undefined}

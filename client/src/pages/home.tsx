@@ -967,7 +967,7 @@ export default function Home() {
     setSelectedSet(new Set(paginatedResults.map((r) => r.asin)));
   }, [paginatedResults]);
 
-  const activeFilterCount = getActiveFilterCount(colFilters, searchQuery) + (selectedSearchAsins.size > 0 ? 1 : 0) + (filterNoPrices ? 1 : 0) + (filterUncalculated ? 1 : 0);
+  const activeFilterCount = getActiveFilterCount(colFilters, searchQuery, selectedSearchAsins.size) + (filterNoPrices ? 1 : 0) + (filterUncalculated ? 1 : 0);
 
   function clearSearchFilters() {
     setSearchQuery("");
@@ -1318,8 +1318,10 @@ export default function Home() {
         onOpenChange={setFiltersModalOpen}
         colFilters={colFilters}
         searchQuery={searchQuery}
+        selectedAsins={selectedSearchAsins}
         onRemoveFilter={(colId) => setColFilters((prev) => { const next = { ...prev }; delete next[colId]; return next; })}
-        onClearSearch={() => setSearchQuery("")}
+        onClearSearch={() => { setSearchQuery(""); setSelectedSearchAsins(new Set()); }}
+        onClearSelectedAsins={() => setSelectedSearchAsins(new Set())}
         onClearAll={clearSearchFilters}
       />
 

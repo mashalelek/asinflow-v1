@@ -48,16 +48,19 @@ interface ActiveFiltersModalProps {
   onOpenChange: (open: boolean) => void;
   colFilters: FilterMap;
   searchQuery: string;
+  selectedAsins?: Set<string>;
   onRemoveFilter: (colId: ColumnId) => void;
   onClearSearch: () => void;
+  onClearSelectedAsins?: () => void;
   onClearAll: () => void;
 }
 
 export function ActiveFiltersModal({
-  open, onOpenChange, colFilters, searchQuery, onRemoveFilter, onClearSearch, onClearAll,
+  open, onOpenChange, colFilters, searchQuery, selectedAsins, onRemoveFilter, onClearSearch, onClearSelectedAsins, onClearAll,
 }: ActiveFiltersModalProps) {
   const filters = Object.values(colFilters);
   const hasSearch = searchQuery.trim().length > 0;
+  const hasSelectedAsins = selectedAsins && selectedAsins.size > 0;
 
   // Group filters
   const grouped = new Map<string, { colId: ColumnId; label: string; display: string }[]>();
@@ -74,6 +77,12 @@ export function ActiveFiltersModal({
   if (hasSearch) {
     const arr = grouped.get("Search") ?? [];
     arr.push({ colId: "product" as ColumnId, label: "Search", display: `"${searchQuery.trim()}"` });
+    grouped.set("Search", arr);
+  }
+  if (hasSelectedAsins) {
+    const arr = grouped.get("Search") ?? [];
+    const asinList = Array.from(selectedAsins!);
+    arr.push({ colId: "product" as ColumnId, label: "Selected ASINs", display: `${asinList.length} ASIN${asinList.length !== 1 ? "s" : ""}: ${asinList.slice(0, 3).join(", ")}${asinList.length > 3 ? "..." : ""}` });
     grouped.set("Search", arr);
   }
 
@@ -97,7 +106,8 @@ export function ActiveFiltersModal({
                     <button
                       className="text-muted-foreground/60 hover:text-red-500 transition-colors flex-shrink-0"
                       onClick={() => {
-                        if (item.colId === "product" && group === "Search") onClearSearch();
+                        if (item.label === "Selected ASINs") { onClearSelectedAsins?.(); onClearSearch(); }
+                        else if (item.colId === "product" && group === "Search") onClearSearch();
                         else onRemoveFilter(item.colId);
                       }}
                     >
@@ -118,7 +128,7 @@ export function ActiveFiltersModal({
   );
 }
 
-/** Count of active column filters + search (excludes visibility toggles) */
-export function getActiveFilterCount(colFilters: FilterMap, searchQuery: string): number {
-  return Object.keys(colFilters).length + (searchQuery.trim() ? 1 : 0);
+/** Count of active column filters + search + selected ASINs (excludes visibility toggles) */
+export function getActiveFilterCount(colFilters: FilterMap, searchQuery: string, selectedAsinsCount = 0): number {
+  return Object.keys(colFilters).length + (searchQuery.trim() ? 1 : 0) + (selectedAsinsCount > 0 ? 1 : 0);
 }
