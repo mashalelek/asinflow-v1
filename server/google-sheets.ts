@@ -51,15 +51,17 @@ export async function fetchSheetData(sheetId: string): Promise<Map<string, Sheet
       const cogs = parseFloat(cogsRaw);
       const prepRaw = (row[COL_PREP] ?? "").toString().replace(/[$,]/g, "").trim();
       const prepCost = parseFloat(prepRaw);
+      // Empty prep cell on a real PO row = deliberate $0 (not "no data")
+      const resolvedPrep = isNaN(prepCost) ? 0 : prepCost;
       const supplier = (row[COL_SUPPLIER] ?? "").toString().trim() || null;
 
       if (!existing) {
-        result.set(asin, { cogs: isNaN(cogs) ? null : cogs, prepCost: isNaN(prepCost) ? null : prepCost, orderedQty: 0, supplier });
+        result.set(asin, { cogs: isNaN(cogs) ? null : cogs, prepCost: resolvedPrep, orderedQty: 0, supplier });
       } else {
         result.set(asin, {
           ...existing,
           cogs: isNaN(cogs) ? null : cogs,
-          prepCost: isNaN(prepCost) ? null : prepCost,
+          prepCost: resolvedPrep,
           supplier: supplier ?? existing.supplier,
         });
       }
