@@ -255,14 +255,17 @@ function buildResult(
     error = "No pricing or fee data available";
   }
 
+  // Analyze only refreshes Amazon-side data. Cost fields (estimatedCogs,
+  // actualCogs, prepOverride) are NOT set here — the frontend re-fetches
+  // from /api/asins after analyze to get the DB-authoritative values.
   return {
     asin: input.asin,
-    cogs: input.cogs,
-    estimatedCogs: input.cogs,
+    cogs: input.cogs, // deprecated, kept for backward compat
+    estimatedCogs: null,
     actualCogs: null,
     buyLink: input.buyLink ?? null,
-    prepOverride: input.prepOverride ?? null,
-    storageOverride: input.storageOverride ?? null,
+    prepOverride: null,
+    storageOverride: null,
     pricingData, feesData, catalogData,
     eligibilityData,
     error,
@@ -308,18 +311,19 @@ async function upsertAsinResult(result: AsinResult): Promise<void> {
     ]
   );
 
+  // Asymmetric UPSERT: INSERT populates estimated_cogs from the CSV upload
+  // input (result.cogs). ON CONFLICT UPDATE only refreshes Amazon-side pricing/
+  // fees — never touches estimated_cogs, actual_cogs, or other user-controlled
+  // cost fields. This is an architectural smell: CSV upload piggybacks on the
+  // analyze UPSERT to persist COGS. TODO: separate CSV write path from analyze.
   await query(
     `INSERT INTO asin_estimates (
-       asin, estimated_cogs, estimated_cogs_source, prep_override, storage_override,
+       asin, estimated_cogs, estimated_cogs_source,
        lowest_fba_price, buy_box_price, buy_box_fulfillment, lowest_price,
        sellers_fba, sellers_fbm, fba_fee, referral_fee, fees_estimate_price,
        bsr, bsr_category, eligibility_status, error, fetched_at
-     ) VALUES ($1,$2,'csv',$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,NOW())
+     ) VALUES ($1,$2,'csv',$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,NOW())
      ON CONFLICT (asin) DO UPDATE SET
-       estimated_cogs = EXCLUDED.estimated_cogs,
-       estimated_cogs_source = EXCLUDED.estimated_cogs_source,
-       prep_override = EXCLUDED.prep_override,
-       storage_override = EXCLUDED.storage_override,
        lowest_fba_price = COALESCE(EXCLUDED.lowest_fba_price, asin_estimates.lowest_fba_price),
        buy_box_price = COALESCE(EXCLUDED.buy_box_price, asin_estimates.buy_box_price),
        buy_box_fulfillment = COALESCE(EXCLUDED.buy_box_fulfillment, asin_estimates.buy_box_fulfillment),
@@ -336,7 +340,7 @@ async function upsertAsinResult(result: AsinResult): Promise<void> {
        fetched_at = NOW()`,
     [
       result.asin,
-      result.cogs, result.prepOverride, result.storageOverride,
+      result.cogs, // $2 — only used in INSERT (new ASIN), ignored by UPDATE
       result.pricingData.lowestFbaPrice, result.pricingData.buyBoxPrice,
       result.pricingData.buyBoxFulfillment, result.pricingData.lowestPrice,
       result.pricingData.sellersFba, result.pricingData.sellersFbm,
@@ -1333,11 +1337,11 @@ export async function registerRoutes(
         result = {
           asin: input.asin,
           cogs: input.cogs,
-          estimatedCogs: input.cogs,
+          estimatedCogs: null,
           actualCogs: null,
           buyLink: input.buyLink ?? null,
-          prepOverride: input.prepOverride ?? null,
-          storageOverride: input.storageOverride ?? null,
+          prepOverride: null,
+          storageOverride: null,
           pricingData: {
             lowestFbaPrice: null, buyBoxPrice: null, buyBoxFulfillment: null,
             lowestPrice: null, avg30DayPrice: null, avg90DayPrice: null,

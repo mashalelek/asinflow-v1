@@ -408,15 +408,29 @@ export default function Home() {
             setProgress(msg.data);
           } else if (msg.type === "result") {
             const resultData = msg.data;
+            // Merge analyze result with existing row — preserve user-controlled
+            // fields (estimatedCogs, actualCogs, prepOverride, etc.) that the
+            // analyze path intentionally does not populate.
+            const mergeWithExisting = (existing: AsinResult, incoming: AsinResult): AsinResult => ({
+              ...existing,
+              ...incoming,
+              estimatedCogs: incoming.estimatedCogs ?? existing.estimatedCogs,
+              estimatedCogsSource: incoming.estimatedCogsSource ?? existing.estimatedCogsSource,
+              actualCogs: incoming.actualCogs ?? existing.actualCogs,
+              cogsSource: incoming.cogsSource ?? existing.cogsSource,
+              prepOverride: incoming.prepOverride ?? existing.prepOverride,
+              storageOverride: incoming.storageOverride ?? existing.storageOverride,
+              cogs: incoming.cogs || existing.cogs,
+            });
             if (resultData._update) {
               delete resultData._update;
               setResults((prev) =>
-                prev.map((r) => (r.asin === resultData.asin ? resultData : r))
+                prev.map((r) => (r.asin === resultData.asin ? mergeWithExisting(r, resultData) : r))
               );
             } else {
               setResults((prev) => {
                 const idx = prev.findIndex((r) => r.asin === resultData.asin);
-                if (idx >= 0) return prev.map((r, i) => i === idx ? resultData : r);
+                if (idx >= 0) return prev.map((r, i) => i === idx ? mergeWithExisting(r, resultData) : r);
                 setSavedCount((c) => (c ?? 0) + 1);
                 return [...prev, resultData];
               });
