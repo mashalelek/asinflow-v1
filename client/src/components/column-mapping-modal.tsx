@@ -35,9 +35,9 @@ const MAPPING_FIELDS: MappingField[] = [
   },
   {
     key: "cogs",
-    label: "COGS",
+    label: "Est. COGS",
     required: true,
-    matchPatterns: [/^cogs$/i, /cost\s*of\s*goods/i, /\bcogs\b/i, /\bunit\s*cost\b/i, /\bpurchase\s*price\b/i, /\bprice\s*paid\b/i, /\bbuy\s*cost\b/i, /\bcost\b/i],
+    matchPatterns: [/^cogs$/i, /cost\s*of\s*goods/i, /\bcogs\b/i, /\bunit\s*cost\b/i, /\bpurchase\s*price\b/i, /\bprice\s*paid\b/i, /\bbuy\s*cost\b/i, /\bcost\b/i, /est.*cogs/i],
   },
   {
     key: "buyLink",
