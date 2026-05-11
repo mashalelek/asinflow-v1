@@ -310,21 +310,14 @@ async function upsertAsinResult(result: AsinResult): Promise<void> {
 
   await query(
     `INSERT INTO asin_estimates (
-       asin, cogs, estimated_cogs, estimated_cogs_source, prep_override, storage_override,
+       asin, estimated_cogs, estimated_cogs_source, prep_override, storage_override,
        lowest_fba_price, buy_box_price, buy_box_fulfillment, lowest_price,
        sellers_fba, sellers_fbm, fba_fee, referral_fee, fees_estimate_price,
        bsr, bsr_category, eligibility_status, error, fetched_at
-     ) VALUES ($1,$2,$2,'csv',$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,NOW())
+     ) VALUES ($1,$2,'csv',$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,NOW())
      ON CONFLICT (asin) DO UPDATE SET
-       cogs = EXCLUDED.cogs,
-       estimated_cogs = CASE
-         WHEN asin_estimates.estimated_cogs IS NULL THEN EXCLUDED.estimated_cogs
-         ELSE asin_estimates.estimated_cogs
-       END,
-       estimated_cogs_source = CASE
-         WHEN asin_estimates.estimated_cogs IS NULL THEN EXCLUDED.estimated_cogs_source
-         ELSE asin_estimates.estimated_cogs_source
-       END,
+       estimated_cogs = EXCLUDED.estimated_cogs,
+       estimated_cogs_source = EXCLUDED.estimated_cogs_source,
        prep_override = EXCLUDED.prep_override,
        storage_override = EXCLUDED.storage_override,
        lowest_fba_price = COALESCE(EXCLUDED.lowest_fba_price, asin_estimates.lowest_fba_price),
@@ -846,26 +839,24 @@ export async function registerRoutes(
         if ((existing.rowCount ?? 0) > 0) {
           await pool.query(
             `UPDATE asin_estimates SET
-               cogs = COALESCE($2, cogs),
                estimated_cogs = COALESCE($2, estimated_cogs),
-               estimated_cogs_source = CASE WHEN $2 IS NOT NULL AND estimated_cogs IS NULL THEN 'manual' ELSE estimated_cogs_source END,
+               estimated_cogs_source = CASE WHEN $2 IS NOT NULL THEN 'manual' ELSE estimated_cogs_source END,
                buy_box_price = COALESCE($3, buy_box_price),
-               sellers_fba = COALESCE($5, sellers_fba),
-               sellers_fbm = COALESCE($6, sellers_fbm)
+               sellers_fba = COALESCE($4, sellers_fba),
+               sellers_fbm = COALESCE($5, sellers_fbm)
              WHERE id = $1`,
             [
               existing.rows[0].id,
               hasCogs ? parseFloat(cogs) : null,
               sale_price ?? null,
-              bsr ?? null,
               sellers_fba ?? null,
               sellers_fbm ?? null,
             ]
           );
         } else {
           await pool.query(
-            `INSERT INTO asin_estimates (asin, cogs, cogs_source, estimated_cogs, estimated_cogs_source, buy_box_price, sellers_fba, sellers_fbm)
-             VALUES ($1, $2, 'manual', $2, 'manual', $3, $4, $5)`,
+            `INSERT INTO asin_estimates (asin, estimated_cogs, estimated_cogs_source, buy_box_price, sellers_fba, sellers_fbm)
+             VALUES ($1, $2, 'manual', $3, $4, $5)`,
             [
               asin,
               hasCogs ? parseFloat(cogs) : null,
