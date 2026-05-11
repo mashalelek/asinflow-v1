@@ -1237,12 +1237,15 @@ export async function getCatalogData(asin: string): Promise<AsinCatalogResult> {
       if (tempRating.includes("chilled") || tempRating.includes("frozen") || tempRating.includes("refriger")) isMeltable = true;
       if (attrs.is_heat_sensitive?.[0]?.value === true || attrs.is_heat_sensitive?.[0]?.value === "true") isMeltable = true;
       if (attrs.meltable?.[0]?.value === true || attrs.meltable?.[0]?.value === "true") isMeltable = true;
-      // Hazmat/DG: hazmat attribute, DG regulation, safety data sheet, or GHS classification
-      if (attrs.hazmat && attrs.hazmat.length > 0) isHazmat = true;
-      if (attrs.ghs_classification_category?.[0]?.value) isHazmat = true;
-      if (attrs.safety_data_sheet_url?.[0]?.value) isHazmat = true;
+      // Hazmat/DG: ONLY supplier_declared_dg_hz_regulation is a reliable indicator
+      // for FBA hazmat surcharge applicability. Other attributes (ghs_classification_category,
+      // safety_data_sheet_url, attrs.hazmat) are compliance metadata that appear on many
+      // non-hazmat products (cosmetics, food, cleaning supplies) and produce false positives.
+      // See SPEC.md for details.
       const dgReg = (attrs.supplier_declared_dg_hz_regulation?.[0]?.value ?? "").toLowerCase();
-      if (dgReg && dgReg !== "not_applicable") isHazmat = true;
+      // "not_applicable" and "unknown" both mean NOT operationally hazmat for FBA.
+      // Only explicit DG regulation values (e.g., "ghs", "limited_quantity", etc.) trigger hazmat.
+      if (dgReg && dgReg !== "not_applicable" && dgReg !== "unknown") isHazmat = true;
     }
 
     return {

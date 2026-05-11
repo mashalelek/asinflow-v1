@@ -230,10 +230,12 @@ export function calculateProfit(
   const hazmatPrepExtra = isHazmat ? (settings.hazmatPrepSurcharge ?? 0) : 0;
 
   const weightMissing = weightLbs == null || weightLbs <= 0;
-  const inboundShipping = weightMissing ? null : weightLbs * settings.inboundShippingCost + hazmatShipExtra;
+  // Inbound shipping = weight × rate only. No hazmat padding, no dim weight.
+  const inboundShipping = weightMissing ? null : weightLbs * settings.inboundShippingCost;
   const totalFbaFee = fbaFee + settings.lowInventorySurcharge;
   const effectivePrep = prepCost + hazmatPrepExtra;
-  const inboundCost = includeInboundShipping ? (inboundShipping ?? 0) : 0;
+  // Hazmat ship surcharge added to total cost separately, not to the displayed inbound value
+  const inboundCost = includeInboundShipping ? (inboundShipping ?? 0) + hazmatShipExtra : 0;
   const profit =
     salePrice -
     cogs -
@@ -281,7 +283,7 @@ export function calculateMaxCogs(
   const totalFbaFee = fbaFee + settings.lowInventorySurcharge;
   const effectivePrep = prepCost + hazmatPrepExtra;
   const inboundCost = includeInboundShipping
-    ? ((weightLbs != null && weightLbs > 0) ? weightLbs * settings.inboundShippingCost + hazmatShipExtra : hazmatShipExtra)
+    ? ((weightLbs != null && weightLbs > 0) ? weightLbs * settings.inboundShippingCost : 0) + hazmatShipExtra
     : 0;
 
   const totalFees = totalFbaFee + adjReferralFee + inboundCost + effectivePrep + storageFee;

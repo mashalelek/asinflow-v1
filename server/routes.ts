@@ -280,6 +280,26 @@ function getFeePriceForAsin(pricingData: AsinResult["pricingData"]): { price: nu
   return { price: realPrice ?? 15, isFallback: realPrice == null };
 }
 
+/**
+ * Dedicated write path for CSV-uploaded COGS values. Runs BEFORE the
+ * analyze UPSERT so estimated_cogs is populated regardless of whether
+ * the ASIN is new or existing. This is separate from the analyze UPSERT
+ * which only touches Amazon-side pricing/fees and never user-controlled
+ * cost fields.
+ */
+async function upsertCsvCogs(asin: string, cogs: number): Promise<void> {
+  // Try UPDATE first (existing ASIN)
+  const updated = await query(
+    `UPDATE asin_estimates SET estimated_cogs = $2, estimated_cogs_source = 'csv'
+     WHERE asin = $1`,
+    [asin, cogs],
+  );
+  if ((updated.rowCount ?? 0) === 0) {
+    // New ASIN — INSERT will be handled by upsertAsinResult below,
+    // which includes estimated_cogs in its INSERT branch
+  }
+}
+
 async function upsertAsinResult(result: AsinResult): Promise<void> {
   const supplier = extractDomain(result.buyLink);
 
@@ -392,11 +412,19 @@ async function appendNotesForAsin(asin: string, newNotes: string): Promise<void>
   );
 }
 
-function writeResult(res: Response, allResults: Map<string, AsinResult>, asin: string, result: AsinResult, isUpdate = false): void {
+function writeResult(res: Response, allResults: Map<string, AsinResult>, asin: string, result: AsinResult, isUpdate = false, fromCsvUpload = false): void {
   allResults.set(asin, result);
   res.write(JSON.stringify({ type: "result", data: isUpdate ? { ...result, _update: true } : result }) + "\n");
   if (isDbAvailable()) {
-    upsertAsinResult(result).catch((err: any) => log(`DB upsert error for ${asin}: ${err.message}`, "db"));
+    // If this is a CSV upload with user-provided COGS, persist estimated_cogs
+    // via the dedicated write path BEFORE the analyze UPSERT. This ensures
+    // estimated_cogs is set for both new and existing ASINs.
+    const csvCogsPromise = fromCsvUpload && result.cogs > 0
+      ? upsertCsvCogs(result.asin, result.cogs).catch((err: any) => log(`CSV COGS write error for ${asin}: ${err.message}`, "db"))
+      : Promise.resolve();
+    csvCogsPromise.then(() => {
+      upsertAsinResult(result).catch((err: any) => log(`DB upsert error for ${asin}: ${err.message}`, "db"));
+    });
   }
 }
 
@@ -1285,6 +1313,7 @@ export async function registerRoutes(
     asins: AsinInput[],
     res: Response,
     progressPrefix: (i: number) => string | null = () => null,
+    fromCsvUpload = false,
   ) {
     const BATCH_SIZE = 10;
     const BATCH_DELAY = 1000;
@@ -1360,10 +1389,10 @@ export async function registerRoutes(
         retryQueue.push({ input, attempt: 1, result });
         log(`Queued ${input.asin} for retry (fees=${retryNeeded.fees}, pricing=${retryNeeded.pricing}, catalog=${retryNeeded.catalog})`, "retry");
         if (!retryNeeded.fees && !retryNeeded.pricing) {
-          writeResult(res, allResults, input.asin, result);
+          writeResult(res, allResults, input.asin, result, false, fromCsvUpload);
         }
       } else {
-        writeResult(res, allResults, input.asin, result);
+        writeResult(res, allResults, input.asin, result, false, fromCsvUpload);
       }
 
       // Save tags and notes from CSV import (fire-and-forget)
@@ -1467,7 +1496,7 @@ export async function registerRoutes(
               const finalResult = retryError
                 ? { ...retried, error: retryError }
                 : retried;
-              writeResult(res, allResults, item.input.asin, finalResult, allResults.has(item.input.asin));
+              writeResult(res, allResults, item.input.asin, finalResult, allResults.has(item.input.asin), fromCsvUpload);
             }
           } catch (err: any) {
             log(`Retry error for ${item.input.asin}: ${err.message}`, "retry");
@@ -1501,7 +1530,7 @@ export async function registerRoutes(
                 ...finalItem,
                 error: errorMsg ?? finalItem.error,
               };
-              writeResult(res, allResults, item.input.asin, errorResult, allResults.has(item.input.asin));
+              writeResult(res, allResults, item.input.asin, errorResult, allResults.has(item.input.asin), fromCsvUpload);
             } else {
               item.attempt = attempt + 1;
             }
@@ -1528,7 +1557,7 @@ export async function registerRoutes(
             ...item.result,
             error: errorMsg,
           };
-          writeResult(res, allResults, item.input.asin, errorResult);
+          writeResult(res, allResults, item.input.asin, errorResult, false, fromCsvUpload);
         }
       }
       if (uncalculated.length > 0) {
@@ -1561,7 +1590,8 @@ export async function registerRoutes(
     res.setHeader("Cache-Control", "no-cache");
     res.setHeader("Connection", "keep-alive");
 
-    await runAnalyzeAndStream(asins, res);
+    // CSV upload sends COGS values → persist to estimated_cogs via dedicated path
+    await runAnalyzeAndStream(asins, res, () => null, true);
     res.write(JSON.stringify({ type: "complete" }) + "\n");
     res.end();
     runPostAnalyzeBackgroundSyncs();
