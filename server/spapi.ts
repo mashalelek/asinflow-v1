@@ -1237,15 +1237,20 @@ export async function getCatalogData(asin: string): Promise<AsinCatalogResult> {
       if (tempRating.includes("chilled") || tempRating.includes("frozen") || tempRating.includes("refriger")) isMeltable = true;
       if (attrs.is_heat_sensitive?.[0]?.value === true || attrs.is_heat_sensitive?.[0]?.value === "true") isMeltable = true;
       if (attrs.meltable?.[0]?.value === true || attrs.meltable?.[0]?.value === "true") isMeltable = true;
-      // Hazmat/DG: ONLY supplier_declared_dg_hz_regulation is a reliable indicator
-      // for FBA hazmat surcharge applicability. Other attributes (ghs_classification_category,
-      // safety_data_sheet_url, attrs.hazmat) are compliance metadata that appear on many
-      // non-hazmat products (cosmetics, food, cleaning supplies) and produce false positives.
-      // See SPEC.md for details.
-      const dgReg = (attrs.supplier_declared_dg_hz_regulation?.[0]?.value ?? "").toLowerCase();
-      // "not_applicable" and "unknown" both mean NOT operationally hazmat for FBA.
-      // Only explicit DG regulation values (e.g., "ghs", "limited_quantity", etc.) trigger hazmat.
-      if (dgReg && dgReg !== "not_applicable" && dgReg !== "unknown") isHazmat = true;
+      // Hazmat: attrs.hazmat is the sole reliable SP-API indicator.
+      // Contains the product classification (e.g., "PERFUMERY PRODUCTS") when
+      // Amazon classifies the product as hazmat/DG. Not present on non-hazmat.
+      // Hazmat and DG are interchangeable in Amazon's system — single flag.
+      // Other attributes are NOT used (all produce false positives):
+      //   - ghs_classification_category: appears on cosmetics, food, cleaning supplies
+      //   - safety_data_sheet_url: regulatory compliance, not operational hazmat
+      //   - supplier_declared_dg_hz_regulation: seller self-declaration, unreliable
+      if (attrs.hazmat && Array.isArray(attrs.hazmat) && attrs.hazmat.length > 0) {
+        const hazmatVal = (attrs.hazmat[0]?.value ?? "").toString().trim();
+        if (hazmatVal.length > 0) {
+          isHazmat = true;
+        }
+      }
     }
 
     return {

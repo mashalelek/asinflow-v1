@@ -210,7 +210,7 @@ export function calculateProfit(
   storageFee: number,
   settings: Settings,
   includeInboundShipping = true,
-  isHazmat = false
+  isHazmat = false,
 ): {
   profit: number;
   roi: number;
@@ -230,7 +230,7 @@ export function calculateProfit(
   const hazmatPrepExtra = isHazmat ? (settings.hazmatPrepSurcharge ?? 0) : 0;
 
   const weightMissing = weightLbs == null || weightLbs <= 0;
-  // Inbound shipping = weight × rate only. No hazmat padding, no dim weight.
+  // Inbound shipping = weight × rate only. No hazmat/DG padding, no dim weight.
   const inboundShipping = weightMissing ? null : weightLbs * settings.inboundShippingCost;
   const totalFbaFee = fbaFee + settings.lowInventorySurcharge;
   const effectivePrep = prepCost + hazmatPrepExtra;
@@ -272,7 +272,6 @@ export function calculateMaxCogs(
   if (salePrice == null || salePrice <= 0) return null;
   if (fbaFee == null || referralFee == null) return null;
 
-  // Adjust referral fee proportionally if the fee estimate was based on a different price
   let adjReferralFee = referralFee;
   if (feesEstimatePrice && feesEstimatePrice > 0 && salePrice !== feesEstimatePrice) {
     adjReferralFee = parseFloat(((referralFee / feesEstimatePrice) * salePrice).toFixed(2));
