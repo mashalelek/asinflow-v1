@@ -751,7 +751,7 @@ export default function Home() {
         if (price == null || r.estimatedCogs == null) return activeFilter === "unprofitable";
         const prep = getEffectivePrep(r, settings);
         const storage = getEffectiveStorage(r, settings);
-        const p = calculateProfit(price, r.estimatedCogs, r.feesData.fbaFulfillmentFee ?? 0, r.feesData.referralFee ?? 0, r.feesData.feesEstimatePrice, r.catalogData.weightLbs, prep.value, storage.value, settings, includeInboundShipping, r.isHazmat ?? false);
+        const p = calculateProfit(price, r.estimatedCogs, r.feesData.fbaFulfillmentFee ?? 0, r.feesData.referralFee ?? 0, r.feesData.feesEstimatePrice, r.catalogData.weightLbs, prep.value, storage.value, settings, includeInboundShipping, r.isHazmat ?? false, r.category ?? null);
         const meets = p.roi >= settings.minRoiThreshold && p.margin >= settings.minMarginThreshold;
         return activeFilter === "profitable" ? meets : !meets;
       });

@@ -367,7 +367,7 @@ function GroupRows({
         let rowBg = "";
 
         if (!hasError && price != null && result.estimatedCogs != null) {
-          profitData = calculateProfit(price, result.estimatedCogs, result.feesData.fbaFulfillmentFee ?? 0, result.feesData.referralFee ?? 0, result.feesData.feesEstimatePrice, result.catalogData.weightLbs, prep.value, storage.value, settings, includeInboundShipping, result.isHazmat ?? false);
+          profitData = calculateProfit(price, result.estimatedCogs, result.feesData.fbaFulfillmentFee ?? 0, result.feesData.referralFee ?? 0, result.feesData.feesEstimatePrice, result.catalogData.weightLbs, prep.value, storage.value, settings, includeInboundShipping, result.isHazmat ?? false, result.category ?? null);
         }
         if (price == null || hasError) rowBg = "opacity-50";
 

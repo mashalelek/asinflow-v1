@@ -1,4 +1,5 @@
 import { z } from "zod";
+import feeData from "./fee-engine/feeData.json";
 
 export const settingsSchema = z.object({
   inboundShippingCost: z.number().min(0).default(0.5),
@@ -199,6 +200,134 @@ export function getEffectiveStorage(result: AsinResult, settings: Settings): { v
   return { value: settings.storageFee, isOverride: false };
 }
 
+/**
+ * Maps the SP-API browse-node category stored on `asins.category` to the
+ * referral-fee category keys used in fee-engine/feeData.json. Only categories
+ * we can confidently map are listed; anything missing falls back to the
+ * SP-API-derived referral fee (linear scaling) in the callers below.
+ */
+const REFERRAL_CATEGORY_MAP: Record<string, string> = {
+  "Clothing, Shoes & Jewelry": "Clothing & Accessories",
+  "Grocery & Gourmet Food": "Grocery & Gourmet Food",
+  "Health & Household": "Beauty, Health & Personal Care",
+  "Beauty & Personal Care": "Beauty, Health & Personal Care",
+  "Baby": "Baby Products",
+  "Industrial & Scientific": "Business, Industrial & Scientific",
+  "Home & Kitchen": "Home & Garden",
+  "Kitchen & Dining": "Kitchen",
+  "Arts, Crafts & Sewing": "Home & Garden",
+  "Tools & Home Improvement": "Tools & Home Improvement",
+  "Pet Supplies": "Pet Supplies",
+  "Sports & Outdoors": "Sports & Outdoors",
+  "Sports Collectibles": "Sports & Outdoors",
+  "Automotive": "Automotive & Powersports",
+  "Toys & Games": "Toys & Games",
+  "Patio, Lawn & Garden": "Lawn & Garden",
+  "Office Products": "Office Products",
+  "Electronics": "Consumer Electronics",
+  "Cell Phones & Accessories": "Electronics Accessories",
+  "Video Games": "Media - Software & Video Games",
+  "Musical Instruments": "Musical Instruments & AV Production",
+  "Books": "Books",
+  "Movies & TV": "Media - Music & Video",
+};
+
+interface ReferralTier { maxPrice: number | null; rate: number }
+interface ReferralCatDef {
+  rate?: number;
+  tiers?: ReferralTier[];
+  tierMode?: "bracket" | "marginal";
+  minFee?: number;
+}
+
+/**
+ * Raw referral fee from a feeData.json category definition at a given price.
+ *
+ * Amazon uses two distinct tiered structures:
+ *  - "bracket" (Clothing, Baby, Beauty/Health, Grocery): a single rate chosen
+ *    by which price band the *whole* sale price lands in.
+ *  - "marginal" (Jewelry, Watches, Furniture, etc.): per-portion rates summed
+ *    across bands, like tax brackets. This is the default for tiered cats.
+ */
+function feeFromCatDef(def: ReferralCatDef, price: number): number | null {
+  const minFee = def.minFee ?? (feeData as any).referralFees.defaultMinFee ?? 0;
+  let fee: number;
+
+  if (def.tiers && def.tiers.length > 0) {
+    if (def.tierMode === "bracket") {
+      const tier =
+        def.tiers.find((t) => t.maxPrice != null && price <= t.maxPrice) ??
+        def.tiers[def.tiers.length - 1];
+      fee = price * tier.rate;
+    } else {
+      let remaining = price;
+      let prevMax = 0;
+      fee = 0;
+      for (const t of def.tiers) {
+        const cap = t.maxPrice == null ? Infinity : t.maxPrice;
+        const portion = Math.min(remaining, cap - prevMax);
+        if (portion > 0) {
+          fee += portion * t.rate;
+          remaining -= portion;
+        }
+        prevMax = cap;
+        if (remaining <= 0) break;
+      }
+    }
+  } else if (def.rate != null) {
+    fee = price * def.rate;
+  } else {
+    return null;
+  }
+
+  return parseFloat(Math.max(fee, minFee).toFixed(2));
+}
+
+/**
+ * Recomputes the referral fee at `salePrice` for tiered Amazon categories,
+ * fixing the linear-scaling bug that mis-prices items across tier boundaries.
+ *
+ * The SP-API browse category (e.g. "Clothing, Shoes & Jewelry") is a coarse
+ * umbrella spanning subcategories with different fee schedules: apparel is
+ * tiered 5/10/17, but shoes, handbags and plush under the same umbrella are
+ * flat 15%. We therefore only trust the tier table when SP-API's *own*
+ * referral fee at the estimate price matches what the table predicts there —
+ * that confirms the item really is in the tiered subcategory. Otherwise we
+ * return null so the caller keeps SP-API's accurate per-ASIN value (linear
+ * scaling), which is correct for flat subcategories.
+ *
+ * Returns null when: price invalid, category unmapped, SP-API inputs missing,
+ * or SP-API's rate disagrees with the table at the estimate price.
+ */
+export function computeReferralFee(
+  spApiCategory: string | null | undefined,
+  salePrice: number,
+  feesEstimatePrice: number | null,
+  spApiReferralFee: number | null,
+): number | null {
+  if (salePrice == null || salePrice <= 0) return null;
+  if (!spApiCategory) return null;
+  if (feesEstimatePrice == null || feesEstimatePrice <= 0) return null;
+  if (spApiReferralFee == null || spApiReferralFee < 0) return null;
+
+  const key = REFERRAL_CATEGORY_MAP[spApiCategory];
+  if (!key) return null;
+
+  const cats = (feeData as any).referralFees.categories as Record<string, ReferralCatDef>;
+  const def = cats[key];
+  if (!def) return null;
+
+  // Confirm the item is in this fee schedule: the table's prediction at the
+  // estimate price must match SP-API's actual fee there. Mismatch ⇒ the SP-API
+  // umbrella maps to a different real subcategory (shoes/bags/etc.) ⇒ bail.
+  const predictedAtEstimate = feeFromCatDef(def, feesEstimatePrice);
+  if (predictedAtEstimate == null) return null;
+  const tolerance = Math.max(0.05, 0.02 * spApiReferralFee);
+  if (Math.abs(predictedAtEstimate - spApiReferralFee) > tolerance) return null;
+
+  return feeFromCatDef(def, salePrice);
+}
+
 export function calculateProfit(
   salePrice: number,
   cogs: number,
@@ -211,6 +340,7 @@ export function calculateProfit(
   settings: Settings,
   includeInboundShipping = true,
   isHazmat = false,
+  category: string | null = null,
 ): {
   profit: number;
   roi: number;
@@ -222,8 +352,20 @@ export function calculateProfit(
 } {
   let adjustedReferralFee = referralFee;
   if (feesEstimatePrice && feesEstimatePrice > 0 && salePrice !== feesEstimatePrice) {
-    const referralPct = referralFee / feesEstimatePrice;
-    adjustedReferralFee = parseFloat((referralPct * salePrice).toFixed(2));
+    const tiered = computeReferralFee(category, salePrice, feesEstimatePrice, referralFee);
+    if (tiered != null) {
+      adjustedReferralFee = tiered;
+    } else {
+      // No category mapping (or flat/unknown): preserve SP-API's accurate
+      // per-ASIN rate by scaling it linearly to the new price.
+      const referralPct = referralFee / feesEstimatePrice;
+      adjustedReferralFee = parseFloat((referralPct * salePrice).toFixed(2));
+      if (typeof console !== "undefined") {
+        console.warn(
+          `[referral] tier table not applied for category "${category ?? "null"}" (unmapped, flat, or SP-API rate disagreed at est price) — linear-scaled SP-API referral ${referralFee} from ${feesEstimatePrice} to salePrice ${salePrice} = ${adjustedReferralFee}`,
+        );
+      }
+    }
   }
 
   const hazmatShipExtra = isHazmat ? (settings.hazmatShipSurcharge ?? 0) : 0;
@@ -268,13 +410,24 @@ export function calculateMaxCogs(
   settings: Settings,
   includeInboundShipping: boolean,
   isHazmat: boolean,
+  category: string | null = null,
 ): number | null {
   if (salePrice == null || salePrice <= 0) return null;
   if (fbaFee == null || referralFee == null) return null;
 
   let adjReferralFee = referralFee;
   if (feesEstimatePrice && feesEstimatePrice > 0 && salePrice !== feesEstimatePrice) {
-    adjReferralFee = parseFloat(((referralFee / feesEstimatePrice) * salePrice).toFixed(2));
+    const tiered = computeReferralFee(category, salePrice, feesEstimatePrice, referralFee);
+    if (tiered != null) {
+      adjReferralFee = tiered;
+    } else {
+      adjReferralFee = parseFloat(((referralFee / feesEstimatePrice) * salePrice).toFixed(2));
+      if (typeof console !== "undefined") {
+        console.warn(
+          `[referral] tier table not applied for category "${category ?? "null"}" (unmapped, flat, or SP-API rate disagreed) — linear-scaled SP-API referral in calculateMaxCogs`,
+        );
+      }
+    }
   }
 
   const hazmatShipExtra = isHazmat ? (settings.hazmatShipSurcharge ?? 0) : 0;

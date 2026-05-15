@@ -39,6 +39,7 @@ export function getEstimatedProfit(
     settings,
     includeInboundShipping,
     result.isHazmat ?? false,
+    result.category ?? null,
   );
 }
 
@@ -85,6 +86,7 @@ export function getActualProfit(
     settings,
     includeInboundShipping,
     result.isHazmat ?? false,
+    result.category ?? null,
   );
   return {
     totalProfit: calc.profit * au,
@@ -120,5 +122,6 @@ export function getMaxCogs(
     settings,
     includeInboundShipping,
     result.isHazmat ?? false,
+    result.category ?? null,
   );
 }

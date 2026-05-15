@@ -48,7 +48,8 @@ export function SummaryCards({ results, priceSource, settings, activeFilter, onF
       storage.value,
       settings,
       true,
-      r.isHazmat ?? false
+      r.isHazmat ?? false,
+      r.category ?? null
     );
 
     calculated++;

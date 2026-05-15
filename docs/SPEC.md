@@ -705,6 +705,29 @@ Profitability is recalculated server-side using current settings. The Chrome
 extension sends a minimal payload (`{ asin, cogs?, buy_link?, tags?, notes? }`)
 and AsinFlow recomputes. This keeps logic centralized and avoids drift.
 
+### Tiered referral fees (Clothing, Jewelry, Watches, etc.)
+
+Tiered-category referral fees are computed locally from
+`shared/fee-engine/feeData.json` at the display price via
+`computeReferralFee()` in `shared/schema.ts` — **not** scaled linearly from
+SP-API's estimate-price referral fee. Linear scaling is wrong whenever the
+display price crosses a tier boundary (e.g. Clothing apparel: 5% ≤$15, 10%
+$15.01–$20, 17% >$20 — a sock estimated at $19.94/10% but sold at $25 must be
+17%, not a linearly-scaled 10%).
+
+Two tier semantics exist and are distinguished by `tierMode` in feeData.json:
+- **bracket** (Clothing, Baby, Beauty/Health, Grocery): one rate, chosen by
+  which band the whole price lands in.
+- **marginal** (Jewelry, Watches, Furniture, Fine Art, …): per-portion rates
+  summed across bands. Default when `tierMode` is absent.
+
+The SP-API browse category (`asins.category`) is a coarse umbrella — e.g.
+"Clothing, Shoes & Jewelry" covers tiered apparel **and** flat-15% shoes,
+handbags and plush. So the local recompute is only applied when SP-API's own
+referral fee at the estimate price matches what the tier table predicts
+there; on mismatch (or unmapped/flat category) it falls back to linear
+scaling of SP-API's accurate per-ASIN value and logs a `[referral]` warning.
+
 ### Forward-looking vs backward-looking
 
 Everything in the system has one of two time orientations:

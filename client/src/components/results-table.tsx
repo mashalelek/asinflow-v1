@@ -337,7 +337,8 @@ export function getRowValue(
       storage.value,
       settings,
       true,
-      result.isHazmat ?? false
+      result.isHazmat ?? false,
+      result.category ?? null
     );
   }
 
@@ -410,7 +411,7 @@ export function getRowValue(
       const ar = result.actuals.revenue;
       const ap = getEffectivePrep(result, settings);
       const as2 = getEffectiveStorage(result, settings);
-      const ac = calculateProfit(ar / au, result.actualCogs, result.feesData.fbaFulfillmentFee ?? 0, result.feesData.referralFee ?? 0, result.feesData.feesEstimatePrice, result.catalogData.weightLbs, ap.value, as2.value, settings, true, result.isHazmat ?? false);
+      const ac = calculateProfit(ar / au, result.actualCogs, result.feesData.fbaFulfillmentFee ?? 0, result.feesData.referralFee ?? 0, result.feesData.feesEstimatePrice, result.catalogData.weightLbs, ap.value, as2.value, settings, true, result.isHazmat ?? false, result.category ?? null);
       if (colId === "actProfit") return ac.profit * au;
       if (colId === "actProfitPerUnit") return ac.profit;
       if (colId === "actMargin") return ac.margin;
@@ -431,6 +432,7 @@ export function getRowValue(
         result.feesData.feesEstimatePrice,
         result.catalogData.weightLbs,
         p.value, s2.value, settings, true, result.isHazmat ?? false,
+        result.category ?? null,
       );
     }
     default: return null;
@@ -450,7 +452,8 @@ function isProfitable(result: AsinResult, priceSource: PriceSource, settings: Se
     result.feesData.feesEstimatePrice,
     result.catalogData.weightLbs,
     prep.value, storage.value, settings,
-    true, result.isHazmat ?? false
+    true, result.isHazmat ?? false,
+    result.category ?? null
   );
   return calc.roi >= settings.minRoiThreshold && calc.margin >= settings.minMarginThreshold;
 }
@@ -710,7 +713,8 @@ export function ResultsTable({
                 result.catalogData.weightLbs,
                 prep.value, storage.value, settings,
                 includeInboundShipping,
-                result.isHazmat ?? false
+                result.isHazmat ?? false,
+                result.category ?? null
               );
             }
 
@@ -1587,7 +1591,8 @@ export function renderCell(
         result.catalogData.weightLbs,
         prep2.value, storage2.value, settings,
         includeInboundShipping,
-        result.isHazmat ?? false
+        result.isHazmat ?? false,
+        result.category ?? null
       );
       const total = perUnit.profit * units;
       return (
@@ -1612,7 +1617,8 @@ export function renderCell(
         result.catalogData.weightLbs,
         prep2.value, storage2.value, settings,
         includeInboundShipping,
-        result.isHazmat ?? false
+        result.isHazmat ?? false,
+        result.category ?? null
       );
       return (
         <span className={`font-mono text-sm ${perUnit.profit >= 0 ? "text-emerald-600 dark:text-emerald-400" : "text-red-600 dark:text-red-400"}`}>
@@ -1636,7 +1642,8 @@ export function renderCell(
         result.catalogData.weightLbs,
         prep2.value, storage2.value, settings,
         includeInboundShipping,
-        result.isHazmat ?? false
+        result.isHazmat ?? false,
+        result.category ?? null
       );
       return (
         <span className={`font-mono text-sm ${perUnit.margin >= settings.minMarginThreshold ? "text-emerald-600 dark:text-emerald-400" : "text-red-600 dark:text-red-400"}`}>
@@ -1660,7 +1667,8 @@ export function renderCell(
         result.catalogData.weightLbs,
         prep2.value, storage2.value, settings,
         includeInboundShipping,
-        result.isHazmat ?? false
+        result.isHazmat ?? false,
+        result.category ?? null
       );
       return (
         <span className={`font-mono text-sm ${perUnit.roi >= settings.minRoiThreshold ? "text-emerald-600 dark:text-emerald-400" : "text-red-600 dark:text-red-400"}`}>
@@ -1699,6 +1707,7 @@ export function renderCell(
         result.feesData.feesEstimatePrice,
         result.catalogData.weightLbs,
         prep.value, storage.value, settings, includeInboundShipping, result.isHazmat ?? false,
+        result.category ?? null,
       );
       if (mc == null) return <span className="text-muted-foreground text-sm">—</span>;
       if (mc < 0) return <span className="font-mono text-sm text-red-500">-{fmt(Math.abs(mc))}</span>;
