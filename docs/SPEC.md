@@ -488,6 +488,64 @@ Note: Col Y was historically prep-inclusive but has been cleaned up — prep is
 now in Col AS exclusively. Any `actual_cogs` values in the DB from older PO
 syncs are "dirty" until the next sync overwrites them with clean Col Y data.
 
+### Google Sheets sourcing sheet (insert-only)
+
+- **Sheet ID:** `1i4kUDG02qIMnhVnSjJ6LRZTuWFNzvP1SVKAmRoXS6kU` (separate from the PO tracker)
+- **Tab name:** `ASINs`
+- **Range:** `ASINs!A2:AS`
+- **Configured via:** `SOURCING_SHEET_ID` env var (mirrors `GOOGLE_SHEET_ID` pattern)
+
+Column mappings:
+
+| Column | Index | Field | Notes |
+|---|---|---|---|
+| E | 4 | Status | `.toLowerCase().includes("discontinued")` triggers archive (new-insert only) |
+| I | 8 | ASIN | Match key, `.trim()` |
+| N | 13 | Buy Link | Written to `asins.buy_link`; supplier derived via `extractDomain` |
+| S | 18 | Est. COGS | Written to `asin_estimates.estimated_cogs`, `estimated_cogs_source = 'csv'` |
+| AP | 41 | VA notes | Combined into `asins.notes` |
+| AS | 44 | My notes | Combined into `asins.notes` |
+
+**⚠️ Col AS means different things per tab.** On the PO `Orders` tab, Col AS =
+Prep cost (numeric). On THIS `ASINs` tab, Col AS = "My notes" (free text).
+The two sheet clients live in separate files (`server/google-sheets.ts` for PO,
+`server/sourcing-sheet.ts` for sourcing) and the tab name is hardcoded in each
+so they can never cross.
+
+**Insert-only model.** AsinFlow is the source of truth. The sourcing sync:
+
+- **Always skips ASINs that already exist in the `asins` table** — no update,
+  no archive, no analyze. The sheet's only job is to add new ASINs to AF.
+- For NEW ASINs (not yet in AF), runs the full analyze pipeline (SP-API
+  pricing/catalog/fees/eligibility/hazmat) and inserts via the same write path
+  CSV upload uses, with `estimated_cogs_source = 'csv'`.
+- For NEW ASINs whose collapsed status contains "discontinued" (case-insensitive
+  `.includes`), inserts and analyzes them, THEN sets `is_active = false` so
+  they land in the Archived view. This is the only place the sync writes
+  `is_active`, and only on rows it just inserted.
+- An ASIN with multiple sheet rows is collapsed to one record per field:
+  first non-empty value wins (mirrors `google-sheets.ts`'s "first non-canceled
+  row per ASIN" pattern — top-of-sheet is canonical).
+- Archive-on-insert requires EVERY status row for that ASIN to contain
+  "discontinued" (empty status exempts). A single "order" row anywhere keeps
+  the ASIN unarchived.
+
+Notes combination: `My notes: {AS}\nVA notes: {AP}` — each line only if that
+cell is non-empty. Both empty → `notes = NULL`. Appended via
+`appendNotesForAsin` so re-inserts dedupe.
+
+COGS parsing: Col S goes through the shared `parseMoney` helper
+(`shared/parse-money.ts`) — strips `$`/`,`/whitespace, returns `null` on
+unparseable. Null cogs is acceptable: the new ASIN inserts with `cogs = 0`
+(intentionally diverges from the CSV path, which skips NaN-cogs rows).
+
+Triggers:
+- Manual: `POST /api/sync/sourcing-sheet` (NDJSON-streaming, auth-gated). Wired
+  to the "Sync Sourcing" toolbar button on the home page.
+- Scheduled: `cron.schedule("0 9 * * *")` = 5:00 AM EST, one hour before the
+  inventory sync so newly-pulled ASINs are included in today's inventory + price
+  passes. Defined in `server/sourcing-sync-cron.ts`.
+
 ### SP-API
 
 Currently used endpoints:
@@ -498,8 +556,10 @@ Currently used endpoints:
   max range; chunked sequentially with 2-second delays)
 - Listings Restrictions API (`/listings/2021-08-01/restrictions`) — ungating
   status check
-- `getCompetitivePricing` / `getItemOffers` — pricing and seller counts
-  (`Summary.TotalOfferCount` for total seller count when implemented)
+- `getItemOffers` (`GET /products/pricing/v0/items/{Asin}/offers`) — competing
+  offer prices; **implemented** (drives the offer-add price resolver, §18).
+- `getCompetitivePricing` — pricing / seller counts; `Summary.TotalOfferCount`
+  for total seller count is **not yet built**.
 
 Not yet integrated:
 
@@ -653,7 +713,7 @@ that writes it:
 | `buy_link`, `supplier` | CSV upload / manual edit / Chrome extension |
 | Tags, notes | Manual / CSV upload / Chrome extension |
 | `is_wholesale`, `is_oa` | Manual edit |
-| `is_active` (archive) | Manual edit |
+| `is_active` (archive) | Manual edit / Sourcing sync (only on freshly-inserted discontinued rows — never on pre-existing ASINs) |
 
 When a code path needs to touch a field outside its ownership, that's a red
 flag. Either the architecture is wrong, or the workflow is misnamed.
@@ -906,3 +966,370 @@ The "all duplicates" case still surfaces the dialog with the same options.
   SPEC.md?" — not "did Claude remember?"
 - Periodic refresh: review the whole doc every few weeks or when a major
   feature ships. Stale rules are worse than missing ones.
+
+## 18. Add Offer to Seller Central (Offer-Only Listing Creation)
+
+AsinFlow's first **write** operation against SP-API. Adds the seller's own
+offer to an ASIN that already exists in Amazon's catalog ("offer-only
+matching" — not product creation). From the user's perspective the ASIN
+becomes a new entry in the AF catalog, but no title/image/description is
+supplied — only sales terms (SKU, price, condition, fulfillment).
+
+Triggered by selecting ASINs in the list and clicking **Add to SC**, or via
+the per-row **+** button.
+
+### Mechanism
+
+- API: `putListingsItem` (Listings Items API, 2021-08-01) with
+  `requirements: "LISTING_OFFER_ONLY"` and `productType: "PRODUCT"`.
+- The ASIN attaches via the `merchant_suggested_asin` attribute. A blank
+  product-ID makes Amazon create a NEW listing (duplicate ASIN), so this
+  must always be populated.
+- **Required first step:** call `getDefinitionsProductType` to obtain the
+  correct attribute shape before building the payload. Skipping this produces
+  `4000001 "invalid value"` errors. Do not hardcode the attribute structure.
+- Fulfillment: **FBA always.** Set the FBA `fulfillment_channel_code` and
+  **omit the quantity field entirely.** For an AFN/FBA SKU, quantity is owned
+  by Amazon (set from warehouse receipts); sending any quantity value
+  (including `0`) risks flipping the SKU to merchant-fulfilled.
+
+### Always-present offer attributes
+
+Sent on every payload, not gated by category/brand/product:
+
+- `condition_type` — `new_new` (New)
+- price (see Price Resolution)
+- `batteries_required` — always `No` today (hardcoded). TODO: per-ASIN battery
+  flag (`offer-add.ts` — no per-ASIN logic exists yet).
+- `supplier_declared_dg_hz_regulation` — default `Not Applicable`; set to
+  `consumer_commodity` when AF **live-derives the ASIN as a dangerous good**
+  (`attributes.hazmat` present at submit time — NOT the `is_hazmat` flag)
+
+`batteries_required` and `supplier_declared_dg_hz_regulation` are NOT
+category-specific. Treat them as universally required.
+
+### Gating
+
+Gated ASINs cannot receive an offer. Excluded before submission via the
+eligibility data: gate predicate is `eligibility_status !== 'yes'`, read from
+`asin_estimates` (written by the analyze path — see `GATED_SQL`,
+`server/sku-resurrection.ts`). The former `asins.is_gated` / `gating_reason`
+columns were dropped (migration `014_drop_dead_gating_columns.sql`);
+`eligibility_status` on `asin_estimates` is the sole gating source. No offer
+payload is built for a gated ASIN.
+
+### Expiration attributes
+
+Expiration attributes are NOT part of offer creation (they belong to the
+shipment-creation step). If `putListingsItem` returns an expiration-related
+issue during an offer add, treat it as a **failed offer** — not a benign
+"Successful with other errors."
+
+### Dead ASINs
+
+An ASIN whose product has been removed from Amazon's catalog returns 404
+(`NOT_FOUND`) from `getCatalogItem`. This is a reliable, binary dead-ASIN
+signal (confirmed: live ASINs return data, dead ones 404, no false positives).
+A dead ASIN cannot receive an offer — the generator hard-fails and the
+offer-add preview surfaces "dead ASIN — cannot create offer" and excludes it.
+(A separate, parked feature will flag/archive dead ASINs catalog-wide.)
+
+### Price Resolution
+
+Offer price is set by priority:
+
+1. **Default (≥1 competing offer):** highest competing offer **× 1.30**, rounded UP to the next `.99`.
+2. **No competing offers:** price solved for **100% ROI** on our COGS.
+
+Rule 1 is the default whenever any competing offer exists. Rule 2 applies only
+when the listing has zero competing offers.
+
+**Implementation (verified 2026-07-06, read-only trace):** the offer-add path
+calls `getItemOffers` (`GET /products/pricing/v0/items/{Asin}/offers`, ~0.5 rps)
+via `fetchCompetingOffers` (`server/listings-offers-fetch.ts`). It does **NOT**
+reuse `getPricing` data, and **lowest FBA is never the anchor**.
+
+- **"Competing"** = the **landed price** (`ListingPrice + ShippingPrice`) of
+  **every offer from OTHER sellers — FBA and FBM both**. Our own offers are
+  filtered out by seller ID, so the price is never set against ourselves.
+- **Rule 1 anchor** = `Math.max` of that competing list — the **single highest
+  competing offer of any fulfillment type** (NOT the buy box, NOT lowest FBA,
+  NOT a median). Price = anchor × 1.30, rounded UP to the next `.99`
+  (`ceilToNext99`).
+
+**Rule 2 (0 competing offers)** requires an inverse solve (ROI → price), not a
+direct profitability check. `shared/profitability.ts` helpers gate "is this
+price profitable"; they don't solve for a target price. A **bisection over
+`calculateProfit`** targets `roi === 100`, since FBA/referral fees vary
+nonlinearly with price; the result is rounded UP to `.99` (protects the ROI
+floor — resulting ROI is always ≥ target). Two guards short-circuit it:
+- **`skip_no_cogs`** — COGS is null or ≤ 0 → 100% ROI can't be solved without
+  cost; the ASIN is skipped, not priced.
+- **`skip_unreachable`** — 100% ROI isn't achievable within the price search
+  range (extreme fee/prep structure) → skipped.
+
+**Expected side effect — high placeholder pricing.** Anchoring on the *max*
+competing offer can land **far above the buy box** when a high outlier exists
+(observed: a `$69` FBA outlier among offers clustered `$46–60` →
+`$69 × 1.30 = $89.99` submitted → Amazon `18555` / `LISTING_SUPPRESSED`). This
+is **designed behavior**: the offer-creation price is a deliberately high
+placeholder; the repricer (Seller Snap) and the FBA check-in review own the
+real selling price. **`18555` suppressions on freshly-created offers are
+expected, not defects** — the verification ledger surfaces them
+(`terminal_conflict`) for visibility, not as failures.
+
+### SKU Format
+
+```
+BRD-DEP-AS3-TTL-NNN-X
+```
+
+| Segment | Chars | Meaning |
+|---|---|---|
+| BRD | 3 | Brand code (from legend) |
+| DEP | 3 | Department / top-level category (from legend) |
+| AS3 | 3 | Last 3 chars of the ASIN — MANDATORY in every SKU |
+| TTL | 3 | Product title code (auto-derived) |
+| NNN | 3 | Product number |
+| X | 1 | Variant suffix — ONLY for a duplicate offer on the SAME ASIN |
+
+- AS3 is present in every SKU. It auto-disambiguates the "same product,
+  different ASIN" case (two ASINs of one product produce different AS3).
+- There is **no SUB (sub-category) segment.** A full-catalog scan found 755
+  distinct sub-categories (390 needed to cover 80% of ASINs) — a scattered
+  long-tail that produced opaque, colliding codes with no grouping value. SUB
+  was dropped from the format entirely, and no `sub_category` column is
+  stored.
+- TTL is auto-derived from the product's core name: deterministic, 3-char,
+  word tokens must start with a letter (drops model-number/digit noise, e.g.
+  "Aqua King 790PSC10 Filter, 25Micron" → FMR). TTL collisions are
+  acceptable — NNN disambiguates; TTL is a hint, not a key.
+- Variant suffix is ONLY for a duplicate offer on the same ASIN.
+- Allowed chars: letters, digits, hyphens. Under 40 chars total.
+
+### Catalog data source (live fetch)
+
+The generator **live-fetches** catalog data from `getCatalogItem` at
+SKU-creation time — it does NOT depend on AF having analyzed the ASIN first.
+This means stale/un-enriched ASINs just work; only truly-dead (404) ASINs
+fail.
+
+- `category` (top-level) — read from the **classifications chain top-level**,
+  NOT `salesRanks[].displayName`. The DEP legend was seeded from the
+  classifications-chain values; reading category from a different source
+  (salesRanks) produces legend mismatches (e.g. "Coffee" vs "Grocery &
+  Gourmet Food"). A regression test pins this: an ASIN whose salesRanks and
+  classifications top-levels differ must use the classifications value.
+- `brand` — from `summaries[].brand`.
+- Missing brand or unresolvable DEP → `legend_pending` (awaits approval).
+  Missing category leaf or 404 → hard-fail.
+
+**Self-heal write:** after a successful catalog fetch, the resolver writes
+`category` and `brand` (and `title`, `image_url`) back to `asins`,
+COALESCE-only (refresh only when the API returns non-null). Catalog-data
+ownership per §14 — `getCatalogItem` is an analyze data source. Never touches
+COGS, tags, notes, buy_link, supplier, is_active, prep, or estimate fields.
+
+### Brand / Department Legend
+
+Persistent `sku_legend` table maps real-world brand→BRD and category→DEP
+codes. The legend is **authoritative**; algorithmic derivation is only a
+fallback proposer for codes not yet in the legend, and a derived code is
+surfaced for approval (`legend_pending`) before it's committed — never
+silently applied.
+
+- Seed: AminoGenesis → AMG; 23 department codes from the catalog's distinct
+  top-level categories (BPC for Beauty & Personal Care, SPC for Sports
+  Collectibles resolving the SPO collision with Sports & Outdoors, etc.).
+- Brand consistency: one code per real brand even across name variants —
+  **brand aliases** map multiple raw brand names to one code (AminoGenesis /
+  AminoGenesis Cosmetics → AMG; CerMedia / MarinePure → one code). The
+  approval flow must allow attaching aliases / merging a pending brand into an
+  existing code, so a variant name never splits a brand into two codes.
+- Department consistency: never two DEP codes for one category.
+- No SUB codes — SUB is not part of the format.
+
+### SKU Resolution (resurrection)
+
+There is **no SKU ledger** — the `listing_submissions` verification ledger
+(§19) tracks *submissions*, not SKU history. SP-API's listings endpoints
+return 404 for deleted SKUs (no readable "deleted" status), but `asin_skus`
+already retains every SKU AF has seen — written by **two** paths:
+`getInventorySummaries` (FBA inventory API, long horizon) **and** the offer-add
+path's optimistic submit-time write on ACCEPTED (`offer-add.ts`).
+Append-accumulate, never pruned. So `asin_skus` is the SKU-history source; no
+separate ledger is needed.
+
+Per ASIN at offer-add:
+
+1. Read the ASIN's prior SKU(s) from `asin_skus`.
+2. If any match the current SKU format, prefer the **most recent** match
+   (by `created_at`) → candidate for reuse.
+3. Live status check (`getListingsItem`) on that SKU for THIS ASIN:
+   - 404 / absent (deleted) → reuse the matched SKU.
+   - present (active / closed / out-of-stock) → a live offer already exists →
+     duplicate-offer WARNING path, not resurrection.
+4. If no `asin_skus` SKU matches the current format → generate a new SKU.
+
+Any non-conforming prior SKU (legacy AMG `BRD-DD-...` with no AS3,
+Amazon-random, all-digit, prep-center-created like `PFL_...`) does not match
+the current format and is therefore regenerated, never reused. No legacy
+allowlist, no subtypes, no quarantine — the format check is the sole
+discriminator.
+
+**`asin_skus` membership ≠ "listing is alive."** It means "FBA inventory has
+observed this SKU **or** AF optimistically wrote it at submit time." Because
+that submit-time write fires on ACCEPTED — before any inventory, and even for
+submissions that later ghost (async-failed / suppressed) — **presence does not
+even guarantee the listing ever materialized.** The live status check
+(`getListingsItem`, step 3) is what makes reuse safe; never infer listing state
+from `asin_skus` presence.
+
+### Duplicate-offer confirmation
+
+If the ASIN already has a live offer (the status check returns present),
+prompt before creating an additional offer:
+
+> "[ASIN, TITLE] is already in your catalog. Create an additional offer?"
+
+On confirm, proceed and assign the next variant suffix.
+
+### Write flow (dry-run first)
+
+Per AF's dry-run-before-live-writes principle, and because this is the first
+live write to Seller Central:
+
+1. User selects ASINs → **Add to SC** (selection-aware), or per-row **+**.
+2. Per ASIN, AF resolves: SKU (reuse or generate), price, full payload.
+   Gated, dead, and `legend_pending` ASINs are surfaced and excluded /
+   gated for approval.
+3. Dry-run preview renders SKU + price + payload per ASIN. The preview must
+   clearly show "reusing existing SKU X" vs "generating new SKU Y" — since
+   there is no ledger, the preview is the only check that the right SKU
+   resolved. Duplicate-offer confirmations surface here.
+4. On explicit confirm, AF fires `putListingsItem` per ASIN.
+5. Issues are surfaced per ASIN; expiration issues count as failures.
+
+### Source-of-truth ownership
+
+| Field | Owner |
+|---|---|
+| Offer creation (putListingsItem) | Add-Offer path (only writer) |
+| Offer price at creation | Add-Offer path (price resolver) |
+| `sku_legend` entries (brand/dept codes, aliases) | Add-Offer approval flow |
+| `category`, `brand` (self-heal) | Add-Offer catalog fetch (per §14 catalog ownership) |
+
+The Add-Offer path does NOT modify user-controlled fields (COGS, tags, notes,
+etc.).
+
+## 19. Post-Submit Verification (Submission Ledger)
+
+`putListingsItem` returning **ACCEPTED** is only synchronous validation —
+Amazon then processes the offer asynchronously (minutes to hours), and any
+downstream step can suppress or reject it. ACCEPTED is therefore **never**
+rendered as "created/live." A batch audit found ~1-in-8 submissions were
+silent ghosts (e.g. restricted-generic `5886`, suppressed `13013`), invisible
+until manual checking. This system records every submission and resolves its
+real state on demand.
+
+No background jobs / notifications infra: verification is an on-demand,
+read-only sweep against SC plus status writes to the ledger.
+
+### Ledger: `listing_submissions`
+
+One row per `putListingsItem` **fire** (not per SKU), written best-effort at
+submit time — a ledger-write failure must never mask a real SC submission.
+Columns: `asin`, `sku`, `submission_id`, `submitted_price`, `submitted_at`,
+`verify_status`, `verified_at`, `verdict_source`, `issues` (jsonb),
+`review_flags` (text[]), `terminal_conflict`.
+
+### Six states
+
+| state | meaning |
+|---|---|
+| `pending` | submitted, not yet probed |
+| `processing` | verified, not materialized yet, no terminal signal → re-verify later |
+| `live` | listing materialized (status/offer present) |
+| `failed` | not materialized AND a conclusive terminal signal present |
+| `stale` | `processing` older than the window → needs a manual verdict |
+| `deleted` | manual verdict: the listing was intentionally removed in SC |
+
+### Verify sweep (on-demand, paced, fail-closed)
+
+`POST /api/submissions/verify` sweeps every non-terminal row
+(`pending`/`processing`/`stale`), paced for the Listings API rate limit.
+Primary probe is `getListingsItem` (`summaries,issues,offers,fulfillmentAvailability`);
+on a 404 it **falls back to `searchListingsItems` by ASIN** to catch a listing
+that materialized under a drifted SKU. **Fail-closed:** a throttled/5xx probe
+leaves the row **unchanged in whatever state it was** (a `processing` row stays
+`processing`, keeping its stale clock) — never a guessed verdict. Idempotent
+and safe to re-run — expected to run the morning after a batch, once async
+processing has settled.
+
+### Classifier (precedence order)
+
+Evaluated per probed listing, in this order:
+
+1. **Materialized → `live`.** `summaries[0].status` non-empty OR an offer/
+   fulfillment is present. Any ERROR-severity issues are surfaced as
+   **`review_flags`** (visible, not just JSONB) — they do **not** downgrade a
+   materialized listing. *ERROR severity ≠ failed* (a live, buyable listing
+   routinely carries an `18555` price advisory).
+2. **Precedence guard:** if a **terminal signal is present alongside a
+   materialized listing**, it is still `live` but `terminal_conflict = true`
+   with a prominent "verify manually" review flag — never silently `live`.
+3. **Terminal signal + not materialized → `failed`.** Terminal = an issue code
+   in the **observed terminal set `{5886, 13013}`** OR an enforcement action
+   `LISTING_SUPPRESSED`. The code set is **observed, not inferred** — extend it
+   deliberately from re-probed evidence; **never infer terminality from issue
+   severity.**
+4. **Otherwise → `processing`.** Empty status, transient issues (e.g. an `8541`
+   matching-conflict that later resolves), unknown codes, or an ASIN not yet
+   indexed. Defaults toward not-failed.
+
+A `processing` row older than **48h** is promoted to `stale` (needs a human
+verdict). There is no submission-status API to poll and no processing SLA, so
+time alone never forces `failed`.
+
+### Manual verdicts
+
+`POST /api/submissions/{id}/resolve` with `verdict ∈ {live, failed, deleted}`,
+allowed on **any non-terminal row** (`pending`/`processing`/`stale`) — not
+stale-only; stale is merely when we *prompt*, a human may answer earlier.
+Already-resolved rows are rejected (409). Every verdict records `verdict_source`
+= `api` (sweep) or `manual` (human).
+
+**Rationale for the manual flow:** a listing the user deleted in SC is
+**API-indistinguishable** from a silent ghost — both read as absent with no
+terminal signal. The VA can also delete listings AF never recorded. So the
+resolution flow must let a human state "this was deleted," rather than the
+system inferring failure.
+
+**`deleted` scope:** touches **only** the ledger row and `asin_skus.is_primary`
+(demoted to false). It **never** writes the analyze-owned `asins` fields
+(`in_catalog`, `primary_sku`) — those are §14-owned and self-correct on the
+next analyze; deleting one SKU doesn't mean a multi-offer ASIN has no live
+offer. The `asin_skus` row is kept, so resurrection can reuse a 404'ing SKU.
+
+### Backfill = repair path
+
+`script/backfill-listing-submissions.ts` seeds ledger rows from `asin_skus`
+(canonical-SKU-format filter, so inventory-observed SKUs aren't mistaken for AF
+submissions; `submission_id`/`submitted_price` are NULL for pre-ledger rows). It
+is **idempotent by (asin, sku)** and therefore doubles as the **repair path for
+any submission whose best-effort ledger write failed** — re-running fills gaps
+without duplicating. Preserve that property across refactors.
+
+The ledger is per-fire, but the backfill is idempotent by `(asin, sku)` — so
+for a resubmitted SKU it guarantees the pair is *tracked*, not one row per
+historical fire. For pre-ledger or repair-path rows the ledger is therefore
+**not a complete fire count.** That is acceptable — do **not** "fix" the
+backfill into inserting duplicate rows.
+
+### Relationship to `asin_skus`
+
+`listing_submissions` tracks **submissions and their verified state**;
+`asin_skus` remains **SKU history** (§18 "no SKU ledger" still holds — this is
+not a SKU ledger). Both can name the same SKU: `asin_skus` says "this SKU was
+observed/submitted," `listing_submissions` says "this specific submission
+resolved to live/failed/deleted."
