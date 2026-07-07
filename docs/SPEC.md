@@ -630,6 +630,21 @@ reader, and Aura consumes what the PO sync already wrote to AF. Design:
 - **Auth:** Aura API via the `AURA_API_KEY` env var (HTTP Basic — key as
   username, empty password).
 
+**Implemented** (`server/aura-cost-sync.ts`): dry-run (`script/aura-dry-run.ts`)
++ capped live push (`script/aura-push.ts --limit=<n|all>`). Write contract is
+`POST /listings/:id?currency=<listing.currency>&cost=<cents>` — **form/query
+params, not a JSON body** (a JSON body is silently ignored → 2xx no-op), and
+`currency` is **required** alongside `cost`. Persistence is verified from the
+POST response object (`response.cost === sent`) plus a list-endpoint re-fetch.
+No cron / route / toolbar button yet.
+
+Skip semantics (learned in implementation):
+- **Computed cost ≤ 0 is skipped fail-closed** (`SKIP:zero_cost`) — Aura rejects
+  `cost=0`, and a zero COGS in AF indicates dirty data, not a real cost.
+- **Unmapped SKUs are expected and correctly skipped** — Aura retains deleted SC
+  listings, and never-stocked listings are invisible to `asin_skus`. No backfill
+  planned.
+
 ---
 
 ## 12. Roadmap (Planned, Not Built)
