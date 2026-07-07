@@ -470,19 +470,33 @@ YYYY-MM-DD_SupplierName_OrderID
 ### Google Sheets PO tracker
 
 - **Sheet ID:** `1WC7r4Z-fIVENFoj_Z14rAgXs2U4Etue0BM065DPGl7Q`
-- **Tab name:** `Orders`
+- **Tab name:** `Sheet1` — the range in `server/google-sheets.ts` is literally
+  `Sheet1!A2:AS`; the PO data lives on the first tab, named "Sheet1".
 - **Range:** `A2:AS` (extends through Col AS for prep cost)
 
-Column mappings used by AsinFlow:
+Column mappings used by AsinFlow (indices 0-based from Col A):
 
 | Column | Index | Field | Notes |
 |---|---|---|---|
-| U | 20 | Ordered qty | Excluded if status contains "closed" or "canceled" |
-| Y | 24 | COGS | True product cost only (prep removed). First non-canceled row per ASIN |
-| AS | 44 | Prep cost | Empty cell on a real PO row → write `0`, not `NULL` |
+| D | 3 | Status | `.toLowerCase().includes()` — drives the canceled/closed filters |
+| H | 7 | ASIN | Match key, `.trim()` |
+| U | 20 | Ordered qty | Net (qty − shipped) summed only for rows that are neither closed nor canceled |
+| Y | 24 | COGS | True product cost only (prep removed). See selection rule below |
+| AS | 44 | Prep cost | Per unit. Empty cell on the selected row → `0`, not `NULL` |
 
-Status filtering uses `.toLowerCase().includes()` for compound statuses
-(e.g., "Closed, Returned" matches "closed").
+**Selection rule (COGS / prep / supplier).** These come from the **first
+NON-CANCELED row per ASIN whose Col Y parses to a non-null money value**. The
+accumulator gate is "no COGS locked yet," so a leading non-canceled row with a
+blank/unparseable Col Y does NOT lock selection — a later non-canceled row can
+still win. Prep (Col AS) and supplier (Col E, idx 4) are read from that same
+winning row (coupled to the COGS selection).
+
+**"Closed" rows remain COGS-eligible.** Only `canceled` excludes a row from
+COGS/prep/supplier selection; `closed` only excludes the row from the
+`orderedQty` sum. Status filtering uses `.toLowerCase().includes()` for
+compound statuses (e.g., "Closed, Returned" matches "closed"; "Closed, Missing
+/ Damaged from Supplier" matches "closed" but not "canceled", so it stays
+COGS-eligible).
 
 Note: Col Y was historically prep-inclusive but has been cleaned up — prep is
 now in Col AS exclusively. Any `actual_cogs` values in the DB from older PO
@@ -506,7 +520,7 @@ Column mappings:
 | AP | 41 | VA notes | Combined into `asins.notes` |
 | AS | 44 | My notes | Combined into `asins.notes` |
 
-**⚠️ Col AS means different things per tab.** On the PO `Orders` tab, Col AS =
+**⚠️ Col AS means different things per tab.** On the PO `Sheet1` tab, Col AS =
 Prep cost (numeric). On THIS `ASINs` tab, Col AS = "My notes" (free text).
 The two sheet clients live in separate files (`server/google-sheets.ts` for PO,
 `server/sourcing-sheet.ts` for sourcing) and the tab name is hardcoded in each
@@ -576,15 +590,45 @@ Not yet integrated:
   cross-check AsinFlow's Actuals.
 - **Keepa** — price history (graph URL pattern in code)
 
-### Seller Snap (planned)
+### Aura repricer (planned)
 
-When implemented, COGS and MIN prices will be pushed via Seller Snap API.
-Inventory age buckets:
+Repricing is handled by **Aura** (goaura.com). When implemented, COGS and MIN
+prices will be pushed to Aura strategies (not the former Seller Snap API).
+Inventory age buckets for the MIN floor:
 - 0–60 days → 15% ROI floor
 - 61+ days → 0% ROI floor (liquidation candidates)
 
 Watch List for liquidation candidates surfaces in-app with manual approval
 required before pushing MIN price overrides.
+
+### Aura cost sync (planned)
+
+One-directional **AF DB → Aura** cost push (never Aura → AF). It reads AF data
+read-only and writes only to Aura — **no AF DB writes, no AF schema changes**.
+It does **not** read the Google Sheet: the PO sync remains the sheet's sole
+reader, and Aura consumes what the PO sync already wrote to AF. Design:
+
+- **Source (read-only):** `asin_estimates.actual_cogs` + `prep_override`. Manual
+  `actual_cogs` overrides flow through by design — whatever AF holds is what's
+  pushed.
+- **Mapping:** Aura's API exposes **SKU only, no ASIN** — bridge Aura listing
+  `sku` → `asin_skus` → `asins` to reach the estimate row.
+- **Cost pushed** = (`actual_cogs` + `prep_override`) **per unit, integer
+  cents**. Aura's cost/price fields are integer minor units (e.g.
+  `current_price` `3999` = $39.99).
+- **NULL `prep_override` → treated as `$0`** for the push, and **flagged in the
+  sync report** (mirrors the §3 prep-warning semantics — an absent prep value is
+  a $0 assumption worth surfacing, not silent).
+- **Fail-closed (skip + report, never guess):** unmapped SKU (no `asin_skus`
+  row), ambiguous SKU (one SKU resolving to multiple ASINs), and NULL
+  `actual_cogs` are skipped and reported — nothing is pushed for them.
+- **Idempotent:** no API write when Aura's stored cost already matches the
+  computed cents value; only changed costs are sent.
+- **Runs after the PO sync** in the daily chain (so it pushes freshly-synced
+  costs), plus a manual trigger. **Dry-run before any live push**, per AF's
+  dry-run-before-writes principle.
+- **Auth:** Aura API via the `AURA_API_KEY` env var (HTTP Basic — key as
+  username, empty password).
 
 ---
 
@@ -603,7 +647,8 @@ In rough priority order:
    on PO module.
 4. **Actuals data audit + Finances API integration** — see Section 13. The
    single largest data integrity issue in the system.
-5. **Seller Snap COGS + MIN price automation** — depends on PO module
+5. **Aura COGS + MIN price automation** — depends on PO module (§11 "Aura cost
+   sync" + "Aura repricer")
 6. **Auth + cloud deploy** — currently local-only
 7. **Chrome extension rebuild** — injected content panel architecture
    (replaces the scrapped Side Panel approach)
@@ -714,6 +759,7 @@ that writes it:
 | Tags, notes | Manual / CSV upload / Chrome extension |
 | `is_wholesale`, `is_oa` | Manual edit |
 | `is_active` (archive) | Manual edit / Sourcing sync (only on freshly-inserted discontinued rows — never on pre-existing ASINs) |
+| Aura listing cost (external, not an AF column) | Aura cost sync path (§11) — reads `asin_estimates`, writes only to Aura |
 
 When a code path needs to touch a field outside its ownership, that's a red
 flag. Either the architecture is wrong, or the workflow is misnamed.
@@ -1073,7 +1119,7 @@ competing offer can land **far above the buy box** when a high outlier exists
 (observed: a `$69` FBA outlier among offers clustered `$46–60` →
 `$69 × 1.30 = $89.99` submitted → Amazon `18555` / `LISTING_SUPPRESSED`). This
 is **designed behavior**: the offer-creation price is a deliberately high
-placeholder; the repricer (Seller Snap) and the FBA check-in review own the
+placeholder; the repricer (Aura) and the FBA check-in review own the
 real selling price. **`18555` suppressions on freshly-created offers are
 expected, not defects** — the verification ledger surfaces them
 (`terminal_conflict`) for visibility, not as failures.
