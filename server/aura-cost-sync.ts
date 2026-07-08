@@ -256,6 +256,7 @@ export interface PushResult {
   skipped: number;   // non-PUSH verdicts (SKIP:* + UNCHANGED)
   remaining: number; // PUSH rows beyond --limit, not attempted this run
   variantsUsed: Record<string, number>; // which write variant succeeded
+  dryRunSummary: DryRunSummary;         // per-verdict / per-status breakdown
   failures: PushFailure[];
   readback: PushReadback[]; // belt-and-suspenders list re-fetch of ≤5 pushed
 }
@@ -267,7 +268,7 @@ export async function pushAuraCosts(
   opts: { limit: number | "all"; get?: AuraGet; query?: QueryLike },
 ): Promise<PushResult> {
   const get = opts.get ?? realAuraGet;
-  const { rows } = await buildAuraDryRun({ get, query: opts.query });
+  const { rows, summary: dryRunSummary } = await buildAuraDryRun({ get, query: opts.query });
 
   const pushRows = rows.filter((r) => r.verdict === "PUSH");
   const skipped = rows.length - pushRows.length; // SKIP:* + UNCHANGED
@@ -305,5 +306,5 @@ export async function pushAuraCosts(
     }
   }
 
-  return { attempted: toPush.length, pushed: pushedRows.length, failed: failures.length, skipped, remaining, variantsUsed, failures, readback };
+  return { attempted: toPush.length, pushed: pushedRows.length, failed: failures.length, skipped, remaining, variantsUsed, dryRunSummary, failures, readback };
 }

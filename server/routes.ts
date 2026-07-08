@@ -13,6 +13,7 @@ import { syncSuppressionData } from "./suppression-sync";
 import { fetchSheetData } from "./google-sheets";
 import { refreshPrices } from "./price-sync";
 import fs from "fs";
+import { runAuraSyncChain } from "./aura-sync-chain";
 
 const TAG_COLORS = ["#3B82F6", "#EF4444", "#10B981", "#F59E0B", "#8B5CF6", "#EC4899", "#14B8A6", "#F97316", "#6366F1", "#84CC16"];
 
@@ -489,6 +490,14 @@ async function runSheetsSync(): Promise<{ updated: number; skipped: number; erro
   }
 
   return { updated, skipped, errors };
+}
+
+// Getter so the Aura sync chain (a separate module) can invoke the exact same
+// PO sync the /api/sheets/sync route uses — one shared implementation, no
+// divergence. Mirrors getRunAnalyzeCore; leaves runSheetsSync itself untouched
+// and avoids a routes ↔ aura-sync-chain import cycle at module-load time.
+export function getRunSheetsSync() {
+  return runSheetsSync;
 }
 
 export async function registerRoutes(
@@ -1083,6 +1092,24 @@ export async function registerRoutes(
       res.json({ count: asinList.length, archived: archive });
     } catch (err: any) {
       res.status(500).json({ message: err.message });
+    }
+  });
+
+  // Manual trigger for the PO → Aura cost-sync chain. Same shared function the
+  // aura-sync cron calls (server/aura-sync-chain.ts), so they can't diverge.
+  app.post("/api/sync/aura", async (_req: Request, res: Response) => {
+    if (!isDbAvailable()) { res.status(503).json({ message: "Database not available" }); return; }
+    const credPath = process.env.GOOGLE_CREDENTIALS_PATH;
+    if (!credPath || !fs.existsSync(credPath)) {
+      res.status(400).json({ message: "Google credentials file not found" }); return;
+    }
+    if (!process.env.GOOGLE_SHEET_ID) { res.status(400).json({ message: "GOOGLE_SHEET_ID not configured" }); return; }
+    if (!process.env.AURA_API_KEY) { res.status(400).json({ message: "AURA_API_KEY not configured" }); return; }
+    try {
+      const summary = await runAuraSyncChain(); // PO sync (hard dep) → Aura live push
+      res.json(summary);
+    } catch (err: any) {
+      res.status(500).json({ message: `Aura sync chain failed: ${err?.message ?? err}` });
     }
   });
 
