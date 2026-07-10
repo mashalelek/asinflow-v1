@@ -96,11 +96,13 @@ purposes and have separate ownership.
   sales.
 - "What did the units I sold actually cost."
 - Source labels (`cogs_source`): `po_sheet`, `csv`, `manual`.
-- Written by: PO sync (current source of truth), CSV upload during first
-  ingestion, manual inline edit (interim — will be removed once the PO
-  module is the sole source).
-- Inline-editable in the UI for now. Will become read-only once the PO module
-  is the sole writer, and eventually derived from FIFO across open lots.
+- Written by: PO sync only (`po_sheet`) — the sole writer by design. (A dormant
+  API path — `PUT /api/asins/:asin/cogs` with an `actual_cogs` body param,
+  source `'manual'` — still exists but has no UI entry point. Kept deliberately
+  in case manual entry returns; do not wire UI to it without revisiting this
+  rule.) (CSV upload writes `estimated_cogs`, not `actual_cogs`.)
+- Read-only in the UI; not user-editable. Eventually derived from FIFO across
+  open lots.
 
 ### PO sync behavior
 
@@ -134,9 +136,19 @@ Two paths to revert a manual override back to PO-sourced:
 
 ### Product cell display
 
-- Show Actual COGS if present, labeled `COGS: $X.XX`.
-- Otherwise show Estimated COGS, labeled `Est. COGS: $X.XX`.
-- Inline edit pencil opens a popover with both fields editable.
+- The inline COGS line **always shows Estimated COGS**, labeled
+  `Est. COGS: $X.XX` (`—` when null). It **never** displays `actual_cogs` — the
+  Product cell is a forward-looking sourcing glance. (`CogsDisplay`,
+  `client/src/components/results-table.tsx`.)
+- **Actual COGS is viewed via its own dedicated sortable column** (the `cogs`
+  column), not the Product cell.
+- An **`M` badge** appears next to the Est. COGS line when
+  `estimated_cogs_source = 'manual'` (tooltip: "Manually entered — PO sync
+  skipped"). This behavior is unchanged.
+- The inline-edit pencil opens the `CogsEditor` popover, which edits **Estimated
+  COGS only** (writes `estimated_cogs`; never `actual_cogs`). When
+  `estimated_cogs_source = 'manual'` it also shows a **"Sync from PO"** link that
+  re-pulls the estimated COGS from the PO sheet.
 
 ---
 
@@ -273,6 +285,17 @@ representations of the same logical "narrow to specific ASIN(s)" intent.
 
 `COLUMN_GROUPS` array in code is the single source of truth. Both Manage
 Columns panel order and table render order derive from it.
+
+### Stock object population
+
+The stock object is **always populated** (`routes.ts`, `/api/asins`). ASINs
+with no inventory snapshot render Stock as **available 0 + ordered qty** (never
+`-`), so numeric Stock filters include them rather than dropping the null row.
+`ordered` comes from `asin_estimates.ordered_qty` and surfaces even when the
+ASIN has never been seen in Seller Central. A `hasSnapshot` boolean on the
+object lets the client hover breakdown distinguish **"no FBA snapshot yet"**
+(shows "Not yet synced from SC") from a confirmed zero. This is a display/read
+fix only — nothing is written to `inventory_snapshots`.
 
 ### Two-row column headers
 
@@ -644,6 +667,9 @@ Skip semantics (learned in implementation):
 - **Unmapped SKUs are expected and correctly skipped** — Aura retains deleted SC
   listings, and never-stocked listings are invisible to `asin_skus`. No backfill
   planned.
+- **`null_cogs` / `zero_cost` skips are expected and permanent** — sourcing leads
+  listed in SC but never purchased have no PO row by design. Fail-closed skip is
+  correct; no action needed.
 
 ---
 
@@ -768,7 +794,7 @@ that writes it:
 | Pricing, fees, BSR, sellers | Analyze path |
 | Catalog data (title, brand, category, dimensions, weight, etc.) | Analyze path |
 | `estimated_cogs` | CSV upload / manual edit / Chrome extension / PO sync (when source ≠ manual) |
-| `actual_cogs` | PO sync (eventually FIFO calc) / manual edit (interim) |
+| `actual_cogs` | PO sync only (eventually FIFO calc) |
 | `prep_override` | PO sync |
 | `buy_link`, `supplier` | CSV upload / manual edit / Chrome extension |
 | Tags, notes | Manual / CSV upload / Chrome extension |

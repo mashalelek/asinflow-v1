@@ -138,3 +138,19 @@ All application state lives in the single `Home` component:
 ### Column system
 
 Columns are defined in `shared/schema.ts` as `ALL_COLUMNS` (array of `ColumnDef`). `client/src/lib/columns.ts` manages localStorage persistence of column order and visibility. The `ColumnManager` component (drag-to-reorder, toggle visibility) writes back to this store. Three columns are always frozen/visible regardless of config: `#` (row number), `☑` (buy checkbox), `asin`.
+
+## Definition of Done: committed
+
+A feature isn't done until it's committed — same as it isn't done until
+the dry-run passes.
+
+- End of every working session: run `git status`. If the session's feature
+  is verified and working, stage and propose the commit before stopping —
+  don't leave finished work uncommitted overnight.
+- New files belonging to a feature are added in the same commit as the
+  feature — never left untracked. Untracked = one `git clean` from gone.
+- If a session ends with work genuinely unfinished, say so explicitly in
+  the wrap-up ("uncommitted: X, still needs Y") so the state is named, not
+  silent.
+- Docs-only SPEC edits may batch across sessions, but never past the next
+  feature commit.
