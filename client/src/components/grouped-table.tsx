@@ -12,6 +12,7 @@ import {
   getEffectivePrep,
   getEffectiveStorage,
   extractDomain,
+  appliesDgHazmatSurcharge,
 } from "@shared/schema";
 import { type ColumnConfig } from "@/lib/columns";
 import { type AnalyticsMetrics } from "@/lib/analytics";
@@ -367,7 +368,7 @@ function GroupRows({
         let rowBg = "";
 
         if (!hasError && price != null && result.estimatedCogs != null) {
-          profitData = calculateProfit(price, result.estimatedCogs, result.feesData.fbaFulfillmentFee ?? 0, result.feesData.referralFee ?? 0, result.feesData.feesEstimatePrice, result.catalogData.weightLbs, prep.value, storage.value, settings, includeInboundShipping, result.isHazmat ?? false, result.category ?? null);
+          profitData = calculateProfit(price, result.estimatedCogs, result.feesData.fbaFulfillmentFee ?? 0, result.feesData.referralFee ?? 0, result.feesData.feesEstimatePrice, result.catalogData.weightLbs, prep.value, storage.value, settings, includeInboundShipping, appliesDgHazmatSurcharge(result), result.category ?? null);
         }
         if (price == null || hasError) rowBg = "opacity-50";
 

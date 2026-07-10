@@ -142,6 +142,19 @@ export async function getUnverifiedCount(query: QueryLike = defaultQuery as any)
   return r.rows[0]?.n ?? 0;
 }
 
+// In-flight rows (pending/processing) — surfaced separately so the panel can
+// list them individually and offer manual resolve BEFORE they age to stale
+// (e.g. "I deleted this" on a still-processing row, ~26h before the 48h mark).
+export async function listInFlight(query: QueryLike = defaultQuery as any): Promise<any[]> {
+  return (await query(
+    `SELECT id, asin, sku, verify_status, verdict_source, submitted_at, verified_at,
+            issues, review_flags, terminal_conflict
+       FROM listing_submissions
+      WHERE verify_status IN ('pending','processing')
+      ORDER BY submitted_at DESC`,
+  )).rows;
+}
+
 export async function listNeedsAttention(query: QueryLike = defaultQuery as any): Promise<any[]> {
   // Failed rows, stale rows, and LIVE rows carrying review flags / conflicts.
   return (await query(

@@ -258,36 +258,11 @@ INSERT INTO view_presets (name, description, config, is_default) VALUES
             "sort_dir": "desc"
         }'::jsonb,
         TRUE
-    ),
-    (
-        'Replenishment',
-        'Stock levels and sales data for reorder decisions',
-        '{
-            "columns": ["image", "asin", "selleramp", "keepa", "title",
-                         "buy_link", "tags",
-                         "stock", "units_sold", "revenue", "cogs",
-                         "est_profit", "est_margin", "est_roi",
-                         "actual_profit_unit", "actual_margin", "actual_roi"],
-            "sort_by": "stock",
-            "sort_dir": "asc"
-        }'::jsonb,
-        TRUE
-    ),
-    (
-        'Sourcing',
-        'Estimates for evaluating new products',
-        '{
-            "columns": ["image", "asin", "selleramp", "keepa", "title", "brand",
-                         "eligible", "buy_link",
-                         "cogs", "sale_price", "fba_fee", "referral_fee",
-                         "inbound_ship", "prep_cost",
-                         "est_profit", "est_margin", "est_roi",
-                         "bsr", "sellers_fba", "sellers_fbm", "tags"],
-            "sort_by": "est_roi",
-            "sort_dir": "desc"
-        }'::jsonb,
-        TRUE
     );
+-- Note: prior "Replenishment" and "Sourcing" built-in presets were removed
+-- in the B3 cutover. The Replenishment FILTER LOGIC now lives in
+-- shared/profitability.ts (isReplens) and is invoked via the Replens
+-- scorecard tile. See database/delete_replenishment_sourcing_presets.sql.
 
 -- ============================================================================
 -- SETTINGS

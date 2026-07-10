@@ -6,6 +6,7 @@ import { createServer } from "http";
 import { ensureExtensionTables } from "./db";
 import { startInventoryCron } from "./inventory-cron";
 import { startPriceSyncCron } from "./price-sync-cron";
+import { startSourcingSyncCron } from "./sourcing-sync-cron";
 import { startAuraSyncCron } from "./aura-sync-cron";
 
 const app = express();
@@ -96,6 +97,7 @@ app.use((req, res, next) => {
   if (process.env.DATABASE_URL) {
     startInventoryCron();
     startPriceSyncCron();
+    startSourcingSyncCron();
     startAuraSyncCron();
   }
 

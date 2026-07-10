@@ -10,14 +10,21 @@ const MAX_RANGE_DAYS = 30;
 
 export async function syncSalesData(
   startDate: string,
-  endDate: string
+  endDate: string,
+  asinFilter?: ReadonlySet<string>,
 ): Promise<{ daysProcessed: number; asinsUpdated: number; totalOrders: number }> {
   // Split into 30-day chunks (SP-API limit)
   const chunks = buildDateChunks(startDate, endDate, MAX_RANGE_DAYS);
-  log(`Sales sync: ${startDate} to ${endDate} → ${chunks.length} chunk(s)`, "sales-sync");
+  log(`Sales sync: ${startDate} to ${endDate} → ${chunks.length} chunk(s)${asinFilter ? ` (filtered to ${asinFilter.size} ASINs)` : ""}`, "sales-sync");
 
-  // Build ASIN lookup once
-  const asinRows = await query(`SELECT id, asin FROM asins WHERE is_active = TRUE`);
+  // Build ASIN lookup once. The orders report itself is global; we filter by
+  // populating asinIdMap with only the requested subset so chunk processing
+  // skips orders whose ASIN isn't in the map.
+  const sql = asinFilter && asinFilter.size > 0
+    ? `SELECT id, asin FROM asins WHERE is_active = TRUE AND asin = ANY($1::text[])`
+    : `SELECT id, asin FROM asins WHERE is_active = TRUE`;
+  const params = asinFilter && asinFilter.size > 0 ? [Array.from(asinFilter)] : undefined;
+  const asinRows = await query(sql, params);
   const asinIdMap = new Map<string, string>();
   for (const row of asinRows.rows) {
     asinIdMap.set(row.asin, row.id);

@@ -1,74 +1,12 @@
 import axios from "axios";
 import { log } from "./index";
+import { isDangerousGoodFromAttributes } from "./hazmat-classify";
 
-interface SpApiTokens {
-  accessToken: string;
-  expiresAt: number;
-}
-
-let cachedTokens: SpApiTokens | null = null;
-
-async function getAccessToken(): Promise<string> {
-  if (cachedTokens && Date.now() < cachedTokens.expiresAt - 60000) {
-    return cachedTokens.accessToken;
-  }
-
-  const clientId = process.env.SP_API_CLIENT_ID;
-  const clientSecret = process.env.SP_API_CLIENT_SECRET;
-  const refreshToken = process.env.SP_API_REFRESH_TOKEN;
-
-  if (!clientId || !clientSecret || !refreshToken) {
-    throw new Error(
-      "SP-API credentials not configured. Add SP_API_CLIENT_ID, SP_API_CLIENT_SECRET, and SP_API_REFRESH_TOKEN to your Replit Secrets.",
-    );
-  }
-
-  const res = await axios.post("https://api.amazon.com/auth/o2/token", {
-    grant_type: "refresh_token",
-    refresh_token: refreshToken,
-    client_id: clientId,
-    client_secret: clientSecret,
-  });
-
-  cachedTokens = {
-    accessToken: res.data.access_token,
-    expiresAt: Date.now() + res.data.expires_in * 1000,
-  };
-
-  return cachedTokens.accessToken;
-}
-
-export async function spApiGet(endpoint: string, params?: Record<string, any>) {
-  const token = await getAccessToken();
-  const res = await axios.get(
-    `https://sellingpartnerapi-na.amazon.com${endpoint}`,
-    {
-      headers: {
-        Authorization: `Bearer ${token}`,
-        "x-amz-access-token": token,
-        "Content-Type": "application/json",
-      },
-      params,
-    },
-  );
-  return res.data;
-}
-
-export async function spApiPost(endpoint: string, body: any) {
-  const token = await getAccessToken();
-  const res = await axios.post(
-    `https://sellingpartnerapi-na.amazon.com${endpoint}`,
-    body,
-    {
-      headers: {
-        Authorization: `Bearer ${token}`,
-        "x-amz-access-token": token,
-        "Content-Type": "application/json",
-      },
-    },
-  );
-  return res.data;
-}
+// Auth + thin HTTP wrappers live in spapi-auth.ts so SKU-gen modules can
+// import them without dragging in server/index.ts. Re-exported here for
+// backwards compatibility with existing call sites in this file.
+export { getAccessToken, spApiGet, spApiPost, spApiPut } from "./spapi-auth";
+import { spApiGet, spApiPost } from "./spapi-auth";
 
 export interface AsinPricingResult {
   lowestFbaPrice: number | null;
@@ -96,7 +34,25 @@ export interface AsinCatalogResult {
   bsrRank: number | null;
   bsrCategory: string | null;
   isMeltable?: boolean;
-  isHazmat?: boolean;
+  // DA-2: catalog-deleted signal piggybacked on this call (no extra API cost).
+  //   true  → 404 NOT_FOUND (product gone from Amazon's catalog)
+  //   false → 2xx (alive)
+  //   null  → inconclusive (transient/throttle/network error) — caller should
+  //           preserve the prior stored value, NEVER overwrite to false.
+  isCatalogDeleted?: boolean | null;
+  // Dangerous-goods (transport) classification, piggybacked on this catalog
+  // call (attributes.hazmat present/non-empty — see hazmat-classify.ts). Zero
+  // extra API cost.
+  //   true  → attributes.hazmat present
+  //   false → 2xx catalog response without a hazmat array
+  //   null  → inconclusive (transient/throttle/network error) — caller MUST
+  //           preserve the prior stored value, NEVER overwrite to false.
+  isDangerousGood?: boolean | null;
+  // Hazmat (FBA storage/handling program) is NOT derived here. It comes from
+  // getItemEligibilityPreview program=INBOUND, code FBA_INB_0015 — see
+  // server/inbound-hazmat.ts. null = inconclusive; callers must NOT clobber
+  // the stored value when null.
+  isHazmat?: boolean | null;
 }
 
 export async function getPricing(asin: string): Promise<AsinPricingResult> {
@@ -552,6 +508,26 @@ function parseFeeResult(
     referralFee = manualReferralFee;
   }
 
+  // Sanity guard: catch degraded SP-API responses where TotalFeesEstimate
+  // and the line items both agree on a near-zero FBA fee (reconciliation
+  // passes because the bad numbers are internally consistent). An FBA-
+  // eligible item priced > $10 cannot economically have a sub-$1 FBA
+  // fulfillment fee. Returning the all-null fee shape triggers the same
+  // retry → estimateFeeFallback path that legitimate fee failures use
+  // (see server/routes.ts:1495–1503).
+  if (price > 10 && totalFbaFee < 1) {
+    log(
+      `Degraded fee response for ${asin}: price=$${price.toFixed(2)}, ` +
+      `totalFbaFee=$${totalFbaFee.toFixed(2)}. Returning all-null to trigger fallback.`,
+      "fees",
+    );
+    return {
+      fbaFulfillmentFee: null,
+      referralFee: null,
+      feesEstimatePrice: null,
+    };
+  }
+
   log(
     `  Final captured: FBA=$${totalFbaFee.toFixed(2)}, Referral=$${(referralFee ?? 0).toFixed(2)}`,
     "fees",
@@ -836,6 +812,11 @@ export async function getEligibility(asin: string): Promise<EligibilityResult> {
     return { status: "check" };
   }
 }
+
+// Hazmat detection (getItemEligibilityPreview program=INBOUND, code
+// FBA_INB_0015) moved to server/inbound-hazmat.ts — it lives outside this file
+// so it can be imported without booting Express (this file imports ./index)
+// and so it's unit-testable with an injected httpGet.
 
 export async function getCatalogData(asin: string): Promise<AsinCatalogResult> {
   try {
@@ -1228,30 +1209,21 @@ export async function getCatalogData(asin: string): Promise<AsinCatalogResult> {
       "weight",
     );
 
-    // Extract meltable/hazmat from product attributes
+    // Meltable detection from product attributes. FBA-hazmat is NOT derived
+    // here — it comes from getInboundHazmat (INBOUND code FBA_INB_0015).
     let isMeltable = false;
-    let isHazmat = false;
     if (attrs) {
-      // Meltable: temperature_rating containing "chilled"/"frozen", or explicit flags
       const tempRating = (attrs.temperature_rating?.[0]?.value ?? "").toLowerCase();
       if (tempRating.includes("chilled") || tempRating.includes("frozen") || tempRating.includes("refriger")) isMeltable = true;
       if (attrs.is_heat_sensitive?.[0]?.value === true || attrs.is_heat_sensitive?.[0]?.value === "true") isMeltable = true;
       if (attrs.meltable?.[0]?.value === true || attrs.meltable?.[0]?.value === "true") isMeltable = true;
-      // Hazmat: attrs.hazmat is the sole reliable SP-API indicator.
-      // Contains the product classification (e.g., "PERFUMERY PRODUCTS") when
-      // Amazon classifies the product as hazmat/DG. Not present on non-hazmat.
-      // Hazmat and DG are interchangeable in Amazon's system — single flag.
-      // Other attributes are NOT used (all produce false positives):
-      //   - ghs_classification_category: appears on cosmetics, food, cleaning supplies
-      //   - safety_data_sheet_url: regulatory compliance, not operational hazmat
-      //   - supplier_declared_dg_hz_regulation: seller self-declaration, unreliable
-      if (attrs.hazmat && Array.isArray(attrs.hazmat) && attrs.hazmat.length > 0) {
-        const hazmatVal = (attrs.hazmat[0]?.value ?? "").toString().trim();
-        if (hazmatVal.length > 0) {
-          isHazmat = true;
-        }
-      }
     }
+
+    // Dangerous-goods (transport) classification piggybacked on this call.
+    // Presence-not-values: attributes.hazmat present/non-empty = DG (butane
+    // ships class "0"/no-UN yet is DG). See hazmat-classify.ts. Distinct from
+    // is_hazmat (FBA storage program).
+    const isDangerousGood = isDangerousGoodFromAttributes(attrs);
 
     return {
       weightLbs: weightLbs ?? null,
@@ -1261,7 +1233,8 @@ export async function getCatalogData(asin: string): Promise<AsinCatalogResult> {
       bsrRank,
       bsrCategory,
       isMeltable,
-      isHazmat,
+      isDangerousGood,
+      isCatalogDeleted: false, // 2xx → product exists in catalog
     };
   } catch (err: any) {
     const statusCode = err.response?.status;
@@ -1276,6 +1249,13 @@ export async function getCatalogData(asin: string): Promise<AsinCatalogResult> {
       imageUrl: null,
       bsrRank: null,
       bsrCategory: null,
+      // Fail-closed: catalog fetch failed → DG is unknown, NOT false. null tells
+      // the COALESCE UPSERT to preserve the prior stored value (never clobber on
+      // throttle/transient). Applies to 404 too — a dead ASIN's DG stays as-was.
+      isDangerousGood: null,
+      // 404 = definitive "catalog gone". Other errors = inconclusive → null,
+      // which the write helper treats as "preserve prior value, no update".
+      isCatalogDeleted: statusCode === 404 ? true : null,
     };
   }
 }

@@ -4,18 +4,46 @@ import multer from "multer";
 import Papa from "papaparse";
 import * as XLSX from "xlsx";
 import { getPricing, getFees, getCatalogData, estimateFeeFallback, getEligibility, type EligibilityResult } from "./spapi";
+import { getInboundHazmat } from "./inbound-hazmat";
+import { verifyPending, resolveSubmissionManual, getUnverifiedCount, listNeedsAttention, listInFlight } from "./listing-submissions-repo";
+import { runAuraSyncChain } from "./aura-sync-chain";
+import { pushAuraCosts } from "./aura-cost-sync";
+import { registerPoRoutes } from "./po-routes";
 import { log } from "./index";
 import { type AsinInput, type AsinResult, type ColumnMapping, extractDomain } from "@shared/schema";
+import { parseMoney } from "@shared/parse-money";
 import pool, { query, isDbAvailable } from "./db";
 import { syncInventory } from "./inventory-sync";
 import { syncSalesData } from "./sales-sync";
 import { syncSuppressionData } from "./suppression-sync";
 import { fetchSheetData } from "./google-sheets";
+import { syncSourcingSheet } from "./sourcing-sync";
 import { refreshPrices } from "./price-sync";
+import { applyCatalogDeletedSignal } from "./catalog-deleted-write";
+import { offerAddForAsin, preFilterSubmitSet, type OfferAddResult, type PreFilterResult } from "./offer-add";
+import { submitOfferAddBatch, type SubmitAsinRow } from "./offer-add-submit";
+import { makeProductRegistryRepo } from "./product-registry-repo";
+import { processBulkApproval, makeProductionHandlers, type ApprovalItem } from "./sku-legend-approval";
+import { settingsSchema, type Settings } from "@shared/schema";
 import fs from "fs";
-import { runAuraSyncChain } from "./aura-sync-chain";
 
 const TAG_COLORS = ["#3B82F6", "#EF4444", "#10B981", "#F59E0B", "#8B5CF6", "#EC4899", "#14B8A6", "#F97316", "#6366F1", "#84CC16"];
+
+// Module-level handle to runAnalyzeCore (defined inside registerRoutes).
+// Set during registerRoutes init so the sourcing-sync cron (which runs after
+// registerRoutes resolves in server/index.ts) can invoke the analyzer without
+// hoisting ~270 lines of function body out of registerRoutes.
+type RunAnalyzeCore = (
+  asins: AsinInput[],
+  emit: (chunk: string) => void,
+  progressPrefix?: (i: number) => string | null,
+  fromCsvUpload?: boolean,
+) => Promise<void>;
+let runAnalyzeCoreRef: RunAnalyzeCore | null = null;
+export function getRunAnalyzeCore(): RunAnalyzeCore {
+  if (!runAnalyzeCoreRef) throw new Error("runAnalyzeCore not initialized — call registerRoutes first");
+  return runAnalyzeCoreRef;
+}
 
 function cleanBuyLink(raw: string): string | null {
   const first = raw.split(/\r?\n/).map((s) => s.trim()).find((s) => s.length > 0);
@@ -75,9 +103,9 @@ function mapRowsToAsins(rows: Record<string, any>[], mapping: ColumnMapping): As
     if (asinVal === undefined || cogsVal === undefined) continue;
 
     const asin = String(asinVal).trim();
-    const cogs = parseFloat(String(cogsVal));
+    const cogs = parseMoney(cogsVal);
 
-    if (!asin || isNaN(cogs)) continue;
+    if (!asin || cogs == null) continue;
 
     let buyLink: string | null = null;
     let prepOverride: number | null = null;
@@ -87,12 +115,12 @@ function mapRowsToAsins(rows: Record<string, any>[], mapping: ColumnMapping): As
       buyLink = String(row[mapping.buyLink]).trim();
     }
     if (mapping.prepCost && row[mapping.prepCost] !== undefined && row[mapping.prepCost] !== "") {
-      const p = parseFloat(String(row[mapping.prepCost]));
-      if (!isNaN(p)) prepOverride = p;
+      const p = parseMoney(row[mapping.prepCost]);
+      if (p != null) prepOverride = p;
     }
     if (mapping.additionalFees && row[mapping.additionalFees] !== undefined && row[mapping.additionalFees] !== "") {
-      const s = parseFloat(String(row[mapping.additionalFees]));
-      if (!isNaN(s)) storageOverride = s;
+      const s = parseMoney(row[mapping.additionalFees]);
+      if (s != null) storageOverride = s;
     }
 
     let tags: string[] | null = null;
@@ -152,6 +180,119 @@ function parseFileToAsins(buffer: Buffer, filename: string): AsinInput[] {
 
 function delay(ms: number) {
   return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+// Shared loader for the offer-add preview + submit endpoints. Single source of
+// truth so preview and submit can't diverge on which DB fields they read.
+async function loadSubmitRows(asins: string[]): Promise<SubmitAsinRow[]> {
+  const rowsRes = await pool.query(
+    `SELECT a.asin,
+            a.is_catalog_deleted,
+            COALESCE(e.eligibility_status, NULL) AS eligibility_status,
+            COALESCE(a.is_hazmat, false) AS is_hazmat,
+            a.category,
+            a.weight_lb,
+            COALESCE(e.estimated_cogs, e.cogs) AS cogs,
+            e.fba_fee,
+            e.referral_fee,
+            e.fees_estimate_price,
+            e.prep_override,
+            e.storage_override
+       FROM asins a
+       LEFT JOIN asin_estimates e ON e.asin = a.asin
+      WHERE a.asin = ANY($1::text[])`,
+    [asins],
+  );
+  const rowByAsin = new Map<string, any>(rowsRes.rows.map((r: any) => [r.asin, r]));
+  const settings = await loadSettingsForSubmit();
+  return asins.map((asin) => {
+    const r = rowByAsin.get(asin);
+    return {
+      asin,
+      is_catalog_deleted: r?.is_catalog_deleted ?? false,
+      eligibility_status: r?.eligibility_status ?? null,
+      is_hazmat: r?.is_hazmat === true,
+      cogs: r?.cogs != null ? parseFloat(r.cogs) : null,
+      fbaFee: r?.fba_fee != null ? parseFloat(r.fba_fee) : null,
+      referralFee: r?.referral_fee != null ? parseFloat(r.referral_fee) : null,
+      feesEstimatePrice: r?.fees_estimate_price != null ? parseFloat(r.fees_estimate_price) : null,
+      weightLbs: r?.weight_lb != null ? parseFloat(r.weight_lb) : null,
+      category: r?.category ?? null,
+      prepCost: r?.prep_override != null ? parseFloat(r.prep_override) : settings.prepCost,
+      storageCost: r?.storage_override != null ? parseFloat(r.storage_override) : settings.storageFee,
+    };
+  });
+}
+
+// Maps the submit orchestrator's SubmitOutcome → the OfferAddResult shape the
+// preview dialog already understands. "would_submit" maps to "preview" (UI
+// renders payload + sku); skip reasons collapse onto blocked outcome kinds.
+function mapSubmitOutcomeToOfferAddResult(outcome: any): OfferAddResult {
+  switch (outcome.kind) {
+    case "would_submit":
+      return {
+        kind: "preview",
+        asin: outcome.asin,
+        sku: outcome.sku,
+        reused: outcome.reused,
+        payload: outcome.payload,
+        brandCode: outcome.brandCode,
+        registry: outcome.registry,
+        proposedNnn: outcome.proposedNnn,
+        proposedTtl: outcome.proposedTtl,
+      } as any;
+    case "skipped":
+      // Reverse-map skip reasons back to OfferAddResult shape
+      switch (outcome.reason) {
+        case "gated": return { kind: "gated", asin: outcome.asin, details: outcome.details };
+        case "dead_asin": return { kind: "dead_asin", asin: outcome.asin, details: outcome.details };
+        case "legend_pending": return { kind: "legend_pending", asin: outcome.asin, pending: outcome.pending ?? { brand: null, dept: null } as any, details: outcome.details };
+        case "duplicate_warning": return { kind: "duplicate_warning", asin: outcome.asin, existingSku: "", statuses: [] };
+        case "already_in_catalog": return { kind: "already_in_catalog", asin: outcome.asin, items: [] as any, details: outcome.details } as any;
+        case "needs_cogs":
+        case "offers_fetch_failed":
+        case "unreachable_roi":
+        case "nnn_overflow":
+        case "resurrection_error":
+        case "definitions_fetch_failed":
+        case "catalog_deleted":
+        case "not_checked":
+        default:
+          return { kind: "resurrection_error", asin: outcome.asin, reason: outcome.reason, details: outcome.details };
+      }
+    case "created":
+    case "putlistings_failed":
+      // Shouldn't happen in preview mode (phase4Mode="preview"), but pass through
+      return outcome;
+    default:
+      return { kind: "resurrection_error", asin: outcome.asin, reason: "unknown", details: "unknown outcome" };
+  }
+}
+
+// Settings DB-key → settingsSchema field mapping. Used by the offer-add submit
+// endpoint to construct the typed Settings object that the price resolver needs.
+// Matches the diag script's loadSettings pattern (script/diag-price-resolver-sample.ts).
+async function loadSettingsForSubmit(): Promise<Settings> {
+  const result = await pool.query("SELECT key, value FROM settings");
+  const raw: Record<string, any> = {};
+  for (const r of result.rows) {
+    const n = parseFloat(r.value);
+    raw[r.key] = isNaN(n) ? r.value : n;
+  }
+  const mapped = {
+    inboundShippingCost: raw.inbound_shipping_per_lb,
+    prepCost: raw.prep_cost,
+    storageFee: raw.storage_fee,
+    lowInventorySurcharge: raw.low_inventory_surcharge,
+    hazmatShipSurcharge: raw.hazmat_ship_surcharge,
+    hazmatPrepSurcharge: raw.hazmat_prep_surcharge,
+    minRoiThreshold: raw.min_roi,
+    minMarginThreshold: raw.min_margin,
+  };
+  const cleaned = Object.fromEntries(
+    Object.entries(mapped).filter(([_, v]) => v !== undefined && v !== null && !isNaN(v as number)),
+  );
+  return settingsSchema.parse(cleaned);
 }
 
 function hasValidFees(result: AsinResult): boolean {
@@ -301,12 +442,20 @@ async function upsertCsvCogs(asin: string, cogs: number): Promise<void> {
   }
 }
 
-async function upsertAsinResult(result: AsinResult): Promise<void> {
+async function upsertAsinResult(
+  result: AsinResult,
+  notesForNewInsert: string | null = null,
+): Promise<{ inserted: boolean }> {
   const supplier = extractDomain(result.buyLink);
 
-  await query(
-    `INSERT INTO asins (asin, title, image_url, brand, category, weight_lb, buy_link, supplier, is_meltable, is_hazmat, last_refreshed_at)
-     VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, NOW())
+  // Asymmetric UPSERT for notes (same pattern as estimated_cogs below):
+  //   INSERT branch    — writes notes from notesForNewInsert (CSV/sourcing input).
+  //   ON CONFLICT UPDATE — notes NOT in the SET list (§14 ownership preserved).
+  // Existing-ASIN notes get appended (with dedup) by writeResult based on the
+  // `inserted` boolean returned from RETURNING (xmax = 0).
+  const asinUpsert = await query(
+    `INSERT INTO asins (asin, title, image_url, brand, category, weight_lb, buy_link, supplier, is_meltable, is_hazmat, is_dangerous_good, notes, last_refreshed_at)
+     VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, NOW())
      ON CONFLICT (asin) DO UPDATE SET
        title = COALESCE(EXCLUDED.title, asins.title),
        image_url = COALESCE(EXCLUDED.image_url, asins.image_url),
@@ -316,8 +465,12 @@ async function upsertAsinResult(result: AsinResult): Promise<void> {
        buy_link = COALESCE(EXCLUDED.buy_link, asins.buy_link),
        supplier = COALESCE(EXCLUDED.supplier, asins.supplier),
        is_meltable = EXCLUDED.is_meltable OR asins.is_meltable,
-       is_hazmat = EXCLUDED.is_hazmat OR asins.is_hazmat,
-       last_refreshed_at = NOW()`,
+       -- Latest INBOUND hazmat result wins. NULL = inconclusive (throttle/error)
+       -- → keep prior value, don't wipe. Same fail-closed contract for DG.
+       is_hazmat = COALESCE(EXCLUDED.is_hazmat, asins.is_hazmat),
+       is_dangerous_good = COALESCE(EXCLUDED.is_dangerous_good, asins.is_dangerous_good),
+       last_refreshed_at = NOW()
+     RETURNING (xmax = 0) AS inserted`,
     [
       result.asin,
       result.catalogData.title,
@@ -328,8 +481,23 @@ async function upsertAsinResult(result: AsinResult): Promise<void> {
       result.buyLink,
       supplier,
       (result.catalogData as any).isMeltable ?? false,
-      (result.catalogData as any).isHazmat ?? false,
+      // tri-state: true | false | null(inconclusive → COALESCE keeps prior)
+      (result.catalogData as any).isHazmat ?? null,
+      (result.catalogData as any).isDangerousGood ?? null,
+      notesForNewInsert, // $12 — used in INSERT; ignored by UPDATE
     ]
+  );
+  const inserted = asinUpsert.rows[0]?.inserted === true;
+
+  // DA-2: catalog-deleted signal + auto-archive on FALSE→TRUE transition.
+  // Single source of truth lives in server/catalog-deleted-write.ts so the
+  // bulk backfill script can't drift from the live analyze write.
+  // Tri-state input: null = inconclusive (no write), true/false = definitive.
+  await applyCatalogDeletedSignal(
+    result.asin,
+    (result.catalogData as any).isCatalogDeleted ?? null,
+  ).catch((err: any) =>
+    log(`catalog-deleted write error for ${result.asin}: ${err.message}`, "db"),
   );
 
   // Asymmetric UPSERT: INSERT populates estimated_cogs from the CSV upload
@@ -380,6 +548,8 @@ async function upsertAsinResult(result: AsinResult): Promise<void> {
       [idRow.rows[0].id, result.pricingData.sellersFba, result.pricingData.sellersFbm, salePrice, result.catalogData.bsrRank]
     ).catch(() => {});
   }
+
+  return { inserted };
 }
 
 async function upsertTagsForAsin(asin: string, tagNames: string[]): Promise<void> {
@@ -413,9 +583,17 @@ async function appendNotesForAsin(asin: string, newNotes: string): Promise<void>
   );
 }
 
-function writeResult(res: Response, allResults: Map<string, AsinResult>, asin: string, result: AsinResult, isUpdate = false, fromCsvUpload = false): void {
+function writeResult(
+  emit: (chunk: string) => void,
+  allResults: Map<string, AsinResult>,
+  asin: string,
+  result: AsinResult,
+  isUpdate = false,
+  fromCsvUpload = false,
+  inputNotes: string | null = null,
+): void {
   allResults.set(asin, result);
-  res.write(JSON.stringify({ type: "result", data: isUpdate ? { ...result, _update: true } : result }) + "\n");
+  emit(JSON.stringify({ type: "result", data: isUpdate ? { ...result, _update: true } : result }) + "\n");
   if (isDbAvailable()) {
     // If this is a CSV upload with user-provided COGS, persist estimated_cogs
     // via the dedicated write path BEFORE the analyze UPSERT. This ensures
@@ -423,13 +601,24 @@ function writeResult(res: Response, allResults: Map<string, AsinResult>, asin: s
     const csvCogsPromise = fromCsvUpload && result.cogs > 0
       ? upsertCsvCogs(result.asin, result.cogs).catch((err: any) => log(`CSV COGS write error for ${asin}: ${err.message}`, "db"))
       : Promise.resolve();
-    csvCogsPromise.then(() => {
-      upsertAsinResult(result).catch((err: any) => log(`DB upsert error for ${asin}: ${err.message}`, "db"));
-    });
+    csvCogsPromise.then(async () => {
+      // For CSV/sourcing of a brand-new ASIN, notes go in atomically via the
+      // INSERT branch of upsertAsinResult — eliminates the race against
+      // appendNotesForAsin that lost ~152 notes in a recent 7-day window.
+      const notesForInsert = fromCsvUpload ? inputNotes : null;
+      const { inserted } = await upsertAsinResult(result, notesForInsert);
+      // Existing-ASIN path: dedup-aware append. Skipped when the row was just
+      // inserted (notes already written by the INSERT branch above).
+      if (!inserted && inputNotes) {
+        await appendNotesForAsin(result.asin, inputNotes);
+      }
+    }).catch((err: any) => log(`DB upsert error for ${asin}: ${err.message}`, "db"));
   }
 }
 
-async function runSheetsSync(): Promise<{ updated: number; skipped: number; errors: string[] }> {
+async function runSheetsSync(
+  asinFilter?: ReadonlySet<string>,
+): Promise<{ updated: number; skipped: number; errors: string[] }> {
   const sheetId = process.env.GOOGLE_SHEET_ID;
   if (!sheetId) throw new Error("GOOGLE_SHEET_ID not configured");
 
@@ -439,6 +628,10 @@ async function runSheetsSync(): Promise<{ updated: number; skipped: number; erro
   const errors: string[] = [];
 
   for (const [asin, data] of Array.from(sheetData.entries())) {
+    if (asinFilter && asinFilter.size > 0 && !asinFilter.has(asin)) {
+      skipped++;
+      continue;
+    }
     try {
       // Respect manual COGS overrides: skip COGS update (but still sync ordered_qty)
       // for ASINs where a user has explicitly entered cogs_source = 'manual'.
@@ -504,6 +697,9 @@ export async function registerRoutes(
   httpServer: Server,
   app: Express
 ): Promise<Server> {
+  // Purchase Orders module (Phase 2). All /api/pos and /api/pos/:id/line-items
+  // routes live in po-routes.ts to keep this file from growing further.
+  registerPoRoutes(app);
 
   app.post("/api/verify-password", (req: Request, res: Response) => {
     const { password } = req.body as { password: string };
@@ -540,7 +736,7 @@ export async function registerRoutes(
       const result = await query(`
         SELECT
           a.asin, a.title, a.image_url, a.brand, a.category, a.weight_lb, a.buy_link, a.is_active,
-          a.primary_sku, a.in_catalog, a.notes, a.is_meltable, a.is_hazmat, a.is_search_suppressed, a.suppression_reasons, a.last_reviewed_at, a.added_at, a.is_wholesale, a.is_oa,
+          a.primary_sku, a.in_catalog, a.notes, a.is_meltable, a.is_hazmat, a.is_dangerous_good, a.is_search_suppressed, a.suppression_reasons, a.last_reviewed_at, a.added_at, a.is_wholesale, a.is_oa,
           e.cogs, e.cogs_source, e.actual_cogs, e.estimated_cogs, e.estimated_cogs_source, e.prep_override, e.storage_override,
           e.lowest_fba_price, e.buy_box_price, e.buy_box_fulfillment, e.lowest_price,
           e.sellers_fba, e.sellers_fbm,
@@ -638,17 +834,32 @@ export async function registerRoutes(
         const inv = invMap.get(row.asin);
         const sales = salesMap.get(row.asin);
 
+        // Always populate the stock object. When there is no inventory
+        // snapshot yet (ASIN never seen in Seller Central / never synced),
+        // the FBA-side fields are 0 but ordered_qty from asin_estimates still
+        // surfaces — so Stock reads as "0 available + N ordered" instead of a
+        // "-" that would be dropped by numeric filters. hasSnapshot lets the
+        // client distinguish "not synced yet" from a confirmed zero.
+        const ordered = parseInt(row.est_ordered_qty) || 0;
         const stock = inv ? {
           available_fba: parseInt(inv.available_fba) || 0,
           reserved: parseInt(inv.reserved) || 0,
           inbound: (parseInt(inv.inbound_shipped) || 0) + (parseInt(inv.inbound_receiving) || 0),
-          ordered: parseInt(row.est_ordered_qty) || 0,
+          ordered,
           total: (parseInt(inv.available_fba) || 0) +
                  (parseInt(inv.reserved) || 0) +
                  (parseInt(inv.inbound_shipped) || 0) +
                  (parseInt(inv.inbound_receiving) || 0) +
-                 (parseInt(row.est_ordered_qty) || 0),
-        } : null;
+                 ordered,
+          hasSnapshot: true,
+        } : {
+          available_fba: 0,
+          reserved: 0,
+          inbound: 0,
+          ordered,
+          total: ordered,
+          hasSnapshot: false,
+        };
 
         const actuals = sales ? {
           units_sold: parseInt(sales.units_sold) || 0,
@@ -707,7 +918,10 @@ export async function registerRoutes(
           notes: row.notes ?? null,
           isArchived: row.is_active === false,
           isMeltable: row.is_meltable ?? false,
-          isHazmat: row.is_hazmat ?? false,
+          // Tri-state preserved: NULL = unchecked (renders as muted dash, never
+          // a green "No"). Do NOT coerce to false — that would hide unknowns.
+          isHazmat: row.is_hazmat ?? null,
+          isDangerousGood: row.is_dangerous_good ?? null,
           isSearchSuppressed: row.is_search_suppressed ?? false,
           suppressionReasons: row.suppression_reasons ?? [],
           cogsSource: (row.cogs_source as "po_sheet" | "manual" | null) ?? null,
@@ -1025,10 +1239,12 @@ export async function registerRoutes(
   });
 
   // === Inventory / Sales / Sheets / Suppression sync ===
-  app.get("/api/inventory/sync", async (_req: Request, res: Response) => {
+  app.post("/api/inventory/sync", async (req: Request, res: Response) => {
     if (!isDbAvailable()) { res.status(503).json({ message: "Database not available" }); return; }
+    const { asins } = (req.body ?? {}) as { asins?: string[] };
+    const filter = asins && asins.length > 0 ? new Set(asins) : undefined;
     try {
-      const result = await syncInventory();
+      const result = await syncInventory(filter);
       res.json(result);
     } catch (err: any) {
       log(`Inventory sync error: ${err.message}`, "inventory-sync");
@@ -1038,13 +1254,14 @@ export async function registerRoutes(
 
   app.post("/api/sales/sync", async (req: Request, res: Response) => {
     if (!isDbAvailable()) { res.status(503).json({ message: "Database not available" }); return; }
-    const { startDate, endDate } = req.body as { startDate?: string; endDate?: string };
+    const { startDate, endDate, asins } = req.body as { startDate?: string; endDate?: string; asins?: string[] };
     if (!startDate || !endDate) {
       res.status(400).json({ message: "startDate and endDate are required" });
       return;
     }
+    const filter = asins && asins.length > 0 ? new Set(asins) : undefined;
     try {
-      const result = await syncSalesData(startDate, endDate);
+      const result = await syncSalesData(startDate, endDate, filter);
       res.json(result);
     } catch (err: any) {
       log(`Sales sync error: ${err.message}`, "sales-sync");
@@ -1052,19 +1269,111 @@ export async function registerRoutes(
     }
   });
 
-  app.get("/api/sheets/sync", async (_req: Request, res: Response) => {
+  app.post("/api/sheets/sync", async (req: Request, res: Response) => {
     if (!isDbAvailable()) { res.status(503).json({ message: "Database not available" }); return; }
     const credPath = process.env.GOOGLE_CREDENTIALS_PATH;
     if (!credPath || !fs.existsSync(credPath)) {
       res.status(400).json({ message: "Google credentials file not found" });
       return;
     }
+    const { asins } = (req.body ?? {}) as { asins?: string[] };
+    const filter = asins && asins.length > 0 ? new Set(asins) : undefined;
     try {
-      const result = await runSheetsSync();
+      const result = await runSheetsSync(filter);
       res.json(result);
     } catch (err: any) {
       log(`Sheets sync error: ${err.message}`, "sheets");
       res.status(500).json({ message: err.message });
+    }
+  });
+
+  // Insert-only sync from the sourcing Google Sheet. AF is source of truth —
+  // pre-existing ASINs are skipped (no archive, no update, no analyze).
+  // Streams NDJSON: { type: "sync_summary" } first with the plan, then the
+  // standard analyze stream (progress + result) for new ASINs, then complete.
+  // Manual trigger for the PO → Aura cost-sync chain. Same shared function the
+  // aura-sync cron calls (server/aura-sync-chain.ts), so they can't diverge.
+  app.post("/api/sync/aura", async (_req: Request, res: Response) => {
+    if (!isDbAvailable()) { res.status(503).json({ message: "Database not available" }); return; }
+    const credPath = process.env.GOOGLE_CREDENTIALS_PATH;
+    if (!credPath || !fs.existsSync(credPath)) {
+      res.status(400).json({ message: "Google credentials file not found" }); return;
+    }
+    if (!process.env.GOOGLE_SHEET_ID) { res.status(400).json({ message: "GOOGLE_SHEET_ID not configured" }); return; }
+    if (!process.env.AURA_API_KEY) { res.status(400).json({ message: "AURA_API_KEY not configured" }); return; }
+    try {
+      const summary = await runAuraSyncChain(); // PO sync (hard dep) → Aura live push
+      res.json(summary);
+    } catch (err: any) {
+      // PO sync failure aborts the chain before any Aura push (stale-cost guard).
+      res.status(500).json({ message: `Aura sync chain failed: ${err?.message ?? err}` });
+    }
+  });
+
+  // Push-only Aura sync: pushes AF costs to Aura WITHOUT running the PO sheet
+  // sync first (no chain). Gate only on DB + AURA_API_KEY — the Google sheet is
+  // not touched, so no creds/sheet-id requirement. Does not modify the chain.
+  app.post("/api/sync/aura/push", async (req: Request, res: Response) => {
+    if (!isDbAvailable()) { res.status(503).json({ message: "Database not available" }); return; }
+    if (!process.env.AURA_API_KEY) { res.status(400).json({ message: "AURA_API_KEY not configured" }); return; }
+    // Optional selection filter (same body shape as /api/sheets/sync).
+    const { asins } = (req.body ?? {}) as { asins?: string[] };
+    const asinFilter = asins && asins.length > 0 ? new Set(asins) : undefined;
+    try {
+      const r = await pushAuraCosts({ limit: "all", asinFilter });
+      const pv = r.dryRunSummary.perVerdict;
+      const skipped = pv["SKIP:unmapped_sku"] + pv["SKIP:ambiguous_sku"] + pv["SKIP:null_cogs"] + pv["SKIP:zero_cost"];
+      log(
+        `Aura push complete${asinFilter ? ` (${asinFilter.size} selected)` : ""}: ` +
+        `pushed ${r.pushed}, unchanged ${pv.UNCHANGED}, failed ${r.failed}, ` +
+        `skip[unmapped ${pv["SKIP:unmapped_sku"]}, ambiguous ${pv["SKIP:ambiguous_sku"]}, ` +
+        `null_cogs ${pv["SKIP:null_cogs"]}, zero_cost ${pv["SKIP:zero_cost"]}]` +
+        `${r.notInAura?.length ? `, notInAura ${r.notInAura.length}` : ""}`,
+        "aura-push",
+      );
+      res.json({ pushed: r.pushed, unchanged: pv.UNCHANGED, failed: r.failed, skipped, notInAura: r.notInAura ?? [] });
+    } catch (err: any) {
+      res.status(500).json({ message: `Aura push failed: ${err?.message ?? err}` });
+    }
+  });
+
+  app.post("/api/sync/sourcing-sheet", async (req: Request, res: Response) => {
+    if (!isDbAvailable()) { res.status(503).json({ message: "Database not available" }); return; }
+    const credPath = process.env.GOOGLE_CREDENTIALS_PATH;
+    if (!credPath || !fs.existsSync(credPath)) {
+      res.status(400).json({ message: "Google credentials file not found" });
+      return;
+    }
+    if (!process.env.SOURCING_SHEET_ID) {
+      res.status(400).json({ message: "SOURCING_SHEET_ID not configured" });
+      return;
+    }
+
+    const dryRun = String(req.query.dryRun ?? "").toLowerCase() === "true";
+
+    res.setHeader("Content-Type", "application/x-ndjson");
+    res.setHeader("Transfer-Encoding", "chunked");
+    res.setHeader("Cache-Control", "no-cache");
+    res.setHeader("Connection", "keep-alive");
+
+    try {
+      const result = await syncSourcingSheet(
+        async (newInputs) => {
+          // fromCsvUpload=true so estimated_cogs gets persisted via the dedicated CSV write path
+          await runAnalyzeAndStream(newInputs, res, () => null, true);
+        },
+        (plan) => {
+          res.write(JSON.stringify({ type: "sync_summary", data: { ...plan, dryRun } }) + "\n");
+        },
+        { dryRun },
+      );
+      res.write(JSON.stringify({ type: "complete", data: result }) + "\n");
+      res.end();
+    } catch (err: any) {
+      log(`Sourcing sheet sync error: ${err.message}`, "sheets");
+      // Headers already sent — emit error in stream rather than HTTP status
+      res.write(JSON.stringify({ type: "error", data: { message: err.message } }) + "\n");
+      res.end();
     }
   });
 
@@ -1076,6 +1385,277 @@ export async function registerRoutes(
     } catch (err: any) {
       log(`Suppression sync error: ${err.message}`, "suppression-sync");
       res.status(500).json({ message: err.message });
+    }
+  });
+
+  // === DA-3: revival of catalog-deleted-then-restored ASINs ===
+  //
+  // Standing-state predicate (matches DA-2's auto-archive write):
+  //   is_active=false AND archive_reason='catalog_deleted' AND is_catalog_deleted=false
+  // Meaning: "archived BECAUSE catalog-deleted, but the catalog has been restored."
+  // Manual archives (archive_reason=NULL) are never offered for auto-revival.
+
+  app.get("/api/asins/revival-candidates", async (_req: Request, res: Response) => {
+    if (!isDbAvailable()) { res.json([]); return; }
+    try {
+      const result = await query(`
+        SELECT asin, title, brand
+        FROM asins
+        WHERE is_active = FALSE
+          AND archive_reason = 'catalog_deleted'
+          AND is_catalog_deleted = FALSE
+        ORDER BY added_at DESC
+      `);
+      res.json(result.rows);
+    } catch (err: any) {
+      res.status(500).json({ message: err.message });
+    }
+  });
+
+  app.post("/api/asins/revive", async (req: Request, res: Response) => {
+    const { asins: asinList } = req.body as { asins?: string[] };
+    if (!asinList || !Array.isArray(asinList) || asinList.length === 0) {
+      res.status(400).json({ message: "No ASINs provided" }); return;
+    }
+    if (!isDbAvailable()) { res.status(503).json({ message: "Database not available" }); return; }
+    try {
+      // Server-side predicate guard lives in the WHERE clause — atomic, no
+      // TOCTOU window. A stale or malicious payload that included a manually-
+      // archived ASIN (archive_reason=NULL), or one still flagged catalog-
+      // deleted, simply won't match — no flip, no error. RETURNING tells us
+      // which ASINs actually flipped, so the UI can show honest feedback
+      // when something didn't qualify.
+      const result = await query(
+        `UPDATE asins
+           SET is_active = TRUE, archive_reason = NULL
+         WHERE asin = ANY($1::text[])
+           AND is_active = FALSE
+           AND archive_reason = 'catalog_deleted'
+           AND is_catalog_deleted = FALSE
+         RETURNING asin`,
+        [asinList],
+      );
+      const revived: string[] = result.rows.map((r: any) => r.asin);
+      const skipped = asinList.filter((a) => !revived.includes(a));
+      res.json({ revived, skipped });
+    } catch (err: any) {
+      res.status(500).json({ message: err.message });
+    }
+  });
+
+  // === 2D-3: Offer-add preview (dry-run only) ===
+  //
+  // DRY-RUN ONLY ENDPOINT. The orchestrator is invoked with dryRun=true
+  // unconditionally — there is NO server-side path that fires a live
+  // putListingsItem in this round. The live-write endpoint is DA-4.
+  //
+  // For each input ASIN:
+  //   1. Pre-filter against locally-known is_catalog_deleted / eligibility_status
+  //      (cheap UX; the orchestrator re-checks via SP-API for anything that passes)
+  //   2. For submittable ASINs, load isHazmat + a placeholder price
+  //   3. Call offerAddForAsin with dryRun=true → returns OfferAddResult
+  //
+  // Returns a structured response that the preview dialog renders directly.
+  app.post("/api/offer-add/preview", async (req: Request, res: Response) => {
+    if (!isDbAvailable()) { res.status(503).json({ message: "Database not available" }); return; }
+    const sellerId = process.env.SP_API_SELLER_ID;
+    if (!sellerId) { res.status(503).json({ message: "SP_API_SELLER_ID not configured" }); return; }
+    const { asins } = (req.body ?? {}) as { asins?: string[] };
+    if (!asins || !Array.isArray(asins) || asins.length === 0) {
+      res.status(400).json({ message: "No ASINs provided" }); return;
+    }
+
+    try {
+      // PREVIEW uses the SAME submitOfferAddBatch pipeline as live submit,
+      // with phase4Mode="preview" so phase 4 assembles the payload but skips
+      // PUT. This guarantees preview == submit by construction (one code path).
+      const submitRows = await loadSubmitRows(asins);
+      const settings = await loadSettingsForSubmit();
+      const inboundRow = await query(`SELECT value FROM settings WHERE key='include_inbound_shipping'`);
+      const includeInboundShipping = inboundRow.rows[0]?.value === "true" || inboundRow.rows[0]?.value === true;
+      const skusRes = await query(`SELECT sku FROM asin_skus`);
+      const allExistingSkus = skusRes.rows.map((r: any) => String(r.sku));
+
+      const submitResult = await submitOfferAddBatch(submitRows, {
+        queryFn: (sql, params) => query(sql, params),
+        sellerId,
+        settings,
+        includeInboundShipping,
+        allExistingSkus,
+        productRegistry: makeProductRegistryRepo((sql, params) => query(sql, params)),
+        phase4Mode: "preview", // do everything EXCEPT the live PUT
+      });
+
+      // Map SubmitOutcome → OfferAddResult shape for UI compat (the preview
+      // dialog already understands "preview" outcome with payload).
+      const perAsin = submitResult.perAsin.map(({ asin, outcome }) => ({
+        asin,
+        outcome: mapSubmitOutcomeToOfferAddResult(outcome),
+      }));
+
+      res.json({
+        preFilter: { excluded: submitResult.preFilter.excluded },
+        perAsin,
+        notes: {
+          priceSource: "Resolved via getItemOffers + Rule 1/2 (same path as submit)",
+          productNumber: "Real NNN from batch allocator (same path as submit)",
+          liveWrites: submitResult.notes.liveWrites,
+        },
+      });
+    } catch (err: any) {
+      log(`Offer-add preview error: ${err.message}`, "offer-add");
+      res.status(500).json({ message: err.message });
+    }
+  });
+
+  // === 2D-4 substep 4: LIVE submit endpoint ===
+  //
+  // This is the FIRST endpoint that fires real putListingsItem calls.
+  // It expects the preview endpoint to have already run for review; the
+  // server still re-classifies authoritatively (no trust in client-side state).
+  //
+  // Body: { asins: string[] } — typically the ASINs the user reviewed in preview
+  //                              and clicked Confirm for.
+  // Response: { preFilter, perAsin: [{ asin, outcome }], notes }
+  //
+  // CRITICAL: dryRun=FALSE is set inside submitOfferAddBatch's phase 4. The
+  // route doesn't carry a dryRun flag — calling this endpoint IS the consent.
+  // If you want a dry-run preview, use POST /api/offer-add/preview instead.
+  app.post("/api/offer-add/submit", async (req: Request, res: Response) => {
+    if (!isDbAvailable()) { res.status(503).json({ message: "Database not available" }); return; }
+    const sellerId = process.env.SP_API_SELLER_ID;
+    if (!sellerId) { res.status(503).json({ message: "SP_API_SELLER_ID not configured" }); return; }
+    const { asins, skuOverrides } = (req.body ?? {}) as { asins?: string[]; skuOverrides?: Record<string, string> };
+    if (!asins || !Array.isArray(asins) || asins.length === 0) {
+      res.status(400).json({ message: "No ASINs provided" }); return;
+    }
+
+    try {
+      // Use the SAME loaders as preview — single source of truth.
+      const submitRows = await loadSubmitRows(asins);
+      const settings = await loadSettingsForSubmit();
+      const inboundRow = await query(`SELECT value FROM settings WHERE key='include_inbound_shipping'`);
+      const includeInboundShipping = inboundRow.rows[0]?.value === "true" || inboundRow.rows[0]?.value === true;
+      const skusRes = await query(`SELECT sku FROM asin_skus`);
+      const allExistingSkus = skusRes.rows.map((r: any) => String(r.sku));
+
+      log(`Offer-add SUBMIT (LIVE) for ${asins.length} ASIN(s): ${asins.join(", ")}`, "offer-add");
+
+      const result = await submitOfferAddBatch(submitRows, {
+        queryFn: (sql, params) => query(sql, params),
+        sellerId,
+        settings,
+        includeInboundShipping,
+        allExistingSkus,
+        skuOverrides,
+        productRegistry: makeProductRegistryRepo((sql, params) => query(sql, params)),
+        // phase4Mode defaults to "live" — REAL putListingsItem fires here.
+        // selfHealWrite omitted for now — resurrection's selfHeal writes to asins
+        // table; submit path doesn't need it for the live submission itself.
+      });
+
+      log(`Offer-add SUBMIT complete: ${result.notes.submittedCount} created, ${result.notes.failedCount} failed, ${result.notes.skippedCount} skipped`, "offer-add");
+      res.json(result);
+    } catch (err: any) {
+      log(`Offer-add submit error: ${err.message}`, "offer-add");
+      res.status(500).json({ message: err.message });
+    }
+  });
+
+  // === Post-submit verification ledger ===
+  //
+  // On-demand (no job infra). Verify sweeps pending/processing/stale rows
+  // through SC, paced + fail-closed (throttled rows stay unchanged). Amazon
+  // async processing is slow (hours), so this is expected to run the morning
+  // after a batch; re-running is safe/idempotent.
+  app.post("/api/submissions/verify", async (_req: Request, res: Response) => {
+    const sellerId = process.env.SP_API_SELLER_ID;
+    if (!sellerId) { res.status(400).json({ error: "SP_API_SELLER_ID not set" }); return; }
+    try {
+      const summary = await verifyPending(sellerId);
+      const needsAttention = await listNeedsAttention();
+      res.json({ summary, needsAttention });
+    } catch (err: any) {
+      res.status(500).json({ error: err?.message ?? "verify failed" });
+    }
+  });
+
+  // Unverified count (toolbar chip) + the needs-attention list (failed, stale,
+  // and LIVE-with-review-flags — surfaced, not JSONB-only).
+  app.get("/api/submissions/unverified", async (_req: Request, res: Response) => {
+    try {
+      res.json({
+        count: await getUnverifiedCount(),
+        needsAttention: await listNeedsAttention(),
+        inFlight: await listInFlight(),
+      });
+    } catch (err: any) {
+      res.status(500).json({ error: err?.message ?? "query failed" });
+    }
+  });
+
+  // Manual resolution of a stale/ambiguous row: live | failed | deleted.
+  app.post("/api/submissions/:id/resolve", async (req: Request, res: Response) => {
+    const id = String(req.params.id);
+    const verdict = req.body?.verdict as "live" | "failed" | "deleted";
+    if (!["live", "failed", "deleted"].includes(verdict)) {
+      res.status(400).json({ error: "verdict must be live | failed | deleted" }); return;
+    }
+    try {
+      await resolveSubmissionManual(id, verdict);
+      res.json({ ok: true });
+    } catch (err: any) {
+      const msg = err?.message ?? "resolve failed";
+      res.status(/already resolved|not found/.test(msg) ? 409 : 500).json({ error: msg });
+    }
+  });
+
+  // === 2D-2: Legend approvals (legend_pending → approved) ===
+  //
+  // List approved brands — used by the legend approval dialog's merge-target
+  // dropdown. Fetched fresh each dialog open (no client-side cache) so newly-
+  // approved brands from a prior batch appear as targets in the current one.
+  app.get("/api/sku-legend/brands", async (_req: Request, res: Response) => {
+    if (!isDbAvailable()) { res.json([]); return; }
+    try {
+      const r = await query(
+        `SELECT id AS "legendId", raw_value AS "rawValue", code
+           FROM sku_legend
+          WHERE type='brand' AND status='approved'
+          ORDER BY raw_value`,
+      );
+      res.json(r.rows);
+    } catch (err: any) {
+      res.status(500).json({ message: err.message });
+    }
+  });
+
+  // Bulk approve — handles approve_new / approve_in_place / merge per item.
+  // Server-side ordering, dependency tracking, per-item atomicity. See
+  // server/sku-legend-approval.ts for the orchestration contract.
+  app.post("/api/sku-legend/approve", async (req: Request, res: Response) => {
+    if (!isDbAvailable()) { res.status(503).json({ message: "Database not available" }); return; }
+    const { items } = (req.body ?? {}) as { items?: ApprovalItem[] };
+    if (!items || !Array.isArray(items) || items.length === 0) {
+      res.status(400).json({ message: "No items provided" }); return;
+    }
+    // Single client + outer transaction. Each action uses a SAVEPOINT so
+    // failed items roll back their own writes without affecting siblings.
+    // An uncaught orchestrator-level error rolls back the whole batch
+    // (per-item errors are caught and surfaced in results — they don't throw).
+    const client = await pool.connect();
+    try {
+      await client.query("BEGIN");
+      const handlers = makeProductionHandlers(client);
+      const results = await processBulkApproval(items, handlers);
+      await client.query("COMMIT");
+      res.json({ results });
+    } catch (err: any) {
+      await client.query("ROLLBACK").catch(() => {});
+      log(`Bulk legend approval error: ${err.message}`, "sku-legend");
+      res.status(500).json({ message: err.message });
+    } finally {
+      client.release();
     }
   });
 
@@ -1092,24 +1672,6 @@ export async function registerRoutes(
       res.json({ count: asinList.length, archived: archive });
     } catch (err: any) {
       res.status(500).json({ message: err.message });
-    }
-  });
-
-  // Manual trigger for the PO → Aura cost-sync chain. Same shared function the
-  // aura-sync cron calls (server/aura-sync-chain.ts), so they can't diverge.
-  app.post("/api/sync/aura", async (_req: Request, res: Response) => {
-    if (!isDbAvailable()) { res.status(503).json({ message: "Database not available" }); return; }
-    const credPath = process.env.GOOGLE_CREDENTIALS_PATH;
-    if (!credPath || !fs.existsSync(credPath)) {
-      res.status(400).json({ message: "Google credentials file not found" }); return;
-    }
-    if (!process.env.GOOGLE_SHEET_ID) { res.status(400).json({ message: "GOOGLE_SHEET_ID not configured" }); return; }
-    if (!process.env.AURA_API_KEY) { res.status(400).json({ message: "AURA_API_KEY not configured" }); return; }
-    try {
-      const summary = await runAuraSyncChain(); // PO sync (hard dep) → Aura live push
-      res.json(summary);
-    } catch (err: any) {
-      res.status(500).json({ message: `Aura sync chain failed: ${err?.message ?? err}` });
     }
   });
 
@@ -1336,9 +1898,9 @@ export async function registerRoutes(
     } catch (err: any) { res.status(500).json({ message: err.message }); }
   });
 
-  async function runAnalyzeAndStream(
+  const runAnalyzeCore: RunAnalyzeCore = async function (
     asins: AsinInput[],
-    res: Response,
+    emit: (chunk: string) => void,
     progressPrefix: (i: number) => string | null = () => null,
     fromCsvUpload = false,
   ) {
@@ -1355,7 +1917,7 @@ export async function registerRoutes(
 
       const prefix = progressPrefix(i);
       const progressAsin = prefix ? `${prefix} ${input.asin}` : input.asin;
-      res.write(
+      emit(
         JSON.stringify({
           type: "progress",
           data: { current: i + 1, total: asins.length, asin: progressAsin },
@@ -1365,10 +1927,14 @@ export async function registerRoutes(
       let result: AsinResult;
 
       try {
-        const [{ pricingData, catalogData, pricingRestricted }, eligibilityData] = await Promise.all([
+        const [{ pricingData, catalogData, pricingRestricted }, eligibilityData, hazmatFlag] = await Promise.all([
           fetchPricingAndCatalog(input.asin),
           getEligibility(input.asin),
+          getInboundHazmat(input.asin),
         ]);
+        // null = inconclusive; preserved by COALESCE in the UPSERT (no clobber).
+        // is_dangerous_good rides on catalogData from the catalog fetch above.
+        catalogData.isHazmat = hazmatFlag;
 
         const { price: feePrice, isFallback } = getFeePriceForAsin(pricingData);
         let feesData: AsinResult["feesData"] = { fbaFulfillmentFee: null, referralFee: null, feesEstimatePrice: null };
@@ -1416,20 +1982,22 @@ export async function registerRoutes(
         retryQueue.push({ input, attempt: 1, result });
         log(`Queued ${input.asin} for retry (fees=${retryNeeded.fees}, pricing=${retryNeeded.pricing}, catalog=${retryNeeded.catalog})`, "retry");
         if (!retryNeeded.fees && !retryNeeded.pricing) {
-          writeResult(res, allResults, input.asin, result, false, fromCsvUpload);
+          writeResult(emit, allResults, input.asin, result, false, fromCsvUpload, input.notes ?? null);
         }
       } else {
-        writeResult(res, allResults, input.asin, result, false, fromCsvUpload);
+        writeResult(emit, allResults, input.asin, result, false, fromCsvUpload, input.notes ?? null);
       }
 
-      // Save tags and notes from CSV import (fire-and-forget)
+      // Tags are fire-and-forget — they have their own table and don't race
+      // with the asins INSERT (upsertTagsForAsin no-ops if the asin row
+      // doesn't exist yet, which is benign — tags only matter for known ASINs).
       if (isDbAvailable()) {
         if (input.tags && input.tags.length > 0) {
           upsertTagsForAsin(input.asin, input.tags).catch((err: any) => log(`Tags error for ${input.asin}: ${err.message}`, "db"));
         }
-        if (input.notes) {
-          appendNotesForAsin(input.asin, input.notes).catch((err: any) => log(`Notes error for ${input.asin}: ${err.message}`, "db"));
-        }
+        // Notes are persisted by writeResult's promise chain — atomically on
+        // INSERT for new ASINs, via appendNotesForAsin (dedup) for existing.
+        // The old fire-and-forget call was racy: lost ~152 notes in a 7-day window.
       }
 
       if ((i + 1) % BATCH_SIZE === 0 && i < asins.length - 1) {
@@ -1447,7 +2015,7 @@ export async function registerRoutes(
         log(`Retry attempt ${attempt}: ${currentBatch.length} ASINs`, "retry");
         await delay(RETRY_DELAY);
 
-        res.write(
+        emit(
           JSON.stringify({
             type: "progress",
             data: { current: asins.length, total: asins.length, asin: `Retrying ${currentBatch.length} ASINs (attempt ${attempt})...` },
@@ -1468,6 +2036,9 @@ export async function registerRoutes(
               const fetched = await fetchPricingAndCatalog(item.input.asin, item.result, retryParts);
               pricingData = fetched.pricingData;
               catalogData = fetched.catalogData;
+              // Hazmat comes from COMMINGLING, not the catalog fetch. Retries
+              // never re-probe COMMINGLING, so carry the first-pass value.
+              catalogData.isHazmat = item.result.catalogData.isHazmat;
               pricingRestricted = fetched.pricingRestricted;
             }
 
@@ -1523,7 +2094,7 @@ export async function registerRoutes(
               const finalResult = retryError
                 ? { ...retried, error: retryError }
                 : retried;
-              writeResult(res, allResults, item.input.asin, finalResult, allResults.has(item.input.asin), fromCsvUpload);
+              writeResult(emit, allResults, item.input.asin, finalResult, allResults.has(item.input.asin), fromCsvUpload, item.input.notes ?? null);
             }
           } catch (err: any) {
             log(`Retry error for ${item.input.asin}: ${err.message}`, "retry");
@@ -1557,7 +2128,7 @@ export async function registerRoutes(
                 ...finalItem,
                 error: errorMsg ?? finalItem.error,
               };
-              writeResult(res, allResults, item.input.asin, errorResult, allResults.has(item.input.asin), fromCsvUpload);
+              writeResult(emit, allResults, item.input.asin, errorResult, allResults.has(item.input.asin), fromCsvUpload, item.input.notes ?? null);
             } else {
               item.attempt = attempt + 1;
             }
@@ -1584,13 +2155,26 @@ export async function registerRoutes(
             ...item.result,
             error: errorMsg,
           };
-          writeResult(res, allResults, item.input.asin, errorResult, false, fromCsvUpload);
+          writeResult(emit, allResults, item.input.asin, errorResult, false, fromCsvUpload, item.input.notes ?? null);
         }
       }
       if (uncalculated.length > 0) {
         log(`=== RETRY SUMMARY: ${uncalculated.length} ASINs still uncalculated: ${uncalculated.join(", ")} ===`, "retry");
       }
     }
+  };
+  runAnalyzeCoreRef = runAnalyzeCore;
+
+  // Thin streaming wrapper. Preserves the existing /api/analyze + /api/analyze/all
+  // call sites so the interactive upload flow's signature does not change.
+  // The sourcing-sync cron calls runAnalyzeCore directly with a no-op emit.
+  async function runAnalyzeAndStream(
+    asins: AsinInput[],
+    res: Response,
+    progressPrefix: (i: number) => string | null = () => null,
+    fromCsvUpload = false,
+  ) {
+    await runAnalyzeCore(asins, (chunk) => res.write(chunk), progressPrefix, fromCsvUpload);
   }
 
   function runPostAnalyzeBackgroundSyncs() {
@@ -1627,7 +2211,7 @@ export async function registerRoutes(
   // Analyze all active ASINs from the DB in server-side batches of 100.
   // Used when re-analyzing the full catalog — avoids "request entity too large"
   // because the ASIN list is never sent in the request body.
-  app.post("/api/analyze/all", async (_req: Request, res: Response) => {
+  app.post("/api/analyze/all", async (req: Request, res: Response) => {
     if (!isDbAvailable()) { res.status(503).json({ message: "Database not available" }); return; }
 
     res.setHeader("Content-Type", "application/x-ndjson");
@@ -1635,14 +2219,24 @@ export async function registerRoutes(
     res.setHeader("Cache-Control", "no-cache");
     res.setHeader("Connection", "keep-alive");
 
+    const { asins: filterAsins } = (req.body ?? {}) as { asins?: string[] };
+    const hasFilter = Array.isArray(filterAsins) && filterAsins.length > 0;
+
     try {
-      const dbRes = await query(`
-        SELECT a.asin, COALESCE(e.actual_cogs, e.estimated_cogs, e.cogs) AS cogs, a.buy_link, e.prep_override, e.storage_override
-        FROM asins a
-        LEFT JOIN asin_estimates e ON e.asin = a.asin
-        WHERE a.is_active = TRUE
-        ORDER BY a.asin
-      `);
+      const dbRes = await query(
+        hasFilter
+          ? `SELECT a.asin, COALESCE(e.actual_cogs, e.estimated_cogs, e.cogs) AS cogs, a.buy_link, e.prep_override, e.storage_override
+             FROM asins a
+             LEFT JOIN asin_estimates e ON e.asin = a.asin
+             WHERE a.is_active = TRUE AND a.asin = ANY($1::text[])
+             ORDER BY a.asin`
+          : `SELECT a.asin, COALESCE(e.actual_cogs, e.estimated_cogs, e.cogs) AS cogs, a.buy_link, e.prep_override, e.storage_override
+             FROM asins a
+             LEFT JOIN asin_estimates e ON e.asin = a.asin
+             WHERE a.is_active = TRUE
+             ORDER BY a.asin`,
+        hasFilter ? [filterAsins] : undefined,
+      );
       const allAsins: AsinInput[] = dbRes.rows.map((r: any) => ({
         asin: r.asin,
         cogs: r.cogs != null ? parseFloat(r.cogs) : 0,
@@ -1713,7 +2307,7 @@ export async function registerRoutes(
     }
   });
 
-  app.post("/api/prices/refresh", async (_req: Request, res: Response) => {
+  app.post("/api/prices/refresh", async (req: Request, res: Response) => {
     if (!isDbAvailable()) { res.status(503).json({ message: "Database not available" }); return; }
 
     res.setHeader("Content-Type", "application/x-ndjson");
@@ -1721,10 +2315,13 @@ export async function registerRoutes(
     res.setHeader("Cache-Control", "no-cache");
     res.setHeader("Connection", "keep-alive");
 
+    const { asins } = (req.body ?? {}) as { asins?: string[] };
+    const filter = asins && asins.length > 0 ? new Set(asins) : undefined;
+
     try {
       const summary = await refreshPrices(async (p) => {
         res.write(JSON.stringify({ type: "progress", data: p }) + "\n");
-      });
+      }, filter);
       res.write(JSON.stringify({
         type: "complete",
         data: { updated: summary.updated, failed: summary.failed },

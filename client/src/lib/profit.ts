@@ -7,6 +7,7 @@ import {
   getEffectivePrep,
   getEffectiveStorage,
   calculateMaxCogs,
+  appliesDgHazmatSurcharge,
 } from "@shared/schema";
 
 /**
@@ -38,7 +39,7 @@ export function getEstimatedProfit(
     storage.value,
     settings,
     includeInboundShipping,
-    result.isHazmat ?? false,
+    appliesDgHazmatSurcharge(result),
     result.category ?? null,
   );
 }
@@ -85,7 +86,7 @@ export function getActualProfit(
     storage.value,
     settings,
     includeInboundShipping,
-    result.isHazmat ?? false,
+    appliesDgHazmatSurcharge(result),
     result.category ?? null,
   );
   return {
@@ -121,7 +122,7 @@ export function getMaxCogs(
     storage.value,
     settings,
     includeInboundShipping,
-    result.isHazmat ?? false,
+    appliesDgHazmatSurcharge(result),
     result.category ?? null,
   );
 }

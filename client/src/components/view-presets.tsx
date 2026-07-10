@@ -47,7 +47,6 @@ interface ViewPresetsProps {
   columnConfig: ColumnConfig;
   onColumnConfigChange: (config: ColumnConfig) => void;
   onSortChange?: (col: ColumnId, dir: "asc" | "desc") => void;
-  onPresetFilterChange?: (filter: string | null) => void;
   sortCol?: ColumnId | null;
   sortDir?: "asc" | "desc";
   colFilters?: FilterMap;
@@ -78,7 +77,6 @@ function buildSaveConfig(
   columnConfig: ColumnConfig,
   sortCol?: ColumnId | null,
   sortDir?: "asc" | "desc",
-  filter?: string | null,
   colFilters?: FilterMap,
 ): PresetConfig {
   return {
@@ -86,14 +84,13 @@ function buildSaveConfig(
     visible: Array.from(columnConfig.visible) as ColumnId[],
     sort_by: sortCol ?? undefined,
     sort_dir: sortDir ?? "desc",
-    filter: filter ?? undefined,
     colFilters: colFilters && Object.keys(colFilters).length > 0 ? colFilters : undefined,
   };
 }
 
 export function ViewPresets({
   columnConfig, onColumnConfigChange,
-  onSortChange, onPresetFilterChange,
+  onSortChange,
   sortCol, sortDir, colFilters, onColFiltersChange,
 }: ViewPresetsProps) {
   const [presets, setPresets] = useState<Preset[]>([]);
@@ -106,7 +103,6 @@ export function ViewPresets({
   const [showSave, setShowSave] = useState(false);
   const [renamingId, setRenamingId] = useState<string | null>(null);
   const [renameVal, setRenameVal] = useState("");
-  const [activePresetFilter, setActivePresetFilter] = useState<string | null>(null);
 
   const fetchPresets = useCallback(() => {
     fetch("/api/view-presets").then((r) => r.json()).then(setPresets).catch(() => {});
@@ -124,10 +120,6 @@ export function ViewPresets({
     const sc = preset.config.sort_by as ColumnId | undefined;
     const sd = (preset.config.sort_dir as "asc" | "desc") ?? "desc";
     if (sc && onSortChange) onSortChange(sc, sd);
-    // Apply preset filter
-    const pf = preset.config.filter ?? null;
-    setActivePresetFilter(pf);
-    if (onPresetFilterChange) onPresetFilterChange(pf);
     // Apply column filters
     if (onColFiltersChange) onColFiltersChange(preset.config.colFilters ?? {});
     setOpen(false);
@@ -137,7 +129,7 @@ export function ViewPresets({
     if (!newName.trim()) return;
     setSaving(true);
     try {
-      const config = buildSaveConfig(columnConfig, sortCol, sortDir, activePresetFilter, colFilters);
+      const config = buildSaveConfig(columnConfig, sortCol, sortDir, colFilters);
       const res = await fetch("/api/view-presets", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
@@ -159,7 +151,7 @@ export function ViewPresets({
     if (!active) return;
     setSaving(true);
     try {
-      const config = buildSaveConfig(columnConfig, sortCol, sortDir, activePresetFilter, colFilters);
+      const config = buildSaveConfig(columnConfig, sortCol, sortDir, colFilters);
       await fetch(`/api/view-presets/${activeId}`, {
         method: "PUT",
         headers: { "Content-Type": "application/json" },

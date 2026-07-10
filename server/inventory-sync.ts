@@ -19,9 +19,18 @@ interface AsinAgg {
   skuData: SkuData[];
 }
 
-export async function syncInventory(): Promise<{ synced: number; skipped: number }> {
-  // Build a map from asin VARCHAR → asins.id UUID for active ASINs
-  const asinRows = await query(`SELECT id, asin FROM asins WHERE is_active = TRUE`);
+export async function syncInventory(
+  asinFilter?: ReadonlySet<string>,
+): Promise<{ synced: number; skipped: number }> {
+  // Build a map from asin VARCHAR → asins.id UUID for active ASINs.
+  // When asinFilter is supplied, restrict to that subset — the SP-API call
+  // itself is paginated/global, so the filter applies to which rows we
+  // accept into the map and therefore write to the DB.
+  const sql = asinFilter && asinFilter.size > 0
+    ? `SELECT id, asin FROM asins WHERE is_active = TRUE AND asin = ANY($1::text[])`
+    : `SELECT id, asin FROM asins WHERE is_active = TRUE`;
+  const params = asinFilter && asinFilter.size > 0 ? [Array.from(asinFilter)] : undefined;
+  const asinRows = await query(sql, params);
   const asinIdMap = new Map<string, string>();
   for (const row of asinRows.rows) {
     asinIdMap.set(row.asin, row.id);

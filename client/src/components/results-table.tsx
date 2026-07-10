@@ -2,7 +2,7 @@ import { useMemo, useState, useRef, useCallback } from "react";
 import { createPortal } from "react-dom";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
-import { ExternalLink, AlertTriangle, ArrowUp, ArrowDown, Copy, Check, Lock, Unlock, ShoppingBag, Pencil, ShoppingCart, SearchX } from "lucide-react";
+import { ExternalLink, AlertTriangle, ArrowUp, ArrowDown, Copy, Check, Lock, Unlock, ShoppingBag, Pencil, ShoppingCart, SearchX, Clock } from "lucide-react";
 
 import {
   type AsinResult,
@@ -16,6 +16,7 @@ import {
   getEffectiveStorage,
   extractDomain,
   calculateMaxCogs,
+  appliesDgHazmatSurcharge,
 } from "@shared/schema";
 
 function ResizeHandle({ onMouseDown }: { onMouseDown: (e: React.MouseEvent) => void }) {
@@ -52,7 +53,7 @@ const DEFAULT_COL_WIDTHS: Partial<Record<ColumnId, number>> = {
   estCogs: 90, salePrice: 95, profit: 90, margin: 80, roi: 80,
   fbaFee: 85, referralFee: 95, inboundShipping: 100, prep: 85, storage: 105, maxCogs: 90,
   sellersFba: 85, sellers: 80, sellers7d: 85, sellers30d: 90, fba7d: 80, fba30d: 85,
-  tags: 100, notes: 100, sourcing: 80, meltable: 85, hazmat: 80, suppressed: 90, dateAdded: 95,
+  tags: 100, notes: 100, sourcing: 80, meltable: 85, hazmat: 80, dg: 70, suppressed: 90, dateAdded: 95,
 };
 import { type ColumnConfig } from "@/lib/columns";
 import { type FilterMode } from "@/components/summary-cards";
@@ -289,6 +290,8 @@ interface ResultsTableProps {
   activeFilter: FilterMode;
   buySet: Set<string>;
   onToggleBuy: (asin: string) => void;
+  onHoldSet: Set<string>;
+  onToggleHold: (asin: string) => void;
   selectedSet?: Set<string>;
   onToggleSelect?: (asin: string) => void;
   onSelectAllPage?: (asins: string[]) => void;
@@ -337,7 +340,7 @@ export function getRowValue(
       storage.value,
       settings,
       true,
-      result.isHazmat ?? false,
+      appliesDgHazmatSurcharge(result),
       result.category ?? null
     );
   }
@@ -375,7 +378,8 @@ export function getRowValue(
     case "tags": return result.tags?.map((t) => t.name).join(", ") ?? null;
     case "notes": return result.notes ?? null;
     case "meltable": return result.isMeltable ? "Yes" : "No";
-    case "hazmat": return result.isHazmat ? "Yes" : "No";
+    case "hazmat": return result.isHazmat == null ? "—" : (result.isHazmat ? "Yes" : "No");
+    case "dg": return result.isDangerousGood == null ? "—" : (result.isDangerousGood ? "Yes" : "No");
     case "suppressed": return result.isSearchSuppressed ? "Yes" : "No";
     case "stock": return result.stock?.total ?? null;
     case "availableFba": return result.stock?.available_fba ?? null;
@@ -411,7 +415,7 @@ export function getRowValue(
       const ar = result.actuals.revenue;
       const ap = getEffectivePrep(result, settings);
       const as2 = getEffectiveStorage(result, settings);
-      const ac = calculateProfit(ar / au, result.actualCogs, result.feesData.fbaFulfillmentFee ?? 0, result.feesData.referralFee ?? 0, result.feesData.feesEstimatePrice, result.catalogData.weightLbs, ap.value, as2.value, settings, true, result.isHazmat ?? false, result.category ?? null);
+      const ac = calculateProfit(ar / au, result.actualCogs, result.feesData.fbaFulfillmentFee ?? 0, result.feesData.referralFee ?? 0, result.feesData.feesEstimatePrice, result.catalogData.weightLbs, ap.value, as2.value, settings, true, appliesDgHazmatSurcharge(result), result.category ?? null);
       if (colId === "actProfit") return ac.profit * au;
       if (colId === "actProfitPerUnit") return ac.profit;
       if (colId === "actMargin") return ac.margin;
@@ -431,7 +435,7 @@ export function getRowValue(
         result.feesData.referralFee,
         result.feesData.feesEstimatePrice,
         result.catalogData.weightLbs,
-        p.value, s2.value, settings, true, result.isHazmat ?? false,
+        p.value, s2.value, settings, true, appliesDgHazmatSurcharge(result),
         result.category ?? null,
       );
     }
@@ -439,28 +443,9 @@ export function getRowValue(
   }
 }
 
-function isProfitable(result: AsinResult, priceSource: PriceSource, settings: Settings): boolean | null {
-  if (result.error) return null;
-  const { price } = getSelectedPrice(result, priceSource);
-  if (price == null || result.estimatedCogs == null) return null;
-  const prep = getEffectivePrep(result, settings);
-  const storage = getEffectiveStorage(result, settings);
-  const calc = calculateProfit(
-    price, result.estimatedCogs,
-    result.feesData.fbaFulfillmentFee ?? 0,
-    result.feesData.referralFee ?? 0,
-    result.feesData.feesEstimatePrice,
-    result.catalogData.weightLbs,
-    prep.value, storage.value, settings,
-    true, result.isHazmat ?? false,
-    result.category ?? null
-  );
-  return calc.roi >= settings.minRoiThreshold && calc.margin >= settings.minMarginThreshold;
-}
-
 export function ResultsTable({
   results, allResults: allResultsProp, startIndex = 0, priceSource, settings, columnConfig,
-  activeFilter, buySet, onToggleBuy,
+  activeFilter, buySet, onToggleBuy, onHoldSet, onToggleHold,
   sortCol, sortDir, onSort,
   includeInboundShipping = true,
   dateRangeLabel,
@@ -647,8 +632,11 @@ export function ResultsTable({
                 }}
               />
             </th>
-            <th className="sticky z-30 table-header-stone text-center text-xs font-medium px-1 py-2" style={{ left: cartLeft, width: frozenColWidth.cart, minWidth: frozenColWidth.cart }}>
-              <ShoppingCart className="h-3 w-3 mx-auto text-muted-foreground" />
+            <th className="sticky z-30 table-header-stone text-center text-xs font-medium px-1 py-1" style={{ left: cartLeft, width: frozenColWidth.cart, minWidth: frozenColWidth.cart }}>
+              <div className="flex flex-col items-center gap-px">
+                <ShoppingCart className="h-3 w-3 text-muted-foreground" />
+                <Clock className="h-3 w-3 text-muted-foreground" />
+              </div>
             </th>
             {productVisible && (
               <th className="sticky z-30 table-header-stone text-left text-xs font-medium px-2 py-2 relative" style={{ left: productLeft, width: colWidths["product"] ?? DEFAULT_COL_WIDTHS.product, minWidth: 200, borderRight: "0.5px solid hsl(var(--border))" }}>
@@ -700,6 +688,7 @@ export function ResultsTable({
             const prep = getEffectivePrep(result, settings);
             const storage = getEffectiveStorage(result, settings);
             const isBuy = buySet.has(result.asin);
+            const isHold = onHoldSet.has(result.asin);
 
             let rowBg = "";
             let profitData: ReturnType<typeof calculateProfit> | null = null;
@@ -713,7 +702,7 @@ export function ResultsTable({
                 result.catalogData.weightLbs,
                 prep.value, storage.value, settings,
                 includeInboundShipping,
-                result.isHazmat ?? false,
+                appliesDgHazmatSurcharge(result),
                 result.category ?? null
               );
             }
@@ -740,10 +729,25 @@ export function ResultsTable({
                 <td className={`sticky z-10 text-center px-1 py-1.5 ${frozenBg}`} style={{ left: selLeft, width: frozenColWidth.sel, minWidth: frozenColWidth.sel }}>
                   <input type="checkbox" checked={selectedSet.has(result.asin)} onChange={() => onToggleSelect?.(result.asin)} className="h-3.5 w-3.5 accent-blue-500 cursor-pointer" data-testid={`checkbox-select-${result.asin}`} />
                 </td>
-                <td className={`sticky z-10 text-center px-1 py-1.5 ${frozenBg}`} style={{ left: cartLeft, width: frozenColWidth.cart, minWidth: frozenColWidth.cart }}>
-                  <button onClick={() => onToggleBuy(result.asin)} className="p-0.5" data-testid={`btn-cart-${result.asin}`}>
-                    <ShoppingCart className={`h-3.5 w-3.5 ${isBuy ? "text-blue-500 fill-blue-500/20" : "text-muted-foreground/30 hover:text-muted-foreground"} transition-colors`} />
-                  </button>
+                <td className={`sticky z-10 text-center px-1 py-0.5 ${frozenBg}`} style={{ left: cartLeft, width: frozenColWidth.cart, minWidth: frozenColWidth.cart }}>
+                  <div className="flex flex-col items-center gap-px">
+                    <Tooltip>
+                      <TooltipTrigger asChild>
+                        <button onClick={() => onToggleBuy(result.asin)} className="p-0 leading-none" data-testid={`btn-cart-${result.asin}`}>
+                          <ShoppingCart className={`h-3 w-3 ${isBuy ? "text-blue-500 fill-blue-500/20" : "text-muted-foreground/30 hover:text-muted-foreground"} transition-colors`} />
+                        </button>
+                      </TooltipTrigger>
+                      <TooltipContent side="right" className="text-xs">{isBuy ? "Remove from Buy List" : "Add to Buy List"}</TooltipContent>
+                    </Tooltip>
+                    <Tooltip>
+                      <TooltipTrigger asChild>
+                        <button onClick={() => onToggleHold(result.asin)} className="p-0 leading-none" data-testid={`btn-hold-${result.asin}`}>
+                          <Clock className={`h-3 w-3 ${isHold ? "text-amber-600 fill-amber-500/20" : "text-muted-foreground/30 hover:text-muted-foreground"} transition-colors`} />
+                        </button>
+                      </TooltipTrigger>
+                      <TooltipContent side="right" className="text-xs">{isHold ? "Remove from Hold" : "Put on Hold"}</TooltipContent>
+                    </Tooltip>
+                  </div>
                 </td>
                 {productVisible && (
                   <td className={`sticky z-10 px-2 py-1.5 overflow-hidden ${frozenBg}`} style={{ left: productLeft, width: colWidths["product"] ?? DEFAULT_COL_WIDTHS.product, minWidth: 200, maxWidth: colWidths["product"] ?? DEFAULT_COL_WIDTHS.product, borderRight: "0.5px solid hsl(var(--border))" }}>
@@ -771,10 +775,19 @@ export function ResultsTable({
                           </button>
                         </TooltipTrigger>
                         <TooltipContent side="top" className="text-xs space-y-0.5">
-                          <div>Available (FBA): <span className="font-semibold">{result.stock.available_fba}</span></div>
-                          <div>Ordered: <span className="font-semibold">{result.stock.ordered}</span></div>
-                          <div>Reserved: <span className="font-semibold">{result.stock.reserved}</span></div>
-                          <div>Sent to FBA: <span className="font-semibold">{result.stock.inbound}</span></div>
+                          {result.stock.hasSnapshot ? (
+                            <>
+                              <div>Available (FBA): <span className="font-semibold">{result.stock.available_fba}</span></div>
+                              <div>Ordered: <span className="font-semibold">{result.stock.ordered}</span></div>
+                              <div>Reserved: <span className="font-semibold">{result.stock.reserved}</span></div>
+                              <div>Sent to FBA: <span className="font-semibold">{result.stock.inbound}</span></div>
+                            </>
+                          ) : (
+                            <>
+                              <div className="text-muted-foreground">Not yet synced from SC</div>
+                              <div>Ordered: <span className="font-semibold">{result.stock.ordered}</span></div>
+                            </>
+                          )}
                           <div className="text-muted-foreground pt-1">Click for history graph</div>
                         </TooltipContent>
                       </Tooltip>
@@ -1524,7 +1537,15 @@ export function renderCell(
       return <span className={`text-sm ${result.isMeltable ? "text-blue-400" : "text-muted-foreground"}`}>{result.isMeltable ? "Yes" : "No"}</span>;
 
     case "hazmat":
-      return <span className={`text-sm ${result.isHazmat ? "text-amber-400" : "text-muted-foreground"}`}>{result.isHazmat ? "Yes" : "No"}</span>;
+      // NULL-window rule: unchecked → muted dash, never a green "No".
+      return result.isHazmat == null
+        ? <span className="text-sm text-muted-foreground">—</span>
+        : <span className={`text-sm ${result.isHazmat ? "text-amber-400" : "text-muted-foreground"}`}>{result.isHazmat ? "Yes" : "No"}</span>;
+
+    case "dg":
+      return result.isDangerousGood == null
+        ? <span className="text-sm text-muted-foreground">—</span>
+        : <span className={`text-sm ${result.isDangerousGood ? "text-amber-400" : "text-muted-foreground"}`}>{result.isDangerousGood ? "Yes" : "No"}</span>;
 
     case "suppressed":
       return <span className={`text-sm ${result.isSearchSuppressed ? "text-amber-400" : "text-muted-foreground"}`}>{result.isSearchSuppressed ? "Yes" : "No"}</span>;
@@ -1538,10 +1559,19 @@ export function renderCell(
             <span className="font-mono text-sm cursor-help">{s.total}</span>
           </TooltipTrigger>
           <TooltipContent side="top" className="text-xs space-y-0.5">
-            <div>Available (FBA): <span className="font-semibold">{s.available_fba}</span></div>
-            <div>Ordered: <span className="font-semibold">{s.ordered}</span></div>
-            <div>Reserved: <span className="font-semibold">{s.reserved}</span></div>
-            <div>Sent to FBA: <span className="font-semibold">{s.inbound}</span></div>
+            {s.hasSnapshot ? (
+              <>
+                <div>Available (FBA): <span className="font-semibold">{s.available_fba}</span></div>
+                <div>Ordered: <span className="font-semibold">{s.ordered}</span></div>
+                <div>Reserved: <span className="font-semibold">{s.reserved}</span></div>
+                <div>Sent to FBA: <span className="font-semibold">{s.inbound}</span></div>
+              </>
+            ) : (
+              <>
+                <div className="text-muted-foreground">Not yet synced from SC</div>
+                <div>Ordered: <span className="font-semibold">{s.ordered}</span></div>
+              </>
+            )}
           </TooltipContent>
         </Tooltip>
       );
@@ -1591,7 +1621,7 @@ export function renderCell(
         result.catalogData.weightLbs,
         prep2.value, storage2.value, settings,
         includeInboundShipping,
-        result.isHazmat ?? false,
+        appliesDgHazmatSurcharge(result),
         result.category ?? null
       );
       const total = perUnit.profit * units;
@@ -1617,7 +1647,7 @@ export function renderCell(
         result.catalogData.weightLbs,
         prep2.value, storage2.value, settings,
         includeInboundShipping,
-        result.isHazmat ?? false,
+        appliesDgHazmatSurcharge(result),
         result.category ?? null
       );
       return (
@@ -1642,7 +1672,7 @@ export function renderCell(
         result.catalogData.weightLbs,
         prep2.value, storage2.value, settings,
         includeInboundShipping,
-        result.isHazmat ?? false,
+        appliesDgHazmatSurcharge(result),
         result.category ?? null
       );
       return (
@@ -1667,7 +1697,7 @@ export function renderCell(
         result.catalogData.weightLbs,
         prep2.value, storage2.value, settings,
         includeInboundShipping,
-        result.isHazmat ?? false,
+        appliesDgHazmatSurcharge(result),
         result.category ?? null
       );
       return (
@@ -1706,7 +1736,7 @@ export function renderCell(
         result.feesData.referralFee,
         result.feesData.feesEstimatePrice,
         result.catalogData.weightLbs,
-        prep.value, storage.value, settings, includeInboundShipping, result.isHazmat ?? false,
+        prep.value, storage.value, settings, includeInboundShipping, appliesDgHazmatSurcharge(result),
         result.category ?? null,
       );
       if (mc == null) return <span className="text-muted-foreground text-sm">—</span>;

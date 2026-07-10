@@ -4,17 +4,61 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Separator } from "@/components/ui/separator";
+import { Switch } from "@/components/ui/switch";
+import { RadioGroup, RadioGroupItem } from "@/components/ui/radio-group";
 import { Settings as SettingsIcon, Save } from "lucide-react";
-import { type Settings } from "@shared/schema";
+import { type Settings, type PriceSource } from "@shared/schema";
 import { loadSettings, saveSettings } from "@/lib/settings";
 import { useToast } from "@/hooks/use-toast";
 
-interface SettingsDialogProps {
-  onSettingsChange: (settings: Settings) => void;
+/**
+ * Display-side state owned by the host page (home / analytics) and surfaced
+ * inside the modal so users have a single place to find these knobs. Pass
+ * undefined and the Display Options section is omitted; only Cost Parameters,
+ * Profitability Thresholds, and SP-API Credentials render.
+ *
+ * `includeInboundShipping` is conceptually a display option but lives under
+ * Cost Parameters per the B1 spec because it gates which costs are included
+ * in profitability math.
+ */
+export interface MovedToggles {
+  includeInboundShipping: boolean;
+  onIncludeInboundShippingChange: (v: boolean) => void;
+  priceSource: PriceSource;
+  onPriceSourceChange: (v: PriceSource) => void;
+  showGated: boolean;
+  onShowGatedChange: (v: boolean) => void;
+  showMeltable: boolean;
+  onShowMeltableChange: (v: boolean) => void;
+  showArchived: boolean;
+  onShowArchivedChange: (v: boolean) => void;
+  // Reset-Est-COGS-to-PO action — moved here from the toolbar (2026-06-29).
+  // Sits directly under the "Include Inbound Shipping" row.
+  onResetCogs: () => void;
+  isResettingCogs: boolean;
 }
 
-export function SettingsDialog({ onSettingsChange }: SettingsDialogProps) {
-  const [open, setOpen] = useState(false);
+interface SettingsDialogProps {
+  onSettingsChange: (settings: Settings) => void;
+  /** Pass to render the Display Options section + Include Inbound Shipping row. */
+  movedToggles?: MovedToggles;
+  /** If provided, dialog open state is controlled by the parent. */
+  open?: boolean;
+  onOpenChange?: (v: boolean) => void;
+  /** Hide the built-in trigger button (used when opening from the top-nav settings icon). */
+  hideTrigger?: boolean;
+}
+
+export function SettingsDialog({
+  onSettingsChange, movedToggles,
+  open: openProp, onOpenChange, hideTrigger,
+}: SettingsDialogProps) {
+  const [internalOpen, setInternalOpen] = useState(false);
+  const open = openProp !== undefined ? openProp : internalOpen;
+  const setOpen = (v: boolean) => {
+    if (onOpenChange) onOpenChange(v);
+    if (openProp === undefined) setInternalOpen(v);
+  };
   const [settings, setSettings] = useState<Settings>(loadSettings);
   const { toast } = useToast();
 
@@ -38,193 +82,125 @@ export function SettingsDialog({ onSettingsChange }: SettingsDialogProps) {
 
   return (
     <Dialog open={open} onOpenChange={setOpen}>
-      <DialogTrigger asChild>
-        <Button size="sm" variant="outline" className="h-8 text-xs" data-testid="button-settings">
-          <SettingsIcon className="h-3.5 w-3.5 mr-1.5" />
-          Settings
-        </Button>
-      </DialogTrigger>
+      {!hideTrigger && (
+        <DialogTrigger asChild>
+          <Button size="sm" variant="outline" className="h-8 text-xs" data-testid="button-settings">
+            <SettingsIcon className="h-3.5 w-3.5 mr-1.5" />
+            Settings
+          </Button>
+        </DialogTrigger>
+      )}
       <DialogContent className="sm:max-w-lg max-h-[85vh] overflow-y-auto">
         <DialogHeader>
           <DialogTitle className="text-lg font-semibold">Settings</DialogTitle>
         </DialogHeader>
 
         <div className="space-y-5 pt-2">
+          {/* ─── Cost Parameters ─── */}
           <div>
             <h3 className="text-sm font-medium text-muted-foreground mb-3">Cost Parameters</h3>
             <div className="space-y-3">
-              <div className="flex items-center justify-between gap-4">
-                <Label htmlFor="inbound" className="text-sm whitespace-nowrap">Inbound Shipping ($/lb)</Label>
-                <Input
-                  id="inbound"
-                  type="number"
-                  step="0.01"
-                  min="0"
-                  value={settings.inboundShippingCost}
-                  onChange={(e) => updateField("inboundShippingCost", e.target.value)}
-                  className="w-28 text-right"
-                  data-testid="input-inbound-shipping"
-                />
-              </div>
-              <div className="flex items-center justify-between gap-4">
-                <Label htmlFor="prep" className="text-sm whitespace-nowrap">Prep Cost ($/unit)</Label>
-                <Input
-                  id="prep"
-                  type="number"
-                  step="0.01"
-                  min="0"
-                  value={settings.prepCost}
-                  onChange={(e) => updateField("prepCost", e.target.value)}
-                  className="w-28 text-right"
-                  data-testid="input-prep-cost"
-                />
-              </div>
-              <div className="flex items-center justify-between gap-4">
-                <Label htmlFor="storage" className="text-sm whitespace-nowrap">Additional Fees ($/unit)</Label>
-                <Input
-                  id="storage"
-                  type="number"
-                  step="0.01"
-                  min="0"
-                  value={settings.storageFee}
-                  onChange={(e) => updateField("storageFee", e.target.value)}
-                  className="w-28 text-right"
-                  data-testid="input-storage-fee"
-                />
-              </div>
-              <div className="flex items-center justify-between gap-4">
-                <div>
-                  <Label htmlFor="lowInv" className="text-sm whitespace-nowrap">Low-Inventory Surcharge ($/unit)</Label>
-                  <p className="text-[10px] text-muted-foreground mt-0.5">Amazon flat fee not included in SP-API</p>
+              <NumField id="prep"     label="Prep Cost ($/unit)"           value={settings.prepCost}              onChange={(v) => updateField("prepCost", v)} />
+              <NumField id="addl"     label="Additional Fees ($/unit)"     value={settings.storageFee}            onChange={(v) => updateField("storageFee", v)} />
+              <NumField id="lowInv"   label="Low-Inventory Surcharge ($/unit)" value={settings.lowInventorySurcharge} onChange={(v) => updateField("lowInventorySurcharge", v)}
+                        hint="Amazon flat fee not included in SP-API" />
+              <NumField id="hzShip"   label="DG/Hazmat Shipping Surcharge ($/unit)" value={settings.hazmatShipSurcharge ?? 0} onChange={(v) => updateField("hazmatShipSurcharge", v)} />
+              <NumField id="hzPrep"   label="DG/Hazmat Prep Surcharge ($/unit)"     value={settings.hazmatPrepSurcharge ?? 0} onChange={(v) => updateField("hazmatPrepSurcharge", v)} />
+              <NumField id="inbound"  label="Inbound Shipping Rate ($/lb)" value={settings.inboundShippingCost}   onChange={(v) => updateField("inboundShippingCost", v)} />
+
+              {movedToggles && (
+                <>
+                  <ToggleRow
+                    id="incInbound"
+                    label="Include Inbound Shipping in profit"
+                    checked={movedToggles.includeInboundShipping}
+                    onChange={movedToggles.onIncludeInboundShippingChange}
+                    hint="Adds weight × rate to total cost when computing profit."
+                  />
+                  <div className="flex items-center justify-between gap-3 py-2">
+                    <div className="min-w-0">
+                      <div className="text-sm">Reset Est. COGS to PO</div>
+                      <div className="text-[11px] text-muted-foreground">
+                        Re-pull all estimated COGS values from the PO tracker sheet.
+                      </div>
+                    </div>
+                    <Button
+                      variant="outline"
+                      size="sm"
+                      onClick={movedToggles.onResetCogs}
+                      disabled={movedToggles.isResettingCogs}
+                      className="h-8 text-xs shrink-0"
+                      data-testid="button-reset-cogs"
+                    >
+                      {movedToggles.isResettingCogs ? "Syncing..." : "Run sync"}
+                    </Button>
+                  </div>
+                </>
+              )}
+
+              <div className="pt-2">
+                <Label className="text-xs uppercase tracking-wider text-muted-foreground">Max COGS thresholds</Label>
+                <p className="text-[10px] text-muted-foreground mb-2">Criteria for the Max COGS column — the maximum cost at which all three are met.</p>
+                <div className="space-y-3">
+                  <NumField id="mcMargin" label="Min Profit Margin (%)"   value={settings.maxCogsMinMarginPct}  onChange={(v) => updateField("maxCogsMinMarginPct", v)} />
+                  <NumField id="mcRoi"    label="Min ROI (%)"             value={settings.maxCogsMinRoiPct}     onChange={(v) => updateField("maxCogsMinRoiPct", v)} />
+                  <NumField id="mcProfit" label="Min Profit per Unit ($)" value={settings.maxCogsMinProfitUnit} onChange={(v) => updateField("maxCogsMinProfitUnit", v)} />
                 </div>
-                <Input
-                  id="lowInv"
-                  type="number"
-                  step="0.01"
-                  min="0"
-                  value={settings.lowInventorySurcharge}
-                  onChange={(e) => updateField("lowInventorySurcharge", e.target.value)}
-                  className="w-28 text-right"
-                  data-testid="input-low-inventory-surcharge"
-                />
               </div>
             </div>
           </div>
 
+          {/* ─── Display Options (only when host page provides toggles) ─── */}
+          {movedToggles && (
+            <>
+              <Separator />
+              <div>
+                <h3 className="text-sm font-medium text-muted-foreground mb-3">Display Options</h3>
+                <div className="space-y-4">
+                  <div>
+                    <Label className="text-sm">Price source</Label>
+                    <RadioGroup
+                      value={movedToggles.priceSource}
+                      onValueChange={(v) => movedToggles.onPriceSourceChange(v as PriceSource)}
+                      className="flex gap-6 mt-2"
+                    >
+                      <label className="flex items-center gap-2 text-sm cursor-pointer">
+                        <RadioGroupItem value="lowestFba" />
+                        Lowest FBA
+                      </label>
+                      <label className="flex items-center gap-2 text-sm cursor-pointer">
+                        <RadioGroupItem value="buyBox" />
+                        Buy Box
+                      </label>
+                    </RadioGroup>
+                    <p className="text-[10px] text-muted-foreground mt-1">Drives Estimated Profit/ROI/Margin via the column's selected price.</p>
+                  </div>
+
+                  <ToggleRow id="dsGated"     label="Show gated"     checked={movedToggles.showGated}     onChange={movedToggles.onShowGatedChange} />
+                  <ToggleRow id="dsMeltable"  label="Show meltable"  checked={movedToggles.showMeltable}  onChange={movedToggles.onShowMeltableChange}
+                             hint="Seasonal default: auto-ON Apr 15 – Sep 15 unless manually toggled." />
+                  <ToggleRow id="dsArchived"  label="Show archived"  checked={movedToggles.showArchived}  onChange={movedToggles.onShowArchivedChange} />
+                </div>
+              </div>
+            </>
+          )}
+
           <Separator />
 
-          <div>
-            <h3 className="text-sm font-medium text-muted-foreground mb-3">Hazmat Surcharges</h3>
-            <p className="text-xs text-muted-foreground mb-3">Per-unit surcharges added to hazmat products on top of standard costs</p>
-            <div className="space-y-3">
-              <div className="flex items-center justify-between gap-4">
-                <Label htmlFor="hazmatShip" className="text-sm whitespace-nowrap">Hazmat Shipping ($)</Label>
-                <Input
-                  id="hazmatShip"
-                  type="number"
-                  step="0.01"
-                  min="0"
-                  value={settings.hazmatShipSurcharge ?? 0}
-                  onChange={(e) => updateField("hazmatShipSurcharge", e.target.value)}
-                  className="w-28 text-right"
-                />
-              </div>
-              <div className="flex items-center justify-between gap-4">
-                <Label htmlFor="hazmatPrep" className="text-sm whitespace-nowrap">Hazmat Prep ($)</Label>
-                <Input
-                  id="hazmatPrep"
-                  type="number"
-                  step="0.01"
-                  min="0"
-                  value={settings.hazmatPrepSurcharge ?? 0}
-                  onChange={(e) => updateField("hazmatPrepSurcharge", e.target.value)}
-                  className="w-28 text-right"
-                />
-              </div>
-            </div>
-          </div>
-
-          <Separator />
-
+          {/* ─── Profitability Thresholds ─── */}
           <div>
             <h3 className="text-sm font-medium text-muted-foreground mb-3">Profitability Thresholds</h3>
+            <p className="text-xs text-muted-foreground mb-3">Row-level gates used by the Profitable scorecard tile and the Replens tile.</p>
             <div className="space-y-3">
-              <div className="flex items-center justify-between gap-4">
-                <Label htmlFor="roi" className="text-sm whitespace-nowrap">Minimum ROI (%)</Label>
-                <Input
-                  id="roi"
-                  type="number"
-                  step="1"
-                  min="0"
-                  value={settings.minRoiThreshold}
-                  onChange={(e) => updateField("minRoiThreshold", e.target.value)}
-                  className="w-28 text-right"
-                  data-testid="input-min-roi"
-                />
-              </div>
-              <div className="flex items-center justify-between gap-4">
-                <Label htmlFor="margin" className="text-sm whitespace-nowrap">Minimum Margin (%)</Label>
-                <Input
-                  id="margin"
-                  type="number"
-                  step="1"
-                  min="0"
-                  value={settings.minMarginThreshold}
-                  onChange={(e) => updateField("minMarginThreshold", e.target.value)}
-                  className="w-28 text-right"
-                  data-testid="input-min-margin"
-                />
-              </div>
+              <NumField id="roi"          label="Minimum ROI (%)"           value={settings.minRoiThreshold}        onChange={(v) => updateField("minRoiThreshold", v)} />
+              <NumField id="margin"       label="Minimum Margin (%)"        value={settings.minMarginThreshold}     onChange={(v) => updateField("minMarginThreshold", v)} />
+              <NumField id="minProfitUnit" label="Minimum Profit/Unit ($)"  value={settings.minProfitUnitThreshold} onChange={(v) => updateField("minProfitUnitThreshold", v)} step="0.01" />
             </div>
           </div>
 
           <Separator />
 
-          <div>
-            <h3 className="text-sm font-medium text-muted-foreground mb-3">Max COGS Thresholds</h3>
-            <p className="text-xs text-muted-foreground mb-3">Criteria for the Max COGS column — the maximum cost at which all three are met</p>
-            <div className="space-y-3">
-              <div className="flex items-center justify-between gap-4">
-                <Label htmlFor="mcMargin" className="text-sm whitespace-nowrap">Min Profit Margin (%)</Label>
-                <Input
-                  id="mcMargin"
-                  type="number"
-                  step="1"
-                  min="0"
-                  value={settings.maxCogsMinMarginPct}
-                  onChange={(e) => updateField("maxCogsMinMarginPct", e.target.value)}
-                  className="w-28 text-right"
-                />
-              </div>
-              <div className="flex items-center justify-between gap-4">
-                <Label htmlFor="mcRoi" className="text-sm whitespace-nowrap">Min ROI (%)</Label>
-                <Input
-                  id="mcRoi"
-                  type="number"
-                  step="1"
-                  min="0"
-                  value={settings.maxCogsMinRoiPct}
-                  onChange={(e) => updateField("maxCogsMinRoiPct", e.target.value)}
-                  className="w-28 text-right"
-                />
-              </div>
-              <div className="flex items-center justify-between gap-4">
-                <Label htmlFor="mcProfit" className="text-sm whitespace-nowrap">Min Profit per Unit ($)</Label>
-                <Input
-                  id="mcProfit"
-                  type="number"
-                  step="0.01"
-                  min="0"
-                  value={settings.maxCogsMinProfitUnit}
-                  onChange={(e) => updateField("maxCogsMinProfitUnit", e.target.value)}
-                  className="w-28 text-right"
-                />
-              </div>
-            </div>
-          </div>
-
-          <Separator />
-
+          {/* ─── SP-API Credentials (unchanged) ─── */}
           <div>
             <h3 className="text-sm font-medium text-muted-foreground mb-3">SP-API Credentials</h3>
             <p className="text-xs text-muted-foreground mb-3">
@@ -249,8 +225,49 @@ export function SettingsDialog({ onSettingsChange }: SettingsDialogProps) {
             <Save className="h-4 w-4 mr-2" />
             Save Settings
           </Button>
+          <p className="text-[10px] text-muted-foreground text-center -mt-2">
+            Display Options auto-save on toggle. Save commits Cost Parameters + Profitability Thresholds.
+          </p>
         </div>
       </DialogContent>
     </Dialog>
+  );
+}
+
+// ─── Small row helpers ───────────────────────────────────────────────────────
+
+function NumField({ id, label, value, onChange, hint, step = "0.01" }: {
+  id: string; label: string; value: number | string; onChange: (v: string) => void; hint?: string; step?: string;
+}) {
+  return (
+    <div className="flex items-center justify-between gap-4">
+      <div className="flex-1">
+        <Label htmlFor={id} className="text-sm whitespace-nowrap">{label}</Label>
+        {hint && <p className="text-[10px] text-muted-foreground mt-0.5">{hint}</p>}
+      </div>
+      <Input
+        id={id}
+        type="number"
+        step={step}
+        min="0"
+        value={value}
+        onChange={(e) => onChange(e.target.value)}
+        className="w-28 text-right"
+      />
+    </div>
+  );
+}
+
+function ToggleRow({ id, label, checked, onChange, hint }: {
+  id: string; label: string; checked: boolean; onChange: (v: boolean) => void; hint?: string;
+}) {
+  return (
+    <div className="flex items-center justify-between gap-4">
+      <div className="flex-1">
+        <Label htmlFor={id} className="text-sm cursor-pointer">{label}</Label>
+        {hint && <p className="text-[10px] text-muted-foreground mt-0.5">{hint}</p>}
+      </div>
+      <Switch id={id} checked={checked} onCheckedChange={onChange} />
+    </div>
   );
 }

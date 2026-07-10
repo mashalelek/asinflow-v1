@@ -10,6 +10,8 @@ export const settingsSchema = z.object({
   hazmatPrepSurcharge: z.number().min(0).default(0),
   minRoiThreshold: z.number().min(0).default(15),
   minMarginThreshold: z.number().min(0).default(10),
+  // Row-level Profitable/Replens gate (separate from maxCogsMinProfitUnit which is the Max COGS calculator's gate).
+  minProfitUnitThreshold: z.number().min(0).default(3),
   maxCogsMinMarginPct: z.number().min(0).default(12),
   maxCogsMinRoiPct: z.number().min(0).default(20),
   maxCogsMinProfitUnit: z.number().min(0).default(3),
@@ -53,7 +55,8 @@ export interface CatalogData {
   bsrRank: number | null;
   bsrCategory: string | null;
   isMeltable?: boolean;
-  isHazmat?: boolean;
+  isDangerousGood?: boolean | null; // DG transport class (attributes.hazmat present); null = inconclusive catalog fetch
+  isHazmat?: boolean | null; // FBA hazmat program (INBOUND FBA_INB_0015); null = inconclusive probe
 }
 
 export interface EligibilityData {
@@ -66,6 +69,7 @@ export interface StockData {
   inbound: number;
   ordered: number;
   total: number;
+  hasSnapshot: boolean;
 }
 
 export interface ActualsData {
@@ -100,7 +104,8 @@ export interface AsinResult {
   notes?: string | null;
   isArchived?: boolean;
   isMeltable?: boolean;
-  isHazmat?: boolean;
+  isHazmat?: boolean | null;        // FBA hazmat (INBOUND 0015); null = unchecked
+  isDangerousGood?: boolean | null; // DG transport class (attributes.hazmat); null = unchecked
   isSearchSuppressed?: boolean;
   suppressionReasons?: string[];
   cogsSource?: "po_sheet" | "manual" | null;
@@ -328,6 +333,16 @@ export function computeReferralFee(
   return feeFromCatDef(def, salePrice);
 }
 
+// The DG/Hazmat surcharge applies when an ASIN is hazmat OR a dangerous good.
+// NULL on either (unchecked) is NOT surcharged — unknown ≠ surcharged, per the
+// NULL-window rule. `=== true` makes null/undefined fall through to false.
+export function appliesDgHazmatSurcharge(r: {
+  isHazmat?: boolean | null;
+  isDangerousGood?: boolean | null;
+}): boolean {
+  return r.isHazmat === true || r.isDangerousGood === true;
+}
+
 export function calculateProfit(
   salePrice: number,
   cogs: number,
@@ -339,7 +354,9 @@ export function calculateProfit(
   storageFee: number,
   settings: Settings,
   includeInboundShipping = true,
-  isHazmat = false,
+  // Surcharge trigger: pass appliesDgHazmatSurcharge(result) — true when hazmat
+  // OR dangerous good. (Named per its role; not just hazmat anymore.)
+  applyDgHazmatSurcharge = false,
   category: string | null = null,
 ): {
   profit: number;
@@ -368,8 +385,8 @@ export function calculateProfit(
     }
   }
 
-  const hazmatShipExtra = isHazmat ? (settings.hazmatShipSurcharge ?? 0) : 0;
-  const hazmatPrepExtra = isHazmat ? (settings.hazmatPrepSurcharge ?? 0) : 0;
+  const hazmatShipExtra = applyDgHazmatSurcharge ? (settings.hazmatShipSurcharge ?? 0) : 0;
+  const hazmatPrepExtra = applyDgHazmatSurcharge ? (settings.hazmatPrepSurcharge ?? 0) : 0;
 
   const weightMissing = weightLbs == null || weightLbs <= 0;
   // Inbound shipping = weight × rate only. No hazmat/DG padding, no dim weight.
@@ -409,7 +426,8 @@ export function calculateMaxCogs(
   storageFee: number,
   settings: Settings,
   includeInboundShipping: boolean,
-  isHazmat: boolean,
+  // Surcharge trigger: pass appliesDgHazmatSurcharge(result) — hazmat OR DG.
+  applyDgHazmatSurcharge: boolean,
   category: string | null = null,
 ): number | null {
   if (salePrice == null || salePrice <= 0) return null;
@@ -430,8 +448,8 @@ export function calculateMaxCogs(
     }
   }
 
-  const hazmatShipExtra = isHazmat ? (settings.hazmatShipSurcharge ?? 0) : 0;
-  const hazmatPrepExtra = isHazmat ? (settings.hazmatPrepSurcharge ?? 0) : 0;
+  const hazmatShipExtra = applyDgHazmatSurcharge ? (settings.hazmatShipSurcharge ?? 0) : 0;
+  const hazmatPrepExtra = applyDgHazmatSurcharge ? (settings.hazmatPrepSurcharge ?? 0) : 0;
   const totalFbaFee = fbaFee + settings.lowInventorySurcharge;
   const effectivePrep = prepCost + hazmatPrepExtra;
   const inboundCost = includeInboundShipping
@@ -478,7 +496,7 @@ export const DEFAULT_COLUMNS = [
   // Group 5 — Sellers
   "sellersFba", "sellers", "sellers7d", "sellers30d", "fba7d", "fba30d",
   // Group 6 — Additional info
-  "tags", "notes", "sourcing", "meltable", "hazmat", "suppressed", "dateAdded",
+  "tags", "notes", "sourcing", "meltable", "hazmat", "dg", "suppressed", "dateAdded",
 ] as const;
 
 export type ColumnId = (typeof DEFAULT_COLUMNS)[number];
@@ -553,6 +571,7 @@ export const ALL_COLUMNS: ColumnDef[] = [
   { id: "sourcing", label: "Sourcing", defaultVisible: false, align: "left", group: "additional" },
   { id: "meltable", label: "Meltable", defaultVisible: false, align: "left", group: "additional" },
   { id: "hazmat", label: "Hazmat", defaultVisible: false, align: "left", group: "additional" },
+  { id: "dg", label: "DG", defaultVisible: false, align: "left", group: "additional" },
   { id: "suppressed", label: "Suppressed", defaultVisible: false, align: "left", group: "additional" },
   { id: "dateAdded", label: "Date Added", defaultVisible: false, align: "left", group: "additional" },
 ];

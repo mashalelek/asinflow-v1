@@ -7,6 +7,12 @@ import { Alert, AlertDescription } from "@/components/ui/alert";
 import { Input } from "@/components/ui/input";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { SettingsDialog } from "@/components/settings-dialog";
+import { RevivalDialog, type RevivalCandidate } from "@/components/revival-dialog";
+import { OfferAddPreviewDialog, type PreviewResponse, type SubmitResponse } from "@/components/offer-add-preview-dialog";
+import { VerificationChip } from "@/components/verification-chip";
+import { VerificationPanel } from "@/components/verification-panel";
+import { getUnverified, type UnverifiedResponse } from "@/lib/submissions-api";
+import { LegendApprovalDialog, type PendingLegendItem, type ApprovedBrandOption } from "@/components/legend-approval-dialog";
 import { FileUpload } from "@/components/file-upload";
 import { ResultsTable, getRowValue } from "@/components/results-table";
 import { ExportButtons } from "@/components/export-buttons";
@@ -15,8 +21,9 @@ import { ColumnManager } from "@/components/column-manager";
 import { useTheme } from "@/components/theme-provider";
 import { loadSettings } from "@/lib/settings";
 import { loadColumnConfig, type ColumnConfig } from "@/lib/columns";
-import { Sun, Moon, BarChart3, Zap, AlertTriangle, X, Search, RefreshCw, Archive, Sheet, Database, ShoppingCart, DollarSign } from "lucide-react";
+import { Sun, Moon, BarChart3, Zap, AlertTriangle, X, Search, RefreshCw, Archive, Sheet, Database, ShoppingCart, DollarSign, FileSpreadsheet, Upload, Plus } from "lucide-react";
 import { Checkbox } from "@/components/ui/checkbox";
+import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import {
   type AsinInput,
   type AsinResult,
@@ -30,18 +37,22 @@ import {
   getEffectiveStorage,
   extractDomain,
   calculateMaxCogs,
+  appliesDgHazmatSurcharge,
 } from "@shared/schema";
 import { useToast } from "@/hooks/use-toast";
-import { DateRangePicker } from "@/components/date-range-picker";
+import { useDateRange } from "@/contexts/date-range-context";
+import { OPEN_SETTINGS_EVENT } from "@/components/layout/top-nav";
 import { ViewPresets } from "@/components/view-presets";
 import { StockHistoryModal } from "@/components/stock-history-modal";
 import { type ColFilter, type FilterMap, matchesFilters } from "@/components/column-filter";
 import { VisibilityToggles, loadShowGated, saveShowGated, loadShowMeltable, saveShowMeltable, loadShowArchived, saveShowArchived } from "@/components/visibility-toggles";
 import { getEstimatedProfit } from "@/lib/profit";
+import { isProfitable, isReplens } from "@shared/profitability";
 import { ActiveFiltersModal, getActiveFilterCount } from "@/components/active-filters-modal";
 import { Filter } from "lucide-react";
 
 const BUY_LIST_KEY = "fba-buy-list";
+const ON_HOLD_LIST_KEY = "fba-on-hold-list";
 const DATE_PREFS_KEY = "fba-date-prefs";
 const INBOUND_KEY = "fba-include-inbound";
 const COL_FILTERS_KEY = "fba-col-filters";
@@ -56,6 +67,18 @@ function loadBuyList(): Set<string> {
 
 function saveBuyList(set: Set<string>) {
   localStorage.setItem(BUY_LIST_KEY, JSON.stringify(Array.from(set)));
+}
+
+function loadOnHoldList(): Set<string> {
+  try {
+    const stored = localStorage.getItem(ON_HOLD_LIST_KEY);
+    if (stored) return new Set(JSON.parse(stored));
+  } catch {}
+  return new Set();
+}
+
+function saveOnHoldList(set: Set<string>) {
+  localStorage.setItem(ON_HOLD_LIST_KEY, JSON.stringify(Array.from(set)));
 }
 
 function fmtDate(d: Date): string {
@@ -285,7 +308,11 @@ export default function Home() {
   const [credentialsConfigured, setCredentialsConfigured] = useState<boolean | null>(null);
   const [activeFilter, setActiveFilter] = useState<FilterMode>("all");
   const [buySet, setBuySet] = useState<Set<string>>(loadBuyList);
+  const [onHoldSet, setOnHoldSet] = useState<Set<string>>(loadOnHoldList);
   const [selectedSet, setSelectedSet] = useState<Set<string>>(new Set());
+  // Mirrors sortedFilteredResults so selection-aware handlers (declared before
+  // the memo) can read the latest filtered working set without a TDZ.
+  const sortedFilteredResultsRef = useRef<AsinResult[]>([]);
   const [sortCol, setSortCol] = useState<ColumnId | null>(() => {
     try { const s = localStorage.getItem("fba-sort"); if (s) { const p = JSON.parse(s); return p.col; } } catch {} return "roi";
   });
@@ -298,7 +325,6 @@ export default function Home() {
   const [showGated, setShowGated] = useState(loadShowGated);
   const [showMeltable, setShowMeltable] = useState(loadShowMeltable);
   const [showArchived, setShowArchived] = useState(loadShowArchived);
-  const [presetFilter, setPresetFilter] = useState<string | null>(null);
   const [filtersModalOpen, setFiltersModalOpen] = useState(false);
   const [page, setPage] = useState(1);
   const [pageSize, setPageSize] = useState<number>(() => {
@@ -310,28 +336,58 @@ export default function Home() {
   const [isSyncing, setIsSyncing] = useState(false);
   const [isSyncingInventory, setIsSyncingInventory] = useState(false);
   const [isSyncingSales, setIsSyncingSales] = useState(false);
+  const [isSyncingSourcing, setIsSyncingSourcing] = useState(false);
+  const [isPushingAura, setIsPushingAura] = useState(false);
+
+  // DA-3: revival dialog state. Populated by checkRevivalCandidates after
+  // every analyze-completion path (handleAnalyze, runAnalyzeAllFromDb,
+  // handleSyncSourcing). Cleared on confirm/cancel.
+  const [revivalCandidates, setRevivalCandidates] = useState<RevivalCandidate[]>([]);
+  const [revivalDialogOpen, setRevivalDialogOpen] = useState(false);
+
+  // 2D-3: offer-add preview dialog state. Triggered by "Add to SC" toolbar
+  // button (selection-aware) or per-row "+" button. Dry-run only — no live
+  // putListingsItem fires from this UI.
+  const [offerAddOpen, setOfferAddOpen] = useState(false);
+  const [offerAddLoading, setOfferAddLoading] = useState(false);
+
+  // Post-submit verification: chip count + panel data. Refetched on mount, when
+  // the offer-add dialog closes (new pending rows), and after verify/resolve.
+  const [unverified, setUnverified] = useState<UnverifiedResponse | null>(null);
+  const [verifyPanelOpen, setVerifyPanelOpen] = useState(false);
+  const fetchUnverified = useCallback(async () => {
+    try { setUnverified(await getUnverified()); } catch { /* non-blocking status widget */ }
+  }, []);
+  useEffect(() => { fetchUnverified(); }, [fetchUnverified]);
+  const [offerAddData, setOfferAddData] = useState<PreviewResponse | null>(null);
+  const [offerAddError, setOfferAddError] = useState<string | null>(null);
+  // Remember the ASINs being previewed so we can re-fetch after legend approvals.
+  const [offerAddAsins, setOfferAddAsins] = useState<string[]>([]);
+
+  // 2D-2: legend approval sub-dialog state. Launched from preview's "Need approval" section.
+  const [legendDialogOpen, setLegendDialogOpen] = useState(false);
+  const [legendPending, setLegendPending] = useState<PendingLegendItem[]>([]);
+  const [approvedBrands, setApprovedBrands] = useState<ApprovedBrandOption[]>([]);
   const [isRefreshingPrices, setIsRefreshingPrices] = useState(false);
   const [pricesLastRefreshedAt, setPricesLastRefreshedAt] = useState<string | null>(null);
-  const [lastRefreshFailedCount, setLastRefreshFailedCount] = useState(0);
-  const [filterNoPrices, setFilterNoPrices] = useState(false);
   const [filterUncalculated, setFilterUncalculated] = useState(false);
 
-  const [datePrefs] = useState(loadDatePrefs);
-  const [datePreset, setDatePreset] = useState(datePrefs.preset);
-  const [customStart, setCustomStart] = useState(datePrefs.customStart);
-  const [customEnd, setCustomEnd] = useState(datePrefs.customEnd);
   const [includeInboundShipping, setIncludeInboundShipping] = useState(loadIncludeInbound);
 
-  const { startDate, endDate } = useMemo(
-    () => computeDateRange(datePreset, customStart, customEnd),
-    [datePreset, customStart, customEnd]
-  );
-
+  // Date range is global (top-nav DataStudioDatePicker) and persisted by the
+  // context. This page only reads from it.
+  const { range: dateRange } = useDateRange();
+  const startDate = dateRange.start;
+  const endDate = dateRange.end;
   const dateRangeLabel = useMemo(() => formatDateLabel(startDate, endDate), [startDate, endDate]);
 
+  // Settings dialog: top-nav settings icon dispatches a window event we listen for.
+  const [settingsOpen, setSettingsOpen] = useState(false);
   useEffect(() => {
-    localStorage.setItem(DATE_PREFS_KEY, JSON.stringify({ preset: datePreset, customStart, customEnd }));
-  }, [datePreset, customStart, customEnd]);
+    const handler = () => setSettingsOpen(true);
+    window.addEventListener(OPEN_SETTINGS_EVENT, handler);
+    return () => window.removeEventListener(OPEN_SETTINGS_EVENT, handler);
+  }, []);
 
   useEffect(() => {
     localStorage.setItem(INBOUND_KEY, String(includeInboundShipping));
@@ -389,6 +445,44 @@ export default function Home() {
 
   // Consume an NDJSON analyze stream (progress / result / complete messages).
   // Shared between the ASIN-list endpoint and the "analyze all" endpoint.
+  // DA-3: cheap GET against the standing-state predicate. Fires after every
+  // analyze-completion path. Empty result → no dialog (silent).
+  // Declared ahead of the analyze handlers because their useCallback closures
+  // reference it.
+  const checkRevivalCandidates = useCallback(async () => {
+    try {
+      const res = await fetch("/api/asins/revival-candidates");
+      if (!res.ok) return;
+      const candidates = await res.json();
+      if (Array.isArray(candidates) && candidates.length > 0) {
+        setRevivalCandidates(candidates);
+        setRevivalDialogOpen(true);
+      }
+    } catch {
+      // Non-critical UX nicety — swallow errors silently.
+    }
+  }, []);
+
+  const handleRevive = useCallback(async (selectedAsins: string[]) => {
+    try {
+      const res = await fetch("/api/asins/revive", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ asins: selectedAsins }),
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.message || "Revive failed");
+      const desc = data.skipped?.length > 0
+        ? `Unarchived ${data.revived.length}; ${data.skipped.length} skipped (no longer eligible)`
+        : `Unarchived ${data.revived.length}`;
+      toast({ title: "Catalog revival", description: desc });
+      setRevivalDialogOpen(false);
+      await fetchAsins(startDate, endDate, showArchived);
+    } catch (err: any) {
+      toast({ title: "Revive failed", description: err.message, variant: "destructive" });
+    }
+  }, [toast, fetchAsins, startDate, endDate, showArchived]);
+
   const consumeAnalyzeStream = useCallback(async (res: Response) => {
     const reader = res.body?.getReader();
     const decoder = new TextDecoder();
@@ -501,18 +595,28 @@ export default function Home() {
       setIsAnalyzing(false);
       setProgress(null);
       fetchPriceStatus();
-      fetchAsins(startDate, endDate, showArchived);
+      await fetchAsins(startDate, endDate, showArchived);
+      await checkRevivalCandidates(); // DA-3
     }
-  }, [toast, consumeAnalyzeStream, fetchPriceStatus, fetchAsins, startDate, endDate, showArchived]);
+  }, [toast, consumeAnalyzeStream, fetchPriceStatus, fetchAsins, startDate, endDate, showArchived, checkRevivalCandidates]);
 
-  const runAnalyzeAllFromDb = useCallback(async (totalEstimate: number) => {
+  /**
+   * Re-analyze a list of ASINs via the DB-backed endpoint. Server reads
+   * cogs/buyLink/overrides from the DB; we only ship the asin list.
+   * When asinFilter is empty the endpoint operates on all active ASINs.
+   */
+  const runAnalyzeAllFromDb = useCallback(async (asinFilter: string[]) => {
     setIsAnalyzing(true);
-    setProgress({ current: 0, total: totalEstimate, asin: "Starting full-catalog analysis..." });
+    setProgress({ current: 0, total: asinFilter.length, asin: "Starting analysis..." });
     try {
-      const res = await fetch("/api/analyze/all", { method: "POST" });
+      const res = await fetch("/api/analyze/all", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ asins: asinFilter }),
+      });
       if (!res.ok) {
         const err = await res.json().catch(() => ({}));
-        throw new Error(err.message || "Analyze all failed");
+        throw new Error(err.message || "Analyze failed");
       }
       await consumeAnalyzeStream(res);
     } catch (err: any) {
@@ -521,25 +625,42 @@ export default function Home() {
       setIsAnalyzing(false);
       setProgress(null);
       fetchPriceStatus();
-      fetchAsins(startDate, endDate, showArchived);
+      await fetchAsins(startDate, endDate, showArchived);
+      await checkRevivalCandidates(); // DA-3
     }
-  }, [toast, consumeAnalyzeStream, fetchPriceStatus, fetchAsins, startDate, endDate, showArchived]);
+  }, [toast, consumeAnalyzeStream, fetchPriceStatus, fetchAsins, startDate, endDate, showArchived, checkRevivalCandidates]);
 
+  /**
+   * Selection-aware Analyze handler.
+   *   - If a CSV upload is pending → analyze that batch via /api/analyze (CSV path).
+   *   - Else → re-analyze the current working set (selection or filtered view)
+   *     via /api/analyze/all with explicit { asins } filter.
+   */
   const handleAnalyze = useCallback(async () => {
     if (asins.length > 0) {
       await runAnalysis(asins);
-    } else if (results.length > 0) {
-      // Re-analyze the full catalog via the DB-backed endpoint — avoids
-      // sending the entire ASIN list in the request body.
-      await runAnalyzeAllFromDb(results.length);
+      return;
     }
-  }, [asins, results, runAnalysis, runAnalyzeAllFromDb]);
+    const workingSet = selectedSet.size > 0
+      ? Array.from(selectedSet)
+      : sortedFilteredResultsRef.current.map((r) => r.asin);
+    if (workingSet.length === 0) return;
+    await runAnalyzeAllFromDb(workingSet);
+  }, [asins, selectedSet, runAnalysis, runAnalyzeAllFromDb]);
 
   const handleRefreshPrices = useCallback(async () => {
+    const workingSet = selectedSet.size > 0
+      ? Array.from(selectedSet)
+      : sortedFilteredResultsRef.current.map((r) => r.asin);
+    if (workingSet.length === 0) return;
     setIsRefreshingPrices(true);
-    setProgress({ current: 0, total: results.length || 0, asin: "Refreshing prices..." });
+    setProgress({ current: 0, total: workingSet.length, asin: "Refreshing prices..." });
     try {
-      const res = await fetch("/api/prices/refresh", { method: "POST" });
+      const res = await fetch("/api/prices/refresh", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ asins: workingSet }),
+      });
       if (!res.ok) {
         const err = await res.json().catch(() => ({}));
         throw new Error(err.message || "Price refresh failed");
@@ -549,9 +670,6 @@ export default function Home() {
       const decoder = new TextDecoder();
       let buffer = "";
       let updated = 0;
-      let failed = 0;
-      let skipped = 0;
-      let retried = 0;
       let recovered = 0;
       if (reader) {
         while (true) {
@@ -568,19 +686,14 @@ export default function Home() {
                 setProgress(msg.data);
               } else if (msg.type === "complete") {
                 updated = msg.data?.updated ?? 0;
-                failed = msg.data?.failed ?? 0;
-                skipped = msg.data?.skipped ?? 0;
-                retried = msg.data?.retried ?? 0;
                 recovered = msg.data?.recovered ?? 0;
               }
             } catch {}
           }
         }
       }
-      setLastRefreshFailedCount(skipped);
       const parts = [`Updated ${updated} ASIN${updated === 1 ? "" : "s"}`];
       if (recovered > 0) parts.push(`${recovered} recovered via targeted retry`);
-      if (skipped > 0) parts.push(`${skipped} still missing`);
       toast({ title: "Prices refreshed", description: parts.join(", ") });
       await fetchAsins(startDate, endDate, showArchived);
     } catch (err: any) {
@@ -590,15 +703,45 @@ export default function Home() {
       setProgress(null);
       fetchPriceStatus();
     }
-  }, [toast, results.length, fetchAsins, startDate, endDate, showArchived, fetchPriceStatus]);
+  }, [toast, selectedSet, fetchAsins, startDate, endDate, showArchived, fetchPriceStatus]);
 
   const [isSyncingCogs, setIsSyncingCogs] = useState(false);
 
+  // Mutual exclusivity: an ASIN is in Buy List, On Hold, or neither — never
+  // both. Both toggles enforce this in the SAME synchronous handler so the
+  // two sets can't drift apart between renders. Single source of truth: these
+  // two toggles are the ONLY callers that mutate either set (besides
+  // handleClearBuyList for the Buy List).
   const handleToggleBuy = useCallback((asin: string) => {
     setBuySet((prev) => {
       const next = new Set(prev);
       if (next.has(asin)) next.delete(asin);
       else next.add(asin);
+      saveBuyList(next);
+      return next;
+    });
+    // If we're ADDING to Buy List (not removing), evict from On Hold.
+    setOnHoldSet((prev) => {
+      if (!prev.has(asin)) return prev;
+      const next = new Set(prev);
+      next.delete(asin);
+      saveOnHoldList(next);
+      return next;
+    });
+  }, []);
+
+  const handleToggleHold = useCallback((asin: string) => {
+    setOnHoldSet((prev) => {
+      const next = new Set(prev);
+      if (next.has(asin)) next.delete(asin);
+      else next.add(asin);
+      saveOnHoldList(next);
+      return next;
+    });
+    setBuySet((prev) => {
+      if (!prev.has(asin)) return prev;
+      const next = new Set(prev);
+      next.delete(asin);
       saveBuyList(next);
       return next;
     });
@@ -633,45 +776,54 @@ export default function Home() {
     setPage(1);
   }, [sortCol]);
 
-  const handleRefreshSelected = useCallback(async () => {
-    if (selectedSet.size === 0) return;
-    if (selectedSet.size >= 2000) {
-      const confirmed = window.confirm(`Refresh all ${selectedSet.size.toLocaleString()} ASINs? This may take several minutes.`);
-      if (!confirmed) return;
-    }
-    const toRefresh: AsinInput[] = results
-      .filter((r) => selectedSet.has(r.asin))
-      .map((r) => ({
-        asin: r.asin,
-        cogs: r.cogs,
-        buyLink: r.buyLink,
-        prepOverride: r.prepOverride,
-        storageOverride: r.storageOverride,
-      }));
-    await runAnalysis(toRefresh);
-    await fetchAsins(startDate, endDate, showArchived);
-  }, [selectedSet, results, runAnalysis, fetchAsins, startDate, endDate, showArchived]);
+  // Compute the current working set for selection-aware sync handlers.
+  // Selection wins; otherwise we send the current filtered view explicitly.
+  //
+  // MUST be useCallback (not a plain function re-created each render). As a
+  // plain function, every caller has to remember to list `selectedSet` in
+  // their own deps — and any caller that forgets gets a stale closure that
+  // silently falls through to the filtered-view branch. That bit Add-to-SC
+  // on 2026-06-29 — user selected 3 rows, action resolved 90 (the active
+  // Buy List filter view). A stable reference removes the footgun.
+  //
+  // sortedFilteredResultsRef is a ref → stable across renders, no dep needed.
+  const currentWorkingSet = useCallback((): string[] => {
+    return selectedSet.size > 0
+      ? Array.from(selectedSet)
+      : sortedFilteredResultsRef.current.map((r) => r.asin);
+  }, [selectedSet]);
 
   const handleSyncSheet = useCallback(async () => {
+    const ws = currentWorkingSet();
+    if (ws.length === 0) return;
     setIsSyncing(true);
     try {
-      const res = await fetch("/api/sheets/sync");
+      const res = await fetch("/api/sheets/sync", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ asins: ws }),
+      });
       const data = await res.json();
       if (!res.ok) throw new Error(data.message || "Sync failed");
       toast({ title: `Synced PO data`, description: `Updated ${data.updated} ASINs, skipped ${data.skipped}` });
-      // Refresh displayed data
       await fetchAsins(startDate, endDate);
     } catch (err: any) {
       toast({ title: "Sync failed", description: err.message, variant: "destructive" });
     } finally {
       setIsSyncing(false);
     }
-  }, [toast]);
+  }, [toast, currentWorkingSet, fetchAsins, startDate, endDate]);
 
   const handleSyncInventory = useCallback(async () => {
+    const ws = currentWorkingSet();
+    if (ws.length === 0) return;
     setIsSyncingInventory(true);
     try {
-      const res = await fetch("/api/inventory/sync");
+      const res = await fetch("/api/inventory/sync", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ asins: ws }),
+      });
       const data = await res.json();
       if (!res.ok) throw new Error(data.message || "Inventory sync failed");
       toast({ title: "Inventory synced", description: `${data.synced} ASINs synced, ${data.skipped} skipped` });
@@ -681,15 +833,41 @@ export default function Home() {
     } finally {
       setIsSyncingInventory(false);
     }
-  }, [toast, fetchAsins, startDate, endDate]);
+  }, [toast, currentWorkingSet, fetchAsins, startDate, endDate]);
+
+  // Push-only Aura sync — POSTs to /api/sync/aura/push (no PO chain). Selection-
+  // aware: when ASINs are checked, scopes the push to those; otherwise pushes
+  // all. Takes a couple minutes on a fresh day (up to ~1700 listing checks).
+  const handlePushAura = useCallback(async () => {
+    setIsPushingAura(true);
+    const selected = Array.from(selectedSet);
+    try {
+      const res = await fetch("/api/sync/aura/push", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(selected.length > 0 ? { asins: selected } : {}),
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.message || "Aura push failed");
+      const prefix = selected.length > 0 ? `Aura (${selected.length} selected)` : "Aura";
+      const notIn = (data.notInAura?.length ?? 0) > 0 ? `, ${data.notInAura.length} not in Aura` : "";
+      toast({ title: "Aura push complete", description: `${prefix}: ${data.pushed} pushed, ${data.unchanged} unchanged, ${data.skipped} skipped${notIn}` });
+    } catch (err: any) {
+      toast({ title: "Aura push failed", description: err.message, variant: "destructive" });
+    } finally {
+      setIsPushingAura(false);
+    }
+  }, [toast, selectedSet]);
 
   const handleSyncSales = useCallback(async () => {
+    const ws = currentWorkingSet();
+    if (ws.length === 0) return;
     setIsSyncingSales(true);
     try {
       const res = await fetch("/api/sales/sync", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ startDate, endDate }),
+        body: JSON.stringify({ startDate, endDate, asins: ws }),
       });
       const data = await res.json();
       if (!res.ok) throw new Error(data.message || "Sales sync failed");
@@ -700,7 +878,188 @@ export default function Home() {
     } finally {
       setIsSyncingSales(false);
     }
-  }, [toast, fetchAsins, startDate, endDate]);
+  }, [toast, currentWorkingSet, fetchAsins, startDate, endDate]);
+
+  // Insert-only sync from the sourcing Google Sheet. Pre-existing ASINs in AF
+  // are skipped server-side — the sheet only adds. Streams NDJSON: sync_summary
+  // line up front, then standard analyze progress/result chunks for each new
+  // ASIN, then complete with final counts.
+  const handleSyncSourcing = useCallback(async () => {
+    setIsSyncingSourcing(true);
+    let plan: { newCount: number; skippedExisting: number; toArchiveCount: number } | null = null;
+    let final: { inserted: number; archivedNew: number; skippedExisting: number; errors: string[] } | null = null;
+    try {
+      const res = await fetch("/api/sync/sourcing-sheet", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+      });
+      if (!res.ok) {
+        const err = await res.json().catch(() => ({}));
+        throw new Error(err.message || "Sourcing sync failed");
+      }
+      const reader = res.body?.getReader();
+      const decoder = new TextDecoder();
+      let buffer = "";
+      if (reader) {
+        while (true) {
+          const { done, value } = await reader.read();
+          if (done) break;
+          buffer += decoder.decode(value, { stream: true });
+          const lines = buffer.split("\n");
+          buffer = lines.pop() || "";
+          for (const line of lines) {
+            if (!line.trim()) continue;
+            try {
+              const msg = JSON.parse(line);
+              if (msg.type === "sync_summary") {
+                plan = msg.data;
+                if (plan && plan.newCount > 0) {
+                  setProgress({ current: 0, total: plan.newCount, asin: "Fetching new ASIN data..." });
+                }
+              } else if (msg.type === "progress") {
+                setProgress(msg.data);
+              } else if (msg.type === "complete") {
+                final = msg.data;
+              } else if (msg.type === "error") {
+                throw new Error(msg.data?.message || "Sourcing sync failed");
+              }
+            } catch (parseErr: any) {
+              if (parseErr?.message && parseErr.message !== "Sourcing sync failed") continue;
+              throw parseErr;
+            }
+          }
+        }
+      }
+      const f = final ?? { inserted: plan?.newCount ?? 0, archivedNew: 0, skippedExisting: plan?.skippedExisting ?? 0, errors: [] };
+      toast({
+        title: "Sourcing sheet synced",
+        description: `${f.inserted} inserted, ${f.archivedNew} archived (discontinued), ${f.skippedExisting} already in AF`,
+      });
+      await fetchAsins(startDate, endDate, showArchived);
+      await checkRevivalCandidates(); // DA-3
+    } catch (err: any) {
+      toast({ title: "Sourcing sync failed", description: err.message, variant: "destructive" });
+    } finally {
+      setIsSyncingSourcing(false);
+      setProgress(null);
+    }
+  }, [toast, fetchAsins, startDate, endDate, showArchived, checkRevivalCandidates]);
+
+  // 2D-3: open preview dialog for a set of ASINs. Fires POST /api/offer-add/preview
+  // (server runs the orchestrator with dryRun=true). Result rendered in dialog.
+  const openOfferAddPreview = useCallback(async (asinsToPreview: string[]) => {
+    if (asinsToPreview.length === 0) return;
+    setOfferAddAsins(asinsToPreview);
+    setOfferAddOpen(true);
+    setOfferAddLoading(true);
+    setOfferAddData(null);
+    setOfferAddError(null);
+    try {
+      const res = await fetch("/api/offer-add/preview", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ asins: asinsToPreview }),
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.message || "Preview failed");
+      setOfferAddData(data);
+    } catch (err: any) {
+      setOfferAddError(err.message);
+    } finally {
+      setOfferAddLoading(false);
+    }
+  }, []);
+
+  // 2D-2: extract legend_pending items from the current preview, fetch the
+  // fresh approved-brand list (for the merge dropdown), open the sub-dialog.
+  const handleReviewApprovals = useCallback(async () => {
+    if (!offerAddData) return;
+    // Dedupe pending by (type, rawValue) — multiple ASINs may share a brand
+    const seen = new Set<string>();
+    const pending: PendingLegendItem[] = [];
+    for (const row of offerAddData.perAsin) {
+      if (row.outcome.kind !== "legend_pending" || !row.outcome.pending) continue;
+      const p = row.outcome.pending;
+      for (const which of ["brand", "dept"] as const) {
+        const entry = p[which];
+        if (!entry) continue;
+        const key = `${which}:${entry.rawValue.toLowerCase().trim()}`;
+        if (seen.has(key)) continue;
+        seen.add(key);
+        pending.push({
+          type: which,
+          rawValue: entry.rawValue,
+          proposedCode: entry.proposedCode,
+          legendId: entry.legendId ?? null,
+        });
+      }
+    }
+    if (pending.length === 0) return;
+
+    // Fetch approved brands FRESH on dialog open (per Maria's spec point)
+    try {
+      const r = await fetch("/api/sku-legend/brands");
+      const brands = r.ok ? await r.json() : [];
+      setApprovedBrands(brands);
+    } catch {
+      setApprovedBrands([]);
+    }
+    setLegendPending(pending);
+    setLegendDialogOpen(true);
+  }, [offerAddData]);
+
+  // 2D-4 substep 4: fire the LIVE submit endpoint. This is the ONLY place in
+  // the frontend that triggers real putListingsItem calls. Operator edits to
+  // SKU segments (TTL/NNN) flow through as skuOverrides — the server validates
+  // each override and refuses to fire on format mismatch or collision.
+  const handleSubmitOfferAdd = useCallback(async (asinsToSubmit: string[], skuOverrides: Record<string, string>): Promise<SubmitResponse> => {
+    const res = await fetch("/api/offer-add/submit", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ asins: asinsToSubmit, skuOverrides }),
+    });
+    const data = await res.json();
+    if (!res.ok) throw new Error(data.message || "Submit failed");
+    return data as SubmitResponse;
+  }, []);
+
+  const handleApproveLegendItems = useCallback(async (items: any[]) => {
+    const res = await fetch("/api/sku-legend/approve", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ items }),
+    });
+    const data = await res.json();
+    if (!res.ok) throw new Error(data.message || "Approval failed");
+    return data;
+  }, []);
+
+  const handleLegendDialogClose = useCallback(async () => {
+    setLegendDialogOpen(false);
+    // Re-fetch the preview so previously-blocked ASINs re-resolve
+    if (offerAddAsins.length > 0) {
+      await openOfferAddPreview(offerAddAsins);
+    }
+  }, [offerAddAsins, openOfferAddPreview]);
+
+  // Add to SC is selection-ONLY by design — diverges from the Sync convention.
+  // This is the only live-write path to Seller Central; silently operating on
+  // the entire filtered view (potentially thousands of rows) is too dangerous.
+  // Caller MUST check explicit rows. The button is disabled when selectedSet
+  // is empty (real gate); the empty-guard below is defense-in-depth.
+  // Does NOT go through currentWorkingSet — no filtered-view fallback at all.
+  const handleAddToSC = useCallback(() => {
+    if (selectedSet.size === 0) {
+      toast({ title: "Select ASINs first", description: "Add to SC operates only on checked rows.", variant: "destructive" });
+      return;
+    }
+    openOfferAddPreview(Array.from(selectedSet));
+  }, [openOfferAddPreview, toast, selectedSet]);
+
+  // Per-row "+" — single ASIN.
+  const handleAddOneToSC = useCallback((asin: string) => {
+    openOfferAddPreview([asin]);
+  }, [openOfferAddPreview]);
 
   const handleArchiveSelected = useCallback(async (archive = true) => {
     if (selectedSet.size === 0) return;
@@ -731,6 +1090,9 @@ export default function Home() {
   const buyListCount = useMemo(() => {
     return results.filter((r) => buySet.has(r.asin)).length;
   }, [results, buySet]);
+  const onHoldCount = useMemo(() => {
+    return results.filter((r) => onHoldSet.has(r.asin)).length;
+  }, [results, onHoldSet]);
 
   // Serialize the Set to a stable string key so useMemo detects changes reliably
   const selectedSearchAsinsKey = useMemo(
@@ -741,29 +1103,32 @@ export default function Home() {
   const queryFilteredResults = useMemo(() => {
     let out = results;
 
-    // Scorecard filter (Total / Profitable / Unprofitable / Buy List)
+    // Scorecard filter (Total / Profitable / Unprofitable / Replens / Buy List)
+    // Uses shared/profitability helpers for symmetric counts vs. tile face.
+    // Uncalculated rows are EXCLUDED from both Profitable and Unprofitable
+    // (fixes the pre-B2 asymmetry where Unprofitable also swept uncalculated).
     if (activeFilter === "buyList") {
       out = out.filter((r) => buySet.has(r.asin));
-    } else if (activeFilter === "profitable" || activeFilter === "unprofitable") {
-      out = out.filter((r) => {
-        if (r.error) return activeFilter === "unprofitable";
-        const { price } = getSelectedPrice(r, priceSource);
-        if (price == null || r.estimatedCogs == null) return activeFilter === "unprofitable";
-        const prep = getEffectivePrep(r, settings);
-        const storage = getEffectiveStorage(r, settings);
-        const p = calculateProfit(price, r.estimatedCogs, r.feesData.fbaFulfillmentFee ?? 0, r.feesData.referralFee ?? 0, r.feesData.feesEstimatePrice, r.catalogData.weightLbs, prep.value, storage.value, settings, includeInboundShipping, r.isHazmat ?? false, r.category ?? null);
-        const meets = p.roi >= settings.minRoiThreshold && p.margin >= settings.minMarginThreshold;
-        return activeFilter === "profitable" ? meets : !meets;
-      });
     }
-
-    // "No prices" filter: show only ASINs missing all price data
-    if (filterNoPrices) {
-      out = out.filter((r) =>
-        r.pricingData.lowestFbaPrice == null &&
-        r.pricingData.buyBoxPrice == null &&
-        r.pricingData.lowestPrice == null
-      );
+    if (activeFilter === "onHold") {
+      out = out.filter((r) => onHoldSet.has(r.asin));
+    } else if (activeFilter === "profitable") {
+      out = out.filter((r) => isProfitable(r, priceSource, settings, includeInboundShipping));
+    } else if (activeFilter === "unprofitable") {
+      out = out.filter((r) => {
+        // Calculable but failed thresholds. Mirrors evaluate() gate so we don't
+        // sweep in error/no-price/no-cogs rows.
+        if (r.error) return false;
+        if (r.estimatedCogs == null) return false;
+        const anyPrice =
+          r.pricingData.lowestFbaPrice != null
+          || r.pricingData.buyBoxPrice != null
+          || r.pricingData.lowestPrice != null;
+        if (!anyPrice) return false;
+        return !isProfitable(r, priceSource, settings, includeInboundShipping);
+      });
+    } else if (activeFilter === "replens") {
+      out = out.filter((r) => isReplens(r, priceSource, settings, includeInboundShipping));
     }
 
     // "Uncalculated" filter: ASINs with error OR no selected price
@@ -797,26 +1162,7 @@ export default function Home() {
     if (!showMeltable) {
       out = out.filter((r) => !r.isMeltable);
     }
-    // Apply replenishment preset filter
-    if (presetFilter === "replenishment") {
-      out = out.filter((r) => {
-        // (A) Estimated profitability tiers — uses the same estimatedCogs + current price
-        // computation shown in the Est. ROI / Est. Margin table columns
-        const est = getEstimatedProfit(r, priceSource, settings, includeInboundShipping);
-        if (!est) return false;
-        const passesProfit =
-          (est.roi > 25 && est.margin > 10) ||
-          (est.roi > 20 && est.margin > 12) ||
-          (est.roi > 15 && est.margin > 14);
-        if (!passesProfit) return false;
-        // (B) Minimum profit per unit — $3.00 floor
-        if (est.profit < 3) return false;
-        // (C) Sales gate — must have >0 units sold in the current date range
-        const unitsSold = r.actuals?.units_sold ?? 0;
-        return unitsSold > 0;
-      });
-    }
-    // Apply column filters
+// Apply column filters
     if (Object.keys(colFilters).length > 0) {
       out = out.filter((r) => {
         const { price } = getSelectedPrice(r, priceSource);
@@ -824,7 +1170,7 @@ export default function Home() {
         const storage = getEffectiveStorage(r, settings);
         let profitData: ReturnType<typeof calculateProfit> | null = null;
         if (price != null && !r.error && r.estimatedCogs != null) {
-          profitData = calculateProfit(price, r.estimatedCogs, r.feesData.fbaFulfillmentFee ?? 0, r.feesData.referralFee ?? 0, r.feesData.feesEstimatePrice, r.catalogData.weightLbs, prep.value, storage.value, settings, includeInboundShipping, r.isHazmat ?? false);
+          profitData = calculateProfit(price, r.estimatedCogs, r.feesData.fbaFulfillmentFee ?? 0, r.feesData.referralFee ?? 0, r.feesData.feesEstimatePrice, r.catalogData.weightLbs, prep.value, storage.value, settings, includeInboundShipping, appliesDgHazmatSurcharge(r));
         }
         return matchesFilters(r as any, colFilters, (colId) => {
           switch (colId) {
@@ -878,7 +1224,7 @@ export default function Home() {
               const ar = r.actuals.revenue;
               const ap = getEffectivePrep(r, settings);
               const as2 = getEffectiveStorage(r, settings);
-              const ac = calculateProfit(ar / au, r.actualCogs, r.feesData.fbaFulfillmentFee ?? 0, r.feesData.referralFee ?? 0, r.feesData.feesEstimatePrice, r.catalogData.weightLbs, ap.value, as2.value, settings, includeInboundShipping, r.isHazmat ?? false);
+              const ac = calculateProfit(ar / au, r.actualCogs, r.feesData.fbaFulfillmentFee ?? 0, r.feesData.referralFee ?? 0, r.feesData.feesEstimatePrice, r.catalogData.weightLbs, ap.value, as2.value, settings, includeInboundShipping, appliesDgHazmatSurcharge(r));
               if (colId === "actProfit") return ac.profit * au;
               if (colId === "actProfitPerUnit") return ac.profit;
               if (colId === "actMargin") return ac.margin;
@@ -903,7 +1249,7 @@ export default function Home() {
               const { price: mcP } = getSelectedPrice(r, priceSource);
               const mcPrep = getEffectivePrep(r, settings);
               const mcStor = getEffectiveStorage(r, settings);
-              return calculateMaxCogs(mcP, r.feesData.fbaFulfillmentFee, r.feesData.referralFee, r.feesData.feesEstimatePrice, r.catalogData.weightLbs, mcPrep.value, mcStor.value, settings, includeInboundShipping, r.isHazmat ?? false);
+              return calculateMaxCogs(mcP, r.feesData.fbaFulfillmentFee, r.feesData.referralFee, r.feesData.feesEstimatePrice, r.catalogData.weightLbs, mcPrep.value, mcStor.value, settings, includeInboundShipping, appliesDgHazmatSurcharge(r));
             }
             default: return null;
           }
@@ -912,7 +1258,7 @@ export default function Home() {
     }
     return out;
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [results, searchQuery, selectedSearchAsinsKey, showGated, showMeltable, priceSource, settings, includeInboundShipping, colFilters, presetFilter, activeFilter, buySet, filterNoPrices, filterUncalculated]);
+  }, [results, searchQuery, selectedSearchAsinsKey, showGated, showMeltable, priceSource, settings, includeInboundShipping, colFilters, activeFilter, buySet, onHoldSet, filterUncalculated]);
 
   // Sort all filtered results before paginating
   const sortedFilteredResults = useMemo(() => {
@@ -932,8 +1278,20 @@ export default function Home() {
     });
   }, [queryFilteredResults, sortCol, sortDir, priceSource, settings]);
 
+  // Keep ref in sync so selection-aware handlers (declared above) can read
+  // the latest filtered working set without TDZ.
+  useEffect(() => { sortedFilteredResultsRef.current = sortedFilteredResults; }, [sortedFilteredResults]);
+
+  // Count + style for selection-aware button labels. Selection wins; otherwise
+  // we surface the current filtered view count.
+  const workingSetCount = selectedSet.size > 0 ? selectedSet.size : sortedFilteredResults.length;
+  const workingSetIsSelection = selectedSet.size > 0;
+  /** Formats "Label N" (no selection) or "Label (N)" (with selection). */
+  const btnSuffix = (count: number, isSelection: boolean) =>
+    count <= 0 ? "" : isSelection ? ` (${count})` : ` ${count}`;
+
   // Reset to page 1 when any filter/view changes
-  useEffect(() => { setPage(1); }, [searchQuery, selectedSearchAsinsKey, showGated, showMeltable, showArchived, colFilters, presetFilter, activeFilter, filterNoPrices, filterUncalculated]);
+  useEffect(() => { setPage(1); }, [searchQuery, selectedSearchAsinsKey, showGated, showMeltable, showArchived, colFilters, activeFilter, filterUncalculated]);
 
   const handleBulkSyncCogs = useCallback(async () => {
     const targetAsins = selectedSet.size > 0
@@ -981,13 +1339,12 @@ export default function Home() {
     setSelectedSet(new Set(paginatedResults.map((r) => r.asin)));
   }, [paginatedResults]);
 
-  const activeFilterCount = getActiveFilterCount(colFilters, searchQuery, selectedSearchAsins.size) + (filterNoPrices ? 1 : 0) + (filterUncalculated ? 1 : 0);
+  const activeFilterCount = getActiveFilterCount(colFilters, searchQuery, selectedSearchAsins.size) + (filterUncalculated ? 1 : 0);
 
   function clearSearchFilters() {
     setSearchQuery("");
     setSelectedSearchAsins(new Set());
     setColFilters({});
-    setFilterNoPrices(false);
     setFilterUncalculated(false);
   }
 
@@ -1008,52 +1365,112 @@ export default function Home() {
             </Alert>
           )}
 
-          <div className="flex items-center gap-2 flex-wrap">
-            <SettingsDialog onSettingsChange={setSettings} />
-            <FileUpload onFileProcessed={handleFileProcessed} isAnalyzing={isAnalyzing} compact />
-            <Button
-              size="sm"
-              onClick={handleAnalyze}
-              disabled={(asins.length === 0 && results.length === 0) || isAnalyzing}
-              className="h-8 text-xs"
-              data-testid="button-analyze"
-            >
-              <Zap className="h-3.5 w-3.5 mr-1.5" />
-              {isAnalyzing ? "Analyzing..." : `Analyze${asins.length > 0 ? ` ${asins.length}` : results.length > 0 ? ` ${results.length}` : ""}`}
-            </Button>
-            <Button variant="outline" size="sm" onClick={handleSyncSheet} disabled={isSyncing || isAnalyzing} className="h-8 text-xs">
-              <Sheet className="h-3.5 w-3.5 mr-1.5" />
-              {isSyncing ? "Syncing..." : "Sync PO"}
-            </Button>
-            <Button variant="outline" size="sm" onClick={handleSyncInventory} disabled={isSyncingInventory || isAnalyzing} className="h-8 text-xs">
-              <Database className="h-3.5 w-3.5 mr-1.5" />
-              {isSyncingInventory ? "Syncing..." : "Sync Inventory"}
-            </Button>
-            <Button variant="outline" size="sm" onClick={handleSyncSales} disabled={isSyncingSales || isAnalyzing} className="h-8 text-xs">
-              <RefreshCw className={`h-3.5 w-3.5 mr-1.5 ${isSyncingSales ? "animate-spin" : ""}`} />
-              {isSyncingSales ? "Syncing..." : "Sync Sales"}
-            </Button>
-            <Button
-              variant="outline"
-              size="sm"
-              onClick={handleRefreshPrices}
-              disabled={isRefreshingPrices || isAnalyzing}
-              className="h-8 text-xs"
-              data-testid="button-refresh-prices"
-            >
-              <DollarSign className={`h-3.5 w-3.5 mr-1.5 ${isRefreshingPrices ? "animate-pulse" : ""}`} />
-              {isRefreshingPrices ? "Refreshing..." : "Refresh Prices"}
-            </Button>
-            <Button
-              variant="outline"
-              size="sm"
-              onClick={handleBulkSyncCogs}
-              disabled={isSyncingCogs || isAnalyzing}
-              className="h-8 text-xs"
-            >
-              <Sheet className="h-3.5 w-3.5 mr-1.5" />
-              {isSyncingCogs ? "Syncing..." : "Reset Est. COGS to PO"}
-            </Button>
+          {/* Row 1: action buttons. All sync buttons are selection-aware:
+              "(N)" suffix when rows are selected, " N" suffix when operating on
+              the current filtered view. Archive/Unarchive appear only with selection. */}
+          {/* Row 1: split into LEFT (push-data-out actions) and RIGHT (data-in + presentation). */}
+          <div className="flex items-center justify-between gap-2 flex-wrap">
+            {/* LEFT — push-data-out: Add to SC | Sync PO/Inventory/Sales/Sourcing/Prices */}
+            <div className="flex items-center gap-2 flex-wrap">
+              <Button
+                variant="outline"
+                size="sm"
+                onClick={handleAddToSC}
+                disabled={isAnalyzing || selectedSet.size === 0}
+                title={selectedSet.size === 0 ? "Select ASINs to add to Seller Central" : undefined}
+                className="h-8 text-xs"
+                data-testid="button-add-to-sc"
+              >
+                <Upload className="h-3.5 w-3.5 mr-1.5" />
+                Add to SC{selectedSet.size > 0 ? ` (${selectedSet.size})` : ""}
+              </Button>
+              <VerificationChip count={unverified?.count ?? 0} onClick={() => setVerifyPanelOpen(true)} />
+              <span className="h-6 w-px bg-border" aria-hidden="true" />
+              <Button variant="outline" size="sm" onClick={handleSyncSheet} disabled={isSyncing || isAnalyzing} className="h-8 text-xs">
+                <Sheet className="h-3.5 w-3.5 mr-1.5" />
+                {isSyncing ? "Syncing..." : `Sync PO${btnSuffix(workingSetCount, workingSetIsSelection)}`}
+              </Button>
+              <Button variant="outline" size="sm" onClick={handlePushAura} disabled={isPushingAura || isAnalyzing} className="h-8 text-xs">
+                <DollarSign className="h-3.5 w-3.5 mr-1.5" />
+                {isPushingAura ? "Pushing..." : `Push to Aura${selectedSet.size > 0 ? ` (${selectedSet.size})` : ""}`}
+              </Button>
+              <Button variant="outline" size="sm" onClick={handleSyncInventory} disabled={isSyncingInventory || isAnalyzing} className="h-8 text-xs">
+                <Database className="h-3.5 w-3.5 mr-1.5" />
+                {isSyncingInventory ? "Syncing..." : `Sync Inventory${btnSuffix(workingSetCount, workingSetIsSelection)}`}
+              </Button>
+              <Button variant="outline" size="sm" onClick={handleSyncSales} disabled={isSyncingSales || isAnalyzing} className="h-8 text-xs">
+                <RefreshCw className={`h-3.5 w-3.5 mr-1.5 ${isSyncingSales ? "animate-spin" : ""}`} />
+                {isSyncingSales ? "Syncing..." : `Sync Sales${btnSuffix(workingSetCount, workingSetIsSelection)}`}
+              </Button>
+              <Button variant="outline" size="sm" onClick={handleSyncSourcing} disabled={isSyncingSourcing || isAnalyzing} className="h-8 text-xs">
+                <FileSpreadsheet className="h-3.5 w-3.5 mr-1.5" />
+                {isSyncingSourcing ? "Syncing..." : "Sync Sourcing"}
+              </Button>
+              <Tooltip>
+                <TooltipTrigger asChild>
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    onClick={handleRefreshPrices}
+                    disabled={isRefreshingPrices || isAnalyzing}
+                    className="h-8 text-xs"
+                    data-testid="button-refresh-prices"
+                  >
+                    <DollarSign className={`h-3.5 w-3.5 mr-1.5 ${isRefreshingPrices ? "animate-pulse" : ""}`} />
+                    {isRefreshingPrices ? "Syncing..." : `Sync Prices${btnSuffix(workingSetCount, workingSetIsSelection)}`}
+                  </Button>
+                </TooltipTrigger>
+                <TooltipContent side="bottom" className="text-xs">
+                  Prices last synced {formatRelativeTime(pricesLastRefreshedAt)}
+                </TooltipContent>
+              </Tooltip>
+              {/* Reset Est. COGS to PO moved to Settings modal (2026-06-29). */}
+            </div>
+
+            {/* RIGHT — data-in + presentation: Analyze | Upload | Export | Archive */}
+            <div className="flex items-center gap-2 flex-wrap">
+              <Button
+                variant="outline"
+                size="sm"
+                onClick={handleAnalyze}
+                disabled={(asins.length === 0 && results.length === 0) || isAnalyzing}
+                className="h-8 text-xs"
+                data-testid="button-analyze"
+              >
+                <Zap className="h-3.5 w-3.5 mr-1.5" />
+                {isAnalyzing
+                  ? "Analyzing..."
+                  : asins.length > 0
+                    ? `Analyze ${asins.length}`
+                    : `Analyze${btnSuffix(workingSetCount, workingSetIsSelection)}`}
+              </Button>
+              <FileUpload onFileProcessed={handleFileProcessed} isAnalyzing={isAnalyzing} compact />
+              <ExportButtons results={sortedFilteredResults} priceSource={priceSource} settings={settings} columnConfig={columnConfig} />
+              {selectedSet.size > 0 && (
+                <>
+                  <span className="h-6 w-px bg-border" aria-hidden="true" />
+                  <Button
+                    size="sm"
+                    onClick={() => handleArchiveSelected(true)}
+                    className="h-8 text-xs bg-transparent border border-[var(--action-archive-border)] text-[var(--action-archive-text)] hover:bg-[var(--action-archive-border)]/10"
+                  >
+                    <Archive className="h-3 w-3 mr-1" />
+                    Archive ({selectedSet.size})
+                  </Button>
+                  {showArchived && (
+                    <Button
+                      variant="outline"
+                      size="sm"
+                      onClick={() => handleArchiveSelected(false)}
+                      className="h-8 text-xs text-muted-foreground"
+                    >
+                      <Archive className="h-3 w-3 mr-1" />
+                      Unarchive ({selectedSet.size})
+                    </Button>
+                  )}
+                </>
+              )}
+            </div>
           </div>
 
           {isAnalyzing && progress && (
@@ -1076,149 +1493,67 @@ export default function Home() {
 
         {results.length > 0 && (
           <>
-            <div className="px-4">
-              <SummaryCards
-                results={results}
-                priceSource={priceSource}
-                settings={settings}
-                activeFilter={activeFilter}
-                onFilterChange={setActiveFilter}
-                buyListCount={buyListCount}
-                filterUncalculated={filterUncalculated}
-                onFilterUncalculatedChange={setFilterUncalculated}
-              />
-            </div>
-
+            {/* Row 2: search → counts → merged Active-filters pill → Clear-selection pill | views + columns */}
             <div className="flex items-center justify-between gap-4 flex-wrap px-4">
-              <div className="flex items-center gap-4 flex-wrap">
-                <div className="flex items-center gap-3">
-                  <Label className="text-sm text-muted-foreground whitespace-nowrap">Price Source:</Label>
-                  <div className="flex items-center gap-2">
-                    <span className={`text-sm ${priceSource === "lowestFba" ? "font-semibold" : "text-muted-foreground"}`}>
-                      Lowest FBA
-                    </span>
-                    <Switch
-                      checked={priceSource === "buyBox"}
-                      onCheckedChange={(checked) =>
-                        setPriceSource(checked ? "buyBox" : "lowestFba")
-                      }
-                      data-testid="switch-price-source"
-                    />
-                    <span className={`text-sm ${priceSource === "buyBox" ? "font-semibold" : "text-muted-foreground"}`}>
-                      Buy Box
-                    </span>
-                  </div>
-                  <span
-                    className="text-xs text-muted-foreground whitespace-nowrap"
-                    title={pricesLastRefreshedAt ? new Date(pricesLastRefreshedAt).toLocaleString() : undefined}
-                    data-testid="text-prices-staleness"
-                  >
-                    · Prices: {formatRelativeTime(pricesLastRefreshedAt)}
-                  </span>
-                  {lastRefreshFailedCount > 0 && !filterNoPrices && (
-                    <button
-                      className="text-xs text-amber-500 hover:text-amber-400 whitespace-nowrap"
-                      onClick={() => setFilterNoPrices(true)}
-                    >
-                      · {lastRefreshFailedCount} missing
-                    </button>
-                  )}
-                  {filterNoPrices && (
-                    <span className="inline-flex items-center gap-1 text-xs text-amber-500 whitespace-nowrap">
-                      · Showing no-price ASINs
-                      <button
-                        className="text-muted-foreground hover:text-foreground underline"
-                        onClick={() => setFilterNoPrices(false)}
-                      >
-                        Clear
-                      </button>
-                    </span>
-                  )}
-                </div>
-
-                <DateRangePicker
-                  preset={datePreset}
-                  onPresetChange={setDatePreset}
-                  customStart={customStart}
-                  customEnd={customEnd}
-                  onCustomStartChange={setCustomStart}
-                  onCustomEndChange={setCustomEnd}
-                  dateRangeLabel={dateRangeLabel}
+              <div className="flex items-center gap-2 flex-wrap flex-1 min-w-0">
+                <MultiSearch
+                  results={results}
+                  searchQuery={searchQuery}
+                  onSearchQueryChange={setSearchQuery}
+                  selectedAsins={selectedSearchAsins}
+                  onSelectedAsinsChange={setSelectedSearchAsins}
                 />
-
-                <div className="flex items-center gap-2">
-                  <Switch
-                    id="inbound-toggle"
-                    checked={includeInboundShipping}
-                    onCheckedChange={setIncludeInboundShipping}
-                  />
-                  <Label htmlFor="inbound-toggle" className="text-sm text-muted-foreground whitespace-nowrap cursor-pointer">
-                    Include Inbound Shipping
-                  </Label>
-                </div>
+                {queryFilteredResults.length !== results.length && (
+                  <span className="text-xs text-muted-foreground whitespace-nowrap">
+                    {queryFilteredResults.length} of {results.length} shown
+                  </span>
+                )}
+                {/* MERGED Active-filters pill: body opens modal, ✕ clears ALL filters
+                    (calls clearSearchFilters — same handler the modal's "Clear All" uses).
+                    Hidden entirely when activeFilterCount === 0. */}
+                {activeFilterCount > 0 && (
+                  <div className="inline-flex items-center h-8 rounded-md border border-amber-300 dark:border-amber-700 text-amber-600 dark:text-amber-400 text-xs overflow-hidden">
+                    <button
+                      onClick={() => setFiltersModalOpen(true)}
+                      className="pl-2.5 pr-2 h-full flex items-center gap-1.5 hover:bg-amber-50 dark:hover:bg-amber-950"
+                      data-testid="button-active-filters"
+                    >
+                      <Filter className="h-3.5 w-3.5" />
+                      Active filters ({activeFilterCount})
+                    </button>
+                    <button
+                      onClick={clearSearchFilters}
+                      className="px-1.5 h-full border-l border-amber-300 dark:border-amber-700 hover:bg-amber-100 dark:hover:bg-amber-900 flex items-center"
+                      aria-label="Clear all filters"
+                      data-testid="button-clear-filters"
+                    >
+                      <X className="h-3 w-3" />
+                    </button>
+                  </div>
+                )}
+                {/* Option A: row-selection clear stays as its own pill, repurposed label,
+                    moved here from the right group. Handler + trigger condition unchanged. */}
+                {selectedSet.size > 0 && (
+                  <Button
+                    variant="ghost"
+                    size="sm"
+                    onClick={handleClearSelection}
+                    className="text-xs text-muted-foreground h-8"
+                    data-testid="button-clear-selection"
+                    title="Clear row selection"
+                  >
+                    <X className="h-3 w-3 mr-1" />
+                    Clear {selectedSet.size} selected
+                  </Button>
+                )}
               </div>
 
               <div className="flex items-center gap-2">
-                <div className="flex items-center gap-1.5 mr-1">
-                  <Checkbox
-                    id="select-all"
-                    checked={paginatedResults.length > 0 && paginatedResults.every((r) => selectedSet.has(r.asin))}
-                    onCheckedChange={(checked) => checked ? handleSelectAll() : handleClearSelection()}
-                  />
-                  <label htmlFor="select-all" className="text-xs text-muted-foreground cursor-pointer select-none">
-                    All
-                  </label>
-                </div>
-                {selectedSet.size > 0 && (
-                  <>
-                    <Button
-                      variant="outline"
-                      size="sm"
-                      onClick={handleRefreshSelected}
-                      disabled={isAnalyzing}
-                      className="text-xs h-8"
-                    >
-                      <RefreshCw className="h-3 w-3 mr-1" />
-                      Refresh ({selectedSet.size})
-                    </Button>
-                    <Button
-                      variant="outline"
-                      size="sm"
-                      onClick={() => handleArchiveSelected(true)}
-                      className="text-xs h-8 text-muted-foreground"
-                    >
-                      <Archive className="h-3 w-3 mr-1" />
-                      Archive ({selectedSet.size})
-                    </Button>
-                    {showArchived && (
-                      <Button
-                        variant="outline"
-                        size="sm"
-                        onClick={() => handleArchiveSelected(false)}
-                        className="text-xs h-8 text-muted-foreground"
-                      >
-                        <Archive className="h-3 w-3 mr-1" />
-                        Unarchive ({selectedSet.size})
-                      </Button>
-                    )}
-                    <Button
-                      variant="ghost"
-                      size="sm"
-                      onClick={handleClearBuyList}
-                      className="text-xs text-muted-foreground h-8"
-                      data-testid="button-clear-buy-list"
-                    >
-                      <X className="h-3 w-3 mr-1" />
-                      Clear
-                    </Button>
-                  </>
-                )}
-                <ExportButtons results={sortedFilteredResults} priceSource={priceSource} settings={settings} columnConfig={columnConfig} />
+                {/* Export moved to Row 1 (right group). */}
                 <ViewPresets
                   columnConfig={columnConfig}
                   onColumnConfigChange={setColumnConfig}
                   onSortChange={(col, dir) => { setSortCol(col); setSortDir(dir); localStorage.setItem("fba-sort", JSON.stringify({ col, dir })); }}
-                  onPresetFilterChange={setPresetFilter}
                   sortCol={sortCol}
                   sortDir={sortDir}
                   colFilters={colFilters}
@@ -1228,38 +1563,20 @@ export default function Home() {
               </div>
             </div>
 
-            <div className="flex flex-wrap items-center gap-2 px-4">
-              <MultiSearch
+            {/* KPI cards — sits directly above the table (relocated from above-toolbar in B4). */}
+            <div className="px-4">
+              <SummaryCards
                 results={results}
-                searchQuery={searchQuery}
-                onSearchQueryChange={setSearchQuery}
-                selectedAsins={selectedSearchAsins}
-                onSelectedAsinsChange={setSelectedSearchAsins}
+                priceSource={priceSource}
+                settings={settings}
+                includeInboundShipping={includeInboundShipping}
+                activeFilter={activeFilter}
+                onFilterChange={setActiveFilter}
+                buyListCount={buyListCount}
+                onHoldCount={onHoldCount}
+                filterUncalculated={filterUncalculated}
+                onFilterUncalculatedChange={setFilterUncalculated}
               />
-              <VisibilityToggles
-                showGated={showGated}
-                onShowGatedChange={(v) => { setShowGated(v); saveShowGated(v); }}
-                showMeltable={showMeltable}
-                onShowMeltableChange={(v) => { setShowMeltable(v); saveShowMeltable(v); }}
-                showArchived={showArchived}
-                onShowArchivedChange={(v) => { setShowArchived(v); saveShowArchived(v); }}
-              />
-              {activeFilterCount > 0 && (
-                <Button
-                  variant="outline"
-                  size="sm"
-                  onClick={() => setFiltersModalOpen(true)}
-                  className="h-9 text-xs text-amber-600 border-amber-300 hover:bg-amber-50 dark:text-amber-400 dark:border-amber-700 dark:hover:bg-amber-950"
-                >
-                  <Filter className="h-3.5 w-3.5 mr-1.5" />
-                  Active filters ({activeFilterCount})
-                </Button>
-              )}
-              {queryFilteredResults.length !== results.length && (
-                <span className="text-xs text-muted-foreground ml-1">
-                  {queryFilteredResults.length} of {results.length} shown
-                </span>
-              )}
             </div>
 
             <ResultsTable
@@ -1271,6 +1588,8 @@ export default function Home() {
               columnConfig={columnConfig}
               activeFilter={activeFilter}
               buySet={buySet}
+              onHoldSet={onHoldSet}
+              onToggleHold={handleToggleHold}
               onToggleBuy={handleToggleBuy}
               selectedSet={selectedSet}
               onToggleSelect={handleToggleSelect}
@@ -1326,6 +1645,61 @@ export default function Home() {
           </div>
         )}
       </div>
+
+      {/* Page-level mounts (modals + page-wide dialogs). Settings is opened
+          via the OPEN_SETTINGS_EVENT dispatched by the top-nav gear icon. */}
+      <SettingsDialog
+        onSettingsChange={setSettings}
+        open={settingsOpen}
+        onOpenChange={setSettingsOpen}
+        hideTrigger
+        movedToggles={{
+          includeInboundShipping,
+          onIncludeInboundShippingChange: setIncludeInboundShipping,
+          priceSource,
+          onPriceSourceChange: setPriceSource,
+          showGated,
+          onShowGatedChange: (v) => { setShowGated(v); saveShowGated(v); },
+          showMeltable,
+          onShowMeltableChange: (v) => { setShowMeltable(v); saveShowMeltable(v); },
+          showArchived,
+          onShowArchivedChange: (v) => { setShowArchived(v); saveShowArchived(v); },
+          onResetCogs: handleBulkSyncCogs,
+          isResettingCogs: isSyncingCogs,
+        }}
+      />
+
+      <RevivalDialog
+        candidates={revivalCandidates}
+        open={revivalDialogOpen}
+        onClose={() => setRevivalDialogOpen(false)}
+        onConfirm={handleRevive}
+      />
+
+      <VerificationPanel
+        open={verifyPanelOpen}
+        onClose={() => setVerifyPanelOpen(false)}
+        data={unverified}
+        onRefetch={fetchUnverified}
+      />
+
+      <OfferAddPreviewDialog
+        open={offerAddOpen}
+        onClose={() => { setOfferAddOpen(false); fetchUnverified(); }}
+        loading={offerAddLoading}
+        data={offerAddData}
+        errorMessage={offerAddError}
+        onReviewApprovals={handleReviewApprovals}
+        onSubmit={handleSubmitOfferAdd}
+      />
+
+      <LegendApprovalDialog
+        open={legendDialogOpen}
+        pending={legendPending}
+        approvedBrands={approvedBrands}
+        onClose={handleLegendDialogClose}
+        onApprove={handleApproveLegendItems}
+      />
 
       <ActiveFiltersModal
         open={filtersModalOpen}

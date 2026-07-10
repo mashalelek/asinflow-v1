@@ -11,6 +11,7 @@ export const defaultSettings: Settings = {
   hazmatPrepSurcharge: 0,
   minRoiThreshold: 15,
   minMarginThreshold: 10,
+  minProfitUnitThreshold: 3,
   maxCogsMinMarginPct: 12,
   maxCogsMinRoiPct: 20,
   maxCogsMinProfitUnit: 3,

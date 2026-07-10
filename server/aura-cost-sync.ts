@@ -147,13 +147,13 @@ export interface DryRunSummary {
 }
 
 export async function buildAuraDryRun(
-  deps: { get?: AuraGet; query?: QueryLike } = {},
-): Promise<{ rows: DryRunRow[]; summary: DryRunSummary }> {
+  deps: { get?: AuraGet; query?: QueryLike; asinFilter?: Set<string> } = {},
+): Promise<{ rows: DryRunRow[]; summary: DryRunSummary; notInAura?: string[] }> {
   const listings = await listAllListings(deps.get ?? realAuraGet);
   const skus = Array.from(new Set(listings.map((l) => l.sku).filter(Boolean)));
   const resolved = await resolveCostsBySku(skus, deps.query ?? (defaultQuery as any));
 
-  const rows: DryRunRow[] = listings.map((l) => {
+  const allRows: DryRunRow[] = listings.map((l) => {
     const base = { id: l.id, currency: l.currency, sku: l.sku, auraStatus: l.status, repricing: !!l.repricing, currentAuraCost: l.cost ?? null };
     const r = resolved.get(l.sku);
 
@@ -173,6 +173,21 @@ export async function buildAuraDryRun(
     return { ...base, asin, computedCost, verdict, noPoPrep };
   });
 
+  // Selection filter — applied AFTER SKU→ASIN mapping: keep only listings that
+  // resolve to a filtered ASIN. Everything else is ignored entirely (NOT counted
+  // as skipped). Enumeration above still walked ALL Aura listings (there is no
+  // per-SKU Aura query). notInAura = filtered ASINs no Aura listing resolved to.
+  let rows = allRows;
+  let notInAura: string[] | undefined;
+  if (deps.asinFilter) {
+    const filter = deps.asinFilter;
+    const asinsOf = (row: DryRunRow) => (row.asin == null ? [] : row.asin.split(",")); // ambiguous = "A,B"
+    rows = allRows.filter((row) => asinsOf(row).some((a) => filter.has(a)));
+    const matched = new Set<string>();
+    for (const row of allRows) for (const a of asinsOf(row)) if (filter.has(a)) matched.add(a);
+    notInAura = Array.from(filter).filter((a) => !matched.has(a));
+  }
+
   const perVerdict: Record<Verdict, number> = {
     PUSH: 0, UNCHANGED: 0, "SKIP:unmapped_sku": 0, "SKIP:ambiguous_sku": 0, "SKIP:null_cogs": 0, "SKIP:zero_cost": 0,
   };
@@ -184,7 +199,7 @@ export async function buildAuraDryRun(
     if (row.noPoPrep) noPoPrepCount++;
   }
 
-  return { rows, summary: { totalListings: rows.length, perVerdict, perStatus, noPoPrepCount } };
+  return { rows, summary: { totalListings: rows.length, perVerdict, perStatus, noPoPrepCount }, notInAura };
 }
 
 // Cents → "$X.XX" (or "—" for null), for the dry-run table.
@@ -257,6 +272,7 @@ export interface PushResult {
   remaining: number; // PUSH rows beyond --limit, not attempted this run
   variantsUsed: Record<string, number>; // which write variant succeeded
   dryRunSummary: DryRunSummary;         // per-verdict / per-status breakdown
+  notInAura?: string[];                 // (filtered runs only) selected ASINs no Aura listing matched
   failures: PushFailure[];
   readback: PushReadback[]; // belt-and-suspenders list re-fetch of ≤5 pushed
 }
@@ -265,10 +281,10 @@ export interface PushResult {
 // Sequential with 250ms spacing. Persistence is verified from the POST response
 // object per row; a final list re-fetch of ≤5 SKUs is a belt-and-suspenders check.
 export async function pushAuraCosts(
-  opts: { limit: number | "all"; get?: AuraGet; query?: QueryLike },
+  opts: { limit: number | "all"; get?: AuraGet; query?: QueryLike; asinFilter?: Set<string> },
 ): Promise<PushResult> {
   const get = opts.get ?? realAuraGet;
-  const { rows, summary: dryRunSummary } = await buildAuraDryRun({ get, query: opts.query });
+  const { rows, summary: dryRunSummary, notInAura } = await buildAuraDryRun({ get, query: opts.query, asinFilter: opts.asinFilter });
 
   const pushRows = rows.filter((r) => r.verdict === "PUSH");
   const skipped = rows.length - pushRows.length; // SKIP:* + UNCHANGED
@@ -306,5 +322,5 @@ export async function pushAuraCosts(
     }
   }
 
-  return { attempted: toPush.length, pushed: pushedRows.length, failed: failures.length, skipped, remaining, variantsUsed, dryRunSummary, failures, readback };
+  return { attempted: toPush.length, pushed: pushedRows.length, failed: failures.length, skipped, remaining, variantsUsed, dryRunSummary, notInAura, failures, readback };
 }

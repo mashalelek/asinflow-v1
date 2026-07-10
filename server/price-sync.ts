@@ -131,13 +131,18 @@ async function writePrice(asin: string, data: AsinPricingResult): Promise<void> 
  */
 export async function refreshPrices(
   onProgress?: (p: PriceRefreshProgress) => void | Promise<void>,
+  asinFilter?: ReadonlySet<string>,
 ): Promise<PriceRefreshResult> {
+  const filtered = asinFilter && asinFilter.size > 0;
   const result = await query(
-    `SELECT asin FROM asins WHERE is_active = TRUE ORDER BY asin`,
+    filtered
+      ? `SELECT asin FROM asins WHERE is_active = TRUE AND asin = ANY($1::text[]) ORDER BY asin`
+      : `SELECT asin FROM asins WHERE is_active = TRUE ORDER BY asin`,
+    filtered ? [Array.from(asinFilter!)] : undefined,
   );
   const asins: string[] = result.rows.map((r: any) => r.asin);
 
-  log(`Price refresh starting for ${asins.length} active ASINs`, "price-sync");
+  log(`Price refresh starting for ${asins.length} active ASINs${filtered ? ` (filtered subset)` : ""}`, "price-sync");
 
   let updated = 0;
   const failedAsins: string[] = [];

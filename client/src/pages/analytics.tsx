@@ -24,7 +24,7 @@ import {
   getSelectedPrice,
 } from "@shared/schema";
 import { useToast } from "@/hooks/use-toast";
-import { DateRangePicker } from "@/components/date-range-picker";
+import { useDateRange } from "@/contexts/date-range-context";
 import { type ColFilter, type FilterMap, matchesFilters } from "@/components/column-filter";
 import { computeAnalyticsMetrics } from "@/lib/analytics";
 import { MetricTile, DualMetricTile } from "@/components/metric-tile";
@@ -35,6 +35,7 @@ import {
   calculateProfit,
   extractDomain,
   calculateMaxCogs,
+  appliesDgHazmatSurcharge,
 } from "@shared/schema";
 
 // ── localStorage keys (analytics-specific to avoid collisions) ──────
@@ -150,19 +151,13 @@ export default function Analytics() {
   // Collapse all when groupBy changes
   useEffect(() => { setExpandedGroups(new Set()); setPage(1); }, [groupBy]);
 
-  const [datePrefs] = useState(loadDatePrefs);
-  const [datePreset, setDatePreset] = useState(datePrefs.preset);
-  const [customStart, setCustomStart] = useState(datePrefs.customStart);
-  const [customEnd, setCustomEnd] = useState(datePrefs.customEnd);
-
-  const { startDate, endDate } = useMemo(
-    () => computeDateRange(datePreset, customStart, customEnd),
-    [datePreset, customStart, customEnd],
-  );
+  // Date range is global (top-nav DataStudioDatePicker), shared across pages.
+  const { range: dateRange } = useDateRange();
+  const startDate = dateRange.start;
+  const endDate = dateRange.end;
   const dateRangeLabel = useMemo(() => formatDateLabel(startDate, endDate), [startDate, endDate]);
 
-  // Persist prefs
-  useEffect(() => { localStorage.setItem(A_DATE_PREFS_KEY, JSON.stringify({ preset: datePreset, customStart, customEnd })); }, [datePreset, customStart, customEnd]);
+  // Persist prefs (date range persisted by DateRangeContext)
   useEffect(() => { localStorage.setItem(A_INBOUND_KEY, String(includeInboundShipping)); }, [includeInboundShipping]);
   useEffect(() => { localStorage.setItem(A_COL_FILTERS_KEY, JSON.stringify(colFilters)); }, [colFilters]);
 
@@ -219,7 +214,7 @@ export default function Analytics() {
         const storage = getEffectiveStorage(r, settings);
         let profitData: ReturnType<typeof calculateProfit> | null = null;
         if (price != null && !r.error) {
-          if (r.estimatedCogs != null) profitData = calculateProfit(price, r.estimatedCogs, r.feesData.fbaFulfillmentFee ?? 0, r.feesData.referralFee ?? 0, r.feesData.feesEstimatePrice, r.catalogData.weightLbs, prep.value, storage.value, settings, includeInboundShipping, r.isHazmat ?? false);
+          if (r.estimatedCogs != null) profitData = calculateProfit(price, r.estimatedCogs, r.feesData.fbaFulfillmentFee ?? 0, r.feesData.referralFee ?? 0, r.feesData.feesEstimatePrice, r.catalogData.weightLbs, prep.value, storage.value, settings, includeInboundShipping, appliesDgHazmatSurcharge(r));
         }
         return matchesFilters(r as any, colFilters, (colId) => {
           switch (colId) {
@@ -259,7 +254,7 @@ export default function Analytics() {
               return null;
             }
             case "maxCogs": {
-              const mc = calculateMaxCogs(price, r.feesData.fbaFulfillmentFee, r.feesData.referralFee, r.feesData.feesEstimatePrice, r.catalogData.weightLbs, prep.value, storage.value, settings, includeInboundShipping, r.isHazmat ?? false);
+              const mc = calculateMaxCogs(price, r.feesData.fbaFulfillmentFee, r.feesData.referralFee, r.feesData.feesEstimatePrice, r.catalogData.weightLbs, prep.value, storage.value, settings, includeInboundShipping, appliesDgHazmatSurcharge(r));
               return mc;
             }
             default: return null;
@@ -368,16 +363,7 @@ export default function Analytics() {
               <span className={`text-sm ${priceSource === "buyBox" ? "font-semibold" : "text-muted-foreground"}`}>Buy Box</span>
             </div>
           </div>
-          <DateRangePicker
-            preset={datePreset}
-            onPresetChange={setDatePreset}
-            customStart={customStart}
-            customEnd={customEnd}
-            onCustomStartChange={setCustomStart}
-            onCustomEndChange={setCustomEnd}
-            dateRangeLabel={dateRangeLabel}
-          />
-          <div className="flex items-center gap-2">
+<div className="flex items-center gap-2">
             <Switch id="a-inbound" checked={includeInboundShipping} onCheckedChange={setIncludeInboundShipping} />
             <Label htmlFor="a-inbound" className="text-sm text-muted-foreground whitespace-nowrap cursor-pointer">Include Inbound Shipping</Label>
           </div>
@@ -518,6 +504,8 @@ export default function Analytics() {
                 activeFilter="all"
                 buySet={new Set()}
                 onToggleBuy={() => {}}
+                onHoldSet={new Set()}
+                onToggleHold={() => {}}
                 selectedSet={selectedSet}
                 onToggleSelect={(asin) => {
                   setSelectedSet((prev) => {

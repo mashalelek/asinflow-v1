@@ -1,5 +1,6 @@
 import { google } from "googleapis";
 import { log } from "./index";
+import { parseMoney } from "@shared/parse-money";
 
 // Column indices (0-based from col A)
 const COL_STATUS = 3;   // D
@@ -47,20 +48,18 @@ export async function fetchSheetData(sheetId: string): Promise<Map<string, Sheet
 
     // COGS + prep cost + supplier: first non-canceled row per ASIN
     if (!isCanceled && existing?.cogs == null) {
-      const cogsRaw = (row[COL_COGS] ?? "").toString().replace(/[$,]/g, "").trim();
-      const cogs = parseFloat(cogsRaw);
-      const prepRaw = (row[COL_PREP] ?? "").toString().replace(/[$,]/g, "").trim();
-      const prepCost = parseFloat(prepRaw);
+      const cogs = parseMoney(row[COL_COGS]);
+      const prepCost = parseMoney(row[COL_PREP]);
       // Empty prep cell on a real PO row = deliberate $0 (not "no data")
-      const resolvedPrep = isNaN(prepCost) ? 0 : prepCost;
+      const resolvedPrep = prepCost == null ? 0 : prepCost;
       const supplier = (row[COL_SUPPLIER] ?? "").toString().trim() || null;
 
       if (!existing) {
-        result.set(asin, { cogs: isNaN(cogs) ? null : cogs, prepCost: resolvedPrep, orderedQty: 0, supplier });
+        result.set(asin, { cogs, prepCost: resolvedPrep, orderedQty: 0, supplier });
       } else {
         result.set(asin, {
           ...existing,
-          cogs: isNaN(cogs) ? null : cogs,
+          cogs,
           prepCost: resolvedPrep,
           supplier: supplier ?? existing.supplier,
         });

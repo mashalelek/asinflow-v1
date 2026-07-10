@@ -38,6 +38,17 @@
   --destructive-foreground: 0 0% 98%;
   --input: 25 5% 65%;
   --ring: 217 91% 60%;
+
+  /* Action-button semantic tokens (light). Scoped to toolbar action buttons —
+     intentionally separate from --primary/--destructive/--accent which are
+     used app-wide and differ from these target hues. Hex values are stored
+     as raw values (not HSL-only) because they're consumed directly in
+     Tailwind arbitrary-value classes.
+     Only Archive remains tokenized — push (Add to SC) and analyze tokens
+     were removed when those buttons reverted to neutral outline (2026-06-29). */
+  --action-archive-border: #A32D2D;    /* Archive border + text */
+  --action-archive-text: #A32D2D;
+
   --nav: 12 6% 15%;
   --nav-foreground: 60 5% 96%;
   --nav-active: 30 6% 25%;
@@ -132,6 +143,11 @@
   --destructive-foreground: 0 0% 98%;
   --input: 25 5% 35%;
   --ring: 217 91% 60%;
+
+  /* Action-button semantic tokens (dark). Same scope as in :root above. */
+  --action-archive-border: #D77272;
+  --action-archive-text: #E89999;
+
   --nav: 20 14% 4%;
   --nav-foreground: 60 5% 96%;
   --nav-active: 12 6% 15%;
