@@ -118,19 +118,46 @@ export async function syncInventory(
     const sorted = (realSkus.length > 0 ? realSkus : agg.skuData)
       .sort((a, b) => b.fulfillable - a.fulfillable || b.seenOrder - a.seenOrder);
     const primarySku = sorted[0]?.sku ?? null;
+
+    // Primary ownership: the live-offer SKU (set by the Add-Offer path) is
+    // authoritative. inventory-sync's fulfillable-count pick is BOOTSTRAP-ONLY —
+    // it may set primary_sku / is_primary only when the ASIN has no primary at
+    // all. If a primary already exists (primary_sku set OR any is_primary row),
+    // do NOT recompute or demote — leave both fields untouched.
+    const primaryCheck = await query(
+      `SELECT (a.primary_sku IS NOT NULL
+               OR EXISTS (SELECT 1 FROM asin_skus s WHERE s.asin_id = a.id AND s.is_primary = TRUE)) AS has_primary
+       FROM asins a WHERE a.id = $1`,
+      [agg.asinId]
+    );
+    const hasPrimary = primaryCheck.rows[0]?.has_primary === true;
+
+    // in_catalog is always refreshed; primary_sku only on bootstrap.
     await query(
-      `UPDATE asins SET in_catalog = TRUE, primary_sku = $2 WHERE id = $1`,
-      [agg.asinId, primarySku]
+      hasPrimary
+        ? `UPDATE asins SET in_catalog = TRUE WHERE id = $1`
+        : `UPDATE asins SET in_catalog = TRUE, primary_sku = $2 WHERE id = $1`,
+      hasPrimary ? [agg.asinId] : [agg.asinId, primarySku]
     );
 
-    // Store all SKUs in asin_skus, update is_primary (never mark amzn.gr.* as primary)
+    // Store all SKUs in asin_skus. On bootstrap, set is_primary by the
+    // heuristic (never amzn.gr.*). When a primary already exists, still track
+    // newly-seen SKUs (as non-primary) but never overwrite existing is_primary.
     for (const sd of agg.skuData) {
-      const isPrimary = sd.sku === primarySku && !isAmznGr(sd.sku);
-      await query(
-        `INSERT INTO asin_skus (asin_id, sku, is_primary) VALUES ($1, $2, $3)
-         ON CONFLICT (asin_id, sku) DO UPDATE SET is_primary = EXCLUDED.is_primary`,
-        [agg.asinId, sd.sku, isPrimary]
-      );
+      if (hasPrimary) {
+        await query(
+          `INSERT INTO asin_skus (asin_id, sku, is_primary) VALUES ($1, $2, FALSE)
+           ON CONFLICT (asin_id, sku) DO NOTHING`,
+          [agg.asinId, sd.sku]
+        );
+      } else {
+        const isPrimary = sd.sku === primarySku && !isAmznGr(sd.sku);
+        await query(
+          `INSERT INTO asin_skus (asin_id, sku, is_primary) VALUES ($1, $2, $3)
+           ON CONFLICT (asin_id, sku) DO UPDATE SET is_primary = EXCLUDED.is_primary`,
+          [agg.asinId, sd.sku, isPrimary]
+        );
+      }
     }
 
     synced++;

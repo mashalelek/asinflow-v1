@@ -291,44 +291,55 @@ export async function offerAddForAsin(
     if (outcome.ok) {
       committed = true; // MUST be set before return so finally sees it
 
-      // Write the live SKU into asin_skus so the NNN allocator sees it on the
-      // NEXT batch's max+1 computation (in-batch sequencing is already handled
-      // by assignNnns's cursor). Before this write existed, the allocator was
-      // blind to submitted-but-not-yet-inventory-synced SKUs and silently
-      // reassigned their NNNs to new ASINs in subsequent batches.
+      // Promote this SKU to primary and record it in asin_skus. It now carries
+      // the live SC offer, so it IS the lead SKU for the ASIN — runs for BOTH
+      // the generate path (new row) and the resurrection-reuse path (existing
+      // row flipped back to primary). This also keeps the NNN allocator aware
+      // of submitted-but-not-yet-inventory-synced SKUs: before any asin_skus
+      // write existed, the allocator was blind to them and silently reassigned
+      // their NNNs to new ASINs in later batches.
       //
-      // ON CONFLICT semantics mirror inventory-sync.ts:131 exactly — a later
-      // inventory-sync re-observing this same SKU is an idempotent no-op
-      // (well, a NO-OP UPDATE on is_primary).
+      // One atomic statement (data-modifying CTEs) so asin_skus.is_primary and
+      // asins.primary_sku can NEVER disagree:
+      //   promote — upsert this SKU as is_primary=true (INSERT for generate;
+      //             flip an existing/resurrected row via ON CONFLICT),
+      //   demote  — set is_primary=false on every OTHER SKU for the ASIN,
+      //   then update asins.primary_sku to this SKU.
+      // promote and demote touch disjoint rows (target vs. sku <> $2), so the
+      // two CTEs never modify the same tuple.
       //
-      // is_primary=false at submit time: SKU has zero fulfillable inventory
-      // until physical units arrive. inventory-sync's later poll determines
-      // primary by fulfillable count and UPDATEs accordingly.
-      //
-      // Generate-path only: reuse path means the SKU was already in
-      // asin_skus (that's how resurrection found it as a candidate).
+      // The live-offer SKU is authoritative for primary. inventory-sync's
+      // fulfillable-count heuristic is bootstrap-only (sets primary only when
+      // none exists) and must never overwrite this — see inventory-sync.ts.
       //
       // Best-effort with loud logging: a DB failure here leaves a live SC
-      // listing without local asin_skus tracking. The registry row is intact
-      // and the SKU at SC is real; inventory-sync will reconcile asin_skus
-      // on its next run. Until then, allocator could collide for this bucket
-      // on a same-day second batch — log loudly so it's visible.
-      if (!reused) {
-        try {
-          await deps.queryFn(
-            `INSERT INTO asin_skus (asin_id, sku, is_primary)
-                  SELECT id, $2, false FROM asins WHERE asin = $1
-             ON CONFLICT (asin_id, sku) DO UPDATE SET is_primary = EXCLUDED.is_primary`,
-            [input.asin, sku],
-          );
-        } catch (err: any) {
-          // eslint-disable-next-line no-console
-          console.error(
-            `[offer-add] CRITICAL: failed to write asin_skus for asin=${input.asin} sku=${sku} ` +
-            `(listing IS live at SC; registry row is committed; allocator may collide on next ` +
-            `batch in this bucket until inventory-sync runs): ${err?.message ?? err}`,
-          );
-        }
+      // listing whose local primary wasn't promoted (the registry row is
+      // committed and the SKU at SC is real). It must NOT roll back the live
+      // listing — inventory-sync reconciles asin_skus on its next run.
+      try {
+        await deps.queryFn(
+          `WITH tgt AS (
+             SELECT id FROM asins WHERE asin = $1
+           ),
+           promote AS (
+             INSERT INTO asin_skus (asin_id, sku, is_primary)
+             SELECT id, $2, true FROM tgt
+             ON CONFLICT (asin_id, sku) DO UPDATE SET is_primary = true
+           ),
+           demote AS (
+             UPDATE asin_skus SET is_primary = false
+             WHERE asin_id = (SELECT id FROM tgt) AND sku <> $2
+           )
+           UPDATE asins SET primary_sku = $2 WHERE asin = $1`,
+          [input.asin, sku],
+        );
+      } catch (err: any) {
+        // eslint-disable-next-line no-console
+        console.error(
+          `[offer-add] CRITICAL: failed to promote primary SKU for asin=${input.asin} sku=${sku} ` +
+          `(listing IS live at SC; registry row is committed; local primary_sku/is_primary not ` +
+          `updated until inventory-sync reconciles): ${err?.message ?? err}`,
+        );
       }
 
       // Record the fire in the verification ledger. ACCEPTED ≠ live — this row

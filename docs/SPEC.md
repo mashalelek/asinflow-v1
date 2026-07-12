@@ -1296,6 +1296,11 @@ live write to Seller Central:
    resolved. Duplicate-offer confirmations surface here.
 4. On explicit confirm, AF fires `putListingsItem` per ASIN.
 5. Issues are surfaced per ASIN; expiration issues count as failures.
+6. On success, the created SKU is **promoted to primary**: one atomic
+   statement sets `asin_skus.is_primary = true` on it and `false` on all
+   other SKUs for the ASIN, and updates `asins.primary_sku` to match. The
+   live-offer SKU is the lead SKU. Applies to **both** new-SKU generation and
+   resurrection-reuse; the two fields never disagree.
 
 ### Source-of-truth ownership
 
@@ -1303,11 +1308,26 @@ live write to Seller Central:
 |---|---|
 | Offer creation (putListingsItem) | Add-Offer path (only writer) |
 | Offer price at creation | Add-Offer path (price resolver) |
+| `primary_sku`, `asin_skus.is_primary` | Add-Offer path (promotes the live-offer SKU on creation); inventory-sync may set them only as bootstrap when no primary exists, never overwrite |
 | `sku_legend` entries (brand/dept codes, aliases) | Add-Offer approval flow |
 | `category`, `brand` (self-heal) | Add-Offer catalog fetch (per §14 catalog ownership) |
 
 The Add-Offer path does NOT modify user-controlled fields (COGS, tags, notes,
 etc.).
+
+**Primary-SKU ownership.** The live-offer SKU is authoritative for primary.
+inventory-sync's fulfillable-count heuristic is **bootstrap-only**: it may set
+`primary_sku` / `is_primary` solely when the ASIN has no primary at all
+(`primary_sku IS NULL` and no `asin_skus` row with `is_primary = true`); once a
+primary exists it never recomputes or demotes. *Legacy state:* an ASIN whose
+only SKUs are `amzn.gr.*` gets `primary_sku` set to that SKU by bootstrap while
+no `asin_skus` row is marked `is_primary` (the two fields disagree) — and since
+the bootstrap check treats a non-null `primary_sku` as "has primary," sync never
+self-corrects it; only a future Add-Offer promotion heals it.
+
+**Known limitation.** If a primary SKU's listing is later deleted in SC, the
+`primary_sku` / `is_primary` fields go stale — live-offer detection is tracked
+separately (the catalog-icon bug fix).
 
 ## 19. Post-Submit Verification (Submission Ledger)
 
