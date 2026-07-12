@@ -154,3 +154,6 @@ the dry-run passes.
   silent.
 - Docs-only SPEC edits may batch across sessions, but never past the next
   feature commit.
+- After committing changes to sync/cron code, restart any long-running dev
+  server before triggering jobs — `tsx` does not hot-reload, so a stale
+  process silently runs pre-fix code (this caused a primary-SKU revert once).

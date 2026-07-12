@@ -1309,7 +1309,7 @@ live write to Seller Central:
 | Offer creation (putListingsItem) | Add-Offer path (only writer) |
 | Offer price at creation | Add-Offer path (price resolver) |
 | `primary_sku`, `asin_skus.is_primary` | Add-Offer path (promotes the live-offer SKU on creation); inventory-sync may set them only as bootstrap when no primary exists, never overwrite |
-| `has_live_offer`, `offer_checked_at` | Daily live-offer staleness pass (`live-offer-sync.ts`) + §19 verification `'live'` transition — both getListingsItem-derived |
+| `has_live_offer`, `offer_checked_at` | Daily live-offer staleness pass (`live-offer-sync.ts`) + §19 API verify-sweep `'live'` transition (`verifyPending`) — both getListingsItem-derived; manual verdicts never write it |
 | `sku_legend` entries (brand/dept codes, aliases) | Add-Offer approval flow |
 | `category`, `brand` (self-heal) | Add-Offer catalog fetch (per §14 catalog ownership) |
 
@@ -1355,10 +1355,12 @@ inventory summaries.
 - **Writers:** (1) the daily staleness pass (`live-offer-sync.ts`, 07:00
   host-local) over every `in_catalog=TRUE` ASIN **that has ≥1 `asin_skus` row**
   — no-SKU ASINs are excluded (nothing to probe; they stay `NULL`/"+" and are
-  picked up once inventory-sync records a SKU); (2) the §19 `'live'` transition
-  (sweep or manual verdict), which flips `has_live_offer = TRUE` same-day after
-  Add to SC so a freshly added offer never shows a stale "+". **Not** written at
-  ACCEPTED (synchronous validation only).
+  picked up once inventory-sync records a SKU); (2) the §19 **API verify-sweep**
+  `'live'` transition (`verifyPending`, getListingsItem-derived), which flips
+  `has_live_offer = TRUE` same-day after Add to SC so a freshly added offer never
+  shows a stale "+". A **manual** `'live'` verdict does NOT write it (waits for
+  the daily pass), and it is **not** written at ACCEPTED (synchronous validation
+  only).
 - **Fail-closed:** only a definitive 200 writes `TRUE`; only all-SKUs-404 writes
   `FALSE`; any transient (429/5xx/timeout) writes nothing and is retried next
   run. Never coerced from missing data.

@@ -127,16 +127,10 @@ export async function resolveSubmissionManual(
     [id, verdict],
   );
 
-  // A manual 'live' verdict is a human confirmation the offer exists — mirror the
-  // sweep's has_live_offer write. ('deleted' does NOT clear it: deleting ONE SKU
-  // doesn't mean the ASIN has no live offer; only the daily pass writes FALSE,
-  // and only when ALL of the ASIN's SKUs 404.)
-  if (verdict === "live") {
-    await query(
-      `UPDATE asins SET has_live_offer = TRUE, offer_checked_at = now() WHERE asin = $1`,
-      [asin],
-    );
-  }
+  // NOTE: manual verdicts deliberately do NOT write asins.has_live_offer — only
+  // the API verify-sweep 'live' transition (getListingsItem-derived) and the
+  // daily staleness pass own that field. A manual 'live' waits for the next
+  // daily pass to reflect in the icon.
 
   // DELETED: the SKU is gone from SC. Demote ONLY this SKU's is_primary and keep
   // the asin_skus row — resurrection reuses a 404'ing SKU (candidate →
