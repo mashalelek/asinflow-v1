@@ -1309,6 +1309,7 @@ live write to Seller Central:
 | Offer creation (putListingsItem) | Add-Offer path (only writer) |
 | Offer price at creation | Add-Offer path (price resolver) |
 | `primary_sku`, `asin_skus.is_primary` | Add-Offer path (promotes the live-offer SKU on creation); inventory-sync may set them only as bootstrap when no primary exists, never overwrite |
+| `has_live_offer`, `offer_checked_at` | Daily live-offer staleness pass (`live-offer-sync.ts`) + §19 verification `'live'` transition — both getListingsItem-derived |
 | `sku_legend` entries (brand/dept codes, aliases) | Add-Offer approval flow |
 | `category`, `brand` (self-heal) | Add-Offer catalog fetch (per §14 catalog ownership) |
 
@@ -1326,8 +1327,43 @@ the bootstrap check treats a non-null `primary_sku` as "has primary," sync never
 self-corrects it; only a future Add-Offer promotion heals it.
 
 **Known limitation.** If a primary SKU's listing is later deleted in SC, the
-`primary_sku` / `is_primary` fields go stale — live-offer detection is tracked
-separately (the catalog-icon bug fix).
+`primary_sku` / `is_primary` fields (which drive the *lead-SKU display*) go
+stale until the next Add-Offer promotion — a separate concern from the catalog
+**icon**, which is now driven by `has_live_offer` (below) and self-corrects
+daily.
+
+### Catalog icon: live-offer truth (`has_live_offer`)
+
+The Product-cell "in catalog" icon (blue checkmark vs. "+" Add-to-SC) reads
+**`has_live_offer` only** — never `in_catalog`, `asin_skus` presence, or
+inventory summaries.
+
+- **`in_catalog` is demoted to an internal discovery latch** — it is NOT a
+  live-offer signal. It is a one-way TRUE-only flag (set by sales-sync on any
+  order and by inventory-sync for every ASIN in `getInventorySummaries`, which
+  **retains tombstones for deleted listings**), so it stays TRUE forever and
+  over-reports. It is no longer read by the UI.
+- **`has_live_offer` is tri-state:** `NULL` = never checked (icon shows "+",
+  same as no offer); `TRUE` = ≥1 SKU has a live listing (both Active/BUYABLE and
+  Inactive/DISCOVERABLE count — a listing existing in either state is a
+  checkmark); `FALSE` = every SKU for the ASIN definitively 404s at
+  `getListingsItem`. `offer_checked_at` records the last definitive write.
+- **Truth source = `getListingsItem`** (via `checkSkuListingStatus`, the same
+  404 primitive as §18 resurrection). Multi-SKU: check `primary_sku` first, then
+  other `asin_skus` rows, short-circuit on the first live hit
+  (`live-offer-check.ts`, shared by the daily pass and the one-off backfill).
+- **Writers:** (1) the daily staleness pass (`live-offer-sync.ts`, 07:00
+  host-local) over every `in_catalog=TRUE` ASIN **that has ≥1 `asin_skus` row**
+  — no-SKU ASINs are excluded (nothing to probe; they stay `NULL`/"+" and are
+  picked up once inventory-sync records a SKU); (2) the §19 `'live'` transition
+  (sweep or manual verdict), which flips `has_live_offer = TRUE` same-day after
+  Add to SC so a freshly added offer never shows a stale "+". **Not** written at
+  ACCEPTED (synchronous validation only).
+- **Fail-closed:** only a definitive 200 writes `TRUE`; only all-SKUs-404 writes
+  `FALSE`; any transient (429/5xx/timeout) writes nothing and is retried next
+  run. Never coerced from missing data.
+- **`is_listing_active`** (a dead `DEFAULT TRUE` column, zero readers) was
+  dropped in migration 018 — its default would have poisoned the tri-state.
 
 ## 19. Post-Submit Verification (Submission Ledger)
 

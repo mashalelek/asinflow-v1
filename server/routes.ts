@@ -736,7 +736,7 @@ export async function registerRoutes(
       const result = await query(`
         SELECT
           a.asin, a.title, a.image_url, a.brand, a.category, a.weight_lb, a.buy_link, a.is_active,
-          a.primary_sku, a.in_catalog, a.notes, a.is_meltable, a.is_hazmat, a.is_dangerous_good, a.is_search_suppressed, a.suppression_reasons, a.last_reviewed_at, a.added_at, a.is_wholesale, a.is_oa,
+          a.primary_sku, a.in_catalog, a.has_live_offer, a.notes, a.is_meltable, a.is_hazmat, a.is_dangerous_good, a.is_search_suppressed, a.suppression_reasons, a.last_reviewed_at, a.added_at, a.is_wholesale, a.is_oa,
           e.cogs, e.cogs_source, e.actual_cogs, e.estimated_cogs, e.estimated_cogs_source, e.prep_override, e.storage_override,
           e.lowest_fba_price, e.buy_box_price, e.buy_box_fulfillment, e.lowest_price,
           e.sellers_fba, e.sellers_fbm,
@@ -914,6 +914,7 @@ export async function registerRoutes(
           sku: row.primary_sku ?? null,
           skus: skusMap.get(row.asin) ?? [],
           inCatalog: row.in_catalog ?? false,
+          hasLiveOffer: row.has_live_offer ?? null,
           tags: tagsMap.get(row.asin) ?? [],
           notes: row.notes ?? null,
           isArchived: row.is_active === false,

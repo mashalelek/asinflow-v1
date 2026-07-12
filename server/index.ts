@@ -8,6 +8,7 @@ import { startInventoryCron } from "./inventory-cron";
 import { startPriceSyncCron } from "./price-sync-cron";
 import { startSourcingSyncCron } from "./sourcing-sync-cron";
 import { startAuraSyncCron } from "./aura-sync-cron";
+import { startLiveOfferCron } from "./live-offer-cron";
 
 const app = express();
 const httpServer = createServer(app);
@@ -99,6 +100,7 @@ app.use((req, res, next) => {
     startPriceSyncCron();
     startSourcingSyncCron();
     startAuraSyncCron();
+    startLiveOfferCron();
   }
 
   app.use((err: any, _req: Request, res: Response, next: NextFunction) => {

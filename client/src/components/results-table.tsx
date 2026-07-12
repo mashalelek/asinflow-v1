@@ -1156,7 +1156,11 @@ function ProductCell({ result, price, settings, onResultUpdate }: { result: Asin
               </TooltipContent>
             </Tooltip>
           )}
-          {result.inCatalog ? (
+          {/* Live-offer truth (has_live_offer, getListingsItem-derived) — NOT
+              in_catalog (a tombstone-latched discovery flag). Checkmark only when
+              a live offer is confirmed; "+" for deleted (FALSE) and never-checked
+              (NULL) alike. */}
+          {result.hasLiveOffer === true ? (
             <Tooltip>
               <TooltipTrigger asChild>
                 <ShoppingBag className="h-3 w-3 text-blue-500 flex-shrink-0" />

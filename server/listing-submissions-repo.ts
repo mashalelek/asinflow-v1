@@ -79,7 +79,18 @@ export async function verifyPending(
       [row.id, status, issuesJson, reviewFlags, probe.classification.terminalConflict],
     );
 
-    if (status === "live") s.live++;
+    if (status === "live") {
+      s.live++;
+      // §19 → live-offer signal: a 'live' verdict is getListingsItem-derived, so
+      // it is authoritative for asins.has_live_offer. Flips the icon same-day
+      // after Add to SC (before the daily staleness pass runs), preventing a
+      // stale "+" that would invite a double-add. NOT set at ACCEPTED — that is
+      // only synchronous validation (§19).
+      await query(
+        `UPDATE asins SET has_live_offer = TRUE, offer_checked_at = now() WHERE asin = $1`,
+        [row.asin],
+      );
+    }
     else if (status === "failed") s.failed++;
     else if (status === "stale") s.stale++;
     else s.processing++;
@@ -115,6 +126,17 @@ export async function resolveSubmissionManual(
     `UPDATE listing_submissions SET verify_status = $2, verdict_source = 'manual', verified_at = now() WHERE id = $1`,
     [id, verdict],
   );
+
+  // A manual 'live' verdict is a human confirmation the offer exists — mirror the
+  // sweep's has_live_offer write. ('deleted' does NOT clear it: deleting ONE SKU
+  // doesn't mean the ASIN has no live offer; only the daily pass writes FALSE,
+  // and only when ALL of the ASIN's SKUs 404.)
+  if (verdict === "live") {
+    await query(
+      `UPDATE asins SET has_live_offer = TRUE, offer_checked_at = now() WHERE asin = $1`,
+      [asin],
+    );
+  }
 
   // DELETED: the SKU is gone from SC. Demote ONLY this SKU's is_primary and keep
   // the asin_skus row — resurrection reuses a 404'ing SKU (candidate →

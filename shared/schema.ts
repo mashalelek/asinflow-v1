@@ -99,7 +99,8 @@ export interface AsinResult {
   actuals?: ActualsData | null;
   sku?: string | null;
   skus?: string[];
-  inCatalog?: boolean;
+  inCatalog?: boolean;                // internal discovery latch — NOT the icon signal
+  hasLiveOffer?: boolean | null;      // live-offer truth (getListingsItem); null = never checked. Drives the catalog icon.
   tags?: { name: string; color: string }[];
   notes?: string | null;
   isArchived?: boolean;
