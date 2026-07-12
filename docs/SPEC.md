@@ -494,18 +494,26 @@ YYYY-MM-DD_SupplierName_OrderID
 
 - **Sheet ID:** `1WC7r4Z-fIVENFoj_Z14rAgXs2U4Etue0BM065DPGl7Q`
 - **Tab name:** `Sheet1` — the range in `server/google-sheets.ts` is literally
-  `Sheet1!A2:AS`; the PO data lives on the first tab, named "Sheet1".
-- **Range:** `A2:AS` (extends through Col AS for prep cost)
+  `Sheet1!A2:AZ`; the PO data lives on the first tab, named "Sheet1".
+- **Range:** `A2:AZ` (widened for the Velocity export fields in Cols AX–AZ; prep
+  cost remains Col AS)
 
 Column mappings used by AsinFlow (indices 0-based from Col A):
 
 | Column | Index | Field | Notes |
 |---|---|---|---|
+| B | 1 | Order number | Velocity export |
+| C | 2 | Order date | Velocity export row selection; also needed by the SellerBoard COGS export |
 | D | 3 | Status | `.toLowerCase().includes()` — drives the canceled/closed filters |
+| E | 4 | Retailer | Velocity export |
 | H | 7 | ASIN | Match key, `.trim()` |
+| I | 8 | Item name | Velocity export |
 | U | 20 | Ordered qty | Net (qty − shipped) summed only for rows that are neither closed nor canceled |
 | Y | 24 | COGS | True product cost only (prep removed). See selection rule below |
 | AS | 44 | Prep cost | Per unit. Empty cell on the selected row → `0`, not `NULL` |
+| AX | 49 | sold_as | Velocity-ready, pass through verbatim |
+| AY | 50 | units_per_pack | Velocity-ready, pass through verbatim |
+| AZ | 51 | quantity | Velocity-ready, pass through verbatim |
 
 **Selection rule (COGS / prep / supplier).** These come from the **first
 NON-CANCELED row per ASIN whose Col Y parses to a non-null money value**. The

@@ -11,6 +11,16 @@ const COL_QTY = 20;     // U
 const COL_COGS = 24;    // Y
 const COL_PREP = 44;    // AS — Prep cost per unit
 
+// Velocity export fields (0-based). Additive — NOT read by the COGS sync path
+// (fetchSheetData); consumed only by fetchSheetRows below.
+const COL_ORDER_NUMBER = 1;    // B
+const COL_ORDER_DATE = 2;      // C
+const COL_RETAILER = 4;        // E — same column as supplier
+const COL_ITEM_NAME = 8;       // I
+const COL_SOLD_AS = 49;        // AX
+const COL_UNITS_PER_PACK = 50; // AY
+const COL_QUANTITY = 51;       // AZ
+
 export interface SheetAsinData {
   cogs: number | null;
   prepCost: number | null;
@@ -18,7 +28,11 @@ export interface SheetAsinData {
   supplier: string | null;
 }
 
-export async function fetchSheetData(sheetId: string): Promise<Map<string, SheetAsinData>> {
+// Shared read: auth + values.get. Extracted so fetchSheetData and fetchSheetRows
+// use one range. Widened to A2:AZ for the Velocity fields — existing COGS-sync
+// columns (all <= AS) read the same indices, and Google trims trailing empties,
+// so the widened range is byte-identical for the COGS parsing below.
+async function getSheetValues(sheetId: string, range: string): Promise<any[][]> {
   const credPath = process.env.GOOGLE_CREDENTIALS_PATH;
   if (!credPath) throw new Error("GOOGLE_CREDENTIALS_PATH not configured");
 
@@ -30,10 +44,13 @@ export async function fetchSheetData(sheetId: string): Promise<Map<string, Sheet
   const sheets = google.sheets({ version: "v4", auth });
   const response = await sheets.spreadsheets.values.get({
     spreadsheetId: sheetId,
-    range: "Sheet1!A2:AS",
+    range,
   });
+  return response.data.values || [];
+}
 
-  const rows = response.data.values || [];
+export async function fetchSheetData(sheetId: string): Promise<Map<string, SheetAsinData>> {
+  const rows = await getSheetValues(sheetId, "Sheet1!A2:AZ");
   const result = new Map<string, SheetAsinData>();
 
   for (const row of rows) {
@@ -86,4 +103,58 @@ export async function fetchSheetData(sheetId: string): Promise<Map<string, Sheet
 
   log(`Sheet fetch: ${rows.length} rows, ${result.size} unique ASINs`, "sheets");
   return result;
+}
+
+// Per-row view of the PO sheet — the existing COGS columns (parsed identically
+// to fetchSheetData) plus the Velocity export fields, WITHOUT the ASIN-collapse.
+// Additive: the COGS sync does not use this. Feeds the upcoming Velocity upload.
+export interface SheetRow {
+  // existing columns (per-row)
+  status: string | null;   // D
+  asin: string;            // H
+  cogs: number | null;     // Y  (parseMoney)
+  prepCost: number | null; // AS (parseMoney)
+  qty: number | null;      // U  (parseFloat)
+  supplier: string | null; // E
+  // Velocity export fields
+  orderNumber: string | null;  // B
+  orderDate: string | null;    // C
+  retailer: string | null;     // E (alias of the supplier column)
+  itemName: string | null;     // I
+  soldAs: string | null;       // AX — verbatim
+  unitsPerPack: string | null; // AY — verbatim
+  quantity: string | null;     // AZ — verbatim
+}
+
+// Trim to string, empty → null. Velocity fields pass through verbatim otherwise.
+function cellStr(v: any): string | null {
+  if (v == null) return null;
+  const s = v.toString();
+  return s === "" ? null : s;
+}
+
+export async function fetchSheetRows(sheetId: string): Promise<SheetRow[]> {
+  const rows = await getSheetValues(sheetId, "Sheet1!A2:AZ");
+  const out: SheetRow[] = [];
+  for (const row of rows) {
+    const asin = (row[COL_ASIN] ?? "").toString().trim();
+    if (!asin) continue; // skip spacer/blank rows — same domain as fetchSheetData
+    const qtyRaw = (row[COL_QTY] ?? "").toString().trim();
+    out.push({
+      status: cellStr(row[COL_STATUS]),
+      asin,
+      cogs: parseMoney(row[COL_COGS]),
+      prepCost: parseMoney(row[COL_PREP]),
+      qty: qtyRaw === "" ? null : (parseFloat(qtyRaw) || 0),
+      supplier: (row[COL_SUPPLIER] ?? "").toString().trim() || null,
+      orderNumber: cellStr(row[COL_ORDER_NUMBER]),
+      orderDate: cellStr(row[COL_ORDER_DATE]),
+      retailer: cellStr(row[COL_RETAILER]),
+      itemName: cellStr(row[COL_ITEM_NAME]),
+      soldAs: cellStr(row[COL_SOLD_AS]),
+      unitsPerPack: cellStr(row[COL_UNITS_PER_PACK]),
+      quantity: cellStr(row[COL_QUANTITY]),
+    });
+  }
+  return out;
 }
