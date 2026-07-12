@@ -1,6 +1,6 @@
 import { useMemo, useState, useRef, useCallback } from "react";
 import { createPortal } from "react-dom";
-import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
+import { Tooltip, TooltipContent, TooltipTrigger, TooltipPortal } from "@/components/ui/tooltip";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import { ExternalLink, AlertTriangle, ArrowUp, ArrowDown, Copy, Check, Lock, Unlock, ShoppingBag, Pencil, ShoppingCart, SearchX, Clock } from "lucide-react";
 
@@ -540,6 +540,12 @@ export function ResultsTable({
   });
   const resizeRef = useRef<{ colId: string; startX: number; startW: number } | null>(null);
   const widthSaveTimer = useRef<ReturnType<typeof setTimeout>>();
+  // Collision boundary for in-cell popups that must flip away from the sticky
+  // header. State-backed callback ref (not useRef): a plain ref is null on the
+  // first render pass and setting .current never re-renders, so Radix would read
+  // null and silently fall back to viewport collision. setScrollEl re-renders
+  // once the element mounts, so collisionBoundary reliably gets the container.
+  const [scrollEl, setScrollEl] = useState<HTMLDivElement | null>(null);
   // Debounced save to localStorage
   const saveWidths = useCallback((widths: Record<string, number>) => {
     clearTimeout(widthSaveTimer.current);
@@ -604,7 +610,7 @@ export function ResultsTable({
   // Group band was removed — these are no longer needed
 
   return (
-    <div className="w-full overflow-auto relative" style={{ maxHeight: "calc(100vh - 280px)" }}>
+    <div ref={setScrollEl} className="w-full overflow-auto relative" style={{ maxHeight: "calc(100vh - 280px)" }}>
       <table className="border-collapse text-sm w-full" data-testid="results-table">
         <thead className="sticky top-0 z-20">
           <tr className="table-header-stone">
@@ -751,7 +757,7 @@ export function ResultsTable({
                 </td>
                 {productVisible && (
                   <td className={`sticky z-10 px-2 py-1.5 overflow-hidden ${frozenBg}`} style={{ left: productLeft, width: colWidths["product"] ?? DEFAULT_COL_WIDTHS.product, minWidth: 200, maxWidth: colWidths["product"] ?? DEFAULT_COL_WIDTHS.product, borderRight: "0.5px solid hsl(var(--border))" }}>
-                    <ProductCell result={result} price={price} settings={settings} onResultUpdate={onResultUpdate} />
+                    <ProductCell result={result} price={price} settings={settings} onResultUpdate={onResultUpdate} collisionBoundary={scrollEl} />
                   </td>
                 )}
                 {dataCols.map((colId) => {
@@ -1057,7 +1063,7 @@ function CogsDisplay({
   );
 }
 
-function ProductCell({ result, price, settings, onResultUpdate }: { result: AsinResult; price: number | null; settings: Settings; onResultUpdate?: (asin: string, updates: Partial<AsinResult>) => void }) {
+function ProductCell({ result, price, settings, onResultUpdate, collisionBoundary }: { result: AsinResult; price: number | null; settings: Settings; onResultUpdate?: (asin: string, updates: Partial<AsinResult>) => void; collisionBoundary?: HTMLElement | null }) {
   const title = result.catalogData.title;
   const domain = extractDomain(result.buyLink);
   const stock = result.stock;
@@ -1101,9 +1107,21 @@ function ProductCell({ result, price, settings, onResultUpdate }: { result: Asin
                 </span>
               </TooltipTrigger>
               {result.skus.length > 1 && (
-                <TooltipContent side="top" className="text-xs">
-                  {result.skus.map((s) => <div key={s}>{s}</div>)}
-                </TooltipContent>
+                <TooltipPortal>
+                  {/* Portaled to body so it escapes the cell's overflow-hidden,
+                      the scroll container's overflow-auto, and the cell's z-10
+                      stacking context (the sticky header is z-20/z-30). Flips
+                      downward near the sticky header via the container boundary
+                      (measured thead height ~61px → 64 padding). */}
+                  <TooltipContent
+                    side="top"
+                    className="text-xs"
+                    collisionBoundary={collisionBoundary}
+                    collisionPadding={{ top: 64 }}
+                  >
+                    {result.skus.map((s) => <div key={s}>{s}</div>)}
+                  </TooltipContent>
+                </TooltipPortal>
               )}
             </Tooltip>
           ) : result.sku ? (
