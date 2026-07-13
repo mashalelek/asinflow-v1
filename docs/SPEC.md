@@ -498,6 +498,23 @@ YYYY-MM-DD_SupplierName_OrderID
 - **Range:** `A2:AZ` (widened for the Velocity export fields in Cols AX–AZ; prep
   cost remains Col AS)
 
+**Architecture — the sheet AF reads is a MIRROR, not the real Orders file.**
+`GOOGLE_SHEET_ID` points at **"AsinFlow - Purchase Orders"** (tab `Sheet1`), a
+mirror spreadsheet populated by an `IMPORTRANGE` formula pulling from Maria's
+real Orders file. The real file is **intentionally NOT shared** with the service
+account — the mirror is a deliberate read boundary, so AF (and the service-
+account credential) can never see or touch the source of truth, only the mirrored
+columns Maria chooses to expose.
+
+**Maintenance rule (learned the hard way).** The mirror's `IMPORTRANGE` range
+must **always cover the code's read range.** The `IMPORTRANGE` was bounded at
+Col AS, so when the code range was widened to `A2:AZ` for the Velocity fields,
+the VA's Cols AX–AZ data (already filled in the real file) **did not flow
+through** the mirror and AF read them as empty — until the `IMPORTRANGE` range
+was extended to match. When widening the code's read range: **widen the mirror
+`IMPORTRANGE` FIRST**, then verify the new columns actually flow through (read a
+known-populated row) before trusting reads of them.
+
 Column mappings used by AsinFlow (indices 0-based from Col A):
 
 | Column | Index | Field | Notes |
