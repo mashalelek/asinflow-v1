@@ -17,6 +17,7 @@ import { syncInventory } from "./inventory-sync";
 import { syncSalesData } from "./sales-sync";
 import { syncSuppressionData } from "./suppression-sync";
 import { fetchSheetData } from "./google-sheets";
+import { buildVelocityRecords, serializeVelocityCsv, parseMDY, formatYMD, todayLocal } from "./velocity-export";
 import { syncSourcingSheet } from "./sourcing-sync";
 import { refreshPrices } from "./price-sync";
 import { applyCatalogDeletedSignal } from "./catalog-deleted-write";
@@ -1335,6 +1336,41 @@ export async function registerRoutes(
       res.json({ pushed: r.pushed, unchanged: pv.UNCHANGED, failed: r.failed, skipped, notInAura: r.notInAura ?? [] });
     } catch (err: any) {
       res.status(500).json({ message: `Aura push failed: ${err?.message ?? err}` });
+    }
+  });
+
+  // Velocity prep-service upload export (phase 1: CSV). Gated by DB + Google
+  // credentials + GOOGLE_SHEET_ID, like the other sheet integrations.
+  app.get("/api/export/velocity-upload", async (req: Request, res: Response) => {
+    if (!isDbAvailable()) { res.status(503).json({ message: "Database not available" }); return; }
+    const credPath = process.env.GOOGLE_CREDENTIALS_PATH;
+    if (!credPath || !fs.existsSync(credPath)) { res.status(400).json({ message: "Google credentials file not found" }); return; }
+    if (!process.env.GOOGLE_SHEET_ID) { res.status(400).json({ message: "GOOGLE_SHEET_ID not configured" }); return; }
+
+    const today = todayLocal();
+    const fromStr = (req.query.from as string) || "";
+    const toStr = (req.query.to as string) || "";
+    const from = fromStr ? parseMDY(fromStr) : today;
+    const to = toStr ? parseMDY(toStr) : today;
+    if (from === null || to === null) { res.status(400).json({ message: "from/to must be M/D/YYYY" }); return; }
+    const dryRun = ["1", "true"].includes(String(req.query.dryRun ?? "").toLowerCase());
+
+    try {
+      const { records, selfPrepExcluded, skips } = await buildVelocityRecords(from, to);
+      const skipsByReason = skips.reduce((a, s) => { a[s.reason] = (a[s.reason] || 0) + 1; return a; }, {} as Record<string, number>);
+      log(`Velocity export ${formatYMD(from)}..${formatYMD(to)}: ${records.length} records, ${selfPrepExcluded} self-prep excluded, ${skips.length} skips ${JSON.stringify(skipsByReason)}`, "velocity-export");
+
+      if (dryRun) {
+        res.json({ from: formatYMD(from), to: formatYMD(to), records: records.length, selfPrepExcluded, skipCount: skips.length, skipsByReason, skips });
+        return;
+      }
+      const csv = serializeVelocityCsv(records);
+      res.setHeader("Content-Type", "text/csv; charset=utf-8");
+      res.setHeader("Content-Disposition", `attachment; filename=velocity-upload-${formatYMD(to)}.csv`);
+      res.send(csv);
+    } catch (err: any) {
+      log(`Velocity export error: ${err?.message ?? err}`, "velocity-export");
+      res.status(500).json({ message: err?.message ?? String(err) });
     }
   });
 

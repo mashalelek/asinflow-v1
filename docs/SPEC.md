@@ -533,6 +533,51 @@ Note: Col Y was historically prep-inclusive but has been cleaned up — prep is
 now in Col AS exclusively. Any `actual_cogs` values in the DB from older PO
 syncs are "dirty" until the next sync overwrites them with clean Col Y data.
 
+### Velocity upload export
+
+Exports prep-outsourced orders to the Velocity prep service as a CSV (phase 1;
+an API delivery client will consume the same records in phase 2). Built by
+`server/velocity-export.ts` (`buildVelocityRecords(from, to)`) over
+`fetchSheetRows` (per-row PO-sheet view), delivered by
+`GET /api/export/velocity-upload?from=&to=` (both params optional, `M/D/YYYY`,
+default = today; `&dryRun=1` returns counts + skip detail as JSON instead of the
+file). Gated by DB + Google credentials + `GOOGLE_SHEET_ID`, like the other
+sheet integrations.
+
+**Row selection (in order):**
+1. **Order date (Col C, `M/D/YYYY`) within `[from, to]` inclusive.** Parsed by
+   splitting on `/` and constructing a local `Date(y, m-1, d)` — **never**
+   `new Date(str)` (format/timezone-safe). Out-of-range rows are silently
+   excluded; a Col C that does not parse is a `unparseable_date` skip (never
+   silently dropped).
+2. **Status not `canceled`** (`.toLowerCase().includes()`, same as the COGS
+   sync). `closed` rows remain uploadable — closed ≠ canceled for prep.
+3. **Col AS (prep cost) > 0.** `AS = 0` or empty (per §3, empty on a real row
+   means 0) → the order is **self-prepped** and never goes to Velocity. Counted
+   as **`excluded (self-prep): N`** — a separate, intentional tally, NOT a skip.
+
+**SKU join:** for each selected row's ASIN, use `asins.primary_sku` where
+`has_live_offer = TRUE`.
+
+**Skip taxonomy** (fail-closed; each skip carries `{orderNumber, asin,
+itemName}`):
+- `no_live_sku` — no `primary_sku`, or `has_live_offer ≠ TRUE`
+- `missing_quantity` — Col AZ empty on a selected row
+- `unparseable_date` — Col C does not parse
+
+**Record columns** (exact header + order, CRLF line endings, matches Velocity's
+sample):
+`fulfillment_type,date,retailer,order_number,item_name,color,brand_sku,size,quantity,asin,amazon_sku,unit_cost,list_price,client_notes,trackings,sold_as,units_per_pack`
+- `fulfillment_type` = `"fba"` (constant); `date` = Col C verbatim;
+  `retailer` = Col E; `order_number` = Col B; `item_name` = Col I;
+  `quantity` = Col AZ verbatim; `asin` = Col H; `amazon_sku` = joined SKU;
+  `sold_as` = Col AX verbatim; `units_per_pack` = Col AY verbatim.
+- `color, brand_sku, size, unit_cost, list_price, client_notes, trackings` =
+  empty.
+
+`buildVelocityRecords` returns `{ records, selfPrepExcluded, skips }` and is
+**delivery-agnostic** — the phase-2 API client consumes the same `records`.
+
 ### Google Sheets sourcing sheet (insert-only)
 
 - **Sheet ID:** `1i4kUDG02qIMnhVnSjJ6LRZTuWFNzvP1SVKAmRoXS6kU` (separate from the PO tracker)
