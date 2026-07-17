@@ -1393,9 +1393,9 @@ export async function registerRoutes(
       log(
         `SellerBoard COGS export: ${summary.rowsEmitted} rows, ${summary.distinctAsins} ASINs, ` +
         `${summary.distinctPeriods} periods, template ${summary.templateRowsLoaded} rows; skips ` +
-        `badCost=${s.badOrZeroCost} badDate=${s.badOrMissingDate} sameDateConflict=${s.sameDateConflict} ` +
-        `notInSb=${s.notInSb} [${details.notInSbAsins.join(", ")}]` +
-        (details.conflicts.length ? ` conflicts=${JSON.stringify(details.conflicts)}` : ""),
+        `badCost=${s.badOrZeroCost} badDate=${s.badOrMissingDate} badQty=${s.badQty} ` +
+        `sameDateMerged=${s.sameDateMerged} notInSb=${s.notInSb} [${details.notInSbAsins.join(", ")}]` +
+        (details.merges.length ? ` merges=${JSON.stringify(details.merges)}` : ""),
         "sellerboard-cogs",
       );
       res.json({
@@ -1409,7 +1409,8 @@ export async function registerRoutes(
           skips: {
             badCost: s.badOrZeroCost,
             badDate: s.badOrMissingDate,
-            sameDateConflict: s.sameDateConflict,
+            badQty: s.badQty,
+            sameDateMerged: s.sameDateMerged,
             notInSb: s.notInSb,
           },
           notInSbAsins: details.notInSbAsins,

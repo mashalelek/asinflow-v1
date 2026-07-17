@@ -302,7 +302,7 @@ type SbSummary = {
   asins: number;
   periods: number;
   templateRowsLoaded: number;
-  skips: { badCost: number; badDate: number; sameDateConflict: number; notInSb: number };
+  skips: { badCost: number; badDate: number; badQty: number; sameDateMerged: number; notInSb: number };
   notInSbAsins: string[];
 };
 
@@ -1779,7 +1779,7 @@ export default function Home() {
               <div><span className="font-semibold">{sbResult.summary.emitted}</span> rows · {sbResult.summary.asins} ASINs · {sbResult.summary.periods} periods</div>
               <div className="text-muted-foreground text-xs">Template rows loaded: {sbResult.summary.templateRowsLoaded}</div>
               <div className="text-xs">
-                Skips — bad cost: {sbResult.summary.skips.badCost}, bad date: {sbResult.summary.skips.badDate}, same-date conflict: {sbResult.summary.skips.sameDateConflict}, not in SB: {sbResult.summary.skips.notInSb}
+                Skips — bad cost: {sbResult.summary.skips.badCost}, bad date: {sbResult.summary.skips.badDate}, bad qty: {sbResult.summary.skips.badQty}, same-date merged: {sbResult.summary.skips.sameDateMerged}, not in SB: {sbResult.summary.skips.notInSb}
               </div>
               {sbResult.summary.notInSbAsins.length > 0 && (
                 <details className="text-xs">

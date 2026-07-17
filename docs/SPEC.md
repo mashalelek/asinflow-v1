@@ -619,25 +619,44 @@ Col C parses (`M/D/YYYY`, split-on-`/` local Date, never `new Date(str)`) and
 falls in **2026** (YTD). `Cost = parseMoney(Col Y) + prep`, prep = `parseMoney(Col
 AS)` with an empty Col AS on a real row = 0 (§3). Col Y empty / unparseable / ≤ 0
 → **bad-cost** skip. `CostPeriodStartDate` = the Col C date as `M/D/YYYY`, no
-leading zeros. Same-ASIN same-date duplicates keep the **first** (top-of-sheet,
-canonical); a differing cost on a repeat is a **same-date conflict** (counted,
-first kept). Different dates = separate periods (intended).
+leading zeros.
 
-**Step 3 — join + fan out:** for each (ASIN, date, cost) period, emit one CSV row
-per SKU the template maps to that ASIN. PO ASINs absent from the template →
-**not-in-SB** skip (counted as **distinct ASINs**, not periods; export is
+`BatchQuantity` = **Col U** (ordered qty) from the **same canonical row** the
+cost came from, parsed as a **positive integer**. Col U empty / unparseable /
+non-positive / non-integer on an otherwise-valid row → **badQty** skip — a cost
+row is **never** emitted with a blank qty (a blank `BatchQuantity` flips the row
+to time-based-period semantics in SB).
+
+Same-ASIN same-date collapse: same-day rows are **genuine separate orders**, so
+they **merge into one batch** — `BatchQuantity` = sum of Col U quantities,
+`Cost` = **qty-weighted average** (computed in integer cents, rounded to 2 dp;
+e.g. 5@17.61 + 3@19.17 → 8@**18.20**). Same-cost rows are the trivial case of the
+same average. Each merged period is counted as **`sameDateMerged`**
+(informational: ASIN, date, merged row count, resulting qty + cost). A **badQty**
+row is skipped *before* the merge, so it never participates — the remaining valid
+rows merge among themselves (or pass through solo). Different dates = separate
+periods (intended).
+
+**Step 3 — join + fan out:** for each (ASIN, date, cost, qty) period, emit one
+CSV row per SKU the template maps to that ASIN, duplicating the **full batch
+quantity on every SKU row** (per-SKU batches deplete independently in SB — the
+qty is deliberately **not** split across SKUs). PO ASINs absent from the template
+→ **not-in-SB** skip (counted as **distinct ASINs**, not periods; export is
 idempotent so they pick up periods on a later run once SB knows them). Template
 ASINs with no YTD PO are simply never emitted (untouched in SB).
 
-**Output CSV** (exact headers): `ASIN,SKU,CostPeriodStartDate,Cost`, named
-`sb-cogs-YYYY-MM-DD.csv`.
+**Output CSV** carries **all 15 template headers in template order**:
+`ASIN,SKU,Title,Labels,CostPeriodStartDate,Cost,DomesticShippingCost,RestofworldShippingCost,ShippingProfile,Value_of_unsellable_returns,VAT,VAT_CATEGORY,Hide,Marketplace,BatchQuantity`.
+Only `ASIN,SKU,CostPeriodStartDate,Cost,BatchQuantity` are populated; **every
+other cell is an empty string** so a blank never overwrites SB-side state.
+Named `sb-cogs-YYYY-MM-DD.csv`.
 
 **Response** is JSON `{ filename, csv, summary }` (not a raw file, not headers):
 `summary = { emitted, asins, periods, templateRowsLoaded, skips: { badCost,
-badDate, sameDateConflict, notInSb }, notInSbAsins: [...] }`. The client builds
-the download from the `csv` string and shows a summary modal (not-in-SB list
-expandable); full detail (incl. conflicts) is logged server-side. Toolbar button
-**"Export SB COGS"** opens the template file picker.
+badDate, badQty, sameDateMerged, notInSb }, notInSbAsins: [...] }`. The client
+builds the download from the `csv` string and shows a summary modal (not-in-SB
+list expandable); full detail (incl. merges) is logged server-side. Toolbar
+button **"Export SB COGS"** opens the template file picker.
 
 ### Google Sheets sourcing sheet (insert-only)
 

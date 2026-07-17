@@ -23,21 +23,23 @@ async function main() {
   console.log(`skips:`);
   console.log(`  bad/zero cost      : ${summary.skips.badOrZeroCost}`);
   console.log(`  bad/missing date   : ${summary.skips.badOrMissingDate}`);
-  console.log(`  same-date conflict : ${summary.skips.sameDateConflict}`);
+  console.log(`  bad qty            : ${summary.skips.badQty}`);
+  console.log(`  same-date merged   : ${summary.skips.sameDateMerged}`);
   console.log(`  not in SB (ASINs)  : ${summary.skips.notInSb}`);
 
-  if (details.conflicts.length) {
-    console.log(`\n===== same-date conflicts (first kept) =====`);
-    for (const c of details.conflicts) console.log(`  ${c.asin} ${c.date}: kept ${c.kept.toFixed(2)}, ignored ${c.other.toFixed(2)}`);
+  if (details.merges.length) {
+    console.log(`\n===== same-date merges (qty-weighted) =====`);
+    for (const m of details.merges) console.log(`  ${m.asin} ${m.date}: ${m.count} rows → qty ${m.qty} @ ${m.cost.toFixed(2)}`);
   }
   if (details.notInSbAsins.length) {
     console.log(`\n===== not in SB (${details.notInSbAsins.length} PO ASINs with YTD periods, absent from template) =====`);
     console.log("  " + details.notInSbAsins.join(", "));
   }
 
-  console.log(`\n===== first 10 CSV rows =====`);
-  console.log(SB_HEADERS.join(","));
-  for (const r of rows.slice(0, 10)) console.log(SB_HEADERS.map((h) => r[h]).join(","));
+  console.log(`\n===== first 10 CSV rows (full ${SB_HEADERS.length}-column layout) =====`);
+  // Serialize just the first 10 so the printed rows match the file byte-for-byte
+  // (all 15 columns, empties as blanks).
+  process.stdout.write(serializeSbCsv(rows.slice(0, 10)).replace(/\r\n/g, "\n"));
 
   // write full CSV for eyeballing
   const outPath = "/tmp/sb-cogs-dryrun.csv";

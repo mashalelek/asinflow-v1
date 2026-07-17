@@ -6,8 +6,24 @@ import * as XLSX from "xlsx";
 import { fetchSheetRows } from "./google-sheets";
 import { parseMDY } from "./velocity-export";
 
-export const SB_HEADERS = ["ASIN", "SKU", "CostPeriodStartDate", "Cost"] as const;
-export type SbRow = Record<(typeof SB_HEADERS)[number], string>;
+// Full SB template header set, in template order. We populate ONLY ASIN, SKU,
+// CostPeriodStartDate, Cost, and BatchQuantity; every other cell is emitted as an
+// empty string so a blank does not overwrite SB-side state on import.
+export const SB_HEADERS = [
+  "ASIN", "SKU", "Title", "Labels", "CostPeriodStartDate", "Cost",
+  "DomesticShippingCost", "RestofworldShippingCost", "ShippingProfile",
+  "Value_of_unsellable_returns", "VAT", "VAT_CATEGORY", "Hide",
+  "Marketplace", "BatchQuantity",
+] as const;
+
+// Only the populated columns are typed; serializeSbCsv fills the rest with "".
+export type SbRow = {
+  ASIN: string;
+  SKU: string;
+  CostPeriodStartDate: string;
+  Cost: string;
+  BatchQuantity: string;
+};
 
 export interface SbSummary {
   rowsEmitted: number;
@@ -18,17 +34,19 @@ export interface SbSummary {
   skips: {
     badOrZeroCost: number;    // Col Y empty / unparseable / <= 0 (2026, non-closed/canceled rows)
     badOrMissingDate: number; // Col C missing / unparseable (non-closed/canceled rows)
-    sameDateConflict: number; // same (ASIN, date) seen again with a DIFFERENT cost (first kept)
+    badQty: number;           // Col U empty / unparseable / not a positive integer (otherwise-valid row)
+    sameDateMerged: number;   // (ASIN, date) periods where 2+ rows were qty-weighted-merged
     notInSb: number;          // distinct PO ASINs with YTD periods but absent from the template
   };
 }
 
-export interface SbConflict { asin: string; date: string; kept: number; other: number; }
+// Informational: a (ASIN, date) period that combined 2+ same-day orders.
+export interface SbMerge { asin: string; date: string; count: number; qty: number; cost: number; }
 export interface SbBuildResult {
   rows: SbRow[];
   summary: SbSummary;
   // Detail for review/logging — not part of the CSV.
-  details: { notInSbAsins: string[]; conflicts: SbConflict[] };
+  details: { notInSbAsins: string[]; merges: SbMerge[] };
 }
 
 // M/D/YYYY, no leading zeros, from a parsed local Date.
@@ -55,6 +73,11 @@ export function parseTemplate(buffer: Buffer): { map: Map<string, string[]>; ent
   return { map, entriesLoaded };
 }
 
+// Accumulator for a (ASIN, date) period. weightedCents = Σ(costCents · qty);
+// the period cost is the qty-weighted average, cents-integer to avoid float drift.
+interface PeriodAcc { weightedCents: number; qty: number; count: number; }
+const avgCents = (a: PeriodAcc): number => Math.round(a.weightedCents / a.qty);
+
 export async function buildSellerboardCogs(
   templateBuffer: Buffer,
   deps: { sheetId?: string } = {},
@@ -65,13 +88,13 @@ export async function buildSellerboardCogs(
   const { map: skuMap, entriesLoaded } = parseTemplate(templateBuffer);
   const rows = await fetchSheetRows(sheetId);
 
-  const skips = { badOrZeroCost: 0, badOrMissingDate: 0, sameDateConflict: 0, notInSb: 0 };
-  const conflicts: SbConflict[] = [];
+  const skips = { badOrZeroCost: 0, badOrMissingDate: 0, badQty: 0, sameDateMerged: 0, notInSb: 0 };
 
-  // Step 2: PO cost periods, keyed by ASIN -> (dateStr -> cost). First row wins
-  // per (ASIN, date); a later same-(ASIN,date) row with a different cost is a
-  // same-date conflict (counted, first kept). Funnel: status -> date -> cost.
-  const periods = new Map<string, Map<string, number>>();
+  // Step 2: PO cost periods, keyed by ASIN -> (dateStr -> accumulator). Funnel:
+  // status -> date -> cost -> qty. Same-ASIN same-date rows are genuine separate
+  // same-day orders, not errors: MERGE them into one batch — BatchQuantity = sum
+  // of qtys, Cost = qty-weighted average. (Same-cost rows are the trivial case.)
+  const periods = new Map<string, Map<string, PeriodAcc>>();
   for (const row of rows) {
     const status = (row.status ?? "").toLowerCase();
     if (status.includes("closed") || status.includes("canceled")) continue; // excluded (silent)
@@ -85,17 +108,37 @@ export async function buildSellerboardCogs(
     const prep = row.prepCost == null ? 0 : row.prepCost; // empty Col AS on a real row = 0 (§3)
     const cost = cogs + prep;
 
+    // BatchQuantity = Col U (ordered qty) from THIS canonical row. Must be a
+    // positive integer — a blank/zero/fractional qty is skipped as badQty (before
+    // the merge, so it doesn't participate), never emitted: a blank BatchQuantity
+    // flips the row to time-based-period semantics in SB. (row.qty = parseFloat of
+    // Col U: "" -> null, unparseable -> 0.)
+    const qty = row.qty;
+    if (qty == null || !Number.isInteger(qty) || qty <= 0) { skips.badQty++; continue; }
+
+    const costCents = Math.round(cost * 100);
     const dateStr = formatMDYNoPad(dt);
     let byDate = periods.get(row.asin);
     if (!byDate) { byDate = new Map(); periods.set(row.asin, byDate); }
-    if (byDate.has(dateStr)) {
-      const kept = byDate.get(dateStr)!;
-      if (Math.abs(kept - cost) > 0.005) { // differ → conflict, keep first
-        skips.sameDateConflict++;
-        conflicts.push({ asin: row.asin, date: dateStr, kept, other: cost });
-      }
+    const acc = byDate.get(dateStr);
+    if (acc) {
+      acc.weightedCents += costCents * qty;
+      acc.qty += qty;
+      acc.count += 1;
     } else {
-      byDate.set(dateStr, cost);
+      byDate.set(dateStr, { weightedCents: costCents * qty, qty, count: 1 });
+    }
+  }
+
+  // Record merges (2+ rows collapsed into one period) — informational, counted
+  // for ALL periods (independent of whether the ASIN is later in the template).
+  const merges: SbMerge[] = [];
+  for (const [asin, byDate] of Array.from(periods)) {
+    for (const [dateStr, acc] of Array.from(byDate)) {
+      if (acc.count > 1) {
+        skips.sameDateMerged++;
+        merges.push({ asin, date: dateStr, count: acc.count, qty: acc.qty, cost: avgCents(acc) / 100 });
+      }
     }
   }
 
@@ -107,11 +150,16 @@ export async function buildSellerboardCogs(
   for (const [asin, byDate] of Array.from(periods)) {
     const skus = skuMap.get(asin);
     if (!skus || skus.length === 0) { notInSbAsins.add(asin); continue; } // PO ASIN not in SB
-    for (const [dateStr, cost] of Array.from(byDate)) {
+    for (const [dateStr, acc] of Array.from(byDate)) {
       distinctPeriods++;
       emittedAsins.add(asin);
+      const cost = (avgCents(acc) / 100).toFixed(2);
+      const qtyStr = String(acc.qty);
       for (const sku of skus) {
-        out.push({ ASIN: asin, SKU: sku, CostPeriodStartDate: dateStr, Cost: cost.toFixed(2) });
+        // Multi-SKU fan-out duplicates the FULL batch qty on every SKU row —
+        // per-SKU batches deplete independently in SB, so we deliberately do NOT
+        // split the quantity across SKUs.
+        out.push({ ASIN: asin, SKU: sku, CostPeriodStartDate: dateStr, Cost: cost, BatchQuantity: qtyStr });
       }
     }
   }
@@ -127,13 +175,14 @@ export async function buildSellerboardCogs(
       templateAsins: skuMap.size,
       skips,
     },
-    details: { notInSbAsins: Array.from(notInSbAsins), conflicts },
+    details: { notInSbAsins: Array.from(notInSbAsins), merges },
   };
 }
 
 export function serializeSbCsv(rows: SbRow[]): string {
   const esc = (v: string) => (/[",\r\n]/.test(v) ? '"' + v.replace(/"/g, '""') + '"' : v);
   const lines = [SB_HEADERS.join(",")];
-  for (const r of rows) lines.push(SB_HEADERS.map((h) => esc(r[h] ?? "")).join(","));
+  // Only populated columns exist on SbRow; every other header serializes to "".
+  for (const r of rows) lines.push(SB_HEADERS.map((h) => esc((r as Record<string, string>)[h] ?? "")).join(","));
   return lines.join("\r\n") + "\r\n";
 }
