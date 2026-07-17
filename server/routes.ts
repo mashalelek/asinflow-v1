@@ -18,6 +18,7 @@ import { syncSalesData } from "./sales-sync";
 import { syncSuppressionData } from "./suppression-sync";
 import { fetchSheetData } from "./google-sheets";
 import { buildVelocityRecords, serializeVelocityCsv, parseMDY, formatYMD, todayLocal } from "./velocity-export";
+import { buildSellerboardCogs, serializeSbCsv } from "./sellerboard-cogs";
 import { syncSourcingSheet } from "./sourcing-sync";
 import { refreshPrices } from "./price-sync";
 import { applyCatalogDeletedSignal } from "./catalog-deleted-write";
@@ -1370,6 +1371,52 @@ export async function registerRoutes(
       res.send(csv);
     } catch (err: any) {
       log(`Velocity export error: ${err?.message ?? err}`, "velocity-export");
+      res.status(500).json({ message: err?.message ?? String(err) });
+    }
+  });
+
+  // SellerBoard COGS export (interim bandage until the Actuals audit). Read-only:
+  // no DB, no SC. Inputs = uploaded SB products template (multipart "file") +
+  // the Orders sheet. Returns JSON { filename, csv, summary } so the client can
+  // build the download AND show the summary; full detail is logged server-side.
+  app.post("/api/export/sellerboard-cogs", upload.single("file"), async (req: Request, res: Response) => {
+    const credPath = process.env.GOOGLE_CREDENTIALS_PATH;
+    if (!credPath || !fs.existsSync(credPath)) { res.status(400).json({ message: "Google credentials file not found" }); return; }
+    if (!process.env.GOOGLE_SHEET_ID) { res.status(400).json({ message: "GOOGLE_SHEET_ID not configured" }); return; }
+    if (!req.file) { res.status(400).json({ message: "No template file uploaded (field 'file')" }); return; }
+
+    try {
+      const { rows, summary, details } = await buildSellerboardCogs(req.file.buffer);
+      const csv = serializeSbCsv(rows);
+      const filename = `sb-cogs-${formatYMD(todayLocal())}.csv`;
+      const s = summary.skips;
+      log(
+        `SellerBoard COGS export: ${summary.rowsEmitted} rows, ${summary.distinctAsins} ASINs, ` +
+        `${summary.distinctPeriods} periods, template ${summary.templateRowsLoaded} rows; skips ` +
+        `badCost=${s.badOrZeroCost} badDate=${s.badOrMissingDate} sameDateConflict=${s.sameDateConflict} ` +
+        `notInSb=${s.notInSb} [${details.notInSbAsins.join(", ")}]` +
+        (details.conflicts.length ? ` conflicts=${JSON.stringify(details.conflicts)}` : ""),
+        "sellerboard-cogs",
+      );
+      res.json({
+        filename,
+        csv,
+        summary: {
+          emitted: summary.rowsEmitted,
+          asins: summary.distinctAsins,
+          periods: summary.distinctPeriods,
+          templateRowsLoaded: summary.templateRowsLoaded,
+          skips: {
+            badCost: s.badOrZeroCost,
+            badDate: s.badOrMissingDate,
+            sameDateConflict: s.sameDateConflict,
+            notInSb: s.notInSb,
+          },
+          notInSbAsins: details.notInSbAsins,
+        },
+      });
+    } catch (err: any) {
+      log(`SellerBoard COGS export error: ${err?.message ?? err}`, "sellerboard-cogs");
       res.status(500).json({ message: err?.message ?? String(err) });
     }
   });

@@ -595,6 +595,50 @@ sample):
 `buildVelocityRecords` returns `{ records, selfPrepExcluded, skips }` and is
 **delivery-agnostic** — the phase-2 API client consumes the same `records`.
 
+### SellerBoard COGS export (INTERIM — bandage)
+
+> **Interim, not the target state.** SellerBoard remains the trusted P&L only
+> until the Actuals audit lands; this export is a bandage that pushes YTD PO
+> landed costs into SB as per-PO cost periods so SB's numbers aren't stale in the
+> meantime. It is **superseded by the Actuals audit** and should be removed once
+> AF's own actuals are trusted.
+
+Read-only against AF — **no DB reads/writes, no SC, no cron.** Inputs: the Orders
+sheet (`fetchSheetRows`) + an uploaded SB products template xlsx. Built by
+`server/sellerboard-cogs.ts` (`buildSellerboardCogs(templateBuffer)`), delivered
+by `POST /api/export/sellerboard-cogs` (multipart `file` upload). Gated by Google
+credentials + `GOOGLE_SHEET_ID`.
+
+**Step 1 — ASIN → SKU map from the template** (sheet `TDSheet`, columns `ASIN`,
+`SKU`): one entry per (ASIN, SKU) row, both trimmed; multi-SKU ASINs keep all
+SKUs; rows missing ASIN or SKU ignored.
+
+**Step 2 — YTD PO cost periods** from the Orders tab: include rows whose status
+does **not** contain `closed`/`canceled` (`.toLowerCase().includes()`), whose
+Col C parses (`M/D/YYYY`, split-on-`/` local Date, never `new Date(str)`) and
+falls in **2026** (YTD). `Cost = parseMoney(Col Y) + prep`, prep = `parseMoney(Col
+AS)` with an empty Col AS on a real row = 0 (§3). Col Y empty / unparseable / ≤ 0
+→ **bad-cost** skip. `CostPeriodStartDate` = the Col C date as `M/D/YYYY`, no
+leading zeros. Same-ASIN same-date duplicates keep the **first** (top-of-sheet,
+canonical); a differing cost on a repeat is a **same-date conflict** (counted,
+first kept). Different dates = separate periods (intended).
+
+**Step 3 — join + fan out:** for each (ASIN, date, cost) period, emit one CSV row
+per SKU the template maps to that ASIN. PO ASINs absent from the template →
+**not-in-SB** skip (counted as **distinct ASINs**, not periods; export is
+idempotent so they pick up periods on a later run once SB knows them). Template
+ASINs with no YTD PO are simply never emitted (untouched in SB).
+
+**Output CSV** (exact headers): `ASIN,SKU,CostPeriodStartDate,Cost`, named
+`sb-cogs-YYYY-MM-DD.csv`.
+
+**Response** is JSON `{ filename, csv, summary }` (not a raw file, not headers):
+`summary = { emitted, asins, periods, templateRowsLoaded, skips: { badCost,
+badDate, sameDateConflict, notInSb }, notInSbAsins: [...] }`. The client builds
+the download from the `csv` string and shows a summary modal (not-in-SB list
+expandable); full detail (incl. conflicts) is logged server-side. Toolbar button
+**"Export SB COGS"** opens the template file picker.
+
 ### Google Sheets sourcing sheet (insert-only)
 
 - **Sheet ID:** `1i4kUDG02qIMnhVnSjJ6LRZTuWFNzvP1SVKAmRoXS6kU` (separate from the PO tracker)

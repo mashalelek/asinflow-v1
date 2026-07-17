@@ -6,6 +6,7 @@ import { Progress } from "@/components/ui/progress";
 import { Alert, AlertDescription } from "@/components/ui/alert";
 import { Input } from "@/components/ui/input";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
+import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription } from "@/components/ui/dialog";
 import { SettingsDialog } from "@/components/settings-dialog";
 import { RevivalDialog, type RevivalCandidate } from "@/components/revival-dialog";
 import { OfferAddPreviewDialog, type PreviewResponse, type SubmitResponse } from "@/components/offer-add-preview-dialog";
@@ -296,6 +297,15 @@ function MultiSearch({
   );
 }
 
+type SbSummary = {
+  emitted: number;
+  asins: number;
+  periods: number;
+  templateRowsLoaded: number;
+  skips: { badCost: number; badDate: number; sameDateConflict: number; notInSb: number };
+  notInSbAsins: string[];
+};
+
 export default function Home() {
   // Theme toggle is now in the top nav
   const { toast } = useToast();
@@ -338,6 +348,11 @@ export default function Home() {
   const [isSyncingSales, setIsSyncingSales] = useState(false);
   const [isSyncingSourcing, setIsSyncingSourcing] = useState(false);
   const [isPushingAura, setIsPushingAura] = useState(false);
+  // SellerBoard COGS export (interim). File picker → upload template → download
+  // CSV from the JSON response → show summary modal.
+  const [isExportingSb, setIsExportingSb] = useState(false);
+  const [sbResult, setSbResult] = useState<{ filename: string; summary: SbSummary } | null>(null);
+  const sbFileInputRef = useRef<HTMLInputElement>(null);
 
   // DA-3: revival dialog state. Populated by checkRevivalCandidates after
   // every analyze-completion path (handleAnalyze, runAnalyzeAllFromDb,
@@ -858,6 +873,39 @@ export default function Home() {
       setIsPushingAura(false);
     }
   }, [toast, selectedSet]);
+
+  // SellerBoard COGS export — opens the template file picker; the upload+download
+  // happens in handleSbTemplateSelected.
+  const handleExportSbCogs = useCallback(() => {
+    sbFileInputRef.current?.click();
+  }, []);
+
+  const handleSbTemplateSelected = useCallback(async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    e.target.value = ""; // allow re-picking the same file
+    if (!file) return;
+    setIsExportingSb(true);
+    try {
+      const fd = new FormData();
+      fd.append("file", file);
+      const res = await fetch("/api/export/sellerboard-cogs", { method: "POST", body: fd });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.message || "SellerBoard COGS export failed");
+      // Build the download from the CSV string in the response.
+      const blob = new Blob([data.csv], { type: "text/csv" });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      a.href = url;
+      a.download = data.filename;
+      a.click();
+      URL.revokeObjectURL(url);
+      setSbResult({ filename: data.filename, summary: data.summary });
+    } catch (err: any) {
+      toast({ title: "SB COGS export failed", description: err.message, variant: "destructive" });
+    } finally {
+      setIsExportingSb(false);
+    }
+  }, [toast]);
 
   const handleSyncSales = useCallback(async () => {
     const ws = currentWorkingSet();
@@ -1406,6 +1454,11 @@ export default function Home() {
                 <FileSpreadsheet className="h-3.5 w-3.5 mr-1.5" />
                 {isSyncingSourcing ? "Syncing..." : "Sync Sourcing"}
               </Button>
+              <Button variant="outline" size="sm" onClick={handleExportSbCogs} disabled={isExportingSb} className="h-8 text-xs" title="Upload a SellerBoard products export; downloads YTD PO cost periods as CSV" data-testid="button-export-sb-cogs">
+                <DollarSign className="h-3.5 w-3.5 mr-1.5" />
+                {isExportingSb ? "Exporting..." : "Export SB COGS"}
+              </Button>
+              <input ref={sbFileInputRef} type="file" accept=".xlsx" onChange={handleSbTemplateSelected} className="hidden" data-testid="input-sb-template" />
               <Tooltip>
                 <TooltipTrigger asChild>
                   <Button
@@ -1712,6 +1765,32 @@ export default function Home() {
         onClearSelectedAsins={() => setSelectedSearchAsins(new Set())}
         onClearAll={clearSearchFilters}
       />
+
+      <Dialog open={!!sbResult} onOpenChange={(o) => { if (!o) setSbResult(null); }}>
+        <DialogContent className="max-w-md">
+          <DialogHeader>
+            <DialogTitle>SellerBoard COGS export</DialogTitle>
+            <DialogDescription>
+              Downloaded {sbResult?.filename}. Interim bandage — superseded by the Actuals audit.
+            </DialogDescription>
+          </DialogHeader>
+          {sbResult && (
+            <div className="text-sm space-y-2">
+              <div><span className="font-semibold">{sbResult.summary.emitted}</span> rows · {sbResult.summary.asins} ASINs · {sbResult.summary.periods} periods</div>
+              <div className="text-muted-foreground text-xs">Template rows loaded: {sbResult.summary.templateRowsLoaded}</div>
+              <div className="text-xs">
+                Skips — bad cost: {sbResult.summary.skips.badCost}, bad date: {sbResult.summary.skips.badDate}, same-date conflict: {sbResult.summary.skips.sameDateConflict}, not in SB: {sbResult.summary.skips.notInSb}
+              </div>
+              {sbResult.summary.notInSbAsins.length > 0 && (
+                <details className="text-xs">
+                  <summary className="cursor-pointer text-muted-foreground">Not in SB — {sbResult.summary.notInSbAsins.length} ASINs (expand)</summary>
+                  <div className="mt-1 font-mono max-h-40 overflow-auto break-words">{sbResult.summary.notInSbAsins.join(", ")}</div>
+                </details>
+              )}
+            </div>
+          )}
+        </DialogContent>
+      </Dialog>
 
       {historyAsin && (
         <StockHistoryModal
