@@ -42,11 +42,23 @@ export interface SbSummary {
 
 // Informational: a (ASIN, date) period that combined 2+ same-day orders.
 export interface SbMerge { asin: string; date: string; count: number; qty: number; cost: number; }
+
+// A row dropped by the badQty gate, itemized by failure mode.
+export type BadQtyMode = "empty" | "non_numeric" | "non_positive" | "non_integer";
+export interface BadQtyRow {
+  sheetRow: number; // 1-based sheet row
+  asin: string;
+  date: string;     // Col C verbatim
+  rawQty: string;   // Col U verbatim (untrimmed)
+  mode: BadQtyMode;
+  cost: number;     // parsed cost (cogs + prep) the row would have carried
+}
+
 export interface SbBuildResult {
   rows: SbRow[];
   summary: SbSummary;
   // Detail for review/logging — not part of the CSV.
-  details: { notInSbAsins: string[]; merges: SbMerge[] };
+  details: { notInSbAsins: string[]; merges: SbMerge[]; badQtyRows: BadQtyRow[] };
 }
 
 // M/D/YYYY, no leading zeros, from a parsed local Date.
@@ -89,6 +101,7 @@ export async function buildSellerboardCogs(
   const rows = await fetchSheetRows(sheetId);
 
   const skips = { badOrZeroCost: 0, badOrMissingDate: 0, badQty: 0, sameDateMerged: 0, notInSb: 0 };
+  const badQtyRows: BadQtyRow[] = [];
 
   // Step 2: PO cost periods, keyed by ASIN -> (dateStr -> accumulator). Funnel:
   // status -> date -> cost -> qty. Same-ASIN same-date rows are genuine separate
@@ -109,12 +122,28 @@ export async function buildSellerboardCogs(
     const cost = cogs + prep;
 
     // BatchQuantity = Col U (ordered qty) from THIS canonical row. Must be a
-    // positive integer — a blank/zero/fractional qty is skipped as badQty (before
-    // the merge, so it doesn't participate), never emitted: a blank BatchQuantity
-    // flips the row to time-based-period semantics in SB. (row.qty = parseFloat of
-    // Col U: "" -> null, unparseable -> 0.)
-    const qty = row.qty;
-    if (qty == null || !Number.isInteger(qty) || qty <= 0) { skips.badQty++; continue; }
+    // positive integer — a blank/zero/fractional/non-numeric qty is skipped as
+    // badQty (before the merge, so it doesn't participate), never emitted: a
+    // blank BatchQuantity flips the row to time-based-period semantics in SB.
+    // Classify the failure mode from the verbatim cell; parseFloat matches the
+    // sheet reader so the skip DECISION is unchanged, only now itemized.
+    const rawQty = row.qtyRaw;
+    const t = rawQty.trim();
+    let qtyMode: BadQtyMode | null = null;
+    let qty = 0;
+    if (t === "") qtyMode = "empty";
+    else {
+      const n = parseFloat(t);
+      if (Number.isNaN(n)) qtyMode = "non_numeric";
+      else if (n <= 0) qtyMode = "non_positive";
+      else if (!Number.isInteger(n)) qtyMode = "non_integer";
+      else qty = n;
+    }
+    if (qtyMode) {
+      skips.badQty++;
+      badQtyRows.push({ sheetRow: row.sheetRow, asin: row.asin, date: row.orderDate ?? "", rawQty, mode: qtyMode, cost });
+      continue;
+    }
 
     const costCents = Math.round(cost * 100);
     const dateStr = formatMDYNoPad(dt);
@@ -175,7 +204,7 @@ export async function buildSellerboardCogs(
       templateAsins: skuMap.size,
       skips,
     },
-    details: { notInSbAsins: Array.from(notInSbAsins), merges },
+    details: { notInSbAsins: Array.from(notInSbAsins), merges, badQtyRows },
   };
 }
 

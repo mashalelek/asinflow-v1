@@ -304,6 +304,7 @@ type SbSummary = {
   templateRowsLoaded: number;
   skips: { badCost: number; badDate: number; badQty: number; sameDateMerged: number; notInSb: number };
   notInSbAsins: string[];
+  badQtyRows: { asin: string; date: string; rawQty: string; mode: string }[];
 };
 
 export default function Home() {
@@ -1785,6 +1786,16 @@ export default function Home() {
                 <details className="text-xs">
                   <summary className="cursor-pointer text-muted-foreground">Not in SB — {sbResult.summary.notInSbAsins.length} ASINs (expand)</summary>
                   <div className="mt-1 font-mono max-h-40 overflow-auto break-words">{sbResult.summary.notInSbAsins.join(", ")}</div>
+                </details>
+              )}
+              {sbResult.summary.badQtyRows.length > 0 && (
+                <details className="text-xs">
+                  <summary className="cursor-pointer text-muted-foreground">Bad qty — {sbResult.summary.badQtyRows.length} rows (expand)</summary>
+                  <div className="mt-1 font-mono max-h-40 overflow-auto space-y-0.5">
+                    {sbResult.summary.badQtyRows.map((r, i) => (
+                      <div key={i}>{r.asin} · {r.date} · qty="{r.rawQty}" ({r.mode})</div>
+                    ))}
+                  </div>
                 </details>
               )}
             </div>

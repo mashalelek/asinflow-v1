@@ -1395,7 +1395,8 @@ export async function registerRoutes(
         `${summary.distinctPeriods} periods, template ${summary.templateRowsLoaded} rows; skips ` +
         `badCost=${s.badOrZeroCost} badDate=${s.badOrMissingDate} badQty=${s.badQty} ` +
         `sameDateMerged=${s.sameDateMerged} notInSb=${s.notInSb} [${details.notInSbAsins.join(", ")}]` +
-        (details.merges.length ? ` merges=${JSON.stringify(details.merges)}` : ""),
+        (details.merges.length ? ` merges=${JSON.stringify(details.merges)}` : "") +
+        (details.badQtyRows.length ? ` badQtyRows=${JSON.stringify(details.badQtyRows)}` : ""),
         "sellerboard-cogs",
       );
       res.json({
@@ -1414,6 +1415,7 @@ export async function registerRoutes(
             notInSb: s.notInSb,
           },
           notInSbAsins: details.notInSbAsins,
+          badQtyRows: details.badQtyRows.map((r) => ({ asin: r.asin, date: r.date, rawQty: r.rawQty, mode: r.mode })),
         },
       });
     } catch (err: any) {

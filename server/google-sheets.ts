@@ -109,12 +109,14 @@ export async function fetchSheetData(sheetId: string): Promise<Map<string, Sheet
 // to fetchSheetData) plus the Velocity export fields, WITHOUT the ASIN-collapse.
 // Additive: the COGS sync does not use this. Feeds the upcoming Velocity upload.
 export interface SheetRow {
+  sheetRow: number;        // 1-based row number in the sheet (A2 = row 2)
   // existing columns (per-row)
   status: string | null;   // D
   asin: string;            // H
   cogs: number | null;     // Y  (parseMoney)
   prepCost: number | null; // AS (parseMoney)
   qty: number | null;      // U  (parseFloat)
+  qtyRaw: string;          // U  verbatim (untrimmed cell), for skip diagnostics
   supplier: string | null; // E
   // Velocity export fields
   orderNumber: string | null;  // B
@@ -136,16 +138,20 @@ function cellStr(v: any): string | null {
 export async function fetchSheetRows(sheetId: string): Promise<SheetRow[]> {
   const rows = await getSheetValues(sheetId, "Sheet1!A2:AZ");
   const out: SheetRow[] = [];
-  for (const row of rows) {
+  for (let i = 0; i < rows.length; i++) {
+    const row = rows[i];
     const asin = (row[COL_ASIN] ?? "").toString().trim();
     if (!asin) continue; // skip spacer/blank rows — same domain as fetchSheetData
-    const qtyRaw = (row[COL_QTY] ?? "").toString().trim();
+    const qtyRaw = row[COL_QTY] == null ? "" : String(row[COL_QTY]); // verbatim, untrimmed
+    const qtyTrim = qtyRaw.trim();
     out.push({
+      sheetRow: i + 2, // range starts at A2, so rows[0] is sheet row 2
       status: cellStr(row[COL_STATUS]),
       asin,
       cogs: parseMoney(row[COL_COGS]),
       prepCost: parseMoney(row[COL_PREP]),
-      qty: qtyRaw === "" ? null : (parseFloat(qtyRaw) || 0),
+      qty: qtyTrim === "" ? null : (parseFloat(qtyTrim) || 0),
+      qtyRaw,
       supplier: (row[COL_SUPPLIER] ?? "").toString().trim() || null,
       orderNumber: cellStr(row[COL_ORDER_NUMBER]),
       orderDate: cellStr(row[COL_ORDER_DATE]),

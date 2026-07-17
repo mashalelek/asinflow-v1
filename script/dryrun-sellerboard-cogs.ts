@@ -31,6 +31,15 @@ async function main() {
     console.log(`\n===== same-date merges (qty-weighted) =====`);
     for (const m of details.merges) console.log(`  ${m.asin} ${m.date}: ${m.count} rows → qty ${m.qty} @ ${m.cost.toFixed(2)}`);
   }
+  if (details.badQtyRows.length) {
+    console.log(`\n===== badQty rows (${details.badQtyRows.length}), grouped by mode =====`);
+    for (const mode of ["empty", "non_numeric", "non_positive", "non_integer"] as const) {
+      const g = details.badQtyRows.filter((r) => r.mode === mode);
+      if (!g.length) continue;
+      console.log(`  ── ${mode} (${g.length}) ──`);
+      for (const r of g) console.log(`    row ${r.sheetRow}  ${r.asin}  ${r.date}  Col U="${r.rawQty}"  cost ${r.cost.toFixed(2)}`);
+    }
+  }
   if (details.notInSbAsins.length) {
     console.log(`\n===== not in SB (${details.notInSbAsins.length} PO ASINs with YTD periods, absent from template) =====`);
     console.log("  " + details.notInSbAsins.join(", "));

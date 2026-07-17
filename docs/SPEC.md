@@ -653,10 +653,13 @@ Named `sb-cogs-YYYY-MM-DD.csv`.
 
 **Response** is JSON `{ filename, csv, summary }` (not a raw file, not headers):
 `summary = { emitted, asins, periods, templateRowsLoaded, skips: { badCost,
-badDate, badQty, sameDateMerged, notInSb }, notInSbAsins: [...] }`. The client
-builds the download from the `csv` string and shows a summary modal (not-in-SB
-list expandable); full detail (incl. merges) is logged server-side. Toolbar
-button **"Export SB COGS"** opens the template file picker.
+badDate, badQty, sameDateMerged, notInSb }, notInSbAsins: [...], badQtyRows:
+[{ asin, date, rawQty, mode }] }` (`mode` ∈ `empty` / `non_numeric` /
+`non_positive` / `non_integer`). The client builds the download from the `csv`
+string and shows a summary modal with the **not-in-SB list and the bad-qty rows
+both expandable**; full detail (incl. merges and per-row badQty with sheet row +
+cost) is logged server-side. Toolbar button **"Export SB COGS"** opens the
+template file picker.
 
 ### Google Sheets sourcing sheet (insert-only)
 
