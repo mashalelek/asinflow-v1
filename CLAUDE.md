@@ -80,6 +80,12 @@ npm run start      # Run production build
 npm run check      # TypeScript type checking
 ```
 
+**Known tsc baseline: 4× TS1252 in `server/spapi.ts` (lines 939/948/957/965).**
+These are pre-existing (function declarations nested in a block under the ES5
+target) and are the expected clean state. Gate reports must label tsc errors as
+**baseline vs. introduced** — e.g. "4 errors, all baseline; 0 introduced" — and
+any introduced error must be fixed forward before committing.
+
 There are no tests in this codebase.
 
 ## Required Environment Variables
