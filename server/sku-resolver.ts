@@ -26,6 +26,9 @@ export interface ResolutionTrail {
   // DG live-derived from the same catalog fetch — threaded to the offer-add
   // payload gate so it never reads the stored column.
   isDangerousGood: boolean;
+  // Catalog's own supplier_declared_dg_hz_regulation (US), or null. Passed
+  // through verbatim (when enum-valid) as the offer's DG declaration value.
+  dgHzRegulation: string | null;
 }
 
 export type ResolveSkuOutcome =
@@ -73,7 +76,7 @@ export async function resolveAndGenerateSku(
     }
   }
 
-  const { category, brand, itemName, imageUrl, isDangerousGood } = fetched.data;
+  const { category, brand, itemName, imageUrl, isDangerousGood, dgHzRegulation } = fetched.data;
 
   // Self-heal first — succeed-and-write even if legend lookup later returns pending,
   // so the data is fresh for the next attempt.
@@ -132,6 +135,7 @@ export async function resolveAndGenerateSku(
       brand: brand!,
       itemName: itemName ?? null,
       isDangerousGood,
+      dgHzRegulation,
     },
   };
 }

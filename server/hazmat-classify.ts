@@ -41,6 +41,65 @@ export function isHazmatFromInboundCodes(codes: readonly string[]): boolean {
 // DG = getCatalogItem attributes.hazmat array present/non-empty. PRESENCE, not
 // value validation: butane (B08MWQ7ZNT) ships a hazmat row with class "0" and
 // no UN#, yet is a dangerous good. Any non-empty hazmat array = DG.
+//
+// KNOWN OVER-FLAG (see resolveDgHzRegulation below + the deferred DG audit): the
+// hazmat array is a UN-transport block that non-DG items ALSO carry (with
+// per-country "*_Unregulated" exceptions), so PRESENCE has confirmed false
+// positives (B07H3B443Q fuel filter, B001DKV5H8 lubricant — Amazon says NOT DG).
+// The offer payload no longer trusts this flag for the declaration value; it
+// mirrors the catalog's own supplier_declared_dg_hz_regulation instead.
 export function isDangerousGoodFromAttributes(attrs: any): boolean {
   return Array.isArray(attrs?.hazmat) && attrs.hazmat.length > 0;
+}
+
+// ── supplier_declared_dg_hz_regulation (offer-add payload value) ──────────────
+//
+// The DG DECLARATION attribute for putListingsItem. SOURCE = the catalog's own
+// attributes.supplier_declared_dg_hz_regulation (Amazon's classification),
+// verified against SC dangerous-goods ground truth (not_applicable ⇔ not DG;
+// a real regulation value ⇔ genuine DG). NOT the hazmat array (its values are
+// never in this enum) and NOT the old `consumer_commodity` constant (enum-
+// invalid for every product type). The offer-side value is advisory — Amazon
+// classifies from its own catalog data (B00HX6N2WW went live with not_applicable
+// despite Amazon holding "storage") — so our value only needs to be enum-valid
+// and should truthfully mirror Amazon's.
+//
+// Enum verified PRODUCT-TYPE-INVARIANT (PRODUCT / FUEL_FILTER / MACHINE_LUBRICANT
+// / CALCULATOR / PORTABLE_STOVE all identical) via getDefinitionsProductType.
+export const DG_HZ_REGULATION_ENUM: readonly string[] = [
+  "ghs", "not_applicable", "other", "storage", "transportation", "unknown", "waste",
+];
+
+const MARKETPLACE_US = "ATVPDKIKX0DER";
+
+// Catalog's declared regulation value for the US marketplace, or null if absent.
+export function dgHzRegulationFromAttributes(attrs: any): string | null {
+  const entries = attrs?.supplier_declared_dg_hz_regulation;
+  if (!Array.isArray(entries)) return null;
+  const us = entries.find((e: any) => e?.marketplace_id === MARKETPLACE_US);
+  const v = us?.value;
+  return typeof v === "string" && v.length > 0 ? v : null;
+}
+
+export type DgHzResolution = { kind: "value"; value: string } | { kind: "unresolved" };
+
+// Resolve the payload's supplier_declared_dg_hz_regulation. Pure pass-through:
+//   - catalog value present AND enum-valid → pass through verbatim, REGARDLESS
+//     of the is_dangerous_good flag. Self-healing: the presence-derivation's
+//     false positives carry `not_applicable` in the catalog, so they submit
+//     correctly even before is_dangerous_good is re-derived.
+//   - absent / enum-invalid:
+//       isDangerousGood → unresolved (fail-closed; caller excludes for manual
+//                         selection — no 'unknown' guess).
+//       else            → not_applicable (proven-safe non-DG value).
+export function resolveDgHzRegulation(
+  catalogValue: string | null,
+  isDangerousGood: boolean,
+  allowedEnum: readonly string[] = DG_HZ_REGULATION_ENUM,
+): DgHzResolution {
+  if (catalogValue != null && allowedEnum.includes(catalogValue)) {
+    return { kind: "value", value: catalogValue };
+  }
+  if (isDangerousGood) return { kind: "unresolved" };
+  return { kind: "value", value: "not_applicable" };
 }

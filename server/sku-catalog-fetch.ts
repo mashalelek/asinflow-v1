@@ -17,7 +17,7 @@
 // network access.
 
 import { spApiGet as realSpApiGet } from "./spapi-auth";
-import { isDangerousGoodFromAttributes } from "./hazmat-classify";
+import { isDangerousGoodFromAttributes, dgHzRegulationFromAttributes } from "./hazmat-classify";
 
 const MARKETPLACE = "ATVPDKIKX0DER";
 
@@ -31,6 +31,10 @@ export interface CatalogFetchResult {
   // present). Offer-add reads THIS, never the stored is_dangerous_good column,
   // so the DG attribute is immune to stale/NULL backfill state.
   isDangerousGood: boolean;
+  // Catalog's own supplier_declared_dg_hz_regulation value (US marketplace), or
+  // null if absent. The offer payload passes this through verbatim when enum-
+  // valid — see resolveDgHzRegulation.
+  dgHzRegulation: string | null;
 }
 
 export type CatalogFetchOutcome =
@@ -141,28 +145,35 @@ export async function fetchCatalogForSku(
   const itemName = (summary.itemName ?? "").toString().trim() || null;
   const imageUrl = data?.images?.[0]?.images?.[0]?.link ?? null;
   const isDangerousGood = isDangerousGoodFromAttributes(data?.attributes);
+  const dgHzRegulation = dgHzRegulationFromAttributes(data?.attributes);
 
   return {
     ok: true,
-    data: { asin, category, brand, itemName, imageUrl, isDangerousGood },
+    data: { asin, category, brand, itemName, imageUrl, isDangerousGood, dgHzRegulation },
   };
 }
 
 // Reuse-path DG probe. The reuse path (offer added to an already-listed SKU)
 // skips fetchCatalogForSku, so it has no fresh attributes — this dedicated call
-// keeps DG LIVE there too (still never touches the stored column). Returns:
-//   true/false — catalog attributes read; DG derived from attributes.hazmat
-//   null       — fetch failed (404/transient); caller decides the safe default
-export async function fetchDangerousGoodLive(
+// keeps DG LIVE there too (still never touches the stored column). One fetch,
+// both signals:
+//   { isDangerousGood, dgHzRegulation } — attributes read (dgHzRegulation may be
+//                                          null if the catalog omits the attr)
+//   null                                — fetch failed (404/transient); caller
+//                                          decides the safe default
+export async function fetchDgHzLive(
   asin: string,
   httpGet: HttpGetFn = realSpApiGet,
-): Promise<boolean | null> {
+): Promise<{ isDangerousGood: boolean; dgHzRegulation: string | null } | null> {
   try {
     const data = await httpGet(`/catalog/2022-04-01/items/${asin}`, {
       marketplaceIds: MARKETPLACE,
       includedData: "attributes",
     });
-    return isDangerousGoodFromAttributes(data?.attributes);
+    return {
+      isDangerousGood: isDangerousGoodFromAttributes(data?.attributes),
+      dgHzRegulation: dgHzRegulationFromAttributes(data?.attributes),
+    };
   } catch {
     return null;
   }

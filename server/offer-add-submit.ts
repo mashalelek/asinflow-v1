@@ -72,6 +72,8 @@ export type SkipReason =
   | "catalog_deleted" | "gated" | "not_checked"
   // Phase 1 (resurrection blocked outcomes)
   | "dead_asin" | "legend_pending" | "duplicate_warning" | "already_in_catalog" | "resurrection_error" | "definitions_fetch_failed"
+  // DG declaration value unresolved (fail-closed; manual selection needed)
+  | "dg_value_unresolved"
   // Phase 2 (allocator)
   | "nnn_overflow"
   // Phase 3 (price resolver)
@@ -539,6 +541,8 @@ function mapBlockedOutcomeToSkip(result: OfferAddResult): SubmitOutcome | null {
               : result.reason === "invalid_sku_format" ? "invalid_sku_format"
               : "resurrection_error",
         details: result.details };
+    case "dg_value_unresolved":
+      return { kind: "skipped", asin: result.asin, reason: "dg_value_unresolved", details: result.details };
     default:
       return null;
   }

@@ -251,6 +251,7 @@ function mapSubmitOutcomeToOfferAddResult(outcome: any): OfferAddResult {
         case "legend_pending": return { kind: "legend_pending", asin: outcome.asin, pending: outcome.pending ?? { brand: null, dept: null } as any, details: outcome.details };
         case "duplicate_warning": return { kind: "duplicate_warning", asin: outcome.asin, existingSku: "", statuses: [] };
         case "already_in_catalog": return { kind: "already_in_catalog", asin: outcome.asin, items: [] as any, details: outcome.details } as any;
+        case "dg_value_unresolved": return { kind: "dg_value_unresolved", asin: outcome.asin, details: outcome.details };
         case "needs_cogs":
         case "offers_fetch_failed":
         case "unreachable_roi":

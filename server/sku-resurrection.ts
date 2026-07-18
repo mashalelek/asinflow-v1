@@ -56,7 +56,7 @@ export interface LegendPending {
 
 export type ResurrectionOutcome =
   | { kind: "reuse"; sku: string; lastCreatedAt: Date }
-  | { kind: "generate"; sku: string; trail: { brd: string; dep: string; ttl: string; category: string; brand: string; itemName: string | null; isDangerousGood: boolean } }
+  | { kind: "generate"; sku: string; trail: { brd: string; dep: string; ttl: string; category: string; brand: string; itemName: string | null; isDangerousGood: boolean; dgHzRegulation: string | null } }
   | { kind: "duplicate_warning"; existingSku: string; statuses: string[] }
   // NEW: at least one SKU listing exists under our sellerId for this ASIN in
   // SC, in any status. Format-agnostic — applies to legacy/PFL/Amazon-random

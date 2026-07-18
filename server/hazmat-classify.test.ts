@@ -2,8 +2,58 @@ import { describe, it, expect } from "vitest";
 import {
   isHazmatFromInboundCodes,
   isDangerousGoodFromAttributes,
+  dgHzRegulationFromAttributes,
+  resolveDgHzRegulation,
+  DG_HZ_REGULATION_ENUM,
   HAZMAT_INBOUND_CODES,
 } from "./hazmat-classify";
+
+// Fixtures = the four real ASINs vs Amazon's SC dangerous-goods ground truth.
+// `flag` = the presence-derivation's is_dangerous_good (which over-flags the two
+// non-DG items); `catalogValue` = attributes.supplier_declared_dg_hz_regulation.
+describe("resolveDgHzRegulation (supplier_declared_dg_hz_regulation pass-through)", () => {
+  it("B00HX6N2WW (genuine DG) → passes through catalog 'storage'", () => {
+    expect(resolveDgHzRegulation("storage", true, DG_HZ_REGULATION_ENUM)).toEqual({ kind: "value", value: "storage" });
+  });
+
+  it("B0BLHGNP54 Jetboil (genuine DG) → passes through catalog 'transportation'", () => {
+    expect(resolveDgHzRegulation("transportation", true, DG_HZ_REGULATION_ENUM)).toEqual({ kind: "value", value: "transportation" });
+  });
+
+  it("B07H3B443Q / B001DKV5H8 (presence false-positive, flag TRUE) → self-heals to catalog 'not_applicable'", () => {
+    expect(resolveDgHzRegulation("not_applicable", true, DG_HZ_REGULATION_ENUM)).toEqual({ kind: "value", value: "not_applicable" });
+  });
+
+  it("absent catalog value + flag TRUE → fail-closed unresolved (no guess)", () => {
+    expect(resolveDgHzRegulation(null, true, DG_HZ_REGULATION_ENUM)).toEqual({ kind: "unresolved" });
+  });
+
+  it("absent catalog value + flag FALSE → not_applicable (proven-safe non-DG)", () => {
+    expect(resolveDgHzRegulation(null, false, DG_HZ_REGULATION_ENUM)).toEqual({ kind: "value", value: "not_applicable" });
+  });
+
+  it("enum-invalid catalog value (e.g. legacy consumer_commodity) + flag TRUE → unresolved", () => {
+    expect(resolveDgHzRegulation("consumer_commodity", true, DG_HZ_REGULATION_ENUM)).toEqual({ kind: "unresolved" });
+  });
+
+  it("enum-invalid catalog value + flag FALSE → not_applicable", () => {
+    expect(resolveDgHzRegulation("consumer_commodity", false, DG_HZ_REGULATION_ENUM)).toEqual({ kind: "value", value: "not_applicable" });
+  });
+});
+
+describe("dgHzRegulationFromAttributes (US marketplace extraction)", () => {
+  const US = "ATVPDKIKX0DER";
+  it("extracts the US marketplace value", () => {
+    expect(dgHzRegulationFromAttributes({ supplier_declared_dg_hz_regulation: [{ value: "transportation", marketplace_id: US }] })).toBe("transportation");
+  });
+  it("ignores non-US entries → null when no US entry", () => {
+    expect(dgHzRegulationFromAttributes({ supplier_declared_dg_hz_regulation: [{ value: "storage", marketplace_id: "A1F83G8C2ARO7P" }] })).toBeNull();
+  });
+  it("absent attribute → null (does not throw)", () => {
+    expect(dgHzRegulationFromAttributes({})).toBeNull();
+    expect(dgHzRegulationFromAttributes(null)).toBeNull();
+  });
+});
 
 describe("isHazmatFromInboundCodes (is_hazmat driver)", () => {
   it("0015 → hazmat true (CO2 cylinders, the proven anchor)", () => {

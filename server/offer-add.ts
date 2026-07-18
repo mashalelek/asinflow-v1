@@ -20,12 +20,13 @@
 import { resurrectOrGenerateSku, type ResurrectionDeps, type ResurrectionOutcome, type LegendPending } from "./sku-resurrection";
 import type { PresentListing } from "./sku-listing-search";
 import type { ProductRegistryRepo } from "./product-registry-repo";
-import { fetchProductTypeDefinition } from "./listings-definitions";
+import { fetchDgHzRegulationEnum } from "./listings-definitions";
 import { putListingsItem, type HttpPutFn } from "./listings-write";
 import { mapPutListingsResponse, type OfferAddFailureReason, type ListingsIssue } from "./listings-error-map";
 import { applyCatalogDeletedSignal } from "./catalog-deleted-write";
 import type { QueryFn } from "@shared/sku-legend";
-import { fetchDangerousGoodLive, type HttpGetFn } from "./sku-catalog-fetch";
+import { fetchDgHzLive, type HttpGetFn } from "./sku-catalog-fetch";
+import { resolveDgHzRegulation } from "./hazmat-classify";
 import { recordSubmission } from "./listing-submissions-repo";
 
 const MARKETPLACE = "ATVPDKIKX0DER";
@@ -38,7 +39,7 @@ export interface OfferAddInput {
   price: number;       // resolved by the price resolver (separate concern)
   // NOTE: DG is NOT taken from the caller/stored column. It is derived LIVE from
   // the catalog fetch inside offerAddForAsin (generate: resurrection trail;
-  // reuse: fetchDangerousGoodLive) and passed to buildOfferOnlyPayload. This
+  // reuse: fetchDgHzLive) and passed to buildOfferOnlyPayload. This
   // keeps the DG attribute immune to stale/NULL is_dangerous_good state.
   // OPTIONAL operator override for the assembled SKU. Only applied on the
   // GENERATE path (reused SKUs ignore this). Must match the canonical
@@ -67,6 +68,10 @@ export type OfferAddResult =
   // status). Skip — never create a duplicate offer.
   | { kind: "already_in_catalog"; asin: string; items: PresentListing[] }
   | { kind: "resurrection_error"; asin: string; reason: string; details: string }
+  // Fail-closed DG exclusion: is_dangerous_good but the catalog carries no enum-
+  // valid supplier_declared_dg_hz_regulation to mirror. Needs manual selection —
+  // same exclusion family as legend_pending. Never guessed ('unknown' not used).
+  | { kind: "dg_value_unresolved";  asin: string; details: string }
   // Dry-run output: payload assembled, no PUT fired
   | { kind: "preview";            asin: string; sku: string; reused: boolean; payload: PutListingsPayload }
   // Live PUT outcomes
@@ -142,10 +147,21 @@ export async function offerAddForAsin(
   // Reuse-path fetch failure (null) → default not_applicable (false): non-blocking
   // and still not sourced from the stored column. (The blanket consumer_commodity
   // VALUE for genuinely-DG items remains a separate PARKED bug — see below.)
-  const isDangerousGood =
-    resurrection.kind === "generate"
-      ? resurrection.trail.isDangerousGood
-      : ((await fetchDangerousGoodLive(input.asin, deps.httpGet)) ?? false);
+  // DG signals — LIVE-derived, never the stored column. We need BOTH the flag
+  // (for the fail-closed branch) AND the catalog's own supplier_declared_dg_hz_
+  // regulation value (which the payload mirrors when enum-valid).
+  //   generate → resurrection catalog fetch already carries both (zero extra call)
+  //   reuse    → dedicated probe; null (fetch failed) → safe non-DG defaults
+  let isDangerousGood: boolean;
+  let catalogDgHz: string | null;
+  if (resurrection.kind === "generate") {
+    isDangerousGood = resurrection.trail.isDangerousGood;
+    catalogDgHz = resurrection.trail.dgHzRegulation;
+  } else {
+    const live = await fetchDgHzLive(input.asin, deps.httpGet);
+    isDangerousGood = live?.isDangerousGood ?? false;
+    catalogDgHz = live?.dgHzRegulation ?? null;
+  }
 
   // 3b. Apply operator SKU override (generate path only). Validates format
   // and the BRD-DEP-AS3 invariant (operator can only edit TTL and NNN, not
@@ -175,12 +191,13 @@ export async function offerAddForAsin(
     sku = input.skuOverride;
   }
 
-  // 4. Spec-required: fetch product-type definition BEFORE payload assembly.
-  // (Cached per session; doesn't add cost on a multi-ASIN batch.) Today this
-  // is mostly a validation tripwire — if it throws, we abort with a clear
-  // diagnostic before wasting a putListingsItem call on a malformed payload.
+  // 4. Spec-required: fetch product-type definition BEFORE payload assembly, and
+  // extract the supplier_declared_dg_hz_regulation enum to validate against.
+  // (Cached; the definitions call is also the §18 product-type tripwire — if it
+  // throws we abort before wasting a putListingsItem call.)
+  let dgHzEnum: string[];
   try {
-    await fetchProductTypeDefinition(PRODUCT_TYPE, deps.sellerId, deps.httpGet);
+    dgHzEnum = await fetchDgHzRegulationEnum(PRODUCT_TYPE, deps.sellerId, deps.httpGet);
   } catch (err: any) {
     return {
       kind: "resurrection_error",
@@ -190,8 +207,20 @@ export async function offerAddForAsin(
     };
   }
 
+  // 4b. Resolve the DG declaration value: pass through the catalog's own value
+  // when enum-valid (self-healing over the presence-derivation's false
+  // positives); fail closed if DG-true with no enum-valid value (no guess).
+  const dgHz = resolveDgHzRegulation(catalogDgHz, isDangerousGood, dgHzEnum);
+  if (dgHz.kind === "unresolved") {
+    return {
+      kind: "dg_value_unresolved",
+      asin: input.asin,
+      details: `is_dangerous_good but catalog supplier_declared_dg_hz_regulation is ${catalogDgHz == null ? "absent" : `not enum-valid ("${catalogDgHz}")`}; needs manual selection`,
+    };
+  }
+
   // 5. Assemble the payload — strictly per spec
-  const payload = buildOfferOnlyPayload(input, isDangerousGood);
+  const payload = buildOfferOnlyPayload(input, dgHz.value);
 
   // 6. Dry-run gate — no PUT, no DB writes downstream
   if (dryRun) {
@@ -410,7 +439,7 @@ function attr(value: any, extra: Record<string, any> = {}): any {
   return [{ value, marketplace_id: MARKETPLACE, ...extra }];
 }
 
-export function buildOfferOnlyPayload(input: OfferAddInput, isDangerousGood: boolean): PutListingsPayload {
+export function buildOfferOnlyPayload(input: OfferAddInput, dgHzRegulationValue: string): PutListingsPayload {
   const attributes: Record<string, any> = {
     // ASIN attaches the offer to an EXISTING listing (offer-only matching).
     // Without this, Amazon would create a NEW listing (duplicate ASIN).
@@ -420,17 +449,13 @@ export function buildOfferOnlyPayload(input: OfferAddInput, isDangerousGood: boo
 
     // Always-present per spec (not category-specific):
     batteries_required: attr(false), // TODO per-ASIN battery flag if needed
-    supplier_declared_dg_hz_regulation: attr(
-      // Gated on LIVE-derived is_dangerous_good (attributes.hazmat present), NOT
-      // the old is_hazmat. Non-DG → not_applicable (the fix: the 3 grocery ASINs
-      // stop sending consumer_commodity and no longer hit invalid_attribute).
-      //
-      // PARKED BUG (unchanged here, per plan): the consumer_commodity VALUE is a
-      // blanket placeholder for genuinely-DG items — real DG needs a per-product
-      // -type value (ltd_qty / storage_class_* / consumer_commodity) derived from
-      // getDefinitionsProductType. Tracked separately; do NOT fix in this change.
-      isDangerousGood ? "consumer_commodity" : "not_applicable",
-    ),
+    // Value is resolved upstream by resolveDgHzRegulation and passed in verbatim
+    // — it mirrors the catalog's own supplier_declared_dg_hz_regulation and is
+    // enum-validated before we get here. (FIXED: the old `consumer_commodity`
+    // constant was enum-INVALID for every product type — the enum is
+    // {ghs, not_applicable, other, storage, transportation, unknown, waste} — and
+    // the hazmat array was never the source. Amazon's own catalog attribute is.)
+    supplier_declared_dg_hz_regulation: attr(dgHzRegulationValue),
 
     // Price + FBA fulfillment. Critically OMITS quantity (FBA-owned).
     purchasable_offer: [

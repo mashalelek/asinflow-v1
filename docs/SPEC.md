@@ -900,6 +900,19 @@ do not flow into AsinFlow's inventory state.
 - **Meltable flag** — ASINs flagged as meltable in SellerAmp/Amazon don't
   show as meltable in AsinFlow. Diagnose: is the field captured from SP-API?
   Is the column rendering? Is the seasonal hide logic interfering?
+- **`is_dangerous_good` over-flags (presence, not value)** — the current
+  derivation (`isDangerousGoodFromAttributes` = `attributes.hazmat` non-empty)
+  has ≥2 confirmed false positives (B07H3B443Q fuel filter, B001DKV5H8 lubricant
+  — Amazon's SC dangerous-goods lookup says NOT DG). The hazmat array is a UN-
+  transport block that non-DG items also carry (per-country `*_Unregulated`
+  exceptions). **Ground-truth signal:** the catalog's own
+  `attributes.supplier_declared_dg_hz_regulation` (`not_applicable` ⇔ not DG; a
+  real regulation value ⇔ DG) — matched all four test ASINs exactly. Re-derive
+  all 103 DG-flagged ASINs off `supplier_declared_dg_hz_regulation != not_applicable`,
+  NOT hazmat-array presence. Fold into the hazmat/meltable audit with its own
+  backfill discipline. (The offer-add payload already self-heals via
+  `resolveDgHzRegulation` — §18 — so this backfill only fixes the stored column /
+  UI DG icon, not submissions.)
 
 ---
 
@@ -1224,9 +1237,26 @@ Sent on every payload, not gated by category/brand/product:
 - price (see Price Resolution)
 - `batteries_required` — always `No` today (hardcoded). TODO: per-ASIN battery
   flag (`offer-add.ts` — no per-ASIN logic exists yet).
-- `supplier_declared_dg_hz_regulation` — default `Not Applicable`; set to
-  `consumer_commodity` when AF **live-derives the ASIN as a dangerous good**
-  (`attributes.hazmat` present at submit time — NOT the `is_hazmat` flag)
+- `supplier_declared_dg_hz_regulation` — **pass-through of the catalog's own
+  value.** Enum (verified product-type-invariant via getDefinitionsProductType):
+  `{ghs, not_applicable, other, storage, transportation, unknown, waste}`.
+  Resolution (`resolveDgHzRegulation`):
+  - If `attributes.supplier_declared_dg_hz_regulation` (US marketplace) is
+    present AND enum-valid → **pass it through verbatim, regardless of the
+    is_dangerous_good flag.** Self-healing: the presence-derivation's false
+    positives (fuel filter, lubricant) carry `not_applicable` in the catalog, so
+    they submit correctly even before the flag is re-derived.
+  - Else (absent / enum-invalid): DG-flag TRUE → **fail closed**, excluded in
+    preview as `dg_value_unresolved` ("needs manual selection", legend_pending
+    family) — no `unknown` guess; flag FALSE → `not_applicable` (proven-safe).
+  - The offer-side declaration is **advisory** — Amazon classifies DG from its
+    own catalog data (B00HX6N2WW went live with `not_applicable` while Amazon
+    held `storage`); our value only needs to be enum-valid and should truthfully
+    mirror Amazon's.
+  - HISTORY: the prior `consumer_commodity` constant was **enum-invalid for
+    every product type** (never a member) and the `attributes.hazmat` array was
+    never the source (it's a UN-transport block whose values aren't in this
+    enum). Both premises were falsified by the enum + array diagnostics.
 
 `batteries_required` and `supplier_declared_dg_hz_regulation` are NOT
 category-specific. Treat them as universally required.

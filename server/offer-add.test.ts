@@ -110,51 +110,51 @@ describe("buildOfferOnlyPayload — spec guarantees", () => {
   };
 
   it("has merchant_suggested_asin matching the input ASIN", () => {
-    const p = buildOfferOnlyPayload(sample, false);
+    const p = buildOfferOnlyPayload(sample, "not_applicable");
     expect(p.attributes.merchant_suggested_asin[0].value).toBe("B0FCM6CX8M");
   });
 
   it("has productType=PRODUCT and requirements=LISTING_OFFER_ONLY", () => {
-    const p = buildOfferOnlyPayload(sample, false);
+    const p = buildOfferOnlyPayload(sample, "not_applicable");
     expect(p.productType).toBe("PRODUCT");
     expect(p.requirements).toBe("LISTING_OFFER_ONLY");
   });
 
   it("has condition_type=new_new", () => {
-    const p = buildOfferOnlyPayload(sample, false);
+    const p = buildOfferOnlyPayload(sample, "not_applicable");
     expect(p.attributes.condition_type[0].value).toBe("new_new");
   });
 
   it("has FBA fulfillment_channel_code (AMAZON_NA)", () => {
-    const p = buildOfferOnlyPayload(sample, false);
+    const p = buildOfferOnlyPayload(sample, "not_applicable");
     expect(p.attributes.fulfillment_availability[0].fulfillment_channel_code).toBe("AMAZON_NA");
   });
 
   // CRITICAL — adding quantity flips the SKU to merchant-fulfilled.
   // This test exists specifically to fail loudly if anyone ever adds it.
   it("has NO quantity key anywhere in the payload (FBA quantity is Amazon-owned)", () => {
-    const p = buildOfferOnlyPayload(sample, false);
+    const p = buildOfferOnlyPayload(sample, "not_applicable");
     const json = JSON.stringify(p);
     expect(json.toLowerCase()).not.toContain("quantity");
   });
 
   it("has batteries_required=false by default", () => {
-    const p = buildOfferOnlyPayload(sample, false);
+    const p = buildOfferOnlyPayload(sample, "not_applicable");
     expect(p.attributes.batteries_required[0].value).toBe(false);
   });
 
-  it("has supplier_declared_dg_hz_regulation=not_applicable when isDangerousGood=false", () => {
-    const p = buildOfferOnlyPayload(sample, false);
+  it("passes the resolved supplier_declared_dg_hz_regulation value through verbatim (not_applicable)", () => {
+    const p = buildOfferOnlyPayload(sample, "not_applicable");
     expect(p.attributes.supplier_declared_dg_hz_regulation[0].value).toBe("not_applicable");
   });
 
-  it("uses consumer_commodity for DG/HZ when isDangerousGood=true", () => {
-    const p = buildOfferOnlyPayload(sample, true);
-    expect(p.attributes.supplier_declared_dg_hz_regulation[0].value).toBe("consumer_commodity");
+  it("passes a real DG regulation value through verbatim (e.g. transportation)", () => {
+    const p = buildOfferOnlyPayload(sample, "transportation");
+    expect(p.attributes.supplier_declared_dg_hz_regulation[0].value).toBe("transportation");
   });
 
   it("encodes price under purchasable_offer.our_price.schedule.value_with_tax", () => {
-    const p = buildOfferOnlyPayload({ ...sample, price: 24.99 });
+    const p = buildOfferOnlyPayload({ ...sample, price: 24.99 }, "not_applicable");
     expect(p.attributes.purchasable_offer[0].our_price[0].schedule[0].value_with_tax).toBe(24.99);
     expect(p.attributes.purchasable_offer[0].currency).toBe("USD");
   });
