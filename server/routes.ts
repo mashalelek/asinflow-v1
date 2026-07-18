@@ -1766,7 +1766,12 @@ export async function registerRoutes(
   app.get("/api/tags", async (_req: Request, res: Response) => {
     if (!isDbAvailable()) { res.json([]); return; }
     try {
-      const result = await query(`SELECT id, name, color FROM tags ORDER BY name`);
+      // Ungrouped tags (tag_group NULL) first, alphabetical; then grouped tags
+      // by group then sort_order (e.g. the Seasonal group renders last).
+      const result = await query(
+        `SELECT id, name, color, tag_group, sort_order FROM tags
+         ORDER BY (tag_group IS NOT NULL), tag_group, sort_order NULLS LAST, name`
+      );
       res.json(result.rows);
     } catch (err: any) { res.status(500).json({ message: err.message }); }
   });
@@ -1776,11 +1781,11 @@ export async function registerRoutes(
     if (!name || !name.trim()) { res.status(400).json({ message: "Tag name required" }); return; }
     if (!isDbAvailable()) { res.status(503).json({ message: "Database not available" }); return; }
     try {
-      const existing = await query(`SELECT id, name, color FROM tags WHERE LOWER(name) = LOWER($1)`, [name.trim()]);
+      const existing = await query(`SELECT id, name, color, tag_group, sort_order FROM tags WHERE LOWER(name) = LOWER($1)`, [name.trim()]);
       if (existing.rows.length > 0) { res.json(existing.rows[0]); return; }
       const color = TAG_COLORS[Math.floor(Math.random() * TAG_COLORS.length)];
       const result = await query(
-        `INSERT INTO tags (name, color) VALUES ($1, $2) RETURNING id, name, color`,
+        `INSERT INTO tags (name, color) VALUES ($1, $2) RETURNING id, name, color, tag_group, sort_order`,
         [name.trim(), color]
       );
       res.json(result.rows[0]);

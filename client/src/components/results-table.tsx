@@ -58,6 +58,7 @@ const DEFAULT_COL_WIDTHS: Partial<Record<ColumnId, number>> = {
 import { type ColumnConfig } from "@/lib/columns";
 import { type FilterMode } from "@/components/summary-cards";
 import { ColumnFilterButton, type ColFilter, type FilterMap, type MultiSelectOption } from "@/components/column-filter";
+import { useTagGroups, compareTagKeys } from "@/lib/use-tag-groups";
 import { TagEditor } from "@/components/tag-editor";
 import { NoteEditor } from "@/components/note-editor";
 
@@ -463,8 +464,9 @@ export function ResultsTable({
   const colMap = useMemo(() => new Map(ALL_COLUMNS.map((c) => [c.id, c])), []);
 
   // Compute multi-select options for tags and supplier from ALL results
+  const tagMeta = useTagGroups();
   const tagOptions: MultiSelectOption[] = useMemo(() => {
-    const counts = new Map<string, { color: string; count: number }>();
+    const counts = new Map<string, { color: string; count: number; name: string }>();
     let noTagCount = 0;
     for (const r of allResults) {
       if (!r.tags || r.tags.length === 0) { noTagCount++; continue; }
@@ -472,15 +474,15 @@ export function ResultsTable({
         const key = t.name.toLowerCase();
         const existing = counts.get(key);
         if (existing) existing.count++;
-        else counts.set(key, { color: t.color, count: 1 });
+        else counts.set(key, { color: t.color, count: 1, name: t.name });
       }
     }
     const opts: MultiSelectOption[] = [{ value: "__none__", label: "No tags", count: noTagCount }];
-    for (const [key, { color, count }] of Array.from(counts.entries()).sort((a, b) => a[0].localeCompare(b[0]))) {
-      opts.push({ value: key, label: key.charAt(0).toUpperCase() + key.slice(1), color, count });
+    for (const [key, { color, count, name }] of Array.from(counts.entries()).sort((a, b) => compareTagKeys(a[0], b[0], tagMeta))) {
+      opts.push({ value: key, label: name, color, count, group: tagMeta.get(key)?.group ?? undefined });
     }
     return opts;
-  }, [allResults]);
+  }, [allResults, tagMeta]);
 
   const supplierOptions: MultiSelectOption[] = useMemo(() => {
     const counts = new Map<string, number>();

@@ -1,4 +1,4 @@
-import { useState, useMemo } from "react";
+import { useState, useMemo, Fragment } from "react";
 import { Filter } from "lucide-react";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import { Button } from "@/components/ui/button";
@@ -20,6 +20,7 @@ export interface MultiSelectOption {
   label: string;
   color?: string;
   count?: number;
+  group?: string; // options are pre-sorted; a group header renders when this changes
 }
 
 type FilterType = "numeric" | "text" | "tags" | "supplier" | "boolean" | "reviewed";
@@ -149,9 +150,14 @@ function MultiSelectFilter({
         <span className="ml-auto">{selected.size} selected</span>
       </div>
       <div className="max-h-48 overflow-y-auto -mx-1 space-y-0.5">
-        {filtered.map((opt) => (
+        {filtered.map((opt, i) => (
+          <Fragment key={opt.value}>
+            {opt.group && opt.group !== filtered[i - 1]?.group && (
+              <div className="px-2 pt-1.5 pb-0.5 text-[10px] font-semibold uppercase tracking-wide text-muted-foreground">
+                {opt.group}
+              </div>
+            )}
           <label
-            key={opt.value}
             className="flex items-center gap-2 px-2 py-1 rounded hover:bg-muted cursor-pointer text-xs"
           >
             <input
@@ -171,6 +177,7 @@ function MultiSelectFilter({
               <span className="text-muted-foreground/60 text-[10px]">({opt.count})</span>
             )}
           </label>
+          </Fragment>
         ))}
       </div>
       {colId === "tags" && (

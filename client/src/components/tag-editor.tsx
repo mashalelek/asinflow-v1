@@ -1,13 +1,16 @@
-import { useState, useEffect } from "react";
+import { useState, useEffect, useMemo, Fragment } from "react";
 import { Plus } from "lucide-react";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import { Input } from "@/components/ui/input";
 import { Button } from "@/components/ui/button";
+import { compareTagRecords } from "@/lib/use-tag-groups";
 
 interface Tag {
   id: string;
   name: string;
   color: string;
+  tag_group?: string | null;
+  sort_order?: number | null;
 }
 
 interface TagEditorProps {
@@ -71,7 +74,7 @@ export function TagEditor({ asin, currentTags, onTagsChanged }: TagEditorProps) 
         body: JSON.stringify({ name }),
       });
       const newTag: Tag = await res.json();
-      setAllTags((prev) => [...prev, newTag].sort((a, b) => a.name.localeCompare(b.name)));
+      setAllTags((prev) => [...prev, newTag]); // ordering handled at render (group-aware)
       const next = new Set(selectedIds);
       next.add(newTag.id);
       setSelectedIds(next);
@@ -80,6 +83,10 @@ export function TagEditor({ asin, currentTags, onTagsChanged }: TagEditorProps) 
     } catch {}
     setSaving(false);
   }
+
+  // Ungrouped tags first (alphabetical), then grouped tags (e.g. Seasonal) by
+  // group + sort_order. Render inserts a header at each group boundary.
+  const sortedTags = useMemo(() => [...allTags].sort(compareTagRecords), [allTags]);
 
   return (
     <Popover open={open} onOpenChange={setOpen}>
@@ -103,24 +110,32 @@ export function TagEditor({ asin, currentTags, onTagsChanged }: TagEditorProps) 
       </PopoverTrigger>
       <PopoverContent className="w-56 p-0" align="start" sideOffset={4} onClick={(e) => e.stopPropagation()}>
         <div className="max-h-[250px] overflow-y-auto p-1">
-          {allTags.map((tag) => {
+          {sortedTags.map((tag, i) => {
             const checked = selectedIds.has(tag.id);
+            const group = tag.tag_group ?? undefined;
+            const showHeader = group && group !== (sortedTags[i - 1]?.tag_group ?? undefined);
             return (
-              <button
-                key={tag.id}
-                className={`w-full flex items-center gap-2 px-2 py-1.5 rounded text-left text-sm hover:bg-muted transition-colors ${saving ? "opacity-50" : ""}`}
-                onClick={() => toggleTag(tag.id)}
-                disabled={saving}
-              >
-                <span
-                  className="w-3 h-3 rounded-sm flex-shrink-0 border"
-                  style={{
-                    backgroundColor: checked ? tag.color : "transparent",
-                    borderColor: tag.color,
-                  }}
-                />
-                <span className="truncate flex-1">{tag.name}</span>
-              </button>
+              <Fragment key={tag.id}>
+                {showHeader && (
+                  <div className="px-2 pt-1.5 pb-0.5 text-[10px] font-semibold uppercase tracking-wide text-muted-foreground">
+                    {group}
+                  </div>
+                )}
+                <button
+                  className={`w-full flex items-center gap-2 px-2 py-1.5 rounded text-left text-sm hover:bg-muted transition-colors ${saving ? "opacity-50" : ""}`}
+                  onClick={() => toggleTag(tag.id)}
+                  disabled={saving}
+                >
+                  <span
+                    className="w-3 h-3 rounded-sm flex-shrink-0 border"
+                    style={{
+                      backgroundColor: checked ? tag.color : "transparent",
+                      borderColor: tag.color,
+                    }}
+                  />
+                  <span className="truncate flex-1">{tag.name}</span>
+                </button>
+              </Fragment>
             );
           })}
         </div>
