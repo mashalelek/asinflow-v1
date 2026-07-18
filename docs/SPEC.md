@@ -1614,3 +1614,21 @@ backfill into inserting duplicate rows.
 not a SKU ledger). Both can name the same SKU: `asin_skus` says "this SKU was
 observed/submitted," `listing_submissions` says "this specific submission
 resolved to live/failed/deleted."
+
+## 20. Tags
+
+Free-form labels applied to ASINs (`tags` + `asin_tags` join).
+
+- **`tags` table:** `name` (unique), `color`, `tag_group` (NULL = ungrouped),
+  `sort_order` (ordering within a group).
+- **Render order — everywhere tags are listed** (tag filter dropdowns, the tag
+  picker popover): **ungrouped tags first** in their current order, then each
+  **group under a header**, its tags in `sort_order`. (`/api/tags` returns this
+  order; `client/src/lib/use-tag-groups.ts` drives it client-side.)
+- **Row tag chips are unaffected by grouping** — grouping only changes
+  list/picker ordering, not how chips render on a row.
+- **Current groups:** `Seasonal` — Fall/Q4, St. Valentine's Day,
+  St. Patrick's Day, Spring, Easter, Summer, Back to School (in that
+  `sort_order`).
+- **Deletion cascades:** deleting a tag removes its `asin_tags` associations
+  (`ON DELETE CASCADE`); the ASINs themselves are untouched.
