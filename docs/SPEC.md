@@ -831,6 +831,12 @@ In rough priority order:
    (replaces the scrapped Side Panel approach)
 8. **Prep center webhook integration** — depends on PO module. Parses
    shipment names per the convention above.
+9. **Offer-add resets `has_live_offer` to NULL on submitted ASINs** — so a
+   same-day Add-to-SC batch becomes eligible for the next unchecked-scope
+   live-offer pass (§18 / inventory-sync rider) instead of waiting for the 07:00
+   cron. Needed when the ASIN had a *prior* checked SKU: today the flag stays at
+   its old non-NULL verdict (e.g. `f`), so the unchecked-scope rider skips it and
+   the new SKU's live status isn't reflected until the full cron re-checks it.
 
 ---
 
