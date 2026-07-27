@@ -280,8 +280,8 @@ representations of the same logical "narrow to specific ASIN(s)" intent.
    Max COGS
 5. **Sellers** — Sellers (FBA), Sellers (combined), Sellers 7d Δ, Sellers 30d Δ,
    FBA 7d Δ, FBA 30d Δ
-6. **Additional info** — Tags, Notes, Sourcing, Meltable, Hazmat, Suppressed,
-   Date Added
+6. **Additional info** — Tags, Notes, Promos, Sourcing, Meltable, Hazmat,
+   Suppressed, Date Added
 
 `COLUMN_GROUPS` array in code is the single source of truth. Both Manage
 Columns panel order and table render order derive from it.
@@ -343,6 +343,7 @@ default — the user enables them per-need:
 - Date Added
 - Category
 - Sourcing
+- Promos (free-text `promo_notes` from the sourcing sheet, §11)
 - Max COGS
 - Est. COGS (when shown as separate from Actual COGS)
 - Meltable, Hazmat, Suppressed (icons appear in Product cell regardless)
@@ -675,6 +676,7 @@ Column mappings:
 | E | 4 | Status | `.toLowerCase().includes("discontinued")` triggers archive (new-insert only) |
 | I | 8 | ASIN | Match key, `.trim()` |
 | N | 13 | Buy Link | Written to `asins.buy_link`; supplier derived via `extractDomain` |
+| O | 14 | Coupons/Gift Cards/Sales | Written to `asins.promo_notes` on the new-ASIN INSERT branch only (asymmetric UPSERT, §14); empty cell → NULL |
 | S | 18 | Est. COGS | Written to `asin_estimates.estimated_cogs`, `estimated_cogs_source = 'csv'` |
 | AP | 41 | VA notes | Combined into `asins.notes` |
 | AS | 44 | My notes | Combined into `asins.notes` |
@@ -703,9 +705,13 @@ so they can never cross.
   "discontinued" (empty status exempts). A single "order" row anywhere keeps
   the ASIN unarchived.
 
-Notes combination: `My notes: {AS}\nVA notes: {AP}` — each line only if that
-cell is non-empty. Both empty → `notes = NULL`. Appended via
-`appendNotesForAsin` so re-inserts dedupe.
+Notes combination: `{AS}\nVA: {AP}` — AS (My notes) renders bare with no
+label; AP (VA notes) gets the short `VA: ` prefix. Each line only if that cell
+is non-empty. Both empty → `notes = NULL`. For new ASINs, notes and
+promo_notes are written atomically on the INSERT branch of the analyze UPSERT
+(never via post-insert append — see §14 asymmetric pattern). The dedup-aware
+`appendNotesForAsin` path applies only to pre-existing ASINs, and only to
+notes — promo_notes has no append path at all.
 
 COGS parsing: Col S goes through the shared `parseMoney` helper
 (`shared/parse-money.ts`) — strips `$`/`,`/whitespace, returns `null` on
@@ -953,6 +959,7 @@ that writes it:
 | `prep_override` | PO sync |
 | `buy_link`, `supplier` | CSV upload / manual edit / Chrome extension |
 | Tags, notes | Manual / CSV upload / Chrome extension |
+| `promo_notes` | Sourcing sync (new-ASIN INSERT branch only — never rewritten on re-sync/re-analyze) |
 | `is_wholesale`, `is_oa` | Manual edit |
 | `is_active` (archive) | Manual edit / Sourcing sync (only on freshly-inserted discontinued rows — never on pre-existing ASINs) |
 | Aura listing cost (external, not an AF column) | Aura cost sync path (§11) — reads `asin_estimates`, writes only to Aura |
@@ -978,7 +985,7 @@ refresh) refreshes Amazon-side data ONLY.
 - `actual_cogs`, `cogs_source`
 - `prep_override`
 - `buy_link`, `supplier`
-- Tags, notes
+- Tags, notes, `promo_notes`
 - `is_wholesale`, `is_oa`
 - `is_active`
 

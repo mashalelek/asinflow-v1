@@ -19,6 +19,7 @@ interface CollapsedNew {
   asin: string;
   cogs: number | null;     // first non-null parsed cogs across this ASIN's rows
   buyLink: string | null;  // first non-empty buy link
+  promoNotes: string | null; // first non-empty Col O cell → promo_notes
   vaNotes: string | null;  // first non-empty AP cell
   myNotes: string | null;  // first non-empty AS cell
   statuses: string[];      // ALL status strings (lowercased+trimmed) for this ASIN
@@ -26,8 +27,8 @@ interface CollapsedNew {
 
 function buildNotes(myNotes: string | null, vaNotes: string | null): string | null {
   const lines: string[] = [];
-  if (myNotes) lines.push(`My notes: ${myNotes}`);
-  if (vaNotes) lines.push(`VA notes: ${vaNotes}`);
+  if (myNotes) lines.push(myNotes);           // AS (My notes) renders bare, no label
+  if (vaNotes) lines.push(`VA: ${vaNotes}`);  // AP gets the short "VA: " prefix
   return lines.length > 0 ? lines.join("\n") : null;
 }
 
@@ -66,6 +67,7 @@ function collapseNewAsinRows(
         asin: row.asin,
         cogs: null,
         buyLink: null,
+        promoNotes: null,
         vaNotes: null,
         myNotes: null,
         statuses: [],
@@ -75,6 +77,7 @@ function collapseNewAsinRows(
     entry.statuses.push(row.status.toLowerCase().trim());
     if (entry.cogs == null && row.cogs != null) entry.cogs = row.cogs;
     if (!entry.buyLink && row.buyLink) entry.buyLink = row.buyLink;
+    if (!entry.promoNotes && row.promoNotes) entry.promoNotes = row.promoNotes;
     if (!entry.vaNotes && row.vaNotes) entry.vaNotes = row.vaNotes;
     if (!entry.myNotes && row.myNotes) entry.myNotes = row.myNotes;
   }
@@ -131,6 +134,7 @@ export async function syncSourcingSheet(
     storageOverride: null,
     tags: null,
     notes: buildNotes(r.myNotes, r.vaNotes),
+    promoNotes: r.promoNotes,
   }));
 
   log(

@@ -9,6 +9,7 @@ import { parseMoney } from "@shared/parse-money";
 const COL_STATUS = 4;     // E  — drives archive on insert
 const COL_ASIN = 8;       // I  — match key
 const COL_BUY_LINK = 13;  // N  — buy_link; supplier derived via extractDomain
+const COL_PROMO = 14;     // O  — "Coupons/Gift Cards/Sales" → promo_notes
 const COL_COGS = 18;      // S  — estimated_cogs, parsed via parseMoney
 const COL_VA_NOTES = 41;  // AP — VA notes
 const COL_MY_NOTES = 44;  // AS — My notes
@@ -18,6 +19,7 @@ export interface RawSourcingRow {
   status: string;
   buyLink: string | null;
   cogs: number | null;
+  promoNotes: string | null;
   vaNotes: string | null;
   myNotes: string | null;
 }
@@ -57,6 +59,7 @@ export async function fetchSourcingSheet(sheetId: string): Promise<RawSourcingRo
 
     const status = (row[COL_STATUS] ?? "").toString();
     const buyLinkRaw = (row[COL_BUY_LINK] ?? "").toString().trim();
+    const promoRaw = (row[COL_PROMO] ?? "").toString().trim();
     const vaNotesRaw = (row[COL_VA_NOTES] ?? "").toString().trim();
     const myNotesRaw = (row[COL_MY_NOTES] ?? "").toString().trim();
 
@@ -65,6 +68,7 @@ export async function fetchSourcingSheet(sheetId: string): Promise<RawSourcingRo
       status,
       buyLink: buyLinkRaw || null,
       cogs: parseMoney(row[COL_COGS]),
+      promoNotes: promoRaw || null,
       vaNotes: vaNotesRaw || null,
       myNotes: myNotesRaw || null,
     });

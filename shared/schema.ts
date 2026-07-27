@@ -27,6 +27,7 @@ export interface AsinInput {
   storageOverride?: number | null;
   tags?: string[] | null;
   notes?: string | null;
+  promoNotes?: string | null; // sourcing sheet Col O — written on new-ASIN INSERT only
 }
 
 export interface PricingData {
@@ -103,6 +104,7 @@ export interface AsinResult {
   hasLiveOffer?: boolean | null;      // live-offer truth (getListingsItem); null = never checked. Drives the catalog icon.
   tags?: { name: string; color: string }[];
   notes?: string | null;
+  promoNotes?: string | null; // sourcing sheet Col O promos — user-controlled, display-only
   isArchived?: boolean;
   isMeltable?: boolean;
   isHazmat?: boolean | null;        // FBA hazmat (INBOUND 0015); null = unchecked
@@ -497,7 +499,7 @@ export const DEFAULT_COLUMNS = [
   // Group 5 — Sellers
   "sellersFba", "sellers", "sellers7d", "sellers30d", "fba7d", "fba30d",
   // Group 6 — Additional info
-  "tags", "notes", "sourcing", "meltable", "hazmat", "dg", "suppressed", "dateAdded",
+  "tags", "notes", "promos", "sourcing", "meltable", "hazmat", "dg", "suppressed", "dateAdded",
 ] as const;
 
 export type ColumnId = (typeof DEFAULT_COLUMNS)[number];
@@ -569,6 +571,7 @@ export const ALL_COLUMNS: ColumnDef[] = [
   // Group 6 — Additional info
   { id: "tags", label: "Tags", defaultVisible: true, align: "left", group: "additional" },
   { id: "notes", label: "Notes", defaultVisible: true, align: "left", group: "additional" },
+  { id: "promos", label: "Promos", defaultVisible: false, align: "left", group: "additional" },
   { id: "sourcing", label: "Sourcing", defaultVisible: false, align: "left", group: "additional" },
   { id: "meltable", label: "Meltable", defaultVisible: false, align: "left", group: "additional" },
   { id: "hazmat", label: "Hazmat", defaultVisible: false, align: "left", group: "additional" },

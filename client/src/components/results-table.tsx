@@ -378,6 +378,7 @@ export function getRowValue(
     }
     case "tags": return result.tags?.map((t) => t.name).join(", ") ?? null;
     case "notes": return result.notes ?? null;
+    case "promos": return result.promoNotes ?? null;
     case "meltable": return result.isMeltable ? "Yes" : "No";
     case "hazmat": return result.isHazmat == null ? "—" : (result.isHazmat ? "Yes" : "No");
     case "dg": return result.isDangerousGood == null ? "—" : (result.isDangerousGood ? "Yes" : "No");
@@ -1555,6 +1556,27 @@ export function renderCell(
         );
       }
       return <span className="text-sm text-muted-foreground">{n}</span>;
+    }
+
+    case "promos": {
+      // Display-only free text (sourcing sheet Col O). No inline edit —
+      // user-controlled via the sheet; same truncate+tooltip pattern as notes.
+      const p = result.promoNotes;
+      if (!p) return <span className="text-muted-foreground text-sm">-</span>;
+      const truncated = p.length > 30 ? p.substring(0, 30) + "..." : p;
+      if (p.length > 30) {
+        return (
+          <Tooltip>
+            <TooltipTrigger asChild>
+              <span className="text-sm text-muted-foreground cursor-help">{truncated}</span>
+            </TooltipTrigger>
+            <TooltipContent side="top" className="max-w-[300px]">
+              <p className="text-xs whitespace-pre-wrap">{p}</p>
+            </TooltipContent>
+          </Tooltip>
+        );
+      }
+      return <span className="text-sm text-muted-foreground">{p}</span>;
     }
 
     case "meltable":

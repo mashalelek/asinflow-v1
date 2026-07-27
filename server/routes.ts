@@ -448,17 +448,20 @@ async function upsertCsvCogs(asin: string, cogs: number): Promise<void> {
 async function upsertAsinResult(
   result: AsinResult,
   notesForNewInsert: string | null = null,
+  promoNotesForNewInsert: string | null = null,
 ): Promise<{ inserted: boolean }> {
   const supplier = extractDomain(result.buyLink);
 
-  // Asymmetric UPSERT for notes (same pattern as estimated_cogs below):
-  //   INSERT branch    — writes notes from notesForNewInsert (CSV/sourcing input).
-  //   ON CONFLICT UPDATE — notes NOT in the SET list (§14 ownership preserved).
+  // Asymmetric UPSERT for notes + promo_notes (same pattern as estimated_cogs
+  // below):
+  //   INSERT branch    — writes both from the CSV/sourcing input.
+  //   ON CONFLICT UPDATE — neither in the SET list (§14 ownership preserved).
   // Existing-ASIN notes get appended (with dedup) by writeResult based on the
-  // `inserted` boolean returned from RETURNING (xmax = 0).
+  // `inserted` boolean returned from RETURNING (xmax = 0). promo_notes has NO
+  // append path — existing ASINs keep their prior value untouched.
   const asinUpsert = await query(
-    `INSERT INTO asins (asin, title, image_url, brand, category, weight_lb, buy_link, supplier, is_meltable, is_hazmat, is_dangerous_good, notes, last_refreshed_at)
-     VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, NOW())
+    `INSERT INTO asins (asin, title, image_url, brand, category, weight_lb, buy_link, supplier, is_meltable, is_hazmat, is_dangerous_good, notes, promo_notes, last_refreshed_at)
+     VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, NOW())
      ON CONFLICT (asin) DO UPDATE SET
        title = COALESCE(EXCLUDED.title, asins.title),
        image_url = COALESCE(EXCLUDED.image_url, asins.image_url),
@@ -488,6 +491,7 @@ async function upsertAsinResult(
       (result.catalogData as any).isHazmat ?? null,
       (result.catalogData as any).isDangerousGood ?? null,
       notesForNewInsert, // $12 — used in INSERT; ignored by UPDATE
+      promoNotesForNewInsert, // $13 — used in INSERT; ignored by UPDATE
     ]
   );
   const inserted = asinUpsert.rows[0]?.inserted === true;
@@ -594,6 +598,7 @@ function writeResult(
   isUpdate = false,
   fromCsvUpload = false,
   inputNotes: string | null = null,
+  inputPromoNotes: string | null = null,
 ): void {
   allResults.set(asin, result);
   emit(JSON.stringify({ type: "result", data: isUpdate ? { ...result, _update: true } : result }) + "\n");
@@ -605,13 +610,16 @@ function writeResult(
       ? upsertCsvCogs(result.asin, result.cogs).catch((err: any) => log(`CSV COGS write error for ${asin}: ${err.message}`, "db"))
       : Promise.resolve();
     csvCogsPromise.then(async () => {
-      // For CSV/sourcing of a brand-new ASIN, notes go in atomically via the
-      // INSERT branch of upsertAsinResult — eliminates the race against
-      // appendNotesForAsin that lost ~152 notes in a recent 7-day window.
+      // For CSV/sourcing of a brand-new ASIN, notes + promo_notes go in
+      // atomically via the INSERT branch of upsertAsinResult — eliminates the
+      // race against appendNotesForAsin that lost ~152 notes in a recent
+      // 7-day window.
       const notesForInsert = fromCsvUpload ? inputNotes : null;
-      const { inserted } = await upsertAsinResult(result, notesForInsert);
+      const promoNotesForInsert = fromCsvUpload ? inputPromoNotes : null;
+      const { inserted } = await upsertAsinResult(result, notesForInsert, promoNotesForInsert);
       // Existing-ASIN path: dedup-aware append. Skipped when the row was just
       // inserted (notes already written by the INSERT branch above).
+      // promo_notes: intentionally NO existing-ASIN write — insert-only.
       if (!inserted && inputNotes) {
         await appendNotesForAsin(result.asin, inputNotes);
       }
@@ -739,7 +747,7 @@ export async function registerRoutes(
       const result = await query(`
         SELECT
           a.asin, a.title, a.image_url, a.brand, a.category, a.weight_lb, a.buy_link, a.is_active,
-          a.primary_sku, a.in_catalog, a.has_live_offer, a.notes, a.is_meltable, a.is_hazmat, a.is_dangerous_good, a.is_search_suppressed, a.suppression_reasons, a.last_reviewed_at, a.added_at, a.is_wholesale, a.is_oa,
+          a.primary_sku, a.in_catalog, a.has_live_offer, a.notes, a.promo_notes, a.is_meltable, a.is_hazmat, a.is_dangerous_good, a.is_search_suppressed, a.suppression_reasons, a.last_reviewed_at, a.added_at, a.is_wholesale, a.is_oa,
           e.cogs, e.cogs_source, e.actual_cogs, e.estimated_cogs, e.estimated_cogs_source, e.prep_override, e.storage_override,
           e.lowest_fba_price, e.buy_box_price, e.buy_box_fulfillment, e.lowest_price,
           e.sellers_fba, e.sellers_fbm,
@@ -920,6 +928,7 @@ export async function registerRoutes(
           hasLiveOffer: row.has_live_offer ?? null,
           tags: tagsMap.get(row.asin) ?? [],
           notes: row.notes ?? null,
+          promoNotes: row.promo_notes ?? null,
           isArchived: row.is_active === false,
           isMeltable: row.is_meltable ?? false,
           // Tri-state preserved: NULL = unchecked (renders as muted dash, never
@@ -2075,10 +2084,10 @@ export async function registerRoutes(
         retryQueue.push({ input, attempt: 1, result });
         log(`Queued ${input.asin} for retry (fees=${retryNeeded.fees}, pricing=${retryNeeded.pricing}, catalog=${retryNeeded.catalog})`, "retry");
         if (!retryNeeded.fees && !retryNeeded.pricing) {
-          writeResult(emit, allResults, input.asin, result, false, fromCsvUpload, input.notes ?? null);
+          writeResult(emit, allResults, input.asin, result, false, fromCsvUpload, input.notes ?? null, input.promoNotes ?? null);
         }
       } else {
-        writeResult(emit, allResults, input.asin, result, false, fromCsvUpload, input.notes ?? null);
+        writeResult(emit, allResults, input.asin, result, false, fromCsvUpload, input.notes ?? null, input.promoNotes ?? null);
       }
 
       // Tags are fire-and-forget — they have their own table and don't race
@@ -2187,7 +2196,7 @@ export async function registerRoutes(
               const finalResult = retryError
                 ? { ...retried, error: retryError }
                 : retried;
-              writeResult(emit, allResults, item.input.asin, finalResult, allResults.has(item.input.asin), fromCsvUpload, item.input.notes ?? null);
+              writeResult(emit, allResults, item.input.asin, finalResult, allResults.has(item.input.asin), fromCsvUpload, item.input.notes ?? null, item.input.promoNotes ?? null);
             }
           } catch (err: any) {
             log(`Retry error for ${item.input.asin}: ${err.message}`, "retry");
@@ -2221,7 +2230,7 @@ export async function registerRoutes(
                 ...finalItem,
                 error: errorMsg ?? finalItem.error,
               };
-              writeResult(emit, allResults, item.input.asin, errorResult, allResults.has(item.input.asin), fromCsvUpload, item.input.notes ?? null);
+              writeResult(emit, allResults, item.input.asin, errorResult, allResults.has(item.input.asin), fromCsvUpload, item.input.notes ?? null, item.input.promoNotes ?? null);
             } else {
               item.attempt = attempt + 1;
             }
@@ -2248,7 +2257,7 @@ export async function registerRoutes(
             ...item.result,
             error: errorMsg,
           };
-          writeResult(emit, allResults, item.input.asin, errorResult, false, fromCsvUpload, item.input.notes ?? null);
+          writeResult(emit, allResults, item.input.asin, errorResult, false, fromCsvUpload, item.input.notes ?? null, item.input.promoNotes ?? null);
         }
       }
       if (uncalculated.length > 0) {
