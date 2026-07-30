@@ -18,7 +18,8 @@ import { syncSalesData } from "./sales-sync";
 import { syncSuppressionData } from "./suppression-sync";
 import { fetchSheetData } from "./google-sheets";
 import { buildVelocityRecords, serializeVelocityCsv, parseMDY, formatYMD, todayLocal } from "./velocity-export";
-import { fetchAllInboundOrders, submitBulkCsv } from "./velocity-api";
+import { fetchAllInboundOrders, submitBulkCsv, updateInboundOrder } from "./velocity-api";
+import { buildVelocityPlan, putBodyFromDiffs, type PlanUpdate } from "./velocity-reconcile";
 import { buildSellerboardCogs, serializeSbCsv } from "./sellerboard-cogs";
 import { syncSourcingSheet } from "./sourcing-sync";
 import { refreshPrices } from "./price-sync";
@@ -1457,6 +1458,115 @@ export async function registerRoutes(
       });
     } catch (err: any) {
       log(`Velocity upload error: ${err?.message ?? err}`, "velocity-upload");
+      res.status(500).json({ message: err?.message ?? String(err) });
+    }
+  });
+
+  // Velocity reconciliation plan (SPEC §11) — read-only. Full classified plan:
+  // creates / updates (field diffs) / delete-candidates (manual list) /
+  // aggregate mismatches (manual-review-only) / unchanged + closed counts.
+  app.get("/api/velocity/plan", async (req: Request, res: Response) => {
+    if (!isDbAvailable()) { res.status(503).json({ message: "Database not available" }); return; }
+    const credPath = process.env.GOOGLE_CREDENTIALS_PATH;
+    if (!credPath || !fs.existsSync(credPath)) { res.status(400).json({ message: "Google credentials file not found" }); return; }
+    if (!process.env.GOOGLE_SHEET_ID) { res.status(400).json({ message: "GOOGLE_SHEET_ID not configured" }); return; }
+    if (!process.env.VELOCITY_API_KEY || !process.env.VELOCITY_WAREHOUSE_ID) { res.status(400).json({ message: "VELOCITY_API_KEY / VELOCITY_WAREHOUSE_ID not configured" }); return; }
+
+    const today = todayLocal();
+    const from = (req.query.from as string) ? parseMDY(req.query.from as string) : today;
+    const to = (req.query.to as string) ? parseMDY(req.query.to as string) : today;
+    if (from === null || to === null) { res.status(400).json({ message: "from/to must be M/D/YYYY" }); return; }
+
+    try {
+      const plan = await buildVelocityPlan(from, to);
+      log(
+        `Velocity plan ${plan.from}..${plan.to}: ${plan.creates.length} create, ${plan.updates.length} update, ${plan.deleteCandidates.length} delete-candidate, ${plan.aggregateMismatches.length} aggregate-mismatch, ${plan.unchanged} unchanged, ${plan.closedInVelocity} closed, ${plan.unmatchedVelocity} unmatched, ${plan.skips.length} skips`,
+        "velocity-reconcile",
+      );
+      res.json(plan);
+    } catch (err: any) {
+      log(`Velocity plan error: ${err?.message ?? err}`, "velocity-reconcile");
+      res.status(500).json({ message: err?.message ?? String(err) });
+    }
+  });
+
+  // Velocity execute (SPEC §11) — executes ONLY the approved plan items in the
+  // body, nothing inferred. Creates re-checked against live Velocity (a
+  // double-execute cannot double-create). Updates via PUT with only changed
+  // fields; pack math pre-validated; target must still be actionable.
+  // aggregate_mismatch items are never accepted here. Per-item results; no
+  // rollback on partial failure.
+  app.post("/api/velocity/execute", async (req: Request, res: Response) => {
+    if (!isDbAvailable()) { res.status(503).json({ message: "Database not available" }); return; }
+    if (!process.env.VELOCITY_API_KEY || !process.env.VELOCITY_WAREHOUSE_ID) { res.status(400).json({ message: "VELOCITY_API_KEY / VELOCITY_WAREHOUSE_ID not configured" }); return; }
+
+    const { creates, updates } = (req.body ?? {}) as { creates?: any[]; updates?: PlanUpdate[] };
+    if (!Array.isArray(creates ?? []) || !Array.isArray(updates ?? [])) {
+      res.status(400).json({ message: "body must be { creates?: VelocityRecord[], updates?: PlanUpdate[] }" }); return;
+    }
+    const toCreate = creates ?? [];
+    const toUpdate = updates ?? [];
+    if (toCreate.length === 0 && toUpdate.length === 0) { res.status(400).json({ message: "empty plan — nothing to execute" }); return; }
+
+    try {
+      const results: any[] = [];
+      const live = await fetchAllInboundOrders();
+      const liveByKey = new Map(live.map((o) => [
+        `${String(o.order_number ?? "").trim()} ${String(o.asin ?? "").trim().toUpperCase()}`, o,
+      ]));
+
+      // Creates: drop anything already present, then one bulk CSV.
+      const createNow = [];
+      for (const r of toCreate) {
+        const key = `${String(r.order_number ?? "").trim()} ${String(r.asin ?? "").trim().toUpperCase()}`;
+        if (liveByKey.has(key)) {
+          results.push({ action: "create", order_number: r.order_number, asin: r.asin, outcome: "skipped_already_in_velocity" });
+        } else {
+          createNow.push(r);
+        }
+      }
+      if (createNow.length > 0) {
+        try {
+          await submitBulkCsv(serializeVelocityCsv(createNow));
+          for (const r of createNow) results.push({ action: "create", order_number: r.order_number, asin: r.asin, outcome: "created" });
+        } catch (err: any) {
+          for (const r of createNow) results.push({ action: "create", order_number: r.order_number, asin: r.asin, outcome: "failed", error: err?.message ?? String(err) });
+        }
+      }
+
+      // Updates: per-order PUT with only the changed fields.
+      for (const u of toUpdate) {
+        const current = live.find((o) => o.order_id === u.order_id);
+        if (!current) { results.push({ action: "update", order_id: u.order_id, order_number: u.order_number, outcome: "failed", error: "order_id not found in Velocity" }); continue; }
+        if (String(current.status ?? "").toLowerCase() !== "inbound") {
+          results.push({ action: "update", order_id: u.order_id, order_number: u.order_number, outcome: "skipped_not_actionable", status: current.status }); continue;
+        }
+        const body = putBodyFromDiffs(u.diffs ?? []);
+        if (Object.keys(body).length === 0) { results.push({ action: "update", order_id: u.order_id, order_number: u.order_number, outcome: "skipped_no_fields" }); continue; }
+        // Pack-math pre-validation on the MERGED post-update state — skip a
+        // doomed PUT rather than send it (Velocity enforces divisibility).
+        const soldAs = String(body.sold_as ?? current.sold_as ?? "").toLowerCase();
+        const qty = Number(body.quantity ?? current.quantity);
+        const upp = body.units_per_pack ?? current.units_per_pack;
+        if (soldAs && soldAs !== "individual") {
+          const uppN = Number(upp);
+          if (!Number.isInteger(uppN) || uppN <= 0 || !Number.isInteger(qty) || qty % uppN !== 0) {
+            results.push({ action: "update", order_id: u.order_id, order_number: u.order_number, outcome: "skipped_invalid_pack_math", quantity: qty, units_per_pack: upp }); continue;
+          }
+        }
+        try {
+          await updateInboundOrder(u.order_id, body);
+          results.push({ action: "update", order_id: u.order_id, order_number: u.order_number, asin: u.asin, outcome: "updated", fields: Object.keys(body) });
+        } catch (err: any) {
+          results.push({ action: "update", order_id: u.order_id, order_number: u.order_number, outcome: "failed", error: err?.message ?? String(err) });
+        }
+      }
+
+      const outcomes = results.reduce((a, r) => { a[r.outcome] = (a[r.outcome] || 0) + 1; return a; }, {} as Record<string, number>);
+      log(`Velocity execute: ${JSON.stringify(outcomes)}`, "velocity-reconcile");
+      res.json({ results, outcomes });
+    } catch (err: any) {
+      log(`Velocity execute error: ${err?.message ?? err}`, "velocity-reconcile");
       res.status(500).json({ message: err?.message ?? String(err) });
     }
   });

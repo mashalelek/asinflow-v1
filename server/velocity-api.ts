@@ -102,8 +102,31 @@ export async function fetchAllInboundOrders(): Promise<VelocityInboundOrder[]> {
   throw new Error(`Velocity pagination did not converge after ${MAX_PAGES} pages — aborting`);
 }
 
+// Update a single order — PUT /inbound/:order_id. Field casing is MIXED per
+// docs (verified 2026-07-30): amazonSKU/orderNumber/itemName are camelCase,
+// but sold_as and units_per_pack stay snake_case; quantity/date as-is.
+// Callers send ONLY changed fields. fulfilledBy is deliberately not in the
+// allowed set — never PUT it (immutable once shipped; we never change
+// fulfillment channel from AF).
+const PUT_ALLOWED_FIELDS = new Set(["quantity", "date", "sold_as", "units_per_pack", "amazonSKU"]);
+export async function updateInboundOrder(orderId: string, fields: Record<string, any>): Promise<any> {
+  const body: Record<string, any> = {};
+  for (const [k, v] of Object.entries(fields)) {
+    if (!PUT_ALLOWED_FIELDS.has(k)) throw new Error(`updateInboundOrder: field ${JSON.stringify(k)} not in the allowed update set`);
+    body[k] = v;
+  }
+  if (Object.keys(body).length === 0) throw new Error("updateInboundOrder: no fields to update");
+  const res = await velocityFetch(`/inbound/${encodeURIComponent(orderId)}`, {
+    method: "PUT",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(body),
+  });
+  return res.data ?? null;
+}
+
 // Submit the bulk CSV — the exact serializeVelocityCsv output, unmodified.
-// Returns the response `data` (order_id per docs; shape not further relied on).
+// Returns the response `data` (order_id per docs; shape not further relied on
+// — bulk mode has been observed returning an empty array).
 export async function submitBulkCsv(csv: string): Promise<any> {
   const form = new FormData();
   form.append("bulk", "true");

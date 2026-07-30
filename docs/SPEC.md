@@ -671,6 +671,91 @@ via `submitBulkCsv` + `listInboundOrders`, then deleted from the Velocity
 dashboard by Maria; the endpoint is cleared for real use only after her
 confirmation.
 
+### Velocity reconciliation (plan → approve → execute)
+
+Replaces "already-in-Velocity → silently drop" with a classified plan.
+`server/velocity-reconcile.ts`; the floor + dedup + plan-approval + aggregate
+check are **layered defenses covering distinct failure classes** — none
+replaces another.
+
+**Match key** (as dedup): normalized `(order_number, asin)` — both trimmed,
+`order_number` exact string, ASIN case-insensitive. Dates are always
+parse-then-compare (Velocity zero-pads `MM/DD/YYYY`).
+
+**Classification** (sheet rows fetched at full range for matching, not just
+the upload window):
+- **CREATE** — sheet row passes all selection rules (date ≥ floor, in
+  requested range, not canceled, prep > 0, live SKU, pack math) and has no
+  Velocity match.
+- **UPDATE** — matched pair where audited fields differ. Audited fields:
+  `quantity`, `date`, `sold_as`, `units_per_pack`, `amazon_sku`. Field-level
+  diffs emitted: `{field, sheet_value, velocity_value}`. Quantity covers the
+  partial-cancel case (supplier OOS). `amazon_sku` is audited only when AF
+  has a live SKU for the ASIN.
+
+  **Assertion rules** (a null/empty sheet value is NO ASSERTION — older sheet
+  rows predate the Velocity columns AX–AZ; writing null over a real Velocity
+  value would be destructive): `quantity` proposes an update only from a
+  **positive integer** (an explicit 0 is full-cancel territory —
+  aggregate/manual, never an update); `date` only when the sheet date parses;
+  `sold_as` only when the cell is non-empty; `units_per_pack` only when the
+  effective sold_as ≠ `individual` (Velocity normalizes individual to null,
+  so "1" vs null is semantically equal) and the cell is non-empty.
+- **DELETE-CANDIDATE** — matched Velocity order whose sheet row is now
+  canceled. The API has **no DELETE endpoint** (POST/GET/PUT only, verified
+  2026-07-30; edit/delete is a dashboard feature) — delete-candidates are a
+  **manual-action list** ("delete these in the Velocity dashboard"), never an
+  automated write. Undocumented endpoints are not probed.
+- **UNCHANGED** — matched, no diffs. Count only.
+- Skips keep the existing taxonomy and appear in the plan.
+
+**Audit scope is bound by Velocity order STATUS, not date.** Only
+still-actionable orders are classified for UPDATE / DELETE-CANDIDATE.
+Actionable = status `inbound` (the only observed value across all 44 orders,
+2026-07-30; docs name `outbound` = shipped — an unknown status is treated as
+closed, fail-safe). Non-actionable orders count as `closed_in_velocity: N`
+and are never audited per-order (changes to shipped orders are moot; keeps
+the audit set small as history grows). **No date floor on reconciliation** —
+pre-floor orders (e.g. the 7/18–19 manual uploads) stay auditable while
+actionable. Velocity orders with no sheet match at all are counted
+(`unmatched_velocity`) but never touched.
+
+**ASIN-level aggregate check** — catches cross-order check-in errors
+per-order auditing structurally cannot see (e.g. units from order B checked
+in under order A's ID). For each ASIN with ≥1 still-actionable Velocity
+order: sum sheet quantities across ALL matched non-canceled orders for that
+ASIN vs. sum Velocity quantities across the same matched orders — INCLUDING
+shipped/received ones (read-only; shipped orders stay excluded from
+per-order UPDATE/DELETE, but their quantities count in the aggregate). The
+comparison runs only when EVERY matched non-canceled order for the ASIN has
+an asserted (non-null) sheet quantity — a pre-Velocity-columns row poisons
+comparability and the ASIN is skipped (partial sums would mislead; explicit
+0 IS an assertion and stays in the sums). Equal
+→ silent. Different → plan category `aggregate_mismatch`: `{asin,
+sheet_total, velocity_total, delta, contributing orders from both sides with
+per-order qty + status}`. **MANUAL-REVIEW ONLY** — never auto-generate an
+update from an aggregate mismatch; the correct fix (adjust the open order vs.
+a Velocity-side recount) needs human context. Execute ignores this category
+unless Maria explicitly includes a specific order-level change she chose
+herself. If everything for an ASIN has shipped, a historical mismatch is moot
+— not reported.
+
+**Approval contract:**
+- `GET /api/velocity/plan?from=&to=` — read-only; full plan JSON: creates
+  (complete records), updates (field diffs), delete-candidates, aggregate
+  mismatches, unchanged + closed counts, skips.
+- `POST /api/velocity/execute` — body carries the approved plan's items;
+  executes ONLY what was submitted, nothing inferred. Creates via
+  `submitBulkCsv` (re-checked against live Velocity so a double-execute
+  cannot double-create); updates via `PUT /inbound/:order_id` sending ONLY
+  the changed fields. PUT casing is MIXED per docs: `amazonSKU` camelCase but
+  `sold_as` / `units_per_pack` snake_case; `quantity` / `date` as-is.
+  **Never PUT `fulfilledBy`.** Pack math is pre-validated (skip with
+  `invalid_pack_math` rather than send a doomed PUT). Velocity errors surface
+  verbatim per-item; partial failures are reported per-item, not rolled back.
+- This endpoint pair IS the approval flow for now (plan → Maria reviews →
+  execute). UI wrapper comes later.
+
 ### SellerBoard COGS export (INTERIM — bandage)
 
 > **Interim, not the target state.** SellerBoard remains the trusted P&L only
