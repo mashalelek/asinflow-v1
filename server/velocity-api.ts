@@ -105,10 +105,24 @@ export async function fetchAllInboundOrders(): Promise<VelocityInboundOrder[]> {
 // Update a single order — PUT /inbound/:order_id. Field casing is MIXED per
 // docs (verified 2026-07-30): amazonSKU/orderNumber/itemName are camelCase,
 // but sold_as and units_per_pack stay snake_case; quantity/date as-is.
-// Callers send ONLY changed fields. fulfilledBy is deliberately not in the
-// allowed set — never PUT it (immutable once shipped; we never change
-// fulfillment channel from AF).
-const PUT_ALLOWED_FIELDS = new Set(["quantity", "date", "sold_as", "units_per_pack", "amazonSKU"]);
+// Velocity's PUT is FULL-REPLACE in practice: the first live PUT
+// (2026-07-30) sent only {quantity} and the API nulled the omitted date
+// ("null value in column \"date\" ... not-null constraint"). Callers must
+// therefore echo the order's current values alongside the changed fields
+// (see routes execute). fulfilledBy is deliberately not in the allowed set —
+// never PUT it (immutable once shipped; we never change fulfillment channel
+// from AF). cogs/listPrice are also excluded: cost privacy — pricing never
+// leaves AF (they are null on our orders anyway).
+// fulfilledBy note: with full-replace PUTs, omitting it nulls the NOT NULL
+// fulfillment_type column — so it must be ECHOED with the order's current
+// value. The rail's intent survives as: never SET fulfilledBy to a different
+// value than the order already has (the audit is quantity-only, so no diff
+// can ever carry it; routes echo current.fulfillment_type verbatim).
+const PUT_ALLOWED_FIELDS = new Set([
+  "quantity", "date", "sold_as", "units_per_pack", "amazonSKU",
+  "retailer", "orderNumber", "itemName", "asin", "fulfilledBy",
+  "trackingNumbers",
+]);
 export async function updateInboundOrder(orderId: string, fields: Record<string, any>): Promise<any> {
   const body: Record<string, any> = {};
   for (const [k, v] of Object.entries(fields)) {

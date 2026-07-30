@@ -748,11 +748,35 @@ herself. If everything for an ASIN has shipped, a historical mismatch is moot
 - `POST /api/velocity/execute` — body carries the approved plan's items;
   executes ONLY what was submitted, nothing inferred. Creates via
   `submitBulkCsv` (re-checked against live Velocity so a double-execute
-  cannot double-create); updates via `PUT /inbound/:order_id` sending ONLY
-  the changed field — with the quantity-only audit that is `quantity`. (PUT
-  casing, should the audit ever widen: MIXED per docs — `amazonSKU` camelCase
-  but `sold_as` / `units_per_pack` snake_case; `quantity` / `date` as-is.)
-  **Never PUT `fulfilledBy`.** Pack math is pre-validated (skip with
+  cannot double-create); updates via `PUT /inbound/:order_id`.
+
+  **⚠️ Velocity's PUT is FULL-REPLACE — their docs claimed partial update
+  and were FALSIFIED by live testing (2026-07-30).** Three observed failure
+  modes on the dress-rehearsal order: (1) `{quantity}` alone → API nulls the
+  omitted `date` (NOT NULL violation); (2) adding the documented field set →
+  nulls `fulfillment_type`; (3) omitting `trackingNumbers` → their handler
+  crashes ("'NoneType' object is not iterable") — an explicit `[]` is
+  required. **Future sessions: trust observed behavior over their docs for
+  this endpoint.**
+
+  Updates therefore send an **echo-merge body**: the order's CURRENT values
+  for `date, retailer, orderNumber, itemName, asin, amazonSKU, sold_as,
+  units_per_pack, fulfilledBy, trackingNumbers`, overridden only by the
+  approved change (quantity-only audit ⇒ only `quantity` can differ).
+  **Echo freshness rule:** the GET that sources echo values happens at
+  EXECUTE time, immediately before the PUT loop — never reuse order values
+  cached from the plan/review fetch. The review screen can sit open for
+  minutes; echoing stale values would full-replace away interim
+  Velocity-side changes. (Casing is MIXED per docs — `amazonSKU`/
+  `orderNumber`/`itemName` camelCase but `sold_as`/`units_per_pack`
+  snake_case; `quantity`/`date` as-is.)
+
+  **`fulfilledBy` rail (reworded for full-replace): never SET it to a
+  different value.** It is echoed verbatim from the order's current
+  `fulfillment_type` because omitting it is impossible under full-replace;
+  structurally no diff can carry it (quantity-only audit). `cogs`/
+  `listPrice` are still never sent (cost privacy; null on our orders and
+  stay null). Pack math is pre-validated (skip with
   `invalid_pack_math` rather than send a doomed PUT). Velocity errors surface
   verbatim per-item; partial failures are reported per-item, not rolled back.
 - This endpoint pair IS the approval flow for now (plan → Maria reviews →

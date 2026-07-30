@@ -1510,6 +1510,11 @@ export async function registerRoutes(
 
     try {
       const results: any[] = [];
+      // ECHO FRESHNESS RULE (SPEC §11): this GET sources the echo-merge
+      // values for full-replace PUTs and MUST happen here, at execute time,
+      // immediately before the write loop — never reuse order values cached
+      // from the plan/review fetch. A review screen open for minutes would
+      // otherwise full-replace away interim Velocity-side changes.
       const live = await fetchAllInboundOrders();
       const liveByKey = new Map(live.map((o) => [
         `${String(o.order_number ?? "").trim()} ${String(o.asin ?? "").trim().toUpperCase()}`, o,
@@ -1554,9 +1559,31 @@ export async function registerRoutes(
             results.push({ action: "update", order_id: u.order_id, order_number: u.order_number, outcome: "skipped_invalid_pack_math", quantity: qty, units_per_pack: upp }); continue;
           }
         }
+        // Velocity's PUT is full-replace (first live PUT nulled the omitted
+        // date → NOT NULL violation). Echo the order's current values for the
+        // documented-safe set, overridden by the approved changes. Never
+        // fulfilledBy; never cogs/listPrice (cost privacy).
+        const putBody = {
+          date: current.date,
+          retailer: current.retailer ?? "",
+          orderNumber: String(current.order_number ?? ""),
+          itemName: current.item_name ?? "",
+          asin: current.asin,
+          amazonSKU: current.amazon_sku ?? "",
+          sold_as: current.sold_as ?? "",
+          units_per_pack: current.units_per_pack ?? null,
+          // ECHO ONLY — full-replace PUT nulls fulfillment_type if omitted.
+          // Always the order's CURRENT value; a change can never originate
+          // here (quantity-only audit; spread of `body` cannot contain it).
+          fulfilledBy: current.fulfillment_type,
+          // Their handler iterates trackingNumbers — omitting it 500s with
+          // "'NoneType' object is not iterable". Echo current (usually []).
+          trackingNumbers: current.trackings ?? [],
+          ...body,
+        };
         try {
-          await updateInboundOrder(u.order_id, body);
-          results.push({ action: "update", order_id: u.order_id, order_number: u.order_number, asin: u.asin, outcome: "updated", fields: Object.keys(body) });
+          await updateInboundOrder(u.order_id, putBody);
+          results.push({ action: "update", order_id: u.order_id, order_number: u.order_number, asin: u.asin, outcome: "updated", fields: Object.keys(body), echoed: Object.keys(putBody).filter((k) => !(k in body)) });
         } catch (err: any) {
           results.push({ action: "update", order_id: u.order_id, order_number: u.order_number, outcome: "failed", error: err?.message ?? String(err) });
         }
