@@ -553,14 +553,28 @@ syncs are "dirty" until the next sync overwrites them with clean Col Y data.
 
 ### Velocity upload export
 
-Exports prep-outsourced orders to the Velocity prep service as a CSV (phase 1;
-an API delivery client will consume the same records in phase 2). Built by
+Exports prep-outsourced orders to the Velocity prep service — as a CSV
+download (phase 1) or pushed directly to Velocity's API (phase 2, next
+subsection); both consume the same records. Built by
 `server/velocity-export.ts` (`buildVelocityRecords(from, to)`) over
 `fetchSheetRows` (per-row PO-sheet view), delivered by
 `GET /api/export/velocity-upload?from=&to=` (both params optional, `M/D/YYYY`,
 default = today; `&dryRun=1` returns counts + skip detail as JSON instead of the
 file). Gated by DB + Google credentials + `GOOGLE_SHEET_ID`, like the other
 sheet integrations.
+
+**Order-date creation floor.** `VELOCITY_MIN_ORDER_DATE` (env, `M/D/YYYY`,
+currently `7/30/2026`): orders dated before it must never be **created** in
+Velocity via any path. The clamp lives inside `buildVelocityRecords` (the
+record builder), so the CSV export and the API upload both inherit it —
+`effective_from = max(requested_from, floor)`; an entire range before the
+floor yields zero records with an explicit `range_before_floor` indication
+(HTTP 400 on both routes). Clamping is reported when it happens ("requested
+7/1..7/30, clamped to 7/30..7/30"). Missing/unparseable floor **fails fast**
+— never defaults to "no floor". Rationale: pre-floor history was uploaded
+manually; recreating it would duplicate or resurrect orders Velocity already
+has. The floor gates CREATION only — reconciliation (below) audits matched
+existing orders regardless of floor.
 
 **Row selection (in order):**
 1. **Order date (Col C, `M/D/YYYY`) within `[from, to]` inclusive.** Parsed by
@@ -582,6 +596,13 @@ itemName}`):
 - `no_live_sku` — no `primary_sku`, or `has_live_offer ≠ TRUE`
 - `missing_quantity` — Col AZ empty on a selected row
 - `unparseable_date` — Col C does not parse
+- `bundle_unsupported` — Col AX `sold_as` is `bundle` (case-insensitive). We
+  don't do bundles, and a flat CSV row can't carry Velocity's `bundle_items`
+  anyway.
+- `invalid_pack_math` — `sold_as` is `multi-pack` AND (Col AY
+  `units_per_pack` is not a positive integer OR Col AZ `quantity` is not
+  divisible by it). Velocity enforces divisibility; catch VA typos before
+  they do.
 
 **Record columns** (exact header + order, CRLF line endings, matches Velocity's
 sample):
@@ -595,6 +616,60 @@ sample):
 
 `buildVelocityRecords` returns `{ records, selfPrepExcluded, skips }` and is
 **delivery-agnostic** — the phase-2 API client consumes the same `records`.
+
+### Velocity API delivery (phase 2)
+
+Pushes the same records straight to Velocity's inbound API instead of a manual
+CSV upload. Docs: `https://docs.velocityprepservices.com/` (introduction,
+warehouses, inbound).
+
+**API client** (`server/velocity-api.ts`):
+- Base URL `https://api.velocityprepservices.com/api/v1`; auth header
+  `Authorization: ApiKey ${VELOCITY_API_KEY}`; warehouse scoping via
+  `X-Warehouse-Id: ${VELOCITY_WAREHOUSE_ID}` header. Both env vars required —
+  fail fast with a clear message if either is missing. (Warehouse 1 =
+  "Velocity Prep Services", code 001, the only/default warehouse as of
+  2026-07-30.)
+- `listInboundOrders({limit, offset, ...})` — `GET /inbound`, paginated
+  (`data.orders[]` + `data.results.total_results`).
+- `submitBulkCsv(csv)` — `POST /inbound` as `multipart/form-data` with
+  `bulk=true` and the CSV attached as `file`. Sends the EXACT
+  `serializeVelocityCsv` output — the format Velocity has accepted from our
+  manual uploads. The per-order form-data path is deliberately NOT built: its
+  required color/brand_sku/unit_cost/list_price fields are blank in our
+  records; the CSV parser tolerates blanks, per-order validation is an
+  unknown we don't need.
+- Any non-2xx or `status ≠ "success"` response is a failure with the API's
+  `errors` array surfaced verbatim. On 429: back off and retry once, then
+  fail.
+
+**Dedup — Velocity is the truth; no local gatekeeper ledger:**
+- Before sending, `listInboundOrders` pages through existing orders
+  (`limit=200` until `total_results` covered; revisit with a date filter if
+  this gets slow).
+- Match key: `(order_number, asin)`, both trimmed; `order_number` compared as
+  an exact string, `asin` case-insensitively.
+- Records matching an existing Velocity order are dropped as
+  **`already_in_velocity: N`** — a separate intentional tally like self-prep,
+  NOT an error. Orders deleted in Velocity are simply absent from the list,
+  so re-upload works with zero special handling.
+- ⚠️ Velocity normalizes `date` to zero-padded `MM/DD/YYYY` on ingest (ours
+  are unpadded `M/D/YYYY`). Irrelevant to the (order_number, asin) key, but
+  any future date-scoped listing/compare must parse dates, never
+  string-compare.
+
+**Endpoint:** `POST /api/upload/velocity?from=&to=` (POST, not GET — it
+writes to an external system). Params as the export. Flow: build → guards →
+dedup → `submitBulkCsv` → JSON report
+`{sent, alreadyInVelocity, selfPrepExcluded, skips[]}`. `&dryRun=1` does
+everything EXCEPT the POST and reports what would be sent.
+
+No cron, no UI button yet — those come only after the first real upload
+succeeds. First-write protocol: a single deliberately-fake row
+(`AF-TEST-001`, obviously-fake item name, qty 1, real ASIN+SKU) round-tripped
+via `submitBulkCsv` + `listInboundOrders`, then deleted from the Velocity
+dashboard by Maria; the endpoint is cleared for real use only after her
+confirmation.
 
 ### SellerBoard COGS export (INTERIM — bandage)
 

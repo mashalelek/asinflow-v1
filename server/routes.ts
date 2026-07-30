@@ -18,6 +18,7 @@ import { syncSalesData } from "./sales-sync";
 import { syncSuppressionData } from "./suppression-sync";
 import { fetchSheetData } from "./google-sheets";
 import { buildVelocityRecords, serializeVelocityCsv, parseMDY, formatYMD, todayLocal } from "./velocity-export";
+import { fetchAllInboundOrders, submitBulkCsv } from "./velocity-api";
 import { buildSellerboardCogs, serializeSbCsv } from "./sellerboard-cogs";
 import { syncSourcingSheet } from "./sourcing-sync";
 import { refreshPrices } from "./price-sync";
@@ -1367,12 +1368,17 @@ export async function registerRoutes(
     const dryRun = ["1", "true"].includes(String(req.query.dryRun ?? "").toLowerCase());
 
     try {
-      const { records, selfPrepExcluded, skips } = await buildVelocityRecords(from, to);
+      const { records, selfPrepExcluded, skips, effectiveFrom, clamped, rangeBeforeFloor } = await buildVelocityRecords(from, to);
+      if (rangeBeforeFloor) {
+        res.status(400).json({ message: `range_before_floor: entire range ${formatYMD(from)}..${formatYMD(to)} is before VELOCITY_MIN_ORDER_DATE — no Velocity records can be created for it`, rangeBeforeFloor: true });
+        return;
+      }
       const skipsByReason = skips.reduce((a, s) => { a[s.reason] = (a[s.reason] || 0) + 1; return a; }, {} as Record<string, number>);
-      log(`Velocity export ${formatYMD(from)}..${formatYMD(to)}: ${records.length} records, ${selfPrepExcluded} self-prep excluded, ${skips.length} skips ${JSON.stringify(skipsByReason)}`, "velocity-export");
+      const clampNote = clamped ? ` (requested ${formatYMD(from)}..${formatYMD(to)}, clamped to ${formatYMD(effectiveFrom)}..${formatYMD(to)} by floor)` : "";
+      log(`Velocity export ${formatYMD(effectiveFrom)}..${formatYMD(to)}: ${records.length} records, ${selfPrepExcluded} self-prep excluded, ${skips.length} skips ${JSON.stringify(skipsByReason)}${clampNote}`, "velocity-export");
 
       if (dryRun) {
-        res.json({ from: formatYMD(from), to: formatYMD(to), records: records.length, selfPrepExcluded, skipCount: skips.length, skipsByReason, skips });
+        res.json({ from: formatYMD(from), to: formatYMD(to), effectiveFrom: formatYMD(effectiveFrom), clamped, records: records.length, selfPrepExcluded, skipCount: skips.length, skipsByReason, skips });
         return;
       }
       const csv = serializeVelocityCsv(records);
@@ -1381,6 +1387,76 @@ export async function registerRoutes(
       res.send(csv);
     } catch (err: any) {
       log(`Velocity export error: ${err?.message ?? err}`, "velocity-export");
+      res.status(500).json({ message: err?.message ?? String(err) });
+    }
+  });
+
+  // Velocity API delivery (phase 2, SPEC §11): POST because it writes to an
+  // external system. Flow: build → guards → dedup (Velocity-as-truth) →
+  // submitBulkCsv. &dryRun=1 does everything EXCEPT the POST.
+  app.post("/api/upload/velocity", async (req: Request, res: Response) => {
+    if (!isDbAvailable()) { res.status(503).json({ message: "Database not available" }); return; }
+    const credPath = process.env.GOOGLE_CREDENTIALS_PATH;
+    if (!credPath || !fs.existsSync(credPath)) { res.status(400).json({ message: "Google credentials file not found" }); return; }
+    if (!process.env.GOOGLE_SHEET_ID) { res.status(400).json({ message: "GOOGLE_SHEET_ID not configured" }); return; }
+    if (!process.env.VELOCITY_API_KEY) { res.status(400).json({ message: "VELOCITY_API_KEY not configured" }); return; }
+    if (!process.env.VELOCITY_WAREHOUSE_ID) { res.status(400).json({ message: "VELOCITY_WAREHOUSE_ID not configured" }); return; }
+
+    const today = todayLocal();
+    const fromStr = (req.query.from as string) || "";
+    const toStr = (req.query.to as string) || "";
+    const from = fromStr ? parseMDY(fromStr) : today;
+    const to = toStr ? parseMDY(toStr) : today;
+    if (from === null || to === null) { res.status(400).json({ message: "from/to must be M/D/YYYY" }); return; }
+    const dryRun = ["1", "true"].includes(String(req.query.dryRun ?? "").toLowerCase());
+
+    try {
+      const { records, selfPrepExcluded, skips, effectiveFrom, clamped, rangeBeforeFloor } = await buildVelocityRecords(from, to);
+      if (rangeBeforeFloor) {
+        res.status(400).json({ message: `range_before_floor: entire range ${formatYMD(from)}..${formatYMD(to)} is before VELOCITY_MIN_ORDER_DATE — creation refused (reconciliation, not upload, audits existing orders)`, rangeBeforeFloor: true });
+        return;
+      }
+      const skipsByReason = skips.reduce((a, s) => { a[s.reason] = (a[s.reason] || 0) + 1; return a; }, {} as Record<string, number>);
+
+      // Dedup — Velocity is the truth. Key: (order_number exact-string,
+      // asin case-insensitive), both trimmed. Orders deleted in Velocity are
+      // absent from the list, so re-upload needs no special handling.
+      const dedupKey = (orderNumber: string, asin: string) =>
+        `${orderNumber.trim()} ${asin.trim().toUpperCase()}`;
+      const existing = await fetchAllInboundOrders();
+      const existingKeys = new Set(
+        existing.map((o) => dedupKey(String(o.order_number ?? ""), String(o.asin ?? ""))),
+      );
+      const toSend = records.filter((r) => !existingKeys.has(dedupKey(r.order_number, r.asin)));
+      const alreadyInVelocity = records.length - toSend.length; // intentional tally, like self-prep
+
+      const clampNote = clamped ? ` (requested ${formatYMD(from)}..${formatYMD(to)}, clamped to ${formatYMD(effectiveFrom)}..${formatYMD(to)} by floor)` : "";
+      log(
+        `Velocity upload${dryRun ? " [DRY-RUN]" : ""} ${formatYMD(effectiveFrom)}..${formatYMD(to)}: ${toSend.length} to send, ${alreadyInVelocity} already in Velocity, ${selfPrepExcluded} self-prep excluded, ${skips.length} skips ${JSON.stringify(skipsByReason)}${clampNote}`,
+        "velocity-upload",
+      );
+
+      if (!dryRun && toSend.length > 0) {
+        await submitBulkCsv(serializeVelocityCsv(toSend));
+        log(`Velocity upload: bulk CSV accepted (${toSend.length} records)`, "velocity-upload");
+      }
+
+      res.json({
+        from: formatYMD(from),
+        to: formatYMD(to),
+        effectiveFrom: formatYMD(effectiveFrom),
+        clamped,
+        dryRun,
+        sent: dryRun ? 0 : toSend.length,
+        wouldSend: dryRun ? toSend.length : undefined,
+        alreadyInVelocity,
+        selfPrepExcluded,
+        skipCount: skips.length,
+        skipsByReason,
+        skips,
+      });
+    } catch (err: any) {
+      log(`Velocity upload error: ${err?.message ?? err}`, "velocity-upload");
       res.status(500).json({ message: err?.message ?? String(err) });
     }
   });

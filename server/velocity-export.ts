@@ -16,7 +16,12 @@ export const VELOCITY_HEADERS = [
 
 export type VelocityRecord = Record<(typeof VELOCITY_HEADERS)[number], string>;
 
-export type VelocitySkipReason = "no_live_sku" | "missing_quantity" | "unparseable_date";
+export type VelocitySkipReason =
+  | "no_live_sku"
+  | "missing_quantity"
+  | "unparseable_date"
+  | "bundle_unsupported"   // sold_as=bundle — we don't do bundles; flat CSV can't carry bundle_items
+  | "invalid_pack_math";   // multi-pack with bad units_per_pack or qty not divisible by it
 export interface VelocitySkip {
   reason: VelocitySkipReason;
   orderNumber: string | null;
@@ -28,6 +33,30 @@ export interface VelocityBuildResult {
   records: VelocityRecord[];
   selfPrepExcluded: number; // Col AS <= 0 / empty — intentional, not a skip
   skips: VelocitySkip[];
+  // Order-date floor (SPEC §11): creation clamp applied inside the builder so
+  // every delivery path (CSV export, API upload) inherits it.
+  requestedFrom: Date;
+  effectiveFrom: Date;      // max(requestedFrom, floor)
+  clamped: boolean;         // effectiveFrom > requestedFrom
+  rangeBeforeFloor: boolean; // entire [from, to] before floor → zero records
+}
+
+// Order-date floor: orders dated before VELOCITY_MIN_ORDER_DATE must never be
+// CREATED in Velocity via any path (pre-floor history was uploaded manually;
+// recreating it would duplicate orders Velocity already has or intentionally
+// closed). Fail-fast: a missing/unparseable floor is a config error, never
+// "no floor". Gates CREATION only — reconciliation audits matched existing
+// orders regardless of floor (SPEC §11).
+export function getVelocityMinOrderDate(): Date {
+  const raw = process.env.VELOCITY_MIN_ORDER_DATE;
+  if (!raw) {
+    throw new Error("VELOCITY_MIN_ORDER_DATE not set (M/D/YYYY) — refusing to build Velocity records without a creation floor");
+  }
+  const d = parseMDY(raw);
+  if (!d) {
+    throw new Error(`VELOCITY_MIN_ORDER_DATE unparseable: ${JSON.stringify(raw)} (expected M/D/YYYY)`);
+  }
+  return d;
 }
 
 // Parse M/D/YYYY into a LOCAL midnight Date. Never new Date(str) — split + numeric
@@ -76,13 +105,23 @@ export async function buildVelocityRecords(
   const sheetId = process.env.GOOGLE_SHEET_ID;
   if (!sheetId) throw new Error("GOOGLE_SHEET_ID not configured");
 
+  // Creation floor clamp (before any sheet fetch — cheap early exit).
+  const floor = getVelocityMinOrderDate();
+  const requestedFrom = from;
+  const effectiveFrom = from.getTime() < floor.getTime() ? floor : from;
+  const clamped = effectiveFrom.getTime() > requestedFrom.getTime();
+  const rangeBeforeFloor = to.getTime() < floor.getTime();
+  if (rangeBeforeFloor) {
+    return { records: [], selfPrepExcluded: 0, skips: [], requestedFrom, effectiveFrom, clamped, rangeBeforeFloor };
+  }
+
   const rows = await fetchSheetRows(sheetId);
   const skips: VelocitySkip[] = [];
   let selfPrepExcluded = 0;
 
-  // Selection: date-range -> not-canceled -> prep > 0.
+  // Selection: date-range (floor-clamped) -> not-canceled -> prep > 0.
   const selected = [];
-  const fromMs = from.getTime(), toMs = to.getTime();
+  const fromMs = effectiveFrom.getTime(), toMs = to.getTime();
   for (const row of rows) {
     const dt = parseMDY(row.orderDate);
     if (dt === null) {
@@ -121,6 +160,21 @@ export async function buildVelocityRecords(
       skips.push({ reason: "missing_quantity", orderNumber: row.orderNumber, asin: row.asin, itemName: row.itemName });
       continue;
     }
+    // Fail-closed guards ahead of Velocity's own validation (SPEC §11 taxonomy).
+    const soldAs = (row.soldAs ?? "").toString().trim().toLowerCase();
+    if (soldAs === "bundle") {
+      skips.push({ reason: "bundle_unsupported", orderNumber: row.orderNumber, asin: row.asin, itemName: row.itemName });
+      continue;
+    }
+    if (soldAs === "multi-pack") {
+      const upp = Number((row.unitsPerPack ?? "").toString().trim());
+      const qty = Number((row.quantity ?? "").toString().trim());
+      // Velocity enforces qty % units_per_pack === 0 — catch VA typos before they do.
+      if (!Number.isInteger(upp) || upp <= 0 || !Number.isInteger(qty) || qty % upp !== 0) {
+        skips.push({ reason: "invalid_pack_math", orderNumber: row.orderNumber, asin: row.asin, itemName: row.itemName });
+        continue;
+      }
+    }
     records.push({
       fulfillment_type: "fba",
       date: row.orderDate ?? "",       // Col C verbatim
@@ -142,5 +196,5 @@ export async function buildVelocityRecords(
     });
   }
 
-  return { records, selfPrepExcluded, skips };
+  return { records, selfPrepExcluded, skips, requestedFrom, effectiveFrom, clamped, rangeBeforeFloor };
 }
