@@ -11,8 +11,6 @@ import Home from "@/pages/home";
 import Analytics from "@/pages/analytics";
 import ComingSoon from "@/pages/coming-soon";
 import PurchaseOrders from "@/pages/purchase-orders";
-import PoNew from "@/pages/po-new";
-import PoDetail from "@/pages/po-detail";
 import { CreditCard, TrendingUp, Truck } from "lucide-react";
 
 function Router() {
@@ -25,8 +23,6 @@ function Router() {
         <Route path="/asins" component={Home} />
         <Route path="/analytics" component={Analytics} />
         <Route path="/purchase-orders" component={PurchaseOrders} />
-        <Route path="/purchase-orders/new" component={PoNew} />
-        <Route path="/purchase-orders/:id" component={PoDetail} />
         <Route path="/gift-cards">
           <ComingSoon title="Gift Cards" icon={CreditCard} />
         </Route>

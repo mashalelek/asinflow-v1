@@ -16,29 +16,6 @@ export function isDbAvailable(): boolean {
   return !!process.env.DATABASE_URL;
 }
 
-/**
- * Run `fn` inside a single pooled client + BEGIN/COMMIT, rolling back on any
- * thrown error. Needed for multi-statement mutations (e.g. PO create → line
- * items → po_asins → po_gift_cards) where the default `query()` would grab a
- * fresh client per call and break transactional guarantees.
- */
-export async function withTransaction<T>(
-  fn: (client: pg.PoolClient) => Promise<T>,
-): Promise<T> {
-  const client = await pool.connect();
-  try {
-    await client.query("BEGIN");
-    const result = await fn(client);
-    await client.query("COMMIT");
-    return result;
-  } catch (e) {
-    try { await client.query("ROLLBACK"); } catch { /* swallow */ }
-    throw e;
-  } finally {
-    client.release();
-  }
-}
-
 export async function ensureUsersTable() {
   await pool.query(`
     CREATE TABLE IF NOT EXISTS users (

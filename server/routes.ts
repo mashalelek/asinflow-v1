@@ -8,7 +8,6 @@ import { getInboundHazmat } from "./inbound-hazmat";
 import { verifyPending, resolveSubmissionManual, getUnverifiedCount, listNeedsAttention, listInFlight } from "./listing-submissions-repo";
 import { runAuraSyncChain } from "./aura-sync-chain";
 import { pushAuraCosts } from "./aura-cost-sync";
-import { registerPoRoutes } from "./po-routes";
 import { log } from "./index";
 import { type AsinInput, type AsinResult, type ColumnMapping, extractDomain } from "@shared/schema";
 import { parseMoney } from "@shared/parse-money";
@@ -712,7 +711,6 @@ export async function registerRoutes(
 ): Promise<Server> {
   // Purchase Orders module (Phase 2). All /api/pos and /api/pos/:id/line-items
   // routes live in po-routes.ts to keep this file from growing further.
-  registerPoRoutes(app);
 
   app.post("/api/verify-password", (req: Request, res: Response) => {
     const { password } = req.body as { password: string };

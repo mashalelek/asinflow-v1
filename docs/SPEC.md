@@ -422,7 +422,14 @@ Items in order:
 - **AsinFlow** (logo, far left)
 - **ASINs** — active route
 - **Analytics** — active route
-- **POs** — disabled, "Soon" badge
+- **POs** — active route, **minimal shell page** (heading + toolbar, no
+  content). The toolbar hosts the "Upload to Velocity" action (§11). The
+  prior PO scaffold (pages, po-routes, po-cogs, purchase_orders/
+  po_line_items/po_asins/po_gift_cards/gift_cards tables, seed data) was
+  removed 2026-07-30 — functional but unused; its tables held only
+  seed/test rows (confirmed disposable). The real PO module arrives later
+  and will be built fresh; Velocity upload is a toolbar ACTION, not page
+  content.
 - **Gift Cards** — disabled, "Soon" badge
 - **Repricer** — disabled, "Soon" badge
 - **Shipments** — disabled, "Soon" badge

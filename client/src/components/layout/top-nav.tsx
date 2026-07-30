@@ -22,7 +22,9 @@ const NAV_ITEMS: NavItem[] = [
 ];
 
 // Routes that opt into the global date picker.
-const DATE_PICKER_ROUTES = ["/", "/asins", "/analytics", "/purchase-orders"];
+// /purchase-orders dropped: the shell page has no date-driven content; the
+// Velocity upload dialog (§11) carries its own date-range picker.
+const DATE_PICKER_ROUTES = ["/", "/asins", "/analytics"];
 // Routes that expose a Settings icon (each page owns its own dialog and
 // listens for the custom event below).
 const SETTINGS_ROUTES = ["/", "/asins"];
