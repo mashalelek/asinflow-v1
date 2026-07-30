@@ -7,7 +7,7 @@
 import { fetchSheetRows } from "./google-sheets";
 import { query as defaultQuery } from "./db";
 import {
-  buildVelocityRecords, parseMDY, formatYMD,
+  buildVelocityRecords, formatYMD,
   type VelocityRecord, type VelocitySkip,
 } from "./velocity-export";
 import { fetchAllInboundOrders, type VelocityInboundOrder } from "./velocity-api";
@@ -20,7 +20,10 @@ type QueryLike = (sql: string, params?: any[]) => Promise<{ rows: any[]; rowCoun
 // don't understand.
 const ACTIONABLE_STATUSES = new Set(["inbound"]);
 
-export type AuditedField = "quantity" | "date" | "sold_as" | "units_per_pack" | "amazon_sku";
+// Per-order audit is QUANTITY ONLY (Maria, 2026-07-30): actionable qty
+// mismatches, not SKU/date noise. sold_as/units_per_pack still pre-validate
+// CREATEs (pack-math guard) — they're just not audited on existing orders.
+export type AuditedField = "quantity";
 
 export interface FieldDiff {
   field: AuditedField;
@@ -80,13 +83,6 @@ export interface VelocityPlan {
 const normKey = (orderNumber: string, asin: string) =>
   `${orderNumber.trim()} ${asin.trim().toUpperCase()}`;
 
-// Dates: parse-then-compare, never string-compare (Velocity zero-pads MM/DD/YYYY).
-function datesEqual(a: string | null | undefined, b: string | null | undefined): boolean {
-  const da = parseMDY(a ?? null), db = parseMDY(b ?? null);
-  if (da === null || db === null) return da === db;
-  return da.getTime() === db.getTime();
-}
-
 function numOrNull(v: any): number | null {
   if (v === null || v === undefined || v === "") return null;
   const n = Number(String(v).trim());
@@ -125,20 +121,6 @@ export async function buildVelocityPlan(
     const existingCanceled = (existing.status ?? "").toLowerCase().includes("canceled");
     const rowCanceled = (row.status ?? "").toLowerCase().includes("canceled");
     if (existingCanceled && !rowCanceled) sheetByKey.set(key, row);
-  }
-
-  // amazon_sku audit needs AF's live primary SKU per matched ASIN.
-  const matchedAsins = Array.from(new Set(
-    velocityOrders.map((o) => String(o.asin ?? "").trim().toUpperCase()).filter(Boolean),
-  ));
-  const skuMap = new Map<string, string>();
-  if (matchedAsins.length) {
-    const res = await query(
-      `SELECT asin, primary_sku FROM asins
-        WHERE has_live_offer = TRUE AND primary_sku IS NOT NULL AND asin = ANY($1)`,
-      [matchedAsins],
-    );
-    for (const r of res.rows) skuMap.set(String(r.asin).toUpperCase(), r.primary_sku);
   }
 
   const updates: PlanUpdate[] = [];
@@ -194,40 +176,15 @@ export async function buildVelocityPlan(
       continue;
     }
 
-    // Field audit (SPEC §11 audited-field list + assertion rules).
-    // A null/empty sheet value is NO ASSERTION — older sheet rows predate the
-    // Velocity columns (AX–AZ); proposing a write of null over a real Velocity
-    // value would be destructive. Assertion rules:
-    //   quantity       — only a POSITIVE INTEGER sheet value proposes an
-    //                    update (0 = full-cancel territory → aggregate/manual,
-    //                    never an update).
-    //   date           — only when the sheet date parses.
-    //   sold_as        — only when the sheet cell is non-empty.
-    //   units_per_pack — only when effective sold_as ≠ individual (Velocity
-    //                    normalizes individual to null; "1" vs null is
-    //                    semantically equal) AND the sheet cell is non-empty.
-    //   amazon_sku     — only when AF has a live SKU for the ASIN.
+    // Field audit — QUANTITY ONLY (SPEC §11). Assertion rules: a null/empty
+    // sheet value is NO ASSERTION (older sheet rows predate the Velocity
+    // columns AX–AZ) — never propose writing over a real Velocity value; only
+    // a POSITIVE INTEGER proposes an update (explicit 0 = full-cancel
+    // territory → aggregate/manual only, never an update).
     const diffs: FieldDiff[] = [];
     const sheetQty = numOrNull(sheetRow.quantity), velQty = numOrNull(o.quantity);
     if (sheetQty !== null && Number.isInteger(sheetQty) && sheetQty > 0 && sheetQty !== velQty) {
       diffs.push({ field: "quantity", sheet_value: sheetQty, velocity_value: velQty });
-    }
-    if (parseMDY(sheetRow.orderDate) !== null && !datesEqual(sheetRow.orderDate, o.date)) {
-      diffs.push({ field: "date", sheet_value: sheetRow.orderDate ?? null, velocity_value: o.date ?? null });
-    }
-    const sheetSoldAs = (sheetRow.soldAs ?? "").toString().trim().toLowerCase() || null;
-    const velSoldAs = (o.sold_as ?? "").toString().trim().toLowerCase() || null;
-    if (sheetSoldAs !== null && sheetSoldAs !== velSoldAs) {
-      diffs.push({ field: "sold_as", sheet_value: sheetSoldAs, velocity_value: velSoldAs });
-    }
-    const effSoldAs = sheetSoldAs ?? velSoldAs;
-    const sheetUpp = numOrNull(sheetRow.unitsPerPack), velUpp = numOrNull(o.units_per_pack);
-    if (effSoldAs !== null && effSoldAs !== "individual" && sheetUpp !== null && sheetUpp !== velUpp) {
-      diffs.push({ field: "units_per_pack", sheet_value: sheetUpp, velocity_value: velUpp });
-    }
-    const liveSku = skuMap.get(asin.trim().toUpperCase());
-    if (liveSku && liveSku !== String(o.amazon_sku ?? "")) {
-      diffs.push({ field: "amazon_sku", sheet_value: liveSku, velocity_value: o.amazon_sku ?? null });
     }
 
     if (diffs.length === 0) { unchanged++; continue; }
@@ -271,18 +228,13 @@ export async function buildVelocityPlan(
   };
 }
 
-// PUT body from a diff list — plan field names → Velocity PUT names. Mixed
-// casing per docs: amazonSKU camelCase, sold_as/units_per_pack snake_case.
+// PUT body from a diff list. Audit is quantity-only, so only quantity ever
+// maps; anything else in a submitted plan is ignored here (and would be
+// rejected by the client's allowed-field set anyway).
 export function putBodyFromDiffs(diffs: FieldDiff[]): Record<string, any> {
   const body: Record<string, any> = {};
   for (const d of diffs) {
-    switch (d.field) {
-      case "quantity": body.quantity = d.sheet_value; break;
-      case "date": body.date = d.sheet_value; break;
-      case "sold_as": body.sold_as = d.sheet_value; break;
-      case "units_per_pack": body.units_per_pack = d.sheet_value; break;
-      case "amazon_sku": body.amazonSKU = d.sheet_value; break;
-    }
+    if (d.field === "quantity") body.quantity = d.sheet_value;
   }
   return body;
 }

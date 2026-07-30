@@ -612,7 +612,9 @@ sample):
   `quantity` = Col AZ verbatim; `asin` = Col H; `amazon_sku` = joined SKU;
   `sold_as` = Col AX verbatim; `units_per_pack` = Col AY verbatim.
 - `color, brand_sku, size, unit_cost, list_price, client_notes, trackings` =
-  empty.
+  empty. `unit_cost` / `list_price` are ALWAYS empty by design — matches the
+  manual-CSV format Velocity has accepted, and COGS/pricing never leaves AF
+  (cost privacy). This holds for every delivery path.
 
 `buildVelocityRecords` returns `{ records, selfPrepExcluded, skips }` and is
 **delivery-agnostic** — the phase-2 API client consumes the same `records`.
@@ -687,20 +689,19 @@ the upload window):
 - **CREATE** — sheet row passes all selection rules (date ≥ floor, in
   requested range, not canceled, prep > 0, live SKU, pack math) and has no
   Velocity match.
-- **UPDATE** — matched pair where audited fields differ. Audited fields:
-  `quantity`, `date`, `sold_as`, `units_per_pack`, `amazon_sku`. Field-level
-  diffs emitted: `{field, sheet_value, velocity_value}`. Quantity covers the
-  partial-cancel case (supplier OOS). `amazon_sku` is audited only when AF
-  has a live SKU for the ASIN.
+- **UPDATE** — matched pair where the audited field differs. The per-order
+  audit is **QUANTITY ONLY**: actionable qty mismatches
+  (`{order_id, asin, sheet_qty, velocity_qty}` via the diff), not SKU/date
+  noise — amazon_sku, date, sold_as, units_per_pack are deliberately NOT
+  audited on existing orders (sold_as / units_per_pack still pre-validate
+  CREATEs via the pack-math guard). Quantity covers the partial-cancel case
+  (supplier OOS).
 
   **Assertion rules** (a null/empty sheet value is NO ASSERTION — older sheet
   rows predate the Velocity columns AX–AZ; writing null over a real Velocity
   value would be destructive): `quantity` proposes an update only from a
-  **positive integer** (an explicit 0 is full-cancel territory —
-  aggregate/manual, never an update); `date` only when the sheet date parses;
-  `sold_as` only when the cell is non-empty; `units_per_pack` only when the
-  effective sold_as ≠ `individual` (Velocity normalizes individual to null,
-  so "1" vs null is semantically equal) and the cell is non-empty.
+  **positive integer**; an explicit 0 is full-cancel territory —
+  aggregate/manual, never an update.
 - **DELETE-CANDIDATE** — matched Velocity order whose sheet row is now
   canceled. The API has **no DELETE endpoint** (POST/GET/PUT only, verified
   2026-07-30; edit/delete is a dashboard feature) — delete-candidates are a
@@ -748,8 +749,9 @@ herself. If everything for an ASIN has shipped, a historical mismatch is moot
   executes ONLY what was submitted, nothing inferred. Creates via
   `submitBulkCsv` (re-checked against live Velocity so a double-execute
   cannot double-create); updates via `PUT /inbound/:order_id` sending ONLY
-  the changed fields. PUT casing is MIXED per docs: `amazonSKU` camelCase but
-  `sold_as` / `units_per_pack` snake_case; `quantity` / `date` as-is.
+  the changed field — with the quantity-only audit that is `quantity`. (PUT
+  casing, should the audit ever widen: MIXED per docs — `amazonSKU` camelCase
+  but `sold_as` / `units_per_pack` snake_case; `quantity` / `date` as-is.)
   **Never PUT `fulfilledBy`.** Pack math is pre-validated (skip with
   `invalid_pack_math` rather than send a doomed PUT). Velocity errors surface
   verbatim per-item; partial failures are reported per-item, not rolled back.
