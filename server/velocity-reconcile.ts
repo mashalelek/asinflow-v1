@@ -1,9 +1,13 @@
 // Velocity reconciliation — plan → approve → execute (SPEC §11 "Velocity
 // reconciliation"). Replaces "already-in-Velocity → silently drop" with a
-// classified plan: CREATE / UPDATE (field diffs) / DELETE-CANDIDATE (manual
-// list — the API has no DELETE endpoint) / UNCHANGED, plus the ASIN-level
-// aggregate check (manual-review-only). Floor + dedup + plan-approval +
-// aggregate check are layered defenses over distinct failure classes.
+// classified plan: CREATE / UPDATE (quantity diffs) / DELETE-CANDIDATE
+// (manual list — the API has no DELETE endpoint) / UNCHANGED.
+// Shipped/received matched pairs ARE compared and included when mismatched,
+// marked actionable:false (flag-only — no PUT ever targets them). This
+// per-PO comparison including shipped orders is what catches the cross-order
+// check-in case (a partial cancel on the sheet vs. a full check-in in
+// Velocity is a per-PO mismatch on that order) — the former ASIN-level
+// aggregate check was removed 2026-07-30 as redundant with it.
 import { fetchSheetRows } from "./google-sheets";
 import { query as defaultQuery } from "./db";
 import {
@@ -37,6 +41,9 @@ export interface PlanUpdate {
   asin: string;
   status: string;
   item_name: string | null;
+  // false = shipped/received (or unknown status): displayed as a flag only —
+  // no checkbox in the UI, never a PUT target (SPEC §11).
+  actionable: boolean;
   diffs: FieldDiff[];
 }
 
@@ -49,32 +56,16 @@ export interface PlanDeleteCandidate {
   sheet_status: string; // the canceled status text that triggered this
 }
 
-export interface AggregateOrderLine {
-  order_number: string;
-  side: "sheet" | "velocity";
-  quantity: number | null;
-  status: string; // velocity status, or sheet status text
-}
-
-export interface AggregateMismatch {
-  asin: string;
-  sheet_total: number;
-  velocity_total: number;
-  delta: number; // sheet_total - velocity_total
-  orders: AggregateOrderLine[];
-}
-
 export interface VelocityPlan {
   from: string;               // YMD
   to: string;                 // YMD
   effectiveFrom: string;      // YMD (creation floor applied to creates only)
   clamped: boolean;
   creates: VelocityRecord[];
-  updates: PlanUpdate[];
+  updates: PlanUpdate[];      // incl. actionable:false shipped-pair mismatches (flag-only)
   deleteCandidates: PlanDeleteCandidate[]; // manual dashboard action — no API DELETE exists
-  aggregateMismatches: AggregateMismatch[]; // MANUAL REVIEW ONLY — execute never consumes these
   unchanged: number;
-  closedInVelocity: number;   // matched but no longer actionable — never audited per-order
+  closedInVelocity: number;   // matched, not actionable, no qty mismatch (or moot-canceled)
   unmatchedVelocity: number;  // Velocity orders with no sheet row — counted, never touched
   selfPrepExcluded: number;
   skips: VelocitySkip[];
@@ -127,15 +118,6 @@ export async function buildVelocityPlan(
   const deleteCandidates: PlanDeleteCandidate[] = [];
   let unchanged = 0, closedInVelocity = 0, unmatchedVelocity = 0;
 
-  // Per-ASIN aggregate bookkeeping over MATCHED, non-canceled orders — all
-  // statuses included in the sums; the actionable flag only gates reporting.
-  // Comparable only when EVERY matched non-canceled order for the ASIN has an
-  // asserted (non-null) sheet quantity — partial sums would mislead. An
-  // explicit 0 IS an assertion (e.g. supplier-canceled qty) and stays in the
-  // sums; a null (pre-Velocity-columns row) poisons comparability.
-  interface AggEntry { sheet: number; velocity: number; lines: AggregateOrderLine[]; hasActionable: boolean; countable: boolean; hasUnasserted: boolean }
-  const agg = new Map<string, AggEntry>();
-
   const matchedVelocityByKey = new Map<string, VelocityInboundOrder>();
 
   for (const o of velocityOrders) {
@@ -150,47 +132,38 @@ export async function buildVelocityPlan(
     const actionable = ACTIONABLE_STATUSES.has(status);
     const sheetCanceled = (sheetRow.status ?? "").toLowerCase().includes("canceled");
 
-    // Aggregate sums: matched + sheet-row-not-canceled, ALL statuses.
-    if (!sheetCanceled) {
-      const asinKey = asin.trim().toUpperCase();
-      let e = agg.get(asinKey);
-      if (!e) { e = { sheet: 0, velocity: 0, lines: [], hasActionable: false, countable: false, hasUnasserted: false }; agg.set(asinKey, e); }
-      const sheetQty = numOrNull(sheetRow.quantity);
-      const velQty = numOrNull(o.quantity);
-      if (sheetQty === null) e.hasUnasserted = true;
-      e.sheet += sheetQty ?? 0;
-      e.velocity += velQty ?? 0;
-      e.countable = true;
-      e.hasActionable = e.hasActionable || actionable;
-      e.lines.push({ order_number: orderNumber, side: "sheet", quantity: sheetQty, status: sheetRow.status ?? "" });
-      e.lines.push({ order_number: orderNumber, side: "velocity", quantity: velQty, status });
-    }
-
-    if (!actionable) { closedInVelocity++; continue; } // shipped/received/unknown — moot
-
     if (sheetCanceled) {
-      deleteCandidates.push({
-        order_id: o.order_id, order_number: orderNumber, asin,
-        status, item_name: o.item_name ?? null, sheet_status: sheetRow.status ?? "",
-      });
+      // Delete-candidate only while actionable; a shipped order for a
+      // canceled sheet row is moot.
+      if (actionable) {
+        deleteCandidates.push({
+          order_id: o.order_id, order_number: orderNumber, asin,
+          status, item_name: o.item_name ?? null, sheet_status: sheetRow.status ?? "",
+        });
+      } else {
+        closedInVelocity++;
+      }
       continue;
     }
 
-    // Field audit — QUANTITY ONLY (SPEC §11). Assertion rules: a null/empty
-    // sheet value is NO ASSERTION (older sheet rows predate the Velocity
-    // columns AX–AZ) — never propose writing over a real Velocity value; only
-    // a POSITIVE INTEGER proposes an update (explicit 0 = full-cancel
-    // territory → aggregate/manual only, never an update).
+    // Quantity audit — ALL matched pairs, shipped/received included (SPEC
+    // §11): a shipped-pair mismatch is displayed flag-only (actionable:false,
+    // no checkbox, never a PUT). This per-PO comparison incl. shipped orders
+    // is what catches the cross-order check-in case; the former ASIN-level
+    // aggregate check was removed as redundant with it. Assertion rules: a
+    // null/empty sheet value is NO ASSERTION (older sheet rows predate the
+    // Velocity columns AX–AZ); only a POSITIVE INTEGER proposes/flags a
+    // mismatch (explicit 0 = full-cancel territory → manual, never an update).
     const diffs: FieldDiff[] = [];
     const sheetQty = numOrNull(sheetRow.quantity), velQty = numOrNull(o.quantity);
     if (sheetQty !== null && Number.isInteger(sheetQty) && sheetQty > 0 && sheetQty !== velQty) {
       diffs.push({ field: "quantity", sheet_value: sheetQty, velocity_value: velQty });
     }
 
-    if (diffs.length === 0) { unchanged++; continue; }
+    if (diffs.length === 0) { actionable ? unchanged++ : closedInVelocity++; continue; }
     updates.push({
       order_id: o.order_id, order_number: orderNumber, asin,
-      status, item_name: o.item_name ?? null, diffs,
+      status, item_name: o.item_name ?? null, actionable, diffs,
     });
   }
 
@@ -198,18 +171,6 @@ export async function buildVelocityPlan(
   const creates = build.records.filter(
     (r) => !matchedVelocityByKey.has(normKey(r.order_number, r.asin)),
   );
-
-  // Aggregate mismatches: only ASINs with ≥1 still-actionable order (all-
-  // shipped mismatches are moot), sums over ALL matched non-canceled orders.
-  const aggregateMismatches: AggregateMismatch[] = [];
-  for (const [asin, e] of Array.from(agg.entries())) {
-    if (!e.countable || !e.hasActionable || e.hasUnasserted) continue;
-    if (e.sheet === e.velocity) continue;
-    aggregateMismatches.push({
-      asin, sheet_total: e.sheet, velocity_total: e.velocity,
-      delta: e.sheet - e.velocity, orders: e.lines,
-    });
-  }
 
   return {
     from: formatYMD(from),
@@ -219,7 +180,6 @@ export async function buildVelocityPlan(
     creates,
     updates,
     deleteCandidates,
-    aggregateMismatches,
     unchanged,
     closedInVelocity,
     unmatchedVelocity,

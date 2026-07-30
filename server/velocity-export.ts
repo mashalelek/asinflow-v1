@@ -27,6 +27,16 @@ export interface VelocitySkip {
   orderNumber: string | null;
   asin: string;
   itemName: string | null;
+  // Verbatim sheet fields for the skipped row — lets the Upload-to-Velocity
+  // dialog promote a fixed row (e.g. after Create SKU & include) into NEW
+  // ORDERS without re-fetching the whole set (SPEC §11).
+  row?: {
+    date: string | null;
+    retailer: string | null;
+    quantity: string | null;
+    soldAs: string | null;
+    unitsPerPack: string | null;
+  };
 }
 
 export interface VelocityBuildResult {
@@ -153,17 +163,17 @@ export async function buildVelocityRecords(
   for (const row of selected) {
     const sku = skuMap.get(row.asin);
     if (!sku) {
-      skips.push({ reason: "no_live_sku", orderNumber: row.orderNumber, asin: row.asin, itemName: row.itemName });
+      skips.push({ reason: "no_live_sku", orderNumber: row.orderNumber, asin: row.asin, itemName: row.itemName, row: { date: row.orderDate ?? null, retailer: row.retailer ?? null, quantity: row.quantity ?? null, soldAs: row.soldAs ?? null, unitsPerPack: row.unitsPerPack ?? null } });
       continue;
     }
     if (row.quantity == null || row.quantity === "") {
-      skips.push({ reason: "missing_quantity", orderNumber: row.orderNumber, asin: row.asin, itemName: row.itemName });
+      skips.push({ reason: "missing_quantity", orderNumber: row.orderNumber, asin: row.asin, itemName: row.itemName, row: { date: row.orderDate ?? null, retailer: row.retailer ?? null, quantity: row.quantity ?? null, soldAs: row.soldAs ?? null, unitsPerPack: row.unitsPerPack ?? null } });
       continue;
     }
     // Fail-closed guards ahead of Velocity's own validation (SPEC §11 taxonomy).
     const soldAs = (row.soldAs ?? "").toString().trim().toLowerCase();
     if (soldAs === "bundle") {
-      skips.push({ reason: "bundle_unsupported", orderNumber: row.orderNumber, asin: row.asin, itemName: row.itemName });
+      skips.push({ reason: "bundle_unsupported", orderNumber: row.orderNumber, asin: row.asin, itemName: row.itemName, row: { date: row.orderDate ?? null, retailer: row.retailer ?? null, quantity: row.quantity ?? null, soldAs: row.soldAs ?? null, unitsPerPack: row.unitsPerPack ?? null } });
       continue;
     }
     if (soldAs === "multi-pack") {
@@ -171,7 +181,7 @@ export async function buildVelocityRecords(
       const qty = Number((row.quantity ?? "").toString().trim());
       // Velocity enforces qty % units_per_pack === 0 — catch VA typos before they do.
       if (!Number.isInteger(upp) || upp <= 0 || !Number.isInteger(qty) || qty % upp !== 0) {
-        skips.push({ reason: "invalid_pack_math", orderNumber: row.orderNumber, asin: row.asin, itemName: row.itemName });
+        skips.push({ reason: "invalid_pack_math", orderNumber: row.orderNumber, asin: row.asin, itemName: row.itemName, row: { date: row.orderDate ?? null, retailer: row.retailer ?? null, quantity: row.quantity ?? null, soldAs: row.soldAs ?? null, unitsPerPack: row.unitsPerPack ?? null } });
         continue;
       }
     }

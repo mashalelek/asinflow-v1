@@ -1460,9 +1460,10 @@ export async function registerRoutes(
     }
   });
 
-  // Velocity reconciliation plan (SPEC §11) — read-only. Full classified plan:
-  // creates / updates (field diffs) / delete-candidates (manual list) /
-  // aggregate mismatches (manual-review-only) / unchanged + closed counts.
+  // Velocity reconciliation (SPEC §11) — read-only. Full classified result:
+  // creates / updates (quantity diffs; actionable:false = shipped-pair
+  // mismatch, flag-only) / delete-candidates (manual list) / unchanged +
+  // closed counts. Feeds the "Upload to Velocity" dialog.
   app.get("/api/velocity/plan", async (req: Request, res: Response) => {
     if (!isDbAvailable()) { res.status(503).json({ message: "Database not available" }); return; }
     const credPath = process.env.GOOGLE_CREDENTIALS_PATH;
@@ -1478,7 +1479,7 @@ export async function registerRoutes(
     try {
       const plan = await buildVelocityPlan(from, to);
       log(
-        `Velocity plan ${plan.from}..${plan.to}: ${plan.creates.length} create, ${plan.updates.length} update, ${plan.deleteCandidates.length} delete-candidate, ${plan.aggregateMismatches.length} aggregate-mismatch, ${plan.unchanged} unchanged, ${plan.closedInVelocity} closed, ${plan.unmatchedVelocity} unmatched, ${plan.skips.length} skips`,
+        `Velocity plan ${plan.from}..${plan.to}: ${plan.creates.length} create, ${plan.updates.length} update (${plan.updates.filter((u) => !u.actionable).length} shipped/flag-only), ${plan.deleteCandidates.length} delete-candidate, ${plan.unchanged} unchanged, ${plan.closedInVelocity} closed, ${plan.unmatchedVelocity} unmatched, ${plan.skips.length} skips`,
         "velocity-reconcile",
       );
       res.json(plan);
@@ -1488,12 +1489,12 @@ export async function registerRoutes(
     }
   });
 
-  // Velocity execute (SPEC §11) — executes ONLY the approved plan items in the
+  // Velocity execute (SPEC §11) — executes ONLY the approved items in the
   // body, nothing inferred. Creates re-checked against live Velocity (a
-  // double-execute cannot double-create). Updates via PUT with only changed
-  // fields; pack math pre-validated; target must still be actionable.
-  // aggregate_mismatch items are never accepted here. Per-item results; no
-  // rollback on partial failure.
+  // double-execute cannot double-create). Updates via echo-merge full-replace
+  // PUT; pack math pre-validated; target must still be actionable (shipped
+  // flag-only mismatches are refused here by the live status re-check).
+  // Per-item results; no rollback on partial failure.
   app.post("/api/velocity/execute", async (req: Request, res: Response) => {
     if (!isDbAvailable()) { res.status(503).json({ message: "Database not available" }); return; }
     if (!process.env.VELOCITY_API_KEY || !process.env.VELOCITY_WAREHOUSE_ID) { res.status(400).json({ message: "VELOCITY_API_KEY / VELOCITY_WAREHOUSE_ID not configured" }); return; }

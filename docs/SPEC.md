@@ -707,8 +707,15 @@ the upload window):
   **Assertion rules** (a null/empty sheet value is NO ASSERTION — older sheet
   rows predate the Velocity columns AX–AZ; writing null over a real Velocity
   value would be destructive): `quantity` proposes an update only from a
-  **positive integer**; an explicit 0 is full-cancel territory —
-  aggregate/manual, never an update.
+  **positive integer**; an explicit 0 is full-cancel territory — manual
+  review, never an update.
+
+  **Shipped/received pairs are compared too.** The quantity comparison runs
+  on ALL matched pairs regardless of Velocity status; a mismatch on a
+  shipped/received (or unknown-status) order is included in `updates` with
+  `actionable: false` — displayed as a flag (amber, "not editable — order
+  already shipped"), no checkbox, never a PUT target. Execute independently
+  re-checks live status, so a stale flag can't be forced through.
 - **DELETE-CANDIDATE** — matched Velocity order whose sheet row is now
   canceled. The API has **no DELETE endpoint** (POST/GET/PUT only, verified
   2026-07-30; edit/delete is a dashboard feature) — delete-candidates are a
@@ -728,30 +735,19 @@ pre-floor orders (e.g. the 7/18–19 manual uploads) stay auditable while
 actionable. Velocity orders with no sheet match at all are counted
 (`unmatched_velocity`) but never touched.
 
-**ASIN-level aggregate check** — catches cross-order check-in errors
-per-order auditing structurally cannot see (e.g. units from order B checked
-in under order A's ID). For each ASIN with ≥1 still-actionable Velocity
-order: sum sheet quantities across ALL matched non-canceled orders for that
-ASIN vs. sum Velocity quantities across the same matched orders — INCLUDING
-shipped/received ones (read-only; shipped orders stay excluded from
-per-order UPDATE/DELETE, but their quantities count in the aggregate). The
-comparison runs only when EVERY matched non-canceled order for the ASIN has
-an asserted (non-null) sheet quantity — a pre-Velocity-columns row poisons
-comparability and the ASIN is skipped (partial sums would mislead; explicit
-0 IS an assertion and stays in the sums). Equal
-→ silent. Different → plan category `aggregate_mismatch`: `{asin,
-sheet_total, velocity_total, delta, contributing orders from both sides with
-per-order qty + status}`. **MANUAL-REVIEW ONLY** — never auto-generate an
-update from an aggregate mismatch; the correct fix (adjust the open order vs.
-a Velocity-side recount) needs human context. Execute ignores this category
-unless Maria explicitly includes a specific order-level change she chose
-herself. If everything for an ASIN has shipped, a historical mismatch is moot
-— not reported.
+**ASIN-level aggregate check — REMOVED (2026-07-30).** The former aggregate
+category (per-ASIN sheet-total vs. Velocity-total sums) was deleted, not
+hidden. Rationale: per-PO quantity comparison on matched pairs — INCLUDING
+shipped/received orders (flag-only, no action) — catches the cross-order
+check-in case directly: a partial cancel on the sheet vs. a full check-in in
+Velocity is a per-PO mismatch on that order. Dead code with opinions is a
+hazard; remove, don't hide.
 
 **Approval contract:**
-- `GET /api/velocity/plan?from=&to=` — read-only; full plan JSON: creates
-  (complete records), updates (field diffs), delete-candidates, aggregate
-  mismatches, unchanged + closed counts, skips.
+- `GET /api/velocity/plan?from=&to=` — read-only; full JSON: creates
+  (complete records), updates (quantity diffs, `actionable` flag),
+  delete-candidates, unchanged + closed counts, skips. (Endpoint name is
+  internal — the UI never says "plan", see the dialog spec below.)
 - `POST /api/velocity/execute` — body carries the approved plan's items;
   executes ONLY what was submitted, nothing inferred. Creates via
   `submitBulkCsv` (re-checked against live Velocity so a double-execute
@@ -786,8 +782,52 @@ herself. If everything for an ASIN has shipped, a historical mismatch is moot
   stay null). Pack math is pre-validated (skip with
   `invalid_pack_math` rather than send a doomed PUT). Velocity errors surface
   verbatim per-item; partial failures are reported per-item, not rolled back.
-- This endpoint pair IS the approval flow for now (plan → Maria reviews →
-  execute). UI wrapper comes later.
+- The "Upload to Velocity" dialog (below) is the approval flow: review →
+  select → send.
+
+### Upload to Velocity dialog
+
+Single-user tool (Maria) — no VA-oriented affordances, no sub-page, no
+history view, no scheduled/auto anything. UI vocabulary: **"Upload to
+Velocity"** — the word "plan" appears NOWHERE in the UI (internal endpoint
+names are unchanged).
+
+**Entry point:** "Upload to Velocity" button in the POs shell toolbar (§8).
+Not added to the ASINs toolbar (already crowded — deliberate skip).
+
+**Full-screen dialog** (Add-to-SC preview pattern: wide `DialogContent`,
+scrollable sections, §7 design system, no new structural colors; portal like
+the SKU popup if stacking demands it — no z-index arms races).
+
+Flow:
+1. **Header**: date-range picker, default today. Changing it re-fetches.
+2. On open, fetch the reconciliation for the range; sections in order:
+   a. **NEW ORDERS** — full record rows (date, retailer, order #, item, qty,
+      sold_as/upp, ASIN, SKU). Checkboxes **PRE-TICKED**; uncheck to
+      exclude.
+   b. **QTY MISMATCHES** — order # · ASIN · sheet qty vs Velocity qty.
+      Checkboxes **UNTICKED** (opt-in per row → becomes a quantity PUT).
+      Shipped/received mismatches: displayed, amber per §7, no checkbox,
+      label "not editable — order already shipped".
+   c. **SKIPPED** — rows with reasons. `no_live_sku` rows get a
+      **"Create SKU & include"** action: runs the §18 offer-add for that
+      ASIN via the existing batch flow; on ACCEPTED (standing rule) the row
+      shows the resulting SKU inline and moves into NEW ORDERS pre-ticked —
+      same dialog, no re-fetch of the whole set, row expands inline (no
+      nested modal). Gated/dead ASINs: reason shown, excluded, no button.
+   d. Collapsed one-line counts: unchanged / **shipped** / unmatched —
+      expandable, display-only. UI vocabulary is "shipped", never "closed"
+      ("closed" collides with the Orders-sheet status vocabulary and reads
+      as a closed PO); the internal category key stays `closedInVelocity`.
+      Explainer: "Shipped — matched orders already shipped/received with no
+      quantity mismatch; not editable." — unified with the "order already
+      shipped" tag on mismatch rows.
+3. **Footer**: "Send to Velocity (N)" — count reflects current selections.
+   Confirmation states exactly what fires: X new orders, Y quantity
+   updates. On confirm: POST execute with the selected items only.
+4. **Results** render per-row in the same dialog: green success / red
+   failure with Velocity's error text verbatim. Dialog stays open until
+   closed manually.
 
 ### SellerBoard COGS export (INTERIM — bandage)
 
