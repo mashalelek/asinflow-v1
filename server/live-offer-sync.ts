@@ -5,8 +5,12 @@
 //
 // ONE implementation, multiple entry points:
 //   - 07:00 cron           → full scope (re-checks all, oldest offer_checked_at first)
-//   - end of inventory-sync → { onlyUnchecked: true } (has_live_offer IS NULL only),
-//                             scoped to the same asinFilter the inventory sync used
+//   - end of inventory-sync → { notLiveOnly: true } (has_live_offer IS DISTINCT FROM
+//                             TRUE — never-checked NULL and stale FALSE alike; listings
+//                             are created/deleted constantly, so a FALSE goes stale and
+//                             nothing else rechecks it), scoped to the same asinFilter
+//                             the inventory sync used. TRUE rows are excluded — only
+//                             the full-scope cron re-verifies confirmed-live rows.
 //
 // No-SKU ASINs are EXCLUDED at the query level: there is nothing to probe, so
 // re-checking them daily would be permanent wasted iteration. They stay NULL
@@ -35,7 +39,7 @@ export async function syncLiveOffers(
     query?: QueryLike;
     sellerId?: string;
     pacingMs?: number;
-    onlyUnchecked?: boolean;                 // has_live_offer IS NULL only (inventory-sync entry point)
+    notLiveOnly?: boolean;                   // has_live_offer IS DISTINCT FROM TRUE (inventory-sync entry point)
     asinFilter?: ReadonlySet<string>;        // restrict to these ASINs (mirrors inventory-sync's filter)
   } = {},
 ): Promise<LiveOfferSyncSummary> {
@@ -46,10 +50,10 @@ export async function syncLiveOffers(
   if (!sellerId) throw new Error("SP_API_SELLER_ID not set");
 
   // in_catalog=TRUE AND has >=1 SKU. No-SKU ASINs are excluded (see header).
-  // Optional onlyUnchecked (NULL-scope) and asinFilter narrow it further.
+  // Optional notLiveOnly (NULL + FALSE scope) and asinFilter narrow it further.
   const conds = ["a.in_catalog = TRUE", "EXISTS (SELECT 1 FROM asin_skus s WHERE s.asin_id = a.id)"];
   const params: any[] = [];
-  if (opts.onlyUnchecked) conds.push("a.has_live_offer IS NULL");
+  if (opts.notLiveOnly) conds.push("a.has_live_offer IS DISTINCT FROM TRUE");
   if (opts.asinFilter && opts.asinFilter.size > 0) {
     params.push(Array.from(opts.asinFilter));
     conds.push(`a.asin = ANY($${params.length}::text[])`);
@@ -77,7 +81,7 @@ export async function syncLiveOffers(
     await sleep(pacingMs);
   }
 
-  const scope = `${opts.onlyUnchecked ? "unchecked-scope" : "full"}${opts.asinFilter?.size ? ", filtered" : ""}`;
+  const scope = `${opts.notLiveOnly ? "not-live-scope" : "full"}${opts.asinFilter?.size ? ", filtered" : ""}`;
   log(
     `Live-offer sync complete (${scope}): ${s.total} probed — ${s.live} live, ${s.noOffer} no_offer, ` +
     `${s.transient} transient-skipped (unwritten, retry next run)`,

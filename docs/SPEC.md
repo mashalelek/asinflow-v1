@@ -1070,12 +1070,12 @@ In rough priority order:
    (replaces the scrapped Side Panel approach)
 8. **Prep center webhook integration** — depends on PO module. Parses
    shipment names per the convention above.
-9. **Offer-add resets `has_live_offer` to NULL on submitted ASINs** — so a
-   same-day Add-to-SC batch becomes eligible for the next unchecked-scope
-   live-offer pass (§18 / inventory-sync rider) instead of waiting for the 07:00
-   cron. Needed when the ASIN had a *prior* checked SKU: today the flag stays at
-   its old non-NULL verdict (e.g. `f`), so the unchecked-scope rider skips it and
-   the new SKU's live status isn't reflected until the full cron re-checks it.
+9. ~~**Offer-add resets `has_live_offer` to NULL on submitted ASINs**~~ —
+   **SUPERSEDED (2026-08-01)** by the rider-scope change in §18b: the
+   inventory-sync live-offer rider now probes `has_live_offer IS DISTINCT FROM
+   TRUE` (never-checked `NULL` *and* stale `FALSE`), so a prior `f` verdict no
+   longer hides a same-day Add-to-SC offer. No offer-add write needed — the
+   flag keeps a single set of owners (rider / daily pass / §19 verify-sweep).
 
 ---
 
@@ -1767,7 +1767,16 @@ inventory summaries.
 - **Writers:** (1) the daily staleness pass (`live-offer-sync.ts`, 07:00
   host-local) over every `in_catalog=TRUE` ASIN **that has ≥1 `asin_skus` row**
   — no-SKU ASINs are excluded (nothing to probe; they stay `NULL`/"+" and are
-  picked up once inventory-sync records a SKU); (2) the §19 **API verify-sweep**
+  picked up once inventory-sync records a SKU); (1b, "§18b") the
+  **inventory-sync trailing rider** — same `syncLiveOffers` implementation,
+  mirroring the sync's `asinFilter`, scoped to `has_live_offer IS DISTINCT
+  FROM TRUE`: never-checked (`NULL`) **and** stale-`FALSE` rows are re-probed
+  after every inventory sync, because listings are created and deleted
+  constantly and a `FALSE` would otherwise go stale with nothing scheduled to
+  recheck it (the B0085ZIHR0 incident, 2026-08-01: checked `f` at 07:04, offer
+  created 19:54, invisible to the old `NULL`-only rider scope forever after).
+  Confirmed-`TRUE` rows stay excluded from the rider — only the full-scope
+  daily pass re-verifies live rows; (2) the §19 **API verify-sweep**
   `'live'` transition (`verifyPending`, getListingsItem-derived), which flips
   `has_live_offer = TRUE` same-day after Add to SC so a freshly added offer never
   shows a stale "+". A **manual** `'live'` verdict does NOT write it (waits for

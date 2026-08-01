@@ -169,15 +169,17 @@ export async function syncInventory(
   log(`Inventory sync complete: ${synced} ASINs synced (aggregated from ${Array.from(asinAgg.values()).reduce((s, a) => s + a.skuData.length, 0)} SKUs), ${skipped} skipped`, "inventory-sync");
 
   // Fold in the live-offer check AFTER inventory writes: this run may have
-  // created/left ASINs with has_live_offer IS NULL (new SKUs). Reuses the 07:00
-  // cron's checkAsinLiveOffer logic (single implementation), scoped to unchecked
-  // rows only, mirroring this sync's asinFilter. Paced per the Listings budget.
+  // created/left ASINs with has_live_offer IS NULL (new SKUs) or a stale FALSE
+  // (offer created after the last check — nothing else rechecks a FALSE).
+  // Reuses the 07:00 cron's checkAsinLiveOffer logic (single implementation),
+  // scoped to not-yet-live rows (has_live_offer IS DISTINCT FROM TRUE),
+  // mirroring this sync's asinFilter. Paced per the Listings budget.
   // FAIL-CLOSED: a throttle/failure here must NOT fail the inventory sync — log,
   // report the (partial/zero) counts, leave rows NULL for the next run / 07:00
   // cron. Writes has_live_offer / offer_checked_at ONLY.
   let liveOffer: LiveOfferPassCounts = { checked: 0, live: 0, no_offer: 0, throttled: 0 };
   try {
-    const lo = await syncLiveOffers({ onlyUnchecked: true, asinFilter });
+    const lo = await syncLiveOffers({ notLiveOnly: true, asinFilter });
     liveOffer = { checked: lo.total, live: lo.live, no_offer: lo.noOffer, throttled: lo.transient };
     log(`Inventory sync live-offer pass: ${liveOffer.checked} checked — ${liveOffer.live} live, ${liveOffer.no_offer} no_offer, ${liveOffer.throttled} throttled`, "inventory-sync");
   } catch (err: any) {
