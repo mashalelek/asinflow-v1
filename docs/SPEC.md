@@ -954,9 +954,10 @@ unparseable. Null cogs is acceptable: the new ASIN inserts with `cogs = 0`
 Triggers:
 - Manual: `POST /api/sync/sourcing-sheet` (NDJSON-streaming, auth-gated). Wired
   to the "Sync Sourcing" toolbar button on the home page.
-- Scheduled: `cron.schedule("0 9 * * *")` = 5:00 AM EST, one hour before the
-  inventory sync so newly-pulled ASINs are included in today's inventory + price
-  passes. Defined in `server/sourcing-sync-cron.ts`.
+- Scheduled: `cron.schedule("0 9 * * *")` = 09:00 host-local, one hour before
+  the inventory sync so newly-pulled ASINs are included in today's inventory +
+  price passes. Defined in `server/sourcing-sync-cron.ts`. **Gated behind
+  `ENABLE_CRONS` — disabled by default** (§11 "Scheduled crons").
 
 ### SP-API
 
@@ -1045,6 +1046,32 @@ Skip semantics (learned in implementation):
 - **`null_cogs` / `zero_cost` skips are expected and permanent** — sourcing leads
   listed in SC but never purchased have no PO row by design. Fail-closed skip is
   correct; no action needed.
+
+### Scheduled crons — disabled by default (`ENABLE_CRONS`)
+
+Five node-cron schedules exist, all in-process, registered in one block in
+`server/index.ts`:
+
+| Cron | File | Schedule (host-local) |
+|---|---|---|
+| Live-offer full-scope pass | `live-offer-cron.ts` | 07:00 |
+| Sourcing-sheet sync | `sourcing-sync-cron.ts` | 09:00 |
+| Inventory sync | `inventory-cron.ts` | 10:00 |
+| Price refresh | `price-sync-cron.ts` | 12:00 |
+| Aura cost-sync chain | `aura-sync-cron.ts` | 13:00 |
+
+**All five are gated behind a single env flag: `ENABLE_CRONS=true`. Unset or
+any other value = no cron is scheduled.** Rationale (2026-08-01): the host Mac
+is asleep at the scheduled times — node-cron fires host-local and silently
+skips missed ticks, so schedules only ran when the machine happened to be
+awake (08-01 incident: the 07:00/09:00/10:00 crons were all missed, machine
+asleep until 11:28; only the 12:00 price refresh fired). **Manual toolbar/API
+triggers are the operating model.** The cron code is kept, not deleted —
+re-enable with `ENABLE_CRONS=true` at cloud deploy (§12 item 6).
+
+The "EST/UTC" comments inside the older cron files are wrong: node-cron with
+no timezone option fires in host-local time (documented in
+`live-offer-cron.ts` / `aura-sync-cron.ts`).
 
 ---
 
@@ -1765,7 +1792,8 @@ inventory summaries.
   other `asin_skus` rows, short-circuit on the first live hit
   (`live-offer-check.ts`, shared by the daily pass and the one-off backfill).
 - **Writers:** (1) the daily staleness pass (`live-offer-sync.ts`, 07:00
-  host-local) over every `in_catalog=TRUE` ASIN **that has ≥1 `asin_skus` row**
+  host-local; cron gated behind `ENABLE_CRONS`, default off — §11 "Scheduled
+  crons") over every `in_catalog=TRUE` ASIN **that has ≥1 `asin_skus` row**
   — no-SKU ASINs are excluded (nothing to probe; they stay `NULL`/"+" and are
   picked up once inventory-sync records a SKU); (1b, "§18b") the
   **inventory-sync trailing rider** — same `syncLiveOffers` implementation,

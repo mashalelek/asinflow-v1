@@ -95,12 +95,18 @@ app.use((req, res, next) => {
 
   await registerRoutes(httpServer, app);
 
-  if (process.env.DATABASE_URL) {
+  // Scheduled crons are OFF by default: the host Mac is asleep at the
+  // scheduled times (node-cron fires host-local and silently skips missed
+  // ticks), so manual toolbar/API triggers are the operating model. Set
+  // ENABLE_CRONS=true at cloud deploy. (SPEC §11 "Scheduled crons")
+  if (process.env.DATABASE_URL && process.env.ENABLE_CRONS === "true") {
     startInventoryCron();
     startPriceSyncCron();
     startSourcingSyncCron();
     startAuraSyncCron();
     startLiveOfferCron();
+  } else if (process.env.DATABASE_URL) {
+    log("Scheduled crons disabled (ENABLE_CRONS != 'true') — manual sync triggers are the operating model", "cron");
   }
 
   app.use((err: any, _req: Request, res: Response, next: NextFunction) => {
