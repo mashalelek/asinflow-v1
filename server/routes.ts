@@ -1612,11 +1612,19 @@ export async function registerRoutes(
       const csv = serializeSbCsv(rows);
       const filename = `sb-cogs-${formatYMD(todayLocal())}.csv`;
       const s = summary.skips;
+      // Row-accounting identity — every Orders row read lands exactly once.
+      const accounted = summary.blankAsinRows + s.excludedByStatus + s.badOrMissingDate +
+        s.excludedNonYtd + s.badOrZeroCost + s.badQty + summary.includedRows;
       log(
         `SellerBoard COGS export: ${summary.rowsEmitted} rows, ${summary.distinctAsins} ASINs, ` +
-        `${summary.distinctPeriods} periods, template ${summary.templateRowsLoaded} rows; skips ` +
-        `badCost=${s.badOrZeroCost} badDate=${s.badOrMissingDate} badQty=${s.badQty} ` +
-        `sameDateMerged=${s.sameDateMerged} notInSb=${s.notInSb} [${details.notInSbAsins.join(", ")}]` +
+        `${summary.distinctPeriods} periods, template ${summary.templateRowsLoaded} rows ` +
+        `(read=${summary.templateRowsRead} dropped=${summary.templateRowsDropped} dupes=${summary.templateDupeRows}); ` +
+        `orders rawRowsRead=${summary.rawRowsRead} blankAsin=${summary.blankAsinRows} ` +
+        `excludedByStatus=${s.excludedByStatus} badDate=${s.badOrMissingDate} nonYtd=${s.excludedNonYtd} ` +
+        `badCost=${s.badOrZeroCost} badQty=${s.badQty} included=${summary.includedRows} ` +
+        `(identity remainder=${summary.rawRowsRead - accounted}); ` +
+        `sameDateMerged=${s.sameDateMerged} notInSb=${s.notInSb} [${details.notInSbAsins.join(", ")}] ` +
+        `inSbNoUsableSku=${s.inSbNoUsableSku} [${details.inSbNoUsableSkuAsins.join(", ")}]` +
         (details.merges.length ? ` merges=${JSON.stringify(details.merges)}` : "") +
         (details.badQtyRows.length ? ` badQtyRows=${JSON.stringify(details.badQtyRows)}` : ""),
         "sellerboard-cogs",
@@ -1628,15 +1636,23 @@ export async function registerRoutes(
           emitted: summary.rowsEmitted,
           asins: summary.distinctAsins,
           periods: summary.distinctPeriods,
+          rawRowsRead: summary.rawRowsRead,
+          blankAsinRows: summary.blankAsinRows,
+          includedRows: summary.includedRows,
           templateRowsLoaded: summary.templateRowsLoaded,
+          templateRowsDropped: summary.templateRowsDropped,
           skips: {
-            badCost: s.badOrZeroCost,
+            excludedByStatus: s.excludedByStatus,
             badDate: s.badOrMissingDate,
+            excludedNonYtd: s.excludedNonYtd,
+            badCost: s.badOrZeroCost,
             badQty: s.badQty,
             sameDateMerged: s.sameDateMerged,
             notInSb: s.notInSb,
+            inSbNoUsableSku: s.inSbNoUsableSku,
           },
           notInSbAsins: details.notInSbAsins,
+          inSbNoUsableSkuAsins: details.inSbNoUsableSkuAsins,
           badQtyRows: details.badQtyRows.map((r) => ({ asin: r.asin, date: r.date, rawQty: r.rawQty, mode: r.mode })),
         },
       });

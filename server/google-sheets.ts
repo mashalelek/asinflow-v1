@@ -83,7 +83,11 @@ export async function fetchSheetData(sheetId: string): Promise<Map<string, Sheet
       }
     }
 
-    // Ordered qty: sum (qty - shipped) for all non-closed, non-canceled rows
+    // Ordered qty: sum (qty - shipped) for all non-closed, non-canceled rows.
+    // NOTE: this status rule DELIBERATELY differs from the SellerBoard COGS
+    // export (sellerboard-cogs.ts), which excludes only canceled: here we want
+    // qty still on order, so closed (fully received) POs must not count; there
+    // we want completed purchase history, so closed POs must count.
     if (!isClosed && !isCanceled) {
       const qtyRaw = (row[COL_QTY] ?? "").toString().trim();
       const shippedRaw = (row[COL_SHIPPED] ?? "").toString().trim();
@@ -135,13 +139,24 @@ function cellStr(v: any): string | null {
   return s === "" ? null : s;
 }
 
-export async function fetchSheetRows(sheetId: string): Promise<SheetRow[]> {
+// Row-accounting metadata alongside the parsed rows, for callers that must
+// prove nothing exited silently (SellerBoard COGS export). rawRowsRead is the
+// total row count the API returned for the range — an upstream-truncation
+// tripwire; blankAsinRows is how many of those were dropped for a blank Col H.
+export interface SheetRowsResult {
+  rows: SheetRow[];
+  rawRowsRead: number;
+  blankAsinRows: number;
+}
+
+export async function fetchSheetRowsWithMeta(sheetId: string): Promise<SheetRowsResult> {
   const rows = await getSheetValues(sheetId, "Sheet1!A2:AZ");
   const out: SheetRow[] = [];
+  let blankAsinRows = 0;
   for (let i = 0; i < rows.length; i++) {
     const row = rows[i];
     const asin = (row[COL_ASIN] ?? "").toString().trim();
-    if (!asin) continue; // skip spacer/blank rows — same domain as fetchSheetData
+    if (!asin) { blankAsinRows++; continue; } // spacer/blank rows — same domain as fetchSheetData, but counted
     const qtyRaw = row[COL_QTY] == null ? "" : String(row[COL_QTY]); // verbatim, untrimmed
     const qtyTrim = qtyRaw.trim();
     out.push({
@@ -162,5 +177,9 @@ export async function fetchSheetRows(sheetId: string): Promise<SheetRow[]> {
       quantity: cellStr(row[COL_QUANTITY]),
     });
   }
-  return out;
+  return { rows: out, rawRowsRead: rows.length, blankAsinRows };
+}
+
+export async function fetchSheetRows(sheetId: string): Promise<SheetRow[]> {
+  return (await fetchSheetRowsWithMeta(sheetId)).rows;
 }

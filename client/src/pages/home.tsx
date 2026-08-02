@@ -301,9 +301,17 @@ type SbSummary = {
   emitted: number;
   asins: number;
   periods: number;
+  rawRowsRead: number;
+  blankAsinRows: number;
+  includedRows: number;
   templateRowsLoaded: number;
-  skips: { badCost: number; badDate: number; badQty: number; sameDateMerged: number; notInSb: number };
+  templateRowsDropped: number;
+  skips: {
+    excludedByStatus: number; badDate: number; excludedNonYtd: number; badCost: number;
+    badQty: number; sameDateMerged: number; notInSb: number; inSbNoUsableSku: number;
+  };
   notInSbAsins: string[];
+  inSbNoUsableSkuAsins: string[];
   badQtyRows: { asin: string; date: string; rawQty: string; mode: string }[];
 };
 
@@ -1778,14 +1786,23 @@ export default function Home() {
           {sbResult && (
             <div className="text-sm space-y-2">
               <div><span className="font-semibold">{sbResult.summary.emitted}</span> rows · {sbResult.summary.asins} ASINs · {sbResult.summary.periods} periods</div>
-              <div className="text-muted-foreground text-xs">Template rows loaded: {sbResult.summary.templateRowsLoaded}</div>
+              <div className="text-muted-foreground text-xs">Template rows loaded: {sbResult.summary.templateRowsLoaded} (dropped blank stubs: {sbResult.summary.templateRowsDropped})</div>
               <div className="text-xs">
-                Skips — bad cost: {sbResult.summary.skips.badCost}, bad date: {sbResult.summary.skips.badDate}, bad qty: {sbResult.summary.skips.badQty}, same-date merged: {sbResult.summary.skips.sameDateMerged}, not in SB: {sbResult.summary.skips.notInSb}
+                Orders rows — read: {sbResult.summary.rawRowsRead}, blank ASIN: {sbResult.summary.blankAsinRows}, canceled: {sbResult.summary.skips.excludedByStatus}, bad date: {sbResult.summary.skips.badDate}, non-YTD: {sbResult.summary.skips.excludedNonYtd}, bad cost: {sbResult.summary.skips.badCost}, bad qty: {sbResult.summary.skips.badQty}, included: {sbResult.summary.includedRows}
+              </div>
+              <div className="text-xs">
+                Same-date merged: {sbResult.summary.skips.sameDateMerged} · not in SB: {sbResult.summary.skips.notInSb} · in SB, no usable SKU: {sbResult.summary.skips.inSbNoUsableSku}
               </div>
               {sbResult.summary.notInSbAsins.length > 0 && (
                 <details className="text-xs">
                   <summary className="cursor-pointer text-muted-foreground">Not in SB — {sbResult.summary.notInSbAsins.length} ASINs (expand)</summary>
                   <div className="mt-1 font-mono max-h-40 overflow-auto break-words">{sbResult.summary.notInSbAsins.join(", ")}</div>
+                </details>
+              )}
+              {sbResult.summary.inSbNoUsableSkuAsins.length > 0 && (
+                <details className="text-xs">
+                  <summary className="cursor-pointer text-muted-foreground">In SB, no usable SKU — {sbResult.summary.inSbNoUsableSkuAsins.length} ASINs (expand)</summary>
+                  <div className="mt-1 font-mono max-h-40 overflow-auto break-words">{sbResult.summary.inSbNoUsableSkuAsins.join(", ")}</div>
                 </details>
               )}
               {sbResult.summary.badQtyRows.length > 0 && (

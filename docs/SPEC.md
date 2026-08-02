@@ -844,16 +844,27 @@ by `POST /api/export/sellerboard-cogs` (multipart `file` upload). Gated by Googl
 credentials + `GOOGLE_SHEET_ID`.
 
 **Step 1 — ASIN → SKU map from the template** (sheet `TDSheet`, columns `ASIN`,
-`SKU`): one entry per (ASIN, SKU) row, both trimmed; multi-SKU ASINs keep all
-SKUs; rows missing ASIN or SKU ignored.
+`SKU`): one entry per (ASIN, SKU) row; ASIN normalized **trim + uppercase** (to
+match the Orders side of the join), SKU trimmed only (SKUs are case-sensitive);
+multi-SKU ASINs keep all SKUs. Rows missing ASIN or SKU are counted as
+**templateRowsDropped** (never silent); repeats of an already-loaded (ASIN, SKU)
+count as **templateDupeRows**. ASINs seen only on blank-SKU rows are remembered
+so the join can report them as **inSbNoUsableSku** instead of not-in-SB.
 
-**Step 2 — YTD PO cost periods** from the Orders tab: include rows whose status
-does **not** contain `closed`/`canceled` (`.toLowerCase().includes()`), whose
-Col C parses (`M/D/YYYY`, split-on-`/` local Date, never `new Date(str)`) and
-falls in **2026** (YTD). `Cost = parseMoney(Col Y) + prep`, prep = `parseMoney(Col
-AS)` with an empty Col AS on a real row = 0 (§3). Col Y empty / unparseable / ≤ 0
-→ **bad-cost** skip. `CostPeriodStartDate` = the Col C date as `M/D/YYYY`, no
-leading zeros.
+**Step 2 — YTD PO cost periods** from the Orders tab: exclude **only** rows whose
+status contains `canceled` (`.toLowerCase().includes()`, counted as
+**excludedByStatus**). **Closed rows are included** — closed POs are completed
+purchases, exactly the batch history SB needs (this matches the sheet client's
+COGS canonical-row rule). ⚠️ This status rule **deliberately differs** from the
+ordered-qty sync (`fetchSheetData`), which excludes closed **and** canceled
+because it counts qty still on order; both sites carry cross-referencing
+comments. Col C must parse (`M/D/YYYY`, split-on-`/` local Date, never
+`new Date(str)`; failure → **badDate**) and fall in **2026** (YTD; a parsed
+non-2026 date → **excludedNonYtd**). `Cost = parseMoney(Col Y) + prep`, prep =
+`parseMoney(Col AS)` with an empty Col AS on a real row = 0 (§3). Col Y empty /
+unparseable / ≤ 0 → **bad-cost** skip. `CostPeriodStartDate` = the Col C date as
+`M/D/YYYY`, no leading zeros. Orders-side ASINs are normalized trim + uppercase
+before keying/joining.
 
 `BatchQuantity` = **Col U** (ordered qty) from the **same canonical row** the
 cost came from, parsed as a **positive integer**. Col U empty / unparseable /
@@ -875,9 +886,25 @@ periods (intended).
 CSV row per SKU the template maps to that ASIN, duplicating the **full batch
 quantity on every SKU row** (per-SKU batches deplete independently in SB — the
 qty is deliberately **not** split across SKUs). PO ASINs absent from the template
-→ **not-in-SB** skip (counted as **distinct ASINs**, not periods; export is
-idempotent so they pick up periods on a later run once SB knows them). Template
-ASINs with no YTD PO are simply never emitted (untouched in SB).
+entirely → **notInSb**; PO ASINs present in the template **only on blank-SKU
+rows** → **inSbNoUsableSku** (both counted as **distinct ASINs**, not periods;
+export is idempotent so they pick up periods on a later run once SB knows them).
+Template ASINs with no YTD PO are simply never emitted (untouched in SB).
+
+**Row accounting (reconciliation identity).** Every Orders row read lands in
+exactly one bucket — nothing exits the pipeline silently:
+
+```
+rawRowsRead = blankAsinRows + excludedByStatus + badDate + excludedNonYtd
+            + badCost + badQty + includedRows        (remainder must be 0)
+```
+
+`rawRowsRead` is the total row count the sheet read returned (an
+upstream-truncation tripwire, surfaced by `fetchSheetRowsWithMeta`);
+`blankAsinRows` are rows dropped upstream for a blank Col H. `sameDateMerged` is
+informational (merged rows stay included); `notInSb` / `inSbNoUsableSku` are
+ASIN-level drops at the join, after row accounting. The identity (with remainder)
+is printed by the dry-run script and logged by the endpoint.
 
 **Output CSV** carries **all 15 template headers in template order**:
 `ASIN,SKU,Title,Labels,CostPeriodStartDate,Cost,DomesticShippingCost,RestofworldShippingCost,ShippingProfile,Value_of_unsellable_returns,VAT,VAT_CATEGORY,Hide,Marketplace,BatchQuantity`.
@@ -886,14 +913,16 @@ other cell is an empty string** so a blank never overwrites SB-side state.
 Named `sb-cogs-YYYY-MM-DD.csv`.
 
 **Response** is JSON `{ filename, csv, summary }` (not a raw file, not headers):
-`summary = { emitted, asins, periods, templateRowsLoaded, skips: { badCost,
-badDate, badQty, sameDateMerged, notInSb }, notInSbAsins: [...], badQtyRows:
-[{ asin, date, rawQty, mode }] }` (`mode` ∈ `empty` / `non_numeric` /
-`non_positive` / `non_integer`). The client builds the download from the `csv`
-string and shows a summary modal with the **not-in-SB list and the bad-qty rows
-both expandable**; full detail (incl. merges and per-row badQty with sheet row +
-cost) is logged server-side. Toolbar button **"Export SB COGS"** opens the
-template file picker.
+`summary = { emitted, asins, periods, rawRowsRead, blankAsinRows, includedRows,
+templateRowsLoaded, templateRowsDropped, skips: { excludedByStatus, badDate,
+excludedNonYtd, badCost, badQty, sameDateMerged, notInSb, inSbNoUsableSku },
+notInSbAsins: [...], inSbNoUsableSkuAsins: [...], badQtyRows: [{ asin, date,
+rawQty, mode }] }` (`mode` ∈ `empty` / `non_numeric` / `non_positive` /
+`non_integer`). The client builds the download from the `csv` string and shows a
+summary modal with the full row accounting plus the **not-in-SB, no-usable-SKU,
+and bad-qty lists expandable**; full detail (incl. merges, per-row badQty with
+sheet row + cost, and the identity remainder) is logged server-side. Toolbar
+button **"Export SB COGS"** opens the template file picker.
 
 ### Google Sheets sourcing sheet (insert-only)
 

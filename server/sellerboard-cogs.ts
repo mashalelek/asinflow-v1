@@ -3,7 +3,7 @@
 // SC. Inputs = the Orders Google Sheet (via fetchSheetRows) + an uploaded SB
 // products template xlsx (sheet "TDSheet", columns ASIN/SKU). See SPEC §11.
 import * as XLSX from "xlsx";
-import { fetchSheetRows } from "./google-sheets";
+import { fetchSheetRowsWithMeta } from "./google-sheets";
 import { parseMDY } from "./velocity-export";
 
 // Full SB template header set, in template order. We populate ONLY ASIN, SKU,
@@ -25,18 +25,33 @@ export type SbRow = {
   BatchQuantity: string;
 };
 
+// Row accounting is closed: every Orders row read is either included in a
+// period or lands in exactly one exclusion counter —
+//   rawRowsRead = blankAsinRows + excludedByStatus + badOrMissingDate
+//               + excludedNonYtd + badOrZeroCost + badQty + includedRows
+// (sameDateMerged is informational — merged rows stay included; notInSb /
+// inSbNoUsableSku are ASIN-level drops at the join, after row accounting.)
 export interface SbSummary {
   rowsEmitted: number;
-  distinctAsins: number;      // ASINs that produced >= 1 emitted row
-  distinctPeriods: number;    // distinct (ASIN, date) periods emitted
-  templateRowsLoaded: number; // (ASIN, SKU) entries loaded from the template
-  templateAsins: number;      // distinct ASINs in the template
+  distinctAsins: number;        // ASINs that produced >= 1 emitted row
+  distinctPeriods: number;      // distinct (ASIN, date) periods emitted
+  rawRowsRead: number;          // total Orders rows the sheet read returned (truncation tripwire)
+  blankAsinRows: number;        // Orders rows dropped upstream for a blank Col H ASIN
+  includedRows: number;         // Orders rows accumulated into cost periods
+  templateRowsLoaded: number;   // (ASIN, SKU) entries loaded from the template
+  templateAsins: number;        // distinct ASINs in the template (with a usable SKU)
+  templateRowsRead: number;     // total TDSheet rows read
+  templateRowsDropped: number;  // template rows ignored: blank ASIN and/or blank SKU stubs
+  templateDupeRows: number;     // template rows repeating an already-loaded (ASIN, SKU)
   skips: {
-    badOrZeroCost: number;    // Col Y empty / unparseable / <= 0 (2026, non-closed/canceled rows)
-    badOrMissingDate: number; // Col C missing / unparseable (non-closed/canceled rows)
-    badQty: number;           // Col U empty / unparseable / not a positive integer (otherwise-valid row)
-    sameDateMerged: number;   // (ASIN, date) periods where 2+ rows were qty-weighted-merged
-    notInSb: number;          // distinct PO ASINs with YTD periods but absent from the template
+    excludedByStatus: number;   // status contains "canceled" — ONLY canceled; closed IS included
+    badOrMissingDate: number;   // Col C missing / unparseable (non-canceled rows)
+    excludedNonYtd: number;     // Col C parsed but the year is not 2026
+    badOrZeroCost: number;      // Col Y empty / unparseable / <= 0 (2026, non-canceled rows)
+    badQty: number;             // Col U empty / unparseable / not a positive integer (otherwise-valid row)
+    sameDateMerged: number;     // (ASIN, date) periods where 2+ rows were qty-weighted-merged
+    notInSb: number;            // distinct PO ASINs with YTD periods, absent from the template entirely
+    inSbNoUsableSku: number;    // distinct PO ASINs present in the template ONLY on blank-SKU rows
   };
 }
 
@@ -58,7 +73,7 @@ export interface SbBuildResult {
   rows: SbRow[];
   summary: SbSummary;
   // Detail for review/logging — not part of the CSV.
-  details: { notInSbAsins: string[]; merges: SbMerge[]; badQtyRows: BadQtyRow[] };
+  details: { notInSbAsins: string[]; inSbNoUsableSkuAsins: string[]; merges: SbMerge[]; badQtyRows: BadQtyRow[] };
 }
 
 // M/D/YYYY, no leading zeros, from a parsed local Date.
@@ -66,23 +81,42 @@ function formatMDYNoPad(d: Date): string {
   return `${d.getMonth() + 1}/${d.getDate()}/${d.getFullYear()}`;
 }
 
-// Step 1: ASIN -> [SKU,...] from the SB template (sheet "TDSheet").
-export function parseTemplate(buffer: Buffer): { map: Map<string, string[]>; entriesLoaded: number } {
+// Step 1: ASIN -> [SKU,...] from the SB template (sheet "TDSheet"). ASINs are
+// normalized (trim + UPPERCASE) to match the Orders side of the join; SKUs are
+// trimmed only (SKUs are case-sensitive in SB). blankSkuAsins collects ASINs
+// seen on blank-SKU rows so the join can distinguish "not in SB at all" from
+// "in SB but no usable SKU".
+export function parseTemplate(buffer: Buffer): {
+  map: Map<string, string[]>;
+  entriesLoaded: number;
+  rowsRead: number;
+  rowsDropped: number;
+  dupeRows: number;
+  blankSkuAsins: Set<string>;
+} {
   const wb = XLSX.read(buffer, { type: "buffer" });
   const ws = wb.Sheets["TDSheet"];
   if (!ws) throw new Error(`Template has no "TDSheet" sheet (found: ${wb.SheetNames.join(", ") || "none"})`);
   const rows = XLSX.utils.sheet_to_json<Record<string, any>>(ws, { defval: "" });
   const map = new Map<string, string[]>();
+  const blankSkuAsins = new Set<string>();
   let entriesLoaded = 0;
+  let rowsDropped = 0;
+  let dupeRows = 0;
   for (const r of rows) {
-    const asin = String(r["ASIN"] ?? "").trim();
+    const asin = String(r["ASIN"] ?? "").trim().toUpperCase();
     const sku = String(r["SKU"] ?? "").trim();
-    if (!asin || !sku) continue; // ignore rows missing ASIN or SKU
+    if (!asin || !sku) {
+      rowsDropped++; // blank-ASIN and/or blank-SKU stub — counted, never silent
+      if (asin && !sku) blankSkuAsins.add(asin);
+      continue;
+    }
     const arr = map.get(asin) ?? [];
     if (!arr.includes(sku)) { arr.push(sku); entriesLoaded++; } // one entry per (ASIN, SKU)
+    else dupeRows++; // repeat of an already-loaded (ASIN, SKU) — contributes nothing
     map.set(asin, arr);
   }
-  return { map, entriesLoaded };
+  return { map, entriesLoaded, rowsRead: rows.length, rowsDropped, dupeRows, blankSkuAsins };
 }
 
 // Accumulator for a (ASIN, date) period. weightedCents = Σ(costCents · qty);
@@ -97,10 +131,15 @@ export async function buildSellerboardCogs(
   const sheetId = deps.sheetId ?? process.env.GOOGLE_SHEET_ID;
   if (!sheetId) throw new Error("GOOGLE_SHEET_ID not configured");
 
-  const { map: skuMap, entriesLoaded } = parseTemplate(templateBuffer);
-  const rows = await fetchSheetRows(sheetId);
+  const template = parseTemplate(templateBuffer);
+  const skuMap = template.map;
+  const { rows, rawRowsRead, blankAsinRows } = await fetchSheetRowsWithMeta(sheetId);
 
-  const skips = { badOrZeroCost: 0, badOrMissingDate: 0, badQty: 0, sameDateMerged: 0, notInSb: 0 };
+  const skips = {
+    excludedByStatus: 0, badOrMissingDate: 0, excludedNonYtd: 0,
+    badOrZeroCost: 0, badQty: 0, sameDateMerged: 0, notInSb: 0, inSbNoUsableSku: 0,
+  };
+  let includedRows = 0;
   const badQtyRows: BadQtyRow[] = [];
 
   // Step 2: PO cost periods, keyed by ASIN -> (dateStr -> accumulator). Funnel:
@@ -110,11 +149,16 @@ export async function buildSellerboardCogs(
   const periods = new Map<string, Map<string, PeriodAcc>>();
   for (const row of rows) {
     const status = (row.status ?? "").toLowerCase();
-    if (status.includes("closed") || status.includes("canceled")) continue; // excluded (silent)
+    // Exclude ONLY canceled. Closed POs are completed purchases — exactly the
+    // batch history SB needs — so "closed" IS included (matches the sheet
+    // client's COGS canonical-row rule). NOTE: this DELIBERATELY differs from
+    // the ordered-qty sync's status rule (google-sheets.ts fetchSheetData),
+    // which excludes closed AND canceled because it counts qty still on order.
+    if (status.includes("canceled")) { skips.excludedByStatus++; continue; }
 
     const dt = parseMDY(row.orderDate);
     if (dt === null) { skips.badOrMissingDate++; continue; } // never silently drop bad dates
-    if (dt.getFullYear() !== 2026) continue; // not YTD — silently excluded, intended
+    if (dt.getFullYear() !== 2026) { skips.excludedNonYtd++; continue; } // not YTD — excluded, intended (and counted)
 
     const cogs = row.cogs; // parseMoney(Col Y); null = empty/unparseable
     if (cogs == null || cogs <= 0) { skips.badOrZeroCost++; continue; }
@@ -145,10 +189,14 @@ export async function buildSellerboardCogs(
       continue;
     }
 
+    includedRows++;
     const costCents = Math.round(cost * 100);
     const dateStr = formatMDYNoPad(dt);
-    let byDate = periods.get(row.asin);
-    if (!byDate) { byDate = new Map(); periods.set(row.asin, byDate); }
+    // Normalize the join key the same way as the template side (trim came from
+    // fetchSheetRows; uppercase here) so ASIN case can never fake a not-in-SB.
+    const asinKey = row.asin.toUpperCase();
+    let byDate = periods.get(asinKey);
+    if (!byDate) { byDate = new Map(); periods.set(asinKey, byDate); }
     const acc = byDate.get(dateStr);
     if (acc) {
       acc.weightedCents += costCents * qty;
@@ -175,10 +223,17 @@ export async function buildSellerboardCogs(
   const out: SbRow[] = [];
   const emittedAsins = new Set<string>();
   const notInSbAsins = new Set<string>();
+  const inSbNoUsableSkuAsins = new Set<string>();
   let distinctPeriods = 0;
   for (const [asin, byDate] of Array.from(periods)) {
     const skus = skuMap.get(asin);
-    if (!skus || skus.length === 0) { notInSbAsins.add(asin); continue; } // PO ASIN not in SB
+    if (!skus || skus.length === 0) {
+      // ASIN-level drop: split "SB has never heard of it" from "SB knows the
+      // ASIN but only on blank-SKU template rows" — different remediations.
+      if (template.blankSkuAsins.has(asin)) inSbNoUsableSkuAsins.add(asin);
+      else notInSbAsins.add(asin);
+      continue;
+    }
     for (const [dateStr, acc] of Array.from(byDate)) {
       distinctPeriods++;
       emittedAsins.add(asin);
@@ -193,6 +248,7 @@ export async function buildSellerboardCogs(
     }
   }
   skips.notInSb = notInSbAsins.size;
+  skips.inSbNoUsableSku = inSbNoUsableSkuAsins.size;
 
   return {
     rows: out,
@@ -200,11 +256,22 @@ export async function buildSellerboardCogs(
       rowsEmitted: out.length,
       distinctAsins: emittedAsins.size,
       distinctPeriods,
-      templateRowsLoaded: entriesLoaded,
+      rawRowsRead,
+      blankAsinRows,
+      includedRows,
+      templateRowsLoaded: template.entriesLoaded,
       templateAsins: skuMap.size,
+      templateRowsRead: template.rowsRead,
+      templateRowsDropped: template.rowsDropped,
+      templateDupeRows: template.dupeRows,
       skips,
     },
-    details: { notInSbAsins: Array.from(notInSbAsins), merges, badQtyRows },
+    details: {
+      notInSbAsins: Array.from(notInSbAsins),
+      inSbNoUsableSkuAsins: Array.from(inSbNoUsableSkuAsins),
+      merges,
+      badQtyRows,
+    },
   };
 }
 

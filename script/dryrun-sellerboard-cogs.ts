@@ -19,13 +19,24 @@ async function main() {
   console.log(`rows emitted        : ${summary.rowsEmitted}`);
   console.log(`distinct ASINs       : ${summary.distinctAsins}`);
   console.log(`distinct periods     : ${summary.distinctPeriods}`);
-  console.log(`template rows loaded : ${summary.templateRowsLoaded}  (across ${summary.templateAsins} template ASINs)`);
-  console.log(`skips:`);
-  console.log(`  bad/zero cost      : ${summary.skips.badOrZeroCost}`);
+  console.log(`template rows loaded : ${summary.templateRowsLoaded}  (across ${summary.templateAsins} template ASINs; read ${summary.templateRowsRead}, dropped ${summary.templateRowsDropped} blank stubs, ${summary.templateDupeRows} dupes)`);
+  console.log(`orders row accounting:`);
+  console.log(`  raw rows read      : ${summary.rawRowsRead}`);
+  console.log(`  blank ASIN         : ${summary.blankAsinRows}`);
+  console.log(`  canceled (status)  : ${summary.skips.excludedByStatus}`);
   console.log(`  bad/missing date   : ${summary.skips.badOrMissingDate}`);
+  console.log(`  non-YTD (not 2026) : ${summary.skips.excludedNonYtd}`);
+  console.log(`  bad/zero cost      : ${summary.skips.badOrZeroCost}`);
   console.log(`  bad qty            : ${summary.skips.badQty}`);
+  console.log(`  included in periods: ${summary.includedRows}`);
+  const s = summary.skips;
+  const accounted = summary.blankAsinRows + s.excludedByStatus + s.badOrMissingDate +
+    s.excludedNonYtd + s.badOrZeroCost + s.badQty + summary.includedRows;
+  console.log(`  identity           : ${summary.blankAsinRows} + ${s.excludedByStatus} + ${s.badOrMissingDate} + ${s.excludedNonYtd} + ${s.badOrZeroCost} + ${s.badQty} + ${summary.includedRows} = ${accounted} vs rawRowsRead ${summary.rawRowsRead} → remainder ${summary.rawRowsRead - accounted}${summary.rawRowsRead - accounted === 0 ? " ✓" : " ✗ ROWS UNACCOUNTED"}`);
+  console.log(`post-accounting (ASIN-level / informational):`);
   console.log(`  same-date merged   : ${summary.skips.sameDateMerged}`);
   console.log(`  not in SB (ASINs)  : ${summary.skips.notInSb}`);
+  console.log(`  in SB, no usable SKU: ${summary.skips.inSbNoUsableSku}`);
 
   if (details.merges.length) {
     console.log(`\n===== same-date merges (qty-weighted) =====`);
@@ -43,6 +54,10 @@ async function main() {
   if (details.notInSbAsins.length) {
     console.log(`\n===== not in SB (${details.notInSbAsins.length} PO ASINs with YTD periods, absent from template) =====`);
     console.log("  " + details.notInSbAsins.join(", "));
+  }
+  if (details.inSbNoUsableSkuAsins.length) {
+    console.log(`\n===== in SB, no usable SKU (${details.inSbNoUsableSkuAsins.length} PO ASINs on blank-SKU template rows only) =====`);
+    console.log("  " + details.inSbNoUsableSkuAsins.join(", "));
   }
 
   console.log(`\n===== first 10 CSV rows (full ${SB_HEADERS.length}-column layout) =====`);
