@@ -1501,6 +1501,22 @@ the per-row **+** button.
   **omit the quantity field entirely.** For an AFN/FBA SKU, quantity is owned
   by Amazon (set from warehouse receipts); sending any quantity value
   (including `0`) risks flipping the SKU to merchant-fulfilled.
+- **Born closed (close-on-create):** every created offer includes
+  `purchasable_offer.end_at` set to a past date, so the listing materializes
+  in SC already **Closed**. This is the documented "soft-close" — SC's "Close
+  listing" button is literally this field; the SKU, listing data, and report
+  presence are retained, nothing is deleted, and no quantity /
+  `fulfillment_availability` field is involved (MF-flip rail untouched).
+  - **Reopen** is a `patchListingsItem` **`op: "merge"`** on
+    `/attributes/purchasable_offer` with `"end_at": null` (the documented
+    optional-sub-attribute delete; fallback: a far-future date). **Never
+    `op: "replace"`** — replace swaps the entire `purchasable_offer` array and
+    wipes the price. **Never include price fields in a close/reopen patch** —
+    a high-price error (18555) makes Amazon silently ignore the `end_at`
+    carried in the same patch.
+  - **Stranded-inventory caveat:** FBA stock checking in against a closed SKU
+    goes stranded (and is exposed to stranded-inventory auto-removal
+    settings). **Reopen must precede any FBA stock arriving.**
 
 ### Always-present offer attributes
 
