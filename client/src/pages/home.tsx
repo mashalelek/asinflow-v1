@@ -308,11 +308,14 @@ type SbSummary = {
   templateRowsDropped: number;
   skips: {
     excludedByStatus: number; badDate: number; excludedNonYtd: number; badCost: number;
-    badQty: number; sameDateMerged: number; notInSb: number; inSbNoUsableSku: number;
+    badQty: number; sameDateMerged: number; fractionalCollapsed: number; fractionalRounded: number;
+    notInSb: number; inSbNoUsableSku: number;
   };
   notInSbAsins: string[];
   inSbNoUsableSkuAsins: string[];
   badQtyRows: { asin: string; date: string; rawQty: string; mode: string }[];
+  fractionalCollapsed: { asin: string; rowsFolded: number; qty: number; cost: number; date: string }[];
+  fractionalRounded: { asin: string; rawSum: number; rounded: number }[];
 };
 
 export default function Home() {
@@ -1791,8 +1794,28 @@ export default function Home() {
                 Orders rows — read: {sbResult.summary.rawRowsRead}, blank ASIN: {sbResult.summary.blankAsinRows}, canceled: {sbResult.summary.skips.excludedByStatus}, bad date: {sbResult.summary.skips.badDate}, non-YTD: {sbResult.summary.skips.excludedNonYtd}, bad cost: {sbResult.summary.skips.badCost}, bad qty: {sbResult.summary.skips.badQty}, included: {sbResult.summary.includedRows}
               </div>
               <div className="text-xs">
-                Same-date merged: {sbResult.summary.skips.sameDateMerged} · not in SB: {sbResult.summary.skips.notInSb} · in SB, no usable SKU: {sbResult.summary.skips.inSbNoUsableSku}
+                Same-date merged: {sbResult.summary.skips.sameDateMerged} · fractional collapsed: {sbResult.summary.skips.fractionalCollapsed} · rounded: {sbResult.summary.skips.fractionalRounded} · not in SB: {sbResult.summary.skips.notInSb} · in SB, no usable SKU: {sbResult.summary.skips.inSbNoUsableSku}
               </div>
+              {sbResult.summary.fractionalCollapsed.length > 0 && (
+                <details className="text-xs">
+                  <summary className="cursor-pointer text-muted-foreground">Fractional collapsed — {sbResult.summary.fractionalCollapsed.length} ASINs (expand)</summary>
+                  <div className="mt-1 font-mono max-h-40 overflow-auto space-y-0.5">
+                    {sbResult.summary.fractionalCollapsed.map((f, i) => (
+                      <div key={i}>{f.asin} · {f.rowsFolded} rows → qty {f.qty} @ {f.cost.toFixed(2)} from {f.date}</div>
+                    ))}
+                  </div>
+                </details>
+              )}
+              {sbResult.summary.fractionalRounded.length > 0 && (
+                <details className="text-xs">
+                  <summary className="cursor-pointer text-muted-foreground">Fractional rounded — {sbResult.summary.fractionalRounded.length} batches (expand)</summary>
+                  <div className="mt-1 font-mono max-h-40 overflow-auto space-y-0.5">
+                    {sbResult.summary.fractionalRounded.map((f, i) => (
+                      <div key={i}>{f.asin} · {f.rawSum} → {f.rounded}{f.rounded === 0 ? " (dropped)" : ""}</div>
+                    ))}
+                  </div>
+                </details>
+              )}
               {sbResult.summary.notInSbAsins.length > 0 && (
                 <details className="text-xs">
                   <summary className="cursor-pointer text-muted-foreground">Not in SB — {sbResult.summary.notInSbAsins.length} ASINs (expand)</summary>

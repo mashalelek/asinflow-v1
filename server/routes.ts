@@ -1623,10 +1623,13 @@ export async function registerRoutes(
         `excludedByStatus=${s.excludedByStatus} badDate=${s.badOrMissingDate} nonYtd=${s.excludedNonYtd} ` +
         `badCost=${s.badOrZeroCost} badQty=${s.badQty} included=${summary.includedRows} ` +
         `(identity remainder=${summary.rawRowsRead - accounted}); ` +
-        `sameDateMerged=${s.sameDateMerged} notInSb=${s.notInSb} [${details.notInSbAsins.join(", ")}] ` +
+        `sameDateMerged=${s.sameDateMerged} fractionalCollapsed=${s.fractionalCollapsed} ` +
+        `fractionalRounded=${s.fractionalRounded} notInSb=${s.notInSb} [${details.notInSbAsins.join(", ")}] ` +
         `inSbNoUsableSku=${s.inSbNoUsableSku} [${details.inSbNoUsableSkuAsins.join(", ")}]` +
         (details.merges.length ? ` merges=${JSON.stringify(details.merges)}` : "") +
-        (details.badQtyRows.length ? ` badQtyRows=${JSON.stringify(details.badQtyRows)}` : ""),
+        (details.badQtyRows.length ? ` badQtyRows=${JSON.stringify(details.badQtyRows)}` : "") +
+        (details.fractionalCollapsed.length ? ` fractionalCollapsed=${JSON.stringify(details.fractionalCollapsed)}` : "") +
+        (details.fractionalRounded.length ? ` fractionalRounded=${JSON.stringify(details.fractionalRounded)}` : ""),
         "sellerboard-cogs",
       );
       res.json({
@@ -1648,12 +1651,16 @@ export async function registerRoutes(
             badCost: s.badOrZeroCost,
             badQty: s.badQty,
             sameDateMerged: s.sameDateMerged,
+            fractionalCollapsed: s.fractionalCollapsed,
+            fractionalRounded: s.fractionalRounded,
             notInSb: s.notInSb,
             inSbNoUsableSku: s.inSbNoUsableSku,
           },
           notInSbAsins: details.notInSbAsins,
           inSbNoUsableSkuAsins: details.inSbNoUsableSkuAsins,
           badQtyRows: details.badQtyRows.map((r) => ({ asin: r.asin, date: r.date, rawQty: r.rawQty, mode: r.mode })),
+          fractionalCollapsed: details.fractionalCollapsed,
+          fractionalRounded: details.fractionalRounded,
         },
       });
     } catch (err: any) {

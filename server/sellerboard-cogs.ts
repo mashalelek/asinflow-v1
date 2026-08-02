@@ -48,8 +48,10 @@ export interface SbSummary {
     badOrMissingDate: number;   // Col C missing / unparseable (non-canceled rows)
     excludedNonYtd: number;     // Col C parsed but the year is not 2026
     badOrZeroCost: number;      // Col Y empty / unparseable / <= 0 (2026, non-canceled rows)
-    badQty: number;             // Col U empty / unparseable / not a positive integer (otherwise-valid row)
+    badQty: number;             // Col U empty / unparseable / non-positive (otherwise-valid row)
     sameDateMerged: number;     // (ASIN, date) periods where 2+ rows were qty-weighted-merged
+    fractionalCollapsed: number; // ASINs whose batches were folded into one (>= 1 fractional row)
+    fractionalRounded: number;  // collapsed batches whose summed qty was rounded half-up (incl. rounded-to-0 drops)
     notInSb: number;            // distinct PO ASINs with YTD periods, absent from the template entirely
     inSbNoUsableSku: number;    // distinct PO ASINs present in the template ONLY on blank-SKU rows
   };
@@ -58,8 +60,19 @@ export interface SbSummary {
 // Informational: a (ASIN, date) period that combined 2+ same-day orders.
 export interface SbMerge { asin: string; date: string; count: number; qty: number; cost: number; }
 
-// A row dropped by the badQty gate, itemized by failure mode.
-export type BadQtyMode = "empty" | "non_numeric" | "non_positive" | "non_integer";
+// Informational: an ASIN with >= 1 fractional-qty row — ALL of its batches were
+// folded into one (qty = sum, cost = raw-qty-weighted average, date = earliest).
+export interface SbFractionalCollapse { asin: string; rowsFolded: number; qty: number; cost: number; date: string; }
+// Informational: a collapsed batch whose summed qty was still fractional and was
+// rounded half-up. rounded 0 = the batch was dropped and its rows reclassified
+// as badQty/non_positive.
+export interface SbFractionalRound { asin: string; rawSum: number; rounded: number; }
+
+// A row dropped by the badQty gate, itemized by failure mode. Fractional qty is
+// NOT a failure — Col U is ASIN-level sellable qty (raw units ÷ pack size), so
+// fractions are legitimate and handled by the per-ASIN collapse; zero qty is a
+// returned order and stays a non_positive skip.
+export type BadQtyMode = "empty" | "non_numeric" | "non_positive";
 export interface BadQtyRow {
   sheetRow: number; // 1-based sheet row
   asin: string;
@@ -73,7 +86,14 @@ export interface SbBuildResult {
   rows: SbRow[];
   summary: SbSummary;
   // Detail for review/logging — not part of the CSV.
-  details: { notInSbAsins: string[]; inSbNoUsableSkuAsins: string[]; merges: SbMerge[]; badQtyRows: BadQtyRow[] };
+  details: {
+    notInSbAsins: string[];
+    inSbNoUsableSkuAsins: string[];
+    merges: SbMerge[];
+    badQtyRows: BadQtyRow[];
+    fractionalCollapsed: SbFractionalCollapse[];
+    fractionalRounded: SbFractionalRound[];
+  };
 }
 
 // M/D/YYYY, no leading zeros, from a parsed local Date.
@@ -120,8 +140,11 @@ export function parseTemplate(buffer: Buffer): {
 }
 
 // Accumulator for a (ASIN, date) period. weightedCents = Σ(costCents · qty);
-// the period cost is the qty-weighted average, cents-integer to avoid float drift.
-interface PeriodAcc { weightedCents: number; qty: number; count: number; }
+// the period cost is the qty-weighted average, cents-integer to avoid float
+// drift. dt + rowRefs exist for the fractional collapse: earliest-date pick and
+// per-row reclassification if a collapsed batch rounds to zero.
+interface PeriodRowRef { sheetRow: number; asin: string; date: string; rawQty: string; cost: number; }
+interface PeriodAcc { weightedCents: number; qty: number; count: number; dt: Date; rowRefs: PeriodRowRef[]; }
 const avgCents = (a: PeriodAcc): number => Math.round(a.weightedCents / a.qty);
 
 export async function buildSellerboardCogs(
@@ -137,10 +160,15 @@ export async function buildSellerboardCogs(
 
   const skips = {
     excludedByStatus: 0, badOrMissingDate: 0, excludedNonYtd: 0,
-    badOrZeroCost: 0, badQty: 0, sameDateMerged: 0, notInSb: 0, inSbNoUsableSku: 0,
+    badOrZeroCost: 0, badQty: 0, sameDateMerged: 0,
+    fractionalCollapsed: 0, fractionalRounded: 0, notInSb: 0, inSbNoUsableSku: 0,
   };
   let includedRows = 0;
   const badQtyRows: BadQtyRow[] = [];
+  // ASINs seen with a fractional Col U on an included row — row-level detection,
+  // NOT period sums, so fractions that happen to sum to an integer (or float
+  // noise near one) still trigger the collapse.
+  const fracAsins = new Set<string>();
 
   // Step 2: PO cost periods, keyed by ASIN -> (dateStr -> accumulator). Funnel:
   // status -> date -> cost -> qty. Same-ASIN same-date rows are genuine separate
@@ -165,12 +193,12 @@ export async function buildSellerboardCogs(
     const prep = row.prepCost == null ? 0 : row.prepCost; // empty Col AS on a real row = 0 (§3)
     const cost = cogs + prep;
 
-    // BatchQuantity = Col U (ordered qty) from THIS canonical row. Must be a
-    // positive integer — a blank/zero/fractional/non-numeric qty is skipped as
-    // badQty (before the merge, so it doesn't participate), never emitted: a
-    // blank BatchQuantity flips the row to time-based-period semantics in SB.
-    // Classify the failure mode from the verbatim cell; parseFloat matches the
-    // sheet reader so the skip DECISION is unchanged, only now itemized.
+    // BatchQuantity = Col U (ASIN-level sellable qty: raw units ÷ pack size)
+    // from THIS canonical row. Fractions are LEGITIMATE — they flow into the
+    // per-ASIN fractional collapse below; the integer guarantee for the
+    // emitted CSV is enforced after collapse + rounding (a blank BatchQuantity
+    // flips the row to time-based-period semantics in SB). Only blank /
+    // non-numeric / non-positive rows die here — zero qty = returned order.
     const rawQty = row.qtyRaw;
     const t = rawQty.trim();
     let qtyMode: BadQtyMode | null = null;
@@ -180,7 +208,6 @@ export async function buildSellerboardCogs(
       const n = parseFloat(t);
       if (Number.isNaN(n)) qtyMode = "non_numeric";
       else if (n <= 0) qtyMode = "non_positive";
-      else if (!Number.isInteger(n)) qtyMode = "non_integer";
       else qty = n;
     }
     if (qtyMode) {
@@ -195,6 +222,8 @@ export async function buildSellerboardCogs(
     // Normalize the join key the same way as the template side (trim came from
     // fetchSheetRows; uppercase here) so ASIN case can never fake a not-in-SB.
     const asinKey = row.asin.toUpperCase();
+    if (!Number.isInteger(qty)) fracAsins.add(asinKey);
+    const ref: PeriodRowRef = { sheetRow: row.sheetRow, asin: asinKey, date: row.orderDate ?? "", rawQty, cost };
     let byDate = periods.get(asinKey);
     if (!byDate) { byDate = new Map(); periods.set(asinKey, byDate); }
     const acc = byDate.get(dateStr);
@@ -202,8 +231,9 @@ export async function buildSellerboardCogs(
       acc.weightedCents += costCents * qty;
       acc.qty += qty;
       acc.count += 1;
+      acc.rowRefs.push(ref);
     } else {
-      byDate.set(dateStr, { weightedCents: costCents * qty, qty, count: 1 });
+      byDate.set(dateStr, { weightedCents: costCents * qty, qty, count: 1, dt, rowRefs: [ref] });
     }
   }
 
@@ -217,6 +247,52 @@ export async function buildSellerboardCogs(
         merges.push({ asin, date: dateStr, count: acc.count, qty: acc.qty, cost: avgCents(acc) / 100 });
       }
     }
+  }
+
+  // Step 2b/2c: per-ASIN fractional handling, AFTER the same-date merge. Col U
+  // is ASIN-level sellable qty (raw units ÷ pack size), so fractional rows are
+  // real partial-pack allocations: if the ASIN had ANY fractional included row,
+  // collapse ALL of its periods into ONE batch — qty = sum, cost = weighted
+  // average over the RAW (fractional) quantities (integer cents, half up),
+  // date = EARLIEST so the batch covers the full sales window. All-integer
+  // ASINs keep their separate dated batches. A still-fractional summed qty
+  // rounds half-up; zero after rounding drops the batch and reclassifies its
+  // constituent rows as badQty/non_positive so the row identity still balances.
+  const fractionalCollapsed: SbFractionalCollapse[] = [];
+  const fractionalRounded: SbFractionalRound[] = [];
+  for (const asin of Array.from(fracAsins)) {
+    const byDate = periods.get(asin);
+    if (!byDate) continue;
+    let weightedCents = 0, rawSum = 0, rowsFolded = 0;
+    let earliest: Date | null = null;
+    const rowRefs: PeriodRowRef[] = [];
+    for (const a of Array.from(byDate.values())) {
+      weightedCents += a.weightedCents;
+      rawSum += a.qty;
+      rowsFolded += a.count;
+      rowRefs.push(...a.rowRefs);
+      if (!earliest || a.dt < earliest) earliest = a.dt;
+    }
+    const costCents = Math.round(weightedCents / rawSum); // weighted by RAW qtys, before any rounding
+    const qty = Math.round(rawSum); // residual rounding, half up
+    if (!Number.isInteger(rawSum)) {
+      skips.fractionalRounded++;
+      fractionalRounded.push({ asin, rawSum: Math.round(rawSum * 10000) / 10000, rounded: qty });
+    }
+    if (qty === 0) {
+      for (const ref of rowRefs) { skips.badQty++; badQtyRows.push({ ...ref, mode: "non_positive" }); }
+      includedRows -= rowRefs.length;
+      periods.delete(asin);
+      continue;
+    }
+    skips.fractionalCollapsed++;
+    const dateStr = formatMDYNoPad(earliest!);
+    fractionalCollapsed.push({ asin, rowsFolded, qty, cost: costCents / 100, date: dateStr });
+    // Single synthetic period; weightedCents is chosen so avgCents reproduces
+    // the raw-weighted cost exactly despite the rounded qty.
+    const single = new Map<string, PeriodAcc>();
+    single.set(dateStr, { weightedCents: costCents * qty, qty, count: rowsFolded, dt: earliest!, rowRefs });
+    periods.set(asin, single);
   }
 
   // Step 3: join to template SKUs and fan out one row per SKU per period.
@@ -271,6 +347,8 @@ export async function buildSellerboardCogs(
       inSbNoUsableSkuAsins: Array.from(inSbNoUsableSkuAsins),
       merges,
       badQtyRows,
+      fractionalCollapsed,
+      fractionalRounded,
     },
   };
 }

@@ -866,11 +866,14 @@ unparseable / ≤ 0 → **bad-cost** skip. `CostPeriodStartDate` = the Col C dat
 `M/D/YYYY`, no leading zeros. Orders-side ASINs are normalized trim + uppercase
 before keying/joining.
 
-`BatchQuantity` = **Col U** (ordered qty) from the **same canonical row** the
-cost came from, parsed as a **positive integer**. Col U empty / unparseable /
-non-positive / non-integer on an otherwise-valid row → **badQty** skip — a cost
-row is **never** emitted with a blank qty (a blank `BatchQuantity` flips the row
-to time-based-period semantics in SB).
+`BatchQuantity` = **Col U** from the **same canonical row** the cost came from.
+Col U is **ASIN-level sellable qty** (raw units ÷ pack size), so **fractional
+values are legitimate** and flow into the per-ASIN fractional collapse below;
+the integer guarantee for the emitted CSV is enforced after collapse + rounding.
+Col U empty / unparseable / non-positive on an otherwise-valid row → **badQty**
+skip (`mode` ∈ `empty` / `non_numeric` / `non_positive`; zero qty = returned
+order) — a cost row is **never** emitted with a blank qty (a blank
+`BatchQuantity` flips the row to time-based-period semantics in SB).
 
 Same-ASIN same-date collapse: same-day rows are **genuine separate orders**, so
 they **merge into one batch** — `BatchQuantity` = sum of Col U quantities,
@@ -881,6 +884,21 @@ same average. Each merged period is counted as **`sameDateMerged`**
 row is skipped *before* the merge, so it never participates — the remaining valid
 rows merge among themselves (or pass through solo). Different dates = separate
 periods (intended).
+
+**Fractional collapse (after the same-date merge), per ASIN:** if **any**
+included row for the ASIN had a non-integer Col U (detected at row level, not
+from period sums, so fractions summing to an integer still trigger), **all** of
+that ASIN's periods collapse into **one batch**: `BatchQuantity` = sum of all
+quantities, `Cost` = weighted average over the **raw fractional** quantities
+(integer cents, round half up), `CostPeriodStartDate` = the **earliest** period
+date (the batch must cover the full sales window). All-integer ASINs keep their
+separate dated batches. A still-fractional summed qty then **rounds half-up** to
+the nearest integer; a batch that rounds to **zero is dropped** and its
+constituent rows are reclassified as **badQty/`non_positive`** (decrementing
+`includedRows`), so the row-accounting identity still balances. Counted as
+**`fractionalCollapsed`** (ASIN, rows folded, final qty/cost/date) and
+**`fractionalRounded`** (ASIN, raw sum → rounded; includes rounded-to-zero
+drops) — both informational, like `sameDateMerged`.
 
 **Step 3 — join + fan out:** for each (ASIN, date, cost, qty) period, emit one
 CSV row per SKU the template maps to that ASIN, duplicating the **full batch
@@ -901,9 +919,11 @@ rawRowsRead = blankAsinRows + excludedByStatus + badDate + excludedNonYtd
 
 `rawRowsRead` is the total row count the sheet read returned (an
 upstream-truncation tripwire, surfaced by `fetchSheetRowsWithMeta`);
-`blankAsinRows` are rows dropped upstream for a blank Col H. `sameDateMerged` is
-informational (merged rows stay included); `notInSb` / `inSbNoUsableSku` are
-ASIN-level drops at the join, after row accounting. The identity (with remainder)
+`blankAsinRows` are rows dropped upstream for a blank Col H. `sameDateMerged`,
+`fractionalCollapsed`, and `fractionalRounded` are informational (their rows
+stay included — except a collapsed batch rounding to zero, whose rows are
+reclassified from `includedRows` into `badQty`); `notInSb` / `inSbNoUsableSku`
+are ASIN-level drops at the join, after row accounting. The identity (with remainder)
 is printed by the dry-run script and logged by the endpoint.
 
 **Output CSV** carries **all 15 template headers in template order**:
@@ -915,10 +935,12 @@ Named `sb-cogs-YYYY-MM-DD.csv`.
 **Response** is JSON `{ filename, csv, summary }` (not a raw file, not headers):
 `summary = { emitted, asins, periods, rawRowsRead, blankAsinRows, includedRows,
 templateRowsLoaded, templateRowsDropped, skips: { excludedByStatus, badDate,
-excludedNonYtd, badCost, badQty, sameDateMerged, notInSb, inSbNoUsableSku },
-notInSbAsins: [...], inSbNoUsableSkuAsins: [...], badQtyRows: [{ asin, date,
-rawQty, mode }] }` (`mode` ∈ `empty` / `non_numeric` / `non_positive` /
-`non_integer`). The client builds the download from the `csv` string and shows a
+excludedNonYtd, badCost, badQty, sameDateMerged, fractionalCollapsed,
+fractionalRounded, notInSb, inSbNoUsableSku }, notInSbAsins: [...],
+inSbNoUsableSkuAsins: [...], badQtyRows: [{ asin, date, rawQty, mode }],
+fractionalCollapsed: [{ asin, rowsFolded, qty, cost, date }],
+fractionalRounded: [{ asin, rawSum, rounded }] }` (`mode` ∈ `empty` /
+`non_numeric` / `non_positive`). The client builds the download from the `csv` string and shows a
 summary modal with the full row accounting plus the **not-in-SB, no-usable-SKU,
 and bad-qty lists expandable**; full detail (incl. merges, per-row badQty with
 sheet row + cost, and the identity remainder) is logged server-side. Toolbar
