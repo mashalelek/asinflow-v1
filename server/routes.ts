@@ -239,6 +239,11 @@ function mapSubmitOutcomeToOfferAddResult(outcome: any): OfferAddResult {
         sku: outcome.sku,
         reused: outcome.reused,
         payload: outcome.payload,
+        // 18555-cap surfacing (SPEC §18 "Suppression cap")
+        priceDetail: outcome.priceDetail,
+        capApplied: outcome.capApplied,
+        noPriceReference: outcome.noPriceReference,
+        lowRoiAfterCap: outcome.lowRoiAfterCap,
         brandCode: outcome.brandCode,
         registry: outcome.registry,
         proposedNnn: outcome.proposedNnn,

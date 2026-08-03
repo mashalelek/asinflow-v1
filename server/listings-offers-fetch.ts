@@ -27,7 +27,17 @@ export interface CompetingOffer {
 }
 
 export type OffersFetchOutcome =
-  | { ok: true; competingOffers: number[]; ourOffer: number | null; allOffers: CompetingOffer[] }
+  | {
+      ok: true;
+      competingOffers: number[];
+      ourOffer: number | null;
+      allOffers: CompetingOffer[];
+      // 18555-cap reference data from payload.Summary of the SAME response —
+      // zero extra API calls (SPEC §18 "Suppression cap"). Frequently absent:
+      // null when the field isn't in the Summary.
+      competitivePriceThreshold: number | null;
+      buyBoxPrice: number | null; // New-condition landed buy box price
+    }
   | { ok: false; reason: "not_found" | "transient_error"; status?: number; message: string };
 
 // Retry config (defaults to production values). Exposed for tests to override —
@@ -118,10 +128,24 @@ export async function fetchCompetingOffers(
   const ourOffers = allOffers.filter((o) => o.sellerId === ourSellerId);
   const competing = allOffers.filter((o) => o.sellerId !== ourSellerId);
 
+  // 18555-cap reference data (payload.Summary — same response, free).
+  const summary = data?.payload?.Summary ?? {};
+  const cptRaw = summary?.CompetitivePriceThreshold?.Amount;
+  const cptNum = cptRaw != null ? parseFloat(cptRaw) : NaN;
+  const competitivePriceThreshold = !isNaN(cptNum) && cptNum > 0 ? cptNum : null;
+  const bbEntry = (summary?.BuyBoxPrices ?? []).find(
+    (b: any) => String(b?.condition ?? "").toLowerCase() === "new",
+  ) ?? (summary?.BuyBoxPrices ?? [])[0];
+  const bbRaw = bbEntry?.LandedPrice?.Amount ?? bbEntry?.ListingPrice?.Amount;
+  const bbNum = bbRaw != null ? parseFloat(bbRaw) : NaN;
+  const buyBoxPrice = !isNaN(bbNum) && bbNum > 0 ? bbNum : null;
+
   return {
     ok: true,
     competingOffers: competing.map((o) => o.price).sort((a, b) => b - a),
     ourOffer: ourOffers.length > 0 ? ourOffers[0].price : null,
     allOffers,
+    competitivePriceThreshold,
+    buyBoxPrice,
   };
 }

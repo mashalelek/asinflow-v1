@@ -374,3 +374,85 @@ describe("cogsMissing matrix (Rule 1 informational, Rule 2 blocking)", () => {
     expect(noCogs.rule).toBe("offers_fetch_failed");
   });
 });
+
+// ============================================================================
+// 18555 suppression cap (SPEC §18 "Suppression cap")
+// ============================================================================
+describe("18555 suppression cap", () => {
+  const withRefs = (competing: number[], cpt: number | null, bb: number | null): OffersInput =>
+    ({ kind: "definitive", competing, competitivePriceThreshold: cpt, buyBoxPrice: bb });
+
+  it("CPT cap binds strictly below CPT with .x9 dime-step flooring ($119.99 → $119.89)", () => {
+    // Rule 1 price: $180 × 1.30 = $234 → $234.99; CPT $119.99 sits on .x9 → step down a dime
+    const r = resolveOfferPrice(inp({ offers: withRefs([180], 119.99, null) }), DEFAULT_SETTINGS, true);
+    expect(r.rule).toBe("highest_plus_30");
+    expect(r.capApplied).toBe(true);
+    expect(r.capReference).toBe("cpt");
+    expect(r.resolvedPrice).toBe(119.89);
+    expect(r.uncappedPrice).toBe(234.99);
+    expect(r.detail).toMatch(/CAPPED/);
+  });
+
+  it("CPT not on .x9 floors to the nearest .x9 strictly below ($120.00 → $119.99)", () => {
+    const r = resolveOfferPrice(inp({ offers: withRefs([180], 120.0, null) }), DEFAULT_SETTINGS, true);
+    expect(r.resolvedPrice).toBe(119.99);
+    expect(r.capReference).toBe("cpt");
+  });
+
+  it("CPT takes precedence over buy box", () => {
+    const r = resolveOfferPrice(inp({ offers: withRefs([180], 119.99, 26) }), DEFAULT_SETTINGS, true);
+    expect(r.capReference).toBe("cpt");
+    expect(r.resolvedPrice).toBe(119.89);
+  });
+
+  it("BB fallback: cap = BB × 1.5 floored to .x9 ($26 → $38.99; the Aug-02 B0H19TPRR7 case)", () => {
+    // Rule price 49.99 × 1.3 = 64.99 (the real 18555 trip); 26 × 1.5 = 39.00 → .x9 floor → 38.99
+    const r = resolveOfferPrice(inp({ offers: withRefs([49.99], null, 26) }), DEFAULT_SETTINGS, true);
+    expect(r.capApplied).toBe(true);
+    expect(r.capReference).toBe("buy_box_x1_5");
+    expect(r.resolvedPrice).toBe(38.99);
+    expect(r.uncappedPrice).toBe(64.99);
+  });
+
+  it(".x9 flooring is 10-cent steps, not .99 dollar-steps ($12.65 BB → cap $18.89)", () => {
+    // 12.65 × 1.5 = 18.975 → $18.89 (NOT $18.99 which exceeds, NOT $17.99 dollar-step)
+    const r = resolveOfferPrice(inp({ offers: withRefs([40], null, 12.65) }), DEFAULT_SETTINGS, true);
+    expect(r.capApplied).toBe(true);
+    expect(r.resolvedPrice).toBe(18.89);
+  });
+
+  it("cap never raises: rule price below cap is untouched", () => {
+    // Rule: $10 × 1.3 → $13.99; cap would be 26 × 1.5 → $38.99
+    const r = resolveOfferPrice(inp({ offers: withRefs([10], null, 26) }), DEFAULT_SETTINGS, true);
+    expect(r.capApplied).toBe(false);
+    expect(r.resolvedPrice).toBe(13.99);
+    expect(r.uncappedPrice).toBeNull();
+    expect(r.noPriceReference).toBe(false);
+  });
+
+  it("Rule 2 (roi_100) output is capped too, and low-ROI-after-cap flags", () => {
+    // ROI-100 on $100 cogs lands far above CPT $50 → capped to $49.99 (strictly below 50);
+    // ROI at $49.99 on $100 cogs is deep-negative → flagged, not blocked.
+    const r = resolveOfferPrice(inp({ cogs: 100, offers: withRefs([], 50, null) }), DEFAULT_SETTINGS, true);
+    expect(r.rule).toBe("roi_100");
+    expect(r.capApplied).toBe(true);
+    expect(r.resolvedPrice).toBe(49.99);
+    expect(r.lowRoiAfterCap).toBe(true);
+    expect(r.detail).toMatch(/below min/);
+  });
+
+  it("no CPT and no BB → uncapped with noPriceReference flag (18555 risk visible)", () => {
+    const r = resolveOfferPrice(inp({ offers: definite([49.99]) }), DEFAULT_SETTINGS, true);
+    expect(r.capApplied).toBe(false);
+    expect(r.noPriceReference).toBe(true);
+    expect(r.resolvedPrice).toBe(64.99); // rule price stands
+    expect(r.detail).toMatch(/18555 risk/);
+  });
+
+  it("null-price outcomes (fetch_failed) carry inert cap fields", () => {
+    const r = resolveOfferPrice(inp({ offers: failed() }), DEFAULT_SETTINGS, true);
+    expect(r.capApplied).toBe(false);
+    expect(r.noPriceReference).toBe(false);
+    expect(r.uncappedPrice).toBeNull();
+  });
+});

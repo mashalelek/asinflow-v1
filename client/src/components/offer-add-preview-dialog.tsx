@@ -39,6 +39,11 @@ export type OfferAddOutcome =
       sku: string;
       reused: boolean;
       payload: any;
+      // 18555-cap surfacing (SPEC §18 "Suppression cap")
+      priceDetail?: string;
+      capApplied?: boolean;
+      noPriceReference?: boolean;
+      lowRoiAfterCap?: boolean;
       brandCode?: string;
       registry?: RegistryEntry[];
       proposedNnn?: number;
@@ -360,7 +365,21 @@ export function OfferAddPreviewDialog({
                         ) : (
                           <code className="font-mono text-xs font-bold">{o.sku}</code>
                         )}
-                        <span className="text-xs text-muted-foreground ml-auto">${Number(price).toFixed(2)}</span>
+                        <span className="text-xs text-muted-foreground ml-auto" title={o.priceDetail}>${Number(price).toFixed(2)}</span>
+                        {/* 18555-cap indicators (SPEC §18 "Suppression cap") */}
+                        {o.capApplied && (
+                          <Badge variant="secondary" className="text-[10px]" title={o.priceDetail}>capped</Badge>
+                        )}
+                        {o.noPriceReference && (
+                          <Badge variant="outline" className="text-[10px] border-amber-500 text-amber-600" title="No CPT / buy box reference — price is uncapped; 18555 suppression risk">
+                            18555 risk
+                          </Badge>
+                        )}
+                        {o.lowRoiAfterCap && (
+                          <Badge variant="outline" className="text-[10px] border-amber-500 text-amber-600" title={o.priceDetail}>
+                            low ROI
+                          </Badge>
+                        )}
                         <Button variant="ghost" size="sm" className="h-6 text-xs" onClick={() => toggleExpand(row.asin)}>
                           {isExpanded ? "Hide payload" : "View payload"}
                         </Button>

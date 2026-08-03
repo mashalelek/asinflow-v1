@@ -1633,6 +1633,10 @@ Offer price is set by priority:
 
 1. **Default (≥1 competing offer):** highest competing offer **× 1.30**, rounded UP to the next `.99`.
 2. **No competing offers:** price solved for **100% ROI** on our COGS.
+3. **18555 cap (2026-08-02):** the rule price is then capped — `price =
+   min(rule price, cap)` — so opening offers stay under Amazon's
+   "price appears higher than expected" suppression. See "Suppression cap"
+   below. The cap can only lower a price, never raise it.
 
 Rule 1 is the default whenever any competing offer exists. Rule 2 applies only
 when the listing has zero competing offers.
@@ -1661,15 +1665,45 @@ floor — resulting ROI is always ≥ target). Two guards short-circuit it:
 - **`skip_unreachable`** — 100% ROI isn't achievable within the price search
   range (extreme fee/prep structure) → skipped.
 
-**Expected side effect — high placeholder pricing.** Anchoring on the *max*
-competing offer can land **far above the buy box** when a high outlier exists
-(observed: a `$69` FBA outlier among offers clustered `$46–60` →
-`$69 × 1.30 = $89.99` submitted → Amazon `18555` / `LISTING_SUPPRESSED`). This
-is **designed behavior**: the offer-creation price is a deliberately high
-placeholder; the repricer (Aura) and the FBA check-in review own the
-real selling price. **`18555` suppressions on freshly-created offers are
-expected, not defects** — the verification ledger surfaces them
-(`terminal_conflict`) for visibility, not as failures.
+### Suppression cap (18555 prevention)
+
+**History.** Anchoring Rule 1 on the *max* competing offer lands far above the
+buy box when a junk high outlier exists. Until 2026-08-02 this was treated as
+designed behavior ("high placeholder, repricer owns the real price") — but the
+`18555` / `LISTING_SUPPRESSED` rows it produced (3 of the Aug-02 batch of 21;
+each back-solved to 1.3 × an offer 50–100% above the buy box) are pure
+downside: a suppressed opening offer sells nothing and pollutes the
+verification ledger with terminal conflicts. The err-high philosophy is kept
+**within the non-suppressed range** — the repricer walks the price down after.
+
+**Reference data — free, same call.** `getItemOffers`' response carries
+`payload.Summary` alongside `Offers[]`; `fetchCompetingOffers` parses
+`CompetitivePriceThreshold` (CPT — present only sometimes; observed 2 of 6
+probes, including an ASIN with NO buy box) and the New-condition buy box
+landed price. Zero additional API calls.
+
+**Cap chain** (applies to BOTH rules' output):
+
+1. **CPT present** → cap **strictly below CPT**, floored to `.x9`:
+   the largest price ending in 9 cents that is `< CPT`. If CPT itself ends in
+   `.x9`, step down one dime (CPT `$119.99` → cap `$119.89`).
+2. **CPT absent, buy box present** → cap = **buy box × 1.5**, floored to the
+   nearest `.x9` (≤). Calibration (Aug-02 data): ≤ 1.94×BB passed, 1.95–2.5×
+   tripped; 1.5 errs high with margin for Amazon's drifting heuristic.
+3. **Neither reference** → **no silent cap**: the rule price stands and the
+   preview row carries a visible flag ("no market reference — 18555 risk") for
+   a per-ASIN eyes-on decision.
+
+`.x9` flooring = 10-cent steps ending in 9 (`$18.97` → `$18.89`), NOT
+`.99`-dollar steps. The rules' own `.99` ceil-rounding is unchanged; flooring
+applies only to the cap value.
+
+**Visibility.** When the cap binds, the resolver reports the uncapped rule
+price + cap reference in its detail string, and the preview shows a capped
+indicator. If the capped price drops resulting ROI below the min-ROI
+threshold, the preview row is **flagged, not blocked** — review decides.
+Historical `18555` rows already in the ledger keep their `terminal_conflict`
+surfacing unchanged.
 
 ### SKU Format
 

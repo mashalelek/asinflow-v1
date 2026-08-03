@@ -28,7 +28,16 @@ export type PriceRule =
 // 429 transient would silently trigger 100% ROI pricing on an ASIN that
 // actually has competitors).
 export type OffersInput =
-  | { kind: "definitive"; competing: number[] }   // empty array = real zero offers
+  | {
+      kind: "definitive";
+      competing: number[];                        // empty array = real zero offers
+      // 18555-cap reference data — parsed from the SAME getItemOffers response
+      // (payload.Summary), zero extra API calls. Both are frequently absent:
+      // CPT observed on ~1/3 of probes (and can exist WITHOUT a buy box);
+      // buy box absent when no offer holds it. null/undefined = not present.
+      competitivePriceThreshold?: number | null;
+      buyBoxPrice?: number | null;                // New-condition landed price
+    }
   | { kind: "fetch_failed"; reason: string };     // 429/5xx/404/network — UNKNOWN
 
 export interface PriceResolverInput {
@@ -71,6 +80,53 @@ export interface PriceResolverResult {
   // The blocking/non-blocking distinction is encoded by which rule fires;
   // cogsMissing is the UI-side flag for the non-blocking case.
   cogsMissing: boolean;
+  // ─── 18555 suppression cap (SPEC §18 "Suppression cap") ───
+  // The cap can only LOWER a rule price, never raise it.
+  capApplied: boolean;                            // rule price exceeded the cap
+  capReference: "cpt" | "buy_box_x1_5" | null;    // which reference bound (when capApplied)
+  uncappedPrice: number | null;                   // the rule price before capping (when capApplied)
+  // No CPT and no buy box → nothing to cap against. Rule price stands
+  // UNCAPPED; preview surfaces "no market reference — 18555 risk".
+  noPriceReference: boolean;
+  // Cap bound AND resulting ROI fell below settings.minRoiThreshold.
+  // Flagged for review, never blocked.
+  lowRoiAfterCap: boolean;
+}
+
+// ─── 18555 cap helpers ────────────────────────────────────────────────────────
+const CAP_BB_MULTIPLIER = 1.5;
+
+// Largest price ending in 9 CENTS (10-cent steps: .09, .19, … .99) that is
+// <= v. NOT .99-dollar steps: $18.97 → $18.89.
+function floorToX9(v: number): number {
+  const cents = Math.floor(v * 100 + 1e-6);
+  const r = cents % 10;
+  return (r === 9 ? cents : cents - r - 1) / 100;
+}
+
+// Largest .x9 price STRICTLY below v — for the CPT cap ("never price AT the
+// threshold"). If v itself sits on .x9, step down one dime ($119.99 → $119.89).
+function floorToX9StrictlyBelow(v: number): number {
+  const f = floorToX9(v);
+  return Math.abs(f - v) < 0.005 ? Math.round((f - 0.10) * 100) / 100 : f;
+}
+
+interface CapInfo { value: number; reference: "cpt" | "buy_box_x1_5" }
+
+// Cap chain: CPT (strictly below, .x9) → buy box × 1.5 (.x9) → null.
+function resolveCap(offers: OffersInput): CapInfo | null {
+  if (offers.kind !== "definitive") return null;
+  const cpt = offers.competitivePriceThreshold;
+  if (cpt != null && cpt > 0) {
+    const value = floorToX9StrictlyBelow(cpt);
+    if (value >= 0.09) return { value, reference: "cpt" };
+  }
+  const bb = offers.buyBoxPrice;
+  if (bb != null && bb > 0) {
+    const value = floorToX9(bb * CAP_BB_MULTIPLIER);
+    if (value >= 0.09) return { value, reference: "buy_box_x1_5" };
+  }
+  return null;
 }
 
 const round2 = (n: number): number => Math.round(n * 100) / 100;
@@ -113,6 +169,7 @@ export function resolveOfferPrice(
       detail: `Couldn't check competition: ${input.offers.reason}. Not submittable until retry succeeds.`,
       resultingRoi: null,
       cogsMissing,
+      ...NO_CAP_FIELDS,
     };
   }
 
@@ -124,20 +181,12 @@ export function resolveOfferPrice(
   // ─── Rule 1: ≥1 competing offer → highest × 1.30, ceil to .99 ────────────
   if (n >= 1) {
     const raw = highest! * 1.30;
-    const price = ceilToNext99(raw);
-    // Compute resulting ROI at that price for diagnostic display
-    const resultingRoi = input.cogs != null && input.cogs > 0
-      ? roiAt(price, input, settings, includeInboundShipping)
-      : null;
-    return {
-      rule: "highest_plus_30",
-      resolvedPrice: price,
-      competingOfferCount: n,
-      highestCompetingOffer: highest,
-      detail: `${n} competing offer${n === 1 ? "" : "s"}; highest $${highest!.toFixed(2)} × 1.30 = $${raw.toFixed(2)} → $${price.toFixed(2)} (.99)${cogsMissing ? " — ROI unknown (no COGS)" : ""}`,
-      resultingRoi,
-      cogsMissing,
-    };
+    const rulePrice = ceilToNext99(raw);
+    const baseDetail = `${n} competing offer${n === 1 ? "" : "s"}; highest $${highest!.toFixed(2)} × 1.30 = $${raw.toFixed(2)} → $${rulePrice.toFixed(2)} (.99)${cogsMissing ? " — ROI unknown (no COGS)" : ""}`;
+    return finalizePriced(
+      "highest_plus_30", rulePrice, n, highest, baseDetail, cogsMissing,
+      input, settings, includeInboundShipping,
+    );
   }
 
   // ─── Rule 2: 0 competing offers → bisect for 100% ROI ────────────────────
@@ -150,6 +199,7 @@ export function resolveOfferPrice(
       detail: "0 competing offers; cannot solve 100% ROI without COGS (cogs is null or 0)",
       resultingRoi: null,
       cogsMissing: true,
+      ...NO_CAP_FIELDS,
     };
   }
 
@@ -180,6 +230,7 @@ export function resolveOfferPrice(
       detail: `100% ROI not reachable: at price $${round2(hi).toFixed(2)} (cogs × ${Math.round(hi / cogs)}), ROI = ${roiAt(hi, input, settings, includeInboundShipping).toFixed(1)}%`,
       resultingRoi: null,
       cogsMissing: false, // we have cogs here (passed the earlier check)
+      ...NO_CAP_FIELDS,
     };
   }
 
@@ -199,16 +250,67 @@ export function resolveOfferPrice(
   // Re-evaluating ROI at the rounded price yields ROI slightly > 100%
   // (rounding up nudges margin up). Acceptable per spec: "erring high is safe".
   const rawSolved = hi;
-  const price = ceilToNext99(rawSolved);
-  const finalRoi = roiAt(price, input, settings, includeInboundShipping);
+  const rulePrice = ceilToNext99(rawSolved);
+  const ruleRoi = roiAt(rulePrice, input, settings, includeInboundShipping);
+  const baseDetail = `0 competing offers; bisected to $${rawSolved.toFixed(2)} for ~100% ROI; rounded UP to $${rulePrice.toFixed(2)} (.99). Actual ROI ${ruleRoi.toFixed(1)}% (cogs $${cogs.toFixed(2)})`;
+  return finalizePriced(
+    "roi_100", rulePrice, 0, null, baseDetail, false,
+    input, settings, includeInboundShipping,
+  );
+}
+
+// Default cap fields for null-price outcomes (skips / fetch-failed) — no price
+// was produced, so nothing was capped and no risk flag applies.
+const NO_CAP_FIELDS = {
+  capApplied: false,
+  capReference: null,
+  uncappedPrice: null,
+  noPriceReference: false,
+  lowRoiAfterCap: false,
+} as const;
+
+// Applies the 18555 cap to a rule-produced price and assembles the final
+// result. ROI is computed at the FINAL (possibly capped) price so preview ROI
+// matches what will actually be submitted.
+function finalizePriced(
+  rule: PriceRule,
+  rulePrice: number,
+  competingOfferCount: number,
+  highestCompetingOffer: number | null,
+  baseDetail: string,
+  cogsMissing: boolean,
+  input: PriceResolverInput,
+  settings: Settings,
+  includeInboundShipping: boolean,
+): PriceResolverResult {
+  const cap = resolveCap(input.offers);
+  const capApplied = cap != null && rulePrice > cap.value;
+  const price = capApplied ? cap!.value : rulePrice;
+  const resultingRoi = !cogsMissing ? roiAt(price, input, settings, includeInboundShipping) : null;
+  const lowRoiAfterCap = capApplied && resultingRoi != null && resultingRoi < settings.minRoiThreshold;
+
+  let detail = baseDetail;
+  if (capApplied) {
+    const refLabel = cap!.reference === "cpt" ? "strictly below CPT" : "buy box × 1.5";
+    detail += ` — CAPPED $${rulePrice.toFixed(2)} → $${price.toFixed(2)} (${refLabel}, 18555 prevention)`;
+    if (lowRoiAfterCap) detail += `; ROI ${resultingRoi!.toFixed(1)}% is below min ${settings.minRoiThreshold}%`;
+  } else if (cap == null) {
+    detail += " — no market reference (CPT/buy box absent): uncapped, 18555 risk";
+  }
+
   return {
-    rule: "roi_100",
+    rule,
     resolvedPrice: price,
-    competingOfferCount: 0,
-    highestCompetingOffer: null,
-    detail: `0 competing offers; bisected to $${rawSolved.toFixed(2)} for ~100% ROI; rounded UP to $${price.toFixed(2)} (.99). Actual ROI ${finalRoi.toFixed(1)}% (cogs $${cogs.toFixed(2)})`,
-    resultingRoi: finalRoi,
-    cogsMissing: false, // Rule 2 requires cogs; this path only reached when cogs > 0
+    competingOfferCount,
+    highestCompetingOffer,
+    detail,
+    resultingRoi,
+    cogsMissing,
+    capApplied,
+    capReference: capApplied ? cap!.reference : null,
+    uncappedPrice: capApplied ? rulePrice : null,
+    noPriceReference: cap == null,
+    lowRoiAfterCap,
   };
 }
 

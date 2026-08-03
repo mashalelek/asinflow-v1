@@ -173,3 +173,36 @@ describe("fetchCompetingOffers", () => {
     }
   });
 });
+
+// ============================================================================
+// 18555-cap reference parsing (payload.Summary — SPEC §18 "Suppression cap")
+// ============================================================================
+describe("Summary reference parsing (CPT / buy box)", () => {
+  it("parses CompetitivePriceThreshold and New-condition buy box landed price", async () => {
+    const out = await fetchCompetingOffers("B000TEST01", "OUR_ID", fakeGet({
+      payload: {
+        Offers: [],
+        Summary: {
+          CompetitivePriceThreshold: { CurrencyCode: "USD", Amount: "119.99" },
+          BuyBoxPrices: [{ condition: "New", LandedPrice: { CurrencyCode: "USD", Amount: "26.00" } }],
+        },
+      },
+    }));
+    expect(out.ok).toBe(true);
+    if (out.ok) {
+      expect(out.competitivePriceThreshold).toBe(119.99);
+      expect(out.buyBoxPrice).toBe(26);
+    }
+  });
+
+  it("absent Summary fields → nulls (CPT is frequently missing)", async () => {
+    const out = await fetchCompetingOffers("B000TEST01", "OUR_ID", fakeGet({
+      payload: { Offers: [], Summary: { BuyBoxPrices: [] } },
+    }));
+    expect(out.ok).toBe(true);
+    if (out.ok) {
+      expect(out.competitivePriceThreshold).toBeNull();
+      expect(out.buyBoxPrice).toBeNull();
+    }
+  });
+});

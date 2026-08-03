@@ -48,7 +48,8 @@ import type { ProductRegistryRow } from "@shared/product-registry";
 // 'created' / 'putlistings_failed' come only from phase 4.
 export type SubmitOutcome =
   // Reached phase 4 + completed (phase4Mode="live")
-  | { kind: "created";             asin: string; sku: string; submissionId: string; warnings: ListingsIssue[]; resolvedPrice: number; priceRule: string }
+  | { kind: "created";             asin: string; sku: string; submissionId: string; warnings: ListingsIssue[]; resolvedPrice: number; priceRule: string;
+      priceDetail: string; capApplied: boolean; noPriceReference: boolean; lowRoiAfterCap: boolean }
   | { kind: "putlistings_failed";  asin: string; sku: string; reason: OfferAddFailureReason; originalCode: string | null; originalMessage: string; retryable: boolean; resolvedPrice: number }
   // Reached phase 4 but did NOT fire PUT (phase4Mode="preview").
   // The payload IS the exact bytes that "live" mode would have sent.
@@ -58,6 +59,7 @@ export type SubmitOutcome =
   // round-trip. proposedNnn/proposedTtl are the allocator + derivation
   // defaults the canonical SKU was built from.
   | { kind: "would_submit"; asin: string; sku: string; reused: boolean; payload: any; resolvedPrice: number; priceRule: string;
+      priceDetail: string; capApplied: boolean; noPriceReference: boolean; lowRoiAfterCap: boolean;
       brandCode?: string; registry?: ProductRegistryRow[]; proposedNnn?: number; proposedTtl?: string }
   // Skipped before reaching phase 4.
   // `pending` is populated ONLY when reason === "legend_pending" — the
@@ -309,7 +311,10 @@ export async function submitOfferAddBatch(
   // ─── Phase 3: per-ASIN price resolution (paced) ─────────────────────────────
   // After phase 2, "ready for pricing" = phase1Ready ∖ (overflow + non-conforming-SKU).
   const readyForPricing = phase1Ready.filter((p) => !outcomeByAsin.has(p.asin));
-  const priceByAsin = new Map<string, { price: number; rule: string }>();
+  const priceByAsin = new Map<string, {
+    price: number; rule: string;
+    detail: string; capApplied: boolean; noPriceReference: boolean; lowRoiAfterCap: boolean;
+  }>();
   for (let i = 0; i < readyForPricing.length; i++) {
     const p = readyForPricing[i];
     const row = submittableRows.find((r) => r.asin === p.asin)!;
@@ -331,7 +336,12 @@ export async function submitOfferAddBatch(
       prepCost: row.prepCost,
       storageCost: row.storageCost,
       offers: offersOutcome.ok
-        ? { kind: "definitive" as const, competing: offersOutcome.competingOffers }
+        ? {
+            kind: "definitive" as const,
+            competing: offersOutcome.competingOffers,
+            competitivePriceThreshold: offersOutcome.competitivePriceThreshold,
+            buyBoxPrice: offersOutcome.buyBoxPrice,
+          }
         : { kind: "fetch_failed" as const, reason: `${offersOutcome.reason}${offersOutcome.status ? ` (${offersOutcome.status})` : ""}: ${offersOutcome.message}` },
     };
     const resolved: PriceResolverResult = resolveOfferPrice(resolverInput, deps.settings, deps.includeInboundShipping);
@@ -348,7 +358,11 @@ export async function submitOfferAddBatch(
       });
       continue;
     }
-    priceByAsin.set(p.asin, { price: resolved.resolvedPrice, rule: resolved.rule });
+    priceByAsin.set(p.asin, {
+      price: resolved.resolvedPrice, rule: resolved.rule,
+      detail: resolved.detail, capApplied: resolved.capApplied,
+      noPriceReference: resolved.noPriceReference, lowRoiAfterCap: resolved.lowRoiAfterCap,
+    });
   }
 
   // ─── Phase 4: per-ASIN live submit (or preview) ─────────────────────────────
@@ -453,12 +467,16 @@ export async function submitOfferAddBatch(
       outcomeByAsin.set(p.asin, {
         kind: "would_submit", asin: p.asin, sku: result.sku, reused: result.reused,
         payload: result.payload, resolvedPrice: priced.price, priceRule: priced.rule,
+        priceDetail: priced.detail, capApplied: priced.capApplied,
+        noPriceReference: priced.noPriceReference, lowRoiAfterCap: priced.lowRoiAfterCap,
         brandCode, registry, proposedNnn, proposedTtl,
       });
     } else if (result.kind === "created") {
       outcomeByAsin.set(p.asin, {
         kind: "created", asin: p.asin, sku: result.sku, submissionId: result.submissionId,
         warnings: result.warnings, resolvedPrice: priced.price, priceRule: priced.rule,
+        priceDetail: priced.detail, capApplied: priced.capApplied,
+        noPriceReference: priced.noPriceReference, lowRoiAfterCap: priced.lowRoiAfterCap,
       });
     } else if (result.kind === "putlistings_failed") {
       outcomeByAsin.set(p.asin, {
