@@ -316,10 +316,7 @@ export function OfferAddPreviewDialog({
             {buckets && buckets.ready.length > 0 && (
               <Section title="Ready to create" count={buckets.ready.length}>
                 {/* §18 born-closed: every creation carries a past end_at */}
-                <p className="text-[11px] text-amber-600 dark:text-amber-500 font-medium">
-                  All offers will be created closed (end_at in the past). Reopen from the
-                  verification panel BEFORE FBA stock arrives — closed SKUs strand inventory.
-                </p>
+                <p className="text-[11px] text-muted-foreground">Offers are created closed.</p>
                 {buckets.ready.map((row) => {
                   if (row.outcome.kind !== "preview") return null;
                   const isExpanded = expanded.has(row.asin);

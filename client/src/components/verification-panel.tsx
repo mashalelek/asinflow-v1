@@ -75,36 +75,8 @@ export function VerificationPanel({ open, onClose, data, onRefetch }: Props) {
     }
   };
 
-  // §18 born-closed: reopen action (price-free end_at:null merge patch).
-  // Shown on every submission row — offers are created closed by default, so
-  // this is the standard "stock is arriving, go live" step. Reopen MUST happen
-  // before FBA stock checks in (stranded-inventory caveat, SPEC §18).
-  const [reopeningSku, setReopeningSku] = useState<string | null>(null);
-  const handleReopen = async (sku: string) => {
-    setReopeningSku(sku);
-    try {
-      const res = await fetch(`/api/listings/${encodeURIComponent(sku)}/reopen`, { method: "POST" });
-      const body = await res.json();
-      if (res.ok && body.ok) {
-        toast({ title: "Reopen accepted", description: `${sku} — Amazon applies it asynchronously (SC can lag up to ~an hour).` });
-      } else {
-        toast({ title: "Reopen failed", description: body.message ?? `HTTP ${res.status}`, variant: "destructive" });
-      }
-    } catch (err: any) {
-      toast({ title: "Reopen failed", description: err.message, variant: "destructive" });
-    } finally {
-      setReopeningSku(null);
-    }
-  };
-  const ReopenButton = ({ sku }: { sku: string }) => (
-    <Button size="sm" variant="outline" className="h-6 px-2 text-[11px]" disabled={reopeningSku === sku}
-      title="Remove the born-closed end date (price-free merge patch) so the offer can go live. Do this BEFORE FBA stock arrives."
-      onClick={() => handleReopen(sku)}>
-      {reopeningSku === sku ? "Reopening…" : "Reopen listing"}
-    </Button>
-  );
-
   // §19 bulk actions: row selection + resolve-selected + dismiss.
+  // (Reopening a born-closed listing is done in Seller Central directly — §18.)
   const [selected, setSelected] = useState<Set<string>>(new Set());
   const [bulkBusy, setBulkBusy] = useState(false);
   const toggleSelected = (id: string, on: boolean) =>
@@ -170,7 +142,6 @@ export function VerificationPanel({ open, onClose, data, onRefetch }: Props) {
   const ResolveActions = ({ row }: { row: SubmissionRow }) =>
     isNonTerminal(row.verify_status) ? (
       <div className="flex items-center gap-1 ml-auto">
-        <ReopenButton sku={row.sku} />
         <Button size="sm" variant="ghost" className="h-6 px-2 text-[11px]" disabled={busyId === row.id}
           onClick={() => handleResolve(row.id, "live")}>Confirmed live</Button>
         <Button size="sm" variant="ghost" className="h-6 px-2 text-[11px]" disabled={busyId === row.id}
@@ -178,7 +149,7 @@ export function VerificationPanel({ open, onClose, data, onRefetch }: Props) {
         <Button size="sm" variant="ghost" className="h-6 px-2 text-[11px]" disabled={busyId === row.id}
           onClick={() => handleResolve(row.id, "deleted")}>I deleted this</Button>
       </div>
-    ) : <div className="ml-auto flex items-center gap-1"><ReopenButton sku={row.sku} /><DismissButton row={row} /><VerdictSource row={row} /></div>;
+    ) : <div className="ml-auto flex items-center gap-1"><DismissButton row={row} /><VerdictSource row={row} /></div>;
 
   const needs = data?.needsAttention ?? [];
   const restricted = needs.filter((r) => treatmentOf(r) === "restricted");

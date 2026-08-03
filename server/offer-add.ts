@@ -464,9 +464,8 @@ export function buildOfferOnlyPayload(input: OfferAddInput, dgHzRegulationValue:
     // BORN CLOSED (§18): end_at in the past soft-closes the offer at creation
     // — SC's "Close listing" is literally this field. Verified live 2026-08-01
     // and -02 (accepted at create, persists through async processing, listing
-    // settles DISCOVERABLE-not-BUYABLE, §19 verifies live). Reopen via the
-    // price-free end_at:null merge patch (listing-reopen.ts) — and reopen MUST
-    // precede any FBA stock arriving (stranded-inventory caveat).
+    // settles DISCOVERABLE-not-BUYABLE, §19 verifies live). Reopening is done
+    // in Seller Central directly by the user.
     purchasable_offer: [
       {
         marketplace_id: MARKETPLACE,

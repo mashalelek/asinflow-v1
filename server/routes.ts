@@ -25,7 +25,6 @@ import { refreshPrices } from "./price-sync";
 import { applyCatalogDeletedSignal } from "./catalog-deleted-write";
 import { offerAddForAsin, preFilterSubmitSet, type OfferAddResult, type PreFilterResult } from "./offer-add";
 import { submitOfferAddBatch, type SubmitAsinRow } from "./offer-add-submit";
-import { reopenListing } from "./listing-reopen";
 import { makeProductRegistryRepo } from "./product-registry-repo";
 import { processBulkApproval, makeProductionHandlers, type ApprovalItem } from "./sku-legend-approval";
 import { settingsSchema, type Settings } from "@shared/schema";
@@ -1897,72 +1896,6 @@ export async function registerRoutes(
     } catch (err: any) {
       log(`Offer-add submit error: ${err.message}`, "offer-add");
       res.status(500).json({ message: err.message });
-    }
-  });
-
-  // §18 born-closed: reopen a soft-closed listing (price-free end_at:null
-  // merge patch — listing-reopen.ts owns the rails). ACCEPTED = validation
-  // only; SC applies asynchronously (can lag up to ~an hour).
-  app.post("/api/listings/:sku/reopen", async (req: Request, res: Response) => {
-    const sellerId = process.env.SP_API_SELLER_ID;
-    if (!sellerId) { res.status(503).json({ message: "SP_API_SELLER_ID not configured" }); return; }
-    const sku = String(req.params.sku ?? "").trim();
-    if (!sku) { res.status(400).json({ message: "SKU required" }); return; }
-    const outcome = await reopenListing(sellerId, sku);
-    if (outcome.ok) {
-      log(`Reopen listing ACCEPTED for ${sku} (async — SC may lag)`, "offer-add");
-      res.json({ ok: true, submissionId: outcome.submissionId });
-    } else {
-      log(`Reopen listing FAILED for ${sku}: ${outcome.message}`, "offer-add");
-      res.status(502).json({ ok: false, message: outcome.message, code: outcome.code });
-    }
-  });
-
-  // === Post-submit verification ledger ===
-  //
-  // On-demand (no job infra). Verify sweeps pending/processing/stale rows
-  // through SC, paced + fail-closed (throttled rows stay unchanged). Amazon
-  // async processing is slow (hours), so this is expected to run the morning
-  // after a batch; re-running is safe/idempotent.
-  app.post("/api/submissions/verify", async (_req: Request, res: Response) => {
-    const sellerId = process.env.SP_API_SELLER_ID;
-    if (!sellerId) { res.status(400).json({ error: "SP_API_SELLER_ID not set" }); return; }
-    try {
-      const summary = await verifyPending(sellerId);
-      const needsAttention = await listNeedsAttention();
-      res.json({ summary, needsAttention });
-    } catch (err: any) {
-      res.status(500).json({ error: err?.message ?? "verify failed" });
-    }
-  });
-
-  // Unverified count (toolbar chip) + the needs-attention list (failed, stale,
-  // and LIVE-with-review-flags — surfaced, not JSONB-only).
-  app.get("/api/submissions/unverified", async (_req: Request, res: Response) => {
-    try {
-      res.json({
-        count: await getUnverifiedCount(),
-        needsAttention: await listNeedsAttention(),
-        inFlight: await listInFlight(),
-      });
-    } catch (err: any) {
-      res.status(500).json({ error: err?.message ?? "query failed" });
-    }
-  });
-
-  // Manual resolution of a stale/ambiguous row: live | failed | deleted.
-  app.post("/api/submissions/:id/resolve", async (req: Request, res: Response) => {
-    const id = String(req.params.id);
-    const verdict = req.body?.verdict as "live" | "failed" | "deleted";
-    if (!["live", "failed", "deleted"].includes(verdict)) {
-      res.status(400).json({ error: "verdict must be live | failed | deleted" }); return;
-    }
-    try {
-      await resolveSubmissionManual(id, verdict);
-      res.json({ ok: true });
-    } catch (err: any) {
-      const msg = err?.message ?? "resolve failed";
-      res.status(/already resolved|not found/.test(msg) ? 409 : 500).json({ error: msg });
     }
   });
 

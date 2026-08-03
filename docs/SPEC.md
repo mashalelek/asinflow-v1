@@ -1558,25 +1558,17 @@ the per-row **+** button.
   listing" button is literally this field; the SKU, listing data, and report
   presence are retained, nothing is deleted, and no quantity /
   `fulfillment_availability` field is involved (MF-flip rail untouched).
-  - **Reopen** is a `patchListingsItem` **`op: "merge"`** on
-    `/attributes/purchasable_offer` with `"end_at": null` (the documented
-    optional-sub-attribute delete; fallback: a far-future date). **Never
-    `op: "replace"`** — replace swaps the entire `purchasable_offer` array and
-    wipes the price. **Never include price fields in a close/reopen patch** —
-    a high-price error (18555) makes Amazon silently ignore the `end_at`
-    carried in the same patch.
-  - **Stranded-inventory caveat:** FBA stock checking in against a closed SKU
-    goes stranded (and is exposed to stranded-inventory auto-removal
-    settings). **Reopen must precede any FBA stock arriving.**
+  - **Reopen is done in Seller Central directly by the user** (2026-08-03: the
+    in-app reopen action was removed as unnecessary). For reference, the API
+    mechanism — should it ever be needed again — is a `patchListingsItem`
+    `op: "merge"` on `/attributes/purchasable_offer` with `"end_at": null`;
+    never `op: "replace"` (wipes the price) and never with price fields in the
+    same patch (a high-price error makes Amazon silently ignore the `end_at`).
+    Round-trip was verified live on `CAM-HOM-M64-RQR-003` before removal.
   - **Implemented (2026-08-02):** `end_at` is set unconditionally in
-    `buildOfferOnlyPayload` (`BORN_CLOSED_END_AT = "2000-01-01"`). Reopen is
-    `server/listing-reopen.ts` → `POST /api/listings/:sku/reopen`, surfaced as
-    the **"Reopen listing" button on every row of the verification panel**
-    (submissions = recent creations = the born-closed set). The offer-add
-    preview's "Ready to create" section states that all offers are created
-    closed. Round-trip verified live on `CAM-HOM-M64-RQR-003` (reopen →
-    `end_at: null`, re-close → `end_at` restored; PATCH ACCEPTED is async —
-    attribute updates in ~seconds, SC UI lags up to ~an hour).
+    `buildOfferOnlyPayload` (`BORN_CLOSED_END_AT = "2000-01-01"`). The
+    offer-add preview's "Ready to create" section carries a plain one-line
+    note that offers are created closed.
 
 ### Always-present offer attributes
 

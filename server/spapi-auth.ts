@@ -89,22 +89,3 @@ export async function spApiPut(
   });
   return res.data;
 }
-
-// §18 born-closed: PATCH for patchListingsItem (Listings Items API 2021-08-01).
-// Mirrors spApiPut. Used by the reopen-listing action (merge end_at: null).
-export async function spApiPatch(
-  endpoint: string,
-  body: any,
-  params?: Record<string, any>,
-) {
-  const token = await getAccessToken();
-  const res = await axios.patch(`${SP_API_BASE}${endpoint}`, body, {
-    headers: {
-      Authorization: `Bearer ${token}`,
-      "x-amz-access-token": token,
-      "Content-Type": "application/json",
-    },
-    params,
-  });
-  return res.data;
-}
