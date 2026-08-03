@@ -12,7 +12,7 @@ import { RevivalDialog, type RevivalCandidate } from "@/components/revival-dialo
 import { OfferAddPreviewDialog, type PreviewResponse, type SubmitResponse } from "@/components/offer-add-preview-dialog";
 import { VerificationChip } from "@/components/verification-chip";
 import { VerificationPanel } from "@/components/verification-panel";
-import { getUnverified, type UnverifiedResponse } from "@/lib/submissions-api";
+import { getUnverified, submissionCategory, type UnverifiedResponse } from "@/lib/submissions-api";
 import { LegendApprovalDialog, type PendingLegendItem, type ApprovedBrandOption } from "@/components/legend-approval-dialog";
 import { FileUpload } from "@/components/file-upload";
 import { ResultsTable, getRowValue } from "@/components/results-table";
@@ -1296,6 +1296,7 @@ export default function Home() {
             case "hazmat": return r.isHazmat ? "Yes" : "No";
             case "suppressed": return r.isSearchSuppressed ? "Yes" : "No";
             case "dateAdded": return r.addedAt ?? null;
+            case "submission": return submissionCategory(r.submission);
             case "category": return r.category ?? null;
             case "sourcing": {
               const w = r.isWholesale ?? false;

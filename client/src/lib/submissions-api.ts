@@ -100,6 +100,22 @@ export async function dismissSubmissionFlags(
   return r.json();
 }
 
+// §6 Submission column: categorical value for filtering/sorting.
+// "failed" > "flags" > "clean" > "none". Acknowledged flags STILL count as
+// "flags" — acknowledgment mutes the render, never the category (§6/§19).
+export type SubmissionCategory = "failed" | "flags" | "clean" | "none";
+export function submissionCategory(sub: {
+  latest: { status: string; issues: any[]; reviewFlags: string[]; terminalConflict: boolean } | null;
+} | null | undefined): SubmissionCategory {
+  const latest = sub?.latest;
+  if (!latest) return "none";
+  if (latest.status === "failed") return "failed";
+  if ((latest.issues?.length ?? 0) > 0 || (latest.reviewFlags?.length ?? 0) > 0 || latest.terminalConflict) {
+    return "flags";
+  }
+  return "clean";
+}
+
 // ── View helpers ────────────────────────────────────────────────────────────
 
 export const isNonTerminal = (s: VerifyStatus): boolean =>

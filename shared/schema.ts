@@ -82,6 +82,25 @@ export interface ActualsData {
   days_in_stock: number;
 }
 
+// §6 Submission column — read-only surface of the §19 listing_submissions
+// ledger. `latest` drives the badge; `history` (newest first) drives the
+// tooltip. `acknowledged` mutes the render (grey, not amber) but NEVER hides
+// flags — the column is the permanent record (panel dismiss is triage-only).
+export interface SubmissionEntry {
+  sku: string;
+  status: string;             // verify_status
+  submittedAt: string;
+  verifiedAt: string | null;
+  issues: { code: string; severity: string; message: string }[];
+  reviewFlags: string[];
+  terminalConflict: boolean;
+  acknowledged: boolean;      // flags_acknowledged_at IS NOT NULL
+}
+export interface SubmissionColumnData {
+  latest: SubmissionEntry;
+  history: SubmissionEntry[]; // newest first, includes latest
+}
+
 export interface AsinResult {
   asin: string;
   cogs: number; // deprecated — use estimatedCogs / actualCogs
@@ -103,6 +122,7 @@ export interface AsinResult {
   inCatalog?: boolean;                // internal discovery latch — NOT the icon signal
   hasLiveOffer?: boolean | null;      // live-offer truth (getListingsItem); null = never checked. Drives the catalog icon.
   tags?: { name: string; color: string }[];
+  submission?: SubmissionColumnData | null; // §6 Submission column (ledger, read-only)
   notes?: string | null;
   promoNotes?: string | null; // sourcing sheet Col O promos — user-controlled, display-only
   isArchived?: boolean;
@@ -499,7 +519,7 @@ export const DEFAULT_COLUMNS = [
   // Group 5 — Sellers
   "sellersFba", "sellers", "sellers7d", "sellers30d", "fba7d", "fba30d",
   // Group 6 — Additional info
-  "tags", "notes", "promos", "sourcing", "meltable", "hazmat", "dg", "suppressed", "dateAdded",
+  "tags", "notes", "promos", "sourcing", "meltable", "hazmat", "dg", "suppressed", "dateAdded", "submission",
 ] as const;
 
 export type ColumnId = (typeof DEFAULT_COLUMNS)[number];
@@ -578,6 +598,8 @@ export const ALL_COLUMNS: ColumnDef[] = [
   { id: "dg", label: "DG", defaultVisible: false, align: "left", group: "additional" },
   { id: "suppressed", label: "Suppressed", defaultVisible: false, align: "left", group: "additional" },
   { id: "dateAdded", label: "Date Added", defaultVisible: false, align: "left", group: "additional" },
+  // §6 Submission column — §19 ledger surface, read-only, never in default presets.
+  { id: "submission", label: "Submission", defaultVisible: false, align: "left", group: "additional" },
 ];
 
 export const users = undefined;

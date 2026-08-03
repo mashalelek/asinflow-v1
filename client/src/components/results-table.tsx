@@ -59,6 +59,7 @@ import { type ColumnConfig } from "@/lib/columns";
 import { type FilterMode } from "@/components/summary-cards";
 import { ColumnFilterButton, type ColFilter, type FilterMap, type MultiSelectOption } from "@/components/column-filter";
 import { useTagGroups, compareTagKeys } from "@/lib/use-tag-groups";
+import { submissionCategory } from "@/lib/submissions-api";
 import { TagEditor } from "@/components/tag-editor";
 import { NoteEditor } from "@/components/note-editor";
 
@@ -425,6 +426,7 @@ export function getRowValue(
     }
     case "product": return result.catalogData.title ?? result.asin;
     case "dateAdded": return result.addedAt ?? null;
+    case "submission": return submissionCategory(result.submission);
     case "category": return result.category ?? null;
     case "sourcing": return getSourcingLabel(result) || null;
     case "maxCogs": {
@@ -1761,6 +1763,59 @@ export function renderCell(
       const dd = String(d.getDate()).padStart(2, "0");
       const yyyy = d.getFullYear();
       return <span className="text-sm text-muted-foreground">{`${mm}/${dd}/${yyyy}`}</span>;
+    }
+
+    // §6 Submission column — read-only §19 ledger surface. Badge from the
+    // LATEST submission; tooltip = full history. Acknowledged flags render
+    // muted grey, never hidden (permanent record). Semantic color in cell
+    // text only — no row tints (§7).
+    case "submission": {
+      const sub = result.submission;
+      const cat = submissionCategory(sub);
+      if (cat === "none" || cat === "clean") return null; // nothing to show
+      const latest = sub!.latest;
+      const codes = (latest.issues ?? []).map((i) => i.code).filter(Boolean);
+      const ack = latest.acknowledged;
+      const chipTone = latest.status === "failed"
+        ? (ack ? "text-muted-foreground" : "text-red-600 dark:text-red-400")
+        : (ack ? "text-muted-foreground" : "text-amber-600 dark:text-amber-500");
+      const fmtDate = (t: string) => {
+        const d = new Date(t);
+        return `${String(d.getMonth() + 1).padStart(2, "0")}/${String(d.getDate()).padStart(2, "0")}/${d.getFullYear()}`;
+      };
+      return (
+        <Tooltip>
+          <TooltipTrigger asChild>
+            <span className={`inline-flex items-center gap-1 text-xs font-medium ${chipTone}`}>
+              {latest.status === "failed" && <span>failed</span>}
+              {codes.length > 0
+                ? codes.map((c) => <span key={c} className="font-mono">{c}</span>)
+                : latest.status !== "failed" && <span>{latest.terminalConflict ? "conflict" : latest.status}</span>}
+              {ack && <span className="text-[10px] uppercase tracking-wide">ack</span>}
+            </span>
+          </TooltipTrigger>
+          <TooltipPortal>
+            <TooltipContent side="top" className="max-w-md">
+              <div className="space-y-2 text-xs">
+                {sub!.history.map((h, i) => (
+                  <div key={i} className={i > 0 ? "opacity-70" : ""}>
+                    <p className="font-medium">
+                      {fmtDate(h.submittedAt)} · <span className="font-mono">{h.sku}</span> · {h.status}
+                      {h.acknowledged ? " · acknowledged" : ""}
+                    </p>
+                    {(h.issues ?? []).map((iss, j) => (
+                      <p key={j}>- <span className="font-mono">{iss.code}</span> ({iss.severity}): {iss.message}</p>
+                    ))}
+                    {(h.reviewFlags ?? []).filter((f) => !f.startsWith("18555") && !(h.issues ?? []).some((iss) => f.startsWith(iss.code))).map((f, j) => (
+                      <p key={`f${j}`}>- {f}</p>
+                    ))}
+                  </div>
+                ))}
+              </div>
+            </TooltipContent>
+          </TooltipPortal>
+        </Tooltip>
+      );
     }
 
     case "category": {

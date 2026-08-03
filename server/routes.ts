@@ -832,6 +832,34 @@ export async function registerRoutes(
         skusMap.set(row.asin, arr);
       }
 
+      // §6 Submission column: full ledger per ASIN, newest first. history[0]
+      // = latest (drives the badge); the rest is tooltip history. Read-only —
+      // this endpoint never writes the ledger. listing_submissions_asin_idx
+      // covers the lookup; the whole table is one small scan here.
+      const subsResult = await query(`
+        SELECT asin, sku, verify_status, submitted_at, verified_at, issues,
+               review_flags, terminal_conflict, flags_acknowledged_at
+          FROM listing_submissions
+         ORDER BY asin, submitted_at DESC
+      `).catch(() => ({ rows: [] as any[] }));
+      const subsMap = new Map<string, any[]>();
+      for (const row of subsResult.rows) {
+        const arr = subsMap.get(row.asin) ?? [];
+        arr.push({
+          sku: row.sku,
+          status: row.verify_status,
+          submittedAt: row.submitted_at,
+          verifiedAt: row.verified_at,
+          issues: (row.issues ?? []).map((i: any) => ({
+            code: String(i?.code ?? ""), severity: String(i?.severity ?? ""), message: String(i?.message ?? ""),
+          })),
+          reviewFlags: row.review_flags ?? [],
+          terminalConflict: row.terminal_conflict === true,
+          acknowledged: row.flags_acknowledged_at != null,
+        });
+        subsMap.set(row.asin, arr);
+      }
+
       // Tags per ASIN
       const tagsResult = await query(`
         SELECT a.asin, t.name, t.color FROM asin_tags at
@@ -932,6 +960,9 @@ export async function registerRoutes(
           inCatalog: row.in_catalog ?? false,
           hasLiveOffer: row.has_live_offer ?? null,
           tags: tagsMap.get(row.asin) ?? [],
+          submission: subsMap.has(row.asin)
+            ? { latest: subsMap.get(row.asin)![0], history: subsMap.get(row.asin)! }
+            : null,
           notes: row.notes ?? null,
           promoNotes: row.promo_notes ?? null,
           isArchived: row.is_active === false,

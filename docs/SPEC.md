@@ -281,10 +281,37 @@ representations of the same logical "narrow to specific ASIN(s)" intent.
 5. **Sellers** — Sellers (FBA), Sellers (combined), Sellers 7d Δ, Sellers 30d Δ,
    FBA 7d Δ, FBA 30d Δ
 6. **Additional info** — Tags, Notes, Promos, Sourcing, Meltable, Hazmat,
-   Suppressed, Date Added
+   Suppressed, Date Added, Submission
 
 `COLUMN_GROUPS` array in code is the single source of truth. Both Manage
 Columns panel order and table render order derive from it.
+
+### Submission column (2026-08-03)
+
+Surfaces the §19 ledger per ASIN, in Manage Columns only — **not in any
+default preset** (`defaultVisible: false`; DB presets list columns explicitly
+so it never appears unbidden).
+
+- **Data:** the LATEST `listing_submissions` row per ASIN (by `submitted_at`)
+  drives the badge; superseded submissions appear only in the tooltip history.
+  Shipped in `/api/asins` as `submission: { latest, history[] }` (newest
+  first), one grouped query over the ledger (indexed by
+  `listing_submissions_asin_idx`; measured no meaningful `/api/asins` slowdown).
+- **Render:** nothing when no submission exists or the latest is a clean
+  `live`. Otherwise a compact badge: amber issue-code chips (e.g. `18555`),
+  red `failed`, muted chip for other states (`processing`, `stale`,
+  `deleted`). Per §7: semantic color in cell TEXT only — no row tints.
+- **Acknowledgment NEVER hides column flags** (contrast with the §19 panel):
+  acknowledged flags render muted/grey instead of amber, permanently. Badge,
+  tooltip, and filterability remain. The panel's dismiss is triage; the column
+  is the permanent record. Flags are never deleted from the ledger.
+- **Filter:** has flags / failed / clean / none — acknowledged still counts as
+  "has flags".
+- **Read-only end to end:** the column reads the ledger, never writes it.
+  Resolution/acknowledgment stay in the §19 panel.
+- **Tooltip:** full submission history for the ASIN — submitted date, SKU,
+  status, issue codes + messages, flags; newest first — so errors resolved
+  over time stay visible.
 
 ### Stock object population
 
@@ -2036,6 +2063,10 @@ The panel is clearable after review without per-row clicking:
   `flags_acknowledged_at IS NULL`. After sweep + review (bulk verdicts) +
   dismiss, the badge reaches zero. Note this WIDENS the old pill (which counted
   only non-terminal): flagged/failed rows now count until acknowledged.
+- **Dismiss scope:** acknowledgment affects PANEL triage (and the pill) only.
+  The §6 Submission column keeps showing acknowledged flags permanently
+  (muted/grey) — the column is the permanent record; nothing is ever deleted
+  from the ledger.
 
 ### Backfill = repair path
 

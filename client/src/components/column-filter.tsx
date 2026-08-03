@@ -23,7 +23,7 @@ export interface MultiSelectOption {
   group?: string; // options are pre-sorted; a group header renders when this changes
 }
 
-type FilterType = "numeric" | "text" | "tags" | "supplier" | "boolean" | "reviewed";
+type FilterType = "numeric" | "text" | "tags" | "supplier" | "boolean" | "reviewed" | "submission";
 
 const NUMERIC_COLS = new Set<ColumnId>([
   "cogs", "estCogs", "salePrice", "profit", "margin", "roi",
@@ -48,8 +48,19 @@ function getFilterType(colId: ColumnId): FilterType {
   if (colId === "sourcing") return "supplier"; // reuse supplier multi-select type
   if (BOOL_COLS.has(colId)) return "boolean";
   if (REVIEWED_COLS.has(colId)) return "reviewed";
+  if (colId === "submission") return "submission";
   return "text";
 }
+
+// §6 Submission column categories. Acknowledged flags still match "Has flags"
+// — acknowledgment mutes the render, never the category.
+const SUBMISSION_OPTIONS = [
+  { label: "All", value: "" },
+  { label: "Has flags", value: "flags" },
+  { label: "Failed", value: "failed" },
+  { label: "Clean", value: "clean" },
+  { label: "None", value: "none" },
+];
 
 const NUMERIC_OPS = [
   { value: "gt", label: "Greater than" },
@@ -268,7 +279,7 @@ export function ColumnFilterButton({ colId, currentFilter, onApply, onClear, mul
         </button>
       </PopoverTrigger>
       <PopoverContent
-        className={`${filterType === "boolean" ? "w-36" : isMultiSelect ? "w-64" : "w-56"} p-3 space-y-2`}
+        className={`${filterType === "boolean" || filterType === "submission" ? "w-36" : isMultiSelect ? "w-64" : "w-56"} p-3 space-y-2`}
         align="start"
         sideOffset={4}
         onClick={(e) => e.stopPropagation()}
@@ -307,6 +318,25 @@ export function ColumnFilterButton({ colId, currentFilter, onApply, onClear, mul
               <Button size="sm" variant="ghost" className="h-7 text-xs" onClick={handleClear} disabled={!isActive}>Clear</Button>
             </div>
           </>
+        ) : filterType === "submission" ? (
+          <div className="flex flex-col gap-1">
+            {SUBMISSION_OPTIONS.map((opt) => (
+              <button
+                key={opt.label}
+                className={`text-left text-sm px-2 py-1.5 rounded transition-colors ${
+                  (opt.value === "" && !isActive) || (isActive && currentFilter?.value === opt.value)
+                    ? "bg-primary text-primary-foreground"
+                    : "hover:bg-muted"
+                }`}
+                onClick={() => {
+                  if (opt.value === "") { handleClear(); }
+                  else { onApply({ colId, operator: "eq", value: opt.value }); setOpen(false); }
+                }}
+              >
+                {opt.label}
+              </button>
+            ))}
+          </div>
         ) : filterType === "boolean" ? (
           <div className="flex flex-col gap-1">
             {[{ label: "All", value: "" }, { label: "Yes", value: "Yes" }, { label: "No", value: "No" }].map((opt) => (
@@ -378,6 +408,14 @@ export function matchesFilters(
   for (const f of Object.values(filters)) {
     const raw = getValueFn(f.colId as ColumnId);
     const filterType = getFilterType(f.colId as ColumnId);
+
+    // §6 Submission column: categorical eq — value is the category string
+    // ("flags" | "failed" | "clean" | "none"); null raw = "none".
+    if (filterType === "submission") {
+      const cat = raw != null ? String(raw) : "none";
+      if (cat !== f.value) return false;
+      continue;
+    }
 
     // "reviewed" filters handle null specially (null = "never reviewed")
     if (filterType === "reviewed") {
