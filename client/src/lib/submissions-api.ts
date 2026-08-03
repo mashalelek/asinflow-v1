@@ -22,11 +22,13 @@ export interface SubmissionRow {
   issues: SubmissionIssue[] | null;
   review_flags: string[];
   terminal_conflict: boolean;
+  flags_acknowledged_at?: string | null; // §19 dismiss — set = acknowledged
 }
 
 export interface UnverifiedResponse {
-  count: number;             // pending + processing + stale
-  needsAttention: SubmissionRow[]; // failed / stale / live-with-flags
+  // §19: non-terminal + unacknowledged attention-terminal (failed / flagged-live)
+  count: number;
+  needsAttention: SubmissionRow[]; // stale / unacked failed / unacked live-with-flags
   inFlight: SubmissionRow[]; // pending / processing (individually resolvable)
 }
 
@@ -63,6 +65,39 @@ export async function resolveSubmission(
   if (r.ok) return { status: r.status };
   const body = await r.json().catch(() => ({}));
   return { status: r.status, error: body?.error };
+}
+
+// §19 bulk manual verdicts — already-terminal rows come back in `skipped`.
+export async function resolveSubmissionsBulk(
+  ids: string[],
+  verdict: ManualVerdict,
+): Promise<{ resolved: string[]; skipped: Array<{ id: string; reason: string }> }> {
+  const r = await fetch("/api/submissions/resolve-bulk", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ ids, verdict }),
+  });
+  if (!r.ok) {
+    const body = await r.json().catch(() => ({}));
+    throw new Error(body?.error ?? `bulk resolve failed (${r.status})`);
+  }
+  return r.json();
+}
+
+// §19 dismiss (acknowledge) — terminal rows only; non-terminal ids → skipped.
+export async function dismissSubmissionFlags(
+  ids: string[],
+): Promise<{ dismissed: string[]; skipped: string[] }> {
+  const r = await fetch("/api/submissions/dismiss-flags", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ ids }),
+  });
+  if (!r.ok) {
+    const body = await r.json().catch(() => ({}));
+    throw new Error(body?.error ?? `dismiss failed (${r.status})`);
+  }
+  return r.json();
 }
 
 // ── View helpers ────────────────────────────────────────────────────────────

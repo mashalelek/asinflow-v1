@@ -150,10 +150,69 @@ export async function resolveSubmissionManual(
   }
 }
 
+// §19 bulk manual verdicts: the single-row semantics applied per id (same
+// function — including the deleted → is_primary demote). Already-terminal rows
+// are skipped and reported, never a batch failure (the single-row endpoint
+// keeps its 409; the batch absorbs it as a skip note).
+export interface BulkResolveResult {
+  resolved: string[];
+  skipped: Array<{ id: string; reason: string }>;
+}
+export async function resolveSubmissionsBulk(
+  ids: string[],
+  verdict: ManualVerdict,
+  query: QueryLike = defaultQuery as any,
+): Promise<BulkResolveResult> {
+  const out: BulkResolveResult = { resolved: [], skipped: [] };
+  for (const id of ids) {
+    try {
+      await resolveSubmissionManual(id, verdict, query);
+      out.resolved.push(id);
+    } catch (err: any) {
+      out.skipped.push({ id, reason: err?.message ?? "unknown error" });
+    }
+  }
+  return out;
+}
+
+// §19 dismiss (acknowledge): hide a TERMINAL needs-attention row from the
+// panel. Guard in the WHERE clause — non-terminal rows (incl. stale, which
+// needs a verdict, not an ack) simply don't match and are reported as skipped.
+// Hides, never deletes: issues/review_flags/terminal_conflict are untouched.
+export interface DismissFlagsResult {
+  dismissed: string[];
+  skipped: string[]; // non-terminal or unknown ids
+}
+export async function dismissFlags(
+  ids: string[],
+  query: QueryLike = defaultQuery as any,
+): Promise<DismissFlagsResult> {
+  if (ids.length === 0) return { dismissed: [], skipped: [] };
+  const r = await query(
+    `UPDATE listing_submissions
+        SET flags_acknowledged_at = now()
+      WHERE id = ANY($1::uuid[])
+        AND verify_status IN ('live','failed','deleted')
+      RETURNING id`,
+    [ids],
+  );
+  const dismissed = r.rows.map((row: any) => String(row.id));
+  const skipped = ids.filter((id) => !dismissed.includes(id));
+  return { dismissed, skipped };
+}
+
 // Surfacing helpers.
+// Pill definition (§19 "Panel bulk actions & dismiss"): non-terminal rows PLUS
+// unacknowledged attention-terminal rows (failed, or live with flags). After
+// sweep + bulk verdicts + dismiss, this reaches zero.
 export async function getUnverifiedCount(query: QueryLike = defaultQuery as any): Promise<number> {
   const r = await query(
-    `SELECT count(*)::int AS n FROM listing_submissions WHERE verify_status IN ('pending','processing','stale')`,
+    `SELECT count(*)::int AS n FROM listing_submissions
+      WHERE verify_status IN ('pending','processing','stale')
+         OR (verify_status = 'failed' AND flags_acknowledged_at IS NULL)
+         OR (verify_status = 'live'
+             AND (array_length(review_flags,1) > 0 OR terminal_conflict)
+             AND flags_acknowledged_at IS NULL)`,
   );
   return r.rows[0]?.n ?? 0;
 }
@@ -172,13 +231,19 @@ export async function listInFlight(query: QueryLike = defaultQuery as any): Prom
 }
 
 export async function listNeedsAttention(query: QueryLike = defaultQuery as any): Promise<any[]> {
-  // Failed rows, stale rows, and LIVE rows carrying review flags / conflicts.
+  // Stale rows (always — they need a verdict, not an ack), plus UNACKNOWLEDGED
+  // failed rows and UNACKNOWLEDGED live rows carrying review flags / conflicts.
+  // Dismissed (flags_acknowledged_at set) terminal rows leave this view; the
+  // ledger keeps their issues/flags untouched.
   return (await query(
     `SELECT id, asin, sku, verify_status, verdict_source, submitted_at, verified_at,
-            issues, review_flags, terminal_conflict
+            issues, review_flags, terminal_conflict, flags_acknowledged_at
        FROM listing_submissions
-      WHERE verify_status IN ('failed','stale')
-         OR (verify_status = 'live' AND (array_length(review_flags,1) > 0 OR terminal_conflict))
+      WHERE verify_status = 'stale'
+         OR (verify_status = 'failed' AND flags_acknowledged_at IS NULL)
+         OR (verify_status = 'live'
+             AND (array_length(review_flags,1) > 0 OR terminal_conflict)
+             AND flags_acknowledged_at IS NULL)
       ORDER BY submitted_at DESC`,
   )).rows;
 }

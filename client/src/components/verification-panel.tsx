@@ -7,8 +7,10 @@ import { Badge } from "@/components/ui/badge";
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/components/ui/collapsible";
 import { ChevronRight, ChevronDown } from "lucide-react";
 import { useToast } from "@/hooks/use-toast";
+import { Checkbox } from "@/components/ui/checkbox";
 import {
-  verifySubmissions, resolveSubmission, isNonTerminal, treatmentOf,
+  verifySubmissions, resolveSubmission, resolveSubmissionsBulk, dismissSubmissionFlags,
+  isNonTerminal, treatmentOf,
   type UnverifiedResponse, type SubmissionRow, type VerifySummary, type ManualVerdict,
 } from "@/lib/submissions-api";
 
@@ -102,6 +104,69 @@ export function VerificationPanel({ open, onClose, data, onRefetch }: Props) {
     </Button>
   );
 
+  // §19 bulk actions: row selection + resolve-selected + dismiss.
+  const [selected, setSelected] = useState<Set<string>>(new Set());
+  const [bulkBusy, setBulkBusy] = useState(false);
+  const toggleSelected = (id: string, on: boolean) =>
+    setSelected((prev) => {
+      const next = new Set(prev);
+      if (on) next.add(id); else next.delete(id);
+      return next;
+    });
+
+  const handleBulkResolve = async (verdict: ManualVerdict) => {
+    setBulkBusy(true);
+    try {
+      const r = await resolveSubmissionsBulk(Array.from(selected), verdict);
+      toast({
+        title: `Resolved ${r.resolved.length} as ${verdict}`,
+        description: r.skipped.length ? `${r.skipped.length} skipped (already resolved)` : undefined,
+      });
+      setSelected(new Set());
+      await onRefetch();
+    } catch (err: any) {
+      toast({ title: "Bulk resolve failed", description: err.message, variant: "destructive" });
+    } finally {
+      setBulkBusy(false);
+    }
+  };
+
+  const handleDismiss = async (ids: string[]) => {
+    setBulkBusy(true);
+    try {
+      const r = await dismissSubmissionFlags(ids);
+      toast({
+        title: `Dismissed ${r.dismissed.length} flagged row${r.dismissed.length === 1 ? "" : "s"}`,
+        description: r.skipped.length
+          ? `${r.skipped.length} skipped (non-terminal — resolve those instead)`
+          : "Issues stay in the ledger; the rows leave this view.",
+      });
+      setSelected(new Set());
+      await onRefetch();
+    } catch (err: any) {
+      toast({ title: "Dismiss failed", description: err.message, variant: "destructive" });
+    } finally {
+      setBulkBusy(false);
+    }
+  };
+
+  const RowCheck = ({ id }: { id: string }) => (
+    <Checkbox
+      checked={selected.has(id)}
+      onCheckedChange={(v) => toggleSelected(id, v === true)}
+      className="h-3.5 w-3.5"
+      aria-label="Select row"
+    />
+  );
+
+  const DismissButton = ({ row }: { row: SubmissionRow }) => (
+    <Button size="sm" variant="ghost" className="h-6 px-2 text-[11px]" disabled={bulkBusy}
+      title="Acknowledge — hides this row from needs-attention. Issues stay in the ledger; nothing is deleted."
+      onClick={() => handleDismiss([row.id])}>
+      Dismiss
+    </Button>
+  );
+
   const ResolveActions = ({ row }: { row: SubmissionRow }) =>
     isNonTerminal(row.verify_status) ? (
       <div className="flex items-center gap-1 ml-auto">
@@ -113,7 +178,7 @@ export function VerificationPanel({ open, onClose, data, onRefetch }: Props) {
         <Button size="sm" variant="ghost" className="h-6 px-2 text-[11px]" disabled={busyId === row.id}
           onClick={() => handleResolve(row.id, "deleted")}>I deleted this</Button>
       </div>
-    ) : <div className="ml-auto flex items-center gap-1"><ReopenButton sku={row.sku} /><VerdictSource row={row} /></div>;
+    ) : <div className="ml-auto flex items-center gap-1"><ReopenButton sku={row.sku} /><DismissButton row={row} /><VerdictSource row={row} /></div>;
 
   const needs = data?.needsAttention ?? [];
   const restricted = needs.filter((r) => treatmentOf(r) === "restricted");
@@ -131,14 +196,14 @@ export function VerificationPanel({ open, onClose, data, onRefetch }: Props) {
           </DialogDescription>
         </DialogHeader>
 
-        {/* Verify now + last sweep summary */}
+        {/* Verify all + last sweep summary (§19 "Panel bulk actions") */}
         <div className="flex items-center gap-3">
           <Button size="sm" className="h-8 text-xs" onClick={handleVerify} disabled={verifying}>
-            {verifying ? "Verifying…" : "Verify now"}
+            {verifying ? "Verifying…" : "Verify all"}
           </Button>
           {summary && (
             <div className="text-xs text-muted-foreground">
-              checked {summary.checked} · live {summary.live} · failed {summary.failed} · processing {summary.processing} · stale {summary.stale}
+              {summary.live} resolved live · {summary.failed} failed · {summary.processing + summary.stale} still processing/stale
               {summary.throttled > 0 && (
                 <span className="text-amber-500"> · throttled {summary.throttled} (re-run to converge)</span>
               )}
@@ -146,12 +211,32 @@ export function VerificationPanel({ open, onClose, data, onRefetch }: Props) {
           )}
         </div>
 
+        {/* Bulk action bar — appears when rows are selected */}
+        {selected.size > 0 && (
+          <div className="flex items-center gap-2 flex-wrap rounded border px-2 py-1.5 bg-muted/40">
+            <span className="text-xs font-medium">{selected.size} selected</span>
+            <span className="text-xs text-muted-foreground">Resolve as:</span>
+            <Button size="sm" variant="outline" className="h-6 px-2 text-[11px]" disabled={bulkBusy}
+              onClick={() => handleBulkResolve("live")}>live</Button>
+            <Button size="sm" variant="outline" className="h-6 px-2 text-[11px]" disabled={bulkBusy}
+              onClick={() => handleBulkResolve("failed")}>failed</Button>
+            <Button size="sm" variant="outline" className="h-6 px-2 text-[11px]" disabled={bulkBusy}
+              onClick={() => handleBulkResolve("deleted")}>deleted</Button>
+            <Button size="sm" variant="outline" className="h-6 px-2 text-[11px]" disabled={bulkBusy}
+              title="Acknowledge the selected terminal rows — non-terminal rows are skipped with a note"
+              onClick={() => handleDismiss(Array.from(selected))}>Dismiss flags</Button>
+            <Button size="sm" variant="ghost" className="h-6 px-2 text-[11px]"
+              onClick={() => setSelected(new Set())}>Clear</Button>
+          </div>
+        )}
+
         <div className="space-y-4 text-sm mt-1">
           {/* b — restricted generic: calm sourcing verdict, muted */}
           {restricted.length > 0 && (
             <Section title="Restricted generic — do not source" count={restricted.length}>
               {restricted.map((r) => (
                 <RowShell key={r.id}>
+                  <RowCheck id={r.id} />
                   <code className="font-mono text-xs">{r.asin}</code>
                   <code className="font-mono text-[11px] text-muted-foreground">{r.sku}</code>
                   <span className="text-xs text-muted-foreground">{rowMessage(r)}</span>
@@ -166,6 +251,7 @@ export function VerificationPanel({ open, onClose, data, onRefetch }: Props) {
             <Section title="Suppressed pending reprice" count={price.length}>
               {price.map((r) => (
                 <RowShell key={r.id}>
+                  <RowCheck id={r.id} />
                   <code className="font-mono text-xs">{r.asin}</code>
                   <code className="font-mono text-[11px] text-muted-foreground">{r.sku}</code>
                   <span className="text-xs text-muted-foreground">{rowMessage(r)}</span>
@@ -183,6 +269,7 @@ export function VerificationPanel({ open, onClose, data, onRefetch }: Props) {
             <Section title="Needs a look in Seller Central" count={check.length}>
               {check.map((r) => (
                 <RowShell key={r.id}>
+                  <RowCheck id={r.id} />
                   <code className="font-mono text-xs">{r.asin}</code>
                   <code className="font-mono text-[11px] text-muted-foreground">{r.sku}</code>
                   <span className="text-xs text-amber-500 flex-1">{rowMessage(r)}</span>
@@ -205,6 +292,7 @@ export function VerificationPanel({ open, onClose, data, onRefetch }: Props) {
                 </p>
                 {inFlight.map((r) => (
                   <RowShell key={r.id}>
+                    <RowCheck id={r.id} />
                     <code className="font-mono text-xs">{r.asin}</code>
                     <code className="font-mono text-[11px] text-muted-foreground">{r.sku}</code>
                     <Badge variant="secondary" className="text-[10px]">{r.verify_status}</Badge>

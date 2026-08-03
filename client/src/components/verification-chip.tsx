@@ -10,13 +10,13 @@ export function VerificationChip({ count, onClick }: { count: number; onClick: (
       type="button"
       onClick={onClick}
       data-testid="chip-unverified-submissions"
-      title="Submissions awaiting verification"
+      title="Submissions needing attention: unverified, or flagged/failed awaiting acknowledgment (§19)"
       className="inline-flex h-8 items-center gap-1.5 rounded-md bg-muted/50 px-2.5 text-xs
                  text-muted-foreground hover:bg-muted/70 hover:text-foreground transition-colors"
     >
       <ClipboardCheck className="h-3.5 w-3.5" />
       <span className="tabular-nums">{count}</span>
-      <span>unverified</span>
+      <span>submission{count === 1 ? "" : "s"}</span>
     </button>
   );
 }

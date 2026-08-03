@@ -5,7 +5,7 @@ import Papa from "papaparse";
 import * as XLSX from "xlsx";
 import { getPricing, getFees, getCatalogData, estimateFeeFallback, getEligibility, type EligibilityResult } from "./spapi";
 import { getInboundHazmat } from "./inbound-hazmat";
-import { verifyPending, resolveSubmissionManual, getUnverifiedCount, listNeedsAttention, listInFlight } from "./listing-submissions-repo";
+import { verifyPending, resolveSubmissionManual, resolveSubmissionsBulk, dismissFlags, getUnverifiedCount, listNeedsAttention, listInFlight } from "./listing-submissions-repo";
 import { runAuraSyncChain } from "./aura-sync-chain";
 import { pushAuraCosts } from "./aura-cost-sync";
 import { log } from "./index";
@@ -1963,6 +1963,42 @@ export async function registerRoutes(
     } catch (err: any) {
       const msg = err?.message ?? "resolve failed";
       res.status(/already resolved|not found/.test(msg) ? 409 : 500).json({ error: msg });
+    }
+  });
+
+  // §19 bulk manual verdicts: single-row semantics per id; already-terminal
+  // rows are skipped and reported, never a batch failure.
+  app.post("/api/submissions/resolve-bulk", async (req: Request, res: Response) => {
+    const { ids, verdict } = (req.body ?? {}) as { ids?: string[]; verdict?: string };
+    if (!Array.isArray(ids) || ids.length === 0) {
+      res.status(400).json({ error: "ids[] required" }); return;
+    }
+    if (!["live", "failed", "deleted"].includes(verdict ?? "")) {
+      res.status(400).json({ error: "verdict must be live | failed | deleted" }); return;
+    }
+    try {
+      const result = await resolveSubmissionsBulk(ids.map(String), verdict as any);
+      log(`Bulk resolve (${verdict}): ${result.resolved.length} resolved, ${result.skipped.length} skipped`, "submissions");
+      res.json(result);
+    } catch (err: any) {
+      res.status(500).json({ error: err?.message ?? "bulk resolve failed" });
+    }
+  });
+
+  // §19 dismiss (acknowledge): hide terminal needs-attention rows. Terminal-
+  // only (guarded in the repo's WHERE); non-terminal ids come back as skipped.
+  // Hides, never deletes — issues/review_flags stay in the ledger.
+  app.post("/api/submissions/dismiss-flags", async (req: Request, res: Response) => {
+    const { ids } = (req.body ?? {}) as { ids?: string[] };
+    if (!Array.isArray(ids) || ids.length === 0) {
+      res.status(400).json({ error: "ids[] required" }); return;
+    }
+    try {
+      const result = await dismissFlags(ids.map(String));
+      log(`Dismiss flags: ${result.dismissed.length} acknowledged, ${result.skipped.length} skipped (non-terminal/unknown)`, "submissions");
+      res.json(result);
+    } catch (err: any) {
+      res.status(500).json({ error: err?.message ?? "dismiss failed" });
     }
   });
 

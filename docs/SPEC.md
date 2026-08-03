@@ -1945,7 +1945,9 @@ One row per `putListingsItem` **fire** (not per SKU), written best-effort at
 submit time — a ledger-write failure must never mask a real SC submission.
 Columns: `asin`, `sku`, `submission_id`, `submitted_price`, `submitted_at`,
 `verify_status`, `verified_at`, `verdict_source`, `issues` (jsonb),
-`review_flags` (text[]), `terminal_conflict`.
+`review_flags` (text[]), `terminal_conflict`, `flags_acknowledged_at`
+(timestamptz NULL — set by the dismiss action, migration 023; see "Panel
+bulk actions & dismiss" below).
 
 ### Six states
 
@@ -2014,6 +2016,34 @@ system inferring failure.
 (`in_catalog`, `primary_sku`) — those are §14-owned and self-correct on the
 next analyze; deleting one SKU doesn't mean a multi-offer ASIN has no live
 offer. The `asin_skus` row is kept, so resurrection can reuse a 404'ing SKU.
+
+### Panel bulk actions & dismiss (2026-08-03)
+
+The panel is clearable after review without per-row clicking:
+
+- **Verify all** (header) — the existing sweep endpoint, summarized as
+  "N resolved live · N failed · N still processing/stale (· N throttled)"
+  and the list refetched. Sweep semantics unchanged.
+- **Bulk manual verdicts** — row checkboxes + "Resolve selected as… (live /
+  failed / deleted)". `POST /api/submissions/resolve-bulk` `{ids, verdict}`
+  applies the single-row manual-verdict semantics per id (same repo function,
+  including the `deleted` → `is_primary` demote). Already-terminal rows are
+  **skipped and reported** (`skipped: [{id, reason}]`) — the batch never fails
+  on them; the single-row endpoint keeps its 409.
+- **Dismiss (acknowledge)** — terminal rows surfaced in needs-attention
+  (`failed`, and `live` with `review_flags`/`terminal_conflict`) previously had
+  no reviewed state and sat there forever. `POST /api/submissions/dismiss-flags`
+  `{ids}` sets `flags_acknowledged_at = now()` on **terminal rows only**
+  (non-terminal ids are skipped and reported — `stale` needs a verdict, not an
+  ack). Single-row and bulk in the UI. **Dismiss hides, never deletes**:
+  `issues`/`review_flags`/`terminal_conflict` stay in the ledger untouched.
+  Acknowledged rows leave needs-attention. Stable: the sweep only probes
+  non-terminal rows, so a dismissed terminal row is never re-flagged.
+- **Pill = non-terminal + unacknowledged-attention-terminal:**
+  `pending/processing/stale` PLUS (`failed` OR flagged-`live`) with
+  `flags_acknowledged_at IS NULL`. After sweep + review (bulk verdicts) +
+  dismiss, the badge reaches zero. Note this WIDENS the old pill (which counted
+  only non-terminal): flagged/failed rows now count until acknowledged.
 
 ### Backfill = repair path
 
