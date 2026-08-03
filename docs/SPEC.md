@@ -859,6 +859,19 @@ Flow:
       shows the resulting SKU inline and moves into NEW ORDERS pre-ticked —
       same dialog, no re-fetch of the whole set, row expands inline (no
       nested modal). Gated/dead ASINs: reason shown, excluded, no button.
+      **`legend_pending` is not a dead end (2026-08-04):** when the offer-add
+      returns `legend_pending`, the row expands inline (same no-nested-modal
+      pattern) showing what needs approval — the derived brand code and/or
+      dept code, each an editable 3-char input prefilled with the proposal —
+      with **Approve / Cancel**. Both appear in the one expansion when both
+      are pending. Approve commits via `POST /api/sku-legend/approve` — the
+      SAME single legend writer the Add-to-SC preview uses (§18 ownership;
+      `approve_in_place` when a proposed `legendId` exists, `approve_new`
+      otherwise) — then automatically re-fires the offer-add and continues
+      the existing success path (SKU shown, row promoted into NEW ORDERS
+      pre-ticked, no re-fetch, no dialog restart). Approval errors (e.g.
+      code collision) render inline in the expansion for correction. Cancel
+      collapses the expansion and leaves the row skipped, as today.
    d. Collapsed one-line counts: unchanged / **shipped** / unmatched —
       expandable, display-only. UI vocabulary is "shipped", never "closed"
       ("closed" collides with the Orders-sheet status vocabulary and reads
