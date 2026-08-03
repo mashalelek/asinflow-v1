@@ -25,6 +25,7 @@ import { refreshPrices } from "./price-sync";
 import { applyCatalogDeletedSignal } from "./catalog-deleted-write";
 import { offerAddForAsin, preFilterSubmitSet, type OfferAddResult, type PreFilterResult } from "./offer-add";
 import { submitOfferAddBatch, type SubmitAsinRow } from "./offer-add-submit";
+import { reopenListing } from "./listing-reopen";
 import { makeProductRegistryRepo } from "./product-registry-repo";
 import { processBulkApproval, makeProductionHandlers, type ApprovalItem } from "./sku-legend-approval";
 import { settingsSchema, type Settings } from "@shared/schema";
@@ -1896,6 +1897,24 @@ export async function registerRoutes(
     } catch (err: any) {
       log(`Offer-add submit error: ${err.message}`, "offer-add");
       res.status(500).json({ message: err.message });
+    }
+  });
+
+  // §18 born-closed: reopen a soft-closed listing (price-free end_at:null
+  // merge patch — listing-reopen.ts owns the rails). ACCEPTED = validation
+  // only; SC applies asynchronously (can lag up to ~an hour).
+  app.post("/api/listings/:sku/reopen", async (req: Request, res: Response) => {
+    const sellerId = process.env.SP_API_SELLER_ID;
+    if (!sellerId) { res.status(503).json({ message: "SP_API_SELLER_ID not configured" }); return; }
+    const sku = String(req.params.sku ?? "").trim();
+    if (!sku) { res.status(400).json({ message: "SKU required" }); return; }
+    const outcome = await reopenListing(sellerId, sku);
+    if (outcome.ok) {
+      log(`Reopen listing ACCEPTED for ${sku} (async — SC may lag)`, "offer-add");
+      res.json({ ok: true, submissionId: outcome.submissionId });
+    } else {
+      log(`Reopen listing FAILED for ${sku}: ${outcome.message}`, "offer-add");
+      res.status(502).json({ ok: false, message: outcome.message, code: outcome.code });
     }
   });
 

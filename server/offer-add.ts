@@ -31,6 +31,9 @@ import { recordSubmission } from "./listing-submissions-repo";
 
 const MARKETPLACE = "ATVPDKIKX0DER";
 const PRODUCT_TYPE = "PRODUCT"; // offer-only matching uses the generic PRODUCT type
+// §18 born-closed: past end_at soft-closes the offer at creation. Year-2000
+// per the community-verified pattern; any past date works.
+const BORN_CLOSED_END_AT = "2000-01-01";
 
 export interface OfferAddInput {
   asin: string;
@@ -458,11 +461,18 @@ export function buildOfferOnlyPayload(input: OfferAddInput, dgHzRegulationValue:
     supplier_declared_dg_hz_regulation: attr(dgHzRegulationValue),
 
     // Price + FBA fulfillment. Critically OMITS quantity (FBA-owned).
+    // BORN CLOSED (§18): end_at in the past soft-closes the offer at creation
+    // — SC's "Close listing" is literally this field. Verified live 2026-08-01
+    // and -02 (accepted at create, persists through async processing, listing
+    // settles DISCOVERABLE-not-BUYABLE, §19 verifies live). Reopen via the
+    // price-free end_at:null merge patch (listing-reopen.ts) — and reopen MUST
+    // precede any FBA stock arriving (stranded-inventory caveat).
     purchasable_offer: [
       {
         marketplace_id: MARKETPLACE,
         currency: "USD",
         our_price: [{ schedule: [{ value_with_tax: input.price }] }],
+        end_at: { value: BORN_CLOSED_END_AT },
       },
     ],
     fulfillment_availability: [

@@ -1568,6 +1568,15 @@ the per-row **+** button.
   - **Stranded-inventory caveat:** FBA stock checking in against a closed SKU
     goes stranded (and is exposed to stranded-inventory auto-removal
     settings). **Reopen must precede any FBA stock arriving.**
+  - **Implemented (2026-08-02):** `end_at` is set unconditionally in
+    `buildOfferOnlyPayload` (`BORN_CLOSED_END_AT = "2000-01-01"`). Reopen is
+    `server/listing-reopen.ts` → `POST /api/listings/:sku/reopen`, surfaced as
+    the **"Reopen listing" button on every row of the verification panel**
+    (submissions = recent creations = the born-closed set). The offer-add
+    preview's "Ready to create" section states that all offers are created
+    closed. Round-trip verified live on `CAM-HOM-M64-RQR-003` (reopen →
+    `end_at: null`, re-close → `end_at` restored; PATCH ACCEPTED is async —
+    attribute updates in ~seconds, SC UI lags up to ~an hour).
 
 ### Always-present offer attributes
 

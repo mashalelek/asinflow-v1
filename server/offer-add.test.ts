@@ -158,6 +158,13 @@ describe("buildOfferOnlyPayload — spec guarantees", () => {
     expect(p.attributes.purchasable_offer[0].our_price[0].schedule[0].value_with_tax).toBe(24.99);
     expect(p.attributes.purchasable_offer[0].currency).toBe("USD");
   });
+
+  it("is born closed: purchasable_offer carries a past end_at (§18)", () => {
+    const p = buildOfferOnlyPayload(sample, "not_applicable");
+    const endAt = p.attributes.purchasable_offer[0].end_at;
+    expect(endAt).toBeDefined();
+    expect(new Date(endAt.value).getTime()).toBeLessThan(Date.now());
+  });
 });
 
 // ============================================================================
