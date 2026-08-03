@@ -22,7 +22,7 @@ import { ColumnManager } from "@/components/column-manager";
 import { useTheme } from "@/components/theme-provider";
 import { loadSettings } from "@/lib/settings";
 import { loadColumnConfig, type ColumnConfig } from "@/lib/columns";
-import { Sun, Moon, BarChart3, Zap, AlertTriangle, X, Search, RefreshCw, Archive, Sheet, Database, ShoppingCart, DollarSign, FileSpreadsheet, Upload, Plus } from "lucide-react";
+import { Sun, Moon, BarChart3, Zap, AlertTriangle, X, Search, RefreshCw, Archive, Sheet, Database, ShoppingCart, DollarSign, FileSpreadsheet, Upload, Plus, ScanSearch } from "lucide-react";
 import { Checkbox } from "@/components/ui/checkbox";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import {
@@ -360,6 +360,10 @@ export default function Home() {
   const [isSyncingSales, setIsSyncingSales] = useState(false);
   const [isSyncingSourcing, setIsSyncingSourcing] = useState(false);
   const [isPushingAura, setIsPushingAura] = useState(false);
+  // §18 full-scope listing scan (item 8): streaming progress + report dialog.
+  const [scanState, setScanState] = useState<{ dryRun: boolean; phase: string; done: number; total: number } | null>(null);
+  const [scanReport, setScanReport] = useState<any | null>(null);
+  const [scanReportOpen, setScanReportOpen] = useState(false);
   // SellerBoard COGS export (interim). File picker → upload template → download
   // CSV from the JSON response → show summary modal.
   const [isExportingSb, setIsExportingSb] = useState(false);
@@ -861,6 +865,48 @@ export default function Home() {
       setIsSyncingInventory(false);
     }
   }, [toast, currentWorkingSet, fetchAsins, startDate, endDate]);
+
+  // §18 full-scope listing scan. Selection-aware: selected ASINs, else FULL
+  // catalog (not the filtered view — this is a catalog-truth operation).
+  // Entry is ALWAYS a dry-run; the live run is launched from the report
+  // dialog after review (dryRun is an explicit param end to end).
+  const handleFullScan = useCallback(async (dryRun: boolean) => {
+    const sel = Array.from(selectedSet);
+    setScanState({ dryRun, phase: "a", done: 0, total: 0 });
+    setScanReport(null);
+    try {
+      const res = await fetch(`/api/listings/full-scope-pass?dryRun=${dryRun ? 1 : 0}`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(sel.length > 0 ? { asins: sel } : {}),
+      });
+      if (!res.ok || !res.body) throw new Error(`scan failed (${res.status})`);
+      const reader = res.body.getReader();
+      const decoder = new TextDecoder();
+      let buf = "";
+      for (;;) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        buf += decoder.decode(value, { stream: true });
+        const lines = buf.split("\n");
+        buf = lines.pop() ?? "";
+        for (const line of lines) {
+          if (!line.trim()) continue;
+          let ev: any;
+          try { ev = JSON.parse(line); } catch { continue; }
+          if (ev.type === "phase") setScanState({ dryRun, phase: ev.phase, done: 0, total: ev.asins });
+          else if (ev.type === "progress") setScanState((prev) => prev ? { ...prev, phase: ev.phase, done: ev.done, total: ev.total ?? prev.total } : prev);
+          else if (ev.type === "complete") { setScanReport(ev.report); setScanReportOpen(true); }
+          else if (ev.type === "error") toast({ title: "Listing scan failed", description: ev.message, variant: "destructive" });
+        }
+      }
+      if (!dryRun) await fetchAsins(startDate, endDate);
+    } catch (err: any) {
+      toast({ title: "Listing scan failed", description: err.message, variant: "destructive" });
+    } finally {
+      setScanState(null);
+    }
+  }, [selectedSet, toast, fetchAsins, startDate, endDate]);
 
   // Push-only Aura sync — POSTs to /api/sync/aura/push (no PO chain). Selection-
   // aware: when ASINs are checked, scopes the push to those; otherwise pushes
@@ -1467,6 +1513,11 @@ export default function Home() {
                 <FileSpreadsheet className="h-3.5 w-3.5 mr-1.5" />
                 {isSyncingSourcing ? "Syncing..." : "Sync Sourcing"}
               </Button>
+              <Button variant="outline" size="sm" onClick={() => handleFullScan(true)} disabled={!!scanState || isAnalyzing} className="h-8 text-xs"
+                title="Full-scope listing scan (§18): probes every SKU, discovers SC-created SKUs on no-SKU ASINs, enforces latest-live-wins primary. Runs as a dry-run first — go live from the report.">
+                <ScanSearch className="h-3.5 w-3.5 mr-1.5" />
+                {scanState ? `Scan ${scanState.phase}: ${scanState.done}/${scanState.total}` : `Scan Listings${selectedSet.size > 0 ? ` (${selectedSet.size})` : ""}`}
+              </Button>
               <Button variant="outline" size="sm" onClick={handleExportSbCogs} disabled={isExportingSb} className="h-8 text-xs" title="Upload a SellerBoard products export; downloads YTD PO cost periods as CSV" data-testid="button-export-sb-cogs">
                 <DollarSign className="h-3.5 w-3.5 mr-1.5" />
                 {isExportingSb ? "Exporting..." : "Export SB COGS"}
@@ -1748,6 +1799,60 @@ export default function Home() {
         data={unverified}
         onRefetch={fetchUnverified}
       />
+
+      {/* §18 full-scope listing scan report (item 8). The live run is only
+          reachable from a reviewed dry-run report. */}
+      {scanReport && (
+        <Dialog open={scanReportOpen} onOpenChange={(o) => setScanReportOpen(o)}>
+          <DialogContent className="max-w-2xl max-h-[80vh] overflow-y-auto">
+            <DialogHeader>
+              <DialogTitle>Listing scan report {scanReport.dryRun ? "(dry-run — nothing written)" : "(live)"}</DialogTitle>
+              <DialogDescription>
+                Phase a: {scanReport.phaseA.asins} ASINs / {scanReport.phaseA.skusProbed} SKUs probed —{" "}
+                {scanReport.phaseA.live} live, {scanReport.phaseA.noOffer} no offer, {scanReport.phaseA.transientSkipped} transient-skipped,{" "}
+                {Math.round(scanReport.phaseA.durationMs / 1000)}s · Phase b: {scanReport.phaseB.asins} ASINs —{" "}
+                {scanReport.phaseB.discovered.length} discovered, {scanReport.phaseB.noListing} no listing,{" "}
+                {scanReport.phaseB.transientSkipped} transient, {Math.round(scanReport.phaseB.durationMs / 1000)}s
+              </DialogDescription>
+            </DialogHeader>
+            <div className="space-y-3 text-xs">
+              <div>
+                <p className="font-semibold uppercase tracking-wide text-muted-foreground">
+                  Flag flips ({scanReport.phaseA.flips.length})
+                </p>
+                {scanReport.phaseA.flips.map((f: any) => (
+                  <p key={f.asin} className="font-mono">{f.asin}: {String(f.from)} → {String(f.to)}</p>
+                ))}
+              </div>
+              <div>
+                <p className="font-semibold uppercase tracking-wide text-muted-foreground">
+                  Primary re-points — latest live wins ({scanReport.phaseA.repoints.length})
+                </p>
+                {scanReport.phaseA.repoints.map((r: any) => (
+                  <p key={r.asin} className="font-mono">{r.asin} primary → newest live: {r.from ?? "∅"} → {r.to}</p>
+                ))}
+              </div>
+              <div>
+                <p className="font-semibold uppercase tracking-wide text-muted-foreground">
+                  Discovered SKUs ({scanReport.phaseB.discovered.length})
+                </p>
+                {scanReport.phaseB.discovered.map((d: any) => (
+                  <p key={d.asin} className="font-mono">{d.asin}: {d.skus.join(", ")}</p>
+                ))}
+              </div>
+            </div>
+            <div className="flex justify-end gap-2 pt-2">
+              {scanReport.dryRun && (
+                <Button size="sm" className="h-8 text-xs" disabled={!!scanState}
+                  onClick={() => { setScanReportOpen(false); handleFullScan(false); }}>
+                  Run live now (writes the above)
+                </Button>
+              )}
+              <Button size="sm" variant="outline" className="h-8 text-xs" onClick={() => setScanReportOpen(false)}>Close</Button>
+            </div>
+          </DialogContent>
+        </Dialog>
+      )}
 
       <OfferAddPreviewDialog
         open={offerAddOpen}

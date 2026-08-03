@@ -26,6 +26,7 @@ import { applyCatalogDeletedSignal } from "./catalog-deleted-write";
 import { offerAddForAsin, preFilterSubmitSet, type OfferAddResult, type PreFilterResult } from "./offer-add";
 import { submitOfferAddBatch, type SubmitAsinRow } from "./offer-add-submit";
 import { syncLiveOffers } from "./live-offer-sync";
+import { runFullScopePass } from "./full-scope-pass";
 import { makeProductRegistryRepo } from "./product-registry-repo";
 import { processBulkApproval, makeProductionHandlers, type ApprovalItem } from "./sku-legend-approval";
 import { settingsSchema, type Settings } from "@shared/schema";
@@ -1955,6 +1956,32 @@ export async function registerRoutes(
     } catch (err: any) {
       res.status(500).json({ message: err?.message ?? "recheck failed" });
     }
+  });
+
+  // §18 manual full-scope listing scan (item 8 + 8c). NDJSON progress
+  // stream. dryRun REQUIRED as an explicit query param (no fail-open default
+  // — ?dryRun=1 probes read-only with ZERO writes; ?dryRun=0 is the live
+  // run). Body {asins?} = selection-aware scope.
+  app.post("/api/listings/full-scope-pass", async (req: Request, res: Response) => {
+    if (!isDbAvailable()) { res.status(503).json({ message: "Database not available" }); return; }
+    if (!process.env.SP_API_SELLER_ID) { res.status(503).json({ message: "SP_API_SELLER_ID not configured" }); return; }
+    const dryRunRaw = String(req.query.dryRun ?? "");
+    if (dryRunRaw !== "1" && dryRunRaw !== "0") {
+      res.status(400).json({ message: "dryRun=1 or dryRun=0 required (explicit — no default)" }); return;
+    }
+    const dryRun = dryRunRaw === "1";
+    const { asins } = (req.body ?? {}) as { asins?: string[] };
+    const asinFilter = asins && asins.length > 0 ? new Set(asins) : undefined;
+    res.setHeader("Content-Type", "application/x-ndjson");
+    const emit = (ev: Record<string, any>) => res.write(JSON.stringify(ev) + "\n");
+    try {
+      log(`Full-scope pass ${dryRun ? "DRY-RUN" : "LIVE"} started (${asinFilter ? asinFilter.size + " selected" : "full catalog"})`, "full-scope");
+      const report = await runFullScopePass({ dryRun, asinFilter, emit });
+      emit({ type: "complete", report });
+    } catch (err: any) {
+      emit({ type: "error", message: err?.message ?? "full-scope pass failed" });
+    }
+    res.end();
   });
 
   // §19 bulk manual verdicts: single-row semantics per id; already-terminal

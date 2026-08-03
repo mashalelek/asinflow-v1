@@ -1901,21 +1901,30 @@ live write to Seller Central:
 The Add-Offer path does NOT modify user-controlled fields (COGS, tags, notes,
 etc.).
 
-**Primary-SKU ownership.** The live-offer SKU is authoritative for primary.
-inventory-sync's fulfillable-count heuristic is **bootstrap-only**: it may set
-`primary_sku` / `is_primary` solely when the ASIN has no primary at all
-(`primary_sku IS NULL` and no `asin_skus` row with `is_primary = true`); once a
-primary exists it never recomputes or demotes. *Legacy state:* an ASIN whose
-only SKUs are `amzn.gr.*` gets `primary_sku` set to that SKU by bootstrap while
-no `asin_skus` row is marked `is_primary` (the two fields disagree) — and since
-the bootstrap check treats a non-null `primary_sku` as "has primary," sync never
-self-corrects it; only a future Add-Offer promotion heals it.
+**Primary-SKU ownership (rewritten 2026-08-03, item 8c).** Three writers:
 
-**Known limitation.** If a primary SKU's listing is later deleted in SC, the
-`primary_sku` / `is_primary` fields (which drive the *lead-SKU display*) go
-stale until the next Add-Offer promotion — a separate concern from the catalog
-**icon**, which is now driven by `has_live_offer` (below) and self-corrects
-daily.
+1. **Add-to-SC promotion on create** — the freshly created live-offer SKU is
+   promoted to primary (unchanged).
+2. **Full-scope listing scan enforcing latest-live-wins** — after probing, for
+   every ASIN: primary = the most recently observed SKU
+   (`asin_skus.created_at`) among SKUs whose listing is LIVE, with
+   **`amzn.gr.*` excluded from the candidate set** (the repo-wide
+   never-amzn.gr-primary invariant; if only `amzn.gr.*` SKUs are live, primary
+   stays unchanged — dry-run 2026-08-03 found 4 such cases). If the winner
+   differs from the current primary, re-point (`asins.primary_sku` +
+   `asin_skus.is_primary`, atomically in one statement) — including demoting
+   an older SKU that is still live. If NO eligible SKU is live, primary is
+   left unchanged (never point primary at a dead SKU; never null it out).
+   Every re-point is reported as "primary → newest live: old → new".
+3. **inventory-sync bootstrap — for the no-primary case ONLY** (`primary_sku
+   IS NULL` and no `is_primary` row); it never recomputes or demotes.
+
+*Legacy state:* an ASIN whose only SKUs are `amzn.gr.*` got `primary_sku` set
+by bootstrap with no matching `is_primary` row; the full-scope scan's
+latest-live-wins rule now heals these whenever any SKU is live. A primary
+whose listing was deleted in SC self-corrects on the next full-scope scan
+(if another SKU is live) — the catalog **icon** is separately driven by
+`has_live_offer` (below).
 
 ### Catalog icon: live-offer truth (`has_live_offer`)
 
@@ -1965,6 +1974,34 @@ inventory summaries.
   summaries,issues`), zero extra calls. `live` verdict → the live SKU's
   issues; `no_offer` → `[]` (no listing = no listing issues). Same fail-closed
   rule: transient probes write neither field.
+
+### Manual full-scope listing scan (2026-08-03, item 8)
+
+Toolbar button, **selection-aware** (selected ASINs, else full active
+catalog). Two sequential phases over one NDJSON progress stream
+(`POST /api/listings/full-scope-pass`, body `{asins?}`):
+
+- **Phase a — every active ASIN with ≥1 `asin_skus` row, ALL flag states**
+  (TRUE/FALSE/NULL): `getListingsItem` per SKU — deliberately NO
+  first-live short-circuit, because 8c needs per-SKU liveness. Per
+  definitively-probed ASIN it writes `has_live_offer` (any SKU live),
+  `offer_checked_at`, the §6 issue snapshot (newest-live SKU's issues; `[]`
+  when none live), and applies the **latest-live-wins primary re-point**
+  (Primary-SKU ownership above). Any transient SKU probe → the whole ASIN is
+  skipped, fail-closed.
+- **Phase b — active no-SKU ASINs**: `searchListingsItems` by ASIN (the §19
+  fallback endpoint, `includedData=summaries,issues`) to discover SC-created
+  SKUs. Found → write `asin_skus` rows (bootstrap primary only if none
+  exists), `has_live_offer`, issue snapshot. Not found → stays NULL, counted
+  **"no listing"** (sourcing leads — expected, the majority).
+- **Pacing:** 260ms between calls, both phases (getListingsItem and
+  searchListingsItems share the 5 rps Listings bucket; phases are sequential).
+- **Per-phase report:** probed / flips / discovered SKUs / no-listing count /
+  re-points ("primary → newest live: old → new") / duration.
+- **Dry-run (`?dryRun=1`, Velocity pattern):** both probe phases run
+  read-only and report what WOULD change — flag flips, discovered SKUs, the
+  full 8c re-point list — with **zero DB writes**. The first live run is
+  gated on a reviewed dry-run.
 - **`is_listing_active`** (a dead `DEFAULT TRUE` column, zero readers) was
   dropped in migration 018 — its default would have poisoned the tri-state.
 
