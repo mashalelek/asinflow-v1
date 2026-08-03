@@ -20,7 +20,8 @@
 // Fail-closed: only a definitive 200 writes TRUE; only all-SKUs-404 writes
 // FALSE. Transient responses (429/5xx/timeout) write nothing and are counted in
 // the end-of-pass skip summary — the next run retries them. Writes has_live_offer
-// / offer_checked_at ONLY (no in_catalog, no manual-verdict fields).
+// / offer_checked_at / current_issues / issues_checked_at ONLY (no in_catalog,
+// no manual-verdict fields, never listing_submissions).
 import { query as defaultQuery } from "./db";
 import { checkAsinLiveOffer } from "./live-offer-check";
 import { log } from "./index";
@@ -69,9 +70,14 @@ export async function syncLiveOffers(
   for (const { asin } of rows) {
     const res = await checkAsinLiveOffer(asin, sellerId, { query });
     if (res.verdict === "live" || res.verdict === "no_offer") {
+      // §6 item 7: the same definitive probe refreshes the current-issues
+      // snapshot (issues came in the same getListingsItem response). Ledger
+      // rows are never touched here.
       await query(
-        `UPDATE asins SET has_live_offer = $2, offer_checked_at = now() WHERE asin = $1`,
-        [asin, res.verdict === "live"],
+        `UPDATE asins SET has_live_offer = $2, offer_checked_at = now(),
+                current_issues = $3::jsonb, issues_checked_at = now()
+          WHERE asin = $1`,
+        [asin, res.verdict === "live", JSON.stringify(res.issues ?? [])],
       );
       if (res.verdict === "live") s.live++; else s.noOffer++;
     } else {

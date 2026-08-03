@@ -25,6 +25,7 @@ import { refreshPrices } from "./price-sync";
 import { applyCatalogDeletedSignal } from "./catalog-deleted-write";
 import { offerAddForAsin, preFilterSubmitSet, type OfferAddResult, type PreFilterResult } from "./offer-add";
 import { submitOfferAddBatch, type SubmitAsinRow } from "./offer-add-submit";
+import { syncLiveOffers } from "./live-offer-sync";
 import { makeProductRegistryRepo } from "./product-registry-repo";
 import { processBulkApproval, makeProductionHandlers, type ApprovalItem } from "./sku-legend-approval";
 import { settingsSchema, type Settings } from "@shared/schema";
@@ -752,7 +753,7 @@ export async function registerRoutes(
       const result = await query(`
         SELECT
           a.asin, a.title, a.image_url, a.brand, a.category, a.weight_lb, a.buy_link, a.is_active,
-          a.primary_sku, a.in_catalog, a.has_live_offer, a.notes, a.promo_notes, a.is_meltable, a.is_hazmat, a.is_dangerous_good, a.is_search_suppressed, a.suppression_reasons, a.last_reviewed_at, a.added_at, a.is_wholesale, a.is_oa,
+          a.primary_sku, a.in_catalog, a.has_live_offer, a.current_issues, a.issues_checked_at, a.notes, a.promo_notes, a.is_meltable, a.is_hazmat, a.is_dangerous_good, a.is_search_suppressed, a.suppression_reasons, a.last_reviewed_at, a.added_at, a.is_wholesale, a.is_oa,
           e.cogs, e.cogs_source, e.actual_cogs, e.estimated_cogs, e.estimated_cogs_source, e.prep_override, e.storage_override,
           e.lowest_fba_price, e.buy_box_price, e.buy_box_fulfillment, e.lowest_price,
           e.sellers_fba, e.sellers_fbm,
@@ -959,6 +960,8 @@ export async function registerRoutes(
           skus: skusMap.get(row.asin) ?? [],
           inCatalog: row.in_catalog ?? false,
           hasLiveOffer: row.has_live_offer ?? null,
+          currentIssues: row.current_issues ?? null,
+          issuesCheckedAt: row.issues_checked_at ?? null,
           tags: tagsMap.get(row.asin) ?? [],
           submission: subsMap.has(row.asin)
             ? { latest: subsMap.get(row.asin)![0], history: subsMap.get(row.asin)! }
@@ -1927,6 +1930,30 @@ export async function registerRoutes(
     } catch (err: any) {
       log(`Offer-add submit error: ${err.message}`, "offer-add");
       res.status(500).json({ message: err.message });
+    }
+  });
+
+  // §6 item 7: single-ASIN current-issues recheck. Runs the SAME full-scope
+  // live-offer pass implementation scoped to one ASIN — single owner of
+  // has_live_offer preserved; the snapshot write rides the definitive probe.
+  // Read-only vs the ledger. Returns the fresh row fields for in-place update.
+  app.post("/api/asins/:asin/recheck-issues", async (req: Request, res: Response) => {
+    if (!isDbAvailable()) { res.status(503).json({ message: "Database not available" }); return; }
+    const asin = String(req.params.asin ?? "").trim();
+    if (!asin) { res.status(400).json({ message: "ASIN required" }); return; }
+    try {
+      const summary = await syncLiveOffers({ asinFilter: new Set([asin]) });
+      const row = (await query(
+        `SELECT has_live_offer, current_issues, issues_checked_at FROM asins WHERE asin = $1`, [asin],
+      )).rows[0];
+      res.json({
+        probed: summary.total, transient: summary.transient,
+        hasLiveOffer: row?.has_live_offer ?? null,
+        currentIssues: row?.current_issues ?? null,
+        issuesCheckedAt: row?.issues_checked_at ?? null,
+      });
+    } catch (err: any) {
+      res.status(500).json({ message: err?.message ?? "recheck failed" });
     }
   });
 

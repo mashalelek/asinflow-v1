@@ -75,3 +75,26 @@ describe("checkSkuListingStatus", () => {
     }
   });
 });
+
+// §6 item 7: issues ride the same getListingsItem call (zero extra volume).
+describe("current-issues capture (includedData=summaries,issues)", () => {
+  it("normalizes issues on a present listing", async () => {
+    const out = await checkSkuListingStatus("SELLER", "SKU-1", async (_e: string, params: any) => {
+      expect(params.includedData).toBe("summaries,issues");
+      return {
+        summaries: [{ status: ["DISCOVERABLE"] }],
+        issues: [{ code: "18555", severity: "ERROR", message: "price too high", extra: "dropped" }],
+      };
+    });
+    expect(out.ok).toBe(true);
+    if (out.ok && out.present) {
+      expect(out.issues).toEqual([{ code: "18555", severity: "ERROR", message: "price too high" }]);
+    }
+  });
+
+  it("present with no issues → empty array (checked-clean snapshot)", async () => {
+    const out = await checkSkuListingStatus("SELLER", "SKU-1", async () => ({ summaries: [] }));
+    expect(out.ok).toBe(true);
+    if (out.ok && out.present) expect(out.issues).toEqual([]);
+  });
+});

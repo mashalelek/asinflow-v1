@@ -12,8 +12,15 @@ import type { HttpGetFn } from "./sku-catalog-fetch";
 
 const MARKETPLACE = "ATVPDKIKX0DER";
 
+// Normalized listing issue — §6 current-issues snapshot shape.
+export interface ListingIssueLite {
+  code: string;
+  severity: string;
+  message: string;
+}
+
 export type ListingStatusOutcome =
-  | { ok: true; present: true; statuses: string[] }
+  | { ok: true; present: true; statuses: string[]; issues: ListingIssueLite[] }
   | { ok: true; present: false }
   | { ok: false; reason: "transient_error"; status?: number; message: string; retryable: true };
 
@@ -25,10 +32,16 @@ export async function checkSkuListingStatus(
   try {
     const data = await httpGet(
       `/listings/2021-08-01/items/${sellerId}/${encodeURIComponent(sku)}`,
-      { marketplaceIds: MARKETPLACE, includedData: "summaries" },
+      // issues ride the same call — §6 item 7 snapshot, zero extra volume.
+      { marketplaceIds: MARKETPLACE, includedData: "summaries,issues" },
     );
     const statuses: string[] = data?.summaries?.[0]?.status ?? [];
-    return { ok: true, present: true, statuses };
+    const issues: ListingIssueLite[] = (data?.issues ?? []).map((i: any) => ({
+      code: String(i?.code ?? ""),
+      severity: String(i?.severity ?? ""),
+      message: String(i?.message ?? ""),
+    }));
+    return { ok: true, present: true, statuses, issues };
   } catch (err: any) {
     const status = err?.response?.status;
     if (status === 404) return { ok: true, present: false };

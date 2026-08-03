@@ -176,7 +176,8 @@ export async function syncInventory(
   // mirroring this sync's asinFilter. Paced per the Listings budget.
   // FAIL-CLOSED: a throttle/failure here must NOT fail the inventory sync — log,
   // report the (partial/zero) counts, leave rows NULL for the next run / 07:00
-  // cron. Writes has_live_offer / offer_checked_at ONLY.
+  // cron. Writes has_live_offer / offer_checked_at + the §6 current-issues
+  // snapshot ONLY.
   let liveOffer: LiveOfferPassCounts = { checked: 0, live: 0, no_offer: 0, throttled: 0 };
   try {
     const lo = await syncLiveOffers({ notLiveOnly: true, asinFilter });

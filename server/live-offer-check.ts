@@ -29,6 +29,10 @@ export interface LiveOfferResult {
   skipReason?: SkipReason; // set only when verdict === "skip"
   liveSku?: string;       // the SKU that returned present=true (verdict "live")
   statuses?: string[];    // its SC statuses, e.g. ["ACTIVE"] / ["INACTIVE"]
+  // §6 item 7 snapshot: the live SKU's listing issues (same getListingsItem
+  // response). Defined ONLY on definitive verdicts: live → that SKU's issues,
+  // no_offer → [] (no listing, no listing issues). Absent on skip.
+  issues?: { code: string; severity: string; message: string }[];
   skusChecked: number;
   sawTransient: boolean;  // true if any SKU returned a non-definitive response
 }
@@ -65,7 +69,7 @@ export async function checkAsinLiveOffer(
     const out = await checkSkuListingStatus(sellerId, sku, deps.httpGet);
     checked++;
     if (out.ok && out.present) {
-      return { verdict: "live", liveSku: sku, statuses: out.statuses, skusChecked: checked, sawTransient };
+      return { verdict: "live", liveSku: sku, statuses: out.statuses, issues: out.issues, skusChecked: checked, sawTransient };
     }
     if (!out.ok) sawTransient = true; // transient — this SKU is indeterminate
     // out.ok && !out.present → definitive 404; keep checking the rest
@@ -74,5 +78,5 @@ export async function checkAsinLiveOffer(
   // No live SKU found. If any check was indeterminate we cannot assert no_offer.
   return sawTransient
     ? { verdict: "skip", skipReason: "transient", skusChecked: checked, sawTransient }
-    : { verdict: "no_offer", skusChecked: checked, sawTransient };
+    : { verdict: "no_offer", issues: [], skusChecked: checked, sawTransient };
 }

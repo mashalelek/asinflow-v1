@@ -301,6 +301,23 @@ so it never appears unbidden).
   `live`. Otherwise a compact badge: amber issue-code chips (e.g. `18555`),
   red `failed`, muted chip for other states (`processing`, `stale`,
   `deleted`). Per §7: semantic color in cell TEXT only — no row tints.
+- **Current-issues snapshot is the primary badge (2026-08-03, item 7).**
+  Ledger flags freeze at verify time and go stale — Amazon-side issues resolve
+  without new submissions. `asins.current_issues` (jsonb) +
+  `asins.issues_checked_at` (migration 024) hold a per-ASIN snapshot from
+  `getListingsItem` (`includedData=summaries,issues` — issues ride the SAME
+  call the live-offer probe already makes, zero extra volume). Badge
+  precedence: snapshot when present (empty snapshot = currently clean → no
+  badge), else latest-submission flags. Ledger flags stay in the tooltip and
+  the filter regardless — the permanent record is unchanged.
+  - **Refresh paths:** (a) "Recheck" button in the column tooltip →
+    `POST /api/asins/:asin/recheck-issues`, which runs the single-ASIN
+    full-scope live-offer pass (same `syncLiveOffers` implementation — single
+    owner of `has_live_offer` preserved); (b) EVERY live-offer pass (07:00
+    cron, inventory-sync rider, recheck) writes the snapshot for each ASIN it
+    definitively probes. Fail-closed: transient probes write nothing.
+  - **Rescans never modify ledger rows** — the snapshot lives on `asins`,
+    the ledger is append/verify-only.
 - **Acknowledgment NEVER hides column flags** (contrast with the §19 panel):
   acknowledged flags render muted/grey instead of amber, permanently. Badge,
   tooltip, and filterability remain. The panel's dismiss is triage; the column
@@ -1942,6 +1959,12 @@ inventory summaries.
 - **Fail-closed:** only a definitive 200 writes `TRUE`; only all-SKUs-404 writes
   `FALSE`; any transient (429/5xx/timeout) writes nothing and is retried next
   run. Never coerced from missing data.
+- **Issue snapshot rider (2026-08-03):** every definitive probe also writes
+  `asins.current_issues` / `issues_checked_at` (§6 Submission column) — the
+  issues arrive in the same `getListingsItem` response (`includedData=
+  summaries,issues`), zero extra calls. `live` verdict → the live SKU's
+  issues; `no_offer` → `[]` (no listing = no listing issues). Same fail-closed
+  rule: transient probes write neither field.
 - **`is_listing_active`** (a dead `DEFAULT TRUE` column, zero readers) was
   dropped in migration 018 — its default would have poisoned the tri-state.
 

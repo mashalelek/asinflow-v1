@@ -123,6 +123,11 @@ export interface AsinResult {
   hasLiveOffer?: boolean | null;      // live-offer truth (getListingsItem); null = never checked. Drives the catalog icon.
   tags?: { name: string; color: string }[];
   submission?: SubmissionColumnData | null; // §6 Submission column (ledger, read-only)
+  // §6 item 7: per-ASIN current-issues snapshot (asins.current_issues /
+  // issues_checked_at). null checkedAt = never snapshotted; [] = checked clean.
+  // Snapshot is the PRIMARY badge; ledger flags stay in tooltip + filter.
+  currentIssues?: { code: string; severity: string; message: string }[] | null;
+  issuesCheckedAt?: string | null;
   notes?: string | null;
   promoNotes?: string | null; // sourcing sheet Col O promos — user-controlled, display-only
   isArchived?: boolean;

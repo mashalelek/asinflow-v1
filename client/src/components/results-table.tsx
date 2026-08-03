@@ -825,7 +825,7 @@ export function ResultsTable({
                       </span>
                     );
                   } else {
-                    content = renderCell(colId, result, price, label, hasError, profitData, settings, prep, storage, includeInboundShipping, priceFallback);
+                    content = renderCell(colId, result, price, label, hasError, profitData, settings, prep, storage, includeInboundShipping, priceFallback, onResultUpdate);
                   }
                   return (
                     <td key={colId} className={`px-3 py-1.5 overflow-hidden ${col.align === "right" ? "text-right" : ""}`} style={w ? { width: w, minWidth: w, maxWidth: w } : undefined}>
@@ -1296,6 +1296,7 @@ export function renderCell(
   storage: { value: number; isOverride: boolean },
   includeInboundShipping = true,
   priceFallback = false,
+  onResultUpdate?: (asin: string, updates: Partial<AsinResult>) => void,
 ) {
   switch (colId) {
     case "brand": {
@@ -1765,39 +1766,89 @@ export function renderCell(
       return <span className="text-sm text-muted-foreground">{`${mm}/${dd}/${yyyy}`}</span>;
     }
 
-    // §6 Submission column — read-only §19 ledger surface. Badge from the
-    // LATEST submission; tooltip = full history. Acknowledged flags render
-    // muted grey, never hidden (permanent record). Semantic color in cell
-    // text only — no row tints (§7).
+    // §6 Submission column — read-only §19 ledger surface. Item 7: the
+    // current-issues SNAPSHOT is the primary badge when present (ledger flags
+    // freeze at verify time and go stale); ledger flags stay in the tooltip
+    // and the filter regardless. Acknowledged ledger flags render muted grey,
+    // never hidden (permanent record). Semantic color in cell text only — no
+    // row tints (§7).
     case "submission": {
       const sub = result.submission;
       const cat = submissionCategory(sub);
-      if (cat === "none" || cat === "clean") return null; // nothing to show
-      const latest = sub!.latest;
-      const codes = (latest.issues ?? []).map((i) => i.code).filter(Boolean);
-      const ack = latest.acknowledged;
-      const chipTone = latest.status === "failed"
-        ? (ack ? "text-muted-foreground" : "text-red-600 dark:text-red-400")
-        : (ack ? "text-muted-foreground" : "text-amber-600 dark:text-amber-500");
+      const snap = result.issuesCheckedAt != null ? (result.currentIssues ?? []) : null;
+      // Badge source: snapshot when present, else latest submission flags.
+      const showLedgerBadge = snap == null && cat !== "none" && cat !== "clean";
+      const showSnapBadge = snap != null && snap.length > 0;
+      if (!showLedgerBadge && !showSnapBadge && cat === "none") return null;
+      const latest = sub?.latest ?? null;
+      const ack = latest?.acknowledged === true;
       const fmtDate = (t: string) => {
         const d = new Date(t);
         return `${String(d.getMonth() + 1).padStart(2, "0")}/${String(d.getDate()).padStart(2, "0")}/${d.getFullYear()}`;
       };
+      let badge: React.ReactNode = null;
+      if (showSnapBadge) {
+        badge = (
+          <span className="inline-flex items-center gap-1 text-xs font-medium text-amber-600 dark:text-amber-500">
+            {snap!.map((i) => <span key={i.code} className="font-mono">{i.code}</span>)}
+          </span>
+        );
+      } else if (showLedgerBadge) {
+        const codes = (latest!.issues ?? []).map((i) => i.code).filter(Boolean);
+        const chipTone = latest!.status === "failed"
+          ? (ack ? "text-muted-foreground" : "text-red-600 dark:text-red-400")
+          : (ack ? "text-muted-foreground" : "text-amber-600 dark:text-amber-500");
+        badge = (
+          <span className={`inline-flex items-center gap-1 text-xs font-medium ${chipTone}`}>
+            {latest!.status === "failed" && <span>failed</span>}
+            {codes.length > 0
+              ? codes.map((c) => <span key={c} className="font-mono">{c}</span>)
+              : latest!.status !== "failed" && <span>{latest!.terminalConflict ? "conflict" : latest!.status}</span>}
+            {ack && <span className="text-[10px] uppercase tracking-wide">ack</span>}
+          </span>
+        );
+      } else if (sub == null && !showSnapBadge) {
+        return null; // no submission, no snapshot issues
+      }
       return (
         <Tooltip>
           <TooltipTrigger asChild>
-            <span className={`inline-flex items-center gap-1 text-xs font-medium ${chipTone}`}>
-              {latest.status === "failed" && <span>failed</span>}
-              {codes.length > 0
-                ? codes.map((c) => <span key={c} className="font-mono">{c}</span>)
-                : latest.status !== "failed" && <span>{latest.terminalConflict ? "conflict" : latest.status}</span>}
-              {ack && <span className="text-[10px] uppercase tracking-wide">ack</span>}
-            </span>
+            <span className="inline-flex">{badge ?? <span className="text-xs text-muted-foreground">—</span>}</span>
           </TooltipTrigger>
           <TooltipPortal>
             <TooltipContent side="top" className="max-w-md">
               <div className="space-y-2 text-xs">
-                {sub!.history.map((h, i) => (
+                {/* Item 7: current-issues snapshot — primary truth when checked */}
+                {snap != null && (
+                  <div>
+                    <p className="font-medium">
+                      Current issues (as of {fmtDate(result.issuesCheckedAt!)}): {snap.length === 0 ? "none" : ""}
+                    </p>
+                    {snap.map((iss, j) => (
+                      <p key={j}>- <span className="font-mono">{iss.code}</span> ({iss.severity}): {iss.message}</p>
+                    ))}
+                  </div>
+                )}
+                <button
+                  type="button"
+                  className="text-[11px] underline text-muted-foreground hover:text-foreground"
+                  onClick={async (e) => {
+                    e.stopPropagation();
+                    try {
+                      const r = await fetch(`/api/asins/${result.asin}/recheck-issues`, { method: "POST" });
+                      const d = await r.json();
+                      if (r.ok) {
+                        onResultUpdate?.(result.asin, {
+                          currentIssues: d.currentIssues, issuesCheckedAt: d.issuesCheckedAt,
+                          hasLiveOffer: d.hasLiveOffer,
+                        });
+                      }
+                    } catch { /* transient — next pass retries */ }
+                  }}
+                >
+                  Recheck now
+                </button>
+                {sub != null && sub.history.map((h, i) => (
                   <div key={i} className={i > 0 ? "opacity-70" : ""}>
                     <p className="font-medium">
                       {fmtDate(h.submittedAt)} · <span className="font-mono">{h.sku}</span> · {h.status}
@@ -1806,7 +1857,7 @@ export function renderCell(
                     {(h.issues ?? []).map((iss, j) => (
                       <p key={j}>- <span className="font-mono">{iss.code}</span> ({iss.severity}): {iss.message}</p>
                     ))}
-                    {(h.reviewFlags ?? []).filter((f) => !f.startsWith("18555") && !(h.issues ?? []).some((iss) => f.startsWith(iss.code))).map((f, j) => (
+                    {(h.reviewFlags ?? []).filter((f) => !(h.issues ?? []).some((iss) => f.startsWith(iss.code))).map((f, j) => (
                       <p key={`f${j}`}>- {f}</p>
                     ))}
                   </div>
