@@ -1934,6 +1934,54 @@ export async function registerRoutes(
     }
   });
 
+  // === Post-submit verification ledger ===
+  //
+  // On-demand (no job infra). Verify sweeps pending/processing/stale rows
+  // through SC, paced + fail-closed (throttled rows stay unchanged). Amazon
+  // async processing is slow (hours), so this is expected to run the morning
+  // after a batch; re-running is safe/idempotent.
+  app.post("/api/submissions/verify", async (_req: Request, res: Response) => {
+    const sellerId = process.env.SP_API_SELLER_ID;
+    if (!sellerId) { res.status(400).json({ error: "SP_API_SELLER_ID not set" }); return; }
+    try {
+      const summary = await verifyPending(sellerId);
+      const needsAttention = await listNeedsAttention();
+      res.json({ summary, needsAttention });
+    } catch (err: any) {
+      res.status(500).json({ error: err?.message ?? "verify failed" });
+    }
+  });
+
+  // Unverified count (toolbar chip) + the needs-attention list (failed, stale,
+  // and LIVE-with-review-flags — surfaced, not JSONB-only).
+  app.get("/api/submissions/unverified", async (_req: Request, res: Response) => {
+    try {
+      res.json({
+        count: await getUnverifiedCount(),
+        needsAttention: await listNeedsAttention(),
+        inFlight: await listInFlight(),
+      });
+    } catch (err: any) {
+      res.status(500).json({ error: err?.message ?? "query failed" });
+    }
+  });
+
+  // Manual resolution of a stale/ambiguous row: live | failed | deleted.
+  app.post("/api/submissions/:id/resolve", async (req: Request, res: Response) => {
+    const id = String(req.params.id);
+    const verdict = req.body?.verdict as "live" | "failed" | "deleted";
+    if (!["live", "failed", "deleted"].includes(verdict)) {
+      res.status(400).json({ error: "verdict must be live | failed | deleted" }); return;
+    }
+    try {
+      await resolveSubmissionManual(id, verdict);
+      res.json({ ok: true });
+    } catch (err: any) {
+      const msg = err?.message ?? "resolve failed";
+      res.status(/already resolved|not found/.test(msg) ? 409 : 500).json({ error: msg });
+    }
+  });
+
   // §6 item 7: single-ASIN current-issues recheck. Runs the SAME full-scope
   // live-offer pass implementation scoped to one ASIN — single owner of
   // has_live_offer preserved; the snapshot write rides the definitive probe.

@@ -2136,6 +2136,9 @@ The panel is clearable after review without per-row clicking:
   `flags_acknowledged_at IS NULL`. After sweep + review (bulk verdicts) +
   dismiss, the badge reaches zero. Note this WIDENS the old pill (which counted
   only non-terminal): flagged/failed rows now count until acknowledged.
+- **Pill is ALWAYS visible** (2026-08-03): it is the panel's only entry point,
+  so it renders at count 0 too (extra-muted "0 submissions") — a hidden pill
+  made "count endpoint broken" indistinguishable from "legitimately zero".
 - **Dismiss scope:** acknowledgment affects PANEL triage (and the pill) only.
   The §6 Submission column keeps showing acknowledged flags permanently
   (muted/grey) — the column is the permanent record; nothing is ever deleted
