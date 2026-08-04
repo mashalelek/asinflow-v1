@@ -145,6 +145,27 @@ All application state lives in the single `Home` component:
 
 Columns are defined in `shared/schema.ts` as `ALL_COLUMNS` (array of `ColumnDef`). `client/src/lib/columns.ts` manages localStorage persistence of column order and visibility. The `ColumnManager` component (drag-to-reorder, toggle visibility) writes back to this store. Three columns are always frozen/visible regardless of config: `#` (row number), `☑` (buy checkbox), `asin`.
 
+## Blob-staging shared files: inventory-diff before commit
+
+When staging a shared file by CONSTRUCTING the staged blob (index version +
+selected slices, `git hash-object` + `git update-index`) instead of normal
+`git add` — the workaround for files co-edited by a parallel session — the
+slice boundaries can silently swallow unrelated code sitting between the
+anchors. This happened in commit `9360780`: a deletion slice spanning two
+comment anchors also removed the three §19 submission-ledger routes between
+them, breaking the verification panel's only entry point unnoticed
+(restored in `aed66a9`).
+
+**Rule: any constructed-blob staging of a shared file requires an inventory
+diff against HEAD before commit.** For `routes.ts`: diff the
+`app.get/post/put/delete("…")` route list. For other files: the export list
+(`grep -E '^export'`). Every removed entry must be one you intended to
+remove, by name — an inventory diff of "what I meant to touch" vs "what
+actually changed" is the check; eyeballing the patch is not. The
+route-registration test (`server/route-inventory.test.ts`) backstops
+routes.ts specifically, but the inventory-diff rule applies to every
+blob-staged shared file.
+
 ## Definition of Done: committed
 
 A feature isn't done until it's committed — same as it isn't done until
