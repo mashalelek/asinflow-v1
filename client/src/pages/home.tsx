@@ -21,7 +21,9 @@ import { SummaryCards, type FilterMode } from "@/components/summary-cards";
 import { ColumnManager } from "@/components/column-manager";
 import { useTheme } from "@/components/theme-provider";
 import { loadSettings } from "@/lib/settings";
+import { useSearch } from "wouter";
 import { loadColumnConfig, type ColumnConfig } from "@/lib/columns";
+import { loadBuyList, saveBuyList, loadOnHoldList, saveOnHoldList } from "@/lib/buy-hold";
 import { Sun, Moon, BarChart3, Zap, AlertTriangle, X, Search, RefreshCw, Archive, Sheet, Database, ShoppingCart, DollarSign, FileSpreadsheet, Upload, Plus, ScanSearch } from "lucide-react";
 import { Checkbox } from "@/components/ui/checkbox";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
@@ -52,35 +54,9 @@ import { isProfitable, isReplens } from "@shared/profitability";
 import { ActiveFiltersModal, getActiveFilterCount } from "@/components/active-filters-modal";
 import { Filter } from "lucide-react";
 
-const BUY_LIST_KEY = "fba-buy-list";
-const ON_HOLD_LIST_KEY = "fba-on-hold-list";
 const DATE_PREFS_KEY = "fba-date-prefs";
 const INBOUND_KEY = "fba-include-inbound";
 const COL_FILTERS_KEY = "fba-col-filters";
-
-function loadBuyList(): Set<string> {
-  try {
-    const stored = localStorage.getItem(BUY_LIST_KEY);
-    if (stored) return new Set(JSON.parse(stored));
-  } catch {}
-  return new Set();
-}
-
-function saveBuyList(set: Set<string>) {
-  localStorage.setItem(BUY_LIST_KEY, JSON.stringify(Array.from(set)));
-}
-
-function loadOnHoldList(): Set<string> {
-  try {
-    const stored = localStorage.getItem(ON_HOLD_LIST_KEY);
-    if (stored) return new Set(JSON.parse(stored));
-  } catch {}
-  return new Set();
-}
-
-function saveOnHoldList(set: Set<string>) {
-  localStorage.setItem(ON_HOLD_LIST_KEY, JSON.stringify(Array.from(set)));
-}
 
 function fmtDate(d: Date): string {
   return d.toISOString().split("T")[0];
@@ -342,6 +318,15 @@ export default function Home() {
     try { const s = localStorage.getItem("fba-sort"); if (s) { const p = JSON.parse(s); return p.dir; } } catch {} return "desc";
   });
   const [searchQuery, setSearchQuery] = useState("");
+
+  // §21 pre-filter link target: /asins?q=<ASIN> (the bulk page's in_database
+  // icon). Seeds the search box from the ?q= param; inert when absent.
+  // Archived ASINs stay hidden (showArchived off) — same as a manual search.
+  const urlSearch = useSearch();
+  useEffect(() => {
+    const q = new URLSearchParams(urlSearch).get("q");
+    if (q) setSearchQuery(q);
+  }, [urlSearch]);
   const [selectedSearchAsins, setSelectedSearchAsins] = useState<Set<string>>(new Set());
   const [colFilters, setColFilters] = useState<FilterMap>(loadColFilters);
   const [showGated, setShowGated] = useState(loadShowGated);

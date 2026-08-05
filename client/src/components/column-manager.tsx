@@ -4,36 +4,40 @@ import { Checkbox } from "@/components/ui/checkbox";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import { Separator } from "@/components/ui/separator";
 import { Columns3, RotateCcw } from "lucide-react";
-import { ALL_COLUMNS, COLUMN_GROUPS, type ColumnId } from "@shared/schema";
+import { ALL_COLUMNS, COLUMN_GROUPS, type ColumnDef, type ColumnId } from "@shared/schema";
 import { type ColumnConfig, getDefaultConfig, saveColumnConfig } from "@/lib/columns";
 
 interface ColumnManagerProps {
   config: ColumnConfig;
   onChange: (config: ColumnConfig) => void;
+  // §21 bulk page: pass its column subset + its own storage key. Defaults
+  // preserve the main table exactly (ALL_COLUMNS, "fba-column-config").
+  columns?: ColumnDef[];
+  storageKey?: string;
 }
 
-export function ColumnManager({ config, onChange }: ColumnManagerProps) {
+export function ColumnManager({ config, onChange, columns = ALL_COLUMNS, storageKey }: ColumnManagerProps) {
   const toggleColumn = useCallback(
     (id: ColumnId) => {
       if (id === "product") return;
       const next = { ...config, visible: new Set(config.visible) };
       if (next.visible.has(id)) next.visible.delete(id);
       else next.visible.add(id);
-      saveColumnConfig(next);
+      saveColumnConfig(next, storageKey);
       onChange(next);
     },
-    [config, onChange],
+    [config, onChange, storageKey],
   );
 
   const resetToDefault = useCallback(() => {
-    const def = getDefaultConfig();
-    saveColumnConfig(def);
+    const def = getDefaultConfig(columns);
+    saveColumnConfig(def, storageKey);
     onChange(def);
-  }, [onChange]);
+  }, [onChange, columns, storageKey]);
 
   // Group columns by their schema-defined group
-  const colsByGroup = new Map<string, typeof ALL_COLUMNS>();
-  for (const col of ALL_COLUMNS) {
+  const colsByGroup = new Map<string, ColumnDef[]>();
+  for (const col of columns) {
     const arr = colsByGroup.get(col.group) ?? [];
     arr.push(col);
     colsByGroup.set(col.group, arr);

@@ -9,6 +9,7 @@ import {
   type PriceSource,
   type Settings,
   type ColumnId,
+  type ColumnDef,
   ALL_COLUMNS,
   getSelectedPrice,
   calculateProfit,
@@ -308,6 +309,11 @@ interface ResultsTableProps {
   onFilterClear?: (colId: ColumnId) => void;
   onResultUpdate?: (asin: string, updates: Partial<AsinResult>) => void;
   onStockClick?: (asin: string) => void;
+  // §21 bulk page parameterization — every prop defaults to main-page behavior.
+  columns?: ColumnDef[];                                   // column subset (default ALL_COLUMNS)
+  productBadge?: (result: AsinResult) => React.ReactNode;  // replaces the has_live_offer icon slot in ProductCell
+  cogsSaveUrl?: (asin: string) => string;                  // CogsEditor save target (default PUT /api/asins/:asin/cogs); also disables PO sync
+  onSupplierSkuSave?: (asin: string, value: string | null) => Promise<{ supplierSku: string | null }>; // enables inline Supplier SKU editing
 }
 
 function fmt(value: number | null): string {
@@ -350,6 +356,7 @@ export function getRowValue(
   switch (colId) {
     case "brand": return result.catalogData.brand;
     case "supplier": return extractDomain(result.buyLink);
+    case "supplierSku": return result.supplierSku ?? null;
     case "cogs": return result.actualCogs ?? null;
     case "estCogs": return result.estimatedCogs ?? null;
     case "salePrice": return price;
@@ -462,9 +469,13 @@ export function ResultsTable({
   onSelectAllPage,
   onClearSelection,
   onStockClick,
+  columns = ALL_COLUMNS,
+  productBadge,
+  cogsSaveUrl,
+  onSupplierSkuSave,
 }: ResultsTableProps) {
   const allResults = allResultsProp ?? results;
-  const colMap = useMemo(() => new Map(ALL_COLUMNS.map((c) => [c.id, c])), []);
+  const colMap = useMemo(() => new Map(columns.map((c) => [c.id, c])), [columns]);
 
   // Compute multi-select options for tags and supplier from ALL results
   const tagMeta = useTagGroups();
@@ -593,8 +604,8 @@ export function ResultsTable({
   const visibleCols = useMemo(
     // Column order is locked to schema definition (COLUMN_GROUPS order).
     // User controls visibility only, not ordering.
-    () => ALL_COLUMNS.map((c) => c.id).filter((id) => columnConfig.visible.has(id) && colMap.has(id)),
-    [columnConfig, colMap]
+    () => columns.map((c) => c.id).filter((id) => columnConfig.visible.has(id) && colMap.has(id)),
+    [columnConfig, colMap, columns]
   );
 
   // Filtering and sorting done in home.tsx before pagination. Use results directly.
@@ -762,14 +773,23 @@ export function ResultsTable({
                 </td>
                 {productVisible && (
                   <td className={`sticky z-10 px-2 py-1.5 overflow-hidden ${frozenBg}`} style={{ left: productLeft, width: colWidths["product"] ?? DEFAULT_COL_WIDTHS.product, minWidth: 200, maxWidth: colWidths["product"] ?? DEFAULT_COL_WIDTHS.product, borderRight: "0.5px solid hsl(var(--border))" }}>
-                    <ProductCell result={result} price={price} settings={settings} onResultUpdate={onResultUpdate} collisionBoundary={scrollEl} />
+                    <ProductCell result={result} price={price} settings={settings} onResultUpdate={onResultUpdate} collisionBoundary={scrollEl} productBadge={productBadge} cogsSaveUrl={cogsSaveUrl} />
                   </td>
                 )}
                 {dataCols.map((colId) => {
                   const col = colMap.get(colId)!;
                   const w = colWidths[colId] ?? DEFAULT_COL_WIDTHS[colId];
                   let content;
-                  if (colId === "tags" && onResultUpdate) {
+                  if (colId === "supplierSku" && onSupplierSkuSave) {
+                    content = (
+                      <SupplierSkuEditor
+                        asin={result.asin}
+                        value={result.supplierSku ?? null}
+                        onSave={onSupplierSkuSave}
+                        onSaved={(v) => onResultUpdate?.(result.asin, { supplierSku: v })}
+                      />
+                    );
+                  } else if (colId === "tags" && onResultUpdate) {
                     content = (
                       <TagEditor
                         asin={result.asin}
@@ -842,16 +862,83 @@ export function ResultsTable({
   );
 }
 
+// Inline Supplier SKU editor — §21 bulk page only (enabled by the
+// onSupplierSkuSave prop; the main table renders the value read-only).
+// Empty input clears the value.
+function SupplierSkuEditor({
+  asin,
+  value,
+  onSave,
+  onSaved,
+}: {
+  asin: string;
+  value: string | null;
+  onSave: (asin: string, value: string | null) => Promise<{ supplierSku: string | null }>;
+  onSaved: (value: string | null) => void;
+}) {
+  const [open, setOpen] = useState(false);
+  const [val, setVal] = useState(value ?? "");
+  const [saving, setSaving] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  async function save() {
+    setSaving(true);
+    setError(null);
+    try {
+      const res = await onSave(asin, val.trim() || null);
+      onSaved(res.supplierSku);
+      setOpen(false);
+    } catch (e: any) { setError(e.message); } finally { setSaving(false); }
+  }
+
+  return (
+    <span className="inline-flex items-center gap-1">
+      {value
+        ? <span className="text-sm font-mono">{value}</span>
+        : <span className="text-muted-foreground text-sm">-</span>}
+      <Popover open={open} onOpenChange={(v) => { setOpen(v); if (v) { setVal(value ?? ""); setError(null); } }}>
+        <PopoverTrigger asChild>
+          <button className="text-muted-foreground/40 hover:text-muted-foreground p-0 ml-0.5" onClick={(e) => e.stopPropagation()} title="Edit Supplier SKU">
+            <Pencil className="h-2.5 w-2.5" />
+          </button>
+        </PopoverTrigger>
+        <PopoverContent className="w-56 p-3" align="start" sideOffset={4} onClick={(e) => e.stopPropagation()}>
+          <div className="space-y-2">
+            <label className="text-xs text-muted-foreground">Edit Supplier SKU</label>
+            <input type="text" maxLength={100} value={val} onChange={(e) => setVal(e.target.value)}
+              className="w-full text-sm p-2 rounded border border-border bg-background focus:outline-none focus:ring-1 focus:ring-ring"
+              onKeyDown={(e) => { if (e.key === "Enter") save(); }}
+              autoFocus />
+            {error && <p className="text-xs text-destructive">{error}</p>}
+            <div className="flex justify-end gap-2">
+              <button className="text-xs text-muted-foreground hover:text-foreground px-2 py-1" onClick={() => setOpen(false)}>Cancel</button>
+              <button className="text-xs bg-primary text-primary-foreground px-3 py-1 rounded hover:bg-primary/90 disabled:opacity-50" onClick={save} disabled={saving}>
+                {saving ? "..." : "Save"}
+              </button>
+            </div>
+          </div>
+        </PopoverContent>
+      </Popover>
+    </span>
+  );
+}
+
 function CogsEditor({
   asin,
   estimatedCogs,
   estimatedCogsSource,
   onChanged,
+  saveUrl,
+  showPoSync = true,
 }: {
   asin: string;
   estimatedCogs: number | null;
   estimatedCogsSource: string | null | undefined;
   onChanged: (updates: Partial<AsinResult>) => void;
+  // §21 bulk page: custom save target (bulk_list_asins) + PO sync hidden.
+  // Defaults preserve the main-page editor exactly.
+  saveUrl?: string;
+  showPoSync?: boolean;
 }) {
   const [open, setOpen] = useState(false);
   const [estVal, setEstVal] = useState(String(estimatedCogs ?? ""));
@@ -859,7 +946,7 @@ function CogsEditor({
   const [syncing, setSyncing] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
-  const canSyncFromPo = estimatedCogsSource === "manual";
+  const canSyncFromPo = showPoSync && estimatedCogsSource === "manual";
 
   async function save() {
     const estParsed = parseFloat(estVal);
@@ -867,7 +954,7 @@ function CogsEditor({
     setError(null);
     setSaving(true);
     try {
-      const res = await fetch(`/api/asins/${asin}/cogs`, {
+      const res = await fetch(saveUrl ?? `/api/asins/${asin}/cogs`, {
         method: "PUT",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ estimated_cogs: estParsed }),
@@ -1038,9 +1125,11 @@ function BuyLinkEditor({ asin, currentLink, onChanged }: { asin: string; current
 function CogsDisplay({
   result,
   onResultUpdate,
+  cogsSaveUrl,
 }: {
   result: AsinResult;
   onResultUpdate?: (asin: string, updates: Partial<AsinResult>) => void;
+  cogsSaveUrl?: (asin: string) => string; // §21 bulk page — also hides PO sync + PO wording
 }) {
   const displayValue = result.estimatedCogs;
   const source = result.estimatedCogsSource;
@@ -1053,7 +1142,7 @@ function CogsDisplay({
           <TooltipTrigger asChild>
             <span className="inline-flex items-center justify-center rounded-sm border border-current text-[9px] font-bold px-1 leading-tight cursor-help text-muted-foreground">M</span>
           </TooltipTrigger>
-          <TooltipContent side="top"><p className="text-xs">Manually entered — PO sync skipped</p></TooltipContent>
+          <TooltipContent side="top"><p className="text-xs">{cogsSaveUrl ? "Manually entered" : "Manually entered — PO sync skipped"}</p></TooltipContent>
         </Tooltip>
       )}
       {onResultUpdate && (
@@ -1062,13 +1151,15 @@ function CogsDisplay({
           estimatedCogs={result.estimatedCogs ?? null}
           estimatedCogsSource={result.estimatedCogsSource}
           onChanged={(updates) => onResultUpdate(result.asin, updates)}
+          saveUrl={cogsSaveUrl ? cogsSaveUrl(result.asin) : undefined}
+          showPoSync={!cogsSaveUrl}
         />
       )}
     </span>
   );
 }
 
-function ProductCell({ result, price, settings, onResultUpdate, collisionBoundary }: { result: AsinResult; price: number | null; settings: Settings; onResultUpdate?: (asin: string, updates: Partial<AsinResult>) => void; collisionBoundary?: HTMLElement | null }) {
+function ProductCell({ result, price, settings, onResultUpdate, collisionBoundary, productBadge, cogsSaveUrl }: { result: AsinResult; price: number | null; settings: Settings; onResultUpdate?: (asin: string, updates: Partial<AsinResult>) => void; collisionBoundary?: HTMLElement | null; productBadge?: (result: AsinResult) => React.ReactNode; cogsSaveUrl?: (asin: string) => string }) {
   const title = result.catalogData.title;
   const domain = extractDomain(result.buyLink);
   const stock = result.stock;
@@ -1182,8 +1273,9 @@ function ProductCell({ result, price, settings, onResultUpdate, collisionBoundar
           {/* Live-offer truth (has_live_offer, getListingsItem-derived) — NOT
               in_catalog (a tombstone-latched discovery flag). Checkmark only when
               a live offer is confirmed; "+" for deleted (FALSE) and never-checked
-              (NULL) alike. */}
-          {result.hasLiveOffer === true ? (
+              (NULL) alike. The §21 bulk page swaps this slot for its own badge
+              (in_database) via the productBadge render prop. */}
+          {productBadge ? productBadge(result) : result.hasLiveOffer === true ? (
             <Tooltip>
               <TooltipTrigger asChild>
                 <ShoppingBag className="h-3 w-3 text-blue-500 flex-shrink-0" />
@@ -1263,7 +1355,7 @@ function ProductCell({ result, price, settings, onResultUpdate, collisionBoundar
             />
           )}
           <span>·</span>
-          <CogsDisplay result={result} onResultUpdate={onResultUpdate} />
+          <CogsDisplay result={result} onResultUpdate={onResultUpdate} cogsSaveUrl={cogsSaveUrl} />
           {stock && (
             <Tooltip>
               <TooltipTrigger asChild>
@@ -1304,6 +1396,11 @@ export function renderCell(
       if (!brand) return <span className="text-muted-foreground text-sm">-</span>;
       return <span className="text-sm" data-testid={`text-brand-${result.asin}`}>{brand}</span>;
     }
+
+    case "supplierSku":
+      return result.supplierSku
+        ? <span className="text-sm font-mono">{result.supplierSku}</span>
+        : <span className="text-muted-foreground text-sm">-</span>;
 
     case "supplier": {
       const domain = extractDomain(result.buyLink);

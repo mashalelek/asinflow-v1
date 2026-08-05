@@ -2223,8 +2223,8 @@ The single permitted main-DB access is one READ: a set-based EXISTS query
   width_in, height_in), pricing/fee snapshot (sale_price, price_source,
   fba_fee, referral_fee, variable_closing_fee, fees_estimate_price, bsr,
   sellers_fba, sellers_fbm), estimated_cogs, estimated_cogs_source,
-  eligibility_status, is_meltable, is_hazmat, is_dangerous_good, error,
-  fetched_at.
+  supplier_sku, eligibility_status, is_meltable, is_hazmat,
+  is_dangerous_good, error, fetched_at.
   UNIQUE(list_id, asin).
 
 No `has_live_offer` column — account state is out of scope (see `in_database`
@@ -2291,6 +2291,8 @@ ever wired to a live call site, it must remain unwired on this page.
 - ASINs: CSV upload only. No sheet sync, no Chrome extension, no manual add.
 - COGS: CSV column or manual inline edit. `estimated_cogs_source` is `'csv'`
   or `'manual'` only.
+- Supplier SKU: CSV column (mapper alias) or manual inline edit — same
+  user-controlled contract as COGS (§14); the bulk sink never writes it.
 - Everything else: the analyze pipeline via the bulk sink.
 
 `/api/parse-file` and `/api/parse-mapped` are pure and reused. `parse-mapped`
@@ -2308,7 +2310,7 @@ That is the isolation working, not a sync bug.
 
 Subset of `COLUMN_GROUPS`:
 
-- **Description** — Product, Category, Brand, Supplier
+- **Description** — Product, Category, Brand, Supplier, Supplier SKU
 - **Estimates** — full group
 - **Sellers** — full group
 - **Additional info** — Meltable, Hazmat, Suppressed, Date Added
@@ -2318,6 +2320,12 @@ data path; empty Actuals columns would violate honest labeling, §14). Tags,
 Notes, Promos, and Sourcing are excluded — no data source on this page.
 
 No date-range selector: nothing here is range-scoped.
+
+The frozen row-action columns stay: **Buy List and Hold are SHARED with the
+main page** — same localStorage sets, same toggle handlers, so carting an
+ASIN here shows on the main page's Buy List and vice versa. The **selection
+checkbox drives Export CSV** on this page: rows selected → export the
+selection; none selected → export all. No other batch actions.
 
 `ResultsTable` and `ColumnManager` take an optional `columns?: ColumnDef[]`
 prop defaulting to `ALL_COLUMNS`. `lib/columns.ts` takes a parameterized
@@ -2333,7 +2341,9 @@ The ONLY main-database value rendered on this page. Occupies the Product cell
 slot that the main table uses for `has_live_offer`.
 
 - Present in `asins` → `Database` icon (lucide-react), linking to the main
-  ASINs page pre-filtered to that ASIN. Tooltip: "In your AsinFlow database."
+  ASINs page pre-filtered to that ASIN via `/asins?q=<ASIN>` (home seeds its
+  search box from the `?q=` param; inert when absent; archived ASINs stay
+  hidden — same as a manual search). Tooltip: "In your AsinFlow database."
 - Absent → dash.
 
 Must be visually distinct from the main table's `has_live_offer` shopping-bag
@@ -2355,9 +2365,10 @@ it.
 Lists persist and are selectable from a dropdown at the top of the page.
 Selecting a list renders its stored snapshot.
 
-Prices and fees are a snapshot from the last analyze run, not live. A manual
-"Refresh Prices" button re-runs the bulk analyze for the selected list and
-overwrites `bulk_list_asins` only. Snapshot age is shown next to the list
+Prices and fees are a snapshot from the last analyze run, not live. Creating
+a list auto-runs the first analyze; subsequent refreshes are manual only. A
+manual "Refresh Prices" button re-runs the bulk analyze for the selected list
+and overwrites `bulk_list_asins` only. Snapshot age is shown next to the list
 name. Lists can be renamed and deleted; delete cascades.
 
 ### Toolbar
@@ -2365,10 +2376,14 @@ name. Lists can be renamed and deleted; delete cascades.
 Present: Upload CSV, Refresh Prices, Export CSV, Manage Columns, Settings,
 list selector, save/rename/delete.
 
+Export CSV downloads `bulk-<listname>.csv` with the visible §21 column set —
+including Supplier SKU — honoring the checkbox selection (above).
+
 Absent: Add to SC, Sync PO, Push to Aura, Sync Inventory, Sync Sales,
 Sync Sourcing, Export SB COGS, Archive, Buy List.
 
 ### Nav
 
-Top nav gains "Bulk Calc" as an active route. Structure otherwise unchanged
-(§8).
+Top nav gains "Bulk Calc" as an active route, immediately after ASINs.
+Structure otherwise unchanged (§8); added to the settings-gear routes, NOT to
+the date-picker routes.

@@ -6,12 +6,15 @@ import { type AsinInput, type ColumnMapping } from "@shared/schema";
 import { ColumnMappingModal } from "@/components/column-mapping-modal";
 
 interface FileUploadProps {
-  onFileProcessed: (asins: AsinInput[]) => void;
+  onFileProcessed: (asins: AsinInput[], sourceFilename?: string) => void;
   isAnalyzing: boolean;
   compact?: boolean;
+  // §21 bulk page: COGS column optional (supplier catalogs often have none).
+  // Default (false) preserves the main upload flow exactly.
+  cogsOptional?: boolean;
 }
 
-export function FileUpload({ onFileProcessed, isAnalyzing, compact }: FileUploadProps) {
+export function FileUpload({ onFileProcessed, isAnalyzing, compact, cogsOptional = false }: FileUploadProps) {
   const [file, setFile] = useState<File | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [isDragOver, setIsDragOver] = useState(false);
@@ -58,6 +61,7 @@ export function FileUpload({ onFileProcessed, isAnalyzing, compact }: FileUpload
     const formData = new FormData();
     formData.append("file", file);
     formData.append("mapping", JSON.stringify(mapping));
+    if (cogsOptional) formData.append("allowMissingCogs", "true");
 
     try {
       const res = await fetch("/api/parse-mapped", {
@@ -71,12 +75,12 @@ export function FileUpload({ onFileProcessed, isAnalyzing, compact }: FileUpload
       }
 
       const data = await res.json();
-      onFileProcessed(data.asins);
+      onFileProcessed(data.asins, file.name);
     } catch (err: any) {
       setError(err.message || "Failed to process file");
       setFile(null);
     }
-  }, [file, onFileProcessed]);
+  }, [file, onFileProcessed, cogsOptional]);
 
   const handleMappingCancel = useCallback(() => {
     setShowMapping(false);
@@ -122,7 +126,7 @@ export function FileUpload({ onFileProcessed, isAnalyzing, compact }: FileUpload
           {file ? file.name : "Upload File"}
         </Button>
         <input ref={inputRef} type="file" accept=".csv,.xlsx,.xls" onChange={handleChange} className="hidden" />
-        <ColumnMappingModal open={showMapping} headers={headers} onCancel={handleMappingCancel} onContinue={handleMappingContinue} />
+        <ColumnMappingModal open={showMapping} headers={headers} onCancel={handleMappingCancel} onContinue={handleMappingContinue} cogsRequired={!cogsOptional} />
       </>
     );
   }
@@ -218,6 +222,7 @@ export function FileUpload({ onFileProcessed, isAnalyzing, compact }: FileUpload
         headers={headers}
         onCancel={handleMappingCancel}
         onContinue={handleMappingContinue}
+        cogsRequired={!cogsOptional}
       />
     </>
   );

@@ -69,6 +69,12 @@ const MAPPING_FIELDS: MappingField[] = [
     required: false,
     matchPatterns: [/^notes?$/i, /\bnotes?\b/i, /\bcomments?\b/i],
   },
+  {
+    key: "supplierSku",
+    label: "Supplier SKU",
+    required: false,
+    matchPatterns: [/supplier\s*_?\s*sku/i, /^sku$/i, /vendor\s*(sku|item)/i, /item\s*(number|no\.?|#)/i, /catalog\s*number/i, /part\s*number/i, /\bmpn\b/i],
+  },
 ];
 
 const NOT_IN_FILE = "__not_in_file__";
@@ -78,6 +84,9 @@ interface ColumnMappingModalProps {
   headers: string[];
   onCancel: () => void;
   onContinue: (mapping: ColumnMapping) => void;
+  // §21 bulk page: COGS column may be absent from a supplier catalog.
+  // Default (true) preserves the main upload flow exactly.
+  cogsRequired?: boolean;
 }
 
 function autoMatch(headers: string[]): Record<string, string> {
@@ -106,6 +115,7 @@ export function ColumnMappingModal({
   headers,
   onCancel,
   onContinue,
+  cogsRequired = true,
 }: ColumnMappingModalProps) {
   const [mappings, setMappings] = useState<Record<string, string>>({});
 
@@ -116,10 +126,10 @@ export function ColumnMappingModal({
   }, [open, headers]);
 
   const canContinue = useMemo(() => {
-    return MAPPING_FIELDS.filter((f) => f.required).every(
+    return MAPPING_FIELDS.filter((f) => f.required && (cogsRequired || f.key !== "cogs")).every(
       (f) => mappings[f.key] && mappings[f.key] !== NOT_IN_FILE
     );
-  }, [mappings]);
+  }, [mappings, cogsRequired]);
 
   const handleChange = (key: string, value: string) => {
     setMappings((prev) => ({ ...prev, [key]: value }));
@@ -135,6 +145,7 @@ export function ColumnMappingModal({
       additionalFees: optVal("additionalFees"),
       tags: optVal("tags"),
       notes: optVal("notes"),
+      supplierSku: optVal("supplierSku"),
     };
     onContinue(mapping);
   };
@@ -151,9 +162,10 @@ export function ColumnMappingModal({
 
         <div className="flex flex-col gap-4 py-2">
           {MAPPING_FIELDS.map((field) => {
+            const isRequired = field.required && (cogsRequired || field.key !== "cogs");
             const currentValue = mappings[field.key] || "";
             const isMapped = currentValue && currentValue !== NOT_IN_FILE;
-            const showWarning = field.required && !isMapped;
+            const showWarning = isRequired && !isMapped;
 
             return (
               <div key={field.key} className="flex items-center gap-3">
@@ -168,7 +180,7 @@ export function ColumnMappingModal({
                   <span className="text-sm font-medium" data-testid={`text-field-label-${field.key}`}>
                     {field.label}
                   </span>
-                  {field.required ? (
+                  {isRequired ? (
                     <Badge variant="destructive" className="text-[10px] px-1 py-0 no-default-active-elevate" data-testid={`badge-required-${field.key}`}>
                       Required
                     </Badge>
@@ -187,7 +199,7 @@ export function ColumnMappingModal({
                     <SelectValue placeholder="Select a column..." />
                   </SelectTrigger>
                   <SelectContent>
-                    {!field.required && (
+                    {!isRequired && (
                       <SelectItem value={NOT_IN_FILE} data-testid={`option-not-in-file-${field.key}`}>
                         Not in my file
                       </SelectItem>

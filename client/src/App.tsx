@@ -8,6 +8,7 @@ import { DateRangeProvider } from "@/contexts/date-range-context";
 import { Layout } from "@/components/layout/layout";
 import NotFound from "@/pages/not-found";
 import Home from "@/pages/home";
+import BulkCalc from "@/pages/bulk-calc";
 import Analytics from "@/pages/analytics";
 import ComingSoon from "@/pages/coming-soon";
 import PurchaseOrders from "@/pages/purchase-orders";
@@ -21,6 +22,7 @@ function Router() {
           <Redirect to="/asins" />
         </Route>
         <Route path="/asins" component={Home} />
+        <Route path="/bulk-calc" component={BulkCalc} />
         <Route path="/analytics" component={Analytics} />
         <Route path="/purchase-orders" component={PurchaseOrders} />
         <Route path="/gift-cards">

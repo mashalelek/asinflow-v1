@@ -1,30 +1,39 @@
-import { type ColumnId, ALL_COLUMNS, DEFAULT_COLUMNS } from "@shared/schema";
+import { type ColumnDef, type ColumnId, ALL_COLUMNS, DEFAULT_COLUMNS } from "@shared/schema";
 
 const COLUMNS_KEY = "fba-column-config";
+
+// All three functions take an optional storage key + column set so the §21
+// bulk page can keep its own config ("fba-bulk-column-config" + BULK_COLUMNS)
+// without touching the main table's saved state. Defaults resolve to exactly
+// the values used before parameterization — main-page call sites pass no
+// arguments and are byte-identical in behavior.
 
 export interface ColumnConfig {
   order: ColumnId[];
   visible: Set<ColumnId>;
 }
 
-export function loadColumnConfig(): ColumnConfig {
+export function loadColumnConfig(
+  key: string = COLUMNS_KEY,
+  columns: ColumnDef[] = ALL_COLUMNS,
+): ColumnConfig {
   try {
-    const stored = localStorage.getItem(COLUMNS_KEY);
+    const stored = localStorage.getItem(key);
     if (stored) {
       const parsed = JSON.parse(stored);
       const savedOrder: ColumnId[] = parsed.order as ColumnId[];
-      const allKnownIds = new Set(ALL_COLUMNS.map((c) => c.id));
+      const allKnownIds = new Set(columns.map((c) => c.id));
       const savedVisible: Set<ColumnId> = new Set((parsed.visible as ColumnId[]).filter((id: ColumnId) => allKnownIds.has(id)));
       // Remove stale column IDs that no longer exist
       const cleanedOrder = savedOrder.filter((id: ColumnId) => allKnownIds.has(id));
       const savedSet = new Set(cleanedOrder);
 
-      const missingCols = ALL_COLUMNS.filter(
+      const missingCols = columns.filter(
         (c) => allKnownIds.has(c.id) && !savedSet.has(c.id)
       );
 
       if (missingCols.length > 0) {
-        const defaultOrder = [...DEFAULT_COLUMNS];
+        const defaultOrder = DEFAULT_COLUMNS.filter((id) => allKnownIds.has(id as ColumnId));
         const merged = [...cleanedOrder];
 
         for (const col of missingCols) {
@@ -51,12 +60,12 @@ export function loadColumnConfig(): ColumnConfig {
       return { order: cleanedOrder, visible: savedVisible };
     }
   } catch {}
-  return getDefaultConfig();
+  return getDefaultConfig(columns);
 }
 
-export function saveColumnConfig(config: ColumnConfig): void {
+export function saveColumnConfig(config: ColumnConfig, key: string = COLUMNS_KEY): void {
   localStorage.setItem(
-    COLUMNS_KEY,
+    key,
     JSON.stringify({
       order: config.order,
       visible: Array.from(config.visible),
@@ -64,11 +73,11 @@ export function saveColumnConfig(config: ColumnConfig): void {
   );
 }
 
-export function getDefaultConfig(): ColumnConfig {
+export function getDefaultConfig(columns: ColumnDef[] = ALL_COLUMNS): ColumnConfig {
   return {
-    order: [...DEFAULT_COLUMNS],
+    order: DEFAULT_COLUMNS.filter((id) => columns.some((c) => c.id === id)),
     visible: new Set(
-      ALL_COLUMNS.filter((c) => c.defaultVisible).map((c) => c.id)
+      columns.filter((c) => c.defaultVisible).map((c) => c.id)
     ),
   };
 }

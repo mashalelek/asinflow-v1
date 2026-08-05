@@ -1,6 +1,6 @@
 import { useLocation, Link } from "wouter";
 import { useTheme } from "@/components/theme-provider";
-import { Sun, Moon, Package, BarChart3, ShoppingCart, CreditCard, TrendingUp, Truck, Settings } from "lucide-react";
+import { Sun, Moon, Package, BarChart3, Calculator, ShoppingCart, CreditCard, TrendingUp, Truck, Settings } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { useDateRange } from "@/contexts/date-range-context";
 import { DataStudioDatePicker } from "@/components/data-studio-date-picker";
@@ -14,6 +14,7 @@ interface NavItem {
 
 const NAV_ITEMS: NavItem[] = [
   { path: "/asins", label: "ASINs", icon: Package },
+  { path: "/bulk-calc", label: "Bulk Calc", icon: Calculator },
   { path: "/analytics", label: "Analytics", icon: BarChart3 },
   { path: "/purchase-orders", label: "POs", icon: ShoppingCart },
   { path: "/gift-cards", label: "Gift Cards", icon: CreditCard, disabled: true },
@@ -27,7 +28,7 @@ const NAV_ITEMS: NavItem[] = [
 const DATE_PICKER_ROUTES = ["/", "/asins", "/analytics"];
 // Routes that expose a Settings icon (each page owns its own dialog and
 // listens for the custom event below).
-const SETTINGS_ROUTES = ["/", "/asins"];
+const SETTINGS_ROUTES = ["/", "/asins", "/bulk-calc"];
 export const OPEN_SETTINGS_EVENT = "asinflow:open-settings";
 
 export function TopNav() {
