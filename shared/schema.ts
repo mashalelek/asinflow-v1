@@ -28,6 +28,7 @@ export interface AsinInput {
   tags?: string[] | null;
   notes?: string | null;
   promoNotes?: string | null; // sourcing sheet Col O — written on new-ASIN INSERT only
+  supplierSku?: string | null; // supplier's own catalog/item number — INSERT branch only, never re-analyze
 }
 
 export interface PricingData {
@@ -111,7 +112,7 @@ export interface AsinResult {
   asin: string;
   cogs: number; // deprecated — use estimatedCogs / actualCogs
   estimatedCogs: number | null;
-  estimatedCogsSource?: "manual" | "po_sheet" | null;
+  estimatedCogsSource?: "manual" | "po_sheet" | "csv" | null;
   actualCogs: number | null;
   buyLink: string | null;
   prepOverride: number | null;
@@ -136,6 +137,7 @@ export interface AsinResult {
   issuesCheckedAt?: string | null;
   notes?: string | null;
   promoNotes?: string | null; // sourcing sheet Col O promos — user-controlled, display-only
+  supplierSku?: string | null; // supplier's own catalog/item number — user-controlled (§14), never from Amazon
   isArchived?: boolean;
   isMeltable?: boolean;
   isHazmat?: boolean | null;        // FBA hazmat (INBOUND 0015); null = unchecked
@@ -183,6 +185,7 @@ export interface ColumnMapping {
   additionalFees: string | null;
   tags: string | null;
   notes: string | null;
+  supplierSku?: string | null; // supplier's own catalog/item number — never from Amazon
 }
 
 export function getSelectedPrice(
@@ -518,7 +521,7 @@ export function extractDomain(url: string | null): string | null {
 
 export const DEFAULT_COLUMNS = [
   // Group 1 — Description
-  "product", "category", "brand", "supplier",
+  "product", "category", "brand", "supplier", "supplierSku",
   // Group 2 — Stock
   "stock", "availableFba", "ordered", "reserved", "sentToFba", "daysLeft",
   // Group 3 — Actuals
@@ -561,6 +564,7 @@ export const ALL_COLUMNS: ColumnDef[] = [
   { id: "category", label: "Category", defaultVisible: false, align: "left", group: "description" },
   { id: "brand", label: "Brand", defaultVisible: true, align: "left", group: "description" },
   { id: "supplier", label: "Supplier", defaultVisible: true, align: "left", group: "description" },
+  { id: "supplierSku", label: "Supplier SKU", defaultVisible: false, align: "left", group: "description" },
   // Group 2 — Stock
   { id: "stock", label: "Stock", defaultVisible: true, align: "right", group: "stock" },
   { id: "availableFba", label: "Available (FBA)", defaultVisible: false, align: "right", group: "stock" },

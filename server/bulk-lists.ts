@@ -35,14 +35,18 @@ export async function createBulkList(
   inputs: AsinInput[],
 ): Promise<{ id: string; name: string; asinCount: number; skippedInvalid: number }> {
   const seen = new Set<string>();
-  const rows: { asin: string; cogs: number | null }[] = [];
+  const rows: { asin: string; cogs: number | null; supplierSku: string | null }[] = [];
   let skippedInvalid = 0;
   for (const input of inputs) {
     const asin = String(input.asin ?? "").trim().toUpperCase();
     if (!ASIN_RE.test(asin)) { skippedInvalid++; continue; }
     if (seen.has(asin)) continue; // first occurrence wins, same as UNIQUE would enforce
     seen.add(asin);
-    rows.push({ asin, cogs: input.cogs > 0 ? input.cogs : null });
+    rows.push({
+      asin,
+      cogs: input.cogs > 0 ? input.cogs : null,
+      supplierSku: input.supplierSku ? String(input.supplierSku).trim().slice(0, 100) || null : null,
+    });
   }
   if (rows.length === 0) {
     throw new Error("No valid ASINs in the uploaded file.");
@@ -55,12 +59,13 @@ export async function createBulkList(
   );
   const listId = listRes.rows[0].id as string;
 
-  // Rows carry the CSV COGS immediately; everything else fills in on analyze.
+  // Rows carry the CSV COGS + supplier SKU immediately; everything else
+  // fills in on analyze (which never touches either — both user-controlled).
   for (const row of rows) {
     await query(
-      `INSERT INTO bulk_list_asins (list_id, asin, estimated_cogs, estimated_cogs_source)
-       VALUES ($1, $2, $3, $4)`,
-      [listId, row.asin, row.cogs, row.cogs != null ? "csv" : null],
+      `INSERT INTO bulk_list_asins (list_id, asin, estimated_cogs, estimated_cogs_source, supplier_sku)
+       VALUES ($1, $2, $3, $4, $5)`,
+      [listId, row.asin, row.cogs, row.cogs != null ? "csv" : null, row.supplierSku],
     );
   }
 

@@ -269,7 +269,7 @@ representations of the same logical "narrow to specific ASIN(s)" intent.
 
 ### Six groups (canonical order)
 
-1. **Description** — Product, Category, Brand, Supplier
+1. **Description** — Product, Category, Brand, Supplier, Supplier SKU
 2. **Stock** — Stock, Available (FBA), Ordered, Reserved, Sent to FBA, Days Left
 3. **Actuals** — Actual COGS, Actual Prep Cost, Actual Units Sold, Refunds,
    Refund %, Actual Avg. Sale Price, Actual Revenue, Actual Total Profit,
@@ -285,6 +285,19 @@ representations of the same logical "narrow to specific ASIN(s)" intent.
 
 `COLUMN_GROUPS` array in code is the single source of truth. Both Manage
 Columns panel order and table render order derive from it.
+
+### Supplier SKU column (2026-08-05)
+
+The supplier's own catalog/item number — NEVER from Amazon, unrelated to
+`primary_sku` / `asin_skus`. Labeled "Supplier SKU" everywhere. Lives on both
+`asins` and `bulk_list_asins` (migration 025). Sources: CSV upload (mapper
+alias, both upload paths) or manual inline edit; analyze never writes it
+(§14). `defaultVisible: false` — not in any main-page preset by default.
+Included in both pages' CSV exports.
+
+Main-table `supplier_sku` is **display-only today** — populated via the CSV
+upload INSERT branch; the inline editor exists only on the Bulk Profit
+Calculator (§21). Main-page inline editing is not built yet.
 
 ### Submission column (2026-08-03)
 
@@ -1326,6 +1339,7 @@ that writes it:
 | `actual_cogs` | PO sync only (eventually FIFO calc) |
 | `prep_override` | PO sync |
 | `buy_link`, `supplier` | CSV upload / manual edit / Chrome extension |
+| `supplier_sku` | CSV upload / manual edit — analyze MUST NOT write it (asymmetric-UPSERT INSERT branch only on the main path; never in the bulk sink's SET list) |
 | Tags, notes | Manual / CSV upload / Chrome extension |
 | `promo_notes` | Sourcing sync (new-ASIN INSERT branch only — never rewritten on re-sync/re-analyze) |
 | `is_wholesale`, `is_oa` | Manual edit |

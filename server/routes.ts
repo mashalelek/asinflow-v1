@@ -102,6 +102,10 @@ const COLUMN_NAME_ALIASES: Record<string, string[]> = {
   additionalFees: ["storage", "storage fee", "storagefee", "additional fees", "additionalfees", "additional fee", "extra fees", "misc", "misc fees", "other fees"],
   tags: ["tags", "tag"],
   notes: ["notes", "note", "comments", "comment"],
+  // Supplier's own catalog/item number — never Amazon SKUs. "sku" is included
+  // because on a supplier sheet a bare "SKU" column IS the supplier SKU; the
+  // mapping modal confirmation is the guard against mis-mapping.
+  supplierSku: ["supplier sku", "supplier_sku", "suppliersku", "sku", "item number", "item #", "item no", "vendor sku", "vendor item", "catalog number", "part number", "mpn"],
 };
 
 function matchColumnName(header: string, field: string): boolean {
@@ -164,7 +168,12 @@ function mapRowsToAsins(rows: Record<string, any>[], mapping: ColumnMapping, cog
       notes = String(row[mapping.notes]).trim() || null;
     }
 
-    asins.push({ asin, cogs, buyLink, prepOverride, storageOverride, tags, notes });
+    let supplierSku: string | null = null;
+    if (mapping.supplierSku && row[mapping.supplierSku] !== undefined && row[mapping.supplierSku] !== "") {
+      supplierSku = String(row[mapping.supplierSku]).trim().slice(0, 100) || null;
+    }
+
+    asins.push({ asin, cogs, buyLink, prepOverride, storageOverride, tags, notes, supplierSku });
   }
 
   if (asins.length === 0) {
@@ -194,6 +203,7 @@ function parseFileToAsins(buffer: Buffer, filename: string): AsinInput[] {
 
   const tagsHeader = headers.find((h) => matchColumnName(h, "tags"));
   const notesHeader = headers.find((h) => matchColumnName(h, "notes"));
+  const supplierSkuHeader = headers.find((h) => matchColumnName(h, "supplierSku"));
 
   const mapping: ColumnMapping = {
     asin: asinHeader,
@@ -203,6 +213,7 @@ function parseFileToAsins(buffer: Buffer, filename: string): AsinInput[] {
     additionalFees: storageHeader ?? null,
     tags: tagsHeader ?? null,
     notes: notesHeader ?? null,
+    supplierSku: supplierSkuHeader ?? null,
   };
 
   return mapRowsToAsins(rows, mapping);
@@ -444,6 +455,9 @@ function buildResult(
     buyLink: input.buyLink ?? null,
     prepOverride: null,
     storageOverride: null,
+    // User-controlled (§14): rides through to the asins INSERT branch only —
+    // the ON CONFLICT branch never touches it, so re-analyze can't write it.
+    supplierSku: input.supplierSku ?? null,
     pricingData, feesData, catalogData,
     eligibilityData,
     error,
@@ -493,8 +507,8 @@ async function upsertAsinResult(
   // `inserted` boolean returned from RETURNING (xmax = 0). promo_notes has NO
   // append path — existing ASINs keep their prior value untouched.
   const asinUpsert = await query(
-    `INSERT INTO asins (asin, title, image_url, brand, category, weight_lb, buy_link, supplier, is_meltable, is_hazmat, is_dangerous_good, notes, promo_notes, last_refreshed_at)
-     VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, NOW())
+    `INSERT INTO asins (asin, title, image_url, brand, category, weight_lb, buy_link, supplier, is_meltable, is_hazmat, is_dangerous_good, notes, promo_notes, supplier_sku, last_refreshed_at)
+     VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, NOW())
      ON CONFLICT (asin) DO UPDATE SET
        title = COALESCE(EXCLUDED.title, asins.title),
        image_url = COALESCE(EXCLUDED.image_url, asins.image_url),
@@ -525,6 +539,7 @@ async function upsertAsinResult(
       (result.catalogData as any).isDangerousGood ?? null,
       notesForNewInsert, // $12 — used in INSERT; ignored by UPDATE
       promoNotesForNewInsert, // $13 — used in INSERT; ignored by UPDATE
+      result.supplierSku ?? null, // $14 — user-controlled (§14): INSERT branch only, never in the ON CONFLICT SET list
     ]
   );
   const inserted = asinUpsert.rows[0]?.inserted === true;
@@ -798,7 +813,7 @@ export async function registerRoutes(
       const result = await query(`
         SELECT
           a.asin, a.title, a.image_url, a.brand, a.category, a.weight_lb, a.buy_link, a.is_active,
-          a.primary_sku, a.in_catalog, a.has_live_offer, a.current_issues, a.issues_checked_at, a.notes, a.promo_notes, a.is_meltable, a.is_hazmat, a.is_dangerous_good, a.is_search_suppressed, a.suppression_reasons, a.last_reviewed_at, a.added_at, a.is_wholesale, a.is_oa,
+          a.primary_sku, a.in_catalog, a.has_live_offer, a.current_issues, a.issues_checked_at, a.notes, a.promo_notes, a.supplier_sku, a.is_meltable, a.is_hazmat, a.is_dangerous_good, a.is_search_suppressed, a.suppression_reasons, a.last_reviewed_at, a.added_at, a.is_wholesale, a.is_oa,
           e.cogs, e.cogs_source, e.actual_cogs, e.estimated_cogs, e.estimated_cogs_source, e.prep_override, e.storage_override,
           e.lowest_fba_price, e.buy_box_price, e.buy_box_fulfillment, e.lowest_price,
           e.sellers_fba, e.sellers_fbm,
@@ -1013,6 +1028,7 @@ export async function registerRoutes(
             : null,
           notes: row.notes ?? null,
           promoNotes: row.promo_notes ?? null,
+          supplierSku: row.supplier_sku ?? null,
           isArchived: row.is_active === false,
           isMeltable: row.is_meltable ?? false,
           // Tri-state preserved: NULL = unchecked (renders as muted dash, never
@@ -2476,6 +2492,7 @@ export async function registerRoutes(
           buyLink: input.buyLink ?? null,
           prepOverride: null,
           storageOverride: null,
+          supplierSku: input.supplierSku ?? null,
           pricingData: {
             lowestFbaPrice: null, buyBoxPrice: null, buyBoxFulfillment: null,
             lowestPrice: null, avg30DayPrice: null, avg90DayPrice: null,
@@ -3090,6 +3107,62 @@ export async function registerRoutes(
         res.write(JSON.stringify({ type: "error", message: err.message }) + "\n");
         res.end();
       } catch {}
+    }
+  });
+
+  // Manual COGS inline edit for a bulk-list row. Guarantees (§21):
+  // bulk_list_asins ONLY — never asin_estimates; estimated_cogs_source is
+  // always 'manual'; scoped to the (list, asin) row, 404 on no match.
+  // Response shape mirrors PUT /api/asins/:asin/cogs so CogsEditor's
+  // onChanged plumbing is shared.
+  app.put("/api/bulk-lists/:id/asins/:asin/cogs", async (req: Request, res: Response) => {
+    if (!isDbAvailable()) { res.status(503).json({ message: "Database not available" }); return; }
+    const listId = typeof req.params.id === "string" ? req.params.id : "";
+    const asin = (typeof req.params.asin === "string" ? req.params.asin : "").toUpperCase();
+    const { estimated_cogs } = (req.body ?? {}) as { estimated_cogs?: number };
+    if (typeof estimated_cogs !== "number" || !isFinite(estimated_cogs) || estimated_cogs < 0) {
+      res.status(400).json({ message: "estimated_cogs must be a non-negative number" }); return;
+    }
+    try {
+      const updated = await query(
+        `UPDATE bulk_list_asins SET estimated_cogs = $3, estimated_cogs_source = 'manual'
+         WHERE list_id = $1 AND asin = $2
+         RETURNING estimated_cogs, estimated_cogs_source`,
+        [listId, asin, estimated_cogs],
+      );
+      if ((updated.rowCount ?? 0) === 0) { res.status(404).json({ message: "Row not found in list" }); return; }
+      const r = updated.rows[0];
+      res.json({
+        estimatedCogs: r.estimated_cogs != null ? parseFloat(r.estimated_cogs) : null,
+        estimatedCogsSource: r.estimated_cogs_source ?? null,
+      });
+    } catch (err: any) {
+      res.status(500).json({ message: err.message });
+    }
+  });
+
+  // Manual Supplier SKU inline edit for a bulk-list row. Same guarantees:
+  // bulk_list_asins ONLY. Empty string clears the value.
+  app.put("/api/bulk-lists/:id/asins/:asin/supplier-sku", async (req: Request, res: Response) => {
+    if (!isDbAvailable()) { res.status(503).json({ message: "Database not available" }); return; }
+    const listId = typeof req.params.id === "string" ? req.params.id : "";
+    const asin = (typeof req.params.asin === "string" ? req.params.asin : "").toUpperCase();
+    const raw = (req.body ?? {}).supplier_sku;
+    if (raw != null && typeof raw !== "string") {
+      res.status(400).json({ message: "supplier_sku must be a string or null" }); return;
+    }
+    const supplierSku = raw ? String(raw).trim().slice(0, 100) || null : null;
+    try {
+      const updated = await query(
+        `UPDATE bulk_list_asins SET supplier_sku = $3
+         WHERE list_id = $1 AND asin = $2
+         RETURNING supplier_sku`,
+        [listId, asin, supplierSku],
+      );
+      if ((updated.rowCount ?? 0) === 0) { res.status(404).json({ message: "Row not found in list" }); return; }
+      res.json({ supplierSku: updated.rows[0].supplier_sku ?? null });
+    } catch (err: any) {
+      res.status(500).json({ message: err.message });
     }
   });
 

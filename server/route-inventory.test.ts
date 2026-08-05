@@ -82,6 +82,8 @@ const EXPECTED_ROUTES = [
   "PUT /api/asins/:asin/tags",
   "PUT /api/asins/archive",
   "PUT /api/bulk-lists/:id",
+  "PUT /api/bulk-lists/:id/asins/:asin/cogs",
+  "PUT /api/bulk-lists/:id/asins/:asin/supplier-sku",
   "PUT /api/settings/hazmat",
   "PUT /api/view-presets/:id",
 ];
