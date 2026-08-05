@@ -20,11 +20,14 @@ import { createServer } from "http";
 vi.mock("./index", () => ({ log: () => {} }));
 
 const EXPECTED_ROUTES = [
+  "DELETE /api/bulk-lists/:id",
   "DELETE /api/view-presets/:id",
   "GET /api/asins",
   "GET /api/asins/:asin/history",
   "GET /api/asins/check/:asin",
   "GET /api/asins/revival-candidates",
+  "GET /api/bulk-lists",
+  "GET /api/bulk-lists/:id",
   "GET /api/credentials-status",
   "GET /api/download-template",
   "GET /api/export/velocity-upload",
@@ -42,7 +45,10 @@ const EXPECTED_ROUTES = [
   "POST /api/asins/:asin/cogs/reset",
   "POST /api/asins/:asin/cogs/sync-from-po",
   "POST /api/asins/:asin/recheck-issues",
+  "POST /api/asins/in-database",
   "POST /api/asins/revive",
+  "POST /api/bulk-lists",
+  "POST /api/bulk-lists/:id/refresh",
   "POST /api/cogs/bulk-sync-from-po",
   "POST /api/export/sellerboard-cogs",
   "POST /api/import-asin",
@@ -75,6 +81,7 @@ const EXPECTED_ROUTES = [
   "PUT /api/asins/:asin/sourcing-type",
   "PUT /api/asins/:asin/tags",
   "PUT /api/asins/archive",
+  "PUT /api/bulk-lists/:id",
   "PUT /api/settings/hazmat",
   "PUT /api/view-presets/:id",
 ];

@@ -31,6 +31,15 @@ import { makeProductRegistryRepo } from "./product-registry-repo";
 import { processBulkApproval, makeProductionHandlers, type ApprovalItem } from "./sku-legend-approval";
 import { settingsSchema, type Settings } from "@shared/schema";
 import type { AnalyzeSink } from "./analyze-sink";
+import {
+  createBulkList,
+  listBulkLists,
+  getBulkListWithRows,
+  renameBulkList,
+  deleteBulkList,
+  loadBulkListAsinInputs,
+  makeBulkListSink,
+} from "./bulk-lists";
 import fs from "fs";
 
 const TAG_COLORS = ["#3B82F6", "#EF4444", "#10B981", "#F59E0B", "#8B5CF6", "#EC4899", "#14B8A6", "#F97316", "#6366F1", "#84CC16"];
@@ -1308,13 +1317,17 @@ export async function registerRoutes(
         return;
       }
 
-      if (!mapping.asin || !mapping.cogs) {
+      // Opt-in COGS-optional mode (§21 bulk page only). Default: exactly the
+      // historical behavior — ASIN and COGS mappings both required.
+      const allowMissingCogs = String(req.body?.allowMissingCogs ?? "").toLowerCase() === "true";
+
+      if (!mapping.asin || (!mapping.cogs && !allowMissingCogs)) {
         res.status(400).json({ message: "ASIN and COGS column mappings are required" });
         return;
       }
 
       const { rows } = parseFileToRawRows(req.file.buffer, req.file.originalname);
-      const asins = mapRowsToAsins(rows, mapping);
+      const asins = mapRowsToAsins(rows, mapping, allowMissingCogs);
 
       const hasPrepOverrides = asins.some((a) => a.prepOverride != null);
       const hasStorageOverrides = asins.some((a) => a.storageOverride != null);
@@ -2968,6 +2981,140 @@ export async function registerRoutes(
       res.json({ synced, skipped });
     } catch (err: any) {
       log(`Bulk COGS sync error: ${err.message}`, "cogs");
+      res.status(500).json({ message: err.message });
+    }
+  });
+
+  // === Bulk Profit Calculator (SPEC §21) ===
+  //
+  // Isolated from the main catalog: these endpoints write to bulk_lists /
+  // bulk_list_asins only (see server/bulk-lists.ts header for the full list
+  // of deliberately-absent write sites). The refresh endpoint runs the same
+  // runAnalyzeCore fetch with the bulk sink swapped in and NEVER calls
+  // runPostAnalyzeBackgroundSyncs.
+
+  // Create a list from a parsed CSV (client runs /api/parse-file +
+  // /api/parse-mapped first, same as the main upload flow).
+  app.post("/api/bulk-lists", async (req: Request, res: Response) => {
+    if (!isDbAvailable()) { res.status(503).json({ message: "Database not available" }); return; }
+    const { name, sourceFilename, asins } = (req.body ?? {}) as {
+      name?: string; sourceFilename?: string; asins?: AsinInput[];
+    };
+    const listName = (name ?? "").trim();
+    if (!listName) { res.status(400).json({ message: "List name is required" }); return; }
+    if (!asins || !Array.isArray(asins) || asins.length === 0) {
+      res.status(400).json({ message: "No ASINs provided" }); return;
+    }
+    try {
+      const created = await createBulkList(listName, sourceFilename?.trim() || null, asins);
+      log(`Bulk list created: "${created.name}" (${created.asinCount} ASINs, ${created.skippedInvalid} invalid skipped)`, "bulk");
+      res.json(created);
+    } catch (err: any) {
+      log(`Bulk list create error: ${err.message}`, "bulk");
+      res.status(400).json({ message: err.message });
+    }
+  });
+
+  app.get("/api/bulk-lists", async (_req: Request, res: Response) => {
+    if (!isDbAvailable()) { res.status(503).json({ message: "Database not available" }); return; }
+    try {
+      res.json(await listBulkLists());
+    } catch (err: any) {
+      res.status(500).json({ message: err.message });
+    }
+  });
+
+  app.get("/api/bulk-lists/:id", async (req: Request, res: Response) => {
+    if (!isDbAvailable()) { res.status(503).json({ message: "Database not available" }); return; }
+    const listId = typeof req.params.id === "string" ? req.params.id : "";
+    try {
+      const found = await getBulkListWithRows(listId);
+      if (!found) { res.status(404).json({ message: "List not found" }); return; }
+      res.json(found);
+    } catch (err: any) {
+      res.status(500).json({ message: err.message });
+    }
+  });
+
+  app.put("/api/bulk-lists/:id", async (req: Request, res: Response) => {
+    if (!isDbAvailable()) { res.status(503).json({ message: "Database not available" }); return; }
+    const listId = typeof req.params.id === "string" ? req.params.id : "";
+    const name = ((req.body ?? {}).name ?? "").trim();
+    if (!name) { res.status(400).json({ message: "List name is required" }); return; }
+    try {
+      const renamed = await renameBulkList(listId, name);
+      if (!renamed) { res.status(404).json({ message: "List not found" }); return; }
+      res.json({ id: listId, name });
+    } catch (err: any) {
+      res.status(500).json({ message: err.message });
+    }
+  });
+
+  app.delete("/api/bulk-lists/:id", async (req: Request, res: Response) => {
+    if (!isDbAvailable()) { res.status(503).json({ message: "Database not available" }); return; }
+    const listId = typeof req.params.id === "string" ? req.params.id : "";
+    try {
+      const deleted = await deleteBulkList(listId);
+      if (!deleted) { res.status(404).json({ message: "List not found" }); return; }
+      res.json({ deleted: true });
+    } catch (err: any) {
+      res.status(500).json({ message: err.message });
+    }
+  });
+
+  // "Refresh Prices" — re-run analyze for the list, persisting to
+  // bulk_list_asins only. NDJSON stream, same shape as /api/analyze.
+  app.post("/api/bulk-lists/:id/refresh", async (req: Request, res: Response) => {
+    if (!isDbAvailable()) { res.status(503).json({ message: "Database not available" }); return; }
+    const listId = typeof req.params.id === "string" ? req.params.id : "";
+    try {
+      const inputs = await loadBulkListAsinInputs(listId);
+      if (inputs.length === 0) { res.status(404).json({ message: "List not found or empty" }); return; }
+
+      res.setHeader("Content-Type", "application/x-ndjson");
+      res.setHeader("Transfer-Encoding", "chunked");
+      res.setHeader("Cache-Control", "no-cache");
+      res.setHeader("Connection", "keep-alive");
+
+      const sink = makeBulkListSink(listId);
+      // fromCsvUpload=false and a no-op notes/tags surface: the bulk sink
+      // ignores cost fields either way. NO runPostAnalyzeBackgroundSyncs here.
+      await runAnalyzeCore(inputs, (chunk) => res.write(chunk), () => null, false, sink);
+      const { written, errors } = await sink.flush();
+      log(`Bulk list refresh complete (list ${listId}): ${written}/${inputs.length} rows written, ${errors.length} write errors`, "bulk");
+      res.write(JSON.stringify({ type: "complete", data: { total: inputs.length, written, writeErrors: errors } }) + "\n");
+      res.end();
+    } catch (err: any) {
+      log(`Bulk list refresh error: ${err.message}`, "bulk");
+      try {
+        res.write(JSON.stringify({ type: "error", message: err.message }) + "\n");
+        res.end();
+      } catch {}
+    }
+  });
+
+  // Set-based `in_database` check — the single sanctioned read from the main
+  // catalog (§21): an EXISTS against asins.asin, computed at render time,
+  // never stored. Deliberately NOT the one-at-a-time /api/asins/check/:asin.
+  app.post("/api/asins/in-database", async (req: Request, res: Response) => {
+    if (!isDbAvailable()) { res.status(503).json({ message: "Database not available" }); return; }
+    const { asins } = (req.body ?? {}) as { asins?: string[] };
+    if (!asins || !Array.isArray(asins)) {
+      res.status(400).json({ message: "asins array is required" }); return;
+    }
+    if (asins.length > 10000) {
+      res.status(400).json({ message: "Too many ASINs (max 10000)" }); return;
+    }
+    try {
+      const cleaned = asins
+        .map((a) => String(a ?? "").trim().toUpperCase())
+        .filter((a) => /^[A-Z0-9]{10}$/.test(a));
+      const found = await query(
+        `SELECT asin FROM asins WHERE asin = ANY($1::text[])`,
+        [cleaned],
+      );
+      res.json({ present: found.rows.map((r: any) => r.asin) });
+    } catch (err: any) {
       res.status(500).json({ message: err.message });
     }
   });

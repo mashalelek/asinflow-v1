@@ -8,7 +8,7 @@ make a rule self-explanatory.
 When something here is wrong or stale, fix the doc first, then change the
 code. This is the canonical reference both Maria and Claude work from.
 
-Last updated: May 11, 2026.
+Last updated: August 4, 2026.
 
 ---
 
@@ -2184,3 +2184,177 @@ Free-form labels applied to ASINs (`tags` + `asin_tags` join).
   `sort_order`).
 - **Deletion cascades:** deleting a tag removes its `asin_tags` associations
   (`ON DELETE CASCADE`); the ASINs themselves are untouched.
+
+
+## 21. Bulk Profit Calculator
+
+A standalone page for evaluating arbitrary ASIN lists (supplier catalogs,
+substitution lists, wholesale sheets) without touching the main catalog.
+
+### Isolation guarantee
+
+Bulk Profit Calculator data lives in its own tables. No cron, sync job, or
+main-catalog code path reads or writes them. Conversely, no action on this
+page writes to `asins`, `asin_estimates`, `asin_estimates_history`,
+`asin_tags`, `tags`, `sales_daily`, or `asin_skus`.
+
+The single permitted main-DB access is one READ: a set-based EXISTS query
+(`WHERE asin = ANY($1)`) against `asins.asin` to populate `in_database`.
+
+### Tables (migration 022)
+
+- `bulk_lists` — id, name, source_filename, asin_count, created_at
+- `bulk_list_asins` — list_id (FK, ON DELETE CASCADE), asin, added_at,
+  catalog snapshot (title, image_url, brand, category, weight_lb, length_in,
+  width_in, height_in), pricing/fee snapshot (sale_price, price_source,
+  fba_fee, referral_fee, variable_closing_fee, fees_estimate_price, bsr,
+  sellers_fba, sellers_fbm), estimated_cogs, estimated_cogs_source,
+  eligibility_status, is_meltable, is_hazmat, is_dangerous_good, error,
+  fetched_at.
+  UNIQUE(list_id, asin).
+
+No `has_live_offer` column — account state is out of scope (see `in_database`
+below). No `size_tier` column — the analyze fetch produces no writer for it,
+and a column with no writer is a latent bug.
+
+`length_in`, `width_in`, and `height_in` ARE retained: the catalog fetch
+produces `packageDims`, and the bulk sink stores them. They are
+stored-but-unrendered — no column in the §21 subset displays dims — kept so a
+saved snapshot carries the same catalog facts as the main table and a future
+column needs no backfill. `weight_lb` is retained: inbound shipping is
+calculated $/lb.
+
+### Fee column semantics
+
+`fba_fee` is the total non-referral fee and INCLUDES the variable closing
+fee, matching main-path semantics. `variable_closing_fee` is an
+informational breakout of a value already contained in `fba_fee`. Never sum
+the two.
+
+`fees_estimate_price` is required: `getEstimatedProfit()` scales the referral
+fee from the fee-estimate price to the display price. Without it, bulk
+estimates silently diverge from the main table's math for the same ASIN.
+
+### Persistence seam
+
+`runAnalyzeCore` takes a persistence-sink parameter. The parameter is
+REQUIRED, not defaulted — every call site names its sink explicitly. A
+defaulted sink is fail-open: a future call site that omits the argument
+would silently write to the main catalog, which is the single failure this
+feature exists to prevent.
+
+The main sink reproduces prior behavior exactly (fire-and-forget, same call
+sites, same ordering). The bulk sink writes only to `bulk_list_asins`, via
+UPDATE-only statements — list membership is fixed at creation, so a stray
+ASIN can never insert a row. Bulk writes are awaited, so the snapshot is
+complete before render. `estimated_cogs` and `estimated_cogs_source` are
+never in the bulk sink's SET list: a refresh cannot clobber COGS.
+
+Suppressed on the bulk sink:
+
+| Site | What it writes |
+|---|---|
+| `upsertAsinResult` asins UPSERT | catalog fields; also INSERTs new `asins` rows |
+| `applyCatalogDeletedSignal` | `is_catalog_deleted`, and `is_active = FALSE` + `archive_reason` on FALSE→TRUE |
+| `appendNotesForAsin` | `asins.notes` |
+| `upsertAsinResult` estimates UPSERT | `asin_estimates` |
+| `upsertCsvCogs` | `asin_estimates.estimated_cogs` |
+| history insert | `asin_estimates_history` |
+| `upsertTagsForAsin` | `tags`, `asin_tags` |
+
+`runPostAnalyzeBackgroundSyncs` (PO sheets sync + suppression sync) is fired
+by the analyze endpoint wrappers, not the core. The bulk endpoint does not
+call it.
+
+The dead-ASIN 404 signal is retained in the result object for display. Only
+its DB write is suppressed — including the silent auto-archive.
+
+The §18 `getCatalogItem` self-heal callback is currently unwired. If it is
+ever wired to a live call site, it must remain unwired on this page.
+
+### Data sources
+
+- ASINs: CSV upload only. No sheet sync, no Chrome extension, no manual add.
+- COGS: CSV column or manual inline edit. `estimated_cogs_source` is `'csv'`
+  or `'manual'` only.
+- Everything else: the analyze pipeline via the bulk sink.
+
+`/api/parse-file` and `/api/parse-mapped` are pure and reused. `parse-mapped`
+takes an opt-in flag to skip the COGS-column requirement; the default
+preserves main-path behavior and only the bulk client passes it. A supplier
+catalog with ASINs and no costs is the normal starting case here.
+
+### COGS divergence is expected
+
+The same ASIN may show a different Estimated COGS here than on the main page.
+This page reads only the uploaded CSV or manual entry, never `po_sheet` data.
+That is the isolation working, not a sync bug.
+
+### Columns
+
+Subset of `COLUMN_GROUPS`:
+
+- **Description** — Product, Category, Brand, Supplier
+- **Estimates** — full group
+- **Sellers** — full group
+- **Additional info** — Meltable, Hazmat, Suppressed, Date Added
+
+Excluded: the entire **Stock** and **Actuals** groups (no inventory or sales
+data path; empty Actuals columns would violate honest labeling, §14). Tags,
+Notes, Promos, and Sourcing are excluded — no data source on this page.
+
+No date-range selector: nothing here is range-scoped.
+
+`ResultsTable` and `ColumnManager` take an optional `columns?: ColumnDef[]`
+prop defaulting to `ALL_COLUMNS`. `lib/columns.ts` takes a parameterized
+storage key — the bulk page uses its own key so its column choices never
+clobber the main table's saved config.
+
+Estimates use the same `getEstimatedProfit()` / `getEffectivePrep()` and the
+same global `settings` as the main table.
+
+### `in_database`
+
+The ONLY main-database value rendered on this page. Occupies the Product cell
+slot that the main table uses for `has_live_offer`.
+
+- Present in `asins` → `Database` icon (lucide-react), linking to the main
+  ASINs page pre-filtered to that ASIN. Tooltip: "In your AsinFlow database."
+- Absent → dash.
+
+Must be visually distinct from the main table's `has_live_offer` shopping-bag
+icon. Computed at render time from the set-based EXISTS query, never stored.
+
+`has_live_offer` is NOT displayed and NOT stored here. This page is an
+explicit exception to the §18 catalog-icon rule: the tri-state
+`has_live_offer` icon and its NULL-state "+" create-listing link do not
+appear, because Add to SC is not on this page.
+
+**The distinction:** account-specific Seller Central state (live offers, SKUs,
+inventory, sales) is excluded. Product-level Amazon catalog data from the
+analyze pipeline (meltable, hazmat, DG, eligibility, pricing, fees, BSR,
+seller counts) is retained — it describes the ASIN, not your relationship to
+it.
+
+### Saved lists
+
+Lists persist and are selectable from a dropdown at the top of the page.
+Selecting a list renders its stored snapshot.
+
+Prices and fees are a snapshot from the last analyze run, not live. A manual
+"Refresh Prices" button re-runs the bulk analyze for the selected list and
+overwrites `bulk_list_asins` only. Snapshot age is shown next to the list
+name. Lists can be renamed and deleted; delete cascades.
+
+### Toolbar
+
+Present: Upload CSV, Refresh Prices, Export CSV, Manage Columns, Settings,
+list selector, save/rename/delete.
+
+Absent: Add to SC, Sync PO, Push to Aura, Sync Inventory, Sync Sales,
+Sync Sourcing, Export SB COGS, Archive, Buy List.
+
+### Nav
+
+Top nav gains "Bulk Calc" as an active route. Structure otherwise unchanged
+(§8).
