@@ -46,6 +46,9 @@ export interface FeesData {
   fbaFulfillmentFee: number | null;
   referralFee: number | null;
   feesEstimatePrice: number | null;
+  // Informational breakout (§21 bulk page). Already included in
+  // fbaFulfillmentFee — never add the two together.
+  variableClosingFee?: number | null;
 }
 
 export interface CatalogData {
@@ -58,6 +61,9 @@ export interface CatalogData {
   isMeltable?: boolean;
   isDangerousGood?: boolean | null; // DG transport class (attributes.hazmat present); null = inconclusive catalog fetch
   isHazmat?: boolean | null; // FBA hazmat program (INBOUND FBA_INB_0015); null = inconclusive probe
+  lengthIn?: number | null; // package dims (inches) — §21 bulk snapshot; main path ignores
+  widthIn?: number | null;
+  heightIn?: number | null;
 }
 
 export interface EligibilityData {

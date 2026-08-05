@@ -24,6 +24,10 @@ export interface AsinFeesResult {
   fbaFulfillmentFee: number | null;
   referralFee: number | null;
   feesEstimatePrice: number | null;
+  // Informational breakout for the §21 bulk page. Still INCLUDED in
+  // fbaFulfillmentFee (which sums every non-referral fee) — do not add the
+  // two together.
+  variableClosingFee?: number | null;
 }
 
 export interface AsinCatalogResult {
@@ -53,6 +57,13 @@ export interface AsinCatalogResult {
   // server/inbound-hazmat.ts. null = inconclusive; callers must NOT clobber
   // the stored value when null.
   isHazmat?: boolean | null;
+  // Package dimensions (inches), for the §21 bulk snapshot. Derived from the
+  // same packageDims already computed for dimensional weight; null when the
+  // catalog response carries no usable dimensions. Main path ignores these
+  // (its dims come from the Chrome extension only).
+  lengthIn?: number | null;
+  widthIn?: number | null;
+  heightIn?: number | null;
 }
 
 export async function getPricing(asin: string): Promise<AsinPricingResult> {
@@ -443,6 +454,7 @@ function parseFeeResult(
 
   let referralFee: number | null = null;
   let totalFbaFee: number = 0;
+  let variableClosingFee: number | null = null;
 
   log(`Fee breakdown for ${asin} (price=$${price}):`, "fees");
 
@@ -471,6 +483,11 @@ function parseFeeResult(
     if (feeType === "ReferralFee") {
       referralFee = finalFee;
     } else {
+      // VariableClosingFee is captured separately for the §21 bulk snapshot
+      // but stays inside totalFbaFee — main-path fee semantics unchanged.
+      if (feeType === "VariableClosingFee" && finalFee > 0) {
+        variableClosingFee = finalFee;
+      }
       totalFbaFee += finalFee;
     }
   }
@@ -537,6 +554,7 @@ function parseFeeResult(
     fbaFulfillmentFee: totalFbaFee > 0 ? totalFbaFee : null,
     referralFee,
     feesEstimatePrice: price,
+    variableClosingFee,
   };
 }
 
@@ -1235,6 +1253,9 @@ export async function getCatalogData(asin: string): Promise<AsinCatalogResult> {
       isMeltable,
       isDangerousGood,
       isCatalogDeleted: false, // 2xx → product exists in catalog
+      lengthIn: packageDims?.l ?? null,
+      widthIn: packageDims?.w ?? null,
+      heightIn: packageDims?.h ?? null,
     };
   } catch (err: any) {
     const statusCode = err.response?.status;

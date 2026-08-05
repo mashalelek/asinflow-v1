@@ -30,6 +30,7 @@ import { runFullScopePass } from "./full-scope-pass";
 import { makeProductRegistryRepo } from "./product-registry-repo";
 import { processBulkApproval, makeProductionHandlers, type ApprovalItem } from "./sku-legend-approval";
 import { settingsSchema, type Settings } from "@shared/schema";
+import type { AnalyzeSink } from "./analyze-sink";
 import fs from "fs";
 
 const TAG_COLORS = ["#3B82F6", "#EF4444", "#10B981", "#F59E0B", "#8B5CF6", "#EC4899", "#14B8A6", "#F97316", "#6366F1", "#84CC16"];
@@ -38,11 +39,16 @@ const TAG_COLORS = ["#3B82F6", "#EF4444", "#10B981", "#F59E0B", "#8B5CF6", "#EC4
 // Set during registerRoutes init so the sourcing-sync cron (which runs after
 // registerRoutes resolves in server/index.ts) can invoke the analyzer without
 // hoisting ~270 lines of function body out of registerRoutes.
+// The sink parameter is REQUIRED, never defaulted: a defaulted sink is
+// fail-open — a future call site that omits the argument would silently
+// write to the live catalog, which is the single failure the §21 isolation
+// exists to prevent. Every caller names its sink explicitly.
 type RunAnalyzeCore = (
   asins: AsinInput[],
   emit: (chunk: string) => void,
-  progressPrefix?: (i: number) => string | null,
-  fromCsvUpload?: boolean,
+  progressPrefix: (i: number) => string | null,
+  fromCsvUpload: boolean,
+  sink: AnalyzeSink,
 ) => Promise<void>;
 let runAnalyzeCoreRef: RunAnalyzeCore | null = null;
 export function getRunAnalyzeCore(): RunAnalyzeCore {
@@ -96,21 +102,31 @@ function matchColumnName(header: string, field: string): boolean {
   return aliases.includes(normalized);
 }
 
-function mapRowsToAsins(rows: Record<string, any>[], mapping: ColumnMapping): AsinInput[] {
+// cogsOptional (§21 bulk page only): the COGS column may be unmapped, and
+// blank/unparseable COGS cells keep the row with cogs=0 instead of dropping
+// it — a supplier catalog with ASINs and no costs is the normal starting
+// case there. Default (false) preserves the main upload path exactly: COGS
+// column required, rows with unparseable COGS skipped.
+function mapRowsToAsins(rows: Record<string, any>[], mapping: ColumnMapping, cogsOptional = false): AsinInput[] {
   const asins: AsinInput[] = [];
 
   for (const row of rows) {
-    if (!mapping.asin || !mapping.cogs) continue;
+    if (!mapping.asin) continue;
+    if (!mapping.cogs && !cogsOptional) continue;
 
     const asinVal = row[mapping.asin];
-    const cogsVal = row[mapping.cogs];
+    const cogsVal = mapping.cogs ? row[mapping.cogs] : undefined;
 
-    if (asinVal === undefined || cogsVal === undefined) continue;
+    if (asinVal === undefined) continue;
+    if (cogsVal === undefined && !cogsOptional) continue;
 
     const asin = String(asinVal).trim();
-    const cogs = parseMoney(cogsVal);
+    const parsedCogs = cogsVal !== undefined ? parseMoney(cogsVal) : null;
 
-    if (!asin || cogs == null) continue;
+    if (!asin) continue;
+    if (parsedCogs == null && !cogsOptional) continue;
+
+    const cogs = parsedCogs ?? 0;
 
     let buyLink: string | null = null;
     let prepOverride: number | null = null;
@@ -598,24 +614,20 @@ async function appendNotesForAsin(asin: string, newNotes: string): Promise<void>
   );
 }
 
-function writeResult(
-  emit: (chunk: string) => void,
-  allResults: Map<string, AsinResult>,
-  asin: string,
-  result: AsinResult,
-  isUpdate = false,
-  fromCsvUpload = false,
-  inputNotes: string | null = null,
-  inputPromoNotes: string | null = null,
-): void {
-  allResults.set(asin, result);
-  emit(JSON.stringify({ type: "result", data: isUpdate ? { ...result, _update: true } : result }) + "\n");
-  if (isDbAvailable()) {
+// Main-catalog persistence sink: the historical writes, verbatim.
+// Fire-and-forget — persistResult launches the promise chain and returns
+// immediately, exactly as the old inline writeResult DB block did. The §21
+// bulk page passes makeBulkListSink instead. Exported so out-of-module
+// callers (sourcing-sync cron) can name it explicitly — the sink parameter
+// is required everywhere, never defaulted.
+export const mainCatalogSink: AnalyzeSink = {
+  persistResult(result, { fromCsvUpload, inputNotes, inputPromoNotes }) {
+    if (!isDbAvailable()) return;
     // If this is a CSV upload with user-provided COGS, persist estimated_cogs
     // via the dedicated write path BEFORE the analyze UPSERT. This ensures
     // estimated_cogs is set for both new and existing ASINs.
     const csvCogsPromise = fromCsvUpload && result.cogs > 0
-      ? upsertCsvCogs(result.asin, result.cogs).catch((err: any) => log(`CSV COGS write error for ${asin}: ${err.message}`, "db"))
+      ? upsertCsvCogs(result.asin, result.cogs).catch((err: any) => log(`CSV COGS write error for ${result.asin}: ${err.message}`, "db"))
       : Promise.resolve();
     csvCogsPromise.then(async () => {
       // For CSV/sourcing of a brand-new ASIN, notes + promo_notes go in
@@ -631,8 +643,31 @@ function writeResult(
       if (!inserted && inputNotes) {
         await appendNotesForAsin(result.asin, inputNotes);
       }
-    }).catch((err: any) => log(`DB upsert error for ${asin}: ${err.message}`, "db"));
-  }
+    }).catch((err: any) => log(`DB upsert error for ${result.asin}: ${err.message}`, "db"));
+  },
+  persistTags(asin, tagNames) {
+    if (!isDbAvailable()) return;
+    // Tags are fire-and-forget — they have their own table and don't race
+    // with the asins INSERT (upsertTagsForAsin no-ops if the asin row
+    // doesn't exist yet, which is benign — tags only matter for known ASINs).
+    upsertTagsForAsin(asin, tagNames).catch((err: any) => log(`Tags error for ${asin}: ${err.message}`, "db"));
+  },
+};
+
+function writeResult(
+  emit: (chunk: string) => void,
+  allResults: Map<string, AsinResult>,
+  asin: string,
+  result: AsinResult,
+  isUpdate = false,
+  fromCsvUpload = false,
+  inputNotes: string | null = null,
+  inputPromoNotes: string | null = null,
+  sink: AnalyzeSink,
+): void {
+  allResults.set(asin, result);
+  emit(JSON.stringify({ type: "result", data: isUpdate ? { ...result, _update: true } : result }) + "\n");
+  sink.persistResult(result, { fromCsvUpload, inputNotes, inputPromoNotes });
 }
 
 async function runSheetsSync(
@@ -1732,7 +1767,7 @@ export async function registerRoutes(
       const result = await syncSourcingSheet(
         async (newInputs) => {
           // fromCsvUpload=true so estimated_cogs gets persisted via the dedicated CSV write path
-          await runAnalyzeAndStream(newInputs, res, () => null, true);
+          await runAnalyzeAndStream(newInputs, res, mainCatalogSink, () => null, true);
         },
         (plan) => {
           res.write(JSON.stringify({ type: "sync_summary", data: { ...plan, dryRun } }) + "\n");
@@ -2364,8 +2399,9 @@ export async function registerRoutes(
   const runAnalyzeCore: RunAnalyzeCore = async function (
     asins: AsinInput[],
     emit: (chunk: string) => void,
-    progressPrefix: (i: number) => string | null = () => null,
-    fromCsvUpload = false,
+    progressPrefix: (i: number) => string | null,
+    fromCsvUpload: boolean,
+    sink: AnalyzeSink,
   ) {
     const BATCH_SIZE = 10;
     const BATCH_DELAY = 1000;
@@ -2445,23 +2481,20 @@ export async function registerRoutes(
         retryQueue.push({ input, attempt: 1, result });
         log(`Queued ${input.asin} for retry (fees=${retryNeeded.fees}, pricing=${retryNeeded.pricing}, catalog=${retryNeeded.catalog})`, "retry");
         if (!retryNeeded.fees && !retryNeeded.pricing) {
-          writeResult(emit, allResults, input.asin, result, false, fromCsvUpload, input.notes ?? null, input.promoNotes ?? null);
+          writeResult(emit, allResults, input.asin, result, false, fromCsvUpload, input.notes ?? null, input.promoNotes ?? null, sink);
         }
       } else {
-        writeResult(emit, allResults, input.asin, result, false, fromCsvUpload, input.notes ?? null, input.promoNotes ?? null);
+        writeResult(emit, allResults, input.asin, result, false, fromCsvUpload, input.notes ?? null, input.promoNotes ?? null, sink);
       }
 
-      // Tags are fire-and-forget — they have their own table and don't race
-      // with the asins INSERT (upsertTagsForAsin no-ops if the asin row
-      // doesn't exist yet, which is benign — tags only matter for known ASINs).
-      if (isDbAvailable()) {
-        if (input.tags && input.tags.length > 0) {
-          upsertTagsForAsin(input.asin, input.tags).catch((err: any) => log(`Tags error for ${input.asin}: ${err.message}`, "db"));
-        }
-        // Notes are persisted by writeResult's promise chain — atomically on
-        // INSERT for new ASINs, via appendNotesForAsin (dedup) for existing.
-        // The old fire-and-forget call was racy: lost ~152 notes in a 7-day window.
+      // Tags go through the sink (main: fire-and-forget upsertTagsForAsin;
+      // bulk: intentional no-op — §21, no tag data source on that page).
+      if (input.tags && input.tags.length > 0) {
+        sink.persistTags(input.asin, input.tags);
       }
+      // Notes are persisted by the sink's persistResult chain — atomically on
+      // INSERT for new ASINs, via appendNotesForAsin (dedup) for existing.
+      // The old fire-and-forget call was racy: lost ~152 notes in a 7-day window.
 
       if ((i + 1) % BATCH_SIZE === 0 && i < asins.length - 1) {
         await delay(BATCH_DELAY);
@@ -2557,7 +2590,7 @@ export async function registerRoutes(
               const finalResult = retryError
                 ? { ...retried, error: retryError }
                 : retried;
-              writeResult(emit, allResults, item.input.asin, finalResult, allResults.has(item.input.asin), fromCsvUpload, item.input.notes ?? null, item.input.promoNotes ?? null);
+              writeResult(emit, allResults, item.input.asin, finalResult, allResults.has(item.input.asin), fromCsvUpload, item.input.notes ?? null, item.input.promoNotes ?? null, sink);
             }
           } catch (err: any) {
             log(`Retry error for ${item.input.asin}: ${err.message}`, "retry");
@@ -2591,7 +2624,7 @@ export async function registerRoutes(
                 ...finalItem,
                 error: errorMsg ?? finalItem.error,
               };
-              writeResult(emit, allResults, item.input.asin, errorResult, allResults.has(item.input.asin), fromCsvUpload, item.input.notes ?? null, item.input.promoNotes ?? null);
+              writeResult(emit, allResults, item.input.asin, errorResult, allResults.has(item.input.asin), fromCsvUpload, item.input.notes ?? null, item.input.promoNotes ?? null, sink);
             } else {
               item.attempt = attempt + 1;
             }
@@ -2618,7 +2651,7 @@ export async function registerRoutes(
             ...item.result,
             error: errorMsg,
           };
-          writeResult(emit, allResults, item.input.asin, errorResult, false, fromCsvUpload, item.input.notes ?? null, item.input.promoNotes ?? null);
+          writeResult(emit, allResults, item.input.asin, errorResult, false, fromCsvUpload, item.input.notes ?? null, item.input.promoNotes ?? null, sink);
         }
       }
       if (uncalculated.length > 0) {
@@ -2628,16 +2661,17 @@ export async function registerRoutes(
   };
   runAnalyzeCoreRef = runAnalyzeCore;
 
-  // Thin streaming wrapper. Preserves the existing /api/analyze + /api/analyze/all
-  // call sites so the interactive upload flow's signature does not change.
+  // Thin streaming wrapper for the main-catalog endpoints. The sink is
+  // required here too — each endpoint names mainCatalogSink explicitly.
   // The sourcing-sync cron calls runAnalyzeCore directly with a no-op emit.
   async function runAnalyzeAndStream(
     asins: AsinInput[],
     res: Response,
+    sink: AnalyzeSink,
     progressPrefix: (i: number) => string | null = () => null,
     fromCsvUpload = false,
   ) {
-    await runAnalyzeCore(asins, (chunk) => res.write(chunk), progressPrefix, fromCsvUpload);
+    await runAnalyzeCore(asins, (chunk) => res.write(chunk), progressPrefix, fromCsvUpload, sink);
   }
 
   function runPostAnalyzeBackgroundSyncs() {
@@ -2665,7 +2699,7 @@ export async function registerRoutes(
     res.setHeader("Connection", "keep-alive");
 
     // CSV upload sends COGS values → persist to estimated_cogs via dedicated path
-    await runAnalyzeAndStream(asins, res, () => null, true);
+    await runAnalyzeAndStream(asins, res, mainCatalogSink, () => null, true);
     res.write(JSON.stringify({ type: "complete" }) + "\n");
     res.end();
     runPostAnalyzeBackgroundSyncs();
@@ -2722,7 +2756,7 @@ export async function registerRoutes(
         const batchLabel = `Batch ${b + 1} of ${totalBatches} (ASINs ${start + 1}-${end})`;
 
         try {
-          await runAnalyzeAndStream(batch, res, () => batchLabel);
+          await runAnalyzeAndStream(batch, res, mainCatalogSink, () => batchLabel);
           succeededTotal += batch.length;
         } catch (err: any) {
           failedBatches++;

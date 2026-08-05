@@ -1,6 +1,6 @@
 import cron from "node-cron";
 import { syncSourcingSheet } from "./sourcing-sync";
-import { getRunAnalyzeCore } from "./routes";
+import { getRunAnalyzeCore, mainCatalogSink } from "./routes";
 import { log } from "./index";
 
 export function startSourcingSyncCron() {
@@ -12,7 +12,7 @@ export function startSourcingSyncCron() {
     try {
       const runCore = getRunAnalyzeCore();
       const result = await syncSourcingSheet(async (newInputs) => {
-        await runCore(newInputs, () => {}, () => null, true);
+        await runCore(newInputs, () => {}, () => null, true, mainCatalogSink);
       });
       log(
         `Daily sourcing-sheet sync complete: inserted ${result.inserted}, archivedNew ${result.archivedNew}, skippedExisting ${result.skippedExisting}, errors ${result.errors.length}`,
