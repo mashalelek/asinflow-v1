@@ -15,11 +15,6 @@ const BINARY_EXT = new Set([
   ".eot", ".pdf", ".xlsx", ".zip", ".webp",
 ]);
 
-// TEMPORARY exclusion: routes.ts still carries one literal-NUL dedup key.
-// It is owned by the in-flight bulk-lists session and gets the same \u0000
-// fix in its own commit — REMOVE this entry when that lands.
-const TEMP_EXCLUDED = new Set(["server/routes.ts"]);
-
 describe("repo hygiene — no literal NUL bytes in tracked text files", () => {
   it("every tracked text file is NUL-free (use \\u0000 escapes in string literals)", () => {
     const root = path.resolve(__dirname, "..");
@@ -30,7 +25,6 @@ describe("repo hygiene — no literal NUL bytes in tracked text files", () => {
     const offenders: string[] = [];
     for (const f of files) {
       if (BINARY_EXT.has(path.extname(f).toLowerCase())) continue;
-      if (TEMP_EXCLUDED.has(f)) continue;
       let data: Buffer;
       try {
         data = readFileSync(path.join(root, f));

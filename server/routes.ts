@@ -1461,7 +1461,7 @@ export async function registerRoutes(
       // asin case-insensitive), both trimmed. Orders deleted in Velocity are
       // absent from the list, so re-upload needs no special handling.
       const dedupKey = (orderNumber: string, asin: string) =>
-        `${orderNumber.trim()} ${asin.trim().toUpperCase()}`;
+        `${orderNumber.trim()}\u0000${asin.trim().toUpperCase()}`;
       const existing = await fetchAllInboundOrders();
       const existingKeys = new Set(
         existing.map((o) => dedupKey(String(o.order_number ?? ""), String(o.asin ?? ""))),
