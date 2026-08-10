@@ -2325,6 +2325,23 @@ export async function registerRoutes(
     } catch (err: any) { res.status(500).json({ message: err.message }); }
   });
 
+  // Promos (promo_notes) — same pattern as notes. MANUAL EDIT ONLY (§14):
+  // analyze and re-syncs never write this field; sourcing sync touches it
+  // solely on the new-ASIN INSERT branch. Empty/whitespace → NULL, never ''.
+  app.put("/api/asins/:asin/promos", async (req: Request, res: Response) => {
+    const { asin } = req.params;
+    const { promo_notes } = req.body as { promo_notes?: string | null };
+    if (!isDbAvailable()) { res.status(503).json({ message: "Database not available" }); return; }
+    if (promo_notes != null && typeof promo_notes !== "string") {
+      res.status(400).json({ message: "promo_notes must be a string or null" }); return;
+    }
+    const value = typeof promo_notes === "string" && promo_notes.trim() ? promo_notes.trim() : null;
+    try {
+      await query(`UPDATE asins SET promo_notes = $2 WHERE asin = $1`, [asin, value]);
+      res.json({ ok: true, promoNotes: value });
+    } catch (err: any) { res.status(500).json({ message: err.message }); }
+  });
+
   // === Reviewed timestamp ===
   app.put("/api/asins/:asin/reviewed", async (req: Request, res: Response) => {
     const { asin } = req.params;

@@ -831,6 +831,22 @@ export function ResultsTable({
                         onNoteChanged={(notes) => onResultUpdate(result.asin, { notes })}
                       />
                     );
+                  } else if (colId === "promos" && onResultUpdate) {
+                    // §6: Promos is inline-editable with the exact Notes
+                    // interaction. Manual edit only — analyze and re-syncs
+                    // never touch promo_notes (§14); sourcing sync writes it
+                    // solely on new-ASIN INSERT, so edits are never overwritten.
+                    content = (
+                      <NoteEditor
+                        asin={result.asin}
+                        currentNote={result.promoNotes ?? null}
+                        onNoteChanged={(promoNotes) => onResultUpdate(result.asin, { promoNotes })}
+                        saveUrl={`/api/asins/${result.asin}/promos`}
+                        bodyField="promo_notes"
+                        placeholder="Add promo notes..."
+                        emptyLabel="+ promo"
+                      />
+                    );
                   } else if (colId === "sourcing" && onResultUpdate) {
                     const sLabel = getSourcingLabel(result);
                     content = (
@@ -1659,8 +1675,9 @@ export function renderCell(
     }
 
     case "promos": {
-      // Display-only free text (sourcing sheet Col O). No inline edit —
-      // user-controlled via the sheet; same truncate+tooltip pattern as notes.
+      // Read-only FALLBACK (contexts without an update handler) — with
+      // onResultUpdate present the body loop renders the NoteEditor variant
+      // instead (§6 inline edit). Same truncate+tooltip pattern as notes.
       const p = result.promoNotes;
       if (!p) return <span className="text-muted-foreground text-sm">-</span>;
       const truncated = p.length > 30 ? p.substring(0, 30) + "..." : p;

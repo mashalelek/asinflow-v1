@@ -400,7 +400,11 @@ default — the user enables them per-need:
 - Date Added
 - Category
 - Sourcing
-- Promos (free-text `promo_notes` from the sourcing sheet, §11)
+- Promos (free-text `promo_notes`) — **inline-editable, same interaction as
+  Notes** (2026-08-09): click to edit, save on blur/enter, empty → NULL.
+  Seeded by the sourcing sheet on new-ASIN INSERT (§11); manual edit only
+  after that — analyze and re-syncs never touch it, so edits are never
+  overwritten.
 - Max COGS
 - Est. COGS (when shown as separate from Actual COGS)
 - Meltable, Hazmat, Suppressed (icons appear in Product cell regardless)
@@ -1341,7 +1345,7 @@ that writes it:
 | `buy_link`, `supplier` | CSV upload / manual edit / Chrome extension |
 | `supplier_sku` | CSV upload / manual edit — analyze MUST NOT write it (asymmetric-UPSERT INSERT branch only on the main path; never in the bulk sink's SET list) |
 | Tags, notes | Manual / CSV upload / Chrome extension |
-| `promo_notes` | Sourcing sync (new-ASIN INSERT branch only — never rewritten on re-sync/re-analyze) |
+| `promo_notes` | Manual edit / Sourcing sync (new-ASIN INSERT branch only — never rewritten on re-sync/re-analyze, so manual edits are never overwritten) |
 | `is_wholesale`, `is_oa` | Manual edit |
 | `is_active` (archive) | Manual edit / Sourcing sync (only on freshly-inserted discontinued rows — never on pre-existing ASINs) |
 | Aura listing cost (external, not an AF column) | Aura cost sync path (§11) — reads `asin_estimates`, writes only to Aura |

@@ -7,9 +7,19 @@ interface NoteEditorProps {
   asin: string;
   currentNote: string | null;
   onNoteChanged: (note: string | null) => void;
+  // Field variant (Promos reuses the exact Notes interaction, §6). Defaults
+  // preserve the Notes cell byte-for-byte. Empty input always saves NULL,
+  // never an empty string (the save path trims and coalesces).
+  saveUrl?: string;      // default /api/asins/:asin/notes
+  bodyField?: string;    // default "notes"
+  placeholder?: string;  // default "Add a note..."
+  emptyLabel?: string;   // default "+ note"
 }
 
-export function NoteEditor({ asin, currentNote, onNoteChanged }: NoteEditorProps) {
+export function NoteEditor({
+  asin, currentNote, onNoteChanged,
+  saveUrl, bodyField = "notes", placeholder = "Add a note...", emptyLabel = "+ note",
+}: NoteEditorProps) {
   const [open, setOpen] = useState(false);
   const [text, setText] = useState(currentNote ?? "");
   const [saving, setSaving] = useState(false);
@@ -25,10 +35,10 @@ export function NoteEditor({ asin, currentNote, onNoteChanged }: NoteEditorProps
   async function save() {
     setSaving(true);
     try {
-      await fetch(`/api/asins/${asin}/notes`, {
+      await fetch(saveUrl ?? `/api/asins/${asin}/notes`, {
         method: "PUT",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ notes: text.trim() || null }),
+        body: JSON.stringify({ [bodyField]: text.trim() || null }),
       });
       onNoteChanged(text.trim() || null);
       setOpen(false);
@@ -57,7 +67,7 @@ export function NoteEditor({ asin, currentNote, onNoteChanged }: NoteEditorProps
               <span className="text-sm text-muted-foreground">{display}</span>
             )
           ) : (
-            <span className="text-muted-foreground/50 text-sm">+ note</span>
+            <span className="text-muted-foreground/50 text-sm">{emptyLabel}</span>
           )}
         </div>
       </PopoverTrigger>
@@ -67,7 +77,7 @@ export function NoteEditor({ asin, currentNote, onNoteChanged }: NoteEditorProps
           value={text}
           onChange={(e) => setText(e.target.value)}
           className="w-full h-24 text-sm p-2 rounded border border-border bg-background resize-none focus:outline-none focus:ring-1 focus:ring-ring"
-          placeholder="Add a note..."
+          placeholder={placeholder}
         />
         <div className="flex justify-end gap-2 mt-2">
           <Button size="sm" variant="ghost" className="h-7 text-xs" onClick={() => setOpen(false)}>

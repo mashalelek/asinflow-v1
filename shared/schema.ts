@@ -136,7 +136,7 @@ export interface AsinResult {
   currentIssues?: { code: string; severity: string; message: string }[] | null;
   issuesCheckedAt?: string | null;
   notes?: string | null;
-  promoNotes?: string | null; // sourcing sheet Col O promos — user-controlled, display-only
+  promoNotes?: string | null; // promos — user-controlled (§14): manual edit / sourcing sync new-ASIN INSERT only
   supplierSku?: string | null; // supplier's own catalog/item number — user-controlled (§14), never from Amazon
   isArchived?: boolean;
   isMeltable?: boolean;
