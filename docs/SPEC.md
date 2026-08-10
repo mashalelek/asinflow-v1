@@ -1423,6 +1423,35 @@ referral fee at the estimate price matches what the tier table predicts
 there; on mismatch (or unmapped/flat category) it falls back to linear
 scaling of SP-API's accurate per-ASIN value and logs a `[referral]` warning.
 
+### Fee sources & fallback self-heal (`fee_source`, migration 026)
+
+Every stored fee triple (`fba_fee`, `referral_fee`, `fees_estimate_price`)
+carries its provenance in `asin_estimates.fee_source`:
+
+- **`'spapi'`** — a real `getMyFeesEstimateForASIN` response (the `getFees`
+  path).
+- **`'fallback'`** — `estimateFeeFallback`, the weight-based estimator used
+  when the real fetch exhausts its retries. Materially inaccurate (diagnosed
+  2026-08-09: B0F74MTVJP stored $3.53 vs Amazon's real $5.66 — the weight-only
+  curve ignores dims/size tier; ~71 rows were affected and fingerprint-
+  backfilled via `script/backfill-fee-source.ts`).
+- **NULL** — legacy (pre-026), presumed real after the backfill.
+
+**Write gate** (the analyze UPSERT — fees + source move as one block):
+`'spapi'` always wins; `'fallback'` only fills missing fees or refreshes a
+prior `'fallback'` — it **never overwrites a real fee** (`'spapi'` or
+legacy-NULL). All-null fee shapes (fetch errors, the degraded-response guard,
+discarded fallback-price estimates) write nothing, as before.
+
+**Self-heal:** analyze always re-attempts the real fetch (there is no
+"fees already present, skip" path), so a fallback row converges to `'spapi'`
+on the first successful real fetch. `script/repair-fallback-fees.ts` is the
+paced on-demand version of the same repair for the flagged backlog.
+
+**Honest labeling (this section's rule applied):** the Estimated FBA Fee cell
+renders amber with a tooltip when `fee_source = 'fallback'` — a weight-guess
+is never presented as a real Amazon fee.
+
 ### Forward-looking vs backward-looking
 
 Everything in the system has one of two time orientations:

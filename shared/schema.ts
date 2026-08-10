@@ -50,6 +50,9 @@ export interface FeesData {
   // Informational breakout (§21 bulk page). Already included in
   // fbaFulfillmentFee — never add the two together.
   variableClosingFee?: number | null;
+  // 'spapi' = real fee response; 'fallback' = weight-based estimateFeeFallback
+  // (amber indicator in the UI; self-heals on the next successful real fetch).
+  feeSource?: "spapi" | "fallback" | null;
 }
 
 export interface CatalogData {
@@ -146,6 +149,7 @@ export interface AsinResult {
   suppressionReasons?: string[];
   cogsSource?: "po_sheet" | "manual" | null;
   pricesFetchedAt?: string | null;
+  feeSource?: "spapi" | "fallback" | null; // stored fee provenance (migration 026); null = legacy/unknown
   lastReviewedAt?: string | null;
   addedAt?: string | null;
   category?: string | null;

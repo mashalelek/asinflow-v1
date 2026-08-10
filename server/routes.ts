@@ -615,13 +615,19 @@ async function upsertAsinResult(
   // fees — never touches estimated_cogs, actual_cogs, or other user-controlled
   // cost fields. This is an architectural smell: CSV upload piggybacks on the
   // analyze UPSERT to persist COGS. TODO: separate CSV write path from analyze.
+  // Fee triple + fee_source write gate (migration 026): 'spapi' always wins;
+  // 'fallback' only fills missing fees or refreshes a prior 'fallback' — it
+  // never overwrites a real fee ('spapi' or legacy-NULL rows, which predate
+  // the marker and are presumed real after the fingerprint backfill). The
+  // three fee fields + source move as ONE coherent block, keyed on the
+  // incoming fba_fee (all-null error shapes write nothing, as before).
   await query(
     `INSERT INTO asin_estimates (
        asin, estimated_cogs, estimated_cogs_source,
        lowest_fba_price, buy_box_price, buy_box_fulfillment, lowest_price,
-       sellers_fba, sellers_fbm, fba_fee, referral_fee, fees_estimate_price,
+       sellers_fba, sellers_fbm, fba_fee, referral_fee, fees_estimate_price, fee_source,
        bsr, bsr_category, eligibility_status, error, fetched_at
-     ) VALUES ($1,$2,'csv',$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,NOW())
+     ) VALUES ($1,$2,'csv',$3,$4,$5,$6,$7,$8,$9,$10,$11,$16,$12,$13,$14,$15,NOW())
      ON CONFLICT (asin) DO UPDATE SET
        lowest_fba_price = COALESCE(EXCLUDED.lowest_fba_price, asin_estimates.lowest_fba_price),
        buy_box_price = COALESCE(EXCLUDED.buy_box_price, asin_estimates.buy_box_price),
@@ -629,9 +635,14 @@ async function upsertAsinResult(
        lowest_price = COALESCE(EXCLUDED.lowest_price, asin_estimates.lowest_price),
        sellers_fba = COALESCE(EXCLUDED.sellers_fba, asin_estimates.sellers_fba),
        sellers_fbm = COALESCE(EXCLUDED.sellers_fbm, asin_estimates.sellers_fbm),
-       fba_fee = COALESCE(EXCLUDED.fba_fee, asin_estimates.fba_fee),
-       referral_fee = COALESCE(EXCLUDED.referral_fee, asin_estimates.referral_fee),
-       fees_estimate_price = COALESCE(EXCLUDED.fees_estimate_price, asin_estimates.fees_estimate_price),
+       fba_fee = CASE WHEN EXCLUDED.fba_fee IS NOT NULL AND (EXCLUDED.fee_source = 'spapi' OR asin_estimates.fee_source = 'fallback' OR asin_estimates.fba_fee IS NULL)
+                      THEN EXCLUDED.fba_fee ELSE asin_estimates.fba_fee END,
+       referral_fee = CASE WHEN EXCLUDED.fba_fee IS NOT NULL AND (EXCLUDED.fee_source = 'spapi' OR asin_estimates.fee_source = 'fallback' OR asin_estimates.fba_fee IS NULL)
+                      THEN EXCLUDED.referral_fee ELSE asin_estimates.referral_fee END,
+       fees_estimate_price = CASE WHEN EXCLUDED.fba_fee IS NOT NULL AND (EXCLUDED.fee_source = 'spapi' OR asin_estimates.fee_source = 'fallback' OR asin_estimates.fba_fee IS NULL)
+                      THEN EXCLUDED.fees_estimate_price ELSE asin_estimates.fees_estimate_price END,
+       fee_source = CASE WHEN EXCLUDED.fba_fee IS NOT NULL AND (EXCLUDED.fee_source = 'spapi' OR asin_estimates.fee_source = 'fallback' OR asin_estimates.fba_fee IS NULL)
+                      THEN EXCLUDED.fee_source ELSE asin_estimates.fee_source END,
        bsr = COALESCE(EXCLUDED.bsr, asin_estimates.bsr),
        bsr_category = COALESCE(EXCLUDED.bsr_category, asin_estimates.bsr_category),
        eligibility_status = EXCLUDED.eligibility_status,
@@ -646,6 +657,7 @@ async function upsertAsinResult(
       result.feesData.fbaFulfillmentFee, result.feesData.referralFee, result.feesData.feesEstimatePrice,
       result.catalogData.bsrRank, result.catalogData.bsrCategory,
       result.eligibilityData?.status, result.error,
+      result.feesData.feeSource ?? null, // $16 — fee provenance, gated with the fee block
     ]
   );
 
@@ -872,7 +884,7 @@ export async function registerRoutes(
           e.cogs, e.cogs_source, e.actual_cogs, e.estimated_cogs, e.estimated_cogs_source, e.prep_override, e.storage_override,
           e.lowest_fba_price, e.buy_box_price, e.buy_box_fulfillment, e.lowest_price,
           e.sellers_fba, e.sellers_fbm,
-          e.fba_fee, e.referral_fee, e.fees_estimate_price,
+          e.fba_fee, e.referral_fee, e.fees_estimate_price, e.fee_source,
           e.bsr, e.bsr_category, e.eligibility_status, e.error,
           e.fetched_at,
           e.ordered_qty AS est_ordered_qty
@@ -1094,6 +1106,7 @@ export async function registerRoutes(
           suppressionReasons: row.suppression_reasons ?? [],
           cogsSource: (row.cogs_source as "po_sheet" | "manual" | null) ?? null,
           pricesFetchedAt: row.fetched_at ? new Date(row.fetched_at).toISOString() : null,
+          feeSource: row.fee_source ?? null,
           lastReviewedAt: row.last_reviewed_at ? new Date(row.last_reviewed_at).toISOString() : null,
           addedAt: row.added_at ? new Date(row.added_at).toISOString() : null,
           category: row.category ?? null,

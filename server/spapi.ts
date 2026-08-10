@@ -24,6 +24,10 @@ export interface AsinFeesResult {
   fbaFulfillmentFee: number | null;
   referralFee: number | null;
   feesEstimatePrice: number | null;
+  // Which writer produced the fee triple (migration 026): 'spapi' = real
+  // getMyFeesEstimateForASIN response; 'fallback' = estimateFeeFallback
+  // (weight-based). Null on the all-null error shapes (nothing to attribute).
+  feeSource?: "spapi" | "fallback" | null;
   // Informational breakout for the §21 bulk page. Still INCLUDED in
   // fbaFulfillmentFee (which sums every non-referral fee) — do not add the
   // two together.
@@ -555,6 +559,7 @@ function parseFeeResult(
     referralFee,
     feesEstimatePrice: price,
     variableClosingFee,
+    feeSource: "spapi",
   };
 }
 
@@ -679,7 +684,7 @@ export function estimateFeeFallback(
     "fees",
   );
 
-  return { fbaFulfillmentFee: fbaFee, referralFee, feesEstimatePrice: price };
+  return { fbaFulfillmentFee: fbaFee, referralFee, feesEstimatePrice: price, feeSource: "fallback" };
 }
 
 export interface BatchFeeItem {
