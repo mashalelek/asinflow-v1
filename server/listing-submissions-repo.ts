@@ -31,23 +31,29 @@ export interface VerifySweepSummary {
   throttled: number; // left unchanged (fail-closed) — re-run to converge
 }
 
-// Sweep all non-terminal rows (pending/processing/stale) through SC. Paced +
+// Sweep non-terminal rows (pending/processing/stale) through SC. Paced +
 // fail-closed: a throttled probe leaves the row untouched. Idempotent.
+// opts.ids scopes the sweep to specific ledger rows (the §19 auto verify
+// after submit) — already-resolved ids fall out via the status filter, so a
+// scoped re-run over the same ids only probes what's still open.
 export async function verifyPending(
   sellerId: string,
-  opts: { httpGet?: HttpGetFn; query?: QueryLike; delayMs?: number; staleHours?: number } = {},
+  opts: { httpGet?: HttpGetFn; query?: QueryLike; delayMs?: number; staleHours?: number; ids?: string[] } = {},
 ): Promise<VerifySweepSummary> {
   const query = opts.query ?? (defaultQuery as any);
   const delayMs = opts.delayMs ?? 1100;
   const staleHours = opts.staleHours ?? STALE_HOURS_DEFAULT;
   const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
+  const scoped = opts.ids != null && opts.ids.length > 0;
   const rows = (await query(
     `SELECT id, asin, sku, submitted_at,
             EXTRACT(EPOCH FROM (now() - submitted_at))/3600 AS age_hours
        FROM listing_submissions
       WHERE verify_status IN ('pending','processing','stale')
+      ${scoped ? "AND id = ANY($1::uuid[])" : ""}
       ORDER BY submitted_at`,
+    scoped ? [opts.ids] : undefined,
   )).rows;
 
   const s: VerifySweepSummary = { checked: 0, live: 0, failed: 0, processing: 0, stale: 0, throttled: 0 };
@@ -98,6 +104,42 @@ export async function verifyPending(
     if (i < rows.length - 1) await sleep(delayMs);
   }
   return s;
+}
+
+// Resolve the freshly-written ledger ids for a batch's (asin, sku) pairs —
+// newest pending row per pair (per-fire ledger: the row recordSubmission just
+// wrote is the newest for its pair). Pairs whose best-effort ledger write
+// failed simply resolve no id and drop out — the auto-sweep covers what the
+// ledger knows, the pill + manual sweep remain the backstop (§19).
+export async function findRecentPendingIds(
+  pairs: Array<{ asin: string; sku: string }>,
+  query: QueryLike = defaultQuery as any,
+): Promise<string[]> {
+  if (pairs.length === 0) return [];
+  const r = await query(
+    `SELECT DISTINCT ON (asin, sku) id
+       FROM listing_submissions
+      WHERE verify_status = 'pending'
+        AND (asin, sku) IN (SELECT unnest($1::text[]), unnest($2::text[]))
+      ORDER BY asin, sku, submitted_at DESC`,
+    [pairs.map((p) => p.asin), pairs.map((p) => p.sku)],
+  );
+  return r.rows.map((row: any) => String(row.id));
+}
+
+// How many of a scoped id set are still open (pending/processing/stale) —
+// used by the auto-sweep to decide whether the retry pass is needed.
+export async function countOpenAmong(
+  ids: string[],
+  query: QueryLike = defaultQuery as any,
+): Promise<number> {
+  if (ids.length === 0) return 0;
+  const r = await query(
+    `SELECT count(*)::int AS n FROM listing_submissions
+      WHERE id = ANY($1::uuid[]) AND verify_status IN ('pending','processing','stale')`,
+    [ids],
+  );
+  return r.rows[0]?.n ?? 0;
 }
 
 export type ManualVerdict = "live" | "failed" | "deleted";

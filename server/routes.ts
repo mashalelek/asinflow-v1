@@ -5,7 +5,7 @@ import Papa from "papaparse";
 import * as XLSX from "xlsx";
 import { getPricing, getFees, getCatalogData, estimateFeeFallback, getEligibility, type EligibilityResult } from "./spapi";
 import { getInboundHazmat } from "./inbound-hazmat";
-import { verifyPending, resolveSubmissionManual, resolveSubmissionsBulk, dismissFlags, getUnverifiedCount, listNeedsAttention, listInFlight } from "./listing-submissions-repo";
+import { verifyPending, resolveSubmissionManual, resolveSubmissionsBulk, dismissFlags, getUnverifiedCount, listNeedsAttention, listInFlight, findRecentPendingIds, countOpenAmong } from "./listing-submissions-repo";
 import { runAuraSyncChain } from "./aura-sync-chain";
 import { pushAuraCosts } from "./aura-cost-sync";
 import { log } from "./index";
@@ -340,6 +340,61 @@ async function loadSettingsForSubmit(): Promise<Settings> {
     Object.entries(mapped).filter(([_, v]) => v !== undefined && v !== null && !isNaN(v as number)),
   );
   return settingsSchema.parse(cleaned);
+}
+
+// §19 auto verify after submit: one-shot in-process follow-up to a batch
+// submit with ≥1 ACCEPTED submission — first scoped sweep ~10 min after
+// submit, one retry ~30 min later for rows still open (async materialization
+// lag; rehearsals settled by T+65 at the latest). Deliberately NOT a cron and
+// NOT persisted: a restart before firing just leaves the rows in the pill for
+// the manual sweep, which stays the fallback. Reuses verifyPending scoped to
+// the batch's ledger ids — fail-closed semantics (throttle/not-yet-found
+// writes nothing) and the has_live_offer 'live' transition come with it; no
+// new writers.
+const AUTO_VERIFY_FIRST_MS = 10 * 60 * 1000;
+const AUTO_VERIFY_RETRY_MS = 30 * 60 * 1000;
+function scheduleBatchVerify(
+  sellerId: string,
+  pairs: Array<{ asin: string; sku: string }>,
+  delays: { firstMs?: number; retryMs?: number } = {},
+): void {
+  const firstMs = delays.firstMs ?? AUTO_VERIFY_FIRST_MS;
+  const retryMs = delays.retryMs ?? AUTO_VERIFY_RETRY_MS;
+  findRecentPendingIds(pairs)
+    .then((ids) => {
+      if (ids.length === 0) {
+        log(`Auto-verify: no pending ledger rows found for ${pairs.length} submitted pair(s) — nothing scheduled (manual sweep remains the fallback)`, "verify");
+        return;
+      }
+      log(`Auto-verify scheduled for ${ids.length} submission(s): first sweep in ${Math.round(firstMs / 60000)}m, retry in +${Math.round(retryMs / 60000)}m if still open`, "verify");
+      const t1 = setTimeout(async () => {
+        try {
+          const s = await verifyPending(sellerId, { ids });
+          log(`Auto-verify sweep 1 (${ids.length} scoped): checked=${s.checked} live=${s.live} failed=${s.failed} processing=${s.processing} stale=${s.stale} throttled=${s.throttled}`, "verify");
+          const open = await countOpenAmong(ids);
+          if (open === 0) {
+            log(`Auto-verify: all ${ids.length} resolved — retry skipped`, "verify");
+            return;
+          }
+          log(`Auto-verify: ${open} still open — retry in ${Math.round(retryMs / 60000)}m`, "verify");
+          const t2 = setTimeout(async () => {
+            try {
+              const s2 = await verifyPending(sellerId, { ids });
+              log(`Auto-verify sweep 2 (retry): checked=${s2.checked} live=${s2.live} failed=${s2.failed} processing=${s2.processing} stale=${s2.stale} throttled=${s2.throttled}`, "verify");
+              const stillOpen = await countOpenAmong(ids);
+              if (stillOpen > 0) log(`Auto-verify: ${stillOpen} still open after retry — left for the pill / manual sweep`, "verify");
+            } catch (err: any) {
+              log(`Auto-verify sweep 2 error (rows left for manual sweep): ${err.message}`, "verify");
+            }
+          }, retryMs);
+          t2.unref?.();
+        } catch (err: any) {
+          log(`Auto-verify sweep 1 error (rows left for manual sweep): ${err.message}`, "verify");
+        }
+      }, firstMs);
+      t1.unref?.();
+    })
+    .catch((err: any) => log(`Auto-verify scheduling error (manual sweep remains the fallback): ${err.message}`, "verify"));
 }
 
 function hasValidFees(result: AsinResult): boolean {
@@ -1991,6 +2046,16 @@ export async function registerRoutes(
       });
 
       log(`Offer-add SUBMIT complete: ${result.notes.submittedCount} created, ${result.notes.failedCount} failed, ${result.notes.skippedCount} skipped`, "offer-add");
+
+      // §19 auto verify after submit — fires only when ≥1 submission was
+      // ACCEPTED (kind "created"); fire-and-forget, never delays the response.
+      const createdPairs = result.perAsin
+        .filter((p) => p.outcome.kind === "created")
+        .map((p) => ({ asin: p.outcome.asin, sku: (p.outcome as any).sku as string }));
+      if (createdPairs.length > 0) {
+        scheduleBatchVerify(sellerId, createdPairs);
+      }
+
       res.json(result);
     } catch (err: any) {
       log(`Offer-add submit error: ${err.message}`, "offer-add");

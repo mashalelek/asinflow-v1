@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { resolveSubmissionsBulk, dismissFlags } from "./listing-submissions-repo";
+import { resolveSubmissionsBulk, dismissFlags, verifyPending, findRecentPendingIds, countOpenAmong } from "./listing-submissions-repo";
 
 // Minimal fake query router: SELECT of a row by id → configurable status;
 // UPDATEs are recorded. Mirrors the QueryLike surface the repo uses.
@@ -71,5 +71,80 @@ describe("dismissFlags — §19 acknowledge semantics", () => {
     expect(u.sql).toMatch(/SET flags_acknowledged_at = now\(\)/);
     expect(u.sql).not.toMatch(/issues|review_flags|terminal_conflict/);
     expect(u.sql).toMatch(/verify_status IN \('live','failed','deleted'\)/);
+  });
+});
+
+// §19 auto verify after submit — the id-scoping contract. The sweep body
+// (probe → classify → write) is exercised against real batches; these pin
+// the SELECT shape: scoped runs filter to the batch's ids, unscoped runs
+// stay the full-sweep query, helpers never query on empty input.
+function captureQuery(rows: any[] = []) {
+  const calls: Array<{ sql: string; params?: any[] }> = [];
+  const query = async (sql: string, params?: any[]) => {
+    calls.push({ sql, params });
+    return { rows, rowCount: rows.length };
+  };
+  return { calls, query };
+}
+
+describe("verifyPending id scoping (§19 auto verify after submit)", () => {
+  it("unscoped: full-sweep query, no id filter, no params", async () => {
+    const { calls, query } = captureQuery([]);
+    const s = await verifyPending("SELLER", { query: query as any });
+    expect(s.checked).toBe(0);
+    expect(calls).toHaveLength(1);
+    expect(calls[0].sql).not.toContain("id = ANY");
+    expect(calls[0].params).toBeUndefined();
+  });
+
+  it("scoped: id = ANY filter with the batch ids as $1", async () => {
+    const ids = ["11111111-1111-1111-1111-111111111111", "22222222-2222-2222-2222-222222222222"];
+    const { calls, query } = captureQuery([]);
+    await verifyPending("SELLER", { query: query as any, ids });
+    expect(calls[0].sql).toContain("AND id = ANY($1::uuid[])");
+    // Status filter is still present — resolved ids fall out of a scoped re-run.
+    expect(calls[0].sql).toContain("verify_status IN ('pending','processing','stale')");
+    expect(calls[0].params).toEqual([ids]);
+  });
+
+  it("empty ids array behaves as unscoped (defensive)", async () => {
+    const { calls, query } = captureQuery([]);
+    await verifyPending("SELLER", { query: query as any, ids: [] });
+    expect(calls[0].sql).not.toContain("id = ANY");
+  });
+});
+
+describe("findRecentPendingIds", () => {
+  it("newest pending row per (asin, sku) pair via parallel unnest params", async () => {
+    const { calls, query } = captureQuery([{ id: "aaa" }, { id: "bbb" }]);
+    const ids = await findRecentPendingIds(
+      [{ asin: "B000000001", sku: "SKU-1" }, { asin: "B000000002", sku: "SKU-2" }],
+      query as any,
+    );
+    expect(ids).toEqual(["aaa", "bbb"]);
+    expect(calls[0].sql).toContain("DISTINCT ON (asin, sku)");
+    expect(calls[0].sql).toContain("verify_status = 'pending'");
+    expect(calls[0].params).toEqual([["B000000001", "B000000002"], ["SKU-1", "SKU-2"]]);
+  });
+
+  it("no pairs → no query", async () => {
+    const { calls, query } = captureQuery();
+    expect(await findRecentPendingIds([], query as any)).toEqual([]);
+    expect(calls).toHaveLength(0);
+  });
+});
+
+describe("countOpenAmong", () => {
+  it("counts non-terminal rows within the id set", async () => {
+    const { calls, query } = captureQuery([{ n: 3 }]);
+    expect(await countOpenAmong(["x"], query as any)).toBe(3);
+    expect(calls[0].sql).toContain("verify_status IN ('pending','processing','stale')");
+    expect(calls[0].params).toEqual([["x"]]);
+  });
+
+  it("empty ids → 0 without a query", async () => {
+    const { calls, query } = captureQuery();
+    expect(await countOpenAmong([], query as any)).toBe(0);
+    expect(calls).toHaveLength(0);
   });
 });

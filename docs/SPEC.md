@@ -1913,6 +1913,9 @@ live write to Seller Central:
    other SKUs for the ASIN, and updates `asins.primary_sku` to match. The
    live-offer SKU is the lead SKU. Applies to **both** new-SKU generation and
    resurrection-reuse; the two fields never disagree.
+7. A batch with ≥1 ACCEPTED submission schedules the §19 **auto verify after
+   submit** (scoped sweep at ~T+10m, one retry ~30m later) — no manual Scan
+   Listings needed after a routine batch.
 
 ### Source-of-truth ownership
 
@@ -2043,7 +2046,9 @@ until manual checking. This system records every submission and resolves its
 real state on demand.
 
 No background jobs / notifications infra: verification is an on-demand,
-read-only sweep against SC plus status writes to the ledger.
+read-only sweep against SC plus status writes to the ledger — plus one
+in-process, one-shot follow-up per submit batch (below), which is a delayed
+invocation of the same sweep, not a scheduler.
 
 ### Ledger: `listing_submissions`
 
@@ -2075,8 +2080,32 @@ on a 404 it **falls back to `searchListingsItems` by ASIN** to catch a listing
 that materialized under a drifted SKU. **Fail-closed:** a throttled/5xx probe
 leaves the row **unchanged in whatever state it was** (a `processing` row stays
 `processing`, keeping its stale clock) — never a guessed verdict. Idempotent
-and safe to re-run — expected to run the morning after a batch, once async
-processing has settled.
+and safe to re-run — the manual sweep remains available and is the fallback
+whenever the auto sweep couldn't finish the job.
+
+### Auto verify after submit (2026-08-09)
+
+After a batch submit completes with **≥1 ACCEPTED** submission, AF schedules
+an in-process, one-shot follow-up: the SAME `verifyPending` sweep **scoped to
+that batch's ledger ids** (`ids` option — the status filter still applies, so
+already-resolved rows fall out of the scoped re-run), first at **~T+10m**,
+with **one retry ~30m later** only if rows in the scope are still open
+(async materialization lag; rehearsals settled by T+65 at the latest).
+
+- **Not a cron, not persisted:** timers are in-process only (`unref`ed). A
+  server restart before firing simply leaves the rows in the pill; the manual
+  sweep is the fallback. Deliberate — this is a follow-up to a user action,
+  not a schedule.
+- **No new writers:** the scoped sweep carries `verifyPending`'s existing
+  semantics — fail-closed probes (throttle/not-yet-found write nothing) and
+  the `'live'` → `has_live_offer` transition.
+- Batch ids resolve from the newest `pending` ledger row per submitted
+  (asin, sku) pair; pairs whose best-effort ledger write failed drop out
+  (covered by pill + manual sweep, as before).
+- Every firing logs what it swept and what it resolved; rows still open
+  after the retry stay in the pill for the manual sweep.
+- UI: nothing new — the pill count reflects the auto-resolution on its next
+  natural refetch (page load / panel close). No polling added.
 
 ### Classifier (precedence order)
 
