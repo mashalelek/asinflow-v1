@@ -1520,8 +1520,26 @@ export function renderCell(
         </span>
       );
 
-    case "fbaFee":
-      return <span className="font-mono text-sm">{profitData ? fmt(profitData.totalFbaFee) : fmt(result.feesData.fbaFulfillmentFee)}</span>;
+    case "fbaFee": {
+      const fbaVal = profitData ? fmt(profitData.totalFbaFee) : fmt(result.feesData.fbaFulfillmentFee);
+      // Honest labeling (§14): a weight-estimated fallback fee is visibly
+      // provisional, not presented as a real Amazon fee.
+      if (result.feeSource === "fallback") {
+        return (
+          <Tooltip>
+            <TooltipTrigger asChild>
+              <span className="font-mono text-sm text-amber-500 cursor-help" data-testid={`text-fbaFee-fallback-${result.asin}`}>
+                {fbaVal} <AlertTriangle className="inline h-3 w-3" />
+              </span>
+            </TooltipTrigger>
+            <TooltipContent side="top">
+              <p className="text-xs">Estimated from weight — SP-API fee fetch failed; will retry on next analyze</p>
+            </TooltipContent>
+          </Tooltip>
+        );
+      }
+      return <span className="font-mono text-sm">{fbaVal}</span>;
+    }
 
     case "referralFee":
       return (
