@@ -2865,7 +2865,7 @@ export async function registerRoutes(
           ? `SELECT a.asin, COALESCE(e.actual_cogs, e.estimated_cogs, e.cogs) AS cogs, a.buy_link, e.prep_override, e.storage_override
              FROM asins a
              LEFT JOIN asin_estimates e ON e.asin = a.asin
-             WHERE a.is_active = TRUE AND a.asin = ANY($1::text[])
+             WHERE a.asin = ANY($1::text[])
              ORDER BY a.asin`
           : `SELECT a.asin, COALESCE(e.actual_cogs, e.estimated_cogs, e.cogs) AS cogs, a.buy_link, e.prep_override, e.storage_override
              FROM asins a

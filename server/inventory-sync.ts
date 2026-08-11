@@ -30,7 +30,8 @@ export async function syncInventory(
   // itself is paginated/global, so the filter applies to which rows we
   // accept into the map and therefore write to the DB.
   const sql = asinFilter && asinFilter.size > 0
-    ? `SELECT id, asin FROM asins WHERE is_active = TRUE AND asin = ANY($1::text[])`
+    // Explicit selection: exactly those ASINs, archived included (SPEC 14).
+    ? `SELECT id, asin FROM asins WHERE asin = ANY($1::text[])`
     : `SELECT id, asin FROM asins WHERE is_active = TRUE`;
   const params = asinFilter && asinFilter.size > 0 ? [Array.from(asinFilter)] : undefined;
   const asinRows = await query(sql, params);

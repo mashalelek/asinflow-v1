@@ -68,7 +68,12 @@ export async function runFullScopePass(opts: {
   if (!sellerId) throw new Error("SP_API_SELLER_ID not set");
   const { dryRun } = opts;
 
-  const filterCond = opts.asinFilter && opts.asinFilter.size > 0 ? `AND a.asin = ANY($1::text[])` : "";
+  // Explicit selection scans exactly those ASINs, archived included (SPEC 14
+  // "Archived != excluded from sync"); active-only applies to the unfiltered
+  // full-catalog walk.
+  const hasFilter = opts.asinFilter != null && opts.asinFilter.size > 0;
+  const activeCond = hasFilter ? "TRUE" : "a.is_active = TRUE";
+  const filterCond = hasFilter ? `AND a.asin = ANY($1::text[])` : "";
   const filterParams = opts.asinFilter && opts.asinFilter.size > 0 ? [Array.from(opts.asinFilter)] : undefined;
 
   // ─── Phase a: ASINs with ≥1 SKU, all flag states ──────────────────────────
@@ -78,7 +83,7 @@ export async function runFullScopePass(opts: {
             json_agg(json_build_object('sku', s.sku, 'created_at', s.created_at)
                      ORDER BY s.created_at DESC) AS skus
        FROM asins a JOIN asin_skus s ON s.asin_id = a.id
-      WHERE a.is_active = TRUE ${filterCond}
+      WHERE ${activeCond} ${filterCond}
       GROUP BY a.asin, a.id, a.primary_sku, a.has_live_offer
       ORDER BY a.asin`,
     filterParams,
@@ -162,7 +167,7 @@ export async function runFullScopePass(opts: {
     `SELECT a.asin, a.id, a.primary_sku,
             EXISTS (SELECT 1 FROM asin_skus s WHERE s.asin_id = a.id AND s.is_primary) AS has_primary_row
        FROM asins a
-      WHERE a.is_active = TRUE
+      WHERE ${activeCond}
         AND NOT EXISTS (SELECT 1 FROM asin_skus s WHERE s.asin_id = a.id)
         ${filterCond}
       ORDER BY a.asin`,

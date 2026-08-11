@@ -21,7 +21,8 @@ export async function syncSalesData(
   // populating asinIdMap with only the requested subset so chunk processing
   // skips orders whose ASIN isn't in the map.
   const sql = asinFilter && asinFilter.size > 0
-    ? `SELECT id, asin FROM asins WHERE is_active = TRUE AND asin = ANY($1::text[])`
+    // Explicit selection: exactly those ASINs, archived included (SPEC 14).
+    ? `SELECT id, asin FROM asins WHERE asin = ANY($1::text[])`
     : `SELECT id, asin FROM asins WHERE is_active = TRUE`;
   const params = asinFilter && asinFilter.size > 0 ? [Array.from(asinFilter)] : undefined;
   const asinRows = await query(sql, params);

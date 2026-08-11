@@ -1477,6 +1477,19 @@ UI.
 (The current state of AsinFlow's Actuals violates this principle. Section 13
 captures the gap; it must be addressed.)
 
+### Archived ≠ excluded from sync
+
+Archive is a **view-level hide, not a data-freshness opt-out**. An explicitly
+selected ASIN syncs — prices, PO, sales, inventory, analyze, scan — regardless
+of `is_active`; with no selection, sync scope follows the current view (Show
+Archived on → archived included; the UI sends the visible ASIN list, so this
+falls out of selection semantics). Unfiltered cron/full-catalog scopes remain
+active-only. Any future "never sync archived" behavior must be a deliberate
+setting, never a hidden predicate. (Root-caused 2026-08-11: `is_active = TRUE`
+inside the explicit-selection branches of prices/inventory/sales/analyze/scan
+silently dropped selected archived ASINs; post-sync refreshes also dropped the
+Show Archived view scope, hiding even successful writes.)
+
 ### Push back on stale spec
 
 If the user is heading in a wrong direction or asking for something that

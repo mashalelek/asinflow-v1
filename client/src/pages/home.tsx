@@ -822,13 +822,13 @@ export default function Home() {
       const data = await res.json();
       if (!res.ok) throw new Error(data.message || "Sync failed");
       toast({ title: `Synced PO data`, description: `Updated ${data.updated} ASINs, skipped ${data.skipped}` });
-      await fetchAsins(startDate, endDate);
+      await fetchAsins(startDate, endDate, showArchived);
     } catch (err: any) {
       toast({ title: "Sync failed", description: err.message, variant: "destructive" });
     } finally {
       setIsSyncing(false);
     }
-  }, [toast, currentWorkingSet, fetchAsins, startDate, endDate]);
+  }, [toast, currentWorkingSet, fetchAsins, startDate, endDate, showArchived]);
 
   const handleSyncInventory = useCallback(async () => {
     const ws = currentWorkingSet();
@@ -843,13 +843,13 @@ export default function Home() {
       const data = await res.json();
       if (!res.ok) throw new Error(data.message || "Inventory sync failed");
       toast({ title: "Inventory synced", description: `${data.synced} ASINs synced, ${data.skipped} skipped` });
-      await fetchAsins(startDate, endDate);
+      await fetchAsins(startDate, endDate, showArchived);
     } catch (err: any) {
       toast({ title: "Inventory sync failed", description: err.message, variant: "destructive" });
     } finally {
       setIsSyncingInventory(false);
     }
-  }, [toast, currentWorkingSet, fetchAsins, startDate, endDate]);
+  }, [toast, currentWorkingSet, fetchAsins, startDate, endDate, showArchived]);
 
   // §18 full-scope listing scan. Selection-aware: selected ASINs, else FULL
   // catalog (not the filtered view — this is a catalog-truth operation).
@@ -885,13 +885,13 @@ export default function Home() {
           else if (ev.type === "error") toast({ title: "Listing scan failed", description: ev.message, variant: "destructive" });
         }
       }
-      if (!dryRun) await fetchAsins(startDate, endDate);
+      if (!dryRun) await fetchAsins(startDate, endDate, showArchived);
     } catch (err: any) {
       toast({ title: "Listing scan failed", description: err.message, variant: "destructive" });
     } finally {
       setScanState(null);
     }
-  }, [selectedSet, toast, fetchAsins, startDate, endDate]);
+  }, [selectedSet, toast, fetchAsins, startDate, endDate, showArchived]);
 
   // Push-only Aura sync — POSTs to /api/sync/aura/push (no PO chain). Selection-
   // aware: when ASINs are checked, scopes the push to those; otherwise pushes
@@ -963,13 +963,13 @@ export default function Home() {
       const data = await res.json();
       if (!res.ok) throw new Error(data.message || "Sales sync failed");
       toast({ title: "Sales synced", description: `${data.daysProcessed} days, ${data.asinsUpdated} ASINs updated` });
-      await fetchAsins(startDate, endDate);
+      await fetchAsins(startDate, endDate, showArchived);
     } catch (err: any) {
       toast({ title: "Sales sync failed", description: err.message, variant: "destructive" });
     } finally {
       setIsSyncingSales(false);
     }
-  }, [toast, currentWorkingSet, fetchAsins, startDate, endDate]);
+  }, [toast, currentWorkingSet, fetchAsins, startDate, endDate, showArchived]);
 
   // Insert-only sync from the sourcing Google Sheet. Pre-existing ASINs in AF
   // are skipped server-side — the sheet only adds. Streams NDJSON: sync_summary

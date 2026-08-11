@@ -136,7 +136,10 @@ export async function refreshPrices(
   const filtered = asinFilter && asinFilter.size > 0;
   const result = await query(
     filtered
-      ? `SELECT asin FROM asins WHERE is_active = TRUE AND asin = ANY($1::text[]) ORDER BY asin`
+      // Explicit selection syncs EXACTLY those ASINs — archived included
+      // (SPEC 14 "Archived != excluded from sync"). Active-only applies only
+      // to the unfiltered cron/full-catalog scope.
+      ? `SELECT asin FROM asins WHERE asin = ANY($1::text[]) ORDER BY asin`
       : `SELECT asin FROM asins WHERE is_active = TRUE ORDER BY asin`,
     filtered ? [Array.from(asinFilter!)] : undefined,
   );
