@@ -793,11 +793,14 @@ async function runSheetsSync(
         setClauses.push(`cogs = $${idx++}`, `cogs_source = $${idx++}`, `actual_cogs = $${idx++}`);
         values.push(data.cogs, "po_sheet", data.cogs);
       }
-      // Est. COGS auto-sync: update if source is 'po_sheet' or null (not manual/csv)
+      // Est. COGS auto-sync (§2, corrected 2026-08-11): overwrite with the PO
+      // value (source → 'po_sheet') UNLESS the source is 'manual'. csv/imported
+      // yield to PO — CSV seeds pre-purchase estimates, a PO row is ground
+      // truth. The old po_sheet/NULL-only check silently froze csv rows.
       if (data.cogs != null) {
         const estCheck = await query(`SELECT estimated_cogs_source FROM asin_estimates WHERE asin = $1`, [asin]);
         const estSource = estCheck?.rows?.[0]?.estimated_cogs_source;
-        if (estSource === "po_sheet" || estSource == null) {
+        if (estSource !== "manual") {
           setClauses.push(`estimated_cogs = $${idx++}`, `estimated_cogs_source = $${idx++}`);
           values.push(data.cogs, "po_sheet");
         }
