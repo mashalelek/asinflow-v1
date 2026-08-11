@@ -788,10 +788,17 @@ async function runSheetsSync(
       const setClauses: string[] = [];
       const values: any[] = [];
       let idx = 1;
+      // Per-ASIN branch trace (2026-08-11): the csv-freeze diagnosis had to
+      // reconstruct these decisions from DB side-effects — log them instead.
+      let actBranch = "no-cogs";
+      let estBranch = "no-cogs";
       if (data.cogs != null && !isManualOverride) {
         // Always update actual_cogs from PO
         setClauses.push(`cogs = $${idx++}`, `cogs_source = $${idx++}`, `actual_cogs = $${idx++}`);
         values.push(data.cogs, "po_sheet", data.cogs);
+        actBranch = "written";
+      } else if (data.cogs != null) {
+        actBranch = "skipped:manual";
       }
       // Est. COGS auto-sync (§2, corrected 2026-08-11): overwrite with the PO
       // value (source → 'po_sheet') UNLESS the source is 'manual'. csv/imported
@@ -803,6 +810,9 @@ async function runSheetsSync(
         if (estSource !== "manual") {
           setClauses.push(`estimated_cogs = $${idx++}`, `estimated_cogs_source = $${idx++}`);
           values.push(data.cogs, "po_sheet");
+          estBranch = `written(was:${estSource ?? "null"})`;
+        } else {
+          estBranch = "skipped:manual";
         }
       }
       // Prep cost from PO sheet (Col AS)
@@ -818,8 +828,10 @@ async function runSheetsSync(
         `UPDATE asin_estimates SET ${setClauses.join(", ")} WHERE asin = $${idx}`,
         values
       );
-      if ((result.rowCount ?? 0) > 0) updated++;
-      else skipped++;
+      if ((result.rowCount ?? 0) > 0) {
+        updated++;
+        log(`PO sync ${asin}: cogs=${data.cogs ?? "-"} actual=${actBranch} est=${estBranch} prep=${data.prepCost ?? "-"} qty=${data.orderedQty}`, "sheets");
+      } else skipped++;
 
       // Update supplier on asins table if available
       if (data.supplier) {
