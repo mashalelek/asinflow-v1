@@ -88,7 +88,7 @@ purposes and have separate ownership.
 - Source labels (`estimated_cogs_source`): `manual`, `csv`, `imported`
   (Chrome extension), `po_sheet`.
 - Written by: CSV upload, manual inline edit, Chrome extension import, and
-  PO sync (when source is `po_sheet` or NULL — never when source is `manual`).
+  PO sync (any source except `manual` — see "PO sync behavior").
 - Inline-editable in the UI via the CogsEditor popup.
 
 **Actual COGS (`asin_estimates.actual_cogs`)**
@@ -110,11 +110,15 @@ When the PO sync job runs for an ASIN that has a matching PO row:
 
 - Always overwrites `actual_cogs` with the latest PO value. Sets
   `cogs_source = 'po_sheet'`.
-- For `estimated_cogs`:
-  - If `estimated_cogs_source = 'po_sheet'`: overwrite with latest PO value.
-  - If `estimated_cogs_source = 'manual'`: leave alone (manual override
-    sticks).
-  - If `estimated_cogs IS NULL`: set from PO and mark source `'po_sheet'`.
+- For `estimated_cogs` (rule corrected 2026-08-11): **overwrite with the
+  latest PO value and set source `'po_sheet'` — unless
+  `estimated_cogs_source = 'manual'`**, which is left alone (manual override
+  sticks, unchanged semantics). `csv`/`imported` YIELD to PO: those sources
+  seed pre-purchase estimates, and a PO row is ground truth for what the
+  units cost. (The prior rule — update only `po_sheet`/NULL — silently froze
+  `csv`-seeded rows against PO updates: 83 rows had drifted ~$268 total by
+  2026-08-10, incl. two stuck at $0.00. The first sync after this change
+  heals that population as a side effect; no repair script.)
 
 ### Manual override
 
