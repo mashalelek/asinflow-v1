@@ -7,3 +7,4 @@ vite.config.ts.*
 *.tar.gz
 google-credentials.json
 velocity-upload*.csv
+data/
