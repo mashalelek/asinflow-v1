@@ -3112,6 +3112,66 @@ export async function registerRoutes(
     }
   });
 
+  // === PO module frame (docs/po-module-v1-frame-plan.md §3) ===
+  //
+  // READ-ONLY: the frame has no write endpoints (the importer is a script).
+  // Rollups are computed in the query, never stored. units_received uses
+  // SUM over line items' qty_received — an all-NULL group sums to NULL
+  // (SQL semantics), which the UI renders as an em-dash, never 0.
+  app.get("/api/pos", async (req: Request, res: Response) => {
+    if (!isDbAvailable()) { res.status(503).json({ message: "Database not available" }); return; }
+    const q = typeof req.query.search === "string" ? req.query.search.trim() : "";
+    const status = typeof req.query.status === "string" ? req.query.status.trim() : "";
+    const supplier = typeof req.query.supplier === "string" ? req.query.supplier.trim() : "";
+    const from = typeof req.query.from === "string" ? req.query.from.trim() : "";
+    const to = typeof req.query.to === "string" ? req.query.to.trim() : "";
+    const page = Math.max(1, parseInt(String(req.query.page ?? "1"), 10) || 1);
+    const PAGE_SIZE = 25;
+
+    const conds: string[] = [];
+    const params: any[] = [];
+    const add = (cond: string, val: any) => { params.push(val); conds.push(cond.replace("$?", `$${params.length}`)); };
+    if (q) {
+      params.push(`%${q}%`);
+      const n = params.length;
+      conds.push(`(p.order_id ILIKE $${n}
+        OR EXISTS (SELECT 1 FROM po_asins a WHERE a.po_id = p.id AND a.asin ILIKE $${n})
+        OR EXISTS (SELECT 1 FROM po_line_items l WHERE l.po_id = p.id AND l.product_name ILIKE $${n}))`);
+    }
+    // Status filter is TOKEN-based: a PO matches if its comma-joined status
+    // CONTAINS the token (same .includes() convention as the sync code).
+    if (status) add(`p.status ILIKE $?`, `%${status}%`);
+    if (supplier) add(`p.supplier = $?`, supplier);
+    if (from) add(`p.order_date >= $?`, from);
+    if (to) add(`p.order_date <= $?`, to);
+    const where = conds.length > 0 ? `WHERE ${conds.join(" AND ")}` : "";
+
+    try {
+      const total = (await query(`SELECT COUNT(*)::int AS n FROM purchase_orders p ${where}`, params)).rows[0].n;
+      const rows = (await query(
+        `SELECT p.*,
+                (SELECT COUNT(*)::int FROM po_asins a WHERE a.po_id = p.id) AS asin_count,
+                (SELECT COALESCE(SUM(a.qty), 0)::int FROM po_asins a WHERE a.po_id = p.id) AS units_ordered,
+                (SELECT SUM(l.qty_received)::int FROM po_line_items l WHERE l.po_id = p.id) AS units_received,
+                (p.notes IS NOT NULL
+                  OR EXISTS (SELECT 1 FROM po_asins a WHERE a.po_id = p.id AND a.notes IS NOT NULL)
+                  OR EXISTS (SELECT 1 FROM po_line_items l WHERE l.po_id = p.id AND l.notes IS NOT NULL)) AS has_notes
+           FROM purchase_orders p
+           ${where}
+          ORDER BY p.order_date DESC, p.created_at DESC
+          LIMIT ${PAGE_SIZE} OFFSET ${(page - 1) * PAGE_SIZE}`,
+        params,
+      )).rows;
+      // Filter options for the toolbar (distinct across the whole table, not
+      // the page): suppliers + status tokens (comma-split, deduped).
+      const suppliers = (await query(`SELECT DISTINCT supplier FROM purchase_orders ORDER BY supplier`)).rows.map((r: any) => r.supplier);
+      const tokenRows = (await query(`SELECT DISTINCT TRIM(t) AS token FROM purchase_orders, unnest(string_to_array(status, ',')) AS t ORDER BY 1`)).rows;
+      res.json({ pos: rows, total, page, pageSize: PAGE_SIZE, suppliers, statusTokens: tokenRows.map((r: any) => r.token) });
+    } catch (err: any) {
+      res.status(500).json({ message: err.message });
+    }
+  });
+
   // === Bulk Profit Calculator (SPEC §21) ===
   //
   // Isolated from the main catalog: these endpoints write to bulk_lists /

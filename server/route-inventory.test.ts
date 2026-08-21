@@ -31,6 +31,7 @@ const EXPECTED_ROUTES = [
   "GET /api/credentials-status",
   "GET /api/download-template",
   "GET /api/export/velocity-upload",
+  "GET /api/pos",
   "GET /api/prices/status",
   "GET /api/settings",
   "GET /api/settings/hazmat",

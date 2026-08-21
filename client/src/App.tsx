@@ -11,7 +11,7 @@ import Home from "@/pages/home";
 import BulkCalc from "@/pages/bulk-calc";
 import Analytics from "@/pages/analytics";
 import ComingSoon from "@/pages/coming-soon";
-import PurchaseOrders from "@/pages/purchase-orders";
+import PurchaseOrders, { PurchaseOrderDetailPlaceholder } from "@/pages/purchase-orders";
 import { CreditCard, TrendingUp, Truck } from "lucide-react";
 
 function Router() {
@@ -25,6 +25,7 @@ function Router() {
         <Route path="/bulk-calc" component={BulkCalc} />
         <Route path="/analytics" component={Analytics} />
         <Route path="/purchase-orders" component={PurchaseOrders} />
+        <Route path="/purchase-orders/:id" component={PurchaseOrderDetailPlaceholder} />
         <Route path="/gift-cards">
           <ComingSoon title="Gift Cards" icon={CreditCard} />
         </Route>
