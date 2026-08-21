@@ -155,7 +155,7 @@ async function main() {
       supplier = "shop.tetleyusa.com";
     }
     const orderId = t(r.cells[COL.orderId]);
-    const key = `${supplier} ${orderId}`;
+    const key = `${supplier}\u0000${orderId}`;
     if (!groups.has(key)) groups.set(key, { orderId, supplier, rows: [] as any });
     groups.get(key)!.rows.push(r);
   }
@@ -351,7 +351,7 @@ const SEEDED_PAYMENT_BY_LC = new Map([...SEEDED_PAYMENT].map((v) => [v.toLowerCa
   const pool = new pg.Pool({ connectionString: process.env.DATABASE_URL });
   const existing = new Set(
     (await pool.query(`SELECT supplier, order_id FROM purchase_orders`)).rows
-      .map((r: any) => `${r.supplier} ${r.order_id}`),
+      .map((r: any) => `${r.supplier}\u0000${r.order_id}`),
   );
   const allAsins = [...new Set(pos.flatMap((p) => p.poAsins.map((a: any) => a.asin)))];
   const skuRows = (await pool.query(
@@ -359,7 +359,7 @@ const SEEDED_PAYMENT_BY_LC = new Map([...SEEDED_PAYMENT].map((v) => [v.toLowerCa
   )).rows;
   const skuByAsin = new Map(skuRows.map((r: any) => [r.asin, r.primary_sku]));
 
-  const toImport = pos.filter((p) => !existing.has(`${p.supplier} ${p.orderId}`));
+  const toImport = pos.filter((p) => !existing.has(`${p.supplier}\u0000${p.orderId}`));
   const skippedExisting = pos.length - toImport.length;
 
   let asinRowsTotal = 0, lineRowsTotal = 0, skuMatched = 0, skuNull = 0;
