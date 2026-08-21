@@ -166,6 +166,11 @@ route-registration test (`server/route-inventory.test.ts`) backstops
 routes.ts specifically, but the inventory-diff rule applies to every
 blob-staged shared file.
 
+## Migrations run from committed code only
+
+Migrations and any DB-mutating script run only from committed code.
+Apply-then-commit is backwards — commit, then apply, then verify.
+
 ## Definition of Done: committed
 
 A feature isn't done until it's committed — same as it isn't done until
