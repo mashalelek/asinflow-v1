@@ -3140,8 +3140,17 @@ export async function registerRoutes(
     }
     // Status filter is TOKEN-based: a PO matches if its comma-joined status
     // CONTAINS the token (same .includes() convention as the sync code).
-    if (status) add(`p.status ILIKE $?`, `%${status}%`);
-    if (supplier) add(`p.supplier = $?`, supplier);
+    // Both facets accept comma-separated multi-selects: OR within a facet,
+    // AND across facets (tokens/domains never contain commas).
+    if (status) {
+      const tokens = status.split(",").map((x) => x.trim()).filter(Boolean);
+      const ors = tokens.map((tk) => { params.push(`%${tk}%`); return `p.status ILIKE $${params.length}`; });
+      if (ors.length > 0) conds.push(`(${ors.join(" OR ")})`);
+    }
+    if (supplier) {
+      const list = supplier.split(",").map((x) => x.trim()).filter(Boolean);
+      if (list.length > 0) { params.push(list); conds.push(`p.supplier = ANY($${params.length}::text[])`); }
+    }
     if (from) add(`p.order_date >= $?`, from);
     if (to) add(`p.order_date <= $?`, to);
     const where = conds.length > 0 ? `WHERE ${conds.join(" AND ")}` : "";
@@ -3215,7 +3224,8 @@ export async function registerRoutes(
       const unitsOrdered = asinRows.reduce((t: number, a: any) => t + (a.qty ?? 0), 0);
       const recVals = lineRows.map((l: any) => l.qty_received).filter((v: any) => v != null);
       const unitsReceived = recVals.length === 0 ? null : recVals.reduce((t: number, v: any) => t + Number(v), 0);
-      const cogsTotal = asinRows.reduce((t: number, a: any) => t + (num(a.total_cost) ?? 0), 0);
+      const nonNullCosts = asinRows.filter((a: any) => a.total_cost != null);
+      const cogsTotal = nonNullCosts.reduce((t: number, a: any) => t + (num(a.total_cost) ?? 0), 0);
       // pg DATE → JS Date (midnight local): build YYYY-MM-DD from local
       // components — String()/toISOString() would garble or TZ-shift it.
       const od = po.order_date instanceof Date ? po.order_date : new Date(po.order_date);
@@ -3229,7 +3239,9 @@ export async function registerRoutes(
           units_ordered: unitsOrdered,
           units_received: unitsReceived,
           order_total: po.order_total,
-          cogs_total: cogsTotal.toFixed(2),
+          // All-NULL cost set → null → the strip renders a muted em-dash,
+          // never $0.00 (canceled #DIV/0! orders).
+          cogs_total: nonNullCosts.length === 0 ? null : cogsTotal.toFixed(2),
         },
         asins,
         orphanLines,

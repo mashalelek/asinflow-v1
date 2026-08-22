@@ -19,6 +19,7 @@ import {
   Select, SelectContent, SelectItem, SelectTrigger, SelectValue,
 } from "@/components/ui/select";
 import { Tooltip, TooltipTrigger, TooltipContent } from "@/components/ui/tooltip";
+import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import { UploadToVelocityDialog } from "@/components/upload-to-velocity-dialog";
 
 interface PoRow {
@@ -44,6 +45,69 @@ interface PosResponse {
   statusTokens: string[];
 }
 
+// §7: tinted chips only, never saturated fills. Families ruled 2026-08-22.
+function statusChipClass(token: string): string {
+  const t = token.toLowerCase();
+  if (t === "ordered") return "bg-blue-500/10 text-blue-600 dark:text-blue-400";
+  if (t === "ship") return "bg-indigo-500/10 text-indigo-600 dark:text-indigo-400";
+  if (t.startsWith("received")) return "bg-green-500/10 text-green-700 dark:text-green-400";
+  if (t === "closed") return "bg-muted text-muted-foreground";
+  if (t === "canceled") return "bg-red-500/10 text-red-600/80 dark:text-red-400/80";
+  if (t.startsWith("returned") || t.includes("partial return")) return "bg-orange-500/10 text-orange-600 dark:text-orange-400";
+  // ATTN: Velocity · See Comments · Confirm Refund / Replacement ·
+  // Missing / Damaged from Supplier · Lost / Damaged by Us — and any
+  // unmapped token — read as needs-attention: amber.
+  return "bg-amber-500/10 text-amber-600 dark:text-amber-400";
+}
+const chipBase = "inline-block rounded-sm px-1.5 py-0.5 text-[11px] whitespace-nowrap";
+
+// Searchable multi-select facet — same interaction pattern as the main
+// page's Tags/Supplier filters (type-ahead, select/clear all, checkbox
+// list). OR within a facet; facets AND together server-side.
+function FacetMultiSelect({ label, options, selected, onChange, testId }: {
+  label: string;
+  options: string[];
+  selected: Set<string>;
+  onChange: (next: Set<string>) => void;
+  testId: string;
+}) {
+  const [open, setOpen] = useState(false);
+  const [q, setQ] = useState("");
+  const filtered = q.trim() ? options.filter((o) => o.toLowerCase().includes(q.toLowerCase())) : options;
+  return (
+    <Popover open={open} onOpenChange={(v) => { setOpen(v); if (v) setQ(""); }}>
+      <PopoverTrigger asChild>
+        <Button variant="outline" size="sm" className="h-8 text-xs font-normal" data-testid={testId}>
+          {label}{selected.size > 0 ? ` (${selected.size})` : ""}
+          <ChevronDown className="h-3 w-3 ml-1 text-muted-foreground" />
+        </Button>
+      </PopoverTrigger>
+      <PopoverContent className="w-64 p-2 space-y-2" align="start">
+        <Input placeholder="Search..." value={q} onChange={(e) => setQ(e.target.value)} className="h-7 text-xs" autoFocus />
+        <div className="flex items-center gap-2 text-[10px] text-muted-foreground">
+          <button className="hover:text-foreground" onClick={() => onChange(new Set(options))}>Select all</button>
+          <span>·</span>
+          <button className="hover:text-foreground" onClick={() => onChange(new Set())}>Clear all</button>
+          <span className="ml-auto">{selected.size} selected</span>
+        </div>
+        <div className="max-h-48 overflow-y-auto -mx-1 space-y-0.5">
+          {filtered.map((opt) => (
+            <label key={opt} className="flex items-center gap-2 px-2 py-1 rounded hover:bg-muted cursor-pointer text-xs">
+              <input type="checkbox" checked={selected.has(opt)} onChange={() => {
+                const next = new Set(selected);
+                if (next.has(opt)) next.delete(opt); else next.add(opt);
+                onChange(next);
+              }} className="h-3 w-3 accent-blue-500" />
+              <span className="truncate">{opt}</span>
+            </label>
+          ))}
+          {filtered.length === 0 && <div className="px-2 py-1 text-xs text-muted-foreground">No matches</div>}
+        </div>
+      </PopoverContent>
+    </Popover>
+  );
+}
+
 const ALL = "__all__";
 
 function fmtMoney(v: string | null): { text: string; muted: boolean } {
@@ -63,8 +127,8 @@ export default function PurchaseOrders() {
   const [velocityOpen, setVelocityOpen] = useState(false);
   const [search, setSearch] = useState("");
   const [debouncedSearch, setDebouncedSearch] = useState("");
-  const [statusFilter, setStatusFilter] = useState(ALL);
-  const [supplierFilter, setSupplierFilter] = useState(ALL);
+  const [statusSel, setStatusSel] = useState<Set<string>>(new Set());
+  const [supplierSel, setSupplierSel] = useState<Set<string>>(new Set());
   const [from, setFrom] = useState("");
   const [to, setTo] = useState("");
   const [page, setPage] = useState(1);
@@ -76,14 +140,16 @@ export default function PurchaseOrders() {
     return () => clearTimeout(h);
   }, [search]);
 
-  useEffect(() => { setPage(1); }, [debouncedSearch, statusFilter, supplierFilter, from, to]);
+  const statusKey = Array.from(statusSel).sort().join(",");
+  const supplierKey = Array.from(supplierSel).sort().join(",");
+  useEffect(() => { setPage(1); }, [debouncedSearch, statusKey, supplierKey, from, to]);
 
   const load = useCallback(async () => {
     setError(null);
     const params = new URLSearchParams();
     if (debouncedSearch) params.set("search", debouncedSearch);
-    if (statusFilter !== ALL) params.set("status", statusFilter);
-    if (supplierFilter !== ALL) params.set("supplier", supplierFilter);
+    if (statusKey) params.set("status", statusKey);
+    if (supplierKey) params.set("supplier", supplierKey);
     if (from) params.set("from", from);
     if (to) params.set("to", to);
     params.set("page", String(page));
@@ -94,7 +160,7 @@ export default function PurchaseOrders() {
     } catch (e: any) {
       setError(e.message);
     }
-  }, [debouncedSearch, statusFilter, supplierFilter, from, to, page]);
+  }, [debouncedSearch, statusKey, supplierKey, from, to, page]);
 
   useEffect(() => { load(); }, [load]);
 
@@ -144,20 +210,8 @@ export default function PurchaseOrders() {
             placeholder="Search order ID, ASIN, product name..."
             className="h-8 w-[280px] pl-8 text-sm" data-testid="input-po-search" />
         </div>
-        <Select value={statusFilter} onValueChange={setStatusFilter}>
-          <SelectTrigger className="h-8 w-[170px] text-sm" data-testid="select-po-status"><SelectValue /></SelectTrigger>
-          <SelectContent>
-            <SelectItem value={ALL}>All statuses</SelectItem>
-            {(data?.statusTokens ?? []).map((t) => <SelectItem key={t} value={t}>{t}</SelectItem>)}
-          </SelectContent>
-        </Select>
-        <Select value={supplierFilter} onValueChange={setSupplierFilter}>
-          <SelectTrigger className="h-8 w-[200px] text-sm" data-testid="select-po-supplier"><SelectValue /></SelectTrigger>
-          <SelectContent>
-            <SelectItem value={ALL}>All suppliers</SelectItem>
-            {(data?.suppliers ?? []).map((sp) => <SelectItem key={sp} value={sp}>{sp}</SelectItem>)}
-          </SelectContent>
-        </Select>
+        <FacetMultiSelect label="Status" options={data?.statusTokens ?? []} selected={statusSel} onChange={setStatusSel} testId="select-po-status" />
+        <FacetMultiSelect label="Supplier" options={data?.suppliers ?? []} selected={supplierSel} onChange={setSupplierSel} testId="select-po-supplier" />
         <input type="date" value={from} onChange={(e) => setFrom(e.target.value)}
           className="h-8 rounded-md border border-input bg-background px-2 text-sm" data-testid="input-po-from" />
         <span className="text-xs text-muted-foreground">to</span>
@@ -171,7 +225,7 @@ export default function PurchaseOrders() {
         <table className="w-full border-collapse text-sm" data-testid="po-table">
           <thead>
             <tr className="table-header-stone">
-              {["PO Date", "Order ID", "Supplier", "Status", "Order Total", "ASINs", "Units Ordered", "Units Received", "Invoice", "Notes"].map((h, i) => (
+              {["Status", "PO Date", "Order ID", "Supplier", "Order Total", "ASINs", "Units Ordered", "Units Received", "Invoice", "Notes"].map((h, i) => (
                 <th key={h} className={`px-3 py-2 text-xs font-medium whitespace-nowrap ${i >= 4 && i <= 7 ? "text-right" : "text-left"}`}>{h}</th>
               ))}
             </tr>
@@ -183,16 +237,16 @@ export default function PurchaseOrders() {
               return (
                 <tr key={po.id} className="table-zebra-stone cursor-pointer hover:bg-muted/40" style={hairline}
                   onClick={() => navigate(`/purchase-orders/${po.id}`)} data-testid={`row-po-${po.order_id}`}>
-                  <td className="px-3 py-2 whitespace-nowrap">{fmtDate(po.order_date)}</td>
-                  <td className="px-3 py-2 font-mono text-xs">{po.order_id}</td>
-                  <td className="px-3 py-2">{po.supplier}</td>
                   <td className="px-3 py-2">
                     <div className="flex flex-col items-start gap-0.5">
                       {tokens.map((tk) => (
-                        <span key={tk} className="inline-block rounded-sm bg-muted px-1.5 py-0.5 text-[11px] text-muted-foreground whitespace-nowrap">{tk}</span>
+                        <span key={tk} className={`${chipBase} ${statusChipClass(tk)}`}>{tk}</span>
                       ))}
                     </div>
                   </td>
+                  <td className="px-3 py-2 whitespace-nowrap">{fmtDate(po.order_date)}</td>
+                  <td className="px-3 py-2 font-mono text-xs">{po.order_id}</td>
+                  <td className="px-3 py-2">{po.supplier}</td>
                   <td className={`px-3 py-2 text-right font-mono ${money.muted ? "text-muted-foreground/50" : ""}`}>{money.text}</td>
                   <td className="px-3 py-2 text-right">{po.asin_count}</td>
                   <td className="px-3 py-2 text-right">{po.units_ordered}</td>
@@ -266,7 +320,7 @@ interface PoLine {
 }
 interface PoDetail {
   po: Record<string, any> & { invoice_file_name: string };
-  summary: { asin_count: number; units_ordered: number; units_received: number | null; order_total: string | null; cogs_total: string };
+  summary: { asin_count: number; units_ordered: number; units_received: number | null; order_total: string | null; cogs_total: string | null };
   asins: PoAsinDetail[];
 }
 
@@ -355,7 +409,7 @@ export function PurchaseOrderDetailPlaceholder() {
         </div>
         <div className="flex gap-1">
           {tokens.map((tk: string) => (
-            <span key={tk} className="inline-block rounded-sm bg-muted px-1.5 py-0.5 text-[11px] text-muted-foreground">{tk}</span>
+            <span key={tk} className={`${chipBase} ${statusChipClass(tk)}`}>{tk}</span>
           ))}
         </div>
       </div>
