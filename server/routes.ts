@@ -3172,6 +3172,73 @@ export async function registerRoutes(
     }
   });
 
+  // Full PO detail (frame step 4): PO + po_asins (computed total_cost,
+  // joined thumbnail from asins where present) + line items grouped under
+  // their po_asin_id. Summary rollups + invoice_file_name computed in the
+  // response, never stored. invoice_file_name is built from THIS PO's own
+  // date/supplier/orderID — the mockup's cross-wired filename regression is
+  // exactly what that rule guards.
+  app.get("/api/pos/:id", async (req: Request, res: Response) => {
+    if (!isDbAvailable()) { res.status(503).json({ message: "Database not available" }); return; }
+    const id = typeof req.params.id === "string" ? req.params.id : "";
+    try {
+      const poRes = await query(`SELECT * FROM purchase_orders WHERE id = $1`, [id]);
+      if (poRes.rows.length === 0) { res.status(404).json({ message: "PO not found" }); return; }
+      const po = poRes.rows[0];
+
+      const asinRows = (await query(
+        `SELECT pa.*, (pa.qty * pa.cost_per_unit) AS total_cost,
+                a.image_url AS thumbnail
+           FROM po_asins pa
+           LEFT JOIN asins a ON a.asin = pa.asin
+          WHERE pa.po_id = $1
+          ORDER BY pa.asin`,
+        [id],
+      )).rows;
+
+      const lineRows = (await query(
+        `SELECT * FROM po_line_items WHERE po_id = $1 ORDER BY po_asin_id, position, id`,
+        [id],
+      )).rows;
+      const linesByAsin = new Map<string, any[]>();
+      for (const l of lineRows) {
+        const key = String(l.po_asin_id ?? "");
+        if (!linesByAsin.has(key)) linesByAsin.set(key, []);
+        linesByAsin.get(key)!.push(l);
+      }
+      const asins = asinRows.map((a: any) => ({ ...a, lines: linesByAsin.get(String(a.id)) ?? [] }));
+      const orphanLines = linesByAsin.get("") ?? []; // po_asin_id NULL (SET NULL on delete) — none expected in the frame
+
+      // Summary rollups (computed, never stored). units_received: SUM over
+      // line qty_received — all-NULL stays NULL → em-dash, never 0.
+      const num = (v: any) => (v == null ? null : parseFloat(v));
+      const unitsOrdered = asinRows.reduce((t: number, a: any) => t + (a.qty ?? 0), 0);
+      const recVals = lineRows.map((l: any) => l.qty_received).filter((v: any) => v != null);
+      const unitsReceived = recVals.length === 0 ? null : recVals.reduce((t: number, v: any) => t + Number(v), 0);
+      const cogsTotal = asinRows.reduce((t: number, a: any) => t + (num(a.total_cost) ?? 0), 0);
+      // pg DATE → JS Date (midnight local): build YYYY-MM-DD from local
+      // components — String()/toISOString() would garble or TZ-shift it.
+      const od = po.order_date instanceof Date ? po.order_date : new Date(po.order_date);
+      const ymd = `${od.getFullYear()}-${String(od.getMonth() + 1).padStart(2, "0")}-${String(od.getDate()).padStart(2, "0")}`;
+      const invoiceFileName = `${ymd}_${po.supplier}_${po.order_id}`;
+
+      res.json({
+        po: { ...po, invoice_file_name: invoiceFileName },
+        summary: {
+          asin_count: asinRows.length,
+          units_ordered: unitsOrdered,
+          units_received: unitsReceived,
+          order_total: po.order_total,
+          cogs_total: cogsTotal.toFixed(2),
+        },
+        asins,
+        orphanLines,
+      });
+    } catch (err: any) {
+      res.status(500).json({ message: err.message });
+    }
+  });
+
   // === Bulk Profit Calculator (SPEC §21) ===
   //
   // Isolated from the main catalog: these endpoints write to bulk_lists /
