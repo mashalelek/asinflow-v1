@@ -8,7 +8,7 @@ make a rule self-explanatory.
 When something here is wrong or stale, fix the doc first, then change the
 code. This is the canonical reference both Maria and Claude work from.
 
-Last updated: August 4, 2026.
+Last updated: August 22, 2026.
 
 ---
 
@@ -487,14 +487,12 @@ Items in order:
 - **AsinFlow** (logo, far left)
 - **ASINs** — active route
 - **Analytics** — active route
-- **POs** — active route, **minimal shell page** (heading + toolbar, no
-  content). The toolbar hosts the "Upload to Velocity" action (§11). The
-  prior PO scaffold (pages, po-routes, po-cogs, purchase_orders/
-  po_line_items/po_asins/po_gift_cards/gift_cards tables, seed data) was
-  removed 2026-07-30 — functional but unused; its tables held only
-  seed/test rows (confirmed disposable). The real PO module arrives later
-  and will be built fresh; Velocity upload is a toolbar ACTION, not page
-  content.
+- **POs** — active route: the **PO module frame** (§22) — list + read-only
+  expanded view over the in-app PO database (768 imported 2026 orders). No
+  longer a minimal shell. The toolbar hosts the "Upload to Velocity" action
+  (§11) — Velocity upload remains a toolbar ACTION, not page content. (The
+  prior PO scaffold was removed 2026-07-30, migration 021; the module was
+  rebuilt fresh per §22.)
 - **Gift Cards** — disabled, "Soon" badge
 - **Repricer** — disabled, "Soon" badge
 - **Shipments** — disabled, "Soon" badge
@@ -2466,3 +2464,132 @@ Sync Sourcing, Export SB COGS, Archive, Buy List.
 Top nav gains "Bulk Calc" as an active route, immediately after ASINs.
 Structure otherwise unchanged (§8); added to the settings-gear routes, NOT to
 the date-picker routes.
+
+## 22. PO Module (Frame)
+
+An in-app purchase-order database replacing the Google Sheets PO tracker —
+eventually. The frame (schema, 2026 importer, read-only list + expanded view)
+is **purely additive**: the sheet remains the source of truth for every
+existing integration (PO sync → `actual_cogs`/`prep_override`, Velocity
+export, SB COGS export, sourcing-cost export). Nothing repoints to these
+tables until the cutover layer, and each repoint gets its own dry-run.
+
+### Tables (migrations 028–029)
+
+- `purchase_orders` — one row per order. `UNIQUE (supplier, order_id)` (order
+  IDs collide across suppliers, §10). `source ∈ {manual, sheet_import}`.
+- `po_asins` — one row per ASIN per order. `UNIQUE (po_id, asin)`. Carries
+  qty, `cost_per_unit` (adjusted-COGS snapshot), prep, sold_as /
+  units_per_pack, unreimbursed loss, Amazon SKU, notes.
+- `po_line_items` — one row per supplier product. FK to its `po_asins` row
+  (`ON DELETE SET NULL`). Carries price, per-item discount, qtys,
+  `asin_qty_per_product` (yield), `adjusted_product_cost` snapshot, Supplier
+  SKU / UPC, notes.
+
+Migration 021 dropped an older same-named scaffold; 028 is fresh, not a
+revival.
+
+**Lookup lists** live in `settings` as JSONB arrays: `po_payment_methods`
+(13), `po_cashback_sites` (5), `po_emails` (2), `po_purchasers` (1).
+**List order is meaningful: element 0 is the default** (mpeters.cqg@gmail.com;
+Maria). The entry form must preserve order; never sort these lists.
+
+### Stored vs. computed
+
+Stored snapshots, written at save/import, recomputed only on edit (layer 2):
+`cost_per_unit`, `adjusted_product_cost`. Migrated rows carry the sheet's
+values **verbatim — never re-derived**, so app numbers match the sheet
+penny-for-penny.
+
+Computed at render, never stored: ASIN total cost (`qty × cost_per_unit`),
+COGS with prep, PO rollups (ASIN count, unit sums, COGS total),
+unique-products-per-ASIN (count of line items sharing a `po_asin_id`),
+Velocity quantity (`units_per_pack × qty`), invoice file name
+(`YYYY-MM-DD_supplier_orderID`, built from local date components — pg returns
+DATE as a JS Date; never string-slice it), bundle set-count check.
+
+### Multi-row same-ASIN semantics
+
+Two distinct cases, distinguished by the sheet's Col S at import (and by
+entry-form intent later):
+
+- **Bundle** (S ≥ 2): component rows share one `po_asins` row; the sheet's
+  Col N is the group total duplicated per row → **take-first**. Set count =
+  `min` over components of `qty_ordered × asin_qty_per_product`.
+- **Pack-size merge** (S = 1, same ASIN on 2+ rows): independent supplier
+  listings (1-pack / 2-pack / …) feeding one ASIN → contributions are
+  **additive**: `qty = SUM(Col N)`; cost is verbatim when rows agree, else
+  qty-weighted average in integer cents (the §11 SB same-date-merge
+  precedent), reported as a deviation-from-verbatim.
+- N-weighted cost basis reviewed 2026-08-20 and stands (homedepot WN63100522
+  $17.61 outlier accepted) — do not reopen.
+- A mixed group (S=1 and S≥2 rows for one ASIN in one order) is a data error:
+  report and skip the PO, never guess.
+
+Both cases render identically in the ASINs tab: one row with an expander
+revealing component line items.
+
+### Importer (`script/import-po-2026.ts`)
+
+2026 data only (prior years deferred — a future import extends the cleanup
+map after its own profiling pass). CSV input (path argument), **dry-run by
+default**, `--live` explicit. Idempotent on `(supplier, order_id)`: existing
+POs skip and report — re-runs and resumes are safe. Row-accounting identity
+printed every run; remainder must be 0. Every cleanup-map hit is reported and
+row-identified; nothing normalizes silently. Single-token payment/cashback
+normalization is case-insensitive against the seeded spellings;
+split-payment free-text strings import verbatim and are never substring-
+edited. `qty_received` blank → NULL (never 0); prep blank on a real row → 0
+(§3). Amazon SKU joins `asins.primary_sku` at import time; no match → NULL.
+
+### UI rules
+
+- Route `/purchase-orders`: list (25/page, `order_date DESC`) → expanded view
+  (three tabs: PO Details · ASINs · Products). Read-only in the frame; **+
+  New PO renders disabled** until the entry form ships. The Upload to
+  Velocity toolbar action (§11) is unchanged and stays on this page.
+- Search spans order_id, ASIN, and product name in one box. Supplier and
+  status filters are **searchable multi-selects** (OR within a facet, AND
+  across facets); status matches by token containment (`.includes()`, same
+  convention as the sheet sync). Status renders as comma-split token chips in
+  the FIRST column, color-coded by family — lifecycle: Ordered blue, SHIP
+  indigo, Received* green, Closed neutral gray (recedes), Canceled muted red;
+  returns orange; attention tags (ATTN: Velocity, See Comments, Confirm
+  Refund / Replacement, Missing/Damaged, Lost/Damaged) amber. Tinted
+  text/chip only — never saturated badge fills (§7). The sheet's vocabulary
+  imports verbatim; no CHECK constraint.
+- **SKU labels are never ambiguous:** column headers read **"Amazon SKU"**
+  (ours, ASIN-level; amber "No SKU — create offer first" warning when NULL)
+  and **"Supplier SKU / UPC"** (theirs, product-level). Component rows under
+  an expander show a muted dash for Amazon SKU.
+- **All money renders neutral** — no red/green on any money field (Discount
+  and Refund included). `$0.00` renders muted. NULL money renders a muted
+  em-dash, never `$0.00` — including rollups over all-NULL sets (a canceled
+  order's COGS Total is unknown, not zero). Amber is reserved for warnings.
+- Invoice file name renders in the Meta card with a copy icon.
+
+### Source-of-truth ownership (additions to §14)
+
+| Field | Owner |
+|---|---|
+| `purchase_orders` / `po_asins` / `po_line_items` (all fields) | PO module UI + importer — nothing else writes them |
+| `settings.po_*` lookup lists | Migrations (seed/append) + entry form (layer 1) |
+
+The PO module writes nothing outside its own tables. `asin_estimates`
+(`actual_cogs`, `prep_override`) remains owned by the sheet-based PO sync
+until cutover.
+
+### Deferred (agreed order)
+
+1. Entry form (create; managed dropdowns; ASIN search; bundle merge prompt)
+2. Edit + COGS formula engine (recompute snapshots; per-item discount math)
+3. Invoice file upload (indicator → stored file)
+4. POs-by-ASIN cross-PO view
+5. Cutover (repoint syncs/exports sheet → tables; retire mirror; POs sub-nav)
+6. Later: gift-card ledger, subscription alerts, Velocity bundles, %-type
+   product discounts, §15 FIFO/lots, pre-2026 import
+7. Velocity qty check-in pull — read-only sync of received/checked-in
+   quantities from Velocity into a Velocity-owned po_asins column, matched on
+   (order_number, asin); Velocity order quantity corresponds to the computed
+   Velocity quantity (units_per_pack × qty), so no backfill or conversion
+   layer is needed. Discovery probe first.
