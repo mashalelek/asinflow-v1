@@ -15,7 +15,7 @@ import pool, { query, isDbAvailable } from "./db";
 import { syncInventory } from "./inventory-sync";
 import { syncSalesData } from "./sales-sync";
 import { syncSuppressionData } from "./suppression-sync";
-import { fetchSheetData } from "./google-sheets";
+import { fetchSheetData, fetchSheetDataWithMeta } from "./google-sheets";
 import { buildVelocityRecords, serializeVelocityCsv, parseMDY, formatYMD, todayLocal } from "./velocity-export";
 import { fetchAllInboundOrders, submitBulkCsv, updateInboundOrder } from "./velocity-api";
 import { buildVelocityPlan, putBodyFromDiffs, type PlanUpdate } from "./velocity-reconcile";
@@ -763,11 +763,11 @@ function writeResult(
 
 async function runSheetsSync(
   asinFilter?: ReadonlySet<string>,
-): Promise<{ updated: number; skipped: number; errors: string[] }> {
+): Promise<{ updated: number; skipped: number; errors: string[]; cleared: number; clearedAsins: string[] }> {
   const sheetId = process.env.GOOGLE_SHEET_ID;
   if (!sheetId) throw new Error("GOOGLE_SHEET_ID not configured");
 
-  const sheetData = await fetchSheetData(sheetId);
+  const { data: sheetData, rawRowsRead } = await fetchSheetDataWithMeta(sheetId);
   let updated = 0;
   let skipped = 0;
   const errors: string[] = [];
@@ -842,7 +842,34 @@ async function runSheetsSync(
     }
   }
 
-  return { updated, skipped, errors };
+  // Clearing pass (SPEC §11, 2026-08-23): ordered_qty ONLY — the loop above
+  // never visits ASINs absent from the sheet, so a vanished ASIN (corrected
+  // in the sheet) kept its last-written qty forever. Cost snapshots are
+  // point-in-time by semantics and are never cleared here. Fail-closed on
+  // rawRowsRead: an empty read must not zero the catalog. Scoped runs clear
+  // only inside their filter — never an ASIN outside the sync's scope.
+  const clearedAsins: string[] = [];
+  if (rawRowsRead > 0) {
+    try {
+      const stale = await query(`SELECT asin FROM asin_estimates WHERE ordered_qty <> 0`);
+      for (const row of stale.rows) {
+        const staleAsin: string = row.asin;
+        if (sheetData.has(staleAsin)) continue;
+        if (asinFilter && asinFilter.size > 0 && !asinFilter.has(staleAsin)) continue;
+        await query(`UPDATE asin_estimates SET ordered_qty = 0 WHERE asin = $1`, [staleAsin]);
+        clearedAsins.push(staleAsin);
+      }
+      if (clearedAsins.length > 0) {
+        log(`PO sync clearing pass${asinFilter ? " (in-filter)" : ""}: ordered_qty -> 0 for ${clearedAsins.length} ASIN(s) with zero sheet rows: ${clearedAsins.join(", ")}`, "sheets");
+      }
+    } catch (err: any) {
+      errors.push(`clearing pass: ${err.message}`);
+    }
+  } else {
+    log(`PO sync clearing pass SKIPPED (fail-closed): rawRowsRead=0 — empty/failed sheet read, nothing cleared`, "sheets");
+  }
+
+  return { updated, skipped, errors, cleared: clearedAsins.length, clearedAsins };
 }
 
 // Getter so the Aura sync chain (a separate module) can invoke the exact same

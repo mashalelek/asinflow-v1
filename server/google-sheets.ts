@@ -49,7 +49,16 @@ async function getSheetValues(sheetId: string, range: string): Promise<any[][]> 
   return response.data.values || [];
 }
 
-export async function fetchSheetData(sheetId: string): Promise<Map<string, SheetAsinData>> {
+// Meta-returning variant of the COGS-sync read. rawRowsRead is the raw row
+// count the API returned for the range — the truncation tripwire the
+// ordered_qty clearing pass fails closed on (SPEC §11): rawRowsRead = 0 means
+// an empty/failed read, and clearing against it would zero the whole catalog.
+export interface SheetDataResult {
+  data: Map<string, SheetAsinData>;
+  rawRowsRead: number;
+}
+
+export async function fetchSheetDataWithMeta(sheetId: string): Promise<SheetDataResult> {
   const rows = await getSheetValues(sheetId, "Sheet1!A2:AZ");
   const result = new Map<string, SheetAsinData>();
 
@@ -106,7 +115,11 @@ export async function fetchSheetData(sheetId: string): Promise<Map<string, Sheet
   }
 
   log(`Sheet fetch: ${rows.length} rows, ${result.size} unique ASINs`, "sheets");
-  return result;
+  return { data: result, rawRowsRead: rows.length };
+}
+
+export async function fetchSheetData(sheetId: string): Promise<Map<string, SheetAsinData>> {
+  return (await fetchSheetDataWithMeta(sheetId)).data;
 }
 
 // Per-row view of the PO sheet — the existing COGS columns (parsed identically

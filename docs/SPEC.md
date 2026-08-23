@@ -621,6 +621,45 @@ Note: Col Y was historically prep-inclusive but has been cleaned up — prep is
 now in Col AS exclusively. Any `actual_cogs` values in the DB from older PO
 syncs are "dirty" until the next sync overwrites them with clean Col Y data.
 
+**Ordered-qty clearing pass (2026-08-23).** `runSheetsSync` is an UPSERT loop
+over ASINs present in the current read, so an ASIN whose sheet rows vanish
+(ASIN corrected in the sheet, rows deleted) would keep its last-written
+`ordered_qty` forever — real case: order 2461171104's correction
+B07GC57HR4 → B0HBGJW4JH left BOTH ASINs at qty 10 across multiple syncs, and
+the stale value propagated into every new `inventory_snapshots` row. After
+the per-ASIN write loop, a clearing pass sets `ordered_qty = 0` for every
+ASIN whose `asin_estimates.ordered_qty` is non-zero but which has zero rows
+in the current sheet read:
+
+- **Full-catalog runs** (post-analyze background sync, Aura chain, bare
+  `POST /api/sheets/sync` with no `asins` body): all such ASINs clear.
+- **Scoped runs** (the UI Sync PO path always sends `asins`): clearing is
+  restricted to ASINs INSIDE the filter — a scoped sync must never zero an
+  ASIN outside its scope. In-filter clearing is what fixes the UI path: the
+  stale ASIN sits in the user's selection but is absent from the sheet, so
+  the write loop alone can never reach it.
+- Every run reports the cleared count + ASIN list (`cleared`,
+  `clearedAsins` in the response; also logged), both modes.
+
+**Clears `ordered_qty` ONLY.** The cost snapshots this sync writes —
+`cogs`/`actual_cogs`, `estimated_cogs`, `prep_override`, `asins.supplier` —
+are point-in-time records ("last known PO cost") and are NEVER cleared when
+rows vanish. `ordered_qty` is a live open-quantity that must mirror the
+current sheet; the snapshots stay meaningful (and load-bearing — e.g.
+`actual_cogs` + `cogs_source = 'po_sheet'` gates the sourcing-cost export)
+after the rows are gone.
+
+**Fail-closed gate.** The clearing pass requires an end-to-end successful
+read: the sync reads through `fetchSheetDataWithMeta`, which returns
+`rawRowsRead` (raw row count the API returned for the range — the same
+truncation-tripwire idea as the SellerBoard export), and the pass runs only
+when `rawRowsRead > 0`. A thrown read aborts the whole sync; an empty read
+(`rawRowsRead = 0` — a creds/range/mirror failure would otherwise zero the
+entire catalog) skips the clearing pass entirely and logs the skip. A
+partial-but-nonempty read is not detectable at this layer (`values.get` is a
+single ranged read: it errors or it returns), so the tripwire's job is the
+catastrophic-empty case.
+
 ### Velocity upload export
 
 Exports prep-outsourced orders to the Velocity prep service — as a CSV
