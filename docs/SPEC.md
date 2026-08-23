@@ -2482,9 +2482,10 @@ tables until the cutover layer, and each repoint gets its own dry-run.
   qty, `cost_per_unit` (adjusted-COGS snapshot), prep, sold_as /
   units_per_pack, unreimbursed loss, Amazon SKU, notes.
 - `po_line_items` — one row per supplier product. FK to its `po_asins` row
-  (`ON DELETE SET NULL`). Carries price, per-item discount, qtys,
-  `asin_qty_per_product` (yield), `adjusted_product_cost` snapshot, Supplier
-  SKU / UPC, notes.
+  (`ON DELETE SET NULL`). Carries price, per-item discount, qtys
+  (`qty_ordered`, `qty_received`, `qty_canceled`, `qty_returned`,
+  generated `final_qty` — migration 030, below), `asin_qty_per_product`
+  (yield), `adjusted_product_cost` snapshot, Supplier SKU / UPC, notes.
 
 Migration 021 dropped an older same-named scaffold; 028 is fresh, not a
 revival.
@@ -2507,6 +2508,32 @@ unique-products-per-ASIN (count of line items sharing a `po_asin_id`),
 Velocity quantity (`units_per_pack × qty`), invoice file name
 (`YYYY-MM-DD_supplier_orderID`, built from local date components — pg returns
 DATE as a JS Date; never string-slice it), bundle set-count check.
+
+### Canceled / returned / final quantities (migration 030)
+
+Decisions resolved 2026-08-22:
+
+- `qty_refunded` was RENAMED `qty_returned` (data preserved — the import
+  wrote blank Col R as 0, which stands: a blank refund cell means none
+  occurred).
+- `qty_canceled` is NULLable with NO default. **NULL = not tracked**: all
+  sheet-imported rows stay NULL — **no backfill**, and no status-derived
+  writes; the sheet recorded only status tokens + ordered qty. The entry
+  form writes explicit values (its 0 default lives in the form, not the
+  column).
+- `final_qty` is GENERATED ALWAYS STORED:
+  `qty_ordered − qty_canceled − qty_returned` — plain arithmetic, **no
+  COALESCE**. NULL propagates by design: historical rows render Final as a
+  muted em-dash ("not tracked"); app-entered rows compute real values.
+  Explicit 0 renders muted, never as an em-dash.
+
+**Cutover exclusion rule** (recorded now, applied at the cutover layer): a
+PO is excluded from profit calculations when `final_qty = 0`, OR when
+`final_qty IS NULL` (not tracked — all sheet-imported rows) AND status
+contains `canceled` (case-insensitive containment, the standard
+convention). `final_qty` is authoritative when tracked; status is only the
+fallback for untracked rows. A partially-canceled PO with `final_qty > 0`
+is INCLUDED regardless of status tokens.
 
 ### Multi-row same-ASIN semantics
 

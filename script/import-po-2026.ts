@@ -38,7 +38,7 @@ const COL = {
   rcpt: 0, orderId: 1, orderDate: 2, status: 3, supplier: 4,
   skuUpc: 5, productName: 6, asin: 7, asinName: 8,
   price: 10, qtyOrdered: 11, qtyReceived: 12, asinQtyTotal: 13,
-  qtyRefunded: 17, uniqueProductsPerAsin: 18, asinQtyPerProduct: 19,
+  qtyReturned: 17, uniqueProductsPerAsin: 18, asinQtyPerProduct: 19, // Col R (renamed qty_returned, migration 030)
   lossQty: 21, lossAmount: 22, adjProductCost: 23, adjCogs: 24,
   subtotal: 27, tax: 28, shDonations: 29, discount: 30, refundAmount: 31, orderTotal: 32,
   paymentMethod: 34, weightedGcPct: 35, promo: 36, cashbackSite: 37, cashbackPct: 38,
@@ -324,7 +324,7 @@ const SEEDED_PAYMENT_BY_LC = new Map([...SEEDED_PAYMENT].map((v) => [v.toLowerCa
           price: money(g, r, COL.price),
           qtyOrdered: intOrNull(r.cells[COL.qtyOrdered]),
           qtyReceived: intOrNull(r.cells[COL.qtyReceived]), // blank → NULL, never 0
-          qtyRefunded: intOrNull(r.cells[COL.qtyRefunded]) ?? 0,
+          qtyReturned: intOrNull(r.cells[COL.qtyReturned]) ?? 0, // blank = none occurred (stands, 2026-08-22)
           asinQtyPerProduct: t(r.cells[COL.asinQtyPerProduct]) === "" ? "1" : t(r.cells[COL.asinQtyPerProduct]),
           adjustedProductCost: money(g, r, COL.adjProductCost),
         })),
@@ -437,9 +437,12 @@ const SEEDED_PAYMENT_BY_LC = new Map([...SEEDED_PAYMENT].map((v) => [v.toLowerCa
           const paId = pa.rows[0].id;
           for (const l of a.lines) {
             await client.query(
-              `INSERT INTO po_line_items (po_id, po_asin_id, position, product_name, supplier_sku, price, item_discount, qty_ordered, qty_received, qty_refunded, asin_qty_per_product, adjusted_product_cost)
+              // qty_canceled deliberately absent → stays NULL (= not tracked;
+              // the sheet never recorded it — NO status-derived writes).
+              // final_qty is GENERATED — never inserted.
+              `INSERT INTO po_line_items (po_id, po_asin_id, position, product_name, supplier_sku, price, item_discount, qty_ordered, qty_received, qty_returned, asin_qty_per_product, adjusted_product_cost)
                VALUES ($1,$2,$3,$4,$5,$6,0,$7,$8,$9,$10,$11)`,
-              [poId, paId, l.position, l.productName, l.supplierSku, l.price, l.qtyOrdered, l.qtyReceived, l.qtyRefunded, l.asinQtyPerProduct, l.adjustedProductCost],
+              [poId, paId, l.position, l.productName, l.supplierSku, l.price, l.qtyOrdered, l.qtyReceived, l.qtyReturned, l.asinQtyPerProduct, l.adjustedProductCost],
             );
           }
         }

@@ -313,7 +313,9 @@ interface PoLine {
   item_discount: string | null;
   qty_ordered: number | null;
   qty_received: number | null;
-  qty_refunded: number | null;
+  qty_canceled: number | null; // NULL = not tracked (all sheet-imported rows)
+  qty_returned: number | null;
+  final_qty: number | null;    // generated; NULL propagates from qty_canceled
   asin_qty_per_product: string | null;
   adjusted_product_cost: string | null;
   notes: string | null;
@@ -332,6 +334,11 @@ function Money({ v }: { v: string | null | undefined }) {
 }
 function Dash({ v }: { v: number | string | null | undefined }) {
   return v == null ? <span className="text-muted-foreground/50">—</span> : <>{v}</>;
+}
+// Qty rendering (§22): NULL = not tracked → muted em-dash; explicit 0 muted.
+function Qty({ v }: { v: number | null | undefined }) {
+  if (v == null) return <span className="text-muted-foreground/50">—</span>;
+  return <span className={v === 0 ? "text-muted-foreground/50" : ""}>{v}</span>;
 }
 
 function DetailCard({ title, rows }: { title: string; rows: Array<[string, React.ReactNode]> }) {
@@ -571,7 +578,9 @@ export function PurchaseOrderDetailPlaceholder() {
                 <th className={thNum}>Item Discount</th>
                 <th className={thNum}>Ordered</th>
                 <th className={thNum}>Received</th>
-                <th className={thNum}>Refunded</th>
+                <th className={thNum}>Canceled</th>
+                <th className={thNum}>Returned</th>
+                <th className={thNum}>Final</th>
                 <th className={thTxt}>ASIN</th>
                 <th className={thTxt}></th>
               </tr>
@@ -583,9 +592,11 @@ export function PurchaseOrderDetailPlaceholder() {
                   <td className="px-3 py-1.5 font-mono text-xs"><Dash v={l.supplier_sku} /></td>
                   <td className="px-3 py-1.5 text-right"><Money v={l.price} /></td>
                   <td className="px-3 py-1.5 text-right"><Money v={l.item_discount} /></td>
-                  <td className="px-3 py-1.5 text-right"><Dash v={l.qty_ordered} /></td>
-                  <td className="px-3 py-1.5 text-right"><Dash v={l.qty_received} /></td>
-                  <td className="px-3 py-1.5 text-right"><Dash v={l.qty_refunded} /></td>
+                  <td className="px-3 py-1.5 text-right"><Qty v={l.qty_ordered} /></td>
+                  <td className="px-3 py-1.5 text-right"><Qty v={l.qty_received} /></td>
+                  <td className="px-3 py-1.5 text-right"><Qty v={l.qty_canceled} /></td>
+                  <td className="px-3 py-1.5 text-right"><Qty v={l.qty_returned} /></td>
+                  <td className="px-3 py-1.5 text-right"><Qty v={l.final_qty} /></td>
                   <td className="px-3 py-1.5">
                     <span className="inline-block rounded-sm bg-muted px-1.5 py-0.5 font-mono text-[11px] text-muted-foreground">→ {l.parentAsin}</span>
                   </td>
