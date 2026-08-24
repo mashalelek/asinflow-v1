@@ -129,6 +129,46 @@ function hit(rule: string, row: number, order: string, from: string, to: string)
   cleanupHits.push({ rule, row, order, from, to });
 }
 
+// ── row classification (identity buckets) ────────────────────────────────────
+// Pure + exported so the blank_order_id guard is unit-testable without
+// running the importer. Buckets are mutually exclusive and, with importedRows,
+// must sum back to rawRowsRead (the printed identity).
+export interface ClassifyResult {
+  totalsRow: number;
+  blankRows: number;
+  nonYear2026: number;
+  blankOrderId: number;
+  noAsin: number;
+  rows: Array<{ cells: string[]; srcRow: number; dateIso: string }>;
+  notes: string[];
+}
+
+export function classifyRows(dataRows: Array<{ cells: string[]; srcRow: number }>): ClassifyResult {
+  let totalsRow = 0, blankRows = 0, nonYear2026 = 0, blankOrderId = 0, noAsin = 0;
+  const rows: ClassifyResult["rows"] = [];
+  const notes: string[] = [];
+  for (const r of dataRows) {
+    const c = r.cells;
+    const allBlank = c.every((x) => t(x) === "");
+    if (allBlank) { blankRows++; continue; }
+    const orderId = t(c[COL.orderId]);
+    const date = parseDateMDY(c[COL.orderDate]);
+    if (orderId === "" && date === null) { totalsRow++; continue; }
+    if (date === null || date.year !== 2026) { nonYear2026++; continue; }
+    // Blank-Order-ID guard (2026-08-24): a parseable date with no Order ID is
+    // an in-progress sheet row — it must never group as (supplier, "") and
+    // import. Own bucket, row-identified.
+    if (orderId === "") {
+      blankOrderId++;
+      notes.push(`row ${r.srcRow}: parseable date ${date.iso} but BLANK Order ID (supplier ${JSON.stringify(t(c[COL.supplier]))}) — row skipped to blank_order_id`);
+      continue;
+    }
+    if (t(c[COL.asin]) === "") { noAsin++; notes.push(`row ${r.srcRow}: order ${orderId} has no ASIN — row skipped`); continue; }
+    rows.push({ cells: c, srcRow: r.srcRow, dateIso: date.iso });
+  }
+  return { totalsRow, blankRows, nonYear2026, blankOrderId, noAsin, rows, notes };
+}
+
 async function main() {
   // Both modes yield the same shape: a header row (CSV line 1 / sheet A1:AZ1)
   // for the sanity check, and data rows whose srcRow numbering starts at 2
@@ -159,20 +199,9 @@ async function main() {
   }
   const dataRows = dataCells.map((cells, i) => ({ cells, srcRow: i + 2 })); // 1-based incl. header
 
-  // ── row classification (identity buckets; pre-filtered file → all 0 but counted) ──
-  let totalsRow = 0, blankRows = 0, nonYear2026 = 0, noAsin = 0;
-  const rows: Array<{ cells: string[]; srcRow: number; dateIso: string }> = [];
-  for (const r of dataRows) {
-    const c = r.cells;
-    const allBlank = c.every((x) => t(x) === "");
-    if (allBlank) { blankRows++; continue; }
-    const orderId = t(c[COL.orderId]);
-    const date = parseDateMDY(c[COL.orderDate]);
-    if (orderId === "" && date === null) { totalsRow++; continue; }
-    if (date === null || date.year !== 2026) { nonYear2026++; continue; }
-    if (t(c[COL.asin]) === "") { noAsin++; observations.push(`row ${r.srcRow}: order ${orderId} has no ASIN — row skipped`); continue; }
-    rows.push({ cells: c, srcRow: r.srcRow, dateIso: date.iso });
-  }
+  const cls = classifyRows(dataRows);
+  const { totalsRow, blankRows, nonYear2026, blankOrderId, noAsin, rows } = cls;
+  observations.push(...cls.notes);
 
   // ── group by (Order ID, Supplier) ────────────────────────────────────────────
   interface PoGroup { orderId: string; supplier: string; rows: typeof rows }
@@ -406,11 +435,11 @@ const SEEDED_PAYMENT_BY_LC = new Map([...SEEDED_PAYMENT].map((v) => [v.toLowerCa
   // ── report ──────────────────────────────────────────────────────────────────
   const importedRows = rows.length - 0; // every classified row belongs to a group
   const rawRowsRead = dataRows.length;
-  const remainder = rawRowsRead - (totalsRow + blankRows + nonYear2026 + noAsin + importedRows);
+  const remainder = rawRowsRead - (totalsRow + blankRows + nonYear2026 + blankOrderId + noAsin + importedRows);
 
   console.log(`\n=== PO IMPORT ${LIVE ? "LIVE RUN" : "DRY RUN (no writes)"} — ${csvPath ?? `sheet ${process.env.GOOGLE_SHEET_ID} (mirror, Sheet1!A2:AZ)`} ===\n`);
   console.log(`ROW ACCOUNTING IDENTITY`);
-  console.log(`  rawRowsRead(${rawRowsRead}) = totalsRow(${totalsRow}) + blankRows(${blankRows}) + nonYear2026(${nonYear2026}) + noAsin(${noAsin}) + importedRows(${importedRows})`);
+  console.log(`  rawRowsRead(${rawRowsRead}) = totalsRow(${totalsRow}) + blankRows(${blankRows}) + nonYear2026(${nonYear2026}) + blankOrderId(${blankOrderId}) + noAsin(${noAsin}) + importedRows(${importedRows})`);
   console.log(`  remainder: ${remainder} ${remainder === 0 ? "✓" : "✗✗✗ MUST BE 0"}`);
   console.log(`\nWOULD ${LIVE ? "INSERT" : "INSERT (dry)"}:`);
   console.log(`  purchase_orders: ${toImport.length}  (skipped existing: ${skippedExisting})`);
@@ -488,4 +517,9 @@ const SEEDED_PAYMENT_BY_LC = new Map([...SEEDED_PAYMENT].map((v) => [v.toLowerCa
   await pool.end();
 }
 
-main().then(() => process.exit(0)).catch((e) => { console.error(e); process.exit(1); });
+// Run only when executed directly (tsx script/import-po-2026.ts ...) — the
+// classifier above is imported by tests, and importing must never start a run.
+import { pathToFileURL } from "url";
+if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
+  main().then(() => process.exit(0)).catch((e) => { console.error(e); process.exit(1); });
+}

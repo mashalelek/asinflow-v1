@@ -2618,6 +2618,10 @@ normalization is case-insensitive against the seeded spellings;
 split-payment free-text strings import verbatim and are never substring-
 edited. `qty_received` blank → NULL (never 0); prep blank on a real row → 0
 (§3). Amazon SKU joins `asins.primary_sku` at import time; no match → NULL.
+A row with a parseable date but a blank/whitespace Order ID lands in its own
+`blank_order_id` skip bucket (row-identified, part of the identity), never
+grouped or imported — guard added 2026-08-24 after a live dry run showed an
+in-progress sheet row would otherwise import as `(supplier, "")`.
 
 ### UI rules
 
