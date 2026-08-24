@@ -1,6 +1,6 @@
-import { google } from "googleapis";
 import { log } from "./index";
 import { parseMoney } from "@shared/parse-money";
+import { getSheetValues } from "./sheet-read";
 
 // Column indices (0-based from col A)
 const COL_STATUS = 3;   // D
@@ -26,27 +26,6 @@ export interface SheetAsinData {
   prepCost: number | null;
   orderedQty: number;
   supplier: string | null;
-}
-
-// Shared read: auth + values.get. Extracted so fetchSheetData and fetchSheetRows
-// use one range. Widened to A2:AZ for the Velocity fields — existing COGS-sync
-// columns (all <= AS) read the same indices, and Google trims trailing empties,
-// so the widened range is byte-identical for the COGS parsing below.
-async function getSheetValues(sheetId: string, range: string): Promise<any[][]> {
-  const credPath = process.env.GOOGLE_CREDENTIALS_PATH;
-  if (!credPath) throw new Error("GOOGLE_CREDENTIALS_PATH not configured");
-
-  const auth = new google.auth.GoogleAuth({
-    keyFile: credPath,
-    scopes: ["https://www.googleapis.com/auth/spreadsheets.readonly"],
-  });
-
-  const sheets = google.sheets({ version: "v4", auth });
-  const response = await sheets.spreadsheets.values.get({
-    spreadsheetId: sheetId,
-    range,
-  });
-  return response.data.values || [];
 }
 
 // Meta-returning variant of the COGS-sync read. rawRowsRead is the raw row

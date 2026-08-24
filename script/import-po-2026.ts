@@ -23,15 +23,27 @@
 // (some rows S=1, some S≥2) are a data error: the whole PO is skipped and
 // reported, never guessed.
 //
-// Usage: npx tsx script/import-po-2026.ts data/orders-2026.csv [--live]
+// Usage (sheet mode, default): npx tsx script/import-po-2026.ts [--live]
+//   Reads the mirror sheet directly — GOOGLE_SHEET_ID, Sheet1, A2:AZ — through
+//   the same shared raw read as the PO sync (server/sheet-read.ts). Header
+//   sanity reads A1:AZ1. SPEC §11 mirror caveats apply (IMPORTRANGE coverage,
+//   mirror refresh lag).
+// Usage (CSV fallback): npx tsx script/import-po-2026.ts --csv <orders.csv> [--live]
+//   Identical parsing/gates/identity; the CSV's line 1 is the header row, so
+//   data rows start at source row 2 in both modes and row numbering matches.
 import "dotenv/config";
 import fs from "fs";
 import Papa from "papaparse";
 import pg from "pg";
+import { getSheetValues } from "../server/sheet-read";
 
 const LIVE = process.argv.includes("--live");
-const csvPath = process.argv.filter((a) => !a.startsWith("--"))[2];
-if (!csvPath) { console.error("usage: npx tsx script/import-po-2026.ts <orders.csv> [--live]"); process.exit(1); }
+const CSV_FLAG = process.argv.indexOf("--csv");
+const csvPath = CSV_FLAG >= 0 ? process.argv[CSV_FLAG + 1] : null;
+if (CSV_FLAG >= 0 && (!csvPath || csvPath.startsWith("--"))) {
+  console.error("usage: npx tsx script/import-po-2026.ts [--csv <orders.csv>] [--live]");
+  process.exit(1);
+}
 
 // ── column letters → indices (0-based) ───────────────────────────────────────
 const COL = {
@@ -118,17 +130,34 @@ function hit(rule: string, row: number, order: string, from: string, to: string)
 }
 
 async function main() {
-  const raw = fs.readFileSync(csvPath, "utf-8");
-  const parsed = Papa.parse<string[]>(raw.replace(/^﻿/, ""), { skipEmptyLines: false });
-  if (parsed.errors.length > 0) throw new Error(`CSV parse errors: ${JSON.stringify(parsed.errors.slice(0, 3))}`);
-  const all = parsed.data as string[][];
-  const header = all[0];
+  // Both modes yield the same shape: a header row (CSV line 1 / sheet A1:AZ1)
+  // for the sanity check, and data rows whose srcRow numbering starts at 2
+  // (CSV line 2 / sheet row 2 — the A2:AZ range).
+  let header: string[];
+  let dataCells: string[][];
+  if (csvPath) {
+    const raw = fs.readFileSync(csvPath, "utf-8");
+    const parsed = Papa.parse<string[]>(raw.replace(/^﻿/, ""), { skipEmptyLines: false });
+    if (parsed.errors.length > 0) throw new Error(`CSV parse errors: ${JSON.stringify(parsed.errors.slice(0, 3))}`);
+    const all = parsed.data as string[][];
+    header = all[0];
+    dataCells = all.slice(1);
+  } else {
+    const sheetId = process.env.GOOGLE_SHEET_ID;
+    if (!sheetId) throw new Error("GOOGLE_SHEET_ID not configured (sheet mode is the default; use --csv <path> for a file)");
+    const headerRows = await getSheetValues(sheetId, "Sheet1!A1:AZ1");
+    if (headerRows.length !== 1) throw new Error(`sheet header read: expected 1 row from A1:AZ1, got ${headerRows.length}`);
+    header = headerRows[0].map((c: any) => String(c ?? ""));
+    dataCells = (await getSheetValues(sheetId, "Sheet1!A2:AZ")).map(
+      (row: any[]) => row.map((c: any) => String(c ?? "")),
+    );
+  }
   for (const [idx, expect] of HEADER_EXPECT) {
     if (!String(header[idx] ?? "").includes(expect)) {
       throw new Error(`header mismatch at col ${idx}: expected to contain ${JSON.stringify(expect)}, got ${JSON.stringify(header[idx])}`);
     }
   }
-  const dataRows = all.slice(1).map((cells, i) => ({ cells, srcRow: i + 2 })); // 1-based incl. header
+  const dataRows = dataCells.map((cells, i) => ({ cells, srcRow: i + 2 })); // 1-based incl. header
 
   // ── row classification (identity buckets; pre-filtered file → all 0 but counted) ──
   let totalsRow = 0, blankRows = 0, nonYear2026 = 0, noAsin = 0;
@@ -379,7 +408,7 @@ const SEEDED_PAYMENT_BY_LC = new Map([...SEEDED_PAYMENT].map((v) => [v.toLowerCa
   const rawRowsRead = dataRows.length;
   const remainder = rawRowsRead - (totalsRow + blankRows + nonYear2026 + noAsin + importedRows);
 
-  console.log(`\n=== PO IMPORT ${LIVE ? "LIVE RUN" : "DRY RUN (no writes)"} — ${csvPath} ===\n`);
+  console.log(`\n=== PO IMPORT ${LIVE ? "LIVE RUN" : "DRY RUN (no writes)"} — ${csvPath ?? `sheet ${process.env.GOOGLE_SHEET_ID} (mirror, Sheet1!A2:AZ)`} ===\n`);
   console.log(`ROW ACCOUNTING IDENTITY`);
   console.log(`  rawRowsRead(${rawRowsRead}) = totalsRow(${totalsRow}) + blankRows(${blankRows}) + nonYear2026(${nonYear2026}) + noAsin(${noAsin}) + importedRows(${importedRows})`);
   console.log(`  remainder: ${remainder} ${remainder === 0 ? "✓" : "✗✗✗ MUST BE 0"}`);

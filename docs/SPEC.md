@@ -2598,8 +2598,19 @@ revealing component line items.
 ### Importer (`script/import-po-2026.ts`)
 
 2026 data only (prior years deferred — a future import extends the cleanup
-map after its own profiling pass). CSV input (path argument), **dry-run by
-default**, `--live` explicit. Idempotent on `(supplier, order_id)`: existing
+map after its own profiling pass). **Input source: the mirror sheet, read
+directly (2026-08-24)** — the default mode fetches `Sheet1!A2:AZ` from
+`GOOGLE_SHEET_ID` through the same shared raw read as the PO sync
+(`server/sheet-read.ts`), with the header sanity check reading `A1:AZ1`.
+`--csv <path>` remains an explicit fallback for file-based runs. Parsing,
+the cleanup map, all gates, and the row-accounting identity are IDENTICAL
+in both modes; `rawRowsRead` comes from the ranged read's row count either
+way, and source-row numbering matches (CSV data starts at line 2 after the
+header; the sheet range starts at A2). The §11 mirror caveats apply: the
+`IMPORTRANGE` must cover A:AZ, and a sheet correction reaches the importer
+only after the mirror refreshes — freshness-gate any correction-driven
+re-import by reading the changed row back first. **Dry-run by default**,
+`--live` explicit. Idempotent on `(supplier, order_id)`: existing
 POs skip and report — re-runs and resumes are safe. Row-accounting identity
 printed every run; remainder must be 0. Every cleanup-map hit is reported and
 row-identified; nothing normalizes silently. Single-token payment/cashback
