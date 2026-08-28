@@ -20,6 +20,7 @@
 // NEVER touches listing_submissions.
 import { query as defaultQuery } from "./db";
 import { checkSkuListingStatus, type ListingIssueLite } from "./sku-listing-fetch";
+import { discoverAsinListings, recordDiscoveredSkus, pick8cPrimary } from "./live-offer-check";
 import { spApiGet as realSpApiGet } from "./spapi-auth";
 import type { HttpGetFn } from "./sku-catalog-fetch";
 import { log } from "./index";
@@ -38,6 +39,9 @@ export interface FullScopeReport {
   phaseA: {
     asins: number; skusProbed: number; live: number; noOffer: number;
     transientSkipped: number; flips: FlipEntry[]; repoints: RepointEntry[];
+    // §18 all-404 → discovery (2026-08-28): ASINs whose known SKUs all 404'd
+    // but searchListingsItems found SC-created listing(s).
+    discoveries: DiscoveredEntry[];
     durationMs: number;
   };
   phaseB: {
@@ -91,7 +95,7 @@ export async function runFullScopePass(opts: {
 
   const phaseA: FullScopeReport["phaseA"] = {
     asins: aRows.length, skusProbed: 0, live: 0, noOffer: 0,
-    transientSkipped: 0, flips: [], repoints: [], durationMs: 0,
+    transientSkipped: 0, flips: [], repoints: [], discoveries: [], durationMs: 0,
   };
   emit({ type: "phase", phase: "a", asins: aRows.length, dryRun });
 
@@ -112,6 +116,47 @@ export async function runFullScopePass(opts: {
       phaseA.transientSkipped++;
       emit({ type: "progress", phase: "a", done: i + 1, total: aRows.length, asin: row.asin, skipped: "transient" });
       continue;
+    }
+
+    // §18 all-known-SKUs-404 → discovery before FALSE (2026-08-28): every
+    // known SKU just definitively 404'd, which proves nothing about SC-created
+    // SKUs AF doesn't know. Probe by ASIN before writing FALSE; fail-closed on
+    // a transient discovery. (Phase b can't cover this ASIN — it HAS rows.)
+    if (liveByCreated.length === 0) {
+      const disc = await discoverAsinListings(row.asin, sellerId, httpGet);
+      if (!disc.ok) {
+        phaseA.transientSkipped++;
+        emit({ type: "progress", phase: "a", done: i + 1, total: aRows.length, asin: row.asin, skipped: "transient" });
+        await sleep(pacingMs);
+        continue;
+      }
+      if (disc.found.length > 0) {
+        phaseA.discoveries.push({ asin: row.asin, skus: disc.found.map((f) => f.sku), live: true });
+        phaseA.live++;
+        const prevFlag: boolean | null = row.has_live_offer;
+        if (prevFlag !== true) phaseA.flips.push({ asin: row.asin, from: prevFlag, to: true });
+        const newPrimary = pick8cPrimary(disc.found);
+        if (newPrimary != null && newPrimary !== row.primary_sku) {
+          phaseA.repoints.push({ asin: row.asin, from: row.primary_sku ?? null, to: newPrimary });
+        }
+        const lead = disc.found.find((f) => f.sku === newPrimary) ?? disc.found[0];
+        if (!dryRun) {
+          await recordDiscoveredSkus(row.asin, disc.found, query);
+          await query(
+            `UPDATE asins SET has_live_offer = TRUE, offer_checked_at = now(),
+                    current_issues = $2::jsonb, issues_checked_at = now()
+              WHERE asin = $1`,
+            [row.asin, JSON.stringify(lead.issues)],
+          );
+          log(`Full-scope phase a discovery: ${row.asin} — known SKUs all 404, found ${disc.found.map((f) => f.sku).join(", ")}${newPrimary ? `; primary → newest live: ${row.primary_sku ?? "∅"} → ${newPrimary}` : ""}`, "full-scope");
+        }
+        if ((i + 1) % 25 === 0 || i === aRows.length - 1) {
+          emit({ type: "progress", phase: "a", done: i + 1, total: aRows.length });
+        }
+        await sleep(pacingMs);
+        continue;
+      }
+      // discovery empty (200, zero items) → the FALSE verdict below stands.
     }
 
     const anyLive = liveByCreated.length > 0;
@@ -249,7 +294,7 @@ export async function runFullScopePass(opts: {
   log(
     `Full-scope pass ${opts.dryRun ? "DRY-RUN " : ""}complete: phase a ${phaseA.asins} ASINs/${phaseA.skusProbed} SKUs ` +
     `(${phaseA.live} live, ${phaseA.noOffer} no_offer, ${phaseA.transientSkipped} transient, ${phaseA.flips.length} flips, ` +
-    `${phaseA.repoints.length} re-points, ${Math.round(phaseA.durationMs / 1000)}s); ` +
+    `${phaseA.repoints.length} re-points, ${phaseA.discoveries.length} discoveries, ${Math.round(phaseA.durationMs / 1000)}s); ` +
     `phase b ${phaseB.asins} ASINs (${phaseB.discovered.length} discovered, ${phaseB.noListing} no-listing, ` +
     `${phaseB.transientSkipped} transient, ${Math.round(phaseB.durationMs / 1000)}s)`,
     "full-scope",
@@ -261,6 +306,6 @@ function summarizeA(a: FullScopeReport["phaseA"]) {
   return {
     asins: a.asins, skusProbed: a.skusProbed, live: a.live, noOffer: a.noOffer,
     transient: a.transientSkipped, flips: a.flips.length, repoints: a.repoints.length,
-    durationMs: a.durationMs,
+    discoveries: a.discoveries.length, durationMs: a.durationMs,
   };
 }

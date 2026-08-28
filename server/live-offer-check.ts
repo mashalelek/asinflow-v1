@@ -9,9 +9,12 @@
 // Fail-closed: only a definitive 200 yields "live"; "no_offer" requires EVERY
 // SKU to definitively 404. Any non-definitive response (429 / 5xx / timeout) or
 // an ASIN with no SKUs yields "skip" — the caller writes nothing.
-import { checkSkuListingStatus } from "./sku-listing-fetch";
+import { checkSkuListingStatus, type ListingIssueLite } from "./sku-listing-fetch";
+import { spApiGet as realSpApiGet } from "./spapi-auth";
 import { query as defaultQuery } from "./db";
 import type { HttpGetFn } from "./sku-catalog-fetch";
+
+const MARKETPLACE = "ATVPDKIKX0DER";
 
 type QueryLike = (sql: string, params?: any[]) => Promise<{ rows: any[]; rowCount: number | null }>;
 
@@ -35,6 +38,10 @@ export interface LiveOfferResult {
   issues?: { code: string; severity: string; message: string }[];
   skusChecked: number;
   sawTransient: boolean;  // true if any SKU returned a non-definitive response
+  // §18 all-404 → discovery (2026-08-28): set when the discovery step ran.
+  // "live" with discovered = the offer exists only under SC-created SKU(s) AF
+  // didn't know; "no_offer" with discovered = [] = discovery came back empty.
+  discovered?: string[];
 }
 
 // Checks the ASIN's primary SKU first, then its other asin_skus rows, short-
@@ -42,7 +49,7 @@ export interface LiveOfferResult {
 export async function checkAsinLiveOffer(
   asin: string,
   sellerId: string,
-  deps: { query?: QueryLike; httpGet?: HttpGetFn } = {},
+  deps: { query?: QueryLike; httpGet?: HttpGetFn; applyDiscoveries?: boolean } = {},
 ): Promise<LiveOfferResult> {
   const q = deps.query ?? (defaultQuery as any as QueryLike);
 
@@ -76,7 +83,116 @@ export async function checkAsinLiveOffer(
   }
 
   // No live SKU found. If any check was indeterminate we cannot assert no_offer.
-  return sawTransient
-    ? { verdict: "skip", skipReason: "transient", skusChecked: checked, sawTransient }
-    : { verdict: "no_offer", issues: [], skusChecked: checked, sawTransient };
+  if (sawTransient) {
+    return { verdict: "skip", skipReason: "transient", skusChecked: checked, sawTransient };
+  }
+
+  // §18 all-known-SKUs-404 → ASIN discovery before FALSE (2026-08-28): every
+  // known SKU definitively 404ing proves only "no offer on the SKUs AF knows".
+  // An SC-created listing under a new SKU (B0CT61H23P / CQ-OMI0-SSZ7) is
+  // invisible behind dead asin_skus rows, and phase b never fires for an ASIN
+  // that HAS rows. Probe by ASIN before asserting no_offer.
+  const disc = await discoverAsinListings(asin, sellerId, deps.httpGet);
+  if (!disc.ok) {
+    // Discovery transient — cannot assert no_offer; write nothing, retry later.
+    return { verdict: "skip", skipReason: "transient", skusChecked: checked, sawTransient: true };
+  }
+  if (disc.found.length === 0) {
+    return { verdict: "no_offer", issues: [], skusChecked: checked, sawTransient, discovered: [] };
+  }
+  // Discovery hit. Record + 8c re-point unless the caller is in a dry-run
+  // (applyDiscoveries false) — the verdict is still "live" either way.
+  let newPrimary: string | null = null;
+  if (deps.applyDiscoveries !== false) {
+    newPrimary = (await recordDiscoveredSkus(asin, disc.found, q)).newPrimary;
+  } else {
+    newPrimary = pick8cPrimary(disc.found);
+  }
+  const lead = disc.found.find((f) => f.sku === newPrimary) ?? newestFirst(disc.found)[0];
+  return {
+    verdict: "live", liveSku: lead.sku, statuses: lead.statuses, issues: lead.issues,
+    skusChecked: checked, sawTransient, discovered: disc.found.map((f) => f.sku),
+  };
+}
+
+// ── §18 all-404 discovery primitives (2026-08-28) ───────────────────────────
+export interface DiscoveredListing {
+  sku: string;
+  statuses: string[];
+  createdDate: string; // summaries[].createdDate — drives the 8c newest-live pick
+  issues: ListingIssueLite[];
+}
+export type DiscoveryOutcome = { ok: true; found: DiscoveredListing[] } | { ok: false };
+
+// searchListingsItems by ASIN — the same fallback endpoint as full-scope
+// phase b. Fail-closed: any error is transient (ok: false), the caller writes
+// nothing. A no-listing ASIN is a 200 with zero items, not an error.
+export async function discoverAsinListings(
+  asin: string,
+  sellerId: string,
+  httpGet: HttpGetFn = realSpApiGet,
+): Promise<DiscoveryOutcome> {
+  let data: any;
+  try {
+    data = await httpGet(`/listings/2021-08-01/items/${sellerId}`, {
+      marketplaceIds: MARKETPLACE,
+      identifiers: asin,
+      identifiersType: "ASIN",
+      includedData: "summaries,issues",
+    });
+  } catch {
+    return { ok: false };
+  }
+  const items: any[] = data?.items ?? [];
+  const found: DiscoveredListing[] = items
+    .map((it) => ({
+      sku: String(it?.sku ?? ""),
+      statuses: it?.summaries?.[0]?.status ?? [],
+      createdDate: String(it?.summaries?.[0]?.createdDate ?? ""),
+      issues: (it?.issues ?? []).map((x: any) => ({
+        code: String(x?.code ?? ""), severity: String(x?.severity ?? ""), message: String(x?.message ?? ""),
+      })),
+    }))
+    .filter((f) => f.sku);
+  return { ok: true, found };
+}
+
+const isAmznGr = (sku: string) => sku.toLowerCase().startsWith("amzn.gr.");
+const newestFirst = (arr: DiscoveredListing[]) =>
+  [...arr].sort((a, b) => (a.createdDate < b.createdDate ? 1 : -1));
+
+// 8c latest-live-wins among the discovered listings, amzn.gr.* never primary.
+// Null when every discovered SKU is amzn.gr.* (primary stays unchanged).
+export function pick8cPrimary(found: DiscoveredListing[]): string | null {
+  const real = newestFirst(found.filter((f) => !isAmznGr(f.sku)));
+  return real.length > 0 ? real[0].sku : null;
+}
+
+// Insert discovered SKUs into asin_skus and apply the 8c primary re-point.
+// The re-point is safe by construction: this runs ONLY on the all-known-404
+// path, so every previously-known SKU — including the current primary — has
+// just definitively died; the newest discovered live SKU is 8c's pick.
+export async function recordDiscoveredSkus(
+  asin: string,
+  found: DiscoveredListing[],
+  query: QueryLike = defaultQuery as any,
+): Promise<{ inserted: string[]; newPrimary: string | null }> {
+  const newPrimary = pick8cPrimary(found);
+  for (const f of found) {
+    await query(
+      `INSERT INTO asin_skus (asin_id, sku, is_primary)
+       SELECT a.id, $2, FALSE FROM asins a WHERE a.asin = $1
+       ON CONFLICT (asin_id, sku) DO NOTHING`,
+      [asin, f.sku],
+    );
+  }
+  if (newPrimary != null) {
+    await query(`UPDATE asins SET primary_sku = $2 WHERE asin = $1`, [asin, newPrimary]);
+    await query(
+      `UPDATE asin_skus s SET is_primary = (s.sku = $2)
+         FROM asins a WHERE s.asin_id = a.id AND a.asin = $1`,
+      [asin, newPrimary],
+    );
+  }
+  return { inserted: found.map((f) => f.sku), newPrimary };
 }

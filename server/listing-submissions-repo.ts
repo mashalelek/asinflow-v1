@@ -169,10 +169,18 @@ export async function resolveSubmissionManual(
     [id, verdict],
   );
 
-  // NOTE: manual verdicts deliberately do NOT write asins.has_live_offer — only
-  // the API verify-sweep 'live' transition (getListingsItem-derived) and the
-  // daily staleness pass own that field. A manual 'live' waits for the next
-  // daily pass to reflect in the icon.
+  // Manual 'live' writes the flag (§19, 2026-08-28): a manual verdict is a
+  // definitive human determination — deferring the icon to a future pass
+  // violated §14 manual-trigger completeness (crons are off in this
+  // deployment, so "waits for the daily pass" meant "waits for a manual
+  // scan"). 'failed'/'deleted' still write nothing to the flag: failing or
+  // deleting ONE SKU does not mean the ASIN has no live offer.
+  if (verdict === "live") {
+    await query(
+      `UPDATE asins SET has_live_offer = TRUE, offer_checked_at = now() WHERE asin = $1`,
+      [asin],
+    );
+  }
 
   // DELETED: the SKU is gone from SC. Demote ONLY this SKU's is_primary and keep
   // the asin_skus row — resurrection reuses a 404'ing SKU (candidate →

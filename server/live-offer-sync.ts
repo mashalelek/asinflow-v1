@@ -32,6 +32,7 @@ export interface LiveOfferSyncSummary {
   total: number;
   live: number;
   noOffer: number;
+  discovered: number; // §18 all-404 → discovery hits (2026-08-28)
   transient: number; // non-definitive responses — written nothing, retried next run
 }
 
@@ -66,7 +67,7 @@ export async function syncLiveOffers(
     params.length ? params : undefined,
   )).rows as { asin: string }[];
 
-  const s: LiveOfferSyncSummary = { total: rows.length, live: 0, noOffer: 0, transient: 0 };
+  const s: LiveOfferSyncSummary = { total: rows.length, live: 0, noOffer: 0, discovered: 0, transient: 0 };
   for (const { asin } of rows) {
     const res = await checkAsinLiveOffer(asin, sellerId, { query });
     if (res.verdict === "live" || res.verdict === "no_offer") {
@@ -80,6 +81,10 @@ export async function syncLiveOffers(
         [asin, res.verdict === "live", JSON.stringify(res.issues ?? [])],
       );
       if (res.verdict === "live") s.live++; else s.noOffer++;
+      if (res.verdict === "live" && (res.discovered?.length ?? 0) > 0) {
+        s.discovered++;
+        log(`Live-offer discovery: ${asin} — known SKUs all 404, found ${res.discovered!.join(", ")}`, "live-offer-sync");
+      }
     } else {
       // skip — reason is transient here (no_sku is excluded by the query above)
       s.transient++;
@@ -90,7 +95,7 @@ export async function syncLiveOffers(
   const scope = `${opts.notLiveOnly ? "not-live-scope" : "full"}${opts.asinFilter?.size ? ", filtered" : ""}`;
   log(
     `Live-offer sync complete (${scope}): ${s.total} probed — ${s.live} live, ${s.noOffer} no_offer, ` +
-    `${s.transient} transient-skipped (unwritten, retry next run)`,
+    `${s.discovered} discovered, ${s.transient} transient-skipped (unwritten, retry next run)`,
     "live-offer-sync",
   );
   return s;

@@ -148,3 +148,32 @@ describe("countOpenAmong", () => {
     expect(calls).toHaveLength(0);
   });
 });
+
+// §19 manual-'live' flag write (2026-08-28, §14 manual-trigger completeness):
+// a manual 'live' verdict writes asins.has_live_offer = TRUE + offer_checked_at
+// exactly like the API sweep transition; 'failed'/'deleted' never touch the flag.
+describe("manual verdict — has_live_offer flag write (§19, 2026-08-28)", () => {
+  const flagWrites = (updates: Array<{ sql: string; params: any[] }>) =>
+    updates.filter((u) => /UPDATE asins SET has_live_offer = TRUE, offer_checked_at = now\(\)/.test(u.sql));
+
+  it("manual 'live' on a non-terminal row writes the flag for the row's ASIN", async () => {
+    const { query, updates } = makeFakeQuery({ a: "pending" });
+    const r = await resolveSubmissionsBulk(["a"], "live", query as any);
+    expect(r.resolved).toEqual(["a"]);
+    const w = flagWrites(updates);
+    expect(w).toHaveLength(1);
+    expect(w[0].params).toEqual(["B000TEST01"]);
+  });
+
+  it("manual 'failed' writes nothing to the flag", async () => {
+    const { query, updates } = makeFakeQuery({ a: "stale" });
+    await resolveSubmissionsBulk(["a"], "failed", query as any);
+    expect(flagWrites(updates)).toEqual([]);
+  });
+
+  it("manual 'deleted' writes nothing to the flag (one dead SKU is not no-live-offer)", async () => {
+    const { query, updates } = makeFakeQuery({ a: "processing" });
+    await resolveSubmissionsBulk(["a"], "deleted", query as any);
+    expect(flagWrites(updates)).toEqual([]);
+  });
+});

@@ -45,7 +45,7 @@ async function main() {
   const transientSkips: string[] = []; // retried after the main pass (--apply)
   let i = 0;
   for (const { asin } of rows) {
-    const res = await checkAsinLiveOffer(asin, SELLER_ID);
+    const res = await checkAsinLiveOffer(asin, SELLER_ID, { applyDiscoveries: APPLY });
     if (res.verdict === "skip") {
       if (res.skipReason === "no_sku") tally.skip_no_sku++;
       else { tally.skip_transient++; transientSkips.push(asin); }
@@ -79,7 +79,7 @@ async function main() {
   if (APPLY && transientSkips.length > 0) {
     console.log(`\n=== retry pass: ${transientSkips.length} transient skips ===`);
     for (const asin of transientSkips) {
-      const res = await checkAsinLiveOffer(asin, SELLER_ID);
+      const res = await checkAsinLiveOffer(asin, SELLER_ID, { applyDiscoveries: APPLY });
       if (res.verdict !== "skip") {
         await query(
           `UPDATE asins SET has_live_offer = $2, offer_checked_at = now() WHERE asin = $1`,

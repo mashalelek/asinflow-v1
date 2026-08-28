@@ -1505,6 +1505,17 @@ Everything in the system has one of two time orientations:
 When in doubt about which source a metric should use, ask which question the
 user is trying to answer.
 
+### Manual-trigger completeness
+
+All derived state must converge via manual triggers alone. Crons only re-run
+existing jobs on a schedule and are **never load-bearing for correctness** —
+this deployment runs with `ENABLE_CRONS` off (§11 "Scheduled crons"), so a
+code path that only converges "when the daily/scheduled pass runs" is a bug,
+not a design. When a definitive fact is established (an API probe, a human
+verdict), every field derived from it is written then and there; a later pass
+may re-verify, never first-deliver. (Adopted 2026-08-28; first application:
+the §19 manual-`'live'` flag write.)
+
 ### Honest labeling
 
 If a metric is named "Actual" but computed from Estimates, that's a bug — fix
@@ -2011,7 +2022,7 @@ live write to Seller Central:
 | Offer creation (putListingsItem) | Add-Offer path (only writer) |
 | Offer price at creation | Add-Offer path (price resolver) |
 | `primary_sku`, `asin_skus.is_primary` | Add-Offer path (promotes the live-offer SKU on creation); inventory-sync may set them only as bootstrap when no primary exists, never overwrite |
-| `has_live_offer`, `offer_checked_at` | Daily live-offer staleness pass (`live-offer-sync.ts`) + §19 API verify-sweep `'live'` transition (`verifyPending`) — both getListingsItem-derived; manual verdicts never write it |
+| `has_live_offer`, `offer_checked_at` | Daily live-offer staleness pass (`live-offer-sync.ts`) + §19 API verify-sweep `'live'` transition (`verifyPending`) — both getListingsItem-derived — + §19 **manual `'live'` verdict** (2026-08-28, a definitive human determination; §14 manual-trigger completeness). Manual `'failed'`/`'deleted'` never write it |
 | `sku_legend` entries (brand/dept codes, aliases) | Add-Offer approval flow |
 | `category`, `brand` (self-heal) | Add-Offer catalog fetch (per §14 catalog ownership) |
 
@@ -2079,12 +2090,37 @@ inventory summaries.
   daily pass re-verifies live rows; (2) the §19 **API verify-sweep**
   `'live'` transition (`verifyPending`, getListingsItem-derived), which flips
   `has_live_offer = TRUE` same-day after Add to SC so a freshly added offer never
-  shows a stale "+". A **manual** `'live'` verdict does NOT write it (waits for
-  the daily pass), and it is **not** written at ACCEPTED (synchronous validation
-  only).
+  shows a stale "+"; (3) a **manual `'live'` verdict** (2026-08-28): a
+  definitive human determination writes `has_live_offer = TRUE` +
+  `offer_checked_at` exactly like the sweep transition — the old "waits for
+  the daily pass" rule violated §14 manual-trigger completeness (with crons
+  off it meant "waits for a manual scan"). Manual `'failed'`/`'deleted'`
+  still write nothing (deleting one SKU ≠ no live offer). The flag is
+  **not** written at ACCEPTED (synchronous validation only).
 - **Fail-closed:** only a definitive 200 writes `TRUE`; only all-SKUs-404 writes
-  `FALSE`; any transient (429/5xx/timeout) writes nothing and is retried next
-  run. Never coerced from missing data.
+  `FALSE` — and only after the discovery step below comes back empty; any
+  transient (429/5xx/timeout) writes nothing and is retried next run. Never
+  coerced from missing data.
+- **All-known-SKUs-404 → ASIN discovery before `FALSE` (2026-08-28):** every
+  known SKU 404ing proves only "no offer on the SKUs AF knows," not "no
+  offer" — an SC-created listing under a new SKU is invisible behind dead
+  `asin_skus` rows, and phase b's discovery never fires for such an ASIN (it
+  is gated on **zero** `asin_skus` rows). Found live (B0CT61H23P, 2026-08-26:
+  live CQ-OMI0-SSZ7 behind dead primary 3E-ZRRX-EQTD → written `FALSE`
+  repeatedly). So the shared layer runs `searchListingsItems` by ASIN
+  whenever all known SKUs definitively 404, BEFORE any `FALSE`: discovery
+  hit → the discovered SKUs are inserted into `asin_skus` and the 8c
+  latest-live-wins primary re-point applies (every previously-known SKU
+  including the old primary just definitively died; `amzn.gr.*` never
+  primary — if only amzn.gr.* is discovered, rows insert non-primary and
+  primary stays), the flag is written per the discovered listing, and the
+  ASIN is counted as a **discovery** in the pass report; discovery empty
+  (200, zero items) → `FALSE` exactly as before; discovery transient →
+  nothing written, fail-closed unchanged. Lives in `live-offer-check.ts`
+  (`discoverAsinListings` + `recordDiscoveredSkus`, composed by
+  `checkAsinLiveOffer`), inherited by the daily pass, the §18b rider, the
+  backfill, and full-scope phase a; dry-run modes probe and report the
+  discovery but write nothing.
 - **Issue snapshot rider (2026-08-03):** every definitive probe also writes
   `asins.current_issues` / `issues_checked_at` (§6 Submission column) — the
   issues arrive in the same `getListingsItem` response (`includedData=
@@ -2105,7 +2141,9 @@ catalog). Two sequential phases over one NDJSON progress stream
   `offer_checked_at`, the §6 issue snapshot (newest-live SKU's issues; `[]`
   when none live), and applies the **latest-live-wins primary re-point**
   (Primary-SKU ownership above). Any transient SKU probe → the whole ASIN is
-  skipped, fail-closed.
+  skipped, fail-closed. When ALL SKUs definitively 404, the all-404 →
+  discovery rule above runs before `FALSE` is written; discovered ASINs are
+  reported per-phase as **discoveries**.
 - **Phase b — active no-SKU ASINs**: `searchListingsItems` by ASIN (the §19
   fallback endpoint, `includedData=summaries,issues`) to discover SC-created
   SKUs. Found → write `asin_skus` rows (bootstrap primary only if none
@@ -2226,6 +2264,14 @@ allowed on **any non-terminal row** (`pending`/`processing`/`stale`) — not
 stale-only; stale is merely when we *prompt*, a human may answer earlier.
 Already-resolved rows are rejected (409). Every verdict records `verdict_source`
 = `api` (sweep) or `manual` (human).
+
+**Manual `live` writes the flag (2026-08-28):** a manual `'live'` verdict
+writes `asins.has_live_offer = TRUE` + `offer_checked_at`, exactly like the
+API sweep's `'live'` transition. A manual verdict is a definitive human
+determination; the old defer-to-daily-pass rule violated §14 manual-trigger
+completeness (with crons off, "waits for the daily pass" meant "waits for a
+manual scan"). Manual `'failed'`/`'deleted'` still write **nothing** to the
+flag — deleting or failing one SKU doesn't mean the ASIN has no live offer.
 
 **Rationale for the manual flow:** a listing the user deleted in SC is
 **API-indistinguishable** from a silent ghost — both read as absent with no

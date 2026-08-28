@@ -7,7 +7,7 @@ function makeHarness(cfg: {
   phaseA?: any[];
   phaseB?: any[];
   skuState?: Record<string, { present: boolean; issues?: any[] } | "transient">;
-  searchItems?: Record<string, any[]>;
+  searchItems?: Record<string, any[] | "transient">;
 }) {
   const writes: Array<{ sql: string; params: any[] }> = [];
   const query = async (sql: string, params?: any[]) => {
@@ -22,7 +22,9 @@ function makeHarness(cfg: {
   };
   const httpGet = async (endpoint: string, params?: any) => {
     if (params?.identifiersType === "ASIN") {
-      return { items: cfg.searchItems?.[params.identifiers] ?? [] };
+      const items = cfg.searchItems?.[params.identifiers];
+      if (items === "transient") { const e: any = new Error("503"); e.response = { status: 503 }; throw e; }
+      return { items: items ?? [] };
     }
     const sku = decodeURIComponent(endpoint.split("/").pop()!);
     const st = cfg.skuState?.[sku];
@@ -196,5 +198,83 @@ describe("full-scope pass — 8c amzn.gr.* exclusion", () => {
     const upd = h.writes.find((w) => /SET has_live_offer/.test(w.sql))!;
     expect(upd.params[1]).toBe(true);
     expect(upd.params[2]).toContain("100893");
+  });
+});
+
+// §18 all-known-SKUs-404 → discovery before FALSE (2026-08-28). An ASIN whose
+// known SKUs all definitively 404 gets a searchListingsItems probe before any
+// FALSE verdict — SC-created SKUs are otherwise invisible (phase b is gated on
+// zero asin_skus rows). Found live: B0CT61H23P / CQ-OMI0-SSZ7.
+describe("full-scope phase a — all-404 discovery", () => {
+  const discItem = (sku: string, createdDate: string) =>
+    ({ sku, summaries: [{ status: ["DISCOVERABLE"], createdDate }], issues: [] });
+
+  it("all-404 + discovery hit → TRUE, asin_skus insert, 8c re-point to discovered SKU, counted as discovery", async () => {
+    const h = makeHarness({
+      phaseA: [aRow("B0DISC", "DEAD-SKU", false, [["DEAD-SKU", "2026-01-01"]])],
+      skuState: {}, // DEAD-SKU 404s
+      searchItems: { B0DISC: [discItem("SC-NEW-SKU", "2026-08-26")] },
+    });
+    const r = await runFullScopePass({ ...base, dryRun: false, query: h.query as any, httpGet: h.httpGet as any });
+    expect(r.phaseA.discoveries).toEqual([{ asin: "B0DISC", skus: ["SC-NEW-SKU"], live: true }]);
+    expect(r.phaseA.live).toBe(1);
+    expect(r.phaseA.noOffer).toBe(0);
+    expect(r.phaseA.flips).toEqual([{ asin: "B0DISC", from: false, to: true }]);
+    expect(r.phaseA.repoints).toEqual([{ asin: "B0DISC", from: "DEAD-SKU", to: "SC-NEW-SKU" }]);
+    expect(h.writes.some((w) => /INSERT INTO asin_skus/.test(w.sql) && w.params.includes("SC-NEW-SKU"))).toBe(true);
+    expect(h.writes.some((w) => /SET primary_sku = \$2/.test(w.sql) && w.params[1] === "SC-NEW-SKU")).toBe(true);
+    const flagWrite = h.writes.find((w) => /SET has_live_offer = TRUE/.test(w.sql))!;
+    expect(flagWrite.params[0]).toBe("B0DISC");
+  });
+
+  it("all-404 + discovery empty → FALSE exactly as before, zero discoveries", async () => {
+    const h = makeHarness({
+      phaseA: [aRow("B0DEAD", "DEAD-SKU", false, [["DEAD-SKU", "2026-01-01"]])],
+      skuState: {},
+      searchItems: { B0DEAD: [] },
+    });
+    const r = await runFullScopePass({ ...base, dryRun: false, query: h.query as any, httpGet: h.httpGet as any });
+    expect(r.phaseA.discoveries).toEqual([]);
+    expect(r.phaseA.noOffer).toBe(1);
+    const w = h.writes.find((x) => /SET has_live_offer = \$2/.test(x.sql))!;
+    expect(w.params[1]).toBe(false);
+  });
+
+  it("all-404 + discovery transient → whole ASIN skipped, nothing written (fail-closed)", async () => {
+    const h = makeHarness({
+      phaseA: [aRow("B0TRAN", "DEAD-SKU", false, [["DEAD-SKU", "2026-01-01"]])],
+      skuState: {},
+      searchItems: { B0TRAN: "transient" },
+    });
+    const r = await runFullScopePass({ ...base, dryRun: false, query: h.query as any, httpGet: h.httpGet as any });
+    expect(r.phaseA.transientSkipped).toBe(1);
+    expect(r.phaseA.discoveries).toEqual([]);
+    expect(h.writes.filter((w) => /UPDATE asins|INSERT INTO asin_skus/.test(w.sql))).toEqual([]);
+  });
+
+  it("amzn.gr.*-only discovery → TRUE + insert, but primary NEVER re-points to amzn.gr", async () => {
+    const h = makeHarness({
+      phaseA: [aRow("B0GR", "DEAD-SKU", false, [["DEAD-SKU", "2026-01-01"]])],
+      skuState: {},
+      searchItems: { B0GR: [discItem("amzn.gr.SOMETHING", "2026-08-26")] },
+    });
+    const r = await runFullScopePass({ ...base, dryRun: false, query: h.query as any, httpGet: h.httpGet as any });
+    expect(r.phaseA.discoveries).toEqual([{ asin: "B0GR", skus: ["amzn.gr.SOMETHING"], live: true }]);
+    expect(r.phaseA.repoints).toEqual([]);
+    expect(h.writes.some((w) => /INSERT INTO asin_skus/.test(w.sql) && w.params.includes("amzn.gr.SOMETHING"))).toBe(true);
+    expect(h.writes.some((w) => /SET primary_sku/.test(w.sql))).toBe(false);
+    expect(h.writes.some((w) => /SET has_live_offer = TRUE/.test(w.sql))).toBe(true);
+  });
+
+  it("dry-run: discovery reported (discoveries/flips/repoints) with ZERO writes", async () => {
+    const h = makeHarness({
+      phaseA: [aRow("B0DRY", "DEAD-SKU", false, [["DEAD-SKU", "2026-01-01"]])],
+      skuState: {},
+      searchItems: { B0DRY: [discItem("SC-NEW-SKU", "2026-08-26")] },
+    });
+    const r = await runFullScopePass({ ...base, dryRun: true, query: h.query as any, httpGet: h.httpGet as any });
+    expect(r.phaseA.discoveries).toHaveLength(1);
+    expect(r.phaseA.repoints).toEqual([{ asin: "B0DRY", from: "DEAD-SKU", to: "SC-NEW-SKU" }]);
+    expect(h.writes.filter((w) => /UPDATE|INSERT/.test(w.sql))).toEqual([]);
   });
 });
