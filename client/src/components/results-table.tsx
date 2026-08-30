@@ -54,7 +54,7 @@ const DEFAULT_COL_WIDTHS: Partial<Record<ColumnId, number>> = {
   estCogs: 90, salePrice: 95, profit: 90, margin: 80, roi: 80,
   fbaFee: 85, referralFee: 95, inboundShipping: 100, prep: 85, storage: 105, maxCogs: 90,
   sellersFba: 85, sellers: 80, sellers7d: 85, sellers30d: 90, fba7d: 80, fba30d: 85,
-  tags: 100, notes: 100, sourcing: 80, meltable: 85, hazmat: 80, dg: 70, suppressed: 90, dateAdded: 95,
+  tags: 100, notes: 100, sourcing: 80, meltable: 85, hazmat: 80, dg: 70, suppressed: 90, dateAdded: 95, lastReviewed: 105,
 };
 import { type ColumnConfig } from "@/lib/columns";
 import { type FilterMode } from "@/components/summary-cards";
@@ -433,6 +433,7 @@ export function getRowValue(
     }
     case "product": return result.catalogData.title ?? result.asin;
     case "dateAdded": return result.addedAt ?? null;
+    case "lastReviewed": return result.lastReviewedAt ?? null;
     case "submission": return submissionCategory(result.submission);
     case "category": return result.category ?? null;
     case "sourcing": return getSourcingLabel(result) || null;
@@ -1896,6 +1897,16 @@ export function renderCell(
       const dd = String(d.getDate()).padStart(2, "0");
       const yyyy = d.getFullYear();
       return <span className="text-sm text-muted-foreground">{`${mm}/${dd}/${yyyy}`}</span>;
+    }
+
+    // Same field as the Product cell's corner date (lastReviewedAt — human
+    // review stamp from the Keepa-link click). M/D/YYYY, muted em-dash when
+    // never reviewed. The corner date stays; this column supplements it.
+    case "lastReviewed": {
+      const ts = result.lastReviewedAt;
+      if (!ts) return <span className="text-muted-foreground/50 text-sm">{"\u2014"}</span>;
+      const d = new Date(ts);
+      return <span className="text-sm text-muted-foreground">{`${d.getMonth() + 1}/${d.getDate()}/${d.getFullYear()}`}</span>;
     }
 
     // §6 Submission column — read-only §19 ledger surface. Item 7: the

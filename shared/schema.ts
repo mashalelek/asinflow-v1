@@ -537,7 +537,7 @@ export const DEFAULT_COLUMNS = [
   // Group 5 — Sellers
   "sellersFba", "sellers", "sellers7d", "sellers30d", "fba7d", "fba30d",
   // Group 6 — Additional info
-  "tags", "notes", "promos", "sourcing", "meltable", "hazmat", "dg", "suppressed", "dateAdded", "submission",
+  "tags", "notes", "promos", "sourcing", "meltable", "hazmat", "dg", "suppressed", "dateAdded", "lastReviewed", "submission",
 ] as const;
 
 export type ColumnId = (typeof DEFAULT_COLUMNS)[number];
@@ -617,6 +617,11 @@ export const ALL_COLUMNS: ColumnDef[] = [
   { id: "dg", label: "DG", defaultVisible: false, align: "left", group: "additional" },
   { id: "suppressed", label: "Suppressed", defaultVisible: false, align: "left", group: "additional" },
   { id: "dateAdded", label: "Date Added", defaultVisible: false, align: "left", group: "additional" },
+  // Same field as the Product cell's corner date (asins.last_reviewed_at,
+  // stamped by the Keepa-link review click) — one source of truth, the cell
+  // keeps its corner date. Not in any DB preset (presets list columns
+  // explicitly; untouched).
+  { id: "lastReviewed", label: "Last Reviewed", defaultVisible: false, align: "left", group: "additional" },
   // §6 Submission column — §19 ledger surface, read-only, never in default presets.
   { id: "submission", label: "Submission", defaultVisible: false, align: "left", group: "additional" },
 ];

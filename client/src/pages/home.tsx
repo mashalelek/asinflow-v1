@@ -1327,6 +1327,7 @@ export default function Home() {
             case "hazmat": return r.isHazmat ? "Yes" : "No";
             case "suppressed": return r.isSearchSuppressed ? "Yes" : "No";
             case "dateAdded": return r.addedAt ?? null;
+            case "lastReviewed": return r.lastReviewedAt ?? null;
             case "submission": return submissionCategory(r.submission);
             case "category": return r.category ?? null;
             case "sourcing": {

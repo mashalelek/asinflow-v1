@@ -38,7 +38,7 @@ const NUMERIC_COLS = new Set<ColumnId>([
 ]);
 
 const BOOL_COLS = new Set<ColumnId>(["meltable", "hazmat", "suppressed"]);
-const REVIEWED_COLS = new Set<ColumnId>(["dateAdded"]);
+const REVIEWED_COLS = new Set<ColumnId>(["dateAdded", "lastReviewed"]);
 
 function getFilterType(colId: ColumnId): FilterType {
   if (NUMERIC_COLS.has(colId)) return "numeric";
