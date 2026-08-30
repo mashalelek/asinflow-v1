@@ -96,11 +96,18 @@ purposes and have separate ownership.
   sales.
 - "What did the units I sold actually cost."
 - Source labels (`cogs_source`): `po_sheet`, `csv`, `manual`.
-- Written by: PO sync only (`po_sheet`) — the sole writer by design. (A dormant
-  API path — `PUT /api/asins/:asin/cogs` with an `actual_cogs` body param,
-  source `'manual'` — still exists but has no UI entry point. Kept deliberately
-  in case manual entry returns; do not wire UI to it without revisiting this
-  rule.) (CSV upload writes `estimated_cogs`, not `actual_cogs`.)
+- Written by: PO sync only (`po_sheet`) — the sole writer, enforced
+  (2026-08-30). The dormant API path (`PUT /api/asins/:asin/cogs` with an
+  `actual_cogs` body param, source `'manual'`) is REMOVED — the param is
+  ignored; the route's `estimated_cogs` handling is unchanged. `cogs_source
+  = 'manual'` is now legacy/unwritable (the CHECK-constraint enum cleanup is
+  deferred to a future migration). Ruled after the B0G4XGFX1Z phantom: a
+  `manual` source marker with a NULL value blocked the sync's actual_cogs
+  write forever (19 phantom rows found 2026-08-30), so the sync's
+  manual-override guard on `actual_cogs` is also gone — the sync ALWAYS
+  overwrites, per the §2 rule above. `estimated_cogs`' manual-override
+  semantics are untouched. (CSV upload writes `estimated_cogs`, not
+  `actual_cogs`.)
 - Read-only in the UI; not user-editable. Eventually derived from FIFO across
   open lots.
 

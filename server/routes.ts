@@ -778,13 +778,6 @@ async function runSheetsSync(
       continue;
     }
     try {
-      // Respect manual COGS overrides: skip COGS update (but still sync ordered_qty)
-      // for ASINs where a user has explicitly entered cogs_source = 'manual'.
-      const manualCheck = data.cogs != null
-        ? await query(`SELECT cogs_source FROM asin_estimates WHERE asin = $1`, [asin])
-        : null;
-      const isManualOverride = manualCheck?.rows?.[0]?.cogs_source === "manual";
-
       const setClauses: string[] = [];
       const values: any[] = [];
       let idx = 1;
@@ -792,13 +785,14 @@ async function runSheetsSync(
       // reconstruct these decisions from DB side-effects — log them instead.
       let actBranch = "no-cogs";
       let estBranch = "no-cogs";
-      if (data.cogs != null && !isManualOverride) {
-        // Always update actual_cogs from PO
+      if (data.cogs != null) {
+        // ALWAYS overwrite actual_cogs from PO — §2, enforced 2026-08-30.
+        // actual_cogs is PO-sync-only; the old cogs_source='manual' guard let
+        // a phantom marker (manual + NULL value) block this write forever
+        // (B0G4XGFX1Z). Manual-override semantics live on estimated_cogs ONLY.
         setClauses.push(`cogs = $${idx++}`, `cogs_source = $${idx++}`, `actual_cogs = $${idx++}`);
         values.push(data.cogs, "po_sheet", data.cogs);
         actBranch = "written";
-      } else if (data.cogs != null) {
-        actBranch = "skipped:manual";
       }
       // Est. COGS auto-sync (§2, corrected 2026-08-11): overwrite with the PO
       // value (source → 'po_sheet') UNLESS the source is 'manual'. csv/imported
@@ -3005,28 +2999,24 @@ export async function registerRoutes(
   // === COGS: manual inline edit + reset to PO sync ===
   app.put("/api/asins/:asin/cogs", async (req: Request, res: Response) => {
     const { asin } = req.params;
-    const { estimated_cogs, actual_cogs } = req.body as { estimated_cogs?: number; actual_cogs?: number };
+    // actual_cogs is PO-sync-only (§2, enforced 2026-08-30): the body param is
+    // IGNORED — this was the sole writer of cogs_source='manual', now legacy/
+    // unwritable. Estimated handling unchanged.
+    const { estimated_cogs } = req.body as { estimated_cogs?: number };
     if (!isDbAvailable()) { res.status(503).json({ message: "Database not available" }); return; }
-    if (estimated_cogs == null && actual_cogs == null) {
-      res.status(400).json({ message: "Provide estimated_cogs and/or actual_cogs" }); return;
+    if (estimated_cogs == null) {
+      res.status(400).json({ message: "Provide estimated_cogs (actual_cogs is PO-sync-only and ignored)" }); return;
     }
     try {
       const sets: string[] = [];
       const vals: any[] = [];
       let idx = 1;
-      if (estimated_cogs != null) {
+      {
         if (typeof estimated_cogs !== "number" || !isFinite(estimated_cogs) || estimated_cogs < 0) {
           res.status(400).json({ message: "estimated_cogs must be a non-negative number" }); return;
         }
         sets.push(`estimated_cogs = $${idx++}`, `estimated_cogs_source = $${idx++}`);
         vals.push(estimated_cogs, "manual");
-      }
-      if (actual_cogs != null) {
-        if (typeof actual_cogs !== "number" || !isFinite(actual_cogs) || actual_cogs < 0) {
-          res.status(400).json({ message: "actual_cogs must be a non-negative number" }); return;
-        }
-        sets.push(`actual_cogs = $${idx++}`, `cogs_source = $${idx++}`, `cogs = $${idx++}`);
-        vals.push(actual_cogs, "manual", actual_cogs);
       }
       vals.push(asin);
       await query(`UPDATE asin_estimates SET ${sets.join(", ")} WHERE asin = $${idx}`, vals);
