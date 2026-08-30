@@ -234,7 +234,7 @@ describe("resurrectOrGenerateSku — decision tree", () => {
     }
   });
 
-  it("error no_brand: no candidate, catalog returns blank brand", async () => {
+  it("blank brand → legend_pending 'missing' (§18 2026-08-29 reclassification), not error", async () => {
     const r = await resurrectOrGenerateSku(ASIN, 1, {
       queryFn: makeRoutedQueryFn({ eligibility: "yes", candidates: [] }),
       httpGet: makeRoutedHttpGet({
@@ -242,8 +242,8 @@ describe("resurrectOrGenerateSku — decision tree", () => {
       }),
       sellerId: SELLER,
     });
-    expect(r.kind).toBe("error");
-    if (r.kind === "error") expect(r.reason).toBe("no_brand");
+    expect(r.kind).toBe("legend_pending");
+    if (r.kind === "legend_pending") expect(r.pending.brand?.status).toBe("missing");
   });
 
   // ────────────────────────────────────────────────────────────────────────

@@ -50,7 +50,8 @@ import type { QueryFn } from "@shared/sku-legend";
 import type { HttpGetFn } from "./sku-catalog-fetch";
 
 export interface LegendPending {
-  brand?: { rawValue: string; proposedCode: string; status: "proposed" | "not_in_legend" };
+  // "missing" (2026-08-29): brand absent from the catalog — manual 3-char code entry.
+  brand?: { rawValue: string; proposedCode: string; status: "proposed" | "not_in_legend" | "missing" };
   dept?: { rawValue: string; proposedCode: string; status: "proposed" | "not_in_legend" };
 }
 
@@ -72,6 +73,8 @@ export interface ResurrectionDeps {
   httpGet?: HttpGetFn;
   selfHealWrite?: ResolveSkuDeps["selfHealWrite"];
   sellerId: string;
+  // §18 missing-brand manual entry — threaded to the resolver (generate path only).
+  brandCodeOverride?: string;
 }
 
 const GATED_SQL = `
@@ -156,6 +159,7 @@ export async function resurrectOrGenerateSku(
       queryFn: deps.queryFn,
       httpGet: deps.httpGet,
       selfHealWrite: deps.selfHealWrite,
+      brandCodeOverride: deps.brandCodeOverride,
     },
     variantSuffix,
   );

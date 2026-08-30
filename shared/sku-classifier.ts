@@ -8,7 +8,7 @@
 // Prefix-only check: the first 4 segments are the discriminator that
 // distinguishes our format from legacy AMG (2-char dept) and Amazon-random
 // patterns (e.g. XX-XXXX-XXXX, amzn.gr.*).
-const CURRENT_FORMAT_PREFIX = /^[A-Z]{3}-[A-Z]{3}-[A-Z0-9]{3}-[A-Z]{3}-/;
+const CURRENT_FORMAT_PREFIX = /^[A-Z0-9]{3}-[A-Z]{3}-[A-Z0-9]{3}-[A-Z]{3}-/; // BRD may carry digits (§18 missing-brand manual code, 2026-08-29)
 
 export function matchesCurrentSkuFormat(sku: string): boolean {
   return CURRENT_FORMAT_PREFIX.test(sku);

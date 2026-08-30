@@ -105,7 +105,9 @@ function validate3AlphaNum(s: string, name: string): void {
 }
 
 export function buildSku(p: SkuParts): string {
-  validate3Alpha(p.brd, "brd");
+  // BRD allows digits (2026-08-29): a §18 missing-brand manual code is
+  // A-Z/0-9; DEP and TTL remain alpha-only.
+  validate3AlphaNum(p.brd, "brd");
   validate3Alpha(p.dep, "dep");
   validate3Alpha(p.ttl, "ttl");
   if (!/^[A-Z0-9]{10}$/.test(p.asin)) {

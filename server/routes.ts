@@ -2006,7 +2006,7 @@ export async function registerRoutes(
     if (!isDbAvailable()) { res.status(503).json({ message: "Database not available" }); return; }
     const sellerId = process.env.SP_API_SELLER_ID;
     if (!sellerId) { res.status(503).json({ message: "SP_API_SELLER_ID not configured" }); return; }
-    const { asins } = (req.body ?? {}) as { asins?: string[] };
+    const { asins, brandCodes } = (req.body ?? {}) as { asins?: string[]; brandCodes?: Record<string, string> };
     if (!asins || !Array.isArray(asins) || asins.length === 0) {
       res.status(400).json({ message: "No ASINs provided" }); return;
     }
@@ -2029,6 +2029,7 @@ export async function registerRoutes(
         includeInboundShipping,
         allExistingSkus,
         productRegistry: makeProductRegistryRepo((sql, params) => query(sql, params)),
+        brandCodes, // §18 missing-brand manual entry — per-ASIN BRD overrides
         phase4Mode: "preview", // do everything EXCEPT the live PUT
       });
 
@@ -2071,7 +2072,7 @@ export async function registerRoutes(
     if (!isDbAvailable()) { res.status(503).json({ message: "Database not available" }); return; }
     const sellerId = process.env.SP_API_SELLER_ID;
     if (!sellerId) { res.status(503).json({ message: "SP_API_SELLER_ID not configured" }); return; }
-    const { asins, skuOverrides } = (req.body ?? {}) as { asins?: string[]; skuOverrides?: Record<string, string> };
+    const { asins, skuOverrides, brandCodes } = (req.body ?? {}) as { asins?: string[]; skuOverrides?: Record<string, string>; brandCodes?: Record<string, string> };
     if (!asins || !Array.isArray(asins) || asins.length === 0) {
       res.status(400).json({ message: "No ASINs provided" }); return;
     }
@@ -2094,6 +2095,7 @@ export async function registerRoutes(
         includeInboundShipping,
         allExistingSkus,
         skuOverrides,
+        brandCodes, // §18 missing-brand manual entry — per-ASIN BRD overrides
         productRegistry: makeProductRegistryRepo((sql, params) => query(sql, params)),
         // phase4Mode defaults to "live" — REAL putListingsItem fires here.
         // selfHealWrite omitted for now — resurrection's selfHeal writes to asins

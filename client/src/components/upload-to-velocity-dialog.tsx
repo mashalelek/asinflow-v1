@@ -83,7 +83,10 @@ type SkuCreateState =
   | { state: "done"; sku: string }
   | { state: "failed"; reason: string }
   | { state: "legend_pending"; brand: PendingLegend; dept: PendingLegend;
-      brandCode: string; deptCode: string; approving: boolean; error?: string };
+      brandCode: string; deptCode: string; approving: boolean; error?: string;
+      // §18 missing-brand manual entry (2026-08-29): optional name — non-blank
+      // commits approve_new to the legend; blank = one-off code, no legend write.
+      brandName: string };
 
 export function UploadToVelocityDialog({ open, onOpenChange }: { open: boolean; onOpenChange: (v: boolean) => void }) {
   const [fromYmd, setFromYmd] = useState(todayYmd());
@@ -136,13 +139,15 @@ export function UploadToVelocityDialog({ open, onOpenChange }: { open: boolean; 
   // "Create SKU & include" — §18 offer-add via the existing batch flow for
   // ONE asin. On ACCEPTED (kind "created"), promote the row into NEW ORDERS
   // pre-ticked. No nested modal; the row shows its result inline.
-  async function createSkuAndInclude(skip: SkipRow) {
+  async function createSkuAndInclude(skip: SkipRow, brandCode?: string) {
     setSkuCreate((m) => ({ ...m, [skip.asin]: { state: "running" } }));
     try {
       const res = await fetch("/api/offer-add/submit", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ asins: [skip.asin] }),
+        // §18 missing-brand: the manually-entered BRD rides as a per-ASIN
+        // override so the re-fired build can assemble without a catalog brand.
+        body: JSON.stringify({ asins: [skip.asin], ...(brandCode ? { brandCodes: { [skip.asin]: brandCode } } : {}) }),
       });
       const body = await res.json();
       if (!res.ok) throw new Error(body?.message ?? `HTTP ${res.status}`);
@@ -175,8 +180,10 @@ export function UploadToVelocityDialog({ open, onOpenChange }: { open: boolean; 
         const dept: PendingLegend = outcome.pending.dept ?? null;
         setSkuCreate((m) => ({ ...m, [skip.asin]: {
           state: "legend_pending", brand, dept,
-          brandCode: brand?.proposedCode ?? "", deptCode: dept?.proposedCode ?? "",
-          approving: false,
+          // "missing" brand has no proposal — the code input starts empty.
+          brandCode: brand?.status === "missing" ? "" : brand?.proposedCode ?? "",
+          deptCode: dept?.proposedCode ?? "",
+          approving: false, brandName: "",
         } }));
       } else {
         const reason = outcome
@@ -198,11 +205,24 @@ export function UploadToVelocityDialog({ open, onOpenChange }: { open: boolean; 
     const st = skuCreate[skip.asin];
     if (!st || st.state !== "legend_pending" || st.approving) return;
     const items: any[] = [];
+    const brandMissing = st.brand?.status === "missing";
     for (const [type, pending, code] of [
       ["brand", st.brand, st.brandCode],
       ["dept", st.dept, st.deptCode],
     ] as const) {
       if (!pending) continue;
+      if (type === "brand" && brandMissing) {
+        // §18 missing-brand: A-Z/0-9 allowed; legend commit ONLY when a name
+        // was entered (blank = one-off, no legend write — the code rides the
+        // re-fire as a per-ASIN override instead).
+        if (!/^[A-Z0-9]{3}$/.test(code)) {
+          setSkuCreate((m) => ({ ...m, [skip.asin]: { ...st, error: "brand code must be exactly 3 characters A-Z/0-9" } }));
+          return;
+        }
+        const name = st.brandName.trim();
+        if (name !== "") items.push({ type: "brand", rawValue: name, action: "approve_new", code });
+        continue;
+      }
       if (!/^[A-Z]{3}$/.test(code)) {
         setSkuCreate((m) => ({ ...m, [skip.asin]: { ...st, error: `${type} code must be exactly 3 letters` } }));
         return;
@@ -213,6 +233,12 @@ export function UploadToVelocityDialog({ open, onOpenChange }: { open: boolean; 
     }
     setSkuCreate((m) => ({ ...m, [skip.asin]: { ...st, approving: true, error: undefined } }));
     try {
+      if (items.length === 0) {
+        // One-off missing-brand code with nothing else pending: no legend
+        // write at all — straight to the re-fire with the override.
+        await createSkuAndInclude(skip, brandMissing ? st.brandCode : undefined);
+        return;
+      }
       const res = await fetch("/api/sku-legend/approve", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
@@ -228,8 +254,10 @@ export function UploadToVelocityDialog({ open, onOpenChange }: { open: boolean; 
         } }));
         return;
       }
-      // Legend committed — continue the existing flow automatically.
-      await createSkuAndInclude(skip);
+      // Legend committed — continue the existing flow automatically. The
+      // missing-brand code still rides as an override: the catalog has no
+      // brand rawValue, so the legend row alone cannot resolve THIS ASIN.
+      await createSkuAndInclude(skip, brandMissing ? st.brandCode : undefined);
     } catch (e: any) {
       setSkuCreate((m) => ({ ...m, [skip.asin]: { ...st, approving: false, error: e?.message ?? String(e) } }));
     }
@@ -445,8 +473,8 @@ export function UploadToVelocityDialog({ open, onOpenChange }: { open: boolean; 
                                   <p className="font-medium text-amber-600 dark:text-amber-500">Needs legend approval:</p>
                                   {st.brand && (
                                     <label className="flex items-center gap-2">
-                                      <span className="text-muted-foreground max-w-[160px] truncate" title={st.brand.rawValue}>
-                                        brand “{st.brand.rawValue}” →
+                                      <span className="text-muted-foreground max-w-[160px] truncate" title={st.brand.status === "missing" ? "brand missing from catalog" : st.brand.rawValue}>
+                                        {st.brand.status === "missing" ? "brand missing — code" : `brand “${st.brand.rawValue}”`} →
                                       </span>
                                       <input
                                         aria-label="Brand code"
@@ -455,9 +483,24 @@ export function UploadToVelocityDialog({ open, onOpenChange }: { open: boolean; 
                                         maxLength={3}
                                         disabled={st.approving}
                                         onChange={(e) => {
-                                          const val = e.target.value.toUpperCase().replace(/[^A-Z]/g, "").slice(0, 3);
+                                          const allowed = st.brand?.status === "missing" ? /[^A-Z0-9]/g : /[^A-Z]/g;
+                                          const val = e.target.value.toUpperCase().replace(allowed, "").slice(0, 3);
                                           setSkuCreate((m) => ({ ...m, [s.asin]: { ...st, brandCode: val } }));
                                         }}
+                                        spellCheck={false}
+                                      />
+                                    </label>
+                                  )}
+                                  {st.brand?.status === "missing" && (
+                                    <label className="flex items-center gap-2">
+                                      <span className="text-muted-foreground">name (optional)</span>
+                                      <input
+                                        aria-label="Brand name (optional)"
+                                        className="text-xs rounded px-1 py-0.5 w-[12em] border border-input bg-background text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+                                        value={st.brandName}
+                                        disabled={st.approving}
+                                        placeholder="blank = one-off, no legend write"
+                                        onChange={(e) => setSkuCreate((m) => ({ ...m, [s.asin]: { ...st, brandName: e.target.value } }))}
                                         spellCheck={false}
                                       />
                                     </label>

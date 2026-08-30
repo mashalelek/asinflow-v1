@@ -153,6 +153,11 @@ export interface SubmitDeps {
   // to edit). Validation: format regex + BRD-DEP-AS3 invariant inside
   // offerAddForAsin, plus a final batch-wide collision sweep here.
   skuOverrides?: Record<string, string>;
+  // §18 missing-brand manual entry (2026-08-29): per-ASIN operator-entered
+  // 3-char BRD codes, threaded to OfferAddInput.brandCodeOverride in BOTH the
+  // classification and live phases. Only consulted when the catalog has no
+  // brand; validated in the resolver.
+  brandCodes?: Record<string, string>;
   // Registry repo for reserve-then-PUT in live mode. Required for any live
   // submit; preview mode uses it only to LOAD the brand's registry into
   // would_submit outcomes (no reservation).
@@ -230,7 +235,7 @@ export async function submitOfferAddBatch(
       // but defense-in-depth.
     };
     const result = await offerAddFn(
-      { asin: row.asin, productNumber: 1, price: 0 },
+      { asin: row.asin, productNumber: 1, price: 0, brandCodeOverride: deps.brandCodes?.[row.asin] },
       innerDeps,
       true, // dryRun
     );
@@ -441,7 +446,7 @@ export async function submitOfferAddBatch(
       productRegistry: phase4Mode === "live" ? deps.productRegistry : undefined,
     };
     const result = await offerAddFn(
-      { asin: p.asin, productNumber, price: priced.price, skuOverride },
+      { asin: p.asin, productNumber, price: priced.price, skuOverride, brandCodeOverride: deps.brandCodes?.[p.asin] },
       innerDeps,
       phase4Mode === "preview", // dryRun: TRUE for preview, FALSE for live PUT
     );

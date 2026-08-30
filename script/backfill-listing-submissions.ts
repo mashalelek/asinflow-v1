@@ -20,7 +20,7 @@ import "dotenv/config";
 import { query } from "../server/db";
 
 // Mirrors matchesCurrentSkuFormat / SKU_FMT (offer-add.ts): 3-3-3-3-NNN[-X].
-const CANONICAL_SKU_RE = `^[A-Z]{3}-[A-Z]{3}-[A-Z0-9]{3}-[A-Z]{3}-[0-9]{3}(-[A-Z])?$`;
+const CANONICAL_SKU_RE = `^[A-Z0-9]{3}-[A-Z]{3}-[A-Z0-9]{3}-[A-Z]{3}-[0-9]{3}(-[A-Z])?$`; // BRD may carry digits (§18 missing-brand manual code, 2026-08-29)
 
 (async () => {
   const sinceArg = process.argv.find((a) => a.startsWith("--since="));

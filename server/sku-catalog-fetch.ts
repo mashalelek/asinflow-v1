@@ -40,7 +40,11 @@ export interface CatalogFetchResult {
 export type CatalogFetchOutcome =
   | { ok: true; data: CatalogFetchResult }
   | { ok: false; reason: "dead_asin"; status: 404 }
-  | { ok: false; reason: "no_brand" | "no_category" }
+  // no_brand carries the fetched data (brand null) so the manual brand-code
+  // override path (§18, 2026-08-29) can build without a second fetch. A
+  // both-missing item classifies as no_category (the unrecoverable failure).
+  | { ok: false; reason: "no_brand"; data: Omit<CatalogFetchResult, "brand"> & { brand: null } }
+  | { ok: false; reason: "no_category" }
   | { ok: false; reason: "transient_error"; status?: number; message: string; retryable: true };
 
 export type HttpGetFn = (endpoint: string, params?: Record<string, any>) => Promise<any>;
@@ -137,7 +141,6 @@ export async function fetchCatalogForSku(
 
   const summary = data?.summaries?.[0] ?? {};
   const brand: string | null = (summary.brand ?? "").toString().trim() || null;
-  if (!brand) return { ok: false, reason: "no_brand" };
 
   const category = extractTopCategory(data);
   if (!category) return { ok: false, reason: "no_category" };
@@ -146,6 +149,14 @@ export async function fetchCatalogForSku(
   const imageUrl = data?.images?.[0]?.images?.[0]?.link ?? null;
   const isDangerousGood = isDangerousGoodFromAttributes(data?.attributes);
   const dgHzRegulation = dgHzRegulationFromAttributes(data?.attributes);
+
+  if (!brand) {
+    return {
+      ok: false,
+      reason: "no_brand",
+      data: { asin, category, brand: null, itemName, imageUrl, isDangerousGood, dgHzRegulation },
+    };
+  }
 
   return {
     ok: true,

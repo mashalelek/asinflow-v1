@@ -1920,6 +1920,24 @@ fail.
 - `brand` — from `summaries[].brand`.
 - Missing brand or unresolvable DEP → `legend_pending` (awaits approval).
   Missing category leaf or 404 → hard-fail.
+- **Brand ABSENT from the catalog → `legend_pending` with manual code entry
+  (2026-08-29).** When `summaries[].brand` is missing entirely (B00MW6OAK6),
+  there is no rawValue to resolve and nothing to derive a proposal from —
+  but that is an approval problem, not an error: the row surfaces in the
+  need-approval section (`pending.brand.status = "missing"`) with an EMPTY
+  3-char code input (A–Z/0–9, validated) plus an OPTIONAL brand-name field.
+  Collision against existing legend codes is checked on approve (inline
+  error, correctable). **Commit semantics:** name provided → `approve_new`
+  through the single legend writer (`POST /api/sku-legend/approve`, §18
+  ownership) so the brand resolves automatically wherever the catalog DOES
+  carry that name; name blank → **one-off**: the code is used for this SKU
+  build only and NO legend row is written. Approve re-fires the payload
+  build with the code as a per-ASIN override (`brandCodes` on the offer-add
+  preview/submit endpoints) and the row moves to READY inline — no
+  re-fetch, no dialog restart. Same treatment in BOTH `legend_pending`
+  surfaces (Add-to-SC preview and the Velocity dialog's "Create SKU &
+  include"). Self-heal never writes a manually-entered code or name to
+  `asins` — catalog stays the only source for catalog fields.
 
 **Self-heal write:** after a successful catalog fetch, the resolver writes
 `category` and `brand` (and `title`, `image_url`) back to `asins`,
