@@ -15,6 +15,7 @@
  * only change needed to go live.
  */
 import { useCallback, useEffect, useMemo, useState } from "react";
+import { fetchLongSync } from "@/lib/long-sync";
 import {
   Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription, DialogFooter,
 } from "@/components/ui/dialog";
@@ -269,13 +270,7 @@ export function UploadToVelocityDialog({ open, onOpenChange }: { open: boolean; 
     try {
       const creates = allCreates.filter((r) => selCreates.has(recKey(r)));
       const updates = actionableUpdates.filter((u) => selUpdates.has(u.order_id));
-      const res = await fetch("/api/velocity/execute", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ creates, updates }),
-      });
-      const body = await res.json();
-      if (!res.ok) throw new Error(body?.message ?? `HTTP ${res.status}`);
+      const body = await fetchLongSync("/api/velocity/execute", { creates, updates });
       setResults(body.results as ExecResult[]);
     } catch (e: any) {
       setResults([{ action: "send", outcome: "failed", error: e?.message ?? String(e) }]);

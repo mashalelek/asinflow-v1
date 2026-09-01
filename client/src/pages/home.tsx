@@ -24,6 +24,7 @@ import { loadSettings } from "@/lib/settings";
 import { useSearch } from "wouter";
 import { loadColumnConfig, type ColumnConfig } from "@/lib/columns";
 import { loadBuyList, saveBuyList, loadOnHoldList, saveOnHoldList } from "@/lib/buy-hold";
+import { fetchLongSync } from "@/lib/long-sync";
 import { Sun, Moon, BarChart3, Zap, AlertTriangle, X, Search, RefreshCw, Archive, Sheet, Database, ShoppingCart, DollarSign, FileSpreadsheet, Upload, Plus, ScanSearch } from "lucide-react";
 import { Checkbox } from "@/components/ui/checkbox";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
@@ -814,14 +815,8 @@ export default function Home() {
     if (ws.length === 0) return;
     setIsSyncing(true);
     try {
-      const res = await fetch("/api/sheets/sync", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ asins: ws }),
-      });
-      const data = await res.json();
-      if (!res.ok) throw new Error(data.message || "Sync failed");
-      toast({ title: `Synced PO data`, description: `Updated ${data.updated} ASINs, skipped ${data.skipped}` });
+      const data = await fetchLongSync("/api/sheets/sync", { asins: ws });
+      toast({ title: `Synced PO data`, description: `Updated ${data.updated} ASINs, skipped ${data.skipped}${data.cleared ? `, cleared ${data.cleared} stale qty` : ""}` });
       await fetchAsins(startDate, endDate, showArchived);
     } catch (err: any) {
       toast({ title: "Sync failed", description: err.message, variant: "destructive" });
@@ -835,13 +830,7 @@ export default function Home() {
     if (ws.length === 0) return;
     setIsSyncingInventory(true);
     try {
-      const res = await fetch("/api/inventory/sync", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ asins: ws }),
-      });
-      const data = await res.json();
-      if (!res.ok) throw new Error(data.message || "Inventory sync failed");
+      const data = await fetchLongSync("/api/inventory/sync", { asins: ws });
       toast({ title: "Inventory synced", description: `${data.synced} ASINs synced, ${data.skipped} skipped` });
       await fetchAsins(startDate, endDate, showArchived);
     } catch (err: any) {
@@ -900,13 +889,7 @@ export default function Home() {
     setIsPushingAura(true);
     const selected = Array.from(selectedSet);
     try {
-      const res = await fetch("/api/sync/aura/push", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(selected.length > 0 ? { asins: selected } : {}),
-      });
-      const data = await res.json();
-      if (!res.ok) throw new Error(data.message || "Aura push failed");
+      const data = await fetchLongSync("/api/sync/aura/push", selected.length > 0 ? { asins: selected } : {});
       const prefix = selected.length > 0 ? `Aura (${selected.length} selected)` : "Aura";
       const notIn = (data.notInAura?.length ?? 0) > 0 ? `, ${data.notInAura.length} not in Aura` : "";
       toast({ title: "Aura push complete", description: `${prefix}: ${data.pushed} pushed, ${data.unchanged} unchanged, ${data.skipped} skipped${notIn}` });
@@ -955,13 +938,7 @@ export default function Home() {
     if (ws.length === 0) return;
     setIsSyncingSales(true);
     try {
-      const res = await fetch("/api/sales/sync", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ startDate, endDate, asins: ws }),
-      });
-      const data = await res.json();
-      if (!res.ok) throw new Error(data.message || "Sales sync failed");
+      const data = await fetchLongSync("/api/sales/sync", { startDate, endDate, asins: ws });
       toast({ title: "Sales synced", description: `${data.daysProcessed} days, ${data.asinsUpdated} ASINs updated` });
       await fetchAsins(startDate, endDate, showArchived);
     } catch (err: any) {

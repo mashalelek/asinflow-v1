@@ -74,6 +74,32 @@ function cleanBuyLink(raw: string): string | null {
 
 const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 10 * 1024 * 1024 } });
 
+// Long-sync response wrapper (2026-08-11). Buffered JSON responses send ZERO
+// bytes until the sync finishes; Chrome aborts a byte-silent response around
+// the 5-minute mark, so the client saw "Failed to fetch" (red "sync failed"
+// toast) while the server kept working and later logged 200. This streams a
+// heartbeat line every 15s to keep the connection alive, then one terminal
+// {result} or {error} line — the client helper (lib/long-sync.ts) resolves on
+// it. Guard-path failures (503/400 before work starts) stay plain JSON.
+async function respondLongSync(res: Response, work: () => Promise<any>): Promise<void> {
+  res.setHeader("Content-Type", "application/x-ndjson");
+  res.setHeader("Cache-Control", "no-cache");
+  res.setHeader("Connection", "keep-alive");
+  const hb = setInterval(() => {
+    try { res.write(JSON.stringify({ type: "heartbeat" }) + "\n"); } catch { /* client gone — work continues */ }
+  }, 15_000);
+  try {
+    const data = await work();
+    res.write(JSON.stringify({ type: "result", data }) + "\n");
+  } catch (err: any) {
+    // Genuine sync failure: the server's error, verbatim, as the terminal line.
+    res.write(JSON.stringify({ type: "error", message: err?.message ?? String(err) }) + "\n");
+  } finally {
+    clearInterval(hb);
+    try { res.end(); } catch {}
+  }
+}
+
 function parseFileToRawRows(buffer: Buffer, filename: string): { headers: string[]; rows: Record<string, any>[] } {
   const ext = filename.toLowerCase().split(".").pop();
   let rows: Record<string, any>[] = [];
@@ -1464,13 +1490,14 @@ export async function registerRoutes(
     if (!isDbAvailable()) { res.status(503).json({ message: "Database not available" }); return; }
     const { asins } = (req.body ?? {}) as { asins?: string[] };
     const filter = asins && asins.length > 0 ? new Set(asins) : undefined;
-    try {
-      const result = await syncInventory(filter);
-      res.json(result);
-    } catch (err: any) {
-      log(`Inventory sync error: ${err.message}`, "inventory-sync");
-      res.status(500).json({ message: err.message });
-    }
+    await respondLongSync(res, async () => {
+      try {
+        return await syncInventory(filter);
+      } catch (err: any) {
+        log(`Inventory sync error: ${err.message}`, "inventory-sync");
+        throw err;
+      }
+    });
   });
 
   app.post("/api/sales/sync", async (req: Request, res: Response) => {
@@ -1481,13 +1508,14 @@ export async function registerRoutes(
       return;
     }
     const filter = asins && asins.length > 0 ? new Set(asins) : undefined;
-    try {
-      const result = await syncSalesData(startDate, endDate, filter);
-      res.json(result);
-    } catch (err: any) {
-      log(`Sales sync error: ${err.message}`, "sales-sync");
-      res.status(500).json({ message: err.message });
-    }
+    await respondLongSync(res, async () => {
+      try {
+        return await syncSalesData(startDate, endDate, filter);
+      } catch (err: any) {
+        log(`Sales sync error: ${err.message}`, "sales-sync");
+        throw err;
+      }
+    });
   });
 
   app.post("/api/sheets/sync", async (req: Request, res: Response) => {
@@ -1499,13 +1527,14 @@ export async function registerRoutes(
     }
     const { asins } = (req.body ?? {}) as { asins?: string[] };
     const filter = asins && asins.length > 0 ? new Set(asins) : undefined;
-    try {
-      const result = await runSheetsSync(filter);
-      res.json(result);
-    } catch (err: any) {
-      log(`Sheets sync error: ${err.message}`, "sheets");
-      res.status(500).json({ message: err.message });
-    }
+    await respondLongSync(res, async () => {
+      try {
+        return await runSheetsSync(filter);
+      } catch (err: any) {
+        log(`Sheets sync error: ${err.message}`, "sheets");
+        throw err;
+      }
+    });
   });
 
   // Insert-only sync from the sourcing Google Sheet. AF is source of truth —
@@ -1522,13 +1551,14 @@ export async function registerRoutes(
     }
     if (!process.env.GOOGLE_SHEET_ID) { res.status(400).json({ message: "GOOGLE_SHEET_ID not configured" }); return; }
     if (!process.env.AURA_API_KEY) { res.status(400).json({ message: "AURA_API_KEY not configured" }); return; }
-    try {
-      const summary = await runAuraSyncChain(); // PO sync (hard dep) → Aura live push
-      res.json(summary);
-    } catch (err: any) {
-      // PO sync failure aborts the chain before any Aura push (stale-cost guard).
-      res.status(500).json({ message: `Aura sync chain failed: ${err?.message ?? err}` });
-    }
+    await respondLongSync(res, async () => {
+      try {
+        return await runAuraSyncChain(); // PO sync (hard dep) → Aura live push
+      } catch (err: any) {
+        // PO sync failure aborts the chain before any Aura push (stale-cost guard).
+        throw new Error(`Aura sync chain failed: ${err?.message ?? err}`);
+      }
+    });
   });
 
   // Push-only Aura sync: pushes AF costs to Aura WITHOUT running the PO sheet
@@ -1540,22 +1570,24 @@ export async function registerRoutes(
     // Optional selection filter (same body shape as /api/sheets/sync).
     const { asins } = (req.body ?? {}) as { asins?: string[] };
     const asinFilter = asins && asins.length > 0 ? new Set(asins) : undefined;
-    try {
-      const r = await pushAuraCosts({ limit: "all", asinFilter });
-      const pv = r.dryRunSummary.perVerdict;
-      const skipped = pv["SKIP:unmapped_sku"] + pv["SKIP:ambiguous_sku"] + pv["SKIP:null_cogs"] + pv["SKIP:zero_cost"];
-      log(
-        `Aura push complete${asinFilter ? ` (${asinFilter.size} selected)` : ""}: ` +
-        `pushed ${r.pushed}, unchanged ${pv.UNCHANGED}, failed ${r.failed}, ` +
-        `skip[unmapped ${pv["SKIP:unmapped_sku"]}, ambiguous ${pv["SKIP:ambiguous_sku"]}, ` +
-        `null_cogs ${pv["SKIP:null_cogs"]}, zero_cost ${pv["SKIP:zero_cost"]}]` +
-        `${r.notInAura?.length ? `, notInAura ${r.notInAura.length}` : ""}`,
-        "aura-push",
-      );
-      res.json({ pushed: r.pushed, unchanged: pv.UNCHANGED, failed: r.failed, skipped, notInAura: r.notInAura ?? [] });
-    } catch (err: any) {
-      res.status(500).json({ message: `Aura push failed: ${err?.message ?? err}` });
-    }
+    await respondLongSync(res, async () => {
+      try {
+        const r = await pushAuraCosts({ limit: "all", asinFilter });
+        const pv = r.dryRunSummary.perVerdict;
+        const skipped = pv["SKIP:unmapped_sku"] + pv["SKIP:ambiguous_sku"] + pv["SKIP:null_cogs"] + pv["SKIP:zero_cost"];
+        log(
+          `Aura push complete${asinFilter ? ` (${asinFilter.size} selected)` : ""}: ` +
+          `pushed ${r.pushed}, unchanged ${pv.UNCHANGED}, failed ${r.failed}, ` +
+          `skip[unmapped ${pv["SKIP:unmapped_sku"]}, ambiguous ${pv["SKIP:ambiguous_sku"]}, ` +
+          `null_cogs ${pv["SKIP:null_cogs"]}, zero_cost ${pv["SKIP:zero_cost"]}]` +
+          `${r.notInAura?.length ? `, notInAura ${r.notInAura.length}` : ""}`,
+          "aura-push",
+        );
+        return { pushed: r.pushed, unchanged: pv.UNCHANGED, failed: r.failed, skipped, notInAura: r.notInAura ?? [] };
+      } catch (err: any) {
+        throw new Error(`Aura push failed: ${err?.message ?? err}`);
+      }
+    });
   });
 
   // Velocity prep-service upload export (phase 1: CSV). Gated by DB + Google
@@ -1717,7 +1749,7 @@ export async function registerRoutes(
     const toUpdate = updates ?? [];
     if (toCreate.length === 0 && toUpdate.length === 0) { res.status(400).json({ message: "empty plan — nothing to execute" }); return; }
 
-    try {
+    await respondLongSync(res, async () => {
       const results: any[] = [];
       // ECHO FRESHNESS RULE (SPEC §11): this GET sources the echo-merge
       // values for full-replace PUTs and MUST happen here, at execute time,
@@ -1803,11 +1835,8 @@ export async function registerRoutes(
 
       const outcomes = results.reduce((a, r) => { a[r.outcome] = (a[r.outcome] || 0) + 1; return a; }, {} as Record<string, number>);
       log(`Velocity execute: ${JSON.stringify(outcomes)}`, "velocity-reconcile");
-      res.json({ results, outcomes });
-    } catch (err: any) {
-      log(`Velocity execute error: ${err?.message ?? err}`, "velocity-reconcile");
-      res.status(500).json({ message: err?.message ?? String(err) });
-    }
+      return { results, outcomes };
+    });
   });
 
   // SellerBoard COGS export (interim bandage until the Actuals audit). Read-only:
