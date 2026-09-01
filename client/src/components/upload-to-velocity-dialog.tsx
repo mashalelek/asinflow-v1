@@ -14,7 +14,7 @@
  * eyeballed the review screen once (SPEC hold). Flipping it to true is the
  * only change needed to go live.
  */
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { Fragment, useCallback, useEffect, useMemo, useState } from "react";
 import { fetchLongSync } from "@/lib/long-sync";
 import {
   Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription, DialogFooter,
@@ -44,9 +44,17 @@ interface SkipRow {
   reason: string; orderNumber: string | null; asin: string; itemName: string | null;
   row?: { date: string | null; retailer: string | null; quantity: string | null; soldAs: string | null; unitsPerPack: string | null };
 }
+interface VelocityBundleItem { item_name: string; quantity: number; order_number: string; retailer: string; date: string }
+interface VelocityBundleRecord {
+  asin: string; amazon_sku: string; item_name: string; sold_as: "bundle";
+  units_per_pack: number; quantity: number; date: string; fulfillment_type: "fba";
+  bundle_items: VelocityBundleItem[]; orderNumbers: string[];
+}
+interface BundleFlag { orderNumber: string; asin: string; field: string; sheet: string; derived: number }
+
 interface ReviewData {
   from: string; to: string; effectiveFrom: string; clamped: boolean;
-  creates: VelocityRecord[]; updates: PlanUpdate[];
+  creates: VelocityRecord[]; bundleCreates?: VelocityBundleRecord[]; bundleFlags?: BundleFlag[]; updates: PlanUpdate[];
   deleteCandidates: Array<{ order_id: string; order_number: string; asin: string; item_name: string | null; sheet_status: string }>;
   unchanged: number; closedInVelocity: number; unmatchedVelocity: number;
   selfPrepExcluded: number; skips: SkipRow[];
@@ -67,6 +75,9 @@ function todayYmd(): string {
   return `${n.getFullYear()}-${p(n.getMonth() + 1)}-${p(n.getDate())}`;
 }
 const recKey = (r: { order_number: string; asin: string }) => `${r.order_number.trim()}\u0000${r.asin.trim().toUpperCase()}`;
+// Bundle rows key on first child order number × parent asin (child-derived
+// identity, SPEC §11 Bundles).
+const bundleKey = (b: VelocityBundleRecord) => `${(b.orderNumbers[0] ?? "").trim()}\u0000${b.asin.trim().toUpperCase()}`;
 
 const SKIP_REASON_LABEL: Record<string, string> = {
   no_live_sku: "no live SKU",
@@ -114,7 +125,11 @@ export function UploadToVelocityDialog({ open, onOpenChange }: { open: boolean; 
       if (!res.ok) throw new Error(body?.message ?? `HTTP ${res.status}`);
       setData(body as ReviewData);
       // NEW ORDERS pre-ticked; QTY MISMATCHES opt-in (unticked).
-      setSelCreates(new Set((body.creates as VelocityRecord[]).map(recKey)));
+      // NEW ORDERS pre-ticked — bundles included (SPEC §11 Bundles).
+      setSelCreates(new Set([
+        ...(body.creates as VelocityRecord[]).map(recKey),
+        ...(((body.bundleCreates ?? []) as VelocityBundleRecord[])).map(bundleKey),
+      ]));
       setSelUpdates(new Set());
     } catch (e: any) {
       setData(null); setError(e?.message ?? String(e));
@@ -128,7 +143,8 @@ export function UploadToVelocityDialog({ open, onOpenChange }: { open: boolean; 
   const allCreates = useMemo(() => [...(data?.creates ?? []), ...promoted], [data, promoted]);
   const actionableUpdates = useMemo(() => (data?.updates ?? []).filter((u) => u.actionable), [data]);
   const flagOnlyUpdates = useMemo(() => (data?.updates ?? []).filter((u) => !u.actionable), [data]);
-  const nCreates = allCreates.filter((r) => selCreates.has(recKey(r))).length;
+  const nCreates = allCreates.filter((r) => selCreates.has(recKey(r))).length
+    + (data?.bundleCreates ?? []).filter((b) => selCreates.has(bundleKey(b))).length;
   const nUpdates = actionableUpdates.filter((u) => selUpdates.has(u.order_id)).length;
   const nTotal = nCreates + nUpdates;
 
@@ -269,8 +285,9 @@ export function UploadToVelocityDialog({ open, onOpenChange }: { open: boolean; 
     setSending(true);
     try {
       const creates = allCreates.filter((r) => selCreates.has(recKey(r)));
+      const bundles = (data?.bundleCreates ?? []).filter((b) => selCreates.has(bundleKey(b)));
       const updates = actionableUpdates.filter((u) => selUpdates.has(u.order_id));
-      const body = await fetchLongSync("/api/velocity/execute", { creates, updates });
+      const body = await fetchLongSync("/api/velocity/execute", { creates, updates, bundles });
       setResults(body.results as ExecResult[]);
     } catch (e: any) {
       setResults([{ action: "send", outcome: "failed", error: e?.message ?? String(e) }]);
@@ -280,11 +297,11 @@ export function UploadToVelocityDialog({ open, onOpenChange }: { open: boolean; 
     }
   }
 
-  const resultFor = (kind: "create" | "update", idOrKey: string): ExecResult | undefined =>
+  const resultFor = (kind: "create" | "update" | "create_bundle", idOrKey: string): ExecResult | undefined =>
     results?.find((r) =>
-      kind === "create"
-        ? r.action === "create" && `${(r.order_number ?? "").trim()}\u0000${(r.asin ?? "").trim().toUpperCase()}` === idOrKey
-        : r.action === "update" && r.order_id === idOrKey,
+      kind === "update"
+        ? r.action === "update" && r.order_id === idOrKey
+        : r.action === kind && `${(r.order_number ?? "").trim()}\u0000${(r.asin ?? "").trim().toUpperCase()}` === idOrKey,
     );
 
   const resultBadge = (r: ExecResult | undefined) => {
@@ -376,6 +393,60 @@ export function UploadToVelocityDialog({ open, onOpenChange }: { open: boolean; 
                       })}
                     </tbody>
                   </table>
+                )}
+                {/* Bundles (SPEC §11 Bundles, 2026-08-31): parent row +
+                    nested component sub-rows (PO-module ASINs-tab pattern),
+                    pre-ticked, per-row results inline. */}
+                {(data.bundleCreates ?? []).length > 0 && (
+                  <div className="mt-3">
+                    <h4 className="text-xs font-semibold text-muted-foreground mb-1">
+                      Bundles ({(data.bundleCreates ?? []).length})
+                    </h4>
+                    <table className="w-full text-sm">
+                      <tbody>
+                        {(data.bundleCreates ?? []).map((b) => {
+                          const key = bundleKey(b);
+                          return (
+                            <Fragment key={key}>
+                              <tr className="border-b border-border/50">
+                                <td className="py-1.5 pr-2 w-8">
+                                  <Checkbox checked={selCreates.has(key)} onCheckedChange={() => toggleCreate(key)} disabled={!!results} />
+                                </td>
+                                <td className="py-1.5 pr-3 whitespace-nowrap">{b.date}</td>
+                                <td className="py-1.5 pr-3 max-w-[280px] truncate" title={b.item_name}>{b.item_name}</td>
+                                <td className="py-1.5 pr-3 text-right whitespace-nowrap">{b.quantity} units</td>
+                                <td className="py-1.5 pr-3 whitespace-nowrap">bundle ×{b.units_per_pack}</td>
+                                <td className="py-1.5 pr-3 font-mono text-xs">{b.asin}</td>
+                                <td className="py-1.5 pr-3 font-mono text-xs">{b.amazon_sku}</td>
+                                <td className="py-1.5">{resultBadge(resultFor("create_bundle", key))}</td>
+                              </tr>
+                              {b.bundle_items.map((c, i) => (
+                                <tr key={`${key}-c${i}`} className="border-b border-border/30 text-xs text-muted-foreground">
+                                  <td></td>
+                                  <td className="py-1 pr-3 whitespace-nowrap pl-4">↳ {c.date}</td>
+                                  <td className="py-1 pr-3 max-w-[280px] truncate" title={c.item_name}>{c.item_name}</td>
+                                  <td className="py-1 pr-3 text-right">{c.quantity}</td>
+                                  <td className="py-1 pr-3 whitespace-nowrap" colSpan={3}>
+                                    {c.retailer} · #{c.order_number}
+                                  </td>
+                                  <td></td>
+                                </tr>
+                              ))}
+                            </Fragment>
+                          );
+                        })}
+                      </tbody>
+                    </table>
+                  </div>
+                )}
+                {(data.bundleFlags ?? []).length > 0 && (
+                  <div className="mt-2 text-xs text-amber-600 dark:text-amber-500">
+                    {(data.bundleFlags ?? []).map((f, i) => (
+                      <div key={i}>
+                        AY/AZ cross-check: {f.asin} #{f.orderNumber} — sheet {f.field} "{f.sheet}" vs derived {f.derived}
+                      </div>
+                    ))}
+                  </div>
                 )}
               </section>
 

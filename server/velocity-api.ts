@@ -24,7 +24,29 @@ export interface VelocityInboundOrder {
   status: string;       // e.g. "inbound"
   item_name?: string;
   quantity?: number;
+  // Bundles (SPEC §11, 2026-08-31): parent rows carry order_number null and
+  // nest their components here; each child is order-like with its own
+  // order_number/retailer and a bundle_order_id pointing at the parent.
+  bundle_children?: any[];
   [key: string]: any;
+}
+
+// Child-derived match key (SPEC §11 Bundles): a bundle's identity for dedup /
+// reconciliation is bundle_children[].order_number × parent asin — the
+// parent's own order_number is null by observation (manual B0GNHTYGPF).
+// Non-bundles (and bundles with no usable child order numbers) fall back to
+// the flat (order_number, asin) key.
+export function matchKeysForOrder(
+  o: Pick<VelocityInboundOrder, "order_number" | "asin" | "sold_as" | "bundle_children">,
+): Array<{ orderNumber: string; asin: string }> {
+  const asin = String(o.asin ?? "");
+  if (String(o.sold_as ?? "").toLowerCase() === "bundle" && Array.isArray(o.bundle_children) && o.bundle_children.length > 0) {
+    const nums = Array.from(new Set(
+      o.bundle_children.map((c: any) => String(c?.order_number ?? "").trim()).filter((x) => x !== ""),
+    ));
+    if (nums.length > 0) return nums.map((orderNumber) => ({ orderNumber, asin }));
+  }
+  return [{ orderNumber: String(o.order_number ?? ""), asin }];
 }
 
 function getCreds(): { key: string; warehouseId: string } {
@@ -100,6 +122,43 @@ export async function fetchAllInboundOrders(): Promise<VelocityInboundOrder[]> {
     if (all.length >= totalResults || orders.length === 0) return all;
   }
   throw new Error(`Velocity pagination did not converge after ${MAX_PAGES} pages — aborting`);
+}
+
+// Create ONE bundle order — JSON POST /inbound (SPEC §11 Bundles,
+// 2026-08-31). The bulk CSV cannot carry bundle_items, so bundles post one
+// order per call. Top-level order_number/retailer are OMITTED (parent-null by
+// observation); per-child order_number/retailer/date ride inside
+// bundle_items. unit_cost/list_price are NEVER sent (cost privacy). If the
+// API rejects or drops per-child fields, callers STOP and report — no PUT
+// improvisation (first-write protocol).
+export async function createBundleOrder(rec: {
+  asin: string; amazon_sku: string; item_name: string;
+  units_per_pack: number; quantity: number; date: string;
+  bundle_items: Array<{ item_name: string; quantity: number; order_number: string; retailer: string; date: string }>;
+}): Promise<any> {
+  const body = {
+    date: rec.date,
+    item_name: rec.item_name,
+    quantity: rec.quantity,
+    asin: rec.asin,
+    amazon_sku: rec.amazon_sku,
+    fulfillment_type: "fba",
+    sold_as: "bundle",
+    units_per_pack: rec.units_per_pack,
+    bundle_items: rec.bundle_items.map((c) => ({
+      item_name: c.item_name,
+      quantity: c.quantity,
+      order_number: c.order_number,
+      retailer: c.retailer,
+      date: c.date,
+    })),
+  };
+  const res = await velocityFetch("/inbound", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(body),
+  });
+  return res.data ?? null;
 }
 
 // Update a single order — PUT /inbound/:order_id. Field casing is MIXED per

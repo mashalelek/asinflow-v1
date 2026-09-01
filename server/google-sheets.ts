@@ -16,7 +16,12 @@ const COL_PREP = 44;    // AS — Prep cost per unit
 const COL_ORDER_NUMBER = 1;    // B
 const COL_ORDER_DATE = 2;      // C
 const COL_RETAILER = 4;        // E — same column as supplier
+const COL_PRODUCT_NAME = 6;    // G — supplier product name (bundle component item_name)
 const COL_ITEM_NAME = 8;       // I
+const COL_QTY_ORDERED = 11;    // L — supplier qty ordered (bundle derivation)
+const COL_SETS_N = 13;         // N — total ASIN qty per order = bundle SET count
+const COL_UNIQUE_S = 18;       // S — unique products per ASIN (S >= 2 = bundle)
+const COL_YIELD_T = 19;        // T — asin_qty_per_product (component yield)
 const COL_SOLD_AS = 49;        // AX
 const COL_UNITS_PER_PACK = 50; // AY
 const COL_QUANTITY = 51;       // AZ
@@ -119,6 +124,12 @@ export interface SheetRow {
   orderDate: string | null;    // C
   retailer: string | null;     // E (alias of the supplier column)
   itemName: string | null;     // I
+  // Bundle-derivation columns (2026-08-31, SPEC §11 Bundles) — verbatim strings.
+  productName: string | null;  // G — component item_name
+  qtyOrderedL: string | null;  // L — supplier qty ordered
+  setsN: string | null;        // N — bundle set count
+  uniqueS: string | null;      // S — unique products per ASIN (>= 2 = bundle)
+  yieldT: string | null;       // T — component yield (asin_qty_per_product)
   soldAs: string | null;       // AX — verbatim
   unitsPerPack: string | null; // AY — verbatim
   quantity: string | null;     // AZ — verbatim
@@ -164,6 +175,11 @@ export async function fetchSheetRowsWithMeta(sheetId: string): Promise<SheetRows
       orderDate: cellStr(row[COL_ORDER_DATE]),
       retailer: cellStr(row[COL_RETAILER]),
       itemName: cellStr(row[COL_ITEM_NAME]),
+      productName: cellStr(row[COL_PRODUCT_NAME]),
+      qtyOrderedL: cellStr(row[COL_QTY_ORDERED]),
+      setsN: cellStr(row[COL_SETS_N]),
+      uniqueS: cellStr(row[COL_UNIQUE_S]),
+      yieldT: cellStr(row[COL_YIELD_T]),
       soldAs: cellStr(row[COL_SOLD_AS]),
       unitsPerPack: cellStr(row[COL_UNITS_PER_PACK]),
       quantity: cellStr(row[COL_QUANTITY]),

@@ -12,9 +12,9 @@ import { fetchSheetRows } from "./google-sheets";
 import { query as defaultQuery } from "./db";
 import {
   buildVelocityRecords, formatYMD,
-  type VelocityRecord, type VelocitySkip,
+  type VelocityRecord, type VelocitySkip, type VelocityBundleRecord, type BundleFlag,
 } from "./velocity-export";
-import { fetchAllKnownOrders, type KnownVelocityOrder } from "./velocity-api";
+import { fetchAllKnownOrders, matchKeysForOrder, type KnownVelocityOrder } from "./velocity-api";
 
 type QueryLike = (sql: string, params?: any[]) => Promise<{ rows: any[]; rowCount: number | null }>;
 
@@ -63,6 +63,10 @@ export interface VelocityPlan {
   effectiveFrom: string;      // YMD (creation floor applied to creates only)
   clamped: boolean;
   creates: VelocityRecord[];
+  // Bundles (SPEC §11, 2026-08-31): dedup by child-derived keys; AY/AZ
+  // cross-check mismatches ride along for the review screen.
+  bundleCreates: VelocityBundleRecord[];
+  bundleFlags: BundleFlag[];
   updates: PlanUpdate[];      // incl. actionable:false shipped-pair mismatches (flag-only)
   deleteCandidates: PlanDeleteCandidate[]; // manual dashboard action — no API DELETE exists
   unchanged: number;
@@ -126,12 +130,51 @@ export async function buildVelocityPlan(
 
   const matchedVelocityByKey = new Map<string, KnownVelocityOrder>();
 
+  // Sheet-side derived bundle units per (order, asin) — the units audit for
+  // matched bundles compares parent quantity vs this (AZ is never an input).
+  const sheetBundleUnits = new Map<string, number>();
+  {
+    const groups = new Map<string, typeof sheetRows>();
+    for (const row of sheetRows) {
+      if ((row.soldAs ?? "").trim().toLowerCase() !== "bundle") continue;
+      if (!row.orderNumber || !row.asin) continue;
+      const k = normKey(row.orderNumber, row.asin);
+      if (!groups.has(k)) groups.set(k, []);
+      groups.get(k)!.push(row);
+    }
+    for (const [k, g] of Array.from(groups.entries())) {
+      const S = Number((g[0].uniqueS ?? "").trim());
+      if (!Number.isInteger(S) || g.length !== S) continue; // underivable — no audit assertion
+      let total = 0, ok = true;
+      for (const r of g) {
+        const L = Number((r.qtyOrderedL ?? "").trim());
+        const T = Number((r.yieldT ?? "").trim());
+        const units = Math.round(L * T * 1e6) / 1e6;
+        if (!Number.isFinite(units) || !Number.isInteger(units) || units <= 0) { ok = false; break; }
+        total += units;
+      }
+      if (ok) sheetBundleUnits.set(k, total);
+    }
+  }
+
   for (const o of velocityOrders) {
-    const orderNumber = String(o.order_number ?? "");
     const asin = String(o.asin ?? "");
-    const key = normKey(orderNumber, asin);
-    matchedVelocityByKey.set(key, o);
-    const sheetRow = sheetByKey.get(key);
+    const isBundle = String(o.sold_as ?? "").toLowerCase() === "bundle";
+    // Child-derived match keys (SPEC §11 Bundles): a bundle registers one key
+    // per distinct child order_number × parent asin; flat orders keep their
+    // (order_number, asin) key. The first key with a sheet hit is the match.
+    const keys = matchKeysForOrder(o);
+    let sheetRow: (typeof sheetRows)[number] | undefined;
+    let matchedKey: string | null = null;
+    for (const k of keys) {
+      const nk = normKey(k.orderNumber, k.asin);
+      matchedVelocityByKey.set(nk, o);
+      if (!sheetRow) {
+        const hit = sheetByKey.get(nk);
+        if (hit) { sheetRow = hit; matchedKey = nk; }
+      }
+    }
+    const orderNumber = matchedKey != null ? String(sheetRow!.orderNumber ?? "") : String(o.order_number ?? "");
     if (!sheetRow) { unmatchedVelocity++; continue; }
 
     const status = String(o.status ?? "").toLowerCase();
@@ -165,7 +208,17 @@ export async function buildVelocityPlan(
     // quantity — different semantics, never quantity-audited (a partially
     // shipped order would flag pure noise). They exist to block CREATE and
     // land in closedInVelocity. Inbound/inventory rows audit as before.
-    if (o.lifecycleSource !== "shipment") {
+    if (isBundle) {
+      // Bundles audit in UNITS: parent quantity vs the sheet-derived total
+      // (N × units_per_bundle). Underivable sheet groups assert nothing.
+      // Flag-only regardless of status — a PUT against a bundle parent is
+      // untested; fail-closed until proven (SPEC §11 Bundles).
+      const derived = matchedKey != null ? sheetBundleUnits.get(matchedKey) : undefined;
+      const velQty = numOrNull(o.quantity);
+      if (derived !== undefined && derived !== velQty) {
+        diffs.push({ field: "quantity", sheet_value: derived, velocity_value: velQty });
+      }
+    } else if (o.lifecycleSource !== "shipment") {
       const sheetQty = numOrNull(sheetRow.quantity), velQty = numOrNull(o.quantity);
       if (sheetQty !== null && Number.isInteger(sheetQty) && sheetQty > 0 && sheetQty !== velQty) {
         diffs.push({ field: "quantity", sheet_value: sheetQty, velocity_value: velQty });
@@ -175,13 +228,18 @@ export async function buildVelocityPlan(
     if (diffs.length === 0) { actionable ? unchanged++ : closedInVelocity++; continue; }
     updates.push({
       order_id: o.order_id, order_number: orderNumber, asin,
-      status, item_name: o.item_name ?? null, actionable, diffs,
+      status, item_name: o.item_name ?? null, actionable: actionable && !isBundle, diffs,
     });
   }
 
   // CREATE = build output minus anything matched in Velocity.
   const creates = build.records.filter(
     (r) => !matchedVelocityByKey.has(normKey(r.order_number, r.asin)),
+  );
+  // Bundle CREATE dedup: ANY child-derived key already known in Velocity
+  // means the bundle exists — never re-send (SPEC §11 Bundles).
+  const bundleCreates = build.bundles.filter(
+    (b) => !b.orderNumbers.some((n) => matchedVelocityByKey.has(normKey(n, b.asin))),
   );
 
   return {
@@ -190,6 +248,8 @@ export async function buildVelocityPlan(
     effectiveFrom: formatYMD(build.effectiveFrom),
     clamped: build.clamped,
     creates,
+    bundleCreates,
+    bundleFlags: build.bundleFlags,
     updates,
     deleteCandidates,
     unchanged,

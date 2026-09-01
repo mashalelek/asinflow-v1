@@ -712,13 +712,65 @@ itemName}`):
 - `no_live_sku` — no `primary_sku`, or `has_live_offer ≠ TRUE`
 - `missing_quantity` — Col AZ empty on a selected row
 - `unparseable_date` — Col C does not parse
-- `bundle_unsupported` — Col AX `sold_as` is `bundle` (case-insensitive). We
-  don't do bundles, and a flat CSV row can't carry Velocity's `bundle_items`
-  anyway.
+- ~~`bundle_unsupported`~~ RETIRED for complete groups (2026-08-31) — see
+  **Bundles** below. Incomplete/unbuildable bundle groups skip under the
+  bundle taxonomy there; complete groups build real bundle records.
+- `bundle_incomplete` — a bundle group's row count ≠ its Col S value: the
+  remaining components live in ANOTHER order (cross-order composition —
+  observed live: B00HX01Z5O, Col S=3 with one component row in each of two
+  orders) or the sheet is mid-edit. Cross-order bundle assembly is
+  DEFERRED; these skip fail-closed, never guessed.
+- `bundle_component_bad_yield` — a bundle component's Col T
+  (asin_qty_per_product) is missing/unparseable, or the derived
+  units-per-bundle / total units don't come out as positive integers.
+- `bundle_sets_disagree` — Col N differs across a bundle group's rows; the
+  set count is ambiguous, skip fail-closed.
 - `invalid_pack_math` — `sold_as` is `multi-pack` AND (Col AY
   `units_per_pack` is not a positive integer OR Col AZ `quantity` is not
   divisible by it). Velocity enforces divisibility; catch VA typos before
   they do.
+
+**Bundles (2026-08-31).** A bundle = the rows sharing `(order, ASIN)` with
+Col S ≥ 2 (unique products per ASIN); Col AX reads `bundle`. Ground truth
+from Maria's manual dashboard entry (B0GNHTYGPF, 2026-08-30) and the raw
+GET: the parent carries `asin` / `amazon_sku` / bundle `item_name` (Col I) /
+`sold_as bundle` / `units_per_pack` (component units per set) / `quantity`
+(TOTAL units) — and **`order_number` + `retailer` are NULL on the parent**;
+they live on each `bundle_children` row, which are order-like rows with
+their own `order_id` and a `bundle_order_id` pointing at the parent.
+
+- **Derivation (the sheet's AY/AZ are NOT inputs):** sets `N` = Col N;
+  component units = Col L (qty ordered) × Col T (yield — a 5-pack supplier
+  product ordered ×1 with T=5 contributes 5 units); `units_per_bundle` =
+  Σ (component units ÷ N); parent `quantity` = N × units_per_bundle =
+  Σ component units. Per component: `item_name` = Col G product name,
+  `quantity` = its units, `order_number`/`retailer`/`date` from its row.
+  When Maria fills AY (= units per bundle) / AZ (= total units) they are
+  CROSS-CHECKED against the derived values and mismatches are FLAGGED in
+  the build report — never used as inputs (they were observed wrong:
+  AY=1/AZ=7 on the B0GNHTYGPF rows vs ground truth 2/14).
+- **Write path:** JSON `POST /inbound`, ONE order per call (the bulk CSV
+  cannot carry `bundle_items`). Top-level `order_number`/`retailer` are
+  omitted (parent-null by observation); per-child
+  `order_number`/`retailer`/`date` ride inside `bundle_items`. If the API
+  rejects or drops per-child fields, STOP and report — no PUT
+  improvisation. `unit_cost`/`list_price` are NEVER sent (cost privacy) —
+  confirmed non-blocking: the manual entry landed with both null.
+- **Match key (dedup / fetchAllKnownOrders / reconciliation):** a bundle's
+  identity = `bundle_children[].order_number` × parent `asin` — one key
+  per distinct child order number, since the parent's own `order_number`
+  is null. Keyed this way the manual B0GNHTYGPF classifies `matched`; on
+  the parent key alone it sat in `unmatched_velocity`. Quantity audit
+  compares UNITS (parent quantity vs derived N × units_per_bundle).
+- **Velocity docs discrepancies (4, recorded 2026-08-31 — their docs have
+  been wrong before):** (1) POST docs mark `color`/`brand_sku`/
+  `unit_cost`/`list_price` Required — the live manual entry has them
+  empty/null; (2) POST field is `bundle_items` but GET serializes
+  `bundle_children`; (3) the documented `bundle_items` item schema omits
+  `order_number`/`retailer`, which is exactly where they actually live;
+  (4) pagination metadata documented as `total` is actually
+  `total_results`, and `tracking_numbers` (POST docs) serializes as
+  `trackings` on GET.
 
 **Record columns** (exact header + order, CRLF line endings, matches Velocity's
 sample):

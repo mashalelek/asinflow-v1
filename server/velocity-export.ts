@@ -20,7 +20,11 @@ export type VelocitySkipReason =
   | "no_live_sku"
   | "missing_quantity"
   | "unparseable_date"
-  | "bundle_unsupported"   // sold_as=bundle — we don't do bundles; flat CSV can't carry bundle_items
+  // Bundle taxonomy (2026-08-31, SPEC §11 Bundles) — bundle_unsupported is
+  // RETIRED for complete groups; these are its fail-closed replacements:
+  | "bundle_incomplete"          // group rows ≠ Col S (cross-order composition — deferred)
+  | "bundle_component_bad_yield" // Col T/N/L missing/unparseable, or derived units not positive integers
+  | "bundle_sets_disagree"       // Col N differs across the group's rows
   | "invalid_pack_math";   // multi-pack with bad units_per_pack or qty not divisible by it
 export interface VelocitySkip {
   reason: VelocitySkipReason;
@@ -39,8 +43,40 @@ export interface VelocitySkip {
   };
 }
 
+// A bundle build (SPEC §11 Bundles, 2026-08-31): parent + bundle_items,
+// derived from Col N/L/T — the sheet's AY/AZ are cross-checked, never inputs.
+// Costs are never serialized anywhere in this shape.
+export interface VelocityBundleItem {
+  item_name: string;     // Col G product name
+  quantity: number;      // component UNITS = Col L × Col T
+  order_number: string;  // per-child (parent order_number is null in Velocity)
+  retailer: string;
+  date: string;          // Col C verbatim
+}
+export interface VelocityBundleRecord {
+  asin: string;
+  amazon_sku: string;    // live-SKU join, same rule as flat records
+  item_name: string;     // Col I ASIN name (the bundle listing's name)
+  sold_as: "bundle";
+  units_per_pack: number; // component units per SET
+  quantity: number;       // TOTAL units = sets × units_per_pack
+  date: string;           // first component row's Col C
+  fulfillment_type: "fba";
+  bundle_items: VelocityBundleItem[];
+  // Distinct child order numbers — the child-derived match keys (× asin).
+  orderNumbers: string[];
+}
+// AY/AZ cross-check mismatch — reported, never blocking (AY/AZ are not inputs).
+export interface BundleFlag {
+  orderNumber: string; asin: string;
+  field: "AY_units_per_pack" | "AZ_quantity";
+  sheet: string; derived: number;
+}
+
 export interface VelocityBuildResult {
   records: VelocityRecord[];
+  bundles: VelocityBundleRecord[];
+  bundleFlags: BundleFlag[];
   selfPrepExcluded: number; // Col AS <= 0 / empty — intentional, not a skip
   skips: VelocitySkip[];
   // Order-date floor (SPEC §11): creation clamp applied inside the builder so
@@ -122,7 +158,7 @@ export async function buildVelocityRecords(
   const clamped = effectiveFrom.getTime() > requestedFrom.getTime();
   const rangeBeforeFloor = to.getTime() < floor.getTime();
   if (rangeBeforeFloor) {
-    return { records: [], selfPrepExcluded: 0, skips: [], requestedFrom, effectiveFrom, clamped, rangeBeforeFloor };
+    return { records: [], bundles: [], bundleFlags: [], selfPrepExcluded: 0, skips: [], requestedFrom, effectiveFrom, clamped, rangeBeforeFloor };
   }
 
   const rows = await fetchSheetRows(sheetId);
@@ -160,20 +196,25 @@ export async function buildVelocityRecords(
   }
 
   const records: VelocityRecord[] = [];
+  const bundleGroups = new Map<string, typeof selected>();
   for (const row of selected) {
     const sku = skuMap.get(row.asin);
     if (!sku) {
       skips.push({ reason: "no_live_sku", orderNumber: row.orderNumber, asin: row.asin, itemName: row.itemName, row: { date: row.orderDate ?? null, retailer: row.retailer ?? null, quantity: row.quantity ?? null, soldAs: row.soldAs ?? null, unitsPerPack: row.unitsPerPack ?? null } });
       continue;
     }
-    if (row.quantity == null || row.quantity === "") {
-      skips.push({ reason: "missing_quantity", orderNumber: row.orderNumber, asin: row.asin, itemName: row.itemName, row: { date: row.orderDate ?? null, retailer: row.retailer ?? null, quantity: row.quantity ?? null, soldAs: row.soldAs ?? null, unitsPerPack: row.unitsPerPack ?? null } });
-      continue;
-    }
     // Fail-closed guards ahead of Velocity's own validation (SPEC §11 taxonomy).
     const soldAs = (row.soldAs ?? "").toString().trim().toLowerCase();
     if (soldAs === "bundle") {
-      skips.push({ reason: "bundle_unsupported", orderNumber: row.orderNumber, asin: row.asin, itemName: row.itemName, row: { date: row.orderDate ?? null, retailer: row.retailer ?? null, quantity: row.quantity ?? null, soldAs: row.soldAs ?? null, unitsPerPack: row.unitsPerPack ?? null } });
+      // SPEC §11 Bundles (2026-08-31): grouped + derived after this loop.
+      // AZ is cross-check-only for bundles, so no missing_quantity gate here.
+      const key = `${(row.orderNumber ?? "").trim()}\u0000${row.asin}`;
+      if (!bundleGroups.has(key)) bundleGroups.set(key, []);
+      bundleGroups.get(key)!.push(row);
+      continue;
+    }
+    if (row.quantity == null || row.quantity === "") {
+      skips.push({ reason: "missing_quantity", orderNumber: row.orderNumber, asin: row.asin, itemName: row.itemName, row: { date: row.orderDate ?? null, retailer: row.retailer ?? null, quantity: row.quantity ?? null, soldAs: row.soldAs ?? null, unitsPerPack: row.unitsPerPack ?? null } });
       continue;
     }
     if (soldAs === "multi-pack") {
@@ -206,5 +247,78 @@ export async function buildVelocityRecords(
     });
   }
 
-  return { records, selfPrepExcluded, skips, requestedFrom, effectiveFrom, clamped, rangeBeforeFloor };
+  // ── Bundle derivation (SPEC §11 Bundles, 2026-08-31) ──────────────────────
+  const bundles: VelocityBundleRecord[] = [];
+  const bundleFlags: BundleFlag[] = [];
+  const intOf = (s: string | null | undefined): number | null => {
+    const n = Number((s ?? "").toString().trim());
+    return Number.isInteger(n) && n > 0 ? n : null;
+  };
+  const numOf = (s: string | null | undefined): number | null => {
+    const n = Number((s ?? "").toString().trim());
+    return Number.isFinite(n) && n > 0 ? n : null;
+  };
+  for (const [key, group] of Array.from(bundleGroups.entries())) {
+    const first = group[0];
+    const orderNumber = (first.orderNumber ?? "").trim();
+    const base = { orderNumber: first.orderNumber, asin: first.asin, itemName: first.itemName,
+      row: { date: first.orderDate ?? null, retailer: first.retailer ?? null, quantity: first.quantity ?? null, soldAs: first.soldAs ?? null, unitsPerPack: first.unitsPerPack ?? null } };
+    // Completeness: group row count must equal Col S (cross-order composition
+    // is deferred — B00HX01Z5O splits one bundle across two orders).
+    const S = intOf(first.uniqueS);
+    if (S == null || group.length !== S) {
+      skips.push({ reason: "bundle_incomplete", ...base });
+      continue;
+    }
+    // Set count: every row's Col N must agree.
+    const Ns = group.map((r) => intOf(r.setsN));
+    if (Ns.some((n) => n == null)) { skips.push({ reason: "bundle_component_bad_yield", ...base }); continue; }
+    if (new Set(Ns).size !== 1) { skips.push({ reason: "bundle_sets_disagree", ...base }); continue; }
+    const N = Ns[0]!;
+    // Components: units = Col L × Col T, positive integers throughout.
+    let totalUnits = 0;
+    const items: VelocityBundleItem[] = [];
+    let bad = false;
+    for (const r of group) {
+      const L = intOf(r.qtyOrderedL);
+      const T = numOf(r.yieldT);
+      const units = L != null && T != null ? Math.round(L * T * 1e6) / 1e6 : null;
+      if (units == null || !Number.isInteger(units) || units <= 0) { bad = true; break; }
+      totalUnits += units;
+      items.push({
+        item_name: r.productName ?? "",
+        quantity: units,
+        order_number: (r.orderNumber ?? "").trim(),
+        retailer: r.retailer ?? "",
+        date: r.orderDate ?? "",
+      });
+    }
+    if (bad) { skips.push({ reason: "bundle_component_bad_yield", ...base }); continue; }
+    if (totalUnits % N !== 0) { skips.push({ reason: "bundle_component_bad_yield", ...base }); continue; }
+    const unitsPerBundle = totalUnits / N;
+    // AY/AZ cross-check — Maria fills AY = units per bundle, AZ = total units.
+    // Never inputs (observed wrong: AY=1/AZ=7 vs ground truth 2/14); mismatches flag.
+    const ay = (first.unitsPerPack ?? "").toString().trim();
+    if (ay !== "" && Number(ay) !== unitsPerBundle) {
+      bundleFlags.push({ orderNumber, asin: first.asin, field: "AY_units_per_pack", sheet: ay, derived: unitsPerBundle });
+    }
+    const az = (first.quantity ?? "").toString().trim();
+    if (az !== "" && Number(az) !== totalUnits) {
+      bundleFlags.push({ orderNumber, asin: first.asin, field: "AZ_quantity", sheet: az, derived: totalUnits });
+    }
+    bundles.push({
+      asin: first.asin,
+      amazon_sku: skuMap.get(first.asin)!,
+      item_name: first.itemName ?? "",
+      sold_as: "bundle",
+      units_per_pack: unitsPerBundle,
+      quantity: totalUnits,
+      date: first.orderDate ?? "",
+      fulfillment_type: "fba",
+      bundle_items: items,
+      orderNumbers: Array.from(new Set(items.map((i) => i.order_number).filter((x) => x !== ""))),
+    });
+  }
+
+  return { records, bundles, bundleFlags, selfPrepExcluded, skips, requestedFrom, effectiveFrom, clamped, rangeBeforeFloor };
 }

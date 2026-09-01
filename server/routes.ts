@@ -17,7 +17,7 @@ import { syncSalesData } from "./sales-sync";
 import { syncSuppressionData } from "./suppression-sync";
 import { fetchSheetData, fetchSheetDataWithMeta } from "./google-sheets";
 import { buildVelocityRecords, serializeVelocityCsv, parseMDY, formatYMD, todayLocal } from "./velocity-export";
-import { fetchAllKnownOrders, submitBulkCsv, updateInboundOrder } from "./velocity-api";
+import { fetchAllKnownOrders, matchKeysForOrder, createBundleOrder, submitBulkCsv, updateInboundOrder } from "./velocity-api";
 import { buildVelocityPlan, putBodyFromDiffs, type PlanUpdate } from "./velocity-reconcile";
 import { buildSellerboardCogs, serializeSbCsv } from "./sellerboard-cogs";
 import { syncSourcingSheet } from "./sourcing-sync";
@@ -1741,13 +1741,14 @@ export async function registerRoutes(
     if (!isDbAvailable()) { res.status(503).json({ message: "Database not available" }); return; }
     if (!process.env.VELOCITY_API_KEY || !process.env.VELOCITY_WAREHOUSE_ID) { res.status(400).json({ message: "VELOCITY_API_KEY / VELOCITY_WAREHOUSE_ID not configured" }); return; }
 
-    const { creates, updates } = (req.body ?? {}) as { creates?: any[]; updates?: PlanUpdate[] };
-    if (!Array.isArray(creates ?? []) || !Array.isArray(updates ?? [])) {
-      res.status(400).json({ message: "body must be { creates?: VelocityRecord[], updates?: PlanUpdate[] }" }); return;
+    const { creates, updates, bundles } = (req.body ?? {}) as { creates?: any[]; updates?: PlanUpdate[]; bundles?: any[] };
+    if (!Array.isArray(creates ?? []) || !Array.isArray(updates ?? []) || !Array.isArray(bundles ?? [])) {
+      res.status(400).json({ message: "body must be { creates?: VelocityRecord[], updates?: PlanUpdate[], bundles?: VelocityBundleRecord[] }" }); return;
     }
     const toCreate = creates ?? [];
     const toUpdate = updates ?? [];
-    if (toCreate.length === 0 && toUpdate.length === 0) { res.status(400).json({ message: "empty plan — nothing to execute" }); return; }
+    const toBundle = bundles ?? [];
+    if (toCreate.length === 0 && toUpdate.length === 0 && toBundle.length === 0) { res.status(400).json({ message: "empty plan — nothing to execute" }); return; }
 
     await respondLongSync(res, async () => {
       const results: any[] = [];
@@ -1780,6 +1781,34 @@ export async function registerRoutes(
           for (const r of createNow) results.push({ action: "create", order_number: r.order_number, asin: r.asin, outcome: "created" });
         } catch (err: any) {
           for (const r of createNow) results.push({ action: "create", order_number: r.order_number, asin: r.asin, outcome: "failed", error: err?.message ?? String(err) });
+        }
+      }
+
+      // Bundles (SPEC §11 Bundles, 2026-08-31): one JSON POST per bundle —
+      // the bulk CSV cannot carry bundle_items. Execute-time dedup uses the
+      // CHILD-DERIVED keys against the same fresh three-leg union (any child
+      // order_number × parent asin already known = the bundle exists).
+      if (toBundle.length > 0) {
+        const liveKeysAll = new Set<string>();
+        for (const o of live) {
+          for (const k of matchKeysForOrder(o)) {
+            liveKeysAll.add(`${k.orderNumber.trim()} ${k.asin.trim().toUpperCase()}`);
+          }
+        }
+        for (const b of toBundle) {
+          const asin = String(b.asin ?? "");
+          const nums: string[] = Array.isArray(b.orderNumbers) ? b.orderNumbers : [];
+          const dup = nums.some((n) => liveKeysAll.has(`${String(n).trim()} ${asin.trim().toUpperCase()}`));
+          if (dup) {
+            results.push({ action: "create_bundle", order_number: nums[0] ?? "", asin, outcome: "skipped_already_in_velocity" });
+            continue;
+          }
+          try {
+            await createBundleOrder(b);
+            results.push({ action: "create_bundle", order_number: nums[0] ?? "", asin, outcome: "created" });
+          } catch (err: any) {
+            results.push({ action: "create_bundle", order_number: nums[0] ?? "", asin, outcome: "failed", error: err?.message ?? String(err) });
+          }
         }
       }
 
