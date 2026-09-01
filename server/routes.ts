@@ -17,7 +17,7 @@ import { syncSalesData } from "./sales-sync";
 import { syncSuppressionData } from "./suppression-sync";
 import { fetchSheetData, fetchSheetDataWithMeta } from "./google-sheets";
 import { buildVelocityRecords, serializeVelocityCsv, parseMDY, formatYMD, todayLocal } from "./velocity-export";
-import { fetchAllInboundOrders, submitBulkCsv, updateInboundOrder } from "./velocity-api";
+import { fetchAllKnownOrders, submitBulkCsv, updateInboundOrder } from "./velocity-api";
 import { buildVelocityPlan, putBodyFromDiffs, type PlanUpdate } from "./velocity-reconcile";
 import { buildSellerboardCogs, serializeSbCsv } from "./sellerboard-cogs";
 import { syncSourcingSheet } from "./sourcing-sync";
@@ -1630,7 +1630,9 @@ export async function registerRoutes(
       // absent from the list, so re-upload needs no special handling.
       const dedupKey = (orderNumber: string, asin: string) =>
         `${orderNumber.trim()}\u0000${asin.trim().toUpperCase()}`;
-      const existing = await fetchAllInboundOrders();
+      // COMPLETE coverage (2026-08-11): dedup against /inbound + /inventory +
+      // shipment details — a completed order must never re-send as a CREATE.
+      const existing = await fetchAllKnownOrders();
       const existingKeys = new Set(
         existing.map((o) => dedupKey(String(o.order_number ?? ""), String(o.asin ?? ""))),
       );
@@ -1722,7 +1724,10 @@ export async function registerRoutes(
       // immediately before the write loop — never reuse order values cached
       // from the plan/review fetch. A review screen open for minutes would
       // otherwise full-replace away interim Velocity-side changes.
-      const live = await fetchAllInboundOrders();
+      // COMPLETE coverage (2026-08-11): the execute-time create-dedup uses
+      // the same three-leg union as the plan — a completed order must block
+      // a CREATE here too, the last line of defense against a duplicate.
+      const live = await fetchAllKnownOrders();
       const liveByKey = new Map(live.map((o) => [
         `${String(o.order_number ?? "").trim()} ${String(o.asin ?? "").trim().toUpperCase()}`, o,
       ]));

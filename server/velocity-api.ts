@@ -138,6 +138,104 @@ export async function updateInboundOrder(orderId: string, fields: Record<string,
   return res.data ?? null;
 }
 
+// ── Complete-coverage order fetch (dedup blind-spot fix, diagnosed 2026-08-07) ──
+//
+// GET /inbound serves ONLY active inbound orders (all 51 probed rows were
+// status "inbound"; status params are silently ignored). Orders that moved on
+// live elsewhere: checked-in stock in GET /inventory (carries order_number/
+// order_id/asin; statuses observed: "inventory", "inbound"), fully-shipped
+// orders ONLY in GET /shipments/:id detail (orders[] carries order_number).
+// The dedup/reconciliation match set must cover ALL of them — a completed
+// order classified as CREATE would duplicate on send (near-miss: orders
+// 129059664 + 100878, both already checked in/shipped, appeared as CREATEs).
+
+export type OrderLifecycleSource = "inbound" | "inventory" | "shipment";
+
+export interface KnownVelocityOrder extends VelocityInboundOrder {
+  // Which endpoint this record came from. Precedence in the union:
+  // inbound > inventory > shipment (richest, actionable-first). Shipment-
+  // derived rows are pseudo-orders: status "shipped", quantity =
+  // quantity_shipped (DIFFERENT semantics — never quantity-audit them).
+  lifecycleSource: OrderLifecycleSource;
+}
+
+async function fetchAllInventoryOrders(): Promise<VelocityInboundOrder[]> {
+  const PAGE = 200;
+  const MAX_PAGES = 50;
+  const all: VelocityInboundOrder[] = [];
+  for (let page = 0; page < MAX_PAGES; page++) {
+    const body = await velocityFetch(`/inventory?limit=${PAGE}&offset=${page * PAGE}`);
+    const orders: VelocityInboundOrder[] = body.data?.orders ?? [];
+    const total: number = body.data?.results?.total_results ?? orders.length;
+    all.push(...orders);
+    if (all.length >= total || orders.length === 0) return all;
+  }
+  throw new Error(`Velocity /inventory pagination did not converge after ${MAX_PAGES} pages — aborting`);
+}
+
+// Fail-closed parser: a shipment detail without a well-formed orders array is
+// AMBIGUOUS coverage — throw so the caller refuses to classify CREATEs,
+// rather than silently shrinking the match set (the exact failure mode this
+// module exists to prevent).
+export function shipmentOrdersFrom(detailData: any, shipmentId: string): VelocityInboundOrder[] {
+  const orders = detailData?.orders;
+  if (!Array.isArray(orders)) {
+    throw new Error(`Velocity shipment ${shipmentId}: detail response has no orders array — coverage ambiguous, refusing to classify`);
+  }
+  return orders.map((o: any) => ({
+    order_id: String(o.order_id ?? ""),
+    order_number: String(o.order_number ?? ""),
+    asin: String(o.asin ?? "").toUpperCase(),
+    date: String(o.date ?? ""),
+    sold_as: String(o.sold_as ?? ""),
+    status: "shipped",
+    item_name: o.item_name,
+    quantity: o.quantity_shipped != null ? Number(o.quantity_shipped) : undefined,
+  }));
+}
+
+// Pure union by (order_number, asin), first-source-wins with the precedence
+// inbound > inventory > shipment. Exported for tests.
+export function unionKnownOrders(
+  inbound: VelocityInboundOrder[],
+  inventory: VelocityInboundOrder[],
+  shipmentOrders: VelocityInboundOrder[],
+): KnownVelocityOrder[] {
+  const seen = new Set<string>();
+  const out: KnownVelocityOrder[] = [];
+  const add = (rows: VelocityInboundOrder[], source: OrderLifecycleSource) => {
+    for (const o of rows) {
+      const key = `${String(o.order_number ?? "").trim()}\u0000${String(o.asin ?? "").trim().toUpperCase()}`;
+      if (seen.has(key)) continue;
+      seen.add(key);
+      out.push({ ...o, lifecycleSource: source });
+    }
+  };
+  add(inbound, "inbound");
+  add(inventory, "inventory");
+  add(shipmentOrders, "shipment");
+  return out;
+}
+
+// The complete match set: /inbound + /inventory + every /shipments/:id
+// detail. FAIL-CLOSED: any leg throwing propagates — callers (the reconcile
+// plan) must refuse to classify CREATEs on a partial set, never risk a
+// duplicate. ~29 GETs at current volume; velocityFetch's 429-retry paces it.
+export async function fetchAllKnownOrders(): Promise<KnownVelocityOrder[]> {
+  const inbound = await fetchAllInboundOrders();
+  const inventory = await fetchAllInventoryOrders();
+  const shipList = await velocityFetch(`/shipments?limit=-1`);
+  const shipments: any[] = shipList.data?.shipments ?? shipList.data ?? [];
+  const shipmentOrders: VelocityInboundOrder[] = [];
+  for (const sh of shipments) {
+    const sid = String(sh.shipment_id ?? sh.id ?? "");
+    if (!sid) throw new Error("Velocity /shipments row without shipment_id — coverage ambiguous, refusing to classify");
+    const det = await velocityFetch(`/shipments/${encodeURIComponent(sid)}`);
+    shipmentOrders.push(...shipmentOrdersFrom(det.data, sid));
+  }
+  return unionKnownOrders(inbound, inventory, shipmentOrders);
+}
+
 // Submit the bulk CSV — the exact serializeVelocityCsv output, unmodified.
 // Returns the response `data` (order_id per docs; shape not further relied on
 // — bulk mode has been observed returning an empty array).

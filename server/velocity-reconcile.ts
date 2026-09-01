@@ -14,14 +14,15 @@ import {
   buildVelocityRecords, formatYMD,
   type VelocityRecord, type VelocitySkip,
 } from "./velocity-export";
-import { fetchAllInboundOrders, type VelocityInboundOrder } from "./velocity-api";
+import { fetchAllKnownOrders, type KnownVelocityOrder } from "./velocity-api";
 
 type QueryLike = (sql: string, params?: any[]) => Promise<{ rows: any[]; rowCount: number | null }>;
 
-// Actionable = still editable in Velocity. "inbound" is the only value
-// observed across all 44 orders (2026-07-30); docs name "outbound" = shipped.
-// Unknown statuses are treated as closed — fail-safe: never audit what we
-// don't understand.
+// Actionable = still editable in Velocity. "inbound" is the only editable
+// state; the complete-coverage fetch (2026-08-11) also carries "inventory"
+// (checked-in) and "shipped" (pseudo-orders from shipment details) — both
+// non-actionable. Unknown statuses are treated as closed — fail-safe: never
+// audit what we don't understand.
 const ACTIONABLE_STATUSES = new Set(["inbound"]);
 
 // Per-order audit is QUANTITY ONLY (Maria, 2026-07-30): actionable qty
@@ -94,9 +95,14 @@ export async function buildVelocityPlan(
 
   // Matching needs the FULL sheet (audit is status-bound, not date-bound) and
   // the full Velocity list.
+  // COMPLETE coverage (2026-08-11): /inbound + /inventory + shipment details.
+  // A completed order must MATCH (landing in the shipped/closed buckets) —
+  // never classify as CREATE (the duplicate-send near-miss, 2026-08-07).
+  // fetchAllKnownOrders is fail-closed: any leg failing throws, the plan
+  // build fails, and NOTHING is classified — no partial match set.
   const [sheetRows, velocityOrders] = await Promise.all([
     fetchSheetRows(sheetId),
-    fetchAllInboundOrders(),
+    fetchAllKnownOrders(),
   ]);
 
   // One canonical sheet row per (order_number, asin): first non-canceled wins
@@ -118,7 +124,7 @@ export async function buildVelocityPlan(
   const deleteCandidates: PlanDeleteCandidate[] = [];
   let unchanged = 0, closedInVelocity = 0, unmatchedVelocity = 0;
 
-  const matchedVelocityByKey = new Map<string, VelocityInboundOrder>();
+  const matchedVelocityByKey = new Map<string, KnownVelocityOrder>();
 
   for (const o of velocityOrders) {
     const orderNumber = String(o.order_number ?? "");
@@ -155,9 +161,15 @@ export async function buildVelocityPlan(
     // Velocity columns AX–AZ); only a POSITIVE INTEGER proposes/flags a
     // mismatch (explicit 0 = full-cancel territory → manual, never an update).
     const diffs: FieldDiff[] = [];
-    const sheetQty = numOrNull(sheetRow.quantity), velQty = numOrNull(o.quantity);
-    if (sheetQty !== null && Number.isInteger(sheetQty) && sheetQty > 0 && sheetQty !== velQty) {
-      diffs.push({ field: "quantity", sheet_value: sheetQty, velocity_value: velQty });
+    // Shipment-derived pseudo-orders carry quantity_shipped, NOT the order
+    // quantity — different semantics, never quantity-audited (a partially
+    // shipped order would flag pure noise). They exist to block CREATE and
+    // land in closedInVelocity. Inbound/inventory rows audit as before.
+    if (o.lifecycleSource !== "shipment") {
+      const sheetQty = numOrNull(sheetRow.quantity), velQty = numOrNull(o.quantity);
+      if (sheetQty !== null && Number.isInteger(sheetQty) && sheetQty > 0 && sheetQty !== velQty) {
+        diffs.push({ field: "quantity", sheet_value: sheetQty, velocity_value: velQty });
+      }
     }
 
     if (diffs.length === 0) { actionable ? unchanged++ : closedInVelocity++; continue; }

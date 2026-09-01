@@ -762,9 +762,17 @@ warehouses, inbound).
   fail.
 
 **Dedup — Velocity is the truth; no local gatekeeper ledger:**
-- Before sending, `listInboundOrders` pages through existing orders
-  (`limit=200` until `total_results` covered; revisit with a date filter if
-  this gets slow).
+- Before sending, the match set is the COMPLETE-COVERAGE union
+  (`fetchAllKnownOrders`, 2026-08-11): `GET /inbound` + `GET /inventory` +
+  every `GET /shipments/:id` detail. `GET /inbound` serves ONLY active
+  inbound orders (verified: status params silently ignored) — checked-in
+  orders live in `/inventory`, fully-shipped orders ONLY in shipment details
+  (near-miss 2026-08-07: two completed orders classified as CREATE and would
+  have duplicated on send). Union precedence inbound > inventory > shipment;
+  shipment-derived rows are pseudo-orders (`status "shipped"`, quantity =
+  `quantity_shipped` — never quantity-audited). **Fail-closed:** any leg
+  failing, or a malformed shipment detail, aborts the plan — CREATEs are
+  never classified against a partial match set.
 - Match key: `(order_number, asin)`, both trimmed; `order_number` compared as
   an exact string, `asin` case-insensitively.
 - Records matching an existing Velocity order are dropped as
@@ -798,7 +806,9 @@ replaces another.
 
 **Match key** (as dedup): normalized `(order_number, asin)` — both trimmed,
 `order_number` exact string, ASIN case-insensitive. Dates are always
-parse-then-compare (Velocity zero-pads `MM/DD/YYYY`).
+parse-then-compare (Velocity zero-pads `MM/DD/YYYY`). The match set is the
+complete-coverage union above — completed (inventory/shipped) orders MATCH
+and land in the closed/flag-only buckets, never CREATE.
 
 **Classification** (sheet rows fetched at full range for matching, not just
 the upload window):
