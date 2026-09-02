@@ -102,9 +102,15 @@ export async function listInboundOrders(
   if (opts.sortKey) params.set("sort_key", opts.sortKey);
   if (opts.sortOrder) params.set("sort_order", opts.sortOrder);
   const body = await velocityFetch(`/inbound?${params.toString()}`);
+  // Tripwire (2026-09-02): the metadata field must exist and be finite — a
+  // silent fallback here once meant single-page coverage would pass unnoticed.
+  const total = body.data?.results?.total_results;
+  if (typeof total !== "number" || !Number.isFinite(total)) {
+    throw new Error(`Velocity /inbound metadata missing data.results.total_results — refusing partial coverage (got ${JSON.stringify(total)})`);
+  }
   return {
     orders: body.data?.orders ?? [],
-    totalResults: body.data?.results?.total_results ?? 0,
+    totalResults: total,
   };
 }
 
@@ -116,12 +122,19 @@ export async function fetchAllInboundOrders(): Promise<VelocityInboundOrder[]> {
   const PAGE = 200;
   const MAX_PAGES = 50; // 10k orders — far beyond plausible volume
   const all: VelocityInboundOrder[] = [];
+  let reported = -1;
   for (let page = 0; page < MAX_PAGES; page++) {
     const { orders, totalResults } = await listInboundOrders({ limit: PAGE, offset: page * PAGE });
+    reported = totalResults;
     all.push(...orders);
-    if (all.length >= totalResults || orders.length === 0) return all;
+    if (all.length >= totalResults || orders.length === 0) break;
   }
-  throw new Error(`Velocity pagination did not converge after ${MAX_PAGES} pages — aborting`);
+  // Fail-closed both ways (2026-09-02): fetched ≠ reported total → loud
+  // failure. No plan or dedup ever runs on partial coverage.
+  if (all.length !== reported) {
+    throw new Error(`Velocity /inbound coverage incomplete: fetched ${all.length} of ${reported} — refusing to classify`);
+  }
+  return all;
 }
 
 // Create ONE bundle order — JSON POST /inbound (SPEC §11 Bundles,
@@ -222,14 +235,23 @@ async function fetchAllInventoryOrders(): Promise<VelocityInboundOrder[]> {
   const PAGE = 200;
   const MAX_PAGES = 50;
   const all: VelocityInboundOrder[] = [];
+  let reported = -1;
   for (let page = 0; page < MAX_PAGES; page++) {
     const body = await velocityFetch(`/inventory?limit=${PAGE}&offset=${page * PAGE}`);
     const orders: VelocityInboundOrder[] = body.data?.orders ?? [];
-    const total: number = body.data?.results?.total_results ?? orders.length;
+    const total = body.data?.results?.total_results;
+    // Tripwire (2026-09-02): no silent fallback — missing metadata throws.
+    if (typeof total !== "number" || !Number.isFinite(total)) {
+      throw new Error(`Velocity /inventory metadata missing data.results.total_results — refusing partial coverage (got ${JSON.stringify(total)})`);
+    }
+    reported = total;
     all.push(...orders);
-    if (all.length >= total || orders.length === 0) return all;
+    if (all.length >= total || orders.length === 0) break;
   }
-  throw new Error(`Velocity /inventory pagination did not converge after ${MAX_PAGES} pages — aborting`);
+  if (all.length !== reported) {
+    throw new Error(`Velocity /inventory coverage incomplete: fetched ${all.length} of ${reported} — refusing to classify`);
+  }
+  return all;
 }
 
 // Fail-closed parser: a shipment detail without a well-formed orders array is
@@ -264,9 +286,16 @@ export function unionKnownOrders(
   const out: KnownVelocityOrder[] = [];
   const add = (rows: VelocityInboundOrder[], source: OrderLifecycleSource) => {
     for (const o of rows) {
-      const key = `${String(o.order_number ?? "").trim()}\u0000${String(o.asin ?? "").trim().toUpperCase()}`;
-      if (seen.has(key)) continue;
-      seen.add(key);
+      // CHILD-DERIVED keys (2026-09-02): bundle parents carry order_number
+      // null, so the old flat key collided every same-ASIN bundle on
+      // ("", ASIN) and silently dropped all but the first — the 8/30
+      // B0GNHTYGPF phantom-CREATE incident. An order is a cross-leg duplicate
+      // only when ALL its derived keys are already seen.
+      const keys = matchKeysForOrder(o).map(
+        (k) => `${k.orderNumber.trim()}\u0000${k.asin.trim().toUpperCase()}`,
+      );
+      if (keys.every((k) => seen.has(k))) continue;
+      for (const k of keys) seen.add(k);
       out.push({ ...o, lifecycleSource: source });
     }
   };

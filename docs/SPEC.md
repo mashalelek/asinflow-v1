@@ -825,6 +825,24 @@ warehouses, inbound).
   `quantity_shipped` — never quantity-audited). **Fail-closed:** any leg
   failing, or a malformed shipment detail, aborts the plan — CREATEs are
   never classified against a partial match set.
+- **Union dedup keys are CHILD-DERIVED (2026-09-02).** The cross-leg dedup
+  originally keyed `(order_number ?? "", asin)` — bundle parents carry
+  `order_number` null, so every bundle of the same ASIN collided on
+  `("", ASIN)` and all but the first were silently dropped BEFORE
+  `matchKeysForOrder` could derive keys. Live incident: the moment a second
+  B0GNHTYGPF bundle was entered, the 8/30 one vanished from the match set
+  and its sheet group became a phantom CREATE (caught at the first-write
+  pre-flight, 2026-09-02 — nothing was sent). `unionKnownOrders` now
+  registers each order under its `matchKeysForOrder` key set (bundles → one
+  key per distinct child order number × parent asin) and drops an order
+  only when ALL its keys are already seen; leg precedence unchanged.
+- **Pagination tripwire, fail-closed both ways (2026-09-02):** on /inbound
+  and /inventory, `data.results.total_results` must be present and finite —
+  a missing/moved metadata field THROWS (no silent `?? 0` / `?? page
+  length` fallback); after paging, fetched ≠ total THROWS. No plan, dedup,
+  or execute runs on partial coverage — silent partial coverage is worse
+  than no dedup. (Docs-wrong item #5: their pagination metadata is
+  documented as `total`; the real field is `data.results.total_results`.)
 - Match key: `(order_number, asin)`, both trimmed; `order_number` compared as
   an exact string, `asin` case-insensitively.
 - Records matching an existing Velocity order are dropped as
