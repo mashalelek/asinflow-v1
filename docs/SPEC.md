@@ -725,6 +725,10 @@ itemName}`):
   units-per-bundle / total units don't come out as positive integers.
 - `bundle_sets_disagree` — Col N differs across a bundle group's rows; the
   set count is ambiguous, skip fail-closed.
+- `bundle_shipped_unidentified` — a fully-shipped bundle of this ASIN
+  exists in Velocity with unrecoverable child keys (see "Shipped-bundle
+  identity gap"); ALL bundle creates for the ASIN are suppressed rather
+  than risk re-creating it.
 - `invalid_pack_math` — `sold_as` is `multi-pack` AND (Col AY
   `units_per_pack` is not a positive integer OR Col AZ `quantity` is not
   divisible by it). Velocity enforces divisibility; catch VA typos before
@@ -836,6 +840,20 @@ warehouses, inbound).
   registers each order under its `matchKeysForOrder` key set (bundles → one
   key per distinct child order number × parent asin) and drops an order
   only when ALL its keys are already seen; leg precedence unchanged.
+- **Shipped-bundle identity gap (2026-09-02):** fully-shipped bundles exist
+  ONLY as shipment-detail pseudo-rows, and the API serializes
+  `bundle_children` on LIST endpoints alone (`/inbound`, `/inventory`) —
+  shipment details and direct `GET /inbound/:order_id` omit them entirely
+  (docs-wrong item #6), so a fully-shipped bundle's child keys are
+  unrecoverable. Rule: shipment-leg bundle pseudo-rows are HYDRATED
+  in-batch by `order_id` from the inbound/inventory legs (covers
+  partially-shipped bundles whose parent is still list-visible); bundles
+  visible only as child-less shipment rows are surfaced as
+  `unidentifiedShippedBundles`, and the plan SUPPRESSES every bundle
+  create for those ASINs with skip `bundle_shipped_unidentified` — loud,
+  fail-closed, no persistent identity table (revisit only if this skip
+  recurs in practice). Live case: B0GWG5S64Q shipped 2026-09-02 and its
+  sheet group became a phantom CREATE until this rule.
 - **Pagination tripwire, fail-closed both ways (2026-09-02):** on /inbound
   and /inventory, `data.results.total_results` must be present and finite —
   a missing/moved metadata field THROWS (no silent `?? 0` / `?? page

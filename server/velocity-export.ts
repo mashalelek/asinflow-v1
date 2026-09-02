@@ -25,6 +25,7 @@ export type VelocitySkipReason =
   | "bundle_incomplete"          // group rows ≠ Col S (cross-order composition — deferred)
   | "bundle_component_bad_yield" // Col T/N/L missing/unparseable, or derived units not positive integers
   | "bundle_sets_disagree"       // Col N differs across the group's rows
+  | "bundle_shipped_unidentified" // fully-shipped bundle of this ASIN with unrecoverable child keys — creates suppressed
   | "invalid_pack_math";   // multi-pack with bad units_per_pack or qty not divisible by it
 export interface VelocitySkip {
   reason: VelocitySkipReason;

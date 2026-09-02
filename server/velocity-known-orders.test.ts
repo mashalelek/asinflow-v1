@@ -1,5 +1,5 @@
 import { describe, it, expect, vi } from "vitest";
-import { unionKnownOrders, shipmentOrdersFrom, listInboundOrders, type VelocityInboundOrder } from "./velocity-api";
+import { unionKnownOrders, shipmentOrdersFrom, listInboundOrders, hydrateShipmentBundles, unidentifiedShippedBundles, type VelocityInboundOrder } from "./velocity-api";
 
 // Complete-coverage dedup fix (2026-08-11; near-miss diagnosed 2026-08-07:
 // checked-in order 129059664 and shipped order 100878 vanished from
@@ -123,5 +123,45 @@ describe("pagination tripwires (2026-09-02)", () => {
       const { fetchAllInboundOrders } = await import("./velocity-api");
       await expect(fetchAllInboundOrders()).rejects.toThrow(/coverage incomplete: fetched 1 of 57/);
     } finally { globalThis.fetch = orig; }
+  });
+});
+
+// ── Shipped-bundle identity gap (2026-09-02, SPEC §11) ──────────────────────
+// Shipment details omit bundle_children; pseudo-rows hydrate in-batch by
+// order_id from list-visible parents, and fully-shipped bundles (no source to
+// hydrate from) surface as unidentified — the plan suppresses their ASIN's
+// creates fail-closed (the B0GWG5S64Q phantom, 2026-09-02).
+const shipPseudo = (order_id: string, asin: string, qty: number): VelocityInboundOrder => ({
+  order_id, order_number: "" as any, asin, date: "09/02/2026",
+  sold_as: "bundle", status: "shipped", quantity: qty,
+});
+
+describe("shipped-bundle hydration + unidentified surface (2026-09-02)", () => {
+  it("partially-shipped: pseudo-row hydrates children from its list-visible parent and dedups in the union", () => {
+    const parent = bundleOrd("c0835a42", "B0GNHTYGPF", ["200015523189765"], 20);
+    const hydrated = hydrateShipmentBundles([shipPseudo("c0835a42", "B0GNHTYGPF", 10)], [parent]);
+    expect(hydrated[0].bundle_children).toHaveLength(1);
+    const u = unionKnownOrders([parent], [], hydrated);
+    expect(u).toHaveLength(1); // pseudo-row deduped via the now-shared child keys
+    expect(u[0].lifecycleSource).toBe("inbound");
+    expect(unidentifiedShippedBundles(u)).toEqual([]);
+  });
+
+  it("fully-shipped: no hydration source → survives child-less and reports unidentified", () => {
+    const hydrated = hydrateShipmentBundles([shipPseudo("48f9a158", "B0GWG5S64Q", 10)], []);
+    expect(hydrated[0].bundle_children).toBeUndefined();
+    const u = unionKnownOrders([], [], hydrated);
+    expect(u).toHaveLength(1);
+    const un = unidentifiedShippedBundles(u);
+    expect(un).toHaveLength(1);
+    expect(un[0].asin).toBe("B0GWG5S64Q");
+  });
+
+  it("non-bundle shipment rows are untouched by hydration and never flagged", () => {
+    const flat: VelocityInboundOrder = { order_id: "x", order_number: "111", asin: "B0A", date: "09/02/2026", sold_as: "individual", status: "shipped", quantity: 3 };
+    const hydrated = hydrateShipmentBundles([flat], []);
+    expect(hydrated[0]).toBe(flat);
+    const u = unionKnownOrders([], [], hydrated);
+    expect(unidentifiedShippedBundles(u)).toEqual([]);
   });
 });

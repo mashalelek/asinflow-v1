@@ -14,7 +14,7 @@ import {
   buildVelocityRecords, formatYMD,
   type VelocityRecord, type VelocitySkip, type VelocityBundleRecord, type BundleFlag,
 } from "./velocity-export";
-import { fetchAllKnownOrders, matchKeysForOrder, type KnownVelocityOrder } from "./velocity-api";
+import { fetchAllKnownOrders, matchKeysForOrder, unidentifiedShippedBundles, type KnownVelocityOrder } from "./velocity-api";
 
 type QueryLike = (sql: string, params?: any[]) => Promise<{ rows: any[]; rowCount: number | null }>;
 
@@ -238,9 +238,26 @@ export async function buildVelocityPlan(
   );
   // Bundle CREATE dedup: ANY child-derived key already known in Velocity
   // means the bundle exists — never re-send (SPEC §11 Bundles).
-  const bundleCreates = build.bundles.filter(
-    (b) => !b.orderNumbers.some((n) => matchedVelocityByKey.has(normKey(n, b.asin))),
+  // Shipped-bundle suppression (2026-09-02): a fully-shipped bundle's child
+  // keys are unrecoverable (identity gap), so ALL bundle creates for its
+  // ASIN are suppressed fail-closed with a loud skip — never risk
+  // re-creating an order the API can no longer identify.
+  const shippedUnidentifiedAsins = new Set(
+    unidentifiedShippedBundles(velocityOrders).map((o) => String(o.asin ?? "").toUpperCase()),
   );
+  const bundleCreates: typeof build.bundles = [];
+  for (const b of build.bundles) {
+    if (b.orderNumbers.some((n) => matchedVelocityByKey.has(normKey(n, b.asin)))) continue;
+    if (shippedUnidentifiedAsins.has(b.asin.toUpperCase())) {
+      build.skips.push({
+        reason: "bundle_shipped_unidentified",
+        orderNumber: b.orderNumbers[0] ?? "", asin: b.asin, itemName: b.item_name,
+        row: { date: b.date, retailer: null, quantity: String(b.quantity), soldAs: "bundle", unitsPerPack: String(b.units_per_pack) },
+      });
+      continue;
+    }
+    bundleCreates.push(b);
+  }
 
   return {
     from: formatYMD(from),

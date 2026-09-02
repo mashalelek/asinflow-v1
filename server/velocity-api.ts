@@ -309,6 +309,40 @@ export function unionKnownOrders(
 // detail. FAIL-CLOSED: any leg throwing propagates — callers (the reconcile
 // plan) must refuse to classify CREATEs on a partial set, never risk a
 // duplicate. ~29 GETs at current volume; velocityFetch's 429-retry paces it.
+// Shipped-bundle identity gap (2026-09-02, SPEC §11): shipment details omit
+// bundle_children (LIST endpoints alone serialize them — docs-wrong #6), so
+// shipment-leg bundle pseudo-rows hydrate their children IN-BATCH by order_id
+// from the inbound/inventory legs. A bundle visible only as a child-less
+// shipment row (fully shipped) stays child-less and is surfaced via
+// unidentifiedShippedBundles() — the plan suppresses its ASIN's creates.
+export function hydrateShipmentBundles(
+  shipmentOrders: VelocityInboundOrder[],
+  listOrders: VelocityInboundOrder[],
+): VelocityInboundOrder[] {
+  const childrenById = new Map<string, any[]>();
+  for (const o of listOrders) {
+    if (String(o.sold_as ?? "").toLowerCase() === "bundle" && Array.isArray(o.bundle_children) && o.bundle_children.length > 0) {
+      childrenById.set(String(o.order_id), o.bundle_children);
+    }
+  }
+  return shipmentOrders.map((o) => {
+    if (String(o.sold_as ?? "").toLowerCase() !== "bundle") return o;
+    if (Array.isArray(o.bundle_children) && o.bundle_children.length > 0) return o;
+    const kids = childrenById.get(String(o.order_id));
+    return kids ? { ...o, bundle_children: kids } : o;
+  });
+}
+
+// Fully-shipped bundles whose child keys are unrecoverable — the fail-closed
+// suppression input (SPEC §11 "Shipped-bundle identity gap").
+export function unidentifiedShippedBundles(orders: KnownVelocityOrder[]): KnownVelocityOrder[] {
+  return orders.filter((o) =>
+    o.lifecycleSource === "shipment" &&
+    String(o.sold_as ?? "").toLowerCase() === "bundle" &&
+    !(Array.isArray(o.bundle_children) && o.bundle_children.length > 0),
+  );
+}
+
 export async function fetchAllKnownOrders(): Promise<KnownVelocityOrder[]> {
   const inbound = await fetchAllInboundOrders();
   const inventory = await fetchAllInventoryOrders();
@@ -321,7 +355,8 @@ export async function fetchAllKnownOrders(): Promise<KnownVelocityOrder[]> {
     const det = await velocityFetch(`/shipments/${encodeURIComponent(sid)}`);
     shipmentOrders.push(...shipmentOrdersFrom(det.data, sid));
   }
-  return unionKnownOrders(inbound, inventory, shipmentOrders);
+  const hydrated = hydrateShipmentBundles(shipmentOrders, [...inbound, ...inventory]);
+  return unionKnownOrders(inbound, inventory, hydrated);
 }
 
 // Submit the bulk CSV — the exact serializeVelocityCsv output, unmodified.
