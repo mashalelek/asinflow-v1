@@ -137,40 +137,83 @@ export async function fetchAllInboundOrders(): Promise<VelocityInboundOrder[]> {
   return all;
 }
 
-// Create ONE bundle order — JSON POST /inbound (SPEC §11 Bundles,
-// 2026-08-31). The bulk CSV cannot carry bundle_items, so bundles post one
-// order per call. Top-level order_number/retailer are OMITTED (parent-null by
-// observation); per-child order_number/retailer/date ride inside
-// bundle_items. unit_cost/list_price are NEVER sent (cost privacy). If the
-// API rejects or drops per-child fields, callers STOP and report — no PUT
-// improvisation (first-write protocol).
+// Create ONE bundle order — multipart/form-data POST /inbound with
+// bulk=false (2026-09-03, decoded from a dashboard capture). JSON is NOT
+// accepted on the single-order POST (docs-wrong #7: two JSON attempts 400'd
+// "Quantity must be a valid number." with quantity present — their validator
+// reads form fields only); dates go as YYYY-MM-DD (capture: 2026-09-02), not
+// our sheet's M/D/YYYY. Every scalar is a string; blanks are EMPTY STRINGS
+// PRESENT — including top-level order_number/retailer (parent-null contract)
+// and unit_cost/list_price (cost privacy preserved as empty-not-omitted).
+// bundle_items is a JSON.stringify'd array of FULL order-shaped children
+// mirroring the capture verbatim. If the API rejects or drops per-child
+// fields, callers STOP and report — no PUT improvisation.
+
+// M/D/YYYY (sheet) → YYYY-MM-DD (capture contract). Fail-closed on garbage.
+export function mdyToIso(mdy: string): string {
+  const m = /^(\d{1,2})\/(\d{1,2})\/(\d{4})$/.exec(mdy.trim());
+  if (!m) throw new Error(`createBundleOrder: unparseable date ${JSON.stringify(mdy)} — expected M/D/YYYY`);
+  return `${m[3]}-${m[1].padStart(2, "0")}-${m[2].padStart(2, "0")}`;
+}
+
 export async function createBundleOrder(rec: {
   asin: string; amazon_sku: string; item_name: string;
   units_per_pack: number; quantity: number; date: string;
   bundle_items: Array<{ item_name: string; quantity: number; order_number: string; retailer: string; date: string }>;
 }): Promise<any> {
-  const body = {
-    date: rec.date,
+  const children = rec.bundle_items.map((c) => ({
+    item_name: c.item_name,
+    quantity: String(c.quantity),
+    order_number: c.order_number,
+    retailer: c.retailer,
+    date: mdyToIso(c.date),
+    asin: "",
+    amazon_sku: "",
+    size: "",
+    brand_sku: "",
+    color: "",
+    unit_cost: "",
+    list_price: "",
+    client_notes: "",
+    upc: "",
+    fulfillment_type: "-- select an option --", // capture-verbatim child placeholder
+    sold_as: "individual",
+    units_per_pack: "",
+    trackings: [],
+    bundle_items: [],
+    shipping_labels: [],
+    transparency_files: [],
+  }));
+
+  const form = new FormData();
+  const fields: Record<string, string> = {
+    bulk: "false",
+    date: mdyToIso(rec.date),
+    retailer: "",          // parent-null contract — empty string PRESENT
+    order_number: "",      // parent-null contract — empty string PRESENT
     item_name: rec.item_name,
-    quantity: rec.quantity,
+    quantity: String(rec.quantity),
     asin: rec.asin,
     amazon_sku: rec.amazon_sku,
     fulfillment_type: "fba",
     sold_as: "bundle",
-    units_per_pack: rec.units_per_pack,
-    bundle_items: rec.bundle_items.map((c) => ({
-      item_name: c.item_name,
-      quantity: c.quantity,
-      order_number: c.order_number,
-      retailer: c.retailer,
-      date: c.date,
-    })),
+    units_per_pack: String(rec.units_per_pack),
+    size: "",
+    color: "",
+    brand_sku: "",
+    upc: "",
+    client_notes: "",
+    unit_cost: "",         // cost privacy — empty, never a value
+    list_price: "",        // cost privacy — empty, never a value
+    bundle_items: JSON.stringify(children),
+    trackings: JSON.stringify([]),
+    shipping_labels: JSON.stringify([]),
+    transparency_files: JSON.stringify([]),
+    tracking_numbers: JSON.stringify([]),
   };
-  const res = await velocityFetch("/inbound", {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify(body),
-  });
+  for (const [k, v] of Object.entries(fields)) form.append(k, v);
+
+  const res = await velocityFetch("/inbound", { method: "POST", body: form });
   return res.data ?? null;
 }
 

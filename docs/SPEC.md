@@ -753,13 +753,29 @@ their own `order_id` and a `bundle_order_id` pointing at the parent.
   CROSS-CHECKED against the derived values and mismatches are FLAGGED in
   the build report — never used as inputs (they were observed wrong:
   AY=1/AZ=7 on the B0GNHTYGPF rows vs ground truth 2/14).
-- **Write path:** JSON `POST /inbound`, ONE order per call (the bulk CSV
-  cannot carry `bundle_items`). Top-level `order_number`/`retailer` are
-  omitted (parent-null by observation); per-child
-  `order_number`/`retailer`/`date` ride inside `bundle_items`. If the API
-  rejects or drops per-child fields, STOP and report — no PUT
-  improvisation. `unit_cost`/`list_price` are NEVER sent (cost privacy) —
-  confirmed non-blocking: the manual entry landed with both null.
+- **Write path (corrected 2026-09-03, proven by the TEST first write):**
+  `POST /inbound` as **multipart/form-data with `bulk=false`**, ONE order
+  per call (the bulk CSV cannot carry `bundle_items`; decoded from a
+  dashboard capture). Every scalar is a STRING; blanks are EMPTY STRINGS
+  PRESENT — including top-level `order_number`/`retailer` (parent-null
+  contract) and `unit_cost`/`list_price` (cost privacy as
+  empty-not-omitted). Dates go as **YYYY-MM-DD** (the sheet's M/D/YYYY is
+  converted; Velocity serializes back zero-padded MM/DD/YYYY on GET).
+  `bundle_items` is a JSON.stringify'd array of FULL order-shaped children
+  mirroring the capture verbatim: filled item_name/quantity(string)/
+  order_number/retailer/date; empty asin/amazon_sku/size/brand_sku/color/
+  unit_cost/list_price/client_notes/upc; `fulfillment_type` literally
+  `"-- select an option --"`; `sold_as "individual"`; `units_per_pack ""`;
+  empty arrays trackings/bundle_items/shipping_labels/transparency_files.
+  Per-child `order_number`/`retailer`/`date` land verbatim (GET-back
+  verified, incl. children `sold_as` normalized to "individual" and child
+  fulfillment_type to "fba" server-side). If the API rejects or drops
+  per-child fields, STOP and report — no PUT improvisation.
+- **Docs-wrong item #7 (2026-09-03):** JSON is NOT accepted on the
+  single-order POST — two JSON attempts (number-typed and string-typed
+  quantity) both 400'd "Quantity must be a valid number." with the field
+  present; the validator reads multipart form fields only. And POST dates
+  must be ISO YYYY-MM-DD, not the M/D/YYYY the docs imply.
 - **Match key (dedup / fetchAllKnownOrders / reconciliation):** a bundle's
   identity = `bundle_children[].order_number` × parent `asin` — one key
   per distinct child order number, since the parent's own `order_number`
