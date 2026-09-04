@@ -2013,6 +2013,23 @@ BRD-DEP-AS3-TTL-NNN-X
 
 - AS3 is present in every SKU. It auto-disambiguates the "same product,
   different ASIN" case (two ASINs of one product produce different AS3).
+- **In-batch (brand, NNN) claims mirror those semantics (2026-09-04).** Two
+  new-product rows in one Add-to-SC batch claiming the same (brand, NNN) is
+  NOT automatically an error — it is exactly the documented same-product
+  case ("AS3 … auto-disambiguates the 'same product, different ASIN' case
+  … with no special-case logic"; live pair B0D97XHDXR + B091ZGHPDR, both
+  LEM STD 003, AS3 DXR/PDR). The preview surfaces a per-group resolution —
+  "Same product listed under N ASINs?" — on ALL affected rows (groups of
+  3+ resolve as one group, never pairwise): **Same product** → the rows
+  proceed sharing (brand, NNN); same-product requires an identical TTL
+  across the group (inline error otherwise, correctable); the registry
+  records ONE product for the group by construction — UNIQUE (brand_code,
+  nnn) means the first row's reserve INSERTs and every later same-TTL row
+  takes the existing row (reuse_ok, no second registration).
+  **Different products** → the later row(s) bump to the next free NNN
+  (registry ∪ batch claims), re-rendered for review. The hard error
+  REMAINS for byte-identical final SKUs (same AS3 too) — that is X-suffix
+  territory and never auto-resolves.
 - There is **no SUB (sub-category) segment.** A full-catalog scan found 755
   distinct sub-categories (390 needed to cover 80% of ASINs) — a scattered
   long-tail that produced opaque, colliding codes with no grouping value. SUB

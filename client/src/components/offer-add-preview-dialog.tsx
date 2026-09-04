@@ -175,6 +175,13 @@ export function OfferAddPreviewDialog({
   // codes that produced a READY row, threaded into submit so the live build
   // uses the same override.
   const [brandEntry, setBrandEntry] = useState<Record<string, { code: string; name: string; busy: boolean; error?: string }>>({});
+  // §18 same-product resolution (2026-09-04): in-batch (brand, NNN) claims by
+  // multiple new-product rows are the documented same-product case, not an
+  // error. Keyed `${brandCode}\u0000${nnn}`; true = operator confirmed SAME
+  // PRODUCT (rows share the NNN; registry registers once via UNIQUE
+  // (brand_code, nnn) + reuse_ok). "Different products" is an action, not
+  // state — it bumps later rows to free NNNs, dissolving the group.
+  const [sameProduct, setSameProduct] = useState<Record<string, boolean>>({});
   const [patched, setPatched] = useState<Record<string, PreviewResponse["perAsin"][number]>>({});
   const [brandCodes, setBrandCodes] = useState<Record<string, string>>({});
 
@@ -187,6 +194,7 @@ export function OfferAddPreviewDialog({
       setBrandEntry({});
       setPatched({});
       setBrandCodes({});
+      setSameProduct({});
     }
   }, [open]);
 
@@ -223,6 +231,40 @@ export function OfferAddPreviewDialog({
   // preview with the code as a per-ASIN override. The returned row replaces
   // the old one in place — READY on success, legend_pending with the error
   // in details (e.g. code collision) when correctable.
+  // §18 same-product resolution: DIFFERENT PRODUCTS — keep the group's first
+  // row (batch order) on the contested NNN and bump every later member to the
+  // next free NNN (free = not in the brand's registry, not claimed by another
+  // batch edit of the same brand). Rows re-render for review; the group
+  // dissolves, so the prompt disappears without persisting state.
+  function resolveDifferentProducts(groupKey: string) {
+    if (!buckets) return;
+    const [brand, nnnStr] = groupKey.split("\u0000");
+    const nnn = parseInt(nnnStr, 10);
+    const members = buckets.ready.filter((r) => {
+      if (r.outcome.kind !== "preview" || r.outcome.reused || r.outcome.brandCode !== brand) return false;
+      const e = edits[r.asin];
+      return !!e && /^\d{1,3}$/.test(e.nnnInput) && parseInt(e.nnnInput, 10) === nnn
+        && !(r.outcome.registry ?? []).some((reg) => reg.nnn === nnn);
+    });
+    if (members.length < 2) return;
+    const claimed = new Set<number>();
+    for (const r of buckets.ready) {
+      if (r.outcome.kind !== "preview" || r.outcome.reused || r.outcome.brandCode !== brand) continue;
+      for (const reg of r.outcome.registry ?? []) claimed.add(reg.nnn);
+      const e = edits[r.asin];
+      if (e && /^\d{1,3}$/.test(e.nnnInput)) claimed.add(parseInt(e.nnnInput, 10));
+    }
+    const bumps = planDifferentProducts(members.map((m) => m.asin), claimed);
+    setEdits((prev) => {
+      const out = { ...prev };
+      for (const [asin, nnn] of Object.entries(bumps)) {
+        out[asin] = { ...out[asin], nnnInput: String(nnn).padStart(3, "0") };
+      }
+      return out;
+    });
+    setSameProduct((m) => { const n = { ...m }; delete n[groupKey]; return n; });
+  }
+
   async function approveMissingBrand(asin: string) {
     const entry = brandEntry[asin] ?? { code: "", name: "", busy: false };
     const code = entry.code.trim().toUpperCase();
@@ -430,9 +472,9 @@ export function OfferAddPreviewDialog({
                   const editable = !o.reused;
                   const parts = o.sku.split("-");
                   const edit = edits[row.asin] ?? { nnnInput: String(o.proposedNnn ?? 1).padStart(3, "0"), ttlForNew: o.proposedTtl ?? "" };
-                  const v = editable ? validateRow(edit, parts, o, buckets.ready, edits) : null;
+                  const v = editable ? validateRow(edit, parts, o, buckets.ready, edits, sameProduct) : null;
                   return (
-                    <div key={row.asin} className={`border rounded p-2 space-y-1 ${v?.error ? "border-destructive" : ""}`}>
+                    <div key={row.asin} className={`border rounded p-2 space-y-1 ${v?.error ? "border-destructive" : v?.resolution ? "border-amber-500" : ""}`}>
                       <div className="flex items-center gap-2 flex-wrap">
                         <code className="font-mono text-xs">{row.asin}</code>
                         <Badge variant={o.reused ? "secondary" : (v?.classification === "existing" ? "secondary" : "default")} className="text-xs">
@@ -495,6 +537,18 @@ export function OfferAddPreviewDialog({
                         <div className="text-[10px] flex items-center gap-3 pl-2 flex-wrap">
                           {v.error ? (
                             <span className="text-destructive">⚠ {v.error}</span>
+                          ) : v.resolution ? (
+                            <span className="flex items-center gap-2 flex-wrap text-amber-600 dark:text-amber-500" data-testid={`same-product-${row.asin}`}>
+                              Same product listed under {v.resolution.count} ASINs?
+                              <Button size="sm" variant="outline" className="h-5 text-[10px] px-1.5"
+                                onClick={() => setSameProduct((m) => ({ ...m, [v.resolution!.groupKey]: true }))}>
+                                Same product
+                              </Button>
+                              <Button size="sm" variant="outline" className="h-5 text-[10px] px-1.5"
+                                onClick={() => resolveDifferentProducts(v.resolution!.groupKey)}>
+                                Different products
+                              </Button>
+                            </span>
                           ) : (
                             <>
                               <span className="text-muted-foreground">
@@ -572,7 +626,7 @@ export function OfferAddPreviewDialog({
             <SubmitButton
               ready={totalReady}
               submitting={submitting}
-              disabled={!onSubmit || totalReady === 0 || submitting || hasAnyValidationError(buckets, edits)}
+              disabled={!onSubmit || totalReady === 0 || submitting || hasAnyValidationError(buckets, edits, sameProduct)}
               onClick={async () => {
                 if (!buckets || !onSubmit) return;
                 setSubmitting(true);
@@ -589,8 +643,8 @@ export function OfferAddPreviewDialog({
                   const parts = row.outcome.sku.split("-");
                   const e = edits[row.asin];
                   if (!e) continue;
-                  const v = validateRow(e, parts, row.outcome, buckets.ready, edits);
-                  if (v.error || !v.finalSku) continue; // skip — gate should have blocked
+                  const v = validateRow(e, parts, row.outcome, buckets.ready, edits, sameProduct);
+                  if (v.error || v.resolution || !v.finalSku) continue; // skip — gate should have blocked
                   if (v.finalSku !== row.outcome.sku) overrides[row.asin] = v.finalSku;
                 }
                 try {
@@ -689,9 +743,28 @@ interface RowValidation {
   changed: boolean;
   existingRow?: RegistryEntry;         // present when classification === "existing"
   error?: string;
+  // §18 same-product resolution pending: N same-brand new-product rows claim
+  // this NNN. Gates submit like an error until resolved; never set when the
+  // group is marked same-product.
+  resolution?: { groupKey: string; count: number };
 }
 
 function padNnn(s: string): string { return s.padStart(3, "0"); }
+
+// §18 different-products bump (pure, exported for tests): keep the group's
+// first member on the contested NNN; every later member gets the next free
+// NNN not in `claimed` (registry ∪ batch claims for the brand).
+export function planDifferentProducts(memberAsins: string[], claimed: Set<number>): Record<string, number> {
+  const taken = new Set(claimed);
+  const out: Record<string, number> = {};
+  for (const asin of memberAsins.slice(1)) {
+    let n = 1;
+    while (taken.has(n)) n++;
+    taken.add(n);
+    out[asin] = n;
+  }
+  return out;
+}
 
 function assembleFinalSku(parts: string[], ttl: string, nnn: string): string {
   const tail = parts[5] ? `-${parts[5]}` : "";
@@ -700,12 +773,13 @@ function assembleFinalSku(parts: string[], ttl: string, nnn: string): string {
 
 // Validate one Ready row's edit against the brand registry + sibling rows.
 // Returns classification, effective TTL, final SKU, error (if any).
-function validateRow(
+export function validateRow(
   edit: { nnnInput: string; ttlForNew: string },
   canonicalParts: string[],
   outcome: Extract<OfferAddOutcome, { kind: "preview" }>,
   readyRows: Array<{ asin: string; outcome: OfferAddOutcome }>,
   allEdits: Record<string, { nnnInput: string; ttlForNew: string }>,
+  sameProduct: Record<string, boolean> = {},
 ): RowValidation {
   // 1. NNN format/range
   if (!/^\d{1,3}$/.test(edit.nnnInput)) {
@@ -740,6 +814,11 @@ function validateRow(
   // Actually the real risk: two NEW products both claiming the same unused NNN.
   // Catches the operator typing "use NNN 5" on two different ASINs in one batch.
   if (classification === "new") {
+    // §18 (2026-09-04): same-brand new-product rows claiming one NNN is the
+    // documented same-product case ("AS3 … auto-disambiguates the 'same
+    // product, different ASIN' case"), resolved per GROUP — never pairwise.
+    const groupSibs: Array<{ asin: string; ttl: string; finalSku: string }> = [];
+    let existingSib: string | null = null;
     for (const sib of readyRows) {
       if (sib.asin === outcome.asin) continue;
       if (sib.outcome.kind !== "preview" || sib.outcome.reused) continue;
@@ -748,16 +827,41 @@ function validateRow(
       if (!sibEdit || !/^\d{1,3}$/.test(sibEdit.nnnInput)) continue;
       const sibNnn = parseInt(sibEdit.nnnInput, 10);
       if (sibNnn !== nnnNum) continue;
-      // Same NNN. If sibling is also "new" in this batch → collision.
       const sibRegistry = sib.outcome.registry ?? [];
-      const sibIsExisting = sibRegistry.some((r) => r.nnn === sibNnn);
-      if (!sibIsExisting) {
-        return { classification, ttl, finalSku, changed, existingRow: existing,
-          error: `Collides with ${sib.asin} in same batch — both claim brand ${outcome.brandCode} NNN ${padNnn(edit.nnnInput)} as a new product` };
-      }
-      // Sibling is "existing" — they're reusing this NNN. We're trying to use it as new → error too.
+      if (sibRegistry.some((r) => r.nnn === sibNnn)) { existingSib = sib.asin; continue; }
+      const sibParts = sib.outcome.sku.split("-");
+      const sibTtl = sibEdit.ttlForNew;
+      groupSibs.push({ asin: sib.asin, ttl: sibTtl, finalSku: assembleFinalSku(sibParts, sibTtl, sibEdit.nnnInput) });
+    }
+    if (existingSib) {
+      // Inconsistent registry views (sibling reuses this NNN as existing while
+      // our registry lacks it) — unchanged hard error.
       return { classification, ttl, finalSku, changed, existingRow: existing,
-        error: `Cannot create a new product at NNN ${padNnn(edit.nnnInput)}; ${sib.asin} in this batch is reusing it as existing product` };
+        error: `Cannot create a new product at NNN ${padNnn(edit.nnnInput)}; ${existingSib} in this batch is reusing it as existing product` };
+    }
+    if (groupSibs.length > 0) {
+      // Byte-identical final SKU (same AS3 too) — X-suffix territory, ALWAYS a
+      // hard error, never auto-resolved.
+      const twin = groupSibs.find((s) => s.finalSku === finalSku);
+      if (twin) {
+        return { classification, ttl, finalSku, changed, existingRow: existing,
+          error: `Final SKU '${finalSku}' is byte-identical to ${twin.asin}'s — a duplicate offer on one SKU needs the X variant suffix, never auto-resolved` };
+      }
+      const groupKey = `${outcome.brandCode}\u0000${nnnNum}`;
+      if (sameProduct[groupKey]) {
+        // Same product confirmed: shared NNN requires an identical TTL group-wide.
+        const odd = groupSibs.find((s) => s.ttl !== ttl);
+        if (odd) {
+          return { classification, ttl, finalSku, changed, existingRow: existing,
+            error: `Same product must share one TTL — this row is '${ttl}' but ${odd.asin} is '${odd.ttl}'` };
+        }
+        // Proceeds sharing (brand, NNN). Registration on submit records ONE
+        // product: UNIQUE (brand_code, nnn) — first row reserves, later
+        // same-TTL rows take reuse_ok.
+      } else {
+        return { classification, ttl, finalSku, changed, existingRow: existing,
+          resolution: { groupKey, count: groupSibs.length + 1 } };
+      }
     }
   }
 
@@ -768,6 +872,7 @@ function validateRow(
 function hasAnyValidationError(
   buckets: ReturnType<typeof bucket> | null,
   edits: Record<string, { nnnInput: string; ttlForNew: string }>,
+  sameProduct: Record<string, boolean> = {},
 ): boolean {
   if (!buckets) return false;
   for (const row of buckets.ready) {
@@ -777,8 +882,8 @@ function hasAnyValidationError(
       nnnInput: String(row.outcome.proposedNnn ?? 1).padStart(3, "0"),
       ttlForNew: row.outcome.proposedTtl ?? "",
     };
-    const v = validateRow(edit, parts, row.outcome, buckets.ready, edits);
-    if (v.error) return true;
+    const v = validateRow(edit, parts, row.outcome, buckets.ready, edits, sameProduct);
+    if (v.error || v.resolution) return true; // unresolved same-product prompt gates like an error
   }
   return false;
 }
