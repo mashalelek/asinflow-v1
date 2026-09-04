@@ -9,7 +9,7 @@ import { verifyPending, resolveSubmissionManual, resolveSubmissionsBulk, dismiss
 import { runAuraSyncChain } from "./aura-sync-chain";
 import { pushAuraCosts } from "./aura-cost-sync";
 import { log } from "./index";
-import { type AsinInput, type AsinResult, type ColumnMapping, extractDomain } from "@shared/schema";
+import { type AsinInput, type AsinResult, type ColumnMapping, extractDomain, cleanBuyLink } from "@shared/schema";
 import { parseMoney } from "@shared/parse-money";
 import pool, { query, isDbAvailable } from "./db";
 import { syncInventory } from "./inventory-sync";
@@ -39,6 +39,7 @@ import {
   deleteBulkList,
   loadBulkListAsinInputs,
   makeBulkListSink,
+  parseAddedAt,
 } from "./bulk-lists";
 import fs from "fs";
 
@@ -65,12 +66,8 @@ export function getRunAnalyzeCore(): RunAnalyzeCore {
   return runAnalyzeCoreRef;
 }
 
-function cleanBuyLink(raw: string): string | null {
-  const first = raw.split(/\r?\n/).map((s) => s.trim()).find((s) => s.length > 0);
-  if (!first) return null;
-  const qIdx = first.indexOf("?");
-  return qIdx >= 0 ? first.substring(0, qIdx) : first;
-}
+// cleanBuyLink moved to @shared/schema (2026-09-04) — shared with the §21
+// bulk path. Imported above.
 
 const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 10 * 1024 * 1024 } });
 
@@ -132,6 +129,12 @@ const COLUMN_NAME_ALIASES: Record<string, string[]> = {
   // because on a supplier sheet a bare "SKU" column IS the supplier SKU; the
   // mapping modal confirmation is the guard against mis-mapping.
   supplierSku: ["supplier sku", "supplier_sku", "suppliersku", "sku", "item number", "item #", "item no", "vendor sku", "vendor item", "catalog number", "part number", "mpn"],
+  // §21 bulk fields (2026-09-04). Broad aliases ("date"/"added") are safe
+  // because matchColumnName is EXACT on the normalized header, never fuzzy.
+  // Parsed on both paths; the main upload path ignores both (promos on the
+  // main page come only from the sourcing sheet — SPEC §21 asymmetry note).
+  promos: ["promos", "promo", "promo notes", "promonotes"],
+  dateAdded: ["date added", "dateadded", "added", "date"],
 };
 
 function matchColumnName(header: string, field: string): boolean {
@@ -199,7 +202,16 @@ function mapRowsToAsins(rows: Record<string, any>[], mapping: ColumnMapping, cog
       supplierSku = String(row[mapping.supplierSku]).trim().slice(0, 100) || null;
     }
 
-    asins.push({ asin, cogs, buyLink, prepOverride, storageOverride, tags, notes, supplierSku });
+    let promoNotes: string | null = null;
+    if (mapping.promos && row[mapping.promos] !== undefined && row[mapping.promos] !== "") {
+      promoNotes = String(row[mapping.promos]).trim() || null;
+    }
+    let addedAtRaw: string | null = null;
+    if (mapping.dateAdded && row[mapping.dateAdded] !== undefined && row[mapping.dateAdded] !== "") {
+      addedAtRaw = String(row[mapping.dateAdded]).trim() || null;
+    }
+
+    asins.push({ asin, cogs, buyLink, prepOverride, storageOverride, tags, notes, supplierSku, promoNotes, addedAtRaw });
   }
 
   if (asins.length === 0) {
@@ -240,6 +252,8 @@ function parseFileToAsins(buffer: Buffer, filename: string): AsinInput[] {
     tags: tagsHeader ?? null,
     notes: notesHeader ?? null,
     supplierSku: supplierSkuHeader ?? null,
+    promos: headers.find((h) => matchColumnName(h, "promos")) ?? null,
+    dateAdded: headers.find((h) => matchColumnName(h, "dateAdded")) ?? null,
   };
 
   return mapRowsToAsins(rows, mapping);
@@ -3495,6 +3509,84 @@ export async function registerRoutes(
     } catch (err: any) {
       res.status(500).json({ message: err.message });
     }
+  });
+
+  // §21 user-controlled inline edits (2026-09-04) — bulk_list_asins only,
+  // same contract as supplier-sku above: CSV or manual, sink never writes.
+
+  // Buy link edit — supplier is DERIVED (cleanBuyLink + extractDomain, the
+  // main path's exact normalization). Clearing nulls BOTH. No free-text
+  // supplier override exists: one source of truth, the URL.
+  app.put("/api/bulk-lists/:id/asins/:asin/buy-link", async (req: Request, res: Response) => {
+    if (!isDbAvailable()) { res.status(503).json({ message: "Database not available" }); return; }
+    const listId = typeof req.params.id === "string" ? req.params.id : "";
+    const asin = (typeof req.params.asin === "string" ? req.params.asin : "").toUpperCase();
+    const raw = (req.body ?? {}).buy_link;
+    if (raw != null && typeof raw !== "string") { res.status(400).json({ message: "buy_link must be a string or null" }); return; }
+    const cleaned = raw ? cleanBuyLink(String(raw)) : null;
+    const supplier = cleaned ? extractDomain(cleaned) : null;
+    try {
+      const updated = await query(
+        `UPDATE bulk_list_asins SET buy_link = $3, supplier = $4 WHERE list_id = $1 AND asin = $2 RETURNING buy_link, supplier`,
+        [listId, asin, cleaned, supplier],
+      );
+      if ((updated.rowCount ?? 0) === 0) { res.status(404).json({ message: "Row not found in list" }); return; }
+      res.json({ buyLink: updated.rows[0].buy_link ?? null, supplier: updated.rows[0].supplier ?? null });
+    } catch (err: any) { res.status(500).json({ message: err.message }); }
+  });
+
+  // Bulk-local free-text tags (§21 isolation: never tags/asin_tags).
+  app.put("/api/bulk-lists/:id/asins/:asin/tags", async (req: Request, res: Response) => {
+    if (!isDbAvailable()) { res.status(503).json({ message: "Database not available" }); return; }
+    const listId = typeof req.params.id === "string" ? req.params.id : "";
+    const asin = (typeof req.params.asin === "string" ? req.params.asin : "").toUpperCase();
+    const raw = (req.body ?? {}).tags;
+    if (raw != null && typeof raw !== "string") { res.status(400).json({ message: "tags must be a comma-delimited string or null" }); return; }
+    const tags = raw ? String(raw).split(",").map((x: string) => x.trim()).filter((x: string) => x.length > 0) : [];
+    try {
+      const updated = await query(
+        `UPDATE bulk_list_asins SET tags = $3 WHERE list_id = $1 AND asin = $2 RETURNING tags`,
+        [listId, asin, tags.length > 0 ? tags : null],
+      );
+      if ((updated.rowCount ?? 0) === 0) { res.status(404).json({ message: "Row not found in list" }); return; }
+      res.json({ tags: updated.rows[0].tags ?? [] });
+    } catch (err: any) { res.status(500).json({ message: err.message }); }
+  });
+
+  app.put("/api/bulk-lists/:id/asins/:asin/promos", async (req: Request, res: Response) => {
+    if (!isDbAvailable()) { res.status(503).json({ message: "Database not available" }); return; }
+    const listId = typeof req.params.id === "string" ? req.params.id : "";
+    const asin = (typeof req.params.asin === "string" ? req.params.asin : "").toUpperCase();
+    const raw = (req.body ?? {}).promo_notes;
+    if (raw != null && typeof raw !== "string") { res.status(400).json({ message: "promo_notes must be a string or null" }); return; }
+    try {
+      const updated = await query(
+        `UPDATE bulk_list_asins SET promo_notes = $3 WHERE list_id = $1 AND asin = $2 RETURNING promo_notes`,
+        [listId, asin, raw ? String(raw).trim() || null : null],
+      );
+      if ((updated.rowCount ?? 0) === 0) { res.status(404).json({ message: "Row not found in list" }); return; }
+      res.json({ promoNotes: updated.rows[0].promo_notes ?? null });
+    } catch (err: any) { res.status(500).json({ message: err.message }); }
+  });
+
+  // Backdate Date Added (M/D/YYYY as local midnight, or ISO; bad value 400s
+  // here — the CSV path's silent NOW() fallback applies only at import).
+  app.put("/api/bulk-lists/:id/asins/:asin/date-added", async (req: Request, res: Response) => {
+    if (!isDbAvailable()) { res.status(503).json({ message: "Database not available" }); return; }
+    const listId = typeof req.params.id === "string" ? req.params.id : "";
+    const asin = (typeof req.params.asin === "string" ? req.params.asin : "").toUpperCase();
+    const raw = (req.body ?? {}).added_at;
+    if (typeof raw !== "string" || !raw.trim()) { res.status(400).json({ message: "added_at is required (M/D/YYYY or ISO)" }); return; }
+    const parsed = parseAddedAt(raw);
+    if (!parsed) { res.status(400).json({ message: `unparseable date: ${raw}` }); return; }
+    try {
+      const updated = await query(
+        `UPDATE bulk_list_asins SET added_at = $3 WHERE list_id = $1 AND asin = $2 RETURNING added_at`,
+        [listId, asin, parsed],
+      );
+      if ((updated.rowCount ?? 0) === 0) { res.status(404).json({ message: "Row not found in list" }); return; }
+      res.json({ addedAt: updated.rows[0].added_at });
+    } catch (err: any) { res.status(500).json({ message: err.message }); }
   });
 
   // Set-based `in_database` check — the single sanctioned read from the main

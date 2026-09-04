@@ -11,6 +11,7 @@ import {
 } from "@/components/ui/select";
 import { Tooltip, TooltipTrigger, TooltipContent } from "@/components/ui/tooltip";
 import { ResultsTable, getRowValue } from "@/components/results-table";
+import { matchesFilters, type FilterMap } from "@/components/column-filter";
 import { ColumnManager } from "@/components/column-manager";
 import { ExportButtons } from "@/components/export-buttons";
 import { FileUpload } from "@/components/file-upload";
@@ -36,13 +37,19 @@ const BULK_COLUMN_IDS = new Set<ColumnId>([
   "estCogs", "prep", "salePrice", "profit", "roi", "margin",
   "fbaFee", "referralFee", "inboundShipping", "storage", "maxCogs",
   "sellersFba", "sellers", "sellers7d", "sellers30d", "fba7d", "fba30d",
-  "meltable", "hazmat", "suppressed", "dateAdded",
+  // tags + promos are BULK-LOCAL fields (§21, 2026-09-04) — free text on the
+  // bulk row, unrelated to main-page tags/promos.
+  "tags", "promos", "meltable", "hazmat", "suppressed", "dateAdded",
 ]);
 // supplierSku is defaultVisible:false on the MAIN page (not in any preset);
 // on the bulk page it defaults visible — supplier sheets are the input here
 // and the export must carry it (§21).
+// promos/dateAdded default hidden on the MAIN page; here they default
+// visible (like supplierSku) — these fields are this page's import payload,
+// and Export CSV carries visible columns only (§21).
+const BULK_DEFAULT_VISIBLE = new Set<ColumnId>(["supplierSku", "promos", "dateAdded"]);
 const BULK_COLUMNS = ALL_COLUMNS.filter((c) => BULK_COLUMN_IDS.has(c.id))
-  .map((c) => (c.id === "supplierSku" ? { ...c, defaultVisible: true } : c));
+  .map((c) => (BULK_DEFAULT_VISIBLE.has(c.id) ? { ...c, defaultVisible: true } : c));
 const BULK_COLUMNS_KEY = "fba-bulk-column-config";
 const BULK_SELECTED_LIST_KEY = "fba-bulk-selected-list";
 
@@ -82,10 +89,14 @@ function mapBulkRow(row: any): AsinResult {
     estimatedCogs: num(row.estimated_cogs),
     estimatedCogsSource: row.estimated_cogs_source ?? null,
     actualCogs: null,
-    buyLink: null,
+    buyLink: row.buy_link ?? null,
     prepOverride: null,
     storageOverride: null,
     supplierSku: row.supplier_sku ?? null,
+    // §21 bulk-local tags: free text, rendered as neutral slate chips (no
+    // color by design — the shared chip renderer falls back to #64748b).
+    tags: Array.isArray(row.tags) ? row.tags.map((name: string) => ({ name, color: "#64748b" })) : [],
+    promoNotes: row.promo_notes ?? null,
     pricingData,
     feesData: {
       fbaFulfillmentFee: num(row.fba_fee),
@@ -142,6 +153,8 @@ export default function BulkCalc() {
   const [onHoldSet, setOnHoldSet] = useState<Set<string>>(loadOnHoldList);
   const [selectedSet, setSelectedSet] = useState<Set<string>>(new Set());
   const [sortCol, setSortCol] = useState<ColumnId | null>(null);
+  // §21 column filters (2026-09-04) — enables the Tags dropdown among others.
+  const [colFilters, setColFilters] = useState<FilterMap>({});
   const [sortDir, setSortDir] = useState<"asc" | "desc">("desc");
   const [refreshing, setRefreshing] = useState(false);
   const [refreshProgress, setRefreshProgress] = useState<string | null>(null);
@@ -363,9 +376,12 @@ export default function BulkCalc() {
   }, []);
 
   const sortedResults = useMemo(() => {
-    if (!sortCol) return results;
+    const filtered = Object.keys(colFilters).length > 0
+      ? results.filter((r) => matchesFilters(r, colFilters, (colId) => getRowValue(r, colId, "lowestFba", settings)))
+      : results;
+    if (!sortCol) return filtered;
     const dir = sortDir === "asc" ? 1 : -1;
-    return [...results].sort((a, b) => {
+    return [...filtered].sort((a, b) => {
       const va = getRowValue(a, sortCol, "lowestFba", settings);
       const vb = getRowValue(b, sortCol, "lowestFba", settings);
       if (va == null && vb == null) return 0;
@@ -374,7 +390,7 @@ export default function BulkCalc() {
       if (typeof va === "number" && typeof vb === "number") return (va - vb) * dir;
       return String(va).localeCompare(String(vb)) * dir;
     });
-  }, [results, sortCol, sortDir, settings]);
+  }, [results, sortCol, sortDir, settings, colFilters]);
 
   // Export scope (§21): rows selected → export selected; none → export all.
   const exportResults = useMemo(
@@ -406,6 +422,21 @@ export default function BulkCalc() {
     (asin: string) => `/api/bulk-lists/${selectedListId}/asins/${asin}/cogs`,
     [selectedListId],
   );
+
+  // §21 user-controlled inline edits — bulk endpoints only (isolation).
+  const bulkPut = useCallback(async (asin: string, path: string, body: Record<string, unknown>) => {
+    const res = await fetch(`/api/bulk-lists/${selectedListId}/asins/${asin}/${path}`, {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(body),
+    });
+    if (!res.ok) { const err = await res.json().catch(() => ({})); throw new Error(err.message || "Failed to save"); }
+    return res.json();
+  }, [selectedListId]);
+  const onBulkTagsSave = useCallback((asin: string, csvText: string | null) => bulkPut(asin, "tags", { tags: csvText }), [bulkPut]);
+  const onBuyLinkSave = useCallback((asin: string, url: string | null) => bulkPut(asin, "buy-link", { buy_link: url }), [bulkPut]);
+  const onDateAddedSave = useCallback((asin: string, value: string) => bulkPut(asin, "date-added", { added_at: value }), [bulkPut]);
+  const promosSaveUrl = useCallback((asin: string) => `/api/bulk-lists/${selectedListId}/asins/${asin}/promos`, [selectedListId]);
 
   const onSupplierSkuSave = useCallback(async (asin: string, value: string | null) => {
     const res = await fetch(`/api/bulk-lists/${selectedListId}/asins/${asin}/supplier-sku`, {
@@ -503,6 +534,13 @@ export default function BulkCalc() {
           productBadge={productBadge}
           cogsSaveUrl={cogsSaveUrl}
           onSupplierSkuSave={onSupplierSkuSave}
+          promosSaveUrl={promosSaveUrl}
+          onBulkTagsSave={onBulkTagsSave}
+          onBuyLinkSave={onBuyLinkSave}
+          onDateAddedSave={onDateAddedSave}
+          colFilters={colFilters}
+          onFilterApply={(f) => setColFilters((prev) => ({ ...prev, [f.colId]: f }))}
+          onFilterClear={(colId) => setColFilters((prev) => { const n = { ...prev }; delete n[colId]; return n; })}
         />
       ) : (
         <div className="text-sm text-muted-foreground py-16 text-center" data-testid="text-bulk-empty">

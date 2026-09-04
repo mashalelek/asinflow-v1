@@ -22,10 +22,32 @@
 
 import { query } from "./db";
 import { log } from "./index";
+import { cleanBuyLink, extractDomain } from "@shared/schema";
 import type { AsinInput, AsinResult } from "@shared/schema";
 import type { AnalyzeSink } from "./analyze-sink";
 
 const ASIN_RE = /^[A-Z0-9]{10}$/;
+
+// §21 Date Added backdate (2026-09-04): M/D/YYYY parses as LOCAL midnight
+// (the server runs in America/New_York — never UTC midnight, so 09/02/2026
+// renders 09/02/2026); ISO strings (what Export CSV emits for Date Added)
+// parse natively, so export → re-upload round-trips. Unparseable/absent →
+// null, caller falls back to NOW() — a bad date never fails the row.
+export function parseAddedAt(raw: string | null | undefined): Date | null {
+  const s = (raw ?? "").trim();
+  if (!s) return null;
+  const mdy = /^(\d{1,2})\/(\d{1,2})\/(\d{4})$/.exec(s);
+  if (mdy) {
+    const m = Number(mdy[1]), day = Number(mdy[2]), y = Number(mdy[3]);
+    const d = new Date(y, m - 1, day);
+    // JS Date rolls invalid components over (13/45 → Feb of next year) —
+    // reject unless the constructed date round-trips exactly.
+    if (d.getFullYear() !== y || d.getMonth() !== m - 1 || d.getDate() !== day) return null;
+    return d;
+  }
+  const iso = new Date(s);
+  return isNaN(iso.getTime()) ? null : iso;
+}
 
 // ── List CRUD ────────────────────────────────────────────────────────────────
 
@@ -35,17 +57,29 @@ export async function createBulkList(
   inputs: AsinInput[],
 ): Promise<{ id: string; name: string; asinCount: number; skippedInvalid: number }> {
   const seen = new Set<string>();
-  const rows: { asin: string; cogs: number | null; supplierSku: string | null }[] = [];
+  const rows: Array<{
+    asin: string; cogs: number | null; supplierSku: string | null;
+    buyLink: string | null; supplier: string | null;
+    tags: string[] | null; promoNotes: string | null; addedAt: Date | null;
+  }> = [];
   let skippedInvalid = 0;
   for (const input of inputs) {
     const asin = String(input.asin ?? "").trim().toUpperCase();
     if (!ASIN_RE.test(asin)) { skippedInvalid++; continue; }
     if (seen.has(asin)) continue; // first occurrence wins, same as UNIQUE would enforce
     seen.add(asin);
+    // §21 user-controlled fields (2026-09-04): supplier is DERIVED from the
+    // buy link via the same cleanBuyLink + extractDomain as the main path.
+    const buyLink = input.buyLink ? cleanBuyLink(String(input.buyLink)) : null;
     rows.push({
       asin,
       cogs: input.cogs > 0 ? input.cogs : null,
       supplierSku: input.supplierSku ? String(input.supplierSku).trim().slice(0, 100) || null : null,
+      buyLink,
+      supplier: buyLink ? extractDomain(buyLink) : null,
+      tags: input.tags && input.tags.length > 0 ? input.tags : null,
+      promoNotes: input.promoNotes ? String(input.promoNotes).trim() || null : null,
+      addedAt: parseAddedAt(input.addedAtRaw),
     });
   }
   if (rows.length === 0) {
@@ -63,9 +97,11 @@ export async function createBulkList(
   // fills in on analyze (which never touches either — both user-controlled).
   for (const row of rows) {
     await query(
-      `INSERT INTO bulk_list_asins (list_id, asin, estimated_cogs, estimated_cogs_source, supplier_sku)
-       VALUES ($1, $2, $3, $4, $5)`,
-      [listId, row.asin, row.cogs, row.cogs != null ? "csv" : null, row.supplierSku],
+      `INSERT INTO bulk_list_asins (list_id, asin, estimated_cogs, estimated_cogs_source, supplier_sku,
+                                    buy_link, supplier, tags, promo_notes, added_at)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, COALESCE($10, NOW()))`,
+      [listId, row.asin, row.cogs, row.cogs != null ? "csv" : null, row.supplierSku,
+       row.buyLink, row.supplier, row.tags, row.promoNotes, row.addedAt],
     );
   }
 

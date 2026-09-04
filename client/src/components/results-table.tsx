@@ -314,6 +314,13 @@ interface ResultsTableProps {
   productBadge?: (result: AsinResult) => React.ReactNode;  // replaces the has_live_offer icon slot in ProductCell
   cogsSaveUrl?: (asin: string) => string;                  // CogsEditor save target (default PUT /api/asins/:asin/cogs); also disables PO sync
   onSupplierSkuSave?: (asin: string, value: string | null) => Promise<{ supplierSku: string | null }>; // enables inline Supplier SKU editing
+  // §21 bulk page user-controlled editors (2026-09-04). When present they
+  // REPLACE the main-page editors for their columns — the main TagEditor and
+  // the main /api/asins promos endpoint are never used on the bulk page.
+  promosSaveUrl?: (asin: string) => string;
+  onBulkTagsSave?: (asin: string, csvText: string | null) => Promise<{ tags: string[] }>;
+  onBuyLinkSave?: (asin: string, url: string | null) => Promise<{ buyLink: string | null; supplier: string | null }>;
+  onDateAddedSave?: (asin: string, value: string) => Promise<{ addedAt: string }>;
 }
 
 function fmt(value: number | null): string {
@@ -474,6 +481,10 @@ export function ResultsTable({
   productBadge,
   cogsSaveUrl,
   onSupplierSkuSave,
+  promosSaveUrl,
+  onBulkTagsSave,
+  onBuyLinkSave,
+  onDateAddedSave,
 }: ResultsTableProps) {
   const allResults = allResultsProp ?? results;
   const colMap = useMemo(() => new Map(columns.map((c) => [c.id, c])), [columns]);
@@ -790,6 +801,28 @@ export function ResultsTable({
                         onSaved={(v) => onResultUpdate?.(result.asin, { supplierSku: v })}
                       />
                     );
+                  } else if (colId === "tags" && onBulkTagsSave && onResultUpdate) {
+                    // §21 bulk-local free-text tags — the main TagEditor is
+                    // NEVER mounted on the bulk page (isolation guarantee).
+                    content = (
+                      <BulkFieldEditor
+                        label="Tags (comma-separated)"
+                        display={(result.tags && result.tags.length > 0) ? (
+                          <div className="flex flex-wrap gap-1">
+                            {result.tags.map((tg) => (
+                              <span key={tg.name} className="inline-block text-[10px] leading-tight px-1.5 py-0.5 rounded-full font-medium text-white" style={{ backgroundColor: tg.color ?? "#64748b" }}>
+                                {tg.name}
+                              </span>
+                            ))}
+                          </div>
+                        ) : <span className="text-muted-foreground text-sm">-</span>}
+                        initial={(result.tags ?? []).map((x) => x.name).join(", ")}
+                        onSave={async (text) => {
+                          const r = await onBulkTagsSave(result.asin, text);
+                          onResultUpdate(result.asin, { tags: r.tags.map((name) => ({ name, color: "#64748b" })) } as any);
+                        }}
+                      />
+                    );
                   } else if (colId === "tags" && onResultUpdate) {
                     content = (
                       <TagEditor
@@ -842,10 +875,52 @@ export function ResultsTable({
                         asin={result.asin}
                         currentNote={result.promoNotes ?? null}
                         onNoteChanged={(promoNotes) => onResultUpdate(result.asin, { promoNotes })}
-                        saveUrl={`/api/asins/${result.asin}/promos`}
+                        saveUrl={promosSaveUrl ? promosSaveUrl(result.asin) : `/api/asins/${result.asin}/promos`}
                         bodyField="promo_notes"
                         placeholder="Add promo notes..."
                         emptyLabel="+ promo"
+                      />
+                    );
+                  } else if (colId === "supplier" && onBuyLinkSave && onResultUpdate) {
+                    // §21 bulk: supplier is DERIVED — the editor edits the
+                    // BUY LINK URL; clearing nulls both (dash). No free-text
+                    // supplier override exists.
+                    content = (
+                      <BulkFieldEditor
+                        label="Buy link URL (blank clears)"
+                        display={(() => {
+                          const dom = extractDomain(result.buyLink);
+                          return dom ? (
+                            <a href={result.buyLink!} target="_blank" rel="noopener noreferrer" className="flex items-center gap-1 text-primary text-sm hover:underline" onClick={(e) => e.stopPropagation()}>
+                              {dom}
+                              <ExternalLink className="h-3 w-3" />
+                            </a>
+                          ) : <span className="text-muted-foreground text-sm">-</span>;
+                        })()}
+                        initial={result.buyLink ?? ""}
+                        onSave={async (text) => {
+                          const r = await onBuyLinkSave(result.asin, text);
+                          onResultUpdate(result.asin, { buyLink: r.buyLink } as any);
+                        }}
+                      />
+                    );
+                  } else if (colId === "dateAdded" && onDateAddedSave && onResultUpdate) {
+                    content = (
+                      <BulkFieldEditor
+                        label="Date added (M/D/YYYY)"
+                        display={(() => {
+                          const ts = result.addedAt;
+                          if (!ts) return <span className="text-muted-foreground text-sm">-</span>;
+                          const d = new Date(ts);
+                          return <span className="text-sm text-muted-foreground">{`${String(d.getMonth() + 1).padStart(2, "0")}/${String(d.getDate()).padStart(2, "0")}/${d.getFullYear()}`}</span>;
+                        })()}
+                        initial={(() => { const ts = result.addedAt; if (!ts) return ""; const d = new Date(ts); return `${d.getMonth() + 1}/${d.getDate()}/${d.getFullYear()}`; })()}
+                        requireValue
+                        onSave={async (text) => {
+                          if (!text) return;
+                          const r = await onDateAddedSave(result.asin, text);
+                          onResultUpdate(result.asin, { addedAt: r.addedAt } as any);
+                        }}
                       />
                     );
                   } else if (colId === "sourcing" && onResultUpdate) {
@@ -882,6 +957,68 @@ export function ResultsTable({
 // Inline Supplier SKU editor — §21 bulk page only (enabled by the
 // onSupplierSkuSave prop; the main table renders the value read-only).
 // Empty input clears the value.
+// §21 bulk inline editor (2026-09-04): generic display + pencil-popover text
+// input. Mirrors SupplierSkuEditor's interaction; used for the bulk page's
+// tags / buy-link / date-added cells.
+function BulkFieldEditor({
+  label,
+  display,
+  initial,
+  onSave,
+  requireValue = false,
+}: {
+  label: string;
+  display: React.ReactNode;
+  initial: string;
+  onSave: (text: string | null) => Promise<void>;
+  requireValue?: boolean;
+}) {
+  const [open, setOpen] = useState(false);
+  const [val, setVal] = useState(initial);
+  const [saving, setSaving] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  async function save() {
+    const trimmed = val.trim();
+    if (requireValue && !trimmed) { setError("value required"); return; }
+    setSaving(true);
+    setError(null);
+    try {
+      await onSave(trimmed || null);
+      setOpen(false);
+    } catch (e: any) { setError(e.message); } finally { setSaving(false); }
+  }
+
+  return (
+    <span className="inline-flex items-center gap-1">
+      {display}
+      <Popover open={open} onOpenChange={(v) => { setOpen(v); if (v) { setVal(initial); setError(null); } }}>
+        <PopoverTrigger asChild>
+          <button className="text-muted-foreground/40 hover:text-muted-foreground p-0 ml-0.5" onClick={(e) => e.stopPropagation()} title={label}>
+            <Pencil className="h-2.5 w-2.5" />
+          </button>
+        </PopoverTrigger>
+        <PopoverContent className="w-72 p-3" align="start" sideOffset={4} onClick={(e) => e.stopPropagation()}>
+          <div className="space-y-2">
+            <label className="text-xs text-muted-foreground">{label}</label>
+            <input type="text" value={val} onChange={(e) => setVal(e.target.value)}
+              className="w-full text-sm p-2 rounded border border-border bg-background focus:outline-none focus:ring-1 focus:ring-ring"
+              onKeyDown={(e) => { if (e.key === "Enter") save(); }}
+              autoFocus />
+            {error && <p className="text-xs text-destructive">{error}</p>}
+            <div className="flex justify-end gap-2">
+              <button className="text-xs text-muted-foreground hover:text-foreground px-2 py-1" onClick={() => setOpen(false)}>Cancel</button>
+              <button className="text-xs bg-primary text-primary-foreground px-3 py-1 rounded hover:bg-primary/90 disabled:opacity-50" onClick={save} disabled={saving}>
+                {saving ? "..." : "Save"}
+              </button>
+            </div>
+          </div>
+        </PopoverContent>
+      </Popover>
+    </span>
+  );
+}
+
 function SupplierSkuEditor({
   asin,
   value,
@@ -1665,7 +1802,7 @@ export function renderCell(
             <span
               key={t.name}
               className="inline-block text-[10px] leading-tight px-1.5 py-0.5 rounded-full font-medium text-white"
-              style={{ backgroundColor: t.color }}
+              style={{ backgroundColor: t.color ?? "#64748b" }}
             >
               {t.name}
             </span>

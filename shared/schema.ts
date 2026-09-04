@@ -29,6 +29,9 @@ export interface AsinInput {
   notes?: string | null;
   promoNotes?: string | null; // sourcing sheet Col O — written on new-ASIN INSERT only
   supplierSku?: string | null; // supplier's own catalog/item number — INSERT branch only, never re-analyze
+  // §21 bulk page (2026-09-04): raw Date Added cell from the CSV; only the
+  // bulk list creation consumes it (backdated added_at). Main path ignores.
+  addedAtRaw?: string | null;
 }
 
 export interface PricingData {
@@ -190,6 +193,11 @@ export interface ColumnMapping {
   tags: string | null;
   notes: string | null;
   supplierSku?: string | null; // supplier's own catalog/item number — never from Amazon
+  // §21 bulk page (2026-09-04). Parsed on both paths; the MAIN path ignores
+  // both by design (promos there come only from the sourcing sheet — SPEC §21
+  // records the asymmetry).
+  promos?: string | null;
+  dateAdded?: string | null;
 }
 
 export function getSelectedPrice(
@@ -511,6 +519,16 @@ export function calculateMaxCogs(
   const maxC = salePrice - totalFees - P;
 
   return parseFloat(Math.min(maxA, maxB, maxC).toFixed(2));
+}
+
+// First non-blank line, query string stripped — the canonical buy-link
+// normalization (moved from server/routes.ts 2026-09-04 so the §21 bulk path
+// shares one implementation without importing the routes module).
+export function cleanBuyLink(raw: string): string | null {
+  const first = raw.split(/\r?\n/).map((s) => s.trim()).find((s) => s.length > 0);
+  if (!first) return null;
+  const qIdx = first.indexOf("?");
+  return qIdx >= 0 ? first.substring(0, qIdx) : first;
 }
 
 export function extractDomain(url: string | null): string | null {

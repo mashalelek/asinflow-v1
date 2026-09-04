@@ -75,6 +75,20 @@ const MAPPING_FIELDS: MappingField[] = [
     required: false,
     matchPatterns: [/supplier\s*_?\s*sku/i, /^sku$/i, /vendor\s*(sku|item)/i, /item\s*(number|no\.?|#)/i, /catalog\s*number/i, /part\s*number/i, /\bmpn\b/i],
   },
+  // §21 bulk fields (2026-09-04): parsed on both paths, consumed only by the
+  // bulk list creation (the main path ignores both — SPEC §21 asymmetry note).
+  {
+    key: "promos",
+    label: "Promos",
+    required: false,
+    matchPatterns: [/^promos?$/i, /promo\s*notes?/i],
+  },
+  {
+    key: "dateAdded",
+    label: "Date Added",
+    required: false,
+    matchPatterns: [/date\s*added/i, /^added$/i, /^date$/i],
+  },
 ];
 
 const NOT_IN_FILE = "__not_in_file__";

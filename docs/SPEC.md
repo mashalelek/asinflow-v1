@@ -1536,6 +1536,9 @@ refresh) refreshes Amazon-side data ONLY.
 - Tags, notes, `promo_notes`
 - `is_wholesale`, `is_oa`
 - `is_active`
+- On `bulk_list_asins` (§21, 2026-09-04): `buy_link`, `supplier`, `tags`,
+  `promo_notes`, `added_at`, `supplier_sku`, `estimated_cogs` — the bulk
+  sink never writes, clears, or overwrites them
 
 Violations of this rule have caused recurring "COGS clears on analyze" bugs.
 When in doubt, the analyze path should leave the field alone.
@@ -2533,6 +2536,11 @@ page writes to `asins`, `asin_estimates`, `asin_estimates_history`,
 The single permitted main-DB access is one READ: a set-based EXISTS query
 (`WHERE asin = ANY($1)`) against `asins.asin` to populate `in_database`.
 
+Bulk tags are FREE TEXT on the bulk row (2026-09-04). They never read or
+write `tags` / `asin_tags`, carry no FK, and have no relationship to
+main-page tags even when the labels match. The main TagEditor is never
+mounted on this page.
+
 ### Tables (migration 022)
 
 - `bulk_lists` — id, name, source_filename, asin_count, created_at
@@ -2542,7 +2550,12 @@ The single permitted main-DB access is one READ: a set-based EXISTS query
   fba_fee, referral_fee, variable_closing_fee, fees_estimate_price, bsr,
   sellers_fba, sellers_fbm), estimated_cogs, estimated_cogs_source,
   supplier_sku, eligibility_status, is_meltable, is_hazmat,
-  is_dangerous_good, error, fetched_at.
+  is_dangerous_good, error, fetched_at; user-controlled fields (migration
+  031, 2026-09-04): buy_link, supplier (derived from buy_link), tags
+  (TEXT[] — free-text labels, deliberately NOT a join table: there is no FK
+  target by design, no cross-list tag queries exist, and a join table would
+  re-create the exact shape the isolation guarantee forbids linking to),
+  promo_notes.
   UNIQUE(list_id, asin).
 
 No `has_live_offer` column — account state is out of scope (see `in_database`
@@ -2611,7 +2624,33 @@ ever wired to a live call site, it must remain unwired on this page.
   or `'manual'` only.
 - Supplier SKU: CSV column (mapper alias) or manual inline edit — same
   user-controlled contract as COGS (§14); the bulk sink never writes it.
-- Everything else: the analyze pipeline via the bulk sink.
+- Buy link / Supplier (2026-09-04): CSV `buyLink` column (aliases incl.
+  "source url") or inline edit of the URL — supplier is ALWAYS derived via
+  the same `cleanBuyLink` + `extractDomain` as the main path; there is no
+  separate free-text supplier override (one source of truth: the URL).
+  Clearing the URL nulls both. Same §14 contract; sink never writes it.
+- Tags (2026-09-04): CSV `tags` column (comma-delimited, same split as the
+  main path) or inline edit. BULK-LOCAL free text — stored as TEXT[] on the
+  row, rendered as neutral-colored chips, no relationship to main-page tags
+  even when names match. Same §14 contract.
+- Promos (2026-09-04): CSV `promos` column (new alias: promos/promo/promo
+  notes) or inline edit → `promo_notes`. NOTE THE ASYMMETRY, on purpose:
+  on the MAIN page promo_notes still comes ONLY from the sourcing sheet —
+  the new CSV alias is parsed but ignored on the main path. Do not "fix"
+  this without deciding to.
+- Date Added (2026-09-04): when the CSV mapping includes a Date Added
+  column (aliases: date added/dateadded/added/date — safe because alias
+  matching is exact on the normalized header), the value is written into
+  `added_at` (M/D/YYYY parsed as LOCAL midnight — America/New_York in this
+  deployment — never UTC midnight, so 09/02/2026 renders 09/02/2026; ISO
+  timestamps also accepted, which is what Export CSV emits, so
+  export → re-upload round-trips). Absent/unparseable → NOW(), the row
+  never fails. Inline date editor on the cell. Snapshot-age display uses
+  fetched_at, so a backdated row never looks stale; added_at drives only
+  the row ORDER BY.
+- Everything else: the analyze pipeline via the bulk sink. The bulk sink's
+  UPDATE never touches any user-controlled field above — Refresh Prices is
+  column-scoped to the analyze snapshot, so they persist.
 
 `/api/parse-file` and `/api/parse-mapped` are pure and reused. `parse-mapped`
 takes an opt-in flag to skip the COGS-column requirement; the default
@@ -2628,14 +2667,19 @@ That is the isolation working, not a sync bug.
 
 Subset of `COLUMN_GROUPS`:
 
-- **Description** — Product, Category, Brand, Supplier, Supplier SKU
+- **Description** — Product, Category, Brand, Supplier (domain linked to
+  buy_link, populated since 2026-09-04; editable via the URL), Supplier SKU
 - **Estimates** — full group
 - **Sellers** — full group
-- **Additional info** — Meltable, Hazmat, Suppressed, Date Added
+- **Additional info** — Tags, Promos, Meltable, Hazmat, Suppressed, Date
+  Added (Tags + Promos added 2026-09-04 — BULK-LOCAL fields, unrelated to
+  main-page tags/promos; a Tags filter dropdown is wired here too)
 
 Excluded: the entire **Stock** and **Actuals** groups (no inventory or sales
-data path; empty Actuals columns would violate honest labeling, §14). Tags,
-Notes, Promos, and Sourcing are excluded — no data source on this page.
+data path; empty Actuals columns would violate honest labeling, §14). Notes
+and Sourcing are excluded — no data source on this page. Export CSV carries
+Tags (comma-joined — re-imports through the same split), Promos, Date
+Added, and Supplier.
 
 No date-range selector: nothing here is range-scoped.
 
