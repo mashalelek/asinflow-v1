@@ -555,7 +555,7 @@ export const DEFAULT_COLUMNS = [
   // Group 5 — Sellers
   "sellersFba", "sellers", "sellers7d", "sellers30d", "fba7d", "fba30d",
   // Group 6 — Additional info
-  "tags", "notes", "promos", "sourcing", "meltable", "hazmat", "dg", "suppressed", "dateAdded", "lastReviewed", "submission",
+  "tags", "notes", "promos", "sourcing", "meltable", "hazmat", "dg", "suppressed", "dateAdded", "lastReviewed", "priceAge", "submission",
 ] as const;
 
 export type ColumnId = (typeof DEFAULT_COLUMNS)[number];
@@ -640,6 +640,9 @@ export const ALL_COLUMNS: ColumnDef[] = [
   // keeps its corner date. Not in any DB preset (presets list columns
   // explicitly; untouched).
   { id: "lastReviewed", label: "Last Reviewed", defaultVisible: false, align: "left", group: "additional" },
+  // Relative age of pricesFetchedAt (SPEC §11 Refresh, 2026-09-06) — "what's
+  // stale" answerable without SQL, independent of any single run.
+  { id: "priceAge", label: "Price Age", defaultVisible: false, align: "left", group: "additional" },
   // §6 Submission column — §19 ledger surface, read-only, never in default presets.
   { id: "submission", label: "Submission", defaultVisible: false, align: "left", group: "additional" },
 ];

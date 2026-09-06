@@ -441,6 +441,7 @@ export function getRowValue(
     case "product": return result.catalogData.title ?? result.asin;
     case "dateAdded": return result.addedAt ?? null;
     case "lastReviewed": return result.lastReviewedAt ?? null;
+    case "priceAge": return result.pricesFetchedAt ?? null;
     case "submission": return submissionCategory(result.submission);
     case "category": return result.category ?? null;
     case "sourcing": return getSourcingLabel(result) || null;
@@ -1434,7 +1435,7 @@ function ProductCell({ result, price, settings, onResultUpdate, collisionBoundar
               <TooltipTrigger asChild>
                 <ShoppingBag className="h-3 w-3 text-blue-500 flex-shrink-0" />
               </TooltipTrigger>
-              <TooltipContent side="top"><p className="text-xs">Listed in your catalog</p></TooltipContent>
+              <TooltipContent side="top"><p className="text-xs">Listed in Seller Central (Active or Inactive)</p></TooltipContent>
             </Tooltip>
           ) : (
             <Tooltip>
@@ -1449,7 +1450,7 @@ function ProductCell({ result, price, settings, onResultUpdate, collisionBoundar
                   +
                 </a>
               </TooltipTrigger>
-              <TooltipContent side="top"><p className="text-xs">Create listing on Seller Central</p></TooltipContent>
+              <TooltipContent side="top"><p className="text-xs">Not listed — Add to SC</p></TooltipContent>
             </Tooltip>
           )}
           {/* Last Reviewed timestamp */}
@@ -2034,6 +2035,24 @@ export function renderCell(
       const dd = String(d.getDate()).padStart(2, "0");
       const yyyy = d.getFullYear();
       return <span className="text-sm text-muted-foreground">{`${mm}/${dd}/${yyyy}`}</span>;
+    }
+
+    // Relative age of the last conclusive price answer (§11 Refresh,
+    // 2026-09-06). Em-dash = never synced.
+    case "priceAge": {
+      const ts = result.pricesFetchedAt;
+      if (!ts) return <span className="text-muted-foreground/50 text-sm">{"\u2014"}</span>;
+      const ms = Date.now() - new Date(ts).getTime();
+      const mins = Math.floor(ms / 60000);
+      const label = mins < 60 ? `${mins}m` : mins < 1440 ? `${Math.floor(mins / 60)}h` : `${Math.floor(mins / 1440)}d`;
+      return (
+        <Tooltip>
+          <TooltipTrigger asChild>
+            <span className="text-sm text-muted-foreground cursor-help">{label}</span>
+          </TooltipTrigger>
+          <TooltipContent side="top"><p className="text-xs">Prices synced: {new Date(ts).toLocaleString()}</p></TooltipContent>
+        </Tooltip>
+      );
     }
 
     // Same field as the Product cell's corner date (lastReviewedAt — human

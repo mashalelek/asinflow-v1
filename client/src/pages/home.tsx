@@ -383,14 +383,16 @@ export default function Home() {
   const [savedCount, setSavedCount] = useState<number | null>(null);
   const [dbLoaded, setDbLoaded] = useState(false);
   const [isSyncing, setIsSyncing] = useState(false);
-  const [isSyncingInventory, setIsSyncingInventory] = useState(false);
-  const [isSyncingSales, setIsSyncingSales] = useState(false);
+  // One Refresh job (SPEC §11, 2026-09-06) — replaces the four SP-API sync
+  // buttons. refreshState drives the button label + progress strip; the
+  // result opens the per-stage outcomes dialog with Retry failed.
+  const [refreshState, setRefreshState] = useState<{ stage: string; current: number; total: number } | null>(null);
+  const [refreshResult, setRefreshResult] = useState<any | null>(null);
+  const [refreshResultOpen, setRefreshResultOpen] = useState(false);
+  const [refreshHistory, setRefreshHistory] = useState<any[] | null>(null);
   const [isSyncingSourcing, setIsSyncingSourcing] = useState(false);
   const [isPushingAura, setIsPushingAura] = useState(false);
   // §18 full-scope listing scan (item 8): streaming progress + report dialog.
-  const [scanState, setScanState] = useState<{ dryRun: boolean; phase: string; done: number; total: number } | null>(null);
-  const [scanReport, setScanReport] = useState<any | null>(null);
-  const [scanReportOpen, setScanReportOpen] = useState(false);
   // SellerBoard COGS export (interim). File picker → upload template → download
   // CSV from the JSON response → show summary modal.
   const [isExportingSb, setIsExportingSb] = useState(false);
@@ -433,7 +435,6 @@ export default function Home() {
   const [legendDialogOpen, setLegendDialogOpen] = useState(false);
   const [legendPending, setLegendPending] = useState<PendingLegendItem[]>([]);
   const [approvedBrands, setApprovedBrands] = useState<ApprovedBrandOption[]>([]);
-  const [isRefreshingPrices, setIsRefreshingPrices] = useState(false);
   const [pricesLastRefreshedAt, setPricesLastRefreshedAt] = useState<string | null>(null);
   const [filterUncalculated, setFilterUncalculated] = useState(false);
 
@@ -713,62 +714,6 @@ export default function Home() {
     await runAnalyzeAllFromDb(workingSet);
   }, [asins, selectedSet, runAnalysis, runAnalyzeAllFromDb]);
 
-  const handleRefreshPrices = useCallback(async () => {
-    const workingSet = selectedSet.size > 0
-      ? Array.from(selectedSet)
-      : sortedFilteredResultsRef.current.map((r) => r.asin);
-    if (workingSet.length === 0) return;
-    setIsRefreshingPrices(true);
-    setProgress({ current: 0, total: workingSet.length, asin: "Refreshing prices..." });
-    try {
-      const res = await fetch("/api/prices/refresh", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ asins: workingSet }),
-      });
-      if (!res.ok) {
-        const err = await res.json().catch(() => ({}));
-        throw new Error(err.message || "Price refresh failed");
-      }
-
-      const reader = res.body?.getReader();
-      const decoder = new TextDecoder();
-      let buffer = "";
-      let updated = 0;
-      let recovered = 0;
-      if (reader) {
-        while (true) {
-          const { done, value } = await reader.read();
-          if (done) break;
-          buffer += decoder.decode(value, { stream: true });
-          const lines = buffer.split("\n");
-          buffer = lines.pop() || "";
-          for (const line of lines) {
-            if (!line.trim()) continue;
-            try {
-              const msg = JSON.parse(line);
-              if (msg.type === "progress") {
-                setProgress(msg.data);
-              } else if (msg.type === "complete") {
-                updated = msg.data?.updated ?? 0;
-                recovered = msg.data?.recovered ?? 0;
-              }
-            } catch {}
-          }
-        }
-      }
-      const parts = [`Updated ${updated} ASIN${updated === 1 ? "" : "s"}`];
-      if (recovered > 0) parts.push(`${recovered} recovered via targeted retry`);
-      toast({ title: "Prices refreshed", description: parts.join(", ") });
-      await fetchAsins(startDate, endDate, showArchived);
-    } catch (err: any) {
-      toast({ title: "Price refresh failed", description: err.message, variant: "destructive" });
-    } finally {
-      setIsRefreshingPrices(false);
-      setProgress(null);
-      fetchPriceStatus();
-    }
-  }, [toast, selectedSet, fetchAsins, startDate, endDate, showArchived, fetchPriceStatus]);
 
   const [isSyncingCogs, setIsSyncingCogs] = useState(false);
 
@@ -873,39 +818,28 @@ export default function Home() {
     }
   }, [toast, currentWorkingSet, fetchAsins, startDate, endDate, showArchived]);
 
-  const handleSyncInventory = useCallback(async () => {
-    const ws = currentWorkingSet();
+  // One Refresh job (SPEC §11, 2026-09-06): inventory + sales + prices +
+  // listings in one NDJSON stream. Scope = what is on screen (selection,
+  // else the filtered view incl. visibility toggles) — the explicit list is
+  // always sent. asinsOverride powers "Retry failed (N)".
+  const handleRefresh = useCallback(async (asinsOverride?: string[]) => {
+    const ws = asinsOverride ?? currentWorkingSet();
     if (ws.length === 0) return;
-    setIsSyncingInventory(true);
+    setRefreshState({ stage: "starting", current: 0, total: ws.length });
     try {
-      const data = await fetchLongSync("/api/inventory/sync", { asins: ws });
-      toast({ title: "Inventory synced", description: `${data.synced} ASINs synced, ${data.skipped} skipped` });
-      await fetchAsins(startDate, endDate, showArchived);
-    } catch (err: any) {
-      toast({ title: "Inventory sync failed", description: err.message, variant: "destructive" });
-    } finally {
-      setIsSyncingInventory(false);
-    }
-  }, [toast, currentWorkingSet, fetchAsins, startDate, endDate, showArchived]);
-
-  // §18 full-scope listing scan. Selection-aware: selected ASINs, else FULL
-  // catalog (not the filtered view — this is a catalog-truth operation).
-  // Entry is ALWAYS a dry-run; the live run is launched from the report
-  // dialog after review (dryRun is an explicit param end to end).
-  const handleFullScan = useCallback(async (dryRun: boolean) => {
-    const sel = Array.from(selectedSet);
-    setScanState({ dryRun, phase: "a", done: 0, total: 0 });
-    setScanReport(null);
-    try {
-      const res = await fetch(`/api/listings/full-scope-pass?dryRun=${dryRun ? 1 : 0}`, {
+      const res = await fetch("/api/refresh", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(sel.length > 0 ? { asins: sel } : {}),
+        body: JSON.stringify({ asins: ws, startDate, endDate }),
       });
-      if (!res.ok || !res.body) throw new Error(`scan failed (${res.status})`);
+      if (!res.ok || !res.body) {
+        const err = await res.json().catch(() => ({}));
+        throw new Error(err.message || `refresh failed (${res.status})`);
+      }
       const reader = res.body.getReader();
       const decoder = new TextDecoder();
       let buf = "";
+      let complete: any = null;
       for (;;) {
         const { done, value } = await reader.read();
         if (done) break;
@@ -916,19 +850,47 @@ export default function Home() {
           if (!line.trim()) continue;
           let ev: any;
           try { ev = JSON.parse(line); } catch { continue; }
-          if (ev.type === "phase") setScanState({ dryRun, phase: ev.phase, done: 0, total: ev.asins });
-          else if (ev.type === "progress") setScanState((prev) => prev ? { ...prev, phase: ev.phase, done: ev.done, total: ev.total ?? prev.total } : prev);
-          else if (ev.type === "complete") { setScanReport(ev.report); setScanReportOpen(true); }
-          else if (ev.type === "error") toast({ title: "Listing scan failed", description: ev.message, variant: "destructive" });
+          if (ev.type === "stage" && ev.status === "running") {
+            setRefreshState({ stage: ev.stage, current: ev.current ?? 0, total: ev.total ?? ws.length });
+          } else if (ev.type === "complete") {
+            complete = ev.data;
+          } else if (ev.type === "error") {
+            throw new Error(ev.message);
+          }
         }
       }
-      if (!dryRun) await fetchAsins(startDate, endDate, showArchived);
+      if (!complete) throw new Error("stream ended without a completion line");
+      setRefreshResult(complete);
+      setRefreshResultOpen(true);
+      await fetchAsins(startDate, endDate, showArchived);
+      fetchPriceStatus();
     } catch (err: any) {
-      toast({ title: "Listing scan failed", description: err.message, variant: "destructive" });
+      toast({ title: "Refresh failed", description: err.message, variant: "destructive" });
     } finally {
-      setScanState(null);
+      setRefreshState(null);
     }
-  }, [selectedSet, toast, fetchAsins, startDate, endDate, showArchived]);
+  }, [toast, currentWorkingSet, fetchAsins, fetchPriceStatus, startDate, endDate, showArchived]);
+
+  // Retry failed (N): every ASIN whose prices outcome was throttled/error,
+  // plus listings transients don't list per-ASIN — prices is the retry axis.
+  const refreshFailedAsins = useMemo(() => {
+    const s = refreshResult?.stages?.prices?.outcomes ?? {};
+    return Object.entries(s)
+      .filter(([, v]) => String(v).startsWith("throttled") || String(v).startsWith("error"))
+      .map(([asin]) => asin);
+  }, [refreshResult]);
+
+  const handleOpenRefreshHistory = useCallback(async () => {
+    try {
+      const res = await fetch("/api/refresh/history");
+      const body = await res.json();
+      setRefreshHistory(body.runs ?? []);
+    } catch {
+      setRefreshHistory([]);
+    }
+  }, []);
+
+
 
   // Push-only Aura sync — POSTs to /api/sync/aura/push (no PO chain). Selection-
   // aware: when ASINs are checked, scopes the push to those; otherwise pushes
@@ -1032,20 +994,6 @@ export default function Home() {
     }
   }, [toast, scHistory]);
 
-  const handleSyncSales = useCallback(async () => {
-    const ws = currentWorkingSet();
-    if (ws.length === 0) return;
-    setIsSyncingSales(true);
-    try {
-      const data = await fetchLongSync("/api/sales/sync", { startDate, endDate, asins: ws });
-      toast({ title: "Sales synced", description: `${data.daysProcessed} days, ${data.asinsUpdated} ASINs updated` });
-      await fetchAsins(startDate, endDate, showArchived);
-    } catch (err: any) {
-      toast({ title: "Sales sync failed", description: err.message, variant: "destructive" });
-    } finally {
-      setIsSyncingSales(false);
-    }
-  }, [toast, currentWorkingSet, fetchAsins, startDate, endDate, showArchived]);
 
   // Insert-only sync from the sourcing Google Sheet. Pre-existing ASINs in AF
   // are skipped server-side — the sheet only adds. Streams NDJSON: sync_summary
@@ -1563,22 +1511,9 @@ export default function Home() {
                 <DollarSign className="h-3.5 w-3.5 mr-1.5" />
                 {isPushingAura ? "Pushing..." : `Push to Aura${selectedSet.size > 0 ? ` (${selectedSet.size})` : ""}`}
               </Button>
-              <Button variant="outline" size="sm" onClick={handleSyncInventory} disabled={isSyncingInventory || isAnalyzing} className="h-8 text-xs">
-                <Database className="h-3.5 w-3.5 mr-1.5" />
-                {isSyncingInventory ? "Syncing..." : `Sync Inventory${btnSuffix(workingSetCount, workingSetIsSelection)}`}
-              </Button>
-              <Button variant="outline" size="sm" onClick={handleSyncSales} disabled={isSyncingSales || isAnalyzing} className="h-8 text-xs">
-                <RefreshCw className={`h-3.5 w-3.5 mr-1.5 ${isSyncingSales ? "animate-spin" : ""}`} />
-                {isSyncingSales ? "Syncing..." : `Sync Sales${btnSuffix(workingSetCount, workingSetIsSelection)}`}
-              </Button>
               <Button variant="outline" size="sm" onClick={handleSyncSourcing} disabled={isSyncingSourcing || isAnalyzing} className="h-8 text-xs">
                 <FileSpreadsheet className="h-3.5 w-3.5 mr-1.5" />
                 {isSyncingSourcing ? "Syncing..." : "Sync Sourcing"}
-              </Button>
-              <Button variant="outline" size="sm" onClick={() => handleFullScan(true)} disabled={!!scanState || isAnalyzing} className="h-8 text-xs"
-                title="Full-scope listing scan (§18): probes every SKU, discovers SC-created SKUs on no-SKU ASINs, enforces latest-live-wins primary. Runs as a dry-run first — go live from the report.">
-                <ScanSearch className="h-3.5 w-3.5 mr-1.5" />
-                {scanState ? `Scan ${scanState.phase}: ${scanState.done}/${scanState.total}` : `Scan Listings${selectedSet.size > 0 ? ` (${selectedSet.size})` : ""}`}
               </Button>
               <Button variant="outline" size="sm" onClick={handleExportSbCogs} disabled={isExportingSb} className="h-8 text-xs" title="Upload a SellerBoard products export; downloads YTD PO cost periods as CSV" data-testid="button-export-sb-cogs">
                 <DollarSign className="h-3.5 w-3.5 mr-1.5" />
@@ -1598,19 +1533,24 @@ export default function Home() {
                   <Button
                     variant="outline"
                     size="sm"
-                    onClick={handleRefreshPrices}
-                    disabled={isRefreshingPrices || isAnalyzing}
+                    onClick={() => handleRefresh()}
+                    disabled={!!refreshState || isAnalyzing}
                     className="h-8 text-xs"
-                    data-testid="button-refresh-prices"
+                    data-testid="button-refresh"
                   >
-                    <DollarSign className={`h-3.5 w-3.5 mr-1.5 ${isRefreshingPrices ? "animate-pulse" : ""}`} />
-                    {isRefreshingPrices ? "Syncing..." : `Sync Prices${btnSuffix(workingSetCount, workingSetIsSelection)}`}
+                    <RefreshCw className={`h-3.5 w-3.5 mr-1.5 ${refreshState ? "animate-spin" : ""}`} />
+                    {refreshState
+                      ? `Refresh · ${refreshState.stage}${refreshState.total ? ` ${refreshState.current}/${refreshState.total}` : ""}`
+                      : `Refresh${btnSuffix(workingSetCount, workingSetIsSelection)}`}
                   </Button>
                 </TooltipTrigger>
                 <TooltipContent side="bottom" className="text-xs">
-                  Prices last synced {formatRelativeTime(pricesLastRefreshedAt)}
+                  Inventory + sales + prices + listings in one job. Prices last synced {formatRelativeTime(pricesLastRefreshedAt)}
                 </TooltipContent>
               </Tooltip>
+              <Button variant="ghost" size="sm" onClick={() => { handleOpenRefreshHistory(); setRefreshResultOpen(true); }} className="h-8 text-xs px-2" title="Refresh run history" data-testid="button-refresh-history">
+                <History className="h-3.5 w-3.5" />
+              </Button>
               {/* Reset Est. COGS to PO moved to Settings modal (2026-06-29). */}
             </div>
 
@@ -1660,6 +1600,21 @@ export default function Home() {
             </div>
           </div>
 
+          {/* Refresh progress strip (SPEC §11, 2026-09-06): the old strip was
+              gated on isAnalyzing and never rendered during a price refresh —
+              the 2026-09-04 "Syncing… for 30 minutes with no progress"
+              incident. Renders for the Refresh job with its active stage. */}
+          {refreshState && refreshState.total > 0 && (
+            <div className="space-y-2 mt-6">
+              <div className="flex items-center justify-between text-sm">
+                <span className="text-muted-foreground">
+                  Refresh · {refreshState.stage} — {refreshState.current} of {refreshState.total}
+                </span>
+                <span className="font-mono text-xs">{Math.round((refreshState.current / refreshState.total) * 100)}%</span>
+              </div>
+              <Progress value={Math.round((refreshState.current / refreshState.total) * 100)} className="h-2" data-testid="progress-refresh" />
+            </div>
+          )}
           {isAnalyzing && progress && (
             <div className="space-y-2 mt-6">
               <div className="flex items-center justify-between text-sm">
@@ -1872,57 +1827,70 @@ export default function Home() {
 
       {/* §18 full-scope listing scan report (item 8). The live run is only
           reachable from a reviewed dry-run report. */}
-      {scanReport && (
-        <Dialog open={scanReportOpen} onOpenChange={(o) => setScanReportOpen(o)}>
-          <DialogContent className="max-w-2xl max-h-[80vh] overflow-y-auto">
-            <DialogHeader>
-              <DialogTitle>Listing scan report {scanReport.dryRun ? "(dry-run — nothing written)" : "(live)"}</DialogTitle>
-              <DialogDescription>
-                Phase a: {scanReport.phaseA.asins} ASINs / {scanReport.phaseA.skusProbed} SKUs probed —{" "}
-                {scanReport.phaseA.live} live, {scanReport.phaseA.noOffer} no offer, {scanReport.phaseA.transientSkipped} transient-skipped,{" "}
-                {Math.round(scanReport.phaseA.durationMs / 1000)}s · Phase b: {scanReport.phaseB.asins} ASINs —{" "}
-                {scanReport.phaseB.discovered.length} discovered, {scanReport.phaseB.noListing} no listing,{" "}
-                {scanReport.phaseB.transientSkipped} transient, {Math.round(scanReport.phaseB.durationMs / 1000)}s
-              </DialogDescription>
-            </DialogHeader>
+      {/* Refresh results + history (SPEC §11, 2026-09-06): per-stage counts,
+          expandable outcome lists, rate-limit stats, Retry failed. */}
+      <Dialog open={refreshResultOpen} onOpenChange={(o) => { setRefreshResultOpen(o); if (!o) setRefreshHistory(null); }}>
+        <DialogContent className="max-w-2xl max-h-[80vh] overflow-y-auto">
+          <DialogHeader>
+            <DialogTitle>Refresh {refreshResult ? "results" : "history"}</DialogTitle>
+            <DialogDescription>
+              {refreshResult
+                ? "One job: inventory + sales + prices + listings. Rate-limit stats prove the pacing (0 throttled = healthy)."
+                : "Recent refresh runs (newest first)."}
+            </DialogDescription>
+          </DialogHeader>
+          {refreshResult && (
             <div className="space-y-3 text-xs">
-              <div>
-                <p className="font-semibold uppercase tracking-wide text-muted-foreground">
-                  Flag flips ({scanReport.phaseA.flips.length})
-                </p>
-                {scanReport.phaseA.flips.map((f: any) => (
-                  <p key={f.asin} className="font-mono">{f.asin}: {String(f.from)} → {String(f.to)}</p>
-                ))}
-              </div>
-              <div>
-                <p className="font-semibold uppercase tracking-wide text-muted-foreground">
-                  Primary re-points — latest live wins ({scanReport.phaseA.repoints.length})
-                </p>
-                {scanReport.phaseA.repoints.map((r: any) => (
-                  <p key={r.asin} className="font-mono">{r.asin} primary → newest live: {r.from ?? "∅"} → {r.to}</p>
-                ))}
-              </div>
-              <div>
-                <p className="font-semibold uppercase tracking-wide text-muted-foreground">
-                  Discovered SKUs ({scanReport.phaseB.discovered.length})
-                </p>
-                {scanReport.phaseB.discovered.map((d: any) => (
-                  <p key={d.asin} className="font-mono">{d.asin}: {d.skus.join(", ")}</p>
-                ))}
+              {Object.values(refreshResult.stages ?? {}).map((s: any) => (
+                <details key={s.stage} className="border rounded p-2">
+                  <summary className="cursor-pointer">
+                    <span className={`font-semibold ${s.status === "failed" ? "text-destructive" : ""}`}>{s.stage}</span>
+                    {" — "}{s.status}{s.error ? `: ${s.error}` : ""} · {Math.round((s.durationMs ?? 0) / 1000)}s ·{" "}
+                    {Object.entries(s.counts ?? {}).map(([k, v]) => `${k} ${v}`).join(", ") || "no counts"}
+                  </summary>
+                  {Object.keys(s.outcomes ?? {}).length > 0 ? (
+                    <div className="mt-2 max-h-48 overflow-y-auto font-mono">
+                      {Object.entries(s.outcomes).map(([asin, o]) => (
+                        <p key={asin}>{asin}: {String(o)}</p>
+                      ))}
+                    </div>
+                  ) : (
+                    <p className="mt-2 text-muted-foreground">No per-item exceptions.</p>
+                  )}
+                </details>
+              ))}
+              <details className="border rounded p-2">
+                <summary className="cursor-pointer font-semibold">Rate limits</summary>
+                <div className="mt-2 font-mono">
+                  {Object.entries(refreshResult.rateLimits ?? {}).map(([bucket, s]: [string, any]) => (
+                    <p key={bucket}>{bucket}: {s.sent} sent, {s.throttled} throttled{s.adjusted ? ", rate adjusted by Amazon header" : ""}</p>
+                  ))}
+                </div>
+              </details>
+              <div className="flex justify-end gap-2">
+                {refreshFailedAsins.length > 0 && (
+                  <Button size="sm" className="h-8 text-xs" disabled={!!refreshState}
+                    onClick={() => { setRefreshResultOpen(false); handleRefresh(refreshFailedAsins); }}>
+                    Retry failed ({refreshFailedAsins.length})
+                  </Button>
+                )}
+                <Button size="sm" variant="outline" className="h-8 text-xs" onClick={() => setRefreshResultOpen(false)}>Close</Button>
               </div>
             </div>
-            <div className="flex justify-end gap-2 pt-2">
-              {scanReport.dryRun && (
-                <Button size="sm" className="h-8 text-xs" disabled={!!scanState}
-                  onClick={() => { setScanReportOpen(false); handleFullScan(false); }}>
-                  Run live now (writes the above)
-                </Button>
-              )}
-              <Button size="sm" variant="outline" className="h-8 text-xs" onClick={() => setScanReportOpen(false)}>Close</Button>
+          )}
+          {!refreshResult && refreshHistory && (
+            <div className="space-y-1 text-xs max-h-80 overflow-y-auto">
+              {refreshHistory.length === 0 && <p className="text-muted-foreground">No runs recorded yet.</p>}
+              {refreshHistory.map((r: any) => (
+                <p key={r.id} className="font-mono">
+                  {new Date(r.started_at).toLocaleString()} · {r.stage} · {r.trigger}/{r.scope} · {r.requested} req
+                  {r.error ? ` · FAILED: ${r.error}` : r.counts ? ` · ${Object.entries(r.counts).map(([k, v]) => `${k} ${v}`).join(", ")}` : ""}
+                </p>
+              ))}
             </div>
-          </DialogContent>
-        </Dialog>
-      )}
+          )}
+        </DialogContent>
+      </Dialog>
 
       <OfferAddPreviewDialog
         open={offerAddOpen}

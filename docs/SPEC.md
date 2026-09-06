@@ -1475,6 +1475,127 @@ Skip semantics (learned in implementation):
   listed in SC but never purchased have no PO row by design. Fail-closed skip is
   correct; no action needed.
 
+### SP-API rate limiting (2026-09-06)
+
+Every SP-API operation is metered by a token bucket (refill at a fixed
+rate to a burst cap; empty bucket → `429 QuotaExceeded`). Motivating
+incident 2026-09-04: Sync Prices on 2,208 ASINs fired `getItemOffers`
+~3.3 rps into a 1 rps bucket — most calls 429'd, blind per-ASIN retries
+tripled the load, projected runtime hours, no failed-list, progress strip
+never rendered (gated on `isAnalyzing`). Root cause structural: pacing was
+guessed per module.
+
+Published limits for the operations AF uses (rate = req/s; the ceiling for
+arbitrary-ASIN price pulls is **getItemOffersBatch: 20 ASINs/call at
+0.1 rps = 2 ASINs/s → 2,208 ASINs ≈ 18 min**; nothing pull-based beats it):
+
+| Operation | Rate | Burst | Items/call |
+|---|---|---|---|
+| getItemOffers | 1 | 2 | 1 |
+| **getItemOffersBatch** | **0.1** | 1 | **20** |
+| getCompetitivePricing | 0.5 | 1 | ≤20 |
+| getMyFeesEstimateForASIN | 1 | 2 | 1 |
+| getMyFeesEstimates (batch) | 0.5 | 1 | 20 |
+| getCatalogItem / searchCatalogItems | 2 | 2 | 1 / ≤20 |
+| getListingsItem / putListingsItem / searchListingsItems / getListingsRestrictions | 5 | 10 | 1 |
+| getInventorySummaries | 2 | 2 | page |
+| getItemEligibilityPreview | 1 | 1 | 1 |
+| createReport / getReportDocument | 0.0167 | 15 | — |
+| getReport | 2 | 15 | — |
+
+(The per-call SP-API fees announced for 2026 were cancelled 2026-05-12;
+cost is not a design input.)
+
+**The limiter (`server/spapi-rate-limit.ts`)** — one shared client layer,
+wired into `spApiGet/spApiPost/spApiPut` in `spapi-auth.ts` (the single
+choke point; the S3 report-document download is a plain URL and stays
+outside). Path→bucket mapping from the table; unknown paths pass through
+un-throttled but logged, and the table is extended — never silently
+throttled. FIFO release per bucket (bursts honored, steady state = the
+published rate; callers keep their concurrency — serialization happens at
+the wire). Header-adaptive: `x-amzn-RateLimit-Limit` on any 2xx/400/404
+overrides the bucket's rate (logged). **429 handling lives here, once**: a
+429 drains the bucket, transparent retry after a refill interval × a
+penalty growing with consecutive 429s (cap ×4), up to 3, then thrown —
+per-module retry loops (price-sync 3×backoff, analyze 2×2 s,
+listings-offers-fetch 2200 ms doubling) are REMOVED, not layered. **Hard
+timeouts** (decision 9): 30 s per API request, 120 s for the
+report-document download; a timeout is a per-item `error` outcome, never a
+frozen job. Diagnostics: `rateLimitStats()` per bucket
+`{rate, sent, throttled, adjusted}` — every job report includes the
+buckets it touched ("0 throttled" is visible proof of pacing).
+Dependency-free (no `server/index.ts` import). Unit tests: fake clock,
+FIFO, burst-then-steady, header override, 429 drain/retry/throw, unknown
+path passthrough.
+
+### Refresh job & price refresh v2 (2026-09-06)
+
+**One Refresh button** replaces Sync Inventory + Sync Sales + Sync Prices +
+Scan Listings (decision 4; Sync PO, Sync Sourcing, Push to Aura stay
+separate — decision 8). `POST /api/refresh` (NDJSON), body
+`{asins, startDate, endDate}`; **scope = what is on screen** (decision 7):
+the checkbox selection, else the current filtered view including Show
+Archived / Show Gated; the client always sends the explicit list. Cron
+scope (`asins` omitted) = every non-archived ASIN (`is_active = TRUE`),
+sourcing leads included; archived only via the button (decision 10).
+
+Stages, each with per-item outcomes, run concurrently where buckets differ;
+`listings` waits for `inventory` (needs its SKUs), `prices` and `sales`
+start immediately; full-catalog wall time ≈ the prices stage ≈ 18 min:
+
+| stage | source | replaces |
+|---|---|---|
+| `inventory` | getInventorySummaries + SKU recording | Sync Inventory |
+| `sales` | orders report, 30-day chunks | Sync Sales |
+| `prices` | price refresh v2 (below) | Sync Prices |
+| `listings` | live-offer reconcile (§18) | Scan Listings + the inventory-sync `notLiveOnly` rider (removed) |
+
+A failed stage does not abort the others. Stream: `{type:"stage", stage,
+status, current, total}` + terminal `{type:"complete", data:{stages,
+rateLimits}}`; heartbeats as respondLongSync. Old routes stay as thin
+one-stage wrappers (single implementation). Toolbar: one Refresh button
+with working-set count, active-stage label while running, progress strip
+un-gated from `isAnalyzing`; a results dialog shows per-stage counts,
+expandable outcome lists, rate-limit stats, duration, and **Retry failed
+(N)**; runs persist in `refresh_runs` (migration 032) with a history
+clock. The 10:00/12:00 crons collapse into one daily Refresh (still behind
+`ENABLE_CRONS`, default off). Dry-run (`?dryRun=1`, Velocity pattern):
+listings reports would-be flips/discoveries, prices reports outcomes,
+zero writes; the first live run is gated on a reviewed dry-run.
+
+**Price refresh v2** (replaces price-sync.ts's three-pass design):
+`getItemOffersBatch`, 20 ASINs/call; the Summary/Offers parser is
+extracted to a pure `parseOffersPayload(asin, payload)` shared with the
+single-ASIN analyze path (semantics unchanged); `writePrice` columns
+unchanged BUT its COALESCE guards drop — a conclusive answer overwrites,
+including to NULL. No blind retries: one main pass + ONE trailing pass
+over `throttled`/`error` items. Per-ASIN outcomes:
+
+| outcome | meaning | writes |
+|---|---|---|
+| `updated` | ≥1 price parsed | prices + seller counts + fetched_at |
+| `no_offers` | 200, zero New offers | prices → **NULL**, sellers 0, fetched_at (decision 6 — conclusive: nothing is for sale; row becomes uncalculated) |
+| `restricted` | 403/restricted | nothing |
+| `not_found` | 404 | nothing |
+| `throttled` | 429 survived limiter + trailing pass | nothing |
+| `error` | timeout/5xx/parse | nothing (message kept) |
+
+`fetched_at` stamps only the two conclusive outcomes — the honest price
+age. **Run ledger `refresh_runs`** (migration 032, one table for all
+stages): started/finished, scope, trigger (manual|refresh|cron), stage,
+requested, per-outcome counts, `outcomes JSONB` (every non-updated ASIN +
+error messages), `rate_limit_stats JSONB`. "Which failed" is a row, not
+scrollback; retry-failed is one click.
+
+**Price Age column** (`priceAge`, Additional info group, default hidden):
+relative age of `pricesFetchedAt` ("2h"/"3d"), tooltip = timestamp,
+em-dash when null; filter reuses the `reviewed` mechanism with neutral
+labels ("Never synced" / "Older than" / "Within last").
+
+**Future (not this patch):** ANY_OFFER_CHANGED push notifications belong
+with the Repricer module; the consumer would write through the same
+`writePrice` and the pull path would narrow to no-live-offer ASINs.
+
 ### Scheduled crons — disabled by default (`ENABLE_CRONS`)
 
 Five node-cron schedules exist, all in-process, registered in one block in
@@ -2365,11 +2486,20 @@ inventory summaries.
   order and by inventory-sync for every ASIN in `getInventorySummaries`, which
   **retains tombstones for deleted listings**), so it stays TRUE forever and
   over-reports. It is no longer read by the UI.
-- **`has_live_offer` is tri-state:** `NULL` = never checked (icon shows "+",
-  same as no offer); `TRUE` = ≥1 SKU has a live listing (both Active/BUYABLE and
-  Inactive/DISCOVERABLE count — a listing existing in either state is a
-  checkmark); `FALSE` = every SKU for the ASIN definitively 404s at
-  `getListingsItem`. `offer_checked_at` records the last definitive write.
+- **`has_live_offer` is tri-state — ONE definition (2026-09-06):**
+  `TRUE` ⇔ a listing record for ≥1 of the ASIN's SKUs EXISTS at Seller
+  Central (`getListingsItem` 200), regardless of Active/Inactive status or
+  the §19 ledger state; `FALSE` ⇔ every known SKU definitively 404s AND
+  ASIN discovery is empty (the 2026-08-28 rule, unchanged); `NULL` = never
+  probed. Fail-closed on transients. `offer_checked_at` records the last
+  definitive write. This resolves the 2026-09-04 defect where §19's
+  materialized-only classifier and §18's exists-at-SC probes disagreed and
+  the icon needed a manual Scan Listings after every Add-to-SC: the §19
+  ledger keeps its own live/processing/failed classifier (it answers "did
+  the offer materialize"), but the `has_live_offer` WRITE is decoupled from
+  it — the post-submit probe ladder (§19) writes TRUE on any 200 for the
+  submitted SKU immediately. Icon tooltip wording: "Listed in Seller
+  Central (Active or Inactive)" vs "Not listed — Add to SC".
 - **Truth source = `getListingsItem`** (via `checkSkuListingStatus`, the same
   404 primitive as §18 resurrection). Multi-SKU: check `primary_sku` first, then
   other `asin_skus` rows, short-circuit on the first live hit
@@ -2428,9 +2558,15 @@ inventory summaries.
   issues; `no_offer` → `[]` (no listing = no listing issues). Same fail-closed
   rule: transient probes write neither field.
 
-### Manual full-scope listing scan (2026-08-03, item 8)
+### Manual full-scope listing scan (2026-08-03, item 8; toolbar button REMOVED 2026-09-06)
 
-Toolbar button, **selection-aware** (selected ASINs, else full active
+**Scan Listings is no longer a toolbar button** — the scan IS the Refresh
+job's `listings` stage (§11 Refresh job): every in-scope ASIN with ≥1
+`asin_skus` row probes per SKU across ALL flag states including TRUE (a
+listing deleted in SC flips FALSE on the next Refresh), then no-SKU ASINs
+run phase-b discovery — same primitives, one implementation.
+`POST /api/listings/full-scope-pass` remains as a script/dry-run entry
+point, **selection-aware** (selected ASINs, else full active
 catalog). Two sequential phases over one NDJSON progress stream
 (`POST /api/listings/full-scope-pass`, body `{asins?}`):
 
@@ -2508,14 +2644,22 @@ leaves the row **unchanged in whatever state it was** (a `processing` row stays
 and safe to re-run — the manual sweep remains available and is the fallback
 whenever the auto sweep couldn't finish the job.
 
-### Auto verify after submit (2026-08-09)
+### Auto verify after submit (2026-08-09; ladder + immediate flag write 2026-09-06)
 
 After a batch submit completes with **≥1 ACCEPTED** submission, AF schedules
 an in-process, one-shot follow-up: the SAME `verifyPending` sweep **scoped to
 that batch's ledger ids** (`ids` option — the status filter still applies, so
-already-resolved rows fall out of the scoped re-run), first at **~T+10m**,
-with **one retry ~30m later** only if rows in the scope are still open
-(async materialization lag; rehearsals settled by T+65 at the latest).
+already-resolved rows fall out of the scoped re-run), on a ladder of
+**T+1m, +3m, +10m, +30m, +60m**, each firing only if rows in scope are
+still open. On EVERY probe, a `200` for the submitted SKU writes
+`has_live_offer = TRUE` + `offer_checked_at` **immediately**, independent
+of whether the ledger row moves to `live` or stays `processing` (§18 one
+definition, 2026-09-06) — a just-created SKU returns 200-with-empty-status
+while materializing, which is "listed", not "live yet". Manual `'live'`
+still writes TRUE; manual `'failed'`/`'deleted'` still write nothing;
+ACCEPTED alone still writes nothing (synchronous validation only). A
+server restart loses the timers; the Refresh `listings` reconcile catches
+up.
 
 - **Not a cron, not persisted:** timers are in-process only (`unref`ed). A
   server restart before firing simply leaves the rows in the pill; the manual

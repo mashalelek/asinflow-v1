@@ -24,6 +24,7 @@ import { buildSourcingCost, sourcingCostFilename, parseYMDLocal } from "./sourci
 import { recordSourcingCostExport, listSourcingCostExports } from "./sourcing-cost-repo";
 import { syncSourcingSheet } from "./sourcing-sync";
 import { refreshPrices } from "./price-sync";
+import { runRefreshJob } from "./refresh-job";
 import { applyCatalogDeletedSignal } from "./catalog-deleted-write";
 import { offerAddForAsin, preFilterSubmitSet, type OfferAddResult, type PreFilterResult } from "./offer-add";
 import { submitOfferAddBatch, type SubmitAsinRow } from "./offer-add-submit";
@@ -393,48 +394,52 @@ async function loadSettingsForSubmit(): Promise<Settings> {
 // the batch's ledger ids — fail-closed semantics (throttle/not-yet-found
 // writes nothing) and the has_live_offer 'live' transition come with it; no
 // new writers.
-const AUTO_VERIFY_FIRST_MS = 10 * 60 * 1000;
-const AUTO_VERIFY_RETRY_MS = 30 * 60 * 1000;
+// §19 probe ladder (2026-09-06): T+1m, +3m, +10m, +30m, +60m — each fires
+// only while rows in scope are still open. verifyPending itself now writes
+// has_live_offer = TRUE on ANY 200 for the submitted SKU (§18 one
+// definition), so the icon flips on the first probe that sees the listing
+// exist, independent of ledger materialization. Timers are in-process +
+// unref'd; a restart loses them and the Refresh listings reconcile catches
+// up.
+const AUTO_VERIFY_LADDER_MS = [1, 3, 10, 30, 60].map((m) => m * 60 * 1000);
 function scheduleBatchVerify(
   sellerId: string,
   pairs: Array<{ asin: string; sku: string }>,
-  delays: { firstMs?: number; retryMs?: number } = {},
+  ladderMs: number[] = AUTO_VERIFY_LADDER_MS,
 ): void {
-  const firstMs = delays.firstMs ?? AUTO_VERIFY_FIRST_MS;
-  const retryMs = delays.retryMs ?? AUTO_VERIFY_RETRY_MS;
   findRecentPendingIds(pairs)
     .then((ids) => {
       if (ids.length === 0) {
         log(`Auto-verify: no pending ledger rows found for ${pairs.length} submitted pair(s) — nothing scheduled (manual sweep remains the fallback)`, "verify");
         return;
       }
-      log(`Auto-verify scheduled for ${ids.length} submission(s): first sweep in ${Math.round(firstMs / 60000)}m, retry in +${Math.round(retryMs / 60000)}m if still open`, "verify");
-      const t1 = setTimeout(async () => {
-        try {
-          const s = await verifyPending(sellerId, { ids });
-          log(`Auto-verify sweep 1 (${ids.length} scoped): checked=${s.checked} live=${s.live} failed=${s.failed} processing=${s.processing} stale=${s.stale} throttled=${s.throttled}`, "verify");
-          const open = await countOpenAmong(ids);
-          if (open === 0) {
-            log(`Auto-verify: all ${ids.length} resolved — retry skipped`, "verify");
-            return;
-          }
-          log(`Auto-verify: ${open} still open — retry in ${Math.round(retryMs / 60000)}m`, "verify");
-          const t2 = setTimeout(async () => {
-            try {
-              const s2 = await verifyPending(sellerId, { ids });
-              log(`Auto-verify sweep 2 (retry): checked=${s2.checked} live=${s2.live} failed=${s2.failed} processing=${s2.processing} stale=${s2.stale} throttled=${s2.throttled}`, "verify");
-              const stillOpen = await countOpenAmong(ids);
-              if (stillOpen > 0) log(`Auto-verify: ${stillOpen} still open after retry — left for the pill / manual sweep`, "verify");
-            } catch (err: any) {
-              log(`Auto-verify sweep 2 error (rows left for manual sweep): ${err.message}`, "verify");
+      log(`Auto-verify ladder scheduled for ${ids.length} submission(s): ${ladderMs.map((ms) => `${Math.round(ms / 60000)}m`).join(", ")} (each only while rows stay open)`, "verify");
+      const fire = (step: number) => {
+        if (step >= ladderMs.length) return;
+        const delay = ladderMs[step] - (step > 0 ? ladderMs[step - 1] : 0);
+        const t = setTimeout(async () => {
+          try {
+            const s = await verifyPending(sellerId, { ids });
+            log(`Auto-verify probe ${step + 1}/${ladderMs.length} (${ids.length} scoped): checked=${s.checked} live=${s.live} failed=${s.failed} processing=${s.processing} stale=${s.stale} throttled=${s.throttled}`, "verify");
+            const open = await countOpenAmong(ids);
+            if (open === 0) {
+              log(`Auto-verify: all ${ids.length} resolved after probe ${step + 1} — ladder stopped`, "verify");
+              return;
             }
-          }, retryMs);
-          t2.unref?.();
-        } catch (err: any) {
-          log(`Auto-verify sweep 1 error (rows left for manual sweep): ${err.message}`, "verify");
-        }
-      }, firstMs);
-      t1.unref?.();
+            if (step + 1 < ladderMs.length) {
+              log(`Auto-verify: ${open} still open — next probe at T+${Math.round(ladderMs[step + 1] / 60000)}m`, "verify");
+            } else {
+              log(`Auto-verify: ${open} still open after the full ladder — left for the pill / manual sweep`, "verify");
+            }
+            fire(step + 1);
+          } catch (err: any) {
+            log(`Auto-verify probe ${step + 1} error (ladder continues): ${err.message}`, "verify");
+            fire(step + 1);
+          }
+        }, delay);
+        t.unref?.();
+      };
+      fire(0);
     })
     .catch((err: any) => log(`Auto-verify scheduling error (manual sweep remains the fallback): ${err.message}`, "verify"));
 }
@@ -1502,6 +1507,54 @@ export async function registerRoutes(
   });
 
   // === Inventory / Sales / Sheets / Suppression sync ===
+  // ── One Refresh job (SPEC §11 "Refresh job & price refresh v2", 2026-09-06) ──
+  // Folds inventory + sales + prices + listings into one NDJSON stream of
+  // stages. Scope = the explicit asins list (what is on screen — decision 7);
+  // the cron path calls runRefreshJob directly with no list (full
+  // non-archived). ?dryRun=1: listings reports would-be flips/discoveries,
+  // prices reports outcomes, inventory/sales are skipped — zero writes.
+  app.post("/api/refresh", async (req: Request, res: Response) => {
+    if (!isDbAvailable()) { res.status(503).json({ message: "Database not available" }); return; }
+    const { asins, startDate, endDate } = (req.body ?? {}) as { asins?: string[]; startDate?: string; endDate?: string };
+    if (!asins || !Array.isArray(asins) || asins.length === 0) {
+      res.status(400).json({ message: "asins is required — the client always sends the on-screen working set" }); return;
+    }
+    if (!startDate || !endDate) { res.status(400).json({ message: "startDate and endDate are required (sales stage)" }); return; }
+    const dryRun = req.query.dryRun === "1" || req.query.dryRun === "true";
+
+    res.setHeader("Content-Type", "application/x-ndjson");
+    res.setHeader("Cache-Control", "no-cache");
+    res.setHeader("Connection", "keep-alive");
+    const hb = setInterval(() => { try { res.write(JSON.stringify({ type: "heartbeat" }) + "\n"); } catch {} }, 15_000);
+    try {
+      const result = await runRefreshJob({
+        asins, startDate, endDate,
+        trigger: dryRun ? "manual" : "refresh",
+        dryRun,
+        emit: (ev) => { try { res.write(JSON.stringify(ev) + "\n"); } catch {} },
+      });
+      res.write(JSON.stringify({ type: "complete", data: result }) + "\n");
+    } catch (err: any) {
+      log(`Refresh job error: ${err?.message ?? err}`, "refresh");
+      res.write(JSON.stringify({ type: "error", message: err?.message ?? String(err) }) + "\n");
+    } finally {
+      clearInterval(hb);
+      try { res.end(); } catch {}
+    }
+  });
+
+  // Run history for the results dialog's clock icon (migration 032).
+  app.get("/api/refresh/history", async (_req: Request, res: Response) => {
+    if (!isDbAvailable()) { res.status(503).json({ message: "Database not available" }); return; }
+    try {
+      const r = await query(
+        `SELECT id, started_at, finished_at, trigger, stage, scope, requested, counts, outcomes, error
+           FROM refresh_runs ORDER BY started_at DESC LIMIT 60`,
+      );
+      res.json({ runs: r.rows });
+    } catch (err: any) { res.status(500).json({ message: err.message }); }
+  });
+
   app.post("/api/inventory/sync", async (req: Request, res: Response) => {
     if (!isDbAvailable()) { res.status(503).json({ message: "Database not available" }); return; }
     const { asins } = (req.body ?? {}) as { asins?: string[] };

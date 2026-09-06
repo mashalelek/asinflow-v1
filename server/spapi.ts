@@ -1,4 +1,5 @@
 import axios from "axios";
+import { parseOffersPayload } from "./offers-parse";
 import { log } from "./index";
 import { isDangerousGoodFromAttributes } from "./hazmat-classify";
 
@@ -88,136 +89,19 @@ export async function getPricing(asin: string): Promise<AsinPricingResult> {
       },
     );
 
+    // Shared parser (SPEC §11, 2026-09-06): identical semantics to the old
+    // inline parse; also used by the getItemOffersBatch path in price-refresh.
     const summary = offersData?.payload?.Summary;
-    if (summary) {
-      if (summary.LowestPrices) {
-        for (const lp of summary.LowestPrices) {
-          const cond = (lp.condition || "").toLowerCase();
-          if (cond !== "new") continue; // skip used/refurbished prices
-          const amt = parseFloat(lp.LandedPrice?.Amount);
-          if (!isNaN(amt)) {
-            const channel =
-              lp.fulfillmentChannel || lp.FulfillmentChannel || "";
-            if (channel === "Amazon") {
-              if (lowestFbaPrice === null || amt < lowestFbaPrice) {
-                lowestFbaPrice = amt;
-              }
-            }
-            if (lowestPrice === null || amt < lowestPrice) {
-              lowestPrice = amt;
-            }
-          }
-        }
-      }
-
-      if (summary.TotalOfferCount != null) {
-        numberOfSellers = summary.TotalOfferCount;
-      }
-
-      if (summary.NumberOfOffers) {
-        for (const entry of summary.NumberOfOffers) {
-          const cond = (entry.condition || entry.Condition || "").toLowerCase();
-          const channel =
-            entry.fulfillmentChannel || entry.FulfillmentChannel || "";
-          const count = parseInt(entry.OfferCount ?? entry.Value ?? "0") || 0;
-          if (cond === "new") {
-            if (channel === "Amazon" || channel === "AFN") {
-              sellersFba = (sellersFba ?? 0) + count;
-            } else if (channel === "Merchant" || channel === "MFN") {
-              sellersFbm = (sellersFbm ?? 0) + count;
-            }
-          }
-        }
-        if (numberOfSellers === null && (sellersFba || sellersFbm)) {
-          numberOfSellers = (sellersFba ?? 0) + (sellersFbm ?? 0);
-        }
-      }
-    }
-
-    log(
-      `Raw NumberOfOffers for ${asin}: ${JSON.stringify(summary?.NumberOfOffers)}`,
-      "sellers-raw",
-    );
-    log(
-      `Raw BuyBoxEligibleOffers for ${asin}: ${JSON.stringify(summary?.BuyBoxEligibleOffers)}`,
-      "sellers-raw",
-    );
-    log(
-      `NumberOfOffers parsed for ${asin}: sellersFba=${sellersFba}, sellersFbm=${sellersFbm}, totalFromSummary=${numberOfSellers}`,
-      "sellers-raw",
-    );
-
-    const offers = offersData?.payload?.Offers;
-    if (offers && Array.isArray(offers)) {
-      log(
-        `Raw Offers array for ${asin}: ${offers.length} offers`,
-        "sellers-raw",
-      );
-
-      let fbaCount = 0;
-      let fbmCount = 0;
-
-      for (const offer of offers) {
-        // IsFulfilledByAmazon is the authoritative FBA indicator in the
-        // Offers array. The FulfillmentChannel field is NOT present on
-        // individual offers — it only appears in the Summary section.
-        const isFba = offer.IsFulfilledByAmazon === true;
-
-        if (isFba) {
-          fbaCount++;
-        } else {
-          fbmCount++;
-        }
-
-        const amt = parseFloat(offer.ListingPrice?.Amount);
-        if (!isNaN(amt)) {
-          const shipping = parseFloat(offer.Shipping?.Amount) || 0;
-          const landed = amt + shipping;
-
-          if (isFba) {
-            if (lowestFbaPrice === null || landed < lowestFbaPrice) {
-              lowestFbaPrice = landed;
-            }
-          }
-
-          if (lowestPrice === null || landed < lowestPrice) {
-            lowestPrice = landed;
-          }
-
-          if (offer.IsBuyBoxWinner === true) {
-            buyBoxPrice = landed;
-            buyBoxFulfillment = isFba ? "FBA" : "FBM";
-          }
-        }
-      }
-
-      log(
-        `Offer-based counts for ${asin}: FBA=${fbaCount}, FBM=${fbmCount} (from ${offers.length} offers, first page only)`,
-        "sellers-raw",
-      );
-
-      if (sellersFba === null) sellersFba = fbaCount;
-      if (sellersFbm === null) sellersFbm = fbmCount;
-      if (numberOfSellers === null) {
-        numberOfSellers = (sellersFba ?? 0) + (sellersFbm ?? 0);
-      }
-    }
-
-    if (sellersFba === null) sellersFba = 0;
-    if (sellersFbm === null) sellersFbm = 0;
-
-    if (buyBoxPrice === null && summary?.BuyBoxPrices) {
-      for (const bp of summary.BuyBoxPrices) {
-        const cond = bp.condition || bp.Condition || "";
-        if (cond === "New" || cond === "new") {
-          const amt = parseFloat(bp.LandedPrice?.Amount);
-          if (!isNaN(amt)) {
-            buyBoxPrice = amt;
-            buyBoxFulfillment = null;
-          }
-        }
-      }
-    }
+    log(`Raw NumberOfOffers for ${asin}: ${JSON.stringify(summary?.NumberOfOffers)}`, "sellers-raw");
+    log(`Raw BuyBoxEligibleOffers for ${asin}: ${JSON.stringify(summary?.BuyBoxEligibleOffers)}`, "sellers-raw");
+    const parsed = parseOffersPayload(offersData?.payload);
+    lowestFbaPrice = parsed.lowestFbaPrice;
+    buyBoxPrice = parsed.buyBoxPrice;
+    buyBoxFulfillment = parsed.buyBoxFulfillment;
+    lowestPrice = parsed.lowestPrice;
+    numberOfSellers = parsed.numberOfSellers;
+    sellersFba = parsed.sellersFba;
+    sellersFbm = parsed.sellersFbm;
 
     log(
       `Pricing for ${asin}: lowestFba=${lowestFbaPrice}, buyBox=${buyBoxPrice} (${buyBoxFulfillment}), lowest=${lowestPrice}, sellers=${numberOfSellers} (FBA:${sellersFba}, FBM:${sellersFbm})`,

@@ -72,30 +72,18 @@ export async function fetchCompetingOffers(
   httpGet: HttpGetFn = realSpApiGet,
   retryConfig: OffersRetryConfig = DEFAULT_RETRY,
 ): Promise<OffersFetchOutcome> {
+  // 429 handling moved to the shared rate limiter (SPEC §11, 2026-09-06):
+  // requests are paced at the wire and throttles are retried THERE, once —
+  // this module's 2200ms-doubling loop was removed, not layered.
   let data: any;
-  let backoff = retryConfig.initialBackoffMs;
-  let attempt = 0;
-  while (true) {
+  {
     try {
       data = await httpGet(`/products/pricing/v0/items/${asin}/offers`, {
         MarketplaceId: MARKETPLACE,
         ItemCondition: "New",
       });
-      break; // success — exit retry loop
     } catch (err: any) {
       const status = err?.response?.status;
-      const code =
-        err?.response?.data?.Errors?.[0]?.Code ??
-        err?.response?.data?.errors?.[0]?.code;
-      const isThrottle = status === 429 || code === "QuotaExceeded";
-
-      // Retry only on throttle, and only while we have attempts left.
-      if (isThrottle && attempt < retryConfig.maxAttempts - 1) {
-        await new Promise((r) => setTimeout(r, backoff));
-        backoff *= 2;
-        attempt++;
-        continue;
-      }
 
       // 404 → not_found (don't retry; ASIN genuinely missing)
       if (status === 404) {

@@ -122,88 +122,63 @@ describe("fetchCatalogForSku", () => {
     if (!r.ok) expect(r.reason).toBe("no_category");
   });
 
-  it("429 retries 5× then surfaces transient_error (fail-closed under throttle storm)", async () => {
+  // Throttle retries were REMOVED from this module (SPEC §11, 2026-09-06):
+  // the shared rate limiter paces + retries 429s once, at the wire. An
+  // escaped throttle surfaces here as an immediate transient_error.
+  it("429 → transient_error immediately, no module-level retry (limiter owns 429s)", async () => {
     let calls = 0;
-    const throttled: HttpGetFn = async () => {
+    const get = async () => {
       calls++;
-      const err: any = new Error("429");
-      err.response = { status: 429, data: { errors: [{ code: "QuotaExceeded", message: "QuotaExceeded" }] } };
+      const err: any = new Error("throttled");
+      err.response = { status: 429 };
       throw err;
     };
-    const r = await fetchCatalogForSku("B0X", throttled, FAST_RETRY);
-    expect(calls).toBe(5); // 1 initial + 4 retries
+    const r = await fetchCatalogForSku("B0XXXXXXXX", get as any, FAST_RETRY);
     expect(r.ok).toBe(false);
-    if (!r.ok && r.reason === "transient_error") {
-      expect(r.retryable).toBe(true);
-      expect(r.status).toBe(429);
-      expect(r.message).toContain("QuotaExceeded");
-    }
+    if (!r.ok) expect(r.reason).toBe("transient_error");
+    expect(calls).toBe(1);
   });
 
-  it("429 then 200 — retries succeed (transient throttle recovers)", async () => {
+  it("404 fails IMMEDIATELY as dead_asin (never retried)", async () => {
     let calls = 0;
-    const flakey: HttpGetFn = async () => {
+    const get = async () => {
       calls++;
-      if (calls < 3) {
-        const err: any = new Error("429");
-        err.response = { status: 429, data: { errors: [{ code: "QuotaExceeded", message: "throttled" }] } };
-        throw err;
-      }
-      return FULL_CHAIN_PAYLOAD;
-    };
-    const r = await fetchCatalogForSku("B0X", flakey, FAST_RETRY);
-    expect(calls).toBe(3); // 2 throttles + 1 success
-    expect(r.ok).toBe(true);
-    if (r.ok) expect(r.data.category).toBe("Grocery & Gourmet Food");
-  });
-
-  // REGRESSION GUARD: 404 must NEVER be retried — dead-ASIN is a permanent
-  // signal, retrying 5× would waste 15s on every dead ASIN in a batch.
-  it("404 fails IMMEDIATELY (not retried)", async () => {
-    let calls = 0;
-    const dead: HttpGetFn = async () => {
-      calls++;
-      const err: any = new Error("404");
-      err.response = { status: 404, data: { errors: [{ code: "NOT_FOUND", message: "..." }] } };
+      const err: any = new Error("not found");
+      err.response = { status: 404 };
       throw err;
     };
-    const r = await fetchCatalogForSku("B0DEAD", dead, FAST_RETRY);
-    expect(calls).toBe(1); // ONLY one call — no retries on 404
+    const r = await fetchCatalogForSku("B0XXXXXXXX", get as any, FAST_RETRY);
     expect(r.ok).toBe(false);
     if (!r.ok) expect(r.reason).toBe("dead_asin");
+    expect(calls).toBe(1);
   });
 
-  // REGRESSION GUARD: non-throttle errors (5xx, auth, etc) also bail fast —
-  // retrying a 401 or 503 wastes time and doesn't help.
-  it("500 fails immediately (only 429/QuotaExceeded retries)", async () => {
+  it("500 fails immediately as transient_error", async () => {
     let calls = 0;
-    const broken: HttpGetFn = async () => {
+    const get = async () => {
       calls++;
-      const err: any = new Error("500");
-      err.response = { status: 500, data: { errors: [{ code: "InternalError" }] } };
+      const err: any = new Error("server error");
+      err.response = { status: 500, data: { errors: [{ message: "boom" }] } };
       throw err;
     };
-    const r = await fetchCatalogForSku("B0X", broken, FAST_RETRY);
-    expect(calls).toBe(1); // no retry on non-throttle
+    const r = await fetchCatalogForSku("B0XXXXXXXX", get as any, FAST_RETRY);
     expect(r.ok).toBe(false);
-    if (!r.ok && r.reason === "transient_error") {
-      expect(r.status).toBe(500);
-    }
+    if (!r.ok) expect(r.reason).toBe("transient_error");
+    expect(calls).toBe(1);
   });
 
-  // QuotaExceeded body code (without HTTP 429) also triggers retry — SP-API
-  // sometimes surfaces throttling as body code rather than HTTP status.
-  it("body code 'QuotaExceeded' (no HTTP 429) also triggers retry", async () => {
+  it("QuotaExceeded body code (no HTTP 429) is likewise immediate transient", async () => {
     let calls = 0;
-    const odd: HttpGetFn = async () => {
+    const get = async () => {
       calls++;
-      const err: any = new Error("body-throttle");
-      err.response = { status: 200, data: { errors: [{ code: "QuotaExceeded", message: "..." }] } };
+      const err: any = new Error("throttled");
+      err.response = { status: 403, data: { errors: [{ code: "QuotaExceeded", message: "Rate exceeded" }] } };
       throw err;
     };
-    const r = await fetchCatalogForSku("B0X", odd, FAST_RETRY);
-    expect(calls).toBe(5); // retried, not failed-fast
+    const r = await fetchCatalogForSku("B0XXXXXXXX", get as any, FAST_RETRY);
     expect(r.ok).toBe(false);
+    if (!r.ok) expect(r.reason).toBe("transient_error");
+    expect(calls).toBe(1);
   });
 
   it("category walks to top even when intermediate levels exist", async () => {

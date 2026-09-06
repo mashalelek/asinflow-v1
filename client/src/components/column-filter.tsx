@@ -38,7 +38,7 @@ const NUMERIC_COLS = new Set<ColumnId>([
 ]);
 
 const BOOL_COLS = new Set<ColumnId>(["meltable", "hazmat", "suppressed"]);
-const REVIEWED_COLS = new Set<ColumnId>(["dateAdded", "lastReviewed"]);
+const REVIEWED_COLS = new Set<ColumnId>(["dateAdded", "lastReviewed", "priceAge"]);
 
 function getFilterType(colId: ColumnId): FilterType {
   if (NUMERIC_COLS.has(colId)) return "numeric";
@@ -82,6 +82,13 @@ const REVIEWED_OPS = [
   { value: "never", label: "Never reviewed" },
   { value: "olderThan", label: "Not reviewed in last X days" },
   { value: "newerThan", label: "Reviewed in last X days" },
+];
+// §11 Price Age (2026-09-06): same mechanism, neutral labels — the Date
+// Added / Last Reviewed filters keep their wording.
+const PRICE_AGE_OPS = [
+  { value: "never", label: "Never synced" },
+  { value: "olderThan", label: "Older than X days" },
+  { value: "newerThan", label: "Within last X days" },
 ];
 
 interface ColumnFilterProps {
@@ -229,7 +236,9 @@ export function ColumnFilterButton({ colId, currentFilter, onApply, onClear, mul
   const [open, setOpen] = useState(false);
   const filterType = getFilterType(colId);
   const isMultiSelect = filterType === "tags" || filterType === "supplier";
-  const ops = filterType === "numeric" ? NUMERIC_OPS : filterType === "reviewed" ? REVIEWED_OPS : TEXT_OPS;
+  const ops = filterType === "numeric" ? NUMERIC_OPS
+    : filterType === "reviewed" ? (colId === "priceAge" ? PRICE_AGE_OPS : REVIEWED_OPS)
+    : TEXT_OPS;
   const defaultOp = filterType === "numeric" ? "gt" : filterType === "reviewed" ? "never" : "contains";
 
   const [op, setOp] = useState(currentFilter?.operator ?? defaultOp);

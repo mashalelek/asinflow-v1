@@ -92,7 +92,11 @@ describe("fetchCompetingOffers", () => {
     expect(calls).toBe(1); // 503 is not a throttle; bail immediately
   });
 
-  it("429 → retries with backoff, eventually transient_error after exhaustion", async () => {
+  // 429 retry loops were REMOVED from this module (SPEC §11, 2026-09-06):
+  // pacing + throttle retries live in the shared rate limiter, once. Escaped
+  // throttles surface here as an immediate transient_error — asserted below;
+  // the limiter's own retry behavior is pinned in spapi-rate-limit.test.ts.
+  it("429 → transient_error immediately, NO module-level retry (limiter owns 429s)", async () => {
     let calls = 0;
     const get = async () => {
       calls++;
@@ -103,41 +107,21 @@ describe("fetchCompetingOffers", () => {
     const r = await fetchCompetingOffers("B0XXX", OUR_SELLER, get, FAST_RETRY);
     expect(r.ok).toBe(false);
     if (!r.ok) expect(r.reason).toBe("transient_error");
-    expect(calls).toBe(3); // initial + 2 retries
+    expect(calls).toBe(1);
   });
 
-  it("transient 429 then success on retry → returns success", async () => {
-    let calls = 0;
-    const get = async () => {
-      calls++;
-      if (calls <= 1) {
-        const err: any = new Error("simulated"); err.response = { status: 429 }; throw err;
-      }
-      return { payload: { Offers: [{ SellerId: "A1OTHER", ListingPrice: { Amount: "10.00" }, IsFulfilledByAmazon: true }] } };
-    };
-    const r = await fetchCompetingOffers("B0XXX", OUR_SELLER, get, FAST_RETRY);
-    expect(r.ok).toBe(true);
-    if (r.ok) expect(r.competingOffers).toEqual([10]);
-    expect(calls).toBe(2); // 1 throttle + 1 success
-  });
-
-  it("error code QuotaExceeded (not just HTTP 429) also triggers retry", async () => {
-    // SP-API sometimes surfaces throttling as HTTP 4xx with code=QuotaExceeded
-    // rather than HTTP 429. Both must trigger the retry path.
+  it("QuotaExceeded code (HTTP 4xx) is likewise transient with no retry", async () => {
     let calls = 0;
     const get = async () => {
       calls++;
       const err: any = new Error("simulated");
-      err.response = {
-        status: 403,
-        data: { Errors: [{ Code: "QuotaExceeded", Message: "Rate exceeded" }] },
-      };
+      err.response = { status: 403, data: { Errors: [{ Code: "QuotaExceeded", Message: "Rate exceeded" }] } };
       throw err;
     };
     const r = await fetchCompetingOffers("B0XXX", OUR_SELLER, get, FAST_RETRY);
     expect(r.ok).toBe(false);
     if (!r.ok) expect(r.reason).toBe("transient_error");
-    expect(calls).toBe(3); // retried like a 429
+    expect(calls).toBe(1);
   });
 
   it("rejects offers with no price (defensive)", async () => {

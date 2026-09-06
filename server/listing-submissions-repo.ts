@@ -85,17 +85,20 @@ export async function verifyPending(
       [row.id, status, issuesJson, reviewFlags, probe.classification.terminalConflict],
     );
 
-    if (status === "live") {
-      s.live++;
-      // §19 → live-offer signal: a 'live' verdict is getListingsItem-derived, so
-      // it is authoritative for asins.has_live_offer. Flips the icon same-day
-      // after Add to SC (before the daily staleness pass runs), preventing a
-      // stale "+" that would invite a double-add. NOT set at ACCEPTED — that is
-      // only synchronous validation (§19).
+    // §18 ONE definition (2026-09-06): has_live_offer means "a listing record
+    // EXISTS at SC" — any 200 for the submitted SKU writes TRUE immediately,
+    // independent of whether the ledger row materializes to 'live' or stays
+    // 'processing' (a just-created SKU 200s with empty status for a while).
+    // The ledger keeps its own classifier; only this flag write is decoupled.
+    // Still NOT set at ACCEPTED — that is synchronous validation only (§19).
+    if (probe.input.found) {
       await query(
         `UPDATE asins SET has_live_offer = TRUE, offer_checked_at = now() WHERE asin = $1`,
         [row.asin],
       );
+    }
+    if (status === "live") {
+      s.live++;
     }
     else if (status === "failed") s.failed++;
     else if (status === "stale") s.stale++;

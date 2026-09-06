@@ -4,6 +4,7 @@
 // these for backwards compatibility.
 
 import axios from "axios";
+import { withRateLimit } from "./spapi-rate-limit";
 
 const SP_API_BASE = "https://sellingpartnerapi-na.amazon.com";
 
@@ -44,28 +45,41 @@ export async function getAccessToken(): Promise<string> {
   return cachedTokens.accessToken;
 }
 
+// SPEC §11 "SP-API rate limiting" (2026-09-06): every request goes through
+// the shared per-operation token-bucket limiter (429s handled there, once)
+// and carries a hard timeout — a hung socket ends as a per-item error, never
+// a frozen job (decision 9: 30 s per API request; the S3 report-document
+// download is a plain URL outside these wrappers and uses its own 120 s).
+const SP_API_TIMEOUT_MS = 30_000;
+
 export async function spApiGet(endpoint: string, params?: Record<string, any>) {
   const token = await getAccessToken();
-  const res = await axios.get(`${SP_API_BASE}${endpoint}`, {
-    headers: {
-      Authorization: `Bearer ${token}`,
-      "x-amz-access-token": token,
-      "Content-Type": "application/json",
-    },
-    params,
-  });
+  const res = await withRateLimit(endpoint, () =>
+    axios.get(`${SP_API_BASE}${endpoint}`, {
+      headers: {
+        Authorization: `Bearer ${token}`,
+        "x-amz-access-token": token,
+        "Content-Type": "application/json",
+      },
+      params,
+      timeout: SP_API_TIMEOUT_MS,
+    }),
+  );
   return res.data;
 }
 
 export async function spApiPost(endpoint: string, body: any) {
   const token = await getAccessToken();
-  const res = await axios.post(`${SP_API_BASE}${endpoint}`, body, {
-    headers: {
-      Authorization: `Bearer ${token}`,
-      "x-amz-access-token": token,
-      "Content-Type": "application/json",
-    },
-  });
+  const res = await withRateLimit(endpoint, () =>
+    axios.post(`${SP_API_BASE}${endpoint}`, body, {
+      headers: {
+        Authorization: `Bearer ${token}`,
+        "x-amz-access-token": token,
+        "Content-Type": "application/json",
+      },
+      timeout: SP_API_TIMEOUT_MS,
+    }),
+  );
   return res.data;
 }
 
@@ -79,13 +93,16 @@ export async function spApiPut(
   params?: Record<string, any>,
 ) {
   const token = await getAccessToken();
-  const res = await axios.put(`${SP_API_BASE}${endpoint}`, body, {
-    headers: {
-      Authorization: `Bearer ${token}`,
-      "x-amz-access-token": token,
-      "Content-Type": "application/json",
-    },
-    params,
-  });
+  const res = await withRateLimit(endpoint, () =>
+    axios.put(`${SP_API_BASE}${endpoint}`, body, {
+      headers: {
+        Authorization: `Bearer ${token}`,
+        "x-amz-access-token": token,
+        "Content-Type": "application/json",
+      },
+      params,
+      timeout: SP_API_TIMEOUT_MS,
+    }),
+  );
   return res.data;
 }

@@ -92,10 +92,10 @@ export async function fetchCatalogForSku(
   httpGet: HttpGetFn = realSpApiGet,
   retryConfig: CatalogFetchRetryConfig = DEFAULT_RETRY,
 ): Promise<CatalogFetchOutcome> {
+  // Throttle retries moved to the shared rate limiter (SPEC §11, 2026-09-06)
+  // — this module's 5-attempt doubling loop was removed, not layered.
   let data: any;
-  let backoff = retryConfig.initialBackoffMs;
-  let attempt = 0;
-  while (true) {
+  {
     try {
       data = await httpGet(`/catalog/2022-04-01/items/${asin}`, {
         marketplaceIds: MARKETPLACE,
@@ -103,23 +103,11 @@ export async function fetchCatalogForSku(
         // extra call on the generate path).
         includedData: "summaries,classifications,images,attributes",
       });
-      break; // success — exit retry loop
     } catch (err: any) {
       const status = err?.response?.status;
       const code =
         err?.response?.data?.errors?.[0]?.code ??
         err?.response?.data?.Errors?.[0]?.Code;
-      const isThrottle = status === 429 || code === "QuotaExceeded";
-
-      // Retry ONLY on throttle, and only while we have attempts left.
-      // CRITICAL: 404 (dead ASIN) is NOT a throttle — falls through to the
-      // fail-fast return below. Same for any other non-throttle error.
-      if (isThrottle && attempt < retryConfig.maxAttempts - 1) {
-        await new Promise((r) => setTimeout(r, backoff));
-        backoff *= 2;
-        attempt++;
-        continue;
-      }
 
       // 404 → dead_asin (fast-fail, never retried — checked AFTER the
       // throttle branch above so we never spend retry budget on a 404)

@@ -1,7 +1,6 @@
 import { spApiGet } from "./spapi";
 import { query } from "./db";
 import { log } from "./index";
-import { syncLiveOffers } from "./live-offer-sync";
 
 const MARKETPLACE_ID = "ATVPDKIKX0DER";
 
@@ -20,11 +19,10 @@ interface AsinAgg {
   skuData: SkuData[];
 }
 
-export interface LiveOfferPassCounts { checked: number; live: number; no_offer: number; throttled: number }
 
 export async function syncInventory(
   asinFilter?: ReadonlySet<string>,
-): Promise<{ synced: number; skipped: number; liveOffer: LiveOfferPassCounts }> {
+): Promise<{ synced: number; skipped: number }> {
   // Build a map from asin VARCHAR → asins.id UUID for active ASINs.
   // When asinFilter is supplied, restrict to that subset — the SP-API call
   // itself is paginated/global, so the filter applies to which rows we
@@ -172,21 +170,8 @@ export async function syncInventory(
   // Fold in the live-offer check AFTER inventory writes: this run may have
   // created/left ASINs with has_live_offer IS NULL (new SKUs) or a stale FALSE
   // (offer created after the last check — nothing else rechecks a FALSE).
-  // Reuses the 07:00 cron's checkAsinLiveOffer logic (single implementation),
-  // scoped to not-yet-live rows (has_live_offer IS DISTINCT FROM TRUE),
-  // mirroring this sync's asinFilter. Paced per the Listings budget.
-  // FAIL-CLOSED: a throttle/failure here must NOT fail the inventory sync — log,
-  // report the (partial/zero) counts, leave rows NULL for the next run / 07:00
-  // cron. Writes has_live_offer / offer_checked_at + the §6 current-issues
-  // snapshot ONLY.
-  let liveOffer: LiveOfferPassCounts = { checked: 0, live: 0, no_offer: 0, throttled: 0 };
-  try {
-    const lo = await syncLiveOffers({ notLiveOnly: true, asinFilter });
-    liveOffer = { checked: lo.total, live: lo.live, no_offer: lo.noOffer, throttled: lo.transient };
-    log(`Inventory sync live-offer pass: ${liveOffer.checked} checked — ${liveOffer.live} live, ${liveOffer.no_offer} no_offer, ${liveOffer.throttled} throttled`, "inventory-sync");
-  } catch (err: any) {
-    log(`Inventory sync live-offer pass FAILED (inventory sync unaffected; rows left NULL): ${err?.message ?? err}`, "inventory-sync");
-  }
-
-  return { synced, skipped, liveOffer };
+  // The live-offer rider was REMOVED 2026-09-06 (SPEC §11 Refresh job):
+  // the Refresh `listings` stage reconciles ALL flag states including TRUE,
+  // subsuming the notLiveOnly re-probe entirely.
+  return { synced, skipped };
 }

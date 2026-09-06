@@ -4,11 +4,9 @@ import { registerRoutes } from "./routes";
 import { serveStatic } from "./static";
 import { createServer } from "http";
 import { ensureExtensionTables } from "./db";
-import { startInventoryCron } from "./inventory-cron";
-import { startPriceSyncCron } from "./price-sync-cron";
+import { startRefreshCron } from "./refresh-cron";
 import { startSourcingSyncCron } from "./sourcing-sync-cron";
 import { startAuraSyncCron } from "./aura-sync-cron";
-import { startLiveOfferCron } from "./live-offer-cron";
 
 const app = express();
 const httpServer = createServer(app);
@@ -100,11 +98,9 @@ app.use((req, res, next) => {
   // ticks), so manual toolbar/API triggers are the operating model. Set
   // ENABLE_CRONS=true at cloud deploy. (SPEC §11 "Scheduled crons")
   if (process.env.DATABASE_URL && process.env.ENABLE_CRONS === "true") {
-    startInventoryCron();
-    startPriceSyncCron();
+    startRefreshCron();
     startSourcingSyncCron();
     startAuraSyncCron();
-    startLiveOfferCron();
   } else if (process.env.DATABASE_URL) {
     log("Scheduled crons disabled (ENABLE_CRONS != 'true') — manual sync triggers are the operating model", "cron");
   }
