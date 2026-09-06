@@ -25,7 +25,7 @@ import { useSearch } from "wouter";
 import { loadColumnConfig, type ColumnConfig } from "@/lib/columns";
 import { loadBuyList, saveBuyList, loadOnHoldList, saveOnHoldList } from "@/lib/buy-hold";
 import { fetchLongSync } from "@/lib/long-sync";
-import { Sun, Moon, BarChart3, Zap, AlertTriangle, X, Search, RefreshCw, Archive, Sheet, Database, ShoppingCart, DollarSign, FileSpreadsheet, Upload, Plus, ScanSearch } from "lucide-react";
+import { Sun, Moon, BarChart3, Zap, AlertTriangle, X, Search, RefreshCw, Archive, Sheet, Database, ShoppingCart, DollarSign, FileSpreadsheet, Upload, Plus, ScanSearch, History } from "lucide-react";
 import { Checkbox } from "@/components/ui/checkbox";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import {
@@ -295,6 +295,47 @@ type SbSummary = {
   fractionalRounded: { asin: string; rawSum: number; rounded: number }[];
 };
 
+// Amazon sourcing cost export (Manage Your Sourcing Cost bulk update). No
+// SP-API exists for this, so the flow is: download Amazon's workbook → run it
+// through here → upload the filled copy in Seller Central.
+type ScSummary = {
+  from: string;
+  to: string;
+  rowsWritten: number;
+  asinsWritten: number;
+  purchasedAsins: number;
+  asinsWithPoCogs: number;
+  sheetsScanned: number;
+  workbookRowsRead: number;
+  workbookAsins: number;
+  rawRowsRead: number;
+  blankAsinRows: number;
+  includedRows: number;
+  skips: {
+    excludedByStatus: number; badDate: number; outOfRange: number;
+    noCogsRow: number; notPoSourced: number; badCost: number;
+    notInWorkbook: number; alreadyApproved: number; wouldLowerApproved: number;
+  };
+  noCogsRowAsins: string[];
+  notPoSourcedAsins: { asin: string; source: string | null }[];
+  badCostAsins: { asin: string; cogs: string }[];
+  notInWorkbookAsins: string[];
+  alreadyApprovedAsins: string[];
+  wouldLowerAsins: { asin: string; approved: number; cost: number; source: string | null }[];
+  written: { asin: string; fnskus: string[]; cost: number; wasApproved: number | null; source: string | null }[];
+};
+
+type ScExportRecord = {
+  id: number;
+  filename: string;
+  rangeStart: string;
+  rangeEnd: string;
+  purchasedAsins: number;
+  asinsWritten: number;
+  rowsWritten: number;
+  createdAt: string;
+};
+
 export default function Home() {
   // Theme toggle is now in the top nav
   const { toast } = useToast();
@@ -355,6 +396,13 @@ export default function Home() {
   const [isExportingSb, setIsExportingSb] = useState(false);
   const [sbResult, setSbResult] = useState<{ filename: string; summary: SbSummary } | null>(null);
   const sbFileInputRef = useRef<HTMLInputElement>(null);
+  // Amazon sourcing cost export. Same file-picker shape as the SB export, but
+  // the uploaded workbook IS the output — we fill one column and hand it back.
+  const [isExportingSc, setIsExportingSc] = useState(false);
+  const [scResult, setScResult] = useState<{ filename: string; summary: ScSummary } | null>(null);
+  const [scHistory, setScHistory] = useState<ScExportRecord[] | null>(null);
+  const [scHistoryOpen, setScHistoryOpen] = useState(false);
+  const scFileInputRef = useRef<HTMLInputElement>(null);
 
   // DA-3: revival dialog state. Populated by checkRevivalCandidates after
   // every analyze-completion path (handleAnalyze, runAnalyzeAllFromDb,
@@ -933,6 +981,57 @@ export default function Home() {
     }
   }, [toast]);
 
+  // Amazon sourcing cost export — opens the workbook picker; the upload +
+  // download happens in handleScWorkbookSelected.
+  const handleExportSourcingCost = useCallback(() => {
+    scFileInputRef.current?.click();
+  }, []);
+
+  const handleScWorkbookSelected = useCallback(async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    e.target.value = ""; // allow re-picking the same file
+    if (!file) return;
+    setIsExportingSc(true);
+    try {
+      const fd = new FormData();
+      fd.append("file", file);
+      fd.append("from", startDate);
+      fd.append("to", endDate);
+      const res = await fetch("/api/export/sourcing-cost", { method: "POST", body: fd });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.message || "Sourcing cost export failed");
+      // Rebuild the xlsx from base64 — the response is JSON so the summary can
+      // ride along with the file.
+      const bytes = Uint8Array.from(atob(data.xlsxBase64), (c) => c.charCodeAt(0));
+      const blob = new Blob([bytes], { type: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      a.href = url;
+      a.download = data.filename;
+      a.click();
+      URL.revokeObjectURL(url);
+      setScResult({ filename: data.filename, summary: data.summary });
+      setScHistory(null); // stale — refetched on next open
+    } catch (err: any) {
+      toast({ title: "Sourcing cost export failed", description: err.message, variant: "destructive" });
+    } finally {
+      setIsExportingSc(false);
+    }
+  }, [toast, startDate, endDate]);
+
+  const handleOpenScHistory = useCallback(async () => {
+    setScHistoryOpen(true);
+    if (scHistory) return;
+    try {
+      const res = await fetch("/api/export/sourcing-cost/history");
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.message || "Could not load export history");
+      setScHistory(data.exports);
+    } catch (err: any) {
+      toast({ title: "Export history failed", description: err.message, variant: "destructive" });
+    }
+  }, [toast, scHistory]);
+
   const handleSyncSales = useCallback(async () => {
     const ws = currentWorkingSet();
     if (ws.length === 0) return;
@@ -1486,6 +1585,14 @@ export default function Home() {
                 {isExportingSb ? "Exporting..." : "Export SB COGS"}
               </Button>
               <input ref={sbFileInputRef} type="file" accept=".xlsx" onChange={handleSbTemplateSelected} className="hidden" data-testid="input-sb-template" />
+              <Button variant="outline" size="sm" onClick={handleExportSourcingCost} disabled={isExportingSc} className="h-8 text-xs" title={`Upload Amazon's Manage Your Sourcing Cost bulk-update workbook; fills Seller New Cost from PO actual COGS for ASINs purchased ${dateRangeLabel}. Amazon has no API for this — the filled file goes back through Seller Central by hand.`} data-testid="button-export-sourcing-cost">
+                <DollarSign className="h-3.5 w-3.5 mr-1.5" />
+                {isExportingSc ? "Filling..." : "Export Sourcing Cost"}
+              </Button>
+              <Button variant="ghost" size="sm" onClick={handleOpenScHistory} className="h-8 text-xs px-2" title="Sourcing cost exports already generated" data-testid="button-sc-history">
+                <History className="h-3.5 w-3.5" />
+              </Button>
+              <input ref={scFileInputRef} type="file" accept=".xlsx" onChange={handleScWorkbookSelected} className="hidden" data-testid="input-sc-workbook" />
               <Tooltip>
                 <TooltipTrigger asChild>
                   <Button
@@ -1907,6 +2014,143 @@ export default function Home() {
                   </div>
                 </details>
               )}
+            </div>
+          )}
+        </DialogContent>
+      </Dialog>
+
+      <Dialog open={!!scResult} onOpenChange={(o) => { if (!o) setScResult(null); }}>
+        <DialogContent className="max-w-md">
+          <DialogHeader>
+            <DialogTitle>Amazon sourcing cost export</DialogTitle>
+            <DialogDescription>
+              Downloaded {scResult?.filename}. Upload it under Bulk Update on the Manage Your
+              Sourcing Cost page — Amazon has no API for this. Have the matching invoices ready:
+              submissions are gated on document review.
+            </DialogDescription>
+          </DialogHeader>
+          {scResult && (
+            <div className="text-sm space-y-2">
+              <div>
+                <span className="font-semibold">{scResult.summary.rowsWritten}</span> costs written ·{" "}
+                {scResult.summary.asinsWritten} ASINs
+                {scResult.summary.rowsWritten > scResult.summary.asinsWritten && (
+                  <span className="text-muted-foreground"> (multi-FNSKU fan-out)</span>
+                )}
+              </div>
+              <div className="text-muted-foreground text-xs">
+                Purchased {scResult.summary.from}..{scResult.summary.to}: {scResult.summary.purchasedAsins} ASINs,
+                {" "}{scResult.summary.asinsWithPoCogs} with a PO cost. Workbook: {scResult.summary.workbookRowsRead} rows /
+                {" "}{scResult.summary.workbookAsins} ASINs over {scResult.summary.sheetsScanned} sheet(s).
+              </div>
+              <div className="text-xs">
+                PO rows — read: {scResult.summary.rawRowsRead}, blank ASIN: {scResult.summary.blankAsinRows}, canceled:{" "}
+                {scResult.summary.skips.excludedByStatus}, bad date: {scResult.summary.skips.badDate}, out of range:{" "}
+                {scResult.summary.skips.outOfRange}, included: {scResult.summary.includedRows}
+              </div>
+              <div className="text-xs">
+                Skipped — no estimates row: {scResult.summary.skips.noCogsRow} · not PO-sourced:{" "}
+                {scResult.summary.skips.notPoSourced} · bad cost: {scResult.summary.skips.badCost} · not in workbook:{" "}
+                {scResult.summary.skips.notInWorkbook} · already approved: {scResult.summary.skips.alreadyApproved} · would
+                {" "}lower approval: {scResult.summary.skips.wouldLowerApproved}
+              </div>
+              {scResult.summary.skips.wouldLowerApproved > 0 && (
+                <div className="text-xs rounded border border-amber-500/40 bg-amber-500/10 px-2 py-1.5">
+                  Held back {scResult.summary.skips.wouldLowerApproved} row(s) whose PO cost is below Amazon's
+                  approved value. Amazon accepts reductions far more readily than increases, so submitting these
+                  would lower your reimbursement basis with little chance of undoing it.
+                </div>
+              )}
+              {scResult.summary.written.length > 0 && (
+                <details className="text-xs">
+                  <summary className="cursor-pointer text-muted-foreground">Costs written — {scResult.summary.written.length} ASINs (expand)</summary>
+                  <div className="mt-1 font-mono max-h-40 overflow-auto space-y-0.5">
+                    {scResult.summary.written.map((w, i) => (
+                      <div key={i}>
+                        {w.asin} → {w.cost.toFixed(2)}
+                        {w.wasApproved != null && ` (was ${w.wasApproved.toFixed(2)}${w.source ? ` / ${w.source}` : ""})`}
+                        {w.fnskus.length > 1 && ` ×${w.fnskus.length} FNSKU`}
+                      </div>
+                    ))}
+                  </div>
+                </details>
+              )}
+              {scResult.summary.wouldLowerAsins.length > 0 && (
+                <details className="text-xs">
+                  <summary className="cursor-pointer text-muted-foreground">Would lower approval — {scResult.summary.wouldLowerAsins.length} ASINs (expand)</summary>
+                  <div className="mt-1 font-mono max-h-40 overflow-auto space-y-0.5">
+                    {scResult.summary.wouldLowerAsins.map((x, i) => (
+                      <div key={i}>{x.asin} · approved {x.approved.toFixed(2)} → PO {x.cost.toFixed(2)}{x.source ? ` (${x.source})` : ""}</div>
+                    ))}
+                  </div>
+                </details>
+              )}
+              {scResult.summary.notPoSourcedAsins.length > 0 && (
+                <details className="text-xs">
+                  <summary className="cursor-pointer text-muted-foreground">Not PO-sourced — {scResult.summary.notPoSourcedAsins.length} ASINs (expand)</summary>
+                  <div className="mt-1 font-mono max-h-40 overflow-auto space-y-0.5">
+                    {scResult.summary.notPoSourcedAsins.map((x, i) => (
+                      <div key={i}>{x.asin} · source={x.source ?? "null"}</div>
+                    ))}
+                  </div>
+                </details>
+              )}
+              {scResult.summary.noCogsRowAsins.length > 0 && (
+                <details className="text-xs">
+                  <summary className="cursor-pointer text-muted-foreground">No estimates row — {scResult.summary.noCogsRowAsins.length} ASINs (expand)</summary>
+                  <div className="mt-1 font-mono max-h-40 overflow-auto break-words">{scResult.summary.noCogsRowAsins.join(", ")}</div>
+                </details>
+              )}
+              {scResult.summary.badCostAsins.length > 0 && (
+                <details className="text-xs">
+                  <summary className="cursor-pointer text-muted-foreground">Bad cost — {scResult.summary.badCostAsins.length} ASINs (expand)</summary>
+                  <div className="mt-1 font-mono max-h-40 overflow-auto space-y-0.5">
+                    {scResult.summary.badCostAsins.map((x, i) => (
+                      <div key={i}>{x.asin} · cogs={x.cogs}</div>
+                    ))}
+                  </div>
+                </details>
+              )}
+              {scResult.summary.notInWorkbookAsins.length > 0 && (
+                <details className="text-xs">
+                  <summary className="cursor-pointer text-muted-foreground">Not in Amazon's workbook — {scResult.summary.notInWorkbookAsins.length} ASINs (expand)</summary>
+                  <div className="mt-1 font-mono max-h-40 overflow-auto break-words">{scResult.summary.notInWorkbookAsins.join(", ")}</div>
+                </details>
+              )}
+              {scResult.summary.alreadyApprovedAsins.length > 0 && (
+                <details className="text-xs">
+                  <summary className="cursor-pointer text-muted-foreground">Already approved at this cost — {scResult.summary.alreadyApprovedAsins.length} ASINs (expand)</summary>
+                  <div className="mt-1 font-mono max-h-40 overflow-auto break-words">{scResult.summary.alreadyApprovedAsins.join(", ")}</div>
+                </details>
+              )}
+            </div>
+          )}
+        </DialogContent>
+      </Dialog>
+
+      <Dialog open={scHistoryOpen} onOpenChange={setScHistoryOpen}>
+        <DialogContent className="max-w-lg">
+          <DialogHeader>
+            <DialogTitle>Sourcing cost export history</DialogTitle>
+            <DialogDescription>
+              Files generated, newest first. This records what AsinFlow produced — Seller Central
+              gives no upload receipt, so it cannot confirm what Amazon accepted.
+            </DialogDescription>
+          </DialogHeader>
+          {scHistory === null ? (
+            <div className="text-sm text-muted-foreground">Loading...</div>
+          ) : scHistory.length === 0 ? (
+            <div className="text-sm text-muted-foreground">No exports yet.</div>
+          ) : (
+            <div className="text-xs font-mono max-h-80 overflow-auto space-y-1">
+              {scHistory.map((h) => (
+                <div key={h.id} className="flex justify-between gap-3">
+                  <span className="truncate">{h.filename}</span>
+                  <span className="text-muted-foreground whitespace-nowrap">
+                    {h.rowsWritten} rows / {h.asinsWritten} ASINs
+                  </span>
+                </div>
+              ))}
             </div>
           )}
         </DialogContent>

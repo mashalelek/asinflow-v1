@@ -20,6 +20,8 @@ import { buildVelocityRecords, serializeVelocityCsv, parseMDY, formatYMD, todayL
 import { fetchAllKnownOrders, matchKeysForOrder, createBundleOrder, submitBulkCsv, updateInboundOrder } from "./velocity-api";
 import { buildVelocityPlan, putBodyFromDiffs, type PlanUpdate } from "./velocity-reconcile";
 import { buildSellerboardCogs, serializeSbCsv } from "./sellerboard-cogs";
+import { buildSourcingCost, sourcingCostFilename, parseYMDLocal } from "./sourcing-cost";
+import { recordSourcingCostExport, listSourcingCostExports } from "./sourcing-cost-repo";
 import { syncSourcingSheet } from "./sourcing-sync";
 import { refreshPrices } from "./price-sync";
 import { applyCatalogDeletedSignal } from "./catalog-deleted-write";
@@ -1950,6 +1952,123 @@ export async function registerRoutes(
       });
     } catch (err: any) {
       log(`SellerBoard COGS export error: ${err?.message ?? err}`, "sellerboard-cogs");
+      res.status(500).json({ message: err?.message ?? String(err) });
+    }
+  });
+
+  // Amazon Sourcing Cost export. No SP-API exists for sourcing cost (verified
+  // against the SP-API model + feed-type lists, Aug 2026), so this is a
+  // fill-in-place transform on Amazon's own workbook: upload the file from
+  // "Bulk Update" on the Manage Your Sourcing Cost page, get it back with
+  // "Seller New Cost" populated for every ASIN purchased in the selected range.
+  // Cost = actual_cogs, po_sheet-sourced only. Returns JSON
+  // { filename, xlsxBase64, summary } so the client builds the download AND
+  // shows the accounting; full detail is logged server-side.
+  app.post("/api/export/sourcing-cost", upload.single("file"), async (req: Request, res: Response) => {
+    if (!isDbAvailable()) { res.status(503).json({ message: "Database not available" }); return; }
+    const credPath = process.env.GOOGLE_CREDENTIALS_PATH;
+    if (!credPath || !fs.existsSync(credPath)) { res.status(400).json({ message: "Google credentials file not found" }); return; }
+    if (!process.env.GOOGLE_SHEET_ID) { res.status(400).json({ message: "GOOGLE_SHEET_ID not configured" }); return; }
+    if (!req.file) { res.status(400).json({ message: "No workbook uploaded (field 'file')" }); return; }
+
+    const from = parseYMDLocal(req.body?.from);
+    const to = parseYMDLocal(req.body?.to);
+    if (!from || !to) { res.status(400).json({ message: "from/to must be YYYY-MM-DD" }); return; }
+    if (from.getTime() > to.getTime()) { res.status(400).json({ message: "from must not be after to" }); return; }
+
+    try {
+      const { buffer, summary, details } = await buildSourcingCost(req.file.buffer, from, to);
+      const filename = sourcingCostFilename(from, to);
+      const s = summary.skips;
+      // Row-accounting identity — every PO sheet row read lands exactly once.
+      const accounted = summary.blankAsinRows + s.excludedByStatus + s.badOrMissingDate +
+        s.excludedOutOfRange + summary.includedRows;
+      log(
+        `Sourcing cost export ${formatYMD(from)}..${formatYMD(to)}: ` +
+        `${summary.rowsWritten} rows written across ${summary.asinsWritten} ASINs ` +
+        `(workbook ${summary.workbookRowsRead} rows / ${summary.workbookAsins} ASINs over ${summary.sheetsScanned} sheet(s)); ` +
+        `PO sheet rawRowsRead=${summary.rawRowsRead} blankAsin=${summary.blankAsinRows} ` +
+        `excludedByStatus=${s.excludedByStatus} badDate=${s.badOrMissingDate} ` +
+        `outOfRange=${s.excludedOutOfRange} included=${summary.includedRows} ` +
+        `(identity remainder=${summary.rawRowsRead - accounted}); ` +
+        `purchasedAsins=${summary.purchasedAsins} withPoCogs=${summary.asinsWithPoCogs} ` +
+        `noCogsRow=${s.noCogsRow} [${details.noCogsRowAsins.join(", ")}] ` +
+        `notPoSourced=${s.notPoSourced} [${details.notPoSourcedAsins.map((x) => `${x.asin}:${x.source ?? "null"}`).join(", ")}] ` +
+        `badCost=${s.badCost} [${details.badCostAsins.map((x) => `${x.asin}:${x.cogs}`).join(", ")}] ` +
+        `notInWorkbook=${s.notInWorkbook} [${details.notInWorkbookAsins.join(", ")}] ` +
+        `alreadyApproved=${s.alreadyApproved} [${details.alreadyApprovedAsins.join(", ")}] ` +
+        `wouldLowerApproved=${s.wouldLowerApproved} ` +
+        `[${details.wouldLowerAsins.map((x) => `${x.asin}:${x.approved}>${x.cost}`).join(", ")}]` +
+        (details.written.length ? ` written=${JSON.stringify(details.written)}` : ""),
+        "sourcing-cost",
+      );
+
+      // History is recorded at GENERATION time — Seller Central gives no upload
+      // receipt, so this logs what we produced, not what Amazon accepted. A
+      // history write failure must not lose the user their file.
+      try {
+        await recordSourcingCostExport({
+          filename,
+          rangeStart: formatYMD(from),
+          rangeEnd: formatYMD(to),
+          purchasedAsins: summary.purchasedAsins,
+          asinsWritten: summary.asinsWritten,
+          rowsWritten: summary.rowsWritten,
+        });
+      } catch (histErr: any) {
+        log(`Sourcing cost export: history write failed (file still returned): ${histErr?.message ?? histErr}`, "sourcing-cost");
+      }
+
+      res.json({
+        filename,
+        xlsxBase64: buffer.toString("base64"),
+        summary: {
+          from: formatYMD(from),
+          to: formatYMD(to),
+          rowsWritten: summary.rowsWritten,
+          asinsWritten: summary.asinsWritten,
+          purchasedAsins: summary.purchasedAsins,
+          asinsWithPoCogs: summary.asinsWithPoCogs,
+          sheetsScanned: summary.sheetsScanned,
+          workbookRowsRead: summary.workbookRowsRead,
+          workbookAsins: summary.workbookAsins,
+          rawRowsRead: summary.rawRowsRead,
+          blankAsinRows: summary.blankAsinRows,
+          includedRows: summary.includedRows,
+          skips: {
+            excludedByStatus: s.excludedByStatus,
+            badDate: s.badOrMissingDate,
+            outOfRange: s.excludedOutOfRange,
+            noCogsRow: s.noCogsRow,
+            notPoSourced: s.notPoSourced,
+            badCost: s.badCost,
+            notInWorkbook: s.notInWorkbook,
+            alreadyApproved: s.alreadyApproved,
+            wouldLowerApproved: s.wouldLowerApproved,
+          },
+          noCogsRowAsins: details.noCogsRowAsins,
+          notPoSourcedAsins: details.notPoSourcedAsins,
+          badCostAsins: details.badCostAsins,
+          notInWorkbookAsins: details.notInWorkbookAsins,
+          alreadyApprovedAsins: details.alreadyApprovedAsins,
+          wouldLowerAsins: details.wouldLowerAsins,
+          written: details.written,
+        },
+      });
+    } catch (err: any) {
+      log(`Sourcing cost export error: ${err?.message ?? err}`, "sourcing-cost");
+      res.status(500).json({ message: err?.message ?? String(err) });
+    }
+  });
+
+  // Export history — what we've generated, newest first. Filenames carry their
+  // own date range, so the list is self-describing.
+  app.get("/api/export/sourcing-cost/history", async (_req: Request, res: Response) => {
+    if (!isDbAvailable()) { res.status(503).json({ message: "Database not available" }); return; }
+    try {
+      res.json({ exports: await listSourcingCostExports(50) });
+    } catch (err: any) {
+      log(`Sourcing cost history error: ${err?.message ?? err}`, "sourcing-cost");
       res.status(500).json({ message: err?.message ?? String(err) });
     }
   });

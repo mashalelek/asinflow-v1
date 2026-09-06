@@ -1182,6 +1182,147 @@ and bad-qty lists expandable**; full detail (incl. merges, per-row badQty with
 sheet row + cost, and the identity remainder) is logged server-side. Toolbar
 button **"Export SB COGS"** opens the template file picker.
 
+### Amazon sourcing cost export (Manage Your Sourcing Cost)
+
+**There is no API.** Verified Aug 19, 2026 against the SP-API model list and the
+Feeds API feed-type list: no endpoint, no feed, nothing on the roadmap. Sourcing
+cost moves only through the **Bulk Update** button on the Manage Your Sourcing
+Cost page in Seller Central. AsinFlow's job is to prepare that file; the upload
+is a manual step and always will be until Amazon ships something.
+
+**This export fills a workbook — it does not generate one.** Amazon owns the row
+set and seven of the eight columns. We own exactly one cell per row. Contrast
+with the SellerBoard export above, which emits rows from a header list.
+
+Amazon's workbook (`Part_1`..`Part_N` sheets, one row per **ASIN + FNSKU**):
+
+| Column | Owner | Notes |
+|---|---|---|
+| `Asin` | Amazon | match key |
+| `Fnsku` | Amazon | row key — an ASIN can have several |
+| `Amazon Estimated Cost` | Amazon | their valuation, per FNSKU |
+| `Latest Approved Cost` | Amazon | what reimbursement currently uses |
+| `Source of Latest Approved Cost` | Amazon | `AMAZON` or `SELLER` |
+| `Currency` | Amazon | `USD` |
+| `Date of Last Updated Cost` | Amazon | ISO-8601 **string**, never a date cell |
+| **`Seller New Cost`** | **AsinFlow** | the only cell we write |
+
+Columns are located **by header text, never by index**. A missing `Asin` or
+`Seller New Cost` header throws rather than writing into the wrong column.
+
+**Cost source: `actual_cogs`, and only where `cogs_source = 'po_sheet'`.**
+Sourcing cost sets Amazon's reimbursement valuation for lost/damaged units and
+is gated on invoice review, so only a cost with a PO behind it is defensible.
+`estimated_cogs` is never submitted. Neither is a `manual`- or `csv`-sourced
+actual — those ASINs are skipped and named in the summary, never guessed.
+
+**Confirmed Aug 20, 2026 (Maria): keep this filter narrow.** Widening it to any
+`actual_cogs` regardless of source was considered and rejected — non-PO costs
+have no invoice behind them, and every submission is document-gated, so a wider
+filter only manufactures rejections while spending the scarce per-FNSKU update
+attempts (see "attempt budget" below). A cost AsinFlow cannot document is a cost
+Amazon will not approve. The
+value written is always the latest PO cost on record, regardless of which window
+selected the ASIN.
+
+**Scope: ASINs purchased inside the selected date range**, per the PO sheet
+(Col C order date, Col H ASIN). Canceled rows are excluded; `closed` IS a
+purchase. The range picks *which ASINs*, not which cost.
+
+**Never lower an approved cost — the higher number always wins.** If Amazon's
+`Latest Approved Cost` is above our PO cost, the row is skipped and Amazon's
+number stands, whatever its source. This is a standing instruction from Maria
+(Aug 20, 2026), not a heuristic to be re-litigated by a future refactor.
+
+The reasoning is the asymmetry of the system, measured on the first live upload
+(985 rows): Amazon accepted **73.5% of cost reductions** and only **17.2% of
+increases**. Combined with a cap of two update attempts per FNSKU per 30 days
+(failed attempts count), the process ratchets one way — value surrendered is
+effectively unrecoverable. Amazon's definition compounds it: sourcing cost
+"specifically excludes shipping, handling, customs duties (tariffs), and other
+costs," so the reimbursable value already sits below true landed cost before any
+of this. Against a real loss rate that includes entire boxes going missing, a
+volunteered reduction is a straight cash loss.
+
+So: never correct downward. Correct upward whenever a PO supports it.
+
+**Never resubmit an approved cost.** A row is skipped when
+`Source of Latest Approved Cost = SELLER` **and** `Latest Approved Cost` already
+equals the cost we would write. Resubmitting spends a bulk-upload attempt
+(sellers hit "Number of attempts exceeded") and re-opens a settled row to
+document review for no gain. An `AMAZON`-sourced approval at the same number is
+**not** skipped — we still want that row seller-backed.
+
+**Fan-out.** One ASIN's cost is written to every FNSKU row Amazon lists for it.
+`asinsWritten` counts ASINs; `rowsWritten` counts cells, and is the larger number
+whenever a multi-FNSKU ASIN is in scope.
+
+**Workbook fidelity.** The file is written with SheetJS `bookSST: true`. This is
+load-bearing, not cosmetic: without it SheetJS emits text cells as `t="str"`,
+which in OOXML means *cached result of a formula* — malformed on a cell with no
+`<f>`, and a POI-based reader (which Amazon's bulk upload almost certainly is)
+can return null for every string column. Verified against a live 1,415-row
+workbook: with `bookSST` all seven Amazon columns read back byte-identical under
+an independent parser, and the untouched `Seller New Cost` cells stay empty
+strings rather than vanishing. **Do not drop this flag.**
+
+Row accounting is closed:
+`rawRowsRead = blankAsinRows + excludedByStatus + badOrMissingDate + excludedOutOfRange + includedRows`.
+The remainder is logged, as in the SB export.
+
+**Operating model (set Aug 20, 2026).** Three distinct phases, not one
+recurring job:
+
+1. **Backfill (one-off, in progress).** Bring the whole catalog current. This is
+   the only phase that touches large row counts, and it is the only reason the
+   attempt budget was ever tight.
+2. **Steady state — new POs only.** A run submits an ASIN *only* when a new PO
+   has moved its cost above what Seller Central currently has approved. ASINs
+   whose cost has not changed are never revisited. In practice this is a handful
+   of rows per cycle, which keeps every FNSKU well inside its 2-per-30-days
+   allowance without any scheduling cleverness.
+3. **Quarterly full sweep.** Re-scan the whole catalog for rows where *Amazon's
+   own estimate* has risen above the approved value, and submit their number
+   back (the restore-to-estimate path — auto-approves, needs no invoice). Amazon
+   revises its estimates over time and never volunteers the increase; this sweep
+   is the only way to collect it.
+
+**This collapses the two guards into one rule.** Given the model above, the
+export writes a row if and only if:
+
+    submit  ⟺  cost > Latest Approved Cost
+
+where `cost` = the PO cost in steady state, or Amazon's estimate in the sweep.
+Everything else falls out of it — a reduction is skipped because it is not
+greater, an already-approved value is skipped because it is not greater, and an
+unchanged cost is skipped because it is not greater. `wouldLowerApproved` and
+`alreadyApproved` remain as separate skip *counters* for diagnostics, but they
+are two faces of one condition, and no future change should reintroduce them as
+independent rules.
+
+**Endpoints**
+- `POST /api/export/sourcing-cost` — multipart `file` (Amazon's workbook) plus
+  `from` / `to` as `YYYY-MM-DD`. Returns
+  `{ filename, xlsxBase64, summary }`. Filename is
+  `amzn-sourcing-cost-<from>_<to>.xlsx`.
+- `GET /api/export/sourcing-cost/history` — the 50 most recent exports.
+
+`summary.skips` = `{ excludedByStatus, badDate, outOfRange, noCogsRow,
+notPoSourced, badCost, notInWorkbook, alreadyApproved }`, each with its ASIN
+list expandable in the modal. Full detail — including every cost written and
+what it replaced — is logged server-side under `sourcing-cost`.
+
+**Export history** (`sourcing_cost_exports`, migration 027) records one row per
+file **generated**. Seller Central issues no upload receipt, so this is a
+coverage log, not a confirmation that Amazon accepted anything. A history write
+failure is logged and swallowed — it must never cost the user their file.
+
+**UI.** Toolbar button **"Export Sourcing Cost"** opens the workbook picker and
+uses the global date range. The clock icon beside it opens the history list.
+
+**Not automated, by design.** The upload leg is manual and invoice-gated, so
+there is no cron. Weekly cadence is a human habit, not a scheduled job.
+
 ### Google Sheets sourcing sheet (insert-only)
 
 - **Sheet ID:** `1i4kUDG02qIMnhVnSjJ6LRZTuWFNzvP1SVKAmRoXS6kU` (separate from the PO tracker)
