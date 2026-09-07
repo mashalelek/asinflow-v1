@@ -37,7 +37,10 @@ export interface BucketSpec {
 /** Path patterns → published limits. First match wins; order matters. */
 const OPERATION_TABLE: { key: string; test: RegExp; spec: BucketSpec }[] = [
   // Product Pricing v0
-  { key: "pricing.itemOffersBatch", test: /^\/batches\/products\/pricing\/v0\/itemOffers$/, spec: { rate: 0.1, burst: 1 } },
+  // 0.10 → 0.09 (2026-09-07): the first full run absorbed 6 throttles in 116
+  // calls — an over-optimistic clock. ~1 min slower per full run, 0 throttled
+  // by construction.
+  { key: "pricing.itemOffersBatch", test: /^\/batches\/products\/pricing\/v0\/itemOffers$/, spec: { rate: 0.09, burst: 1 } },
   { key: "pricing.listingOffersBatch", test: /^\/batches\/products\/pricing\/v0\/listingOffers$/, spec: { rate: 0.5, burst: 1 } },
   { key: "pricing.itemOffers", test: /^\/products\/pricing\/v0\/items\/[^/]+\/offers$/, spec: { rate: 1, burst: 2 } },
   { key: "pricing.listingOffers", test: /^\/products\/pricing\/v0\/listings\/[^/]+\/offers$/, spec: { rate: 1, burst: 2 } },
@@ -69,6 +72,8 @@ const SAFETY_FACTOR = 0.95;
 interface Bucket {
   key: string;
   rate: number;
+  /** The table-seeded rate (× SAFETY_FACTOR) — the ceiling for header adjustment. */
+  seededRate: number;
   burst: number;
   tokens: number;
   lastRefill: number;
@@ -102,6 +107,7 @@ function getBucket(key: string): Bucket {
     b = {
       key,
       rate: spec.rate * SAFETY_FACTOR,
+      seededRate: spec.rate * SAFETY_FACTOR,
       burst: spec.burst,
       tokens: spec.burst,
       lastRefill: Date.now(),
@@ -145,7 +151,12 @@ function applyHeaderLimit(b: Bucket, headers: Record<string, any> | undefined) {
   const raw = headers?.["x-amzn-ratelimit-limit"];
   const advertised = raw != null ? parseFloat(String(raw)) : NaN;
   if (!isFinite(advertised) || advertised <= 0) return;
-  const target = advertised * SAFETY_FACTOR;
+  // Downward-only (2026-09-07): the header may only SLOW a bucket, never
+  // raise it above its seeded rate. itemOffersBatch is seeded 0.09 exactly
+  // because Amazon's advertised 0.1 (→ 0.095 after safety factor) draws
+  // steady-state 429s — the first post-seed full run still took 4 of them
+  // after one header response re-raised the rate to 0.095.
+  const target = Math.min(advertised * SAFETY_FACTOR, b.seededRate);
   if (Math.abs(target - b.rate) / b.rate > 0.01) {
     slog(`${b.key}: rate adjusted ${b.rate.toFixed(4)} → ${target.toFixed(4)} rps (x-amzn-RateLimit-Limit=${advertised})`);
     b.rate = target;

@@ -14,9 +14,11 @@ import { syncInventory } from "./inventory-sync";
 import { syncSalesData } from "./sales-sync";
 import { runFullScopePass, type FullScopeReport } from "./full-scope-pass";
 import { rateLimitStats, rateLimitStatsSince } from "./spapi-rate-limit";
+import { fetchFeesBatch } from "./product-info-batch";
+import { getFeePriceForAsin } from "@shared/schema";
 
 export type RefreshTrigger = "manual" | "refresh" | "cron";
-export type RefreshStage = "inventory" | "sales" | "prices" | "listings";
+export type RefreshStage = "inventory" | "sales" | "prices" | "fees" | "listings";
 
 export interface StageSummary {
   stage: RefreshStage;
@@ -56,6 +58,76 @@ async function recordRun(
   }
 }
 
+// Fees stage (SPEC §11 Part D, 2026-09-07): batch feesEstimate on the
+// just-written prices via the same getFeePriceForAsin rule Product Info
+// uses. ASINs whose price outcome was non-updated skip as skipped_no_price
+// — NEVER a fallback-price estimate. Writes the fee triple with
+// fee_source 'spapi'. Shared with nothing else here; Product Info's fees
+// use the same fetchFeesBatch primitive.
+export async function runFeesStage(opts: {
+  filter?: ReadonlySet<string>;
+  dryRun: boolean;
+  emit: RefreshEmit;
+  /** ASINs whose price outcome was no_offers/invalid_asin/error/etc. */
+  skipAsins: ReadonlySet<string>;
+}): Promise<{ counts: Record<string, number>; outcomes: Record<string, string> }> {
+  const filtered = opts.filter && opts.filter.size > 0;
+  const rows = (await query(
+    filtered
+      ? `SELECT a.asin, e.lowest_fba_price, e.buy_box_price, e.lowest_price, e.bsr_category
+           FROM asins a LEFT JOIN asin_estimates e ON e.asin = a.asin
+          WHERE a.asin = ANY($1::text[]) ORDER BY a.asin`
+      : `SELECT a.asin, e.lowest_fba_price, e.buy_box_price, e.lowest_price, e.bsr_category
+           FROM asins a LEFT JOIN asin_estimates e ON e.asin = a.asin
+          WHERE a.status = 'active' ORDER BY a.asin`,
+    filtered ? [Array.from(opts.filter!)] : undefined,
+  )).rows;
+
+  const counts = { updated: 0, skipped_no_price: 0, error: 0 };
+  const outcomes: Record<string, string> = {};
+  const items: Array<{ asin: string; price: number; category?: string | null }> = [];
+  for (const r of rows) {
+    const asin: string = r.asin;
+    const { price, isFallback } = getFeePriceForAsin({
+      lowestFbaPrice: r.lowest_fba_price != null ? parseFloat(r.lowest_fba_price) : null,
+      buyBoxPrice: r.buy_box_price != null ? parseFloat(r.buy_box_price) : null,
+      lowestPrice: r.lowest_price != null ? parseFloat(r.lowest_price) : null,
+    });
+    if (isFallback || opts.skipAsins.has(asin)) {
+      counts.skipped_no_price++;
+      outcomes[asin] = "skipped_no_price";
+      continue;
+    }
+    items.push({ asin, price, category: r.bsr_category ?? null });
+  }
+
+  let done = 0;
+  for (let i = 0; i < items.length; i += 20) {
+    const chunk = items.slice(i, i + 20);
+    const batch = await fetchFeesBatch(chunk);
+    for (const it of chunk) {
+      const entry = batch.get(it.asin);
+      if (entry?.kind === "parsed" && entry.fees.fbaFulfillmentFee != null) {
+        counts.updated++;
+        if (!opts.dryRun) {
+          await query(
+            `UPDATE asin_estimates SET fba_fee = $2, referral_fee = $3, fees_estimate_price = $4, fee_source = 'spapi' WHERE asin = $1`,
+            [it.asin, entry.fees.fbaFulfillmentFee, entry.fees.referralFee, entry.fees.feesEstimatePrice],
+          );
+        } else {
+          outcomes[it.asin] = `would-write fba=${entry.fees.fbaFulfillmentFee} referral=${entry.fees.referralFee} @ $${it.price}`;
+        }
+      } else {
+        counts.error++;
+        outcomes[it.asin] = `error: ${entry?.kind === "error" ? entry.message : "no fee in response"}`;
+      }
+    }
+    done += chunk.length;
+    opts.emit({ type: "stage", stage: "fees", status: "running", current: done, total: items.length });
+  }
+  return { counts, outcomes };
+}
+
 export async function runRefreshJob(opts: {
   asins?: string[];           // explicit working set (button); omitted = cron full scope
   startDate: string;          // sales stage chunk range
@@ -88,7 +160,7 @@ export async function runRefreshJob(opts: {
         stage, status: "failed", durationMs: Date.now() - t0,
         counts: {}, outcomes: {}, error: err?.message ?? String(err),
       };
-      log(`Refresh stage ${stage} FAILED (others continue): ${summary.error}`, "refresh");
+      log(`Prices & Stock stage ${stage} FAILED (others continue): ${summary.error}`, "refresh");
     }
     stages[stage] = summary;
     if (!dryRun) await recordRun(opts.trigger, scope, requested, startedAt, summary, rateLimitStatsSince(rateBaseline));
@@ -130,14 +202,25 @@ export async function runRefreshJob(opts: {
     });
   })();
 
-  const pricesPromise = runStage("prices", async () => {
-    const r: PriceRefreshResult = await refreshPrices(
-      (p) => emit({ type: "stage", stage: "prices", status: "running", current: p.current, total: p.total }),
-      filter,
-      { dryRun },
-    );
-    return { counts: r.counts as any, outcomes: r.outcomes };
-  });
+  // prices → fees (SPEC §11 Part D, 2026-09-07): the fees stage needs the
+  // just-written prices — Low-Price FBA rates apply under $10, so a price
+  // crossing that line changes the fulfillment fee.
+  const pricesThenFees = (async () => {
+    let priceResult: PriceRefreshResult | null = null;
+    await runStage("prices", async () => {
+      const r: PriceRefreshResult = await refreshPrices(
+        (p) => emit({ type: "stage", stage: "prices", status: "running", current: p.current, total: p.total }),
+        filter,
+        { dryRun },
+      );
+      priceResult = r;
+      return { counts: r.counts as any, outcomes: r.outcomes };
+    });
+    await runStage("fees", async () => {
+      const skipOutcomes = new Set(Object.keys(priceResult?.outcomes ?? {}));
+      return runFeesStage({ filter, dryRun, emit, skipAsins: skipOutcomes });
+    });
+  })();
 
   const salesPromise = (async () => {
     if (!dryRun) {
@@ -151,12 +234,12 @@ export async function runRefreshJob(opts: {
     }
   })();
 
-  await Promise.all([inventoryThenListings, pricesPromise, salesPromise]);
+  await Promise.all([inventoryThenListings, pricesThenFees, salesPromise]);
 
   const result: RefreshJobResult = { stages, rateLimits: rateLimitStatsSince(rateBaseline) };
   const line = Object.values(stages)
     .map((s) => `${s.stage}=${s.status}${s.error ? `(${s.error.slice(0, 60)})` : ""}`)
     .join(" ");
-  log(`Refresh${dryRun ? " [DRY-RUN]" : ""} complete: ${line}`, "refresh");
+  log(`Prices & Stock${dryRun ? " [DRY-RUN]" : ""} complete: ${line}`, "refresh");
   return result;
 }

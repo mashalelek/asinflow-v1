@@ -30,8 +30,10 @@ export interface MovedToggles {
   onShowGatedChange: (v: boolean) => void;
   showMeltable: boolean;
   onShowMeltableChange: (v: boolean) => void;
-  showArchived: boolean;
-  onShowArchivedChange: (v: boolean) => void;
+  showParked: boolean;
+  onShowParkedChange: (v: boolean) => void;
+  showDead: boolean;
+  onShowDeadChange: (v: boolean) => void;
   // Reset-Est-COGS-to-PO action — moved here from the toolbar (2026-06-29).
   // Sits directly under the "Include Inbound Shipping" row.
   onResetCogs: () => void;
@@ -179,7 +181,8 @@ export function SettingsDialog({
                   <ToggleRow id="dsGated"     label="Show gated"     checked={movedToggles.showGated}     onChange={movedToggles.onShowGatedChange} />
                   <ToggleRow id="dsMeltable"  label="Show meltable"  checked={movedToggles.showMeltable}  onChange={movedToggles.onShowMeltableChange}
                              hint="Seasonal default: auto-ON Apr 15 – Sep 15 unless manually toggled." />
-                  <ToggleRow id="dsArchived"  label="Show archived"  checked={movedToggles.showArchived}  onChange={movedToggles.onShowArchivedChange} />
+                  <ToggleRow id="dsParked"    label="Show parked"    checked={movedToggles.showParked}    onChange={movedToggles.onShowParkedChange} />
+                  <ToggleRow id="dsDead"      label="Show dead"      checked={movedToggles.showDead}      onChange={movedToggles.onShowDeadChange} />
                 </div>
               </div>
             </>

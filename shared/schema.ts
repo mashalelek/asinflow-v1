@@ -154,6 +154,10 @@ export interface AsinResult {
   pricesFetchedAt?: string | null;
   feeSource?: "spapi" | "fallback" | null; // stored fee provenance (migration 026); null = legacy/unknown
   lastReviewedAt?: string | null;
+  // §14 parked/dead (2026-09-07). isArchived stays = (status === 'parked')
+  // for the existing muted styling; dead rows render their own tag.
+  status?: "active" | "parked" | "dead";
+  statusReason?: string | null;
   addedAt?: string | null;
   category?: string | null;
   isWholesale?: boolean;
@@ -531,6 +535,16 @@ export function cleanBuyLink(raw: string): string | null {
   return qIdx >= 0 ? first.substring(0, qIdx) : first;
 }
 
+// Fee-estimate input price rule (shared by Product Info and the Prices &
+// Stock fees stage, 2026-09-07): first real price wins; $15 fallback is
+// flagged so callers can DISCARD fallback-based estimates (never store them).
+export function getFeePriceForAsin(pricingData: {
+  lowestFbaPrice: number | null; buyBoxPrice: number | null; lowestPrice: number | null;
+}): { price: number; isFallback: boolean } {
+  const realPrice = pricingData.lowestFbaPrice ?? pricingData.buyBoxPrice ?? pricingData.lowestPrice;
+  return { price: realPrice ?? 15, isFallback: realPrice == null };
+}
+
 export function extractDomain(url: string | null): string | null {
   if (!url) return null;
   try {
@@ -555,7 +569,7 @@ export const DEFAULT_COLUMNS = [
   // Group 5 — Sellers
   "sellersFba", "sellers", "sellers7d", "sellers30d", "fba7d", "fba30d",
   // Group 6 — Additional info
-  "tags", "notes", "promos", "sourcing", "meltable", "hazmat", "dg", "suppressed", "dateAdded", "lastReviewed", "priceAge", "submission",
+  "tags", "notes", "promos", "sourcing", "meltable", "hazmat", "dg", "suppressed", "dateAdded", "lastReviewed", "priceAge", "submission", "status",
 ] as const;
 
 export type ColumnId = (typeof DEFAULT_COLUMNS)[number];
@@ -643,6 +657,9 @@ export const ALL_COLUMNS: ColumnDef[] = [
   // Relative age of pricesFetchedAt (SPEC §11 Refresh, 2026-09-06) — "what's
   // stale" answerable without SQL, independent of any single run.
   { id: "priceAge", label: "Price Age", defaultVisible: false, align: "left", group: "additional" },
+  // §6 Status column (2026-09-07): active/parked/dead + reason; default
+  // hidden; multi-select filter. View-scope toggles (§5) remain the primary UI.
+  { id: "status", label: "Status", defaultVisible: false, align: "left", group: "additional" },
   // §6 Submission column — §19 ledger surface, read-only, never in default presets.
   { id: "submission", label: "Submission", defaultVisible: false, align: "left", group: "additional" },
 ];

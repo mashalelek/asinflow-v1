@@ -9,7 +9,7 @@ import { verifyPending, resolveSubmissionManual, resolveSubmissionsBulk, dismiss
 import { runAuraSyncChain } from "./aura-sync-chain";
 import { pushAuraCosts } from "./aura-cost-sync";
 import { log } from "./index";
-import { type AsinInput, type AsinResult, type ColumnMapping, extractDomain, cleanBuyLink } from "@shared/schema";
+import { type AsinInput, type AsinResult, type ColumnMapping, extractDomain, cleanBuyLink, getFeePriceForAsin } from "@shared/schema";
 import { parseMoney } from "@shared/parse-money";
 import pool, { query, isDbAvailable } from "./db";
 import { syncInventory } from "./inventory-sync";
@@ -25,6 +25,7 @@ import { recordSourcingCostExport, listSourcingCostExports } from "./sourcing-co
 import { syncSourcingSheet } from "./sourcing-sync";
 import { refreshPrices } from "./price-sync";
 import { runRefreshJob } from "./refresh-job";
+import { fetchCatalogBatch, fetchFeesBatch } from "./product-info-batch";
 import { applyCatalogDeletedSignal } from "./catalog-deleted-write";
 import { offerAddForAsin, preFilterSubmitSet, type OfferAddResult, type PreFilterResult } from "./offer-add";
 import { submitOfferAddBatch, type SubmitAsinRow } from "./offer-add-submit";
@@ -34,6 +35,7 @@ import { makeProductRegistryRepo } from "./product-registry-repo";
 import { processBulkApproval, makeProductionHandlers, type ApprovalItem } from "./sku-legend-approval";
 import { settingsSchema, type Settings } from "@shared/schema";
 import type { AnalyzeSink } from "./analyze-sink";
+import { rateLimitStats, rateLimitStatsSince } from "./spapi-rate-limit";
 import {
   createBulkList,
   listBulkLists,
@@ -62,6 +64,10 @@ type RunAnalyzeCore = (
   progressPrefix: (i: number) => string | null,
   fromCsvUpload: boolean,
   sink: AnalyzeSink,
+  // §11 Product Info (2026-09-07): dryRun = zero writes — batch catalog +
+  // fees are FETCHED and compared vs stored, gating/hazmat are LISTED (what
+  // the 30-day rule would probe) but never probed, sink writes suppressed.
+  opts?: { dryRun?: boolean },
 ) => Promise<void>;
 let runAnalyzeCoreRef: RunAnalyzeCore | null = null;
 export function getRunAnalyzeCore(): RunAnalyzeCore {
@@ -463,8 +469,12 @@ function hasValidBsr(result: AsinResult): boolean {
 
 function needsRetry(result: AsinResult): { fees: boolean; pricing: boolean; catalog: boolean } {
   return {
-    fees: !hasValidFees(result),
-    pricing: !hasValidPricing(result),
+    // Product Info no longer fetches prices (§11, 2026-09-07) — stored
+    // prices may legitimately be null (never synced / no_offers), so
+    // pricing NEVER queues a retry. Fees skipped for lack of a price are
+    // likewise not retryable (feesSkippedNoPrice tracked separately).
+    fees: !hasValidFees(result) && !(result as any)._feesSkippedNoPrice,
+    pricing: false,
     catalog: !hasValidBsr(result) && !result.error,
   };
 }
@@ -566,13 +576,8 @@ function buildResult(
   };
 }
 
-function getFeePriceForAsin(pricingData: AsinResult["pricingData"]): { price: number; isFallback: boolean } {
-  const realPrice =
-    pricingData.lowestFbaPrice ??
-    pricingData.buyBoxPrice ??
-    pricingData.lowestPrice;
-  return { price: realPrice ?? 15, isFallback: realPrice == null };
-}
+// getFeePriceForAsin moved to @shared/schema (2026-09-07) — shared with the
+// Prices & Stock fees stage. Imported above.
 
 /**
  * Dedicated write path for CSV-uploaded COGS values. Runs BEFORE the
@@ -957,12 +962,18 @@ export async function registerRoutes(
   app.get("/api/asins", async (req: Request, res: Response) => {
     if (!isDbAvailable()) { res.json([]); return; }
     try {
-      const { startDate, endDate, includeArchived } = req.query as { startDate?: string; endDate?: string; includeArchived?: string };
-      const activeFilter = includeArchived === "true" ? "TRUE" : "a.is_active = TRUE";
+      // §14 parked/dead (2026-09-07): Show parked / Show dead are separate
+      // view-scope toggles; includeArchived kept as a legacy alias for
+      // includeParked (old clients / scripts).
+      const { startDate, endDate, includeArchived, includeParked, includeDead } = req.query as Record<string, string | undefined>;
+      const statuses = ["'active'"];
+      if (includeParked === "true" || includeArchived === "true") statuses.push("'parked'");
+      if (includeDead === "true") statuses.push("'dead'");
+      const activeFilter = `a.status IN (${statuses.join(", ")})`;
 
       const result = await query(`
         SELECT
-          a.asin, a.title, a.image_url, a.brand, a.category, a.weight_lb, a.buy_link, a.is_active,
+          a.asin, a.title, a.image_url, a.brand, a.category, a.weight_lb, a.buy_link, a.status, a.status_reason,
           a.primary_sku, a.in_catalog, a.has_live_offer, a.current_issues, a.issues_checked_at, a.notes, a.promo_notes, a.supplier_sku, a.is_meltable, a.is_hazmat, a.is_dangerous_good, a.is_search_suppressed, a.suppression_reasons, a.last_reviewed_at, a.added_at, a.is_wholesale, a.is_oa,
           e.cogs, e.cogs_source, e.actual_cogs, e.estimated_cogs, e.estimated_cogs_source, e.prep_override, e.storage_override,
           e.lowest_fba_price, e.buy_box_price, e.buy_box_fulfillment, e.lowest_price,
@@ -1025,7 +1036,7 @@ export async function registerRoutes(
           (SELECT sellers_fbm FROM asin_estimates_history h WHERE h.asin_id = a.id AND h.fetched_at <= NOW() - INTERVAL '6 days' ORDER BY h.fetched_at DESC LIMIT 1) AS fbm_7d_old,
           (SELECT sellers_fba FROM asin_estimates_history h WHERE h.asin_id = a.id AND h.fetched_at <= NOW() - INTERVAL '29 days' ORDER BY h.fetched_at DESC LIMIT 1) AS fba_30d_old,
           (SELECT sellers_fbm FROM asin_estimates_history h WHERE h.asin_id = a.id AND h.fetched_at <= NOW() - INTERVAL '29 days' ORDER BY h.fetched_at DESC LIMIT 1) AS fbm_30d_old
-        FROM asins a WHERE a.is_active = TRUE
+        FROM asins a WHERE a.status = 'active'
       `).catch(() => ({ rows: [] as any[] }));
       const deltaMap = new Map<string, any>();
       for (const row of deltaResult.rows) deltaMap.set(row.asin, row);
@@ -1034,7 +1045,7 @@ export async function registerRoutes(
       const skusResult = await query(`
         SELECT a.asin, s.sku FROM asin_skus s
         JOIN asins a ON a.id = s.asin_id
-        WHERE a.is_active = TRUE ORDER BY s.is_primary DESC, s.sku
+        WHERE a.status = 'active' ORDER BY s.is_primary DESC, s.sku
       `).catch(() => ({ rows: [] as any[] }));
       const skusMap = new Map<string, string[]>();
       for (const row of skusResult.rows) {
@@ -1076,7 +1087,7 @@ export async function registerRoutes(
         SELECT a.asin, t.name, t.color FROM asin_tags at
         JOIN tags t ON t.id = at.tag_id
         JOIN asins a ON a.id = at.asin_id
-        WHERE a.is_active = TRUE
+        WHERE a.status = 'active'
       `).catch(() => ({ rows: [] as any[] }));
       const tagsMap = new Map<string, { name: string; color: string }[]>();
       for (const row of tagsResult.rows) {
@@ -1179,7 +1190,10 @@ export async function registerRoutes(
           notes: row.notes ?? null,
           promoNotes: row.promo_notes ?? null,
           supplierSku: row.supplier_sku ?? null,
-          isArchived: row.is_active === false,
+          // parked keeps the old archived styling; dead renders its own tag.
+          isArchived: row.status === 'parked',
+          status: row.status ?? 'active',
+          statusReason: row.status_reason ?? null,
           isMeltable: row.is_meltable ?? false,
           // Tri-state preserved: NULL = unchecked (renders as muted dash, never
           // a green "No"). Do NOT coerce to false — that would hide unknowns.
@@ -1302,8 +1316,8 @@ export async function registerRoutes(
       // Only columns that exist in production's `asins` table. BSR,
       // seller counts, and prices live in `asin_estimates`, not here.
       const upsertResult = await pool.query(
-        `INSERT INTO asins (asin, title, brand, image_url, category, weight_lb, length_in, width_in, height_in, buy_link, in_catalog, is_active)
-         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, false, true)
+        `INSERT INTO asins (asin, title, brand, image_url, category, weight_lb, length_in, width_in, height_in, buy_link, in_catalog)
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, false)
          ON CONFLICT (asin) DO UPDATE SET
            title = COALESCE($2, asins.title),
            brand = COALESCE($3, asins.brand),
@@ -1535,7 +1549,7 @@ export async function registerRoutes(
       });
       res.write(JSON.stringify({ type: "complete", data: result }) + "\n");
     } catch (err: any) {
-      log(`Refresh job error: ${err?.message ?? err}`, "refresh");
+      log(`Prices & Stock job error: ${err?.message ?? err}`, "refresh");
       res.write(JSON.stringify({ type: "error", message: err?.message ?? String(err) }) + "\n");
     } finally {
       clearInterval(hb);
@@ -2179,10 +2193,10 @@ export async function registerRoutes(
 
   // === DA-3: revival of catalog-deleted-then-restored ASINs ===
   //
-  // Standing-state predicate (matches DA-2's auto-archive write):
-  //   is_active=false AND archive_reason='catalog_deleted' AND is_catalog_deleted=false
-  // Meaning: "archived BECAUSE catalog-deleted, but the catalog has been restored."
-  // Manual archives (archive_reason=NULL) are never offered for auto-revival.
+  // Standing-state predicate (matches DA-2's auto-dead write):
+  //   status='dead' AND status_reason='catalog_deleted' AND is_catalog_deleted=false
+  // Meaning: "dead BECAUSE catalog-deleted, but the catalog has been restored."
+  // Parked ASINs and dead-for-other-reasons are never offered for auto-revival.
 
   app.get("/api/asins/revival-candidates", async (_req: Request, res: Response) => {
     if (!isDbAvailable()) { res.json([]); return; }
@@ -2190,8 +2204,8 @@ export async function registerRoutes(
       const result = await query(`
         SELECT asin, title, brand
         FROM asins
-        WHERE is_active = FALSE
-          AND archive_reason = 'catalog_deleted'
+        WHERE status = 'dead'
+          AND status_reason = 'catalog_deleted'
           AND is_catalog_deleted = FALSE
         ORDER BY added_at DESC
       `);
@@ -2209,17 +2223,17 @@ export async function registerRoutes(
     if (!isDbAvailable()) { res.status(503).json({ message: "Database not available" }); return; }
     try {
       // Server-side predicate guard lives in the WHERE clause — atomic, no
-      // TOCTOU window. A stale or malicious payload that included a manually-
-      // archived ASIN (archive_reason=NULL), or one still flagged catalog-
+      // TOCTOU window. A stale or malicious payload that included a parked
+      // ASIN, a dead-for-another-reason ASIN, or one still flagged catalog-
       // deleted, simply won't match — no flip, no error. RETURNING tells us
       // which ASINs actually flipped, so the UI can show honest feedback
       // when something didn't qualify.
       const result = await query(
         `UPDATE asins
-           SET is_active = TRUE, archive_reason = NULL
+           SET status = 'active', status_reason = NULL, status_changed_at = NOW()
          WHERE asin = ANY($1::text[])
-           AND is_active = FALSE
-           AND archive_reason = 'catalog_deleted'
+           AND status = 'dead'
+           AND status_reason = 'catalog_deleted'
            AND is_catalog_deleted = FALSE
          RETURNING asin`,
         [asinList],
@@ -2546,7 +2560,9 @@ export async function registerRoutes(
     }
   });
 
-  // === Archive / unarchive ===
+  // === Park / unpark (was Archive — SPEC §14, 2026-09-07) ===
+  // Legacy route name kept (scripts); the body's `archive` flag now means
+  // park. Reason cleared either way — parked has no machine reason here.
   app.put("/api/asins/archive", async (req: Request, res: Response) => {
     const { asins: asinList, archive } = req.body as { asins: string[]; archive: boolean };
     if (!asinList || !Array.isArray(asinList) || asinList.length === 0) {
@@ -2555,8 +2571,38 @@ export async function registerRoutes(
     }
     if (!isDbAvailable()) { res.status(503).json({ message: "Database not available" }); return; }
     try {
-      await query(`UPDATE asins SET is_active = $2 WHERE asin = ANY($1::text[])`, [asinList, !archive]);
+      await query(
+        `UPDATE asins SET status = $2, status_reason = NULL, status_changed_at = NOW() WHERE asin = ANY($1::text[])`,
+        [asinList, archive ? "parked" : "active"],
+      );
       res.json({ count: asinList.length, archived: archive });
+    } catch (err: any) {
+      res.status(500).json({ message: err.message });
+    }
+  });
+
+  // === Mark dead / revive (SPEC §14, 2026-09-07) ===
+  // status 'dead' requires a reason (preset ip_complaint / not_sourceable or
+  // free text); 'active' (revive) clears it. 'parked' goes through the
+  // park route above.
+  app.put("/api/asins/status", async (req: Request, res: Response) => {
+    const { asins: asinList, status, reason } = req.body as { asins?: string[]; status?: string; reason?: string };
+    if (!asinList || !Array.isArray(asinList) || asinList.length === 0) {
+      res.status(400).json({ message: "No ASINs provided" }); return;
+    }
+    if (status !== "dead" && status !== "active") {
+      res.status(400).json({ message: "status must be 'dead' or 'active' (park via /api/asins/archive)" }); return;
+    }
+    if (status === "dead" && (!reason || !String(reason).trim())) {
+      res.status(400).json({ message: "marking dead requires a reason" }); return;
+    }
+    if (!isDbAvailable()) { res.status(503).json({ message: "Database not available" }); return; }
+    try {
+      await query(
+        `UPDATE asins SET status = $2, status_reason = $3, status_changed_at = NOW() WHERE asin = ANY($1::text[])`,
+        [asinList, status, status === "dead" ? String(reason).trim() : null],
+      );
+      res.json({ count: asinList.length, status });
     } catch (err: any) {
       res.status(500).json({ message: err.message });
     }
@@ -2813,14 +2859,75 @@ export async function registerRoutes(
     progressPrefix: (i: number) => string | null,
     fromCsvUpload: boolean,
     sink: AnalyzeSink,
+    opts: { dryRun?: boolean } = {},
   ) {
-    const BATCH_SIZE = 10;
-    const BATCH_DELAY = 1000;
+    const dryRun = opts.dryRun === true;
     const MAX_RETRIES = 2;
     const RETRY_DELAY = 2000;
 
     const allResults: Map<string, AsinResult> = new Map();
     const retryQueue: { input: AsinInput; attempt: number; result: AsinResult }[] = [];
+
+    // ── §11 Product Info batched pre-fetch (2026-09-07) ─────────────────────
+    // Catalog via searchCatalogItems (20/call, 40 ASINs/s) and fees via the
+    // batch feesEstimate (20/call, 10/s) replace the per-ASIN 1 rps loops
+    // (~37 min full catalog → ~7 min, gating-bound). Prices are NOT fetched:
+    // Prices & Stock owns them; fees use the STORED price via
+    // getFeePriceForAsin, and no stored price → fees skipped
+    // (skipped_no_price), never a fallback-price estimate.
+    const runStartedAt = new Date();
+    const rateBaseline = rateLimitStats(); // per-run deltas, same as Prices & Stock
+    const asinList = asins.map((a) => a.asin);
+    const catalogMap = await fetchCatalogBatch(asinList);
+
+    const storedRows = await pool.query(
+      `SELECT a.asin, a.is_hazmat, a.gating_checked_at, a.hazmat_checked_at,
+              e.lowest_fba_price, e.buy_box_price, e.lowest_price, e.bsr_category, e.eligibility_status,
+              e.sellers_fba, e.sellers_fbm
+         FROM asins a LEFT JOIN asin_estimates e ON e.asin = a.asin
+        WHERE a.asin = ANY($1::text[])`,
+      [asinList],
+    );
+    const storedByAsin = new Map<string, any>(storedRows.rows.map((r: any) => [r.asin, r]));
+
+    const num = (v: any) => (v != null ? parseFloat(v) : null);
+    const storedPricing = (asin: string): AsinResult["pricingData"] => {
+      const r = storedByAsin.get(asin);
+      return {
+        lowestFbaPrice: num(r?.lowest_fba_price), buyBoxPrice: num(r?.buy_box_price),
+        buyBoxFulfillment: null, lowestPrice: num(r?.lowest_price),
+        avg30DayPrice: null, avg90DayPrice: null,
+        numberOfSellers: null, sellersFba: r?.sellers_fba ?? null, sellersFbm: r?.sellers_fbm ?? null,
+      };
+    };
+
+    const feeItems: Array<{ asin: string; price: number; category?: string | null }> = [];
+    const feesSkippedNoPrice = new Set<string>();
+    for (const asin of asinList) {
+      const { price, isFallback } = getFeePriceForAsin(storedPricing(asin));
+      if (isFallback) feesSkippedNoPrice.add(asin);
+      else feeItems.push({ asin, price, category: storedByAsin.get(asin)?.bsr_category ?? null });
+    }
+    const feesMap = await fetchFeesBatch(feeItems);
+
+    // 30-day gating/hazmat scope (decision 5): never-checked or >30 days —
+    // ALWAYS for the upload path. Dry-run lists the scope, probes nothing.
+    const THIRTY_D = 30 * 86400000;
+    const staleOrNever = (ts: any) => ts == null || Date.now() - new Date(ts).getTime() > THIRTY_D;
+    const gatingScope = new Set<string>();
+    const hazmatScope = new Set<string>();
+    for (const asin of asinList) {
+      const r = storedByAsin.get(asin);
+      if (fromCsvUpload || !r || staleOrNever(r.gating_checked_at)) gatingScope.add(asin);
+      if (fromCsvUpload || !r || staleOrNever(r.hazmat_checked_at)) hazmatScope.add(asin);
+    }
+
+    const stageCounts = {
+      catalog: { parsed: 0, absent: 0, inconclusive: 0 },
+      fees: { updated: 0, skipped_no_price: feesSkippedNoPrice.size, error: 0 },
+      gating: { probed: 0, reused_stored: asinList.length - gatingScope.size, would_probe: dryRun ? gatingScope.size : 0 },
+      hazmat: { probed: 0, reused_stored: asinList.length - hazmatScope.size, would_probe: dryRun ? hazmatScope.size : 0 },
+    };
 
     for (let i = 0; i < asins.length; i++) {
       const input = asins[i];
@@ -2837,33 +2944,53 @@ export async function registerRoutes(
       let result: AsinResult;
 
       try {
-        const [{ pricingData, catalogData, pricingRestricted }, eligibilityData, hazmatFlag] = await Promise.all([
-          fetchPricingAndCatalog(input.asin),
-          getEligibility(input.asin),
-          getInboundHazmat(input.asin),
-        ]);
-        // null = inconclusive; preserved by COALESCE in the UPSERT (no clobber).
-        // is_dangerous_good rides on catalogData from the catalog fetch above.
+        // ── batch lookups (§11 Product Info, 2026-09-07) ──
+        const pricingData = storedPricing(input.asin); // Prices & Stock owns prices
+        const stored = storedByAsin.get(input.asin);
+
+        const catEntry = catalogMap.get(input.asin);
+        let catalogData: AsinResult["catalogData"];
+        if (catEntry?.kind === "parsed") {
+          stageCounts.catalog.parsed++;
+          catalogData = catEntry.data as AsinResult["catalogData"];
+        } else if (catEntry?.kind === "absent") {
+          // DA-2 batch analogue of the 404: absent from a COMPLETE response.
+          stageCounts.catalog.absent++;
+          catalogData = { weightLbs: null, title: null, brand: null, imageUrl: null, bsrRank: null, bsrCategory: null, isDangerousGood: null, isCatalogDeleted: true } as any;
+        } else {
+          // thrown call → inconclusive for every ASIN in it — fail-closed.
+          stageCounts.catalog.inconclusive++;
+          catalogData = { weightLbs: null, title: null, brand: null, imageUrl: null, bsrRank: null, bsrCategory: null, isDangerousGood: null, isCatalogDeleted: null } as any;
+        }
+
+        // gating + hazmat: probe only in the 30-day scope (always for
+        // uploads); out-of-scope reuses stored values. Dry-run never probes.
+        let eligibilityData: AsinResult["eligibilityData"] = { status: (stored?.eligibility_status as any) ?? "check" };
+        let hazmatFlag: boolean | null = stored?.is_hazmat ?? null;
+        if (!dryRun && gatingScope.has(input.asin)) {
+          eligibilityData = await getEligibility(input.asin);
+          stageCounts.gating.probed++;
+          await query(`UPDATE asins SET gating_checked_at = NOW() WHERE asin = $1`, [input.asin]).catch(() => {});
+        }
+        if (!dryRun && hazmatScope.has(input.asin)) {
+          hazmatFlag = await getInboundHazmat(input.asin);
+          stageCounts.hazmat.probed++;
+          await query(`UPDATE asins SET hazmat_checked_at = NOW() WHERE asin = $1`, [input.asin]).catch(() => {});
+        }
         catalogData.isHazmat = hazmatFlag;
 
-        const { price: feePrice, isFallback } = getFeePriceForAsin(pricingData);
         let feesData: AsinResult["feesData"] = { fbaFulfillmentFee: null, referralFee: null, feesEstimatePrice: null };
-
-        if (isFallback) {
-          log(`No real price available for ${input.asin}, using fallback price $${feePrice} for fee estimation`, "fees");
+        const feeEntry = feesMap.get(input.asin);
+        if (feeEntry?.kind === "parsed") {
+          feesData = feeEntry.fees;
+          stageCounts.fees.updated++;
+        } else if (feeEntry?.kind === "error") {
+          stageCounts.fees.error++;
+          log(`Fees error for ${input.asin}: ${feeEntry.message}`, "analyzer");
         }
 
-        try {
-          feesData = await getFees(input.asin, feePrice, catalogData.bsrCategory);
-          if (isFallback && feesData.fbaFulfillmentFee != null) {
-            log(`Discarding fee estimate for ${input.asin} because it was based on fallback price (got FBA=$${feesData.fbaFulfillmentFee})`, "fees");
-            feesData = { fbaFulfillmentFee: null, referralFee: null, feesEstimatePrice: null };
-          }
-        } catch (err: any) {
-          log(`Fees error for ${input.asin}: ${err.message}`, "analyzer");
-        }
-
-        result = buildResult(input, pricingData, catalogData, feesData, pricingRestricted, eligibilityData);
+        result = buildResult(input, pricingData, catalogData, feesData, false, eligibilityData);
+        if (feesSkippedNoPrice.has(input.asin)) (result as any)._feesSkippedNoPrice = true;
       } catch (err: any) {
         log(`Error processing ${input.asin}: ${err.message}\n${err.stack}`, "analyzer");
         result = {
@@ -2908,9 +3035,9 @@ export async function registerRoutes(
       // INSERT for new ASINs, via appendNotesForAsin (dedup) for existing.
       // The old fire-and-forget call was racy: lost ~152 notes in a 7-day window.
 
-      if ((i + 1) % BATCH_SIZE === 0 && i < asins.length - 1) {
-        await delay(BATCH_DELAY);
-      }
+      // No inter-batch sleep: the loop makes no unpaced API calls — the only
+      // remaining per-ASIN calls (scoped gating/hazmat) go through the rate
+      // limiter, which paces at the wire (§11, 2026-09-07).
     }
 
     if (retryQueue.length > 0) {
@@ -3070,6 +3197,37 @@ export async function registerRoutes(
         log(`=== RETRY SUMMARY: ${uncalculated.length} ASINs still uncalculated: ${uncalculated.join(", ")} ===`, "retry");
       }
     }
+
+    // ── §11 Product Info run ledger + summary (2026-09-07) ──────────────────
+    // Same machinery as Prices & Stock: one refresh_runs row per stage
+    // (catalog / fees / gating / hazmat), rate-limit deltas via the caller's
+    // stream. Dry-run: no ledger rows, but a summary line lists the counts +
+    // which ASINs the 30-day rule WOULD probe, so the gate report can quote it.
+    emit(JSON.stringify({
+      type: "product_info_summary",
+      data: {
+        dryRun,
+        stages: stageCounts,
+        rateLimits: rateLimitStatsSince(rateBaseline),
+        ...(dryRun ? {
+          wouldProbeGating: Array.from(gatingScope),
+          wouldProbeHazmat: Array.from(hazmatScope),
+        } : {}),
+      },
+    }) + "\n");
+    if (!dryRun) {
+      for (const [stage, counts] of Object.entries(stageCounts)) {
+        try {
+          await query(
+            `INSERT INTO refresh_runs (started_at, finished_at, trigger, stage, scope, requested, counts, outcomes)
+             VALUES ($1, NOW(), 'manual', $2, $3, $4, $5::jsonb, '{}'::jsonb)`,
+            [runStartedAt, stage, "subset", asinList.length, JSON.stringify(counts)],
+          );
+        } catch (err: any) {
+          log(`refresh_runs write failed for Product Info stage ${stage}: ${err?.message ?? err}`, "refresh");
+        }
+      }
+    }
   };
   runAnalyzeCoreRef = runAnalyzeCore;
 
@@ -3082,8 +3240,24 @@ export async function registerRoutes(
     sink: AnalyzeSink,
     progressPrefix: (i: number) => string | null = () => null,
     fromCsvUpload = false,
+    opts: { dryRun?: boolean } = {},
   ) {
-    await runAnalyzeCore(asins, (chunk) => res.write(chunk), progressPrefix, fromCsvUpload, sink);
+    // Upload path (§11 Product Info, 2026-09-07): new ASINs have no stored
+    // prices, and Product Info no longer fetches them — so run Prices &
+    // Stock's prices stage FIRST on the uploaded set, then Product Info,
+    // under this one progress stream. Seconds for a normal upload.
+    if (fromCsvUpload && !opts.dryRun && asins.length > 0) {
+      const set = new Set(asins.map((a) => a.asin));
+      try {
+        await refreshPrices(
+          async (p) => { res.write(JSON.stringify({ type: "progress", data: { current: p.current, total: p.total, asin: `Prices: ${p.asin}` } }) + "\n"); },
+          set,
+        );
+      } catch (err: any) {
+        log(`Upload prices pre-pass failed (Product Info continues; fees will skip no-price ASINs): ${err?.message ?? err}`, "price-sync");
+      }
+    }
+    await runAnalyzeCore(asins, (chunk) => res.write(chunk), progressPrefix, fromCsvUpload, sink, opts);
   }
 
   function runPostAnalyzeBackgroundSyncs() {
@@ -3109,6 +3283,18 @@ export async function registerRoutes(
     res.setHeader("Transfer-Encoding", "chunked");
     res.setHeader("Cache-Control", "no-cache");
     res.setHeader("Connection", "keep-alive");
+
+    // §11 Product Info dry-run (2026-09-07): batch catalog + fees fetched
+    // and reported, gating/hazmat scope listed, ZERO writes (no-op sink, no
+    // checked_at stamps, no upload prices pre-pass, no background syncs).
+    const dryRun = req.query.dryRun === "1" || req.query.dryRun === "true";
+    if (dryRun) {
+      const nullSink: AnalyzeSink = { persistResult: () => {}, persistTags: () => {} } as any;
+      await runAnalyzeAndStream(asins, res, nullSink, () => null, false, { dryRun: true });
+      res.write(JSON.stringify({ type: "complete" }) + "\n");
+      res.end();
+      return;
+    }
 
     // CSV upload sends COGS values → persist to estimated_cogs via dedicated path
     await runAnalyzeAndStream(asins, res, mainCatalogSink, () => null, true);
@@ -3142,7 +3328,7 @@ export async function registerRoutes(
           : `SELECT a.asin, COALESCE(e.actual_cogs, e.estimated_cogs, e.cogs) AS cogs, a.buy_link, e.prep_override, e.storage_override
              FROM asins a
              LEFT JOIN asin_estimates e ON e.asin = a.asin
-             WHERE a.is_active = TRUE
+             WHERE a.status = 'active'
              ORDER BY a.asin`,
         hasFilter ? [filterAsins] : undefined,
       );
@@ -3207,7 +3393,7 @@ export async function registerRoutes(
         `SELECT MAX(e.fetched_at) AS last_refreshed
          FROM asin_estimates e
          JOIN asins a ON a.asin = e.asin
-         WHERE a.is_active = TRUE`
+         WHERE a.status = 'active'`
       );
       const ts = row.rows[0]?.last_refreshed;
       res.json({ lastRefreshedAt: ts ? new Date(ts).toISOString() : null });

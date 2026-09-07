@@ -319,7 +319,7 @@ function getCategoryReferralPercentage(category?: string | null): number {
   return DEFAULT_REFERRAL_PCT;
 }
 
-function parseFeeResult(
+export function parseFeeResult(
   asin: string,
   feesEstimateResult: any,
   price: number,
@@ -725,12 +725,11 @@ export async function getEligibility(asin: string): Promise<EligibilityResult> {
 // so it can be imported without booting Express (this file imports ./index)
 // and so it's unit-testable with an injected httpGet.
 
-export async function getCatalogData(asin: string): Promise<AsinCatalogResult> {
-  try {
-    const data = await spApiGet(`/catalog/2022-04-01/items/${asin}`, {
-      marketplaceIds: "ATVPDKIKX0DER",
-      includedData: "attributes,dimensions,images,salesRanks,summaries",
-    });
+// Pure per-item catalog parser (SPEC §11 Product Info, 2026-09-07) —
+// extracted so getCatalogData (single getCatalogItem) and the batch
+// searchCatalogItems path share ONE implementation, exactly as offers were.
+export function parseCatalogItem(asin: string, data: any): AsinCatalogResult {
+  {
 
     let weightLbs: number | null = null;
     let title: string | null = null;
@@ -1146,6 +1145,16 @@ export async function getCatalogData(asin: string): Promise<AsinCatalogResult> {
       widthIn: packageDims?.w ?? null,
       heightIn: packageDims?.h ?? null,
     };
+  }
+}
+
+export async function getCatalogData(asin: string): Promise<AsinCatalogResult> {
+  try {
+    const data = await spApiGet(`/catalog/2022-04-01/items/${asin}`, {
+      marketplaceIds: "ATVPDKIKX0DER",
+      includedData: "attributes,dimensions,images,salesRanks,summaries",
+    });
+    return parseCatalogItem(asin, data);
   } catch (err: any) {
     const statusCode = err.response?.status;
     log(

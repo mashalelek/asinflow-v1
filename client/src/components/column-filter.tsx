@@ -46,6 +46,7 @@ function getFilterType(colId: ColumnId): FilterType {
   if (colId === "supplier") return "supplier";
   if (colId === "category") return "supplier"; // reuse supplier multi-select type
   if (colId === "sourcing") return "supplier"; // reuse supplier multi-select type
+  if (colId === "status") return "supplier"; // status (2026-09-07): active/parked/dead multi-select
   if (BOOL_COLS.has(colId)) return "boolean";
   if (REVIEWED_COLS.has(colId)) return "reviewed";
   if (colId === "submission") return "submission";

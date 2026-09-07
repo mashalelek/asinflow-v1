@@ -34,13 +34,17 @@ export async function applyCatalogDeletedSignal(
     `UPDATE asins SET
        is_catalog_deleted = $2,
        catalog_checked_at = NOW(),
-       is_active = CASE
-         WHEN $2 = TRUE AND is_catalog_deleted = FALSE THEN FALSE
-         ELSE is_active
+       status = CASE
+         WHEN $2 = TRUE AND is_catalog_deleted = FALSE THEN 'dead'
+         ELSE status
        END,
-       archive_reason = CASE
+       status_reason = CASE
          WHEN $2 = TRUE AND is_catalog_deleted = FALSE THEN 'catalog_deleted'
-         ELSE archive_reason
+         ELSE status_reason
+       END,
+       status_changed_at = CASE
+         WHEN $2 = TRUE AND is_catalog_deleted = FALSE THEN NOW()
+         ELSE status_changed_at
        END
      WHERE asin = $1`,
     [asin, isCatalogDeleted],

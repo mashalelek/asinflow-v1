@@ -155,7 +155,7 @@ export async function syncSourcingSheet(
   let archivedNew = 0;
   if (!dryRun && toArchive.length > 0) {
     const r = await query(
-      `UPDATE asins SET is_active = false WHERE asin = ANY($1::text[]) AND is_active = true`,
+      `UPDATE asins SET status = 'parked', status_reason = 'discontinued', status_changed_at = NOW() WHERE asin = ANY($1::text[]) AND status = 'active'`,
       [toArchive],
     );
     archivedNew = r.rowCount ?? 0;

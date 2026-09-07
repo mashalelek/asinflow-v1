@@ -164,6 +164,9 @@ export default function BulkCalc() {
   const [renameVal, setRenameVal] = useState("");
   const [deleteOpen, setDeleteOpen] = useState(false);
   const [pageError, setPageError] = useState<string | null>(null);
+  // Create-list failures render INSIDE the Save-list dialog (2026-09-07):
+  // pageError renders behind the open dialog, so a 413 looked like a no-op.
+  const [createError, setCreateError] = useState<string | null>(null);
 
   const selectedList = lists.find((l) => l.id === selectedListId) ?? null;
 
@@ -284,7 +287,7 @@ export default function BulkCalc() {
 
   const createList = useCallback(async () => {
     if (!pendingUpload || !newListName.trim()) return;
-    setPageError(null);
+    setCreateError(null);
     try {
       const res = await fetch("/api/bulk-lists", {
         method: "POST",
@@ -302,7 +305,7 @@ export default function BulkCalc() {
       setSelectedListId(created.id);
       runRefresh(created.id);
     } catch (e: any) {
-      setPageError(e.message);
+      setCreateError(e.message);
     }
   }, [pendingUpload, newListName, fetchLists, runRefresh]);
 
@@ -551,7 +554,7 @@ export default function BulkCalc() {
       )}
 
       {/* Name-the-list dialog (after upload mapping) */}
-      <Dialog open={pendingUpload != null} onOpenChange={(v) => { if (!v) setPendingUpload(null); }}>
+      <Dialog open={pendingUpload != null} onOpenChange={(v) => { if (!v) { setPendingUpload(null); setCreateError(null); } }}>
         <DialogContent className="sm:max-w-sm" data-testid="dialog-name-list">
           <DialogHeader>
             <DialogTitle>Save list</DialogTitle>
@@ -561,8 +564,11 @@ export default function BulkCalc() {
           </DialogHeader>
           <Input value={newListName} onChange={(e) => setNewListName(e.target.value)}
             onKeyDown={(e) => { if (e.key === "Enter") createList(); }} autoFocus data-testid="input-list-name" />
+          {createError && (
+            <p className="text-sm text-destructive" data-testid="text-create-list-error">{createError}</p>
+          )}
           <DialogFooter className="gap-2">
-            <Button variant="outline" onClick={() => setPendingUpload(null)} data-testid="button-name-cancel">Cancel</Button>
+            <Button variant="outline" onClick={() => { setPendingUpload(null); setCreateError(null); }} data-testid="button-name-cancel">Cancel</Button>
             <Button onClick={createList} disabled={!newListName.trim()} data-testid="button-name-save">Create list</Button>
           </DialogFooter>
         </DialogContent>

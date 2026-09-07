@@ -13,7 +13,7 @@ import { loadSettings } from "@/lib/settings";
 import { loadColumnConfig, type ColumnConfig } from "@/lib/columns";
 import { Sun, Moon, BarChart3, Search, X, Filter } from "lucide-react";
 import { Checkbox } from "@/components/ui/checkbox";
-import { VisibilityToggles, loadShowGated, saveShowGated, loadShowMeltable, saveShowMeltable, loadShowArchived, saveShowArchived } from "@/components/visibility-toggles";
+import { VisibilityToggles, loadShowGated, saveShowGated, loadShowMeltable, saveShowMeltable, loadShowParked, saveShowParked, loadShowDead, saveShowDead } from "@/components/visibility-toggles";
 import { ActiveFiltersModal, getActiveFilterCount } from "@/components/active-filters-modal";
 import { Input } from "@/components/ui/input";
 import {
@@ -121,7 +121,8 @@ export default function Analytics() {
   const [colFilters, setColFilters] = useState<FilterMap>(loadColFilters);
   const [showGated, setShowGated] = useState(loadShowGated);
   const [showMeltable, setShowMeltable] = useState(loadShowMeltable);
-  const [showArchived, setShowArchived] = useState(loadShowArchived);
+  const [showParked, setShowParked] = useState(loadShowParked);
+  const [showDead, setShowDead] = useState(loadShowDead);
   const [filtersModalOpen, setFiltersModalOpen] = useState(false);
   const [page, setPage] = useState(1);
   const [pageSize, setPageSize] = useState<number>(() => {
@@ -162,14 +163,14 @@ export default function Analytics() {
   useEffect(() => { localStorage.setItem(A_COL_FILTERS_KEY, JSON.stringify(colFilters)); }, [colFilters]);
 
   // Fetch data
-  const fetchAsins = useCallback((start: string, end: string, archived = false) => {
-    return fetch(`/api/asins?startDate=${start}&endDate=${end}${archived ? "&includeArchived=true" : ""}`)
+  const fetchAsins = useCallback((start: string, end: string, parked = false, dead = false) => {
+    return fetch(`/api/asins?startDate=${start}&endDate=${end}${parked ? "&includeParked=true" : ""}${dead ? "&includeDead=true" : ""}`)
       .then((r) => r.json())
       .then((data: AsinResult[]) => { if (data.length > 0) setResults(data); setDbLoaded(true); })
       .catch(() => setDbLoaded(true));
   }, []);
 
-  useEffect(() => { fetchAsins(startDate, endDate, showArchived); }, [startDate, endDate, showArchived, fetchAsins]);
+  useEffect(() => { fetchAsins(startDate, endDate, showParked, showDead); }, [startDate, endDate, showParked, showDead, fetchAsins]);
 
   // Column config persistence
   const handleColumnConfigChange = useCallback((config: ColumnConfig) => {
@@ -322,7 +323,7 @@ export default function Analytics() {
   }, [groupBy, sortedFilteredResults, priceSource, settings, includeInboundShipping]);
 
   // Page reset
-  useEffect(() => { setPage(1); }, [searchQuery, colFilters, showGated, showMeltable, showArchived]);
+  useEffect(() => { setPage(1); }, [searchQuery, colFilters, showGated, showMeltable, showParked, showDead]);
 
   // Pagination: group-level when grouped, ASIN-level when flat
   const isGrouped = groupBy !== "none";
@@ -442,8 +443,10 @@ export default function Analytics() {
                 onShowGatedChange={(v) => { setShowGated(v); saveShowGated(v); }}
                 showMeltable={showMeltable}
                 onShowMeltableChange={(v) => { setShowMeltable(v); saveShowMeltable(v); }}
-                showArchived={showArchived}
-                onShowArchivedChange={(v) => { setShowArchived(v); saveShowArchived(v); }}
+                showParked={showParked}
+                onShowParkedChange={(v) => { setShowParked(v); saveShowParked(v); }}
+                showDead={showDead}
+                onShowDeadChange={(v) => { setShowDead(v); saveShowDead(v); }}
               />
               {activeFilterCount > 0 && (
                 <Button

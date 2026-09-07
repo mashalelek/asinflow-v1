@@ -35,6 +35,11 @@ export type PriceOutcome =
   | "no_offers"
   | "restricted"
   | "not_found"
+  // Amazon's "invalid ASIN for marketplace" per-item error (2026-09-07):
+  // conclusive, not transient — excluded from the trailing pass and from
+  // Retry failed (a 96-ASIN retry reproduced 96-for-96), and it auto-marks
+  // the ASIN dead (status 'dead', reason 'invalid_asin' — SPEC §14).
+  | "invalid_asin"
   | "throttled"
   | "error";
 
@@ -121,6 +126,7 @@ async function fetchBatch(asins: string[]): Promise<Map<string, ItemResult>> {
     } else {
       const msg = r?.body?.errors?.[0]?.message ?? r?.status?.reasonPhrase ?? `status ${code}`;
       if (/restricted|unauthorized/i.test(String(msg))) out.set(asin, { outcome: "restricted" });
+      else if (/invalid ASIN/i.test(String(msg))) out.set(asin, { outcome: "invalid_asin", message: String(msg) });
       else out.set(asin, { outcome: "error", message: String(msg) });
     }
   }
@@ -143,7 +149,7 @@ export async function refreshPrices(
       // (SPEC 14 "Archived != excluded from sync"). Active-only applies only
       // to the unfiltered cron/full-catalog scope.
       ? `SELECT asin FROM asins WHERE asin = ANY($1::text[]) ORDER BY asin`
-      : `SELECT asin FROM asins WHERE is_active = TRUE ORDER BY asin`,
+      : `SELECT asin FROM asins WHERE status = 'active' ORDER BY asin`,
     filtered ? [Array.from(asinFilter!)] : undefined,
   );
   const asins: string[] = result.rows.map((r: any) => r.asin);
@@ -174,7 +180,7 @@ export async function refreshPrices(
     await runPass(retryable);
   }
 
-  const counts: Record<PriceOutcome, number> = { updated: 0, no_offers: 0, restricted: 0, not_found: 0, throttled: 0, error: 0 };
+  const counts: Record<PriceOutcome, number> = { updated: 0, no_offers: 0, restricted: 0, not_found: 0, invalid_asin: 0, throttled: 0, error: 0 };
   const outcomes: Record<string, string> = {};
   for (const asin of asins) {
     const r = results.get(asin) ?? { outcome: "error" as const, message: "never processed" };
@@ -187,16 +193,33 @@ export async function refreshPrices(
     }
   }
 
+  // Auto-dead (SPEC §14, 2026-09-07): invalid_asin is Amazon saying the ASIN
+  // does not exist in the marketplace — retire it so the daily job stops
+  // paying for it. Revivable via the status actions; visible in the dialog
+  // ("→ marked dead (N)").
+  let markedDead = 0;
+  const invalids = asins.filter((a) => results.get(a)?.outcome === "invalid_asin");
+  if (!opts.dryRun && invalids.length > 0) {
+    const r = await query(
+      `UPDATE asins SET status = 'dead', status_reason = 'invalid_asin', status_changed_at = NOW()
+        WHERE asin = ANY($1::text[]) AND status <> 'dead'`,
+      [invalids],
+    );
+    markedDead = r.rowCount ?? 0;
+    log(`Price refresh v2: marked ${markedDead} invalid ASIN(s) dead (reason invalid_asin)`, "price-sync");
+  }
+
   log(
     `Price refresh v2 complete${opts.dryRun ? " [DRY-RUN — nothing written]" : ""}: ` +
     `${counts.updated} updated, ${counts.no_offers} no-offers, ${counts.restricted} restricted, ` +
-    `${counts.not_found} not-found, ${counts.throttled} throttled, ${counts.error} error`,
+    `${counts.not_found} not-found, ${counts.invalid_asin} invalid-asin (${markedDead} marked dead), ` +
+    `${counts.throttled} throttled, ${counts.error} error`,
     "price-sync",
   );
 
   return {
     requested: asins.length,
-    counts,
+    counts: { ...counts, marked_dead: markedDead } as any,
     outcomes,
     updated: counts.updated,
     failed: counts.throttled + counts.error,

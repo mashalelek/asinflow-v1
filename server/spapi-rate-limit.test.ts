@@ -61,11 +61,23 @@ describe("withRateLimit", () => {
     expect(order).toEqual(["a", "b", "c", "d"]);
   });
 
-  it("x-amzn-RateLimit-Limit header overrides the bucket rate", async () => {
-    await drain(withRateLimit(OFFERS, async () => ok({ "x-amzn-ratelimit-limit": "5" })));
+  // Downward-only (2026-09-07): the header may slow a bucket but never raise
+  // it above its seeded rate — Amazon's advertised 0.1 on itemOffersBatch
+  // kept re-raising the 0.09 seed to 0.095 and drawing steady-state 429s.
+  it("x-amzn-RateLimit-Limit header lowers the bucket rate", async () => {
+    await drain(withRateLimit(OFFERS, async () => ok({ "x-amzn-ratelimit-limit": "0.5" })));
     const s = rateLimitStats()["pricing.itemOffers"];
     expect(s.adjusted).toBe(true);
-    expect(s.rate).toBeCloseTo(5 * 0.95, 3);
+    expect(s.rate).toBeCloseTo(0.5 * 0.95, 3);
+  });
+
+  it("x-amzn-RateLimit-Limit header never raises the rate above the seed", async () => {
+    await drain(withRateLimit(OFFERS, async () => ok())); // create the bucket at its seed
+    const seeded = rateLimitStats()["pricing.itemOffers"].rate;
+    await drain(withRateLimit(OFFERS, async () => ok({ "x-amzn-ratelimit-limit": "5" })));
+    const s = rateLimitStats()["pricing.itemOffers"];
+    expect(s.adjusted).toBe(false);
+    expect(s.rate).toBeCloseTo(seeded, 3);
   });
 
   it("429 drains the bucket, retries transparently, succeeds", async () => {

@@ -441,6 +441,7 @@ export function getRowValue(
     case "product": return result.catalogData.title ?? result.asin;
     case "dateAdded": return result.addedAt ?? null;
     case "lastReviewed": return result.lastReviewedAt ?? null;
+    case "status": return result.status ?? "active";
     case "priceAge": return result.pricesFetchedAt ?? null;
     case "submission": return submissionCategory(result.submission);
     case "category": return result.category ?? null;
@@ -539,6 +540,21 @@ export function ResultsTable({
       opts.push({ value: cat.toLowerCase(), label: cat, count });
     }
     return opts;
+  }, [allResults]);
+
+  // Status filter options (2026-09-07): fixed vocabulary, counts from the
+  // loaded set (parked/dead only appear when their toggles are on).
+  const statusOptions: MultiSelectOption[] = useMemo(() => {
+    let a = 0, pk = 0, dd = 0;
+    for (const r of allResults) {
+      const s = r.status ?? "active";
+      if (s === "dead") dd++; else if (s === "parked") pk++; else a++;
+    }
+    return [
+      { value: "active", label: "Active", count: a },
+      { value: "parked", label: "Parked", count: pk },
+      { value: "dead", label: "Dead", count: dd },
+    ];
   }, [allResults]);
 
   const sourcingOptions: MultiSelectOption[] = useMemo(() => {
@@ -705,7 +721,7 @@ export function ResultsTable({
                         currentFilter={colFilters[colId]}
                         onApply={onFilterApply}
                         onClear={() => onFilterClear(colId)}
-                        multiSelectOptions={colId === "tags" ? tagOptions : colId === "supplier" ? supplierOptions : colId === "category" ? categoryOptions : colId === "sourcing" ? sourcingOptions : undefined}
+                        multiSelectOptions={colId === "tags" ? tagOptions : colId === "supplier" ? supplierOptions : colId === "category" ? categoryOptions : colId === "sourcing" ? sourcingOptions : colId === "status" ? statusOptions : undefined}
                       />
                     )}
                   </span>
@@ -1474,6 +1490,11 @@ function ProductCell({ result, price, settings, onResultUpdate, collisionBoundar
 
         {/* Line 2: Title + ungating icon */}
         <div className="flex items-center gap-1">
+          {result.status === "dead" && (
+            <span className="text-[10px] text-muted-foreground/70 border border-border rounded px-1 flex-shrink-0" data-testid={`tag-dead-${result.asin}`}>
+              dead{result.statusReason ? ` · ${result.statusReason}` : ""}
+            </span>
+          )}
           {title ? (
             <span className="text-sm truncate" title={title}>{title}</span>
           ) : (
@@ -2063,6 +2084,17 @@ export function renderCell(
       if (!ts) return <span className="text-muted-foreground/50 text-sm">{"\u2014"}</span>;
       const d = new Date(ts);
       return <span className="text-sm text-muted-foreground">{`${d.getMonth() + 1}/${d.getDate()}/${d.getFullYear()}`}</span>;
+    }
+
+    // §6 Status column (2026-09-07): status word + muted reason.
+    case "status": {
+      const s = result.status ?? "active";
+      if (s === "active") return <span className="text-sm text-muted-foreground">active</span>;
+      return (
+        <span className="text-sm text-muted-foreground">
+          {s}{result.statusReason ? <span className="text-muted-foreground/60"> · {result.statusReason}</span> : null}
+        </span>
+      );
     }
 
     // §6 Submission column — read-only §19 ledger surface. Item 7: the

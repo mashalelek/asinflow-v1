@@ -34,6 +34,9 @@ app.use((req, res, next) => {
 
 app.use(
   express.json({
+    // 10mb (2026-09-07): the 100 KB default 413'd a 1,962-row Bulk Calc
+    // "Create list" body (~527 KB). Largest realistic upload is a few MB.
+    limit: "10mb",
     verify: (req, _res, buf) => {
       req.rawBody = buf;
     },

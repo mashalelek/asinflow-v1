@@ -1,7 +1,8 @@
-// Daily Refresh cron (SPEC §11 "Refresh job", 2026-09-06). Replaces the
-// separate inventory (10:00 UTC), price (12:00), and live-offer (07:00)
-// crons with ONE daily run of the same Refresh job the toolbar button uses.
-// Scope: every non-archived ASIN (asins omitted → is_active = TRUE, sourcing
+// Daily Prices & Stock cron (SPEC §11, renamed from Refresh 2026-09-07).
+// Replaces the separate inventory (10:00 UTC), price (12:00), and live-offer
+// (07:00) crons with ONE daily run of the same Prices & Stock job the toolbar
+// button uses.
+// Scope: every active ASIN (asins omitted → status = 'active', sourcing
 // leads included — decision 7/10). Still gated behind ENABLE_CRONS (default
 // off; manual is the operating model).
 import cron from "node-cron";
@@ -14,10 +15,10 @@ function ymd(d: Date): string {
 
 export function startRefreshCron() {
   // 10:00 — AFTER the 09:00 sourcing-sheet sync, so leads added that
-  // morning are included in the day's Refresh (post-implementation review,
+  // morning are included in the day's Prices & Stock run (post-implementation review,
   // 2026-09-07).
   cron.schedule("0 10 * * *", async () => {
-    log("Daily Refresh started (full non-archived scope)", "cron");
+    log("Daily Prices & Stock started (full active scope)", "cron");
     try {
       const to = new Date();
       const from = new Date(to.getTime() - 30 * 86400000);
@@ -29,10 +30,10 @@ export function startRefreshCron() {
         emit: () => {},
       });
       const line = Object.values(result.stages).map((s) => `${s.stage}=${s.status}`).join(" ");
-      log(`Daily Refresh complete: ${line}`, "cron");
+      log(`Daily Prices & Stock complete: ${line}`, "cron");
     } catch (err: any) {
-      log(`Daily Refresh failed: ${err.message}`, "cron");
+      log(`Daily Prices & Stock failed: ${err.message}`, "cron");
     }
   });
-  log("Refresh cron scheduled: daily at 10:00 host-local time, after the 09:00 sourcing sync (replaces inventory/price/live-offer crons)", "cron");
+  log("Prices & Stock cron scheduled: daily at 10:00 host-local time, after the 09:00 sourcing sync (replaces inventory/price/live-offer crons)", "cron");
 }

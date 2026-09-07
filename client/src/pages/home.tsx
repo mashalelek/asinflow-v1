@@ -49,7 +49,7 @@ import { OPEN_SETTINGS_EVENT } from "@/components/layout/top-nav";
 import { ViewPresets } from "@/components/view-presets";
 import { StockHistoryModal } from "@/components/stock-history-modal";
 import { type ColFilter, type FilterMap, matchesFilters } from "@/components/column-filter";
-import { VisibilityToggles, loadShowGated, saveShowGated, loadShowMeltable, saveShowMeltable, loadShowArchived, saveShowArchived } from "@/components/visibility-toggles";
+import { VisibilityToggles, loadShowGated, saveShowGated, loadShowMeltable, saveShowMeltable, loadShowParked, saveShowParked, loadShowDead, saveShowDead } from "@/components/visibility-toggles";
 import { getEstimatedProfit } from "@/lib/profit";
 import { isProfitable, isReplens } from "@shared/profitability";
 import { ActiveFiltersModal, getActiveFilterCount } from "@/components/active-filters-modal";
@@ -363,7 +363,7 @@ export default function Home() {
 
   // §21 pre-filter link target: /asins?q=<ASIN> (the bulk page's in_database
   // icon). Seeds the search box from the ?q= param; inert when absent.
-  // Archived ASINs stay hidden (showArchived off) — same as a manual search.
+  // Parked/dead ASINs stay hidden (toggles off) — same as a manual search.
   const urlSearch = useSearch();
   useEffect(() => {
     const q = new URLSearchParams(urlSearch).get("q");
@@ -373,7 +373,10 @@ export default function Home() {
   const [colFilters, setColFilters] = useState<FilterMap>(loadColFilters);
   const [showGated, setShowGated] = useState(loadShowGated);
   const [showMeltable, setShowMeltable] = useState(loadShowMeltable);
-  const [showArchived, setShowArchived] = useState(loadShowArchived);
+  // §14 parked/dead (2026-09-07): Show parked replaced Show archived (same
+  // persistence); Show dead is a new default-off scope toggle.
+  const [showParked, setShowParked] = useState(loadShowParked);
+  const [showDead, setShowDead] = useState(loadShowDead);
   const [filtersModalOpen, setFiltersModalOpen] = useState(false);
   const [page, setPage] = useState(1);
   const [pageSize, setPageSize] = useState<number>(() => {
@@ -463,8 +466,8 @@ export default function Home() {
     localStorage.setItem(COL_FILTERS_KEY, JSON.stringify(colFilters));
   }, [colFilters]);
 
-  const fetchAsins = useCallback((start: string, end: string, archived = false) => {
-    return fetch(`/api/asins?startDate=${start}&endDate=${end}${archived ? "&includeArchived=true" : ""}`)
+  const fetchAsins = useCallback((start: string, end: string, parked = false, dead = false) => {
+    return fetch(`/api/asins?startDate=${start}&endDate=${end}${parked ? "&includeParked=true" : ""}${dead ? "&includeDead=true" : ""}`)
       .then((r) => r.json())
       .then((data: AsinResult[]) => {
         if (data.length > 0) setResults(data);
@@ -475,8 +478,8 @@ export default function Home() {
   }, []);
 
   useEffect(() => {
-    fetchAsins(startDate, endDate, showArchived);
-  }, [startDate, endDate, showArchived]); // eslint-disable-line react-hooks/exhaustive-deps
+    fetchAsins(startDate, endDate, showParked, showDead);
+  }, [startDate, endDate, showParked, showDead]); // eslint-disable-line react-hooks/exhaustive-deps
 
   useEffect(() => {
     fetch("/api/credentials-status")
@@ -543,11 +546,11 @@ export default function Home() {
         : `Unarchived ${data.revived.length}`;
       toast({ title: "Catalog revival", description: desc });
       setRevivalDialogOpen(false);
-      await fetchAsins(startDate, endDate, showArchived);
+      await fetchAsins(startDate, endDate, showParked, showDead);
     } catch (err: any) {
       toast({ title: "Revive failed", description: err.message, variant: "destructive" });
     }
-  }, [toast, fetchAsins, startDate, endDate, showArchived]);
+  }, [toast, fetchAsins, startDate, endDate, showParked, showDead]);
 
   const consumeAnalyzeStream = useCallback(async (res: Response) => {
     const reader = res.body?.getReader();
@@ -638,7 +641,7 @@ export default function Home() {
             });
           }
         }
-        toast({ title: "Analysis complete", description: `Processed ${total} ASINs in ${batches} batches` });
+        toast({ title: "Product Info complete", description: `Processed ${total} ASINs in ${batches} batches` });
       } else {
         const res = await fetch("/api/analyze", {
           method: "POST",
@@ -647,13 +650,13 @@ export default function Home() {
         });
         if (!res.ok) {
           const err = await res.json();
-          throw new Error(err.message || "Analysis failed");
+          throw new Error(err.message || "Product Info failed");
         }
         await consumeAnalyzeStream(res);
       }
     } catch (err: any) {
       toast({
-        title: "Analysis failed",
+        title: "Product Info failed",
         description: err.message,
         variant: "destructive",
       });
@@ -661,10 +664,10 @@ export default function Home() {
       setIsAnalyzing(false);
       setProgress(null);
       fetchPriceStatus();
-      await fetchAsins(startDate, endDate, showArchived);
+      await fetchAsins(startDate, endDate, showParked, showDead);
       await checkRevivalCandidates(); // DA-3
     }
-  }, [toast, consumeAnalyzeStream, fetchPriceStatus, fetchAsins, startDate, endDate, showArchived, checkRevivalCandidates]);
+  }, [toast, consumeAnalyzeStream, fetchPriceStatus, fetchAsins, startDate, endDate, showParked, showDead, checkRevivalCandidates]);
 
   /**
    * Re-analyze a list of ASINs via the DB-backed endpoint. Server reads
@@ -682,19 +685,19 @@ export default function Home() {
       });
       if (!res.ok) {
         const err = await res.json().catch(() => ({}));
-        throw new Error(err.message || "Analyze failed");
+        throw new Error(err.message || "Product Info failed");
       }
       await consumeAnalyzeStream(res);
     } catch (err: any) {
-      toast({ title: "Analysis failed", description: err.message, variant: "destructive" });
+      toast({ title: "Product Info failed", description: err.message, variant: "destructive" });
     } finally {
       setIsAnalyzing(false);
       setProgress(null);
       fetchPriceStatus();
-      await fetchAsins(startDate, endDate, showArchived);
+      await fetchAsins(startDate, endDate, showParked, showDead);
       await checkRevivalCandidates(); // DA-3
     }
-  }, [toast, consumeAnalyzeStream, fetchPriceStatus, fetchAsins, startDate, endDate, showArchived, checkRevivalCandidates]);
+  }, [toast, consumeAnalyzeStream, fetchPriceStatus, fetchAsins, startDate, endDate, showParked, showDead, checkRevivalCandidates]);
 
   /**
    * Selection-aware Analyze handler.
@@ -810,13 +813,13 @@ export default function Home() {
     try {
       const data = await fetchLongSync("/api/sheets/sync", { asins: ws });
       toast({ title: `Synced PO data`, description: `Updated ${data.updated} ASINs, skipped ${data.skipped}${data.cleared ? `, cleared ${data.cleared} stale qty` : ""}` });
-      await fetchAsins(startDate, endDate, showArchived);
+      await fetchAsins(startDate, endDate, showParked, showDead);
     } catch (err: any) {
       toast({ title: "Sync failed", description: err.message, variant: "destructive" });
     } finally {
       setIsSyncing(false);
     }
-  }, [toast, currentWorkingSet, fetchAsins, startDate, endDate, showArchived]);
+  }, [toast, currentWorkingSet, fetchAsins, startDate, endDate, showParked, showDead]);
 
   // One Refresh job (SPEC §11, 2026-09-06): inventory + sales + prices +
   // listings in one NDJSON stream. Scope = what is on screen (selection,
@@ -862,17 +865,19 @@ export default function Home() {
       if (!complete) throw new Error("stream ended without a completion line");
       setRefreshResult(complete);
       setRefreshResultOpen(true);
-      await fetchAsins(startDate, endDate, showArchived);
+      await fetchAsins(startDate, endDate, showParked, showDead);
       fetchPriceStatus();
     } catch (err: any) {
-      toast({ title: "Refresh failed", description: err.message, variant: "destructive" });
+      toast({ title: "Prices & Stock failed", description: err.message, variant: "destructive" });
     } finally {
       setRefreshState(null);
     }
-  }, [toast, currentWorkingSet, fetchAsins, fetchPriceStatus, startDate, endDate, showArchived]);
+  }, [toast, currentWorkingSet, fetchAsins, fetchPriceStatus, startDate, endDate, showParked, showDead]);
 
   // Retry failed (N): every ASIN whose prices outcome was throttled/error,
   // plus listings transients don't list per-ASIN — prices is the retry axis.
+  // invalid_asin is conclusive (2026-09-07) — its outcomes start with
+  // "invalid_asin", so the prefix filter excludes it from retry by design.
   const refreshFailedAsins = useMemo(() => {
     const s = refreshResult?.stages?.prices?.outcomes ?? {};
     return Object.entries(s)
@@ -961,7 +966,7 @@ export default function Home() {
       fd.append("to", endDate);
       const res = await fetch("/api/export/sourcing-cost", { method: "POST", body: fd });
       const data = await res.json();
-      if (!res.ok) throw new Error(data.message || "Sourcing cost export failed");
+      if (!res.ok) throw new Error(data.message || "COGS update export failed");
       // Rebuild the xlsx from base64 — the response is JSON so the summary can
       // ride along with the file.
       const bytes = Uint8Array.from(atob(data.xlsxBase64), (c) => c.charCodeAt(0));
@@ -975,7 +980,7 @@ export default function Home() {
       setScResult({ filename: data.filename, summary: data.summary });
       setScHistory(null); // stale — refetched on next open
     } catch (err: any) {
-      toast({ title: "Sourcing cost export failed", description: err.message, variant: "destructive" });
+      toast({ title: "COGS update export failed", description: err.message, variant: "destructive" });
     } finally {
       setIsExportingSc(false);
     }
@@ -1050,7 +1055,7 @@ export default function Home() {
         title: "Sourcing sheet synced",
         description: `${f.inserted} inserted, ${f.archivedNew} archived (discontinued), ${f.skippedExisting} already in AF`,
       });
-      await fetchAsins(startDate, endDate, showArchived);
+      await fetchAsins(startDate, endDate, showParked, showDead);
       await checkRevivalCandidates(); // DA-3
     } catch (err: any) {
       toast({ title: "Sourcing sync failed", description: err.message, variant: "destructive" });
@@ -1058,7 +1063,7 @@ export default function Home() {
       setIsSyncingSourcing(false);
       setProgress(null);
     }
-  }, [toast, fetchAsins, startDate, endDate, showArchived, checkRevivalCandidates]);
+  }, [toast, fetchAsins, startDate, endDate, showParked, showDead, checkRevivalCandidates]);
 
   // 2D-3: open preview dialog for a set of ASINs. Fires POST /api/offer-add/preview
   // (server runs the orchestrator with dryRun=true). Result rendered in dialog.
@@ -1176,31 +1181,84 @@ export default function Home() {
     openOfferAddPreview([asin]);
   }, [openOfferAddPreview]);
 
-  const handleArchiveSelected = useCallback(async (archive = true) => {
+  // Park/Unpark (was Archive/Unarchive, 2026-09-07) — same route, new labels.
+  const handleParkSelected = useCallback(async (park = true) => {
     if (selectedSet.size === 0) return;
     const asinList = Array.from(selectedSet);
-    const label = archive ? "Archive" : "Unarchive";
+    const label = park ? "Park" : "Unpark";
     const confirmed = window.confirm(`${label} ${asinList.length} selected ASIN${asinList.length !== 1 ? "s" : ""}?`);
     if (!confirmed) return;
     try {
       await fetch("/api/asins/archive", {
         method: "PUT",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ asins: asinList, archive }),
+        body: JSON.stringify({ asins: asinList, archive: park }),
       });
-      if (archive && !showArchived) {
-        const archivedAsins = new Set(asinList);
-        setResults((prev) => prev.filter((r) => !archivedAsins.has(r.asin)));
+      if (park && !showParked) {
+        const parkedAsins = new Set(asinList);
+        setResults((prev) => prev.filter((r) => !parkedAsins.has(r.asin)));
         setSavedCount((c) => Math.max(0, (c ?? 0) - asinList.length));
       } else {
-        await fetchAsins(startDate, endDate, showArchived);
+        await fetchAsins(startDate, endDate, showParked, showDead);
       }
       setSelectedSet(new Set());
-      toast({ title: `${label}d ${asinList.length} ASIN${asinList.length !== 1 ? "s" : ""}` });
+      toast({ title: `${label}ed ${asinList.length} ASIN${asinList.length !== 1 ? "s" : ""}` });
     } catch {
       toast({ title: `${label} failed`, variant: "destructive" });
     }
-  }, [selectedSet, toast, showArchived, fetchAsins, startDate, endDate]);
+  }, [selectedSet, toast, showParked, showDead, fetchAsins, startDate, endDate]);
+
+  // Mark dead / Revive (2026-09-07) — PUT /api/asins/status. Dead requires a
+  // reason: preset ip_complaint / not_sourceable, or free text.
+  const handleMarkDeadSelected = useCallback(async () => {
+    if (selectedSet.size === 0) return;
+    const asinList = Array.from(selectedSet);
+    const raw = window.prompt(
+      `Mark ${asinList.length} ASIN${asinList.length !== 1 ? "s" : ""} dead.\nReason — type 1 (ip_complaint), 2 (not_sourceable), or free text:`,
+    );
+    if (raw === null) return;
+    const reason = raw.trim() === "1" ? "ip_complaint" : raw.trim() === "2" ? "not_sourceable" : raw.trim();
+    if (!reason) { toast({ title: "Mark dead needs a reason", variant: "destructive" }); return; }
+    try {
+      const res = await fetch("/api/asins/status", {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ asins: asinList, status: "dead", reason }),
+      });
+      if (!res.ok) throw new Error(await res.text());
+      if (!showDead) {
+        const deadAsins = new Set(asinList);
+        setResults((prev) => prev.filter((r) => !deadAsins.has(r.asin)));
+        setSavedCount((c) => Math.max(0, (c ?? 0) - asinList.length));
+      } else {
+        await fetchAsins(startDate, endDate, showParked, showDead);
+      }
+      setSelectedSet(new Set());
+      toast({ title: `Marked ${asinList.length} dead (${reason})` });
+    } catch {
+      toast({ title: "Mark dead failed", variant: "destructive" });
+    }
+  }, [selectedSet, toast, showParked, showDead, fetchAsins, startDate, endDate]);
+
+  const handleReviveSelected = useCallback(async () => {
+    if (selectedSet.size === 0) return;
+    const asinList = Array.from(selectedSet);
+    const confirmed = window.confirm(`Revive ${asinList.length} selected ASIN${asinList.length !== 1 ? "s" : ""} back to active?`);
+    if (!confirmed) return;
+    try {
+      const res = await fetch("/api/asins/status", {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ asins: asinList, status: "active" }),
+      });
+      if (!res.ok) throw new Error(await res.text());
+      await fetchAsins(startDate, endDate, showParked, showDead);
+      setSelectedSet(new Set());
+      toast({ title: `Revived ${asinList.length} ASIN${asinList.length !== 1 ? "s" : ""}` });
+    } catch {
+      toast({ title: "Revive failed", variant: "destructive" });
+    }
+  }, [selectedSet, toast, showParked, showDead, fetchAsins, startDate, endDate]);
 
   const buyListCount = useMemo(() => {
     return results.filter((r) => buySet.has(r.asin)).length;
@@ -1408,7 +1466,7 @@ export default function Home() {
     count <= 0 ? "" : isSelection ? ` (${count})` : ` ${count}`;
 
   // Reset to page 1 when any filter/view changes
-  useEffect(() => { setPage(1); }, [searchQuery, selectedSearchAsinsKey, showGated, showMeltable, showArchived, colFilters, activeFilter, filterUncalculated]);
+  useEffect(() => { setPage(1); }, [searchQuery, selectedSearchAsinsKey, showGated, showMeltable, showParked, showDead, colFilters, activeFilter, filterUncalculated]);
 
   const handleBulkSyncCogs = useCallback(async () => {
     const targetAsins = selectedSet.size > 0
@@ -1436,13 +1494,13 @@ export default function Home() {
       const data = await res.json();
       if (!res.ok) throw new Error(data.message || "Sync failed");
       toast({ title: "Est. COGS synced", description: `Synced ${data.synced} ASIN${data.synced !== 1 ? "s" : ""} from PO sheet. ${data.skipped} skipped (no PO data).` });
-      await fetchAsins(startDate, endDate, showArchived);
+      await fetchAsins(startDate, endDate, showParked, showDead);
     } catch (err: any) {
       toast({ title: "Sync failed", description: err.message, variant: "destructive" });
     } finally {
       setIsSyncingCogs(false);
     }
-  }, [selectedSet, sortedFilteredResults, results, toast, fetchAsins, startDate, endDate, showArchived]);
+  }, [selectedSet, sortedFilteredResults, results, toast, fetchAsins, startDate, endDate, showParked, showDead]);
 
   const totalFiltered = sortedFilteredResults.length;
   const totalPages = Math.max(1, Math.ceil(totalFiltered / pageSize));
@@ -1484,10 +1542,12 @@ export default function Home() {
 
           {/* Row 1: action buttons. All sync buttons are selection-aware:
               "(N)" suffix when rows are selected, " N" suffix when operating on
-              the current filtered view. Archive/Unarchive appear only with selection. */}
-          {/* Row 1: split into LEFT (push-data-out actions) and RIGHT (data-in + presentation). */}
+              the current filtered view. Park/Unpark/Mark dead/Revive appear only with selection. */}
+          {/* Row 1 (§8 toolbar order, 2026-09-07): LEFT = Add to SC, then the
+              sync pair + push-out buttons in the spec's exact order; RIGHT =
+              Upload | Export | status actions. */}
           <div className="flex items-center justify-between gap-2 flex-wrap">
-            {/* LEFT — push-data-out: Add to SC | Sync PO/Inventory/Sales/Sourcing/Prices */}
+            {/* LEFT — Add to SC | Product Info | Prices & Stock | Sync Sourcing | Sync POs | Push to Aura | Export SB COGS | Update COGS in SC */}
             <div className="flex items-center gap-2 flex-wrap">
               <Button
                 variant="outline"
@@ -1503,31 +1563,23 @@ export default function Home() {
               </Button>
               <VerificationChip count={unverified?.count ?? 0} onClick={() => setVerifyPanelOpen(true)} />
               <span className="h-6 w-px bg-border" aria-hidden="true" />
-              <Button variant="outline" size="sm" onClick={handleSyncSheet} disabled={isSyncing || isAnalyzing} className="h-8 text-xs">
-                <Sheet className="h-3.5 w-3.5 mr-1.5" />
-                {isSyncing ? "Syncing..." : `Sync PO${btnSuffix(workingSetCount, workingSetIsSelection)}`}
+              {/* 1. Product Info (was Analyze) — catalog/fees/gating/hazmat */}
+              <Button
+                variant="outline"
+                size="sm"
+                onClick={handleAnalyze}
+                disabled={(asins.length === 0 && results.length === 0) || isAnalyzing}
+                className="h-8 text-xs"
+                data-testid="button-product-info"
+              >
+                <RefreshCw className={`h-3.5 w-3.5 mr-1.5 ${isAnalyzing ? "animate-spin" : ""}`} />
+                {isAnalyzing
+                  ? "Fetching..."
+                  : asins.length > 0
+                    ? `Product Info ${asins.length}`
+                    : `Product Info${btnSuffix(workingSetCount, workingSetIsSelection)}`}
               </Button>
-              <Button variant="outline" size="sm" onClick={handlePushAura} disabled={isPushingAura || isAnalyzing} className="h-8 text-xs">
-                <DollarSign className="h-3.5 w-3.5 mr-1.5" />
-                {isPushingAura ? "Pushing..." : `Push to Aura${selectedSet.size > 0 ? ` (${selectedSet.size})` : ""}`}
-              </Button>
-              <Button variant="outline" size="sm" onClick={handleSyncSourcing} disabled={isSyncingSourcing || isAnalyzing} className="h-8 text-xs">
-                <FileSpreadsheet className="h-3.5 w-3.5 mr-1.5" />
-                {isSyncingSourcing ? "Syncing..." : "Sync Sourcing"}
-              </Button>
-              <Button variant="outline" size="sm" onClick={handleExportSbCogs} disabled={isExportingSb} className="h-8 text-xs" title="Upload a SellerBoard products export; downloads YTD PO cost periods as CSV" data-testid="button-export-sb-cogs">
-                <DollarSign className="h-3.5 w-3.5 mr-1.5" />
-                {isExportingSb ? "Exporting..." : "Export SB COGS"}
-              </Button>
-              <input ref={sbFileInputRef} type="file" accept=".xlsx" onChange={handleSbTemplateSelected} className="hidden" data-testid="input-sb-template" />
-              <Button variant="outline" size="sm" onClick={handleExportSourcingCost} disabled={isExportingSc} className="h-8 text-xs" title={`Upload Amazon's Manage Your Sourcing Cost bulk-update workbook; fills Seller New Cost from PO actual COGS for ASINs purchased ${dateRangeLabel}. Amazon has no API for this — the filled file goes back through Seller Central by hand.`} data-testid="button-export-sourcing-cost">
-                <DollarSign className="h-3.5 w-3.5 mr-1.5" />
-                {isExportingSc ? "Filling..." : "Export Sourcing Cost"}
-              </Button>
-              <Button variant="ghost" size="sm" onClick={handleOpenScHistory} className="h-8 text-xs px-2" title="Sourcing cost exports already generated" data-testid="button-sc-history">
-                <History className="h-3.5 w-3.5" />
-              </Button>
-              <input ref={scFileInputRef} type="file" accept=".xlsx" onChange={handleScWorkbookSelected} className="hidden" data-testid="input-sc-workbook" />
+              {/* 2. Prices & Stock (was Refresh) — inventory + sales + prices + fees + listings */}
               <Tooltip>
                 <TooltipTrigger asChild>
                   <Button
@@ -1536,41 +1588,51 @@ export default function Home() {
                     onClick={() => handleRefresh()}
                     disabled={!!refreshState || isAnalyzing}
                     className="h-8 text-xs"
-                    data-testid="button-refresh"
+                    data-testid="button-prices-stock"
                   >
                     <RefreshCw className={`h-3.5 w-3.5 mr-1.5 ${refreshState ? "animate-spin" : ""}`} />
                     {refreshState
-                      ? `Refresh · ${refreshState.stage}${refreshState.total ? ` ${refreshState.current}/${refreshState.total}` : ""}`
-                      : `Refresh${btnSuffix(workingSetCount, workingSetIsSelection)}`}
+                      ? `Prices & Stock · ${refreshState.stage}${refreshState.total ? ` ${refreshState.current}/${refreshState.total}` : ""}`
+                      : `Prices & Stock${btnSuffix(workingSetCount, workingSetIsSelection)}`}
                   </Button>
                 </TooltipTrigger>
                 <TooltipContent side="bottom" className="text-xs">
-                  Inventory + sales + prices + listings in one job. Prices last synced {formatRelativeTime(pricesLastRefreshedAt)}
+                  Inventory + sales + prices + fees + listings in one job. Prices last synced {formatRelativeTime(pricesLastRefreshedAt)}
                 </TooltipContent>
               </Tooltip>
-              <Button variant="ghost" size="sm" onClick={() => { handleOpenRefreshHistory(); setRefreshResultOpen(true); }} className="h-8 text-xs px-2" title="Refresh run history" data-testid="button-refresh-history">
+              <Button variant="ghost" size="sm" onClick={() => { handleOpenRefreshHistory(); setRefreshResultOpen(true); }} className="h-8 text-xs px-2" title="Prices & Stock run history" data-testid="button-prices-stock-history">
                 <History className="h-3.5 w-3.5" />
               </Button>
+              <Button variant="outline" size="sm" onClick={handleSyncSourcing} disabled={isSyncingSourcing || isAnalyzing} className="h-8 text-xs">
+                <FileSpreadsheet className="h-3.5 w-3.5 mr-1.5" />
+                {isSyncingSourcing ? "Syncing..." : "Sync Sourcing"}
+              </Button>
+              <Button variant="outline" size="sm" onClick={handleSyncSheet} disabled={isSyncing || isAnalyzing} className="h-8 text-xs">
+                <Sheet className="h-3.5 w-3.5 mr-1.5" />
+                {isSyncing ? "Syncing..." : `Sync POs${btnSuffix(workingSetCount, workingSetIsSelection)}`}
+              </Button>
+              <Button variant="outline" size="sm" onClick={handlePushAura} disabled={isPushingAura || isAnalyzing} className="h-8 text-xs">
+                <DollarSign className="h-3.5 w-3.5 mr-1.5" />
+                {isPushingAura ? "Pushing..." : `Push to Aura${selectedSet.size > 0 ? ` (${selectedSet.size})` : ""}`}
+              </Button>
+              <Button variant="outline" size="sm" onClick={handleExportSbCogs} disabled={isExportingSb} className="h-8 text-xs" title="Upload a SellerBoard products export; downloads YTD PO cost periods as CSV" data-testid="button-export-sb-cogs">
+                <DollarSign className="h-3.5 w-3.5 mr-1.5" />
+                {isExportingSb ? "Exporting..." : "Export SB COGS"}
+              </Button>
+              <input ref={sbFileInputRef} type="file" accept=".xlsx" onChange={handleSbTemplateSelected} className="hidden" data-testid="input-sb-template" />
+              <Button variant="outline" size="sm" onClick={handleExportSourcingCost} disabled={isExportingSc} className="h-8 text-xs" title={`Upload Amazon's Manage Your Sourcing Cost bulk-update workbook; fills Seller New Cost from PO actual COGS for ASINs purchased ${dateRangeLabel}. Amazon has no API for this — the filled file goes back through Seller Central by hand.`} data-testid="button-update-cogs-sc">
+                <DollarSign className="h-3.5 w-3.5 mr-1.5" />
+                {isExportingSc ? "Filling..." : "Update COGS in SC"}
+              </Button>
+              <Button variant="ghost" size="sm" onClick={handleOpenScHistory} className="h-8 text-xs px-2" title="COGS update workbooks already generated" data-testid="button-sc-history">
+                <History className="h-3.5 w-3.5" />
+              </Button>
+              <input ref={scFileInputRef} type="file" accept=".xlsx" onChange={handleScWorkbookSelected} className="hidden" data-testid="input-sc-workbook" />
               {/* Reset Est. COGS to PO moved to Settings modal (2026-06-29). */}
             </div>
 
-            {/* RIGHT — data-in + presentation: Analyze | Upload | Export | Archive */}
+            {/* RIGHT — data-in + presentation: Upload | Export | status actions */}
             <div className="flex items-center gap-2 flex-wrap">
-              <Button
-                variant="outline"
-                size="sm"
-                onClick={handleAnalyze}
-                disabled={(asins.length === 0 && results.length === 0) || isAnalyzing}
-                className="h-8 text-xs"
-                data-testid="button-analyze"
-              >
-                <Zap className="h-3.5 w-3.5 mr-1.5" />
-                {isAnalyzing
-                  ? "Analyzing..."
-                  : asins.length > 0
-                    ? `Analyze ${asins.length}`
-                    : `Analyze${btnSuffix(workingSetCount, workingSetIsSelection)}`}
-              </Button>
               <FileUpload onFileProcessed={handleFileProcessed} isAnalyzing={isAnalyzing} compact />
               <ExportButtons results={sortedFilteredResults} priceSource={priceSource} settings={settings} columnConfig={columnConfig} />
               {selectedSet.size > 0 && (
@@ -1578,21 +1640,45 @@ export default function Home() {
                   <span className="h-6 w-px bg-border" aria-hidden="true" />
                   <Button
                     size="sm"
-                    onClick={() => handleArchiveSelected(true)}
+                    onClick={() => handleParkSelected(true)}
                     className="h-8 text-xs bg-transparent border border-[var(--action-archive-border)] text-[var(--action-archive-text)] hover:bg-[var(--action-archive-border)]/10"
+                    data-testid="button-park"
                   >
                     <Archive className="h-3 w-3 mr-1" />
-                    Archive ({selectedSet.size})
+                    Park ({selectedSet.size})
                   </Button>
-                  {showArchived && (
+                  {showParked && (
                     <Button
                       variant="outline"
                       size="sm"
-                      onClick={() => handleArchiveSelected(false)}
+                      onClick={() => handleParkSelected(false)}
                       className="h-8 text-xs text-muted-foreground"
+                      data-testid="button-unpark"
                     >
                       <Archive className="h-3 w-3 mr-1" />
-                      Unarchive ({selectedSet.size})
+                      Unpark ({selectedSet.size})
+                    </Button>
+                  )}
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    onClick={handleMarkDeadSelected}
+                    className="h-8 text-xs text-destructive border-destructive/40 hover:bg-destructive/10"
+                    data-testid="button-mark-dead"
+                  >
+                    <X className="h-3 w-3 mr-1" />
+                    Mark dead ({selectedSet.size})
+                  </Button>
+                  {showDead && (
+                    <Button
+                      variant="outline"
+                      size="sm"
+                      onClick={handleReviveSelected}
+                      className="h-8 text-xs text-muted-foreground"
+                      data-testid="button-revive"
+                    >
+                      <RefreshCw className="h-3 w-3 mr-1" />
+                      Revive ({selectedSet.size})
                     </Button>
                   )}
                 </>
@@ -1608,11 +1694,11 @@ export default function Home() {
             <div className="space-y-2 mt-6">
               <div className="flex items-center justify-between text-sm">
                 <span className="text-muted-foreground">
-                  Refresh · {refreshState.stage} — {refreshState.current} of {refreshState.total}
+                  Prices &amp; Stock · {refreshState.stage} — {refreshState.current} of {refreshState.total}
                 </span>
                 <span className="font-mono text-xs">{Math.round((refreshState.current / refreshState.total) * 100)}%</span>
               </div>
-              <Progress value={Math.round((refreshState.current / refreshState.total) * 100)} className="h-2" data-testid="progress-refresh" />
+              <Progress value={Math.round((refreshState.current / refreshState.total) * 100)} className="h-2" data-testid="progress-prices-stock" />
             </div>
           )}
           {isAnalyzing && progress && (
@@ -1782,7 +1868,7 @@ export default function Home() {
               Upload a CSV/XLSX to get started
             </h2>
             <p className="text-sm text-muted-foreground/70 mt-1 max-w-md">
-              Click "Upload File" above to import ASINs with COGS data, then click "Analyze" to fetch pricing from Amazon SP-API.
+              Click "Upload File" above to import ASINs with COGS data, then click "Product Info" to fetch catalog data from Amazon SP-API.
             </p>
           </div>
         )}
@@ -1804,8 +1890,10 @@ export default function Home() {
           onShowGatedChange: (v) => { setShowGated(v); saveShowGated(v); },
           showMeltable,
           onShowMeltableChange: (v) => { setShowMeltable(v); saveShowMeltable(v); },
-          showArchived,
-          onShowArchivedChange: (v) => { setShowArchived(v); saveShowArchived(v); },
+          showParked,
+          onShowParkedChange: (v) => { setShowParked(v); saveShowParked(v); },
+          showDead,
+          onShowDeadChange: (v) => { setShowDead(v); saveShowDead(v); },
           onResetCogs: handleBulkSyncCogs,
           isResettingCogs: isSyncingCogs,
         }}
@@ -1832,11 +1920,11 @@ export default function Home() {
       <Dialog open={refreshResultOpen} onOpenChange={(o) => { setRefreshResultOpen(o); if (!o) setRefreshHistory(null); }}>
         <DialogContent className="max-w-2xl max-h-[80vh] overflow-y-auto">
           <DialogHeader>
-            <DialogTitle>Refresh {refreshResult ? "results" : "history"}</DialogTitle>
+            <DialogTitle>Prices &amp; Stock {refreshResult ? "results" : "history"}</DialogTitle>
             <DialogDescription>
               {refreshResult
-                ? "One job: inventory + sales + prices + listings. Rate-limit stats prove the pacing (0 throttled = healthy)."
-                : "Recent refresh runs (newest first)."}
+                ? "One job: inventory + sales + prices + fees + listings. Rate-limit stats prove the pacing (0 throttled = healthy)."
+                : "Recent Prices & Stock runs (newest first)."}
             </DialogDescription>
           </DialogHeader>
           {refreshResult && (
@@ -1859,6 +1947,21 @@ export default function Home() {
                   )}
                 </details>
               ))}
+              {(() => {
+                const po = refreshResult.stages?.prices?.outcomes ?? {};
+                const invalids = Object.keys(po).filter((a) => String(po[a]).startsWith("invalid_asin"));
+                const markedDead = refreshResult.stages?.prices?.counts?.marked_dead ?? invalids.length;
+                if (invalids.length === 0) return null;
+                return (
+                  <div className="border rounded p-2">
+                    <p className="font-semibold">Invalid ASINs (conclusive — not retried)</p>
+                    <div className="mt-1 max-h-32 overflow-y-auto font-mono">
+                      {invalids.map((a) => <p key={a}>{a}</p>)}
+                    </div>
+                    <p className="mt-1 text-muted-foreground">→ marked dead ({markedDead})</p>
+                  </div>
+                );
+              })()}
               <details className="border rounded p-2">
                 <summary className="cursor-pointer font-semibold">Rate limits</summary>
                 <div className="mt-2 font-mono">
@@ -1990,7 +2093,7 @@ export default function Home() {
       <Dialog open={!!scResult} onOpenChange={(o) => { if (!o) setScResult(null); }}>
         <DialogContent className="max-w-md">
           <DialogHeader>
-            <DialogTitle>Amazon sourcing cost export</DialogTitle>
+            <DialogTitle>Update COGS in SC</DialogTitle>
             <DialogDescription>
               Downloaded {scResult?.filename}. Upload it under Bulk Update on the Manage Your
               Sourcing Cost page — Amazon has no API for this. Have the matching invoices ready:
@@ -2099,7 +2202,7 @@ export default function Home() {
       <Dialog open={scHistoryOpen} onOpenChange={setScHistoryOpen}>
         <DialogContent className="max-w-lg">
           <DialogHeader>
-            <DialogTitle>Sourcing cost export history</DialogTitle>
+            <DialogTitle>COGS update history</DialogTitle>
             <DialogDescription>
               Files generated, newest first. This records what AsinFlow produced — Seller Central
               gives no upload receipt, so it cannot confirm what Amazon accepted.

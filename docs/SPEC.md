@@ -243,7 +243,10 @@ Three toggles in the toolbar control what's in the working set:
    - Otherwise: ON (meltable items visible)
    User can override; manual state is remembered across reloads within the
    same seasonal window.
-3. **Show archived** — default OFF (hides archived ASINs)
+3. **Show parked** — default OFF (hides parked ASINs; replaced Show
+   archived 2026-09-07 when `is_active` split into parked/dead — same
+   persistence, same semantics)
+4. **Show dead** — default OFF (hides dead ASINs)
 
 Toggles do **not** count toward the active filter count. They do not appear
 in the Active Filters modal. They define scope, not filtering.
@@ -292,7 +295,9 @@ representations of the same logical "narrow to specific ASIN(s)" intent.
 5. **Sellers** — Sellers (FBA), Sellers (combined), Sellers 7d Δ, Sellers 30d Δ,
    FBA 7d Δ, FBA 30d Δ
 6. **Additional info** — Tags, Notes, Promos, Sourcing, Meltable, Hazmat,
-   Suppressed, Date Added, Submission
+   Suppressed, Date Added, Last Reviewed, Price Age, Status (2026-09-07:
+   active/parked/dead + reason; default hidden; multi-select filter),
+   Submission
 
 `COLUMN_GROUPS` array in code is the single source of truth. Both Manage
 Columns panel order and table render order derive from it.
@@ -515,6 +520,26 @@ A sub-nav strip below the top nav will be added when the PO module ships
 (for POs / Suppliers / Invoices / Reconciliation sub-pages). Not built yet.
 
 ---
+
+### ASINs-page toolbar (order + names, 2026-09-07)
+
+Left group, in this exact order — renamed by the data each button updates,
+the two sync jobs sharing the `RefreshCw` two-arrows icon so they read as a
+pair (route paths did NOT change; they are not user-facing):
+
+| # | Label | Was | Notes |
+|---|---|---|---|
+| 1 | **Product Info** | Analyze | catalog, fees, gating, hazmat (§11 Product Info); keeps btnSuffix count + pending-upload path |
+| 2 | **Prices & Stock** | Refresh | inventory + sales + prices + fees + listings (§11); active-stage label while running; history clock beside it |
+| 3 | **Sync Sourcing** | — | unchanged |
+| 4 | **Sync POs** | Sync PO | plural |
+| 5 | **Push to Aura** | — | unchanged |
+| 6 | **Export SB COGS** | — | unchanged |
+| 7 | **Update COGS in SC** | Export Sourcing Cost | its history clock stays beside it |
+
+Upload File and Export stay on the right. The Archive action is now
+**Park** / **Unpark**, plus **Mark dead** (reason: preset `ip_complaint`,
+`not_sourceable`, or free text) and **Revive** — all selection-aware.
 
 ## 9. Settings
 
@@ -1513,8 +1538,11 @@ outside). Path→bucket mapping from the table; unknown paths pass through
 un-throttled but logged, and the table is extended — never silently
 throttled. FIFO release per bucket (bursts honored, steady state = the
 published rate; callers keep their concurrency — serialization happens at
-the wire). Header-adaptive: `x-amzn-RateLimit-Limit` on any 2xx/400/404
-overrides the bucket's rate (logged). **429 handling lives here, once**: a
+the wire). Header-adaptive **downward only** (2026-09-07):
+`x-amzn-RateLimit-Limit` on any 2xx/400/404 may LOWER the bucket's rate
+(logged) but never raise it above the table seed — Amazon's advertised 0.1
+on itemOffersBatch kept re-raising the deliberate 0.09 seed to 0.095 and
+drawing steady-state 429s. **429 handling lives here, once**: a
 429 drains the bucket, transparent retry after a refill interval × a
 penalty growing with consecutive 429s (cap ×4), up to 3, then thrown —
 per-module retry loops (price-sync 3×backoff, analyze 2×2 s,
@@ -1531,10 +1559,10 @@ Dependency-free (no `server/index.ts` import). Unit tests: fake clock,
 FIFO, burst-then-steady, header override, 429 drain/retry/throw, unknown
 path passthrough.
 
-### Refresh job & price refresh v2 (2026-09-06)
+### Prices & Stock (the Refresh job) & price refresh v2 (2026-09-06; renamed 2026-09-07)
 
-**One Refresh button** replaces Sync Inventory + Sync Sales + Sync Prices +
-Scan Listings (decision 4; Sync PO, Sync Sourcing, Push to Aura stay
+**One Prices & Stock button** (labeled Refresh until 2026-09-07) replaces
+Sync Inventory + Sync Sales + Sync Prices + Scan Listings (decision 4; Sync PO, Sync Sourcing, Push to Aura stay
 separate — decision 8). `POST /api/refresh` (NDJSON), body
 `{asins, startDate, endDate}`; **scope = what is on screen** (decision 7):
 the checkbox selection, else the current filtered view including Show
@@ -1543,14 +1571,18 @@ scope (`asins` omitted) = every non-archived ASIN (`is_active = TRUE`),
 sourcing leads included; archived only via the button (decision 10).
 
 Stages, each with per-item outcomes, run concurrently where buckets differ;
-`listings` waits for `inventory` (needs its SKUs), `prices` and `sales`
-start immediately; full-catalog wall time ≈ the prices stage ≈ 18 min:
+`listings` waits for `inventory` (needs its SKUs), `fees` waits for
+`prices` (needs the fresh price), `prices` and `sales` start immediately;
+listings probes run with bounded concurrency (5 in flight — the limiter
+still paces at the wire; per-ASIN fail-closed semantics unchanged,
+2026-09-07), so full-catalog wall time ≈ the prices stage ≈ 18–21 min:
 
 | stage | source | replaces |
 |---|---|---|
 | `inventory` | getInventorySummaries + SKU recording | Sync Inventory |
 | `sales` | orders report, 30-day chunks | Sync Sales |
 | `prices` | price refresh v2 (below) | Sync Prices |
+| `fees` | batch `feesEstimate` on the just-written prices (2026-09-07) | the stale-fee gap: Low-Price FBA rates apply under $10, so a price crossing that line changes the fulfillment fee — the proportional referral adjustment never covered it |
 | `listings` | live-offer reconcile (§18) | Scan Listings + the inventory-sync `notLiveOnly` rider (removed) |
 
 A failed stage does not abort the others. Stream: `{type:"stage", stage,
@@ -1580,8 +1612,22 @@ over `throttled`/`error` items. Per-ASIN outcomes:
 | `no_offers` | 200, zero New offers | prices → **NULL**, sellers 0, fetched_at (decision 6 — conclusive: nothing is for sale; row becomes uncalculated) |
 | `restricted` | 403/restricted | nothing |
 | `not_found` | 404 | nothing |
+| `invalid_asin` | Amazon's "invalid ASIN for marketplace" per-item error (2026-09-07) — conclusive, not transient: excluded from Retry failed (a 96-ASIN retry reproduced 96-for-96), listed separately, and **auto-marks the ASIN dead** (status `dead`, reason `invalid_asin` — §14; the dialog's list ends "→ marked dead (N)") | status only |
 | `throttled` | 429 survived limiter + trailing pass | nothing |
-| `error` | timeout/5xx/parse | nothing (message kept) |
+| `error` | timeout/5xx/parse (throttle/invalid excluded) | nothing (message kept) |
+
+**Fees stage (2026-09-07):** `POST /products/fees/v0/feesEstimate` (20 per
+call at 0.5 calls/s ≈ 4 min full catalog), input price per ASIN = the same
+`getFeePriceForAsin` rule Product Info uses, computed from the just-written
+prices. ASINs whose price outcome was `no_offers`/`invalid_asin`/`error`
+skip as `skipped_no_price` — never a fallback-price estimate. Writes the
+fee triple with `fee_source = 'spapi'`; outcomes `updated` /
+`skipped_no_price` / `error`.
+
+**Batch-pricing rate seed 0.10 → 0.09 rps (2026-09-07):** the first full
+run absorbed 6 throttles in 116 calls — an over-optimistic clock. The
+table entry is now 0.09 (×0.95 safety on top); costs ~1 min per full run,
+buys 0 throttled by construction.
 
 `fetched_at` stamps only the two conclusive outcomes — the honest price
 age. **Run ledger `refresh_runs`** (migration 032, one table for all
@@ -1598,6 +1644,41 @@ labels ("Never synced" / "Older than" / "Within last").
 **Future (not this patch):** ANY_OFFER_CHANGED push notifications belong
 with the Repricer module; the consumer would write through the same
 `writePrice` and the pull path would narrow to no-live-offer ASINs.
+
+### Product Info (the Analyze job) — batch endpoints (2026-09-07)
+
+Product Info (labeled Analyze until 2026-09-07) ran one ASIN/second because
+three calls sat on 1 rps buckets (~37 min full catalog). Now:
+
+| call | today | full catalog |
+|---|---|---|
+| catalog | `searchCatalogItems` by ASIN identifiers, 20/call at 2/s → 40 ASINs/s | ~1 min |
+| fees | batch `feesEstimate` (same stage code as Prices & Stock's fees stage) | ~4 min |
+| prices | **removed** — Prices & Stock owns prices; fees use the stored price via `getFeePriceForAsin` | — |
+| gating | listings restrictions, 5/s (no batch form) | ~7 min |
+| hazmat | inbound eligibility preview, 1/s, scoped | stale-only |
+
+- **30-day scoping for gating + hazmat (confirmed 2026-09-07):** re-check
+  only when never checked or older than 30 days — ALWAYS for ASINs coming
+  through the upload path. `gating_checked_at` / `hazmat_checked_at`
+  (migration 033) make the rule a WHERE clause. A deliberate selection
+  still respects the rule; the 30-day window is the knob.
+- **Product Info no longer writes price columns.** No stored price →
+  fees skip (`skipped_no_price`), never a fallback-price estimate. The
+  upload path runs Prices & Stock's `prices` stage FIRST on the new
+  ASINs, then Product Info, under one progress stream.
+- The per-item catalog parser is extracted pure and shared (as offers
+  were); catalog-404 (DA-2) maps to "absent from a COMPLETE batch
+  response"; a partial batch response is inconclusive for its missing
+  ASINs — fail-closed, no `catalog_deleted`.
+- Outcomes, results dialog, `refresh_runs` rows (stage names `catalog` /
+  `fees` / `gating` / `hazmat`), rate-limit deltas, Retry failed:
+  identical machinery to Prices & Stock. Expected full catalog ≈ 7 min
+  (gating-bound) + stale hazmat only.
+
+**Deferred, explicitly (2026-09-07):** merging Product Info into Prices &
+Stock. The overlap is only the price columns; the two jobs answer
+different questions at different cadences. Nothing here precludes it.
 
 ### Scheduled crons — disabled by default (`ENABLE_CRONS`)
 
@@ -1773,7 +1854,7 @@ that writes it:
 | Tags, notes | Manual / CSV upload / Chrome extension |
 | `promo_notes` | Manual edit / Sourcing sync (new-ASIN INSERT branch only — never rewritten on re-sync/re-analyze, so manual edits are never overwritten) |
 | `is_wholesale`, `is_oa` | Manual edit |
-| `is_active` (archive) | Manual edit / Sourcing sync (only on freshly-inserted discontinued rows — never on pre-existing ASINs) |
+| `status` (active/parked/dead — replaced `is_active` 2026-09-07, migration 033) | Manual Park/Unpark/Mark-dead/Revive; Sourcing sync writes `parked`+`discontinued` on freshly-inserted discontinued rows only; the prices stage's `invalid_asin` outcome and the catalog-404 signal (DA-2) write `dead` with their reasons |
 | Aura listing cost (external, not an AF column) | Aura cost sync path (§11) — reads `asin_estimates`, writes only to Aura |
 
 When a code path needs to touch a field outside its ownership, that's a red
@@ -1799,7 +1880,7 @@ refresh) refreshes Amazon-side data ONLY.
 - `buy_link`, `supplier`
 - Tags, notes, `promo_notes`
 - `is_wholesale`, `is_oa`
-- `is_active`
+- `status` / `status_reason` (except the named auto-dead writers above)
 - On `bulk_list_asins` (§21, 2026-09-04): `buy_link`, `supplier`, `tags`,
   `promo_notes`, `added_at`, `supplier_sku`, `estimated_cogs` — the bulk
   sink never writes, clears, or overwrites them
@@ -1913,18 +1994,38 @@ UI.
 (The current state of AsinFlow's Actuals violates this principle. Section 13
 captures the gap; it must be addressed.)
 
-### Archived ≠ excluded from sync
+### Parked / Dead ≠ excluded from sync (was "Archived ≠ excluded", re-modeled 2026-09-07)
 
-Archive is a **view-level hide, not a data-freshness opt-out**. An explicitly
-selected ASIN syncs — prices, PO, sales, inventory, analyze, scan — regardless
-of `is_active`; with no selection, sync scope follows the current view (Show
-Archived on → archived included; the UI sends the visible ASIN list, so this
-falls out of selection semantics). Unfiltered cron/full-catalog scopes remain
-active-only. Any future "never sync archived" behavior must be a deliberate
-setting, never a hidden predicate. (Root-caused 2026-08-11: `is_active = TRUE`
-inside the explicit-selection branches of prices/inventory/sales/analyze/scan
-silently dropped selected archived ASINs; post-sync refreshes also dropped the
-Show Archived view scope, hiding even successful writes.)
+`is_active` conflated two populations: ASINs set aside that may come back
+to profitable (a core sourcing pattern) and ASINs gone for good (deleted
+by Amazon, IP complaints). Migration 033 replaces it with
+`status ∈ {active, parked, dead}` + `status_reason` + `status_changed_at`
+(backfill: TRUE → active; FALSE + `archive_reason` 'catalog_deleted' →
+dead; other FALSE → parked; `is_active` DROPPED, no shim — a stale reader
+fails loudly at tsc/SQL, never silently treats dead as parked).
+
+Parked/Dead is a **view-level hide, not a data-freshness opt-out**. An
+explicitly selected ASIN syncs — prices, PO, sales, inventory, Product
+Info, listings — regardless of status; with no selection, sync scope
+follows the current view (Show parked / Show dead on → included; the UI
+sends the visible ASIN list). Unfiltered cron/full-catalog scopes remain
+ACTIVE-only (parked and dead are both excluded from the daily job —
+decision 10). Any future "never sync parked" behavior must be a deliberate
+setting, never a hidden predicate. (Root-caused 2026-08-11: `is_active =
+TRUE` inside the explicit-selection branches silently dropped selected
+archived ASINs; post-sync refreshes also dropped the view scope.)
+
+Writers: manual Park/Unpark (the old Archive action), Mark dead (preset
+reasons `ip_complaint` / `not_sourceable` or free text), Revive (dead →
+active, clears the reason); automatic → dead: the prices stage's
+`invalid_asin` outcome (reason `invalid_asin` — confirmed auto-retire
+2026-09-07) and the catalog-404 DA-2 signal (reason `catalog_deleted`,
+same as its old auto-archive, now the right bucket; the DA-2 revival
+dialog revives from `dead` when `is_catalog_deleted` flips back — the
+one-click un-dead for Amazon-resurrected ASINs); automatic → parked: the
+sourcing sync's discontinued-on-insert rule (reason `discontinued`).
+Parked rows keep the archived styling; dead rows get a muted
+"dead · <reason>" tag in the Product cell — no row tints (§7).
 
 ### Push back on stale spec
 
@@ -2183,7 +2284,8 @@ An ASIN whose product has been removed from Amazon's catalog returns 404
 signal (confirmed: live ASINs return data, dead ones 404, no false positives).
 A dead ASIN cannot receive an offer — the generator hard-fails and the
 offer-add preview surfaces "dead ASIN — cannot create offer" and excludes it.
-(A separate, parked feature will flag/archive dead ASINs catalog-wide.)
+(Catalog-404 now auto-marks `status = 'dead'`, reason `catalog_deleted` —
+§14, 2026-09-07 — and the DA-2 revival dialog is the one-click un-dead.)
 
 ### Price Resolution
 
@@ -2888,7 +2990,7 @@ Suppressed on the bulk sink:
 | Site | What it writes |
 |---|---|
 | `upsertAsinResult` asins UPSERT | catalog fields; also INSERTs new `asins` rows |
-| `applyCatalogDeletedSignal` | `is_catalog_deleted`, and `is_active = FALSE` + `archive_reason` on FALSE→TRUE |
+| `applyCatalogDeletedSignal` | `is_catalog_deleted`, and `status = 'dead'` + `status_reason = 'catalog_deleted'` on FALSE→TRUE (2026-09-07; was is_active/archive_reason) |
 | `appendNotesForAsin` | `asins.notes` |
 | `upsertAsinResult` estimates UPSERT | `asin_estimates` |
 | `upsertCsvCogs` | `asin_estimates.estimated_cogs` |
@@ -2908,6 +3010,11 @@ ever wired to a live call site, it must remain unwired on this page.
 ### Data sources
 
 - ASINs: CSV upload only. No sheet sync, no Chrome extension, no manual add.
+  Upload bodies can be large (a 1,962-row list with URLs + notes is ~527 KB
+  as JSON): `express.json` runs at `limit: "10mb"` in `server/index.ts`
+  (2026-09-07 — the 100 KB default 413'd before the route ran). Create-list
+  errors render INSIDE the Save-list dialog and keep it open; `pageError`
+  behind an open dialog is invisible and reads as a silent no-op.
 - COGS: CSV column or manual inline edit. `estimated_cogs_source` is `'csv'`
   or `'manual'` only.
 - Supplier SKU: CSV column (mapper alias) or manual inline edit — same

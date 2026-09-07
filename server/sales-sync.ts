@@ -23,7 +23,7 @@ export async function syncSalesData(
   const sql = asinFilter && asinFilter.size > 0
     // Explicit selection: exactly those ASINs, archived included (SPEC 14).
     ? `SELECT id, asin FROM asins WHERE asin = ANY($1::text[])`
-    : `SELECT id, asin FROM asins WHERE is_active = TRUE`;
+    : `SELECT id, asin FROM asins WHERE status = 'active'`;
   const params = asinFilter && asinFilter.size > 0 ? [Array.from(asinFilter)] : undefined;
   const asinRows = await query(sql, params);
   const asinIdMap = new Map<string, string>();

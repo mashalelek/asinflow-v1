@@ -76,7 +76,7 @@ export async function runFullScopePass(opts: {
   // "Archived != excluded from sync"); active-only applies to the unfiltered
   // full-catalog walk.
   const hasFilter = opts.asinFilter != null && opts.asinFilter.size > 0;
-  const activeCond = hasFilter ? "TRUE" : "a.is_active = TRUE";
+  const activeCond = hasFilter ? "TRUE" : "a.status = 'active'";
   const filterCond = hasFilter ? `AND a.asin = ANY($1::text[])` : "";
   const filterParams = opts.asinFilter && opts.asinFilter.size > 0 ? [Array.from(opts.asinFilter)] : undefined;
 
@@ -99,8 +99,13 @@ export async function runFullScopePass(opts: {
   };
   emit({ type: "phase", phase: "a", asins: aRows.length, dryRun });
 
-  for (let i = 0; i < aRows.length; i++) {
-    const row = aRows[i];
+  // Bounded-concurrency probes (SPEC §11 Part C, 2026-09-07): the old
+  // sequential await ran ~2 probes/s (latency-bound) against a 5 rps bucket
+  // — 18 min for the full catalog. 5 ASINs in flight; the limiter still
+  // paces at the wire, and each ASIN's SKUs still resolve fully before its
+  // flag is written (per-ASIN fail-closed semantics unchanged).
+  let aDone = 0;
+  const processARow = async (row: (typeof aRows)[number], i: number): Promise<void> => {
     const skus: { sku: string; created_at: string }[] = row.skus ?? [];
     // Probe EVERY SKU (8c needs full liveness, not first-live short-circuit).
     let transient = false;
@@ -110,12 +115,11 @@ export async function runFullScopePass(opts: {
       phaseA.skusProbed++;
       if (!out.ok) { transient = true; }
       else if (out.present) liveByCreated.push({ sku: s.sku, created_at: s.created_at, issues: out.issues });
-      await sleep(pacingMs);
     }
     if (transient) {
       phaseA.transientSkipped++;
       emit({ type: "progress", phase: "a", done: i + 1, total: aRows.length, asin: row.asin, skipped: "transient" });
-      continue;
+      return;
     }
 
     // §18 all-known-SKUs-404 → discovery before FALSE (2026-08-28): every
@@ -127,8 +131,7 @@ export async function runFullScopePass(opts: {
       if (!disc.ok) {
         phaseA.transientSkipped++;
         emit({ type: "progress", phase: "a", done: i + 1, total: aRows.length, asin: row.asin, skipped: "transient" });
-        await sleep(pacingMs);
-        continue;
+        return;
       }
       if (disc.found.length > 0) {
         phaseA.discoveries.push({ asin: row.asin, skus: disc.found.map((f) => f.sku), live: true });
@@ -153,8 +156,7 @@ export async function runFullScopePass(opts: {
         if ((i + 1) % 25 === 0 || i === aRows.length - 1) {
           emit({ type: "progress", phase: "a", done: i + 1, total: aRows.length });
         }
-        await sleep(pacingMs);
-        continue;
+        return;
       }
       // discovery empty (200, zero items) → the FALSE verdict below stands.
     }
@@ -199,9 +201,25 @@ export async function runFullScopePass(opts: {
         log(`Full-scope 8c re-point: ${row.asin} primary → newest live: ${row.primary_sku ?? "∅"} → ${newestLiveReal!.sku}`, "full-scope");
       }
     }
-    if ((i + 1) % 25 === 0 || i === aRows.length - 1) {
-      emit({ type: "progress", phase: "a", done: i + 1, total: aRows.length });
-    }
+  };
+  const A_CONCURRENCY = 5;
+  {
+    let next = 0;
+    const workers = Array.from({ length: Math.min(A_CONCURRENCY, aRows.length) }, async () => {
+      for (;;) {
+        const i = next++;
+        if (i >= aRows.length) return;
+        try { await processARow(aRows[i], i); } catch (err: any) {
+          phaseA.transientSkipped++;
+          log(`Full-scope phase a: row ${aRows[i].asin} threw (${err?.message ?? err}) — skipped fail-closed`, "full-scope");
+        }
+        aDone++;
+        if (aDone % 25 === 0 || aDone === aRows.length) {
+          emit({ type: "progress", phase: "a", done: aDone, total: aRows.length });
+        }
+      }
+    });
+    await Promise.all(workers);
   }
   phaseA.durationMs = now() - t0;
   emit({ type: "phase_done", phase: "a", ...summarizeA(phaseA) });
