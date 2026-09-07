@@ -13,7 +13,10 @@ function ymd(d: Date): string {
 }
 
 export function startRefreshCron() {
-  cron.schedule("0 7 * * *", async () => {
+  // 10:00 — AFTER the 09:00 sourcing-sheet sync, so leads added that
+  // morning are included in the day's Refresh (post-implementation review,
+  // 2026-09-07).
+  cron.schedule("0 10 * * *", async () => {
     log("Daily Refresh started (full non-archived scope)", "cron");
     try {
       const to = new Date();
@@ -31,5 +34,5 @@ export function startRefreshCron() {
       log(`Daily Refresh failed: ${err.message}`, "cron");
     }
   });
-  log("Refresh cron scheduled: daily at 07:00 host-local time (replaces inventory/price/live-offer crons)", "cron");
+  log("Refresh cron scheduled: daily at 10:00 host-local time, after the 09:00 sourcing sync (replaces inventory/price/live-offer crons)", "cron");
 }

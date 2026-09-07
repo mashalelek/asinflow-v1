@@ -1520,10 +1520,13 @@ penalty growing with consecutive 429s (cap ×4), up to 3, then thrown —
 per-module retry loops (price-sync 3×backoff, analyze 2×2 s,
 listings-offers-fetch 2200 ms doubling) are REMOVED, not layered. **Hard
 timeouts** (decision 9): 30 s per API request, 120 s for the
-report-document download; a timeout is a per-item `error` outcome, never a
-frozen job. Diagnostics: `rateLimitStats()` per bucket
-`{rate, sent, throttled, adjusted}` — every job report includes the
-buckets it touched ("0 throttled" is visible proof of pacing).
+report-document download (the S3 `axios.get` in sales-sync.ts and
+suppression-sync.ts, applied 2026-09-07); a timeout is a per-item `error`
+outcome, never a frozen job. Diagnostics: `rateLimitStats()` per bucket
+`{rate, sent, throttled, adjusted}` — counters are process-lifetime, so
+the Refresh job snapshots them at run start and reports PER-RUN DELTAS
+(2026-09-07): "0 throttled" in a run report is proof for THAT run, never
+diluted by history.
 Dependency-free (no `server/index.ts` import). Unit tests: fake clock,
 FIFO, burst-then-steady, header override, 429 drain/retry/throw, unknown
 path passthrough.
@@ -1598,18 +1601,17 @@ with the Repricer module; the consumer would write through the same
 
 ### Scheduled crons — disabled by default (`ENABLE_CRONS`)
 
-Five node-cron schedules exist, all in-process, registered in one block in
-`server/index.ts`:
+Three node-cron schedules exist (down from five — the 2026-09-06 Refresh
+job collapsed the live-offer, inventory, and price crons into one), all
+in-process, registered in one block in `server/index.ts`:
 
 | Cron | File | Schedule (host-local) |
 |---|---|---|
-| Live-offer full-scope pass | `live-offer-cron.ts` | 07:00 |
 | Sourcing-sheet sync | `sourcing-sync-cron.ts` | 09:00 |
-| Inventory sync | `inventory-cron.ts` | 10:00 |
-| Price refresh | `price-sync-cron.ts` | 12:00 |
+| Daily Refresh (inventory + sales + prices + listings) | `refresh-cron.ts` | 10:00 — after the 09:00 sourcing sync so freshly added leads are included |
 | Aura cost-sync chain | `aura-sync-cron.ts` | 13:00 |
 
-**All five are gated behind a single env flag: `ENABLE_CRONS=true`. Unset or
+**All three are gated behind a single env flag: `ENABLE_CRONS=true`. Unset or
 any other value = no cron is scheduled.** Rationale (2026-08-01): the host Mac
 is asleep at the scheduled times — node-cron fires host-local and silently
 skips missed ticks, so schedules only ran when the machine happened to be
@@ -2433,8 +2435,9 @@ live write to Seller Central:
    live-offer SKU is the lead SKU. Applies to **both** new-SKU generation and
    resurrection-reuse; the two fields never disagree.
 7. A batch with ≥1 ACCEPTED submission schedules the §19 **auto verify after
-   submit** (scoped sweep at ~T+10m, one retry ~30m later) — no manual Scan
-   Listings needed after a routine batch.
+   submit** (probe ladder T+1m/+3m/+10m/+30m/+60m, each firing only while
+   rows stay open; any 200 for the submitted SKU writes `has_live_offer`
+   immediately — 2026-09-06) — nothing manual needed after a routine batch.
 
 ### Source-of-truth ownership
 

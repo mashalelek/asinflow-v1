@@ -213,6 +213,23 @@ export function rateLimitStats(): Record<string, { rate: number; sent: number; t
   return out;
 }
 
+/** Per-run view (2026-09-07): counters are process-lifetime, so job reports
+ * snapshot at run start and report the DELTA — "0 throttled" then means
+ * this run, not history. Buckets untouched during the run are omitted. */
+export function rateLimitStatsSince(
+  baseline: ReturnType<typeof rateLimitStats>,
+): ReturnType<typeof rateLimitStats> {
+  const now = rateLimitStats();
+  const out: Record<string, any> = {};
+  for (const [key, s] of Object.entries(now)) {
+    const b = baseline[key];
+    const sent = s.sent - (b?.sent ?? 0);
+    const throttled = s.throttled - (b?.throttled ?? 0);
+    if (sent > 0 || throttled > 0) out[key] = { rate: s.rate, sent, throttled, adjusted: s.adjusted };
+  }
+  return out;
+}
+
 /** Test hook: forget all buckets (fresh limits, fresh counters). */
 export function _resetRateLimitsForTests() {
   buckets.clear();

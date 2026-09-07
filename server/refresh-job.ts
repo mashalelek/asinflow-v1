@@ -13,7 +13,7 @@ import { refreshPrices, type PriceRefreshResult } from "./price-sync";
 import { syncInventory } from "./inventory-sync";
 import { syncSalesData } from "./sales-sync";
 import { runFullScopePass, type FullScopeReport } from "./full-scope-pass";
-import { rateLimitStats } from "./spapi-rate-limit";
+import { rateLimitStats, rateLimitStatsSince } from "./spapi-rate-limit";
 
 export type RefreshTrigger = "manual" | "refresh" | "cron";
 export type RefreshStage = "inventory" | "sales" | "prices" | "listings";
@@ -41,13 +41,14 @@ async function recordRun(
   requested: number,
   startedAt: Date,
   s: StageSummary,
+  rateStats: Record<string, unknown>,
 ): Promise<void> {
   try {
     await query(
       `INSERT INTO refresh_runs (started_at, finished_at, trigger, stage, scope, requested, counts, outcomes, rate_limit_stats, error)
        VALUES ($1, NOW(), $2, $3, $4, $5, $6::jsonb, $7::jsonb, $8::jsonb, $9)`,
       [startedAt, trigger, s.stage, scope, requested, JSON.stringify(s.counts),
-       JSON.stringify(s.outcomes), JSON.stringify(rateLimitStats()), s.error ?? null],
+       JSON.stringify(s.outcomes), JSON.stringify(rateStats), s.error ?? null],
     );
   } catch (err: any) {
     // Ledger write failure must never fail the job (coverage log semantics).
@@ -64,6 +65,8 @@ export async function runRefreshJob(opts: {
   emit: RefreshEmit;
 }): Promise<RefreshJobResult> {
   const { emit, dryRun } = opts;
+  // Per-run rate-limit view (2026-09-07): snapshot at start, report deltas.
+  const rateBaseline = rateLimitStats();
   const filter = opts.asins && opts.asins.length > 0 ? new Set(opts.asins) : undefined;
   const scope: "full" | "subset" = filter ? "subset" : "full";
   const requested = filter ? filter.size : 0;
@@ -88,7 +91,7 @@ export async function runRefreshJob(opts: {
       log(`Refresh stage ${stage} FAILED (others continue): ${summary.error}`, "refresh");
     }
     stages[stage] = summary;
-    if (!dryRun) await recordRun(opts.trigger, scope, requested, startedAt, summary);
+    if (!dryRun) await recordRun(opts.trigger, scope, requested, startedAt, summary, rateLimitStatsSince(rateBaseline));
     emit({ type: "stage", stage, status: summary.status, durationMs: summary.durationMs, counts: summary.counts, error: summary.error });
   }
 
@@ -150,7 +153,7 @@ export async function runRefreshJob(opts: {
 
   await Promise.all([inventoryThenListings, pricesPromise, salesPromise]);
 
-  const result: RefreshJobResult = { stages, rateLimits: rateLimitStats() };
+  const result: RefreshJobResult = { stages, rateLimits: rateLimitStatsSince(rateBaseline) };
   const line = Object.values(stages)
     .map((s) => `${s.stage}=${s.status}${s.error ? `(${s.error.slice(0, 60)})` : ""}`)
     .join(" ");

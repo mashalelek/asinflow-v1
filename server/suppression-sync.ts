@@ -45,7 +45,10 @@ export async function syncSuppressionData(): Promise<{ suppressed: number; clear
 
   // 3. Download
   const docRes = await spApiGet(`/reports/2021-06-30/documents/${reportDocumentId}`);
-  const downloadRes = await axios.get(docRes.url, { responseType: "text" });
+  // 120 s hard timeout (SPEC §11 decision 9, applied 2026-09-07): the S3
+  // report-document fetch is outside the rate-limited SP-API wrappers and
+  // can be several MB — a dead connection must end as an error, not hang.
+  const downloadRes = await axios.get(docRes.url, { responseType: "text", timeout: 120_000 });
   const rawData = typeof downloadRes.data === "string" ? downloadRes.data : String(downloadRes.data);
   const lines = rawData.split("\n").filter((l: string) => l.trim());
 
