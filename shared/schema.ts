@@ -159,6 +159,11 @@ export interface AsinResult {
   status?: "active" | "parked" | "dead";
   statusReason?: string | null;
   addedAt?: string | null;
+  // §21 bulk per-leg outcomes (2026-09-09): present on bulk rows only.
+  // catalog: parsed | absent | inconclusive ("absent" renders "Not found");
+  // price: updated | no_offers | restricted | throttled | error.
+  priceOutcome?: string | null;
+  catalogOutcome?: string | null;
   category?: string | null;
   isWholesale?: boolean;
   isOa?: boolean;

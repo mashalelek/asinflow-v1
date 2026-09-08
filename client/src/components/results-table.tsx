@@ -1620,6 +1620,29 @@ export function renderCell(
       return <span className="font-mono text-sm">{fmt(result.estimatedCogs)}</span>;
 
     case "salePrice":
+      // §21 bulk per-leg outcomes (2026-09-09): explicit vocabulary instead
+      // of a synthesized error string. Catalog "absent" renders "Not found"
+      // (its own leg); a missing price with a conclusive outcome renders the
+      // outcome word, never a bare "Error".
+      if (result.priceOutcome != null || result.catalogOutcome != null) {
+        if (price != null) return <span className="font-mono text-sm">{fmt(price)}</span>;
+        const label = result.catalogOutcome === "absent" ? "Not found"
+          : result.priceOutcome === "no_offers" ? "No offers"
+          : result.priceOutcome === "restricted" ? "Restricted"
+          : result.priceOutcome === "throttled" ? "Throttled"
+          : result.priceOutcome === "invalid_asin" ? "Invalid ASIN"
+          : result.priceOutcome === "error" ? "Error"
+          : result.priceOutcome === "not_found" ? "Not found"
+          : null;
+        if (label == null) return <span className="text-muted-foreground text-sm">—</span>;
+        const benign = label === "No offers";
+        return (
+          <span className={`flex items-center gap-1 justify-end text-sm ${benign ? "text-muted-foreground" : "text-destructive"}`} data-testid={`text-price-outcome-${result.asin}`}>
+            {!benign && <AlertTriangle className="h-3 w-3" />}
+            {label}
+          </span>
+        );
+      }
       if (hasError) {
         const isRestricted = result.error?.includes("Restricted");
         const isNoData = result.error?.includes("No data") || result.error?.includes("No pricing");

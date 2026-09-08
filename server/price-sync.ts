@@ -137,6 +137,66 @@ async function fetchBatch(asins: string[]): Promise<Map<string, ItemResult>> {
   return out;
 }
 
+// ── Pure price pass (2026-09-09): shared fetch/parse/outcome loop with a
+// PLUGGABLE writer — the "one implementation" for the ASINs page and the
+// Bulk Calc pipeline. Performs NO DB access of its own (pinned by test):
+// the caller owns scope selection and the writer owns persistence. The
+// writer is called once per conclusive outcome (updated / no_offers) with
+// the parsed offers; dry-run callers pass write: null.
+export interface PricePassResult {
+  counts: Record<PriceOutcome, number>;
+  outcomes: Record<string, string>;
+  /** Conclusive parses by ASIN — what the writer saw (or would have). */
+  parsed: Map<string, ParsedOffers>;
+}
+
+export async function runPricePass(
+  asins: string[],
+  write: ((asin: string, p: ParsedOffers) => Promise<void>) | null,
+  onProgress?: (p: PriceRefreshProgress) => void | Promise<void>,
+): Promise<PricePassResult> {
+  const results = new Map<string, ItemResult>();
+  let processed = 0;
+  const runPass = async (scope: string[]) => {
+    for (let i = 0; i < scope.length; i += PER_CALL) {
+      const chunk = scope.slice(i, i + PER_CALL);
+      const batch = await fetchBatch(chunk);
+      for (const [asin, r] of Array.from(batch.entries())) results.set(asin, r);
+      processed = Math.min(processed + chunk.length, asins.length);
+      if (onProgress) await onProgress({ current: processed, total: asins.length, asin: chunk[chunk.length - 1] });
+    }
+  };
+
+  await runPass(asins);
+
+  // ONE trailing pass over transient outcomes — that's it (SPEC §11).
+  const retryable = asins.filter((a) => {
+    const o = results.get(a)?.outcome;
+    return o === "throttled" || o === "error";
+  });
+  if (retryable.length > 0) {
+    log(`Price pass: trailing pass over ${retryable.length} throttled/error ASIN(s)`, "price-sync");
+    processed = asins.length - retryable.length;
+    await runPass(retryable);
+  }
+
+  const counts: Record<PriceOutcome, number> = { updated: 0, no_offers: 0, restricted: 0, not_found: 0, invalid_asin: 0, throttled: 0, error: 0 };
+  const outcomes: Record<string, string> = {};
+  const parsed = new Map<string, ParsedOffers>();
+  for (const asin of asins) {
+    const r = results.get(asin) ?? { outcome: "error" as const, message: "never processed" };
+    counts[r.outcome]++;
+    if ((r.outcome === "updated" || r.outcome === "no_offers") && r.parsed) {
+      parsed.set(asin, r.parsed);
+      if (write) await write(asin, r.parsed);
+    }
+    if (r.outcome !== "updated") {
+      outcomes[asin] = r.message ? `${r.outcome}: ${r.message}` : r.outcome;
+    }
+  }
+  return { counts, outcomes, parsed };
+}
+
 export async function refreshPrices(
   onProgress?: (p: PriceRefreshProgress) => void | Promise<void>,
   asinFilter?: ReadonlySet<string>,
@@ -158,50 +218,14 @@ export async function refreshPrices(
   const asins: string[] = result.rows.map((r: any) => r.asin);
   log(`Price refresh v2${opts.dryRun ? " [DRY-RUN]" : ""}: ${asins.length} ASINs, ${Math.ceil(asins.length / PER_CALL)} batch calls`, "price-sync");
 
-  const results = new Map<string, ItemResult>();
-  let processed = 0;
-  const runPass = async (scope: string[]) => {
-    for (let i = 0; i < scope.length; i += PER_CALL) {
-      const chunk = scope.slice(i, i + PER_CALL);
-      const batch = await fetchBatch(chunk);
-      for (const [asin, r] of Array.from(batch.entries())) results.set(asin, r);
-      processed = Math.min(processed + chunk.length, asins.length);
-      if (onProgress) await onProgress({ current: processed, total: asins.length, asin: chunk[chunk.length - 1] });
-    }
-  };
-
-  await runPass(asins);
-
-  // ONE trailing pass over transient outcomes — that's it (SPEC §11).
-  const retryable = asins.filter((a) => {
-    const o = results.get(a)?.outcome;
-    return o === "throttled" || o === "error";
-  });
-  if (retryable.length > 0) {
-    log(`Price refresh v2: trailing pass over ${retryable.length} throttled/error ASIN(s)`, "price-sync");
-    processed = asins.length - retryable.length;
-    await runPass(retryable);
-  }
-
-  const counts: Record<PriceOutcome, number> = { updated: 0, no_offers: 0, restricted: 0, not_found: 0, invalid_asin: 0, throttled: 0, error: 0 };
-  const outcomes: Record<string, string> = {};
-  for (const asin of asins) {
-    const r = results.get(asin) ?? { outcome: "error" as const, message: "never processed" };
-    counts[r.outcome]++;
-    if (!opts.dryRun && (r.outcome === "updated" || r.outcome === "no_offers") && r.parsed) {
-      await writePrice(asin, r.parsed);
-    }
-    if (r.outcome !== "updated") {
-      outcomes[asin] = r.message ? `${r.outcome}: ${r.message}` : r.outcome;
-    }
-  }
+  const { counts, outcomes } = await runPricePass(asins, opts.dryRun ? null : writePrice, onProgress);
 
   // Auto-dead (SPEC §14, 2026-09-07): invalid_asin is Amazon saying the ASIN
   // does not exist in the marketplace — retire it so the daily job stops
   // paying for it. Revivable via the status actions; visible in the dialog
   // ("→ marked dead (N)").
   let markedDead = 0;
-  const invalids = asins.filter((a) => results.get(a)?.outcome === "invalid_asin");
+  const invalids = asins.filter((a) => outcomes[a]?.startsWith("invalid_asin"));
   if (!opts.dryRun && invalids.length > 0) {
     const r = await query(
       `UPDATE asins SET status = 'dead', status_reason = 'invalid_asin', status_changed_at = NOW()

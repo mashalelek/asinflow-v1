@@ -523,6 +523,12 @@ A sub-nav strip below the top nav will be added when the PO module ships
 
 ### ASINs-page toolbar (order + names, 2026-09-07)
 
+**Label uniqueness (standing rule, 2026-09-09): a button label names
+exactly one job, app-wide.** Two buttons that do different things never
+share a label, and a renamed job's old label is retired, not reused for
+something else. Any new or renamed button must be grepped against every
+existing button/menu label before commit.
+
 Left group, in this exact order — renamed by the data each button updates,
 the two sync jobs sharing the `RefreshCw` two-arrows icon so they read as a
 pair (route paths did NOT change; they are not user-facing):
@@ -3071,9 +3077,40 @@ ever wired to a live call site, it must remain unwired on this page.
   completeness test pins builder-emits-every-field-key, and pins that the
   MAIN path keeps ignoring promos/dateAdded (parses, never writes — the
   deliberate asymmetry above).
-- Everything else: the analyze pipeline via the bulk sink. The bulk sink's
-  UPDATE never touches any user-controlled field above — Refresh Prices is
-  column-scoped to the analyze snapshot, so they persist.
+- Everything else: the bulk run pipeline (2026-09-09 — replaces the
+  Product Info core here, which since 2026-09-07 reads prices from the
+  MAIN tables and therefore could never price a bulk-only ASIN: the
+  "⚠ Error on every row" incident). One implementation, pluggable writes:
+  the prices and fees stages are pure fetch/parse/outcome passes that
+  take a writer — the ASINs page passes the asin_estimates writer, this
+  page passes the bulk sink. Stages, in order, under one NDJSON stream
+  with a 15 s heartbeat: **prices** (getItemOffersBatch, one trailing
+  pass) → **fees** (batch feesEstimate on the just-fetched prices;
+  no-price rows skip — never fallback-price estimates) → **catalog**
+  (searchCatalogItems) → **gating + hazmat** (probed only when
+  never-checked or >30 days, via bulk_list_asins.gating_checked_at /
+  hazmat_checked_at — migration 035; same 30-day rule and knob as the
+  main page's stamps, on this table). Account-scoped stages (inventory,
+  sales, listings) are excluded — meaningless for arbitrary ASINs.
+  Outcomes are per LEG (migration 035): `catalog_outcome`
+  (parsed/absent/inconclusive — absent is the DA-2 404 analogue and
+  renders "Not found") and `price_outcome` (updated / no_offers /
+  restricted / throttled / error — the fees result folds in: no price ⇒
+  fees skipped). A price failure never blanks catalog data and vice
+  versa; `fetched_at` stamps only conclusive price outcomes. Fresh
+  prices are fetched for EVERY row — including ASINs that also live in
+  the main catalog — and written to bulk_list_asins ONLY (a test pins
+  that the shared stages perform no DB writes of their own).
+  **Run lifecycle (decision, 2026-09-09): a bulk run continues to
+  completion after client disconnect** — progress is re-attachable via
+  GET /api/bulk-lists/:id/refresh/status (the page polls it on load and
+  while a run is live). One run per list at a time: a second POST is
+  refused with 409 and a visible message. Every run lands in
+  refresh_runs with scope `bulk:<list_id>` ("Refresh · bulk:<list>" in
+  the dialog — UI and ledger agree). Default scope = failed +
+  never-fetched rows; "Refresh all" covers everything; Retry failed
+  re-runs exactly the failures. The bulk sink's UPDATE never touches any
+  user-controlled field above, so they persist across runs.
 
 `/api/parse-file` and `/api/parse-mapped` are pure and reused. `parse-mapped`
 takes an opt-in flag to skip the COGS-column requirement; the default
@@ -3157,15 +3194,17 @@ it.
 Lists persist and are selectable from a dropdown at the top of the page.
 Selecting a list renders its stored snapshot.
 
-Prices and fees are a snapshot from the last analyze run, not live. Creating
-a list auto-runs the first analyze; subsequent refreshes are manual only. A
-manual "Refresh Prices" button re-runs the bulk analyze for the selected list
-and overwrites `bulk_list_asins` only. Snapshot age is shown next to the list
-name. Lists can be renamed and deleted; delete cascades.
+Prices and fees are a snapshot from the last run, not live. Creating a
+list auto-runs the first bulk run; subsequent runs are manual only. The
+**"Refresh"** button (renamed from "Refresh Prices" 2026-09-09 — it runs
+the full bulk pipeline: prices, fees, catalog, gating, hazmat) re-runs it
+for the selected list and overwrites `bulk_list_asins` only. Snapshot age
+is shown next to the list name. Lists can be renamed and deleted; delete
+cascades.
 
 ### Toolbar
 
-Present: Upload CSV, Refresh Prices, Export CSV, Manage Columns, Settings,
+Present: Upload CSV, Refresh, Export CSV, Manage Columns, Settings,
 list selector, save/rename/delete.
 
 Export CSV downloads `bulk-<listname>.csv` with the visible §21 column set —

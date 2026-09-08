@@ -101,6 +101,35 @@ export async function runFeesStage(opts: {
     items.push({ asin, price, category: r.bsr_category ?? null });
   }
 
+  const pass = await runFeesPass(
+    items,
+    opts.dryRun ? null : async (asin, fees) => {
+      await query(
+        `UPDATE asin_estimates SET fba_fee = $2, referral_fee = $3, fees_estimate_price = $4, fee_source = 'spapi' WHERE asin = $1`,
+        [asin, fees.fbaFulfillmentFee, fees.referralFee, fees.feesEstimatePrice],
+      );
+    },
+    (current, total) => opts.emit({ type: "stage", stage: "fees", status: "running", current, total }),
+    opts.dryRun,
+  );
+  counts.updated = pass.counts.updated;
+  counts.error = pass.counts.error;
+  Object.assign(outcomes, pass.outcomes);
+  return { counts, outcomes };
+}
+
+// ── Pure fees pass (2026-09-09): shared batch-feesEstimate loop with a
+// PLUGGABLE writer — same contract as runPricePass (no DB access of its
+// own; pinned by test). The caller builds the priced items list (its own
+// skip rule) and owns persistence via the writer.
+export async function runFeesPass(
+  items: Array<{ asin: string; price: number; category?: string | null }>,
+  write: ((asin: string, fees: { fbaFulfillmentFee: number | null; referralFee: number | null; feesEstimatePrice: number | null }) => Promise<void>) | null,
+  onProgress?: (current: number, total: number) => void,
+  dryRun = false,
+): Promise<{ counts: { updated: number; error: number }; outcomes: Record<string, string> }> {
+  const counts = { updated: 0, error: 0 };
+  const outcomes: Record<string, string> = {};
   let done = 0;
   for (let i = 0; i < items.length; i += 20) {
     const chunk = items.slice(i, i + 20);
@@ -109,21 +138,15 @@ export async function runFeesStage(opts: {
       const entry = batch.get(it.asin);
       if (entry?.kind === "parsed" && entry.fees.fbaFulfillmentFee != null) {
         counts.updated++;
-        if (!opts.dryRun) {
-          await query(
-            `UPDATE asin_estimates SET fba_fee = $2, referral_fee = $3, fees_estimate_price = $4, fee_source = 'spapi' WHERE asin = $1`,
-            [it.asin, entry.fees.fbaFulfillmentFee, entry.fees.referralFee, entry.fees.feesEstimatePrice],
-          );
-        } else {
-          outcomes[it.asin] = `would-write fba=${entry.fees.fbaFulfillmentFee} referral=${entry.fees.referralFee} @ $${it.price}`;
-        }
+        if (write) await write(it.asin, entry.fees);
+        if (dryRun) outcomes[it.asin] = `would-write fba=${entry.fees.fbaFulfillmentFee} referral=${entry.fees.referralFee} @ $${it.price}`;
       } else {
         counts.error++;
         outcomes[it.asin] = `error: ${entry?.kind === "error" ? entry.message : "no fee in response"}`;
       }
     }
     done += chunk.length;
-    opts.emit({ type: "stage", stage: "fees", status: "running", current: done, total: items.length });
+    onProgress?.(done, items.length);
   }
   return { counts, outcomes };
 }

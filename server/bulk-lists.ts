@@ -23,12 +23,11 @@
 import { query } from "./db";
 import { log } from "./index";
 import { cleanBuyLink, extractDomain } from "@shared/schema";
-import type { AsinInput, AsinResult } from "@shared/schema";
+import type { AsinInput } from "@shared/schema";
 // Pure lead-date helpers live in bulk-lead-dates.ts (no Express-boot import
 // chain) — re-exported here so existing callers keep their import path.
 import { parseAddedAt, resolveAddedAt, extractPromoFromNotes } from "./bulk-lead-dates";
 export { parseAddedAt, resolveAddedAt, extractPromoFromNotes };
-import type { AnalyzeSink } from "./analyze-sink";
 
 const ASIN_RE = /^[A-Z0-9]{10}$/;
 
@@ -155,110 +154,7 @@ export async function loadBulkListAsinInputs(listId: string): Promise<AsinInput[
   }));
 }
 
-// ── The bulk analyze sink ────────────────────────────────────────────────────
-
-// Price snapshot resolution mirrors getFeePriceForAsin's order (lowest FBA →
-// buy box → lowest), minus the $15 fallback — no real price means a NULL
-// snapshot, never a fabricated one.
-function resolveSalePrice(result: AsinResult): { price: number | null; source: string | null } {
-  const p = result.pricingData;
-  if (p.lowestFbaPrice != null) return { price: p.lowestFbaPrice, source: "lowest_fba" };
-  if (p.buyBoxPrice != null) return { price: p.buyBoxPrice, source: "buy_box" };
-  if (p.lowestPrice != null) return { price: p.lowestPrice, source: "lowest" };
-  return { price: null, source: null };
-}
-
-async function writeBulkRow(listId: string, result: AsinResult): Promise<void> {
-  const { price, source } = resolveSalePrice(result);
-  const c = result.catalogData;
-  const f = result.feesData;
-  // UPDATE-only: rows exist from list creation; analyze never adds membership.
-  // COALESCE on catalog fields = same never-clobber-with-null contract as the
-  // main path; tri-state is_hazmat/is_dangerous_good preserved when the probe
-  // is inconclusive; is_meltable latches like the main path.
-  // estimated_cogs / estimated_cogs_source are NEVER in this SET list (§21 —
-  // analyze must not touch user-controlled cost fields, mirrored from §14).
-  await query(
-    `UPDATE bulk_list_asins SET
-       title = COALESCE($3, title),
-       image_url = COALESCE($4, image_url),
-       brand = COALESCE($5, brand),
-       category = COALESCE($6, category),
-       weight_lb = COALESCE($7, weight_lb),
-       length_in = COALESCE($8, length_in),
-       width_in = COALESCE($9, width_in),
-       height_in = COALESCE($10, height_in),
-       sale_price = $11,
-       price_source = $12,
-       fba_fee = $13,
-       referral_fee = $14,
-       variable_closing_fee = $15,
-       fees_estimate_price = $16,
-       bsr = COALESCE($17, bsr),
-       sellers_fba = $18,
-       sellers_fbm = $19,
-       eligibility_status = $20,
-       is_meltable = ($21 OR is_meltable),
-       is_hazmat = COALESCE($22, is_hazmat),
-       is_dangerous_good = COALESCE($23, is_dangerous_good),
-       error = $24,
-       fetched_at = NOW()
-     WHERE list_id = $1 AND asin = $2`,
-    [
-      listId,
-      result.asin,
-      c.title,
-      c.imageUrl,
-      c.brand,
-      c.bsrCategory,
-      c.weightLbs,
-      c.lengthIn ?? null,
-      c.widthIn ?? null,
-      c.heightIn ?? null,
-      price,
-      source,
-      f.fbaFulfillmentFee,
-      f.referralFee,
-      f.variableClosingFee ?? null,
-      f.feesEstimatePrice,
-      c.bsrRank,
-      result.pricingData.sellersFba,
-      result.pricingData.sellersFbm,
-      result.eligibilityData?.status ?? null,
-      c.isMeltable ?? false,
-      c.isHazmat ?? null,
-      c.isDangerousGood ?? null,
-      result.error,
-    ],
-  );
-}
-
-export interface BulkListSink extends AnalyzeSink {
-  /** Awaits every write issued so far; call after runAnalyzeCore returns. */
-  flush(): Promise<{ written: number; errors: string[] }>;
-}
-
-export function makeBulkListSink(listId: string): BulkListSink {
-  const pending: Promise<void>[] = [];
-  const writtenAsins = new Set<string>();
-  const errors: string[] = [];
-  return {
-    persistResult(result, _opts) {
-      pending.push(
-        writeBulkRow(listId, result)
-          .then(() => { writtenAsins.add(result.asin); })
-          .catch((err: any) => {
-            errors.push(`${result.asin}: ${err.message}`);
-            log(`Bulk row write error for ${result.asin} (list ${listId}): ${err.message}`, "bulk");
-          }),
-      );
-    },
-    persistTags(_asin, _tagNames) {
-      // §21: tags have no data source on the bulk page. Intentional no-op.
-    },
-    async flush() {
-      await Promise.all(pending);
-      return { written: writtenAsins.size, errors };
-    },
-  };
-}
+// The old per-result sink (resolveSalePrice / writeBulkRow /
+// makeBulkListSink) was REMOVED 2026-09-09: the bulk refresh runs the
+// staged pipeline in bulk-refresh.ts — shared fetch passes with
+// column-scoped bulk writers — instead of runAnalyzeCore.

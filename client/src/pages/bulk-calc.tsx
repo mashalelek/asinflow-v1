@@ -1,6 +1,6 @@
 import { useState, useEffect, useCallback, useMemo } from "react";
 import { Link } from "wouter";
-import { Database, RefreshCw, Trash2, Pencil } from "lucide-react";
+import { Database, RefreshCw, Trash2, Pencil, History } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import {
@@ -99,6 +99,8 @@ function mapBulkRow(row: any): AsinResult {
     tags: Array.isArray(row.tags) ? row.tags.map((name: string) => ({ name, color: "#64748b" })) : [],
     promoNotes: row.promo_notes ?? null,
     notes: row.notes ?? null,
+    priceOutcome: row.price_outcome ?? null,
+    catalogOutcome: row.catalog_outcome ?? null,
     pricingData,
     feesData: {
       fbaFulfillmentFee: num(row.fba_fee),
@@ -160,6 +162,10 @@ export default function BulkCalc() {
   const [sortDir, setSortDir] = useState<"asc" | "desc">("desc");
   const [refreshing, setRefreshing] = useState(false);
   const [refreshProgress, setRefreshProgress] = useState<string | null>(null);
+  // §21 bulk run results (2026-09-09): per-stage counts + outcomes + rate
+  // deltas from the run's complete event — drives the results dialog.
+  const [refreshResult, setRefreshResult] = useState<any | null>(null);
+  const [refreshResultOpen, setRefreshResultOpen] = useState(false);
   const [pendingUpload, setPendingUpload] = useState<{ asins: AsinInput[]; filename: string } | null>(null);
   const [newListName, setNewListName] = useState("");
   const [renameOpen, setRenameOpen] = useState(false);
@@ -237,14 +243,27 @@ export default function BulkCalc() {
     }
   }, [selectedListId, loadRows]);
 
-  // "Refresh Prices" — POST the NDJSON refresh stream, then reload the
-  // snapshot. Never touches the main catalog (bulk sink, §21).
-  const runRefresh = useCallback(async (listId: string) => {
+  // "Refresh" (§21 bulk run, 2026-09-09) — POST the staged NDJSON stream
+  // (prices → fees → catalog → gating → hazmat) and render per-stage
+  // progress. The SERVER run continues if this stream dies (SPEC §21
+  // lifecycle decision); attachToRun below re-attaches via the status
+  // route. scope 'failed' (default) covers failed + never-fetched rows;
+  // 'all' is the Refresh-all option; asins = Retry failed.
+  const runRefresh = useCallback(async (listId: string, opts: { scope?: "failed" | "all"; asins?: string[] } = {}) => {
     setRefreshing(true);
     setRefreshProgress(null);
     setPageError(null);
+    setRefreshResult(null);
     try {
-      const res = await fetch(`/api/bulk-lists/${listId}/refresh`, { method: "POST" });
+      const res = await fetch(`/api/bulk-lists/${listId}/refresh`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ scope: opts.scope ?? "failed", asins: opts.asins }),
+      });
+      if (res.status === 409) {
+        const err = await res.json().catch(() => ({}));
+        throw new Error(err.message ?? "A run for this list is already in progress.");
+      }
       if (!res.ok || !res.body) throw new Error(`Refresh failed (${res.status})`);
       const reader = res.body.getReader();
       const decoder = new TextDecoder();
@@ -259,8 +278,12 @@ export default function BulkCalc() {
           if (!line.trim()) continue;
           try {
             const msg = JSON.parse(line);
-            if (msg.type === "progress") {
-              setRefreshProgress(`${msg.data.current}/${msg.data.total} — ${msg.data.asin}`);
+            if (msg.type === "stage") {
+              setRefreshProgress(`${msg.stage} ${msg.current}/${msg.total}${msg.asin ? ` — ${msg.asin}` : ""}`);
+            } else if (msg.type === "complete") {
+              if (msg.data?.error) throw new Error(msg.data.error);
+              setRefreshResult(msg.data);
+              setRefreshResultOpen(true);
             } else if (msg.type === "error") {
               throw new Error(msg.message ?? "Refresh error");
             }
@@ -279,6 +302,47 @@ export default function BulkCalc() {
       setRefreshProgress(null);
     }
   }, [fetchLists, loadRows]);
+
+  // Retry failed (N) — every ASIN whose prices outcome was throttled/error
+  // (transients), same exclusion rule as the ASINs page (invalid_asin and
+  // no_offers are conclusive; catalog absent is a fact, not a failure).
+  const refreshFailedAsins = useMemo(() => {
+    const s = refreshResult?.stages?.prices?.outcomes ?? {};
+    return Object.entries(s)
+      .filter(([, v]) => String(v).startsWith("throttled") || String(v).startsWith("error"))
+      .map(([asin]) => asin);
+  }, [refreshResult]);
+
+  // Re-attach (SPEC §21): if a run for the selected list is live (this tab
+  // reloaded, or another tab started it), poll the status route until it
+  // finishes, then reload the snapshot.
+  useEffect(() => {
+    if (!selectedListId) return;
+    let timer: ReturnType<typeof setInterval> | null = null;
+    let cancelled = false;
+    const poll = async () => {
+      try {
+        const res = await fetch(`/api/bulk-lists/${selectedListId}/refresh/status`);
+        if (cancelled) return;
+        if (res.status === 204) {
+          if (timer) { clearInterval(timer); timer = null; setRefreshing(false); setRefreshProgress(null); await loadRows(selectedListId); }
+          return;
+        }
+        const st = await res.json();
+        if (st.stage === "done" || st.stage === "failed") {
+          if (timer) { clearInterval(timer); timer = null; }
+          setRefreshing(false); setRefreshProgress(null);
+          await loadRows(selectedListId);
+          return;
+        }
+        setRefreshing(true);
+        setRefreshProgress(`${st.stage} ${st.current}/${st.total} (re-attached)`);
+        if (!timer) timer = setInterval(poll, 2000);
+      } catch {}
+    };
+    void poll();
+    return () => { cancelled = true; if (timer) clearInterval(timer); };
+  }, [selectedListId, loadRows]);
 
   // Upload CSV → name the list → create → auto-run the first analyze.
   const handleFileProcessed = useCallback((asins: AsinInput[], sourceFilename?: string) => {
@@ -496,11 +560,26 @@ export default function BulkCalc() {
         )}
         <div className="flex-1" />
         <FileUpload onFileProcessed={handleFileProcessed} isAnalyzing={refreshing} compact cogsOptional />
-        <Button variant="outline" size="sm" className="h-8 text-xs" data-testid="button-refresh-prices"
+        {/* "Refresh" (was "Refresh Prices", 2026-09-09): full bulk pipeline —
+            prices, fees, catalog, gating, hazmat. Default scope failed +
+            never-fetched; "Refresh all" covers everything (§21). */}
+        <Button variant="outline" size="sm" className="h-8 text-xs" data-testid="button-bulk-refresh"
           disabled={!selectedListId || refreshing}
           onClick={() => selectedListId && runRefresh(selectedListId)}>
           <RefreshCw className={`h-3.5 w-3.5 mr-1.5 ${refreshing ? "animate-spin" : ""}`} />
-          {refreshing ? "Refreshing..." : "Refresh Prices"}
+          {refreshing ? (refreshProgress ? `Refresh · ${refreshProgress.split(" — ")[0]}` : "Refreshing...") : "Refresh"}
+        </Button>
+        <Button variant="ghost" size="sm" className="h-8 text-xs px-2" data-testid="button-bulk-refresh-all"
+          disabled={!selectedListId || refreshing}
+          title="Re-run every row, including conclusive ones"
+          onClick={() => selectedListId && runRefresh(selectedListId, { scope: "all" })}>
+          all
+        </Button>
+        <Button variant="ghost" size="sm" className="h-8 text-xs px-2" data-testid="button-bulk-refresh-results"
+          disabled={!refreshResult}
+          title="Last run results"
+          onClick={() => setRefreshResultOpen(true)}>
+          <History className="h-3.5 w-3.5" />
         </Button>
         <ExportButtons results={exportResults} priceSource="lowestFba" settings={settings} columnConfig={columnConfig} filename={exportFilename} includeSkuSubColumn={false} />
         <ColumnManager config={columnConfig} onChange={setColumnConfig} columns={BULK_COLUMNS} storageKey={BULK_COLUMNS_KEY} />
@@ -582,6 +661,59 @@ export default function BulkCalc() {
             <Button variant="outline" onClick={() => { setPendingUpload(null); setCreateError(null); }} data-testid="button-name-cancel">Cancel</Button>
             <Button onClick={createList} disabled={!newListName.trim()} data-testid="button-name-save">Create list</Button>
           </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      {/* §21 bulk run results dialog (2026-09-09) — same shape as the ASINs
+          page: per-stage counts, expandable outcomes, rate deltas, Retry
+          failed (N). Title matches the refresh_runs scope string. */}
+      <Dialog open={refreshResultOpen} onOpenChange={setRefreshResultOpen}>
+        <DialogContent className="max-w-2xl max-h-[80vh] overflow-y-auto" data-testid="dialog-bulk-refresh-results">
+          <DialogHeader>
+            <DialogTitle>Refresh · bulk:{selectedList?.name ?? ""}</DialogTitle>
+            <DialogDescription>
+              Prices + fees + catalog + gating + hazmat for this list only. Rate-limit stats prove the pacing (0 throttled = healthy).
+            </DialogDescription>
+          </DialogHeader>
+          {refreshResult && (
+            <div className="space-y-3 text-xs">
+              {Object.entries(refreshResult.stages ?? {}).map(([stage, s]: [string, any]) => (
+                <details key={stage} className="border rounded p-2">
+                  <summary className="cursor-pointer">
+                    <span className="font-semibold">{stage}</span>
+                    {" — "}{Object.entries(s.counts ?? {}).map(([k, v]) => `${k} ${v}`).join(", ") || "no counts"}
+                  </summary>
+                  {Object.keys(s.outcomes ?? {}).length > 0 ? (
+                    <div className="mt-2 max-h-48 overflow-y-auto font-mono">
+                      {Object.entries(s.outcomes).map(([asin, o]) => (
+                        <p key={asin}>{asin}: {String(o)}</p>
+                      ))}
+                    </div>
+                  ) : (
+                    <p className="mt-2 text-muted-foreground">No per-item exceptions.</p>
+                  )}
+                </details>
+              ))}
+              <details className="border rounded p-2">
+                <summary className="cursor-pointer font-semibold">Rate limits</summary>
+                <div className="mt-2 font-mono">
+                  {Object.entries(refreshResult.rateLimits ?? {}).map(([bucket, s]: [string, any]) => (
+                    <p key={bucket}>{bucket}: {s.sent} sent, {s.throttled} throttled{s.adjusted ? ", rate adjusted by Amazon header" : ""}</p>
+                  ))}
+                </div>
+              </details>
+              <div className="flex justify-end gap-2">
+                {refreshFailedAsins.length > 0 && (
+                  <Button size="sm" className="h-8 text-xs" disabled={refreshing}
+                    onClick={() => { setRefreshResultOpen(false); if (selectedListId) runRefresh(selectedListId, { asins: refreshFailedAsins }); }}
+                    data-testid="button-bulk-retry-failed">
+                    Retry failed ({refreshFailedAsins.length})
+                  </Button>
+                )}
+                <Button size="sm" variant="outline" className="h-8 text-xs" onClick={() => setRefreshResultOpen(false)}>Close</Button>
+              </div>
+            </div>
+          )}
         </DialogContent>
       </Dialog>
 

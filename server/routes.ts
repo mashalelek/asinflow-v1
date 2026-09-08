@@ -35,6 +35,7 @@ import { makeProductRegistryRepo } from "./product-registry-repo";
 import { processBulkApproval, makeProductionHandlers, type ApprovalItem } from "./sku-legend-approval";
 import { settingsSchema, type Settings } from "@shared/schema";
 import type { AnalyzeSink } from "./analyze-sink";
+import { startBulkRun, subscribeBulkRun, getBulkRunStatus } from "./bulk-refresh";
 import { rateLimitStats, rateLimitStatsSince } from "./spapi-rate-limit";
 import {
   createBulkList,
@@ -42,8 +43,6 @@ import {
   getBulkListWithRows,
   renameBulkList,
   deleteBulkList,
-  loadBulkListAsinInputs,
-  makeBulkListSink,
   parseAddedAt,
 } from "./bulk-lists";
 import fs from "fs";
@@ -3790,33 +3789,42 @@ export async function registerRoutes(
 
   // "Refresh Prices" — re-run analyze for the list, persisting to
   // bulk_list_asins only. NDJSON stream, same shape as /api/analyze.
+  // §21 bulk run (2026-09-09): registry-backed pipeline — prices → fees →
+  // catalog → gating/hazmat via the shared passes with the bulk writer.
+  // Continues to completion after client disconnect (SPEC §21 lifecycle
+  // decision); one run per list (409 while busy); re-attach via the status
+  // route below.
   app.post("/api/bulk-lists/:id/refresh", async (req: Request, res: Response) => {
     if (!isDbAvailable()) { res.status(503).json({ message: "Database not available" }); return; }
     const listId = typeof req.params.id === "string" ? req.params.id : "";
-    try {
-      const inputs = await loadBulkListAsinInputs(listId);
-      if (inputs.length === 0) { res.status(404).json({ message: "List not found or empty" }); return; }
+    const body = (req.body ?? {}) as { scope?: "failed" | "all"; asins?: string[] };
+    const scope = body.scope === "all" ? "all" : "failed";
 
-      res.setHeader("Content-Type", "application/x-ndjson");
-      res.setHeader("Transfer-Encoding", "chunked");
-      res.setHeader("Cache-Control", "no-cache");
-      res.setHeader("Connection", "keep-alive");
-
-      const sink = makeBulkListSink(listId);
-      // fromCsvUpload=false and a no-op notes/tags surface: the bulk sink
-      // ignores cost fields either way. NO runPostAnalyzeBackgroundSyncs here.
-      await runAnalyzeCore(inputs, (chunk) => res.write(chunk), () => null, false, sink);
-      const { written, errors } = await sink.flush();
-      log(`Bulk list refresh complete (list ${listId}): ${written}/${inputs.length} rows written, ${errors.length} write errors`, "bulk");
-      res.write(JSON.stringify({ type: "complete", data: { total: inputs.length, written, writeErrors: errors } }) + "\n");
-      res.end();
-    } catch (err: any) {
-      log(`Bulk list refresh error: ${err.message}`, "bulk");
-      try {
-        res.write(JSON.stringify({ type: "error", message: err.message }) + "\n");
-        res.end();
-      } catch {}
+    const started = startBulkRun(listId, { scope, asins: body.asins });
+    if (started.busy) {
+      res.status(409).json({ message: `A run for this list is already in progress (since ${started.since}). One run per list at a time.` });
+      return;
     }
+
+    res.setHeader("Content-Type", "application/x-ndjson");
+    res.setHeader("Transfer-Encoding", "chunked");
+    res.setHeader("Cache-Control", "no-cache");
+    res.setHeader("Connection", "keep-alive");
+    const hb = setInterval(() => { try { res.write(JSON.stringify({ type: "heartbeat" }) + "\n"); } catch {} }, 15_000);
+    const unsubscribe = subscribeBulkRun(listId, (event: any) => {
+      try { res.write(JSON.stringify(event) + "\n"); } catch {}
+      if (event?.type === "complete") { clearInterval(hb); try { res.end(); } catch {} }
+    });
+    res.on("close", () => { clearInterval(hb); unsubscribe?.(); });
+  });
+
+  // Re-attach point: current progress of a live run (or terminal state for
+  // ~60 s after it ends); 204 when nothing is running.
+  app.get("/api/bulk-lists/:id/refresh/status", (req: Request, res: Response) => {
+    const listId = typeof req.params.id === "string" ? req.params.id : "";
+    const state = getBulkRunStatus(listId);
+    if (!state) { res.status(204).end(); return; }
+    res.json(state);
   });
 
   // Manual COGS inline edit for a bulk-list row. Guarantees (§21):
