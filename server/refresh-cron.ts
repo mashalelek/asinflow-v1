@@ -2,7 +2,8 @@
 // Replaces the separate inventory (10:00 UTC), price (12:00), and live-offer
 // (07:00) crons with ONE daily run of the same Prices & Stock job the toolbar
 // button uses.
-// Scope: every active ASIN (asins omitted → status = 'active', sourcing
+// Scope: active + parked (asins omitted → status IN ('active','parked') —
+// decision 5, 2026-09-07: dead never syncs automatically; sourcing
 // leads included — decision 7/10). Still gated behind ENABLE_CRONS (default
 // off; manual is the operating model).
 import cron from "node-cron";

@@ -30,7 +30,7 @@ export async function syncInventory(
   const sql = asinFilter && asinFilter.size > 0
     // Explicit selection: exactly those ASINs, archived included (SPEC 14).
     ? `SELECT id, asin FROM asins WHERE asin = ANY($1::text[])`
-    : `SELECT id, asin FROM asins WHERE status = 'active'`;
+    : `SELECT id, asin FROM asins WHERE status IN ('active', 'parked')`; // cron scope: decision 5, 2026-09-07
   const params = asinFilter && asinFilter.size > 0 ? [Array.from(asinFilter)] : undefined;
   const asinRows = await query(sql, params);
   const asinIdMap = new Map<string, string>();

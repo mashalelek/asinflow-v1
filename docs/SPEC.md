@@ -1566,9 +1566,10 @@ Sync Inventory + Sync Sales + Sync Prices + Scan Listings (decision 4; Sync PO, 
 separate — decision 8). `POST /api/refresh` (NDJSON), body
 `{asins, startDate, endDate}`; **scope = what is on screen** (decision 7):
 the checkbox selection, else the current filtered view including Show
-Archived / Show Gated; the client always sends the explicit list. Cron
-scope (`asins` omitted) = every non-archived ASIN (`is_active = TRUE`),
-sourcing leads included; archived only via the button (decision 10).
+Parked / Show Dead / Show Gated; the client always sends the explicit
+list. Cron scope (`asins` omitted) = `status IN ('active','parked')`,
+sourcing leads included; dead only via the button (decision 5, 2026-09-07
+— supersedes decision 10, which predates the Parked/Dead split).
 
 Stages, each with per-item outcomes, run concurrently where buckets differ;
 `listings` waits for `inventory` (needs its SKUs), `fees` waits for
@@ -1689,7 +1690,7 @@ in-process, registered in one block in `server/index.ts`:
 | Cron | File | Schedule (host-local) |
 |---|---|---|
 | Sourcing-sheet sync | `sourcing-sync-cron.ts` | 09:00 |
-| Daily Refresh (inventory + sales + prices + listings) | `refresh-cron.ts` | 10:00 — after the 09:00 sourcing sync so freshly added leads are included |
+| Daily Prices & Stock (inventory + sales + prices + fees + listings; scope active+parked) | `refresh-cron.ts` | 10:00 — after the 09:00 sourcing sync so freshly added leads are included |
 | Aura cost-sync chain | `aura-sync-cron.ts` | 13:00 |
 
 **All three are gated behind a single env flag: `ENABLE_CRONS=true`. Unset or
@@ -2008,10 +2009,13 @@ Parked/Dead is a **view-level hide, not a data-freshness opt-out**. An
 explicitly selected ASIN syncs — prices, PO, sales, inventory, Product
 Info, listings — regardless of status; with no selection, sync scope
 follows the current view (Show parked / Show dead on → included; the UI
-sends the visible ASIN list). Unfiltered cron/full-catalog scopes remain
-ACTIVE-only (parked and dead are both excluded from the daily job —
-decision 10). Any future "never sync parked" behavior must be a deliberate
-setting, never a hidden predicate. (Root-caused 2026-08-11: `is_active =
+sends the visible ASIN list). The unfiltered daily-cron scope is
+`status IN ('active','parked')` — parked ASINs are exactly the "may come
+back to profitable" population, so the daily job keeps their prices
+current (~5 min extra at 525 parked); dead is never touched automatically
+(decision 5, 2026-09-07 — supersedes decision 10 of the refresh patch,
+which predates the Parked/Dead split). Any future "never sync parked"
+behavior must be a deliberate setting, never a hidden predicate. (Root-caused 2026-08-11: `is_active =
 TRUE` inside the explicit-selection branches silently dropped selected
 archived ASINs; post-sync refreshes also dropped the view scope.)
 

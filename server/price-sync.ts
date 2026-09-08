@@ -149,7 +149,10 @@ export async function refreshPrices(
       // (SPEC 14 "Archived != excluded from sync"). Active-only applies only
       // to the unfiltered cron/full-catalog scope.
       ? `SELECT asin FROM asins WHERE asin = ANY($1::text[]) ORDER BY asin`
-      : `SELECT asin FROM asins WHERE status = 'active' ORDER BY asin`,
+      // Cron scope = active + parked (decision 5, 2026-09-07): parked is the
+      // "may come back" population, so the daily job keeps its prices
+      // current. Dead is never synced automatically.
+      : `SELECT asin FROM asins WHERE status IN ('active', 'parked') ORDER BY asin`,
     filtered ? [Array.from(asinFilter!)] : undefined,
   );
   const asins: string[] = result.rows.map((r: any) => r.asin);

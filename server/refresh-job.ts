@@ -79,7 +79,7 @@ export async function runFeesStage(opts: {
           WHERE a.asin = ANY($1::text[]) ORDER BY a.asin`
       : `SELECT a.asin, e.lowest_fba_price, e.buy_box_price, e.lowest_price, e.bsr_category
            FROM asins a LEFT JOIN asin_estimates e ON e.asin = a.asin
-          WHERE a.status = 'active' ORDER BY a.asin`,
+          WHERE a.status IN ('active', 'parked') ORDER BY a.asin`, // cron scope: decision 5, 2026-09-07
     filtered ? [Array.from(opts.filter!)] : undefined,
   )).rows;
 

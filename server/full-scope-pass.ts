@@ -76,7 +76,7 @@ export async function runFullScopePass(opts: {
   // "Archived != excluded from sync"); active-only applies to the unfiltered
   // full-catalog walk.
   const hasFilter = opts.asinFilter != null && opts.asinFilter.size > 0;
-  const activeCond = hasFilter ? "TRUE" : "a.status = 'active'";
+  const activeCond = hasFilter ? "TRUE" : "a.status IN ('active', 'parked')"; // cron scope: decision 5, 2026-09-07
   const filterCond = hasFilter ? `AND a.asin = ANY($1::text[])` : "";
   const filterParams = opts.asinFilter && opts.asinFilter.size > 0 ? [Array.from(opts.asinFilter)] : undefined;
 
