@@ -59,6 +59,11 @@ const DEFAULT_COL_WIDTHS: Partial<Record<ColumnId, number>> = {
 import { type ColumnConfig } from "@/lib/columns";
 import { type FilterMode } from "@/components/summary-cards";
 import { ColumnFilterButton, type ColFilter, type FilterMap, type MultiSelectOption } from "@/components/column-filter";
+
+// Columns whose getRowValue is an ISO timestamp string (2026-09-08) — sort
+// comparators should Date.parse these, never string-compare the formatted
+// cell. Exported for the pages' sort logic.
+export const DATE_VALUE_COLS = new Set<ColumnId>(["dateAdded", "lastReviewed", "priceAge"]);
 import { useTagGroups, compareTagKeys } from "@/lib/use-tag-groups";
 import { submissionCategory } from "@/lib/submissions-api";
 import { TagEditor } from "@/components/tag-editor";
@@ -321,6 +326,8 @@ interface ResultsTableProps {
   onBulkTagsSave?: (asin: string, csvText: string | null) => Promise<{ tags: string[] }>;
   onBuyLinkSave?: (asin: string, url: string | null) => Promise<{ buyLink: string | null; supplier: string | null }>;
   onDateAddedSave?: (asin: string, value: string) => Promise<{ addedAt: string }>;
+  /** Columns to render with the generic date filter (presets + range) — §21 Bulk Calc opt-in. */
+  dateFilterCols?: Set<ColumnId>;
 }
 
 function fmt(value: number | null): string {
@@ -487,6 +494,7 @@ export function ResultsTable({
   onBulkTagsSave,
   onBuyLinkSave,
   onDateAddedSave,
+  dateFilterCols,
 }: ResultsTableProps) {
   const allResults = allResultsProp ?? results;
   const colMap = useMemo(() => new Map(columns.map((c) => [c.id, c])), [columns]);
@@ -722,6 +730,7 @@ export function ResultsTable({
                         onApply={onFilterApply}
                         onClear={() => onFilterClear(colId)}
                         multiSelectOptions={colId === "tags" ? tagOptions : colId === "supplier" ? supplierOptions : colId === "category" ? categoryOptions : colId === "sourcing" ? sourcingOptions : colId === "status" ? statusOptions : undefined}
+                        dateFilter={dateFilterCols?.has(colId)}
                       />
                     )}
                   </span>

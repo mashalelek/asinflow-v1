@@ -24,30 +24,13 @@ import { query } from "./db";
 import { log } from "./index";
 import { cleanBuyLink, extractDomain } from "@shared/schema";
 import type { AsinInput, AsinResult } from "@shared/schema";
+// Pure lead-date helpers live in bulk-lead-dates.ts (no Express-boot import
+// chain) — re-exported here so existing callers keep their import path.
+import { parseAddedAt, resolveAddedAt, extractPromoFromNotes } from "./bulk-lead-dates";
+export { parseAddedAt, resolveAddedAt, extractPromoFromNotes };
 import type { AnalyzeSink } from "./analyze-sink";
 
 const ASIN_RE = /^[A-Z0-9]{10}$/;
-
-// §21 Date Added backdate (2026-09-04): M/D/YYYY parses as LOCAL midnight
-// (the server runs in America/New_York — never UTC midnight, so 09/02/2026
-// renders 09/02/2026); ISO strings (what Export CSV emits for Date Added)
-// parse natively, so export → re-upload round-trips. Unparseable/absent →
-// null, caller falls back to NOW() — a bad date never fails the row.
-export function parseAddedAt(raw: string | null | undefined): Date | null {
-  const s = (raw ?? "").trim();
-  if (!s) return null;
-  const mdy = /^(\d{1,2})\/(\d{1,2})\/(\d{4})$/.exec(s);
-  if (mdy) {
-    const m = Number(mdy[1]), day = Number(mdy[2]), y = Number(mdy[3]);
-    const d = new Date(y, m - 1, day);
-    // JS Date rolls invalid components over (13/45 → Feb of next year) —
-    // reject unless the constructed date round-trips exactly.
-    if (d.getFullYear() !== y || d.getMonth() !== m - 1 || d.getDate() !== day) return null;
-    return d;
-  }
-  const iso = new Date(s);
-  return isNaN(iso.getTime()) ? null : iso;
-}
 
 // ── List CRUD ────────────────────────────────────────────────────────────────
 
@@ -79,7 +62,13 @@ export async function createBulkList(
       supplier: buyLink ? extractDomain(buyLink) : null,
       tags: input.tags && input.tags.length > 0 ? input.tags : null,
       promoNotes: input.promoNotes ? String(input.promoNotes).trim() || null : null,
-      addedAt: parseAddedAt(input.addedAtRaw),
+      addedAt: (() => {
+        const r = resolveAddedAt(input.addedAtRaw, input.notes);
+        if (r.source === "fallback") {
+          log(`bulk list "${name}": ${asin} added_at falls back to NOW() (raw=${JSON.stringify(r.raw)}, reason=${r.raw ? "unparseable" : "absent, no Notes lead date"})`, "bulk");
+        }
+        return r.date;
+      })(),
     });
   }
   if (rows.length === 0) {

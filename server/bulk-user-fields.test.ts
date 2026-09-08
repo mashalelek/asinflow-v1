@@ -36,3 +36,66 @@ describe("parseAddedAt — §21 Date Added backdate", () => {
     expect(parseAddedAt("13/45/2026")).toBeNull();
   });
 });
+
+// §21 resolution chain (2026-09-08): explicit column > Notes "Lead date
+// MM/DD/YYYY" > NOW()-fallback, one parser for both inputs. THREE DISTINCT
+// dates on purpose — the 42f0f42 same-date fixture couldn't distinguish
+// "parsed from CSV" from "everything stamped upload day".
+import { resolveAddedAt, extractPromoFromNotes } from "./bulk-lists";
+
+describe("resolveAddedAt — §21 lead-date resolution chain", () => {
+  const local = (m: number, d: number, y: number) => new Date(y, m - 1, d).getTime();
+
+  it("three DISTINCT column dates each land distinctly (column source)", () => {
+    const rows = [
+      resolveAddedAt("08/02/2026", "Lead date 09/02/2026 | stuff"),
+      resolveAddedAt("08/12/2026", "Lead date 09/02/2026 | stuff"),
+      resolveAddedAt("09/02/2026", "Lead date 09/02/2026 | stuff"),
+    ];
+    expect(rows.map((r) => r.source)).toEqual(["column", "column", "column"]);
+    expect(rows.map((r) => r.date!.getTime())).toEqual([
+      local(8, 2, 2026), local(8, 12, 2026), local(9, 2, 2026),
+    ]);
+    expect(new Set(rows.map((r) => r.date!.getTime())).size).toBe(3);
+  });
+
+  it("no column → Notes 'Lead date' regex, distinct dates, SAME parser (local midnight)", () => {
+    const rows = [
+      resolveAddedAt(null, "Lead date 08/02/2026 | Promo: X"),
+      resolveAddedAt("", "Lead date 08/12/2026 | notes"),
+      resolveAddedAt(undefined, "prefix | Lead date 09/02/2026"),
+    ];
+    expect(rows.map((r) => r.source)).toEqual(["notes", "notes", "notes"]);
+    expect(rows.map((r) => r.date!.getTime())).toEqual([
+      local(8, 2, 2026), local(8, 12, 2026), local(9, 2, 2026),
+    ]);
+    expect(rows[0].date!.getHours()).toBe(0); // local midnight, never UTC
+  });
+
+  it("explicit column beats the Notes date", () => {
+    const r = resolveAddedAt("08/02/2026", "Lead date 09/02/2026");
+    expect(r.source).toBe("column");
+    expect(r.date!.getTime()).toBe(local(8, 2, 2026));
+  });
+
+  it("unparseable column falls through to Notes; both bad → fallback with raw preserved", () => {
+    expect(resolveAddedAt("13/45/2026", "Lead date 09/02/2026").source).toBe("notes");
+    const f = resolveAddedAt("garbage", "no lead date here");
+    expect(f).toEqual({ date: null, source: "fallback", raw: "garbage" });
+    expect(resolveAddedAt(null, null)).toEqual({ date: null, source: "fallback", raw: null });
+    // Rollover-rejecting parser applies to the Notes leg too — one parser.
+    expect(resolveAddedAt(null, "Lead date 13/45/2026").source).toBe("fallback");
+  });
+});
+
+describe("extractPromoFromNotes — explicit value only", () => {
+  it("takes the value up to the next ' | ' delimiter", () => {
+    expect(extractPromoFromNotes("Lead date 09/02/2026 | Promo: WELCOME | Newly listed")).toBe("WELCOME");
+  });
+  it("value at end of string works; absent/empty → null, never guesses", () => {
+    expect(extractPromoFromNotes("stuff | Promo: SAVE20")).toBe("SAVE20");
+    expect(extractPromoFromNotes("no promos mentioned")).toBeNull();
+    expect(extractPromoFromNotes("stuff | Promo:  | more")).toBeNull();
+    expect(extractPromoFromNotes(null)).toBeNull();
+  });
+});

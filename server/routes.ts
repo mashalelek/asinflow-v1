@@ -3272,12 +3272,18 @@ export async function registerRoutes(
 
   // Analyze a user-supplied list of ASINs (typically from a fresh CSV upload).
   app.post("/api/analyze", async (req: Request, res: Response) => {
-    const { asins } = req.body as { asins: AsinInput[] };
+    const { asins: asinsRaw } = req.body as { asins: AsinInput[] };
 
-    if (!asins || !Array.isArray(asins) || asins.length === 0) {
+    if (!asinsRaw || !Array.isArray(asinsRaw) || asinsRaw.length === 0) {
       res.status(400).json({ message: "No ASINs provided" });
       return;
     }
+    // §21 asymmetry guard (2026-09-08): the MAIN upload path parses promos +
+    // dateAdded (shared mapper) but never writes them — promos here come only
+    // from the sourcing sheet (its route passes its own inputs and keeps Col
+    // O), and asins has no backdatable added_at. Before the mapping-modal fix
+    // the modal dropped both keys, so this held by accident; now it's explicit.
+    const asins: AsinInput[] = asinsRaw.map((a) => ({ ...a, promoNotes: null, addedAtRaw: null }));
 
     res.setHeader("Content-Type", "application/x-ndjson");
     res.setHeader("Transfer-Encoding", "chunked");

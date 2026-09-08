@@ -3037,16 +3037,39 @@ ever wired to a live call site, it must remain unwired on this page.
   on the MAIN page promo_notes still comes ONLY from the sourcing sheet —
   the new CSV alias is parsed but ignored on the main path. Do not "fix"
   this without deciding to.
-- Date Added (2026-09-04): when the CSV mapping includes a Date Added
-  column (aliases: date added/dateadded/added/date — safe because alias
-  matching is exact on the normalized header), the value is written into
-  `added_at` (M/D/YYYY parsed as LOCAL midnight — America/New_York in this
-  deployment — never UTC midnight, so 09/02/2026 renders 09/02/2026; ISO
-  timestamps also accepted, which is what Export CSV emits, so
-  export → re-upload round-trips). Absent/unparseable → NOW(), the row
-  never fails. Inline date editor on the cell. Snapshot-age display uses
-  fetched_at, so a backdated row never looks stale; added_at drives only
-  the row ORDER BY.
+- Date Added (2026-09-04; meaning pinned 2026-09-08): on Bulk Calc,
+  **Date Added IS the lead date** — the day the ASIN appeared on the
+  Spark leads list. It is NOT the upload timestamp (upload time is not
+  something this page needs to show), and it stays one column
+  (`added_at`), not a separate lead_date. When the CSV mapping includes a
+  Date Added column (aliases: date added/dateadded/added/date — safe
+  because alias matching is exact on the normalized header), the value is
+  written into `added_at` (M/D/YYYY parsed as LOCAL midnight —
+  America/New_York in this deployment — never UTC midnight, so 09/02/2026
+  renders 09/02/2026; ISO timestamps also accepted, which is what Export
+  CSV emits, so export → re-upload round-trips). Resolution chain
+  (2026-09-08): explicit Date Added column > Notes
+  "Lead date MM/DD/YYYY" regex (both inputs go through the SAME
+  parseAddedAt — one parser, two inputs) > NOW(). Every NOW() fallback
+  logs one per-row line (raw value + reason) so a silent upload-day stamp
+  can't go unnoticed again. Inline date editor on the cell. Snapshot-age
+  display uses fetched_at, so a backdated row never looks stale.
+  Sortable (asc/desc on the actual timestamp — date-typed columns compare
+  via Date.parse, never the formatted string) and filterable via the
+  generic date filter type (presets Today / Last 7 days / Last 30 days +
+  custom from/to; counts toward the active-filter badge; Export CSV
+  respects it through the standard filtered-rows/selected-rows rule).
+  Bulk Calc opts `dateAdded` into the date filter type per-page; the main
+  page's existing filter behavior is untouched (§21 isolation).
+- Mapping-modal serialization (2026-09-08 regression): the modal builds
+  its outgoing ColumnMapping FROM the MAPPING_FIELDS list generically —
+  never a hand-typed field literal. The 42f0f42 bug: promos/dateAdded were
+  in the field list (auto-matched, green check) but dropped by
+  handleContinue's literal, optional in the type so tsc stayed silent, and
+  every downstream layer nulled gracefully → silent NOW() on all rows. A
+  completeness test pins builder-emits-every-field-key, and pins that the
+  MAIN path keeps ignoring promos/dateAdded (parses, never writes — the
+  deliberate asymmetry above).
 - Everything else: the analyze pipeline via the bulk sink. The bulk sink's
   UPDATE never touches any user-controlled field above — Refresh Prices is
   column-scoped to the analyze snapshot, so they persist.

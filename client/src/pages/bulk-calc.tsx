@@ -10,7 +10,7 @@ import {
   Select, SelectContent, SelectItem, SelectTrigger, SelectValue,
 } from "@/components/ui/select";
 import { Tooltip, TooltipTrigger, TooltipContent } from "@/components/ui/tooltip";
-import { ResultsTable, getRowValue } from "@/components/results-table";
+import { ResultsTable, getRowValue, DATE_VALUE_COLS } from "@/components/results-table";
 import { matchesFilters, type FilterMap } from "@/components/column-filter";
 import { ColumnManager } from "@/components/column-manager";
 import { ExportButtons } from "@/components/export-buttons";
@@ -48,6 +48,7 @@ const BULK_COLUMN_IDS = new Set<ColumnId>([
 // visible (like supplierSku) — these fields are this page's import payload,
 // and Export CSV carries visible columns only (§21).
 const BULK_DEFAULT_VISIBLE = new Set<ColumnId>(["supplierSku", "promos", "dateAdded"]);
+const BULK_DATE_FILTER_COLS = new Set<ColumnId>(["dateAdded"]); // §21 date filter opt-in (2026-09-08)
 const BULK_COLUMNS = ALL_COLUMNS.filter((c) => BULK_COLUMN_IDS.has(c.id))
   .map((c) => (BULK_DEFAULT_VISIBLE.has(c.id) ? { ...c, defaultVisible: true } : c));
 const BULK_COLUMNS_KEY = "fba-bulk-column-config";
@@ -391,6 +392,12 @@ export default function BulkCalc() {
       if (va == null) return 1;
       if (vb == null) return -1;
       if (typeof va === "number" && typeof vb === "number") return (va - vb) * dir;
+      // Date-valued columns sort on the actual timestamp (2026-09-08) —
+      // never the formatted string.
+      if (DATE_VALUE_COLS.has(sortCol)) {
+        const ta = new Date(String(va)).getTime(), tb = new Date(String(vb)).getTime();
+        if (!isNaN(ta) && !isNaN(tb)) return (ta - tb) * dir;
+      }
       return String(va).localeCompare(String(vb)) * dir;
     });
   }, [results, sortCol, sortDir, settings, colFilters]);
@@ -529,6 +536,7 @@ export default function BulkCalc() {
           })}
           onSelectAllPage={(asins) => setSelectedSet(new Set(asins))}
           onClearSelection={() => setSelectedSet(new Set())}
+          dateFilterCols={BULK_DATE_FILTER_COLS}
           sortCol={sortCol}
           sortDir={sortDir}
           onSort={handleSort}

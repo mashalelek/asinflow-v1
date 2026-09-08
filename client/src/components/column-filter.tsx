@@ -23,7 +23,7 @@ export interface MultiSelectOption {
   group?: string; // options are pre-sorted; a group header renders when this changes
 }
 
-type FilterType = "numeric" | "text" | "tags" | "supplier" | "boolean" | "reviewed" | "submission";
+type FilterType = "numeric" | "text" | "tags" | "supplier" | "boolean" | "reviewed" | "submission" | "date";
 
 const NUMERIC_COLS = new Set<ColumnId>([
   "cogs", "estCogs", "salePrice", "profit", "margin", "roi",
@@ -92,12 +92,26 @@ const PRICE_AGE_OPS = [
   { value: "newerThan", label: "Within last X days" },
 ];
 
+// §21 generic date filter (2026-09-08): presets + custom range on any
+// date-valued column. Operators are self-describing ("date_*") so
+// matchesFilters needs no per-page context; pages opt a column in via the
+// dateFilter prop (Bulk Calc does for dateAdded — the main page's existing
+// filter behavior is untouched).
+const DATE_OPS = [
+  { value: "date_today", label: "Today" },
+  { value: "date_last7", label: "Last 7 days" },
+  { value: "date_last30", label: "Last 30 days" },
+  { value: "date_range", label: "Custom range" },
+];
+
 interface ColumnFilterProps {
   colId: ColumnId;
   currentFilter: ColFilter | undefined;
   onApply: (filter: ColFilter) => void;
   onClear: () => void;
   multiSelectOptions?: MultiSelectOption[];
+  /** Opt this column into the generic date filter type (presets + range). */
+  dateFilter?: boolean;
 }
 
 // ── Multi-select checkbox list (used for tags and supplier) ──────────
@@ -233,14 +247,15 @@ function MultiSelectFilter({
   );
 }
 
-export function ColumnFilterButton({ colId, currentFilter, onApply, onClear, multiSelectOptions }: ColumnFilterProps) {
+export function ColumnFilterButton({ colId, currentFilter, onApply, onClear, multiSelectOptions, dateFilter }: ColumnFilterProps) {
   const [open, setOpen] = useState(false);
-  const filterType = getFilterType(colId);
+  const filterType: FilterType = dateFilter ? "date" : getFilterType(colId);
   const isMultiSelect = filterType === "tags" || filterType === "supplier";
   const ops = filterType === "numeric" ? NUMERIC_OPS
+    : filterType === "date" ? DATE_OPS
     : filterType === "reviewed" ? (colId === "priceAge" ? PRICE_AGE_OPS : REVIEWED_OPS)
     : TEXT_OPS;
-  const defaultOp = filterType === "numeric" ? "gt" : filterType === "reviewed" ? "never" : "contains";
+  const defaultOp = filterType === "numeric" ? "gt" : filterType === "date" ? "date_last7" : filterType === "reviewed" ? "never" : "contains";
 
   const [op, setOp] = useState(currentFilter?.operator ?? defaultOp);
   const [val, setVal] = useState(currentFilter?.value ?? "");
@@ -251,6 +266,18 @@ export function ColumnFilterButton({ colId, currentFilter, onApply, onClear, mul
   function handleApply() {
     if (op === "never") {
       onApply({ colId, operator: op, value: "never" });
+      setOpen(false);
+      return;
+    }
+    // Date presets carry no input; the range needs both bounds.
+    if (op === "date_today" || op === "date_last7" || op === "date_last30") {
+      onApply({ colId, operator: op, value: op });
+      setOpen(false);
+      return;
+    }
+    if (op === "date_range") {
+      if (!val.trim() || !val2.trim()) return;
+      onApply({ colId, operator: op, value: val.trim(), value2: val2.trim() });
       setOpen(false);
       return;
     }
@@ -303,6 +330,27 @@ export function ColumnFilterButton({ colId, currentFilter, onApply, onClear, mul
             onClear={onClear}
             onClose={() => setOpen(false)}
           />
+        ) : filterType === "date" ? (
+          <>
+            <Select value={op} onValueChange={setOp}>
+              <SelectTrigger className="h-8 text-xs" data-testid={`select-date-op-${colId}`}><SelectValue /></SelectTrigger>
+              <SelectContent>
+                {ops.map((o) => (
+                  <SelectItem key={o.value} value={o.value}>{o.label}</SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+            {op === "date_range" && (
+              <div className="space-y-1">
+                <Input type="date" value={val} onChange={(e) => setVal(e.target.value)} className="h-8 text-xs" data-testid={`input-date-from-${colId}`} />
+                <Input type="date" value={val2} onChange={(e) => setVal2(e.target.value)} className="h-8 text-xs" data-testid={`input-date-to-${colId}`} />
+              </div>
+            )}
+            <div className="flex gap-1.5 pt-1">
+              <Button size="sm" className="h-7 text-xs flex-1" onClick={handleApply}>Apply</Button>
+              {isActive && <Button size="sm" variant="outline" className="h-7 text-xs" onClick={handleClear}>Clear</Button>}
+            </div>
+          </>
         ) : filterType === "reviewed" ? (
           <>
             <Select value={op} onValueChange={(v) => { setOp(v); if (v === "never") { setVal("never"); } }}>
@@ -418,6 +466,30 @@ export function matchesFilters(
   for (const f of Object.values(filters)) {
     const raw = getValueFn(f.colId as ColumnId);
     const filterType = getFilterType(f.colId as ColumnId);
+
+    // Generic date operators (2026-09-08) — self-describing, so they work
+    // regardless of the column's page-level type. Raw must parse as a date;
+    // null/unparseable never matches a date filter.
+    if (typeof f.operator === "string" && f.operator.startsWith("date_")) {
+      const ts = raw != null ? new Date(String(raw)).getTime() : NaN;
+      if (isNaN(ts)) return false;
+      const now = new Date();
+      if (f.operator === "date_today") {
+        const d = new Date(ts);
+        if (d.getFullYear() !== now.getFullYear() || d.getMonth() !== now.getMonth() || d.getDate() !== now.getDate()) return false;
+      } else if (f.operator === "date_last7" || f.operator === "date_last30") {
+        const days = f.operator === "date_last7" ? 7 : 30;
+        if (ts < Date.now() - days * 86400000) return false;
+      } else if (f.operator === "date_range") {
+        // yyyy-mm-dd bounds parsed as LOCAL days, inclusive on both ends.
+        const parseLocal = (s: string) => { const p = s.split("-").map(Number); return new Date(p[0], p[1] - 1, p[2]); };
+        const from = parseLocal(f.value).getTime();
+        const to = parseLocal(f.value2 ?? f.value).getTime() + 86400000;
+        if (isNaN(from) || isNaN(to)) return false;
+        if (ts < from || ts >= to) return false;
+      }
+      continue;
+    }
 
     // §6 Submission column: categorical eq — value is the category string
     // ("flags" | "failed" | "clean" | "none"); null raw = "none".
