@@ -69,7 +69,11 @@ export function startBulkRun(
   opts: { scope: "failed" | "all"; asins?: string[] },
 ): { busy: true; since: string } | { busy: false; state: BulkRunState } {
   const existing = activeRuns.get(listId);
-  if (existing) return { busy: true, since: existing.state.startedAt };
+  // Only a LIVE run blocks; a terminal state lingering for re-attach
+  // (60 s window) must never refuse the next run.
+  if (existing && existing.state.stage !== "done" && existing.state.stage !== "failed") {
+    return { busy: true, since: existing.state.startedAt };
+  }
 
   const state: BulkRunState = {
     listId, startedAt: new Date().toISOString(),
