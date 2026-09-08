@@ -323,6 +323,7 @@ interface ResultsTableProps {
   // REPLACE the main-page editors for their columns — the main TagEditor and
   // the main /api/asins promos endpoint are never used on the bulk page.
   promosSaveUrl?: (asin: string) => string;
+  notesSaveUrl?: (asin: string) => string;                 // NoteEditor save target for the Notes cell (§21 bulk: bulk_list_asins.notes, never asins)
   onBulkTagsSave?: (asin: string, csvText: string | null) => Promise<{ tags: string[] }>;
   onBuyLinkSave?: (asin: string, url: string | null) => Promise<{ buyLink: string | null; supplier: string | null }>;
   onDateAddedSave?: (asin: string, value: string) => Promise<{ addedAt: string }>;
@@ -491,6 +492,7 @@ export function ResultsTable({
   cogsSaveUrl,
   onSupplierSkuSave,
   promosSaveUrl,
+  notesSaveUrl,
   onBulkTagsSave,
   onBuyLinkSave,
   onDateAddedSave,
@@ -697,8 +699,14 @@ export function ResultsTable({
                 <Clock className="h-3 w-3 text-muted-foreground" />
               </div>
             </th>
+            {/* Product th maxWidth matches the body td (2026-09-08): without
+                it the product column was the ONLY column with an unconstrained
+                max, so w-full auto-layout dumped all stretch surplus into it
+                and its sticky cell painted over the first data column (the
+                clipped-Brand screenshot on Bulk Calc, which shows fewer
+                columns and therefore more surplus). */}
             {productVisible && (
-              <th className="sticky z-30 table-header-stone text-left text-xs font-medium px-2 py-2 relative" style={{ left: productLeft, width: colWidths["product"] ?? DEFAULT_COL_WIDTHS.product, minWidth: 200, borderRight: "0.5px solid hsl(var(--border))" }}>
+              <th className="sticky z-30 table-header-stone text-left text-xs font-medium px-2 py-2 relative" style={{ left: productLeft, width: colWidths["product"] ?? DEFAULT_COL_WIDTHS.product, minWidth: 200, maxWidth: colWidths["product"] ?? DEFAULT_COL_WIDTHS.product, borderRight: "2px solid hsl(var(--border))" }}>
                 Product
                 <ResizeHandle onMouseDown={(e) => handleResizeStart(e, "product")} />
               </th>
@@ -810,7 +818,7 @@ export function ResultsTable({
                   </div>
                 </td>
                 {productVisible && (
-                  <td className={`sticky z-10 px-2 py-1.5 overflow-hidden ${frozenBg}`} style={{ left: productLeft, width: colWidths["product"] ?? DEFAULT_COL_WIDTHS.product, minWidth: 200, maxWidth: colWidths["product"] ?? DEFAULT_COL_WIDTHS.product, borderRight: "0.5px solid hsl(var(--border))" }}>
+                  <td className={`sticky z-10 px-2 py-1.5 overflow-hidden ${frozenBg}`} style={{ left: productLeft, width: colWidths["product"] ?? DEFAULT_COL_WIDTHS.product, minWidth: 200, maxWidth: colWidths["product"] ?? DEFAULT_COL_WIDTHS.product, borderRight: "2px solid hsl(var(--border))" }}>
                     <ProductCell result={result} price={price} settings={settings} onResultUpdate={onResultUpdate} collisionBoundary={scrollEl} productBadge={productBadge} cogsSaveUrl={cogsSaveUrl} />
                   </td>
                 )}
@@ -889,6 +897,7 @@ export function ResultsTable({
                         asin={result.asin}
                         currentNote={result.notes ?? null}
                         onNoteChanged={(notes) => onResultUpdate(result.asin, { notes })}
+                        saveUrl={notesSaveUrl ? notesSaveUrl(result.asin) : undefined}
                       />
                     );
                   } else if (colId === "promos" && onResultUpdate) {

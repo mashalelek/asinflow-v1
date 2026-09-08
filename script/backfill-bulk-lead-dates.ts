@@ -1,5 +1,6 @@
-// §21 scoped backfill (2026-09-08): restore added_at (lead date) and
-// promo_notes on ONE bulk list whose upload predates the mapping-modal fix
+// §21 scoped backfill (2026-09-08): restore added_at (lead date),
+// promo_notes, and notes on ONE bulk list whose upload predates the
+// mapping-modal fix / the bulk-local Notes column (migration 034)
 // (the 42f0f42 handleContinue literal dropped promos/dateAdded, so every
 // row got NOW() and NULL promos). Values come from the original CSV —
 // explicit Date Added / Promos columns first, Notes "Lead date"/"Promo:"
@@ -10,8 +11,8 @@
 //   npx tsx script/backfill-bulk-lead-dates.ts --list <name> --csv <path> --mode dry
 //   npx tsx script/backfill-bulk-lead-dates.ts --list <name> --csv <path> --mode apply
 //
-// Writes bulk_list_asins.added_at / promo_notes ONLY (never overwrites an
-// existing promo_notes; §21 isolation — no main-catalog tables).
+// Writes bulk_list_asins.added_at / promo_notes / notes ONLY (never
+// overwrites an existing promo or note; §21 isolation — no main tables).
 import { readFileSync } from "fs";
 import { query } from "../server/db";
 // bulk-lead-dates, NOT bulk-lists: bulk-lists pulls server/index which
@@ -64,17 +65,19 @@ async function main() {
     });
   }
 
-  const dbRows = await query(`SELECT asin, added_at, promo_notes FROM bulk_list_asins WHERE list_id = $1 ORDER BY asin`, [listId]);
-  let dateSet = 0, promoSet = 0, promoKept = 0, noSource = 0, notInCsv = 0;
-  const plan: Array<{ asin: string; beforeDate: string; afterDate: string | null; source: string; beforePromo: string | null; afterPromo: string | null }> = [];
+  const dbRows = await query(`SELECT asin, added_at, promo_notes, notes FROM bulk_list_asins WHERE list_id = $1 ORDER BY asin`, [listId]);
+  let dateSet = 0, promoSet = 0, promoKept = 0, notesSet = 0, notesKept = 0, noSource = 0, notInCsv = 0;
+  const plan: Array<{ asin: string; beforeDate: string; afterDate: string | null; source: string; beforePromo: string | null; afterPromo: string | null; beforeNotes: string | null; afterNotes: string | null }> = [];
   for (const db of dbRows.rows) {
     const src = byAsin.get(db.asin);
     if (!src) { notInCsv++; continue; }
     const r = resolveAddedAt(src.addedAtRaw, src.notes);
     const promo = src.promos ?? extractPromoFromNotes(src.notes);
     const afterPromo = db.promo_notes ?? promo; // never overwrite an existing promo
+    const afterNotes = db.notes ?? src.notes;   // never overwrite an existing note
     if (r.date) dateSet++; else noSource++;
     if (afterPromo && !db.promo_notes) promoSet++; else if (db.promo_notes) promoKept++;
+    if (afterNotes && !db.notes) notesSet++; else if (db.notes) notesKept++;
     plan.push({
       asin: db.asin,
       beforeDate: new Date(db.added_at).toISOString(),
@@ -82,12 +85,14 @@ async function main() {
       source: r.source,
       beforePromo: db.promo_notes,
       afterPromo,
+      beforeNotes: db.notes,
+      afterNotes,
     });
   }
 
-  console.log(`list "${listName}" (${listId}): ${dbRows.rows.length} rows | date from csv: ${dateSet}, no source (kept as-is): ${noSource}, not in csv: ${notInCsv} | promos to set: ${promoSet}, existing kept: ${promoKept}`);
+  console.log(`list "${listName}" (${listId}): ${dbRows.rows.length} rows | date from csv: ${dateSet}, no source (kept as-is): ${noSource}, not in csv: ${notInCsv} | promos to set: ${promoSet}, existing kept: ${promoKept} | notes to set: ${notesSet}, existing kept: ${notesKept}`);
   for (const p of plan.slice(0, 8)) {
-    console.log(`  ${p.asin}: added_at ${p.beforeDate.slice(0, 10)} -> ${p.afterDate ? p.afterDate.slice(0, 10) : "(unchanged)"} [${p.source}] | promo ${JSON.stringify(p.beforePromo)} -> ${JSON.stringify(p.afterPromo)}`);
+    console.log(`  ${p.asin}: added_at ${p.beforeDate.slice(0, 10)} -> ${p.afterDate ? p.afterDate.slice(0, 10) : "(unchanged)"} [${p.source}] | promo ${JSON.stringify(p.beforePromo)} -> ${JSON.stringify(p.afterPromo)} | notes ${JSON.stringify(p.beforeNotes)} -> ${JSON.stringify((p.afterNotes ?? "").slice(0, 40) || null)}`);
   }
   if (plan.length > 8) console.log(`  … ${plan.length - 8} more`);
 
@@ -95,10 +100,10 @@ async function main() {
 
   let updated = 0;
   for (const p of plan) {
-    if (!p.afterDate && p.afterPromo === p.beforePromo) continue;
+    if (!p.afterDate && p.afterPromo === p.beforePromo && p.afterNotes === p.beforeNotes) continue;
     await query(
-      `UPDATE bulk_list_asins SET added_at = COALESCE($3, added_at), promo_notes = COALESCE(promo_notes, $4) WHERE list_id = $1 AND asin = $2`,
-      [listId, p.asin, p.afterDate, p.afterPromo],
+      `UPDATE bulk_list_asins SET added_at = COALESCE($3, added_at), promo_notes = COALESCE(promo_notes, $4), notes = COALESCE(notes, $5) WHERE list_id = $1 AND asin = $2`,
+      [listId, p.asin, p.afterDate, p.afterPromo, p.afterNotes],
     );
     updated++;
   }

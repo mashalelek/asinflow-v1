@@ -43,7 +43,7 @@ export async function createBulkList(
   const rows: Array<{
     asin: string; cogs: number | null; supplierSku: string | null;
     buyLink: string | null; supplier: string | null;
-    tags: string[] | null; promoNotes: string | null; addedAt: Date | null;
+    tags: string[] | null; promoNotes: string | null; notes: string | null; addedAt: Date | null;
   }> = [];
   let skippedInvalid = 0;
   for (const input of inputs) {
@@ -62,6 +62,9 @@ export async function createBulkList(
       supplier: buyLink ? extractDomain(buyLink) : null,
       tags: input.tags && input.tags.length > 0 ? input.tags : null,
       promoNotes: input.promoNotes ? String(input.promoNotes).trim() || null : null,
+      // §21 bulk-local Notes (2026-09-08): stored verbatim — the SAME value
+      // the lead-date fallback below reads.
+      notes: input.notes ? String(input.notes).trim() || null : null,
       addedAt: (() => {
         const r = resolveAddedAt(input.addedAtRaw, input.notes);
         if (r.source === "fallback") {
@@ -87,10 +90,10 @@ export async function createBulkList(
   for (const row of rows) {
     await query(
       `INSERT INTO bulk_list_asins (list_id, asin, estimated_cogs, estimated_cogs_source, supplier_sku,
-                                    buy_link, supplier, tags, promo_notes, added_at)
-       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, COALESCE($10, NOW()))`,
+                                    buy_link, supplier, tags, promo_notes, notes, added_at)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, COALESCE($11, NOW()))`,
       [listId, row.asin, row.cogs, row.cogs != null ? "csv" : null, row.supplierSku,
-       row.buyLink, row.supplier, row.tags, row.promoNotes, row.addedAt],
+       row.buyLink, row.supplier, row.tags, row.promoNotes, row.notes, row.addedAt],
     );
   }
 

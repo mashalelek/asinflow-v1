@@ -3917,6 +3917,24 @@ export async function registerRoutes(
     } catch (err: any) { res.status(500).json({ message: err.message }); }
   });
 
+  // §21 bulk-local Notes (2026-09-08) — same contract as promos: manual
+  // edit only, the bulk sink never touches it.
+  app.put("/api/bulk-lists/:id/asins/:asin/notes", async (req: Request, res: Response) => {
+    if (!isDbAvailable()) { res.status(503).json({ message: "Database not available" }); return; }
+    const listId = typeof req.params.id === "string" ? req.params.id : "";
+    const asin = (typeof req.params.asin === "string" ? req.params.asin : "").toUpperCase();
+    const raw = (req.body ?? {}).notes;
+    if (raw != null && typeof raw !== "string") { res.status(400).json({ message: "notes must be a string or null" }); return; }
+    try {
+      const updated = await query(
+        `UPDATE bulk_list_asins SET notes = $3 WHERE list_id = $1 AND asin = $2 RETURNING notes`,
+        [listId, asin, raw ? String(raw).trim() || null : null],
+      );
+      if ((updated.rowCount ?? 0) === 0) { res.status(404).json({ message: "Row not found in list" }); return; }
+      res.json({ notes: updated.rows[0].notes ?? null });
+    } catch (err: any) { res.status(500).json({ message: err.message }); }
+  });
+
   app.put("/api/bulk-lists/:id/asins/:asin/promos", async (req: Request, res: Response) => {
     if (!isDbAvailable()) { res.status(503).json({ message: "Database not available" }); return; }
     const listId = typeof req.params.id === "string" ? req.params.id : "";

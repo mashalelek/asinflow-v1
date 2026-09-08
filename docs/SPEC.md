@@ -1883,8 +1883,8 @@ refresh) refreshes Amazon-side data ONLY.
 - `is_wholesale`, `is_oa`
 - `status` / `status_reason` (except the named auto-dead writers above)
 - On `bulk_list_asins` (§21, 2026-09-04): `buy_link`, `supplier`, `tags`,
-  `promo_notes`, `added_at`, `supplier_sku`, `estimated_cogs` — the bulk
-  sink never writes, clears, or overwrites them
+  `promo_notes`, `notes` (2026-09-08), `added_at`, `supplier_sku`,
+  `estimated_cogs` — the bulk sink never writes, clears, or overwrites them
 
 Violations of this rule have caused recurring "COGS clears on analyze" bugs.
 When in doubt, the analyze path should leave the field alone.
@@ -2949,7 +2949,8 @@ mounted on this page.
   (TEXT[] — free-text labels, deliberately NOT a join table: there is no FK
   target by design, no cross-list tag queries exist, and a join table would
   re-create the exact shape the isolation guarantee forbids linking to),
-  promo_notes.
+  promo_notes, notes (migration 034, 2026-09-08 — bulk-local Spark
+  commentary; same pattern as promo_notes).
   UNIQUE(list_id, asin).
 
 No `has_live_offer` column — account state is out of scope (see `in_database`
@@ -3098,10 +3099,17 @@ Subset of `COLUMN_GROUPS`:
   main-page tags/promos; a Tags filter dropdown is wired here too)
 
 Excluded: the entire **Stock** and **Actuals** groups (no inventory or sales
-data path; empty Actuals columns would violate honest labeling, §14). Notes
-and Sourcing are excluded — no data source on this page. Export CSV carries
-Tags (comma-joined — re-imports through the same split), Promos, Date
-Added, and Supplier.
+data path; empty Actuals columns would violate honest labeling, §14).
+Sourcing is excluded — no data source on this page. Notes moved OFF this
+list 2026-09-08: it is a bulk-local column now (Additional info group,
+default visible here like Promos; `bulk_list_asins.notes`, unrelated to
+`asins.notes`) — the CSV Notes column carries the Spark commentary, and
+the lead-date fallback regex reads the SAME stored value. CSV or inline
+edit only (§14 user-controlled); the bulk sink never writes or clears it;
+survives Refresh Prices. Truncate-with-hover render like the main Notes
+cell. Export CSV carries Tags (comma-joined — re-imports through the same
+split), Promos, Date Added, Supplier, and Notes (header "Notes",
+alias-recognized — export → re-upload round-trips).
 
 No date-range selector: nothing here is range-scoped.
 

@@ -37,9 +37,9 @@ const BULK_COLUMN_IDS = new Set<ColumnId>([
   "estCogs", "prep", "salePrice", "profit", "roi", "margin",
   "fbaFee", "referralFee", "inboundShipping", "storage", "maxCogs",
   "sellersFba", "sellers", "sellers7d", "sellers30d", "fba7d", "fba30d",
-  // tags + promos are BULK-LOCAL fields (§21, 2026-09-04) — free text on the
-  // bulk row, unrelated to main-page tags/promos.
-  "tags", "promos", "meltable", "hazmat", "suppressed", "dateAdded",
+  // tags + promos + notes are BULK-LOCAL fields (§21, 2026-09-04 / notes
+  // 2026-09-08) — free text on the bulk row, unrelated to the main page's.
+  "tags", "promos", "notes", "meltable", "hazmat", "suppressed", "dateAdded",
 ]);
 // supplierSku is defaultVisible:false on the MAIN page (not in any preset);
 // on the bulk page it defaults visible — supplier sheets are the input here
@@ -47,7 +47,7 @@ const BULK_COLUMN_IDS = new Set<ColumnId>([
 // promos/dateAdded default hidden on the MAIN page; here they default
 // visible (like supplierSku) — these fields are this page's import payload,
 // and Export CSV carries visible columns only (§21).
-const BULK_DEFAULT_VISIBLE = new Set<ColumnId>(["supplierSku", "promos", "dateAdded"]);
+const BULK_DEFAULT_VISIBLE = new Set<ColumnId>(["supplierSku", "promos", "notes", "dateAdded"]);
 const BULK_DATE_FILTER_COLS = new Set<ColumnId>(["dateAdded"]); // §21 date filter opt-in (2026-09-08)
 const BULK_COLUMNS = ALL_COLUMNS.filter((c) => BULK_COLUMN_IDS.has(c.id))
   .map((c) => (BULK_DEFAULT_VISIBLE.has(c.id) ? { ...c, defaultVisible: true } : c));
@@ -98,6 +98,7 @@ function mapBulkRow(row: any): AsinResult {
     // color by design — the shared chip renderer falls back to #64748b).
     tags: Array.isArray(row.tags) ? row.tags.map((name: string) => ({ name, color: "#64748b" })) : [],
     promoNotes: row.promo_notes ?? null,
+    notes: row.notes ?? null,
     pricingData,
     feesData: {
       fbaFulfillmentFee: num(row.fba_fee),
@@ -447,6 +448,7 @@ export default function BulkCalc() {
   const onBuyLinkSave = useCallback((asin: string, url: string | null) => bulkPut(asin, "buy-link", { buy_link: url }), [bulkPut]);
   const onDateAddedSave = useCallback((asin: string, value: string) => bulkPut(asin, "date-added", { added_at: value }), [bulkPut]);
   const promosSaveUrl = useCallback((asin: string) => `/api/bulk-lists/${selectedListId}/asins/${asin}/promos`, [selectedListId]);
+  const notesSaveUrl = useCallback((asin: string) => `/api/bulk-lists/${selectedListId}/asins/${asin}/notes`, [selectedListId]);
 
   const onSupplierSkuSave = useCallback(async (asin: string, value: string | null) => {
     const res = await fetch(`/api/bulk-lists/${selectedListId}/asins/${asin}/supplier-sku`, {
@@ -546,6 +548,7 @@ export default function BulkCalc() {
           cogsSaveUrl={cogsSaveUrl}
           onSupplierSkuSave={onSupplierSkuSave}
           promosSaveUrl={promosSaveUrl}
+          notesSaveUrl={notesSaveUrl}
           onBulkTagsSave={onBulkTagsSave}
           onBuyLinkSave={onBuyLinkSave}
           onDateAddedSave={onDateAddedSave}
