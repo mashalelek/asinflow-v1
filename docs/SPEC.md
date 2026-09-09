@@ -523,11 +523,13 @@ A sub-nav strip below the top nav will be added when the PO module ships
 
 ### ASINs-page toolbar (order + names, 2026-09-07)
 
-**Label uniqueness (standing rule, 2026-09-09): a button label names
-exactly one job, app-wide.** Two buttons that do different things never
-share a label, and a renamed job's old label is retired, not reused for
-something else. Any new or renamed button must be grepped against every
-existing button/menu label before commit.
+**Label uniqueness (standing rule, 2026-09-09; corrected same day): a
+button label names exactly one job AT A TIME, app-wide.** The same word
+must never be live on two different jobs simultaneously; a label freed by
+a rename may be reused (Bulk Calc's "Refresh" reuses the ASINs page's
+pre-09-07 label — correct under this rule). Any new or renamed button
+must be grepped against every existing button/menu label before commit,
+and collisions reported.
 
 Left group, in this exact order — renamed by the data each button updates,
 the two sync jobs sharing the `RefreshCw` two-arrows icon so they read as a

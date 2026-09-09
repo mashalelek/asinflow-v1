@@ -1636,12 +1636,26 @@ export function renderCell(
           : null;
         if (label == null) return <span className="text-muted-foreground text-sm">—</span>;
         const benign = label === "No offers";
-        return (
+        const badge = (
           <span className={`flex items-center gap-1 justify-end text-sm ${benign ? "text-muted-foreground" : "text-destructive"}`} data-testid={`text-price-outcome-${result.asin}`}>
             {!benign && <AlertTriangle className="h-3 w-3" />}
             {label}
           </span>
         );
+        if (label === "Not found") {
+          // Verified 2026-09-09: every "Not found" here is Amazon-side —
+          // well-formed ASINs absent from the catalog with pricing 400
+          // InvalidInput. Format rejects never reach a row (createBulkList
+          // skips them at import as skippedInvalid), so the "rejected
+          // before lookup" variant is unreachable for stored rows.
+          return (
+            <Tooltip>
+              <TooltipTrigger asChild>{badge}</TooltipTrigger>
+              <TooltipContent side="top"><p className="text-xs">Not in Amazon's catalog (deactivated or removed)</p></TooltipContent>
+            </Tooltip>
+          );
+        }
+        return badge;
       }
       if (hasError) {
         const isRestricted = result.error?.includes("Restricted");
