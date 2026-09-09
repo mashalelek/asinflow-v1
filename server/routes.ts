@@ -553,13 +553,16 @@ function buildResult(
   pricingRestricted: boolean,
   eligibilityData: EligibilityResult,
 ): AsinResult {
+  // Since 2026-09-07 Product Info doesn't fetch prices — a missing stored
+  // price is a STATE, not an error. The old synthesized strings ("Price
+  // unavailable…" and the no-pricing-or-fees variant) were persisted into
+  // asin_estimates.error by the sink and survived later conclusive price
+  // writes, poisoning the Sale Price cell into "⚠ Error" on rows with
+  // perfectly good prices (2026-09-09 incident; migration 041 cleared the
+  // 188 stale rows). Only genuine failures set error now.
   let error: string | null = null;
   if (pricingRestricted && !hasValidPricing({ pricingData } as AsinResult)) {
     error = "Restricted - no pricing data available";
-  } else if (!hasValidPricing({ pricingData } as AsinResult) && catalogData.title != null) {
-    error = "Price unavailable - product found but pricing data could not be retrieved";
-  } else if (!hasValidFees({ feesData } as AsinResult) && !hasValidPricing({ pricingData } as AsinResult)) {
-    error = "No pricing or fee data available";
   }
 
   // Analyze only refreshes Amazon-side data. Cost fields (estimatedCogs,

@@ -1698,7 +1698,22 @@ export function renderCell(
         }
         return <span className="font-mono text-sm">{fmt(price)}</span>;
       }
-      return <span className="text-muted-foreground text-sm">N/A</span>;
+      // No price and no genuine error (2026-09-09): derive the OUTCOME from
+      // row state — same vocabulary as Bulk Calc, never a synthesized
+      // failure. Conclusive no_offers = prices NULLed WITH a fetched stamp;
+      // never-fetched = a plain dash. (Catalog-deleted rows go status=dead
+      // via DA-2 and carry the dead tag — no separate label needed here.)
+      if (result.pricesFetchedAt != null) {
+        return (
+          <Tooltip>
+            <TooltipTrigger asChild>
+              <span className="text-muted-foreground text-sm cursor-help" data-testid={`text-price-outcome-${result.asin}`}>No offers</span>
+            </TooltipTrigger>
+            <TooltipContent side="top"><p className="text-xs">Amazon answered with zero New offers — nothing is for sale (checked {new Date(result.pricesFetchedAt).toLocaleString()})</p></TooltipContent>
+          </Tooltip>
+        );
+      }
+      return <span className="text-muted-foreground text-sm">{"\u2014"}</span>;
 
     case "profit":
       return (
@@ -1753,6 +1768,23 @@ export function renderCell(
             </TooltipTrigger>
             <TooltipContent side="top">
               <p className="text-xs">Estimated from weight — SP-API fee fetch failed; will retry on next analyze</p>
+            </TooltipContent>
+          </Tooltip>
+        );
+      }
+      // Fee computed at a non-FBA price (2026-09-09): the row has no FBA
+      // offer, so the estimate ran at the buy-box/lowest price — same amber
+      // honesty indicator as the Sale Price fallback.
+      if (result.feesData.fbaFulfillmentFee != null && result.pricingData.lowestFbaPrice == null && (result.pricingData.buyBoxPrice != null || result.pricingData.lowestPrice != null)) {
+        return (
+          <Tooltip>
+            <TooltipTrigger asChild>
+              <span className="font-mono text-sm text-amber-500 cursor-help" data-testid={`text-fbaFee-nonfba-${result.asin}`}>
+                {fbaVal} <AlertTriangle className="inline h-3 w-3" />
+              </span>
+            </TooltipTrigger>
+            <TooltipContent side="top">
+              <p className="text-xs">Fee estimated at the buy-box/lowest price — no FBA offer exists</p>
             </TooltipContent>
           </Tooltip>
         );

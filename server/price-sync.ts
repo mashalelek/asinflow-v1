@@ -60,7 +60,10 @@ export interface PriceRefreshResult {
 }
 
 // Conclusive write — NO COALESCE (SPEC §11 2026-09-06): Amazon answered, so
-// what it said replaces what we had, including NULLs on no_offers.
+// what it said replaces what we had, including NULLs on no_offers. Also
+// clears asin_estimates.error (2026-09-09): a conclusive price answer
+// supersedes any stale per-row error string — the old synthesized
+// "Price unavailable" strings survived price writes and poisoned the UI.
 async function writePrice(asin: string, p: ParsedOffers): Promise<void> {
   await query(
     `UPDATE asin_estimates SET
@@ -70,7 +73,8 @@ async function writePrice(asin: string, p: ParsedOffers): Promise<void> {
        lowest_price = $5,
        sellers_fba = $6,
        sellers_fbm = $7,
-       fetched_at = NOW()
+       fetched_at = NOW(),
+       error = NULL
      WHERE asin = $1`,
     [asin, p.lowestFbaPrice, p.buyBoxPrice, p.buyBoxFulfillment, p.lowestPrice, p.sellersFba, p.sellersFbm],
   );

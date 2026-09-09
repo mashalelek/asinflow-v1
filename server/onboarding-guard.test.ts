@@ -44,3 +44,16 @@ describe("every insert path onboards through onboardNewAsins", () => {
     expect(route).toMatch(/wasInserted && onboardNewAsinsRef/);
   });
 });
+
+describe("no synthesized price-absence errors (2026-09-09 poison incident)", () => {
+  it("buildResult never synthesizes 'Price unavailable' / 'No pricing or fee data'", () => {
+    const src = read("routes.ts");
+    expect(src).not.toContain("Price unavailable - product found");
+    expect(src).not.toContain("No pricing or fee data available");
+  });
+  it("conclusive price writes clear asin_estimates.error", () => {
+    const src = read("price-sync.ts");
+    const write = src.slice(src.indexOf("async function writePrice"), src.indexOf("async function writePrice") + 900);
+    expect(write).toMatch(/error = NULL/);
+  });
+});
