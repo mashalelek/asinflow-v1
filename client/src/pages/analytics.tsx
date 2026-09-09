@@ -9,7 +9,7 @@ import { ResultsTable, getRowValue } from "@/components/results-table";
 import { GroupedTable, type GroupData } from "@/components/grouped-table";
 import { ColumnManager } from "@/components/column-manager";
 // Theme toggle is now in the top nav
-import { loadSettings } from "@/lib/settings";
+import { loadSettings, loadIncludeInbound, saveIncludeInbound } from "@/lib/settings";
 import { loadColumnConfig, type ColumnConfig } from "@/lib/columns";
 import { Sun, Moon, BarChart3, Search, X, Filter } from "lucide-react";
 import { Checkbox } from "@/components/ui/checkbox";
@@ -44,7 +44,6 @@ const A_COL_CONFIG_KEY = "fba-analytics-col-config";
 const A_COL_FILTERS_KEY = "fba-analytics-col-filters";
 const A_SORT_KEY = "fba-analytics-sort";
 const A_PAGE_SIZE_KEY = "fba-analytics-page-size";
-const A_INBOUND_KEY = "fba-analytics-include-inbound";
 
 function fmtDate(d: Date): string {
   return d.toISOString().split("T")[0];
@@ -128,9 +127,9 @@ export default function Analytics() {
   const [pageSize, setPageSize] = useState<number>(() => {
     try { const v = localStorage.getItem(A_PAGE_SIZE_KEY); return v ? parseInt(v) : 100; } catch { return 100; }
   });
-  const [includeInboundShipping, setIncludeInboundShipping] = useState(() => {
-    try { const v = localStorage.getItem(A_INBOUND_KEY); if (v !== null) return v === "true"; } catch {} return true;
-  });
+  // Shared inbound toggle (2026-09-09): one key, all pages — the old
+  // analytics-only key is migrated/removed inside loadIncludeInbound.
+  const [includeInboundShipping, setIncludeInboundShipping] = useState(loadIncludeInbound);
 
   // Grouping — persisted in URL query param
   type GroupByOption = "none" | "category" | "brand" | "supplier";
@@ -159,7 +158,7 @@ export default function Analytics() {
   const dateRangeLabel = useMemo(() => formatDateLabel(startDate, endDate), [startDate, endDate]);
 
   // Persist prefs (date range persisted by DateRangeContext)
-  useEffect(() => { localStorage.setItem(A_INBOUND_KEY, String(includeInboundShipping)); }, [includeInboundShipping]);
+  useEffect(() => { saveIncludeInbound(includeInboundShipping); }, [includeInboundShipping]);
   useEffect(() => { localStorage.setItem(A_COL_FILTERS_KEY, JSON.stringify(colFilters)); }, [colFilters]);
 
   // Fetch data

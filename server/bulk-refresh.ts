@@ -146,13 +146,14 @@ async function executeBulkRun(
   const priceRes = await runPricePass(
     asins,
     async (asin, p) => {
-      const price = p.lowestFbaPrice ?? p.buyBoxPrice ?? p.lowestPrice;
-      const source = p.lowestFbaPrice != null ? "lowest_fba" : p.buyBoxPrice != null ? "buy_box" : p.lowestPrice != null ? "lowest" : null;
+      // All three parsed prices stored verbatim (migration 039) — the
+      // client's price-source toggle + getSelectedPrice fallback then
+      // behave exactly as on the main page.
       await query(
-        `UPDATE bulk_list_asins SET sale_price = $3, price_source = $4, sellers_fba = $5, sellers_fbm = $6,
-                price_outcome = $7, fetched_at = NOW()
+        `UPDATE bulk_list_asins SET sale_price = $3, sale_price_buy_box = $4, sale_price_lowest = $5,
+                sellers_fba = $6, sellers_fbm = $7, price_outcome = $8, fetched_at = NOW()
           WHERE list_id = $1 AND asin = $2`,
-        [listId, asin, price, source, p.sellersFba, p.sellersFbm, p.noOffers ? "no_offers" : "updated"],
+        [listId, asin, p.lowestFbaPrice, p.buyBoxPrice, p.lowestPrice, p.sellersFba, p.sellersFbm, p.noOffers ? "no_offers" : "updated"],
       );
     },
     (prog) => tick("prices", prog.current, prog.total, prog.asin),

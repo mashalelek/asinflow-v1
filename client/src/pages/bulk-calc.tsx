@@ -22,11 +22,10 @@ import {
   type AsinInput,
   type AsinResult,
   type ColumnId,
-  type Settings,
-} from "@shared/schema";
+  type Settings, type PriceSource } from "@shared/schema";
 import { loadColumnConfig, type ColumnConfig } from "@/lib/columns";
-import { loadSettings, loadIncludeInbound, saveIncludeInbound } from "@/lib/settings";
-import { loadShowGated, loadShowMeltable, loadShowParked, loadShowDead } from "@/components/visibility-toggles";
+import { loadSettings, loadIncludeInbound, saveIncludeInbound, loadPriceSource, savePriceSource } from "@/lib/settings";
+import { loadShowGated, saveShowGated, loadShowMeltable, saveShowMeltable, loadShowParked, loadShowDead } from "@/components/visibility-toggles";
 import { loadBuyList, saveBuyList, loadOnHoldList, saveOnHoldList } from "@/lib/buy-hold";
 
 // §21 column subset: Description + full Estimates + full Sellers + the four
@@ -64,27 +63,20 @@ interface BulkListMeta {
   last_fetched_at: string | null;
 }
 
-// bulk_list_asins row → AsinResult. sale_price slots into the pricingData
-// field named by price_source; with priceSource="lowestFba",
-// getSelectedPrice's fallback order (lowest_fba → buy_box → lowest)
-// reproduces the stored snapshot price with the correct label.
+// bulk_list_asins row → AsinResult. All three parsed prices stored
+// verbatim (migration 039) — getSelectedPrice picks by the toggle and
+// falls back with the same labels as the main page.
 function mapBulkRow(row: any): AsinResult {
   const num = (v: any) => (v != null ? parseFloat(v) : null);
-  const price = num(row.sale_price);
   const pricingData = {
-    lowestFbaPrice: null as number | null,
-    buyBoxPrice: null as number | null,
+    lowestFbaPrice: num(row.sale_price),
+    buyBoxPrice: num(row.sale_price_buy_box),
     buyBoxFulfillment: null,
-    lowestPrice: null as number | null,
+    lowestPrice: num(row.sale_price_lowest),
     avg30DayPrice: null, avg90DayPrice: null, numberOfSellers: null,
     sellersFba: row.sellers_fba != null ? parseInt(row.sellers_fba) : null,
     sellersFbm: row.sellers_fbm != null ? parseInt(row.sellers_fbm) : null,
   };
-  if (price != null) {
-    if (row.price_source === "buy_box") pricingData.buyBoxPrice = price;
-    else if (row.price_source === "lowest") pricingData.lowestPrice = price;
-    else pricingData.lowestFbaPrice = price;
-  }
   return {
     asin: row.asin,
     cogs: num(row.estimated_cogs) ?? 0,
@@ -158,6 +150,12 @@ export default function BulkCalc() {
   // (fba-include-inbound) — this page silently hard-defaulted to true.
   const [includeInboundShipping, setIncludeInboundShipping] = useState(loadIncludeInbound);
   useEffect(() => { saveIncludeInbound(includeInboundShipping); }, [includeInboundShipping]);
+  // Applied Display Options (2026-09-09): shared keys with the main page —
+  // gated/meltable filter rows here with identical semantics; price source
+  // picks which stored price feeds calculateProfit.
+  const [showGated, setShowGated] = useState(loadShowGated);
+  const [showMeltable, setShowMeltable] = useState(loadShowMeltable);
+  const [priceSource, setPriceSource] = useState<PriceSource>(loadPriceSource);
   const [buySet, setBuySet] = useState<Set<string>>(loadBuyList);
   const [onHoldSet, setOnHoldSet] = useState<Set<string>>(loadOnHoldList);
   const [selectedSet, setSelectedSet] = useState<Set<string>>(new Set());
@@ -466,14 +464,20 @@ export default function BulkCalc() {
   }, []);
 
   const sortedResults = useMemo(() => {
+    // Visibility toggles (scope controls, not filters) — same semantics as
+    // the main page: toggle off → rows with that status hidden, and hidden
+    // rows drop out of export's filtered set the same way.
+    let scoped = results;
+    if (!showGated) scoped = scoped.filter((r) => (r.eligibilityData?.status ?? "check") !== "no");
+    if (!showMeltable) scoped = scoped.filter((r) => !r.isMeltable);
     const filtered = Object.keys(colFilters).length > 0
-      ? results.filter((r) => matchesFilters(r, colFilters, (colId) => getRowValue(r, colId, "lowestFba", settings, includeInboundShipping)))
-      : results;
+      ? scoped.filter((r) => matchesFilters(r, colFilters, (colId) => getRowValue(r, colId, priceSource, settings, includeInboundShipping)))
+      : scoped;
     if (!sortCol) return filtered;
     const dir = sortDir === "asc" ? 1 : -1;
     return [...filtered].sort((a, b) => {
-      const va = getRowValue(a, sortCol, "lowestFba", settings, includeInboundShipping);
-      const vb = getRowValue(b, sortCol, "lowestFba", settings, includeInboundShipping);
+      const va = getRowValue(a, sortCol, priceSource, settings, includeInboundShipping);
+      const vb = getRowValue(b, sortCol, priceSource, settings, includeInboundShipping);
       if (va == null && vb == null) return 0;
       if (va == null) return 1;
       if (vb == null) return -1;
@@ -486,7 +490,7 @@ export default function BulkCalc() {
       }
       return String(va).localeCompare(String(vb)) * dir;
     });
-  }, [results, sortCol, sortDir, settings, colFilters, includeInboundShipping]);
+  }, [results, sortCol, sortDir, settings, colFilters, includeInboundShipping, showGated, showMeltable, priceSource]);
 
   // Export scope (§21): rows selected → export selected; none → export all.
   const exportResults = useMemo(
@@ -602,7 +606,7 @@ export default function BulkCalc() {
           onClick={() => setRefreshResultOpen(true)}>
           <History className="h-3.5 w-3.5" />
         </Button>
-        <ExportButtons results={exportResults} priceSource="lowestFba" settings={settings} columnConfig={columnConfig} filename={exportFilename} includeSkuSubColumn={false} includeInboundShipping={includeInboundShipping} />
+        <ExportButtons results={exportResults} priceSource={priceSource} settings={settings} columnConfig={columnConfig} filename={exportFilename} includeSkuSubColumn={false} includeInboundShipping={includeInboundShipping} />
         <ColumnManager config={columnConfig} onChange={setColumnConfig} columns={BULK_COLUMNS} storageKey={BULK_COLUMNS_KEY} />
       </div>
 
@@ -621,7 +625,7 @@ export default function BulkCalc() {
       {results.length > 0 ? (
         <ResultsTable
           results={sortedResults}
-          priceSource="lowestFba"
+          priceSource={priceSource}
           settings={settings}
           columnConfig={columnConfig}
           activeFilter="all"
@@ -780,12 +784,12 @@ export default function BulkCalc() {
         movedToggles={{
           includeInboundShipping,
           onIncludeInboundShippingChange: setIncludeInboundShipping,
-          priceSource: "lowestFba",
-          onPriceSourceChange: () => {},
-          showGated: loadShowGated(),
-          onShowGatedChange: () => {},
-          showMeltable: loadShowMeltable(),
-          onShowMeltableChange: () => {},
+          priceSource,
+          onPriceSourceChange: (v) => { setPriceSource(v); savePriceSource(v); },
+          showGated,
+          onShowGatedChange: (v) => { setShowGated(v); saveShowGated(v); },
+          showMeltable,
+          onShowMeltableChange: (v) => { setShowMeltable(v); saveShowMeltable(v); },
           showParked: loadShowParked(),
           onShowParkedChange: () => {},
           showDead: loadShowDead(),
@@ -793,11 +797,8 @@ export default function BulkCalc() {
           onResetCogs: () => {},
           isResettingCogs: false,
           disabledReasons: {
-            priceSource: "Bulk rows store one snapshot price (lowest FBA, buy-box fallback) — there is no second price to switch to.",
-            showGated: "Applies to the main ASINs list — bulk lists have no gating-based row scope.",
-            showMeltable: "Applies to the main ASINs list — bulk lists have no meltable-based row scope.",
-            showParked: "Applies to the main ASINs list — bulk rows have no parked/dead status.",
-            showDead: "Applies to the main ASINs list — bulk rows have no parked/dead status.",
+            showParked: "Parked/dead are statuses of ASINs in your main catalog; bulk rows don't have them.",
+            showDead: "Parked/dead are statuses of ASINs in your main catalog; bulk rows don't have them.",
             resetCogs: "Acts on the main catalog's estimates — this page never writes there (§21 isolation).",
           },
         }}

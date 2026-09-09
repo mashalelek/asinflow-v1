@@ -3226,16 +3226,25 @@ list selector, save/rename/delete.
 
 Settings opens the SAME dialog as the ASINs page, backed by the same
 storage keys (`fba-analyzer-settings`; Include Inbound Shipping shares
-`fba-include-inbound` — 2026-09-09, this page silently hard-defaulted to
-true before); **no page-local settings exist**. Every field visible on the
-ASINs page is visible here with the same value; a field this page cannot
-honor (price source — one stored snapshot price; Show gated/meltable/
-parked/dead — main-list row scopes; Reset Est. COGS to PO — writes to the
-main catalog) renders DISABLED with a one-line reason, never hidden:
-hidden fields are how the pages drifted. (Analytics keeps its own
-deliberate `fba-analytics-include-inbound` key — separate decision, not
-part of this rule.) A test pins that both pages import the same Settings
-component and key constants.
+`fba-include-inbound` — one toggle for home, Bulk Calc, AND Analytics
+since 2026-09-09, when the analytics-only key was folded in: its value
+migrated only if the shared key was unset, shared key wins otherwise;
+price source shares `fba-price-source` — persisted now, was session-only
+on the ASINs page); **no page-local settings exist**. Display Options
+applicability here (2026-09-09):
+
+| Control | On Bulk Calc | Why |
+|---|---|---|
+| Include Inbound Shipping | applies | same profit math |
+| Price source | applies | both prices stored per row (migration 039: sale_price = strict lowest FBA, sale_price_buy_box, sale_price_lowest; price_source column dropped — the fallback label derives from which fields are present; legacy rows carry NULLs until their next Refresh) |
+| Show gated | applies | rows carry eligibility_status; toggle off hides gated rows, which also drop from export's filtered set — main semantics |
+| Show meltable | applies | rows carry is_meltable; same semantics |
+| Show parked / dead | DISABLED | parked/dead are statuses of ASINs in the main catalog; bulk rows don't have them |
+| Reset Est. COGS to PO | DISABLED | writes to the main catalog (§21 isolation) |
+
+Disabled controls render with the one-line reason, never hidden: hidden
+fields are how the pages drifted. A test pins the component/key sharing
+and that the disabled set is exactly {showParked, showDead, resetCogs}.
 
 Export CSV downloads `bulk-<listname>.csv` with the visible §21 column set —
 including Supplier SKU — honoring the checkbox selection (above).

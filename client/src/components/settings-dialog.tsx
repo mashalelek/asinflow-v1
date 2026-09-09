@@ -41,7 +41,10 @@ export interface MovedToggles {
   // §21 settings-drift fix (2026-09-09): a host page that cannot honor a
   // control renders it DISABLED with this one-line reason — never hidden.
   // Hidden fields are how the two pages drifted apart.
-  disabledReasons?: Partial<Record<"priceSource" | "showGated" | "showMeltable" | "showParked" | "showDead" | "resetCogs", string>>;
+  // Narrowed 2026-09-09: gated/meltable/price-source now APPLY on Bulk Calc,
+  // so only these three can be disabled anywhere — widening this type back
+  // is how a page would quietly stop honoring a control. Don't.
+  disabledReasons?: Partial<Record<"showParked" | "showDead" | "resetCogs", string>>;
 }
 
 interface SettingsDialogProps {
@@ -169,8 +172,7 @@ export function SettingsDialog({
                     <RadioGroup
                       value={movedToggles.priceSource}
                       onValueChange={(v) => movedToggles.onPriceSourceChange(v as PriceSource)}
-                      disabled={!!movedToggles.disabledReasons?.priceSource}
-                      className={`flex gap-6 mt-2 ${movedToggles.disabledReasons?.priceSource ? "opacity-60" : ""}`}
+                      className="flex gap-6 mt-2"
                     >
                       <label className="flex items-center gap-2 text-sm cursor-pointer">
                         <RadioGroupItem value="lowestFba" />
@@ -181,12 +183,12 @@ export function SettingsDialog({
                         Buy Box
                       </label>
                     </RadioGroup>
-                    <p className="text-[10px] text-muted-foreground mt-1">{movedToggles.disabledReasons?.priceSource ?? "Drives Estimated Profit/ROI/Margin via the column's selected price."}</p>
+                    <p className="text-[10px] text-muted-foreground mt-1">Drives Estimated Profit/ROI/Margin via the column's selected price.</p>
                   </div>
 
-                  <ToggleRow id="dsGated"     label="Show gated"     checked={movedToggles.showGated}     onChange={movedToggles.onShowGatedChange} disabledReason={movedToggles.disabledReasons?.showGated} />
+                  <ToggleRow id="dsGated"     label="Show gated"     checked={movedToggles.showGated}     onChange={movedToggles.onShowGatedChange} />
                   <ToggleRow id="dsMeltable"  label="Show meltable"  checked={movedToggles.showMeltable}  onChange={movedToggles.onShowMeltableChange}
-                             hint="Seasonal default: auto-ON Apr 15 – Sep 15 unless manually toggled." disabledReason={movedToggles.disabledReasons?.showMeltable} />
+                             hint="Seasonal default: auto-ON Apr 15 – Sep 15 unless manually toggled." />
                   <ToggleRow id="dsParked"    label="Show parked"    checked={movedToggles.showParked}    onChange={movedToggles.onShowParkedChange} disabledReason={movedToggles.disabledReasons?.showParked} />
                   <ToggleRow id="dsDead"      label="Show dead"      checked={movedToggles.showDead}      onChange={movedToggles.onShowDeadChange} disabledReason={movedToggles.disabledReasons?.showDead} />
                 </div>

@@ -20,7 +20,7 @@ import { ExportButtons } from "@/components/export-buttons";
 import { SummaryCards, type FilterMode } from "@/components/summary-cards";
 import { ColumnManager } from "@/components/column-manager";
 import { useTheme } from "@/components/theme-provider";
-import { loadSettings, loadIncludeInbound, saveIncludeInbound } from "@/lib/settings";
+import { loadSettings, loadIncludeInbound, saveIncludeInbound, loadPriceSource, savePriceSource } from "@/lib/settings";
 import { useSearch } from "wouter";
 import { loadColumnConfig, type ColumnConfig } from "@/lib/columns";
 import { loadBuyList, saveBuyList, loadOnHoldList, saveOnHoldList } from "@/lib/buy-hold";
@@ -337,7 +337,9 @@ export default function Home() {
   const [columnConfig, setColumnConfig] = useState<ColumnConfig>(loadColumnConfig);
   const [asins, setAsins] = useState<AsinInput[]>([]);
   const [results, setResults] = useState<AsinResult[]>([]);
-  const [priceSource, setPriceSource] = useState<PriceSource>("lowestFba");
+  // Shared + persisted (2026-09-09): fba-price-source, same key as Bulk Calc.
+  const [priceSource, setPriceSource] = useState<PriceSource>(loadPriceSource);
+  useEffect(() => { savePriceSource(priceSource); }, [priceSource]);
   const [isAnalyzing, setIsAnalyzing] = useState(false);
   const [credentialsConfigured, setCredentialsConfigured] = useState<boolean | null>(null);
   const [activeFilter, setActiveFilter] = useState<FilterMode>("all");
