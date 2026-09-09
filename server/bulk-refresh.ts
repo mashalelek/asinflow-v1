@@ -112,8 +112,7 @@ async function executeBulkRun(
   const runStartedAt = new Date();
 
   const rows = (await query(
-    `SELECT asin, eligibility_status, is_hazmat, gating_checked_at, hazmat_checked_at,
-            fetched_at, price_outcome, category
+    `SELECT asin, eligibility_status, is_hazmat, fetched_at, price_outcome, category
        FROM bulk_list_asins WHERE list_id = $1 ORDER BY asin`,
     [listId],
   )).rows;
@@ -241,19 +240,46 @@ async function executeBulkRun(
   }
   state.stages.catalog = { counts: catCounts, outcomes: catOutcomes };
 
-  // ── gating + hazmat (30-day rule on THIS table's stamps) ──
-  const gatingScope = scoped.filter((r: any) => staleOrNever(r.gating_checked_at));
-  const hazmatScope = scoped.filter((r: any) => staleOrNever(r.hazmat_checked_at));
-  const gCounts = { probed: 0, reused_stored: asins.length - gatingScope.length, error: 0 };
+  // ── gating + hazmat via the SHARED per-ASIN cache (migration 038) ──
+  // Stamps live ONLY in bulk_gating_hazmat_cache — one place decides
+  // "needs probe"; every list shares it, so re-uploads of already-probed
+  // ASINs cost nothing. Read-through by default; scope "all" (Refresh all)
+  // BUSTS the cache for this list's ASINs — fresh probes, matching what
+  // Refresh all means everywhere else. Cache rows survive list deletion by
+  // design. Per-row eligibility_status / is_hazmat are the display copy,
+  // written from the cache on reuse and from the probe on probe.
+  const cacheRows = (await query(
+    `SELECT asin, eligibility_status, is_hazmat, gating_checked_at, hazmat_checked_at
+       FROM bulk_gating_hazmat_cache WHERE asin = ANY($1::text[])`,
+    [asins],
+  )).rows;
+  const cache = new Map<string, any>(cacheRows.map((r: any) => [r.asin, r]));
+  const bustCache = opts.scope === "all" && !(opts.asins && opts.asins.length > 0);
+
+  const gCounts = { probed: 0, reused_cache: 0, error: 0 };
   const gOutcomes: Record<string, string> = {};
+  const gatingScope = scoped.filter((r: any) => bustCache || staleOrNever(cache.get(r.asin)?.gating_checked_at));
+  const gatingScopeSet = new Set(gatingScope.map((r: any) => r.asin));
   setStage("gating", gatingScope.length);
+  // Cache hits: copy the cached value into the row's display column.
+  for (const r of scoped as any[]) {
+    if (gatingScopeSet.has(r.asin)) continue;
+    gCounts.reused_cache++;
+    const c = cache.get(r.asin);
+    if (c?.eligibility_status != null && c.eligibility_status !== r.eligibility_status) {
+      await query(`UPDATE bulk_list_asins SET eligibility_status = $3 WHERE list_id = $1 AND asin = $2`, [listId, r.asin, c.eligibility_status]);
+    }
+  }
   for (const r of gatingScope as any[]) {
     try {
       const elig = await getEligibility(r.asin);
       await query(
-        `UPDATE bulk_list_asins SET eligibility_status = $3, gating_checked_at = NOW() WHERE list_id = $1 AND asin = $2`,
-        [listId, r.asin, elig.status],
+        `INSERT INTO bulk_gating_hazmat_cache (asin, eligibility_status, gating_checked_at)
+         VALUES ($1, $2, NOW())
+         ON CONFLICT (asin) DO UPDATE SET eligibility_status = $2, gating_checked_at = NOW()`,
+        [r.asin, elig.status],
       );
+      await query(`UPDATE bulk_list_asins SET eligibility_status = $3 WHERE list_id = $1 AND asin = $2`, [listId, r.asin, elig.status]);
     } catch (err: any) {
       gCounts.error++;
       gOutcomes[r.asin] = `error: ${err?.message ?? "unknown"}`;
@@ -264,17 +290,30 @@ async function executeBulkRun(
   }
   state.stages.gating = { counts: gCounts, outcomes: gOutcomes };
 
-  const hCounts = { probed: 0, reused_stored: asins.length - hazmatScope.length, error: 0 };
+  const hCounts = { probed: 0, reused_cache: 0, error: 0 };
   const hOutcomes: Record<string, string> = {};
+  const hazmatScope = scoped.filter((r: any) => bustCache || staleOrNever(cache.get(r.asin)?.hazmat_checked_at));
+  const hazmatScopeSet = new Set(hazmatScope.map((r: any) => r.asin));
   setStage("hazmat", hazmatScope.length);
+  for (const r of scoped as any[]) {
+    if (hazmatScopeSet.has(r.asin)) continue;
+    hCounts.reused_cache++;
+    const c = cache.get(r.asin);
+    if (c?.is_hazmat != null && c.is_hazmat !== r.is_hazmat) {
+      await query(`UPDATE bulk_list_asins SET is_hazmat = $3 WHERE list_id = $1 AND asin = $2`, [listId, r.asin, c.is_hazmat]);
+    }
+  }
   for (const r of hazmatScope as any[]) {
     try {
       const hz = await getInboundHazmat(r.asin);
-      // Tri-state preserved: an inconclusive probe never overwrites.
       await query(
-        `UPDATE bulk_list_asins SET is_hazmat = COALESCE($3, is_hazmat), hazmat_checked_at = NOW() WHERE list_id = $1 AND asin = $2`,
-        [listId, r.asin, hz],
+        `INSERT INTO bulk_gating_hazmat_cache (asin, is_hazmat, hazmat_checked_at)
+         VALUES ($1, $2, NOW())
+         ON CONFLICT (asin) DO UPDATE SET is_hazmat = COALESCE($2, bulk_gating_hazmat_cache.is_hazmat), hazmat_checked_at = NOW()`,
+        [r.asin, hz],
       );
+      // Tri-state preserved on the display copy too.
+      await query(`UPDATE bulk_list_asins SET is_hazmat = COALESCE($3, is_hazmat) WHERE list_id = $1 AND asin = $2`, [listId, r.asin, hz]);
     } catch (err: any) {
       hCounts.error++;
       hOutcomes[r.asin] = `error: ${err?.message ?? "unknown"}`;

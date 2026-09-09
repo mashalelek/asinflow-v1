@@ -3089,10 +3089,25 @@ ever wired to a live call site, it must remain unwired on this page.
   with a 15 s heartbeat: **prices** (getItemOffersBatch, one trailing
   pass) → **fees** (batch feesEstimate on the just-fetched prices;
   no-price rows skip — never fallback-price estimates) → **catalog**
-  (searchCatalogItems) → **gating + hazmat** (probed only when
-  never-checked or >30 days, via bulk_list_asins.gating_checked_at /
-  hazmat_checked_at — migration 035; same 30-day rule and knob as the
-  main page's stamps, on this table). Account-scoped stages (inventory,
+  (searchCatalogItems) → **gating + hazmat** via the shared
+  per-ASIN cache `bulk_gating_hazmat_cache` (migration 038: asin PK,
+  eligibility_status, is_hazmat, gating_checked_at, hazmat_checked_at —
+  stamps live ONLY here; the per-row stamp columns from 035 were dropped
+  so exactly one place decides "needs probe"). Read-through by default
+  (same 30-day rule and knob as the main page); **"Refresh all" BUSTS the
+  cache** for the list's ASINs — fresh probes, matching what Refresh all
+  means everywhere else. Per-row eligibility_status / is_hazmat are the
+  display copy, written from the cache on reuse and from the probe on
+  probe; the dialog's gating/hazmat lines show probed / reused_cache /
+  error so the cache is visible working. The cache is deliberately
+  CROSS-LIST shared state, keyed by ASIN and fully bulk-side (no FK to
+  asins, no main-table read — bulk gating/hazmat stays separate from the
+  main catalog's per the standing decision, and in_database EXISTS
+  remains the single main-DB read): a probe under any list serves every
+  list, staleness bounded by the 30-day rule. **Delete-list does NOT
+  delete cache rows** (no FK to bulk_lists, on purpose — they are shared
+  state). Do not "fix" this back to per-list stamps; per-list is exactly
+  what made every re-upload pay the full ~45-minute probe tax. Account-scoped stages (inventory,
   sales, listings) are excluded — meaningless for arbitrary ASINs.
   Outcomes are per LEG (migration 035): `catalog_outcome`
   (parsed/absent/inconclusive — absent is the DA-2 404 analogue and
