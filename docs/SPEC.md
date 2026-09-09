@@ -1874,13 +1874,22 @@ flag. Either the architecture is wrong, or the workflow is misnamed.
 The analyze code path (`/api/analyze`, `/api/analyze/all`, single-ASIN
 refresh) refreshes Amazon-side data ONLY.
 
-**Analyze MAY write to:**
-- `asins`: title, brand, category, dimensions, weight, size_tier, in_catalog,
-  is_meltable, is_hazmat, is_gated, gating_reason, is_listing_active
-- `asin_estimates`: sale_price, price_source, fba_fee, referral_fee,
-  variable_closing_fee, bsr, sellers_fba, sellers_fbm, fetched_at
-- Computed estimate fields (`est_profit_unit`, `est_margin`, `est_roi`) when
-  recomputed from the above + existing cost data
+**Analyze MAY write to** (column list audited against the live schema
+2026-09-09 — the old list named six non-existent columns: is_gated,
+gating_reason, is_listing_active, sale_price, price_source,
+variable_closing_fee, plus computed est_* fields that never existed —
+profit is calculated client-side only):
+- `asins`: title, brand, category, image_url, weight_lb,
+  length_in/width_in/height_in, in_catalog, is_meltable,
+  is_hazmat, is_dangerous_good, gating_checked_at/hazmat_checked_at
+  (probe stamps), is_catalog_deleted (via applyCatalogDeletedSignal)
+- `asin_estimates`: lowest_fba_price, buy_box_price, buy_box_fulfillment,
+  lowest_price, sellers_fba, sellers_fbm, fba_fee, referral_fee,
+  fees_estimate_price, fee_source, bsr, bsr_category, eligibility_status
+  (the gating result — there is no is_gated on asins), error, fetched_at
+  — noting that since 2026-09-07 Product Info no longer FETCHES prices
+  (Prices & Stock owns them, §11); the price columns remain in its UPSERT
+  only as COALESCE pass-throughs of stored values
 
 **Analyze MUST NOT write to (user-controlled fields):**
 - `estimated_cogs`, `estimated_cogs_source`
