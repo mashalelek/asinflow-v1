@@ -1385,9 +1385,13 @@ so they can never cross.
 
 - **Always skips ASINs that already exist in the `asins` table** — no update,
   no archive, no analyze. The sheet's only job is to add new ASINs to AF.
-- For NEW ASINs (not yet in AF), runs the full analyze pipeline (SP-API
-  pricing/catalog/fees/eligibility/hazmat) and inserts via the same write path
-  CSV upload uses, with `estimated_cogs_source = 'csv'`.
+- For NEW ASINs (not yet in AF), runs the shared **new-ASIN onboarding**
+  (`onboardNewAsins`, 2026-09-09): Product Info (which performs the
+  insert, catalog, gating, hazmat) → Prices & Stock `prices` stage →
+  `fees` stage, under one stream, ledgered in `refresh_runs` with
+  trigger `sourcing` (migration 040 widened the trigger CHECK).
+  `estimated_cogs_source = 'csv'`. Same function as CSV upload and the
+  Chrome-extension add.
 - For NEW ASINs whose collapsed status contains "discontinued" (case-insensitive
   `.includes`), inserts and analyzes them, THEN sets `is_active = false` so
   they land in the Archived view. This is the only place the sync writes
@@ -1673,9 +1677,17 @@ three calls sat on 1 rps buckets (~37 min full catalog). Now:
   (migration 033) make the rule a WHERE clause. A deliberate selection
   still respects the rule; the 30-day window is the knob.
 - **Product Info no longer writes price columns.** No stored price →
-  fees skip (`skipped_no_price`), never a fallback-price estimate. The
-  upload path runs Prices & Stock's `prices` stage FIRST on the new
-  ASINs, then Product Info, under one progress stream.
+  fees skip (`skipped_no_price`), never a fallback-price estimate.
+  **Any path that inserts a new ASIN onboards it through
+  `onboardNewAsins`; Product Info alone never prices.** Onboarding order
+  (2026-09-09 — corrected from the original "prices first" design):
+  Product Info FIRST (its sink performs the INSERT), THEN prices, THEN
+  fees — because the prices stage's scope query and writer target
+  EXISTING rows, the prices-first pre-pass silently no-oped for
+  genuinely-new ASINs (the "sourcing sync inserts priceless ASINs"
+  incident; brand-new CSV uploads had the same hole). One stream, one
+  `refresh_runs` ledger under the caller's trigger (upload / sourcing /
+  extension / backfill).
 - The per-item catalog parser is extracted pure and shared (as offers
   were); catalog-404 (DA-2) maps to "absent from a COMPLETE batch
   response"; a partial batch response is inconclusive for its missing

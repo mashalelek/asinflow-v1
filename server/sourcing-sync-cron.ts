@@ -1,6 +1,6 @@
 import cron from "node-cron";
 import { syncSourcingSheet } from "./sourcing-sync";
-import { getRunAnalyzeCore, mainCatalogSink } from "./routes";
+import { getOnboardNewAsins, mainCatalogSink } from "./routes";
 import { log } from "./index";
 
 export function startSourcingSyncCron() {
@@ -10,9 +10,11 @@ export function startSourcingSyncCron() {
   cron.schedule("0 9 * * *", async () => {
     log("Daily sourcing-sheet sync started", "cron");
     try {
-      const runCore = getRunAnalyzeCore();
+      // §11 onboarding (2026-09-09): NEVER runAnalyzeCore directly for new
+      // ASINs — Product Info alone leaves them priceless.
+      const onboard = getOnboardNewAsins();
       const result = await syncSourcingSheet(async (newInputs) => {
-        await runCore(newInputs, () => {}, () => null, true, mainCatalogSink);
+        await onboard(newInputs, () => {}, mainCatalogSink, "sourcing");
       });
       log(
         `Daily sourcing-sheet sync complete: inserted ${result.inserted}, archivedNew ${result.archivedNew}, skippedExisting ${result.skippedExisting}, errors ${result.errors.length}`,

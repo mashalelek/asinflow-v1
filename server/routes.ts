@@ -24,7 +24,7 @@ import { buildSourcingCost, sourcingCostFilename, parseYMDLocal } from "./sourci
 import { recordSourcingCostExport, listSourcingCostExports } from "./sourcing-cost-repo";
 import { syncSourcingSheet } from "./sourcing-sync";
 import { refreshPrices } from "./price-sync";
-import { runRefreshJob } from "./refresh-job";
+import { runRefreshJob, runFeesStage } from "./refresh-job";
 import { fetchCatalogBatch, fetchFeesBatch } from "./product-info-batch";
 import { applyCatalogDeletedSignal } from "./catalog-deleted-write";
 import { offerAddForAsin, preFilterSubmitSet, type OfferAddResult, type PreFilterResult } from "./offer-add";
@@ -70,6 +70,12 @@ type RunAnalyzeCore = (
   opts?: { dryRun?: boolean },
 ) => Promise<void>;
 let runAnalyzeCoreRef: RunAnalyzeCore | null = null;
+type OnboardNewAsins = (asins: AsinInput[], emit: (chunk: string) => void, sink: AnalyzeSink, trigger: "upload" | "sourcing" | "extension" | "backfill", progressPrefix?: (i: number) => string | null) => Promise<void>;
+let onboardNewAsinsRef: OnboardNewAsins | null = null;
+export function getOnboardNewAsins(): OnboardNewAsins {
+  if (!onboardNewAsinsRef) throw new Error("onboardNewAsins not initialized — call registerRoutes first");
+  return onboardNewAsinsRef;
+}
 export function getRunAnalyzeCore(): RunAnalyzeCore {
   if (!runAnalyzeCoreRef) throw new Error("runAnalyzeCore not initialized — call registerRoutes first");
   return runAnalyzeCoreRef;
@@ -1383,6 +1389,14 @@ export async function registerRoutes(
         }
       }
 
+      // §11 onboarding (2026-09-09): a NEW row from the extension has only
+      // the page-scraped buy-box price and no fees — run the shared
+      // onboarding fire-and-forget (one ASIN ≈ seconds; the extension's
+      // response must stay fast). Errors log; the row exists either way.
+      if (wasInserted && onboardNewAsinsRef) {
+        void onboardNewAsinsRef([{ asin, cogs: 0 } as AsinInput], () => {}, mainCatalogSink, "extension")
+          .catch((err: any) => log(`Extension onboarding failed for ${asin}: ${err?.message ?? err}`, "refresh"));
+      }
       res.json({ success: true, action: wasInserted ? "created" : "updated", asin });
     } catch (err: any) {
       log(`Import ASIN error: ${err.message}`, "api");
@@ -2145,7 +2159,7 @@ export async function registerRoutes(
       const result = await syncSourcingSheet(
         async (newInputs) => {
           // fromCsvUpload=true so estimated_cogs gets persisted via the dedicated CSV write path
-          await runAnalyzeAndStream(newInputs, res, mainCatalogSink, () => null, true);
+          await runAnalyzeAndStream(newInputs, res, mainCatalogSink, () => null, true, {}, "sourcing");
         },
         (plan) => {
           res.write(JSON.stringify({ type: "sync_summary", data: { ...plan, dryRun } }) + "\n");
@@ -3213,9 +3227,60 @@ export async function registerRoutes(
   };
   runAnalyzeCoreRef = runAnalyzeCore;
 
+  // ── New-ASIN onboarding (§11, 2026-09-09) ────────────────────────────
+  // ONE shared sequence for every path that inserts new ASINs: Product
+  // Info FIRST (runAnalyzeCore — the INSERT lives in its sink, plus
+  // catalog/gating/hazmat), THEN the Prices & Stock prices stage, THEN
+  // fees — because refreshPrices' scope query and writePrice both target
+  // EXISTING rows. The old "prices pre-pass BEFORE the core" silently
+  // no-oped for genuinely-new ASINs (SELECT ... FROM asins matched
+  // nothing; UPDATE asin_estimates wrote nothing) — the 2026-09-09
+  // "sourcing sync inserts priceless ASINs" incident, and the same hole
+  // existed for brand-new CSV uploads. End state identical to the
+  // prices-first sketch; this order is also exactly the manual repair
+  // sequence (Product Info, then Prices & Stock).
+  // Ledgered per stage under the CALLER'S trigger (upload / sourcing /
+  // extension / backfill — migration 040). Product Info alone never
+  // prices; no insert path may call runAnalyzeCore directly.
+  async function onboardNewAsins(
+    asins: AsinInput[],
+    emit: (chunk: string) => void,
+    sink: AnalyzeSink,
+    trigger: "upload" | "sourcing" | "extension" | "backfill",
+    progressPrefix: (i: number) => string | null = () => null,
+  ) {
+    await runAnalyzeCore(asins, emit, progressPrefix, true, sink);
+    const set = new Set(asins.map((a) => a.asin));
+    const startedAt = new Date();
+    try {
+      const priceRes = await refreshPrices(
+        async (p) => { emit(JSON.stringify({ type: "progress", data: { current: p.current, total: p.total, asin: `Prices: ${p.asin}` } }) + "\n"); },
+        set,
+      );
+      const skip = new Set(Object.keys(priceRes.outcomes));
+      const feesRes = await runFeesStage({ filter: set, dryRun: false, emit: () => {}, skipAsins: skip });
+      for (const [stage, counts, outcomes] of [
+        ["prices", priceRes.counts, priceRes.outcomes],
+        ["fees", feesRes.counts, feesRes.outcomes],
+      ] as const) {
+        await query(
+          `INSERT INTO refresh_runs (started_at, finished_at, trigger, stage, scope, requested, counts, outcomes)
+           VALUES ($1, NOW(), $2, $3, 'subset', $4, $5::jsonb, $6::jsonb)`,
+          [startedAt, trigger, stage, set.size, JSON.stringify(counts), JSON.stringify(outcomes)],
+        ).catch((err: any) => log(`refresh_runs write failed for onboarding ${stage}: ${err?.message ?? err}`, "refresh"));
+      }
+      log(`Onboarding (${trigger}): ${set.size} ASIN(s) — prices ${priceRes.counts.updated} updated/${priceRes.counts.no_offers} no-offers, fees ${feesRes.counts.updated} updated`, "refresh");
+    } catch (err: any) {
+      log(`Onboarding prices/fees failed after insert (${trigger}) — rows exist but may be priceless until the next Prices & Stock run: ${err?.message ?? err}`, "price-sync");
+    }
+  }
+  onboardNewAsinsRef = onboardNewAsins;
+
   // Thin streaming wrapper for the main-catalog endpoints. The sink is
   // required here too — each endpoint names mainCatalogSink explicitly.
-  // The sourcing-sync cron calls runAnalyzeCore directly with a no-op emit.
+  // fromCsvUpload=true routes through onboardNewAsins (§11): the set may
+  // contain brand-new ASINs, which Product Info alone would leave
+  // priceless. Existing ASINs in the set just get a fresh price+fee pass.
   async function runAnalyzeAndStream(
     asins: AsinInput[],
     res: Response,
@@ -3223,21 +3288,11 @@ export async function registerRoutes(
     progressPrefix: (i: number) => string | null = () => null,
     fromCsvUpload = false,
     opts: { dryRun?: boolean } = {},
+    trigger: "upload" | "sourcing" = "upload",
   ) {
-    // Upload path (§11 Product Info, 2026-09-07): new ASINs have no stored
-    // prices, and Product Info no longer fetches them — so run Prices &
-    // Stock's prices stage FIRST on the uploaded set, then Product Info,
-    // under this one progress stream. Seconds for a normal upload.
     if (fromCsvUpload && !opts.dryRun && asins.length > 0) {
-      const set = new Set(asins.map((a) => a.asin));
-      try {
-        await refreshPrices(
-          async (p) => { res.write(JSON.stringify({ type: "progress", data: { current: p.current, total: p.total, asin: `Prices: ${p.asin}` } }) + "\n"); },
-          set,
-        );
-      } catch (err: any) {
-        log(`Upload prices pre-pass failed (Product Info continues; fees will skip no-price ASINs): ${err?.message ?? err}`, "price-sync");
-      }
+      await onboardNewAsins(asins, (chunk) => res.write(chunk), sink, trigger, progressPrefix);
+      return;
     }
     await runAnalyzeCore(asins, (chunk) => res.write(chunk), progressPrefix, fromCsvUpload, sink, opts);
   }
