@@ -302,6 +302,18 @@ representations of the same logical "narrow to specific ASIN(s)" intent.
 `COLUMN_GROUPS` array in code is the single source of truth. Both Manage
 Columns panel order and table render order derive from it.
 
+### Sale Price cell renders row STATE (2026-09-09)
+
+The Estimated Sale Price cell derives what it shows from the row, same
+vocabulary as Bulk Calc (§21): a real price; the amber "BB (no FBA)"
+fallback when only a buy-box/lowest price exists (the FBA-fee cell
+carries the same amber indicator when the fee was estimated at that
+non-FBA price); muted "No offers" when prices are NULL WITH a fetched
+stamp (the conclusive nothing-is-for-sale state, check time in the
+tooltip); a plain dash when never fetched. "⚠ Error" renders ONLY for a
+genuine stored `asin_estimates.error` — never a synthesized
+absence message (the 2026-09-09 poisoned-cell incident, §14).
+
 ### Supplier SKU column (2026-08-05)
 
 The supplier's own catalog/item number — NEVER from Amazon, unrelated to
@@ -1914,6 +1926,15 @@ profit is calculated client-side only):
 - On `bulk_list_asins` (§21, 2026-09-04): `buy_link`, `supplier`, `tags`,
   `promo_notes`, `notes` (2026-09-08), `added_at`, `supplier_sku`,
   `estimated_cogs` — the bulk sink never writes, clears, or overwrites them
+
+**`asin_estimates.error` holds genuine failures ONLY (2026-09-09):**
+never a synthesized absence message — "no stored price" is a state, not
+an error, since Product Info stopped fetching prices (§11). buildResult
+synthesizes nothing but genuine Restricted; `writePrice` clears `error`
+on every conclusive outcome, so a real Amazon answer always supersedes a
+stale string; migration 041 purged the 188 legacy rows (two generations
+of synthesized strings that had survived price writes and poisoned Sale
+Price cells into "⚠ Error" on rows with good prices).
 
 **Bulk promote (2026-09-09, new-ASIN INSERT only — §21 "Promote to
 database"):** a second writer for `buy_link`, `supplier`, `supplier_sku`,
