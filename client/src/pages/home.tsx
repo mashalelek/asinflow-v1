@@ -20,7 +20,7 @@ import { ExportButtons } from "@/components/export-buttons";
 import { SummaryCards, type FilterMode } from "@/components/summary-cards";
 import { ColumnManager } from "@/components/column-manager";
 import { useTheme } from "@/components/theme-provider";
-import { loadSettings } from "@/lib/settings";
+import { loadSettings, loadIncludeInbound, saveIncludeInbound } from "@/lib/settings";
 import { useSearch } from "wouter";
 import { loadColumnConfig, type ColumnConfig } from "@/lib/columns";
 import { loadBuyList, saveBuyList, loadOnHoldList, saveOnHoldList } from "@/lib/buy-hold";
@@ -56,7 +56,6 @@ import { ActiveFiltersModal, getActiveFilterCount } from "@/components/active-fi
 import { Filter } from "lucide-react";
 
 const DATE_PREFS_KEY = "fba-date-prefs";
-const INBOUND_KEY = "fba-include-inbound";
 const COL_FILTERS_KEY = "fba-col-filters";
 
 function fmtDate(d: Date): string {
@@ -109,13 +108,8 @@ function loadColFilters(): FilterMap {
   return {};
 }
 
-function loadIncludeInbound(): boolean {
-  try {
-    const v = localStorage.getItem(INBOUND_KEY);
-    if (v !== null) return v === "true";
-  } catch {}
-  return true;
-}
+// loadIncludeInbound moved to @/lib/settings (2026-09-09) — one key for
+// every page (§21 settings-drift fix).
 
 function formatRelativeTime(iso: string | null): string {
   if (!iso) return "never";
@@ -459,7 +453,7 @@ export default function Home() {
   }, []);
 
   useEffect(() => {
-    localStorage.setItem(INBOUND_KEY, String(includeInboundShipping));
+    saveIncludeInbound(includeInboundShipping);
   }, [includeInboundShipping]);
 
   useEffect(() => {

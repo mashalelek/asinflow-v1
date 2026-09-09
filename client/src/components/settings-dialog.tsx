@@ -38,6 +38,10 @@ export interface MovedToggles {
   // Sits directly under the "Include Inbound Shipping" row.
   onResetCogs: () => void;
   isResettingCogs: boolean;
+  // §21 settings-drift fix (2026-09-09): a host page that cannot honor a
+  // control renders it DISABLED with this one-line reason — never hidden.
+  // Hidden fields are how the two pages drifted apart.
+  disabledReasons?: Partial<Record<"priceSource" | "showGated" | "showMeltable" | "showParked" | "showDead" | "resetCogs", string>>;
 }
 
 interface SettingsDialogProps {
@@ -130,7 +134,8 @@ export function SettingsDialog({
                       variant="outline"
                       size="sm"
                       onClick={movedToggles.onResetCogs}
-                      disabled={movedToggles.isResettingCogs}
+                      disabled={movedToggles.isResettingCogs || !!movedToggles.disabledReasons?.resetCogs}
+                      title={movedToggles.disabledReasons?.resetCogs}
                       className="h-8 text-xs shrink-0"
                       data-testid="button-reset-cogs"
                     >
@@ -164,7 +169,8 @@ export function SettingsDialog({
                     <RadioGroup
                       value={movedToggles.priceSource}
                       onValueChange={(v) => movedToggles.onPriceSourceChange(v as PriceSource)}
-                      className="flex gap-6 mt-2"
+                      disabled={!!movedToggles.disabledReasons?.priceSource}
+                      className={`flex gap-6 mt-2 ${movedToggles.disabledReasons?.priceSource ? "opacity-60" : ""}`}
                     >
                       <label className="flex items-center gap-2 text-sm cursor-pointer">
                         <RadioGroupItem value="lowestFba" />
@@ -175,14 +181,14 @@ export function SettingsDialog({
                         Buy Box
                       </label>
                     </RadioGroup>
-                    <p className="text-[10px] text-muted-foreground mt-1">Drives Estimated Profit/ROI/Margin via the column's selected price.</p>
+                    <p className="text-[10px] text-muted-foreground mt-1">{movedToggles.disabledReasons?.priceSource ?? "Drives Estimated Profit/ROI/Margin via the column's selected price."}</p>
                   </div>
 
-                  <ToggleRow id="dsGated"     label="Show gated"     checked={movedToggles.showGated}     onChange={movedToggles.onShowGatedChange} />
+                  <ToggleRow id="dsGated"     label="Show gated"     checked={movedToggles.showGated}     onChange={movedToggles.onShowGatedChange} disabledReason={movedToggles.disabledReasons?.showGated} />
                   <ToggleRow id="dsMeltable"  label="Show meltable"  checked={movedToggles.showMeltable}  onChange={movedToggles.onShowMeltableChange}
-                             hint="Seasonal default: auto-ON Apr 15 – Sep 15 unless manually toggled." />
-                  <ToggleRow id="dsParked"    label="Show parked"    checked={movedToggles.showParked}    onChange={movedToggles.onShowParkedChange} />
-                  <ToggleRow id="dsDead"      label="Show dead"      checked={movedToggles.showDead}      onChange={movedToggles.onShowDeadChange} />
+                             hint="Seasonal default: auto-ON Apr 15 – Sep 15 unless manually toggled." disabledReason={movedToggles.disabledReasons?.showMeltable} />
+                  <ToggleRow id="dsParked"    label="Show parked"    checked={movedToggles.showParked}    onChange={movedToggles.onShowParkedChange} disabledReason={movedToggles.disabledReasons?.showParked} />
+                  <ToggleRow id="dsDead"      label="Show dead"      checked={movedToggles.showDead}      onChange={movedToggles.onShowDeadChange} disabledReason={movedToggles.disabledReasons?.showDead} />
                 </div>
               </div>
             </>
@@ -261,16 +267,16 @@ function NumField({ id, label, value, onChange, hint, step = "0.01" }: {
   );
 }
 
-function ToggleRow({ id, label, checked, onChange, hint }: {
-  id: string; label: string; checked: boolean; onChange: (v: boolean) => void; hint?: string;
+function ToggleRow({ id, label, checked, onChange, hint, disabledReason }: {
+  id: string; label: string; checked: boolean; onChange: (v: boolean) => void; hint?: string; disabledReason?: string;
 }) {
   return (
-    <div className="flex items-center justify-between gap-4">
+    <div className={`flex items-center justify-between gap-4 ${disabledReason ? "opacity-60" : ""}`}>
       <div className="flex-1">
-        <Label htmlFor={id} className="text-sm cursor-pointer">{label}</Label>
-        {hint && <p className="text-[10px] text-muted-foreground mt-0.5">{hint}</p>}
+        <Label htmlFor={id} className={`text-sm ${disabledReason ? "" : "cursor-pointer"}`}>{label}</Label>
+        {(disabledReason ?? hint) && <p className="text-[10px] text-muted-foreground mt-0.5">{disabledReason ?? hint}</p>}
       </div>
-      <Switch id={id} checked={checked} onCheckedChange={onChange} />
+      <Switch id={id} checked={checked} onCheckedChange={onChange} disabled={!!disabledReason} />
     </div>
   );
 }

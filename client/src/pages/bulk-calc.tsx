@@ -25,7 +25,8 @@ import {
   type Settings,
 } from "@shared/schema";
 import { loadColumnConfig, type ColumnConfig } from "@/lib/columns";
-import { loadSettings } from "@/lib/settings";
+import { loadSettings, loadIncludeInbound, saveIncludeInbound } from "@/lib/settings";
+import { loadShowGated, loadShowMeltable, loadShowParked, loadShowDead } from "@/components/visibility-toggles";
 import { loadBuyList, saveBuyList, loadOnHoldList, saveOnHoldList } from "@/lib/buy-hold";
 
 // §21 column subset: Description + full Estimates + full Sellers + the four
@@ -153,6 +154,10 @@ export default function BulkCalc() {
   );
   const [settings, setSettings] = useState<Settings>(loadSettings);
   const [settingsOpen, setSettingsOpen] = useState(false);
+  // §21 settings-drift fix (2026-09-09): SAME key as the ASINs page
+  // (fba-include-inbound) — this page silently hard-defaulted to true.
+  const [includeInboundShipping, setIncludeInboundShipping] = useState(loadIncludeInbound);
+  useEffect(() => { saveIncludeInbound(includeInboundShipping); }, [includeInboundShipping]);
   const [buySet, setBuySet] = useState<Set<string>>(loadBuyList);
   const [onHoldSet, setOnHoldSet] = useState<Set<string>>(loadOnHoldList);
   const [selectedSet, setSelectedSet] = useState<Set<string>>(new Set());
@@ -617,6 +622,7 @@ export default function BulkCalc() {
           })}
           onSelectAllPage={(asins) => setSelectedSet(new Set(asins))}
           onClearSelection={() => setSelectedSet(new Set())}
+          includeInboundShipping={includeInboundShipping}
           dateFilterCols={BULK_DATE_FILTER_COLS}
           sortCol={sortCol}
           sortDir={sortDir}
@@ -748,7 +754,38 @@ export default function BulkCalc() {
 
       {/* Settings — opened via the top-nav gear (OPEN_SETTINGS_EVENT). Same
           global settings as the main table (§21). */}
-      <SettingsDialog onSettingsChange={setSettings} open={settingsOpen} onOpenChange={setSettingsOpen} hideTrigger />
+      {/* §21: the SAME dialog + storage key as the ASINs page. Controls this
+          page cannot honor render DISABLED with a reason — never hidden. */}
+      <SettingsDialog
+        onSettingsChange={setSettings}
+        open={settingsOpen}
+        onOpenChange={setSettingsOpen}
+        hideTrigger
+        movedToggles={{
+          includeInboundShipping,
+          onIncludeInboundShippingChange: setIncludeInboundShipping,
+          priceSource: "lowestFba",
+          onPriceSourceChange: () => {},
+          showGated: loadShowGated(),
+          onShowGatedChange: () => {},
+          showMeltable: loadShowMeltable(),
+          onShowMeltableChange: () => {},
+          showParked: loadShowParked(),
+          onShowParkedChange: () => {},
+          showDead: loadShowDead(),
+          onShowDeadChange: () => {},
+          onResetCogs: () => {},
+          isResettingCogs: false,
+          disabledReasons: {
+            priceSource: "Bulk rows store one snapshot price (lowest FBA, buy-box fallback) — there is no second price to switch to.",
+            showGated: "Applies to the main ASINs list — bulk lists have no gating-based row scope.",
+            showMeltable: "Applies to the main ASINs list — bulk lists have no meltable-based row scope.",
+            showParked: "Applies to the main ASINs list — bulk rows have no parked/dead status.",
+            showDead: "Applies to the main ASINs list — bulk rows have no parked/dead status.",
+            resetCogs: "Acts on the main catalog's estimates — this page never writes there (§21 isolation).",
+          },
+        }}
+      />
     </div>
   );
 }
