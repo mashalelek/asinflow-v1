@@ -467,13 +467,13 @@ export default function BulkCalc() {
 
   const sortedResults = useMemo(() => {
     const filtered = Object.keys(colFilters).length > 0
-      ? results.filter((r) => matchesFilters(r, colFilters, (colId) => getRowValue(r, colId, "lowestFba", settings)))
+      ? results.filter((r) => matchesFilters(r, colFilters, (colId) => getRowValue(r, colId, "lowestFba", settings, includeInboundShipping)))
       : results;
     if (!sortCol) return filtered;
     const dir = sortDir === "asc" ? 1 : -1;
     return [...filtered].sort((a, b) => {
-      const va = getRowValue(a, sortCol, "lowestFba", settings);
-      const vb = getRowValue(b, sortCol, "lowestFba", settings);
+      const va = getRowValue(a, sortCol, "lowestFba", settings, includeInboundShipping);
+      const vb = getRowValue(b, sortCol, "lowestFba", settings, includeInboundShipping);
       if (va == null && vb == null) return 0;
       if (va == null) return 1;
       if (vb == null) return -1;
@@ -486,7 +486,7 @@ export default function BulkCalc() {
       }
       return String(va).localeCompare(String(vb)) * dir;
     });
-  }, [results, sortCol, sortDir, settings, colFilters]);
+  }, [results, sortCol, sortDir, settings, colFilters, includeInboundShipping]);
 
   // Export scope (§21): rows selected → export selected; none → export all.
   const exportResults = useMemo(
@@ -602,7 +602,7 @@ export default function BulkCalc() {
           onClick={() => setRefreshResultOpen(true)}>
           <History className="h-3.5 w-3.5" />
         </Button>
-        <ExportButtons results={exportResults} priceSource="lowestFba" settings={settings} columnConfig={columnConfig} filename={exportFilename} includeSkuSubColumn={false} />
+        <ExportButtons results={exportResults} priceSource="lowestFba" settings={settings} columnConfig={columnConfig} filename={exportFilename} includeSkuSubColumn={false} includeInboundShipping={includeInboundShipping} />
         <ColumnManager config={columnConfig} onChange={setColumnConfig} columns={BULK_COLUMNS} storageKey={BULK_COLUMNS_KEY} />
       </div>
 

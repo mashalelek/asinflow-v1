@@ -271,8 +271,8 @@ export default function Analytics() {
   const sortedFilteredResults = useMemo(() => {
     if (!sortCol) return filteredResults;
     return [...filteredResults].sort((a, b) => {
-      const va = getRowValue(a, sortCol, priceSource, settings);
-      const vb = getRowValue(b, sortCol, priceSource, settings);
+      const va = getRowValue(a, sortCol, priceSource, settings, includeInboundShipping);
+      const vb = getRowValue(b, sortCol, priceSource, settings, includeInboundShipping);
       if (va == null && vb == null) return 0;
       if (va == null) return 1;
       if (vb == null) return -1;
@@ -281,7 +281,7 @@ export default function Analytics() {
       const sb = String(vb).toLowerCase();
       return sortDir === "asc" ? sa.localeCompare(sb) : sb.localeCompare(sa);
     });
-  }, [filteredResults, sortCol, sortDir, priceSource, settings]);
+  }, [filteredResults, sortCol, sortDir, priceSource, settings, includeInboundShipping]);
 
   // ── Metrics ───────────────────────────────────────────────────────
   // Selection wins over filters

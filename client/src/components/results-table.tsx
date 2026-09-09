@@ -345,7 +345,11 @@ export function getRowValue(
   result: AsinResult,
   colId: ColumnId,
   priceSource: PriceSource,
-  settings: Settings
+  settings: Settings,
+  // ONE profit computation (2026-09-09): sort/filter/export consult the
+  // same inbound toggle the rendered cells do. Default true = the toggle's
+  // own default, NOT a page override — every page passes its live value.
+  includeInboundShipping = true,
 ): number | string | null {
   const { price } = getSelectedPrice(result, priceSource);
   const prep = getEffectivePrep(result, settings);
@@ -362,7 +366,7 @@ export function getRowValue(
       prep.value,
       storage.value,
       settings,
-      true,
+      includeInboundShipping,
       appliesDgHazmatSurcharge(result),
       result.category ?? null
     );

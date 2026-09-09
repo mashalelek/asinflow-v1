@@ -1433,8 +1433,8 @@ export default function Home() {
   const sortedFilteredResults = useMemo(() => {
     if (!sortCol) return queryFilteredResults;
     return [...queryFilteredResults].sort((a, b) => {
-      const va = getRowValue(a, sortCol, priceSource, settings);
-      const vb = getRowValue(b, sortCol, priceSource, settings);
+      const va = getRowValue(a, sortCol, priceSource, settings, includeInboundShipping);
+      const vb = getRowValue(b, sortCol, priceSource, settings, includeInboundShipping);
       if (va == null && vb == null) return 0;
       if (va == null) return 1;
       if (vb == null) return -1;
@@ -1445,7 +1445,7 @@ export default function Home() {
       const sb = String(vb).toLowerCase();
       return sortDir === "asc" ? sa.localeCompare(sb) : sb.localeCompare(sa);
     });
-  }, [queryFilteredResults, sortCol, sortDir, priceSource, settings]);
+  }, [queryFilteredResults, sortCol, sortDir, priceSource, settings, includeInboundShipping]);
 
   // Keep ref in sync so selection-aware handlers (declared above) can read
   // the latest filtered working set without TDZ.
@@ -1628,7 +1628,7 @@ export default function Home() {
             {/* RIGHT — data-in + presentation: Upload | Export | status actions */}
             <div className="flex items-center gap-2 flex-wrap">
               <FileUpload onFileProcessed={handleFileProcessed} isAnalyzing={isAnalyzing} compact />
-              <ExportButtons results={sortedFilteredResults} priceSource={priceSource} settings={settings} columnConfig={columnConfig} />
+              <ExportButtons results={sortedFilteredResults} priceSource={priceSource} settings={settings} columnConfig={columnConfig} includeInboundShipping={includeInboundShipping} />
               {selectedSet.size > 0 && (
                 <>
                   <span className="h-6 w-px bg-border" aria-hidden="true" />

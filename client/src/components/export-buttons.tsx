@@ -20,6 +20,9 @@ interface ExportButtonsProps {
   // expansion's SKU sub-column would always be empty — the SKU-named column
   // in the bulk export is the standalone Supplier SKU column instead.
   includeSkuSubColumn?: boolean;
+  /** ONE profit computation (2026-09-09): export consults the same inbound
+      toggle the rendered cells do. */
+  includeInboundShipping?: boolean;
 }
 
 // The "product" column is a combined cell in the UI. When exporting, split it
@@ -36,6 +39,7 @@ const colLabelMap = new Map(ALL_COLUMNS.map((c) => [c.id, c.label]));
 function buildExportColumns(
   columnConfig: ColumnConfig,
   includeSkuSubColumn: boolean,
+  includeInboundShipping: boolean,
 ): { id: string; label: string; getValue: (r: AsinResult, priceSource: PriceSource, settings: Settings) => string | number | null }[] {
   const visibleOrder = columnConfig.order.filter((id) => columnConfig.visible.has(id));
   const visibleSet = new Set(visibleOrder);
@@ -58,7 +62,7 @@ function buildExportColumns(
       cols.push({
         id: colId,
         label: colLabelMap.get(colId) ?? colId,
-        getValue: (r, ps, s) => getRowValue(r, colId, ps, s),
+        getValue: (r, ps, s) => getRowValue(r, colId, ps, s, includeInboundShipping),
       });
     }
   }
@@ -81,8 +85,9 @@ function buildExportData(
   settings: Settings,
   columnConfig: ColumnConfig,
   includeSkuSubColumn: boolean,
+  includeInboundShipping: boolean,
 ): { headers: string[]; rows: string[][] } {
-  const cols = buildExportColumns(columnConfig, includeSkuSubColumn);
+  const cols = buildExportColumns(columnConfig, includeSkuSubColumn, includeInboundShipping);
   const headers = cols.map((c) => c.label);
   const rows = results.map((r) =>
     cols.map((c) => formatValue(c.getValue(r, priceSource, settings)))
@@ -97,8 +102,9 @@ function downloadCsv(
   columnConfig: ColumnConfig,
   filename: string,
   includeSkuSubColumn: boolean,
+  includeInboundShipping: boolean,
 ) {
-  const { headers, rows } = buildExportData(results, priceSource, settings, columnConfig, includeSkuSubColumn);
+  const { headers, rows } = buildExportData(results, priceSource, settings, columnConfig, includeSkuSubColumn, includeInboundShipping);
   if (rows.length === 0) return;
 
   function escapeCsv(val: string): string {
@@ -122,12 +128,12 @@ function downloadCsv(
   URL.revokeObjectURL(url);
 }
 
-export function ExportButtons({ results, priceSource, settings, columnConfig, filename = "fba-analysis.csv", includeSkuSubColumn = true }: ExportButtonsProps) {
+export function ExportButtons({ results, priceSource, settings, columnConfig, filename = "fba-analysis.csv", includeSkuSubColumn = true, includeInboundShipping = true }: ExportButtonsProps) {
   return (
     <Button
       variant="outline"
       size="sm"
-      onClick={() => downloadCsv(results, priceSource, settings, columnConfig, filename, includeSkuSubColumn)}
+      onClick={() => downloadCsv(results, priceSource, settings, columnConfig, filename, includeSkuSubColumn, includeInboundShipping)}
       disabled={results.length === 0}
       className="h-8 text-xs"
       data-testid="button-export"
