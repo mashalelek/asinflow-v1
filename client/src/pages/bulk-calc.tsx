@@ -27,6 +27,7 @@ import { loadColumnConfig, type ColumnConfig } from "@/lib/columns";
 import { loadSettings, loadIncludeInbound, saveIncludeInbound, loadPriceSource, savePriceSource } from "@/lib/settings";
 import { loadShowGated, saveShowGated, loadShowMeltable, saveShowMeltable, loadShowParked, loadShowDead } from "@/components/visibility-toggles";
 import { loadBuyList, saveBuyList, loadOnHoldList, saveOnHoldList } from "@/lib/buy-hold";
+import { useToast } from "@/hooks/use-toast";
 
 // §21 column subset: Description + full Estimates + full Sellers + the four
 // Additional-info columns. Stock and Actuals excluded (no data path — honest
@@ -141,6 +142,7 @@ export default function BulkCalc() {
   );
   const [results, setResults] = useState<AsinResult[]>([]);
   const [inDbSet, setInDbSet] = useState<Set<string>>(new Set());
+  const { toast } = useToast();
   const [columnConfig, setColumnConfig] = useState<ColumnConfig>(
     () => loadColumnConfig(BULK_COLUMNS_KEY, BULK_COLUMNS),
   );
@@ -418,39 +420,95 @@ export default function BulkCalc() {
 
   // Buy List + On Hold — SHARED with the main page (same localStorage keys,
   // same mutual-eviction semantics as home.tsx's handlers).
-  const handleToggleBuy = useCallback((asin: string) => {
+  // §21 Promote to database (2026-09-09): the one user-initiated bulk →
+  // main write. Returns per-ASIN outcomes; callers decide UI.
+  const promoteAsins = useCallback(async (asinList: string[]) => {
+    const res = await fetch(`/api/bulk-lists/${selectedListId}/promote`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ asins: asinList }),
+    });
+    if (!res.ok) { const err = await res.json().catch(() => ({})); throw new Error(err.message ?? `Promote failed (${res.status})`); }
+    return res.json() as Promise<{ counts: { added: number; already_in_database: number; error: number }; results: Array<{ asin: string; outcome: string; message?: string }> }>;
+  }, [selectedListId]);
+
+  const handleAddToDatabase = useCallback(async () => {
+    if (selectedSet.size === 0) return;
+    const asinList = Array.from(selectedSet);
+    try {
+      const { counts, results } = await promoteAsins(asinList);
+      const already = results.filter((r) => r.outcome === "already_in_database").map((r) => r.asin);
+      const errors = results.filter((r) => r.outcome === "error");
+      setInDbSet((prev) => {
+        const next = new Set(prev);
+        for (const r of results) if (r.outcome === "added" || r.outcome === "already_in_database") next.add(r.asin);
+        return next;
+      });
+      toast({
+        title: `Added ${counts.added} to your database` + (counts.already_in_database ? ` · already in database (${counts.already_in_database})` : "") + (counts.error ? ` · errors (${counts.error})` : ""),
+        description: (counts.added ? "They're now separate from this list — edits no longer flow between the two. " : "")
+          + (already.length ? `Already there: ${already.slice(0, 10).join(", ")}${already.length > 10 ? ` +${already.length - 10} more` : ""}. ` : "")
+          + errors.map((e) => `${e.asin}: ${e.message}`).slice(0, 3).join("; "),
+      });
+    } catch (e: any) {
+      toast({ title: "Add to database failed", description: e.message, variant: "destructive" });
+    }
+  }, [selectedSet, promoteAsins, toast]);
+
+  // §21 auto-add (decision): cart/hold on a row NOT in the database
+  // promotes it silently, then updates the set. Optimistic icon flip —
+  // set + inDb updated immediately, reverted with a toast if the promote
+  // fails. Already-in-DB rows: the click only touches the set, as always.
+  const withAutoPromote = useCallback((asin: string, addingToSet: boolean, applySet: () => void, revertSet: () => void) => {
+    applySet();
+    if (!addingToSet || inDbSet.has(asin)) return;
+    setInDbSet((prev) => new Set(prev).add(asin)); // optimistic icon flip
+    promoteAsins([asin]).then(({ results }) => {
+      const r = results[0];
+      if (r?.outcome === "error") throw new Error(r.message ?? "promote failed");
+      toast({ title: `Added ${asin} to your database`, description: "It's now separate from this list — edits no longer flow between the two." });
+    }).catch((e: any) => {
+      setInDbSet((prev) => { const next = new Set(prev); next.delete(asin); return next; });
+      revertSet();
+      toast({ title: `Couldn't add ${asin} to your database`, description: e.message, variant: "destructive" });
+    });
+  }, [inDbSet, promoteAsins, toast]);
+
+  const applyBuyToggle = useCallback((asin: string, add: boolean) => {
     setBuySet((prev) => {
       const next = new Set(prev);
-      if (next.has(asin)) next.delete(asin);
-      else next.add(asin);
+      if (add) next.add(asin); else next.delete(asin);
       saveBuyList(next);
       return next;
     });
-    setOnHoldSet((prev) => {
+    if (add) setOnHoldSet((prev) => {
       if (!prev.has(asin)) return prev;
-      const next = new Set(prev);
-      next.delete(asin);
-      saveOnHoldList(next);
-      return next;
+      const next = new Set(prev); next.delete(asin); saveOnHoldList(next); return next;
     });
   }, []);
 
-  const handleToggleHold = useCallback((asin: string) => {
+  const applyHoldToggle = useCallback((asin: string, add: boolean) => {
     setOnHoldSet((prev) => {
       const next = new Set(prev);
-      if (next.has(asin)) next.delete(asin);
-      else next.add(asin);
+      if (add) next.add(asin); else next.delete(asin);
       saveOnHoldList(next);
       return next;
     });
-    setBuySet((prev) => {
+    if (add) setBuySet((prev) => {
       if (!prev.has(asin)) return prev;
-      const next = new Set(prev);
-      next.delete(asin);
-      saveBuyList(next);
-      return next;
+      const next = new Set(prev); next.delete(asin); saveBuyList(next); return next;
     });
   }, []);
+
+  const handleToggleBuy = useCallback((asin: string) => {
+    const adding = !buySet.has(asin);
+    withAutoPromote(asin, adding, () => applyBuyToggle(asin, adding), () => applyBuyToggle(asin, false));
+  }, [buySet, withAutoPromote, applyBuyToggle]);
+
+  const handleToggleHold = useCallback((asin: string) => {
+    const adding = !onHoldSet.has(asin);
+    withAutoPromote(asin, adding, () => applyHoldToggle(asin, adding), () => applyHoldToggle(asin, false));
+  }, [onHoldSet, withAutoPromote, applyHoldToggle]);
 
   const handleSort = useCallback((colId: ColumnId) => {
     setSortCol((prev) => {
@@ -585,6 +643,15 @@ export default function BulkCalc() {
         )}
         <div className="flex-1" />
         <FileUpload onFileProcessed={handleFileProcessed} isAnalyzing={refreshing} compact cogsOptional />
+        {/* §21 Promote (2026-09-09): selection-scoped, never "all" — a
+            1,946-row promote must be deliberate. Label grep clean per §8. */}
+        <Button variant="outline" size="sm" className="h-8 text-xs" data-testid="button-add-to-database"
+          disabled={selectedSet.size === 0}
+          title={selectedSet.size === 0 ? "Select rows to add to your database" : undefined}
+          onClick={handleAddToDatabase}>
+          <Database className="h-3.5 w-3.5 mr-1.5" />
+          Add to database{selectedSet.size > 0 ? ` (${selectedSet.size})` : ""}
+        </Button>
         {/* "Refresh" (was "Refresh Prices", 2026-09-09): full bulk pipeline —
             prices, fees, catalog, gating, hazmat. Default scope failed +
             never-fetched; "Refresh all" covers everything (§21). */}

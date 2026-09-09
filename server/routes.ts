@@ -36,6 +36,8 @@ import { processBulkApproval, makeProductionHandlers, type ApprovalItem } from "
 import { settingsSchema, type Settings } from "@shared/schema";
 import type { AnalyzeSink } from "./analyze-sink";
 import { startBulkRun, subscribeBulkRun, getBulkRunStatus } from "./bulk-refresh";
+import { upsertTagsForAsin, TAG_COLORS } from "./tags-repo";
+import { promoteBulkAsins } from "./bulk-promote";
 import { rateLimitStats, rateLimitStatsSince } from "./spapi-rate-limit";
 import {
   createBulkList,
@@ -47,7 +49,6 @@ import {
 } from "./bulk-lists";
 import fs from "fs";
 
-const TAG_COLORS = ["#3B82F6", "#EF4444", "#10B981", "#F59E0B", "#8B5CF6", "#EC4899", "#14B8A6", "#F97316", "#6366F1", "#84CC16"];
 
 // Module-level handle to runAnalyzeCore (defined inside registerRoutes).
 // Set during registerRoutes init so the sourcing-sync cron (which runs after
@@ -725,25 +726,7 @@ async function upsertAsinResult(
   return { inserted };
 }
 
-async function upsertTagsForAsin(asin: string, tagNames: string[]): Promise<void> {
-  const asinRow = await query(`SELECT id FROM asins WHERE asin = $1`, [asin]);
-  if (asinRow.rows.length === 0) return;
-  const asinId = asinRow.rows[0].id;
-
-  for (const name of tagNames) {
-    let tagRes = await query(`SELECT id FROM tags WHERE LOWER(name) = LOWER($1)`, [name]);
-    if (tagRes.rows.length === 0) {
-      tagRes = await query(
-        `INSERT INTO tags (name, color) VALUES ($1, $2) RETURNING id`,
-        [name, TAG_COLORS[Math.floor(Math.random() * TAG_COLORS.length)]]
-      );
-    }
-    await query(
-      `INSERT INTO asin_tags (asin_id, tag_id) VALUES ($1, $2) ON CONFLICT DO NOTHING`,
-      [asinId, tagRes.rows[0].id]
-    );
-  }
-}
+// upsertTagsForAsin + TAG_COLORS moved to server/tags-repo.ts (2026-09-09).
 
 async function appendNotesForAsin(asin: string, newNotes: string): Promise<void> {
   await query(
@@ -3816,6 +3799,28 @@ export async function registerRoutes(
       if (event?.type === "complete") { clearInterval(hb); try { res.end(); } catch {} }
     });
     res.on("close", () => { clearInterval(hb); unsubscribe?.(); });
+  });
+
+  // §21 Promote to database (2026-09-09): the ONE user-initiated bulk →
+  // main write. Per-ASIN transactions; existing ASINs (any status) skipped.
+  app.post("/api/bulk-lists/:id/promote", async (req: Request, res: Response) => {
+    if (!isDbAvailable()) { res.status(503).json({ message: "Database not available" }); return; }
+    const listId = typeof req.params.id === "string" ? req.params.id : "";
+    const asins = (req.body ?? {}).asins;
+    if (!Array.isArray(asins) || asins.length === 0) {
+      res.status(400).json({ message: "asins is required — promotion acts on an explicit selection, never a whole list" }); return;
+    }
+    try {
+      const results = await promoteBulkAsins(listId, asins.map(String));
+      const counts = {
+        added: results.filter((r) => r.outcome === "added").length,
+        already_in_database: results.filter((r) => r.outcome === "already_in_database").length,
+        error: results.filter((r) => r.outcome === "error").length,
+      };
+      res.json({ counts, results });
+    } catch (err: any) {
+      res.status(500).json({ message: err.message });
+    }
   });
 
   // Re-attach point: current progress of a live run (or terminal state for

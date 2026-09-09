@@ -67,3 +67,17 @@ describe("runFeesPass — pluggable writer, zero DB access", () => {
     expect(querySpy).not.toHaveBeenCalled();
   });
 });
+
+describe("§21 isolation — promote is the ONLY bulk module that writes to asins", () => {
+  it("no other bulk-* module contains an INSERT/UPDATE against asins or asin_estimates", async () => {
+    const { readFileSync } = await import("fs");
+    const { join } = await import("path");
+    for (const mod of ["bulk-lists.ts", "bulk-refresh.ts"]) {
+      const src = readFileSync(join(__dirname, mod), "utf8");
+      expect(src, `${mod} must not write to main tables`).not.toMatch(/(INSERT INTO|UPDATE)\s+asins\b/);
+      expect(src, `${mod} must not write to main tables`).not.toMatch(/(INSERT INTO|UPDATE)\s+asin_estimates\b/);
+    }
+    const promote = readFileSync(join(__dirname, "bulk-promote.ts"), "utf8");
+    expect(promote).toMatch(/insertSql\("asins"/); // the one sanctioned writer (builds its INSERT via insertSql)
+  });
+});

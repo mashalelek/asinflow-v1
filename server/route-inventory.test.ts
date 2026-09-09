@@ -51,6 +51,7 @@ const EXPECTED_ROUTES = [
   "POST /api/asins/in-database",
   "POST /api/asins/revive",
   "POST /api/bulk-lists",
+  "POST /api/bulk-lists/:id/promote",
   "POST /api/bulk-lists/:id/refresh",
   "POST /api/cogs/bulk-sync-from-po",
   "POST /api/export/sellerboard-cogs",

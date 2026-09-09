@@ -1894,6 +1894,17 @@ refresh) refreshes Amazon-side data ONLY.
   `promo_notes`, `notes` (2026-09-08), `added_at`, `supplier_sku`,
   `estimated_cogs` — the bulk sink never writes, clears, or overwrites them
 
+**Bulk promote (2026-09-09, new-ASIN INSERT only — §21 "Promote to
+database"):** a second writer for `buy_link`, `supplier`, `supplier_sku`,
+tags, notes, `promo_notes` (alongside the sourcing sync), and
+`estimated_cogs`/`estimated_cogs_source` — INSERT branch only, never an
+update to an existing row. `added_at` is insert time (NOW()) everywhere
+EXCEPT bulk promote, which carries the bulk row's lead date. Promotion
+also seeds the catalog/pricing snapshot and the gating/hazmat values with
+their ORIGINAL timestamps (bulk `fetched_at`, cache `*_checked_at`) — a
+one-time seed at row creation, not an ongoing writer; the next Prices &
+Stock / Product Info run takes over as owner.
+
 Violations of this rule have caused recurring "COGS clears on analyze" bugs.
 When in doubt, the analyze path should leave the field alone.
 
@@ -2165,7 +2176,9 @@ flag and the tag are not synced — they coexist independently.
 ## 17. CSV Upload — Duplicate ASIN Handling (Planned)
 
 When a user uploads a CSV/XLSX containing ASINs that already exist in the
-catalog, AsinFlow surfaces them before processing.
+catalog, AsinFlow surfaces them before processing. (Bulk promote — §21 —
+handles its own duplicates by SKIPPING existing rows outright, any status;
+the Overwrite option below is a CSV-upload concern and stays here.)
 
 ### Pre-upload check
 
@@ -3205,6 +3218,55 @@ inventory, sales) is excluded. Product-level Amazon catalog data from the
 analyze pipeline (meltable, hazmat, DG, eligibility, pricing, fees, BSR,
 seller counts) is retained — it describes the ASIN, not your relationship to
 it.
+
+### Promote to database (2026-09-09)
+
+**The isolation guarantee gets ONE exception.** Nothing automatic on this
+page writes to the main tables — the pipeline, inline edits, list
+create/delete, Refresh all stay bulk-only. **Promotion is the one
+user-initiated write**, through a dedicated write path
+(`insertPromotedAsin` — NOT the bulk sink, NOT the analyze UPSERT), and
+it is reachable only from an explicit user action:
+
+1. **Toolbar "Add to database"** — acts on the checkbox selection; none
+   selected → disabled (never "all"; a 1,946-row promote must be
+   deliberate).
+2. **Cart / Hold click on a row whose ASIN is not in `asins`** — promotes
+   silently (decision: auto-add), then updates the Buy/Hold set as
+   today. Optimistic icon flip; revert + toast on error. Already-in-DB
+   ASINs: the click only touches the set. (This fixes the invisibility
+   bug: the sets are shared localStorage, but the ASINs page's Buy List
+   view inner-joins against `asins` — a bulk-only ASIN carted here was
+   silently invisible there.)
+
+Per promoted ASIN, one transaction: a new `asins` row (status `active`)
+plus its `asin_estimates` row, carrying the bulk row's user-controlled
+fields (buy link/supplier, supplier SKU, est. COGS + source, notes,
+promos, tags — missing tag names created ungrouped, matched
+case-insensitively, existing tags never modified; tag creation runs
+AFTER the insert commits, in the same per-ASIN unit of work, and a tag
+failure makes that ASIN's outcome `error`, never a silent success) and
+its snapshot (catalog, both prices, fees, BSR, sellers — seeded with the
+bulk `fetched_at`; gating/hazmat values + stamps from
+`bulk_gating_hazmat_cache` — all timestamps passed EXPLICITLY so no
+column default fires and Price Age / the 30-day rule stay honest).
+`added_at` = the bulk row's lead date (decision: lead date, not
+promotion date). `is_wholesale`/`is_oa` unset (§16: user-set only).
+
+Duplicates (decision: skip existing): an ASIN already in `asins` — ANY
+status, parked/dead included — is never touched; it reports
+`already_in_database`. No §17 dialog, no merge.
+
+After promotion the bulk row is NEVER modified; its Product cell flips
+to the `in_database` icon on refetch. The bulk row and the `asins` row
+are independent copies — edits on one do not flow to the other (the §21
+COGS-divergence rule, extended to every field; the "Added" toast says
+so). No ledger row — it's a write, not a fetch; one server log line per
+promoted ASIN. Endpoint: `POST /api/bulk-lists/:id/promote {asins}` →
+per-ASIN `{asin, outcome: added | already_in_database | error}`, one
+transaction per ASIN (one failure never rolls back the others). Out of
+scope: un-promote (use Park/Mark dead), promoting without a selection,
+syncing later bulk edits into the main row.
 
 ### Saved lists
 
