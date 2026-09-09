@@ -273,6 +273,11 @@ export default function BulkCalc() {
       const reader = res.body.getReader();
       const decoder = new TextDecoder();
       let buffer = "";
+      // Stage writes land in bulk_list_asins AS EACH STAGE RUNS (the sink
+      // is per-row) — refetch rows + the snapshot label on every stage
+      // TRANSITION so prices appear after the prices stage, titles after
+      // catalog, etc., not only after hazmat ends (2026-09-09).
+      let lastStage: string | null = null;
       for (;;) {
         const { done, value } = await reader.read();
         if (done) break;
@@ -284,6 +289,13 @@ export default function BulkCalc() {
           try {
             const msg = JSON.parse(line);
             if (msg.type === "stage") {
+              if (lastStage !== null && msg.stage !== lastStage) {
+                // Previous stage finished — pull its rows in (fire-and-forget
+                // so the stream read never stalls behind a refetch).
+                void loadRows(listId);
+                void fetchLists();
+              }
+              lastStage = msg.stage;
               setRefreshProgress(`${msg.stage} ${msg.current}/${msg.total}${msg.asin ? ` — ${msg.asin}` : ""}`);
             } else if (msg.type === "complete") {
               if (msg.data?.error) throw new Error(msg.data.error);
@@ -325,6 +337,7 @@ export default function BulkCalc() {
     if (!selectedListId) return;
     let timer: ReturnType<typeof setInterval> | null = null;
     let cancelled = false;
+    let pollStage: string | null = null;
     const poll = async () => {
       try {
         const res = await fetch(`/api/bulk-lists/${selectedListId}/refresh/status`);
@@ -341,6 +354,9 @@ export default function BulkCalc() {
           return;
         }
         setRefreshing(true);
+        // Stage advanced while re-attached — pull the finished stage's rows.
+        if (pollStage !== null && pollStage !== st.stage) { void loadRows(selectedListId); void fetchLists(); }
+        pollStage = st.stage;
         setRefreshProgress(`${st.stage} ${st.current}/${st.total} (re-attached)`);
         if (!timer) timer = setInterval(poll, 2000);
       } catch {}
