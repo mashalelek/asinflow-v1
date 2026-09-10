@@ -52,6 +52,7 @@ const BULK_ROW = {
   bsr: 1234, sellers_fba: 3, sellers_fbm: 1,
   eligibility_status: null, estimated_cogs: "11.17", estimated_cogs_source: "csv",
   fetched_at: new Date("2026-09-09T15:00:00Z"),
+  last_reviewed_at: new Date("2026-09-08T12:00:00Z"),
   tags: ["Spark Lead"],
 };
 const CACHE_ROW = {
@@ -73,6 +74,7 @@ describe("buildPromoteRows — the doc's field table, verbatim", () => {
       is_hazmat: false,                                  // cache wins
       gating_checked_at: CACHE_ROW.gating_checked_at,    // stamps carried
       hazmat_checked_at: CACHE_ROW.hazmat_checked_at,
+      last_reviewed_at: BULK_ROW.last_reviewed_at,       // review stamp carries (2026-09-10)
     });
     expect(asins).not.toHaveProperty("is_wholesale");    // §16: user-set only
     expect(estimates).toMatchObject({

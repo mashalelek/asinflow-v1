@@ -47,6 +47,7 @@ export function buildPromoteRows(bulk: any, cache: any): {
       notes: bulk.notes ?? null,
       promo_notes: bulk.promo_notes ?? null,
       added_at: bulk.added_at,               // lead date, NOT promotion date
+      last_reviewed_at: bulk.last_reviewed_at ?? null, // review stamp carries (2026-09-10)
       status: "active",
       gating_checked_at: cache?.gating_checked_at ?? null,
       hazmat_checked_at: cache?.hazmat_checked_at ?? null,

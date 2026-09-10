@@ -3988,6 +3988,22 @@ export async function registerRoutes(
     } catch (err: any) { res.status(500).json({ message: err.message }); }
   });
 
+  // §21 bulk-local Last Reviewed (2026-09-10) — same gesture as the main
+  // page's review-link clicks; stamps NOW(); bulk table only.
+  app.put("/api/bulk-lists/:id/asins/:asin/last-reviewed", async (req: Request, res: Response) => {
+    if (!isDbAvailable()) { res.status(503).json({ message: "Database not available" }); return; }
+    const listId = typeof req.params.id === "string" ? req.params.id : "";
+    const asin = (typeof req.params.asin === "string" ? req.params.asin : "").toUpperCase();
+    try {
+      const updated = await query(
+        `UPDATE bulk_list_asins SET last_reviewed_at = NOW() WHERE list_id = $1 AND asin = $2 RETURNING last_reviewed_at`,
+        [listId, asin],
+      );
+      if ((updated.rowCount ?? 0) === 0) { res.status(404).json({ message: "Row not found in list" }); return; }
+      res.json({ lastReviewedAt: updated.rows[0].last_reviewed_at });
+    } catch (err: any) { res.status(500).json({ message: err.message }); }
+  });
+
   // §21 bulk-local Notes (2026-09-08) — same contract as promos: manual
   // edit only, the bulk sink never touches it.
   app.put("/api/bulk-lists/:id/asins/:asin/notes", async (req: Request, res: Response) => {

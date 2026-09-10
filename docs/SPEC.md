@@ -302,6 +302,26 @@ representations of the same logical "narrow to specific ASIN(s)" intent.
 `COLUMN_GROUPS` array in code is the single source of truth. Both Manage
 Columns panel order and table render order derive from it.
 
+### Last Reviewed (documented 2026-09-10)
+
+Backed by `asins.last_reviewed_at`. **Set automatically** when the user
+clicks any review link in the Product cell — the Keepa link, the SAS
+link, or the supplier/buy-link domain — via `markReviewed()` →
+`PUT /api/asins/:asin/reviewed` (stamps NOW(); optimistic client
+update). There is no manual date editor and **nothing clears it** — it
+answers "when did a human last look at this row," and the honest answer
+only moves forward. Renders as the tiny MM/DD/YYYY corner date in the
+Product cell (dash when never reviewed, tooltip with the full
+timestamp) and as the optional "Last Reviewed" column (Additional info,
+default hidden, M/D/YYYY, em-dash when null). Filter: the `reviewed`
+mechanism (Never reviewed / not reviewed in last X days / reviewed in
+last X days — shared with Price Age's neutral-label variant). Sort is
+date-aware (`DATE_VALUE_COLS`). Mirrored bulk-locally on Bulk Calc
+(§21, 2026-09-10): same gesture, same renderer, same filter, backed by
+`bulk_list_asins.last_reviewed_at` via
+`PUT /api/bulk-lists/:id/asins/:asin/last-reviewed` — never the main
+table; carried to `asins` on promotion.
+
 ### Sale Price cell renders row STATE (2026-09-09)
 
 The Estimated Sale Price cell derives what it shows from the row, same
@@ -1938,7 +1958,8 @@ Price cells into "⚠ Error" on rows with good prices).
 
 **Bulk promote (2026-09-09, new-ASIN INSERT only — §21 "Promote to
 database"):** a second writer for `buy_link`, `supplier`, `supplier_sku`,
-tags, notes, `promo_notes` (alongside the sourcing sync), and
+tags, notes, `promo_notes` (alongside the sourcing sync),
+`last_reviewed_at` (2026-09-10), and
 `estimated_cogs`/`estimated_cogs_source` — INSERT branch only, never an
 update to an existing row. `added_at` is insert time (NOW()) everywhere
 EXCEPT bulk promote, which carries the bulk row's lead date. Promotion
@@ -3013,7 +3034,10 @@ mounted on this page.
   target by design, no cross-list tag queries exist, and a join table would
   re-create the exact shape the isolation guarantee forbids linking to),
   promo_notes, notes (migration 034, 2026-09-08 — bulk-local Spark
-  commentary; same pattern as promo_notes).
+  commentary; same pattern as promo_notes), last_reviewed_at (migration
+  042, 2026-09-10 — the §6 review stamp, bulk-local: set by the same
+  Product-cell link clicks, default-hidden column like main, `reviewed`
+  filter, never touched by the pipeline, carried on promotion).
   UNIQUE(list_id, asin).
 
 No `has_live_offer` column — account state is out of scope (see `in_database`
@@ -3293,7 +3317,8 @@ bulk `fetched_at`; gating/hazmat values + stamps from
 `bulk_gating_hazmat_cache` — all timestamps passed EXPLICITLY so no
 column default fires and Price Age / the 30-day rule stay honest).
 `added_at` = the bulk row's lead date (decision: lead date, not
-promotion date). `is_wholesale`/`is_oa` unset (§16: user-set only).
+promotion date). `is_wholesale`/`is_oa` unset (§16: user-set only);
+`last_reviewed_at` carries over (2026-09-10).
 
 Duplicates (decision: skip existing): an ASIN already in `asins` — ANY
 status, parked/dead included — is never touched; it reports

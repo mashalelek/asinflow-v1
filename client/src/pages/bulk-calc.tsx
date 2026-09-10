@@ -40,7 +40,7 @@ const BULK_COLUMN_IDS = new Set<ColumnId>([
   "sellersFba", "sellers", "sellers7d", "sellers30d", "fba7d", "fba30d",
   // tags + promos + notes are BULK-LOCAL fields (§21, 2026-09-04 / notes
   // 2026-09-08) — free text on the bulk row, unrelated to the main page's.
-  "tags", "promos", "notes", "meltable", "hazmat", "suppressed", "dateAdded",
+  "tags", "promos", "notes", "meltable", "hazmat", "suppressed", "dateAdded", "lastReviewed",
 ]);
 // supplierSku is defaultVisible:false on the MAIN page (not in any preset);
 // on the bulk page it defaults visible — supplier sheets are the input here
@@ -120,6 +120,7 @@ function mapBulkRow(row: any): AsinResult {
     isDangerousGood: row.is_dangerous_good,
     category: row.category ?? null,
     addedAt: row.added_at ?? null,
+    lastReviewedAt: row.last_reviewed_at ?? null,
     pricesFetchedAt: row.fetched_at ?? null,
   };
 }
@@ -596,6 +597,7 @@ export default function BulkCalc() {
   const onDateAddedSave = useCallback((asin: string, value: string) => bulkPut(asin, "date-added", { added_at: value }), [bulkPut]);
   const promosSaveUrl = useCallback((asin: string) => `/api/bulk-lists/${selectedListId}/asins/${asin}/promos`, [selectedListId]);
   const notesSaveUrl = useCallback((asin: string) => `/api/bulk-lists/${selectedListId}/asins/${asin}/notes`, [selectedListId]);
+  const reviewedSaveUrl = useCallback((asin: string) => `/api/bulk-lists/${selectedListId}/asins/${asin}/last-reviewed`, [selectedListId]);
 
   const onSupplierSkuSave = useCallback(async (asin: string, value: string | null) => {
     const res = await fetch(`/api/bulk-lists/${selectedListId}/asins/${asin}/supplier-sku`, {
@@ -721,6 +723,7 @@ export default function BulkCalc() {
           onSupplierSkuSave={onSupplierSkuSave}
           promosSaveUrl={promosSaveUrl}
           notesSaveUrl={notesSaveUrl}
+          reviewedSaveUrl={reviewedSaveUrl}
           onBulkTagsSave={onBulkTagsSave}
           onBuyLinkSave={onBuyLinkSave}
           onDateAddedSave={onDateAddedSave}

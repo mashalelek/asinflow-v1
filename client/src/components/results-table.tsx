@@ -78,8 +78,10 @@ function getSourcingLabel(r: AsinResult): string {
   return "";
 }
 
-function markReviewed(asin: string, onResultUpdate?: (asin: string, updates: Partial<AsinResult>) => void) {
-  fetch(`/api/asins/${asin}/reviewed`, { method: "PUT" }).catch(() => {});
+// §6 review stamp. saveUrl override (2026-09-10): Bulk Calc passes its
+// bulk-table endpoint — the same gesture must never write to asins there.
+function markReviewed(asin: string, onResultUpdate?: (asin: string, updates: Partial<AsinResult>) => void, saveUrl?: string) {
+  fetch(saveUrl ?? `/api/asins/${asin}/reviewed`, { method: "PUT" }).catch(() => {});
   if (onResultUpdate) {
     onResultUpdate(asin, { lastReviewedAt: new Date().toISOString() });
   }
@@ -142,7 +144,7 @@ function FaviconLink({
 // Cache Keepa image load status across renders
 const keepaCache = new Map<string, "loading" | "loaded" | "error">();
 
-function KeepaLink({ asin, testId, onReviewed }: { asin: string; testId: string; onReviewed?: () => void }) {
+function KeepaLink({ asin, testId, onReviewed, reviewedSaveUrl }: { asin: string; testId: string; onReviewed?: () => void; reviewedSaveUrl?: string }) {
   const [show, setShow] = useState(false);
   const [imgStatus, setImgStatus] = useState<"loading" | "loaded" | "error">(keepaCache.get(asin) ?? "loading");
   const [pos, setPos] = useState({ top: 0, left: 0 });
@@ -190,7 +192,7 @@ function KeepaLink({ asin, testId, onReviewed }: { asin: string; testId: string;
         rel="noopener noreferrer"
         className="flex items-center justify-center w-5 h-5 rounded hover:bg-muted transition-colors"
         data-testid={testId}
-        onClick={(e) => { e.stopPropagation(); markReviewed(asin); onReviewed?.(); }}
+        onClick={(e) => { e.stopPropagation(); markReviewed(asin, undefined, reviewedSaveUrl); onReviewed?.(); }}
         onMouseEnter={handleMouseEnter}
         onMouseLeave={handleMouseLeave}
       >
@@ -324,6 +326,7 @@ interface ResultsTableProps {
   // the main /api/asins promos endpoint are never used on the bulk page.
   promosSaveUrl?: (asin: string) => string;
   notesSaveUrl?: (asin: string) => string;                 // NoteEditor save target for the Notes cell (§21 bulk: bulk_list_asins.notes, never asins)
+  reviewedSaveUrl?: (asin: string) => string;              // markReviewed target (§21 bulk: bulk_list_asins.last_reviewed_at, never asins)
   onBulkTagsSave?: (asin: string, csvText: string | null) => Promise<{ tags: string[] }>;
   onBuyLinkSave?: (asin: string, url: string | null) => Promise<{ buyLink: string | null; supplier: string | null }>;
   onDateAddedSave?: (asin: string, value: string) => Promise<{ addedAt: string }>;
@@ -497,6 +500,7 @@ export function ResultsTable({
   onSupplierSkuSave,
   promosSaveUrl,
   notesSaveUrl,
+  reviewedSaveUrl,
   onBulkTagsSave,
   onBuyLinkSave,
   onDateAddedSave,
@@ -823,7 +827,7 @@ export function ResultsTable({
                 </td>
                 {productVisible && (
                   <td className={`sticky z-10 px-2 py-1.5 overflow-hidden ${frozenBg}`} style={{ left: productLeft, width: colWidths["product"] ?? DEFAULT_COL_WIDTHS.product, minWidth: 200, maxWidth: colWidths["product"] ?? DEFAULT_COL_WIDTHS.product, borderRight: "2px solid hsl(var(--border))" }}>
-                    <ProductCell result={result} price={price} settings={settings} onResultUpdate={onResultUpdate} collisionBoundary={scrollEl} productBadge={productBadge} cogsSaveUrl={cogsSaveUrl} />
+                    <ProductCell result={result} price={price} settings={settings} onResultUpdate={onResultUpdate} collisionBoundary={scrollEl} productBadge={productBadge} cogsSaveUrl={cogsSaveUrl} reviewedSaveUrl={reviewedSaveUrl} />
                   </td>
                 )}
                 {dataCols.map((colId) => {
@@ -1352,7 +1356,7 @@ function CogsDisplay({
   );
 }
 
-function ProductCell({ result, price, settings, onResultUpdate, collisionBoundary, productBadge, cogsSaveUrl }: { result: AsinResult; price: number | null; settings: Settings; onResultUpdate?: (asin: string, updates: Partial<AsinResult>) => void; collisionBoundary?: HTMLElement | null; productBadge?: (result: AsinResult) => React.ReactNode; cogsSaveUrl?: (asin: string) => string }) {
+function ProductCell({ result, price, settings, onResultUpdate, collisionBoundary, productBadge, cogsSaveUrl, reviewedSaveUrl }: { result: AsinResult; price: number | null; settings: Settings; onResultUpdate?: (asin: string, updates: Partial<AsinResult>) => void; collisionBoundary?: HTMLElement | null; productBadge?: (result: AsinResult) => React.ReactNode; cogsSaveUrl?: (asin: string) => string; reviewedSaveUrl?: (asin: string) => string }) {
   const title = result.catalogData.title;
   const domain = extractDomain(result.buyLink);
   const stock = result.stock;
@@ -1383,7 +1387,7 @@ function ProductCell({ result, price, settings, onResultUpdate, collisionBoundar
             target="_blank"
             rel="noopener noreferrer"
             className="text-primary font-mono hover:underline"
-            onClick={(e) => { e.stopPropagation(); markReviewed(result.asin, onResultUpdate); }}
+            onClick={(e) => { e.stopPropagation(); markReviewed(result.asin, onResultUpdate, reviewedSaveUrl?.(result.asin)); }}
           >
             {result.asin}
           </a>
@@ -1422,9 +1426,9 @@ function ProductCell({ result, price, settings, onResultUpdate, collisionBoundar
             fallback="SA"
             label="Open in SellerAmp"
             testId={`link-selleramp-${result.asin}`}
-            onLinkClick={() => markReviewed(result.asin, onResultUpdate)}
+            onLinkClick={() => markReviewed(result.asin, onResultUpdate, reviewedSaveUrl?.(result.asin))}
           />
-          <KeepaLink asin={result.asin} testId={`link-keepa-${result.asin}`} onReviewed={() => onResultUpdate?.(result.asin, { lastReviewedAt: new Date().toISOString() })} />
+          <KeepaLink asin={result.asin} testId={`link-keepa-${result.asin}`} reviewedSaveUrl={reviewedSaveUrl?.(result.asin)} onReviewed={() => onResultUpdate?.(result.asin, { lastReviewedAt: new Date().toISOString() })} />
           {result.isMeltable && (
             <Tooltip>
               <TooltipTrigger asChild>
@@ -1539,7 +1543,7 @@ function ProductCell({ result, price, settings, onResultUpdate, collisionBoundar
         {/* Line 3: Supplier · COGS · Stock */}
         <div className="flex items-center gap-1 text-xs text-muted-foreground">
           {domain ? (
-            <a href={result.buyLink!} target="_blank" rel="noopener noreferrer" className="text-primary hover:underline" onClick={(e) => { e.stopPropagation(); markReviewed(result.asin, onResultUpdate); }}>
+            <a href={result.buyLink!} target="_blank" rel="noopener noreferrer" className="text-primary hover:underline" onClick={(e) => { e.stopPropagation(); markReviewed(result.asin, onResultUpdate, reviewedSaveUrl?.(result.asin)); }}>
               {domain}
             </a>
           ) : (
