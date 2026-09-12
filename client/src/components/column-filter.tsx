@@ -23,7 +23,7 @@ export interface MultiSelectOption {
   group?: string; // options are pre-sorted; a group header renders when this changes
 }
 
-type FilterType = "numeric" | "text" | "tags" | "supplier" | "boolean" | "reviewed" | "submission" | "date";
+type FilterType = "numeric" | "text" | "tags" | "supplier" | "boolean" | "reviewed" | "submission" | "date" | "indb";
 
 const NUMERIC_COLS = new Set<ColumnId>([
   "cogs", "estCogs", "salePrice", "profit", "margin", "roi",
@@ -104,6 +104,16 @@ const DATE_OPS = [
   { value: "date_range", label: "Custom range" },
 ];
 
+// §21 in-database filter (2026-09-12): self-describing operator "indb"
+// (like the date_* ops) so matchesFilters needs no page context — the
+// page's getValueFn answers the sentinel key "__inDatabase" with
+// "yes"/"no". Attached to the Product column on Bulk Calc only.
+export const IN_DB_SENTINEL = "__inDatabase";
+const INDB_OPS = [
+  { value: "yes", label: "In database" },
+  { value: "no", label: "Not in database" },
+];
+
 interface ColumnFilterProps {
   colId: ColumnId;
   currentFilter: ColFilter | undefined;
@@ -112,6 +122,8 @@ interface ColumnFilterProps {
   multiSelectOptions?: MultiSelectOption[];
   /** Opt this column into the generic date filter type (presets + range). */
   dateFilter?: boolean;
+  /** Opt this column into the in-database tri-state (§21 Bulk Calc Product column). */
+  inDbFilter?: boolean;
 }
 
 // ── Multi-select checkbox list (used for tags and supplier) ──────────
@@ -247,15 +259,16 @@ function MultiSelectFilter({
   );
 }
 
-export function ColumnFilterButton({ colId, currentFilter, onApply, onClear, multiSelectOptions, dateFilter }: ColumnFilterProps) {
+export function ColumnFilterButton({ colId, currentFilter, onApply, onClear, multiSelectOptions, dateFilter, inDbFilter }: ColumnFilterProps) {
   const [open, setOpen] = useState(false);
-  const filterType: FilterType = dateFilter ? "date" : getFilterType(colId);
+  const filterType: FilterType = inDbFilter ? "indb" : dateFilter ? "date" : getFilterType(colId);
   const isMultiSelect = filterType === "tags" || filterType === "supplier";
   const ops = filterType === "numeric" ? NUMERIC_OPS
+    : filterType === "indb" ? INDB_OPS
     : filterType === "date" ? DATE_OPS
     : filterType === "reviewed" ? (colId === "priceAge" ? PRICE_AGE_OPS : REVIEWED_OPS)
     : TEXT_OPS;
-  const defaultOp = filterType === "numeric" ? "gt" : filterType === "date" ? "date_last7" : filterType === "reviewed" ? "never" : "contains";
+  const defaultOp = filterType === "numeric" ? "gt" : filterType === "indb" ? "yes" : filterType === "date" ? "date_last7" : filterType === "reviewed" ? "never" : "contains";
 
   const [op, setOp] = useState(currentFilter?.operator ?? defaultOp);
   const [val, setVal] = useState(currentFilter?.value ?? "");
@@ -266,6 +279,12 @@ export function ColumnFilterButton({ colId, currentFilter, onApply, onClear, mul
   function handleApply() {
     if (op === "never") {
       onApply({ colId, operator: op, value: "never" });
+      setOpen(false);
+      return;
+    }
+    if (op === "yes" || op === "no") {
+      // in-database tri-state: All = Clear; the two states carry no input.
+      onApply({ colId, operator: "indb", value: op });
       setOpen(false);
       return;
     }
@@ -296,7 +315,8 @@ export function ColumnFilterButton({ colId, currentFilter, onApply, onClear, mul
 
   function handleOpen(nextOpen: boolean) {
     if (nextOpen && currentFilter) {
-      setOp(currentFilter.operator);
+      // indb stores operator "indb" + value yes/no — the select edits the value.
+      setOp(currentFilter.operator === "indb" ? currentFilter.value : currentFilter.operator);
       setVal(currentFilter.value);
       setVal2(currentFilter.value2 ?? "");
     }
@@ -330,6 +350,21 @@ export function ColumnFilterButton({ colId, currentFilter, onApply, onClear, mul
             onClear={onClear}
             onClose={() => setOpen(false)}
           />
+        ) : filterType === "indb" ? (
+          <>
+            <Select value={op} onValueChange={setOp}>
+              <SelectTrigger className="h-8 text-xs" data-testid="select-indb-op"><SelectValue /></SelectTrigger>
+              <SelectContent>
+                {INDB_OPS.map((o) => (
+                  <SelectItem key={o.value} value={o.value}>{o.label}</SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+            <div className="flex gap-1.5 pt-1">
+              <Button size="sm" className="h-7 text-xs flex-1" onClick={handleApply}>Apply</Button>
+              {isActive && <Button size="sm" variant="outline" className="h-7 text-xs" onClick={handleClear}>All</Button>}
+            </div>
+          </>
         ) : filterType === "date" ? (
           <>
             <Select value={op} onValueChange={setOp}>
@@ -466,6 +501,14 @@ export function matchesFilters(
   for (const f of Object.values(filters)) {
     const raw = getValueFn(f.colId as ColumnId);
     const filterType = getFilterType(f.colId as ColumnId);
+
+    // In-database tri-state (2026-09-12) — self-describing; the page's
+    // getValueFn answers the sentinel key with "yes"/"no".
+    if (f.operator === "indb") {
+      const v = getValueFn(IN_DB_SENTINEL as any);
+      if (String(v) !== f.value) return false;
+      continue;
+    }
 
     // Generic date operators (2026-09-08) — self-describing, so they work
     // regardless of the column's page-level type. Raw must parse as a date;

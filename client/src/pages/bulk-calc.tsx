@@ -11,7 +11,7 @@ import {
 } from "@/components/ui/select";
 import { Tooltip, TooltipTrigger, TooltipContent } from "@/components/ui/tooltip";
 import { ResultsTable, getRowValue, DATE_VALUE_COLS } from "@/components/results-table";
-import { matchesFilters, type FilterMap } from "@/components/column-filter";
+import { matchesFilters, IN_DB_SENTINEL, type FilterMap } from "@/components/column-filter";
 import { ColumnManager } from "@/components/column-manager";
 import { ExportButtons } from "@/components/export-buttons";
 import { FileUpload } from "@/components/file-upload";
@@ -530,7 +530,8 @@ export default function BulkCalc() {
     if (!showGated) scoped = scoped.filter((r) => (r.eligibilityData?.status ?? "check") !== "no");
     if (!showMeltable) scoped = scoped.filter((r) => !r.isMeltable);
     const filtered = Object.keys(colFilters).length > 0
-      ? scoped.filter((r) => matchesFilters(r, colFilters, (colId) => getRowValue(r, colId, priceSource, settings, includeInboundShipping)))
+      ? scoped.filter((r) => matchesFilters(r, colFilters, (colId) =>
+          (colId as string) === IN_DB_SENTINEL ? (inDbSet.has(r.asin) ? "yes" : "no") : getRowValue(r, colId, priceSource, settings, includeInboundShipping)))
       : scoped;
     if (!sortCol) return filtered;
     const dir = sortDir === "asc" ? 1 : -1;
@@ -549,7 +550,19 @@ export default function BulkCalc() {
       }
       return String(va).localeCompare(String(vb)) * dir;
     });
-  }, [results, sortCol, sortDir, settings, colFilters, includeInboundShipping, showGated, showMeltable, priceSource]);
+  }, [results, sortCol, sortDir, settings, colFilters, includeInboundShipping, showGated, showMeltable, priceSource, inDbSet]);
+
+  // §21 in-database filter (2026-09-12): a promoted row rightly vanishes
+  // from a "Not in database" view on refetch — prune the selection to
+  // VISIBLE rows so a hidden row is never carried into the next action.
+  useEffect(() => {
+    setSelectedSet((prev) => {
+      if (prev.size === 0) return prev;
+      const visible = new Set(sortedResults.map((r) => r.asin));
+      const next = new Set(Array.from(prev).filter((a) => visible.has(a)));
+      return next.size === prev.size ? prev : next;
+    });
+  }, [sortedResults]);
 
   // Export scope (§21): rows selected → export selected; none → export all.
   const exportResults = useMemo(
@@ -713,6 +726,7 @@ export default function BulkCalc() {
           onClearSelection={() => setSelectedSet(new Set())}
           includeInboundShipping={includeInboundShipping}
           dateFilterCols={BULK_DATE_FILTER_COLS}
+          inDbFilterOnProduct
           sortCol={sortCol}
           sortDir={sortDir}
           onSort={handleSort}

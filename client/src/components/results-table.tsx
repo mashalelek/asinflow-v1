@@ -332,6 +332,8 @@ interface ResultsTableProps {
   onDateAddedSave?: (asin: string, value: string) => Promise<{ addedAt: string }>;
   /** Columns to render with the generic date filter (presets + range) — §21 Bulk Calc opt-in. */
   dateFilterCols?: Set<ColumnId>;
+  /** Render the in-database tri-state filter on the Product column header (§21 Bulk Calc). */
+  inDbFilterOnProduct?: boolean;
 }
 
 function fmt(value: number | null): string {
@@ -505,6 +507,7 @@ export function ResultsTable({
   onBuyLinkSave,
   onDateAddedSave,
   dateFilterCols,
+  inDbFilterOnProduct,
 }: ResultsTableProps) {
   const allResults = allResultsProp ?? results;
   const colMap = useMemo(() => new Map(columns.map((c) => [c.id, c])), [columns]);
@@ -716,6 +719,15 @@ export function ResultsTable({
             {productVisible && (
               <th className="sticky z-30 table-header-stone text-left text-xs font-medium px-2 py-2 relative" style={{ left: productLeft, width: colWidths["product"] ?? DEFAULT_COL_WIDTHS.product, minWidth: 200, maxWidth: colWidths["product"] ?? DEFAULT_COL_WIDTHS.product, borderRight: "2px solid hsl(var(--border))" }}>
                 Product
+                {inDbFilterOnProduct && onFilterApply && onFilterClear && (
+                  <ColumnFilterButton
+                    colId={"product" as ColumnId}
+                    currentFilter={colFilters["product" as ColumnId]}
+                    onApply={onFilterApply}
+                    onClear={() => onFilterClear("product" as ColumnId)}
+                    inDbFilter
+                  />
+                )}
                 <ResizeHandle onMouseDown={(e) => handleResizeStart(e, "product")} />
               </th>
             )}

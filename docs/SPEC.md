@@ -3013,6 +3013,21 @@ page writes to `asins`, `asin_estimates`, `asin_estimates_history`,
 
 The single permitted main-DB access is one READ: a set-based EXISTS query
 (`WHERE asin = ANY($1)`) against `asins.asin` to populate `in_database`.
+`in_database` is TRUE for ANY `asins` row regardless of status — active,
+parked, and dead all count (a dead ASIN is still "in your database").
+
+**In-database filter (2026-09-12):** a column filter on the Product
+column (where the `in_database` icon renders), three states — All
+(default, no filter) / In database / Not in database — through the same
+column-filter mechanism as every other bulk filter: filled icon when
+active, composes with tags/date/toggles and sort, the filtered count
+updates, and Export follows the standard rule (selection if any, else
+the filtered rows). Backed ONLY by the existing `in_database` flag — no
+new main-DB access. Like the other bulk column filters it is
+session-state, not persisted. Promoting a row while "Not in database"
+is active correctly drops it from the view on refetch; the selection is
+pruned to visible rows so a hidden row is never carried into the next
+action.
 
 Bulk tags are FREE TEXT on the bulk row (2026-09-04). They never read or
 write `tags` / `asin_tags`, carry no FK, and have no relationship to
