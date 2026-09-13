@@ -37,6 +37,12 @@ export async function fetchProductTypeDefinition(
   if (cached && Date.now() - cached.fetchedAt < TTL_MS) {
     return cached.schema;
   }
+  // UNPACED (flagged 2026-09-13, deliberately not fixed): this path has NO
+  // entry in spapi-rate-limit's OPERATION_TABLE, so the limiter logs "sending
+  // unpaced" and lets it through at wire speed. Safe ONLY because the 24h
+  // cache above means at most one call per product type per day. If you ever
+  // call this in a loop, per ASIN, or with the cache disabled, add a rate
+  // table entry FIRST.
   const data = await httpGet(
     `/definitions/2020-09-01/productTypes/${encodeURIComponent(productType)}`,
     { marketplaceIds: MARKETPLACE, sellerId },

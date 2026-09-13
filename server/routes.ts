@@ -334,6 +334,7 @@ function mapSubmitOutcomeToOfferAddResult(outcome: any): OfferAddResult {
         payload: outcome.payload,
         // 18555-cap surfacing (SPEC §18 "Suppression cap")
         priceDetail: outcome.priceDetail,
+        maxOrderQuantity: outcome.maxOrderQuantity,
         capApplied: outcome.capApplied,
         noPriceReference: outcome.noPriceReference,
         lowRoiAfterCap: outcome.lowRoiAfterCap,

@@ -2322,6 +2322,18 @@ Sent on every payload, not gated by category/brand/product:
 
 - `condition_type` — `new_new` (New)
 - price (see Price Resolution)
+- `max_order_quantity` — **per-ORDER purchase cap, COGS-conditional**
+  (2026-09-13): estimated COGS **≤ $20 → 6**, **> $20 → 4**, **unknown → 4**
+  (unknown exposure gets the tighter cap; the boundary is inclusive, so
+  20.00 → 6 and 20.01 → 4). The COGS is the value the PRICE RESOLVER
+  consumed (`COALESCE(estimated_cogs, cogs)`, §2 provenance), threaded with
+  the resolved price so the cap can never drift from the number the price
+  was built on — and it is a REQUIRED field on `OfferAddInput`
+  (`null` = explicitly unknown; an omitted field silently meaning "unknown"
+  is the fail-quiet pattern §14 forbids). Schema verified live against the
+  PRODUCT productType definition: top-level array, `marketplace_id`
+  selector, `value` integer ≥ 1. Preview surfaces the resolved cap per ASIN
+  (read back OUT of the assembled payload, so preview == submit).
 - `batteries_required` — always `No` today (hardcoded). TODO: per-ASIN battery
   flag (`offer-add.ts` — no per-ASIN logic exists yet).
 - `supplier_declared_dg_hz_regulation` — **pass-through of the catalog's own
@@ -2347,6 +2359,23 @@ Sent on every payload, not gated by category/brand/product:
 
 `batteries_required` and `supplier_declared_dg_hz_regulation` are NOT
 category-specific. Treat them as universally required.
+
+### The one forbidden key: fulfillment `quantity`
+
+`fulfillment_availability[].quantity` ("your current inventory commitment")
+flips the SKU to **merchant-fulfilled** — any value, including 0. It is
+never sent; FBA quantity is Amazon-owned.
+
+The guard is **key-precise, not substring** (corrected 2026-09-13 when
+`max_order_quantity` was added — the old check string-matched "quantity" in
+the serialized payload and would have false-positived on a correct
+payload). `findForbiddenQuantityPaths` walks the payload's KEYS and flags
+any key named exactly `quantity` at ANY depth, returning the offending
+paths; `max_order_quantity` is a different key and passes. Enforced twice:
+in tests, and as a **pre-flight abort immediately before the live PUT** —
+inside the reserve/commit try block, so the registry reservation rolls back
+and no listing is created. Test-time-only enforcement is not sufficient for
+an irreversible write.
 
 ### Gating
 

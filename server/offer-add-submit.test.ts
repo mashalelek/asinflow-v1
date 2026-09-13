@@ -8,6 +8,7 @@ import { describe, it, expect } from "vitest";
 import { submitOfferAddBatch, type SubmitAsinRow, type SubmitDeps } from "./offer-add-submit";
 import { settingsSchema, type Settings } from "@shared/schema";
 import type { OfferAddResult, OfferAddInput, OfferAddDeps } from "./offer-add";
+import { buildOfferOnlyPayload as realBuildOfferOnlyPayload } from "./offer-add";
 import type { OffersFetchOutcome } from "./listings-offers-fetch";
 
 const SETTINGS: Settings = settingsSchema.parse({});
@@ -372,6 +373,30 @@ describe("submitOfferAddBatch — phase4Mode='preview'", () => {
       expect(r.perAsin[0].outcome.payload.attributes.our_price).toBe(13.99); // payload built with REAL price
     }
     expect(r.notes.liveWrites).toContain("DISABLED");
+  });
+
+  // §18 max_order_quantity (2026-09-13): preview surfaces the resolved cap
+  // per ASIN, read OUT of the assembled payload — so what you eyeball before
+  // firing is literally what ships. Uses the REAL payload builder.
+  it("preview surfaces max_order_quantity from the assembled payload (COGS-conditional)", async () => {
+    const offerAddFn = async (input: OfferAddInput): Promise<OfferAddResult> => ({
+      kind: "preview",
+      asin: input.asin,
+      sku: "AMG-HEA-AB1-PRD-001",
+      reused: false,
+      payload: realBuildOfferOnlyPayload(input, "not_applicable"),
+    });
+    const fetchOffersFn = async () => ({ ok: true, competingOffers: [10.00], ourOffer: null, allOffers: [] } as OffersFetchOutcome);
+
+    // makeRow default cogs is 5.00 → <= $20 → cap 6
+    const cheap = await submitOfferAddBatch([makeRow("B0000001")], { ...makeDeps(offerAddFn, fetchOffersFn), phase4Mode: "preview" as const });
+    const cheapOutcome = cheap.perAsin[0].outcome;
+    expect(cheapOutcome.kind).toBe("would_submit");
+    if (cheapOutcome.kind === "would_submit") {
+      expect(cheapOutcome.maxOrderQuantity).toBe(6);
+      // ...and it matches the payload the operator can expand in the dialog:
+      expect(cheapOutcome.payload.attributes.max_order_quantity[0].value).toBe(6);
+    }
   });
 
   it("preview mode honors all phase 1-3 blockers (legend_pending, offers_fetch_failed, etc) identically to live mode", async () => {

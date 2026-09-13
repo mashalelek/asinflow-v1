@@ -5,7 +5,8 @@
 //   2. If pre-PUT failure (gated, dead, legend_pending, error) → return early.
 //   3. If duplicate_warning → return as preview gate (UI prompts; DA-4 doesn't auto-resolve).
 //   4. If reuse/generate → fetch product-type definition (spec-required first step).
-//   5. Assemble putListingsItem payload (FBA, NO quantity key, always-present attrs).
+//   5. Assemble putListingsItem payload (FBA, no fulfillment quantity key,
+//      always-present attrs incl. the COGS-conditional max_order_quantity).
 //   6. If dryRun=true → return { kind: 'preview', sku, payload }. NO PUT call.
 //   7. If dryRun=false → call putListingsItem → mapper → typed outcome.
 //      - On reason='catalog_deleted' → fire applyCatalogDeletedSignal(asin, true).
@@ -40,6 +41,13 @@ export interface OfferAddInput {
   productNumber: number;
   variantSuffix?: string;
   price: number;       // resolved by the price resolver (separate concern)
+  // Per-unit estimated COGS — the SAME value the price resolver consumed
+  // (COALESCE(estimated_cogs, cogs), §2 provenance), threaded from phase 3
+  // so the cap can never drift from the number the price was built on.
+  // REQUIRED (null = explicitly unknown): an omitted field silently meaning
+  // "unknown" and quietly picking the tighter cap is the fail-quiet pattern
+  // we're eliminating — state it, always.
+  cogs: number | null;
   // NOTE: DG is NOT taken from the caller/stored column. It is derived LIVE from
   // the catalog fetch inside offerAddForAsin (generate: resurrection trail;
   // reuse: fetchDgHzLive) and passed to buildOfferOnlyPayload. This
@@ -95,6 +103,10 @@ export interface OfferAddDeps {
   // orchestrator does registry validation + reserve-then-PUT. Absent in
   // dry-run / preview / tests-that-don't-care; validation is skipped.
   productRegistry?: ProductRegistryRepo;
+  // TEST SEAM (2026-09-13): override the payload builder so the pre-flight
+  // quantity abort can be proven end-to-end — a poisoned payload must never
+  // reach putListingsItem. Production never passes this.
+  buildPayloadFn?: typeof buildOfferOnlyPayload;
 }
 
 /**
@@ -228,7 +240,7 @@ export async function offerAddForAsin(
   }
 
   // 5. Assemble the payload — strictly per spec
-  const payload = buildOfferOnlyPayload(input, dgHz.value);
+  const payload = (deps.buildPayloadFn ?? buildOfferOnlyPayload)(input, dgHz.value);
 
   // 6. Dry-run gate — no PUT, no DB writes downstream
   if (dryRun) {
@@ -319,6 +331,17 @@ export async function offerAddForAsin(
   // Rollback failure is caught + logged so it can't mask the original error.
   let committed = false;
   try {
+    // PRE-FLIGHT ABORT (2026-09-13): the payload is physically blocked at
+    // fire time if it carries the fulfillment quantity key. Test-time
+    // checking isn't enough for an irreversible live write. Inside the try
+    // on purpose — the finally rolls the registry reservation back.
+    const forbidden = findForbiddenQuantityPaths(payload);
+    if (forbidden.length > 0) {
+      throw new Error(
+        `Offer-add aborted before PUT: payload contains the fulfillment quantity key at ${forbidden.join(", ")} — ` +
+        `this would flip ${sku} to merchant-fulfilled. No listing was created.`,
+      );
+    }
     const callResult = await putListingsItem(
       { sellerId: deps.sellerId, sku, productType: PRODUCT_TYPE, attributes: payload.attributes, requirements: "LISTING_OFFER_ONLY" },
       deps.httpPut,
@@ -432,7 +455,11 @@ export async function offerAddForAsin(
 // CRITICAL guarantees enforced by buildOfferOnlyPayload + tested explicitly:
 //   - merchant_suggested_asin is present (else Amazon creates a NEW listing)
 //   - fulfillment_channel_code is FBA (AMAZON_NA — see TODO below)
-//   - NO quantity key anywhere (would flip SKU to merchant-fulfilled)
+//   - NO fulfillment quantity key: the exact key "quantity" at ANY depth
+//     (fulfillment_availability[].quantity flips the SKU to merchant-
+//     fulfilled). max_order_quantity is a DIFFERENT attribute and IS sent.
+//     Enforced by findForbiddenQuantityPaths in tests AND as a pre-flight
+//     abort immediately before the live PUT.
 //   - condition_type=new_new, batteries_required default No, DG/HZ defaults
 // ============================================================================
 
@@ -447,6 +474,41 @@ function attr(value: any, extra: Record<string, any> = {}): any {
   return [{ value, marketplace_id: MARKETPLACE, ...extra }];
 }
 
+// §18 Max Order Quantity (2026-09-13) — per-ORDER purchase cap, COGS-conditional:
+//   COGS <= $20   → 6   (boundary INCLUSIVE: 20.00 → 6, 20.01 → 4)
+//   COGS >  $20   → 4   (tighter cap on higher per-unit exposure)
+//   COGS unknown  → 4   (conservative — unknown exposure gets the tight cap)
+// Schema (verified live against the PRODUCT productType definition,
+// 2026-09-13): top-level `max_order_quantity`, array, selector
+// marketplace_id, items {value: integer >= 1} — exactly the shape attr()
+// emits. This is NOT a fulfillment quantity and never touches FBA
+// inventory ownership; see findForbiddenQuantityPaths for the key that does.
+export const MAX_ORDER_QTY_COGS_THRESHOLD = 20;
+
+export function resolveMaxOrderQuantity(cogs: number | null | undefined): number {
+  if (cogs == null || !isFinite(cogs)) return 4;
+  return cogs <= MAX_ORDER_QTY_COGS_THRESHOLD ? 6 : 4;
+}
+
+// The ONE forbidden key: `quantity` (exact, any depth). On
+// fulfillment_availability it is "your current inventory commitment" and
+// flips the SKU to merchant-fulfilled — irreversible in effect and invisible
+// until the offer misbehaves. Walks KEYS rather than the serialized blob, so
+// max_order_quantity (a different key) passes while the real key is caught
+// wherever it appears. Returns the offending paths; empty array = clean.
+export function findForbiddenQuantityPaths(node: any, path = "$"): string[] {
+  if (Array.isArray(node)) {
+    return node.flatMap((v, i) => findForbiddenQuantityPaths(v, `${path}[${i}]`));
+  }
+  if (node && typeof node === "object") {
+    return Object.entries(node).flatMap(([k, v]) =>
+      k.toLowerCase() === "quantity"
+        ? [`${path}.${k}`]
+        : findForbiddenQuantityPaths(v, `${path}.${k}`));
+  }
+  return [];
+}
+
 export function buildOfferOnlyPayload(input: OfferAddInput, dgHzRegulationValue: string): PutListingsPayload {
   const attributes: Record<string, any> = {
     // ASIN attaches the offer to an EXISTING listing (offer-only matching).
@@ -454,6 +516,10 @@ export function buildOfferOnlyPayload(input: OfferAddInput, dgHzRegulationValue:
     merchant_suggested_asin: attr(input.asin),
 
     condition_type: attr("new_new"),
+
+    // Per-ORDER purchase cap (§18, 2026-09-13) — 6 at COGS <= $20, else 4,
+    // 4 when COGS is unknown. NOT a fulfillment quantity.
+    max_order_quantity: attr(resolveMaxOrderQuantity(input.cogs)),
 
     // Always-present per spec (not category-specific):
     batteries_required: attr(false), // TODO per-ASIN battery flag if needed

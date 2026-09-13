@@ -60,6 +60,8 @@ export type SubmitOutcome =
   // defaults the canonical SKU was built from.
   | { kind: "would_submit"; asin: string; sku: string; reused: boolean; payload: any; resolvedPrice: number; priceRule: string;
       priceDetail: string; capApplied: boolean; noPriceReference: boolean; lowRoiAfterCap: boolean;
+      // §18 max_order_quantity (2026-09-13) — read out of the assembled payload.
+      maxOrderQuantity?: number;
       brandCode?: string; registry?: ProductRegistryRow[]; proposedNnn?: number; proposedTtl?: string }
   // Skipped before reaching phase 4.
   // `pending` is populated ONLY when reason === "legend_pending" — the
@@ -235,7 +237,9 @@ export async function submitOfferAddBatch(
       // but defense-in-depth.
     };
     const result = await offerAddFn(
-      { asin: row.asin, productNumber: 1, price: 0, brandCodeOverride: deps.brandCodes?.[row.asin] },
+      // cogs passed for completeness — this probe resolves the SKU only
+      // (price 0, dryRun), so the cap it computes is never submitted.
+      { asin: row.asin, productNumber: 1, price: 0, cogs: row.cogs, brandCodeOverride: deps.brandCodes?.[row.asin] },
       innerDeps,
       true, // dryRun
     );
@@ -317,7 +321,10 @@ export async function submitOfferAddBatch(
   // After phase 2, "ready for pricing" = phase1Ready ∖ (overflow + non-conforming-SKU).
   const readyForPricing = phase1Ready.filter((p) => !outcomeByAsin.has(p.asin));
   const priceByAsin = new Map<string, {
-    price: number; rule: string;
+    // cogs travels WITH the price (2026-09-13) so max_order_quantity is
+    // computed from the exact number the price was resolved against — a
+    // re-read here could drift from what the resolver saw.
+    price: number; rule: string; cogs: number | null;
     detail: string; capApplied: boolean; noPriceReference: boolean; lowRoiAfterCap: boolean;
   }>();
   for (let i = 0; i < readyForPricing.length; i++) {
@@ -364,7 +371,7 @@ export async function submitOfferAddBatch(
       continue;
     }
     priceByAsin.set(p.asin, {
-      price: resolved.resolvedPrice, rule: resolved.rule,
+      price: resolved.resolvedPrice, rule: resolved.rule, cogs: row.cogs,
       detail: resolved.detail, capApplied: resolved.capApplied,
       noPriceReference: resolved.noPriceReference, lowRoiAfterCap: resolved.lowRoiAfterCap,
     });
@@ -446,7 +453,7 @@ export async function submitOfferAddBatch(
       productRegistry: phase4Mode === "live" ? deps.productRegistry : undefined,
     };
     const result = await offerAddFn(
-      { asin: p.asin, productNumber, price: priced.price, skuOverride, brandCodeOverride: deps.brandCodes?.[p.asin] },
+      { asin: p.asin, productNumber, price: priced.price, cogs: priced.cogs, skuOverride, brandCodeOverride: deps.brandCodes?.[p.asin] },
       innerDeps,
       phase4Mode === "preview", // dryRun: TRUE for preview, FALSE for live PUT
     );
@@ -472,6 +479,9 @@ export async function submitOfferAddBatch(
       outcomeByAsin.set(p.asin, {
         kind: "would_submit", asin: p.asin, sku: result.sku, reused: result.reused,
         payload: result.payload, resolvedPrice: priced.price, priceRule: priced.rule,
+        // Read back OUT of the assembled payload — preview shows exactly what
+        // would ship, not a recomputation that could drift from it.
+        maxOrderQuantity: (result.payload as any)?.attributes?.max_order_quantity?.[0]?.value,
         priceDetail: priced.detail, capApplied: priced.capApplied,
         noPriceReference: priced.noPriceReference, lowRoiAfterCap: priced.lowRoiAfterCap,
         brandCode, registry, proposedNnn, proposedTtl,

@@ -2,6 +2,8 @@ import { describe, it, expect, vi } from "vitest";
 import {
   offerAddForAsin,
   buildOfferOnlyPayload,
+  resolveMaxOrderQuantity,
+  findForbiddenQuantityPaths,
   preFilterSubmitSet,
   type OfferAddDeps,
 } from "./offer-add";
@@ -107,6 +109,7 @@ describe("buildOfferOnlyPayload — spec guarantees", () => {
     asin: "B0FCM6CX8M",
     productNumber: 4,
     price: 24.99,
+    cogs: 12.50, // <= $20 → max_order_quantity 6
   };
 
   it("has merchant_suggested_asin matching the input ASIN", () => {
@@ -130,12 +133,52 @@ describe("buildOfferOnlyPayload — spec guarantees", () => {
     expect(p.attributes.fulfillment_availability[0].fulfillment_channel_code).toBe("AMAZON_NA");
   });
 
-  // CRITICAL — adding quantity flips the SKU to merchant-fulfilled.
-  // This test exists specifically to fail loudly if anyone ever adds it.
-  it("has NO quantity key anywhere in the payload (FBA quantity is Amazon-owned)", () => {
+  // CRITICAL — the fulfillment quantity key flips the SKU to
+  // merchant-fulfilled. Precise since 2026-09-13: the guard forbids the EXACT
+  // key "quantity" at any depth (walking keys, not the serialized blob), so
+  // max_order_quantity — a different attribute we now send deliberately —
+  // passes while the real key is still caught wherever it appears.
+  it("has NO fulfillment quantity key (max_order_quantity is a different attribute)", () => {
     const p = buildOfferOnlyPayload(sample, "not_applicable");
-    const json = JSON.stringify(p);
-    expect(json.toLowerCase()).not.toContain("quantity");
+    expect(findForbiddenQuantityPaths(p)).toEqual([]);
+    expect(p.attributes.fulfillment_availability[0].quantity).toBeUndefined();
+    // ...and the substring is present, proving the old check would now
+    // false-positive on a correct payload:
+    expect(JSON.stringify(p)).toContain("max_order_quantity");
+  });
+
+  it("the guard still fails loudly if the REAL quantity key ever appears", () => {
+    const poisoned: any = buildOfferOnlyPayload(sample, "not_applicable");
+    poisoned.attributes.fulfillment_availability[0].quantity = 0; // even 0 flips it
+    expect(findForbiddenQuantityPaths(poisoned)).toEqual([
+      "$.attributes.fulfillment_availability[0].quantity",
+    ]);
+    // Caught at ANY depth, not just the known path:
+    expect(findForbiddenQuantityPaths({ a: { b: [{ Quantity: 5 }] } })).toEqual(["$.a.b[0].Quantity"]);
+  });
+
+  // §18 max_order_quantity — COGS-conditional cap (2026-09-13).
+  describe("max_order_quantity", () => {
+    const capOf = (cogs: number | null) =>
+      buildOfferOnlyPayload({ ...sample, cogs }, "not_applicable").attributes.max_order_quantity[0].value;
+
+    it("COGS 15 → 6", () => expect(capOf(15)).toBe(6));
+    it("COGS 20.00 → 6 (boundary is INCLUSIVE)", () => expect(capOf(20.0)).toBe(6));
+    it("COGS 20.01 → 4", () => expect(capOf(20.01)).toBe(4));
+    it("COGS null → 4 (unknown exposure gets the tighter cap)", () => expect(capOf(null)).toBe(4));
+
+    it("resolver handles undefined/NaN as unknown → 4", () => {
+      expect(resolveMaxOrderQuantity(undefined)).toBe(4);
+      expect(resolveMaxOrderQuantity(NaN)).toBe(4);
+    });
+
+    it("is marketplace-scoped with an integer value (matches the live PRODUCT schema)", () => {
+      const a = buildOfferOnlyPayload(sample, "not_applicable").attributes.max_order_quantity;
+      expect(a).toHaveLength(1);
+      expect(a[0].marketplace_id).toBe("ATVPDKIKX0DER");
+      expect(Number.isInteger(a[0].value)).toBe(true);
+      expect(a[0].value).toBeGreaterThanOrEqual(1);
+    });
   });
 
   it("has batteries_required=false by default", () => {
@@ -182,7 +225,7 @@ describe("offerAddForAsin — pre-PUT outcomes", () => {
       sellerId: SELLER,
     };
     const r = await offerAddForAsin(
-      { asin: ASIN, productNumber: 1, price: 19.99 },
+      { asin: ASIN, productNumber: 1, price: 19.99, cogs: null },
       deps,
       false,
     );
@@ -193,7 +236,7 @@ describe("offerAddForAsin — pre-PUT outcomes", () => {
   it("returns dead_asin when catalog 404s (NO PUT call)", async () => {
     let putCalled = false;
     const r = await offerAddForAsin(
-      { asin: ASIN, productNumber: 1, price: 19.99 },
+      { asin: ASIN, productNumber: 1, price: 19.99, cogs: null },
       {
         queryFn: makeRoutedQueryFn({ eligibility: "yes", candidates: [] }),
         httpGet: makeRoutedHttpGet({ catalog: { error: 404 } }),
@@ -209,10 +252,57 @@ describe("offerAddForAsin — pre-PUT outcomes", () => {
     expect(putCalled).toBe(false);
   });
 
+  // PRE-FLIGHT ABORT (2026-09-13): test-time checking isn't enough for an
+  // irreversible live write — the payload is blocked at fire time. The
+  // buildPayloadFn seam injects a poisoned payload; putListingsItem must
+  // never see it.
+  it("aborts before the PUT if the payload carries the real quantity key (NO PUT call)", async () => {
+    clearProductTypeDefinitionCache();
+    let putCalled = false;
+    await expect(offerAddForAsin(
+      { asin: ASIN, productNumber: 4, price: 24.99, cogs: 12.50 },
+      {
+        queryFn: makeRoutedQueryFn({ eligibility: "yes", candidates: [], legend: HAPPY_LEGEND }),
+        httpGet: makeRoutedHttpGet({ catalog: HAPPY_CATALOG, definitions: { name: "PRODUCT" } }),
+        httpPut: async () => {
+          putCalled = true;
+          return {};
+        },
+        sellerId: SELLER,
+        buildPayloadFn: (input, dgHz) => {
+          const p: any = buildOfferOnlyPayload(input, dgHz);
+          p.attributes.fulfillment_availability[0].quantity = 0; // the poison
+          return p;
+        },
+      },
+      false, // LIVE — this is the path that would create a listing
+    )).rejects.toThrow(/aborted before PUT.*fulfillment_availability\[0\]\.quantity/s);
+    expect(putCalled).toBe(false); // physically blocked at fire time
+  });
+
+  it("a clean payload still reaches the PUT (the abort isn't blocking everything)", async () => {
+    clearProductTypeDefinitionCache();
+    let putCalled = false;
+    await offerAddForAsin(
+      { asin: ASIN, productNumber: 4, price: 24.99, cogs: 12.50 },
+      {
+        queryFn: makeRoutedQueryFn({ eligibility: "yes", candidates: [], legend: HAPPY_LEGEND }),
+        httpGet: makeRoutedHttpGet({ catalog: HAPPY_CATALOG, definitions: { name: "PRODUCT" } }),
+        httpPut: async () => {
+          putCalled = true;
+          return { status: "ACCEPTED", submissionId: "sub-1", issues: [] };
+        },
+        sellerId: SELLER,
+      },
+      false,
+    );
+    expect(putCalled).toBe(true);
+  });
+
   it("returns legend_pending when brand not in legend (NO PUT call)", async () => {
     let putCalled = false;
     const r = await offerAddForAsin(
-      { asin: ASIN, productNumber: 1, price: 19.99 },
+      { asin: ASIN, productNumber: 1, price: 19.99, cogs: null },
       {
         queryFn: makeRoutedQueryFn({
           eligibility: "yes",
@@ -238,7 +328,7 @@ describe("offerAddForAsin — pre-PUT outcomes", () => {
   it("returns duplicate_warning when a current-format SKU is alive in SC (NO PUT call)", async () => {
     let putCalled = false;
     const r = await offerAddForAsin(
-      { asin: ASIN, productNumber: 1, price: 19.99 },
+      { asin: ASIN, productNumber: 1, price: 19.99, cogs: null },
       {
         queryFn: makeRoutedQueryFn({
           eligibility: "yes",
@@ -271,7 +361,7 @@ describe("offerAddForAsin — dryRun=true", () => {
     clearProductTypeDefinitionCache();
     let putCalled = false;
     const r = await offerAddForAsin(
-      { asin: ASIN, productNumber: 4, price: 24.99 },
+      { asin: ASIN, productNumber: 4, price: 24.99, cogs: 12.50 },
       {
         queryFn: makeRoutedQueryFn({ eligibility: "yes", candidates: [], legend: HAPPY_LEGEND }),
         httpGet: makeRoutedHttpGet({ catalog: HAPPY_CATALOG, definitions: { name: "PRODUCT" } }),
@@ -295,7 +385,7 @@ describe("offerAddForAsin — dryRun=true", () => {
   it("preview reused=true when resurrection finds a deleted current-format SKU", async () => {
     clearProductTypeDefinitionCache();
     const r = await offerAddForAsin(
-      { asin: ASIN, productNumber: 1, price: 19.99 },
+      { asin: ASIN, productNumber: 1, price: 19.99, cogs: null },
       {
         queryFn: makeRoutedQueryFn({
           eligibility: "yes",
@@ -318,7 +408,7 @@ describe("offerAddForAsin — dryRun=true", () => {
     clearProductTypeDefinitionCache();
     const heal = vi.fn();
     await offerAddForAsin(
-      { asin: ASIN, productNumber: 1, price: 19.99 },
+      { asin: ASIN, productNumber: 1, price: 19.99, cogs: null },
       {
         queryFn: makeRoutedQueryFn({ eligibility: "yes", candidates: [], legend: HAPPY_LEGEND }),
         httpGet: makeRoutedHttpGet({ catalog: HAPPY_CATALOG, definitions: { name: "PRODUCT" } }),
@@ -338,7 +428,7 @@ describe("offerAddForAsin — dryRun=false (live PUT)", () => {
   it("created on putListingsItem 200-ACCEPTED", async () => {
     clearProductTypeDefinitionCache();
     const r = await offerAddForAsin(
-      { asin: ASIN, productNumber: 4, price: 24.99 },
+      { asin: ASIN, productNumber: 4, price: 24.99, cogs: 12.50 },
       {
         queryFn: makeRoutedQueryFn({ eligibility: "yes", candidates: [], legend: HAPPY_LEGEND }),
         httpGet: makeRoutedHttpGet({ catalog: HAPPY_CATALOG, definitions: { name: "PRODUCT" } }),
@@ -362,7 +452,7 @@ describe("offerAddForAsin — dryRun=false (live PUT)", () => {
   it("putlistings_failed with reason=catalog_deleted from 200-INVALID body", async () => {
     clearProductTypeDefinitionCache();
     const r = await offerAddForAsin(
-      { asin: ASIN, productNumber: 4, price: 24.99 },
+      { asin: ASIN, productNumber: 4, price: 24.99, cogs: 12.50 },
       {
         queryFn: makeRoutedQueryFn({ eligibility: "yes", candidates: [], legend: HAPPY_LEGEND }),
         httpGet: makeRoutedHttpGet({ catalog: HAPPY_CATALOG, definitions: { name: "PRODUCT" } }),
@@ -401,7 +491,7 @@ describe("offerAddForAsin — dryRun=false (live PUT)", () => {
     };
 
     const r = await offerAddForAsin(
-      { asin: ASIN, productNumber: 4, price: 24.99 },
+      { asin: ASIN, productNumber: 4, price: 24.99, cogs: 12.50 },
       {
         queryFn,
         httpGet: makeRoutedHttpGet({ catalog: HAPPY_CATALOG, definitions: { name: "PRODUCT" } }),
@@ -438,7 +528,7 @@ describe("offerAddForAsin — dryRun=false (live PUT)", () => {
     };
 
     await offerAddForAsin(
-      { asin: ASIN, productNumber: 4, price: 24.99 },
+      { asin: ASIN, productNumber: 4, price: 24.99, cogs: 12.50 },
       {
         queryFn,
         httpGet: makeRoutedHttpGet({ catalog: HAPPY_CATALOG, definitions: { name: "PRODUCT" } }),
@@ -464,7 +554,7 @@ describe("offerAddForAsin — dryRun=false (live PUT)", () => {
   it("transient error from HTTP 500 → putlistings_failed retryable=true", async () => {
     clearProductTypeDefinitionCache();
     const r = await offerAddForAsin(
-      { asin: ASIN, productNumber: 1, price: 19.99 },
+      { asin: ASIN, productNumber: 1, price: 19.99, cogs: null },
       {
         queryFn: makeRoutedQueryFn({ eligibility: "yes", candidates: [], legend: HAPPY_LEGEND }),
         httpGet: makeRoutedHttpGet({ catalog: HAPPY_CATALOG, definitions: { name: "PRODUCT" } }),
@@ -488,7 +578,7 @@ describe("offerAddForAsin — dryRun=false (live PUT)", () => {
     clearProductTypeDefinitionCache();
     let putCalled = false;
     const r = await offerAddForAsin(
-      { asin: ASIN, productNumber: 1, price: 19.99 },
+      { asin: ASIN, productNumber: 1, price: 19.99, cogs: null },
       {
         queryFn: makeRoutedQueryFn({ eligibility: "yes", candidates: [], legend: HAPPY_LEGEND }),
         httpGet: makeRoutedHttpGet({ catalog: HAPPY_CATALOG, definitions: { error: 500 } }),

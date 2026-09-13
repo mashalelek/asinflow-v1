@@ -42,6 +42,9 @@ export type OfferAddOutcome =
       payload: any;
       // 18555-cap surfacing (SPEC §18 "Suppression cap")
       priceDetail?: string;
+      // §18 max_order_quantity (2026-09-13): 6 at COGS <= $20, else 4;
+      // 4 when COGS is unknown. Read from the assembled payload server-side.
+      maxOrderQuantity?: number;
       capApplied?: boolean;
       noPriceReference?: boolean;
       lowRoiAfterCap?: boolean;
@@ -515,6 +518,18 @@ export function OfferAddPreviewDialog({
                           <code className="font-mono text-xs font-bold">{o.sku}</code>
                         )}
                         <span className="text-xs text-muted-foreground ml-auto" title={o.priceDetail}>${Number(price).toFixed(2)}</span>
+                        {/* §18 per-order cap (2026-09-13) — eyeball which cap
+                            each ASIN got before firing. 6 = COGS <= $20. */}
+                        {o.maxOrderQuantity != null && (
+                          <Badge
+                            variant="outline"
+                            className="text-[10px]"
+                            title={`Max order quantity ${o.maxOrderQuantity} — ${o.maxOrderQuantity === 6 ? "COGS ≤ $20" : "COGS > $20 or unknown"}`}
+                            data-testid={`badge-max-order-qty-${row.asin}`}
+                          >
+                            max {o.maxOrderQuantity}
+                          </Badge>
+                        )}
                         {/* 18555-cap indicators (SPEC §18 "Suppression cap") */}
                         {o.capApplied && (
                           <Badge variant="secondary" className="text-[10px]" title={o.priceDetail}>capped</Badge>
