@@ -66,7 +66,11 @@ describe("full-scope pass — phase a + 8c", () => {
     expect(h.writes.some((w) => /SET primary_sku/.test(w.sql))).toBe(false);
     // has_live_offer flip + empty snapshot still written
     const upd = h.writes.find((w) => /SET has_live_offer/.test(w.sql))!;
-    expect(upd.params).toEqual(["B0B", false, "[]"]);
+    // 4th param is has_buyable_offer (§23, 2026-09-15) — no live SKU means
+    // no BUYABLE offer either, written in the SAME statement so the two
+    // flags can never disagree about one probe.
+    expect(upd.params).toEqual(["B0B", false, "[]", false]);
+    expect(upd.sql).toMatch(/has_buyable_offer/);
   });
 
   it("probes EVERY SKU (no first-live short-circuit)", async () => {

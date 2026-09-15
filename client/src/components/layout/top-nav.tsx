@@ -18,7 +18,7 @@ const NAV_ITEMS: NavItem[] = [
   { path: "/analytics", label: "Analytics", icon: BarChart3 },
   { path: "/purchase-orders", label: "POs", icon: ShoppingCart },
   { path: "/gift-cards", label: "Gift Cards", icon: CreditCard, disabled: true },
-  { path: "/repricer", label: "Repricer", icon: TrendingUp, disabled: true },
+  { path: "/repricer", label: "Repricer", icon: TrendingUp },
   { path: "/fba-shipments", label: "Shipments", icon: Truck, disabled: true },
 ];
 
@@ -28,7 +28,9 @@ const NAV_ITEMS: NavItem[] = [
 const DATE_PICKER_ROUTES = ["/", "/asins", "/analytics"];
 // Routes that expose a Settings icon (each page owns its own dialog and
 // listens for the custom event below).
-const SETTINGS_ROUTES = ["/", "/asins", "/bulk-calc"];
+// §23 (2026-09-15): Repricer takes the settings gear but NOT the date picker
+// — its 7-day window is fixed (same precedent as Bulk Calc, §21).
+const SETTINGS_ROUTES = ["/", "/asins", "/bulk-calc", "/repricer"];
 export const OPEN_SETTINGS_EVENT = "asinflow:open-settings";
 
 export function TopNav() {

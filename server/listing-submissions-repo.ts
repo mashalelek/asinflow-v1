@@ -2,6 +2,7 @@
 // the submit path, the Verify sweep, and the backfill script share one writer.
 
 import { query as defaultQuery } from "./db";
+import { anyBuyable } from "./live-offer-check";
 import { probeListingState, extractConflictAsin } from "./submission-verify";
 import type { HttpGetFn } from "./sku-catalog-fetch";
 
@@ -92,9 +93,15 @@ export async function verifyPending(
     // The ledger keeps its own classifier; only this flag write is decoupled.
     // Still NOT set at ACCEPTED — that is synchronous validation only (§19).
     if (probe.input.found) {
+      // §23 (2026-09-15): has_buyable_offer rides the SAME definitive probe,
+      // in the SAME statement — BUYABLE in summaries[].status. A transient
+      // probe never reaches here (throttled short-circuits above), so the
+      // fail-closed rule holds for both flags.
       await query(
-        `UPDATE asins SET has_live_offer = TRUE, offer_checked_at = now() WHERE asin = $1`,
-        [row.asin],
+        `UPDATE asins SET has_live_offer = TRUE, offer_checked_at = now(),
+                has_buyable_offer = $2, buyable_checked_at = now()
+          WHERE asin = $1`,
+        [row.asin, anyBuyable([probe.input.status])],
       );
     }
     if (status === "live") {
@@ -178,6 +185,13 @@ export async function resolveSubmissionManual(
   // deployment, so "waits for the daily pass" meant "waits for a manual
   // scan"). 'failed'/'deleted' still write nothing to the flag: failing or
   // deleting ONE SKU does not mean the ASIN has no live offer.
+  //
+  // has_buyable_offer is deliberately NOT written here (§23, 2026-09-15):
+  // manual verdicts never write it. A human saying "it's live" is not
+  // evidence of a BUYABLE offer — only summaries[].status from a definitive
+  // probe is, and the sweep above writes it from exactly that. Leaving it
+  // NULL keeps the ASIN out of the Repricer view (fail-closed) and counted
+  // in its "not yet checked" note until a real probe answers.
   if (verdict === "live") {
     await query(
       `UPDATE asins SET has_live_offer = TRUE, offer_checked_at = now() WHERE asin = $1`,

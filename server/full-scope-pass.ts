@@ -20,7 +20,7 @@
 // NEVER touches listing_submissions.
 import { query as defaultQuery } from "./db";
 import { checkSkuListingStatus, type ListingIssueLite } from "./sku-listing-fetch";
-import { discoverAsinListings, recordDiscoveredSkus, pick8cPrimary } from "./live-offer-check";
+import { discoverAsinListings, recordDiscoveredSkus, pick8cPrimary, anyBuyable } from "./live-offer-check";
 import { spApiGet as realSpApiGet } from "./spapi-auth";
 import type { HttpGetFn } from "./sku-catalog-fetch";
 import { log } from "./index";
@@ -109,12 +109,14 @@ export async function runFullScopePass(opts: {
     const skus: { sku: string; created_at: string }[] = row.skus ?? [];
     // Probe EVERY SKU (8c needs full liveness, not first-live short-circuit).
     let transient = false;
-    const liveByCreated: { sku: string; created_at: string; issues: ListingIssueLite[] }[] = [];
+    // statuses retained (2026-09-15, §23): has_buyable_offer is derived from
+    // summaries[].status here — already parsed, no extra call.
+    const liveByCreated: { sku: string; created_at: string; issues: ListingIssueLite[]; statuses: string[] }[] = [];
     for (const s of skus) {
       const out = await checkSkuListingStatus(sellerId, s.sku, httpGet);
       phaseA.skusProbed++;
       if (!out.ok) { transient = true; }
-      else if (out.present) liveByCreated.push({ sku: s.sku, created_at: s.created_at, issues: out.issues });
+      else if (out.present) liveByCreated.push({ sku: s.sku, created_at: s.created_at, issues: out.issues, statuses: out.statuses ?? [] });
     }
     if (transient) {
       phaseA.transientSkipped++;
@@ -147,9 +149,12 @@ export async function runFullScopePass(opts: {
           await recordDiscoveredSkus(row.asin, disc.found, query);
           await query(
             `UPDATE asins SET has_live_offer = TRUE, offer_checked_at = now(),
+                    has_buyable_offer = $3, buyable_checked_at = now(),
                     current_issues = $2::jsonb, issues_checked_at = now()
               WHERE asin = $1`,
-            [row.asin, JSON.stringify(lead.issues)],
+            // §23: BUYABLE on ANY discovered SKU. Same statement as
+            // has_live_offer so the two can never disagree about one probe.
+            [row.asin, JSON.stringify(lead.issues), anyBuyable(disc.found.map((f) => f.statuses))],
           );
           log(`Full-scope phase a discovery: ${row.asin} — known SKUs all 404, found ${disc.found.map((f) => f.sku).join(", ")}${newPrimary ? `; primary → newest live: ${row.primary_sku ?? "∅"} → ${newPrimary}` : ""}`, "full-scope");
         }
@@ -185,9 +190,11 @@ export async function runFullScopePass(opts: {
     if (!dryRun) {
       await query(
         `UPDATE asins SET has_live_offer = $2, offer_checked_at = now(),
+                has_buyable_offer = $4, buyable_checked_at = now(),
                 current_issues = $3::jsonb, issues_checked_at = now()
           WHERE asin = $1`,
-        [row.asin, anyLive, JSON.stringify((newestLiveReal ?? newestLiveAny)?.issues ?? [])],
+        [row.asin, anyLive, JSON.stringify((newestLiveReal ?? newestLiveAny)?.issues ?? []),
+         anyBuyable(liveByCreated.map((l) => l.statuses))],
       );
       if (repoint) {
         // Atomic single-statement re-point (§18 promotion): primary_sku +
@@ -288,14 +295,16 @@ export async function runFullScopePass(opts: {
             [row.id, found[f].sku, bootstrap && f === 0],
           );
         }
+        const buyable = anyBuyable(found.map((f) => f.statuses));
         await query(
           `UPDATE asins SET has_live_offer = $2, offer_checked_at = now(),
+                  has_buyable_offer = ${bootstrap ? "$5" : "$4"}, buyable_checked_at = now(),
                   current_issues = $3::jsonb, issues_checked_at = now()
                   ${bootstrap ? ", primary_sku = $4" : ""}
             WHERE asin = $1`,
           bootstrap
-            ? [row.asin, anyLive, JSON.stringify(found[0].issues), found[0].sku]
-            : [row.asin, anyLive, JSON.stringify(found[0].issues)],
+            ? [row.asin, anyLive, JSON.stringify(found[0].issues), found[0].sku, buyable]
+            : [row.asin, anyLive, JSON.stringify(found[0].issues), buyable],
         );
         log(`Full-scope phase b: discovered ${found.length} SKU(s) for ${row.asin}: ${found.map((f) => f.sku).join(", ")}`, "full-scope");
       }

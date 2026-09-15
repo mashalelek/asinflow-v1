@@ -115,6 +115,18 @@ export async function checkAsinLiveOffer(
   };
 }
 
+// §23 SC-Active (2026-09-15): "BUYABLE" in summaries[].status is Amazon's own
+// word for "this listing carries a purchasable offer" — the ONE signal that
+// separates an active listing from a Closed / out-of-stock / pricing-issue
+// one. has_live_offer deliberately cannot answer this (it means "a listing
+// record exists", Inactive included — §18). Case-insensitive; an ASIN is
+// buyable when ANY of its SKUs is.
+export const BUYABLE_STATUS = "BUYABLE";
+export function anyBuyable(statusesPerSku: Array<string[] | null | undefined>): boolean {
+  return statusesPerSku.some((arr) =>
+    (arr ?? []).some((s) => String(s).toUpperCase() === BUYABLE_STATUS));
+}
+
 // ── §18 all-404 discovery primitives (2026-08-28) ───────────────────────────
 export interface DiscoveredListing {
   sku: string;

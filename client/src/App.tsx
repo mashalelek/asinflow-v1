@@ -9,6 +9,7 @@ import { Layout } from "@/components/layout/layout";
 import NotFound from "@/pages/not-found";
 import Home from "@/pages/home";
 import BulkCalc from "@/pages/bulk-calc";
+import Repricer from "@/pages/repricer";
 import Analytics from "@/pages/analytics";
 import ComingSoon from "@/pages/coming-soon";
 import PurchaseOrders, { PurchaseOrderDetailPlaceholder } from "@/pages/purchase-orders";
@@ -29,9 +30,7 @@ function Router() {
         <Route path="/gift-cards">
           <ComingSoon title="Gift Cards" icon={CreditCard} />
         </Route>
-        <Route path="/repricer">
-          <ComingSoon title="Repricer" icon={TrendingUp} />
-        </Route>
+        <Route path="/repricer" component={Repricer} />
         <Route path="/fba-shipments">
           <ComingSoon title="FBA Shipments" icon={Truck} />
         </Route>

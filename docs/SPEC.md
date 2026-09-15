@@ -538,7 +538,10 @@ Items in order:
   prior PO scaffold was removed 2026-07-30, migration 021; the module was
   rebuilt fresh per §22.)
 - **Gift Cards** — disabled, "Soon" badge
-- **Repricer** — disabled, "Soon" badge
+- **Repricer** — active route (2026-09-15, Phase 1b): the zero-sales view
+  (§23). Added to the settings-gear routes, NOT to the date-picker routes
+  — its 7-day window is fixed (same precedent as Bulk Calc, §21). Nav
+  structure otherwise unchanged.
 - **Shipments** — disabled, "Soon" badge
 - (right side) **Dark mode toggle**
 
@@ -3601,3 +3604,97 @@ until cutover.
    (order_number, asin); Velocity order quantity corresponds to the computed
    Velocity quantity (units_per_pack × qty), so no backfill or conversion
    layer is needed. Discovery probe first.
+
+---
+
+## 23. Repricer tab — zero-sales view (Phase 1b)
+
+*Shipped 2026-09-15. Phase 1b of the repricing engine: activate the Repricer
+nav item with ONE read-only view. No pricing writes, no Aura, no
+recommendations — those are later phases.*
+
+### The population is "SC-ACTIVE LISTINGS", strictly
+
+This view shows only ASINs whose listing is **ACTIVE IN SELLER CENTRAL** —
+a listing carrying a **BUYABLE** offer. Deliberately NOT:
+
+- AF's catalog status bucket (`status = 'active'` is a separate hygiene
+  condition, applied on top — see below);
+- `has_live_offer`, which by design means "a listing record EXISTS at SC"
+  and therefore also counts Inactive/DISCOVERABLE-only listings (§18 one
+  definition). Correct for the catalog icon, WRONG here.
+
+Closed, out-of-stock, and pricing-issue listings are all excluded —
+including **born-closed offers whose inventory has checked in but which
+have not been reopened** (§18 born-closed): those were effectively out of
+stock until reopening and do not belong on this list. There is no special
+handling for recently reopened listings: the moment a listing is BUYABLE
+and the other conditions hold it appears, not before.
+
+### `has_buyable_offer` (migration 043)
+
+- `asins.has_buyable_offer` — tri-state like `has_live_offer`
+  (**NULL = never checked**, never conflated with FALSE) +
+  `asins.buyable_checked_at`.
+- **Written by the SAME definitive `getListingsItem` probes that own
+  `has_live_offer`**, nowhere else: the Prices & Stock listings stage
+  (full-scope pass phases a + b, including the all-404 discovery path) and
+  the §19 verify-sweep's flag write. Definition: **TRUE ⇔ ≥1 of the ASIN's
+  SKUs has `summaries[].status` containing `BUYABLE`**.
+- Same single-owner and fail-closed rules as `has_live_offer`: a transient
+  probe writes nothing (neither flag), and the two flags are always written
+  in the same statement so they can never disagree about the same probe.
+  Manual verdicts never write it.
+- **No new API calls.** `summaries[].status` is already in the responses
+  these paths parse (`checkSkuListingStatus`, `discoverAsinListings`,
+  `probeListingState` — all request `includedData=summaries`).
+
+### The page
+
+Route `/repricer`, rendering the full ASINs table — the same `ResultsTable`
+/ `ColumnManager` components and column semantics as the main page —
+**pre-filtered on the BACKEND** (`GET /api/repricer/zero-sales`) to rows
+meeting ALL of:
+
+1. `has_buyable_offer = TRUE` (SC-Active, per above).
+2. **At-FBA stock > 0**: `available_fba` from the LATEST inventory snapshot
+   per ASIN. `ordered_qty` is explicitly EXCLUDED — units on order are not
+   at FBA and cannot sell.
+3. **Zero sales in the trailing 7 calendar days**:
+   `SUM(sales_daily.units_sold) = 0` over rows dated within the last 7
+   calendar days inclusive of today, on the same date basis `sales_daily`
+   is keyed by (real order dates from the all-orders flat file — never
+   stock diffs, §11). An ASIN with no `sales_daily` rows at all in the
+   window sums to zero and qualifies.
+4. Catalog hygiene: `status = 'active'` — parked/dead never appear here.
+
+Column config uses a **parameterized storage key** (`fba-repricer-column-
+config`, §21 precedent) so it never clobbers the main table's saved config.
+CSV export of the filtered set via the existing export pattern. The page is
+**read-only**: no writers besides the `has_buyable_offer` rider above.
+
+### Data-as-of, and the unprobed count
+
+Crons are OFF (§11) — every input to this view is as fresh as the last
+manual Prices & Stock run, and stale data must be VISIBLE, never mistaken
+for a dead ASIN. The page shows, from the `refresh_runs` ledger plus the
+data itself:
+
+- **Sales through** — the newest ingested `sales_daily.sale_date`, plus the
+  last `sales` stage run time. A gap here silently manufactures
+  "zero sales".
+- **Inventory as of** — the newest `inventory_snapshots.snapshot_at`.
+- **Listings checked** — the newest `buyable_checked_at` and the count of
+  in-scope ASINs still lacking one.
+- **"Not yet checked: N"** — ASINs that pass every other condition but have
+  `has_buyable_offer IS NULL`. They are EXCLUDED from the rows (fail-closed:
+  never-probed is not evidence of BUYABLE) but counted in plain sight, so an
+  unprobed ASIN is never silently invisible. N drops to 0 once a full
+  listings stage has run.
+
+### Deliberately out of scope (Phase 1b)
+
+- Any "was in stock ≥ N days ago" condition — deferred until cloud hosting
+  (the local box can't guarantee the daily snapshot history it needs).
+- Days-since-last-sale column, min/max price columns, Aura API anything —
+  later phases of the repricing engine.

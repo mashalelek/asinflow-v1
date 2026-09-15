@@ -950,9 +950,66 @@ export async function registerRoutes(
     res.json({ configured });
   });
 
-  // Main AsinFlow: load all ASINs joined with estimates, inventory, sales, tags, deltas
-  app.get("/api/asins", async (req: Request, res: Response) => {
-    if (!isDbAvailable()) { res.json([]); return; }
+  // §23 data-as-of (2026-09-15). Crons are OFF (§11) — every input to the
+  // zero-sales view is only as fresh as the last manual Prices & Stock run,
+  // and stale data must be VISIBLE rather than silently manufacturing
+  // "zero sales". notYetChecked counts ASINs that pass every OTHER condition
+  // but were never probed (has_buyable_offer IS NULL): excluded from the rows
+  // (fail-closed) and shown in plain sight so they are never silently gone.
+  async function repricerMeta() {
+    const one = async (sql: string) => {
+      try { return (await query(sql)).rows[0] ?? {}; } catch { return {}; }
+    };
+    const sales = await one(`SELECT MAX(sale_date)::text AS through FROM sales_daily`);
+    const inv = await one(`SELECT MAX(snapshot_at) AS as_of FROM inventory_snapshots`);
+    const listings = await one(`SELECT MAX(buyable_checked_at) AS as_of FROM asins WHERE status = 'active'`);
+    const runs = await one(`
+      SELECT MAX(finished_at) FILTER (WHERE stage = 'sales')     AS sales_run,
+             MAX(finished_at) FILTER (WHERE stage = 'inventory') AS inventory_run,
+             MAX(finished_at) FILTER (WHERE stage = 'listings')  AS listings_run
+        FROM refresh_runs WHERE scope NOT LIKE 'bulk:%'`);
+    const unprobed = await one(`
+      SELECT COUNT(*)::int AS n FROM asins a
+       WHERE a.status = 'active'
+         AND a.has_buyable_offer IS NULL
+         AND COALESCE((
+           SELECT i.available_fba FROM inventory_snapshots i
+            WHERE i.asin_id = a.id ORDER BY i.snapshot_at DESC LIMIT 1
+         ), 0) > 0
+         AND COALESCE((
+           SELECT SUM(s.units_sold) FROM sales_daily s
+            WHERE s.asin_id = a.id
+              AND s.sale_date >= (CURRENT_DATE - INTERVAL '6 days')
+              AND s.sale_date <= CURRENT_DATE
+         ), 0) = 0`);
+    const iso = (v: any) => (v ? new Date(v).toISOString() : null);
+    return {
+      freshness: {
+        salesThrough: sales.through ?? null,
+        salesRunAt: iso(runs.sales_run),
+        inventoryAsOf: iso(inv.as_of),
+        inventoryRunAt: iso(runs.inventory_run),
+        listingsCheckedAt: iso(listings.as_of),
+        listingsRunAt: iso(runs.listings_run),
+        windowDays: 7,
+      },
+      notYetChecked: unprobed.n ?? 0,
+    };
+  }
+
+  // Main AsinFlow: load all ASINs joined with estimates, inventory, sales, tags, deltas.
+  //
+  // ONE row builder, two routes (§23, 2026-09-15): the Repricer zero-sales
+  // view renders the SAME table with the SAME column semantics, so it
+  // delegates here with a server-side pre-filter rather than duplicating 260
+  // lines of payload assembly. opts.repricerZeroSales adds the §23 WHERE
+  // conditions and wraps the response with freshness + the unprobed count.
+  async function listAsinsHandler(
+    req: Request,
+    res: Response,
+    opts: { repricerZeroSales?: boolean } = {},
+  ) {
+    if (!isDbAvailable()) { res.json(opts.repricerZeroSales ? { rows: [], freshness: null, notYetChecked: 0 } : []); return; }
     try {
       // §14 parked/dead (2026-09-07): Show parked / Show dead are separate
       // view-scope toggles; includeArchived kept as a legacy alias for
@@ -961,7 +1018,25 @@ export async function registerRoutes(
       const statuses = ["'active'"];
       if (includeParked === "true" || includeArchived === "true") statuses.push("'parked'");
       if (includeDead === "true") statuses.push("'dead'");
-      const activeFilter = `a.status IN (${statuses.join(", ")})`;
+      let activeFilter = `a.status IN (${statuses.join(", ")})`;
+      if (opts.repricerZeroSales) {
+        // §23 SC-Active + at-FBA stock + zero 7-day sales. Status hygiene is
+        // forced to 'active' regardless of the toggles (parked/dead never
+        // appear here). NULL has_buyable_offer is EXCLUDED — never-probed is
+        // not evidence of BUYABLE — and surfaced as "not yet checked" instead.
+        activeFilter = `a.status = 'active'
+          AND a.has_buyable_offer = TRUE
+          AND COALESCE((
+            SELECT i.available_fba FROM inventory_snapshots i
+             WHERE i.asin_id = a.id ORDER BY i.snapshot_at DESC LIMIT 1
+          ), 0) > 0
+          AND COALESCE((
+            SELECT SUM(s.units_sold) FROM sales_daily s
+             WHERE s.asin_id = a.id
+               AND s.sale_date >= (CURRENT_DATE - INTERVAL '6 days')
+               AND s.sale_date <= CURRENT_DATE
+          ), 0) = 0`;
+      }
 
       const result = await query(`
         SELECT
@@ -1210,12 +1285,23 @@ export async function registerRoutes(
         };
       });
 
+      if (opts.repricerZeroSales) {
+        res.json({ rows: asinResults, ...(await repricerMeta()) });
+        return;
+      }
       res.json(asinResults);
     } catch (err: any) {
       log(`GET /api/asins error: ${err.message}`, "db");
       res.status(500).json({ message: err.message });
     }
-  });
+  }
+
+  app.get("/api/asins", (req: Request, res: Response) => listAsinsHandler(req, res));
+
+  // §23 Repricer Phase 1b (2026-09-15) — zero-sales view. Same table, same
+  // columns, backend-filtered. Read-only.
+  app.get("/api/repricer/zero-sales", (req: Request, res: Response) =>
+    listAsinsHandler(req, res, { repricerZeroSales: true }));
 
   // Settings API for Chrome extension
   app.get("/api/settings", async (_req: Request, res: Response) => {
