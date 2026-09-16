@@ -37,6 +37,7 @@ import { settingsSchema, type Settings } from "@shared/schema";
 import type { AnalyzeSink } from "./analyze-sink";
 import { startBulkRun, subscribeBulkRun, getBulkRunStatus } from "./bulk-refresh";
 import { upsertTagsForAsin, TAG_COLORS } from "./tags-repo";
+import { resolveRepricerRange as resolveRange } from "./repricer-range";
 import { promoteBulkAsins } from "./bulk-promote";
 import { rateLimitStats, rateLimitStatsSince } from "./spapi-rate-limit";
 import {
@@ -956,9 +957,20 @@ export async function registerRoutes(
   // "zero sales". notYetChecked counts ASINs that pass every OTHER condition
   // but were never probed (has_buyable_offer IS NULL): excluded from the rows
   // (fail-closed) and shown in plain sight so they are never silently gone.
-  async function repricerMeta() {
-    const one = async (sql: string) => {
-      try { return (await query(sql)).rows[0] ?? {}; } catch { return {}; }
+  // §23 (2026-09-16): pure resolution + clamp lives in repricer-range.ts;
+  // this only supplies the coverage start from the DB.
+  async function resolveRepricerRange(fromRaw?: string, toRaw?: string) {
+    let coverageStart: string | null = null;
+    try {
+      const r = await query(`SELECT MIN(sale_date)::text AS s FROM sales_daily`);
+      coverageStart = r.rows[0]?.s ?? null;
+    } catch { coverageStart = null; }
+    return resolveRange(coverageStart, fromRaw, toRaw);
+  }
+
+  async function repricerMeta(range: { from: string; to: string }) {
+    const one = async (sql: string, params?: any[]) => {
+      try { return (await query(sql, params)).rows[0] ?? {}; } catch { return {}; }
     };
     const sales = await one(`SELECT MAX(sale_date)::text AS through FROM sales_daily`);
     const inv = await one(`SELECT MAX(snapshot_at) AS as_of FROM inventory_snapshots`);
@@ -979,9 +991,9 @@ export async function registerRoutes(
          AND COALESCE((
            SELECT SUM(s.units_sold) FROM sales_daily s
             WHERE s.asin_id = a.id
-              AND s.sale_date >= (CURRENT_DATE - INTERVAL '6 days')
-              AND s.sale_date <= CURRENT_DATE
-         ), 0) = 0`);
+              AND s.sale_date >= $1::date
+              AND s.sale_date <= $2::date
+         ), 0) = 0`, [range.from, range.to]);
     const iso = (v: any) => (v ? new Date(v).toISOString() : null);
     return {
       freshness: {
@@ -991,7 +1003,6 @@ export async function registerRoutes(
         inventoryRunAt: iso(runs.inventory_run),
         listingsCheckedAt: iso(listings.as_of),
         listingsRunAt: iso(runs.listings_run),
-        windowDays: 7,
       },
       notYetChecked: unprobed.n ?? 0,
     };
@@ -1019,6 +1030,9 @@ export async function registerRoutes(
       if (includeParked === "true" || includeArchived === "true") statuses.push("'parked'");
       if (includeDead === "true") statuses.push("'dead'");
       let activeFilter = `a.status IN (${statuses.join(", ")})`;
+      const repRange = opts.repricerZeroSales
+        ? await resolveRepricerRange(req.query.from as string | undefined, req.query.to as string | undefined)
+        : null;
       if (opts.repricerZeroSales) {
         // §23 SC-Active + at-FBA stock + zero 7-day sales. Status hygiene is
         // forced to 'active' regardless of the toggles (parked/dead never
@@ -1033,9 +1047,15 @@ export async function registerRoutes(
           AND COALESCE((
             SELECT SUM(s.units_sold) FROM sales_daily s
              WHERE s.asin_id = a.id
-               AND s.sale_date >= (CURRENT_DATE - INTERVAL '6 days')
-               AND s.sale_date <= CURRENT_DATE
+               -- Interpolated, not bound: both values are either regex-
+               -- validated ISO dates or DB-derived (coverage start), never
+               -- raw user input. resolveRepricerRange is the only producer.
+               AND s.sale_date >= '${repRange!.effective.from}'::date
+               AND s.sale_date <= '${repRange!.effective.to}'::date
           ), 0) = 0`;
+        // Range entirely outside sales coverage: refuse rather than return
+        // every ASIN as "no sales" (§23 coverage guard).
+        if (repRange!.noCoverage) activeFilter = `FALSE`;
       }
 
       const result = await query(`
@@ -1286,7 +1306,11 @@ export async function registerRoutes(
       });
 
       if (opts.repricerZeroSales) {
-        res.json({ rows: asinResults, ...(await repricerMeta()) });
+        res.json({
+          rows: asinResults,
+          ...(await repricerMeta(repRange!.effective)),
+          range: repRange,
+        });
         return;
       }
       res.json(asinResults);

@@ -539,9 +539,13 @@ Items in order:
   rebuilt fresh per §22.)
 - **Gift Cards** — disabled, "Soon" badge
 - **Repricer** — active route (2026-09-15, Phase 1b): the zero-sales view
-  (§23). Added to the settings-gear routes, NOT to the date-picker routes
-  — its 7-day window is fixed (same precedent as Bulk Calc, §21). Nav
-  structure otherwise unchanged.
+  (§23). Added to the settings-gear routes, NOT to the date-picker routes.
+  The original reason ("its window is fixed") was superseded 2026-09-16 when
+  the window became selectable — but the conclusion is UNCHANGED and now
+  load-bearing: the page owns a **page-local** range control that must never
+  read or mutate the global range other pages share. Staying out of
+  DATE_PICKER_ROUTES is what guarantees that. Nav structure otherwise
+  unchanged.
 - **Shipments** — disabled, "Soon" badge
 - (right side) **Dark mode toggle**
 
@@ -3660,18 +3664,53 @@ meeting ALL of:
 2. **At-FBA stock > 0**: `available_fba` from the LATEST inventory snapshot
    per ASIN. `ordered_qty` is explicitly EXCLUDED — units on order are not
    at FBA and cannot sell.
-3. **Zero sales in the trailing 7 calendar days**:
-   `SUM(sales_daily.units_sold) = 0` over rows dated within the last 7
-   calendar days inclusive of today, on the same date basis `sales_daily`
-   is keyed by (real order dates from the all-orders flat file — never
-   stock diffs, §11). An ASIN with no `sales_daily` rows at all in the
-   window sums to zero and qualifies.
+3. **Zero sales in the SELECTED range** (2026-09-16 — was a fixed
+   trailing 7 days): `SUM(sales_daily.units_sold) = 0` for order dates
+   within `[from, to]` INCLUSIVE, chosen by the user on the page, on the
+   same date basis `sales_daily` is keyed by (real order dates from the
+   all-orders flat file — never stock diffs, §11). An ASIN with no
+   `sales_daily` rows at all in the range sums to zero and qualifies.
+   **Default on load: the trailing 7 calendar days inclusive of today** —
+   byte-identical to the shipped fixed window, so the page reads the same
+   until a range is chosen. (Note this is NOT the shared `last_7_days`
+   preset, which is `[today-7, yesterday]`; the §23 default is
+   `[today-6, today]`.)
 4. Catalog hygiene: `status = 'active'` — parked/dead never appear here.
+
+**Only the sales condition is range-scoped.** `has_buyable_offer = TRUE`
+and latest-snapshot `available_fba > 0` are always evaluated AS-OF-NOW,
+never as-of the range. The view therefore means: **"currently stocked,
+currently SC-Active ASINs with zero sales during the selected period."**
+The page's subtitle says exactly that, so the asymmetry is visible rather
+than inferred.
+
+**Range control: PAGE-LOCAL state.** It reuses the shared
+`DateRangePicker` component for look and behavior (it is fully controlled
+— no context coupling) but keeps its own state and **never reads or
+mutates the global date range** other pages share. Switching to the
+Repricer tab and picking a range must not change what the ASINs page's
+Actuals show. This is why §23 stays out of the shared date-picker route
+list (§8).
+
+**Data-coverage guard (decision: CLAMP, 2026-09-16).** `sales_daily`
+starts at a finite earliest order date. A range reaching before it would
+let MISSING data masquerade as "no sales" — the one failure mode that
+silently overstates the view's core claim. So the backend **clamps the
+effective range to the coverage start** and returns both the requested
+and the effective range; the page shows the effective range always, plus
+a prominent clamp notice naming the coverage date when they differ.
+Clamping (not merely warning) is deliberate: a warning would leave rows
+on screen that were evaluated over days we have no data for. Every
+returned row is always evaluated against a period we actually cover. If
+coverage is empty entirely, the view returns no rows and says so rather
+than returning everything.
 
 Column config uses a **parameterized storage key** (`fba-repricer-column-
 config`, §21 precedent) so it never clobbers the main table's saved config.
-CSV export of the filtered set via the existing export pattern. The page is
-**read-only**: no writers besides the `has_buyable_offer` rider above.
+CSV export of the filtered set via the existing export pattern — it
+reflects the selected range, because it exports exactly the rows on
+screen. The page is **read-only**: no writers besides the
+`has_buyable_offer` rider above.
 
 ### Data-as-of, and the unprobed count
 
@@ -3682,7 +3721,8 @@ data itself:
 
 - **Sales through** — the newest ingested `sales_daily.sale_date`, plus the
   last `sales` stage run time. A gap here silently manufactures
-  "zero sales".
+  "zero sales". (The coverage guard above handles the other end of the
+  same problem: a range starting before the earliest order date.)
 - **Inventory as of** — the newest `inventory_snapshots.snapshot_at`.
 - **Listings checked** — the newest `buyable_checked_at` and the count of
   in-scope ASINs still lacking one.
