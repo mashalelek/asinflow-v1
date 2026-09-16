@@ -25,11 +25,11 @@ export interface MultiSelectOption {
 
 type FilterType = "numeric" | "text" | "tags" | "supplier" | "boolean" | "reviewed" | "submission" | "date" | "indb";
 
-const NUMERIC_COLS = new Set<ColumnId>([
+export const NUMERIC_COLS = new Set<ColumnId>([
   "cogs", "estCogs", "salePrice", "profit", "margin", "roi",
   "fbaFee", "referralFee", "inboundShipping", "prep", "storage",
   "sellersFba", "sellers", "stock", "daysLeft",
-  "availableFba", "ordered", "reserved", "sentToFba",
+  "availableFba", "ordered", "fbaStock", "reserved", "sentToFba",
   "fba7d", "fba30d", "sellers7d", "sellers30d",
   "actUnitsSold", "actRevenue", "actRefunds", "actRefundPct",
   "actProfit", "actProfitPerUnit", "actMargin", "actRoi",

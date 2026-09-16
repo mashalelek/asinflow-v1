@@ -564,7 +564,7 @@ export const DEFAULT_COLUMNS = [
   // Group 1 — Description
   "product", "category", "brand", "supplier", "supplierSku",
   // Group 2 — Stock
-  "stock", "availableFba", "ordered", "reserved", "sentToFba", "daysLeft",
+  "stock", "availableFba", "ordered", "fbaStock", "reserved", "sentToFba", "daysLeft",
   // Group 3 — Actuals
   "cogs", "actPrepCost", "actUnitsSold", "actRefunds", "actRefundPct",
   "actAvgSalePrice", "actRevenue", "actProfit", "actProfitPerUnit", "actRoi", "actMargin",
@@ -610,6 +610,10 @@ export const ALL_COLUMNS: ColumnDef[] = [
   { id: "stock", label: "Stock", defaultVisible: true, align: "right", group: "stock" },
   { id: "availableFba", label: "Available (FBA)", defaultVisible: false, align: "right", group: "stock" },
   { id: "ordered", label: "Ordered", defaultVisible: false, align: "right", group: "stock" },
+  // §6 FBA Stock (2026-09-17) = Stock − Ordered, computed from the SAME
+  // values those two cells render so the identity holds row by row. Default
+  // visibility matches its inputs (Stock visible, Ordered not → hidden).
+  { id: "fbaStock", label: "FBA Stock", defaultVisible: false, align: "right", group: "stock" },
   { id: "reserved", label: "Reserved", defaultVisible: false, align: "right", group: "stock" },
   { id: "sentToFba", label: "Sent to FBA", defaultVisible: false, align: "right", group: "stock" },
   { id: "daysLeft", label: "Days Left", defaultVisible: true, align: "right", group: "stock" },

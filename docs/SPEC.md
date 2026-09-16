@@ -284,7 +284,8 @@ representations of the same logical "narrow to specific ASIN(s)" intent.
 ### Six groups (canonical order)
 
 1. **Description** — Product, Category, Brand, Supplier, Supplier SKU
-2. **Stock** — Stock, Available (FBA), Ordered, Reserved, Sent to FBA, Days Left
+2. **Stock** — Stock, Available (FBA), Ordered, **FBA Stock**, Reserved,
+   Sent to FBA, Days Left
 3. **Actuals** — Actual COGS, Actual Prep Cost, Actual Units Sold, Refunds,
    Refund %, Actual Avg. Sale Price, Actual Revenue, Actual Total Profit,
    Actual Profit/Unit, Actual ROI, Actual Margin
@@ -401,6 +402,49 @@ ASIN has never been seen in Seller Central. A `hasSnapshot` boolean on the
 object lets the client hover breakdown distinguish **"no FBA snapshot yet"**
 (shows "Not yet synced from SC") from a confirmed zero. This is a display/read
 fix only — nothing is written to `inventory_snapshots`.
+
+### FBA Stock column (2026-09-17)
+
+**FBA Stock = Stock − Ordered**, computed from the SAME values the Stock and
+Ordered cells render — not re-derived from the snapshot — so the identity
+holds visually row by row. A row with no inventory snapshot renders Stock as
+`available 0 + ordered` (the rule above), so its FBA Stock renders **0**, not
+the negative of its ordered quantity. Sortable, numeric-filterable, in CSV
+export and Manage Columns. Default visibility MATCHES its inputs: Stock is
+default-visible, Ordered is not, so FBA Stock ships **default-hidden** and is
+added to no preset that lacks Stock/Ordered. Present on every table built
+from the shared column defs — the ASINs page and the Repricer tab (§23);
+absent from Bulk Calc, which excludes the whole Stock group (§21).
+
+### Numeric columns render zero, never a dash (2026-09-17)
+
+Every NUMERIC column renders **0** (counts) or **$0.00** (money) where it
+used to render `-` / `—`. The reason is behavioral, not cosmetic: a dash
+made the row invisible to numeric filters and unsortable against real
+values, so "Estimated ROI ≤ 0" silently skipped exactly the rows a user was
+looking for.
+
+**null sorts and filters as zero; muted rendering marks no-data.** The
+null-vs-zero distinction is preserved VISUALLY, never structurally:
+
+- a NULL / no-data value renders `0` or `$0.00` in the muted (tertiary) text
+  color, and keeps whatever tooltip it already had;
+- a true stored zero renders in normal text;
+- `getRowValue` — the single value source for sort, numeric filters, and CSV
+  export (§6 one-computation rule) — returns `0` for both, so the two are
+  indistinguishable to sorting and filtering, by design. **CSV export
+  therefore also carries `0` where it used to carry an empty cell.**
+
+Exceptions that keep their current behavior:
+
+- **Actual Prep Cost** — the §3 amber NULL-warning survives; the cell may
+  read `$0.00`, but the indicator distinguishing "no prep data" stays.
+- **Estimated Inbound Ship.** — renders `?` when weight is unknown, per the
+  standing architecture decision that a missing weight must NOT read as
+  `$0` (it is a genuinely unknown cost, not a zero one). It is NOT a dash,
+  so it is out of scope for this change; its sort/filter VALUE is still 0
+  like every other numeric, so the filter-visibility goal holds.
+- Non-numeric columns (text, dates, status) keep their dashes.
 
 ### Two-row column headers
 

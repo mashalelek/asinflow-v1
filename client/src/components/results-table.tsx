@@ -48,7 +48,7 @@ function ResizeHandle({ onMouseDown }: { onMouseDown: (e: React.MouseEvent) => v
 
 const DEFAULT_COL_WIDTHS: Partial<Record<ColumnId, number>> = {
   product: 400, category: 160, brand: 100, supplier: 100,
-  stock: 75, availableFba: 80, ordered: 75, reserved: 75, sentToFba: 80, daysLeft: 80,
+  stock: 75, availableFba: 80, ordered: 75, fbaStock: 85, reserved: 75, sentToFba: 80, daysLeft: 80,
   cogs: 90, actPrepCost: 85, actUnitsSold: 85, actRefunds: 80, actRefundPct: 80,
   actAvgSalePrice: 100, actRevenue: 95, actProfit: 100, actProfitPerUnit: 90, actRoi: 80, actMargin: 80,
   estCogs: 90, salePrice: 95, profit: 90, margin: 80, roi: 80,
@@ -58,7 +58,7 @@ const DEFAULT_COL_WIDTHS: Partial<Record<ColumnId, number>> = {
 };
 import { type ColumnConfig } from "@/lib/columns";
 import { type FilterMode } from "@/components/summary-cards";
-import { ColumnFilterButton, type ColFilter, type FilterMap, type MultiSelectOption } from "@/components/column-filter";
+import { ColumnFilterButton, NUMERIC_COLS, type ColFilter, type FilterMap, type MultiSelectOption } from "@/components/column-filter";
 
 // Columns whose getRowValue is an ISO timestamp string (2026-09-08) — sort
 // comparators should Date.parse these, never string-compare the formatted
@@ -345,8 +345,39 @@ function fmtPct(value: number): string {
   return `${value.toFixed(1)}%`;
 }
 
+// §6 numeric cells render zero, never a dash (2026-09-17). The value is
+// structurally 0 (getRowValue coerces it, so filters/sort/export see 0); the
+// muted colour is the ONLY thing distinguishing "no data" from a stored zero.
+const NO_DATA_CLASS = "text-muted-foreground/60";
+function numCell(noData: boolean, text: string, testId?: string) {
+  return (
+    <span className={`font-mono text-sm${noData ? ` ${NO_DATA_CLASS}` : ""}`} data-testid={testId}>
+      {text}
+    </span>
+  );
+}
 
+
+// §6 null-as-zero (2026-09-17). getRowValue is the ONE value source for
+// sort, numeric filters, and CSV export, so the coercion lives HERE, at the
+// boundary, rather than in ~25 individual cases where one would eventually be
+// missed: any NUMERIC column whose computation yields null reports 0. The
+// null/zero distinction survives VISUALLY (muted rendering in renderCell),
+// never structurally — that is the point of the change, since a dash made a
+// row invisible to "ROI ≤ 0" and unsortable against real values.
 export function getRowValue(
+  result: AsinResult,
+  colId: ColumnId,
+  priceSource: PriceSource,
+  settings: Settings,
+  includeInboundShipping = true,
+): number | string | null {
+  const v = computeRowValue(result, colId, priceSource, settings, includeInboundShipping);
+  if (v == null && NUMERIC_COLS.has(colId)) return 0;
+  return v;
+}
+
+function computeRowValue(
   result: AsinResult,
   colId: ColumnId,
   priceSource: PriceSource,
@@ -418,6 +449,10 @@ export function getRowValue(
     case "stock": return result.stock?.total ?? null;
     case "availableFba": return result.stock?.available_fba ?? null;
     case "ordered": return result.stock?.ordered ?? null;
+    // §6 FBA Stock (2026-09-17): derived from the SAME two values the Stock
+    // and Ordered cells render, never re-derived from the snapshot — the
+    // identity must hold visually row by row.
+    case "fbaStock": return (result.stock?.total ?? 0) - (result.stock?.ordered ?? 0);
     case "reserved": return result.stock?.reserved ?? null;
     case "sentToFba": return result.stock?.inbound ?? null;
     case "actAvgSalePrice": {
@@ -1654,7 +1689,7 @@ export function renderCell(
           : result.priceOutcome === "error" ? "Error"
           : result.priceOutcome === "not_found" ? "Not found"
           : null;
-        if (label == null) return <span className="text-muted-foreground text-sm">—</span>;
+        if (label == null) return numCell(true, fmt(0));
         const benign = label === "No offers";
         const badge = (
           <span className={`flex items-center gap-1 justify-end text-sm ${benign ? "text-muted-foreground" : "text-destructive"}`} data-testid={`text-price-outcome-${result.asin}`}>
@@ -1729,7 +1764,7 @@ export function renderCell(
           </Tooltip>
         );
       }
-      return <span className="text-muted-foreground text-sm">{"\u2014"}</span>;
+      return numCell(true, fmt(0));
 
     case "profit":
       return (
@@ -1738,9 +1773,9 @@ export function renderCell(
             ? profitData.profit >= 0
               ? "text-emerald-600 dark:text-emerald-400"
               : "text-red-600 dark:text-red-400"
-            : ""
+            : NO_DATA_CLASS
         }`}>
-          {profitData ? fmt(profitData.profit) : "-"}
+          {profitData ? fmt(profitData.profit) : fmt(0)}
         </span>
       );
 
@@ -1751,9 +1786,9 @@ export function renderCell(
             ? profitData.margin >= settings.minMarginThreshold
               ? "text-emerald-600 dark:text-emerald-400"
               : "text-red-600 dark:text-red-400"
-            : ""
+            : NO_DATA_CLASS
         }`}>
-          {profitData ? fmtPct(profitData.margin) : "-"}
+          {profitData ? fmtPct(profitData.margin) : fmtPct(0)}
         </span>
       );
 
@@ -1764,9 +1799,9 @@ export function renderCell(
             ? profitData.roi >= settings.minRoiThreshold
               ? "text-emerald-600 dark:text-emerald-400"
               : "text-red-600 dark:text-red-400"
-            : ""
+            : NO_DATA_CLASS
         }`}>
-          {profitData ? fmtPct(profitData.roi) : "-"}
+          {profitData ? fmtPct(profitData.roi) : fmtPct(0)}
         </span>
       );
 
@@ -1830,7 +1865,7 @@ export function renderCell(
           </Tooltip>
         );
       }
-      return <span className="font-mono text-sm" data-testid={`text-inboundShipping-${result.asin}`}>{profitData ? fmt(profitData.inboundShipping ?? 0) : "-"}</span>;
+      return <span className={`font-mono text-sm${profitData ? "" : ` ${NO_DATA_CLASS}`}`} data-testid={`text-inboundShipping-${result.asin}`}>{fmt(profitData?.inboundShipping ?? 0)}</span>;
     }
 
     case "prep":
@@ -1868,11 +1903,11 @@ export function renderCell(
       );
 
     case "sellersFba":
-      return <span className="font-mono text-sm">{result.pricingData.sellersFba ?? "-"}</span>;
+      return numCell(result.pricingData.sellersFba == null, String(result.pricingData.sellersFba ?? 0));
 
     case "sellers": {
       const totalSellers = (result.pricingData.sellersFba ?? 0) + (result.pricingData.sellersFbm ?? 0);
-      return <span className="font-mono text-sm">{totalSellers || "-"}</span>;
+      return numCell(!totalSellers, String(totalSellers || 0));
     }
 
     case "fba7d":
@@ -1892,17 +1927,19 @@ export function renderCell(
     }
 
     case "availableFba":
-      return <span className="font-mono text-sm">{result.stock?.available_fba ?? "-"}</span>;
+      return numCell(result.stock?.available_fba == null, String(result.stock?.available_fba ?? 0));
     case "ordered":
-      return <span className="font-mono text-sm">{result.stock?.ordered ?? "-"}</span>;
+      return numCell(result.stock?.ordered == null, String(result.stock?.ordered ?? 0));
+    case "fbaStock":
+      return <span className="font-mono text-sm">{(result.stock?.total ?? 0) - (result.stock?.ordered ?? 0)}</span>;
     case "reserved":
-      return <span className="font-mono text-sm">{result.stock?.reserved ?? "-"}</span>;
+      return numCell(result.stock?.reserved == null, String(result.stock?.reserved ?? 0));
     case "sentToFba":
-      return <span className="font-mono text-sm">{result.stock?.inbound ?? "-"}</span>;
+      return numCell(result.stock?.inbound == null, String(result.stock?.inbound ?? 0));
 
     case "actAvgSalePrice": {
       const avgUs = result.actuals?.units_sold ?? 0;
-      return <span className="font-mono text-sm">{avgUs > 0 ? fmt(result.actuals!.revenue / avgUs) : "\u2014"}</span>;
+      return numCell(!(avgUs > 0), fmt(avgUs > 0 ? result.actuals!.revenue / avgUs : 0));
     }
 
     case "actPrepCost": {
@@ -2000,7 +2037,7 @@ export function renderCell(
 
     case "stock": {
       const s = result.stock;
-      if (!s) return <span className="text-muted-foreground text-sm">-</span>;
+      if (!s) return numCell(true, "0");
       return (
         <Tooltip>
           <TooltipTrigger asChild>
@@ -2031,7 +2068,7 @@ export function renderCell(
       const dis = result.actuals?.days_in_stock ?? 0;
       const dws = result.actuals?.days_with_sales ?? 0;
       const activeDays = dis >= 7 ? dis : dws;
-      if (us === 0 || activeDays === 0) return <span className="font-mono text-sm text-muted-foreground">–</span>;
+      if (us === 0 || activeDays === 0) return numCell(true, "0");
       const velocity = us / activeDays;
       if (stk === 0) return <span className="font-mono text-sm text-red-500 font-semibold">0</span>;
       const days = Math.round(stk / velocity);
@@ -2040,22 +2077,22 @@ export function renderCell(
     }
 
     case "actUnitsSold":
-      return <span className="font-mono text-sm">{result.actuals ? result.actuals.units_sold : "-"}</span>;
+      return numCell(!result.actuals, String(result.actuals?.units_sold ?? 0));
 
     case "actRevenue":
-      return <span className="font-mono text-sm">{result.actuals ? fmt(result.actuals.revenue) : "-"}</span>;
+      return numCell(!result.actuals, fmt(result.actuals?.revenue ?? 0));
 
     case "actRefunds":
-      return <span className="font-mono text-sm">{result.actuals ? result.actuals.units_refunded : "-"}</span>;
+      return numCell(!result.actuals, String(result.actuals?.units_refunded ?? 0));
 
     case "actRefundPct": {
-      if (!result.actuals || result.actuals.units_sold === 0) return <span className="font-mono text-sm">-</span>;
+      if (!result.actuals || result.actuals.units_sold === 0) return numCell(true, "0.0%");
       const pct = (result.actuals.units_refunded / result.actuals.units_sold) * 100;
       return <span className="font-mono text-sm">{pct.toFixed(1)}%</span>;
     }
 
     case "actProfit": {
-      if (!result.actuals || result.actuals.units_sold === 0 || result.actualCogs == null) return <span className="font-mono text-sm">-</span>;
+      if (!result.actuals || result.actuals.units_sold === 0 || result.actualCogs == null) return numCell(true, fmt(0));
       const units = result.actuals.units_sold;
       const rev = result.actuals.revenue;
       const prep2 = getEffectivePrep(result, settings);
@@ -2081,7 +2118,7 @@ export function renderCell(
     }
 
     case "actProfitPerUnit": {
-      if (!result.actuals || result.actuals.units_sold === 0 || result.actualCogs == null) return <span className="font-mono text-sm">-</span>;
+      if (!result.actuals || result.actuals.units_sold === 0 || result.actualCogs == null) return numCell(true, fmt(0));
       const units = result.actuals.units_sold;
       const rev = result.actuals.revenue;
       const prep2 = getEffectivePrep(result, settings);
@@ -2106,7 +2143,7 @@ export function renderCell(
     }
 
     case "actMargin": {
-      if (!result.actuals || result.actuals.units_sold === 0 || result.actualCogs == null) return <span className="font-mono text-sm">-</span>;
+      if (!result.actuals || result.actuals.units_sold === 0 || result.actualCogs == null) return numCell(true, "0.0%");
       const units = result.actuals.units_sold;
       const rev = result.actuals.revenue;
       const prep2 = getEffectivePrep(result, settings);
@@ -2131,7 +2168,7 @@ export function renderCell(
     }
 
     case "actRoi": {
-      if (!result.actuals || result.actuals.units_sold === 0 || result.actualCogs == null) return <span className="font-mono text-sm">-</span>;
+      if (!result.actuals || result.actuals.units_sold === 0 || result.actualCogs == null) return numCell(true, "0.0%");
       const units = result.actuals.units_sold;
       const rev = result.actuals.revenue;
       const prep2 = getEffectivePrep(result, settings);
@@ -2329,7 +2366,7 @@ export function renderCell(
         prep.value, storage.value, settings, includeInboundShipping, appliesDgHazmatSurcharge(result),
         result.category ?? null,
       );
-      if (mc == null) return <span className="text-muted-foreground text-sm">—</span>;
+      if (mc == null) return numCell(true, fmt(0));
       if (mc < 0) return <span className="font-mono text-sm text-red-500">-{fmt(Math.abs(mc))}</span>;
       return <span className="font-mono text-sm">{fmt(mc)}</span>;
     }
