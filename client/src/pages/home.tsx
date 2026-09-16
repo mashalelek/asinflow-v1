@@ -1333,99 +1333,15 @@ export default function Home() {
     }
 // Apply column filters
     if (Object.keys(colFilters).length > 0) {
-      out = out.filter((r) => {
-        const { price } = getSelectedPrice(r, priceSource);
-        const prep = getEffectivePrep(r, settings);
-        const storage = getEffectiveStorage(r, settings);
-        let profitData: ReturnType<typeof calculateProfit> | null = null;
-        if (price != null && !r.error && r.estimatedCogs != null) {
-          profitData = calculateProfit(price, r.estimatedCogs, r.feesData.fbaFulfillmentFee ?? 0, r.feesData.referralFee ?? 0, r.feesData.feesEstimatePrice, r.catalogData.weightLbs, prep.value, storage.value, settings, includeInboundShipping, appliesDgHazmatSurcharge(r));
-        }
-        return matchesFilters(r as any, colFilters, (colId) => {
-          switch (colId) {
-            case "cogs": return r.actualCogs ?? null;
-            case "estCogs": return r.estimatedCogs ?? null;
-            case "brand": return r.catalogData.brand;
-            case "supplier": return r.buyLink ? extractDomain(r.buyLink) : null;
-            case "salePrice": return price;
-            case "profit": return profitData?.profit ?? null;
-            case "margin": return profitData?.margin ?? null;
-            case "roi": return profitData?.roi ?? null;
-            case "fbaFee": return profitData?.totalFbaFee ?? r.feesData.fbaFulfillmentFee;
-            case "referralFee": return profitData?.adjustedReferralFee ?? r.feesData.referralFee;
-            case "sellersFba": return r.pricingData.sellersFba;
-            case "sellers": return (r.pricingData.sellersFba ?? 0) + (r.pricingData.sellersFbm ?? 0) || null;
-            case "stock": return r.stock?.total ?? null;
-            case "availableFba": return r.stock?.available_fba ?? null;
-            case "ordered": return r.stock?.ordered ?? null;
-            case "reserved": return r.stock?.reserved ?? null;
-            case "sentToFba": return r.stock?.inbound ?? null;
-            case "actAvgSalePrice": {
-              const u = r.actuals?.units_sold ?? 0;
-              return u > 0 ? r.actuals!.revenue / u : null;
-            }
-            case "actPrepCost": return r.prepOverride ?? 0;
-            case "daysLeft": {
-              const stk = r.stock?.total ?? 0;
-              const us = r.actuals?.units_sold ?? 0;
-              const dis = r.actuals?.days_in_stock ?? 0;
-              const dws = r.actuals?.days_with_sales ?? 0;
-              const ad = dis >= 7 ? dis : dws;
-              if (us === 0 || ad === 0) return null;
-              return Math.round(stk / (us / ad));
-            }
-            case "fba7d": return r.sellersDelta?.fba_7d ?? null;
-            case "fba30d": return r.sellersDelta?.fba_30d ?? null;
-            case "sellers7d": return r.sellersDelta ? (r.sellersDelta.fba_7d ?? 0) + (r.sellersDelta.fbm_7d ?? 0) : null;
-            case "sellers30d": return r.sellersDelta ? (r.sellersDelta.fba_30d ?? 0) + (r.sellersDelta.fbm_30d ?? 0) : null;
-            case "actUnitsSold": return r.actuals?.units_sold ?? null;
-            case "actRevenue": return r.actuals?.revenue ?? null;
-            case "actRefunds": return r.actuals?.units_refunded ?? null;
-            case "actRefundPct":
-              return r.actuals && r.actuals.units_sold > 0
-                ? (r.actuals.units_refunded / r.actuals.units_sold) * 100 : null;
-            case "actProfit":
-            case "actProfitPerUnit":
-            case "actMargin":
-            case "actRoi": {
-              if (!r.actuals || r.actuals.units_sold === 0 || r.actualCogs == null) return null;
-              const au = r.actuals.units_sold;
-              const ar = r.actuals.revenue;
-              const ap = getEffectivePrep(r, settings);
-              const as2 = getEffectiveStorage(r, settings);
-              const ac = calculateProfit(ar / au, r.actualCogs, r.feesData.fbaFulfillmentFee ?? 0, r.feesData.referralFee ?? 0, r.feesData.feesEstimatePrice, r.catalogData.weightLbs, ap.value, as2.value, settings, includeInboundShipping, appliesDgHazmatSurcharge(r));
-              if (colId === "actProfit") return ac.profit * au;
-              if (colId === "actProfitPerUnit") return ac.profit;
-              if (colId === "actMargin") return ac.margin;
-              return ac.roi;
-            }
-            case "tags": return r.tags?.map((t) => t.name).join(", ") ?? null;
-            case "notes": return r.notes ?? null;
-            case "meltable": return r.isMeltable ? "Yes" : "No";
-            case "hazmat": return r.isHazmat ? "Yes" : "No";
-            case "suppressed": return r.isSearchSuppressed ? "Yes" : "No";
-            case "dateAdded": return r.addedAt ?? null;
-            case "lastReviewed": return r.lastReviewedAt ?? null;
-            case "submission": return submissionCategory(r.submission);
-            case "category": return r.category ?? null;
-            case "sourcing": {
-              const w = r.isWholesale ?? false;
-              const o = r.isOa ?? false;
-              if (w && o) return "w + oa";
-              if (w) return "w";
-              if (o) return "oa";
-              return null;
-            }
-            case "maxCogs": {
-              const { price: mcP } = getSelectedPrice(r, priceSource);
-              const mcPrep = getEffectivePrep(r, settings);
-              const mcStor = getEffectiveStorage(r, settings);
-              return calculateMaxCogs(mcP, r.feesData.fbaFulfillmentFee, r.feesData.referralFee, r.feesData.feesEstimatePrice, r.catalogData.weightLbs, mcPrep.value, mcStor.value, settings, includeInboundShipping, appliesDgHazmatSurcharge(r));
-            }
-            default: return null;
-          }
-        });
-      });
+      out = out.filter((r) =>
+        // ONE accessor (2026-09-17): the main page used to carry its own
+        // near-copy of getRowValue here. It drifted — it had never heard of
+        // fbaStock (so "FBA Stock > 0" matched nothing while sorting the same
+        // column worked), and it returned raw nulls, bypassing the numeric
+        // null→0 coercion that makes "ROI ≤ 0" include no-data rows. Render,
+        // sort, filter, and CSV now all read getRowValue.
+        matchesFilters(r as any, colFilters, (colId) =>
+          getRowValue(r, colId, priceSource, settings, includeInboundShipping)));
     }
     return out;
   // eslint-disable-next-line react-hooks/exhaustive-deps

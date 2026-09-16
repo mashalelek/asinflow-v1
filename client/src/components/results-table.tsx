@@ -337,7 +337,10 @@ interface ResultsTableProps {
 }
 
 function fmt(value: number | null): string {
-  if (value == null) return "-";
+  // §6 (2026-09-17 final): money columns render $0.00, never a dash — the
+  // row data model already reports 0 (getRowValue), and display must agree
+  // with what sort/filter/CSV see.
+  if (value == null) return "$0.00";
   return `$${value.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
 }
 
@@ -345,16 +348,13 @@ function fmtPct(value: number): string {
   return `${value.toFixed(1)}%`;
 }
 
-// §6 numeric cells render zero, never a dash (2026-09-17). The value is
-// structurally 0 (getRowValue coerces it, so filters/sort/export see 0); the
-// muted colour is the ONLY thing distinguishing "no data" from a stored zero.
-const NO_DATA_CLASS = "text-muted-foreground/60";
-function numCell(noData: boolean, text: string, testId?: string) {
-  return (
-    <span className={`font-mono text-sm${noData ? ` ${NO_DATA_CLASS}` : ""}`} data-testid={testId}>
-      {text}
-    </span>
-  );
+// §6 (2026-09-17 final): numeric cells render a plain zero — NORMAL text,
+// identical styling to any other number. The muted "no-data" colour from the
+// first iteration of this change is gone: absence of order events IS zero
+// (provenance A), and the only surviving record-gap signal is the amber
+// indicator on the two PO-sheet-derived columns (provenance B).
+function numCell(text: string, testId?: string) {
+  return <span className="font-mono text-sm" data-testid={testId}>{text}</span>;
 }
 
 
@@ -449,10 +449,9 @@ function computeRowValue(
     case "stock": return result.stock?.total ?? null;
     case "availableFba": return result.stock?.available_fba ?? null;
     case "ordered": return result.stock?.ordered ?? null;
-    // §6 FBA Stock (2026-09-17): derived from the SAME two values the Stock
-    // and Ordered cells render, never re-derived from the snapshot — the
-    // identity must hold visually row by row.
-    case "fbaStock": return (result.stock?.total ?? 0) - (result.stock?.ordered ?? 0);
+    // §6 FBA Stock (2026-09-17): READ the row-model field — one number for
+    // sort, filter, CSV, and the cell. Never recomputed here.
+    case "fbaStock": return result.fbaStock ?? 0;
     case "reserved": return result.stock?.reserved ?? null;
     case "sentToFba": return result.stock?.inbound ?? null;
     case "actAvgSalePrice": {
@@ -1668,8 +1667,26 @@ export function renderCell(
       );
     }
 
-    case "cogs":
-      return <span className="font-mono text-sm">{fmt(result.actualCogs)}</span>;
+    // §6 provenance B (2026-09-17): Actual COGS is PO-sheet-derived, so a
+    // missing value means "no PO record found" — an unmapped sale or a
+    // missing row, not a free product. The number is a first-class $0.00
+    // for sort/filter/CSV; the amber indicator is the ONLY marker of the
+    // record gap (same pattern as Actual Prep Cost, §3).
+    case "cogs": {
+      if (result.actualCogs != null) return <span className="font-mono text-sm">{fmt(result.actualCogs)}</span>;
+      return (
+        <Tooltip>
+          <TooltipTrigger asChild>
+            <span className="font-mono text-sm text-amber-500 cursor-help" data-testid={`text-cogs-missing-po-${result.asin}`}>
+              {fmt(0)} <AlertTriangle className="inline h-3 w-3" />
+            </span>
+          </TooltipTrigger>
+          <TooltipContent side="top" className="max-w-[280px]">
+            <p className="text-xs">No PO COGS found. This indicates a missing PO record or unmapped sale. Actual profit/margin/ROI may be overstated.</p>
+          </TooltipContent>
+        </Tooltip>
+      );
+    }
 
     case "estCogs":
       return <span className="font-mono text-sm">{fmt(result.estimatedCogs)}</span>;
@@ -1689,7 +1706,7 @@ export function renderCell(
           : result.priceOutcome === "error" ? "Error"
           : result.priceOutcome === "not_found" ? "Not found"
           : null;
-        if (label == null) return numCell(true, fmt(0));
+        if (label == null) return numCell(fmt(0));
         const benign = label === "No offers";
         const badge = (
           <span className={`flex items-center gap-1 justify-end text-sm ${benign ? "text-muted-foreground" : "text-destructive"}`} data-testid={`text-price-outcome-${result.asin}`}>
@@ -1764,7 +1781,7 @@ export function renderCell(
           </Tooltip>
         );
       }
-      return numCell(true, fmt(0));
+      return numCell(fmt(0));
 
     case "profit":
       return (
@@ -1773,7 +1790,7 @@ export function renderCell(
             ? profitData.profit >= 0
               ? "text-emerald-600 dark:text-emerald-400"
               : "text-red-600 dark:text-red-400"
-            : NO_DATA_CLASS
+            : ""
         }`}>
           {profitData ? fmt(profitData.profit) : fmt(0)}
         </span>
@@ -1786,7 +1803,7 @@ export function renderCell(
             ? profitData.margin >= settings.minMarginThreshold
               ? "text-emerald-600 dark:text-emerald-400"
               : "text-red-600 dark:text-red-400"
-            : NO_DATA_CLASS
+            : ""
         }`}>
           {profitData ? fmtPct(profitData.margin) : fmtPct(0)}
         </span>
@@ -1799,7 +1816,7 @@ export function renderCell(
             ? profitData.roi >= settings.minRoiThreshold
               ? "text-emerald-600 dark:text-emerald-400"
               : "text-red-600 dark:text-red-400"
-            : NO_DATA_CLASS
+            : ""
         }`}>
           {profitData ? fmtPct(profitData.roi) : fmtPct(0)}
         </span>
@@ -1865,7 +1882,7 @@ export function renderCell(
           </Tooltip>
         );
       }
-      return <span className={`font-mono text-sm${profitData ? "" : ` ${NO_DATA_CLASS}`}`} data-testid={`text-inboundShipping-${result.asin}`}>{fmt(profitData?.inboundShipping ?? 0)}</span>;
+      return <span className="font-mono text-sm" data-testid={`text-inboundShipping-${result.asin}`}>{fmt(profitData?.inboundShipping ?? 0)}</span>;
     }
 
     case "prep":
@@ -1903,11 +1920,11 @@ export function renderCell(
       );
 
     case "sellersFba":
-      return numCell(result.pricingData.sellersFba == null, String(result.pricingData.sellersFba ?? 0));
+      return numCell(String(result.pricingData.sellersFba ?? 0));
 
     case "sellers": {
       const totalSellers = (result.pricingData.sellersFba ?? 0) + (result.pricingData.sellersFbm ?? 0);
-      return numCell(!totalSellers, String(totalSellers || 0));
+      return numCell(String(totalSellers || 0));
     }
 
     case "fba7d":
@@ -1927,19 +1944,19 @@ export function renderCell(
     }
 
     case "availableFba":
-      return numCell(result.stock?.available_fba == null, String(result.stock?.available_fba ?? 0));
+      return numCell(String(result.stock?.available_fba ?? 0));
     case "ordered":
-      return numCell(result.stock?.ordered == null, String(result.stock?.ordered ?? 0));
+      return numCell(String(result.stock?.ordered ?? 0));
     case "fbaStock":
-      return <span className="font-mono text-sm">{(result.stock?.total ?? 0) - (result.stock?.ordered ?? 0)}</span>;
+      return numCell(String(result.fbaStock ?? 0));
     case "reserved":
-      return numCell(result.stock?.reserved == null, String(result.stock?.reserved ?? 0));
+      return numCell(String(result.stock?.reserved ?? 0));
     case "sentToFba":
-      return numCell(result.stock?.inbound == null, String(result.stock?.inbound ?? 0));
+      return numCell(String(result.stock?.inbound ?? 0));
 
     case "actAvgSalePrice": {
       const avgUs = result.actuals?.units_sold ?? 0;
-      return numCell(!(avgUs > 0), fmt(avgUs > 0 ? result.actuals!.revenue / avgUs : 0));
+      return numCell(fmt(avgUs > 0 ? result.actuals!.revenue / avgUs : 0));
     }
 
     case "actPrepCost": {
@@ -2037,7 +2054,7 @@ export function renderCell(
 
     case "stock": {
       const s = result.stock;
-      if (!s) return numCell(true, "0");
+      if (!s) return numCell("0");
       return (
         <Tooltip>
           <TooltipTrigger asChild>
@@ -2068,7 +2085,7 @@ export function renderCell(
       const dis = result.actuals?.days_in_stock ?? 0;
       const dws = result.actuals?.days_with_sales ?? 0;
       const activeDays = dis >= 7 ? dis : dws;
-      if (us === 0 || activeDays === 0) return numCell(true, "0");
+      if (us === 0 || activeDays === 0) return numCell("0");
       const velocity = us / activeDays;
       if (stk === 0) return <span className="font-mono text-sm text-red-500 font-semibold">0</span>;
       const days = Math.round(stk / velocity);
@@ -2077,22 +2094,22 @@ export function renderCell(
     }
 
     case "actUnitsSold":
-      return numCell(!result.actuals, String(result.actuals?.units_sold ?? 0));
+      return numCell(String(result.actuals?.units_sold ?? 0));
 
     case "actRevenue":
-      return numCell(!result.actuals, fmt(result.actuals?.revenue ?? 0));
+      return numCell(fmt(result.actuals?.revenue ?? 0));
 
     case "actRefunds":
-      return numCell(!result.actuals, String(result.actuals?.units_refunded ?? 0));
+      return numCell(String(result.actuals?.units_refunded ?? 0));
 
     case "actRefundPct": {
-      if (!result.actuals || result.actuals.units_sold === 0) return numCell(true, "0.0%");
+      if (!result.actuals || result.actuals.units_sold === 0) return numCell("0.0%");
       const pct = (result.actuals.units_refunded / result.actuals.units_sold) * 100;
       return <span className="font-mono text-sm">{pct.toFixed(1)}%</span>;
     }
 
     case "actProfit": {
-      if (!result.actuals || result.actuals.units_sold === 0 || result.actualCogs == null) return numCell(true, fmt(0));
+      if (!result.actuals || result.actuals.units_sold === 0 || result.actualCogs == null) return numCell(fmt(0));
       const units = result.actuals.units_sold;
       const rev = result.actuals.revenue;
       const prep2 = getEffectivePrep(result, settings);
@@ -2118,7 +2135,7 @@ export function renderCell(
     }
 
     case "actProfitPerUnit": {
-      if (!result.actuals || result.actuals.units_sold === 0 || result.actualCogs == null) return numCell(true, fmt(0));
+      if (!result.actuals || result.actuals.units_sold === 0 || result.actualCogs == null) return numCell(fmt(0));
       const units = result.actuals.units_sold;
       const rev = result.actuals.revenue;
       const prep2 = getEffectivePrep(result, settings);
@@ -2143,7 +2160,7 @@ export function renderCell(
     }
 
     case "actMargin": {
-      if (!result.actuals || result.actuals.units_sold === 0 || result.actualCogs == null) return numCell(true, "0.0%");
+      if (!result.actuals || result.actuals.units_sold === 0 || result.actualCogs == null) return numCell("0.0%");
       const units = result.actuals.units_sold;
       const rev = result.actuals.revenue;
       const prep2 = getEffectivePrep(result, settings);
@@ -2168,7 +2185,7 @@ export function renderCell(
     }
 
     case "actRoi": {
-      if (!result.actuals || result.actuals.units_sold === 0 || result.actualCogs == null) return numCell(true, "0.0%");
+      if (!result.actuals || result.actuals.units_sold === 0 || result.actualCogs == null) return numCell("0.0%");
       const units = result.actuals.units_sold;
       const rev = result.actuals.revenue;
       const prep2 = getEffectivePrep(result, settings);
@@ -2366,7 +2383,7 @@ export function renderCell(
         prep.value, storage.value, settings, includeInboundShipping, appliesDgHazmatSurcharge(result),
         result.category ?? null,
       );
-      if (mc == null) return numCell(true, fmt(0));
+      if (mc == null) return numCell(fmt(0));
       if (mc < 0) return <span className="font-mono text-sm text-red-500">-{fmt(Math.abs(mc))}</span>;
       return <span className="font-mono text-sm">{fmt(mc)}</span>;
     }

@@ -405,46 +405,79 @@ fix only — nothing is written to `inventory_snapshots`.
 
 ### FBA Stock column (2026-09-17)
 
-**FBA Stock = Stock − Ordered**, computed from the SAME values the Stock and
-Ordered cells render — not re-derived from the snapshot — so the identity
+**FBA Stock = Stock − Ordered**, a REAL numeric field on the row model
+(`AsinResult.fbaStock`) computed ONCE server-side where rows are built, from
+the same two values the Stock and Ordered cells render — never at render
+time. Sort, numeric filters, CSV export, and the cell all read that one
+field, so they cannot disagree, and it is always `number`-typed (a string
+silently breaks numeric "greater than" comparisons). The identity therefore
 holds visually row by row. A row with no inventory snapshot renders Stock as
 `available 0 + ordered` (the rule above), so its FBA Stock renders **0**, not
 the negative of its ordered quantity. Sortable, numeric-filterable, in CSV
-export and Manage Columns. Default visibility MATCHES its inputs: Stock is
-default-visible, Ordered is not, so FBA Stock ships **default-hidden** and is
-added to no preset that lacks Stock/Ordered. Present on every table built
-from the shared column defs — the ASINs page and the Repricer tab (§23);
-absent from Bulk Calc, which excludes the whole Stock group (§21).
+export and Manage Columns. **Default-visible wherever Stock/Ordered are**
+(revised 2026-09-17 — it shipped default-hidden for one day). Present on
+every table built from the shared column defs — the ASINs page and the
+Repricer tab (§23); absent from Bulk Calc, which excludes the whole Stock
+group (§21). Saved view presets list columns explicitly and do not absorb
+new ones; adding it to a preset is a deliberate per-preset edit.
 
-### Numeric columns render zero, never a dash (2026-09-17)
+### Numeric cells render zero, never a dash (2026-09-17, final)
 
 Every NUMERIC column renders **0** (counts) or **$0.00** (money) where it
-used to render `-` / `—`. The reason is behavioral, not cosmetic: a dash
-made the row invisible to numeric filters and unsortable against real
-values, so "Estimated ROI ≤ 0" silently skipped exactly the rows a user was
-looking for.
+used to render `-` / `—`. The reason is behavioral: a dash made the row
+invisible to numeric filters and unsortable against real values, so
+"Actual Units Sold = 0" or "Estimated ROI ≤ 0" silently skipped exactly the
+rows the user was looking for.
 
-**null sorts and filters as zero; muted rendering marks no-data.** The
-null-vs-zero distinction is preserved VISUALLY, never structurally:
+**ONE accessor, no duplicates.** `getRowValue` is the only value source for
+sort, numeric filters, and CSV export on EVERY table surface. The main ASINs
+page previously carried its own near-copy switch for filtering, which drifted
+from it: the copy had never heard of FBA Stock (so "FBA Stock > 0" matched
+nothing while sorting the same column worked) and returned raw nulls,
+bypassing the coercion below. Removed 2026-09-17 and pinned by test — a page
+that re-derives filter values is the bug, not a style choice.
 
-- a NULL / no-data value renders `0` or `$0.00` in the muted (tertiary) text
-  color, and keeps whatever tooltip it already had;
-- a true stored zero renders in normal text;
-- `getRowValue` — the single value source for sort, numeric filters, and CSV
-  export (§6 one-computation rule) — returns `0` for both, so the two are
-  indistinguishable to sorting and filtering, by design. **CSV export
-  therefore also carries `0` where it used to carry an empty cell.**
+**The coercion lives in the ROW DATA MODEL, not the cell renderer.**
+`getRowValue` — the single value source for sort, numeric filters, and CSV
+export — returns a literal `0` for any numeric column that computes to
+null, and the renderer displays that same `0`. Display, sort, filter, and
+CSV therefore always agree on the same number. A renderer-only fix would
+leave filters blind to exactly the rows this change exists to surface.
 
-Exceptions that keep their current behavior:
+Semantics differ by column **PROVENANCE**, not by null-ness:
 
-- **Actual Prep Cost** — the §3 amber NULL-warning survives; the cell may
-  read `$0.00`, but the indicator distinguishing "no prep data" stays.
-- **Estimated Inbound Ship.** — renders `?` when weight is unknown, per the
-  standing architecture decision that a missing weight must NOT read as
-  `$0` (it is a genuinely unknown cost, not a zero one). It is NOT a dash,
-  so it is out of scope for this change; its sort/filter VALUE is still 0
-  like every other numeric, so the filter-visibility goal holds.
-- Non-numeric columns (text, dates, status) keep their dashes.
+**A. Event-derived** — computed from order records: Actual Units Sold,
+Actual Revenue, Refunds, Refund %, Actual Avg. Sale Price, and any other
+order-event aggregate. **Absence of orders in the range IS zero**: 0 sold,
+$0.00 revenue. Render plain `0` / `$0.00` in NORMAL text, styled
+identically to any other number — no muted colour, no indicator, no
+"no data" tooltip. No exceptions.
+
+**B. PO-sheet-derived** — looked up from PO records: **Actual COGS** and
+**Actual Prep Cost**. Absence means "no PO record found" — genuinely
+unknown, possibly an unmapped sale or a missing row. Render `$0.00` in
+NORMAL text AND keep a small amber missing-record indicator (the §3
+prep-warning pattern, extended to Actual COGS 2026-09-17). The number is a
+first-class `0` for sort/filter/CSV; only the indicator marks the record
+gap.
+
+**C. All other numeric columns** — counts, fees, estimates: null renders
+and behaves as plain `0` / `$0.00`, normal text. An estimate that is null
+because a required input is missing (e.g. no COGS on file) still shows 0 —
+the Product cell's Est. COGS line and its M-badge remain the signal for
+that.
+
+Scope: the main ASINs table, the Repricer tab (§23), and the Bulk Profit
+Calculator (§21) — all shared table surfaces render identically. Any
+muted/grey zero styling or "no data" tooltip from the first iteration of
+this change is REMOVED. Non-numeric (text) columns keep their dashes.
+
+One deliberate hold-out, unchanged by this rule: **Estimated Inbound Ship.
+renders `?`** when the item's weight is unknown, because a missing weight
+is an unknown cost, not a zero one, and showing `$0.00` would understate
+landed cost (long-standing decision, recorded in CLAUDE.md). It is not a
+dash; its sort/filter/CSV VALUE is `0` like every other numeric, so the
+filter-visibility guarantee above still holds.
 
 ### Two-row column headers
 

@@ -1214,6 +1214,12 @@ export async function registerRoutes(
           hasSnapshot: false,
         };
 
+        // §6 FBA Stock (2026-09-17): computed ONCE here, from the same two
+        // values the Stock and Ordered cells render, so the on-screen
+        // identity holds and sort/filter/CSV/render all read one number.
+        // A no-snapshot row is total = ordered, so this is 0 — never negative.
+        const fbaStock = stock.total - stock.ordered;
+
         const actuals = sales ? {
           units_sold: parseInt(sales.units_sold) || 0,
           revenue: parseFloat(sales.revenue) || 0,
@@ -1289,6 +1295,7 @@ export async function registerRoutes(
           isSearchSuppressed: row.is_search_suppressed ?? false,
           suppressionReasons: row.suppression_reasons ?? [],
           cogsSource: (row.cogs_source as "po_sheet" | "manual" | null) ?? null,
+          fbaStock,
           pricesFetchedAt: row.fetched_at ? new Date(row.fetched_at).toISOString() : null,
           feeSource: row.fee_source ?? null,
           lastReviewedAt: row.last_reviewed_at ? new Date(row.last_reviewed_at).toISOString() : null,

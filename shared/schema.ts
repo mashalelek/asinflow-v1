@@ -158,6 +158,12 @@ export interface AsinResult {
   // for the existing muted styling; dead rows render their own tag.
   status?: "active" | "parked" | "dead";
   statusReason?: string | null;
+  // §6 FBA Stock (2026-09-17): a REAL numeric field on the row model,
+  // computed once where rows are built — never at render time. Sort,
+  // numeric filters, CSV export, and the cell all read THIS field, so they
+  // can never disagree (the 2026-09-17 bug: sort used one accessor and the
+  // main page's filter used another that had never heard of the column).
+  fbaStock?: number;
   addedAt?: string | null;
   // §21 bulk per-leg outcomes (2026-09-09): present on bulk rows only.
   // catalog: parsed | absent | inconclusive ("absent" renders "Not found");
@@ -611,9 +617,9 @@ export const ALL_COLUMNS: ColumnDef[] = [
   { id: "availableFba", label: "Available (FBA)", defaultVisible: false, align: "right", group: "stock" },
   { id: "ordered", label: "Ordered", defaultVisible: false, align: "right", group: "stock" },
   // §6 FBA Stock (2026-09-17) = Stock − Ordered, computed from the SAME
-  // values those two cells render so the identity holds row by row. Default
-  // visibility matches its inputs (Stock visible, Ordered not → hidden).
-  { id: "fbaStock", label: "FBA Stock", defaultVisible: false, align: "right", group: "stock" },
+  // values those two cells render so the identity holds row by row.
+  // Default-VISIBLE wherever Stock/Ordered are (revised same day).
+  { id: "fbaStock", label: "FBA Stock", defaultVisible: true, align: "right", group: "stock" },
   { id: "reserved", label: "Reserved", defaultVisible: false, align: "right", group: "stock" },
   { id: "sentToFba", label: "Sent to FBA", defaultVisible: false, align: "right", group: "stock" },
   { id: "daysLeft", label: "Days Left", defaultVisible: true, align: "right", group: "stock" },
