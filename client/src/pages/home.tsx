@@ -15,7 +15,7 @@ import { VerificationPanel } from "@/components/verification-panel";
 import { getUnverified, submissionCategory, type UnverifiedResponse } from "@/lib/submissions-api";
 import { LegendApprovalDialog, type PendingLegendItem, type ApprovedBrandOption } from "@/components/legend-approval-dialog";
 import { FileUpload } from "@/components/file-upload";
-import { ResultsTable, getRowValue } from "@/components/results-table";
+import { ResultsTable, getRowValue, isSubmissionPending } from "@/components/results-table";
 import { ExportButtons } from "@/components/export-buttons";
 import { SummaryCards, type FilterMode } from "@/components/summary-cards";
 import { ColumnManager } from "@/components/column-manager";
@@ -1136,6 +1136,28 @@ export default function Home() {
     });
     const data = await res.json();
     if (!res.ok) throw new Error(data.message || "Submit failed");
+
+    // §18 pending half (2026-09-21): flip the catalog icon on the RESPONSE,
+    // like Bulk Calc's cart flip — the server already wrote has_live_offer
+    // for every ACCEPTED row, so this just spares the user a refetch. The
+    // synthetic 'pending' ledger entry is what renders the pending style;
+    // the next /api/asins load replaces it with the real row.
+    const accepted: string[] = ((data as any)?.perAsin ?? [])
+      .filter((r: any) => r?.outcome?.kind === "created")
+      .map((r: any) => r.asin);
+    if (accepted.length > 0) {
+      const now = new Date().toISOString();
+      setResults((prev) => prev.map((r) => accepted.includes(r.asin)
+        ? {
+            ...r,
+            hasLiveOffer: true,
+            submission: {
+              latest: { sku: "", status: "pending", submittedAt: now, verifiedAt: null, issues: [], reviewFlags: [], terminalConflict: false, acknowledged: false },
+              history: r.submission?.history ?? [],
+            } as any,
+          }
+        : r));
+    }
     return data as SubmitResponse;
   }, []);
 
@@ -1164,18 +1186,41 @@ export default function Home() {
   // Caller MUST check explicit rows. The button is disabled when selectedSet
   // is empty (real gate); the empty-guard below is defense-in-depth.
   // Does NOT go through currentWorkingSet — no filtered-view fallback at all.
+  // §19 (2026-09-21): a row whose latest submission is still unresolved is
+  // already "submitted (pending)" — re-firing would create a second offer
+  // for the same ASIN while the first is materializing. Dropped from the
+  // set here rather than silently succeeding.
+  const pendingSubmitAsins = useMemo(
+    () => new Set(results.filter((r) => isSubmissionPending(r)).map((r) => r.asin)),
+    [results],
+  );
+
   const handleAddToSC = useCallback(() => {
     if (selectedSet.size === 0) {
       toast({ title: "Select ASINs first", description: "Add to SC operates only on checked rows.", variant: "destructive" });
       return;
     }
-    openOfferAddPreview(Array.from(selectedSet));
-  }, [openOfferAddPreview, toast, selectedSet]);
+    const chosen = Array.from(selectedSet);
+    const eligible = chosen.filter((a) => !pendingSubmitAsins.has(a));
+    const skipped = chosen.length - eligible.length;
+    if (eligible.length === 0) {
+      toast({ title: "Already submitted", description: `${skipped} selected ASIN${skipped === 1 ? " is" : "s are"} still pending at Amazon — wait for the icon to turn solid.`, variant: "destructive" });
+      return;
+    }
+    if (skipped > 0) {
+      toast({ title: `Skipping ${skipped} pending`, description: "Those ASINs already have a submission waiting for Amazon to publish." });
+    }
+    openOfferAddPreview(eligible);
+  }, [openOfferAddPreview, toast, selectedSet, pendingSubmitAsins]);
 
   // Per-row "+" — single ASIN.
   const handleAddOneToSC = useCallback((asin: string) => {
+    if (pendingSubmitAsins.has(asin)) {
+      toast({ title: "Already submitted", description: `${asin} is waiting for Amazon to publish — the icon turns solid when it's live.`, variant: "destructive" });
+      return;
+    }
     openOfferAddPreview([asin]);
-  }, [openOfferAddPreview]);
+  }, [openOfferAddPreview, pendingSubmitAsins, toast]);
 
   // Park/Unpark (was Archive/Unarchive, 2026-09-07) — same route, new labels.
   const handleParkSelected = useCallback(async (park = true) => {
@@ -1465,8 +1510,14 @@ export default function Home() {
                 variant="outline"
                 size="sm"
                 onClick={handleAddToSC}
-                disabled={isAnalyzing || selectedSet.size === 0}
-                title={selectedSet.size === 0 ? "Select ASINs to add to Seller Central" : undefined}
+                // §19 (2026-09-21): also disabled when EVERY selected row is
+                // already pending at Amazon — no double submits.
+                disabled={isAnalyzing || selectedSet.size === 0 || Array.from(selectedSet).every((a) => pendingSubmitAsins.has(a))}
+                title={selectedSet.size === 0
+                  ? "Select ASINs to add to Seller Central"
+                  : Array.from(selectedSet).every((a) => pendingSubmitAsins.has(a))
+                    ? "Every selected ASIN is already submitted and waiting for Amazon to publish"
+                    : undefined}
                 className="h-8 text-xs"
                 data-testid="button-add-to-sc"
               >

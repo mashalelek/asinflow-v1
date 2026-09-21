@@ -336,6 +336,26 @@ interface ResultsTableProps {
   inDbFilterOnProduct?: boolean;
 }
 
+// §18/§19 (2026-09-21). An unresolved ledger row means AF submitted an
+// offer that Amazon hasn't published yet — the PENDING half of the icon's
+// two-part definition. 'stale' counts as unresolved: it aged out of the
+// probe ladder without a verdict, so we still can't claim "listed".
+const UNRESOLVED_SUBMISSION = new Set(["pending", "processing", "stale"]);
+export function isSubmissionPending(result: AsinResult): boolean {
+  const s = result.submission?.latest?.status;
+  return s != null && UNRESOLVED_SUBMISSION.has(String(s));
+}
+
+// When the last submission definitively failed, the "+" should say WHY
+// rather than reading like the ASIN was never touched.
+export function submissionFailureReason(result: AsinResult): string | null {
+  const latest = result.submission?.latest;
+  if (!latest || latest.status !== "failed") return null;
+  const issue = (latest.issues ?? [])[0];
+  const why = issue?.message ? `: ${issue.message}` : issue?.code ? `: ${issue.code}` : "";
+  return `Submission failed${why} — Add to SC to retry`;
+}
+
 function fmt(value: number | null): string {
   // §6 (2026-09-17 final): money columns render $0.00, never a dash — the
   // row data model already reports 0 (getRowValue), and display must agree
@@ -1519,12 +1539,28 @@ function ProductCell({ result, price, settings, onResultUpdate, collisionBoundar
               (NULL) alike. The §21 bulk page swaps this slot for its own badge
               (in_database) via the productBadge render prop. */}
           {productBadge ? productBadge(result) : result.hasLiveOffer === true ? (
-            <Tooltip>
-              <TooltipTrigger asChild>
-                <ShoppingBag className="h-3 w-3 text-blue-500 flex-shrink-0" />
-              </TooltipTrigger>
-              <TooltipContent side="top"><p className="text-xs">Listed in Seller Central (Active or Inactive)</p></TooltipContent>
-            </Tooltip>
+            // §18 two-part definition (2026-09-21): TRUE means "submitted
+            // (pending)" OR "listed (confirmed)". The §19 ledger row is what
+            // distinguishes them — unresolved ⇒ pending style, so the flag
+            // never overstates what Amazon has actually published.
+            isSubmissionPending(result) ? (
+              <Tooltip>
+                <TooltipTrigger asChild>
+                  <span className="relative flex-shrink-0 inline-flex" data-testid={`icon-catalog-pending-${result.asin}`}>
+                    <ShoppingBag className="h-3 w-3 text-blue-500/50" />
+                    <Clock className="h-2 w-2 text-amber-500 absolute -bottom-0.5 -right-0.5" />
+                  </span>
+                </TooltipTrigger>
+                <TooltipContent side="top"><p className="text-xs">Submitted — waiting for Amazon to publish</p></TooltipContent>
+              </Tooltip>
+            ) : (
+              <Tooltip>
+                <TooltipTrigger asChild>
+                  <ShoppingBag className="h-3 w-3 text-blue-500 flex-shrink-0" data-testid={`icon-catalog-live-${result.asin}`} />
+                </TooltipTrigger>
+                <TooltipContent side="top"><p className="text-xs">Listed in Seller Central (Active or Inactive)</p></TooltipContent>
+              </Tooltip>
+            )
           ) : (
             <Tooltip>
               <TooltipTrigger asChild>
@@ -1538,7 +1574,7 @@ function ProductCell({ result, price, settings, onResultUpdate, collisionBoundar
                   +
                 </a>
               </TooltipTrigger>
-              <TooltipContent side="top"><p className="text-xs">Not listed — Add to SC</p></TooltipContent>
+              <TooltipContent side="top"><p className="text-xs">{submissionFailureReason(result) ?? "Not listed — Add to SC"}</p></TooltipContent>
             </Tooltip>
           )}
           {/* Last Reviewed timestamp */}

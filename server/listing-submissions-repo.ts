@@ -104,6 +104,23 @@ export async function verifyPending(
         [row.asin, anyBuyable([probe.input.status])],
       );
     }
+    // §18/§19 (2026-09-21): a definitive 'failed' verdict REVERTS the
+    // pending flag the submit set — the icon goes back to "+" with the
+    // reason. Guarded: failing ONE SKU of a multi-offer ASIN is not
+    // evidence the ASIN has no live offer, so we only revert when no other
+    // ledger row for this ASIN resolved 'live'.
+    if (status === "failed") {
+      await query(
+        `UPDATE asins SET has_live_offer = FALSE, offer_checked_at = now()
+          WHERE asin = $1
+            AND NOT EXISTS (
+              SELECT 1 FROM listing_submissions ls
+               WHERE ls.asin = $1 AND ls.verify_status = 'live'
+            )`,
+        [row.asin],
+      );
+    }
+
     if (status === "live") {
       s.live++;
     }
