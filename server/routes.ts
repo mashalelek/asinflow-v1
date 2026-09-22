@@ -18,6 +18,7 @@ import { syncSuppressionData } from "./suppression-sync";
 import { fetchSheetData, fetchSheetDataWithMeta } from "./google-sheets";
 import { buildVelocityRecords, serializeVelocityCsv, parseMDY, formatYMD, todayLocal } from "./velocity-export";
 import { fetchAllKnownOrders, matchKeysForOrder, createBundleOrder, submitBulkCsv, updateInboundOrder } from "./velocity-api";
+import { recordableBundles, recordBundleIdentities, mapBundleIdentity } from "./velocity-bundle-identity";
 import { buildVelocityPlan, putBodyFromDiffs, type PlanUpdate } from "./velocity-reconcile";
 import { buildSellerboardCogs, serializeSbCsv } from "./sellerboard-cogs";
 import { buildSourcingCost, sourcingCostFilename, parseYMDLocal } from "./sourcing-cost";
@@ -1952,6 +1953,7 @@ export async function registerRoutes(
 
     await respondLongSync(res, async () => {
       const results: any[] = [];
+      const createdBundleAsins = new Set<string>();
       // ECHO FRESHNESS RULE (SPEC §11): this GET sources the echo-merge
       // values for full-replace PUTs and MUST happen here, at execute time,
       // immediately before the write loop — never reuse order values cached
@@ -1961,6 +1963,18 @@ export async function registerRoutes(
       // the same three-leg union as the plan — a completed order must block
       // a CREATE here too, the last line of defense against a duplicate.
       const live = await fetchAllKnownOrders();
+      // §11 Part B.1 (2026-09-21): record identity for every list-visible
+      // bundle parent on EVERY fetch. Failures are surfaced, never fatal —
+      // in-batch hydration already covers what is list-visible (Part B.4).
+      {
+        const rec = await recordBundleIdentities(recordableBundles(live));
+        if (rec.written > 0 || rec.errors.length > 0 || rec.changed.length > 0) {
+          results.push({ action: "record_identity", scope: "pre_write_fetch", written: rec.written, changed: rec.changed, errors: rec.errors });
+        }
+        for (const c of rec.changed) {
+          log(`Velocity bundle identity changed for ${c.velocity_order_id}: [${c.from.join(", ")}] -> [${c.to.join(", ")}]`, "velocity-upload");
+        }
+      }
       const liveByKey = new Map(live.map((o) => [
         `${String(o.order_number ?? "").trim()} ${String(o.asin ?? "").trim().toUpperCase()}`, o,
       ]));
@@ -2006,9 +2020,36 @@ export async function registerRoutes(
           try {
             await createBundleOrder(b);
             results.push({ action: "create_bundle", order_number: nums[0] ?? "", asin, outcome: "created" });
+            createdBundleAsins.add(asin.toUpperCase());
           } catch (err: any) {
             results.push({ action: "create_bundle", order_number: nums[0] ?? "", asin, outcome: "failed", error: err?.message ?? String(err) });
           }
+        }
+      }
+
+      // §11 Part B.2 (2026-09-21): ONE fresh /inbound read after the bundle
+      // creates, to capture the new parents' identity while they are still
+      // list-visible (their children are only serialized on the list legs).
+      // A failed capture is AMBER in the results — never a failure of the
+      // create, which already succeeded at Velocity; the next run captures
+      // it as long as the bundle is still list-visible.
+      if (createdBundleAsins.size > 0) {
+        try {
+          const after = await fetchAllKnownOrders();
+          const fresh = recordableBundles(after).filter((r) => createdBundleAsins.has(r.asin.toUpperCase()));
+          const rec = await recordBundleIdentities(fresh);
+          results.push({
+            action: "record_identity", scope: "post_create",
+            written: rec.written, errors: rec.errors,
+            outcome: rec.errors.length === 0 && rec.written === fresh.length ? "captured" : "capture_incomplete",
+            expected: fresh.length,
+          });
+        } catch (err: any) {
+          results.push({
+            action: "record_identity", scope: "post_create", outcome: "capture_failed",
+            error: err?.message ?? String(err),
+            note: "bundle creates SUCCEEDED; identity will be captured on the next run while the bundle is still list-visible",
+          });
         }
       }
 

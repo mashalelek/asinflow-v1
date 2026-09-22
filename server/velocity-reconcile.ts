@@ -15,6 +15,7 @@ import {
   type VelocityRecord, type VelocitySkip, type VelocityBundleRecord, type BundleFlag,
 } from "./velocity-export";
 import { fetchAllKnownOrders, matchKeysForOrder, unidentifiedShippedBundles, type KnownVelocityOrder } from "./velocity-api";
+import { recordableBundles, type BundleIdentityRow } from "./velocity-bundle-identity";
 
 type QueryLike = (sql: string, params?: any[]) => Promise<{ rows: any[]; rowCount: number | null }>;
 
@@ -74,6 +75,9 @@ export interface VelocityPlan {
   unmatchedVelocity: number;  // Velocity orders with no sheet row — counted, never touched
   selfPrepExcluded: number;
   skips: VelocitySkip[];
+  // §11 Part B.3 (2026-09-21): identity recording the plan WOULD perform.
+  // Computed here, written only by execute — the plan is a preview.
+  identityWouldRecord: BundleIdentityRow[];
 }
 
 const normKey = (orderNumber: string, asin: string) =>
@@ -108,6 +112,11 @@ export async function buildVelocityPlan(
     fetchSheetRows(sheetId),
     fetchAllKnownOrders(),
   ]);
+
+  // §11 Part B.3 (2026-09-21): the plan is a preview (dryRun by nature), so
+  // the identity recording it WOULD do is computed and reported — never
+  // written. The execute path does the writing after its own fetch.
+  const wouldRecordRows: BundleIdentityRow[] = recordableBundles(velocityOrders);
 
   // One canonical sheet row per (order_number, asin): first non-canceled wins
   // (top-of-sheet canonical, as everywhere); a canceled row is kept only if
@@ -274,6 +283,7 @@ export async function buildVelocityPlan(
     unmatchedVelocity,
     selfPrepExcluded: build.selfPrepExcluded,
     skips: build.skips,
+    identityWouldRecord: wouldRecordRows,
   };
 }
 

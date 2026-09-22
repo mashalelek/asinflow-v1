@@ -64,3 +64,75 @@ describe("Part C.1 — shipment-leg bundle grouping", () => {
     expect(keys).toEqual([{ orderNumber: "200015497641702", asin: "B0G6R55GNQ" }]);
   });
 });
+
+import { recordableBundles, childIdentityOf, recordBundleIdentities, mapBundleIdentity } from "./velocity-bundle-identity";
+
+// §11 Part B (2026-09-21) — recording.
+describe("Part B — recording", () => {
+  const listBundle = (over: any = {}) => ({
+    order_id: "d86eb6ef", asin: "b0g6r55gnq", sold_as: "bundle", lifecycleSource: "inbound",
+    bundle_children: [
+      { order_id: "27e74815", order_number: "200015497641702" },
+      { order_id: "179e2b04", order_number: "200015497641702" },
+    ],
+    ...over,
+  });
+
+  it("collects list-leg bundle parents with children, uppercasing the ASIN and de-duping numbers", () => {
+    const rows = recordableBundles([listBundle()]);
+    expect(rows).toEqual([{
+      velocity_order_id: "d86eb6ef", asin: "B0G6R55GNQ",
+      child_order_numbers: ["200015497641702"],           // de-duped
+      child_order_ids: ["27e74815", "179e2b04"],
+      source: "observed",
+    }]);
+  });
+
+  it("ignores shipment-leg rows (their children are never serialized)", () => {
+    expect(recordableBundles([listBundle({ lifecycleSource: "shipment", bundle_children: [] })])).toEqual([]);
+  });
+
+  it("ignores non-bundles and children-less parents — nothing to record", () => {
+    expect(recordableBundles([listBundle({ sold_as: "individual" })])).toEqual([]);
+    expect(recordableBundles([listBundle({ bundle_children: [] })])).toEqual([]);
+    expect(recordableBundles([listBundle({ bundle_children: [{ order_number: "  " }] })])).toEqual([]);
+  });
+
+  it("childIdentityOf returns ids only when present (manual rows have none)", () => {
+    expect(childIdentityOf({ bundle_children: [{ order_number: "A" }] })).toEqual({ numbers: ["A"], ids: [] });
+  });
+
+  it("observed children OVERWRITE a stale row and the change is reported", async () => {
+    const calls: any[] = [];
+    const fakeQuery = async (sql: string, params?: any[]) => {
+      calls.push({ sql, params });
+      if (/SELECT child_order_numbers/.test(sql)) return { rows: [{ child_order_numbers: ["OLD-1"] }] };
+      return { rows: [], rowCount: 1 };
+    };
+    const r = await recordBundleIdentities(recordableBundles([listBundle()]), { query: fakeQuery as any });
+    expect(r.written).toBe(1);
+    expect(r.changed).toEqual([{ velocity_order_id: "d86eb6ef", from: ["OLD-1"], to: ["200015497641702"] }]);
+    expect(calls.some((c) => /INSERT INTO velocity_bundle_identity/.test(c.sql) && /ON CONFLICT/.test(c.sql))).toBe(true);
+    expect(calls.every((c) => !/DELETE/i.test(c.sql))).toBe(true); // insert/upsert only
+  });
+
+  it("a write failure is surfaced, not thrown — the plan still completes (B.4)", async () => {
+    const fakeQuery = async (sql: string) => {
+      if (/SELECT child_order_numbers/.test(sql)) return { rows: [] };
+      throw new Error("db on fire");
+    };
+    const r = await recordBundleIdentities(recordableBundles([listBundle()]), { query: fakeQuery as any });
+    expect(r.written).toBe(0);
+    expect(r.errors[0]).toMatch(/d86eb6ef: db on fire/);
+  });
+
+  it("mapBundleIdentity writes a manual_map row and refuses a blank order number", async () => {
+    const calls: any[] = [];
+    const fakeQuery = async (sql: string, params?: any[]) => { calls.push({ sql, params }); return { rows: [] }; };
+    await mapBundleIdentity({ velocityOrderId: "c0835a42", asin: "b0gnhtygpf", orderNumber: " 200015523189765 " }, { query: fakeQuery as any });
+    expect(calls[0].sql).toMatch(/'manual_map'/);
+    expect(calls[0].params).toEqual(["c0835a42", "B0GNHTYGPF", "200015523189765"]);
+    await expect(mapBundleIdentity({ velocityOrderId: "x", asin: "y", orderNumber: "  " }, { query: fakeQuery as any }))
+      .rejects.toThrow(/orderNumber is required/);
+  });
+});
