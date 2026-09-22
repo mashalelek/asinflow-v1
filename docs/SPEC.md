@@ -2295,6 +2295,26 @@ sourcing sync's discontinued-on-insert rule (reason `discontinued`).
 Parked rows keep the archived styling; dead rows get a muted
 "dead · <reason>" tag in the Product cell — no row tints (§7).
 
+### Fail-closed rules must name their victim and their exit
+
+A rule that blocks a legitimate action to prevent a worse one must state, in
+the spec: **what** it blocks, at **what scope**, for **how long**, and **how
+often in practice** — measured against real business patterns (repurchase
+frequency, reorder cadence), never all-time totals, which hide a rule that
+fires constantly inside a small active set.
+
+The block is scoped to the **smallest unit whose identity is actually
+unknown** — a record, not an ASIN, supplier, or account. And it needs a real
+exit: "until it ages out" or "revisit if it recurs" is NOT an exit unless a
+mechanism exists to clear it.
+
+Origin: `bundle_shipped_unidentified` (§11, 2026-09-02 → retired
+2026-09-21). One shipment losing its child keys blocked EVERY future bundle
+of that ASIN, permanently, with no clearing mechanism. The unknown was a
+single parent order; the block was the whole ASIN, forever. It took three
+legitimate orders being silently held to notice, and "revisit only if this
+skip recurs" had no owner and no trigger.
+
 ### Push back on stale spec
 
 If the user is heading in a wrong direction or asking for something that
