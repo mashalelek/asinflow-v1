@@ -874,10 +874,20 @@ itemName}`):
   units-per-bundle / total units don't come out as positive integers.
 - `bundle_sets_disagree` — Col N differs across a bundle group's rows; the
   set count is ambiguous, skip fail-closed.
-- `bundle_shipped_unidentified` — a fully-shipped bundle of this ASIN
-  exists in Velocity with unrecoverable child keys (see "Shipped-bundle
-  identity gap"); ALL bundle creates for the ASIN are suppressed rather
-  than risk re-creating it.
+- ~~`bundle_shipped_unidentified`~~ — **RETIRED 2026-09-21.** It suppressed
+  every bundle create for an ASIN, permanently, after one shipment of that
+  ASIN lost its child keys; three legitimate new orders (134524, 135707,
+  200015497641702) were blocked by August shipments. Replaced by the
+  identity record below — see "Bundle identity records". Its own revisit
+  condition ("revisit only if this skip recurs in practice") had fired: 8
+  groups across 4 ASINs.
+- `bundle_unplaced_candidate` (2026-09-21) — an UNPLACED shipped bundle (a
+  child-less shipment parent with no identity record, i.e. one AF never saw
+  on a list leg) has this sheet group as a plausible original: same ASIN,
+  derived total units = the parent's `quantity`, and sheet order date within
+  ±1 calendar day of the Velocity `date`. Only the candidates are held; every
+  other group of that ASIN proceeds normally. Cleared by the dialog's inline
+  mapping action, which writes a `manual_map` identity row.
 - `invalid_pack_math` — `sold_as` is `multi-pack` AND (Col AY
   `units_per_pack` is not a positive integer OR Col AZ `quantity` is not
   divisible by it). Velocity enforces divisibility; catch VA typos before
@@ -983,6 +993,15 @@ warehouses, inbound).
   fail.
 
 **Dedup — Velocity is the truth; no local gatekeeper ledger:**
+
+`velocity_bundle_identity` (migration 044, 2026-09-21) is NOT a gatekeeper
+ledger and does not weaken this rule. It records no sends, and never causes
+a create or a skip on its own: a row matters ONLY when Velocity itself
+returns that parent `order_id` on a shipment row, at which point it restores
+a key Velocity has stopped serializing. A parent deleted in Velocity simply
+never appears again and its row is inert. Rows are insert/upsert only —
+never deleted by code.
+
 - Before sending, the match set is the COMPLETE-COVERAGE union
   (`fetchAllKnownOrders`, 2026-08-11): `GET /inbound` + `GET /inventory` +
   every `GET /shipments/:id` detail. `GET /inbound` serves ONLY active
@@ -990,8 +1009,14 @@ warehouses, inbound).
   orders live in `/inventory`, fully-shipped orders ONLY in shipment details
   (near-miss 2026-08-07: two completed orders classified as CREATE and would
   have duplicated on send). Union precedence inbound > inventory > shipment;
-  shipment-derived rows are pseudo-orders (`status "shipped"`, quantity =
-  `quantity_shipped` — never quantity-audited). **Fail-closed:** any leg
+  shipment-derived rows are pseudo-orders (`status "shipped"`; quantity =
+  `quantity_shipped` for FLAT orders — never quantity-audited. **Bundles are
+  different (2026-09-21, Part C.1):** a bundle's shipment rows are grouped by
+  parent `order_id` — one known order per parent, never keyed `("", ASIN)` —
+  and its quantity is the parent's `quantity`, the bundle TOTAL, never
+  `quantity_shipped`. Split shipments made the old rule wrong twice over:
+  c0835a42's four rows (2+6+2+10) collapsed to a single pseudo-row reporting
+  quantity 2 instead of 20). **Fail-closed:** any leg
   failing, or a malformed shipment detail, aborts the plan — CREATEs are
   never classified against a partial match set.
 - **Union dedup keys are CHILD-DERIVED (2026-09-02).** The cross-leg dedup
@@ -1005,20 +1030,93 @@ warehouses, inbound).
   registers each order under its `matchKeysForOrder` key set (bundles → one
   key per distinct child order number × parent asin) and drops an order
   only when ALL its keys are already seen; leg precedence unchanged.
-- **Shipped-bundle identity gap (2026-09-02):** fully-shipped bundles exist
-  ONLY as shipment-detail pseudo-rows, and the API serializes
-  `bundle_children` on LIST endpoints alone (`/inbound`, `/inventory`) —
-  shipment details and direct `GET /inbound/:order_id` omit them entirely
-  (docs-wrong item #6), so a fully-shipped bundle's child keys are
-  unrecoverable. Rule: shipment-leg bundle pseudo-rows are HYDRATED
-  in-batch by `order_id` from the inbound/inventory legs (covers
-  partially-shipped bundles whose parent is still list-visible); bundles
-  visible only as child-less shipment rows are surfaced as
-  `unidentifiedShippedBundles`, and the plan SUPPRESSES every bundle
-  create for those ASINs with skip `bundle_shipped_unidentified` — loud,
-  fail-closed, no persistent identity table (revisit only if this skip
-  recurs in practice). Live case: B0GWG5S64Q shipped 2026-09-02 and its
-  sheet group became a phantom CREATE until this rule.
+- **Bundle identity records (2026-09-21 — replaces "Shipped-bundle identity
+  gap", 2026-09-02).** Fully-shipped bundles exist only as
+  `GET /shipments/:id` rows. The evidence (read-only research 2026-09-21):
+
+  - A shipment row carries the parent `order_id`, `date`, `quantity` (bundle
+    total), `quantity_shipped`, `amazon_sku`, `item_name` — but
+    `order_number` is **null** and `bundle_children` is **absent**.
+  - `order_number` (the sheet order ID) never lives on the parent, only on
+    children. Children are visible nested in `bundle_children` ONLY while the
+    parent is on `/inbound` or `/inventory`; they never appear as top-level
+    list rows, and there is no documented way to enumerate children from a
+    parent once it leaves those legs. (Confirmed: `bundle_children` is absent
+    from `GET /inbound/:order_id` for shipped AND still-inbound parents
+    alike — it is a property of the single-order endpoint, not of shipping.)
+  - A child `order_id` IS independently addressable: `GET /inbound/:child_id`
+    returns its `order_number` plus a `bundle_order_id` back-pointer, even
+    after the parent ships. What is lost is the ability to ENUMERATE them.
+  - Split shipments: every shipment row of one bundle carries the same parent
+    `order_id`; `quantity` is the bundle total and constant per parent;
+    `quantity_shipped` is the per-shipment part (c0835a42: 2+6+2+10 = 20).
+  - Units are total component units on both sides (Velocity `quantity`;
+    sheet Σ Col L × Col T). 14 units at `units_per_pack` 2 = 7 bundles.
+  - Velocity `date` is NOT reliable for dashboard-entered bundles: 2 of the 5
+    legacy bundles are dated one day after their sheet order (c0835a42,
+    074e6255) — consistent with the dashboard defaulting to the UTC date on
+    late-evening entry (hypothesis; `date` is a supplied field, since two
+    bundles created 16 minutes apart carry different dates). AF-created
+    bundles send the sheet date explicitly.
+
+  **The rule.** AF keeps an identity record so a key Velocity stops
+  serializing can be restored:
+
+  1. **Recording (Part B).** On EVERY `fetchAllKnownOrders` call (plan and
+     execute), every `/inbound` or `/inventory` row with `sold_as = bundle`
+     and non-empty `bundle_children` upserts a `velocity_bundle_identity`
+     row (`source = observed`). While a parent is list-visible Velocity is
+     the truth: observed children OVERWRITE the stored array, and a change is
+     logged. After each successful bundle create in execute, one fresh
+     `GET /inbound` read records the new parent; a failed capture is reported
+     amber in the results and is NOT a failure of the create (the next run
+     captures it while the bundle is still list-visible). Under `dryRun=1`
+     recording is computed and reported ("would record N") but never written.
+     A recording write failure is surfaced and the plan still completes —
+     in-batch hydration already covers everything list-visible.
+  2. **Reading (Part C).** Hydration order for a child-less shipment bundle:
+     (a) in-batch from the list legs by `order_id`; (b) from
+     `velocity_bundle_identity` by `order_id`. A hydrated parent gets its
+     child order numbers and flows through the existing child-derived match
+     keys → classified matched, counted under "shipped". Flat-order shipment
+     rows are unchanged.
+  3. **Unplaced (Part D).** A child-less shipment bundle with NO record is
+     *unplaced* — in practice only a bundle entered directly in the Velocity
+     dashboard that fully shipped before the next upload run. For each
+     unplaced parent, candidate sheet groups in range are those with the same
+     ASIN AND derived total units = the parent `quantity` AND a sheet order
+     date within ±1 calendar day of the Velocity `date` (parsed dates;
+     Velocity serializes zero-padded MM/DD/YYYY, the sheet is M/D/YYYY).
+     Candidates are held as `bundle_unplaced_candidate`; every other group of
+     that ASIN proceeds normally. An unplaced parent with no candidates holds
+     nothing and is listed as info only.
+  4. **Mapping (Part D UI).** In the Upload to Velocity dialog's SKIPPED
+     section a `bundle_unplaced_candidate` row expands inline (the
+     no-nested-modal pattern of `no_live_sku` / `legend_pending`) showing each
+     unplaced Velocity bundle — order date, units, item name, SKU, Velocity
+     created date — with **"This order is that bundle"** (writes a
+     `manual_map` row mapping parent `order_id` → this group's order number;
+     the row moves to the shipped count and any other candidates held only by
+     that parent are released into NEW ORDERS pre-ticked, with no full
+     re-fetch) and **"Map to a different order #"** (text input for the true
+     original's order number, when none of the candidates is it; writes the
+     `manual_map` row and releases all candidates held by that parent). No
+     negative ("not this one") records are kept.
+
+  **Seed (Part E, migration 044, `source = manual_seed`, confirmed by Maria
+  2026-09-21):** 03bb63ec→{200015210238647} B0GNHTYGPF 14u;
+  c0835a42→{200015523189765} B0GNHTYGPF 20u;
+  48f9a158→{200015210238647} B0GWG5S64Q 10u;
+  074e6255→{130097} B0DWXWHXP1 10u;
+  80d43b58→{127552} B0DKT4NDFZ 10u. `child_order_ids` NULL for all five
+  (they were never observed list-visible by AF).
+
+  **History (2026-09-02, superseded):** the original rule surfaced these as
+  `unidentifiedShippedBundles` and SUPPRESSED every bundle create for their
+  ASINs, fail-closed, with no persistent identity table. That traded one
+  phantom-CREATE risk for a permanent block on an entire ASIN — see §14
+  "Fail-closed rules must name their victim and their exit".
+
 - **Pagination tripwire, fail-closed both ways (2026-09-02):** on /inbound
   and /inventory, `data.results.total_results` must be present and finite —
   a missing/moved metadata field THROWS (no silent `?? 0` / `?? page
