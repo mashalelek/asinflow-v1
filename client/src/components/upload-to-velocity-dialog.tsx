@@ -40,9 +40,15 @@ interface PlanUpdate {
   order_id: string; order_number: string; asin: string; status: string;
   item_name: string | null; actionable: boolean; diffs: FieldDiff[];
 }
+interface UnplacedBundle {
+  velocity_order_id: string; date: string; quantity: number | null;
+  units_per_pack: any; amazon_sku: string | null; item_name: string | null; created_at: string | null;
+}
 interface SkipRow {
   reason: string; orderNumber: string | null; asin: string; itemName: string | null;
   row?: { date: string | null; retailer: string | null; quantity: string | null; soldAs: string | null; unitsPerPack: string | null };
+  // §11 Part D: only on bundle_unplaced_candidate — the parent(s) holding it.
+  unplaced?: UnplacedBundle[];
 }
 interface VelocityBundleItem { item_name: string; quantity: number; order_number: string; retailer: string; date: string }
 interface VelocityBundleRecord {
@@ -81,6 +87,7 @@ const bundleKey = (b: VelocityBundleRecord) => `${(b.orderNumbers[0] ?? "").trim
 
 const SKIP_REASON_LABEL: Record<string, string> = {
   no_live_sku: "no live SKU",
+  bundle_unplaced_candidate: "may be an already-shipped bundle",
   missing_quantity: "quantity missing on sheet",
   unparseable_date: "order date does not parse",
   bundle_unsupported: "bundles not supported",
@@ -111,6 +118,47 @@ export function UploadToVelocityDialog({ open, onOpenChange }: { open: boolean; 
   const [selCreates, setSelCreates] = useState<Set<string>>(new Set());
   const [selUpdates, setSelUpdates] = useState<Set<string>>(new Set());
   const [skuCreate, setSkuCreate] = useState<Record<string, SkuCreateState>>({});
+  // §11 Part D (2026-09-21): inline bundle mapping. Keyed by
+  // "<orderNumber>|<asin>" — the identity of one held group. Same
+  // no-nested-modal pattern as no_live_sku / legend_pending.
+  const [bundleMap, setBundleMap] = useState<Record<string, {
+    open: boolean; busy?: boolean; mappedTo?: string; error?: string; otherNumber?: string;
+  }>>({});
+  // Groups released by a mapping (their holder is now identified) and the
+  // groups that MOVED to shipped — applied locally, no full re-fetch.
+  const [bundleReleased, setBundleReleased] = useState<Set<string>>(new Set());
+  const [bundleMappedKeys, setBundleMappedKeys] = useState<Set<string>>(new Set());
+
+  const mapBundle = useCallback(async (s: SkipRow, velocityOrderId: string, orderNumber: string) => {
+    const key = `${s.orderNumber ?? ""}|${s.asin}`;
+    setBundleMap((m) => ({ ...m, [key]: { ...(m[key] ?? { open: true }), busy: true, error: undefined } }));
+    try {
+      const res = await fetch("/api/velocity/bundle-identity/map", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ velocityOrderId, asin: s.asin, orderNumber }),
+      });
+      const body = await res.json();
+      if (!res.ok) throw new Error(body.message ?? `Mapping failed (${res.status})`);
+      setBundleMap((m) => ({ ...m, [key]: { open: false, busy: false, mappedTo: orderNumber } }));
+      // The mapped group moves to the shipped count; every OTHER group held
+      // by this same parent is released into NEW ORDERS, pre-ticked. Groups
+      // held by a DIFFERENT parent stay held (Part D).
+      setBundleMappedKeys((prev) => new Set(prev).add(key));
+      const released = new Set(bundleReleased);
+      for (const other of data?.skips ?? []) {
+        if (other.reason !== "bundle_unplaced_candidate") continue;
+        const ok = `${other.orderNumber ?? ""}|${other.asin}`;
+        if (ok === key) continue;
+        if ((other.unplaced ?? []).some((u: UnplacedBundle) => u.velocity_order_id === velocityOrderId)) {
+          released.add(ok);
+        }
+      }
+      setBundleReleased(released);
+    } catch (e: any) {
+      setBundleMap((m) => ({ ...m, [key]: { ...(m[key] ?? { open: true }), busy: false, error: e.message } }));
+    }
+  }, [bundleReleased, data]);
   const [countsOpen, setCountsOpen] = useState(false);
   const [confirming, setConfirming] = useState(false);
   const [sending, setSending] = useState(false);
@@ -516,6 +564,70 @@ export function UploadToVelocityDialog({ open, onOpenChange }: { open: boolean; 
                             <td className="py-1.5 pr-3 font-mono text-xs">{s.asin}</td>
                             <td className="py-1.5 pr-3 text-muted-foreground">{SKIP_REASON_LABEL[s.reason] ?? s.reason}</td>
                             <td className="py-1.5 text-xs">
+                              {/* §11 Part D (2026-09-21): a held bundle group
+                                  expands INLINE with its holder(s) — never a
+                                  nested modal. Mapping it identifies the
+                                  shipped parent and releases the parent's
+                                  other candidates. */}
+                              {s.reason === "bundle_unplaced_candidate" && (() => {
+                                const key = `${s.orderNumber ?? ""}|${s.asin}`;
+                                const ms = bundleMap[key];
+                                if (bundleMappedKeys.has(key)) {
+                                  return <span className="text-green-600 dark:text-green-400">✓ mapped to the shipped bundle — counted under shipped</span>;
+                                }
+                                if (bundleReleased.has(key)) {
+                                  return <span className="text-green-600 dark:text-green-400">✓ released — moved to New orders</span>;
+                                }
+                                return (
+                                  <div className="space-y-1.5 py-1">
+                                    {!ms?.open && (
+                                      <Button size="sm" variant="outline" className="h-7 text-xs" onClick={() => setBundleMap((m) => ({ ...m, [key]: { open: true } }))}>
+                                        Resolve ({(s.unplaced ?? []).length} shipped bundle{(s.unplaced ?? []).length === 1 ? "" : "s"})
+                                      </Button>
+                                    )}
+                                    {ms?.open && (
+                                      <div className="space-y-2">
+                                        <p className="text-muted-foreground">
+                                          An already-shipped Velocity bundle for this ASIN has no recorded order number. If it is THIS order, map it — otherwise give the real order number.
+                                        </p>
+                                        {(s.unplaced ?? []).map((u) => (
+                                          <div key={u.velocity_order_id} className="border border-border/60 rounded p-2 space-y-1">
+                                            <div className="text-[11px] text-muted-foreground">
+                                              ordered <strong>{u.date}</strong> · {u.quantity} units
+                                              {u.units_per_pack ? ` (packs of ${u.units_per_pack})` : ""}
+                                              {u.amazon_sku ? <> · <span className="font-mono">{u.amazon_sku}</span></> : null}
+                                              {u.created_at ? ` · entered ${u.created_at}` : ""}
+                                            </div>
+                                            <div className="max-w-[420px] truncate" title={u.item_name ?? ""}>{u.item_name}</div>
+                                            <div className="flex items-center gap-2 flex-wrap">
+                                              <Button size="sm" className="h-7 text-xs" disabled={ms.busy}
+                                                onClick={() => mapBundle(s, u.velocity_order_id, s.orderNumber ?? "")}>
+                                                This order is that bundle
+                                              </Button>
+                                              <input
+                                                aria-label="Map to a different order number"
+                                                placeholder="or a different order #"
+                                                className="text-xs rounded px-2 py-1 w-[12em] border border-input bg-background text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+                                                value={ms.otherNumber ?? ""}
+                                                disabled={ms.busy}
+                                                onChange={(e) => setBundleMap((m) => ({ ...m, [key]: { ...(m[key] ?? { open: true }), otherNumber: e.target.value } }))}
+                                                spellCheck={false}
+                                              />
+                                              <Button size="sm" variant="outline" className="h-7 text-xs"
+                                                disabled={ms.busy || !(ms.otherNumber ?? "").trim()}
+                                                onClick={() => mapBundle(s, u.velocity_order_id, (ms.otherNumber ?? "").trim())}>
+                                                Map to that #
+                                              </Button>
+                                            </div>
+                                          </div>
+                                        ))}
+                                        {ms.busy && <span className="flex items-center gap-1 text-muted-foreground"><Loader2 className="h-3 w-3 animate-spin" /> mapping…</span>}
+                                        {ms.error && <span className="text-red-600 dark:text-red-400">✗ {ms.error}</span>}
+                                      </div>
+                                    )}
+                                  </div>
+                                );
+                              })()}
                               {s.reason === "no_live_sku" && !st && (
                                 <Button size="sm" variant="outline" className="h-7 text-xs" onClick={() => createSkuAndInclude(s)}>
                                   Create SKU &amp; include

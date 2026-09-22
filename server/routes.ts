@@ -1907,6 +1907,24 @@ export async function registerRoutes(
   // creates / updates (quantity diffs; actionable:false = shipped-pair
   // mismatch, flag-only) / delete-candidates (manual list) / unchanged +
   // closed counts. Feeds the "Upload to Velocity" dialog.
+  // §11 Part D (2026-09-21): inline mapping from the Upload dialog's SKIPPED
+  // section — writes a manual_map identity row (parent order_id → the sheet
+  // order number). Writes to velocity_bundle_identity ONLY; no Velocity call.
+  app.post("/api/velocity/bundle-identity/map", async (req: Request, res: Response) => {
+    if (!isDbAvailable()) { res.status(503).json({ message: "Database not available" }); return; }
+    const { velocityOrderId, asin, orderNumber } = (req.body ?? {}) as Record<string, string>;
+    if (!velocityOrderId || !asin || !orderNumber || !String(orderNumber).trim()) {
+      res.status(400).json({ message: "velocityOrderId, asin and orderNumber are all required" }); return;
+    }
+    try {
+      await mapBundleIdentity({ velocityOrderId, asin, orderNumber: String(orderNumber) });
+      log(`Velocity bundle identity mapped (manual): ${velocityOrderId} -> ${String(orderNumber).trim()} (${asin})`, "velocity-upload");
+      res.json({ ok: true, velocityOrderId, asin, orderNumber: String(orderNumber).trim() });
+    } catch (err: any) {
+      res.status(500).json({ message: err.message });
+    }
+  });
+
   app.get("/api/velocity/plan", async (req: Request, res: Response) => {
     if (!isDbAvailable()) { res.status(503).json({ message: "Database not available" }); return; }
     const credPath = process.env.GOOGLE_CREDENTIALS_PATH;

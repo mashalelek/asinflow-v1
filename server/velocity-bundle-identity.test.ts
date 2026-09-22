@@ -162,3 +162,34 @@ describe("Part D — unplaced candidate window", () => {
     expect(withinOneDay("2026-09-01", "09/01/2026")).toBe(false); // wrong format
   });
 });
+
+// §11 Part D UI (2026-09-21): a mapping identifies ONE parent, so it releases
+// exactly that parent's other candidates — never another parent's.
+describe("Part D — mapping releases only the mapping parent's candidates", () => {
+  const skip = (orderNumber: string, asin: string, holders: string[]) => ({
+    reason: "bundle_unplaced_candidate", orderNumber, asin, itemName: null,
+    unplaced: holders.map((h) => ({ velocity_order_id: h, date: "09/01/2026", quantity: 20, units_per_pack: 2, amazon_sku: null, item_name: null, created_at: null })),
+  });
+  // Mirrors the dialog's release rule (same predicate, asserted here so the
+  // scoping can't silently widen).
+  const released = (skips: any[], mappedKey: string, parentId: string) =>
+    skips.filter((o) => o.reason === "bundle_unplaced_candidate")
+      .filter((o) => `${o.orderNumber}|${o.asin}` !== mappedKey)
+      .filter((o) => (o.unplaced ?? []).some((u: any) => u.velocity_order_id === parentId))
+      .map((o) => `${o.orderNumber}|${o.asin}`);
+
+  it("releases the other groups held by the SAME parent", () => {
+    const skips = [skip("A1", "B0GNHTYGPF", ["parent-1"]), skip("A2", "B0GNHTYGPF", ["parent-1"])];
+    expect(released(skips, "A1|B0GNHTYGPF", "parent-1")).toEqual(["A2|B0GNHTYGPF"]);
+  });
+
+  it("leaves groups held by a DIFFERENT parent still held", () => {
+    const skips = [skip("A1", "B0GNHTYGPF", ["parent-1"]), skip("A2", "B0GNHTYGPF", ["parent-2"])];
+    expect(released(skips, "A1|B0GNHTYGPF", "parent-1")).toEqual([]);
+  });
+
+  it("a group held by BOTH parents is released when either is mapped", () => {
+    const skips = [skip("A1", "B0GNHTYGPF", ["parent-1"]), skip("A2", "B0GNHTYGPF", ["parent-1", "parent-2"])];
+    expect(released(skips, "A1|B0GNHTYGPF", "parent-1")).toEqual(["A2|B0GNHTYGPF"]);
+  });
+});
