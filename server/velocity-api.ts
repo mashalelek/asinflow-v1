@@ -40,11 +40,22 @@ export function matchKeysForOrder(
   o: Pick<VelocityInboundOrder, "order_number" | "asin" | "sold_as" | "bundle_children">,
 ): Array<{ orderNumber: string; asin: string }> {
   const asin = String(o.asin ?? "");
-  if (String(o.sold_as ?? "").toLowerCase() === "bundle" && Array.isArray(o.bundle_children) && o.bundle_children.length > 0) {
+  const isBundle = String(o.sold_as ?? "").toLowerCase() === "bundle";
+  if (isBundle && Array.isArray(o.bundle_children) && o.bundle_children.length > 0) {
     const nums = Array.from(new Set(
       o.bundle_children.map((c: any) => String(c?.order_number ?? "").trim()).filter((x) => x !== ""),
     ));
     if (nums.length > 0) return nums.map((orderNumber) => ({ orderNumber, asin }));
+  }
+  // §11 Part C.1 (2026-09-21): an UNIDENTIFIED bundle parent (no children to
+  // derive from) gets a key unique to its own order_id — never ("", asin),
+  // which collapsed every shipped bundle of one ASIN into a single union slot
+  // (both B0GNHTYGPF parents → one, reporting quantity 2 instead of 20). The
+  // synthetic form also cannot collide with any sheet key, which is correct:
+  // an unhydrated parent must match no sheet group.
+  if (isBundle) {
+    const oid = String((o as any).order_id ?? "").trim();
+    if (oid !== "") return [{ orderNumber: `__velocity_order_id:${oid}`, asin }];
   }
   return [{ orderNumber: String(o.order_number ?? ""), asin }];
 }
@@ -306,16 +317,31 @@ export function shipmentOrdersFrom(detailData: any, shipmentId: string): Velocit
   if (!Array.isArray(orders)) {
     throw new Error(`Velocity shipment ${shipmentId}: detail response has no orders array — coverage ambiguous, refusing to classify`);
   }
-  return orders.map((o: any) => ({
-    order_id: String(o.order_id ?? ""),
-    order_number: String(o.order_number ?? ""),
-    asin: String(o.asin ?? "").toUpperCase(),
-    date: String(o.date ?? ""),
-    sold_as: String(o.sold_as ?? ""),
-    status: "shipped",
-    item_name: o.item_name,
-    quantity: o.quantity_shipped != null ? Number(o.quantity_shipped) : undefined,
-  }));
+  return orders.map((o: any) => {
+    const isBundle = String(o.sold_as ?? "").toLowerCase() === "bundle";
+    return {
+      order_id: String(o.order_id ?? ""),
+      order_number: String(o.order_number ?? ""),
+      asin: String(o.asin ?? "").toUpperCase(),
+      date: String(o.date ?? ""),
+      sold_as: String(o.sold_as ?? ""),
+      status: "shipped",
+      item_name: o.item_name,
+      // §11 Part C.1 (2026-09-21): for a BUNDLE the quantity is the parent's
+      // `quantity` — the bundle TOTAL, constant across its shipment rows —
+      // never `quantity_shipped`, which is the per-shipment part and made
+      // c0835a42 (2+6+2+10) report 2 instead of 20. Flat orders keep
+      // quantity_shipped (unchanged, never quantity-audited).
+      quantity: isBundle
+        ? (o.quantity != null ? Number(o.quantity) : undefined)
+        : (o.quantity_shipped != null ? Number(o.quantity_shipped) : undefined),
+      // Carried for the Part D unplaced fallback + the mapping UI.
+      units_per_pack: o.units_per_pack,
+      amazon_sku: o.amazon_sku,
+      created_at: o.created_at,
+      __shipment_id: shipmentId,
+    };
+  });
 }
 
 // Pure union by (order_number, asin), first-source-wins with the precedence
@@ -358,6 +384,36 @@ export function unionKnownOrders(
 // from the inbound/inventory legs. A bundle visible only as a child-less
 // shipment row (fully shipped) stays child-less and is surfaced via
 // unidentifiedShippedBundles() — the plan suppresses its ASIN's creates.
+// §11 Part C.1 (2026-09-21): a bundle that shipped in parts has one shipment
+// row PER shipment, all carrying the same parent order_id (c0835a42: four
+// rows across four shipments). Collapse them to ONE pseudo-order per parent
+// before the union, keeping every shipment id for the mapping UI. Flat-order
+// rows pass through untouched (one order can legitimately appear in several
+// shipments and is never quantity-audited).
+export function collapseBundleShipmentRows(rows: VelocityInboundOrder[]): VelocityInboundOrder[] {
+  const out: VelocityInboundOrder[] = [];
+  const byParent = new Map<string, VelocityInboundOrder>();
+  for (const o of rows) {
+    if (String(o.sold_as ?? "").toLowerCase() !== "bundle") { out.push(o); continue; }
+    const oid = String((o as any).order_id ?? "").trim();
+    if (oid === "") { out.push(o); continue; }
+    const existing = byParent.get(oid);
+    if (!existing) {
+      const ids = [(o as any).__shipment_id].filter(Boolean);
+      const row = { ...o, __shipment_ids: ids } as VelocityInboundOrder;
+      byParent.set(oid, row);
+      out.push(row);
+      continue;
+    }
+    // Same parent seen again: accumulate shipment ids + shipped units. The
+    // bundle total (quantity) is identical on every row, so it is NOT summed.
+    const ids = ((existing as any).__shipment_ids ?? []) as string[];
+    if ((o as any).__shipment_id) ids.push((o as any).__shipment_id);
+    (existing as any).__shipment_ids = ids;
+  }
+  return out;
+}
+
 export function hydrateShipmentBundles(
   shipmentOrders: VelocityInboundOrder[],
   listOrders: VelocityInboundOrder[],
@@ -398,7 +454,8 @@ export async function fetchAllKnownOrders(): Promise<KnownVelocityOrder[]> {
     const det = await velocityFetch(`/shipments/${encodeURIComponent(sid)}`);
     shipmentOrders.push(...shipmentOrdersFrom(det.data, sid));
   }
-  const hydrated = hydrateShipmentBundles(shipmentOrders, [...inbound, ...inventory]);
+  const collapsed = collapseBundleShipmentRows(shipmentOrders);
+  const hydrated = hydrateShipmentBundles(collapsed, [...inbound, ...inventory]);
   return unionKnownOrders(inbound, inventory, hydrated);
 }
 
