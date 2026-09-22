@@ -136,3 +136,29 @@ describe("Part B — recording", () => {
       .rejects.toThrow(/orderNumber is required/);
   });
 });
+
+import { withinOneDay } from "./velocity-reconcile";
+
+// §11 Part D (2026-09-21) — the ±1-day / same-units candidate window.
+describe("Part D — unplaced candidate window", () => {
+  it("−1 / 0 / +1 calendar day are candidates; ±2 is not", () => {
+    // Velocity 09/01/2026 (zero-padded) vs sheet M/D/YYYY.
+    expect(withinOneDay("8/31/2026", "09/01/2026")).toBe(true);   // the c0835a42 case
+    expect(withinOneDay("9/1/2026", "09/01/2026")).toBe(true);
+    expect(withinOneDay("9/2/2026", "09/01/2026")).toBe(true);
+    expect(withinOneDay("8/30/2026", "09/01/2026")).toBe(false);  // −2
+    expect(withinOneDay("9/3/2026", "09/01/2026")).toBe(false);   // +2
+  });
+
+  it("crosses month and year boundaries correctly", () => {
+    expect(withinOneDay("8/31/2026", "09/01/2026")).toBe(true);
+    expect(withinOneDay("12/31/2025", "01/01/2026")).toBe(true);
+    expect(withinOneDay("1/1/2026", "12/31/2025")).toBe(true);
+  });
+
+  it("an unparseable date on either side is NOT a candidate (fail-closed)", () => {
+    expect(withinOneDay("", "09/01/2026")).toBe(false);
+    expect(withinOneDay("9/1/2026", "")).toBe(false);
+    expect(withinOneDay("2026-09-01", "09/01/2026")).toBe(false); // wrong format
+  });
+});

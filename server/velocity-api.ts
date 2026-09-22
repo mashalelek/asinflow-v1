@@ -383,7 +383,8 @@ export function unionKnownOrders(
 // shipment-leg bundle pseudo-rows hydrate their children IN-BATCH by order_id
 // from the inbound/inventory legs. A bundle visible only as a child-less
 // shipment row (fully shipped) stays child-less and is surfaced via
-// unidentifiedShippedBundles() — the plan suppresses its ASIN's creates.
+// unidentifiedShippedBundles() — the plan hydrates these from the identity
+// record (§11 Part C.2) and treats only the unrecorded ones as unplaced.
 // §11 Part C.1 (2026-09-21): a bundle that shipped in parts has one shipment
 // row PER shipment, all carrying the same parent order_id (c0835a42: four
 // rows across four shipments). Collapse them to ONE pseudo-order per parent
@@ -432,8 +433,11 @@ export function hydrateShipmentBundles(
   });
 }
 
-// Fully-shipped bundles whose child keys are unrecoverable — the fail-closed
-// suppression input (SPEC §11 "Shipped-bundle identity gap").
+// Fully-shipped bundles whose child keys are not (yet) recoverable. Since
+// 2026-09-21 this is NO LONGER a suppression input: the plan hydrates from
+// velocity_bundle_identity first (§11 Part C.2) and only a parent with no
+// record at all is "unplaced", holding just its own candidate groups
+// (Part D). Kept as the predicate for that detection.
 export function unidentifiedShippedBundles(orders: KnownVelocityOrder[]): KnownVelocityOrder[] {
   return orders.filter((o) =>
     o.lifecycleSource === "shipment" &&

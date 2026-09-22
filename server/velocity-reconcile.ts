@@ -14,8 +14,8 @@ import {
   buildVelocityRecords, formatYMD,
   type VelocityRecord, type VelocitySkip, type VelocityBundleRecord, type BundleFlag,
 } from "./velocity-export";
-import { fetchAllKnownOrders, matchKeysForOrder, unidentifiedShippedBundles, type KnownVelocityOrder } from "./velocity-api";
-import { recordableBundles, type BundleIdentityRow } from "./velocity-bundle-identity";
+import { fetchAllKnownOrders, matchKeysForOrder, type KnownVelocityOrder } from "./velocity-api";
+import { recordableBundles, loadBundleIdentities, type BundleIdentityRow } from "./velocity-bundle-identity";
 
 type QueryLike = (sql: string, params?: any[]) => Promise<{ rows: any[]; rowCount: number | null }>;
 
@@ -78,6 +78,11 @@ export interface VelocityPlan {
   // §11 Part B.3 (2026-09-21): identity recording the plan WOULD perform.
   // Computed here, written only by execute — the plan is a preview.
   identityWouldRecord: BundleIdentityRow[];
+  unplacedBundles: Array<{
+    velocity_order_id: string; asin: string; date: string; quantity: number | null;
+    units_per_pack: any; amazon_sku: string | null; item_name: string | null;
+    created_at: string | null; shipment_ids: string[]; candidateOrderNumbers: string[];
+  }>;
 }
 
 const normKey = (orderNumber: string, asin: string) =>
@@ -87,6 +92,20 @@ function numOrNull(v: any): number | null {
   if (v === null || v === undefined || v === "") return null;
   const n = Number(String(v).trim());
   return Number.isFinite(n) ? n : null;
+}
+
+// §11 Part D: sheet is M/D/YYYY, Velocity serializes zero-padded MM/DD/YYYY.
+// Compare as parsed calendar dates, ±1 day inclusive. Unparseable either side
+// → NOT a candidate (fail-closed: never hold a group on a date we can't read).
+export function withinOneDay(sheetDate: string, velocityDate: string): boolean {
+  const parse = (s: string): number | null => {
+    const m = /^(\d{1,2})\/(\d{1,2})\/(\d{4})$/.exec(String(s ?? "").trim());
+    if (!m) return null;
+    return Date.UTC(Number(m[3]), Number(m[1]) - 1, Number(m[2]));
+  };
+  const a = parse(sheetDate), b = parse(velocityDate);
+  if (a === null || b === null) return false;
+  return Math.abs(a - b) <= 86400000;
 }
 
 export async function buildVelocityPlan(
@@ -117,6 +136,32 @@ export async function buildVelocityPlan(
   // the identity recording it WOULD do is computed and reported — never
   // written. The execute path does the writing after its own fetch.
   const wouldRecordRows: BundleIdentityRow[] = recordableBundles(velocityOrders);
+
+  // §11 Part C.2 (2026-09-21): hydration order for a child-less shipment
+  // bundle is (a) in-batch from the list legs by order_id — already done
+  // inside fetchAllKnownOrders — then (b) from velocity_bundle_identity by
+  // order_id. A hydrated parent gets child order numbers and flows through
+  // the SAME child-derived match keys as any list-visible bundle, so it
+  // classifies as matched and counts under "shipped".
+  const childlessBundles = velocityOrders.filter((o) =>
+    String(o.sold_as ?? "").toLowerCase() === "bundle" &&
+    !(Array.isArray(o.bundle_children) && o.bundle_children.length > 0));
+  const identities = await loadBundleIdentities(
+    childlessBundles.map((o) => String((o as any).order_id ?? "")).filter((x) => x !== ""),
+    { query },
+  );
+  for (const o of childlessBundles) {
+    const rec = identities.get(String((o as any).order_id ?? ""));
+    if (!rec || rec.child_order_numbers.length === 0) continue;
+    // Synthesize the minimal children matchKeysForOrder needs. Marked so the
+    // source of the identity stays visible downstream (report + UI).
+    (o as any).bundle_children = rec.child_order_numbers.map((n) => ({ order_number: n }));
+    (o as any).__identity_source = rec.source;
+  }
+
+  // §11 Part C.3: a child-less shipment bundle with NO record is UNPLACED.
+  const unplacedBundles = childlessBundles.filter((o) =>
+    !(Array.isArray(o.bundle_children) && o.bundle_children.length > 0));
 
   // One canonical sheet row per (order_number, asin): first non-canceled wins
   // (top-of-sheet canonical, as everywhere); a canceled row is kept only if
@@ -247,21 +292,45 @@ export async function buildVelocityPlan(
   );
   // Bundle CREATE dedup: ANY child-derived key already known in Velocity
   // means the bundle exists — never re-send (SPEC §11 Bundles).
-  // Shipped-bundle suppression (2026-09-02): a fully-shipped bundle's child
-  // keys are unrecoverable (identity gap), so ALL bundle creates for its
-  // ASIN are suppressed fail-closed with a loud skip — never risk
-  // re-creating an order the API can no longer identify.
-  const shippedUnidentifiedAsins = new Set(
-    unidentifiedShippedBundles(velocityOrders).map((o) => String(o.asin ?? "").toUpperCase()),
-  );
+  //
+  // §11 Part D (2026-09-21, replaces the 2026-09-02 ASIN-wide suppression):
+  // only a group that could BE an unplaced parent is held, and only by that
+  // parent. Candidate = same ASIN + derived total units = the parent's
+  // quantity (bundle total) + sheet order date within ±1 calendar day of the
+  // Velocity date. The ±1 day exists because 2 of the 5 legacy bundles are
+  // dated one day after their sheet order (dashboard UTC-default hypothesis).
+  // Every OTHER group of that ASIN proceeds normally — the whole point.
+  const unplacedInfo = unplacedBundles.map((o) => ({
+    velocity_order_id: String((o as any).order_id ?? ""),
+    asin: String(o.asin ?? "").toUpperCase(),
+    date: String(o.date ?? ""),
+    quantity: numOrNull(o.quantity),
+    units_per_pack: (o as any).units_per_pack ?? null,
+    amazon_sku: (o as any).amazon_sku ?? null,
+    item_name: o.item_name ?? null,
+    created_at: (o as any).created_at ?? null,
+    shipment_ids: ((o as any).__shipment_ids ?? []) as string[],
+    candidateOrderNumbers: [] as string[],
+  }));
+
   const bundleCreates: typeof build.bundles = [];
   for (const b of build.bundles) {
     if (b.orderNumbers.some((n) => matchedVelocityByKey.has(normKey(n, b.asin)))) continue;
-    if (shippedUnidentifiedAsins.has(b.asin.toUpperCase())) {
+    const holders = unplacedInfo.filter((u) =>
+      u.asin === b.asin.toUpperCase() &&
+      u.quantity !== null && u.quantity === numOrNull(b.quantity) &&
+      withinOneDay(b.date, u.date));
+    if (holders.length > 0) {
+      for (const h of holders) h.candidateOrderNumbers.push(b.orderNumbers[0] ?? "");
       build.skips.push({
-        reason: "bundle_shipped_unidentified",
+        reason: "bundle_unplaced_candidate",
         orderNumber: b.orderNumbers[0] ?? "", asin: b.asin, itemName: b.item_name,
         row: { date: b.date, retailer: null, quantity: String(b.quantity), soldAs: "bundle", unitsPerPack: String(b.units_per_pack) },
+        unplaced: holders.map((h) => ({
+          velocity_order_id: h.velocity_order_id, date: h.date, quantity: h.quantity,
+          units_per_pack: h.units_per_pack, amazon_sku: h.amazon_sku,
+          item_name: h.item_name, created_at: h.created_at,
+        })),
       });
       continue;
     }
@@ -284,6 +353,8 @@ export async function buildVelocityPlan(
     selfPrepExcluded: build.selfPrepExcluded,
     skips: build.skips,
     identityWouldRecord: wouldRecordRows,
+    // Part C.3/D: unplaced parents, incl. those holding nothing (info only).
+    unplacedBundles: unplacedInfo,
   };
 }
 

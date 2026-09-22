@@ -25,13 +25,24 @@ export type VelocitySkipReason =
   | "bundle_incomplete"          // group rows ≠ Col S (cross-order composition — deferred)
   | "bundle_component_bad_yield" // Col T/N/L missing/unparseable, or derived units not positive integers
   | "bundle_sets_disagree"       // Col N differs across the group's rows
-  | "bundle_shipped_unidentified" // fully-shipped bundle of this ASIN with unrecoverable child keys — creates suppressed
+  // RETIRED 2026-09-21 (§11): bundle_shipped_unidentified suppressed EVERY
+  // bundle create for an ASIN, permanently, after one shipment lost its child
+  // keys — it blocked three legitimate new orders. Replaced by identity
+  // records (§11 Parts A–C) plus the narrow per-parent candidate hold below.
+  | "bundle_unplaced_candidate"  // an UNPLACED shipped bundle (no identity record) may be THIS group — same ASIN, same units, sheet date within ±1 day of the Velocity date
   | "invalid_pack_math";   // multi-pack with bad units_per_pack or qty not divisible by it
 export interface VelocitySkip {
   reason: VelocitySkipReason;
   orderNumber: string | null;
   asin: string;
   itemName: string | null;
+  // §11 Part D (2026-09-21): populated ONLY for bundle_unplaced_candidate —
+  // the unplaced Velocity parent(s) holding this group, for the dialog's
+  // inline mapping action.
+  unplaced?: Array<{
+    velocity_order_id: string; date: string; quantity: number | null;
+    units_per_pack: any; amazon_sku: string | null; item_name: string | null; created_at: string | null;
+  }>;
   // Verbatim sheet fields for the skipped row — lets the Upload-to-Velocity
   // dialog promote a fixed row (e.g. after Create SKU & include) into NEW
   // ORDERS without re-fetching the whole set (SPEC §11).
