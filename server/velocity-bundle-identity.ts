@@ -139,3 +139,43 @@ export async function mapBundleIdentity(
     [args.velocityOrderId, args.asin.toUpperCase(), num],
   );
 }
+
+/**
+ * §11 Part C.2 (2026-09-21; shared 2026-09-24) — hydrate child-less shipment
+ * bundles from the identity record, in place, and report what stayed
+ * unplaced.
+ *
+ * SHARED BY PLAN AND EXECUTE ON PURPOSE. Execute originally built its dedup
+ * key set from matchKeysForOrder(live) with no hydration at all, so a bundle
+ * whose parent had SHIPPED since approval keyed on the synthetic
+ * __velocity_order_id form, matched no sheet key, and would have been
+ * re-sent — a duplicate (134524 / B0DKT4NDFZ, measured 2026-09-24). A second
+ * copy of this logic is exactly how the two paths diverged; there is now one.
+ */
+export async function hydrateChildlessBundles(
+  orders: any[],
+  deps: { query?: QueryLike } = {},
+): Promise<{ hydrated: number; unplaced: any[] }> {
+  const childless = orders.filter((o) =>
+    String(o?.sold_as ?? "").toLowerCase() === "bundle" &&
+    !(Array.isArray(o?.bundle_children) && o.bundle_children.length > 0));
+  if (childless.length === 0) return { hydrated: 0, unplaced: [] };
+
+  const identities = await loadBundleIdentities(
+    childless.map((o) => String(o?.order_id ?? "")).filter((x) => x !== ""),
+    deps,
+  );
+  let hydrated = 0;
+  for (const o of childless) {
+    const rec = identities.get(String(o?.order_id ?? ""));
+    if (!rec || rec.child_order_numbers.length === 0) continue;
+    // Minimal children — matchKeysForOrder only reads order_number. The
+    // identity source stays visible downstream (report + mapping UI).
+    o.bundle_children = rec.child_order_numbers.map((n) => ({ order_number: n }));
+    o.__identity_source = rec.source;
+    hydrated++;
+  }
+  const unplaced = childless.filter((o) =>
+    !(Array.isArray(o?.bundle_children) && o.bundle_children.length > 0));
+  return { hydrated, unplaced };
+}

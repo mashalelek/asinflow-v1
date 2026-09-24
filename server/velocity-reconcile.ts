@@ -15,7 +15,7 @@ import {
   type VelocityRecord, type VelocitySkip, type VelocityBundleRecord, type BundleFlag,
 } from "./velocity-export";
 import { fetchAllKnownOrders, matchKeysForOrder, type KnownVelocityOrder } from "./velocity-api";
-import { recordableBundles, loadBundleIdentities, type BundleIdentityRow } from "./velocity-bundle-identity";
+import { recordableBundles, hydrateChildlessBundles, type BundleIdentityRow } from "./velocity-bundle-identity";
 
 type QueryLike = (sql: string, params?: any[]) => Promise<{ rows: any[]; rowCount: number | null }>;
 
@@ -143,25 +143,8 @@ export async function buildVelocityPlan(
   // order_id. A hydrated parent gets child order numbers and flows through
   // the SAME child-derived match keys as any list-visible bundle, so it
   // classifies as matched and counts under "shipped".
-  const childlessBundles = velocityOrders.filter((o) =>
-    String(o.sold_as ?? "").toLowerCase() === "bundle" &&
-    !(Array.isArray(o.bundle_children) && o.bundle_children.length > 0));
-  const identities = await loadBundleIdentities(
-    childlessBundles.map((o) => String((o as any).order_id ?? "")).filter((x) => x !== ""),
-    { query },
-  );
-  for (const o of childlessBundles) {
-    const rec = identities.get(String((o as any).order_id ?? ""));
-    if (!rec || rec.child_order_numbers.length === 0) continue;
-    // Synthesize the minimal children matchKeysForOrder needs. Marked so the
-    // source of the identity stays visible downstream (report + UI).
-    (o as any).bundle_children = rec.child_order_numbers.map((n) => ({ order_number: n }));
-    (o as any).__identity_source = rec.source;
-  }
-
-  // §11 Part C.3: a child-less shipment bundle with NO record is UNPLACED.
-  const unplacedBundles = childlessBundles.filter((o) =>
-    !(Array.isArray(o.bundle_children) && o.bundle_children.length > 0));
+  // §11 Part C.2/C.3 — ONE shared implementation with execute (2026-09-24).
+  const { unplaced: unplacedBundles } = await hydrateChildlessBundles(velocityOrders, { query });
 
   // One canonical sheet row per (order_number, asin): first non-canceled wins
   // (top-of-sheet canonical, as everywhere); a canceled row is kept only if

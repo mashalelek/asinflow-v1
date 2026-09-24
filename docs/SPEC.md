@@ -1252,17 +1252,27 @@ hazard; remove, don't hide.
   approval and execution has a human in it and is unbounded in practice, so
   staleness is the normal case, not the exception.
 
-  **KNOWN GAP — do not rely on execute's dedup alone (2026-09-24).** The
-  execute-time key set is built from `matchKeysForOrder(live)` WITHOUT the
-  `velocity_bundle_identity` hydration that `buildVelocityPlan` performs
-  (Part C.2 above). A bundle whose parent has SHIPPED since approval is
-  child-less and keys on the synthetic `__velocity_order_id:<uuid>` form, so
-  execute does NOT recognise it and would re-send it. Measured on the real
-  2026-09-24 set: 135707 and 200015497641702 were caught (parents still
-  list-visible), **134524 was not** (its parent shipped on 9/23). What
-  prevented the duplicate was re-running the PLAN before executing — only
-  the plan hydrates. Until execute hydrates the same way, re-run the plan
-  immediately before acting on any approved send and re-confirm the set.
+  **Hydration happens before ANY key set is built — one shared
+  implementation (fixed 2026-09-24).** `hydrateChildlessBundles` fills a
+  child-less shipment bundle's children from `velocity_bundle_identity`
+  (Part C.2), and BOTH `buildVelocityPlan` and execute call it before
+  deriving keys. Execute previously built its key set from
+  `matchKeysForOrder(live)` with no hydration at all, so a bundle whose
+  parent had SHIPPED since approval keyed on the synthetic
+  `__velocity_order_id:<uuid>` form, matched nothing, and would have been
+  re-sent as a duplicate. Measured on the real 2026-09-24 set before the
+  fix: 135707 and 200015497641702 were caught (parents still list-visible),
+  **134524 was NOT** (its parent shipped on 9/23) — the duplicate was
+  prevented only by re-running the plan by hand, because at that time only
+  the plan hydrated. The two paths diverged precisely because each had its
+  own copy of the logic; there is now one, and a test pins 134524's case
+  (parent shipped, child-less shipment row, approved create must be
+  dropped).
+
+  Scope note: `/api/upload/velocity` (the bulk-CSV path) keys on the raw
+  `(order_number, asin)` and does NOT hydrate — correct, because it sends
+  FLAT records only and never bundles. Any future path that sends bundles
+  must hydrate first.
 
   **Echo freshness rule:** the GET that sources echo values happens at
   EXECUTE time, immediately before the PUT loop — never reuse order values

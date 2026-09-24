@@ -193,3 +193,58 @@ describe("Part D — mapping releases only the mapping parent's candidates", () 
     expect(released(skips, "A1|B0GNHTYGPF", "parent-1")).toEqual(["A2|B0GNHTYGPF"]);
   });
 });
+
+import { hydrateChildlessBundles } from "./velocity-bundle-identity";
+import { matchKeysForOrder as mkKeys } from "./velocity-api";
+
+// §11 Part C.2 (2026-09-24) — the shared hydration, and the exact case that
+// would have duplicated: 134524 / B0DKT4NDFZ, approved 9/21, created 9/23,
+// parent SHIPPED before the send, so its shipment row is child-less.
+describe("shared hydration — execute must drop an approved create whose parent shipped", () => {
+  const PARENT = "6766a9d2-1f85-4765-af1e-fa6655eeebe6";
+  const shippedChildless = () => ({
+    order_id: PARENT, order_number: null, asin: "B0DKT4NDFZ", sold_as: "bundle",
+    status: "shipped", lifecycleSource: "shipment", date: "09/13/2026", quantity: 10,
+  });
+  const recordQuery = async (sql: string, params?: any[]) => {
+    if (/FROM velocity_bundle_identity/.test(sql)) {
+      return { rows: (params?.[0] ?? []).includes(PARENT)
+        ? [{ velocity_order_id: PARENT, asin: "B0DKT4NDFZ", child_order_numbers: ["134524"], child_order_ids: null, source: "observed" }]
+        : [] };
+    }
+    return { rows: [] };
+  };
+
+  it("WITHOUT hydration the shipped parent keys on the synthetic form — the duplicate bug", () => {
+    const keys = mkKeys(shippedChildless() as any);
+    expect(keys[0].orderNumber).toBe(`__velocity_order_id:${PARENT}`);
+    const liveKeys = new Set(keys.map((k) => `${k.orderNumber} ${k.asin}`));
+    expect(liveKeys.has("134524 B0DKT4NDFZ")).toBe(false);   // execute would re-send
+  });
+
+  it("WITH hydration it keys on 134524 — the approved create is dropped", async () => {
+    const live = [shippedChildless()];
+    const r = await hydrateChildlessBundles(live, { query: recordQuery as any });
+    expect(r.hydrated).toBe(1);
+    expect(r.unplaced).toEqual([]);
+    const liveKeys = new Set<string>();
+    for (const o of live) for (const k of mkKeys(o as any)) liveKeys.add(`${k.orderNumber} ${k.asin}`);
+    expect(liveKeys.has("134524 B0DKT4NDFZ")).toBe(true);    // execute now skips it
+  });
+
+  it("a parent with NO record stays unplaced and is not invented", async () => {
+    const live = [{ ...shippedChildless(), order_id: "unknown-parent" }];
+    const r = await hydrateChildlessBundles(live, { query: recordQuery as any });
+    expect(r.hydrated).toBe(0);
+    expect(r.unplaced).toHaveLength(1);
+    expect(live[0].bundle_children).toBeUndefined();
+  });
+
+  it("a list-visible bundle with real children is left alone", async () => {
+    const live = [{ order_id: "d86eb6ef", asin: "B0G6R55GNQ", sold_as: "bundle", lifecycleSource: "inbound",
+      bundle_children: [{ order_number: "200015497641702" }] }];
+    const r = await hydrateChildlessBundles(live, { query: recordQuery as any });
+    expect(r.hydrated).toBe(0);
+    expect(live[0].bundle_children).toEqual([{ order_number: "200015497641702" }]);
+  });
+});

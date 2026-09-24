@@ -18,7 +18,7 @@ import { syncSuppressionData } from "./suppression-sync";
 import { fetchSheetData, fetchSheetDataWithMeta } from "./google-sheets";
 import { buildVelocityRecords, serializeVelocityCsv, parseMDY, formatYMD, todayLocal } from "./velocity-export";
 import { fetchAllKnownOrders, matchKeysForOrder, createBundleOrder, submitBulkCsv, updateInboundOrder } from "./velocity-api";
-import { recordableBundles, recordBundleIdentities, mapBundleIdentity } from "./velocity-bundle-identity";
+import { recordableBundles, recordBundleIdentities, mapBundleIdentity, hydrateChildlessBundles } from "./velocity-bundle-identity";
 import { buildVelocityPlan, putBodyFromDiffs, type PlanUpdate } from "./velocity-reconcile";
 import { buildSellerboardCogs, serializeSbCsv } from "./sellerboard-cogs";
 import { buildSourcingCost, sourcingCostFilename, parseYMDLocal } from "./sourcing-cost";
@@ -1993,6 +1993,20 @@ export async function registerRoutes(
           log(`Velocity bundle identity changed for ${c.velocity_order_id}: [${c.from.join(", ")}] -> [${c.to.join(", ")}]`, "velocity-upload");
         }
       }
+      // §11 Part C.2 (2026-09-24): hydrate child-less shipment bundles from
+      // the identity record BEFORE any key set is built — the SAME shared
+      // implementation the plan uses. Without this, a bundle whose parent
+      // shipped after approval keyed on the synthetic __velocity_order_id
+      // form, matched nothing, and would have been re-sent as a duplicate
+      // (134524 / B0DKT4NDFZ, measured 2026-09-24).
+      const liveHydration = await hydrateChildlessBundles(live);
+      if (liveHydration.hydrated > 0 || liveHydration.unplaced.length > 0) {
+        results.push({
+          action: "hydrate_identity", scope: "pre_write_fetch",
+          hydrated: liveHydration.hydrated, unplaced: liveHydration.unplaced.length,
+        });
+      }
+
       const liveByKey = new Map(live.map((o) => [
         `${String(o.order_number ?? "").trim()} ${String(o.asin ?? "").trim().toUpperCase()}`, o,
       ]));
