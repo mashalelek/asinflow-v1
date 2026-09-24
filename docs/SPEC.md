@@ -1236,6 +1236,34 @@ hazard; remove, don't hide.
   for `date, retailer, orderNumber, itemName, asin, amazonSKU, sold_as,
   units_per_pack, fulfilledBy, trackingNumbers`, overridden only by the
   approved change (quantity-only audit ⇒ only `quantity` can differ).
+  **Execute re-fetches the live match set immediately before any write
+  (2026-09-24).** An approved plan is a SNAPSHOT, not a mandate. Execute
+  calls `fetchAllKnownOrders` at write time and drops every approved item
+  that no longer classifies as a create, reporting it as
+  `skipped_already_in_velocity` instead of sending it. Approval authorises a
+  set of orders to EXIST in Velocity — not a set of POSTs to fire — so an
+  order someone created in between is already satisfied and must not be sent
+  again.
+
+  *Origin (2026-09-24):* three bundle creates approved on 9/21 (135707 /
+  B0DKT4NDFZ, 200015497641702 / B0GWG5S64Q, 134524 / B0DKT4NDFZ) had ALL
+  been created in Velocity on 9/23 before the approval was acted on.
+  Sending the approved set would have duplicated all three. The gap between
+  approval and execution has a human in it and is unbounded in practice, so
+  staleness is the normal case, not the exception.
+
+  **KNOWN GAP — do not rely on execute's dedup alone (2026-09-24).** The
+  execute-time key set is built from `matchKeysForOrder(live)` WITHOUT the
+  `velocity_bundle_identity` hydration that `buildVelocityPlan` performs
+  (Part C.2 above). A bundle whose parent has SHIPPED since approval is
+  child-less and keys on the synthetic `__velocity_order_id:<uuid>` form, so
+  execute does NOT recognise it and would re-send it. Measured on the real
+  2026-09-24 set: 135707 and 200015497641702 were caught (parents still
+  list-visible), **134524 was not** (its parent shipped on 9/23). What
+  prevented the duplicate was re-running the PLAN before executing — only
+  the plan hydrates. Until execute hydrates the same way, re-run the plan
+  immediately before acting on any approved send and re-confirm the set.
+
   **Echo freshness rule:** the GET that sources echo values happens at
   EXECUTE time, immediately before the PUT loop — never reuse order values
   cached from the plan/review fetch. The review screen can sit open for
