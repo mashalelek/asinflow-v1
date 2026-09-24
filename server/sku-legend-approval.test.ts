@@ -320,3 +320,117 @@ describe("normalizeRawValue", () => {
     expect(normalizeRawValue("A   B   C")).toBe("a b c");
   });
 });
+
+// ============================================================================
+// Phase 0 — reserved code + blank raw value rejection (§18, 2026-09-24)
+// ============================================================================
+// Origin: approving a brand row whose raw value was empty wrote
+// sku_legend(brand, "", HAU). Every later brandless ASIN then resolved
+// through it, and both Approve and Merge on that row failed with
+// `"" already in legend with code "HAU"` — unfixable from the UI.
+describe("processBulkApproval — reserved codes and blank raw values", () => {
+  const RESERVED = "NUL";
+
+  for (const action of ["approve_new", "approve_in_place"] as const) {
+    it(`rejects the reserved code ${RESERVED} for ${action}, and no handler runs`, async () => {
+      const { handlers, calls } = mockHandlers({});
+      const item =
+        action === "approve_new"
+          ? { type: "brand", rawValue: "Nulon", action, code: RESERVED }
+          : { type: "brand", rawValue: "Nulon", action, legendId: "u-1", code: RESERVED };
+      const results = await processBulkApproval([item as ApprovalItem], handlers);
+      expect(results[0].outcome).toBe("error");
+      if (results[0].outcome !== "error") return;
+      expect(results[0].reason).toBe("invalid_input");
+      expect(results[0].message).toContain(RESERVED);
+      expect(calls.filter((c) => c.phase !== "loadApprovedBrands")).toEqual([]);
+    });
+  }
+
+  it("rejects the reserved code case-insensitively and with surrounding space", async () => {
+    const { handlers } = mockHandlers({});
+    const results = await processBulkApproval(
+      [
+        { type: "brand", rawValue: "A", action: "approve_new", code: "nul" },
+        { type: "dept", rawValue: "B", action: "approve_new", code: " NUL " },
+      ],
+      handlers,
+    );
+    expect(results.every((r) => r.outcome === "error")).toBe(true);
+  });
+
+  it("reserves NUL for departments too — not just brands", async () => {
+    const { handlers } = mockHandlers({});
+    const results = await processBulkApproval(
+      [{ type: "dept", rawValue: "Books", action: "approve_new", code: RESERVED }],
+      handlers,
+    );
+    expect(results[0].outcome).toBe("error");
+  });
+
+  for (const [label, blank] of [["empty", ""], ["whitespace", "   "]] as const) {
+    it(`rejects a ${label} raw value for approve_new — this is the "" → HAU row's origin`, async () => {
+      const { handlers, calls } = mockHandlers({});
+      const results = await processBulkApproval(
+        [{ type: "brand", rawValue: blank, action: "approve_new", code: "HAU" }],
+        handlers,
+      );
+      expect(results[0].outcome).toBe("error");
+      if (results[0].outcome !== "error") return;
+      expect(results[0].reason).toBe("invalid_input");
+      expect(results[0].message).toContain("NUL"); // points at the real rule
+      expect(calls.filter((c) => c.phase === "approveNew")).toEqual([]);
+    });
+  }
+
+  it("rejects a blank raw value for merge, and a blank merge TARGET", async () => {
+    const { handlers } = mockHandlers({});
+    const results = await processBulkApproval(
+      [
+        { type: "brand", rawValue: "   ", action: "merge", intoRawValue: "AminoGenesis" },
+        { type: "brand", rawValue: "Amino Genesis", action: "merge", intoRawValue: "  " },
+      ],
+      handlers,
+    );
+    expect(results[0].outcome).toBe("error");
+    expect(results[1].outcome).toBe("error");
+  });
+
+  it("a rejected item does not block its valid siblings, and positions still line up", async () => {
+    const { handlers } = mockHandlers({});
+    const results = await processBulkApproval(
+      [
+        { type: "brand", rawValue: "Patagonia", action: "approve_new", code: "PAT" },
+        { type: "brand", rawValue: "", action: "approve_new", code: "HAU" },       // rejected
+        { type: "brand", rawValue: "Nulon", action: "approve_new", code: "NUL" },  // rejected
+        { type: "dept", rawValue: "Books", action: "approve_new", code: "BOO" },
+      ],
+      handlers,
+    );
+    expect(results.map((r) => r.outcome)).toEqual(["created", "error", "error", "created"]);
+    expect(results[0].rawValue).toBe("Patagonia");
+    expect(results[3].rawValue).toBe("Books");
+  });
+
+  it("a rejected approve_new is NOT available as a merge target in the same batch", async () => {
+    const { handlers } = mockHandlers({});
+    const results = await processBulkApproval(
+      [
+        { type: "brand", rawValue: "", action: "approve_new", code: "HAU" },
+        { type: "brand", rawValue: "Some Brand", action: "merge", intoRawValue: "" },
+      ],
+      handlers,
+    );
+    expect(results[0].outcome).toBe("error");
+    expect(results[1].outcome).toBe("error");
+  });
+
+  it("still approves a normal, non-reserved code with a real raw value", async () => {
+    const { handlers } = mockHandlers({});
+    const results = await processBulkApproval(
+      [{ type: "brand", rawValue: "AminoGenesis", action: "approve_new", code: "AMG" }],
+      handlers,
+    );
+    expect(results[0].outcome).toBe("created");
+  });
+});

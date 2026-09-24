@@ -10,7 +10,7 @@
 // Returns a typed outcome so the offer-add preview can render per-ASIN status.
 
 import { fetchCatalogForSku, type CatalogFetchOutcome, type HttpGetFn } from "./sku-catalog-fetch";
-import { resolveLegend, type QueryFn } from "@shared/sku-legend";
+import { resolveLegend, NO_BRAND_CODE, type QueryFn } from "@shared/sku-legend";
 import { generateSku } from "@shared/sku-generator";
 
 export interface ResolutionTrail {
@@ -44,9 +44,10 @@ export type ResolveSkuOutcome =
       details: string;
       // For legend_pending — caller surfaces these for human approval
       pending?: {
-        // status "missing" (2026-08-29): brand absent from the catalog — no
-        // rawValue, nothing to derive; needs a manually-entered 3-char code.
-        brand?: { rawValue: string; proposedCode: string; status: "proposed" | "not_in_legend" | "missing" };
+        // A brandless ASIN never appears here (§18, 2026-09-24): it resolves
+        // to NUL automatically. A brand row means a REAL brand name that the
+        // legend hasn't approved yet — so rawValue is always non-empty.
+        brand?: { rawValue: string; proposedCode: string; status: "proposed" | "not_in_legend" };
         dept?: { rawValue: string; proposedCode: string; status: "proposed" | "not_in_legend" };
       };
     };
@@ -55,11 +56,6 @@ export interface ResolveSkuDeps {
   httpGet?: HttpGetFn;            // SP-API GET — default real
   queryFn: QueryFn;               // DB query — required (no sane default for a server module)
   selfHealWrite?: (catalog: { asin: string; category: string; brand: string; itemName: string | null; imageUrl: string | null }) => Promise<void>;
-  // §18 missing-brand manual entry (2026-08-29): operator-entered 3-char BRD
-  // used ONLY when the catalog has no brand. Validated here (A-Z/0-9, legend
-  // collision) — invalid/colliding values return legend_pending with the
-  // error in details, correctable inline.
-  brandCodeOverride?: string;
 }
 
 export async function resolveAndGenerateSku(
@@ -75,7 +71,7 @@ export async function resolveAndGenerateSku(
       case "dead_asin":
         return { ok: false, reason: "dead_asin", details: `getCatalogItem returned 404 for ${asin}` };
       case "no_brand":
-        break; // §18 missing-brand flow below — legend_pending, not an error
+        break; // §18 brandless → BRD = NUL below. Not an error, not pending.
       case "no_category":
         return { ok: false, reason: "no_category", details: `classifications block empty for ${asin}` };
       case "transient_error":
@@ -85,53 +81,30 @@ export async function resolveAndGenerateSku(
 
   const { category, brand, itemName, imageUrl, isDangerousGood, dgHzRegulation } = fetched.data;
 
-  // §18 missing-brand (2026-08-29): brand absent from the catalog. Without a
-  // manual code this is legend_pending (status "missing", empty proposal —
-  // there is nothing to derive). With one, validate + collision-check it and
-  // use it as BRD directly; the legend is NOT consulted (no rawValue exists).
-  const MISSING_PENDING = { brand: { rawValue: "", proposedCode: "", status: "missing" as const } };
-  let brandOverride: string | null = null;
-  if (brand == null) {
-    const entered = (deps.brandCodeOverride ?? "").trim().toUpperCase();
-    if (entered === "") {
-      return {
-        ok: false, reason: "legend_pending",
-        details: `summaries[].brand missing for ${asin} — enter a 3-char brand code`,
-        pending: MISSING_PENDING,
-      };
-    }
-    if (!/^[A-Z0-9]{3}$/.test(entered)) {
-      return {
-        ok: false, reason: "legend_pending",
-        details: `brand code must be exactly 3 characters A-Z/0-9 (got "${entered}")`,
-        pending: MISSING_PENDING,
-      };
-    }
-    const coll = await deps.queryFn(
-      `SELECT raw_value FROM sku_legend WHERE type = 'brand' AND code = $1 LIMIT 1`,
-      [entered],
-    );
-    if (coll.rows.length > 0) {
-      return {
-        ok: false, reason: "legend_pending",
-        details: `code ${entered} is already assigned to brand "${coll.rows[0].raw_value}" in the legend`,
-        pending: MISSING_PENDING,
-      };
-    }
-    brandOverride = entered;
-  }
+  // §18 brandless ASIN (2026-09-24, replaces the 2026-08-29 manual-code flow):
+  // brand absent/null/empty/whitespace in the catalog → BRD = NUL, decided
+  // here, automatically. No approval step, no legend lookup, and critically NO
+  // pending.brand — there is no raw value, so there is nothing a human could
+  // approve. `brand` is already trimmed-to-null at the fetch boundary
+  // (sku-catalog-fetch), so null here means genuinely brandless.
+  //
+  // The old flow surfaced an approval row with an empty raw value; approving
+  // it wrote a sku_legend row keyed on "" that then captured every later
+  // brandless ASIN. NUL is reserved (shared/sku-legend) precisely so the
+  // legend never has to represent "no brand" as a value.
+  const brandless = brand == null;
 
   // Self-heal first — succeed-and-write even if legend lookup later returns pending,
   // so the data is fresh for the next attempt. Skipped when the catalog has no
-  // brand: a manually-entered code is never written to asins (§18 — catalog
-  // stays the only source for catalog fields).
+  // brand: NUL is a code, never a brand name, and must never reach asins.brand
+  // (§14 — catalog stays the only source for catalog fields).
   if (deps.selfHealWrite && brand != null) {
     await deps.selfHealWrite({ asin, category: category!, brand: brand!, itemName, imageUrl });
   }
 
   const [brandRes, deptRes] = await Promise.all([
-    brandOverride != null
-      ? Promise.resolve({ status: "approved", code: brandOverride, derivedProposal: null } as any)
+    brandless
+      ? Promise.resolve({ status: "approved", code: NO_BRAND_CODE, derivedProposal: null } as any)
       : resolveLegend("brand", brand!, deps.queryFn),
     resolveLegend("dept", category!, deps.queryFn),
   ]);
@@ -179,8 +152,8 @@ export async function resolveAndGenerateSku(
       dep: deptRes.code!,
       ttl: sku.split("-")[3], // TTL is the 4th segment (index 3)
       category: category!,
-      // Missing-brand override path: no catalog brand exists; empty string
-      // (never the entered code — that is a BRD, not a brand name).
+      // Brandless ASIN: no catalog brand exists, so the brand NAME is empty
+      // (never "NUL" — that is a BRD code, not a brand name).
       brand: brand ?? "",
       itemName: itemName ?? null,
       isDangerousGood,

@@ -107,19 +107,20 @@ describe("resolveAndGenerateSku", () => {
     expect(lq).not.toHaveBeenCalled();
   });
 
-  it("no_brand → legend_pending 'missing' (§18 2026-08-29 reclassification), no legend lookup", async () => {
-    const lq = vi.fn(async () => ({ rows: [] }));
+  it("no brand → BRD = NUL, and the legend is never consulted for the brand", async () => {
+    // dept resolves; the brand leg must not reach the legend at all.
+    const lq = vi.fn(fakeLegendQuery({ "dept:beauty & personal care": { code: "BPC", status: "approved" } }));
     const r = await resolveAndGenerateSku(
       "B00MW6OAK6",
       1,
       { queryFn: lq as any, httpGet: fakeHttpGet({ ...HAPPY_PAYLOAD, summaries: [{ itemName: "X" }] }) },
     );
-    expect(r.ok).toBe(false);
-    if (!r.ok) {
-      expect(r.reason).toBe("legend_pending");
-      expect(r.pending?.brand?.status).toBe("missing");
-    }
-    expect(lq).not.toHaveBeenCalled();
+    expect(r.ok).toBe(true);
+    if (!r.ok) return;
+    expect(r.trail.brd).toBe("NUL");
+    expect(r.sku.startsWith("NUL-BPC-")).toBe(true);
+    // Every legend call was for dept — none for brand.
+    for (const call of lq.mock.calls) expect((call as any[])[1][0]).toBe("dept");
   });
 
   it("no_category: returns outcome", async () => {
@@ -174,76 +175,152 @@ describe("resolveAndGenerateSku", () => {
 // is legend_pending (status "missing"), never an error; a manually-entered
 // 3-char code (A-Z/0-9) builds the SKU after validation + legend-collision
 // check, and the one-off path writes NO legend row.
-describe("resolveAndGenerateSku — missing brand (§18, 2026-08-29)", () => {
-  const NO_BRAND_PAYLOAD = {
-    ...HAPPY_PAYLOAD,
-    summaries: [{ itemName: "Mystery Widget Deluxe" }], // no brand key at all
-  };
+describe("resolveAndGenerateSku — brandless ASIN → NUL (§18, 2026-09-24)", () => {
+  // Replaces the 2026-08-29 manual-code flow. A brandless ASIN is decided
+  // automatically: BRD = NUL, no approval step, no legend row keyed on "".
+  // Origin: B08WX3XDLQ ("Winter Garden Paperback") — a book, so the catalog
+  // omits `brand` entirely.
+  const NO_BRAND_SUMMARY = { itemName: "Mystery Widget Deluxe" }; // no brand key at all
 
-  // Query router: legend resolve lookups (params [type, rawValue]) + the
-  // collision probe (SQL contains "code = $1"); captures every write.
-  function makeQuery(opts: { collidingBrand?: string } = {}) {
+  function makeQuery() {
     const writes: Array<{ sql: string; params: any[] }> = [];
+    const brandLookups: any[] = [];
     const queryFn = async (sql: string, params?: any[]) => {
       if (/INSERT|UPDATE|DELETE/i.test(sql)) { writes.push({ sql, params: params ?? [] }); return { rows: [] }; }
-      if (/code = \$1/.test(sql)) {
-        return { rows: opts.collidingBrand ? [{ raw_value: opts.collidingBrand }] : [] };
-      }
       const [type, rawValue] = params ?? [];
+      if (type === "brand") brandLookups.push(rawValue);
       if (type === "dept" && String(rawValue).toLowerCase() === "beauty & personal care") {
         return { rows: [{ code: "BPC", status: "approved" }] };
       }
       return { rows: [] };
     };
-    return { queryFn, writes };
+    return { queryFn, writes, brandLookups };
   }
 
-  it("no brand, no override → legend_pending with pending.brand.status 'missing' (reclassified, not error)", async () => {
-    const { queryFn } = makeQuery();
-    const r = await resolveAndGenerateSku("B00MW6OAK6", 1, { queryFn, httpGet: fakeHttpGet(NO_BRAND_PAYLOAD) });
+  function payloadWithBrand(brand: any) {
+    // `undefined` means the key is absent entirely, matching a real book.
+    const summary: any = brand === undefined ? { ...NO_BRAND_SUMMARY } : { ...NO_BRAND_SUMMARY, brand };
+    return { ...HAPPY_PAYLOAD, summaries: [summary] };
+  }
+
+  // The four shapes the catalog can hand us for "no brand".
+  const BLANK_SHAPES: Array<[string, any]> = [
+    ["absent", undefined],
+    ["null", null],
+    ["empty string", ""],
+    ["whitespace only", "   "],
+  ];
+
+  for (const [label, value] of BLANK_SHAPES) {
+    it(`brand ${label} → BRD = NUL, ok, and NO pending.brand`, async () => {
+      const { queryFn, brandLookups } = makeQuery();
+      const r = await resolveAndGenerateSku("B08WX3XDLQ", 1, { queryFn, httpGet: fakeHttpGet(payloadWithBrand(value)) });
+      expect(r.ok).toBe(true);
+      if (!r.ok) return;
+      expect(r.trail.brd).toBe("NUL");
+      expect(r.sku.startsWith("NUL-BPC-")).toBe(true);
+      expect(r.trail.brand).toBe(""); // the NAME is empty — never "NUL"
+      // Nothing was looked up in the legend under a blank value — that lookup
+      // is exactly what resolved through the "" → HAU row.
+      expect(brandLookups).toEqual([]);
+    });
+  }
+
+  it("a brandless ASIN is never legend_pending on the brand — there is nothing to approve", async () => {
+    // dept is ALSO unknown here, so the result IS pending — but only for dept.
+    const queryFn = async (_sql: string, params?: any[]) => {
+      const [type] = params ?? [];
+      if (type === "brand") throw new Error("brand must never reach the legend for a brandless ASIN");
+      return { rows: [] };
+    };
+    const r = await resolveAndGenerateSku("B08WX3XDLQ", 1, { queryFn, httpGet: fakeHttpGet(payloadWithBrand(undefined)) });
     expect(r.ok).toBe(false);
     if (r.ok) return;
     expect(r.reason).toBe("legend_pending");
-    expect(r.pending?.brand?.status).toBe("missing");
-    expect(r.pending?.brand?.proposedCode).toBe(""); // nothing to derive — empty, no prefill
+    expect(r.pending?.brand).toBeUndefined();   // DEP can still gate on its own
+    expect(r.pending?.dept?.status).toBe("not_in_legend");
   });
 
-  it("override must be exactly 3 chars A-Z/0-9 — bad shapes stay legend_pending with the reason in details", async () => {
-    for (const bad of ["AB", "ABCD", "a?c", ""]) {
-      const { queryFn } = makeQuery();
-      const r = await resolveAndGenerateSku("B00MW6OAK6", 1, { queryFn, httpGet: fakeHttpGet(NO_BRAND_PAYLOAD), brandCodeOverride: bad });
-      expect(r.ok).toBe(false);
-      if (r.ok) continue;
-      expect(r.reason).toBe("legend_pending");
-      expect(r.pending?.brand?.status).toBe("missing");
-    }
-  });
-
-  it("override colliding with an existing legend code → legend_pending naming the owning brand", async () => {
-    const { queryFn } = makeQuery({ collidingBrand: "AminoGenesis" });
-    const r = await resolveAndGenerateSku("B00MW6OAK6", 1, { queryFn, httpGet: fakeHttpGet(NO_BRAND_PAYLOAD), brandCodeOverride: "AMG" });
-    expect(r.ok).toBe(false);
+  it("a real brand still resolves through the legend normally", async () => {
+    const { queryFn, brandLookups } = makeQuery();
+    const r = await resolveAndGenerateSku("B00MW6OAK6", 1, { queryFn, httpGet: fakeHttpGet(payloadWithBrand("AminoGenesis")) });
+    expect(brandLookups).toEqual(["AminoGenesis"]);  // NOT short-circuited to NUL
+    expect(r.ok).toBe(false);                        // not in this legend stub
     if (r.ok) return;
-    expect(r.reason).toBe("legend_pending");
-    expect(r.details).toContain("AminoGenesis");
-    expect(r.pending?.brand?.status).toBe("missing");
+    expect(r.pending?.brand?.rawValue).toBe("AminoGenesis");
   });
 
-  it("valid one-off override builds the SKU with the entered BRD and writes NO legend row", async () => {
-    const { queryFn, writes } = makeQuery();
-    const r = await resolveAndGenerateSku("B00MW6OAK6", 7, { queryFn, httpGet: fakeHttpGet(NO_BRAND_PAYLOAD), brandCodeOverride: "cq1" });
-    expect(r.ok).toBe(true);
-    if (!r.ok) return;
-    expect(r.sku.startsWith("CQ1-BPC-")).toBe(true); // normalized uppercase; digits allowed
-    expect(r.trail.brd).toBe("CQ1");
-    expect(r.trail.brand).toBe(""); // never the code — there is no brand name
-    expect(writes).toEqual([]); // one-off: NO legend (or any other) write from the resolver
-  });
-
-  it("missing brand never self-heals asins (no catalog brand to write)", async () => {
+  it("a brandless ASIN never self-heals asins.brand — NUL is a code, not a brand name", async () => {
     const { queryFn } = makeQuery();
     const selfHealWrite = vi.fn();
-    await resolveAndGenerateSku("B00MW6OAK6", 1, { queryFn, httpGet: fakeHttpGet(NO_BRAND_PAYLOAD), selfHealWrite, brandCodeOverride: "CQ1" });
+    await resolveAndGenerateSku("B08WX3XDLQ", 1, { queryFn, httpGet: fakeHttpGet(payloadWithBrand("  ")), selfHealWrite });
     expect(selfHealWrite).not.toHaveBeenCalled();
+  });
+
+  it("the resolver writes nothing — no legend row is created for a brandless ASIN", async () => {
+    const { queryFn, writes } = makeQuery();
+    const r = await resolveAndGenerateSku("B08WX3XDLQ", 7, { queryFn, httpGet: fakeHttpGet(payloadWithBrand("")) });
+    expect(r.ok).toBe(true);
+    expect(writes).toEqual([]);
+  });
+});
+
+// ============================================================================
+// B08WX3XDLQ — the ASIN that could not be added (§18, 2026-09-24)
+// ============================================================================
+// "Winter Garden Paperback", walmart.com, a book. Books carry contributors /
+// manufacturer and the catalog omits `brand` ENTIRELY (verified live against
+// getCatalogItem on 2026-09-24 — `"brand" in summaries[0] === false`).
+//
+// Before the fix this surfaced a legend approval row with an EMPTY raw value;
+// Approve and Merge both failed with `"" already in legend with code "HAU"`,
+// and the ASIN could not be added at all.
+describe("B08WX3XDLQ — brandless book adds with a NUL- SKU", () => {
+  // Recorded from the live catalog response (2026-09-24), trimmed to the
+  // fields the resolver reads. Note: no `brand` key anywhere.
+  const WINTER_GARDEN = {
+    summaries: [{
+      marketplaceId: "ATVPDKIKX0DER",
+      itemName: "Winter Garden Paperback 20 Nov 2014",
+      manufacturer: "Pan Macmillan",
+      websiteDisplayGroupName: "Books",
+    }],
+    classifications: [{ classifications: [{ displayName: "Books" }] }],
+    attributes: {},
+  };
+
+  const legendWithBooks = fakeLegendQuery({ "dept:books": { code: "BOO", status: "approved" } });
+
+  it("resolves to NUL-BOO-DLQ-WGP-001 — the exact SKU the live catalog produces", async () => {
+    const r = await resolveAndGenerateSku("B08WX3XDLQ", 1, {
+      queryFn: legendWithBooks,
+      httpGet: fakeHttpGet(WINTER_GARDEN),
+    });
+    expect(r.ok).toBe(true);
+    if (!r.ok) return;
+    expect(r.sku).toBe("NUL-BOO-DLQ-WGP-001");
+    expect(r.trail.brd).toBe("NUL");
+    expect(r.trail.dep).toBe("BOO");
+    expect(r.trail.brand).toBe("");
+  });
+
+  it("is not legend_pending and not an error — no approval step at all", async () => {
+    const r = await resolveAndGenerateSku("B08WX3XDLQ", 1, {
+      queryFn: legendWithBooks,
+      httpGet: fakeHttpGet(WINTER_GARDEN),
+    });
+    expect(r.ok).toBe(true);
+    if (r.ok) return;
+    expect(r.reason).not.toBe("legend_pending");
+  });
+
+  it("never asks the legend for a blank brand — the lookup that hit the \"\" → HAU row", async () => {
+    const seen: any[] = [];
+    const spy = async (sql: string, params?: any[]) => {
+      seen.push(params?.[0]);
+      return legendWithBooks(sql, params);
+    };
+    await resolveAndGenerateSku("B08WX3XDLQ", 1, { queryFn: spy, httpGet: fakeHttpGet(WINTER_GARDEN) });
+    expect(seen).not.toContain("brand");
   });
 });

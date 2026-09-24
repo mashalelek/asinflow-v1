@@ -58,8 +58,9 @@ export type OfferAddOutcome =
   | { kind: "gated"; asin: string; details: string }
   | { kind: "dead_asin"; asin: string; details: string }
   | { kind: "legend_pending"; asin: string; pending: {
-        // "missing" (§18, 2026-08-29): brand absent from the catalog — manual 3-char entry
-        brand?: { rawValue: string; proposedCode: string; status: "proposed" | "not_in_legend" | "missing"; legendId?: string | null } | null;
+        // Brandless ASINs never appear here (§18, 2026-09-24) — they take the
+        // reserved code NUL automatically, so rawValue is always a real brand.
+        brand?: { rawValue: string; proposedCode: string; status: "proposed" | "not_in_legend"; legendId?: string | null } | null;
         dept?:  { rawValue: string; proposedCode: string; status: "proposed" | "not_in_legend"; legendId?: string | null } | null;
       }; details: string }
   | { kind: "duplicate_warning"; asin: string; existingSku: string; statuses: string[] }
@@ -100,7 +101,7 @@ interface OfferAddPreviewDialogProps {
   onReviewApprovals?: () => void; // launches the LegendApprovalDialog
   // Confirm button: only enabled when ready bucket non-empty AND parent provides handler.
   // skuOverrides: per-ASIN operator edits to SKU (TTL/NNN segments). Empty map = no edits.
-  onSubmit?: (asins: string[], skuOverrides: Record<string, string>, brandCodes?: Record<string, string>) => Promise<SubmitResponse>;
+  onSubmit?: (asins: string[], skuOverrides: Record<string, string>) => Promise<SubmitResponse>;
 }
 
 // ============================================================================
@@ -172,12 +173,8 @@ export function OfferAddPreviewDialog({
   // editable for existing NNNs. For new (unused) NNNs, TTL is editable
   // and starts at proposedTtl.
   const [edits, setEdits] = useState<Record<string, { nnnInput: string; ttlForNew: string }>>({});
-  // §18 missing-brand manual entry (2026-08-29). brandEntry holds the inline
-  // form per ASIN; patched holds per-row re-fired preview outcomes (merged
-  // over data.perAsin — no re-fetch, no dialog restart); brandCodes holds the
-  // codes that produced a READY row, threaded into submit so the live build
-  // uses the same override.
-  const [brandEntry, setBrandEntry] = useState<Record<string, { code: string; name: string; busy: boolean; error?: string }>>({});
+  // patched holds per-row re-fired preview outcomes, merged over data.perAsin
+  // — no re-fetch, no dialog restart.
   // §18 same-product resolution (2026-09-04): in-batch (brand, NNN) claims by
   // multiple new-product rows are the documented same-product case, not an
   // error. Keyed `${brandCode}\u0000${nnn}`; true = operator confirmed SAME
@@ -186,7 +183,6 @@ export function OfferAddPreviewDialog({
   // state — it bumps later rows to free NNNs, dissolving the group.
   const [sameProduct, setSameProduct] = useState<Record<string, boolean>>({});
   const [patched, setPatched] = useState<Record<string, PreviewResponse["perAsin"][number]>>({});
-  const [brandCodes, setBrandCodes] = useState<Record<string, string>>({});
 
   useEffect(() => {
     if (open) {
@@ -194,9 +190,7 @@ export function OfferAddPreviewDialog({
       setSubmitting(false);
       setSubmitResult(null);
       setEdits({});
-      setBrandEntry({});
       setPatched({});
-      setBrandCodes({});
       setSameProduct({});
     }
   }, [open]);
@@ -216,7 +210,6 @@ export function OfferAddPreviewDialog({
     }
     setEdits(init);
     setPatched({});
-    setBrandCodes({});
   }, [data]);
 
   const toggleExpand = (asin: string) => {
@@ -268,56 +261,6 @@ export function OfferAddPreviewDialog({
     setSameProduct((m) => { const n = { ...m }; delete n[groupKey]; return n; });
   }
 
-  async function approveMissingBrand(asin: string) {
-    const entry = brandEntry[asin] ?? { code: "", name: "", busy: false };
-    const code = entry.code.trim().toUpperCase();
-    if (!/^[A-Z0-9]{3}$/.test(code)) {
-      setBrandEntry((m) => ({ ...m, [asin]: { ...entry, error: "code must be exactly 3 characters A-Z/0-9" } }));
-      return;
-    }
-    setBrandEntry((m) => ({ ...m, [asin]: { ...entry, busy: true, error: undefined } }));
-    try {
-      const name = entry.name.trim();
-      if (name !== "") {
-        // Legend commit — same single writer as every other approval (§18).
-        const res = await fetch("/api/sku-legend/approve", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ items: [{ type: "brand", rawValue: name, action: "approve_new", code }] }),
-        });
-        const body = await res.json();
-        if (!res.ok) throw new Error(body?.message ?? `HTTP ${res.status}`);
-        const errs = (body.results ?? []).filter((r: any) => r.outcome === "error");
-        if (errs.length > 0) throw new Error(errs.map((e: any) => `${e.rawValue}: ${e.message ?? e.reason}`).join(" · "));
-      }
-      // Re-fire the payload build for this row only, with the code override.
-      const res = await fetch("/api/offer-add/preview", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ asins: [asin], brandCodes: { [asin]: code } }),
-      });
-      const body = await res.json();
-      if (!res.ok) throw new Error(body?.message ?? `HTTP ${res.status}`);
-      const row = (body?.perAsin ?? []).find((r: any) => r.asin === asin);
-      if (!row) throw new Error("re-fired preview returned no row for this ASIN");
-      setPatched((m) => ({ ...m, [asin]: row }));
-      if (row.outcome.kind === "preview") {
-        setBrandCodes((m) => ({ ...m, [asin]: code }));
-        if (!row.outcome.reused) {
-          setEdits((m) => ({ ...m, [asin]: {
-            nnnInput: String(row.outcome.proposedNnn ?? 1).padStart(3, "0"),
-            ttlForNew: row.outcome.proposedTtl ?? "",
-          } }));
-        }
-        setBrandEntry((m) => ({ ...m, [asin]: { ...entry, code, busy: false, error: undefined } }));
-      } else {
-        // Still pending — surface the server's reason (collision etc.) inline.
-        setBrandEntry((m) => ({ ...m, [asin]: { ...entry, code, busy: false, error: row.outcome.details ?? "still pending" } }));
-      }
-    } catch (e: any) {
-      setBrandEntry((m) => ({ ...m, [asin]: { ...entry, busy: false, error: e?.message ?? String(e) } }));
-    }
-  }
   const totalReady = buckets?.ready.length ?? 0;
   const totalExcluded = data?.preFilter.excluded.length ?? 0;
   const totalApproval = buckets?.needsApproval.length ?? 0;
@@ -404,8 +347,6 @@ export function OfferAddPreviewDialog({
             {buckets && buckets.needsApproval.length > 0 && (
               <Section title="Need approval" count={buckets.needsApproval.length}>
                 {buckets.needsApproval.map((row) => {
-                  const missingBrand = row.outcome.kind === "legend_pending" && row.outcome.pending?.brand?.status === "missing";
-                  const entry = brandEntry[row.asin] ?? { code: "", name: "", busy: false };
                   return (
                     <div key={row.asin}>
                       <Row>
@@ -419,33 +360,6 @@ export function OfferAddPreviewDialog({
                               : ""}
                         </span>
                       </Row>
-                      {missingBrand && (
-                        // §18 missing-brand manual entry: empty 3-char code (nothing
-                        // to derive from), optional name. Name → legend commit via the
-                        // single writer; blank name → one-off, no legend write.
-                        <div className="ml-6 mt-1 mb-2 flex items-center gap-2 flex-wrap" data-testid={`missing-brand-${row.asin}`}>
-                          <Input
-                            className="h-6 w-16 font-mono text-xs uppercase"
-                            placeholder="BRD"
-                            maxLength={3}
-                            value={entry.code}
-                            onChange={(e) => setBrandEntry((m) => ({ ...m, [row.asin]: { ...entry, code: e.target.value.toUpperCase(), error: undefined } }))}
-                          />
-                          <Input
-                            className="h-6 w-44 text-xs"
-                            placeholder="Brand name (optional → legend)"
-                            value={entry.name}
-                            onChange={(e) => setBrandEntry((m) => ({ ...m, [row.asin]: { ...entry, name: e.target.value, error: undefined } }))}
-                          />
-                          <Button size="sm" className="h-6 text-xs" disabled={entry.busy} onClick={() => approveMissingBrand(row.asin)}>
-                            {entry.busy ? "Approving…" : "Approve"}
-                          </Button>
-                          <span className="text-[11px] text-muted-foreground">
-                            {entry.name.trim() === "" ? "one-off: code used for this SKU only, no legend write" : "will add to legend (approve_new)"}
-                          </span>
-                          {entry.error && <span className="text-[11px] text-destructive w-full">{entry.error}</span>}
-                        </div>
-                      )}
                     </div>
                   );
                 })}
@@ -663,7 +577,7 @@ export function OfferAddPreviewDialog({
                   if (v.finalSku !== row.outcome.sku) overrides[row.asin] = v.finalSku;
                 }
                 try {
-                  const result = await onSubmit(asinsToSubmit, overrides, brandCodes);
+                  const result = await onSubmit(asinsToSubmit, overrides);
                   setSubmitResult(result);
                 } catch (err: any) {
                   setSubmitResult({
@@ -905,8 +819,7 @@ function hasAnyValidationError(
 
 function renderLegendPending(pending: any): string {
   const parts: string[] = [];
-  if (pending.brand?.status === "missing") parts.push("brand missing from catalog — enter a 3-char code below");
-  else if (pending.brand) parts.push(`brand "${pending.brand.rawValue}" → ${pending.brand.proposedCode} (${pending.brand.status})`);
+  if (pending.brand) parts.push(`brand "${pending.brand.rawValue}" → ${pending.brand.proposedCode} (${pending.brand.status})`);
   if (pending.dept) parts.push(`dept "${pending.dept.rawValue}" → ${pending.dept.proposedCode} (${pending.dept.status})`);
   return parts.join("; ");
 }

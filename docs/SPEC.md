@@ -2782,26 +2782,37 @@ fail.
   Gourmet Food"). A regression test pins this: an ASIN whose salesRanks and
   classifications top-levels differ must use the classifications value.
 - `brand` — from `summaries[].brand`.
-- Missing brand or unresolvable DEP → `legend_pending` (awaits approval).
-  Missing category leaf or 404 → hard-fail.
-- **Brand ABSENT from the catalog → `legend_pending` with manual code entry
-  (2026-08-29).** When `summaries[].brand` is missing entirely (B00MW6OAK6),
-  there is no rawValue to resolve and nothing to derive a proposal from —
-  but that is an approval problem, not an error: the row surfaces in the
-  need-approval section (`pending.brand.status = "missing"`) with an EMPTY
-  3-char code input (A–Z/0–9, validated) plus an OPTIONAL brand-name field.
-  Collision against existing legend codes is checked on approve (inline
-  error, correctable). **Commit semantics:** name provided → `approve_new`
-  through the single legend writer (`POST /api/sku-legend/approve`, §18
-  ownership) so the brand resolves automatically wherever the catalog DOES
-  carry that name; name blank → **one-off**: the code is used for this SKU
-  build only and NO legend row is written. Approve re-fires the payload
-  build with the code as a per-ASIN override (`brandCodes` on the offer-add
-  preview/submit endpoints) and the row moves to READY inline — no
-  re-fetch, no dialog restart. Same treatment in BOTH `legend_pending`
-  surfaces (Add-to-SC preview and the Velocity dialog's "Create SKU &
-  include"). Self-heal never writes a manually-entered code or name to
-  `asins` — catalog stays the only source for catalog fields.
+- Unresolvable DEP → `legend_pending` (awaits approval). Missing category
+  leaf or 404 → hard-fail. A missing BRAND is neither — see below.
+- **Brand ABSENT from the catalog → `BRD = NUL`, automatically
+  (2026-09-24).** `summaries[].brand` that is absent, null, `""`, or
+  whitespace-only **after trimming** counts as absent — all four are one
+  case, decided at the catalog-fetch boundary, which trims to null. A
+  brandless ASIN takes the reserved code `NUL`: **no approval step, no
+  `legend_pending` for brand, no `pending.brand` in the outcome, and no
+  `sku_legend` row keyed on an empty value.** DEP still resolves normally,
+  so an ASIN can be `legend_pending` on its department alone.
+
+  Neither surface (Add-to-SC preview, Velocity "Create SKU & include")
+  shows a brand row for a brandless ASIN, and the Legend-approvals dialog
+  drops any row whose raw value is blank. Self-heal never writes `""` or
+  whitespace to `asins.brand` (`NULLIF(TRIM(...), '')` — blank stores as
+  NULL), and never writes `NUL` there: `NUL` is a code, not a brand name.
+  If the catalog later starts returning a real brand, normal legend
+  resolution applies to NEW SKUs; existing SKUs are reused unchanged per
+  the resurrection rules.
+
+  **Replaces the 2026-08-29 manual-code flow**, which surfaced an approval
+  row with an EMPTY raw value plus a 3-char code input. Approving it wrote
+  `sku_legend(brand, "", HAU)` — and from then on every brandless ASIN
+  resolved through that one row, while Approve and Merge on it both failed
+  with `"" already in legend with code "HAU"`, unfixable from the UI.
+  Origin: B08WX3XDLQ ("Winter Garden Paperback", walmart.com) — a book, so
+  the catalog serializes `contributors`/`manufacturer` and omits `brand`
+  entirely; verified live 2026-09-24 (`"brand" in summaries[0] === false`).
+  It now resolves to `NUL-BOO-DLQ-WGP-001`. The `brandCodes` per-ASIN
+  override on the offer-add preview/submit endpoints is retired with the
+  flow.
 
 **Self-heal write:** after a successful catalog fetch, the resolver writes
 `category` and `brand` (and `title`, `image_url`) back to `asins`,
@@ -2827,6 +2838,19 @@ silently applied.
   existing code, so a variant name never splits a brand into two codes.
 - Department consistency: never two DEP codes for one category.
 - No SUB codes — SUB is not part of the format.
+- **Reserved codes (never assignable to a real brand or department):**
+  - `NUL` — "this ASIN has no brand" (2026-09-24). Assigned by the resolver,
+    never by approval. `POST /api/sku-legend/approve` rejects it for
+    `approve_new`, `approve_in_place`, AND `merge` with an `invalid_input`
+    error naming the rule. Reserving it is what keeps a real brand from
+    colliding with every brandless SKU. There is no `sku_legend` row for
+    `NUL` and nothing resolves to it through the legend.
+- **The legend never holds an entry with a blank value.** A raw value that is
+  empty or whitespace-only is not a value; the same writer rejects it for
+  every action (including a blank merge target), and the approvals dialog
+  filters blank rows out before they can be actioned. This is enforced at the
+  writer, not just the UI — the one row that got in this way
+  (`brand "" → HAU`, 2026-09-10) was written through the dialog.
 
 ### SKU Resolution (resurrection)
 

@@ -1128,11 +1128,11 @@ export default function Home() {
   // the frontend that triggers real putListingsItem calls. Operator edits to
   // SKU segments (TTL/NNN) flow through as skuOverrides — the server validates
   // each override and refuses to fire on format mismatch or collision.
-  const handleSubmitOfferAdd = useCallback(async (asinsToSubmit: string[], skuOverrides: Record<string, string>, brandCodes?: Record<string, string>): Promise<SubmitResponse> => {
+  const handleSubmitOfferAdd = useCallback(async (asinsToSubmit: string[], skuOverrides: Record<string, string>): Promise<SubmitResponse> => {
     const res = await fetch("/api/offer-add/submit", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ asins: asinsToSubmit, skuOverrides, brandCodes }),
+      body: JSON.stringify({ asins: asinsToSubmit, skuOverrides }),
     });
     const data = await res.json();
     if (!res.ok) throw new Error(data.message || "Submit failed");

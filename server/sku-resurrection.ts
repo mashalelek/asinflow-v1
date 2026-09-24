@@ -50,8 +50,10 @@ import type { QueryFn } from "@shared/sku-legend";
 import type { HttpGetFn } from "./sku-catalog-fetch";
 
 export interface LegendPending {
-  // "missing" (2026-08-29): brand absent from the catalog — manual 3-char code entry.
-  brand?: { rawValue: string; proposedCode: string; status: "proposed" | "not_in_legend" | "missing" };
+  // A brandless ASIN is never pending (§18, 2026-09-24) — it resolves to the
+  // reserved code NUL automatically, so a brand row here always carries a real
+  // (non-empty) brand name awaiting a legend decision.
+  brand?: { rawValue: string; proposedCode: string; status: "proposed" | "not_in_legend" };
   dept?: { rawValue: string; proposedCode: string; status: "proposed" | "not_in_legend" };
 }
 
@@ -73,8 +75,6 @@ export interface ResurrectionDeps {
   httpGet?: HttpGetFn;
   selfHealWrite?: ResolveSkuDeps["selfHealWrite"];
   sellerId: string;
-  // §18 missing-brand manual entry — threaded to the resolver (generate path only).
-  brandCodeOverride?: string;
 }
 
 const GATED_SQL = `
@@ -159,7 +159,6 @@ export async function resurrectOrGenerateSku(
       queryFn: deps.queryFn,
       httpGet: deps.httpGet,
       selfHealWrite: deps.selfHealWrite,
-      brandCodeOverride: deps.brandCodeOverride,
     },
     variantSuffix,
   );

@@ -58,10 +58,6 @@ export interface OfferAddInput {
   // resurrection-computed SKU (no brand/dept/asin swap). Server-side
   // collision checks live in the submit orchestrator (offer-add-submit.ts).
   skuOverride?: string;
-  // §18 missing-brand manual entry (2026-08-29): operator-entered 3-char BRD,
-  // used ONLY when the catalog has no brand (generate path). Validated in the
-  // resolver (A-Z/0-9 + legend collision).
-  brandCodeOverride?: string;
 }
 
 export interface PutListingsPayload {
@@ -132,7 +128,6 @@ export async function offerAddForAsin(
       httpGet: deps.httpGet,
       sellerId: deps.sellerId,
       selfHealWrite: dryRun ? undefined : deps.selfHealWrite,
-      brandCodeOverride: input.brandCodeOverride,
     },
     input.variantSuffix,
   );

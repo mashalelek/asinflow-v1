@@ -23,6 +23,7 @@
 // tested independently from the SQL.
 
 import type pg from "pg";
+import { NO_BRAND_CODE, isReservedLegendCode, isBlankRawValue } from "@shared/sku-legend";
 
 // ============================================================================
 // Types
@@ -86,8 +87,57 @@ export async function processBulkApproval(
 ): Promise<ApprovalResult[]> {
   const results: ApprovalResult[] = new Array(items.length);
 
+  // Phase 0 — input rejection (§18, 2026-09-24). Runs before ANY handler so
+  // the guard holds for every action and every handler implementation.
+  //
+  //   blank rawValue: the legend must never hold a row keyed on ""/whitespace.
+  //     One such row (brand "" → HAU, 2026-09-10) swallowed every brandless
+  //     ASIN into a single code and made both Approve and Merge fail with
+  //     `"" already in legend with code "HAU"`.
+  //   reserved code: NUL means "no brand" and is assigned by the resolver, not
+  //     by approval. Letting a real brand take it would collide with every
+  //     brandless SKU.
+  //
+  // A rejected item is marked here and skipped by the phase loops below.
+  for (let i = 0; i < items.length; i++) {
+    const item = items[i];
+    if (isBlankRawValue(item.rawValue)) {
+      results[i] = {
+        rawValue: item.rawValue,
+        outcome: "error",
+        reason: "invalid_input",
+        message:
+          "raw value is empty or whitespace — the legend cannot hold an entry with no value. " +
+          "A brandless ASIN is assigned the reserved code NUL automatically and needs no approval.",
+      };
+      continue;
+    }
+    if (item.action === "merge") {
+      if (isBlankRawValue(item.intoRawValue)) {
+        results[i] = {
+          rawValue: item.rawValue,
+          outcome: "error",
+          reason: "invalid_input",
+          message: "merge target is empty or whitespace — there is no such legend entry",
+        };
+      }
+      continue; // merge carries no code to check
+    }
+    if (isReservedLegendCode(item.code)) {
+      results[i] = {
+        rawValue: item.rawValue,
+        outcome: "error",
+        reason: "invalid_input",
+        message:
+          `code "${item.code.trim().toUpperCase()}" is reserved and cannot be assigned to a ` +
+          `${item.type}. ${NO_BRAND_CODE} marks an ASIN with no brand and is set automatically.`,
+      };
+    }
+  }
+
   // Phase 1: approve_new — must run first so new brands appear in merge targets
   for (let i = 0; i < items.length; i++) {
+    if (results[i]) continue; // rejected in phase 0
     const item = items[i];
     if (item.action === "approve_new") {
       try {
@@ -121,6 +171,7 @@ export async function processBulkApproval(
   // Phase 2: merge — uses the approved-brand map; tracks same-batch failures
   for (let i = 0; i < items.length; i++) {
     const item = items[i];
+    if (results[i]) continue; // rejected in phase 0
     if (item.action !== "merge") continue;
 
     const normalizedTarget = normalizeRawValue(item.intoRawValue);
@@ -170,6 +221,7 @@ export async function processBulkApproval(
   // Phase 3: approve_in_place — UPDATEs only; doesn't affect merge targets
   for (let i = 0; i < items.length; i++) {
     const item = items[i];
+    if (results[i]) continue; // rejected in phase 0
     if (item.action !== "approve_in_place") continue;
     try {
       results[i] = await handlers.approveInPlace(item);

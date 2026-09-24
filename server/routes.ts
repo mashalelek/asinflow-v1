@@ -627,7 +627,10 @@ async function upsertAsinResult(
   // append path — existing ASINs keep their prior value untouched.
   const asinUpsert = await query(
     `INSERT INTO asins (asin, title, image_url, brand, category, weight_lb, buy_link, supplier, is_meltable, is_hazmat, is_dangerous_good, notes, promo_notes, supplier_sku, last_refreshed_at)
-     VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, NOW())
+     -- §18 (2026-09-24): NULLIF(TRIM(...)) so a blank catalog brand is stored
+     -- as NULL, never "". An empty-string brand is what let the legend build a
+     -- row keyed on "" and swallow every brandless ASIN into one code.
+     VALUES ($1, $2, $3, NULLIF(TRIM($4::text), ''), $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, NOW())
      ON CONFLICT (asin) DO UPDATE SET
        title = COALESCE(EXCLUDED.title, asins.title),
        image_url = COALESCE(EXCLUDED.image_url, asins.image_url),
@@ -1427,10 +1430,11 @@ export async function registerRoutes(
       // seller counts, and prices live in `asin_estimates`, not here.
       const upsertResult = await pool.query(
         `INSERT INTO asins (asin, title, brand, image_url, category, weight_lb, length_in, width_in, height_in, buy_link, in_catalog)
-         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, false)
+         -- §18 (2026-09-24): blank brand -> NULL, never "" (see the analyze upsert).
+         VALUES ($1, $2, NULLIF(TRIM($3::text), ''), $4, $5, $6, $7, $8, $9, $10, false)
          ON CONFLICT (asin) DO UPDATE SET
            title = COALESCE($2, asins.title),
-           brand = COALESCE($3, asins.brand),
+           brand = COALESCE(NULLIF(TRIM($3::text), ''), asins.brand),
            image_url = COALESCE($4, asins.image_url),
            category = COALESCE($5, asins.category),
            weight_lb = COALESCE($6, asins.weight_lb),
@@ -2453,7 +2457,7 @@ export async function registerRoutes(
     if (!isDbAvailable()) { res.status(503).json({ message: "Database not available" }); return; }
     const sellerId = process.env.SP_API_SELLER_ID;
     if (!sellerId) { res.status(503).json({ message: "SP_API_SELLER_ID not configured" }); return; }
-    const { asins, brandCodes } = (req.body ?? {}) as { asins?: string[]; brandCodes?: Record<string, string> };
+    const { asins } = (req.body ?? {}) as { asins?: string[] };
     if (!asins || !Array.isArray(asins) || asins.length === 0) {
       res.status(400).json({ message: "No ASINs provided" }); return;
     }
@@ -2476,7 +2480,6 @@ export async function registerRoutes(
         includeInboundShipping,
         allExistingSkus,
         productRegistry: makeProductRegistryRepo((sql, params) => query(sql, params)),
-        brandCodes, // §18 missing-brand manual entry — per-ASIN BRD overrides
         phase4Mode: "preview", // do everything EXCEPT the live PUT
       });
 
@@ -2519,7 +2522,7 @@ export async function registerRoutes(
     if (!isDbAvailable()) { res.status(503).json({ message: "Database not available" }); return; }
     const sellerId = process.env.SP_API_SELLER_ID;
     if (!sellerId) { res.status(503).json({ message: "SP_API_SELLER_ID not configured" }); return; }
-    const { asins, skuOverrides, brandCodes } = (req.body ?? {}) as { asins?: string[]; skuOverrides?: Record<string, string>; brandCodes?: Record<string, string> };
+    const { asins, skuOverrides } = (req.body ?? {}) as { asins?: string[]; skuOverrides?: Record<string, string> };
     if (!asins || !Array.isArray(asins) || asins.length === 0) {
       res.status(400).json({ message: "No ASINs provided" }); return;
     }
@@ -2542,7 +2545,6 @@ export async function registerRoutes(
         includeInboundShipping,
         allExistingSkus,
         skuOverrides,
-        brandCodes, // §18 missing-brand manual entry — per-ASIN BRD overrides
         productRegistry: makeProductRegistryRepo((sql, params) => query(sql, params)),
         // phase4Mode defaults to "live" — REAL putListingsItem fires here.
         // selfHealWrite omitted for now — resurrection's selfHeal writes to asins

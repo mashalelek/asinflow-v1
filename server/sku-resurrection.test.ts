@@ -75,6 +75,8 @@ function makeRoutedQueryFn(routes: {
   };
 }
 
+const HAPPY_DEPT_RAW = "Beauty & Personal Care";
+
 const HAPPY_CATALOG = {
   summaries: [{ brand: "AminoGenesis", itemName: "Triple Firming Renewal" }],
   classifications: [{
@@ -234,16 +236,22 @@ describe("resurrectOrGenerateSku — decision tree", () => {
     }
   });
 
-  it("blank brand → legend_pending 'missing' (§18 2026-08-29 reclassification), not error", async () => {
+  it("blank brand → generate with BRD = NUL (§18 2026-09-24), not pending and not an error", async () => {
     const r = await resurrectOrGenerateSku(ASIN, 1, {
-      queryFn: makeRoutedQueryFn({ eligibility: "yes", candidates: [] }),
+      queryFn: makeRoutedQueryFn({
+        eligibility: "yes",
+        candidates: [],
+        legend: { [`dept:${HAPPY_DEPT_RAW.toLowerCase()}`]: { code: "BPC", status: "approved" } },
+      }),
       httpGet: makeRoutedHttpGet({
         catalog: { summaries: [{ brand: "" }], classifications: HAPPY_CATALOG.classifications },
       }),
       sellerId: SELLER,
     });
-    expect(r.kind).toBe("legend_pending");
-    if (r.kind === "legend_pending") expect(r.pending.brand?.status).toBe("missing");
+    expect(r.kind).toBe("generate");
+    if (r.kind !== "generate") return;
+    expect(r.trail.brd).toBe("NUL");
+    expect(r.sku.startsWith("NUL-BPC-")).toBe(true);
   });
 
   // ────────────────────────────────────────────────────────────────────────

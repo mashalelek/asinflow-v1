@@ -103,3 +103,33 @@ export async function resolveLegend(
     derivedProposal: row.code,
   };
 }
+
+// ============================================================================
+// Reserved codes — never assignable to a real brand or department
+// ============================================================================
+
+// NUL = "this ASIN has no brand". Assigned automatically by the resolver when
+// summaries[].brand is absent/null/empty/whitespace (§18, 2026-09-24). It is
+// NOT a legend entry: there is no sku_legend row for it, no raw value keys to
+// it, and the approval writer rejects it for every action. Reserving the code
+// is what keeps a real brand from ever colliding with a brandless SKU.
+//
+// Origin: B08WX3XDLQ ("Winter Garden Paperback") — a book, so the catalog
+// serializes contributors/manufacturer and omits `brand` entirely. The old
+// missing-brand flow surfaced an approval row with an EMPTY raw value, and
+// approving it wrote a sku_legend row keyed on "" — which then swallowed
+// every later brandless ASIN into that one code.
+export const NO_BRAND_CODE = "NUL";
+
+export const RESERVED_LEGEND_CODES: ReadonlySet<string> = new Set([NO_BRAND_CODE]);
+
+export function isReservedLegendCode(code: string): boolean {
+  return RESERVED_LEGEND_CODES.has((code ?? "").trim().toUpperCase());
+}
+
+// A raw value that is absent/null/empty/whitespace-only is not a value at all.
+// The legend must never store a row keyed on one, and nothing may resolve
+// through one.
+export function isBlankRawValue(raw: string | null | undefined): boolean {
+  return (raw ?? "").trim().length === 0;
+}

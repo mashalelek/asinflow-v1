@@ -82,15 +82,22 @@ export function LegendApprovalDialog({
   useEffect(() => {
     if (!open) return;
     setRows(
-      pending.map((p) => ({
-        rawValue: p.rawValue,
-        type: p.type,
-        proposedCode: p.proposedCode,
-        legendId: p.legendId ?? null,
-        action: p.legendId ? "approve_in_place" : "approve_new",
-        codeOverride: "",
-        intoLegendId: null,
-      })),
+      // §18 (2026-09-24): a blank raw value is not an approvable entry. A
+      // brandless ASIN takes the reserved code NUL automatically, so no row
+      // should ever arrive with an empty value — this filter is the last
+      // guard against the one that did (brand "" → HAU, 2026-09-10), which
+      // made both Approve and Merge fail with an unfixable error.
+      pending
+        .filter((p) => (p.rawValue ?? "").trim() !== "")
+        .map((p) => ({
+          rawValue: p.rawValue,
+          type: p.type,
+          proposedCode: p.proposedCode,
+          legendId: p.legendId ?? null,
+          action: p.legendId ? "approve_in_place" : "approve_new",
+          codeOverride: "",
+          intoLegendId: null,
+        })),
     );
   }, [open, pending]);
 
