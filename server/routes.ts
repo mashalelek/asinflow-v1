@@ -762,14 +762,18 @@ async function appendNotesForAsin(asin: string, newNotes: string): Promise<void>
 // is required everywhere, never defaulted.
 export const mainCatalogSink: AnalyzeSink = {
   persistResult(result, { fromCsvUpload, inputNotes, inputPromoNotes }) {
-    if (!isDbAvailable()) return;
+    if (!isDbAvailable()) return Promise.resolve();
     // If this is a CSV upload with user-provided COGS, persist estimated_cogs
     // via the dedicated write path BEFORE the analyze UPSERT. This ensures
     // estimated_cogs is set for both new and existing ASINs.
     const csvCogsPromise = fromCsvUpload && result.cogs > 0
       ? upsertCsvCogs(result.asin, result.cogs).catch((err: any) => log(`CSV COGS write error for ${result.asin}: ${err.message}`, "db"))
       : Promise.resolve();
-    csvCogsPromise.then(async () => {
+    // RETURNED (2026-09-27), not dropped: writeResult awaits this so the tag
+    // write is ordered behind the asins INSERT. Errors stay logged-and-
+    // swallowed here exactly as before — this promise reports COMPLETION,
+    // not success.
+    return csvCogsPromise.then(async () => {
       // For CSV/sourcing of a brand-new ASIN, notes + promo_notes go in
       // atomically via the INSERT branch of upsertAsinResult — eliminates the
       // race against appendNotesForAsin that lost ~152 notes in a recent
@@ -786,15 +790,26 @@ export const mainCatalogSink: AnalyzeSink = {
     }).catch((err: any) => log(`DB upsert error for ${result.asin}: ${err.message}`, "db"));
   },
   persistTags(asin, tagNames) {
-    if (!isDbAvailable()) return;
-    // Tags are fire-and-forget — they have their own table and don't race
-    // with the asins INSERT (upsertTagsForAsin no-ops if the asin row
-    // doesn't exist yet, which is benign — tags only matter for known ASINs).
-    upsertTagsForAsin(asin, tagNames).catch((err: any) => log(`Tags error for ${asin}: ${err.message}`, "db"));
+    if (!isDbAvailable()) return Promise.resolve();
+    // NOT fire-and-forget (fixed 2026-09-27). The old version launched this
+    // alongside the asins INSERT and swallowed the result. upsertTagsForAsin
+    // opens with `SELECT id FROM asins` and returns silently when the row is
+    // absent, so for a BRAND-NEW ASIN the lookup reliably won the race and
+    // every CSV tag was dropped — with no error anywhere. Existing ASINs were
+    // unaffected, which is why this looked intermittent rather than broken.
+    // writeResult now awaits persistResult before calling this, and the
+    // rejection propagates so the caller can report it (§14 honest labeling).
+    return upsertTagsForAsin(asin, tagNames);
   },
 };
 
-function writeResult(
+// One per-ASIN unit of work: emit, persist the row, THEN apply the tags it
+// was given. Tags live here rather than at the call sites so every persist
+// path — first pass, retry `_update`, exhausted final sweep — orders them
+// behind the INSERT identically; the 2026-09-27 bug was a tag write that sat
+// outside this unit and raced it. Same contract as bulk-promote.ts: a tag
+// failure is reported against that ASIN, never a silent success without tags.
+async function writeResult(
   emit: (chunk: string) => void,
   allResults: Map<string, AsinResult>,
   asin: string,
@@ -804,10 +819,19 @@ function writeResult(
   inputNotes: string | null = null,
   inputPromoNotes: string | null = null,
   sink: AnalyzeSink,
-): void {
+  inputTags: string[] | null = null,
+): Promise<void> {
   allResults.set(asin, result);
   emit(JSON.stringify({ type: "result", data: isUpdate ? { ...result, _update: true } : result }) + "\n");
-  sink.persistResult(result, { fromCsvUpload, inputNotes, inputPromoNotes });
+  await sink.persistResult(result, { fromCsvUpload, inputNotes, inputPromoNotes });
+  if (!inputTags || inputTags.length === 0) return;
+  try {
+    await sink.persistTags(asin, inputTags);
+  } catch (err: any) {
+    const msg = `row written; tag write FAILED for ${asin} (${inputTags.join(", ")}): ${err?.message ?? err}`;
+    log(msg, "db");
+    emit(JSON.stringify({ type: "progress", data: { current: 0, total: 0, asin: `⚠ ${msg}` } }) + "\n");
+  }
 }
 
 async function runSheetsSync(
@@ -3212,20 +3236,17 @@ export async function registerRoutes(
         retryQueue.push({ input, attempt: 1, result });
         log(`Queued ${input.asin} for retry (fees=${retryNeeded.fees}, pricing=${retryNeeded.pricing}, catalog=${retryNeeded.catalog})`, "retry");
         if (!retryNeeded.fees && !retryNeeded.pricing) {
-          writeResult(emit, allResults, input.asin, result, false, fromCsvUpload, input.notes ?? null, input.promoNotes ?? null, sink);
+          await writeResult(emit, allResults, input.asin, result, false, fromCsvUpload, input.notes ?? null, input.promoNotes ?? null, sink, input.tags ?? null);
         }
       } else {
-        writeResult(emit, allResults, input.asin, result, false, fromCsvUpload, input.notes ?? null, input.promoNotes ?? null, sink);
+        await writeResult(emit, allResults, input.asin, result, false, fromCsvUpload, input.notes ?? null, input.promoNotes ?? null, sink, input.tags ?? null);
       }
 
-      // Tags go through the sink (main: fire-and-forget upsertTagsForAsin;
-      // bulk: intentional no-op — §21, no tag data source on that page).
-      if (input.tags && input.tags.length > 0) {
-        sink.persistTags(input.asin, input.tags);
-      }
-      // Notes are persisted by the sink's persistResult chain — atomically on
-      // INSERT for new ASINs, via appendNotesForAsin (dedup) for existing.
-      // The old fire-and-forget call was racy: lost ~152 notes in a 7-day window.
+      // Tags and notes both ride inside writeResult now — tags AFTER the
+      // asins INSERT commits (2026-09-27), notes atomically on the INSERT
+      // branch for new ASINs / appendNotesForAsin (dedup) for existing. Both
+      // were fire-and-forget once; notes lost ~152 rows in a 7-day window and
+      // tags lost every CSV tag on a brand-new ASIN.
 
       // No inter-batch sleep: the loop makes no unpaced API calls — the only
       // remaining per-ASIN calls (scoped gating/hazmat) go through the rate
@@ -3321,7 +3342,7 @@ export async function registerRoutes(
               const finalResult = retryError
                 ? { ...retried, error: retryError }
                 : retried;
-              writeResult(emit, allResults, item.input.asin, finalResult, allResults.has(item.input.asin), fromCsvUpload, item.input.notes ?? null, item.input.promoNotes ?? null, sink);
+              await writeResult(emit, allResults, item.input.asin, finalResult, allResults.has(item.input.asin), fromCsvUpload, item.input.notes ?? null, item.input.promoNotes ?? null, sink, item.input.tags ?? null);
             }
           } catch (err: any) {
             log(`Retry error for ${item.input.asin}: ${err.message}`, "retry");
@@ -3355,7 +3376,7 @@ export async function registerRoutes(
                 ...finalItem,
                 error: errorMsg ?? finalItem.error,
               };
-              writeResult(emit, allResults, item.input.asin, errorResult, allResults.has(item.input.asin), fromCsvUpload, item.input.notes ?? null, item.input.promoNotes ?? null, sink);
+              await writeResult(emit, allResults, item.input.asin, errorResult, allResults.has(item.input.asin), fromCsvUpload, item.input.notes ?? null, item.input.promoNotes ?? null, sink, item.input.tags ?? null);
             } else {
               item.attempt = attempt + 1;
             }
@@ -3382,7 +3403,7 @@ export async function registerRoutes(
             ...item.result,
             error: errorMsg,
           };
-          writeResult(emit, allResults, item.input.asin, errorResult, false, fromCsvUpload, item.input.notes ?? null, item.input.promoNotes ?? null, sink);
+          await writeResult(emit, allResults, item.input.asin, errorResult, false, fromCsvUpload, item.input.notes ?? null, item.input.promoNotes ?? null, sink, item.input.tags ?? null);
         }
       }
       if (uncalculated.length > 0) {
@@ -3528,7 +3549,7 @@ export async function registerRoutes(
     // checked_at stamps, no upload prices pre-pass, no background syncs).
     const dryRun = req.query.dryRun === "1" || req.query.dryRun === "true";
     if (dryRun) {
-      const nullSink: AnalyzeSink = { persistResult: () => {}, persistTags: () => {} } as any;
+      const nullSink: AnalyzeSink = { persistResult: async () => {}, persistTags: async () => {} } as any;
       await runAnalyzeAndStream(asins, res, nullSink, () => null, false, { dryRun: true });
       res.write(JSON.stringify({ type: "complete" }) + "\n");
       res.end();

@@ -21,6 +21,11 @@ export interface AnalyzeSink {
    * old writeResult DB block). Implementations decide whether writes are
    * fire-and-forget (main catalog) or collected for an awaited flush (bulk).
    * Must not throw synchronously.
+   *
+   * Returns a promise that settles when THIS result's writes (including the
+   * asins INSERT) have landed. Callers that must order a later write behind
+   * the INSERT — tags, which no-op when the row doesn't exist yet — await it
+   * (§11/§14, 2026-09-27). Implementations may still launch the work eagerly.
    */
   persistResult(
     result: AsinResult,
@@ -29,12 +34,18 @@ export interface AnalyzeSink {
       inputNotes: string | null;
       inputPromoNotes: string | null;
     },
-  ): void;
+  ): Promise<void>;
 
   /**
-   * Called once per input ASIN carrying CSV tags (the old direct
-   * upsertTagsForAsin call site in runAnalyzeCore). The bulk sink no-ops:
-   * §21 — tags have no data source on that page.
+   * Called once per input ASIN carrying CSV tags, AFTER persistResult has
+   * settled — upsertTagsForAsin silently no-ops when the asins row does not
+   * exist yet, so running it concurrently with the INSERT loses every tag on
+   * a brand-new ASIN (the 2026-09-27 "Tags don't land" report).
+   *
+   * MUST reject on failure. The caller surfaces it per-ASIN; a swallowed
+   * rejection is a silent success without tags, the exact contract
+   * bulk-promote.ts already refuses. The bulk sink no-ops: §21 — tags have
+   * no data source on that page.
    */
-  persistTags(asin: string, tagNames: string[]): void;
+  persistTags(asin: string, tagNames: string[]): Promise<void>;
 }

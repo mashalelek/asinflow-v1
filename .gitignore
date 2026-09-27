@@ -8,3 +8,4 @@ vite.config.ts.*
 google-credentials.json
 velocity-upload*.csv
 data/
+script/scratch/venv/

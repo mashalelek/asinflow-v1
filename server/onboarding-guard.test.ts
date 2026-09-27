@@ -45,6 +45,59 @@ describe("every insert path onboards through onboardNewAsins", () => {
   });
 });
 
+// §11/§14 (2026-09-27). The incident: CSV Tags never landed on brand-new
+// ASINs. upsertTagsForAsin opens with `SELECT id FROM asins` and returns
+// SILENTLY when the row is absent, and the old code launched it alongside
+// the fire-and-forget asins INSERT — so the lookup reliably won and every
+// tag was dropped with no error. Existing ASINs were unaffected, which is
+// why it read as intermittent. The rule: user-supplied fields an insert
+// path was GIVEN must be applied after the row exists, in the same
+// per-ASIN unit of work, with failures surfaced (bulk-promote.ts's
+// contract).
+describe("every insert path applies the tags/notes it was given, after the INSERT", () => {
+  it("writeResult persists the row, THEN the tags — never concurrently", () => {
+    const src = read("routes.ts");
+    const fn = src.slice(src.indexOf("async function writeResult"), src.indexOf("async function runSheetsSync"));
+    const persistIdx = fn.indexOf("await sink.persistResult(");
+    const tagsIdx = fn.indexOf("await sink.persistTags(");
+    expect(persistIdx).toBeGreaterThan(-1);          // awaited, not dropped
+    expect(tagsIdx).toBeGreaterThan(persistIdx);     // ordered AFTER the insert
+  });
+
+  it("a tag failure is surfaced, not swallowed", () => {
+    const src = read("routes.ts");
+    const fn = src.slice(src.indexOf("async function writeResult"), src.indexOf("async function runSheetsSync"));
+    expect(fn).toMatch(/catch/);
+    expect(fn).toMatch(/tag write FAILED/);
+  });
+
+  it("the main sink returns its tag promise instead of catch-and-logging it", () => {
+    const src = read("routes.ts");
+    const sink = src.slice(src.indexOf("export const mainCatalogSink"), src.indexOf("async function writeResult"));
+    expect(sink).toMatch(/return upsertTagsForAsin\(asin, tagNames\);/);
+    // The swallowing form is what lost the tags — it must not come back.
+    expect(sink).not.toMatch(/upsertTagsForAsin\([^)]*\)\.catch/);
+  });
+
+  it("no runAnalyzeCore call site applies tags outside writeResult", () => {
+    const src = read("routes.ts");
+    const core = src.slice(src.indexOf("async function runAnalyzeCore"));
+    // persistTags is called in exactly one place: inside writeResult.
+    expect((src.match(/sink\.persistTags\(/g) ?? []).length).toBe(1);
+    expect(core).not.toMatch(/sink\.persistTags\(/);
+  });
+
+  it("every writeResult call site is awaited and passes the input's tags", () => {
+    const src = read("routes.ts");
+    const calls = src.match(/^\s*(await )?writeResult\(.*$/gm) ?? [];
+    expect(calls.length).toBeGreaterThanOrEqual(5);   // first pass x2, retry x2, final sweep
+    for (const c of calls) {
+      expect(c, `un-awaited writeResult — tags would race the INSERT again:\n${c}`).toMatch(/await writeResult\(/);
+      expect(c, `writeResult call drops its tags argument:\n${c}`).toMatch(/\.tags \?\? null\)/);
+    }
+  });
+});
+
 describe("no synthesized price-absence errors (2026-09-09 poison incident)", () => {
   it("buildResult never synthesizes 'Price unavailable' / 'No pricing or fee data'", () => {
     const src = read("routes.ts");
