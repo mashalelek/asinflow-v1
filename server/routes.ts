@@ -3532,12 +3532,18 @@ export async function registerRoutes(
       res.status(400).json({ message: "No ASINs provided" });
       return;
     }
-    // §21 asymmetry guard (2026-09-08): the MAIN upload path parses promos +
-    // dateAdded (shared mapper) but never writes them — promos here come only
-    // from the sourcing sheet (its route passes its own inputs and keeps Col
-    // O), and asins has no backdatable added_at. Before the mapping-modal fix
-    // the modal dropped both keys, so this held by accident; now it's explicit.
-    const asins: AsinInput[] = asinsRaw.map((a) => ({ ...a, promoNotes: null, addedAtRaw: null }));
+    // §21 asymmetry guard, NARROWED to dateAdded (2026-09-27). The MAIN
+    // upload path parses promos + dateAdded via the shared mapper.
+    //   promos — NOW WRITTEN, insert-only, exactly like notes. Reversed
+    //     because a CSV that carries a discount code per row is the same kind
+    //     of user-supplied field as Notes, and dropping it silently was
+    //     indistinguishable from the tags bug reported the same day. The
+    //     sourcing sheet keeps Col O for the ASINs it owns; these two writers
+    //     don't collide because the CSV value only lands on INSERT — an
+    //     existing ASIN's promo_notes is never touched from here.
+    //   dateAdded — still dropped: `asins` has no backdatable added_at column
+    //     (that is a §21 bulk-only field), so there is nothing to write it to.
+    const asins: AsinInput[] = asinsRaw.map((a) => ({ ...a, addedAtRaw: null }));
 
     res.setHeader("Content-Type", "application/x-ndjson");
     res.setHeader("Transfer-Encoding", "chunked");

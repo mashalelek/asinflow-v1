@@ -32,16 +32,31 @@ describe("buildColumnMapping — completeness", () => {
   });
 });
 
-describe("main-path asymmetry (§21) — promos/dateAdded parsed but never written", () => {
-  it("/api/analyze strips promoNotes and addedAtRaw before the stream", () => {
-    // Source-level pin (repo-hygiene style): now that the modal forwards
-    // both keys, the main upload entry must neutralize them explicitly —
-    // a future "helpful" removal of this guard should fail here, not ship.
+describe("main-path asymmetry (§21) — dateAdded dropped, promos WRITTEN", () => {
+  // Narrowed 2026-09-27. promos used to be nulled here alongside dateAdded;
+  // that was reversed (CSV promos now land on the new-ASIN INSERT, like
+  // notes). dateAdded stays dropped because `asins` has no backdatable
+  // added_at column to write it to.
+  const handler = () => {
     const src = readFileSync(join(__dirname, "../../../server/routes.ts"), "utf8");
     const analyzeIdx = src.indexOf('app.post("/api/analyze"');
     expect(analyzeIdx).toBeGreaterThan(-1);
-    const handler = src.slice(analyzeIdx, analyzeIdx + 2000);
-    expect(handler).toMatch(/promoNotes:\s*null/);
-    expect(handler).toMatch(/addedAtRaw:\s*null/);
+    return src.slice(analyzeIdx, analyzeIdx + 2000);
+  };
+
+  it("/api/analyze still strips addedAtRaw — no column to write it to", () => {
+    expect(handler()).toMatch(/addedAtRaw:\s*null/);
+  });
+
+  it("/api/analyze does NOT strip promoNotes — reinstating the null would re-drop CSV promos", () => {
+    expect(handler()).not.toMatch(/promoNotes:\s*null/);
+  });
+
+  it("promos reach the INSERT branch, insert-only like notes", () => {
+    const src = readFileSync(join(__dirname, "../../../server/routes.ts"), "utf8");
+    const sink = src.slice(src.indexOf("export const mainCatalogSink"), src.indexOf("async function writeResult"));
+    expect(sink).toMatch(/promoNotesForInsert\s*=\s*fromCsvUpload\s*\?\s*inputPromoNotes/);
+    // Existing ASINs keep their prior value — there is no non-insert write.
+    expect(sink).toMatch(/promo_notes: intentionally NO existing-ASIN write/);
   });
 });

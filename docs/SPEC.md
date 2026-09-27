@@ -2125,7 +2125,7 @@ that writes it:
 | `buy_link`, `supplier` | CSV upload / manual edit / Chrome extension |
 | `supplier_sku` | CSV upload / manual edit — analyze MUST NOT write it (asymmetric-UPSERT INSERT branch only on the main path; never in the bulk sink's SET list) |
 | Tags, notes | Manual / CSV upload / Chrome extension |
-| `promo_notes` | Manual edit / Sourcing sync (new-ASIN INSERT branch only — never rewritten on re-sync/re-analyze, so manual edits are never overwritten) |
+| `promo_notes` | Manual edit / Sourcing sync / main CSV upload (2026-09-27) — all three write the new-ASIN INSERT branch only; never rewritten on re-sync/re-analyze/re-upload, so manual edits are never overwritten |
 | `is_wholesale`, `is_oa` | Manual edit |
 | `status` (active/parked/dead — replaced `is_active` 2026-09-07, migration 033) | Manual Park/Unpark/Mark-dead/Revive; Sourcing sync writes `parked`+`discontinued` on freshly-inserted discontinued rows only; the prices stage's `invalid_asin` outcome and the catalog-404 signal (DA-2) write `dead` with their reasons |
 | Aura listing cost (external, not an AF column) | Aura cost sync path (§11) — reads `asin_estimates`, writes only to Aura |
@@ -3470,11 +3470,15 @@ ever wired to a live call site, it must remain unwired on this page.
   main path) or inline edit. BULK-LOCAL free text — stored as TEXT[] on the
   row, rendered as neutral-colored chips, no relationship to main-page tags
   even when names match. Same §14 contract.
-- Promos (2026-09-04): CSV `promos` column (new alias: promos/promo/promo
-  notes) or inline edit → `promo_notes`. NOTE THE ASYMMETRY, on purpose:
-  on the MAIN page promo_notes still comes ONLY from the sourcing sheet —
-  the new CSV alias is parsed but ignored on the main path. Do not "fix"
-  this without deciding to.
+- Promos (2026-09-04; main path reversed 2026-09-27): CSV `promos` column
+  (aliases promos/promo/promo notes) or inline edit → `promo_notes`. The
+  main page originally parsed the CSV column and IGNORED it, so that
+  `promo_notes` came only from the sourcing sheet. **That asymmetry is
+  retired** — the main CSV path now writes promos on the new-ASIN INSERT
+  branch, the same insert-only contract as notes and `supplier_sku`. An
+  existing ASIN's `promo_notes` is still never rewritten from any upload
+  path, which is what keeps the CSV and the sourcing sheet from
+  overwriting each other (and manual edits from being clobbered).
 - Date Added (2026-09-04; meaning pinned 2026-09-08): on Bulk Calc,
   **Date Added IS the lead date** — the day the ASIN appeared on the
   Spark leads list. It is NOT the upload timestamp (upload time is not
@@ -3505,9 +3509,22 @@ ever wired to a live call site, it must remain unwired on this page.
   in the field list (auto-matched, green check) but dropped by
   handleContinue's literal, optional in the type so tsc stayed silent, and
   every downstream layer nulled gracefully → silent NOW() on all rows. A
-  completeness test pins builder-emits-every-field-key, and pins that the
-  MAIN path keeps ignoring promos/dateAdded (parses, never writes — the
-  deliberate asymmetry above).
+  completeness test pins builder-emits-every-field-key, and pins the
+  main-path asymmetry below.
+- **Main-path asymmetry, narrowed 2026-09-27: promos ARE written,
+  dateAdded is not.** `/api/analyze` used to null both. Now:
+  - `promoNotes` — **written, insert-only**, the same contract as notes: the
+    value lands on the new-ASIN INSERT branch and an existing ASIN's
+    `promo_notes` is never touched from this path. Reversed because a CSV
+    carrying a discount code per row is the same kind of user-supplied field
+    as Notes, and dropping it silently was indistinguishable from the tags
+    bug found the same day. The sourcing sheet still owns Col O for the
+    ASINs it syncs; the two writers do not collide precisely because the CSV
+    value is insert-only.
+  - `addedAtRaw` — **still dropped**, and the guard stays explicit. `asins`
+    has no backdatable `added_at` column (that is a §21 bulk-only field), so
+    there is nothing to write it to. A test pins that the `promoNotes: null`
+    strip does NOT come back and that the `addedAtRaw: null` strip does.
 - Everything else: the bulk run pipeline (2026-09-09 — replaces the
   Product Info core here, which since 2026-09-07 reads prices from the
   MAIN tables and therefore could never price a bulk-only ASIN: the
