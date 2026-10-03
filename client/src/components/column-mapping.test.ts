@@ -60,3 +60,24 @@ describe("main-path asymmetry (§21) — dateAdded dropped, promos WRITTEN", () 
     expect(sink).toMatch(/promo_notes: intentionally NO existing-ASIN write/);
   });
 });
+
+
+// §6 Buy Link (2026-10-03): the ASINs-page export emits header "Buy Link"
+// whenever the column is visible, and that export is an upload source — so
+// the header has to be a mapper alias on BOTH matchers. It already was;
+// these pin it so a future alias cleanup can't silently break the round-trip.
+describe("\"Buy Link\" round-trips from the ASINs export into the upload mapper", () => {
+  it("the modal's matchPatterns claim it for buyLink", () => {
+    const f = MAPPING_FIELDS.find((x) => x.key === "buyLink")!;
+    expect(f.matchPatterns.some((re) => re.test("Buy Link"))).toBe(true);
+  });
+
+  it("the server's COLUMN_NAME_ALIASES lists it verbatim", () => {
+    const src = readFileSync(join(__dirname, "../../../server/routes.ts"), "utf8");
+    const i = src.indexOf("const COLUMN_NAME_ALIASES");
+    expect(i).toBeGreaterThan(-1);
+    const block = src.slice(i, src.indexOf("};", i));
+    const line = block.split("\n").find((l) => l.trim().startsWith("buyLink:")) ?? "";
+    expect(line).toContain('"buy link"');
+  });
+});

@@ -431,6 +431,9 @@ function computeRowValue(
   switch (colId) {
     case "brand": return result.catalogData.brand;
     case "supplier": return extractDomain(result.buyLink);
+    // §6 Buy Link: the FULL url. Supplier above is the derived domain of
+    // this same stored value — one field, two accessors, never two writers.
+    case "buyLink": return result.buyLink ?? null;
     case "supplierSku": return result.supplierSku ?? null;
     case "cogs": return result.actualCogs ?? null;
     case "estCogs": return result.estimatedCogs ?? null;
@@ -1012,6 +1015,39 @@ export function ResultsTable({
                           onResultUpdate(result.asin, { buyLink: r.buyLink } as any);
                         }}
                       />
+                    );
+                  } else if (colId === "buyLink" && onResultUpdate) {
+                    // §6 Buy Link (2026-10-03): the full URL, inline-editable
+                    // through the SAME BuyLinkEditor the Product cell uses —
+                    // one writer path, one endpoint. Supplier re-derives from
+                    // the saved value on the next render (§14).
+                    const u = result.buyLink;
+                    content = (
+                      <span className="flex items-center gap-0.5 min-w-0">
+                        {u ? (
+                          u.length > 30 ? (
+                            <Tooltip>
+                              <TooltipTrigger asChild>
+                                <a href={u} target="_blank" rel="noopener noreferrer" className="text-primary text-sm hover:underline truncate cursor-help" onClick={(e) => e.stopPropagation()}>
+                                  {u.substring(0, 30) + "..."}
+                                </a>
+                              </TooltipTrigger>
+                              <TooltipContent side="top" className="max-w-[300px]">
+                                <p className="text-xs break-all">{u}</p>
+                              </TooltipContent>
+                            </Tooltip>
+                          ) : (
+                            <a href={u} target="_blank" rel="noopener noreferrer" className="text-primary text-sm hover:underline truncate" onClick={(e) => e.stopPropagation()}>{u}</a>
+                          )
+                        ) : (
+                          <span className="text-muted-foreground text-sm">-</span>
+                        )}
+                        <BuyLinkEditor
+                          asin={result.asin}
+                          currentLink={result.buyLink}
+                          onChanged={(buyLink) => onResultUpdate(result.asin, { buyLink })}
+                        />
+                      </span>
                     );
                   } else if (colId === "dateAdded" && onDateAddedSave && onResultUpdate) {
                     content = (
@@ -2027,6 +2063,34 @@ export function renderCell(
             </span>
           ))}
         </div>
+      );
+    }
+
+    case "buyLink": {
+      // Read-only FALLBACK (contexts with no update handler). With
+      // onResultUpdate present the body loop renders the BuyLinkEditor
+      // variant instead (§6 inline edit). Truncate+tooltip like notes.
+      const u = result.buyLink;
+      if (!u) return <span className="text-muted-foreground text-sm">-</span>;
+      const link = (
+        <a
+          href={u}
+          target="_blank"
+          rel="noopener noreferrer"
+          className="text-primary text-sm hover:underline"
+          onClick={(e) => e.stopPropagation()}
+        >
+          {u.length > 30 ? u.substring(0, 30) + "..." : u}
+        </a>
+      );
+      if (u.length <= 30) return link;
+      return (
+        <Tooltip>
+          <TooltipTrigger asChild><span className="cursor-help">{link}</span></TooltipTrigger>
+          <TooltipContent side="top" className="max-w-[300px]">
+            <p className="text-xs break-all">{u}</p>
+          </TooltipContent>
+        </Tooltip>
       );
     }
 

@@ -283,7 +283,7 @@ representations of the same logical "narrow to specific ASIN(s)" intent.
 
 ### Six groups (canonical order)
 
-1. **Description** — Product, Category, Brand, Supplier, Supplier SKU
+1. **Description** — Product, Category, Brand, Supplier, Buy Link, Supplier SKU
 2. **Stock** — Stock, Available (FBA), Ordered, **FBA Stock**, Reserved,
    Sent to FBA, Days Left
 3. **Actuals** — Actual COGS, Actual Prep Cost, Actual Units Sold, Refunds,
@@ -334,6 +334,29 @@ stamp (the conclusive nothing-is-for-sale state, check time in the
 tooltip); a plain dash when never fetched. "⚠ Error" renders ONLY for a
 genuine stored `asin_estimates.error` — never a synthesized
 absence message (the 2026-09-09 poisoned-cell incident, §14).
+
+### Buy Link column (2026-10-03)
+
+The full `asins.buy_link` URL as its own Description-group column, sitting
+between Supplier and Supplier SKU. Renders as a clickable link
+(`target="_blank"`, `rel="noopener noreferrer"`) truncated at 30 chars with
+the value on hover — the same truncate-with-tooltip interaction as Notes and
+Promos.
+
+**One writer path.** Inline editing reuses `BuyLinkEditor`, the pencil-popover
+the Product cell already uses, PUTting `/api/asins/:asin/buy-link`. No second
+editor and no second endpoint: Supplier keeps DERIVING from the same stored
+URL via `cleanBuyLink` + `extractDomain` (§14), so editing Buy Link updates
+Supplier in the same round-trip, and clearing the URL blanks both.
+
+**Default hidden; available in the column picker.** (`defaultVisible: false`.)
+No per-view default is possible today: `ColumnDef.defaultVisible` is a single
+global boolean with no per-preset dimension — the §21 bulk page gets its own
+defaults only by rebuilding the column list with `BULK_DEFAULT_VISIBLE` — and
+there is only one default preset anyway (see "Default view presets").
+
+Keepa-style text filter — the `getFilterType` default, no registration needed.
+Sorting and filtering read `getRowValue`, the one accessor (§14).
 
 ### Supplier SKU column (2026-08-05)
 
@@ -517,10 +540,30 @@ sort/filter change. Non-sortable, non-filterable.
 
 ### Default view presets
 
-The three default view presets (Full View, Replenishment, Sourcing) define
-initial column visibility, sort, and applied filters. The following columns
-are available in the column picker but are NOT included in any preset by
-default — the user enables them per-need:
+**There is ONE default preset: Full View.** It defines initial column
+visibility, sort, and applied filters.
+
+**Replenishment and Sourcing are no longer presets (removed 2026-05-23).**
+They were seeded as built-ins on 2026-04-04 and deleted in the B3 cutover by
+`database/delete_replenishment_sourcing_presets.sql`, with the rows backed up
+re-runnably in `database/backup_deleted_view_presets_20260523.sql`. Why each
+went:
+- **Replenishment** — its FILTER LOGIC moved to the Replens scorecard tile,
+  which calls `isReplens()` in `shared/profitability.ts`. §4 documents that
+  filter, and §4 is still live: it is a **filter reached from a scorecard
+  tile**, not a preset. Only the preset wrapper was removed.
+- **Sourcing** — carried no filter at all, just a column-visibility set, and
+  was unused.
+
+Earlier wording in this section claimed three default presets; that was
+stale from 2026-05-23 until corrected 2026-10-03. `view_presets` currently
+holds exactly one row. User-saved presets are unaffected — they are created
+through `POST /api/view-presets` with `is_default = FALSE`, and the DELETE
+endpoint still blocks `is_default = TRUE` rows, which is why removing the
+built-ins needed that one-time script.
+
+The following columns are available in the column picker but are NOT included
+in the default preset — the user enables them per-need:
 
 - Date Added
 - Category
@@ -3610,6 +3653,12 @@ survives Refresh Prices. Truncate-with-hover render like the main Notes
 cell. Export CSV carries Tags (comma-joined — re-imports through the same
 split), Promos, Date Added, Supplier, and Notes (header "Notes",
 alias-recognized — export → re-upload round-trips).
+
+The ASINs page's export feeds this page's upload: its **"Buy Link"** header is
+an exact alias of the mapper's `buyLink` field on BOTH matchers — the server's
+`COLUMN_NAME_ALIASES` ("buy link") and the modal's `matchPatterns`
+(`/buy\s*link/i`) — so ASINs-page export → Bulk Calc upload carries the full
+URL with no re-mapping.
 
 No date-range selector: nothing here is range-scoped.
 

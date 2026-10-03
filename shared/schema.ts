@@ -568,7 +568,7 @@ export function extractDomain(url: string | null): string | null {
 
 export const DEFAULT_COLUMNS = [
   // Group 1 — Description
-  "product", "category", "brand", "supplier", "supplierSku",
+  "product", "category", "brand", "supplier", "buyLink", "supplierSku",
   // Group 2 — Stock
   "stock", "availableFba", "ordered", "fbaStock", "reserved", "sentToFba", "daysLeft",
   // Group 3 — Actuals
@@ -611,6 +611,10 @@ export const ALL_COLUMNS: ColumnDef[] = [
   { id: "category", label: "Category", defaultVisible: false, align: "left", group: "description" },
   { id: "brand", label: "Brand", defaultVisible: true, align: "left", group: "description" },
   { id: "supplier", label: "Supplier", defaultVisible: true, align: "left", group: "description" },
+  // §6 Buy Link (2026-10-03): the full asins.buy_link URL. Supplier stays the
+  // DERIVED domain of this same value (cleanBuyLink + extractDomain, §14) —
+  // one stored field, two columns, one writer (BuyLinkEditor).
+  { id: "buyLink", label: "Buy Link", defaultVisible: false, align: "left", group: "description" },
   { id: "supplierSku", label: "Supplier SKU", defaultVisible: false, align: "left", group: "description" },
   // Group 2 — Stock
   { id: "stock", label: "Stock", defaultVisible: true, align: "right", group: "stock" },
