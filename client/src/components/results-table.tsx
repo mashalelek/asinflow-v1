@@ -306,6 +306,14 @@ interface ResultsTableProps {
   onToggleSelect?: (asin: string) => void;
   onSelectAllPage?: (asins: string[]) => void;
   onClearSelection?: () => void;
+  // §21 Bulk Buy List / Hold (2026-10-03): when supplied, the frozen header's
+  // cart and clock icons become buttons acting on the checkbox selection.
+  // Omitted (analytics, repricer) → the icons stay the plain labels they were.
+  onBulkBuy?: () => void;
+  onBulkHold?: () => void;
+  bulkBuyLabel?: string;   // resolved direction + count, from bulkToggleLabel
+  bulkHoldLabel?: string;
+  bulkActionsDisabled?: boolean;
   sortCol: ColumnId | null;
   sortDir: "asc" | "desc";
   onSort: (colId: ColumnId) => void;
@@ -552,6 +560,11 @@ export function ResultsTable({
   onToggleSelect,
   onSelectAllPage,
   onClearSelection,
+  onBulkBuy,
+  onBulkHold,
+  bulkBuyLabel,
+  bulkHoldLabel,
+  bulkActionsDisabled = false,
   onStockClick,
   columns = ALL_COLUMNS,
   productBadge,
@@ -763,8 +776,49 @@ export function ResultsTable({
             </th>
             <th className="sticky z-30 table-header-stone text-center text-xs font-medium px-1 py-1" style={{ left: cartLeft, width: frozenColWidth.cart, minWidth: frozenColWidth.cart }}>
               <div className="flex flex-col items-center gap-px">
-                <ShoppingCart className="h-3 w-3 text-muted-foreground" />
-                <Clock className="h-3 w-3 text-muted-foreground" />
+                {onBulkBuy ? (
+                  <Tooltip>
+                    <TooltipTrigger asChild>
+                      {/* span wrapper: a disabled button fires no pointer
+                          events, so the tooltip would never show the
+                          "Select rows first" reason for the disabled state. */}
+                      <span className={bulkActionsDisabled ? "cursor-not-allowed" : ""}>
+                        <button
+                          onClick={onBulkBuy}
+                          disabled={bulkActionsDisabled}
+                          className="p-0 leading-none disabled:opacity-40 disabled:pointer-events-none"
+                          data-testid="btn-bulk-cart"
+                          aria-label={bulkBuyLabel}
+                        >
+                          <ShoppingCart className={`h-3 w-3 ${bulkActionsDisabled ? "text-muted-foreground" : "text-blue-500 hover:text-blue-600"} transition-colors`} />
+                        </button>
+                      </span>
+                    </TooltipTrigger>
+                    <TooltipContent side="right" className="text-xs">{bulkBuyLabel}</TooltipContent>
+                  </Tooltip>
+                ) : (
+                  <ShoppingCart className="h-3 w-3 text-muted-foreground" />
+                )}
+                {onBulkHold ? (
+                  <Tooltip>
+                    <TooltipTrigger asChild>
+                      <span className={bulkActionsDisabled ? "cursor-not-allowed" : ""}>
+                        <button
+                          onClick={onBulkHold}
+                          disabled={bulkActionsDisabled}
+                          className="p-0 leading-none disabled:opacity-40 disabled:pointer-events-none"
+                          data-testid="btn-bulk-hold"
+                          aria-label={bulkHoldLabel}
+                        >
+                          <Clock className={`h-3 w-3 ${bulkActionsDisabled ? "text-muted-foreground" : "text-amber-600 hover:text-amber-700"} transition-colors`} />
+                        </button>
+                      </span>
+                    </TooltipTrigger>
+                    <TooltipContent side="right" className="text-xs">{bulkHoldLabel}</TooltipContent>
+                  </Tooltip>
+                ) : (
+                  <Clock className="h-3 w-3 text-muted-foreground" />
+                )}
               </div>
             </th>
             {/* Product th maxWidth matches the body td (2026-09-08): without

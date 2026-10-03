@@ -27,6 +27,7 @@ import { loadColumnConfig, type ColumnConfig } from "@/lib/columns";
 import { loadSettings, loadIncludeInbound, saveIncludeInbound, loadPriceSource, savePriceSource } from "@/lib/settings";
 import { loadShowGated, saveShowGated, loadShowMeltable, saveShowMeltable, loadShowParked, loadShowDead } from "@/components/visibility-toggles";
 import { loadBuyList, saveBuyList, loadOnHoldList, saveOnHoldList } from "@/lib/buy-hold";
+import { planBulkSetToggle, bulkToggleLabel, promoteTargets, applyBulkPlan, type BulkSetPlan } from "@/lib/bulk-buy-hold";
 import { useToast } from "@/hooks/use-toast";
 
 // §21 column subset: Description + full Estimates + full Sellers + the four
@@ -162,6 +163,12 @@ export default function BulkCalc() {
   const [buySet, setBuySet] = useState<Set<string>>(loadBuyList);
   const [onHoldSet, setOnHoldSet] = useState<Set<string>>(loadOnHoldList);
   const [selectedSet, setSelectedSet] = useState<Set<string>>(new Set());
+  // §21 bulk cart/hold confirm — non-null ONLY when the plan would promote
+  // (§14: the dialog appears only when the side-effect count is non-zero,
+  // so it never becomes noise people click through).
+  const [pendingBulkSet, setPendingBulkSet] = useState<
+    { which: "buy" | "hold"; plan: BulkSetPlan; toPromote: string[] } | null
+  >(null);
   const [sortCol, setSortCol] = useState<ColumnId | null>(null);
   // §21 column filters (2026-09-04) — enables the Tags dropdown among others.
   const [colFilters, setColFilters] = useState<FilterMap>({});
@@ -511,6 +518,84 @@ export default function BulkCalc() {
     withAutoPromote(asin, adding, () => applyHoldToggle(asin, adding), () => applyHoldToggle(asin, false));
   }, [onHoldSet, withAutoPromote, applyHoldToggle]);
 
+
+  // §21 Bulk Buy List / Hold (2026-10-03). Differs from the single-row path
+  // above in ORDER: promote FIRST, then add only what landed. A bulk action
+  // can fail for an arbitrary subset, so there is no coherent optimistic
+  // revert — the set must only ever contain ASINs that really made it.
+  const buyPlan = useMemo(
+    () => planBulkSetToggle(Array.from(selectedSet), buySet),
+    [selectedSet, buySet],
+  );
+  const holdPlan = useMemo(
+    () => planBulkSetToggle(Array.from(selectedSet), onHoldSet),
+    [selectedSet, onHoldSet],
+  );
+
+  const commitBulkSet = useCallback(async (which: "buy" | "hold", plan: BulkSetPlan, toPromote: string[]) => {
+    const name = which === "buy" ? "Buy List" : "Hold";
+    // landed = may be written to the set. Starts as everything the plan
+    // targets; promote failures are removed below.
+    const landed = new Set(plan.targets);
+    let promotedCount = 0;
+    const failed: Array<{ asin: string; message?: string }> = [];
+
+    if (toPromote.length > 0) {
+      try {
+        const { counts, results } = await promoteAsins(toPromote);
+        promotedCount = counts.added;
+        for (const r of results) {
+          // already_in_database is NOT an error — it proceeds normally.
+          if (r.outcome === "error") { landed.delete(r.asin); failed.push(r); }
+        }
+        setInDbSet((prev) => {
+          const next = new Set(prev);
+          for (const r of results) if (r.outcome === "added" || r.outcome === "already_in_database") next.add(r.asin);
+          return next;
+        });
+      } catch (e: any) {
+        // Whole-request failure: nothing was promoted, so nothing that
+        // needed promoting may enter the set.
+        for (const a of toPromote) { landed.delete(a); }
+        toast({ title: `Couldn't add to ${name}`, description: e.message, variant: "destructive" });
+        return;
+      }
+    }
+
+    const next = applyBulkPlan(plan, landed, {
+      target: which === "buy" ? buySet : onHoldSet,
+      other: which === "buy" ? onHoldSet : buySet,
+    });
+    if (which === "buy") {
+      setBuySet(next.target); saveBuyList(next.target);
+      setOnHoldSet(next.other); saveOnHoldList(next.other);
+    } else {
+      setOnHoldSet(next.target); saveOnHoldList(next.target);
+      setBuySet(next.other); saveBuyList(next.other);
+    }
+
+    const written = plan.targets.filter((a) => landed.has(a)).length;
+    const parts = [plan.direction === "add" ? `Added ${written} to ${name}` : `Removed ${written} from ${name}`];
+    if (promotedCount > 0) parts.push(`${promotedCount} added to database`);
+    if (failed.length > 0) parts.push(`${failed.length} failed (see list)`);
+    toast({
+      title: parts.join(" · "),
+      description: failed.length > 0
+        ? `Failed: ${failed.map((f) => `${f.asin}${f.message ? ` (${f.message})` : ""}`).join(", ")}`
+        : undefined,
+      variant: failed.length > 0 ? "destructive" : undefined,
+    });
+  }, [promoteAsins, buySet, onHoldSet, toast]);
+
+  const startBulkSet = useCallback((which: "buy" | "hold") => {
+    const plan = which === "buy" ? buyPlan : holdPlan;
+    if (plan.selectedCount === 0 || plan.targets.length === 0) return;
+    const toPromote = promoteTargets(plan, inDbSet);
+    // Confirm ONLY when something would be promoted (§14).
+    if (toPromote.length > 0) { setPendingBulkSet({ which, plan, toPromote }); return; }
+    void commitBulkSet(which, plan, []);
+  }, [buyPlan, holdPlan, inDbSet, commitBulkSet]);
+
   const handleSort = useCallback((colId: ColumnId) => {
     setSortCol((prev) => {
       if (prev === colId) {
@@ -712,6 +797,11 @@ export default function BulkCalc() {
           columnConfig={columnConfig}
           activeFilter="all"
           buySet={buySet}
+          onBulkBuy={() => startBulkSet("buy")}
+          onBulkHold={() => startBulkSet("hold")}
+          bulkBuyLabel={bulkToggleLabel(buyPlan, "Buy List")}
+          bulkHoldLabel={bulkToggleLabel(holdPlan, "Hold")}
+          bulkActionsDisabled={selectedSet.size === 0}
           onToggleBuy={handleToggleBuy}
           onHoldSet={onHoldSet}
           onToggleHold={handleToggleHold}
@@ -770,6 +860,40 @@ export default function BulkCalc() {
           <DialogFooter className="gap-2">
             <Button variant="outline" onClick={() => { setPendingUpload(null); setCreateError(null); }} data-testid="button-name-cancel">Cancel</Button>
             <Button onClick={createList} disabled={!newListName.trim()} data-testid="button-name-save">Create list</Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      {/* §21 bulk cart/hold confirm (2026-10-03). Shown ONLY when the plan
+          would promote — zero to promote goes straight through (§14). It
+          names the promote count, which is the side effect the button
+          label does not mention. */}
+      <Dialog open={pendingBulkSet != null} onOpenChange={(v) => { if (!v) setPendingBulkSet(null); }}>
+        <DialogContent className="sm:max-w-md" data-testid="dialog-bulk-set-confirm">
+          <DialogHeader>
+            <DialogTitle>
+              {pendingBulkSet
+                ? `${pendingBulkSet.plan.direction === "add" ? "Add" : "Remove"} ${pendingBulkSet.plan.selectedCount} ${pendingBulkSet.plan.direction === "add" ? "to" : "from"} ${pendingBulkSet.which === "buy" ? "Buy List" : "Hold"}`
+                : ""}
+            </DialogTitle>
+            <DialogDescription data-testid="text-bulk-set-promote-count">
+              {pendingBulkSet
+                ? `${pendingBulkSet.toPromote.length} of these aren't in your database yet and will be added.`
+                : ""}
+            </DialogDescription>
+          </DialogHeader>
+          <DialogFooter className="gap-2">
+            <Button variant="outline" onClick={() => setPendingBulkSet(null)} data-testid="button-bulk-set-cancel">Cancel</Button>
+            <Button
+              data-testid="button-bulk-set-confirm"
+              onClick={() => {
+                const p = pendingBulkSet;
+                setPendingBulkSet(null);
+                if (p) void commitBulkSet(p.which, p.plan, p.toPromote);
+              }}
+            >
+              Confirm
+            </Button>
           </DialogFooter>
         </DialogContent>
       </Dialog>

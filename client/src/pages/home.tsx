@@ -24,6 +24,7 @@ import { loadSettings, loadIncludeInbound, saveIncludeInbound, loadPriceSource, 
 import { useSearch } from "wouter";
 import { loadColumnConfig, type ColumnConfig } from "@/lib/columns";
 import { loadBuyList, saveBuyList, loadOnHoldList, saveOnHoldList } from "@/lib/buy-hold";
+import { planBulkSetToggle, bulkToggleLabel, applyBulkPlan } from "@/lib/bulk-buy-hold";
 import { fetchLongSync } from "@/lib/long-sync";
 import { Sun, Moon, BarChart3, Zap, AlertTriangle, X, Search, RefreshCw, Archive, Sheet, Database, ShoppingCart, DollarSign, FileSpreadsheet, Upload, Plus, ScanSearch, History } from "lucide-react";
 import { Checkbox } from "@/components/ui/checkbox";
@@ -755,6 +756,42 @@ export default function Home() {
       return next;
     });
   }, []);
+
+
+  // §21 Bulk Buy List / Hold (2026-10-03). Same shared sets, same toggle
+  // semantics as Bulk Calc — minus the promote step: everything on this
+  // page is already in `asins`, so every selected ASIN lands.
+  const buyPlan = useMemo(
+    () => planBulkSetToggle(Array.from(selectedSet), buySet),
+    [selectedSet, buySet],
+  );
+  const holdPlan = useMemo(
+    () => planBulkSetToggle(Array.from(selectedSet), onHoldSet),
+    [selectedSet, onHoldSet],
+  );
+
+  const runBulkSet = useCallback((which: "buy" | "hold") => {
+    const plan = which === "buy" ? buyPlan : holdPlan;
+    if (plan.selectedCount === 0 || plan.targets.length === 0) return;
+    const landed = new Set(plan.targets); // nothing to promote → all land
+    const next = applyBulkPlan(plan, landed, {
+      target: which === "buy" ? buySet : onHoldSet,
+      other: which === "buy" ? onHoldSet : buySet,
+    });
+    if (which === "buy") {
+      setBuySet(next.target); saveBuyList(next.target);
+      setOnHoldSet(next.other); saveOnHoldList(next.other);
+    } else {
+      setOnHoldSet(next.target); saveOnHoldList(next.target);
+      setBuySet(next.other); saveBuyList(next.other);
+    }
+    const name = which === "buy" ? "Buy List" : "Hold";
+    toast({
+      title: plan.direction === "add"
+        ? `Added ${plan.targets.length} to ${name}`
+        : `Removed ${plan.targets.length} from ${name}`,
+    });
+  }, [buyPlan, holdPlan, buySet, onHoldSet, toast]);
 
   const handleClearBuyList = useCallback(() => {
     setBuySet(new Set());
@@ -1782,6 +1819,11 @@ export default function Home() {
               onHoldSet={onHoldSet}
               onToggleHold={handleToggleHold}
               onToggleBuy={handleToggleBuy}
+              onBulkBuy={() => runBulkSet("buy")}
+              onBulkHold={() => runBulkSet("hold")}
+              bulkBuyLabel={bulkToggleLabel(buyPlan, "Buy List")}
+              bulkHoldLabel={bulkToggleLabel(holdPlan, "Hold")}
+              bulkActionsDisabled={selectedSet.size === 0}
               selectedSet={selectedSet}
               onToggleSelect={handleToggleSelect}
               onSelectAllPage={(asins) => setSelectedSet(new Set(asins))}

@@ -2406,6 +2406,27 @@ sourcing sync's discontinued-on-insert rule (reason `discontinued`).
 Parked rows keep the archived styling; dead rows get a muted
 "dead · <reason>" tag in the Product cell — no row tints (§7).
 
+### A bulk write states its blast radius before it runs
+
+A batch action reached from a header or toolbar control acts on the
+**explicit selection and nothing else**. No selection → the control is
+disabled with a tooltip saying so; there is no "apply to everything"
+fallback, because the difference between 3 rows and 1,946 is invisible at
+the moment of clicking.
+
+When such an action has a side effect beyond the one named on the control —
+bulk cart/hold ALSO promoting rows into `asins` (§21) — the count of that
+side effect is stated in a confirm dialog before anything runs, and the
+dialog appears only when the count is non-zero so it never becomes noise
+people click through. Concretely: **bulk cart/hold never promotes without a
+selection, and never without the confirm when the promote count is > 0.**
+
+Ordering follows from the same idea: promote first, update the set only for
+the ASINs that actually landed. A single-row action can flip optimistically
+and revert, because there is exactly one thing to undo. A bulk action can
+fail for an arbitrary subset, so there is no coherent revert — the set must
+only ever contain what really succeeded.
+
 ### Fail-closed rules must name their victim and their exit
 
 A rule that blocks a legitimate action to prevent a worse one must state, in
@@ -3698,7 +3719,58 @@ The frozen row-action columns stay: **Buy List and Hold are SHARED with the
 main page** — same localStorage sets, same toggle handlers, so carting an
 ASIN here shows on the main page's Buy List and vice versa. The **selection
 checkbox drives Export CSV** on this page: rows selected → export the
-selection; none selected → export all. No other batch actions.
+selection; none selected → export all. It also drives the bulk Buy List /
+Hold header actions (below) and the toolbar's "Add to database".
+
+#### Bulk Buy List / Hold (2026-10-03)
+
+The cart and clock icons in the frozen column header were decoration; they
+are now **buttons that act on the checkbox selection**. Both pages get them
+— the component is shared, so the only difference is the promote step.
+
+1. **Selection-only, never "all".** No selection → both buttons disabled,
+   tooltip "Select rows first". There is no act-on-everything path: the same
+   reasoning as "Add to database", where a 1,946-row action must be
+   deliberate (§14).
+2. **Toggle semantics, per set.** If EVERY selected ASIN is already in the
+   set → remove them all. Otherwise → add every selected ASIN not yet in it,
+   and remove none. So a mixed selection always resolves toward "add", and
+   the operation is never partly-add-partly-remove. The tooltip states the
+   resolved direction and count before the click: "Add 52 to Buy List",
+   "Remove 52 from Buy List", "Add 52 to Hold".
+3. **Buy and Hold stay mutually exclusive**, exactly as the single-row
+   toggle already behaves: adding a selection to Buy List removes those
+   ASINs from Hold, and vice versa. Removing from a set never touches the
+   other.
+4. **Promotion first, then the set** (Bulk Calc only). Selected ASINs not in
+   `asins` are promoted through the existing `POST
+   /api/bulk-lists/:id/promote {asins}` — same per-ASIN outcomes, same
+   one-transaction-per-ASIN rule — and only then is the set updated. An ASIN
+   whose promote returns `error` is **not** added to the set;
+   `already_in_database` is not an error and proceeds normally. This is the
+   opposite order from the single-row cart/hold click, which flips the set
+   optimistically and reverts on failure: a bulk action can fail for a
+   subset, so there is no single thing to revert, and the set must only ever
+   contain ASINs that really landed.
+5. **One confirm dialog, only when the promote count is > 0.** "Add 52 to
+   Buy List. 30 of these aren't in your database yet and will be added." /
+   Confirm / Cancel — shown BEFORE anything runs. Zero to promote → no
+   dialog, immediate action. The remove direction never promotes and never
+   confirms.
+
+Outcome reporting is one toast: "Added 50 to Buy List · 30 added to database
+· 2 failed (see list)", with the failed ASINs listed. Icons flip on refetch
+as they do today.
+
+**This is the THIRD explicit user action that reaches the promote endpoint**,
+after the toolbar's "Add to database" and the single-row cart/hold click.
+The isolation guarantee is unchanged — promotion is still only ever
+user-initiated, and still only through `insertPromotedAsin`.
+
+The main ASINs page gets the same two header buttons with the same toggle
+semantics and the same shared localStorage sets, minus steps 4 and 5:
+everything there is already in `asins`, so there is nothing to promote and
+no dialog.
 
 `ResultsTable` and `ColumnManager` take an optional `columns?: ColumnDef[]`
 prop defaulting to `ALL_COLUMNS`. `lib/columns.ts` takes a parameterized
@@ -3752,6 +3824,11 @@ it is reachable only from an explicit user action:
    bug: the sets are shared localStorage, but the ASINs page's Buy List
    view inner-joins against `asins` — a bulk-only ASIN carted here was
    silently invisible there.)
+3. **Bulk Buy List / Hold from the frozen column header** (2026-10-03) —
+   acts on the checkbox selection; none selected → disabled. Promotes the
+   not-yet-in-`asins` members of the selection, THEN updates the set,
+   behind one confirm dialog whenever the promote count is > 0. Error
+   ASINs are excluded from the set. See "Bulk Buy List / Hold" above.
 
 Per promoted ASIN, one transaction: a new `asins` row (status `active`)
 plus its `asin_estimates` row, carrying the bulk row's user-controlled
