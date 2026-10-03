@@ -13,6 +13,14 @@ export interface MappingField {
   label: string;
   required: boolean;
   matchPatterns: RegExp[];
+  // Headers that must NEVER auto-match this field, even when matchPatterns
+  // hit. Needed once the ASINs export started emitting group-qualified
+  // headers (§6, 2026-10-03): /\bcogs\b/i matches "Actual COGS" as readily
+  // as "Estimated COGS", and autoMatch takes the FIRST matching header in
+  // FILE order — where Actuals precede Estimates. Without this, Est. COGS
+  // would bind to the Actual column and the real Estimated column would go
+  // unmapped. Actual COGS is PO/SellerBoard-sourced (§2), never uploaded.
+  excludePatterns?: RegExp[];
 }
 
 export const MAPPING_FIELDS: MappingField[] = [
@@ -27,6 +35,7 @@ export const MAPPING_FIELDS: MappingField[] = [
     label: "Est. COGS",
     required: true,
     matchPatterns: [/^cogs$/i, /cost\s*of\s*goods/i, /\bcogs\b/i, /\bunit\s*cost\b/i, /\bpurchase\s*price\b/i, /\bprice\s*paid\b/i, /\bbuy\s*cost\b/i, /\bcost\b/i, /est.*cogs/i],
+    excludePatterns: [/^actual\b/i],
   },
   {
     key: "buyLink",
@@ -39,6 +48,7 @@ export const MAPPING_FIELDS: MappingField[] = [
     label: "Prep Cost",
     required: false,
     matchPatterns: [/prep\s*cost/i, /\bprep\b/i],
+    excludePatterns: [/^actual\b/i],
   },
   {
     key: "additionalFees",

@@ -34,7 +34,18 @@ const PRODUCT_SUB_COLUMNS: { key: string; label: string; standaloneId?: ColumnId
   { key: "title", label: "Title", getValue: (r) => r.catalogData.title },
 ];
 
-const colLabelMap = new Map(ALL_COLUMNS.map((c) => [c.id, c.label]));
+// §6 Export CSV headers (2026-10-03): group-qualified so the Actuals and
+// Estimates groups don't both emit a column called "COGS". The old output
+// was not "COGS.1" — it was the header "COGS" written TWICE, which Excel /
+// Sheets / pandas then disambiguate on read. The qualifier already drives
+// the table header and the column picker; export reads the same field.
+//
+// "Estimated COGS" / "Estimated Prep Cost" are mapper aliases, so the export
+// re-imports. "Actual COGS" / "Actual Prep Cost" deliberately are NOT —
+// actual COGS comes from the PO sheet and SellerBoard (§2), never a CSV.
+const colLabelMap = new Map(
+  ALL_COLUMNS.map((c) => [c.id, c.qualifier ? `${c.qualifier} ${c.label}` : c.label]),
+);
 
 function buildExportColumns(
   columnConfig: ColumnConfig,

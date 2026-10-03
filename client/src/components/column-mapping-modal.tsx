@@ -31,13 +31,19 @@ interface ColumnMappingModalProps {
   cogsRequired?: boolean;
 }
 
-function autoMatch(headers: string[]): Record<string, string> {
+// Exported for test (2026-10-03): the export -> re-import binding is the
+// thing that broke when headers became group-qualified, so the test drives
+// THIS function over a real export header row, not a replica of it.
+export function autoMatch(headers: string[]): Record<string, string> {
   const result: Record<string, string> = {};
   const usedHeaders = new Set<string>();
 
   for (const field of MAPPING_FIELDS) {
     for (const header of headers) {
       if (usedHeaders.has(header)) continue;
+      // §6 (2026-10-03): a header this field must never claim, however well
+      // matchPatterns fit. See MappingField.excludePatterns.
+      if (field.excludePatterns?.some((re) => re.test(header))) continue;
       for (const pattern of field.matchPatterns) {
         if (pattern.test(header)) {
           result[field.key] = header;

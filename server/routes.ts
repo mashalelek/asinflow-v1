@@ -136,9 +136,16 @@ function parseFileToRawRows(buffer: Buffer, filename: string): { headers: string
 
 const COLUMN_NAME_ALIASES: Record<string, string[]> = {
   asin: ["asin"],
-  cogs: ["cogs", "cost", "cost of goods", "unit cost", "purchase price", "price paid", "buy cost"],
+  // "estimated cogs" / "est cogs": the ASINs-page export's group-qualified
+  // header (§6, 2026-10-03) — matchColumnName is an EXACT match on the
+  // normalized header, so the qualified form needs its own alias or the
+  // export does not re-import. "actual cogs" is deliberately absent: actual
+  // COGS comes from the PO sheet and SellerBoard (§2), never a CSV upload.
+  cogs: ["cogs", "cost", "cost of goods", "unit cost", "purchase price", "price paid", "buy cost", "estimated cogs", "est cogs", "est. cogs"],
   buyLink: ["buy link", "buylink", "buy url", "buyurl", "link", "url", "supplier link", "source link", "source url"],
-  prepCost: ["prep", "prep cost", "prepcost", "prep fee", "prepfee"],
+  // "estimated prep cost": same qualified-header reason as cogs above.
+  // "actual prep cost" deliberately absent — actuals are not CSV-sourced.
+  prepCost: ["prep", "prep cost", "prepcost", "prep fee", "prepfee", "estimated prep cost", "est prep cost"],
   additionalFees: ["storage", "storage fee", "storagefee", "additional fees", "additionalfees", "additional fee", "extra fees", "misc", "misc fees", "other fees"],
   tags: ["tags", "tag"],
   notes: ["notes", "note", "comments", "comment"],

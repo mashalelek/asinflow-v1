@@ -358,6 +358,36 @@ there is only one default preset anyway (see "Default view presets").
 Keepa-style text filter — the `getFilterType` default, no registration needed.
 Sorting and filtering read `getRowValue`, the one accessor (§14).
 
+### Export CSV headers — group-qualified, round-trip-safe (2026-10-03)
+
+The ASINs-page export emits `ColumnDef.qualifier` + `label` for every column
+that carries one, so the header says **"Estimated COGS" / "Actual COGS"** and
+**"Estimated Prep Cost" / "Actual Prep Cost"** rather than two columns both
+named "COGS". The qualifier already drives the table header and the column
+picker; export now reads the same field instead of `label` alone.
+
+Note on the old symptom: the CSV never contained "COGS.1". It contained the
+header "COGS" **twice**, and Excel / Sheets / pandas disambiguate on read by
+suffixing. Two same-named columns were the actual defect.
+
+**Round-trip.** The export is an upload source, so headers must be mapper
+aliases:
+- **"Buy Link"** was already an exact alias of `buyLink` on both matchers —
+  verified, not added.
+- **"Estimated COGS"** / **"Estimated Prep Cost"** were NOT server aliases
+  (`matchColumnName` is an exact match on the normalized header). Added to
+  `COLUMN_NAME_ALIASES` for `cogs` / `prepCost`.
+- **"Actual COGS"** / **"Actual Prep Cost"** are deliberately NOT aliases.
+  Actual COGS comes from the PO sheet and SellerBoard (§2), never from a CSV
+  upload, and importing an actual as an estimate would silently corrupt it.
+  The client auto-matcher used to match them anyway (`/\bcogs\b/i` matches
+  "Actual COGS"), and since Actuals precede Estimates in column order,
+  `autoMatch` — first header wins, file order — would have bound Est. COGS to
+  the **Actual** column and left the real Estimated column unmapped. A
+  `MappingField.excludePatterns` guard (`/^actual\b/i` on `cogs` and
+  `prepCost`) blocks that. Renaming the headers is what made this reachable;
+  before it, both columns read "COGS" and the first one won regardless.
+
 ### Supplier SKU column (2026-08-05)
 
 The supplier's own catalog/item number — NEVER from Amazon, unrelated to
@@ -3658,7 +3688,9 @@ The ASINs page's export feeds this page's upload: its **"Buy Link"** header is
 an exact alias of the mapper's `buyLink` field on BOTH matchers — the server's
 `COLUMN_NAME_ALIASES` ("buy link") and the modal's `matchPatterns`
 (`/buy\s*link/i`) — so ASINs-page export → Bulk Calc upload carries the full
-URL with no re-mapping.
+URL with no re-mapping. Its qualified **"Estimated COGS"** / **"Estimated Prep
+Cost"** headers round-trip too (§6 Export CSV headers); the matching "Actual"
+headers are intentionally inert on import.
 
 No date-range selector: nothing here is range-scoped.
 
