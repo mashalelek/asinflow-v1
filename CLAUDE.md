@@ -77,16 +77,38 @@ This app runs on the following stack. This is settled. Do not suggest alternativ
 npm run dev        # Start dev server (Express + Vite HMR) on port 5000
 npm run build      # Build for production (tsx script/build.ts)
 npm run start      # Run production build
-npm run check      # TypeScript type checking
+npm run check      # TypeScript type checking (source — EXCLUDES *.test.ts)
+npm run check:tests # TypeScript type checking (test files — tsconfig.test.json)
+npm test           # Run the test suite once (vitest run)
+npm run test:watch # Run the test suite in watch mode
 ```
 
-**Known tsc baseline: 4× TS1252 in `server/spapi.ts` (lines 939/948/957/965).**
+**Known tsc baseline: 4× TS1252 in `server/spapi.ts` (lines 845/854/863/871).**
 These are pre-existing (function declarations nested in a block under the ES5
-target) and are the expected clean state. Gate reports must label tsc errors as
-**baseline vs. introduced** — e.g. "4 errors, all baseline; 0 introduced" — and
-any introduced error must be fixed forward before committing.
+target) and are the expected clean state. The SAME four are the only expected
+errors from both `check` and `check:tests`. Gate reports must label tsc errors
+as **baseline vs. introduced** — e.g. "4 errors, all baseline; 0 introduced" —
+and any introduced error must be fixed forward before committing.
 
-There are no tests in this codebase.
+## Tests
+
+`npm test` (vitest). **598 tests across 47 files** as of 2026-10-03 — this
+codebase IS tested; the old "there are no tests" line was years stale.
+
+**A gate report must cover BOTH typecheck commands, labelled separately:**
+
+```
+npm run check        -> 4 baseline TS1252, 0 introduced
+npm run check:tests  -> 4 baseline TS1252, 0 introduced
+npm test             -> 598/598
+```
+
+`npm run check` alone is NOT a complete gate. The base `tsconfig.json`
+excludes `**/*.test.ts`, so it never sees test code — and vitest does not
+typecheck, so a test can import a non-existent export and BOTH stay silent
+(commit d3123ef shipped exactly that). `check:tests` is the other half; run
+it alongside, never instead. Quote the two separately in the report so a
+reader can tell which half passed.
 
 ## Required Environment Variables
 
