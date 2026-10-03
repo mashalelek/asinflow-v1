@@ -121,7 +121,7 @@ describe("offerAddForAsin — registry reserve-then-PUT", () => {
     const { repo, state } = makeMockRepo();
     const httpPut = async () => ({ sku: "AMG-BPC-X8M-TPR-001", status: "ACCEPTED", submissionId: "SUB-OK", issues: [] });
     const r = await offerAddForAsin(
-      { asin: ASIN, productNumber: 1, price: 10, isHazmat: false },
+      { asin: ASIN, productNumber: 1, price: 10, cogs: null },
       { queryFn: makeMockQuery(), httpGet: makeMockHttpGet(), httpPut, sellerId: SELLER, productRegistry: repo },
       false,
     );
@@ -140,7 +140,7 @@ describe("offerAddForAsin — registry reserve-then-PUT", () => {
       throw e;
     };
     const r = await offerAddForAsin(
-      { asin: ASIN, productNumber: 1, price: 10, isHazmat: false },
+      { asin: ASIN, productNumber: 1, price: 10, cogs: null },
       { queryFn: makeMockQuery(), httpGet: makeMockHttpGet(), httpPut, sellerId: SELLER, productRegistry: repo },
       false,
     );
@@ -160,7 +160,7 @@ describe("offerAddForAsin — registry reserve-then-PUT", () => {
     const { repo, state } = makeMockRepo();
     const httpPut = async () => { throw new Error("ECONNRESET: connection reset"); };
     const r = await offerAddForAsin(
-      { asin: ASIN, productNumber: 1, price: 10, isHazmat: false },
+      { asin: ASIN, productNumber: 1, price: 10, cogs: null },
       { queryFn: makeMockQuery(), httpGet: makeMockHttpGet(), httpPut, sellerId: SELLER, productRegistry: repo },
       false,
     );
@@ -180,7 +180,7 @@ describe("offerAddForAsin — registry reserve-then-PUT", () => {
     ]);
     const httpPut = async () => { putCalled = true; return { status: 200, data: {} }; };
     const r = await offerAddForAsin(
-      { asin: ASIN, productNumber: 1, price: 10, isHazmat: false },
+      { asin: ASIN, productNumber: 1, price: 10, cogs: null },
       { queryFn: makeMockQuery(), httpGet: makeMockHttpGet(), httpPut, sellerId: SELLER, productRegistry: repo },
       false,
     );
@@ -203,7 +203,7 @@ describe("offerAddForAsin — registry reserve-then-PUT", () => {
     let putCalled = false;
     const httpPut = async () => { putCalled = true; return { sku: "AMG-BPC-X8M-TPR-001", status: "ACCEPTED", submissionId: "SUB-OK", issues: [] }; };
     const r = await offerAddForAsin(
-      { asin: ASIN, productNumber: 1, price: 10, isHazmat: false },
+      { asin: ASIN, productNumber: 1, price: 10, cogs: null },
       { queryFn: makeMockQuery(), httpGet: makeMockHttpGet(), httpPut, sellerId: SELLER, productRegistry: repo },
       false,
     );
@@ -222,7 +222,7 @@ describe("offerAddForAsin — registry reserve-then-PUT", () => {
       getByKey: async (b, n) => { getByKeyCalls++; return repo.getByKey(b, n); },
     };
     const r = await offerAddForAsin(
-      { asin: ASIN, productNumber: 1, price: 10, isHazmat: false },
+      { asin: ASIN, productNumber: 1, price: 10, cogs: null },
       { queryFn: makeMockQuery(), httpGet: makeMockHttpGet(), sellerId: SELLER, productRegistry: wrappedRepo },
       true, // dryRun
     );
@@ -236,7 +236,7 @@ describe("offerAddForAsin — registry reserve-then-PUT", () => {
     // Back-compat: tests/callers without registry config still work.
     const httpPut = async () => ({ sku: "AMG-BPC-X8M-TPR-001", status: "ACCEPTED", submissionId: "SUB-OK", issues: [] });
     const r = await offerAddForAsin(
-      { asin: ASIN, productNumber: 1, price: 10, isHazmat: false },
+      { asin: ASIN, productNumber: 1, price: 10, cogs: null },
       { queryFn: makeMockQuery(), httpGet: makeMockHttpGet(), httpPut, sellerId: SELLER /* no productRegistry */ },
       false,
     );
@@ -255,7 +255,7 @@ describe("offerAddForAsin — registry reserve-then-PUT", () => {
     };
     const httpPut = async () => ({ sku: "AMG-BPC-X8M-TPR-001", status: "ACCEPTED", submissionId: "SUB-OK", issues: [] });
     await offerAddForAsin(
-      { asin: ASIN, productNumber: 1, price: 10, isHazmat: false },
+      { asin: ASIN, productNumber: 1, price: 10, cogs: null },
       { queryFn: makeMockQuery(), httpGet: makeMockHttpGet(), httpPut, sellerId: SELLER, productRegistry: wrappedRepo },
       false,
     );
@@ -278,7 +278,7 @@ describe("offerAddForAsin — registry reserve-then-PUT", () => {
     };
     // Should still return putlistings_failed (not throw the rollback error)
     const r = await offerAddForAsin(
-      { asin: ASIN, productNumber: 1, price: 10, isHazmat: false },
+      { asin: ASIN, productNumber: 1, price: 10, cogs: null },
       { queryFn: makeMockQuery(), httpGet: makeMockHttpGet(), httpPut, sellerId: SELLER, productRegistry: badRepo },
       false,
     );

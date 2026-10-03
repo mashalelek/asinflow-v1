@@ -69,7 +69,8 @@ describe("same-product (brand, NNN) resolution", () => {
     twin.outcome = { ...twin.outcome, asin: "B0XXXXXHDXR", sku: "LEM-HOM-DXR-STD-001" };
     const rows2 = [lemRow(A), twin];
     const edits = { [A]: { nnnInput: "003", ttlForNew: "STD" }, ["B0XXXXXHDXR"]: { nnnInput: "003", ttlForNew: "STD" } };
-    for (const same of [{}, { ["LEM\u00003"]: true }]) {
+    const sameVariants: Record<string, boolean>[] = [{}, { ["LEM\u00003"]: true }];
+    for (const same of sameVariants) {
       const v = run(A, rows2, edits, same);
       expect(v.error).toMatch(/byte-identical/);
     }

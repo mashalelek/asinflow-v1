@@ -202,7 +202,11 @@ import { matchKeysForOrder as mkKeys } from "./velocity-api";
 // parent SHIPPED before the send, so its shipment row is child-less.
 describe("shared hydration — execute must drop an approved create whose parent shipped", () => {
   const PARENT = "6766a9d2-1f85-4765-af1e-fa6655eeebe6";
-  const shippedChildless = () => ({
+  const shippedChildless = (): {
+    order_id: string; order_number: null; asin: string; sold_as: string;
+    status: string; lifecycleSource: string; date: string; quantity: number;
+    bundle_children?: Array<{ order_number: string }>;
+  } => ({
     order_id: PARENT, order_number: null, asin: "B0DKT4NDFZ", sold_as: "bundle",
     status: "shipped", lifecycleSource: "shipment", date: "09/13/2026", quantity: 10,
   });

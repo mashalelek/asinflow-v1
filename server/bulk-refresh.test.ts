@@ -6,7 +6,7 @@ import { describe, it, expect, vi, beforeEach } from "vitest";
 // write to asins/asin_estimates, because they never touch the DB at all.
 // This is the test Maria asked for instead of a comment.
 vi.mock("./index", () => ({ log: () => {} }));
-const querySpy = vi.fn(async () => ({ rows: [], rowCount: 0 }));
+const querySpy = vi.fn(async (..._a: any[]) => ({ rows: [], rowCount: 0 }));
 vi.mock("./db", () => ({ query: (...a: any[]) => querySpy(...a), pool: {} }));
 const postSpy = vi.fn();
 vi.mock("./spapi-auth", () => ({

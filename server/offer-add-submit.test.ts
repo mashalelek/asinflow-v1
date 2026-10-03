@@ -78,7 +78,7 @@ describe("submitOfferAddBatch — pre-filter", () => {
       calls.push(input.asin);
       return previewOutcome(input.asin, "AMG", "HEA");
     };
-    const fetchOffersFn = async () => ({ ok: true, competingOffers: [], ourOffer: null, allOffers: [] } as OffersFetchOutcome);
+    const fetchOffersFn = async () => ({ ok: true, competingOffers: [], ourOffer: null, allOffers: [], competitivePriceThreshold: null, buyBoxPrice: null } as OffersFetchOutcome);
     const rows = [makeRow("B0000001", { is_catalog_deleted: true })];
     const r = await submitOfferAddBatch(rows, makeDeps(offerAddFn, fetchOffersFn));
     expect(calls).toEqual([]); // never called offerAddFn for excluded ASIN
@@ -135,7 +135,7 @@ describe("submitOfferAddBatch — phase 1 (classification)", () => {
       if (dryRun) return previewOutcome(input.asin, "AMG", "HEA");
       return createdOutcome(input.asin, "AMG-HEA-AB1-PRD-001");
     };
-    const fetchOffersFn = async () => ({ ok: true, competingOffers: [10.00], ourOffer: null, allOffers: [] } as OffersFetchOutcome);
+    const fetchOffersFn = async () => ({ ok: true, competingOffers: [10.00], ourOffer: null, allOffers: [], competitivePriceThreshold: null, buyBoxPrice: null } as OffersFetchOutcome);
     const r = await submitOfferAddBatch([makeRow("B0000001")], makeDeps(offerAddFn, fetchOffersFn));
     expect(calls).toHaveLength(2); // 1 dry-run, 1 live
     expect(calls[0].dryRun).toBe(true);
@@ -157,7 +157,7 @@ describe("submitOfferAddBatch — phase 2 (NNN allocation)", () => {
       livePutCalls.push(input.productNumber);
       return createdOutcome(input.asin, `AMG-HEA-AB1-PRD-${String(input.productNumber).padStart(3, "0")}`);
     };
-    const fetchOffersFn = async () => ({ ok: true, competingOffers: [10.00], ourOffer: null, allOffers: [] } as OffersFetchOutcome);
+    const fetchOffersFn = async () => ({ ok: true, competingOffers: [10.00], ourOffer: null, allOffers: [], competitivePriceThreshold: null, buyBoxPrice: null } as OffersFetchOutcome);
     const rows = [makeRow("B0000001"), makeRow("B0000002"), makeRow("B0000003")];
     const r = await submitOfferAddBatch(rows, makeDeps(offerAddFn, fetchOffersFn));
     expect(livePutCalls).toEqual([1, 2, 3]); // sequential within batch
@@ -171,7 +171,7 @@ describe("submitOfferAddBatch — phase 2 (NNN allocation)", () => {
       livePutCalls.push(input.productNumber);
       return createdOutcome(input.asin, "AMG-HEA-AB1-PRD-XXX");
     };
-    const fetchOffersFn = async () => ({ ok: true, competingOffers: [10.00], ourOffer: null, allOffers: [] } as OffersFetchOutcome);
+    const fetchOffersFn = async () => ({ ok: true, competingOffers: [10.00], ourOffer: null, allOffers: [], competitivePriceThreshold: null, buyBoxPrice: null } as OffersFetchOutcome);
     const rows = [makeRow("B0000001"), makeRow("B0000002")];
     const deps = makeDeps(offerAddFn, fetchOffersFn, [
       "AMG-HEA-XY1-OLD-042",  // existing NNN=42 in AMG-HEA bucket
@@ -190,7 +190,7 @@ describe("submitOfferAddBatch — phase 2 (NNN allocation)", () => {
       }
       return createdOutcome(input.asin, "X");
     };
-    const fetchOffersFn = async () => ({ ok: true, competingOffers: [10.00], ourOffer: null, allOffers: [] } as OffersFetchOutcome);
+    const fetchOffersFn = async () => ({ ok: true, competingOffers: [10.00], ourOffer: null, allOffers: [], competitivePriceThreshold: null, buyBoxPrice: null } as OffersFetchOutcome);
     const rows = [makeRow("B0000001"), makeRow("B0000002"), makeRow("B0000003")];
     // Existing 999 in AMG-HEA bucket — first 2 ASINs hit overflow
     const deps = makeDeps(offerAddFn, fetchOffersFn, ["AMG-HEA-XY1-OLD-999"]);
@@ -209,7 +209,7 @@ describe("submitOfferAddBatch — phase 2 (NNN allocation)", () => {
       livePutSkus.push(`reuse-call:NNN=${input.productNumber}`);
       return createdOutcome(input.asin, "AMG-HEA-AB1-PRD-001-A"); // arbitrary
     };
-    const fetchOffersFn = async () => ({ ok: true, competingOffers: [10.00], ourOffer: null, allOffers: [] } as OffersFetchOutcome);
+    const fetchOffersFn = async () => ({ ok: true, competingOffers: [10.00], ourOffer: null, allOffers: [], competitivePriceThreshold: null, buyBoxPrice: null } as OffersFetchOutcome);
     const r = await submitOfferAddBatch([makeRow("B0000001")], makeDeps(offerAddFn, fetchOffersFn));
     // Reuse path: phase 4 still calls offerAddForAsin (which uses the existing SKU);
     // productNumber passed is the placeholder 1 (ignored downstream because resurrection
@@ -236,6 +236,8 @@ describe("submitOfferAddBatch — phase 3 (price resolution)", () => {
       competingOffers: [10.00], // highest * 1.30 = 13.00 → ceiled to 13.99
       ourOffer: null,
       allOffers: [],
+      competitivePriceThreshold: null,
+      buyBoxPrice: null,
     } as OffersFetchOutcome);
     const r = await submitOfferAddBatch([makeRow("B0000001")], makeDeps(offerAddFn, fetchOffersFn));
     expect(r.perAsin[0].outcome.kind).toBe("created");
@@ -272,7 +274,7 @@ describe("submitOfferAddBatch — phase 3 (price resolution)", () => {
       if (dryRun) return previewOutcome(input.asin, "AMG", "HEA");
       return createdOutcome(input.asin, "X");
     };
-    const fetchOffersFn = async () => ({ ok: true, competingOffers: [], ourOffer: null, allOffers: [] } as OffersFetchOutcome);
+    const fetchOffersFn = async () => ({ ok: true, competingOffers: [], ourOffer: null, allOffers: [], competitivePriceThreshold: null, buyBoxPrice: null } as OffersFetchOutcome);
     const r = await submitOfferAddBatch(
       [makeRow("B0000001", { cogs: null })],
       makeDeps(offerAddFn, fetchOffersFn),
@@ -302,7 +304,7 @@ describe("submitOfferAddBatch — phase 4 (live submit)", () => {
         retryable: false,
       };
     };
-    const fetchOffersFn = async () => ({ ok: true, competingOffers: [10.00], ourOffer: null, allOffers: [] } as OffersFetchOutcome);
+    const fetchOffersFn = async () => ({ ok: true, competingOffers: [10.00], ourOffer: null, allOffers: [], competitivePriceThreshold: null, buyBoxPrice: null } as OffersFetchOutcome);
     const r = await submitOfferAddBatch([makeRow("B0000001")], makeDeps(offerAddFn, fetchOffersFn));
     expect(r.perAsin[0].outcome.kind).toBe("putlistings_failed");
     if (r.perAsin[0].outcome.kind === "putlistings_failed") {
@@ -317,12 +319,12 @@ describe("submitOfferAddBatch — phase 4 (live submit)", () => {
     const offerAddFn = async (input: OfferAddInput, _d: OfferAddDeps, dryRun: boolean): Promise<OfferAddResult> => {
       if (dryRun) return previewOutcome(input.asin, "AMG", "HEA");
       if (input.asin === "B0000002") {
-        return { kind: "putlistings_failed", asin: input.asin, sku: "X", reason: "validation_error",
+        return { kind: "putlistings_failed", asin: input.asin, sku: "X", reason: "invalid_attribute",
           originalCode: "VAL", originalMessage: "bad", retryable: false };
       }
       return createdOutcome(input.asin, "AMG-HEA-AB1-PRD-XXX");
     };
-    const fetchOffersFn = async () => ({ ok: true, competingOffers: [10.00], ourOffer: null, allOffers: [] } as OffersFetchOutcome);
+    const fetchOffersFn = async () => ({ ok: true, competingOffers: [10.00], ourOffer: null, allOffers: [], competitivePriceThreshold: null, buyBoxPrice: null } as OffersFetchOutcome);
     const rows = [makeRow("B0000001"), makeRow("B0000002"), makeRow("B0000003")];
     const r = await submitOfferAddBatch(rows, makeDeps(offerAddFn, fetchOffersFn));
     expect(r.perAsin.map((p) => p.outcome.kind)).toEqual(["created", "putlistings_failed", "created"]);
@@ -362,7 +364,7 @@ describe("submitOfferAddBatch — phase4Mode='preview'", () => {
       livePutFired = true;
       return createdOutcome(input.asin, "X");
     };
-    const fetchOffersFn = async () => ({ ok: true, competingOffers: [10.00], ourOffer: null, allOffers: [] } as OffersFetchOutcome);
+    const fetchOffersFn = async () => ({ ok: true, competingOffers: [10.00], ourOffer: null, allOffers: [], competitivePriceThreshold: null, buyBoxPrice: null } as OffersFetchOutcome);
     const deps = { ...makeDeps(offerAddFn, fetchOffersFn), phase4Mode: "preview" as const };
     const r = await submitOfferAddBatch([makeRow("B0000001")], deps);
     expect(livePutFired).toBe(false); // CRITICAL: no PUT in preview mode
@@ -386,7 +388,7 @@ describe("submitOfferAddBatch — phase4Mode='preview'", () => {
       reused: false,
       payload: realBuildOfferOnlyPayload(input, "not_applicable"),
     });
-    const fetchOffersFn = async () => ({ ok: true, competingOffers: [10.00], ourOffer: null, allOffers: [] } as OffersFetchOutcome);
+    const fetchOffersFn = async () => ({ ok: true, competingOffers: [10.00], ourOffer: null, allOffers: [], competitivePriceThreshold: null, buyBoxPrice: null } as OffersFetchOutcome);
 
     // makeRow default cogs is 5.00 → <= $20 → cap 6
     const cheap = await submitOfferAddBatch([makeRow("B0000001")], { ...makeDeps(offerAddFn, fetchOffersFn), phase4Mode: "preview" as const });
@@ -423,7 +425,7 @@ describe("submitOfferAddBatch — result shape", () => {
       }
       return createdOutcome(input.asin, "X");
     };
-    const fetchOffersFn = async () => ({ ok: true, competingOffers: [10.00], ourOffer: null, allOffers: [] } as OffersFetchOutcome);
+    const fetchOffersFn = async () => ({ ok: true, competingOffers: [10.00], ourOffer: null, allOffers: [], competitivePriceThreshold: null, buyBoxPrice: null } as OffersFetchOutcome);
     const rows = ["B0000001", "B0000002", "B0000003", "B0000004"].map((a) => makeRow(a));
     const r = await submitOfferAddBatch(rows, makeDeps(offerAddFn, fetchOffersFn));
     expect(r.perAsin.map((p) => p.asin)).toEqual(["B0000001", "B0000002", "B0000003", "B0000004"]);

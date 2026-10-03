@@ -41,7 +41,7 @@ async function postJson(server: Server, body: string): Promise<number> {
 describe("express.json limit — Bulk Calc Create list 413", () => {
   it("server/index.ts declares the 10mb limit", () => {
     const src = readFileSync(join(__dirname, "index.ts"), "utf8");
-    expect(src).toMatch(/express\.json\(\{[^}]*limit:\s*"10mb"/s);
+    expect(src).toMatch(/express\.json\(\{[^}]*limit:\s*"10mb"/);
   });
 
   it(">100 KB /api/bulk-lists body passes at 10mb", async () => {

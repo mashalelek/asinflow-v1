@@ -228,7 +228,7 @@ async function main() {
     [COL.subscription, "Subscription"], [COL.notes, "Notes"], [COL.emailUsed, "Email used"],
   ];
   const discrepancies: string[] = [];
-  for (const g of groups.values()) {
+  for (const g of Array.from(groups.values())) {
     const first = g.rows[0].cells;
     for (const r of g.rows.slice(1)) {
       for (const [idx, label] of ORDER_LEVEL) {
@@ -243,7 +243,7 @@ async function main() {
   const divzeroCells: string[] = [];
   const outsideLookups = { payment: new Map<string, number>(), cashback: new Map<string, number>() };
   const SEEDED_PAYMENT = new Set(["Gift cards","Amex (1001)","Amex (1005)","Chase (7927)","Chase (9647)","Chase Ink (7927)","Chase (6120)","Citi (9510)","Discover","Webstaurant Visa","Amex (1002)","Walmart card","Citi (9627)"]); // incl. migration 029 additions
-const SEEDED_PAYMENT_BY_LC = new Map([...SEEDED_PAYMENT].map((v) => [v.toLowerCase(), v]));
+const SEEDED_PAYMENT_BY_LC = new Map(Array.from(SEEDED_PAYMENT).map((v) => [v.toLowerCase(), v]));
   const SEEDED_CASHBACK = new Set(["BeFrugal","TopCashback","Rakuten","RetailMeNot","Coupert"]);
 
   const money = (g: PoGroup, r: { cells: string[]; srcRow: number }, idx: number): string | null => {
@@ -258,7 +258,7 @@ const SEEDED_PAYMENT_BY_LC = new Map([...SEEDED_PAYMENT].map((v) => [v.toLowerCa
   const skippedMixedPOs: string[] = [];
 
   const pos: any[] = [];
-  for (const g of groups.values()) {
+  for (const g of Array.from(groups.values())) {
     const f = g.rows[0];
     const c = f.cells;
 
@@ -300,7 +300,7 @@ const SEEDED_PAYMENT_BY_LC = new Map([...SEEDED_PAYMENT].map((v) => [v.toLowerCa
     }
     const poAsins: any[] = [];
     let mixedSError = false;
-    for (const [asin, ars] of byAsin) {
+    for (const [asin, ars] of Array.from(byAsin)) {
       const ar = ars[0];
       const sVals = ars.map((r) => intOrNull(r.cells[COL.uniqueProductsPerAsin]) ?? 1);
       const isBundleGroup = sVals.every((v) => v >= 2);
@@ -337,7 +337,7 @@ const SEEDED_PAYMENT_BY_LC = new Map([...SEEDED_PAYMENT].map((v) => [v.toLowerCa
         // STANDS: the homedepot WN63100522 group (N=1/N=0 → $17.61) was
         // examined and accepted as an outlier, not a rule problem — do not
         // reopen the weighting basis.
-        const yVals = [...new Set(perRow.map((r) => r.y ?? "NULL"))];
+        const yVals = Array.from(new Set(perRow.map((r) => r.y ?? "NULL")));
         if (yVals.length === 1) {
           costPerUnit = perRow[0].y;
         } else {
@@ -356,7 +356,7 @@ const SEEDED_PAYMENT_BY_LC = new Map([...SEEDED_PAYMENT].map((v) => [v.toLowerCa
         // total — take-first, verbatim. Verify N agreement on bundles.
         if (ars.length > 1) {
           const qtys = new Set(ars.map((r) => t(r.cells[COL.asinQtyTotal])));
-          if (qtys.size > 1) discrepancies.push(`${g.supplier} ${g.orderId} [ASIN ${asin} Col N]: differing per-ASIN qty ${JSON.stringify([...qtys])} — first-row wins`);
+          if (qtys.size > 1) discrepancies.push(`${g.supplier} ${g.orderId} [ASIN ${asin} Col N]: differing per-ASIN qty ${JSON.stringify(Array.from(qtys))} — first-row wins`);
         }
         qty = intOrNull(ar.cells[COL.asinQtyTotal]) ?? 0;
         costPerUnit = money(g, ar, COL.adjCogs);
@@ -411,7 +411,7 @@ const SEEDED_PAYMENT_BY_LC = new Map([...SEEDED_PAYMENT].map((v) => [v.toLowerCa
     (await pool.query(`SELECT supplier, order_id FROM purchase_orders`)).rows
       .map((r: any) => `${r.supplier}\u0000${r.order_id}`),
   );
-  const allAsins = [...new Set(pos.flatMap((p) => p.poAsins.map((a: any) => a.asin)))];
+  const allAsins = Array.from(new Set(pos.flatMap((p) => p.poAsins.map((a: any) => a.asin))));
   const skuRows = (await pool.query(
     `SELECT asin, primary_sku FROM asins WHERE asin = ANY($1::text[])`, [allAsins],
   )).rows;
@@ -459,7 +459,7 @@ const SEEDED_PAYMENT_BY_LC = new Map([...SEEDED_PAYMENT].map((v) => [v.toLowerCa
   const byRule = new Map<string, CleanupHit[]>();
   for (const h of cleanupHits) { if (!byRule.has(h.rule)) byRule.set(h.rule, []); byRule.get(h.rule)!.push(h); }
   console.log(`\nCLEANUP MAP HITS (${cleanupHits.length} total):`);
-  for (const [rule, hs] of byRule) {
+  for (const [rule, hs] of Array.from(byRule)) {
     console.log(`  ${rule}: ${hs.length}`);
     if (rule !== "Rcpt TRUE → invoice_attached" && rule !== "#DIV/0! → NULL") {
       for (const h of hs) console.log(`    row ${h.row} order ${h.order}: ${JSON.stringify(h.from)} → ${JSON.stringify(h.to)}`);
@@ -468,8 +468,8 @@ const SEEDED_PAYMENT_BY_LC = new Map([...SEEDED_PAYMENT].map((v) => [v.toLowerCa
   console.log(`\nORDER-LEVEL DISAGREEMENTS (first-row-wins applied): ${discrepancies.length}`);
   for (const d of discrepancies) console.log(`  ${d}`);
   console.log(`\nVALUES OUTSIDE SEEDED LOOKUPS (imported verbatim — review):`);
-  console.log(`  payment: ${JSON.stringify([...outsideLookups.payment.entries()])}`);
-  console.log(`  cashback: ${JSON.stringify([...outsideLookups.cashback.entries()])}`);
+  console.log(`  payment: ${JSON.stringify(Array.from(outsideLookups.payment.entries()))}`);
+  console.log(`  cashback: ${JSON.stringify(Array.from(outsideLookups.cashback.entries()))}`);
   if (observations.length) { console.log(`\nOBSERVATIONS:`); for (const o of observations) console.log(`  ${o}`); }
 
   // ── live writes (guarded) ───────────────────────────────────────────────────

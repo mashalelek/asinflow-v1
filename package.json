@@ -8,6 +8,7 @@
     "build": "tsx script/build.ts",
     "start": "NODE_ENV=production node dist/index.cjs",
     "check": "tsc",
+    "check:tests": "tsc -p tsconfig.test.json",
     "test": "vitest run",
     "test:watch": "vitest",
     "db:push": "drizzle-kit push"

@@ -1,0 +1,23 @@
+// Typecheck the test files. The base tsconfig EXCLUDES **/*.test.ts, so
+// `npm run check` has never covered them — a test file could import a
+// non-existent export and tsc would stay silent (2026-10-03: commit d3123ef
+// shipped exactly that, an `import { autoMatch }` of something not yet
+// exported; vitest also stayed silent because esbuild strips an unused
+// import without resolving it).
+//
+// Run as `npm run check:tests`, ALONGSIDE `npm run check` — not instead of
+// it. The two cover disjoint file sets and both belong in a gate report,
+// labelled separately.
+{
+  "extends": "./tsconfig.json",
+  // `exclude` is NOT merged by `extends` — it is replaced wholesale. The
+  // base list minus the **/*.test.ts entry, which is the whole point here.
+  "exclude": ["node_modules", "build", "dist"],
+  "include": ["client/src/**/*", "shared/**/*", "server/**/*"],
+  "compilerOptions": {
+    "noEmit": true,
+    // Its own build-info file: sharing the base config's would make the two
+    // runs invalidate each other's incremental cache on every alternation.
+    "tsBuildInfoFile": "./node_modules/typescript/tsbuildinfo.test"
+  }
+}

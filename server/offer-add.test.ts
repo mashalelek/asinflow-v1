@@ -276,7 +276,7 @@ describe("offerAddForAsin — pre-PUT outcomes", () => {
         },
       },
       false, // LIVE — this is the path that would create a listing
-    )).rejects.toThrow(/aborted before PUT.*fulfillment_availability\[0\]\.quantity/s);
+    )).rejects.toThrow(/aborted before PUT[\s\S]*fulfillment_availability\[0\]\.quantity/);
     expect(putCalled).toBe(false); // physically blocked at fire time
   });
 
