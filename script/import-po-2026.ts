@@ -36,6 +36,10 @@ import fs from "fs";
 import Papa from "papaparse";
 import pg from "pg";
 import { getSheetValues } from "../server/sheet-read";
+// Row classification + the pure primitives it needs live in server/ so the
+// test can import classifyRows WITHOUT pulling this driver into the test
+// typecheck (2026-10-03). One definition of each, imported back here.
+import { COL, t, parseDateMDY, classifyRows } from "../server/po-import-classify";
 
 const LIVE = process.argv.includes("--live");
 const CSV_FLAG = process.argv.indexOf("--csv");
@@ -44,19 +48,6 @@ if (CSV_FLAG >= 0 && (!csvPath || csvPath.startsWith("--"))) {
   console.error("usage: npx tsx script/import-po-2026.ts [--csv <orders.csv>] [--live]");
   process.exit(1);
 }
-
-// ── column letters → indices (0-based) ───────────────────────────────────────
-const COL = {
-  rcpt: 0, orderId: 1, orderDate: 2, status: 3, supplier: 4,
-  skuUpc: 5, productName: 6, asin: 7, asinName: 8,
-  price: 10, qtyOrdered: 11, qtyReceived: 12, asinQtyTotal: 13,
-  qtyReturned: 17, uniqueProductsPerAsin: 18, asinQtyPerProduct: 19, // Col R (renamed qty_returned, migration 030)
-  lossQty: 21, lossAmount: 22, adjProductCost: 23, adjCogs: 24,
-  subtotal: 27, tax: 28, shDonations: 29, discount: 30, refundAmount: 31, orderTotal: 32,
-  paymentMethod: 34, weightedGcPct: 35, promo: 36, cashbackSite: 37, cashbackPct: 38,
-  purchasedBy: 39, subscription: 40, notes: 41, prepCost: 44, emailUsed: 45,
-  soldAs: 49, unitsPerPack: 50,
-} as const;
 
 // Header sanity: refuse to run against a differently-shaped export.
 const HEADER_EXPECT: Array<[number, string]> = [
@@ -70,8 +61,6 @@ const HEADER_EXPECT: Array<[number, string]> = [
 interface CleanupHit { rule: string; row: number; order: string; from: string; to: string }
 const cleanupHits: CleanupHit[] = [];
 const observations: string[] = [];
-
-const t = (v: string | undefined) => String(v ?? "").trim();
 
 // Verbatim money: "$1,234.56" → "1234.56" (exact string, no float). "" → null.
 // "#DIV/0!" → null + cleanup hit (caller records). "(1.23)" → "-1.23".
@@ -116,57 +105,8 @@ const centsToDec = (c: number): string => `${c < 0 ? "-" : ""}${Math.floor(Math.
 // Exact decimal string → integer hundredths (for Col T, NUMERIC(8,2)).
 const toHundredths = toCents;
 
-// Order Date: split on "/" — NEVER new Date(str).
-function parseDateMDY(raw: string): { iso: string; year: number } | null {
-  const parts = t(raw).split("/");
-  if (parts.length !== 3) return null;
-  const [m, d, y] = parts.map((p) => Number(p.trim()));
-  if (!Number.isInteger(m) || !Number.isInteger(d) || !Number.isInteger(y)) return null;
-  return { iso: `${y}-${String(m).padStart(2, "0")}-${String(d).padStart(2, "0")}`, year: y };
-}
-
 function hit(rule: string, row: number, order: string, from: string, to: string) {
   cleanupHits.push({ rule, row, order, from, to });
-}
-
-// ── row classification (identity buckets) ────────────────────────────────────
-// Pure + exported so the blank_order_id guard is unit-testable without
-// running the importer. Buckets are mutually exclusive and, with importedRows,
-// must sum back to rawRowsRead (the printed identity).
-export interface ClassifyResult {
-  totalsRow: number;
-  blankRows: number;
-  nonYear2026: number;
-  blankOrderId: number;
-  noAsin: number;
-  rows: Array<{ cells: string[]; srcRow: number; dateIso: string }>;
-  notes: string[];
-}
-
-export function classifyRows(dataRows: Array<{ cells: string[]; srcRow: number }>): ClassifyResult {
-  let totalsRow = 0, blankRows = 0, nonYear2026 = 0, blankOrderId = 0, noAsin = 0;
-  const rows: ClassifyResult["rows"] = [];
-  const notes: string[] = [];
-  for (const r of dataRows) {
-    const c = r.cells;
-    const allBlank = c.every((x) => t(x) === "");
-    if (allBlank) { blankRows++; continue; }
-    const orderId = t(c[COL.orderId]);
-    const date = parseDateMDY(c[COL.orderDate]);
-    if (orderId === "" && date === null) { totalsRow++; continue; }
-    if (date === null || date.year !== 2026) { nonYear2026++; continue; }
-    // Blank-Order-ID guard (2026-08-24): a parseable date with no Order ID is
-    // an in-progress sheet row — it must never group as (supplier, "") and
-    // import. Own bucket, row-identified.
-    if (orderId === "") {
-      blankOrderId++;
-      notes.push(`row ${r.srcRow}: parseable date ${date.iso} but BLANK Order ID (supplier ${JSON.stringify(t(c[COL.supplier]))}) — row skipped to blank_order_id`);
-      continue;
-    }
-    if (t(c[COL.asin]) === "") { noAsin++; notes.push(`row ${r.srcRow}: order ${orderId} has no ASIN — row skipped`); continue; }
-    rows.push({ cells: c, srcRow: r.srcRow, dateIso: date.iso });
-  }
-  return { totalsRow, blankRows, nonYear2026, blankOrderId, noAsin, rows, notes };
 }
 
 async function main() {
@@ -228,7 +168,7 @@ async function main() {
     [COL.subscription, "Subscription"], [COL.notes, "Notes"], [COL.emailUsed, "Email used"],
   ];
   const discrepancies: string[] = [];
-  for (const g of Array.from(groups.values())) {
+  for (const g of groups.values()) {
     const first = g.rows[0].cells;
     for (const r of g.rows.slice(1)) {
       for (const [idx, label] of ORDER_LEVEL) {
@@ -243,7 +183,7 @@ async function main() {
   const divzeroCells: string[] = [];
   const outsideLookups = { payment: new Map<string, number>(), cashback: new Map<string, number>() };
   const SEEDED_PAYMENT = new Set(["Gift cards","Amex (1001)","Amex (1005)","Chase (7927)","Chase (9647)","Chase Ink (7927)","Chase (6120)","Citi (9510)","Discover","Webstaurant Visa","Amex (1002)","Walmart card","Citi (9627)"]); // incl. migration 029 additions
-const SEEDED_PAYMENT_BY_LC = new Map(Array.from(SEEDED_PAYMENT).map((v) => [v.toLowerCase(), v]));
+const SEEDED_PAYMENT_BY_LC = new Map([...SEEDED_PAYMENT].map((v) => [v.toLowerCase(), v]));
   const SEEDED_CASHBACK = new Set(["BeFrugal","TopCashback","Rakuten","RetailMeNot","Coupert"]);
 
   const money = (g: PoGroup, r: { cells: string[]; srcRow: number }, idx: number): string | null => {
@@ -258,7 +198,7 @@ const SEEDED_PAYMENT_BY_LC = new Map(Array.from(SEEDED_PAYMENT).map((v) => [v.to
   const skippedMixedPOs: string[] = [];
 
   const pos: any[] = [];
-  for (const g of Array.from(groups.values())) {
+  for (const g of groups.values()) {
     const f = g.rows[0];
     const c = f.cells;
 
@@ -300,7 +240,7 @@ const SEEDED_PAYMENT_BY_LC = new Map(Array.from(SEEDED_PAYMENT).map((v) => [v.to
     }
     const poAsins: any[] = [];
     let mixedSError = false;
-    for (const [asin, ars] of Array.from(byAsin)) {
+    for (const [asin, ars] of byAsin) {
       const ar = ars[0];
       const sVals = ars.map((r) => intOrNull(r.cells[COL.uniqueProductsPerAsin]) ?? 1);
       const isBundleGroup = sVals.every((v) => v >= 2);
@@ -337,7 +277,7 @@ const SEEDED_PAYMENT_BY_LC = new Map(Array.from(SEEDED_PAYMENT).map((v) => [v.to
         // STANDS: the homedepot WN63100522 group (N=1/N=0 → $17.61) was
         // examined and accepted as an outlier, not a rule problem — do not
         // reopen the weighting basis.
-        const yVals = Array.from(new Set(perRow.map((r) => r.y ?? "NULL")));
+        const yVals = [...new Set(perRow.map((r) => r.y ?? "NULL"))];
         if (yVals.length === 1) {
           costPerUnit = perRow[0].y;
         } else {
@@ -356,7 +296,7 @@ const SEEDED_PAYMENT_BY_LC = new Map(Array.from(SEEDED_PAYMENT).map((v) => [v.to
         // total — take-first, verbatim. Verify N agreement on bundles.
         if (ars.length > 1) {
           const qtys = new Set(ars.map((r) => t(r.cells[COL.asinQtyTotal])));
-          if (qtys.size > 1) discrepancies.push(`${g.supplier} ${g.orderId} [ASIN ${asin} Col N]: differing per-ASIN qty ${JSON.stringify(Array.from(qtys))} — first-row wins`);
+          if (qtys.size > 1) discrepancies.push(`${g.supplier} ${g.orderId} [ASIN ${asin} Col N]: differing per-ASIN qty ${JSON.stringify([...qtys])} — first-row wins`);
         }
         qty = intOrNull(ar.cells[COL.asinQtyTotal]) ?? 0;
         costPerUnit = money(g, ar, COL.adjCogs);
@@ -411,7 +351,7 @@ const SEEDED_PAYMENT_BY_LC = new Map(Array.from(SEEDED_PAYMENT).map((v) => [v.to
     (await pool.query(`SELECT supplier, order_id FROM purchase_orders`)).rows
       .map((r: any) => `${r.supplier}\u0000${r.order_id}`),
   );
-  const allAsins = Array.from(new Set(pos.flatMap((p) => p.poAsins.map((a: any) => a.asin))));
+  const allAsins = [...new Set(pos.flatMap((p) => p.poAsins.map((a: any) => a.asin)))];
   const skuRows = (await pool.query(
     `SELECT asin, primary_sku FROM asins WHERE asin = ANY($1::text[])`, [allAsins],
   )).rows;
@@ -459,7 +399,7 @@ const SEEDED_PAYMENT_BY_LC = new Map(Array.from(SEEDED_PAYMENT).map((v) => [v.to
   const byRule = new Map<string, CleanupHit[]>();
   for (const h of cleanupHits) { if (!byRule.has(h.rule)) byRule.set(h.rule, []); byRule.get(h.rule)!.push(h); }
   console.log(`\nCLEANUP MAP HITS (${cleanupHits.length} total):`);
-  for (const [rule, hs] of Array.from(byRule)) {
+  for (const [rule, hs] of byRule) {
     console.log(`  ${rule}: ${hs.length}`);
     if (rule !== "Rcpt TRUE → invoice_attached" && rule !== "#DIV/0! → NULL") {
       for (const h of hs) console.log(`    row ${h.row} order ${h.order}: ${JSON.stringify(h.from)} → ${JSON.stringify(h.to)}`);
@@ -468,8 +408,8 @@ const SEEDED_PAYMENT_BY_LC = new Map(Array.from(SEEDED_PAYMENT).map((v) => [v.to
   console.log(`\nORDER-LEVEL DISAGREEMENTS (first-row-wins applied): ${discrepancies.length}`);
   for (const d of discrepancies) console.log(`  ${d}`);
   console.log(`\nVALUES OUTSIDE SEEDED LOOKUPS (imported verbatim — review):`);
-  console.log(`  payment: ${JSON.stringify(Array.from(outsideLookups.payment.entries()))}`);
-  console.log(`  cashback: ${JSON.stringify(Array.from(outsideLookups.cashback.entries()))}`);
+  console.log(`  payment: ${JSON.stringify([...outsideLookups.payment.entries()])}`);
+  console.log(`  cashback: ${JSON.stringify([...outsideLookups.cashback.entries()])}`);
   if (observations.length) { console.log(`\nOBSERVATIONS:`); for (const o of observations) console.log(`  ${o}`); }
 
   // ── live writes (guarded) ───────────────────────────────────────────────────

@@ -5,7 +5,7 @@ import { describe, it, expect } from "vitest";
 // but a blank/whitespace Order ID is an in-progress sheet entry and must
 // land in its own row-identified bucket, never group as (supplier, "") and
 // import. Found live: a mid-entry chewy.com row on the 2026-08-24 dry run.
-import { classifyRows } from "../script/import-po-2026";
+import { classifyRows } from "./po-import-classify";
 
 // COL indices from the importer: orderId 1, orderDate 2, supplier 4, asin 7.
 function row(cells: Record<number, string>, srcRow: number) {
