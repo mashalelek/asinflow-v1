@@ -80,6 +80,7 @@ const HAPPY_DEPT_RAW = "Beauty & Personal Care";
 const HAPPY_CATALOG = {
   summaries: [{ brand: "AminoGenesis", itemName: "Triple Firming Renewal" }],
   classifications: [{
+    marketplaceId: "ATVPDKIKX0DER",
     classifications: [{
       displayName: "Moisturizers",
       parent: { displayName: "Skin Care", parent: { displayName: "Beauty & Personal Care" } },

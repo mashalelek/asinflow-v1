@@ -26,6 +26,7 @@ const HAPPY_PAYLOAD = {
   summaries: [{ brand: "AminoGenesis", itemName: "AminoGenesis Triple Firming Renewal" }],
   classifications: [
     {
+      marketplaceId: "ATVPDKIKX0DER",
       classifications: [
         {
           displayName: "Moisturizers",
@@ -123,7 +124,10 @@ describe("resolveAndGenerateSku", () => {
     for (const call of lq.mock.calls) expect((call as any[])[1][0]).toBe("dept");
   });
 
-  it("no_category: returns outcome", async () => {
+  // RETIRED 2026-10-04: an empty classifications block was the no_category
+  // hard fail. It is now DEP = NUL (§18). Brand "X" is unknown to this stub
+  // legend, so the outcome is pending on BRAND only — never on dept.
+  it("empty classifications → DEP NUL, pending on brand only (was no_category)", async () => {
     const r = await resolveAndGenerateSku(
       "B0X",
       1,
@@ -133,7 +137,11 @@ describe("resolveAndGenerateSku", () => {
       },
     );
     expect(r.ok).toBe(false);
-    if (!r.ok) expect(r.reason).toBe("no_category");
+    if (!r.ok) {
+      expect(r.reason).toBe("legend_pending");
+      expect(r.pending?.dept).toBeUndefined();
+      expect(r.pending?.brand?.rawValue).toBe("X");
+    }
   });
 
   it("legend_pending: surfaces brand and dept that need approval", async () => {
@@ -285,7 +293,7 @@ describe("B08WX3XDLQ — brandless book adds with a NUL- SKU", () => {
       manufacturer: "Pan Macmillan",
       websiteDisplayGroupName: "Books",
     }],
-    classifications: [{ classifications: [{ displayName: "Books" }] }],
+    classifications: [{ marketplaceId: "ATVPDKIKX0DER", classifications: [{ displayName: "Books" }] }],
     attributes: {},
   };
 
@@ -322,5 +330,169 @@ describe("B08WX3XDLQ — brandless book adds with a NUL- SKU", () => {
     };
     await resolveAndGenerateSku("B08WX3XDLQ", 1, { queryFn: spy, httpGet: fakeHttpGet(WINTER_GARDEN) });
     expect(seen).not.toContain("brand");
+  });
+});
+
+// ============================================================================
+// §18 categoryless ASIN → DEP = NUL (2026-10-04)
+// ============================================================================
+// Mirror of the brandless → BRD = NUL rule. NUL is ONE reserved code meaning
+// "the catalog has no value here", used in either position.
+describe("resolveAndGenerateSku — categoryless ASIN → DEP = NUL", () => {
+  const payload = (over: any = {}) => ({
+    summaries: [{ brand: "Infusion Pool Products", itemName: "Infusion V-fitting Venturi" }],
+    classifications: [{ marketplaceId: "ATVPDKIKX0DER", classifications: [] }],
+    attributes: {},
+    ...over,
+  });
+
+  function makeQuery() {
+    const writes: Array<{ sql: string }> = [];
+    const deptLookups: any[] = [];
+    const queryFn = async (sql: string, params?: any[]) => {
+      if (/INSERT|UPDATE|DELETE/i.test(sql)) { writes.push({ sql }); return { rows: [] }; }
+      const [type, rawValue] = params ?? [];
+      if (type === "dept") deptLookups.push(rawValue);
+      if (type === "brand" && String(rawValue) === "Infusion Pool Products") {
+        return { rows: [{ code: "INF", status: "approved" }] };
+      }
+      return { rows: [] };
+    };
+    return { queryFn, writes, deptLookups };
+  }
+
+  it("resolves DEP to NUL and never asks the legend for a blank category", async () => {
+    const { queryFn, deptLookups } = makeQuery();
+    const r = await resolveAndGenerateSku("B008DG32FI", 1, { queryFn, httpGet: fakeHttpGet(payload()) });
+    expect(r.ok).toBe(true);
+    if (!r.ok) return;
+    expect(r.trail.dep).toBe("NUL");
+    expect(r.trail.brd).toBe("INF");
+    expect(r.sku.startsWith("INF-NUL-")).toBe(true);
+    expect(r.trail.category).toBeNull();     // the NAME stays null, never "NUL"
+    expect(deptLookups).toEqual([]);         // the lookup that would key on ""
+  });
+
+  it("is never legend_pending on department — there is nothing to approve", async () => {
+    // Brand ALSO unknown here, so the result IS pending — but only on brand.
+    const queryFn = async (_sql: string, params?: any[]) => {
+      const [type] = params ?? [];
+      if (type === "dept") throw new Error("dept must never reach the legend for a categoryless ASIN");
+      return { rows: [] };
+    };
+    const r = await resolveAndGenerateSku("B008DG32FI", 1, { queryFn, httpGet: fakeHttpGet(payload()) });
+    expect(r.ok).toBe(false);
+    if (r.ok) return;
+    expect(r.reason).toBe("legend_pending");
+    expect(r.pending?.dept).toBeUndefined();
+    expect(r.pending?.brand?.rawValue).toBe("Infusion Pool Products");
+  });
+
+  it("brandless AND categoryless → NUL-NUL-…", async () => {
+    const { queryFn } = makeQuery();
+    const r = await resolveAndGenerateSku("B000BOTH01", 1, {
+      queryFn,
+      httpGet: fakeHttpGet(payload({ summaries: [{ itemName: "Mystery Thing" }] })),
+    });
+    expect(r.ok).toBe(true);
+    if (!r.ok) return;
+    expect(r.trail.brd).toBe("NUL");
+    expect(r.trail.dep).toBe("NUL");
+    expect(r.sku.startsWith("NUL-NUL-")).toBe(true);
+  });
+
+  it("self-heal never runs for a categoryless ASIN — NUL is not a category name", async () => {
+    const { queryFn } = makeQuery();
+    const selfHealWrite = vi.fn();
+    await resolveAndGenerateSku("B008DG32FI", 1, { queryFn, httpGet: fakeHttpGet(payload()), selfHealWrite });
+    expect(selfHealWrite).not.toHaveBeenCalled();
+  });
+
+  it("the resolver writes nothing — no sku_legend row keyed on an empty category", async () => {
+    const { queryFn, writes } = makeQuery();
+    await resolveAndGenerateSku("B008DG32FI", 7, { queryFn, httpGet: fakeHttpGet(payload()) });
+    expect(writes).toEqual([]);
+  });
+
+  it("a real category still resolves through the legend normally", async () => {
+    const { queryFn, deptLookups } = makeQuery();
+    await resolveAndGenerateSku("B000REAL01", 1, { queryFn, httpGet: fakeHttpGet(payload({
+      classifications: [{ marketplaceId: "ATVPDKIKX0DER", classifications: [{ displayName: "Patio, Lawn & Garden" }] }],
+    })) });
+    expect(deptLookups).toEqual(["Patio, Lawn & Garden"]); // NOT short-circuited
+  });
+
+  it("a 404 is still a hard fail, not NUL-NUL", async () => {
+    const { queryFn } = makeQuery();
+    const r = await resolveAndGenerateSku("B000DEAD01", 1, {
+      queryFn,
+      httpGet: async () => { const e: any = new Error("gone"); e.response = { status: 404 }; throw e; },
+    });
+    expect(r.ok).toBe(false);
+    if (r.ok) return;
+    expect(r.reason).toBe("dead_asin");
+  });
+});
+
+// ============================================================================
+// B008DG32FI — the ASIN that triggered the rule (§18, 2026-10-04)
+// ============================================================================
+// "Infusion V-fitting for Inlet and Return Line, Venturi, White". Verified
+// live: HTTP 200 whose classifications entry for ATVPDKIKX0DER is an EMPTY
+// array, stable across four consecutive fetches, salesRanks empty,
+// relationships [] (no variation parent to inherit from). Genuinely absent at
+// Amazon — not a fetch or parse fault.
+//
+// Before the rule it failed offer-add preview with "classifications block
+// empty for B008DG32FI".
+describe("B008DG32FI — categoryless fitting resolves with a NUL department", () => {
+  // Trimmed to the fields the resolver reads, from the live response.
+  const INFUSION = {
+    summaries: [{
+      marketplaceId: "ATVPDKIKX0DER",
+      brand: "Infusion Pool Products",
+      manufacturer: "Infusion Pool Products",
+      itemName: "Infusion V-fitting for Inlet and Return Line, Venturi, White",
+      websiteDisplayGroupName: "Home Improvement", // deliberately NOT used for DEP
+      itemClassification: "BASE_PRODUCT",
+    }],
+    classifications: [{ marketplaceId: "ATVPDKIKX0DER", classifications: [] }],
+    salesRanks: [{ marketplaceId: "ATVPDKIKX0DER" }], // no ranks at all
+    attributes: {},
+  };
+
+  // INF was approved for "Infusion Pool Products" on 2026-10-04, so the
+  // brand resolves and the ASIN is fully ready.
+  const legendWithInf = fakeLegendQuery({ "brand:infusion pool products": { code: "INF", status: "approved" } });
+
+  it("resolves to INF-NUL-2FI-FIR-001 — the exact SKU the live catalog produces", async () => {
+    const r = await resolveAndGenerateSku("B008DG32FI", 1, { queryFn: legendWithInf, httpGet: fakeHttpGet(INFUSION) });
+    expect(r.ok).toBe(true);
+    if (!r.ok) return;
+    expect(r.sku).toBe("INF-NUL-2FI-FIR-001");
+    expect(r.trail.dep).toBe("NUL");
+    expect(r.trail.category).toBeNull();
+  });
+
+  it("never falls back to websiteDisplayGroupName or salesRanks for DEP", async () => {
+    const r = await resolveAndGenerateSku("B008DG32FI", 1, { queryFn: legendWithInf, httpGet: fakeHttpGet(INFUSION) });
+    expect(r.ok).toBe(true);
+    if (!r.ok) return;
+    // "Home Improvement" is right there in the payload and must be ignored.
+    expect(r.trail.dep).not.toMatch(/HOM|HOME/);
+    expect(r.trail.dep).toBe("NUL");
+  });
+
+  it("with the brand NOT yet approved: pending.brand present, pending.dept ABSENT", async () => {
+    // The state this ASIN was in before INF was approved — the acceptance
+    // shape originally specified. Dept is never pending either way.
+    const r = await resolveAndGenerateSku("B008DG32FI", 1, {
+      queryFn: fakeLegendQuery({}), httpGet: fakeHttpGet(INFUSION),
+    });
+    expect(r.ok).toBe(false);
+    if (r.ok) return;
+    expect(r.reason).toBe("legend_pending");
+    expect(r.pending?.brand?.rawValue).toBe("Infusion Pool Products");
+    expect(r.pending?.dept).toBeUndefined();
   });
 });

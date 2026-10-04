@@ -2876,22 +2876,57 @@ fail.
   Gourmet Food"). A regression test pins this: an ASIN whose salesRanks and
   classifications top-levels differ must use the classifications value.
 - `brand` — from `summaries[].brand`.
-- Unresolvable DEP → `legend_pending` (awaits approval). Missing category
-  leaf or 404 → hard-fail. A missing BRAND is neither — see below.
-- **Brand ABSENT from the catalog → `BRD = NUL`, automatically
-  (2026-09-24).** `summaries[].brand` that is absent, null, `""`, or
-  whitespace-only **after trimming** counts as absent — all four are one
-  case, decided at the catalog-fetch boundary, which trims to null. A
-  brandless ASIN takes the reserved code `NUL`: **no approval step, no
-  `legend_pending` for brand, no `pending.brand` in the outcome, and no
-  `sku_legend` row keyed on an empty value.** DEP still resolves normally,
-  so an ASIN can be `legend_pending` on its department alone.
+- Unresolvable DEP → `legend_pending` (awaits approval). A 404 → hard-fail.
+  An ABSENT brand or an ABSENT category is neither — both take the reserved
+  code `NUL`, see below. (The former "missing category leaf → hard-fail" was
+  retired 2026-10-04; it was the same condition as "empty classifications",
+  not a separate check, and `no_category` no longer exists as an outcome.)
+- **ABSENT from the catalog → `NUL`, automatically, in EITHER position.**
+  `NUL` is the one reserved code meaning "the catalog has no value here":
+
+  - **`BRD = NUL` (2026-09-24)** — `summaries[].brand` absent, null, `""`, or
+    whitespace-only **after trimming**. All four are one case, decided at the
+    catalog-fetch boundary, which trims to null.
+  - **`DEP = NUL` (2026-10-04)** — no non-empty classifications chain for
+    `ATVPDKIKX0DER`: our entry absent, the top-level array empty, or our
+    entry's chain empty. Decided at the SAME boundary, in `extractTopCategory`,
+    which selects the entry by `marketplaceId` (hardened 2026-10-04 — it used
+    to read `[0]`, correct only because the request asks for one marketplace)
+    and returns null when there is no chain for us.
+
+  Either way: **no approval step, no `legend_pending` for that position, no
+  `pending.brand`/`pending.dept` in the outcome, and no `sku_legend` row keyed
+  on an empty value.** The two resolve INDEPENDENTLY, so an ASIN can be
+  `legend_pending` on brand alone, on department alone, or on neither — and a
+  brandless, categoryless ASIN is `NUL-NUL-…`, which is correct, not a bug.
+
+  **`NUL` can only come from a 200.** A 404 (`dead_asin`), a transport error,
+  throttling, and any partial/failed response remain hard fails on their own
+  outcomes. NUL never masks a fetch that did not work.
+
+  **No fallback for DEP.** Not `salesRanks[].displayName`, not
+  `websiteDisplayGroup` — §18 forbids both; reading a different source than
+  the one the legend was seeded from caused the legend-mismatch bug, and the
+  regression test pinning classifications-over-salesRanks still stands.
+
+  Origin (category): **B008DG32FI** ("Infusion V-fitting for Inlet and Return
+  Line, Venturi"). Verified live 2026-10-04: HTTP 200 whose classifications
+  entry for our marketplace is an EMPTY array, stable across four consecutive
+  fetches, `salesRanks` with no ranks at all, `relationships: []` so there is
+  no variation parent to inherit from, and `websiteDisplayGroupName: "Home
+  Improvement"` which is deliberately NOT used. Genuinely absent at Amazon,
+  not a fetch or parse fault. It now resolves to `INF-NUL-2FI-FIR-001`.
 
   Neither surface (Add-to-SC preview, Velocity "Create SKU & include")
-  shows a brand row for a brandless ASIN, and the Legend-approvals dialog
-  drops any row whose raw value is blank. Self-heal never writes `""` or
-  whitespace to `asins.brand` (`NULLIF(TRIM(...), '')` — blank stores as
-  NULL), and never writes `NUL` there: `NUL` is a code, not a brand name.
+  shows a brand row for a brandless ASIN — nor a department row for a
+  categoryless one, since neither produces a pending entry — and the
+  Legend-approvals dialog drops any row whose raw value is blank. The
+  preview still renders the assembled SKU, so `NUL` in either position is
+  visible there. Self-heal never writes `""` or whitespace to `asins.brand`
+  (`NULLIF(TRIM(...), '')` — blank stores as NULL), never writes `NUL` to
+  either column, and **skips entirely when the category is absent**:
+  `asins.category` stays NULL. `NUL` is a code, never a brand or category
+  name.
   If the catalog later starts returning a real brand, normal legend
   resolution applies to NEW SKUs; existing SKUs are reused unchanged per
   the resurrection rules.
@@ -2933,12 +2968,18 @@ silently applied.
 - Department consistency: never two DEP codes for one category.
 - No SUB codes — SUB is not part of the format.
 - **Reserved codes (never assignable to a real brand or department):**
-  - `NUL` — "this ASIN has no brand" (2026-09-24). Assigned by the resolver,
-    never by approval. `POST /api/sku-legend/approve` rejects it for
-    `approve_new`, `approve_in_place`, AND `merge` with an `invalid_input`
-    error naming the rule. Reserving it is what keeps a real brand from
-    colliding with every brandless SKU. There is no `sku_legend` row for
-    `NUL` and nothing resolves to it through the legend.
+  - `NUL` — "the catalog has no value here", in **either position**: BRD for
+    a brandless ASIN (2026-09-24) and DEP for a categoryless one
+    (2026-10-04). Assigned by the resolver, never by approval. `POST
+    /api/sku-legend/approve` rejects it for `approve_new`,
+    `approve_in_place`, AND `merge`, for **both** legend types (brand and
+    dept), with an `invalid_input` error naming the rule — the phase-0 pass
+    is type-agnostic by construction. Reserving it is what keeps a real
+    brand or department from colliding with an absent-valued SKU. There is
+    no `sku_legend` row for `NUL` and nothing resolves to it through the
+    legend. The constant is `NO_VALUE_CODE` in `shared/sku-legend`
+    (renamed from `NO_BRAND_CODE` 2026-10-04, when it stopped being
+    brand-only).
 - **The legend never holds an entry with a blank value.** A raw value that is
   empty or whitespace-only is not a value; the same writer rejects it for
   every action (including a blank merge target), and the approvals dialog

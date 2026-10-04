@@ -40,11 +40,15 @@ export interface CatalogFetchResult {
 export type CatalogFetchOutcome =
   | { ok: true; data: CatalogFetchResult }
   | { ok: false; reason: "dead_asin"; status: 404 }
-  // no_brand carries the fetched data (brand null) so the manual brand-code
-  // override path (§18, 2026-08-29) can build without a second fetch. A
-  // both-missing item classifies as no_category (the unrecoverable failure).
+  // no_brand carries the fetched data (brand null) so the caller can assign
+  // the reserved NUL code without a second fetch (§18).
+  //
+  // There is NO no_category outcome (removed 2026-10-04). An absent category
+  // on a SUCCESSFUL response is not a failure — it takes BRD/DEP's shared
+  // reserved code NUL, exactly like an absent brand. `category: null` in the
+  // ok payload IS that signal. Only a 404 or a transport/throttle failure
+  // stops a SKU being built, and both are separate outcomes below.
   | { ok: false; reason: "no_brand"; data: Omit<CatalogFetchResult, "brand"> & { brand: null } }
-  | { ok: false; reason: "no_category" }
   | { ok: false; reason: "transient_error"; status?: number; message: string; retryable: true };
 
 export type HttpGetFn = (endpoint: string, params?: Record<string, any>) => Promise<any>;
@@ -73,8 +77,21 @@ const DEFAULT_RETRY: CatalogFetchRetryConfig = {
 // the same ASIN, prefer the first. The full-catalog scan showed 5.7% of ASINs
 // are multi-path; the first path's top is generally the same canonical
 // department (e.g. "Tools & Home Improvement") in the cases that matter.
+//
+// Returns the top-level category for OUR marketplace, or null when the
+// catalog has no classification chain for it.
+//
+// Entry selection is by marketplaceId, NOT [0] (hardened 2026-10-04). Both
+// a single-marketplace request and a multi-marketplace response must read
+// OUR entry; reading [0] blindly happened to be correct only because the
+// request asks for one marketplace. A 200 with no entry for ATVPDKIKX0DER
+// is "no category" — the same null as an empty chain, never a silent read
+// of someone else's taxonomy.
 function extractTopCategory(data: any): string | null {
-  const paths = data?.classifications?.[0]?.classifications;
+  const entries = data?.classifications;
+  if (!Array.isArray(entries)) return null;
+  const ours = entries.find((e: any) => e?.marketplaceId === MARKETPLACE);
+  const paths = ours?.classifications;
   if (!Array.isArray(paths) || paths.length === 0) return null;
   const leaf = paths[0];
   if (!leaf) return null;
@@ -130,8 +147,13 @@ export async function fetchCatalogForSku(
   const summary = data?.summaries?.[0] ?? {};
   const brand: string | null = (summary.brand ?? "").toString().trim() || null;
 
+  // §18 (2026-10-04): an absent category on a 200 is NOT a failure. It is
+  // carried as null and becomes DEP = NUL downstream, the same reserved code
+  // an absent brand takes. The decision lives HERE, at the fetch boundary, so
+  // there is one definition of "the catalog has no category for us".
+  // Deliberately NO fallback to salesRanks[].displayName or
+  // websiteDisplayGroup — §18 forbids both (they caused legend mismatches).
   const category = extractTopCategory(data);
-  if (!category) return { ok: false, reason: "no_category" };
 
   const itemName = (summary.itemName ?? "").toString().trim() || null;
   const imageUrl = data?.images?.[0]?.images?.[0]?.link ?? null;

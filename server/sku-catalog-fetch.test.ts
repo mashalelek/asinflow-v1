@@ -113,13 +113,17 @@ describe("fetchCatalogForSku", () => {
     if (!r.ok) expect(r.reason).toBe("no_brand");
   });
 
-  it("no_category when classifications block is missing/empty", async () => {
+  // RETIRED 2026-10-04: an empty classifications block used to be the
+  // no_category hard fail. It is now `category: null` -> DEP = NUL (§18),
+  // the same treatment an absent brand gets. Kept here, inverted, so the
+  // behaviour change is visible at the old assertion's site.
+  it("empty classifications block is NOT a failure — category null (was no_category)", async () => {
     const r = await fetchCatalogForSku("B0X", fakeGet({
       summaries: [{ brand: "Some Brand" }],
       classifications: [],
     }));
-    expect(r.ok).toBe(false);
-    if (!r.ok) expect(r.reason).toBe("no_category");
+    expect(r.ok).toBe(true);
+    if (r.ok) expect(r.data.category).toBeNull();
   });
 
   // Throttle retries were REMOVED from this module (SPEC §11, 2026-09-06):
@@ -187,11 +191,79 @@ describe("fetchCatalogForSku", () => {
       summaries: [{ brand: "Some Brand" }],
       classifications: [
         {
+          marketplaceId: "ATVPDKIKX0DER",
           classifications: [{ displayName: "Books" }], // no parent
         },
       ],
     }));
     expect(r.ok).toBe(true);
     if (r.ok) expect(r.data.category).toBe("Books");
+  });
+});
+
+// ============================================================================
+// §18 absent category → DEP = NUL (2026-10-04)
+// ============================================================================
+// An absent category on a SUCCESSFUL response is no longer a failure: it is
+// carried as `category: null` and becomes the reserved code NUL downstream,
+// exactly as an absent brand does. The no_category outcome is gone.
+//
+// Origin: B008DG32FI ("Infusion V-fitting") — a 200 whose classifications
+// entry for ATVPDKIKX0DER is an EMPTY array, verified live, stable across
+// four fetches, with no variation parent to inherit from.
+describe("absent category on a 200 → category null, never a failure", () => {
+  const withClassifications = (classifications: any) => ({
+    summaries: [{ brand: "Infusion Pool Products", itemName: "Infusion V-fitting" }],
+    classifications,
+    attributes: {},
+  });
+
+  // The four shapes "no category for us" can take.
+  const EMPTY_SHAPES: Array<[string, any]> = [
+    ["key absent entirely", undefined],
+    ["empty top-level array", []],
+    ["our entry with an empty chain (the real B008DG32FI)", [{ marketplaceId: "ATVPDKIKX0DER", classifications: [] }]],
+    ["no entry for OUR marketplace", [{ marketplaceId: "A1F83G8C2ARO7P", classifications: [{ displayName: "DIY & Tools" }] }]],
+  ];
+
+  for (const [label, classifications] of EMPTY_SHAPES) {
+    it(`${label} → ok with category null`, async () => {
+      const r = await fetchCatalogForSku("B008DG32FI", fakeGet(withClassifications(classifications)));
+      expect(r.ok).toBe(true);           // NOT a failure
+      if (!r.ok) return;
+      expect(r.data.category).toBeNull();
+      expect(r.data.brand).toBe("Infusion Pool Products"); // brand is independent
+    });
+  }
+
+  it("reads OUR marketplace's chain when it is not first in the array", async () => {
+    const r = await fetchCatalogForSku("B000TEST01", fakeGet(withClassifications([
+      { marketplaceId: "A1F83G8C2ARO7P", classifications: [{ displayName: "WRONG — UK" }] },
+      { marketplaceId: "A1AM78C64UM0Y8", classifications: [{ displayName: "WRONG — MX" }] },
+      { marketplaceId: "ATVPDKIKX0DER", classifications: [{ displayName: "Patio, Lawn & Garden" }] },
+    ])));
+    expect(r.ok).toBe(true);
+    if (!r.ok) return;
+    expect(r.data.category).toBe("Patio, Lawn & Garden"); // ours, not [0]
+  });
+
+  it("a 404 is STILL a hard fail — NUL never masks a dead ASIN", async () => {
+    const r = await fetchCatalogForSku("B000DEAD01", async () => {
+      const e: any = new Error("not found"); e.response = { status: 404 }; throw e;
+    });
+    expect(r.ok).toBe(false);
+    if (r.ok) return;
+    expect(r.reason).toBe("dead_asin");
+  });
+
+  it("a transport/throttle failure is STILL a hard fail — NUL only comes from a 200", async () => {
+    for (const status of [429, 500, 503]) {
+      const r = await fetchCatalogForSku("B000FAIL01", async () => {
+        const e: any = new Error("boom"); e.response = { status }; throw e;
+      });
+      expect(r.ok).toBe(false);
+      if (r.ok) continue;
+      expect(r.reason).toBe("transient_error");
+    }
   });
 });

@@ -32,7 +32,9 @@
 //        ok          → generate
 //        dead_asin   → dead_asin
 //        legend_pending → legend_pending (pass through pending details)
-//        no_brand / no_category / transient_error → error(reason)
+//        no_brand / transient_error → error(reason)
+//        (no_category retired 2026-10-04 — an absent category is DEP = NUL,
+//         not a failure; see SPEC §18.)
 //
 // CRITICAL ordering rationale:
 //   already_in_catalog runs BEFORE the dead_asin / catalog-fetch path because
@@ -59,7 +61,7 @@ export interface LegendPending {
 
 export type ResurrectionOutcome =
   | { kind: "reuse"; sku: string; lastCreatedAt: Date }
-  | { kind: "generate"; sku: string; trail: { brd: string; dep: string; ttl: string; category: string; brand: string; itemName: string | null; isDangerousGood: boolean; dgHzRegulation: string | null } }
+  | { kind: "generate"; sku: string; trail: { brd: string; dep: string; ttl: string; category: string | null; brand: string; itemName: string | null; isDangerousGood: boolean; dgHzRegulation: string | null } }
   | { kind: "duplicate_warning"; existingSku: string; statuses: string[] }
   // NEW: at least one SKU listing exists under our sellerId for this ASIN in
   // SC, in any status. Format-agnostic — applies to legacy/PFL/Amazon-random
@@ -68,7 +70,7 @@ export type ResurrectionOutcome =
   | { kind: "dead_asin"; details: string }
   | { kind: "legend_pending"; pending: LegendPending; details: string }
   | { kind: "gated"; eligibilityStatus: string }
-  | { kind: "error"; reason: "no_brand" | "no_category" | "transient_error" | "listings_search_failed"; details: string };
+  | { kind: "error"; reason: "no_brand" | "transient_error" | "listings_search_failed"; details: string };
 
 export interface ResurrectionDeps {
   queryFn: QueryFn;
@@ -172,7 +174,6 @@ export async function resurrectOrGenerateSku(
     case "legend_pending":
       return { kind: "legend_pending", pending: resolved.pending ?? {}, details: resolved.details };
     case "no_brand":
-    case "no_category":
     case "transient_error":
       return { kind: "error", reason: resolved.reason, details: resolved.details };
   }

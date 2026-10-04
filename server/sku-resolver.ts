@@ -10,14 +10,15 @@
 // Returns a typed outcome so the offer-add preview can render per-ASIN status.
 
 import { fetchCatalogForSku, type CatalogFetchOutcome, type HttpGetFn } from "./sku-catalog-fetch";
-import { resolveLegend, NO_BRAND_CODE, type QueryFn } from "@shared/sku-legend";
+import { resolveLegend, NO_VALUE_CODE, type QueryFn } from "@shared/sku-legend";
 import { generateSku } from "@shared/sku-generator";
 
 export interface ResolutionTrail {
   brd: string;
   dep: string;
   ttl: string;
-  category: string;
+  // null when the catalog has no chain for our marketplace (DEP = NUL).
+  category: string | null;
   brand: string;
   // First-ASIN product name (from the catalog's itemName), captured so the
   // registry's reserve() can record what product this NNN actually is.
@@ -38,7 +39,6 @@ export type ResolveSkuOutcome =
       reason:
         | "dead_asin"
         | "no_brand"
-        | "no_category"
         | "transient_error"
         | "legend_pending";
       details: string;
@@ -72,8 +72,6 @@ export async function resolveAndGenerateSku(
         return { ok: false, reason: "dead_asin", details: `getCatalogItem returned 404 for ${asin}` };
       case "no_brand":
         break; // §18 brandless → BRD = NUL below. Not an error, not pending.
-      case "no_category":
-        return { ok: false, reason: "no_category", details: `classifications block empty for ${asin}` };
       case "transient_error":
         return { ok: false, reason: "transient_error", details: `${fetched.status ?? "?"}: ${fetched.message}` };
     }
@@ -81,32 +79,42 @@ export async function resolveAndGenerateSku(
 
   const { category, brand, itemName, imageUrl, isDangerousGood, dgHzRegulation } = fetched.data;
 
-  // §18 brandless ASIN (2026-09-24, replaces the 2026-08-29 manual-code flow):
-  // brand absent/null/empty/whitespace in the catalog → BRD = NUL, decided
-  // here, automatically. No approval step, no legend lookup, and critically NO
-  // pending.brand — there is no raw value, so there is nothing a human could
-  // approve. `brand` is already trimmed-to-null at the fetch boundary
-  // (sku-catalog-fetch), so null here means genuinely brandless.
+  // §18 ABSENT FROM THE CATALOG → NUL, in either position.
   //
-  // The old flow surfaced an approval row with an empty raw value; approving
-  // it wrote a sku_legend row keyed on "" that then captured every later
-  // brandless ASIN. NUL is reserved (shared/sku-legend) precisely so the
-  // legend never has to represent "no brand" as a value.
+  //   brand    absent/null/""/whitespace  → BRD = NUL  (2026-09-24)
+  //   category no chain for our marketplace → DEP = NUL  (2026-10-04)
+  //
+  // Both are decided at the fetch boundary (sku-catalog-fetch trims brand to
+  // null and resolves OUR marketplace's chain to null), so null here means
+  // genuinely absent on a SUCCESSFUL response — never a fetch failure, which
+  // returns dead_asin/transient_error above and never reaches this line.
+  //
+  // Automatic: no approval step, no legend lookup, and critically NO pending
+  // entry — there is no raw value, so there is nothing a human could approve.
+  // The retired brand flow surfaced an approval row with an EMPTY raw value;
+  // approving it wrote a sku_legend row keyed on "" that then captured every
+  // later brandless ASIN. NUL is reserved (shared/sku-legend) precisely so
+  // the legend never has to represent "absent" as a value — in either column.
   const brandless = brand == null;
+  const categoryless = category == null;
 
-  // Self-heal first — succeed-and-write even if legend lookup later returns pending,
-  // so the data is fresh for the next attempt. Skipped when the catalog has no
-  // brand: NUL is a code, never a brand name, and must never reach asins.brand
-  // (§14 — catalog stays the only source for catalog fields).
-  if (deps.selfHealWrite && brand != null) {
-    await deps.selfHealWrite({ asin, category: category!, brand: brand!, itemName, imageUrl });
+  // Self-heal first — succeed-and-write even if the legend lookup later
+  // returns pending, so the data is fresh for the next attempt. It writes
+  // only REAL catalog values: NUL is a code, never a brand or category name,
+  // and must never reach asins.brand / asins.category (§14 — catalog stays
+  // the only source for catalog fields). A categoryless ASIN keeps
+  // asins.category NULL; a brandless one keeps asins.brand NULL.
+  if (deps.selfHealWrite && brand != null && category != null) {
+    await deps.selfHealWrite({ asin, category, brand, itemName, imageUrl });
   }
 
   const [brandRes, deptRes] = await Promise.all([
     brandless
-      ? Promise.resolve({ status: "approved", code: NO_BRAND_CODE, derivedProposal: null } as any)
+      ? Promise.resolve({ status: "approved", code: NO_VALUE_CODE, derivedProposal: null } as any)
       : resolveLegend("brand", brand!, deps.queryFn),
-    resolveLegend("dept", category!, deps.queryFn),
+    categoryless
+      ? Promise.resolve({ status: "approved", code: NO_VALUE_CODE, derivedProposal: null } as any)
+      : resolveLegend("dept", category, deps.queryFn),
   ]);
 
   if (brandRes.status !== "approved" || deptRes.status !== "approved") {
@@ -151,7 +159,7 @@ export async function resolveAndGenerateSku(
       brd: brandRes.code!,
       dep: deptRes.code!,
       ttl: sku.split("-")[3], // TTL is the 4th segment (index 3)
-      category: category!,
+      category,
       // Brandless ASIN: no catalog brand exists, so the brand NAME is empty
       // (never "NUL" — that is a BRD code, not a brand name).
       brand: brand ?? "",

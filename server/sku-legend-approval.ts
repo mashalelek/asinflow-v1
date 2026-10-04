@@ -23,7 +23,7 @@
 // tested independently from the SQL.
 
 import type pg from "pg";
-import { NO_BRAND_CODE, isReservedLegendCode, isBlankRawValue } from "@shared/sku-legend";
+import { NO_VALUE_CODE, isReservedLegendCode, isBlankRawValue } from "@shared/sku-legend";
 
 // ============================================================================
 // Types
@@ -130,7 +130,8 @@ export async function processBulkApproval(
         reason: "invalid_input",
         message:
           `code "${item.code.trim().toUpperCase()}" is reserved and cannot be assigned to a ` +
-          `${item.type}. ${NO_BRAND_CODE} marks an ASIN with no brand and is set automatically.`,
+          `${item.type}. ${NO_VALUE_CODE} marks a value the catalog does not have ` +
+          `— brand OR department — and is set automatically by the resolver.`,
       };
     }
   }

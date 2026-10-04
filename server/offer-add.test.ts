@@ -89,6 +89,7 @@ function makeRoutedQueryFn(routes: {
 const HAPPY_CATALOG = {
   summaries: [{ brand: "AminoGenesis", itemName: "Triple Firming Renewal" }],
   classifications: [{
+    marketplaceId: "ATVPDKIKX0DER",
     classifications: [{
       displayName: "Moisturizers",
       parent: { displayName: "Skin Care", parent: { displayName: "Beauty & Personal Care" } },

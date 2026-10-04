@@ -359,6 +359,8 @@ describe("processBulkApproval — reserved codes and blank raw values", () => {
     expect(results.every((r) => r.outcome === "error")).toBe(true);
   });
 
+  // §18 (2026-10-04): NUL is now assigned to DEP as well as BRD, so the
+  // department side of this guard is load-bearing, not just symmetry.
   it("reserves NUL for departments too — not just brands", async () => {
     const { handlers } = mockHandlers({});
     const results = await processBulkApproval(
@@ -366,6 +368,33 @@ describe("processBulkApproval — reserved codes and blank raw values", () => {
       handlers,
     );
     expect(results[0].outcome).toBe("error");
+  });
+
+  for (const type of ["brand", "dept"] as const) {
+    for (const action of ["approve_new", "approve_in_place"] as const) {
+      it(`rejects NUL for type=${type} action=${action}`, async () => {
+        const { handlers, calls } = mockHandlers({});
+        const item = action === "approve_new"
+          ? { type, rawValue: "Something", action, code: RESERVED }
+          : { type, rawValue: "Something", action, legendId: "u-1", code: RESERVED };
+        const results = await processBulkApproval([item as ApprovalItem], handlers);
+        expect(results[0].outcome).toBe("error");
+        if (results[0].outcome !== "error") return;
+        expect(results[0].reason).toBe("invalid_input");
+        expect(results[0].message).toContain(RESERVED);
+        expect(calls.filter((c) => c.phase !== "loadApprovedBrands")).toEqual([]);
+      });
+    }
+  }
+
+  it("the rejection message names BOTH positions, not just brand", async () => {
+    const { handlers } = mockHandlers({});
+    const r = await processBulkApproval(
+      [{ type: "dept", rawValue: "Books", action: "approve_new", code: RESERVED }],
+      handlers,
+    );
+    if (r[0].outcome !== "error") throw new Error("expected error");
+    expect(r[0].message).toMatch(/department/i);
   });
 
   for (const [label, blank] of [["empty", ""], ["whitespace", "   "]] as const) {

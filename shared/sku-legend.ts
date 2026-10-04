@@ -108,20 +108,33 @@ export async function resolveLegend(
 // Reserved codes — never assignable to a real brand or department
 // ============================================================================
 
-// NUL = "this ASIN has no brand". Assigned automatically by the resolver when
-// summaries[].brand is absent/null/empty/whitespace (§18, 2026-09-24). It is
-// NOT a legend entry: there is no sku_legend row for it, no raw value keys to
-// it, and the approval writer rejects it for every action. Reserving the code
-// is what keeps a real brand from ever colliding with a brandless SKU.
+// NUL = "the catalog has no value here" — the ONE reserved code for absent,
+// in EITHER position of the SKU:
 //
-// Origin: B08WX3XDLQ ("Winter Garden Paperback") — a book, so the catalog
-// serializes contributors/manufacturer and omits `brand` entirely. The old
-// missing-brand flow surfaced an approval row with an EMPTY raw value, and
-// approving it wrote a sku_legend row keyed on "" — which then swallowed
-// every later brandless ASIN into that one code.
-export const NO_BRAND_CODE = "NUL";
+//   BRD = NUL  summaries[].brand absent/null/""/whitespace   (§18, 2026-09-24)
+//   DEP = NUL  no classifications chain for our marketplace  (§18, 2026-10-04)
+//
+// A brandless, categoryless ASIN is therefore NUL-NUL-… and that is correct,
+// not a bug. Both are decided at the catalog-fetch boundary and only ever on
+// a SUCCESSFUL 200 — a 404 or transport failure is still a hard fail, so NUL
+// can never mask a fetch that did not work.
+//
+// NUL is NOT a legend entry: no sku_legend row, no raw value keys to it, and
+// the approval writer rejects it for every action and BOTH types. Reserving
+// it is what keeps a real brand or department from colliding with an
+// absent-valued SKU.
+//
+// Origin (brand): B08WX3XDLQ ("Winter Garden Paperback") — a book, so the
+// catalog serializes contributors/manufacturer and omits `brand` entirely.
+// The retired missing-brand flow surfaced an approval row with an EMPTY raw
+// value, and approving it wrote a sku_legend row keyed on "" that then
+// swallowed every later brandless ASIN into one code.
+// Origin (category): B008DG32FI ("Infusion V-fitting") — a 200 whose
+// classifications entry for ATVPDKIKX0DER is an EMPTY array, with no
+// variation parent to inherit from.
+export const NO_VALUE_CODE = "NUL";
 
-export const RESERVED_LEGEND_CODES: ReadonlySet<string> = new Set([NO_BRAND_CODE]);
+export const RESERVED_LEGEND_CODES: ReadonlySet<string> = new Set([NO_VALUE_CODE]);
 
 export function isReservedLegendCode(code: string): boolean {
   return RESERVED_LEGEND_CODES.has((code ?? "").trim().toUpperCase());
