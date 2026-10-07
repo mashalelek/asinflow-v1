@@ -28,7 +28,7 @@ import { applyCatalogDeletedSignal } from "./catalog-deleted-write";
 import type { QueryFn } from "@shared/sku-legend";
 import { fetchDgHzLive, type HttpGetFn } from "./sku-catalog-fetch";
 import { resolveDgHzRegulation } from "./hazmat-classify";
-import { recordSubmission } from "./listing-submissions-repo";
+import { recordSubmission, type PricingDecision } from "./listing-submissions-repo";
 
 const MARKETPLACE = "ATVPDKIKX0DER";
 const PRODUCT_TYPE = "PRODUCT"; // offer-only matching uses the generic PRODUCT type
@@ -58,6 +58,12 @@ export interface OfferAddInput {
   // resurrection-computed SKU (no brand/dept/asin swap). Server-side
   // collision checks live in the submit orchestrator (offer-add-submit.ts).
   skuOverride?: string;
+  // §18 v2 (2026-10-07): the resolver's decision, threaded through so the
+  // verification-ledger row records WHY this price — source, anchor offer,
+  // CPT seen, resulting ROI, warning, qualified/disqualified. Optional: the
+  // dry-run/preview path and tests don't supply it, and a missing decision
+  // writes NULLs (= "not recorded"), never a wrong one.
+  pricingDecision?: PricingDecision;
 }
 
 export interface PutListingsPayload {
@@ -424,7 +430,11 @@ export async function offerAddForAsin(
       // a ledger-write failure must never mask a real SC submission.
       try {
         await recordSubmission(
-          { asin: input.asin, sku, submissionId: outcome.submissionId ?? null, submittedPrice: input.price ?? null },
+          {
+            asin: input.asin, sku, submissionId: outcome.submissionId ?? null,
+            submittedPrice: input.price ?? null,
+            pricing: input.pricingDecision,
+          },
           deps.queryFn as any,
         );
       } catch (err: any) {

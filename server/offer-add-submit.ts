@@ -31,7 +31,7 @@
 import { offerAddForAsin as realOfferAddForAsin, preFilterSubmitSet, type OfferAddInput, type OfferAddResult, type OfferAddDeps, type PreFilterResult } from "./offer-add";
 import type { LegendPending } from "./sku-resurrection";
 import { fetchCompetingOffers as realFetchOffers, type OffersFetchOutcome } from "./listings-offers-fetch";
-import { resolveOfferPrice, type PriceResolverResult } from "@shared/price-resolver";
+import { resolveOfferPrice, type PriceResolverResult, type DisqualifiedOffer } from "@shared/price-resolver";
 import { assignNnns, buildExistingNnnsFromSkus, parseConformingSku, type NnnAssignmentRequest, type NnnAssignmentOutcome } from "@shared/nnn-assignment";
 import type { ListingsIssue, OfferAddFailureReason } from "./listings-error-map";
 import type { QueryFn } from "@shared/sku-legend";
@@ -48,8 +48,10 @@ import type { ProductRegistryRow } from "@shared/product-registry";
 // 'created' / 'putlistings_failed' come only from phase 4.
 export type SubmitOutcome =
   // Reached phase 4 + completed (phase4Mode="live")
-  | { kind: "created";             asin: string; sku: string; submissionId: string; warnings: ListingsIssue[]; resolvedPrice: number; priceRule: string;
-      priceDetail: string; capApplied: boolean; noPriceReference: boolean; lowRoiAfterCap: boolean }
+  | { kind: "created";             asin: string; sku: string; submissionId: string; warnings: ListingsIssue[]; resolvedPrice: number; priceSource: string;
+      priceDetail: string; anchorOfferPrice: number | null; anchorOfferFeedback: number | null;
+      competitivePriceThreshold: number | null; resultingRoi: number | null;
+      priceWarning: string | null; qualifiedCount: number; disqualified: DisqualifiedOffer[] }
   | { kind: "putlistings_failed";  asin: string; sku: string; reason: OfferAddFailureReason; originalCode: string | null; originalMessage: string; retryable: boolean; resolvedPrice: number }
   // Reached phase 4 but did NOT fire PUT (phase4Mode="preview").
   // The payload IS the exact bytes that "live" mode would have sent.
@@ -58,8 +60,10 @@ export type SubmitOutcome =
   // operator NNN edits can lock/unlock TTL client-side without an extra
   // round-trip. proposedNnn/proposedTtl are the allocator + derivation
   // defaults the canonical SKU was built from.
-  | { kind: "would_submit"; asin: string; sku: string; reused: boolean; payload: any; resolvedPrice: number; priceRule: string;
-      priceDetail: string; capApplied: boolean; noPriceReference: boolean; lowRoiAfterCap: boolean;
+  | { kind: "would_submit"; asin: string; sku: string; reused: boolean; payload: any; resolvedPrice: number; priceSource: string;
+      priceDetail: string; anchorOfferPrice: number | null; anchorOfferFeedback: number | null;
+      competitivePriceThreshold: number | null; resultingRoi: number | null;
+      priceWarning: string | null; qualifiedCount: number; disqualified: DisqualifiedOffer[];
       // §18 max_order_quantity (2026-09-13) — read out of the assembled payload.
       maxOrderQuantity?: number;
       brandCode?: string; registry?: ProductRegistryRow[]; proposedNnn?: number; proposedTtl?: string }
@@ -319,8 +323,10 @@ export async function submitOfferAddBatch(
     // cogs travels WITH the price (2026-09-13) so max_order_quantity is
     // computed from the exact number the price was resolved against — a
     // re-read here could drift from what the resolver saw.
-    price: number; rule: string; cogs: number | null;
-    detail: string; capApplied: boolean; noPriceReference: boolean; lowRoiAfterCap: boolean;
+    price: number; cogs: number | null;
+    detail: string; source: string; anchorOfferPrice: number | null; anchorOfferFeedback: number | null;
+    competitivePriceThreshold: number | null; resultingRoi: number | null;
+    warning: string | null; qualifiedCount: number; disqualified: DisqualifiedOffer[];
   }>();
   for (let i = 0; i < readyForPricing.length; i++) {
     const p = readyForPricing[i];
@@ -345,7 +351,10 @@ export async function submitOfferAddBatch(
       offers: offersOutcome.ok
         ? {
             kind: "definitive" as const,
-            competing: offersOutcome.competingOffers,
+            // §18 v2: the resolver qualifies (Amazon out, feedback >= 15) and
+            // reports the disqualified, so it needs the full per-offer list —
+            // not just prices. Our own offer is already filtered out upstream.
+            offers: offersOutcome.allOffers.filter((o) => o.sellerId !== deps.sellerId),
             competitivePriceThreshold: offersOutcome.competitivePriceThreshold,
             buyBoxPrice: offersOutcome.buyBoxPrice,
           }
@@ -354,10 +363,12 @@ export async function submitOfferAddBatch(
     const resolved: PriceResolverResult = resolveOfferPrice(resolverInput, deps.settings, deps.includeInboundShipping);
 
     if (resolved.resolvedPrice == null) {
-      // skip_no_cogs / skip_unreachable / offers_fetch_failed
+      // §18 v2 blocked reasons map 1:1 onto the existing skip reasons.
+      // needs_cogs is NOT a dead end: the preview expands the row for an
+      // inline COGS entry, saves it as estimated COGS, and re-resolves.
       const skipReason: SkipReason =
-        resolved.rule === "skip_no_cogs" ? "needs_cogs"
-        : resolved.rule === "offers_fetch_failed" ? "offers_fetch_failed"
+        resolved.blocked === "needs_cogs" ? "needs_cogs"
+        : resolved.blocked === "offers_fetch_failed" ? "offers_fetch_failed"
         : "unreachable_roi";
       outcomeByAsin.set(p.asin, {
         kind: "skipped", asin: p.asin, reason: skipReason,
@@ -366,9 +377,14 @@ export async function submitOfferAddBatch(
       continue;
     }
     priceByAsin.set(p.asin, {
-      price: resolved.resolvedPrice, rule: resolved.rule, cogs: row.cogs,
-      detail: resolved.detail, capApplied: resolved.capApplied,
-      noPriceReference: resolved.noPriceReference, lowRoiAfterCap: resolved.lowRoiAfterCap,
+      price: resolved.resolvedPrice, cogs: row.cogs,
+      detail: resolved.detail, source: resolved.source!,
+      anchorOfferPrice: resolved.anchorOffer?.price ?? null,
+      anchorOfferFeedback: resolved.anchorOffer?.feedbackCount ?? null,
+      competitivePriceThreshold: resolved.competitivePriceThreshold,
+      resultingRoi: resolved.resultingRoi,
+      warning: resolved.warning, qualifiedCount: resolved.qualifiedCount,
+      disqualified: resolved.disqualified,
     });
   }
 
@@ -448,7 +464,22 @@ export async function submitOfferAddBatch(
       productRegistry: phase4Mode === "live" ? deps.productRegistry : undefined,
     };
     const result = await offerAddFn(
-      { asin: p.asin, productNumber, price: priced.price, cogs: priced.cogs, skuOverride },
+      {
+        asin: p.asin, productNumber, price: priced.price, cogs: priced.cogs, skuOverride,
+        // §18 v2: persist WHY this price on the ledger row. Only in live mode —
+        // preview fires no PUT and writes no submission.
+        pricingDecision: phase4Mode === "live" ? {
+          source: priced.source,
+          detail: priced.detail,
+          anchorOfferPrice: priced.anchorOfferPrice,
+          anchorOfferFeedback: priced.anchorOfferFeedback,
+          cptSeen: priced.competitivePriceThreshold,
+          resultingRoi: priced.resultingRoi,
+          warning: priced.warning,
+          qualifiedOfferCount: priced.qualifiedCount,
+          disqualifiedOffers: priced.disqualified,
+        } : undefined,
+      },
       innerDeps,
       phase4Mode === "preview", // dryRun: TRUE for preview, FALSE for live PUT
     );
@@ -473,20 +504,26 @@ export async function submitOfferAddBatch(
       }
       outcomeByAsin.set(p.asin, {
         kind: "would_submit", asin: p.asin, sku: result.sku, reused: result.reused,
-        payload: result.payload, resolvedPrice: priced.price, priceRule: priced.rule,
+        payload: result.payload, resolvedPrice: priced.price, priceSource: priced.source,
         // Read back OUT of the assembled payload — preview shows exactly what
         // would ship, not a recomputation that could drift from it.
         maxOrderQuantity: (result.payload as any)?.attributes?.max_order_quantity?.[0]?.value,
-        priceDetail: priced.detail, capApplied: priced.capApplied,
-        noPriceReference: priced.noPriceReference, lowRoiAfterCap: priced.lowRoiAfterCap,
+        priceDetail: priced.detail, anchorOfferPrice: priced.anchorOfferPrice,
+        anchorOfferFeedback: priced.anchorOfferFeedback,
+        competitivePriceThreshold: priced.competitivePriceThreshold,
+        resultingRoi: priced.resultingRoi, priceWarning: priced.warning,
+        qualifiedCount: priced.qualifiedCount, disqualified: priced.disqualified,
         brandCode, registry, proposedNnn, proposedTtl,
       });
     } else if (result.kind === "created") {
       outcomeByAsin.set(p.asin, {
         kind: "created", asin: p.asin, sku: result.sku, submissionId: result.submissionId,
-        warnings: result.warnings, resolvedPrice: priced.price, priceRule: priced.rule,
-        priceDetail: priced.detail, capApplied: priced.capApplied,
-        noPriceReference: priced.noPriceReference, lowRoiAfterCap: priced.lowRoiAfterCap,
+        warnings: result.warnings, resolvedPrice: priced.price, priceSource: priced.source,
+        priceDetail: priced.detail, anchorOfferPrice: priced.anchorOfferPrice,
+        anchorOfferFeedback: priced.anchorOfferFeedback,
+        competitivePriceThreshold: priced.competitivePriceThreshold,
+        resultingRoi: priced.resultingRoi, priceWarning: priced.warning,
+        qualifiedCount: priced.qualifiedCount, disqualified: priced.disqualified,
       });
     } else if (result.kind === "putlistings_failed") {
       outcomeByAsin.set(p.asin, {

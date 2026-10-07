@@ -24,7 +24,12 @@ describe("submit-time pending write", () => {
   });
 
   it("the ledger row still starts 'pending' — it supplies the pending render style", () => {
-    expect(read("listing-submissions-repo.ts")).toMatch(/verify_status\)\s*\n?\s*VALUES \(\$1, \$2, \$3, \$4, 'pending'\)/);
+    // §18 v2 (2026-10-07) widened this INSERT with the pricing-decision
+    // columns, so the pin can't match the old closing paren. The INTENT is
+    // unchanged and still asserted: verify_status is the 5th value and it is
+    // the literal 'pending' — ACCEPTED is not live.
+    const repo = read("listing-submissions-repo.ts");
+    expect(repo).toMatch(/verify_status,?[\s\S]*VALUES \(\$1, \$2, \$3, \$4, 'pending'/);
   });
 });
 

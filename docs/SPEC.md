@@ -2738,83 +2738,139 @@ offer-add preview surfaces "dead ASIN — cannot create offer" and excludes it.
 (Catalog-404 now auto-marks `status = 'dead'`, reason `catalog_deleted` —
 §14, 2026-09-07 — and the DA-2 revival dialog is the one-click un-dead.)
 
-### Price Resolution
+### Price Resolution (v2, 2026-10-07)
 
-Offer price is set by priority:
+Offer-anchored. The anchor comes from a **qualified offer set** of current
+competing offers; `CompetitivePriceThreshold` is **never a pricing input**;
+every path resolves to a price without manual entry.
 
-1. **Default (≥1 competing offer):** highest competing offer **× 1.30**, rounded UP to the next `.99`.
-2. **No competing offers:** price solved for **100% ROI** on our COGS.
-3. **18555 cap (2026-08-02):** the rule price is then capped — `price =
-   min(rule price, cap)` — so opening offers stay under Amazon's
-   "price appears higher than expected" suppression. See "Suppression cap"
-   below. The cap can only lower a price, never raise it.
+Data source is unchanged: `fetchCompetingOffers` / `getItemOffers`
+(`GET /products/pricing/v0/items/{Asin}/offers`, ~0.5 rps,
+`server/listings-offers-fetch.ts`), landed prices (`ListingPrice +
+ShippingPrice`), our own offers filtered out by seller ID. It does NOT reuse
+`getPricing`, and lowest FBA is never the anchor. `.99` ceil-rounding is
+unchanged.
 
-Rule 1 is the default whenever any competing offer exists. Rule 2 applies only
-when the listing has zero competing offers.
+**Why v2 (B0BS6NVYCN, 2026-09-02):** a listing glutted for months (~50
+sellers, ~$20) collapsed to 6 offers; survivors repriced to $37–40, last FBA
+Buy Box $39.99 — Buy Box suppressed because Amazon's CPT lagged at ~$21. The
+v1 cap chain priced the new offer at **$20.99, $3 below breakeven**. CPT was
+measuring the past, not the market. Confirmed on three more (2026-10-04):
+B00IJYJKRI (5 offers $21.57–21.95, CPT $5.68, COGS $5.36 → v1 capped to
+**$5.59, ROI −102.4%**), B00MN4IRRO (CPT $6.88 vs an $11.00 floor),
+B099KRQ1W7 (CPT $12.50 vs $30.98).
 
-**Implementation (verified 2026-07-06, read-only trace):** the offer-add path
-calls `getItemOffers` (`GET /products/pricing/v0/items/{Asin}/offers`, ~0.5 rps)
-via `fetchCompetingOffers` (`server/listings-offers-fetch.ts`). It does **NOT**
-reuse `getPricing` data, and **lowest FBA is never the anchor**.
+#### Qualified offer set
 
-- **"Competing"** = the **landed price** (`ListingPrice + ShippingPrice`) of
-  **every offer from OTHER sellers — FBA and FBM both**. Our own offers are
-  filtered out by seller ID, so the price is never set against ourselves.
-- **Rule 1 anchor** = `Math.max` of that competing list — the **single highest
-  competing offer of any fulfillment type** (NOT the buy box, NOT lowest FBA,
-  NOT a median). Price = anchor × 1.30, rounded UP to the next `.99`
-  (`ceilToNext99`).
+All competing offers (other sellers, New condition, landed price), minus two
+exclusion classes. **This set is SHARED with the Repricing Engine's min/max
+(§23)** — one definition, both consumers.
 
-**Rule 2 (0 competing offers)** requires an inverse solve (ROI → price), not a
-direct profitability check. `shared/profitability.ts` helpers gate "is this
-price profitable"; they don't solve for a target price. A **bisection over
-`calculateProfit`** targets `roi === 100`, since FBA/referral fees vary
-nonlinearly with price; the result is rounded UP to `.99` (protects the ROI
-floor — resulting ROI is always ≥ target). Two guards short-circuit it:
-- **`skip_no_cogs`** — COGS is null or ≤ 0 → 100% ROI can't be solved without
-  cost; the ASIN is skipped, not priced.
-- **`skip_unreachable`** — 100% ROI isn't achievable within the price search
-  range (extreme fee/prep structure) → skipped.
+1. **Amazon — always excluded.** Amazon is technically FBA but we never
+   compete with Amazon.
+2. **Feedback count < 15 — always excluded**, regardless of price (no track
+   record). Threshold history: 10 (2026-09-03) → 20 (2026-09-15) → **15
+   (2026-10-05)**. A missing `SellerFeedbackRating` counts as 0 → excluded.
 
-### Suppression cap (18555 prevention)
+Disqualified offers are **listed in the preview with reasons**
+(`amazon_offer`, `under_15_feedback`), never silently dropped.
 
-**History.** Anchoring Rule 1 on the *max* competing offer lands far above the
-buy box when a junk high outlier exists. Until 2026-08-02 this was treated as
-designed behavior ("high placeholder, repricer owns the real price") — but the
-`18555` / `LISTING_SUPPRESSED` rows it produced (3 of the Aug-02 batch of 21;
-each back-solved to 1.3 × an offer 50–100% above the buy box) are pure
-downside: a suppressed opening offer sells nothing and pollutes the
-verification ledger with terminal conflicts. The err-high philosophy is kept
-**within the non-suppressed range** — the repricer walks the price down after.
+**No outlier rule for opening prices** (2026-10-05). The former
+"low-credibility outlier" rule is removed and nothing replaces it here: the
+anchor is the HIGHEST qualified FBA offer, so excluding low-priced outliers
+could never change it. Low-outlier handling lives only in §23's min
+calculation (its lowest-offer outlier rule).
 
-**Reference data — free, same call.** `getItemOffers`' response carries
-`payload.Summary` alongside `Offers[]`; `fetchCompetingOffers` parses
-`CompetitivePriceThreshold` (CPT — present only sometimes; observed 2 of 6
-probes, including an ASIN with NO buy box) and the New-condition buy box
-landed price. Zero additional API calls.
+**Data limitation (v2 scope):** `getItemOffers` carries per-offer feedback but
+NOT stock depth, so "1 review and 5 units" is filterable on feedback only.
+Stock-depth-aware filtering (Keepa offer data, cart probing) is a possible v3
+— do not fake it from available fields.
 
-**Cap chain** (applies to BOTH rules' output):
+#### COGS is required
 
-1. **CPT present** → cap **strictly below CPT**, floored to `.x9`:
-   the largest price ending in 9 cents that is `< CPT`. If CPT itself ends in
-   `.x9`, step down one dime (CPT `$119.99` → cap `$119.89`).
-2. **CPT absent, buy box present** → cap = **buy box × 1.5**, floored to the
-   nearest `.x9` (≤). Calibration (Aug-02 data): ≤ 1.94×BB passed, 1.95–2.5×
-   tripped; 1.5 errs high with margin for Amazon's drifting heuristic.
-3. **Neither reference** → **no silent cap**: the rule price stands and the
-   preview row carries a visible flag ("no market reference — 18555 risk") for
-   a per-ASIN eyes-on decision.
+Every path needs COGS (`COALESCE(estimated_cogs, cogs)`, §2 provenance). When
+COGS is null or ≤ 0 the preview row **expands inline for a COGS entry** (same
+no-nested-modal pattern as `legend_pending`) and **cannot be submitted until
+it is entered**. The entered value is saved as the ASIN's estimated COGS
+through the SAME write path as the product row's Est. COGS edit, then the row
+resolves normally. Replaces v1's `skip_no_cogs` skip.
 
-`.x9` flooring = 10-cent steps ending in 9 (`$18.97` → `$18.89`), NOT
-`.99`-dollar steps. The rules' own `.99` ceil-rounding is unchanged; flooring
-applies only to the cap value.
+#### Anchor resolution
 
-**Visibility.** When the cap binds, the resolver reports the uncapped rule
-price + cap reference in its detail string, and the preview shows a capped
-indicator. If the capped price drops resulting ROI below the min-ROI
-threshold, the preview row is **flagged, not blocked** — review decides.
-Historical `18555` rows already in the ledger keep their `terminal_conflict`
-surfacing unchanged.
+1. **Qualified FBA offers exist** → anchor = **highest qualified FBA landed
+   price**; opening price = anchor ceil-rounded to the next `.99`. Then the ROI
+   check below. (Err-high is retained — offers are born closed and the
+   repricer walks the price down — but bounded by *real offers*, not by CPT
+   and not by ×1.30 over a junk outlier.)
+2. **No qualified FBA offers, or no offers at all** → price **solved for 60%
+   ROI**: bisection over `calculateProfit` targeting `roi === 60`, ceil to
+   `.99` (so resulting ROI is always ≥ 60%). If 60% is unreachable within the
+   search range, the row is **blocked** with that reason.
+
+**ROI check on the FBA anchor.** After path 1, compute ROI at the anchor
+price. If ROI **< 20%** → price = **40% ROI solve** (same bisection, ceil
+`.99`) and the row shows the warning **`low_roi_repriced`**: "highest
+qualified FBA offer gives X% ROI — priced at 40% ROI." **This is the only
+warning the resolver emits.** Path 2 needs no check — it is already ≥ 60%.
+Rationale: a starting price above the market beats live-at-a-loss.
+
+#### CPT: shown, never used
+
+`CompetitivePriceThreshold` is still parsed (free, same `getItemOffers` call)
+and **shown as a value on every preview row** ("—" when Amazon returns none).
+It is **never an input to any price** — not a cap, not a floor, not a trigger —
+and produces **no warning or flag**. The Buy Box landed price is likewise not
+a pricing input.
+
+*Scope clarification:* CPT relates to Featured Offer (Buy Box)
+eligibility/suppression. It is NOT the mechanism behind "potential high
+pricing error" listing deactivation, and it is never an input to min/max
+prices anywhere in AF.
+
+#### Preview visibility
+
+Per row: price source (`fba_anchor` / `roi_60_solve` / `roi_40_floor`); the
+anchor offer's landed price and seller feedback (FBA path); resulting ROI; the
+CPT value or "—"; qualified vs disqualified counts with the disqualified
+expandable by reason; the inline COGS input when COGS is missing; the
+`low_roi_repriced` warning when it applies.
+
+#### Retired from v1 (history below)
+
+The cap chain, the "capped" indicator, `lowRoiAfterCap`, `noPriceReference` /
+"no market reference — 18555 risk", the above-CPT advisory,
+`priced_above_market`, `no_cogs_floor_unknown`, manual price entry, the
+**×1.30** anchor, and the **100% ROI** solve.
+
+### Suppression cap (18555) — HISTORY, retired 2026-10-07
+
+Kept as the record of why the cap existed and why it was removed. **None of
+the mechanism below is live.**
+
+Anchoring v1's Rule 1 on the *max* competing offer landed far above the buy
+box when a junk high outlier existed. Until 2026-08-02 that was treated as
+designed ("high placeholder, repricer owns the real price") — but the `18555`
+/ `LISTING_SUPPRESSED` rows it produced (3 of the Aug-02 batch of 21, each
+back-solving to 1.3 × an offer 50–100% above the buy box) were pure downside:
+a suppressed opening offer sells nothing and pollutes the verification ledger
+with terminal conflicts.
+
+The cap chain (shipped 860ee27, 2026-08-02; retired 2026-10-07) applied to
+both rules' output: **CPT present** → cap strictly below CPT, floored to
+`.x9`; **CPT absent, buy box present** → cap = buy box × **1.5**, floored to
+`.x9`; **neither** → no cap, with a visible "no market reference — 18555
+risk" flag. `.x9` flooring meant 10-cent steps ending in 9 (`$18.97` →
+`$18.89`), not `.99`-dollar steps.
+
+**v1 calibration data (kept):** on the Aug-02 set, ≤ 1.94 × buy box passed
+and 1.95–2.5 × tripped 18555; 1.5 was chosen to err high with margin for
+Amazon's drifting heuristic.
+
+**Why it was retired:** the cap keyed on CPT, and CPT lags the market badly
+enough to price below breakeven (the four cases above). Err-high within the
+non-suppressed range is now achieved by anchoring on the highest *qualified*
+offer instead — a real, current reference. Historical `18555` rows already in
+the ledger keep their `terminal_conflict` surfacing unchanged.
 
 ### SKU Format
 
@@ -4253,3 +4309,16 @@ data itself:
   (the local box can't guarantee the daily snapshot history it needs).
 - Days-since-last-sale column, min/max price columns, Aura API anything —
   later phases of the repricing engine.
+
+**Qualified offer set (forward reference, 2026-10-07).** This section states
+no qualified-set rules of its own — min/max are out of scope above. When the
+repricing engine's min/max phases land they consume the SAME qualified offer
+set defined in §18 "Price Resolution (v2)": FBA, New, landed price, **feedback
+count ≥ 15**, **Amazon always excluded**, and **no low-credibility
+junk-outlier filter** (removed 2026-10-05). The engine's own **lowest-offer
+outlier rule** is additional and unchanged — it belongs to the min
+calculation only, and §18 deliberately has no outlier rule because its anchor
+is the HIGHEST qualified offer. Design detail lives in
+`docs/claude_spec-patch-repricing-engine-v1.md` (v1.6) until that phase is
+folded in. No repricer min/max code exists yet (verified 2026-10-07), so
+there is nothing implemented to align.

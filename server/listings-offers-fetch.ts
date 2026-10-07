@@ -24,7 +24,32 @@ export interface CompetingOffer {
   sellerId: string;
   price: number;            // landed price (listing + shipping)
   isFba: boolean;
+  // §18 v2 qualified offer set (2026-10-07). Both needed to qualify an offer;
+  // the resolver does the qualifying, this module only reports what Amazon
+  // said.
+  //
+  // feedbackCount: SellerFeedbackRating.FeedbackCount. NULL when Amazon omits
+  // the block entirely — the resolver treats null as 0, i.e. disqualified,
+  // because "no track record" is exactly the case the >= 15 rule exists for.
+  feedbackCount: number | null;
+  isAmazon: boolean;
 }
+
+// Amazon's own retail seller ID in the US marketplace. Amazon is technically
+// FBA but we never compete with it (§18 v2 / §23), so it is excluded from
+// every qualified offer set.
+//
+// NOT CONFIRMED LIVE: no probe during implementation (2026-10-07) returned an
+// Amazon-sold offer to check against. The value is the documented US retail
+// merchant token, which is the same string as the marketplace ID — a known
+// SP-API quirk, not a copy-paste error.
+//
+// Safety net if it is ever wrong: Amazon retail offers carry no
+// SellerFeedbackRating, so feedbackCount is null → 0 → disqualified by the
+// >= 15 rule anyway. A wrong constant here mislabels the REASON
+// (under_15_feedback instead of amazon_offer); it does not let an Amazon
+// offer into the qualified set.
+export const AMAZON_US_SELLER_ID = "ATVPDKIKX0DER";
 
 export type OffersFetchOutcome =
   | {
@@ -56,9 +81,11 @@ const DEFAULT_RETRY: OffersRetryConfig = {
  * Returns just the prices (sorted desc, what the resolver needs) plus the
  * full per-offer list for diagnostic visibility.
  *
- * NOTE: includes ALL non-our offers — both FBA and FBM. The resolver's
- * "highest competing offer + 30%" rule treats both equally; if you ever
- * want FBA-only competition, filter on `allOffers[].isFba` in the caller.
+ * NOTE: includes ALL non-our offers — both FBA and FBM, Amazon and
+ * third-party, any feedback count. This module does NOT qualify offers; it
+ * reports what Amazon returned. §18 v2's qualified set (Amazon excluded,
+ * feedback >= 15) is applied in shared/price-resolver.ts, which needs the
+ * full list to report disqualified counts and reasons.
  *
  * Retry pattern mirrors getCommingleHazmat (spapi.ts:826) — same loop shape,
  * backoff doubling, max retries — keeping ONE retry pattern in the codebase
@@ -105,10 +132,15 @@ export async function fetchCompetingOffers(
       const listing = parseFloat(o?.ListingPrice?.Amount ?? "0");
       const shipping = parseFloat(o?.ShippingPrice?.Amount ?? "0");
       const landed = listing + (isNaN(shipping) ? 0 : shipping);
+      const fbRaw = o?.SellerFeedbackRating?.FeedbackCount;
+      const fbNum = fbRaw != null ? Number(fbRaw) : NaN;
+      const sellerId = String(o?.SellerId ?? "");
       return {
-        sellerId: String(o?.SellerId ?? ""),
+        sellerId,
         price: landed,
         isFba: o?.IsFulfilledByAmazon === true,
+        feedbackCount: Number.isFinite(fbNum) ? fbNum : null,
+        isAmazon: sellerId === AMAZON_US_SELLER_ID,
       };
     })
     .filter((o) => o.price > 0 && o.sellerId.length > 0);

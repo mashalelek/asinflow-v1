@@ -12,14 +12,45 @@ const STALE_HOURS_DEFAULT = 48; // processing beyond this → stale (needs a man
 
 // Record one putListingsItem fire. Best-effort: caller must not let a ledger
 // failure block the submit (mirrors the asin_skus optimistic-write contract).
+export interface PricingDecision {
+  source: string | null;                 // fba_anchor | roi_40_floor | roi_60_solve
+  detail: string | null;
+  anchorOfferPrice: number | null;
+  anchorOfferFeedback: number | null;
+  cptSeen: number | null;                // recorded for analysis; NEVER a pricing input (§18 v2)
+  resultingRoi: number | null;
+  warning: string | null;                // low_roi_repriced
+  qualifiedOfferCount: number | null;
+  disqualifiedOffers: unknown | null;    // JSONB array
+}
+
+/**
+ * §18 v2 (2026-10-07): the pricing decision is persisted alongside the
+ * submission so "why this price" is a ledger fact. `pricing` is OPTIONAL —
+ * callers that don't have it (or pre-v2 rows) write NULLs, which means
+ * "decision not recorded", never "no decision".
+ */
 export async function recordSubmission(
-  args: { asin: string; sku: string; submissionId: string | null; submittedPrice: number | null },
+  args: {
+    asin: string; sku: string; submissionId: string | null; submittedPrice: number | null;
+    pricing?: PricingDecision;
+  },
   query: QueryLike = defaultQuery as any,
 ): Promise<void> {
+  const p = args.pricing;
   await query(
-    `INSERT INTO listing_submissions (asin, sku, submission_id, submitted_price, verify_status)
-     VALUES ($1, $2, $3, $4, 'pending')`,
-    [args.asin, args.sku, args.submissionId, args.submittedPrice],
+    `INSERT INTO listing_submissions (
+       asin, sku, submission_id, submitted_price, verify_status,
+       price_source, price_detail, anchor_offer_price, anchor_offer_feedback,
+       cpt_seen, resulting_roi, price_warning, qualified_offer_count, disqualified_offers)
+     VALUES ($1, $2, $3, $4, 'pending', $5, $6, $7, $8, $9, $10, $11, $12, $13::jsonb)`,
+    [
+      args.asin, args.sku, args.submissionId, args.submittedPrice,
+      p?.source ?? null, p?.detail ?? null, p?.anchorOfferPrice ?? null,
+      p?.anchorOfferFeedback ?? null, p?.cptSeen ?? null, p?.resultingRoi ?? null,
+      p?.warning ?? null, p?.qualifiedOfferCount ?? null,
+      p?.disqualifiedOffers != null ? JSON.stringify(p.disqualifiedOffers) : null,
+    ],
   );
 }
 
