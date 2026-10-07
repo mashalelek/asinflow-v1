@@ -39,10 +39,18 @@ export interface CompetingOffer {
 // FBA but we never compete with it (§18 v2 / §23), so it is excluded from
 // every qualified offer set.
 //
-// NOT CONFIRMED LIVE: no probe during implementation (2026-10-07) returned an
-// Amazon-sold offer to check against. The value is the documented US retail
-// merchant token, which is the same string as the marketplace ID — a known
-// SP-API quirk, not a copy-paste error.
+// STILL NOT CONFIRMED LIVE as of 2026-10-07. Checked against every
+// getItemOffers response in the v2 reprice preview — 49 ASINs, every offer
+// inspected: ZERO offers with this seller ID, and ZERO offers missing
+// SellerFeedbackRating. So this account's catalog simply has no
+// Amazon-sold competition to test against, and the secondary signal
+// (Amazon carries no feedback rating) is equally untested here.
+//
+// The value is the documented US retail merchant token, which is the same
+// string as the marketplace ID — a known SP-API quirk, not a typo. Next time
+// an Amazon-sold offer DOES appear, verify both: that the ID matches, and
+// whether Amazon's offer carries a feedback count. Until then treat the
+// constant as unverified.
 //
 // Safety net if it is ever wrong: Amazon retail offers carry no
 // SellerFeedbackRating, so feedbackCount is null → 0 → disqualified by the
