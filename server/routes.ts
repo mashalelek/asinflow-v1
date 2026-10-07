@@ -3133,24 +3133,34 @@ export async function registerRoutes(
     }
     const feesMap = await fetchFeesBatch(feeItems);
 
-    // 30-day gating/hazmat scope (decision 5): never-checked or >30 days —
-    // ALWAYS for the upload path. Dry-run lists the scope, probes nothing.
-    const THIRTY_D = 30 * 86400000;
-    const staleOrNever = (ts: any) => ts == null || Date.now() - new Date(ts).getTime() > THIRTY_D;
-    const gatingScope = new Set<string>();
-    const hazmatScope = new Set<string>();
-    for (const asin of asinList) {
-      const r = storedByAsin.get(asin);
-      if (fromCsvUpload || !r || staleOrNever(r.gating_checked_at)) gatingScope.add(asin);
-      if (fromCsvUpload || !r || staleOrNever(r.hazmat_checked_at)) hazmatScope.add(asin);
-    }
-
+    // §11 (2026-10-07): Product Info probes EVERYTHING in its working set.
+    // The 30-day gating/hazmat scope is GONE — no threshold constant, no
+    // staleness predicate, no per-stage scope sets, no reuse-stored branch.
+    // (Named without the old identifiers on purpose: the gate greps for them.)
+    // Its assumption
+    // ("gating rarely flips inside 30 days") was wrong: B00P0OYZ66 flipped in
+    // under 3 days and AF served the stale 'yes' because no probe was ever
+    // allowed to replace it. A shorter window would be the same bug, smaller.
+    // gating_checked_at / hazmat_checked_at remain as probe STAMPS only.
+    //
+    // Per-ASIN outcomes for ALL FOUR stages, in the Prices & Stock shape
+    // (Record<string, string>, ASIN -> outcome, failure message appended as
+    // price-sync.ts:198 does). Until now every Product Info stage wrote
+    // outcomes = '{}', so which ASIN a run touched could not be proven from
+    // the ledger — the same disease as a skip.
     const stageCounts = {
-      catalog: { parsed: 0, absent: 0, inconclusive: 0 },
+      catalog: { updated: 0, absent: 0, inconclusive: 0, error: 0 },
       fees: { updated: 0, skipped_no_price: feesSkippedNoPrice.size, error: 0 },
-      gating: { probed: 0, reused_stored: asinList.length - gatingScope.size, would_probe: dryRun ? gatingScope.size : 0 },
-      hazmat: { probed: 0, reused_stored: asinList.length - hazmatScope.size, would_probe: dryRun ? hazmatScope.size : 0 },
+      gating: { updated: 0, error: 0 },
+      hazmat: { updated: 0, error: 0 },
     };
+    const stageOutcomes: Record<"catalog" | "fees" | "gating" | "hazmat", Record<string, string>> = {
+      catalog: {}, fees: {}, gating: {}, hazmat: {},
+    };
+    // fees' missing-input skip is recorded up front — it is decided before the
+    // loop, from the stored price, and is the ONE surviving skip (a missing
+    // INPUT, not a freshness heuristic).
+    for (const asin of Array.from(feesSkippedNoPrice)) stageOutcomes.fees[asin] = "skipped_no_price";
 
     for (let i = 0; i < asins.length; i++) {
       const input = asins[i];
@@ -3174,31 +3184,49 @@ export async function registerRoutes(
         const catEntry = catalogMap.get(input.asin);
         let catalogData: AsinResult["catalogData"];
         if (catEntry?.kind === "parsed") {
-          stageCounts.catalog.parsed++;
+          stageCounts.catalog.updated++;
+          stageOutcomes.catalog[input.asin] = "updated";
           catalogData = catEntry.data as AsinResult["catalogData"];
         } else if (catEntry?.kind === "absent") {
           // DA-2 batch analogue of the 404: absent from a COMPLETE response.
           stageCounts.catalog.absent++;
+          stageOutcomes.catalog[input.asin] = "absent";
           catalogData = { weightLbs: null, title: null, brand: null, imageUrl: null, bsrRank: null, bsrCategory: null, isDangerousGood: null, isCatalogDeleted: true } as any;
         } else {
           // thrown call → inconclusive for every ASIN in it — fail-closed.
           stageCounts.catalog.inconclusive++;
+          stageOutcomes.catalog[input.asin] = "inconclusive";
           catalogData = { weightLbs: null, title: null, brand: null, imageUrl: null, bsrRank: null, bsrCategory: null, isDangerousGood: null, isCatalogDeleted: null } as any;
         }
 
-        // gating + hazmat: probe only in the 30-day scope (always for
-        // uploads); out-of-scope reuses stored values. Dry-run never probes.
+        // gating + hazmat: probe EVERY ASIN in the working set, every time
+        // (§11, 2026-10-07). The stored value is the starting point only so a
+        // dry run (which probes nothing) still renders something truthful.
         let eligibilityData: AsinResult["eligibilityData"] = { status: (stored?.eligibility_status as any) ?? "check" };
         let hazmatFlag: boolean | null = stored?.is_hazmat ?? null;
-        if (!dryRun && gatingScope.has(input.asin)) {
-          eligibilityData = await getEligibility(input.asin);
-          stageCounts.gating.probed++;
-          await query(`UPDATE asins SET gating_checked_at = NOW() WHERE asin = $1`, [input.asin]).catch(() => {});
-        }
-        if (!dryRun && hazmatScope.has(input.asin)) {
-          hazmatFlag = await getInboundHazmat(input.asin);
-          stageCounts.hazmat.probed++;
-          await query(`UPDATE asins SET hazmat_checked_at = NOW() WHERE asin = $1`, [input.asin]).catch(() => {});
+        if (!dryRun) {
+          try {
+            eligibilityData = await getEligibility(input.asin);
+            stageCounts.gating.updated++;
+            stageOutcomes.gating[input.asin] = "updated";
+            await query(`UPDATE asins SET gating_checked_at = NOW() WHERE asin = $1`, [input.asin]).catch(() => {});
+          } catch (err: any) {
+            // Fail-closed per ASIN: this stage errors, the row keeps its
+            // stored status, and Retry failed can pick it up.
+            stageCounts.gating.error++;
+            stageOutcomes.gating[input.asin] = `error: ${err?.message ?? "unknown"}`;
+            log(`Gating error for ${input.asin}: ${err?.message ?? err}`, "analyzer");
+          }
+          try {
+            hazmatFlag = await getInboundHazmat(input.asin);
+            stageCounts.hazmat.updated++;
+            stageOutcomes.hazmat[input.asin] = "updated";
+            await query(`UPDATE asins SET hazmat_checked_at = NOW() WHERE asin = $1`, [input.asin]).catch(() => {});
+          } catch (err: any) {
+            stageCounts.hazmat.error++;
+            stageOutcomes.hazmat[input.asin] = `error: ${err?.message ?? "unknown"}`;
+            log(`Hazmat error for ${input.asin}: ${err?.message ?? err}`, "analyzer");
+          }
         }
         catalogData.isHazmat = hazmatFlag;
 
@@ -3207,8 +3235,10 @@ export async function registerRoutes(
         if (feeEntry?.kind === "parsed") {
           feesData = feeEntry.fees;
           stageCounts.fees.updated++;
+          stageOutcomes.fees[input.asin] = "updated";
         } else if (feeEntry?.kind === "error") {
           stageCounts.fees.error++;
+          stageOutcomes.fees[input.asin] = `error: ${feeEntry.message ?? "unknown"}`;
           log(`Fees error for ${input.asin}: ${feeEntry.message}`, "analyzer");
         }
 
@@ -3421,27 +3451,31 @@ export async function registerRoutes(
     // ── §11 Product Info run ledger + summary (2026-09-07) ──────────────────
     // Same machinery as Prices & Stock: one refresh_runs row per stage
     // (catalog / fees / gating / hazmat), rate-limit deltas via the caller's
-    // stream. Dry-run: no ledger rows, but a summary line lists the counts +
-    // which ASINs the 30-day rule WOULD probe, so the gate report can quote it.
+    // stream, per-ASIN outcomes.
+    //
+    // Dry-run writes no ledger rows and lists EVERY ASIN in scope under every
+    // stage (§11, 2026-10-07). There is no "which ASINs the 30-day rule would
+    // probe" set any more — the rule is gone, so the answer is always "all of
+    // them", which is what `scope` says.
     emit(JSON.stringify({
       type: "product_info_summary",
       data: {
         dryRun,
         stages: stageCounts,
         rateLimits: rateLimitStatsSince(rateBaseline),
-        ...(dryRun ? {
-          wouldProbeGating: Array.from(gatingScope),
-          wouldProbeHazmat: Array.from(hazmatScope),
-        } : {}),
+        ...(dryRun ? { scope: asinList } : { outcomes: stageOutcomes }),
       },
     }) + "\n");
     if (!dryRun) {
       for (const [stage, counts] of Object.entries(stageCounts)) {
         try {
           await query(
+            // Per-ASIN outcomes, same shape as the Prices & Stock stages
+            // (§11, 2026-10-07 — this used to be a hardcoded '{}').
             `INSERT INTO refresh_runs (started_at, finished_at, trigger, stage, scope, requested, counts, outcomes)
-             VALUES ($1, NOW(), 'manual', $2, $3, $4, $5::jsonb, '{}'::jsonb)`,
-            [runStartedAt, stage, "subset", asinList.length, JSON.stringify(counts)],
+             VALUES ($1, NOW(), 'manual', $2, $3, $4, $5::jsonb, $6::jsonb)`,
+            [runStartedAt, stage, "subset", asinList.length, JSON.stringify(counts),
+             JSON.stringify(stageOutcomes[stage as keyof typeof stageOutcomes] ?? {})],
           );
         } catch (err: any) {
           log(`refresh_runs write failed for Product Info stage ${stage}: ${err?.message ?? err}`, "refresh");

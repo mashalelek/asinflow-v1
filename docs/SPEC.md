@@ -1994,13 +1994,54 @@ three calls sat on 1 rps buckets (~37 min full catalog). Now:
 | fees | batch `feesEstimate` (same stage code as Prices & Stock's fees stage) | ~4 min |
 | prices | **removed** — Prices & Stock owns prices; fees use the stored price via `getFeePriceForAsin` | — |
 | gating | listings restrictions, 5/s (no batch form) | ~7 min |
-| hazmat | inbound eligibility preview, 1/s, scoped | stale-only |
+| hazmat | inbound eligibility preview, 1/s (no batch form) | every ASIN in scope |
 
-- **30-day scoping for gating + hazmat (confirmed 2026-09-07):** re-check
-  only when never checked or older than 30 days — ALWAYS for ASINs coming
-  through the upload path. `gating_checked_at` / `hazmat_checked_at`
-  (migration 033) make the rule a WHERE clause. A deliberate selection
-  still respects the rule; the 30-day window is the knob.
+- **Product Info probes EVERYTHING in its working set (2026-10-07).**
+  Supersedes the 30-day gating/hazmat scoping confirmed 2026-09-07, and
+  decision 6 of the (folded, deleted) sync-buttons-parked-dead patch.
+
+  The job syncs every stage it names — catalog, fees, gating, hazmat — for
+  every ASIN in its working set, **every time**, and reports every ASIN's
+  outcome. There is no freshness-based skip anywhere in the job, and no
+  stage writes an empty outcome map.
+
+  `THIRTY_D`, `staleOrNever`, `gatingScope` / `hazmatScope` and the
+  reuse-stored branch are **deleted**. The working set — the selection,
+  else every row of the current filtered view across all pages (decision 5)
+  — is the only scope.
+
+  `gating_checked_at` / `hazmat_checked_at` (migration 033) **stay**, and
+  are still stamped on every probe. They are now **informational** (an age
+  column or tooltip later, if wanted), never a gate.
+
+  **Why (the B00P0OYZ66 incident, 2026-10-07).** Amazon gated several ASINs
+  that AF still showed ungated after a Product Info sync. The sync did not
+  fail — it declined to probe. B00P0OYZ66 had `gating_checked_at`
+  2026-10-04 and `eligibility_status = 'yes'`; a live
+  `getListingsRestrictions` the same day returned one restriction,
+  `APPROVAL_REQUIRED` ("You need approval to list in this brand"). AF's
+  mapping (`spapi.ts:713` — `restrictions.length === 0 → 'yes'`, else
+  `'no'`) is CORRECT and would have produced `'no'`; the stored value was a
+  3-day-old answer the rule never let a probe replace. Gating flipped in
+  under 3 days, so the design assumption ("gating rarely flips inside 30
+  days") is simply wrong — and a shorter window would be the same bug,
+  smaller. A sync button that quietly declines to sync part of what it
+  names is not acceptable (§14).
+
+  **Cost, stated plainly.** Rates are unchanged (gating 5/s, hazmat 1/s,
+  no batch form for either). Hazmat is the bound: ~1 s per ASIN, so the
+  full catalog (~2,200 active) is **≈ 37 min** of Product Info rather than
+  ≈ 4–7. A filtered view or a selection costs proportionally less. That is
+  the accepted price of a button that does what it says. If a faster
+  "most of it" path is ever wanted it is a **separate, explicitly labelled
+  control** — never a silent narrowing of this one.
+
+  **The only surviving skip in Product Info is fees `skipped_no_price`**,
+  which is a missing INPUT (no stored price), not a freshness heuristic. It
+  stays, and stays visible in the results dialog.
+
+  The `?dryRun=1` report no longer lists "which ASINs the 30-day rule would
+  probe" — every ASIN in scope is listed under every stage.
 - **Product Info no longer writes price columns.** No stored price →
   fees skip (`skipped_no_price`), never a fallback-price estimate.
   **Any path that inserts a new ASIN onboards it through
@@ -2019,8 +2060,52 @@ three calls sat on 1 rps buckets (~37 min full catalog). Now:
   ASINs — fail-closed, no `catalog_deleted`.
 - Outcomes, results dialog, `refresh_runs` rows (stage names `catalog` /
   `fees` / `gating` / `hazmat`), rate-limit deltas, Retry failed:
-  identical machinery to Prices & Stock. Expected full catalog ≈ 7 min
-  (gating-bound) + stale hazmat only.
+  the same `refresh_runs` machinery as Prices & Stock (the results-dialog
+  half lands in the next commit — see "Where the outcomes are visible"
+  below). **Expected full catalog ≈ 37 min (hazmat-bound); the working set
+  is the only scope.**
+
+  **Per-ASIN outcomes, all four stages (fixed 2026-10-07).** Until then
+  this claim of "identical machinery" was false: `routes.ts` inserted
+  EVERY Product Info stage with a hardcoded `'{}'::jsonb`, so which ASIN a
+  run touched could not be proven from the ledger for any stage — only the
+  Prices & Stock / onboarding stages passed real outcome maps. That is the
+  same disease as a skip: a stage you cannot see per ASIN. All four stages
+  now write a per-ASIN map in the Prices & Stock shape —
+  `Record<string, string>`, ASIN → outcome, failure message appended as
+  `price-sync.ts:198` does. Vocabulary per stage:
+
+  | stage | outcomes |
+  |---|---|
+  | catalog | `updated` / `absent` (complete batch, ASIN missing — the DA-2 signal) / `inconclusive` (partial batch) / `error: <msg>` |
+  | fees | `updated` / `skipped_no_price` / `error: <msg>` |
+  | gating | `updated` / `error: <msg>` |
+  | hazmat | `updated` / `error: <msg>` |
+
+  `counts` for every Product Info stage reduces to `{updated, error}` plus
+  the stage-specific values above (`skipped_no_price` for fees, `absent` /
+  `inconclusive` for catalog). The `probed` / `would_probe` /
+  `reused_stored` counters are **deleted** — once every ASIN is probed,
+  `probed` always equals `requested`.
+
+  **Where the outcomes are visible, as of this commit.** In the **run
+  history** (the History button on the Prices & Stock dialog —
+  `GET /api/refresh/history` returns every `refresh_runs` row unfiltered,
+  and the dialog renders counts and per-ASIN outcomes generically, so
+  Product Info's four stages appear there with no UI change).
+
+  **Not yet built:** Product Info has NO post-run results dialog of its own.
+  Its only immediate report is a toast ("Product Info complete — processed N
+  ASINs"), and `product_info_summary` is emitted on the analyze stream with
+  no consumer. **Retry failed** is likewise wired to the Prices & Stock
+  prices stage only, not to Product Info's `error` outcomes. Both land in
+  the NEXT commit — a results-dialog consumer for `product_info_summary`
+  reusing the generic dialog, Retry failed scoped to `error` outcomes across
+  all four stages, and the toast removed. Until then the error outcomes are
+  recorded and inspectable, but not actionable from the run itself.
+
+  Onboarding (`onboardNewAsins`) already probes everything and inherits
+  the per-ASIN outcomes through the shared stage code; otherwise unchanged.
 
 **Deferred, explicitly (2026-09-07):** merging Product Info into Prices &
 Stock. The overlap is only the price columns; the two jobs answer
