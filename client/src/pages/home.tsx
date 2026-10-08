@@ -23,6 +23,7 @@ import { useTheme } from "@/components/theme-provider";
 import { loadSettings, loadIncludeInbound, saveIncludeInbound, loadPriceSource, savePriceSource } from "@/lib/settings";
 import { useSearch } from "wouter";
 import { loadColumnConfig, type ColumnConfig } from "@/lib/columns";
+import { StageResultsList, failedAsinsFrom, type StageResult } from "@/components/stage-results";
 import { loadBuyList, saveBuyList, loadOnHoldList, saveOnHoldList } from "@/lib/buy-hold";
 import { planBulkSetToggle, bulkToggleLabel, applyBulkPlan } from "@/lib/bulk-buy-hold";
 import { fetchLongSync } from "@/lib/long-sync";
@@ -387,6 +388,13 @@ export default function Home() {
   // buttons. refreshState drives the button label + progress strip; the
   // result opens the per-stage outcomes dialog with Retry failed.
   const [refreshState, setRefreshState] = useState<{ stage: string; current: number; total: number } | null>(null);
+  // §11 Product Info results (2026-10-07). Accumulated ACROSS batches: a
+  // multi-batch run emits one product_info_summary per batch, and the operator
+  // needs the whole run's picture, not the last batch's.
+  const [productInfoResult, setProductInfoResult] = useState<
+    { stages: StageResult[]; rateLimits: Record<string, any> } | null
+  >(null);
+  const [productInfoOpen, setProductInfoOpen] = useState(false);
   const [refreshResult, setRefreshResult] = useState<any | null>(null);
   const [refreshResultOpen, setRefreshResultOpen] = useState(false);
   const [refreshHistory, setRefreshHistory] = useState<any[] | null>(null);
@@ -566,6 +574,34 @@ export default function Home() {
           const msg = JSON.parse(line);
           if (msg.type === "progress") {
             setProgress(msg.data);
+          } else if (msg.type === "product_info_summary") {
+            // §11 (2026-10-07): the summary used to be emitted to nobody.
+            // Dry runs carry no outcomes and open no dialog — they have their
+            // own scope listing and write no ledger rows.
+            const d = msg.data ?? {};
+            if (!d.dryRun) {
+              setProductInfoResult((prev) => {
+                const merged = new Map<string, StageResult>();
+                for (const s0 of prev?.stages ?? []) merged.set(s0.stage, s0);
+                for (const [stage, counts] of Object.entries(d.stages ?? {})) {
+                  const existing = merged.get(stage);
+                  // Sum counts and union outcomes across batches.
+                  const nextCounts: Record<string, number> = { ...(existing?.counts as any ?? {}) };
+                  for (const [k, v] of Object.entries(counts as Record<string, number>)) {
+                    nextCounts[k] = (nextCounts[k] ?? 0) + (v ?? 0);
+                  }
+                  merged.set(stage, {
+                    stage,
+                    counts: nextCounts,
+                    outcomes: { ...(existing?.outcomes ?? {}), ...((d.outcomes ?? {})[stage] ?? {}) },
+                  });
+                }
+                return {
+                  stages: Array.from(merged.values()),
+                  rateLimits: { ...(prev?.rateLimits ?? {}), ...(d.rateLimits ?? {}) },
+                };
+              });
+            }
           } else if (msg.type === "result") {
             const resultData = msg.data;
             // Merge analyze result with existing row — preserve user-controlled
@@ -604,9 +640,19 @@ export default function Home() {
   const BATCH_SIZE_LIMIT = 200;
   const FRONTEND_BATCH_SIZE = 100;
 
+  // §11: every ASIN with an `error:` outcome in ANY of the four stages.
+  // Deliberately NOT refreshFailedAsins — that is the Prices & Stock prices
+  // stage, a different job with a different retry.
+  const productInfoFailedAsins = useMemo(
+    () => (productInfoResult ? failedAsinsFrom(productInfoResult.stages) : []),
+    [productInfoResult],
+  );
+
   const runAnalysis = useCallback(async (asinsToAnalyze: AsinInput[]) => {
     setIsAnalyzing(true);
     setProgress({ current: 0, total: asinsToAnalyze.length, asin: "" });
+    // Fresh picture per run — the summary accumulates across BATCHES, not runs.
+    setProductInfoResult(null);
 
     try {
       // For large CSV-upload flows, split into client-side batches to avoid
@@ -638,7 +684,10 @@ export default function Home() {
             });
           }
         }
-        toast({ title: "Product Info complete", description: `Processed ${total} ASINs in ${batches} batches` });
+        // Toast removed (§11, 2026-10-07): a count in a disappearing toast was
+        // the ENTIRE report for a job with four stages and per-ASIN outcomes.
+        // The results dialog replaces it.
+        setProductInfoOpen(true);
       } else {
         const res = await fetch("/api/analyze", {
           method: "POST",
@@ -650,6 +699,7 @@ export default function Home() {
           throw new Error(err.message || "Product Info failed");
         }
         await consumeAnalyzeStream(res);
+        setProductInfoOpen(true);
       }
     } catch (err: any) {
       toast({
@@ -1934,24 +1984,7 @@ export default function Home() {
           </DialogHeader>
           {refreshResult && (
             <div className="space-y-3 text-xs">
-              {Object.values(refreshResult.stages ?? {}).map((s: any) => (
-                <details key={s.stage} className="border rounded p-2">
-                  <summary className="cursor-pointer">
-                    <span className={`font-semibold ${s.status === "failed" ? "text-destructive" : ""}`}>{s.stage}</span>
-                    {" — "}{s.status}{s.error ? `: ${s.error}` : ""} · {Math.round((s.durationMs ?? 0) / 1000)}s ·{" "}
-                    {Object.entries(s.counts ?? {}).map(([k, v]) => `${k} ${v}`).join(", ") || "no counts"}
-                  </summary>
-                  {Object.keys(s.outcomes ?? {}).length > 0 ? (
-                    <div className="mt-2 max-h-48 overflow-y-auto font-mono">
-                      {Object.entries(s.outcomes).map(([asin, o]) => (
-                        <p key={asin}>{asin}: {String(o)}</p>
-                      ))}
-                    </div>
-                  ) : (
-                    <p className="mt-2 text-muted-foreground">No per-item exceptions.</p>
-                  )}
-                </details>
-              ))}
+              <StageResultsList stages={Object.values(refreshResult.stages ?? {}) as StageResult[]} />
               {(() => {
                 const po = refreshResult.stages?.prices?.outcomes ?? {};
                 const invalids = Object.keys(po).filter((a) => String(po[a]).startsWith("invalid_asin"));
@@ -1997,6 +2030,51 @@ export default function Home() {
               ))}
             </div>
           )}
+        </DialogContent>
+      </Dialog>
+
+      {/* §11 Product Info results (2026-10-07). Replaces the toast that was
+          the entire report for a four-stage job. Renders through the SAME
+          StageResultsList the Prices & Stock dialog uses, so the two cannot
+          drift. Retry failed is scoped to `error:` outcomes across ALL FOUR
+          stages — not the prices stage, which is a different job. */}
+      <Dialog open={productInfoOpen} onOpenChange={setProductInfoOpen}>
+        <DialogContent className="max-w-2xl max-h-[85vh] overflow-y-auto" data-testid="dialog-product-info-results">
+          <DialogHeader>
+            <DialogTitle>Product Info run</DialogTitle>
+            <DialogDescription>
+              One job: catalog + fees + gating + hazmat. Every ASIN in the working set is
+              probed every time — no freshness skip (§11).
+            </DialogDescription>
+          </DialogHeader>
+          {productInfoResult && (
+            <div className="space-y-3 text-xs">
+              <StageResultsList stages={productInfoResult.stages} />
+              <details className="border rounded p-2">
+                <summary className="cursor-pointer font-semibold">Rate limits</summary>
+                <div className="mt-2 font-mono">
+                  {Object.entries(productInfoResult.rateLimits ?? {}).map(([bucket, st]: [string, any]) => (
+                    <p key={bucket}>{bucket}: {st.sent} sent, {st.throttled} throttled{st.adjusted ? ", rate adjusted by Amazon header" : ""}</p>
+                  ))}
+                </div>
+              </details>
+              <div className="flex justify-end gap-2">
+                {productInfoFailedAsins.length > 0 && (
+                  <Button size="sm" className="h-8 text-xs" disabled={isAnalyzing}
+                    data-testid="button-product-info-retry"
+                    onClick={() => {
+                      const retry = productInfoFailedAsins;
+                      setProductInfoOpen(false);
+                      void runAnalysis(retry.map((asin) => ({ asin, cogs: 0 })));
+                    }}>
+                    Retry failed ({productInfoFailedAsins.length})
+                  </Button>
+                )}
+                <Button size="sm" variant="outline" className="h-8 text-xs" onClick={() => setProductInfoOpen(false)}>Close</Button>
+              </div>
+            </div>
+          )}
+          {!productInfoResult && <p className="text-xs text-muted-foreground">No stage summary was received for this run.</p>}
         </DialogContent>
       </Dialog>
 

@@ -2060,8 +2060,8 @@ three calls sat on 1 rps buckets (~37 min full catalog). Now:
   ASINs — fail-closed, no `catalog_deleted`.
 - Outcomes, results dialog, `refresh_runs` rows (stage names `catalog` /
   `fees` / `gating` / `hazmat`), rate-limit deltas, Retry failed:
-  the same `refresh_runs` machinery as Prices & Stock (the results-dialog
-  half lands in the next commit — see "Where the outcomes are visible"
+  identical machinery to Prices & Stock — same ledger rows, same results
+  renderer, same Retry-failed shape (see "Where the outcomes are visible"
   below). **Expected full catalog ≈ 37 min (hazmat-bound); the working set
   is the only scope.**
 
@@ -2088,21 +2088,40 @@ three calls sat on 1 rps buckets (~37 min full catalog). Now:
   `reused_stored` counters are **deleted** — once every ASIN is probed,
   `probed` always equals `requested`.
 
-  **Where the outcomes are visible, as of this commit.** In the **run
-  history** (the History button on the Prices & Stock dialog —
-  `GET /api/refresh/history` returns every `refresh_runs` row unfiltered,
-  and the dialog renders counts and per-ASIN outcomes generically, so
-  Product Info's four stages appear there with no UI change).
+  **Where the outcomes are visible.** Two places:
 
-  **Not yet built:** Product Info has NO post-run results dialog of its own.
-  Its only immediate report is a toast ("Product Info complete — processed N
-  ASINs"), and `product_info_summary` is emitted on the analyze stream with
-  no consumer. **Retry failed** is likewise wired to the Prices & Stock
-  prices stage only, not to Product Info's `error` outcomes. Both land in
-  the NEXT commit — a results-dialog consumer for `product_info_summary`
-  reusing the generic dialog, Retry failed scoped to `error` outcomes across
-  all four stages, and the toast removed. Until then the error outcomes are
-  recorded and inspectable, but not actionable from the run itself.
+  - **The Product Info results dialog**, opened at the end of every live run
+    (2026-10-07). It consumes `product_info_summary` off the analyze stream
+    and renders the four stages through `StageResultsList` — **the same
+    component the Prices & Stock dialog uses**, extracted so the two cannot
+    drift (the one-renderer-per-shape discipline of §6's one accessor). Each
+    stage expands to its per-ASIN outcomes, errors in red, with the run's
+    rate-limit deltas alongside. A multi-batch run ACCUMULATES: counts are
+    summed and outcome maps unioned across batches, so the dialog shows the
+    whole run rather than the last batch.
+  - **The run history** (History button on the Prices & Stock dialog) —
+    `GET /api/refresh/history` returns every `refresh_runs` row unfiltered,
+    so Product Info's four stages appear there too.
+
+  **This replaced a toast.** Until 2026-10-07 the entire report for a
+  four-stage job with per-ASIN outcomes was a disappearing
+  "Product Info complete — processed N ASINs", and
+  `product_info_summary` was emitted to no consumer at all. The toast is
+  **gone**; failures are no longer something you had to go looking for.
+
+  **Retry failed** re-runs Product Info on every ASIN the run got **no
+  answer** for, in ANY of the four stages (`failedAsinsFrom`): an `error:`
+  outcome, or catalog **`inconclusive`** — the partial-batch state, where the
+  response came back without the ASIN and without proving its absence, and is
+  fail-closed precisely so it can be asked again. Not retried: `updated`
+  (answered), catalog **`absent`** (CONCLUSIVE — missing from a complete
+  batch, the DA-2 signal; re-asking cannot change it), and fees
+  `skipped_no_price` (a missing INPUT, not a failed call). It is deliberately
+  NOT the Prices & Stock `refreshFailedAsins` set — different job, different
+  retry.
+
+  A **dry run** opens no dialog and contributes no outcomes — it has its own
+  scope listing and writes no ledger rows.
 
   Onboarding (`onboardNewAsins`) already probes everything and inherits
   the per-ASIN outcomes through the shared stage code; otherwise unchanged.
