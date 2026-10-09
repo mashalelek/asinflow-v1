@@ -686,15 +686,33 @@ export async function getBatchFees(
   return results;
 }
 
-export interface EligibilityResult {
-  status: "yes" | "no" | "check";
-}
+/**
+ * The result of ONE gating probe (§11, 2026-10-07).
+ *
+ * There is deliberately NO "check" here. `check` is a STORED
+ * eligibility_status meaning "never probed" — it is not something a probe can
+ * return. A probe either answers yes/no, or it failed; those are the only two
+ * outcomes, and the caller must branch on them.
+ *
+ * This replaced `{ status: "yes" | "no" | "check" }`, where every API error
+ * was swallowed into `check`. Because `asin_estimates` writes
+ * `eligibility_status = EXCLUDED.eligibility_status` unconditionally, a
+ * throttled probe overwrote a stored `no` with `check` AND moved
+ * gating_checked_at — which the old 30-day rule then used to skip
+ * re-probing. A transient failure is not evidence that a known `no` became
+ * unknown.
+ */
+export type EligibilityProbe =
+  | { kind: "ok"; status: "yes" | "no" }
+  | { kind: "error"; message: string };
 
-export async function getEligibility(asin: string): Promise<EligibilityResult> {
+export async function getEligibility(asin: string): Promise<EligibilityProbe> {
   const sellerId = process.env.SP_API_SELLER_ID;
   if (!sellerId) {
-    log(`SP_API_SELLER_ID not set, skipping eligibility for ${asin}`, "eligibility");
-    return { status: "check" };
+    log(`SP_API_SELLER_ID not set — cannot probe eligibility for ${asin}`, "eligibility");
+    // A config error is still "no answer". Reported as an error outcome so the
+    // run says so, rather than quietly storing a non-answer.
+    return { kind: "error", message: "SP_API_SELLER_ID not configured" };
   }
 
   try {
@@ -711,12 +729,19 @@ export async function getEligibility(asin: string): Promise<EligibilityResult> {
     log(`Eligibility ${asin}: restrictions=${restrictions.length}`, "eligibility");
 
     if (restrictions.length === 0) {
-      return { status: "yes" };
+      return { kind: "ok", status: "yes" };
     }
-    return { status: "no" };
+    return { kind: "ok", status: "no" };
   } catch (err: any) {
-    log(`Eligibility error for ${asin}: status=${err.response?.status} body=${JSON.stringify(err.response?.data)}`, "eligibility");
-    return { status: "check" };
+    const status = err?.response?.status;
+    const body = JSON.stringify(err?.response?.data);
+    log(`Eligibility error for ${asin}: status=${status} body=${body}`, "eligibility");
+    // SURFACED, not swallowed. The caller writes nothing and records error.
+    return {
+      kind: "error",
+      message: err?.response?.data?.errors?.[0]?.message
+        ?? (status ? `HTTP ${status}` : err?.message ?? "unknown"),
+    };
   }
 }
 

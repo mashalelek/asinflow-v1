@@ -272,8 +272,18 @@ async function executeBulkRun(
     }
   }
   for (const r of gatingScope as any[]) {
+    // §21 (2026-10-07): a FAILED probe is NOT cached — no cache row written
+    // or updated, no stamp moved — so the next run re-probes instead of
+    // treating a throttle as a 30-day-fresh answer. The row reports the
+    // error. The 30-day window itself is untouched.
+    const elig = await getEligibility(r.asin);
+    if (elig.kind !== "ok") {
+      gCounts.error++;
+      gOutcomes[r.asin] = `error: ${elig.message}`;
+      tick("gating", gCounts.probed + gCounts.error, gatingScope.length, r.asin);
+      continue;
+    }
     try {
-      const elig = await getEligibility(r.asin);
       await query(
         `INSERT INTO bulk_gating_hazmat_cache (asin, eligibility_status, gating_checked_at)
          VALUES ($1, $2, NOW())
@@ -305,16 +315,24 @@ async function executeBulkRun(
     }
   }
   for (const r of hazmatScope as any[]) {
+    // Same rule as gating above: a failed probe is not cached and no stamp
+    // moves. (The COALESCE on write already protected the VALUE from a null
+    // sentinel; what it could not protect was the stamp.)
+    const hz = await getInboundHazmat(r.asin);
+    if (hz.kind !== "ok") {
+      hCounts.error++;
+      hOutcomes[r.asin] = `error: ${hz.message}`;
+      tick("hazmat", hCounts.probed + hCounts.error, hazmatScope.length, r.asin);
+      continue;
+    }
     try {
-      const hz = await getInboundHazmat(r.asin);
       await query(
         `INSERT INTO bulk_gating_hazmat_cache (asin, is_hazmat, hazmat_checked_at)
          VALUES ($1, $2, NOW())
-         ON CONFLICT (asin) DO UPDATE SET is_hazmat = COALESCE($2, bulk_gating_hazmat_cache.is_hazmat), hazmat_checked_at = NOW()`,
-        [r.asin, hz],
+         ON CONFLICT (asin) DO UPDATE SET is_hazmat = $2, hazmat_checked_at = NOW()`,
+        [r.asin, hz.isHazmat],
       );
-      // Tri-state preserved on the display copy too.
-      await query(`UPDATE bulk_list_asins SET is_hazmat = COALESCE($3, is_hazmat) WHERE list_id = $1 AND asin = $2`, [listId, r.asin, hz]);
+      await query(`UPDATE bulk_list_asins SET is_hazmat = $3 WHERE list_id = $1 AND asin = $2`, [listId, r.asin, hz.isHazmat]);
     } catch (err: any) {
       hCounts.error++;
       hOutcomes[r.asin] = `error: ${err?.message ?? "unknown"}`;

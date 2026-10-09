@@ -94,8 +94,11 @@ describe("per-ASIN outcomes for ALL FOUR stages", () => {
     for (const word of ['"updated"', '"absent"', '"inconclusive"', '"skipped_no_price"']) {
       expect(r, word).toContain(word);
     }
-    // errors carry the message, as price-sync.ts:198 does
-    expect(r).toMatch(/`error: \$\{err\?\.message \?\? "unknown"\}`/);
+    // errors carry the message, as price-sync.ts:198 does. Since 2026-10-07
+    // the gating/hazmat messages come from the probes' typed {kind:"error"}
+    // results rather than a caught exception.
+    expect(r).toMatch(/`error: \$\{eligProbe\.message\}`/);
+    expect(r).toMatch(/`error: \$\{hzProbe\.message\}`/);
     expect(r).toMatch(/`error: \$\{feeEntry\.message \?\? "unknown"\}`/);
   });
 });
@@ -117,21 +120,24 @@ describe("counts shape is {updated, error} plus the stage-specific values", () =
 });
 
 describe("one probe failure is per-ASIN, never fatal to the run", () => {
-  it("each probe is individually try/caught", () => {
+  it("each probe is branched INDEPENDENTLY on its typed result", () => {
+    // Was "individually try/caught" until 2026-10-07. The try/catch was dead
+    // code — both probe functions swallowed their own errors and never threw,
+    // which is exactly why a failed probe recorded `updated`. They now return
+    // {kind:"ok"|"error"} and each gets its own branch; a shared one would
+    // let a gating failure skip that ASIN's hazmat probe.
     const r = productInfoRegion();
-    // gating and hazmat each get their own try — a shared one would let a
-    // gating failure skip the hazmat probe for that ASIN.
     const gating = r.slice(r.indexOf("getEligibility(input.asin)"));
-    expect(gating).toMatch(/catch \(err: any\) \{[\s\S]{0,400}stageCounts\.gating\.error\+\+/);
+    expect(gating).toMatch(/eligProbe\.kind === "ok"[\s\S]{0,600}\} else \{[\s\S]{0,300}stageCounts\.gating\.error\+\+/);
     const hazmat = r.slice(r.indexOf("getInboundHazmat(input.asin)"));
-    expect(hazmat).toMatch(/catch \(err: any\) \{[\s\S]{0,400}stageCounts\.hazmat\.error\+\+/);
+    expect(hazmat).toMatch(/hzProbe\.kind === "ok"[\s\S]{0,600}\} else \{[\s\S]{0,300}stageCounts\.hazmat\.error\+\+/);
   });
 
   it("a failed probe records error:<msg> for THAT ASIN and leaves the loop running", () => {
     const r = productInfoRegion();
     expect(r).toMatch(/stageCounts\.gating\.error\+\+;[\s\S]{0,200}stageOutcomes\.gating\[input\.asin\] = `error:/);
     expect(r).toMatch(/stageCounts\.hazmat\.error\+\+;[\s\S]{0,200}stageOutcomes\.hazmat\[input\.asin\] = `error:/);
-    // No rethrow / break / return inside either catch.
+    // No rethrow / break / return inside either failure branch.
     for (const probe of ["gating", "hazmat"]) {
       const i = r.indexOf(`stageCounts.${probe}.error++`);
       const block = r.slice(i, i + 300);

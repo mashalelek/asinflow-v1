@@ -3,7 +3,7 @@ import { createServer, type Server } from "http";
 import multer from "multer";
 import Papa from "papaparse";
 import * as XLSX from "xlsx";
-import { getPricing, getFees, getCatalogData, estimateFeeFallback, getEligibility, type EligibilityResult } from "./spapi";
+import { getPricing, getFees, getCatalogData, estimateFeeFallback, getEligibility } from "./spapi";
 import { getInboundHazmat } from "./inbound-hazmat";
 import { verifyPending, resolveSubmissionManual, resolveSubmissionsBulk, dismissFlags, getUnverifiedCount, listNeedsAttention, listInFlight, findRecentPendingIds, countOpenAmong } from "./listing-submissions-repo";
 import { runAuraSyncChain } from "./aura-sync-chain";
@@ -561,7 +561,7 @@ function buildResult(
   catalogData: AsinResult["catalogData"],
   feesData: AsinResult["feesData"],
   pricingRestricted: boolean,
-  eligibilityData: EligibilityResult,
+  eligibilityData: AsinResult["eligibilityData"],
 ): AsinResult {
   // Since 2026-09-07 Product Info doesn't fetch prices — a missing stored
   // price is a STATE, not an error. The old synthesized strings ("Price
@@ -3205,27 +3205,37 @@ export async function registerRoutes(
         let eligibilityData: AsinResult["eligibilityData"] = { status: (stored?.eligibility_status as any) ?? "check" };
         let hazmatFlag: boolean | null = stored?.is_hazmat ?? null;
         if (!dryRun) {
-          try {
-            eligibilityData = await getEligibility(input.asin);
+          // §11 (2026-10-07): a FAILED probe writes NOTHING — no fallback
+          // value, no stamp move — and records error:<msg>. The stored value
+          // stands until a probe succeeds; a throttle is not evidence that a
+          // known `no` became unknown. Retry failed picks these up.
+          const eligProbe = await getEligibility(input.asin);
+          if (eligProbe.kind === "ok") {
+            eligibilityData = { status: eligProbe.status };
             stageCounts.gating.updated++;
             stageOutcomes.gating[input.asin] = "updated";
             await query(`UPDATE asins SET gating_checked_at = NOW() WHERE asin = $1`, [input.asin]).catch(() => {});
-          } catch (err: any) {
-            // Fail-closed per ASIN: this stage errors, the row keeps its
-            // stored status, and Retry failed can pick it up.
+          } else {
+            // eligibilityData keeps the STORED status (set above). The
+            // asin_estimates write is an unconditional overwrite, so writing
+            // the stored value back is a no-op; the stamp is NOT touched.
             stageCounts.gating.error++;
-            stageOutcomes.gating[input.asin] = `error: ${err?.message ?? "unknown"}`;
-            log(`Gating error for ${input.asin}: ${err?.message ?? err}`, "analyzer");
+            stageOutcomes.gating[input.asin] = `error: ${eligProbe.message}`;
+            log(`Gating probe failed for ${input.asin}: ${eligProbe.message}`, "analyzer");
           }
-          try {
-            hazmatFlag = await getInboundHazmat(input.asin);
+
+          const hzProbe = await getInboundHazmat(input.asin);
+          if (hzProbe.kind === "ok") {
+            hazmatFlag = hzProbe.isHazmat;
             stageCounts.hazmat.updated++;
             stageOutcomes.hazmat[input.asin] = "updated";
             await query(`UPDATE asins SET hazmat_checked_at = NOW() WHERE asin = $1`, [input.asin]).catch(() => {});
-          } catch (err: any) {
+          } else {
+            // hazmatFlag keeps the stored value; is_hazmat is COALESCE'd on
+            // write anyway, and the stamp is NOT touched.
             stageCounts.hazmat.error++;
-            stageOutcomes.hazmat[input.asin] = `error: ${err?.message ?? "unknown"}`;
-            log(`Hazmat error for ${input.asin}: ${err?.message ?? err}`, "analyzer");
+            stageOutcomes.hazmat[input.asin] = `error: ${hzProbe.message}`;
+            log(`Hazmat probe failed for ${input.asin}: ${hzProbe.message}`, "analyzer");
           }
         }
         catalogData.isHazmat = hazmatFlag;

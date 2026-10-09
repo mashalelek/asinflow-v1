@@ -32,18 +32,29 @@ const DEFAULT_RETRY: InboundHazmatRetry = { maxAttempts: 3, initialBackoffMs: 12
  *   true  — INBOUND ineligibility list contains a hazmat code (FBA_INB_0015).
  *   false — conclusive response WITHOUT a hazmat code (incl. eligible, or
  *           ineligible for a NON-hazmat reason like 0014/0004/0050).
- *   null  — INCONCLUSIVE (throttle/QuotaExceeded, network/API error). Callers
- *           MUST treat null as "unknown" and NEVER overwrite the stored value
- *           — a transient throttle must never write false. (COALESCE contract.)
+ * FAILURE IS SURFACED, NOT SIGNALLED BY null (§11, 2026-10-07). It used to
+ * return `null` for "inconclusive" with a comment telling callers to treat
+ * null as unknown — but a sentinel that looks like a value gets read like one.
+ * The Product Info stage recorded `updated` for a failed probe and moved
+ * hazmat_checked_at, which the old 30-day rule then used to skip re-probing.
+ * A `{kind:"error"}` cannot be mistaken for an answer.
  *
  * httpGet + retry are injected so tests can stub without network and with fast
  * backoff.
  */
+/**
+ * One hazmat probe. Either an answer, or a failure the caller must branch on.
+ * No `null` — see the note above.
+ */
+export type HazmatProbe =
+  | { kind: "ok"; isHazmat: boolean }
+  | { kind: "error"; message: string };
+
 export async function getInboundHazmat(
   asin: string,
   httpGet: HttpGetFn = realSpApiGet,
   retry: InboundHazmatRetry = DEFAULT_RETRY,
-): Promise<boolean | null> {
+): Promise<HazmatProbe> {
   let delay = retry.initialBackoffMs;
   for (let attempt = 0; attempt < retry.maxAttempts; attempt++) {
     try {
@@ -57,7 +68,7 @@ export async function getInboundHazmat(
         .map((r) => (typeof r === "string" ? r : r?.code))
         .filter(Boolean);
       // Exact-code match, NOT isEligibleForProgram — see hazmat-classify.ts.
-      return isHazmatFromInboundCodes(codes);
+      return { kind: "ok", isHazmat: isHazmatFromInboundCodes(codes) };
     } catch (err: any) {
       const code = err?.response?.data?.errors?.[0]?.code;
       if (code === "QuotaExceeded" && attempt < retry.maxAttempts - 1) {
@@ -65,10 +76,16 @@ export async function getInboundHazmat(
         delay *= 2;
         continue;
       }
-      // Any non-throttle error, or throttle after exhausting retries →
-      // inconclusive. Fail-closed: null, NEVER false.
-      return null;
+      // Any non-throttle error, or throttle after exhausting retries → the
+      // probe failed. Fail-closed: an error the caller MUST branch on, never
+      // a value (and never `false`).
+      const status = err?.response?.status;
+      return {
+        kind: "error",
+        message: err?.response?.data?.errors?.[0]?.message
+          ?? (code ? String(code) : status ? `HTTP ${status}` : err?.message ?? "unknown"),
+      };
     }
   }
-  return null;
+  return { kind: "error", message: "retries exhausted" };
 }

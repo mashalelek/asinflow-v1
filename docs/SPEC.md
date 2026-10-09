@@ -1993,8 +1993,36 @@ three calls sat on 1 rps buckets (~37 min full catalog). Now:
 | catalog | `searchCatalogItems` by ASIN identifiers, 20/call at 2/s → 40 ASINs/s | ~1 min |
 | fees | batch `feesEstimate` (same stage code as Prices & Stock's fees stage) | ~4 min |
 | prices | **removed** — Prices & Stock owns prices; fees use the stored price via `getFeePriceForAsin` | — |
-| gating | listings restrictions, 5/s (no batch form) | ~7 min |
-| hazmat | inbound eligibility preview, 1/s (no batch form) | every ASIN in scope |
+| gating | listings restrictions, 5/s (no batch form) — a failed probe writes NOTHING and records `error` | ~7 min |
+| hazmat | inbound eligibility preview, 1/s (no batch form) — a failed probe writes NOTHING and records `error` | every ASIN in scope |
+
+- **A failed gating or hazmat probe is never recorded as a success
+  (2026-10-07).** A probe that does not return an answer writes **nothing**:
+  no fallback value, and **the `_checked_at` stamp does not move**. The stage
+  records `error: <msg>` for that ASIN and **Retry failed picks it up**. The
+  previously stored `eligibility_status` / `is_hazmat` **stand** until a
+  probe succeeds — a throttle is not evidence that a known `no` became
+  unknown (the tri-state discipline §14 already requires for prices and
+  catalog-deleted).
+
+  `"check"` as a stored `eligibility_status` means **"never probed"** and
+  nothing else. It is never written by a failed probe.
+
+  **What was wrong.** `getEligibility` caught every API error and returned
+  `{status: "check"}`; `getInboundHazmat` returned `null`. Neither surfaced
+  failure, so the Product Info stage's per-ASIN `try/catch` could not fire
+  and the `error:` outcome was **unreachable for both stages** — a failed
+  probe recorded `updated`. Worse on the gating side: `asin_estimates`
+  writes `eligibility_status = EXCLUDED.eligibility_status`, an
+  UNCONDITIONAL overwrite, so a throttled probe replaced a stored `no` with
+  `check` **and** moved the stamp, which the (now removed) 30-day rule then
+  used to skip re-probing. Hazmat was luckier: `is_hazmat = COALESCE(
+  EXCLUDED.is_hazmat, asins.is_hazmat)` protected the value, but the stamp
+  still moved on failure.
+
+  Both functions now surface failure to the caller rather than returning a
+  sentinel, and **every** caller has an explicit failure branch. No caller
+  may read `status === "check"` or a `null` hazmat as an answer.
 
 - **Product Info probes EVERYTHING in its working set (2026-10-07).**
   Supersedes the 30-day gating/hazmat scoping confirmed 2026-09-07, and
@@ -2322,12 +2350,16 @@ variable_closing_fee, plus computed est_* fields that never existed —
 profit is calculated client-side only):
 - `asins`: title, brand, category, image_url, weight_lb,
   length_in/width_in/height_in, in_catalog, is_meltable,
-  is_hazmat, is_dangerous_good, gating_checked_at/hazmat_checked_at
-  (probe stamps), is_catalog_deleted (via applyCatalogDeletedSignal)
+  **is_hazmat — ONLY on a successful probe**, is_dangerous_good,
+  **gating_checked_at / hazmat_checked_at (probe stamps) — ONLY on a
+  successful probe; a failed probe leaves the stamp where it was**,
+  is_catalog_deleted (via applyCatalogDeletedSignal)
 - `asin_estimates`: lowest_fba_price, buy_box_price, buy_box_fulfillment,
   lowest_price, sellers_fba, sellers_fbm, fba_fee, referral_fee,
-  fees_estimate_price, fee_source, bsr, bsr_category, eligibility_status
-  (the gating result — there is no is_gated on asins), error, fetched_at
+  fees_estimate_price, fee_source, bsr, bsr_category, **eligibility_status
+  — ONLY on a successful probe** (the gating result — there is no is_gated
+  on asins; a failed probe must not overwrite a stored `yes`/`no` with
+  `check`, and `check` means "never probed"), error, fetched_at
   — noting that since 2026-09-07 Product Info no longer FETCHES prices
   (Prices & Stock owns them, §11); the price columns remain in its UPSERT
   only as COALESCE pass-throughs of stored values
@@ -3840,8 +3872,13 @@ ever wired to a live call site, it must remain unwired on this page.
   means everywhere else. Per-row eligibility_status / is_hazmat are the
   display copy, written from the cache on reuse and from the probe on
   probe; the dialog's gating/hazmat lines show probed / reused_cache /
-  error so the cache is visible working. The cache is deliberately
-  CROSS-LIST shared state, keyed by ASIN and fully bulk-side (no FK to
+  error so the cache is visible working. **A FAILED probe is not cached
+  (2026-10-07)**: no cache row is written or updated, no stamp moves, and
+  the row reports `error` — so the next run re-probes rather than treating
+  a throttle as a 30-day-fresh answer. The 30-day window and the
+  "Refresh all busts the cache" rule are otherwise untouched.
+
+  The cache is deliberately CROSS-LIST shared state, keyed by ASIN and fully bulk-side (no FK to
   asins, no main-table read — bulk gating/hazmat stays separate from the
   main catalog's per the standing decision, and in_database EXISTS
   remains the single main-DB read): a probe under any list serves every
