@@ -188,6 +188,29 @@ route-registration test (`server/route-inventory.test.ts`) backstops
 routes.ts specifically, but the inventory-diff rule applies to every
 blob-staged shared file.
 
+## Gate tests must not leave ASINs behind
+
+Any gate test or verification run that INSERTS an ASIN into AF — `/api/analyze`
+with `fromCsvUpload`, onboarding, bulk promote, the Chrome extension, or any
+other insert path — must delete that ASIN and its dependent rows before the
+gate report is written.
+
+**Why:** the UI cannot delete ASINs. Park and Mark-dead are the only controls,
+and both keep the row. A test ASIN therefore lives in the database forever,
+polluting counts, filters, and every later "how many ASINs are X" answer.
+`B0INVALID9` survived three gate runs this way before anyone noticed.
+
+**Prefer not to insert at all.** Use a dry run, or an ASIN that is already in
+the catalog, whenever the gate allows it. Reach for an invented ASIN only when
+the behaviour under test genuinely requires a new row.
+
+**When you must clean up:** check provenance FIRST — `added_at`, title, and
+dependent rows in `asin_skus`, `listing_submissions`, `brand_product_registry`,
+`po_asins`, `asin_tags`. An ASIN you merely READ during a gate is not a test
+row, and deleting one with a generated SKU or a submission record destroys real
+history and frees a registry NNN that is supposed to be stable. `refresh_runs`
+outcomes are history — leave them.
+
 ## Migrations run from committed code only
 
 Migrations and any DB-mutating script run only from committed code.

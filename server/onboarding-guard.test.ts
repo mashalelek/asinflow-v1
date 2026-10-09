@@ -93,7 +93,10 @@ describe("every insert path applies the tags/notes it was given, after the INSER
     expect(calls.length).toBeGreaterThanOrEqual(5);   // first pass x2, retry x2, final sweep
     for (const c of calls) {
       expect(c, `un-awaited writeResult — tags would race the INSERT again:\n${c}`).toMatch(/await writeResult\(/);
-      expect(c, `writeResult call drops its tags argument:\n${c}`).toMatch(/\.tags \?\? null\)/);
+      // Not anchored to the end of the call: the probe-stamps argument was
+      // appended after tags on 2026-10-09 (§14). What matters is that the
+      // tags are PASSED, not that they are last.
+      expect(c, `writeResult call drops its tags argument:\n${c}`).toMatch(/\.tags \?\? null[,)]/);
     }
   });
 });

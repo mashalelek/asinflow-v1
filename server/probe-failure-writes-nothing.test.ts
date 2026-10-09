@@ -83,16 +83,24 @@ describe("Product Info: a failed probe writes nothing", () => {
     ["gating", "getEligibility", "gating_checked_at"],
     ["hazmat", "getInboundHazmat", "hazmat_checked_at"],
   ] as const) {
-    it(`${probe}: the stamp UPDATE is inside the ok branch ONLY`, () => {
+    // The stamp is EARNED in the ok branch and WRITTEN later, by the sink,
+    // behind the asins INSERT (§14, 2026-10-09 — the stamp used to be an
+    // UPDATE right here, which matched zero rows on a brand-new ASIN). What
+    // this test pins is unchanged in substance: only a successful probe may
+    // put a stamp in play, and the failure branch may not.
+    it(`${probe}: the stamp is claimed inside the ok branch ONLY`, () => {
       const r = region();
       const i = r.indexOf(`await ${call}(input.asin)`);
       const block = r.slice(i, i + 1400);
       const okIdx = block.indexOf('.kind === "ok"');
-      const stampIdx = block.indexOf(`UPDATE asins SET ${stamp} = NOW()`);
+      const stampIdx = block.indexOf(`${probe}: true }`);
       const elseIdx = block.indexOf("} else {");
       expect(okIdx).toBeGreaterThan(-1);
       expect(stampIdx).toBeGreaterThan(okIdx);   // after the ok check
       expect(stampIdx).toBeLessThan(elseIdx);     // and before the else
+      // and the claim is recorded, not written, here
+      expect(block.slice(okIdx, elseIdx)).toMatch(/probeStamps\.set\(input\.asin/);
+      expect(block.slice(okIdx, elseIdx)).not.toMatch(new RegExp(`UPDATE asins SET ${stamp}`));
     });
 
     it(`${probe}: the failure branch records error:<msg> and writes no value`, () => {
@@ -110,6 +118,7 @@ describe("Product Info: a failed probe writes nothing", () => {
       expect(failure).toMatch(new RegExp(`stageOutcomes\\.${probe}\\[input\\.asin\\] = \`error: `));
       // nothing written in the failure branch
       expect(failure).not.toMatch(/UPDATE asins SET/);
+      expect(failure).not.toMatch(/probeStamps\.set/);   // no stamp claimed either
       expect(failure).not.toMatch(/eligibilityData = \{/);
       expect(failure).not.toMatch(/hazmatFlag = /);
     });

@@ -808,6 +808,33 @@ export const mainCatalogSink: AnalyzeSink = {
     // rejection propagates so the caller can report it (§14 honest labeling).
     return upsertTagsForAsin(asin, tagNames);
   },
+  async persistProbeStamps(asin, which) {
+    if (!isDbAvailable()) return;
+    // Built from `which` rather than always setting both: a failed probe
+    // must not move its stamp (§11), and a NULL-valued SET would move it to
+    // NULL rather than leave it alone.
+    const sets: string[] = [];
+    if (which.gating) sets.push("gating_checked_at = NOW()");
+    if (which.hazmat) sets.push("hazmat_checked_at = NOW()");
+    if (sets.length === 0) return;
+    const r = await query(`UPDATE asins SET ${sets.join(", ")} WHERE asin = $1`, [asin]);
+    // Zero rows is the old bug, not a success. pg reports no error for an
+    // UPDATE that matches nothing, so without this check moving the write
+    // after the INSERT would still fail silently the day the INSERT itself
+    // fails (persistResult logs-and-swallows its own errors).
+    if (r.rowCount === 0) {
+      throw new Error(`no asins row for ${asin} — stamp(s) ${sets.join(", ")} not written`);
+    }
+  },
+};
+
+// Which probe stamps this ASIN earned, plus how to report a failed write.
+// Carried to writeResult rather than written at the probe site: the probe
+// runs before the row exists for a brand-new ASIN (§14, 2026-10-09).
+type ProbeStampWrite = {
+  gating: boolean;
+  hazmat: boolean;
+  onError: (msg: string) => void;
 };
 
 // One per-ASIN unit of work: emit, persist the row, THEN apply the tags it
@@ -827,10 +854,24 @@ async function writeResult(
   inputPromoNotes: string | null = null,
   sink: AnalyzeSink,
   inputTags: string[] | null = null,
+  stamps: ProbeStampWrite | null = null,
 ): Promise<void> {
   allResults.set(asin, result);
   emit(JSON.stringify({ type: "result", data: isUpdate ? { ...result, _update: true } : result }) + "\n");
   await sink.persistResult(result, { fromCsvUpload, inputNotes, inputPromoNotes });
+  // Probe stamps ride here for the same reason tags do: ordered BEHIND the
+  // asins INSERT (§14, 2026-10-09). The failure is reported against the
+  // probe's own stage via onError — the probe succeeded, but the record does
+  // not show it, so `updated` would be a lie.
+  if (stamps && (stamps.gating || stamps.hazmat)) {
+    try {
+      await sink.persistProbeStamps(asin, { gating: stamps.gating, hazmat: stamps.hazmat });
+    } catch (err: any) {
+      const msg = err?.message ?? String(err);
+      log(`Probe stamp write FAILED for ${asin}: ${msg}`, "db");
+      stamps.onError(msg);
+    }
+  }
   if (!inputTags || inputTags.length === 0) return;
   try {
     await sink.persistTags(asin, inputTags);
@@ -3162,6 +3203,34 @@ export async function registerRoutes(
     // INPUT, not a freshness heuristic).
     for (const asin of Array.from(feesSkippedNoPrice)) stageOutcomes.fees[asin] = "skipped_no_price";
 
+    // Which stamps each ASIN earned from a `kind: "ok"` probe. The stamp
+    // WRITE happens later, in writeResult, behind the sink's INSERT — see
+    // ProbeStampWrite. This map is the hand-off; nothing else reads it.
+    const probeStamps = new Map<string, { gating: boolean; hazmat: boolean }>();
+    const stampsFor = (asin: string): ProbeStampWrite | null => {
+      const s = probeStamps.get(asin);
+      if (!s || (!s.gating && !s.hazmat)) return null;
+      return {
+        gating: s.gating,
+        hazmat: s.hazmat,
+        // A stamp that did not land demotes `updated` -> `error` for that
+        // stage. The counts move with the outcome so the two can never
+        // disagree, and Retry failed re-asks the ASIN (error: prefix).
+        // Guarded on the CURRENT outcome because writeResult can run twice
+        // for one ASIN (the partial first-pass write, then the retry
+        // `_update`); an ungated decrement would double-count.
+        onError: (msg: string) => {
+          for (const stage of ["gating", "hazmat"] as const) {
+            if (!s[stage]) continue;
+            if (stageOutcomes[stage][asin] !== "updated") continue;
+            stageCounts[stage].updated--;
+            stageCounts[stage].error++;
+            stageOutcomes[stage][asin] = `error: stamp write failed: ${msg}`;
+          }
+        },
+      };
+    };
+
     for (let i = 0; i < asins.length; i++) {
       const input = asins[i];
 
@@ -3214,7 +3283,9 @@ export async function registerRoutes(
             eligibilityData = { status: eligProbe.status };
             stageCounts.gating.updated++;
             stageOutcomes.gating[input.asin] = "updated";
-            await query(`UPDATE asins SET gating_checked_at = NOW() WHERE asin = $1`, [input.asin]).catch(() => {});
+            // Stamp is EARNED here, WRITTEN in writeResult — the asins row
+            // may not exist yet (§14, 2026-10-09).
+            probeStamps.set(input.asin, { ...(probeStamps.get(input.asin) ?? { gating: false, hazmat: false }), gating: true });
           } else {
             // eligibilityData keeps the STORED status (set above). The
             // asin_estimates write is an unconditional overwrite, so writing
@@ -3229,7 +3300,7 @@ export async function registerRoutes(
             hazmatFlag = hzProbe.isHazmat;
             stageCounts.hazmat.updated++;
             stageOutcomes.hazmat[input.asin] = "updated";
-            await query(`UPDATE asins SET hazmat_checked_at = NOW() WHERE asin = $1`, [input.asin]).catch(() => {});
+            probeStamps.set(input.asin, { ...(probeStamps.get(input.asin) ?? { gating: false, hazmat: false }), hazmat: true });
           } else {
             // hazmatFlag keeps the stored value; is_hazmat is COALESCE'd on
             // write anyway, and the stamp is NOT touched.
@@ -3283,10 +3354,10 @@ export async function registerRoutes(
         retryQueue.push({ input, attempt: 1, result });
         log(`Queued ${input.asin} for retry (fees=${retryNeeded.fees}, pricing=${retryNeeded.pricing}, catalog=${retryNeeded.catalog})`, "retry");
         if (!retryNeeded.fees && !retryNeeded.pricing) {
-          await writeResult(emit, allResults, input.asin, result, false, fromCsvUpload, input.notes ?? null, input.promoNotes ?? null, sink, input.tags ?? null);
+          await writeResult(emit, allResults, input.asin, result, false, fromCsvUpload, input.notes ?? null, input.promoNotes ?? null, sink, input.tags ?? null, stampsFor(input.asin));
         }
       } else {
-        await writeResult(emit, allResults, input.asin, result, false, fromCsvUpload, input.notes ?? null, input.promoNotes ?? null, sink, input.tags ?? null);
+        await writeResult(emit, allResults, input.asin, result, false, fromCsvUpload, input.notes ?? null, input.promoNotes ?? null, sink, input.tags ?? null, stampsFor(input.asin));
       }
 
       // Tags and notes both ride inside writeResult now — tags AFTER the
@@ -3389,7 +3460,7 @@ export async function registerRoutes(
               const finalResult = retryError
                 ? { ...retried, error: retryError }
                 : retried;
-              await writeResult(emit, allResults, item.input.asin, finalResult, allResults.has(item.input.asin), fromCsvUpload, item.input.notes ?? null, item.input.promoNotes ?? null, sink, item.input.tags ?? null);
+              await writeResult(emit, allResults, item.input.asin, finalResult, allResults.has(item.input.asin), fromCsvUpload, item.input.notes ?? null, item.input.promoNotes ?? null, sink, item.input.tags ?? null, stampsFor(item.input.asin));
             }
           } catch (err: any) {
             log(`Retry error for ${item.input.asin}: ${err.message}`, "retry");
@@ -3423,7 +3494,7 @@ export async function registerRoutes(
                 ...finalItem,
                 error: errorMsg ?? finalItem.error,
               };
-              await writeResult(emit, allResults, item.input.asin, errorResult, allResults.has(item.input.asin), fromCsvUpload, item.input.notes ?? null, item.input.promoNotes ?? null, sink, item.input.tags ?? null);
+              await writeResult(emit, allResults, item.input.asin, errorResult, allResults.has(item.input.asin), fromCsvUpload, item.input.notes ?? null, item.input.promoNotes ?? null, sink, item.input.tags ?? null, stampsFor(item.input.asin));
             } else {
               item.attempt = attempt + 1;
             }
@@ -3450,7 +3521,7 @@ export async function registerRoutes(
             ...item.result,
             error: errorMsg,
           };
-          await writeResult(emit, allResults, item.input.asin, errorResult, false, fromCsvUpload, item.input.notes ?? null, item.input.promoNotes ?? null, sink, item.input.tags ?? null);
+          await writeResult(emit, allResults, item.input.asin, errorResult, false, fromCsvUpload, item.input.notes ?? null, item.input.promoNotes ?? null, sink, item.input.tags ?? null, stampsFor(item.input.asin));
         }
       }
       if (uncalculated.length > 0) {
@@ -3606,7 +3677,7 @@ export async function registerRoutes(
     // checked_at stamps, no upload prices pre-pass, no background syncs).
     const dryRun = req.query.dryRun === "1" || req.query.dryRun === "true";
     if (dryRun) {
-      const nullSink: AnalyzeSink = { persistResult: async () => {}, persistTags: async () => {} } as any;
+      const nullSink: AnalyzeSink = { persistResult: async () => {}, persistTags: async () => {}, persistProbeStamps: async () => {} } as any;
       await runAnalyzeAndStream(asins, res, nullSink, () => null, false, { dryRun: true });
       res.write(JSON.stringify({ type: "complete" }) + "\n");
       res.end();

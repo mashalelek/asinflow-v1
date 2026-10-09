@@ -48,4 +48,27 @@ export interface AnalyzeSink {
    * no data source on that page.
    */
   persistTags(asin: string, tagNames: string[]): Promise<void>;
+
+  /**
+   * Writes the gating / hazmat probe stamps, AFTER persistResult has settled
+   * (§14, 2026-10-09). Same ordering contract as persistTags and the same
+   * reason: these are `UPDATE asins SET ... WHERE asin = $1`, so on a
+   * brand-new ASIN they match ZERO rows until the sink's INSERT has landed.
+   * They used to run from inside the per-ASIN probe loop — before the INSERT
+   * — under a `.catch(() => {})`, so a first-ever Product Info run reported
+   * `updated` on a probe whose stamp never landed.
+   *
+   * Only called for stamps whose probe returned `kind: "ok"` — a failed probe
+   * writes nothing (§11). `which` names those stamps; at least one is true.
+   *
+   * MUST reject on failure, INCLUDING a zero-row match. Zero rows is not a
+   * pg error, and it is the exact shape the old bug took: silent success
+   * against a row that does not exist. A rejection here means the ledger
+   * would otherwise claim an update the record cannot show, so the caller
+   * turns it into that ASIN's `error` outcome.
+   */
+  persistProbeStamps(
+    asin: string,
+    which: { gating: boolean; hazmat: boolean },
+  ): Promise<void>;
 }

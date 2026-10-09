@@ -58,10 +58,14 @@ describe("the 30-day gating/hazmat skip is GONE from Product Info", () => {
     expect(r).not.toMatch(/else[\s\S]{0,120}reuse/i);
   });
 
-  it("the probe stamps are still written on every probe", () => {
+  it("the probe stamps are still earned on every successful probe", () => {
     const r = productInfoRegion();
-    expect(r).toMatch(/UPDATE asins SET gating_checked_at = NOW\(\)/);
-    expect(r).toMatch(/UPDATE asins SET hazmat_checked_at = NOW\(\)/);
+    // The WRITE moved to the sink on 2026-10-09 (§14) because it ran before
+    // a new ASIN's row existed; the stamps are claimed here and written in
+    // writeResult. Location is pinned by probe-stamps-after-insert.test.ts.
+    expect(r).toMatch(/probeStamps\.set\(input\.asin, \{[^\n]*gating: true/);
+    expect(r).toMatch(/probeStamps\.set\(input\.asin, \{[^\n]*hazmat: true/);
+    expect(r).toMatch(/stampsFor\(input\.asin\)/);
   });
 });
 

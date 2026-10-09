@@ -2354,6 +2354,17 @@ profit is calculated client-side only):
   **gating_checked_at / hazmat_checked_at (probe stamps) — ONLY on a
   successful probe; a failed probe leaves the stamp where it was**,
   is_catalog_deleted (via applyCatalogDeletedSignal)
+
+  **The stamps are written BY THE SINK, alongside the row, never before it
+  exists (2026-10-09).** They used to be written from inside the per-ASIN
+  loop, which runs BEFORE `writeResult`'s sink INSERTs a brand-new ASIN — so
+  on a first-ever Product Info run the `UPDATE asins SET ... = NOW()` matched
+  zero rows and a swallowing `.catch(() => {})` hid it: the probe succeeded,
+  the outcome said `updated`, and the stamp never landed. Same ordering bug
+  as the CSV-tags race (§11, 456b238): a write sequenced before the INSERT it
+  depends on. A failed stamp write now surfaces as that ASIN's `error`
+  outcome rather than being swallowed — if the stamp did not land, the ledger
+  is claiming something the record does not show.
 - `asin_estimates`: lowest_fba_price, buy_box_price, buy_box_fulfillment,
   lowest_price, sellers_fba, sellers_fbm, fba_fee, referral_fee,
   fees_estimate_price, fee_source, bsr, bsr_category, **eligibility_status
