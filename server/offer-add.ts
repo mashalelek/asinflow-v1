@@ -256,9 +256,10 @@ export async function offerAddForAsin(
   //
   // The reservation is INSERTED before the PUT so concurrent submits across
   // operators (Maria's VA + Maria) can't both claim the same (brand, NNN).
-  // UNIQUE (brand_code, nnn) serializes — second writer's INSERT throws,
-  // and we re-check what the winner wrote (matching TTL → reuse, mismatched
-  // TTL → ttl_mismatch reject before PUT).
+  // UNIQUE (brand_code, nnn) serializes — second writer's INSERT throws, and
+  // we re-check what the winner wrote. Either way the loser REJECTS before
+  // the PUT (§18, 2026-10-07): an NNN someone else just took is not ours to
+  // share, whatever its TTL says.
   let reservedRowId: string | null = null;
   if (deps.productRegistry && !reused) {
     const parts = sku.split("-");
@@ -277,15 +278,25 @@ export async function offerAddForAsin(
     }
     const existing = await deps.productRegistry.getByKey(brd, nnn);
     if (existing) {
-      if (existing.ttl !== ttl) {
-        return {
-          kind: "resurrection_error",
-          asin: input.asin,
-          reason: "ttl_mismatch",
-          details: `NNN ${nnn} in brand ${brd} is bound to TTL '${existing.ttl}' (${existing.productName ?? "unnamed product"}); submitted SKU uses '${ttl}'. The product's TTL is fixed by the first ASIN that registered it.`,
-        };
-      }
-      // reuse_ok — proceed without reserving (no row to roll back)
+      // §18 (2026-10-07): an existing (brand, NNN) is NEVER assigned to an
+      // ASIN that does not already own it. This used to be `reuse_ok` —
+      // matching TTL meant "same product, different ASIN", proceed sharing
+      // the number without reserving. The inference was wrong every time in
+      // practice: equal TTLs are two products that happened to derive the
+      // same 3 chars. The allocator now bumps past every taken NNN, so
+      // reaching here at all means something upstream handed us a number
+      // that is already spoken for — a hard error, not a reuse.
+      //
+      // TTL is NOT consulted. The old code split this into reuse_ok (TTL
+      // equal) and ttl_mismatch (TTL differs); both are the same fact — the
+      // number belongs to another ASIN — and comparing TTLs to decide was
+      // itself the forbidden (brand, TTL) -> NNN lookup.
+      return {
+        kind: "resurrection_error",
+        asin: input.asin,
+        reason: "nnn_taken",
+        details: `NNN ${nnn} in brand ${brd} already belongs to ${existing.firstAsin ?? "another ASIN"} (${existing.productName ?? "unnamed product"}, TTL '${existing.ttl}'). Every new ASIN gets its own product number; NNN is never shared.`,
+      };
     } else {
       try {
         const r = await deps.productRegistry.reserve({
@@ -301,15 +312,19 @@ export async function offerAddForAsin(
         // UNIQUE conflict (concurrent writer) is the expected throw. Re-check
         // the current row state and route accordingly.
         const post = await deps.productRegistry.getByKey(brd, nnn).catch(() => null);
-        if (post && post.ttl === ttl) {
-          // A concurrent writer reserved the same product (same TTL) — fine,
-          // their row stays, we proceed without our own reservation.
-        } else if (post && post.ttl !== ttl) {
+        if (post) {
+          // §18 (2026-10-07): a concurrent writer winning this (brand, NNN)
+          // is a hard error whether or not its TTL matches ours. The
+          // same-TTL arm used to proceed on the winner's row — that is the
+          // reuse_ok rule under a different name, and the same wrong
+          // inference. Losing the race means our number is gone; the
+          // operator re-previews and the allocator hands out the next free
+          // one.
           return {
             kind: "resurrection_error",
             asin: input.asin,
-            reason: "ttl_mismatch",
-            details: `Concurrent reservation: NNN ${nnn} in brand ${brd} was just registered with TTL '${post.ttl}' by another submit; submitted '${ttl}'.`,
+            reason: "nnn_taken",
+            details: `Concurrent reservation: NNN ${nnn} in brand ${brd} was just registered by another submit (TTL '${post.ttl}', ASIN ${post.firstAsin ?? "unknown"}); submitted '${ttl}'. Re-preview to get the next free number.`,
           };
         } else {
           return {

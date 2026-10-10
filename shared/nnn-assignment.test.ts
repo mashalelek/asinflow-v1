@@ -3,6 +3,7 @@ import {
   assignNnns,
   parseConformingSku,
   buildExistingNnnsFromSkus,
+  mergeRegistryNnns,
   type NnnAssignmentRequest,
   type ExistingNnns,
 } from "./nnn-assignment";
@@ -56,20 +57,20 @@ describe("parseConformingSku", () => {
 });
 
 // ============================================================================
-// buildExistingNnnsFromSkus — filters non-conforming, groups by bucket
+// buildExistingNnnsFromSkus — filters non-conforming, groups by BRAND
 // ============================================================================
 describe("buildExistingNnnsFromSkus", () => {
-  it("groups conforming SKUs by (BRD, DEP), filters non-conforming silently", () => {
+  it("groups conforming SKUs by BRAND (not BRD-DEP), filters non-conforming silently", () => {
     const result = buildExistingNnnsFromSkus([
       "AMG-BPC-X8M-RRC-001",       // conforming
       "AMG-BPC-Y9N-XYZ-002-A",     // conforming, variant
-      "KAR-GRO-7Y8-NUT-042",       // conforming, different bucket
+      "KAR-GRO-7Y8-NUT-042",       // conforming, different brand
       "AMG-BP-CLN-RRC-002-A",      // legacy (rejected)
       "amzn.gr.foo",               // amazon (rejected)
       "1068914771",                // pure digit (rejected)
     ]);
-    expect(result.get("AMG-BPC")).toEqual(new Set([1, 2]));
-    expect(result.get("KAR-GRO")).toEqual(new Set([42]));
+    expect(result.get("AMG")).toEqual(new Set([1, 2]));
+    expect(result.get("KAR")).toEqual(new Set([42]));
     expect(result.size).toBe(2); // only the two conforming buckets
   });
 
@@ -87,7 +88,7 @@ describe("buildExistingNnnsFromSkus", () => {
 // ============================================================================
 // assignNnns — empty existing, fresh assignments
 // ============================================================================
-describe("assignNnns — fresh buckets (no existing)", () => {
+describe("assignNnns — fresh brands (no existing)", () => {
   it("single request, empty bucket → NNN=1", () => {
     const r = assignNnns([req("B0X1", "AMG", "BPC")], new Map());
     expect(r).toHaveLength(1);
@@ -110,7 +111,7 @@ describe("assignNnns — increment past existing max", () => {
   it("existing max 5 → next is 6", () => {
     const r = assignNnns(
       [req("B0X1", "AMG", "BPC")],
-      existing([["AMG-BPC", [1, 2, 3, 4, 5]]]),
+      existing([["AMG", [1, 2, 3, 4, 5]]]),
     );
     expect((r[0] as any).nnn).toBe(6);
   });
@@ -119,7 +120,7 @@ describe("assignNnns — increment past existing max", () => {
     // Critical: never fill gaps left by retired SKUs. Monotonic increase only.
     const r = assignNnns(
       [req("B0X1", "AMG", "BPC")],
-      existing([["AMG-BPC", [1, 3, 5]]]),
+      existing([["AMG", [1, 3, 5]]]),
     );
     expect((r[0] as any).nnn).toBe(6); // NOT 2, NOT 4
   });
@@ -130,7 +131,7 @@ describe("assignNnns — increment past existing max", () => {
     // asin_skus which retains retired SKUs. This test pins the contract.
     const r = assignNnns(
       [req("B0X1", "AMG", "BPC")],
-      existing([["AMG-BPC", [7]]]), // imagine 7 belongs to a deleted SKU
+      existing([["AMG", [7]]]), // imagine 7 belongs to a deleted SKU
     );
     expect((r[0] as any).nnn).toBe(8);
   });
@@ -139,7 +140,7 @@ describe("assignNnns — increment past existing max", () => {
 // ============================================================================
 // assignNnns — batch sequencing within same bucket (CRITICAL)
 // ============================================================================
-describe("assignNnns — batch sequencing within same (BRD,DEP)", () => {
+describe("assignNnns — batch sequencing within same BRAND", () => {
   it("3 requests in same bucket, empty existing → sequential 1, 2, 3", () => {
     const r = assignNnns(
       [req("B0A", "AMG", "BPC"), req("B0B", "AMG", "BPC"), req("B0C", "AMG", "BPC")],
@@ -153,7 +154,7 @@ describe("assignNnns — batch sequencing within same (BRD,DEP)", () => {
     // = 11, all three get 11, collision on commit.
     const r = assignNnns(
       [req("B0A", "AMG", "BPC"), req("B0B", "AMG", "BPC"), req("B0C", "AMG", "BPC")],
-      existing([["AMG-BPC", [10]]]),
+      existing([["AMG", [10]]]),
     );
     expect(r.map((o) => (o as any).nnn)).toEqual([11, 12, 13]);
   });
@@ -161,15 +162,15 @@ describe("assignNnns — batch sequencing within same (BRD,DEP)", () => {
   it("mixed buckets in same batch, each bucket increments independently", () => {
     const r = assignNnns(
       [
-        req("B01", "AMG", "BPC"), // AMG-BPC has max=5 → 6
-        req("B02", "KAR", "GRO"), // KAR-GRO has max=2 → 3
-        req("B03", "AMG", "BPC"), // AMG-BPC cursor now 6 → 7
-        req("B04", "PAT", "SPO"), // PAT-SPO empty → 1
-        req("B05", "KAR", "GRO"), // KAR-GRO cursor now 3 → 4
+        req("B01", "AMG", "BPC"), // AMG has max=5 → 6
+        req("B02", "KAR", "GRO"), // KAR has max=2 → 3
+        req("B03", "AMG", "BPC"), // AMG cursor now 6 → 7
+        req("B04", "PAT", "SPO"), // PAT empty → 1
+        req("B05", "KAR", "GRO"), // KAR cursor now 3 → 4
       ],
       existing([
-        ["AMG-BPC", [5]],
-        ["KAR-GRO", [2]],
+        ["AMG", [5]],
+        ["KAR", [2]],
       ]),
     );
     expect(r.map((o) => (o as any).nnn)).toEqual([6, 3, 7, 1, 4]);
@@ -191,11 +192,11 @@ describe("assignNnns — 999 overflow", () => {
   it("bucket at 999 → first request in that bucket errors with kind=overflow", () => {
     const r = assignNnns(
       [req("B0X1", "AMG", "BPC")],
-      existing([["AMG-BPC", [999]]]),
+      existing([["AMG", [999]]]),
     );
     expect(r[0].kind).toBe("overflow");
     expect((r[0] as any).detail).toMatch(/999/);
-    expect((r[0] as any).bucket).toBe("AMG-BPC");
+    expect((r[0] as any).bucket).toBe("AMG"); // brand, not BRD-DEP (2026-10-07)
   });
 
   it("bucket at 999, batch of 3 in that bucket → all 3 error (cursor doesn't advance on overflow)", () => {
@@ -205,7 +206,7 @@ describe("assignNnns — 999 overflow", () => {
         req("B02", "AMG", "BPC"),
         req("B03", "AMG", "BPC"),
       ],
-      existing([["AMG-BPC", [999]]]),
+      existing([["AMG", [999]]]),
     );
     expect(r.map((o) => o.kind)).toEqual(["overflow", "overflow", "overflow"]);
   });
@@ -218,7 +219,7 @@ describe("assignNnns — 999 overflow", () => {
         req("B03", "AMG", "BPC"), // overflow again
         req("B04", "PAT", "SPO"), // assigned 1
       ],
-      existing([["AMG-BPC", [999]]]),
+      existing([["AMG", [999]]]),
     );
     expect(r[0].kind).toBe("overflow");
     expect((r[1] as any).nnn).toBe(1);
@@ -229,7 +230,7 @@ describe("assignNnns — 999 overflow", () => {
   it("bucket at 998, batch of 2 in that bucket → 999 assigned, then overflow", () => {
     const r = assignNnns(
       [req("B01", "AMG", "BPC"), req("B02", "AMG", "BPC")],
-      existing([["AMG-BPC", [998]]]),
+      existing([["AMG", [998]]]),
     );
     expect((r[0] as any).nnn).toBe(999);
     expect(r[1].kind).toBe("overflow");
@@ -315,19 +316,80 @@ describe("integration: assignNnns output → buildSku produces fixed-width NNN",
   });
 });
 
+// ============================================================================
+// §18 (2026-10-07): brand-only bucketing + the registry counts
+// ============================================================================
+describe("brand-only bucketing — no two rows can share (brand, NNN)", () => {
+  it("same brand, DIFFERENT depts → sequential NNNs, never the same number", () => {
+    // The bug this is here for: the cursor used to be keyed "BRD-DEP", so
+    // these two rows each got NNN 1 and both claimed (AMG, 1) — which the
+    // registry's UNIQUE (brand_code, nnn) forbids and §18 now forbids outright.
+    const r = assignNnns([req("B0A", "AMG", "BPC"), req("B0B", "AMG", "GRO")], new Map());
+    expect(r.map((o) => (o as any).nnn)).toEqual([1, 2]);
+  });
+
+  it("existing max is per BRAND, pooled across depts", () => {
+    // One conforming SKU under AMG-BPC and one under AMG-GRO: the brand's max
+    // is 7, so the next row gets 8 regardless of which dept it lands in.
+    const ex = buildExistingNnnsFromSkus(["AMG-BPC-X8M-RRC-003", "AMG-GRO-Y9N-NUT-007"]);
+    expect(ex.get("AMG")).toEqual(new Set([3, 7]));
+    const r = assignNnns([req("B0A", "AMG", "HOM")], ex);
+    expect((r[0] as any).nnn).toBe(8);
+  });
+
+  it("different brands are still independent", () => {
+    const r = assignNnns([req("B0A", "AMG", "BPC"), req("B0B", "KAR", "BPC")], new Map());
+    expect(r.map((o) => (o as any).nnn)).toEqual([1, 1]);
+  });
+});
+
+describe("mergeRegistryNnns — the registry burns numbers too", () => {
+  it("a registry NNN with no asin_skus SKU still blocks reallocation", () => {
+    // A reservation whose PUT failed leaves a registry row and no SKU. Without
+    // this merge the allocator would hand that number out again and collide on
+    // UNIQUE (brand_code, nnn) at reserve time.
+    const ex = mergeRegistryNnns(buildExistingNnnsFromSkus([]), [{ brandCode: "AMG", nnn: 4 }]);
+    expect(ex.get("AMG")).toEqual(new Set([4]));
+    expect((assignNnns([req("B0A", "AMG", "BPC")], ex)[0] as any).nnn).toBe(5);
+  });
+
+  it("unions with the SKU-derived set rather than replacing it", () => {
+    const ex = buildExistingNnnsFromSkus(["AMG-BPC-X8M-RRC-002"]);
+    mergeRegistryNnns(ex, [{ brandCode: "AMG", nnn: 9 }, { brandCode: "KAR", nnn: 1 }]);
+    expect(ex.get("AMG")).toEqual(new Set([2, 9]));
+    expect(ex.get("KAR")).toEqual(new Set([1]));
+    expect((assignNnns([req("B0A", "AMG", "BPC")], ex)[0] as any).nnn).toBe(10);
+  });
+
+  it("ignores out-of-range and malformed rows instead of poisoning the cursor", () => {
+    const ex = mergeRegistryNnns(new Map(), [
+      { brandCode: "AMG", nnn: 0 },
+      { brandCode: "AMG", nnn: 1000 },
+      { brandCode: "", nnn: 5 },
+      { brandCode: "AMG", nnn: 2 },
+    ]);
+    expect(ex.get("AMG")).toEqual(new Set([2]));
+  });
+
+  it("returns the same map it was given (in-place, chainable)", () => {
+    const ex: ExistingNnns = new Map();
+    expect(mergeRegistryNnns(ex, [{ brandCode: "AMG", nnn: 1 }])).toBe(ex);
+  });
+});
+
 describe("assignNnns — determinism", () => {
   it("same input → same output (pure function)", () => {
     const reqs = [req("B0A", "AMG", "BPC"), req("B0B", "KAR", "GRO")];
-    const ex = existing([["AMG-BPC", [3]]]);
+    const ex = existing([["AMG", [3]]]);
     const r1 = assignNnns(reqs, ex);
     const r2 = assignNnns(reqs, ex);
     expect(r1).toEqual(r2);
   });
 
   it("does NOT mutate the existing map", () => {
-    const ex = existing([["AMG-BPC", [5]]]);
-    const before = new Set(ex.get("AMG-BPC")!);
+    const ex = existing([["AMG", [5]]]);
+    const before = new Set(ex.get("AMG")!);
     assignNnns([req("B0X", "AMG", "BPC"), req("B0Y", "AMG", "BPC")], ex);
-    expect(ex.get("AMG-BPC")).toEqual(before); // unchanged
+    expect(ex.get("AMG")).toEqual(before); // unchanged
   });
 });

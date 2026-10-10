@@ -57,17 +57,22 @@ describe("resolveLegend", () => {
     expect(r.derivedProposal).toBe("YAN");
   });
 
-  it("handles empty/whitespace raw value as not_in_legend, no DB hit needed", async () => {
-    let called = false;
-    const q: QueryFn = async () => {
-      called = true;
+  it("handles empty/whitespace raw value as not_in_legend, with no LOOKUP", async () => {
+    // The alias LOOKUP is still skipped for a blank value — there is nothing
+    // to look up. The taken-codes SELECT does run (2026-10-07): the proposer
+    // always proposes a FREE code, which means it must know what is taken on
+    // every branch. Blank values never become legend entries either way
+    // (§18 — they resolve to NUL and the approvals dialog drops them).
+    const seen: string[] = [];
+    const q: QueryFn = async (sql) => {
+      seen.push(sql);
       return { rows: [] };
     };
     const r1 = await resolveLegend("dept", "", q);
     const r2 = await resolveLegend("dept", "   ", q);
     expect(r1.status).toBe("not_in_legend");
     expect(r2.status).toBe("not_in_legend");
-    expect(called).toBe(false);
+    expect(seen.every((sql) => !/sku_legend_alias/.test(sql))).toBe(true);
   });
 
   it("normalization is handled by the SQL — resolver passes raw value through", async () => {

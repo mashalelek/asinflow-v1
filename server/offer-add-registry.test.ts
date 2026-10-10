@@ -4,10 +4,10 @@
 //   - PUT returns failure → reservation rolled back
 //   - PUT throws (network/timeout) → reservation rolled back, exception re-propagates
 //   - PUT succeeds → reservation committed (not rolled back)
-//   - ttl_mismatch rejected BEFORE PUT (no reservation, no PUT call)
-//   - reuse_ok proceeds without reserving
-//   - concurrent UNIQUE conflict + matching TTL → proceed
-//   - concurrent UNIQUE conflict + mismatched TTL → ttl_mismatch reject
+//   - a taken (brand, NNN) rejected BEFORE PUT (no reservation, no PUT call)
+//   - a taken NNN with a MATCHING TTL is rejected too (was reuse_ok until
+//     2026-10-07 — §18, NNN is never shared across ASINs)
+//   - concurrent UNIQUE conflict → nnn_taken reject, whatever the TTL
 
 import { describe, it, expect } from "vitest";
 import { offerAddForAsin } from "./offer-add";
@@ -173,7 +173,7 @@ describe("offerAddForAsin — registry reserve-then-PUT", () => {
     expect(state.rows).toHaveLength(0);
   });
 
-  it("ttl_mismatch: NNN exists with different TTL → REJECT BEFORE PUT (no reservation, no PUT)", async () => {
+  it("nnn_taken: NNN exists with a DIFFERENT TTL → REJECT BEFORE PUT (no reservation, no PUT)", async () => {
     let putCalled = false;
     const { repo, state } = makeMockRepo([
       { brandCode: "AMG", nnn: 1, ttl: "OLD", deptCode: "BPC", productName: "Old Product", firstAsin: "B00OLD", registeredAt: new Date() },
@@ -186,17 +186,22 @@ describe("offerAddForAsin — registry reserve-then-PUT", () => {
     );
     expect(r.kind).toBe("resurrection_error");
     if (r.kind === "resurrection_error") {
-      expect(r.reason).toBe("ttl_mismatch");
+      expect(r.reason).toBe("nnn_taken");
       expect(r.details).toContain("'OLD'");
+      expect(r.details).toContain("B00OLD");
     }
     expect(state.reserveCalls).toBe(0); // never tried to insert
     expect(state.rollbackCalls).toBe(0);
     expect(putCalled).toBe(false); // CRITICAL: no PUT fired
   });
 
-  it("reuse_ok: NNN exists with matching TTL → PUT fires, no reservation, no rollback", async () => {
-    // resurrection generates SKU with TTL "TPR" (from "Test Product"). Registry
-    // already has (AMG, 1, TES) — should detect as reuse_ok, fire PUT, no row added.
+  it("nnn_taken: NNN exists with a MATCHING TTL → also rejected (this was reuse_ok)", async () => {
+    // §18 (2026-10-07). resurrection generates the SKU with TTL "TPR"; the
+    // registry already holds (AMG, 1, TPR) under another ASIN. That exact
+    // shape used to be `reuse_ok` — "same product, different ASIN", fire the
+    // PUT and share the number. An equal TTL is now no evidence of anything:
+    // two products deriving the same 3 chars is ordinary, and the number
+    // belongs to B00OLD either way.
     const { repo, state } = makeMockRepo([
       { brandCode: "AMG", nnn: 1, ttl: "TPR", deptCode: "BPC", productName: "Test Product (existing)", firstAsin: "B00OLD", registeredAt: new Date() },
     ]);
@@ -207,11 +212,55 @@ describe("offerAddForAsin — registry reserve-then-PUT", () => {
       { queryFn: makeMockQuery(), httpGet: makeMockHttpGet(), httpPut, sellerId: SELLER, productRegistry: repo },
       false,
     );
-    expect(r.kind).toBe("created");
-    expect(putCalled).toBe(true);
-    expect(state.reserveCalls).toBe(0); // reuse path → no reservation
+    expect(r.kind).toBe("resurrection_error");
+    if (r.kind === "resurrection_error") {
+      expect(r.reason).toBe("nnn_taken");
+      expect(r.details).toContain("B00OLD");
+    }
+    expect(putCalled).toBe(false); // CRITICAL: no offer created on someone else's NNN
+    expect(state.reserveCalls).toBe(0);
     expect(state.rollbackCalls).toBe(0);
-    expect(state.rows).toHaveLength(1); // still just the original row
+    expect(state.rows).toHaveLength(1); // untouched
+  });
+
+  it("concurrent writer wins the NNN with a MATCHING TTL → nnn_taken, no PUT", async () => {
+    // The race: getByKey saw the NNN free, so we tried to reserve; a parallel
+    // submit got there first and UNIQUE (brand_code, nnn) threw. We re-read
+    // and find THEIR row, carrying the same TTL ours derived.
+    //
+    // §18 (2026-10-07): this is the reuse_ok rule under another name and is
+    // now a hard error. Losing the race means the number is gone — the
+    // operator re-previews and the allocator hands out the next free one.
+    // Previously this arm fell through and fired the PUT on their number.
+    const { repo, state } = makeMockRepo([]);
+    let putCalled = false;
+    const winner: ProductRegistryRow = {
+      brandCode: "AMG", nnn: 1, ttl: "TPR", deptCode: "BPC",
+      productName: "Won the race", firstAsin: "B00RACE", registeredAt: new Date(),
+    };
+    // reserve throws like a UNIQUE conflict; the post-conflict re-read then
+    // sees the winner's row.
+    state.reserveShouldThrow = "unique_conflict";
+    const racing: ProductRegistryRepo = {
+      ...repo,
+      async reserve(input) { return repo.reserve(input); },
+      async getByKey(brand, nnn) {
+        return state.reserveCalls > 0 ? winner : null; // free before, taken after
+      },
+    };
+    const httpPut = async () => { putCalled = true; return { sku: "x", status: "ACCEPTED", submissionId: "S", issues: [] }; };
+    const r = await offerAddForAsin(
+      { asin: ASIN, productNumber: 1, price: 10, cogs: null },
+      { queryFn: makeMockQuery(), httpGet: makeMockHttpGet(), httpPut, sellerId: SELLER, productRegistry: racing },
+      false,
+    );
+    expect(r.kind).toBe("resurrection_error");
+    if (r.kind === "resurrection_error") {
+      expect(r.reason).toBe("nnn_taken");
+      expect(r.details).toContain("B00RACE");
+    }
+    expect(putCalled).toBe(false);
+    expect(state.rollbackCalls).toBe(0); // our reserve never landed — nothing to undo
   });
 
   it("dryRun=true bypasses ALL registry interaction (no reads, no writes)", async () => {

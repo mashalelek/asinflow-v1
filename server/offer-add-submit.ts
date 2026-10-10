@@ -32,7 +32,7 @@ import { offerAddForAsin as realOfferAddForAsin, preFilterSubmitSet, type OfferA
 import type { LegendPending } from "./sku-resurrection";
 import { fetchCompetingOffers as realFetchOffers, type OffersFetchOutcome } from "./listings-offers-fetch";
 import { resolveOfferPrice, type PriceResolverResult, type DisqualifiedOffer } from "@shared/price-resolver";
-import { assignNnns, buildExistingNnnsFromSkus, parseConformingSku, type NnnAssignmentRequest, type NnnAssignmentOutcome } from "@shared/nnn-assignment";
+import { assignNnns, buildExistingNnnsFromSkus, mergeRegistryNnns, parseConformingSku, type NnnAssignmentRequest, type NnnAssignmentOutcome } from "@shared/nnn-assignment";
 import type { ListingsIssue, OfferAddFailureReason } from "./listings-error-map";
 import type { QueryFn } from "@shared/sku-legend";
 import type { Settings } from "@shared/schema";
@@ -88,7 +88,7 @@ export type SkipReason =
   | "needs_cogs" | "offers_fetch_failed" | "unreachable_roi"
   // Phase 4 override validation + registry validation
   | "invalid_sku_override" | "sku_collision"
-  | "ttl_mismatch" | "registry_reserve_failed" | "invalid_sku_format";
+  | "nnn_taken" | "registry_reserve_failed" | "invalid_sku_format";
 
 export interface SubmitResult {
   preFilter: { excluded: PreFilterResult["excluded"] };
@@ -301,7 +301,14 @@ export async function submitOfferAddBatch(
     }
     nnnRequests.push({ asin: p.asin, brandCode: parsed.brd, deptCode: parsed.dep });
   }
+  // §18 (2026-10-07): the existing set is asin_skus UNION the registry. The
+  // per-brand rows were already loaded above for the preview's client-side
+  // lookup, so this costs no extra query. A registry row whose SKU never
+  // reached asin_skus (a reservation whose PUT failed) still burns its NNN.
   const existingNnns = buildExistingNnnsFromSkus(deps.allExistingSkus);
+  for (const rows of Array.from(registryByBrand.values())) {
+    mergeRegistryNnns(existingNnns, rows.map((r) => ({ brandCode: r.brandCode, nnn: r.nnn })));
+  }
   const allocations = assignNnns(nnnRequests, existingNnns);
   // Build map: asin → allocation outcome
   const allocByAsin = new Map<string, NnnAssignmentOutcome>();
@@ -601,7 +608,7 @@ function mapBlockedOutcomeToSkip(result: OfferAddResult): SubmitOutcome | null {
       return { kind: "skipped", asin: result.asin,
         reason: result.reason === "definitions_fetch_failed" ? "definitions_fetch_failed"
               : result.reason === "invalid_sku_override" ? "invalid_sku_override"
-              : result.reason === "ttl_mismatch" ? "ttl_mismatch"
+              : result.reason === "nnn_taken" ? "nnn_taken"
               : result.reason === "registry_reserve_failed" ? "registry_reserve_failed"
               : result.reason === "invalid_sku_format" ? "invalid_sku_format"
               : "resurrection_error",
