@@ -35,6 +35,16 @@ export interface ListingIssue {
 
 export interface ListingStateInput {
   found: boolean;      // getListingsItem returned 200 (SKU record exists at SC)
+  // §18 A1 (2026-10-09): 200 AND a NON-EMPTY summaries array — i.e. a real
+  // listing, not a SKU shell. DISTINCT from `found` on purpose:
+  //   - `found` keeps its documented meaning ("a SKU record exists") and is
+  //     what the classifier's terminal-signal path needs. A shell still
+  //     carries its issues, so B07J2WWWD4's 5886 must still classify
+  //     `failed` — dropping `found` to false would lose that and make it
+  //     `processing` forever.
+  //   - `listed` is the FLAG predicate. Only this may write has_live_offer.
+  // Conflating the two is exactly how a shell wrote TRUE.
+  listed: boolean;
   status: string[];    // summaries[0].status, e.g. ["DISCOVERABLE","BUYABLE"]
   hasOffer: boolean;   // offers.length>0 OR fulfillmentAvailability present
   issues: ListingIssue[];
@@ -136,9 +146,11 @@ export async function probeListingState(
       marketplaceIds: MARKETPLACE,
       includedData: "summaries,issues,offers,fulfillmentAvailability",
     });
+    const summaries: any[] = Array.isArray(d?.summaries) ? d.summaries : [];
     const input: ListingStateInput = {
       found: true,
-      status: d?.summaries?.[0]?.status ?? [],
+      listed: summaries.length > 0, // §18 A1 — a shell is found-but-not-listed
+      status: summaries[0]?.status ?? [],
       hasOffer: (d?.offers ?? []).length > 0 || (d?.fulfillmentAvailability ?? []).length > 0,
       issues: normalizeIssues(d?.issues ?? []),
     };
@@ -149,7 +161,7 @@ export async function probeListingState(
     if (status === 429 || code === "QuotaExceeded" || (status >= 500 && status <= 599)) {
       // Fail-closed: no verdict on throttle/server error.
       return {
-        input: { found: false, status: [], hasOffer: false, issues: [] },
+        input: { found: false, listed: false, status: [], hasOffer: false, issues: [] },
         classification: { status: "processing", reviewFlags: [], terminalConflict: false },
         observedSku: sku,
         throttled: true,
@@ -158,7 +170,7 @@ export async function probeListingState(
     if (status !== 404) {
       // Any other client error is inconclusive — treat like throttle (no verdict).
       return {
-        input: { found: false, status: [], hasOffer: false, issues: [] },
+        input: { found: false, listed: false, status: [], hasOffer: false, issues: [] },
         classification: { status: "processing", reviewFlags: [], terminalConflict: false },
         observedSku: sku,
         throttled: true,
@@ -174,17 +186,21 @@ export async function probeListingState(
       identifiersType: "ASIN",
       includedData: "summaries",
     });
-    const items: any[] = d?.items ?? [];
+    // §18 A1: shells filtered before the found/absent decision.
+    const items: any[] = (d?.items ?? []).filter(
+      (it: any) => Array.isArray(it?.summaries) && it.summaries.length > 0,
+    );
     if (items.length === 0) {
       // Genuinely absent at SC, and no terminal signal (404 carries none) →
       // PROCESSING. Time-based STALE + manual DELETED verdict handle this.
-      const input: ListingStateInput = { found: false, status: [], hasOffer: false, issues: [] };
+      const input: ListingStateInput = { found: false, listed: false, status: [], hasOffer: false, issues: [] };
       return { input, classification: classifyListingState(input), observedSku: sku, throttled: false };
     }
     // Materialized under a (possibly different) SKU → LIVE, record the real SKU.
     const it = items[0];
     const input: ListingStateInput = {
       found: true,
+      listed: true, // filtered above — this row has a summary
       status: it?.summaries?.[0]?.status ?? [],
       hasOffer: true, // present under the ASIN with a summary = materialized
       issues: [],
@@ -193,7 +209,7 @@ export async function probeListingState(
   } catch {
     // Fallback failed → no verdict (fail-closed).
     return {
-      input: { found: false, status: [], hasOffer: false, issues: [] },
+      input: { found: false, listed: false, status: [], hasOffer: false, issues: [] },
       classification: { status: "processing", reviewFlags: [], terminalConflict: false },
       observedSku: sku,
       throttled: true,

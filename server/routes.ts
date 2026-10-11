@@ -30,7 +30,7 @@ import { fetchCatalogBatch, fetchFeesBatch } from "./product-info-batch";
 import { applyCatalogDeletedSignal } from "./catalog-deleted-write";
 import { offerAddForAsin, preFilterSubmitSet, type OfferAddResult, type PreFilterResult } from "./offer-add";
 import { submitOfferAddBatch, type SubmitAsinRow } from "./offer-add-submit";
-import { syncLiveOffers } from "./live-offer-sync";
+
 import { runFullScopePass } from "./full-scope-pass";
 import { makeProductRegistryRepo } from "./product-registry-repo";
 import { processBulkApproval, makeProductionHandlers, type ApprovalItem } from "./sku-legend-approval";
@@ -2689,21 +2689,26 @@ export async function registerRoutes(
     }
   });
 
-  // §6 item 7: single-ASIN current-issues recheck. Runs the SAME full-scope
-  // live-offer pass implementation scoped to one ASIN — single owner of
-  // has_live_offer preserved; the snapshot write rides the definitive probe.
+  // §6 item 7: single-ASIN current-issues recheck. Runs the listings
+  // reconcile STAGE scoped to one ASIN (2026-10-09) — it used to call
+  // syncLiveOffers, the last surviving caller of that module, which wrote the
+  // flag with no ledger anywhere. live-offer-sync.ts is deleted; this is the
+  // same runFullScopePass the Refresh stage uses, so there is one
+  // implementation and every write here is ledgered (§18 A2).
   // Read-only vs the ledger. Returns the fresh row fields for in-place update.
   app.post("/api/asins/:asin/recheck-issues", async (req: Request, res: Response) => {
     if (!isDbAvailable()) { res.status(503).json({ message: "Database not available" }); return; }
     const asin = String(req.params.asin ?? "").trim();
     if (!asin) { res.status(400).json({ message: "ASIN required" }); return; }
     try {
-      const summary = await syncLiveOffers({ asinFilter: new Set([asin]) });
+      const report = await runFullScopePass({ dryRun: false, asinFilter: new Set([asin]) });
       const row = (await query(
         `SELECT has_live_offer, current_issues, issues_checked_at FROM asins WHERE asin = $1`, [asin],
       )).rows[0];
       res.json({
-        probed: summary.total, transient: summary.transient,
+        probed: report.phaseA.asins + report.phaseB.asins,
+        transient: report.phaseA.transientSkipped + report.phaseB.transientSkipped,
+        outcome: report.outcomes[asin] ?? null,
         hasLiveOffer: row?.has_live_offer ?? null,
         currentIssues: row?.current_issues ?? null,
         issuesCheckedAt: row?.issues_checked_at ?? null,

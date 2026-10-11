@@ -6,8 +6,12 @@ import {
   type ListingStateInput,
 } from "./submission-verify";
 
+// `listed` (§18 A1) defaults to `found` here: for every pre-existing case in
+// this file a 200 came with a real summary, so found and listed agree. The
+// shell case — found WITHOUT listed — is covered explicitly in
+// listing-shell-a1.test.ts.
 const base = (o: Partial<ListingStateInput>): ListingStateInput => ({
-  found: false, status: [], hasOffer: false, issues: [], ...o,
+  found: false, status: [], hasOffer: false, issues: [], listed: o.found ?? false, ...o,
 });
 
 describe("classifyListingState — the 5 adjustments + real batch cases", () => {

@@ -4,8 +4,30 @@
 // GET /listings/2021-08-01/items/{sellerId}/{sku}
 //   404 → present=false (we already verified in the diag: a deleted SKU
 //         reliably returns 404 with body code NOT_FOUND. No fuzzy signal.)
-//   200 → present=true, statuses array from summaries[0].status
+//   200 with a NON-EMPTY summaries array → present=true, statuses from
+//         summaries[0].status
+//   200 with summaries: [] → present=false, shell=true (§18 A1, 2026-10-09)
 //   anything else → transient, surface to caller for retry/backoff
+//
+// A1 — PRESENT REQUIRES A LISTING, NOT A SKU STRING. The header above has
+// claimed "200 = present with Active/Inactive statuses" since this module was
+// written, but the code accepted ANY 200. Amazon leaves a SKU **shell**
+// behind a failed submission: the SKU exists in the seller namespace and
+// getListingsItem answers 200 with summaries: [], no status, no offer, no
+// fulfillmentAvailability. B07J2WWWD4 / CAI-TOO-WD4-UMC-001 (2026-10-09) is
+// the case — never listed, submission failed on 13013+5886, and the shell
+// still read as "live" all the way into has_live_offer.
+//
+// The predicate is `summaries.length > 0`, NOT `status.length > 0`. A real
+// listing can carry an EMPTY status array while it materialises, and §19's
+// classifier depends on that ("200-with-empty-status is listed, not live
+// yet"). Verified against the full 805-SKU account list 2026-10-09: one row
+// (ALF-BOO-V8U-RCM-001 / B01JO20V8U) is exactly that shape. Keying A1 on
+// status would call that genuine listing absent.
+//
+// The asin_skus row for a shell SKU STAYS — it is history, and resurrection
+// may reuse the shell's own SKU string (Amazon accepts a PUT to an existing
+// SKU, so the re-add carries no duplicate risk).
 
 import { spApiGet as realSpApiGet } from "./spapi-auth";
 import type { HttpGetFn } from "./sku-catalog-fetch";
@@ -20,8 +42,12 @@ export interface ListingIssueLite {
 }
 
 export type ListingStatusOutcome =
+  // `shell: true` distinguishes "200, but no listing behind the SKU" from a
+  // plain 404. Both are present=false and both are treated identically for
+  // the flag (§18 A1); the discriminator exists so reports can count shells
+  // and so a future reader does not have to rediscover that they happen.
   | { ok: true; present: true; statuses: string[]; issues: ListingIssueLite[] }
-  | { ok: true; present: false }
+  | { ok: true; present: false; shell?: true }
   | { ok: false; reason: "transient_error"; status?: number; message: string; retryable: true };
 
 export async function checkSkuListingStatus(
@@ -35,7 +61,14 @@ export async function checkSkuListingStatus(
       // issues ride the same call — §6 item 7 snapshot, zero extra volume.
       { marketplaceIds: MARKETPLACE, includedData: "summaries,issues" },
     );
-    const statuses: string[] = data?.summaries?.[0]?.status ?? [];
+    // §18 A1: a 200 with no summary is a SKU shell, not a listing. Treated
+    // exactly like a 404 — present=false — so it contributes nothing to the
+    // flag and all-shell still routes through ASIN discovery before FALSE.
+    const summaries: any[] = Array.isArray(data?.summaries) ? data.summaries : [];
+    if (summaries.length === 0) {
+      return { ok: true, present: false, shell: true };
+    }
+    const statuses: string[] = summaries[0]?.status ?? [];
     const issues: ListingIssueLite[] = (data?.issues ?? []).map((i: any) => ({
       code: String(i?.code ?? ""),
       severity: String(i?.severity ?? ""),

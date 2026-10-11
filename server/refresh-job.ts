@@ -211,9 +211,13 @@ export async function runRefreshJob(opts: {
         emit: (ev) => emit({ ...ev, stage: "listings" }),
       });
       const a = report.phaseA, b = report.phaseB;
-      const outcomes: Record<string, string> = {};
-      for (const f of a.flips) outcomes[f.asin] = `flip: ${String(f.from)} -> ${String(f.to)}`;
-      for (const d of [...a.discoveries, ...b.discovered]) outcomes[d.asin] = `discovered: ${d.skus.join(", ")}`;
+      // §18 A2 (2026-10-09): the outcomes come from the pass itself now, one
+      // per ASIN PROBED. This used to build the map here from flips +
+      // discoveries only — so an ASIN that was probed and stayed put left no
+      // trace, and "which ASINs did this run look at" was unanswerable from
+      // the ledger. That gap is half of how B07J2WWWD4's wrong TRUE became
+      // unattributable.
+      const outcomes: Record<string, string> = { ...report.outcomes };
       return {
         counts: {
           probed: a.asins, live: a.live, no_offer: a.noOffer, transient: a.transientSkipped,

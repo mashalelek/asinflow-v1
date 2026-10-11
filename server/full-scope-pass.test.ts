@@ -66,10 +66,12 @@ describe("full-scope pass — phase a + 8c", () => {
     expect(h.writes.some((w) => /SET primary_sku/.test(w.sql))).toBe(false);
     // has_live_offer flip + empty snapshot still written
     const upd = h.writes.find((w) => /SET has_live_offer/.test(w.sql))!;
-    // 4th param is has_buyable_offer (§23, 2026-09-15) — no live SKU means
-    // no BUYABLE offer either, written in the SAME statement so the two
-    // flags can never disagree about one probe.
-    expect(upd.params).toEqual(["B0B", false, "[]", false]);
+    // Params are [asin, listed, buyable, issues] since the write moved into
+    // writeLiveOfferVerdict (§18 A2, 2026-10-09); they were
+    // [asin, listed, issues, buyable] when the SQL was inline here. No live
+    // SKU means no BUYABLE offer either, and both flags move in the SAME
+    // statement so they can never disagree about one probe (§23).
+    expect(upd.params).toEqual(["B0B", false, false, "[]"]);
     expect(upd.sql).toMatch(/has_buyable_offer/);
   });
 
@@ -123,7 +125,14 @@ describe("full-scope pass — phase b discovery", () => {
     const ins = h.writes.find((w) => /INSERT INTO asin_skus/.test(w.sql))!;
     expect(ins.params).toEqual(["id-B0F", "SC-SKU-1", true]); // bootstrap primary
     const upd = h.writes.find((w) => /SET has_live_offer/.test(w.sql))!;
-    expect(upd.sql).toMatch(/primary_sku = \$4/);
+    expect(upd.params[1]).toBe(true);
+    // primary_sku is NO LONGER folded into the flag statement (§18 A2,
+    // 2026-10-09): it is §14 analyze-owned with its own 8c promotion rules,
+    // so the bootstrap is a separate UPDATE. The flag primitive writes only
+    // the two flags, their stamps, and the issue snapshot.
+    expect(upd.sql).not.toMatch(/primary_sku/);
+    const boot = h.writes.find((w) => /SET primary_sku = \$2/.test(w.sql))!;
+    expect(boot.params).toEqual(["B0F", "SC-SKU-1"]);
   });
 
   it("stale primary_sku value blocks the bootstrap (per §18: only when NONE exists)", async () => {
@@ -201,7 +210,7 @@ describe("full-scope pass — 8c amzn.gr.* exclusion", () => {
     expect(h.writes.some((w) => /SET primary_sku/.test(w.sql))).toBe(false);
     const upd = h.writes.find((w) => /SET has_live_offer/.test(w.sql))!;
     expect(upd.params[1]).toBe(true);
-    expect(upd.params[2]).toContain("100893");
+    expect(upd.params[3]).toContain("100893"); // issues moved to $4 (A2)
   });
 });
 
@@ -227,8 +236,11 @@ describe("full-scope phase a — all-404 discovery", () => {
     expect(r.phaseA.repoints).toEqual([{ asin: "B0DISC", from: "DEAD-SKU", to: "SC-NEW-SKU" }]);
     expect(h.writes.some((w) => /INSERT INTO asin_skus/.test(w.sql) && w.params.includes("SC-NEW-SKU"))).toBe(true);
     expect(h.writes.some((w) => /SET primary_sku = \$2/.test(w.sql) && w.params[1] === "SC-NEW-SKU")).toBe(true);
-    const flagWrite = h.writes.find((w) => /SET has_live_offer = TRUE/.test(w.sql))!;
+    // One parameterized statement for every verdict now (§18 A2) — the
+    // discovery path no longer has its own `= TRUE` literal.
+    const flagWrite = h.writes.find((w) => /SET has_live_offer = \$2/.test(w.sql))!;
     expect(flagWrite.params[0]).toBe("B0DISC");
+    expect(flagWrite.params[1]).toBe(true);
   });
 
   it("all-404 + discovery empty → FALSE exactly as before, zero discoveries", async () => {
@@ -267,7 +279,7 @@ describe("full-scope phase a — all-404 discovery", () => {
     expect(r.phaseA.repoints).toEqual([]);
     expect(h.writes.some((w) => /INSERT INTO asin_skus/.test(w.sql) && w.params.includes("amzn.gr.SOMETHING"))).toBe(true);
     expect(h.writes.some((w) => /SET primary_sku/.test(w.sql))).toBe(false);
-    expect(h.writes.some((w) => /SET has_live_offer = TRUE/.test(w.sql))).toBe(true);
+    expect(h.writes.some((w) => /SET has_live_offer = \$2/.test(w.sql) && w.params[1] === true)).toBe(true);
   });
 
   it("dry-run: discovery reported (discoveries/flips/repoints) with ZERO writes", async () => {

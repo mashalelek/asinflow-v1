@@ -3,8 +3,10 @@
 // (script/backfill-has-live-offer.ts) so the multi-SKU logic lives in one place.
 //
 // Truth comes ONLY from the Listings API via checkSkuListingStatus
-// (getListingsItem: 404 = absent, 200 = present with Active/Inactive statuses).
-// Never inferred from asin_skus presence or inventory summaries.
+// (getListingsItem: 404 = absent; 200 with a NON-EMPTY summaries array =
+// present — §18 A1, 2026-10-09; 200 with summaries: [] is a SKU shell and
+// counts as absent). Never inferred from asin_skus presence or inventory
+// summaries.
 //
 // Fail-closed: only a definitive 200 yields "live"; "no_offer" requires EVERY
 // SKU to definitively 404. Any non-definitive response (429 / 5xx / timeout) or
@@ -157,6 +159,11 @@ export async function discoverAsinListings(
   }
   const items: any[] = data?.items ?? [];
   const found: DiscoveredListing[] = items
+    // §18 A1 (2026-10-09): a row with no summary is a SKU shell, not a
+    // listing. Discovering a shell and writing it into asin_skus would
+    // manufacture the very evidence the all-404 path exists to look for, and
+    // would turn a correct FALSE into a wrong TRUE.
+    .filter((it) => Array.isArray(it?.summaries) && it.summaries.length > 0)
     .map((it) => ({
       sku: String(it?.sku ?? ""),
       statuses: it?.summaries?.[0]?.status ?? [],

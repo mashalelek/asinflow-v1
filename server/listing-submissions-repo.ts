@@ -3,6 +3,7 @@
 
 import { query as defaultQuery } from "./db";
 import { anyBuyable } from "./live-offer-check";
+import { writeLiveOfferVerdict } from "./live-offer-write";
 import { probeListingState, extractConflictAsin } from "./submission-verify";
 import type { HttpGetFn } from "./sku-catalog-fetch";
 
@@ -61,6 +62,11 @@ export interface VerifySweepSummary {
   processing: number;
   stale: number;
   throttled: number; // left unchanged (fail-closed) — re-run to converge
+  // §18 A2 (2026-10-09): ASIN -> outcome for every flag write this sweep
+  // made. The sweep has no refresh_runs row of its own, so its ledger is
+  // this field — a flag write with nowhere to record an outcome is not
+  // reachable through the primitive.
+  flagOutcomes: Record<string, string>;
 }
 
 // Sweep non-terminal rows (pending/processing/stale) through SC. Paced +
@@ -88,7 +94,10 @@ export async function verifyPending(
     scoped ? [opts.ids] : undefined,
   )).rows;
 
-  const s: VerifySweepSummary = { checked: 0, live: 0, failed: 0, processing: 0, stale: 0, throttled: 0 };
+  const s: VerifySweepSummary = {
+    checked: 0, live: 0, failed: 0, processing: 0, stale: 0, throttled: 0, flagOutcomes: {},
+  };
+  const flagOutcomes = s.flagOutcomes;
 
   for (let i = 0; i < rows.length; i++) {
     const row = rows[i];
@@ -117,22 +126,36 @@ export async function verifyPending(
       [row.id, status, issuesJson, reviewFlags, probe.classification.terminalConflict],
     );
 
-    // §18 ONE definition (2026-09-06): has_live_offer means "a listing record
-    // EXISTS at SC" — any 200 for the submitted SKU writes TRUE immediately,
-    // independent of whether the ledger row materializes to 'live' or stays
-    // 'processing' (a just-created SKU 200s with empty status for a while).
-    // The ledger keeps its own classifier; only this flag write is decoupled.
-    // Still NOT set at ACCEPTED — that is synchronous validation only (§19).
-    if (probe.input.found) {
-      // §23 (2026-09-15): has_buyable_offer rides the SAME definitive probe,
-      // in the SAME statement — BUYABLE in summaries[].status. A transient
-      // probe never reaches here (throttled short-circuits above), so the
-      // fail-closed rule holds for both flags.
-      await query(
-        `UPDATE asins SET has_live_offer = TRUE, offer_checked_at = now(),
-                has_buyable_offer = $2, buyable_checked_at = now()
-          WHERE asin = $1`,
-        [row.asin, anyBuyable([probe.input.status])],
+    // §18: has_live_offer means "a listing record EXISTS at SC". A 200 with a
+    // real listing for the submitted SKU writes TRUE immediately, independent
+    // of whether the ledger row materializes to 'live' or stays 'processing'
+    // (a just-created SKU 200s with an EMPTY status for a while — still
+    // listed). The ledger keeps its own classifier; only this flag write is
+    // decoupled. Still NOT set at ACCEPTED — synchronous validation only.
+    //
+    // Keyed on `probe.input.listed`, NOT `.found` (§18 A1, 2026-10-09): a 200
+    // with summaries: [] is a SKU shell, and the shell behind B07J2WWWD4's
+    // failed submission is precisely what used to write TRUE here. `found`
+    // stays true for the shell so the classifier still sees its 5886 and
+    // returns `failed` — the two predicates are deliberately different.
+    //
+    // Written through the ONE primitive (§18 A2), which also records the
+    // per-ASIN outcome. The sweep has no refresh_runs row of its own, so the
+    // outcome goes to the sweep's own summary; a flag write with nowhere to
+    // record an outcome is not reachable.
+    if (probe.input.listed) {
+      await writeLiveOfferVerdict(
+        {
+          asin: row.asin,
+          prevFlag: (await query(`SELECT has_live_offer FROM asins WHERE asin = $1`, [row.asin]))
+            .rows[0]?.has_live_offer ?? null,
+          listed: true,
+          buyable: anyBuyable([probe.input.status]),
+          issues: probe.input.issues.map((i) => ({
+            code: String(i.code ?? ""), severity: String(i.severity ?? ""), message: String(i.message ?? ""),
+          })),
+        },
+        { query, outcomes: (asin, outcome) => { flagOutcomes[asin] = outcome; } },
       );
     }
     // §18/§19 (2026-09-21): a definitive 'failed' verdict REVERTS the

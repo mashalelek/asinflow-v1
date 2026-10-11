@@ -1,14 +1,26 @@
 // §18 manual full-scope listing scan (item 8 + 8c).
 //
-// Phase a: every active ASIN with ≥1 asin_skus row, ALL flag states — probes
-// EVERY SKU via getListingsItem (no first-live short-circuit: the 8c primary
-// rule needs per-SKU liveness). Phase b: active no-SKU ASINs via
-// searchListingsItems (§19 fallback endpoint) to discover SC-created SKUs.
+// SCOPE = EVERY ASIN AF KNOWS (§18 A3, 2026-10-09). All statuses — active,
+// parked AND dead — with or without asin_skus rows. The two filters this
+// replaced (`status IN ('active','parked')` here, `in_catalog = TRUE` in the
+// now-deleted live-offer-sync.ts) are why B07J2WWWD4's wrong TRUE was frozen:
+// dead + in_catalog=f put it outside both reconciles, so nothing could ever
+// correct it. A flag AF cannot re-probe is a flag AF should not be showing.
+//
+// Phase a: every ASIN with ≥1 asin_skus row, ANY status, ALL flag states —
+// probes EVERY SKU via getListingsItem (no first-live short-circuit: the 8c
+// primary rule needs per-SKU liveness). Phase b: no-SKU ASINs, ANY status
+// (the active-only gate was removed 2026-10-09), via searchListingsItems
+// (§19 fallback endpoint) to discover SC-created SKUs.
+//
+// Every ASIN gets a per-ASIN outcome in `report.outcomes` — not only the ones
+// that changed (§18 A2). The flag itself is written by the ONE primitive in
+// live-offer-write.ts, which records the outcome in the same call.
 //
 // Writes (live mode only; dryRun=true probes identically but writes NOTHING):
-//   - has_live_offer / offer_checked_at (any-SKU-live verdict)
-//   - current_issues / issues_checked_at (§6 snapshot; newest-live SKU's
-//     issues, [] when none live)
+//   - has_live_offer / has_buyable_offer + both stamps, and current_issues /
+//     issues_checked_at — ALL via writeLiveOfferVerdict, one statement, so
+//     the flags can never disagree about one probe (§18 A2, §23)
 //   - 8c primary re-point: latest-live-wins — primary = most recently
 //     observed (asin_skus.created_at) LIVE SKU, amzn.gr.* EXCLUDED from the
 //     candidate set (never-amzn.gr-primary invariant); atomic single-statement
@@ -21,6 +33,7 @@
 import { query as defaultQuery } from "./db";
 import { checkSkuListingStatus, type ListingIssueLite } from "./sku-listing-fetch";
 import { discoverAsinListings, recordDiscoveredSkus, pick8cPrimary, anyBuyable } from "./live-offer-check";
+import { writeLiveOfferVerdict, recordTransient, recordError, type OutcomeSink } from "./live-offer-write";
 import { spApiGet as realSpApiGet } from "./spapi-auth";
 import type { HttpGetFn } from "./sku-catalog-fetch";
 import { log } from "./index";
@@ -36,6 +49,11 @@ export interface FlipEntry { asin: string; from: boolean | null; to: boolean }
 
 export interface FullScopeReport {
   dryRun: boolean;
+  // §18 A2: ASIN -> outcome, for EVERY ASIN probed across both phases. The
+  // caller persists this into refresh_runs.outcomes. ~2.5k entries at
+  // full-catalog scope (~100 KB jsonb), accepted deliberately — "which ASINs
+  // did this run look at" has to be answerable from the ledger alone.
+  outcomes: Record<string, string>;
   phaseA: {
     asins: number; skusProbed: number; live: number; noOffer: number;
     transientSkipped: number; flips: FlipEntry[]; repoints: RepointEntry[];
@@ -72,11 +90,13 @@ export async function runFullScopePass(opts: {
   if (!sellerId) throw new Error("SP_API_SELLER_ID not set");
   const { dryRun } = opts;
 
-  // Explicit selection scans exactly those ASINs, archived included (SPEC 14
-  // "Archived != excluded from sync"); active-only applies to the unfiltered
-  // full-catalog walk.
+  // §18 A3 (2026-10-09): NO status filter, filtered or not. The unfiltered
+  // walk used to be `a.status IN ('active','parked')` (cron scope, decision 5,
+  // 2026-09-07); dead ASINs were therefore unreachable by any reconcile and
+  // their flags froze at whatever a past run left behind. Dead rows still get
+  // skipped by the OTHER stages — there is no point re-pricing one — but
+  // "does SC still list it" is exactly the question a dead row needs asked.
   const hasFilter = opts.asinFilter != null && opts.asinFilter.size > 0;
-  const activeCond = hasFilter ? "TRUE" : "a.status IN ('active', 'parked')"; // cron scope: decision 5, 2026-09-07
   const filterCond = hasFilter ? `AND a.asin = ANY($1::text[])` : "";
   const filterParams = opts.asinFilter && opts.asinFilter.size > 0 ? [Array.from(opts.asinFilter)] : undefined;
 
@@ -87,11 +107,15 @@ export async function runFullScopePass(opts: {
             json_agg(json_build_object('sku', s.sku, 'created_at', s.created_at)
                      ORDER BY s.created_at DESC) AS skus
        FROM asins a JOIN asin_skus s ON s.asin_id = a.id
-      WHERE ${activeCond} ${filterCond}
+      WHERE TRUE ${filterCond}
       GROUP BY a.asin, a.id, a.primary_sku, a.has_live_offer
       ORDER BY a.asin`,
     filterParams,
   )).rows;
+
+  // §18 A2: one outcome per ASIN, both phases, written by the primitive.
+  const outcomes: Record<string, string> = {};
+  const sink: OutcomeSink = (asin, outcome) => { outcomes[asin] = outcome; };
 
   const phaseA: FullScopeReport["phaseA"] = {
     asins: aRows.length, skusProbed: 0, live: 0, noOffer: 0,
@@ -120,6 +144,7 @@ export async function runFullScopePass(opts: {
     }
     if (transient) {
       phaseA.transientSkipped++;
+      recordTransient(row.asin, sink);
       emit({ type: "progress", phase: "a", done: i + 1, total: aRows.length, asin: row.asin, skipped: "transient" });
       return;
     }
@@ -132,6 +157,7 @@ export async function runFullScopePass(opts: {
       const disc = await discoverAsinListings(row.asin, sellerId, httpGet);
       if (!disc.ok) {
         phaseA.transientSkipped++;
+        recordTransient(row.asin, sink);
         emit({ type: "progress", phase: "a", done: i + 1, total: aRows.length, asin: row.asin, skipped: "transient" });
         return;
       }
@@ -145,18 +171,19 @@ export async function runFullScopePass(opts: {
           phaseA.repoints.push({ asin: row.asin, from: row.primary_sku ?? null, to: newPrimary });
         }
         const lead = disc.found.find((f) => f.sku === newPrimary) ?? disc.found[0];
+        if (!dryRun) await recordDiscoveredSkus(row.asin, disc.found, query);
+        // One primitive, dry-run aware: the outcome is recorded either way,
+        // which is what makes the dry run a faithful preview.
+        await writeLiveOfferVerdict(
+          {
+            asin: row.asin, prevFlag: row.has_live_offer, listed: true,
+            buyable: anyBuyable(disc.found.map((f) => f.statuses)),
+            issues: lead.issues, event: "discovery",
+          },
+          { query, outcomes: sink, dryRun },
+        );
         if (!dryRun) {
-          await recordDiscoveredSkus(row.asin, disc.found, query);
-          await query(
-            `UPDATE asins SET has_live_offer = TRUE, offer_checked_at = now(),
-                    has_buyable_offer = $3, buyable_checked_at = now(),
-                    current_issues = $2::jsonb, issues_checked_at = now()
-              WHERE asin = $1`,
-            // §23: BUYABLE on ANY discovered SKU. Same statement as
-            // has_live_offer so the two can never disagree about one probe.
-            [row.asin, JSON.stringify(lead.issues), anyBuyable(disc.found.map((f) => f.statuses))],
-          );
-          log(`Full-scope phase a discovery: ${row.asin} — known SKUs all 404, found ${disc.found.map((f) => f.sku).join(", ")}${newPrimary ? `; primary → newest live: ${row.primary_sku ?? "∅"} → ${newPrimary}` : ""}`, "full-scope");
+          log(`Full-scope phase a discovery: ${row.asin} — known SKUs all 404/shell, found ${disc.found.map((f) => f.sku).join(", ")}${newPrimary ? `; primary → newest live: ${row.primary_sku ?? "∅"} → ${newPrimary}` : ""}`, "full-scope");
         }
         if ((i + 1) % 25 === 0 || i === aRows.length - 1) {
           emit({ type: "progress", phase: "a", done: i + 1, total: aRows.length });
@@ -187,15 +214,15 @@ export async function runFullScopePass(opts: {
     const repoint = newestLiveReal != null && newestLiveReal.sku !== row.primary_sku;
     if (repoint) phaseA.repoints.push({ asin: row.asin, from: row.primary_sku ?? null, to: newestLiveReal!.sku });
 
+    await writeLiveOfferVerdict(
+      {
+        asin: row.asin, prevFlag: prev, listed: anyLive,
+        buyable: anyBuyable(liveByCreated.map((l) => l.statuses)),
+        issues: (newestLiveReal ?? newestLiveAny)?.issues ?? [],
+      },
+      { query, outcomes: sink, dryRun },
+    );
     if (!dryRun) {
-      await query(
-        `UPDATE asins SET has_live_offer = $2, offer_checked_at = now(),
-                has_buyable_offer = $4, buyable_checked_at = now(),
-                current_issues = $3::jsonb, issues_checked_at = now()
-          WHERE asin = $1`,
-        [row.asin, anyLive, JSON.stringify((newestLiveReal ?? newestLiveAny)?.issues ?? []),
-         anyBuyable(liveByCreated.map((l) => l.statuses))],
-      );
       if (repoint) {
         // Atomic single-statement re-point (§18 promotion): primary_sku +
         // every is_primary flag for the ASIN in one CTE.
@@ -218,6 +245,8 @@ export async function runFullScopePass(opts: {
         if (i >= aRows.length) return;
         try { await processARow(aRows[i], i); } catch (err: any) {
           phaseA.transientSkipped++;
+          // A2: a throw is this ASIN's outcome, not an absence of one.
+          recordError(aRows[i].asin, String(err?.message ?? err), sink);
           log(`Full-scope phase a: row ${aRows[i].asin} threw (${err?.message ?? err}) — skipped fail-closed`, "full-scope");
         }
         aDone++;
@@ -234,11 +263,13 @@ export async function runFullScopePass(opts: {
   // ─── Phase b: no-SKU ASINs → searchListingsItems discovery ────────────────
   const t1 = now();
   const bRows = (await query(
-    `SELECT a.asin, a.id, a.primary_sku,
+    // has_live_offer is selected for flip detection (§18 A2) — without it
+    // every phase-b discovery would report `flip: null -> true` even when the
+    // flag was already TRUE.
+    `SELECT a.asin, a.id, a.primary_sku, a.has_live_offer,
             EXISTS (SELECT 1 FROM asin_skus s WHERE s.asin_id = a.id AND s.is_primary) AS has_primary_row
        FROM asins a
-      WHERE ${activeCond}
-        AND NOT EXISTS (SELECT 1 FROM asin_skus s WHERE s.asin_id = a.id)
+      WHERE NOT EXISTS (SELECT 1 FROM asin_skus s WHERE s.asin_id = a.id)
         ${filterCond}
       ORDER BY a.asin`,
     filterParams,
@@ -264,12 +295,22 @@ export async function runFullScopePass(opts: {
       // stays NULL and the next run retries. (A no-listing ASIN is a 200 with
       // empty items, not an error.)
       phaseB.transientSkipped++;
+      recordTransient(row.asin, sink);
       await sleep(pacingMs);
       continue;
     }
-    const items: any[] = data?.items ?? [];
+    // §18 A1: shells are not listings — filtered before the found/not-found
+    // decision, so a shell can never be discovered into asin_skus.
+    const items: any[] = (data?.items ?? []).filter(
+      (it: any) => Array.isArray(it?.summaries) && it.summaries.length > 0,
+    );
     if (items.length === 0) {
       phaseB.noListing++; // sourcing lead — expected; stays NULL
+      // A2: "nothing there" is an outcome too. The flag is NOT written —
+      // a no-SKU ASIN with no SC listing stays NULL, never coerced to FALSE
+      // (§18 tri-state) — so this records directly rather than through the
+      // primitive, which exists to write a verdict.
+      sink(row.asin, "not_listed");
     } else {
       const found = items.map((it) => ({
         sku: String(it?.sku ?? ""),
@@ -284,10 +325,10 @@ export async function runFullScopePass(opts: {
       const anyLive = found.length > 0;
       phaseB.discovered.push({ asin: row.asin, skus: found.map((f) => f.sku), live: anyLive });
 
-      if (!opts.dryRun && found.length > 0) {
-        // Bootstrap primary ONLY if none exists (§18): no-SKU ASIN has no
-        // is_primary row by definition, but primary_sku may hold a stale value.
-        const bootstrap = row.primary_sku == null && row.has_primary_row !== true;
+      // Bootstrap primary ONLY if none exists (§18): no-SKU ASIN has no
+      // is_primary row by definition, but primary_sku may hold a stale value.
+      const bootstrap = row.primary_sku == null && row.has_primary_row !== true;
+      if (!opts.dryRun) {
         for (let f = 0; f < found.length; f++) {
           await query(
             `INSERT INTO asin_skus (asin_id, sku, is_primary) VALUES ($1, $2, $3)
@@ -295,17 +336,21 @@ export async function runFullScopePass(opts: {
             [row.id, found[f].sku, bootstrap && f === 0],
           );
         }
-        const buyable = anyBuyable(found.map((f) => f.statuses));
-        await query(
-          `UPDATE asins SET has_live_offer = $2, offer_checked_at = now(),
-                  has_buyable_offer = ${bootstrap ? "$5" : "$4"}, buyable_checked_at = now(),
-                  current_issues = $3::jsonb, issues_checked_at = now()
-                  ${bootstrap ? ", primary_sku = $4" : ""}
-            WHERE asin = $1`,
-          bootstrap
-            ? [row.asin, anyLive, JSON.stringify(found[0].issues), found[0].sku, buyable]
-            : [row.asin, anyLive, JSON.stringify(found[0].issues), buyable],
-        );
+        if (bootstrap) {
+          // primary_sku is NOT part of the flag primitive's statement — it is
+          // §14 analyze-owned and has its own promotion rules (§18 8c).
+          await query(`UPDATE asins SET primary_sku = $2 WHERE asin = $1`, [row.asin, found[0].sku]);
+        }
+      }
+      await writeLiveOfferVerdict(
+        {
+          asin: row.asin, prevFlag: row.has_live_offer ?? null, listed: anyLive,
+          buyable: anyBuyable(found.map((f) => f.statuses)),
+          issues: found[0].issues, event: "discovery",
+        },
+        { query, outcomes: sink, dryRun: opts.dryRun },
+      );
+      if (!opts.dryRun) {
         log(`Full-scope phase b: discovered ${found.length} SKU(s) for ${row.asin}: ${found.map((f) => f.sku).join(", ")}`, "full-scope");
       }
     }
@@ -317,7 +362,7 @@ export async function runFullScopePass(opts: {
   phaseB.durationMs = now() - t1;
   emit({ type: "phase_done", phase: "b", asins: phaseB.asins, discovered: phaseB.discovered.length, noListing: phaseB.noListing, transient: phaseB.transientSkipped, durationMs: phaseB.durationMs });
 
-  const report: FullScopeReport = { dryRun: opts.dryRun, phaseA, phaseB };
+  const report: FullScopeReport = { dryRun: opts.dryRun, outcomes, phaseA, phaseB };
   log(
     `Full-scope pass ${opts.dryRun ? "DRY-RUN " : ""}complete: phase a ${phaseA.asins} ASINs/${phaseA.skusProbed} SKUs ` +
     `(${phaseA.live} live, ${phaseA.noOffer} no_offer, ${phaseA.transientSkipped} transient, ${phaseA.flips.length} flips, ` +

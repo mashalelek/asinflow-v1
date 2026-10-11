@@ -101,7 +101,20 @@ export async function searchListingsItemsByAsin(
     }
   }
 
-  const items: any[] = data?.items ?? [];
+  // §18 A1 (2026-10-09): a row with no summary is a SKU shell, not a listing.
+  // Shells are filtered out BEFORE the present/absent decision, so a shell
+  // cannot make an ASIN permanently un-addable through the already_in_catalog
+  // pre-gate. No duplicate risk: resurrection reuses the shell's OWN SKU
+  // string, so the re-add is a PUT to that same SKU.
+  //
+  // Observed scope: the unfiltered account walk (2026-10-09) returned zero
+  // empty-summary rows across all 805 SKUs, so shells are a per-SKU
+  // getListingsItem artifact. This filter is belt-and-braces for the by-ASIN
+  // path, and it is also what keeps A1 a single rule rather than two.
+  const raw: any[] = data?.items ?? [];
+  const items = raw.filter(
+    (it) => Array.isArray(it?.summaries) && it.summaries.length > 0,
+  );
   if (items.length === 0) {
     return { ok: true, present: false };
   }

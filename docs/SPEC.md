@@ -1908,6 +1908,13 @@ list. Cron scope (`asins` omitted) = `status IN ('active','parked')`,
 sourcing leads included; dead only via the button (decision 5, 2026-09-07
 — supersedes decision 10, which predates the Parked/Dead split).
 
+**Superseded FOR THE LISTINGS STAGE ONLY (2026-10-09, §18 A3):** the
+listings reconcile scopes to **every ASIN AF knows, including `dead`**, with
+or without `asin_skus` rows. The other stages keep the active+parked cron
+scope above — there is no point re-pricing a dead row, but there is every
+point re-probing whether SC still lists it, and a dead ASIN outside the
+reconcile is a flag AF can never correct (B07J2WWWD4, §18 A3).
+
 Stages, each with per-item outcomes, run concurrently where buckets differ;
 `listings` waits for `inventory` (needs its SKUs), `fees` waits for
 `prices` (needs the fresh price), `prices` and `sales` start immediately;
@@ -1921,7 +1928,7 @@ still paces at the wire; per-ASIN fail-closed semantics unchanged,
 | `sales` | orders report, 30-day chunks | Sync Sales |
 | `prices` | price refresh v2 (below) | Sync Prices |
 | `fees` | batch `feesEstimate` on the just-written prices (2026-09-07) | the stale-fee gap: Low-Price FBA rates apply under $10, so a price crossing that line changes the fulfillment fee — the proportional referral adjustment never covered it |
-| `listings` | live-offer reconcile (§18) | Scan Listings + the inventory-sync `notLiveOnly` rider (removed) |
+| `listings` | live-offer reconcile (§18) — phases a/b/c, scope per §18 A3 (ALL statuses incl. dead, SKU'd and no-SKU alike), one per-ASIN outcome for EVERY ASIN probed (§18 A2) | Scan Listings; the inventory-sync `notLiveOnly` rider (removed 2026-09-06); `live-offer-sync.ts` and `script/backfill-has-live-offer.ts` (both deleted 2026-10-09) |
 
 A failed stage does not abort the others. Stream: `{type:"stage", stage,
 status, current, total}` + terminal `{type:"complete", data:{stages,
@@ -3397,36 +3404,106 @@ inventory summaries.
 - **Truth source = `getListingsItem`** (via `checkSkuListingStatus`, the same
   404 primitive as §18 resurrection). Multi-SKU: check `primary_sku` first, then
   other `asin_skus` rows, short-circuit on the first live hit
-  (`live-offer-check.ts`, shared by the daily pass and the one-off backfill).
-- **Writers:** (1) the daily staleness pass (`live-offer-sync.ts`, 07:00
-  host-local; cron gated behind `ENABLE_CRONS`, default off — §11 "Scheduled
-  crons") over every `in_catalog=TRUE` ASIN **that has ≥1 `asin_skus` row**
-  — no-SKU ASINs are excluded (nothing to probe; they stay `NULL`/"+" and are
-  picked up once inventory-sync records a SKU); (1b, "§18b") the
-  **inventory-sync trailing rider** — same `syncLiveOffers` implementation,
-  mirroring the sync's `asinFilter`, scoped to `has_live_offer IS DISTINCT
-  FROM TRUE`: never-checked (`NULL`) **and** stale-`FALSE` rows are re-probed
-  after every inventory sync, because listings are created and deleted
-  constantly and a `FALSE` would otherwise go stale with nothing scheduled to
-  recheck it (the B0085ZIHR0 incident, 2026-08-01: checked `f` at 07:04, offer
-  created 19:54, invisible to the old `NULL`-only rider scope forever after).
-  Confirmed-`TRUE` rows stay excluded from the rider — only the full-scope
-  daily pass re-verifies live rows; (2) the §19 **API verify-sweep**
-  `'live'` transition (`verifyPending`, getListingsItem-derived), which flips
-  `has_live_offer = TRUE` same-day after Add to SC so a freshly added offer never
-  shows a stale "+"; (3) a **manual `'live'` verdict** (2026-08-28): a
-  definitive human determination writes `has_live_offer = TRUE` +
-  `offer_checked_at` exactly like the sweep transition — the old "waits for
-  the daily pass" rule violated §14 manual-trigger completeness (with crons
-  off it meant "waits for a manual scan"). Manual `'failed'`/`'deleted'`
-  still write nothing (deleting one SKU ≠ no live offer). (4) **ACCEPTED at
-  submit time (2026-09-21):** ≥1 ACCEPTED in a batch writes
-  `has_live_offer = TRUE` + `offer_checked_at = NOW()` IMMEDIATELY, entering
-  the PENDING half of the two-part definition above; the §19 ledger row
-  ('pending' → 'processing') supplies the pending render style. (5) a §19
-  `'failed'` verdict REVERTS the flag to `FALSE` — but only when no other
-  ledger row for that ASIN is `'live'`, since failing one SKU of a
-  multi-offer ASIN is not evidence the ASIN has no live offer.
+  (`live-offer-check.ts`).
+
+- **PRESENT REQUIRES A LISTING, NOT A SKU STRING (A1, 2026-10-09).** A 200
+  counts as listed **only if `summaries` is NON-EMPTY**. A 200 with
+  `summaries: []` is a **SKU shell** — the SKU exists in the seller's
+  namespace with no listing behind it — and is treated **exactly like a
+  404** for the flag: it contributes nothing, and all-404/all-shell still
+  routes through ASIN discovery before `FALSE`.
+
+  **The predicate is `summaries.length > 0`, NEVER `status.length > 0`.** A
+  real listing can carry an EMPTY `status` array while it materialises —
+  §19's classifier depends on exactly that ("a just-created SKU returns
+  200-with-empty-status while materializing, which is 'listed', not 'live
+  yet'"). Verified live 2026-10-09 against the full 805-SKU account list:
+  **one** row (`ALF-BOO-V8U-RCM-001` / `B01JO20V8U`) has a populated summary
+  with `status: []`. Keying A1 on status would mark that genuine listing
+  absent.
+
+  Origin: **B07J2WWWD4 / CAI-TOO-WD4-UMC-001** (2026-10-09). The ASIN was
+  never listed — its 2026-09-18 submission failed on 13013 + 5886 and the
+  verdict wrote the flag `FALSE` — but Amazon left a SKU shell behind:
+  `getListingsItem` returns **200** with `summaries: []`, no status, no
+  offer, no `fulfillmentAvailability`, while `searchListingsItems` by ASIN
+  returns zero items. `sku-listing-fetch.ts` set `present: true` on ANY 200
+  without requiring a summary, so `checkAsinLiveOffer` called the shell
+  "live" and a later reconcile flipped `FALSE` → `TRUE`. The module header
+  already claimed the correct contract ("404 = absent, 200 = present with
+  Active/Inactive statuses"); the code never enforced it. A1 makes the code
+  match the header.
+
+  **The `asin_skus` row stays.** It is history, and resurrection may reuse
+  the shell's own SKU string — Amazon accepts a PUT to an existing SKU, so
+  the re-add is a PUT to that same SKU and carries no duplicate risk. For
+  the same reason the §18 `already_in_catalog` pre-gate applies A1 too: a
+  shell is not a listing, so it must not make an ASIN permanently
+  un-addable.
+
+  Shells are a **per-SKU artifact**: the unfiltered account listing (Part B
+  phase c) returned zero empty-summary rows across all 805 SKUs, so A1's
+  teeth are in the per-SKU `getListingsItem` path where the shell actually
+  lives.
+
+  **Counter-case, deliberately unchanged: B081S8MTJ5 / BC-DO62-O14S.** The
+  SC UI shows nothing for it; the API returns a full `DISCOVERABLE` listing
+  with an FBA offer, `fnSku`, and a populated summary. AF's `TRUE` is
+  CORRECT and A1 keeps it. SC-UI absence is not evidence.
+- **EVERY FLAG WRITE GOES THROUGH ONE PRIMITIVE, AND EVERY WRITE IS
+  LEDGERED (A2, 2026-10-09).** One function writes `has_live_offer` — and
+  `has_buyable_offer` **atomically in the same statement** (§23; `BUYABLE`
+  in `summaries[].status` remains the buyable flag's sole source, and the
+  two flags must never be able to disagree) — alongside
+  `offer_checked_at`, `current_issues` and `issues_checked_at`. The same
+  call records a **per-ASIN outcome in the invoking run**, one of:
+
+  `listed` · `not_listed` · `flip: x -> y` · `discovery` · `onboarded` ·
+  `skipped_transient` · `error: <msg>`
+
+  The listings stage records **every ASIN it probed**, not only the ones
+  that changed. **A `FALSE`→`TRUE` flip with no ledger row is impossible by
+  construction.**
+
+  Before this the flag had **nine** write sites across five files, and the
+  listings stage's `outcomes` recorded flips and discoveries only — so an
+  ASIN that was probed and stayed put left no trace at all, and
+  `syncLiveOffers` wrote the flag from entry points that touched no ledger.
+  That combination is how B07J2WWWD4's wrong `TRUE` arrived with nothing to
+  attribute it to.
+
+- **Writers after A2** (previous list corrected — see the phantom note
+  below):
+  - **The listings reconcile stage** (§11 Refresh job) — phases a, b and c,
+    scope per A3, outcomes per A2. The daily-pass/rider implementation is
+    gone (`live-offer-sync.ts` **deleted** 2026-10-09); the §6 single-ASIN
+    `recheck-issues` endpoint now runs the stage scoped to one ASIN.
+  - **Product Info** — runs the same stage over its working set, one
+    implementation, no second copy.
+  - **The §19 post-submit ladder** (T+1/3/10/30/60m) — a probe, so subject
+    to A1, writing through the primitive.
+  - The one-off `script/backfill-has-live-offer.ts` is **deleted**
+    (2026-10-09): the stage now covers the full catalog, every status,
+    no-SKU ASINs, and ledgers every ASIN — none of which the script could
+    do.
+
+  **Phantom writers, corrected 2026-10-09.** The list this replaces opened
+  with two writers that no longer existed when it was read: **(1)** a
+  "daily staleness pass at 07:00" — there is no cron that calls it — and
+  **(1b)** the "inventory-sync trailing rider", which was **removed
+  2026-09-06** when the Refresh `listings` stage subsumed it
+  (`inventory-sync.ts` says so in place). The only surviving
+  `syncLiveOffers` caller was the single-ASIN `recheck-issues` endpoint.
+  SPEC described a schedule that had not run for a month; that is recorded
+  here rather than quietly dropped.
+
+  **Still true at this commit, changed by the next one:** three NON-probe
+  writers survive — ACCEPTED-at-submit (`offer-add.ts`), the §19 `'failed'`
+  verdict's revert-to-FALSE, and the manual `'live'` verdict's write-TRUE.
+  They are the subject of the writers→re-probe commit and are described in
+  their own sections until then. A2's "one primitive" is complete for the
+  PROBE paths as of this commit.
+
 - **Fail-closed (amended 2026-09-21):** a definitive 200 writes `TRUE`
   (confirmed half) and an ACCEPTED submit writes `TRUE` (pending half,
   visually distinct); only all-SKUs-404 writes
@@ -3467,13 +3544,38 @@ job's `listings` stage (§11 Refresh job): every in-scope ASIN with ≥1
 `asin_skus` row probes per SKU across ALL flag states including TRUE (a
 listing deleted in SC flips FALSE on the next Refresh), then no-SKU ASINs
 run phase-b discovery — same primitives, one implementation.
+
+**SCOPE = EVERY ASIN AF KNOWS (A3, 2026-10-09).** All statuses — active,
+parked AND **dead** — with or without `asin_skus` rows. Known SKUs are
+probed per SKU; no-SKU ASINs go to phase b, which is **no longer
+active-only**.
+
+The two scope filters this removes were how B07J2WWWD4's wrong `TRUE`
+became *frozen*: `full-scope-pass.ts` selected `status IN ('active',
+'parked')` and the deleted `live-offer-sync.ts` selected `in_catalog =
+TRUE`. The ASIN is `dead` with `in_catalog = f`, so it sat outside both and
+nothing could ever correct it. A flag AF cannot re-probe is a flag AF
+should not be showing — "mirror the SC catalog" has no exceptions for rows
+we happen to have given up on.
+
+Cost: roughly (SKU count + no-SKU ASIN count) ÷ 5 rps. Measured
+2026-10-09 on the live account, the unfiltered account walk alone was 41
+calls in 18.7s — about 456ms per round trip, not the 260ms pacing floor, so
+project from observed latency rather than the bucket. A button run is
+bounded by its working set.
+
+**SC lag is real but short (A4).** `offer_checked_at` age stays in the
+tooltip and nothing codes around the lag — no grace windows, no
+"recently submitted so assume listed" branches.
 `POST /api/listings/full-scope-pass` remains as a script/dry-run entry
-point, **selection-aware** (selected ASINs, else full active
-catalog). Two sequential phases over one NDJSON progress stream
+point, **selection-aware** (selected ASINs, else the full catalog — every
+status, per A3; it was "full active catalog" until 2026-10-09). Two
+sequential phases over one NDJSON progress stream
 (`POST /api/listings/full-scope-pass`, body `{asins?}`):
 
-- **Phase a — every active ASIN with ≥1 `asin_skus` row, ALL flag states**
-  (TRUE/FALSE/NULL): `getListingsItem` per SKU — deliberately NO
+- **Phase a — every ASIN with ≥1 `asin_skus` row, ANY status, ALL flag
+  states** (TRUE/FALSE/NULL; `active` + `parked` + `dead` per A3):
+  `getListingsItem` per SKU — deliberately NO
   first-live short-circuit, because 8c needs per-SKU liveness. Per
   definitively-probed ASIN it writes `has_live_offer` (any SKU live),
   `offer_checked_at`, the §6 issue snapshot (newest-live SKU's issues; `[]`
@@ -3482,7 +3584,8 @@ catalog). Two sequential phases over one NDJSON progress stream
   skipped, fail-closed. When ALL SKUs definitively 404, the all-404 →
   discovery rule above runs before `FALSE` is written; discovered ASINs are
   reported per-phase as **discoveries**.
-- **Phase b — active no-SKU ASINs**: `searchListingsItems` by ASIN (the §19
+- **Phase b — no-SKU ASINs, ANY status** (the active-only gate was removed
+  2026-10-09, A3): `searchListingsItems` by ASIN (the §19
   fallback endpoint, `includedData=summaries,issues`) to discover SC-created
   SKUs. Found → write `asin_skus` rows (bootstrap primary only if none
   exists), `has_live_offer`, issue snapshot. Not found → stays NULL, counted
@@ -3490,7 +3593,12 @@ catalog). Two sequential phases over one NDJSON progress stream
 - **Pacing:** 260ms between calls, both phases (getListingsItem and
   searchListingsItems share the 5 rps Listings bucket; phases are sequential).
 - **Per-phase report:** probed / flips / discovered SKUs / no-listing count /
-  re-points ("primary → newest live: old → new") / duration.
+  re-points ("primary → newest live: old → new") / duration — plus, as of
+  2026-10-09 (A2), a **per-ASIN outcome for every ASIN probed**, not only
+  the ones that changed. At full-catalog scope that is ~2.5k entries, on the
+  order of 100 KB of `jsonb` in the run row; accepted deliberately, because
+  "which ASINs did this run actually look at" has to be answerable from the
+  ledger alone.
 - **Dry-run (`?dryRun=1`, Velocity pattern):** both probe phases run
   read-only and report what WOULD change — flag flips, discovered SKUs, the
   full 8c re-point list — with **zero DB writes**. The first live run is
@@ -4419,7 +4527,12 @@ and the other conditions hold it appears, not before.
   `has_live_offer`**, nowhere else: the Prices & Stock listings stage
   (full-scope pass phases a + b, including the all-404 discovery path) and
   the §19 verify-sweep's flag write. Definition: **TRUE ⇔ ≥1 of the ASIN's
-  SKUs has `summaries[].status` containing `BUYABLE`**.
+  SKUs has `summaries[].status` containing `BUYABLE`** — and that remains
+  its SOLE source.
+- **Owned by the §18 A2 primitive (2026-10-09).** Both flags are written by
+  that one function, in one statement, so "always written together" is now
+  structural rather than a convention each call site has to remember. A1
+  applies first: a shell (200, `summaries: []`) yields neither flag.
 - Same single-owner and fail-closed rules as `has_live_offer`: a transient
   probe writes nothing (neither flag), and the two flags are always written
   in the same statement so they can never disagree about the same probe.
