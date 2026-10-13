@@ -3,7 +3,7 @@ import express, { type Request, Response, NextFunction } from "express";
 import { registerRoutes } from "./routes";
 import { serveStatic } from "./static";
 import { createServer } from "http";
-import { ensureExtensionTables } from "./db";
+import { ensureExtensionTables, query } from "./db";
 import { startRefreshCron } from "./refresh-cron";
 import { startSourcingSyncCron } from "./sourcing-sync-cron";
 import { startAuraSyncCron } from "./aura-sync-cron";
@@ -93,6 +93,22 @@ app.use((req, res, next) => {
   } else {
     log("DATABASE_URL not set — extension database features disabled", "db");
   }
+
+  // Health check for the hosting platform (SPEC "Deployment"). Unauthenticated.
+  // Registered BEFORE the static catch-all: /{*path} serves index.html for any
+  // unknown route with a 200, which would mask a dead database. 200 only when
+  // a trivial read of the main table succeeds; 503 with a FIXED body otherwise.
+  // The pg error goes to the server log only — it can carry the database host,
+  // and this route is public.
+  app.get("/health", async (_req: Request, res: Response) => {
+    try {
+      await query("SELECT 1 FROM asins LIMIT 1");
+      res.json({ ok: true });
+    } catch (err: any) {
+      log(`health check failed: ${err?.message ?? err}`, "health");
+      res.status(503).json({ ok: false });
+    }
+  });
 
   await registerRoutes(httpServer, app);
 
