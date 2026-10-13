@@ -71,8 +71,39 @@ describe("the 30-day gating/hazmat skip is GONE from Product Info", () => {
 
 describe("per-ASIN outcomes for ALL FOUR stages", () => {
   it("declares one outcome map per stage, in the Prices & Stock shape", () => {
+    // The union type widened to Record<string, ...> when `listings` joined
+    // the job (2026-10-11); what matters is that EVERY stage has a map and
+    // none of them is a literal '{}' at write time.
     const r = productInfoRegion();
-    expect(r).toMatch(/stageOutcomes:\s*Record<"catalog" \| "fees" \| "gating" \| "hazmat", Record<string, string>>/);
+    expect(r).toMatch(/stageOutcomes: Record<string, Record<string, string>>/);
+    for (const stage of ["catalog", "fees", "gating", "hazmat", "listings"]) {
+      expect(r, stage).toMatch(new RegExp(`${stage}: \\{\\}`));
+    }
+  });
+
+  it("the listings reconcile runs here, via the SAME pass as Prices & Stock", () => {
+    // §11/§18 principle 2: every sync that touches an ASIN re-probes it, and
+    // there is exactly ONE implementation of the reconcile.
+    const r = productInfoRegion();
+    expect(r).toMatch(/runFullScopePass\(\{\s*\n?\s*dryRun,/);
+    expect(r).toMatch(/asinFilter: new Set\(asinList\)/);
+    expect(r).toMatch(/stageOutcomes\.listings = lr\.outcomes/);
+  });
+
+  it("a failed listings reconcile does not abort the other stages", () => {
+    const r = productInfoRegion();
+    const i = r.indexOf("const lr = await runFullScopePass(");
+    expect(i).toBeGreaterThan(-1);
+    const block = r.slice(i - 900, i + 1800);
+    expect(block).toMatch(/try \{/);
+    expect(block).toMatch(/catch \(err: any\)/);
+    expect(block).toMatch(/stageOutcomes\.listings\["_stage"\] = `error:/);
+  });
+
+  it("the listings stage honours dryRun — probes, reports, writes nothing", () => {
+    const r = productInfoRegion();
+    const i = r.indexOf("const lr = await runFullScopePass(");
+    expect(r.slice(i, i + 120)).toMatch(/dryRun,/);
   });
 
   for (const stage of ["catalog", "fees", "gating", "hazmat"] as const) {

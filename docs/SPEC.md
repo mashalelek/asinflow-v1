@@ -2052,6 +2052,7 @@ three calls sat on 1 rps buckets (~37 min full catalog). Now:
 | prices | **removed** — Prices & Stock owns prices; fees use the stored price via `getFeePriceForAsin` | — |
 | gating | listings restrictions, 5/s (no batch form) — a failed probe writes NOTHING and records `error` | ~7 min |
 | hazmat | inbound eligibility preview, 1/s (no batch form) — a failed probe writes NOTHING and records `error` | every ASIN in scope |
+| listings | **the listings reconcile (2026-10-11)** — the SAME `runFullScopePass` the Prices & Stock `listings` stage runs, over Product Info's working set. One implementation, no second copy: §18 A1 presence, the A2 primitive, per-ASIN outcomes for every ASIN probed | ≈ SKU count ÷ 5 rps |
 
 - **A failed gating or hazmat probe is never recorded as a success
   (2026-10-07).** A probe that does not return an answer writes **nothing**:
@@ -2085,10 +2086,24 @@ three calls sat on 1 rps buckets (~37 min full catalog). Now:
   Supersedes the 30-day gating/hazmat scoping confirmed 2026-09-07, and
   decision 6 of the (folded, deleted) sync-buttons-parked-dead patch.
 
-  The job syncs every stage it names — catalog, fees, gating, hazmat — for
-  every ASIN in its working set, **every time**, and reports every ASIN's
-  outcome. There is no freshness-based skip anywhere in the job, and no
-  stage writes an empty outcome map.
+  The job syncs every stage it names — catalog, fees, gating, hazmat **and,
+  since 2026-10-11, listings** — for every ASIN in its working set, **every
+  time**, and reports every ASIN's outcome. There is no freshness-based skip
+  anywhere in the job, and no stage writes an empty outcome map.
+
+  **Product Info runs the listings reconcile (2026-10-11, §18 principle 2:
+  "every sync that touches an ASIN re-probes it").** It calls the same
+  `runFullScopePass` as the Prices & Stock stage, scoped to its working set —
+  one implementation, never a parallel copy. Before this, an ASIN could be
+  fully re-synced by Product Info while `has_live_offer` kept whatever a
+  previous run left behind, which is how a wrong flag survived repeated
+  "refreshes" of the row. The stage appears in the Product Info results
+  dialog alongside catalog / fees / gating / hazmat, with the same per-ASIN
+  outcomes, and its `refresh_runs` row carries them.
+
+  Phase c (Part B) runs here **only when the working set is the full
+  catalog** — see §18 phase c. A selection-scoped Product Info run reconciles
+  the selection and does not pull the account-wide SKU list.
 
   `THIRTY_D`, `staleOrNever`, `gatingScope` / `hazmatScope` and the
   reuse-stored branch are **deleted**. The working set — the selection,

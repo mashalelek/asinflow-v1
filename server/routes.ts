@@ -3199,14 +3199,17 @@ export async function registerRoutes(
     // price-sync.ts:198 does). Until now every Product Info stage wrote
     // outcomes = '{}', so which ASIN a run touched could not be proven from
     // the ledger — the same disease as a skip.
-    const stageCounts = {
+    const stageCounts: Record<string, Record<string, number>> = {
       catalog: { updated: 0, absent: 0, inconclusive: 0, error: 0 },
       fees: { updated: 0, skipped_no_price: feesSkippedNoPrice.size, error: 0 },
       gating: { updated: 0, error: 0 },
       hazmat: { updated: 0, error: 0 },
+      // §11 (2026-10-11): the listings reconcile runs here too, filled in
+      // after the per-ASIN loop from runFullScopePass's own report.
+      listings: { probed: 0, live: 0, no_offer: 0, transient: 0, flips: 0, discoveries: 0 },
     };
-    const stageOutcomes: Record<"catalog" | "fees" | "gating" | "hazmat", Record<string, string>> = {
-      catalog: {}, fees: {}, gating: {}, hazmat: {},
+    const stageOutcomes: Record<string, Record<string, string>> = {
+      catalog: {}, fees: {}, gating: {}, hazmat: {}, listings: {},
     };
     // fees' missing-input skip is recorded up front — it is decided before the
     // loop, from the stored price, and is the ONE surviving skip (a missing
@@ -3537,6 +3540,37 @@ export async function registerRoutes(
       if (uncalculated.length > 0) {
         log(`=== RETRY SUMMARY: ${uncalculated.length} ASINs still uncalculated: ${uncalculated.join(", ")} ===`, "retry");
       }
+    }
+
+    // ── §11 listings reconcile (2026-10-11) ────────────────────────────────
+    // §18 principle 2: every sync that touches an ASIN re-probes it. This is
+    // the SAME runFullScopePass the Prices & Stock listings stage runs —
+    // one implementation, never a parallel copy — scoped to Product Info's
+    // working set. Before this an ASIN could be fully re-synced here while
+    // has_live_offer kept whatever a previous run left behind.
+    //
+    // Dry-run probes and reports identically but writes nothing, exactly as
+    // the pass's own dryRun does.
+    try {
+      const lr = await runFullScopePass({
+        dryRun,
+        asinFilter: new Set(asinList),
+        emit: (ev) => emit(JSON.stringify({ type: "progress", data: { current: ev.done ?? 0, total: ev.total ?? 0, asin: `Listings: ${ev.asin ?? ev.phase ?? ""}` } }) + "\n"),
+      });
+      stageCounts.listings = {
+        probed: lr.phaseA.asins + lr.phaseB.asins,
+        live: lr.phaseA.live, no_offer: lr.phaseA.noOffer,
+        transient: lr.phaseA.transientSkipped + lr.phaseB.transientSkipped,
+        flips: lr.phaseA.flips.length,
+        discoveries: lr.phaseA.discoveries.length + lr.phaseB.discovered.length,
+      };
+      stageOutcomes.listings = lr.outcomes;
+    } catch (err: any) {
+      // A failed stage does not abort the others (§11). Record it against
+      // the stage rather than losing the whole run.
+      log(`Product Info listings reconcile failed: ${err?.message ?? err}`, "analyzer");
+      stageCounts.listings.error = (stageCounts.listings.error ?? 0) + 1;
+      stageOutcomes.listings["_stage"] = `error: ${err?.message ?? err}`;
     }
 
     // ── §11 Product Info run ledger + summary (2026-09-07) ──────────────────
