@@ -2940,19 +2940,58 @@ export async function registerRoutes(
     } catch (err: any) { res.status(500).json({ message: err.message }); }
   });
 
+  // §20: the ONE tag writer. The row tag picker calls it with {name} only and
+  // gets a random palette colour, unchanged. The filter dropdown (2026-10-13)
+  // additionally passes an explicit colour and an optional group — both
+  // optional, so the picker's contract is untouched and there is still one
+  // create path rather than two that can drift.
   app.post("/api/tags", async (req: Request, res: Response) => {
-    const { name } = req.body as { name?: string };
+    const { name, color: colorRaw, tagGroup } = req.body as { name?: string; color?: string; tagGroup?: string | null };
     if (!name || !name.trim()) { res.status(400).json({ message: "Tag name required" }); return; }
     if (!isDbAvailable()) { res.status(503).json({ message: "Database not available" }); return; }
+    // Name uniqueness is case-insensitive on the TRIMMED value, and an
+    // existing tag is RETURNED rather than erroring — the picker depends on
+    // that (type an existing name, get the tag back and attach it).
+    const trimmed = name.trim();
+    // Only accept a colour from the server's own palette: the input is a
+    // swatch picker, so anything else is a malformed request, and letting
+    // arbitrary strings into a style attribute is not worth the convenience.
+    const color = colorRaw && (TAG_COLORS as readonly string[]).includes(colorRaw)
+      ? colorRaw
+      : TAG_COLORS[Math.floor(Math.random() * TAG_COLORS.length)];
+    const group = typeof tagGroup === "string" && tagGroup.trim() ? tagGroup.trim() : null;
     try {
-      const existing = await query(`SELECT id, name, color, tag_group, sort_order FROM tags WHERE LOWER(name) = LOWER($1)`, [name.trim()]);
+      const existing = await query(`SELECT id, name, color, tag_group, sort_order FROM tags WHERE LOWER(name) = LOWER($1)`, [trimmed]);
       if (existing.rows.length > 0) { res.json(existing.rows[0]); return; }
-      const color = TAG_COLORS[Math.floor(Math.random() * TAG_COLORS.length)];
+      // sort_order within a group: append. NULL for ungrouped, matching the
+      // ORDER BY in GET /api/tags (ungrouped sorts by name).
       const result = await query(
-        `INSERT INTO tags (name, color) VALUES ($1, $2) RETURNING id, name, color, tag_group, sort_order`,
-        [name.trim(), color]
+        `INSERT INTO tags (name, color, tag_group, sort_order)
+         VALUES ($1, $2, $3,
+                 CASE WHEN $3::text IS NULL THEN NULL
+                      ELSE (SELECT COALESCE(MAX(sort_order), 0) + 1 FROM tags WHERE tag_group = $3) END)
+         RETURNING id, name, color, tag_group, sort_order`,
+        [trimmed, color, group]
       );
       res.json(result.rows[0]);
+    } catch (err: any) { res.status(500).json({ message: err.message }); }
+  });
+
+  // §20 deletion cascade: asin_tags has ON DELETE CASCADE, so removing the tag
+  // row removes its associations and leaves the ASINs themselves untouched.
+  // Returns the number of ASINs that lost the tag so the caller can report it.
+  //
+  // Added 2026-10-13 with the filter-dropdown management UI — there was no
+  // tag delete endpoint before; tags could only be removed with SQL.
+  app.delete("/api/tags/:id", async (req: Request, res: Response) => {
+    const id = String(req.params.id ?? "");
+    if (!isDbAvailable()) { res.status(503).json({ message: "Database not available" }); return; }
+    try {
+      const tag = await query(`SELECT id, name FROM tags WHERE id = $1`, [id]);
+      if (tag.rows.length === 0) { res.status(404).json({ message: "Tag not found" }); return; }
+      const n = (await query(`SELECT count(*)::int AS n FROM asin_tags WHERE tag_id = $1`, [id])).rows[0]?.n ?? 0;
+      await query(`DELETE FROM tags WHERE id = $1`, [id]);
+      res.json({ ok: true, name: tag.rows[0].name, asinsAffected: n });
     } catch (err: any) { res.status(500).json({ message: err.message }); }
   });
 

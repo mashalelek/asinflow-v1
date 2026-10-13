@@ -64,7 +64,7 @@ import { ColumnFilterButton, NUMERIC_COLS, type ColFilter, type FilterMap, type 
 // comparators should Date.parse these, never string-compare the formatted
 // cell. Exported for the pages' sort logic.
 export const DATE_VALUE_COLS = new Set<ColumnId>(["dateAdded", "lastReviewed", "priceAge"]);
-import { useTagGroups, compareTagKeys } from "@/lib/use-tag-groups";
+import { useTagGroups, useAllTags, compareTagKeys } from "@/lib/use-tag-groups";
 import { submissionCategory } from "@/lib/submissions-api";
 import { TagEditor } from "@/components/tag-editor";
 import { NoteEditor } from "@/components/note-editor";
@@ -607,24 +607,50 @@ export function ResultsTable({
 
   // Compute multi-select options for tags and supplier from ALL results
   const tagMeta = useTagGroups();
+  const { tags: allTags, reload: reloadTags } = useAllTags();
   const tagOptions: MultiSelectOption[] = useMemo(() => {
-    const counts = new Map<string, { color: string; count: number; name: string }>();
+    // EVERY tag is listed, always — seeded from /api/tags, then counts
+    // overlaid from the current result set (2026-10-13, §20 Filter dropdown).
+    // This used to be built from `allResults` alone, so a tag no visible ASIN
+    // carried simply vanished from the list: St. Patrick's Day and Back to
+    // School were missing from Seasonal whenever nothing matched, which reads
+    // as "that tag doesn't exist" rather than "nothing here has it".
+    const counts = new Map<string, number>();
+    const seen = new Map<string, { color: string; name: string }>();
     let noTagCount = 0;
     for (const r of allResults) {
       if (!r.tags || r.tags.length === 0) { noTagCount++; continue; }
       for (const t of r.tags) {
         const key = t.name.toLowerCase();
-        const existing = counts.get(key);
-        if (existing) existing.count++;
-        else counts.set(key, { color: t.color, count: 1, name: t.name });
+        counts.set(key, (counts.get(key) ?? 0) + 1);
+        if (!seen.has(key)) seen.set(key, { color: t.color, name: t.name });
       }
     }
     const opts: MultiSelectOption[] = [{ value: "__none__", label: "No tags", count: noTagCount }];
-    for (const [key, { color, count, name }] of Array.from(counts.entries()).sort((a, b) => compareTagKeys(a[0], b[0], tagMeta))) {
-      opts.push({ value: key, label: name, color, count, group: tagMeta.get(key)?.group ?? undefined });
+    // allTags is already in §20 render order from the server (ungrouped
+    // first, then groups by sort_order) — keep it rather than re-sorting.
+    const fromServer = allTags.map((t) => t.name.toLowerCase());
+    // Any tag present on a row but absent from /api/tags (a stale result set
+    // after a delete, mid-refetch) still shows, sorted in by the same
+    // comparator, rather than silently dropping a count the user can see.
+    const extras = Array.from(counts.keys())
+      .filter((k) => !fromServer.includes(k))
+      .sort((a, b) => compareTagKeys(a, b, tagMeta));
+    for (const t of allTags) {
+      const key = t.name.toLowerCase();
+      opts.push({
+        value: key, label: t.name, color: t.color,
+        count: counts.get(key) ?? 0,
+        group: t.tag_group ?? undefined,
+        tagId: t.id,
+      });
+    }
+    for (const key of extras) {
+      const s0 = seen.get(key)!;
+      opts.push({ value: key, label: s0.name, color: s0.color, count: counts.get(key) ?? 0, group: tagMeta.get(key)?.group ?? undefined });
     }
     return opts;
-  }, [allResults, tagMeta]);
+  }, [allResults, tagMeta, allTags]);
 
   const supplierOptions: MultiSelectOption[] = useMemo(() => {
     const counts = new Map<string, number>();
@@ -892,6 +918,7 @@ export function ResultsTable({
                         onApply={onFilterApply}
                         onClear={() => onFilterClear(colId)}
                         multiSelectOptions={colId === "tags" ? tagOptions : colId === "supplier" ? supplierOptions : colId === "category" ? categoryOptions : colId === "sourcing" ? sourcingOptions : colId === "status" ? statusOptions : undefined}
+                        onTagsChanged={colId === "tags" ? reloadTags : undefined}
                         dateFilter={dateFilterCols?.has(colId)}
                       />
                     )}

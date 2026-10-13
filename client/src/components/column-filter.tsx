@@ -21,7 +21,17 @@ export interface MultiSelectOption {
   color?: string;
   count?: number;
   group?: string; // options are pre-sorted; a group header renders when this changes
+  tagId?: string; // §20 tags only — present when the option is a real tag row,
+                  // which is what makes it deletable from the dropdown
 }
+
+// The server's palette (server/tags-repo.ts TAG_COLORS). POST /api/tags
+// accepts a colour only if it is one of these, so the picker offers exactly
+// these and nothing else.
+export const TAG_COLORS = [
+  "#3B82F6", "#EF4444", "#10B981", "#F59E0B", "#8B5CF6",
+  "#EC4899", "#14B8A6", "#F97316", "#6366F1", "#84CC16",
+];
 
 type FilterType = "numeric" | "text" | "tags" | "supplier" | "boolean" | "reviewed" | "submission" | "date" | "indb";
 
@@ -120,6 +130,9 @@ interface ColumnFilterProps {
   onApply: (filter: ColFilter) => void;
   onClear: () => void;
   multiSelectOptions?: MultiSelectOption[];
+  // §20 tag management from the filter dropdown (2026-10-13). Absent = the
+  // list is read-only, which is what every non-tag multi-select gets.
+  onTagsChanged?: () => void;
   /** Opt this column into the generic date filter type (presets + range). */
   dateFilter?: boolean;
   /** Opt this column into the in-database tri-state (§21 Bulk Calc Product column). */
@@ -134,6 +147,7 @@ function MultiSelectFilter({
   onApply,
   onClear,
   onClose,
+  onTagsChanged,
 }: {
   colId: ColumnId;
   options: MultiSelectOption[];
@@ -141,6 +155,7 @@ function MultiSelectFilter({
   onApply: (filter: ColFilter) => void;
   onClear: () => void;
   onClose: () => void;
+  onTagsChanged?: () => void;
 }) {
   const currentSelected = useMemo(() => {
     if (!currentFilter) return new Set<string>();
@@ -158,6 +173,68 @@ function MultiSelectFilter({
     const q = search.toLowerCase();
     return options.filter((o) => o.label.toLowerCase().includes(q));
   }, [options, search]);
+
+  // §20 tag management (2026-10-13). Only mounted when onTagsChanged is
+  // supplied, i.e. the tags filter — every other multi-select stays read-only.
+  const manageable = typeof onTagsChanged === "function";
+  const [creating, setCreating] = useState(false);
+  const [newName, setNewName] = useState("");
+  const [newColor, setNewColor] = useState(TAG_COLORS[0]);
+  const [newGroup, setNewGroup] = useState<string>("");
+  const [confirmDelete, setConfirmDelete] = useState<MultiSelectOption | null>(null);
+  const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState<string | null>(null);
+
+  const existingGroups = useMemo(
+    () => Array.from(new Set(options.map((o) => o.group).filter((g): g is string => !!g))).sort(),
+    [options],
+  );
+  // Case-insensitive on the trimmed value, matching the server.
+  const nameTaken = useMemo(() => {
+    const n = newName.trim().toLowerCase();
+    return !!n && options.some((o) => o.label.toLowerCase() === n);
+  }, [newName, options]);
+
+  async function createTag() {
+    const name = newName.trim();
+    if (!name || nameTaken || busy) return;
+    setBusy(true); setErr(null);
+    try {
+      const r = await fetch("/api/tags", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ name, color: newColor, tagGroup: newGroup || null }),
+      });
+      if (!r.ok) throw new Error((await r.json().catch(() => ({}))).message ?? `HTTP ${r.status}`);
+      setNewName(""); setNewGroup(""); setCreating(false);
+      onTagsChanged?.();
+    } catch (e: any) { setErr(e?.message ?? "create failed"); }
+    finally { setBusy(false); }
+  }
+
+  async function deleteTag(opt: MultiSelectOption) {
+    if (!opt.tagId || busy) return;
+    setBusy(true); setErr(null);
+    try {
+      const r = await fetch(`/api/tags/${opt.tagId}`, { method: "DELETE" });
+      if (!r.ok) throw new Error((await r.json().catch(() => ({}))).message ?? `HTTP ${r.status}`);
+      // If the deleted tag was part of the ACTIVE filter, drop it and
+      // re-apply — otherwise the filter keeps referencing a tag that no
+      // longer exists and the view silently shows nothing.
+      if (selected.has(opt.value)) {
+        const next = new Set(selected);
+        next.delete(opt.value);
+        setSelected(next);
+        if (currentFilter) {
+          if (next.size === 0) onClear();
+          else onApply({ colId, operator: mode, value: JSON.stringify(Array.from(next)) });
+        }
+      }
+      setConfirmDelete(null);
+      onTagsChanged?.();
+    } catch (e: any) { setErr(e?.message ?? "delete failed"); }
+    finally { setBusy(false); }
+  }
 
   function toggle(val: string) {
     setSelected((prev) => {
@@ -203,7 +280,7 @@ function MultiSelectFilter({
               </div>
             )}
           <label
-            className="flex items-center gap-2 px-2 py-1 rounded hover:bg-muted cursor-pointer text-xs"
+            className="group flex items-center gap-2 px-2 py-1 rounded hover:bg-muted cursor-pointer text-xs"
           >
             <input
               type="checkbox"
@@ -221,9 +298,87 @@ function MultiSelectFilter({
             {opt.count != null && (
               <span className="text-muted-foreground/60 text-[10px]">({opt.count})</span>
             )}
+            {manageable && opt.tagId && (
+              // × on hover, matching the row tag chips' remove affordance.
+              <button
+                className="opacity-0 group-hover:opacity-100 text-muted-foreground hover:text-destructive text-[11px] leading-none px-0.5 transition-opacity"
+                title={`Delete '${opt.label}'`}
+                onClick={(e) => { e.preventDefault(); e.stopPropagation(); setErr(null); setConfirmDelete(opt); }}
+              >
+                ×
+              </button>
+            )}
           </label>
           </Fragment>
         ))}
+
+        {/* §20: create from the dropdown, at the bottom of the list. */}
+        {manageable && (creating ? (
+          <div className="px-2 py-1.5 space-y-1.5 border-t mt-1">
+            <Input
+              autoFocus
+              placeholder="Tag name"
+              value={newName}
+              onChange={(e) => setNewName(e.target.value)}
+              onKeyDown={(e) => { if (e.key === "Enter") createTag(); if (e.key === "Escape") setCreating(false); }}
+              className="h-6 text-xs"
+            />
+            <div className="flex items-center gap-1 flex-wrap">
+              {TAG_COLORS.map((c) => (
+                <button
+                  key={c}
+                  title={c}
+                  onClick={() => setNewColor(c)}
+                  className={`w-3.5 h-3.5 rounded-full border-2 ${newColor === c ? "border-foreground" : "border-transparent"}`}
+                  style={{ backgroundColor: c }}
+                />
+              ))}
+            </div>
+            <select
+              value={newGroup}
+              onChange={(e) => setNewGroup(e.target.value)}
+              className="w-full h-6 text-xs rounded border border-input bg-background px-1"
+            >
+              <option value="">(ungrouped)</option>
+              {existingGroups.map((g) => <option key={g} value={g}>{g}</option>)}
+            </select>
+            {nameTaken && <p className="text-[10px] text-destructive">A tag with that name already exists.</p>}
+            <div className="flex gap-1">
+              <Button size="sm" className="h-6 text-[11px] flex-1" disabled={!newName.trim() || nameTaken || busy} onClick={createTag}>
+                {busy ? "Creating…" : "Create"}
+              </Button>
+              <Button size="sm" variant="ghost" className="h-6 text-[11px]" onClick={() => { setCreating(false); setNewName(""); setErr(null); }}>
+                Cancel
+              </Button>
+            </div>
+          </div>
+        ) : (
+          <button
+            className="w-full text-left px-2 py-1 text-xs text-muted-foreground hover:text-foreground hover:bg-muted rounded"
+            onClick={() => { setCreating(true); setErr(null); }}
+          >
+            + New tag
+          </button>
+        ))}
+
+        {/* Inline delete confirmation, with the live affected-ASIN count. */}
+        {manageable && confirmDelete && (
+          <div className="px-2 py-1.5 mt-1 border-t space-y-1.5">
+            <p className="text-[11px]">
+              Delete <span className="font-semibold">'{confirmDelete.label}'</span>? Removes it from{" "}
+              {confirmDelete.count ?? 0} ASIN{(confirmDelete.count ?? 0) === 1 ? "" : "s"}.
+            </p>
+            <div className="flex gap-1">
+              <Button size="sm" variant="destructive" className="h-6 text-[11px] flex-1" disabled={busy} onClick={() => deleteTag(confirmDelete)}>
+                {busy ? "Deleting…" : "Delete"}
+              </Button>
+              <Button size="sm" variant="ghost" className="h-6 text-[11px]" onClick={() => setConfirmDelete(null)}>
+                Cancel
+              </Button>
+            </div>
+          </div>
+        )}
+        {err && <p className="px-2 text-[10px] text-destructive">{err}</p>}
       </div>
       {colId === "tags" && (
         <div className="flex items-center gap-2 text-[10px]">
@@ -259,7 +414,7 @@ function MultiSelectFilter({
   );
 }
 
-export function ColumnFilterButton({ colId, currentFilter, onApply, onClear, multiSelectOptions, dateFilter, inDbFilter }: ColumnFilterProps) {
+export function ColumnFilterButton({ colId, currentFilter, onApply, onClear, multiSelectOptions, dateFilter, inDbFilter, onTagsChanged }: ColumnFilterProps) {
   const [open, setOpen] = useState(false);
   const filterType: FilterType = inDbFilter ? "indb" : dateFilter ? "date" : getFilterType(colId);
   const isMultiSelect = filterType === "tags" || filterType === "supplier";
@@ -345,6 +500,7 @@ export function ColumnFilterButton({ colId, currentFilter, onApply, onClear, mul
           <MultiSelectFilter
             colId={colId}
             options={multiSelectOptions}
+            onTagsChanged={colId === "tags" ? onTagsChanged : undefined}
             currentFilter={currentFilter}
             onApply={onApply}
             onClear={onClear}

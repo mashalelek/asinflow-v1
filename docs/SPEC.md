@@ -4056,11 +4056,47 @@ Free-form labels applied to ASINs (`tags` + `asin_tags` join).
   order; `client/src/lib/use-tag-groups.ts` drives it client-side.)
 - **Row tag chips are unaffected by grouping** — grouping only changes
   list/picker ordering, not how chips render on a row.
-- **Current groups:** `Seasonal` — Fall/Q4, St. Valentine's Day,
-  St. Patrick's Day, Spring, Easter, Summer, Back to School (in that
-  `sort_order`).
+- **Current groups (verified 2026-10-13):** `Seasonal` — Fall/Q4,
+  St. Valentine's Day, St. Patrick's Day, Spring, Summer, Back to School
+  (`sort_order` 1,2,3,4,6,7 — the gap at 5 is where **Easter** sat; it was
+  deleted 2026-10-13 and the remaining rows were not renumbered). 25 tags
+  total, one group.
 - **Deletion cascades:** deleting a tag removes its `asin_tags` associations
   (`ON DELETE CASCADE`); the ASINs themselves are untouched.
+
+### Filter dropdown (2026-10-13)
+
+The Tags column filter is also where tags are managed. It used to be a
+read-only list built from the CURRENT RESULT SET, which meant a tag no
+visible ASIN carried simply vanished — St. Patrick's Day and Back to School
+disappeared from Seasonal whenever nothing matched, which reads as "that tag
+doesn't exist" rather than "nothing here has it".
+
+- **Every tag is listed, always**, in the §20 render order above (ungrouped
+  first, then each group under its header by `sort_order`), with the match
+  count shown — **`(0)` when nothing in the current set carries it**. Same
+  list in both `Any of` and `All of` modes. The list is seeded from
+  `/api/tags`; counts are overlaid from the result set. A tag present on a
+  row but absent from `/api/tags` (a stale set mid-refetch) still shows,
+  rather than dropping a count the user can see.
+- **Create** — a `+ New tag` row at the bottom: name, colour swatch, and an
+  optional group chosen from the existing `tag_group` values (default
+  ungrouped). Name is unique case-insensitively on the trimmed value. It
+  posts to **the same `POST /api/tags` the row tag picker uses** — ONE
+  writer. That endpoint gained optional `color` and `tagGroup` for this;
+  called with `{name}` alone it behaves exactly as before (random palette
+  colour, ungrouped), so the picker is unaffected. A colour is accepted only
+  if it is one of the server's own `TAG_COLORS`.
+- **Delete** — a `×` on row hover, then an inline confirmation naming the
+  live count: *"Delete 'X'? Removes it from N ASINs."* `DELETE /api/tags/:id`
+  **did not exist before 2026-10-13** — tags could only be removed with SQL —
+  and was added with this. It returns the affected-ASIN count. The §20
+  cascade removes the `asin_tags` rows; the ASINs are untouched.
+- **If the deleted tag is part of the ACTIVE filter it is dropped from the
+  filter** and the filter re-applied (or cleared, if it was the only
+  selection) — otherwise the filter keeps referencing a tag that no longer
+  exists and the view silently shows nothing.
+- Both actions refetch `/api/tags` and the counts in place. No page reload.
 
 
 ## 21. Bulk Profit Calculator

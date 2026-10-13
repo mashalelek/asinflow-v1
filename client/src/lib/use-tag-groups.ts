@@ -5,6 +5,25 @@ import { useState, useEffect } from "react";
 // and group consistently with the picker (ungrouped first, then Seasonal etc.).
 export interface TagMeta { group: string | null; sortOrder: number | null }
 
+// The FULL tag list, not just ordering metadata (2026-10-13). The filter
+// dropdown lists every tag — including ones no ASIN in the current set
+// carries — and can create and delete them, so it needs ids and colours too.
+// `reload` is what the create/delete actions call; no page reload.
+export interface FullTag { id: string; name: string; color: string; tag_group: string | null; sort_order: number | null }
+export function useAllTags(): { tags: FullTag[]; reload: () => void } {
+  const [tags, setTags] = useState<FullTag[]>([]);
+  const [nonce, setNonce] = useState(0);
+  useEffect(() => {
+    let cancelled = false;
+    fetch("/api/tags")
+      .then((r) => r.json())
+      .then((rows: FullTag[]) => { if (!cancelled && Array.isArray(rows)) setTags(rows); })
+      .catch(() => {});
+    return () => { cancelled = true; };
+  }, [nonce]);
+  return { tags, reload: () => setNonce((n) => n + 1) };
+}
+
 export function useTagGroups(): Map<string, TagMeta> {
   const [map, setMap] = useState<Map<string, TagMeta>>(new Map());
   useEffect(() => {
