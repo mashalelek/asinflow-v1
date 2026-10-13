@@ -1978,7 +1978,7 @@ still paces at the wire; per-ASIN fail-closed semantics unchanged,
 | `sales` | orders report, 30-day chunks | Sync Sales |
 | `prices` | price refresh v2 (below) | Sync Prices |
 | `fees` | batch `feesEstimate` on the just-written prices (2026-09-07) | the stale-fee gap: Low-Price FBA rates apply under $10, so a price crossing that line changes the fulfillment fee — the proportional referral adjustment never covered it |
-| `listings` | live-offer reconcile (§18) — phases a/b/c, scope per §18 A3 (ALL statuses incl. dead, SKU'd and no-SKU alike), one per-ASIN outcome for EVERY ASIN probed (§18 A2) | Scan Listings; the inventory-sync `notLiveOnly` rider (removed 2026-09-06); `live-offer-sync.ts` and `script/backfill-has-live-offer.ts` (both deleted 2026-10-09) |
+| `listings` | live-offer reconcile (§18) — phases a/b, scope per §18 A3, **plus phase c on EVERY run regardless of working set (cron included)** — "does SC have an ASIN AF lacks" is account-wide and a selection cannot answer it (ALL statuses incl. dead, SKU'd and no-SKU alike), one per-ASIN outcome for EVERY ASIN probed (§18 A2) | Scan Listings; the inventory-sync `notLiveOnly` rider (removed 2026-09-06); `live-offer-sync.ts` and `script/backfill-has-live-offer.ts` (both deleted 2026-10-09) |
 
 A failed stage does not abort the others. Stream: `{type:"stage", stage,
 status, current, total}` + terminal `{type:"complete", data:{stages,
@@ -2153,7 +2153,18 @@ three calls sat on 1 rps buckets (~37 min full catalog). Now:
   genuinely-new ASINs (the "sourcing sync inserts priceless ASINs"
   incident; brand-new CSV uploads had the same hole). One stream, one
   `refresh_runs` ledger under the caller's trigger (upload / sourcing /
-  extension / backfill).
+  extension / backfill / **`sc_discovery`** — the last added 2026-10-11 for
+  §18 phase c, migration 046, so an ASIN that arrived from the Seller
+  Central account list is not misattributed to an upload or a backfill).
+
+  **Phase c is an INSERT-branch writer (2026-10-11).** It supplies
+  `buy_link`, `supplier` and the `SC import` tag on the row it creates, and
+  sets `in_catalog = TRUE` (the ASIN is in SC by construction — that is what
+  discovery found). Like the sourcing sync's `promo_notes` and bulk
+  promote's `buy_link`, these are INSERT-only: discovery never writes tags,
+  notes, COGS or a buy link to an EXISTING row. COGS comes from the real PO
+  sync scoped to the ASIN when it has Orders rows, and is left NULL
+  otherwise — never a synthetic zero.
 - The per-item catalog parser is extracted pure and shared (as offers
   were); catalog-404 (DA-2) maps to "absent from a COMPLETE batch
   response"; a partial batch response is inconclusive for its missing
@@ -3691,7 +3702,87 @@ sequential phases over one NDJSON progress stream
   SKUs. Found → write `asin_skus` rows (bootstrap primary only if none
   exists), `has_live_offer`, issue snapshot. Not found → stays NULL, counted
   **"no listing"** (sourcing leads — expected, the majority).
-- **Pacing:** 260ms between calls, both phases (getListingsItem and
+- **Phase c — ASINs SC has that AF does NOT (2026-10-11, Part B).** The
+  other direction of "AF mirrors the SC catalog": phases a and b reconcile
+  ASINs AF knows; phase c finds the ones it doesn't.
+
+  **Source: `searchListingsItems` with NO identifiers** — the unfiltered
+  account listing, `pageSize=20`, following `pagination.nextToken`. Verified
+  live 2026-10-09 against the real account: HTTP 200, `numberOfResults` 805,
+  41 calls in 18.7s. **The Reports-API fallback
+  (`GET_MERCHANT_LISTINGS_ALL_DATA`) is NOT needed and is not implemented** —
+  the spike settled it. With `includedData=summaries` the response carries
+  only `{ sku, summaries }`, so the ASIN comes from `summaries[0].asin`.
+
+  **A1 applies:** a row with no summary is a SKU shell, not a listing, and is
+  not onboarded. (The account list returned zero such rows across all 805
+  SKUs — shells are a per-SKU `getListingsItem` artifact — but the filter is
+  the same single rule either way.)
+
+  **A PARTIAL PULL ONBOARDS NOTHING.** Any page failing, or the page cap
+  being hit with a `nextToken` still present, makes the whole list
+  inconclusive: the run reports **`sc_list_incomplete`** and creates no rows.
+  Onboarding from a truncated list would create rows for some ASINs and
+  silently omit others — and the omission is invisible, because there is no
+  "missing" to notice.
+
+  **When it runs:** EVERY Prices & Stock run regardless of working set, cron
+  included — "does SC have an ASIN AF lacks" is an account-wide question a
+  selection cannot answer. On **Product Info only when the working set is the
+  full catalog**. A dry run lists the would-be onboards with the data below
+  and writes nothing.
+
+- **Onboarding a discovered ASIN (phase c).** Through **`onboardNewAsins`** —
+  the ONE insert path (§14) — so the row gets Product Info → prices → fees on
+  one stream exactly like a CSV upload. `refresh_runs.trigger =
+  'sc_discovery'` (migration 046 widens the CHECK); labelling it `upload` or
+  `backfill` would misattribute how the ASIN arrived. Then:
+
+  1. `in_catalog = TRUE` (it is in SC by construction — that is what phase c
+     found, and the latch exists for discoveries). `asin_skus` rows for every
+     SKU SC returned, primary per the existing rules (`amzn.gr.*` never
+     primary). The flag via the **A2 primitive**, outcome **`onboarded`** —
+     a verdict, not a guess: the ASIN came from an A1-filtered account list.
+     `has_buyable_offer` stays unwritten here; BUYABLE comes from a per-SKU
+     probe, which the next reconcile supplies.
+  2. **COGS:** if the ASIN has rows in the Orders sheet (the PO mirror), the
+     existing PO sync runs **scoped to that ASIN**, so `actual_cogs` /
+     `cogs_source='po_sheet'` / `ordered_qty` land as for any PO'd ASIN. No
+     Orders rows → COGS stays **NULL**. No synthetic zero is stored; the UI
+     already renders `$0.00` from nothing.
+  3. **Buy link / supplier**, first match wins:
+     a. **Master sheet** (`SOURCING_SHEET_ID`) ASINs tab **col N** (Buy Link,
+        a full URL) → `buy_link` as-is, `supplier` via `extractDomain` — the
+        same helper the Buy Link column edit uses. A **targeted read** of the
+        tab, deliberately NOT the insert-only sourcing sync, which would try
+        to create rows of its own.
+     b. Else **Orders sheet col E** (supplier, a bare domain like
+        `macys.com`) → `supplier` = the domain, `buy_link` = `https://` +
+        domain, after trimming, lowercasing, and stripping any leading
+        `http(s)://` or `www.`.
+     c. Neither → both NULL.
+  4. Tag **`SC import`**; `added_at = NOW()`; `estimated_cogs` untouched.
+  5. **Results dialog:** the onboarded ASINs appear under the listings stage
+     carrying their detail in the outcome string —
+     `onboarded · SKUs <…> · COGS po_sheet|none · link master|orders|none`.
+     Kept in the outcome rather than a parallel field so BOTH dialogs
+     (Prices & Stock and Product Info) render it through the existing
+     per-ASIN outcome list, with no second shape to thread through two
+     different summary payloads. Retry failed covers `error:` outcomes here
+     too.
+
+  **INSERT-BRANCH WRITES ONLY.** Buy link, supplier and the tag are written
+  on insert and never on conflict — the same precedent as the sourcing sync's
+  `promo_notes` and bulk promote's `buy_link`. Phase c only ever sees ASINs
+  with no row, so there is nothing to overwrite; the guarantee is structural
+  rather than circumstantial. **Discovery never writes tags, notes, COGS or
+  buy link to an EXISTING row.**
+
+  **Edge rules.** All-shell ASINs are not onboarded (A1). An ASIN SC has that
+  AF holds as **dead** is phase a/b territory (A3) — the flag flips, the
+  dialog shows it, and nothing auto-revives: the DA-2 dialog is Maria's call.
+
+- **Pacing:** 260ms between calls, all phases (getListingsItem and
   searchListingsItems share the 5 rps Listings bucket; phases are sequential).
 - **Per-phase report:** probed / flips / discovered SKUs / no-listing count /
   re-points ("primary → newest live: old → new") / duration — plus, as of

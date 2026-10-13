@@ -58,6 +58,15 @@ export interface LiveOfferVerdict {
    * from the pass report's flips array.
    */
   event?: "discovery" | "onboarded";
+  /**
+   * Appended to the event label, for outcomes that carry detail the ledger
+   * should keep. Phase c uses it for the onboarded list the results dialog
+   * shows (§18 phase c step 5): SKUs, COGS source, buy-link source. Kept in
+   * the outcome string rather than a parallel field so BOTH results dialogs
+   * render it through the existing per-ASIN outcome list, with no second
+   * shape to thread through two different summary payloads.
+   */
+  detail?: string;
 }
 
 /**
@@ -65,7 +74,7 @@ export interface LiveOfferVerdict {
  * reports exactly what a live run would record, with no second implementation.
  */
 export function outcomeFor(v: LiveOfferVerdict): LiveOfferOutcome {
-  if (v.event) return v.event;
+  if (v.event) return v.detail ? `${v.event} · ${v.detail}` : v.event;
   if (v.prevFlag !== v.listed) {
     return `flip: ${String(v.prevFlag)} -> ${String(v.listed)}`;
   }

@@ -32,6 +32,8 @@ import { offerAddForAsin, preFilterSubmitSet, type OfferAddResult, type PreFilte
 import { submitOfferAddBatch, type SubmitAsinRow } from "./offer-add-submit";
 
 import { runFullScopePass } from "./full-scope-pass";
+import type { OnboardResolution } from "./sc-discovery";
+import { writeLiveOfferVerdict } from "./live-offer-write";
 import { makeProductRegistryRepo } from "./product-registry-repo";
 import { processBulkApproval, makeProductionHandlers, type ApprovalItem } from "./sku-legend-approval";
 import { settingsSchema, type Settings } from "@shared/schema";
@@ -72,7 +74,7 @@ type RunAnalyzeCore = (
   opts?: { dryRun?: boolean },
 ) => Promise<void>;
 let runAnalyzeCoreRef: RunAnalyzeCore | null = null;
-type OnboardNewAsins = (asins: AsinInput[], emit: (chunk: string) => void, sink: AnalyzeSink, trigger: "upload" | "sourcing" | "extension" | "backfill", progressPrefix?: (i: number) => string | null) => Promise<void>;
+type OnboardNewAsins = (asins: AsinInput[], emit: (chunk: string) => void, sink: AnalyzeSink, trigger: "upload" | "sourcing" | "extension" | "backfill" | "sc_discovery", progressPrefix?: (i: number) => string | null) => Promise<void>;
 let onboardNewAsinsRef: OnboardNewAsins | null = null;
 export function getOnboardNewAsins(): OnboardNewAsins {
   if (!onboardNewAsinsRef) throw new Error("onboardNewAsins not initialized — call registerRoutes first");
@@ -1741,6 +1743,7 @@ export async function registerRoutes(
         trigger: dryRun ? "manual" : "refresh",
         dryRun,
         emit: (ev) => { try { res.write(JSON.stringify(ev) + "\n"); } catch {} },
+        onboardScDiscoveries,
       });
       res.write(JSON.stringify({ type: "complete", data: result }) + "\n");
     } catch (err: any) {
@@ -3552,9 +3555,18 @@ export async function registerRoutes(
     // Dry-run probes and reports identically but writes nothing, exactly as
     // the pass's own dryRun does.
     try {
+      // §18 phase c here ONLY when the working set is the full catalog
+      // (§11). A selection-scoped Product Info run reconciles the selection;
+      // pulling 41 pages of account listings for three ASINs would be noise.
+      const totalAsins = Number(
+        (await query(`SELECT count(*)::int AS n FROM asins`)).rows[0]?.n ?? 0,
+      );
+      const fullCatalog = totalAsins > 0 && asinList.length >= totalAsins;
       const lr = await runFullScopePass({
         dryRun,
         asinFilter: new Set(asinList),
+        phaseC: fullCatalog,
+        onboard: onboardScDiscoveries,
         emit: (ev) => emit(JSON.stringify({ type: "progress", data: { current: ev.done ?? 0, total: ev.total ?? 0, asin: `Listings: ${ev.asin ?? ev.phase ?? ""}` } }) + "\n"),
       });
       stageCounts.listings = {
@@ -3629,7 +3641,9 @@ export async function registerRoutes(
     asins: AsinInput[],
     emit: (chunk: string) => void,
     sink: AnalyzeSink,
-    trigger: "upload" | "sourcing" | "extension" | "backfill",
+    // 'sc_discovery' added 2026-10-11 (§18 phase c, migration 046): the ASIN
+    // came from the SC account list, not from an upload/sheet/extension.
+    trigger: "upload" | "sourcing" | "extension" | "backfill" | "sc_discovery",
     progressPrefix: (i: number) => string | null = () => null,
   ) {
     await runAnalyzeCore(asins, emit, progressPrefix, true, sink);
@@ -3658,6 +3672,101 @@ export async function registerRoutes(
     }
   }
   onboardNewAsinsRef = onboardNewAsins;
+
+  // §18 Part B phase c (2026-10-11): onboard the ASINs SC has that AF does
+  // not. Injected into runFullScopePass so full-scope-pass.ts never imports
+  // this module.
+  //
+  // Goes through onboardNewAsins — the ONE insert path (§14) — so these rows
+  // get Product Info -> prices -> fees exactly like a CSV upload, on one
+  // stream. The buy link / supplier / tag are INSERT-BRANCH ONLY: AsinInput
+  // carries them, upsertAsinResult writes them on INSERT and never on
+  // conflict, which is the same precedent as the sourcing sync's promo_notes
+  // and bulk promote's buy_link. Phase c only ever sees ASINs with no row,
+  // so there is nothing to overwrite — but the guarantee is structural, not
+  // circumstantial.
+  async function onboardScDiscoveries(rows: OnboardResolution[]): Promise<void> {
+    if (rows.length === 0) return;
+    const inputs: AsinInput[] = rows.map((r) => ({
+      asin: r.asin,
+      cogs: 0,                       // never a synthetic zero in the DB — see below
+      buyLink: r.buyLink,
+      prepOverride: null,
+      storageOverride: null,
+      tags: ["SC import"],           // §20; applied after the INSERT by writeResult
+      notes: null,
+      promoNotes: null,
+      supplierSku: null,
+      addedAtRaw: null,
+    } as AsinInput));
+
+    // fromCsvUpload=false: cogs 0 here is a placeholder for the AsinInput
+    // shape, NOT a value to store. upsertCsvCogs is the only thing that would
+    // persist it and it is gated on fromCsvUpload, so estimated_cogs stays
+    // NULL and the UI renders $0.00 from nothing — §18 phase c step 2.
+    await onboardNewAsins(inputs, () => {}, mainCatalogSink, "sc_discovery");
+
+    // in_catalog = TRUE: the ASIN is in SC by construction (that is what
+    // phase c found). It is a one-way discovery latch (§18) and this is a
+    // discovery.
+    const asins = rows.map((r) => r.asin);
+    await query(`UPDATE asins SET in_catalog = TRUE WHERE asin = ANY($1::text[])`, [asins])
+      .catch((err: any) => log(`Phase c: in_catalog write failed: ${err?.message ?? err}`, "full-scope"));
+
+    // supplier rides the INSERT branch too, derived from the buy link the
+    // same way the Buy Link column edit derives it.
+    for (const r of rows) {
+      if (!r.supplier) continue;
+      await query(`UPDATE asins SET supplier = $2 WHERE asin = $1 AND supplier IS NULL`, [r.asin, r.supplier])
+        .catch((err: any) => log(`Phase c: supplier write failed for ${r.asin}: ${err?.message ?? err}`, "full-scope"));
+    }
+
+    // asin_skus for every SKU SC returned, primary per the existing rules
+    // (amzn.gr.* never primary; first real SKU bootstraps when none exists).
+    for (const r of rows) {
+      const real = r.skus.filter((sku) => !sku.toLowerCase().startsWith("amzn.gr."));
+      for (let i = 0; i < r.skus.length; i++) {
+        await query(
+          `INSERT INTO asin_skus (asin_id, sku, is_primary)
+           SELECT id, $2, $3 FROM asins WHERE asin = $1
+           ON CONFLICT (asin_id, sku) DO NOTHING`,
+          [r.asin, r.skus[i], r.skus[i] === real[0]],
+        ).catch((err: any) => log(`Phase c: asin_skus insert failed for ${r.asin}/${r.skus[i]}: ${err?.message ?? err}`, "full-scope"));
+      }
+      if (real[0]) {
+        await query(`UPDATE asins SET primary_sku = $2 WHERE asin = $1 AND primary_sku IS NULL`, [r.asin, real[0]])
+          .catch(() => {});
+      }
+    }
+
+    // The FLAG, through the A2 primitive, outcome `onboarded` (§18 A2). The
+    // ASIN is listed by construction — it came from the account list, which
+    // is A1-filtered — so this is a verdict, not a guess.
+    const onboardOutcomes: Record<string, string> = {};
+    for (const r of rows) {
+      await writeLiveOfferVerdict(
+        {
+          asin: r.asin, prevFlag: null, listed: true,
+          buyable: false,   // §23: BUYABLE comes from a per-SKU probe, not the
+                            // account list; the next reconcile fills it in.
+          issues: [], event: "onboarded",
+          detail: `SKUs ${r.skus.join(", ")} · COGS ${r.cogsSource} · link ${r.buyLinkSource}`,
+        },
+        { query: (sql, params) => query(sql, params), outcomes: (a, o) => { onboardOutcomes[a] = o; } },
+      );
+    }
+
+    // COGS: ASINs with Orders-sheet rows get the real PO sync, scoped to
+    // them, so actual_cogs / cogs_source='po_sheet' / ordered_qty land the
+    // same way they do for any PO'd ASIN. No Orders rows → COGS stays NULL.
+    const poAsins = rows.filter((r) => r.cogsSource === "po_sheet").map((r) => r.asin);
+    if (poAsins.length > 0) {
+      await runSheetsSync(new Set(poAsins))
+        .catch((err: any) => log(`Phase c: scoped PO sync failed: ${err?.message ?? err}`, "full-scope"));
+    }
+
+    log(`Phase c onboarded ${rows.length} ASIN(s): ${rows.map((r) => `${r.asin}(${r.cogsSource}/${r.buyLinkSource})`).join(", ")}`, "full-scope");
+  }
 
   // Thin streaming wrapper for the main-catalog endpoints. The sink is
   // required here too — each endpoint names mainCatalogSink explicitly.

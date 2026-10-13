@@ -158,6 +158,10 @@ export async function runRefreshJob(opts: {
   trigger: RefreshTrigger;
   dryRun: boolean;
   emit: RefreshEmit;
+  // §18 phase c onboarding callback, injected by the route layer so this
+  // module does not import routes.ts. Absent = phase c reports what it
+  // WOULD onboard and writes nothing (what a dry run does anyway).
+  onboardScDiscoveries?: (rows: any[]) => Promise<void>;
 }): Promise<RefreshJobResult> {
   const { emit, dryRun } = opts;
   // Per-run rate-limit view (2026-09-07): snapshot at start, report deltas.
@@ -209,6 +213,11 @@ export async function runRefreshJob(opts: {
         dryRun,
         asinFilter: filter,
         emit: (ev) => emit({ ...ev, stage: "listings" }),
+        // §18 phase c runs on EVERY Prices & Stock run regardless of working
+        // set, cron included — "SC has it and AF doesn't" is an account-wide
+        // question that a selection cannot answer.
+        phaseC: true,
+        onboard: opts.onboardScDiscoveries,
       });
       const a = report.phaseA, b = report.phaseB;
       // §18 A2 (2026-10-09): the outcomes come from the pass itself now, one
@@ -218,8 +227,14 @@ export async function runRefreshJob(opts: {
       // the ledger. That gap is half of how B07J2WWWD4's wrong TRUE became
       // unattributable.
       const outcomes: Record<string, string> = { ...report.outcomes };
+      const c = report.phaseC;
       return {
         counts: {
+          ...(c ? {
+            sc_listings: c.scListings, sc_asins: c.scAsins,
+            onboarded: c.onboarded.length,
+            ...(c.incomplete ? { sc_list_incomplete: 1 } : {}),
+          } : {}),
           probed: a.asins, live: a.live, no_offer: a.noOffer, transient: a.transientSkipped,
           flips: a.flips.length, repoints: a.repoints.length,
           discoveries: a.discoveries.length + b.discovered.length, no_listing: b.noListing,

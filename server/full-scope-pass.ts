@@ -34,6 +34,7 @@ import { query as defaultQuery } from "./db";
 import { checkSkuListingStatus, type ListingIssueLite } from "./sku-listing-fetch";
 import { discoverAsinListings, recordDiscoveredSkus, pick8cPrimary, anyBuyable } from "./live-offer-check";
 import { writeLiveOfferVerdict, recordTransient, recordError, type OutcomeSink } from "./live-offer-write";
+import { fetchAllAccountListings, type OnboardResolution } from "./sc-discovery";
 import { spApiGet as realSpApiGet } from "./spapi-auth";
 import type { HttpGetFn } from "./sku-catalog-fetch";
 import { log } from "./index";
@@ -66,6 +67,18 @@ export interface FullScopeReport {
     asins: number; discovered: DiscoveredEntry[]; noListing: number;
     transientSkipped: number; durationMs: number;
   };
+  // §18 Part B phase c (2026-10-11): ASINs SC has that AF does not. Absent
+  // when the caller did not ask for phase c (a selection-scoped run).
+  phaseC?: {
+    ran: boolean;
+    /** Set when the account pull was partial — NOTHING was onboarded. */
+    incomplete: string | null;
+    scListings: number;      // rows in the account list, A1-qualified
+    scAsins: number;         // distinct ASINs among them
+    alreadyInAf: number;
+    onboarded: OnboardResolution[];
+    durationMs: number;
+  };
 }
 
 export type ProgressEmit = (event: Record<string, any>) => void;
@@ -79,6 +92,16 @@ export async function runFullScopePass(opts: {
   pacingMs?: number;
   emit?: ProgressEmit;                   // NDJSON progress events
   nowMs?: () => number;
+  // §18 phase c: pull the account-wide SKU list and onboard SC-only ASINs.
+  // OFF by default — a selection-scoped run reconciles the selection and has
+  // no business pulling 41 pages of account listings. Prices & Stock turns it
+  // on for every run; Product Info only when its working set is the full
+  // catalog.
+  phaseC?: boolean;
+  // Injected so this module never imports routes.ts. Called ONCE with every
+  // ASIN to onboard; the implementation is onboardNewAsins (§14 — the ONE
+  // insert path). Not called on a dry run.
+  onboard?: (rows: OnboardResolution[]) => Promise<void>;
 }): Promise<FullScopeReport> {
   const query = opts.query ?? (defaultQuery as any as QueryLike);
   const httpGet = opts.httpGet ?? realSpApiGet;
@@ -362,7 +385,61 @@ export async function runFullScopePass(opts: {
   phaseB.durationMs = now() - t1;
   emit({ type: "phase_done", phase: "b", asins: phaseB.asins, discovered: phaseB.discovered.length, noListing: phaseB.noListing, transient: phaseB.transientSkipped, durationMs: phaseB.durationMs });
 
-  const report: FullScopeReport = { dryRun: opts.dryRun, outcomes, phaseA, phaseB };
+  // ─── Phase c: ASINs SC has that AF does not (§18 Part B, 2026-10-11) ─────
+  let phaseC: FullScopeReport["phaseC"];
+  if (opts.phaseC) {
+    const t2 = now();
+    emit({ type: "phase", phase: "c", dryRun });
+    const pull = await fetchAllAccountListings(sellerId, httpGet, pacingMs);
+
+    if (!pull.ok) {
+      // A partial pull onboards NOTHING. Onboarding from a truncated list
+      // creates rows for some ASINs and silently omits others, and the
+      // omission is invisible — there is no "missing" to notice.
+      phaseC = {
+        ran: true, incomplete: pull.detail, scListings: 0, scAsins: 0,
+        alreadyInAf: 0, onboarded: [], durationMs: now() - t2,
+      };
+      outcomes["_phase_c"] = `error: sc_list_incomplete — ${pull.detail}`;
+      log(`Full-scope phase c: sc_list_incomplete after ${pull.pagesFetched} page(s) — onboarded nothing. ${pull.detail}`, "full-scope");
+    } else {
+      const skusByAsin = new Map<string, string[]>();
+      for (const l of pull.listings) {
+        const arr = skusByAsin.get(l.asin) ?? [];
+        arr.push(l.sku);
+        skusByAsin.set(l.asin, arr);
+      }
+      const scAsins = Array.from(skusByAsin.keys());
+      const known = new Set(
+        (await query(`SELECT asin FROM asins WHERE asin = ANY($1::text[])`, [scAsins]))
+          .rows.map((r: any) => String(r.asin)),
+      );
+      const missing = scAsins.filter((a) => !known.has(a));
+
+      const resolved = missing.length > 0 ? await resolveForOnboard(missing, skusByAsin, query) : [];
+      if (!dryRun && resolved.length > 0 && opts.onboard) {
+        await opts.onboard(resolved);
+      }
+      // The flag + its outcome are written by the onboarding path through the
+      // A2 primitive (outcome `onboarded`); recorded here too so a dry run
+      // previews the same outcomes a live run would record.
+      if (dryRun) {
+        for (const r of resolved) {
+          outcomes[r.asin] = `onboarded · SKUs ${r.skus.join(", ")} · COGS ${r.cogsSource} · link ${r.buyLinkSource}`;
+        }
+      }
+
+      phaseC = {
+        ran: true, incomplete: null,
+        scListings: pull.listings.length, scAsins: scAsins.length,
+        alreadyInAf: known.size, onboarded: resolved, durationMs: now() - t2,
+      };
+      log(`Full-scope phase c${dryRun ? " DRY-RUN" : ""}: ${pull.pages} pages, ${pull.listings.length} listings, ${scAsins.length} ASINs, ${known.size} already in AF, ${resolved.length} to onboard`, "full-scope");
+    }
+    emit({ type: "phase_done", phase: "c", ...phaseC });
+  }
+
+  const report: FullScopeReport = { dryRun: opts.dryRun, outcomes, phaseA, phaseB, phaseC };
   log(
     `Full-scope pass ${opts.dryRun ? "DRY-RUN " : ""}complete: phase a ${phaseA.asins} ASINs/${phaseA.skusProbed} SKUs ` +
     `(${phaseA.live} live, ${phaseA.noOffer} no_offer, ${phaseA.transientSkipped} transient, ${phaseA.flips.length} flips, ` +
@@ -380,4 +457,60 @@ function summarizeA(a: FullScopeReport["phaseA"]) {
     transient: a.transientSkipped, flips: a.flips.length, repoints: a.repoints.length,
     discoveries: a.discoveries.length, durationMs: a.durationMs,
   };
+}
+
+/**
+ * Resolve the per-ASIN onboarding data phase c needs (§18 phase c step 3).
+ *
+ * Two sheet reads for the whole batch, not per ASIN:
+ *   - the Master sheet's ASINs tab (SOURCING_SHEET_ID, col N = Buy Link) —
+ *     a TARGETED read, deliberately NOT the insert-only sourcing sync, which
+ *     would try to create rows of its own;
+ *   - the Orders sheet (the PO mirror), for "does this ASIN have PO rows"
+ *     and its col-E supplier domain.
+ *
+ * Either read failing is non-fatal: the ASIN onboards with whatever resolved,
+ * down to buy_link/supplier NULL and COGS none. Phase c's job is to get the
+ * ASIN into AF; the enrichment is best-effort and self-corrects on the next
+ * PO sync.
+ */
+async function resolveForOnboard(
+  missing: string[],
+  skusByAsin: Map<string, string[]>,
+  query: QueryLike,
+): Promise<OnboardResolution[]> {
+  const masterBuyLinks = new Map<string, string>();
+  const ordersSuppliers = new Map<string, string | null>();
+
+  try {
+    const sheetId = process.env.SOURCING_SHEET_ID;
+    if (sheetId) {
+      const { fetchSourcingSheet } = await import("./sourcing-sheet");
+      const want = new Set(missing);
+      for (const row of await fetchSourcingSheet(sheetId)) {
+        if (!want.has(row.asin)) continue;
+        // First non-empty wins, matching the sourcing sync's collapse rule.
+        if (row.buyLink && !masterBuyLinks.has(row.asin)) masterBuyLinks.set(row.asin, row.buyLink);
+      }
+    }
+  } catch (err: any) {
+    log(`Phase c: master-sheet buy-link lookup failed (${err?.message ?? err}) — falling through to Orders`, "full-scope");
+  }
+
+  try {
+    const sheetId = process.env.GOOGLE_SHEET_ID;
+    if (sheetId) {
+      const { fetchSheetData } = await import("./google-sheets");
+      const po = await fetchSheetData(sheetId);
+      for (const asin of missing) {
+        const row = po.get(asin);
+        if (row) ordersSuppliers.set(asin, row.supplier ?? null);
+      }
+    }
+  } catch (err: any) {
+    log(`Phase c: Orders-sheet lookup failed (${err?.message ?? err}) — COGS/supplier left unresolved`, "full-scope");
+  }
+
+  const { resolveOnboardData } = await import("./sc-discovery");
+  return resolveOnboardData(missing, skusByAsin, masterBuyLinks, ordersSuppliers);
 }
