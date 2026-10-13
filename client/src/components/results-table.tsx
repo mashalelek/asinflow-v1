@@ -667,12 +667,19 @@ export function ResultsTable({
       if (!r.leadSource) { none++; continue; }
       counts.set(r.leadSource, (counts.get(r.leadSource) ?? 0) + 1);
     }
-    return [
-      { value: "__none__", label: "No lead source", count: none },
-      ...LEAD_SOURCES.map((s) => ({
+    // Ordered by COUNT DESCENDING, ties by name (2026-10-13) — not by the
+    // enum's declaration order. The useful question at the filter is "where
+    // do most of these leads come from", and the counts come from the
+    // current filtered set, so the order re-sorts as the view narrows.
+    // "No lead source" stays PINNED at the top regardless of its count: it
+    // is the absence of a value, not one of the six, and it should not move
+    // around as the view changes.
+    const sorted = LEAD_SOURCES
+      .map((s) => ({
         value: s.toLowerCase(), label: s, color: LEAD_SOURCE_COLORS[s], count: counts.get(s) ?? 0,
-      })),
-    ];
+      }))
+      .sort((a, b) => (b.count - a.count) || a.label.localeCompare(b.label));
+    return [{ value: "__none__", label: "No lead source", count: none }, ...sorted];
   }, [allResults]);
 
   const supplierOptions: MultiSelectOption[] = useMemo(() => {
