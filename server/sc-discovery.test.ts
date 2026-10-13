@@ -301,6 +301,19 @@ describe("phase c wiring", () => {
     expect(fn.indexOf("estimated_cogs = NULL")).toBeLessThan(fn.indexOf("runSheetsSync"));
   });
 
+  it("the standalone pass endpoint persists a refresh_runs row (A2)", () => {
+    // It used to return outcomes in the HTTP response and persist nothing,
+    // so a reconcile run here left its flips provable only from a
+    // transcript. A2 says a flag write with no ledger row is impossible by
+    // construction — this entry point was the hole.
+    const s = code("routes.ts");
+    const i = s.indexOf('"/api/listings/full-scope-pass"');
+    const h = s.slice(i, i + 3500);
+    expect(h).toMatch(/INSERT INTO refresh_runs/);
+    expect(h).toMatch(/JSON\.stringify\(report\.outcomes\)/);
+    expect(h).toMatch(/if \(!dryRun\) \{/);   // dry runs stay write-free
+  });
+
   it("migration 047 widens the trigger COLUMN, not just the CHECK", () => {
     // 046 widened the CHECK; the column was VARCHAR(10) and 'sc_discovery'
     // is 12 chars, so every phase-c ledger row failed silently.

@@ -2749,10 +2749,43 @@ export async function registerRoutes(
     const emit = (ev: Record<string, any>) => res.write(JSON.stringify(ev) + "\n");
     try {
       log(`Full-scope pass ${dryRun ? "DRY-RUN" : "LIVE"} started (${asinFilter ? asinFilter.size + " selected" : "full catalog"}${onlyPhaseC ? ", phase c ONLY" : phaseC ? ", with phase c" : ""})`, "full-scope");
+      const startedAt = new Date();
       const report = await runFullScopePass({
         dryRun, asinFilter, emit, phaseC, onlyPhaseC,
         onboard: onboardScDiscoveries,
       });
+
+      // §18 A2: a flag write with no ledger row must be impossible BY
+      // CONSTRUCTION. This endpoint returned its outcomes in the HTTP
+      // response and persisted nothing — so a reconcile run here left the
+      // flips provable only from a transcript someone happened to keep. The
+      // 2026-10-13 full-catalog backfill ran before this was fixed; its 8
+      // flips are evidenced by the pass report and a before/after DB diff
+      // rather than by refresh_runs.
+      //
+      // Dry runs write no ledger row, matching every other dry-run path.
+      if (!dryRun) {
+        const a = report.phaseA, b = report.phaseB, c = report.phaseC;
+        await query(
+          `INSERT INTO refresh_runs (started_at, finished_at, trigger, stage, scope, requested, counts, outcomes)
+           VALUES ($1, NOW(), 'manual', 'listings', $2, $3, $4::jsonb, $5::jsonb)`,
+          [
+            startedAt,
+            asinFilter ? "subset" : "full",
+            a.asins + b.asins,
+            JSON.stringify({
+              probed: a.asins + b.asins, live: a.live, no_offer: a.noOffer,
+              transient: a.transientSkipped + b.transientSkipped,
+              flips: a.flips.length, repoints: a.repoints.length,
+              discoveries: a.discoveries.length + b.discovered.length,
+              no_listing: b.noListing,
+              ...(c ? { sc_asins: c.scAsins, onboarded: c.onboarded.length,
+                        ...(c.incomplete ? { sc_list_incomplete: 1 } : {}) } : {}),
+            }),
+            JSON.stringify(report.outcomes),
+          ],
+        ).catch((err: any) => log(`refresh_runs write failed for full-scope pass: ${err?.message ?? err}`, "full-scope"));
+      }
       emit({ type: "complete", report });
     } catch (err: any) {
       emit({ type: "error", message: err?.message ?? "full-scope pass failed" });
