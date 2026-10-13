@@ -271,6 +271,22 @@ describe("phase c wiring", () => {
     expect(fn).toMatch(/runSheetsSync\(new Set\(poAsins\)\)/);
   });
 
+  it("onlyPhaseC skips the per-ASIN phases entirely", () => {
+    const s = code("full-scope-pass.ts");
+    expect(s).toMatch(/const skipAB = opts\.onlyPhaseC === true/);
+    expect(s).toMatch(/const aRows = skipAB \? \[\] :/);
+    expect(s).toMatch(/const bRows = skipAB \? \[\] :/);
+  });
+
+  it("the full-scope endpoint keeps phase c OPT-IN", () => {
+    // The standalone entry point is used for scripts and dry runs; it must
+    // not pull 41 pages of account listings unless asked.
+    const s = code("routes.ts");
+    const i = s.indexOf('"/api/listings/full-scope-pass"');
+    const h = s.slice(i, i + 1600);
+    expect(h).toMatch(/const phaseC = onlyPhaseC \|\| String\(req\.query\.phaseC \?\? ""\) === "1"/);
+  });
+
   it("migration 046 widens the trigger CHECK with sc_discovery", () => {
     const m = readFileSync(
       join(__dirname, "..", "database", "migrations", "046_refresh_runs_trigger_sc_discovery.sql"), "utf8");

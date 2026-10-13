@@ -98,6 +98,11 @@ export async function runFullScopePass(opts: {
   // on for every run; Product Info only when its working set is the full
   // catalog.
   phaseC?: boolean;
+  // Run ONLY phase c, skipping the per-ASIN phases a and b. The phase-c dry
+  // run and the "re-run, expect 0 onboarded" check both want the
+  // account-list diff on its own — 41 calls, ~19s — not a full-catalog
+  // reconcile of every known SKU, which is a different (much longer) job.
+  onlyPhaseC?: boolean;
   // Injected so this module never imports routes.ts. Called ONCE with every
   // ASIN to onboard; the implementation is onboardNewAsins (§14 — the ONE
   // insert path). Not called on a dry run.
@@ -125,7 +130,8 @@ export async function runFullScopePass(opts: {
 
   // ─── Phase a: ASINs with ≥1 SKU, all flag states ──────────────────────────
   const t0 = now();
-  const aRows = (await query(
+  const skipAB = opts.onlyPhaseC === true;
+  const aRows = skipAB ? [] : (await query(
     `SELECT a.asin, a.id, a.primary_sku, a.has_live_offer,
             json_agg(json_build_object('sku', s.sku, 'created_at', s.created_at)
                      ORDER BY s.created_at DESC) AS skus
@@ -285,7 +291,7 @@ export async function runFullScopePass(opts: {
 
   // ─── Phase b: no-SKU ASINs → searchListingsItems discovery ────────────────
   const t1 = now();
-  const bRows = (await query(
+  const bRows = skipAB ? [] : (await query(
     // has_live_offer is selected for flip detection (§18 A2) — without it
     // every phase-b discovery would report `flip: null -> true` even when the
     // flag was already TRUE.

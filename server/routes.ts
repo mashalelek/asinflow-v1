@@ -2740,11 +2740,19 @@ export async function registerRoutes(
     const dryRun = dryRunRaw === "1";
     const { asins } = (req.body ?? {}) as { asins?: string[] };
     const asinFilter = asins && asins.length > 0 ? new Set(asins) : undefined;
+    // §18 phase c on this entry point is OPT-IN (?phaseC=1), and ?onlyPhaseC=1
+    // runs it alone — the dry-run gate and the "re-run, expect 0" check both
+    // want the account-list diff without a full-catalog reconcile.
+    const onlyPhaseC = String(req.query.onlyPhaseC ?? "") === "1";
+    const phaseC = onlyPhaseC || String(req.query.phaseC ?? "") === "1";
     res.setHeader("Content-Type", "application/x-ndjson");
     const emit = (ev: Record<string, any>) => res.write(JSON.stringify(ev) + "\n");
     try {
-      log(`Full-scope pass ${dryRun ? "DRY-RUN" : "LIVE"} started (${asinFilter ? asinFilter.size + " selected" : "full catalog"})`, "full-scope");
-      const report = await runFullScopePass({ dryRun, asinFilter, emit });
+      log(`Full-scope pass ${dryRun ? "DRY-RUN" : "LIVE"} started (${asinFilter ? asinFilter.size + " selected" : "full catalog"}${onlyPhaseC ? ", phase c ONLY" : phaseC ? ", with phase c" : ""})`, "full-scope");
+      const report = await runFullScopePass({
+        dryRun, asinFilter, emit, phaseC, onlyPhaseC,
+        onboard: onboardScDiscoveries,
+      });
       emit({ type: "complete", report });
     } catch (err: any) {
       emit({ type: "error", message: err?.message ?? "full-scope pass failed" });
