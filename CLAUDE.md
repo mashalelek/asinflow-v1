@@ -188,28 +188,45 @@ route-registration test (`server/route-inventory.test.ts`) backstops
 routes.ts specifically, but the inventory-diff rule applies to every
 blob-staged shared file.
 
-## Gate tests must not leave ASINs behind
+## Gate tests must not leave ROWS behind
 
-Any gate test or verification run that INSERTS an ASIN into AF — `/api/analyze`
-with `fromCsvUpload`, onboarding, bulk promote, the Chrome extension, or any
-other insert path — must delete that ASIN and its dependent rows before the
-gate report is written.
+Any gate test or verification run that CREATES a row — of any kind — must
+remove it before the gate report is written. Not just ASINs: **tags**, SKUs,
+bulk lists, view presets, submissions, registry reservations, anything.
 
-**Why:** the UI cannot delete ASINs. Park and Mark-dead are the only controls,
-and both keep the row. A test ASIN therefore lives in the database forever,
-polluting counts, filters, and every later "how many ASINs are X" answer.
-`B0INVALID9` survived three gate runs this way before anyone noticed.
+**Why:** most of these have no delete in the UI, so a test row lives in the
+database forever, polluting counts, filters, dropdowns, and every later "how
+many X are there" answer. `B0INVALID9` survived three gate runs before anyone
+noticed. Tag verification created `zz-test`, `zz-grouped`, `zz-badcolor`,
+`zz-inline` and `zz-free` across several sessions; each was cleaned up, but
+only because it was tracked deliberately — nothing in the system would have
+flagged a leftover.
 
-**Prefer not to insert at all.** Use a dry run, or an ASIN that is already in
-the catalog, whenever the gate allows it. Reach for an invented ASIN only when
-the behaviour under test genuinely requires a new row.
+**Prefer not to create at all.** Use a dry run, or a row that already exists,
+whenever the gate allows it. Reach for an invented row only when the behaviour
+under test genuinely requires a new one. A great many gates can be run against
+existing data: the listings reconcile, the price/fee stages and the lead-source
+backfill were all verified without creating anything.
 
-**When you must clean up:** check provenance FIRST — `added_at`, title, and
-dependent rows in `asin_skus`, `listing_submissions`, `brand_product_registry`,
-`po_asins`, `asin_tags`. An ASIN you merely READ during a gate is not a test
-row, and deleting one with a generated SKU or a submission record destroys real
-history and frees a registry NNN that is supposed to be stable. `refresh_runs`
-outcomes are history — leave them.
+**Name test rows so they are findable.** A `zz-` prefix sorts last in every
+list and greps cleanly; an invented ASIN should be obviously synthetic. A row
+you cannot find later is a row you cannot clean up.
+
+**Verify the cleanup, do not assume it.** Re-query and show the count in the
+gate report — "tags back to 17", "asins total unchanged at 2579". A delete
+call that 404'd or matched zero rows looks identical to success from the
+caller's side.
+
+**When you must clean up, check provenance FIRST.** For an ASIN: `added_at`,
+title, and dependent rows in `asin_skus`, `listing_submissions`,
+`brand_product_registry`, `po_asins`, `asin_tags`. For a tag: its
+`asin_tags` count and `created_at`. A row you merely READ during a gate is
+not a test row — deleting an ASIN with a generated SKU or a submission record
+destroys real history and frees a registry NNN that is supposed to be stable,
+and deleting a real tag silently untags every ASIN carrying it.
+
+**What stays:** `refresh_runs` rows are history, including those a gate run
+produced — they record that the run happened and are never cleaned up.
 
 ## Never `git checkout <file>` to undo an experiment
 
