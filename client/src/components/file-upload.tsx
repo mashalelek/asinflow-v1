@@ -53,7 +53,7 @@ export function FileUpload({ onFileProcessed, isAnalyzing, compact, cogsOptional
     }
   }, []);
 
-  const handleMappingContinue = useCallback(async (mapping: ColumnMapping) => {
+  const handleMappingContinue = useCallback(async (mapping: ColumnMapping, leadSource: string | null) => {
     if (!file) return;
     setShowMapping(false);
     setError(null);
@@ -62,6 +62,9 @@ export function FileUpload({ onFileProcessed, isAnalyzing, compact, cogsOptional
     formData.append("file", file);
     formData.append("mapping", JSON.stringify(mapping));
     if (cogsOptional) formData.append("allowMissingCogs", "true");
+    // §6: the dialog's list-wide pick. Omitted entirely when None, so the
+    // server sees undefined and leaves lead_source NULL.
+    if (leadSource) formData.append("leadSource", leadSource);
 
     try {
       const res = await fetch("/api/parse-mapped", {

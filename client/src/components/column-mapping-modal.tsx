@@ -19,13 +19,18 @@ import {
 } from "@/components/ui/select";
 import type { ColumnMapping } from "@shared/schema";
 import { MAPPING_FIELDS, NOT_IN_FILE, buildColumnMapping } from "./column-mapping";
+import { LEAD_SOURCES } from "@shared/schema";
+
+// Radix Select cannot hold an empty-string value, so "no lead source" needs
+// a sentinel — the same reason NOT_IN_FILE exists for the column mappings.
+const NONE_LEAD_SOURCE = "__none__";
 
 
 interface ColumnMappingModalProps {
   open: boolean;
   headers: string[];
   onCancel: () => void;
-  onContinue: (mapping: ColumnMapping) => void;
+  onContinue: (mapping: ColumnMapping, leadSource: string | null) => void;
   // §21 bulk page: COGS column may be absent from a supplier catalog.
   // Default (true) preserves the main upload flow exactly.
   cogsRequired?: boolean;
@@ -66,6 +71,10 @@ export function ColumnMappingModal({
   cogsRequired = true,
 }: ColumnMappingModalProps) {
   const [mappings, setMappings] = useState<Record<string, string>>({});
+  // §6 (2026-10-13): one lead source applied to the WHOLE upload. Blank =
+  // none. A per-row lead_source column in the file overrides it — the file
+  // is more specific than the dropdown.
+  const [leadSource, setLeadSource] = useState<string>("");
 
   useEffect(() => {
     if (open && headers.length > 0) {
@@ -86,7 +95,7 @@ export function ColumnMappingModal({
   const handleContinue = () => {
     // Serialization is derived from MAPPING_FIELDS (2026-09-08) — the
     // hand-typed literal here silently dropped promos/dateAdded once.
-    onContinue(buildColumnMapping(mappings));
+    onContinue(buildColumnMapping(mappings), leadSource || null);
   };
 
   return (
@@ -153,6 +162,28 @@ export function ColumnMappingModal({
               </div>
             );
           })}
+        </div>
+
+        {/* §6 (2026-10-13): one lead source for the whole upload. Sits below
+            the column mappings because it is NOT a column mapping — it is a
+            value applied to every row that does not carry its own. A
+            lead_source column in the file overrides it per row. */}
+        <div className="border-t pt-3 space-y-1">
+          <label className="text-xs font-medium">Lead source</label>
+          <Select value={leadSource || NONE_LEAD_SOURCE} onValueChange={(v) => setLeadSource(v === NONE_LEAD_SOURCE ? "" : v)}>
+            <SelectTrigger className="h-8 text-xs" data-testid="select-upload-lead-source">
+              <SelectValue placeholder="None" />
+            </SelectTrigger>
+            <SelectContent>
+              <SelectItem value={NONE_LEAD_SOURCE}>None</SelectItem>
+              {LEAD_SOURCES.map((ls) => (
+                <SelectItem key={ls} value={ls}>{ls}</SelectItem>
+              ))}
+            </SelectContent>
+          </Select>
+          <p className="text-[10px] text-muted-foreground">
+            Applied to every uploaded row. A <code>Lead Source</code> column in the file overrides it per row.
+          </p>
         </div>
 
         <DialogFooter className="gap-2">

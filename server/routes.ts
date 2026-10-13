@@ -175,7 +175,17 @@ function matchColumnName(header: string, field: string): boolean {
 // it — a supplier catalog with ASINs and no costs is the normal starting
 // case there. Default (false) preserves the main upload path exactly: COGS
 // column required, rows with unparseable COGS skipped.
-function mapRowsToAsins(rows: Record<string, any>[], mapping: ColumnMapping, cogsOptional = false): AsinInput[] {
+// §6 (2026-10-13): `defaultLeadSource` is the upload dialog's list-wide
+// pick. A per-row lead_source CSV column OVERRIDES it — the file is more
+// specific than the dropdown. An unrecognised cell falls back to the
+// list-wide pick rather than to null, so one bad cell in a labelled upload
+// does not silently lose the label.
+function mapRowsToAsins(
+  rows: Record<string, any>[],
+  mapping: ColumnMapping,
+  cogsOptional = false,
+  defaultLeadSource: LeadSource | null = null,
+): AsinInput[] {
   const asins: AsinInput[] = [];
 
   for (const row of rows) {
@@ -237,7 +247,11 @@ function mapRowsToAsins(rows: Record<string, any>[], mapping: ColumnMapping, cog
       addedAtRaw = String(row[mapping.dateAdded]).trim() || null;
     }
 
-    asins.push({ asin, cogs, buyLink, prepOverride, storageOverride, tags, notes, supplierSku, promoNotes, addedAtRaw });
+    const rowLead = mapping.leadSource && row[mapping.leadSource] !== undefined
+      ? normalizeLeadSource(row[mapping.leadSource])
+      : null;
+    asins.push({ asin, cogs, buyLink, prepOverride, storageOverride, tags, notes, supplierSku, promoNotes, addedAtRaw,
+                 leadSource: rowLead ?? defaultLeadSource });
   }
 
   if (asins.length === 0) {
@@ -1713,6 +1727,9 @@ export async function registerRoutes(
       // Opt-in COGS-optional mode (§21 bulk page only). Default: exactly the
       // historical behavior — ASIN and COGS mappings both required.
       const allowMissingCogs = String(req.body?.allowMissingCogs ?? "").toLowerCase() === "true";
+      // §6: the dialog's list-wide pick. Blank = none, which leaves
+      // lead_source NULL unless a per-row column supplies one.
+      const defaultLeadSource = normalizeLeadSource(req.body?.leadSource);
 
       if (!mapping.asin || (!mapping.cogs && !allowMissingCogs)) {
         res.status(400).json({ message: "ASIN and COGS column mappings are required" });
@@ -1720,7 +1737,7 @@ export async function registerRoutes(
       }
 
       const { rows } = parseFileToRawRows(req.file.buffer, req.file.originalname);
-      const asins = mapRowsToAsins(rows, mapping, allowMissingCogs);
+      const asins = mapRowsToAsins(rows, mapping, allowMissingCogs, defaultLeadSource);
 
       const hasPrepOverrides = asins.some((a) => a.prepOverride != null);
       const hasStorageOverrides = asins.some((a) => a.storageOverride != null);

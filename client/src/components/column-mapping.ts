@@ -42,6 +42,12 @@ export const MAPPING_FIELDS: MappingField[] = [
     label: "Buy Link",
     required: false,
     matchPatterns: [/buy\s*link/i, /\blink\b/i, /\burl\b/i, /\bsource\b/i, /supplier\s*link/i],
+    // §6 (2026-10-13): /\bsource\b/ matches "Lead Source" as readily as
+    // "Source URL", and buyLink is earlier in this list, so it claimed the
+    // header and leadSource auto-matched nothing. Caught by a test, not by
+    // a user — the mapping modal would have shown Lead Source bound to Buy
+    // Link, which is wrong in a way that is easy to click past.
+    excludePatterns: [/\blead[\s_-]*source\b/i],
   },
   {
     key: "prepCost",
@@ -87,6 +93,14 @@ export const MAPPING_FIELDS: MappingField[] = [
     label: "Date Added",
     required: false,
     matchPatterns: [/date\s*added/i, /^added$/i, /^date$/i],
+  },
+  {
+    key: "leadSource",
+    label: "Lead Source",
+    required: false,
+    // §6 (2026-10-13). Matches the ASINs-export header "Description: Lead
+    // Source" as well as a bare "lead source" / "lead_source".
+    matchPatterns: [/\blead[\s_-]*source\b/i],
   },
 ];
 

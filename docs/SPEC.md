@@ -451,8 +451,10 @@ so it never appears unbidden).
 
 ### Lead Source column (2026-10-13)
 
-Where a lead came from, as a first-class field. In the **Description** group
-directly after Supplier SKU, `defaultVisible: false`.
+Where a lead came from, as a first-class field. In the **Additional info**
+group directly after **Sourcing**, `defaultVisible: false`. It sits there
+rather than in Description because it is the same kind of field as Sourcing
+— how the lead reached us — not a product attribute (moved 2026-10-13).
 
 - **Closed set:** `ER` · `Spark` · `OA Hunt` · `OAL 24/7` · `MP` · `RA`,
   enforced by a CHECK on `asins.lead_source` and `bulk_list_asins.lead_source`

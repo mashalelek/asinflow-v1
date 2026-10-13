@@ -278,6 +278,9 @@ export interface ColumnMapping {
   // records the asymmetry).
   promos?: string | null;
   dateAdded?: string | null;
+  // §6 (2026-10-13): per-row lead source. OVERRIDES the upload dialog's
+  // list-wide pick — the file is more specific than the dropdown.
+  leadSource?: string | null;
 }
 
 export function getSelectedPrice(
@@ -633,7 +636,7 @@ export function extractDomain(url: string | null): string | null {
 
 export const DEFAULT_COLUMNS = [
   // Group 1 — Description
-  "product", "category", "brand", "supplier", "buyLink", "supplierSku", "leadSource",
+  "product", "category", "brand", "supplier", "buyLink", "supplierSku",
   // Group 2 — Stock
   "stock", "availableFba", "ordered", "fbaStock", "reserved", "sentToFba", "daysLeft",
   // Group 3 — Actuals
@@ -645,7 +648,7 @@ export const DEFAULT_COLUMNS = [
   // Group 5 — Sellers
   "sellersFba", "sellers", "sellers7d", "sellers30d", "fba7d", "fba30d",
   // Group 6 — Additional info
-  "tags", "notes", "promos", "sourcing", "meltable", "hazmat", "dg", "suppressed", "dateAdded", "lastReviewed", "priceAge", "submission", "status",
+  "tags", "notes", "promos", "sourcing", "leadSource", "meltable", "hazmat", "dg", "suppressed", "dateAdded", "lastReviewed", "priceAge", "submission", "status",
 ] as const;
 
 export type ColumnId = (typeof DEFAULT_COLUMNS)[number];
@@ -681,7 +684,6 @@ export const ALL_COLUMNS: ColumnDef[] = [
   // one stored field, two columns, one writer (BuyLinkEditor).
   { id: "buyLink", label: "Buy Link", defaultVisible: false, align: "left", group: "description" },
   { id: "supplierSku", label: "Supplier SKU", defaultVisible: false, align: "left", group: "description" },
-  { id: "leadSource", label: "Lead Source", defaultVisible: false, align: "left", group: "description" },
   // Group 2 — Stock
   { id: "stock", label: "Stock", defaultVisible: true, align: "right", group: "stock" },
   { id: "availableFba", label: "Available (FBA)", defaultVisible: false, align: "right", group: "stock" },
@@ -729,6 +731,9 @@ export const ALL_COLUMNS: ColumnDef[] = [
   { id: "notes", label: "Notes", defaultVisible: true, align: "left", group: "additional" },
   { id: "promos", label: "Promos", defaultVisible: false, align: "left", group: "additional" },
   { id: "sourcing", label: "Sourcing", defaultVisible: false, align: "left", group: "additional" },
+  // §6 (2026-10-13): moved here from Description — it is the same kind of
+  // field as Sourcing (where the lead came from), not a product attribute.
+  { id: "leadSource", label: "Lead Source", defaultVisible: false, align: "left", group: "additional" },
   { id: "meltable", label: "Meltable", defaultVisible: false, align: "left", group: "additional" },
   { id: "hazmat", label: "Hazmat", defaultVisible: false, align: "left", group: "additional" },
   { id: "dg", label: "DG", defaultVisible: false, align: "left", group: "additional" },
