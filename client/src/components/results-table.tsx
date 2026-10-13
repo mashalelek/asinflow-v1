@@ -345,13 +345,36 @@ interface ResultsTableProps {
 }
 
 // §18/§19 (2026-09-21). An unresolved ledger row means AF submitted an
-// offer that Amazon hasn't published yet — the PENDING half of the icon's
-// two-part definition. 'stale' counts as unresolved: it aged out of the
-// probe ladder without a verdict, so we still can't claim "listed".
+// offer that Amazon hasn't published yet. Since 2026-10-10 this is the icon's
+// ONLY source of pendingness — it is no longer a render style layered on a
+// flag value (the retired "two-part definition"); it IS the Pending state.
+//
+// 'stale' counts as unresolved: it aged out of the probe ladder without a
+// verdict, so we still can't claim "listed". It MUST stay in this set — the
+// same three statuses gate Add to SC (server: NON_TERMINAL / countOpenAmong,
+// client: home.tsx's disable set reads this very predicate), and an icon that
+// disagreed with that guard about whether a submit is in flight would be
+// exactly the inconsistency the two-source split exists to prevent.
 const UNRESOLVED_SUBMISSION = new Set(["pending", "processing", "stale"]);
 export function isSubmissionPending(result: AsinResult): boolean {
   const s = result.submission?.latest?.status;
   return s != null && UNRESOLVED_SUBMISSION.has(String(s));
+}
+
+// §6: the Listed tooltip carries how old the observation is. SC lag is real
+// but short (§18 A4) and nothing codes around it — the age is shown so the
+// user can judge for themselves, never used to decide anything.
+export function offerCheckedAge(result: AsinResult): string | null {
+  const ts = result.offerCheckedAt;
+  if (!ts) return null;
+  const ms = Date.now() - new Date(ts).getTime();
+  if (!Number.isFinite(ms) || ms < 0) return null;
+  const mins = Math.floor(ms / 60_000);
+  if (mins < 1) return "just now";
+  if (mins < 60) return `${mins}m ago`;
+  const hours = Math.floor(mins / 60);
+  if (hours < 24) return `${hours}h ago`;
+  return `${Math.floor(hours / 24)}d ago`;
 }
 
 // When the last submission definitively failed, the "+" should say WHY
@@ -1623,34 +1646,43 @@ function ProductCell({ result, price, settings, onResultUpdate, collisionBoundar
               </TooltipContent>
             </Tooltip>
           )}
-          {/* Live-offer truth (has_live_offer, getListingsItem-derived) — NOT
-              in_catalog (a tombstone-latched discovery flag). Checkmark only when
-              a live offer is confirmed; "+" for deleted (FALSE) and never-checked
-              (NULL) alike. The §21 bulk page swaps this slot for its own badge
+          {/* §6 Catalog icon — THREE STATES, TWO SOURCES (2026-10-10).
+              Pendingness comes from the §19 LEDGER, liveness from
+              has_live_offer (getListingsItem-derived, probe-only). Never
+              in_catalog — that is a tombstone-latched discovery flag.
+
+              Precedence is Pending > Listed > Not listed, and PENDING IS
+              CHECKED FIRST, regardless of the flag. It used to be nested
+              inside `hasLiveOffer === true`, which only worked because
+              ACCEPTED-at-submit wrote the flag TRUE (the 2026-09-21 "pending
+              half"). That write is gone — the flag now means ONLY "SC has a
+              listing" — so a freshly submitted ASIN is pending with the flag
+              still FALSE or NULL, and nesting would render it as "+".
+
+              The §21 bulk page swaps this slot for its own badge
               (in_database) via the productBadge render prop. */}
-          {productBadge ? productBadge(result) : result.hasLiveOffer === true ? (
-            // §18 two-part definition (2026-09-21): TRUE means "submitted
-            // (pending)" OR "listed (confirmed)". The §19 ledger row is what
-            // distinguishes them — unresolved ⇒ pending style, so the flag
-            // never overstates what Amazon has actually published.
-            isSubmissionPending(result) ? (
-              <Tooltip>
-                <TooltipTrigger asChild>
-                  <span className="relative flex-shrink-0 inline-flex" data-testid={`icon-catalog-pending-${result.asin}`}>
-                    <ShoppingBag className="h-3 w-3 text-blue-500/50" />
-                    <Clock className="h-2 w-2 text-amber-500 absolute -bottom-0.5 -right-0.5" />
-                  </span>
-                </TooltipTrigger>
-                <TooltipContent side="top"><p className="text-xs">Submitted — waiting for Amazon to publish</p></TooltipContent>
-              </Tooltip>
-            ) : (
-              <Tooltip>
-                <TooltipTrigger asChild>
-                  <ShoppingBag className="h-3 w-3 text-blue-500 flex-shrink-0" data-testid={`icon-catalog-live-${result.asin}`} />
-                </TooltipTrigger>
-                <TooltipContent side="top"><p className="text-xs">Listed in Seller Central (Active or Inactive)</p></TooltipContent>
-              </Tooltip>
-            )
+          {productBadge ? productBadge(result) : isSubmissionPending(result) ? (
+            <Tooltip>
+              <TooltipTrigger asChild>
+                <span className="relative flex-shrink-0 inline-flex" data-testid={`icon-catalog-pending-${result.asin}`}>
+                  <ShoppingBag className="h-3 w-3 text-blue-500/50" />
+                  <Clock className="h-2 w-2 text-amber-500 absolute -bottom-0.5 -right-0.5" />
+                </span>
+              </TooltipTrigger>
+              <TooltipContent side="top"><p className="text-xs">Submitted — waiting for Amazon to publish</p></TooltipContent>
+            </Tooltip>
+          ) : result.hasLiveOffer === true ? (
+            <Tooltip>
+              <TooltipTrigger asChild>
+                <ShoppingBag className="h-3 w-3 text-blue-500 flex-shrink-0" data-testid={`icon-catalog-live-${result.asin}`} />
+              </TooltipTrigger>
+              <TooltipContent side="top">
+                <p className="text-xs">Listed in Seller Central (Active or Inactive)</p>
+                {offerCheckedAge(result) && (
+                  <p className="text-[10px] text-muted-foreground">Checked {offerCheckedAge(result)}</p>
+                )}
+              </TooltipContent>
+            </Tooltip>
           ) : (
             <Tooltip>
               <TooltipTrigger asChild>

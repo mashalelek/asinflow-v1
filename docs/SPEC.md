@@ -425,12 +425,16 @@ so it never appears unbidden).
   precedence: snapshot when present (empty snapshot = currently clean → no
   badge), else latest-submission flags. Ledger flags stay in the tooltip and
   the filter regardless — the permanent record is unchanged.
-  - **Refresh paths:** (a) "Recheck" button in the column tooltip →
-    `POST /api/asins/:asin/recheck-issues`, which runs the single-ASIN
-    full-scope live-offer pass (same `syncLiveOffers` implementation — single
-    owner of `has_live_offer` preserved); (b) EVERY live-offer pass (07:00
-    cron, inventory-sync rider, recheck) writes the snapshot for each ASIN it
-    definitively probes. Fail-closed: transient probes write nothing.
+  - **Refresh paths (corrected 2026-10-10):** (a) "Recheck" button in the
+    column tooltip → `POST /api/asins/:asin/recheck-issues`, which runs the
+    listings reconcile STAGE scoped to one ASIN (`runFullScopePass`); (b)
+    EVERY probe through the §18 A2 primitive writes the snapshot for each ASIN
+    it definitively probes — the listings stage (Prices & Stock and Product
+    Info), the §19 ladder, and the §19 verdict/stale re-probes. Fail-closed:
+    transient probes write nothing.
+    The previous text named `syncLiveOffers`, a "07:00 cron" and the
+    "inventory-sync rider" — the rider was removed 2026-09-06, no cron ever
+    called the pass, and the module was deleted 2026-10-09.
   - **Rescans never modify ledger rows** — the snapshot lives on `asins`,
     the ledger is append/verify-only.
 - **Acknowledgment NEVER hides column flags** (contrast with the §19 panel):
@@ -444,6 +448,52 @@ so it never appears unbidden).
 - **Tooltip:** full submission history for the ASIN — submitted date, SKU,
   status, issue codes + messages, flags; newest first — so errors resolved
   over time stay visible.
+
+### Catalog icon — three states (2026-10-10)
+
+The Product cell's catalog icon reads from **two sources, because it shows
+two different facts** (§18): liveness from `asins.has_live_offer`, which only
+a probe of SC may write, and pendingness from the §19 ledger. Neither
+pretends to be the other.
+
+| state | render | condition | tooltip |
+|---|---|---|---|
+| **Pending** | hollow bag + small clock | the NEWEST `listing_submissions` row for the ASIN is `pending`, `processing` **or `stale`** — **regardless of the flag** | "Submitted — waiting for Amazon to publish" |
+| **Listed** | solid bag | `has_live_offer = TRUE` | "Listed in Seller Central (Active or Inactive)" + the age of `offer_checked_at` |
+| **Not listed** | `"+"` (Add to SC) | `FALSE` or `NULL` with no open ledger row | "Not listed — Add to SC"; when the newest ledger row is `failed`, **its** failure reason instead |
+
+Precedence is top to bottom: an open ledger row shows PENDING even if the
+flag is already TRUE (the submit is genuinely still unresolved), and even if
+it is FALSE (Amazon hasn't published yet — that is the whole point of the
+state).
+
+**The failure reason comes from the newest LEDGER ROW, not from
+`current_issues`.** This is not a style preference, it is forced: §18 writes
+the issue snapshot from the live probe, and an ASIN with no listing correctly
+snapshots `[]` (no listing, no listing issues). B07J2WWWD4 demonstrates it —
+after its 2026-10-10 reconcile, `current_issues` is `[]` while
+`listing_submissions` still holds the `13013` + `5886` that explain why there
+is nothing there. Reading the tooltip from the snapshot would show an empty
+reason on exactly the rows that most need one.
+
+**`in_catalog` is not read here**, or anywhere in the UI (§18: it is a
+one-way discovery latch that over-reports and retains tombstones).
+
+**Add to SC stays DISABLED while the latest submission is unresolved** — same
+ledger read as the Pending state, so the guard and the icon can never
+disagree about whether a submit is in flight. This is why **`stale` is in the
+Pending set**: the server's `NON_TERMINAL` / `countOpenAmong` and the client's
+disable set all gate on the same three statuses, and a `stale` row is still an
+unresolved submission — it aged out of the probe ladder without a verdict, so
+AF still cannot claim "listed". (An earlier draft of this table listed only
+`pending` and `processing`; that would have split the icon from the guard.)
+
+**What changed:** until 2026-09-21 the icon was flag-only, and "pending" did
+not exist. From 2026-09-21 to 2026-10-10 pendingness was encoded IN the flag
+(ACCEPTED wrote `TRUE`), with the ledger supplying only the render style —
+so the flag meant "listed OR submitted" and nothing reading it could tell
+which. The states above are the same three the user saw; what moved is where
+each one's truth comes from.
 
 ### Stock object population
 
@@ -3316,8 +3366,10 @@ live write to Seller Central:
    resurrection-reuse; the two fields never disagree.
 7. A batch with ≥1 ACCEPTED submission schedules the §19 **auto verify after
    submit** (probe ladder T+1m/+3m/+10m/+30m/+60m, each firing only while
-   rows stay open; any 200 for the submitted SKU writes `has_live_offer`
-   immediately — 2026-09-06) — nothing manual needed after a routine batch.
+   rows stay open; a 200 **with a non-empty summary** for the submitted SKU
+   writes `has_live_offer` immediately — A1, 2026-10-10) — nothing manual
+   needed after a routine batch. The ACCEPTED response itself writes nothing
+   to the flag; the pending ledger row drives the pending icon (§6).
 
 ### Source-of-truth ownership
 
@@ -3326,7 +3378,7 @@ live write to Seller Central:
 | Offer creation (putListingsItem) | Add-Offer path (only writer) |
 | Offer price at creation | Add-Offer path (price resolver) |
 | `primary_sku`, `asin_skus.is_primary` | Add-Offer path (promotes the live-offer SKU on creation); inventory-sync may set them only as bootstrap when no primary exists, never overwrite |
-| `has_live_offer`, `offer_checked_at` | Daily live-offer staleness pass (`live-offer-sync.ts`) + §19 API verify-sweep `'live'` transition (`verifyPending`) — both getListingsItem-derived — + §19 **manual `'live'` verdict** (2026-08-28, a definitive human determination; §14 manual-trigger completeness). Manual `'failed'`/`'deleted'` never write it |
+| `has_live_offer`, `has_buyable_offer` + both stamps, `current_issues`, `issues_checked_at` | **`writeLiveOfferVerdict` — the one primitive (§18 A2, 2026-10-10).** Called ONLY by probes: the listings reconcile stage (Prices & Stock + Product Info), the §19 post-submit ladder, and the §19 verdict / 48h-stale re-probes. No verdict, submission response, or human determination writes any of these fields. Supersedes the previous owners list, which named `live-offer-sync.ts` (deleted), the sweep's `'live'` transition, and the manual `'live'` verdict (2026-08-28, now a re-probe trigger) |
 | `sku_legend` entries (brand/dept codes, aliases) | Add-Offer approval flow |
 | `category`, `brand` (self-heal) | Add-Offer catalog fetch (per §14 catalog ownership) |
 
@@ -3369,38 +3421,45 @@ inventory summaries.
   order and by inventory-sync for every ASIN in `getInventorySummaries`, which
   **retains tombstones for deleted listings**), so it stays TRUE forever and
   over-reports. It is no longer read by the UI.
-- **`has_live_offer` is tri-state — TWO-PART definition (2026-09-21,
-  supersedes the 2026-09-06 "one definition"):** the catalog icon means
-  **"AF has submitted an offer (pending) OR Seller Central has a listing
-  record (confirmed)."** Concretely, `TRUE` ⇔ either (a) AF fired an
-  offer-add that Amazon ACCEPTED and the §19 ledger row is still
-  unresolved — the **pending** half — or (b) a listing record for ≥1 of the
-  ASIN's SKUs EXISTS at Seller Central (`getListingsItem` 200), regardless
-  of Active/Inactive status — the **confirmed** half. `FALSE` ⇔ every known
-  SKU definitively 404s AND ASIN discovery is empty (the 2026-08-28 rule,
-  unchanged), or the §19 verdict for the submission that set the pending
-  half came back `'failed'` with no other live SKU. `NULL` = never probed.
-  Fail-closed on transients. `offer_checked_at` records the last write.
+- **`has_live_offer` is tri-state, and it answers EXACTLY ONE question
+  (2026-10-10, supersedes the 2026-09-21 "two-part definition"):** *does a
+  listing record exist in Seller Central right now?* `TRUE` ⇔ a listing
+  record for ≥1 of the ASIN's SKUs EXISTS at SC — a `getListingsItem` 200
+  with a NON-EMPTY summary (A1), regardless of Active/Inactive status.
+  `FALSE` ⇔ every known SKU definitively 404s or returns a shell, AND ASIN
+  discovery is empty (the 2026-08-28 rule, unchanged). `NULL` = never
+  probed. Fail-closed on transients. `offer_checked_at` records the last
+  write.
 
-  **The two halves are visually distinct, which is what keeps the icon
-  honest**: while the §19 ledger row is unresolved the icon renders in a
-  PENDING style (hollow bag + a small clock, tooltip "Submitted — waiting
-  for Amazon to publish"); it goes SOLID only when a probe returns 200. The
-  §19 ledger row IS the source of that distinction — the flag alone can't
-  express it.
+  **The flag is written ONLY by a probe of SC.** No writer may set it from a
+  submission response, a ledger state, or a human verdict. That is the whole
+  principle: AF mirrors the SC catalog, and a mirror reflects what it
+  observed, not what it expects.
 
-  **Why the 2026-09-06 fail-closed decision is superseded:** that rule
-  ("only a definitive 200 may write TRUE") optimised for never showing an
-  offer that doesn't exist, at the cost of a user finishing Add to SC and
-  seeing "+" — the same state as "never submitted" — for minutes while
-  Amazon materialised the listing. The feedback for a deliberate user
-  action matters more than waiting for Amazon, and the pending style keeps
-  the claim truthful: it says "submitted", not "live". The probe ladder
-  did not disappear; it was demoted from first writer to CONFIRMER.
-  Icon tooltips: "Submitted — waiting for Amazon to publish" (pending),
-  "Listed in Seller Central (Active or Inactive)" (confirmed), "Not listed
-  — Add to SC" ("+"), and on a failed submission the "+" tooltip carries
-  the failure reason.
+  **The PENDING half is a LEDGER STATE, not a flag value.** "AF submitted an
+  offer and Amazon hasn't published it yet" is real and worth showing — it is
+  just not the same fact as "SC has a listing", and storing both in one
+  boolean is what made the boolean unreliable. The §19 ledger already records
+  it precisely (`pending` → `processing` → resolved), so the icon reads
+  pendingness from there and liveness from the flag. Two sources, two facts,
+  neither pretending to be the other. See §6 Product cell for the three
+  resulting icon states.
+
+  **Why the 2026-09-21 two-part definition is superseded.** It wrote
+  `has_live_offer = TRUE` the moment Amazon ACCEPTED a submission, so the
+  icon could react immediately to a user action — a real UX concern, and the
+  pending style did keep the claim truthful at the time. But it made
+  **three** non-probe writers legitimate: ACCEPTED-at-submit wrote TRUE, a
+  `'failed'` verdict reverted to FALSE, and a manual `'live'` verdict wrote
+  TRUE. Once the flag can mean either "observed" or "expected", nothing
+  reading it can tell which, and every later bug in this area traced back to
+  that ambiguity: B07J2WWWD4's `FALSE` was written by a verdict rather than a
+  probe, which is exactly why a single bad probe could overturn it with no
+  ledger trace. The UX concern is met in full by the ledger-driven pending
+  icon — the user still sees feedback on submit; it just comes from the
+  record of the submission rather than from a flag that claims SC has
+  something it doesn't.
+
 - **Truth source = `getListingsItem`** (via `checkSkuListingStatus`, the same
   404 primitive as §18 resurrection). Multi-SKU: check `primary_sku` first, then
   other `asin_skus` rows, short-circuit on the first live hit
@@ -3472,8 +3531,7 @@ inventory summaries.
   That combination is how B07J2WWWD4's wrong `TRUE` arrived with nothing to
   attribute it to.
 
-- **Writers after A2** (previous list corrected — see the phantom note
-  below):
+- **Writers — the COMPLETE list (2026-10-10). Every entry is a probe.**
   - **The listings reconcile stage** (§11 Refresh job) — phases a, b and c,
     scope per A3, outcomes per A2. The daily-pass/rider implementation is
     gone (`live-offer-sync.ts` **deleted** 2026-10-09); the §6 single-ASIN
@@ -3481,7 +3539,10 @@ inventory summaries.
   - **Product Info** — runs the same stage over its working set, one
     implementation, no second copy.
   - **The §19 post-submit ladder** (T+1/3/10/30/60m) — a probe, so subject
-    to A1, writing through the primitive.
+    to A1, writing through the primitive. Restored to being the FIRST writer
+    after a submit (§19 Auto verify), which it was until 2026-09-21.
+  - **The §19 verdict and stale-promotion re-probes** — a verdict is not a
+    writer, it is a TRIGGER for one. See the next bullet.
   - The one-off `script/backfill-has-live-offer.ts` is **deleted**
     (2026-10-09): the stage now covers the full catalog, every status,
     no-SKU ASINs, and ledgers every ASIN — none of which the script could
@@ -3497,19 +3558,44 @@ inventory summaries.
   SPEC described a schedule that had not run for a month; that is recorded
   here rather than quietly dropped.
 
-  **Still true at this commit, changed by the next one:** three NON-probe
-  writers survive — ACCEPTED-at-submit (`offer-add.ts`), the §19 `'failed'`
-  verdict's revert-to-FALSE, and the manual `'live'` verdict's write-TRUE.
-  They are the subject of the writers→re-probe commit and are described in
-  their own sections until then. A2's "one primitive" is complete for the
-  PROBE paths as of this commit.
+- **NON-PROBE WRITERS ARE GONE (2026-10-10). A verdict triggers a probe; it
+  never writes the flag.** The three that existed are removed outright:
 
-- **Fail-closed (amended 2026-09-21):** a definitive 200 writes `TRUE`
-  (confirmed half) and an ACCEPTED submit writes `TRUE` (pending half,
-  visually distinct); only all-SKUs-404 writes
-  `FALSE` — and only after the discovery step below comes back empty; any
-  transient (429/5xx/timeout) writes nothing and is retried next run. Never
-  coerced from missing data.
+  | was | is now |
+  |---|---|
+  | ACCEPTED at submit wrote `TRUE` (2026-09-21) | writes **nothing**; the pending ledger row alone drives the pending icon |
+  | §19 API `'failed'` verdict reverted to `FALSE` | triggers an **immediate re-probe** of the ASIN (all known SKUs + discovery) |
+  | manual `'live'` verdict wrote `TRUE` (2026-08-28) | triggers an **immediate re-probe** |
+
+  Extended to the rest of §19 for the same reason:
+  - manual **`'failed'`** / **`'deleted'`** → immediate re-probe (they wrote
+    nothing before, which was right, but "wrote nothing" also meant the row
+    could sit stale until the next full reconcile);
+  - **`processing` → `stale` promotion at 48h** → re-probe on promotion.
+
+  **Why a re-probe rather than a write.** A verdict is a statement about a
+  SUBMISSION; the flag is a statement about SELLER CENTRAL. They are usually
+  consistent and occasionally not, and when they diverge the API is the
+  better witness — a human resolving a row as `'live'` may be right about
+  having created the listing and wrong about which SKU or ASIN carries it.
+  Re-probing costs one Listings call and makes the two statements agree on
+  evidence instead of assertion. It also satisfies §14 manual-trigger
+  completeness, which is what motivated the 2026-08-28 manual-`'live'` write
+  in the first place: the user still gets an immediate, correct answer — it
+  just comes from SC rather than from their click.
+
+  Fail-closed is unchanged throughout: a throttled or 5xx re-probe writes
+  nothing, records `skipped_transient`, and the next sync retries. **A
+  verdict never forces a flag value just because the probe was inconclusive.**
+
+- **Fail-closed (2026-10-10, supersedes the 2026-09-21 amendment):** a
+  definitive 200 **with a non-empty summary** (A1) writes `TRUE`; only
+  all-SKUs-404-or-shell writes `FALSE`, and only after the discovery step
+  below comes back empty; any transient (429/5xx/timeout) writes nothing,
+  records `skipped_transient`, and is retried next run. Never coerced from
+  missing data. **An ACCEPTED submit writes NOTHING** — the 2026-09-21
+  pending-half write is removed; the ledger row alone drives the pending
+  icon.
 - **All-known-SKUs-404 → ASIN discovery before `FALSE` (2026-08-28):** every
   known SKU 404ing proves only "no offer on the SKUs AF knows," not "no
   offer" — an SC-created listing under a new SKU is invisible behind dead
@@ -3611,11 +3697,15 @@ sequential phases over one NDJSON progress stream
 `putListingsItem` returning **ACCEPTED** is only synchronous validation —
 Amazon then processes the offer asynchronously (minutes to hours), and any
 downstream step can suppress or reject it. ACCEPTED is therefore **never**
-rendered as "created/live" — but since 2026-09-21 it IS rendered as
-**"submitted (pending)"** on the §18 catalog icon, immediately, so a
-deliberate user action gets immediate feedback without overstating what
-Amazon has actually done. A batch audit found ~1-in-8 submissions were
-silent ghosts (e.g. restricted-generic `5886`, suppressed `13013`), invisible
+rendered as "created/live" — but it IS rendered as **"submitted (pending)"**
+on the §6 catalog icon, immediately, so a deliberate user action gets
+immediate feedback without overstating what Amazon has actually done. As of
+2026-10-10 that render comes from the LEDGER ROW this system creates, not
+from a flag write: ACCEPTED no longer touches `has_live_offer` (§18 Writers).
+The user-visible behaviour is identical; the difference is that the flag no
+longer claims SC has a listing before SC has said so.
+
+A batch audit found ~1-in-8 submissions were silent ghosts (e.g. restricted-generic `5886`, suppressed `13013`), invisible
 until manual checking. This system records every submission and resolves its
 real state on demand.
 
@@ -3664,24 +3754,32 @@ an in-process, one-shot follow-up: the SAME `verifyPending` sweep **scoped to
 that batch's ledger ids** (`ids` option — the status filter still applies, so
 already-resolved rows fall out of the scoped re-run), on a ladder of
 **T+1m, +3m, +10m, +30m, +60m**, each firing only if rows in scope are
-still open. On EVERY probe, a `200` for the submitted SKU writes
-`has_live_offer = TRUE` + `offer_checked_at` **immediately**, independent
-of whether the ledger row moves to `live` or stays `processing` (§18
-two-part definition) — a just-created SKU returns 200-with-empty-status
-while materializing, which is "listed", not "live yet".
+still open. On EVERY probe, a `200` **with a non-empty summary** for the
+submitted SKU writes `has_live_offer = TRUE` + `offer_checked_at`
+**immediately**,
+independent of whether the ledger row moves to `live` or stays `processing`
+— a just-created SKU returns 200-with-empty-STATUS while materializing,
+which is "listed", not "live yet". (A 200 with no SUMMARY at all is a
+different thing entirely: a SKU shell, which is not listed — §18 A1.)
 
-**The ladder is CONFIRMATION, not the first writer (2026-09-21, replaces
-"ACCEPTED alone writes nothing").** ≥1 ACCEPTED writes
-`has_live_offer = TRUE` at submit time, so the icon flips to the pending
-style on the submit response; a 200 from the ladder upgrades it to solid;
-a `'failed'` verdict (or all-SKU 404 once the ladder completes) reverts it
-to `FALSE` and the icon returns to "+" with the reason in its tooltip.
-Manual `'live'` still writes TRUE; manual `'failed'`/`'deleted'` still
-write nothing (a human's verdict on one SKU is weaker evidence than the
-API's). Add to SC is DISABLED for a row whose latest submission is still
-unresolved — no double submits while pending. A server restart loses the
-timers; the Refresh `listings` reconcile catches up, confirming or
-reverting exactly the same way.
+**THE LADDER IS THE FIRST WRITER AGAIN (2026-10-10, reverts the 2026-09-21
+demotion to "CONFIRMATION").** ≥1 ACCEPTED writes **nothing** to the flag.
+The icon still reacts the instant the submit response lands — it reads
+pendingness from the ledger row, which is created by the same submit — and
+the ladder's first 200 is what turns the flag TRUE. A `'failed'` verdict no
+longer reverts anything; it triggers a re-probe (§18 Writers), and the probe
+decides.
+
+This restores "only a probe may write the flag" without giving back the UX
+the 2026-09-21 change bought: the user finishing Add to SC sees the pending
+icon immediately, because the ledger row exists immediately. What they no
+longer see is a flag asserting SC has a listing before SC has said so.
+
+Add to SC is DISABLED for a row whose latest submission is still unresolved
+— no double submits while pending; the guard is keyed on the LEDGER, which
+is now also the only thing the pending icon reads. A server restart loses
+the timers; the Refresh `listings` reconcile catches up, writing exactly the
+same verdict from exactly the same probe.
 
 `has_buyable_offer` (§23) is deliberately NOT written at submit time: a
 submitted-but-unmaterialized offer is not BUYABLE, and the Repricer must
@@ -3693,7 +3791,9 @@ not count it.
   not a schedule.
 - **No new writers:** the scoped sweep carries `verifyPending`'s existing
   semantics — fail-closed probes (throttle/not-yet-found write nothing) and
-  the `'live'` → `has_live_offer` transition.
+  the probe-driven flag write, which since 2026-10-10 goes through the §18 A2
+  primitive and is keyed on A1 (`listed`, not `found`), so a SKU shell
+  cannot write TRUE here either.
 - Batch ids resolve from the newest `pending` ledger row per submitted
   (asin, sku) pair; pairs whose best-effort ledger write failed drop out
   (covered by pill + manual sweep, as before).
@@ -3727,6 +3827,13 @@ A `processing` row older than **48h** is promoted to `stale` (needs a human
 verdict). There is no submission-status API to poll and no processing SLA, so
 time alone never forces `failed`.
 
+**The promotion re-probes the ASIN (2026-10-10).** A row reaching 48h is the
+moment AF admits it does not know what happened, which is exactly when the
+flag is most likely to be stale too — and the human is about to be asked for
+a verdict, so they should be looking at a freshly observed flag rather than
+one last written two days ago. One Listings call, through the §18 A2
+primitive, fail-closed like any other probe.
+
 ### Manual verdicts
 
 `POST /api/submissions/{id}/resolve` with `verdict ∈ {live, failed, deleted}`,
@@ -3735,13 +3842,30 @@ stale-only; stale is merely when we *prompt*, a human may answer earlier.
 Already-resolved rows are rejected (409). Every verdict records `verdict_source`
 = `api` (sweep) or `manual` (human).
 
-**Manual `live` writes the flag (2026-08-28):** a manual `'live'` verdict
-writes `asins.has_live_offer = TRUE` + `offer_checked_at`, exactly like the
-API sweep's `'live'` transition. A manual verdict is a definitive human
-determination; the old defer-to-daily-pass rule violated §14 manual-trigger
-completeness (with crons off, "waits for the daily pass" meant "waits for a
-manual scan"). Manual `'failed'`/`'deleted'` still write **nothing** to the
-flag — deleting or failing one SKU doesn't mean the ASIN has no live offer.
+**EVERY manual verdict RE-PROBES; none writes the flag (2026-10-10,
+supersedes the 2026-08-28 manual-`'live'` write).** `live`, `failed` and
+`deleted` all trigger an immediate re-probe of the ASIN — all known SKUs,
+then discovery if they all come back absent — through the §18 A2 primitive.
+The probe writes the flag; the verdict writes the ledger row. Nothing else.
+
+The 2026-08-28 rule had manual `'live'` write `TRUE` directly, to satisfy
+§14 manual-trigger completeness: with crons off, "waits for the daily pass"
+meant "waits for a manual scan". The re-probe satisfies that requirement
+better — the user gets an immediate answer AND it is an observed one. A human
+resolving a row as `'live'` can be right that they created a listing and
+wrong about which SKU or ASIN carries it; the probe catches that, a direct
+write cannot.
+
+Manual `'failed'`/`'deleted'` previously wrote **nothing**, which was the
+right call on the evidence (deleting or failing one SKU doesn't mean the ASIN
+has no live offer) but left the flag untouched until the next full reconcile.
+They now re-probe for the same reason — the human has just told AF something
+changed, so this is the cheapest possible moment to go look.
+
+**The verdict never forces a value.** If the re-probe is throttled or 5xx it
+writes nothing and records `skipped_transient`; the ledger row still resolves
+as the human said. A verdict is a statement about a submission, not about
+Seller Central.
 
 **Rationale for the manual flow:** a listing the user deleted in SC is
 **API-indistinguishable** from a silent ghost — both read as absent with no
@@ -3750,7 +3874,8 @@ resolution flow must let a human state "this was deleted," rather than the
 system inferring failure.
 
 **`deleted` scope:** touches **only** the ledger row and `asin_skus.is_primary`
-(demoted to false). It **never** writes the analyze-owned `asins` fields
+(demoted to false), plus the re-probe above, which may move the flag on the
+evidence it finds. It **never** writes the analyze-owned `asins` fields
 (`in_catalog`, `primary_sku`) — those are §14-owned and self-correct on the
 next analyze; deleting one SKU doesn't mean a multi-offer ASIN has no live
 offer. The `asin_skus` row is kept, so resurrection can reuse a 404'ing SKU.

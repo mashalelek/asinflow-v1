@@ -134,6 +134,7 @@ export interface AsinResult {
   skus?: string[];
   inCatalog?: boolean;                // internal discovery latch — NOT the icon signal
   hasLiveOffer?: boolean | null;      // live-offer truth (getListingsItem); null = never checked. Drives the catalog icon.
+  offerCheckedAt?: string | null;     // §6: age shown in the Listed tooltip (§18 A4 — shown, never acted on)
   tags?: { name: string; color: string }[];
   submission?: SubmissionColumnData | null; // §6 Submission column (ledger, read-only)
   // §6 item 7: per-ASIN current-issues snapshot (asins.current_issues /

@@ -1137,7 +1137,7 @@ export async function registerRoutes(
       const result = await query(`
         SELECT
           a.asin, a.title, a.image_url, a.brand, a.category, a.weight_lb, a.buy_link, a.status, a.status_reason,
-          a.primary_sku, a.in_catalog, a.has_live_offer, a.current_issues, a.issues_checked_at, a.notes, a.promo_notes, a.supplier_sku, a.is_meltable, a.is_hazmat, a.is_dangerous_good, a.is_search_suppressed, a.suppression_reasons, a.last_reviewed_at, a.added_at, a.is_wholesale, a.is_oa,
+          a.primary_sku, a.in_catalog, a.has_live_offer, a.offer_checked_at, a.current_issues, a.issues_checked_at, a.notes, a.promo_notes, a.supplier_sku, a.is_meltable, a.is_hazmat, a.is_dangerous_good, a.is_search_suppressed, a.suppression_reasons, a.last_reviewed_at, a.added_at, a.is_wholesale, a.is_oa,
           e.cogs, e.cogs_source, e.actual_cogs, e.estimated_cogs, e.estimated_cogs_source, e.prep_override, e.storage_override,
           e.lowest_fba_price, e.buy_box_price, e.buy_box_fulfillment, e.lowest_price,
           e.sellers_fba, e.sellers_fbm,
@@ -1350,6 +1350,7 @@ export async function registerRoutes(
           skus: skusMap.get(row.asin) ?? [],
           inCatalog: row.in_catalog ?? false,
           hasLiveOffer: row.has_live_offer ?? null,
+          offerCheckedAt: row.offer_checked_at ?? null,
           currentIssues: row.current_issues ?? null,
           issuesCheckedAt: row.issues_checked_at ?? null,
           tags: tagsMap.get(row.asin) ?? [],
@@ -2681,8 +2682,12 @@ export async function registerRoutes(
       res.status(400).json({ error: "verdict must be live | failed | deleted" }); return;
     }
     try {
-      await resolveSubmissionManual(id, verdict);
-      res.json({ ok: true });
+      // The verdict re-probes the ASIN (§19, 2026-10-10) — the outcome is
+      // surfaced so the caller can see what SC actually said, including
+      // `skipped_transient` when the probe was throttled and the flag
+      // therefore did not move.
+      const { flagOutcome } = await resolveSubmissionManual(id, verdict);
+      res.json({ ok: true, flagOutcome });
     } catch (err: any) {
       const msg = err?.message ?? "resolve failed";
       res.status(/already resolved|not found/.test(msg) ? 409 : 500).json({ error: msg });

@@ -418,27 +418,21 @@ export async function offerAddForAsin(
         );
       }
 
-      // §18 PENDING half (2026-09-21): ≥1 ACCEPTED writes has_live_offer
-      // NOW, so the catalog icon flips on the submit response instead of
-      // showing "+" — indistinguishable from never-submitted — for the
-      // minutes Amazon takes to materialize the listing. The ledger row
-      // below stays 'pending' until a probe resolves it, and THAT is what
-      // renders the icon in its pending style, so the flag never overstates:
-      // it claims "submitted", not "live". The T+1/3/10/30/60m ladder is
-      // demoted from first writer to confirmer (§19).
+      // ACCEPTED WRITES NOTHING TO has_live_offer (§18 Writers, 2026-10-10).
       //
-      // has_buyable_offer is deliberately NOT touched: a submitted-but-
-      // unmaterialized offer is not BUYABLE and must not reach the Repricer
-      // (§23). Best-effort — never mask a real SC submission.
-      try {
-        await (deps.queryFn as any)(
-          `UPDATE asins SET has_live_offer = TRUE, offer_checked_at = now() WHERE asin = $1`,
-          [input.asin],
-        );
-      } catch (err: any) {
-        // eslint-disable-next-line no-console
-        console.error(`[offer-add] failed to set pending has_live_offer for ${input.asin}: ${err?.message ?? err}`);
-      }
+      // The 2026-09-21 "PENDING half" wrote has_live_offer = TRUE here, so
+      // the catalog icon would flip on the submit response rather than show
+      // "+" for the minutes Amazon takes to materialize. The UX concern was
+      // real and is unchanged — but the flag answers "does SC have a
+      // listing", and at this moment SC does not. Writing it here made the
+      // flag mean "listed OR submitted", and nothing reading it could tell
+      // which; that ambiguity is what let a bad probe silently overturn a
+      // verdict-written value (B07J2WWWD4).
+      //
+      // The icon still flips immediately: it reads PENDINGNESS from the
+      // ledger row created just below, which exists the instant this submit
+      // lands (§6 Catalog icon). Same feedback, honest source. The
+      // T+1/3/10/30/60m ladder is the first writer of the flag again (§19).
 
       // Record the fire in the verification ledger. ACCEPTED ≠ live — this row
       // starts 'pending' and only the Verify sweep resolves it. Best-effort:

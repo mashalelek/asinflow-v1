@@ -149,31 +149,50 @@ describe("countOpenAmong", () => {
   });
 });
 
-// §19 manual-'live' flag write (2026-08-28, §14 manual-trigger completeness):
-// a manual 'live' verdict writes asins.has_live_offer = TRUE + offer_checked_at
-// exactly like the API sweep transition; 'failed'/'deleted' never touch the flag.
-describe("manual verdict — has_live_offer flag write (§19, 2026-08-28)", () => {
+// §19 manual verdicts RE-PROBE (2026-10-10, supersedes the 2026-08-28
+// manual-'live' flag write). A verdict is a statement about a SUBMISSION; the
+// flag is a statement about SELLER CENTRAL. No verdict writes the flag — all
+// three trigger a probe and the probe decides. These are behavioural: the fake
+// query records every statement, so "wrote nothing" is checked against what
+// actually reached the DB layer.
+describe("manual verdict — re-probes, never writes the flag (§19, 2026-10-10)", () => {
   const flagWrites = (updates: Array<{ sql: string; params: any[] }>) =>
-    updates.filter((u) => /UPDATE asins SET has_live_offer = TRUE, offer_checked_at = now\(\)/.test(u.sql));
+    updates.filter((u) => /SET has_live_offer/.test(u.sql));
+  // The re-probe reads the prior flag before deciding — its presence is how
+  // we know a probe was attempted at all.
+  const prevFlagReads = (updates: Array<{ sql: string; params: any[] }>) =>
+    updates.filter((u) => /SELECT has_live_offer FROM asins/.test(u.sql));
 
-  it("manual 'live' on a non-terminal row writes the flag for the row's ASIN", async () => {
-    const { query, updates } = makeFakeQuery({ a: "pending" });
-    const r = await resolveSubmissionsBulk(["a"], "live", query as any);
-    expect(r.resolved).toEqual(["a"]);
-    const w = flagWrites(updates);
-    expect(w).toHaveLength(1);
-    expect(w[0].params).toEqual(["B000TEST01"]);
-  });
+  for (const verdict of ["live", "failed", "deleted"] as const) {
+    it(`manual '${verdict}' writes NO flag UPDATE of its own`, async () => {
+      const { query, updates } = makeFakeQuery({ a: "pending" });
+      const r = await resolveSubmissionsBulk(["a"], verdict, query as any, {
+        sellerId: "SELLER", httpGet: (async () => { throw new Error("probe unavailable"); }) as any,
+      });
+      expect(r.resolved).toEqual(["a"]);
+      // The probe threw, so nothing was written — and critically, the verdict
+      // still resolved. A throttled probe can never refuse the human.
+      expect(flagWrites(updates)).toEqual([]);
+    });
 
-  it("manual 'failed' writes nothing to the flag", async () => {
+    it(`manual '${verdict}' attempts a re-probe of the row's ASIN`, async () => {
+      const { query, updates } = makeFakeQuery({ a: "pending" });
+      await resolveSubmissionsBulk(["a"], verdict, query as any, {
+        sellerId: "SELLER", httpGet: (async () => { throw new Error("probe unavailable"); }) as any,
+      });
+      const reads = prevFlagReads(updates);
+      expect(reads).toHaveLength(1);
+      expect(reads[0].params).toEqual(["B000TEST01"]);
+    });
+  }
+
+  it("the ledger verdict lands even when the re-probe cannot run", async () => {
     const { query, updates } = makeFakeQuery({ a: "stale" });
-    await resolveSubmissionsBulk(["a"], "failed", query as any);
-    expect(flagWrites(updates)).toEqual([]);
-  });
-
-  it("manual 'deleted' writes nothing to the flag (one dead SKU is not no-live-offer)", async () => {
-    const { query, updates } = makeFakeQuery({ a: "processing" });
-    await resolveSubmissionsBulk(["a"], "deleted", query as any);
-    expect(flagWrites(updates)).toEqual([]);
+    await resolveSubmissionsBulk(["a"], "live", query as any, {
+      sellerId: "SELLER", httpGet: (async () => { throw new Error("429") }) as any,
+    });
+    const ledger = updates.filter((u) => /UPDATE listing_submissions SET verify_status/.test(u.sql));
+    expect(ledger).toHaveLength(1);
+    expect(ledger[0].params).toEqual(["a", "live"]);
   });
 });

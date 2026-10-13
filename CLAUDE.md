@@ -211,6 +211,27 @@ row, and deleting one with a generated SKU or a submission record destroys real
 history and frees a registry NNN that is supposed to be stable. `refresh_runs`
 outcomes are history — leave them.
 
+## Never `git checkout <file>` to undo an experiment
+
+When mutation-testing — deliberately breaking code to prove a test catches it
+— undo the mutation with a **file copy**, never `git checkout <file>`.
+
+```bash
+cp server/thing.ts /tmp/thing.bak     # before
+# ...mutate, run the test...
+cp /tmp/thing.bak server/thing.ts     # after
+```
+
+**Why:** `git checkout <file>` reverts to HEAD, which silently discards every
+uncommitted change in that file — not just the mutation. During the SC-mirror
+commit 2 this destroyed a full file of work twice in one session
+(`listing-submissions-repo.ts`, then `results-table.tsx`); both were
+recoverable only because the edits had been applied by a saved script. The
+command looks like an undo and is actually "discard my work since the last
+commit".
+
+Applies to `git restore <file>` and `git stash` mid-edit for the same reason.
+
 ## Migrations run from committed code only
 
 Migrations and any DB-mutating script run only from committed code.

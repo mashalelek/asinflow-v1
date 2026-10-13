@@ -3,7 +3,7 @@
 
 import { query as defaultQuery } from "./db";
 import { anyBuyable } from "./live-offer-check";
-import { writeLiveOfferVerdict } from "./live-offer-write";
+import { writeLiveOfferVerdict, reprobeAsinLiveOffer } from "./live-offer-write";
 import { probeListingState, extractConflictAsin } from "./submission-verify";
 import type { HttpGetFn } from "./sku-catalog-fetch";
 
@@ -158,21 +158,32 @@ export async function verifyPending(
         { query, outcomes: (asin, outcome) => { flagOutcomes[asin] = outcome; } },
       );
     }
-    // §18/§19 (2026-09-21): a definitive 'failed' verdict REVERTS the
-    // pending flag the submit set — the icon goes back to "+" with the
-    // reason. Guarded: failing ONE SKU of a multi-offer ASIN is not
-    // evidence the ASIN has no live offer, so we only revert when no other
-    // ledger row for this ASIN resolved 'live'.
+    // A 'failed' verdict RE-PROBES; it does not write the flag (§18 Writers,
+    // 2026-10-10). It used to revert has_live_offer to FALSE directly, guarded
+    // on no other ledger row for the ASIN being 'live' — a guard that existed
+    // because a verdict is weak evidence about an ASIN: failing ONE SKU of a
+    // multi-offer ASIN says nothing about the others. The probe needs no such
+    // guard, because it looks at every SKU and answers the actual question.
+    //
+    // This is also the write that put the wrong FALSE on B07J2WWWD4 in the
+    // first place: correct by luck, from a verdict rather than an observation,
+    // which is why a single bad probe could later overturn it.
     if (status === "failed") {
-      await query(
-        `UPDATE asins SET has_live_offer = FALSE, offer_checked_at = now()
-          WHERE asin = $1
-            AND NOT EXISTS (
-              SELECT 1 FROM listing_submissions ls
-               WHERE ls.asin = $1 AND ls.verify_status = 'live'
-            )`,
-        [row.asin],
-      );
+      await reprobeAsinLiveOffer(row.asin, {
+        query, outcomes: (asin, outcome) => { flagOutcomes[asin] = outcome; },
+        sellerId, httpGet: opts.httpGet,
+      });
+    }
+
+    // A 48h stale promotion re-probes too (§19): the row reaching 48h is the
+    // moment AF admits it does not know what happened, which is exactly when
+    // the flag is most likely stale — and a human is about to be asked for a
+    // verdict, so they should be looking at a freshly observed one.
+    if (status === "stale" && probe.classification.status === "processing") {
+      await reprobeAsinLiveOffer(row.asin, {
+        query, outcomes: (asin, outcome) => { flagOutcomes[asin] = outcome; },
+        sellerId, httpGet: opts.httpGet,
+      });
     }
 
     if (status === "live") {
@@ -231,7 +242,10 @@ export async function resolveSubmissionManual(
   id: string,
   verdict: ManualVerdict,
   query: QueryLike = defaultQuery as any,
-): Promise<void> {
+  // Injected for tests; production uses the env seller id and the real
+  // spApiGet via reprobeAsinLiveOffer's defaults.
+  deps?: { sellerId?: string; httpGet?: HttpGetFn },
+): Promise<{ flagOutcome: string | null }> {
   const rows = (await query(`SELECT asin, sku, verify_status FROM listing_submissions WHERE id = $1`, [id])).rows;
   if (rows.length === 0) throw new Error(`listing_submissions ${id} not found`);
   const { asin, sku, verify_status } = rows[0];
@@ -250,25 +264,35 @@ export async function resolveSubmissionManual(
     [id, verdict],
   );
 
-  // Manual 'live' writes the flag (§19, 2026-08-28): a manual verdict is a
-  // definitive human determination — deferring the icon to a future pass
-  // violated §14 manual-trigger completeness (crons are off in this
-  // deployment, so "waits for the daily pass" meant "waits for a manual
-  // scan"). 'failed'/'deleted' still write nothing to the flag: failing or
-  // deleting ONE SKU does not mean the ASIN has no live offer.
+  // EVERY manual verdict RE-PROBES; none writes the flag (§19, 2026-10-10,
+  // supersedes the 2026-08-28 manual-'live' write).
   //
-  // has_buyable_offer is deliberately NOT written here (§23, 2026-09-15):
-  // manual verdicts never write it. A human saying "it's live" is not
-  // evidence of a BUYABLE offer — only summaries[].status from a definitive
-  // probe is, and the sweep above writes it from exactly that. Leaving it
-  // NULL keeps the ASIN out of the Repricer view (fail-closed) and counted
-  // in its "not yet checked" note until a real probe answers.
-  if (verdict === "live") {
-    await query(
-      `UPDATE asins SET has_live_offer = TRUE, offer_checked_at = now() WHERE asin = $1`,
-      [asin],
-    );
-  }
+  // The old rule had 'live' write has_live_offer = TRUE directly, to satisfy
+  // §14 manual-trigger completeness: with crons off, "waits for the daily
+  // pass" meant "waits for a manual scan". The re-probe satisfies that
+  // better — the user still gets an immediate answer AND it is an observed
+  // one. A human resolving a row as 'live' can be right that they created a
+  // listing and wrong about which SKU or ASIN carries it; the probe catches
+  // that, a direct write cannot.
+  //
+  // 'failed'/'deleted' wrote nothing before, which was right on the evidence
+  // but left the flag untouched until the next full reconcile. They re-probe
+  // for the same reason: the human has just said something changed, so this
+  // is the cheapest possible moment to go look.
+  //
+  // has_buyable_offer is no longer a special case — the primitive writes it
+  // from the same probe's summaries[].status (§23), so it can neither be
+  // skipped nor set from a human's assertion.
+  //
+  // NON-FATAL by construction (see reprobeAsinLiveOffer): a throttled probe
+  // records skipped_transient and writes nothing. The ledger row above has
+  // ALREADY been written — the verdict is the human's to make, and this must
+  // never be able to refuse it.
+  const flagOutcomes: Record<string, string> = {};
+  await reprobeAsinLiveOffer(asin, {
+    query, outcomes: (a, o) => { flagOutcomes[a] = o; },
+    sellerId: deps?.sellerId, httpGet: deps?.httpGet,
+  });
 
   // DELETED: the SKU is gone from SC. Demote ONLY this SKU's is_primary and keep
   // the asin_skus row — resurrection reuses a 404'ing SKU (candidate →
@@ -286,6 +310,8 @@ export async function resolveSubmissionManual(
       [asin, sku],
     );
   }
+
+  return { flagOutcome: flagOutcomes[asin] ?? null };
 }
 
 // §19 bulk manual verdicts: the single-row semantics applied per id (same
@@ -300,11 +326,12 @@ export async function resolveSubmissionsBulk(
   ids: string[],
   verdict: ManualVerdict,
   query: QueryLike = defaultQuery as any,
+  deps?: { sellerId?: string; httpGet?: HttpGetFn },
 ): Promise<BulkResolveResult> {
   const out: BulkResolveResult = { resolved: [], skipped: [] };
   for (const id of ids) {
     try {
-      await resolveSubmissionManual(id, verdict, query);
+      await resolveSubmissionManual(id, verdict, query, deps);
       out.resolved.push(id);
     } catch (err: any) {
       out.skipped.push({ id, reason: err?.message ?? "unknown error" });

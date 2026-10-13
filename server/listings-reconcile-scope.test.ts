@@ -82,10 +82,43 @@ describe("A2: the one-primitive invariant, enforced by grep", () => {
       // column are fine; an assignment is not.
       if (/SET\s+has_live_offer\s*=/.test(s)) writers.push(f);
     }
-    // offer-add.ts and listing-submissions-repo.ts still carry the three
-    // NON-probe writers until the writers→re-probe commit (§18 "still true at
-    // this commit"). Everything else must be clean, and the probe paths are.
-    expect(writers.sort()).toEqual(["listing-submissions-repo.ts", "offer-add.ts"]);
+    // As of 2026-10-10 the list is EMPTY: the three non-probe writers
+    // (ACCEPTED-at-submit, the 'failed' revert, manual 'live') are gone, so
+    // writeLiveOfferVerdict is the only place in the codebase that assigns
+    // the flag. This assertion is the A2 invariant in its final form —
+    // anything appearing here is a new writer and must be justified in §18.
+    expect(writers.sort()).toEqual([]);
+  });
+
+  it("no verdict, submit response, or human determination writes the flag", () => {
+    // §18 Writers (2026-10-10): a verdict TRIGGERS a probe, never writes.
+    const oa = code("offer-add.ts");
+    expect(oa).not.toMatch(/has_live_offer/);          // ACCEPTED writes nothing
+    const repo = code("listing-submissions-repo.ts");
+    expect(repo).not.toMatch(/SET has_live_offer/);     // no revert, no manual TRUE
+    // and the verdict paths call the re-probe instead
+    expect(repo).toMatch(/reprobeAsinLiveOffer/);
+  });
+
+  it("all three verdict paths and the 48h promotion re-probe", () => {
+    const repo = code("listing-submissions-repo.ts");
+    // sweep 'failed' + the stale promotion, in verifyPending
+    const sweep = repo.slice(repo.indexOf("export async function verifyPending"),
+                             repo.indexOf("export async function countOpenAmong"));
+    expect(sweep).toMatch(/if \(status === "failed"\)[\s\S]{0,400}reprobeAsinLiveOffer/);
+    expect(sweep).toMatch(/if \(status === "stale"[\s\S]{0,400}reprobeAsinLiveOffer/);
+    // manual live/failed/deleted — one unconditional re-probe, not per-verdict
+    const manual = repo.slice(repo.indexOf("export async function resolveSubmissionManual"));
+    expect(manual).toMatch(/await reprobeAsinLiveOffer\(asin/);
+    expect(manual).not.toMatch(/if \(verdict === "live"\)[\s\S]{0,200}has_live_offer/);
+  });
+
+  it("the re-probe is non-fatal — it can never refuse the human's verdict", () => {
+    const w = code("live-offer-write.ts");
+    const fn = w.slice(w.indexOf("export async function reprobeAsinLiveOffer"));
+    // every failure path returns a recorded outcome; none rethrows
+    expect(fn).toMatch(/catch \(err: any\) \{\s*return recordError/);
+    expect(fn).not.toMatch(/throw /);
   });
 
   it("the primitive itself writes both flags in one statement", () => {
@@ -138,6 +171,42 @@ describe("A2: the one-primitive invariant, enforced by grep", () => {
     expect(body).toMatch(/\.\.\.report\.outcomes/);
     // the old flips+discoveries-only reconstruction is gone
     expect(body).not.toMatch(/for \(const f of a\.flips\) outcomes/);
+  });
+});
+
+describe("§6 icon: pending is evaluated BEFORE the flag", () => {
+  const rt = () =>
+    stripComments(readFileSync(join(__dirname, "..", "client", "src", "components", "results-table.tsx"), "utf8"));
+
+  it("the pending branch is not nested inside hasLiveOffer === true", () => {
+    // The old structure was `hasLiveOffer === true ? (pending ? A : B) : C`,
+    // which only worked because ACCEPTED-at-submit wrote the flag TRUE. With
+    // that write gone a freshly submitted ASIN has the flag FALSE/NULL, so
+    // nesting would render it as "+" — never-submitted.
+    const s = rt();
+    expect(s).toMatch(/productBadge\(result\) : isSubmissionPending\(result\) \? \(/);
+    expect(s).not.toMatch(/productBadge\(result\) : result\.hasLiveOffer === true \? \(/);
+  });
+
+  it("the three states appear in precedence order in the source", () => {
+    const s = rt();
+    const pending = s.indexOf("icon-catalog-pending-");
+    const live = s.indexOf("icon-catalog-live-");
+    const plus = s.indexOf("submissionFailureReason(result) ??");
+    expect(pending).toBeGreaterThan(-1);
+    expect(pending).toBeLessThan(live);
+    expect(live).toBeLessThan(plus);
+  });
+
+  it("the Listed tooltip carries the offer_checked_at age", () => {
+    expect(rt()).toMatch(/offerCheckedAge\(result\)/);
+  });
+
+  it("offerCheckedAt is threaded from the query through to AsinResult", () => {
+    expect(stripComments(readFileSync(join(__dirname, "routes.ts"), "utf8")))
+      .toMatch(/offerCheckedAt: row\.offer_checked_at/);
+    expect(stripComments(readFileSync(join(__dirname, "..", "shared", "schema.ts"), "utf8")))
+      .toMatch(/offerCheckedAt\?: string \| null/);
   });
 });
 

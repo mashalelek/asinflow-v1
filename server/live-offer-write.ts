@@ -21,6 +21,8 @@
 // as absent. This function never sees the distinction — it is handed a verdict.
 
 import type { ListingIssueLite } from "./sku-listing-fetch";
+import { checkAsinLiveOffer, anyBuyable } from "./live-offer-check";
+import type { HttpGetFn } from "./sku-catalog-fetch";
 
 type QueryLike = (sql: string, params?: any[]) => Promise<{ rows: any[]; rowCount: number | null }>;
 
@@ -116,4 +118,70 @@ export function recordError(asin: string, msg: string, outcomes: OutcomeSink): L
   const outcome = `error: ${msg}`;
   outcomes(asin, outcome);
   return outcome;
+}
+
+/**
+ * Re-probe one ASIN and write whatever SC says (§18 Writers, 2026-10-10).
+ *
+ * This is what a §19 verdict or a 48h stale promotion TRIGGERS. A verdict is
+ * a statement about a SUBMISSION; the flag is a statement about SELLER
+ * CENTRAL. They are usually consistent and occasionally not, and when they
+ * diverge the API is the better witness — a human resolving a row as 'live'
+ * can be right that they created a listing and wrong about which SKU or ASIN
+ * carries it. So the verdict never writes the flag; it asks.
+ *
+ * Probes every known SKU, then ASIN discovery if they all come back absent —
+ * `checkAsinLiveOffer`, the same path the reconcile stage uses.
+ *
+ * FAIL-CLOSED AND NON-FATAL. A throttled or 5xx probe writes nothing and
+ * records skipped_transient; the caller's ledger write still stands. The
+ * verdict is the human's to make — this must never be able to refuse it.
+ */
+export async function reprobeAsinLiveOffer(
+  asin: string,
+  deps: {
+    query: QueryLike;
+    outcomes: OutcomeSink;
+    sellerId?: string;
+    httpGet?: HttpGetFn;
+  },
+): Promise<LiveOfferOutcome> {
+  const sellerId = deps.sellerId ?? process.env.SP_API_SELLER_ID;
+  if (!sellerId) return recordError(asin, "SP_API_SELLER_ID not configured", deps.outcomes);
+
+  let prevFlag: boolean | null = null;
+  try {
+    const r = await deps.query(`SELECT has_live_offer FROM asins WHERE asin = $1`, [asin]);
+    prevFlag = r.rows[0]?.has_live_offer ?? null;
+  } catch (err: any) {
+    return recordError(asin, `prev-flag read failed: ${err?.message ?? err}`, deps.outcomes);
+  }
+
+  let res: Awaited<ReturnType<typeof checkAsinLiveOffer>>;
+  try {
+    res = await checkAsinLiveOffer(asin, sellerId, { query: deps.query, httpGet: deps.httpGet });
+  } catch (err: any) {
+    return recordError(asin, `re-probe failed: ${err?.message ?? err}`, deps.outcomes);
+  }
+
+  if (res.verdict === "skip") {
+    // transient → retried by the next sync. no_sku → nothing to probe, which
+    // retrying cannot fix; recorded as an error so it is visible rather than
+    // silently indistinguishable from a throttle.
+    return res.skipReason === "no_sku"
+      ? recordError(asin, "no known SKUs to probe", deps.outcomes)
+      : recordTransient(asin, deps.outcomes);
+  }
+
+  return writeLiveOfferVerdict(
+    {
+      asin,
+      prevFlag,
+      listed: res.verdict === "live",
+      buyable: anyBuyable([res.statuses ?? []]),
+      issues: res.issues ?? [],
+      event: res.discovered && res.discovered.length > 0 ? "discovery" : undefined,
+    },
+    { query: deps.query, outcomes: deps.outcomes },
+  );
 }
