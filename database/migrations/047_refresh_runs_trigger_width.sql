@@ -1,0 +1,13 @@
+-- Migration 046 widened the refresh_runs.trigger CHECK to allow
+-- 'sc_discovery' but NOT the column, which is VARCHAR(10). 'sc_discovery' is
+-- 12 characters, so every phase-c onboarding ledger row failed with
+-- "value too long for type character varying(10)" — caught and logged by
+-- onboardNewAsins, so the onboarding itself succeeded while its prices/fees
+-- ledger rows silently did not exist.
+--
+-- Found on the first live phase-c run (2026-10-13): 4 ASINs onboarded, zero
+-- refresh_runs rows under trigger 'sc_discovery'.
+--
+-- VARCHAR(32) rather than (12): the next trigger name should not need a
+-- third migration.
+ALTER TABLE refresh_runs ALTER COLUMN trigger TYPE VARCHAR(32);

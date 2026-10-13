@@ -287,6 +287,33 @@ describe("phase c wiring", () => {
     expect(h).toMatch(/const phaseC = onlyPhaseC \|\| String\(req\.query\.phaseC \?\? ""\) === "1"/);
   });
 
+  it("no synthetic COGS survives onboarding", () => {
+    // upsertAsinResult writes estimated_cogs from AsinInput.cogs on INSERT,
+    // tagged 'csv'. Phase c has no COGS, so its 0 placeholder must be
+    // cleared — §18 phase c step 2: "COGS stays NULL; no synthetic zero
+    // stored". Tightly guarded so it can only undo what onboarding wrote.
+    const s = code("routes.ts");
+    const i = s.indexOf("async function onboardScDiscoveries");
+    const fn = s.slice(i, i + 6000);
+    expect(fn).toMatch(/SET estimated_cogs = NULL, estimated_cogs_source = NULL/);
+    expect(fn).toMatch(/AND estimated_cogs = 0 AND estimated_cogs_source = 'csv'/);
+    // and it must precede the PO sync, or a PO'd ASIN loses its real COGS
+    expect(fn.indexOf("estimated_cogs = NULL")).toBeLessThan(fn.indexOf("runSheetsSync"));
+  });
+
+  it("migration 047 widens the trigger COLUMN, not just the CHECK", () => {
+    // 046 widened the CHECK; the column was VARCHAR(10) and 'sc_discovery'
+    // is 12 chars, so every phase-c ledger row failed silently.
+    const m = readFileSync(
+      join(__dirname, "..", "database", "migrations", "047_refresh_runs_trigger_width.sql"), "utf8");
+    // Match the ALTER, not the first VARCHAR in the file — the comment
+    // explaining the bug names VARCHAR(10).
+    const alter = m.match(/ALTER COLUMN trigger TYPE VARCHAR\((\d+)\)/);
+    expect(alter).not.toBeNull();
+    const width = Number(alter![1]);
+    expect(width).toBeGreaterThanOrEqual("sc_discovery".length);
+  });
+
   it("migration 046 widens the trigger CHECK with sc_discovery", () => {
     const m = readFileSync(
       join(__dirname, "..", "database", "migrations", "046_refresh_runs_trigger_sc_discovery.sql"), "utf8");

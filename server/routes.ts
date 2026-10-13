@@ -3764,6 +3764,23 @@ export async function registerRoutes(
       );
     }
 
+    // upsertAsinResult's INSERT branch always writes estimated_cogs from
+    // AsinInput.cogs, tagged 'csv'. Phase c has no COGS to supply, so the 0
+    // placeholder landed as a synthetic 0.00 labelled as a CSV upload —
+    // exactly what §18 phase c step 2 forbids ("COGS stays NULL; no
+    // synthetic zero stored"). Found on the first live run (2026-10-13).
+    //
+    // Cleared here rather than by changing upsertAsinResult, whose INSERT
+    // behaviour the CSV/sourcing/extension paths all depend on. The guard is
+    // tight enough that it can only undo what this onboarding just wrote: a
+    // 0 value, sourced 'csv', on an ASIN this call created. It runs BEFORE
+    // the PO sync so a PO'd ASIN still gets its real COGS.
+    await query(
+      `UPDATE asin_estimates SET estimated_cogs = NULL, estimated_cogs_source = NULL
+        WHERE asin = ANY($1::text[]) AND estimated_cogs = 0 AND estimated_cogs_source = 'csv'`,
+      [asins],
+    ).catch((err: any) => log(`Phase c: synthetic-COGS clear failed: ${err?.message ?? err}`, "full-scope"));
+
     // COGS: ASINs with Orders-sheet rows get the real PO sync, scoped to
     // them, so actual_cogs / cogs_source='po_sheet' / ordered_qty land the
     // same way they do for any PO'd ASIN. No Orders rows → COGS stays NULL.
