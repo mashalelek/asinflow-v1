@@ -26,12 +26,15 @@
 
 import "dotenv/config";
 import { readFileSync } from "fs";
-import { join } from "path";
+import { join, dirname } from "path";
+import { fileURLToPath } from "url";
 import { query } from "../server/db";
 import { normalizeLeadSource, type LeadSource } from "@shared/schema";
 
 const LIVE = process.argv.includes("--live");
-const ER_FILE = join(__dirname, "..", "data", "er-lead-asins.txt");
+// ESM: no __dirname. The other script/ files that read files are CJS-style;
+// this one imports @shared/schema, which makes it ESM under tsx.
+const ER_FILE = join(dirname(fileURLToPath(import.meta.url)), "..", "data", "er-lead-asins.txt");
 
 const TAG_TO_SOURCE: Record<string, LeadSource> = {
   "Spark Lead": "Spark",

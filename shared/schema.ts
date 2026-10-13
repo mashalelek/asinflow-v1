@@ -135,12 +135,46 @@ export const LEAD_SOURCE_COLORS: Record<LeadSource, string> = {
   "RA": "#14B8A6",
 };
 
-/** Case-insensitive, whitespace-tolerant normalisation to the enum. */
-export function normalizeLeadSource(raw: string | null | undefined): LeadSource | null {
-  const v = String(raw ?? "").trim().toLowerCase().replace(/\s+/g, " ");
+// Aliases observed in Master ASINs col G (2026-10-13 backfill dry run).
+// Exact, normalised matches only — not fuzzy prefixes, which would make
+// "OA Hunt PT" silently become OA Hunt when it may mean something else.
+const LEAD_SOURCE_ALIASES: Record<string, LeadSource> = {
+  "fba spark": "Spark",
+  "oah": "OA Hunt",
+};
+
+// A multi-value cell ("ER, MP") is resolved by this priority, per Maria
+// 2026-10-13: any ER wins, else MP, else RA. A cell whose tokens resolve to
+// none of those three falls back to the first token that resolved at all.
+const MULTI_PRIORITY: LeadSource[] = ["ER", "MP", "RA"];
+
+const fold = (x: string) => x.trim().toLowerCase().replace(/\s+/g, " ");
+
+function matchOne(v: string): LeadSource | null {
   if (!v) return null;
   for (const s of LEAD_SOURCES) if (s.toLowerCase() === v) return s;
-  return null;
+  return LEAD_SOURCE_ALIASES[v] ?? null;
+}
+
+/**
+ * Case- and whitespace-insensitive normalisation to the enum, with aliases
+ * and multi-value cells.
+ *
+ * Multi-value cells are TOKENISED on , / | & +, never substring-matched:
+ * "Supplier" contains the letters E and R adjacently, and a `includes("er")`
+ * test would call it ER.
+ */
+export function normalizeLeadSource(raw: string | null | undefined): LeadSource | null {
+  const v = fold(String(raw ?? ""));
+  if (!v) return null;
+
+  const single = matchOne(v);
+  if (single) return single;
+
+  const hits = v.split(/[,/|&+]/).map(fold).map(matchOne).filter((x): x is LeadSource => x !== null);
+  if (hits.length === 0) return null;
+  for (const p of MULTI_PRIORITY) if (hits.includes(p)) return p;
+  return hits[0];
 }
 
 export interface AsinResult {
