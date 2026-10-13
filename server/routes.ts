@@ -2966,10 +2966,13 @@ export async function registerRoutes(
       // sort_order within a group: append. NULL for ungrouped, matching the
       // ORDER BY in GET /api/tags (ungrouped sorts by name).
       const result = await query(
+        // $3 is cast to ::text at EVERY use. Without that, postgres sees it
+        // as a value, a CASE operand and a comparison operand and refuses:
+        // "inconsistent types deduced for parameter $3".
         `INSERT INTO tags (name, color, tag_group, sort_order)
-         VALUES ($1, $2, $3,
+         VALUES ($1, $2, $3::text,
                  CASE WHEN $3::text IS NULL THEN NULL
-                      ELSE (SELECT COALESCE(MAX(sort_order), 0) + 1 FROM tags WHERE tag_group = $3) END)
+                      ELSE (SELECT COALESCE(MAX(sort_order), 0) + 1 FROM tags WHERE tag_group = $3::text) END)
          RETURNING id, name, color, tag_group, sort_order`,
         [trimmed, color, group]
       );
