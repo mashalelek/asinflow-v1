@@ -1,7 +1,7 @@
 import { describe, it, expect } from "vitest";
 import { readFileSync } from "fs";
 import { join } from "path";
-import { TAG_COLORS } from "./column-filter";
+import { TAG_COLORS, HEX_RE } from "./column-filter";
 import { compareTagRecords } from "@/lib/use-tag-groups";
 
 // §20 Filter dropdown (2026-10-13).
@@ -129,8 +129,9 @@ describe("§20 group render order is explicit, not alphabetical", () => {
 
 describe("the colour palette is the server's", () => {
   it("client TAG_COLORS matches server tags-repo TAG_COLORS exactly", () => {
-    // POST /api/tags accepts a colour only if it is in the server list, so a
-    // drifted client palette would silently fall back to a random colour.
+    // The server no longer gates on the palette (any valid hex is accepted),
+    // but it is still the random-fallback source, so the swatches the user
+    // sees should be the colours an unspecified create would pick from.
     const src = server("tags-repo.ts");
     const m = src.match(/export const TAG_COLORS = \[([^\]]+)\]/);
     expect(m).not.toBeNull();
@@ -237,9 +238,15 @@ describe("server endpoints", () => {
     expect(fn).toMatch(/if \(existing\.rows\.length > 0\) \{ res\.json\(existing\.rows\[0\]\); return; \}/);
   });
 
-  it("POST /api/tags only accepts a colour from the server palette", () => {
+  it("POST /api/tags accepts any VALID hex, not only the palette", () => {
+    // Superseded 2026-10-13: the palette-only rule made §20's "all colours
+    // distinct" unsatisfiable once there were more than ten tags. Format is
+    // still validated strictly; the palette is now just the default.
     const i = routes.indexOf('app.post("/api/tags"');
-    expect(routes.slice(i, i + 2200)).toMatch(/TAG_COLORS as readonly string\[\]\)\.includes\(colorRaw\)/);
+    const fn = routes.slice(i, i + 2600);
+    expect(fn).not.toMatch(/TAG_COLORS as readonly string\[\]\)\.includes\(colorRaw\)/);
+    expect(fn).toMatch(/const HEX = \/\^#\[0-9a-fA-F\]\{6\}\$\//);
+    expect(fn).toMatch(/TAG_COLORS\[Math\.floor\(Math\.random\(\)/);  // still the fallback
   });
 
   it("DELETE /api/tags/:id exists and reports the affected-ASIN count", () => {
@@ -253,5 +260,66 @@ describe("server endpoints", () => {
     expect(fn).not.toMatch(/DELETE FROM asin_tags/);
     // unknown id is a 404, not a silent ok
     expect(fn).toMatch(/res\.status\(404\)/);
+  });
+});
+
+// ── §20 colour uniqueness, ENFORCED (2026-10-13) ───────────────────────────
+// "All colours distinct" was documented but unenforceable: the picker
+// offered ten swatches and there are 17 tags, so a new tag could only be
+// given a colour already taken. The hex input makes the rule satisfiable
+// and the server makes it true.
+describe("tag colour: hex input + server-enforced uniqueness", () => {
+  const cf = code("column-filter.tsx");
+  const routes = server("routes.ts");
+
+  it("HEX_RE accepts #RRGGBB and nothing else", () => {
+    for (const ok of ["#FF5C5C", "#ff5c5c", "#000000", "#AbCdEf"]) expect(HEX_RE.test(ok), ok).toBe(true);
+    for (const bad of ["FF5C5C", "#FFF", "#FF5C5C7", "#GGGGGG", "red", "", "#FF5C5"]) {
+      expect(HEX_RE.test(bad), bad).toBe(false);
+    }
+  });
+
+  it("the ten swatches remain, alongside the hex field", () => {
+    expect(cf).toMatch(/TAG_COLORS\.map\(\(c\) =>/);
+    expect(cf).toMatch(/data-testid="tag-color-hex"/);
+    expect(cf).toMatch(/placeholder="#RRGGBB"/);
+  });
+
+  it("Create is disabled while the hex is invalid", () => {
+    expect(cf).toMatch(/!HEX_RE\.test\(newColor\) \|\| busy\} onClick=\{createTag\}/);
+  });
+
+  it("the input keeps a leading # and clamps to 7 chars", () => {
+    // Typing "ff0000" should not post "ff0000" and get a 400.
+    expect(cf).toMatch(/v\.startsWith\("#"\) \? v\.slice\(0, 7\) : `#\$\{v\}`\.slice\(0, 7\)/);
+  });
+
+  it("the server validates the format itself — the client check is a courtesy", () => {
+    const i = routes.indexOf('app.post("/api/tags"');
+    const fn = routes.slice(i, i + 2600);
+    expect(fn).toMatch(/const HEX = \/\^#\[0-9a-fA-F\]\{6\}\$\//);
+    expect(fn).toMatch(/color must be a #RRGGBB hex value/);
+  });
+
+  it("the server rejects a colour another tag already uses, naming it", () => {
+    const i = routes.indexOf('app.post("/api/tags"');
+    const fn = routes.slice(i, i + 2600);
+    expect(fn).toMatch(/SELECT name FROM tags WHERE UPPER\(color\) = \$1 LIMIT 1/);
+    expect(fn).toMatch(/color already in use by \$\{clash\.rows\[0\]\.name\}/);
+  });
+
+  it("comparison is case-insensitive — #ef4444 and #EF4444 are one colour", () => {
+    const i = routes.indexOf('app.post("/api/tags"');
+    const fn = routes.slice(i, i + 2600);
+    expect(fn).toMatch(/color = colorRaw\.toUpperCase\(\)/);
+    expect(fn).toMatch(/UPPER\(color\)/);
+  });
+
+  it("the uniqueness check runs AFTER the existing-name return", () => {
+    // Re-posting an existing tag's name returns that tag; it must not trip
+    // over its own colour on the way.
+    const i = routes.indexOf('app.post("/api/tags"');
+    const fn = routes.slice(i, i + 2600);
+    expect(fn.indexOf("if (existing.rows.length > 0)")).toBeLessThan(fn.indexOf("color already in use"));
   });
 });

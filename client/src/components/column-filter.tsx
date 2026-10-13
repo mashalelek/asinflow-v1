@@ -28,6 +28,11 @@ export interface MultiSelectOption {
 // The server's palette (server/tags-repo.ts TAG_COLORS). POST /api/tags
 // accepts a colour only if it is one of these, so the picker offers exactly
 // these and nothing else.
+// §20: a colour must be #RRGGBB. Validated client-side for immediate
+// feedback and AGAIN on the server, which is the one that matters — the
+// client check is a courtesy, not the guard.
+export const HEX_RE = /^#[0-9A-F]{6}$/i;
+
 export const TAG_COLORS = [
   "#3B82F6", "#EF4444", "#10B981", "#F59E0B", "#8B5CF6",
   "#EC4899", "#14B8A6", "#F97316", "#6366F1", "#84CC16",
@@ -182,7 +187,7 @@ function MultiSelectFilter({
   const manageable = typeof onTagsChanged === "function";
   const [creating, setCreating] = useState(false);
   const [newName, setNewName] = useState("");
-  const [newColor, setNewColor] = useState(TAG_COLORS[0]);
+  const [newColor, setNewColor] = useState(TAG_COLORS[0].toUpperCase());
   const [newGroup, setNewGroup] = useState<string>("");
   const [confirmDelete, setConfirmDelete] = useState<MultiSelectOption | null>(null);
   const [busy, setBusy] = useState(false);
@@ -360,17 +365,43 @@ function MultiSelectFilter({
               onKeyDown={(e) => { if (e.key === "Enter") createTag(); if (e.key === "Escape") setCreating(false); }}
               className="h-6 text-xs"
             />
+            {/* §20 (2026-10-13): the ten swatches are a shortcut, not the
+                range. All colours must be DISTINCT and there are already 17
+                tags, so the palette cannot supply a free one — the hex input
+                is how the rule stays satisfiable. The server validates
+                #RRGGBB and rejects a colour another tag already uses. */}
             <div className="flex items-center gap-1 flex-wrap">
               {TAG_COLORS.map((c) => (
                 <button
                   key={c}
                   title={c}
-                  onClick={() => setNewColor(c)}
-                  className={`w-3.5 h-3.5 rounded-full border-2 ${newColor === c ? "border-foreground" : "border-transparent"}`}
+                  onClick={() => setNewColor(c.toUpperCase())}
+                  className={`w-3.5 h-3.5 rounded-full border-2 ${newColor.toUpperCase() === c.toUpperCase() ? "border-foreground" : "border-transparent"}`}
                   style={{ backgroundColor: c }}
                 />
               ))}
+              <span
+                className="w-3.5 h-3.5 rounded-full border border-input flex-shrink-0 ml-1"
+                style={{ backgroundColor: HEX_RE.test(newColor) ? newColor : "transparent" }}
+                title="current colour"
+              />
+              <Input
+                value={newColor}
+                onChange={(e) => {
+                  // Keep the leading # so the field reads like a hex value
+                  // even mid-type, and uppercase so it matches the swatches.
+                  const v = e.target.value.toUpperCase();
+                  setNewColor(v.startsWith("#") ? v.slice(0, 7) : `#${v}`.slice(0, 7));
+                }}
+                placeholder="#RRGGBB"
+                aria-label="Hex colour"
+                data-testid="tag-color-hex"
+                className="h-6 w-[5.6rem] text-[10px] font-mono"
+              />
             </div>
+            {newColor !== "" && !HEX_RE.test(newColor) && (
+              <p className="text-[10px] text-destructive">Colour must be #RRGGBB.</p>
+            )}
             <select
               value={newGroup}
               onChange={(e) => setNewGroup(e.target.value)}
@@ -381,7 +412,7 @@ function MultiSelectFilter({
             </select>
             {nameTaken && <p className="text-[10px] text-destructive">A tag with that name already exists.</p>}
             <div className="flex gap-1">
-              <Button size="sm" className="h-6 text-[11px] flex-1" disabled={!newName.trim() || nameTaken || busy} onClick={createTag}>
+              <Button size="sm" className="h-6 text-[11px] flex-1" disabled={!newName.trim() || nameTaken || !HEX_RE.test(newColor) || busy} onClick={createTag}>
                 {busy ? "Creating…" : "Create"}
               </Button>
               <Button size="sm" variant="ghost" className="h-6 text-[11px]" onClick={() => { setCreating(false); setNewName(""); setErr(null); }}>

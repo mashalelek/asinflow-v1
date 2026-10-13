@@ -4121,12 +4121,20 @@ Free-form labels applied to ASINs (`tags` + `asin_tags` join).
   Within BLOCKERS and MARK DEAD the shade also carries meaning — the ramp
   runs darkest-first in list order, so severity reads off the colour.
 
-  **Caveat, unresolved (2026-10-13):** the create-from-dropdown swatch picker
-  offers only the ten `TAG_COLORS` the server accepts, and 14 of the 17
-  colours above are NOT in that palette. The rule therefore cannot be
-  maintained through the UI once more than ten tags exist — a new tag can
-  only be given a colour that is already taken. Either the palette widens or
-  the picker accepts free-form hex; **not decided.**
+  **ENFORCED since 2026-10-13, no longer just documented.** `POST /api/tags`
+  rejects a colour another tag already uses with
+  **400 `color already in use by <tag>`**, compared case-insensitively
+  (`#ef4444` and `#EF4444` are one colour; values are stored uppercase).
+
+  The picker takes **any `#RRGGBB`**, validated strictly on both sides — the
+  ten swatches are a shortcut, not the range. The palette-only rule it
+  replaces made this rule unsatisfiable: ten swatches against 17 tags meant
+  a new tag could only be given a colour already taken. `TAG_COLORS` remains
+  the random fallback when a create supplies no colour.
+
+  The uniqueness check runs AFTER the existing-name early return, so
+  re-posting an existing tag's name still returns that tag rather than
+  tripping over its own colour.
 
 - **Deleted 2026-10-13:** Easter, Buyable, SET MIN PRICE, For Sourcing (3
   ASINs), St. Patrick's Day, Back to School — and then **Spark Lead, OA Hunt

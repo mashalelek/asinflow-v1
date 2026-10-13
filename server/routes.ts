@@ -3001,16 +3001,39 @@ export async function registerRoutes(
     // existing tag is RETURNED rather than erroring — the picker depends on
     // that (type an existing name, get the tag back and attach it).
     const trimmed = name.trim();
-    // Only accept a colour from the server's own palette: the input is a
-    // swatch picker, so anything else is a malformed request, and letting
-    // arbitrary strings into a style attribute is not worth the convenience.
-    const color = colorRaw && (TAG_COLORS as readonly string[]).includes(colorRaw)
-      ? colorRaw
-      : TAG_COLORS[Math.floor(Math.random() * TAG_COLORS.length)];
+    // Any #RRGGBB is accepted now (2026-10-13), not just the ten-swatch
+    // palette — §20 requires 17+ distinct colours and the palette cannot
+    // supply them. The format is validated STRICTLY so nothing but a hex
+    // literal reaches a style attribute; an arbitrary string would.
+    //
+    // Normalised to uppercase so #ef4444 and #EF4444 are the same colour for
+    // the uniqueness check below, rather than two rows that look identical.
+    const HEX = /^#[0-9a-fA-F]{6}$/;
+    let color: string;
+    if (colorRaw != null && colorRaw !== "") {
+      if (!HEX.test(colorRaw)) {
+        res.status(400).json({ message: "color must be a #RRGGBB hex value" });
+        return;
+      }
+      color = colorRaw.toUpperCase();
+    } else {
+      color = TAG_COLORS[Math.floor(Math.random() * TAG_COLORS.length)].toUpperCase();
+    }
     const group = typeof tagGroup === "string" && tagGroup.trim() ? tagGroup.trim() : null;
     try {
       const existing = await query(`SELECT id, name, color, tag_group, sort_order FROM tags WHERE LOWER(name) = LOWER($1)`, [trimmed]);
       if (existing.rows.length > 0) { res.json(existing.rows[0]); return; }
+
+      // §20 "all colours distinct" is ENFORCED here (2026-10-13), not just
+      // documented. The colour is the only thing separating two chips at a
+      // glance on a row, so a repeat makes two different tags read as one.
+      // Checked case-insensitively — both sides are stored uppercase, but a
+      // row predating that normalisation may not be.
+      const clash = await query(`SELECT name FROM tags WHERE UPPER(color) = $1 LIMIT 1`, [color]);
+      if (clash.rows.length > 0) {
+        res.status(400).json({ message: `color already in use by ${clash.rows[0].name}` });
+        return;
+      }
       // sort_order within a group: append. NULL for ungrouped, matching the
       // ORDER BY in GET /api/tags (ungrouped sorts by name).
       const result = await query(
