@@ -124,15 +124,19 @@ export interface SubmissionColumnData {
 export const LEAD_SOURCES = ["ER", "Spark", "OA Hunt", "OAL 24/7", "MP", "RA"] as const;
 export type LeadSource = (typeof LEAD_SOURCES)[number];
 
-// Chip colours, distinct from each other and from the §20 tag palette —
-// a lead-source chip and a tag chip sit on the same row.
+// Chip colours (2026-10-13), distinct from each other and from the §20 tag
+// palette — a lead-source chip and a tag chip sit on the same row.
+//
+// The three OA-family sources are a burgundy ramp, dark → light in even
+// steps, so they read as one family at a glance; the three standalone
+// sources get unrelated hues.
 export const LEAD_SOURCE_COLORS: Record<LeadSource, string> = {
-  "ER": "#F59E0B",
-  "Spark": "#F97316",
-  "OA Hunt": "#22C55E",
-  "OAL 24/7": "#EC4899",
-  "MP": "#64748B",
-  "RA": "#14B8A6",
+  "ER": "#9B7BD6",        // soft violet
+  "MP": "#5B8DEF",        // mid blue
+  "RA": "#8A94A6",        // cool grey
+  "OAL 24/7": "#7A2E45",  // burgundy, darkest
+  "Spark": "#96405A",     // burgundy, mid
+  "OA Hunt": "#B0546F",   // burgundy, lightest
 };
 
 // Aliases observed in Master ASINs col G (2026-10-13 backfill dry run).

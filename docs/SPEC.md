@@ -461,10 +461,32 @@ rather than in Description because it is the same kind of field as Sourcing
   (migration 048). **NULL is meaningful** — "we don't know" — and is what
   §18 phase c leaves an SC-discovered ASIN, which has no lead source AF can
   honestly claim.
-- **Chip colours**, distinct from each other AND from the §20 tag palette,
-  because a lead chip and a tag chip sit on the same row: ER `#F59E0B` ·
-  Spark `#F97316` · OA Hunt `#22C55E` · OAL 24/7 `#EC4899` · MP `#64748B` ·
-  RA `#14B8A6`.
+- **Chip colours (2026-10-13)**, distinct from each other AND from the §20
+  tag palette, because a lead chip and a tag chip sit on the same row:
+
+  | | |
+  |---|---|
+  | ER | `#9B7BD6` soft violet |
+  | MP | `#5B8DEF` mid blue |
+  | RA | `#8A94A6` cool grey |
+  | **OAL 24/7** | `#7A2E45` burgundy, darkest |
+  | **Spark** | `#96405A` burgundy, mid |
+  | **OA Hunt** | `#B0546F` burgundy, lightest |
+
+  The three **OA-family** sources are a burgundy ramp, dark → light in even
+  steps (RGB distance 39.4 then 38.9), so they read as one family at a
+  glance; the three standalone sources take unrelated hues.
+
+  `LEAD_SOURCE_COLORS` in `shared/schema.ts` is the ONE source — the row
+  chip, the inline-edit popover and the filter swatches all read it, so a
+  colour change is a one-line edit and cannot half-apply.
+
+  **Known proximity, accepted:** MP `#5B8DEF` is close to the OTHER-group
+  tag colours Wholesale `#3B82F6` and especially SC import `#60A5FA` (RGB
+  distance 26.9). A row carrying both an MP lead source and an SC import tag
+  shows two similar blues. They are different shapes in different columns,
+  so this is tolerable, but it is the tightest pair across the two palettes
+  and worth knowing before either is changed again.
 - **Inline edit** — single-select popover (the Sourcing pattern) with a
   Clear. `PUT /api/asins/:asin/lead-source`; an unrecognised value is a
   **400 naming the allowed set**, not a CHECK-violation 500.

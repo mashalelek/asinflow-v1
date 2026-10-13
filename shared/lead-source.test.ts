@@ -65,9 +65,41 @@ describe("multi-value cells: ER > MP > RA", () => {
 });
 
 describe("chip colours", () => {
+  const rgb = (h: string) => [1, 3, 5].map((i) => parseInt(h.slice(i, i + 2), 16));
+  const dist = (a: string, b: string) =>
+    Math.sqrt(rgb(a).reduce((acc, x, i) => acc + (x - rgb(b)[i]) ** 2, 0));
+
   it("one per source, all distinct", () => {
     const cols = LEAD_SOURCES.map((s) => LEAD_SOURCE_COLORS[s]);
     expect(cols.filter(Boolean)).toHaveLength(LEAD_SOURCES.length);
     expect(new Set(cols).size).toBe(LEAD_SOURCES.length);
+  });
+
+  it("every value is a #RRGGBB literal", () => {
+    for (const s of LEAD_SOURCES) expect(LEAD_SOURCE_COLORS[s], s).toMatch(/^#[0-9A-F]{6}$/i);
+  });
+
+  it("does not collide with the §20 tag swatch palette", () => {
+    // A lead chip and a tag chip sit on the SAME row. The 17 live tag
+    // colours are DB state and cannot be asserted here, but TAG_COLORS —
+    // the swatch/fallback palette a new tag draws from — is in code.
+    const palette = ["#3B82F6", "#EF4444", "#10B981", "#F59E0B", "#8B5CF6",
+                     "#EC4899", "#14B8A6", "#F97316", "#6366F1", "#84CC16"];
+    for (const s of LEAD_SOURCES) {
+      expect(palette.map((c) => c.toUpperCase()), s)
+        .not.toContain(LEAD_SOURCE_COLORS[s].toUpperCase());
+    }
+  });
+
+  it("the OA family is a burgundy ramp, dark -> light in even steps", () => {
+    const [dark, mid, light] = [
+      LEAD_SOURCE_COLORS["OAL 24/7"], LEAD_SOURCE_COLORS["Spark"], LEAD_SOURCE_COLORS["OA Hunt"],
+    ];
+    const lum = (h: string) => rgb(h).reduce((a, b) => a + b, 0);
+    expect(lum(dark)).toBeLessThan(lum(mid));
+    expect(lum(mid)).toBeLessThan(lum(light));
+    // "even steps": the two gaps within 25% of each other.
+    const [g1, g2] = [dist(dark, mid), dist(mid, light)];
+    expect(Math.abs(g1 - g2) / Math.max(g1, g2)).toBeLessThan(0.25);
   });
 });
