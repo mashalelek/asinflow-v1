@@ -1,4 +1,5 @@
 import { query } from "./db";
+import { normalizeLeadSource } from "@shared/schema";
 import { log } from "./index";
 import { fetchSourcingSheet, type RawSourcingRow } from "./sourcing-sheet";
 import type { AsinInput } from "@shared/schema";
@@ -11,6 +12,11 @@ export interface SourcingSyncResult {
   sampleNewAsins: string[];
   sampleArchiveAsins: string[];
   dryRun: boolean;
+  // §6 (2026-10-13): col G values that did not normalise to the enum. They
+  // fall back to MP — the common case for a blank or ad-hoc cell — but the
+  // DISTINCT strings are reported so a systematic typo is visible rather
+  // than quietly becoming MP forever.
+  unrecognizedLeadSources: string[];
 }
 
 // One collapsed record per NEW ASIN (asin not yet in the `asins` table).
@@ -19,6 +25,7 @@ interface CollapsedNew {
   asin: string;
   cogs: number | null;     // first non-null parsed cogs across this ASIN's rows
   buyLink: string | null;  // first non-empty buy link
+  leadSourceRaw: string | null; // §6 col G, first non-empty; normalised below
   promoNotes: string | null; // first non-empty Col O cell → promo_notes
   vaNotes: string | null;  // first non-empty AP cell
   myNotes: string | null;  // first non-empty AS cell
@@ -67,6 +74,7 @@ function collapseNewAsinRows(
         asin: row.asin,
         cogs: null,
         buyLink: null,
+        leadSourceRaw: null,
         promoNotes: null,
         vaNotes: null,
         myNotes: null,
@@ -77,6 +85,7 @@ function collapseNewAsinRows(
     entry.statuses.push(row.status.toLowerCase().trim());
     if (entry.cogs == null && row.cogs != null) entry.cogs = row.cogs;
     if (!entry.buyLink && row.buyLink) entry.buyLink = row.buyLink;
+    if (!entry.leadSourceRaw && row.leadSourceRaw) entry.leadSourceRaw = row.leadSourceRaw;
     if (!entry.promoNotes && row.promoNotes) entry.promoNotes = row.promoNotes;
     if (!entry.vaNotes && row.vaNotes) entry.vaNotes = row.vaNotes;
     if (!entry.myNotes && row.myNotes) entry.myNotes = row.myNotes;
@@ -126,10 +135,19 @@ export async function syncSourcingSheet(
     .filter((r) => shouldArchiveNew(r.statuses))
     .map((r) => r.asin);
 
+  const unrecognized = new Set<string>();
+  for (const r of Array.from(byNew.values())) {
+    if (r.leadSourceRaw && normalizeLeadSource(r.leadSourceRaw) == null) unrecognized.add(r.leadSourceRaw);
+  }
+
   const newInputs: AsinInput[] = Array.from(byNew.values()).map((r) => ({
     asin: r.asin,
     cogs: r.cogs ?? 0,
     buyLink: r.buyLink,
+    // §6: unrecognised or blank col G -> MP. The sourcing sheet is the
+    // marketplace lead pipeline, so MP is the honest default for a row that
+    // came from it without saying otherwise.
+    leadSource: normalizeLeadSource(r.leadSourceRaw) ?? "MP",
     prepOverride: null,
     storageOverride: null,
     tags: null,
@@ -169,5 +187,6 @@ export async function syncSourcingSheet(
     sampleNewAsins: newInputs.slice(0, 10).map((i) => i.asin),
     sampleArchiveAsins: toArchive.slice(0, 10),
     dryRun,
+    unrecognizedLeadSources: Array.from(unrecognized).sort(),
   };
 }

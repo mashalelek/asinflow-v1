@@ -7,6 +7,7 @@ import { parseMoney } from "@shared/parse-money";
 // On the PO tab, Col AS = Prep cost. On THIS sheet's `ASINs` tab,
 // Col AS = "My notes". Keep the tab name explicit so the two never cross.
 const COL_STATUS = 4;     // E  — drives archive on insert
+const COL_LEAD_SOURCE = 6;// G  — §6 lead source, normalised to the enum
 const COL_ASIN = 8;       // I  — match key
 const COL_BUY_LINK = 13;  // N  — buy_link; supplier derived via extractDomain
 const COL_PROMO = 14;     // O  — "Coupons/Gift Cards/Sales" → promo_notes
@@ -17,6 +18,9 @@ const COL_MY_NOTES = 44;  // AS — My notes
 export interface RawSourcingRow {
   asin: string;
   status: string;
+  /** §6 col G, RAW — normalisation to the enum happens in the sync, which
+      also reports the distinct unrecognised strings. */
+  leadSourceRaw: string | null;
   buyLink: string | null;
   cogs: number | null;
   promoNotes: string | null;
@@ -58,6 +62,7 @@ export async function fetchSourcingSheet(sheetId: string): Promise<RawSourcingRo
     if (!asin) continue;
 
     const status = (row[COL_STATUS] ?? "").toString();
+    const leadSourceRaw = (row[COL_LEAD_SOURCE] ?? "").toString().trim();
     const buyLinkRaw = (row[COL_BUY_LINK] ?? "").toString().trim();
     const promoRaw = (row[COL_PROMO] ?? "").toString().trim();
     const vaNotesRaw = (row[COL_VA_NOTES] ?? "").toString().trim();
@@ -66,6 +71,7 @@ export async function fetchSourcingSheet(sheetId: string): Promise<RawSourcingRo
     out.push({
       asin,
       status,
+      leadSourceRaw: leadSourceRaw || null,
       buyLink: buyLinkRaw || null,
       cogs: parseMoney(row[COL_COGS]),
       promoNotes: promoRaw || null,

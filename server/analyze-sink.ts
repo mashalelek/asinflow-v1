@@ -12,7 +12,7 @@
 // The interface lives in its own module so bulk-lists.ts doesn't have to
 // import routes.ts for a type.
 
-import type { AsinResult } from "@shared/schema";
+import type { AsinResult, LeadSource } from "@shared/schema";
 
 export interface AnalyzeSink {
   /**
@@ -33,6 +33,8 @@ export interface AnalyzeSink {
       fromCsvUpload: boolean;
       inputNotes: string | null;
       inputPromoNotes: string | null;
+      /** §6 lead source — INSERT branch only (§14). */
+      inputLeadSource?: LeadSource | null;
     },
   ): Promise<void>;
 

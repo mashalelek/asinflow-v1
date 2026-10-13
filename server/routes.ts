@@ -9,7 +9,7 @@ import { verifyPending, resolveSubmissionManual, resolveSubmissionsBulk, dismiss
 import { runAuraSyncChain } from "./aura-sync-chain";
 import { pushAuraCosts } from "./aura-cost-sync";
 import { log } from "./index";
-import { type AsinInput, type AsinResult, type ColumnMapping, extractDomain, cleanBuyLink, getFeePriceForAsin } from "@shared/schema";
+import { type AsinInput, type AsinResult, type ColumnMapping, extractDomain, cleanBuyLink, getFeePriceForAsin, LEAD_SOURCES, normalizeLeadSource, type LeadSource } from "@shared/schema";
 import { parseMoney } from "@shared/parse-money";
 import pool, { query, isDbAvailable } from "./db";
 import { syncInventory } from "./inventory-sync";
@@ -624,6 +624,9 @@ async function upsertAsinResult(
   result: AsinResult,
   notesForNewInsert: string | null = null,
   promoNotesForNewInsert: string | null = null,
+  // §6 lead source, INSERT branch only (§14). Absent = NULL, which is what
+  // §18 phase c wants: an SC-discovered ASIN has no lead source AF can claim.
+  leadSourceForNewInsert: LeadSource | null = null,
 ): Promise<{ inserted: boolean }> {
   const supplier = extractDomain(result.buyLink);
 
@@ -635,11 +638,15 @@ async function upsertAsinResult(
   // `inserted` boolean returned from RETURNING (xmax = 0). promo_notes has NO
   // append path — existing ASINs keep their prior value untouched.
   const asinUpsert = await query(
-    `INSERT INTO asins (asin, title, image_url, brand, category, weight_lb, buy_link, supplier, is_meltable, is_hazmat, is_dangerous_good, notes, promo_notes, supplier_sku, last_refreshed_at)
+    `INSERT INTO asins (asin, title, image_url, brand, category, weight_lb, buy_link, supplier, is_meltable, is_hazmat, is_dangerous_good, notes, promo_notes, supplier_sku, lead_source, last_refreshed_at)
      -- §18 (2026-09-24): NULLIF(TRIM(...)) so a blank catalog brand is stored
      -- as NULL, never "". An empty-string brand is what let the legend build a
      -- row keyed on "" and swallow every brandless ASIN into one code.
-     VALUES ($1, $2, $3, NULLIF(TRIM($4::text), ''), $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, NOW())
+     -- $15 lead_source: INSERT-BRANCH ONLY. It is absent from the ON CONFLICT
+     -- SET list below, so a re-analyze of an existing ASIN never touches it
+     -- (§14 user-controlled — only the INSERT paths and the inline edit write
+     -- it, and a sync must not overwrite a human's answer).
+     VALUES ($1, $2, $3, NULLIF(TRIM($4::text), ''), $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, NOW())
      ON CONFLICT (asin) DO UPDATE SET
        title = COALESCE(EXCLUDED.title, asins.title),
        image_url = COALESCE(EXCLUDED.image_url, asins.image_url),
@@ -671,6 +678,7 @@ async function upsertAsinResult(
       notesForNewInsert, // $12 — used in INSERT; ignored by UPDATE
       promoNotesForNewInsert, // $13 — used in INSERT; ignored by UPDATE
       result.supplierSku ?? null, // $14 — user-controlled (§14): INSERT branch only, never in the ON CONFLICT SET list
+      leadSourceForNewInsert, // $15 — §6, same INSERT-branch-only contract
     ]
   );
   const inserted = asinUpsert.rows[0]?.inserted === true;
@@ -770,7 +778,7 @@ async function appendNotesForAsin(asin: string, newNotes: string): Promise<void>
 // callers (sourcing-sync cron) can name it explicitly — the sink parameter
 // is required everywhere, never defaulted.
 export const mainCatalogSink: AnalyzeSink = {
-  persistResult(result, { fromCsvUpload, inputNotes, inputPromoNotes }) {
+  persistResult(result, { fromCsvUpload, inputNotes, inputPromoNotes, inputLeadSource }) {
     if (!isDbAvailable()) return Promise.resolve();
     // If this is a CSV upload with user-provided COGS, persist estimated_cogs
     // via the dedicated write path BEFORE the analyze UPSERT. This ensures
@@ -789,7 +797,10 @@ export const mainCatalogSink: AnalyzeSink = {
       // 7-day window.
       const notesForInsert = fromCsvUpload ? inputNotes : null;
       const promoNotesForInsert = fromCsvUpload ? inputPromoNotes : null;
-      const { inserted } = await upsertAsinResult(result, notesForInsert, promoNotesForInsert);
+      // §6: always passed, not gated on fromCsvUpload — the sourcing sync and
+      // bulk promote supply it too, and it is INSERT-branch-only in the SQL.
+      const leadSourceForInsert = inputLeadSource;
+      const { inserted } = await upsertAsinResult(result, notesForInsert, promoNotesForInsert, leadSourceForInsert);
       // Existing-ASIN path: dedup-aware append. Skipped when the row was just
       // inserted (notes already written by the INSERT branch above).
       // promo_notes: intentionally NO existing-ASIN write — insert-only.
@@ -857,10 +868,13 @@ async function writeResult(
   sink: AnalyzeSink,
   inputTags: string[] | null = null,
   stamps: ProbeStampWrite | null = null,
+  // §6 lead source, INSERT branch only. Rides here with tags and notes for
+  // the same reason they do: one per-ASIN unit of work, one ordering.
+  inputLeadSource: LeadSource | null = null,
 ): Promise<void> {
   allResults.set(asin, result);
   emit(JSON.stringify({ type: "result", data: isUpdate ? { ...result, _update: true } : result }) + "\n");
-  await sink.persistResult(result, { fromCsvUpload, inputNotes, inputPromoNotes });
+  await sink.persistResult(result, { fromCsvUpload, inputNotes, inputPromoNotes, inputLeadSource });
   // Probe stamps ride here for the same reason tags do: ordered BEHIND the
   // asins INSERT (§14, 2026-10-09). The failure is reported against the
   // probe's own stage via onError — the probe succeeded, but the record does
@@ -1139,7 +1153,7 @@ export async function registerRoutes(
       const result = await query(`
         SELECT
           a.asin, a.title, a.image_url, a.brand, a.category, a.weight_lb, a.buy_link, a.status, a.status_reason,
-          a.primary_sku, a.in_catalog, a.has_live_offer, a.offer_checked_at, a.current_issues, a.issues_checked_at, a.notes, a.promo_notes, a.supplier_sku, a.is_meltable, a.is_hazmat, a.is_dangerous_good, a.is_search_suppressed, a.suppression_reasons, a.last_reviewed_at, a.added_at, a.is_wholesale, a.is_oa,
+          a.primary_sku, a.in_catalog, a.has_live_offer, a.offer_checked_at, a.current_issues, a.issues_checked_at, a.notes, a.promo_notes, a.supplier_sku, a.lead_source, a.is_meltable, a.is_hazmat, a.is_dangerous_good, a.is_search_suppressed, a.suppression_reasons, a.last_reviewed_at, a.added_at, a.is_wholesale, a.is_oa,
           e.cogs, e.cogs_source, e.actual_cogs, e.estimated_cogs, e.estimated_cogs_source, e.prep_override, e.storage_override,
           e.lowest_fba_price, e.buy_box_price, e.buy_box_fulfillment, e.lowest_price,
           e.sellers_fba, e.sellers_fbm,
@@ -1362,6 +1376,7 @@ export async function registerRoutes(
           notes: row.notes ?? null,
           promoNotes: row.promo_notes ?? null,
           supplierSku: row.supplier_sku ?? null,
+          leadSource: row.lead_source ?? null,
           // parked keeps the old archived styling; dead renders its own tag.
           isArchived: row.status === 'parked',
           status: row.status ?? 'active',
@@ -3036,6 +3051,29 @@ export async function registerRoutes(
     } catch (err: any) { res.status(500).json({ message: err.message }); }
   });
 
+  // §6 Lead Source inline edit. §14 USER-CONTROLLED: this and the INSERT
+  // paths (CSV upload, sourcing sync, bulk promote) are the only writers —
+  // Analyze, Product Info and Prices & Stock never touch it.
+  //
+  // Single-select: null clears it. An unrecognised value is REJECTED rather
+  // than coerced — the DB CHECK would reject it anyway, and a 400 naming the
+  // allowed set is more useful than a constraint-violation 500.
+  app.put("/api/asins/:asin/lead-source", async (req: Request, res: Response) => {
+    const { asin } = req.params;
+    const { leadSource } = req.body as { leadSource?: string | null };
+    if (!isDbAvailable()) { res.status(503).json({ message: "Database not available" }); return; }
+    const value = leadSource == null || leadSource === "" ? null : normalizeLeadSource(leadSource);
+    if (leadSource != null && leadSource !== "" && value == null) {
+      res.status(400).json({ message: `lead_source must be one of: ${LEAD_SOURCES.join(", ")}` });
+      return;
+    }
+    try {
+      const r = await query(`UPDATE asins SET lead_source = $2 WHERE asin = $1 RETURNING lead_source`, [asin, value]);
+      if (r.rowCount === 0) { res.status(404).json({ message: "ASIN not found" }); return; }
+      res.json({ ok: true, leadSource: r.rows[0].lead_source ?? null });
+    } catch (err: any) { res.status(500).json({ message: err.message }); }
+  });
+
   // === Notes ===
   app.put("/api/asins/:asin/notes", async (req: Request, res: Response) => {
     const { asin } = req.params;
@@ -3469,10 +3507,10 @@ export async function registerRoutes(
         retryQueue.push({ input, attempt: 1, result });
         log(`Queued ${input.asin} for retry (fees=${retryNeeded.fees}, pricing=${retryNeeded.pricing}, catalog=${retryNeeded.catalog})`, "retry");
         if (!retryNeeded.fees && !retryNeeded.pricing) {
-          await writeResult(emit, allResults, input.asin, result, false, fromCsvUpload, input.notes ?? null, input.promoNotes ?? null, sink, input.tags ?? null, stampsFor(input.asin));
+          await writeResult(emit, allResults, input.asin, result, false, fromCsvUpload, input.notes ?? null, input.promoNotes ?? null, sink, input.tags ?? null, stampsFor(input.asin), input.leadSource ?? null);
         }
       } else {
-        await writeResult(emit, allResults, input.asin, result, false, fromCsvUpload, input.notes ?? null, input.promoNotes ?? null, sink, input.tags ?? null, stampsFor(input.asin));
+        await writeResult(emit, allResults, input.asin, result, false, fromCsvUpload, input.notes ?? null, input.promoNotes ?? null, sink, input.tags ?? null, stampsFor(input.asin), input.leadSource ?? null);
       }
 
       // Tags and notes both ride inside writeResult now — tags AFTER the
@@ -3575,7 +3613,7 @@ export async function registerRoutes(
               const finalResult = retryError
                 ? { ...retried, error: retryError }
                 : retried;
-              await writeResult(emit, allResults, item.input.asin, finalResult, allResults.has(item.input.asin), fromCsvUpload, item.input.notes ?? null, item.input.promoNotes ?? null, sink, item.input.tags ?? null, stampsFor(item.input.asin));
+              await writeResult(emit, allResults, item.input.asin, finalResult, allResults.has(item.input.asin), fromCsvUpload, item.input.notes ?? null, item.input.promoNotes ?? null, sink, item.input.tags ?? null, stampsFor(item.input.asin), item.input.leadSource ?? null);
             }
           } catch (err: any) {
             log(`Retry error for ${item.input.asin}: ${err.message}`, "retry");
@@ -3609,7 +3647,7 @@ export async function registerRoutes(
                 ...finalItem,
                 error: errorMsg ?? finalItem.error,
               };
-              await writeResult(emit, allResults, item.input.asin, errorResult, allResults.has(item.input.asin), fromCsvUpload, item.input.notes ?? null, item.input.promoNotes ?? null, sink, item.input.tags ?? null, stampsFor(item.input.asin));
+              await writeResult(emit, allResults, item.input.asin, errorResult, allResults.has(item.input.asin), fromCsvUpload, item.input.notes ?? null, item.input.promoNotes ?? null, sink, item.input.tags ?? null, stampsFor(item.input.asin), item.input.leadSource ?? null);
             } else {
               item.attempt = attempt + 1;
             }
@@ -3636,7 +3674,7 @@ export async function registerRoutes(
             ...item.result,
             error: errorMsg,
           };
-          await writeResult(emit, allResults, item.input.asin, errorResult, false, fromCsvUpload, item.input.notes ?? null, item.input.promoNotes ?? null, sink, item.input.tags ?? null, stampsFor(item.input.asin));
+          await writeResult(emit, allResults, item.input.asin, errorResult, false, fromCsvUpload, item.input.notes ?? null, item.input.promoNotes ?? null, sink, item.input.tags ?? null, stampsFor(item.input.asin), item.input.leadSource ?? null);
         }
       }
       if (uncalculated.length > 0) {

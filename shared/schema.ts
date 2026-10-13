@@ -29,6 +29,9 @@ export interface AsinInput {
   notes?: string | null;
   promoNotes?: string | null; // sourcing sheet Col O — written on new-ASIN INSERT only
   supplierSku?: string | null; // supplier's own catalog/item number — INSERT branch only, never re-analyze
+  // §6 lead source, supplied by the INSERT paths (CSV upload, sourcing sync,
+  // bulk promote). §14 user-controlled — no sync ever sets it.
+  leadSource?: LeadSource | null;
   // §21 bulk page (2026-09-04): raw Date Added cell from the CSV; only the
   // bulk list creation consumes it (backdated added_at). Main path ignores.
   addedAtRaw?: string | null;
@@ -114,6 +117,32 @@ export interface SubmissionColumnData {
   history: SubmissionEntry[]; // newest first, includes latest
 }
 
+// §6 Lead Source (2026-10-13). A closed set — the DB CHECK on
+// asins.lead_source and bulk_list_asins.lead_source lists exactly these.
+// NULL is meaningful: "we don't know", which is what an SC-discovered ASIN
+// (§18 phase c) honestly is.
+export const LEAD_SOURCES = ["ER", "Spark", "OA Hunt", "OAL 24/7", "MP", "RA"] as const;
+export type LeadSource = (typeof LEAD_SOURCES)[number];
+
+// Chip colours, distinct from each other and from the §20 tag palette —
+// a lead-source chip and a tag chip sit on the same row.
+export const LEAD_SOURCE_COLORS: Record<LeadSource, string> = {
+  "ER": "#F59E0B",
+  "Spark": "#F97316",
+  "OA Hunt": "#22C55E",
+  "OAL 24/7": "#EC4899",
+  "MP": "#64748B",
+  "RA": "#14B8A6",
+};
+
+/** Case-insensitive, whitespace-tolerant normalisation to the enum. */
+export function normalizeLeadSource(raw: string | null | undefined): LeadSource | null {
+  const v = String(raw ?? "").trim().toLowerCase().replace(/\s+/g, " ");
+  if (!v) return null;
+  for (const s of LEAD_SOURCES) if (s.toLowerCase() === v) return s;
+  return null;
+}
+
 export interface AsinResult {
   asin: string;
   cogs: number; // deprecated — use estimatedCogs / actualCogs
@@ -145,6 +174,7 @@ export interface AsinResult {
   notes?: string | null;
   promoNotes?: string | null; // promos — user-controlled (§14): manual edit / sourcing sync new-ASIN INSERT only
   supplierSku?: string | null; // supplier's own catalog/item number — user-controlled (§14), never from Amazon
+  leadSource?: LeadSource | null; // §6 — user-controlled (§14), never written by a sync
   isArchived?: boolean;
   isMeltable?: boolean;
   isHazmat?: boolean | null;        // FBA hazmat (INBOUND 0015); null = unchecked
