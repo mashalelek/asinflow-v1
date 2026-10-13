@@ -279,6 +279,38 @@ function MultiSelectFilter({
                 {opt.group}
               </div>
             )}
+          {confirmDelete?.value === opt.value ? (
+            // The confirm REPLACES this row, in place (2026-10-13). It used
+            // to render at the bottom of this scrolling container, so
+            // clicking × on a tag near the top looked like nothing happened
+            // — the confirm was below 25 rows, outside the max-h-48 viewport.
+            // Replacing the row keeps it where the user's attention already
+            // is and costs no layout shift.
+            <div
+              className="px-2 py-1.5 rounded border border-destructive/40 bg-destructive/5 space-y-1.5"
+              data-testid={`tag-delete-confirm-${opt.value}`}
+            >
+              <p className="text-[11px] leading-snug">
+                Delete <span className="font-semibold">'{opt.label}'</span>? Removes it from{" "}
+                {opt.count ?? 0} ASIN{(opt.count ?? 0) === 1 ? "" : "s"}.
+              </p>
+              {err && <p className="text-[10px] text-destructive">{err}</p>}
+              <div className="flex gap-1">
+                <Button
+                  size="sm" variant="destructive" className="h-6 text-[11px] flex-1"
+                  disabled={busy} onClick={() => deleteTag(opt)}
+                >
+                  {busy ? "Deleting…" : "Delete"}
+                </Button>
+                <Button
+                  size="sm" variant="ghost" className="h-6 text-[11px]"
+                  disabled={busy} onClick={() => { setConfirmDelete(null); setErr(null); }}
+                >
+                  Cancel
+                </Button>
+              </div>
+            </div>
+          ) : (
           <label
             className="group flex items-center gap-2 px-2 py-1 rounded hover:bg-muted cursor-pointer text-xs"
           >
@@ -303,12 +335,14 @@ function MultiSelectFilter({
               <button
                 className="opacity-0 group-hover:opacity-100 text-muted-foreground hover:text-destructive text-[11px] leading-none px-0.5 transition-opacity"
                 title={`Delete '${opt.label}'`}
+                data-testid={`tag-delete-${opt.value}`}
                 onClick={(e) => { e.preventDefault(); e.stopPropagation(); setErr(null); setConfirmDelete(opt); }}
               >
                 ×
               </button>
             )}
           </label>
+          )}
           </Fragment>
         ))}
 
@@ -361,24 +395,12 @@ function MultiSelectFilter({
           </button>
         ))}
 
-        {/* Inline delete confirmation, with the live affected-ASIN count. */}
-        {manageable && confirmDelete && (
-          <div className="px-2 py-1.5 mt-1 border-t space-y-1.5">
-            <p className="text-[11px]">
-              Delete <span className="font-semibold">'{confirmDelete.label}'</span>? Removes it from{" "}
-              {confirmDelete.count ?? 0} ASIN{(confirmDelete.count ?? 0) === 1 ? "" : "s"}.
-            </p>
-            <div className="flex gap-1">
-              <Button size="sm" variant="destructive" className="h-6 text-[11px] flex-1" disabled={busy} onClick={() => deleteTag(confirmDelete)}>
-                {busy ? "Deleting…" : "Delete"}
-              </Button>
-              <Button size="sm" variant="ghost" className="h-6 text-[11px]" onClick={() => setConfirmDelete(null)}>
-                Cancel
-              </Button>
-            </div>
-          </div>
-        )}
-        {err && <p className="px-2 text-[10px] text-destructive">{err}</p>}
+        {/* The delete confirm is NOT here — it renders inline, replacing the
+            row that was clicked, so it is always in view. "+ New tag" and
+            its form stay pinned at the bottom, which is where a create
+            belongs. This bottom error line is therefore create-only; a
+            delete error shows inside the inline confirm. */}
+        {err && !confirmDelete && <p className="px-2 text-[10px] text-destructive">{err}</p>}
       </div>
       {colId === "tags" && (
         <div className="flex items-center gap-2 text-[10px]">

@@ -124,7 +124,49 @@ describe("create and delete go through the one writer", () => {
 
   it("the confirmation names the live count", () => {
     expect(cf).toMatch(/Removes it from\{" "\}/);
-    expect(cf).toMatch(/confirmDelete\.count \?\? 0/);
+    expect(cf).toMatch(/\{opt\.count \?\? 0\} ASIN/);
+  });
+
+  it("the confirm renders INLINE, replacing the clicked row", () => {
+    // It used to render at the bottom of the max-h-48 scroll container, so
+    // clicking × on a tag near the top looked like nothing happened: the
+    // confirm was below 25 rows, outside the viewport. Replacing the row
+    // keeps it where the user is already looking.
+    expect(cf).toMatch(/\{confirmDelete\?\.value === opt\.value \? \(/);
+    expect(cf).toMatch(/data-testid=\{`tag-delete-confirm-\$\{opt\.value\}`\}/);
+    // and the old bottom-of-list block is gone
+    expect(cf).not.toMatch(/\{manageable && confirmDelete && \(/);
+  });
+
+  it("the confirm sits INSIDE the scrollable list, not after it", () => {
+    // i.e. it is part of the row stream, so it scrolls with the row it
+    // belongs to rather than being pinned anywhere.
+    const listStart = cf.indexOf('max-h-48 overflow-y-auto');
+    const confirm = cf.indexOf('tag-delete-confirm-');
+    const mapEnd = cf.indexOf('+ New tag');
+    expect(listStart).toBeLessThan(confirm);
+    expect(confirm).toBeLessThan(mapEnd);  // before the pinned create row
+  });
+
+  it("+ New tag and its form stay pinned at the bottom", () => {
+    const lastRow = cf.lastIndexOf('tag-delete-confirm-');
+    expect(cf.indexOf('+ New tag')).toBeGreaterThan(lastRow);
+    expect(cf.indexOf('placeholder="Tag name"')).toBeGreaterThan(lastRow);
+  });
+
+  it("a delete error shows in the confirm, not at the bottom of the list", () => {
+    // The bottom error line is create-only now — a delete error rendered
+    // down there would reproduce the original off-screen bug.
+    expect(cf).toMatch(/\{err && !confirmDelete && <p/);
+    const i = cf.indexOf("tag-delete-confirm-");
+    expect(cf.slice(i, i + 900)).toMatch(/\{err && <p className="text-\[10px\] text-destructive">\{err\}<\/p>\}/);
+  });
+
+  it("Cancel is disabled while a delete is in flight", () => {
+    const i = cf.indexOf("tag-delete-confirm-");
+    const block = cf.slice(i, i + 1200);
+    const cancels = block.match(/disabled=\{busy\}/g) ?? [];
+    expect(cancels.length).toBeGreaterThanOrEqual(2); // Delete AND Cancel
   });
 
   it("deleting a tag that is in the ACTIVE filter drops it and re-applies", () => {
