@@ -4056,11 +4056,40 @@ Free-form labels applied to ASINs (`tags` + `asin_tags` join).
   order; `client/src/lib/use-tag-groups.ts` drives it client-side.)
 - **Row tag chips are unaffected by grouping** — grouping only changes
   list/picker ordering, not how chips render on a row.
-- **Current groups (verified 2026-10-13):** `Seasonal` — Fall/Q4,
-  St. Valentine's Day, St. Patrick's Day, Spring, Summer, Back to School
-  (`sort_order` 1,2,3,4,6,7 — the gap at 5 is where **Easter** sat; it was
-  deleted 2026-10-13 and the remaining rows were not renumbered). 25 tags
-  total, one group.
+- **Groups and render order (2026-10-13).** Group order is **EXPLICIT, not
+  alphabetical** — alphabetical put `OTHER` before `SEASONAL`, and Other is
+  the leftovers bucket, so it belongs last. The order is
+  `BLOCKERS → MARK DEAD → SEASONAL → OTHER`, encoded in a `CASE` in
+  `GET /api/tags` (authoritative) and mirrored by `GROUP_ORDER` in
+  `client/src/lib/use-tag-groups.ts` for the client-side comparators. A group
+  not in that list sorts AFTER the named ones, alphabetically, so adding one
+  degrades gracefully instead of landing in the middle.
+
+  | group | tags, in `sort_order` |
+  |---|---|
+  | **BLOCKERS** | a violet ramp, **darkest → lightest in list order**: Waiting for sale `#4C1D95` · OOS (supplier) `#5B21B6` · Cancels orders `#6D28D9` · Cost went up `#7C3AED` · Need more leads from this supplier `#8B5CF6` · Discontinued (supplier) `#A78BFA` · Listing deactivated `#C4B5FD` · Slow mover `#DDD6FE` |
+  | **MARK DEAD** | a red ramp, **darkest → brightest**: 5885 / 5886 `#DC2626` · Wrong product `#EF4444` · IP / Brand on the listing `#FF5C5C` |
+  | **SEASONAL** | Fall / Q4 `#C2703E` · St. Valentine's Day `#E08FB0` · Spring `#A8D8A8` · Summer `#E3C95A` |
+  | **OTHER** | Wholesale `#3B82F6` · SC import `#60A5FA` |
+
+- **ALL TAG COLOURS ARE DISTINCT — this is a rule**, not a coincidence: the
+  colour is the only thing distinguishing two chips at a glance on a row, so
+  a repeat makes two different tags read as one. The 17 above are distinct.
+  Within BLOCKERS and MARK DEAD the shade also carries meaning — the ramp
+  runs darkest-first in list order, so severity reads off the colour.
+
+  **Caveat, unresolved (2026-10-13):** the create-from-dropdown swatch picker
+  offers only the ten `TAG_COLORS` the server accepts, and 14 of the 17
+  colours above are NOT in that palette. The rule therefore cannot be
+  maintained through the UI once more than ten tags exist — a new tag can
+  only be given a colour that is already taken. Either the palette widens or
+  the picker accepts free-form hex; **not decided.**
+
+- **Deleted 2026-10-13:** Easter, Buyable, SET MIN PRICE, For Sourcing (3
+  ASINs), St. Patrick's Day, Back to School. `Spark Lead`, `OA Hunt` and
+  `OAL 24/7` are ungrouped and on their way out — §6 Lead Source replaces
+  them (they are deleted by that patch's backfill, after it has migrated
+  their meaning into `asins.lead_source`).
 - **Deletion cascades:** deleting a tag removes its `asin_tags` associations
   (`ON DELETE CASCADE`); the ASINs themselves are untouched.
 

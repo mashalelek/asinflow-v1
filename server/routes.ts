@@ -2930,11 +2930,27 @@ export async function registerRoutes(
   app.get("/api/tags", async (_req: Request, res: Response) => {
     if (!isDbAvailable()) { res.json([]); return; }
     try {
-      // Ungrouped tags (tag_group NULL) first, alphabetical; then grouped tags
-      // by group then sort_order (e.g. the Seasonal group renders last).
+      // §20 render order: ungrouped tags (tag_group NULL) first,
+      // alphabetical; then each GROUP in the order below, its tags by
+      // sort_order.
+      //
+      // Group order is EXPLICIT, not alphabetical (2026-10-13). Alphabetical
+      // put OTHER before SEASONAL, and "Other" belongs last — it is the
+      // leftovers bucket. A group not in this list sorts after the named
+      // ones, alphabetically, so adding a group degrades gracefully instead
+      // of landing in the middle.
       const result = await query(
         `SELECT id, name, color, tag_group, sort_order FROM tags
-         ORDER BY (tag_group IS NOT NULL), tag_group, sort_order NULLS LAST, name`
+         ORDER BY (tag_group IS NOT NULL),
+                  CASE tag_group
+                    WHEN 'BLOCKERS'  THEN 1
+                    WHEN 'MARK DEAD' THEN 2
+                    WHEN 'SEASONAL'  THEN 3
+                    WHEN 'OTHER'     THEN 4
+                    ELSE 5
+                  END,
+                  tag_group,
+                  sort_order NULLS LAST, name`
       );
       res.json(result.rows);
     } catch (err: any) { res.status(500).json({ message: err.message }); }

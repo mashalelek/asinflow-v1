@@ -93,6 +93,40 @@ describe("every tag is listed, always — including 0 matches", () => {
   });
 });
 
+describe("§20 group render order is explicit, not alphabetical", () => {
+  const routes = server("routes.ts");
+
+  it("GET /api/tags orders groups BLOCKERS, MARK DEAD, SEASONAL, OTHER", () => {
+    // Alphabetical put OTHER before SEASONAL; Other is the leftovers bucket
+    // and belongs last.
+    const i = routes.indexOf('app.get("/api/tags"');
+    const fn = routes.slice(i, i + 1600);
+    for (const [g, n] of [["BLOCKERS", 1], ["MARK DEAD", 2], ["SEASONAL", 3], ["OTHER", 4]] as const) {
+      expect(fn, g).toMatch(new RegExp(`WHEN '${g}'\\s+THEN ${n}`));
+    }
+    expect(fn).toMatch(/ELSE 5/);                       // unknown groups last
+    expect(fn).toMatch(/\(tag_group IS NOT NULL\)/);    // ungrouped still first
+  });
+
+  it("the client comparator mirrors the server's group order", () => {
+    const a = (name: string, g: string | null, so: number | null) =>
+      ({ name, tag_group: g, sort_order: so });
+    const shuffled = [
+      a("SC import", "OTHER", 2), a("Summer", "SEASONAL", 4),
+      a("Waiting for sale", "BLOCKERS", 1), a("OA Hunt", null, null),
+      a("Wrong product", "MARK DEAD", 2),
+    ];
+    expect([...shuffled].sort(compareTagRecords).map((t) => t.tag_group))
+      .toEqual([null, "BLOCKERS", "MARK DEAD", "SEASONAL", "OTHER"]);
+  });
+
+  it("an unknown group sorts after the named ones, not into the middle", () => {
+    const a = (g: string | null) => ({ name: "x" + (g ?? ""), tag_group: g, sort_order: 1 });
+    const out = [a("ZZZ-new"), a("OTHER"), a("BLOCKERS")].sort(compareTagRecords);
+    expect(out.map((t) => t.tag_group)).toEqual(["BLOCKERS", "OTHER", "ZZZ-new"]);
+  });
+});
+
 describe("the colour palette is the server's", () => {
   it("client TAG_COLORS matches server tags-repo TAG_COLORS exactly", () => {
     // POST /api/tags accepts a colour only if it is in the server list, so a
