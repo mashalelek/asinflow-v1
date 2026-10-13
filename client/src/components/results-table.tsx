@@ -18,6 +18,9 @@ import {
   extractDomain,
   calculateMaxCogs,
   appliesDgHazmatSurcharge,
+  LEAD_SOURCES,
+  LEAD_SOURCE_COLORS,
+  type LeadSource,
 } from "@shared/schema";
 
 function ResizeHandle({ onMouseDown }: { onMouseDown: (e: React.MouseEvent) => void }) {
@@ -466,6 +469,7 @@ function computeRowValue(
     // this same stored value — one field, two accessors, never two writers.
     case "buyLink": return result.buyLink ?? null;
     case "supplierSku": return result.supplierSku ?? null;
+    case "leadSource": return result.leadSource ?? null;
     case "cogs": return result.actualCogs ?? null;
     case "estCogs": return result.estimatedCogs ?? null;
     case "salePrice": return price;
@@ -651,6 +655,25 @@ export function ResultsTable({
     }
     return opts;
   }, [allResults, tagMeta, allTags]);
+
+  // §6: EVERY enum value is listed with its count, (0) included — the same
+  // rule as the tag filter (§20). The set of sources is closed and known, so
+  // deriving the list from the result set would hide a source that simply
+  // has no match in the current view.
+  const leadSourceOptions: MultiSelectOption[] = useMemo(() => {
+    const counts = new Map<string, number>();
+    let none = 0;
+    for (const r of allResults) {
+      if (!r.leadSource) { none++; continue; }
+      counts.set(r.leadSource, (counts.get(r.leadSource) ?? 0) + 1);
+    }
+    return [
+      { value: "__none__", label: "No lead source", count: none },
+      ...LEAD_SOURCES.map((s) => ({
+        value: s.toLowerCase(), label: s, color: LEAD_SOURCE_COLORS[s], count: counts.get(s) ?? 0,
+      })),
+    ];
+  }, [allResults]);
 
   const supplierOptions: MultiSelectOption[] = useMemo(() => {
     const counts = new Map<string, number>();
@@ -917,7 +940,7 @@ export function ResultsTable({
                         currentFilter={colFilters[colId]}
                         onApply={onFilterApply}
                         onClear={() => onFilterClear(colId)}
-                        multiSelectOptions={colId === "tags" ? tagOptions : colId === "supplier" ? supplierOptions : colId === "category" ? categoryOptions : colId === "sourcing" ? sourcingOptions : colId === "status" ? statusOptions : undefined}
+                        multiSelectOptions={colId === "tags" ? tagOptions : colId === "supplier" ? supplierOptions : colId === "category" ? categoryOptions : colId === "sourcing" ? sourcingOptions : colId === "status" ? statusOptions : colId === "leadSource" ? leadSourceOptions : undefined}
                         onTagsChanged={colId === "tags" ? reloadTags : undefined}
                         dateFilter={dateFilterCols?.has(colId)}
                       />
@@ -1809,6 +1832,72 @@ function ProductCell({ result, price, settings, onResultUpdate, collisionBoundar
   );
 }
 
+// §6 Lead Source cell — chip + single-select popover (the Sourcing pattern).
+// §14 user-controlled: this and the INSERT paths are the only writers, and
+// the endpoint rejects anything outside the enum rather than coercing.
+function LeadSourceCell({
+  asin, value, onSaved,
+}: { asin: string; value: LeadSource | null; onSaved?: (v: LeadSource | null) => void }) {
+  const [open, setOpen] = useState(false);
+  const [saving, setSaving] = useState(false);
+
+  async function save(next: LeadSource | null) {
+    if (saving) return;
+    setSaving(true);
+    try {
+      const r = await fetch(`/api/asins/${asin}/lead-source`, {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ leadSource: next }),
+      });
+      if (r.ok) { onSaved?.(next); setOpen(false); }
+    } finally { setSaving(false); }
+  }
+
+  return (
+    <Popover open={open} onOpenChange={setOpen}>
+      <PopoverTrigger asChild>
+        <button
+          className="text-left"
+          data-testid={`lead-source-${asin}`}
+          onClick={(e) => e.stopPropagation()}
+        >
+          {value ? (
+            <span
+              className="inline-block px-1.5 py-0.5 rounded text-[10px] font-medium text-white"
+              style={{ backgroundColor: LEAD_SOURCE_COLORS[value] }}
+            >
+              {value}
+            </span>
+          ) : (
+            <span className="text-muted-foreground text-sm hover:text-foreground">-</span>
+          )}
+        </button>
+      </PopoverTrigger>
+      <PopoverContent className="w-44 p-1" onClick={(e) => e.stopPropagation()}>
+        {LEAD_SOURCES.map((s) => (
+          <button
+            key={s}
+            disabled={saving}
+            onClick={() => save(s)}
+            className={`w-full flex items-center gap-2 px-2 py-1 rounded text-left text-xs hover:bg-muted ${value === s ? "bg-muted" : ""}`}
+          >
+            <span className="w-2.5 h-2.5 rounded-full flex-shrink-0" style={{ backgroundColor: LEAD_SOURCE_COLORS[s] }} />
+            {s}
+          </button>
+        ))}
+        <button
+          disabled={saving || value == null}
+          onClick={() => save(null)}
+          className="w-full px-2 py-1 mt-1 border-t rounded text-left text-xs text-muted-foreground hover:bg-muted disabled:opacity-40"
+        >
+          Clear
+        </button>
+      </PopoverContent>
+    </Popover>
+  );
+}
+
 export function renderCell(
   colId: ColumnId,
   result: AsinResult,
@@ -1834,6 +1923,18 @@ export function renderCell(
       return result.supplierSku
         ? <span className="text-sm font-mono">{result.supplierSku}</span>
         : <span className="text-muted-foreground text-sm">-</span>;
+
+    // §6 Lead Source — a chip, inline-editable (single select). Colours are
+    // LEAD_SOURCE_COLORS, distinct from the §20 tag palette because a lead
+    // chip and a tag chip can sit on the same row.
+    case "leadSource":
+      return (
+        <LeadSourceCell
+          asin={result.asin}
+          value={result.leadSource ?? null}
+          onSaved={(v) => onResultUpdate?.(result.asin, { leadSource: v })}
+        />
+      );
 
     case "supplier": {
       const domain = extractDomain(result.buyLink);

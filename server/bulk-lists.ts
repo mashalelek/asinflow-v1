@@ -22,7 +22,7 @@
 
 import { query } from "./db";
 import { log } from "./index";
-import { cleanBuyLink, extractDomain } from "@shared/schema";
+import { cleanBuyLink, extractDomain, normalizeLeadSource } from "@shared/schema";
 import type { AsinInput } from "@shared/schema";
 // Pure lead-date helpers live in bulk-lead-dates.ts (no Express-boot import
 // chain) — re-exported here so existing callers keep their import path.
@@ -43,6 +43,7 @@ export async function createBulkList(
     asin: string; cogs: number | null; supplierSku: string | null;
     buyLink: string | null; supplier: string | null;
     tags: string[] | null; promoNotes: string | null; notes: string | null; addedAt: Date | null;
+    leadSource: string | null;   // §6: per-row CSV value, else the dialog's list-wide pick
   }> = [];
   let skippedInvalid = 0;
   for (const input of inputs) {
@@ -71,6 +72,10 @@ export async function createBulkList(
         }
         return r.date;
       })(),
+      // §6: normalised here so an unrecognised CSV cell becomes NULL rather
+      // than failing the CHECK at INSERT time. The caller has already applied
+      // the dialog's list-wide pick as the default on AsinInput.
+      leadSource: normalizeLeadSource(input.leadSource) ?? null,
     });
   }
   if (rows.length === 0) {
@@ -89,10 +94,14 @@ export async function createBulkList(
   for (const row of rows) {
     await query(
       `INSERT INTO bulk_list_asins (list_id, asin, estimated_cogs, estimated_cogs_source, supplier_sku,
-                                    buy_link, supplier, tags, promo_notes, notes, added_at)
-       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, COALESCE($11, NOW()))`,
+                                    buy_link, supplier, tags, promo_notes, notes, added_at, lead_source)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, COALESCE($11, NOW()), $12)`,
       [listId, row.asin, row.cogs, row.cogs != null ? "csv" : null, row.supplierSku,
-       row.buyLink, row.supplier, row.tags, row.promoNotes, row.notes, row.addedAt],
+       row.buyLink, row.supplier, row.tags, row.promoNotes, row.notes, row.addedAt,
+       // §6: the per-row CSV value if the file had a lead_source column,
+       // else the dialog's list-wide selection. Per-row OVERRIDES the
+       // list-wide value — the file is more specific than the dropdown.
+       row.leadSource ?? null],
     );
   }
 

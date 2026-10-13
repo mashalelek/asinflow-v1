@@ -53,6 +53,9 @@ const REVIEWED_COLS = new Set<ColumnId>(["dateAdded", "lastReviewed", "priceAge"
 function getFilterType(colId: ColumnId): FilterType {
   if (NUMERIC_COLS.has(colId)) return "numeric";
   if (colId === "tags") return "tags";
+  // §6 Lead Source: a closed enum, so the multi-select list (with counts) is
+  // the right filter — same machinery as supplier/category/status.
+  if (colId === "leadSource") return "supplier";
   if (colId === "supplier") return "supplier";
   if (colId === "category") return "supplier"; // reuse supplier multi-select type
   if (colId === "sourcing") return "supplier"; // reuse supplier multi-select type

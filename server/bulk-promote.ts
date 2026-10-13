@@ -44,6 +44,8 @@ export function buildPromoteRows(bulk: any, cache: any): {
       buy_link: bulk.buy_link ?? null,
       supplier: bulk.supplier ?? null,
       supplier_sku: bulk.supplier_sku ?? null,
+      lead_source: bulk.lead_source ?? null,   // §6 — carried through promote
+
       notes: bulk.notes ?? null,
       promo_notes: bulk.promo_notes ?? null,
       added_at: bulk.added_at,               // lead date, NOT promotion date

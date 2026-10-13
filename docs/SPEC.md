@@ -449,6 +449,35 @@ so it never appears unbidden).
   status, issue codes + messages, flags; newest first — so errors resolved
   over time stay visible.
 
+### Lead Source column (2026-10-13)
+
+Where a lead came from, as a first-class field. In the **Description** group
+directly after Supplier SKU, `defaultVisible: false`.
+
+- **Closed set:** `ER` · `Spark` · `OA Hunt` · `OAL 24/7` · `MP` · `RA`,
+  enforced by a CHECK on `asins.lead_source` and `bulk_list_asins.lead_source`
+  (migration 048). **NULL is meaningful** — "we don't know" — and is what
+  §18 phase c leaves an SC-discovered ASIN, which has no lead source AF can
+  honestly claim.
+- **Chip colours**, distinct from each other AND from the §20 tag palette,
+  because a lead chip and a tag chip sit on the same row: ER `#F59E0B` ·
+  Spark `#F97316` · OA Hunt `#22C55E` · OAL 24/7 `#EC4899` · MP `#64748B` ·
+  RA `#14B8A6`.
+- **Inline edit** — single-select popover (the Sourcing pattern) with a
+  Clear. `PUT /api/asins/:asin/lead-source`; an unrecognised value is a
+  **400 naming the allowed set**, not a CHECK-violation 500.
+- **Filter** — multi-select with counts, listing **every** enum value
+  including `(0)`, plus "No lead source". Same rule as the §20 tag filter:
+  the set is closed and known, so deriving the list from the result set
+  would hide a source that merely has no match in the current view.
+- **Export CSV** and the export → Bulk Calc round trip carry it, through
+  `getRowValue` — the one accessor for sort, filter and export (§6).
+
+**Replaces three tags.** Spark Lead, OA Hunt and OAL 24/7 encoded this in a
+structure that cannot express "exactly one of these": an ASIN could carry
+two, or none, and nothing noticed. The 2026-10-13 backfill migrated them and
+the tags were deleted (§20).
+
 ### Catalog icon — three states (2026-10-10)
 
 The Product cell's catalog icon reads from **two sources, because it shows
@@ -1760,6 +1789,17 @@ so they can never cross.
 
 - **Always skips ASINs that already exist in the `asins` table** — no update,
   no archive, no analyze. The sheet's only job is to add new ASINs to AF.
+- **§6 Lead Source from col G (2026-10-13), NEW ASINs only.** The cell is
+  normalised case- and whitespace-insensitively to the enum, with the aliases
+  `FBA Spark → Spark` and `OAH → OA Hunt`, and a multi-value cell
+  (`"ER, MP"`) resolves by priority **ER > MP > RA** regardless of order
+  inside the cell. Multi-value cells are TOKENISED on `, / | & +`, never
+  substring-matched — "Supplier" contains `er` and "Amp" contains `mp`.
+  Unrecognised or blank → **MP**: the sheet is the marketplace lead pipeline,
+  so MP is the honest default for a row that came from it without saying
+  otherwise. The run result carries `unrecognizedLeadSources`, the DISTINCT
+  unrecognised strings, so a systematic typo is visible rather than quietly
+  becoming MP forever.
 - For NEW ASINs (not yet in AF), runs the shared **new-ASIN onboarding**
   (`onboardNewAsins`, 2026-09-09): Product Info (which performs the
   insert, catalog, gating, hazmat) → Prices & Stock `prices` stage →
@@ -3405,6 +3445,7 @@ live write to Seller Central:
 | Offer price at creation | Add-Offer path (price resolver) |
 | `primary_sku`, `asin_skus.is_primary` | Add-Offer path (promotes the live-offer SKU on creation); inventory-sync may set them only as bootstrap when no primary exists, never overwrite |
 | `has_live_offer`, `has_buyable_offer` + both stamps, `current_issues`, `issues_checked_at` | **`writeLiveOfferVerdict` — the one primitive (§18 A2, 2026-10-10).** Called ONLY by probes: the listings reconcile stage (Prices & Stock + Product Info), the §19 post-submit ladder, and the §19 verdict / 48h-stale re-probes. No verdict, submission response, or human determination writes any of these fields. Supersedes the previous owners list, which named `live-offer-sync.ts` (deleted), the sweep's `'live'` transition, and the manual `'live'` verdict (2026-08-28, now a re-probe trigger) |
+| `asins.lead_source` (§6) | **USER-CONTROLLED.** The INSERT paths (CSV upload, sourcing sync, bulk promote) and `PUT /api/asins/:asin/lead-source`. Absent from the asins UPSERT's ON CONFLICT SET list, so a re-analyze of an existing ASIN can never overwrite it. Analyze, Product Info and Prices & Stock NEVER write it |
 | `sku_legend` entries (brand/dept codes, aliases) | Add-Offer approval flow |
 | `category`, `brand` (self-heal) | Add-Offer catalog fetch (per §14 catalog ownership) |
 
@@ -4086,10 +4127,15 @@ Free-form labels applied to ASINs (`tags` + `asin_tags` join).
   the picker accepts free-form hex; **not decided.**
 
 - **Deleted 2026-10-13:** Easter, Buyable, SET MIN PRICE, For Sourcing (3
-  ASINs), St. Patrick's Day, Back to School. `Spark Lead`, `OA Hunt` and
-  `OAL 24/7` are ungrouped and on their way out — §6 Lead Source replaces
-  them (they are deleted by that patch's backfill, after it has migrated
-  their meaning into `asins.lead_source`).
+  ASINs), St. Patrick's Day, Back to School — and then **Spark Lead, OA Hunt
+  and OAL 24/7**, whose meaning moved to **§6 `asins.lead_source`**. Those
+  three encoded "where the lead came from" in a structure that cannot
+  express "exactly one of these"; the backfill migrated 169 associations
+  into the CHECKed column and the tags were dropped. Verified against a
+  per-ASIN before/after snapshot: 169 associations removed, **all three of
+  them lead tags, zero other tags lost** (984 → 815).
+
+  **17 tags remain**, all grouped, all colours distinct.
 - **Deletion cascades:** deleting a tag removes its `asin_tags` associations
   (`ON DELETE CASCADE`); the ASINs themselves are untouched.
 
@@ -4157,6 +4203,15 @@ session-state, not persisted. Promoting a row while "Not in database"
 is active correctly drops it from the view on refetch; the selection is
 pruned to visible rows so a hidden row is never carried into the next
 action.
+
+**§6 Lead Source (2026-10-13)** is the exception to the free-text rule
+below: `bulk_list_asins.lead_source` carries the SAME CHECKed enum as
+`asins.lead_source`, because it survives the export → upload → promote round
+trip and lands in the main catalog. The upload dialog offers a list-wide
+"Lead source"; a `lead_source` CSV column OVERRIDES it per row (the file is
+more specific than the dropdown). Unrecognised cell → NULL, normalised
+before the INSERT so a bad value cannot fail the CHECK mid-upload. Promote
+carries it to `asins.lead_source`.
 
 Bulk tags are FREE TEXT on the bulk row (2026-09-04). They never read or
 write `tags` / `asin_tags`, carry no FK, and have no relationship to

@@ -633,7 +633,7 @@ export function extractDomain(url: string | null): string | null {
 
 export const DEFAULT_COLUMNS = [
   // Group 1 — Description
-  "product", "category", "brand", "supplier", "buyLink", "supplierSku",
+  "product", "category", "brand", "supplier", "buyLink", "supplierSku", "leadSource",
   // Group 2 — Stock
   "stock", "availableFba", "ordered", "fbaStock", "reserved", "sentToFba", "daysLeft",
   // Group 3 — Actuals
@@ -681,6 +681,7 @@ export const ALL_COLUMNS: ColumnDef[] = [
   // one stored field, two columns, one writer (BuyLinkEditor).
   { id: "buyLink", label: "Buy Link", defaultVisible: false, align: "left", group: "description" },
   { id: "supplierSku", label: "Supplier SKU", defaultVisible: false, align: "left", group: "description" },
+  { id: "leadSource", label: "Lead Source", defaultVisible: false, align: "left", group: "description" },
   // Group 2 — Stock
   { id: "stock", label: "Stock", defaultVisible: true, align: "right", group: "stock" },
   { id: "availableFba", label: "Available (FBA)", defaultVisible: false, align: "right", group: "stock" },
