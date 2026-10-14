@@ -74,7 +74,7 @@ This app runs on the following stack. This is settled. Do not suggest alternativ
 ## Commands
 
 ```bash
-npm run dev        # Start dev server (Express + Vite HMR) on port 5000
+npm run dev        # Start dev server (Express + Vite HMR) on port 3000 (PORT from .env; code default 5000 collides with macOS AirPlay)
 npm run build      # Build for production (tsx script/build.ts)
 npm run start      # Run production build
 npm run check      # TypeScript type checking (source — EXCLUDES *.test.ts)
@@ -83,7 +83,22 @@ npm test           # Run the test suite once (vitest run)
 npm run test:watch # Run the test suite in watch mode
 ```
 
-**Known tsc baseline: 4× TS1252 in `server/spapi.ts` (lines 845/854/863/871).**
+**Production build and start, checked locally** (SPEC §24 "Deployment" —
+Render runs the same two commands):
+
+```bash
+npm run build                      # dist/public (Vite) + dist/index.cjs (esbuild); dist/ is gitignored
+PORT=5055 npm start                # NODE_ENV=production node dist/index.cjs — npm start sets NODE_ENV itself
+curl -s -w ' %{http_code}\n' http://127.0.0.1:5055/health   # {"ok":true} 200 when the DB answers; {"ok":false} 503 otherwise
+```
+
+Use a spare port so a running `npm run dev` on 3000 is untouched (5000 is
+taken by macOS AirPlay on this machine), and stop the process afterwards.
+The build pulls tsx, vite, esbuild and the PostCSS/Tailwind toolchain from
+`dependencies`, so it also works after a production-only install
+(`npm ci --omit=dev`).
+
+**Known tsc baseline: 4× TS1252 in `server/spapi.ts` (lines 870/879/888/896).**
 These are pre-existing (function declarations nested in a block under the ES5
 target) and are the expected clean state. The SAME four are the only expected
 errors from both `check` and `check:tests`. Gate reports must label tsc errors
@@ -92,7 +107,7 @@ and any introduced error must be fixed forward before committing.
 
 ## Tests
 
-`npm test` (vitest). **598 tests across 47 files** as of 2026-10-03 — this
+`npm test` (vitest). **905 tests across 59 files** as of 2026-10-13 — this
 codebase IS tested; the old "there are no tests" line was years stale.
 
 **A gate report must cover BOTH typecheck commands, labelled separately:**
@@ -100,7 +115,7 @@ codebase IS tested; the old "there are no tests" line was years stale.
 ```
 npm run check        -> 4 baseline TS1252, 0 introduced
 npm run check:tests  -> 4 baseline TS1252, 0 introduced
-npm test             -> 598/598
+npm test             -> 905/905
 ```
 
 `npm run check` alone is NOT a complete gate. The base `tsconfig.json`
