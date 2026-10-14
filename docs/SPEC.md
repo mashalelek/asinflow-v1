@@ -5022,3 +5022,130 @@ is the HIGHEST qualified offer. Design detail lives in
 `docs/claude_spec-patch-repricing-engine-v1.md` (v1.6) until that phase is
 folded in. No repricer min/max code exists yet (verified 2026-10-07), so
 there is nothing implemented to align.
+
+---
+
+## 24. Deployment
+
+Written 2026-10-13 alongside the cloud pre-flight commits (health route,
+Node pin, build-time packages moved to `dependencies`). Nothing here is
+deployed yet; this section records the target and the contract the repo
+now satisfies.
+
+### Target
+
+- **Render**, Hobby workspace.
+- **Web service**: Standard instance, Node runtime. The server binds
+  `0.0.0.0` on `process.env.PORT` (`server/index.ts`); Render assigns the
+  port.
+- **Database**: Render Postgres, Basic-256mb plan. The app connects over the
+  **internal** URL by default, which needs no SSL.
+- **Node**: `22.x`, pinned in `package.json` `engines` and matched to the
+  local v22.19.0.
+
+### Build and start
+
+| Step | Command | Notes |
+|---|---|---|
+| Install | Render's default `npm install` | Every package the build imports is in `dependencies` (tsx, vite, esbuild, typescript, @vitejs/plugin-react, autoprefixer, tailwindcss, postcss, @tailwindcss/typography, the Replit runtime-error plugin), so a production-only install still builds. Verified with `npm ci --omit=dev && npm run build` in a clean copy. |
+| Build | `npm run build` | `tsx script/build.ts`: Vite builds the client into `dist/public`, esbuild bundles the server into `dist/index.cjs` with `NODE_ENV` baked in as `production`. `dist/` is gitignored and never committed. |
+| Start | `npm start` | `NODE_ENV=production node dist/index.cjs`. The script sets `NODE_ENV` itself; do **not** set `NODE_ENV` in the Render environment. |
+| Health check | `GET /health` | Unauthenticated. `200 {"ok":true}` only when `SELECT 1 FROM asins LIMIT 1` succeeds; `503 {"ok":false}` otherwise, with the pg error written to the server log only. Registered before the SPA catch-all, which answers 200 for any unknown path and would otherwise mask a dead database. |
+
+### Environment variables
+
+Names and purpose only. Values live in Render's environment settings, never
+in the repo. Locally the same names come from `.env` via `dotenv/config`;
+dotenv never overrides a variable already set in the environment, so the
+platform's values always win.
+
+| Variable | Secret | Purpose |
+|---|---|---|
+| `DATABASE_URL` | yes | pg Pool connection string (`server/db.ts`). Use the Render **internal** URL. |
+| `SP_API_CLIENT_ID` | yes | LWA client id for SP-API token exchange. |
+| `SP_API_CLIENT_SECRET` | yes | LWA client secret. |
+| `SP_API_REFRESH_TOKEN` | yes | LWA refresh token. |
+| `SP_API_SELLER_ID` | no | Seller id for Listings, restrictions, submissions and the full-scope pass. |
+| `GOOGLE_CREDENTIALS_PATH` | no (points at a secret) | Path to the service-account JSON. On Render this is a **secret file** (`google-credentials.json` uploaded in the service's Secret Files) and the variable holds that file's mount path. Gates every Sheets route. |
+| `GOOGLE_SHEET_ID` | no | Orders / PO tracker sheet. |
+| `SOURCING_SHEET_ID` | no | Sourcing leads sheet. |
+| `AURA_API_KEY` | yes | Aura repricer API, HTTP Basic username. |
+| `VELOCITY_API_KEY` | yes | Velocity prep-service API. |
+| `VELOCITY_WAREHOUSE_ID` | no | Velocity warehouse. |
+| `VELOCITY_MIN_ORDER_DATE` | no | Floor date for Velocity record creation. |
+| `TZ` | no | **Required: `America/New_York`.** Every date derivation in the syncs, exports and crons uses host-local time (`ymd()`, `todayLocal()`, the sales-window bounds). Render's default is UTC, which would shift day boundaries. |
+| `PORT` | no | Set by Render; the code defaults to 5000 when absent. |
+| `CORS_ALLOWED_ORIGIN` | no | Optional extra allowed origin beside `chrome-extension://*`. |
+| `ENABLE_CRONS` | no | **Leave unset.** See below. |
+| `APP_PASSWORD` | yes | Read by `POST /api/verify-password`, which no client code calls. The auth rebuild is a separate phase; until then nothing gates the app. |
+
+Not read by the server: `NODE_ENV` (set by `npm start`), `SP_API_MARKETPLACE_ID`
+and `REPL_ID` (scripts and `vite.config.ts` only).
+
+### Scheduled crons stay off
+
+`ENABLE_CRONS` remains **unset** on Render until the scheduler rework. The
+three node-cron schedules (§11 "Scheduled crons") have no in-flight guard
+against a concurrent manual sync, fire host-local with no timezone option,
+and the Prices & Stock cron's listings stage cannot onboard SC discoveries
+because the route layer injects that callback and the cron does not. The
+§11 line "re-enable with `ENABLE_CRONS=true` at cloud deploy" is superseded
+by this section: manual toolbar triggers stay the operating model after the
+move.
+
+### Postgres SSL
+
+No code change is needed. The internal Render URL needs no SSL. If the
+**external** URL is ever used (a local `psql`, a one-off script), enable SSL
+through the driver's own switches rather than code:
+
+- append `?sslmode=require` to `DATABASE_URL` (pg-connection-string maps it to
+  `ssl: { rejectUnauthorized: false }`), or
+- set `PGSSLMODE=require` in the environment (`ssl: true`, full verification;
+  `PGSSLMODE=no-verify` relaxes it).
+
+`server/db.ts` passes `DATABASE_URL` straight to `pg.Pool` and sets no `ssl`
+option of its own.
+
+### Migrations
+
+There is no migration runner and no ledger table; `npm start` runs only
+`ensureSettingsTable()` (creates `settings` and seeds its defaults). On an
+empty database the server starts and serves the UI, then every data route
+fails because `asins` does not exist. Migrations are **manual `psql -f`** for
+now; a runner is a queued item.
+
+Schema sources, applied in this order on a fresh database:
+
+1. `database/asinflow_schema_v1.1.sql` — base schema.
+2. `database/migrations/NNN_*.sql` in numeric order. Numbering has gaps
+   (005–007, 009) by history, not by omission; 048 is the newest as of
+   2026-10-13.
+
+Migrations run only from committed code (CLAUDE.md): commit, then apply,
+then verify.
+
+### Initial data load
+
+The first deploy does **not** build the database from migrations. It copies
+the local database, which already carries every migration plus the data:
+
+```
+pg_dump --format=custom --no-owner --no-privileges asinflow > asinflow.dump
+pg_restore --no-owner --no-privileges --dbname "<render external DATABASE_URL>" asinflow.dump
+```
+
+The restore goes over the **external** URL from the local machine, with SSL
+per the section above. After the restore, `GET /health` on the web service
+must return 200 before any sync is triggered. Later migrations are applied to
+Render the same manual way as locally.
+
+### Verification checklist for the first deploy
+
+1. `GET /health` → `200 {"ok":true}`.
+2. `GET /api/credentials-status` → `{"configured":true}`.
+3. ASINs page loads with the expected catalog count (2,579 rows as of
+   2026-10-13; the count is in the scorecards).
+4. A **selection-scoped** Prices & Stock run on two or three ASINs completes
+   and writes `refresh_runs` rows with trigger `refresh`.
+5. Server log shows `Scheduled crons disabled (ENABLE_CRONS != 'true')`.
