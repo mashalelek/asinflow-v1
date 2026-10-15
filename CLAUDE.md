@@ -288,10 +288,38 @@ commit".
 
 Applies to `git restore <file>` and `git stash` mid-edit for the same reason.
 
+## Approval model: Maria approves the spec patch, not each commit
+
+Once a spec patch (`docs/claude_spec-patch-*.md`) is approved, implement
+every commit it lists with the usual discipline — diff, gate (`check`,
+`check:tests`, `test`), single-concern commit message — **without stopping
+for per-commit approval**. Stop only when an input is actually needed:
+
+- a deviation from the patch's text,
+- a decision the patch does not cover,
+- a finding that cannot be resolved from the patch alone.
+
+If everything is straightforward, keep going. Report once, before pushing.
+
+**Still a hard stop before the step that touches production:** migrations
+against Render, SP-API or Aura writes, and auth changes.
+
 ## Migrations run from committed code only
 
 Migrations and any DB-mutating script run only from committed code.
 Apply-then-commit is backwards — commit, then apply, then verify.
+
+**Procedure (SPEC §24 "Migrations", runner since 2026-10-15):** add
+`database/migrations/0NN_*.sql`, restart the dev server (the runner applies
+it on startup and logs it under `[migrate]`), confirm `npm run migrate:status`
+shows it applied with 0 pending, commit. The same runner applies it on
+Render at deploy, before the server listens; a failing file exits the
+process and the deploy stays on the previous instance. `psql -f` is no
+longer part of the procedure. Files must not carry their own
+`BEGIN`/`COMMIT`; one that needs to run outside a transaction starts with
+`-- migrate: no-transaction`. A fresh database is built by
+`npm run migrate` from `database/schema_baseline_2026-10-15.sql`, not from
+the archived v1.1 file.
 
 ## Definition of Done: committed
 

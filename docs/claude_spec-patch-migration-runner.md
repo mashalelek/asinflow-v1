@@ -4,8 +4,18 @@
 "Migrations are manual `psql -f`" procedure in SPEC §24 with an automatic
 runner so a schema change reaches Render the same way code does: on deploy.*
 
-> **Status: DRAFT — awaiting implementation.** Two single-concern commits.
-> Prerequisite for the scheduler rework, which will add several migrations.
+> **Status: IMPLEMENTED 2026-10-15.** Two single-concern commits as listed.
+> SPEC §24 "Migrations" is the record. Deviations from the text below,
+> decided during the pre-implementation check: (1) the "fresh database"
+> path does NOT apply `asinflow_schema_v1.1.sql` + 001..050 — that sequence
+> fails (002, 016, 041) and never produced the live schema; instead a true
+> baseline, `database/schema_baseline_2026-10-15.sql`, was cut from
+> `pg_dump --schema-only` and the old file archived (decision B);
+> (2) the baseline is recorded as ledger version 0 on every database, so the
+> expected first-run line is **"48 applied, 0 pending"** (baseline + 46
+> files ≤ 050 + 051), not 51 — there are 46 files up to 050, not 50;
+> (3) a file carrying its own `BEGIN`/`COMMIT` is refused unless it opts out
+> with `-- migrate: no-transaction`. Prerequisite for the scheduler rework.
 
 ## Why
 

@@ -5112,26 +5112,85 @@ option of its own.
 
 ### Migrations
 
-There is no migration runner and no ledger table; `npm start` runs only
-`ensureSettingsTable()` (creates `settings` and seeds its defaults). On an
-empty database the server starts and serves the UI, then every data route
-fails because `asins` does not exist. Migrations are **manual `psql -f`** for
-now; a runner is a queued item.
+Rewritten 2026-10-15 (patch `docs/claude_spec-patch-migration-runner.md`).
+A schema change reaches Render the same way code does: on deploy.
 
-Schema sources, applied in this order on a fresh database:
+**Rule.** On startup, before anything else touches the database, the server
+applies every unapplied file in `database/migrations/` in numeric order,
+each in its own transaction, and records it. Nothing is ever applied twice.
+Nothing serves until the ledger matches the files on disk.
 
-1. `database/asinflow_schema_v1.1.sql` — base schema.
-2. `database/migrations/NNN_*.sql` in numeric order. Numbering has gaps
-   (005–007, 009) by history, not by omission; 048 is the newest as of
-   2026-10-13.
+- **Runner:** `server/migrate.ts`, `runMigrations(pool)`, called first in
+  `server/index.ts` — before `ensureExtensionTables`, the session store and
+  `listen`. `npm run dev` and `npm start` both run it.
+- **Ledger:** `schema_migrations(version, filename, applied_at, checksum)`,
+  created by the runner itself if absent. `version` is the `NNN` prefix;
+  the baseline is version 0. `checksum` is informational: a file that
+  changed after it was applied is **logged as a warning**, never re-run.
+- **Discovery:** files matching `NNN_*.sql`, sorted numerically. Gaps
+  (005–007, 009) are historical. Two files with the same prefix refuse the
+  whole run before anything is applied.
+- **Apply loop:** `BEGIN`, the file as one statement batch, the ledger row,
+  `COMMIT`. Any error → `ROLLBACK`, `migration NNN_name.sql failed: <pg
+  error>`, process exit 1 **before listen**. Render's health check then
+  fails the deploy and keeps the previous instance up — the same posture as
+  a missing `SESSION_SECRET`.
+- **A file must not carry its own `BEGIN`/`COMMIT`.** Twelve historical
+  files (≤ 050) do, and never execute through the runner; a new one that
+  does is refused by name. A file that must run outside a transaction
+  (`CREATE INDEX CONCURRENTLY`) opts out with a first line
+  `-- migrate: no-transaction`. None exist today.
+- **Advisory lock** `7342001` for the whole run, so two instances starting
+  at once (zero-downtime deploys overlap) cannot race. `RESET ALL` before
+  the client returns to the pool, since the baseline is a `pg_dump` and
+  sets session parameters.
+- **Logging** under tag `migrate`: `ledger: N applied, M pending`, one line
+  per file applied with elapsed ms, `schema current` when nothing is
+  pending.
 
-Migrations run only from committed code (CLAUDE.md): commit, then apply,
-then verify.
+**First run on a database that pre-dates the runner** (ledger empty,
+`asins` exists — local and Render as of 2026-10-15): the runner records the
+baseline as version 0 and every file ≤ `LAST_MANUAL_MIGRATION = 50` as
+applied, **executing none of them**, then applies 051 and up. 051 is
+comment-only; its line in the log is the proof the runner works on that
+database. Result on both: **48 applied, 0 pending** (baseline + 46 files ≤
+050 + 051).
+
+**First run on an EMPTY database** (no `asins`): the runner applies
+`database/schema_baseline_2026-10-15.sql` first, records it as version 0
+and files ≤ 050 as contained in it, then applies 051 and up. This is the
+one-command setup for a new clone: `createdb asinflow`, set
+`DATABASE_URL`, `npm run migrate`, `tsx script/create-admin.ts`.
+
+**Why a baseline (decision B, 2026-10-15).** The original base file plus
+001..050 did **not** rebuild the live schema: 002 and 016 reference
+`asins.is_hazmat` and 041 references `asin_estimates.error`, none created
+by any file; `asin_estimates` live has a different shape from the v1.1
+file; `asin_estimates_history` and seven `asins` columns were added by
+hand and never captured. The baseline is a `pg_dump --schema-only` of
+local with only pg_dump's `\restrict` lines and `search_path` reset
+removed; its header lists the discrepancies. Trialled in a scratch
+database: 48 applied, column-level schema identical to local. The old
+file lives at `database/archive/asinflow_schema_v1.1.sql` as history and
+must not be run. Cut a new baseline only deliberately; forward changes are
+`NNN_*.sql` files.
+
+**Tooling.** `npm run migrate` applies and exits (Render's Shell tab, a
+first local setup). `npm run migrate:status` prints applied / pending /
+checksum mismatches, read-only, exit 2 when anything is pending.
+
+**Procedure for a schema change:** add `database/migrations/0NN_*.sql`,
+restart the dev server, confirm `npm run migrate:status` shows it applied,
+commit. Migrations run only from committed code (CLAUDE.md). `psql -f` is
+no longer part of the procedure.
 
 ### Initial data load
 
-The first deploy does **not** build the database from migrations. It copies
-the local database, which already carries every migration plus the data:
+The first deploy did **not** build the database from migrations (done
+2026-10-15, before the runner existed). It copied the local database, which
+carries every migration plus the data. A fresh database no longer needs this
+for schema — the runner's baseline path builds it — but this remains the
+way to copy **data** between environments:
 
 ```
 pg_dump --format=custom --no-owner --no-privileges asinflow > asinflow.dump
@@ -5140,8 +5199,9 @@ pg_restore --no-owner --no-privileges --dbname "<render external DATABASE_URL>" 
 
 The restore goes over the **external** URL from the local machine, with SSL
 per the section above. After the restore, `GET /health` on the web service
-must return 200 before any sync is triggered. Later migrations are applied to
-Render the same manual way as locally.
+must return 200 before any sync is triggered. Later migrations reach Render
+on deploy, applied by the runner before the server listens (see
+"Migrations" above); nothing is run by hand there.
 
 The restored database already carries `users` with the local admin row and
 the `sessions` table (migration 049, §25), so **no bootstrap runs on
