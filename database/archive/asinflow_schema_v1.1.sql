@@ -1,4 +1,14 @@
 -- ============================================================================
+-- HISTORICAL — superseded 2026-10-15 by database/schema_baseline_2026-10-15.sql
+-- ============================================================================
+-- This was the original base schema (April 2026). It is kept for the record
+-- only. It is NOT applied by the migration runner and does NOT reproduce the
+-- live schema: columns and a whole table were added by hand after it was
+-- written and never captured in a migration file (see the header of the
+-- baseline file for the list). Do not run this against any database.
+-- ============================================================================
+
+-- ============================================================================
 -- AsinFlow Database Schema v1.1
 -- Migration: Initial schema for persistent ASIN database
 -- ============================================================================

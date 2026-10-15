@@ -6,6 +6,7 @@ import { createServer } from "http";
 import pool, { ensureExtensionTables, query } from "./db";
 import { createSessionMiddleware, createAuthRouter, requireAuth, setAuthLogger } from "./auth";
 import { createAdminUsersRouter } from "./admin-users";
+import { runMigrations, setMigrateLogger, MigrationError } from "./migrate";
 import { startRefreshCron } from "./refresh-cron";
 import { startSourcingSyncCron } from "./sourcing-sync-cron";
 import { startAuraSyncCron } from "./aura-sync-cron";
@@ -105,6 +106,19 @@ app.use((req, res, next) => {
 
 (async () => {
   if (process.env.DATABASE_URL) {
+    // Migrations FIRST (SPEC §24): nothing serves until the ledger matches
+    // the files on disk. Fail closed — a failed migration exits before
+    // listen, so Render's health check fails the deploy and keeps the
+    // previous instance up (same posture as a missing SESSION_SECRET).
+    setMigrateLogger(log);
+    try {
+      await runMigrations(pool);
+    } catch (err: any) {
+      const msg = err instanceof MigrationError ? err.message : `migration runner failed: ${err?.message ?? err}`;
+      log(msg, "migrate");
+      console.error(msg);
+      process.exit(1);
+    }
     try {
       await ensureExtensionTables();
       log("Extension database tables initialized");

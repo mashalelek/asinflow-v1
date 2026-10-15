@@ -55,9 +55,10 @@ export async function ensureSettingsTable() {
   }
 }
 
-// Note: the `asins` and `asin_estimates` tables are managed by the main
-// AsinFlow database migrations (see database/asinflow_schema_v1.1.sql) and
-// already exist in production. We intentionally do NOT create them here,
+// Note: the `asins` and `asin_estimates` tables are managed by the migration
+// runner (server/migrate.ts: database/schema_baseline_2026-10-15.sql plus
+// database/migrations/) and already exist in production. We intentionally do
+// NOT create them here,
 // because their production schemas differ from any naive recreation
 // (e.g. `asins.weight_lb` not `weight_oz`, `asin_estimates` uses `asin`
 // varchar as FK, `buy_box_price`/`lowest_fba_price` instead of `sale_price`,

@@ -1,0 +1,12 @@
+-- 051_seed_schema_migrations.sql — the migration runner's first migration
+-- (SPEC §24 "Migrations", patch docs/claude_spec-patch-migration-runner.md).
+--
+-- Deliberately empty. Its only job is to be the first file the runner itself
+-- applies: on a database that pre-dates the runner, files 001..050 are seeded
+-- into the ledger as already applied (they were run by hand), and this is
+-- the first one that goes through the normal apply path. Seeing
+-- "051_seed_schema_migrations.sql applied" in the startup log is the proof
+-- the runner works on that database.
+--
+-- The seeding itself happens in server/migrate.ts, not here — the runner
+-- must exist before any ledger does, so it cannot be a SQL file's job.

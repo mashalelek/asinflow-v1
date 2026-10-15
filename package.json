@@ -14,6 +14,8 @@
     "check:tests": "tsc -p tsconfig.test.json",
     "test": "vitest run",
     "test:watch": "vitest",
+    "migrate": "tsx script/migrate.ts",
+    "migrate:status": "tsx script/migrate.ts --status",
     "db:push": "drizzle-kit push"
   },
   "dependencies": {
