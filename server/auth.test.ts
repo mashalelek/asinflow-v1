@@ -101,6 +101,33 @@ describe("auth.ts and create-admin stay Express-free", () => {
   });
 });
 
+describe("migration 050: nothing references the dropped owner columns", () => {
+  // added_by / applied_by / created_by / registered_by were UUID FKs to the
+  // Replit-era users table; 049's CASCADE removed the FKs, 050 the columns.
+  // A new reader or writer here would 500 against the live schema.
+  const dropped = /\b(added_by|applied_by|registered_by)\b|\bcreated_by\b/;
+  const srcDirs = ["server", "shared", "script", join("client", "src")];
+  it("no server/shared/script/client source mentions them", () => {
+    const { readdirSync, statSync } = require("fs") as typeof import("fs");
+    const root = join(__dirname, "..");
+    const offenders: string[] = [];
+    const walk = (dir: string) => {
+      for (const name of readdirSync(dir)) {
+        const p = join(dir, name);
+        if (name === "node_modules" || name === "scratch" || name.startsWith(".")) continue;
+        if (statSync(p).isDirectory()) { walk(p); continue; }
+        if (!/\.(ts|tsx)$/.test(name) || name.endsWith(".test.ts")) continue;
+        const text = readFileSync(p, "utf8");
+        // Strip comments: the migration-050 note in routes.ts names the column.
+        const code = text.replace(/\/\/.*$/gm, "").replace(/\/\*[\s\S]*?\*\//g, "");
+        if (dropped.test(code)) offenders.push(p.slice(root.length + 1));
+      }
+    };
+    for (const d of srcDirs) walk(join(root, d));
+    expect(offenders).toEqual([]);
+  });
+});
+
 describe("attemptLogin — credentials and lockout (SPEC §25 decision 2)", () => {
   it("success returns the public user, resets the counter and stamps last_login_at", async () => {
     const db = makeDb([maria({ failed_logins: 3 })]);

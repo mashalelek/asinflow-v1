@@ -3177,7 +3177,8 @@ export async function registerRoutes(
   app.get("/api/view-presets", async (_req: Request, res: Response) => {
     if (!isDbAvailable()) { res.json([]); return; }
     try {
-      const result = await query(`SELECT id, name, description, config, is_default, created_by, created_at FROM view_presets ORDER BY is_default DESC, name`);
+      // created_by dropped by migration 050 (always NULL, never written).
+      const result = await query(`SELECT id, name, description, config, is_default, created_at FROM view_presets ORDER BY is_default DESC, name`);
       res.json(result.rows);
     } catch (err: any) { res.status(500).json({ message: err.message }); }
   });

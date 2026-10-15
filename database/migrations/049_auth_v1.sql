@@ -6,6 +6,12 @@
 --
 -- The first account is created by `tsx script/create-admin.ts`, never by a
 -- default row here. No default password anywhere.
+--
+-- CASCADE side effect (observed on the 2026-10-14 local apply): dropping the
+-- old table also removed four foreign keys that pointed at its UUID id —
+-- asins.added_by, asin_tags.applied_by, view_presets.created_by,
+-- brand_product_registry.registered_by. All four columns were NULL in every
+-- row and unwritten by code; migration 050 drops the columns themselves.
 
 DROP TABLE IF EXISTS users CASCADE;
 
