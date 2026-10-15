@@ -78,7 +78,6 @@ const EXPECTED_ROUTES = [
   "POST /api/upload/velocity",
   "POST /api/velocity/bundle-identity/map",
   "POST /api/velocity/execute",
-  "POST /api/verify-password",
   "POST /api/view-presets",
   "PUT /api/asins/:asin/buy-link",
   "PUT /api/asins/:asin/cogs",

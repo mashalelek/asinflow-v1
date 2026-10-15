@@ -5077,7 +5077,10 @@ platform's values always win.
 | `PORT` | no | Set by Render; the code defaults to 5000 when absent. |
 | `CORS_ALLOWED_ORIGIN` | no | Optional extra allowed origin beside `chrome-extension://*`. |
 | `ENABLE_CRONS` | no | **Leave unset.** See below. |
-| `APP_PASSWORD` | yes | Read by `POST /api/verify-password`, which no client code calls. The auth rebuild is a separate phase; until then nothing gates the app. |
+| `SESSION_SECRET` | yes | Signs the `af.sid` session cookie (§25). **Required in production: the server refuses to start without it.** Generate with `openssl rand -hex 32`. Locally it must be in `.env` too, because `npm start` sets `NODE_ENV=production` itself; `npm run dev` falls back to a logged, insecure dev value. Add it to Render **before** the first auth commit deploys. |
+
+`APP_PASSWORD` is gone (auth v1, 2026-10-14): `POST /api/verify-password`
+was removed with it. Login is §25.
 
 Not read by the server: `NODE_ENV` (set by `npm start`), `SP_API_MARKETPLACE_ID`
 and `REPL_ID` (scripts and `vite.config.ts` only).
@@ -5140,6 +5143,11 @@ per the section above. After the restore, `GET /health` on the web service
 must return 200 before any sync is triggered. Later migrations are applied to
 Render the same manual way as locally.
 
+The restored database already carries `users` with the local admin row and
+the `sessions` table (migration 049, §25), so **no bootstrap runs on
+Render**. Only if the restore is skipped does `tsx script/create-admin.ts`
+run there, from the service's Shell tab; it refuses when any user exists.
+
 ### Verification checklist for the first deploy
 
 1. `GET /health` → `200 {"ok":true}`.
@@ -5149,3 +5157,109 @@ Render the same manual way as locally.
 4. A **selection-scoped** Prices & Stock run on two or three ASINs completes
    and writes `refresh_runs` rows with trigger `refresh`.
 5. Server log shows `Scheduled crons disabled (ENABLE_CRONS != 'true')`.
+
+---
+
+## 25. Authentication (v1)
+
+Implemented 2026-10-14 from `docs/claude_spec-patch-auth-v1.md` (decisions
+confirmed the same day). Prerequisite for loading real data into the Render
+deployment (§24): before this, every `/api` route was open to anyone who
+reached the host, which does not meet Amazon's Data Protection Policy for
+SP-API applications.
+
+### Rule
+
+**Every request to AsinFlow is either authenticated by a valid session or
+answered with 401 (API) / the login page (UI). `GET /health` is the only
+exception.**
+
+### Decisions
+
+1. **Session length:** 30 days with "Remember me"; browser-session (cookie
+   expires on close) when unticked. The server-side row lives at most 30
+   days either way.
+2. **Lockout:** 5 consecutive failed attempts lock the account for 15
+   minutes. While locked, every attempt is refused **without a bcrypt
+   compare** and does not extend the lock. Success resets the counter.
+   Per account, not per IP.
+3. **First account:** `tsx script/create-admin.ts`, once, against an empty
+   `users` table. It refuses when any user exists. No sign-up page, no
+   default password anywhere.
+4. **Further accounts:** Settings → Users (admin only; commit 3). No
+   self-service sign-up.
+5. **Roles:** `admin` and `member`. Both see the full app. The only
+   role-gated surface is Settings → Users. VA restrictions are a later patch
+   that builds on the `role` column and nothing else.
+6. **Chrome extension:** treated as dead. Its routes (`GET /api/settings`,
+   `GET /api/asins/check/:asin`, `POST /api/import-asin`) get the same auth
+   as everything else; the `chrome-extension://*` CORS allowance is removed.
+   The ledger shows zero `extension`-trigger runs, ever. `CORS_ALLOWED_ORIGIN`
+   stays.
+7. **Scope:** auth gates `/api/*`. The SPA shell is served regardless; the
+   client renders the login page when `GET /api/auth/me` returns 401.
+
+### Data model (migration `049_auth_v1.sql`)
+
+`users` is **replaced**, not extended — the Replit-era table was never read by
+the running server. Columns: `id`, `email` (unique; lowercased in code),
+`display_name`, `password_hash` (bcrypt cost 12), `role` (`admin` |
+`member`, default `member`), `is_active` (FALSE = disabled: cannot log in,
+sessions revoked), `failed_logins`, `locked_until` (NULL = not locked),
+`last_login_at`, `created_at`, `updated_at`.
+
+`sessions` (`sid`, `sess` jsonb, `expire`, indexed on `expire`) is the
+`connect-pg-simple` store shape; its own sweeper prunes expired rows.
+
+No user-id column is added to any existing table. Ledger attribution of
+syncs to users is a later concern; `refresh_runs.trigger` stays as is.
+
+### Server (`server/auth.ts`, wired in `server/index.ts`)
+
+Middleware order: **health → session → auth routes → `requireAuth` on
+`/api` → `registerRoutes` → static.** In production `app.set("trust proxy",
+1)` so `req.ip` is the client and the `secure` cookie is set behind Render's
+proxy.
+
+- **Session:** `express-session` + `connect-pg-simple` on the existing
+  `pg.Pool`. Cookie `af.sid`, `httpOnly`, `sameSite=lax`, `secure` in
+  production, `maxAge` 30 days only when the login carried `remember: true`.
+  Secret from `SESSION_SECRET` (§24): required in production, logged dev
+  fallback otherwise.
+- `POST /api/auth/login` `{ email, password, remember }` → 200 `{ user: { id,
+  email, displayName, role } }`, or **401 `{ error: "invalid_credentials" }`
+  for unknown email, wrong password, disabled and locked alike** — the body
+  never says which; the server log (tag `auth`, with email and IP, never the
+  password) does. Success regenerates the session id, resets `failed_logins`
+  and `locked_until`, stamps `last_login_at`.
+- `POST /api/auth/logout` → destroys the session, clears the cookie, 204.
+- `GET /api/auth/me` → 200 with a **fresh** read of the user, or 401. A row
+  that is gone or disabled ends the session on the spot. The client calls
+  this once on load.
+- **`requireAuth`** → 401 `{ error: "unauthenticated" }`.
+  **`requireRole('admin')`** → 403 `{ error: "forbidden" }` (used by the
+  admin routes in commit 3).
+- **Rate limit:** `POST /api/auth/login` is capped at 20 requests per 15
+  minutes per IP (`express-rate-limit`), on top of the per-account lockout.
+- **Removed:** `POST /api/verify-password` and the `APP_PASSWORD` read;
+  `server/create-user.ts`; `passport`, `passport-local`, `memorystore` and
+  the passport types from `package.json`; the `chrome-extension://*` CORS
+  origin. `server/auth.ts` was rewritten in place (the bcrypt helpers were
+  the only part worth keeping).
+
+### Tests (`server/auth.test.ts`)
+
+Login success / wrong password / unknown email / disabled; the 5th failure
+locks and the 6th is refused without a compare and without extending the
+lock; `requireAuth` 401s on `/api/asins`, `/api/settings`, `/api/refresh`;
+`/health` and the SPA shell stay 200 without a session; login sets `af.sid`
+with and without the 30-day `Expires`; logout revokes; a member gets 403 on
+an admin route; `/me` ends the session of a disabled row; `create-admin`
+refuses when a user exists and rejects a short password.
+
+### Out of scope (explicitly)
+
+VA-restricted view and per-route permission enforcement beyond the admin
+page (on hold); password reset by email (no outbound email yet); MFA;
+ledger attribution of syncs to users; Chrome extension authentication
+(rebuild).

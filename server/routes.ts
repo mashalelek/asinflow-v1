@@ -1032,21 +1032,10 @@ export async function registerRoutes(
   // Purchase Orders module (Phase 2). All /api/pos and /api/pos/:id/line-items
   // routes live in po-routes.ts to keep this file from growing further.
 
-  app.post("/api/verify-password", (req: Request, res: Response) => {
-    const { password } = req.body as { password: string };
-    const appPassword = process.env.APP_PASSWORD;
-
-    if (!appPassword) {
-      res.json({ valid: true });
-      return;
-    }
-
-    if (password === appPassword) {
-      res.json({ valid: true });
-    } else {
-      res.status(401).json({ valid: false, message: "Incorrect password" });
-    }
-  });
+  // POST /api/verify-password (APP_PASSWORD) was removed with auth v1
+  // (SPEC §25, 2026-10-14): nothing called it, and it answered valid:true
+  // whenever the variable was unset. Login is POST /api/auth/login in
+  // server/auth.ts.
 
   app.get("/api/credentials-status", (_req: Request, res: Response) => {
     const configured = !!(

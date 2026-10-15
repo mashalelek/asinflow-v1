@@ -88,7 +88,7 @@ Render runs the same two commands):
 
 ```bash
 npm run build                      # dist/public (Vite) + dist/index.cjs (esbuild); dist/ is gitignored
-PORT=5055 npm start                # NODE_ENV=production node dist/index.cjs — npm start sets NODE_ENV itself
+PORT=5055 npm start                # NODE_ENV=production node dist/index.cjs — npm start sets NODE_ENV itself; needs SESSION_SECRET in .env
 curl -s -w ' %{http_code}\n' http://127.0.0.1:5055/health   # {"ok":true} 200 when the DB answers; {"ok":false} 503 otherwise
 ```
 
@@ -132,8 +132,24 @@ SP_API_CLIENT_ID
 SP_API_CLIENT_SECRET
 SP_API_REFRESH_TOKEN
 SP_API_SELLER_ID
-APP_PASSWORD       # Optional: enables password protection
+SESSION_SECRET     # Signs the login cookie (SPEC §25). Required by `npm start`
+                   # (it sets NODE_ENV=production, and production refuses to
+                   # start without one). Generate: openssl rand -hex 32.
+                   # `npm run dev` falls back to a logged insecure dev value.
 ```
+
+Full list with purposes: SPEC §24 "Environment variables". `APP_PASSWORD`
+no longer exists.
+
+**Auth (SPEC §25):** every `/api` route except `/api/auth/*` and `/health`
+needs a session. First account, once, against an empty `users` table:
+
+```bash
+tsx script/create-admin.ts --email you@example.com --name "Your Name"   # prompts for the password, no echo
+```
+
+Further accounts: Settings → Users (admin only). The script refuses when any
+user exists.
 
 ## Architecture
 

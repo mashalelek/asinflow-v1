@@ -3,13 +3,28 @@ import express, { type Request, Response, NextFunction } from "express";
 import { registerRoutes } from "./routes";
 import { serveStatic } from "./static";
 import { createServer } from "http";
-import { ensureExtensionTables, query } from "./db";
+import pool, { ensureExtensionTables, query } from "./db";
+import { createSessionMiddleware, createAuthRouter, requireAuth } from "./auth";
 import { startRefreshCron } from "./refresh-cron";
 import { startSourcingSyncCron } from "./sourcing-sync-cron";
 import { startAuraSyncCron } from "./aura-sync-cron";
 
 const app = express();
 const httpServer = createServer(app);
+const isProduction = process.env.NODE_ENV === "production";
+
+// Behind Render's proxy: trust the first hop so req.ip is the client (login
+// rate limit) and req.secure reflects X-Forwarded-Proto (the `secure` session
+// cookie is otherwise never set over the proxy's plain-HTTP leg).
+if (isProduction) app.set("trust proxy", 1);
+
+// SESSION_SECRET (SPEC §25): required in production; a fixed dev fallback is
+// allowed only outside it, and is logged so it is never mistaken for config.
+const sessionSecret = process.env.SESSION_SECRET || (isProduction ? "" : "dev-insecure-session-secret");
+if (!sessionSecret) {
+  console.error("SESSION_SECRET is not set — refusing to start in production (SPEC §25)");
+  process.exit(1);
+}
 
 declare module "http" {
   interface IncomingMessage {
@@ -17,10 +32,12 @@ declare module "http" {
   }
 }
 
-// CORS middleware for Chrome extension requests
+// CORS: only an explicitly configured extra origin. The former
+// `chrome-extension://*` allowance went with auth v1 (SPEC §25, decision 6);
+// the extension rebuild authenticates like any other client.
 app.use((req, res, next) => {
   const origin = req.headers.origin;
-  if (origin && (origin.startsWith("chrome-extension://") || origin === process.env.CORS_ALLOWED_ORIGIN)) {
+  if (origin && origin === process.env.CORS_ALLOWED_ORIGIN) {
     res.setHeader("Access-Control-Allow-Origin", origin);
     res.setHeader("Access-Control-Allow-Methods", "GET, POST, OPTIONS");
     res.setHeader("Access-Control-Allow-Headers", "Content-Type");
@@ -109,6 +126,15 @@ app.use((req, res, next) => {
       res.status(503).json({ ok: false });
     }
   });
+
+  // Auth v1 (SPEC §25). Order matters: health (above) is session-free;
+  // session → the three unauthenticated auth routes → requireAuth on every
+  // other /api route → the app's routes → static (the SPA shell is served
+  // regardless; the client shows the login page on a 401 from /api/auth/me).
+  if (!process.env.SESSION_SECRET) log("SESSION_SECRET not set — using the insecure dev fallback (never in production)", "auth");
+  app.use(createSessionMiddleware({ secret: sessionSecret, isProduction, pool }));
+  app.use(createAuthRouter());
+  app.use("/api", requireAuth);
 
   await registerRoutes(httpServer, app);
 
