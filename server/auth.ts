@@ -26,7 +26,15 @@ import connectPgSimple from "connect-pg-simple";
 import rateLimit from "express-rate-limit";
 import type pg from "pg";
 import { query as defaultQuery } from "./db";
-import { log } from "./index";
+
+// NEVER import ./index here. Importing the entry module boots Express (its
+// async IIFE does DB init + listen), and this module is also loaded by
+// script/create-admin.ts — the 2026-10-14 bootstrap run created the admin
+// and then tried to bind port 3000. The logger is injected by index.ts
+// instead; the console fallback is what a script sees.
+type AuthLogger = (message: string, source?: string) => void;
+let authLog: AuthLogger = (message, source = "auth") => console.log(`[${source}] ${message}`);
+export function setAuthLogger(fn: AuthLogger): void { authLog = fn; }
 
 export const BCRYPT_COST = 12;
 export const MAX_FAILED_LOGINS = 5;
@@ -242,7 +250,7 @@ export function createAuthRouter(deps: { query?: QueryLike; limiter?: RequestHan
     const remember = body.remember === true;
     const ip = clientIp(req);
     if (!email || !password) {
-      log(`login rejected (missing fields) email=${normalizeEmail(email) || "?"} ip=${ip}`, "auth");
+      authLog(`login rejected (missing fields) email=${normalizeEmail(email) || "?"} ip=${ip}`, "auth");
       res.status(401).json({ error: "invalid_credentials" });
       return;
     }
@@ -251,7 +259,7 @@ export function createAuthRouter(deps: { query?: QueryLike; limiter?: RequestHan
     try {
       outcome = await attemptLogin(email, password, { query });
     } catch (err: any) {
-      log(`login error email=${normalizeEmail(email)} ip=${ip}: ${err?.message ?? err}`, "auth");
+      authLog(`login error email=${normalizeEmail(email)} ip=${ip}: ${err?.message ?? err}`, "auth");
       res.status(500).json({ error: "login_failed" });
       return;
     }
@@ -259,7 +267,7 @@ export function createAuthRouter(deps: { query?: QueryLike; limiter?: RequestHan
     if (outcome.kind === "rejected") {
       const extra = outcome.failedLogins != null ? ` failed_logins=${outcome.failedLogins}` : "";
       const verb = outcome.reason === "locked_now" ? "LOCKED" : "rejected";
-      log(`login ${verb} (${outcome.reason}) email=${normalizeEmail(email)} ip=${ip}${extra}`, "auth");
+      authLog(`login ${verb} (${outcome.reason}) email=${normalizeEmail(email)} ip=${ip}${extra}`, "auth");
       res.status(401).json({ error: "invalid_credentials" });
       return;
     }
@@ -268,7 +276,7 @@ export function createAuthRouter(deps: { query?: QueryLike; limiter?: RequestHan
     // Regenerate the session id on login (fixation guard), then populate.
     req.session.regenerate((err) => {
       if (err) {
-        log(`session regenerate failed email=${user.email} ip=${ip}: ${err?.message ?? err}`, "auth");
+        authLog(`session regenerate failed email=${user.email} ip=${ip}: ${err?.message ?? err}`, "auth");
         res.status(500).json({ error: "login_failed" });
         return;
       }
@@ -277,11 +285,11 @@ export function createAuthRouter(deps: { query?: QueryLike; limiter?: RequestHan
       if (remember) req.session.cookie.maxAge = REMEMBER_ME_MS;
       req.session.save((saveErr) => {
         if (saveErr) {
-          log(`session save failed email=${user.email} ip=${ip}: ${saveErr?.message ?? saveErr}`, "auth");
+          authLog(`session save failed email=${user.email} ip=${ip}: ${saveErr?.message ?? saveErr}`, "auth");
           res.status(500).json({ error: "login_failed" });
           return;
         }
-        log(`login ok email=${user.email} role=${user.role} remember=${remember} ip=${ip}`, "auth");
+        authLog(`login ok email=${user.email} role=${user.role} remember=${remember} ip=${ip}`, "auth");
         res.json({ user });
       });
     });
@@ -295,8 +303,8 @@ export function createAuthRouter(deps: { query?: QueryLike; limiter?: RequestHan
     };
     if (!req.session) { finish(); return; }
     req.session.destroy((err) => {
-      if (err) log(`logout destroy error ${email}: ${err?.message ?? err}`, "auth");
-      else log(`logout ${email} ip=${clientIp(req)}`, "auth");
+      if (err) authLog(`logout destroy error ${email}: ${err?.message ?? err}`, "auth");
+      else authLog(`logout ${email} ip=${clientIp(req)}`, "auth");
       finish();
     });
   });
@@ -308,7 +316,7 @@ export function createAuthRouter(deps: { query?: QueryLike; limiter?: RequestHan
     try {
       user = await loadActiveUser(id, query);
     } catch (err: any) {
-      log(`me lookup error user_id=${id}: ${err?.message ?? err}`, "auth");
+      authLog(`me lookup error user_id=${id}: ${err?.message ?? err}`, "auth");
       res.status(500).json({ error: "lookup_failed" });
       return;
     }

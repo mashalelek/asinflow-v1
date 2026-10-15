@@ -4,7 +4,7 @@ import { registerRoutes } from "./routes";
 import { serveStatic } from "./static";
 import { createServer } from "http";
 import pool, { ensureExtensionTables, query } from "./db";
-import { createSessionMiddleware, createAuthRouter, requireAuth } from "./auth";
+import { createSessionMiddleware, createAuthRouter, requireAuth, setAuthLogger } from "./auth";
 import { startRefreshCron } from "./refresh-cron";
 import { startSourcingSyncCron } from "./sourcing-sync-cron";
 import { startAuraSyncCron } from "./aura-sync-cron";
@@ -72,6 +72,9 @@ export function log(message: string, source = "express") {
 
   console.log(`${formattedTime} [${source}] ${message}`);
 }
+// auth.ts must not import this module (it would boot the server from
+// script/create-admin.ts), so it receives the logger instead.
+setAuthLogger(log);
 
 app.use((req, res, next) => {
   const start = Date.now();

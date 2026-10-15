@@ -3,11 +3,14 @@ import express from "express";
 import { createServer, type Server } from "http";
 import bcrypt from "bcrypt";
 import { MemoryStore } from "express-session";
+import { readFileSync } from "fs";
+import { join } from "path";
 
-// server/index.ts is mocked: importing it boots Express (async IIFE — DB
-// init + listen), which must never happen inside a test. auth.ts only needs
-// `log` from it.
-vi.mock("./index", () => ({ log: () => {} }));
+// Deliberately NO vi.mock("./index") here. auth.ts must not import the entry
+// module at all — script/create-admin.ts loads auth.ts, and importing index.ts
+// boots Express (the 2026-10-14 bootstrap created the admin, then tried to
+// bind port 3000). If auth.ts ever regains that import, this suite boots the
+// server and the source checks below fail first.
 
 import {
   attemptLogin,
@@ -81,6 +84,22 @@ function maria(over: Partial<UserRow> = {}): UserRow {
     is_active: true, failed_logins: 0, locked_until: null, last_login_at: null, ...over,
   };
 }
+
+describe("auth.ts and create-admin stay Express-free", () => {
+  const importsIndex = /from\s+["']\.\.?\/(server\/)?index["']/;
+  it("server/auth.ts does not import ./index", () => {
+    expect(readFileSync(join(__dirname, "auth.ts"), "utf8")).not.toMatch(importsIndex);
+  });
+  it("script/create-admin.ts does not import server/index", () => {
+    expect(readFileSync(join(__dirname, "..", "script", "create-admin.ts"), "utf8")).not.toMatch(importsIndex);
+  });
+  it("auth.ts logs through the injected logger, never a direct ./index log", () => {
+    const src = readFileSync(join(__dirname, "auth.ts"), "utf8");
+    expect(src).toMatch(/export function setAuthLogger/);
+    // Bare `log(` only — authLog( and the console.log fallback are allowed.
+    expect(src).not.toMatch(/(^|[^a-zA-Z.])log\(`/m);
+  });
+});
 
 describe("attemptLogin — credentials and lockout (SPEC §25 decision 2)", () => {
   it("success returns the public user, resets the counter and stamps last_login_at", async () => {
