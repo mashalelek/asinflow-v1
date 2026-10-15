@@ -12,10 +12,13 @@ import { join } from "path";
 const read = (rel: string) => readFileSync(join(__dirname, rel), "utf8");
 
 describe("every insert path onboards through onboardNewAsins", () => {
-  it("sourcing cron calls onboarding, never runAnalyzeCore directly", () => {
-    const src = read("sourcing-sync-cron.ts");
-    expect(src).toMatch(/getOnboardNewAsins/);
-    expect(src).not.toMatch(/getRunAnalyzeCore|runAnalyzeCore\(/);
+  it("the sourcing-sheet sync route onboards through the analyze stream, never runAnalyzeCore directly (the sourcing cron is gone — scheduler v1)", () => {
+    const src = read("routes.ts");
+    const i = src.indexOf("const result = await syncSourcingSheet(");
+    expect(i).toBeGreaterThan(-1);
+    const call = src.slice(i, i + 600);
+    expect(call).toMatch(/runAnalyzeAndStream\(/); // → onboardNewAsins → one refresh job
+    expect(call).not.toMatch(/getRunAnalyzeCore|runAnalyzeCore\(/);
   });
 
   it("the fromCsvUpload stream path routes through onboarding (no prices pre-pass remains)", () => {

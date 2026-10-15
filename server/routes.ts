@@ -1759,10 +1759,9 @@ export async function registerRoutes(
   // === Inventory / Sales / Sheets / Suppression sync ===
   // ── One Refresh job (SPEC §11 "Refresh job & price refresh v2", 2026-09-06) ──
   // Folds inventory + sales + prices + listings into one NDJSON stream of
-  // stages. Scope = the explicit asins list (what is on screen — decision 7);
-  // the cron path calls runRefreshJob directly with no list (full
-  // non-archived). ?dryRun=1: listings reports would-be flips/discoveries,
-  // prices reports outcomes, inventory/sales are skipped — zero writes.
+  // stages. Scope = the explicit asins list (what is on screen — decision 7).
+  // The scheduled pass is a job on the queue now (scheduler/schedule.ts);
+  // nothing calls runRefreshJob any more.
   app.post("/api/refresh", async (req: Request, res: Response) => {
     // Scheduler v1 (2026-10-15): thin enqueuer for one more release, then
     // deleted. The client calls POST /api/jobs directly.

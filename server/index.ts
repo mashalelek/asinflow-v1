@@ -3,15 +3,13 @@ import express, { type Request, Response, NextFunction } from "express";
 import { registerRoutes, getOnboardScDiscoveries, getRunSheetsSync } from "./routes";
 import { createJobsRouter } from "./scheduler/routes";
 import { startRunner, setRunnerLogger } from "./scheduler/runner";
+import { startSchedule, setScheduleLogger, nextPassAfter } from "./scheduler/schedule";
 import { serveStatic } from "./static";
 import { createServer } from "http";
 import pool, { ensureExtensionTables, query } from "./db";
 import { createSessionMiddleware, createAuthRouter, requireAuth, setAuthLogger } from "./auth";
 import { createAdminUsersRouter } from "./admin-users";
 import { runMigrations, setMigrateLogger, MigrationError } from "./migrate";
-import { startRefreshCron } from "./refresh-cron";
-import { startSourcingSyncCron } from "./sourcing-sync-cron";
-import { startAuraSyncCron } from "./aura-sync-cron";
 
 const app = express();
 const httpServer = createServer(app);
@@ -164,7 +162,8 @@ if (!process.env.VITEST) (async () => {
   // Settings → Users (SPEC §25 commit 3): admin-only, after requireAuth.
   app.use(createAdminUsersRouter());
   // Scheduler v1 (SPEC §11 "Refresh job"): enqueue / current / history / cancel.
-  app.use(createJobsRouter());
+  // nextPassAt feeds Settings → Scheduler; null while the schedule is off.
+  app.use(createJobsRouter({ nextPassAt: async () => (process.env.ENABLE_CRONS === "true" ? nextPassAfter(new Date()).at.toISOString() : null) }));
 
   await registerRoutes(httpServer, app);
 
@@ -182,16 +181,17 @@ if (!process.env.VITEST) (async () => {
     log("SP_API_SELLER_ID not set — job runner not started", "scheduler");
   }
 
-  // Scheduled crons are OFF by default: the host Mac is asleep at the
-  // scheduled times (node-cron fires host-local and silently skips missed
-  // ticks), so manual toolbar/API triggers are the operating model. Set
-  // ENABLE_CRONS=true at cloud deploy. (SPEC §11 "Scheduled crons")
-  if (process.env.DATABASE_URL && process.env.ENABLE_CRONS === "true") {
-    startRefreshCron();
-    startSourcingSyncCron();
-    startAuraSyncCron();
+  // The schedule (SPEC §11 "Scheduled passes", scheduler patch commit 5):
+  // 00:00 ET with the daily block, hourly 04–23 ET, timezone explicit. Off
+  // unless ENABLE_CRONS=true — the host Mac is asleep at night and would
+  // skip ticks silently; on Render it is switched on after the patch's final
+  // commit. Needs the runner above: a schedule without a runner would only
+  // fill the queue.
+  if (process.env.DATABASE_URL && process.env.ENABLE_CRONS === "true" && process.env.SP_API_SELLER_ID) {
+    setScheduleLogger((m) => log(m, "schedule"));
+    startSchedule();
   } else if (process.env.DATABASE_URL) {
-    log("Scheduled crons disabled (ENABLE_CRONS != 'true') — manual sync triggers are the operating model", "cron");
+    log("Scheduled crons disabled (ENABLE_CRONS != 'true') — the Refresh button is the operating model", "schedule");
   }
 
   app.use((err: any, _req: Request, res: Response, next: NextFunction) => {

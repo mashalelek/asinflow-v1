@@ -55,7 +55,7 @@ describe("the component sequence is fixed", () => {
     }
     const idx = readFileSync(join(__dirname, "..", "index.ts"), "utf8");
     expect(idx.indexOf("startRunner({")).toBeGreaterThan(idx.indexOf("await registerRoutes(httpServer, app)"));
-    expect(idx).toMatch(/app\.use\(createJobsRouter\(\)\)/);
+    expect(idx).toMatch(/app\.use\(createJobsRouter\(/);
     expect(RUNNER_LOCK_KEY).toBe(7342002);
   });
 });
