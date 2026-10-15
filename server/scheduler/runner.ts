@@ -65,8 +65,16 @@ export async function resolveScope(job: JobRow, query: QueryLike): Promise<strin
   return r.rows.map((x: any) => String(x.asin));
 }
 
-/** Which components a job runs, in order: the daily block only when include_daily. */
+/**
+ * Which components a job runs, in sequence order: an explicit `components`
+ * list wins (decision 9's one-component jobs, tier ignored); otherwise the
+ * daily block only when include_daily.
+ */
 export function componentsForJob(job: JobRow, all: readonly ComponentDef[] = COMPONENTS): ComponentDef[] {
+  if (job.components && job.components.length > 0) {
+    const want = new Set(job.components);
+    return all.filter((c) => want.has(c.n));
+  }
   return all.filter((c) => c.tier === "hourly" || job.include_daily);
 }
 
@@ -94,7 +102,7 @@ export async function runJob(
   const ledgerScope = bulk ? `bulk:${bulk.listId}` : (job.scope_asins ? "subset" : "full");
   const progress: JobProgress = { done: [...(job.progress?.done ?? [])], component: job.progress?.component, asin_cursor: job.progress?.asin_cursor ?? null };
   const resumed = progress.done.length > 0 || progress.component != null;
-  log(`job ${job.id} ${resumed ? "resumed" : "started"}: trigger=${job.trigger} scope=${job.scope_asins ? "subset" : "scheduled"} asins=${scope.length} daily=${job.include_daily}${resumed ? ` done=[${progress.done.join(",")}] at=${progress.component ?? "-"}/${progress.asin_cursor ?? "-"}` : ""}`);
+  log(`job ${job.id} ${resumed ? "resumed" : "started"}: trigger=${job.trigger} scope=${job.scope_asins ? "subset" : "scheduled"} asins=${scope.length} daily=${job.include_daily}${job.components ? ` components=[${job.components.join(",")}]` : ""}${resumed ? ` done=[${progress.done.join(",")}] at=${progress.component ?? "-"}/${progress.asin_cursor ?? "-"}` : ""}`);
 
   const summary: JobSummary = { asins: bulk ? bulk.listAsins.length : scope.length, durationMs: 0, components: {}, flips: [] };
   const cache = deps.cache ?? new Map<string, unknown>();
@@ -199,9 +207,14 @@ export async function runJob(
  * Start the loop. Returns a handle; `stop()` finishes the current job's
  * current component checkpoint window and exits the loop.
  */
+let runnerActive = false;
+/** True once startRunner has been called in this process (and not stopped) — a job enqueued without a runner would wait forever. */
+export function isRunnerActive(): boolean { return runnerActive; }
+
 export function startRunner(deps: RunnerDeps): RunnerHandle {
   const pollMs = deps.pollMs ?? IDLE_POLL_MS;
   let stopped = false;
+  runnerActive = true;
   let current: Promise<void> = Promise.resolve();
   let lockClient: pg.PoolClient | null = null;
 
@@ -254,7 +267,7 @@ export function startRunner(deps: RunnerDeps): RunnerHandle {
 
   current = loop();
   return {
-    stop: async () => { stopped = true; await current; },
+    stop: async () => { stopped = true; runnerActive = false; await current; },
     idle: () => current,
   };
 }

@@ -11,7 +11,7 @@ import {
 
 const base: Job = {
   id: 7, kind: "refresh", trigger: "manual", target: "main", bulk_list_id: null, include_daily: true,
-  scope_asins: ["A1", "A2", "A3"], status: "running", progress: { done: [1, 9], component: 10, asin_cursor: "A2", position: 840, total: 2453 },
+  scope_asins: ["A1", "A2", "A3"], components: null, status: "running", progress: { done: [1, 9], component: 10, asin_cursor: "A2", position: 840, total: 2453 },
   summary: null, requested_by: 1, queued_at: "2026-10-15T12:00:00Z", started_at: "2026-10-15T12:00:01Z", finished_at: null, error: null,
 };
 

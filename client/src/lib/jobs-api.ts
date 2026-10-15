@@ -23,6 +23,8 @@ export interface Job {
   bulk_list_id: string | null;
   include_daily: boolean;
   scope_asins: string[] | null;
+  /** Explicit component list (decision 9's gating / PO-sheet jobs); null = the whole sequence. */
+  components: number[] | null;
   status: JobStatus;
   progress: { component?: number; asin_cursor?: string | null; position?: number; total?: number; done: number[] };
   summary: JobSummary | null;

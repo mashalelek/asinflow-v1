@@ -47,6 +47,12 @@ export interface JobRow {
   bulk_list_id: string | null;
   include_daily: boolean;
   scope_asins: string[] | null;
+  /**
+   * Component numbers this job runs (sequence order is kept); NULL = the
+   * whole sequence, daily block per include_daily. Decision 9: Add to SC
+   * enqueues {8} (gating) and Push to Aura {9} (PO sheet) for a selection.
+   */
+  components: number[] | null;
   status: JobStatus;
   progress: JobProgress;
   summary: JobSummary | null;

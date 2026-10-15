@@ -238,7 +238,7 @@ export function OfferAddPreviewDialog({
           <DialogTitle>Add to Seller Central — Preview</DialogTitle>
           <DialogDescription>
             {loading
-              ? "Resolving SKUs and assembling payloads…"
+              ? "Probing gating live, then resolving SKUs and assembling payloads…"
               : errorMessage
                 ? `Error: ${errorMessage}`
                 : data
@@ -249,7 +249,7 @@ export function OfferAddPreviewDialog({
 
         {loading && (
           <div className="text-sm text-muted-foreground py-8 text-center">
-            Calling SP-API catalog + listings checks per ASIN…
+            Probing gating for the selection (a refresh job — waits for any running pass), then catalog + listings checks per ASIN…
           </div>
         )}
 

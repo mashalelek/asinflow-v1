@@ -38,6 +38,17 @@ describe("the component sequence is fixed", () => {
     expect(hourly).toEqual([1, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21]);
     expect(componentsForJob({ include_daily: true } as JobRow).map((c) => c.n)).toEqual(Array.from({ length: 21 }, (_, i) => i + 1));
   });
+  it("componentsForJob: an explicit components list wins, tier ignored, sequence order kept (decision 9)", () => {
+    // Add to SC: component 8 only — a DAILY component, run without include_daily.
+    expect(componentsForJob({ include_daily: false, components: [8] } as JobRow).map((c) => c.n)).toEqual([8]);
+    // Push to Aura: component 9 only.
+    expect(componentsForJob({ include_daily: false, components: [9] } as JobRow).map((c) => c.n)).toEqual([9]);
+    // Order is the sequence's, not the caller's; unknown numbers are dropped.
+    expect(componentsForJob({ include_daily: true, components: [13, 99, 10] } as JobRow).map((c) => c.n)).toEqual([10, 13]);
+    // NULL / empty = the usual rule.
+    expect(componentsForJob({ include_daily: false, components: null } as JobRow).map((c) => c.n)[0]).toBe(1);
+    expect(componentsForJob({ include_daily: false, components: [] } as unknown as JobRow).length).toBe(14);
+  });
   it("runner never imports ./index; index.ts starts the runner after registerRoutes", () => {
     for (const f of ["runner.ts", "jobs-repo.ts", "routes.ts", "types.ts"]) {
       expect(readFileSync(join(__dirname, f), "utf8")).not.toMatch(/from\s+["']\.\.\/index["']/);
@@ -53,7 +64,7 @@ describe("the component sequence is fixed", () => {
 function makeDb(opts: { scope: string[]; job: Partial<JobRow> }) {
   const job: JobRow = {
     id: 1, kind: "refresh", trigger: "manual", target: "main", bulk_list_id: null, include_daily: true,
-    scope_asins: null, status: "running", progress: { done: [] }, summary: null, requested_by: null,
+    scope_asins: null, components: null, status: "running", progress: { done: [] }, summary: null, requested_by: null,
     queued_at: new Date(), started_at: new Date(), finished_at: null, error: null, ...opts.job,
   };
   const ledger: any[] = [];

@@ -7,7 +7,8 @@ import { getPricing, getFees, getCatalogData, estimateFeeFallback, getEligibilit
 import { getInboundHazmat } from "./inbound-hazmat";
 import { verifyPending, resolveSubmissionManual, resolveSubmissionsBulk, dismissFlags, getUnverifiedCount, listNeedsAttention, listInFlight, findRecentPendingIds, countOpenAmong } from "./listing-submissions-repo";
 import { runAuraSyncChain } from "./aura-sync-chain";
-import { pushAuraCosts } from "./aura-cost-sync";
+import { runJobAndWait, JobFailedError } from "./scheduler/await-job";
+import { isRunnerActive } from "./scheduler/runner";
 import { log } from "./index";
 import { type AsinInput, type AsinResult, type ColumnMapping, extractDomain, cleanBuyLink, getFeePriceForAsin, LEAD_SOURCES, normalizeLeadSource, type LeadSource } from "@shared/schema";
 import { parseMoney } from "@shared/parse-money";
@@ -1840,7 +1841,7 @@ export async function registerRoutes(
   // standard analyze stream (progress + result) for new ASINs, then complete.
   // Manual trigger for the PO → Aura cost-sync chain. Same shared function the
   // aura-sync cron calls (server/aura-sync-chain.ts), so they can't diverge.
-  app.post("/api/sync/aura", async (_req: Request, res: Response) => {
+  app.post("/api/sync/aura", async (req: Request, res: Response) => {
     if (!isDbAvailable()) { res.status(503).json({ message: "Database not available" }); return; }
     const credPath = process.env.GOOGLE_CREDENTIALS_PATH;
     if (!credPath || !fs.existsSync(credPath)) {
@@ -1850,37 +1851,38 @@ export async function registerRoutes(
     if (!process.env.AURA_API_KEY) { res.status(400).json({ message: "AURA_API_KEY not configured" }); return; }
     await respondLongSync(res, async () => {
       try {
-        return await runAuraSyncChain(); // PO sync (hard dep) → Aura live push
+        return await runAuraSyncChain({ requestedBy: req.session?.userId ?? null }); // PO read (hard dep, via the queue) → Aura live push
       } catch (err: any) {
-        // PO sync failure aborts the chain before any Aura push (stale-cost guard).
+        // PO read failure aborts the chain before any Aura push (stale-cost guard).
         throw new Error(`Aura sync chain failed: ${err?.message ?? err}`);
       }
     });
   });
 
-  // Push-only Aura sync: pushes AF costs to Aura WITHOUT running the PO sheet
-  // sync first (no chain). Gate only on DB + AURA_API_KEY — the Google sheet is
-  // not touched, so no creds/sheet-id requirement. Does not modify the chain.
+  // Push to Aura (selection-aware). Scheduler decision 9 (2026-10-13): reads
+  // the PO sheet for the selection FIRST — a one-component manual job
+  // (component 9) enqueued and awaited inside runAuraSyncChain — then pushes
+  // the same selection. The same hard dependency the full chain has; the
+  // only difference is the scope. No selection = the full sheet and every
+  // Aura-mapped SKU, i.e. the chain. Gated like the chain: the sheet is read.
   app.post("/api/sync/aura/push", async (req: Request, res: Response) => {
     if (!isDbAvailable()) { res.status(503).json({ message: "Database not available" }); return; }
+    const credPath = process.env.GOOGLE_CREDENTIALS_PATH;
+    if (!credPath || !fs.existsSync(credPath)) {
+      res.status(400).json({ message: "Google credentials file not found" }); return;
+    }
+    if (!process.env.GOOGLE_SHEET_ID) { res.status(400).json({ message: "GOOGLE_SHEET_ID not configured" }); return; }
     if (!process.env.AURA_API_KEY) { res.status(400).json({ message: "AURA_API_KEY not configured" }); return; }
+    if (!isRunnerActive()) { res.status(503).json({ message: "Job runner not started — the PO sheet read cannot run" }); return; }
     // Optional selection filter (same body shape as /api/sheets/sync).
     const { asins } = (req.body ?? {}) as { asins?: string[] };
     const asinFilter = asins && asins.length > 0 ? new Set(asins) : undefined;
     await respondLongSync(res, async () => {
       try {
-        const r = await pushAuraCosts({ limit: "all", asinFilter });
-        const pv = r.dryRunSummary.perVerdict;
-        const skipped = pv["SKIP:unmapped_sku"] + pv["SKIP:ambiguous_sku"] + pv["SKIP:null_cogs"] + pv["SKIP:zero_cost"];
-        log(
-          `Aura push complete${asinFilter ? ` (${asinFilter.size} selected)` : ""}: ` +
-          `pushed ${r.pushed}, unchanged ${pv.UNCHANGED}, failed ${r.failed}, ` +
-          `skip[unmapped ${pv["SKIP:unmapped_sku"]}, ambiguous ${pv["SKIP:ambiguous_sku"]}, ` +
-          `null_cogs ${pv["SKIP:null_cogs"]}, zero_cost ${pv["SKIP:zero_cost"]}]` +
-          `${r.notInAura?.length ? `, notInAura ${r.notInAura.length}` : ""}`,
-          "aura-push",
-        );
-        return { pushed: r.pushed, unchanged: pv.UNCHANGED, failed: r.failed, skipped, notInAura: r.notInAura ?? [] };
+        const r = await runAuraSyncChain({ asinFilter, requestedBy: req.session?.userId ?? null });
+        const sk = r.aura.skipped;
+        const skipped = sk.unmapped_sku + sk.ambiguous_sku + sk.null_cogs + sk.zero_cost;
+        return { pushed: r.aura.pushed, unchanged: r.aura.unchanged, failed: r.aura.failed, skipped, notInAura: r.aura.notInAura, poSync: r.poSync };
       } catch (err: any) {
         throw new Error(`Aura push failed: ${err?.message ?? err}`);
       }
@@ -2539,22 +2541,45 @@ export async function registerRoutes(
   // putListingsItem in this round. The live-write endpoint is DA-4.
   //
   // For each input ASIN:
+  //   0. Probe gating LIVE for the selection (scheduler decision 9, 2026-10-13):
+  //      a one-component manual job (component 8, Listings Restrictions) is
+  //      enqueued for exactly these ASINs and awaited, so the pre-filter below
+  //      reads this minute's eligibility_status, not the daily pass's. If a
+  //      scheduled pass is running the job waits behind it — the response is
+  //      an NDJSON stream with heartbeats so the wait survives any proxy.
   //   1. Pre-filter against locally-known is_catalog_deleted / eligibility_status
   //      (cheap UX; the orchestrator re-checks via SP-API for anything that passes)
   //   2. For submittable ASINs, load isHazmat + a placeholder price
   //   3. Call offerAddForAsin with dryRun=true → returns OfferAddResult
   //
-  // Returns a structured response that the preview dialog renders directly.
+  // Streams { type: "result", data } — the structured response the preview
+  // dialog renders directly — or { type: "error", message }.
   app.post("/api/offer-add/preview", async (req: Request, res: Response) => {
     if (!isDbAvailable()) { res.status(503).json({ message: "Database not available" }); return; }
     const sellerId = process.env.SP_API_SELLER_ID;
     if (!sellerId) { res.status(503).json({ message: "SP_API_SELLER_ID not configured" }); return; }
+    if (!isRunnerActive()) { res.status(503).json({ message: "Job runner not started — the gating probe cannot run" }); return; }
     const { asins } = (req.body ?? {}) as { asins?: string[] };
     if (!asins || !Array.isArray(asins) || asins.length === 0) {
       res.status(400).json({ message: "No ASINs provided" }); return;
     }
 
-    try {
+    await respondLongSync(res, async () => {
+      // Step 0 — gating probe, through the queue (decision 9). A failed or
+      // cancelled probe is the preview's error: never preview on stale gating.
+      let gatingJobId: number;
+      try {
+        const job = await runJobAndWait(
+          { trigger: "manual", includeDaily: false, components: [8], scopeAsins: asins, requestedBy: req.session?.userId ?? null },
+          { onStatus: (st) => log(`Offer-add preview gating probe (${asins.length} ASINs): ${st}`, "offer-add") },
+        );
+        gatingJobId = job.id;
+      } catch (err: any) {
+        const msg = err instanceof JobFailedError ? err.message : `gating probe could not run: ${err?.message ?? err}`;
+        log(`Offer-add preview aborted — ${msg}`, "offer-add");
+        throw new Error(`Gating probe failed — preview not shown: ${msg}`);
+      }
+
       // PREVIEW uses the SAME submitOfferAddBatch pipeline as live submit,
       // with phase4Mode="preview" so phase 4 assembles the payload but skips
       // PUT. This guarantees preview == submit by construction (one code path).
@@ -2582,19 +2607,18 @@ export async function registerRoutes(
         outcome: mapSubmitOutcomeToOfferAddResult(outcome),
       }));
 
-      res.json({
+      return {
         preFilter: { excluded: submitResult.preFilter.excluded },
         perAsin,
         notes: {
           priceSource: "Resolved via getItemOffers + Rule 1/2 (same path as submit)",
           productNumber: "Real NNN from batch allocator (same path as submit)",
+          gating: `Probed live for the selection (job ${gatingJobId}, component 8)`,
+          gatingJobId,
           liveWrites: submitResult.notes.liveWrites,
         },
-      });
-    } catch (err: any) {
-      log(`Offer-add preview error: ${err.message}`, "offer-add");
-      res.status(500).json({ message: err.message });
-    }
+      };
+    });
   });
 
   // === 2D-4 substep 4: LIVE submit endpoint ===

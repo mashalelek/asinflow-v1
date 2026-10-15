@@ -2,7 +2,7 @@
 import { query as defaultQuery } from "../db";
 import type { JobRow, JobTrigger, JobTarget, JobProgress, JobSummary, QueryLike, ComponentResult } from "./types";
 
-const COLS = `id, kind, trigger, target, bulk_list_id, include_daily, scope_asins, status, progress, summary,
+const COLS = `id, kind, trigger, target, bulk_list_id, include_daily, scope_asins, components, status, progress, summary,
               requested_by, queued_at, started_at, finished_at, error`;
 
 function toRow(r: any): JobRow {
@@ -10,6 +10,7 @@ function toRow(r: any): JobRow {
     ...r,
     id: Number(r.id),
     include_daily: r.include_daily === true,
+    components: Array.isArray(r.components) && r.components.length > 0 ? r.components.map((n: any) => Number(n)) : null,
     progress: (r.progress && typeof r.progress === "object") ? { done: [], ...r.progress } : { done: [] },
     requested_by: r.requested_by == null ? null : Number(r.requested_by),
   };
@@ -22,15 +23,17 @@ export interface EnqueueInput {
   includeDaily: boolean;
   /** NULL = the scheduled scope rule (active + parked). */
   scopeAsins?: string[] | null;
+  /** Component numbers to run; omitted/NULL = the whole sequence (decision 9 jobs pass [8] or [9]). */
+  components?: number[] | null;
   requestedBy?: number | null;
 }
 
 export async function enqueueJob(input: EnqueueInput, query: QueryLike = defaultQuery as any): Promise<JobRow> {
   const r = await query(
-    `INSERT INTO jobs (kind, trigger, target, bulk_list_id, include_daily, scope_asins, requested_by)
-     VALUES ('refresh', $1, $2, $3, $4, $5, $6) RETURNING ${COLS}`,
+    `INSERT INTO jobs (kind, trigger, target, bulk_list_id, include_daily, scope_asins, components, requested_by)
+     VALUES ('refresh', $1, $2, $3, $4, $5, $6, $7) RETURNING ${COLS}`,
     [input.trigger, input.target ?? "main", input.bulkListId ?? null, input.includeDaily,
-     input.scopeAsins ?? null, input.requestedBy ?? null],
+     input.scopeAsins ?? null, input.components && input.components.length > 0 ? input.components : null, input.requestedBy ?? null],
   );
   return toRow(r.rows[0]);
 }

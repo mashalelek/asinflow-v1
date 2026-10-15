@@ -880,9 +880,10 @@ export default function Home() {
 
 
 
-  // Push-only Aura sync — POSTs to /api/sync/aura/push (no PO chain). Selection-
-  // aware: when ASINs are checked, scopes the push to those; otherwise pushes
-  // all. Takes a couple minutes on a fresh day (up to ~1700 listing checks).
+  // Push to Aura — POSTs to /api/sync/aura/push. Selection-aware: when ASINs
+  // are checked, scopes to those; otherwise all. The server reads the PO
+  // sheet for that selection first (a component-9 job on the queue, scheduler
+  // decision 9), then pushes — so the costs pushed are this minute's.
   const handlePushAura = useCallback(async () => {
     setIsPushingAura(true);
     const selected = Array.from(selectedSet);
@@ -1058,13 +1059,10 @@ export default function Home() {
     setOfferAddData(null);
     setOfferAddError(null);
     try {
-      const res = await fetch("/api/offer-add/preview", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ asins: asinsToPreview }),
-      });
-      const data = await res.json();
-      if (!res.ok) throw new Error(data.message || "Preview failed");
+      // NDJSON with heartbeats (scheduler decision 9): the server first probes
+      // gating live for these ASINs through the job queue — behind a running
+      // scheduled pass that can take a while — then assembles the preview.
+      const data = await fetchLongSync("/api/offer-add/preview", { asins: asinsToPreview });
       setOfferAddData(data);
     } catch (err: any) {
       setOfferAddError(err.message);
