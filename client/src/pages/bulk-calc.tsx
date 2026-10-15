@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback, useMemo } from "react";
+import { useState, useEffect, useCallback, useMemo, useRef } from "react";
 import { Link } from "wouter";
 import { Database, RefreshCw, Trash2, Pencil, History } from "lucide-react";
 import { Button } from "@/components/ui/button";
@@ -262,9 +262,14 @@ export default function BulkCalc() {
   // lifecycle decision); attachToRun below re-attaches via the status
   // route. scope 'failed' (default) covers failed + never-fetched rows;
   // 'all' is the Refresh-all option; asins = Retry failed.
+  // Scheduler v1 (2026-10-15): POST enqueues a bulk-target job and returns
+  // 202 + the job; the status route below is polled until it ends. The
+  // results dialog is built from the job's per-component ledger rows.
+  const watchedJobRef = useRef<number | null>(null);
+  const [pollTick, setPollTick] = useState(0);
   const runRefresh = useCallback(async (listId: string, opts: { scope?: "failed" | "all"; asins?: string[] } = {}) => {
     setRefreshing(true);
-    setRefreshProgress(null);
+    setRefreshProgress("queuing…");
     setPageError(null);
     setRefreshResult(null);
     try {
@@ -273,105 +278,85 @@ export default function BulkCalc() {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ scope: opts.scope ?? "failed", asins: opts.asins }),
       });
-      if (res.status === 409) {
-        const err = await res.json().catch(() => ({}));
-        throw new Error(err.message ?? "A run for this list is already in progress.");
-      }
-      if (!res.ok || !res.body) throw new Error(`Refresh failed (${res.status})`);
-      const reader = res.body.getReader();
-      const decoder = new TextDecoder();
-      let buffer = "";
-      // Stage writes land in bulk_list_asins AS EACH STAGE RUNS (the sink
-      // is per-row) — refetch rows + the snapshot label on every stage
-      // TRANSITION so prices appear after the prices stage, titles after
-      // catalog, etc., not only after hazmat ends (2026-09-09).
-      let lastStage: string | null = null;
-      for (;;) {
-        const { done, value } = await reader.read();
-        if (done) break;
-        buffer += decoder.decode(value, { stream: true });
-        const lines = buffer.split("\n");
-        buffer = lines.pop() ?? "";
-        for (const line of lines) {
-          if (!line.trim()) continue;
-          try {
-            const msg = JSON.parse(line);
-            if (msg.type === "stage") {
-              if (lastStage !== null && msg.stage !== lastStage) {
-                // Previous stage finished — pull its rows in (fire-and-forget
-                // so the stream read never stalls behind a refetch).
-                void loadRows(listId);
-                void fetchLists();
-              }
-              lastStage = msg.stage;
-              setRefreshProgress(`${msg.stage} ${msg.current}/${msg.total}${msg.asin ? ` — ${msg.asin}` : ""}`);
-            } else if (msg.type === "complete") {
-              if (msg.data?.error) throw new Error(msg.data.error);
-              setRefreshResult(msg.data);
-              setRefreshResultOpen(true);
-            } else if (msg.type === "error") {
-              throw new Error(msg.message ?? "Refresh error");
-            }
-          } catch (e: any) {
-            if (e instanceof SyntaxError) continue;
-            throw e;
-          }
-        }
-      }
-      await fetchLists();
-      await loadRows(listId);
+      const body = await res.json().catch(() => ({}));
+      if (res.status === 409) throw new Error(body.message ?? "A refresh for this list is already queued or running.");
+      if (!res.ok) throw new Error(body.message ?? `Refresh failed (${res.status})`);
+      watchedJobRef.current = body.job?.id ?? null;
+      setRefreshProgress(body.ahead > 0 ? `queued (${body.ahead} ahead)` : "queued");
+      setPollTick((t) => t + 1);
     } catch (e: any) {
       setPageError(e.message);
-    } finally {
       setRefreshing(false);
       setRefreshProgress(null);
     }
-  }, [fetchLists, loadRows]);
+  }, []);
 
   // Retry failed (N) — every ASIN whose prices outcome was throttled/error
   // (transients), same exclusion rule as the ASINs page (invalid_asin and
   // no_offers are conclusive; catalog absent is a fact, not a failure).
   const refreshFailedAsins = useMemo(() => {
-    const s = refreshResult?.stages?.prices?.outcomes ?? {};
-    return Object.entries(s)
-      .filter(([, v]) => String(v).startsWith("throttled") || String(v).startsWith("error"))
-      .map(([asin]) => asin);
+    // Every component of the job (scheduler v1): error/throttled outcomes,
+    // component-level notes (keys starting with _) excluded.
+    const set = new Set<string>();
+    for (const s of Object.values(refreshResult?.stages ?? {}) as any[]) {
+      for (const [asin, v] of Object.entries(s?.outcomes ?? {})) {
+        if (asin.startsWith("_")) continue;
+        if (String(v).startsWith("throttled") || String(v).startsWith("error")) set.add(asin);
+      }
+    }
+    return Array.from(set).sort();
   }, [refreshResult]);
 
-  // Re-attach (SPEC §21): if a run for the selected list is live (this tab
-  // reloaded, or another tab started it), poll the status route until it
-  // finishes, then reload the snapshot.
+  // Re-attach (SPEC §21 lifecycle, now the job queue): poll the list's job
+  // status until it ends — this tab's own run (pollTick), a reload, or a
+  // run another tab started. Rows reload on every component transition and
+  // at the end; the results dialog opens only for a run this tab started.
   useEffect(() => {
     if (!selectedListId) return;
     let timer: ReturnType<typeof setInterval> | null = null;
     let cancelled = false;
     let pollStage: string | null = null;
+    const stop = () => { if (timer) { clearInterval(timer); timer = null; } };
     const poll = async () => {
       try {
         const res = await fetch(`/api/bulk-lists/${selectedListId}/refresh/status`);
         if (cancelled) return;
         if (res.status === 204) {
-          if (timer) { clearInterval(timer); timer = null; setRefreshing(false); setRefreshProgress(null); await loadRows(selectedListId); }
+          stop();
+          if (refreshing) { setRefreshing(false); setRefreshProgress(null); await loadRows(selectedListId); }
           return;
         }
         const st = await res.json();
-        if (st.stage === "done" || st.stage === "failed") {
-          if (timer) { clearInterval(timer); timer = null; }
+        const active = st.status === "queued" || st.status === "running";
+        if (!active) {
+          stop();
           setRefreshing(false); setRefreshProgress(null);
           await loadRows(selectedListId);
+          await fetchLists();
+          if (st.status === "failed" && st.error) setPageError(st.error);
+          if (watchedJobRef.current === st.jobId) {
+            watchedJobRef.current = null;
+            try {
+              const d = await (await fetch(`/api/jobs/${st.jobId}`)).json();
+              const stages: Record<string, any> = {};
+              for (const c of d.components ?? []) stages[c.stage] = { counts: c.counts ?? {}, outcomes: c.outcomes ?? {}, error: c.error ?? null };
+              setRefreshResult({ stages, rateLimits: {}, job: d.job });
+              setRefreshResultOpen(true);
+            } catch { /* the rows reloaded; the dialog is a nicety */ }
+          }
           return;
         }
         setRefreshing(true);
-        // Stage advanced while re-attached — pull the finished stage's rows.
         if (pollStage !== null && pollStage !== st.stage) { void loadRows(selectedListId); void fetchLists(); }
         pollStage = st.stage;
-        setRefreshProgress(`${st.stage} ${st.current}/${st.total} (re-attached)`);
-        if (!timer) timer = setInterval(poll, 2000);
+        setRefreshProgress(st.status === "queued" ? "queued" : `${st.stage} ${st.current}/${st.total}`);
+        if (!timer) timer = setInterval(poll, 3000);
       } catch {}
     };
     void poll();
-    return () => { cancelled = true; if (timer) clearInterval(timer); };
-  }, [selectedListId, loadRows]);
+    return () => { cancelled = true; stop(); };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [selectedListId, loadRows, fetchLists, pollTick]);
 
   // Upload CSV → name the list → create → auto-run the first analyze.
   const handleFileProcessed = useCallback((asins: AsinInput[], sourceFilename?: string) => {
@@ -906,7 +891,7 @@ export default function BulkCalc() {
           <DialogHeader>
             <DialogTitle>Refresh · bulk:{selectedList?.name ?? ""}</DialogTitle>
             <DialogDescription>
-              Prices + fees + catalog + gating + hazmat for this list only. Rate-limit stats prove the pacing (0 throttled = healthy).
+              One refresh job for this list: catalog ASINs through the main components (then copied here), the rest through the public components against the bulk tables only (scheduler v1).
             </DialogDescription>
           </DialogHeader>
           {refreshResult && (

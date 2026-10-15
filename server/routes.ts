@@ -39,7 +39,7 @@ import { makeProductRegistryRepo } from "./product-registry-repo";
 import { processBulkApproval, makeProductionHandlers, type ApprovalItem } from "./sku-legend-approval";
 import { settingsSchema, type Settings } from "@shared/schema";
 import type { AnalyzeSink } from "./analyze-sink";
-import { startBulkRun, subscribeBulkRun, getBulkRunStatus } from "./bulk-refresh";
+import { enqueueBulkRefresh, bulkRefreshStatus } from "./scheduler/bulk";
 import { upsertTagsForAsin, TAG_COLORS } from "./tags-repo";
 import { resolveRepricerRange as resolveRange } from "./repricer-range";
 import { promoteBulkAsins } from "./bulk-promote";
@@ -75,7 +75,7 @@ type RunAnalyzeCore = (
   opts?: { dryRun?: boolean },
 ) => Promise<void>;
 let runAnalyzeCoreRef: RunAnalyzeCore | null = null;
-type OnboardNewAsins = (asins: AsinInput[], emit: (chunk: string) => void, sink: AnalyzeSink, trigger: "upload" | "sourcing" | "extension" | "backfill" | "sc_discovery", progressPrefix?: (i: number) => string | null) => Promise<void>;
+type OnboardNewAsins = (asins: AsinInput[], emit: (chunk: string) => void, sink: AnalyzeSink, trigger: "upload" | "sourcing" | "extension" | "backfill" | "sc_discovery", progressPrefix?: (i: number) => string | null) => Promise<{ jobId: number | null }>;
 let onboardNewAsinsRef: OnboardNewAsins | null = null;
 export function getOnboardNewAsins(): OnboardNewAsins {
   if (!onboardNewAsinsRef) throw new Error("onboardNewAsins not initialized — call registerRoutes first");
@@ -649,6 +649,10 @@ async function upsertAsinResult(
   // §6 lead source, INSERT branch only (§14). Absent = NULL, which is what
   // §18 phase c wants: an SC-discovered ASIN has no lead source AF can claim.
   leadSourceForNewInsert: LeadSource | null = null,
+  // Scheduler v1 onboarding (2026-10-15): rows only. Existing rows keep
+  // their last_refreshed_at; asin_estimates is INSERT ... DO NOTHING; no
+  // history row, no catalog-deleted signal. The queued job does the rest.
+  insertOnly = false,
 ): Promise<{ inserted: boolean }> {
   const supplier = extractDomain(result.buyLink);
 
@@ -682,7 +686,7 @@ async function upsertAsinResult(
        -- → keep prior value, don't wipe. Same fail-closed contract for DG.
        is_hazmat = COALESCE(EXCLUDED.is_hazmat, asins.is_hazmat),
        is_dangerous_good = COALESCE(EXCLUDED.is_dangerous_good, asins.is_dangerous_good),
-       last_refreshed_at = NOW()
+       last_refreshed_at = CASE WHEN $16::boolean THEN asins.last_refreshed_at ELSE NOW() END
      RETURNING (xmax = 0) AS inserted`,
     [
       result.asin,
@@ -701,6 +705,7 @@ async function upsertAsinResult(
       promoNotesForNewInsert, // $13 — used in INSERT; ignored by UPDATE
       result.supplierSku ?? null, // $14 — user-controlled (§14): INSERT branch only, never in the ON CONFLICT SET list
       leadSourceForNewInsert, // $15 — §6, same INSERT-branch-only contract
+      insertOnly,             // $16 — keep last_refreshed_at on an existing row
     ]
   );
   const inserted = asinUpsert.rows[0]?.inserted === true;
@@ -709,12 +714,14 @@ async function upsertAsinResult(
   // Single source of truth lives in server/catalog-deleted-write.ts so the
   // bulk backfill script can't drift from the live analyze write.
   // Tri-state input: null = inconclusive (no write), true/false = definitive.
-  await applyCatalogDeletedSignal(
-    result.asin,
-    (result.catalogData as any).isCatalogDeleted ?? null,
-  ).catch((err: any) =>
-    log(`catalog-deleted write error for ${result.asin}: ${err.message}`, "db"),
-  );
+  if (!insertOnly) {
+    await applyCatalogDeletedSignal(
+      result.asin,
+      (result.catalogData as any).isCatalogDeleted ?? null,
+    ).catch((err: any) =>
+      log(`catalog-deleted write error for ${result.asin}: ${err.message}`, "db"),
+    );
+  }
 
   // Asymmetric UPSERT: INSERT populates estimated_cogs from the CSV upload
   // input (result.cogs). ON CONFLICT UPDATE only refreshes Amazon-side pricing/
@@ -734,7 +741,7 @@ async function upsertAsinResult(
        sellers_fba, sellers_fbm, fba_fee, referral_fee, fees_estimate_price, fee_source,
        bsr, bsr_category, eligibility_status, error, fetched_at
      ) VALUES ($1,$2,'csv',$3,$4,$5,$6,$7,$8,$9,$10,$11,$16,$12,$13,$14,$15,NOW())
-     ON CONFLICT (asin) DO UPDATE SET
+     ${insertOnly ? "ON CONFLICT (asin) DO NOTHING" : `ON CONFLICT (asin) DO UPDATE SET
        lowest_fba_price = COALESCE(EXCLUDED.lowest_fba_price, asin_estimates.lowest_fba_price),
        buy_box_price = COALESCE(EXCLUDED.buy_box_price, asin_estimates.buy_box_price),
        buy_box_fulfillment = COALESCE(EXCLUDED.buy_box_fulfillment, asin_estimates.buy_box_fulfillment),
@@ -753,7 +760,7 @@ async function upsertAsinResult(
        bsr_category = COALESCE(EXCLUDED.bsr_category, asin_estimates.bsr_category),
        eligibility_status = EXCLUDED.eligibility_status,
        error = EXCLUDED.error,
-       fetched_at = NOW()`,
+       fetched_at = NOW()`}`,
     [
       result.asin,
       result.cogs, // $2 — only used in INSERT (new ASIN), ignored by UPDATE
@@ -768,6 +775,7 @@ async function upsertAsinResult(
   );
 
   // Record history snapshot for seller/price/BSR trends
+  if (insertOnly) return { inserted };
   const salePrice = result.pricingData.lowestFbaPrice ?? result.pricingData.buyBoxPrice ?? result.pricingData.lowestPrice;
   const idRow = await query(`SELECT id FROM asins WHERE asin = $1`, [result.asin]);
   if (idRow.rows.length > 0) {
@@ -800,7 +808,7 @@ async function appendNotesForAsin(asin: string, newNotes: string): Promise<void>
 // callers (sourcing-sync cron) can name it explicitly — the sink parameter
 // is required everywhere, never defaulted.
 export const mainCatalogSink: AnalyzeSink = {
-  persistResult(result, { fromCsvUpload, inputNotes, inputPromoNotes, inputLeadSource }) {
+  persistResult(result, { fromCsvUpload, inputNotes, inputPromoNotes, inputLeadSource, insertOnly }) {
     if (!isDbAvailable()) return Promise.resolve();
     // If this is a CSV upload with user-provided COGS, persist estimated_cogs
     // via the dedicated write path BEFORE the analyze UPSERT. This ensures
@@ -822,7 +830,7 @@ export const mainCatalogSink: AnalyzeSink = {
       // §6: always passed, not gated on fromCsvUpload — the sourcing sync and
       // bulk promote supply it too, and it is INSERT-branch-only in the SQL.
       const leadSourceForInsert = inputLeadSource;
-      const { inserted } = await upsertAsinResult(result, notesForInsert, promoNotesForInsert, leadSourceForInsert);
+      const { inserted } = await upsertAsinResult(result, notesForInsert, promoNotesForInsert, leadSourceForInsert, insertOnly === true);
       // Existing-ASIN path: dedup-aware append. Skipped when the row was just
       // inserted (notes already written by the INSERT branch above).
       // promo_notes: intentionally NO existing-ASIN write — insert-only.
@@ -893,10 +901,12 @@ async function writeResult(
   // §6 lead source, INSERT branch only. Rides here with tags and notes for
   // the same reason they do: one per-ASIN unit of work, one ordering.
   inputLeadSource: LeadSource | null = null,
+  // Scheduler v1 onboarding: rows only, no Amazon data (see upsertAsinResult).
+  insertOnly = false,
 ): Promise<void> {
   allResults.set(asin, result);
   emit(JSON.stringify({ type: "result", data: isUpdate ? { ...result, _update: true } : result }) + "\n");
-  await sink.persistResult(result, { fromCsvUpload, inputNotes, inputPromoNotes, inputLeadSource });
+  await sink.persistResult(result, { fromCsvUpload, inputNotes, inputPromoNotes, inputLeadSource, insertOnly });
   // Probe stamps ride here for the same reason tags do: ordered BEHIND the
   // asins INSERT (§14, 2026-10-09). The failure is reported against the
   // probe's own stage via onError — the probe succeeded, but the record does
@@ -3775,20 +3785,15 @@ export async function registerRoutes(
   runAnalyzeCoreRef = runAnalyzeCore;
 
   // ── New-ASIN onboarding (§11, 2026-09-09) ────────────────────────────
-  // ONE shared sequence for every path that inserts new ASINs: Product
-  // Info FIRST (runAnalyzeCore — the INSERT lives in its sink, plus
-  // catalog/gating/hazmat), THEN the Prices & Stock prices stage, THEN
-  // fees — because refreshPrices' scope query and writePrice both target
-  // EXISTING rows. The old "prices pre-pass BEFORE the core" silently
-  // no-oped for genuinely-new ASINs (SELECT ... FROM asins matched
-  // nothing; UPDATE asin_estimates wrote nothing) — the 2026-09-09
-  // "sourcing sync inserts priceless ASINs" incident, and the same hole
-  // existed for brand-new CSV uploads. End state identical to the
-  // prices-first sketch; this order is also exactly the manual repair
-  // sequence (Product Info, then Prices & Stock).
-  // Ledgered per stage under the CALLER'S trigger (upload / sourcing /
-  // extension / backfill — migration 040). Product Info alone never
-  // prices; no insert path may call runAnalyzeCore directly.
+  // ONE shared sequence for every path that inserts new ASINs (upload,
+  // sourcing sheet, extension, backfill, SC discovery, Bulk Calc promote).
+  // Scheduler v1 (2026-10-15): the rows are created with the user-supplied
+  // fields only (insertOnly — COGS, buy link, notes, promo, supplier SKU,
+  // lead source, tags) and ONE Refresh job is enqueued for them with the
+  // daily block included. Its own stage order is gone: catalog, hazmat,
+  // gating, prices, fees and everything else come from the job, in the
+  // one fixed order, ledgered under trigger `onboarding`. No insert path
+  // may call runAnalyzeCore directly.
   async function onboardNewAsins(
     asins: AsinInput[],
     emit: (chunk: string) => void,
@@ -3797,31 +3802,31 @@ export async function registerRoutes(
     // came from the SC account list, not from an upload/sheet/extension.
     trigger: "upload" | "sourcing" | "extension" | "backfill" | "sc_discovery",
     progressPrefix: (i: number) => string | null = () => null,
-  ) {
-    await runAnalyzeCore(asins, emit, progressPrefix, true, sink);
-    const set = new Set(asins.map((a) => a.asin));
-    const startedAt = new Date();
-    try {
-      const priceRes = await refreshPrices(
-        async (p) => { emit(JSON.stringify({ type: "progress", data: { current: p.current, total: p.total, asin: `Prices: ${p.asin}` } }) + "\n"); },
-        set,
-      );
-      const skip = new Set(Object.keys(priceRes.outcomes));
-      const feesRes = await runFeesStage({ filter: set, dryRun: false, emit: () => {}, skipAsins: skip });
-      for (const [stage, counts, outcomes] of [
-        ["prices", priceRes.counts, priceRes.outcomes],
-        ["fees", feesRes.counts, feesRes.outcomes],
-      ] as const) {
-        await query(
-          `INSERT INTO refresh_runs (started_at, finished_at, trigger, stage, scope, requested, counts, outcomes)
-           VALUES ($1, NOW(), $2, $3, 'subset', $4, $5::jsonb, $6::jsonb)`,
-          [startedAt, trigger, stage, set.size, JSON.stringify(counts), JSON.stringify(outcomes)],
-        ).catch((err: any) => log(`refresh_runs write failed for onboarding ${stage}: ${err?.message ?? err}`, "refresh"));
-      }
-      log(`Onboarding (${trigger}): ${set.size} ASIN(s) — prices ${priceRes.counts.updated} updated/${priceRes.counts.no_offers} no-offers, fees ${feesRes.counts.updated} updated`, "refresh");
-    } catch (err: any) {
-      log(`Onboarding prices/fees failed after insert (${trigger}) — rows exist but may be priceless until the next Prices & Stock run: ${err?.message ?? err}`, "price-sync");
+  ): Promise<{ jobId: number | null }> {
+    const allResults = new Map<string, AsinResult>();
+    const blankPricing: AsinResult["pricingData"] = {
+      lowestFbaPrice: null, buyBoxPrice: null, buyBoxFulfillment: null, lowestPrice: null,
+      avg30DayPrice: null, avg90DayPrice: null, numberOfSellers: null, sellersFba: null, sellersFbm: null,
+    };
+    const blankCatalog = { weightLbs: null, title: null, brand: null, imageUrl: null, bsrRank: null, bsrCategory: null, isDangerousGood: null, isCatalogDeleted: null } as AsinResult["catalogData"];
+    const blankFees: AsinResult["feesData"] = { fbaFulfillmentFee: null, referralFee: null, feesEstimatePrice: null };
+    for (let i = 0; i < asins.length; i++) {
+      const input = asins[i];
+      const prefix = progressPrefix(i);
+      emit(JSON.stringify({ type: "progress", data: { current: i + 1, total: asins.length, asin: prefix ? `${prefix} ${input.asin}` : input.asin } }) + "\n");
+      const result = buildResult(input, blankPricing, blankCatalog, blankFees, false, { status: "check" });
+      await writeResult(emit, allResults, input.asin, result, false, true, input.notes ?? null, input.promoNotes ?? null, sink, input.tags ?? null, null, input.leadSource ?? null, true);
     }
+    let jobId: number | null = null;
+    try {
+      const job = await enqueueJob({ trigger: "onboarding", includeDaily: true, scopeAsins: asins.map((a) => a.asin) });
+      jobId = job.id;
+      emit(JSON.stringify({ type: "job_queued", data: { jobId: job.id, asins: asins.length } }) + "\n");
+      log(`Onboarding (${trigger}): ${asins.length} row(s) created; refresh job #${job.id} queued`, "refresh");
+    } catch (err: any) {
+      log(`Onboarding (${trigger}): rows created but the refresh job could not be queued — run Refresh for them: ${err?.message ?? err}`, "refresh");
+    }
+    return { jobId };
   }
   onboardNewAsinsRef = onboardNewAsins;
 
@@ -3957,15 +3962,8 @@ export async function registerRoutes(
     await runAnalyzeCore(asins, (chunk) => res.write(chunk), progressPrefix, fromCsvUpload, sink, opts);
   }
 
-  function runPostAnalyzeBackgroundSyncs() {
-    const credPath = process.env.GOOGLE_CREDENTIALS_PATH;
-    if (isDbAvailable() && credPath && fs.existsSync(credPath) && process.env.GOOGLE_SHEET_ID) {
-      runSheetsSync().catch((err: any) => log(`Post-analysis sheets sync error: ${err.message}`, "sheets"));
-    }
-    if (isDbAvailable()) {
-      syncSuppressionData().catch((err: any) => log(`Post-analysis suppression sync error: ${err.message}`, "suppression-sync"));
-    }
-  }
+  // (runPostAnalyzeBackgroundSyncs removed 2026-10-15: the unledgered
+  // full-catalog PO sync + suppression sync are components 9 and 18.)
 
   // Analyze a user-supplied list of ASINs (typically from a fresh CSV upload).
   app.post("/api/analyze", async (req: Request, res: Response) => {
@@ -4005,11 +4003,12 @@ export async function registerRoutes(
       return;
     }
 
-    // CSV upload sends COGS values → persist to estimated_cogs via dedicated path
+    // CSV upload: rows created with their COGS etc., then ONE refresh job
+    // queued for them (scheduler v1). The PO-sheet and suppression syncs
+    // that used to fire here are components 9 and 18 of that job.
     await runAnalyzeAndStream(asins, res, mainCatalogSink, () => null, true);
     res.write(JSON.stringify({ type: "complete" }) + "\n");
     res.end();
-    runPostAnalyzeBackgroundSyncs();
   });
 
   // Analyze all active ASINs from the DB in server-side batches of 100.
@@ -4429,27 +4428,20 @@ export async function registerRoutes(
   // decision); one run per list (409 while busy); re-attach via the status
   // route below.
   app.post("/api/bulk-lists/:id/refresh", async (req: Request, res: Response) => {
+    // Scheduler v1 (2026-10-15): enqueues a bulk-target job (decision 5).
+    // scope 'failed' (default) = failed + never-fetched rows; 'all' = every
+    // row; asins = Retry failed. 202 + the job; the status route re-attaches.
     if (!isDbAvailable()) { res.status(503).json({ message: "Database not available" }); return; }
     const listId = typeof req.params.id === "string" ? req.params.id : "";
     const body = (req.body ?? {}) as { scope?: "failed" | "all"; asins?: string[] };
-    const scope = body.scope === "all" ? "all" : "failed";
-
-    const started = startBulkRun(listId, { scope, asins: body.asins });
-    if (started.busy) {
-      res.status(409).json({ message: `A run for this list is already in progress (since ${started.since}). One run per list at a time.` });
-      return;
+    try {
+      const r = await enqueueBulkRefresh(listId, { scope: body.scope === "all" ? "all" : "failed", asins: body.asins, requestedBy: req.session?.userId ?? null });
+      if (r.kind === "busy") { res.status(409).json({ message: `A refresh for this list is already ${r.status} (job #${r.jobId}).` }); return; }
+      if (r.kind === "empty") { res.status(404).json({ message: "List not found or empty" }); return; }
+      res.status(202).json({ job: r.job, ahead: r.ahead });
+    } catch (err: any) {
+      res.status(500).json({ message: err?.message ?? String(err) });
     }
-
-    res.setHeader("Content-Type", "application/x-ndjson");
-    res.setHeader("Transfer-Encoding", "chunked");
-    res.setHeader("Cache-Control", "no-cache");
-    res.setHeader("Connection", "keep-alive");
-    const hb = setInterval(() => { try { res.write(JSON.stringify({ type: "heartbeat" }) + "\n"); } catch {} }, 15_000);
-    const unsubscribe = subscribeBulkRun(listId, (event: any) => {
-      try { res.write(JSON.stringify(event) + "\n"); } catch {}
-      if (event?.type === "complete") { clearInterval(hb); try { res.end(); } catch {} }
-    });
-    res.on("close", () => { clearInterval(hb); unsubscribe?.(); });
   });
 
   // §21 Promote to database (2026-09-09): the ONE user-initiated bulk →
@@ -4468,19 +4460,35 @@ export async function registerRoutes(
         already_in_database: results.filter((r) => r.outcome === "already_in_database").length,
         error: results.filter((r) => r.outcome === "error").length,
       };
-      res.json({ counts, results });
+      // Scheduler v1: a promoted ASIN is onboarded like any other insert —
+      // one refresh job for the rows that were just created.
+      let jobId: number | null = null;
+      const added = results.filter((r) => r.outcome === "added").map((r) => r.asin);
+      if (added.length > 0) {
+        try {
+          const job = await enqueueJob({ trigger: "onboarding", includeDaily: true, scopeAsins: added, requestedBy: req.session?.userId ?? null });
+          jobId = job.id;
+        } catch (err: any) {
+          log(`Promote: ${added.length} row(s) created but the refresh job could not be queued: ${err?.message ?? err}`, "bulk");
+        }
+      }
+      res.json({ counts, results, jobId });
     } catch (err: any) {
       res.status(500).json({ message: err.message });
     }
   });
 
-  // Re-attach point: current progress of a live run (or terminal state for
-  // ~60 s after it ends); 204 when nothing is running.
-  app.get("/api/bulk-lists/:id/refresh/status", (req: Request, res: Response) => {
+  // Re-attach point: the list's active job (queued/running) or its most
+  // recent terminal job; 204 when there is none.
+  app.get("/api/bulk-lists/:id/refresh/status", async (req: Request, res: Response) => {
     const listId = typeof req.params.id === "string" ? req.params.id : "";
-    const state = getBulkRunStatus(listId);
-    if (!state) { res.status(204).end(); return; }
-    res.json(state);
+    try {
+      const state = await bulkRefreshStatus(listId);
+      if (!state) { res.status(204).end(); return; }
+      res.json(state);
+    } catch (err: any) {
+      res.status(500).json({ message: err?.message ?? String(err) });
+    }
   });
 
   // Manual COGS inline edit for a bulk-list row. Guarantees (§21):

@@ -22,7 +22,7 @@ const SRC = () => readFileSync(join(__dirname, "routes.ts"), "utf8");
 function productInfoRegion(): string {
   const s = SRC();
   const start = s.indexOf("const feesMap = await fetchFeesBatch(feeItems);");
-  const end = s.indexOf("function runPostAnalyzeBackgroundSyncs");
+  const end = s.indexOf('app.post("/api/analyze", async');
   expect(start).toBeGreaterThan(-1);
   expect(end).toBeGreaterThan(start);
   return s.slice(start, end);
@@ -206,12 +206,10 @@ describe("dry-run lists the whole scope, not a would-probe subset", () => {
   });
 });
 
-describe("Bulk Calc's cache is deliberately untouched (§21)", () => {
-  it("bulk-refresh.ts keeps its own freshness cache with the bustCache override", () => {
-    const bulk = readFileSync(join(__dirname, "bulk-refresh.ts"), "utf8");
-    // Pinned so a future "remove the 30-day rule everywhere" sweep has to
-    // read this and make a deliberate decision about a DIFFERENT feature.
-    expect(bulk).toContain("THIRTY_D");
-    expect(bulk).toMatch(/bustCache \|\| staleOrNever/);
+describe("Bulk Calc's cache is GONE too (scheduler v1, decision 3, 2026-10-15)", () => {
+  it("the bulk pipeline lives in scheduler/bulk.ts with no freshness cache", () => {
+    const bulk = readFileSync(join(__dirname, "scheduler", "bulk.ts"), "utf8");
+    expect(bulk).not.toContain("THIRTY_D");
+    expect(bulk).not.toMatch(/staleOrNever|bustCache|bulk_gating_hazmat_cache/);
   });
 });

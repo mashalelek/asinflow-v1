@@ -36,6 +36,6 @@ describe("Last Reviewed — shared column identity on the bulk page", () => {
     expect(read("client/src/pages/bulk-calc.tsx")).toMatch(/reviewedSaveUrl/);
   });
   it("the bulk pipeline never writes last_reviewed_at (survives Refresh by construction)", () => {
-    expect(read("server/bulk-refresh.ts")).not.toContain("last_reviewed_at");
+    expect(read("server/scheduler/bulk.ts")).not.toContain("last_reviewed_at");
   });
 });

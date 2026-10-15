@@ -65,22 +65,22 @@ beforeEach(() => { clientQueries.length = 0; poolQueries.length = 0; existsResul
 
 describe("buildPromoteRows — the doc's field table, verbatim", () => {
   it("every field lands with original timestamps, lead date, active status", () => {
-    const { asins, estimates } = buildPromoteRows(BULK_ROW, CACHE_ROW);
+    const { asins, estimates } = buildPromoteRows(BULK_ROW);
     expect(asins).toMatchObject({
       asin: "B0PROMO001", title: "T", brand: "Br", buy_link: "https://s.example/x",
       supplier: "s.example", supplier_sku: "SKU-1", notes: BULK_ROW.notes,
       promo_notes: "WELCOME", status: "active",
       added_at: BULK_ROW.added_at,                       // lead date, not NOW()
-      is_hazmat: false,                                  // cache wins
-      gating_checked_at: CACHE_ROW.gating_checked_at,    // stamps carried
-      hazmat_checked_at: CACHE_ROW.hazmat_checked_at,
+      is_hazmat: BULK_ROW.is_hazmat ?? null,             // the row carries it (cache gone, decision 3)
+      gating_checked_at: null,                           // the onboarding job probes both
+      hazmat_checked_at: null,
       last_reviewed_at: BULK_ROW.last_reviewed_at,       // review stamp carries (2026-09-10)
     });
     expect(asins).not.toHaveProperty("is_wholesale");    // §16: user-set only
     expect(estimates).toMatchObject({
       lowest_fba_price: "23.62", buy_box_price: "24.51", lowest_price: "22.99",
       estimated_cogs: "11.17", estimated_cogs_source: "csv",
-      eligibility_status: "yes",
+      eligibility_status: BULK_ROW.eligibility_status ?? null, // the row carries it (cache gone)
       fetched_at: BULK_ROW.fetched_at,                   // bulk snapshot age, never NOW()
     });
   });
@@ -112,8 +112,7 @@ describe("promoteBulkAsins", () => {
     (db.query as any).mockImplementationOnce(async (text: string, values?: any[]) => {
       poolQueries.push({ text, values });
       return { rows: bulkRowsResult };
-    }).mockImplementationOnce(async () => ({ rows: cacheRowsResult }))
-      .mockImplementationOnce(async () => { throw new Error("tags table on fire"); });
+    }).mockImplementationOnce(async () => { throw new Error("tags table on fire"); });
     const results = await promoteBulkAsins("list-1", ["B0PROMO001"]);
     expect(results[0].outcome).toBe("error");
     expect(results[0].message).toMatch(/row inserted; tag creation failed/);

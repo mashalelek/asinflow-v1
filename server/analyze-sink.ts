@@ -35,6 +35,13 @@ export interface AnalyzeSink {
       inputPromoNotes: string | null;
       /** §6 lead source — INSERT branch only (§14). */
       inputLeadSource?: LeadSource | null;
+      /**
+       * Scheduler v1 onboarding (2026-10-15): create the rows with the
+       * user-supplied fields only — no Amazon data, no fetched_at stamp, no
+       * history row, no catalog-deleted signal. The queued Refresh job
+       * fills everything else.
+       */
+      insertOnly?: boolean;
     },
   ): Promise<void>;
 

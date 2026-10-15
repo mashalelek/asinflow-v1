@@ -25,17 +25,23 @@ describe("every insert path onboards through onboardNewAsins", () => {
     expect(wrapper).not.toMatch(/refreshPrices\(/); // the broken pre-pass is gone
   });
 
-  it("onboarding runs core THEN prices THEN fees, ledgered with the caller's trigger", () => {
+  it("onboarding creates the rows (insertOnly) THEN enqueues ONE refresh job — no inline stage order (scheduler v1)", () => {
     const src = read("routes.ts");
     const fn = src.slice(src.indexOf("async function onboardNewAsins"), src.indexOf("onboardNewAsinsRef = onboardNewAsins"));
-    const coreIdx = fn.indexOf("runAnalyzeCore(");
-    const priceIdx = fn.indexOf("refreshPrices(");
-    const feesIdx = fn.indexOf("runFeesStage(");
-    expect(coreIdx).toBeGreaterThan(-1);
-    expect(priceIdx).toBeGreaterThan(coreIdx);   // prices AFTER the insert
-    expect(feesIdx).toBeGreaterThan(priceIdx);
-    expect(fn).toMatch(/INSERT INTO refresh_runs/);
-    expect(fn).toMatch(/trigger/);
+    const insertIdx = fn.indexOf("await writeResult(");
+    const enqueueIdx = fn.indexOf("enqueueJob({ trigger: \"onboarding\"");
+    expect(insertIdx).toBeGreaterThan(-1);
+    expect(enqueueIdx).toBeGreaterThan(insertIdx);      // rows first, then the job
+    expect(fn).toMatch(/input\.leadSource \?\? null, true\)/); // insertOnly = true
+    expect(fn).toMatch(/includeDaily: true/);            // onboarding = a full refresh
+    expect(fn).not.toMatch(/runAnalyzeCore\(|refreshPrices\(|runFeesStage\(/);
+    expect(fn).not.toMatch(/INSERT INTO refresh_runs/);  // the job ledgers its own components
+  });
+
+  it("the upload route no longer fires the unledgered PO + suppression syncs (components 9 and 18 now)", () => {
+    const src = read("routes.ts");
+    expect(src).not.toMatch(/function runPostAnalyzeBackgroundSyncs/);
+    expect(src).not.toMatch(/runPostAnalyzeBackgroundSyncs\(\)/);
   });
 
   it("the extension add onboards freshly inserted rows", () => {

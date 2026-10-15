@@ -117,7 +117,7 @@ export async function listActive(query: QueryLike = defaultQuery as any): Promis
 /** Per-component ledger row (refresh_runs), linked to the job. */
 export async function recordComponentRun(
   input: {
-    jobId: number; trigger: JobTrigger; stage: string; scope: "full" | "subset"; requested: number;
+    jobId: number; trigger: JobTrigger; stage: string; scope: string; requested: number;
     startedAt: Date; result: ComponentResult | null; error: string | null;
   },
   query: QueryLike = defaultQuery as any,

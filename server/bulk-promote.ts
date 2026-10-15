@@ -21,9 +21,12 @@ export interface PromoteResult {
   message?: string;
 }
 
-// Pure field mapping, exported for the promote tests: bulk row + cache row
-// → the two INSERT column/value maps. Every doc-table field lands here.
-export function buildPromoteRows(bulk: any, cache: any): {
+// Pure field mapping, exported for the promote tests: bulk row → the two
+// INSERT column/value maps. Every doc-table field lands here. The gating/
+// hazmat cache is gone (scheduler v1, decision 3): the row carries its own
+// eligibility_status / is_hazmat, and the stamps start NULL — the onboarding
+// job queued by the promote route probes both.
+export function buildPromoteRows(bulk: any): {
   asins: Record<string, any>;
   estimates: Record<string, any>;
 } {
@@ -39,7 +42,7 @@ export function buildPromoteRows(bulk: any, cache: any): {
       width_in: bulk.width_in ?? null,
       height_in: bulk.height_in ?? null,
       is_meltable: bulk.is_meltable ?? false,
-      is_hazmat: cache?.is_hazmat ?? bulk.is_hazmat ?? null,
+      is_hazmat: bulk.is_hazmat ?? null,
       is_dangerous_good: bulk.is_dangerous_good ?? null,
       buy_link: bulk.buy_link ?? null,
       supplier: bulk.supplier ?? null,
@@ -51,8 +54,8 @@ export function buildPromoteRows(bulk: any, cache: any): {
       added_at: bulk.added_at,               // lead date, NOT promotion date
       last_reviewed_at: bulk.last_reviewed_at ?? null, // review stamp carries (2026-09-10)
       status: "active",
-      gating_checked_at: cache?.gating_checked_at ?? null,
-      hazmat_checked_at: cache?.hazmat_checked_at ?? null,
+      gating_checked_at: null,
+      hazmat_checked_at: null,
     },
     estimates: {
       asin: bulk.asin,
@@ -68,7 +71,7 @@ export function buildPromoteRows(bulk: any, cache: any): {
       bsr_category: bulk.category ?? null,
       sellers_fba: bulk.sellers_fba ?? null,
       sellers_fbm: bulk.sellers_fbm ?? null,
-      eligibility_status: cache?.eligibility_status ?? bulk.eligibility_status ?? null,
+      eligibility_status: bulk.eligibility_status ?? null,
       estimated_cogs: bulk.estimated_cogs ?? null,
       estimated_cogs_source: bulk.estimated_cogs_source ?? null,
       fetched_at: bulk.fetched_at ?? null,   // bulk snapshot age — never NOW()
@@ -91,11 +94,6 @@ export async function promoteBulkAsins(listId: string, asins: string[]): Promise
     [listId, want],
   )).rows;
   const bulkByAsin = new Map<string, any>(bulkRows.map((r: any) => [r.asin, r]));
-  const cacheRows = (await query(
-    `SELECT * FROM bulk_gating_hazmat_cache WHERE asin = ANY($1::text[])`,
-    [want],
-  )).rows;
-  const cacheByAsin = new Map<string, any>(cacheRows.map((r: any) => [r.asin, r]));
 
   const results: PromoteResult[] = [];
   for (const asin of want) {
@@ -113,7 +111,7 @@ export async function promoteBulkAsins(listId: string, asins: string[]): Promise
         results.push({ asin, outcome: "already_in_database" });
         continue;
       }
-      const { asins: aCols, estimates: eCols } = buildPromoteRows(bulk, cacheByAsin.get(asin));
+      const { asins: aCols, estimates: eCols } = buildPromoteRows(bulk);
       const aIns = insertSql("asins", aCols);
       await client.query(aIns.text, aIns.values);
       const eIns = insertSql("asin_estimates", eCols);

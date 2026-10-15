@@ -136,41 +136,36 @@ describe("Product Info: a failed probe writes nothing", () => {
 // ============================================================================
 // Caller 2 — Bulk Calc's gating/hazmat cache (§21)
 // ============================================================================
-describe("Bulk Calc: a failed probe is not cached", () => {
-  const src = () => read("bulk-refresh.ts");
+describe("Bulk Calc: a failed probe writes nothing (scheduler/bulk.ts, cache gone — decision 3)", () => {
+  const src = () => read("scheduler/bulk.ts");
 
-  for (const [probe, call, counts] of [
-    ["gating", "getEligibility", "gCounts"],
-    ["hazmat", "getInboundHazmat", "hCounts"],
+  for (const [probe, call] of [
+    ["gating", "getEligibility"],
+    ["hazmat", "getInboundHazmat"],
   ] as const) {
-    it(`${probe}: the failure branch continues BEFORE any cache write`, () => {
+    it(`${probe}: the failure branch continues BEFORE any bulk_list_asins write`, () => {
       const s = src();
-      const i = s.indexOf(`const ${probe === "gating" ? "elig" : "hz"} = await ${call}(r.asin)`);
+      const i = s.indexOf(`await p.${call}(asin)`);
       expect(i).toBeGreaterThan(-1);
-      const block = s.slice(i, i + 1200);
+      const block = s.slice(i, i + 600);
       const guard = block.indexOf('.kind !== "ok"');
-      const insert = block.indexOf("INSERT INTO bulk_gating_hazmat_cache");
+      const write = block.indexOf("UPDATE bulk_list_asins");
       expect(guard).toBeGreaterThan(-1);
-      expect(insert).toBeGreaterThan(guard);          // cache write comes after
-      const failure = block.slice(guard, insert);
-      expect(failure).toMatch(new RegExp(`${counts}\\.error\\+\\+`));
+      expect(write).toBeGreaterThan(guard);
+      const failure = block.slice(guard, write);
+      expect(failure).toMatch(/counts\.error\+\+/);
       expect(failure).toMatch(/error: \$\{/);
-      expect(failure).toMatch(/continue;/);           // and never reaches it
-      expect(failure).not.toMatch(/INSERT INTO|UPDATE bulk_list_asins/);
+      expect(failure).toMatch(/continue;/);
     });
   }
 
-  it("the 30-day window and the bustCache override are untouched", () => {
+  it("no 30-day window, no cache table, no bustCache anywhere in the bulk pass", () => {
     const s = src();
-    expect(s).toContain("THIRTY_D");
-    expect(s).toMatch(/bustCache \|\| staleOrNever/);
+    expect(s).not.toMatch(/THIRTY_D|staleOrNever|bustCache|bulk_gating_hazmat_cache/);
   });
 
-  it("no caller reads a null hazmat as an answer any more", () => {
-    const s = src();
-    // the old COALESCE-the-sentinel write is gone; the value is a real boolean
-    expect(s).not.toMatch(/COALESCE\(\$2, bulk_gating_hazmat_cache\.is_hazmat\)/);
-    expect(s).toMatch(/hz\.isHazmat/);
+  it("the hazmat value written is the probe's boolean, never a sentinel", () => {
+    expect(src()).toMatch(/hz\.isHazmat/);
   });
 });
 

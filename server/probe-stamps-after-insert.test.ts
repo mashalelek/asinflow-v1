@@ -207,10 +207,13 @@ describe("the stamp write stays behind the INSERT", () => {
     expect(body).toMatch(/stageOutcomes\[stage\]\[asin\] = `error: stamp write failed/);
   });
 
-  it("every writeResult call site passes the ASIN's stamps", () => {
+  it("every Product Info writeResult call site passes the ASIN's stamps; the onboarding insert passes none (it probes nothing)", () => {
     const r = src();
     const calls = r.match(/await writeResult\([\s\S]{0,400}?\);/g) ?? [];
-    expect(calls.length).toBe(5);
-    for (const c of calls) expect(c).toMatch(/stampsFor\((input|item\.input)\.asin\)/);
+    expect(calls.length).toBe(6);
+    const onboarding = calls.filter((c) => /input\.leadSource \?\? null, true\)/.test(c)); // insertOnly = true
+    expect(onboarding).toHaveLength(1);
+    expect(onboarding[0]).toMatch(/, null, input\.leadSource/); // no stamps: no probe ran
+    for (const c of calls) if (!onboarding.includes(c)) expect(c).toMatch(/stampsFor\((input|item\.input)\.asin\)/);
   });
 });

@@ -14,6 +14,7 @@
 // needs is injected by index.ts from the routes layer.
 import type pg from "pg";
 import { COMPONENTS } from "./components";
+import { resolveBulkScope, runBulkPublic, copyMainToBulk, type BulkPasses } from "./bulk";
 import {
   claimNextJob, writeProgress, readStatus, finishJob, recordComponentRun,
 } from "./jobs-repo";
@@ -42,6 +43,7 @@ export interface RunnerDeps {
   inject?: Record<string, unknown>;
   /** Test seams. */
   components?: readonly ComponentDef[];
+  bulkPasses?: BulkPasses;
   pollMs?: number;
   now?: () => number;
 }
@@ -77,23 +79,29 @@ export function remainingAfterCursor(scope: string[], cursor: string | null | un
 
 export async function runJob(
   job: JobRow,
-  deps: { query: QueryLike; sellerId: string; components?: readonly ComponentDef[]; now?: () => number; cache?: Map<string, unknown>; inject?: Record<string, unknown> },
+  deps: { query: QueryLike; sellerId: string; components?: readonly ComponentDef[]; now?: () => number; cache?: Map<string, unknown>; inject?: Record<string, unknown>; bulkPasses?: BulkPasses },
 ): Promise<JobSummary> {
   const query = deps.query;
   const now = deps.now ?? Date.now;
   const t0 = now();
   const all = deps.components ?? COMPONENTS;
-  if (job.target !== "main") throw new Error(`job ${job.id}: target '${job.target}' lands in commit 3 of the scheduler patch`);
 
-  const scope = await resolveScope(job, query);
+  // Bulk target (decision 5): the list's catalog ASINs go through the main
+  // components below; the rest get the public pass against the bulk tables
+  // after the loop; then main → bulk copy. Never bulk → main.
+  const bulk = job.target === "bulk" ? await resolveBulkScope(job, query) : null;
+  const scope = bulk ? bulk.inCatalog : await resolveScope(job, query);
+  const ledgerScope = bulk ? `bulk:${bulk.listId}` : (job.scope_asins ? "subset" : "full");
   const progress: JobProgress = { done: [...(job.progress?.done ?? [])], component: job.progress?.component, asin_cursor: job.progress?.asin_cursor ?? null };
   const resumed = progress.done.length > 0 || progress.component != null;
   log(`job ${job.id} ${resumed ? "resumed" : "started"}: trigger=${job.trigger} scope=${job.scope_asins ? "subset" : "scheduled"} asins=${scope.length} daily=${job.include_daily}${resumed ? ` done=[${progress.done.join(",")}] at=${progress.component ?? "-"}/${progress.asin_cursor ?? "-"}` : ""}`);
 
-  const summary: JobSummary = { asins: scope.length, durationMs: 0, components: {}, flips: [] };
+  const summary: JobSummary = { asins: bulk ? bulk.listAsins.length : scope.length, durationMs: 0, components: {}, flips: [] };
   const cache = deps.cache ?? new Map<string, unknown>();
   for (const [k, v] of Object.entries(deps.inject ?? {})) cache.set(k, v);
-  const plan = componentsForJob(job, all);
+  // A bulk list with no catalog ASINs runs no main component at all.
+  const plan = bulk && scope.length === 0 ? [] : componentsForJob(job, all);
+  if (bulk) log(`job ${job.id} bulk list ${bulk.listId}: ${bulk.inCatalog.length} in catalog (main components), ${bulk.publicOnly.length} public-only`);
 
   for (const c of plan) {
     if (progress.done.includes(c.n)) continue;
@@ -128,7 +136,7 @@ export async function runJob(
       const cancelled = err instanceof CancelledError;
       const msg = cancelled ? "cancelled" : (err?.message ?? String(err));
       await recordComponentRun({
-        jobId: job.id, trigger: job.trigger, stage: c.key, scope: job.scope_asins ? "subset" : "full",
+        jobId: job.id, trigger: job.trigger, stage: c.key, scope: ledgerScope,
         requested: asins.length, startedAt, result: null, error: msg,
       }, query);
       summary.stoppedAt = c.n;
@@ -144,7 +152,7 @@ export async function runJob(
     }
 
     await recordComponentRun({
-      jobId: job.id, trigger: job.trigger, stage: c.key, scope: job.scope_asins ? "subset" : "full",
+      jobId: job.id, trigger: job.trigger, stage: c.key, scope: ledgerScope,
       requested: asins.length, startedAt, result, error: null,
     }, query);
     summary.components[c.key] = result.counts;
@@ -164,9 +172,26 @@ export async function runJob(
     }
   }
 
+  if (bulk) {
+    try {
+      const pub = await runBulkPublic({ job, query, listId: bulk.listId, asins: bulk.publicOnly, log: (m) => log(`job ${job.id} ${m}`), passes: deps.bulkPasses });
+      for (const [k, r] of Object.entries(pub)) summary.components[k] = r.counts;
+      const copied = await copyMainToBulk(bulk.listId, bulk.inCatalog, query);
+      summary.components["bulk:copy"] = { copied };
+      log(`job ${job.id} bulk: ${bulk.publicOnly.length} public-only refreshed, ${copied} catalog row(s) copied main → bulk`);
+    } catch (err: any) {
+      const msg = err?.message ?? String(err);
+      summary.stoppedAt = 22; // the bulk public pass, after the 21 components
+      summary.durationMs = now() - t0;
+      log(`job ${job.id} FAILED in the bulk public pass: ${msg}`);
+      await finishJob(job.id, "failed", summary, `bulk public pass: ${msg}`, query);
+      return summary;
+    }
+  }
+
   summary.durationMs = now() - t0;
   await finishJob(job.id, "done", summary, null, query);
-  log(`job ${job.id} done in ${Math.round(summary.durationMs / 1000)} s: ${scope.length} ASINs, ${summary.flips.length} flips`);
+  log(`job ${job.id} done in ${Math.round(summary.durationMs / 1000)} s: ${summary.asins} ASINs, ${summary.flips.length} flips`);
   return summary;
 }
 

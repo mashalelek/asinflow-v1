@@ -175,9 +175,9 @@ describe("runJob", () => {
     expect(ASIN_CHECKPOINT_EVERY).toBe(50);
   });
 
-  it("a bulk-target job is refused until commit 3", async () => {
-    const db = makeDb({ scope: ["A1"], job: { target: "bulk" } });
-    await expect(runJob(db.job, { query: db.query, sellerId: "S", components: [ok(1)] })).rejects.toThrow(/commit 3/);
+  it("a bulk-target job without a list id is refused (bulk jobs are covered in bulk.test.ts)", async () => {
+    const db = makeDb({ scope: ["A1"], job: { target: "bulk", bulk_list_id: null } });
+    await expect(runJob(db.job, { query: db.query, sellerId: "S", components: [ok(1)] })).rejects.toThrow(/bulk target without bulk_list_id/);
   });
 });
 
