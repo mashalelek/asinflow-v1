@@ -21,7 +21,7 @@ This app runs on the following stack. This is settled. Do not suggest alternativ
 - Schema defined in `docs/SCHEMA.md` — reference this for all table structures
 - Google Sheets API integration — pulls COGS from PO tracker sheet, pulls ordered qty
 - SP-API integrations: catalog data, pricing, inventory (`getInventorySummaries`), sales (flat file orders report), listings restrictions, suppression (FYP report)
-- Daily inventory cron job at 6 AM EST
+- Scheduled refresh passes: 00:00 ET with the daily block, hourly 04–23 ET (`server/scheduler/schedule.ts`, gated by `ENABLE_CRONS=true`; off locally)
 - Toolbar buttons: Upload File, Analyze, Sync PO, Sync Inventory, Sync Sales
 - Date range selector with presets
 - Three view presets: Full View, Replenishment, Sourcing
@@ -41,7 +41,7 @@ This app runs on the following stack. This is settled. Do not suggest alternativ
 - Price source toggle (Lowest FBA / Buy Box)
 - Include Inbound Shipping toggle
 - `amzn.gr.*` SKUs excluded from primary SKU selection
-- `in_catalog` flag covers all listing statuses (Active, Inactive, Closed)
+- `in_catalog` is gone (migration 052, 2026-10-15); `has_live_offer` is the listing fact (SPEC §18)
 
 ### Key files:
 - `server/index.ts` — Express server entry point
@@ -295,8 +295,25 @@ One **Refresh** button on the ASINs toolbar enqueues one job (`POST
 fixed order, one job at a time. Product Info and Prices & Stock are gone.
 `POST /api/analyze/all` and `POST /api/refresh` survive for ONE release as
 thin enqueuers (202 + the job) and are then deleted; nothing in the client
-calls them. `POST /api/analyze` (CSV upload onboarding) is rewired to the
-queue in commit 3 of the scheduler patch.
+calls them (`runRefreshJob` in `server/refresh-job.ts` has no callers
+either and goes with them). Onboarding (CSV upload, sourcing sheet,
+extension, SC discovery, Bulk Calc promote) inserts rows and enqueues one
+job; Bulk Calc Refresh enqueues a `target: 'bulk'` job; Add to SC and
+Push to Aura enqueue one-component jobs (8 / 9) for their selection and
+wait (`jobs.components`, migration 053). **Nothing refreshes data outside
+the queue** — a new sync must be a component, not a route.
+
+**Schedule:** `server/scheduler/schedule.ts`, node-cron with
+`timezone: 'America/New_York'`: `0 0 * * *` (daily block) and
+`0 4-23 * * *`. Registered only when `ENABLE_CRONS=true`; keep it unset
+locally (`npm run dev` logs `Scheduled crons disabled`). The runner is
+always on. The three old cron files are deleted — do not recreate a cron
+that calls a sync function directly; enqueue a job.
+
+**Verifying a job locally without a login cookie:** `INSERT INTO jobs
+(kind, trigger, target, include_daily, scope_asins[, components])` and
+watch `[scheduler]` in the dev-server log; the ledger rows are
+`refresh_runs WHERE job_id = N`. Jobs and ledger rows are history and stay.
 
 ## Approval model: Maria approves the spec patch, not each commit
 

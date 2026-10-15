@@ -7,11 +7,25 @@
 Prices & Stock job definitions in SPEC §11 and the three node-cron
 schedules. Prerequisite for `ENABLE_CRONS=true` on Render.*
 
-> **Status: DRAFT — awaiting implementation.** Large patch; six commits.
-> Under the 2026-10-15 approval model: Maria approves this patch; Claude
-> Code implements all commits, stops only on a deviation / uncovered
-> decision / unresolvable finding, reports once before pushing. Hard stop
-> remains before the final commit flips the schedule on in production.
+> **Status: IMPLEMENTED 2026-10-15** — six commits (`3a7094a`, `49338b1`,
+> `a958e5f`, `1f0e1b4`, `ab5249f`, docs), under the 2026-10-15 approval
+> model. `ENABLE_CRONS=true` on Render is the remaining step (hard stop).
+> **Deviations from the text, all approved:** component 14 persists
+> nothing — decision A (ledger counts complete-input ASINs; no `est_*`
+> columns); 20/21 ledger-only (`skipped`) and 17 derived-only until the
+> Finances patch; `jobs.bulk_list_id` is UUID (bulk_lists.id is uuid);
+> the `refresh_runs.trigger` CHECK is the historical set ∪ the four new
+> values; batch components checkpoint every 100 ASINs (5 batches of 20),
+> per-ASIN every 50; `server/index.ts` skips its boot under vitest so the
+> runner tests can import it; **commit 4 added migration 053
+> `jobs.components INTEGER[]`** so a decision-9 job can name the one
+> component it runs, and the preview route streams NDJSON (heartbeats)
+> because the job may wait behind a running pass; the preview and push
+> routes refuse with 503 when no runner is started. The Aura **chain**
+> reads the sheet through the queue too (one function, with or without a
+> selection). Sync POs (`POST /api/sheets/sync`) still calls
+> `runSheetsSync` directly — out of this patch's text; candidate for a
+> one-component job like decision 9.
 
 ## Why
 

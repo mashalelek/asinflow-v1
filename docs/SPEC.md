@@ -429,8 +429,8 @@ so it never appears unbidden).
     column tooltip → `POST /api/asins/:asin/recheck-issues`, which runs the
     listings reconcile STAGE scoped to one ASIN (`runFullScopePass`); (b)
     EVERY probe through the §18 A2 primitive writes the snapshot for each ASIN
-    it definitively probes — the listings stage (Prices & Stock and Product
-    Info), the §19 ladder, and the §19 verdict/stale re-probes. Fail-closed:
+    it definitively probes — the listings component (16) of the Refresh
+    job, the §19 ladder, and the §19 verdict/stale re-probes. Fail-closed:
     transient probes write nothing.
     The previous text named `syncLiveOffers`, a "07:00 cron" and the
     "inventory-sync rider" — the rider was removed 2026-09-06, no cron ever
@@ -529,8 +529,9 @@ after its 2026-10-10 reconcile, `current_issues` is `[]` while
 is nothing there. Reading the tooltip from the snapshot would show an empty
 reason on exactly the rows that most need one.
 
-**`in_catalog` is not read here**, or anywhere in the UI (§18: it is a
-one-way discovery latch that over-reports and retains tombstones).
+**`in_catalog` no longer exists** (dropped by migration 052, decision 11;
+it was a one-way discovery latch that over-reported and retained
+tombstones, and nothing read it).
 
 **Add to SC stays DISABLED while the latest submission is unresolved** — same
 ledger read as the Pending state, so the guard and the icon can never
@@ -829,8 +830,7 @@ pair (route paths did NOT change; they are not user-facing):
 
 | # | Label | Was | Notes |
 |---|---|---|---|
-| 1 | **Product Info** | Analyze | catalog, fees, gating, hazmat (§11 Product Info); keeps btnSuffix count + pending-upload path |
-| 2 | **Prices & Stock** | Refresh | inventory + sales + prices + fees + listings (§11); active-stage label while running; history clock beside it |
+| 1–2 | **Refresh (N)** | Product Info + Prices & Stock | one button, one job, all 21 components (§11 "Refresh job", 2026-10-15); N = working-set size; shows the running component and a Cancel; the history clock opens the jobs dialog |
 | 3 | **Sync Sourcing** | — | unchanged |
 | 4 | **Sync POs** | Sync PO | plural |
 | 5 | **Push to Aura** | — | unchanged |
@@ -1825,12 +1825,11 @@ so they can never cross.
   unrecognised strings, so a systematic typo is visible rather than quietly
   becoming MP forever.
 - For NEW ASINs (not yet in AF), runs the shared **new-ASIN onboarding**
-  (`onboardNewAsins`, 2026-09-09): Product Info (which performs the
-  insert, catalog, gating, hazmat) → Prices & Stock `prices` stage →
-  `fees` stage, under one stream, ledgered in `refresh_runs` with
-  trigger `sourcing` (migration 040 widened the trigger CHECK).
-  `estimated_cogs_source = 'csv'`. Same function as CSV upload and the
-  Chrome-extension add.
+  (`onboardNewAsins`, 2026-09-09; rewired 2026-10-15): the rows are
+  inserted with the sheet's fields, then ONE Refresh job scoped to them
+  is enqueued (trigger `onboarding`, daily block included — §11 "Refresh
+  job"). `estimated_cogs_source = 'csv'`. Same function as CSV upload and
+  the Chrome-extension add.
 - For NEW ASINs whose collapsed status contains "discontinued" (case-insensitive
   `.includes`), inserts and analyzes them, THEN sets `is_active = false` so
   they land in the Archived view. This is the only place the sync writes
@@ -1858,10 +1857,9 @@ unparseable. Null cogs is acceptable: the new ASIN inserts with `cogs = 0`
 Triggers:
 - Manual: `POST /api/sync/sourcing-sheet` (NDJSON-streaming, auth-gated). Wired
   to the "Sync Sourcing" toolbar button on the home page.
-- Scheduled: `cron.schedule("0 9 * * *")` = 09:00 host-local, one hour before
-  the inventory sync so newly-pulled ASINs are included in today's inventory +
-  price passes. Defined in `server/sourcing-sync-cron.ts`. **Gated behind
-  `ENABLE_CRONS` — disabled by default** (§11 "Scheduled crons").
+- Scheduled: **none** (2026-10-15). The 09:00 host-local cron
+  (`sourcing-sync-cron.ts`) was deleted with the scheduler patch; Sync
+  Sourcing is on-demand (§11 "Scheduled passes").
 
 ### SP-API
 
@@ -2010,325 +2008,317 @@ Dependency-free (no `server/index.ts` import). Unit tests: fake clock,
 FIFO, burst-then-steady, header override, 429 drain/retry/throw, unknown
 path passthrough.
 
-### Prices & Stock (the Refresh job) & price refresh v2 (2026-09-06; renamed 2026-09-07)
+### Refresh job (scheduler v1, 2026-10-15)
 
-**One Prices & Stock button** (labeled Refresh until 2026-09-07) replaces
-Sync Inventory + Sync Sales + Sync Prices + Scan Listings (decision 4; Sync PO, Sync Sourcing, Push to Aura stay
-separate — decision 8). `POST /api/refresh` (NDJSON), body
-`{asins, startDate, endDate}`; **scope = what is on screen** (decision 7):
-the checkbox selection, else the current filtered view including Show
-Parked / Show Dead / Show Gated; the client always sends the explicit
-list. Cron scope (`asins` omitted) = `status IN ('active','parked')`,
-sourcing leads included; dead only via the button (decision 5, 2026-09-07
-— supersedes decision 10, which predates the Parked/Dead split).
+Implemented from `docs/claude_spec-patch-scheduler-v1.md` (decisions
+confirmed 2026-10-13 through 2026-10-15; component map
+`docs/af_data_components.csv`, the CSV snapshot of the "AsinFlow Jobs List
+(Cloud Deployment)" sheet). Supersedes the **Product Info** and **Prices &
+Stock** job definitions that stood here from 2026-09-06/07, the three
+node-cron schedules, onboarding's own stage order and Bulk Calc's own
+pipeline. The 2026-10-13 cron audit found three crons that had never run,
+no lock anywhere, a cron listings stage that could not onboard SC
+discoveries, a Product Info button that fired an unledgered full-catalog
+PO sync and a clear-all suppression sync, two buttons with overlapping
+stages in different orders, a third order for onboarding, a fourth for
+Bulk Calc, a 30-day cache that was supposed to be gone, and schedules
+written in UTC comments that fired host-local.
 
-**Superseded FOR THE LISTINGS STAGE ONLY (2026-10-09, §18 A3):** the
-listings reconcile scopes to **every ASIN AF knows, including `dead`**, with
-or without `asin_skus` rows. The other stages keep the active+parked cron
-scope above — there is no point re-pricing a dead row, but there is every
-point re-probing whether SC still lists it, and a dead ASIN outside the
-reconcile is a flag AF can never correct (B07J2WWWD4, §18 A3).
+**Rule.** Every refresh of Amazon-side or sheet-side data is a job on one
+queue (`jobs`, migration 052), executed by one runner, one job at a time,
+in one fixed component order. Scheduled passes and the Refresh button
+enqueue the same job with different scopes. **Nothing refreshes data
+outside the queue.**
 
-Stages, each with per-item outcomes, run concurrently where buckets differ;
-`listings` waits for `inventory` (needs its SKUs), `fees` waits for
-`prices` (needs the fresh price), `prices` and `sales` start immediately;
-listings probes run with bounded concurrency (5 in flight — the limiter
-still paces at the wire; per-ASIN fail-closed semantics unchanged,
-2026-09-07), so full-catalog wall time ≈ the prices stage ≈ 18–21 min:
+#### The component sequence
 
-| stage | source | replaces |
-|---|---|---|
-| `inventory` | getInventorySummaries + SKU recording | Sync Inventory |
-| `sales` | orders report, 30-day chunks | Sync Sales |
-| `prices` | price refresh v2 (below) | Sync Prices |
-| `fees` | batch `feesEstimate` on the just-written prices (2026-09-07) | the stale-fee gap: Low-Price FBA rates apply under $10, so a price crossing that line changes the fulfillment fee — the proportional referral adjustment never covered it |
-| `listings` | live-offer reconcile (§18) — phases a/b, scope per §18 A3, **plus phase c on EVERY run regardless of working set (cron included)** — "does SC have an ASIN AF lacks" is account-wide and a selection cannot answer it (ALL statuses incl. dead, SKU'd and no-SKU alike), one per-ASIN outcome for EVERY ASIN probed (§18 A2) | Scan Listings; the inventory-sync `notLiveOnly` rider (removed 2026-09-06); `live-offer-sync.ts` and `script/backfill-has-live-offer.ts` (both deleted 2026-10-09) |
+The single ordered list every job follows. Numbers are the component map's;
+CALL-n is the API request, shared where several components ride one call;
+the ledger stage is the `refresh_runs.stage` key the component writes.
 
-A failed stage does not abort the others. Stream: `{type:"stage", stage,
-status, current, total}` + terminal `{type:"complete", data:{stages,
-rateLimits}}`; heartbeats as respondLongSync. Old routes stay as thin
-one-stage wrappers (single implementation). Toolbar: one Refresh button
-with working-set count, active-stage label while running, progress strip
-un-gated from `isAnalyzing`; a results dialog shows per-stage counts,
-expandable outcome lists, rate-limit stats, duration, and **Retry failed
-(N)**; runs persist in `refresh_runs` (migration 032) with a history
-clock. The 10:00/12:00 crons collapse into one daily Refresh (still behind
-`ENABLE_CRONS`, default off). Dry-run (`?dryRun=1`, Velocity pattern):
-listings reports would-be flips/discoveries, prices reports outcomes,
-zero writes; the first live run is gated on a reviewed dry-run.
+| # | Component | Tier | Call | Ledger stage | Scope (scheduled) |
+|---|---|---|---|---|---|
+| 1 | SC-only SKU discovery + onboarding | hourly | CALL-1 `searchListingsItems` | `01_sc_discovery` | account |
+| 2 | Catalog attributes | daily | CALL-2 Catalog Items batch | `02_catalog` | active+parked |
+| 3 | Catalog-deleted signal | daily | rides CALL-2 | `03_catalog_deleted` | " |
+| 4 | BSR / rank + category | daily | rides CALL-2 | `04_bsr` | " |
+| 5 | Meltable | daily | rides CALL-2 | `05_meltable` | " |
+| 6 | Dangerous good | daily | rides CALL-2 | `06_dangerous_good` | " |
+| 7 | Hazmat | daily | CALL-3 inbound eligibility, per ASIN | `07_hazmat` | " |
+| 8 | Eligibility / gating | daily | CALL-4 Listings Restrictions, per ASIN | `08_gating` | " |
+| 9 | Actual COGS from PO sheet | hourly | CALL-5 Orders sheet | `09_po_sheet` | full sheet |
+| 10 | Competitive prices | hourly | CALL-6 itemOffers batch | `10_prices` | active+parked |
+| 11 | Seller count | hourly | rides CALL-6 | `11_sellers` | " |
+| 12 | CPT (`asin_estimates.competitive_price_threshold`, migration 052 — decision 12) | hourly | rides CALL-6 | `12_cpt` | " |
+| 13 | FBA fee estimate | hourly | CALL-7 feesEstimate batch | `13_fees` | " |
+| 14 | Estimated profit / margin / ROI | hourly | computed | `14_profit` | " |
+| 15 | FBA inventory snapshot | hourly | CALL-8 inventory summaries | `15_inventory` | " |
+| 16 | Live offer / buyable / issues (§18 reconcile) | hourly | CALL-9 getListingsItem, per SKU | `16_live_offer` | active+parked |
+| 17 | Primary SKU | hourly | derived from 15–16 | `17_primary_sku` | " |
+| 18 | Suppressions (FYP) | hourly | CALL-10 FYP report | `18_suppressions` | account |
+| 19 | Sales units / revenue | hourly | CALL-11 (today: orders report, 48-hour window) | `19_sales` | account, delta |
+| 20 | Refunds | hourly | rides CALL-11 | `20_refunds` | " |
+| 21 | Actual fees charged | hourly | rides CALL-11 | `21_actual_fees` | " |
 
-**Price refresh v2** (replaces price-sync.ts's three-pass design):
-`getItemOffersBatch`, 20 ASINs/call; the Summary/Offers parser is
-extracted to a pure `parseOffersPayload(asin, payload)` shared with the
-single-ASIN analyze path (semantics unchanged); `writePrice` columns
-unchanged BUT its COALESCE guards drop — a conclusive answer overwrites,
-including to NULL. No blind retries: one main pass + ONE trailing pass
-over `throttled`/`error` items. Per-ASIN outcomes:
+Dependencies the order encodes: 9 before 15 (inventory copies
+`ordered_qty`); 10 before 13 (fees need the fresh price); 15 before 16
+(listings need the SKU set); 19–21 last so Actual profit uses this hour's
+COGS. **The daily block (2–8) is executed only by the 00:00 pass** and by
+any job enqueued with `include_daily` (the Refresh button, onboarding);
+every other scheduled pass skips it. 1 runs first in every pass.
 
-| outcome | meaning | writes |
-|---|---|---|
-| `updated` | ≥1 price parsed | prices + seller counts + fetched_at |
-| `no_offers` | 200, zero New offers | prices → **NULL**, sellers 0, fetched_at (decision 6 — conclusive: nothing is for sale; row becomes uncalculated) |
-| `restricted` | 403/restricted | nothing |
-| `not_found` | 404 | nothing |
-| `invalid_asin` | Amazon's "invalid ASIN for marketplace" per-item error (2026-09-07) — conclusive, not transient: excluded from Retry failed (a 96-ASIN retry reproduced 96-for-96), listed separately, and **auto-marks the ASIN dead** (status `dead`, reason `invalid_asin` — §14; the dialog's list ends "→ marked dead (N)") | status only |
-| `throttled` | 429 survived limiter + trailing pass | nothing |
-| `error` | timeout/5xx/parse (throttle/invalid excluded) | nothing (message kept) |
+Three components are ledger-only in this version, by decision:
 
-**Fees stage (2026-09-07):** `POST /products/fees/v0/feesEstimate` (20 per
-call at 0.5 calls/s ≈ 4 min full catalog), input price per ASIN = the same
-`getFeePriceForAsin` rule Product Info uses, computed from the just-written
-prices. ASINs whose price outcome was `no_offers`/`invalid_asin`/`error`
-skip as `skipped_no_price` — never a fallback-price estimate. Writes the
-fee triple with `fee_source = 'spapi'`; outcomes `updated` /
-`skipped_no_price` / `error`.
+- **14 persists nothing** (decision A, 2026-10-15). Profit, margin and ROI
+  are `calculateProfit` on the client (§14 "Analyze path constraints");
+  there are no `est_*` columns. Its ledger row counts the ASINs whose
+  inputs are complete (price, fee triple, COGS) vs `incomplete` /
+  `missing_row` — the number the Profitable scorecard can trust.
+- **20 and 21 record `skipped`** until the Finances API patch lands; 19
+  runs against the current source (orders flat-file report). The scheduler
+  calls one `syncSales(scope, window)`; the Finances patch swaps the
+  implementation, not the schedule. The hourly window is the last 48 hours
+  (overlap on purpose; the upsert is idempotent).
+- **17 is derived**: it re-points `primary_sku` from what 15 and 16 wrote
+  (inventory bootstrap when NULL; listings latest-live-wins), and reports
+  `from_cache` / `bootstrapped_by_inventory` / `repointed_by_listings`.
 
-**Batch-pricing rate seed 0.10 → 0.09 rps (2026-09-07):** the first full
-run absorbed 6 throttles in 116 calls — an over-optimistic clock. The
-table entry is now 0.09 (×0.95 safety on top); costs ~1 min per full run,
-buys 0 throttled by construction.
+#### Scope rules
 
-`fetched_at` stamps only the two conclusive outcomes — the honest price
-age. **Run ledger `refresh_runs`** (migration 032, one table for all
-stages): started/finished, scope, trigger (manual|refresh|cron), stage,
-requested, per-outcome counts, `outcomes JSONB` (every non-updated ASIN +
-error messages), `rate_limit_stats JSONB`. "Which failed" is a row, not
-scrollback; retry-failed is one click.
+- **Scheduled pass:** `status IN ('active','parked')` for ASIN-keyed
+  components; account-wide for 1, 18, 19–21; full sheet for 9. Dead ASINs
+  are never touched by a scheduled pass (decision 10).
+- **Refresh button:** the checkbox selection if any, else every row of the
+  current filtered view, visibility toggles included (decision 15). Dead
+  ASINs in that set are refreshed. The button runs components 1–21 for
+  that set — the daily block included — because "refresh" means
+  everything (decision 4). Account-wide components (1, 18, 19–21) run
+  account-wide regardless of selection; they are cheap.
+- **Onboarding** (Upload File, Sync Sourcing, Chrome extension, SC
+  discovery, Buy List promote from Bulk Calc): `onboardNewAsins` creates
+  the rows with the user-supplied fields only (`insertOnly` through the
+  sink — no `fetched_at` stamp, no history row, no catalog-deleted signal)
+  and enqueues ONE job scoped to the new ASINs, trigger `onboarding`,
+  daily block included. Its own stage order ("Product Info → prices →
+  fees", 2026-09-09) is gone; the dependency that order encoded — rows
+  exist before anything prices them — holds because the INSERT precedes
+  the enqueue. The unledgered post-upload PO-sheet and suppression syncs
+  are components 9 and 18 of that job.
+- **Bulk Calc Refresh:** enqueues a job with `target: 'bulk'` for the
+  list (§21 "Refresh" — the main→bulk copy rule lives there).
+
+#### Runner
+
+`server/scheduler/runner.ts`, started from `server/index.ts` after the
+migrations and `registerRoutes` (it needs the injected
+`onboardScDiscoveries` and `runSheetsSync`), whenever `SP_API_SELLER_ID`
+is set — the runner is always on; only the **schedule** is gated.
+
+- One loop: claim the oldest `queued` job (`SELECT … FOR UPDATE SKIP
+  LOCKED`, a `running` job first — that is resume), run it, repeat; idle
+  poll 5 s. Exactly one job runs at a time per process; advisory lock
+  `7342002` guards the zero-downtime deploy overlap (the second instance
+  waits for the lock and takes over when the first exits).
+- **Components are functions** `run(ctx) → {counts, outcomes, flips}` in
+  `server/scheduler/components/NN-name.ts`, one file each, numbered as the
+  table, registered in `components/index.ts` in that order. Each reads
+  what it needs, writes what it owns (§14 ownership table names the
+  component), and returns per-ASIN outcomes. The existing stage functions
+  (`refreshPrices`, `runFeesStage`, `syncInventory`, `runFullScopePass`,
+  `fetchCatalogBatch`, `getEligibility`, `getInboundHazmat`, the
+  suppression parser …) were moved into these files, not rewritten; where
+  a stage existed as two paths the one that takes the fresh price was kept.
+- **Progress + resume** (decision 14): after each component, and every 50
+  ASINs inside a per-ASIN component (batch components at each 100-ASIN
+  chunk), the runner writes `jobs.progress`
+  `{component, asin_cursor, position, total, done}`. On startup a job left
+  `running` is resumed: components in `done` are skipped; the current one
+  restarts from `asin_cursor` (ASINs are processed in a stable order —
+  `asins.id`); account-level components rerun whole.
+- **Failure:** a component that throws marks the job `failed` with the
+  error and the component number (`summary.stoppedAt`); the ledger row for
+  that component records what was done; later components do not run. The
+  next scheduled pass is a new job. **Retry failed (N)** in the jobs dialog
+  enqueues a manual job scoped to the ASINs with `error:` outcomes.
+- **Cancel:** `PATCH /api/jobs/:id {status:'cancelled'}`; the runner
+  checks between components and at every checkpoint; a cancelled job keeps
+  its partial ledger.
+- **Serialisation is the lock.** The queue is single-consumer, so "cron
+  and button collide" is gone structurally; no per-sync mutex exists. A
+  Refresh clicked during a scheduled pass queues behind it and the button
+  shows "queued (1 ahead)".
+- **Suppressions (18) are stage-then-swap:** the report's ASIN set is
+  loaded into a temp table, then one `UPDATE … SET is_search_suppressed =
+  (asin IN temp)` — no window where the catalog shows no suppressions, and
+  crash-safe. `newly_suppressed` / `cleared` are the flips.
+- **Listings (16)** uses the injected `onboardScDiscoveries` callback
+  whether the job came from the schedule or the button — there is no
+  second entry point, so the old cron divergence cannot recur. The SC-only
+  SKU discovery is component 1.
+- **Add to SC** and **Push to Aura** (decision 9, commit 4) each enqueue a
+  one-component manual job for their selection — components 8 and 9
+  respectively — and wait for it (`server/scheduler/await-job.ts`: poll,
+  fail closed on a failed or cancelled job, cancel after an hour).
+  `jobs.components INTEGER[]` (migration 053) names the components such a
+  job runs; NULL = the whole sequence. The offer-add preview reads the
+  `eligibility_status` the probe just wrote — the daily value is not
+  trusted — and streams NDJSON with heartbeats because the job may queue
+  behind a running pass; a failed probe is the preview's error. Push to
+  Aura reads the PO sheet for the selection first and then pushes the same
+  selection; the full chain (`POST /api/sync/aura`) is the same function
+  without a selection, and reads the sheet through the queue too.
+
+#### Component details that carry over
+
+The stage code moved; its rules did not. Still true, now per component:
+
+- **Prices (10–12) — price refresh v2.** `getItemOffersBatch`, 20
+  ASINs/call at the 0.09 rps seed (×0.95 safety); the Summary/Offers parser
+  is the pure `parseOffersPayload(asin, payload)`; `writePrice` has no
+  COALESCE guards — a conclusive answer overwrites, including to NULL. One
+  main pass + ONE trailing pass over `throttled`/`error` items. Per-ASIN
+  outcomes:
+
+  | outcome | meaning | writes |
+  |---|---|---|
+  | `updated` | ≥1 price parsed | prices + seller counts + CPT + fetched_at |
+  | `no_offers` | 200, zero New offers | prices → **NULL**, sellers 0, fetched_at (decision 6 — conclusive: nothing is for sale; row becomes uncalculated) |
+  | `restricted` | 403/restricted | nothing |
+  | `not_found` | 404 | nothing |
+  | `invalid_asin` | Amazon's "invalid ASIN for marketplace" per-item error — conclusive, not transient: excluded from Retry failed, listed separately, and **auto-marks the ASIN dead** (status `dead`, reason `invalid_asin` — §14) | status only |
+  | `throttled` | 429 survived limiter + trailing pass | nothing |
+  | `error` | timeout/5xx/parse (throttle/invalid excluded) | nothing (message kept) |
+
+  `fetched_at` stamps only the two conclusive outcomes — the honest price
+  age. CPT (`Summary.CompetitivePriceThreshold`) is read off the same
+  response and written to `asin_estimates.competitive_price_threshold`
+  (decision 12; NULL when Amazon returns none).
+- **Fees (13).** `POST /products/fees/v0/feesEstimate`, 20 per call at
+  0.5 calls/s, input price per ASIN = `getFeePriceForAsin` on the
+  just-written prices. ASINs whose price outcome was
+  `no_offers`/`invalid_asin`/`error` skip as `skipped_no_price` — never a
+  fallback-price estimate. Writes the fee triple with `fee_source =
+  'spapi'`; outcomes `updated` / `skipped_no_price` / `error`.
+- **Gating (8) and hazmat (7) fail closed** (2026-10-07). A probe that
+  does not return an answer writes **nothing**: no fallback value, and
+  **the `_checked_at` stamp does not move**. The component records
+  `error: <msg>` for that ASIN and Retry failed picks it up. The stored
+  `eligibility_status` / `is_hazmat` **stand** until a probe succeeds — a
+  throttle is not evidence that a known `no` became unknown.
+  `"check"` as a stored `eligibility_status` means **"never probed"** and
+  nothing else; it is never written by a failed probe. `getEligibility`
+  and `getInboundHazmat` surface failure as a typed result, never a
+  sentinel, and every caller has an explicit failure branch. **Every ASIN
+  in scope is probed every time** — there is no freshness-based skip
+  anywhere in the job (the B00P0OYZ66 incident: gating flipped inside
+  three days under a 30-day rule). `gating_checked_at` /
+  `hazmat_checked_at` stay, stamped on every successful probe,
+  informational only. gated↔ungated transitions are the job's `flips`.
+- **Catalog (2–6).** `searchCatalogItems` by ASIN identifiers, 20/call;
+  the per-item parser is pure and shared; absent from a **complete** batch
+  response is the DA-2 catalog-deleted signal (3), a partial batch is
+  `inconclusive` for its missing ASINs — fail-closed, no `catalog_deleted`.
+  Meltable (5) and dangerous good (6) ride the same attributes.
+- **Inventory (15)** is `getInventorySummaries` + SKU recording, with the
+  primary-SKU bootstrap (only when NULL). **Listings (16)** is the §18
+  reconcile — phases a/b over the job scope, phase c account-wide on every
+  pass (ALL statuses incl. dead, SKU'd and no-SKU alike), one per-ASIN
+  outcome for every ASIN probed (§18 A2); its onboards go through
+  `onboardNewAsins` with trigger `sc_discovery`.
+- **PO sheet (9)** is `runSheetsSync` — full sheet on a scheduled pass,
+  filtered to the job's ASINs on a scoped job (the clearing pass stays
+  inside the filter).
+
+#### Ledger and history
+
+`refresh_runs` stays the per-component ledger: one row per component per
+job, linked by `job_id` (migration 052), `stage` = the keys in the table
+above, `scope` ∈ `full` | `subset` | `bulk:<list_id>`, `trigger` ∈
+`scheduled` | `manual` | `onboarding` | `bulk` (the CHECK keeps the
+historical values), `requested`, per-outcome `counts`, `outcomes JSONB`
+(every non-trivial ASIN + error messages). The jobs row carries
+`progress` and, at the end, `summary` (per-component counts, `flips`,
+duration). "Which failed" is a row, not scrollback.
 
 **Price Age column** (`priceAge`, Additional info group, default hidden):
 relative age of `pricesFetchedAt` ("2h"/"3d"), tooltip = timestamp,
 em-dash when null; filter reuses the `reviewed` mechanism with neutral
 labels ("Never synced" / "Older than" / "Within last").
 
+#### Routes and UI
+
+- `POST /api/jobs {asins?, includeDaily?}` → 201 `{job, ahead}`;
+  `GET /api/jobs/current` (running + queued — the client polls it every
+  10 s while anything is active); `GET /api/jobs` (history);
+  `GET /api/jobs/:id` (one job + its ledger rows); `PATCH /api/jobs/:id
+  {status:'cancelled'}`; `GET /api/jobs/scheduler` (enabled, next pass,
+  last scheduled job — Settings). `POST /api/analyze/all` and
+  `POST /api/refresh` survive for ONE release as thin enqueuers (202 + the
+  job) and are then deleted; nothing in the client calls them, and
+  `runRefreshJob` has no callers left.
+- **Toolbar:** one **Refresh (N)** button, N = working-set size. While a
+  job runs it shows the component ("Refresh · prices 840/2453") and a
+  Cancel; clicking while another job runs enqueues and shows the queue
+  position. The history clock opens the jobs dialog.
+- **Jobs dialog:** one row per job (trigger, scope size, started,
+  duration, status), expandable to per-component counts and outcome lists,
+  plus **Retry failed (N)**. It replaced the Prices & Stock / Product Info
+  results dialogs and the `refresh_runs` history dialog.
+- **Completion notification** (decision 16): a toast when a job this tab
+  is watching (its own manual jobs, or any scheduled job while the tab is
+  open) finishes — "Refresh done · 2,453 ASINs · 44 min" — with a
+  **Changes** link when the summary has flips. The flips panel lists the
+  ASINs that went gated→ungated, ungated→gated, suppressed→unsuppressed,
+  unsuppressed→suppressed in that job, each a link to the row. **Never
+  price counts.** Email is pinned.
+- **Settings:** a read-only **Scheduler** section — enabled or not, next
+  pass, last pass result, link to the jobs dialog.
+
 **Future (not this patch):** ANY_OFFER_CHANGED push notifications belong
 with the Repricer module; the consumer would write through the same
-`writePrice` and the pull path would narrow to no-live-offer ASINs.
+`writePrice` and the pull path would narrow to no-live-offer ASINs. Keepa
+components land as 22+ when their cadence is decided.
 
-### Product Info (the Analyze job) — batch endpoints (2026-09-07)
+### Scheduled passes (`ENABLE_CRONS`)
 
-Product Info (labeled Analyze until 2026-09-07) ran one ASIN/second because
-three calls sat on 1 rps buckets (~37 min full catalog). Now:
+`server/scheduler/schedule.ts` is the one schedule definition — node-cron
+with `timezone: 'America/New_York'` passed explicitly (decision 7). Never
+host-local again: the old crons' "EST/UTC" comments described a timezone
+they never passed.
 
-| call | today | full catalog |
-|---|---|---|
-| catalog | `searchCatalogItems` by ASIN identifiers, 20/call at 2/s → 40 ASINs/s | ~1 min |
-| fees | batch `feesEstimate` (same stage code as Prices & Stock's fees stage) | ~4 min |
-| prices | **removed** — Prices & Stock owns prices; fees use the stored price via `getFeePriceForAsin` | — |
-| gating | listings restrictions, 5/s (no batch form) — a failed probe writes NOTHING and records `error` | ~7 min |
-| hazmat | inbound eligibility preview, 1/s (no batch form) — a failed probe writes NOTHING and records `error` | every ASIN in scope |
-| listings | **the listings reconcile (2026-10-11)** — the SAME `runFullScopePass` the Prices & Stock `listings` stage runs, over Product Info's working set. One implementation, no second copy: §18 A1 presence, the A2 primitive, per-ASIN outcomes for every ASIN probed | ≈ SKU count ÷ 5 rps |
+```
+0 0 * * *        enqueue refresh { trigger: scheduled, include_daily: true }
+0 4-23 * * *     enqueue refresh { trigger: scheduled, include_daily: false }
+```
 
-- **A failed gating or hazmat probe is never recorded as a success
-  (2026-10-07).** A probe that does not return an answer writes **nothing**:
-  no fallback value, and **the `_checked_at` stamp does not move**. The stage
-  records `error: <msg>` for that ASIN and **Retry failed picks it up**. The
-  previously stored `eligibility_status` / `is_hazmat` **stand** until a
-  probe succeeds — a throttle is not evidence that a known `no` became
-  unknown (the tri-state discipline §14 already requires for prices and
-  catalog-deleted).
+One pass at 00:00 ET that also runs the daily block; no passes 01–03
+(both DST transitions fall inside that window); hourly passes
+04:00–23:00. 21 passes a day. If a pass is still running when the next
+tick fires, the tick enqueues anyway and the job waits — the queue is the
+lock; the log shows the overrun. `nextPassAfter()` feeds Settings →
+Scheduler and is tested across both 2026 DST boundaries.
 
-  `"check"` as a stored `eligibility_status` means **"never probed"** and
-  nothing else. It is never written by a failed probe.
+Gated by `ENABLE_CRONS === 'true'` (and the runner's `SP_API_SELLER_ID`)
+in `server/index.ts`; unset or any other value = no schedule, and the log
+says `Scheduled crons disabled (ENABLE_CRONS != 'true')`. Locally it stays
+off: the host Mac is asleep at night and node-cron silently skips missed
+ticks (the 2026-08-01 incident). On Render it is switched on after this
+patch's final commit (§24); the first production pass is the next hourly
+slot. `TZ=America/New_York` is still required on the host for the
+sales-window date derivations (§24).
 
-  **What was wrong.** `getEligibility` caught every API error and returned
-  `{status: "check"}`; `getInboundHazmat` returned `null`. Neither surfaced
-  failure, so the Product Info stage's per-ASIN `try/catch` could not fire
-  and the `error:` outcome was **unreachable for both stages** — a failed
-  probe recorded `updated`. Worse on the gating side: `asin_estimates`
-  writes `eligibility_status = EXCLUDED.eligibility_status`, an
-  UNCONDITIONAL overwrite, so a throttled probe replaced a stored `no` with
-  `check` **and** moved the stamp, which the (now removed) 30-day rule then
-  used to skip re-probing. Hazmat was luckier: `is_hazmat = COALESCE(
-  EXCLUDED.is_hazmat, asins.is_hazmat)` protected the value, but the stamp
-  still moved on failure.
+Expected durations on ~2,450 active+parked at today's pacing: hourly pass
+≈ 40–50 min (prices ≈ 21 min is Amazon's rate floor), midnight pass +10–15
+min for the daily block. Fits the 04:00–23:00 slots; the midnight pass has
+a four-hour window.
 
-  Both functions now surface failure to the caller rather than returning a
-  sentinel, and **every** caller has an explicit failure branch. No caller
-  may read `status === "check"` or a `null` hazmat as an answer.
-
-- **Product Info probes EVERYTHING in its working set (2026-10-07).**
-  Supersedes the 30-day gating/hazmat scoping confirmed 2026-09-07, and
-  decision 6 of the (folded, deleted) sync-buttons-parked-dead patch.
-
-  The job syncs every stage it names — catalog, fees, gating, hazmat **and,
-  since 2026-10-11, listings** — for every ASIN in its working set, **every
-  time**, and reports every ASIN's outcome. There is no freshness-based skip
-  anywhere in the job, and no stage writes an empty outcome map.
-
-  **Product Info runs the listings reconcile (2026-10-11, §18 principle 2:
-  "every sync that touches an ASIN re-probes it").** It calls the same
-  `runFullScopePass` as the Prices & Stock stage, scoped to its working set —
-  one implementation, never a parallel copy. Before this, an ASIN could be
-  fully re-synced by Product Info while `has_live_offer` kept whatever a
-  previous run left behind, which is how a wrong flag survived repeated
-  "refreshes" of the row. The stage appears in the Product Info results
-  dialog alongside catalog / fees / gating / hazmat, with the same per-ASIN
-  outcomes, and its `refresh_runs` row carries them.
-
-  Phase c (Part B) runs here **only when the working set is the full
-  catalog** — see §18 phase c. A selection-scoped Product Info run reconciles
-  the selection and does not pull the account-wide SKU list.
-
-  `THIRTY_D`, `staleOrNever`, `gatingScope` / `hazmatScope` and the
-  reuse-stored branch are **deleted**. The working set — the selection,
-  else every row of the current filtered view across all pages (decision 5)
-  — is the only scope.
-
-  `gating_checked_at` / `hazmat_checked_at` (migration 033) **stay**, and
-  are still stamped on every probe. They are now **informational** (an age
-  column or tooltip later, if wanted), never a gate.
-
-  **Why (the B00P0OYZ66 incident, 2026-10-07).** Amazon gated several ASINs
-  that AF still showed ungated after a Product Info sync. The sync did not
-  fail — it declined to probe. B00P0OYZ66 had `gating_checked_at`
-  2026-10-04 and `eligibility_status = 'yes'`; a live
-  `getListingsRestrictions` the same day returned one restriction,
-  `APPROVAL_REQUIRED` ("You need approval to list in this brand"). AF's
-  mapping (`spapi.ts:713` — `restrictions.length === 0 → 'yes'`, else
-  `'no'`) is CORRECT and would have produced `'no'`; the stored value was a
-  3-day-old answer the rule never let a probe replace. Gating flipped in
-  under 3 days, so the design assumption ("gating rarely flips inside 30
-  days") is simply wrong — and a shorter window would be the same bug,
-  smaller. A sync button that quietly declines to sync part of what it
-  names is not acceptable (§14).
-
-  **Cost, stated plainly.** Rates are unchanged (gating 5/s, hazmat 1/s,
-  no batch form for either). Hazmat is the bound: ~1 s per ASIN, so the
-  full catalog (~2,200 active) is **≈ 37 min** of Product Info rather than
-  ≈ 4–7. A filtered view or a selection costs proportionally less. That is
-  the accepted price of a button that does what it says. If a faster
-  "most of it" path is ever wanted it is a **separate, explicitly labelled
-  control** — never a silent narrowing of this one.
-
-  **The only surviving skip in Product Info is fees `skipped_no_price`**,
-  which is a missing INPUT (no stored price), not a freshness heuristic. It
-  stays, and stays visible in the results dialog.
-
-  The `?dryRun=1` report no longer lists "which ASINs the 30-day rule would
-  probe" — every ASIN in scope is listed under every stage.
-- **Product Info no longer writes price columns.** No stored price →
-  fees skip (`skipped_no_price`), never a fallback-price estimate.
-  **Any path that inserts a new ASIN onboards it through
-  `onboardNewAsins`; Product Info alone never prices.** Onboarding order
-  (2026-09-09 — corrected from the original "prices first" design):
-  Product Info FIRST (its sink performs the INSERT), THEN prices, THEN
-  fees — because the prices stage's scope query and writer target
-  EXISTING rows, the prices-first pre-pass silently no-oped for
-  genuinely-new ASINs (the "sourcing sync inserts priceless ASINs"
-  incident; brand-new CSV uploads had the same hole). One stream, one
-  `refresh_runs` ledger under the caller's trigger (upload / sourcing /
-  extension / backfill / **`sc_discovery`** — the last added 2026-10-11 for
-  §18 phase c, migration 046, so an ASIN that arrived from the Seller
-  Central account list is not misattributed to an upload or a backfill).
-
-  **Phase c is an INSERT-branch writer (2026-10-11).** It supplies
-  `buy_link`, `supplier` and the `SC import` tag on the row it creates, and
-  sets `in_catalog = TRUE` (the ASIN is in SC by construction — that is what
-  discovery found). Like the sourcing sync's `promo_notes` and bulk
-  promote's `buy_link`, these are INSERT-only: discovery never writes tags,
-  notes, COGS or a buy link to an EXISTING row. COGS comes from the real PO
-  sync scoped to the ASIN when it has Orders rows, and is left NULL
-  otherwise — never a synthetic zero.
-- The per-item catalog parser is extracted pure and shared (as offers
-  were); catalog-404 (DA-2) maps to "absent from a COMPLETE batch
-  response"; a partial batch response is inconclusive for its missing
-  ASINs — fail-closed, no `catalog_deleted`.
-- Outcomes, results dialog, `refresh_runs` rows (stage names `catalog` /
-  `fees` / `gating` / `hazmat`), rate-limit deltas, Retry failed:
-  identical machinery to Prices & Stock — same ledger rows, same results
-  renderer, same Retry-failed shape (see "Where the outcomes are visible"
-  below). **Expected full catalog ≈ 37 min (hazmat-bound); the working set
-  is the only scope.**
-
-  **Per-ASIN outcomes, all four stages (fixed 2026-10-07).** Until then
-  this claim of "identical machinery" was false: `routes.ts` inserted
-  EVERY Product Info stage with a hardcoded `'{}'::jsonb`, so which ASIN a
-  run touched could not be proven from the ledger for any stage — only the
-  Prices & Stock / onboarding stages passed real outcome maps. That is the
-  same disease as a skip: a stage you cannot see per ASIN. All four stages
-  now write a per-ASIN map in the Prices & Stock shape —
-  `Record<string, string>`, ASIN → outcome, failure message appended as
-  `price-sync.ts:198` does. Vocabulary per stage:
-
-  | stage | outcomes |
-  |---|---|
-  | catalog | `updated` / `absent` (complete batch, ASIN missing — the DA-2 signal) / `inconclusive` (partial batch) / `error: <msg>` |
-  | fees | `updated` / `skipped_no_price` / `error: <msg>` |
-  | gating | `updated` / `error: <msg>` |
-  | hazmat | `updated` / `error: <msg>` |
-
-  `counts` for every Product Info stage reduces to `{updated, error}` plus
-  the stage-specific values above (`skipped_no_price` for fees, `absent` /
-  `inconclusive` for catalog). The `probed` / `would_probe` /
-  `reused_stored` counters are **deleted** — once every ASIN is probed,
-  `probed` always equals `requested`.
-
-  **Where the outcomes are visible.** Two places:
-
-  - **The Product Info results dialog**, opened at the end of every live run
-    (2026-10-07). It consumes `product_info_summary` off the analyze stream
-    and renders the four stages through `StageResultsList` — **the same
-    component the Prices & Stock dialog uses**, extracted so the two cannot
-    drift (the one-renderer-per-shape discipline of §6's one accessor). Each
-    stage expands to its per-ASIN outcomes, errors in red, with the run's
-    rate-limit deltas alongside. A multi-batch run ACCUMULATES: counts are
-    summed and outcome maps unioned across batches, so the dialog shows the
-    whole run rather than the last batch.
-  - **The run history** (History button on the Prices & Stock dialog) —
-    `GET /api/refresh/history` returns every `refresh_runs` row unfiltered,
-    so Product Info's four stages appear there too.
-
-  **This replaced a toast.** Until 2026-10-07 the entire report for a
-  four-stage job with per-ASIN outcomes was a disappearing
-  "Product Info complete — processed N ASINs", and
-  `product_info_summary` was emitted to no consumer at all. The toast is
-  **gone**; failures are no longer something you had to go looking for.
-
-  **Retry failed** re-runs Product Info on every ASIN the run got **no
-  answer** for, in ANY of the four stages (`failedAsinsFrom`): an `error:`
-  outcome, or catalog **`inconclusive`** — the partial-batch state, where the
-  response came back without the ASIN and without proving its absence, and is
-  fail-closed precisely so it can be asked again. Not retried: `updated`
-  (answered), catalog **`absent`** (CONCLUSIVE — missing from a complete
-  batch, the DA-2 signal; re-asking cannot change it), and fees
-  `skipped_no_price` (a missing INPUT, not a failed call). It is deliberately
-  NOT the Prices & Stock `refreshFailedAsins` set — different job, different
-  retry.
-
-  A **dry run** opens no dialog and contributes no outcomes — it has its own
-  scope listing and writes no ledger rows.
-
-  Onboarding (`onboardNewAsins`) already probes everything and inherits
-  the per-ASIN outcomes through the shared stage code; otherwise unchanged.
-
-**Deferred, explicitly (2026-09-07):** merging Product Info into Prices &
-Stock. The overlap is only the price columns; the two jobs answer
-different questions at different cadences. Nothing here precludes it.
-
-### Scheduled crons — disabled by default (`ENABLE_CRONS`)
-
-Three node-cron schedules exist (down from five — the 2026-09-06 Refresh
-job collapsed the live-offer, inventory, and price crons into one), all
-in-process, registered in one block in `server/index.ts`:
-
-| Cron | File | Schedule (host-local) |
-|---|---|---|
-| Sourcing-sheet sync | `sourcing-sync-cron.ts` | 09:00 |
-| Daily Prices & Stock (inventory + sales + prices + fees + listings; scope active+parked) | `refresh-cron.ts` | 10:00 — after the 09:00 sourcing sync so freshly added leads are included |
-| Aura cost-sync chain | `aura-sync-cron.ts` | 13:00 |
-
-**All three are gated behind a single env flag: `ENABLE_CRONS=true`. Unset or
-any other value = no cron is scheduled.** Rationale (2026-08-01): the host Mac
-is asleep at the scheduled times — node-cron fires host-local and silently
-skips missed ticks, so schedules only ran when the machine happened to be
-awake (08-01 incident: the 07:00/09:00/10:00 crons were all missed, machine
-asleep until 11:28; only the 12:00 price refresh fired). **Manual toolbar/API
-triggers are the operating model.** The cron code is kept, not deleted —
-re-enable with `ENABLE_CRONS=true` at cloud deploy (§12 item 6).
-
-The "EST/UTC" comments inside the older cron files are wrong: node-cron with
-no timezone option fires in host-local time (documented in
-`live-offer-cron.ts` / `aura-sync-cron.ts`).
+The three old cron files (`refresh-cron.ts`, `sourcing-sync-cron.ts`,
+`aura-sync-cron.ts`) are deleted (commit 5). **Sync Sourcing** and the
+**Aura chain** are on-demand (sheet decisions) and keep their buttons;
+the Aura chain's PO-sheet read goes through the queue (decision 9).
+Scheduled passes are still never load-bearing for correctness (§14
+"Manual-trigger completeness"): the Refresh button converges everything
+on its own.
 
 ---
 
@@ -2469,8 +2459,17 @@ that writes it:
 
 | Field | Owner |
 |---|---|
-| Pricing, fees, BSR, sellers | Analyze path |
-| Catalog data (title, brand, category, dimensions, weight, etc.) | Analyze path |
+| Prices, seller counts, CPT | Refresh job components 10–12 (§11) — `writePrice`; CPT `asin_estimates.competitive_price_threshold` |
+| Fee triple, `fee_source` | component 13 |
+| Catalog data (title, brand, category, dimensions, weight, image), BSR + category, `is_meltable`, `is_dangerous_good`, `is_catalog_deleted` | components 2–6 (daily block); the onboarding INSERT seeds nothing Amazon-side |
+| `is_hazmat`, `hazmat_checked_at` | component 7 — successful probe only |
+| `eligibility_status`, `gating_checked_at` | component 8 — successful probe only; also the Add to SC gating job (decision 9) |
+| `ordered_qty`, `actual_cogs`, `cogs_source='po_sheet'` | component 9 (`runSheetsSync`); also the Push to Aura PO-sheet job (decision 9) |
+| Inventory snapshot, `asin_skus` recording | component 15 |
+| `has_live_offer`, `has_buyable_offer`, `current_issues` + stamps | component 16 through the §18 A2 primitive (also the §19 ladder / verdicts) |
+| `primary_sku`, `asin_skus.is_primary` | component 17 (bootstrap / re-point); the Add-Offer path on creation (§18) |
+| `is_search_suppressed` | component 18 (stage-then-swap) |
+| Sales, refunds, actual fees | components 19–21 (20–21 ledger-only until the Finances patch) |
 | `estimated_cogs` | CSV upload / manual edit / Chrome extension / PO sync (when source ≠ manual) |
 | `actual_cogs` | PO sync only (eventually FIFO calc) |
 | `prep_override` | PO sync |
@@ -2480,7 +2479,7 @@ that writes it:
 | `promo_notes` | Manual edit / Sourcing sync / main CSV upload (2026-09-27) — all three write the new-ASIN INSERT branch only; never rewritten on re-sync/re-analyze/re-upload, so manual edits are never overwritten |
 | `is_wholesale`, `is_oa` | Manual edit |
 | `status` (active/parked/dead — replaced `is_active` 2026-09-07, migration 033) | Manual Park/Unpark/Mark-dead/Revive; Sourcing sync writes `parked`+`discontinued` on freshly-inserted discontinued rows only; the prices stage's `invalid_asin` outcome and the catalog-404 signal (DA-2) write `dead` with their reasons |
-| Aura listing cost (external, not an AF column) | Aura cost sync path (§11) — reads `asin_estimates`, writes only to Aura |
+| Aura listing cost (external, not an AF column) | Aura cost sync path (§11) — reads `asin_estimates` after a component-9 job for the selection (decision 9), writes only to Aura |
 
 When a code path needs to touch a field outside its ownership, that's a red
 flag. Either the architecture is wrong, or the workflow is misnamed.
@@ -2496,7 +2495,7 @@ gating_reason, is_listing_active, sale_price, price_source,
 variable_closing_fee, plus computed est_* fields that never existed —
 profit is calculated client-side only):
 - `asins`: title, brand, category, image_url, weight_lb,
-  length_in/width_in/height_in, in_catalog, is_meltable,
+  length_in/width_in/height_in, is_meltable,
   **is_hazmat — ONLY on a successful probe**, is_dangerous_good,
   **gating_checked_at / hazmat_checked_at (probe stamps) — ONLY on a
   successful probe; a failed probe leaves the stamp where it was**,
@@ -2518,9 +2517,9 @@ profit is calculated client-side only):
   — ONLY on a successful probe** (the gating result — there is no is_gated
   on asins; a failed probe must not overwrite a stored `yes`/`no` with
   `check`, and `check` means "never probed"), error, fetched_at
-  — noting that since 2026-09-07 Product Info no longer FETCHES prices
-  (Prices & Stock owns them, §11); the price columns remain in its UPSERT
-  only as COALESCE pass-throughs of stored values
+  — noting that the onboarding INSERT (`insertOnly`, 2026-10-15) fetches
+  nothing: the price, fee, catalog and probe columns are written by the
+  Refresh job's components (§11) after the row exists
 
 **Analyze MUST NOT write to (user-controlled fields):**
 - `estimated_cogs`, `estimated_cogs_source`
@@ -2536,7 +2535,7 @@ profit is calculated client-side only):
 
 **`asin_estimates.error` holds genuine failures ONLY (2026-09-09):**
 never a synthesized absence message — "no stored price" is a state, not
-an error, since Product Info stopped fetching prices (§11). buildResult
+an error — the onboarding insert fetches no prices (§11). buildResult
 synthesizes nothing but genuine Restricted; `writePrice` clears `error`
 on every conclusive outcome, so a real Amazon answer always supersedes a
 stale string; migration 041 purged the 188 legacy rows (two generations
@@ -2550,10 +2549,11 @@ tags, notes, `promo_notes` (alongside the sourcing sync),
 `estimated_cogs`/`estimated_cogs_source` — INSERT branch only, never an
 update to an existing row. `added_at` is insert time (NOW()) everywhere
 EXCEPT bulk promote, which carries the bulk row's lead date. Promotion
-also seeds the catalog/pricing snapshot and the gating/hazmat values with
-their ORIGINAL timestamps (bulk `fetched_at`, cache `*_checked_at`) — a
-one-time seed at row creation, not an ongoing writer; the next Prices &
-Stock / Product Info run takes over as owner.
+also seeds the catalog/pricing snapshot and the row's own gating/hazmat
+values with the bulk `fetched_at` (the gating/hazmat cache is gone —
+decision 3, 2026-10-15; the probe stamps start NULL) — a one-time seed at
+row creation, not an ongoing writer; the onboarding job promote enqueues
+takes over as owner.
 
 Violations of this rule have caused recurring "COGS clears on analyze" bugs.
 When in doubt, the analyze path should leave the field alone.
@@ -2646,11 +2646,11 @@ user is trying to answer.
 
 ### Manual-trigger completeness
 
-All derived state must converge via manual triggers alone. Crons only re-run
-existing jobs on a schedule and are **never load-bearing for correctness** —
-this deployment runs with `ENABLE_CRONS` off (§11 "Scheduled crons"), so a
-code path that only converges "when the daily/scheduled pass runs" is a bug,
-not a design. When a definitive fact is established (an API probe, a human
+All derived state must converge via manual triggers alone. Scheduled passes
+only enqueue the same Refresh job on a schedule and are **never
+load-bearing for correctness** — the schedule is off locally and was off on
+Render until 2026-10-15 (§11 "Scheduled passes"), so a code path that only
+converges "when the daily/scheduled pass runs" is a bug, not a design. When a definitive fact is established (an API probe, a human
 verdict), every field derived from it is written then and there; a later pass
 may re-verify, never first-deliver. (Adopted 2026-08-28; first application:
 the §19 manual-`'live'` flag write.)
@@ -3507,11 +3507,12 @@ The Product-cell "in catalog" icon (blue checkmark vs. "+" Add-to-SC) reads
 **`has_live_offer` only** — never `in_catalog`, `asin_skus` presence, or
 inventory summaries.
 
-- **`in_catalog` is demoted to an internal discovery latch** — it is NOT a
-  live-offer signal. It is a one-way TRUE-only flag (set by sales-sync on any
-  order and by inventory-sync for every ASIN in `getInventorySummaries`, which
-  **retains tombstones for deleted listings**), so it stays TRUE forever and
-  over-reports. It is no longer read by the UI.
+- **`in_catalog` is gone** (dropped by migration 052, 2026-10-15 — decision
+  11). It had been demoted to an internal discovery latch on 2026-10-10: a
+  one-way TRUE-only flag (set by sales-sync on any order and by
+  inventory-sync for every ASIN in `getInventorySummaries`, which retained
+  tombstones for deleted listings), so it stayed TRUE forever and
+  over-reported, and nothing read it. Its writers lost that statement.
 - **`has_live_offer` is tri-state, and it answers EXACTLY ONE question
   (2026-10-10, supersedes the 2026-09-21 "two-part definition"):** *does a
   listing record exist in Seller Central right now?* `TRUE` ⇔ a listing
@@ -3627,8 +3628,9 @@ inventory summaries.
     scope per A3, outcomes per A2. The daily-pass/rider implementation is
     gone (`live-offer-sync.ts` **deleted** 2026-10-09); the §6 single-ASIN
     `recheck-issues` endpoint now runs the stage scoped to one ASIN.
-  - **Product Info** — runs the same stage over its working set, one
-    implementation, no second copy.
+  - **The Refresh button and onboarding** — the same component (16) over
+    their scope; one implementation, no second copy (Product Info is gone,
+    2026-10-15).
   - **The §19 post-submit ladder** (T+1/3/10/30/60m) — a probe, so subject
     to A1, writing through the primitive. Restored to being the FIRST writer
     after a submit (§19 Auto verify), which it was until 2026-09-21.
@@ -3730,7 +3732,8 @@ active-only**.
 The two scope filters this removes were how B07J2WWWD4's wrong `TRUE`
 became *frozen*: `full-scope-pass.ts` selected `status IN ('active',
 'parked')` and the deleted `live-offer-sync.ts` selected `in_catalog =
-TRUE`. The ASIN is `dead` with `in_catalog = f`, so it sat outside both and
+TRUE` (a column since dropped, migration 052). The ASIN was `dead` with
+`in_catalog = f`, so it sat outside both and
 nothing could ever correct it. A flag AF cannot re-probe is a flag AF
 should not be showing — "mirror the SC catalog" has no exceptions for rows
 we happen to have given up on.
@@ -3791,20 +3794,20 @@ sequential phases over one NDJSON progress stream
   silently omit others — and the omission is invisible, because there is no
   "missing" to notice.
 
-  **When it runs:** EVERY Prices & Stock run regardless of working set, cron
-  included — "does SC have an ASIN AF lacks" is an account-wide question a
-  selection cannot answer. On **Product Info only when the working set is the
-  full catalog**. A dry run lists the would-be onboards with the data below
-  and writes nothing.
+  **When it runs:** EVERY Refresh job regardless of scope, scheduled passes
+  included — component 1 (SC-only SKU discovery) runs first in every pass,
+  and component 16 carries the discovery callback whether the job came from
+  the schedule or the button — "does SC have an ASIN AF lacks" is an
+  account-wide question a selection cannot answer.
 
 - **Onboarding a discovered ASIN (phase c).** Through **`onboardNewAsins`** —
-  the ONE insert path (§14) — so the row gets Product Info → prices → fees on
-  one stream exactly like a CSV upload. `refresh_runs.trigger =
-  'sc_discovery'` (migration 046 widens the CHECK); labelling it `upload` or
-  `backfill` would misattribute how the ASIN arrived. Then:
+  the ONE insert path (§14) — so the row is created and then refreshed by
+  one Refresh job exactly like a CSV upload (§11 "Refresh job"; the
+  `in_catalog` latch is gone — migration 052). The discovery is attributed
+  by `lead_source` / the `SC import` tag; the job's trigger is `onboarding`.
+  Then:
 
-  1. `in_catalog = TRUE` (it is in SC by construction — that is what phase c
-     found, and the latch exists for discoveries). `asin_skus` rows for every
+  1. `asin_skus` rows for every
      SKU SC returned, primary per the existing rules (`amzn.gr.*` never
      primary). The flag via the **A2 primitive**, outcome **`onboarded`** —
      a verdict, not a guess: the ASIN came from an A1-filtered account list.
@@ -3830,11 +3833,9 @@ sequential phases over one NDJSON progress stream
   5. **Results dialog:** the onboarded ASINs appear under the listings stage
      carrying their detail in the outcome string —
      `onboarded · SKUs <…> · COGS po_sheet|none · link master|orders|none`.
-     Kept in the outcome rather than a parallel field so BOTH dialogs
-     (Prices & Stock and Product Info) render it through the existing
-     per-ASIN outcome list, with no second shape to thread through two
-     different summary payloads. Retry failed covers `error:` outcomes here
-     too.
+     Kept in the outcome rather than a parallel field so the jobs dialog
+     renders it through the existing per-ASIN outcome list. Retry failed
+     covers `error:` outcomes here too.
 
   **INSERT-BRANCH WRITES ONLY.** Buy link, supplier and the tag are written
   on insert and never on conflict — the same precedent as the sourcing sync's
@@ -4046,9 +4047,9 @@ system inferring failure.
 
 **`deleted` scope:** touches **only** the ledger row and `asin_skus.is_primary`
 (demoted to false), plus the re-probe above, which may move the flag on the
-evidence it finds. It **never** writes the analyze-owned `asins` fields
-(`in_catalog`, `primary_sku`) — those are §14-owned and self-correct on the
-next analyze; deleting one SKU doesn't mean a multi-offer ASIN has no live
+evidence it finds. It **never** writes the component-owned `asins` fields
+(`primary_sku` — §14, component 17), which self-correct on the next
+Refresh job; deleting one SKU doesn't mean a multi-offer ASIN has no live
 offer. The `asin_skus` row is kept, so resurrection can reuse a 404'ing SKU.
 
 ### Panel bulk actions & dismiss (2026-08-03)
@@ -4406,60 +4407,37 @@ ever wired to a live call site, it must remain unwired on this page.
     has no backdatable `added_at` column (that is a §21 bulk-only field), so
     there is nothing to write it to. A test pins that the `promoNotes: null`
     strip does NOT come back and that the `addedAtRaw: null` strip does.
-- Everything else: the bulk run pipeline (2026-09-09 — replaces the
-  Product Info core here, which since 2026-09-07 reads prices from the
-  MAIN tables and therefore could never price a bulk-only ASIN: the
-  "⚠ Error on every row" incident). One implementation, pluggable writes:
-  the prices and fees stages are pure fetch/parse/outcome passes that
-  take a writer — the ASINs page passes the asin_estimates writer, this
-  page passes the bulk sink. Stages, in order, under one NDJSON stream
-  with a 15 s heartbeat: **prices** (getItemOffersBatch, one trailing
-  pass) → **fees** (batch feesEstimate on the just-fetched prices;
-  no-price rows skip — never fallback-price estimates) → **catalog**
-  (searchCatalogItems) → **gating + hazmat** via the shared
-  per-ASIN cache `bulk_gating_hazmat_cache` (migration 038: asin PK,
-  eligibility_status, is_hazmat, gating_checked_at, hazmat_checked_at —
-  stamps live ONLY here; the per-row stamp columns from 035 were dropped
-  so exactly one place decides "needs probe"). Read-through by default
-  (same 30-day rule and knob as the main page); **"Refresh all" BUSTS the
-  cache** for the list's ASINs — fresh probes, matching what Refresh all
-  means everywhere else. Per-row eligibility_status / is_hazmat are the
-  display copy, written from the cache on reuse and from the probe on
-  probe; the dialog's gating/hazmat lines show probed / reused_cache /
-  error so the cache is visible working. **A FAILED probe is not cached
-  (2026-10-07)**: no cache row is written or updated, no stamp moves, and
-  the row reports `error` — so the next run re-probes rather than treating
-  a throttle as a 30-day-fresh answer. The 30-day window and the
-  "Refresh all busts the cache" rule are otherwise untouched.
-
-  The cache is deliberately CROSS-LIST shared state, keyed by ASIN and fully bulk-side (no FK to
-  asins, no main-table read — bulk gating/hazmat stays separate from the
-  main catalog's per the standing decision, and in_database EXISTS
-  remains the single main-DB read): a probe under any list serves every
-  list, staleness bounded by the 30-day rule. **Delete-list does NOT
-  delete cache rows** (no FK to bulk_lists, on purpose — they are shared
-  state). Do not "fix" this back to per-list stamps; per-list is exactly
-  what made every re-upload pay the full ~45-minute probe tax. Account-scoped stages (inventory,
-  sales, listings) are excluded — meaningless for arbitrary ASINs.
-  Outcomes are per LEG (migration 035): `catalog_outcome`
-  (parsed/absent/inconclusive — absent is the DA-2 404 analogue and
-  renders "Not found") and `price_outcome` (updated / no_offers /
-  restricted / throttled / error — the fees result folds in: no price ⇒
-  fees skipped). A price failure never blanks catalog data and vice
-  versa; `fetched_at` stamps only conclusive price outcomes. Fresh
-  prices are fetched for EVERY row — including ASINs that also live in
-  the main catalog — and written to bulk_list_asins ONLY (a test pins
-  that the shared stages perform no DB writes of their own).
-  **Run lifecycle (decision, 2026-09-09): a bulk run continues to
-  completion after client disconnect** — progress is re-attachable via
-  GET /api/bulk-lists/:id/refresh/status (the page polls it on load and
-  while a run is live). One run per list at a time: a second POST is
-  refused with 409 and a visible message. Every run lands in
-  refresh_runs with scope `bulk:<list_id>` ("Refresh · bulk:<list>" in
-  the dialog — UI and ledger agree). Default scope = failed +
-  never-fetched rows; "Refresh all" covers everything; Retry failed
-  re-runs exactly the failures. The bulk sink's UPDATE never touches any
-  user-controlled field above, so they persist across runs.
+- Everything else: **the Refresh job with `target: 'bulk'`** (scheduler
+  v1, 2026-10-15 — replaces the page's own pipeline of 2026-09-09, which
+  replaced the Product Info core that could never price a bulk-only ASIN).
+  Refresh enqueues one job for the list (`POST /api/bulk-lists/:id/refresh`
+  → 202 + the job; 409 while one is active; the status route re-attaches
+  to it). The runner resolves each list ASIN (`server/scheduler/bulk.ts`):
+  **in `asins`** → the main components run against the main tables, then
+  the result row is copied main → bulk (`copyMainToBulk`); **not in
+  `asins`** → the public components — catalog, hazmat, gating, prices,
+  fees — run against `bulk_list_asins` ONLY, ledgered as `bulk:catalog`
+  … `bulk:fees` under scope `bulk:<list_id>`. Store components (15–21) are
+  skipped for ASINs not in the catalog. **Never bulk → main**; the shared
+  passes are pure fetch/parse/outcome functions that take a writer, and a
+  test pins that the bulk module writes no main table. The 30-day
+  gating/hazmat cache (`bulk_gating_hazmat_cache`, migration 038) and its
+  "Refresh all busts the cache" rule are **gone** (decision 3; dropped by
+  migration 052): every run probes every row in scope, and a failed probe
+  writes nothing and reports `error`. Outcomes are per LEG (migration
+  035): `catalog_outcome` (parsed/absent/inconclusive — absent is the DA-2
+  404 analogue and renders "Not found") and `price_outcome` (updated /
+  no_offers / restricted / throttled / error — the fees result folds in:
+  no price ⇒ fees skipped). A price failure never blanks catalog data and
+  vice versa; `fetched_at` stamps only conclusive price outcomes.
+  **Run lifecycle:** the job continues after client disconnect; progress
+  is re-attachable via GET /api/bulk-lists/:id/refresh/status (the page
+  polls it on load and while a job is live) and the finished job's
+  components build the results dialog. One job per list at a time: a
+  second POST is refused with 409 and a visible message. Default scope =
+  failed + never-fetched rows; "Refresh all" covers everything; Retry
+  failed re-runs exactly the failures. The bulk sink's UPDATE never
+  touches any user-controlled field above, so they persist across runs.
 
 `/api/parse-file` and `/api/parse-mapped` are pure and reused. `parse-mapped`
 takes an opt-in flag to skip the COGS-column requirement; the default
@@ -4630,9 +4608,10 @@ case-insensitively, existing tags never modified; tag creation runs
 AFTER the insert commits, in the same per-ASIN unit of work, and a tag
 failure makes that ASIN's outcome `error`, never a silent success) and
 its snapshot (catalog, both prices, fees, BSR, sellers — seeded with the
-bulk `fetched_at`; gating/hazmat values + stamps from
-`bulk_gating_hazmat_cache` — all timestamps passed EXPLICITLY so no
-column default fires and Price Age / the 30-day rule stay honest).
+bulk `fetched_at`; the row's own gating/hazmat values with NULL probe
+stamps, since the cache is gone — decision 3, 2026-10-15; the
+onboarding job it enqueues re-probes both — all timestamps passed
+EXPLICITLY so no column default fires and Price Age stays honest).
 `added_at` = the bulk row's lead date (decision: lead date, not
 promotion date). `is_wholesale`/`is_oa` unset (§16: user-set only);
 `last_reviewed_at` carries over (2026-09-10).
@@ -4907,8 +4886,8 @@ and the other conditions hold it appears, not before.
   (**NULL = never checked**, never conflated with FALSE) +
   `asins.buyable_checked_at`.
 - **Written by the SAME definitive `getListingsItem` probes that own
-  `has_live_offer`**, nowhere else: the Prices & Stock listings stage
-  (full-scope pass phases a + b, including the all-404 discovery path) and
+  `has_live_offer`**, nowhere else: the Refresh job's listings component
+  (16: full-scope pass phases a + b, including the all-404 discovery path) and
   the §19 verify-sweep's flag write. Definition: **TRUE ⇔ ≥1 of the ASIN's
   SKUs has `summaries[].status` containing `BUYABLE`** — and that remains
   its SOLE source.
@@ -4985,9 +4964,9 @@ screen. The page is **read-only**: no writers besides the
 
 ### Data-as-of, and the unprobed count
 
-Crons are OFF (§11) — every input to this view is as fresh as the last
-manual Prices & Stock run, and stale data must be VISIBLE, never mistaken
-for a dead ASIN. The page shows, from the `refresh_runs` ledger plus the
+Every input to this view is as fresh as the last Refresh job — hourly once
+the schedule is on (§11 "Scheduled passes"), otherwise the last button
+run — and stale data must be VISIBLE, never mistaken for a dead ASIN. The page shows, from the `refresh_runs` ledger plus the
 data itself:
 
 - **Sales through** — the newest ingested `sales_daily.sale_date`, plus the
@@ -5076,7 +5055,7 @@ platform's values always win.
 | `TZ` | no | **Required: `America/New_York`.** Every date derivation in the syncs, exports and crons uses host-local time (`ymd()`, `todayLocal()`, the sales-window bounds). Render's default is UTC, which would shift day boundaries. |
 | `PORT` | no | Set by Render; the code defaults to 5000 when absent. |
 | `CORS_ALLOWED_ORIGIN` | no | Optional extra allowed origin beside `chrome-extension://*`. |
-| `ENABLE_CRONS` | no | **Leave unset.** See below. |
+| `ENABLE_CRONS` | no | `true` switches on the scheduled passes (§11 "Scheduled passes": 00:00 ET with the daily block, hourly 04–23 ET). Set it on Render **after** the scheduler patch's final commit deploys (2026-10-15); unset = no schedule, manual Refresh only. See below. |
 | `SESSION_SECRET` | yes | Signs the `af.sid` session cookie (§25). **Required in production: the server refuses to start without it.** Generate with `openssl rand -hex 32`. Locally it must be in `.env` too, because `npm start` sets `NODE_ENV=production` itself; `npm run dev` falls back to a logged, insecure dev value. Add it to Render **before** the first auth commit deploys. |
 
 `APP_PASSWORD` is gone (auth v1, 2026-10-14): `POST /api/verify-password`
@@ -5085,16 +5064,16 @@ was removed with it. Login is §25.
 Not read by the server: `NODE_ENV` (set by `npm start`), `SP_API_MARKETPLACE_ID`
 and `REPL_ID` (scripts and `vite.config.ts` only).
 
-### Scheduled crons stay off
+### Scheduled passes (`ENABLE_CRONS=true`)
 
-`ENABLE_CRONS` remains **unset** on Render until the scheduler rework. The
-three node-cron schedules (§11 "Scheduled crons") have no in-flight guard
-against a concurrent manual sync, fire host-local with no timezone option,
-and the Prices & Stock cron's listings stage cannot onboard SC discoveries
-because the route layer injects that callback and the cron does not. The
-§11 line "re-enable with `ENABLE_CRONS=true` at cloud deploy" is superseded
-by this section: manual toolbar triggers stay the operating model after the
-move.
+The scheduler rework landed 2026-10-15 (§11 "Refresh job"): one durable
+queue, one runner, one schedule with an explicit timezone, and the queue
+is the lock. The three old crons and the objections to them (no in-flight
+guard, host-local firing, a cron listings stage that could not onboard SC
+discoveries) are gone. `ENABLE_CRONS=true` is set on Render after the
+patch's final commit deploys; the first production pass is the next hourly
+slot (04–23 ET) and Maria checks the jobs dialog after it. Leave it unset
+locally. The runner itself is always on wherever `SP_API_SELLER_ID` is set.
 
 ### Postgres SSL
 
@@ -5217,9 +5196,12 @@ run there, from the service's Shell tab; it refuses when any user exists.
 3. `GET /api/credentials-status` with the session → `{"configured":true}`.
 4. ASINs page loads with the expected catalog count (2,579 rows as of
    2026-10-13; the count is in the scorecards).
-5. A **selection-scoped** Prices & Stock run on two or three ASINs completes
-   and writes `refresh_runs` rows with trigger `refresh`.
-6. Server log shows `Scheduled crons disabled (ENABLE_CRONS != 'true')`.
+5. A **selection-scoped** Refresh on two or three ASINs completes (jobs
+   dialog: status `done`, 21 components) and writes `refresh_runs` rows
+   with trigger `manual` and the job's `job_id`.
+6. Server log shows `runner lock 7342002 acquired` and, until the flag is
+   set, `Scheduled crons disabled (ENABLE_CRONS != 'true')`; after it,
+   `schedule registered (America/New_York)` with the next pass time.
 
 ---
 
