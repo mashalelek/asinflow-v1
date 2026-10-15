@@ -5,7 +5,9 @@ import { Toaster } from "@/components/ui/toaster";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import { ThemeProvider } from "@/components/theme-provider";
 import { DateRangeProvider } from "@/contexts/date-range-context";
+import { AuthProvider, useAuth } from "@/contexts/auth-context";
 import { Layout } from "@/components/layout/layout";
+import { LoginScreen } from "@/components/login-screen";
 import NotFound from "@/pages/not-found";
 import Home from "@/pages/home";
 import BulkCalc from "@/pages/bulk-calc";
@@ -40,16 +42,28 @@ function Router() {
   );
 }
 
+// Auth gate (SPEC §25): the app renders only behind an authenticated session.
+// `loading` is the one /api/auth/me round-trip on page load — a blank page
+// beats flashing the login form at a signed-in user.
+function AuthGate() {
+  const { state } = useAuth();
+  if (state.status === "loading") return <div className="min-h-screen bg-background" aria-busy="true" />;
+  if (state.status === "anonymous") return <LoginScreen />;
+  return <Router />;
+}
+
 function App() {
   return (
     <ThemeProvider>
       <QueryClientProvider client={queryClient}>
-        <DateRangeProvider>
-          <TooltipProvider>
-            <Toaster />
-            <Router />
-          </TooltipProvider>
-        </DateRangeProvider>
+        <AuthProvider>
+          <DateRangeProvider>
+            <TooltipProvider>
+              <Toaster />
+              <AuthGate />
+            </TooltipProvider>
+          </DateRangeProvider>
+        </AuthProvider>
       </QueryClientProvider>
     </ThemeProvider>
   );

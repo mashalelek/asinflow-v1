@@ -5151,12 +5151,15 @@ run there, from the service's Shell tab; it refuses when any user exists.
 ### Verification checklist for the first deploy
 
 1. `GET /health` → `200 {"ok":true}`.
-2. `GET /api/credentials-status` → `{"configured":true}`.
-3. ASINs page loads with the expected catalog count (2,579 rows as of
+2. The site shows the login page; `GET /api/credentials-status` without a
+   cookie → 401. Log in as the restored admin (§25); the top nav shows the
+   display name.
+3. `GET /api/credentials-status` with the session → `{"configured":true}`.
+4. ASINs page loads with the expected catalog count (2,579 rows as of
    2026-10-13; the count is in the scorecards).
-4. A **selection-scoped** Prices & Stock run on two or three ASINs completes
+5. A **selection-scoped** Prices & Stock run on two or three ASINs completes
    and writes `refresh_runs` rows with trigger `refresh`.
-5. Server log shows `Scheduled crons disabled (ENABLE_CRONS != 'true')`.
+6. Server log shows `Scheduled crons disabled (ENABLE_CRONS != 'true')`.
 
 ---
 
@@ -5256,6 +5259,31 @@ lock; `requireAuth` 401s on `/api/asins`, `/api/settings`, `/api/refresh`;
 with and without the 30-day `Expires`; logout revokes; a member gets 403 on
 an admin route; `/me` ends the session of a disabled row; `create-admin`
 refuses when a user exists and rejects a short password.
+
+### Client (commit 2, 2026-10-14)
+
+- **Gate.** `AuthProvider` (`client/src/contexts/auth-context.tsx`) calls
+  `GET /api/auth/me` once on load. `App.tsx` renders a blank page while that
+  is in flight, the login page on 401, and the app on 200. State moves
+  through one pure reducer (`client/src/lib/auth.ts`): loading →
+  authenticated | anonymous; authenticated → anonymous on `unauthorized` or
+  `logout`.
+- **401 interceptor — option A.** The client has no single fetch wrapper
+  (67 raw `fetch()` sites across 15 files; `apiRequest` in `queryClient.ts`
+  has zero callers), so the provider wraps `window.fetch` **once**. A 401
+  from any same-origin `/api/*` response other than `/api/auth/*` dispatches
+  `unauthorized`, and the login page replaces the app. Covers raw fetches,
+  `fetchLongSync` and the NDJSON streams alike; installs idempotently.
+- **Login page** (`login-screen.tsx`, replaced): email, password with a
+  show/hide toggle, "Remember me for 30 days", submit. Every credential
+  rejection shows the one line **"Email or password is incorrect."**; a 429
+  from the rate limiter shows its own line. Warm stone via the theme tokens.
+- **User menu.** The top nav's settings gear is per-page and absent on some
+  routes, so the account control is its own menu on every route: display
+  name button → email, role, **Log out** (`POST /api/auth/logout`, then
+  `logout`).
+- Same-origin fetches carry the cookie by default; nothing sends
+  `credentials: "include"` to another origin.
 
 ### Out of scope (explicitly)
 

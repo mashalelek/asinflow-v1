@@ -184,6 +184,11 @@ Referral fee is proportionally adjusted when the sale price differs from the fee
 
 ### Frontend state (`client/src/pages/home.tsx`)
 
+Above the pages, `AuthProvider` (`client/src/contexts/auth-context.tsx`,
+SPEC §25) gates the router: one `GET /api/auth/me` on load, the login page
+on 401, and a global `window.fetch` interceptor that returns to the login
+page when any later `/api` call answers 401. `useAuth()` gives the user.
+
 All application state lives in the single `Home` component:
 - `asins` — parsed inputs from file upload
 - `results` — `AsinResult[]` streamed from the server, accumulated as they arrive

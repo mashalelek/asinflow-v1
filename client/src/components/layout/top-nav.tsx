@@ -1,8 +1,12 @@
 import { useLocation, Link } from "wouter";
 import { useTheme } from "@/components/theme-provider";
-import { Sun, Moon, Package, BarChart3, Calculator, ShoppingCart, CreditCard, TrendingUp, Truck, Settings } from "lucide-react";
+import { Sun, Moon, Package, BarChart3, Calculator, ShoppingCart, CreditCard, TrendingUp, Truck, Settings, LogOut, UserRound } from "lucide-react";
 import { Button } from "@/components/ui/button";
+import {
+  DropdownMenu, DropdownMenuTrigger, DropdownMenuContent, DropdownMenuItem, DropdownMenuLabel, DropdownMenuSeparator,
+} from "@/components/ui/dropdown-menu";
 import { useDateRange } from "@/contexts/date-range-context";
+import { useAuth } from "@/contexts/auth-context";
 import { DataStudioDatePicker } from "@/components/data-studio-date-picker";
 
 interface NavItem {
@@ -37,6 +41,7 @@ export function TopNav() {
   const [location] = useLocation();
   const { theme, toggleTheme } = useTheme();
   const { range, setRange } = useDateRange();
+  const { user, logout } = useAuth();
 
   // Match exact route or its subtree where appropriate.
   const showDatePicker = DATE_PICKER_ROUTES.some((p) => location === p || (p === "/asins" && location === "/"));
@@ -90,7 +95,7 @@ export function TopNav() {
         })}
       </nav>
 
-      {/* Right side utilities — order: Date Picker | Theme toggle | Settings */}
+      {/* Right side utilities — order: Date Picker | Theme toggle | Settings | User */}
       <div className="ml-auto flex items-center gap-2">
         {showDatePicker && (
           <DataStudioDatePicker value={range} onApply={setRange} />
@@ -116,6 +121,38 @@ export function TopNav() {
           >
             <Settings className="h-4 w-4" />
           </Button>
+        )}
+
+        {/* User menu (SPEC §25): display name + Log out, on every route. The
+            settings gear is per-page and absent on some routes, so the
+            account menu is its own control rather than an item inside it. */}
+        {user && (
+          <DropdownMenu>
+            <DropdownMenuTrigger asChild>
+              <Button
+                size="sm"
+                variant="ghost"
+                className="text-inherit hover:bg-white/10 gap-1.5 px-2 h-8 text-xs"
+                title={user.email}
+                data-testid="button-user-menu"
+              >
+                <UserRound className="h-4 w-4" />
+                <span className="max-w-[12rem] truncate">{user.displayName}</span>
+              </Button>
+            </DropdownMenuTrigger>
+            <DropdownMenuContent align="end" className="min-w-[12rem]">
+              <DropdownMenuLabel className="font-normal">
+                <div className="text-sm font-medium truncate">{user.displayName}</div>
+                <div className="text-xs text-muted-foreground truncate">{user.email}</div>
+                <div className="text-[10px] uppercase tracking-wider text-muted-foreground mt-0.5">{user.role}</div>
+              </DropdownMenuLabel>
+              <DropdownMenuSeparator />
+              <DropdownMenuItem onSelect={() => { void logout(); }} data-testid="menu-logout">
+                <LogOut className="h-4 w-4 mr-2" />
+                Log out
+              </DropdownMenuItem>
+            </DropdownMenuContent>
+          </DropdownMenu>
         )}
       </div>
     </header>
