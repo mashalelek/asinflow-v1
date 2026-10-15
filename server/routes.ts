@@ -25,7 +25,8 @@ import { buildSourcingCost, sourcingCostFilename, parseYMDLocal } from "./sourci
 import { recordSourcingCostExport, listSourcingCostExports } from "./sourcing-cost-repo";
 import { syncSourcingSheet } from "./sourcing-sync";
 import { refreshPrices } from "./price-sync";
-import { runRefreshJob, runFeesStage } from "./refresh-job";
+import { runFeesStage } from "./refresh-job";
+import { enqueueJob } from "./scheduler/jobs-repo";
 import { fetchCatalogBatch, fetchFeesBatch } from "./product-info-batch";
 import { applyCatalogDeletedSignal } from "./catalog-deleted-write";
 import { offerAddForAsin, preFilterSubmitSet, type OfferAddResult, type PreFilterResult } from "./offer-add";
@@ -1752,34 +1753,12 @@ export async function registerRoutes(
   // non-archived). ?dryRun=1: listings reports would-be flips/discoveries,
   // prices reports outcomes, inventory/sales are skipped — zero writes.
   app.post("/api/refresh", async (req: Request, res: Response) => {
+    // Scheduler v1 (2026-10-15): thin enqueuer for one more release, then
+    // deleted. The client calls POST /api/jobs directly.
     if (!isDbAvailable()) { res.status(503).json({ message: "Database not available" }); return; }
-    const { asins, startDate, endDate } = (req.body ?? {}) as { asins?: string[]; startDate?: string; endDate?: string };
-    if (!asins || !Array.isArray(asins) || asins.length === 0) {
-      res.status(400).json({ message: "asins is required — the client always sends the on-screen working set" }); return;
-    }
-    if (!startDate || !endDate) { res.status(400).json({ message: "startDate and endDate are required (sales stage)" }); return; }
-    const dryRun = req.query.dryRun === "1" || req.query.dryRun === "true";
-
-    res.setHeader("Content-Type", "application/x-ndjson");
-    res.setHeader("Cache-Control", "no-cache");
-    res.setHeader("Connection", "keep-alive");
-    const hb = setInterval(() => { try { res.write(JSON.stringify({ type: "heartbeat" }) + "\n"); } catch {} }, 15_000);
-    try {
-      const result = await runRefreshJob({
-        asins, startDate, endDate,
-        trigger: dryRun ? "manual" : "refresh",
-        dryRun,
-        emit: (ev) => { try { res.write(JSON.stringify(ev) + "\n"); } catch {} },
-        onboardScDiscoveries,
-      });
-      res.write(JSON.stringify({ type: "complete", data: result }) + "\n");
-    } catch (err: any) {
-      log(`Prices & Stock job error: ${err?.message ?? err}`, "refresh");
-      res.write(JSON.stringify({ type: "error", message: err?.message ?? String(err) }) + "\n");
-    } finally {
-      clearInterval(hb);
-      try { res.end(); } catch {}
-    }
+    const { asins } = (req.body ?? {}) as { asins?: string[] };
+    const job = await enqueueJob({ trigger: "manual", includeDaily: false, scopeAsins: asins?.length ? asins : null, requestedBy: req.session?.userId ?? null });
+    res.status(202).json({ job, deprecated: "POST /api/jobs" });
   });
 
   // Run history for the results dialog's clock icon (migration 032).
@@ -4037,82 +4016,12 @@ export async function registerRoutes(
   // Used when re-analyzing the full catalog — avoids "request entity too large"
   // because the ASIN list is never sent in the request body.
   app.post("/api/analyze/all", async (req: Request, res: Response) => {
+    // Scheduler v1 (2026-10-15): thin enqueuer for one more release, then
+    // deleted. A full refresh (daily block included) for the given ASINs.
     if (!isDbAvailable()) { res.status(503).json({ message: "Database not available" }); return; }
-
-    res.setHeader("Content-Type", "application/x-ndjson");
-    res.setHeader("Transfer-Encoding", "chunked");
-    res.setHeader("Cache-Control", "no-cache");
-    res.setHeader("Connection", "keep-alive");
-
-    const { asins: filterAsins } = (req.body ?? {}) as { asins?: string[] };
-    const hasFilter = Array.isArray(filterAsins) && filterAsins.length > 0;
-
-    try {
-      const dbRes = await query(
-        hasFilter
-          ? `SELECT a.asin, COALESCE(e.actual_cogs, e.estimated_cogs, e.cogs) AS cogs, a.buy_link, e.prep_override, e.storage_override
-             FROM asins a
-             LEFT JOIN asin_estimates e ON e.asin = a.asin
-             WHERE a.asin = ANY($1::text[])
-             ORDER BY a.asin`
-          : `SELECT a.asin, COALESCE(e.actual_cogs, e.estimated_cogs, e.cogs) AS cogs, a.buy_link, e.prep_override, e.storage_override
-             FROM asins a
-             LEFT JOIN asin_estimates e ON e.asin = a.asin
-             WHERE a.status = 'active'
-             ORDER BY a.asin`,
-        hasFilter ? [filterAsins] : undefined,
-      );
-      const allAsins: AsinInput[] = dbRes.rows.map((r: any) => ({
-        asin: r.asin,
-        cogs: r.cogs != null ? parseFloat(r.cogs) : 0,
-        buyLink: r.buy_link ?? null,
-        prepOverride: r.prep_override != null ? parseFloat(r.prep_override) : null,
-        storageOverride: r.storage_override != null ? parseFloat(r.storage_override) : null,
-      }));
-
-      const BATCH_SIZE = 100;
-      const totalBatches = Math.max(1, Math.ceil(allAsins.length / BATCH_SIZE));
-      log(`Full-catalog analyze: ${allAsins.length} ASINs in ${totalBatches} batch(es) of ${BATCH_SIZE}`, "analyzer");
-
-      let succeededTotal = 0;
-      let failedBatches = 0;
-
-      for (let b = 0; b < totalBatches; b++) {
-        const start = b * BATCH_SIZE;
-        const end = Math.min(start + BATCH_SIZE, allAsins.length);
-        const batch = allAsins.slice(start, end);
-        const batchLabel = `Batch ${b + 1} of ${totalBatches} (ASINs ${start + 1}-${end})`;
-
-        try {
-          await runAnalyzeAndStream(batch, res, mainCatalogSink, () => batchLabel);
-          succeededTotal += batch.length;
-        } catch (err: any) {
-          failedBatches++;
-          log(`Batch ${b + 1} failed: ${err.message}`, "analyzer");
-          res.write(JSON.stringify({
-            type: "progress",
-            data: { current: end, total: allAsins.length, asin: `${batchLabel} FAILED — continuing` },
-          }) + "\n");
-        }
-      }
-
-      res.write(JSON.stringify({
-        type: "complete",
-        data: {
-          totalAsins: allAsins.length,
-          updated: succeededTotal,
-          failedBatches,
-        },
-      }) + "\n");
-      res.end();
-      runPostAnalyzeBackgroundSyncs();
-    } catch (err: any) {
-      log(`/api/analyze/all error: ${err.message}`, "analyzer");
-      try {
-        res.write(JSON.stringify({ type: "error", message: err.message }) + "\n");
-        res.end();
-      } catch {}
-    }
+    const { asins } = (req.body ?? {}) as { asins?: string[] };
+    const job = await enqueueJob({ trigger: "manual", includeDaily: true, scopeAsins: asins?.length ? asins : null, requestedBy: req.session?.userId ?? null });
+    res.status(202).json({ job, deprecated: "POST /api/jobs" });
   });
 
   // === Prices: status (staleness indicator) + on-demand refresh ===

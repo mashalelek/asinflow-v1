@@ -60,46 +60,27 @@ describe("failedAsinsFrom — Retry failed spans ALL FOUR stages", () => {
   });
 });
 
-describe("one renderer, two dialogs", () => {
-  const home = () => readFileSync(join(__dirname, "../pages/home.tsx"), "utf8");
+describe("one renderer, one dialog (scheduler v1, 2026-10-15)", () => {
+  const read = (p: string) => readFileSync(join(__dirname, p), "utf8");
 
-  it("both dialogs render through StageResultsList — no second copy", () => {
-    const s = home();
-    expect((s.match(/<StageResultsList/g) ?? []).length).toBe(2);
-    // the old inline renderer is gone
-    expect(s).not.toMatch(/Object\.values\(refreshResult\.stages \?\? \{\}\)\.map/);
+  it("the jobs dialog renders per-component counts through StageResultsList; home.tsx has no copy", () => {
+    expect((read("jobs-dialog.tsx").match(/<StageResultsList/g) ?? []).length).toBe(1);
+    const home = read("../pages/home.tsx");
+    expect(home).not.toMatch(/<StageResultsList/);
+    expect(home).not.toMatch(/Object\.values\(refreshResult\.stages/);
   });
 
-  it("the analyze stream CONSUMES product_info_summary", () => {
-    expect(home()).toMatch(/msg\.type === "product_info_summary"/);
+  it("the Product Info summary consumer and its dialog are gone from home.tsx", () => {
+    const home = read("../pages/home.tsx");
+    expect(home).not.toMatch(/product_info_summary/);
+    expect(home).not.toMatch(/dialog-product-info-results/);
+    expect(home).not.toMatch(/setProductInfoResult/);
+    expect(home).not.toContain('title: "Product Info complete"');
   });
 
-  it("the Product Info toast is gone", () => {
-    expect(home()).not.toContain('title: "Product Info complete"');
-  });
-
-  it("a dry run opens no results dialog and contributes no outcomes", () => {
-    const s = home();
-    const block = s.slice(s.indexOf('msg.type === "product_info_summary"'), s.indexOf('} else if (msg.type === "result")'));
-    expect(block).toMatch(/if \(!d\.dryRun\)/);
-  });
-
-  it("Retry failed uses the Product Info set, NOT the Prices & Stock one", () => {
-    const s = home();
-    const dlg = s.slice(s.indexOf("dialog-product-info-results"), s.indexOf("<OfferAddPreviewDialog"));
-    expect(dlg).toMatch(/productInfoFailedAsins\.length > 0/);
-    expect(dlg).toMatch(/runAnalysis\(retry\.map/);
-    expect(dlg).not.toMatch(/refreshFailedAsins|handleRefresh/);
-  });
-
-  it("the accumulator sums counts and unions outcomes across batches", () => {
-    const s = home();
-    const block = s.slice(s.indexOf('msg.type === "product_info_summary"'), s.indexOf('} else if (msg.type === "result")'));
-    expect(block).toMatch(/nextCounts\[k\] = \(nextCounts\[k\] \?\? 0\) \+/);
-    expect(block).toMatch(/outcomes: \{ \.\.\.\(existing\?\.outcomes \?\? \{\}\), \.\.\./);
-  });
-
-  it("each run starts from a clean picture", () => {
-    expect(home()).toMatch(/setProductInfoResult\(null\)/);
+  it("Retry failed lives in the jobs dialog and spans every component of the job", () => {
+    const dlg = read("jobs-dialog.tsx");
+    expect(dlg).toMatch(/failedAsinsFromRuns\(d\.components\)/);
+    expect(dlg).toMatch(/onRetry\(failedAsinsFromRuns/);
   });
 });

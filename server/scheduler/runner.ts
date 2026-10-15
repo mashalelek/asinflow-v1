@@ -19,7 +19,7 @@ import {
 } from "./jobs-repo";
 import {
   CancelledError, type ComponentContext, type ComponentDef, type ComponentResult, type JobRow, type JobSummary,
-  type Flip, type QueryLike,
+  type JobProgress, type Flip, type QueryLike,
 } from "./types";
 
 export const RUNNER_LOCK_KEY = 7342002;
@@ -86,7 +86,7 @@ export async function runJob(
   if (job.target !== "main") throw new Error(`job ${job.id}: target '${job.target}' lands in commit 3 of the scheduler patch`);
 
   const scope = await resolveScope(job, query);
-  const progress = { done: [...(job.progress?.done ?? [])], component: job.progress?.component, asin_cursor: job.progress?.asin_cursor ?? null };
+  const progress: JobProgress = { done: [...(job.progress?.done ?? [])], component: job.progress?.component, asin_cursor: job.progress?.asin_cursor ?? null };
   const resumed = progress.done.length > 0 || progress.component != null;
   log(`job ${job.id} ${resumed ? "resumed" : "started"}: trigger=${job.trigger} scope=${job.scope_asins ? "subset" : "scheduled"} asins=${scope.length} daily=${job.include_daily}${resumed ? ` done=[${progress.done.join(",")}] at=${progress.component ?? "-"}/${progress.asin_cursor ?? "-"}` : ""}`);
 
@@ -102,7 +102,8 @@ export async function runJob(
     // its cursor, and only for per-ASIN / batch kinds.
     const resumingThis = progress.component === c.n && (c.kind === "asin" || c.kind === "batch");
     const asins = resumingThis ? remainingAfterCursor(scope, progress.asin_cursor) : scope;
-    if (!resumingThis) { progress.component = c.n; progress.asin_cursor = null; }
+    if (!resumingThis) { progress.component = c.n; progress.asin_cursor = null; progress.position = 0; }
+    progress.total = scope.length;
     await writeProgress(job.id, progress, query);
 
     const startedAt = new Date();
@@ -110,6 +111,8 @@ export async function runJob(
     const checkpoint = async (lastAsin: string | null) => {
       progress.component = c.n;
       progress.asin_cursor = lastAsin;
+      progress.position = lastAsin ? scope.indexOf(lastAsin) + 1 : 0;
+      progress.total = scope.length;
       await writeProgress(job.id, progress, query);
       if ((await readStatus(job.id, query)) === "cancelled") throw new CancelledError();
     };

@@ -9,7 +9,7 @@ import { query as defaultQuery } from "../db";
 import { enqueueJob, listActive, listJobs, getJob, listComponentRuns, cancelJob } from "./jobs-repo";
 import type { QueryLike } from "./types";
 
-export function createJobsRouter(deps: { query?: QueryLike } = {}): Router {
+export function createJobsRouter(deps: { query?: QueryLike; nextPassAt?: () => Promise<string | null> } = {}): Router {
   const query = deps.query ?? (defaultQuery as any as QueryLike);
   const router = express.Router();
 
@@ -30,6 +30,22 @@ export function createJobsRouter(deps: { query?: QueryLike } = {}): Router {
       res.status(201).json({ job, ahead });
     } catch (err: any) {
       res.status(500).json({ error: "enqueue_failed", message: err?.message ?? String(err) });
+    }
+  });
+
+  // Settings → Scheduler (read-only): enabled, next pass, last scheduled job.
+  // nextPassAt is filled by the schedule definition (commit 5 of the patch);
+  // until then it is null and `scheduleDefined` says so.
+  router.get("/api/jobs/scheduler", async (_req: Request, res: Response) => {
+    try {
+      const enabled = process.env.ENABLE_CRONS === "true";
+      const last = (await query(
+        `SELECT id, status, started_at, finished_at, summary, error FROM jobs WHERE trigger = 'scheduled' ORDER BY queued_at DESC LIMIT 1`,
+      )).rows[0] ?? null;
+      const nextPassAt = (deps as any).nextPassAt ? await (deps as any).nextPassAt() : null;
+      res.json({ enabled, scheduleDefined: !!(deps as any).nextPassAt, nextPassAt, lastScheduled: last });
+    } catch (err: any) {
+      res.status(500).json({ error: "jobs_failed", message: err?.message ?? String(err) });
     }
   });
 

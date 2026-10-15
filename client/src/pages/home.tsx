@@ -23,7 +23,10 @@ import { useTheme } from "@/components/theme-provider";
 import { loadSettings, loadIncludeInbound, saveIncludeInbound, loadPriceSource, savePriceSource } from "@/lib/settings";
 import { useSearch } from "wouter";
 import { loadColumnConfig, type ColumnConfig } from "@/lib/columns";
-import { StageResultsList, failedAsinsFrom, type StageResult } from "@/components/stage-results";
+import { JobsDialog } from "@/components/jobs-dialog";
+import { useJobs } from "@/hooks/use-jobs";
+import { enqueueRefresh, cancelJob, runningLabel, queuedLabel, completionText, FOCUS_ASIN_EVENT, type Job } from "@/lib/jobs-api";
+import { ToastAction } from "@/components/ui/toast";
 import { loadBuyList, saveBuyList, loadOnHoldList, saveOnHoldList } from "@/lib/buy-hold";
 import { planBulkSetToggle, bulkToggleLabel, applyBulkPlan } from "@/lib/bulk-buy-hold";
 import { fetchLongSync } from "@/lib/long-sync";
@@ -384,20 +387,11 @@ export default function Home() {
   const [savedCount, setSavedCount] = useState<number | null>(null);
   const [dbLoaded, setDbLoaded] = useState(false);
   const [isSyncing, setIsSyncing] = useState(false);
-  // One Refresh job (SPEC §11, 2026-09-06) — replaces the four SP-API sync
-  // buttons. refreshState drives the button label + progress strip; the
-  // result opens the per-stage outcomes dialog with Retry failed.
-  const [refreshState, setRefreshState] = useState<{ stage: string; current: number; total: number } | null>(null);
-  // §11 Product Info results (2026-10-07). Accumulated ACROSS batches: a
-  // multi-batch run emits one product_info_summary per batch, and the operator
-  // needs the whole run's picture, not the last batch's.
-  const [productInfoResult, setProductInfoResult] = useState<
-    { stages: StageResult[]; rateLimits: Record<string, any> } | null
-  >(null);
-  const [productInfoOpen, setProductInfoOpen] = useState(false);
-  const [refreshResult, setRefreshResult] = useState<any | null>(null);
-  const [refreshResultOpen, setRefreshResultOpen] = useState(false);
-  const [refreshHistory, setRefreshHistory] = useState<any[] | null>(null);
+  // Scheduler v1 (SPEC §11 "Refresh job", 2026-10-15): ONE Refresh button
+  // enqueues a job; the jobs dialog is the history and the per-component
+  // report. Product Info / Prices & Stock and their dialogs are gone.
+  const [jobsOpen, setJobsOpen] = useState(false);
+  const [jobsInitialId, setJobsInitialId] = useState<number | null>(null);
   const [isSyncingSourcing, setIsSyncingSourcing] = useState(false);
   const [isPushingAura, setIsPushingAura] = useState(false);
   // §18 full-scope listing scan (item 8): streaming progress + report dialog.
@@ -574,34 +568,6 @@ export default function Home() {
           const msg = JSON.parse(line);
           if (msg.type === "progress") {
             setProgress(msg.data);
-          } else if (msg.type === "product_info_summary") {
-            // §11 (2026-10-07): the summary used to be emitted to nobody.
-            // Dry runs carry no outcomes and open no dialog — they have their
-            // own scope listing and write no ledger rows.
-            const d = msg.data ?? {};
-            if (!d.dryRun) {
-              setProductInfoResult((prev) => {
-                const merged = new Map<string, StageResult>();
-                for (const s0 of prev?.stages ?? []) merged.set(s0.stage, s0);
-                for (const [stage, counts] of Object.entries(d.stages ?? {})) {
-                  const existing = merged.get(stage);
-                  // Sum counts and union outcomes across batches.
-                  const nextCounts: Record<string, number> = { ...(existing?.counts as any ?? {}) };
-                  for (const [k, v] of Object.entries(counts as Record<string, number>)) {
-                    nextCounts[k] = (nextCounts[k] ?? 0) + (v ?? 0);
-                  }
-                  merged.set(stage, {
-                    stage,
-                    counts: nextCounts,
-                    outcomes: { ...(existing?.outcomes ?? {}), ...((d.outcomes ?? {})[stage] ?? {}) },
-                  });
-                }
-                return {
-                  stages: Array.from(merged.values()),
-                  rateLimits: { ...(prev?.rateLimits ?? {}), ...(d.rateLimits ?? {}) },
-                };
-              });
-            }
           } else if (msg.type === "result") {
             const resultData = msg.data;
             // Merge analyze result with existing row — preserve user-controlled
@@ -640,19 +606,12 @@ export default function Home() {
   const BATCH_SIZE_LIMIT = 200;
   const FRONTEND_BATCH_SIZE = 100;
 
-  // §11: every ASIN with an `error:` outcome in ANY of the four stages.
-  // Deliberately NOT refreshFailedAsins — that is the Prices & Stock prices
-  // stage, a different job with a different retry.
-  const productInfoFailedAsins = useMemo(
-    () => (productInfoResult ? failedAsinsFrom(productInfoResult.stages) : []),
-    [productInfoResult],
-  );
-
+  // Upload path (until scheduler commit 3 rewires onboarding to enqueue):
+  // a pending CSV upload is onboarded through /api/analyze, which inserts
+  // the rows and runs their first Product Info + prices + fees inline.
   const runAnalysis = useCallback(async (asinsToAnalyze: AsinInput[]) => {
     setIsAnalyzing(true);
     setProgress({ current: 0, total: asinsToAnalyze.length, asin: "" });
-    // Fresh picture per run — the summary accumulates across BATCHES, not runs.
-    setProductInfoResult(null);
 
     try {
       // For large CSV-upload flows, split into client-side batches to avoid
@@ -684,10 +643,6 @@ export default function Home() {
             });
           }
         }
-        // Toast removed (§11, 2026-10-07): a count in a disappearing toast was
-        // the ENTIRE report for a job with four stages and per-ASIN outcomes.
-        // The results dialog replaces it.
-        setProductInfoOpen(true);
       } else {
         const res = await fetch("/api/analyze", {
           method: "POST",
@@ -696,14 +651,14 @@ export default function Home() {
         });
         if (!res.ok) {
           const err = await res.json();
-          throw new Error(err.message || "Product Info failed");
+          throw new Error(err.message || "Upload failed");
         }
         await consumeAnalyzeStream(res);
-        setProductInfoOpen(true);
       }
+      toast({ title: "Upload onboarded", description: `${asinsToAnalyze.length} ASIN(s) inserted and refreshed.` });
     } catch (err: any) {
       toast({
-        title: "Product Info failed",
+        title: "Upload failed",
         description: err.message,
         variant: "destructive",
       });
@@ -716,53 +671,8 @@ export default function Home() {
     }
   }, [toast, consumeAnalyzeStream, fetchPriceStatus, fetchAsins, startDate, endDate, showParked, showDead, checkRevivalCandidates]);
 
-  /**
-   * Re-analyze a list of ASINs via the DB-backed endpoint. Server reads
-   * cogs/buyLink/overrides from the DB; we only ship the asin list.
-   * When asinFilter is empty the endpoint operates on all active ASINs.
-   */
-  const runAnalyzeAllFromDb = useCallback(async (asinFilter: string[]) => {
-    setIsAnalyzing(true);
-    setProgress({ current: 0, total: asinFilter.length, asin: "Starting analysis..." });
-    try {
-      const res = await fetch("/api/analyze/all", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ asins: asinFilter }),
-      });
-      if (!res.ok) {
-        const err = await res.json().catch(() => ({}));
-        throw new Error(err.message || "Product Info failed");
-      }
-      await consumeAnalyzeStream(res);
-    } catch (err: any) {
-      toast({ title: "Product Info failed", description: err.message, variant: "destructive" });
-    } finally {
-      setIsAnalyzing(false);
-      setProgress(null);
-      fetchPriceStatus();
-      await fetchAsins(startDate, endDate, showParked, showDead);
-      await checkRevivalCandidates(); // DA-3
-    }
-  }, [toast, consumeAnalyzeStream, fetchPriceStatus, fetchAsins, startDate, endDate, showParked, showDead, checkRevivalCandidates]);
-
-  /**
-   * Selection-aware Analyze handler.
-   *   - If a CSV upload is pending → analyze that batch via /api/analyze (CSV path).
-   *   - Else → re-analyze the current working set (selection or filtered view)
-   *     via /api/analyze/all with explicit { asins } filter.
-   */
-  const handleAnalyze = useCallback(async () => {
-    if (asins.length > 0) {
-      await runAnalysis(asins);
-      return;
-    }
-    const workingSet = selectedSet.size > 0
-      ? Array.from(selectedSet)
-      : sortedFilteredResultsRef.current.map((r) => r.asin);
-    if (workingSet.length === 0) return;
-    await runAnalyzeAllFromDb(workingSet);
-  }, [asins, selectedSet, runAnalysis, runAnalyzeAllFromDb]);
+  // (runAnalyzeAllFromDb and handleAnalyze removed 2026-10-15: the Refresh
+  // job replaces Product Info — see handleRefresh.)
 
 
   const [isSyncingCogs, setIsSyncingCogs] = useState(false);
@@ -904,78 +814,68 @@ export default function Home() {
     }
   }, [toast, currentWorkingSet, fetchAsins, startDate, endDate, showParked, showDead]);
 
-  // One Refresh job (SPEC §11, 2026-09-06): inventory + sales + prices +
-  // listings in one NDJSON stream. Scope = what is on screen (selection,
-  // else the filtered view incl. visibility toggles) — the explicit list is
-  // always sent. asinsOverride powers "Retry failed (N)".
+  // ── Scheduler v1 (SPEC §11 "Refresh job", 2026-10-15) ────────────────────
+  // Completion notification (decision 16): a toast for jobs this tab is
+  // watching — its own manual jobs, and any scheduled job that finishes
+  // while the tab is open — with a Changes link when the job flipped any
+  // gating or suppression state. Never price counts. The table reloads so
+  // the new values show.
+  const onJobFinished = useCallback((job: Job) => {
+    const { title, description } = completionText(job);
+    const flips = job.summary?.flips?.length ?? 0;
+    toast({
+      title,
+      description,
+      variant: job.status === "failed" ? "destructive" : undefined,
+      action: flips > 0
+        ? <ToastAction altText="Show changes" onClick={() => { setJobsInitialId(job.id); setJobsOpen(true); }}>Changes</ToastAction>
+        : undefined,
+    });
+    void fetchAsins(startDate, endDate, showParked, showDead);
+    fetchPriceStatus();
+  }, [toast, fetchAsins, fetchPriceStatus, startDate, endDate, showParked, showDead]);
+  const jobs = useJobs(onJobFinished);
+
+  // Refresh (N): scope = the checkbox selection, else every row of the
+  // current filtered view (decision 15). asinsOverride powers Retry failed.
+  // A pending CSV upload is onboarded first (scheduler commit 3 moves that
+  // onto the queue too).
   const handleRefresh = useCallback(async (asinsOverride?: string[]) => {
+    if (!asinsOverride && asins.length > 0) { await runAnalysis(asins); return; }
     const ws = asinsOverride ?? currentWorkingSet();
     if (ws.length === 0) return;
-    setRefreshState({ stage: "starting", current: 0, total: ws.length });
     try {
-      const res = await fetch("/api/refresh", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ asins: ws, startDate, endDate }),
+      const { job, ahead } = await enqueueRefresh(ws);
+      jobs.watch(job);
+      toast({
+        title: ahead > 0 ? `Refresh queued (${ahead} ahead)` : "Refresh queued",
+        description: `${ws.length} ASIN${ws.length === 1 ? "" : "s"}, all components. Progress shows on the button.`,
       });
-      if (!res.ok || !res.body) {
-        const err = await res.json().catch(() => ({}));
-        throw new Error(err.message || `refresh failed (${res.status})`);
-      }
-      const reader = res.body.getReader();
-      const decoder = new TextDecoder();
-      let buf = "";
-      let complete: any = null;
-      for (;;) {
-        const { done, value } = await reader.read();
-        if (done) break;
-        buf += decoder.decode(value, { stream: true });
-        const lines = buf.split("\n");
-        buf = lines.pop() ?? "";
-        for (const line of lines) {
-          if (!line.trim()) continue;
-          let ev: any;
-          try { ev = JSON.parse(line); } catch { continue; }
-          if (ev.type === "stage" && ev.status === "running") {
-            setRefreshState({ stage: ev.stage, current: ev.current ?? 0, total: ev.total ?? ws.length });
-          } else if (ev.type === "complete") {
-            complete = ev.data;
-          } else if (ev.type === "error") {
-            throw new Error(ev.message);
-          }
-        }
-      }
-      if (!complete) throw new Error("stream ended without a completion line");
-      setRefreshResult(complete);
-      setRefreshResultOpen(true);
-      await fetchAsins(startDate, endDate, showParked, showDead);
-      fetchPriceStatus();
     } catch (err: any) {
-      toast({ title: "Prices & Stock failed", description: err.message, variant: "destructive" });
-    } finally {
-      setRefreshState(null);
+      toast({ title: "Refresh could not be queued", description: err.message, variant: "destructive" });
     }
-  }, [toast, currentWorkingSet, fetchAsins, fetchPriceStatus, startDate, endDate, showParked, showDead]);
+  }, [asins, runAnalysis, currentWorkingSet, jobs, toast]);
 
-  // Retry failed (N): every ASIN whose prices outcome was throttled/error,
-  // plus listings transients don't list per-ASIN — prices is the retry axis.
-  // invalid_asin is conclusive (2026-09-07) — its outcomes start with
-  // "invalid_asin", so the prefix filter excludes it from retry by design.
-  const refreshFailedAsins = useMemo(() => {
-    const s = refreshResult?.stages?.prices?.outcomes ?? {};
-    return Object.entries(s)
-      .filter(([, v]) => String(v).startsWith("throttled") || String(v).startsWith("error"))
-      .map(([asin]) => asin);
-  }, [refreshResult]);
-
-  const handleOpenRefreshHistory = useCallback(async () => {
+  const handleCancelMine = useCallback(async () => {
+    const j = jobs.mine?.job;
+    if (!j) return;
     try {
-      const res = await fetch("/api/refresh/history");
-      const body = await res.json();
-      setRefreshHistory(body.runs ?? []);
-    } catch {
-      setRefreshHistory([]);
+      await cancelJob(j.id);
+      toast({ title: "Refresh cancelled", description: `Job #${j.id} stops at its next checkpoint; partial results stay in the ledger.` });
+      void jobs.refresh();
+    } catch (err: any) {
+      toast({ title: "Cancel failed", description: err.message, variant: "destructive" });
     }
+  }, [jobs, toast]);
+
+  // The Changes panel's ASIN links: filter the table to that row.
+  useEffect(() => {
+    const h = (e: Event) => {
+      const asin = (e as CustomEvent).detail?.asin;
+      if (asin) { setSearchQuery(String(asin)); setJobsOpen(false); }
+    };
+    window.addEventListener(FOCUS_ASIN_EVENT, h);
+    return () => window.removeEventListener(FOCUS_ASIN_EVENT, h);
   }, []);
 
 
@@ -1613,44 +1513,41 @@ export default function Home() {
               </Button>
               <VerificationChip count={unverified?.count ?? 0} onClick={() => setVerifyPanelOpen(true)} />
               <span className="h-6 w-px bg-border" aria-hidden="true" />
-              {/* 1. Product Info (was Analyze) — catalog/fees/gating/hazmat */}
-              <Button
-                variant="outline"
-                size="sm"
-                onClick={handleAnalyze}
-                disabled={(asins.length === 0 && results.length === 0) || isAnalyzing}
-                className="h-8 text-xs"
-                data-testid="button-product-info"
-              >
-                <RefreshCw className={`h-3.5 w-3.5 mr-1.5 ${isAnalyzing ? "animate-spin" : ""}`} />
-                {isAnalyzing
-                  ? "Fetching..."
-                  : asins.length > 0
-                    ? `Product Info ${asins.length}`
-                    : `Product Info${btnSuffix(workingSetCount, workingSetIsSelection)}`}
-              </Button>
-              {/* 2. Prices & Stock (was Refresh) — inventory + sales + prices + fees + listings */}
+              {/* 1. Refresh (scheduler v1, 2026-10-15): ONE button, ONE job,
+                  all 21 components for the working set. Replaces Product
+                  Info + Prices & Stock. A pending CSV upload is onboarded
+                  first (until commit 3 moves onboarding onto the queue). */}
               <Tooltip>
                 <TooltipTrigger asChild>
                   <Button
                     variant="outline"
                     size="sm"
                     onClick={() => handleRefresh()}
-                    disabled={!!refreshState || isAnalyzing}
+                    disabled={isAnalyzing || (asins.length === 0 && results.length === 0)}
                     className="h-8 text-xs"
-                    data-testid="button-prices-stock"
+                    data-testid="button-refresh"
                   >
-                    <RefreshCw className={`h-3.5 w-3.5 mr-1.5 ${refreshState ? "animate-spin" : ""}`} />
-                    {refreshState
-                      ? `Prices & Stock · ${refreshState.stage}${refreshState.total ? ` ${refreshState.current}/${refreshState.total}` : ""}`
-                      : `Prices & Stock${btnSuffix(workingSetCount, workingSetIsSelection)}`}
+                    <RefreshCw className={`h-3.5 w-3.5 mr-1.5 ${(jobs.mine || isAnalyzing) ? "animate-spin" : ""}`} />
+                    {isAnalyzing
+                      ? "Onboarding upload…"
+                      : jobs.mine
+                        ? (jobs.mine.job.status === "running" ? runningLabel(jobs.mine.job) : queuedLabel(jobs.mine.ahead))
+                        : asins.length > 0
+                          ? `Refresh ${asins.length} uploaded`
+                          : `Refresh${btnSuffix(workingSetCount, workingSetIsSelection)}`}
                   </Button>
                 </TooltipTrigger>
                 <TooltipContent side="bottom" className="text-xs">
-                  Inventory + sales + prices + fees + listings in one job. Prices last synced {formatRelativeTime(pricesLastRefreshedAt)}
+                  All 21 components for the selection, else the current view. Prices last synced {formatRelativeTime(pricesLastRefreshedAt)}
+                  {jobs.running && !jobs.mine ? ` · a ${jobs.running.trigger} job is running; yours will queue behind it` : ""}
                 </TooltipContent>
               </Tooltip>
-              <Button variant="ghost" size="sm" onClick={() => { handleOpenRefreshHistory(); setRefreshResultOpen(true); }} className="h-8 text-xs px-2" title="Prices & Stock run history" data-testid="button-prices-stock-history">
+              {jobs.mine && (
+                <Button variant="ghost" size="sm" className="h-8 text-xs px-2" onClick={() => handleCancelMine()} title="Cancel this refresh" data-testid="button-refresh-cancel">
+                  <X className="h-3.5 w-3.5" />
+                </Button>
+              )}
+              <Button variant="ghost" size="sm" onClick={() => setJobsOpen(true)} className="h-8 text-xs px-2" title="Refresh jobs and history" data-testid="button-jobs-history">
                 <History className="h-3.5 w-3.5" />
               </Button>
               <Button variant="outline" size="sm" onClick={handleSyncSourcing} disabled={isSyncingSourcing || isAnalyzing} className="h-8 text-xs">
@@ -1740,15 +1637,15 @@ export default function Home() {
               gated on isAnalyzing and never rendered during a price refresh —
               the 2026-09-04 "Syncing… for 30 minutes with no progress"
               incident. Renders for the Refresh job with its active stage. */}
-          {refreshState && refreshState.total > 0 && (
+          {jobs.running && (jobs.running.progress?.total ?? 0) > 0 && (
             <div className="space-y-2 mt-6">
               <div className="flex items-center justify-between text-sm">
                 <span className="text-muted-foreground">
-                  Prices &amp; Stock · {refreshState.stage} — {refreshState.current} of {refreshState.total}
+                  {runningLabel(jobs.running)}{jobs.running.trigger === "scheduled" ? " (scheduled pass)" : ""}
                 </span>
-                <span className="font-mono text-xs">{Math.round((refreshState.current / refreshState.total) * 100)}%</span>
+                <span className="font-mono text-xs">{Math.round(((jobs.running.progress?.position ?? 0) / (jobs.running.progress?.total ?? 1)) * 100)}%</span>
               </div>
-              <Progress value={Math.round((refreshState.current / refreshState.total) * 100)} className="h-2" data-testid="progress-prices-stock" />
+              <Progress value={Math.round(((jobs.running.progress?.position ?? 0) / (jobs.running.progress?.total ?? 1)) * 100)} className="h-2" data-testid="progress-refresh" />
             </div>
           )}
           {isAnalyzing && progress && (
@@ -1968,115 +1865,13 @@ export default function Home() {
         onRefetch={fetchUnverified}
       />
 
-      {/* §18 full-scope listing scan report (item 8). The live run is only
-          reachable from a reviewed dry-run report. */}
-      {/* Refresh results + history (SPEC §11, 2026-09-06): per-stage counts,
-          expandable outcome lists, rate-limit stats, Retry failed. */}
-      <Dialog open={refreshResultOpen} onOpenChange={(o) => { setRefreshResultOpen(o); if (!o) setRefreshHistory(null); }}>
-        <DialogContent className="max-w-2xl max-h-[80vh] overflow-y-auto">
-          <DialogHeader>
-            <DialogTitle>Prices &amp; Stock {refreshResult ? "results" : "history"}</DialogTitle>
-            <DialogDescription>
-              {refreshResult
-                ? "One job: inventory + sales + prices + fees + listings. Rate-limit stats prove the pacing (0 throttled = healthy)."
-                : "Recent Prices & Stock runs (newest first)."}
-            </DialogDescription>
-          </DialogHeader>
-          {refreshResult && (
-            <div className="space-y-3 text-xs">
-              <StageResultsList stages={Object.values(refreshResult.stages ?? {}) as StageResult[]} />
-              {(() => {
-                const po = refreshResult.stages?.prices?.outcomes ?? {};
-                const invalids = Object.keys(po).filter((a) => String(po[a]).startsWith("invalid_asin"));
-                const markedDead = refreshResult.stages?.prices?.counts?.marked_dead ?? invalids.length;
-                if (invalids.length === 0) return null;
-                return (
-                  <div className="border rounded p-2">
-                    <p className="font-semibold">Invalid ASINs (conclusive — not retried)</p>
-                    <div className="mt-1 max-h-32 overflow-y-auto font-mono">
-                      {invalids.map((a) => <p key={a}>{a}</p>)}
-                    </div>
-                    <p className="mt-1 text-muted-foreground">→ marked dead ({markedDead})</p>
-                  </div>
-                );
-              })()}
-              <details className="border rounded p-2">
-                <summary className="cursor-pointer font-semibold">Rate limits</summary>
-                <div className="mt-2 font-mono">
-                  {Object.entries(refreshResult.rateLimits ?? {}).map(([bucket, s]: [string, any]) => (
-                    <p key={bucket}>{bucket}: {s.sent} sent, {s.throttled} throttled{s.adjusted ? ", rate adjusted by Amazon header" : ""}</p>
-                  ))}
-                </div>
-              </details>
-              <div className="flex justify-end gap-2">
-                {refreshFailedAsins.length > 0 && (
-                  <Button size="sm" className="h-8 text-xs" disabled={!!refreshState}
-                    onClick={() => { setRefreshResultOpen(false); handleRefresh(refreshFailedAsins); }}>
-                    Retry failed ({refreshFailedAsins.length})
-                  </Button>
-                )}
-                <Button size="sm" variant="outline" className="h-8 text-xs" onClick={() => setRefreshResultOpen(false)}>Close</Button>
-              </div>
-            </div>
-          )}
-          {!refreshResult && refreshHistory && (
-            <div className="space-y-1 text-xs max-h-80 overflow-y-auto">
-              {refreshHistory.length === 0 && <p className="text-muted-foreground">No runs recorded yet.</p>}
-              {refreshHistory.map((r: any) => (
-                <p key={r.id} className="font-mono">
-                  {new Date(r.started_at).toLocaleString()} · {r.stage} · {r.trigger}/{r.scope} · {r.requested} req
-                  {r.error ? ` · FAILED: ${r.error}` : r.counts ? ` · ${Object.entries(r.counts).map(([k, v]) => `${k} ${v}`).join(", ")}` : ""}
-                </p>
-              ))}
-            </div>
-          )}
-        </DialogContent>
-      </Dialog>
-
-      {/* §11 Product Info results (2026-10-07). Replaces the toast that was
-          the entire report for a four-stage job. Renders through the SAME
-          StageResultsList the Prices & Stock dialog uses, so the two cannot
-          drift. Retry failed is scoped to `error:` outcomes across ALL FOUR
-          stages — not the prices stage, which is a different job. */}
-      <Dialog open={productInfoOpen} onOpenChange={setProductInfoOpen}>
-        <DialogContent className="max-w-2xl max-h-[85vh] overflow-y-auto" data-testid="dialog-product-info-results">
-          <DialogHeader>
-            <DialogTitle>Product Info run</DialogTitle>
-            <DialogDescription>
-              One job: catalog + fees + gating + hazmat. Every ASIN in the working set is
-              probed every time — no freshness skip (§11).
-            </DialogDescription>
-          </DialogHeader>
-          {productInfoResult && (
-            <div className="space-y-3 text-xs">
-              <StageResultsList stages={productInfoResult.stages} />
-              <details className="border rounded p-2">
-                <summary className="cursor-pointer font-semibold">Rate limits</summary>
-                <div className="mt-2 font-mono">
-                  {Object.entries(productInfoResult.rateLimits ?? {}).map(([bucket, st]: [string, any]) => (
-                    <p key={bucket}>{bucket}: {st.sent} sent, {st.throttled} throttled{st.adjusted ? ", rate adjusted by Amazon header" : ""}</p>
-                  ))}
-                </div>
-              </details>
-              <div className="flex justify-end gap-2">
-                {productInfoFailedAsins.length > 0 && (
-                  <Button size="sm" className="h-8 text-xs" disabled={isAnalyzing}
-                    data-testid="button-product-info-retry"
-                    onClick={() => {
-                      const retry = productInfoFailedAsins;
-                      setProductInfoOpen(false);
-                      void runAnalysis(retry.map((asin) => ({ asin, cogs: 0 })));
-                    }}>
-                    Retry failed ({productInfoFailedAsins.length})
-                  </Button>
-                )}
-                <Button size="sm" variant="outline" className="h-8 text-xs" onClick={() => setProductInfoOpen(false)}>Close</Button>
-              </div>
-            </div>
-          )}
-          {!productInfoResult && <p className="text-xs text-muted-foreground">No stage summary was received for this run.</p>}
-        </DialogContent>
-      </Dialog>
+      {/* Scheduler v1 jobs / history dialog (SPEC §11 "Refresh job"). */}
+      <JobsDialog
+        open={jobsOpen}
+        onOpenChange={(o) => { setJobsOpen(o); if (!o) setJobsInitialId(null); }}
+        initialJobId={jobsInitialId}
+        onRetry={(failed) => { void handleRefresh(failed); }}
+      />
 
       <OfferAddPreviewDialog
         open={offerAddOpen}

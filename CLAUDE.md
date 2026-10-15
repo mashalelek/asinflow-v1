@@ -288,6 +288,16 @@ commit".
 
 Applies to `git restore <file>` and `git stash` mid-edit for the same reason.
 
+## Refresh job (scheduler v1, 2026-10-15)
+
+One **Refresh** button on the ASINs toolbar enqueues one job (`POST
+/api/jobs`); a single runner executes the 21 components in SPEC §11's
+fixed order, one job at a time. Product Info and Prices & Stock are gone.
+`POST /api/analyze/all` and `POST /api/refresh` survive for ONE release as
+thin enqueuers (202 + the job) and are then deleted; nothing in the client
+calls them. `POST /api/analyze` (CSV upload onboarding) is rewired to the
+queue in commit 3 of the scheduler patch.
+
 ## Approval model: Maria approves the spec patch, not each commit
 
 Once a spec patch (`docs/claude_spec-patch-*.md`) is approved, implement

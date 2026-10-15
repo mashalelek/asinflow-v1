@@ -15,6 +15,9 @@ export interface JobProgress {
   component?: number;
   /** Last ASIN fully processed by the current component; null = none yet. */
   asin_cursor?: string | null;
+  /** 1-based position of the cursor within the job scope, and the scope size — for the button label. */
+  position?: number;
+  total?: number;
   /** Component numbers completed in this job. */
   done: number[];
 }
