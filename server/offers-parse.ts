@@ -12,6 +12,12 @@ export interface ParsedOffers {
   numberOfSellers: number | null;
   sellersFba: number;
   sellersFbm: number;
+  /**
+   * Summary.CompetitivePriceThreshold — the price Amazon compares an offer
+   * against for Buy Box eligibility (NOT a suppression cap). Decision 12
+   * (2026-10-13): kept on asin_estimates and refreshed every price pass.
+   */
+  competitivePriceThreshold: number | null;
   /** 200 with zero New offers — the conclusive "nothing is for sale". */
   noOffers: boolean;
 }
@@ -24,9 +30,12 @@ export function parseOffersPayload(payload: any): ParsedOffers {
   let numberOfSellers: number | null = null;
   let sellersFba: number | null = null;
   let sellersFbm: number | null = null;
+  let competitivePriceThreshold: number | null = null;
 
   const summary = payload?.Summary;
   if (summary) {
+    const cpt = parseFloat(summary?.CompetitivePriceThreshold?.Amount);
+    if (!isNaN(cpt) && cpt > 0) competitivePriceThreshold = cpt;
     if (summary.LowestPrices) {
       for (const lp of summary.LowestPrices) {
         const cond = (lp.condition || "").toLowerCase();
@@ -116,6 +125,7 @@ export function parseOffersPayload(payload: any): ParsedOffers {
     numberOfSellers,
     sellersFba,
     sellersFbm,
+    competitivePriceThreshold,
     noOffers:
       lowestPrice === null && buyBoxPrice === null && sellersFba === 0 && sellersFbm === 0,
   };

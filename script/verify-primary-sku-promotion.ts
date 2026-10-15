@@ -77,12 +77,11 @@ async function main() {
   const hasPrimary = primaryCheck.rows[0]?.has_primary === true;
   console.log(`hasPrimary = ${hasPrimary}  => path taken: ${hasPrimary ? "hasPrimary=TRUE (bootstrap SKIPPED, no recompute/demote)" : "BOOTSTRAP (heuristic sets primary)"}`);
 
-  await query(
-    hasPrimary
-      ? `UPDATE asins SET in_catalog = TRUE WHERE id = $1`
-      : `UPDATE asins SET in_catalog = TRUE, primary_sku = $2 WHERE id = $1`,
-    hasPrimary ? [asinId] : [asinId, primarySku],
-  );
+  // Mirrors inventory-sync.ts after migration 052 (in_catalog retired):
+  // primary_sku only on bootstrap, nothing else written to asins here.
+  if (!hasPrimary && primarySku) {
+    await query(`UPDATE asins SET primary_sku = $2 WHERE id = $1`, [asinId, primarySku]);
+  }
   for (const sd of skuData) {
     if (hasPrimary) {
       await query(

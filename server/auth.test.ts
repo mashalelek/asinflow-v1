@@ -105,7 +105,10 @@ describe("migration 050: nothing references the dropped owner columns", () => {
   // added_by / applied_by / created_by / registered_by were UUID FKs to the
   // Replit-era users table; 049's CASCADE removed the FKs, 050 the columns.
   // A new reader or writer here would 500 against the live schema.
-  const dropped = /\b(added_by|applied_by|registered_by)\b|\bcreated_by\b/;
+  // in_catalog joined the list 2026-10-15 (migration 052, decision 11);
+  // `already_in_catalog` (an offer-add outcome name) has no word boundary
+  // before "in_catalog" and is deliberately not matched.
+  const dropped = /\b(added_by|applied_by|registered_by|in_catalog)\b|\bcreated_by\b/;
   const srcDirs = ["server", "shared", "script", join("client", "src")];
   it("no server/shared/script/client source mentions them", () => {
     const { readdirSync, statSync } = require("fs") as typeof import("fs");

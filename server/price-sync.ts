@@ -54,6 +54,8 @@ export interface PriceRefreshResult {
   counts: Record<PriceOutcome, number>;
   /** Every non-`updated` ASIN → outcome (plus `: message` for errors). */
   outcomes: Record<string, string>;
+  /** Parsed offers per conclusive ASIN (scheduler riders 11/12 read these). */
+  parsed: Map<string, ParsedOffers>;
   // Back-compat fields for the cron wrapper's log line.
   updated: number;
   failed: number;
@@ -73,10 +75,11 @@ async function writePrice(asin: string, p: ParsedOffers): Promise<void> {
        lowest_price = $5,
        sellers_fba = $6,
        sellers_fbm = $7,
+       competitive_price_threshold = $8,
        fetched_at = NOW(),
        error = NULL
      WHERE asin = $1`,
-    [asin, p.lowestFbaPrice, p.buyBoxPrice, p.buyBoxFulfillment, p.lowestPrice, p.sellersFba, p.sellersFbm],
+    [asin, p.lowestFbaPrice, p.buyBoxPrice, p.buyBoxFulfillment, p.lowestPrice, p.sellersFba, p.sellersFbm, p.competitivePriceThreshold],
   );
 }
 
@@ -222,7 +225,7 @@ export async function refreshPrices(
   const asins: string[] = result.rows.map((r: any) => r.asin);
   log(`Price refresh v2${opts.dryRun ? " [DRY-RUN]" : ""}: ${asins.length} ASINs, ${Math.ceil(asins.length / PER_CALL)} batch calls`, "price-sync");
 
-  const { counts, outcomes } = await runPricePass(asins, opts.dryRun ? null : writePrice, onProgress);
+  const { counts, outcomes, parsed } = await runPricePass(asins, opts.dryRun ? null : writePrice, onProgress);
 
   // Auto-dead (SPEC §14, 2026-09-07): invalid_asin is Amazon saying the ASIN
   // does not exist in the marketplace — retire it so the daily job stops
@@ -252,6 +255,7 @@ export async function refreshPrices(
     requested: asins.length,
     counts: { ...counts, marked_dead: markedDead } as any,
     outcomes,
+    parsed,
     updated: counts.updated,
     failed: counts.throttled + counts.error,
   };

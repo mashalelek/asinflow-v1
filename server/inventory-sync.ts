@@ -22,7 +22,8 @@ interface AsinAgg {
 
 export async function syncInventory(
   asinFilter?: ReadonlySet<string>,
-): Promise<{ synced: number; skipped: number }> {
+): Promise<{ synced: number; skipped: number; primaryBootstrapped: number }> {
+  let primaryBootstrapped = 0;
   // Build a map from asin VARCHAR → asins.id UUID for active ASINs.
   // When asinFilter is supplied, restrict to that subset — the SP-API call
   // itself is paginated/global, so the filter applies to which rows we
@@ -134,13 +135,12 @@ export async function syncInventory(
     );
     const hasPrimary = primaryCheck.rows[0]?.has_primary === true;
 
-    // in_catalog is always refreshed; primary_sku only on bootstrap.
-    await query(
-      hasPrimary
-        ? `UPDATE asins SET in_catalog = TRUE WHERE id = $1`
-        : `UPDATE asins SET in_catalog = TRUE, primary_sku = $2 WHERE id = $1`,
-      hasPrimary ? [agg.asinId] : [agg.asinId, primarySku]
-    );
+    // primary_sku only on bootstrap. (in_catalog retired 2026-10-15,
+    // migration 052 — nothing read it.)
+    if (!hasPrimary && primarySku) {
+      await query(`UPDATE asins SET primary_sku = $2 WHERE id = $1`, [agg.asinId, primarySku]);
+      primaryBootstrapped++;
+    }
 
     // Store all SKUs in asin_skus. On bootstrap, set is_primary by the
     // heuristic (never amzn.gr.*). When a primary already exists, still track
@@ -173,5 +173,5 @@ export async function syncInventory(
   // The live-offer rider was REMOVED 2026-09-06 (SPEC §11 Refresh job):
   // the Refresh `listings` stage reconciles ALL flag states including TRUE,
   // subsuming the notLiveOnly re-probe entirely.
-  return { synced, skipped };
+  return { synced, skipped, primaryBootstrapped };
 }

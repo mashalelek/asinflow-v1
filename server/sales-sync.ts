@@ -192,10 +192,8 @@ async function fetchAndProcessChunk(
     asinSet.add(entry.asin);
   }
 
-  // Mark ASINs with orders as in_catalog (they had a listing to receive orders)
-  if (asinSet.size > 0) {
-    await query(`UPDATE asins SET in_catalog = TRUE WHERE asin = ANY($1::text[])`, [Array.from(asinSet)]);
-  }
+  // (in_catalog retired 2026-10-15, migration 052: the "had an order" latch
+  // this used to set was read by nothing.)
 
   log(`Chunk ${startDate}-${endDate}: ${totalOrders} orders, ${dateSet.size} days, ${asinSet.size} ASINs`, "sales-sync");
   return { dates: dateSet, asins: asinSet, orders: totalOrders };

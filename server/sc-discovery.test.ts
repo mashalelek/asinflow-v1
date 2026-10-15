@@ -243,7 +243,8 @@ describe("phase c wiring", () => {
     const fn = s.slice(i, i + 4000);
     expect(fn).toMatch(/await onboardNewAsins\(inputs, \(\) => \{\}, mainCatalogSink, "sc_discovery"\)/);
     expect(fn).toMatch(/tags: \["SC import"\]/);
-    expect(fn).toMatch(/in_catalog = TRUE/);
+    // in_catalog retired 2026-10-15 (migration 052): the latch write is gone.
+    expect(fn).not.toMatch(/in_catalog\s*=\s*TRUE/);
     expect(fn).toMatch(/event: "onboarded"/);
   });
 

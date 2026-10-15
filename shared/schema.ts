@@ -199,7 +199,6 @@ export interface AsinResult {
   actuals?: ActualsData | null;
   sku?: string | null;
   skus?: string[];
-  inCatalog?: boolean;                // internal discovery latch — NOT the icon signal
   hasLiveOffer?: boolean | null;      // live-offer truth (getListingsItem); null = never checked. Drives the catalog icon.
   offerCheckedAt?: string | null;     // §6: age shown in the Listed tooltip (§18 A4 — shown, never acted on)
   tags?: { name: string; color: string }[];

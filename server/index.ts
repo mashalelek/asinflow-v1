@@ -1,6 +1,8 @@
 import 'dotenv/config';
 import express, { type Request, Response, NextFunction } from "express";
-import { registerRoutes } from "./routes";
+import { registerRoutes, getOnboardScDiscoveries, getRunSheetsSync } from "./routes";
+import { createJobsRouter } from "./scheduler/routes";
+import { startRunner, setRunnerLogger } from "./scheduler/runner";
 import { serveStatic } from "./static";
 import { createServer } from "http";
 import pool, { ensureExtensionTables, query } from "./db";
@@ -104,7 +106,13 @@ app.use((req, res, next) => {
   next();
 });
 
-(async () => {
+// Under vitest this module must never boot: several modules import `log`
+// from here, so any test that imports one of them would otherwise run the
+// migration runner against the real DATABASE_URL and try to listen. Found
+// 2026-10-15 when a pending migration made that boot visible. Tests that
+// need `log` mock this module; this guard is the belt for the ones that
+// forget.
+if (!process.env.VITEST) (async () => {
   if (process.env.DATABASE_URL) {
     // Migrations FIRST (SPEC §24): nothing serves until the ledger matches
     // the files on disk. Fail closed — a failed migration exits before
@@ -155,8 +163,24 @@ app.use((req, res, next) => {
   app.use("/api", requireAuth);
   // Settings → Users (SPEC §25 commit 3): admin-only, after requireAuth.
   app.use(createAdminUsersRouter());
+  // Scheduler v1 (SPEC §11 "Refresh job"): enqueue / current / history / cancel.
+  app.use(createJobsRouter());
 
   await registerRoutes(httpServer, app);
+
+  // The single job runner: one consumer, one job at a time, advisory lock
+  // 7342002. Always on — manual Refresh jobs need it; only the SCHEDULE is
+  // gated by ENABLE_CRONS (commit 5 of the scheduler patch).
+  if (process.env.DATABASE_URL && process.env.SP_API_SELLER_ID) {
+    setRunnerLogger(log);
+    startRunner({
+      pool,
+      sellerId: process.env.SP_API_SELLER_ID,
+      inject: { onboardScDiscoveries: getOnboardScDiscoveries(), runSheetsSync: getRunSheetsSync() },
+    });
+  } else if (process.env.DATABASE_URL) {
+    log("SP_API_SELLER_ID not set — job runner not started", "scheduler");
+  }
 
   // Scheduled crons are OFF by default: the host Mac is asleep at the
   // scheduled times (node-cron fires host-local and silently skips missed

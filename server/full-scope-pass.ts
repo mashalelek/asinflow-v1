@@ -480,7 +480,7 @@ function summarizeA(a: FullScopeReport["phaseA"]) {
  * ASIN into AF; the enrichment is best-effort and self-corrects on the next
  * PO sync.
  */
-async function resolveForOnboard(
+export async function resolveForOnboard(
   missing: string[],
   skusByAsin: Map<string, string[]>,
   query: QueryLike,

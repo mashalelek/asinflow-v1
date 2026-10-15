@@ -80,6 +80,13 @@ export function getOnboardNewAsins(): OnboardNewAsins {
   if (!onboardNewAsinsRef) throw new Error("onboardNewAsins not initialized — call registerRoutes first");
   return onboardNewAsinsRef;
 }
+// Scheduler component 1 (SC discovery) onboards through the ONE insert path
+// without importing this module: index.ts injects this into the runner.
+let onboardScDiscoveriesRef: ((rows: OnboardResolution[]) => Promise<void>) | null = null;
+export function getOnboardScDiscoveries(): (rows: OnboardResolution[]) => Promise<void> {
+  if (!onboardScDiscoveriesRef) throw new Error("onboardScDiscoveries not initialized — call registerRoutes first");
+  return onboardScDiscoveriesRef;
+}
 export function getRunAnalyzeCore(): RunAnalyzeCore {
   if (!runAnalyzeCoreRef) throw new Error("runAnalyzeCore not initialized — call registerRoutes first");
   return runAnalyzeCoreRef;
@@ -1156,7 +1163,7 @@ export async function registerRoutes(
       const result = await query(`
         SELECT
           a.asin, a.title, a.image_url, a.brand, a.category, a.weight_lb, a.buy_link, a.status, a.status_reason,
-          a.primary_sku, a.in_catalog, a.has_live_offer, a.offer_checked_at, a.current_issues, a.issues_checked_at, a.notes, a.promo_notes, a.supplier_sku, a.lead_source, a.is_meltable, a.is_hazmat, a.is_dangerous_good, a.is_search_suppressed, a.suppression_reasons, a.last_reviewed_at, a.added_at, a.is_wholesale, a.is_oa,
+          a.primary_sku, a.has_live_offer, a.offer_checked_at, a.current_issues, a.issues_checked_at, a.notes, a.promo_notes, a.supplier_sku, a.lead_source, a.is_meltable, a.is_hazmat, a.is_dangerous_good, a.is_search_suppressed, a.suppression_reasons, a.last_reviewed_at, a.added_at, a.is_wholesale, a.is_oa,
           e.cogs, e.cogs_source, e.actual_cogs, e.estimated_cogs, e.estimated_cogs_source, e.prep_override, e.storage_override,
           e.lowest_fba_price, e.buy_box_price, e.buy_box_fulfillment, e.lowest_price,
           e.sellers_fba, e.sellers_fbm,
@@ -1367,7 +1374,6 @@ export async function registerRoutes(
           actuals,
           sku: row.primary_sku ?? null,
           skus: skusMap.get(row.asin) ?? [],
-          inCatalog: row.in_catalog ?? false,
           hasLiveOffer: row.has_live_offer ?? null,
           offerCheckedAt: row.offer_checked_at ?? null,
           currentIssues: row.current_issues ?? null,
@@ -1522,9 +1528,9 @@ export async function registerRoutes(
       // Only columns that exist in production's `asins` table. BSR,
       // seller counts, and prices live in `asin_estimates`, not here.
       const upsertResult = await pool.query(
-        `INSERT INTO asins (asin, title, brand, image_url, category, weight_lb, length_in, width_in, height_in, buy_link, in_catalog)
+        `INSERT INTO asins (asin, title, brand, image_url, category, weight_lb, length_in, width_in, height_in, buy_link)
          -- §18 (2026-09-24): blank brand -> NULL, never "" (see the analyze upsert).
-         VALUES ($1, $2, NULLIF(TRIM($3::text), ''), $4, $5, $6, $7, $8, $9, $10, false)
+         VALUES ($1, $2, NULLIF(TRIM($3::text), ''), $4, $5, $6, $7, $8, $9, $10)
          ON CONFLICT (asin) DO UPDATE SET
            title = COALESCE($2, asins.title),
            brand = COALESCE(NULLIF(TRIM($3::text), ''), asins.brand),
@@ -3873,12 +3879,9 @@ export async function registerRoutes(
     // NULL and the UI renders $0.00 from nothing — §18 phase c step 2.
     await onboardNewAsins(inputs, () => {}, mainCatalogSink, "sc_discovery");
 
-    // in_catalog = TRUE: the ASIN is in SC by construction (that is what
-    // phase c found). It is a one-way discovery latch (§18) and this is a
-    // discovery.
+    // (in_catalog retired 2026-10-15, migration 052 — the discovery latch it
+    // set here was read by nothing; has_live_offer below is the fact.)
     const asins = rows.map((r) => r.asin);
-    await query(`UPDATE asins SET in_catalog = TRUE WHERE asin = ANY($1::text[])`, [asins])
-      .catch((err: any) => log(`Phase c: in_catalog write failed: ${err?.message ?? err}`, "full-scope"));
 
     // supplier rides the INSERT branch too, derived from the buy link the
     // same way the Buy Link column edit derives it.
@@ -3951,6 +3954,8 @@ export async function registerRoutes(
 
     log(`Phase c onboarded ${rows.length} ASIN(s): ${rows.map((r) => `${r.asin}(${r.cogsSource}/${r.buyLinkSource})`).join(", ")}`, "full-scope");
   }
+
+  onboardScDiscoveriesRef = onboardScDiscoveries;
 
   // Thin streaming wrapper for the main-catalog endpoints. The sink is
   // required here too — each endpoint names mainCatalogSink explicitly.
