@@ -6,10 +6,12 @@ import { Label } from "@/components/ui/label";
 import { Separator } from "@/components/ui/separator";
 import { Switch } from "@/components/ui/switch";
 import { RadioGroup, RadioGroupItem } from "@/components/ui/radio-group";
-import { Settings as SettingsIcon, Save } from "lucide-react";
+import { Settings as SettingsIcon, Save, Users } from "lucide-react";
 import { type Settings, type PriceSource } from "@shared/schema";
 import { loadSettings, saveSettings } from "@/lib/settings";
 import { useToast } from "@/hooks/use-toast";
+import { useAuth } from "@/contexts/auth-context";
+import { UsersAdminDialog } from "@/components/users-admin-dialog";
 
 /**
  * Display-side state owned by the host page (home / analytics) and surfaced
@@ -70,6 +72,11 @@ export function SettingsDialog({
   };
   const [settings, setSettings] = useState<Settings>(loadSettings);
   const { toast } = useToast();
+  // SPEC §25: the Users section is admin-only. The server is the real gate
+  // (403 for a member); hiding it here just keeps the dialog honest.
+  const { user } = useAuth();
+  const isAdmin = user?.role === "admin";
+  const [usersOpen, setUsersOpen] = useState(false);
 
   useEffect(() => {
     setSettings(loadSettings());
@@ -231,6 +238,20 @@ export function SettingsDialog({
               ))}
             </div>
           </div>
+
+          {/* ─── Users (SPEC §25, admin only) ─── */}
+          {isAdmin && (
+            <div>
+              <h3 className="text-sm font-medium text-muted-foreground mb-3">Users</h3>
+              <div className="flex items-center justify-between gap-4">
+                <p className="text-xs text-muted-foreground">Accounts that can sign in. Add, rename, change role, deactivate, reset password.</p>
+                <Button variant="outline" size="sm" onClick={() => setUsersOpen(true)} data-testid="button-manage-users">
+                  <Users className="h-4 w-4 mr-1.5" /> Manage users
+                </Button>
+              </div>
+              <UsersAdminDialog open={usersOpen} onOpenChange={setUsersOpen} />
+            </div>
+          )}
 
           <Button onClick={handleSave} className="w-full" data-testid="button-save-settings">
             <Save className="h-4 w-4 mr-2" />

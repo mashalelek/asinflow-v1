@@ -94,6 +94,9 @@ curl -s -w ' %{http_code}\n' http://127.0.0.1:5055/health   # {"ok":true} 200 wh
 
 Use a spare port so a running `npm run dev` on 3000 is untouched (5000 is
 taken by macOS AirPlay on this machine), and stop the process afterwards.
+The production session cookie is `Secure`, so this local `npm start` can
+serve the login page but cannot keep a session over plain http — check
+`/health` and the shell here, and do login checks against `npm run dev`.
 The build pulls tsx, vite, esbuild and the PostCSS/Tailwind toolchain from
 `dependencies`, so it also works after a production-only install
 (`npm ci --omit=dev`).

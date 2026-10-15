@@ -5228,7 +5228,11 @@ proxy.
   `pg.Pool`. Cookie `af.sid`, `httpOnly`, `sameSite=lax`, `secure` in
   production, `maxAge` 30 days only when the login carried `remember: true`.
   Secret from `SESSION_SECRET` (§24): required in production, logged dev
-  fallback otherwise.
+  fallback otherwise. **Because the production cookie is `Secure`, a local
+  `npm start` over plain `http://127.0.0.1` serves the login page but can
+  never keep a session** — express-session refuses to set a Secure cookie
+  on a non-TLS connection. Local login checks use `npm run dev`; on Render
+  TLS terminates at the proxy and `trust proxy` makes the cookie flow.
 - `POST /api/auth/login` `{ email, password, remember }` → 200 `{ user: { id,
   email, displayName, role } }`, or **401 `{ error: "invalid_credentials" }`
   for unknown email, wrong password, disabled and locked alike** — the body
@@ -5284,6 +5288,44 @@ refuses when a user exists and rejects a short password.
   `logout`).
 - Same-origin fetches carry the cookie by default; nothing sends
   `credentials: "include"` to another origin.
+
+### Admin: Settings → Users (commit 3, 2026-10-14)
+
+The only way to create further accounts (decision 4); the bootstrap script
+refuses once any user exists. **No delete anywhere — deactivate only.**
+
+- **Routes** (`server/admin-users.ts`, mounted in `index.ts` after
+  `requireAuth`, scoped `requireRole('admin')` on `/api/admin`; a member
+  gets 403, anonymous 401):
+  - `GET /api/admin/users` → `{ users: [{ id, email, displayName, role,
+    isActive, lastLoginAt, createdAt }] }`. `password_hash` is never
+    selected, by construction.
+  - `POST /api/admin/users` `{ email, displayName, password, role }` → 201.
+    400 on a bad email, blank name, password under 8, or unknown role; 409
+    `email_taken` on a duplicate (pre-check plus the unique-violation
+    catch).
+  - `PATCH /api/admin/users/:id` `{ displayName?, role?, isActive?,
+    password? }` → 200. **An admin cannot deactivate or demote their own
+    account** (400 `cannot_modify_self`); a rename or password change on
+    self is fine. **`isActive=false` deletes that user's `sessions` rows**
+    (`sess->>'userId'`), so they are signed out everywhere at once, and
+    `GET /api/auth/me` ends any session that slips through. 404 on an
+    unknown id.
+- **UI.** Settings dialog gains a **Users** section for admins only
+  (hidden for members; the server is the real gate) with a "Manage users"
+  button opening the Users dialog: table (name, email, role, active, last
+  login; the signed-in admin's row is marked "you"), **Add user** (name,
+  email, password, role — the password is handed over directly, nothing
+  is emailed), per-row **Edit** (name, role, active toggle, reset
+  password). On the admin's own row the role select and the active toggle
+  are disabled with a one-line reason, matching the server rule.
+- Client validation mirrors the server (`client/src/lib/admin-users-api.ts`):
+  email with `@`, non-empty name, password ≥ 8. Server error codes render
+  as one line each.
+- Tests: `server/admin-users.test.ts` (member 403 on every admin route,
+  list has no hashes, create/duplicate/validation, self-guard 400,
+  deactivation revokes sessions, 404) and `client/src/lib/admin-users.test.ts`
+  (validation, API mapping, admin-only gating and no-delete source checks).
 
 ### Out of scope (explicitly)
 

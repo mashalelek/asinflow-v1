@@ -5,6 +5,7 @@ import { serveStatic } from "./static";
 import { createServer } from "http";
 import pool, { ensureExtensionTables, query } from "./db";
 import { createSessionMiddleware, createAuthRouter, requireAuth, setAuthLogger } from "./auth";
+import { createAdminUsersRouter } from "./admin-users";
 import { startRefreshCron } from "./refresh-cron";
 import { startSourcingSyncCron } from "./sourcing-sync-cron";
 import { startAuraSyncCron } from "./aura-sync-cron";
@@ -138,6 +139,8 @@ app.use((req, res, next) => {
   app.use(createSessionMiddleware({ secret: sessionSecret, isProduction, pool }));
   app.use(createAuthRouter());
   app.use("/api", requireAuth);
+  // Settings → Users (SPEC §25 commit 3): admin-only, after requireAuth.
+  app.use(createAdminUsersRouter());
 
   await registerRoutes(httpServer, app);
 

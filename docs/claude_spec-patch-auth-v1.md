@@ -4,11 +4,16 @@
 for loading real data into the Render deployment (SPEC §24): today nothing
 gates the app — every `/api` route is open to anyone who reaches the host.*
 
-> **Status: DRAFT — awaiting implementation.** Three single-concern commits
-> (below). SPEC §24 "Verification checklist" gains a login step when commit 3
-> lands. The VA-specific restricted view and permission enforcement are
-> **on hold** (decided 2026-10-14); this patch ships the minimum that makes
-> them cheap later (a `role` column) and nothing more.
+> **Status: IMPLEMENTED 2026-10-14.** Three single-concern commits as
+> listed below, plus two follow-ups found on the way: `auth.ts` must not
+> import `./index` (the bootstrap script booted the server), and migration
+> 050 drops the four Replit-era owner columns whose foreign keys 049's
+> CASCADE removed. SPEC §25 is the record; this patch stays as the design
+> source. Deviations from the text here: the Log out item is its own user
+> menu in the top nav rather than inside the settings gear (the gear is a
+> per-page button, not a menu, and is absent on some routes). The
+> VA-specific restricted view and permission enforcement remain **on hold**
+> (decided 2026-10-14); a `role` column is all that shipped for them.
 
 ## Why
 
