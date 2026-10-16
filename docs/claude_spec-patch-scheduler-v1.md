@@ -231,9 +231,15 @@ absence.
 0 4-23 * * *     enqueue refresh { trigger: scheduled, include_daily: false }
 ```
 
-Gated by `ENABLE_CRONS === 'true'` as today. If a pass is still running
-when the next tick fires, the tick enqueues anyway and the job waits —
-the log shows the overrun. The three existing cron files
+Gated by `ENABLE_CRONS === 'true'` as today. **No stacking (Maria,
+2026-10-16):** at most one scheduled pass waits at any time. A tick that
+finds a scheduled pass already *queued* does not enqueue — it logs
+"tick HH:00 skipped — scheduled pass #N already queued", and the 00:00
+tick promotes that queued pass to `include_daily = true` instead. A tick
+that finds a scheduled pass *running* but none queued enqueues one as
+before, and it waits. Queued manual jobs (Refresh button, backfill) do
+not count. A long manual job delays the next pass but never produces
+back-to-back identical passes. The three existing cron files
 (`refresh-cron.ts`, `sourcing-sync-cron.ts`, `aura-sync-cron.ts`) are
 deleted; Sync Sourcing and the Aura chain are on-demand (sheet decisions)
 and keep their buttons.

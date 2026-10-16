@@ -9,14 +9,20 @@
 //
 // One pass at 00:00 ET that also runs the daily block (components 2–8); no
 // passes 01–03; hourly passes 04:00–23:00. 21 passes a day. Gated by
-// ENABLE_CRONS === 'true' in server/index.ts. If a pass is still running
-// when the next tick fires, the tick enqueues anyway and the job waits —
-// the queue is the lock; the log shows the overrun.
+// ENABLE_CRONS === 'true' in server/index.ts.
+//
+// No stacking (Maria, 2026-10-16): at most ONE scheduled pass waits at any
+// time. A tick that finds a scheduled pass already QUEUED does not enqueue
+// (the 00:00 tick instead promotes that queued pass to carry the daily
+// block); a tick that finds one RUNNING but none queued enqueues as before
+// and the job waits. Queued MANUAL jobs (Refresh button, backfill) do not
+// count — a long manual job delays the next pass but never produces
+// back-to-back identical passes.
 //
 // Express-free; the cron library, the enqueue and the clock are injectable
 // so the tests drive the ticks and the DST arithmetic without a timer.
 import cron from "node-cron";
-import { enqueueJob, listActive, type EnqueueInput } from "./jobs-repo";
+import { enqueueJob, listActive, setIncludeDaily, type EnqueueInput } from "./jobs-repo";
 import type { JobRow, QueryLike } from "./types";
 
 export const SCHEDULE_TZ = "America/New_York";
@@ -74,16 +80,37 @@ export interface ScheduleHandle {
   tick: (includeDaily: boolean) => Promise<JobRow>;
 }
 
-/** The tick handler: enqueue one scheduled pass; say so if one is still running. */
-export async function runScheduledTick(includeDaily: boolean, deps: ScheduleDeps = {}): Promise<JobRow> {
+/**
+ * The tick handler. At most one scheduled pass waits at any time:
+ *  - a scheduled pass already QUEUED → skip (the 00:00 tick promotes it to
+ *    include the daily block instead); the queued job is returned;
+ *  - otherwise enqueue one; if a pass is RUNNING the new one waits, and the
+ *    log says so.
+ * Only scheduled jobs count; a queued manual job never suppresses a tick.
+ */
+export async function runScheduledTick(includeDaily: boolean, deps: ScheduleDeps = {}, now: Date = new Date()): Promise<JobRow> {
   const enqueue = deps.enqueue ?? ((input: EnqueueInput) => enqueueJob(input, deps.query));
   const active = await listActive(deps.query);
+  const label = includeDaily ? "(midnight, daily block)" : "(hourly)";
+  const hh = String(etParts(now).hour).padStart(2, "0");
+
+  const queued = active.find((j) => j.status === "queued" && j.trigger === "scheduled");
+  if (queued) {
+    if (includeDaily && !queued.include_daily) {
+      const promoted = await setIncludeDaily(queued.id, deps.query);
+      scheduleLog(`tick ${hh}:00 skipped — scheduled pass #${queued.id} already queued; promoted to carry the daily block`);
+      return promoted ?? queued;
+    }
+    scheduleLog(`tick ${hh}:00 skipped — scheduled pass #${queued.id} already queued`);
+    return queued;
+  }
+
   const running = active.find((j) => j.status === "running");
   const job = await enqueue({ trigger: "scheduled", includeDaily, scopeAsins: null });
   if (running) {
-    scheduleLog(`scheduled pass ${includeDaily ? "(midnight, daily block)" : "(hourly)"} enqueued as job ${job.id} — job ${running.id} is still running (overrun); it waits behind ${active.length} active`);
+    scheduleLog(`scheduled pass ${label} enqueued as job ${job.id} — job ${running.id} (${running.trigger}) is still running; it waits behind ${active.length} active`);
   } else {
-    scheduleLog(`scheduled pass ${includeDaily ? "(midnight, daily block)" : "(hourly)"} enqueued as job ${job.id}`);
+    scheduleLog(`scheduled pass ${label} enqueued as job ${job.id}`);
   }
   return job;
 }

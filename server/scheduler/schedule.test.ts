@@ -105,14 +105,61 @@ describe("the tick handler", () => {
     ]);
   });
 
-  it("enqueues anyway when a pass is still running, and logs the overrun", async () => {
+  it("enqueues when a pass is RUNNING but none is queued — the new one waits", async () => {
     const lines: string[] = [];
     setScheduleLogger((m) => lines.push(m));
     const enqueue = vi.fn(async () => ({ id: 12, status: "queued" } as JobRow));
-    await runScheduledTick(false, { enqueue, query: fakeQuery([{ id: 10, status: "running" } as JobRow]) });
+    await runScheduledTick(false, { enqueue, query: fakeQuery([{ id: 10, status: "running", trigger: "scheduled" } as JobRow]) });
     expect(enqueue).toHaveBeenCalledTimes(1);
-    expect(lines.join("\n")).toMatch(/job 12 — job 10 is still running \(overrun\)/);
+    expect(lines.join("\n")).toMatch(/job 12 — job 10 \(scheduled\) is still running; it waits/);
     setScheduleLogger(() => {});
+  });
+
+  // No stacking (2026-10-16): at most one scheduled pass waiting.
+  it("skips the tick when a scheduled pass is already QUEUED, and says which", async () => {
+    const lines: string[] = [];
+    setScheduleLogger((m) => lines.push(m));
+    const enqueue = vi.fn(async () => ({ id: 13 } as JobRow));
+    const q = fakeQuery([{ id: 10, status: "running", trigger: "scheduled" } as JobRow, { id: 11, status: "queued", trigger: "scheduled", include_daily: false } as JobRow]);
+    const r = await runScheduledTick(false, { enqueue, query: q }, new Date("2026-10-16T19:00:00Z")); // 15:00 ET
+    expect(enqueue).not.toHaveBeenCalled();
+    expect(r.id).toBe(11);
+    expect(lines).toEqual(["tick 15:00 skipped — scheduled pass #11 already queued"]);
+    setScheduleLogger(() => {});
+  });
+
+  it("the 00:00 tick promotes an already-queued hourly pass to carry the daily block instead of enqueuing", async () => {
+    const lines: string[] = [];
+    setScheduleLogger((m) => lines.push(m));
+    const updates: any[] = [];
+    const enqueue = vi.fn(async () => ({ id: 13 } as JobRow));
+    const base = fakeQuery([{ id: 11, status: "queued", trigger: "scheduled", include_daily: false } as JobRow]);
+    const query: QueryLike = async (sql, params) => {
+      if (/^UPDATE jobs SET include_daily = TRUE WHERE id = \$1 AND status = 'queued'/.test(sql.trim())) { updates.push(params); return { rows: [{ id: 11, status: "queued", trigger: "scheduled", include_daily: true, progress: {} }], rowCount: 1 }; }
+      return base(sql, params);
+    };
+    const r = await runScheduledTick(true, { enqueue, query }, new Date("2026-10-16T04:00:00Z")); // 00:00 ET
+    expect(enqueue).not.toHaveBeenCalled();
+    expect(updates).toEqual([[11]]);
+    expect(r.include_daily).toBe(true);
+    expect(lines).toEqual(["tick 00:00 skipped — scheduled pass #11 already queued; promoted to carry the daily block"]);
+    setScheduleLogger(() => {});
+  });
+
+  it("the 00:00 tick leaves an already-daily queued pass alone", async () => {
+    const enqueue = vi.fn(async () => ({ id: 13 } as JobRow));
+    const q = fakeQuery([{ id: 11, status: "queued", trigger: "scheduled", include_daily: true } as JobRow]);
+    const updates: string[] = [];
+    const query: QueryLike = async (sql, params) => { if (sql.includes("UPDATE jobs")) { updates.push(sql); return { rows: [], rowCount: 0 }; } return q(sql, params); };
+    await runScheduledTick(true, { enqueue, query });
+    expect(enqueue).not.toHaveBeenCalled();
+    expect(updates).toEqual([]);
+  });
+
+  it("a queued MANUAL job (Refresh button, backfill) never suppresses a tick", async () => {
+    const enqueue = vi.fn(async () => ({ id: 14 } as JobRow));
+    await runScheduledTick(false, { enqueue, query: fakeQuery([{ id: 10, status: "running", trigger: "manual" } as JobRow, { id: 12, status: "queued", trigger: "manual" } as JobRow]) });
+    expect(enqueue).toHaveBeenCalledTimes(1);
   });
 
   it("a tick whose enqueue throws is logged, never crashes the process", async () => {

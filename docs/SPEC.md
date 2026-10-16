@@ -2329,9 +2329,15 @@ they never passed.
 
 One pass at 00:00 ET that also runs the daily block; no passes 01–03
 (both DST transitions fall inside that window); hourly passes
-04:00–23:00. 21 passes a day. If a pass is still running when the next
-tick fires, the tick enqueues anyway and the job waits — the queue is the
-lock; the log shows the overrun. `nextPassAfter()` feeds
+04:00–23:00. 21 passes a day. **No stacking (2026-10-16):** at most one
+scheduled pass waits at any time. A tick that finds a scheduled pass
+already queued does not enqueue (log: "tick HH:00 skipped — scheduled
+pass #N already queued"); the 00:00 tick promotes that queued pass to
+carry the daily block instead. A tick that finds one running but none
+queued enqueues as before, and it waits — the queue is the lock. Queued
+manual jobs (Refresh, backfill) never suppress a tick: a long manual job
+delays the next pass but never produces back-to-back identical passes.
+`nextPassAfter()` feeds
 `GET /api/jobs/scheduler` and is tested across both 2026 DST boundaries.
 
 Gated by `ENABLE_CRONS === 'true'` (and the runner's `SP_API_SELLER_ID`)

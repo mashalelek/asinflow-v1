@@ -102,6 +102,12 @@ export async function cancelJob(id: number, query: QueryLike = defaultQuery as a
   return r.rows[0] ? toRow(r.rows[0]) : null;
 }
 
+/** Promote a still-queued job to carry the daily block (the 00:00 tick finding an hourly pass already queued). */
+export async function setIncludeDaily(id: number, query: QueryLike = defaultQuery as any): Promise<JobRow | null> {
+  const r = await query(`UPDATE jobs SET include_daily = TRUE WHERE id = $1 AND status = 'queued' RETURNING ${COLS}`, [id]);
+  return r.rows[0] ? toRow(r.rows[0]) : null;
+}
+
 export async function getJob(id: number, query: QueryLike = defaultQuery as any): Promise<JobRow | null> {
   const r = await query(`SELECT ${COLS} FROM jobs WHERE id = $1`, [id]);
   return r.rows[0] ? toRow(r.rows[0]) : null;
