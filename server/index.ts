@@ -1,6 +1,6 @@
 import 'dotenv/config';
 import express, { type Request, Response, NextFunction } from "express";
-import { registerRoutes, getOnboardScDiscoveries, getRunSheetsSync } from "./routes";
+import { registerRoutes, getOnboardScDiscoveries, getRunSheetsSync, getOnboardSalesAsins } from "./routes";
 import { createJobsRouter } from "./scheduler/routes";
 import { startRunner, setRunnerLogger } from "./scheduler/runner";
 import { startSchedule, setScheduleLogger, nextPassAfter } from "./scheduler/schedule";
@@ -175,7 +175,7 @@ if (!process.env.VITEST) (async () => {
     startRunner({
       pool,
       sellerId: process.env.SP_API_SELLER_ID,
-      inject: { onboardScDiscoveries: getOnboardScDiscoveries(), runSheetsSync: getRunSheetsSync() },
+      inject: { onboardScDiscoveries: getOnboardScDiscoveries(), runSheetsSync: getRunSheetsSync(), onboardSalesAsins: getOnboardSalesAsins() },
     });
   } else if (process.env.DATABASE_URL) {
     log("SP_API_SELLER_ID not set — job runner not started", "scheduler");

@@ -20,7 +20,7 @@ const LIST = "11111111-1111-1111-1111-111111111111";
 function bulkJob(over: Partial<JobRow> = {}): JobRow {
   return {
     id: 5, kind: "refresh", trigger: "bulk", target: "bulk", bulk_list_id: LIST, include_daily: true,
-    scope_asins: null, components: null, status: "running", progress: { done: [] }, summary: null, requested_by: null,
+    scope_asins: null, components: null, params: null, status: "running", progress: { done: [] }, summary: null, requested_by: null,
     queued_at: new Date(), started_at: new Date(), finished_at: null, error: null, ...over,
   };
 }
@@ -44,7 +44,7 @@ function makeDb(opts: { listAsins: string[]; catalog: string[]; job: JobRow }) {
     if (s.startsWith("UPDATE bulk_list_asins b SET")) return { rows: [], rowCount: params[1].length };
     if (s.startsWith("UPDATE bulk_list_asins")) return { rows: [], rowCount: 1 };
     if (s.startsWith("INSERT INTO jobs")) return { rows: [{ ...job, id: 9, status: "queued", scope_asins: params[4], trigger: params[0], target: params[1], bulk_list_id: params[2], include_daily: params[3] }], rowCount: 1 };
-    if (s.startsWith("SELECT id, kind, trigger, target, bulk_list_id, include_daily, scope_asins, components, status, progress, summary, requested_by, queued_at, started_at, finished_at, error FROM jobs WHERE status IN")) return { rows: [], rowCount: 0 };
+    if (s.startsWith("SELECT id, kind, trigger, target, bulk_list_id, include_daily, scope_asins, components, params, status, progress, summary, requested_by, queued_at, started_at, finished_at, error FROM jobs WHERE status IN")) return { rows: [], rowCount: 0 };
     throw new Error(`unhandled SQL in bulk shim: ${s.slice(0, 90)}`);
   };
   return { sql, ledger, job, query };

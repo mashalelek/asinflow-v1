@@ -7,7 +7,19 @@
 import express, { type Router, type Request, type Response } from "express";
 import { query as defaultQuery } from "../db";
 import { enqueueJob, listActive, listJobs, getJob, listComponentRuns, cancelJob } from "./jobs-repo";
+import { requireRole } from "../auth";
 import type { QueryLike } from "./types";
+
+const YMD = /^\d{4}-\d{2}-\d{2}$/;
+/** Validate a backfill window: YYYY-MM-DD pair, from ≤ to, to ≤ today (local). */
+export function parseBackfillWindow(body: any, today: string): { from: string; to: string } | { error: string } {
+  const from = String(body?.from ?? "");
+  const to = String(body?.to ?? "");
+  if (!YMD.test(from) || !YMD.test(to)) return { error: "from and to must be YYYY-MM-DD" };
+  if (from > to) return { error: "from must not be after to" };
+  if (to > today) return { error: `to must not be after today (${today})` };
+  return { from, to };
+}
 
 export function createJobsRouter(deps: { query?: QueryLike; nextPassAt?: () => Promise<string | null> } = {}): Router {
   const query = deps.query ?? (defaultQuery as any as QueryLike);
@@ -33,7 +45,31 @@ export function createJobsRouter(deps: { query?: QueryLike; nextPassAt?: () => P
     }
   });
 
-  // Settings → Scheduler (read-only): enabled, next pass, last scheduled job.
+  // Sales history backfill (2026-10-16): admin-only. ONE manual job running
+  // component 19 alone over params.sales_window, serialized behind the
+  // hourly passes like any job. Writes sales_daily units/revenue (and the
+  // jobs row); ASINs the report names that AF lacks are onboarded by the
+  // component. No UI button — `npm run backfill:sales` or this route.
+  router.post("/api/jobs/backfill-sales", requireRole("admin"), async (req: Request, res: Response) => {
+    const now = new Date();
+    const today = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, "0")}-${String(now.getDate()).padStart(2, "0")}`;
+    const w = parseBackfillWindow(req.body, today);
+    if ("error" in w) { res.status(400).json({ error: "invalid_window", message: w.error }); return; }
+    try {
+      const job = await enqueueJob({
+        trigger: "manual", includeDaily: false, components: [19], scopeAsins: null,
+        params: { sales_window: { from: w.from, to: w.to } },
+        requestedBy: req.session?.userId ?? null,
+      }, query);
+      const active = await listActive(query);
+      const ahead = active.filter((j) => j.id !== job.id && (j.status === "running" || j.queued_at < job.queued_at)).length;
+      res.status(202).json({ job, ahead });
+    } catch (err: any) {
+      res.status(500).json({ error: "enqueue_failed", message: err?.message ?? String(err) });
+    }
+  });
+
+  // GET /api/jobs/scheduler (read-only API): enabled, next pass, last scheduled job.
   // nextPassAt is filled by the schedule definition (commit 5 of the patch);
   // until then it is null and `scheduleDefined` says so.
   router.get("/api/jobs/scheduler", async (_req: Request, res: Response) => {

@@ -11,7 +11,7 @@ import { COMPONENTS } from "./components";
 import { runJob, componentsForJob, remainingAfterCursor, resolveScope, RUNNER_LOCK_KEY, setRunnerLogger } from "./runner";
 import { applySuppressions, parseFypReport } from "../suppression-sync";
 import type { ComponentDef, JobRow, QueryLike, ComponentContext } from "./types";
-import { ASIN_CHECKPOINT_EVERY } from "./types";
+import { ASIN_CHECKPOINT_EVERY, ComponentError } from "./types";
 
 // Scheduler v1 (SPEC §11 "Refresh job"). The runner is exercised against a
 // jobs/ledger shim and a stub component list; the real component list is
@@ -64,7 +64,7 @@ describe("the component sequence is fixed", () => {
 function makeDb(opts: { scope: string[]; job: Partial<JobRow> }) {
   const job: JobRow = {
     id: 1, kind: "refresh", trigger: "manual", target: "main", bulk_list_id: null, include_daily: true,
-    scope_asins: null, components: null, status: "running", progress: { done: [] }, summary: null, requested_by: null,
+    scope_asins: null, components: null, params: null, status: "running", progress: { done: [] }, summary: null, requested_by: null,
     queued_at: new Date(), started_at: new Date(), finished_at: null, error: null, ...opts.job,
   };
   const ledger: any[] = [];
@@ -100,6 +100,21 @@ describe("runJob", () => {
     expect(db.ledger.every((l) => l.job_id === 1 && l.trigger === "manual" && l.scope === "full")).toBe(true);
     expect(s.components["02_stub"]).toEqual({ seen: 3 });
     expect(db.job.progress.done).toEqual([1, 2, 3]);
+  });
+
+  it("a ComponentError's partial result is ledgered and summarised, and the job still fails (sales backfill, 2026-10-16)", async () => {
+    const partial = { counts: { chunks: 2, chunks_failed: 1, orders: 5 }, outcomes: { "_chunk_02 a..b": "error: FATAL" } };
+    const comps = [stub(19, "hourly", "account", async () => { throw new ComponentError("chunk 2/2 failed: FATAL", partial); })];
+    const db = makeDb({ scope: ["A1"], job: { include_daily: false } });
+    const s = await runJob(db.job, { query: db.query, sellerId: "S", components: comps, now: () => 0 });
+    expect(db.job.status).toBe("failed");
+    expect(db.job.error).toMatch(/component 19 19_stub: chunk 2\/2 failed: FATAL/);
+    expect(db.ledger).toHaveLength(1);
+    expect(db.ledger[0].counts).toEqual(partial.counts);
+    expect(db.ledger[0].outcomes).toEqual(partial.outcomes);
+    expect(db.ledger[0].error).toMatch(/FATAL/);
+    expect(s.components["19_stub"]).toEqual(partial.counts);
+    expect(s.stoppedAt).toBe(19);
   });
 
   it("skips the daily block when include_daily is false", async () => {

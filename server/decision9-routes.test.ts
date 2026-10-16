@@ -97,8 +97,8 @@ describe("migration 053 adds jobs.components", () => {
   });
   it("the repo reads and writes it", () => {
     const repo = readFileSync(join(__dirname, "scheduler", "jobs-repo.ts"), "utf8");
-    expect(repo).toMatch(/scope_asins, components, status/);
-    expect(repo).toMatch(/INSERT INTO jobs \(kind, trigger, target, bulk_list_id, include_daily, scope_asins, components, requested_by\)/);
+    expect(repo).toMatch(/scope_asins, components, params, status/);
+    expect(repo).toMatch(/INSERT INTO jobs \(kind, trigger, target, bulk_list_id, include_daily, scope_asins, components, params, requested_by\)/);
   });
 });
 

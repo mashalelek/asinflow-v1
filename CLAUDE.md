@@ -310,6 +310,12 @@ locally (`npm run dev` logs `Scheduled crons disabled`). The runner is
 always on. The three old cron files are deleted — do not recreate a cron
 that calls a sync function directly; enqueue a job.
 
+**Sales history backfill:** `npm run backfill:sales -- --from YYYY-MM-DD --to YYYY-MM-DD`
+enqueues a component-19-only job (needs the dev server running); the
+per-chunk results are in the job's ledger row. Component 19 covers every
+ASIN in `asins` and onboards ASINs the report names that AF lacks (tag
+`Sales import`).
+
 **Verifying a job locally without a login cookie:** `INSERT INTO jobs
 (kind, trigger, target, include_daily, scope_asins[, components])` and
 watch `[scheduler]` in the dev-server log; the ledger rows are

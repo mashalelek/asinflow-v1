@@ -85,6 +85,12 @@ export function getOnboardNewAsins(): OnboardNewAsins {
 // Scheduler component 1 (SC discovery) onboards through the ONE insert path
 // without importing this module: index.ts injects this into the runner.
 let onboardScDiscoveriesRef: ((rows: OnboardResolution[]) => Promise<void>) | null = null;
+let onboardSalesAsinsRef: ((asins: string[]) => Promise<void>) | null = null;
+/** Injected into the runner for component 19 (sales): insert ASINs the orders report names that AF lacks. */
+export function getOnboardSalesAsins(): (asins: string[]) => Promise<void> {
+  if (!onboardSalesAsinsRef) throw new Error("onboardSalesAsins not initialized — call registerRoutes first");
+  return onboardSalesAsinsRef;
+}
 export function getOnboardScDiscoveries(): (rows: OnboardResolution[]) => Promise<void> {
   if (!onboardScDiscoveriesRef) throw new Error("onboardScDiscoveries not initialized — call registerRoutes first");
   return onboardScDiscoveriesRef;
@@ -3826,6 +3832,27 @@ export async function registerRoutes(
     trigger: "upload" | "sourcing" | "extension" | "backfill" | "sc_discovery",
     progressPrefix: (i: number) => string | null = () => null,
   ): Promise<{ jobId: number | null }> {
+    await insertNewAsinRows(asins, emit, sink, progressPrefix);
+    let jobId: number | null = null;
+    try {
+      const job = await enqueueJob({ trigger: "onboarding", includeDaily: true, scopeAsins: asins.map((a) => a.asin) });
+      jobId = job.id;
+      emit(JSON.stringify({ type: "job_queued", data: { jobId: job.id, asins: asins.length } }) + "\n");
+      log(`Onboarding (${trigger}): ${asins.length} row(s) created; refresh job #${job.id} queued`, "refresh");
+    } catch (err: any) {
+      log(`Onboarding (${trigger}): rows created but the refresh job could not be queued — run Refresh for them: ${err?.message ?? err}`, "refresh");
+    }
+    return { jobId };
+  }
+  // The INSERT half of onboarding: the rows, user-supplied fields only
+  // (insertOnly). Shared with the sales component's onboarding (below), which
+  // inserts per report chunk and enqueues ONE job for all of them at the end.
+  async function insertNewAsinRows(
+    asins: AsinInput[],
+    emit: (chunk: string) => void,
+    sink: AnalyzeSink,
+    progressPrefix: (i: number) => string | null = () => null,
+  ): Promise<void> {
     const allResults = new Map<string, AsinResult>();
     const blankPricing: AsinResult["pricingData"] = {
       lowestFbaPrice: null, buyBoxPrice: null, buyBoxFulfillment: null, lowestPrice: null,
@@ -3840,18 +3867,33 @@ export async function registerRoutes(
       const result = buildResult(input, blankPricing, blankCatalog, blankFees, false, { status: "check" });
       await writeResult(emit, allResults, input.asin, result, false, true, input.notes ?? null, input.promoNotes ?? null, sink, input.tags ?? null, null, input.leadSource ?? null, true);
     }
-    let jobId: number | null = null;
-    try {
-      const job = await enqueueJob({ trigger: "onboarding", includeDaily: true, scopeAsins: asins.map((a) => a.asin) });
-      jobId = job.id;
-      emit(JSON.stringify({ type: "job_queued", data: { jobId: job.id, asins: asins.length } }) + "\n");
-      log(`Onboarding (${trigger}): ${asins.length} row(s) created; refresh job #${job.id} queued`, "refresh");
-    } catch (err: any) {
-      log(`Onboarding (${trigger}): rows created but the refresh job could not be queued — run Refresh for them: ${err?.message ?? err}`, "refresh");
-    }
-    return { jobId };
   }
   onboardNewAsinsRef = onboardNewAsins;
+
+  // Sales onboarding (2026-10-16): an ASIN the orders report names that AF
+  // does not have at all. Same insert path as every other onboarding, tag
+  // "Sales import" for provenance (the SC-discovery precedent — lead_source
+  // is user-controlled and CHECK-constrained, §14, so it stays NULL). The
+  // sales component calls this per report chunk, before the chunk's upsert,
+  // and enqueues ONE Refresh job for all of them when the sync ends.
+  async function onboardSalesAsins(asins: string[]): Promise<void> {
+    if (asins.length === 0) return;
+    const inputs: AsinInput[] = asins.map((asin) => ({
+      asin,
+      cogs: 0,                       // placeholder for the shape, never stored (fromCsvUpload=false)
+      buyLink: null,
+      prepOverride: null,
+      storageOverride: null,
+      tags: ["Sales import"],        // §20; applied after the INSERT by writeResult
+      notes: null,
+      promoNotes: null,
+      supplierSku: null,
+      addedAtRaw: null,
+    } as AsinInput));
+    await insertNewAsinRows(inputs, () => {}, mainCatalogSink);
+    log(`Onboarding (sales): ${asins.length} row(s) created from the orders report: ${asins.slice(0, 20).join(", ")}${asins.length > 20 ? "…" : ""}`, "refresh");
+  }
+  onboardSalesAsinsRef = onboardSalesAsins;
 
   // §18 Part B phase c (2026-10-11): onboard the ASINs SC has that AF does
   // not. Injected into runFullScopePass so full-scope-pass.ts never imports

@@ -19,7 +19,7 @@ import {
   claimNextJob, writeProgress, readStatus, finishJob, recordComponentRun,
 } from "./jobs-repo";
 import {
-  CancelledError, type ComponentContext, type ComponentDef, type ComponentResult, type JobRow, type JobSummary,
+  CancelledError, ComponentError, type ComponentContext, type ComponentDef, type ComponentResult, type JobRow, type JobSummary,
   type JobProgress, type Flip, type QueryLike,
 } from "./types";
 
@@ -143,10 +143,14 @@ export async function runJob(
     } catch (err: any) {
       const cancelled = err instanceof CancelledError;
       const msg = cancelled ? "cancelled" : (err?.message ?? String(err));
+      // A ComponentError carries what the component did before it failed:
+      // ledger it and show it in the summary alongside the error.
+      const partial: ComponentResult | null = err instanceof ComponentError ? err.partial : null;
       await recordComponentRun({
         jobId: job.id, trigger: job.trigger, stage: c.key, scope: ledgerScope,
-        requested: asins.length, startedAt, result: null, error: msg,
+        requested: asins.length, startedAt, result: partial, error: msg,
       }, query);
+      if (partial) summary.components[c.key] = partial.counts;
       summary.stoppedAt = c.n;
       summary.durationMs = now() - t0;
       if (cancelled) {

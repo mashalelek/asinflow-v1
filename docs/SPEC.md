@@ -2060,7 +2060,7 @@ the ledger stage is the `refresh_runs.stage` key the component writes.
 | 16 | Live offer / buyable / issues (§18 reconcile) | hourly | CALL-9 getListingsItem, per SKU | `16_live_offer` | active+parked |
 | 17 | Primary SKU | hourly | derived from 15–16 | `17_primary_sku` | " |
 | 18 | Suppressions (FYP) | hourly | CALL-10 FYP report | `18_suppressions` | account |
-| 19 | Sales units / revenue | hourly | CALL-11 (today: orders report, 48-hour window) | `19_sales` | account, delta |
+| 19 | Sales units / revenue | hourly | CALL-11 (today: orders report, 48-hour window; `params.sales_window` for the backfill) | `19_sales` | account — every ASIN in `asins`, all statuses (2026-10-16) |
 | 20 | Refunds | hourly | rides CALL-11 | `20_refunds` | " |
 | 21 | Actual fees charged | hourly | rides CALL-11 | `21_actual_fees` | " |
 
@@ -2083,6 +2083,37 @@ Three components are ledger-only in this version, by decision:
   calls one `syncSales(scope, window)`; the Finances patch swaps the
   implementation, not the schedule. The hourly window is the last 48 hours
   (overlap on purpose; the upsert is idempotent).
+
+  **Sales scope and onboarding (2026-10-16).** The report is account-wide,
+  so component 19 matches its rows against **every** row in `asins` —
+  active, parked and dead (the old active+parked filter was dropping
+  rows). An ASIN the report names that AF does not have at all is
+  **onboarded**: inserted through the shared insert half of
+  `onboardNewAsins` (`insertNewAsinRows`, tag **`Sales import`** —
+  `lead_source` is user-controlled and stays NULL) BEFORE that chunk's
+  upsert, so its rows land in the same chunk; when the sync ends, ONE
+  Refresh job (daily block included, trigger `onboarding`) is enqueued for
+  all of them. The ledger row carries `onboarded_from_sales` and lists the
+  ASINs under `_onboarded_from_sales`. Per-chunk results (status, orders,
+  days, ASINs, onboarded, earliest/latest `purchase-date` the report
+  actually returned) are the `_chunk_NN` outcomes, with
+  `_earliest_sale_date_returned` / `_latest_sale_date_returned` for the
+  whole run. **A failed chunk fails the component** (a `ComponentError`
+  whose partial result is ledgered), never skipped; a "Date range
+  exceeded" answer is a failure, not an empty chunk. The UTC day boundary
+  of the report request and of `purchase-date` is unchanged — noted for
+  the Finances patch.
+
+  **Sales history backfill.** `POST /api/jobs/backfill-sales {from, to}`
+  (admin only) or `npm run backfill:sales [-- --from … --to …]` (defaults
+  2024-05-01 → today; talks to the database directly, there is no API
+  token for scripts) enqueues ONE manual job with `components: [19]` and
+  `params.sales_window` (migration 054 `jobs.params JSONB`). It serializes
+  behind the hourly passes like any job, chunks 30 days at a time as the
+  hourly sync does, writes only `sales_daily.units_sold` / `revenue` (the
+  refund and fee columns keep their first-insert 0 and are never in the
+  SET list), and shows in the jobs dialog like any other job. No UI
+  button.
 - **17 is derived**: it re-points `primary_sku` from what 15 and 16 wrote
   (inventory bootstrap when NULL; listings latest-live-wins), and reports
   `from_cache` / `bootstrapped_by_inventory` / `repointed_by_listings`.

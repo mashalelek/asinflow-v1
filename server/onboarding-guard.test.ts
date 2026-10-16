@@ -31,11 +31,14 @@ describe("every insert path onboards through onboardNewAsins", () => {
   it("onboarding creates the rows (insertOnly) THEN enqueues ONE refresh job — no inline stage order (scheduler v1)", () => {
     const src = read("routes.ts");
     const fn = src.slice(src.indexOf("async function onboardNewAsins"), src.indexOf("onboardNewAsinsRef = onboardNewAsins"));
-    const insertIdx = fn.indexOf("await writeResult(");
+    const insertIdx = fn.indexOf("await insertNewAsinRows(");
     const enqueueIdx = fn.indexOf("enqueueJob({ trigger: \"onboarding\"");
     expect(insertIdx).toBeGreaterThan(-1);
     expect(enqueueIdx).toBeGreaterThan(insertIdx);      // rows first, then the job
-    expect(fn).toMatch(/input\.leadSource \?\? null, true\)/); // insertOnly = true
+    // the shared insert half (2026-10-16: also used by sales onboarding) writes insertOnly rows
+    const ins = fn.slice(fn.indexOf("async function insertNewAsinRows"));
+    expect(ins).toMatch(/await writeResult\(/);
+    expect(ins).toMatch(/input\.leadSource \?\? null, true\)/); // insertOnly = true
     expect(fn).toMatch(/includeDaily: true/);            // onboarding = a full refresh
     expect(fn).not.toMatch(/runAnalyzeCore\(|refreshPrices\(|runFeesStage\(/);
     expect(fn).not.toMatch(/INSERT INTO refresh_runs/);  // the job ledgers its own components

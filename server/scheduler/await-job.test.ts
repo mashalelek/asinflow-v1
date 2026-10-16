@@ -17,7 +17,7 @@ function fakeJobs(script: Array<(row: any) => void>) {
     if (t.startsWith("INSERT INTO jobs")) {
       const row = {
         id: rows.length + 1, kind: "refresh", trigger: params![0], target: params![1], bulk_list_id: params![2],
-        include_daily: params![3], scope_asins: params![4], components: params![5], requested_by: params![6],
+        include_daily: params![3], scope_asins: params![4], components: params![5], params: params![6] ? JSON.parse(params![6]) : null, requested_by: params![7],
         status: "queued", progress: {}, summary: null, queued_at: new Date(2026, 9, 15, 12, 0, rows.length), started_at: null, finished_at: null, error: null,
       };
       rows.push(row);
@@ -62,7 +62,7 @@ describe("runJobAndWait", () => {
   it("reports the queue position while a pass runs ahead of it", async () => {
     const f = fakeJobs([(r) => { r.status = "done"; }]);
     // a scheduled pass already running
-    await f.query(`INSERT INTO jobs (kind, trigger, target, bulk_list_id, include_daily, scope_asins, components, requested_by) VALUES ('refresh', $1, $2, $3, $4, $5, $6, $7) RETURNING x`, ["scheduled", "main", null, false, null, null, null]);
+    await f.query(`INSERT INTO jobs (kind, trigger, target, bulk_list_id, include_daily, scope_asins, components, requested_by) VALUES ('refresh', $1, $2, $3, $4, $5, $6, $7, $8) RETURNING x`, ["scheduled", "main", null, false, null, null, null, null]);
     f.rows[0].status = "running";
     const seen: string[] = [];
     await runJobAndWait({ trigger: "manual", includeDaily: false, components: [9], scopeAsins: null }, { query: f.query, sleep: f.sleep, onStatus: (s) => seen.push(s) });

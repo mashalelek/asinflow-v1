@@ -53,6 +53,8 @@ export interface JobRow {
    * enqueues {8} (gating) and Push to Aura {9} (PO sheet) for a selection.
    */
   components: number[] | null;
+  /** Per-job parameters components read (migration 054); null = none. e.g. {sales_window: {from, to}}. */
+  params: Record<string, any> | null;
   status: JobStatus;
   progress: JobProgress;
   summary: JobSummary | null;
@@ -74,6 +76,16 @@ export type QueryLike = (sql: string, params?: any[]) => Promise<{ rows: any[]; 
 
 export class CancelledError extends Error {
   constructor() { super("job cancelled"); }
+}
+
+/**
+ * A component failure that still has something to record: the runner writes
+ * `partial` to the ledger row and the job summary before marking the job
+ * failed. The sales component uses it so a chunk that failed after others
+ * succeeded leaves the per-chunk results visible, not just an error string.
+ */
+export class ComponentError extends Error {
+  constructor(message: string, public readonly partial: ComponentResult) { super(message); }
 }
 
 export interface ComponentContext {
