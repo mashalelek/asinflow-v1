@@ -33,8 +33,8 @@ function ctxFor(j: JobRow, inject: Record<string, unknown> = {}) {
 }
 
 const okResult = (over: Partial<SalesSyncResult> = {}): SalesSyncResult => ({
-  daysProcessed: 3, asinsUpdated: 2, totalOrders: 5, onboarded: [], minDate: "2024-05-02", maxDate: "2024-05-29",
-  chunks: [{ start: "2024-05-01", end: "2024-05-30", status: "ok", orders: 5, days: 3, asins: 2, onboarded: [], minDate: "2024-05-02", maxDate: "2024-05-29" }],
+  daysProcessed: 3, asinsUpdated: 2, totalOrders: 5, onboarded: [], invalidAsins: [], minDate: "2024-05-02", maxDate: "2024-05-29",
+  chunks: [{ start: "2024-05-01", end: "2024-05-30", status: "ok", orders: 5, days: 3, asins: 2, onboarded: [], invalidAsins: [], minDate: "2024-05-02", maxDate: "2024-05-29" }],
   ...over,
 });
 
@@ -60,7 +60,7 @@ describe("the sales component", () => {
     const { ctx } = ctxFor(job({ params: { sales_window: { from: "2024-05-01", to: "2024-05-30" } } }), { [ONBOARD_SALES_ASINS]: async () => {} });
     const r = await sales.run(ctx);
     expect(got).toEqual({ s: "2024-05-01", e: "2024-05-30", scope: undefined, hasOnboard: true });
-    expect(r.counts).toEqual({ days: 3, asins: 2, orders: 5, chunks: 1, chunks_failed: 0, onboarded_from_sales: 0 });
+    expect(r.counts).toEqual({ days: 3, asins: 2, orders: 5, chunks: 1, chunks_failed: 0, onboarded_from_sales: 0, invalid_asins_skipped: 0 });
     expect(r.outcomes._window).toBe("2024-05-01..2024-05-30 (params)");
     expect(r.outcomes._earliest_sale_date_returned).toBe("2024-05-02");
     expect(r.outcomes._latest_sale_date_returned).toBe("2024-05-29");
@@ -91,8 +91,8 @@ describe("the sales component", () => {
     const partial = okResult({
       onboarded: ["N1"],
       chunks: [
-        { start: "2024-05-01", end: "2024-05-30", status: "ok", orders: 5, days: 3, asins: 2, onboarded: ["N1"], minDate: "2024-05-02", maxDate: "2024-05-29" },
-        { start: "2024-05-31", end: "2024-06-29", status: "failed", orders: 0, days: 0, asins: 0, onboarded: [], minDate: null, maxDate: null, error: "Report R2 failed: FATAL" },
+        { start: "2024-05-01", end: "2024-05-30", status: "ok", orders: 5, days: 3, asins: 2, onboarded: ["N1"], invalidAsins: [], minDate: "2024-05-02", maxDate: "2024-05-29" },
+        { start: "2024-05-31", end: "2024-06-29", status: "failed", orders: 0, days: 0, asins: 0, onboarded: [], invalidAsins: [], minDate: null, maxDate: null, error: "Report R2 failed: FATAL" },
       ],
     });
     salesDeps.sync = async () => { throw new SalesSyncError("chunk 2/2 failed: Report R2 failed: FATAL", partial); };
@@ -112,6 +112,12 @@ describe("the sales component", () => {
     await sales.run(ctx);
     expect(hadOnboard).toBe(false);
     expect(logs.join("\n")).toMatch(/onboardSalesAsins is not injected/);
+  });
+
+  it("lists malformed ASIN strings the report carried, under invalid_asins_skipped", () => {
+    const r = salesResultToComponent(okResult({ invalidAsins: ["UNKNOW"] }), { start: "a", end: "b", source: "params" });
+    expect(r.counts.invalid_asins_skipped).toBe(1);
+    expect(r.outcomes._invalid_asins_skipped).toBe("UNKNOW");
   });
 
   it("salesResultToComponent: no window_hours when the window came from params", () => {

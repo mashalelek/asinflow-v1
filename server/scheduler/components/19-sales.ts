@@ -47,6 +47,7 @@ export function salesResultToComponent(r: SalesSyncResult, window: { start: stri
     days: r.daysProcessed, asins: r.asinsUpdated, orders: r.totalOrders,
     chunks: r.chunks.length, chunks_failed: r.chunks.filter((c) => c.status === "failed").length,
     onboarded_from_sales: r.onboarded.length,
+    invalid_asins_skipped: r.invalidAsins.length,
   };
   if (window.source === "default") counts.window_hours = SALES_WINDOW_HOURS;
   const outcomes: Record<string, string> = {
@@ -61,6 +62,7 @@ export function salesResultToComponent(r: SalesSyncResult, window: { start: stri
       : `${c.status} · orders ${c.orders} · days ${c.days} · asins ${c.asins} · onboarded ${c.onboarded.length} · returned ${c.minDate ?? "-"}..${c.maxDate ?? "-"}`;
   });
   if (r.onboarded.length > 0) outcomes._onboarded_from_sales = r.onboarded.join(", ");
+  if (r.invalidAsins.length > 0) outcomes._invalid_asins_skipped = r.invalidAsins.join(", ");
   return { counts, outcomes };
 }
 

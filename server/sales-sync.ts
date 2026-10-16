@@ -24,6 +24,8 @@ const MARKETPLACE_ID = "ATVPDKIKX0DER";
 export const salesTiming = { pollMs: 10_000, pollTimeoutMs: 5 * 60_000, chunkDelayMs: 2_000 };
 /** 30-day chunks — the limit the code has always asserted for this report type (the "Date range exceeded" response is the check). */
 export const MAX_RANGE_DAYS = 30;
+/** A well-formed ASIN. The report carries placeholders like "UNKNOW" on some lines; those are never onboarded (2026-10-16). */
+export const ASIN_RE = /^[A-Z0-9]{10}$/;
 
 export interface SalesChunkResult {
   start: string;
@@ -34,6 +36,8 @@ export interface SalesChunkResult {
   asins: number;
   /** ASINs the report named that AF lacked and that were inserted before this chunk's upsert. */
   onboarded: string[];
+  /** Distinct malformed ASIN strings the report carried (e.g. "UNKNOW"); their lines are skipped, never onboarded. */
+  invalidAsins: string[];
   /** Earliest / latest `purchase-date` the report actually returned for this chunk (null when empty). */
   minDate: string | null;
   maxDate: string | null;
@@ -45,6 +49,7 @@ export interface SalesSyncResult {
   asinsUpdated: number;
   totalOrders: number;
   onboarded: string[];
+  invalidAsins: string[];
   chunks: SalesChunkResult[];
   minDate: string | null;
   maxDate: string | null;
@@ -87,14 +92,16 @@ export async function syncSalesData(
   const asinIdMap = new Map<string, string>();
   for (const row of asinRows.rows) asinIdMap.set(String(row.asin), String(row.id));
 
-  const result: SalesSyncResult = { daysProcessed: 0, asinsUpdated: 0, totalOrders: 0, onboarded: [], chunks: [], minDate: null, maxDate: null };
+  const result: SalesSyncResult = { daysProcessed: 0, asinsUpdated: 0, totalOrders: 0, onboarded: [], invalidAsins: [], chunks: [], minDate: null, maxDate: null };
   const allDates = new Set<string>();
   const allAsins = new Set<string>();
   const onboardedAll = new Set<string>();
+  const invalidAll = new Set<string>();
   const finish = () => {
     result.daysProcessed = allDates.size;
     result.asinsUpdated = allAsins.size;
     result.onboarded = Array.from(onboardedAll).sort();
+    result.invalidAsins = Array.from(invalidAll).sort();
     result.minDate = minOf(result.chunks.map((c) => c.minDate));
     result.maxDate = maxOf(result.chunks.map((c) => c.maxDate));
   };
@@ -109,7 +116,7 @@ export async function syncSalesData(
       r.asins.forEach((a) => allAsins.add(a));
       chunk = r.chunk;
     } catch (err: any) {
-      chunk = { start: chunkStart, end: chunkEnd, status: "failed", orders: 0, days: 0, asins: 0, onboarded: [], minDate: null, maxDate: null, error: err?.message ?? String(err) };
+      chunk = { start: chunkStart, end: chunkEnd, status: "failed", orders: 0, days: 0, asins: 0, onboarded: [], invalidAsins: [], minDate: null, maxDate: null, error: err?.message ?? String(err) };
       result.chunks.push(chunk);
       await opts.onChunk?.(chunk, ci, chunks.length);
       finish();
@@ -119,6 +126,7 @@ export async function syncSalesData(
     result.chunks.push(chunk);
     result.totalOrders += chunk.orders;
     for (const a of chunk.onboarded) onboardedAll.add(a);
+    for (const a of chunk.invalidAsins) invalidAll.add(a);
     await opts.onChunk?.(chunk, ci, chunks.length);
     // Small delay between chunks to avoid rate limits
     if (ci < chunks.length - 1) await new Promise((r) => setTimeout(r, salesTiming.chunkDelayMs));
@@ -209,7 +217,7 @@ async function fetchChunk(
   if (rawData.includes("Date range exceeded")) {
     throw new Error(`Amazon refused the range ${startDate}..${endDate}: ${rawData.substring(0, 120).trim()}`);
   }
-  const empty = { chunk: { start: startDate, end: endDate, status: "empty" as const, orders: 0, days: 0, asins: 0, onboarded: [], minDate: null, maxDate: null }, dates: new Set<string>(), asins: new Set<string>() };
+  const empty = { chunk: { start: startDate, end: endDate, status: "empty" as const, orders: 0, days: 0, asins: 0, onboarded: [], invalidAsins: [], minDate: null, maxDate: null }, dates: new Set<string>(), asins: new Set<string>() };
   if (lines.length < 2) {
     log(`Chunk ${startDate}-${endDate}: no data (${rawData.substring(0, 100)})`, "sales-sync");
     return empty;
@@ -223,8 +231,12 @@ async function fetchChunk(
   // so their rows land in this chunk. The insert path adds the rows; the
   // caller enqueues their Refresh job once at the end.
   const onboarded: string[] = [];
+  // Malformed ASIN strings (the report writes placeholders such as "UNKNOW")
+  // are skipped and listed — never onboarded, never written.
+  const invalidAsins = Array.from(new Set(parsed.map((l) => l.asin).filter((a) => !ASIN_RE.test(a)))).sort();
+  if (invalidAsins.length > 0) log(`Chunk ${startDate}-${endDate}: ${invalidAsins.length} malformed ASIN string(s) skipped: ${invalidAsins.slice(0, 10).join(", ")}`, "sales-sync");
   if (onboard) {
-    const unknown = Array.from(new Set(parsed.map((l) => l.asin).filter((a) => a && !asinIdMap.has(a)))).sort();
+    const unknown = Array.from(new Set(parsed.map((l) => l.asin).filter((a) => ASIN_RE.test(a) && !asinIdMap.has(a)))).sort();
     if (unknown.length > 0) {
       await onboard(unknown);
       const added = await query(`SELECT id, asin FROM asins WHERE asin = ANY($1::text[])`, [unknown]);
@@ -242,6 +254,7 @@ async function fetchChunk(
   for (const l of parsed) {
     if (!minDate || l.date < minDate) minDate = l.date;
     if (!maxDate || l.date > maxDate) maxDate = l.date;
+    if (!ASIN_RE.test(l.asin)) continue;
     const asinId = asinIdMap.get(l.asin);
     if (!asinId) continue;
     const key = `${l.asin}|${l.date}`;
@@ -278,7 +291,7 @@ async function fetchChunk(
 
   log(`Chunk ${startDate}-${endDate}: ${totalOrders} orders, ${dateSet.size} days, ${asinSet.size} ASINs, ${onboarded.length} onboarded, returned ${minDate ?? "-"}..${maxDate ?? "-"}`, "sales-sync");
   return {
-    chunk: { start: startDate, end: endDate, status: "ok", orders: totalOrders, days: dateSet.size, asins: asinSet.size, onboarded, minDate, maxDate },
+    chunk: { start: startDate, end: endDate, status: "ok", orders: totalOrders, days: dateSet.size, asins: asinSet.size, onboarded, invalidAsins, minDate, maxDate },
     dates: dateSet, asins: asinSet,
   };
 }
