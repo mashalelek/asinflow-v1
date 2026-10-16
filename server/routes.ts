@@ -7,8 +7,7 @@ import { getPricing, getFees, getCatalogData, estimateFeeFallback, getEligibilit
 import { getInboundHazmat } from "./inbound-hazmat";
 import { verifyPending, resolveSubmissionManual, resolveSubmissionsBulk, dismissFlags, getUnverifiedCount, listNeedsAttention, listInFlight, findRecentPendingIds, countOpenAmong } from "./listing-submissions-repo";
 import { runAuraSyncChain } from "./aura-sync-chain";
-import { runJobAndWait, JobFailedError } from "./scheduler/await-job";
-import { isRunnerActive } from "./scheduler/runner";
+import { probeGatingForAsins } from "./gating-probe";
 import { log } from "./index";
 import { type AsinInput, type AsinResult, type ColumnMapping, extractDomain, cleanBuyLink, getFeePriceForAsin, LEAD_SOURCES, normalizeLeadSource, type LeadSource } from "@shared/schema";
 import { parseMoney } from "@shared/parse-money";
@@ -325,6 +324,7 @@ async function loadSubmitRows(asins: string[]): Promise<SubmitAsinRow[]> {
     `SELECT a.asin,
             a.is_catalog_deleted,
             COALESCE(e.eligibility_status, NULL) AS eligibility_status,
+            a.gating_checked_at,
             COALESCE(a.is_hazmat, false) AS is_hazmat,
             a.category,
             a.weight_lb,
@@ -347,6 +347,7 @@ async function loadSubmitRows(asins: string[]): Promise<SubmitAsinRow[]> {
       asin,
       is_catalog_deleted: r?.is_catalog_deleted ?? false,
       eligibility_status: r?.eligibility_status ?? null,
+      gating_checked_at: r?.gating_checked_at ? new Date(r.gating_checked_at).toISOString() : null,
       is_hazmat: r?.is_hazmat === true,
       cogs: r?.cogs != null ? parseFloat(r.cogs) : null,
       fbaFee: r?.fba_fee != null ? parseFloat(r.fba_fee) : null,
@@ -1846,7 +1847,7 @@ export async function registerRoutes(
   // standard analyze stream (progress + result) for new ASINs, then complete.
   // Manual trigger for the PO → Aura cost-sync chain. Same shared function the
   // aura-sync cron calls (server/aura-sync-chain.ts), so they can't diverge.
-  app.post("/api/sync/aura", async (req: Request, res: Response) => {
+  app.post("/api/sync/aura", async (_req: Request, res: Response) => {
     if (!isDbAvailable()) { res.status(503).json({ message: "Database not available" }); return; }
     const credPath = process.env.GOOGLE_CREDENTIALS_PATH;
     if (!credPath || !fs.existsSync(credPath)) {
@@ -1856,7 +1857,7 @@ export async function registerRoutes(
     if (!process.env.AURA_API_KEY) { res.status(400).json({ message: "AURA_API_KEY not configured" }); return; }
     await respondLongSync(res, async () => {
       try {
-        return await runAuraSyncChain({ requestedBy: req.session?.userId ?? null }); // PO read (hard dep, via the queue) → Aura live push
+        return await runAuraSyncChain(); // PO read (hard dep, inline) → Aura live push
       } catch (err: any) {
         // PO read failure aborts the chain before any Aura push (stale-cost guard).
         throw new Error(`Aura sync chain failed: ${err?.message ?? err}`);
@@ -1864,12 +1865,13 @@ export async function registerRoutes(
     });
   });
 
-  // Push to Aura (selection-aware). Scheduler decision 9 (2026-10-13): reads
-  // the PO sheet for the selection FIRST — a one-component manual job
-  // (component 9) enqueued and awaited inside runAuraSyncChain — then pushes
-  // the same selection. The same hard dependency the full chain has; the
-  // only difference is the scope. No selection = the full sheet and every
-  // Aura-mapped SKU, i.e. the chain. Gated like the chain: the sheet is read.
+  // Push to Aura (selection-aware). Decision 9 (2026-10-13): reads the PO
+  // sheet for the selection FIRST, then pushes the same selection — the same
+  // hard dependency the full chain has; the only difference is the scope.
+  // INLINE since 2026-10-16 (a sheet read + COGS upsert is not SP-API refresh
+  // work and never waits on the scheduled pass): no jobs row. No selection =
+  // the full sheet and every Aura-mapped SKU, i.e. the chain. Gated like the
+  // chain: the sheet is read.
   app.post("/api/sync/aura/push", async (req: Request, res: Response) => {
     if (!isDbAvailable()) { res.status(503).json({ message: "Database not available" }); return; }
     const credPath = process.env.GOOGLE_CREDENTIALS_PATH;
@@ -1878,13 +1880,12 @@ export async function registerRoutes(
     }
     if (!process.env.GOOGLE_SHEET_ID) { res.status(400).json({ message: "GOOGLE_SHEET_ID not configured" }); return; }
     if (!process.env.AURA_API_KEY) { res.status(400).json({ message: "AURA_API_KEY not configured" }); return; }
-    if (!isRunnerActive()) { res.status(503).json({ message: "Job runner not started — the PO sheet read cannot run" }); return; }
     // Optional selection filter (same body shape as /api/sheets/sync).
     const { asins } = (req.body ?? {}) as { asins?: string[] };
     const asinFilter = asins && asins.length > 0 ? new Set(asins) : undefined;
     await respondLongSync(res, async () => {
       try {
-        const r = await runAuraSyncChain({ asinFilter, requestedBy: req.session?.userId ?? null });
+        const r = await runAuraSyncChain({ asinFilter });
         const sk = r.aura.skipped;
         const skipped = sk.unmapped_sku + sk.ambiguous_sku + sk.null_cogs + sk.zero_cost;
         return { pushed: r.aura.pushed, unchanged: r.aura.unchanged, failed: r.aura.failed, skipped, notInAura: r.aura.notInAura, poSync: r.poSync };
@@ -2546,12 +2547,15 @@ export async function registerRoutes(
   // putListingsItem in this round. The live-write endpoint is DA-4.
   //
   // For each input ASIN:
-  //   0. Probe gating LIVE for the selection (scheduler decision 9, 2026-10-13):
-  //      a one-component manual job (component 8, Listings Restrictions) is
-  //      enqueued for exactly these ASINs and awaited, so the pre-filter below
-  //      reads this minute's eligibility_status, not the daily pass's. If a
-  //      scheduled pass is running the job waits behind it — the response is
-  //      an NDJSON stream with heartbeats so the wait survives any proxy.
+  //   0. Probe gating LIVE for the selection (scheduler decision 9, 2026-10-13;
+  //      INLINE since 2026-10-16 — no jobs row): the same probeGatingForAsins
+  //      component 8 runs, same writes to eligibility_status /
+  //      gating_checked_at, same rate limiter. The pre-filter below then reads
+  //      this minute's value, not the daily pass's. An ASIN whose probe fails
+  //      keeps its stored value (fail closed) and is listed in notes.gating.
+  //      Confirmed necessary by the 2026-10-16 test (script/probe-gated-submit.ts):
+  //      putListingsItem ACCEPTS a brand-gated ASIN and creates a SKU — the
+  //      restrictions check is the only thing that says no.
   //   1. Pre-filter against locally-known is_catalog_deleted / eligibility_status
   //      (cheap UX; the orchestrator re-checks via SP-API for anything that passes)
   //   2. For submittable ASINs, load isHazmat + a placeholder price
@@ -2563,27 +2567,16 @@ export async function registerRoutes(
     if (!isDbAvailable()) { res.status(503).json({ message: "Database not available" }); return; }
     const sellerId = process.env.SP_API_SELLER_ID;
     if (!sellerId) { res.status(503).json({ message: "SP_API_SELLER_ID not configured" }); return; }
-    if (!isRunnerActive()) { res.status(503).json({ message: "Job runner not started — the gating probe cannot run" }); return; }
     const { asins } = (req.body ?? {}) as { asins?: string[] };
     if (!asins || !Array.isArray(asins) || asins.length === 0) {
       res.status(400).json({ message: "No ASINs provided" }); return;
     }
 
     await respondLongSync(res, async () => {
-      // Step 0 — gating probe, through the queue (decision 9). A failed or
-      // cancelled probe is the preview's error: never preview on stale gating.
-      let gatingJobId: number;
-      try {
-        const job = await runJobAndWait(
-          { trigger: "manual", includeDaily: false, components: [8], scopeAsins: asins, requestedBy: req.session?.userId ?? null },
-          { onStatus: (st) => log(`Offer-add preview gating probe (${asins.length} ASINs): ${st}`, "offer-add") },
-        );
-        gatingJobId = job.id;
-      } catch (err: any) {
-        const msg = err instanceof JobFailedError ? err.message : `gating probe could not run: ${err?.message ?? err}`;
-        log(`Offer-add preview aborted — ${msg}`, "offer-add");
-        throw new Error(`Gating probe failed — preview not shown: ${msg}`);
-      }
+      // Step 0 — gating probe, inline (decision 9). Same writer as component 8.
+      const gating = await probeGatingForAsins(asins.map((a) => String(a).trim().toUpperCase()), { query: (sql, params) => query(sql, params) });
+      const gatingErrors = Object.fromEntries(Object.entries(gating.outcomes).filter(([, o]) => o.startsWith("error")));
+      log(`Offer-add preview gating probe (${asins.length} ASINs): updated=${gating.counts.updated} yes=${gating.counts.yes} no=${gating.counts.no} flips=${gating.counts.flips} error=${gating.counts.error + gating.counts.missing_row}`, "offer-add");
 
       // PREVIEW uses the SAME submitOfferAddBatch pipeline as live submit,
       // with phase4Mode="preview" so phase 4 assembles the payload but skips
@@ -2612,14 +2605,16 @@ export async function registerRoutes(
         outcome: mapSubmitOutcomeToOfferAddResult(outcome),
       }));
 
+      // Excluded rows carry the stamp so the dialog can say "gated as of …".
+      const stampByAsin = new Map(submitRows.map((r) => [r.asin, r.gating_checked_at ?? null]));
       return {
-        preFilter: { excluded: submitResult.preFilter.excluded },
+        preFilter: { excluded: submitResult.preFilter.excluded.map((e) => ({ ...e, gatingCheckedAt: stampByAsin.get(e.asin) ?? null })) },
         perAsin,
         notes: {
           priceSource: "Resolved via getItemOffers + Rule 1/2 (same path as submit)",
           productNumber: "Real NNN from batch allocator (same path as submit)",
-          gating: `Probed live for the selection (job ${gatingJobId}, component 8)`,
-          gatingJobId,
+          gating: `Probed live for the selection just now (inline, same writer as component 8): ${gating.counts.yes} eligible, ${gating.counts.no} gated, ${gating.counts.error + gating.counts.missing_row} probe error(s) — stored value kept for those`,
+          gatingErrors,
           liveWrites: submitResult.notes.liveWrites,
         },
       };

@@ -17,38 +17,29 @@ const between = (s: string, from: string, to: string) => {
   return s.slice(a, b);
 };
 
-describe("Add to SC preview probes gating live through the queue", () => {
+describe("Add to SC preview probes gating live INLINE (amended 2026-10-16 — no jobs row)", () => {
   const route = () => between(routes(), 'app.post("/api/offer-add/preview"', 'app.post("/api/offer-add/submit"');
 
-  it("enqueues a component-8 job for exactly the request's ASINs and awaits it BEFORE loading submit rows", () => {
+  it("calls the shared writer for exactly the request's ASINs BEFORE loading submit rows", () => {
     const r = route();
-    const probe = r.indexOf("runJobAndWait(");
+    const probe = r.indexOf("await probeGatingForAsins(");
     const rows = r.indexOf("await loadSubmitRows(asins)");
     expect(probe).toBeGreaterThan(-1);
     expect(rows).toBeGreaterThan(probe);
-    const call = r.slice(probe, probe + 300);
-    expect(call).toMatch(/components: \[8\]/);
-    expect(call).toMatch(/scopeAsins: asins/);
-    expect(call).toMatch(/trigger: "manual"/);
-    expect(call).toMatch(/includeDaily: false/);
+    expect(r.slice(probe, probe + 200)).toMatch(/asins\.map\(\(a\) => String\(a\)\.trim\(\)\.toUpperCase\(\)\)/);
   });
 
-  it("a failed probe is the preview's error — no preview on stale gating", () => {
+  it("enqueues nothing and does not gate on the runner — the queue is not involved", () => {
     const r = route();
-    const block = between(r, "runJobAndWait(", "await loadSubmitRows(asins)");
-    expect(block).toMatch(/throw new Error\(`Gating probe failed — preview not shown/);
-    expect(block).not.toMatch(/\.catch\(\(\) => \{\}\)/);
+    expect(r).not.toMatch(/runJobAndWait|enqueueJob|components: \[8\]|isRunnerActive/);
+    expect(routes()).not.toMatch(/components: \[8\]/);
   });
 
-  it("streams with heartbeats so a wait behind a running pass survives the proxy", () => {
+  it("still streams with heartbeats and reports the probe in notes.gating", () => {
     const r = route();
     expect(r).toMatch(/await respondLongSync\(res, async \(\) => \{/);
-    expect(r).not.toMatch(/res\.json\(\{\s*preFilter/);
-    expect(r).toMatch(/gatingJobId/);
-  });
-
-  it("refuses when no runner is started — a job nobody runs would wait an hour", () => {
-    expect(route()).toMatch(/if \(!isRunnerActive\(\)\)[^\n]*503/);
+    expect(r).toMatch(/notes: \{[\s\S]*gating: `Probed live for the selection just now/);
+    expect(r).toMatch(/gatingErrors/);
   });
 
   it("does not call getEligibility itself", () => {
@@ -56,22 +47,21 @@ describe("Add to SC preview probes gating live through the queue", () => {
   });
 });
 
-describe("Push to Aura reads the PO sheet for its selection first", () => {
+describe("Push to Aura reads the PO sheet for its selection first — INLINE, off the queue (2026-10-16)", () => {
   const route = () => between(routes(), 'app.post("/api/sync/aura/push"', 'app.get("/api/export/velocity-upload"');
 
-  it("goes through runAuraSyncChain with the selection — no direct pushAuraCosts", () => {
+  it("goes through runAuraSyncChain with the selection — no direct pushAuraCosts, no job", () => {
     const r = route();
-    expect(r).toMatch(/runAuraSyncChain\(\{ asinFilter, requestedBy/);
-    expect(r).not.toMatch(/pushAuraCosts\(/);
-    expect(routes()).not.toMatch(/import \{ pushAuraCosts \}/);
+    expect(r).toMatch(/runAuraSyncChain\(\{ asinFilter \}\)/);
+    expect(r).not.toMatch(/pushAuraCosts\(|runJobAndWait|enqueueJob|isRunnerActive/);
+    expect(routes()).not.toMatch(/import \{ pushAuraCosts \}|runJobAndWait|components: \[9\]/);
   });
 
-  it("is gated like the chain (sheet credentials, sheet id, Aura key) and on the runner", () => {
+  it("is gated like the chain (sheet credentials, sheet id, Aura key)", () => {
     const r = route();
     expect(r).toMatch(/GOOGLE_CREDENTIALS_PATH/);
     expect(r).toMatch(/GOOGLE_SHEET_ID/);
     expect(r).toMatch(/AURA_API_KEY/);
-    expect(r).toMatch(/isRunnerActive\(\)/);
   });
 
   it("keeps the response shape the toolbar toast reads, plus the PO read result", () => {
@@ -79,9 +69,9 @@ describe("Push to Aura reads the PO sheet for its selection first", () => {
     expect(r).toMatch(/return \{ pushed: r\.aura\.pushed, unchanged: r\.aura\.unchanged, failed: r\.aura\.failed, skipped, notInAura: r\.aura\.notInAura, poSync: r\.poSync \}/);
   });
 
-  it("the full chain route passes who asked", () => {
+  it("the full chain route is the same function without a selection", () => {
     const r = between(routes(), 'app.post("/api/sync/aura"', 'app.post("/api/sync/aura/push"');
-    expect(r).toMatch(/runAuraSyncChain\(\{ requestedBy: req\.session\?\.userId \?\? null \}\)/);
+    expect(r).toMatch(/runAuraSyncChain\(\)/);
   });
 });
 
@@ -107,6 +97,6 @@ describe("the client", () => {
     const home = readFileSync(join(__dirname, "..", "client", "src", "pages", "home.tsx"), "utf8");
     expect(home).toMatch(/fetchLongSync\("\/api\/offer-add\/preview", \{ asins: asinsToPreview \}\)/);
     const dialog = readFileSync(join(__dirname, "..", "client", "src", "components", "offer-add-preview-dialog.tsx"), "utf8");
-    expect(dialog).toMatch(/Probing gating live/);
+    expect(dialog).toMatch(/Checking gating live/);
   });
 });

@@ -111,6 +111,8 @@ export interface SubmitAsinRow {
   // Pre-filter inputs
   is_catalog_deleted: boolean;
   eligibility_status: string | null;
+  /** When eligibility_status was last probed (ISO); the preview shows "gated as of …". Optional: tests and older callers omit it. */
+  gating_checked_at?: string | null;
   // Still consumed by the PRICE resolver (hazmat surcharge). NOT used for the
   // offer-add DG attribute anymore — that is LIVE-derived in offerAddForAsin,
   // never the stored column. (Switching the surcharge to is_dangerous_good is

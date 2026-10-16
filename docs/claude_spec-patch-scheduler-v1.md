@@ -21,11 +21,10 @@ schedules. Prerequisite for `ENABLE_CRONS=true` on Render.*
 > `jobs.components INTEGER[]`** so a decision-9 job can name the one
 > component it runs, and the preview route streams NDJSON (heartbeats)
 > because the job may wait behind a running pass; the preview and push
-> routes refuse with 503 when no runner is started. The Aura **chain**
-> reads the sheet through the queue too (one function, with or without a
-> selection). Sync POs (`POST /api/sheets/sync`) still calls
-> `runSheetsSync` directly — out of this patch's text; candidate for a
-> one-component job like decision 9.
+> routes refuse with 503 when no runner is started. *Superseded 2026-10-16:*
+> both decision-9 actions now run inline (see the amended Runner bullet);
+> Sync POs stays a direct call by rule — only SP-API refresh work goes on
+> the queue.
 
 ## Why
 
@@ -220,6 +219,13 @@ absence.
   manual job for their selection — components 8 and 9 respectively —
   and wait for it before proceeding. Both get a hard stop in the
   implementation (production writes).
+  *Amended 2026-10-16 (Maria: manual actions never wait on the scheduled
+  pass):* Add to SC runs the probe **inline** (same `probeGatingForAsins`
+  writer as component 8, no jobs row) after the gated-submit test showed
+  `putListingsItem` accepts a gated ASIN (SPEC §18). Push to Aura reads
+  the PO sheet **inline** too (`runSheetsSync` scoped — a sheet read, not
+  SP-API refresh work). `await-job.ts` is deleted; `jobs.components`
+  stays for the sales backfill.
 
 ## Schedule
 

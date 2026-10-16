@@ -1,15 +1,17 @@
-// Chained job: PO sheet read → Aura cost push (SPEC §11 "Aura cost sync";
-// scheduler patch decision 9). One shared function for the full chain and
-// the selection-scoped Push to Aura button, so they can never diverge.
+// Chained action: PO sheet read → Aura cost push (SPEC §11 "Aura cost sync").
+// One shared function for the full chain and the selection-scoped Push to
+// Aura button, so they can never diverge.
 //
 // HARD DEPENDENCY: the Aura push runs ONLY after a successful PO sheet read
-// for the same selection. The read is component 9 of the refresh job,
-// enqueued here as a one-component manual job and awaited (nothing reads
-// the sheet outside the queue). If that job fails, we log and stop — pushing
-// stale AF costs that we believe are fresh would be worse than not pushing.
+// for the same selection. The read is runSheetsSync (component 9's logic,
+// scoped) run INLINE here — a Google Sheet read + COGS upsert, no SP-API, so
+// it is not refresh work and does not go on the queue (Maria, 2026-10-16:
+// manual actions never wait on the scheduled pass). If the read fails, we
+// log and stop — pushing stale AF costs that we believe are fresh would be
+// worse than not pushing.
 
 import { pushAuraCosts } from "./aura-cost-sync";
-import { runJobAndWait } from "./scheduler/await-job";
+import { getRunSheetsSync } from "./routes";
 import { log } from "./index";
 
 export interface PoSheetReadResult {
@@ -17,8 +19,6 @@ export interface PoSheetReadResult {
   skipped: number;
   errors: number;
   cleared: number;
-  /** The jobs.id of the component-9 job that read the sheet, when the queue did it. */
-  jobId: number | null;
 }
 
 export interface AuraSyncChainSummary {
@@ -35,25 +35,19 @@ export interface AuraSyncChainSummary {
 export interface AuraSyncChainOptions {
   /** The selection; undefined = the full sheet and every Aura-mapped SKU. */
   asinFilter?: Set<string>;
-  /** Who enqueued the sheet-read job (jobs.requested_by). */
-  requestedBy?: number | null;
-  /** Injected for tests; the default enqueues component 9 for the selection and waits. */
+  /** Injected for tests; the default is runSheetsSync (the /api/sheets/sync implementation) scoped to the selection. */
   readPoSheet?: (filter: Set<string> | undefined) => Promise<PoSheetReadResult>;
   push?: typeof pushAuraCosts;
 }
 
-/** Default PO sheet read: a one-component (9) manual job for the selection, awaited. */
-export async function readPoSheetViaQueue(filter: Set<string> | undefined, requestedBy: number | null = null): Promise<PoSheetReadResult> {
-  const job = await runJobAndWait(
-    { trigger: "manual", includeDaily: false, components: [9], scopeAsins: filter ? Array.from(filter) : null, requestedBy },
-    { onStatus: (s) => log(`PO sheet read (job): ${s}`, "aura-sync") },
-  );
-  const c = job.summary?.components?.["09_po_sheet"] ?? {};
-  return { updated: c.updated ?? 0, skipped: c.skipped ?? 0, errors: c.errors ?? 0, cleared: c.cleared ?? 0, jobId: job.id };
+/** Default PO sheet read: runSheetsSync inline, scoped to the selection (undefined = full sheet). */
+export async function readPoSheetInline(filter: Set<string> | undefined): Promise<PoSheetReadResult> {
+  const r = await getRunSheetsSync()(filter);
+  return { updated: r.updated, skipped: r.skipped, errors: r.errors.length, cleared: r.cleared };
 }
 
 export async function runAuraSyncChain(opts: AuraSyncChainOptions = {}): Promise<AuraSyncChainSummary> {
-  const readPoSheet = opts.readPoSheet ?? ((f) => readPoSheetViaQueue(f, opts.requestedBy ?? null));
+  const readPoSheet = opts.readPoSheet ?? readPoSheetInline;
   const push = opts.push ?? pushAuraCosts;
   const scopeLabel = opts.asinFilter ? `${opts.asinFilter.size} selected` : "full";
 
@@ -88,7 +82,7 @@ export async function runAuraSyncChain(opts: AuraSyncChainOptions = {}): Promise
 
   // (d) One-line summary, same style as the other sync jobs.
   log(
-    `Aura sync chain complete (${scopeLabel}): PO rows updated ${po.updated}/skipped ${po.skipped}/errors ${po.errors}${po.jobId ? ` (job ${po.jobId})` : ""} | ` +
+    `Aura sync chain complete (${scopeLabel}): PO rows updated ${po.updated}/skipped ${po.skipped}/errors ${po.errors} | ` +
     `Aura pushed ${r.pushed}, unchanged ${pv.UNCHANGED}, failed ${r.failed}, ` +
     `skip[unmapped ${summary.aura.skipped.unmapped_sku}, ambiguous ${summary.aura.skipped.ambiguous_sku}, ` +
     `null_cogs ${summary.aura.skipped.null_cogs}, zero_cost ${summary.aura.skipped.zero_cost}]` +

@@ -30,8 +30,6 @@ describe("toolbar labels", () => {
     expect(jobKindLabel({ ...base, include_daily: false, trigger: "scheduled" })).toBe("scheduled (hourly)");
     expect(jobKindLabel({ ...base, components: [19], params: { sales_window: { from: "2024-05-01", to: "2026-10-16" } } })).toBe("manual · sales backfill");
     expect(jobKindLabel({ ...base, components: [19], include_daily: false })).toBe("manual · sales"); // no window = a plain sales job
-    expect(jobKindLabel({ ...base, components: [8], include_daily: false })).toBe("manual · gating");   // Add to SC
-    expect(jobKindLabel({ ...base, components: [9], include_daily: false })).toBe("manual · PO sheet"); // Push to Aura
     expect(jobKindLabel({ ...base, components: [], include_daily: false })).toBe("manual (hourly)");   // empty list = full pass
   });
   it("queued: shows the queue position", () => {

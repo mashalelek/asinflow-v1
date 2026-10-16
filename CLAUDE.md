@@ -298,10 +298,17 @@ thin enqueuers (202 + the job) and are then deleted; nothing in the client
 calls them (`runRefreshJob` in `server/refresh-job.ts` has no callers
 either and goes with them). Onboarding (CSV upload, sourcing sheet,
 extension, SC discovery, Bulk Calc promote) inserts rows and enqueues one
-job; Bulk Calc Refresh enqueues a `target: 'bulk'` job; Add to SC and
-Push to Aura enqueue one-component jobs (8 / 9) for their selection and
-wait (`jobs.components`, migration 053). **Nothing refreshes data outside
-the queue** — a new sync must be a component, not a route.
+job; Bulk Calc Refresh enqueues a `target: 'bulk'` job. **Manual actions
+never wait on the scheduled pass (2026-10-16): only SP-API refresh work
+goes on the queue.** Add to SC checks gating live INLINE through
+`server/gating-probe.ts` — the same writer component 8 uses — with no jobs
+row (decision 9, confirmed by test: `putListingsItem` accepts a gated
+ASIN). Push to Aura reads the PO sheet inline (`runSheetsSync`, scoped)
+then pushes. Sync POs, Export SB COGS, Update COGS in SC, Verify now,
+Recheck now, Park/Unpark/Mark dead/Revive stay direct calls; Sync Sourcing
+and Upload File keep their inline sheet/CSV step and only the onboarding
+Refresh they spawn is a job. `jobs.components` (migration 053) remains for
+subset jobs such as the sales backfill.
 
 **Schedule:** `server/scheduler/schedule.ts`, node-cron with
 `timezone: 'America/New_York'`: `0 0 * * *` (daily block) and

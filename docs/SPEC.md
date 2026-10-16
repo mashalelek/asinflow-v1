@@ -2190,18 +2190,27 @@ is set — the runner is always on; only the **schedule** is gated.
   whether the job came from the schedule or the button — there is no
   second entry point, so the old cron divergence cannot recur. The SC-only
   SKU discovery is component 1.
-- **Add to SC** and **Push to Aura** (decision 9, commit 4) each enqueue a
-  one-component manual job for their selection — components 8 and 9
-  respectively — and wait for it (`server/scheduler/await-job.ts`: poll,
-  fail closed on a failed or cancelled job, cancel after an hour).
-  `jobs.components INTEGER[]` (migration 053) names the components such a
-  job runs; NULL = the whole sequence. The offer-add preview reads the
-  `eligibility_status` the probe just wrote — the daily value is not
-  trusted — and streams NDJSON with heartbeats because the job may queue
-  behind a running pass; a failed probe is the preview's error. Push to
-  Aura reads the PO sheet for the selection first and then pushes the same
-  selection; the full chain (`POST /api/sync/aura`) is the same function
-  without a selection, and reads the sheet through the queue too.
+- **Add to SC** (decision 9) checks gating live for its selection
+  **inline** (2026-10-16): the preview route calls `probeGatingForAsins`
+  (`server/gating-probe.ts`, the one writer of `eligibility_status` /
+  `gating_checked_at`, which component 8 also uses) for the selected
+  ASINs, then pre-filters on the value just written — no jobs row, no
+  wait behind a running pass. Confirmed necessary by the 2026-10-16 test
+  (§18): `putListingsItem` accepts a gated ASIN. **Push to Aura**
+  (decision 9) reads the PO sheet for its selection first and then pushes
+  the same selection — **inline** (2026-10-16): `runSheetsSync` scoped to
+  the selection, a Google Sheet read + COGS upsert with no SP-API call, is
+  not refresh work and never waits on the scheduled pass; no jobs row. The
+  full chain (`POST /api/sync/aura`) is the same function without a
+  selection. `jobs.components INTEGER[]` (migration 053) stays for jobs
+  that run a subset of the sequence — the sales history backfill uses it.
+
+  **Rule (Maria, 2026-10-16): manual actions never wait on the scheduled
+  pass. Only SP-API refresh work goes on the queue.** Sync POs, Export SB
+  COGS, Update COGS in SC, Push to Aura, Verify now, Recheck now,
+  Park/Unpark/Mark dead/Revive stay direct calls. Sync Sourcing and Upload
+  File keep their inline sheet/CSV step; only the onboarding Refresh they
+  spawn is a queue job.
 
 #### Component details that carry over
 
@@ -2357,7 +2366,7 @@ a four-hour window.
 The three old cron files (`refresh-cron.ts`, `sourcing-sync-cron.ts`,
 `aura-sync-cron.ts`) are deleted (commit 5). **Sync Sourcing** and the
 **Aura chain** are on-demand (sheet decisions) and keep their buttons;
-the Aura chain's PO-sheet read goes through the queue (decision 9).
+the Aura chain's PO-sheet read runs inline, off the queue (2026-10-16).
 Scheduled passes are still never load-bearing for correctness (§14
 "Manual-trigger completeness"): the Refresh button converges everything
 on its own.
@@ -2505,8 +2514,8 @@ that writes it:
 | Fee triple, `fee_source` | component 13 |
 | Catalog data (title, brand, category, dimensions, weight, image), BSR + category, `is_meltable`, `is_dangerous_good`, `is_catalog_deleted` | components 2–6 (daily block); the onboarding INSERT seeds nothing Amazon-side |
 | `is_hazmat`, `hazmat_checked_at` | component 7 — successful probe only |
-| `eligibility_status`, `gating_checked_at` | component 8 — successful probe only; also the Add to SC gating job (decision 9) |
-| `ordered_qty`, `actual_cogs`, `cogs_source='po_sheet'` | component 9 (`runSheetsSync`); also the Push to Aura PO-sheet job (decision 9) |
+| `eligibility_status`, `gating_checked_at` | `probeGatingForAsins` (`server/gating-probe.ts`) — successful probe only; called by component 8 and, inline, by the Add to SC preview (decision 9) |
+| `ordered_qty`, `actual_cogs`, `cogs_source='po_sheet'` | `runSheetsSync` — component 9 on a scheduled pass; Sync POs and Push to Aura call it inline (decision 9, off the queue 2026-10-16) |
 | Inventory snapshot, `asin_skus` recording | component 15 |
 | `has_live_offer`, `has_buyable_offer`, `current_issues` + stamps | component 16 through the §18 A2 primitive (also the §19 ladder / verdicts) |
 | `primary_sku`, `asin_skus.is_primary` | component 17 (bootstrap / re-point); the Add-Offer path on creation (§18) |
@@ -2521,7 +2530,7 @@ that writes it:
 | `promo_notes` | Manual edit / Sourcing sync / main CSV upload (2026-09-27) — all three write the new-ASIN INSERT branch only; never rewritten on re-sync/re-analyze/re-upload, so manual edits are never overwritten |
 | `is_wholesale`, `is_oa` | Manual edit |
 | `status` (active/parked/dead — replaced `is_active` 2026-09-07, migration 033) | Manual Park/Unpark/Mark-dead/Revive; Sourcing sync writes `parked`+`discontinued` on freshly-inserted discontinued rows only; the prices stage's `invalid_asin` outcome and the catalog-404 signal (DA-2) write `dead` with their reasons |
-| Aura listing cost (external, not an AF column) | Aura cost sync path (§11) — reads `asin_estimates` after a component-9 job for the selection (decision 9), writes only to Aura |
+| Aura listing cost (external, not an AF column) | Aura cost sync path (§11) — reads `asin_estimates` after an inline PO-sheet read for the selection (decision 9), writes only to Aura |
 
 When a code path needs to touch a field outside its ownership, that's a red
 flag. Either the architecture is wrong, or the workflow is misnamed.
@@ -3484,7 +3493,25 @@ live write to Seller Central:
 1. User selects ASINs → **Add to SC** (selection-aware), or per-row **+**.
 2. Per ASIN, AF resolves: SKU (reuse or generate), price, full payload.
    Gated, dead, and `legend_pending` ASINs are surfaced and excluded /
-   gated for approval.
+   gated for approval. **Gating is checked LIVE for the selection first**
+   (scheduler decision 9; inline since 2026-10-16 — `probeGatingForAsins`,
+   the same writer component 8 uses, same rate limiter, no jobs row): the
+   preview reads the `eligibility_status` written seconds ago and shows
+   "Gated as of <gating_checked_at>". A probe that fails keeps the stored
+   value and is listed in the preview notes.
+
+   **Why the live check stays — tested 2026-10-16** (`script/probe-gated-submit.ts`,
+   one-off diagnostic): B0DK7YJCFF, stored `eligibility_status = 'no'`
+   (Listings Restrictions, 2026-10-12), submitted born-closed under
+   `ZZTEST-GATED-B0DK7YJCFF-001`. `putListingsItem` answered **2xx,
+   `status: ACCEPTED`, submissionId `3004518a632045139a5a29acd841eef3`,
+   `issues: []`**. `getListingsItem` at T+10 s, T+60 s and T+5 min: the SKU
+   existed (200, `summaries: []` — an A1 shell), the only issue an `18448`
+   WARNING about a missing `animal_theme`; no approval or restriction code
+   ever appeared. The shell was deleted with `deleteListingsItem`
+   (ACCEPTED). So Amazon's write path does not refuse a gated ASIN at
+   submit time; the restrictions check is the only thing that says no, and
+   a stale daily value would turn into a shell SKU per gated ASIN.
 3. Dry-run preview renders SKU + price + payload per ASIN. The preview must
    clearly show "reusing existing SKU X" vs "generating new SKU Y" — since
    there is no ledger, the preview is the only check that the right SKU

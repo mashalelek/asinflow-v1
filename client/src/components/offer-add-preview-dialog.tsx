@@ -69,7 +69,7 @@ export type OfferAddOutcome =
 
 export interface PreviewResponse {
   preFilter: {
-    excluded: Array<{ asin: string; reason: "catalog_deleted" | "gated" | "not_checked" }>;
+    excluded: Array<{ asin: string; reason: "catalog_deleted" | "gated" | "not_checked"; gatingCheckedAt?: string | null }>;
   };
   perAsin: Array<{ asin: string; outcome: OfferAddOutcome }>;
   notes: {
@@ -238,7 +238,7 @@ export function OfferAddPreviewDialog({
           <DialogTitle>Add to Seller Central — Preview</DialogTitle>
           <DialogDescription>
             {loading
-              ? "Probing gating live, then resolving SKUs and assembling payloads…"
+              ? "Checking gating live for the selection, then resolving SKUs and assembling payloads…"
               : errorMessage
                 ? `Error: ${errorMessage}`
                 : data
@@ -249,7 +249,7 @@ export function OfferAddPreviewDialog({
 
         {loading && (
           <div className="text-sm text-muted-foreground py-8 text-center">
-            Probing gating for the selection (a refresh job — waits for any running pass), then catalog + listings checks per ASIN…
+            Checking gating for the selection (Listings Restrictions, inline), then catalog + listings checks per ASIN…
           </div>
         )}
 
@@ -264,6 +264,9 @@ export function OfferAddPreviewDialog({
                     <Badge variant="destructive" className="text-xs">
                       {e.reason === "catalog_deleted" ? "Catalog deleted" : e.reason === "gated" ? "Gated" : "Not analyzed yet"}
                     </Badge>
+                    {e.reason === "gated" && (
+                      <span className="text-xs text-muted-foreground">as of {e.gatingCheckedAt ? new Date(e.gatingCheckedAt).toLocaleString() : "unknown"}</span>
+                    )}
                   </Row>
                 ))}
               </Section>
