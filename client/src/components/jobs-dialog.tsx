@@ -11,7 +11,7 @@ import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { StageResultsList } from "@/components/stage-results";
 import {
-  listJobs, getJob, cancelJob, formatDuration, groupFlips, failedAsinsFromRuns, componentLabel,
+  listJobs, getJob, cancelJob, formatDuration, groupFlips, failedAsinsFromRuns, componentLabel, jobKindLabel, progressText,
   FOCUS_ASIN_EVENT, type Job, type ComponentRun, type FlipGroups,
 } from "@/lib/jobs-api";
 
@@ -120,13 +120,13 @@ export function JobsDialog({ open, onOpenChange, onRetry, initialJobId }: {
                   <button type="button" className="w-full text-left flex items-center gap-3" onClick={() => setExpanded(isOpen ? null : j.id)}>
                     <span className="font-mono w-10 text-muted-foreground">#{j.id}</span>
                     <Badge variant={statusVariant(j.status)} className="w-20 justify-center">{j.status}</Badge>
-                    <span className="w-24">{j.trigger}{j.include_daily ? "" : " (hourly)"}</span>
+                    <span className="w-40">{jobKindLabel(j)}</span>
                     <span className="w-28">{(j.summary?.asins ?? j.scope_asins?.length ?? (j.scope_asins ? 0 : "all"))} ASINs</span>
                     <span className="w-32 text-muted-foreground">{fmt(j.started_at ?? j.queued_at)}</span>
                     <span className="w-24">{durationOf(j)}</span>
                     {flipCount > 0 && <span className="text-amber-600">{flipCount} change{flipCount === 1 ? "" : "s"}</span>}
                     {j.status === "running" && j.progress?.component != null && (
-                      <span className="text-muted-foreground">{componentLabel(j.progress.component)} {j.progress.position ?? 0}/{j.progress.total ?? "?"}</span>
+                      <span className="text-muted-foreground">{componentLabel(j.progress.component)} {progressText(j.progress) || `${j.progress.position ?? 0}/${j.progress.total ?? "?"}`}</span>
                     )}
                     {j.error && <span className="text-destructive truncate">{j.error}</span>}
                   </button>

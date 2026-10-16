@@ -18,6 +18,8 @@ export interface JobProgress {
   /** 1-based position of the cursor within the job scope, and the scope size — for the button label. */
   position?: number;
   total?: number;
+  /** What position/total count when not ASINs — "chunk" for the sales backfill (2026-10-16). */
+  unit?: string;
   /** Component numbers completed in this job. */
   done: number[];
 }
@@ -109,6 +111,11 @@ export interface ComponentContext {
    * components at each batch boundary.
    */
   checkpoint: (lastAsin: string | null) => Promise<void>;
+  /**
+   * Progress in a unit other than ASINs (the sales backfill reports
+   * "chunk 3/30"). Writes progress; does not check for cancel.
+   */
+  setProgress: (position: number, total: number, unit: string) => Promise<void>;
   /** Shared per-job cache so riders reuse one API response (catalog, prices, inventory, listings). */
   cache: Map<string, unknown>;
 }

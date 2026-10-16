@@ -117,6 +117,19 @@ describe("runJob", () => {
     expect(s.stoppedAt).toBe(19);
   });
 
+  it("ctx.setProgress writes position/total/unit; the next component starts without a unit (2026-10-16)", async () => {
+    const comps = [
+      stub(19, "hourly", "account", async (ctx) => { await ctx.setProgress(3, 30, "chunk"); return { counts: {}, outcomes: {} }; }),
+      stub(20, "hourly", "account", async () => ({ counts: {}, outcomes: {} })),
+    ];
+    const db = makeDb({ scope: ["A1"], job: { include_daily: false } });
+    await runJob(db.job, { query: db.query, sellerId: "S", components: comps, now: () => 0 });
+    const withUnit = db.progressWrites.find((p) => p.unit === "chunk");
+    expect(withUnit).toMatchObject({ component: 19, position: 3, total: 30, unit: "chunk" });
+    const next = db.progressWrites.find((p) => p.component === 20);
+    expect(next.unit).toBeUndefined();
+  });
+
   it("skips the daily block when include_daily is false", async () => {
     const ran: number[] = [];
     const comps = [stub(1, "hourly", "derived", async () => { ran.push(1); return { counts: {}, outcomes: {} }; }), stub(2, "daily", "derived", async () => { ran.push(2); return { counts: {}, outcomes: {} }; }), stub(9, "hourly", "derived", async () => { ran.push(9); return { counts: {}, outcomes: {} }; })];

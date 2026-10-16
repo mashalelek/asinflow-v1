@@ -13,7 +13,7 @@
 // upsert, and ONE Refresh job scoped to all of them is enqueued at the end.
 // Per-chunk results go in the outcomes under `_chunk …` keys; a failed chunk
 // fails the component with the chunks so far recorded (ComponentError).
-import { syncSalesData, SalesSyncError, type SalesSyncResult, type SalesSyncOptions } from "../../sales-sync";
+import { syncSalesData, buildDateChunks, MAX_RANGE_DAYS, SalesSyncError, type SalesSyncResult, type SalesSyncOptions } from "../../sales-sync";
 import { enqueueJob } from "../jobs-repo";
 import { ymdLocal } from "./shared";
 import { ComponentError, type ComponentDef, type ComponentContext, type ComponentResult } from "../types";
@@ -74,6 +74,10 @@ export const sales: ComponentDef = {
     const onboard = ctx.cache.get(ONBOARD_SALES_ASINS) as ((asins: string[]) => Promise<void>) | undefined;
     if (!onboard) ctx.log("onboardSalesAsins is not injected — ASINs the report names that AF lacks will be skipped this run");
     ctx.log(`window ${window.start}..${window.end} (${window.source})`);
+    // A backfill (window from params) reports progress in chunks — "sales
+    // chunk 3/30" on the toolbar and in the jobs dialog — not in ASINs.
+    const chunked = window.source === "params";
+    if (chunked) await ctx.setProgress(0, buildDateChunks(window.start, window.end, MAX_RANGE_DAYS).length, "chunk");
 
     let r: SalesSyncResult;
     try {
@@ -81,7 +85,10 @@ export const sales: ComponentDef = {
       // every row in asins receives rows.
       r = await syncSales(undefined, window, {
         onboard,
-        onChunk: (c, i, n) => ctx.log(`chunk ${i + 1}/${n} ${c.start}..${c.end}: ${c.status}${c.status === "failed" ? ` — ${c.error}` : ` orders=${c.orders} days=${c.days} asins=${c.asins} onboarded=${c.onboarded.length} returned=${c.minDate ?? "-"}..${c.maxDate ?? "-"}`}`),
+        onChunk: async (c, i, n) => {
+          ctx.log(`chunk ${i + 1}/${n} ${c.start}..${c.end}: ${c.status}${c.status === "failed" ? ` — ${c.error}` : ` orders=${c.orders} days=${c.days} asins=${c.asins} onboarded=${c.onboarded.length} returned=${c.minDate ?? "-"}..${c.maxDate ?? "-"}`}`);
+          if (chunked) await ctx.setProgress(i + 1, n, "chunk");
+        },
       });
     } catch (err: any) {
       if (err instanceof SalesSyncError) {

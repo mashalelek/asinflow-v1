@@ -25,8 +25,10 @@ export interface Job {
   scope_asins: string[] | null;
   /** Explicit component list (decision 9's gating / PO-sheet jobs); null = the whole sequence. */
   components: number[] | null;
+  /** Per-job parameters (migration 054), e.g. { sales_window: { from, to } } for the backfill. */
+  params: Record<string, any> | null;
   status: JobStatus;
-  progress: { component?: number; asin_cursor?: string | null; position?: number; total?: number; done: number[] };
+  progress: { component?: number; asin_cursor?: string | null; position?: number; total?: number; unit?: string; done: number[] };
   summary: JobSummary | null;
   requested_by: number | null;
   queued_at: string;
@@ -59,12 +61,35 @@ export function componentLabel(n: number | undefined): string {
   return n == null ? "" : (COMPONENT_LABELS[n] ?? `component ${n}`);
 }
 
-/** Toolbar label while a job runs: "Refresh · prices 840/2453". */
+/** "840/2453", or "chunk 3/30" when the component reports another unit (sales backfill). */
+export function progressText(p: Job["progress"] | undefined): string {
+  if (!p || p.position == null || !p.total) return "";
+  return `${p.unit ? `${p.unit} ` : ""}${p.position}/${p.total}`;
+}
+
+/** Toolbar label while a job runs: "Refresh · prices 840/2453", "Refresh · sales chunk 3/30". */
 export function runningLabel(job: Job): string {
   const p = job.progress ?? { done: [] };
   const name = componentLabel(p.component);
-  const pos = p.position != null && p.total ? ` ${p.position}/${p.total}` : "";
-  return `Refresh · ${name || "starting"}${pos}`;
+  const pos = progressText(p);
+  return `Refresh · ${name || "starting"}${pos ? ` ${pos}` : ""}`;
+}
+
+/** The name of a one-component job's component, with the backfill called out. */
+export function subsetComponentName(job: Job): string {
+  const comps = job.components ?? [];
+  return comps.map((n) => (n === 19 && job.params?.sales_window ? "sales backfill" : componentLabel(n))).join(" + ");
+}
+
+/**
+ * Jobs-dialog kind label (2026-10-16): a full pass is "<trigger> (hourly)"
+ * or "<trigger> (daily)"; a job that runs a subset of the components
+ * (backfill, Add to SC, Push to Aura) is "<trigger> · <component name>"
+ * with no suffix — "manual · sales backfill", "manual · gating".
+ */
+export function jobKindLabel(job: Job): string {
+  if (job.components && job.components.length > 0) return `${job.trigger} · ${subsetComponentName(job)}`;
+  return `${job.trigger} (${job.include_daily ? "daily" : "hourly"})`;
 }
 
 /** Toolbar label for a job of ours that is waiting behind others. */

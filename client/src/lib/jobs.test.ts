@@ -2,7 +2,7 @@ import { describe, it, expect, vi } from "vitest";
 import { readFileSync } from "fs";
 import { join } from "path";
 import {
-  runningLabel, queuedLabel, completionText, groupFlips, failedAsinsFromRuns, formatDuration,
+  runningLabel, queuedLabel, completionText, groupFlips, failedAsinsFromRuns, formatDuration, jobKindLabel,
   enqueueRefresh, type Job, type ComponentRun,
 } from "./jobs-api";
 
@@ -11,7 +11,7 @@ import {
 
 const base: Job = {
   id: 7, kind: "refresh", trigger: "manual", target: "main", bulk_list_id: null, include_daily: true,
-  scope_asins: ["A1", "A2", "A3"], components: null, status: "running", progress: { done: [1, 9], component: 10, asin_cursor: "A2", position: 840, total: 2453 },
+  scope_asins: ["A1", "A2", "A3"], components: null, params: null, status: "running", progress: { done: [1, 9], component: 10, asin_cursor: "A2", position: 840, total: 2453 },
   summary: null, requested_by: 1, queued_at: "2026-10-15T12:00:00Z", started_at: "2026-10-15T12:00:01Z", finished_at: null, error: null,
 };
 
@@ -20,6 +20,19 @@ describe("toolbar labels", () => {
     expect(runningLabel(base)).toBe("Refresh · prices 840/2453");
     expect(runningLabel({ ...base, progress: { done: [] } })).toBe("Refresh · starting");
     expect(runningLabel({ ...base, progress: { done: [], component: 15, total: 2453 } })).toBe("Refresh · inventory");
+  });
+  it("running: a unit other than ASINs (sales backfill) reads 'sales chunk 3/30'", () => {
+    expect(runningLabel({ ...base, progress: { done: [], component: 19, position: 3, total: 30, unit: "chunk" } })).toBe("Refresh · sales chunk 3/30");
+    expect(runningLabel({ ...base, progress: { done: [], component: 19, position: 0, total: 30, unit: "chunk" } })).toBe("Refresh · sales chunk 0/30");
+  });
+  it("jobs-dialog kind label (2026-10-16): subset jobs name their component with no suffix; full passes keep (hourly)/(daily)", () => {
+    expect(jobKindLabel(base)).toBe("manual (daily)");
+    expect(jobKindLabel({ ...base, include_daily: false, trigger: "scheduled" })).toBe("scheduled (hourly)");
+    expect(jobKindLabel({ ...base, components: [19], params: { sales_window: { from: "2024-05-01", to: "2026-10-16" } } })).toBe("manual · sales backfill");
+    expect(jobKindLabel({ ...base, components: [19], include_daily: false })).toBe("manual · sales"); // no window = a plain sales job
+    expect(jobKindLabel({ ...base, components: [8], include_daily: false })).toBe("manual · gating");   // Add to SC
+    expect(jobKindLabel({ ...base, components: [9], include_daily: false })).toBe("manual · PO sheet"); // Push to Aura
+    expect(jobKindLabel({ ...base, components: [], include_daily: false })).toBe("manual (hourly)");   // empty list = full pass
   });
   it("queued: shows the queue position", () => {
     expect(queuedLabel(0)).toBe("Refresh · queued");

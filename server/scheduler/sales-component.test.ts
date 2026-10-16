@@ -23,13 +23,14 @@ const job = (over: Partial<JobRow> = {}): JobRow => ({
 function ctxFor(j: JobRow, inject: Record<string, unknown> = {}) {
   const inserted: any[] = [];
   const logs: string[] = [];
+  const progress: any[] = [];
   const query: QueryLike = async (sql, params) => {
     if (sql.includes("INSERT INTO jobs")) { inserted.push(params); return { rows: [{ id: 77, kind: "refresh", trigger: params![0], include_daily: params![3], scope_asins: params![4], components: params![5], params: null, status: "queued", progress: {} }], rowCount: 1 }; }
     throw new Error(`unexpected sql ${sql.slice(0, 50)}`);
   };
   const cache = new Map<string, unknown>(Object.entries(inject));
-  const ctx: ComponentContext = { job: j, query, log: (m) => logs.push(m), sellerId: "S", asins: [], scopeAsins: [], checkpoint: async () => {}, cache };
-  return { ctx, inserted, logs };
+  const ctx: ComponentContext = { job: j, query, log: (m) => logs.push(m), sellerId: "S", asins: [], scopeAsins: [], checkpoint: async () => {}, setProgress: async (p, t, u) => { progress.push([p, t, u]); }, cache };
+  return { ctx, inserted, logs, progress };
 }
 
 const okResult = (over: Partial<SalesSyncResult> = {}): SalesSyncResult => ({
@@ -65,6 +66,24 @@ describe("the sales component", () => {
     expect(r.outcomes._earliest_sale_date_returned).toBe("2024-05-02");
     expect(r.outcomes._latest_sale_date_returned).toBe("2024-05-29");
     expect(r.outcomes["_chunk_01 2024-05-01..2024-05-30"]).toBe("ok · orders 5 · days 3 · asins 2 · onboarded 0 · returned 2024-05-02..2024-05-29");
+  });
+
+  it("a backfill (window from params) reports progress in chunks: 0/N at start, then i/N after each chunk", async () => {
+    salesDeps.sync = async (_s, _e, _scope, opts) => {
+      const r = okResult();
+      await opts?.onChunk?.(r.chunks[0], 0, 1);
+      return r;
+    };
+    const { ctx, progress } = ctxFor(job({ params: { sales_window: { from: "2024-05-01", to: "2024-05-30" } } }), { [ONBOARD_SALES_ASINS]: async () => {} });
+    await sales.run(ctx);
+    expect(progress).toEqual([[0, 1, "chunk"], [1, 1, "chunk"]]);
+  });
+
+  it("the hourly (default-window) sales run reports no chunk progress", async () => {
+    salesDeps.sync = async (_s, _e, _scope, opts) => { const r = okResult(); await opts?.onChunk?.(r.chunks[0], 0, 1); return r; };
+    const { ctx, progress } = ctxFor(job(), { [ONBOARD_SALES_ASINS]: async () => {} });
+    await sales.run(ctx);
+    expect(progress).toEqual([]);
   });
 
   it("default window carries window_hours=48 in the counts", async () => {

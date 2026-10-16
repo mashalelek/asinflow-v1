@@ -120,6 +120,7 @@ export async function runJob(
     const asins = resumingThis ? remainingAfterCursor(scope, progress.asin_cursor) : scope;
     if (!resumingThis) { progress.component = c.n; progress.asin_cursor = null; progress.position = 0; }
     progress.total = scope.length;
+    progress.unit = undefined;
     await writeProgress(job.id, progress, query);
 
     const startedAt = new Date();
@@ -129,12 +130,20 @@ export async function runJob(
       progress.asin_cursor = lastAsin;
       progress.position = lastAsin ? scope.indexOf(lastAsin) + 1 : 0;
       progress.total = scope.length;
+      progress.unit = undefined;
       await writeProgress(job.id, progress, query);
       if ((await readStatus(job.id, query)) === "cancelled") throw new CancelledError();
     };
+    const setProgress = async (position: number, total: number, unit: string) => {
+      progress.component = c.n;
+      progress.position = position;
+      progress.total = total;
+      progress.unit = unit;
+      await writeProgress(job.id, progress, query);
+    };
     const ctx: ComponentContext = {
       job, query, log: (m) => log(`job ${job.id} ${c.key}: ${m}`), sellerId: deps.sellerId,
-      asins, scopeAsins: scope, checkpoint, cache,
+      asins, scopeAsins: scope, checkpoint, setProgress, cache,
     };
 
     let result: ComponentResult | null = null;
