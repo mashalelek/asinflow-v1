@@ -21,6 +21,7 @@ import {
 import { Tooltip, TooltipTrigger, TooltipContent } from "@/components/ui/tooltip";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import { UploadToVelocityDialog } from "@/components/upload-to-velocity-dialog";
+import { PoAsinTable, type PoAsinRowData, type PoAsinLine } from "@/components/po-asin-rows";
 
 interface PoRow {
   id: string;
@@ -287,39 +288,11 @@ export default function PurchaseOrders() {
 
 // ── Expanded PO view (frame step 4, read-only — no edit pencil) ──────────────
 
-interface PoAsinDetail {
-  id: string;
-  asin: string;
-  asin_name: string | null;
-  sku: string | null;
-  qty: number;
-  cost_per_unit: string | null;
-  total_cost: string | null;
-  prep_cost: string | null;
-  sold_as: string;
-  units_per_pack: number;
-  unreimbursed_loss_qty: number;
-  unreimbursed_loss_amount: string | null;
-  notes: string | null;
-  thumbnail: string | null;
-  lines: PoLine[];
-}
-interface PoLine {
-  id: string;
-  position: number | null;
-  product_name: string | null;
-  supplier_sku: string | null;
-  price: string | null;
-  item_discount: string | null;
-  qty_ordered: number | null;
-  qty_received: number | null;
-  qty_canceled: number | null; // NULL = not tracked (all sheet-imported rows)
-  qty_returned: number | null;
-  final_qty: number | null;    // generated; NULL propagates from qty_canceled
-  asin_qty_per_product: string | null;
-  adjusted_product_cost: string | null;
-  notes: string | null;
-}
+// The ASIN row and its component lines are the shared §4 column model
+// (client/src/components/po-asin-rows.tsx) — one definition for the
+// detail tab and the POs page's nested rows.
+type PoAsinDetail = PoAsinRowData & { lines: PoAsinLine[] };
+type PoLine = PoAsinLine;
 interface PoDetail {
   po: Record<string, any> & { invoice_file_name: string };
   summary: { asin_count: number; units_ordered: number; units_received: number | null; order_total: string | null; cogs_total: string | null };
@@ -363,7 +336,6 @@ export function PurchaseOrderDetailPlaceholder() {
   const [data, setData] = useState<PoDetail | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [tab, setTab] = useState<"details" | "asins" | "products">("details");
-  const [expanded, setExpanded] = useState<Set<string>>(new Set());
   const [copied, setCopied] = useState(false);
 
   useEffect(() => {
@@ -392,12 +364,6 @@ export function PurchaseOrderDetailPlaceholder() {
       setTimeout(() => setCopied(false), 1500);
     }).catch(() => {});
   };
-
-  const toggle = (aid: string) => setExpanded((prev) => {
-    const next = new Set(prev);
-    if (next.has(aid)) next.delete(aid); else next.add(aid);
-    return next;
-  });
 
   const thNum = "px-3 py-2 text-xs font-medium whitespace-nowrap text-right";
   const thTxt = "px-3 py-2 text-xs font-medium whitespace-nowrap text-left";
@@ -485,87 +451,7 @@ export function PurchaseOrderDetailPlaceholder() {
         </div>
       )}
 
-      {tab === "asins" && (
-        <div className="w-full overflow-auto rounded-md" style={{ border: "0.5px solid hsl(var(--border))" }}>
-          <table className="w-full border-collapse text-sm" data-testid="po-asins-table">
-            <thead>
-              <tr className="table-header-stone">
-                <th className={thTxt}></th>
-                <th className={thTxt}>ASIN</th>
-                <th className={thTxt}>Title</th>
-                <th className={thTxt}>Amazon SKU</th>
-                <th className={thNum}>Qty</th>
-                <th className={thNum}>Cost/Unit</th>
-                <th className={thNum}>Total Cost</th>
-                <th className={thNum}>Prep</th>
-                <th className={thTxt}>Sold As</th>
-                <th className={thNum}>Units/Pack</th>
-                <th className={thNum}>Qty (units)</th>
-                <th className={thNum}>Unreimb. Loss</th>
-                <th className={thTxt}></th>
-              </tr>
-            </thead>
-            <tbody>
-              {asins.map((a) => {
-                const isOpen = expanded.has(a.id);
-                const multi = a.lines.length >= 2;
-                return (
-                  <React.Fragment key={a.id}>
-                    <tr className="table-zebra-stone" style={hairline} data-testid={`row-po-asin-${a.asin}`}>
-                      <td className="px-2 py-1.5 w-10">
-                        <span className="inline-flex items-center gap-1">
-                          {multi && (
-                            <button onClick={() => toggle(a.id)} className="text-muted-foreground" data-testid={`button-expand-${a.asin}`}>
-                              {isOpen ? <ChevronDown className="h-3.5 w-3.5" /> : <ChevronRight className="h-3.5 w-3.5" />}
-                            </button>
-                          )}
-                          {a.thumbnail && <img src={a.thumbnail} alt="" className="h-7 w-7 object-contain rounded-sm" />}
-                        </span>
-                      </td>
-                      <td className="px-3 py-1.5">
-                        <Link href={`/asins?q=${a.asin}`} className="font-mono text-xs text-primary hover:underline" onClick={(e) => e.stopPropagation()}>{a.asin}</Link>
-                      </td>
-                      <td className="px-3 py-1.5 max-w-[280px] truncate" title={a.asin_name ?? ""}>{a.asin_name ?? <span className="text-muted-foreground/50">—</span>}</td>
-                      <td className="px-3 py-1.5">
-                        {a.sku ? <span className="font-mono text-xs">{a.sku}</span> : (
-                          <Tooltip>
-                            <TooltipTrigger asChild><AlertTriangle className="h-3.5 w-3.5 text-amber-500" /></TooltipTrigger>
-                            <TooltipContent side="top"><p className="text-xs">No SKU — create offer first</p></TooltipContent>
-                          </Tooltip>
-                        )}
-                      </td>
-                      <td className="px-3 py-1.5 text-right">{a.qty}</td>
-                      <td className="px-3 py-1.5 text-right"><Money v={a.cost_per_unit} /></td>
-                      <td className="px-3 py-1.5 text-right"><Money v={a.total_cost} /></td>
-                      <td className="px-3 py-1.5 text-right"><Money v={a.prep_cost} /></td>
-                      <td className="px-3 py-1.5">{a.sold_as}</td>
-                      <td className="px-3 py-1.5 text-right">{a.units_per_pack}</td>
-                      <td className="px-3 py-1.5 text-right">{a.units_per_pack * a.qty}</td>
-                      <td className="px-3 py-1.5 text-right">
-                        {a.unreimbursed_loss_qty > 0 || parseFloat(a.unreimbursed_loss_amount ?? "0") !== 0
-                          ? <span>{a.unreimbursed_loss_qty} / <Money v={a.unreimbursed_loss_amount} /></span>
-                          : <span className="text-muted-foreground/50">—</span>}
-                      </td>
-                      <td className="px-2 py-1.5">{a.notes && <StickyNote className="h-3.5 w-3.5 text-muted-foreground" />}</td>
-                    </tr>
-                    {multi && isOpen && a.lines.map((l) => (
-                      <tr key={l.id} style={hairline} data-testid={`row-component-${a.asin}-${l.position}`}>
-                        <td className="px-2 py-1" />
-                        <td className="px-3 py-1 pl-8 text-xs text-muted-foreground" colSpan={2}>{l.product_name ?? "—"}</td>
-                        <td className="px-3 py-1 text-muted-foreground/50">—</td>
-                        <td className="px-3 py-1 text-right text-xs text-muted-foreground"><Dash v={l.qty_ordered} /></td>
-                        <td className="px-3 py-1 text-right text-xs text-muted-foreground"><Money v={l.price} /></td>
-                        <td className="px-3 py-1 text-right text-xs text-muted-foreground"><Money v={l.adjusted_product_cost} /></td>
-                        <td className="px-3 py-1" colSpan={6} />
-                      </tr>
-                    ))}
-                  </React.Fragment>
-                );
-              })}
-            </tbody>
-          </table>
-        </div>
-      )}
+      {tab === "asins" && <PoAsinTable asins={asins} />}
 
       {tab === "products" && (
         <div className="w-full overflow-auto rounded-md" style={{ border: "0.5px solid hsl(var(--border))" }}>

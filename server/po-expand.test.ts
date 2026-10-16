@@ -1,0 +1,71 @@
+import { describe, it, expect } from "vitest";
+import { readFileSync } from "fs";
+import { join } from "path";
+import { poAsinRowsSql } from "./po-queries";
+import { fmtQty, qtyNumber, individualUnits, PO_ASIN_COLUMNS } from "../client/src/lib/po-qty";
+
+// PO expand-by-ASIN patch (docs/claude_spec-patch-po-expand-by-asin.md).
+// Commit 3: the §4 column model is ONE component for the detail tab and the
+// nested rows; Canceled/Returned are derived from the lines (decision 1);
+// Unreimb. Loss is gone from the table (column stays in the DB).
+
+const read = (rel: string) => readFileSync(join(__dirname, "..", rel), "utf8");
+
+describe("§4 column model", () => {
+  it("has the 19 columns in the patch's order and names", () => {
+    expect(PO_ASIN_COLUMNS.map((c) => c.label)).toEqual([
+      "ASIN", "Title", "Amazon SKU", "Ordered", "Cost/Unit", "Total Cost", "Prep", "Sold As", "Units/Pack",
+      "Individual Units Ordered", "Canceled", "Returned", "Shipped by Supplier", "At Prep Center", "At CQG Warehouse",
+      "Lost/damaged by us", "Shipped FBA", "Received by Amazon", "Shipment IDs",
+    ]);
+  });
+  it("the detail page renders the shared table and no longer carries Qty (units) or Unreimb. Loss", () => {
+    const page = read("client/src/pages/purchase-orders.tsx");
+    expect(page).toMatch(/<PoAsinTable asins=\{asins\} \/>/);
+    expect(page).not.toMatch(/Qty \(units\)|Unreimb/);
+    const comp = read("client/src/components/po-asin-rows.tsx");
+    expect(comp).not.toMatch(/unreimbursed/i);
+    // Individual Units Ordered = Ordered × Units/Pack (P1)
+    expect(comp).toMatch(/individualUnits\(a\.qty, a\.units_per_pack\)/);
+    // fixed widths so separate instances align under one header
+    expect(comp).toMatch(/table-fixed/);
+    expect(comp).toMatch(/<colgroup>/);
+  });
+});
+
+describe("quantity semantics (§4.1)", () => {
+  it("NULL = not tracked → em-dash; integers plain; fractions 2 dp", () => {
+    expect(fmtQty(null)).toBe("—");
+    expect(fmtQty(undefined)).toBe("—");
+    expect(fmtQty("")).toBe("—");
+    expect(fmtQty(0)).toBe("0");
+    expect(fmtQty("12.00")).toBe("12");
+    expect(fmtQty("1.17")).toBe("1.17");
+    expect(fmtQty(7 / 6)).toBe("1.17");
+    expect(qtyNumber("abc")).toBeNull();
+  });
+  it("Individual Units Ordered: 5 three-packs = 15 skeins", () => {
+    expect(individualUnits(5, 3)).toBe(15);
+    expect(individualUnits(6, 2)).toBe(12);
+  });
+});
+
+describe("derived Canceled / Returned (pre-flight decision 1)", () => {
+  it("the ASIN row sums line qty × yield and is NULL when any line is untracked", () => {
+    const sql = poAsinRowsSql("pa.po_id = $1").replace(/\s+/g, " ");
+    for (const col of ["qty_canceled", "qty_returned"]) {
+      expect(sql).toContain(`COUNT(*) FILTER (WHERE l.${col} IS NULL) > 0 THEN NULL`);
+      expect(sql).toContain(`SUM(l.${col} * COALESCE(l.asin_qty_per_product, 1))`);
+    }
+    expect(sql).toMatch(/AS qty_canceled_asin/);
+    expect(sql).toMatch(/AS qty_returned_asin/);
+    // no stored copies on po_asins are read for these
+    expect(sql).not.toMatch(/pa\.qty_canceled|pa\.qty_returned/);
+  });
+  it("the detail route uses the shared loader (one query shape for both surfaces)", () => {
+    const routes = read("server/routes.ts");
+    const detail = routes.slice(routes.indexOf('app.get("/api/pos/:id"'), routes.indexOf("// === Bulk Profit Calculator"));
+    expect(detail).toMatch(/await loadPoAsinRows\(/);
+    expect(detail).not.toMatch(/SELECT pa\.\*/);
+  });
+});

@@ -8,6 +8,7 @@ import { getInboundHazmat } from "./inbound-hazmat";
 import { verifyPending, resolveSubmissionManual, resolveSubmissionsBulk, dismissFlags, getUnverifiedCount, listNeedsAttention, listInFlight, findRecentPendingIds, countOpenAmong } from "./listing-submissions-repo";
 import { runAuraSyncChain } from "./aura-sync-chain";
 import { probeGatingForAsins } from "./gating-probe";
+import { loadPoAsinRows } from "./po-queries";
 import { log } from "./index";
 import { type AsinInput, type AsinResult, type ColumnMapping, extractDomain, cleanBuyLink, getFeePriceForAsin, LEAD_SOURCES, normalizeLeadSource, type LeadSource } from "@shared/schema";
 import { parseMoney } from "@shared/parse-money";
@@ -4358,15 +4359,9 @@ export async function registerRoutes(
       if (poRes.rows.length === 0) { res.status(404).json({ message: "PO not found" }); return; }
       const po = poRes.rows[0];
 
-      const asinRows = (await query(
-        `SELECT pa.*, (pa.qty * pa.cost_per_unit) AS total_cost,
-                a.image_url AS thumbnail
-           FROM po_asins pa
-           LEFT JOIN asins a ON a.asin = pa.asin
-          WHERE pa.po_id = $1
-          ORDER BY pa.asin`,
-        [id],
-      )).rows;
+      // §4 column model: the same rows the POs page nests (po-queries.ts) —
+      // derived Canceled/Returned, the six stored ASIN quantities, shipments.
+      const asinRows = await loadPoAsinRows((sql, params) => query(sql, params), [id]);
 
       const lineRows = (await query(
         `SELECT * FROM po_line_items WHERE po_id = $1 ORDER BY po_asin_id, position, id`,
