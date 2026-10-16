@@ -2235,7 +2235,8 @@ is set — the runner is always on; only the **schedule** is gated.
   that run a subset of the sequence — the sales history backfill uses it.
 
   **Rule (Maria, 2026-10-16): manual actions never wait on the scheduled
-  pass. Only SP-API refresh work goes on the queue.** Sync POs, Export SB
+  pass. Only SP-API refresh work goes on the queue.** Sync POs (the PO
+  sheet sync of §22 followed by `runSheetsSync`, 2026-10-16), Export SB
   COGS, Update COGS in SC, Push to Aura, Verify now, Recheck now,
   Park/Unpark/Mark dead/Revive stay direct calls. Sync Sourcing and Upload
   File keep their inline sheet/CSV step; only the onboarding Refresh they
@@ -2544,7 +2545,7 @@ that writes it:
 | Catalog data (title, brand, category, dimensions, weight, image), BSR + category, `is_meltable`, `is_dangerous_good`, `is_catalog_deleted` | components 2–6 (daily block); the onboarding INSERT seeds nothing Amazon-side |
 | `is_hazmat`, `hazmat_checked_at` | component 7 — successful probe only |
 | `eligibility_status`, `gating_checked_at` | `probeGatingForAsins` (`server/gating-probe.ts`) — successful probe only; called by component 8 and, inline, by the Add to SC preview (decision 9) |
-| `ordered_qty`, `actual_cogs`, `cogs_source='po_sheet'` | `runSheetsSync` — component 9 on a scheduled pass; Sync POs and Push to Aura call it inline (decision 9, off the queue 2026-10-16) |
+| `ordered_qty`, `actual_cogs`, `cogs_source='po_sheet'` | `runSheetsSync` — component 9 on a scheduled pass; Sync POs (after the PO sheet sync, §22) and Push to Aura call it inline (decision 9, off the queue 2026-10-16) |
 | Inventory snapshot, `asin_skus` recording | component 15 |
 | `has_live_offer`, `has_buyable_offer`, `current_issues` + stamps | component 16 through the §18 A2 primitive (also the §19 ladder / verdicts) |
 | `primary_sku`, `asin_skus.is_primary` | component 17 (bootstrap / re-point); the Add-Offer path on creation (§18) |
@@ -2560,9 +2561,10 @@ that writes it:
 | `is_wholesale`, `is_oa` | Manual edit |
 | `status` (active/parked/dead — replaced `is_active` 2026-09-07, migration 033) | Manual Park/Unpark/Mark-dead/Revive; Sourcing sync writes `parked`+`discontinued` on freshly-inserted discontinued rows only; the prices stage's `invalid_asin` outcome and the catalog-404 signal (DA-2) write `dead` with their reasons |
 | Aura listing cost (external, not an AF column) | Aura cost sync path (§11) — reads `asin_estimates` after an inline PO-sheet read for the selection (decision 9), writes only to Aura |
-| `purchase_orders.action_items`, `closed_at`, `closed_by` | PO module (§22): Action Items editor, Closed toggle, auto-close rule, §6.4 backfill — AF-owned, never a sync |
-| `po_asins.qty_shipped_supplier`, `qty_at_prep`, `qty_at_warehouse`, `qty_lost_damaged_us` | PO module (§22): inline editor today, Phase 2 feeds later — AF-owned, never the importer |
-| `po_asins.qty_shipped_fba`, `qty_received_amazon`; `po_asin_shipments` | PO module (§22): trigger over `po_asin_shipments`; manual rows today, SC/Velocity in Phase 2 |
+| `purchase_orders`, `po_asins`, `po_line_items` — every sheet-carried field, incl. `action_items`, `closed_at`, `closed_by`, `qty_canceled` | **The Orders sheet via the PO sheet sync** (`server/po-sheet-sync.ts`, Sync POs button, 2026-10-16 — "sheet wins for now"); the PO module UI (Action Items editor, Closed toggle, auto-close rule) edits them between syncs only |
+| `po_asins.qty_shipped_supplier`, `qty_at_prep`, `qty_at_warehouse`, `qty_lost_damaged_us` | PO module (§22): inline editor today, Phase 2 feeds later — AF-owned, never the importer, never the sync |
+| `po_asins.qty_shipped_fba`, `qty_received_amazon`; `po_asin_shipments` | PO module (§22): trigger over `po_asin_shipments`; manual rows today, SC/Velocity in Phase 2 — never the sync |
+| `po_asins.notes`, `po_asins.sku` after insert, `po_line_items.notes`, `item_discount` | PO module (§22) — the sheet does not carry them; never the sync |
 
 When a code path needs to touch a field outside its ownership, that's a red
 flag. Either the architecture is wrong, or the workflow is misnamed.
@@ -4793,6 +4795,17 @@ existing integration (PO sync → `actual_cogs`/`prep_override`, Velocity
 export, SB COGS export, sourcing-cost export). Nothing repoints to these
 tables until the cutover layer, and each repoint gets its own dry-run.
 
+**Sheet sync patch (2026-10-16, `docs/claude_spec-patch-po-sheet-sync.md`,
+pre-flight `docs/po-sheet-sync-preflight-2026-10-16.md`).** The one-time
+importer became a repeatable sync: the ASINs-page **Sync POs** button now
+syncs the whole Orders sheet into these tables (new POs inserted, existing
+POs updated) before the per-ASIN COGS sync. **"Sheet wins fully, for now"
+(Maria, 2026-10-16):** every field the sheet carries — including the
+Status cell's Closed / action-item / Canceled words — is overwritten from
+the sheet on every sync, so an AF edit to one of those fields lasts only
+until the next sync. Temporary, until the VA moves off the sheet; fields
+the sheet does not carry stay AF-owned (see "Sync from the Orders sheet").
+
 **Expand by ASIN patch (2026-10-16, `docs/claude_spec-patch-po-expand-by-asin.md`,
 pre-flight `docs/po-expand-preflight-2026-10-16.md`).** Step 1 of taking
 FBA-shipment reconciliation over from the VA: every PO can show its ASIN
@@ -5038,6 +5051,71 @@ A row with a parseable date but a blank/whitespace Order ID lands in its own
 grouped or imported — guard added 2026-08-24 after a live dry run showed an
 in-progress sheet row would otherwise import as `(supplier, "")`.
 
+The importer is a frozen one-off as of 2026-10-16 (it ran once, 773 POs);
+its assembly is ported verbatim into the sync below, which is the live
+path. Do not extend the script.
+
+### Sync from the Orders sheet (`server/po-sheet-sync.ts`, 2026-10-16)
+
+`syncPoSheet({ sheetId, dryRun })` — called by `POST /api/sheets/sync`
+(the ASINs-page **Sync POs** button) ahead of the per-ASIN COGS sync
+(§11 `runSheetsSync`); the two run sequentially and the toast reports
+both. If the PO sync throws, the per-ASIN sync still runs and the result
+carries `poSync.error`. Inline, never a job (rule C). `?dryRun=true`
+returns the plan with nothing written.
+
+- **Scope:** the whole Orders sheet (`Sheet1!A1:AZ1` + `A2:AZ`), 2026
+  rows only (the importer's classifier); never the ASINs-page selection.
+  Match key = the importer's `(supplier, order_id)`; `po_asins` by
+  `(po, asin)`; lines by `(po_asin, position)`.
+- **Insert:** a PO not in AF is inserted exactly as the importer did
+  (`source = 'sheet_import'`, Amazon SKU from `asins.primary_sku` at
+  insert time, `item_discount = 0`).
+- **Update (sheet wins):** every header field the importer reads, every
+  line field (product, supplier SKU, price, Col L ordered, Col M received,
+  Col R returned, Col N ASIN qty, Col T yield, Col X/Y costs, prep,
+  sold_as / units_per_pack, loss qty/amount), and the Status cell mapped
+  as §6.4 applied as a full replace: `action_items` = the sheet's tokens
+  (empty if none); Closed → `closed_at` (kept if already closed, else
+  now()) and `closed_by = 'sheet'`; not Closed → `closed_at` /
+  `closed_by` NULL **regardless of a previous 'auto' or user close**;
+  Canceled → `qty_canceled = qty_ordered` on every line, otherwise NULL.
+  `po_asins.qty` is recomputed from Col N. Unchanged POs are not touched
+  (`updated_at` moves only on a real change).
+- **Canceled POs (Maria, 2026-10-16):** the VA zeroes Col L / Col N on a
+  canceled order. A PO already in AF keeps its stored ordered quantities
+  (`qty_ordered`, `qty`) and gets `qty_canceled = qty_ordered`; counted
+  `canceledKeptOrderedQty`. A new PO that arrives already zeroed is
+  inserted as-is (0 / 0) and counted `canceledNoOrderedQty`.
+- **Deletes, only on a complete read (§3.7):** a line past the sheet's
+  line count for its ASIN is deleted; a `po_asins` row whose (PO, ASIN)
+  left the sheet is deleted (its lines first — the line FK is SET NULL)
+  **only if it has no `po_asin_shipments` rows**, otherwise kept and
+  reported `keptWithShipments`. A PO missing from the sheet is **never**
+  deleted — reported "in AF, not in sheet" (a re-keyed sheet row, e.g.
+  `…_1`, inserts under the new key and leaves the old row for a manual
+  delete).
+- **AF-owned, never written:** `po_asins.qty_shipped_supplier`,
+  `qty_at_prep`, `qty_at_warehouse`, `qty_lost_damaged_us`,
+  `qty_shipped_fba`, `qty_received_amazon`, `po_asin_shipments`,
+  `po_asins.notes`, `po_asins.sku` after insert, `po_line_items.notes`,
+  `item_discount` — anything the sheet does not carry.
+- **Fail-closed:** a header mismatch, an empty read, a mixed-Col-S PO or
+  an **unmapped Status token** writes nothing; the result carries `stop`.
+  "Shipped FBA" maps to nothing (a state word AF tracks as
+  `qty_shipped_fba`); any other new token stops the sync until the map
+  learns it.
+- **Auto-close interaction (accepted temporary state):** the auto-close
+  rule still runs on quantity / shipment / action-item edits; the next
+  sync overwrites its result with the sheet's Closed state (and reopens an
+  auto-closed PO the sheet does not call Closed).
+- **Report (§3.9):** counts — sheet POs, inserted, updated, unchanged,
+  lines deleted, `po_asins` deleted, kept with shipments, canceled kept,
+  canceled 0/0 new, in AF not in sheet, unmapped tokens, mixed Col S —
+  plus 10 sample diffs of changed existing POs and the full diff list.
+  The dry run and the live run return the same shape; the dev-server log
+  prints the counts under `[sheets]`.
+
 ### UI rules
 
 - Route `/purchase-orders`: list (25/page, `order_date DESC`) → expanded view
@@ -5066,11 +5144,12 @@ in-progress sheet row would otherwise import as `(supplier, "")`.
 
 | Field | Owner |
 |---|---|
-| `purchase_orders` / `po_asins` / `po_line_items` (sheet-imported fields) | PO module UI + importer — nothing else writes them |
-| **`purchase_orders.action_items`, `closed_at`, `closed_by`** | **AF-owned** (2026-10-16): the Action Items editor, the Closed toggle, the auto-close rule and the one-time §6.4 backfill. The importer writes them only on its one-time INSERT (it is INSERT-only; existing POs are skipped, so no later sync ever updates them). |
-| **`po_asins.qty_shipped_supplier`, `qty_at_prep`, `qty_at_warehouse`, `qty_lost_damaged_us`** | **AF-owned**: the inline quantity editor today; Phase 2 feeds (email tracking, Velocity) later. Never the importer. |
+| `purchase_orders` / `po_asins` / `po_line_items` (sheet-carried fields) | **The Orders sheet, through the PO sheet sync** (2026-10-16, "sheet wins for now") — overwritten on every Sync POs; the PO module UI edits them between syncs only |
+| `purchase_orders.action_items`, `closed_at`, `closed_by`; `po_line_items.qty_canceled` | **Sheet-owned for now** (2026-10-16): the sync maps the Status cell on every run (full replace). The Action Items editor, the Closed toggle, the auto-close rule and the §6.4 backfill write them too, but the next sync overwrites — accepted until the VA moves off the sheet |
+| **`po_asins.qty_shipped_supplier`, `qty_at_prep`, `qty_at_warehouse`, `qty_lost_damaged_us`** | **AF-owned**: the inline quantity editor today; Phase 2 feeds (email tracking, Velocity) later. Never the importer, never the sync. |
 | **`po_asins.qty_shipped_fba`, `qty_received_amazon`** | **AF-owned, trigger-maintained** from `po_asin_shipments` (manual rows today; SC / Velocity in Phase 2). |
-| `po_asin_shipments` | AF-owned: manual entry from the Shipment IDs chip; Phase 2 feeds. |
+| `po_asin_shipments` | AF-owned: manual entry from the Shipment IDs chip; Phase 2 feeds. Never the sync — and a `po_asins` row with shipment rows survives leaving the sheet. |
+| `po_asins.notes`, `po_asins.sku` (after insert), `po_line_items.notes`, `item_discount` | AF-owned: the sheet does not carry them; the sync never writes them |
 | `settings.po_*` lookup lists | Migrations (seed/append) + entry form (layer 1) |
 
 The PO module writes nothing outside its own tables. `asin_estimates`
