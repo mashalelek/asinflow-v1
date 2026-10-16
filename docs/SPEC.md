@@ -2560,6 +2560,9 @@ that writes it:
 | `is_wholesale`, `is_oa` | Manual edit |
 | `status` (active/parked/dead — replaced `is_active` 2026-09-07, migration 033) | Manual Park/Unpark/Mark-dead/Revive; Sourcing sync writes `parked`+`discontinued` on freshly-inserted discontinued rows only; the prices stage's `invalid_asin` outcome and the catalog-404 signal (DA-2) write `dead` with their reasons |
 | Aura listing cost (external, not an AF column) | Aura cost sync path (§11) — reads `asin_estimates` after an inline PO-sheet read for the selection (decision 9), writes only to Aura |
+| `purchase_orders.action_items`, `closed_at`, `closed_by` | PO module (§22): Action Items editor, Closed toggle, auto-close rule, §6.4 backfill — AF-owned, never a sync |
+| `po_asins.qty_shipped_supplier`, `qty_at_prep`, `qty_at_warehouse`, `qty_lost_damaged_us` | PO module (§22): inline editor today, Phase 2 feeds later — AF-owned, never the importer |
+| `po_asins.qty_shipped_fba`, `qty_received_amazon`; `po_asin_shipments` | PO module (§22): trigger over `po_asin_shipments`; manual rows today, SC/Velocity in Phase 2 |
 
 When a code path needs to touch a field outside its ownership, that's a red
 flag. Either the architecture is wrong, or the workflow is misnamed.
@@ -4784,13 +4787,22 @@ the date-picker routes.
 ## 22. PO Module (Frame)
 
 An in-app purchase-order database replacing the Google Sheets PO tracker —
-eventually. The frame (schema, 2026 importer, read-only list + expanded view)
-is **purely additive**: the sheet remains the source of truth for every
+eventually. The frame (schema, 2026 importer, list + expanded view) is
+**purely additive**: the sheet remains the source of truth for every
 existing integration (PO sync → `actual_cogs`/`prep_override`, Velocity
 export, SB COGS export, sourcing-cost export). Nothing repoints to these
 tables until the cutover layer, and each repoint gets its own dry-run.
 
-### Tables (migrations 028–029)
+**Expand by ASIN patch (2026-10-16, `docs/claude_spec-patch-po-expand-by-asin.md`,
+pre-flight `docs/po-expand-preflight-2026-10-16.md`).** Step 1 of taking
+FBA-shipment reconciliation over from the VA: every PO can show its ASIN
+rows nested under it with the columns the reconciliation will fill in;
+per-ASIN status quantities replace the PO-level status words; PO-level
+Status is Open / Closed with an auto-close rule; the free-text status
+became multi-select **Action Items**. Pulling the data from SC / Velocity
+is Phase 2 (below).
+
+### Tables (migrations 028–029; 056 for the expand-by-ASIN columns)
 
 - `purchase_orders` — one row per order. `UNIQUE (supplier, order_id)` (order
   IDs collide across suppliers, §10). `source ∈ {manual, sheet_import}`.
@@ -4802,6 +4814,22 @@ tables until the cutover layer, and each repoint gets its own dry-run.
   (`qty_ordered`, `qty_received`, `qty_canceled`, `qty_returned`,
   generated `final_qty` — migration 030, below), `asin_qty_per_product`
   (yield), `adjusted_product_cost` snapshot, Supplier SKU / UPC, notes.
+- **Migration 056 (2026-10-16):** `po_asins` gains six ASIN-quantity
+  columns, `numeric(10,2) NULL` — `qty_shipped_supplier`, `qty_at_prep`,
+  `qty_at_warehouse`, `qty_lost_damaged_us`, `qty_shipped_fba`,
+  `qty_received_amazon`; `po_asin_shipments` (one row per FBA shipment
+  per ASIN row: `fba_shipment_id`, `velocity_shipment_id`, `qty_shipped`,
+  `qty_received`, `shipped_at`, `source ∈ velocity|sc|manual`,
+  `UNIQUE (po_asin_id, fba_shipment_id)`; `po_asin_id` is uuid like
+  `po_asins.id`) with a trigger keeping `qty_shipped_fba` /
+  `qty_received_amazon` equal to the SUM over its rows (NULL with no rows —
+  the declarative analogue of the generated `final_qty`); and on
+  `purchase_orders`: `closed_at timestamptz NULL`, `closed_by text NULL`
+  (`'auto'` | `'sheet'` | a `users.id`), `action_items text[] NOT NULL
+  DEFAULT '{}'` CHECK-limited to the seven values below. The old free-text
+  `status` column stays for now (D5) but **nothing reads or writes it**;
+  it is dropped in a follow-up migration once the §6.4 backfill is
+  verified in production.
 
 Migration 021 dropped an older same-named scaffold; 028 is fresh, not a
 revival.
@@ -4832,11 +4860,16 @@ Decisions resolved 2026-08-22:
 - `qty_refunded` was RENAMED `qty_returned` (data preserved — the import
   wrote blank Col R as 0, which stands: a blank refund cell means none
   occurred).
-- `qty_canceled` is NULLable with NO default. **NULL = not tracked**: all
-  sheet-imported rows stay NULL — **no backfill**, and no status-derived
-  writes; the sheet recorded only status tokens + ordered qty. The entry
-  form writes explicit values (its 0 default lives in the form, not the
-  column).
+- `qty_canceled` is NULLable with NO default. **NULL = not tracked.** The
+  one status-derived write that exists (2026-10-16, §6.4 backfill and the
+  importer): a PO whose sheet Status said "Canceled" gets
+  `qty_canceled = qty_ordered` on every line (a PO-wide cancel); per-ASIN
+  partial cancels are not inferrable and stay NULL. The entry form writes
+  explicit values (its 0 default lives in the form, not the column).
+- **Canceled / Returned on the ASIN row are DERIVED** (pre-flight decision
+  1): Σ(line qty × `asin_qty_per_product`) over the ASIN's lines, NULL when
+  any contributing line is untracked. No stored copies on `po_asins`; the
+  product level stays the truth.
 - `final_qty` is GENERATED ALWAYS STORED:
   `qty_ordered − qty_canceled − qty_returned` — plain arithmetic, **no
   COALESCE**. NULL propagates by design: historical rows render Final as a
@@ -4874,8 +4907,108 @@ entry-form intent later):
 - A mixed group (S=1 and S≥2 rows for one ASIN in one order) is a data error:
   report and skip the PO, never guess.
 
-Both cases render identically in the ASINs tab: one row with an expander
+Both cases render identically in the ASINs table: one row with an expander
 revealing component line items.
+
+### Expand by ASIN (POs page, 2026-10-16)
+
+- Toolbar **Expand All** (becomes **Collapse All**) applies to the current
+  filtered list; a per-PO **chevron** in its own cell is the only expand
+  target — clicking anywhere else on the row still opens the PO.
+- Nested rows are the PO's `po_asins` rows, indented, in `po_asins` order,
+  through the same component as the detail ASINs tab (one column model,
+  below). The nested column header appears **once**, under the first
+  expanded PO on the page; fixed column widths keep every later expanded
+  PO aligned with it. Sorting/filtering stays at PO level.
+- Loading: the list is paginated 25/page, so the page's ASIN rows ride the
+  list payload through the same loader as the detail route
+  (`server/po-queries.ts`) — one extra query per page, no fetch on expand.
+- Persistence: `localStorage` `fba-po-expanded` `{ all, ids }` (the ASINs
+  page's per-browser mechanism); default all collapsed; collapsing one PO
+  under Expand All turns the flag off and keeps the others open.
+
+### Column model — ASINs table (nested rows and the detail ASINs tab)
+
+`client/src/components/po-asin-rows.tsx`, order and names fixed
+(`PO_ASIN_COLUMNS`):
+
+| # | Column | Source |
+|---|---|---|
+| 1 | ASIN | link |
+| 2 | Title | |
+| 3 | Amazon SKU | |
+| 4 | **Ordered** | `po_asins.qty` — the ASIN (sellable-pack) qty, Σ sheet Col N (P1) |
+| 5–9 | Cost/Unit · Total Cost · Prep · Sold As · Units/Pack | |
+| 10 | **Individual Units Ordered** | Ordered × Units/Pack (D4) |
+| 11 | Canceled | derived from the lines (above) |
+| 12 | Returned | derived from the lines |
+| 13 | Shipped by Supplier | `qty_shipped_supplier` — hand-entered until email tracking (Phase 2) |
+| 14 | At Prep Center | `qty_at_prep` — Velocity (Phase 2); may be fractional |
+| 15 | At CQG Warehouse | `qty_at_warehouse` — hand-entered |
+| 16 | Lost/damaged by us | `qty_lost_damaged_us` — hand-entered |
+| 17 | Shipped FBA | `qty_shipped_fba` = Σ `po_asin_shipments.qty_shipped` (trigger) |
+| 18 | Received by Amazon | `qty_received_amazon` = Σ `po_asin_shipments.qty_received` (trigger) |
+| 19 | Shipment IDs | chip "N shipments · qty" → per-shipment list; manual add/remove allowed (source `manual`) |
+
+All quantities are ASIN quantities, `numeric(10,2)`; **NULL = not
+tracked** (em-dash, never 0 by default); fractional values are legal
+(7 units of a 6-pack = 1.17) and show 2 dp only when non-integer. There is
+no derived "Received" column (D1): At Prep Center and At CQG Warehouse are
+separate. Unreimb. Loss is gone from the table (DB column untouched).
+Cells 13, 15 and 16 edit inline (click, Enter/blur saves, empty = NULL);
+every quantity or shipment change re-runs the auto-close rule.
+
+**Products tab** (§4.3): Ordered · Received · Canceled · Returned ·
+**At Prep Center · At CQG Warehouse · Lost/damaged by us** · Final. The
+three new ones are the ASIN quantities in product units through the
+line's yield (product qty = ASIN qty ÷ `asin_qty_per_product`) for 1:1
+lines; a bundle component line shows a dash. Shipment columns are
+ASIN-level only.
+
+### Status: Open / Closed (2026-10-16)
+
+- Column 1 of the POs table ("Status"): a green check when Closed, an
+  open-order outline when Open; click toggles with a confirm. A manual
+  close/reopen records the user in `closed_by`. The PO Details header
+  carries the same toggle.
+- **Auto-close (D2)** — `server/po-close.ts`, re-evaluated after every
+  quantity edit, shipment change and action-items change: close with
+  `closed_by = 'auto'` when BOTH (a) every `po_asins` row has Shipped FBA
+  ≥ Ordered − Canceled − Returned − Lost/damaged by us (NULLs read as 0)
+  and at least one row has Shipped FBA > 0, and (b) `action_items` is
+  empty. Auto never reopens a PO closed by hand or by the sheet backfill;
+  an auto-closed PO reopens when (a) or (b) stops holding; a manual
+  reopen stays Open until the rule next becomes true after a change.
+- Filter Open / Closed / All; **default Open only** (D3). The backfill
+  (§6.4) closed 679 sheet-"Closed" POs with `closed_by = 'sheet'`, so the
+  default view opened on the 94 others.
+
+### Action Items (replaces the free-text status, 2026-10-16)
+
+`purchase_orders.action_items text[]`, multi-select, values and display
+order: **Need to Return · Missing / Damaged from Supplier · Confirm
+Refund / Replacement · ATTN: Velocity · See Comments · SHIP · Received -
+FBM** (the last two only meaningful when the PO ships from the house).
+Rendered as tinted chips in the (renamed) **Action Items** column with an
+inline multi-select editor on the POs table and on PO Details; the list
+filter is any-of over them (`action=`), beside the Open/Closed filter.
+Removed from PO level: Canceled, Returned, Received, Ordered — quantities
+on the ASINs/Products tables now; "Ordered" is implied by the open-order
+icon. `PATCH /api/pos/:id/action-items` validates against the list and
+re-runs the auto-close rule.
+
+**§6.4 one-time value migration** (`script/migrate-po-status.ts`,
+dry-run by default, `--live` writes, idempotent, STOPs on an unmapped
+value): action-item strings → `action_items`; "Closed" → `closed_at =
+updated_at`, `closed_by = 'sheet'` (decision 3); "Canceled" →
+`qty_canceled = qty_ordered` on the PO's lines; "Received" and "Received
+Partial" (decision 2) and "Returned" → nothing, counted; "Ordered" →
+nothing. Local run 2026-10-16: 773 POs — 679 Closed, 49 Ordered, 34 SHIP,
+24 Canceled, 10 See Comments, 8 Missing / Damaged, 5 ATTN: Velocity,
+4 Received Partial, 4 Received, 3 Received - FBM, 3 Returned, 2 Confirm
+Refund — no unmapped; wrote `action_items` on 56 POs, closed 679, set
+`qty_canceled` on 38 lines; left 8 Received/Partial and 3 Returned POs
+untouched. Production runs the same script after the deploy.
 
 ### Importer (`script/import-po-2026.ts`)
 
@@ -4912,15 +5045,13 @@ in-progress sheet row would otherwise import as `(supplier, "")`.
   New PO renders disabled** until the entry form ships. The Upload to
   Velocity toolbar action (§11) is unchanged and stays on this page.
 - Search spans order_id, ASIN, and product name in one box. Supplier and
-  status filters are **searchable multi-selects** (OR within a facet, AND
-  across facets); status matches by token containment (`.includes()`, same
-  convention as the sheet sync). Status renders as comma-split token chips in
-  the FIRST column, color-coded by family — lifecycle: Ordered blue, SHIP
-  indigo, Received* green, Closed neutral gray (recedes), Canceled muted red;
-  returns orange; attention tags (ATTN: Velocity, See Comments, Confirm
-  Refund / Replacement, Missing/Damaged, Lost/Damaged) amber. Tinted
-  text/chip only — never saturated badge fills (§7). The sheet's vocabulary
-  imports verbatim; no CHECK constraint.
+  Action Items filters are **searchable multi-selects** (OR within a facet,
+  AND across facets), beside the Open / Closed / All select (default Open).
+  Column 1 is the Open/Closed toggle, column 2 the expand chevron, then
+  **Action Items** as tinted chips — SHIP indigo, Received - FBM green,
+  Need to Return orange, the attention items amber. Tinted text/chip only
+  — never saturated badge fills (§7). (Until 2026-10-16 this column was the
+  sheet's free-text status, imported verbatim; see "Action Items".)
 - **SKU labels are never ambiguous:** column headers read **"Amazon SKU"**
   (ours, ASIN-level; amber "No SKU — create offer first" warning when NULL)
   and **"Supplier SKU / UPC"** (theirs, product-level). Component rows under
@@ -4935,7 +5066,11 @@ in-progress sheet row would otherwise import as `(supplier, "")`.
 
 | Field | Owner |
 |---|---|
-| `purchase_orders` / `po_asins` / `po_line_items` (all fields) | PO module UI + importer — nothing else writes them |
+| `purchase_orders` / `po_asins` / `po_line_items` (sheet-imported fields) | PO module UI + importer — nothing else writes them |
+| **`purchase_orders.action_items`, `closed_at`, `closed_by`** | **AF-owned** (2026-10-16): the Action Items editor, the Closed toggle, the auto-close rule and the one-time §6.4 backfill. The importer writes them only on its one-time INSERT (it is INSERT-only; existing POs are skipped, so no later sync ever updates them). |
+| **`po_asins.qty_shipped_supplier`, `qty_at_prep`, `qty_at_warehouse`, `qty_lost_damaged_us`** | **AF-owned**: the inline quantity editor today; Phase 2 feeds (email tracking, Velocity) later. Never the importer. |
+| **`po_asins.qty_shipped_fba`, `qty_received_amazon`** | **AF-owned, trigger-maintained** from `po_asin_shipments` (manual rows today; SC / Velocity in Phase 2). |
+| `po_asin_shipments` | AF-owned: manual entry from the Shipment IDs chip; Phase 2 feeds. |
 | `settings.po_*` lookup lists | Migrations (seed/append) + entry form (layer 1) |
 
 The PO module writes nothing outside its own tables. `asin_estimates`
@@ -4951,11 +5086,17 @@ until cutover.
 5. Cutover (repoint syncs/exports sheet → tables; retire mirror; POs sub-nav)
 6. Later: gift-card ledger, subscription alerts, Velocity bundles, %-type
    product discounts, §15 FIFO/lots, pre-2026 import
-7. Velocity qty check-in pull — read-only sync of received/checked-in
-   quantities from Velocity into a Velocity-owned po_asins column, matched on
-   (order_number, asin); Velocity order quantity corresponds to the computed
-   Velocity quantity (units_per_pack × qty), so no backfill or conversion
-   layer is needed. Discovery probe first.
+7. **Phase 2 — reconciliation data feeds** (the next patch): SC
+   Fulfillment Inbound API (list inbound shipments + items → `fba_shipment_id`,
+   per-SKU shipped/received qty); Velocity outbound-shipments probe (FBA
+   shipment ID + per-line Order # + ASIN + qty; lines with no Order # →
+   unmatched bucket; confirm whether Quantity Shipped is individual units
+   or ASIN qty and convert through Units/Pack before writing — §4.1);
+   match (Order # → `order_id`, ASIN) → `po_asins` → upsert
+   `po_asin_shipments` → the trigger recomputes Shipped FBA / Received by
+   Amazon → auto-close. Amazon receiving losses simply show as Shipped FBA
+   vs Received by Amazon. Email tracking-number parsing → Shipped by
+   Supplier. Home-shipped POs + a Shipments nav page.
 
 ---
 

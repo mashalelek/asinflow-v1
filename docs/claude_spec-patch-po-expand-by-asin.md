@@ -1,7 +1,20 @@
 # Spec patch — PO module: Expand by ASIN view, column model, Action Items + Closed
 
 Date: 2026-10-15
-Status: APPROVED 2026-10-15 (approval model: patch, not commits)
+Status: IMPLEMENTED 2026-10-16 — commits 1–8 (pre-flight `f04bebb`, migration
+056 `0becb5c`, column model `00fa7b4`, Expand by ASIN `8cc0682`, Closed
+`a544fbd`, Action Items + §6.4 `9f2d5d2`, Products tab `7e8d329`, docs).
+Decisions taken during implementation (pre-flight, 2026-10-16): Canceled /
+Returned are DERIVED on the ASIN row from `po_line_items` (no stored
+copies); "Received Partial" → nothing (as Received); "Closed" →
+`closed_at = updated_at`, `closed_by = 'sheet'`; `po_asin_shipments.po_asin_id`
+is uuid (po_asins.id is uuid); Shipped FBA / Received by Amazon are
+trigger-maintained; the §6.4 value migration is `script/migrate-po-status.ts`
+(dry-run default, `--live`), run on Render after deploy; §6.3 is SPEC text
+only (no code implements the rule; delta counts recorded); the importer is
+INSERT-only so "excluded from ON CONFLICT DO UPDATE SET" is moot; the five
+modules reading the Orders sheet's Status cell directly are out of scope.
+Previously: APPROVED 2026-10-15 (approval model: patch, not commits)
 Target: `docs/SPEC.md` (PO module section) + code.
 
 ## 0. Why
