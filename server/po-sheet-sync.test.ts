@@ -1,4 +1,6 @@
 import { describe, it, expect } from "vitest";
+import { readFileSync } from "fs";
+import { join } from "path";
 import { parsePoSheet, syncPoSheet, poKey, PO_SHEET_HEADER_EXPECT } from "./po-sheet-sync";
 import { COL } from "./po-import-classify";
 
@@ -232,5 +234,33 @@ describe("syncPoSheet — dry run computes the §3.9 counts and writes nothing",
     const failing = { ...db, connect: async () => ({ query: async (sql: string) => { if (sql.startsWith("INSERT")) throw new Error("boom"); return { rows: [], rowCount: 0 }; }, release: () => db.writes.push({ sql: "RELEASE" }) }) };
     await expect(syncPoSheet({ sheetId: "s", dryRun: false, db: failing, read: read(cells) })).rejects.toThrow("boom");
     expect(db.writes.map((w) => w.sql)).toEqual(["RELEASE"]);
+  });
+});
+
+// ── §4 button wiring ──────────────────────────────────────────────────────────
+describe("Sync POs button (§4): PO sync first, then the per-ASIN sync; both outcomes reported", () => {
+  const read = (rel: string) => readFileSync(join(__dirname, "..", rel), "utf8");
+  it("the route runs syncPoSheet before runSheetsSync, survives a PO-sync failure, and ?dryRun=true writes nothing", () => {
+    const routes = read("server/routes.ts");
+    const start = routes.indexOf('app.post("/api/sheets/sync"');
+    const body = routes.slice(start, routes.indexOf("app.post(", start + 10));
+    const po = body.indexOf("await syncPoSheet({ sheetId, dryRun })");
+    const asin = body.indexOf("await runSheetsSync(filter)");
+    expect(po).toBeGreaterThan(0);
+    expect(asin).toBeGreaterThan(po);
+    expect(body).toMatch(/poSync = \{ error: err\?\.message \?\? String\(err\) \}/);
+    expect(body).toMatch(/if \(dryRun\) return \{ dryRun: true, updated: 0, skipped: 0, errors: \[\], cleared: 0, clearedAsins: \[\], poSync \}/);
+    expect(body).toMatch(/return \{ \.\.\.asinSync, poSync \}/);
+    expect(body).not.toMatch(/enqueueJob|enqueueOnboardingJob/); // rule C: inline, never a job
+  });
+  it("the toast shows the PO counts and the ASIN counts, and goes destructive when the PO sync failed or stopped", () => {
+    const page = read("client/src/pages/home.tsx");
+    const h = page.slice(page.indexOf("const handleSyncSheet"), page.indexOf("}, [toast, currentWorkingSet, fetchAsins"));
+    expect(h).toMatch(/fetchLongSync\("\/api\/sheets\/sync", \{ asins: ws \}\)/);
+    expect(h).toMatch(/POs: \+\$\{po\.counts\.inserted\} new, \$\{po\.counts\.updated\} updated, \$\{po\.counts\.unchanged\} unchanged/);
+    expect(h).toMatch(/POs: STOPPED, nothing written/);
+    expect(h).toMatch(/POs: FAILED/);
+    expect(h).toMatch(/ASINs: updated \$\{data\.updated\}, skipped \$\{data\.skipped\}/);
+    expect(h).toMatch(/variant: poFailed \? "destructive" : undefined/);
   });
 });

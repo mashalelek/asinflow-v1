@@ -11,6 +11,7 @@ import { probeGatingForAsins } from "./gating-probe";
 import { loadPoAsinRows } from "./po-queries";
 import { evaluateAutoClose, setPoClosedManually, parseQtyInput, MANUAL_QTY_COLUMNS, type ManualQtyColumn } from "./po-close";
 import { ACTION_ITEMS, normalizeActionItems } from "./po-status-map";
+import { syncPoSheet, type PoSyncResult } from "./po-sheet-sync";
 import { log } from "./index";
 import { type AsinInput, type AsinResult, type ColumnMapping, extractDomain, cleanBuyLink, getFeePriceForAsin, LEAD_SOURCES, normalizeLeadSource, type LeadSource } from "@shared/schema";
 import { parseMoney } from "@shared/parse-money";
@@ -1825,6 +1826,12 @@ export async function registerRoutes(
     });
   });
 
+  // Sync POs (patch docs/claude_spec-patch-po-sheet-sync.md §4, 2026-10-16):
+  // the Orders-sheet → PO-module sync runs FIRST over the whole sheet, then
+  // the existing per-ASIN COGS/ordered-qty sync for the working set. If the
+  // PO sync fails the per-ASIN sync still runs and the result carries both
+  // outcomes (`poSync.error`). `?dryRun=true` runs only the PO sync's plan
+  // and writes nothing at all. Inline, off the queue (rule C).
   app.post("/api/sheets/sync", async (req: Request, res: Response) => {
     if (!isDbAvailable()) { res.status(503).json({ message: "Database not available" }); return; }
     const credPath = process.env.GOOGLE_CREDENTIALS_PATH;
@@ -1832,11 +1839,25 @@ export async function registerRoutes(
       res.status(400).json({ message: "Google credentials file not found" });
       return;
     }
+    const sheetId = process.env.GOOGLE_SHEET_ID;
+    if (!sheetId) { res.status(400).json({ message: "GOOGLE_SHEET_ID not configured" }); return; }
+    const dryRun = String(req.query.dryRun ?? "") === "true";
     const { asins } = (req.body ?? {}) as { asins?: string[] };
     const filter = asins && asins.length > 0 ? new Set(asins) : undefined;
     await respondLongSync(res, async () => {
+      let poSync: PoSyncResult | { error: string };
       try {
-        return await runSheetsSync(filter);
+        poSync = await syncPoSheet({ sheetId, dryRun });
+        const c = poSync.counts;
+        log(`PO sync ${dryRun ? "DRY RUN" : poSync.wrote ? "live" : "STOPPED"}: sheet ${c.sheetPos}, insert ${c.inserted}, update ${c.updated}, unchanged ${c.unchanged}, lines deleted ${c.linesDeleted}, po_asins deleted ${c.poAsinsDeleted}, kept(shipments) ${c.poAsinsKeptWithShipments}, canceled kept ${c.canceledKeptOrderedQty}, canceled 0/0 ${c.canceledNoOrderedQty}, in AF not in sheet ${c.posInAfNotInSheet}, unmapped ${c.unmappedTokens}${poSync.stop ? ` — STOP: ${poSync.stop}` : ""}`, "sheets");
+      } catch (err: any) {
+        log(`PO sync error: ${err.message}`, "sheets");
+        poSync = { error: err?.message ?? String(err) };
+      }
+      if (dryRun) return { dryRun: true, updated: 0, skipped: 0, errors: [], cleared: 0, clearedAsins: [], poSync };
+      try {
+        const asinSync = await runSheetsSync(filter);
+        return { ...asinSync, poSync };
       } catch (err: any) {
         log(`Sheets sync error: ${err.message}`, "sheets");
         throw err;

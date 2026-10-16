@@ -805,7 +805,16 @@ export default function Home() {
     setIsSyncing(true);
     try {
       const data = await fetchLongSync("/api/sheets/sync", { asins: ws });
-      toast({ title: `Synced PO data`, description: `Updated ${data.updated} ASINs, skipped ${data.skipped}${data.cleared ? `, cleared ${data.cleared} stale qty` : ""}` });
+      // Two outcomes (patch po-sheet-sync §4): the whole-sheet PO sync first,
+      // then the per-ASIN COGS/ordered-qty sync for the working set.
+      const po = data.poSync;
+      const poLine = !po ? "POs: not run"
+        : "error" in po ? `POs: FAILED — ${po.error}`
+        : po.stop ? `POs: STOPPED, nothing written — ${po.stop}`
+        : `POs: +${po.counts.inserted} new, ${po.counts.updated} updated, ${po.counts.unchanged} unchanged${po.counts.linesDeleted ? `, ${po.counts.linesDeleted} lines removed` : ""}${po.counts.poAsinsKeptWithShipments ? `, ${po.counts.poAsinsKeptWithShipments} ASIN row(s) kept (shipments)` : ""}${po.counts.posInAfNotInSheet ? `, ${po.counts.posInAfNotInSheet} in AF not in sheet` : ""}`;
+      const asinLine = `ASINs: updated ${data.updated}, skipped ${data.skipped}${data.cleared ? `, cleared ${data.cleared} stale qty` : ""}`;
+      const poFailed = !po || "error" in po || Boolean(po.stop);
+      toast({ title: poFailed ? "Synced ASINs; PO sync did not complete" : "Synced POs and ASINs", description: `${poLine}. ${asinLine}`, variant: poFailed ? "destructive" : undefined });
       await fetchAsins(startDate, endDate, showParked, showDead);
     } catch (err: any) {
       toast({ title: "Sync failed", description: err.message, variant: "destructive" });
