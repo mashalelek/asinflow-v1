@@ -17,6 +17,7 @@
     "migrate": "tsx script/migrate.ts",
     "migrate:status": "tsx script/migrate.ts --status",
     "backfill:sales": "tsx script/backfill-sales.ts",
+    "migrate:po-status": "tsx script/migrate-po-status.ts",
     "db:push": "drizzle-kit push"
   },
   "dependencies": {

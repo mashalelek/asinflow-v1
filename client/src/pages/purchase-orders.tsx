@@ -32,7 +32,8 @@ interface PoRow {
   order_id: string;
   order_date: string;
   supplier: string;
-  status: string;
+  /** §6: multi-select Action Items (the old free-text status is no longer read). */
+  action_items: string[];
   order_total: string | null;
   invoice_attached: boolean;
   asin_count: number;
@@ -52,11 +53,14 @@ interface PosResponse {
   page: number;
   pageSize: number;
   suppliers: string[];
-  statusTokens: string[];
+  /** The §6.1 list, display order. */
+  actionItems: string[];
   closed: "open" | "closed" | "all";
 }
 
 type ClosedFilter = "open" | "closed" | "all";
+/** §6.1 list, display order — the detail page has no list payload to read it from. */
+const ACTION_ITEM_OPTIONS = ["Need to Return", "Missing / Damaged from Supplier", "Confirm Refund / Replacement", "ATTN: Velocity", "See Comments", "SHIP", "Received - FBM"];
 
 /** §5 col 1: green check when Closed, open-order outline when Open. Click toggles with confirm. */
 function ClosedToggle({ po, onToggled, size = "sm" }: { po: { id: string; order_id: string; closed_at: string | null; closed_by: string | null }; onToggled: () => void; size?: "sm" | "lg" }) {
@@ -99,21 +103,53 @@ function ClosedToggle({ po, onToggled, size = "sm" }: { po: { id: string; order_
   );
 }
 
-// §7: tinted chips only, never saturated fills. Families ruled 2026-08-22.
-function statusChipClass(token: string): string {
-  const t = token.toLowerCase();
-  if (t === "ordered") return "bg-blue-500/10 text-blue-600 dark:text-blue-400";
+// §7: tinted chips only, never saturated fills. Action Items (§6.1):
+// needs-attention items amber; SHIP indigo; Received - FBM green;
+// Need to Return orange.
+function actionChipClass(item: string): string {
+  const t = item.toLowerCase();
   if (t === "ship") return "bg-indigo-500/10 text-indigo-600 dark:text-indigo-400";
-  if (t.startsWith("received")) return "bg-green-500/10 text-green-700 dark:text-green-400";
-  if (t === "closed") return "bg-muted text-muted-foreground";
-  if (t === "canceled") return "bg-red-500/10 text-red-600/80 dark:text-red-400/80";
-  if (t.startsWith("returned") || t.includes("partial return")) return "bg-orange-500/10 text-orange-600 dark:text-orange-400";
-  // ATTN: Velocity · See Comments · Confirm Refund / Replacement ·
-  // Missing / Damaged from Supplier · Lost / Damaged by Us — and any
-  // unmapped token — read as needs-attention: amber.
+  if (t === "received - fbm") return "bg-green-500/10 text-green-700 dark:text-green-400";
+  if (t === "need to return") return "bg-orange-500/10 text-orange-600 dark:text-orange-400";
   return "bg-amber-500/10 text-amber-600 dark:text-amber-400";
 }
 const chipBase = "inline-block rounded-sm px-1.5 py-0.5 text-[11px] whitespace-nowrap";
+
+/** Action Items chips + inline multi-select editor (§6.1). Saving re-runs the auto-close rule server-side. */
+function ActionItemsEditor({ po, options, onSaved, align = "start" }: { po: { id: string; order_id: string; action_items: string[] }; options: string[]; onSaved: () => void; align?: "start" | "end" }) {
+  const [open, setOpen] = useState(false);
+  const [draft, setDraft] = useState<Set<string>>(new Set(po.action_items));
+  const [err, setErr] = useState<string | null>(null);
+  const save = async (next: Set<string>) => {
+    setDraft(next); setErr(null);
+    try {
+      const res = await fetch(`/api/pos/${po.id}/action-items`, { method: "PATCH", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ action_items: Array.from(next) }) });
+      if (!res.ok) throw new Error((await res.json().catch(() => ({}))).message || `HTTP ${res.status}`);
+      onSaved();
+    } catch (e: any) { setErr(e.message); }
+  };
+  return (
+    <Popover open={open} onOpenChange={(v) => { setOpen(v); if (v) setDraft(new Set(po.action_items)); }}>
+      <PopoverTrigger asChild>
+        <button type="button" onClick={(e) => e.stopPropagation()} className="flex flex-col items-start gap-0.5 min-h-[1.25rem] min-w-[4rem] text-left" data-testid={`button-action-items-${po.order_id}`} title="Edit action items">
+          {po.action_items.length === 0
+            ? <span className="text-muted-foreground/40 text-[11px]">—</span>
+            : po.action_items.map((it) => <span key={it} className={`${chipBase} ${actionChipClass(it)}`}>{it}</span>)}
+        </button>
+      </PopoverTrigger>
+      <PopoverContent className="w-72 p-2 space-y-1" align={align} onClick={(e) => e.stopPropagation()}>
+        <div className="text-[10px] uppercase tracking-wider text-muted-foreground px-1">Action items</div>
+        {options.map((opt) => (
+          <label key={opt} className="flex items-center gap-2 px-2 py-1 rounded hover:bg-muted cursor-pointer text-xs">
+            <input type="checkbox" checked={draft.has(opt)} onChange={() => { const next = new Set(draft); if (next.has(opt)) next.delete(opt); else next.add(opt); void save(next); }} className="h-3 w-3 accent-blue-500" data-testid={`checkbox-action-${opt}`} />
+            <span className={`${chipBase} ${actionChipClass(opt)}`}>{opt}</span>
+          </label>
+        ))}
+        {err && <div className="px-2 text-xs text-destructive">{err}</div>}
+      </PopoverContent>
+    </Popover>
+  );
+}
 
 // Searchable multi-select facet — same interaction pattern as the main
 // page's Tags/Supplier filters (type-ahead, select/clear all, checkbox
@@ -181,7 +217,7 @@ export default function PurchaseOrders() {
   const [velocityOpen, setVelocityOpen] = useState(false);
   const [search, setSearch] = useState("");
   const [debouncedSearch, setDebouncedSearch] = useState("");
-  const [statusSel, setStatusSel] = useState<Set<string>>(new Set());
+  const [actionSel, setActionSel] = useState<Set<string>>(new Set());
   const [closedFilter, setClosedFilter] = useState<ClosedFilter>("open"); // D3: default Open only
   const [supplierSel, setSupplierSel] = useState<Set<string>>(new Set());
   const [from, setFrom] = useState("");
@@ -198,15 +234,15 @@ export default function PurchaseOrders() {
     return () => clearTimeout(h);
   }, [search]);
 
-  const statusKey = Array.from(statusSel).sort().join(",");
+  const actionKey = Array.from(actionSel).sort().join(",");
   const supplierKey = Array.from(supplierSel).sort().join(",");
-  useEffect(() => { setPage(1); }, [debouncedSearch, statusKey, supplierKey, from, to, closedFilter]);
+  useEffect(() => { setPage(1); }, [debouncedSearch, actionKey, supplierKey, from, to, closedFilter]);
 
   const load = useCallback(async () => {
     setError(null);
     const params = new URLSearchParams();
     if (debouncedSearch) params.set("search", debouncedSearch);
-    if (statusKey) params.set("status", statusKey);
+    if (actionKey) params.set("action", actionKey);
     params.set("closed", closedFilter);
     if (supplierKey) params.set("supplier", supplierKey);
     if (from) params.set("from", from);
@@ -219,7 +255,7 @@ export default function PurchaseOrders() {
     } catch (e: any) {
       setError(e.message);
     }
-  }, [debouncedSearch, statusKey, supplierKey, from, to, page, closedFilter]);
+  }, [debouncedSearch, actionKey, supplierKey, from, to, page, closedFilter]);
 
   useEffect(() => { load(); }, [load]);
 
@@ -281,7 +317,7 @@ export default function PurchaseOrders() {
             <SelectItem value="all">All</SelectItem>
           </SelectContent>
         </Select>
-        <FacetMultiSelect label="Status" options={data?.statusTokens ?? []} selected={statusSel} onChange={setStatusSel} testId="select-po-status" />
+        <FacetMultiSelect label="Action Items" options={data?.actionItems ?? []} selected={actionSel} onChange={setActionSel} testId="select-po-action-items" />
         <FacetMultiSelect label="Supplier" options={data?.suppliers ?? []} selected={supplierSel} onChange={setSupplierSel} testId="select-po-supplier" />
         <input type="date" value={from} onChange={(e) => setFrom(e.target.value)}
           className="h-8 rounded-md border border-input bg-background px-2 text-sm" data-testid="input-po-from" />
@@ -310,7 +346,6 @@ export default function PurchaseOrders() {
               const firstExpandedId = visibleIds.find((id) => isPoExpanded(expandedState, id)) ?? null;
               return (data?.pos ?? []).map((po) => {
               const money = fmtMoney(po.order_total);
-              const tokens = po.status.split(",").map((x) => x.trim()).filter(Boolean);
               const open = isPoExpanded(expandedState, po.id);
               return (
                 <React.Fragment key={po.id}>
@@ -328,12 +363,8 @@ export default function PurchaseOrders() {
                       {open ? <ChevronDown className="h-3.5 w-3.5" /> : <ChevronRight className="h-3.5 w-3.5" />}
                     </button>
                   </td>
-                  <td className="px-3 py-2">
-                    <div className="flex flex-col items-start gap-0.5">
-                      {tokens.map((tk) => (
-                        <span key={tk} className={`${chipBase} ${statusChipClass(tk)}`}>{tk}</span>
-                      ))}
-                    </div>
+                  <td className="px-3 py-2" onClick={(e) => e.stopPropagation()}>
+                    <ActionItemsEditor po={po} options={data?.actionItems ?? []} onSaved={load} />
                   </td>
                   <td className="px-3 py-2 whitespace-nowrap">{fmtDate(po.order_date)}</td>
                   <td className="px-3 py-2 font-mono text-xs">{po.order_id}</td>
@@ -465,7 +496,7 @@ export function PurchaseOrderDetailPlaceholder() {
   if (!data) return <div className="px-6 py-8 text-sm text-muted-foreground">Loading…</div>;
 
   const { po, summary, asins } = data;
-  const tokens = String(po.status ?? "").split(",").map((x: string) => x.trim()).filter(Boolean);
+  const actionItems: string[] = Array.isArray(po.action_items) ? po.action_items : [];
   const hairline = { borderBottom: "0.5px solid hsl(var(--border))" } as const;
   const allLines: Array<PoLine & { parentAsin: string }> = asins.flatMap((a) => a.lines.map((l) => ({ ...l, parentAsin: a.asin })));
 
@@ -495,9 +526,7 @@ export function PurchaseOrderDetailPlaceholder() {
           </div>
         </div>
         <div className="flex gap-1">
-          {tokens.map((tk: string) => (
-            <span key={tk} className={`${chipBase} ${statusChipClass(tk)}`}>{tk}</span>
-          ))}
+          <ActionItemsEditor po={{ id: po.id, order_id: po.order_id, action_items: actionItems }} options={ACTION_ITEM_OPTIONS} onSaved={reload} align="end" />
         </div>
       </div>
 
@@ -531,7 +560,7 @@ export function PurchaseOrderDetailPlaceholder() {
             ["Date", fmtDate(String(po.order_date))],
             ["Supplier", po.supplier],
             ["Status", po.closed_at ? "Closed" : "Open"],
-            ["Action Items", tokens.join(", ") || "—"],
+            ["Action Items", actionItems.join(", ") || "—"],
           ]} />
           <DetailCard title="Money" rows={[
             ["Subtotal", <Money v={po.subtotal} />],

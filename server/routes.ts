@@ -10,6 +10,7 @@ import { runAuraSyncChain } from "./aura-sync-chain";
 import { probeGatingForAsins } from "./gating-probe";
 import { loadPoAsinRows } from "./po-queries";
 import { evaluateAutoClose, setPoClosedManually, parseQtyInput, MANUAL_QTY_COLUMNS, type ManualQtyColumn } from "./po-close";
+import { ACTION_ITEMS, normalizeActionItems } from "./po-status-map";
 import { log } from "./index";
 import { type AsinInput, type AsinResult, type ColumnMapping, extractDomain, cleanBuyLink, getFeePriceForAsin, LEAD_SOURCES, normalizeLeadSource, type LeadSource } from "@shared/schema";
 import { parseMoney } from "@shared/parse-money";
@@ -4286,7 +4287,8 @@ export async function registerRoutes(
   app.get("/api/pos", async (req: Request, res: Response) => {
     if (!isDbAvailable()) { res.status(503).json({ message: "Database not available" }); return; }
     const q = typeof req.query.search === "string" ? req.query.search.trim() : "";
-    const status = typeof req.query.status === "string" ? req.query.status.trim() : "";
+    // §6.3: the Status token filter became the Action Items filter (any-of).
+    const action = typeof req.query.action === "string" ? req.query.action.trim() : "";
     const supplier = typeof req.query.supplier === "string" ? req.query.supplier.trim() : "";
     const from = typeof req.query.from === "string" ? req.query.from.trim() : "";
     const to = typeof req.query.to === "string" ? req.query.to.trim() : "";
@@ -4306,14 +4308,12 @@ export async function registerRoutes(
         OR EXISTS (SELECT 1 FROM po_asins a WHERE a.po_id = p.id AND a.asin ILIKE $${n})
         OR EXISTS (SELECT 1 FROM po_line_items l WHERE l.po_id = p.id AND l.product_name ILIKE $${n}))`);
     }
-    // Status filter is TOKEN-based: a PO matches if its comma-joined status
-    // CONTAINS the token (same .includes() convention as the sync code).
-    // Both facets accept comma-separated multi-selects: OR within a facet,
-    // AND across facets (tokens/domains never contain commas).
-    if (status) {
-      const tokens = status.split(",").map((x) => x.trim()).filter(Boolean);
-      const ors = tokens.map((tk) => { params.push(`%${tk}%`); return `p.status ILIKE $${params.length}`; });
-      if (ors.length > 0) conds.push(`(${ors.join(" OR ")})`);
+    // Action Items filter: any-of over action_items[] (values never contain
+    // commas). Both facets accept comma-separated multi-selects: OR within a
+    // facet, AND across facets.
+    if (action) {
+      const items = action.split(",").map((x) => x.trim()).filter((x) => (ACTION_ITEMS as readonly string[]).includes(x));
+      if (items.length > 0) { params.push(items); conds.push(`p.action_items && $${params.length}::text[]`); }
     }
     if (supplier) {
       const list = supplier.split(",").map((x) => x.trim()).filter(Boolean);
@@ -4348,11 +4348,10 @@ export async function registerRoutes(
       const asinsByPo = new Map<string, any[]>();
       for (const a of asinRows) { const k = String(a.po_id); if (!asinsByPo.has(k)) asinsByPo.set(k, []); asinsByPo.get(k)!.push(a); }
       for (const r of rows) r.asins = asinsByPo.get(String(r.id)) ?? [];
-      // Filter options for the toolbar (distinct across the whole table, not
-      // the page): suppliers + status tokens (comma-split, deduped).
+      // Filter options for the toolbar: suppliers (distinct across the whole
+      // table) + the fixed Action Items list in display order (§6.1).
       const suppliers = (await query(`SELECT DISTINCT supplier FROM purchase_orders ORDER BY supplier`)).rows.map((r: any) => r.supplier);
-      const tokenRows = (await query(`SELECT DISTINCT TRIM(t) AS token FROM purchase_orders, unnest(string_to_array(status, ',')) AS t ORDER BY 1`)).rows;
-      res.json({ pos: rows, total, page, pageSize: PAGE_SIZE, suppliers, statusTokens: tokenRows.map((r: any) => r.token), closed });
+      res.json({ pos: rows, total, page, pageSize: PAGE_SIZE, suppliers, actionItems: ACTION_ITEMS, closed });
     } catch (err: any) {
       res.status(500).json({ message: err.message });
     }
@@ -4427,6 +4426,21 @@ export async function registerRoutes(
   // po_asin_shipments (AF-owned, SPEC §14). Every quantity or shipment
   // change re-runs the auto-close rule for its PO.
   const poQuery = (sql: string, params?: any[]) => query(sql, params);
+
+  // Action Items (§6): multi-select, validated against the §6.1 list; a change re-runs the auto-close rule (b).
+  app.patch("/api/pos/:id/action-items", async (req: Request, res: Response) => {
+    if (!isDbAvailable()) { res.status(503).json({ message: "Database not available" }); return; }
+    const id = String(req.params.id ?? "");
+    const v = normalizeActionItems((req.body ?? {}).action_items);
+    if (!v.ok) { res.status(400).json({ message: v.error }); return; }
+    try {
+      const r = await query(`UPDATE purchase_orders SET action_items = $2::text[], updated_at = NOW() WHERE id = $1 RETURNING id`, [id, v.value]);
+      if (r.rowCount === 0) { res.status(404).json({ message: "PO not found" }); return; }
+      const close = await evaluateAutoClose(id, poQuery);
+      const po = (await query(`SELECT id, action_items, closed_at, closed_by FROM purchase_orders WHERE id = $1`, [id])).rows[0];
+      res.json({ po, close });
+    } catch (err: any) { res.status(500).json({ message: err.message }); }
+  });
 
   // Manual Closed toggle (POs table col 1 / PO Details), with the user as closed_by.
   app.patch("/api/pos/:id/closed", async (req: Request, res: Response) => {

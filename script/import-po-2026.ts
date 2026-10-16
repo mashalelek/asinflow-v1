@@ -40,6 +40,7 @@ import { getSheetValues } from "../server/sheet-read";
 // test can import classifyRows WITHOUT pulling this driver into the test
 // typecheck (2026-10-03). One definition of each, imported back here.
 import { COL, t, parseDateMDY, classifyRows } from "../server/po-import-classify";
+import { mapSheetStatus } from "../server/po-status-map";
 
 const LIVE = process.argv.includes("--live");
 const CSV_FLAG = process.argv.indexOf("--csv");
@@ -331,9 +332,16 @@ const SEEDED_PAYMENT_BY_LC = new Map([...SEEDED_PAYMENT].map((v) => [v.toLowerCa
 
     if (mixedSError) continue; // PO skipped + reported above
 
+    // Status cell → Action Items model (patch §6; 2026-10-16). The old
+    // `status` column is no longer written: action items → action_items,
+    // "Closed" → closed_at/closed_by='sheet', "Canceled" → qty_canceled on
+    // every line (PO-wide), Received/Returned/Ordered → nothing. An
+    // unmapped token is reported and the PO is skipped.
+    const sheetStatus = mapSheetStatus(t(c[COL.status]) || "Ordered");
+    if (sheetStatus.unmapped.length > 0) { discrepancies.push(`${g.supplier} ${g.orderId} [Status]: unmapped token(s) ${JSON.stringify(sheetStatus.unmapped)} — PO skipped`); continue; }
     pos.push({
       orderId: g.orderId, orderDate: g.rows[0].dateIso, supplier: g.supplier,
-      status: t(c[COL.status]) || "Ordered",
+      actionItems: sheetStatus.actionItems, closedFromSheet: sheetStatus.closed, canceledFromSheet: sheetStatus.canceled,
       subtotal: money(g, f, COL.subtotal) ?? "0", tax: money(g, f, COL.tax) ?? "0",
       shDonations: money(g, f, COL.shDonations) ?? "0", discount: money(g, f, COL.discount) ?? "0",
       refundAmount: money(g, f, COL.refundAmount) ?? "0", orderTotal: money(g, f, COL.orderTotal) ?? "0",
@@ -419,10 +427,14 @@ const SEEDED_PAYMENT_BY_LC = new Map([...SEEDED_PAYMENT].map((v) => [v.toLowerCa
       await client.query("BEGIN");
       for (const p of toImport) {
         const po = await client.query(
-          `INSERT INTO purchase_orders (order_id, order_date, supplier, status, subtotal, tax, sh_donations, discount, refund_amount, order_total,
+          // AF-owned columns (SPEC §14): action_items / closed_at / closed_by are
+          // written ONLY on this one-time INSERT (the importer never updates
+          // an existing PO — see the idempotency filter above).
+          `INSERT INTO purchase_orders (order_id, order_date, supplier, action_items, closed_at, closed_by, subtotal, tax, sh_donations, discount, refund_amount, order_total,
              payment_method, weighted_gc_discount_pct, promo, cashback_site, cashback_pct, purchased_by, subscription, email_used, invoice_attached, notes, source)
-           VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,'sheet_import') RETURNING id`,
-          [p.orderId, p.orderDate, p.supplier, p.status, p.subtotal, p.tax, p.shDonations, p.discount, p.refundAmount, p.orderTotal,
+           VALUES ($1,$2,$3,$4::text[],$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22,'sheet_import') RETURNING id`,
+          [p.orderId, p.orderDate, p.supplier, p.actionItems, p.closedFromSheet ? new Date() : null, p.closedFromSheet ? "sheet" : null,
+           p.subtotal, p.tax, p.shDonations, p.discount, p.refundAmount, p.orderTotal,
            p.payment, p.wgc, p.promo, p.cashback, p.cashbackPct, p.purchasedBy, p.subscription, p.email, p.invoiceAttached, p.notes],
         );
         const poId = po.rows[0].id;
@@ -435,12 +447,13 @@ const SEEDED_PAYMENT_BY_LC = new Map([...SEEDED_PAYMENT].map((v) => [v.toLowerCa
           const paId = pa.rows[0].id;
           for (const l of a.lines) {
             await client.query(
-              // qty_canceled deliberately absent → stays NULL (= not tracked;
-              // the sheet never recorded it — NO status-derived writes).
+              // qty_canceled: NULL (= not tracked) UNLESS the sheet's Status said
+              // "Canceled" — a PO-wide cancel sets qty_canceled = qty_ordered on
+              // every line (§6.4). Per-ASIN partial cancels are not inferrable.
               // final_qty is GENERATED — never inserted.
-              `INSERT INTO po_line_items (po_id, po_asin_id, position, product_name, supplier_sku, price, item_discount, qty_ordered, qty_received, qty_returned, asin_qty_per_product, adjusted_product_cost)
-               VALUES ($1,$2,$3,$4,$5,$6,0,$7,$8,$9,$10,$11)`,
-              [poId, paId, l.position, l.productName, l.supplierSku, l.price, l.qtyOrdered, l.qtyReceived, l.qtyReturned, l.asinQtyPerProduct, l.adjustedProductCost],
+              `INSERT INTO po_line_items (po_id, po_asin_id, position, product_name, supplier_sku, price, item_discount, qty_ordered, qty_received, qty_returned, asin_qty_per_product, adjusted_product_cost, qty_canceled)
+               VALUES ($1,$2,$3,$4,$5,$6,0,$7,$8,$9,$10,$11,$12)`,
+              [poId, paId, l.position, l.productName, l.supplierSku, l.price, l.qtyOrdered, l.qtyReceived, l.qtyReturned, l.asinQtyPerProduct, l.adjustedProductCost, p.canceledFromSheet ? l.qtyOrdered : null],
             );
           }
         }

@@ -4843,13 +4843,18 @@ Decisions resolved 2026-08-22:
   muted em-dash ("not tracked"); app-entered rows compute real values.
   Explicit 0 renders muted, never as an em-dash.
 
-**Cutover exclusion rule** (recorded now, applied at the cutover layer): a
-PO is excluded from profit calculations when `final_qty = 0`, OR when
-`final_qty IS NULL` (not tracked — all sheet-imported rows) AND status
-contains `canceled` (case-insensitive containment, the standard
-convention). `final_qty` is authoritative when tracked; status is only the
-fallback for untracked rows. A partially-canceled PO with `final_qty > 0`
-is INCLUDED regardless of status tokens.
+**Cutover exclusion rule** (recorded now, applied at the cutover layer —
+no code implements it yet): a line is excluded from profit calculations
+when `final_qty = 0`, OR when `final_qty IS NULL` (not tracked) AND
+`qty_canceled IS NOT NULL AND qty_canceled >= qty_ordered`. The old
+status-text fallback (`status ILIKE '%canceled%'`) is gone with the
+status column (§6.3, 2026-10-16): the §6.4 backfill wrote
+`qty_canceled = qty_ordered` on every line of a sheet-canceled PO, so the
+generated `final_qty` is 0 there and the first clause covers them.
+Evidence recorded at the switch (local, 1,168 lines): old rule 38 rows,
+new rule 0 before the backfill and 38 after — delta 0, explained entirely
+by `qty_canceled` having been untracked. A partially-canceled line with
+`final_qty > 0` is INCLUDED.
 
 ### Multi-row same-ASIN semantics
 
