@@ -168,7 +168,11 @@ export async function enqueueRefresh(asins: string[] | null, fetchFn: typeof fet
   }));
 }
 
-export async function getCurrent(fetchFn: typeof fetch = fetch): Promise<{ running: Job | null; queued: Job[] }> {
+/** One running job per lane (2026-10-16): the scheduled pass and the lane M job (manual / onboarding / bulk). */
+export interface CurrentJobs { scheduled: Job | null; manual: Job | null; queued: Job[] }
+export const isLaneM = (j: Job) => j.trigger !== "scheduled";
+
+export async function getCurrent(fetchFn: typeof fetch = fetch): Promise<CurrentJobs> {
   return parse(await fetchFn("/api/jobs/current", { credentials: "same-origin" }));
 }
 

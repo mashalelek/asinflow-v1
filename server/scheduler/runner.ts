@@ -19,8 +19,8 @@ import {
   claimNextJob, writeProgress, readStatus, finishJob, recordComponentRun,
 } from "./jobs-repo";
 import {
-  CancelledError, ComponentError, type ComponentContext, type ComponentDef, type ComponentResult, type JobRow, type JobSummary,
-  type JobProgress, type Flip, type QueryLike,
+  CancelledError, ComponentError, ONBOARDING_COMPONENTS, laneOf, type ComponentContext, type ComponentDef, type ComponentResult, type JobRow, type JobSummary,
+  type JobProgress, type Flip, type QueryLike, type Lane,
 } from "./types";
 
 export const RUNNER_LOCK_KEY = 7342002;
@@ -67,12 +67,18 @@ export async function resolveScope(job: JobRow, query: QueryLike): Promise<strin
 
 /**
  * Which components a job runs, in sequence order: an explicit `components`
- * list wins (decision 9's one-component jobs, tier ignored); otherwise the
- * daily block only when include_daily.
+ * list wins (subset jobs such as the sales backfill, tier ignored); an
+ * onboarding job runs the per-ASIN set only (ONBOARDING_COMPONENTS — never
+ * the account-wide 1, 9, 18, 19–21); otherwise the daily block only when
+ * include_daily.
  */
 export function componentsForJob(job: JobRow, all: readonly ComponentDef[] = COMPONENTS): ComponentDef[] {
   if (job.components && job.components.length > 0) {
     const want = new Set(job.components);
+    return all.filter((c) => want.has(c.n));
+  }
+  if (job.trigger === "onboarding") {
+    const want = new Set(ONBOARDING_COMPONENTS);
     return all.filter((c) => want.has(c.n));
   }
   return all.filter((c) => c.tier === "hourly" || job.include_daily);
@@ -102,7 +108,7 @@ export async function runJob(
   const ledgerScope = bulk ? `bulk:${bulk.listId}` : (job.scope_asins ? "subset" : "full");
   const progress: JobProgress = { done: [...(job.progress?.done ?? [])], component: job.progress?.component, asin_cursor: job.progress?.asin_cursor ?? null };
   const resumed = progress.done.length > 0 || progress.component != null;
-  log(`job ${job.id} ${resumed ? "resumed" : "started"}: trigger=${job.trigger} scope=${job.scope_asins ? "subset" : "scheduled"} asins=${scope.length} daily=${job.include_daily}${job.components ? ` components=[${job.components.join(",")}]` : ""}${resumed ? ` done=[${progress.done.join(",")}] at=${progress.component ?? "-"}/${progress.asin_cursor ?? "-"}` : ""}`);
+  log(`job ${job.id} ${resumed ? "resumed" : "started"} [lane ${laneOf(job.trigger)}]: trigger=${job.trigger} scope=${job.scope_asins ? "subset" : "scheduled"} asins=${scope.length} daily=${job.include_daily}${job.components ? ` components=[${job.components.join(",")}]` : ""}${resumed ? ` done=[${progress.done.join(",")}] at=${progress.component ?? "-"}/${progress.asin_cursor ?? "-"}` : ""}`);
 
   const summary: JobSummary = { asins: bulk ? bulk.listAsins.length : scope.length, durationMs: 0, components: {}, flips: [] };
   const cache = deps.cache ?? new Map<string, unknown>();
@@ -239,7 +245,7 @@ export function startRunner(deps: RunnerDeps): RunnerHandle {
       try {
         lockClient = await deps.pool.connect();
         const r = await lockClient.query(`SELECT pg_try_advisory_lock($1) AS ok`, [RUNNER_LOCK_KEY]);
-        if (r.rows[0]?.ok === true) { log(`runner lock ${RUNNER_LOCK_KEY} acquired`); return; }
+        if (r.rows[0]?.ok === true) { log(`runner lock ${RUNNER_LOCK_KEY} acquired — lanes S (scheduled) and M (manual/onboarding/bulk)`); return; }
         lockClient.release();
         lockClient = null;
         log(`runner lock held by another instance; retrying in ${pollMs} ms`);
@@ -251,15 +257,18 @@ export function startRunner(deps: RunnerDeps): RunnerHandle {
     }
   };
 
-  const loop = async () => {
-    await acquireLock();
+  // One loop per lane, both under the one advisory lock. Each lane claims
+  // and resumes only its own trigger set, so a lane M job (manual,
+  // onboarding, bulk) starts the moment it is enqueued while the scheduled
+  // pass keeps running in lane S. Within a lane: one job at a time.
+  const laneLoop = async (lane: Lane) => {
     while (!stopped) {
       let job: JobRow | null = null;
       try {
         const c = await deps.pool.connect();
-        try { job = await claimNextJob((sql, params) => c.query(sql, params)); } finally { c.release(); }
+        try { job = await claimNextJob((sql, params) => c.query(sql, params), lane); } finally { c.release(); }
       } catch (err: any) {
-        log(`claim error: ${err?.message ?? err}`);
+        log(`lane ${lane} claim error: ${err?.message ?? err}`);
       }
       if (!job) { await sleep(pollMs); continue; }
       try {
@@ -271,6 +280,11 @@ export function startRunner(deps: RunnerDeps): RunnerHandle {
         await deps.pool.query(`UPDATE jobs SET status = 'failed', error = $2, finished_at = NOW() WHERE id = $1 AND status = 'running'`, [job.id, String(err?.message ?? err)]).catch(() => {});
       }
     }
+  };
+
+  const loop = async () => {
+    await acquireLock();
+    if (!stopped) await Promise.all([laneLoop("S"), laneLoop("M")]);
     if (lockClient) {
       await lockClient.query(`SELECT pg_advisory_unlock($1)`, [RUNNER_LOCK_KEY]).catch(() => {});
       lockClient.release();

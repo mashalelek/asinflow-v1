@@ -26,7 +26,7 @@ import { recordSourcingCostExport, listSourcingCostExports } from "./sourcing-co
 import { syncSourcingSheet } from "./sourcing-sync";
 import { refreshPrices } from "./price-sync";
 import { runFeesStage } from "./refresh-job";
-import { enqueueJob } from "./scheduler/jobs-repo";
+import { enqueueJob, enqueueOnboardingJob } from "./scheduler/jobs-repo";
 import { fetchCatalogBatch, fetchFeesBatch } from "./product-info-batch";
 import { applyCatalogDeletedSignal } from "./catalog-deleted-write";
 import { offerAddForAsin, preFilterSubmitSet, type OfferAddResult, type PreFilterResult } from "./offer-add";
@@ -3830,10 +3830,21 @@ export async function registerRoutes(
     await insertNewAsinRows(asins, emit, sink, progressPrefix);
     let jobId: number | null = null;
     try {
-      const job = await enqueueJob({ trigger: "onboarding", includeDaily: true, scopeAsins: asins.map((a) => a.asin) });
-      jobId = job.id;
-      emit(JSON.stringify({ type: "job_queued", data: { jobId: job.id, asins: asins.length } }) + "\n");
-      log(`Onboarding (${trigger}): ${asins.length} row(s) created; refresh job #${job.id} queued`, "refresh");
+      // Only rows that actually exist get a job; an ASIN that failed to
+      // insert is logged with the reason and not re-enqueued by this call.
+      const wanted = asins.map((a) => a.asin.toUpperCase());
+      const present = new Set((await query(`SELECT asin FROM asins WHERE asin = ANY($1::text[])`, [wanted])).rows.map((r: any) => String(r.asin)));
+      const missing = wanted.filter((a) => !present.has(a));
+      if (missing.length > 0) log(`Onboarding (${trigger}): ${missing.length} ASIN(s) not inserted (no asins row after insert) — not enqueued: ${missing.slice(0, 10).join(", ")}${missing.length > 10 ? "…" : ""}`, "refresh");
+      const r = await enqueueOnboardingJob(wanted.filter((a) => present.has(a)));
+      if (r.covered.length > 0) log(`Onboarding (${trigger}): ${r.covered.length} ASIN(s) already covered by a queued/running onboarding job — not re-enqueued`, "refresh");
+      if (r.job) {
+        jobId = r.job.id;
+        emit(JSON.stringify({ type: "job_queued", data: { jobId: r.job.id, asins: r.enqueued.length } }) + "\n");
+        log(`Onboarding (${trigger}): ${asins.length} row(s) created; refresh job #${r.job.id} queued for ${r.enqueued.length}`, "refresh");
+      } else {
+        log(`Onboarding (${trigger}): ${asins.length} row(s) created; nothing to enqueue`, "refresh");
+      }
     } catch (err: any) {
       log(`Onboarding (${trigger}): rows created but the refresh job could not be queued — run Refresh for them: ${err?.message ?? err}`, "refresh");
     }
@@ -4526,8 +4537,9 @@ export async function registerRoutes(
       const added = results.filter((r) => r.outcome === "added").map((r) => r.asin);
       if (added.length > 0) {
         try {
-          const job = await enqueueJob({ trigger: "onboarding", includeDaily: true, scopeAsins: added, requestedBy: req.session?.userId ?? null });
-          jobId = job.id;
+          const r = await enqueueOnboardingJob(added, { requestedBy: req.session?.userId ?? null });
+          jobId = r.job?.id ?? null;
+          if (r.covered.length > 0) log(`Promote: ${r.covered.length} ASIN(s) already covered by a queued/running onboarding job — not re-enqueued`, "bulk");
         } catch (err: any) {
           log(`Promote: ${added.length} row(s) created but the refresh job could not be queued: ${err?.message ?? err}`, "bulk");
         }

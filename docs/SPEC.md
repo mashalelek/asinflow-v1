@@ -2029,8 +2029,9 @@ Bulk Calc, a 30-day cache that was supposed to be gone, and schedules
 written in UTC comments that fired host-local.
 
 **Rule.** Every refresh of Amazon-side or sheet-side data is a job on one
-queue (`jobs`, migration 052), executed by one runner, one job at a time,
-in one fixed component order. Scheduled passes and the Refresh button
+queue (`jobs`, migration 052), executed by one runner, **one job per
+lane** (2026-10-16 — lane S the scheduled pass, lane M everything a person
+or an onboarding started), in one fixed component order. Scheduled passes and the Refresh button
 enqueue the same job with different scopes. **Nothing refreshes data
 outside the queue.**
 
@@ -2149,11 +2150,35 @@ migrations and `registerRoutes` (it needs the injected
 `onboardScDiscoveries` and `runSheetsSync`), whenever `SP_API_SELLER_ID`
 is set — the runner is always on; only the **schedule** is gated.
 
-- One loop: claim the oldest `queued` job (`SELECT … FOR UPDATE SKIP
-  LOCKED`, a `running` job first — that is resume), run it, repeat; idle
-  poll 5 s. Exactly one job runs at a time per process; advisory lock
-  `7342002` guards the zero-downtime deploy overlap (the second instance
-  waits for the lock and takes over when the first exits).
+- **Two lanes, one loop each** (Maria, 2026-10-16: manual actions never
+  wait on the scheduled pass). Lane S claims `trigger = 'scheduled'`; lane
+  M claims `trigger IN ('manual','onboarding','bulk')` in queue order. Each
+  loop: claim its lane's oldest `queued` job (`SELECT … FOR UPDATE SKIP
+  LOCKED`, that lane's `running` job first — that is resume, and both
+  lanes resume on boot), run it, repeat; idle poll 5 s. Both lanes run
+  concurrently in the same process, so a lane M job starts the moment it
+  is enqueued when lane M is idle; within a lane, one job at a time. Two
+  `running` rows are normal. Advisory lock `7342002` (one per process)
+  guards the zero-downtime deploy overlap for both lanes.
+- **Onboarding jobs run the per-ASIN components only** — 2–8 and 10–17 for
+  their scope, never the account-wide 1, 9, 18, 19–21, which belong to the
+  pass or a manual Refresh. This is what stops an onboarding job from
+  discovering more ASINs and enqueuing itself again. Manual and bulk jobs
+  keep the full rule. Belt and braces: `enqueueOnboardingJob` drops ASINs a
+  queued or running onboarding job already covers and enqueues nothing when
+  none remain; an ASIN that failed to insert is logged with the reason and
+  not re-enqueued by the same call.
+- **What concurrency costs, accepted:** a lane M job and the scheduled pass
+  can both append an `inventory_snapshots` row (and a daily-block
+  `asin_estimates_history` row) for the same ASIN minutes apart — every
+  reader takes the latest row per ASIN or per day (`ORDER BY snapshot_at
+  DESC LIMIT 1`, `DISTINCT ON (DATE(snapshot_at))`, `MAX(snapshot_at)`),
+  so duplicates are harmless; and both lanes may request the same FYP or
+  orders report in the same hour — the `createReport` budget (0.0167/s,
+  burst 15) absorbs it. Every per-ASIN write is a single-statement
+  overwrite from the same Amazon answer (last writer wins); flip reports
+  may appear in both ledgers. The SP-API rate limiter is process-wide, so
+  the two lanes share one budget per operation.
 - **Components are functions** `run(ctx) → {counts, outcomes, flips}` in
   `server/scheduler/components/NN-name.ts`, one file each, numbered as the
   table, registered in `components/index.ts` in that order. Each reads
@@ -2178,10 +2203,14 @@ is set — the runner is always on; only the **schedule** is gated.
 - **Cancel:** `PATCH /api/jobs/:id {status:'cancelled'}`; the runner
   checks between components and at every checkpoint; a cancelled job keeps
   its partial ledger.
-- **Serialisation is the lock.** The queue is single-consumer, so "cron
-  and button collide" is gone structurally; no per-sync mutex exists. A
-  Refresh clicked during a scheduled pass queues behind it and the button
-  shows "queued (1 ahead)".
+- **Serialisation is per lane.** "Cron and button collide" is gone
+  structurally: a Refresh clicked during a scheduled pass runs at once in
+  lane M; a second Refresh queues behind the first and the button shows
+  "queued (1 ahead)" — lane M positions only, the scheduled pass never
+  counts. `GET /api/jobs/current` returns `{ scheduled, manual, queued }`;
+  the toolbar shows the lane M job when there is one (it is the one the
+  user is waiting on), else the scheduled pass; the jobs dialog lists both
+  as running.
 - **Suppressions (18) are stage-then-swap:** the report's ASIN set is
   loaded into a temp table, then one `UPDATE … SET is_search_suppressed =
   (asin IN temp)` — no window where the catalog shows no suppressions, and

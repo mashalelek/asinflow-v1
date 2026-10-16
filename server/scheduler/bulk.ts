@@ -18,7 +18,7 @@ import { getEligibility as realGetEligibility } from "../spapi";
 import { runPricePass as realRunPricePass } from "../price-sync";
 import { runFeesPass as realRunFeesPass } from "../refresh-job";
 import { getFeePriceForAsin } from "@shared/schema";
-import { enqueueJob, listActive, recordComponentRun } from "./jobs-repo";
+import { enqueueJob, listActive, recordComponentRun, laneAhead } from "./jobs-repo";
 import type { JobRow, QueryLike, ComponentResult } from "./types";
 
 export interface BulkScope {
@@ -243,8 +243,7 @@ export async function enqueueBulkRefresh(
     trigger: "bulk", target: "bulk", bulkListId: listId, includeDaily: true,
     scopeAsins: scoped.map((r: any) => String(r.asin)), requestedBy: opts.requestedBy ?? null,
   }, query);
-  const all = await listActive(query);
-  const ahead = all.filter((j) => j.id !== job.id).length;
+  const ahead = laneAhead(job, await listActive(query)); // lane M only — the scheduled pass never delays a bulk job
   return { kind: "queued", job, ahead };
 }
 

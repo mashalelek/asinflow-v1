@@ -65,7 +65,9 @@ button happened to own which API call.
 ## Rule
 
 **Every refresh of Amazon-side or sheet-side data is a job on one queue,
-executed by one runner, one job at a time, in one fixed component order.
+executed by one runner, one job at a time *per lane* (amended 2026-10-16 —
+lane S scheduled, lane M manual/onboarding/bulk, concurrent), in one
+fixed component order.
 Scheduled passes and the Refresh button enqueue the same job with
 different scopes. Nothing refreshes data outside the queue.**
 
@@ -180,6 +182,15 @@ absence.
   `SELECT … FOR UPDATE SKIP LOCKED`, run it, repeat; idle poll every 5 s.
   Exactly one job runs at a time per process. (One process on Render; the
   advisory lock `7342002` guards against the zero-downtime overlap.)
+  *Amended 2026-10-16 — two lanes:* one loop per lane under the same lock.
+  Lane S claims `trigger = 'scheduled'`, lane M claims
+  `trigger IN ('manual','onboarding','bulk')`; each resumes its own
+  `running` row on boot; a lane M job starts immediately when lane M is
+  idle. Onboarding jobs run only components 2–8 and 10–17 (never the
+  account-wide 1, 9, 18, 19–21), and `enqueueOnboardingJob` dedups by ASIN
+  against queued/running onboarding jobs. Duplicate `inventory_snapshots`
+  rows and duplicate report requests are accepted (readers take the latest
+  row; the report budget absorbs it).
 - **Components are functions** `run<Component>(ctx, scope) → ComponentResult`
   in `server/scheduler/components/`, one file each, numbered as the table.
   Each reads what it needs, writes what it owns (SPEC §14 ownership table
@@ -208,6 +219,10 @@ absence.
   the "cron and button collide" problem goes away structurally; no
   per-sync mutex is needed. A Refresh clicked during a scheduled pass
   queues behind it and the button shows "queued (1 ahead)".
+  *Amended 2026-10-16:* serialisation is per lane. A Refresh during a
+  scheduled pass runs at once in lane M; "queued (N ahead)" counts lane M
+  only; `GET /api/jobs/current` returns `{ scheduled, manual, queued }` and
+  the toolbar shows the lane M job first.
 - **Suppression sync** (component 18) is rewritten as stage-then-swap: the
   report's ASIN set is loaded into a temp table, then one `UPDATE … SET
   is_search_suppressed = (asin IN temp)` — no window where the catalog
@@ -237,8 +252,10 @@ absence.
 0 4-23 * * *     enqueue refresh { trigger: scheduled, include_daily: false }
 ```
 
-Gated by `ENABLE_CRONS === 'true'` as today. **No stacking (Maria,
-2026-10-16):** at most one scheduled pass waits at any time. A tick that
+Gated by `ENABLE_CRONS === 'true'` as today. The tick's overrun check
+looks at lane S only — a running manual job never delays a pass.
+**No stacking (Maria, 2026-10-16):** at most one scheduled pass waits at
+any time. A tick that
 finds a scheduled pass already *queued* does not enqueue — it logs
 "tick HH:00 skipped — scheduled pass #N already queued", and the 00:00
 tick promotes that queued pass to `include_daily = true` instead. A tick

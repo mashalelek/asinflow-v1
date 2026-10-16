@@ -1,12 +1,12 @@
 // Job routes (SPEC §11 "Refresh job"). Mounted behind requireAuth.
 //   POST  /api/jobs              enqueue a manual refresh { asins?, includeDaily? }
-//   GET   /api/jobs/current      running + queued (the client polls this)
+//   GET   /api/jobs/current      { scheduled, manual, queued } — one running job per lane (the client polls this)
 //   GET   /api/jobs              recent jobs (history dialog)
 //   GET   /api/jobs/:id          one job + its per-component ledger rows
 //   PATCH /api/jobs/:id          { status: 'cancelled' }
 import express, { type Router, type Request, type Response } from "express";
 import { query as defaultQuery } from "../db";
-import { enqueueJob, listActive, listJobs, getJob, listComponentRuns, cancelJob } from "./jobs-repo";
+import { enqueueJob, listActive, listJobs, getJob, listComponentRuns, cancelJob, laneAhead } from "./jobs-repo";
 import { requireRole } from "../auth";
 import type { QueryLike } from "./types";
 
@@ -37,8 +37,7 @@ export function createJobsRouter(deps: { query?: QueryLike; nextPassAt?: () => P
         scopeAsins: asins.length > 0 ? asins : null,
         requestedBy: req.session?.userId ?? null,
       }, query);
-      const active = await listActive(query);
-      const ahead = active.filter((j) => j.id !== job.id && (j.status === "running" || j.queued_at < job.queued_at)).length;
+      const ahead = laneAhead(job, await listActive(query)); // lane M only
       res.status(201).json({ job, ahead });
     } catch (err: any) {
       res.status(500).json({ error: "enqueue_failed", message: err?.message ?? String(err) });
@@ -61,8 +60,7 @@ export function createJobsRouter(deps: { query?: QueryLike; nextPassAt?: () => P
         params: { sales_window: { from: w.from, to: w.to } },
         requestedBy: req.session?.userId ?? null,
       }, query);
-      const active = await listActive(query);
-      const ahead = active.filter((j) => j.id !== job.id && (j.status === "running" || j.queued_at < job.queued_at)).length;
+      const ahead = laneAhead(job, await listActive(query)); // lane M only
       res.status(202).json({ job, ahead });
     } catch (err: any) {
       res.status(500).json({ error: "enqueue_failed", message: err?.message ?? String(err) });
@@ -87,8 +85,15 @@ export function createJobsRouter(deps: { query?: QueryLike; nextPassAt?: () => P
 
   router.get("/api/jobs/current", async (_req: Request, res: Response) => {
     try {
+      // Two lanes (2026-10-16): the scheduled pass and the lane M job
+      // (manual / onboarding / bulk) can both be running. `queued` carries
+      // both lanes' waiting jobs; the client counts lane M positions itself.
       const active = await listActive(query);
-      res.json({ running: active.find((j) => j.status === "running") ?? null, queued: active.filter((j) => j.status === "queued") });
+      res.json({
+        scheduled: active.find((j) => j.status === "running" && j.trigger === "scheduled") ?? null,
+        manual: active.find((j) => j.status === "running" && j.trigger !== "scheduled") ?? null,
+        queued: active.filter((j) => j.status === "queued"),
+      });
     } catch (err: any) {
       res.status(500).json({ error: "jobs_failed", message: err?.message ?? String(err) });
     }

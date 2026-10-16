@@ -14,7 +14,7 @@
 // Per-chunk results go in the outcomes under `_chunk …` keys; a failed chunk
 // fails the component with the chunks so far recorded (ComponentError).
 import { syncSalesData, buildDateChunks, MAX_RANGE_DAYS, SalesSyncError, type SalesSyncResult, type SalesSyncOptions } from "../../sales-sync";
-import { enqueueJob } from "../jobs-repo";
+import { enqueueOnboardingJob } from "../jobs-repo";
 import { ymdLocal } from "./shared";
 import { ComponentError, type ComponentDef, type ComponentContext, type ComponentResult } from "../types";
 
@@ -102,12 +102,13 @@ export const sales: ComponentDef = {
   },
 };
 
-/** One Refresh job (daily block included) for every ASIN this run inserted — the standard onboarding job. */
+/** One onboarding job (per-ASIN components) for every ASIN this run inserted, minus any an active onboarding job already covers. */
 async function enqueueOnboarding(ctx: ComponentContext, asins: string[]): Promise<void> {
   if (asins.length === 0) return;
   try {
-    const job = await enqueueJob({ trigger: "onboarding", includeDaily: true, scopeAsins: asins }, ctx.query);
-    ctx.log(`${asins.length} ASIN(s) onboarded from sales; refresh job #${job.id} queued for them`);
+    const r = await enqueueOnboardingJob(asins, {}, ctx.query);
+    if (r.covered.length > 0) ctx.log(`${r.covered.length} onboarded ASIN(s) already covered by a queued/running onboarding job — not re-enqueued`);
+    if (r.job) ctx.log(`${r.enqueued.length} ASIN(s) onboarded from sales; onboarding job #${r.job.id} queued for them`);
   } catch (err: any) {
     ctx.log(`${asins.length} ASIN(s) onboarded from sales but their refresh job could not be queued — run Refresh for them: ${err?.message ?? err}`);
   }

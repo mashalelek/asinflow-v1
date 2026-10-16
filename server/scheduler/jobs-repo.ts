@@ -1,6 +1,7 @@
 // jobs table access (SPEC §11 "Refresh job"). Express-free; injected query.
 import { query as defaultQuery } from "../db";
-import type { JobRow, JobTrigger, JobTarget, JobProgress, JobSummary, QueryLike, ComponentResult } from "./types";
+import type { JobRow, JobTrigger, JobTarget, JobProgress, JobSummary, QueryLike, ComponentResult, Lane } from "./types";
+import { LANE_TRIGGERS, laneOf } from "./types";
 
 const COLS = `id, kind, trigger, target, bulk_list_id, include_daily, scope_asins, components, params, status, progress, summary,
               requested_by, queued_at, started_at, finished_at, error`;
@@ -43,18 +44,21 @@ export async function enqueueJob(input: EnqueueInput, query: QueryLike = default
 }
 
 /**
- * Claim the next job to run on the given client, inside a transaction:
- * a `running` job first (resume after a restart), else the oldest `queued`.
- * FOR UPDATE SKIP LOCKED so an overlapping instance never claims the same row.
+ * Claim the next job of ONE LANE to run on the given client, inside a
+ * transaction: that lane's `running` job first (resume after a restart),
+ * else its oldest `queued`. FOR UPDATE SKIP LOCKED so an overlapping
+ * instance never claims the same row. Two running rows — one per lane —
+ * are normal.
  */
-export async function claimNextJob(query: QueryLike): Promise<JobRow | null> {
+export async function claimNextJob(query: QueryLike, lane: Lane): Promise<JobRow | null> {
   await query("BEGIN");
   try {
     const r = await query(
       `SELECT ${COLS} FROM jobs
-        WHERE status IN ('running','queued')
+        WHERE status IN ('running','queued') AND trigger = ANY($1::text[])
         ORDER BY (status = 'running') DESC, queued_at ASC, id ASC
         LIMIT 1 FOR UPDATE SKIP LOCKED`,
+      [Array.from(LANE_TRIGGERS[lane])],
     );
     if (r.rows.length === 0) { await query("COMMIT"); return null; }
     const job = toRow(r.rows[0]);
@@ -125,6 +129,38 @@ export async function listActive(query: QueryLike = defaultQuery as any): Promis
       ORDER BY (status = 'running') DESC, queued_at ASC, id ASC`,
   );
   return r.rows.map(toRow);
+}
+
+/** Queue position of a lane M job: lane M jobs running or queued ahead of it. Lane S never counts. */
+export function laneAhead(job: JobRow, active: JobRow[]): number {
+  return active.filter((j) => j.id !== job.id && laneOf(j.trigger) === "M" && (j.status === "running" || j.queued_at < job.queued_at)).length;
+}
+
+/** ASINs already covered by a queued or running onboarding job. */
+export async function asinsCoveredByActiveOnboarding(query: QueryLike = defaultQuery as any): Promise<Set<string>> {
+  const r = await query(`SELECT unnest(scope_asins) AS asin FROM jobs WHERE trigger = 'onboarding' AND status IN ('queued','running')`);
+  return new Set(r.rows.map((x: any) => String(x.asin)));
+}
+
+/**
+ * Enqueue ONE onboarding job for `asins`, dropping any ASIN a queued or
+ * running onboarding job already covers (belt and braces against two
+ * lanes discovering the same ASIN). Returns the job, or null when nothing
+ * was left to enqueue, plus what was dropped.
+ */
+export async function enqueueOnboardingJob(
+  asins: string[],
+  opts: { requestedBy?: number | null } = {},
+  query: QueryLike = defaultQuery as any,
+): Promise<{ job: JobRow | null; enqueued: string[]; covered: string[] }> {
+  const wanted = Array.from(new Set(asins.map((a) => String(a).trim().toUpperCase()).filter(Boolean)));
+  if (wanted.length === 0) return { job: null, enqueued: [], covered: [] };
+  const already = await asinsCoveredByActiveOnboarding(query);
+  const enqueued = wanted.filter((a) => !already.has(a));
+  const covered = wanted.filter((a) => already.has(a));
+  if (enqueued.length === 0) return { job: null, enqueued, covered };
+  const job = await enqueueJob({ trigger: "onboarding", includeDaily: true, scopeAsins: enqueued, requestedBy: opts.requestedBy ?? null }, query);
+  return { job, enqueued, covered };
 }
 
 /** Per-component ledger row (refresh_runs), linked to the job. */

@@ -1537,7 +1537,7 @@ export default function Home() {
                 </TooltipTrigger>
                 <TooltipContent side="bottom" className="text-xs">
                   All 21 components for the selection, else the current view. Prices last synced {formatRelativeTime(pricesLastRefreshedAt)}
-                  {jobs.running && !jobs.mine ? ` · a ${jobs.running.trigger} job is running; yours will queue behind it` : ""}
+                  {jobs.manual && !jobs.mine ? ` · a ${jobs.manual.trigger} job is running; yours will queue behind it` : jobs.scheduled && !jobs.mine ? " · the scheduled pass is running; yours starts right away in its own lane" : ""}
                 </TooltipContent>
               </Tooltip>
               {jobs.mine && (

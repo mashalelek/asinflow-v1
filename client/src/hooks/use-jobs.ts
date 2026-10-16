@@ -2,30 +2,41 @@
 // (SPEC §11 "Refresh job", decision 16), and raises a completion callback for
 // jobs the user is watching: their own manual jobs, and any scheduled job
 // that finishes while the tab is open.
+//
+// Two lanes (2026-10-16): the scheduled pass (lane S) and the lane M job
+// (manual / onboarding / bulk) can both be running. The toolbar shows the
+// lane M job when there is one — it is the one the user is waiting on —
+// else the scheduled pass; queue positions count lane M only.
 import { useCallback, useEffect, useRef, useState } from "react";
-import { getCurrent, getJob, type Job } from "@/lib/jobs-api";
+import { getCurrent, getJob, isLaneM, type Job } from "@/lib/jobs-api";
 
 export const JOBS_POLL_MS = 10_000;
 
 export interface JobsState {
+  /** The running scheduled pass (lane S), if any. */
+  scheduled: Job | null;
+  /** The running manual / onboarding / bulk job (lane M), if any. */
+  manual: Job | null;
+  /** What the toolbar strip shows: the lane M job when present, else the scheduled pass. */
   running: Job | null;
   queued: Job[];
-  /** The newest job this tab enqueued that is still active, with its queue position. */
+  /** The newest job this tab enqueued that is still active, with its lane M queue position. */
   mine: { job: Job; ahead: number } | null;
 }
 
 export function useJobs(onFinished: (job: Job) => void) {
-  const [state, setState] = useState<JobsState>({ running: null, queued: [], mine: null });
+  const [state, setState] = useState<JobsState>({ scheduled: null, manual: null, running: null, queued: [], mine: null });
   const mineIds = useRef<Set<number>>(new Set());
   const activeIds = useRef<Set<number>>(new Set());
   const onFinishedRef = useRef(onFinished);
   onFinishedRef.current = onFinished;
 
   const poll = useCallback(async () => {
-    let cur: { running: Job | null; queued: Job[] };
+    let cur: Awaited<ReturnType<typeof getCurrent>>;
     try { cur = await getCurrent(); } catch { return; }
     const nowActive = new Set<number>();
-    if (cur.running) nowActive.add(cur.running.id);
+    if (cur.scheduled) nowActive.add(cur.scheduled.id);
+    if (cur.manual) nowActive.add(cur.manual.id);
     for (const q of cur.queued) nowActive.add(q.id);
 
     // Anything that was active last time and is not now has finished.
@@ -41,17 +52,18 @@ export function useJobs(onFinished: (job: Job) => void) {
       } catch { /* a job that vanished entirely is not worth a toast */ }
     }
 
-    const all = [...(cur.running ? [cur.running] : []), ...cur.queued];
-    const mineActive = all.filter((j) => mineIds.current.has(j.id));
+    // Lane M order: its running job, then its queued jobs; the scheduled pass is not in this list.
+    const laneM = [...(cur.manual ? [cur.manual] : []), ...cur.queued.filter(isLaneM)];
+    const mineActive = laneM.filter((j) => mineIds.current.has(j.id));
     const mineJob = mineActive[mineActive.length - 1] ?? null;
-    const ahead = mineJob ? all.findIndex((j) => j.id === mineJob.id) : 0;
-    setState({ running: cur.running, queued: cur.queued, mine: mineJob ? { job: mineJob, ahead } : null });
+    const ahead = mineJob ? laneM.findIndex((j) => j.id === mineJob.id) : 0;
+    setState({ scheduled: cur.scheduled, manual: cur.manual, running: cur.manual ?? cur.scheduled, queued: cur.queued, mine: mineJob ? { job: mineJob, ahead } : null });
   }, []);
 
   // Poll immediately on mount (a scheduled pass may already be running),
   // then every 10 s only while something is active.
   useEffect(() => { void poll(); }, [poll]);
-  const anyActive = state.running != null || state.queued.length > 0;
+  const anyActive = state.scheduled != null || state.manual != null || state.queued.length > 0;
   useEffect(() => {
     if (!anyActive) return;
     const t = setInterval(() => { void poll(); }, JOBS_POLL_MS);
@@ -62,7 +74,7 @@ export function useJobs(onFinished: (job: Job) => void) {
   const watch = useCallback((job: Job) => {
     mineIds.current.add(job.id);
     activeIds.current.add(job.id);
-    setState((s) => ({ ...s, mine: { job, ahead: (s.running ? 1 : 0) + s.queued.length } }));
+    setState((s) => ({ ...s, mine: { job, ahead: (s.manual ? 1 : 0) + s.queued.filter(isLaneM).length } }));
     void poll();
   }, [poll]);
 

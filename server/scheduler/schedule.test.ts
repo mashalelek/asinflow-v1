@@ -111,7 +111,7 @@ describe("the tick handler", () => {
     const enqueue = vi.fn(async () => ({ id: 12, status: "queued" } as JobRow));
     await runScheduledTick(false, { enqueue, query: fakeQuery([{ id: 10, status: "running", trigger: "scheduled" } as JobRow]) });
     expect(enqueue).toHaveBeenCalledTimes(1);
-    expect(lines.join("\n")).toMatch(/job 12 — job 10 \(scheduled\) is still running; it waits/);
+    expect(lines.join("\n")).toMatch(/job 12 — scheduled pass #10 is still running \(overrun\); it waits/);
     setScheduleLogger(() => {});
   });
 

@@ -25,6 +25,7 @@ function ctxFor(j: JobRow, inject: Record<string, unknown> = {}) {
   const logs: string[] = [];
   const progress: any[] = [];
   const query: QueryLike = async (sql, params) => {
+    if (sql.includes("unnest(scope_asins)")) return { rows: [], rowCount: 0 }; // no active onboarding job covers anything
     if (sql.includes("INSERT INTO jobs")) { inserted.push(params); return { rows: [{ id: 77, kind: "refresh", trigger: params![0], include_daily: params![3], scope_asins: params![4], components: params![5], params: null, status: "queued", progress: {} }], rowCount: 1 }; }
     throw new Error(`unexpected sql ${sql.slice(0, 50)}`);
   };
@@ -93,7 +94,7 @@ describe("the sales component", () => {
     expect(r.outcomes._window).toMatch(/\(default\)$/);
   });
 
-  it("enqueues ONE onboarding job (daily block) for every ASIN the sync onboarded, and lists them", async () => {
+  it("enqueues ONE onboarding job for every ASIN the sync onboarded (deduped against active onboarding jobs), and lists them", async () => {
     salesDeps.sync = async () => okResult({ onboarded: ["N1", "N2", "N3"] });
     const { ctx, inserted, logs } = ctxFor(job(), { [ONBOARD_SALES_ASINS]: async () => {} });
     const r = await sales.run(ctx);
@@ -103,7 +104,7 @@ describe("the sales component", () => {
     expect(inserted[0][4]).toEqual(["N1", "N2", "N3"]);
     expect(r.counts.onboarded_from_sales).toBe(3);
     expect(r.outcomes._onboarded_from_sales).toBe("N1, N2, N3");
-    expect(logs.join("\n")).toMatch(/3 ASIN\(s\) onboarded from sales; refresh job #77 queued/);
+    expect(logs.join("\n")).toMatch(/3 ASIN\(s\) onboarded from sales; onboarding job #77 queued/);
   });
 
   it("a chunk failure is a ComponentError carrying the partial counts and the failed chunk — and still enqueues what was onboarded", async () => {

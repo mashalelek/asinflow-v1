@@ -114,6 +114,16 @@ describe("scope rule and API shape", () => {
     expect(src).toMatch(/JOBS_POLL_MS = 10_000/);
     expect(src).toMatch(/mineIds\.current\.has\(id\) \|\| job\.trigger === "scheduled"/);
   });
+  it("two lanes (2026-10-16): the hook tracks both running jobs, shows lane M first, counts queue position in lane M only", () => {
+    const src = read("hooks/use-jobs.ts");
+    expect(src).toMatch(/scheduled: cur\.scheduled, manual: cur\.manual, running: cur\.manual \?\? cur\.scheduled/);
+    expect(src).toMatch(/const laneM = \[\.\.\.\(cur\.manual \? \[cur\.manual\] : \[\]\), \.\.\.cur\.queued\.filter\(isLaneM\)\]/);
+    expect(src).toMatch(/ahead = mineJob \? laneM\.findIndex/);
+    const api = read("lib/jobs-api.ts");
+    expect(api).toMatch(/interface CurrentJobs \{ scheduled: Job \| null; manual: Job \| null; queued: Job\[\] \}/);
+    const home = read("pages/home.tsx");
+    expect(home).toMatch(/jobs\.manual && !jobs\.mine/);
+  });
   it("settings dialog has NO scheduler section — the jobs dialog is the only surface (2026-10-16)", () => {
     const src = read("components/settings-dialog.tsx");
     expect(src).not.toMatch(/getSchedulerInfo|SchedulerInfo|settings-scheduler/);

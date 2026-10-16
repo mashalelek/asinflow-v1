@@ -32,14 +32,16 @@ describe("every insert path onboards through onboardNewAsins", () => {
     const src = read("routes.ts");
     const fn = src.slice(src.indexOf("async function onboardNewAsins"), src.indexOf("onboardNewAsinsRef = onboardNewAsins"));
     const insertIdx = fn.indexOf("await insertNewAsinRows(");
-    const enqueueIdx = fn.indexOf("enqueueJob({ trigger: \"onboarding\"");
+    const enqueueIdx = fn.indexOf("enqueueOnboardingJob(");
     expect(insertIdx).toBeGreaterThan(-1);
     expect(enqueueIdx).toBeGreaterThan(insertIdx);      // rows first, then the job
     // the shared insert half (2026-10-16: also used by sales onboarding) writes insertOnly rows
     const ins = fn.slice(fn.indexOf("async function insertNewAsinRows"));
     expect(ins).toMatch(/await writeResult\(/);
     expect(ins).toMatch(/input\.leadSource \?\? null, true\)/); // insertOnly = true
-    expect(fn).toMatch(/includeDaily: true/);            // onboarding = a full refresh
+    // the onboarding job itself is built by the dedup helper: daily block on (its per-ASIN set is 2–8 + 10–17)
+    const repo = read("scheduler/jobs-repo.ts");
+    expect(repo).toMatch(/enqueueJob\(\{ trigger: "onboarding", includeDaily: true, scopeAsins: enqueued/);
     expect(fn).not.toMatch(/runAnalyzeCore\(|refreshPrices\(|runFeesStage\(/);
     expect(fn).not.toMatch(/INSERT INTO refresh_runs/);  // the job ledgers its own components
   });

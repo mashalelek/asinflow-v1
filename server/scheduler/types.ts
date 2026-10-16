@@ -7,6 +7,25 @@
 
 export type JobKind = "refresh";
 export type JobTrigger = "scheduled" | "manual" | "onboarding" | "bulk";
+
+/**
+ * Two lanes (Maria, 2026-10-16: manual actions never wait on the scheduled
+ * pass). Lane S = the scheduled pass, one at a time. Lane M = everything a
+ * person or an onboarding started (manual, onboarding, bulk), one at a time
+ * in queue order. Both lanes run concurrently in the same process; a lane M
+ * job starts the moment it is enqueued if lane M is idle.
+ */
+export type Lane = "S" | "M";
+export const LANE_TRIGGERS: Record<Lane, readonly JobTrigger[]> = { S: ["scheduled"], M: ["manual", "onboarding", "bulk"] };
+export function laneOf(trigger: JobTrigger): Lane { return trigger === "scheduled" ? "S" : "M"; }
+
+/**
+ * An onboarding job runs ONLY the per-ASIN components for its scope: the
+ * daily block 2–8 and 10–17. Never 1, 9, 18, 19–21 — those are account-wide
+ * and belong to the scheduled pass or a manual Refresh. This is what stops
+ * an onboarding job from discovering more ASINs and enqueuing itself again.
+ */
+export const ONBOARDING_COMPONENTS: readonly number[] = [2, 3, 4, 5, 6, 7, 8, 10, 11, 12, 13, 14, 15, 16, 17];
 export type JobTarget = "main" | "bulk";
 export type JobStatus = "queued" | "running" | "done" | "failed" | "cancelled";
 

@@ -105,10 +105,12 @@ export async function runScheduledTick(includeDaily: boolean, deps: ScheduleDeps
     return queued;
   }
 
-  const running = active.find((j) => j.status === "running");
+  // Lane S only: a running manual/onboarding/bulk job is in the other lane
+  // and never delays a scheduled pass.
+  const running = active.find((j) => j.status === "running" && j.trigger === "scheduled");
   const job = await enqueue({ trigger: "scheduled", includeDaily, scopeAsins: null });
   if (running) {
-    scheduleLog(`scheduled pass ${label} enqueued as job ${job.id} — job ${running.id} (${running.trigger}) is still running; it waits behind ${active.length} active`);
+    scheduleLog(`scheduled pass ${label} enqueued as job ${job.id} — scheduled pass #${running.id} is still running (overrun); it waits`);
   } else {
     scheduleLog(`scheduled pass ${label} enqueued as job ${job.id}`);
   }

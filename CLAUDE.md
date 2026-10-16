@@ -292,7 +292,10 @@ Applies to `git restore <file>` and `git stash` mid-edit for the same reason.
 
 One **Refresh** button on the ASINs toolbar enqueues one job (`POST
 /api/jobs`); a single runner executes the 21 components in SPEC §11's
-fixed order, one job at a time. Product Info and Prices & Stock are gone.
+fixed order, **one job per lane** (2026-10-16: lane S = the scheduled
+pass, lane M = manual / onboarding / bulk; both run concurrently, so a
+manual action never waits on the pass). Onboarding jobs run only the
+per-ASIN components 2–8 and 10–17. Product Info and Prices & Stock are gone.
 `POST /api/analyze/all` and `POST /api/refresh` survive for ONE release as
 thin enqueuers (202 + the job) and are then deleted; nothing in the client
 calls them (`runRefreshJob` in `server/refresh-job.ts` has no callers
