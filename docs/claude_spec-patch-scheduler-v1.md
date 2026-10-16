@@ -9,7 +9,8 @@ schedules. Prerequisite for `ENABLE_CRONS=true` on Render.*
 
 > **Status: IMPLEMENTED 2026-10-15** — six commits (`3a7094a`, `49338b1`,
 > `a958e5f`, `1f0e1b4`, `ab5249f`, docs), under the 2026-10-15 approval
-> model. `ENABLE_CRONS=true` on Render is the remaining step (hard stop).
+> model. `ENABLE_CRONS=true` set on Render 2026-10-16 08:00 ET — scheduled
+> passes live; the sales history backfill ran there the same day (job #10).
 > **Deviations from the text, all approved:** component 14 persists
 > nothing — decision A (ledger counts complete-input ASINs; no `est_*`
 > columns); 20/21 ledger-only (`skipped`) and 17 derived-only until the
