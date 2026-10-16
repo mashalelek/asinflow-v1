@@ -103,9 +103,18 @@ describe("scope rule and API shape", () => {
     expect(src).toMatch(/JOBS_POLL_MS = 10_000/);
     expect(src).toMatch(/mineIds\.current\.has\(id\) \|\| job\.trigger === "scheduled"/);
   });
-  it("settings dialog shows the read-only Scheduler section", () => {
+  it("settings dialog has NO scheduler section — the jobs dialog is the only surface (2026-10-16)", () => {
     const src = read("components/settings-dialog.tsx");
-    expect(src).toMatch(/getSchedulerInfo/);
-    expect(src).toMatch(/Scheduler/);
+    expect(src).not.toMatch(/getSchedulerInfo|SchedulerInfo|settings-scheduler/);
+    expect(src).not.toMatch(/<h3[^>]*>Scheduler<\/h3>/);
+    expect(read("lib/jobs-api.ts")).not.toMatch(/getSchedulerInfo/);
+  });
+  it("both threshold groups share the order Margin, ROI, Profit/Unit", () => {
+    const src = read("components/settings-dialog.tsx");
+    const order = (ids: string[]) => ids.map((id) => src.indexOf(`id="${id}"`));
+    const mc = order(["mcMargin", "mcRoi", "mcProfit"]);
+    const pt = order(["margin", "roi", "minProfitUnit"]);
+    for (const o of [mc, pt]) { expect(o.every((i) => i > -1)).toBe(true); expect([...o].sort((x, y) => x - y)).toEqual(o); }
+    expect(src).not.toMatch(/Replit/);
   });
 });

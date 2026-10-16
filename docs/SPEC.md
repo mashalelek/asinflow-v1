@@ -850,10 +850,14 @@ global defaults:
 - **Hazmat surcharge** — per unit, applied to hazmat-flagged ASINs
 - **Inbound shipping rate** — $/lb, used for Estimated Inbound Ship.
 - **Price source** — Lowest FBA or Buy Box (also exposed as a toolbar toggle)
-- **Max COGS thresholds** — three values used by the Max COGS column:
+- **Max COGS thresholds** — three values used by the Max COGS column, in
+  the same field order as Profitability Thresholds (Margin, ROI,
+  Profit/Unit — 2026-10-16):
   - `max_cogs_min_margin_pct` (default 12)
   - `max_cogs_min_roi_pct` (default 20)
   - `max_cogs_min_profit_unit` (default 3)
+- **SP-API credentials** — read-only status; set as environment variables
+  on the server (Render → Environment; locally in `.env`)
 - Other operational defaults
 
 Settings values are read by the calculation engine and apply to all Estimated
@@ -2252,7 +2256,7 @@ labels ("Never synced" / "Older than" / "Within last").
   10 s while anything is active); `GET /api/jobs` (history);
   `GET /api/jobs/:id` (one job + its ledger rows); `PATCH /api/jobs/:id
   {status:'cancelled'}`; `GET /api/jobs/scheduler` (enabled, next pass,
-  last scheduled job — Settings). `POST /api/analyze/all` and
+  last scheduled job — an ops/API read; no UI consumes it). `POST /api/analyze/all` and
   `POST /api/refresh` survive for ONE release as thin enqueuers (202 + the
   job) and are then deleted; nothing in the client calls them, and
   `runRefreshJob` has no callers left.
@@ -2271,8 +2275,9 @@ labels ("Never synced" / "Older than" / "Within last").
   ASINs that went gated→ungated, ungated→gated, suppressed→unsuppressed,
   unsuppressed→suppressed in that job, each a link to the row. **Never
   price counts.** Email is pinned.
-- **Settings:** a read-only **Scheduler** section — enabled or not, next
-  pass, last pass result, link to the jobs dialog.
+- **Settings:** no scheduler surface (decided 2026-10-16; the section the
+  patch drafted was removed). The jobs dialog is the only surface for
+  scheduled and manual jobs alike.
 
 **Future (not this patch):** ANY_OFFER_CHANGED push notifications belong
 with the Repricer module; the consumer would write through the same
@@ -2295,8 +2300,8 @@ One pass at 00:00 ET that also runs the daily block; no passes 01–03
 (both DST transitions fall inside that window); hourly passes
 04:00–23:00. 21 passes a day. If a pass is still running when the next
 tick fires, the tick enqueues anyway and the job waits — the queue is the
-lock; the log shows the overrun. `nextPassAfter()` feeds Settings →
-Scheduler and is tested across both 2026 DST boundaries.
+lock; the log shows the overrun. `nextPassAfter()` feeds
+`GET /api/jobs/scheduler` and is tested across both 2026 DST boundaries.
 
 Gated by `ENABLE_CRONS === 'true'` (and the runner's `SP_API_SELLER_ID`)
 in `server/index.ts`; unset or any other value = no schedule, and the log

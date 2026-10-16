@@ -12,7 +12,6 @@ import { loadSettings, saveSettings } from "@/lib/settings";
 import { useToast } from "@/hooks/use-toast";
 import { useAuth } from "@/contexts/auth-context";
 import { UsersAdminDialog } from "@/components/users-admin-dialog";
-import { getSchedulerInfo, formatDuration, type SchedulerInfo } from "@/lib/jobs-api";
 
 /**
  * Display-side state owned by the host page (home / analytics) and surfaced
@@ -78,13 +77,11 @@ export function SettingsDialog({
   const { user } = useAuth();
   const isAdmin = user?.role === "admin";
   const [usersOpen, setUsersOpen] = useState(false);
-  // Scheduler v1 (SPEC §11): read-only status; the jobs dialog is on the
-  // ASINs toolbar clock.
-  const [scheduler, setScheduler] = useState<SchedulerInfo | null>(null);
+  // No scheduler surface here (2026-10-16): the jobs dialog on the ASINs
+  // toolbar clock is the only one.
 
   useEffect(() => {
     setSettings(loadSettings());
-    if (open) getSchedulerInfo().then(setScheduler).catch(() => setScheduler(null));
   }, [open]);
 
   const handleSave = () => {
@@ -164,6 +161,7 @@ export function SettingsDialog({
                 <Label className="text-xs uppercase tracking-wider text-muted-foreground">Max COGS thresholds</Label>
                 <p className="text-[10px] text-muted-foreground mb-2">Criteria for the Max COGS column — the maximum cost at which all three are met.</p>
                 <div className="space-y-3">
+                  {/* Same order as Profitability Thresholds: Margin, ROI, Profit/Unit (2026-10-16). */}
                   <NumField id="mcMargin" label="Min Profit Margin (%)"   value={settings.maxCogsMinMarginPct}  onChange={(v) => updateField("maxCogsMinMarginPct", v)} />
                   <NumField id="mcRoi"    label="Min ROI (%)"             value={settings.maxCogsMinRoiPct}     onChange={(v) => updateField("maxCogsMinRoiPct", v)} />
                   <NumField id="mcProfit" label="Min Profit per Unit ($)" value={settings.maxCogsMinProfitUnit} onChange={(v) => updateField("maxCogsMinProfitUnit", v)} />
@@ -215,8 +213,9 @@ export function SettingsDialog({
             <h3 className="text-sm font-medium text-muted-foreground mb-3">Profitability Thresholds</h3>
             <p className="text-xs text-muted-foreground mb-3">Row-level gates used by the Profitable scorecard tile and the Replens tile.</p>
             <div className="space-y-3">
-              <NumField id="roi"          label="Minimum ROI (%)"           value={settings.minRoiThreshold}        onChange={(v) => updateField("minRoiThreshold", v)} />
+              {/* Same order as Max COGS thresholds: Margin, ROI, Profit/Unit (2026-10-16). */}
               <NumField id="margin"       label="Minimum Margin (%)"        value={settings.minMarginThreshold}     onChange={(v) => updateField("minMarginThreshold", v)} />
+              <NumField id="roi"          label="Minimum ROI (%)"           value={settings.minRoiThreshold}        onChange={(v) => updateField("minRoiThreshold", v)} />
               <NumField id="minProfitUnit" label="Minimum Profit/Unit ($)"  value={settings.minProfitUnitThreshold} onChange={(v) => updateField("minProfitUnitThreshold", v)} step="0.01" />
             </div>
           </div>
@@ -227,7 +226,7 @@ export function SettingsDialog({
           <div>
             <h3 className="text-sm font-medium text-muted-foreground mb-3">SP-API Credentials</h3>
             <p className="text-xs text-muted-foreground mb-3">
-              Store these in your Replit Secrets tab. The app reads them from environment variables on the server.
+              Set as environment variables on the server (Render → Environment; locally in .env).
             </p>
             <div className="space-y-2">
               {[
@@ -257,27 +256,6 @@ export function SettingsDialog({
               <UsersAdminDialog open={usersOpen} onOpenChange={setUsersOpen} />
             </div>
           )}
-
-          {/* ─── Scheduler (SPEC §11 "Refresh job", read-only) ─── */}
-          <div data-testid="settings-scheduler">
-            <h3 className="text-sm font-medium text-muted-foreground mb-3">Scheduler</h3>
-            {!scheduler && <p className="text-xs text-muted-foreground">Status unavailable.</p>}
-            {scheduler && (
-              <div className="space-y-1 text-xs">
-                <div className="flex justify-between gap-4"><span className="text-muted-foreground">Scheduled passes</span><span>{scheduler.enabled ? "enabled" : "off (ENABLE_CRONS unset)"}</span></div>
-                <div className="flex justify-between gap-4"><span className="text-muted-foreground">Next pass</span><span>{scheduler.nextPassAt ? new Date(scheduler.nextPassAt).toLocaleString() : scheduler.scheduleDefined ? "—" : "no schedule defined yet"}</span></div>
-                <div className="flex justify-between gap-4">
-                  <span className="text-muted-foreground">Last scheduled pass</span>
-                  <span>
-                    {scheduler.lastScheduled
-                      ? `#${scheduler.lastScheduled.id} ${scheduler.lastScheduled.status}${scheduler.lastScheduled.summary ? ` · ${scheduler.lastScheduled.summary.asins} ASINs · ${formatDuration(scheduler.lastScheduled.summary.durationMs)}` : ""}${scheduler.lastScheduled.error ? ` · ${scheduler.lastScheduled.error}` : ""}`
-                      : "none yet"}
-                  </span>
-                </div>
-                <p className="text-[10px] text-muted-foreground pt-1">Every job, scheduled or manual, is in the jobs dialog — the clock icon next to Refresh on the ASINs page.</p>
-              </div>
-            )}
-          </div>
 
           <Button onClick={handleSave} className="w-full" data-testid="button-save-settings">
             <Save className="h-4 w-4 mr-2" />

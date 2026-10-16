@@ -264,8 +264,10 @@ a four-hour window.
   `GET /api/jobs/current` every 10 s while any job is queued/running.
 - **Bulk Calc page:** Refresh button stays; it enqueues the bulk-target
   job; same progress/toast treatment.
-- **Settings:** a read-only "Scheduler" section showing: enabled or not,
-  next pass time, last pass result, link to the jobs dialog.
+- **Settings:** ~~a read-only "Scheduler" section~~ — **not built**
+  (decided 2026-10-16 after commit 2 had added it; removed the same day).
+  The jobs dialog is the only surface; `GET /api/jobs/scheduler` remains
+  as an API read.
 
 ## Documentation
 
@@ -282,7 +284,7 @@ a four-hour window.
 ## Commits
 
 1. **`scheduler: jobs table, runner, component framework, progress/resume`** — migration 052 (jobs, CPT column, in_catalog drop, cache drop, refresh_runs.job_id), runner loop, component interface, the 21 component files wrapping the existing stage functions in the fixed order, resume logic, cancel route. No UI, no schedule yet. Tests: order is fixed; resume skips done components and restarts at the cursor; cancel honoured; one job at a time; stage-then-swap suppression leaves no empty window; in_catalog has no writers.
-2. **`scheduler: Refresh button, jobs dialog, completion toast with flips`** — toolbar, dialog, polling, Settings section. Product Info / Prices & Stock removed; their routes become thin enqueuers for one more release then are deleted (CLAUDE.md note). Tests: scope rule; queue-position display; flips panel content.
+2. **`scheduler: Refresh button, jobs dialog, completion toast with flips`** — toolbar, dialog, polling (the Settings section it added was removed 2026-10-16). Product Info / Prices & Stock removed; their routes become thin enqueuers for one more release then are deleted (CLAUDE.md note). Tests: scope rule; queue-position display; flips panel content.
 3. **`scheduler: onboarding and Bulk Calc enqueue the job; cache removed`** — `onboardNewAsins` → enqueue; Bulk Calc Refresh → bulk-target job with the main→bulk copy rule; `bulk_gating_hazmat_cache` and the 30-day rule gone. Tests: bulk never writes main tables; catalog ASIN refreshed in main then copied; non-catalog ASIN public-only.
 4. **`scheduler: Add to SC probes gating live; Push to Aura reads PO sheet first`** — decision 9. **Hard stop before this commit** (touches submission and Aura paths).
 5. **`scheduler: schedule definition; old cron files deleted`** — the two cron lines with explicit timezone, gated by ENABLE_CRONS. Still off on Render. Tests: expressions fire at 00:00 and 04–23 ET across a DST boundary.

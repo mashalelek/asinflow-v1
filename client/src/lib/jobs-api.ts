@@ -47,13 +47,6 @@ export interface ComponentRun {
   error: string | null;
 }
 
-export interface SchedulerInfo {
-  enabled: boolean;
-  scheduleDefined: boolean;
-  nextPassAt: string | null;
-  lastScheduled: { id: number; status: JobStatus; started_at: string | null; finished_at: string | null; summary: JobSummary | null; error: string | null } | null;
-}
-
 // ── Component names, for labels. Keys match server/scheduler/components. ──
 export const COMPONENT_LABELS: Record<number, string> = {
   1: "SC discovery", 2: "catalog", 3: "catalog-deleted", 4: "BSR", 5: "meltable", 6: "dangerous good",
@@ -169,10 +162,6 @@ export async function cancelJob(id: number, fetchFn: typeof fetch = fetch): Prom
     body: JSON.stringify({ status: "cancelled" }),
   }));
   return b.job;
-}
-
-export async function getSchedulerInfo(fetchFn: typeof fetch = fetch): Promise<SchedulerInfo> {
-  return parse(await fetchFn("/api/jobs/scheduler", { credentials: "same-origin" }));
 }
 
 /** Window event the flips panel raises so the ASINs page can focus a row. */
