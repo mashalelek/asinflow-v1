@@ -2,7 +2,7 @@ import { describe, it, expect } from "vitest";
 import { readFileSync } from "fs";
 import { join } from "path";
 import { poAsinRowsSql } from "./po-queries";
-import { fmtQty, qtyNumber, individualUnits, PO_ASIN_COLUMNS } from "../client/src/lib/po-qty";
+import { fmtQty, qtyNumber, individualUnits, productQtyFromAsin, PO_ASIN_COLUMNS } from "../client/src/lib/po-qty";
 
 // PO expand-by-ASIN patch (docs/claude_spec-patch-po-expand-by-asin.md).
 // Commit 3: the §4 column model is ONE component for the detail tab and the
@@ -109,5 +109,27 @@ describe("Expand by ASIN — list payload and page (§3.1–3.3)", () => {
     expect(page).toMatch(/<PoAsinRow key=\{a\.id\} a=\{a\} indent/);
     expect(page).toMatch(/firstExpandedId === po\.id && <thead><PoAsinHeaderRow sub \/><\/thead>/);
     expect(page).toMatch(/savePoExpanded\(next\)/);
+  });
+});
+
+// ── Commit 7: Products table status columns (§4.3) ─────────────────────────
+describe("Products tab status columns (§4.3)", () => {
+  it("converts an ASIN quantity to product units through the yield", () => {
+    expect(productQtyFromAsin("5", "0.33")).toBe(15.15);   // 5 three-packs ≈ 15 skeins (sheet yield is rounded)
+    expect(productQtyFromAsin("6", "6")).toBe(1);          // 6 two-packs = 1 case
+    expect(productQtyFromAsin("4", "1")).toBe(4);
+    expect(productQtyFromAsin("4", null)).toBe(4);
+    expect(productQtyFromAsin(null, "1")).toBeNull();      // not tracked stays not tracked
+  });
+  it("the Products tab adds At Prep Center / At CQG Warehouse / Lost-damaged, through the yield for 1:1 lines, dash for bundle components", () => {
+    const page = read("client/src/pages/purchase-orders.tsx");
+    const tab = page.slice(page.indexOf('{tab === "products" && ('));
+    for (const h of ["At Prep Center", "At CQG Warehouse", "Lost/damaged by us"]) expect(tab).toContain(`<th className={thNum}>${h}</th>`);
+    expect(tab).toMatch(/l\.soleLine \? productQtyFromAsin\(l\.parent\.qty_at_prep, l\.asin_qty_per_product\) : null/);
+    expect(tab).toMatch(/l\.soleLine \? productQtyFromAsin\(l\.parent\.qty_at_warehouse, l\.asin_qty_per_product\) : null/);
+    expect(tab).toMatch(/l\.soleLine \? productQtyFromAsin\(l\.parent\.qty_lost_damaged_us, l\.asin_qty_per_product\) : null/);
+    expect(page).toMatch(/soleLine: a\.lines\.length === 1/);
+    // shipment columns stay ASIN-level only
+    expect(tab).not.toMatch(/Shipped FBA|Received by Amazon|Shipment IDs/);
   });
 });

@@ -15,6 +15,21 @@ export function fmtQty(v: string | number | null | undefined): string {
   return Number.isInteger(n) ? String(n) : n.toFixed(2);
 }
 
+/**
+ * §4.3: an ASIN-level quantity expressed in product (supplier) units for a
+ * 1:1 line: product qty = ASIN qty ÷ yield, where yield =
+ * asin_qty_per_product (ASIN units per product unit; 0.33 for a 3-pack sold
+ * as three singles, 6 for a case of 12 sold as 2-packs). NULL in → NULL;
+ * a missing/zero yield reads as 1.
+ */
+export function productQtyFromAsin(asinQty: string | number | null | undefined, yieldPerProduct: string | number | null | undefined): number | null {
+  const q = qtyNumber(asinQty);
+  if (q == null) return null;
+  const y = qtyNumber(yieldPerProduct);
+  const divisor = y == null || y === 0 ? 1 : y;
+  return Math.round((q / divisor) * 100) / 100;
+}
+
 /** Individual Units Ordered (col 10) = Ordered × Units/Pack (P1). */
 export function individualUnits(qty: number, unitsPerPack: number): number {
   return qty * unitsPerPack;

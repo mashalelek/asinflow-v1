@@ -26,6 +26,7 @@ import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover
 import { UploadToVelocityDialog } from "@/components/upload-to-velocity-dialog";
 import { PoAsinTable, PoAsinColGroup, PoAsinHeaderRow, PoAsinRow, type PoAsinRowData, type PoAsinLine } from "@/components/po-asin-rows";
 import { loadPoExpanded, savePoExpanded, isPoExpanded, togglePoExpanded, toggleExpandAll, type PoExpandedState } from "@/lib/po-expanded";
+import { productQtyFromAsin } from "@/lib/po-qty";
 
 interface PoRow {
   id: string;
@@ -454,6 +455,12 @@ function Qty({ v }: { v: number | null | undefined }) {
   if (v == null) return <span className="text-muted-foreground/50">—</span>;
   return <span className={v === 0 ? "text-muted-foreground/50" : ""}>{v}</span>;
 }
+// Product-unit view of an ASIN quantity (§4.3): fractional values show 2 dp.
+function ProductQty({ v }: { v: number | null }) {
+  if (v == null) return <span className="text-muted-foreground/50">—</span>;
+  const t = Number.isInteger(v) ? String(v) : v.toFixed(2);
+  return <span className={v === 0 ? "text-muted-foreground/50" : ""}>{t}</span>;
+}
 
 function DetailCard({ title, rows }: { title: string; rows: Array<[string, React.ReactNode]> }) {
   return (
@@ -498,7 +505,12 @@ export function PurchaseOrderDetailPlaceholder() {
   const { po, summary, asins } = data;
   const actionItems: string[] = Array.isArray(po.action_items) ? po.action_items : [];
   const hairline = { borderBottom: "0.5px solid hsl(var(--border))" } as const;
-  const allLines: Array<PoLine & { parentAsin: string }> = asins.flatMap((a) => a.lines.map((l) => ({ ...l, parentAsin: a.asin })));
+  // Products tab (§4.3): the three manual ASIN quantities convert to product
+  // units through the line's yield for 1:1 lines (one line per ASIN row);
+  // a bundle component line (≥2 lines on the ASIN) shows a dash — a
+  // per-component split is not inferrable from an ASIN-level number.
+  const allLines: Array<PoLine & { parentAsin: string; parent: PoAsinDetail; soleLine: boolean }> =
+    asins.flatMap((a) => a.lines.map((l) => ({ ...l, parentAsin: a.asin, parent: a, soleLine: a.lines.length === 1 })));
 
   const copyInvoiceName = () => {
     navigator.clipboard.writeText(po.invoice_file_name).then(() => {
@@ -610,6 +622,9 @@ export function PurchaseOrderDetailPlaceholder() {
                 <th className={thNum}>Received</th>
                 <th className={thNum}>Canceled</th>
                 <th className={thNum}>Returned</th>
+                <th className={thNum}>At Prep Center</th>
+                <th className={thNum}>At CQG Warehouse</th>
+                <th className={thNum}>Lost/damaged by us</th>
                 <th className={thNum}>Final</th>
                 <th className={thTxt}>ASIN</th>
                 <th className={thTxt}></th>
@@ -626,6 +641,9 @@ export function PurchaseOrderDetailPlaceholder() {
                   <td className="px-3 py-1.5 text-right"><Qty v={l.qty_received} /></td>
                   <td className="px-3 py-1.5 text-right"><Qty v={l.qty_canceled} /></td>
                   <td className="px-3 py-1.5 text-right"><Qty v={l.qty_returned} /></td>
+                  <td className="px-3 py-1.5 text-right"><ProductQty v={l.soleLine ? productQtyFromAsin(l.parent.qty_at_prep, l.asin_qty_per_product) : null} /></td>
+                  <td className="px-3 py-1.5 text-right"><ProductQty v={l.soleLine ? productQtyFromAsin(l.parent.qty_at_warehouse, l.asin_qty_per_product) : null} /></td>
+                  <td className="px-3 py-1.5 text-right"><ProductQty v={l.soleLine ? productQtyFromAsin(l.parent.qty_lost_damaged_us, l.asin_qty_per_product) : null} /></td>
                   <td className="px-3 py-1.5 text-right"><Qty v={l.final_qty} /></td>
                   <td className="px-3 py-1.5">
                     <span className="inline-block rounded-sm bg-muted px-1.5 py-0.5 font-mono text-[11px] text-muted-foreground">→ {l.parentAsin}</span>
