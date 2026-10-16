@@ -12,7 +12,10 @@
  */
 import React, { useState, useEffect, useCallback } from "react";
 import { useLocation, Link } from "wouter";
-import { Upload, Paperclip, StickyNote, Plus, Search, Copy, Check, ChevronRight, ChevronDown, ChevronsDownUp, ChevronsUpDown } from "lucide-react";
+import { Upload, Paperclip, StickyNote, Plus, Search, Copy, Check, ChevronRight, ChevronDown, ChevronsDownUp, ChevronsUpDown, CheckCircle2, Circle } from "lucide-react";
+import {
+  AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle,
+} from "@/components/ui/alert-dialog";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import {
@@ -36,6 +39,9 @@ interface PoRow {
   units_ordered: number;
   units_received: number | null; // null = not tracked on any line → "—"
   has_notes: boolean;
+  /** §5: NULL = Open. closed_by 'auto' | 'sheet' | a user id. */
+  closed_at: string | null;
+  closed_by: string | null;
   /** Expand by ASIN (§3): the PO's ASIN rows, same model as the detail tab. */
   asins: PoAsinRowData[];
 }
@@ -47,6 +53,50 @@ interface PosResponse {
   pageSize: number;
   suppliers: string[];
   statusTokens: string[];
+  closed: "open" | "closed" | "all";
+}
+
+type ClosedFilter = "open" | "closed" | "all";
+
+/** §5 col 1: green check when Closed, open-order outline when Open. Click toggles with confirm. */
+function ClosedToggle({ po, onToggled, size = "sm" }: { po: { id: string; order_id: string; closed_at: string | null; closed_by: string | null }; onToggled: () => void; size?: "sm" | "lg" }) {
+  const [open, setOpen] = useState(false);
+  const [busy, setBusy] = useState(false);
+  const isClosed = po.closed_at != null;
+  const apply = async () => {
+    setBusy(true);
+    try {
+      const res = await fetch(`/api/pos/${po.id}/closed`, { method: "PATCH", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ closed: !isClosed }) });
+      if (!res.ok) throw new Error((await res.json().catch(() => ({}))).message || `HTTP ${res.status}`);
+      onToggled();
+    } finally { setBusy(false); setOpen(false); }
+  };
+  const icon = isClosed
+    ? <CheckCircle2 className={`${size === "lg" ? "h-5 w-5" : "h-4 w-4"} text-green-600`} />
+    : <Circle className={`${size === "lg" ? "h-5 w-5" : "h-4 w-4"} text-muted-foreground`} />;
+  const who = po.closed_by === "auto" ? "closed automatically" : po.closed_by === "sheet" ? "closed (from the Orders sheet)" : "closed by hand";
+  return (
+    <>
+      <button type="button" onClick={(e) => { e.stopPropagation(); setOpen(true); }} title={isClosed ? who : "Open"}
+        className="inline-flex items-center" data-testid={`button-po-closed-${po.order_id}`} aria-pressed={isClosed}>{icon}</button>
+      <AlertDialog open={open} onOpenChange={setOpen}>
+        <AlertDialogContent onClick={(e) => e.stopPropagation()}>
+          <AlertDialogHeader>
+            <AlertDialogTitle>{isClosed ? "Reopen this PO?" : "Close this PO?"}</AlertDialogTitle>
+            <AlertDialogDescription>
+              {isClosed
+                ? `${po.order_id} is ${who}. Reopening keeps it Open until every unit is accounted for and no action items remain.`
+                : `${po.order_id} will be marked Closed by you. It will not be reopened automatically.`}
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel disabled={busy}>Cancel</AlertDialogCancel>
+            <AlertDialogAction disabled={busy} onClick={(e) => { e.preventDefault(); void apply(); }} data-testid="button-po-closed-confirm">{isClosed ? "Reopen" : "Close"}</AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
+    </>
+  );
 }
 
 // §7: tinted chips only, never saturated fills. Families ruled 2026-08-22.
@@ -132,6 +182,7 @@ export default function PurchaseOrders() {
   const [search, setSearch] = useState("");
   const [debouncedSearch, setDebouncedSearch] = useState("");
   const [statusSel, setStatusSel] = useState<Set<string>>(new Set());
+  const [closedFilter, setClosedFilter] = useState<ClosedFilter>("open"); // D3: default Open only
   const [supplierSel, setSupplierSel] = useState<Set<string>>(new Set());
   const [from, setFrom] = useState("");
   const [to, setTo] = useState("");
@@ -149,13 +200,14 @@ export default function PurchaseOrders() {
 
   const statusKey = Array.from(statusSel).sort().join(",");
   const supplierKey = Array.from(supplierSel).sort().join(",");
-  useEffect(() => { setPage(1); }, [debouncedSearch, statusKey, supplierKey, from, to]);
+  useEffect(() => { setPage(1); }, [debouncedSearch, statusKey, supplierKey, from, to, closedFilter]);
 
   const load = useCallback(async () => {
     setError(null);
     const params = new URLSearchParams();
     if (debouncedSearch) params.set("search", debouncedSearch);
     if (statusKey) params.set("status", statusKey);
+    params.set("closed", closedFilter);
     if (supplierKey) params.set("supplier", supplierKey);
     if (from) params.set("from", from);
     if (to) params.set("to", to);
@@ -167,7 +219,7 @@ export default function PurchaseOrders() {
     } catch (e: any) {
       setError(e.message);
     }
-  }, [debouncedSearch, statusKey, supplierKey, from, to, page]);
+  }, [debouncedSearch, statusKey, supplierKey, from, to, page, closedFilter]);
 
   useEffect(() => { load(); }, [load]);
 
@@ -221,6 +273,14 @@ export default function PurchaseOrders() {
             placeholder="Search order ID, ASIN, product name..."
             className="h-8 w-[280px] pl-8 text-sm" data-testid="input-po-search" />
         </div>
+        <Select value={closedFilter} onValueChange={(v) => setClosedFilter(v as ClosedFilter)}>
+          <SelectTrigger className="h-8 w-[120px] text-xs" data-testid="select-po-closed"><SelectValue /></SelectTrigger>
+          <SelectContent>
+            <SelectItem value="open">Open</SelectItem>
+            <SelectItem value="closed">Closed</SelectItem>
+            <SelectItem value="all">All</SelectItem>
+          </SelectContent>
+        </Select>
         <FacetMultiSelect label="Status" options={data?.statusTokens ?? []} selected={statusSel} onChange={setStatusSel} testId="select-po-status" />
         <FacetMultiSelect label="Supplier" options={data?.suppliers ?? []} selected={supplierSel} onChange={setSupplierSel} testId="select-po-supplier" />
         <input type="date" value={from} onChange={(e) => setFrom(e.target.value)}
@@ -236,8 +296,9 @@ export default function PurchaseOrders() {
         <table className="w-full border-collapse text-sm" data-testid="po-table">
           <thead>
             <tr className="table-header-stone">
+              <th className="px-2 py-2 text-xs font-medium whitespace-nowrap text-left w-12">Status</th>
               <th className="w-8 px-2 py-2" aria-label="Expand by ASIN" />
-              {["Status", "PO Date", "Order ID", "Supplier", "Order Total", "ASINs", "Units Ordered", "Units Received", "Invoice", "Notes"].map((h, i) => (
+              {["Action Items", "PO Date", "Order ID", "Supplier", "Order Total", "ASINs", "Units Ordered", "Units Received", "Invoice", "Notes"].map((h, i) => (
                 <th key={h} className={`px-3 py-2 text-xs font-medium whitespace-nowrap ${i >= 4 && i <= 7 ? "text-right" : "text-left"}`}>{h}</th>
               ))}
             </tr>
@@ -255,6 +316,10 @@ export default function PurchaseOrders() {
                 <React.Fragment key={po.id}>
                 <tr className="table-zebra-stone cursor-pointer hover:bg-muted/40" style={hairline}
                   onClick={() => navigate(`/purchase-orders/${po.id}`)} data-testid={`row-po-${po.order_id}`}>
+                  {/* §5 col 1: Open / Closed */}
+                  <td className="px-2 py-2 w-12" onClick={(e) => e.stopPropagation()}>
+                    <ClosedToggle po={po} onToggled={load} />
+                  </td>
                   {/* §3.1: the chevron is the ONLY expand target; the rest of the row still opens the PO. */}
                   <td className="px-2 py-2 w-8" onClick={(e) => e.stopPropagation()}>
                     <button type="button" className="text-muted-foreground hover:text-foreground"
@@ -286,7 +351,7 @@ export default function PurchaseOrders() {
                 </tr>
                 {open && (
                   <tr data-testid={`row-po-asins-${po.order_id}`}>
-                    <td colSpan={11} className="p-0 pl-6 bg-muted/20">
+                    <td colSpan={12} className="p-0 pl-6 bg-muted/20">
                       {/* Nested rows: same column model as the detail ASINs tab (§3.2, §4);
                           po_asins default order; sorting/filtering stays at PO level. */}
                       <table className="w-full border-collapse text-sm table-fixed" style={{ minWidth: "140rem" }}>
@@ -296,7 +361,7 @@ export default function PurchaseOrders() {
                           {po.asins.length === 0 && (
                             <tr><td colSpan={21} className="px-3 py-2 text-xs text-muted-foreground">No ASIN rows.</td></tr>
                           )}
-                          {po.asins.map((a) => <PoAsinRow key={a.id} a={a} indent />)}
+                          {po.asins.map((a) => <PoAsinRow key={a.id} a={a} indent editable onChanged={load} />)}
                         </tbody>
                       </table>
                     </td>
@@ -307,7 +372,7 @@ export default function PurchaseOrders() {
               });
             })()}
             {data && data.pos.length === 0 && (
-              <tr><td colSpan={11} className="px-3 py-8 text-center text-sm text-muted-foreground">No purchase orders match.</td></tr>
+              <tr><td colSpan={12} className="px-3 py-8 text-center text-sm text-muted-foreground">No purchase orders match.</td></tr>
             )}
           </tbody>
         </table>
@@ -383,12 +448,13 @@ export function PurchaseOrderDetailPlaceholder() {
   const [tab, setTab] = useState<"details" | "asins" | "products">("details");
   const [copied, setCopied] = useState(false);
 
-  useEffect(() => {
+  const reload = useCallback(() => {
     fetch(`/api/pos/${id}`)
       .then(async (r) => { if (!r.ok) throw new Error((await r.json().catch(() => ({}))).message || `HTTP ${r.status}`); return r.json(); })
       .then(setData)
       .catch((e) => setError(e.message));
   }, [id]);
+  useEffect(() => { reload(); }, [reload]);
 
   if (error) return (
     <div className="px-6 py-8 space-y-3">
@@ -421,9 +487,12 @@ export function PurchaseOrderDetailPlaceholder() {
 
       {/* Header */}
       <div className="flex items-end justify-between flex-wrap gap-2">
-        <div>
-          <h1 className="text-2xl font-semibold font-mono" data-testid="text-po-order-id">{po.order_id}</h1>
-          <p className="text-sm text-muted-foreground">{po.supplier} · {fmtDate(String(po.order_date))}</p>
+        <div className="flex items-start gap-3">
+          <div className="pt-1.5"><ClosedToggle po={{ id: po.id, order_id: po.order_id, closed_at: po.closed_at ?? null, closed_by: po.closed_by ?? null }} onToggled={reload} size="lg" /></div>
+          <div>
+            <h1 className="text-2xl font-semibold font-mono" data-testid="text-po-order-id">{po.order_id}</h1>
+            <p className="text-sm text-muted-foreground">{po.supplier} · {fmtDate(String(po.order_date))} · {po.closed_at ? "Closed" : "Open"}</p>
+          </div>
         </div>
         <div className="flex gap-1">
           {tokens.map((tk: string) => (
@@ -461,7 +530,8 @@ export function PurchaseOrderDetailPlaceholder() {
             ["Order ID", <span className="font-mono text-xs">{po.order_id}</span>],
             ["Date", fmtDate(String(po.order_date))],
             ["Supplier", po.supplier],
-            ["Status", tokens.join(", ")],
+            ["Status", po.closed_at ? "Closed" : "Open"],
+            ["Action Items", tokens.join(", ") || "—"],
           ]} />
           <DetailCard title="Money" rows={[
             ["Subtotal", <Money v={po.subtotal} />],
@@ -496,7 +566,7 @@ export function PurchaseOrderDetailPlaceholder() {
         </div>
       )}
 
-      {tab === "asins" && <PoAsinTable asins={asins} />}
+      {tab === "asins" && <PoAsinTable asins={asins} editable onChanged={reload} />}
 
       {tab === "products" && (
         <div className="w-full overflow-auto rounded-md" style={{ border: "0.5px solid hsl(var(--border))" }}>

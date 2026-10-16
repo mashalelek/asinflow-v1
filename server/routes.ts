@@ -9,6 +9,7 @@ import { verifyPending, resolveSubmissionManual, resolveSubmissionsBulk, dismiss
 import { runAuraSyncChain } from "./aura-sync-chain";
 import { probeGatingForAsins } from "./gating-probe";
 import { loadPoAsinRows } from "./po-queries";
+import { evaluateAutoClose, setPoClosedManually, parseQtyInput, MANUAL_QTY_COLUMNS, type ManualQtyColumn } from "./po-close";
 import { log } from "./index";
 import { type AsinInput, type AsinResult, type ColumnMapping, extractDomain, cleanBuyLink, getFeePriceForAsin, LEAD_SOURCES, normalizeLeadSource, type LeadSource } from "@shared/schema";
 import { parseMoney } from "@shared/parse-money";
@@ -4289,6 +4290,9 @@ export async function registerRoutes(
     const supplier = typeof req.query.supplier === "string" ? req.query.supplier.trim() : "";
     const from = typeof req.query.from === "string" ? req.query.from.trim() : "";
     const to = typeof req.query.to === "string" ? req.query.to.trim() : "";
+    // §5 / D3: Status filter = open | closed | all; default view = Open only.
+    const closedRaw = typeof req.query.closed === "string" ? req.query.closed.trim().toLowerCase() : "open";
+    const closed = closedRaw === "closed" ? "closed" : closedRaw === "all" ? "all" : "open";
     const page = Math.max(1, parseInt(String(req.query.page ?? "1"), 10) || 1);
     const PAGE_SIZE = 25;
 
@@ -4317,6 +4321,8 @@ export async function registerRoutes(
     }
     if (from) add(`p.order_date >= $?`, from);
     if (to) add(`p.order_date <= $?`, to);
+    if (closed === "open") conds.push(`p.closed_at IS NULL`);
+    else if (closed === "closed") conds.push(`p.closed_at IS NOT NULL`);
     const where = conds.length > 0 ? `WHERE ${conds.join(" AND ")}` : "";
 
     try {
@@ -4346,7 +4352,7 @@ export async function registerRoutes(
       // the page): suppliers + status tokens (comma-split, deduped).
       const suppliers = (await query(`SELECT DISTINCT supplier FROM purchase_orders ORDER BY supplier`)).rows.map((r: any) => r.supplier);
       const tokenRows = (await query(`SELECT DISTINCT TRIM(t) AS token FROM purchase_orders, unnest(string_to_array(status, ',')) AS t ORDER BY 1`)).rows;
-      res.json({ pos: rows, total, page, pageSize: PAGE_SIZE, suppliers, statusTokens: tokenRows.map((r: any) => r.token) });
+      res.json({ pos: rows, total, page, pageSize: PAGE_SIZE, suppliers, statusTokens: tokenRows.map((r: any) => r.token), closed });
     } catch (err: any) {
       res.status(500).json({ message: err.message });
     }
@@ -4414,6 +4420,91 @@ export async function registerRoutes(
     } catch (err: any) {
       res.status(500).json({ message: err.message });
     }
+  });
+
+  // === PO status + quantities (patch §5, §4.2) ===
+  // The ONLY writers of closed_at / closed_by, the manual qty columns and
+  // po_asin_shipments (AF-owned, SPEC §14). Every quantity or shipment
+  // change re-runs the auto-close rule for its PO.
+  const poQuery = (sql: string, params?: any[]) => query(sql, params);
+
+  // Manual Closed toggle (POs table col 1 / PO Details), with the user as closed_by.
+  app.patch("/api/pos/:id/closed", async (req: Request, res: Response) => {
+    if (!isDbAvailable()) { res.status(503).json({ message: "Database not available" }); return; }
+    const id = String(req.params.id ?? "");
+    const closed = (req.body ?? {}).closed;
+    if (typeof closed !== "boolean") { res.status(400).json({ message: "closed must be a boolean" }); return; }
+    try {
+      const exists = (await query(`SELECT id FROM purchase_orders WHERE id = $1`, [id])).rows[0];
+      if (!exists) { res.status(404).json({ message: "PO not found" }); return; }
+      await setPoClosedManually(id, closed, req.session?.userId ?? null, poQuery);
+      const po = (await query(`SELECT id, closed_at, closed_by, action_items FROM purchase_orders WHERE id = $1`, [id])).rows[0];
+      res.json({ po });
+    } catch (err: any) { res.status(500).json({ message: err.message }); }
+  });
+
+  // Manual quantity edits on an ASIN row: At CQG Warehouse, Lost/damaged by us, Shipped by Supplier.
+  app.patch("/api/pos/asin-rows/:id/quantities", async (req: Request, res: Response) => {
+    if (!isDbAvailable()) { res.status(503).json({ message: "Database not available" }); return; }
+    const id = String(req.params.id ?? "");
+    const body = (req.body ?? {}) as Record<string, unknown>;
+    const sets: string[] = []; const vals: any[] = [id];
+    for (const col of MANUAL_QTY_COLUMNS) {
+      if (!(col in body)) continue;
+      const p = parseQtyInput(body[col]);
+      if (!p.ok) { res.status(400).json({ message: `${col}: ${p.error}` }); return; }
+      vals.push(p.value); sets.push(`${col as ManualQtyColumn} = $${vals.length}`);
+    }
+    if (sets.length === 0) { res.status(400).json({ message: `nothing to update (allowed: ${MANUAL_QTY_COLUMNS.join(", ")})` }); return; }
+    try {
+      const r = await query(`UPDATE po_asins SET ${sets.join(", ")} WHERE id = $1 RETURNING po_id`, vals);
+      if (r.rowCount === 0) { res.status(404).json({ message: "ASIN row not found" }); return; }
+      const poId = String(r.rows[0].po_id);
+      const close = await evaluateAutoClose(poId, poQuery);
+      const [row] = await loadPoAsinRows(poQuery, [poId]).then((rows) => rows.filter((x: any) => String(x.id) === id));
+      res.json({ row, close });
+    } catch (err: any) { res.status(500).json({ message: err.message }); }
+  });
+
+  // Manual shipment rows (§4.2) — the trigger keeps Shipped FBA / Received by Amazon in step.
+  app.post("/api/pos/asin-rows/:id/shipments", async (req: Request, res: Response) => {
+    if (!isDbAvailable()) { res.status(503).json({ message: "Database not available" }); return; }
+    const id = String(req.params.id ?? "");
+    const b = (req.body ?? {}) as Record<string, unknown>;
+    const fba = String(b.fba_shipment_id ?? "").trim();
+    if (!fba) { res.status(400).json({ message: "fba_shipment_id is required" }); return; }
+    const shipped = parseQtyInput(b.qty_shipped);
+    if (!shipped.ok || shipped.value == null) { res.status(400).json({ message: "qty_shipped must be a non-negative number" }); return; }
+    const received = parseQtyInput(b.qty_received);
+    if (!received.ok) { res.status(400).json({ message: `qty_received: ${received.error}` }); return; }
+    const shippedAt = typeof b.shipped_at === "string" && /^\d{4}-\d{2}-\d{2}$/.test(b.shipped_at) ? b.shipped_at : null;
+    try {
+      const pa = (await query(`SELECT po_id FROM po_asins WHERE id = $1`, [id])).rows[0];
+      if (!pa) { res.status(404).json({ message: "ASIN row not found" }); return; }
+      await query(
+        `INSERT INTO po_asin_shipments (po_asin_id, fba_shipment_id, qty_shipped, qty_received, shipped_at, source)
+         VALUES ($1, $2, $3, $4, $5, 'manual')
+         ON CONFLICT (po_asin_id, fba_shipment_id) DO UPDATE SET qty_shipped = EXCLUDED.qty_shipped, qty_received = EXCLUDED.qty_received, shipped_at = EXCLUDED.shipped_at, updated_at = NOW()`,
+        [id, fba, shipped.value, received.value, shippedAt],
+      );
+      const close = await evaluateAutoClose(String(pa.po_id), poQuery);
+      const [row] = await loadPoAsinRows(poQuery, [String(pa.po_id)]).then((rows) => rows.filter((x: any) => String(x.id) === id));
+      res.status(201).json({ row, close });
+    } catch (err: any) { res.status(500).json({ message: err.message }); }
+  });
+
+  app.delete("/api/pos/shipments/:id", async (req: Request, res: Response) => {
+    if (!isDbAvailable()) { res.status(503).json({ message: "Database not available" }); return; }
+    const sid = parseInt(String(req.params.id ?? ""), 10);
+    if (!Number.isInteger(sid)) { res.status(400).json({ message: "invalid shipment id" }); return; }
+    try {
+      const r = await query(`DELETE FROM po_asin_shipments s USING po_asins pa WHERE s.id = $1 AND pa.id = s.po_asin_id RETURNING pa.id AS po_asin_id, pa.po_id`, [sid]);
+      if (r.rowCount === 0) { res.status(404).json({ message: "shipment not found" }); return; }
+      const poId = String(r.rows[0].po_id); const paId = String(r.rows[0].po_asin_id);
+      const close = await evaluateAutoClose(poId, poQuery);
+      const [row] = await loadPoAsinRows(poQuery, [poId]).then((rows) => rows.filter((x: any) => String(x.id) === paId));
+      res.json({ row, close });
+    } catch (err: any) { res.status(500).json({ message: err.message }); }
   });
 
   // === Bulk Profit Calculator (SPEC §21) ===

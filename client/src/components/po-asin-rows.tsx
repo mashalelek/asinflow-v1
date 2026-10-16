@@ -9,7 +9,7 @@
  */
 import React, { useState } from "react";
 import { Link } from "wouter";
-import { StickyNote, ChevronRight, ChevronDown, AlertTriangle } from "lucide-react";
+import { StickyNote, ChevronRight, ChevronDown, AlertTriangle, Plus, X } from "lucide-react";
 import { Tooltip, TooltipTrigger, TooltipContent } from "@/components/ui/tooltip";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import { fmtQty, individualUnits, PO_ASIN_COLUMNS } from "@/lib/po-qty";
@@ -87,24 +87,84 @@ export function QtyCell({ v }: { v: string | number | null | undefined }) {
   return <span className={t === "0" ? "text-muted-foreground/50" : ""}>{t}</span>;
 }
 
-function ShipmentChips({ shipments }: { shipments: PoAsinShipment[] }) {
-  if (shipments.length === 0) return <span className="text-muted-foreground/50">—</span>;
+async function patchJson(url: string, method: string, body?: unknown): Promise<any> {
+  const res = await fetch(url, { method, headers: { "Content-Type": "application/json" }, body: body === undefined ? undefined : JSON.stringify(body) });
+  const data = await res.json().catch(() => ({}));
+  if (!res.ok) throw new Error(data.message || `HTTP ${res.status}`);
+  return data;
+}
+
+/**
+ * A hand-entered quantity cell (At CQG Warehouse, Lost/damaged by us,
+ * Shipped by Supplier): click to edit, Enter/blur saves, Escape cancels,
+ * empty = not tracked (NULL). The server re-runs the auto-close rule.
+ */
+function EditableQty({ rowId, col, v, onChanged }: { rowId: string; col: "qty_at_warehouse" | "qty_lost_damaged_us" | "qty_shipped_supplier"; v: string | null; onChanged?: () => void }) {
+  const [editing, setEditing] = useState(false);
+  const [draft, setDraft] = useState("");
+  const [err, setErr] = useState<string | null>(null);
+  const start = () => { setDraft(v == null ? "" : fmtQty(v)); setErr(null); setEditing(true); };
+  const save = async () => {
+    setEditing(false);
+    const next = draft.trim() === "" ? null : draft.trim();
+    if ((next ?? "") === (v == null ? "" : fmtQty(v))) return;
+    try { await patchJson(`/api/pos/asin-rows/${rowId}/quantities`, "PATCH", { [col]: next }); onChanged?.(); }
+    catch (e: any) { setErr(e.message); }
+  };
+  if (editing) {
+    return (
+      <input autoFocus value={draft} onChange={(e) => setDraft(e.target.value)} onBlur={save}
+        onKeyDown={(e) => { if (e.key === "Enter") save(); if (e.key === "Escape") setEditing(false); }}
+        onClick={(e) => e.stopPropagation()}
+        className="h-6 w-16 rounded border border-input bg-background px-1 text-right text-xs" data-testid={`input-${col}-${rowId}`} />
+    );
+  }
+  return (
+    <button type="button" onClick={(e) => { e.stopPropagation(); start(); }} className="w-full text-right hover:underline decoration-dotted" title={err ?? "Click to edit"} data-testid={`button-edit-${col}-${rowId}`}>
+      <QtyCell v={v} />{err && <span className="ml-1 text-destructive">!</span>}
+    </button>
+  );
+}
+
+function ShipmentChips({ rowId, shipments, editable, onChanged }: { rowId: string; shipments: PoAsinShipment[]; editable?: boolean; onChanged?: () => void }) {
+  const [fba, setFba] = useState("");
+  const [qty, setQty] = useState("");
+  const [err, setErr] = useState<string | null>(null);
   const total = shipments.reduce((t, s) => t + (parseFloat(s.qty_shipped) || 0), 0);
+  const add = async () => {
+    setErr(null);
+    try { await patchJson(`/api/pos/asin-rows/${rowId}/shipments`, "POST", { fba_shipment_id: fba.trim(), qty_shipped: qty.trim() }); setFba(""); setQty(""); onChanged?.(); }
+    catch (e: any) { setErr(e.message); }
+  };
+  const remove = async (id: number) => {
+    setErr(null);
+    try { await patchJson(`/api/pos/shipments/${id}`, "DELETE"); onChanged?.(); } catch (e: any) { setErr(e.message); }
+  };
+  if (shipments.length === 0 && !editable) return <span className="text-muted-foreground/50">—</span>;
   return (
     <Popover>
       <PopoverTrigger asChild>
-        <button className="inline-block rounded-sm bg-muted px-1.5 py-0.5 font-mono text-[11px] hover:bg-muted/70" data-testid="po-shipments-chip">
-          {shipments.length} shipment{shipments.length === 1 ? "" : "s"} · {fmtQty(total)}
+        <button onClick={(e) => e.stopPropagation()} className="inline-block rounded-sm bg-muted px-1.5 py-0.5 font-mono text-[11px] hover:bg-muted/70" data-testid="po-shipments-chip">
+          {shipments.length === 0 ? "+ shipment" : `${shipments.length} shipment${shipments.length === 1 ? "" : "s"} · ${fmtQty(total)}`}
         </button>
       </PopoverTrigger>
-      <PopoverContent className="w-72 p-2 text-xs space-y-1" align="start">
+      <PopoverContent className="w-80 p-2 text-xs space-y-1" align="start" onClick={(e) => e.stopPropagation()}>
         {shipments.map((s) => (
           <div key={s.id} className="flex items-center justify-between gap-2">
             <span className="font-mono">{s.fba_shipment_id}</span>
             <span>({fmtQty(s.qty_shipped)}{s.qty_received != null ? ` · rcvd ${fmtQty(s.qty_received)}` : ""})</span>
             <span className="text-muted-foreground">{s.source}</span>
+            {editable && <button onClick={() => remove(s.id)} className="text-muted-foreground hover:text-destructive" title="Remove" data-testid={`button-remove-shipment-${s.id}`}><X className="h-3 w-3" /></button>}
           </div>
         ))}
+        {editable && (
+          <div className="flex items-center gap-1 pt-1 border-t border-border/50">
+            <input value={fba} onChange={(e) => setFba(e.target.value)} placeholder="FBA shipment ID" className="h-6 flex-1 rounded border border-input bg-background px-1 font-mono text-xs" data-testid={`input-shipment-id-${rowId}`} />
+            <input value={qty} onChange={(e) => setQty(e.target.value)} placeholder="qty" className="h-6 w-14 rounded border border-input bg-background px-1 text-right text-xs" data-testid={`input-shipment-qty-${rowId}`} />
+            <button onClick={add} className="text-muted-foreground hover:text-foreground" title="Add shipment (manual)" data-testid={`button-add-shipment-${rowId}`}><Plus className="h-3.5 w-3.5" /></button>
+          </div>
+        )}
+        {err && <div className="text-destructive">{err}</div>}
       </PopoverContent>
     </Popover>
   );
@@ -135,8 +195,8 @@ export function PoAsinHeaderRow({ sub = false }: { sub?: boolean }) {
 
 const hairline = { borderBottom: "0.5px solid hsl(var(--border))" } as const;
 
-/** One ASIN row (plus its bundle component lines when expanded). */
-export function PoAsinRow({ a, indent = false }: { a: PoAsinRowData; indent?: boolean }) {
+/** One ASIN row (plus its bundle component lines when expanded). `editable` enables the hand-entered quantities and manual shipments. */
+export function PoAsinRow({ a, indent = false, editable = false, onChanged }: { a: PoAsinRowData; indent?: boolean; editable?: boolean; onChanged?: () => void }) {
   const [open, setOpen] = useState(false);
   const lines = a.lines ?? [];
   const multi = lines.length >= 2;
@@ -175,13 +235,13 @@ export function PoAsinRow({ a, indent = false }: { a: PoAsinRowData; indent?: bo
         <td className="px-3 py-1.5 text-right">{individualUnits(a.qty, a.units_per_pack)}</td>
         <td className="px-3 py-1.5 text-right"><QtyCell v={a.qty_canceled_asin} /></td>
         <td className="px-3 py-1.5 text-right"><QtyCell v={a.qty_returned_asin} /></td>
-        <td className="px-3 py-1.5 text-right"><QtyCell v={a.qty_shipped_supplier} /></td>
+        <td className="px-3 py-1.5 text-right">{editable ? <EditableQty rowId={a.id} col="qty_shipped_supplier" v={a.qty_shipped_supplier} onChanged={onChanged} /> : <QtyCell v={a.qty_shipped_supplier} />}</td>
         <td className="px-3 py-1.5 text-right"><QtyCell v={a.qty_at_prep} /></td>
-        <td className="px-3 py-1.5 text-right"><QtyCell v={a.qty_at_warehouse} /></td>
-        <td className="px-3 py-1.5 text-right"><QtyCell v={a.qty_lost_damaged_us} /></td>
+        <td className="px-3 py-1.5 text-right">{editable ? <EditableQty rowId={a.id} col="qty_at_warehouse" v={a.qty_at_warehouse} onChanged={onChanged} /> : <QtyCell v={a.qty_at_warehouse} />}</td>
+        <td className="px-3 py-1.5 text-right">{editable ? <EditableQty rowId={a.id} col="qty_lost_damaged_us" v={a.qty_lost_damaged_us} onChanged={onChanged} /> : <QtyCell v={a.qty_lost_damaged_us} />}</td>
         <td className="px-3 py-1.5 text-right"><QtyCell v={a.qty_shipped_fba} /></td>
         <td className="px-3 py-1.5 text-right"><QtyCell v={a.qty_received_amazon} /></td>
-        <td className="px-3 py-1.5"><ShipmentChips shipments={a.shipments ?? []} /></td>
+        <td className="px-3 py-1.5"><ShipmentChips rowId={a.id} shipments={a.shipments ?? []} editable={editable} onChanged={onChanged} /></td>
         <td className="px-2 py-1.5">{a.notes && <StickyNote className="h-3.5 w-3.5 text-muted-foreground" />}</td>
       </tr>
       {multi && open && lines.map((l) => (
@@ -200,13 +260,13 @@ export function PoAsinRow({ a, indent = false }: { a: PoAsinRowData; indent?: bo
 }
 
 /** A complete ASINs table (the detail tab). */
-export function PoAsinTable({ asins, testId = "po-asins-table" }: { asins: PoAsinRowData[]; testId?: string }) {
+export function PoAsinTable({ asins, testId = "po-asins-table", editable = false, onChanged }: { asins: PoAsinRowData[]; testId?: string; editable?: boolean; onChanged?: () => void }) {
   return (
     <div className="w-full overflow-auto rounded-md" style={{ border: "0.5px solid hsl(var(--border))" }}>
       <table className="w-full border-collapse text-sm table-fixed" style={{ minWidth: "140rem" }} data-testid={testId}>
         <PoAsinColGroup />
         <thead><PoAsinHeaderRow /></thead>
-        <tbody>{asins.map((a) => <PoAsinRow key={a.id} a={a} />)}</tbody>
+        <tbody>{asins.map((a) => <PoAsinRow key={a.id} a={a} editable={editable} onChanged={onChanged} />)}</tbody>
       </table>
     </div>
   );

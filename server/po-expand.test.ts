@@ -21,7 +21,7 @@ describe("§4 column model", () => {
   });
   it("the detail page renders the shared table and no longer carries Qty (units) or Unreimb. Loss", () => {
     const page = read("client/src/pages/purchase-orders.tsx");
-    expect(page).toMatch(/<PoAsinTable asins=\{asins\} \/>/);
+    expect(page).toMatch(/<PoAsinTable asins=\{asins\}/);
     expect(page).not.toMatch(/Qty \(units\)|Unreimb/);
     const comp = read("client/src/components/po-asin-rows.tsx");
     expect(comp).not.toMatch(/unreimbursed/i);
@@ -106,7 +106,7 @@ describe("Expand by ASIN — list payload and page (§3.1–3.3)", () => {
     expect(page).toMatch(/toggleExpandAll\(expandedState\)/);
     expect(page).toMatch(/onClick=\{\(e\) => e\.stopPropagation\(\)\}>\s*<button type="button"/); // chevron cell swallows the row click
     expect(page).toMatch(/togglePoExpanded\(expandedState, po\.id, visibleIds\)/);
-    expect(page).toMatch(/<PoAsinRow key=\{a\.id\} a=\{a\} indent \/>/);
+    expect(page).toMatch(/<PoAsinRow key=\{a\.id\} a=\{a\} indent/);
     expect(page).toMatch(/firstExpandedId === po\.id && <thead><PoAsinHeaderRow sub \/><\/thead>/);
     expect(page).toMatch(/savePoExpanded\(next\)/);
   });
