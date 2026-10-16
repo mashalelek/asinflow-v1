@@ -49,6 +49,8 @@ export interface SheetStatusMapping {
   received: boolean;
   /** "Ordered" → nothing (implied by the open-order icon). */
   ordered: boolean;
+  /** "Shipped FBA" → nothing (Maria 2026-10-16): a state word AF tracks as po_asins.qty_shipped_fba. */
+  shippedFba: boolean;
   /** Anything else — the caller must STOP and report. */
   unmapped: string[];
   tokens: string[];
@@ -59,7 +61,7 @@ const CANON: Record<string, ActionItem> = Object.fromEntries(ACTION_ITEMS.map((a
 /** Split the sheet cell on commas / newlines, trim, map every token. */
 export function mapSheetStatus(status: string | null | undefined): SheetStatusMapping {
   const tokens = String(status ?? "").split(/[,\n]/).map((t) => t.trim()).filter(Boolean);
-  const m: SheetStatusMapping = { actionItems: [], closed: false, canceled: false, returned: false, received: false, ordered: false, unmapped: [], tokens };
+  const m: SheetStatusMapping = { actionItems: [], closed: false, canceled: false, returned: false, received: false, ordered: false, shippedFba: false, unmapped: [], tokens };
   const seen = new Set<ActionItem>();
   for (const t of tokens) {
     const k = t.toLowerCase();
@@ -69,6 +71,7 @@ export function mapSheetStatus(status: string | null | undefined): SheetStatusMa
     if (k === "returned") { m.returned = true; continue; }
     if (k === "received" || k === "received partial") { m.received = true; continue; }
     if (k === "ordered") { m.ordered = true; continue; }
+    if (k === "shipped fba") { m.shippedFba = true; continue; }
     m.unmapped.push(t);
   }
   m.actionItems = ACTION_ITEMS.filter((a) => seen.has(a));
