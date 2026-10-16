@@ -69,3 +69,45 @@ describe("derived Canceled / Returned (pre-flight decision 1)", () => {
     expect(detail).not.toMatch(/SELECT pa\.\*/);
   });
 });
+
+// ── Commit 4: Expand by ASIN on the POs page (§3) ──────────────────────────
+import { DEFAULT_PO_EXPANDED, isPoExpanded, togglePoExpanded, toggleExpandAll, PO_EXPANDED_KEY } from "../client/src/lib/po-expanded";
+
+describe("Expand by ASIN — persisted state helpers (§3.4)", () => {
+  it("default is all collapsed; chevron toggles one; Expand All toggles the flag", () => {
+    expect(DEFAULT_PO_EXPANDED).toEqual({ all: false, ids: [] });
+    expect(PO_EXPANDED_KEY).toBe("fba-po-expanded");
+    const one = togglePoExpanded(DEFAULT_PO_EXPANDED, "p1", ["p1", "p2", "p3"]);
+    expect(one).toEqual({ all: false, ids: ["p1"] });
+    expect(isPoExpanded(one, "p1")).toBe(true);
+    expect(isPoExpanded(one, "p2")).toBe(false);
+    expect(togglePoExpanded(one, "p1", ["p1", "p2", "p3"])).toEqual({ all: false, ids: [] });
+    const all = toggleExpandAll(one);
+    expect(all).toEqual({ all: true, ids: [] });
+    expect(isPoExpanded(all, "p9")).toBe(true);
+    expect(toggleExpandAll(all)).toEqual({ all: false, ids: [] });
+  });
+  it("collapsing one PO under Expand All turns the flag off and keeps the other visible POs open", () => {
+    const s = togglePoExpanded({ all: true, ids: [] }, "p2", ["p1", "p2", "p3"]);
+    expect(s).toEqual({ all: false, ids: ["p1", "p3"] });
+  });
+});
+
+describe("Expand by ASIN — list payload and page (§3.1–3.3)", () => {
+  it("the list route attaches the page's ASIN rows through the shared loader (P3: 25/page, eager)", () => {
+    const routes = read("server/routes.ts");
+    const list = routes.slice(routes.indexOf('app.get("/api/pos"'), routes.indexOf('app.get("/api/pos/:id"'));
+    expect(list).toMatch(/loadPoAsinRows\(\(sql, params\) => query\(sql, params\), rows\.map/);
+    expect(list).toMatch(/r\.asins = asinsByPo\.get/);
+  });
+  it("the page has the Expand All toggle, a chevron-only expand target, nested rows via the shared row, header once", () => {
+    const page = read("client/src/pages/purchase-orders.tsx");
+    expect(page).toMatch(/button-po-expand-all/);
+    expect(page).toMatch(/toggleExpandAll\(expandedState\)/);
+    expect(page).toMatch(/onClick=\{\(e\) => e\.stopPropagation\(\)\}>\s*<button type="button"/); // chevron cell swallows the row click
+    expect(page).toMatch(/togglePoExpanded\(expandedState, po\.id, visibleIds\)/);
+    expect(page).toMatch(/<PoAsinRow key=\{a\.id\} a=\{a\} indent \/>/);
+    expect(page).toMatch(/firstExpandedId === po\.id && <thead><PoAsinHeaderRow sub \/><\/thead>/);
+    expect(page).toMatch(/savePoExpanded\(next\)/);
+  });
+});

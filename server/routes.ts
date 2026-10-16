@@ -4335,6 +4335,13 @@ export async function registerRoutes(
           LIMIT ${PAGE_SIZE} OFFSET ${(page - 1) * PAGE_SIZE}`,
         params,
       )).rows;
+      // Expand by ASIN (§3.3): the list is paginated 25/page, so the page's
+      // po_asins rows ride the payload (one extra query) — Expand All needs
+      // no further fetch. Same rows as the detail tab (po-queries.ts).
+      const asinRows = await loadPoAsinRows((sql, params) => query(sql, params), rows.map((r: any) => String(r.id)));
+      const asinsByPo = new Map<string, any[]>();
+      for (const a of asinRows) { const k = String(a.po_id); if (!asinsByPo.has(k)) asinsByPo.set(k, []); asinsByPo.get(k)!.push(a); }
+      for (const r of rows) r.asins = asinsByPo.get(String(r.id)) ?? [];
       // Filter options for the toolbar (distinct across the whole table, not
       // the page): suppliers + status tokens (comma-split, deduped).
       const suppliers = (await query(`SELECT DISTINCT supplier FROM purchase_orders ORDER BY supplier`)).rows.map((r: any) => r.supplier);

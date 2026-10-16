@@ -12,7 +12,7 @@
  */
 import React, { useState, useEffect, useCallback } from "react";
 import { useLocation, Link } from "wouter";
-import { Upload, Paperclip, StickyNote, Plus, Search, Copy, Check, ChevronRight, ChevronDown, AlertTriangle } from "lucide-react";
+import { Upload, Paperclip, StickyNote, Plus, Search, Copy, Check, ChevronRight, ChevronDown, ChevronsDownUp, ChevronsUpDown } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import {
@@ -21,7 +21,8 @@ import {
 import { Tooltip, TooltipTrigger, TooltipContent } from "@/components/ui/tooltip";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import { UploadToVelocityDialog } from "@/components/upload-to-velocity-dialog";
-import { PoAsinTable, type PoAsinRowData, type PoAsinLine } from "@/components/po-asin-rows";
+import { PoAsinTable, PoAsinColGroup, PoAsinHeaderRow, PoAsinRow, type PoAsinRowData, type PoAsinLine } from "@/components/po-asin-rows";
+import { loadPoExpanded, savePoExpanded, isPoExpanded, togglePoExpanded, toggleExpandAll, type PoExpandedState } from "@/lib/po-expanded";
 
 interface PoRow {
   id: string;
@@ -35,6 +36,8 @@ interface PoRow {
   units_ordered: number;
   units_received: number | null; // null = not tracked on any line → "—"
   has_notes: boolean;
+  /** Expand by ASIN (§3): the PO's ASIN rows, same model as the detail tab. */
+  asins: PoAsinRowData[];
 }
 
 interface PosResponse {
@@ -135,6 +138,9 @@ export default function PurchaseOrders() {
   const [page, setPage] = useState(1);
   const [data, setData] = useState<PosResponse | null>(null);
   const [error, setError] = useState<string | null>(null);
+  // Expand by ASIN (§3.4): persisted per browser, default all collapsed.
+  const [expandedState, setExpandedState] = useState<PoExpandedState>(loadPoExpanded);
+  const applyExpanded = (next: PoExpandedState) => { setExpandedState(next); savePoExpanded(next); };
 
   useEffect(() => {
     const h = setTimeout(() => setDebouncedSearch(search), 250);
@@ -197,6 +203,10 @@ export default function PurchaseOrders() {
             </TooltipTrigger>
             <TooltipContent side="bottom"><p className="text-xs">Soon — arrives with the entry form</p></TooltipContent>
           </Tooltip>
+          <Button variant="outline" size="sm" onClick={() => applyExpanded(toggleExpandAll(expandedState))} data-testid="button-po-expand-all">
+            {expandedState.all ? <ChevronsDownUp className="h-4 w-4 mr-1" /> : <ChevronsUpDown className="h-4 w-4 mr-1" />}
+            {expandedState.all ? "Collapse All" : "Expand All"}
+          </Button>
           <Button variant="outline" size="sm" onClick={() => setVelocityOpen(true)}>
             <Upload className="h-4 w-4 mr-1" /> Upload to Velocity
           </Button>
@@ -226,18 +236,33 @@ export default function PurchaseOrders() {
         <table className="w-full border-collapse text-sm" data-testid="po-table">
           <thead>
             <tr className="table-header-stone">
+              <th className="w-8 px-2 py-2" aria-label="Expand by ASIN" />
               {["Status", "PO Date", "Order ID", "Supplier", "Order Total", "ASINs", "Units Ordered", "Units Received", "Invoice", "Notes"].map((h, i) => (
                 <th key={h} className={`px-3 py-2 text-xs font-medium whitespace-nowrap ${i >= 4 && i <= 7 ? "text-right" : "text-left"}`}>{h}</th>
               ))}
             </tr>
           </thead>
           <tbody>
-            {(data?.pos ?? []).map((po) => {
+            {(() => {
+              const visibleIds = (data?.pos ?? []).map((p) => p.id);
+              // §3.2: the nested column header appears ONCE, under the first expanded PO on the page.
+              const firstExpandedId = visibleIds.find((id) => isPoExpanded(expandedState, id)) ?? null;
+              return (data?.pos ?? []).map((po) => {
               const money = fmtMoney(po.order_total);
               const tokens = po.status.split(",").map((x) => x.trim()).filter(Boolean);
+              const open = isPoExpanded(expandedState, po.id);
               return (
-                <tr key={po.id} className="table-zebra-stone cursor-pointer hover:bg-muted/40" style={hairline}
+                <React.Fragment key={po.id}>
+                <tr className="table-zebra-stone cursor-pointer hover:bg-muted/40" style={hairline}
                   onClick={() => navigate(`/purchase-orders/${po.id}`)} data-testid={`row-po-${po.order_id}`}>
+                  {/* §3.1: the chevron is the ONLY expand target; the rest of the row still opens the PO. */}
+                  <td className="px-2 py-2 w-8" onClick={(e) => e.stopPropagation()}>
+                    <button type="button" className="text-muted-foreground hover:text-foreground"
+                      onClick={() => applyExpanded(togglePoExpanded(expandedState, po.id, visibleIds))}
+                      aria-expanded={open} data-testid={`button-po-expand-${po.order_id}`}>
+                      {open ? <ChevronDown className="h-3.5 w-3.5" /> : <ChevronRight className="h-3.5 w-3.5" />}
+                    </button>
+                  </td>
                   <td className="px-3 py-2">
                     <div className="flex flex-col items-start gap-0.5">
                       {tokens.map((tk) => (
@@ -259,10 +284,30 @@ export default function PurchaseOrders() {
                   </td>
                   <td className="px-3 py-2">{po.has_notes && <StickyNote className="h-3.5 w-3.5 text-muted-foreground" />}</td>
                 </tr>
+                {open && (
+                  <tr data-testid={`row-po-asins-${po.order_id}`}>
+                    <td colSpan={11} className="p-0 pl-6 bg-muted/20">
+                      {/* Nested rows: same column model as the detail ASINs tab (§3.2, §4);
+                          po_asins default order; sorting/filtering stays at PO level. */}
+                      <table className="w-full border-collapse text-sm table-fixed" style={{ minWidth: "140rem" }}>
+                        <PoAsinColGroup />
+                        {firstExpandedId === po.id && <thead><PoAsinHeaderRow sub /></thead>}
+                        <tbody>
+                          {po.asins.length === 0 && (
+                            <tr><td colSpan={21} className="px-3 py-2 text-xs text-muted-foreground">No ASIN rows.</td></tr>
+                          )}
+                          {po.asins.map((a) => <PoAsinRow key={a.id} a={a} indent />)}
+                        </tbody>
+                      </table>
+                    </td>
+                  </tr>
+                )}
+                </React.Fragment>
               );
-            })}
+              });
+            })()}
             {data && data.pos.length === 0 && (
-              <tr><td colSpan={10} className="px-3 py-8 text-center text-sm text-muted-foreground">No purchase orders match.</td></tr>
+              <tr><td colSpan={11} className="px-3 py-8 text-center text-sm text-muted-foreground">No purchase orders match.</td></tr>
             )}
           </tbody>
         </table>
