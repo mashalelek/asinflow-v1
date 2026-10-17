@@ -7,14 +7,13 @@
 //   expected    = qty − canceled − returned − lost/damaged by us   (NULLs read 0)
 //   on_order    = max(expected − shipped_fba, 0)        OPEN POs only (D1)
 //   at_prep     = qty_at_prep                            OPEN POs only (D1)
-//   inbound_fba = max(shipped_fba − received_amazon, 0)  open and closed
-//   pipeline    = on_order + inbound_fba
 // Canceled / Returned are the §22 derived ASIN values (Σ line qty × yield,
 // NULL when any line is untracked → read 0 here). A closed PO has nothing
 // left to ship by definition, which also neutralises pre-May POs that have
 // no shipment rows (shipped_fba NULL would otherwise count the whole
-// expected quantity as On Order). An over-receipt contributes 0 to
-// inbound_fba — those units are already FBA stock.
+// expected quantity as On Order). Inbound FBA / Pipeline were removed on
+// 2026-10-17 (clean-up): Amazon's own inbound ("Sent to FBA") covers the
+// shipped-not-received units.
 import type { QueryLike } from "./scheduler/types";
 
 export interface PipelineRow {
@@ -32,8 +31,6 @@ export interface PipelineRow {
 export interface AsinPipeline {
   on_order: number;
   at_prep: number;
-  inbound_fba: number;
-  pipeline: number;
   open_po_count: number;
 }
 
@@ -45,7 +42,7 @@ export function computePipeline(rows: PipelineRow[]): Map<string, AsinPipeline> 
   const out = new Map<string, AsinPipeline>();
   for (const r of rows) {
     const asin = String(r.asin).trim().toUpperCase();
-    const p = out.get(asin) ?? { on_order: 0, at_prep: 0, inbound_fba: 0, pipeline: 0, open_po_count: 0 };
+    const p = out.get(asin) ?? { on_order: 0, at_prep: 0, open_po_count: 0 };
     const expected = n(r.qty) - n(r.qty_canceled_asin) - n(r.qty_returned_asin) - n(r.qty_lost_damaged_us);
     const shipped = n(r.qty_shipped_fba);
     if (!r.closed) {
@@ -53,10 +50,9 @@ export function computePipeline(rows: PipelineRow[]): Map<string, AsinPipeline> 
       p.at_prep += n(r.qty_at_prep);
       p.open_po_count += 1;
     }
-    p.inbound_fba += Math.max(shipped - n(r.qty_received_amazon), 0);
     out.set(asin, p);
   }
-  for (const p of Array.from(out.values())) { p.on_order = r2(p.on_order); p.at_prep = r2(p.at_prep); p.inbound_fba = r2(p.inbound_fba); p.pipeline = r2(p.on_order + p.inbound_fba); }
+  for (const p of Array.from(out.values())) { p.on_order = r2(p.on_order); p.at_prep = r2(p.at_prep); }
   return out;
 }
 
@@ -79,4 +75,4 @@ export async function loadAsinPipeline(query: QueryLike, asins?: string[]): Prom
   return computePipeline(rows as PipelineRow[]);
 }
 
-export const EMPTY_PIPELINE: AsinPipeline = { on_order: 0, at_prep: 0, inbound_fba: 0, pipeline: 0, open_po_count: 0 };
+export const EMPTY_PIPELINE: AsinPipeline = { on_order: 0, at_prep: 0, open_po_count: 0 };

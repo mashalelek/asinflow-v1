@@ -44,7 +44,7 @@ export const NUMERIC_COLS = new Set<ColumnId>([
   "cogs", "estCogs", "salePrice", "profit", "margin", "roi",
   "fbaFee", "referralFee", "inboundShipping", "prep", "storage",
   "sellersFba", "sellers", "stock", "daysLeft",
-  "availableFba", "onOrder", "atPrep", "inboundFba", "pipeline", "fbaStock", "reserved", "sentToFba",
+  "availableFba", "onOrder", "atPrep", "fbaStock", "reserved", "sentToFba",
   "fba7d", "fba30d", "sellers7d", "sellers30d",
   "actUnitsSold", "actRevenue", "actRefunds", "actRefundPct",
   "actProfit", "actProfitPerUnit", "actMargin", "actRoi",

@@ -52,7 +52,7 @@ function ResizeHandle({ onMouseDown }: { onMouseDown: (e: React.MouseEvent) => v
 
 const DEFAULT_COL_WIDTHS: Partial<Record<ColumnId, number>> = {
   product: 400, category: 160, brand: 100, supplier: 100,
-  stock: 75, availableFba: 80, onOrder: 80, atPrep: 75, inboundFba: 90, pipeline: 80, fbaStock: 85, reserved: 75, sentToFba: 80, daysLeft: 80,
+  stock: 75, availableFba: 80, onOrder: 80, atPrep: 75, fbaStock: 85, reserved: 75, sentToFba: 80, daysLeft: 80,
   cogs: 90, actPrepCost: 85, actUnitsSold: 85, actRefunds: 80, actRefundPct: 80,
   actAvgSalePrice: 100, actRevenue: 95, actProfit: 100, actProfitPerUnit: 90, actRoi: 80, actMargin: 80,
   estCogs: 90, salePrice: 95, profit: 90, margin: 80, roi: 80,
@@ -509,8 +509,6 @@ function computeRowValue(
     case "availableFba": return result.stock?.available_fba ?? null;
     case "onOrder": return result.stock?.on_order ?? null;
     case "atPrep": return result.stock?.at_prep ?? null;
-    case "inboundFba": return result.stock?.inbound_fba ?? null;
-    case "pipeline": return result.stock?.pipeline ?? null;
     // §6 FBA Stock (2026-09-17): READ the row-model field — one number for
     // sort, filter, CSV, and the cell. Never recomputed here.
     case "fbaStock": return result.fbaStock ?? 0;
@@ -1092,10 +1090,9 @@ export function ResultsTable({
                           {result.stock.hasSnapshot ? (
                             <>
                               <div>Available (FBA): <span className="font-semibold">{result.stock.available_fba}</span></div>
-                              <div>On Order (POs): <span className="font-semibold">{result.stock.on_order}</span></div>
                               <div>Reserved: <span className="font-semibold">{result.stock.reserved}</span></div>
-                              <div>Amazon Inbound: <span className="font-semibold">{result.stock.inbound}</span></div>
-                              <div>Inbound FBA (POs): <span className="font-semibold">{result.stock.inbound_fba}</span></div>
+                              <div>Sent to FBA: <span className="font-semibold">{result.stock.inbound}</span></div>
+                              <div>On Order (POs): <span className="font-semibold">{result.stock.on_order}</span></div>
                             </>
                           ) : (
                             <>
@@ -1831,10 +1828,9 @@ function ProductCell({ result, price, settings, onResultUpdate, collisionBoundar
               </TooltipTrigger>
               <TooltipContent side="top" className="text-xs space-y-0.5">
                 <div>Available (FBA): <span className="font-semibold">{stock.available_fba}</span></div>
-                <div>On Order (POs): <span className="font-semibold">{stock.on_order}</span></div>
                 <div>Reserved: <span className="font-semibold">{stock.reserved}</span></div>
-                <div>Amazon Inbound: <span className="font-semibold">{stock.inbound}</span></div>
-                <div>Inbound FBA (POs): <span className="font-semibold">{stock.inbound_fba}</span></div>
+                <div>Sent to FBA: <span className="font-semibold">{stock.inbound}</span></div>
+                <div>On Order (POs): <span className="font-semibold">{stock.on_order}</span></div>
               </TooltipContent>
             </Tooltip>
           )}
@@ -2260,16 +2256,12 @@ export function renderCell(
       );
     case "atPrep":
       return <Tooltip><TooltipTrigger asChild><span className="font-mono text-sm cursor-help">{result.stock?.at_prep ?? 0}</span></TooltipTrigger><TooltipContent side="top" className="text-xs">At Prep = Σ open POs: units still at Velocity (subset of On Order)</TooltipContent></Tooltip>;
-    case "inboundFba":
-      return <Tooltip><TooltipTrigger asChild><span className="font-mono text-sm cursor-help">{result.stock?.inbound_fba ?? 0}</span></TooltipTrigger><TooltipContent side="top" className="text-xs">Inbound FBA = Σ all POs: Shipped FBA − Received by Amazon (over-receipts count 0)</TooltipContent></Tooltip>;
-    case "pipeline":
-      return <Tooltip><TooltipTrigger asChild><span className="font-mono text-sm cursor-help">{result.stock?.pipeline ?? 0}</span></TooltipTrigger><TooltipContent side="top" className="text-xs">Pipeline = On Order + Inbound FBA — units to add to FBA stock for "how much is coming"</TooltipContent></Tooltip>;
     case "fbaStock":
       return numCell(String(result.fbaStock ?? 0));
     case "reserved":
       return numCell(String(result.stock?.reserved ?? 0));
     case "sentToFba":
-      return <Tooltip><TooltipTrigger asChild><span className="font-mono text-sm cursor-help">{result.stock?.inbound ?? 0}</span></TooltipTrigger><TooltipContent side="top" className="text-xs">Amazon Inbound = Seller Central's inbound shipped + receiving + working (FBA inventory sync) — Amazon's own view of Inbound FBA</TooltipContent></Tooltip>;
+      return numCell(String(result.stock?.inbound ?? 0));
 
     case "actAvgSalePrice": {
       const avgUs = result.actuals?.units_sold ?? 0;
@@ -2409,10 +2401,9 @@ export function renderCell(
             {s.hasSnapshot ? (
               <>
                 <div>Available (FBA): <span className="font-semibold">{s.available_fba}</span></div>
-                <div>On Order (POs): <span className="font-semibold">{s.on_order}</span></div>
                 <div>Reserved: <span className="font-semibold">{s.reserved}</span></div>
-                <div>Amazon Inbound: <span className="font-semibold">{s.inbound}</span></div>
-                <div>Inbound FBA (POs): <span className="font-semibold">{s.inbound_fba}</span></div>
+                <div>Sent to FBA: <span className="font-semibold">{s.inbound}</span></div>
+                <div>On Order (POs): <span className="font-semibold">{s.on_order}</span></div>
               </>
             ) : (
               <>

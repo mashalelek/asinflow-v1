@@ -83,13 +83,11 @@ export interface EligibilityData {
 export interface StockData {
   available_fba: number;
   reserved: number;
-  /** Amazon's own inbound (shipped + receiving + working), from the FBA inventory sync. */
+  /** Amazon's own inbound (shipped + receiving + working), from the FBA inventory sync — "Sent to FBA". */
   inbound: number;
   // Derived from the PO tables (patch asins-on-order-from-pos §2), never the sheet:
   on_order: number;     // Σ max(expected − shipped FBA, 0) over OPEN POs
   at_prep: number;      // Σ At Prep Center over OPEN POs (subset of on_order)
-  inbound_fba: number;  // Σ max(shipped FBA − received by Amazon, 0), all POs
-  pipeline: number;     // on_order + inbound_fba
   open_po_count: number;
   /** available_fba + reserved + inbound + on_order. */
   total: number;
@@ -648,7 +646,7 @@ export const DEFAULT_COLUMNS = [
   // Group 1 — Description
   "product", "category", "brand", "supplier", "buyLink", "supplierSku",
   // Group 2 — Stock
-  "stock", "availableFba", "onOrder", "atPrep", "inboundFba", "pipeline", "fbaStock", "reserved", "sentToFba", "daysLeft",
+  "stock", "availableFba", "onOrder", "atPrep", "fbaStock", "reserved", "sentToFba", "daysLeft",
   // Group 3 — Actuals
   "cogs", "actPrepCost", "actUnitsSold", "actRefunds", "actRefundPct",
   "actAvgSalePrice", "actRevenue", "actProfit", "actProfitPerUnit", "actRoi", "actMargin",
@@ -697,23 +695,17 @@ export const ALL_COLUMNS: ColumnDef[] = [
   // Group 2 — Stock
   { id: "stock", label: "Stock", defaultVisible: true, align: "right", group: "stock" },
   { id: "availableFba", label: "Available (FBA)", defaultVisible: false, align: "right", group: "stock" },
-  // §6 on-order figures (2026-10-17, patch asins-on-order-from-pos): derived
-  // from po_asins, the sheet's "Ordered" is gone (D2 — one number, one
-  // meaning). On Order replaces Ordered (hidden by default, as it was);
-  // Pipeline is the "how much is coming" number and is shown by default.
-  { id: "onOrder", label: "On Order", defaultVisible: false, align: "right", group: "stock" },
+  // §6 on-order figures (2026-10-17, patch asins-on-order-from-pos, clean-up
+  // the same day): derived from po_asins, the sheet's "Ordered" is gone (D2 —
+  // one number, one meaning). On Order is shown by default, At Prep hidden.
+  { id: "onOrder", label: "On Order", defaultVisible: true, align: "right", group: "stock" },
   { id: "atPrep", label: "At Prep", defaultVisible: false, align: "right", group: "stock" },
-  { id: "inboundFba", label: "Inbound FBA", defaultVisible: false, align: "right", group: "stock" },
-  { id: "pipeline", label: "Pipeline", defaultVisible: true, align: "right", group: "stock" },
   // §6 FBA Stock (2026-09-17) = Stock − On Order, computed from the SAME
   // values those two cells render so the identity holds row by row.
   // Default-VISIBLE wherever Stock/On Order are (revised same day).
   { id: "fbaStock", label: "FBA Stock", defaultVisible: true, align: "right", group: "stock" },
   { id: "reserved", label: "Reserved", defaultVisible: false, align: "right", group: "stock" },
-  // §3.5 (2026-10-17): Amazon's own inbound count (shipped + receiving +
-  // working from getInventorySummaries) — shown beside the PO-derived
-  // Inbound FBA, no reconciliation between the two. Was "Sent to FBA".
-  { id: "sentToFba", label: "Amazon Inbound", defaultVisible: false, align: "right", group: "stock" },
+  { id: "sentToFba", label: "Sent to FBA", defaultVisible: false, align: "right", group: "stock" },
   { id: "daysLeft", label: "Days Left", defaultVisible: true, align: "right", group: "stock" },
   // Group 3 — Actuals
   { id: "cogs", label: "COGS", qualifier: "Actual", defaultVisible: false, align: "right", group: "actuals" },

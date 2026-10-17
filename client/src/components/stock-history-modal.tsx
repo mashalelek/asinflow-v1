@@ -25,8 +25,6 @@ interface HistoryData {
     inbound: number;
     on_order: number;
     at_prep: number;
-    inbound_fba: number;
-    pipeline: number;
   };
 }
 
@@ -109,17 +107,14 @@ export function StockHistoryModal({ asin, title, startDate, endDate, onClose }: 
                 <div className="font-medium">{m!.reserved}</div>
               </div>
               <div>
-                <div className="text-xs text-muted-foreground">Amazon Inbound</div>
+                <div className="text-xs text-muted-foreground">Sent to FBA</div>
                 <div className="font-medium">{m!.inbound}</div>
               </div>
               <div>
                 <div className="text-xs text-muted-foreground">On Order (POs)</div>
                 <div className="font-medium">{m!.on_order}</div>
               </div>
-              <div>
-                <div className="text-xs text-muted-foreground">Pipeline (POs)</div>
-                <div className="font-medium">{m!.pipeline}</div>
-              </div>
+
             </div>
 
             {/* Right: chart */}

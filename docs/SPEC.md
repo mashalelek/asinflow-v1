@@ -284,8 +284,8 @@ representations of the same logical "narrow to specific ASIN(s)" intent.
 ### Six groups (canonical order)
 
 1. **Description** — Product, Category, Brand, Supplier, Buy Link, Supplier SKU
-2. **Stock** — Stock, Available (FBA), On Order, At Prep, Inbound FBA,
-   Pipeline, **FBA Stock**, Reserved, Amazon Inbound, Days Left
+2. **Stock** — Stock, Available (FBA), On Order, At Prep, **FBA Stock**,
+   Reserved, Sent to FBA, Days Left
 3. **Actuals** — Actual COGS, Actual Prep Cost, Actual Units Sold, Refunds,
    Refund %, Actual Avg. Sale Price, Actual Revenue, Actual Total Profit,
    Actual Profit/Unit, Actual ROI, Actual Margin
@@ -562,40 +562,38 @@ fix only — nothing is written to `inventory_snapshots`.
 
 ### On-order columns derived from POs (2026-10-17)
 
-Patch `docs/claude_spec-patch-asins-on-order-from-pos.md`, pre-flight
-`docs/asins-on-order-preflight-2026-10-17.md`. The sheet's "Ordered"
-column (`asin_estimates.ordered_qty`, a copy of the Orders sheet's open
-quantity that never decreased when units shipped) is **gone** (D2 — one
-number, one meaning). Four columns in the Stock group are computed live
-from `po_asins` ⋈ `purchase_orders` by `server/asin-po-pipeline.ts`
-(`loadAsinPipeline`, one query folded per ASIN; no stored column, D3), all
-in ASIN / sellable-pack units:
+Patch `docs/claude_spec-patch-asins-on-order-from-pos.md` (clean-up the
+same day), pre-flight `docs/asins-on-order-preflight-2026-10-17.md`. The
+sheet's "Ordered" column (`asin_estimates.ordered_qty`, a copy of the
+Orders sheet's open quantity that never decreased when units shipped) is
+**gone** (D2 — one number, one meaning). Two columns in the Stock group
+are computed live from `po_asins` ⋈ `purchase_orders` by
+`server/asin-po-pipeline.ts` (`loadAsinPipeline`, one query folded per
+ASIN; no stored column, D3), in ASIN / sellable-pack units, over **open**
+POs only (D1 — a closed PO has nothing left to ship, which also
+neutralises pre-May POs that have no shipment rows):
 
-| Column | Formula (Σ over the ASIN's `po_asins` rows) | Default |
+| Column | Formula (Σ over the ASIN's open `po_asins` rows) | Default |
 |---|---|---|
-| **On Order** | Σ max(Expected − Shipped FBA, 0) over **open** POs, where Expected = Ordered − Canceled − Returned − Lost/damaged by us (NULLs read 0) | hidden (as Ordered was) |
-| **At Prep** | Σ At Prep Center over open POs — a subset of On Order | hidden |
-| **Inbound FBA** | Σ max(Shipped FBA − Received by Amazon, 0) over all POs; an over-receipt contributes 0 (those units are FBA stock already) | hidden |
-| **Pipeline** | On Order + Inbound FBA — the number to add to FBA stock for "how much is coming" | shown |
-| **Amazon Inbound** | Seller Central's own inbound (shipped + receiving + working) from the FBA inventory sync — was "Sent to FBA"; shown beside Inbound FBA, never reconciled against it (§3.5) | hidden |
+| **On Order** | Σ max(Expected − Shipped FBA, 0), where Expected = Ordered − Canceled − Returned − Lost/damaged by us (NULLs read 0) | shown |
+| **At Prep** | Σ At Prep Center — a subset of On Order | hidden |
 
-Closed POs are excluded from On Order / At Prep (D1: a closed PO has
-nothing left to ship, which also neutralises pre-May POs that have no
-shipment rows), and contribute to Inbound FBA only while Shipped FBA
-exceeds Received. Each cell's tooltip names its formula; the On Order cell
-links to `/purchase-orders?asin=<ASIN>`, which opens the POs page searched
-on that ASIN, Open only. **Stock total = available + reserved + Amazon
-Inbound + On Order** (On Order, not Pipeline: Amazon's inbound already
-holds the shipped-not-received units) and **FBA Stock = Stock − On Order**
-— the identity below unchanged. Days Left inherits the Stock change. The
-history modal shows On Order (POs) and Pipeline (POs); the
+Shipped-not-received units are Amazon's own number, **Sent to FBA**
+(inbound shipped + receiving + working from the FBA inventory sync),
+unchanged; the PO-derived Inbound FBA / Pipeline columns of the first cut
+were removed in the clean-up. Each cell's tooltip names its formula; the
+On Order cell links to `/purchase-orders?asin=<ASIN>`, which opens the
+POs page searched on that ASIN, Open only. **Stock total = available +
+reserved + Sent to FBA + On Order** and **FBA Stock = Stock − On Order** —
+the identity below unchanged. The Stock tooltip reads Available (FBA),
+Reserved, Sent to FBA, On Order (POs) — nothing else. Days Left inherits
+the Stock change. The history modal shows On Order (POs); the
 `inventory_snapshots.ordered_qty` column now records On Order at snapshot
 time. Bulk Calc excludes the whole Stock group and is untouched; Analytics
 reads the same column ids. `asin_estimates.ordered_qty` is no longer
 written or read and is dropped by a later cleanup migration. Fixture
-(local 2026-10-17): B004WZ4CLW on order 0 / at prep 0 / inbound FBA 10 /
-pipeline 10 / Amazon inbound 10; 0349125937 2 / 2 / 10 / 12 / 10;
-B007ICV2AA (one closed pre-May PO) 0 / 0 / 0 / 0 / 0.
+(local and production 2026-10-17): B004WZ4CLW on order 0 / at prep 0;
+0349125937 2 / 2; B007ICV2AA (one closed pre-May PO) 0 / 0.
 
 ### FBA Stock column (2026-09-17)
 
@@ -2574,7 +2572,7 @@ that writes it:
 | `is_hazmat`, `hazmat_checked_at` | component 7 — successful probe only |
 | `eligibility_status`, `gating_checked_at` | `probeGatingForAsins` (`server/gating-probe.ts`) — successful probe only; called by component 8 and, inline, by the Add to SC preview (decision 9) |
 | `actual_cogs`, `cogs_source='po_sheet'`, `prep_override` | `runSheetsSync` — component 9 on a scheduled pass; Sync POs (after the PO sheet sync, §22) and Push to Aura call it inline (decision 9, off the queue 2026-10-16). `asin_estimates.ordered_qty` is no longer written (2026-10-17) and awaits a cleanup migration |
-| On Order, At Prep, Inbound FBA, Pipeline (ASINs page, history modal, `inventory_snapshots.ordered_qty`) | **Derived from the PO tables** by `server/asin-po-pipeline.ts` at read time — never synced from the sheet, never stored on `asins` / `asin_estimates` (§6, 2026-10-17) |
+| On Order, At Prep (ASINs page, history modal, `inventory_snapshots.ordered_qty`) | **Derived from the PO tables** by `server/asin-po-pipeline.ts` at read time — never synced from the sheet, never stored on `asins` / `asin_estimates` (§6, 2026-10-17) |
 | Inventory snapshot, `asin_skus` recording | component 15 |
 | `has_live_offer`, `has_buyable_offer`, `current_issues` + stamps | component 16 through the §18 A2 primitive (also the §19 ladder / verdicts) |
 | `primary_sku`, `asin_skus.is_primary` | component 17 (bootstrap / re-point); the Add-Offer path on creation (§18) |
@@ -5302,7 +5300,7 @@ The PO module writes nothing outside its own tables. `asin_estimates`
 (`actual_cogs`, `prep_override`) remains owned by the sheet-based PO sync
 until cutover.
 
-The ASINs page's On Order / At Prep / Inbound FBA / Pipeline columns read
+The ASINs page's On Order / At Prep columns read
 these tables live (§6 "On-order columns derived from POs", 2026-10-17) —
 the first consumer of the PO module outside the POs page.
 
@@ -5382,7 +5380,7 @@ meeting ALL of:
 
 1. `has_buyable_offer = TRUE` (SC-Active, per above).
 2. **At-FBA stock > 0**: `available_fba` from the LATEST inventory snapshot
-   per ASIN. On Order / Pipeline (PO-derived, §6) are explicitly EXCLUDED —
+   per ASIN. On Order (PO-derived, §6) is explicitly EXCLUDED —
    units on order are not at FBA and cannot sell.
 3. **Zero sales in the SELECTED range** (2026-09-16 — was a fixed
    trailing 7 days): `SUM(sales_daily.units_sold) = 0` for order dates

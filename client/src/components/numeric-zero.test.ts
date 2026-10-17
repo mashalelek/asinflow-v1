@@ -24,16 +24,14 @@ describe("FBA Stock column", () => {
   // built — not derived at read time. These pin the contract the 2026-09-17
   // filter bug violated: one number, of type number, for every consumer.
   it("reads the row-model field, typed number, for sort/filter/CSV alike", () => {
-    const r = row({ stock: { available_fba: 4, reserved: 1, inbound: 2, on_order: 3, at_prep: 1, inbound_fba: 2, pipeline: 5, open_po_count: 1, total: 10, hasSnapshot: true } as any, fbaStock: 7 });
+    const r = row({ stock: { available_fba: 4, reserved: 1, inbound: 2, on_order: 3, at_prep: 1, open_po_count: 1, total: 10, hasSnapshot: true } as any, fbaStock: 7 });
     const v = getRowValue(r, "fbaStock", "lowestFba", S);
     expect(typeof v).toBe("number"); // a string silently breaks "greater than"
     expect(v).toBe(7);
     expect(getRowValue(r, "stock", "lowestFba", S)).toBe(10);
-    // 2026-10-17: the sheet's "Ordered" became the PO-derived On Order / At Prep / Inbound FBA / Pipeline.
+    // 2026-10-17: the sheet's "Ordered" became the PO-derived On Order / At Prep.
     expect(getRowValue(r, "onOrder", "lowestFba", S)).toBe(3);
     expect(getRowValue(r, "atPrep", "lowestFba", S)).toBe(1);
-    expect(getRowValue(r, "inboundFba", "lowestFba", S)).toBe(2);
-    expect(getRowValue(r, "pipeline", "lowestFba", S)).toBe(5);
   });
 
   it("'FBA Stock > 0' matches exactly the rows whose value is > 0", () => {
@@ -47,7 +45,7 @@ describe("FBA Stock column", () => {
   });
 
   it("an absent field reads 0 (no-snapshot rows), never a negative", () => {
-    const r = row({ stock: { available_fba: 0, reserved: 0, inbound: 0, on_order: 5, at_prep: 0, inbound_fba: 0, pipeline: 5, open_po_count: 1, total: 5, hasSnapshot: false } as any });
+    const r = row({ stock: { available_fba: 0, reserved: 0, inbound: 0, on_order: 5, at_prep: 0, open_po_count: 1, total: 5, hasSnapshot: false } as any });
     expect(getRowValue(r, "fbaStock", "lowestFba", S)).toBe(0);
   });
 

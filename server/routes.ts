@@ -1307,14 +1307,14 @@ export async function registerRoutes(
         // surfaces — so Stock reads as "0 available + N on order" instead of
         // a "-" that would be dropped by numeric filters. hasSnapshot lets
         // the client distinguish "not synced yet" from a confirmed zero.
-        // Stock total adds On Order (not Pipeline): Amazon's own inbound
-        // already covers the shipped-not-received units (pre-flight P2).
+        // Stock total adds On Order; Amazon's own inbound (Sent to FBA)
+        // covers the shipped-not-received units (pre-flight P2).
         const pl = pipelineMap.get(row.asin) ?? EMPTY_PIPELINE;
         const stock = inv ? {
           available_fba: parseInt(inv.available_fba) || 0,
           reserved: parseInt(inv.reserved) || 0,
           inbound: (parseInt(inv.inbound_shipped) || 0) + (parseInt(inv.inbound_receiving) || 0),
-          on_order: pl.on_order, at_prep: pl.at_prep, inbound_fba: pl.inbound_fba, pipeline: pl.pipeline, open_po_count: pl.open_po_count,
+          on_order: pl.on_order, at_prep: pl.at_prep, open_po_count: pl.open_po_count,
           total: (parseInt(inv.available_fba) || 0) +
                  (parseInt(inv.reserved) || 0) +
                  (parseInt(inv.inbound_shipped) || 0) +
@@ -1325,7 +1325,7 @@ export async function registerRoutes(
           available_fba: 0,
           reserved: 0,
           inbound: 0,
-          on_order: pl.on_order, at_prep: pl.at_prep, inbound_fba: pl.inbound_fba, pipeline: pl.pipeline, open_po_count: pl.open_po_count,
+          on_order: pl.on_order, at_prep: pl.at_prep, open_po_count: pl.open_po_count,
           total: pl.on_order,
           hasSnapshot: false,
         };
@@ -3304,8 +3304,6 @@ export async function registerRoutes(
           inbound: parseInt(inv?.inbound) || 0,
           on_order: pl.on_order,
           at_prep: pl.at_prep,
-          inbound_fba: pl.inbound_fba,
-          pipeline: pl.pipeline,
         },
       });
     } catch (err: any) {
