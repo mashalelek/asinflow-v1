@@ -59,6 +59,10 @@ const OPERATION_TABLE: { key: string; test: RegExp; spec: BucketSpec }[] = [
   { key: "inventory.summaries", test: /^\/fba\/inventory\/v1\/summaries$/, spec: { rate: 2, burst: 2 } },
   // FBA Inbound Eligibility v1
   { key: "eligibility.preview", test: /^\/fba\/inbound\/v1\/eligibility\/itemPreview$/, spec: { rate: 1, burst: 1 } },
+  // Fulfillment Inbound v0 (shipment reconciliation, 2026-10-17): 2 req/s, burst 30 per Amazon's table.
+  { key: "fbaInbound.getShipments", test: /^\/fba\/inbound\/v0\/shipments$/, spec: { rate: 2, burst: 30 } },
+  { key: "fbaInbound.getShipmentItemsById", test: /^\/fba\/inbound\/v0\/shipments\/[^/]+\/items$/, spec: { rate: 2, burst: 30 } },
+  { key: "fbaInbound.getShipmentItems", test: /^\/fba\/inbound\/v0\/shipmentItems$/, spec: { rate: 2, burst: 30 } },
   // Reports 2021-06-30
   { key: "reports.getDocument", test: /^\/reports\/2021-06-30\/documents\/[^/]+$/, spec: { rate: 0.0167, burst: 15 } },
   { key: "reports.getReport", test: /^\/reports\/2021-06-30\/reports\/[^/]+$/, spec: { rate: 2, burst: 15 } },
