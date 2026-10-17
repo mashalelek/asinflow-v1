@@ -88,6 +88,20 @@ export interface VelocityPlan {
 const normKey = (orderNumber: string, asin: string) =>
   `${orderNumber.trim()} ${asin.trim().toUpperCase()}`;
 
+/**
+ * Skips are built from the sheet alone (buildVelocityRecords), so a row
+ * Velocity already knows — inbound, inventory or shipped — used to surface
+ * as "no live SKU" / "quantity not divisible by units/pack" although there
+ * is nothing to create. Drop every skip whose (order #, ASIN) is matched in
+ * Velocity, exactly as creates are filtered. bundle_unplaced_candidate is
+ * about Velocity state already and always stays. (Fix 2026-10-17.)
+ */
+export function dropSkipsKnownToVelocity(skips: VelocitySkip[], known: { has(key: string): boolean }): VelocitySkip[] {
+  return skips.filter((sk) =>
+    sk.reason === "bundle_unplaced_candidate" ||
+    !known.has(normKey(String(sk.orderNumber ?? ""), String(sk.asin ?? ""))));
+}
+
 function numOrNull(v: any): number | null {
   if (v === null || v === undefined || v === "") return null;
   const n = Number(String(v).trim());
@@ -268,6 +282,10 @@ export async function buildVelocityPlan(
       status, item_name: o.item_name ?? null, actionable: actionable && !isBundle, diffs,
     });
   }
+
+  // Skips follow the same rule as creates: a row Velocity already has is not
+  // "skipped", it is done (its quantity audit lives in updates).
+  build.skips = dropSkipsKnownToVelocity(build.skips, matchedVelocityByKey);
 
   // CREATE = build output minus anything matched in Velocity.
   const creates = build.records.filter(
