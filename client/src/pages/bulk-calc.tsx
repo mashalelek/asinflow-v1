@@ -32,8 +32,10 @@ import { useToast } from "@/hooks/use-toast";
 
 // §21 column subset: Description + full Estimates + full Sellers + the four
 // Additional-info columns. Stock and Actuals excluded (no data path — honest
-// labeling, §14); Tags/Notes/Promos/Sourcing/Submission excluded (no source
-// or account state).
+// labeling, §14), so the 2026-10-17 On Order / Pipeline columns do not
+// appear here either (patch asins-on-order-from-pos §3.6: a bulk row has
+// no PO rows to derive from — nothing to show, not "—"); Tags/Notes/Promos/
+// Sourcing/Submission excluded (no source or account state).
 const BULK_COLUMN_IDS = new Set<ColumnId>([
   "product", "category", "brand", "supplier", "supplierSku",
   "estCogs", "prep", "salePrice", "profit", "roi", "margin",

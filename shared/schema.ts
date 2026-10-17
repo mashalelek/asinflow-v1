@@ -710,7 +710,10 @@ export const ALL_COLUMNS: ColumnDef[] = [
   // Default-VISIBLE wherever Stock/On Order are (revised same day).
   { id: "fbaStock", label: "FBA Stock", defaultVisible: true, align: "right", group: "stock" },
   { id: "reserved", label: "Reserved", defaultVisible: false, align: "right", group: "stock" },
-  { id: "sentToFba", label: "Sent to FBA", defaultVisible: false, align: "right", group: "stock" },
+  // §3.5 (2026-10-17): Amazon's own inbound count (shipped + receiving +
+  // working from getInventorySummaries) — shown beside the PO-derived
+  // Inbound FBA, no reconciliation between the two. Was "Sent to FBA".
+  { id: "sentToFba", label: "Amazon Inbound", defaultVisible: false, align: "right", group: "stock" },
   { id: "daysLeft", label: "Days Left", defaultVisible: true, align: "right", group: "stock" },
   // Group 3 — Actuals
   { id: "cogs", label: "COGS", qualifier: "Actual", defaultVisible: false, align: "right", group: "actuals" },

@@ -109,7 +109,7 @@ export function StockHistoryModal({ asin, title, startDate, endDate, onClose }: 
                 <div className="font-medium">{m!.reserved}</div>
               </div>
               <div>
-                <div className="text-xs text-muted-foreground">Sent to FBA</div>
+                <div className="text-xs text-muted-foreground">Amazon Inbound</div>
                 <div className="font-medium">{m!.inbound}</div>
               </div>
               <div>

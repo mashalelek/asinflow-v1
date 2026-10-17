@@ -2269,7 +2269,7 @@ export function renderCell(
     case "reserved":
       return numCell(String(result.stock?.reserved ?? 0));
     case "sentToFba":
-      return numCell(String(result.stock?.inbound ?? 0));
+      return <Tooltip><TooltipTrigger asChild><span className="font-mono text-sm cursor-help">{result.stock?.inbound ?? 0}</span></TooltipTrigger><TooltipContent side="top" className="text-xs">Amazon Inbound = Seller Central's inbound shipped + receiving + working (FBA inventory sync) — Amazon's own view of Inbound FBA</TooltipContent></Tooltip>;
 
     case "actAvgSalePrice": {
       const avgUs = result.actuals?.units_sold ?? 0;
