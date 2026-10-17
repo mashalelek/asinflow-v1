@@ -1,5 +1,7 @@
 # Spec patch — Sync POs: repeatable Orders-sheet → PO sync (sheet wins)
 
+> **Superseded in part (2026-10-17):** the PO-level Status mapping of §3.2–§3.3 (first row of each PO applied to the whole PO) is replaced by per-row mapping — see `claude_spec-patch-row-level-status.md` §2.1–2.3.
+
 Date: 2026-10-16
 Status: APPROVED 2026-10-16 (approval model: patch, not commits)
 Depends on: `claude_spec-patch-po-expand-by-asin.md` (deployed 2026-10-16)

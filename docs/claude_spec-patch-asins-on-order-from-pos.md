@@ -1,5 +1,7 @@
 # Spec patch — ASINs page: on-order quantities derived from POs
 
+> **Superseded in part (2026-10-17):** decision D1 (closed POs excluded from On Order / At Prep) is replaced — see `claude_spec-patch-row-level-status.md` §2.4.
+
 Date: 2026-10-17
 Status: APPROVED 2026-10-17 (decisions in §6 are Maria's defaults; stop only on pre-flight surprises)
 Depends on: shipment reconciliation (`claude_spec-patch-shipment-reconciliation.md`, head 8da162a)

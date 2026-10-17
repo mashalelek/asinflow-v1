@@ -1,5 +1,7 @@
 # Spec patch — PO module: Expand by ASIN view, column model, Action Items + Closed
 
+> **Superseded in part (2026-10-17):** §6.1 PO-level Action Items and the §6.4 PO-wide Canceled mapping are replaced by product-level action items and per-row cancels — see `claude_spec-patch-row-level-status.md` §2.1–2.2.
+
 Date: 2026-10-15
 Status: IMPLEMENTED 2026-10-16 — commits 1–8 (pre-flight `f04bebb`, migration
 056 `0becb5c`, column model `00fa7b4`, Expand by ASIN `8cc0682`, Closed

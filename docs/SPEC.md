@@ -569,21 +569,22 @@ Orders sheet's open quantity that never decreased when units shipped) is
 **gone** (D2 — one number, one meaning). Two columns in the Stock group
 are computed live from `po_asins` ⋈ `purchase_orders` by
 `server/asin-po-pipeline.ts` (`loadAsinPipeline`, one query folded per
-ASIN; no stored column, D3), in ASIN / sellable-pack units, over **open**
-POs only (D1 — a closed PO has nothing left to ship, which also
-neutralises pre-May POs that have no shipment rows):
+ASIN; no stored column, D3), in ASIN / sellable-pack units, over **open
+and closed** POs alike (row-level Status patch §2.4, 2026-10-17 — the
+earlier "open POs only" rule (D1) let a wrong Closed hide real units,
+e.g. target.com 912003733645362):
 
-| Column | Formula (Σ over the ASIN's open `po_asins` rows) | Default |
+| Column | Formula (Σ over the ASIN's `po_asins` rows) | Default |
 |---|---|---|
-| **On Order** | Σ max(Expected − Shipped FBA, 0), where Expected = Ordered − Canceled − Returned − Lost/damaged by us (NULLs read 0) | shown |
-| **At Prep** | Σ At Prep Center — a subset of On Order | hidden |
+| **On Order** | Σ max(Expected − Shipped FBA, 0), where Expected = Ordered − Canceled − Returned − Lost/damaged by us (NULLs read 0), over rows whose PO is dated on/after the **reconciliation start** (the earliest stored Velocity shipment, 2026-05-20; `VELOCITY_MIN_ORDER_DATE` when none is stored). Older rows contribute 0 — no shipment data exists for them | shown |
+| **At Prep** | Σ At Prep Center — Velocity's quantity on every row | hidden |
 
 Shipped-not-received units are Amazon's own number, **Sent to FBA**
 (inbound shipped + receiving + working from the FBA inventory sync),
 unchanged; the PO-derived Inbound FBA / Pipeline columns of the first cut
 were removed in the clean-up. Each cell's tooltip names its formula; the
 On Order cell links to `/purchase-orders?asin=<ASIN>`, which opens the
-POs page searched on that ASIN, Open only. **Stock total = available +
+POs page searched on that ASIN, Open and Closed. **Stock total = available +
 reserved + Sent to FBA + On Order** and **FBA Stock = Stock − On Order** —
 the identity below unchanged. The Stock tooltip reads Available (FBA),
 Reserved, Sent to FBA, On Order (POs) — nothing else. Days Left inherits
@@ -2592,7 +2593,7 @@ that writes it:
 | `is_wholesale`, `is_oa` | Manual edit |
 | `status` (active/parked/dead — replaced `is_active` 2026-09-07, migration 033) | Manual Park/Unpark/Mark-dead/Revive; Sourcing sync writes `parked`+`discontinued` on freshly-inserted discontinued rows only; the prices stage's `invalid_asin` outcome and the catalog-404 signal (DA-2) write `dead` with their reasons |
 | Aura listing cost (external, not an AF column) | Aura cost sync path (§11) — reads `asin_estimates` after an inline PO-sheet read for the selection (decision 9), writes only to Aura |
-| `purchase_orders`, `po_asins`, `po_line_items` — every sheet-carried field, incl. `action_items`, `closed_at`, `closed_by`, `qty_canceled` | **The Orders sheet via the PO sheet sync** (`server/po-sheet-sync.ts`, Sync POs button, 2026-10-16 — "sheet wins for now"); the PO module UI (Action Items editor, Closed toggle, auto-close rule) edits them between syncs only |
+| `purchase_orders`, `po_asins`, `po_line_items` — every sheet-carried field, incl. `po_line_items.action_items` (per row, 2026-10-17), `closed_at`, `closed_by`, `qty_canceled`, `po_asins.unique_products` | **The Orders sheet via the PO sheet sync** (`server/po-sheet-sync.ts`, Sync POs button, 2026-10-16 — "sheet wins for now"); the PO module UI (Action Items editor, Closed toggle, auto-close rule) edits them between syncs only |
 | `po_asins.qty_at_prep`; `po_asin_shipments` (`source = 'velocity'`: row, `qty_shipped`, `shipped_at`); `velocity_shipments`; `shipment_unmatched` | **Shipment sync, component A** (`server/shipment-sync-velocity.ts`, Sync Shipments button, 2026-10-17) — never the sheet sync, never the UI except the Unmatched picker |
 | `po_asin_shipments.fba_shipment_ids`, `sc_match`, `qty_received`; `velocity_shipments.sc_shipment_ids` / `sc_match`; `sc_inbound_shipments`, `sc_inbound_items` | **Shipment sync, component B** (`server/shipment-sync-sc.ts`) |
 | `po_asins.qty_shipped_fba`, `qty_received_amazon` | Trigger over `po_asin_shipments` (both components' rows + manual rows) |
@@ -4917,16 +4918,25 @@ Decisions resolved 2026-08-22:
 - `qty_refunded` was RENAMED `qty_returned` (data preserved — the import
   wrote blank Col R as 0, which stands: a blank refund cell means none
   occurred).
-- `qty_canceled` is NULLable with NO default. **NULL = not tracked.** The
-  one status-derived write that exists (2026-10-16, §6.4 backfill and the
-  importer): a PO whose sheet Status said "Canceled" gets
-  `qty_canceled = qty_ordered` on every line (a PO-wide cancel); per-ASIN
-  partial cancels are not inferrable and stay NULL. The entry form writes
+- `qty_canceled` is NULLable with NO default. **NULL = not tracked.**
+  Since 2026-10-17 (row-level Status) the sheet sync sets
+  `qty_canceled = qty_ordered` on **the line whose own row** says
+  Canceled — never PO-wide; the "Mark canceled" action on an ASIN row
+  sets it on every line of that ASIN. (2026-10-16 to 10-17: the first
+  row's Canceled was applied to every line of the PO.) The entry form writes
   explicit values (its 0 default lives in the form, not the column).
 - **Canceled / Returned on the ASIN row are DERIVED** (pre-flight decision
   1): Σ(line qty × `asin_qty_per_product`) over the ASIN's lines, NULL when
   any contributing line is untracked. No stored copies on `po_asins`; the
   product level stays the truth.
+- **Bundles divide by N (Maria 2026-10-17, row-level Status P2):** the
+  stored yield of each bundle component is its standalone yield (1.00, or
+  the pack count), so for `sold_as = 'bundle'` the derived Canceled /
+  Returned is Σ(line qty × yield) ÷ `po_asins.unique_products` (Col S).
+  Fully canceled Kinder's B0G6R55GNQ (2 × 12 × 1.00) derives 12, not 24;
+  1 unit of one product in a 3-product bundle derives 1/3. Multi-packs and
+  non-bundle multi-listing groups keep the plain sum. One SQL definition,
+  `derivedFromLines` in `server/po-queries.ts`.
 - `final_qty` is GENERATED ALWAYS STORED:
   `qty_ordered − qty_canceled − qty_returned` — plain arithmetic, **no
   COALESCE**. NULL propagates by design: historical rows render Final as a
@@ -5032,15 +5042,31 @@ ASIN-level only.
   quantity edit, shipment change and action-items change: close with
   `closed_by = 'auto'` when BOTH (a) every `po_asins` row has Shipped FBA
   ≥ Ordered − Canceled − Returned − Lost/damaged by us (NULLs read as 0)
-  and at least one row has Shipped FBA > 0, and (b) `action_items` is
-  empty. Auto never reopens a PO closed by hand or by the sheet backfill;
+  and at least one row has Shipped FBA > 0, and (b) **no product line of
+  the PO carries an action item** (row-level Status, 2026-10-17; was the
+  PO-level array). Auto never reopens a PO closed by hand or by the sheet backfill;
   an auto-closed PO reopens when (a) or (b) stops holding; a manual
   reopen stays Open until the rule next becomes true after a change.
 - Filter Open / Closed / All; **default Open only** (D3). The backfill
   (§6.4) closed 679 sheet-"Closed" POs with `closed_by = 'sheet'`, so the
   default view opened on the 94 others.
 
-### Action Items (replaces the free-text status, 2026-10-16)
+### Action Items (replaces the free-text status, 2026-10-16; per product since 2026-10-17)
+
+**Row-level Status (patch `docs/claude_spec-patch-row-level-status.md`,
+pre-flight `docs/row-level-status-preflight-2026-10-17.md`, 2026-10-17):**
+a sheet row is a product, so action items live on
+`po_line_items.action_items` (migration 058, same CHECK). The sheet sync
+maps each row's Status onto its own line (full replace per line). The
+ASIN row shows the union of its lines and edits write through — an item
+added on the ASIN goes onto every line, an item removed comes off every
+line (`PATCH /api/pos/asin-rows/:id/action-items`); a product row edits
+its own line (`PATCH /api/pos/lines/:id/action-items`). The POs-page
+column and the PO Details header show the union over all lines,
+read-only; the filter is any-of over lines. `purchase_orders.action_items`
+is no longer read or written (kept one release, dropped with `status`).
+The new last ASIN-table column is **Action Items**. The paragraph below
+describes the 2026-10-16 PO-level model it replaces.
 
 `purchase_orders.action_items text[]`, multi-select, values and display
 order: **Need to Return · Missing / Damaged from Supplier · Confirm
@@ -5118,12 +5144,17 @@ returns the plan with nothing written.
 - **Update (sheet wins):** every header field the importer reads, every
   line field (product, supplier SKU, price, Col L ordered, Col M received,
   Col R returned, Col N ASIN qty, Col T yield, Col X/Y costs, prep,
-  sold_as / units_per_pack, loss qty/amount), and the Status cell mapped
-  as §6.4 applied as a full replace: `action_items` = the sheet's tokens
-  (empty if none); Closed → `closed_at` (kept if already closed, else
-  now()) and `closed_by = 'sheet'`; not Closed → `closed_at` /
-  `closed_by` NULL **regardless of a previous 'auto' or user close**;
-  Canceled → `qty_canceled = qty_ordered` on every line, otherwise NULL.
+  sold_as / units_per_pack, loss qty/amount, Col S → `po_asins.unique_products`),
+  and the Status cell **per row** (row-level Status, 2026-10-17 — it used
+  to read the first row of each PO only): each row's action items → that
+  line's `action_items` (full replace); a row's Canceled → that line's
+  `qty_canceled = qty_ordered`, otherwise NULL; a row saying Returned with
+  a blank Col R leaves `qty_returned` as stored (counted `returnedNoQty`);
+  the PO is Closed only when **every** row's Status contains Closed →
+  `closed_at` (kept if already closed, else now()) and `closed_by =
+  'sheet'`; otherwise `closed_at` / `closed_by` NULL **regardless of a
+  previous 'auto' or user close**. `purchase_orders.action_items` is not
+  written.
   `po_asins.qty` is recomputed from Col N. Unchanged POs are not touched
   (`updated_at` moves only on a real change).
 - **Canceled POs (Maria, 2026-10-16):** the VA zeroes Col L / Col N on a
@@ -5290,7 +5321,7 @@ reconstructed (those POs are Closed from the sheet).
 | Field | Owner |
 |---|---|
 | `purchase_orders` / `po_asins` / `po_line_items` (sheet-carried fields) | **The Orders sheet, through the PO sheet sync** (2026-10-16, "sheet wins for now") — overwritten on every Sync POs; the PO module UI edits them between syncs only |
-| `purchase_orders.action_items`, `closed_at`, `closed_by`; `po_line_items.qty_canceled` | **Sheet-owned for now** (2026-10-16): the sync maps the Status cell on every run (full replace). The Action Items editor, the Closed toggle, the auto-close rule and the §6.4 backfill write them too, but the next sync overwrites — accepted until the VA moves off the sheet |
+| `po_line_items.action_items`, `qty_canceled`; `purchase_orders.closed_at`, `closed_by` | **Sheet-owned for now**: the sync maps each row's Status onto its own line on every run (row-level Status, 2026-10-17); the ASIN / product Action Items editors, the ASIN "Mark canceled" action, the Closed toggle and the auto-close rule write them too, and the next sync overwrites — accepted until the VA moves off the sheet. `purchase_orders.action_items` is deprecated, written by nothing |
 | **`po_asins.qty_at_prep`** | **Shipment sync (component A)** — Σ Velocity `quantity_remaining` ÷ units_per_pack; NULL when no Velocity line references the key (D6). Overwritten every Sync Shipments; not hand-editable. |
 | **`po_asins.qty_shipped_supplier`, `qty_at_warehouse`, `qty_lost_damaged_us`** | **AF-owned**: the inline quantity editor today; email tracking later. Never the importer, never a sync. |
 | **`po_asins.qty_shipped_fba`, `qty_received_amazon`** | **Trigger-maintained** from `po_asin_shipments` — Shipped FBA from Velocity rows (component A), Received by Amazon from the SC allocation (component B); manual rows add to both. |
