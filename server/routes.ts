@@ -11,6 +11,7 @@ import { probeGatingForAsins } from "./gating-probe";
 import { loadPoAsinRows } from "./po-queries";
 import { evaluateAutoClose, setPoClosedManually, parseQtyInput, MANUAL_QTY_COLUMNS, type ManualQtyColumn } from "./po-close";
 import { ACTION_ITEMS, normalizeActionItems } from "./po-status-map";
+import { asinWriteThrough, unionActionItems, PO_ACTION_ITEMS_SQL } from "./po-action-items";
 import { syncPoSheet, type PoSyncResult } from "./po-sheet-sync";
 import { syncVelocityShipments, type VelocitySyncResult } from "./shipment-sync-velocity";
 import { syncScShipments, type ScSyncResult } from "./shipment-sync-sc";
@@ -4328,7 +4329,7 @@ export async function registerRoutes(
     // facet, AND across facets.
     if (action) {
       const items = action.split(",").map((x) => x.trim()).filter((x) => (ACTION_ITEMS as readonly string[]).includes(x));
-      if (items.length > 0) { params.push(items); conds.push(`p.action_items && $${params.length}::text[]`); }
+      if (items.length > 0) { params.push(items); conds.push(`EXISTS (SELECT 1 FROM po_line_items l WHERE l.po_id = p.id AND l.action_items && $${params.length}::text[])`); }
     }
     if (supplier) {
       const list = supplier.split(",").map((x) => x.trim()).filter(Boolean);
@@ -4344,6 +4345,7 @@ export async function registerRoutes(
       const total = (await query(`SELECT COUNT(*)::int AS n FROM purchase_orders p ${where}`, params)).rows[0].n;
       const rows = (await query(
         `SELECT p.*,
+                ${PO_ACTION_ITEMS_SQL} AS line_action_items,
                 (SELECT COUNT(*)::int FROM po_asins a WHERE a.po_id = p.id) AS asin_count,
                 (SELECT COALESCE(SUM(a.qty), 0)::int FROM po_asins a WHERE a.po_id = p.id) AS units_ordered,
                 (SELECT SUM(l.qty_received)::int FROM po_line_items l WHERE l.po_id = p.id) AS units_received,
@@ -4362,7 +4364,11 @@ export async function registerRoutes(
       const asinRows = await loadPoAsinRows((sql, params) => query(sql, params), rows.map((r: any) => String(r.id)));
       const asinsByPo = new Map<string, any[]>();
       for (const a of asinRows) { const k = String(a.po_id); if (!asinsByPo.has(k)) asinsByPo.set(k, []); asinsByPo.get(k)!.push(a); }
-      for (const r of rows) r.asins = asinsByPo.get(String(r.id)) ?? [];
+      for (const r of rows) {
+        r.asins = asinsByPo.get(String(r.id)) ?? [];
+        // Row-level Status: the PO's Action Items = union over its lines (read-only here).
+        r.action_items = unionActionItems([r.line_action_items]); delete r.line_action_items;
+      }
       // Filter options for the toolbar: suppliers (distinct across the whole
       // table) + the fixed Action Items list in display order (§6.1).
       const suppliers = (await query(`SELECT DISTINCT supplier FROM purchase_orders ORDER BY supplier`)).rows.map((r: any) => r.supplier);
@@ -4386,9 +4392,10 @@ export async function registerRoutes(
     if (!isDbAvailable()) { res.status(503).json({ message: "Database not available" }); return; }
     const id = typeof req.params.id === "string" ? req.params.id : "";
     try {
-      const poRes = await query(`SELECT * FROM purchase_orders WHERE id = $1`, [id]);
+      const poRes = await query(`SELECT p.*, ${PO_ACTION_ITEMS_SQL} AS line_action_items FROM purchase_orders p WHERE p.id = $1`, [id]);
       if (poRes.rows.length === 0) { res.status(404).json({ message: "PO not found" }); return; }
       const po = poRes.rows[0];
+      po.action_items = unionActionItems([po.line_action_items]); delete po.line_action_items;
 
       // §4 column model: the same rows the POs page nests (po-queries.ts) —
       // derived Canceled/Returned, the six stored ASIN quantities, shipments.
@@ -4446,18 +4453,57 @@ export async function registerRoutes(
   // change re-runs the auto-close rule for its PO.
   const poQuery = (sql: string, params?: any[]) => query(sql, params);
 
-  // Action Items (§6): multi-select, validated against the §6.1 list; a change re-runs the auto-close rule (b).
-  app.patch("/api/pos/:id/action-items", async (req: Request, res: Response) => {
+  // Action Items (row-level Status §2.1, 2026-10-17): they live on the
+  // product line. The ASIN editor sends the desired union — added items go
+  // onto every line of the ASIN, removed items come off every line; the
+  // product editor replaces one line's array. The PO-level array is no longer
+  // written (the POs page shows the union read-only). Each change re-runs the
+  // auto-close rule (b: no line carries an action item).
+  app.patch("/api/pos/asin-rows/:id/action-items", async (req: Request, res: Response) => {
     if (!isDbAvailable()) { res.status(503).json({ message: "Database not available" }); return; }
     const id = String(req.params.id ?? "");
     const v = normalizeActionItems((req.body ?? {}).action_items);
     if (!v.ok) { res.status(400).json({ message: v.error }); return; }
     try {
-      const r = await query(`UPDATE purchase_orders SET action_items = $2::text[], updated_at = NOW() WHERE id = $1 RETURNING id`, [id, v.value]);
-      if (r.rowCount === 0) { res.status(404).json({ message: "PO not found" }); return; }
-      const close = await evaluateAutoClose(id, poQuery);
-      const po = (await query(`SELECT id, action_items, closed_at, closed_by FROM purchase_orders WHERE id = $1`, [id])).rows[0];
-      res.json({ po, close });
+      const pa = (await query(`SELECT po_id FROM po_asins WHERE id = $1`, [id])).rows[0];
+      if (!pa) { res.status(404).json({ message: "ASIN row not found" }); return; }
+      const lines = (await query(`SELECT id, action_items FROM po_line_items WHERE po_asin_id = $1`, [id])).rows;
+      if (lines.length === 0) { res.status(409).json({ message: "this ASIN row has no product lines to carry action items" }); return; }
+      for (const [lineId, items] of Array.from(asinWriteThrough(lines, v.value).entries())) {
+        await query(`UPDATE po_line_items SET action_items = $2::text[] WHERE id = $1`, [lineId, items]);
+      }
+      const close = await evaluateAutoClose(String(pa.po_id), poQuery);
+      const [row] = await loadPoAsinRows(poQuery, [String(pa.po_id)]).then((rows) => rows.filter((x: any) => String(x.id) === id));
+      res.json({ row, close });
+    } catch (err: any) { res.status(500).json({ message: err.message }); }
+  });
+
+  app.patch("/api/pos/lines/:id/action-items", async (req: Request, res: Response) => {
+    if (!isDbAvailable()) { res.status(503).json({ message: "Database not available" }); return; }
+    const id = String(req.params.id ?? "");
+    const v = normalizeActionItems((req.body ?? {}).action_items);
+    if (!v.ok) { res.status(400).json({ message: v.error }); return; }
+    try {
+      const r = await query(`UPDATE po_line_items SET action_items = $2::text[] WHERE id = $1 RETURNING po_id`, [id, v.value]);
+      if (r.rowCount === 0) { res.status(404).json({ message: "product line not found" }); return; }
+      const close = await evaluateAutoClose(String(r.rows[0].po_id), poQuery);
+      res.json({ ok: true, close });
+    } catch (err: any) { res.status(500).json({ message: err.message }); }
+  });
+
+  // "Mark canceled" on an ASIN row (§2.2): every line mapped to the ASIN gets
+  // qty_canceled = qty_ordered; the ASIN's Canceled re-derives (÷ N for a
+  // bundle). Sheet still wins: the next Sync POs re-applies the rows' Status.
+  app.post("/api/pos/asin-rows/:id/cancel", async (req: Request, res: Response) => {
+    if (!isDbAvailable()) { res.status(503).json({ message: "Database not available" }); return; }
+    const id = String(req.params.id ?? "");
+    try {
+      const pa = (await query(`SELECT po_id FROM po_asins WHERE id = $1`, [id])).rows[0];
+      if (!pa) { res.status(404).json({ message: "ASIN row not found" }); return; }
+      const r = await query(`UPDATE po_line_items SET qty_canceled = qty_ordered WHERE po_asin_id = $1 AND qty_ordered IS NOT NULL`, [id]);
+      const close = await evaluateAutoClose(String(pa.po_id), poQuery);
+      const [row] = await loadPoAsinRows(poQuery, [String(pa.po_id)]).then((rows) => rows.filter((x: any) => String(x.id) === id));
+      res.json({ row, close, linesCanceled: r.rowCount ?? 0 });
     } catch (err: any) { res.status(500).json({ message: err.message }); }
   });
 
@@ -4471,7 +4517,7 @@ export async function registerRoutes(
       const exists = (await query(`SELECT id FROM purchase_orders WHERE id = $1`, [id])).rows[0];
       if (!exists) { res.status(404).json({ message: "PO not found" }); return; }
       await setPoClosedManually(id, closed, req.session?.userId ?? null, poQuery);
-      const po = (await query(`SELECT id, closed_at, closed_by, action_items FROM purchase_orders WHERE id = $1`, [id])).rows[0];
+      const po = (await query(`SELECT p.id, p.closed_at, p.closed_by, ${PO_ACTION_ITEMS_SQL} AS action_items FROM purchase_orders p WHERE p.id = $1`, [id])).rows[0];
       res.json({ po });
     } catch (err: any) { res.status(500).json({ message: err.message }); }
   });

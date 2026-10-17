@@ -56,4 +56,7 @@ export const PO_ASIN_COLUMNS = [
   { key: "shipped_fba", label: "Shipped FBA", align: "right" },
   { key: "received_amazon", label: "Received by Amazon", align: "right" },
   { key: "shipments", label: "Shipment IDs", align: "left" },
+  // Row-level Status (2026-10-17): union of the ASIN's product lines; editable,
+  // write-through to every line. Product rows carry their own.
+  { key: "action_items", label: "Action Items", align: "left" },
 ] as const;

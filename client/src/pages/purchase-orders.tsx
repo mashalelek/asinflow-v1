@@ -24,7 +24,7 @@ import {
 import { Tooltip, TooltipTrigger, TooltipContent } from "@/components/ui/tooltip";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import { UploadToVelocityDialog } from "@/components/upload-to-velocity-dialog";
-import { PoAsinTable, PoAsinColGroup, PoAsinHeaderRow, PoAsinRow, type PoAsinRowData, type PoAsinLine } from "@/components/po-asin-rows";
+import { PoAsinTable, PoAsinColGroup, PoAsinHeaderRow, PoAsinRow, ActionItemChips, type PoAsinRowData, type PoAsinLine } from "@/components/po-asin-rows";
 import { loadPoExpanded, savePoExpanded, isPoExpanded, togglePoExpanded, toggleExpandAll, type PoExpandedState } from "@/lib/po-expanded";
 import { productQtyFromAsin, fmtQty } from "@/lib/po-qty";
 import { fetchLongSync } from "@/lib/long-sync";
@@ -64,8 +64,6 @@ interface PosResponse {
 }
 
 type ClosedFilter = "open" | "closed" | "all";
-/** §6.1 list, display order — the detail page has no list payload to read it from. */
-const ACTION_ITEM_OPTIONS = ["Need to Return", "Missing / Damaged from Supplier", "Confirm Refund / Replacement", "ATTN: Velocity", "See Comments", "SHIP", "Received - FBM"];
 
 /** §5 col 1: green check when Closed, open-order outline when Open. Click toggles with confirm. */
 function ClosedToggle({ po, onToggled, size = "sm" }: { po: { id: string; order_id: string; closed_at: string | null; closed_by: string | null }; onToggled: () => void; size?: "sm" | "lg" }) {
@@ -108,53 +106,9 @@ function ClosedToggle({ po, onToggled, size = "sm" }: { po: { id: string; order_
   );
 }
 
-// §7: tinted chips only, never saturated fills. Action Items (§6.1):
-// needs-attention items amber; SHIP indigo; Received - FBM green;
-// Need to Return orange.
-function actionChipClass(item: string): string {
-  const t = item.toLowerCase();
-  if (t === "ship") return "bg-indigo-500/10 text-indigo-600 dark:text-indigo-400";
-  if (t === "received - fbm") return "bg-green-500/10 text-green-700 dark:text-green-400";
-  if (t === "need to return") return "bg-orange-500/10 text-orange-600 dark:text-orange-400";
-  return "bg-amber-500/10 text-amber-600 dark:text-amber-400";
-}
-const chipBase = "inline-block rounded-sm px-1.5 py-0.5 text-[11px] whitespace-nowrap";
-
-/** Action Items chips + inline multi-select editor (§6.1). Saving re-runs the auto-close rule server-side. */
-function ActionItemsEditor({ po, options, onSaved, align = "start" }: { po: { id: string; order_id: string; action_items: string[] }; options: string[]; onSaved: () => void; align?: "start" | "end" }) {
-  const [open, setOpen] = useState(false);
-  const [draft, setDraft] = useState<Set<string>>(new Set(po.action_items));
-  const [err, setErr] = useState<string | null>(null);
-  const save = async (next: Set<string>) => {
-    setDraft(next); setErr(null);
-    try {
-      const res = await fetch(`/api/pos/${po.id}/action-items`, { method: "PATCH", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ action_items: Array.from(next) }) });
-      if (!res.ok) throw new Error((await res.json().catch(() => ({}))).message || `HTTP ${res.status}`);
-      onSaved();
-    } catch (e: any) { setErr(e.message); }
-  };
-  return (
-    <Popover open={open} onOpenChange={(v) => { setOpen(v); if (v) setDraft(new Set(po.action_items)); }}>
-      <PopoverTrigger asChild>
-        <button type="button" onClick={(e) => e.stopPropagation()} className="flex flex-col items-start gap-0.5 min-h-[1.25rem] min-w-[4rem] text-left" data-testid={`button-action-items-${po.order_id}`} title="Edit action items">
-          {po.action_items.length === 0
-            ? <span className="text-muted-foreground/40 text-[11px]">—</span>
-            : po.action_items.map((it) => <span key={it} className={`${chipBase} ${actionChipClass(it)}`}>{it}</span>)}
-        </button>
-      </PopoverTrigger>
-      <PopoverContent className="w-72 p-2 space-y-1" align={align} onClick={(e) => e.stopPropagation()}>
-        <div className="text-[10px] uppercase tracking-wider text-muted-foreground px-1">Action items</div>
-        {options.map((opt) => (
-          <label key={opt} className="flex items-center gap-2 px-2 py-1 rounded hover:bg-muted cursor-pointer text-xs">
-            <input type="checkbox" checked={draft.has(opt)} onChange={() => { const next = new Set(draft); if (next.has(opt)) next.delete(opt); else next.add(opt); void save(next); }} className="h-3 w-3 accent-blue-500" data-testid={`checkbox-action-${opt}`} />
-            <span className={`${chipBase} ${actionChipClass(opt)}`}>{opt}</span>
-          </label>
-        ))}
-        {err && <div className="px-2 text-xs text-destructive">{err}</div>}
-      </PopoverContent>
-    </Popover>
-  );
-}
+// Action Items (row-level Status, 2026-10-17): the PO column is the read-only
+// union over the PO's product lines; edit on the nested ASIN / product rows
+// (shared ActionItemsEditor in po-asin-rows.tsx).
 
 // Searchable multi-select facet — same interaction pattern as the main
 // page's Tags/Supplier filters (type-ahead, select/clear all, checkbox
@@ -508,7 +462,7 @@ export default function PurchaseOrders() {
                     </button>
                   </td>
                   <td className="px-3 py-2" onClick={(e) => e.stopPropagation()}>
-                    <ActionItemsEditor po={po} options={data?.actionItems ?? []} onSaved={load} />
+                    <ActionItemChips items={po.action_items} testId={`po-action-items-${po.order_id}`} />
                   </td>
                   <td className="px-3 py-2 whitespace-nowrap">{fmtDate(po.order_date)}</td>
                   <td className="px-3 py-2 font-mono text-xs">{po.order_id}</td>
@@ -681,7 +635,7 @@ export function PurchaseOrderDetailPlaceholder() {
           </div>
         </div>
         <div className="flex gap-1">
-          <ActionItemsEditor po={{ id: po.id, order_id: po.order_id, action_items: actionItems }} options={ACTION_ITEM_OPTIONS} onSaved={reload} align="end" />
+          <ActionItemChips items={actionItems} testId="po-detail-action-items" />
         </div>
       </div>
 

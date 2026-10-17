@@ -7,7 +7,8 @@
 //   (a) every po_asins row has Shipped FBA >= Ordered − Canceled − Returned −
 //       Lost/damaged by us (NULLs read as 0) AND at least one row has
 //       Shipped FBA > 0 (every unit accounted for), and
-//   (b) action_items is empty.
+//   (b) no line of the PO carries an action item (row-level Status
+//       2026-10-17; purchase_orders.action_items is no longer read).
 // Evaluated whenever a qty column is edited, a shipment row changes, or
 // action_items changes. Auto never reopens a PO closed by hand or by the
 // sheet backfill; a PO auto-closed is reopened automatically when (a) or (b)
@@ -15,6 +16,7 @@
 // until the rule next becomes true after a change.
 import type { QueryLike } from "./scheduler/types";
 import { poAsinRowsSql } from "./po-queries";
+import { PO_ACTION_ITEMS_SQL } from "./po-action-items";
 
 export interface PoCloseRow {
   qty: number;
@@ -48,7 +50,7 @@ export type AutoCloseOutcome = { closed: boolean; closedBy: string | null; chang
 
 /** Re-evaluate one PO after a change and apply the rule. Returns the resulting state. */
 export async function evaluateAutoClose(poId: string, query: QueryLike): Promise<AutoCloseOutcome> {
-  const po = (await query(`SELECT closed_at, closed_by, action_items FROM purchase_orders WHERE id = $1`, [poId])).rows[0];
+  const po = (await query(`SELECT p.closed_at, p.closed_by, ${PO_ACTION_ITEMS_SQL} AS action_items FROM purchase_orders p WHERE p.id = $1`, [poId])).rows[0];
   if (!po) throw new Error(`PO ${poId} not found`);
   const rows = (await query(poAsinRowsSql(`pa.po_id = $1`), [poId])).rows as PoCloseRow[];
   const shouldClose = autoCloseVerdict(rows, Array.isArray(po.action_items) ? po.action_items : []);

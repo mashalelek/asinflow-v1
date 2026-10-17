@@ -55,13 +55,15 @@ describe("consumers switched (§6.3)", () => {
   it("the list route filters on action_items (any-of) and the Closed state; nothing reads the old status column", () => {
     const routes = read("server/routes.ts");
     const list = routes.slice(routes.indexOf('app.get("/api/pos"'), routes.indexOf('app.get("/api/pos/:id"'));
-    expect(list).toMatch(/p\.action_items && \$\d+::text\[\]|p\.action_items && \$\$\{params\.length\}::text\[\]/);
+    // Row-level Status (2026-10-17): the filter is any-of over the PO's LINE action items.
+    expect(list).toMatch(/l\.action_items && \$\$\{params\.length\}::text\[\]/);
     expect(list).not.toMatch(/p\.status ILIKE|string_to_array\(status/);
     expect(list).toMatch(/actionItems: ACTION_ITEMS/);
     const block = routes.slice(routes.indexOf("// === PO status + quantities"), routes.indexOf("// === Bulk Profit Calculator"));
-    expect(block).toMatch(/app\.patch\("\/api\/pos\/:id\/action-items"/);
+    expect(block).toMatch(/app\.patch\("\/api\/pos\/asin-rows\/:id\/action-items"/);
+    expect(block).toMatch(/app\.patch\("\/api\/pos\/lines\/:id\/action-items"/);
     expect(block).toMatch(/normalizeActionItems\(/);
-    expect((block.match(/await evaluateAutoClose\(/g) ?? []).length).toBe(6); // + action items; + Sync Shipments and the unmatched link (shipment-reconciliation §5.4)
+    expect((block.match(/await evaluateAutoClose\(/g) ?? []).length).toBe(8); // ASIN + product action items, ASIN cancel, quantities, shipments ×2, Sync Shipments, unmatched link
   });
   it("the importer writes action_items / closed_at / qty_canceled and never the status column", () => {
     const imp = read("script/import-po-2026.ts");
@@ -81,7 +83,8 @@ describe("consumers switched (§6.3)", () => {
   });
   it("the page renders Action Items chips with an inline editor and filters on them; no status chips remain", () => {
     const page = read("client/src/pages/purchase-orders.tsx");
-    expect(page).toMatch(/<ActionItemsEditor po=\{po\} options=\{data\?\.actionItems \?\? \[\]\} onSaved=\{load\} \/>/);
+    // Row-level Status (2026-10-17): the PO column is the read-only union; editing moved to ASIN / product rows.
+    expect(page).toMatch(/<ActionItemChips items=\{po\.action_items\} testId=\{`po-action-items-\$\{po\.order_id\}`\} \/>/);
     expect(page).toMatch(/params\.set\("action", actionKey\)/);
     expect(page).not.toMatch(/statusChipClass|po\.status\b|statusTokens/);
   });

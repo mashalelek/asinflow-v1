@@ -33,7 +33,8 @@ function fakePo(state: { closed_at: Date | null; closed_by: string | null; actio
   const writes: string[] = [];
   const query: QueryLike = async (sql, params) => {
     const s = sql.replace(/\s+/g, " ").trim();
-    if (s.startsWith("SELECT closed_at, closed_by, action_items FROM purchase_orders")) return { rows: [state], rowCount: 1 };
+    // Row-level Status (2026-10-17): (b) reads the union of the PO's line action items.
+    if (s.startsWith("SELECT p.closed_at, p.closed_by, ARRAY(SELECT DISTINCT x FROM po_line_items l, unnest(l.action_items) x WHERE l.po_id = p.id) AS action_items FROM purchase_orders p")) return { rows: [state], rowCount: 1 };
     if (s.startsWith("SELECT pa.*")) return { rows, rowCount: rows.length };
     if (s.startsWith("UPDATE purchase_orders SET closed_at = NOW(), closed_by = 'auto'")) { writes.push("close:auto"); state.closed_at = new Date(); state.closed_by = "auto"; return { rows: [], rowCount: 1 }; }
     if (s.startsWith("UPDATE purchase_orders SET closed_at = NULL, closed_by = NULL") && s.includes("closed_by = 'auto'")) { writes.push("reopen:auto"); state.closed_at = null; state.closed_by = null; return { rows: [], rowCount: 1 }; }
@@ -99,7 +100,7 @@ describe("quantity input + routes", () => {
   it("every quantity / shipment write re-runs the rule; the manual toggle records the user", () => {
     const s = readFileSync(join(__dirname, "routes.ts"), "utf8");
     const block = s.slice(s.indexOf("// === PO status + quantities"), s.indexOf("// === Bulk Profit Calculator"));
-    expect((block.match(/await evaluateAutoClose\(/g) ?? []).length).toBe(6); // action items, quantities, shipment add, shipment delete, Sync Shipments, unmatched link (§5.4)
+    expect((block.match(/await evaluateAutoClose\(/g) ?? []).length).toBe(8); // ASIN + product action items, ASIN cancel, quantities, shipment add, shipment delete, Sync Shipments, unmatched link
     expect(block).toMatch(/setPoClosedManually\(id, closed, req\.session\?\.userId \?\? null/);
     expect(block).toMatch(/VALUES \(\$1, 'manual:' \|\| uuid_generate_v4\(\)::text, \$2::text\[\], \$3, \$4, \$5, 'manual', 'none'\)/); // shipment-reconciliation §2: manual rows keyed manual:<uuid>
     // only the manual columns are writable

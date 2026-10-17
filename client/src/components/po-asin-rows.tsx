@@ -39,6 +39,8 @@ export interface PoAsinLine {
   asin_qty_per_product: string | null;
   adjusted_product_cost: string | null;
   notes: string | null;
+  /** Row-level Status: this product's action items. */
+  action_items?: string[];
 }
 export interface PoAsinRowData {
   id: string;
@@ -65,13 +67,15 @@ export interface PoAsinRowData {
   qty_shipped_fba: string | null;
   qty_received_amazon: string | null;
   shipments: PoAsinShipment[];
+  /** Union of the product lines' action items (row-level Status 2026-10-17). */
+  action_items?: string[];
   lines?: PoAsinLine[];
 }
 
 const COL_WIDTHS: Record<(typeof PO_ASIN_COLUMNS)[number]["key"], string> = {
   asin: "7rem", title: "18rem", sku: "11rem", ordered: "4.5rem", cost_per_unit: "5.5rem", total_cost: "6rem", prep: "4.5rem",
   sold_as: "6rem", units_per_pack: "5rem", individual_units: "7rem", canceled: "5rem", returned: "5rem", shipped_supplier: "6.5rem",
-  at_prep: "6rem", at_warehouse: "6.5rem", lost_damaged_us: "6.5rem", shipped_fba: "5.5rem", received_amazon: "6.5rem", shipments: "11rem",
+  at_prep: "6rem", at_warehouse: "6.5rem", lost_damaged_us: "6.5rem", shipped_fba: "5.5rem", received_amazon: "6.5rem", shipments: "11rem", action_items: "12rem",
 };
 const LEAD_WIDTH = "2.75rem";
 
@@ -93,6 +97,70 @@ async function patchJson(url: string, method: string, body?: unknown): Promise<a
   const data = await res.json().catch(() => ({}));
   if (!res.ok) throw new Error(data.message || `HTTP ${res.status}`);
   return data;
+}
+
+// ── Action Items (row-level Status, patch row-level-status §2.1) ─────────────
+export const ACTION_ITEM_OPTIONS = ["Need to Return", "Missing / Damaged from Supplier", "Confirm Refund / Replacement", "ATTN: Velocity", "See Comments", "SHIP", "Received - FBM"];
+// §7: tinted chips only. SHIP indigo; Received - FBM green; Need to Return orange; the attention items amber.
+export function actionChipClass(item: string): string {
+  const t = item.toLowerCase();
+  if (t === "ship") return "bg-indigo-500/10 text-indigo-600 dark:text-indigo-400";
+  if (t === "received - fbm") return "bg-green-500/10 text-green-700 dark:text-green-400";
+  if (t === "need to return") return "bg-orange-500/10 text-orange-600 dark:text-orange-400";
+  return "bg-amber-500/10 text-amber-600 dark:text-amber-400";
+}
+export const chipBase = "inline-block rounded-sm px-1.5 py-0.5 text-[11px] whitespace-nowrap";
+const ordered = (items: readonly string[] | undefined) => ACTION_ITEM_OPTIONS.filter((o) => (items ?? []).includes(o));
+
+/** Read-only chips (the POs-page column: union over all lines). */
+export function ActionItemChips({ items, testId }: { items: readonly string[] | undefined; testId?: string }) {
+  const list = ordered(items);
+  return (
+    <span className="flex flex-col items-start gap-0.5" data-testid={testId}>
+      {list.length === 0 ? <span className="text-muted-foreground/40 text-[11px]">—</span> : list.map((it) => <span key={it} className={`${chipBase} ${actionChipClass(it)}`}>{it}</span>)}
+    </span>
+  );
+}
+
+/** Chips + multi-select editor. `url` is the ASIN route (write-through to every line) or the product-line route. */
+export function ActionItemsEditor({ items, url, onSaved, testId }: { items: readonly string[] | undefined; url: string; onSaved?: () => void; testId: string }) {
+  const [open, setOpen] = useState(false);
+  const [draft, setDraft] = useState<Set<string>>(new Set(items ?? []));
+  const [err, setErr] = useState<string | null>(null);
+  const save = async (next: Set<string>) => {
+    setDraft(next); setErr(null);
+    try { await patchJson(url, "PATCH", { action_items: Array.from(next) }); onSaved?.(); } catch (e: any) { setErr(e.message); }
+  };
+  return (
+    <Popover open={open} onOpenChange={(v) => { setOpen(v); if (v) setDraft(new Set(items ?? [])); }}>
+      <PopoverTrigger asChild>
+        <button type="button" onClick={(e) => e.stopPropagation()} className="min-h-[1.25rem] min-w-[4rem] text-left" data-testid={testId} title="Edit action items">
+          <ActionItemChips items={items} />
+        </button>
+      </PopoverTrigger>
+      <PopoverContent className="w-72 p-2 space-y-1" align="end" onClick={(e) => e.stopPropagation()}>
+        <div className="text-[10px] uppercase tracking-wider text-muted-foreground px-1">Action items</div>
+        {ACTION_ITEM_OPTIONS.map((opt) => (
+          <label key={opt} className="flex items-center gap-2 px-2 py-1 rounded hover:bg-muted cursor-pointer text-xs">
+            <input type="checkbox" checked={draft.has(opt)} onChange={() => { const next = new Set(draft); if (next.has(opt)) next.delete(opt); else next.add(opt); void save(next); }} className="h-3 w-3 accent-blue-500" />
+            <span className={`${chipBase} ${actionChipClass(opt)}`}>{opt}</span>
+          </label>
+        ))}
+        {err && <div className="px-2 text-xs text-destructive">{err}</div>}
+      </PopoverContent>
+    </Popover>
+  );
+}
+
+/** "Mark canceled" (§2.2): every line of the ASIN gets qty_canceled = qty_ordered. */
+function MarkCanceled({ a, onChanged }: { a: PoAsinRowData; onChanged?: () => void }) {
+  const [err, setErr] = useState<string | null>(null);
+  const go = async (e: React.MouseEvent) => {
+    e.stopPropagation(); setErr(null);
+    if (!window.confirm(`Mark ${a.asin} canceled? Every product line of this ASIN gets Canceled = Ordered. The next Sync POs re-applies the sheet's Status.`)) return;
+    try { await patchJson(`/api/pos/asin-rows/${a.id}/cancel`, "POST"); onChanged?.(); } catch (er: any) { setErr(er.message); }
+  };
+  return <button onClick={go} className="ml-1 text-[10px] text-muted-foreground hover:text-destructive" title={err ?? "Mark this ASIN canceled"} data-testid={`button-cancel-asin-${a.asin}`}>cancel</button>;
 }
 
 /**
@@ -272,7 +340,7 @@ export function PoAsinRow({ a, indent = false, editable = false, onChanged }: { 
         <td className="px-3 py-1.5">{a.sold_as}</td>
         <td className="px-3 py-1.5 text-right">{a.units_per_pack}</td>
         <td className="px-3 py-1.5 text-right">{individualUnits(a.qty, a.units_per_pack)}</td>
-        <td className="px-3 py-1.5 text-right"><QtyCell v={a.qty_canceled_asin} /></td>
+        <td className="px-3 py-1.5 text-right"><QtyCell v={a.qty_canceled_asin} />{editable && (a.lines ?? []).length > 0 && <MarkCanceled a={a} onChanged={onChanged} />}</td>
         <td className="px-3 py-1.5 text-right"><QtyCell v={a.qty_returned_asin} /></td>
         <td className="px-3 py-1.5 text-right">{editable ? <EditableQty rowId={a.id} col="qty_shipped_supplier" v={a.qty_shipped_supplier} onChanged={onChanged} /> : <QtyCell v={a.qty_shipped_supplier} />}</td>
         <td className="px-3 py-1.5 text-right"><QtyCell v={a.qty_at_prep} /></td>
@@ -281,6 +349,9 @@ export function PoAsinRow({ a, indent = false, editable = false, onChanged }: { 
         <td className="px-3 py-1.5 text-right"><QtyCell v={a.qty_shipped_fba} /></td>
         <td className="px-3 py-1.5 text-right"><QtyCell v={a.qty_received_amazon} /></td>
         <td className="px-3 py-1.5"><ShipmentChips rowId={a.id} shipments={a.shipments ?? []} editable={editable} onChanged={onChanged} /></td>
+        <td className="px-3 py-1.5">{editable && lines.length > 0
+          ? <ActionItemsEditor items={a.action_items} url={`/api/pos/asin-rows/${a.id}/action-items`} onSaved={onChanged} testId={`button-action-items-asin-${a.asin}`} />
+          : <ActionItemChips items={a.action_items} />}</td>
         <td className="px-2 py-1.5">{a.notes && <StickyNote className="h-3.5 w-3.5 text-muted-foreground" />}</td>
       </tr>
       {multi && open && lines.map((l) => (
@@ -291,7 +362,11 @@ export function PoAsinRow({ a, indent = false, editable = false, onChanged }: { 
           <td className="px-3 py-1 text-right text-xs text-muted-foreground"><QtyCell v={l.qty_ordered} /></td>
           <td className="px-3 py-1 text-right text-xs text-muted-foreground"><Money v={l.price} /></td>
           <td className="px-3 py-1 text-right text-xs text-muted-foreground"><Money v={l.adjusted_product_cost} /></td>
-          <td className="px-3 py-1" colSpan={PO_ASIN_COLUMNS.length - 6 + 1} />
+          <td className="px-3 py-1 text-right text-xs text-muted-foreground" colSpan={PO_ASIN_COLUMNS.length - 6 - 1}>{l.qty_canceled != null && l.qty_canceled > 0 ? `canceled ${l.qty_canceled}` : ""}</td>
+          <td className="px-3 py-1">{editable
+            ? <ActionItemsEditor items={l.action_items} url={`/api/pos/lines/${l.id}/action-items`} onSaved={onChanged} testId={`button-action-items-line-${a.asin}-${l.position}`} />
+            : <ActionItemChips items={l.action_items} />}</td>
+          <td className="px-2 py-1" />
         </tr>
       ))}
     </>

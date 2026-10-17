@@ -16,7 +16,7 @@ describe("§4 column model", () => {
     expect(PO_ASIN_COLUMNS.map((c) => c.label)).toEqual([
       "ASIN", "Title", "Amazon SKU", "Ordered", "Cost/Unit", "Total Cost", "Prep", "Sold As", "Units/Pack",
       "Individual Units Ordered", "Canceled", "Returned", "Shipped by Supplier", "At Prep Center", "At CQG Warehouse",
-      "Lost/damaged by us", "Shipped FBA", "Received by Amazon", "Shipment IDs",
+      "Lost/damaged by us", "Shipped FBA", "Received by Amazon", "Shipment IDs", "Action Items", // row-level Status 2026-10-17
     ]);
   });
   it("the detail page renders the shared table and no longer carries Qty (units) or Unreimb. Loss", () => {

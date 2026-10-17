@@ -9,6 +9,7 @@
 // is untracked (NULL) — never a partial sum presented as a total. The six
 // new quantities (cols 13–18) are stored on po_asins as ASIN qty.
 import type { QueryLike } from "./scheduler/types";
+import { ASIN_ACTION_ITEMS_SQL, unionActionItems } from "./po-action-items";
 
 /**
  * Derived ASIN-level qty from the lines: NULL if any line's value is NULL.
@@ -30,7 +31,8 @@ export function poAsinRowsSql(where: string): string {
   return `SELECT pa.*, (pa.qty * pa.cost_per_unit) AS total_cost,
                  a.image_url AS thumbnail,
                  ${derivedFromLines("qty_canceled")} AS qty_canceled_asin,
-                 ${derivedFromLines("qty_returned")} AS qty_returned_asin
+                 ${derivedFromLines("qty_returned")} AS qty_returned_asin,
+                 ${ASIN_ACTION_ITEMS_SQL} AS action_items
             FROM po_asins pa
             LEFT JOIN asins a ON a.asin = pa.asin
            WHERE ${where}
@@ -53,5 +55,14 @@ export async function loadPoAsinRows(query: QueryLike, poIds: string[]): Promise
   )).rows as PoAsinShipmentRow[];
   const byAsin = new Map<string, PoAsinShipmentRow[]>();
   for (const s of ships) { const k = String(s.po_asin_id); if (!byAsin.has(k)) byAsin.set(k, []); byAsin.get(k)!.push(s); }
-  return rows.map((r: any) => ({ ...r, shipments: byAsin.get(String(r.id)) ?? [] }));
+  // Product lines ride along (row-level Status 2026-10-17): the nested rows
+  // edit action items per product, so the list needs them too.
+  const lines = ids.length === 0 ? [] : (await query(
+    `SELECT id, po_asin_id, position, product_name, supplier_sku, price, item_discount, qty_ordered, qty_received, qty_canceled, qty_returned,
+            final_qty, asin_qty_per_product, adjusted_product_cost, notes, action_items
+       FROM po_line_items WHERE po_asin_id = ANY($1::uuid[]) ORDER BY po_asin_id, position, id`, [ids],
+  )).rows as any[];
+  const linesByAsin = new Map<string, any[]>();
+  for (const l of lines) { const k = String(l.po_asin_id); if (!linesByAsin.has(k)) linesByAsin.set(k, []); linesByAsin.get(k)!.push({ ...l, action_items: unionActionItems([l.action_items]) }); }
+  return rows.map((r: any) => ({ ...r, action_items: unionActionItems([r.action_items]), shipments: byAsin.get(String(r.id)) ?? [], lines: linesByAsin.get(String(r.id)) ?? [] }));
 }
