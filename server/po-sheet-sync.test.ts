@@ -42,11 +42,11 @@ function po(overrides: Partial<any> & { id: string; order_id: string }): any {
 }
 function pa(overrides: Partial<any> & { id: string; po_id: string; asin: string }): any {
   return { asin_name: null, qty: 4, cost_per_unit: "10.00", prep_cost: "0", sold_as: "individual", units_per_pack: 1,
-    unreimbursed_loss_qty: 0, unreimbursed_loss_amount: "0", shipment_rows: 0, qty_shipped_fba: null, ...overrides };
+    unreimbursed_loss_qty: 0, unreimbursed_loss_amount: "0", unique_products: 1, shipment_rows: 0, qty_shipped_fba: null, ...overrides };
 }
 function line(overrides: Partial<any> & { id: string; po_id: string; po_asin_id: string }): any {
   return { position: 0, product_name: "Widget", supplier_sku: null, price: "10.00", qty_ordered: 4, qty_received: null, qty_returned: 0,
-    asin_qty_per_product: "1.00", adjusted_product_cost: "10.00", qty_canceled: null, ...overrides };
+    asin_qty_per_product: "1.00", adjusted_product_cost: "10.00", qty_canceled: null, action_items: [], ...overrides };
 }
 function fakeDb(state: DbState) {
   const writes: Array<{ sql: string; params?: any[] }> = [];
@@ -86,9 +86,14 @@ describe("parsePoSheet — the importer's assembly, ported", () => {
     const a1 = p.pos[0];
     expect(a1.key).toBe(poKey("walmart.com", "A1"));
     expect(a1.poAsins.map((a) => a.asin)).toEqual(["B000000001", "B000000002"]);
-    expect(a1).toMatchObject({ closed: true, actionItems: ["SHIP"], canceled: false, email: "orders@coastalqualitygoods.com" });
+    // Row-level Status (2026-10-17): row 1 "Closed, SHIP", row 2 "Ordered" → NOT closed (not every row);
+    // action items land on row 1's line only; the PO reports the union.
+    expect(a1).toMatchObject({ closed: false, actionItems: ["SHIP"], email: "orders@coastalqualitygoods.com" });
+    expect(a1.poAsins[0].lines[0]).toMatchObject({ actionItems: ["SHIP"], canceled: false, statusCell: "Closed, SHIP" });
+    expect(a1.poAsins[1].lines[0]).toMatchObject({ actionItems: [], canceled: false, statusCell: "Ordered" });
     expect(p.pos[1].supplier).toBe("shop.tetleyusa.com");
-    expect(p.pos[2]).toMatchObject({ closed: true, canceled: true });
+    expect(p.pos[2]).toMatchObject({ closed: true });
+    expect(p.pos[2].poAsins[0].lines[0].canceled).toBe(true);
     expect(p.unmapped).toEqual([{ po: "walmart.com U1", tokens: ["Lost in transit"] }]);
     expect(p.skippedMixed).toEqual([]);
   });
@@ -156,7 +161,7 @@ describe("syncPoSheet — dry run computes the §3.9 counts and writes nothing",
     expect(r.wrote).toBe(false);
     expect(r.counts).toEqual({
       sheetPos: 7, inserted: 2, updated: 4, unchanged: 1, linesDeleted: 2, poAsinsDeleted: 1, poAsinsKeptWithShipments: 1,
-      canceledKeptOrderedQty: 1, canceledNoOrderedQty: 1, posInAfNotInSheet: 1, unmappedTokens: 0, skippedMixed: 0,
+      canceledKeptOrderedQty: 1, canceledNoOrderedQty: 1, returnedNoQty: 0, lineActionItemsChanged: 0, posInAfNotInSheet: 1, unmappedTokens: 0, skippedMixed: 0,
     });
     expect(r.inAfNotInSheet).toEqual(["walmart.com GONE (2026-03-01)"]);
     expect(r.keptWithShipments).toEqual(["walmart.com A4 — B000000009 (2 shipment row(s))"]);
@@ -165,7 +170,8 @@ describe("syncPoSheet — dry run computes the §3.9 counts and writes nothing",
     expect(db.writes).toEqual([]);
     const by = Object.fromEntries(r.diffs.map((d) => [d.po, d.changes]));
     expect(by["walmart.com A2"]).toEqual(["closed: closed (auto) → open"]);
-    expect(by["walmart.com A3"]).toEqual(["action_items: [\"SHIP\"] → []", "closed: open → closed (sheet)", "B000000001 line 0.qty_received: NULL → 4"]);
+    // The PO-level action_items column is no longer written (row-level Status §2.1).
+    expect(by["walmart.com A3"]).toEqual(["closed: open → closed (sheet)", "B000000001 line 0.qty_received: NULL → 4"]);
     expect(by["walmart.com A4"]).toEqual(expect.arrayContaining(["B000000002: new ASIN row", "B000000001: ASIN row deleted (not in sheet; 2 line(s))", "B000000009: not in sheet — KEPT (2 shipment rows)"]));
     // A5: stored 12 kept on both the ASIN row and the line; qty_canceled = 12; money fields still follow the sheet.
     expect(by["walmart.com A5"]).toEqual(expect.arrayContaining(["refund_amount: 0.00 → 40.00", "order_total: 40.00 → 0.00", "closed: open → closed (sheet)", "B000000001 line 0.qty_canceled: NULL → 12", "canceled: sheet qty 0 ignored, stored ordered qty kept"]));
@@ -187,7 +193,7 @@ describe("syncPoSheet — dry run computes the §3.9 counts and writes nothing",
     const db = fakeDb(state);
     const r = await syncPoSheet({ sheetId: "s", dryRun: true, db, read: read([row({ orderId: "A1", status: "Shipped FBA, Confirm Refund / Replacement" })]) });
     expect(r.stop).toBeNull();
-    expect(r.diffs.find((d) => d.po === "walmart.com A1")?.changes).toEqual(["action_items: [] → [\"Confirm Refund / Replacement\"]"]);
+    expect(r.diffs.find((d) => d.po === "walmart.com A1")?.changes).toEqual(["B000000001 line 0.action_items: [] → [\"Confirm Refund / Replacement\"]"]);
   });
 
   it("live run applies the plan in one transaction: inserts like the importer, updates in place, lines before ASIN rows, never an AF-owned column", async () => {
@@ -211,7 +217,8 @@ describe("syncPoSheet — dry run computes the §3.9 counts and writes nothing",
     // Reopen regardless of 'auto' (D2), close with closed_by = 'sheet', action_items as text[].
     const poUpdates = db.writes.filter((w) => w.sql.startsWith("UPDATE purchase_orders"));
     expect(poUpdates.find((w) => w.params?.[0] === "p2")?.sql).toMatch(/closed_at = \$2, closed_by = \$3, updated_at = NOW\(\)/);
-    expect(poUpdates.find((w) => w.params?.[0] === "p3")?.sql).toMatch(/action_items = \$2::text\[\], closed_at = NOW\(\), closed_by = \$3/);
+    expect(poUpdates.find((w) => w.params?.[0] === "p3")?.sql).toMatch(/SET closed_at = NOW\(\), closed_by = \$2, updated_at = NOW\(\)/);
+    for (const w of poUpdates) expect(w.sql).not.toMatch(/action_items/); // PO-level column no longer written
     // A4: both lines of the vanished ASIN deleted BEFORE its po_asins row; the kept ASIN (a4b) is never deleted.
     const delLines = sql.findIndex((s) => s.startsWith("DELETE FROM po_line_items WHERE id = ANY"));
     const delAsin = sql.findIndex((s) => s.startsWith("DELETE FROM po_asins"));
@@ -262,5 +269,62 @@ describe("Sync POs button (§4): PO sync first, then the per-ASIN sync; both out
     expect(h).toMatch(/POs: FAILED/);
     expect(h).toMatch(/ASINs: updated \$\{data\.updated\}, skipped \$\{data\.skipped\}/);
     expect(h).toMatch(/variant: poFailed \? "destructive" : undefined/);
+  });
+});
+
+// ── Row-level Status (patch docs/claude_spec-patch-row-level-status.md §2, 2026-10-17) ──
+describe("row-level Status: each sheet row's Status maps onto its own line", () => {
+  // target.com 912003733645362: Kinder's ×2 "Closed", Topps "Received" (2 still at Velocity).
+  const state = {
+    pos: [po({ id: "pt", order_id: "912003733645362", supplier: "target.com", closed_at: "2026-10-16", closed_by: "sheet", action_items: ["SHIP"] })],
+    asins: [
+      pa({ id: "k1", po_id: "pt", asin: "B0H4P226KP" }), pa({ id: "k2", po_id: "pt", asin: "B0H3XJTQVG" }), pa({ id: "tp", po_id: "pt", asin: "B0HGP5P91F", qty: 2 }),
+    ],
+    lines: [
+      line({ id: "lk1", po_id: "pt", po_asin_id: "k1" }), line({ id: "lk2", po_id: "pt", po_asin_id: "k2" }), line({ id: "ltp", po_id: "pt", po_asin_id: "tp", qty_ordered: 2, qty_returned: 1 }),
+    ],
+  };
+  const cells = [
+    row({ orderId: "912003733645362", supplier: "target.com", asin: "B0H4P226KP", status: "Closed" }),
+    row({ orderId: "912003733645362", supplier: "target.com", asin: "B0H3XJTQVG", status: "Closed, See Comments" }),
+    row({ orderId: "912003733645362", supplier: "target.com", asin: "B0HGP5P91F", status: "Received, Returned", L: "2", N: "2", R: "" }),
+  ];
+  it("PO is Open unless EVERY row says Closed; action items go to their own line only; PO-level array untouched", async () => {
+    const r = await syncPoSheet({ sheetId: "s", dryRun: true, db: fakeDb(state), read: read(cells) });
+    const ch = r.diffs.find((d) => d.po === "target.com 912003733645362")!.changes;
+    expect(ch).toContain("closed: closed (sheet) → open");
+    expect(ch).toContain('B0H3XJTQVG line 0.action_items: [] → ["See Comments"]');
+    expect(ch.some((c) => c.startsWith("B0H4P226KP line 0.action_items"))).toBe(false);
+    expect(ch.some((c) => c.startsWith("action_items"))).toBe(false);
+    expect(r.counts.lineActionItemsChanged).toBe(1);
+  });
+  it("a Returned row with a blank Col R leaves qty_returned as stored and is reported", async () => {
+    const r = await syncPoSheet({ sheetId: "s", dryRun: true, db: fakeDb(state), read: read(cells) });
+    expect(r.counts.returnedNoQty).toBe(1);
+    const ch = r.diffs.find((d) => d.po === "target.com 912003733645362")!.changes;
+    expect(ch.some((c) => c.includes("qty_returned:"))).toBe(false);
+    expect(ch).toContain("B0HGP5P91F line 0: Returned with no qty — qty_returned left at 1");
+  });
+  it("all rows Closed → Closed; Canceled on one row cancels that line only", async () => {
+    const all = cells.map((c, i) => { const x = [...c]; x[COL.status] = i === 0 ? "Closed, Canceled" : "Closed"; return x; });
+    const r = await syncPoSheet({ sheetId: "s", dryRun: true, db: fakeDb({ ...state, pos: [po({ id: "pt", order_id: "912003733645362", supplier: "target.com" })] }), read: read(all) });
+    const ch = r.diffs.find((d) => d.po === "target.com 912003733645362")!.changes;
+    expect(ch).toContain("closed: open → closed (sheet)");
+    expect(ch).toContain("B0H4P226KP line 0.qty_canceled: NULL → 4");
+    expect(ch.some((c) => c.startsWith("B0H3XJTQVG line 0.qty_canceled") || c.startsWith("B0HGP5P91F line 0.qty_canceled"))).toBe(false);
+  });
+  it("live: new lines carry their own action_items and qty_canceled; ASIN rows carry Col S", async () => {
+    const db = fakeDb({ pos: [], asins: [], lines: [] });
+    await syncPoSheet({ sheetId: "s", dryRun: false, db, read: read([
+      row({ orderId: "NB", asin: "B0BUNDLE01", S: "2", status: "SHIP" }),
+      row({ orderId: "NB", asin: "B0BUNDLE01", S: "2", status: "Canceled" }),
+    ]) });
+    const li = db.writes.filter((w) => w.sql.startsWith("INSERT INTO po_line_items"));
+    expect(li.map((w) => [w.params?.[11], w.params?.[12]])).toEqual([[null, ["SHIP"]], [4, []]]);
+    expect(li[0].sql).toMatch(/\$13::text\[\]/);
+    const ai = db.writes.find((w) => w.sql.startsWith("INSERT INTO po_asins"))!;
+    expect(ai.params?.[11]).toBe(2);
+    const pi = db.writes.find((w) => w.sql.startsWith("INSERT INTO purchase_orders"))!;
+    expect(pi.params?.[3]).toEqual([]); // PO-level action_items no longer written
   });
 });

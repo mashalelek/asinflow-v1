@@ -4,9 +4,11 @@
 //
 // "Sheet wins for now" (D2): every field the sheet carries is overwritten
 // from the sheet — header fields, line fields, and the Status cell mapped
-// through server/po-status-map.ts (action_items full replace; Closed →
-// closed_at/closed_by='sheet'; Canceled → qty_canceled = qty_ordered on
-// every line). AF-owned fields (SPEC §14) are never written here: the six
+// through server/po-status-map.ts PER ROW (patch row-level-status §2,
+// 2026-10-17: a sheet row is a product): the row's action items → that
+// line's action_items (full replace); the row's Canceled → that line's
+// qty_canceled = qty_ordered; the PO is Closed only when EVERY row says
+// Closed (else Open). purchase_orders.action_items is no longer written. AF-owned fields (SPEC §14) are never written here: the six
 // po_asins quantity columns, po_asin_shipments, po_asins.notes,
 // po_line_items.notes, item_discount, and po_asins.sku after insert.
 //
@@ -29,7 +31,7 @@
 import pool from "./db";
 import { getSheetValues } from "./sheet-read";
 import { COL, t, classifyRows } from "./po-import-classify";
-import { mapSheetStatus, type ActionItem } from "./po-status-map";
+import { mapSheetStatus, ACTION_ITEMS, type ActionItem } from "./po-status-map";
 
 // ── parsing helpers (ported verbatim from script/import-po-2026.ts) ──────────
 
@@ -96,6 +98,16 @@ export interface SheetLine {
   qtyReturned: number;
   asinQtyPerProduct: string;
   adjustedProductCost: string | null;
+  // Row-level Status (patch row-level-status §2, 2026-10-17): a sheet row is a
+  // product, so its Status cell maps onto THIS line only.
+  statusCell: string;
+  actionItems: ActionItem[];
+  /** Row says Canceled → this line's qty_canceled = qty_ordered. */
+  canceled: boolean;
+  /** Row says Returned (the qty itself comes from Col R when the sheet carries one). */
+  returned: boolean;
+  /** Col R blank (as opposed to 0) — a Returned row with no qty leaves qty_returned as stored. */
+  qtyReturnedBlank: boolean;
 }
 
 export interface SheetPoAsin {
@@ -108,6 +120,8 @@ export interface SheetPoAsin {
   unitsPerPack: number;
   lossQty: number;
   lossAmount: string;
+  /** Sheet Col S (unique products per ASIN); bundles derive Canceled/Returned ÷ this. */
+  uniqueProducts: number | null;
   lines: SheetLine[];
 }
 
@@ -116,10 +130,12 @@ export interface SheetPo {
   orderId: string;
   supplier: string;
   orderDate: string;
+  /** First row's Status cell (reporting only). */
   statusCell: string;
+  /** Union of the rows' action items — reported, never written to the PO (§2.1). */
   actionItems: ActionItem[];
+  /** §2.3: Closed only when EVERY row's Status contains Closed. */
   closed: boolean;
-  canceled: boolean;
   subtotal: string; tax: string; shDonations: string; discount: string; refundAmount: string; orderTotal: string;
   payment: string | null;
   wgc: string | null;
@@ -200,6 +216,7 @@ export function parsePoSheet(header: string[], dataCells: string[][]): ParsedPoS
       byAsin.get(a)!.push(r);
     }
     const poAsins: SheetPoAsin[] = [];
+    const rowUnmapped = new Set<string>();
     let mixedSError = false;
     for (const [asin, ars] of Array.from(byAsin.entries())) {
       const ar = ars[0];
@@ -240,7 +257,12 @@ export function parsePoSheet(header: string[], dataCells: string[][]): ParsedPoS
         qty, costPerUnit, prep, soldAs, unitsPerPack: upp,
         lossQty: intOrNull(ar.cells[COL.lossQty]) ?? 0,
         lossAmount: moneyVerbatim(t(ar.cells[COL.lossAmount])).value ?? "0",
-        lines: ars.map((r, i) => ({
+        uniqueProducts: intOrNull(ar.cells[COL.uniqueProductsPerAsin]),
+        lines: ars.map((r, i) => {
+          const statusCell = t(r.cells[COL.status]) || "Ordered";
+          const st = mapSheetStatus(statusCell);
+          for (const u of st.unmapped) rowUnmapped.add(u);
+          return {
           position: i,
           productName: t(r.cells[COL.productName]) || null,
           supplierSku: t(r.cells[COL.skuUpc]) || null,
@@ -250,18 +272,21 @@ export function parsePoSheet(header: string[], dataCells: string[][]): ParsedPoS
           qtyReturned: intOrNull(r.cells[COL.qtyReturned]) ?? 0,
           asinQtyPerProduct: t(r.cells[COL.asinQtyPerProduct]) === "" ? "1" : t(r.cells[COL.asinQtyPerProduct]),
           adjustedProductCost: money(r.cells, COL.adjProductCost),
-        })),
+          statusCell, actionItems: st.actionItems, canceled: st.canceled, returned: st.returned,
+          qtyReturnedBlank: t(r.cells[COL.qtyReturned]) === "",
+        }; }),
       });
     }
     if (mixedSError) continue;
 
-    const statusCell = t(c[COL.status]) || "Ordered";
-    const st = mapSheetStatus(statusCell);
-    if (st.unmapped.length > 0) unmapped.push({ po: label, tokens: st.unmapped });
+    if (rowUnmapped.size > 0) unmapped.push({ po: label, tokens: Array.from(rowUnmapped) });
+    const allLines = poAsins.flatMap((a) => a.lines);
+    const union = new Set<string>(); for (const l of allLines) for (const ai of l.actionItems) union.add(ai);
     pos.push({
       key: poKey(g.supplier, g.orderId),
-      orderId: g.orderId, supplier: g.supplier, orderDate: f.dateIso, statusCell,
-      actionItems: st.actionItems, closed: st.closed, canceled: st.canceled,
+      orderId: g.orderId, supplier: g.supplier, orderDate: f.dateIso, statusCell: t(c[COL.status]) || "Ordered",
+      actionItems: ACTION_ITEMS.filter((a) => union.has(a)),
+      closed: allLines.length > 0 && allLines.every((l) => mapSheetStatus(l.statusCell).closed),
       subtotal: money(c, COL.subtotal) ?? "0", tax: money(c, COL.tax) ?? "0",
       shDonations: money(c, COL.shDonations) ?? "0", discount: money(c, COL.discount) ?? "0",
       refundAmount: money(c, COL.refundAmount) ?? "0", orderTotal: money(c, COL.orderTotal) ?? "0",
@@ -297,6 +322,10 @@ export interface PoSyncCounts {
   poAsinsKeptWithShipments: number;
   /** Existing canceled POs whose zeroed sheet qty was NOT applied (stored ordered qty kept, qty_canceled = ordered). */
   canceledKeptOrderedQty: number;
+  /** Rows that say Returned but carry no Col R qty — qty_returned left as stored (§2.2). */
+  returnedNoQty: number;
+  /** Lines whose action items change (row Status → line, full replace). */
+  lineActionItemsChanged: number;
   /** New canceled POs inserted with every line at ordered qty 0 (as the sheet has them). */
   canceledNoOrderedQty: number;
   posInAfNotInSheet: number;
@@ -360,7 +389,7 @@ const HEADER_FIELDS: HeaderField[] = [
   { col: "email_used", sheet: (p) => p.email, eq: strEq },
   { col: "invoice_attached", sheet: (p) => p.invoiceAttached, eq: boolEq },
   { col: "notes", sheet: (p) => p.notes, eq: strEq },
-  { col: "action_items", sheet: (p) => p.actionItems, eq: arrEq },
+  // purchase_orders.action_items is no longer written (row-level Status §2.1).
 ];
 
 interface AsinField { col: string; sheet: (a: SheetPoAsin) => any; eq: (db: any, sheet: any) => boolean }
@@ -373,6 +402,7 @@ const ASIN_FIELDS: AsinField[] = [
   { col: "units_per_pack", sheet: (a) => a.unitsPerPack, eq: numEq },
   { col: "unreimbursed_loss_qty", sheet: (a) => a.lossQty, eq: numEq },
   { col: "unreimbursed_loss_amount", sheet: (a) => a.lossAmount, eq: numEq },
+  { col: "unique_products", sheet: (a) => a.uniqueProducts, eq: numEq },
 ];
 
 interface LineField { col: string; sheet: (l: SheetLine, po: SheetPo) => any; eq: (db: any, sheet: any) => boolean }
@@ -385,8 +415,10 @@ const LINE_FIELDS: LineField[] = [
   { col: "qty_returned", sheet: (l) => l.qtyReturned, eq: numEq },
   { col: "asin_qty_per_product", sheet: (l) => l.asinQtyPerProduct, eq: numEq },
   { col: "adjusted_product_cost", sheet: (l) => l.adjustedProductCost, eq: numEq },
-  // §3.3: Canceled → qty_ordered on every line; otherwise NULL (not tracked).
-  { col: "qty_canceled", sheet: (l, po) => (po.canceled ? l.qtyOrdered : null), eq: numEq },
+  // Row-level (§2.2): this ROW says Canceled → qty_ordered; otherwise NULL (not tracked).
+  { col: "qty_canceled", sheet: (l) => (l.canceled ? l.qtyOrdered : null), eq: numEq },
+  // Row-level (§2.1): this row's action items, full replace.
+  { col: "action_items", sheet: (l) => l.actionItems, eq: arrEq },
 ];
 
 const fmt = (v: any) => (v == null ? "NULL" : Array.isArray(v) ? JSON.stringify(v) : v instanceof Date ? v.toISOString().slice(0, 10) : String(v));
@@ -423,7 +455,7 @@ export async function syncPoSheet(opts: { sheetId: string; dryRun: boolean; db?:
   const plans: PoPlan[] = [];
   const counts: PoSyncCounts = {
     sheetPos: parsed.pos.length, inserted: 0, updated: 0, unchanged: 0, linesDeleted: 0, poAsinsDeleted: 0,
-    poAsinsKeptWithShipments: 0, canceledKeptOrderedQty: 0, canceledNoOrderedQty: 0,
+    poAsinsKeptWithShipments: 0, canceledKeptOrderedQty: 0, canceledNoOrderedQty: 0, returnedNoQty: 0, lineActionItemsChanged: 0,
     posInAfNotInSheet: 0, unmappedTokens: parsed.unmapped.length, skippedMixed: parsed.skippedMixed.length,
   };
   const keptWithShipments: string[] = [];
@@ -436,7 +468,8 @@ export async function syncPoSheet(opts: { sheetId: string; dryRun: boolean; db?:
     plans.push(plan);
     if (!existing) {
       counts.inserted++; plan.changes.push("new PO");
-      if (po.canceled && po.poAsins.every((a) => a.lines.every((l) => isZero(l.qtyOrdered)))) {
+      const lines0 = po.poAsins.flatMap((a) => a.lines);
+      if (lines0.length > 0 && lines0.every((l) => l.canceled && isZero(l.qtyOrdered))) {
         counts.canceledNoOrderedQty++; canceledNoQty.push(`${po.supplier} ${po.orderId}`); plan.changes.push("canceled with no ordered qty (inserted 0/0)");
       }
       continue;
@@ -465,7 +498,7 @@ export async function syncPoSheet(opts: { sheetId: string; dryRun: boolean; db?:
       if (!ex) { plan.asinOps.push({ kind: "insert", a }); plan.changes.push(`${a.asin}: new ASIN row`); return; }
       const set: Record<string, any> = {};
       // Keep-on-cancel (decision 2): a canceled PO zeroed in the sheet keeps its stored ASIN qty.
-      const aEff: SheetPoAsin = po.canceled && isZero(a.qty) && Number(ex.qty) > 0 ? { ...a, qty: Number(ex.qty) } : a;
+      const aEff: SheetPoAsin = a.lines.length > 0 && a.lines.every((l) => l.canceled) && isZero(a.qty) && Number(ex.qty) > 0 ? { ...a, qty: Number(ex.qty) } : a;
       if (aEff !== a) keptOnCancel = true;
       for (const f of ASIN_FIELDS) {
         const sv = f.sheet(aEff);
@@ -479,11 +512,16 @@ export async function syncPoSheet(opts: { sheetId: string; dryRun: boolean; db?:
         if (!el) { plan.lineOps.push({ kind: "insert", poAsinId: ex.id, asinIdx, line: l }); plan.changes.push(`${a.asin} line ${i}: new line`); return; }
         const lset: Record<string, any> = {};
         // Keep-on-cancel (decision 2): stored qty_ordered stays; qty_canceled = that qty.
-        const lEff: SheetLine = po.canceled && isZero(l.qtyOrdered) && Number(el.qty_ordered) > 0 ? { ...l, qtyOrdered: Number(el.qty_ordered) } : l;
+        const lEff: SheetLine = l.canceled && isZero(l.qtyOrdered) && Number(el.qty_ordered) > 0 ? { ...l, qtyOrdered: Number(el.qty_ordered) } : l;
         if (lEff !== l) keptOnCancel = true;
         for (const f of LINE_FIELDS) {
+          // §2.2 Returned: a Returned row with no Col R qty leaves qty_returned as stored (reported).
+          if (f.col === "qty_returned" && l.returned && l.qtyReturnedBlank) { counts.returnedNoQty++; plan.notes.push(`${a.asin} line ${i}: Returned with no qty — qty_returned left at ${fmt(el.qty_returned)}`); continue; }
           const sv = f.sheet(lEff, po);
-          if (!f.eq(el[f.col], sv)) { lset[f.col] = sv; plan.changes.push(`${a.asin} line ${i}.${f.col}: ${fmt(el[f.col])} → ${fmt(sv)}`); }
+          if (!f.eq(el[f.col], sv)) {
+            lset[f.col] = sv; plan.changes.push(`${a.asin} line ${i}.${f.col}: ${fmt(el[f.col])} → ${fmt(sv)}`);
+            if (f.col === "action_items") counts.lineActionItemsChanged++;
+          }
         }
         if (Object.keys(lset).length > 0) plan.lineOps.push({ kind: "update", id: el.id, set: lset });
       });
@@ -540,7 +578,7 @@ export async function syncPoSheet(opts: { sheetId: string; dryRun: boolean; db?:
           `INSERT INTO purchase_orders (order_id, order_date, supplier, action_items, closed_at, closed_by, subtotal, tax, sh_donations, discount, refund_amount, order_total,
              payment_method, weighted_gc_discount_pct, promo, cashback_site, cashback_pct, purchased_by, subscription, email_used, invoice_attached, notes, source)
            VALUES ($1,$2,$3,$4::text[],$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22,'sheet_import') RETURNING id`,
-          [po.orderId, po.orderDate, po.supplier, po.actionItems, po.closed ? new Date() : null, po.closed ? "sheet" : null,
+          [po.orderId, po.orderDate, po.supplier, [], po.closed ? new Date() : null, po.closed ? "sheet" : null,
            po.subtotal, po.tax, po.shDonations, po.discount, po.refundAmount, po.orderTotal,
            po.payment, po.wgc, po.promo, po.cashback, po.cashbackPct, po.purchasedBy, po.subscription, po.email, po.invoiceAttached, po.notes],
         );
@@ -579,7 +617,7 @@ export async function syncPoSheet(opts: { sheetId: string; dryRun: boolean; db?:
           await insertLine(client, poId, op.poAsinId, op.line, po);
         } else if (op.kind === "update") {
           const ks = Object.keys(op.set); const params: any[] = [op.id];
-          const sets = ks.map((k) => { params.push(op.set[k]); return `${k} = $${params.length}`; });
+          const sets = ks.map((k) => { params.push(op.set[k]); return k === "action_items" ? `action_items = $${params.length}::text[]` : `${k} = $${params.length}`; });
           await client.query(`UPDATE po_line_items SET ${sets.join(", ")} WHERE id = $1`, params);
         } else {
           await client.query(`DELETE FROM po_line_items WHERE id = $1`, [op.id]);
@@ -599,9 +637,9 @@ export async function syncPoSheet(opts: { sheetId: string; dryRun: boolean; db?:
 
 async function insertPoAsin(client: Q, poId: string, a: SheetPoAsin, po: SheetPo, sku: string | null): Promise<void> {
   const pa = await client.query(
-    `INSERT INTO po_asins (po_id, asin, asin_name, sku, qty, cost_per_unit, prep_cost, sold_as, units_per_pack, unreimbursed_loss_qty, unreimbursed_loss_amount)
-     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11) RETURNING id`,
-    [poId, a.asin, a.asinName, sku, a.qty, a.costPerUnit, a.prep, a.soldAs, a.unitsPerPack, a.lossQty, a.lossAmount],
+    `INSERT INTO po_asins (po_id, asin, asin_name, sku, qty, cost_per_unit, prep_cost, sold_as, units_per_pack, unreimbursed_loss_qty, unreimbursed_loss_amount, unique_products)
+     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12) RETURNING id`,
+    [poId, a.asin, a.asinName, sku, a.qty, a.costPerUnit, a.prep, a.soldAs, a.unitsPerPack, a.lossQty, a.lossAmount, a.uniqueProducts],
   );
   for (const l of a.lines) await insertLine(client, poId, pa.rows[0].id, l, po);
 }
@@ -609,8 +647,8 @@ async function insertPoAsin(client: Q, poId: string, a: SheetPoAsin, po: SheetPo
 async function insertLine(client: Q, poId: string, poAsinId: string | null, l: SheetLine, po: SheetPo): Promise<void> {
   // final_qty is GENERATED — never inserted. item_discount stays 0 as the importer wrote it.
   await client.query(
-    `INSERT INTO po_line_items (po_id, po_asin_id, position, product_name, supplier_sku, price, item_discount, qty_ordered, qty_received, qty_returned, asin_qty_per_product, adjusted_product_cost, qty_canceled)
-     VALUES ($1,$2,$3,$4,$5,$6,0,$7,$8,$9,$10,$11,$12)`,
-    [poId, poAsinId, l.position, l.productName, l.supplierSku, l.price, l.qtyOrdered, l.qtyReceived, l.qtyReturned, l.asinQtyPerProduct, l.adjustedProductCost, po.canceled ? l.qtyOrdered : null],
+    `INSERT INTO po_line_items (po_id, po_asin_id, position, product_name, supplier_sku, price, item_discount, qty_ordered, qty_received, qty_returned, asin_qty_per_product, adjusted_product_cost, qty_canceled, action_items)
+     VALUES ($1,$2,$3,$4,$5,$6,0,$7,$8,$9,$10,$11,$12,$13::text[])`,
+    [poId, poAsinId, l.position, l.productName, l.supplierSku, l.price, l.qtyOrdered, l.qtyReceived, l.qtyReturned, l.asinQtyPerProduct, l.adjustedProductCost, l.canceled ? l.qtyOrdered : null, l.actionItems],
   );
 }
