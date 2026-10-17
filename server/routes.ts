@@ -14,6 +14,7 @@ import { ACTION_ITEMS, normalizeActionItems } from "./po-status-map";
 import { syncPoSheet, type PoSyncResult } from "./po-sheet-sync";
 import { syncVelocityShipments, type VelocitySyncResult } from "./shipment-sync-velocity";
 import { syncScShipments, type ScSyncResult } from "./shipment-sync-sc";
+import { loadAsinPipeline, EMPTY_PIPELINE } from "./asin-po-pipeline";
 import { log } from "./index";
 import { type AsinInput, type AsinResult, type ColumnMapping, extractDomain, cleanBuyLink, getFeePriceForAsin, LEAD_SOURCES, normalizeLeadSource, type LeadSource } from "@shared/schema";
 import { parseMoney } from "@shared/parse-money";
@@ -1194,8 +1195,7 @@ export async function registerRoutes(
           e.sellers_fba, e.sellers_fbm,
           e.fba_fee, e.referral_fee, e.fees_estimate_price, e.fee_source,
           e.bsr, e.bsr_category, e.eligibility_status, e.error,
-          e.fetched_at,
-          e.ordered_qty AS est_ordered_qty
+          e.fetched_at
         FROM asins a
         LEFT JOIN asin_estimates e ON e.asin = a.asin
         WHERE ${activeFilter}
@@ -1205,13 +1205,16 @@ export async function registerRoutes(
       // Latest inventory snapshot per ASIN
       const invResult = await query(`
         SELECT DISTINCT ON (i.asin_id)
-          a.asin, i.available_fba, i.reserved, i.inbound_shipped, i.inbound_receiving, i.ordered_qty
+          a.asin, i.available_fba, i.reserved, i.inbound_shipped, i.inbound_receiving
         FROM inventory_snapshots i
         JOIN asins a ON a.id = i.asin_id
         ORDER BY i.asin_id, i.snapshot_at DESC
       `).catch(() => ({ rows: [] as any[] }));
       const invMap = new Map<string, any>();
       for (const row of invResult.rows) invMap.set(row.asin, row);
+      // On-order figures from the PO tables (patch asins-on-order-from-pos
+      // §2): one query, folded per ASIN; the sheet's ordered_qty is not read.
+      const pipelineMap = await loadAsinPipeline((sql, params) => query(sql, params));
 
       // Aggregated sales for date range
       const salesMap = new Map<string, any>();
@@ -1316,36 +1319,38 @@ export async function registerRoutes(
 
         // Always populate the stock object. When there is no inventory
         // snapshot yet (ASIN never seen in Seller Central / never synced),
-        // the FBA-side fields are 0 but ordered_qty from asin_estimates still
-        // surfaces — so Stock reads as "0 available + N ordered" instead of a
-        // "-" that would be dropped by numeric filters. hasSnapshot lets the
-        // client distinguish "not synced yet" from a confirmed zero.
-        const ordered = parseInt(row.est_ordered_qty) || 0;
+        // the FBA-side fields are 0 but the PO-derived On Order still
+        // surfaces — so Stock reads as "0 available + N on order" instead of
+        // a "-" that would be dropped by numeric filters. hasSnapshot lets
+        // the client distinguish "not synced yet" from a confirmed zero.
+        // Stock total adds On Order (not Pipeline): Amazon's own inbound
+        // already covers the shipped-not-received units (pre-flight P2).
+        const pl = pipelineMap.get(row.asin) ?? EMPTY_PIPELINE;
         const stock = inv ? {
           available_fba: parseInt(inv.available_fba) || 0,
           reserved: parseInt(inv.reserved) || 0,
           inbound: (parseInt(inv.inbound_shipped) || 0) + (parseInt(inv.inbound_receiving) || 0),
-          ordered,
+          on_order: pl.on_order, at_prep: pl.at_prep, inbound_fba: pl.inbound_fba, pipeline: pl.pipeline, open_po_count: pl.open_po_count,
           total: (parseInt(inv.available_fba) || 0) +
                  (parseInt(inv.reserved) || 0) +
                  (parseInt(inv.inbound_shipped) || 0) +
                  (parseInt(inv.inbound_receiving) || 0) +
-                 ordered,
+                 pl.on_order,
           hasSnapshot: true,
         } : {
           available_fba: 0,
           reserved: 0,
           inbound: 0,
-          ordered,
-          total: ordered,
+          on_order: pl.on_order, at_prep: pl.at_prep, inbound_fba: pl.inbound_fba, pipeline: pl.pipeline, open_po_count: pl.open_po_count,
+          total: pl.on_order,
           hasSnapshot: false,
         };
 
         // §6 FBA Stock (2026-09-17): computed ONCE here, from the same two
-        // values the Stock and Ordered cells render, so the on-screen
+        // values the Stock and On Order cells render, so the on-screen
         // identity holds and sort/filter/CSV/render all read one number.
-        // A no-snapshot row is total = ordered, so this is 0 — never negative.
-        const fbaStock = stock.total - stock.ordered;
+        // A no-snapshot row is total = on_order, so this is 0 — never negative.
+        const fbaStock = stock.total - stock.on_order;
 
         const actuals = sales ? {
           units_sold: parseInt(sales.units_sold) || 0,

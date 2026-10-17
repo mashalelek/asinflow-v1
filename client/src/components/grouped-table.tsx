@@ -52,7 +52,7 @@ interface GroupedTableProps {
 // ── Column helpers ───────────────────────────────────────────────────
 const DEFAULT_COL_WIDTHS: Partial<Record<ColumnId, number>> = {
   product: 400, category: 160, brand: 100, supplier: 100,
-  stock: 75, availableFba: 80, ordered: 75, reserved: 75, sentToFba: 80, daysLeft: 80,
+  stock: 75, availableFba: 80, onOrder: 80, atPrep: 75, inboundFba: 90, pipeline: 80, reserved: 75, sentToFba: 80, daysLeft: 80,
   cogs: 90, actPrepCost: 85, actUnitsSold: 85, actRefunds: 80, actRefundPct: 80,
   actAvgSalePrice: 100, actRevenue: 95, actProfit: 100, actProfitPerUnit: 90, actRoi: 80, actMargin: 80,
   estCogs: 90, salePrice: 95, profit: 90, margin: 80, roi: 80,
