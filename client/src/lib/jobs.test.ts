@@ -114,9 +114,11 @@ describe("scope rule and API shape", () => {
     expect(src).toMatch(/JOBS_POLL_MS = 10_000/);
     expect(src).toMatch(/mineIds\.current\.has\(id\) \|\| job\.trigger === "scheduled"/);
   });
-  it("two lanes (2026-10-16): the hook tracks both running jobs, shows lane M first, counts queue position in lane M only", () => {
+  it("two lanes (2026-10-16): the hook tracks both running jobs, counts queue position in lane M only; no toolbar progress bar (2026-10-17)", () => {
     const src = read("hooks/use-jobs.ts");
-    expect(src).toMatch(/scheduled: cur\.scheduled, manual: cur\.manual, running: cur\.manual \?\? cur\.scheduled/);
+    expect(src).toMatch(/scheduled: cur\.scheduled, manual: cur\.manual, queued: cur\.queued/);
+    expect(src).not.toMatch(/running: cur\.manual/);
+    expect(read("pages/home.tsx")).not.toMatch(/progress-refresh|\(scheduled pass\)|jobs\.running/);
     expect(src).toMatch(/const laneM = \[\.\.\.\(cur\.manual \? \[cur\.manual\] : \[\]\), \.\.\.cur\.queued\.filter\(isLaneM\)\]/);
     expect(src).toMatch(/ahead = mineJob \? laneM\.findIndex/);
     const api = read("lib/jobs-api.ts");

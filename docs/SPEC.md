@@ -1985,7 +1985,8 @@ rate to a burst cap; empty bucket → `429 QuotaExceeded`). Motivating
 incident 2026-09-04: Sync Prices on 2,208 ASINs fired `getItemOffers`
 ~3.3 rps into a 1 rps bucket — most calls 429'd, blind per-ASIN retries
 tripled the load, projected runtime hours, no failed-list, progress strip
-never rendered (gated on `isAnalyzing`). Root cause structural: pacing was
+never rendered (gated on `isAnalyzing`; the strip that replaced it was
+itself removed 2026-10-17 in favour of the Refresh button and jobs dialog). Root cause structural: pacing was
 guessed per module.
 
 Published limits for the operations AF uses (rate = req/s; the ceiling for
@@ -2234,9 +2235,10 @@ is set — the runner is always on; only the **schedule** is gated.
   lane M; a second Refresh queues behind the first and the button shows
   "queued (1 ahead)" — lane M positions only, the scheduled pass never
   counts. `GET /api/jobs/current` returns `{ scheduled, manual, queued }`;
-  the toolbar shows the lane M job when there is one (it is the one the
-  user is waiting on), else the scheduled pass; the jobs dialog lists both
-  as running.
+  the Refresh button shows the job this tab enqueued; the jobs dialog lists
+  both lanes as running. (The full-width progress bar under the toolbar
+  that mirrored the running job, scheduled pass included, was removed
+  2026-10-17 — the jobs dialog shows the same status.)
 - **Suppressions (18) are stage-then-swap:** the report's ASIN set is
   loaded into a temp table, then one `UPDATE … SET is_search_suppressed =
   (asin IN temp)` — no window where the catalog shows no suppressions, and
@@ -2359,7 +2361,9 @@ labels ("Never synced" / "Older than" / "Within last").
 - **Toolbar:** one **Refresh (N)** button, N = working-set size. While a
   job runs it shows the component ("Refresh · prices 840/2453") and a
   Cancel; clicking while another job runs enqueues and shows the queue
-  position. The history clock opens the jobs dialog.
+  position. The history clock opens the jobs dialog. No progress bar
+  under the toolbar (removed 2026-10-17); the button, the jobs dialog and
+  the completion toast carry the status.
 - **Jobs dialog:** one row per job (trigger, scope size, started,
   duration, status), expandable to per-component counts and outcome lists,
   plus **Retry failed (N)**. It replaced the Prices & Stock / Product Info

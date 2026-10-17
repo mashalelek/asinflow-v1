@@ -1640,21 +1640,10 @@ export default function Home() {
             </div>
           </div>
 
-          {/* Refresh progress strip (SPEC §11, 2026-09-06): the old strip was
-              gated on isAnalyzing and never rendered during a price refresh —
-              the 2026-09-04 "Syncing… for 30 minutes with no progress"
-              incident. Renders for the Refresh job with its active stage. */}
-          {jobs.running && (jobs.running.progress?.total ?? 0) > 0 && (
-            <div className="space-y-2 mt-6">
-              <div className="flex items-center justify-between text-sm">
-                <span className="text-muted-foreground">
-                  {runningLabel(jobs.running)}{jobs.running.trigger === "scheduled" ? " (scheduled pass)" : ""}
-                </span>
-                <span className="font-mono text-xs">{Math.round(((jobs.running.progress?.position ?? 0) / (jobs.running.progress?.total ?? 1)) * 100)}%</span>
-              </div>
-              <Progress value={Math.round(((jobs.running.progress?.position ?? 0) / (jobs.running.progress?.total ?? 1)) * 100)} className="h-2" data-testid="progress-refresh" />
-            </div>
-          )}
+          {/* The full-width Refresh progress bar was removed 2026-10-17: the
+              Refresh button shows this tab's own job (stage n/total, Cancel),
+              the jobs dialog (clock icon) shows every running job incl. the
+              scheduled pass, and the completion toast reports finish / failure. */}
           {isAnalyzing && progress && (
             <div className="space-y-2 mt-6">
               <div className="flex items-center justify-between text-sm">
