@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { computePipeline, loadAsinPipeline, PIPELINE_ROWS_SQL, type PipelineRow } from "./asin-po-pipeline";
+import { computePipeline, loadAsinPipeline, envReconStart, PIPELINE_ROWS_SQL, type PipelineRow } from "./asin-po-pipeline";
 
 // Patch docs/claude_spec-patch-asins-on-order-from-pos.md §2 — the on-order
 // picture derived from po_asins. Fixture (§4 commit 2): one closed pre-May
@@ -7,13 +7,17 @@ import { computePipeline, loadAsinPipeline, PIPELINE_ROWS_SQL, type PipelineRow 
 // row — plus the Equal Exchange and Twilight rows from the reconciliation.
 
 const row = (o: Partial<PipelineRow> & { asin: string }): PipelineRow => ({
-  closed: false, qty: 0, qty_canceled_asin: null, qty_returned_asin: null, qty_lost_damaged_us: null, qty_at_prep: null, qty_shipped_fba: null, qty_received_amazon: null, ...o,
+  closed: false, reconciled: true, qty: 0, qty_canceled_asin: null, qty_returned_asin: null, qty_lost_damaged_us: null, qty_at_prep: null, qty_shipped_fba: null, qty_received_amazon: null, ...o,
 });
 
 describe("computePipeline", () => {
-  it("closed pre-May PO with no shipment rows: nothing on order, nothing inbound (D1)", () => {
-    const p = computePipeline([row({ asin: "B0091CZ7WO", closed: true, qty: 12 })]).get("B0091CZ7WO")!;
-    expect(p).toEqual({ on_order: 0, at_prep: 0, open_po_count: 0 });
+  it("PO dated before the reconciliation start (no shipment data): contributes 0 to On Order, open or closed (§2.4)", () => {
+    const p = computePipeline([row({ asin: "B0091CZ7WO", closed: true, reconciled: false, qty: 12 }), row({ asin: "B0091CZ7WO", reconciled: false, qty: 5 })]).get("B0091CZ7WO")!;
+    expect(p).toEqual({ on_order: 0, at_prep: 0, open_po_count: 1 });
+  });
+  it("target.com 912003733645362 — a CLOSED reconciled PO still counts: Topps 2 ordered, 0 shipped, 2 at Velocity → On Order 2 / At Prep 2 (§2.4 supersedes D1)", () => {
+    const p = computePipeline([row({ asin: "B0HGP5P91F", closed: true, qty: 2, qty_shipped_fba: null, qty_at_prep: "2.00" })]).get("B0HGP5P91F")!;
+    expect(p).toEqual({ on_order: 2, at_prep: 2, open_po_count: 0 });
   });
   it("open PO partly shipped: On Order = expected − shipped; At Prep from Velocity", () => {
     const p = computePipeline([
@@ -22,7 +26,7 @@ describe("computePipeline", () => {
     ]).get("0349125937")!;
     expect(p).toEqual({ on_order: 2, at_prep: 2, open_po_count: 2 });
   });
-  it("fully shipped, auto-closed PO: nothing on order (shipped-not-received shows as Amazon's Sent to FBA, not here)", () => {
+  it("fully shipped, closed PO: nothing on order (shipped-not-received shows as Amazon's Sent to FBA, not here)", () => {
     const p = computePipeline([row({ asin: "B004WZ4CLW", closed: true, qty: 10, qty_shipped_fba: "10.00", qty_received_amazon: "0.00" })]).get("B004WZ4CLW")!;
     expect(p).toEqual({ on_order: 0, at_prep: 0, open_po_count: 0 });
   });
@@ -48,11 +52,14 @@ describe("loadAsinPipeline", () => {
     const m = await loadAsinPipeline(query, ["b004wz4clw"]);
     expect(m.get("B004WZ4CLW")?.on_order).toBe(0);
     expect(calls[0].sql).toContain(PIPELINE_ROWS_SQL);
-    expect(calls[0].sql).toMatch(/WHERE pa\.asin = ANY\(\$1::text\[\]\)$/);
-    expect(calls[0].params).toEqual([["B004WZ4CLW"]]);
+    expect(calls[0].sql).toMatch(/WHERE pa\.asin = ANY\(\$2::text\[\]\)$/);
+    expect(calls[0].params?.[1]).toEqual(["B004WZ4CLW"]);
     await loadAsinPipeline(query);
-    expect(calls[1].params).toBeUndefined();
+    expect(calls[1].params).toHaveLength(1);
     expect(PIPELINE_ROWS_SQL).toMatch(/\(p\.closed_at IS NOT NULL\) AS closed/);
+    expect(PIPELINE_ROWS_SQL).toMatch(/p\.order_date >= COALESCE\(\(SELECT MIN\(shipped_at\) FROM velocity_shipments\), \$1::date, DATE '9999-12-31'\)\) AS reconciled/);
+    expect(envReconStart("7/30/2026")).toBe("2026-07-30");
+    expect(envReconStart("")).toBeNull();
     expect(PIPELINE_ROWS_SQL).toMatch(/FILTER \(WHERE l\.qty_canceled IS NULL\)/);
   });
 });

@@ -86,8 +86,8 @@ export interface StockData {
   /** Amazon's own inbound (shipped + receiving + working), from the FBA inventory sync — "Sent to FBA". */
   inbound: number;
   // Derived from the PO tables (patch asins-on-order-from-pos §2), never the sheet:
-  on_order: number;     // Σ max(expected − shipped FBA, 0) over OPEN POs
-  at_prep: number;      // Σ At Prep Center over OPEN POs (subset of on_order)
+  on_order: number;     // Σ max(expected − shipped FBA, 0) over POs dated from the reconciliation start, open or closed
+  at_prep: number;      // Σ At Prep Center (Velocity) over every PO, open or closed
   open_po_count: number;
   /** available_fba + reserved + inbound + on_order. */
   total: number;

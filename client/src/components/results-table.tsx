@@ -2251,11 +2251,11 @@ export function renderCell(
               {result.stock?.on_order ?? 0}
             </Link>
           </TooltipTrigger>
-          <TooltipContent side="top" className="text-xs">On Order = Σ open POs: Ordered − Canceled − Returned − Lost/damaged − Shipped FBA · {result.stock?.open_po_count ?? 0} open PO(s) · click for the POs</TooltipContent>
+          <TooltipContent side="top" className="text-xs">On Order = Σ POs since reconciliation start (open or closed): Ordered − Canceled − Returned − Lost/damaged − Shipped FBA · click for the POs</TooltipContent>
         </Tooltip>
       );
     case "atPrep":
-      return <Tooltip><TooltipTrigger asChild><span className="font-mono text-sm cursor-help">{result.stock?.at_prep ?? 0}</span></TooltipTrigger><TooltipContent side="top" className="text-xs">At Prep = Σ open POs: units still at Velocity (subset of On Order)</TooltipContent></Tooltip>;
+      return <Tooltip><TooltipTrigger asChild><span className="font-mono text-sm cursor-help">{result.stock?.at_prep ?? 0}</span></TooltipTrigger><TooltipContent side="top" className="text-xs">At Prep = units at Velocity for this ASIN, across every PO</TooltipContent></Tooltip>;
     case "fbaStock":
       return numCell(String(result.fbaStock ?? 0));
     case "reserved":
