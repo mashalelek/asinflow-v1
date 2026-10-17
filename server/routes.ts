@@ -12,6 +12,8 @@ import { loadPoAsinRows } from "./po-queries";
 import { evaluateAutoClose, setPoClosedManually, parseQtyInput, MANUAL_QTY_COLUMNS, type ManualQtyColumn } from "./po-close";
 import { ACTION_ITEMS, normalizeActionItems } from "./po-status-map";
 import { syncPoSheet, type PoSyncResult } from "./po-sheet-sync";
+import { syncVelocityShipments, type VelocitySyncResult } from "./shipment-sync-velocity";
+import { syncScShipments, type ScSyncResult } from "./shipment-sync-sc";
 import { log } from "./index";
 import { type AsinInput, type AsinResult, type ColumnMapping, extractDomain, cleanBuyLink, getFeePriceForAsin, LEAD_SOURCES, normalizeLeadSource, type LeadSource } from "@shared/schema";
 import { parseMoney } from "@shared/parse-money";
@@ -4372,7 +4374,11 @@ export async function registerRoutes(
       // Filter options for the toolbar: suppliers (distinct across the whole
       // table) + the fixed Action Items list in display order (§6.1).
       const suppliers = (await query(`SELECT DISTINCT supplier FROM purchase_orders ORDER BY supplier`)).rows.map((r: any) => r.supplier);
-      res.json({ pos: rows, total, page, pageSize: PAGE_SIZE, suppliers, actionItems: ACTION_ITEMS, closed });
+      // Shipment reconciliation §5.3: the Unmatched badge = open Velocity lines + ambiguous Velocity shipments.
+      const unmatchedCount = (await query(
+        `SELECT (SELECT COUNT(*)::int FROM shipment_unmatched WHERE resolved_at IS NULL) + (SELECT COUNT(*)::int FROM velocity_shipments WHERE sc_match = 'ambiguous') AS n`,
+      )).rows[0].n;
+      res.json({ pos: rows, total, page, pageSize: PAGE_SIZE, suppliers, actionItems: ACTION_ITEMS, closed, unmatchedCount });
     } catch (err: any) {
       res.status(500).json({ message: err.message });
     }
@@ -4502,12 +4508,14 @@ export async function registerRoutes(
   });
 
   // Manual shipment rows (§4.2) — the trigger keeps Shipped FBA / Received by Amazon in step.
+  // Manual shipment row (home-shipped POs, ≈1%): velocity_shipment_id =
+  // manual:<uuid>, the FBA ids typed by hand (patch shipment-reconciliation §2).
   app.post("/api/pos/asin-rows/:id/shipments", async (req: Request, res: Response) => {
     if (!isDbAvailable()) { res.status(503).json({ message: "Database not available" }); return; }
     const id = String(req.params.id ?? "");
     const b = (req.body ?? {}) as Record<string, unknown>;
-    const fba = String(b.fba_shipment_id ?? "").trim();
-    if (!fba) { res.status(400).json({ message: "fba_shipment_id is required" }); return; }
+    const rawIds = Array.isArray(b.fba_shipment_ids) ? b.fba_shipment_ids : String(b.fba_shipment_ids ?? "").split(/[,\s]+/);
+    const fbaIds = Array.from(new Set(rawIds.map((x) => String(x ?? "").trim().toUpperCase()).filter(Boolean)));
     const shipped = parseQtyInput(b.qty_shipped);
     if (!shipped.ok || shipped.value == null) { res.status(400).json({ message: "qty_shipped must be a non-negative number" }); return; }
     const received = parseQtyInput(b.qty_received);
@@ -4517,10 +4525,9 @@ export async function registerRoutes(
       const pa = (await query(`SELECT po_id FROM po_asins WHERE id = $1`, [id])).rows[0];
       if (!pa) { res.status(404).json({ message: "ASIN row not found" }); return; }
       await query(
-        `INSERT INTO po_asin_shipments (po_asin_id, fba_shipment_id, qty_shipped, qty_received, shipped_at, source)
-         VALUES ($1, $2, $3, $4, $5, 'manual')
-         ON CONFLICT (po_asin_id, fba_shipment_id) DO UPDATE SET qty_shipped = EXCLUDED.qty_shipped, qty_received = EXCLUDED.qty_received, shipped_at = EXCLUDED.shipped_at, updated_at = NOW()`,
-        [id, fba, shipped.value, received.value, shippedAt],
+        `INSERT INTO po_asin_shipments (po_asin_id, velocity_shipment_id, fba_shipment_ids, qty_shipped, qty_received, shipped_at, source, sc_match)
+         VALUES ($1, 'manual:' || uuid_generate_v4()::text, $2::text[], $3, $4, $5, 'manual', 'none')`,
+        [id, fbaIds, shipped.value, received.value, shippedAt],
       );
       const close = await evaluateAutoClose(String(pa.po_id), poQuery);
       const [row] = await loadPoAsinRows(poQuery, [String(pa.po_id)]).then((rows) => rows.filter((x: any) => String(x.id) === id));
@@ -4528,17 +4535,133 @@ export async function registerRoutes(
     } catch (err: any) { res.status(500).json({ message: err.message }); }
   });
 
+  // Only manual rows can be removed by hand — a Velocity-sourced row would be
+  // recreated by the next Sync Shipments; its truth lives at Velocity.
   app.delete("/api/pos/shipments/:id", async (req: Request, res: Response) => {
     if (!isDbAvailable()) { res.status(503).json({ message: "Database not available" }); return; }
-    const sid = parseInt(String(req.params.id ?? ""), 10);
-    if (!Number.isInteger(sid)) { res.status(400).json({ message: "invalid shipment id" }); return; }
+    const sid = String(req.params.id ?? "");
+    if (!/^[0-9a-f-]{36}$/i.test(sid)) { res.status(400).json({ message: "invalid shipment id" }); return; }
     try {
+      const cur = (await query(`SELECT source FROM po_asin_shipments WHERE id = $1`, [sid])).rows[0];
+      if (!cur) { res.status(404).json({ message: "shipment not found" }); return; }
+      if (cur.source !== "manual") { res.status(400).json({ message: "only manual shipment rows can be removed; Velocity rows are sync-owned" }); return; }
       const r = await query(`DELETE FROM po_asin_shipments s USING po_asins pa WHERE s.id = $1 AND pa.id = s.po_asin_id RETURNING pa.id AS po_asin_id, pa.po_id`, [sid]);
       if (r.rowCount === 0) { res.status(404).json({ message: "shipment not found" }); return; }
       const poId = String(r.rows[0].po_id); const paId = String(r.rows[0].po_asin_id);
       const close = await evaluateAutoClose(poId, poQuery);
       const [row] = await loadPoAsinRows(poQuery, [poId]).then((rows) => rows.filter((x: any) => String(x.id) === paId));
       res.json({ row, close });
+    } catch (err: any) { res.status(500).json({ message: err.message }); }
+  });
+
+  // === Shipment reconciliation (patch docs/claude_spec-patch-shipment-reconciliation.md §5) ===
+  //
+  // Sync Shipments (D3): component A (Velocity) then component B (Seller
+  // Central), sequentially, as a direct call — Velocity + SP-API inbound
+  // reads, not refresh work, so no lane (rule C). If A fails, B still runs
+  // against what is stored; both outcomes come back. ?dryRun=true computes
+  // both plans and writes nothing. After a live run the auto-close rule
+  // (§5.4) is re-evaluated for every touched PO.
+  app.post("/api/pos/sync-shipments", async (req: Request, res: Response) => {
+    if (!isDbAvailable()) { res.status(503).json({ message: "Database not available" }); return; }
+    const dryRun = String(req.query.dryRun ?? "") === "true";
+    await respondLongSync(res, async () => {
+      let velocity: VelocitySyncResult | { error: string };
+      let sc: ScSyncResult | { error: string };
+      try {
+        velocity = await syncVelocityShipments({ dryRun });
+        const c = velocity.counts;
+        log(`Shipment sync A ${dryRun ? "DRY RUN" : "live"}: shipments ${c.shipments} (fetched ${c.shipmentsFetched}), lines ${c.lines} matched ${c.linesMatched} (order-only ${c.linesMatchedOrderOnly}) no_order ${c.linesNoOrder} po_not_found ${c.linesPoNotFound}; rows +${c.rowsInserted} ~${c.rowsUpdated} =${c.rowsUnchanged}; unmatched new ${c.unmatchedNew} resolved ${c.unmatchedResolved}; at_prep set ${c.atPrepSet} cleared ${c.atPrepCleared}; POs ${c.posTouched}`, "shipments");
+      } catch (err: any) {
+        log(`Shipment sync A error: ${err.message}`, "shipments");
+        velocity = { error: err?.message ?? String(err) };
+      }
+      try {
+        sc = await syncScShipments({ dryRun });
+        const c = sc.counts;
+        log(`Shipment sync B ${dryRun ? "DRY RUN" : "live"}: SC listed ${c.scShipmentsListed} velocity ${c.scShipmentsVelocity} items fetched ${c.scShipmentsItemsFetched}; velocity shipments ${c.velocityShipments} matched ${c.matched} (minute ${c.matchedByMinute}, overlap ${c.matchedByOverlap}) ambiguous ${c.ambiguous} unmatched ${c.unmatched}; rows fba ${c.rowsFbaIdsUpdated} received ${c.rowsReceivedUpdated} unchanged ${c.rowsUnchanged}; POs ${c.posTouched}`, "shipments");
+      } catch (err: any) {
+        log(`Shipment sync B error: ${err.message}`, "shipments");
+        sc = { error: err?.message ?? String(err) };
+      }
+      const autoClose = { evaluated: 0, closed: 0, reopened: 0 };
+      if (!dryRun) {
+        const touched = new Set<string>([...("touchedPoIds" in velocity ? velocity.touchedPoIds : []), ...("touchedPoIds" in sc ? sc.touchedPoIds : [])]);
+        for (const poId of Array.from(touched)) {
+          const out = await evaluateAutoClose(poId, poQuery);
+          autoClose.evaluated++; if (out.changed === "closed") autoClose.closed++; else if (out.changed === "reopened") autoClose.reopened++;
+        }
+      }
+      return { dryRun, velocity, sc, autoClose };
+    });
+  });
+
+  // Unmatched panel (§5.3): open Velocity lines (no_order / po_not_found) and
+  // the rare ambiguous SC match. Nothing else lands here by design.
+  app.get("/api/pos/unmatched", async (_req: Request, res: Response) => {
+    if (!isDbAvailable()) { res.status(503).json({ message: "Database not available" }); return; }
+    try {
+      const lines = (await query(
+        `SELECT u.id, u.velocity_shipment_id, u.velocity_order_id, u.reason, u.created_at, v.shipped_at::text AS shipped_at,
+                u.line->>'order_number' AS order_number, u.line->>'retailer' AS retailer, u.line->>'asin' AS asin, u.line->>'amazon_sku' AS amazon_sku,
+                u.line->>'item_name' AS item_name, u.line->>'sold_as' AS sold_as, (u.line->>'units_per_pack')::numeric AS units_per_pack, (u.line->>'quantity_shipped')::numeric AS quantity_shipped
+           FROM shipment_unmatched u JOIN velocity_shipments v ON v.id = u.velocity_shipment_id
+          WHERE u.resolved_at IS NULL
+          ORDER BY v.shipped_at DESC NULLS LAST, u.created_at`,
+      )).rows;
+      const ambiguous = (await query(
+        `SELECT v.id, v.shipped_at::text AS shipped_at, (SELECT COUNT(*)::int FROM po_asin_shipments s WHERE s.velocity_shipment_id = v.id) AS rows
+           FROM velocity_shipments v WHERE v.sc_match = 'ambiguous' ORDER BY v.shipped_at DESC`,
+      )).rows;
+      res.json({ lines, ambiguous, count: lines.length + ambiguous.length });
+    } catch (err: any) { res.status(500).json({ message: err.message }); }
+  });
+
+  // Picker search: PO ASIN rows by order # / ASIN / supplier.
+  app.get("/api/pos/asin-rows/search", async (req: Request, res: Response) => {
+    if (!isDbAvailable()) { res.status(503).json({ message: "Database not available" }); return; }
+    const q = typeof req.query.q === "string" ? req.query.q.trim() : "";
+    if (q.length < 2) { res.json({ rows: [] }); return; }
+    try {
+      const rows = (await query(
+        `SELECT pa.id, pa.asin, pa.asin_name, pa.qty, pa.units_per_pack, p.order_id, p.supplier, p.order_date::text AS order_date
+           FROM po_asins pa JOIN purchase_orders p ON p.id = pa.po_id
+          WHERE p.order_id ILIKE $1 OR pa.asin ILIKE $1 OR p.supplier ILIKE $1
+          ORDER BY p.order_date DESC, p.order_id, pa.asin LIMIT 20`, [`%${q}%`],
+      )).rows;
+      res.json({ rows });
+    } catch (err: any) { res.status(500).json({ message: err.message }); }
+  });
+
+  // "Link to PO ASIN": the line becomes a Velocity-sourced shipment row on the
+  // chosen ASIN row (ASIN qty = units ÷ that row's units_per_pack), the
+  // unmatched record is stamped resolved and remembered, so later syncs keep
+  // the mapping (component A honours resolved_po_asin_id). Received fills on
+  // the next Sync Shipments.
+  app.post("/api/pos/unmatched/:id/link", async (req: Request, res: Response) => {
+    if (!isDbAvailable()) { res.status(503).json({ message: "Database not available" }); return; }
+    const id = String(req.params.id ?? "");
+    const poAsinId = String((req.body ?? {}).po_asin_id ?? "").trim();
+    if (!/^[0-9a-f-]{36}$/i.test(poAsinId)) { res.status(400).json({ message: "po_asin_id is required" }); return; }
+    try {
+      const u = (await query(`SELECT u.*, v.shipped_at, v.fba_shipment_ids, v.sc_match FROM shipment_unmatched u JOIN velocity_shipments v ON v.id = u.velocity_shipment_id WHERE u.id = $1`, [id])).rows[0];
+      if (!u) { res.status(404).json({ message: "unmatched line not found" }); return; }
+      if (u.resolved_at) { res.status(409).json({ message: "already resolved" }); return; }
+      const pa = (await query(`SELECT id, po_id, units_per_pack FROM po_asins WHERE id = $1`, [poAsinId])).rows[0];
+      if (!pa) { res.status(404).json({ message: "ASIN row not found" }); return; }
+      const units = Number(u.line?.quantity_shipped ?? 0) || 0;
+      const qty = Math.round((units / (Number(pa.units_per_pack) || 1)) * 100) / 100;
+      const matched = u.sc_match === "matched";
+      await query(
+        `INSERT INTO po_asin_shipments (po_asin_id, velocity_shipment_id, fba_shipment_ids, sc_match, qty_shipped, shipped_at, source)
+         VALUES ($1, $2, $3::text[], $4, $5, $6, 'velocity')
+         ON CONFLICT (po_asin_id, velocity_shipment_id) DO UPDATE SET qty_shipped = po_asin_shipments.qty_shipped + EXCLUDED.qty_shipped, updated_at = now()`,
+        [pa.id, u.velocity_shipment_id, matched ? u.fba_shipment_ids : [], u.sc_match === "none" ? "none" : u.sc_match, qty, u.shipped_at],
+      );
+      await query(`UPDATE shipment_unmatched SET resolved_at = now(), resolved_po_asin_id = $2 WHERE id = $1`, [id, pa.id]);
+      const close = await evaluateAutoClose(String(pa.po_id), poQuery);
+      const [row] = await loadPoAsinRows(poQuery, [String(pa.po_id)]).then((rows) => rows.filter((x: any) => String(x.id) === String(pa.id)));
+      res.json({ row, close, qty });
     } catch (err: any) { res.status(500).json({ message: err.message }); }
   });
 

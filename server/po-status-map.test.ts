@@ -61,7 +61,7 @@ describe("consumers switched (§6.3)", () => {
     const block = routes.slice(routes.indexOf("// === PO status + quantities"), routes.indexOf("// === Bulk Profit Calculator"));
     expect(block).toMatch(/app\.patch\("\/api\/pos\/:id\/action-items"/);
     expect(block).toMatch(/normalizeActionItems\(/);
-    expect((block.match(/await evaluateAutoClose\(/g) ?? []).length).toBe(4); // + action items
+    expect((block.match(/await evaluateAutoClose\(/g) ?? []).length).toBe(6); // + action items; + Sync Shipments and the unmatched link (shipment-reconciliation §5.4)
   });
   it("the importer writes action_items / closed_at / qty_canceled and never the status column", () => {
     const imp = read("script/import-po-2026.ts");

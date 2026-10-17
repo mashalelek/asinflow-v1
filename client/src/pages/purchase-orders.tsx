@@ -12,7 +12,7 @@
  */
 import React, { useState, useEffect, useCallback } from "react";
 import { useLocation, Link } from "wouter";
-import { Upload, Paperclip, StickyNote, Plus, Search, Copy, Check, ChevronRight, ChevronDown, ChevronsDownUp, ChevronsUpDown, CheckCircle2, Circle } from "lucide-react";
+import { Upload, Paperclip, StickyNote, Plus, Search, Copy, Check, ChevronRight, ChevronDown, ChevronsDownUp, ChevronsUpDown, CheckCircle2, Circle, RefreshCw, AlertTriangle } from "lucide-react";
 import {
   AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle,
 } from "@/components/ui/alert-dialog";
@@ -26,7 +26,9 @@ import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover
 import { UploadToVelocityDialog } from "@/components/upload-to-velocity-dialog";
 import { PoAsinTable, PoAsinColGroup, PoAsinHeaderRow, PoAsinRow, type PoAsinRowData, type PoAsinLine } from "@/components/po-asin-rows";
 import { loadPoExpanded, savePoExpanded, isPoExpanded, togglePoExpanded, toggleExpandAll, type PoExpandedState } from "@/lib/po-expanded";
-import { productQtyFromAsin } from "@/lib/po-qty";
+import { productQtyFromAsin, fmtQty } from "@/lib/po-qty";
+import { fetchLongSync } from "@/lib/long-sync";
+import { useToast } from "@/hooks/use-toast";
 
 interface PoRow {
   id: string;
@@ -57,6 +59,8 @@ interface PosResponse {
   /** The §6.1 list, display order. */
   actionItems: string[];
   closed: "open" | "closed" | "all";
+  /** Shipment reconciliation §5.3: open unmatched Velocity lines + ambiguous SC matches. */
+  unmatchedCount?: number;
 }
 
 type ClosedFilter = "open" | "closed" | "all";
@@ -201,6 +205,118 @@ function FacetMultiSelect({ label, options, selected, onChange, testId }: {
 
 const ALL = "__all__";
 
+// ── Shipment reconciliation (patch docs/claude_spec-patch-shipment-reconciliation.md §5) ──
+
+interface UnmatchedLine { id: string; velocity_shipment_id: string; velocity_order_id: string; reason: "no_order" | "po_not_found"; shipped_at: string | null; order_number: string | null; retailer: string | null; asin: string | null; amazon_sku: string | null; item_name: string | null; sold_as: string | null; units_per_pack: string | null; quantity_shipped: string | null }
+interface UnmatchedResponse { lines: UnmatchedLine[]; ambiguous: Array<{ id: string; shipped_at: string | null; rows: number }>; count: number }
+interface PickerRow { id: string; asin: string; asin_name: string | null; qty: number; units_per_pack: number; order_id: string; supplier: string; order_date: string }
+
+/** Toast text for a Sync Shipments result (§5.2). */
+export function syncShipmentsToast(data: any): { title: string; description: string; failed: boolean } {
+  const v = data?.velocity, sc = data?.sc;
+  const vLine = !v ? "Velocity: not run" : "error" in v ? `Velocity: FAILED — ${v.error}`
+    : `Velocity: ${v.counts.shipments} shipments, ${v.counts.linesMatched} of ${v.counts.lines} lines matched, ${v.counts.linesNoOrder + v.counts.linesPoNotFound} unmatched`;
+  const sLine = !sc ? "SC: not run" : "error" in sc ? `SC: FAILED — ${sc.error}`
+    : `SC: ${sc.counts.matched} matched, ${sc.counts.ambiguous} ambiguous, ${sc.counts.unmatched} unmatched, received updated on ${sc.counts.rowsReceivedUpdated} rows`;
+  const closeLine = data?.autoClose && !data?.dryRun ? ` Auto-close: ${data.autoClose.closed} closed, ${data.autoClose.reopened} reopened.` : "";
+  const failed = !v || !sc || "error" in v || "error" in sc;
+  return { title: data?.dryRun ? "Shipment sync (dry run)" : failed ? "Shipments synced with errors" : "Shipments synced", description: `${vLine}. ${sLine}.${closeLine}`, failed };
+}
+
+/** "Link to PO ASIN" picker: search PO ASIN rows by order #, ASIN or supplier. */
+function LinkPicker({ line, onLinked }: { line: UnmatchedLine; onLinked: () => void }) {
+  const [q, setQ] = useState(line.order_number || line.asin || "");
+  const [rows, setRows] = useState<PickerRow[]>([]);
+  const [err, setErr] = useState<string | null>(null);
+  useEffect(() => {
+    if (q.trim().length < 2) { setRows([]); return; }
+    const h = setTimeout(() => {
+      fetch(`/api/pos/asin-rows/search?q=${encodeURIComponent(q.trim())}`).then((r) => r.json()).then((d) => setRows(d.rows ?? [])).catch(() => setRows([]));
+    }, 200);
+    return () => clearTimeout(h);
+  }, [q]);
+  const link = async (r: PickerRow) => {
+    setErr(null);
+    try {
+      const res = await fetch(`/api/pos/unmatched/${line.id}/link`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ po_asin_id: r.id }) });
+      if (!res.ok) throw new Error((await res.json().catch(() => ({}))).message || `HTTP ${res.status}`);
+      onLinked();
+    } catch (e: any) { setErr(e.message); }
+  };
+  return (
+    <Popover>
+      <PopoverTrigger asChild>
+        <Button variant="outline" size="sm" className="h-7 text-xs" data-testid={`button-link-unmatched-${line.id}`}>Link to PO ASIN</Button>
+      </PopoverTrigger>
+      <PopoverContent className="w-[28rem] p-2 text-xs space-y-1" align="end">
+        <Input value={q} onChange={(e) => setQ(e.target.value)} placeholder="Order #, ASIN or supplier" className="h-7 text-xs" data-testid={`input-link-search-${line.id}`} />
+        <div className="max-h-64 overflow-auto divide-y divide-border/50">
+          {rows.map((r) => (
+            <button key={r.id} onClick={() => link(r)} className="flex w-full items-center justify-between gap-2 px-1 py-1 text-left hover:bg-muted/60" data-testid={`button-pick-${r.id}`}>
+              <span className="font-mono">{r.order_id}</span>
+              <span className="text-muted-foreground truncate">{r.supplier}</span>
+              <span className="font-mono">{r.asin}</span>
+              <span className="text-muted-foreground">{r.order_date} · {fmtQty(r.qty)}{r.units_per_pack > 1 ? ` × ${r.units_per_pack}` : ""}</span>
+            </button>
+          ))}
+          {q.trim().length >= 2 && rows.length === 0 && <div className="px-1 py-2 text-muted-foreground">No PO ASIN rows match.</div>}
+        </div>
+        {err && <div className="text-destructive">{err}</div>}
+      </PopoverContent>
+    </Popover>
+  );
+}
+
+/** Unmatched panel (§5.3): hidden when empty; only data-entry gaps on Velocity's side and the exact-tie SC case. */
+function UnmatchedPanel({ onChanged }: { onChanged: () => void }) {
+  const [data, setData] = useState<UnmatchedResponse | null>(null);
+  const [open, setOpen] = useState(false);
+  const load = useCallback(() => {
+    fetch("/api/pos/unmatched").then((r) => r.json()).then(setData).catch(() => setData(null));
+  }, []);
+  useEffect(() => { load(); }, [load]);
+  if (!data || data.count === 0) return null;
+  return (
+    <div className="rounded-md" style={{ border: "0.5px solid hsl(var(--border))" }} data-testid="po-unmatched-panel">
+      <button className="flex w-full items-center justify-between px-3 py-2 text-sm" onClick={() => setOpen((o) => !o)} data-testid="button-po-unmatched-toggle">
+        <span className="inline-flex items-center gap-2"><AlertTriangle className="h-4 w-4 text-amber-600" /> Unmatched shipments
+          <span className="rounded-full bg-amber-100 px-2 py-0.5 text-xs text-amber-800" data-testid="text-po-unmatched-count">{data.count}</span>
+        </span>
+        {open ? <ChevronDown className="h-4 w-4" /> : <ChevronRight className="h-4 w-4" />}
+      </button>
+      {open && (
+        <div className="px-3 pb-3 space-y-2 text-xs">
+          {data.lines.length > 0 && (
+            <table className="w-full">
+              <thead><tr className="text-muted-foreground text-left"><th className="py-1 pr-2">Shipped</th><th className="py-1 pr-2">Order #</th><th className="py-1 pr-2">Retailer</th><th className="py-1 pr-2">ASIN</th><th className="py-1 pr-2">Item</th><th className="py-1 pr-2 text-right">Units</th><th className="py-1 pr-2">Why</th><th></th></tr></thead>
+              <tbody>
+                {data.lines.map((l) => (
+                  <tr key={l.id} style={{ borderTop: "0.5px solid hsl(var(--border))" }} data-testid={`row-unmatched-${l.id}`}>
+                    <td className="py-1 pr-2 whitespace-nowrap">{l.shipped_at ?? "—"}</td>
+                    <td className="py-1 pr-2 font-mono">{l.order_number || <span className="text-muted-foreground">(none)</span>}</td>
+                    <td className="py-1 pr-2">{l.retailer || "—"}</td>
+                    <td className="py-1 pr-2 font-mono">{l.asin}</td>
+                    <td className="py-1 pr-2 truncate max-w-[16rem]" title={l.item_name ?? ""}>{l.item_name}</td>
+                    <td className="py-1 pr-2 text-right">{l.quantity_shipped}{l.units_per_pack && Number(l.units_per_pack) > 1 ? ` (÷${l.units_per_pack})` : ""}</td>
+                    <td className="py-1 pr-2 text-muted-foreground">{l.reason === "no_order" ? "no Order # at Velocity" : "Order # not in AF"}</td>
+                    <td className="py-1 text-right"><LinkPicker line={l} onLinked={() => { load(); onChanged(); }} /></td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          )}
+          {data.ambiguous.length > 0 && (
+            <div className="space-y-1">
+              <div className="text-muted-foreground">Seller Central match ambiguous (two STA groups with identical SKUs on the same day) — resolve in Velocity / Seller Central, then Sync Shipments again:</div>
+              {data.ambiguous.map((a) => <div key={a.id} className="font-mono" data-testid={`row-ambiguous-${a.id}`}>Velocity {a.id} · {a.shipped_at ?? "?"} · {a.rows} PO ASIN rows</div>)}
+            </div>
+          )}
+        </div>
+      )}
+    </div>
+  );
+}
+
 function fmtMoney(v: string | null): { text: string; muted: boolean } {
   const n = v != null ? parseFloat(v) : null;
   if (n == null) return { text: "—", muted: true };
@@ -229,6 +345,9 @@ export default function PurchaseOrders() {
   // Expand by ASIN (§3.4): persisted per browser, default all collapsed.
   const [expandedState, setExpandedState] = useState<PoExpandedState>(loadPoExpanded);
   const applyExpanded = (next: PoExpandedState) => { setExpandedState(next); savePoExpanded(next); };
+  const { toast } = useToast();
+  const [isSyncingShipments, setIsSyncingShipments] = useState(false);
+  const [unmatchedKey, setUnmatchedKey] = useState(0);
 
   useEffect(() => {
     const h = setTimeout(() => setDebouncedSearch(search), 250);
@@ -259,6 +378,22 @@ export default function PurchaseOrders() {
   }, [debouncedSearch, actionKey, supplierKey, from, to, page, closedFilter]);
 
   useEffect(() => { load(); }, [load]);
+
+  // Sync Shipments (§5.2, D3): component A then B as one direct call; both outcomes in the toast.
+  const handleSyncShipments = useCallback(async () => {
+    setIsSyncingShipments(true);
+    try {
+      const result = await fetchLongSync("/api/pos/sync-shipments");
+      const t = syncShipmentsToast(result);
+      toast({ title: t.title, description: t.description, variant: t.failed ? "destructive" : undefined });
+      setUnmatchedKey((k) => k + 1);
+      await load();
+    } catch (err: any) {
+      toast({ title: "Shipment sync failed", description: err.message, variant: "destructive" });
+    } finally {
+      setIsSyncingShipments(false);
+    }
+  }, [toast, load]);
 
   const totalPages = data ? Math.max(1, Math.ceil(data.total / data.pageSize)) : 1;
   const showFrom = data && data.total > 0 ? (data.page - 1) * data.pageSize + 1 : 0;
@@ -299,8 +434,13 @@ export default function PurchaseOrders() {
           <Button variant="outline" size="sm" onClick={() => setVelocityOpen(true)}>
             <Upload className="h-4 w-4 mr-1" /> Upload to Velocity
           </Button>
+          <Button variant="outline" size="sm" onClick={handleSyncShipments} disabled={isSyncingShipments} data-testid="button-sync-shipments">
+            <RefreshCw className={`h-4 w-4 mr-1 ${isSyncingShipments ? "animate-spin" : ""}`} /> {isSyncingShipments ? "Syncing…" : "Sync Shipments"}
+          </Button>
         </div>
       </div>
+
+      <UnmatchedPanel key={unmatchedKey} onChanged={load} />
 
       {/* Toolbar: search · status token · supplier · date range */}
       <div className="flex items-center gap-2 flex-wrap">

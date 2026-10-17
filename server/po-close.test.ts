@@ -99,9 +99,9 @@ describe("quantity input + routes", () => {
   it("every quantity / shipment write re-runs the rule; the manual toggle records the user", () => {
     const s = readFileSync(join(__dirname, "routes.ts"), "utf8");
     const block = s.slice(s.indexOf("// === PO status + quantities"), s.indexOf("// === Bulk Profit Calculator"));
-    expect((block.match(/await evaluateAutoClose\(/g) ?? []).length).toBe(4); // action items, quantities, shipment add, shipment delete
+    expect((block.match(/await evaluateAutoClose\(/g) ?? []).length).toBe(6); // action items, quantities, shipment add, shipment delete, Sync Shipments, unmatched link (§5.4)
     expect(block).toMatch(/setPoClosedManually\(id, closed, req\.session\?\.userId \?\? null/);
-    expect(block).toMatch(/VALUES \(\$1, \$2, \$3, \$4, \$5, 'manual'\)/);
+    expect(block).toMatch(/VALUES \(\$1, 'manual:' \|\| uuid_generate_v4\(\)::text, \$2::text\[\], \$3, \$4, \$5, 'manual', 'none'\)/); // shipment-reconciliation §2: manual rows keyed manual:<uuid>
     // only the manual columns are writable
     expect(block).toMatch(/for \(const col of MANUAL_QTY_COLUMNS\)/);
   });

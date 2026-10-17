@@ -15,13 +15,14 @@ import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover
 import { fmtQty, individualUnits, PO_ASIN_COLUMNS } from "@/lib/po-qty";
 
 export interface PoAsinShipment {
-  id: number;
-  fba_shipment_id: string;
-  velocity_shipment_id: string | null;
+  id: string;
+  velocity_shipment_id: string;        // Velocity UUID, or manual:<uuid>
+  fba_shipment_ids: string[];          // the SC shipments it fanned out to (D1)
+  sc_match: "none" | "matched" | "ambiguous" | "unmatched" | string;
   qty_shipped: string;
-  qty_received: string | null;
+  qty_received: string | null;         // NULL until matched to SC
   shipped_at: string | null;
-  source: string;
+  source: "velocity" | "manual" | string;
 }
 export interface PoAsinLine {
   id: string;
@@ -126,6 +127,17 @@ function EditableQty({ rowId, col, v, onChanged }: { rowId: string; col: "qty_at
   );
 }
 
+/**
+ * Shipment IDs chip (patch shipment-reconciliation §5.1): the FBA shipment
+ * ids per shipment row, grouped by Velocity ship date. A Velocity row whose
+ * SC match is not `matched` shows its Velocity date and a warning glyph
+ * instead of ids. Partial receipts read "received 7 of 10".
+ */
+function shipmentLabel(s: PoAsinShipment): string {
+  const ids = s.fba_shipment_ids ?? [];
+  if (ids.length === 0) return s.source === "manual" ? "manual" : `Velocity ${s.shipped_at ?? "?"}`;
+  return ids.length === 1 ? ids[0] : `${ids[0].slice(0, 10)}… (${ids.length})`;
+}
 function ShipmentChips({ rowId, shipments, editable, onChanged }: { rowId: string; shipments: PoAsinShipment[]; editable?: boolean; onChanged?: () => void }) {
   const [fba, setFba] = useState("");
   const [qty, setQty] = useState("");
@@ -133,33 +145,60 @@ function ShipmentChips({ rowId, shipments, editable, onChanged }: { rowId: strin
   const total = shipments.reduce((t, s) => t + (parseFloat(s.qty_shipped) || 0), 0);
   const add = async () => {
     setErr(null);
-    try { await patchJson(`/api/pos/asin-rows/${rowId}/shipments`, "POST", { fba_shipment_id: fba.trim(), qty_shipped: qty.trim() }); setFba(""); setQty(""); onChanged?.(); }
+    try { await patchJson(`/api/pos/asin-rows/${rowId}/shipments`, "POST", { fba_shipment_ids: fba.trim(), qty_shipped: qty.trim() }); setFba(""); setQty(""); onChanged?.(); }
     catch (e: any) { setErr(e.message); }
   };
-  const remove = async (id: number) => {
+  const remove = async (id: string) => {
     setErr(null);
     try { await patchJson(`/api/pos/shipments/${id}`, "DELETE"); onChanged?.(); } catch (e: any) { setErr(e.message); }
   };
   if (shipments.length === 0 && !editable) return <span className="text-muted-foreground/50">—</span>;
+  const unmatched = shipments.some((s) => s.source === "velocity" && s.sc_match !== "matched");
+  const chipText = shipments.length === 0 ? "+ shipment"
+    : shipments.length === 1 ? `${shipmentLabel(shipments[0])} · ${fmtQty(total)}`
+    : `${shipments.length} shipments · ${fmtQty(total)}`;
+  // Group by Velocity ship date (D1), newest first.
+  const groups = new Map<string, PoAsinShipment[]>();
+  for (const s of [...shipments].sort((a, b) => String(b.shipped_at ?? "").localeCompare(String(a.shipped_at ?? "")))) { const k = s.shipped_at ?? "no date"; if (!groups.has(k)) groups.set(k, []); groups.get(k)!.push(s); }
   return (
     <Popover>
       <PopoverTrigger asChild>
-        <button onClick={(e) => e.stopPropagation()} className="inline-block rounded-sm bg-muted px-1.5 py-0.5 font-mono text-[11px] hover:bg-muted/70" data-testid="po-shipments-chip">
-          {shipments.length === 0 ? "+ shipment" : `${shipments.length} shipment${shipments.length === 1 ? "" : "s"} · ${fmtQty(total)}`}
+        <button onClick={(e) => e.stopPropagation()} className="inline-flex items-center gap-1 rounded-sm bg-muted px-1.5 py-0.5 font-mono text-[11px] hover:bg-muted/70" data-testid="po-shipments-chip">
+          {unmatched && <AlertTriangle className="h-3 w-3 text-amber-600" data-testid="po-shipments-unmatched-glyph" />}
+          {chipText}
         </button>
       </PopoverTrigger>
-      <PopoverContent className="w-80 p-2 text-xs space-y-1" align="start" onClick={(e) => e.stopPropagation()}>
-        {shipments.map((s) => (
-          <div key={s.id} className="flex items-center justify-between gap-2">
-            <span className="font-mono">{s.fba_shipment_id}</span>
-            <span>({fmtQty(s.qty_shipped)}{s.qty_received != null ? ` · rcvd ${fmtQty(s.qty_received)}` : ""})</span>
-            <span className="text-muted-foreground">{s.source}</span>
-            {editable && <button onClick={() => remove(s.id)} className="text-muted-foreground hover:text-destructive" title="Remove" data-testid={`button-remove-shipment-${s.id}`}><X className="h-3 w-3" /></button>}
+      <PopoverContent className="w-96 p-2 text-xs space-y-2" align="start" onClick={(e) => e.stopPropagation()}>
+        {Array.from(groups.entries()).map(([date, rows]) => (
+          <div key={date} className="space-y-1">
+            <div className="text-[11px] text-muted-foreground">{date}</div>
+            {rows.map((s) => {
+              const shipped = parseFloat(s.qty_shipped) || 0;
+              const received = s.qty_received == null ? null : parseFloat(s.qty_received) || 0;
+              const bad = s.source === "velocity" && s.sc_match !== "matched";
+              return (
+                <div key={s.id} className="flex items-start justify-between gap-2" data-testid={`po-shipment-${s.id}`}>
+                  <div className="min-w-0">
+                    {bad ? (
+                      <span className="inline-flex items-center gap-1 text-amber-700"><AlertTriangle className="h-3 w-3" />Velocity {s.shipped_at ?? "?"} · SC {s.sc_match}</span>
+                    ) : (s.fba_shipment_ids ?? []).length === 0 ? (
+                      <span className="text-muted-foreground">{s.source === "manual" ? "manual, no FBA id" : "no FBA id"}</span>
+                    ) : (
+                      <span className="font-mono break-all">{s.fba_shipment_ids.join(", ")}</span>
+                    )}
+                    <div className="text-muted-foreground" title={received == null ? "not yet matched to Seller Central" : `received ${fmtQty(received)} of ${fmtQty(shipped)}`}>
+                      {fmtQty(shipped)} shipped{received == null ? "" : ` · received ${fmtQty(received)} of ${fmtQty(shipped)}`} · {s.source}
+                    </div>
+                  </div>
+                  {editable && s.source === "manual" && <button onClick={() => remove(s.id)} className="text-muted-foreground hover:text-destructive" title="Remove" data-testid={`button-remove-shipment-${s.id}`}><X className="h-3 w-3" /></button>}
+                </div>
+              );
+            })}
           </div>
         ))}
         {editable && (
           <div className="flex items-center gap-1 pt-1 border-t border-border/50">
-            <input value={fba} onChange={(e) => setFba(e.target.value)} placeholder="FBA shipment ID" className="h-6 flex-1 rounded border border-input bg-background px-1 font-mono text-xs" data-testid={`input-shipment-id-${rowId}`} />
+            <input value={fba} onChange={(e) => setFba(e.target.value)} placeholder="FBA ids, comma-separated" className="h-6 flex-1 rounded border border-input bg-background px-1 font-mono text-xs" data-testid={`input-shipment-fba-${rowId}`} />
             <input value={qty} onChange={(e) => setQty(e.target.value)} placeholder="qty" className="h-6 w-14 rounded border border-input bg-background px-1 text-right text-xs" data-testid={`input-shipment-qty-${rowId}`} />
             <button onClick={add} className="text-muted-foreground hover:text-foreground" title="Add shipment (manual)" data-testid={`button-add-shipment-${rowId}`}><Plus className="h-3.5 w-3.5" /></button>
           </div>
