@@ -4579,7 +4579,7 @@ export async function registerRoutes(
       try {
         sc = await syncScShipments({ dryRun });
         const c = sc.counts;
-        log(`Shipment sync B ${dryRun ? "DRY RUN" : "live"}: SC listed ${c.scShipmentsListed} velocity ${c.scShipmentsVelocity} items fetched ${c.scShipmentsItemsFetched}; velocity shipments ${c.velocityShipments} matched ${c.matched} (minute ${c.matchedByMinute}, overlap ${c.matchedByOverlap}) ambiguous ${c.ambiguous} unmatched ${c.unmatched}; rows fba ${c.rowsFbaIdsUpdated} received ${c.rowsReceivedUpdated} unchanged ${c.rowsUnchanged}; POs ${c.posTouched}`, "shipments");
+        log(`Shipment sync B ${dryRun ? "DRY RUN" : "live"}: SC listed ${c.scShipmentsListed} velocity ${c.scShipmentsVelocity} items fetched ${c.scShipmentsItemsFetched}; velocity shipments ${c.velocityShipments} matched ${c.matched} (minute ${c.matchedByMinute}, overlap ${c.matchedByOverlap}) ambiguous ${c.ambiguous} unmatched ${c.unmatched}; rows fba ${c.rowsFbaIdsUpdated} received ${c.rowsReceivedUpdated} over-received ${c.overReceivedRows} unchanged ${c.rowsUnchanged}; POs ${c.posTouched}`, "shipments");
       } catch (err: any) {
         log(`Shipment sync B error: ${err.message}`, "shipments");
         sc = { error: err?.message ?? String(err) };

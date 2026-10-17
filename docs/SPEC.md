@@ -5202,11 +5202,15 @@ before Velocity's `shipped_at`.
 - Received (§4.3, D2): Σ `QuantityReceived` per SellerSKU over the group →
   per ASIN through the Velocity lines' `amazon_sku` (asin_skus /
   primary_sku as fallback) → allocated **oldest PO first** across the rows
-  sharing that ASIN in the Velocity shipment, capped at each row's
-  `qty_shipped` (the one estimate in the design — units are mixed in the
-  shipment, so which PO is short is not knowable); 0 when matched but not
-  yet received, NULL while unmatched. The rollup trigger fills
-  `qty_received_amazon`.
+  sharing that ASIN in the Velocity shipment: each row fills up to its
+  `qty_shipped`, the last (newest) row takes the remainder, so the total
+  written **equals SC's number — never capped** (Maria 2026-10-17); an
+  over-receipt reads "received 11 of 10" in the chip and is counted in
+  the toast ("over-received N"). The one estimate in the design: units
+  are mixed in the shipment, so which PO is short or over is not knowable.
+  0 when matched but not yet received, NULL while unmatched. The rollup
+  trigger fills `qty_received_amazon`; the auto-close rule reads Shipped
+  FBA only.
 - SC `QuantityShipped` is never compared or flagged (§4.4): Velocity says
   what left the warehouse, SC what Amazon received; the gap is read off
   the two columns. No review queue beyond the Unmatched panel.
@@ -5227,8 +5231,8 @@ manual reconciliation).
 -era `INSH-…` orders, re-keyed `…_1` POs, free-text order numbers);
 `qty_at_prep` on 723 ASIN rows; SC: 272 shipments listed, 249 ship-from
 Velocity, 3,542 item rows; 57 of 57 Velocity shipments matched (56 by
-minute, 1 by overlap), 0 ambiguous; 752 rows got FBA ids + received; 14
-POs auto-closed. Shipments before Velocity's API history are not
+minute, 1 by overlap), 0 ambiguous; 752 rows got FBA ids + received (13
+over-received, stored as reported); 14 POs auto-closed. Shipments before Velocity's API history are not
 reconstructed (those POs are Closed from the sheet).
 
 ### UI rules

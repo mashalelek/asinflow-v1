@@ -15,9 +15,13 @@
 //
 // SC quantities are sellable packs — AF's unit — so QuantityReceived per
 // SellerSKU sums straight into qty_received, allocated oldest PO first
-// across the rows sharing an ASIN in one Velocity shipment (§4.3, D2),
-// capped at each row's qty_shipped. SC QuantityShipped is never compared
-// (§4.4). Fail-closed: an SP-API read error propagates before BEGIN.
+// across the rows sharing an ASIN in one Velocity shipment (§4.3, D2).
+// The total written always equals SC's number (Maria 2026-10-17): every
+// row but the last is filled up to its qty_shipped, the last row takes the
+// remainder even past its qty_shipped — an over-receipt shows as
+// "received 11 of 10" and is counted, never capped. The auto-close rule
+// reads Shipped FBA only. SC QuantityShipped is never compared (§4.4).
+// Fail-closed: an SP-API read error propagates before BEGIN.
 import pool from "./db";
 import type { QueryLike } from "./scheduler/types";
 import { spApiGet } from "./spapi-auth";
@@ -80,7 +84,7 @@ export interface ScSyncCounts {
   matched: number; matchedByMinute: number; matchedByOverlap: number;
   ambiguous: number; unmatched: number;
   rowsFbaIdsUpdated: number; rowsReceivedUpdated: number; rowsUnchanged: number;
-  receivedOverflowRows: number;   // SC received more than the row's qty_shipped (capped)
+  overReceivedRows: number;       // rows whose qty_received exceeds qty_shipped (stored as reported, never capped)
   posTouched: number;
 }
 export interface ScSyncResult {
@@ -94,14 +98,19 @@ type Q = { query: QueryLike; connect?: () => Promise<{ query: QueryLike; release
 const num = (v: any): number => (v == null || v === "" ? 0 : Number(v) || 0);
 const arrEq = (a: any, b: string[]) => Array.isArray(a) && a.length === b.length && a.every((x, i) => x === b[i]);
 
-/** Oldest PO first (D2), capped at each row's qty_shipped; returns the per-row allocation. */
+/**
+ * Oldest PO first (D2): each row fills up to its qty_shipped, the LAST row
+ * takes whatever remains — so Σ allocation = SC's received total, and an
+ * over-receipt lands on the newest PO (never capped, Maria 2026-10-17).
+ */
 export function allocateReceived(rows: Array<{ id: string; qty_shipped: number; order_date: string; order_id: string }>, received: number): Map<string, number> {
   const out = new Map<string, number>();
+  const sorted = [...rows].sort((a, b) => (a.order_date < b.order_date ? -1 : a.order_date > b.order_date ? 1 : a.order_id < b.order_id ? -1 : a.order_id > b.order_id ? 1 : 0));
   let left = received;
-  for (const r of [...rows].sort((a, b) => (a.order_date < b.order_date ? -1 : a.order_date > b.order_date ? 1 : a.order_id < b.order_id ? -1 : a.order_id > b.order_id ? 1 : 0))) {
-    const take = Math.max(0, Math.min(r.qty_shipped, left));
+  sorted.forEach((r, i) => {
+    const take = i === sorted.length - 1 ? Math.max(0, left) : Math.max(0, Math.min(r.qty_shipped, left));
     out.set(r.id, round2(take)); left -= take;
-  }
+  });
   return out;
 }
 
@@ -112,7 +121,7 @@ export async function syncScShipments(opts: { dryRun: boolean; deps?: ScSyncDeps
   const counts: ScSyncCounts = {
     velocityShipments: 0, scShipmentsListed: 0, scShipmentsVelocity: 0, scShipmentsItemsFetched: 0, scItemRows: 0,
     matched: 0, matchedByMinute: 0, matchedByOverlap: 0, ambiguous: 0, unmatched: 0,
-    rowsFbaIdsUpdated: 0, rowsReceivedUpdated: 0, rowsUnchanged: 0, receivedOverflowRows: 0, posTouched: 0,
+    rowsFbaIdsUpdated: 0, rowsReceivedUpdated: 0, rowsUnchanged: 0, overReceivedRows: 0, posTouched: 0,
   };
   const result: ScSyncResult = { dryRun: opts.dryRun, wrote: false, counts, samples: [], ambiguous: [], unmatchedShipments: [], touchedPoIds: [] };
 
@@ -221,8 +230,7 @@ export async function syncScShipments(opts: { dryRun: boolean; deps?: ScSyncDeps
         const total = recvByAsin.get(asin) ?? 0;
         const alloc = allocateReceived(ars.map((r) => ({ id: String(r.id), qty_shipped: Number(r.qty_shipped), order_date: String(r.order_date), order_id: String(r.order_id) })), total);
         const shippedSum = ars.reduce((a, r) => a + Number(r.qty_shipped), 0);
-        if (total > shippedSum + 1e-9) counts.receivedOverflowRows++;
-        for (const r of ars) recvByRow.set(String(r.id), alloc.get(String(r.id)) ?? 0);
+        for (const r of ars) { const got = alloc.get(String(r.id)) ?? 0; recvByRow.set(String(r.id), got); if (got > Number(r.qty_shipped) + 1e-9) counts.overReceivedRows++; }
         if (result.samples.length < 10 && ars.length > 1) result.samples.push(`${String(m.v.id).slice(0, 8)} ${m.v.shipped_at ?? "?"} · ${asin}: SC received ${total} of ${shippedSum} → ${ars.sort((a, b) => (a.order_date < b.order_date ? -1 : 1)).map((r) => `${r.order_id} ${alloc.get(String(r.id)) ?? 0}/${Number(r.qty_shipped)}`).join(", ")} (oldest PO first)`);
       }
     } else for (const r of vRows) recvByRow.set(String(r.id), null);

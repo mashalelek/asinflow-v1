@@ -41,7 +41,7 @@ const SC = [
 const ITEMS: Record<string, any[]> = {
   FBA19T7ZQ9JQ: [{ SellerSKU: "EQL-NUL-CLW-OPE-001", QuantityShipped: 10, QuantityReceived: 10 }, { SellerSKU: "ATO-BOO-937-TDC-001", QuantityShipped: 4, QuantityReceived: 4 }],
   FBA19T7TWVK4: [{ SellerSKU: "ATO-BOO-937-TDC-001", QuantityShipped: 6, QuantityReceived: 3 }],
-  FBA19T7XBNZC: [{ SellerSKU: "GOL-PET-47B-SPW-002", QuantityShipped: 5, QuantityReceived: 5 }],  // 5 received vs 1 on the row → capped
+  FBA19T7XBNZC: [{ SellerSKU: "GOL-PET-47B-SPW-002", QuantityShipped: 5, QuantityReceived: 5 }],  // 5 received vs 1 on the row → stored as 5, counted over-received
   FBA19T81WCMB: [{ SellerSKU: "UNKNOWN-SKU", QuantityShipped: 1, QuantityReceived: 1 }],
   FBA19T7Y1DV1: [],
   FBA19T84285M: [{ SellerSKU: "KAY-BPC-TCK-OVO-001", QuantityShipped: 5, QuantityReceived: 0 }],
@@ -75,12 +75,13 @@ describe("helpers", () => {
     expect(isVelocityShipFrom("Maria Peters")).toBe(false);
     expect(MATCH_WINDOW_MS).toBe(15 * 60 * 1000);
   });
-  it("allocateReceived: oldest PO first, capped at each row's qty_shipped (D2)", () => {
+  it("allocateReceived: oldest PO first; the last row takes the remainder so the total equals SC's number, never capped (D2, 2026-10-17)", () => {
     const rs = [{ id: "new", qty_shipped: 1, order_date: "2026-10-10", order_id: "b" }, { id: "old", qty_shipped: 9, order_date: "2026-10-09", order_id: "a" }];
     expect(Object.fromEntries(allocateReceived(rs, 7))).toEqual({ old: 7, new: 0 });
     expect(Object.fromEntries(allocateReceived(rs, 10))).toEqual({ old: 9, new: 1 });
-    expect(Object.fromEntries(allocateReceived(rs, 12))).toEqual({ old: 9, new: 1 });
+    expect(Object.fromEntries(allocateReceived(rs, 12))).toEqual({ old: 9, new: 3 });   // over-receipt lands on the newest PO
     expect(Object.fromEntries(allocateReceived(rs, 0))).toEqual({ old: 0, new: 0 });
+    expect(Object.fromEntries(allocateReceived([rs[1]], 11))).toEqual({ old: 11 });   // single row: stored as reported
   });
 });
 
@@ -90,7 +91,7 @@ describe("syncScShipments", () => {
     const r = await syncScShipments({ dryRun: true, deps: d, db });
     expect(r.wrote).toBe(false); expect(db.writes).toEqual([]);
     expect(d.since[0].toISOString()).toBe("2026-08-31T15:00:00.000Z"); // earliest Velocity shipped_at − 1 day
-    expect(r.counts).toMatchObject({ velocityShipments: 3, scShipmentsListed: 9, scShipmentsVelocity: 8, scShipmentsItemsFetched: 8, matched: 2, matchedByMinute: 2, matchedByOverlap: 0, ambiguous: 0, unmatched: 1, rowsFbaIdsUpdated: 5, rowsReceivedUpdated: 5, rowsUnchanged: 0, receivedOverflowRows: 1 });
+    expect(r.counts).toMatchObject({ velocityShipments: 3, scShipmentsListed: 9, scShipmentsVelocity: 8, scShipmentsItemsFetched: 8, matched: 2, matchedByMinute: 2, matchedByOverlap: 0, ambiguous: 0, unmatched: 1, rowsFbaIdsUpdated: 5, rowsReceivedUpdated: 5, rowsUnchanged: 0, overReceivedRows: 1 });
     expect(r.unmatchedShipments).toEqual([{ shipment: V3, shippedAt: "2026-09-01" }]);
     expect(r.samples[0]).toBe(`73917fcd 2026-10-15 → 5 SC shipment(s) FBA19T7TWVK4, FBA19T7XBNZC, FBA19T7Y1DV1, FBA19T7ZQ9JQ, FBA19T81WCMB by minute (Δ 3 min)`);
     expect(r.samples).toContainEqual(`73917fcd 2026-10-15 · 0349125937: SC received 7 of 10 → 102003840691113 7/9, 102003843107733 0/1 (oldest PO first)`);
@@ -119,7 +120,7 @@ describe("syncScShipments", () => {
     expect(byId["r-eql"].params?.slice(1, 4)).toEqual([["FBA19T7TWVK4", "FBA19T7XBNZC", "FBA19T7Y1DV1", "FBA19T7ZQ9JQ", "FBA19T81WCMB"], "matched", 10]);
     expect(byId["r-tw2"].params?.[3]).toBe(7);
     expect(byId["r-tw1"].params?.[3]).toBe(0);
-    expect(byId["r-gr1"].params?.[3]).toBe(1);   // 5 received, capped at the row's 1
+    expect(byId["r-gr1"].params?.[3]).toBe(5);   // 5 received against 1 shipped: stored as reported ("received 5 of 1")
     expect(byId["r-kay"].params?.[3]).toBe(0);   // matched, nothing received yet
     for (const w of db.writes) expect(w.sql).not.toMatch(/qty_shipped =|qty_at_prep/);
     expect(r.touchedPoIds.sort()).toEqual(["p-eql", "p-gr1", "p-kay", "p-tw1", "p-tw2"]);
@@ -128,7 +129,7 @@ describe("syncScShipments", () => {
   it("re-run: terminal cached shipments are not refetched, open ones are; unchanged rows stay untouched", async () => {
     const cached = SC.filter((s) => isVelocityShipFrom(s.ShipFromAddress.Name)).map((s) => ({ shipment_id: s.ShipmentId, status: s.ShipmentStatus }));
     const cachedItems = Object.entries(ITEMS).flatMap(([sid, its]) => its.map((it) => ({ shipment_id: sid, seller_sku: it.SellerSKU, fnsku: null, qty_shipped: it.QuantityShipped, qty_received: it.QuantityReceived })));
-    const done = rows.map((r) => ({ ...r, fba_shipment_ids: r.velocity_shipment_id === V1 ? ["FBA19T7TWVK4", "FBA19T7XBNZC", "FBA19T7Y1DV1", "FBA19T7ZQ9JQ", "FBA19T81WCMB"] : ["FBA19T84285M"], sc_match: "matched", qty_received: { "r-eql": "10.00", "r-tw1": "0.00", "r-tw2": "7.00", "r-gr1": "1.00", "r-kay": "0.00" }[r.id] }));
+    const done = rows.map((r) => ({ ...r, fba_shipment_ids: r.velocity_shipment_id === V1 ? ["FBA19T7TWVK4", "FBA19T7XBNZC", "FBA19T7Y1DV1", "FBA19T7ZQ9JQ", "FBA19T81WCMB"] : ["FBA19T84285M"], sc_match: "matched", qty_received: { "r-eql": "10.00", "r-tw1": "0.00", "r-tw2": "7.00", "r-gr1": "5.00", "r-kay": "0.00" }[r.id] }));
     const vel = velocity().map((v) => ({ ...v, sc_match: v.id === V3 ? "unmatched" : "matched", sc_shipment_ids: v.id === V1 ? ["FBA19T7TWVK4", "FBA19T7XBNZC", "FBA19T7Y1DV1", "FBA19T7ZQ9JQ", "FBA19T81WCMB"] : v.id === V2 ? ["FBA19T84285M"] : [] }));
     const db = fakeDb({ velocity: vel, rows: done, cached, cachedItems }); const d = deps();
     const r = await syncScShipments({ dryRun: true, deps: d, db });

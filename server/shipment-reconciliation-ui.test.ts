@@ -56,8 +56,8 @@ describe("POs page (§5.1 chip, §5.2 button + toast, §5.3 panel)", () => {
   });
   it("syncShipmentsToast: counts for both components; destructive when either failed", async () => {
     const { syncShipmentsToast } = await import("../client/src/pages/purchase-orders");
-    const ok = syncShipmentsToast({ dryRun: false, velocity: { counts: { shipments: 57, lines: 822, linesMatched: 752, linesNoOrder: 11, linesPoNotFound: 59 } }, sc: { counts: { matched: 50, ambiguous: 0, unmatched: 7, rowsReceivedUpdated: 700 } }, autoClose: { evaluated: 10, closed: 3, reopened: 1 } });
-    expect(ok).toEqual({ title: "Shipments synced", failed: false, description: "Velocity: 57 shipments, 752 of 822 lines matched, 70 unmatched. SC: 50 matched, 0 ambiguous, 7 unmatched, received updated on 700 rows. Auto-close: 3 closed, 1 reopened." });
+    const ok = syncShipmentsToast({ dryRun: false, velocity: { counts: { shipments: 57, lines: 822, linesMatched: 752, linesNoOrder: 11, linesPoNotFound: 59 } }, sc: { counts: { matched: 50, ambiguous: 0, unmatched: 7, rowsReceivedUpdated: 700, overReceivedRows: 13 } }, autoClose: { evaluated: 10, closed: 3, reopened: 1 } });
+    expect(ok).toEqual({ title: "Shipments synced", failed: false, description: "Velocity: 57 shipments, 752 of 822 lines matched, 70 unmatched. SC: 50 matched, 0 ambiguous, 7 unmatched, received updated on 700 rows, over-received 13. Auto-close: 3 closed, 1 reopened." });
     const bad = syncShipmentsToast({ dryRun: false, velocity: { error: "Velocity /shipments coverage incomplete" }, sc: { counts: { matched: 0, ambiguous: 0, unmatched: 0, rowsReceivedUpdated: 0 } }, autoClose: { evaluated: 0, closed: 0, reopened: 0 } });
     expect(bad.failed).toBe(true); expect(bad.title).toBe("Shipments synced with errors"); expect(bad.description).toMatch(/^Velocity: FAILED — Velocity \/shipments coverage incomplete\. SC: 0 matched/);
   });
