@@ -1304,6 +1304,11 @@ never deleted by code.
   or execute runs on partial coverage — silent partial coverage is worse
   than no dedup. (Docs-wrong item #5: their pagination metadata is
   documented as `total`; the real field is `data.results.total_results`.)
+  **Docs-wrong (2026-10-17): `offset` is a PAGE INDEX, not a row offset**
+  — `limit=10&offset=1` returns rows 11–20 and `offset=10` nothing.
+  `listInboundOrders({ page })` sends the page number; until 2026-10-17
+  both list legs sent `page × 200`, correct only for page 0 (the tripwire
+  would have thrown, never silently lost rows).
 - Match key: `(order_number, asin)`, both trimmed; `order_number` compared as
   an exact string, `asin` case-insensitively.
 - Records matching an existing Velocity order are dropped as
@@ -2562,8 +2567,10 @@ that writes it:
 | `status` (active/parked/dead — replaced `is_active` 2026-09-07, migration 033) | Manual Park/Unpark/Mark-dead/Revive; Sourcing sync writes `parked`+`discontinued` on freshly-inserted discontinued rows only; the prices stage's `invalid_asin` outcome and the catalog-404 signal (DA-2) write `dead` with their reasons |
 | Aura listing cost (external, not an AF column) | Aura cost sync path (§11) — reads `asin_estimates` after an inline PO-sheet read for the selection (decision 9), writes only to Aura |
 | `purchase_orders`, `po_asins`, `po_line_items` — every sheet-carried field, incl. `action_items`, `closed_at`, `closed_by`, `qty_canceled` | **The Orders sheet via the PO sheet sync** (`server/po-sheet-sync.ts`, Sync POs button, 2026-10-16 — "sheet wins for now"); the PO module UI (Action Items editor, Closed toggle, auto-close rule) edits them between syncs only |
-| `po_asins.qty_shipped_supplier`, `qty_at_prep`, `qty_at_warehouse`, `qty_lost_damaged_us` | PO module (§22): inline editor today, Phase 2 feeds later — AF-owned, never the importer, never the sync |
-| `po_asins.qty_shipped_fba`, `qty_received_amazon`; `po_asin_shipments` | PO module (§22): trigger over `po_asin_shipments`; manual rows today, SC/Velocity in Phase 2 — never the sync |
+| `po_asins.qty_at_prep`; `po_asin_shipments` (`source = 'velocity'`: row, `qty_shipped`, `shipped_at`); `velocity_shipments`; `shipment_unmatched` | **Shipment sync, component A** (`server/shipment-sync-velocity.ts`, Sync Shipments button, 2026-10-17) — never the sheet sync, never the UI except the Unmatched picker |
+| `po_asin_shipments.fba_shipment_ids`, `sc_match`, `qty_received`; `velocity_shipments.sc_shipment_ids` / `sc_match`; `sc_inbound_shipments`, `sc_inbound_items` | **Shipment sync, component B** (`server/shipment-sync-sc.ts`) |
+| `po_asins.qty_shipped_fba`, `qty_received_amazon` | Trigger over `po_asin_shipments` (both components' rows + manual rows) |
+| `po_asins.qty_shipped_supplier`, `qty_at_warehouse`, `qty_lost_damaged_us`; `po_asin_shipments` (`source = 'manual'`) | PO module (§22): inline editor / Shipment IDs chip — AF-owned, never the importer, never a sync |
 | `po_asins.notes`, `po_asins.sku` after insert, `po_line_items.notes`, `item_discount` | PO module (§22) — the sheet does not carry them; never the sync |
 
 When a code path needs to touch a field outside its ownership, that's a red
@@ -4806,6 +4813,14 @@ the sheet on every sync, so an AF edit to one of those fields lasts only
 until the next sync. Temporary, until the VA moves off the sheet; fields
 the sheet does not carry stay AF-owned (see "Sync from the Orders sheet").
 
+**Shipment reconciliation patch (2026-10-17,
+`docs/claude_spec-patch-shipment-reconciliation.md`, evidence
+`docs/phase2-probe-2026-10-17.md`).** Phase 2 of the expand-by-ASIN work:
+At Prep Center, Shipped FBA, Received by Amazon and Shipment IDs are
+filled from Velocity and Seller Central by the **Sync Shipments** button
+(see "Shipment reconciliation"). Nobody reconciles by hand; the only
+review work is the Unmatched panel (data-entry gaps on Velocity's side).
+
 **Expand by ASIN patch (2026-10-16, `docs/claude_spec-patch-po-expand-by-asin.md`,
 pre-flight `docs/po-expand-preflight-2026-10-16.md`).** Step 1 of taking
 FBA-shipment reconciliation over from the VA: every PO can show its ASIN
@@ -4815,7 +4830,7 @@ Status is Open / Closed with an auto-close rule; the free-text status
 became multi-select **Action Items**. Pulling the data from SC / Velocity
 is Phase 2 (below).
 
-### Tables (migrations 028–029; 056 for the expand-by-ASIN columns)
+### Tables (migrations 028–029; 056 for the expand-by-ASIN columns; 057 for shipment reconciliation)
 
 - `purchase_orders` — one row per order. `UNIQUE (supplier, order_id)` (order
   IDs collide across suppliers, §10). `source ∈ {manual, sheet_import}`.
@@ -4830,11 +4845,14 @@ is Phase 2 (below).
 - **Migration 056 (2026-10-16):** `po_asins` gains six ASIN-quantity
   columns, `numeric(10,2) NULL` — `qty_shipped_supplier`, `qty_at_prep`,
   `qty_at_warehouse`, `qty_lost_damaged_us`, `qty_shipped_fba`,
-  `qty_received_amazon`; `po_asin_shipments` (one row per FBA shipment
-  per ASIN row: `fba_shipment_id`, `velocity_shipment_id`, `qty_shipped`,
-  `qty_received`, `shipped_at`, `source ∈ velocity|sc|manual`,
-  `UNIQUE (po_asin_id, fba_shipment_id)`; `po_asin_id` is uuid like
-  `po_asins.id`) with a trigger keeping `qty_shipped_fba` /
+  `qty_received_amazon`; `po_asin_shipments` (as re-keyed by **migration
+  057**, 2026-10-17: one row per **Velocity shipment** per ASIN row —
+  `velocity_shipment_id text NOT NULL` (or `manual:<uuid>` for a hand
+  row), `fba_shipment_ids text[]` (the SC shipments it fanned out to, one
+  per FC — D1), `sc_match ∈ none|matched|ambiguous|unmatched`,
+  `qty_shipped` / `qty_received numeric(10,2)` in ASIN qty, `shipped_at`,
+  `source ∈ velocity|manual`, uuid PK, `UNIQUE (po_asin_id,
+  velocity_shipment_id)`) with a trigger keeping `qty_shipped_fba` /
   `qty_received_amazon` equal to the SUM over its rows (NULL with no rows —
   the declarative analogue of the generated `final_qty`); and on
   `purchase_orders`: `closed_at timestamptz NULL`, `closed_by text NULL`
@@ -5116,6 +5134,103 @@ returns the plan with nothing written.
   The dry run and the live run return the same shape; the dev-server log
   prints the counts under `[sheets]`.
 
+### Shipment reconciliation (`server/shipment-sync-velocity.ts`, `server/shipment-sync-sc.ts`, 2026-10-17)
+
+**Sync Shipments** (POs page, D3): a direct call (`POST
+/api/pos/sync-shipments`, `?dryRun=true` for the plan) that runs component
+A then component B and re-runs the auto-close rule for every touched PO.
+Velocity + SP-API inbound reads are not refresh work, so there is no lane
+(rule C); an hourly pass is a scheduler-rework item. Both outcomes come
+back in one toast; if A fails, B still runs against what is stored.
+
+**Facts the design rests on (probe 2026-10-17, `docs/phase2-probe-2026-10-17.md`):**
+Velocity outbound = `GET /shipments` + `GET /shipments/:id`, every
+shipment retained (terminal status `shipped`), no date filter, **`offset`
+is a page index** (docs-wrong; fixed in `listInboundOrders({ page })`,
+D5); each line carries its own Order # equal to `purchase_orders.order_id`
+and its retailer equal to the supplier; `quantity_shipped` and every other
+Velocity quantity are **individual units**; the public API has **no Amazon
+FBA shipment id** (the dashboard reads a session-only admin endpoint). SC
+Fulfillment Inbound **v0** is the working source (`getShipments` /
+`getShipmentItems`, 837 shipments back to 2024-09-04; v2024-03-20 shows
+only empty draft plans), in **sellable packs** — AF's unit. One Velocity
+shipment fans out to N SC shipments named `FBA STA (MM/DD/YYYY HH:MM)-<FC>`,
+ship-from Velocity Prep, the name timestamp in **UTC** a few minutes
+before Velocity's `shipped_at`.
+
+**Component A — Velocity → `po_asin_shipments`, `qty_at_prep`, `shipment_unmatched` (§3):**
+- Lists every shipment (coverage tripwire), fetches the detail for new /
+  changed ones (the rest replay from `velocity_shipments.raw`), pulls
+  `/inbound` + `/inventory`.
+- Each line resolves to a `po_asins` row: exact (Order #, retailer, ASIN)
+  (retailer case-insensitive) → (Order #, ASIN) alone when unique in AF
+  (retailer spelling drift, counted `linesMatchedOrderOnly`) → a
+  picker-resolved `shipment_unmatched` row. A bundle parent (no Order #)
+  borrows its children's order numbers from the list legs or
+  `velocity_bundle_identity`; several child orders → `no_order`.
+- Row = `qty_shipped = quantity_shipped ÷ po_asins.units_per_pack`,
+  rounded to 2 dp (fractions legal — Equal Exchange 60 ÷ 6 = 10),
+  `shipped_at` = the Eastern date, `source = 'velocity'`; lines sharing
+  one (ASIN row, Velocity shipment) sum.
+- Not resolvable → `shipment_unmatched` (`no_order` | `po_not_found`), one
+  row per line, updated on re-sync, stamped `resolved_at` when it later
+  resolves by key or through the picker (`resolved_po_asin_id` is honoured
+  by every later run).
+- `qty_at_prep` (D6): one live line per Velocity order (inbound >
+  inventory > newest shipment), Σ `quantity_remaining` ÷ units_per_pack
+  per ASIN row; 0 once fully shipped; NULL when no Velocity line
+  references the key.
+- One transaction; dry run writes nothing; a Velocity read error aborts
+  before BEGIN. Never writes `fba_shipment_ids`, `sc_match`, `qty_received`.
+
+**Component B — Seller Central → FBA ids + Received by Amazon (§4):**
+- v0 `getShipments` from the earliest Velocity shipment − 1 day (all
+  statuses), ship-from Velocity only, cached in `sc_inbound_shipments`;
+  per-SKU items (`SellerSKU`, FNSKU, `QuantityShipped`, `QuantityReceived`)
+  in `sc_inbound_items`, refetched only for non-terminal or changed
+  shipments (§4.5; rate table `fbaInbound.*` 2 req/s, burst 30).
+- Match (§4.2, D4): SC shipments grouped by the STA name timestamp
+  (CANCELLED / DELETED excluded); a Velocity shipment takes the unclaimed
+  group closest to its `shipped_at` within **15 minutes** (the probe's
+  Δ 2–8 min; not "same minute in ET" as the patch first said); fallback =
+  same UTC day + best SKU-set overlap; an exact tie → `ambiguous`
+  (Unmatched panel); none → `unmatched`. Written on
+  `velocity_shipments.sc_shipment_ids` / `sc_match` and on every row of
+  the shipment (`fba_shipment_ids`, `sc_match`). When Velocity exposes its
+  `confirmed-shipments` endpoint under the API key, it fills
+  `sc_shipment_ids` directly and this match becomes the fallback.
+- Received (§4.3, D2): Σ `QuantityReceived` per SellerSKU over the group →
+  per ASIN through the Velocity lines' `amazon_sku` (asin_skus /
+  primary_sku as fallback) → allocated **oldest PO first** across the rows
+  sharing that ASIN in the Velocity shipment, capped at each row's
+  `qty_shipped` (the one estimate in the design — units are mixed in the
+  shipment, so which PO is short is not knowable); 0 when matched but not
+  yet received, NULL while unmatched. The rollup trigger fills
+  `qty_received_amazon`.
+- SC `QuantityShipped` is never compared or flagged (§4.4): Velocity says
+  what left the warehouse, SC what Amazon received; the gap is read off
+  the two columns. No review queue beyond the Unmatched panel.
+
+**UI (§5):** the Shipment IDs chip lists `fba_shipment_ids` per row
+grouped by Velocity ship date ("FBA19T81WC… (5)"); a Velocity row whose
+`sc_match` is not `matched` shows "Velocity <date> · SC <state>" with a
+warning glyph; "received 7 of 10" per row; manual rows (home-shipped POs:
+`manual:<uuid>`, FBA ids typed as a list) are removable, Velocity rows are
+not (the next sync would recreate them). **Unmatched panel** (badge count,
+hidden when empty): only `no_order` / `po_not_found` lines with a "Link
+to PO ASIN" picker, and the exact-tie `ambiguous` case. Nothing else lands
+there by design (Maria 2026-10-17: the point of the patch is to remove
+manual reconciliation).
+
+**Backfill (§6), local 2026-10-17:** 57 Velocity shipments, 822 lines →
+752 placed (19 order-only), 11 `no_order`, 59 `po_not_found` (PrepBusiness
+-era `INSH-…` orders, re-keyed `…_1` POs, free-text order numbers);
+`qty_at_prep` on 723 ASIN rows; SC: 272 shipments listed, 249 ship-from
+Velocity, 3,542 item rows; 57 of 57 Velocity shipments matched (56 by
+minute, 1 by overlap), 0 ambiguous; 752 rows got FBA ids + received; 14
+POs auto-closed. Shipments before Velocity's API history are not
+reconstructed (those POs are Closed from the sheet).
+
 ### UI rules
 
 - Route `/purchase-orders`: list (25/page, `order_date DESC`) → expanded view
@@ -5146,9 +5261,12 @@ returns the plan with nothing written.
 |---|---|
 | `purchase_orders` / `po_asins` / `po_line_items` (sheet-carried fields) | **The Orders sheet, through the PO sheet sync** (2026-10-16, "sheet wins for now") — overwritten on every Sync POs; the PO module UI edits them between syncs only |
 | `purchase_orders.action_items`, `closed_at`, `closed_by`; `po_line_items.qty_canceled` | **Sheet-owned for now** (2026-10-16): the sync maps the Status cell on every run (full replace). The Action Items editor, the Closed toggle, the auto-close rule and the §6.4 backfill write them too, but the next sync overwrites — accepted until the VA moves off the sheet |
-| **`po_asins.qty_shipped_supplier`, `qty_at_prep`, `qty_at_warehouse`, `qty_lost_damaged_us`** | **AF-owned**: the inline quantity editor today; Phase 2 feeds (email tracking, Velocity) later. Never the importer, never the sync. |
-| **`po_asins.qty_shipped_fba`, `qty_received_amazon`** | **AF-owned, trigger-maintained** from `po_asin_shipments` (manual rows today; SC / Velocity in Phase 2). |
-| `po_asin_shipments` | AF-owned: manual entry from the Shipment IDs chip; Phase 2 feeds. Never the sync — and a `po_asins` row with shipment rows survives leaving the sheet. |
+| **`po_asins.qty_at_prep`** | **Shipment sync (component A)** — Σ Velocity `quantity_remaining` ÷ units_per_pack; NULL when no Velocity line references the key (D6). Overwritten every Sync Shipments; not hand-editable. |
+| **`po_asins.qty_shipped_supplier`, `qty_at_warehouse`, `qty_lost_damaged_us`** | **AF-owned**: the inline quantity editor today; email tracking later. Never the importer, never a sync. |
+| **`po_asins.qty_shipped_fba`, `qty_received_amazon`** | **Trigger-maintained** from `po_asin_shipments` — Shipped FBA from Velocity rows (component A), Received by Amazon from the SC allocation (component B); manual rows add to both. |
+| `po_asin_shipments` (`source = 'velocity'`), `velocity_shipments`, `sc_inbound_*` | **Shipment sync-owned**: component A writes the row and `qty_shipped` / `shipped_at`; component B writes `fba_shipment_ids`, `sc_match`, `qty_received`. Hand edits only through the Unmatched picker. A `po_asins` row with shipment rows survives leaving the sheet. |
+| `po_asin_shipments` (`source = 'manual'`) | AF-owned: hand-entered rows from the Shipment IDs chip (home-shipped POs); the only rows the chip can delete. |
+| `shipment_unmatched` | Component A writes and resolves; the Unmatched picker sets `resolved_po_asin_id`. |
 | `po_asins.notes`, `po_asins.sku` (after insert), `po_line_items.notes`, `item_discount` | AF-owned: the sheet does not carry them; the sync never writes them |
 | `settings.po_*` lookup lists | Migrations (seed/append) + entry form (layer 1) |
 
@@ -5165,17 +5283,11 @@ until cutover.
 5. Cutover (repoint syncs/exports sheet → tables; retire mirror; POs sub-nav)
 6. Later: gift-card ledger, subscription alerts, Velocity bundles, %-type
    product discounts, §15 FIFO/lots, pre-2026 import
-7. **Phase 2 — reconciliation data feeds** (the next patch): SC
-   Fulfillment Inbound API (list inbound shipments + items → `fba_shipment_id`,
-   per-SKU shipped/received qty); Velocity outbound-shipments probe (FBA
-   shipment ID + per-line Order # + ASIN + qty; lines with no Order # →
-   unmatched bucket; confirm whether Quantity Shipped is individual units
-   or ASIN qty and convert through Units/Pack before writing — §4.1);
-   match (Order # → `order_id`, ASIN) → `po_asins` → upsert
-   `po_asin_shipments` → the trigger recomputes Shipped FBA / Received by
-   Amazon → auto-close. Amazon receiving losses simply show as Shipped FBA
-   vs Received by Amazon. Email tracking-number parsing → Shipped by
-   Supplier. Home-shipped POs + a Shipments nav page.
+7. **Phase 2 — reconciliation data feeds: SHIPPED 2026-10-17** (see
+   "Shipment reconciliation" above). Still deferred from it: an hourly
+   Sync Shipments pass (scheduler rework), Velocity's
+   `confirmed-shipments` under the API key (Maria asked Velocity), email
+   tracking-number parsing → Shipped by Supplier, a Shipments nav page.
 
 ---
 

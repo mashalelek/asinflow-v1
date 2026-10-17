@@ -331,6 +331,17 @@ ASIN in `asins` and onboards ASINs the report names that AF lacks (tag
 watch `[scheduler]` in the dev-server log; the ledger rows are
 `refresh_runs WHERE job_id = N`. Jobs and ledger rows are history and stay.
 
+## Velocity API: `offset` is a page index
+
+Every Velocity list endpoint (`/inbound`, `/inventory`, `/shipments`)
+treats `offset` as the 0-based PAGE NUMBER, not a row offset — the docs
+say "items to skip" and are wrong (probe 2026-10-17: `limit=10&offset=1`
+→ rows 11–20; `offset=10` → nothing). Page through with
+`listInboundOrders({ limit, page })` / `fetchAllInventoryOrders()` in
+`server/velocity-api.ts`, or `limit=-1` for everything; never compute
+`offset = page × limit`. The coverage tripwire (`total_results` vs
+fetched) still guards every list leg.
+
 ## Approval model: Maria approves the spec patch, not each commit
 
 Once a spec patch (`docs/claude_spec-patch-*.md`) is approved, implement
