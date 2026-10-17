@@ -111,6 +111,25 @@ describe("pagination tripwires (2026-09-02)", () => {
     } finally { globalThis.fetch = orig; }
   });
 
+  it("offset is a PAGE INDEX (docs-wrong, probe 2026-10-17): page 2 asks offset=1, never offset=200", async () => {
+    process.env.VELOCITY_API_KEY = "k"; process.env.VELOCITY_WAREHOUSE_ID = "1";
+    const orig = globalThis.fetch;
+    const page = (n: number) => Array.from({ length: n }, (_, i) => ({ order_id: `o${i}`, order_number: String(i), asin: "B0A" }));
+    const urls: string[] = [];
+    globalThis.fetch = vi.fn(async (url: any) => {
+      urls.push(String(url));
+      const off = Number(new URL(String(url)).searchParams.get("offset"));
+      const orders = off === 0 ? page(200) : off === 1 ? page(50) : [];
+      return { status: 200, ok: true, headers: { get: () => null }, json: async () => ({ status: "success", data: { orders, results: { total_results: 250 } } }) };
+    }) as any;
+    try {
+      const { fetchAllInboundOrders, fetchAllInventoryOrders } = await import("./velocity-api");
+      expect((await fetchAllInboundOrders()).length).toBe(250);
+      expect((await fetchAllInventoryOrders()).length).toBe(250);
+      expect(urls.map((u) => new URL(u).searchParams.get("offset"))).toEqual(["0", "1", "0", "1"]);
+    } finally { globalThis.fetch = orig; }
+  });
+
   it("fetched ≠ reported total throws — no plan on partial coverage", async () => {
     process.env.VELOCITY_API_KEY = "k"; process.env.VELOCITY_WAREHOUSE_ID = "1";
     const orig = globalThis.fetch;

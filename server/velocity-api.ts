@@ -24,6 +24,19 @@ export interface VelocityInboundOrder {
   status: string;       // e.g. "inbound"
   item_name?: string;
   quantity?: number;
+  // Quantities (probe 2026-10-17, docs-wrong: none of these is documented).
+  // ALL in component (individual) units; ASIN qty = units ÷ units_per_pack.
+  retailer?: string;            // = the PO supplier
+  amazon_sku?: string | null;
+  fnsku?: string | null;
+  units_per_pack?: number | null; // null for sold_as = individual
+  quantity_received?: number;   // checked in at Velocity
+  quantity_shipped?: number;    // this shipment's part (shipment-detail lines)
+  quantity_remaining?: number;  // still at Velocity (= received − shipped − removed)
+  quantity_damaged?: number;
+  quantity_missing?: number;
+  quantity_removed?: number;
+  unit_status?: string;         // "pending" | "partially_received" | "fully_received"
   // Bundles (SPEC §11, 2026-08-31): parent rows carry order_number null and
   // nest their components here; each child is order-like with its own
   // order_number/retailer and a bundle_order_id pointing at the parent.
@@ -104,12 +117,17 @@ export interface ListInboundResult {
   totalResults: number;
 }
 
+// `page` is the 0-based PAGE INDEX. Velocity's `offset` parameter is a page
+// number, not a row offset (probe 2026-10-17, docs-wrong: `limit=10&offset=1`
+// returns rows 11–20, `offset=10` returns nothing). Until 2026-10-17 every
+// caller passed `page × limit` here, which is only correct for page 0; the
+// coverage tripwire would have thrown on the first >200-row list.
 export async function listInboundOrders(
-  opts: { limit?: number; offset?: number; sortKey?: string; sortOrder?: "asc" | "desc" } = {},
+  opts: { limit?: number; page?: number; sortKey?: string; sortOrder?: "asc" | "desc" } = {},
 ): Promise<ListInboundResult> {
   const params = new URLSearchParams();
   params.set("limit", String(opts.limit ?? 200));
-  params.set("offset", String(opts.offset ?? 0));
+  params.set("offset", String(opts.page ?? 0));
   if (opts.sortKey) params.set("sort_key", opts.sortKey);
   if (opts.sortOrder) params.set("sort_order", opts.sortOrder);
   const body = await velocityFetch(`/inbound?${params.toString()}`);
@@ -135,7 +153,7 @@ export async function fetchAllInboundOrders(): Promise<VelocityInboundOrder[]> {
   const all: VelocityInboundOrder[] = [];
   let reported = -1;
   for (let page = 0; page < MAX_PAGES; page++) {
-    const { orders, totalResults } = await listInboundOrders({ limit: PAGE, offset: page * PAGE });
+    const { orders, totalResults } = await listInboundOrders({ limit: PAGE, page });
     reported = totalResults;
     all.push(...orders);
     if (all.length >= totalResults || orders.length === 0) break;
@@ -285,13 +303,14 @@ export interface KnownVelocityOrder extends VelocityInboundOrder {
   lifecycleSource: OrderLifecycleSource;
 }
 
-async function fetchAllInventoryOrders(): Promise<VelocityInboundOrder[]> {
+export async function fetchAllInventoryOrders(): Promise<VelocityInboundOrder[]> {
   const PAGE = 200;
   const MAX_PAGES = 50;
   const all: VelocityInboundOrder[] = [];
   let reported = -1;
   for (let page = 0; page < MAX_PAGES; page++) {
-    const body = await velocityFetch(`/inventory?limit=${PAGE}&offset=${page * PAGE}`);
+    // offset = page index (see listInboundOrders).
+    const body = await velocityFetch(`/inventory?limit=${PAGE}&offset=${page}`);
     const orders: VelocityInboundOrder[] = body.data?.orders ?? [];
     const total = body.data?.results?.total_results;
     // Tripwire (2026-09-02): no silent fallback — missing metadata throws.
@@ -306,6 +325,49 @@ async function fetchAllInventoryOrders(): Promise<VelocityInboundOrder[]> {
     throw new Error(`Velocity /inventory coverage incomplete: fetched ${all.length} of ${reported} — refusing to classify`);
   }
   return all;
+}
+
+// ── Shipments (outbound) — patch docs/claude_spec-patch-shipment-reconciliation.md ──
+// GET /shipments (list) and GET /shipments/:id (detail). Probe 2026-10-17:
+// every shipment is retained with terminal status "shipped"; the list row
+// carries shipped_at (RFC-1123 GMT), destinations[] {fc, city, state} and
+// total_quantity_shipped; the detail carries orders[] (the lines, with the
+// quantity fields above), boxes[] and trackings[]; neither carries an Amazon
+// FBA shipment id. No date filter exists.
+export interface VelocityShipmentRow {
+  shipment_id: string;
+  status: string;
+  stage?: string;
+  name?: string;
+  created_at?: string;
+  shipped_at?: string | null;
+  destinations?: Array<{ fc: string; city?: string; state?: string }>;
+  total_quantity_shipped?: number;
+  fulfillment_type?: string;
+  [key: string]: any;
+}
+
+/** Every shipment, in one request (limit=-1), with the coverage tripwire. */
+export async function listAllShipments(): Promise<VelocityShipmentRow[]> {
+  const body = await velocityFetch(`/shipments?limit=-1`);
+  const rows: VelocityShipmentRow[] = body.data?.shipments ?? [];
+  const total = body.data?.results?.total_results;
+  if (typeof total !== "number" || !Number.isFinite(total)) {
+    throw new Error(`Velocity /shipments metadata missing data.results.total_results — refusing partial coverage (got ${JSON.stringify(total)})`);
+  }
+  if (rows.length !== total) throw new Error(`Velocity /shipments coverage incomplete: fetched ${rows.length} of ${total}`);
+  for (const r of rows) if (!r.shipment_id) throw new Error("Velocity /shipments row without shipment_id — coverage ambiguous");
+  return rows;
+}
+
+/** One shipment's detail (`data`): orders[] lines, boxes[], trackings[]. Throws when the orders array is missing. */
+export async function getShipmentDetail(shipmentId: string): Promise<{ orders: VelocityInboundOrder[]; [key: string]: any }> {
+  const body = await velocityFetch(`/shipments/${encodeURIComponent(shipmentId)}`);
+  const data = body.data;
+  if (!data || !Array.isArray(data.orders)) {
+    throw new Error(`Velocity shipment ${shipmentId}: detail response has no orders array — coverage ambiguous`);
+  }
+  return data;
 }
 
 // Fail-closed parser: a shipment detail without a well-formed orders array is
