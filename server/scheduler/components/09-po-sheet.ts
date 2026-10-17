@@ -1,8 +1,9 @@
 // 9. Actual COGS from the PO sheet (hourly). CALL-5 Orders Google Sheet via
-// runSheetsSync. MUST precede inventory (15): inventory copies ordered_qty
-// from asin_estimates, written here. Scheduled scope = the full sheet; a
-// scoped job syncs its ASINs only (the clearing pass stays inside the
-// filter, as runSheetsSync already guarantees).
+// runSheetsSync. Since 2026-10-17 (patch asins-on-order-from-pos) it writes
+// COGS / prep only — ordered_qty is derived from the PO tables, so the
+// old "must precede inventory (15)" ordering constraint and the clearing
+// pass are gone (`cleared` is always 0). Scheduled scope = the full sheet;
+// a scoped job syncs its ASINs only.
 import type { ComponentDef, ComponentContext, ComponentResult } from "../types";
 
 export const poSheet: ComponentDef = {

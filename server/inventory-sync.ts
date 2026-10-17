@@ -1,3 +1,4 @@
+import { loadAsinPipeline } from "./asin-po-pipeline";
 import { spApiGet } from "./spapi";
 import { query } from "./db";
 import { log } from "./index";
@@ -100,14 +101,14 @@ export async function syncInventory(
     }
   } while (nextToken);
 
-  // Now insert one aggregated snapshot per ASIN
+  // Now insert one aggregated snapshot per ASIN. The snapshot's ordered_qty
+  // column records the PO-derived On Order at snapshot time (patch
+  // asins-on-order-from-pos §3.3, 2026-10-17) — it used to copy the sheet's
+  // asin_estimates.ordered_qty, which is no longer written.
+  const pipeline = await loadAsinPipeline((sql, params) => query(sql, params));
   let synced = 0;
   for (const [asin, agg] of Array.from(asinAgg.entries())) {
-    // Get ordered_qty from asin_estimates
-    const estRow = await query(`SELECT ordered_qty FROM asin_estimates WHERE asin = $1`, [asin]);
-    const ordered_qty = estRow.rows[0]?.ordered_qty != null
-      ? parseInt(estRow.rows[0].ordered_qty) || 0
-      : 0;
+    const ordered_qty = Math.round(pipeline.get(asin.toUpperCase())?.on_order ?? 0);
 
     await query(
       `INSERT INTO inventory_snapshots (asin_id, available_fba, reserved, inbound_shipped, inbound_receiving, ordered_qty, snapshot_at)

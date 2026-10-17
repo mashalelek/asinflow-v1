@@ -998,8 +998,12 @@ async function runSheetsSync(
         setClauses.push(`prep_override = $${idx++}`);
         values.push(data.prepCost);
       }
-      setClauses.push(`ordered_qty = $${idx++}`);
-      values.push(data.orderedQty);
+      // ordered_qty is NOT written any more (patch asins-on-order-from-pos
+      // §3.4, 2026-10-17): the ASINs page derives On Order / Pipeline from
+      // the PO tables. The column stays in place, unread, until a cleanup
+      // migration drops it. A row the sheet gives no cost or prep for has
+      // nothing left to write.
+      if (setClauses.length === 0) { skipped++; continue; }
       values.push(asin);
 
       const result = await query(
@@ -1008,7 +1012,7 @@ async function runSheetsSync(
       );
       if ((result.rowCount ?? 0) > 0) {
         updated++;
-        log(`PO sync ${asin}: cogs=${data.cogs ?? "-"} actual=${actBranch} est=${estBranch} prep=${data.prepCost ?? "-"} qty=${data.orderedQty}`, "sheets");
+        log(`PO sync ${asin}: cogs=${data.cogs ?? "-"} actual=${actBranch} est=${estBranch} prep=${data.prepCost ?? "-"}`, "sheets");
       } else skipped++;
 
       // Update supplier on asins table if available
@@ -1020,33 +1024,13 @@ async function runSheetsSync(
     }
   }
 
-  // Clearing pass (SPEC §11, 2026-08-23): ordered_qty ONLY — the loop above
-  // never visits ASINs absent from the sheet, so a vanished ASIN (corrected
-  // in the sheet) kept its last-written qty forever. Cost snapshots are
-  // point-in-time by semantics and are never cleared here. Fail-closed on
-  // rawRowsRead: an empty read must not zero the catalog. Scoped runs clear
-  // only inside their filter — never an ASIN outside the sync's scope.
+  // The ordered_qty clearing pass (SPEC §11, 2026-08-23) is gone with the
+  // column's last writer (2026-10-17): nothing reads asin_estimates.
+  // ordered_qty any more. `cleared` / `clearedAsins` stay in the result
+  // shape for the callers (toast, component 9 ledger) and are always 0.
+  // rawRowsRead keeps its fail-closed meaning for the read itself.
+  if (rawRowsRead === 0) log(`PO sync: rawRowsRead=0 — empty/failed sheet read (nothing written beyond the rows above)`, "sheets");
   const clearedAsins: string[] = [];
-  if (rawRowsRead > 0) {
-    try {
-      const stale = await query(`SELECT asin FROM asin_estimates WHERE ordered_qty <> 0`);
-      for (const row of stale.rows) {
-        const staleAsin: string = row.asin;
-        if (sheetData.has(staleAsin)) continue;
-        if (asinFilter && asinFilter.size > 0 && !asinFilter.has(staleAsin)) continue;
-        await query(`UPDATE asin_estimates SET ordered_qty = 0 WHERE asin = $1`, [staleAsin]);
-        clearedAsins.push(staleAsin);
-      }
-      if (clearedAsins.length > 0) {
-        log(`PO sync clearing pass${asinFilter ? " (in-filter)" : ""}: ordered_qty -> 0 for ${clearedAsins.length} ASIN(s) with zero sheet rows: ${clearedAsins.join(", ")}`, "sheets");
-      }
-    } catch (err: any) {
-      errors.push(`clearing pass: ${err.message}`);
-    }
-  } else {
-    log(`PO sync clearing pass SKIPPED (fail-closed): rawRowsRead=0 — empty/failed sheet read, nothing cleared`, "sheets");
-  }
-
   return { updated, skipped, errors, cleared: clearedAsins.length, clearedAsins };
 }
 
@@ -3295,10 +3279,12 @@ export async function registerRoutes(
       );
 
       const latestInv = await query(
-        `SELECT available_fba, reserved, inbound_shipped + inbound_receiving AS inbound, ordered_qty FROM inventory_snapshots WHERE asin_id = $1 ORDER BY snapshot_at DESC LIMIT 1`,
+        `SELECT available_fba, reserved, inbound_shipped + inbound_receiving AS inbound FROM inventory_snapshots WHERE asin_id = $1 ORDER BY snapshot_at DESC LIMIT 1`,
         [asinId]
       );
-      const estRow = await query(`SELECT cogs, ordered_qty FROM asin_estimates WHERE asin = $1`, [asin]);
+      const estRow = await query(`SELECT cogs FROM asin_estimates WHERE asin = $1`, [asin]);
+      // On-order figures from the PO tables (patch asins-on-order-from-pos §3.3).
+      const pl = (await loadAsinPipeline((sql, params) => query(sql, params), [String(asin)])).get(String(asin).toUpperCase()) ?? EMPTY_PIPELINE;
       const inv = latestInv.rows[0];
       const est = estRow.rows[0];
       const stock = parseInt(inv?.available_fba) || 0;
@@ -3316,7 +3302,10 @@ export async function registerRoutes(
           stock_value: Math.round(stock * cogs * 100) / 100,
           reserved: parseInt(inv?.reserved) || 0,
           inbound: parseInt(inv?.inbound) || 0,
-          ordered: parseInt(est?.ordered_qty) || 0,
+          on_order: pl.on_order,
+          at_prep: pl.at_prep,
+          inbound_fba: pl.inbound_fba,
+          pipeline: pl.pipeline,
         },
       });
     } catch (err: any) {
@@ -4030,7 +4019,7 @@ export async function registerRoutes(
     ).catch((err: any) => log(`Phase c: synthetic-COGS clear failed: ${err?.message ?? err}`, "full-scope"));
 
     // COGS: ASINs with Orders-sheet rows get the real PO sync, scoped to
-    // them, so actual_cogs / cogs_source='po_sheet' / ordered_qty land the
+    // them, so actual_cogs / cogs_source='po_sheet' / prep_override land the
     // same way they do for any PO'd ASIN. No Orders rows → COGS stays NULL.
     const poAsins = rows.filter((r) => r.cogsSource === "po_sheet").map((r) => r.asin);
     if (poAsins.length > 0) {

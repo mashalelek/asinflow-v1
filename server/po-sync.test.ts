@@ -46,9 +46,10 @@ const sheetEntries = () =>
     NULASIN0001: { cogs: 4.2, prepCost: null, orderedQty: 1, supplier: null },
   }));
 
+let sheetOverride: Map<string, any> | null = null;
 vi.mock("./google-sheets", () => ({
-  fetchSheetData: async () => sheetEntries(),
-  fetchSheetDataWithMeta: async () => ({ data: sheetEntries(), rawRowsRead }),
+  fetchSheetData: async () => sheetOverride ?? sheetEntries(),
+  fetchSheetDataWithMeta: async () => ({ data: sheetOverride ?? sheetEntries(), rawRowsRead }),
   fetchSheetRows: async () => [],
 }));
 
@@ -56,6 +57,7 @@ import { getRunSheetsSync } from "./routes";
 
 beforeEach(() => {
   updates.length = 0;
+  sheetOverride = null;
   staleOrderedAsins = [];
   rawRowsRead = 3;
   process.env.GOOGLE_SHEET_ID = "test-sheet"; // fetchSheetData is mocked; only the guard reads this
@@ -90,52 +92,29 @@ describe("runSheetsSync estimated_cogs rule (§2, corrected 2026-08-11)", () => 
   });
 });
 
-// Pins the ordered_qty clearing pass (SPEC §11, 2026-08-23): an ASIN with
-// non-zero ordered_qty but zero rows in the current read is zeroed — all of
-// them on full-catalog runs, only in-filter ones on scoped runs — and the
-// pass fails closed on an empty read (rawRowsRead = 0 clears nothing).
-describe("runSheetsSync ordered_qty clearing pass (§11, 2026-08-23)", () => {
-  const clearsFor = (asin: string) =>
-    updates.filter((x) => /SET ordered_qty = 0/.test(x.sql) && x.params[0] === asin);
-
-  it("full-catalog run clears every vanished ASIN and reports it", async () => {
-    staleOrderedAsins = ["GONEASIN001", "GONEASIN002", "CSVASIN0001"];
+// 2026-10-17 (patch asins-on-order-from-pos §3.4): runSheetsSync no longer
+// writes asin_estimates.ordered_qty, and the 2026-08-23 clearing pass went
+// with it — On Order / Pipeline are derived from the PO tables. `cleared`
+// stays 0 in the result for the callers.
+describe("runSheetsSync never touches ordered_qty (2026-10-17)", () => {
+  it("the per-ASIN UPDATE carries cogs / prep only; nothing scans or zeroes ordered_qty", async () => {
+    staleOrderedAsins = ["GONEASIN001", "GONEASIN002"];
     const r = await getRunSheetsSync()();
-    expect(clearsFor("GONEASIN001")).toHaveLength(1);
-    expect(clearsFor("GONEASIN002")).toHaveLength(1);
-    expect(clearsFor("CSVASIN0001")).toHaveLength(0); // present in the read — not "vanished"
-    expect(r.cleared).toBe(2);
-    expect(r.clearedAsins.sort()).toEqual(["GONEASIN001", "GONEASIN002"]);
-  });
-
-  it("scoped run clears only in-filter vanished ASINs", async () => {
-    staleOrderedAsins = ["GONEASIN001", "GONEASIN002"];
-    const r = await getRunSheetsSync()(new Set(["GONEASIN001", "CSVASIN0001"]));
-    expect(clearsFor("GONEASIN001")).toHaveLength(1);
-    expect(clearsFor("GONEASIN002")).toHaveLength(0); // outside scope — untouched
-    expect(r.cleared).toBe(1);
-    expect(r.clearedAsins).toEqual(["GONEASIN001"]);
-  });
-
-  it("scoped run not covering the vanished ASINs clears nothing", async () => {
-    staleOrderedAsins = ["GONEASIN001", "GONEASIN002"];
-    const r = await getRunSheetsSync()(new Set(["CSVASIN0001"]));
+    expect(updates.length).toBeGreaterThan(0);
+    for (const u of updates) expect(u.sql).not.toMatch(/ordered_qty/);
     expect(updates.some((x) => /SET ordered_qty = 0/.test(x.sql))).toBe(false);
     expect(r.cleared).toBe(0);
+    expect(r.clearedAsins).toEqual([]);
   });
 
-  it("fail-closed: rawRowsRead = 0 clears nothing", async () => {
-    staleOrderedAsins = ["GONEASIN001"];
-    rawRowsRead = 0;
-    const r = await getRunSheetsSync()();
-    expect(updates.some((x) => /SET ordered_qty = 0/.test(x.sql))).toBe(false);
-    expect(r.cleared).toBe(0);
-  });
-
-  it("clears ordered_qty ONLY — never the cost snapshot columns", async () => {
-    staleOrderedAsins = ["GONEASIN001"];
-    await getRunSheetsSync()();
-    const clear = clearsFor("GONEASIN001")[0];
-    expect(clear.sql).toBe("UPDATE asin_estimates SET ordered_qty = 0 WHERE asin = $1");
+  it("a sheet row with no cost and no prep writes nothing (counted skipped)", async () => {
+    sourcesByAsin = { NULASIN0001: { est: null, act: null } };
+    const entries = sheetEntries(); entries.set("NULASIN0001", { cogs: null, prepCost: null, orderedQty: 7, supplier: null } as any);
+    sheetOverride = entries;
+    const r = await getRunSheetsSync()(new Set(["NULASIN0001"]));
+    expect(updates.filter((x) => x.params[x.params.length - 1] === "NULASIN0001")).toHaveLength(0);
+    expect(r.skipped).toBe(3); // the row itself + the two out-of-filter entries
+    expect(r.updated).toBe(0);
   });
 });
+
