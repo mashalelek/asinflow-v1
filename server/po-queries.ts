@@ -10,10 +10,19 @@
 // new quantities (cols 13–18) are stored on po_asins as ASIN qty.
 import type { QueryLike } from "./scheduler/types";
 
-/** Derived ASIN-level qty from the lines: NULL if any line's value is NULL. */
-const derivedFromLines = (col: string) =>
+/**
+ * Derived ASIN-level qty from the lines: NULL if any line's value is NULL.
+ * Σ(line qty × yield); for sold_as = 'bundle' divided by unique_products
+ * (Col S) — each component's stored yield is its standalone yield, so the
+ * plain sum counts the bundle N times (Maria 2026-10-17: fully canceled
+ * Kinder's B0G6R55GNQ = 12, not 24; 1 unit of one product in a 3-product
+ * bundle = 1/3). Multi-packs and non-bundle groups keep the plain sum.
+ * `pa` must be the po_asins alias in the enclosing query.
+ */
+export const derivedFromLines = (col: string) =>
   `(SELECT CASE WHEN COUNT(*) = 0 OR COUNT(*) FILTER (WHERE l.${col} IS NULL) > 0 THEN NULL
-                ELSE SUM(l.${col} * COALESCE(l.asin_qty_per_product, 1)) END
+                ELSE SUM(l.${col} * COALESCE(l.asin_qty_per_product, 1))
+                     / (CASE WHEN pa.sold_as = 'bundle' AND COALESCE(pa.unique_products, 0) > 1 THEN pa.unique_products ELSE 1 END) END
       FROM po_line_items l WHERE l.po_asin_id = pa.id)`;
 
 /** The ASIN-row SELECT. `where` is a clause on pa.* (e.g. "pa.po_id = $1" or "pa.po_id = ANY($1::uuid[])"). */

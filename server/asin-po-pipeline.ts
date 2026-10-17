@@ -15,6 +15,7 @@
 // 2026-10-17 (clean-up): Amazon's own inbound ("Sent to FBA") covers the
 // shipped-not-received units.
 import type { QueryLike } from "./scheduler/types";
+import { derivedFromLines } from "./po-queries";
 
 export interface PipelineRow {
   asin: string;
@@ -56,10 +57,7 @@ export function computePipeline(rows: PipelineRow[]): Map<string, AsinPipeline> 
   return out;
 }
 
-const derived = (col: string) =>
-  `(SELECT CASE WHEN COUNT(*) = 0 OR COUNT(*) FILTER (WHERE l.${col} IS NULL) > 0 THEN NULL
-                ELSE SUM(l.${col} * COALESCE(l.asin_qty_per_product, 1)) END
-      FROM po_line_items l WHERE l.po_asin_id = pa.id)`;
+const derived = derivedFromLines; // one definition (server/po-queries.ts), bundle ÷ N included
 
 export const PIPELINE_ROWS_SQL = `
   SELECT pa.asin, (p.closed_at IS NOT NULL) AS closed, pa.qty, pa.qty_lost_damaged_us, pa.qty_at_prep, pa.qty_shipped_fba, pa.qty_received_amazon,
