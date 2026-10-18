@@ -26,7 +26,7 @@ import { loadColumnConfig, type ColumnConfig } from "@/lib/columns";
 import { JobsDialog } from "@/components/jobs-dialog";
 import { useJobs } from "@/hooks/use-jobs";
 import { enqueueRefresh, cancelJob, getJob, runningLabel, queuedLabel, completionText, FOCUS_ASIN_EVENT, type Job } from "@/lib/jobs-api";
-import { refreshPlan, queuedJobIdFromMessage } from "@/lib/upload-flow";
+import { refreshPlan, queuedJobIdFromMessage, applyStreamedRow } from "@/lib/upload-flow";
 import { ToastAction } from "@/components/ui/toast";
 import { loadBuyList, saveBuyList, loadOnHoldList, saveOnHoldList } from "@/lib/buy-hold";
 import { planBulkSetToggle, bulkToggleLabel, applyBulkPlan } from "@/lib/bulk-buy-hold";
@@ -578,33 +578,14 @@ export default function Home() {
             setProgress(msg.data);
           } else if (msg.type === "result") {
             const resultData = msg.data;
-            // Merge analyze result with existing row — preserve user-controlled
-            // fields (estimatedCogs, actualCogs, prepOverride, etc.) that the
-            // analyze path intentionally does not populate.
-            const mergeWithExisting = (existing: AsinResult, incoming: AsinResult): AsinResult => ({
-              ...existing,
-              ...incoming,
-              estimatedCogs: incoming.estimatedCogs ?? existing.estimatedCogs,
-              estimatedCogsSource: incoming.estimatedCogsSource ?? existing.estimatedCogsSource,
-              actualCogs: incoming.actualCogs ?? existing.actualCogs,
-              cogsSource: incoming.cogsSource ?? existing.cogsSource,
-              prepOverride: incoming.prepOverride ?? existing.prepOverride,
-              storageOverride: incoming.storageOverride ?? existing.storageOverride,
-              cogs: incoming.cogs || existing.cogs,
+            // Non-empty-wins merge (fix 2026-10-18): a streamed row — e.g. an
+            // onboarding placeholder with empty catalog / pricing — adds a row
+            // that is not on screen but never blanks a value already shown.
+            if (resultData._update) delete resultData._update;
+            setResults((prev) => {
+              if (prev.findIndex((r) => r.asin === resultData.asin) < 0) setSavedCount((c) => (c ?? 0) + 1);
+              return applyStreamedRow(prev, resultData);
             });
-            if (resultData._update) {
-              delete resultData._update;
-              setResults((prev) =>
-                prev.map((r) => (r.asin === resultData.asin ? mergeWithExisting(r, resultData) : r))
-              );
-            } else {
-              setResults((prev) => {
-                const idx = prev.findIndex((r) => r.asin === resultData.asin);
-                if (idx >= 0) return prev.map((r, i) => i === idx ? mergeWithExisting(r, resultData) : r);
-                setSavedCount((c) => (c ?? 0) + 1);
-                return [...prev, resultData];
-              });
-            }
           }
         } catch {}
       }

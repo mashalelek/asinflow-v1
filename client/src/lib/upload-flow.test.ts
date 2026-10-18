@@ -1,11 +1,10 @@
 import { describe, it, expect } from "vitest";
 import { readFileSync } from "fs";
 import { join } from "path";
-import { refreshPlan, queuedJobIdFromMessage } from "./upload-flow";
+import { refreshPlan, queuedJobIdFromMessage, applyStreamedRow, mergeNonEmpty } from "./upload-flow";
 
 // Fix 2026-10-18 (the 11-ASIN diagnosis): upload state, stream merge, reload on job completion.
 const read = (rel: string) => readFileSync(join(__dirname, "..", rel), "utf8");
-// eslint-disable-next-line @typescript-eslint/no-unused-vars
 const row = (over: any = {}): any => ({
   asin: "B09HRDGW17", cogs: 0, error: null, pricesFetchedAt: "2026-10-18T10:05:08.000Z",
   pricingData: { lowestFbaPrice: 50.11, buyBoxPrice: 50.11, lowestPrice: 49.86, sellersFba: 2, sellersFbm: 5 },
@@ -36,5 +35,23 @@ describe("1. upload then Refresh runs a refresh job", () => {
     expect(home).toMatch(/refreshPlan\(asins\)/);
     expect(home).toMatch(/const \{ job \} = await getJob\(id\); jobs\.watch\(job\);/);
     expect(home).not.toMatch(/if \(!asinsOverride && asins\.length > 0\) \{ await runAnalysis\(asins\); return; \}/);
+  });
+});
+
+describe("2. a placeholder never blanks an existing row", () => {
+  it("the onboarding placeholder leaves title, image, prices, fees and the checked stamp as they were", () => {
+    const [merged] = applyStreamedRow([row()], placeholder());
+    expect(merged).toEqual(row());
+  });
+  it("a placeholder for an ASIN not on screen is added; real values still replace old ones", () => {
+    const rows = applyStreamedRow([row()], placeholder("B0D2RHBG85"));
+    expect(rows.map((r) => r.asin)).toEqual(["B09HRDGW17", "B0D2RHBG85"]);
+    const updated = mergeNonEmpty(row(), { ...placeholder(), pricingData: { lowestFbaPrice: 48.0 } } as any);
+    expect(updated.pricingData).toEqual({ lowestFbaPrice: 48.0, buyBoxPrice: 50.11, lowestPrice: 49.86, sellersFba: 2, sellersFbm: 5 });
+  });
+  it("the page merges every streamed row through applyStreamedRow (no spread of an empty row over a displayed one)", () => {
+    const home = read("pages/home.tsx");
+    expect(home).toMatch(/return applyStreamedRow\(prev, resultData\);/);
+    expect(home).not.toMatch(/const mergeWithExisting = /);
   });
 });
