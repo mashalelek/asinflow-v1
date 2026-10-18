@@ -40,3 +40,19 @@ describe("job-finish row refresh (2026-10-18)", () => {
     expect(home).toMatch(/&asins=\$\{encodeURIComponent\(asins\.join\(","\)\)\}/);
   });
 });
+
+describe("stale off-screen rows (2026-10-18)", () => {
+  it("rows a finished job touched off screen refresh when they come on screen, once", async () => {
+    const { staleRowsDue } = await import("./row-refresh");
+    const stale = new Set(["B09HRDGW17", "B07K1N4K54"]);
+    expect(staleRowsDue(stale, ["b09hrdgw17", "B0OTHER001"])).toEqual(["B09HRDGW17"]);
+    expect(Array.from(stale)).toEqual(["B07K1N4K54"]);
+    expect(staleRowsDue(stale, ["B09HRDGW17"])).toEqual([]);
+  });
+  it("the page marks touched off-screen rows stale and refreshes them as the page shows them; a full load clears it", () => {
+    const home = readFileSync(resolve(__dirname, "../pages/home.tsx"), "utf8");
+    expect(home).toMatch(/for \(const a of touched\) if \(!now\.has\(a\)\) staleAsinsRef\.current\.add\(a\);/);
+    expect(home).toMatch(/const due = staleRowsDue\(staleAsinsRef\.current, paginatedResults\.map\(\(r\) => r\.asin\)\);/);
+    expect(home).toMatch(/staleAsinsRef\.current\.clear\(\); \/\/ a full list is fresh/);
+  });
+});

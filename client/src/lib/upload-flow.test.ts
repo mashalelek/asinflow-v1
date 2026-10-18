@@ -71,3 +71,13 @@ describe("3. a finished onboarding job refetches the rows on screen", () => {
     expect(home).toMatch(/useJobs\(onJobFinished, onJobSettled\)/);
   });
 });
+
+describe("4. the gating icon on upload rows (2026-10-18)", () => {
+  it("a streamed placeholder's gating 'check' (unknown) never replaces a known yes / no; a real status still replaces", () => {
+    const known: any = { ...row(), eligibilityData: { status: "no" } };
+    const ph: any = { ...placeholder(), eligibilityData: { status: "check" } };
+    expect(applyStreamedRow([known], ph)[0].eligibilityData).toEqual({ status: "no" });
+    expect(applyStreamedRow([known], { ...ph, eligibilityData: { status: "yes" } })[0].eligibilityData).toEqual({ status: "yes" });
+    expect(applyStreamedRow([], ph)[0].eligibilityData).toEqual({ status: "check" }); // a new row starts unknown
+  });
+});

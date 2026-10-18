@@ -46,7 +46,15 @@ export function mergeNonEmpty<T>(existing: T, incoming: T): T {
 export function applyStreamedRow(rows: readonly AsinResult[], incoming: AsinResult): AsinResult[] {
   const idx = rows.findIndex((r) => r.asin === incoming.asin);
   if (idx < 0) return [...rows, incoming];
-  return rows.map((r, i) => (i === idx ? mergeNonEmpty(r, incoming) : r));
+  return rows.map((r, i) => {
+    if (i !== idx) return r;
+    const merged = mergeNonEmpty(r, incoming);
+    // A placeholder's gating "check" means "not known yet" — it never replaces a known
+    // yes / no, or the gating icon would vanish until the next full load (2026-10-18).
+    const known = r.eligibilityData?.status;
+    if (incoming.eligibilityData?.status === "check" && (known === "yes" || known === "no")) return { ...merged, eligibilityData: r.eligibilityData };
+    return merged;
+  });
 }
 
 /** Does a finished job touch any row on screen? A job with no scope covered the whole catalog. */

@@ -50,3 +50,10 @@ export class RowRefresher {
     } finally { this.inFlight = false; }
   }
 }
+
+/** The stale rows now on screen — removed from the stale set as they are handed out for refresh. */
+export function staleRowsDue(stale: Set<string>, onScreen: readonly string[]): string[] {
+  const due: string[] = [];
+  for (const a of onScreen) { const k = a.toUpperCase(); if (stale.has(k)) { due.push(k); stale.delete(k); } }
+  return due;
+}

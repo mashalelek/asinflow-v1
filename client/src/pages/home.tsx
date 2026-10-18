@@ -27,7 +27,7 @@ import { JobsDialog } from "@/components/jobs-dialog";
 import { useJobs } from "@/hooks/use-jobs";
 import { enqueueRefresh, cancelJob, getJob, runningLabel, queuedLabel, completionText, FOCUS_ASIN_EVENT, type Job } from "@/lib/jobs-api";
 import { refreshPlan, queuedJobIdFromMessage, applyStreamedRow } from "@/lib/upload-flow";
-import { rowsToRefresh, mergeRefreshedRows, RowRefresher } from "@/lib/row-refresh";
+import { rowsToRefresh, mergeRefreshedRows, RowRefresher, staleRowsDue } from "@/lib/row-refresh";
 import { buildFilterChips, addedHiddenReport, type FilterChipKey } from "@/lib/filter-chips";
 import { FilterChipsBar } from "@/components/filter-chips-bar";
 import { formatFilterValue } from "@/components/active-filters-modal";
@@ -493,6 +493,7 @@ export default function Home() {
       })
       .then((data: AsinResult[]) => {
         if (!Array.isArray(data)) throw new Error("unexpected response from the server");
+        staleAsinsRef.current.clear(); // a full list is fresh
         if (data.length > 0) setResults(data);
         setSavedCount(data.length);
         setDbLoaded(true);
@@ -847,6 +848,8 @@ export default function Home() {
   // list; a scheduled pass (no scope) reloads the visible page once. One
   // request at a time per tab (RowRefresher coalesces), each job handled once.
   const visibleAsinsRef = useRef<string[]>([]);
+  const loadedAsinsRef = useRef<string[]>([]);
+  const staleAsinsRef = useRef<Set<string>>(new Set());
   const rangeRef = useRef({ startDate, endDate, showParked, showDead });
   rangeRef.current = { startDate, endDate, showParked, showDead };
   const rowRefresher = useMemo(() => new RowRefresher(async (asins) => {
@@ -865,6 +868,12 @@ export default function Home() {
     const extra = watch && job.scope_asins ? watch.asins.filter((a) => job.scope_asins!.map((x) => String(x).toUpperCase()).includes(a)) : [];
     if (watch && extra.length > 0) watch.recheck = true;
     const asins = Array.from(new Set([...rowsToRefresh(job, visibleAsinsRef.current), ...extra]));
+    // Rows of the job's scope that are loaded but off screen are now stale: they
+    // refresh when they come on screen (paging, a filter change), not before.
+    const now = new Set(asins);
+    const loaded = loadedAsinsRef.current;
+    const touched = job.scope_asins == null ? loaded : job.scope_asins.map((a) => String(a).toUpperCase()).filter((a) => loaded.includes(a));
+    for (const a of touched) if (!now.has(a)) staleAsinsRef.current.add(a);
     if (asins.length > 0) void rowRefresher.request(asins);
   }, [rowRefresher]);
 
@@ -1555,6 +1564,12 @@ export default function Home() {
     [sortedFilteredResults, safePage, pageSize]
   );
   visibleAsinsRef.current = paginatedResults.map((r) => r.asin);
+  loadedAsinsRef.current = results.map((r) => r.asin.toUpperCase());
+  // Stale rows coming on screen refresh then (only those).
+  useEffect(() => {
+    const due = staleRowsDue(staleAsinsRef.current, paginatedResults.map((r) => r.asin));
+    if (due.length > 0) void rowRefresher.request(due);
+  }, [paginatedResults, rowRefresher]);
 
   const handleSelectAll = useCallback(() => {
     setSelectedSet(new Set(paginatedResults.map((r) => r.asin)));
