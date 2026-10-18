@@ -1,4 +1,4 @@
-import type { Express, Request, Response } from "express";
+import type { Express, Request, Response, NextFunction } from "express";
 import { createServer, type Server } from "http";
 import multer from "multer";
 import Papa from "papaparse";
@@ -4348,9 +4348,13 @@ export async function registerRoutes(
   // response, never stored. invoice_file_name is built from THIS PO's own
   // date/supplier/orderID — the mockup's cross-wired filename regression is
   // exactly what that rule guards.
-  app.get("/api/pos/:id", async (req: Request, res: Response) => {
+  app.get("/api/pos/:id", async (req: Request, res: Response, next: NextFunction) => {
     if (!isDbAvailable()) { res.status(503).json({ message: "Database not available" }); return; }
     const id = typeof req.params.id === "string" ? req.params.id : "";
+    // A PO id is a UUID. Anything else is a fixed path registered later
+    // (/api/pos/unmatched) — hand it on instead of failing the uuid cast
+    // (that 500'd the Unmatched panel, found 2026-10-18).
+    if (!/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(id)) { next(); return; }
     try {
       const poRes = await query(`SELECT p.*, ${PO_ACTION_ITEMS_SQL} AS line_action_items FROM purchase_orders p WHERE p.id = $1`, [id]);
       if (poRes.rows.length === 0) { res.status(404).json({ message: "PO not found" }); return; }
