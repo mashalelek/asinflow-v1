@@ -8,6 +8,7 @@ import { DateRangeProvider } from "@/contexts/date-range-context";
 import { AuthProvider, useAuth } from "@/contexts/auth-context";
 import { Layout } from "@/components/layout/layout";
 import { LoginScreen } from "@/components/login-screen";
+import { UpdateBanner } from "@/components/update-banner";
 import NotFound from "@/pages/not-found";
 import Home from "@/pages/home";
 import BulkCalc from "@/pages/bulk-calc";
@@ -60,6 +61,7 @@ function App() {
           <DateRangeProvider>
             <TooltipProvider>
               <Toaster />
+              <UpdateBanner />
               <AuthGate />
             </TooltipProvider>
           </DateRangeProvider>
