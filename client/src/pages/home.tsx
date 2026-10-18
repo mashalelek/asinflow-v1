@@ -28,6 +28,10 @@ import { useJobs } from "@/hooks/use-jobs";
 import { enqueueRefresh, cancelJob, getJob, runningLabel, queuedLabel, completionText, FOCUS_ASIN_EVENT, type Job } from "@/lib/jobs-api";
 import { refreshPlan, queuedJobIdFromMessage, applyStreamedRow } from "@/lib/upload-flow";
 import { rowsToRefresh, mergeRefreshedRows, RowRefresher } from "@/lib/row-refresh";
+import { buildFilterChips, type FilterChipKey } from "@/lib/filter-chips";
+import { FilterChipsBar } from "@/components/filter-chips-bar";
+import { formatFilterValue } from "@/components/active-filters-modal";
+import { ALL_COLUMNS as ALL_COLUMN_DEFS } from "@shared/schema";
 import { ToastAction } from "@/components/ui/toast";
 import { loadBuyList, saveBuyList, loadOnHoldList, saveOnHoldList } from "@/lib/buy-hold";
 import { planBulkSetToggle, bulkToggleLabel, applyBulkPlan } from "@/lib/bulk-buy-hold";
@@ -1514,6 +1518,31 @@ export default function Home() {
     setFilterUncalculated(false);
   }
 
+  // Active filters, always visible (2026-10-18): a chip per filter that can hide a
+  // loaded ASIN — the visibility toggles included — and how many rows they hide.
+  const colLabelById = useMemo(() => new Map(ALL_COLUMN_DEFS.map((c) => [c.id as string, c.label])), []);
+  const filterChips = useMemo(() => buildFilterChips(
+    { activeFilter, filterUncalculated, searchQuery, selectedCount: selectedSearchAsins.size, showGated, showMeltable, colFilters },
+    (id) => colLabelById.get(id) ?? id,
+    (id) => (colFilters[id] ? formatFilterValue(colFilters[id]) : ""),
+  ), [activeFilter, filterUncalculated, searchQuery, selectedSearchAsins, showGated, showMeltable, colFilters, colLabelById]);
+  const hiddenByFilters = results.length - queryFilteredResults.length;
+  function clearFilterChip(key: FilterChipKey) {
+    if (key === "tile") setActiveFilter("all");
+    else if (key === "uncalculated") setFilterUncalculated(false);
+    else if (key === "search") setSearchQuery("");
+    else if (key === "selection") { setSelectedSearchAsins(new Set()); setSearchQuery(""); }
+    else if (key === "gated") { setShowGated(true); saveShowGated(true); }
+    else if (key === "meltable") { setShowMeltable(true); saveShowMeltable(true); }
+    else if (key.startsWith("col:")) { const id = key.slice(4); setColFilters((prev) => { const next = { ...prev }; delete next[id]; return next; }); }
+  }
+  function clearAllFilters() {
+    clearSearchFilters();
+    setActiveFilter("all");
+    setShowGated(true); saveShowGated(true);
+    setShowMeltable(true); saveShowMeltable(true);
+  }
+
   const progressPercent = progress
     ? Math.round((progress.current / progress.total) * 100)
     : 0;
@@ -1702,6 +1731,7 @@ export default function Home() {
           )}
         </div>
 
+        <FilterChipsBar chips={filterChips} hiddenCount={hiddenByFilters} onClear={clearFilterChip} onClearAll={clearAllFilters} />
         {listLoad.state === "loading" && results.length > 0 && (
           <div className="mx-4 mb-1 flex items-center gap-2 text-xs text-muted-foreground" role="status" aria-live="polite" data-testid="asins-reloading">
             <Loader2 className="h-3.5 w-3.5 animate-spin" /> Updating the list…

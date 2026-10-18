@@ -8,7 +8,7 @@ const colLabelMap = new Map(ALL_COLUMNS.map((c) => [c.id, c.label]));
 const colGroupMap = new Map(ALL_COLUMNS.map((c) => [c.id, c.group]));
 const groupLabelMap = new Map(COLUMN_GROUPS.map((g) => [g.key, g.label]));
 
-function formatFilterValue(f: ColFilter): string {
+export function formatFilterValue(f: ColFilter): string {
   const op = f.operator;
   const v = f.value;
   if (op === "gt") return `> ${v}`;
