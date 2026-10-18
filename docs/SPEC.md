@@ -2122,13 +2122,16 @@ the ledger stage is the `refresh_runs.stage` key the component writes.
 | 12 | CPT (`asin_estimates.competitive_price_threshold`, migration 052 — decision 12) | hourly | rides CALL-6 | `12_cpt` | " |
 | 13 | FBA fee estimate | hourly | CALL-7 feesEstimate batch | `13_fees` | " |
 | 14 | Estimated profit / margin / ROI | hourly | computed | `14_profit` | " |
-| 15 | FBA inventory snapshot | hourly | CALL-8 inventory summaries | `15_inventory` | " |
-| 16 | Live offer / buyable / issues (§18 reconcile) | hourly | CALL-9 getListingsItem, per SKU | `16_live_offer` | active+parked |
+| 15 | FBA inventory snapshot + per-SKU buckets (`sku_fba_inventory`, 2026-10-18) | hourly | CALL-8 inventory summaries, `details=true` | `15_inventory` | " (buckets: account — every SKU in the response) |
+| 16 | Live offer / buyable / issues (§18 reconcile) + listing state per SKU (`asin_skus.listing_created_at` / `offer_end_at` / `listing_checked_at`, 2026-10-18) | hourly | CALL-9 getListingsItem, per SKU, `includedData` + `attributes` | `16_live_offer` | active+parked |
 | 17 | Primary SKU | hourly | derived from 15–16 | `17_primary_sku` | " |
 | 18 | Suppressions (FYP) | hourly | CALL-10 FYP report | `18_suppressions` | account |
 | 19 | Sales units / revenue | hourly | CALL-11 (today: orders report, 48-hour window; `params.sales_window` for the backfill) | `19_sales` | account — every ASIN in `asins`, all statuses (2026-10-16) |
 | 20 | Refunds | hourly | rides CALL-11 | `20_refunds` | " |
 | 21 | Actual fees charged | hourly | rides CALL-11 | `21_actual_fees` | " |
+| 22 | Close OOS listings (listing hygiene, 2026-10-18) | hourly | CALL-12 `patchListingsItem`, per SKU | `22_close_oos` | every SKU 15/16 observed; **scheduled passes only** |
+| 23 | Inventory Ledger (`sku_ledger_state`) | daily | CALL-13 `GET_LEDGER_SUMMARY_VIEW_DATA` (DAILY, COUNTRY); `params.ledger_window` for the backfill | `23_ledger` | account |
+| 24 | Delete long-dead listings (listing hygiene) | daily | CALL-14 `deleteListingsItem`, per SKU + Velocity `/inbound` + `/inventory` | `24_delete_dead` | every closed SKU; **00:00 pass only** |
 
 Dependencies the order encodes: 10 before 13 (fees need the fresh price)
 (9 before 15 was retired 2026-10-17 — the inventory snapshot's ordered_qty
@@ -2136,7 +2139,75 @@ is now derived from the PO tables, not copied from the sheet); 15 before 16
 (listings need the SKU set); 19–21 last so Actual profit uses this hour's
 COGS. **The daily block (2–8) is executed only by the 00:00 pass** and by
 any job enqueued with `include_daily` (the Refresh button, onboarding);
-every other scheduled pass skips it. 1 runs first in every pass.
+every other scheduled pass skips it. 1 runs first in every pass. 22 needs
+this pass's 15 (complete) and 16; 23 and 24 run only in the 00:00 pass
+(24 needs this pass's 15, 16 and tonight's 23) — appending them after 21
+satisfies every dependency.
+
+**Listing hygiene (22–24, 2026-10-18).** Patch
+`docs/claude_spec-patch-listing-hygiene.md` (decisions confirmed by Maria
+2026-10-18; it replaces the backlog line "Delete in SC from AF — not
+now"). Evaluated **per SKU**; ASIN-level pipeline data applies to every SKU
+of the ASIN; `amzn.gr.*` SKUs are excluded entirely.
+
+- **22 Close** — a SKU whose listing exists and is not closed is closed
+  when Available (fulfillable), Inbound (working + shipped + receiving),
+  FC Transfer (reserved › pending transshipment), FC Processing (reserved
+  › FC processing), Reserved (reserved › pending customer order) and
+  future supply are all zero. Unfulfillable and Researching do NOT block;
+  stages before FBA (On Order, At Prep, POs, Velocity) are never read.
+  The write is `patchListingsItem` `op: "merge"` on
+  `/attributes/purchasable_offer` setting `end_at` to
+  `BORN_CLOSED_END_AT`, built by the same helper the born-closed payload
+  uses, with the `findForbiddenQuantityPaths` pre-flight abort before every
+  PATCH. Outcomes: `closed` · `would_close` · `skip_has_stock:<bucket>` ·
+  `skip_already_closed` · `skip_no_listing` · `skip_pending_submission` ·
+  `skip_no_fresh_inventory` · `skip_probe_transient` · `skip_amzn_gr` ·
+  `held` · `invalid` / `error`.
+- **23 Inventory Ledger** — nightly last 7 days (overlap on purpose);
+  `sku_ledger_state.last_stocked_date` (latest Date with Σ Ending
+  Warehouse Balance over all dispositions > 0, per MSKU) only moves
+  forward. Backfill: one manual one-component job with
+  `params.ledger_window {from, to}`, 18 months, chunked (chunk size from
+  the 2026-10-18 spike). Fail-closed tripwire: a report with zero rows
+  while 15 shows any SKU with fulfillable > 0 is `inconclusive` — nothing
+  written, and that night's 24 skips everything as `ledger_unavailable`.
+- **24 Delete** — a SKU is deleted when its listing is closed now, every
+  FBA bucket is zero (Unfulfillable and Researching included), nothing is
+  in the pipeline for the ASIN — `asin_po_pipeline` On Order = 0 and At
+  Prep = 0 (`server/asin-po-pipeline.ts`, §6), no `po_asins` row on an
+  Open PO, and no Velocity units on hand (live `/inbound` + `/inventory`,
+  `quantity_remaining > 0`) — and the OOS clock has run: ever-stocked
+  `max(ledger_last_stocked_date, sku_fba_inventory.last_nonzero_at)` more
+  than 60 days ago; never-stocked (no ledger history in the 18-month
+  window and never nonzero in 15) `listing_created_at` more than 14 days
+  ago. `deleteListingsItem` is asynchronous (ACCEPTED ≠ done); the next
+  probe verifies (404 / empty summaries). Outcomes: `deleted` ·
+  `would_delete` · `skip_not_closed` · `skip_has_stock:<bucket>` ·
+  `skip_pipeline:on_order|at_prep|open_po|velocity` ·
+  `skip_clock:<days>/<threshold>` · `ledger_unavailable` ·
+  `velocity_unavailable` (any leg failed — the whole run skips) · `held` ·
+  `invalid` / `error`.
+- **Every SKU in scope gets an outcome**, and every candidate that fires
+  (or would) gets a `listing_actions` row with the full evidence snapshot.
+  Component 16 verifies on the next pass (close → `offer_end_at <= now()`;
+  delete → absent); still not effective after two passes →
+  `not_effective`, surfaced in the jobs dialog.
+- **Circuit breakers:** more than `settings.hygiene_close_breaker` (25)
+  closes or `hygiene_delete_breaker` (25) deletes in one run → write
+  nothing, every candidate `held`. **Release** in the jobs dialog (or
+  `POST /api/listing-hygiene/release {job_id, action}`) re-evaluates each
+  held SKU live and fires only those that still qualify.
+- **Live gates:** `LISTING_CLOSE_LIVE` / `LISTING_DELETE_LIVE` env vars,
+  unset → dry run (`would_*`, `listing_actions.dry_run = true`, zero SC
+  writes).
+- **22 and 24 never run in manual / onboarding / bulk jobs** — a Refresh
+  click has no SC writes as a side effect. Their own manual entry:
+  `POST /api/listing-hygiene/run {action, dryRun}` (admin) enqueues a
+  one-component lane-M job over the full scheduled scope.
+- PATCH and DELETE on `/listings/2021-08-01/items` share the Listings
+  limiter bucket and go only through `spApiPatch` / `spApiDelete` in
+  `server/spapi-auth.ts`.
 
 Three components are ledger-only in this version, by decision:
 
@@ -2421,7 +2492,8 @@ labels ("Never synced" / "Older than" / "Within last").
 **Future (not this patch):** ANY_OFFER_CHANGED push notifications belong
 with the Repricer module; the consumer would write through the same
 `writePrice` and the pull path would narrow to no-live-offer ASINs. Keepa
-components land as 22+ when their cadence is decided.
+components land as 25+ when their cadence is decided (22–24 are listing
+hygiene, 2026-10-18).
 
 ### Scheduled passes (`ENABLE_CRONS`)
 
@@ -2617,7 +2689,11 @@ that writes it:
 | `actual_cogs`, `cogs_source='po_sheet'`, `prep_override` | `runSheetsSync` — component 9 on a scheduled pass; Sync POs (after the PO intake, §22) and Push to Aura call it inline (decision 9, off the queue 2026-10-16). **Reads the AF PO tables since 2026-10-18** (newest non-canceled ASIN row, §11 banner); the `po_sheet` source label is kept. `asin_estimates.ordered_qty` is no longer written (2026-10-17) and awaits a cleanup migration |
 | On Order, At Prep (ASINs page, history modal, `inventory_snapshots.ordered_qty`) | **Derived from the PO tables** by `server/asin-po-pipeline.ts` at read time — never synced from the sheet, never stored on `asins` / `asin_estimates` (§6, 2026-10-17) |
 | Inventory snapshot, `asin_skus` recording | component 15 |
+| `sku_fba_inventory` (every FBA bucket per SKU, `last_nonzero_at`) | component 15 only (2026-10-18) |
 | `has_live_offer`, `has_buyable_offer`, `current_issues` + stamps | component 16 through the §18 A2 primitive (also the §19 ladder / verdicts) |
+| `asin_skus.listing_created_at`, `offer_end_at`, `listing_checked_at` | component 16 only (2026-10-18) |
+| `sku_ledger_state` | component 23 only (nightly + the `ledger_window` backfill) |
+| `listing_actions` | components 22 (close) and 24 (delete) and the hygiene Release route; `verified_at` / `verified` / `not_effective` by component 16 |
 | `primary_sku`, `asin_skus.is_primary` | component 17 (bootstrap / re-point); the Add-Offer path on creation (§18) |
 | `is_search_suppressed` | component 18 (stage-then-swap) |
 | Sales, refunds, actual fees | components 19–21 (20–21 ledger-only until the Finances patch) |
@@ -3103,6 +3179,18 @@ the per-row **+** button.
     `buildOfferOnlyPayload` (`BORN_CLOSED_END_AT = "2000-01-01"`). The
     offer-add preview's "Ready to create" section carries a plain one-line
     note that offers are created closed.
+  - **AF also closes existing listings (2026-10-18, listing hygiene):**
+    component 22 closes a SKU whose FBA buckets are all zero, with the same
+    `end_at` value through the same helper (§11). On GET, Amazon returns
+    `end_at` as `{value: <ISO timestamp>}` for a closed offer — not the
+    date AF sent (spike 2026-10-18: born-closed SKUs read back
+    `2026-10-13T12:29:10Z` / `2026-10-15T01:55:12Z`) — and
+    `{value: null}` for an open one; component 16 stores it as
+    `asin_skus.offer_end_at` and "closed" means `offer_end_at <= now()`.
+  - **AF never reopens.** No code path clears `end_at`, sends it null or
+    removes it — not even with stock at FBA. Reopen stays a manual action
+    in Seller Central; enforced by test (`listing-hygiene` never-reopen
+    guard).
 
 ### Always-present offer attributes
 
