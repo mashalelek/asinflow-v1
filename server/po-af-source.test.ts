@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { loadAfAsinCostMap, loadAfPoRows, singleLineQty } from "./po-af-source";
+import { loadAfAsinCostMap, loadAfPoRows, lineAsinQty, trueYield } from "./po-af-source";
 
 // patch docs/claude_spec-patch-po-af-owned.md §2.4 — the AF PO tables replace
 // every Orders-sheet reader. These pin the SQL order (newest = order_date,
@@ -42,7 +42,7 @@ describe("loadAfPoRows", () => {
   });
   it("U qty: bundle component = ASIN qty ÷ N, AZ = sets × units per bundle; S=1 multi-line = qty × yield; packs multiply AZ", async () => {
     const { query } = fake([
-      { ...base, sold_as: "bundle", unique_products: 2, asin_qty: 10, line_count: 2, units_per_pack: 3 },
+      { ...base, sold_as: "bundle", unique_products: 2, asin_qty: 10, qty_ordered: 10, line_count: 2, units_per_pack: 3 },
       { ...base, sold_as: "pack", asin_qty: 5, line_count: 2, qty_ordered: 4, asin_qty_per_product: "0.5", units_per_pack: 2 },
     ]);
     const r = await loadAfPoRows(query);
@@ -51,12 +51,23 @@ describe("loadAfPoRows", () => {
   });
 });
 
-describe("singleLineQty", () => {
-  it("non-divisible pack orders come back fractional (fail-closed invalid_pack_math); everything else is the stored qty", () => {
-    expect(singleLineQty(3, 5, 0.5, 2)).toBe(2.5);   // B007K83C46: 5 units of a 2-pack, stored 3
-    expect(singleLineQty(6, 11, 0.5, 2)).toBe(5.5);  // B006T0U4R4
-    expect(singleLineQty(6, 12, 0.5, 2)).toBe(6);    // divisible — stored qty
-    expect(singleLineQty(16, 48, 0.33, 1)).toBe(16); // individual, 2-dp yield noise — stored qty
-    expect(singleLineQty(4, null, null, 2)).toBe(4);
+describe("lineAsinQty / trueYield (the sheet's U = L × T ÷ S)", () => {
+  it("restores 2-dp yields to the fraction typed", () => {
+    expect(trueYield(0.33)).toBeCloseTo(1 / 3, 9);
+    expect(trueYield(0.17)).toBeCloseTo(1 / 6, 9);
+    expect(trueYield(0.67)).toBeCloseTo(2 / 3, 9);
+    expect(trueYield(2.5)).toBe(2.5);
+  });
+  it("S>1 lines split by unique products; S=1 keeps the stored integer unless the product is the half / quarter it was rounded from", () => {
+    expect(lineAsinQty(5, 5, 1, 3)).toBeCloseTo(5 / 3, 6);  // B00SKJW2U4 (S=3 group)
+    expect(lineAsinQty(10, 60, 0.17, 2)).toBe(5);          // B08QMDXLB1: 60 × 1/6 ÷ 2
+    expect(lineAsinQty(3, 5, 0.5, 1)).toBe(2.5);           // B007K83C46: stored 3, sheet 2.5
+    expect(lineAsinQty(16, 48, 0.33, 1)).toBe(16);         // yield noise
+    expect(lineAsinQty(4, 11, 0.33, 1)).toBeCloseTo(11 / 3, 6); // B0CPCBCYT9: 11 × 1/3, stored 4
+    expect(lineAsinQty(9, 14, 0.5, 1)).toBe(9);            // 7 does not round to the stored 9 — stored qty wins
+    expect(lineAsinQty(22, 12, 0.5, 1, 2)).toBe(6);        // multi-line S=1 group: the line's own product
+    expect(lineAsinQty(2, 30, 0.07, 1)).toBe(2);           // 2.1 is not a clean fraction
+    expect(lineAsinQty(18, 1, 24, 1)).toBe(18);            // L 0.75 stored 1
+    expect(lineAsinQty(12, null, null, 2)).toBe(6);
   });
 });

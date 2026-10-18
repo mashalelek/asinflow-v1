@@ -3,7 +3,9 @@
 // SC. Inputs = the Orders Google Sheet (via fetchSheetRows) + an uploaded SB
 // products template xlsx (sheet "TDSheet", columns ASIN/SKU). See SPEC §11.
 import * as XLSX from "xlsx";
-import { fetchSheetRowsWithMeta } from "./google-sheets";
+import type { SheetRow } from "./google-sheets";
+import { loadAfPoRows } from "./po-af-source";
+import { query as defaultQuery } from "./db";
 import { parseMDY } from "./velocity-export";
 
 // Full SB template header set, in template order. We populate ONLY ASIN, SKU,
@@ -149,14 +151,18 @@ const avgCents = (a: PeriodAcc): number => Math.round(a.weightedCents / a.qty);
 
 export async function buildSellerboardCogs(
   templateBuffer: Buffer,
-  deps: { sheetId?: string } = {},
+  deps: {
+    query?: (sql: string, params?: any[]) => Promise<{ rows: any[]; rowCount: number | null }>;
+    loadRows?: () => Promise<{ rows: SheetRow[]; rawRowsRead: number; blankAsinRows: number }>;
+  } = {},
 ): Promise<SbBuildResult> {
-  const sheetId = deps.sheetId ?? process.env.GOOGLE_SHEET_ID;
-  if (!sheetId) throw new Error("GOOGLE_SHEET_ID not configured");
-
   const template = parseTemplate(templateBuffer);
   const skuMap = template.map;
-  const { rows, rawRowsRead, blankAsinRows } = await fetchSheetRowsWithMeta(sheetId);
+  // PO rows from the AF PO tables in the sheet's row shape (po-af-owned §2.4,
+  // 2026-10-18); the Orders sheet is intake-only. rawRowsRead = lines read.
+  const { rows, rawRowsRead, blankAsinRows } = deps.loadRows
+    ? await deps.loadRows()
+    : await loadAfPoRows(deps.query ?? (defaultQuery as any));
 
   const skips = {
     excludedByStatus: 0, badOrMissingDate: 0, excludedNonYtd: 0,
