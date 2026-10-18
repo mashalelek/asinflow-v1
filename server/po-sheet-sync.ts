@@ -192,7 +192,8 @@ export function parsePoSheet(header: string[], dataCells: string[][]): ParsedPoS
     }
   }
   const dataRows = dataCells.map((cells, i) => ({ cells: cells.map((c) => String(c ?? "")), srcRow: i + 2 }));
-  const cls = classifyRows(dataRows, { allYears: true });
+  // A row with no Order ID is skipped silently (2026-10-18): no count, no note, never in skippedRows.
+  const cls = classifyRows(dataRows, { allYears: true, silentBlankOrderId: true });
 
   type Row = { cells: string[]; srcRow: number; dateIso: string };
   interface Group { orderId: string; supplier: string; rows: Row[] }

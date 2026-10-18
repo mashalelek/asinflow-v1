@@ -54,7 +54,7 @@ export interface ClassifyResult {
  * frozen 2026 importer script calls it without options and stays 2026-only;
  * the repeatable sheet sync passes { allYears: true }.
  */
-export function classifyRows(dataRows: Array<{ cells: string[]; srcRow: number }>, opts: { allYears?: boolean } = {}): ClassifyResult {
+export function classifyRows(dataRows: Array<{ cells: string[]; srcRow: number }>, opts: { allYears?: boolean; silentBlankOrderId?: boolean } = {}): ClassifyResult {
   let totalsRow = 0, blankRows = 0, nonYear2026 = 0, blankOrderId = 0, noAsin = 0;
   const rows: ClassifyResult["rows"] = [];
   const notes: string[] = [];
@@ -70,6 +70,9 @@ export function classifyRows(dataRows: Array<{ cells: string[]; srcRow: number }
     // an in-progress sheet row — it must never group as (supplier, "") and
     // import. Own bucket, row-identified.
     if (orderId === "") {
+      // Sync POs (2026-10-18, Maria): a row with no Order ID is skipped
+      // silently — not counted, not noted, not in any report or toast.
+      if (opts.silentBlankOrderId) continue;
       blankOrderId++;
       notes.push(`row ${r.srcRow}: parseable date ${date.iso} but BLANK Order ID (supplier ${JSON.stringify(t(c[COL.supplier]))}) — row skipped to blank_order_id`);
       continue;

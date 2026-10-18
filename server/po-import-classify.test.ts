@@ -62,3 +62,18 @@ describe("classifyRows blank_order_id guard (§22, 2026-08-24)", () => {
     expect(sum).toBe(input.length);
   });
 });
+
+describe("Sync POs skips a row with no Order ID silently (2026-10-18)", () => {
+  it("silentBlankOrderId: not counted, not noted, not imported; the frozen importer keeps its counted bucket", () => {
+    const input = [row({ 2: "10/18/2026", 4: "lg.com", 7: "B09248ZMXB" }, 23), row({ 1: "555001", 2: "10/18/2026", 4: "walmart.com", 7: "B000000001" }, 24)];
+    const s = classifyRows(input, { allYears: true, silentBlankOrderId: true });
+    expect(s.rows.map((r) => r.srcRow)).toEqual([24]);
+    expect(s.blankOrderId).toBe(0);
+    expect(s.notes).toEqual([]);
+    expect(classifyRows(input).blankOrderId).toBe(1);
+  });
+  it("the intake asks for it", async () => {
+    const { readFileSync } = await import("fs");
+    expect(readFileSync(new URL("./po-sheet-sync.ts", import.meta.url), "utf8")).toMatch(/classifyRows\(dataRows, \{ allYears: true, silentBlankOrderId: true \}\)/);
+  });
+});
