@@ -115,11 +115,14 @@ export interface SheetPoAsin {
   asinName: string | null;
   qty: number;
   costPerUnit: string | null;
-  prep: string;
+  /** NULL = not recorded (pre-2026 rows: Col AS did not exist yet). */
+  prep: string | null;
   soldAs: string;
   unitsPerPack: number;
   lossQty: number;
   lossAmount: string;
+  /** "Lost / Damaged by Us" rows of this ASIN (2026-10-18): Σ Col V × yield, ASIN qty; null = no such row. */
+  lostDamagedUs: number | null;
   /** Sheet Col S (unique products per ASIN); bundles derive Canceled/Returned ÷ this. */
   uniqueProducts: number | null;
   lines: SheetLine[];
@@ -136,6 +139,8 @@ export interface SheetPo {
   actionItems: ActionItem[];
   /** §2.3: Closed only when EVERY row's Status contains Closed. */
   closed: boolean;
+  /** Order date before 2026-01-01 (PO history import, 2026-10-18): imported Closed, closed_by = 'import'. */
+  historical: boolean;
   subtotal: string; tax: string; shDonations: string; discount: string; refundAmount: string; orderTotal: string;
   payment: string | null;
   wgc: string | null;
@@ -158,6 +163,12 @@ export interface ParsedPoSheet {
   skippedMixed: string[];
   /** POs carrying a Status token the map does not know — the sync writes nothing while any exist. */
   unmapped: Array<{ po: string; tokens: string[] }>;
+  /** POs skipped for one unparseable cell (2026-10-18): never aborts the read. */
+  skippedBadCells: Array<{ po: string; row: number; reason: string }>;
+  /** Rows the classifier skipped: blank Order ID, no ASIN (expense rows). */
+  skippedRows: string[];
+  /** Pre-2026 pack-size derivation (Col AX/AY did not exist): multi-pack from the yield, or individual ×1. */
+  historyPack: { derivedMultiPack: number; individual: number };
 }
 
 export const poKey = (supplier: string, orderId: string) => `${supplier}\u0000${orderId}`;
@@ -170,7 +181,7 @@ export function parsePoSheet(header: string[], dataCells: string[][]): ParsedPoS
     }
   }
   const dataRows = dataCells.map((cells, i) => ({ cells: cells.map((c) => String(c ?? "")), srcRow: i + 2 }));
-  const cls = classifyRows(dataRows);
+  const cls = classifyRows(dataRows, { allYears: true });
 
   type Row = { cells: string[]; srcRow: number; dateIso: string };
   interface Group { orderId: string; supplier: string; rows: Row[] }
@@ -187,12 +198,17 @@ export function parsePoSheet(header: string[], dataCells: string[][]): ParsedPoS
   const money = (cells: string[], idx: number): string | null => moneyVerbatim(cells[idx]).value;
   const skippedMixed: string[] = [];
   const unmapped: ParsedPoSheet["unmapped"] = [];
+  const skippedBadCells: ParsedPoSheet["skippedBadCells"] = [];
+  const historyPack = { derivedMultiPack: 0, individual: 0 };
   const pos: SheetPo[] = [];
 
   for (const g of Array.from(groups.values())) {
     const f = g.rows[0];
     const c = f.cells;
     const label = `${g.supplier} ${g.orderId}`;
+    const historical = f.dateIso < "2026-01-01";
+    // One unparseable cell skips THIS PO (reported with its sheet row), never the read (2026-10-18).
+    try {
 
     let payment: string | null = t(c[COL.paymentMethod]) || null;
     if (payment === "Gift card") payment = "Gift cards";
@@ -249,12 +265,28 @@ export function parsePoSheet(header: string[], dataCells: string[][]): ParsedPoS
         costPerUnit = money(ar.cells, COL.adjCogs);
       }
       const prepRaw = t(ar.cells[COL.prepCost]);
-      const prep = prepRaw === "" ? "0" : moneyVerbatim(prepRaw).value ?? "0";
-      const soldAs = t(ar.cells[COL.soldAs]) || "individual";
-      const upp = soldAs === "individual" ? 1 : (intOrNull(ar.cells[COL.unitsPerPack]) ?? 1);
+      // Pre-2026 rows predate Col AS: blank = not recorded (NULL), never $0 (Maria 2026-10-18).
+      const prep: string | null = prepRaw === "" ? (historical ? null : "0") : moneyVerbatim(prepRaw).value ?? (historical ? null : "0");
+      let soldAs = t(ar.cells[COL.soldAs]) || "individual";
+      let upp = soldAs === "individual" ? 1 : (intOrNull(ar.cells[COL.unitsPerPack]) ?? 1);
+      if (historical && t(ar.cells[COL.soldAs]) === "") {
+        // Pre-2026 rows predate Col AX/AY: a single-product ASIN whose yield is 1/n (0.5, 0.33, 0.25…) is an n-pack.
+        const yld = Number(t(ar.cells[COL.asinQtyPerProduct]) || "1");
+        const n = yld > 0 && yld < 1 ? Math.round(1 / yld) : 0;
+        if (ars.length === 1 && (sVals[0] ?? 1) <= 1 && n >= 2 && Math.abs(yld * n - 1) <= 0.02) { soldAs = "multi-pack"; upp = n; historyPack.derivedMultiPack++; }
+        else historyPack.individual++;
+      }
+      // "Lost / Damaged by Us" rows (2026-10-18): Col V (product units) × yield → ASIN qty.
+      let lostDamagedUs: number | null = null;
+      for (const r of ars) {
+        if (!mapSheetStatus(t(r.cells[COL.status]) || "Ordered").lostDamagedUs) continue;
+        const v = Number(t(r.cells[COL.lossQty]).replace(/,/g, "") || "0");
+        const yv = Number(t(r.cells[COL.asinQtyPerProduct]) || "1");
+        lostDamagedUs = Math.round(((lostDamagedUs ?? 0) + (Number.isFinite(v) ? v : 0) * (Number.isFinite(yv) && yv > 0 ? yv : 1)) * 100) / 100;
+      }
       poAsins.push({
         asin, asinName: t(ar.cells[COL.asinName]) || null,
-        qty, costPerUnit, prep, soldAs, unitsPerPack: upp,
+        qty, costPerUnit, prep, soldAs, unitsPerPack: upp, lostDamagedUs,
         lossQty: intOrNull(ar.cells[COL.lossQty]) ?? 0,
         lossAmount: moneyVerbatim(t(ar.cells[COL.lossAmount])).value ?? "0",
         uniqueProducts: intOrNull(ar.cells[COL.uniqueProductsPerAsin]),
@@ -287,6 +319,7 @@ export function parsePoSheet(header: string[], dataCells: string[][]): ParsedPoS
       orderId: g.orderId, supplier: g.supplier, orderDate: f.dateIso, statusCell: t(c[COL.status]) || "Ordered",
       actionItems: ACTION_ITEMS.filter((a) => union.has(a)),
       closed: allLines.length > 0 && allLines.every((l) => mapSheetStatus(l.statusCell).closed),
+      historical,
       subtotal: money(c, COL.subtotal) ?? "0", tax: money(c, COL.tax) ?? "0",
       shDonations: money(c, COL.shDonations) ?? "0", discount: money(c, COL.discount) ?? "0",
       refundAmount: money(c, COL.refundAmount) ?? "0", orderTotal: money(c, COL.orderTotal) ?? "0",
@@ -296,8 +329,11 @@ export function parsePoSheet(header: string[], dataCells: string[][]): ParsedPoS
       email, invoiceAttached: rcpt, notes: t(c[COL.notes]) || null,
       poAsins,
     });
+    } catch (err: any) {
+      skippedBadCells.push({ po: label, row: f.srcRow, reason: String(err?.message ?? err) });
+    }
   }
-  return { pos, rawRowsRead: dataRows.length, importedRows: cls.rows.length, skippedMixed, unmapped };
+  return { pos, rawRowsRead: dataRows.length, importedRows: cls.rows.length, skippedMixed, unmapped, skippedBadCells, skippedRows: cls.notes, historyPack };
 }
 
 /** Raw read: header A1:AZ1 + cells A2:AZ. Throws (fail-closed) when either is empty. */
@@ -326,6 +362,11 @@ export interface PoSyncCounts {
   returnedNoQty: number;
   /** Lines whose action items change (row Status → line, full replace). */
   lineActionItemsChanged: number;
+  /** Pre-2026 POs inserted (Closed, closed_by = 'import'), and how many carry action items. */
+  historyInserted: number;
+  historyWithActionItems: number;
+  /** POs skipped for an unparseable cell (listed in skippedBadCells). */
+  skippedBadCells: number;
   /** New canceled POs inserted with every line at ordered qty 0 (as the sheet has them). */
   canceledNoOrderedQty: number;
   posInAfNotInSheet: number;
@@ -349,6 +390,9 @@ export interface PoSyncResult {
   keptWithShipments: string[];
   canceledKept: string[];
   canceledNoQty: string[];
+  skippedBadCells: ParsedPoSheet["skippedBadCells"];
+  skippedRows: string[];
+  historyPack: ParsedPoSheet["historyPack"];
   rawRowsRead: number;
 }
 
@@ -456,6 +500,7 @@ export async function syncPoSheet(opts: { sheetId: string; dryRun: boolean; db?:
   const counts: PoSyncCounts = {
     sheetPos: parsed.pos.length, inserted: 0, updated: 0, unchanged: 0, linesDeleted: 0, poAsinsDeleted: 0,
     poAsinsKeptWithShipments: 0, canceledKeptOrderedQty: 0, canceledNoOrderedQty: 0, returnedNoQty: 0, lineActionItemsChanged: 0,
+    historyInserted: 0, historyWithActionItems: 0, skippedBadCells: parsed.skippedBadCells.length,
     posInAfNotInSheet: 0, unmappedTokens: parsed.unmapped.length, skippedMixed: parsed.skippedMixed.length,
   };
   const keptWithShipments: string[] = [];
@@ -467,7 +512,8 @@ export async function syncPoSheet(opts: { sheetId: string; dryRun: boolean; db?:
     const plan: PoPlan = { po, db: existing, changes: [], notes: [], headerSet: {}, asinOps: [], lineOps: [] };
     plans.push(plan);
     if (!existing) {
-      counts.inserted++; plan.changes.push("new PO");
+      counts.inserted++; plan.changes.push(po.historical ? "new PO (history, imported Closed)" : "new PO");
+      if (po.historical) { counts.historyInserted++; if (po.actionItems.length > 0) counts.historyWithActionItems++; }
       const lines0 = po.poAsins.flatMap((a) => a.lines);
       if (lines0.length > 0 && lines0.every((l) => l.canceled && isZero(l.qtyOrdered))) {
         counts.canceledNoOrderedQty++; canceledNoQty.push(`${po.supplier} ${po.orderId}`); plan.changes.push("canceled with no ordered qty (inserted 0/0)");
@@ -482,7 +528,9 @@ export async function syncPoSheet(opts: { sheetId: string; dryRun: boolean; db?:
     }
     // Closed (§3.3): sheet Closed → keep closed_at if set, else now(); closed_by='sheet'. Not Closed → both NULL.
     const dbClosed = existing.closed_at != null;
-    if (po.closed) {
+    if (existing.closed_by === "import") {
+      // Imported history (2026-10-18): Closed at its order date; the sheet's row Status never reopens it.
+    } else if (po.closed) {
       if (!dbClosed) { plan.headerSet.closed_at = "NOW()"; plan.headerSet.closed_by = "sheet"; plan.changes.push(`closed: open → closed (sheet)`); }
       else if (existing.closed_by !== "sheet") { plan.headerSet.closed_by = "sheet"; plan.changes.push(`closed_by: ${fmt(existing.closed_by)} → sheet`); }
     } else if (dbClosed) {
@@ -504,6 +552,8 @@ export async function syncPoSheet(opts: { sheetId: string; dryRun: boolean; db?:
         const sv = f.sheet(aEff);
         if (!f.eq(ex[f.col], sv)) { set[f.col] = sv; plan.changes.push(`${a.asin}.${f.col}: ${fmt(ex[f.col])} → ${fmt(sv)}`); }
       }
+      // "Lost / Damaged by Us" (2026-10-18): written only when a row carries the token — never clears an AF value.
+      if (a.lostDamagedUs != null && !numEq(ex.qty_lost_damaged_us, a.lostDamagedUs)) { set.qty_lost_damaged_us = a.lostDamagedUs; plan.changes.push(`${a.asin}.qty_lost_damaged_us: ${fmt(ex.qty_lost_damaged_us)} → ${a.lostDamagedUs}`); }
       if (Object.keys(set).length > 0) plan.asinOps.push({ kind: "update", id: ex.id, set });
       // Lines by (po_asin, position).
       const exLines = dbLinesByAsinId.get(String(ex.id)) ?? [];
@@ -563,7 +613,8 @@ export async function syncPoSheet(opts: { sheetId: string; dryRun: boolean; db?:
 
   const result: PoSyncResult = {
     dryRun: opts.dryRun, wrote: false, stop, counts, samples, diffs,
-    unmapped: parsed.unmapped, skippedMixed: parsed.skippedMixed, inAfNotInSheet, keptWithShipments, canceledKept, canceledNoQty, rawRowsRead: parsed.rawRowsRead,
+    unmapped: parsed.unmapped, skippedMixed: parsed.skippedMixed, inAfNotInSheet, keptWithShipments, canceledKept, canceledNoQty,
+    skippedBadCells: parsed.skippedBadCells, skippedRows: parsed.skippedRows, historyPack: parsed.historyPack, rawRowsRead: parsed.rawRowsRead,
   };
   if (opts.dryRun || stop) return result;
 
@@ -578,7 +629,8 @@ export async function syncPoSheet(opts: { sheetId: string; dryRun: boolean; db?:
           `INSERT INTO purchase_orders (order_id, order_date, supplier, action_items, closed_at, closed_by, subtotal, tax, sh_donations, discount, refund_amount, order_total,
              payment_method, weighted_gc_discount_pct, promo, cashback_site, cashback_pct, purchased_by, subscription, email_used, invoice_attached, notes, source)
            VALUES ($1,$2,$3,$4::text[],$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22,'sheet_import') RETURNING id`,
-          [po.orderId, po.orderDate, po.supplier, [], po.closed ? new Date() : null, po.closed ? "sheet" : null,
+          [po.orderId, po.orderDate, po.supplier, [],
+           po.historical ? po.orderDate : po.closed ? new Date() : null, po.historical ? "import" : po.closed ? "sheet" : null,
            po.subtotal, po.tax, po.shDonations, po.discount, po.refundAmount, po.orderTotal,
            po.payment, po.wgc, po.promo, po.cashback, po.cashbackPct, po.purchasedBy, po.subscription, po.email, po.invoiceAttached, po.notes],
         );
@@ -637,9 +689,9 @@ export async function syncPoSheet(opts: { sheetId: string; dryRun: boolean; db?:
 
 async function insertPoAsin(client: Q, poId: string, a: SheetPoAsin, po: SheetPo, sku: string | null): Promise<void> {
   const pa = await client.query(
-    `INSERT INTO po_asins (po_id, asin, asin_name, sku, qty, cost_per_unit, prep_cost, sold_as, units_per_pack, unreimbursed_loss_qty, unreimbursed_loss_amount, unique_products)
-     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12) RETURNING id`,
-    [poId, a.asin, a.asinName, sku, a.qty, a.costPerUnit, a.prep, a.soldAs, a.unitsPerPack, a.lossQty, a.lossAmount, a.uniqueProducts],
+    `INSERT INTO po_asins (po_id, asin, asin_name, sku, qty, cost_per_unit, prep_cost, sold_as, units_per_pack, unreimbursed_loss_qty, unreimbursed_loss_amount, unique_products, qty_lost_damaged_us)
+     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13) RETURNING id`,
+    [poId, a.asin, a.asinName, sku, a.qty, a.costPerUnit, a.prep, a.soldAs, a.unitsPerPack, a.lossQty, a.lossAmount, a.uniqueProducts, a.lostDamagedUs],
   );
   for (const l of a.lines) await insertLine(client, poId, pa.rows[0].id, l, po);
 }

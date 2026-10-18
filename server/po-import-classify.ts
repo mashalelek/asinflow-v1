@@ -49,7 +49,12 @@ export interface ClassifyResult {
   notes: string[];
 }
 
-export function classifyRows(dataRows: Array<{ cells: string[]; srcRow: number }>): ClassifyResult {
+/**
+ * `allYears` (2026-10-18, PO history import): keep rows of every year. The
+ * frozen 2026 importer script calls it without options and stays 2026-only;
+ * the repeatable sheet sync passes { allYears: true }.
+ */
+export function classifyRows(dataRows: Array<{ cells: string[]; srcRow: number }>, opts: { allYears?: boolean } = {}): ClassifyResult {
   let totalsRow = 0, blankRows = 0, nonYear2026 = 0, blankOrderId = 0, noAsin = 0;
   const rows: ClassifyResult["rows"] = [];
   const notes: string[] = [];
@@ -60,7 +65,7 @@ export function classifyRows(dataRows: Array<{ cells: string[]; srcRow: number }
     const orderId = t(c[COL.orderId]);
     const date = parseDateMDY(c[COL.orderDate]);
     if (orderId === "" && date === null) { totalsRow++; continue; }
-    if (date === null || date.year !== 2026) { nonYear2026++; continue; }
+    if (date === null || (!opts.allYears && date.year !== 2026)) { nonYear2026++; continue; }
     // Blank-Order-ID guard (2026-08-24): a parseable date with no Order ID is
     // an in-progress sheet row — it must never group as (supplier, "") and
     // import. Own bucket, row-identified.

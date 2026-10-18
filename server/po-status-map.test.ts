@@ -14,6 +14,10 @@ describe("mapSheetStatus", () => {
       "Received Partial", "Received", "Received - FBM", "Returned", "Confirm Refund / Replacement"];
     for (const t of p5) expect(mapSheetStatus(t).unmapped, t).toEqual([]);
   });
+  it("\"Lost / Damaged by Us\" and \"Partial Return\" are mapped, never a stop (Maria 2026-10-18, all years)", () => {
+    expect(mapSheetStatus("Closed, Lost / Damaged by Us")).toMatchObject({ closed: true, lostDamagedUs: true, unmapped: [] });
+    expect(mapSheetStatus("Partial Return")).toMatchObject({ returned: true, unmapped: [] });
+  });
   it("\"Shipped FBA\" (appeared 2026-10-16, fleetfarm MW7400517) maps to nothing — never an action item, never a stop", () => {
     const m = mapSheetStatus("Shipped FBA, Confirm Refund / Replacement");
     expect(m).toMatchObject({ shippedFba: true, unmapped: [], actionItems: ["Confirm Refund / Replacement"], closed: false });

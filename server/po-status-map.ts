@@ -51,6 +51,8 @@ export interface SheetStatusMapping {
   ordered: boolean;
   /** "Shipped FBA" → nothing (Maria 2026-10-16): a state word AF tracks as po_asins.qty_shipped_fba. */
   shippedFba: boolean;
+  /** "Lost / Damaged by Us" (Maria 2026-10-18) → po_asins.qty_lost_damaged_us from Col V. */
+  lostDamagedUs: boolean;
   /** Anything else — the caller must STOP and report. */
   unmapped: string[];
   tokens: string[];
@@ -61,14 +63,16 @@ const CANON: Record<string, ActionItem> = Object.fromEntries(ACTION_ITEMS.map((a
 /** Split the sheet cell on commas / newlines, trim, map every token. */
 export function mapSheetStatus(status: string | null | undefined): SheetStatusMapping {
   const tokens = String(status ?? "").split(/[,\n]/).map((t) => t.trim()).filter(Boolean);
-  const m: SheetStatusMapping = { actionItems: [], closed: false, canceled: false, returned: false, received: false, ordered: false, shippedFba: false, unmapped: [], tokens };
+  const m: SheetStatusMapping = { actionItems: [], closed: false, canceled: false, returned: false, received: false, ordered: false, shippedFba: false, lostDamagedUs: false, unmapped: [], tokens };
   const seen = new Set<ActionItem>();
   for (const t of tokens) {
     const k = t.toLowerCase();
     if (CANON[k]) { if (!seen.has(CANON[k])) { seen.add(CANON[k]); } continue; }
     if (k === "closed") { m.closed = true; continue; }
     if (k === "canceled" || k === "cancelled") { m.canceled = true; continue; }
-    if (k === "returned") { m.returned = true; continue; }
+    // "Partial Return" (Maria 2026-10-18) is treated as Returned: the qty comes from Col R where present.
+    if (k === "returned" || k === "partial return") { m.returned = true; continue; }
+    if (k === "lost / damaged by us" || k === "lost/damaged by us") { m.lostDamagedUs = true; continue; }
     if (k === "received" || k === "received partial") { m.received = true; continue; }
     if (k === "ordered") { m.ordered = true; continue; }
     if (k === "shipped fba") { m.shippedFba = true; continue; }

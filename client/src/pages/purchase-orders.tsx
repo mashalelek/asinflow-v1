@@ -43,7 +43,7 @@ interface PoRow {
   units_ordered: number;
   units_received: number | null; // null = not tracked on any line → "—"
   has_notes: boolean;
-  /** §5: NULL = Open. closed_by 'auto' | 'sheet' | a user id. */
+  /** §5: NULL = Open. closed_by 'auto' | 'sheet' | 'import' (pre-2026 history, "Imported (history)") | a user id. */
   closed_at: string | null;
   closed_by: string | null;
   /** Expand by ASIN (§3): the PO's ASIN rows, same model as the detail tab. */
@@ -81,7 +81,7 @@ function ClosedToggle({ po, onToggled, size = "sm" }: { po: { id: string; order_
   const icon = isClosed
     ? <CheckCircle2 className={`${size === "lg" ? "h-5 w-5" : "h-4 w-4"} text-green-600`} />
     : <Circle className={`${size === "lg" ? "h-5 w-5" : "h-4 w-4"} text-muted-foreground`} />;
-  const who = po.closed_by === "auto" ? "closed automatically" : po.closed_by === "sheet" ? "closed (from the Orders sheet)" : "closed by hand";
+  const who = po.closed_by === "auto" ? "closed automatically" : po.closed_by === "sheet" ? "closed (from the Orders sheet)" : po.closed_by === "import" ? "Imported (history)" : "closed by hand";
   return (
     <>
       <button type="button" onClick={(e) => { e.stopPropagation(); setOpen(true); }} title={isClosed ? who : "Open"}

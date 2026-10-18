@@ -81,8 +81,10 @@ describe("parsePoSheet — the importer's assembly, ported", () => {
       row({ orderId: "U1", status: "Lost in transit" }),
     ]);
     expect(p.rawRowsRead).toBe(6);
-    expect(p.importedRows).toBe(5);
-    expect(p.pos.map((x) => x.orderId)).toEqual(["A1", "T9", "C1", "U1"]);
+    // 2026-10-18 (PO history import): the year filter is gone — the 2025 row imports too.
+    expect(p.importedRows).toBe(6);
+    expect(p.pos.map((x) => x.orderId)).toEqual(["A1", "T9", "OLD", "C1", "U1"]);
+    expect(p.pos.find((x) => x.orderId === "OLD")?.historical).toBe(true);
     const a1 = p.pos[0];
     expect(a1.key).toBe(poKey("walmart.com", "A1"));
     expect(a1.poAsins.map((a) => a.asin)).toEqual(["B000000001", "B000000002"]);
@@ -92,8 +94,8 @@ describe("parsePoSheet — the importer's assembly, ported", () => {
     expect(a1.poAsins[0].lines[0]).toMatchObject({ actionItems: ["SHIP"], canceled: false, statusCell: "Closed, SHIP" });
     expect(a1.poAsins[1].lines[0]).toMatchObject({ actionItems: [], canceled: false, statusCell: "Ordered" });
     expect(p.pos[1].supplier).toBe("shop.tetleyusa.com");
-    expect(p.pos[2]).toMatchObject({ closed: true });
-    expect(p.pos[2].poAsins[0].lines[0].canceled).toBe(true);
+    expect(p.pos[3]).toMatchObject({ closed: true });
+    expect(p.pos[3].poAsins[0].lines[0].canceled).toBe(true);
     expect(p.unmapped).toEqual([{ po: "walmart.com U1", tokens: ["Lost in transit"] }]);
     expect(p.skippedMixed).toEqual([]);
   });
@@ -161,7 +163,7 @@ describe("syncPoSheet — dry run computes the §3.9 counts and writes nothing",
     expect(r.wrote).toBe(false);
     expect(r.counts).toEqual({
       sheetPos: 7, inserted: 2, updated: 4, unchanged: 1, linesDeleted: 2, poAsinsDeleted: 1, poAsinsKeptWithShipments: 1,
-      canceledKeptOrderedQty: 1, canceledNoOrderedQty: 1, returnedNoQty: 0, lineActionItemsChanged: 0, posInAfNotInSheet: 1, unmappedTokens: 0, skippedMixed: 0,
+      canceledKeptOrderedQty: 1, canceledNoOrderedQty: 1, returnedNoQty: 0, lineActionItemsChanged: 0, historyInserted: 0, historyWithActionItems: 0, skippedBadCells: 0, posInAfNotInSheet: 1, unmappedTokens: 0, skippedMixed: 0,
     });
     expect(r.inAfNotInSheet).toEqual(["walmart.com GONE (2026-03-01)"]);
     expect(r.keptWithShipments).toEqual(["walmart.com A4 — B000000009 (2 shipment row(s))"]);
@@ -231,7 +233,9 @@ describe("syncPoSheet — dry run computes the §3.9 counts and writes nothing",
     expect(l5.params).toEqual(["l5", 12]);
     expect(db.writes.find((w) => w.sql.startsWith("UPDATE po_asins") && w.params?.[0] === "a5")).toBeUndefined();
     // AF-owned columns are never written (§3.6).
-    for (const w of db.writes) expect(w.sql).not.toMatch(/qty_shipped_supplier|qty_at_prep|qty_at_warehouse|qty_lost_damaged_us|qty_shipped_fba|qty_received_amazon|po_asin_shipments|item_discount = |notes = /);
+    for (const w of db.writes.filter((x) => !x.sql.startsWith("INSERT INTO po_asins"))) expect(w.sql).not.toMatch(/qty_shipped_supplier|qty_at_prep|qty_at_warehouse|qty_lost_damaged_us|qty_shipped_fba|qty_received_amazon|po_asin_shipments|item_discount = |notes = /);
+    // INSERT INTO po_asins carries qty_lost_damaged_us since 2026-10-18 ("Lost / Damaged by Us" rows); never the other AF-owned columns.
+    for (const w of db.writes.filter((x) => x.sql.startsWith("INSERT INTO po_asins"))) expect(w.sql).not.toMatch(/qty_shipped_supplier|qty_at_prep|qty_at_warehouse|qty_shipped_fba|qty_received_amazon/);
     // A PO missing from the sheet is never deleted (§3.5).
     expect(sql.some((s) => s.startsWith("DELETE FROM purchase_orders"))).toBe(false);
   });
@@ -326,5 +330,43 @@ describe("row-level Status: each sheet row's Status maps onto its own line", () 
     expect(ai.params?.[11]).toBe(2);
     const pi = db.writes.find((w) => w.sql.startsWith("INSERT INTO purchase_orders"))!;
     expect(pi.params?.[3]).toEqual([]); // PO-level action_items no longer written
+  });
+});
+
+
+// ── PO history import (patch docs/claude_spec-patch-po-history-import.md, 2026-10-18) ──
+describe("pre-2026 history rows", () => {
+  it("a pre-2026 PO is imported Closed at its order date with closed_by = 'import'; prep NULL; a 1/n yield single product becomes an n-pack", async () => {
+    const db = fakeDb({ pos: [], asins: [], lines: [] });
+    const r = await syncPoSheet({ sheetId: "s", dryRun: false, db, read: read([
+      row({ orderId: "H1", date: "12/28/2025", asin: "B000GGJCOI", L: "10", N: "5", T: "0.50", Y: "$5.86", status: "Closed" }),
+      row({ orderId: "H2", date: "7/1/2025", asin: "B000000002", L: "3", N: "3", T: "1.00", status: "Ordered, SHIP" }),
+    ]) });
+    expect(r.counts).toMatchObject({ inserted: 2, historyInserted: 2, historyWithActionItems: 1 });
+    expect(r.historyPack).toEqual({ derivedMultiPack: 1, individual: 1 });
+    const pi = db.writes.filter((w) => w.sql.startsWith("INSERT INTO purchase_orders"));
+    expect(pi.map((w) => [w.params?.[0], w.params?.[4], w.params?.[5]])).toEqual([["H1", "2025-12-28", "import"], ["H2", "2025-07-01", "import"]]);
+    const ai = db.writes.filter((w) => w.sql.startsWith("INSERT INTO po_asins"));
+    // prep_cost $7 NULL; sold_as $8 / units_per_pack $9 derived; cost_per_unit $6 verbatim
+    expect(ai.map((w) => [w.params?.[1], w.params?.[5], w.params?.[6], w.params?.[7], w.params?.[8]])).toEqual([["B000GGJCOI", "5.86", null, "multi-pack", 2], ["B000000002", "10.00", null, "individual", 1]]);
+  });
+  it("an imported (closed_by 'import') PO is never reopened by its rows' Status", async () => {
+    const st = { pos: [po({ id: "ph", order_id: "H2", order_date: "2025-07-01", closed_at: "2025-07-01", closed_by: "import" })], asins: [pa({ id: "ah", po_id: "ph", asin: "B000000002", qty: 3, prep_cost: null })], lines: [line({ id: "lh", po_id: "ph", po_asin_id: "ah", qty_ordered: 3 })] };
+    const r = await syncPoSheet({ sheetId: "s", dryRun: true, db: fakeDb(st), read: read([row({ orderId: "H2", date: "7/1/2025", asin: "B000000002", L: "3", N: "3", status: "Ordered" })]) });
+    const ch = r.diffs.find((d) => d.po === "walmart.com H2")?.changes ?? [];
+    expect(ch.some((c) => c.startsWith("closed"))).toBe(false);
+  });
+  it("one unparseable cell skips that PO only, with its row and reason; the read continues", async () => {
+    const bad = row({ orderId: "BAD", date: "3/1/2025" }); bad[COL.weightedGcPct] = "%";
+    const r = await syncPoSheet({ sheetId: "s", dryRun: true, db: fakeDb({ pos: [], asins: [], lines: [] }), read: read([bad, row({ orderId: "OK1", date: "3/2/2025" })]) });
+    expect(r.stop).toBeNull();
+    expect(r.counts).toMatchObject({ inserted: 1, skippedBadCells: 1 });
+    expect(r.skippedBadCells).toEqual([{ po: "walmart.com BAD", row: 2, reason: 'unparseable percent: "%"' }]);
+  });
+  it("\"Lost / Damaged by Us\" fills qty_lost_damaged_us from Col V × yield on insert", async () => {
+    const lr = row({ orderId: "LD", date: "12/21/2025", asin: "B078MYRN9V", L: "10", N: "30", T: "3.00", status: "Closed, Lost / Damaged by Us" }); lr[COL.lossQty] = "10";
+    const db = fakeDb({ pos: [], asins: [], lines: [] });
+    await syncPoSheet({ sheetId: "s", dryRun: false, db, read: read([lr]) });
+    expect(db.writes.find((w) => w.sql.startsWith("INSERT INTO po_asins"))?.params?.[12]).toBe(30);
   });
 });
