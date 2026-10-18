@@ -363,6 +363,14 @@ describe("pre-2026 history rows", () => {
     expect(r.counts).toMatchObject({ inserted: 1, skippedBadCells: 1 });
     expect(r.skippedBadCells).toEqual([{ po: "walmart.com BAD", row: 2, reason: 'unparseable percent: "%"' }]);
   });
+  it("a cashback-% cell holding only \"%\" means no cashback: site and percent NULL, the PO imports (Maria 2026-10-18)", async () => {
+    const r1 = row({ orderId: "CB", date: "2/2/2025" }); r1[COL.cashbackPct] = "%"; r1[COL.cashbackSite] = "Rakuten";
+    const db = fakeDb({ pos: [], asins: [], lines: [] });
+    const r = await syncPoSheet({ sheetId: "s", dryRun: false, db, read: read([r1]) });
+    expect(r.counts).toMatchObject({ inserted: 1, skippedBadCells: 0 });
+    const pi = db.writes.find((w) => w.sql.startsWith("INSERT INTO purchase_orders"))!;
+    expect([pi.params?.[15], pi.params?.[16]]).toEqual([null, null]); // cashback_site, cashback_pct
+  });
   it("an ASIN cell that is not one ASIN skips its PO (history: any non-ASIN; 2026: only what cannot be stored)", async () => {
     const r = await syncPoSheet({ sheetId: "s", dryRun: true, db: fakeDb({ pos: [], asins: [], lines: [] }), read: read([
       row({ orderId: "X1", date: "9/28/2024", asin: "Shipping Supplies" }),

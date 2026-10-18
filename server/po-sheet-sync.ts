@@ -220,6 +220,11 @@ export function parsePoSheet(header: string[], dataCells: string[][]): ParsedPoS
     let cashback: string | null = t(c[COL.cashbackSite]) || null;
     if (cashback === "Topcashback") cashback = "TopCashback";
     if (cashback === "-" || cashback === "Coupons") cashback = null;
+    // A cashback-% cell holding only "%" (no number) means no cashback
+    // (Maria 2026-10-18): site and percent both NULL, not a bad cell.
+    const cashbackPctRaw = t(c[COL.cashbackPct]);
+    const noCashback = cashbackPctRaw === "%";
+    if (noCashback) cashback = null;
     let wgc = pctToNumber(c[COL.weightedGcPct]);
     if (g.orderId === "130097" && wgc != null) wgc = null;
     const email = t(c[COL.emailUsed]) || DEFAULT_EMAIL;
@@ -332,7 +337,7 @@ export function parsePoSheet(header: string[], dataCells: string[][]): ParsedPoS
       subtotal: money(c, COL.subtotal) ?? "0", tax: money(c, COL.tax) ?? "0",
       shDonations: money(c, COL.shDonations) ?? "0", discount: money(c, COL.discount) ?? "0",
       refundAmount: money(c, COL.refundAmount) ?? "0", orderTotal: money(c, COL.orderTotal) ?? "0",
-      payment, wgc, promo: t(c[COL.promo]) || null, cashback, cashbackPct: pctToNumber(c[COL.cashbackPct]),
+      payment, wgc, promo: t(c[COL.promo]) || null, cashback, cashbackPct: noCashback ? null : pctToNumber(c[COL.cashbackPct]),
       purchasedBy: t(c[COL.purchasedBy]) || null,
       subscription: t(c[COL.subscription]).toUpperCase() === "TRUE",
       email, invoiceAttached: rcpt, notes: t(c[COL.notes]) || null,
