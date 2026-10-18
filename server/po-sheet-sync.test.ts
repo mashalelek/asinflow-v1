@@ -363,6 +363,16 @@ describe("pre-2026 history rows", () => {
     expect(r.counts).toMatchObject({ inserted: 1, skippedBadCells: 1 });
     expect(r.skippedBadCells).toEqual([{ po: "walmart.com BAD", row: 2, reason: 'unparseable percent: "%"' }]);
   });
+  it("an ASIN cell that is not one ASIN skips its PO (history: any non-ASIN; 2026: only what cannot be stored)", async () => {
+    const r = await syncPoSheet({ sheetId: "s", dryRun: true, db: fakeDb({ pos: [], asins: [], lines: [] }), read: read([
+      row({ orderId: "X1", date: "9/28/2024", asin: "Shipping Supplies" }),
+      row({ orderId: "X2", date: "7/20/2024", asin: "NA" }),
+      row({ orderId: "X3", date: "8/9/2026", asin: "NA" }),
+      row({ orderId: "X4", date: "8/9/2026", asin: "B001FB5HYC, B00757A9B6" }),
+    ]) });
+    expect(r.skippedBadCells.map((x) => x.po)).toEqual(["walmart.com X1", "walmart.com X2", "walmart.com X4"]);
+    expect(r.counts.inserted).toBe(1); // X3: a 2026 "NA" row is left as the sync has always treated it
+  });
   it("\"Lost / Damaged by Us\" fills qty_lost_damaged_us from Col V × yield on insert", async () => {
     const lr = row({ orderId: "LD", date: "12/21/2025", asin: "B078MYRN9V", L: "10", N: "30", T: "3.00", status: "Closed, Lost / Damaged by Us" }); lr[COL.lossQty] = "10";
     const db = fakeDb({ pos: [], asins: [], lines: [] });

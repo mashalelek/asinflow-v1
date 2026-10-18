@@ -225,6 +225,15 @@ export function parsePoSheet(header: string[], dataCells: string[][]): ParsedPoS
     const email = t(c[COL.emailUsed]) || DEFAULT_EMAIL;
     const rcpt = t(c[COL.rcpt]).toUpperCase() === "TRUE";
 
+    // An ASIN cell that is not one ASIN (expense labels "Shipping Supplies",
+    // "NA", two ASINs "B001FB5HYC, B00757A9B6", "B01CY3N2AU_Do Not Use for
+    // COGS") is a bad cell (2026-10-18): the PO is skipped and listed. Before
+    // 2026 any non-ASIN value; for 2026 rows only what cannot be stored
+    // (longer than 10), so existing 2026 POs are left as they are.
+    for (const r of g.rows) {
+      const a = t(r.cells[COL.asin]);
+      if (a.length > 10 || (historical && !/^[A-Z0-9]{10}$/i.test(a))) throw new Error(`ASIN cell is not one ASIN: ${JSON.stringify(a)} (row ${r.srcRow})`);
+    }
     const byAsin = new Map<string, Row[]>();
     for (const r of g.rows) {
       const a = t(r.cells[COL.asin]).toUpperCase();
