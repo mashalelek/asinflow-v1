@@ -31,3 +31,11 @@ export function buildFilterChips(s: FilterChipState, colLabel: (colId: string) =
   if ((s.revealedCount ?? 0) > 0) out.push({ key: "reveal", label: `${s.revealedCount} added ASIN${s.revealedCount === 1 ? "" : "s"} shown past filters` });
   return out;
 }
+
+/** Of the ASINs an upload / sourcing sync added: which are loaded, and which of those the filters hide. */
+export function addedHiddenReport(added: readonly string[], loaded: ReadonlyArray<{ asin: string }>, shown: ReadonlyArray<{ asin: string }>): { present: string[]; hidden: string[] } {
+  const inList = new Set(loaded.map((r) => r.asin.toUpperCase()));
+  const visible = new Set(shown.map((r) => r.asin.toUpperCase()));
+  const present = Array.from(new Set(added.map((a) => a.toUpperCase()))).filter((a) => inList.has(a));
+  return { present, hidden: present.filter((a) => !visible.has(a)) };
+}

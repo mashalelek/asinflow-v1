@@ -35,7 +35,7 @@ describe("job-finish row refresh (2026-10-18)", () => {
     expect(finished).not.toMatch(/fetchAsins\(/);
     expect(finished).toMatch(/refreshJobRows\(job\);/);
     expect(home).toMatch(/if \(!rowRefresher\.seenJob\(job\.id\)\) return;/);
-    expect(home).toMatch(/const asins = rowsToRefresh\(job, visibleAsinsRef\.current\);/);
+    expect(home).toMatch(/const asins = Array\.from\(new Set\(\[\.\.\.rowsToRefresh\(job, visibleAsinsRef\.current\), \.\.\.extra\]\)\);/);
     expect(home).toMatch(/visibleAsinsRef\.current = paginatedResults\.map\(\(r\) => r\.asin\);/);
     expect(home).toMatch(/&asins=\$\{encodeURIComponent\(asins\.join\(","\)\)\}/);
   });

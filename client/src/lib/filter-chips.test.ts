@@ -29,3 +29,21 @@ describe("active-filter chips (2026-10-18)", () => {
     expect(bar).toMatch(/>Clear filters</);
   });
 });
+
+describe("added-ASIN report (Upload File / Sync Sourcing, 2026-10-18)", () => {
+  it("counts the added ASINs that are loaded but hidden by the filters", async () => {
+    const { addedHiddenReport } = await import("./filter-chips");
+    const loaded = [{ asin: "B09HRDGW17" }, { asin: "B07K1N4K54" }, { asin: "B01MQHMQ00" }];
+    const shown = [{ asin: "B07K1N4K54" }];
+    expect(addedHiddenReport(["b09hrdgw17", "B07K1N4K54", "B01MQHMQ00", "B0NOTLOADED"], loaded, shown)).toEqual({ present: ["B09HRDGW17", "B07K1N4K54", "B01MQHMQ00"], hidden: ["B09HRDGW17", "B01MQHMQ00"] });
+  });
+  it("the page toasts '<n> added — <h> hidden by your filters' with Show (reveal those ASINs only) for uploads and sourcing syncs, and re-checks after their onboarding job", () => {
+    const home = readFileSync(resolve(__dirname, "../pages/home.tsx"), "utf8");
+    expect(home).toMatch(/const added = `\$\{pendingAdded\.asins\.length\} added — \$\{report\.hidden\.length\} hidden by your filters`;/);
+    expect(home).toMatch(/onClick=\{\(\) => setRevealAsins\(\(prev\) => new Set\(\[\.\.\.Array\.from\(prev\), \.\.\.report\.hidden\]\)\)\}/);
+    expect(home).toMatch(/if \(uploaded\) setPendingAdded\(\{ asins: uploaded, title: "Upload onboarded", base: "" \}\);/);
+    expect(home).toMatch(/setPendingAdded\(\{ asins: Array\.from\(addedAsins\), title: "Sourcing sheet synced"/);
+    expect(home).toMatch(/return results\.filter\(\(r\) => keep\.has\(r\.asin\) \|\| revealAsins\.has\(r\.asin\.toUpperCase\(\)\)\);/);
+    expect(home).toMatch(/if \(report\.hidden\.length <= watch\.hidden\) return;/);
+  });
+});

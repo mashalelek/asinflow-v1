@@ -28,7 +28,7 @@ import { useJobs } from "@/hooks/use-jobs";
 import { enqueueRefresh, cancelJob, getJob, runningLabel, queuedLabel, completionText, FOCUS_ASIN_EVENT, type Job } from "@/lib/jobs-api";
 import { refreshPlan, queuedJobIdFromMessage, applyStreamedRow } from "@/lib/upload-flow";
 import { rowsToRefresh, mergeRefreshedRows, RowRefresher } from "@/lib/row-refresh";
-import { buildFilterChips, type FilterChipKey } from "@/lib/filter-chips";
+import { buildFilterChips, addedHiddenReport, type FilterChipKey } from "@/lib/filter-chips";
 import { FilterChipsBar } from "@/components/filter-chips-bar";
 import { formatFilterValue } from "@/components/active-filters-modal";
 import { ALL_COLUMNS as ALL_COLUMN_DEFS } from "@shared/schema";
@@ -397,6 +397,11 @@ export default function Home() {
   // like an empty page — "loading" shows an indicator in the table area,
   // "error" shows the reason and a Retry.
   const [listLoad, setListLoad] = useState<{ state: "loading" | "ready" | "error"; error?: string }>({ state: "loading" });
+  // Added-ASIN report (2026-10-18): after Upload File / Sync Sourcing, how many of the
+  // added ASINs the current filters hide; "Show" reveals just those past every filter.
+  const [revealAsins, setRevealAsins] = useState<Set<string>>(new Set());
+  const [pendingAdded, setPendingAdded] = useState<{ asins: string[]; title: string; base: string } | null>(null);
+  const addedWatchRef = useRef<{ asins: string[]; hidden: number; recheck: boolean } | null>(null);
   const [isSyncing, setIsSyncing] = useState(false);
   // Scheduler v1 (SPEC §11 "Refresh job", 2026-10-15): ONE Refresh button
   // enqueues a job; the jobs dialog is the history and the per-component
@@ -620,6 +625,7 @@ export default function Home() {
   // a pending CSV upload is onboarded through /api/analyze, which inserts
   // the rows and runs their first Product Info + prices + fees inline.
   const runAnalysis = useCallback(async (asinsToAnalyze: AsinInput[]) => {
+    let uploaded: string[] | null = null;
     setIsAnalyzing(true);
     setProgress({ current: 0, total: asinsToAnalyze.length, asin: "" });
 
@@ -665,7 +671,7 @@ export default function Home() {
         }
         await consumeAnalyzeStream(res);
       }
-      toast({ title: "Upload onboarded", description: `${asinsToAnalyze.length} ASIN(s) inserted and refreshed.` });
+      uploaded = Array.from(new Set(asinsToAnalyze.map((a) => a.asin.trim().toUpperCase())));
     } catch (err: any) {
       toast({
         title: "Upload failed",
@@ -677,6 +683,8 @@ export default function Home() {
       setProgress(null);
       fetchPriceStatus();
       await fetchAsins(startDate, endDate, showParked, showDead);
+      // "11 added — 8 hidden by your filters [Show]", once the list holds them.
+      if (uploaded) setPendingAdded({ asins: uploaded, title: "Upload onboarded", base: "" });
       await checkRevivalCandidates(); // DA-3
     }
   }, [toast, consumeAnalyzeStream, fetchPriceStatus, fetchAsins, startDate, endDate, showParked, showDead, checkRevivalCandidates]);
@@ -850,7 +858,13 @@ export default function Home() {
   }), []);
   const refreshJobRows = useCallback((job: Job) => {
     if (!rowRefresher.seenJob(job.id)) return;
-    const asins = rowsToRefresh(job, visibleAsinsRef.current);
+    // The ASINs just added by an upload / sourcing sync count as on screen until their
+    // onboarding job finishes — their gating (and so whether a filter hides them) is
+    // only known then, and a hidden row would otherwise never be refreshed.
+    const watch = addedWatchRef.current;
+    const extra = watch && job.scope_asins ? watch.asins.filter((a) => job.scope_asins!.map((x) => String(x).toUpperCase()).includes(a)) : [];
+    if (watch && extra.length > 0) watch.recheck = true;
+    const asins = Array.from(new Set([...rowsToRefresh(job, visibleAsinsRef.current), ...extra]));
     if (asins.length > 0) void rowRefresher.request(asins);
   }, [rowRefresher]);
 
@@ -1044,6 +1058,7 @@ export default function Home() {
     setIsSyncingSourcing(true);
     let plan: { newCount: number; skippedExisting: number; toArchiveCount: number } | null = null;
     let final: { inserted: number; archivedNew: number; skippedExisting: number; errors: string[] } | null = null;
+    const addedAsins = new Set<string>();
     try {
       const res = await fetch("/api/sync/sourcing-sheet", {
         method: "POST",
@@ -1074,6 +1089,8 @@ export default function Home() {
                 }
               } else if (msg.type === "progress") {
                 setProgress(msg.data);
+              } else if (msg.type === "result" && msg.data?.asin) {
+                addedAsins.add(String(msg.data.asin).toUpperCase());
               } else if (msg.type === "complete") {
                 final = msg.data;
               } else if (msg.type === "error") {
@@ -1087,11 +1104,9 @@ export default function Home() {
         }
       }
       const f = final ?? { inserted: plan?.newCount ?? 0, archivedNew: 0, skippedExisting: plan?.skippedExisting ?? 0, errors: [] };
-      toast({
-        title: "Sourcing sheet synced",
-        description: `${f.inserted} inserted, ${f.archivedNew} archived (discontinued), ${f.skippedExisting} already in AF`,
-      });
       await fetchAsins(startDate, endDate, showParked, showDead);
+      // One toast: the sync counts + how many of the added ASINs the filters hide [Show].
+      setPendingAdded({ asins: Array.from(addedAsins), title: "Sourcing sheet synced", base: `${f.inserted} inserted, ${f.archivedNew} archived (discontinued), ${f.skippedExisting} already in AF` });
       await checkRevivalCandidates(); // DA-3
     } catch (err: any) {
       toast({ title: "Sourcing sync failed", description: err.message, variant: "destructive" });
@@ -1351,7 +1366,7 @@ export default function Home() {
     [selectedSearchAsins],
   );
 
-  const queryFilteredResults = useMemo(() => {
+  const filteredNoReveal = useMemo(() => {
     let out = results;
 
     // Scorecard filter (Total / Profitable / Unprofitable / Replens / Buy List)
@@ -1428,6 +1443,42 @@ export default function Home() {
     return out;
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [results, searchQuery, selectedSearchAsinsKey, showGated, showMeltable, priceSource, settings, includeInboundShipping, colFilters, activeFilter, buySet, onHoldSet, filterUncalculated]);
+  // ASINs revealed by an added-ASIN report's "Show" pass every filter (they alone).
+  const queryFilteredResults = useMemo(() => {
+    if (revealAsins.size === 0) return filteredNoReveal;
+    const keep = new Set(filteredNoReveal.map((r) => r.asin));
+    return results.filter((r) => keep.has(r.asin) || revealAsins.has(r.asin.toUpperCase()));
+  }, [filteredNoReveal, revealAsins, results]);
+
+  // Added-ASIN report: once the list holds the added ASINs, count those the filters hide.
+  useEffect(() => {
+    if (!pendingAdded || listLoad.state !== "ready") return;
+    const report = addedHiddenReport(pendingAdded.asins, results, filteredNoReveal);
+    const added = `${pendingAdded.asins.length} added — ${report.hidden.length} hidden by your filters`;
+    toast({
+      title: pendingAdded.title,
+      description: pendingAdded.base ? `${pendingAdded.base} · ${added}` : added,
+      action: report.hidden.length > 0
+        ? <ToastAction altText="Show the hidden added ASINs" onClick={() => setRevealAsins((prev) => new Set([...Array.from(prev), ...report.hidden]))} data-testid="button-show-hidden-added">Show</ToastAction>
+        : undefined,
+    });
+    addedWatchRef.current = { asins: pendingAdded.asins, hidden: report.hidden.length, recheck: false };
+    setPendingAdded(null);
+  }, [pendingAdded, listLoad.state, results, filteredNoReveal, toast]);
+  // …and once more when their onboarding job has filled gating in, if more are hidden now.
+  useEffect(() => {
+    const watch = addedWatchRef.current;
+    if (!watch || !watch.recheck) return;
+    const report = addedHiddenReport(watch.asins, results, filteredNoReveal);
+    if (report.hidden.length <= watch.hidden) return;
+    watch.recheck = false; watch.hidden = report.hidden.length;
+    toast({
+      title: "Added ASINs now hidden",
+      description: `${report.hidden.length} of the ${watch.asins.length} added ASINs are hidden by your filters now that their gating is known`,
+      action: <ToastAction altText="Show the hidden added ASINs" onClick={() => setRevealAsins((prev) => new Set([...Array.from(prev), ...report.hidden]))}>Show</ToastAction>,
+    });
+  }, [results, filteredNoReveal, toast]);
+
 
   // Sort all filtered results before paginating
   const sortedFilteredResults = useMemo(() => {
@@ -1522,10 +1573,10 @@ export default function Home() {
   // loaded ASIN — the visibility toggles included — and how many rows they hide.
   const colLabelById = useMemo(() => new Map(ALL_COLUMN_DEFS.map((c) => [c.id as string, c.label])), []);
   const filterChips = useMemo(() => buildFilterChips(
-    { activeFilter, filterUncalculated, searchQuery, selectedCount: selectedSearchAsins.size, showGated, showMeltable, colFilters },
+    { activeFilter, filterUncalculated, searchQuery, selectedCount: selectedSearchAsins.size, showGated, showMeltable, colFilters, revealedCount: results.filter((r) => revealAsins.has(r.asin.toUpperCase())).length },
     (id) => colLabelById.get(id) ?? id,
     (id) => (colFilters[id] ? formatFilterValue(colFilters[id]) : ""),
-  ), [activeFilter, filterUncalculated, searchQuery, selectedSearchAsins, showGated, showMeltable, colFilters, colLabelById]);
+  ), [activeFilter, filterUncalculated, searchQuery, selectedSearchAsins, showGated, showMeltable, colFilters, colLabelById, revealAsins, results]);
   const hiddenByFilters = results.length - queryFilteredResults.length;
   function clearFilterChip(key: FilterChipKey) {
     if (key === "tile") setActiveFilter("all");
@@ -1534,10 +1585,12 @@ export default function Home() {
     else if (key === "selection") { setSelectedSearchAsins(new Set()); setSearchQuery(""); }
     else if (key === "gated") { setShowGated(true); saveShowGated(true); }
     else if (key === "meltable") { setShowMeltable(true); saveShowMeltable(true); }
+    else if (key === "reveal") setRevealAsins(new Set());
     else if (key.startsWith("col:")) { const id = key.slice(4); setColFilters((prev) => { const next = { ...prev }; delete next[id]; return next; }); }
   }
   function clearAllFilters() {
     clearSearchFilters();
+    setRevealAsins(new Set());
     setActiveFilter("all");
     setShowGated(true); saveShowGated(true);
     setShowMeltable(true); saveShowMeltable(true);
