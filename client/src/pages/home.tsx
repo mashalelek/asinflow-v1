@@ -60,7 +60,7 @@ import { VisibilityToggles, loadShowGated, saveShowGated, loadShowMeltable, save
 import { getEstimatedProfit } from "@/lib/profit";
 import { isProfitable, isReplens } from "@shared/profitability";
 import { ActiveFiltersModal, getActiveFilterCount } from "@/components/active-filters-modal";
-import { Filter } from "lucide-react";
+import { Filter, Loader2 } from "lucide-react";
 
 const DATE_PREFS_KEY = "fba-date-prefs";
 const COL_FILTERS_KEY = "fba-col-filters";
@@ -389,6 +389,10 @@ export default function Home() {
   const [historyAsin, setHistoryAsin] = useState<string | null>(null);
   const [savedCount, setSavedCount] = useState<number | null>(null);
   const [dbLoaded, setDbLoaded] = useState(false);
+  // The full-list load (2026-10-18): a slow or failed load must never look
+  // like an empty page — "loading" shows an indicator in the table area,
+  // "error" shows the reason and a Retry.
+  const [listLoad, setListLoad] = useState<{ state: "loading" | "ready" | "error"; error?: string }>({ state: "loading" });
   const [isSyncing, setIsSyncing] = useState(false);
   // Scheduler v1 (SPEC §11 "Refresh job", 2026-10-15): ONE Refresh button
   // enqueues a job; the jobs dialog is the history and the per-component
@@ -469,14 +473,26 @@ export default function Home() {
   }, [colFilters]);
 
   const fetchAsins = useCallback((start: string, end: string, parked = false, dead = false) => {
+    setListLoad({ state: "loading" });
     return fetch(`/api/asins?startDate=${start}&endDate=${end}${parked ? "&includeParked=true" : ""}${dead ? "&includeDead=true" : ""}`)
-      .then((r) => r.json())
+      .then(async (r) => {
+        if (!r.ok) {
+          const body = await r.json().catch(() => ({} as any));
+          throw new Error(body?.message || `the server answered ${r.status}`);
+        }
+        return r.json();
+      })
       .then((data: AsinResult[]) => {
+        if (!Array.isArray(data)) throw new Error("unexpected response from the server");
         if (data.length > 0) setResults(data);
         setSavedCount(data.length);
         setDbLoaded(true);
+        setListLoad({ state: "ready" });
       })
-      .catch(() => setDbLoaded(true));
+      .catch((err: any) => {
+        setDbLoaded(true);
+        setListLoad({ state: "error", error: err?.message ?? String(err) });
+      });
   }, []);
 
   useEffect(() => {
@@ -1686,6 +1702,11 @@ export default function Home() {
           )}
         </div>
 
+        {listLoad.state === "loading" && results.length > 0 && (
+          <div className="mx-4 mb-1 flex items-center gap-2 text-xs text-muted-foreground" role="status" aria-live="polite" data-testid="asins-reloading">
+            <Loader2 className="h-3.5 w-3.5 animate-spin" /> Updating the list…
+          </div>
+        )}
         {results.length > 0 && (
           <>
             {/* Row 2: search → counts → merged Active-filters pill → Clear-selection pill | views + columns */}
@@ -1833,7 +1854,23 @@ export default function Home() {
           </>
         )}
 
-        {!isAnalyzing && results.length === 0 && asins.length === 0 && dbLoaded && (
+        {/* List load state (2026-10-18): indicator while the list loads, the reason + Retry when it fails. */}
+        {listLoad.state === "loading" && results.length === 0 && asins.length === 0 && (
+          <div className="flex flex-col items-center justify-center py-20 text-center px-4" role="status" aria-live="polite" data-testid="asins-loading">
+            <Loader2 className="h-8 w-8 animate-spin text-muted-foreground mb-3" />
+            <p className="text-sm text-muted-foreground">Loading ASINs…</p>
+          </div>
+        )}
+        {listLoad.state === "error" && (
+          <div className="mx-4 my-6 flex flex-col items-center gap-2 rounded-md border border-destructive/40 bg-destructive/5 px-4 py-6 text-center" role="alert" data-testid="asins-load-error">
+            <AlertTriangle className="h-6 w-6 text-destructive" />
+            <p className="text-sm font-medium">The ASIN list didn't load.</p>
+            <p className="text-xs text-muted-foreground">{listLoad.error}</p>
+            <Button size="sm" variant="outline" onClick={() => void fetchAsins(startDate, endDate, showParked, showDead)} data-testid="button-retry-asins">Retry</Button>
+          </div>
+        )}
+
+        {!isAnalyzing && results.length === 0 && asins.length === 0 && dbLoaded && listLoad.state === "ready" && (
           <div className="flex flex-col items-center justify-center py-20 text-center px-4">
             <BarChart3 className="h-16 w-16 text-muted-foreground/30 mb-4" />
             <h2 className="text-lg font-medium text-muted-foreground">
