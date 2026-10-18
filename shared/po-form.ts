@@ -9,9 +9,10 @@
 //   - at least one product; each: whole qty ≥ 1, price ≥ 0, a 10-character
 //     ASIN, yield > 0.
 //   - products of one ASIN agree on sold as / units per pack / prep.
-//   - pack math divisible: an ASIN's Ordered = Σ qty × yield must be a whole
-//     number of ASIN units; a bundle's components must give the same whole
-//     number of sets.
+//   - pack math: an ASIN's Ordered = Σ qty × yield (2 decimals); a non-whole
+//     number of ASIN units is allowed with a warning (Upload to Velocity
+//     skips it — Velocity only accepts whole packs); a bundle's components
+//     must give the same number of sets.
 //   - live totals: subtotal = Σ price × qty (a typed subtotal that differs is
 //     a warning, not an error).
 // Cost / unit per ASIN is prefilled by shared/po-cost.ts (the one formula,
@@ -19,6 +20,9 @@
 // be overridden per ASIN.
 
 import { adjustedProductCost, costPerUnitPrefill, type CostHeader } from "./po-cost";
+
+/** Shown (not blocking) on an ASIN whose Ordered is not a whole number. */
+export const WHOLE_PACKS_WARNING = "Upload to Velocity will skip this line — Velocity only accepts whole packs";
 
 export const SOLD_AS_OPTIONS = ["individual", "multi-pack", "bundle"] as const;
 export type SoldAs = (typeof SOLD_AS_OPTIONS)[number];
@@ -159,19 +163,20 @@ export function checkPoForm(f: PoFormState): PoFormCheck {
     }
     const per = idx.map((i) => (Number(t(products[i].qty_ordered)) || 0) * trueYield(Number(t(products[i].asin_qty_per_product)) || 1));
     let qty: number;
+    const c2 = (x: number) => Math.round(x * 100) / 100;
     if (first.sold_as === "bundle") {
       if (idx.length < 2) errors.push(`${asin}: a bundle needs at least two products`);
-      const sets = per.map((x) => Math.round(x * 1e6) / 1e6);
-      if (sets.some((x) => Math.abs(x - Math.round(x)) > 1e-6) || new Set(sets.map((x) => Math.round(x))).size > 1) {
-        errors.push(`${asin}: pack math — every bundle component must give the same whole number of sets (qty × yield = ${sets.map((x) => +x.toFixed(4)).join(", ")})`);
+      const sets = per.map((x) => c2(x));
+      if (new Set(sets).size > 1) {
+        errors.push(`${asin}: pack math — every bundle component must give the same number of sets (qty × yield = ${sets.join(", ")})`);
       }
-      qty = Math.round(Math.min(...sets));
+      qty = Math.min(...sets);
     } else {
-      const sum = per.reduce((a, b) => a + b, 0);
-      if (Math.abs(sum - Math.round(sum)) > 1e-6) errors.push(`${asin}: pack math — qty × yield = ${+sum.toFixed(4)} is not a whole number of ASIN units`);
-      qty = Math.round(sum);
+      qty = c2(per.reduce((a, b) => a + b, 0));
     }
-    if (qty < 1 && !idx.some((i) => productErrors[i])) errors.push(`${asin}: Ordered works out to 0 ASIN units`);
+    // A non-whole number of ASIN units is allowed (2026-10-18, Maria) — Velocity is the only consumer that refuses it.
+    if (qty > 0 && Math.abs(qty - Math.round(qty)) > 1e-9) warnings.push(`${asin}: ${qty} ASIN units — ${WHOLE_PACKS_WARNING}`);
+    if (!(qty > 0) && !idx.some((i) => productErrors[i])) errors.push(`${asin}: Ordered works out to 0 ASIN units`);
     const lines = idx.map((i, pos) => {
       const p = products[i]; const price = moneyNum(p.price);
       const adj = price == null || Number.isNaN(price) ? null : adjustedProductCost(price, costHeader);

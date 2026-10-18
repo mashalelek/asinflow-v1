@@ -34,25 +34,27 @@ describe("checkPoForm", () => {
     const ov = checkPoForm({ ...tetley, cost_overrides: { B001AXZ7Q8: "17.50" } });
     expect(ov.asins[0]).toMatchObject({ cost_per_unit: "17.50", computed_cost_per_unit: "18.12" });
   });
-  it("pack math: a multi-pack's qty × yield must be whole; 5 units of a 2-pack is refused", () => {
+  it("pack math: 5 units of a 2-pack (2.5 ASIN units) is allowed with the whole-packs warning, not blocked", () => {
     const p = { ...emptyProduct(), price: "6.56", qty_ordered: "5", asin: "B007K83C46", asin_qty_per_product: "0.5", sold_as: "multi-pack" as const, units_per_pack: "2" };
-    const bad = checkPoForm(base({ products: [p] }));
-    expect(bad.ok).toBe(false);
-    expect(bad.errors.join()).toMatch(/B007K83C46: pack math — qty × yield = 2.5 is not a whole number of ASIN units/);
-    const good = checkPoForm(base({ products: [{ ...p, qty_ordered: "6" }] }));
-    expect(good.ok).toBe(true);
-    expect(good.asins[0]).toMatchObject({ qty: 3, units_per_pack: 2 });
+    const half = checkPoForm(base({ products: [p] }));
+    expect(half.ok).toBe(true);
+    expect(half.asins[0]).toMatchObject({ qty: 2.5, units_per_pack: 2 });
+    expect(half.warnings).toContain("B007K83C46: 2.5 ASIN units — Upload to Velocity will skip this line — Velocity only accepts whole packs");
+    const whole = checkPoForm(base({ products: [{ ...p, qty_ordered: "6" }] }));
+    expect(whole.ok).toBe(true);
+    expect(whole.asins[0]).toMatchObject({ qty: 3 });
+    expect(whole.warnings.join()).not.toMatch(/whole packs/);
     expect(checkPoForm(base({ products: [{ ...p, units_per_pack: "1" }] })).productErrors[0]).toContain("units per pack must be a whole number ≥ 2 for a multi-pack");
   });
   it("2-dp yields are read as the fraction they stand for (48 × 0.33 = 16)", () => {
     expect(checkPoForm(base({ products: [{ ...emptyProduct(), price: "1", qty_ordered: "48", asin: "B0TEST0003", asin_qty_per_product: "0.33" }] })).asins[0].qty).toBe(16);
   });
-  it("a bundle needs ≥ 2 products giving the same whole number of sets; S = its products", () => {
+  it("a bundle needs ≥ 2 products giving the same number of sets; S = its products", () => {
     const comp = (q: string) => ({ ...emptyProduct(), price: "3", qty_ordered: q, asin: "B0GNHTYGPF", sold_as: "bundle" as const, units_per_pack: "2" });
     const ok = checkPoForm(base({ products: [comp("7"), comp("7")] }));
     expect(ok.ok).toBe(true);
     expect(ok.asins[0]).toMatchObject({ qty: 7, unique_products: 2, sold_as: "bundle" });
-    expect(checkPoForm(base({ products: [comp("7"), comp("8")] })).errors.join()).toMatch(/every bundle component must give the same whole number of sets/);
+    expect(checkPoForm(base({ products: [comp("7"), comp("8")] })).errors.join()).toMatch(/every bundle component must give the same number of sets/);
     expect(checkPoForm(base({ products: [comp("7")] })).errors.join()).toMatch(/a bundle needs at least two products/);
   });
   it("products of one ASIN must agree on sold as / units per pack / prep; a typed subtotal that differs is only a warning", () => {

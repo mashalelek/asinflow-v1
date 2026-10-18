@@ -208,7 +208,7 @@ export function NewPoDialog({ open, onOpenChange, onCreated }: { open: boolean; 
           <div><span className="text-muted-foreground mr-1.5">Order total</span><span className="font-mono">{money(check.effectiveOrderTotal)}</span></div>
           <div><span className="text-muted-foreground mr-1.5">ASIN units</span><span>{check.asins.reduce((t, a) => t + a.qty, 0)}</span></div>
         </div>
-        {check.warnings.map((w) => <p key={w} className="flex items-center gap-1.5 text-xs text-amber-700 dark:text-amber-400"><AlertTriangle className="h-3.5 w-3.5" />{w}</p>)}
+        {check.warnings.map((w) => <p key={w} data-testid="new-po-warning" className="flex items-center gap-1.5 text-xs text-amber-700 dark:text-amber-400"><AlertTriangle className="h-3.5 w-3.5" />{w}</p>)}
         {touched && check.errors.length > 0 && (
           <ul className="list-disc pl-5 text-xs text-destructive" data-testid="new-po-errors">{check.errors.map((e) => <li key={e}>{e}</li>)}</ul>
         )}
