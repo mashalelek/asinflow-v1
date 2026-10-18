@@ -63,10 +63,11 @@ describe("3. a finished onboarding job refetches the rows on screen", () => {
     expect(jobTouchesRows({ scope_asins: null }, onScreen)).toBe(true);
     expect(jobTouchesRows({ scope_asins: ["B0XXXXXXX1"] }, onScreen)).toBe(false);
   });
-  it("the jobs hook hands every finished job that is not this tab's (onboarding included) to onSettled, and the page refetches on overlap", () => {
+  it("the jobs hook hands every finished job that is not this tab's (onboarding included) to onSettled, and the page refreshes the overlapping rows on screen", () => {
     expect(read("hooks/use-jobs.ts")).toMatch(/if \(mineIds\.current\.has\(id\) \|\| job\.trigger === "scheduled"\) onFinishedRef\.current\(job\);\s*else onSettledRef\.current\?\.\(job\);/);
     const home = read("pages/home.tsx");
-    expect(home).toMatch(/if \(jobTouchesRows\(job, onScreen\)\) void fetchAsins\(/);
+    // Since 2026-10-18 (performance): only the job's rows on screen reload — row-refresh.ts, never the full list.
+    expect(home).toMatch(/const onJobSettled = useCallback\(\(job: Job\) => \{ refreshJobRows\(job\); \}, \[refreshJobRows\]\);/);
     expect(home).toMatch(/useJobs\(onJobFinished, onJobSettled\)/);
   });
 });

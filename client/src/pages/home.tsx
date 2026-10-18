@@ -26,7 +26,8 @@ import { loadColumnConfig, type ColumnConfig } from "@/lib/columns";
 import { JobsDialog } from "@/components/jobs-dialog";
 import { useJobs } from "@/hooks/use-jobs";
 import { enqueueRefresh, cancelJob, getJob, runningLabel, queuedLabel, completionText, FOCUS_ASIN_EVENT, type Job } from "@/lib/jobs-api";
-import { refreshPlan, queuedJobIdFromMessage, applyStreamedRow, jobTouchesRows } from "@/lib/upload-flow";
+import { refreshPlan, queuedJobIdFromMessage, applyStreamedRow } from "@/lib/upload-flow";
+import { rowsToRefresh, mergeRefreshedRows, RowRefresher } from "@/lib/row-refresh";
 import { ToastAction } from "@/components/ui/toast";
 import { loadBuyList, saveBuyList, loadOnHoldList, saveOnHoldList } from "@/lib/buy-hold";
 import { planBulkSetToggle, bulkToggleLabel, applyBulkPlan } from "@/lib/bulk-buy-hold";
@@ -344,8 +345,6 @@ export default function Home() {
   const [asins, setAsins] = useState<AsinInput[]>([]);
   const queuedJobIdsRef = useRef<number[]>([]);
   const [results, setResults] = useState<AsinResult[]>([]);
-  const resultsRef = useRef<AsinResult[]>([]);
-  resultsRef.current = results;
   // Shared + persisted (2026-09-09): fba-price-source, same key as Bulk Calc.
   const [priceSource, setPriceSource] = useState<PriceSource>(loadPriceSource);
   useEffect(() => { savePriceSource(priceSource); }, [priceSource]);
@@ -815,6 +814,26 @@ export default function Home() {
   }, [toast, currentWorkingSet, fetchAsins, startDate, endDate, showParked, showDead]);
 
   // ── Scheduler v1 (SPEC §11 "Refresh job", 2026-10-15) ────────────────────
+  // Job-finish row refresh (performance, 2026-10-18): a finished job reloads
+  // only the rows of its scope that are on the current page — never the full
+  // list; a scheduled pass (no scope) reloads the visible page once. One
+  // request at a time per tab (RowRefresher coalesces), each job handled once.
+  const visibleAsinsRef = useRef<string[]>([]);
+  const rangeRef = useRef({ startDate, endDate, showParked, showDead });
+  rangeRef.current = { startDate, endDate, showParked, showDead };
+  const rowRefresher = useMemo(() => new RowRefresher(async (asins) => {
+    const { startDate: s, endDate: e, showParked: p, showDead: d } = rangeRef.current;
+    const res = await fetch(`/api/asins?startDate=${s}&endDate=${e}${p ? "&includeParked=true" : ""}${d ? "&includeDead=true" : ""}&asins=${encodeURIComponent(asins.join(","))}`);
+    if (!res.ok) return;
+    const fresh: AsinResult[] = await res.json();
+    setResults((prev) => mergeRefreshedRows(prev, fresh, asins));
+  }), []);
+  const refreshJobRows = useCallback((job: Job) => {
+    if (!rowRefresher.seenJob(job.id)) return;
+    const asins = rowsToRefresh(job, visibleAsinsRef.current);
+    if (asins.length > 0) void rowRefresher.request(asins);
+  }, [rowRefresher]);
+
   // Completion notification (decision 16): a toast for jobs this tab is
   // watching — its own manual jobs, and any scheduled job that finishes
   // while the tab is open — with a Changes link when the job flipped any
@@ -831,15 +850,12 @@ export default function Home() {
         ? <ToastAction altText="Show changes" onClick={() => { setJobsInitialId(job.id); setJobsOpen(true); }}>Changes</ToastAction>
         : undefined,
     });
-    void fetchAsins(startDate, endDate, showParked, showDead);
+    refreshJobRows(job);
     fetchPriceStatus();
-  }, [toast, fetchAsins, fetchPriceStatus, startDate, endDate, showParked, showDead]);
-  // Any other finished job (onboarding, another tab's Refresh, bulk) whose
-  // scope overlaps the rows on screen → refetch them (fix 2026-10-18).
-  const onJobSettled = useCallback((job: Job) => {
-    const onScreen = new Set(resultsRef.current.map((r) => r.asin.toUpperCase()));
-    if (jobTouchesRows(job, onScreen)) void fetchAsins(startDate, endDate, showParked, showDead);
-  }, [fetchAsins, startDate, endDate, showParked, showDead]);
+  }, [toast, refreshJobRows, fetchPriceStatus]);
+  // Any other finished job (onboarding, another tab's Refresh, bulk): only
+  // the rows of its scope that are on screen reload (2026-10-18).
+  const onJobSettled = useCallback((job: Job) => { refreshJobRows(job); }, [refreshJobRows]);
   const jobs = useJobs(onJobFinished, onJobSettled);
 
   // Refresh (N): scope = the checkbox selection, else every row of the
@@ -1467,6 +1483,7 @@ export default function Home() {
     () => sortedFilteredResults.slice((safePage - 1) * pageSize, safePage * pageSize),
     [sortedFilteredResults, safePage, pageSize]
   );
+  visibleAsinsRef.current = paginatedResults.map((r) => r.asin);
 
   const handleSelectAll = useCallback(() => {
     setSelectedSet(new Set(paginatedResults.map((r) => r.asin)));

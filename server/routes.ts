@@ -1154,6 +1154,16 @@ export async function registerRoutes(
       // view-scope toggles; includeArchived kept as a legacy alias for
       // includeParked (old clients / scripts).
       const { startDate, endDate, includeArchived, includeParked, includeDead } = req.query as Record<string, string | undefined>;
+      // Row refresh (2026-10-18): ?asins=A,B,… returns just those rows — what a
+      // finished job reloads (the rows of its scope that are on screen) instead
+      // of the whole list. Capped; ASIN-shaped values only.
+      const subset = typeof req.query.asins === "string"
+        ? Array.from(new Set(req.query.asins.split(",").map((x) => x.trim().toUpperCase()).filter((x) => /^[A-Z0-9]{10}$/.test(x)))).slice(0, 500)
+        : null;
+      if (subset && subset.length === 0) { res.json([]); return; }
+      // Appended to each per-ASIN query as `AND a.asin = ANY($n::text[])`.
+      const onlyA = (n: number) => (subset ? ` AND a.asin = ANY($${n}::text[])` : "");
+      const withSubset = (params: any[]) => (subset ? [...params, subset] : params);
       const statuses = ["'active'"];
       if (includeParked === "true" || includeArchived === "true") statuses.push("'parked'");
       if (includeDead === "true") statuses.push("'dead'");
@@ -1198,20 +1208,20 @@ export async function registerRoutes(
           e.fetched_at
         FROM asins a
         LEFT JOIN asin_estimates e ON e.asin = a.asin
-        WHERE ${activeFilter}
+        WHERE ${activeFilter}${onlyA(1)}
         ORDER BY a.last_refreshed_at DESC NULLS LAST
-      `);
+      `, withSubset([]));
 
       // Latest inventory snapshot per ASIN: one index probe per ASIN on
       // idx_inventory_latest (asin_id, snapshot_at DESC) — never the whole
       // history. The DISTINCT ON form it replaced read every snapshot (286,677
       // rows on production, +~2,000 per hourly pass) to keep ~1,940: 2.6–3.3 s.
-      const invResult = await query(LATEST_INVENTORY_SQL).catch(() => ({ rows: [] as any[] }));
+      const invResult = await query(subset ? `${LATEST_INVENTORY_SQL} WHERE a.asin = ANY($1::text[])` : LATEST_INVENTORY_SQL, withSubset([])).catch(() => ({ rows: [] as any[] }));
       const invMap = new Map<string, any>();
       for (const row of invResult.rows) invMap.set(row.asin, row);
       // On-order figures from the PO tables (patch asins-on-order-from-pos
       // §2): one query, folded per ASIN; the sheet's ordered_qty is not read.
-      const pipelineMap = await loadAsinPipeline((sql, params) => query(sql, params));
+      const pipelineMap = await loadAsinPipeline((sql, params) => query(sql, params), subset ?? undefined);
 
       // Aggregated sales for date range
       const salesMap = new Map<string, any>();
@@ -1227,18 +1237,18 @@ export async function registerRoutes(
             COUNT(CASE WHEN s.units_sold > 0 THEN 1 END) AS days_with_sales
           FROM sales_daily s
           JOIN asins a ON a.id = s.asin_id
-          WHERE s.sale_date >= $1 AND s.sale_date <= $2
+          WHERE s.sale_date >= $1 AND s.sale_date <= $2${onlyA(3)}
           GROUP BY a.asin
-        `, [startDate, endDate]).catch(() => ({ rows: [] as any[] }));
+        `, withSubset([startDate, endDate])).catch(() => ({ rows: [] as any[] }));
         for (const row of salesResult.rows) salesMap.set(row.asin, row);
 
         const disResult = await query(`
           SELECT a.asin, COUNT(DISTINCT DATE(i.snapshot_at)) AS days_in_stock
           FROM inventory_snapshots i
           JOIN asins a ON a.id = i.asin_id
-          WHERE i.snapshot_at >= $1::date AND i.snapshot_at <= ($2::date + 1) AND i.available_fba > 0
+          WHERE i.snapshot_at >= $1::date AND i.snapshot_at <= ($2::date + 1) AND i.available_fba > 0${onlyA(3)}
           GROUP BY a.asin
-        `, [startDate, endDate]).catch(() => ({ rows: [] as any[] }));
+        `, withSubset([startDate, endDate])).catch(() => ({ rows: [] as any[] }));
         for (const row of disResult.rows) daysInStockMap.set(row.asin, parseInt(row.days_in_stock) || 0);
       }
 
@@ -1250,8 +1260,8 @@ export async function registerRoutes(
           (SELECT sellers_fbm FROM asin_estimates_history h WHERE h.asin_id = a.id AND h.fetched_at <= NOW() - INTERVAL '6 days' ORDER BY h.fetched_at DESC LIMIT 1) AS fbm_7d_old,
           (SELECT sellers_fba FROM asin_estimates_history h WHERE h.asin_id = a.id AND h.fetched_at <= NOW() - INTERVAL '29 days' ORDER BY h.fetched_at DESC LIMIT 1) AS fba_30d_old,
           (SELECT sellers_fbm FROM asin_estimates_history h WHERE h.asin_id = a.id AND h.fetched_at <= NOW() - INTERVAL '29 days' ORDER BY h.fetched_at DESC LIMIT 1) AS fbm_30d_old
-        FROM asins a WHERE a.status = 'active'
-      `).catch(() => ({ rows: [] as any[] }));
+        FROM asins a WHERE a.status = 'active'${onlyA(1)}
+      `, withSubset([])).catch(() => ({ rows: [] as any[] }));
       const deltaMap = new Map<string, any>();
       for (const row of deltaResult.rows) deltaMap.set(row.asin, row);
 
@@ -1259,8 +1269,8 @@ export async function registerRoutes(
       const skusResult = await query(`
         SELECT a.asin, s.sku FROM asin_skus s
         JOIN asins a ON a.id = s.asin_id
-        WHERE a.status = 'active' ORDER BY s.is_primary DESC, s.sku
-      `).catch(() => ({ rows: [] as any[] }));
+        WHERE a.status = 'active'${onlyA(1)} ORDER BY s.is_primary DESC, s.sku
+      `, withSubset([])).catch(() => ({ rows: [] as any[] }));
       const skusMap = new Map<string, string[]>();
       for (const row of skusResult.rows) {
         const arr = skusMap.get(row.asin) ?? [];
@@ -1276,8 +1286,9 @@ export async function registerRoutes(
         SELECT asin, sku, verify_status, submitted_at, verified_at, issues,
                review_flags, terminal_conflict, flags_acknowledged_at
           FROM listing_submissions
+         ${subset ? "WHERE asin = ANY($1::text[])" : ""}
          ORDER BY asin, submitted_at DESC
-      `).catch(() => ({ rows: [] as any[] }));
+      `, withSubset([])).catch(() => ({ rows: [] as any[] }));
       const subsMap = new Map<string, any[]>();
       for (const row of subsResult.rows) {
         const arr = subsMap.get(row.asin) ?? [];
@@ -1301,8 +1312,9 @@ export async function registerRoutes(
         SELECT a.asin, t.name, t.color FROM asin_tags at
         JOIN tags t ON t.id = at.tag_id
         JOIN asins a ON a.id = at.asin_id
-        WHERE a.status = 'active'
-      `).catch(() => ({ rows: [] as any[] }));
+        WHERE a.status = 'active'${onlyA(1)}
+        ORDER BY a.asin, t.name
+      `, withSubset([])).catch(() => ({ rows: [] as any[] }));
       const tagsMap = new Map<string, { name: string; color: string }[]>();
       for (const row of tagsResult.rows) {
         const arr = tagsMap.get(row.asin) ?? [];
