@@ -15,6 +15,6 @@ describe("PO detail route does not swallow fixed /api/pos/<word> paths", () => {
     expect(head).toMatch(/if \(!\/\^\[0-9a-f\]\{8\}-\[0-9a-f\]\{4\}-\[0-9a-f\]\{4\}-\[0-9a-f\]\{4\}-\[0-9a-f\]\{12\}\$\/i\.test\(id\)\) \{ next\(\); return; \}/);
   });
   it("the fixed paths it would shadow are registered after it", () => {
-    for (const p of ['app.get("/api/pos/unmatched"']) expect(src.indexOf(p)).toBeGreaterThan(i);
+    for (const p of ['app.get("/api/pos/unmatched"', 'app.get("/api/pos/asin-lookup"']) expect(src.indexOf(p)).toBeGreaterThan(i);
   });
 });

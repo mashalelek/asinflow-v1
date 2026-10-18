@@ -35,6 +35,8 @@ const EXPECTED_ROUTES = [
   "GET /api/pos",
   "GET /api/pos/:id",
   "GET /api/pos/:id/history",
+  "POST /api/pos",
+  "GET /api/pos/asin-lookup",
   "PATCH /api/pos/:id",
   "POST /api/pos/:id/lines",
   "PATCH /api/pos/lines/:id",

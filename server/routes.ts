@@ -13,6 +13,7 @@ import { evaluateAutoClose, setPoClosedManually, parseQtyInput, MANUAL_QTY_COLUM
 import { ACTION_ITEMS, normalizeActionItems } from "./po-status-map";
 import { asinWriteThrough, unionActionItems, PO_ACTION_ITEMS_SQL } from "./po-action-items";
 import { editPoHeader, editLine, addLine, removeLine, editAsinRow, loadPoHistory, logEdits, changedFields, asLogText, EditError, type EditResult } from "./po-edit";
+import { createPoFromForm, lookupAsins } from "./po-create";
 import { syncPoSheet, type PoSyncResult } from "./po-sheet-sync";
 import { syncVelocityShipments, type VelocitySyncResult } from "./shipment-sync-velocity";
 import { syncScShipments, type ScSyncResult } from "./shipment-sync-sc";
@@ -4466,6 +4467,23 @@ export async function registerRoutes(
   app.patch("/api/pos/asin-rows/:id", async (req: Request, res: Response) => {
     if (!isDbAvailable()) { res.status(503).json({ message: "Database not available" }); return; }
     await sendEdit(res, () => withPoTx((q) => editAsinRow(q, String(req.params.id ?? ""), req.body, uid(req))));
+  });
+  // New PO form (po-af-owned §4): the body is shared/po-form.ts's PoFormState.
+  app.post("/api/pos", async (req: Request, res: Response) => {
+    if (!isDbAvailable()) { res.status(503).json({ message: "Database not available" }); return; }
+    try {
+      const r = await withPoTx((q) => createPoFromForm(q, req.body, uid(req)));
+      res.status(201).json(r);
+    } catch (err: any) {
+      if (err instanceof EditError) { res.status(err.status).json({ message: err.message }); return; }
+      if (err?.code === "23505") { res.status(409).json({ message: "a PO with this supplier and order # already exists" }); return; }
+      res.status(500).json({ message: err?.message ?? String(err) });
+    }
+  });
+  app.get("/api/pos/asin-lookup", async (req: Request, res: Response) => {
+    if (!isDbAvailable()) { res.status(503).json({ message: "Database not available" }); return; }
+    try { res.json({ rows: await lookupAsins(poQuery, typeof req.query.q === "string" ? req.query.q : "") }); }
+    catch (err: any) { res.status(500).json({ message: err.message }); }
   });
   app.get("/api/pos/:id/history", async (req: Request, res: Response) => {
     if (!isDbAvailable()) { res.status(503).json({ message: "Database not available" }); return; }
