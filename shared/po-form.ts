@@ -14,10 +14,11 @@
 //     number of sets.
 //   - live totals: subtotal = Σ price × qty (a typed subtotal that differs is
 //     a warning, not an error).
-// Cost / unit per ASIN is prefilled from price × (order total ÷ subtotal) ×
-// (1 − weighted gift-card %) — the sheet's adjusted-cost rule, which the
-// imported 2026 cost / unit matches to the cent on 74% of rows (the rest were
-// hand-adjusted) — and can be overridden per ASIN.
+// Cost / unit per ASIN is prefilled by shared/po-cost.ts (the one formula,
+// measured against the imported 2026 cost / unit — v1 matches 74%) and can
+// be overridden per ASIN.
+
+import { adjustedProductCost, costPerUnitPrefill, type CostHeader } from "./po-cost";
 
 export const SOLD_AS_OPTIONS = ["individual", "multi-pack", "bundle"] as const;
 export type SoldAs = (typeof SOLD_AS_OPTIONS)[number];
@@ -136,9 +137,13 @@ export function checkPoForm(f: PoFormState): PoFormCheck {
   const n = (k: "tax" | "sh_donations" | "discount") => { const v = moneyNum(f[k]); return v == null || Number.isNaN(v) ? 0 : v; };
   const typedTotal = moneyNum(f.order_total);
   const effectiveOrderTotal = typedTotal != null && !Number.isNaN(typedTotal) ? typedTotal : r2(subtotal + n("tax") + n("sh_donations") - n("discount"));
-  const ratio = subtotal > 0 ? effectiveOrderTotal / subtotal : 1;
   const gcRaw = t(f.weighted_gc_discount_pct).replace("%", "");
-  const gc = /^\d+(\.\d+)?$/.test(gcRaw) ? Number(gcRaw) / 100 : 0;
+  const cbRaw = t(f.cashback_pct).replace("%", "");
+  // Cost / unit prefill: the one formula in shared/po-cost.ts (measured against the imported 2026 costs).
+  const costHeader: CostHeader = {
+    subtotal, orderTotal: effectiveOrderTotal, gcPct: /^\d+(\.\d+)?$/.test(gcRaw) ? Number(gcRaw) : null,
+    tax: n("tax"), shDonations: n("sh_donations"), discount: n("discount"), cashbackPct: /^\d+(\.\d+)?$/.test(cbRaw) ? Number(cbRaw) : null,
+  };
 
   // Group by ASIN (first appearance order).
   const groups = new Map<string, number[]>();
@@ -169,11 +174,11 @@ export function checkPoForm(f: PoFormState): PoFormCheck {
     if (qty < 1 && !idx.some((i) => productErrors[i])) errors.push(`${asin}: Ordered works out to 0 ASIN units`);
     const lines = idx.map((i, pos) => {
       const p = products[i]; const price = moneyNum(p.price);
-      const adj = price == null || Number.isNaN(price) ? null : r2(price * ratio * (1 - gc));
+      const adj = price == null || Number.isNaN(price) ? null : adjustedProductCost(price, costHeader);
       return { index: i, product_name: t(p.product_name) || null, supplier_sku: t(p.supplier_sku) || null, price: price == null || Number.isNaN(price) ? null : price.toFixed(2), qty_ordered: Number(t(p.qty_ordered)) || 0, asin_qty_per_product: t(p.asin_qty_per_product) || "1", adjusted_product_cost: adj == null ? null : adj.toFixed(2), position: pos };
     });
-    const costTotal = lines.reduce((a, l) => a + (l.adjusted_product_cost == null ? NaN : Number(l.adjusted_product_cost) * l.qty_ordered), 0);
-    const computed = qty > 0 && Number.isFinite(costTotal) ? r2(costTotal / qty).toFixed(2) : null;
+    const prefill = costPerUnitPrefill(costHeader, lines.map((l) => ({ price: l.price == null ? null : Number(l.price), qty: l.qty_ordered })), qty);
+    const computed = prefill == null ? null : prefill.toFixed(2);
     const ovRaw = t(f.cost_overrides?.[asin] ?? "");
     const ov = ovRaw === "" ? null : moneyNum(ovRaw);
     if (ov != null && (Number.isNaN(ov) || ov < 0)) errors.push(`${asin}: cost / unit must be an amount ≥ 0`);
