@@ -1865,11 +1865,6 @@ export async function registerRoutes(
   // aura-sync cron calls (server/aura-sync-chain.ts), so they can't diverge.
   app.post("/api/sync/aura", async (_req: Request, res: Response) => {
     if (!isDbAvailable()) { res.status(503).json({ message: "Database not available" }); return; }
-    const credPath = process.env.GOOGLE_CREDENTIALS_PATH;
-    if (!credPath || !fs.existsSync(credPath)) {
-      res.status(400).json({ message: "Google credentials file not found" }); return;
-    }
-    if (!process.env.GOOGLE_SHEET_ID) { res.status(400).json({ message: "GOOGLE_SHEET_ID not configured" }); return; }
     if (!process.env.AURA_API_KEY) { res.status(400).json({ message: "AURA_API_KEY not configured" }); return; }
     await respondLongSync(res, async () => {
       try {
@@ -1886,15 +1881,11 @@ export async function registerRoutes(
   // hard dependency the full chain has; the only difference is the scope.
   // INLINE since 2026-10-16 (a sheet read + COGS upsert is not SP-API refresh
   // work and never waits on the scheduled pass): no jobs row. No selection =
-  // the full sheet and every Aura-mapped SKU, i.e. the chain. Gated like the
-  // chain: the sheet is read.
+  // every PO cost and every Aura-mapped SKU, i.e. the chain. Since po-af-owned
+  // §2.4 (2026-10-18) the cost read is the AF PO tables, so only the Aura key
+  // gates it — no Google sheet / credentials needed.
   app.post("/api/sync/aura/push", async (req: Request, res: Response) => {
     if (!isDbAvailable()) { res.status(503).json({ message: "Database not available" }); return; }
-    const credPath = process.env.GOOGLE_CREDENTIALS_PATH;
-    if (!credPath || !fs.existsSync(credPath)) {
-      res.status(400).json({ message: "Google credentials file not found" }); return;
-    }
-    if (!process.env.GOOGLE_SHEET_ID) { res.status(400).json({ message: "GOOGLE_SHEET_ID not configured" }); return; }
     if (!process.env.AURA_API_KEY) { res.status(400).json({ message: "AURA_API_KEY not configured" }); return; }
     // Optional selection filter (same body shape as /api/sheets/sync).
     const { asins } = (req.body ?? {}) as { asins?: string[] };
@@ -1911,13 +1902,10 @@ export async function registerRoutes(
     });
   });
 
-  // Velocity prep-service upload export (phase 1: CSV). Gated by DB + Google
-  // credentials + GOOGLE_SHEET_ID, like the other sheet integrations.
+  // Velocity prep-service upload export (phase 1: CSV). Rows come from the AF
+  // PO tables (po-af-owned §2.4, 2026-10-18); no Google sheet gate.
   app.get("/api/export/velocity-upload", async (req: Request, res: Response) => {
     if (!isDbAvailable()) { res.status(503).json({ message: "Database not available" }); return; }
-    const credPath = process.env.GOOGLE_CREDENTIALS_PATH;
-    if (!credPath || !fs.existsSync(credPath)) { res.status(400).json({ message: "Google credentials file not found" }); return; }
-    if (!process.env.GOOGLE_SHEET_ID) { res.status(400).json({ message: "GOOGLE_SHEET_ID not configured" }); return; }
 
     const today = todayLocal();
     const fromStr = (req.query.from as string) || "";
@@ -1956,9 +1944,6 @@ export async function registerRoutes(
   // submitBulkCsv. &dryRun=1 does everything EXCEPT the POST.
   app.post("/api/upload/velocity", async (req: Request, res: Response) => {
     if (!isDbAvailable()) { res.status(503).json({ message: "Database not available" }); return; }
-    const credPath = process.env.GOOGLE_CREDENTIALS_PATH;
-    if (!credPath || !fs.existsSync(credPath)) { res.status(400).json({ message: "Google credentials file not found" }); return; }
-    if (!process.env.GOOGLE_SHEET_ID) { res.status(400).json({ message: "GOOGLE_SHEET_ID not configured" }); return; }
     if (!process.env.VELOCITY_API_KEY) { res.status(400).json({ message: "VELOCITY_API_KEY not configured" }); return; }
     if (!process.env.VELOCITY_WAREHOUSE_ID) { res.status(400).json({ message: "VELOCITY_WAREHOUSE_ID not configured" }); return; }
 
@@ -2047,9 +2032,6 @@ export async function registerRoutes(
 
   app.get("/api/velocity/plan", async (req: Request, res: Response) => {
     if (!isDbAvailable()) { res.status(503).json({ message: "Database not available" }); return; }
-    const credPath = process.env.GOOGLE_CREDENTIALS_PATH;
-    if (!credPath || !fs.existsSync(credPath)) { res.status(400).json({ message: "Google credentials file not found" }); return; }
-    if (!process.env.GOOGLE_SHEET_ID) { res.status(400).json({ message: "GOOGLE_SHEET_ID not configured" }); return; }
     if (!process.env.VELOCITY_API_KEY || !process.env.VELOCITY_WAREHOUSE_ID) { res.status(400).json({ message: "VELOCITY_API_KEY / VELOCITY_WAREHOUSE_ID not configured" }); return; }
 
     const today = todayLocal();
@@ -2266,9 +2248,6 @@ export async function registerRoutes(
   // the Orders sheet. Returns JSON { filename, csv, summary } so the client can
   // build the download AND show the summary; full detail is logged server-side.
   app.post("/api/export/sellerboard-cogs", upload.single("file"), async (req: Request, res: Response) => {
-    const credPath = process.env.GOOGLE_CREDENTIALS_PATH;
-    if (!credPath || !fs.existsSync(credPath)) { res.status(400).json({ message: "Google credentials file not found" }); return; }
-    if (!process.env.GOOGLE_SHEET_ID) { res.status(400).json({ message: "GOOGLE_SHEET_ID not configured" }); return; }
     if (!req.file) { res.status(400).json({ message: "No template file uploaded (field 'file')" }); return; }
 
     try {
@@ -2343,9 +2322,6 @@ export async function registerRoutes(
   // shows the accounting; full detail is logged server-side.
   app.post("/api/export/sourcing-cost", upload.single("file"), async (req: Request, res: Response) => {
     if (!isDbAvailable()) { res.status(503).json({ message: "Database not available" }); return; }
-    const credPath = process.env.GOOGLE_CREDENTIALS_PATH;
-    if (!credPath || !fs.existsSync(credPath)) { res.status(400).json({ message: "Google credentials file not found" }); return; }
-    if (!process.env.GOOGLE_SHEET_ID) { res.status(400).json({ message: "GOOGLE_SHEET_ID not configured" }); return; }
     if (!req.file) { res.status(400).json({ message: "No workbook uploaded (field 'file')" }); return; }
 
     const from = parseYMDLocal(req.body?.from);

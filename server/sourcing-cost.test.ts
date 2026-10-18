@@ -16,8 +16,12 @@ let sheetRows: any[] = [];
 let rawRowsRead = 0;
 let blankAsinRows = 0;
 
+// Since po-af-owned §2.4 (2026-10-18) the rows come from the AF PO tables.
+vi.mock("./po-af-source", () => ({
+  loadAfPoRows: async () => ({ rows: sheetRows, rawRowsRead, blankAsinRows }),
+}));
 vi.mock("./google-sheets", () => ({
-  fetchSheetRowsWithMeta: async () => ({ rows: sheetRows, rawRowsRead, blankAsinRows }),
+  fetchSheetRowsWithMeta: async () => { throw new Error("the Orders sheet must not be read"); },
 }));
 
 import { buildSourcingCost, sourcingCostFilename, parseYMDLocal } from "./sourcing-cost";
@@ -71,7 +75,7 @@ beforeEach(() => {
   sheetRows = [];
   rawRowsRead = 0;
   blankAsinRows = 0;
-  process.env.GOOGLE_SHEET_ID = "test-sheet";
+  delete process.env.GOOGLE_SHEET_ID; // not needed any more (po-af-owned §2.4)
 });
 
 describe("buildSourcingCost", () => {

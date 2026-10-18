@@ -57,10 +57,10 @@ describe("Push to Aura reads the PO sheet for its selection first — INLINE, of
     expect(routes()).not.toMatch(/import \{ pushAuraCosts \}|runJobAndWait|components: \[9\]/);
   });
 
-  it("is gated like the chain (sheet credentials, sheet id, Aura key)", () => {
+  it("is gated by the Aura key only — the cost read is the AF PO tables since po-af-owned §2.4 (2026-10-18)", () => {
     const r = route();
-    expect(r).toMatch(/GOOGLE_CREDENTIALS_PATH/);
-    expect(r).toMatch(/GOOGLE_SHEET_ID/);
+    expect(r).not.toMatch(/GOOGLE_CREDENTIALS_PATH/);
+    expect(r).not.toMatch(/GOOGLE_SHEET_ID/);
     expect(r).toMatch(/AURA_API_KEY/);
   });
 

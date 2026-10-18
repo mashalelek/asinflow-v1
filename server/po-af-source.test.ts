@@ -71,3 +71,15 @@ describe("lineAsinQty / trueYield (the sheet's U = L × T ÷ S)", () => {
     expect(lineAsinQty(12, null, null, 2)).toBe(6);
   });
 });
+
+describe("no former sheet reader is gated on the Orders sheet any more (po-af-owned §2.4)", () => {
+  it("the Aura, Velocity and export routes carry no GOOGLE_SHEET_ID / credentials gate; Sync POs (intake) keeps its own", async () => {
+    const { readFileSync } = await import("fs");
+    const src = readFileSync(new URL("./routes.ts", import.meta.url), "utf8");
+    const body = (route: string) => { const i = src.indexOf(route); expect(i).toBeGreaterThan(0); return src.slice(i, src.indexOf("\n  app.", i + 10)); };
+    for (const r of ['app.post("/api/sync/aura", ', 'app.post("/api/sync/aura/push", ', 'app.get("/api/export/velocity-upload", ', 'app.post("/api/upload/velocity", ', 'app.get("/api/velocity/plan", ', 'app.post("/api/export/sellerboard-cogs", ', 'app.post("/api/export/sourcing-cost", ']) {
+      expect(body(r)).not.toMatch(/GOOGLE_SHEET_ID|GOOGLE_CREDENTIALS_PATH/);
+    }
+    expect(body('app.post("/api/sheets/sync", ')).toMatch(/GOOGLE_SHEET_ID/);
+  });
+});

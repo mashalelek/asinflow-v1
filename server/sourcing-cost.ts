@@ -16,7 +16,8 @@
 // estimated_cogs and manual/csv-sourced actuals are never submitted — an ASIN
 // without a PO cost is skipped and named in the summary, never guessed.
 import * as XLSX from "xlsx";
-import { fetchSheetRowsWithMeta } from "./google-sheets";
+import type { SheetRow } from "./google-sheets";
+import { loadAfPoRows } from "./po-af-source";
 import { parseMDY, formatYMD } from "./velocity-export";
 import { query as defaultQuery } from "./db";
 
@@ -129,9 +130,8 @@ export async function buildSourcingCost(
   from: Date,
   to: Date,
   q: QueryLike = defaultQuery as any,
+  loadRows?: () => Promise<{ rows: SheetRow[]; rawRowsRead: number; blankAsinRows: number }>,
 ): Promise<ScResult> {
-  const sheetId = process.env.GOOGLE_SHEET_ID;
-  if (!sheetId) throw new Error("GOOGLE_SHEET_ID not configured");
 
   const skips: ScSummary["skips"] = {
     excludedByStatus: 0, badOrMissingDate: 0, excludedOutOfRange: 0,
@@ -139,8 +139,9 @@ export async function buildSourcingCost(
     wouldLowerApproved: 0,
   };
 
-  // ── 1. Scope: ASINs purchased inside the window, per the PO sheet ─────────
-  const { rows, rawRowsRead, blankAsinRows } = await fetchSheetRowsWithMeta(sheetId);
+  // ── 1. Scope: ASINs purchased inside the window, per the AF PO tables ────
+  // (po-af-owned §2.4, 2026-10-18 — the Orders sheet is intake-only).
+  const { rows, rawRowsRead, blankAsinRows } = loadRows ? await loadRows() : await loadAfPoRows(q as any);
   const lo = from.getTime(), hi = to.getTime();
   const purchased = new Set<string>();
   let includedRows = 0;
