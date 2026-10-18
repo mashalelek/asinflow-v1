@@ -29,7 +29,7 @@ import { loadPoExpanded, savePoExpanded, isPoExpanded, togglePoExpanded, toggleE
 import { fmtQty } from "@/lib/po-qty";
 import { fetchLongSync } from "@/lib/long-sync";
 import { useToast } from "@/hooks/use-toast";
-import { PoHeaderDrawer, PoProductsTable, PoHistory } from "@/components/po-edit";
+import { PoHeaderDrawer, PoProductsTable, PoHistory, PoDangerActions } from "@/components/po-edit";
 import { NewPoDialog } from "@/components/new-po-dialog";
 import { Pencil } from "lucide-react";
 
@@ -621,6 +621,7 @@ export function PurchaseOrderDetailPlaceholder() {
         <div className="flex items-center gap-2">
           <ActionItemChips items={actionItems} testId="po-detail-action-items" />
           <Button variant="outline" size="sm" onClick={() => setEditOpen(true)} data-testid="button-edit-po"><Pencil className="h-3.5 w-3.5 mr-1" /> Edit PO</Button>
+          <PoDangerActions poId={po.id} reloadKey={version} onCanceled={reload} onDeleted={() => navigate("/purchase-orders")} />
         </div>
       </div>
       <PoHeaderDrawer po={po} open={editOpen} onOpenChange={setEditOpen} onSaved={reload} />

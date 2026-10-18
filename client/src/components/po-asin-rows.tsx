@@ -13,7 +13,7 @@ import { StickyNote, ChevronRight, ChevronDown, AlertTriangle, Plus, X } from "l
 import { Tooltip, TooltipTrigger, TooltipContent } from "@/components/ui/tooltip";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import { fmtQty, individualUnits, PO_ASIN_COLUMNS } from "@/lib/po-qty";
-import { InlineEdit, SelectEdit, poApi } from "@/components/po-edit";
+import { InlineEdit, SelectEdit, poApi, ReassignShipment, shipmentBlockText } from "@/components/po-edit";
 
 export interface PoAsinShipment {
   id: string;
@@ -24,6 +24,8 @@ export interface PoAsinShipment {
   qty_received: string | null;         // NULL until matched to SC
   shipped_at: string | null;
   source: "velocity" | "manual" | string;
+  /** 'manual' = placed by Reassign (af-owned §5.2); Sync Shipments never moves it. */
+  assigned_by?: "auto" | "manual" | string;
 }
 export interface PoAsinLine {
   id: string;
@@ -156,6 +158,9 @@ export function ActionItemsEditor({ items, url, onSaved, testId }: { items: read
 /** "Mark canceled" (§2.2): every line of the ASIN gets qty_canceled = qty_ordered. */
 function MarkCanceled({ a, onChanged }: { a: PoAsinRowData; onChanged?: () => void }) {
   const [err, setErr] = useState<string | null>(null);
+  // §5.1: no cancel while this ASIN row has units shipped to FBA.
+  const blocked = shipmentBlockText(a.shipments ?? []);
+  if (blocked) return <span className="ml-1 text-[10px] text-muted-foreground/40 cursor-not-allowed" title={blocked} data-testid={`button-cancel-asin-${a.asin}-blocked`}>cancel</span>;
   const go = async (e: React.MouseEvent) => {
     e.stopPropagation(); setErr(null);
     if (!window.confirm(`Mark ${a.asin} canceled? Every product line of this ASIN gets Canceled = Ordered.`)) return;
@@ -207,7 +212,7 @@ function shipmentLabel(s: PoAsinShipment): string {
   if (ids.length === 0) return s.source === "manual" ? "manual" : `Velocity ${s.shipped_at ?? "?"}`;
   return ids.length === 1 ? ids[0] : `${ids[0].slice(0, 10)}… (${ids.length})`;
 }
-function ShipmentChips({ rowId, shipments, editable, onChanged }: { rowId: string; shipments: PoAsinShipment[]; editable?: boolean; onChanged?: () => void }) {
+function ShipmentChips({ rowId, asin, shipments, editable, onChanged }: { rowId: string; asin: string; shipments: PoAsinShipment[]; editable?: boolean; onChanged?: () => void }) {
   const [fba, setFba] = useState("");
   const [qty, setQty] = useState("");
   const [err, setErr] = useState<string | null>(null);
@@ -256,8 +261,9 @@ function ShipmentChips({ rowId, shipments, editable, onChanged }: { rowId: strin
                       <span className="font-mono break-all">{s.fba_shipment_ids.join(", ")}</span>
                     )}
                     <div className="text-muted-foreground" title={received == null ? "not yet matched to Seller Central" : `received ${fmtQty(received)} of ${fmtQty(shipped)}`}>
-                      {fmtQty(shipped)} shipped{received == null ? "" : ` · received ${fmtQty(received)} of ${fmtQty(shipped)}`} · {s.source}
+                      {fmtQty(shipped)} shipped{received == null ? "" : ` · received ${fmtQty(received)} of ${fmtQty(shipped)}`} · {s.source}{s.assigned_by === "manual" ? " · assigned by hand" : ""}
                     </div>
+                    {editable && <ReassignShipment shipment={s} asin={asin} currentRowId={rowId} onDone={() => onChanged?.()} />}
                   </div>
                   {editable && s.source === "manual" && <button onClick={() => remove(s.id)} className="text-muted-foreground hover:text-destructive" title="Remove" data-testid={`button-remove-shipment-${s.id}`}><X className="h-3 w-3" /></button>}
                 </div>
@@ -351,7 +357,7 @@ export function PoAsinRow({ a, indent = false, editable = false, onChanged }: { 
         <td className="px-3 py-1.5 text-right">{editable ? <EditableQty rowId={a.id} col="qty_lost_damaged_us" v={a.qty_lost_damaged_us} onChanged={onChanged} /> : <QtyCell v={a.qty_lost_damaged_us} />}</td>
         <td className="px-3 py-1.5 text-right"><QtyCell v={a.qty_shipped_fba} /></td>
         <td className="px-3 py-1.5 text-right"><QtyCell v={a.qty_received_amazon} /></td>
-        <td className="px-3 py-1.5"><ShipmentChips rowId={a.id} shipments={a.shipments ?? []} editable={editable} onChanged={onChanged} /></td>
+        <td className="px-3 py-1.5"><ShipmentChips rowId={a.id} asin={a.asin} shipments={a.shipments ?? []} editable={editable} onChanged={onChanged} /></td>
         <td className="px-3 py-1.5">{editable && lines.length > 0
           ? <ActionItemsEditor items={a.action_items} url={`/api/pos/asin-rows/${a.id}/action-items`} onSaved={onChanged} testId={`button-action-items-asin-${a.asin}`} />
           : <ActionItemChips items={a.action_items} />}</td>

@@ -304,3 +304,113 @@ export function PoHistory({ poId, reloadKey }: { poId: string; reloadKey: unknow
     </div>
   );
 }
+
+// ── §5 Cancel PO / Delete PO (po-af-owned §5.1, §5.3, §5.4) ───────────────────
+export interface PoGuardsData { lineCount: number; asinCount: number; atPrepUnits: number; fba: { units: number; fbaIds: string[]; rows: number }; blocked: string | null; supplier: string; orderId: string }
+
+/** §5.1 text, client side (shipment rows on screen): "N units shipped to FBA in <ids>. Reassign the shipment to another PO first." */
+export function shipmentBlockText(shipments: ReadonlyArray<{ qty_shipped: string | number; fba_shipment_ids?: string[] | null }>): string | null {
+  if (shipments.length === 0) return null;
+  const units = Math.round(shipments.reduce((t, s) => t + (Number(s.qty_shipped) || 0), 0) * 100) / 100;
+  const ids = Array.from(new Set(shipments.flatMap((s) => s.fba_shipment_ids ?? []))).sort();
+  return `${fmtQty(units)} unit${units === 1 ? "" : "s"} shipped to FBA in ${ids.length > 0 ? ids.join(", ") : "a shipment with no FBA id yet"}. Reassign the shipment to another PO first.`;
+}
+
+/** Delete confirm text (§5.3): names the PO and its products; units still at Velocity when any. */
+export function deleteConfirmText(g: Pick<PoGuardsData, "supplier" | "orderId" | "lineCount" | "asinCount" | "atPrepUnits">): string {
+  const base = `Delete PO ${g.supplier} ${g.orderId} with its ${g.lineCount} product${g.lineCount === 1 ? "" : "s"} (${g.asinCount} ASIN${g.asinCount === 1 ? "" : "s"})? Sync POs will not import it again.`;
+  return g.atPrepUnits > 0 ? `${base} ${fmtQty(g.atPrepUnits)} unit${g.atPrepUnits === 1 ? "" : "s"} still at Velocity for this PO.` : base;
+}
+
+export function PoDangerActions({ poId, reloadKey, onCanceled, onDeleted }: { poId: string; reloadKey: unknown; onCanceled: () => void; onDeleted: () => void }) {
+  const { toast } = useToast();
+  const [g, setG] = useState<PoGuardsData | null>(null);
+  const [confirm, setConfirm] = useState<"cancel" | "delete" | null>(null);
+  const [busy, setBusy] = useState(false);
+  useEffect(() => { poApi(`/api/pos/${poId}/guards`, "GET").then(setG).catch(() => setG(null)); }, [poId, reloadKey]);
+  if (!g) return null;
+  const run = async () => {
+    setBusy(true);
+    try {
+      if (confirm === "delete") { await poApi(`/api/pos/${poId}`, "DELETE"); toast({ title: `PO ${g.orderId} deleted` }); setConfirm(null); onDeleted(); }
+      else { const r = await poApi(`/api/pos/${poId}/cancel`, "POST"); toast({ title: `PO canceled`, description: `${r.linesCanceled} product(s) canceled` }); setConfirm(null); onCanceled(); }
+    } catch (e: any) { toast({ title: confirm === "delete" ? "Not deleted" : "Not canceled", description: e.message, variant: "destructive" }); setConfirm(null); }
+    finally { setBusy(false); }
+  };
+  return (
+    <span className="inline-flex items-center gap-2">
+      <span title={g.blocked ?? "Cancel every product of this PO"}>
+        <Button variant="outline" size="sm" disabled={!!g.blocked} onClick={() => setConfirm("cancel")} data-testid="button-cancel-po">Cancel PO</Button>
+      </span>
+      <span title={g.blocked ?? "Delete this PO"}>
+        <Button variant="outline" size="sm" disabled={!!g.blocked} onClick={() => setConfirm("delete")} className="text-destructive hover:text-destructive" data-testid="button-delete-po"><Trash2 className="h-3.5 w-3.5 mr-1" /> Delete PO</Button>
+      </span>
+      {g.blocked && <span className="max-w-[28rem] text-xs text-amber-700 dark:text-amber-400" data-testid="po-blocked-message">{g.blocked}</span>}
+      <Sheet open={confirm != null} onOpenChange={(v) => { if (!v) setConfirm(null); }}>
+        <SheetContent side="bottom" className="max-w-xl mx-auto rounded-t-lg" data-testid="po-danger-confirm">
+          <SheetHeader>
+            <SheetTitle>{confirm === "delete" ? "Delete PO?" : "Cancel PO?"}</SheetTitle>
+            <SheetDescription data-testid="po-danger-confirm-text">
+              {confirm === "delete" ? deleteConfirmText(g) : `Cancel every product of ${g.supplier} ${g.orderId} (${g.lineCount}): Canceled = Ordered on each. Logged in History.`}
+            </SheetDescription>
+          </SheetHeader>
+          <SheetFooter className="mt-4">
+            <Button variant="outline" onClick={() => setConfirm(null)} disabled={busy}>Keep it</Button>
+            <Button variant="destructive" onClick={run} disabled={busy} data-testid="button-po-danger-confirm">{busy ? "Working…" : confirm === "delete" ? "Delete PO" : "Cancel PO"}</Button>
+          </SheetFooter>
+        </SheetContent>
+      </Sheet>
+    </span>
+  );
+}
+
+// ── §5.2 Reassign shipment ───────────────────────────────────────────────────
+export function ReassignShipment({ shipment, asin, currentRowId, onDone }: { shipment: { id: string; qty_shipped: string }; asin: string; currentRowId: string; onDone: () => void }) {
+  const [open, setOpen] = useState(false);
+  const [q, setQ] = useState("");
+  const [rows, setRows] = useState<any[]>([]);
+  const [target, setTarget] = useState<any | null>(null);
+  const [units, setUnits] = useState(fmtQty(shipment.qty_shipped));
+  const [err, setErr] = useState<string | null>(null);
+  useEffect(() => {
+    if (!open || q.trim().length < 2) { setRows([]); return; }
+    const t = window.setTimeout(() => {
+      fetch(`/api/pos/asin-rows/search?q=${encodeURIComponent(q.trim())}`).then((r) => r.json())
+        .then((d) => setRows((d.rows ?? []).filter((r: any) => String(r.asin).toUpperCase() === asin.toUpperCase() && String(r.id) !== currentRowId)))
+        .catch(() => setRows([]));
+    }, 200);
+    return () => window.clearTimeout(t);
+  }, [q, open, asin, currentRowId]);
+  const go = async () => {
+    if (!target) return;
+    setErr(null);
+    try { await poApi(`/api/pos/shipments/${shipment.id}/reassign`, "POST", { po_asin_id: target.id, units }); setOpen(false); setTarget(null); onDone(); }
+    catch (e: any) { setErr(e.message); }
+  };
+  if (!open) return <button onClick={(e) => { e.stopPropagation(); setOpen(true); setQ(""); setUnits(fmtQty(shipment.qty_shipped)); }} className="text-[11px] text-primary hover:underline" data-testid={`button-reassign-${shipment.id}`}>Reassign…</button>;
+  return (
+    <div className="mt-1 space-y-1 rounded border border-border/60 p-1.5" onClick={(e) => e.stopPropagation()} data-testid={`reassign-${shipment.id}`}>
+      <div className="text-[10px] text-muted-foreground">Move to another PO's {asin} row (search by order #)</div>
+      <input autoFocus value={q} onChange={(e) => { setQ(e.target.value); setTarget(null); }} placeholder="order #" className="h-6 w-full rounded border border-input bg-background px-1 text-xs" data-testid={`input-reassign-search-${shipment.id}`} />
+      {rows.length > 0 && !target && (
+        <div className="max-h-32 overflow-y-auto">
+          {rows.map((r) => (
+            <button key={r.id} onClick={() => setTarget(r)} className="block w-full text-left px-1 py-0.5 text-[11px] hover:bg-muted" data-testid={`reassign-target-${r.id}`}>
+              {r.supplier} <span className="font-mono">{r.order_id}</span> · {r.order_date} · {fmtQty(r.qty)} ordered
+            </button>
+          ))}
+        </div>
+      )}
+      {q.trim().length >= 2 && rows.length === 0 && !target && <div className="text-[11px] text-muted-foreground">No other PO has a {asin} row matching "{q.trim()}".</div>}
+      {target && <div className="text-[11px]">→ {target.supplier} <span className="font-mono">{target.order_id}</span></div>}
+      <div className="flex items-center gap-1">
+        <span className="text-[10px] text-muted-foreground">units</span>
+        <input value={units} onChange={(e) => setUnits(e.target.value)} className="h-6 w-14 rounded border border-input bg-background px-1 text-right text-xs" data-testid={`input-reassign-units-${shipment.id}`} />
+        <span className="text-[10px] text-muted-foreground">of {fmtQty(shipment.qty_shipped)}</span>
+        <Button size="sm" className="h-6 px-2 text-[11px]" disabled={!target} onClick={go} data-testid={`button-reassign-go-${shipment.id}`}>Move</Button>
+        <button onClick={() => setOpen(false)} className="text-[11px] text-muted-foreground hover:underline">cancel</button>
+      </div>
+      {err && <div className="text-[11px] text-destructive" data-testid={`reassign-error-${shipment.id}`}>{err}</div>}
+    </div>
+  );
+}

@@ -95,10 +95,9 @@ describe("editPoHeader", () => {
 });
 
 describe("removeLine", () => {
-  it("removing an ASIN row's last line is blocked by an FBA shipment (§5.1) — nothing deleted", async () => {
+  it("removing a product of an ASIN row with an FBA shipment is blocked (§5.1) — nothing deleted", async () => {
     const f = fakeQuery([
       [/FROM po_line_items l LEFT JOIN po_asins pa/, [{ id: "l1", po_id: "po1", po_asin_id: "pa1", asin: "B0TEST0001", product_name: "Thing", qty_ordered: 9 }]],
-      [/SELECT COUNT\(\*\)::int AS n FROM po_line_items WHERE po_asin_id/, [{ n: 1 }]],
       [/SELECT s\.qty_shipped, s\.fba_shipment_ids FROM po_asin_shipments/, [{ qty_shipped: "9.00", fba_shipment_ids: ["FBA19A2B3C"] }]],
     ]);
     const err = await removeLine(f.q, "l1", 7).catch((e) => e);
@@ -117,5 +116,17 @@ describe("editAsinRow", () => {
     const g = fakeQuery([[/SELECT \* FROM po_asins WHERE id/, [{ ...cur, sold_as: "multi-pack", units_per_pack: 2 }]], [/SELECT id, po_id, qty, sold_as/, []], ...autoCloseRows]);
     const r = await editAsinRow(g.q, "pa1", { sold_as: "individual", cost_per_unit: "4.25" }, 7);
     expect(r.changes.map((c) => `${c.field}:${c.old}->${c.new}`)).toEqual(["sold_as:multi-pack->individual", "cost_per_unit:4->4.25", "units_per_pack:2->1"]);
+  });
+});
+
+describe("editLine cancel guard (§5.1)", () => {
+  it("raising qty canceled on a product whose ASIN row has an FBA shipment is refused; nothing written", async () => {
+    const f = fakeQuery([
+      [/FROM po_line_items l LEFT JOIN po_asins pa/, [{ id: "l1", po_id: "po1", po_asin_id: "pa1", asin: "B0TEST0001", qty_ordered: 9, qty_canceled: null }]],
+      [/SELECT s\.qty_shipped, s\.fba_shipment_ids FROM po_asin_shipments/, [{ qty_shipped: "4", fba_shipment_ids: ["FBA19A2B3C"] }]],
+    ]);
+    const { editLine } = await import("./po-edit");
+    await expect(editLine(f.q, "l1", { qty_canceled: "9" }, 7)).rejects.toMatchObject({ status: 409, message: "B0TEST0001: 4 units shipped to FBA in FBA19A2B3C. Reassign the shipment to another PO first." });
+    expect(f.calls.some((c) => /^UPDATE|INSERT INTO po_edit_log/.test(c.sql))).toBe(false);
   });
 });

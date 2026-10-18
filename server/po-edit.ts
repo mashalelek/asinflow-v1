@@ -253,6 +253,11 @@ export async function editLine(query: QueryLike, lineId: string, body: unknown, 
     if (v != null && Number(v) > ordered) throw new EditError(400, `${k} (${v}) cannot exceed qty ordered (${ordered})`);
   }
   const changes = changedFields(cur, p.edits);
+  // §5.1: no cancel on a product whose ASIN row has units shipped to FBA.
+  if (cur.po_asin_id != null && changes.some((c) => c.field === "qty_canceled" && Number(c.new ?? 0) > Number(c.old ?? 0))) {
+    const ship = await fbaShipmentsOf(query, { poAsinId: String(cur.po_asin_id) });
+    if (ship.rows > 0) throw new EditError(409, `${cur.asin}: ${shipmentBlockMessage(ship)}`);
+  }
   const remap = changes.find((c) => c.field === "asin");
   const cols = changes.map((c) => c.field).filter((f) => f !== "asin");
   if (cols.length > 0) {
@@ -295,18 +300,16 @@ export async function addLine(query: QueryLike, poId: string, body: unknown, use
   return { poId, lineId, changes, close: await evaluateAutoClose(poId, query) };
 }
 
-/** §3 remove a product line. Its ASIN row goes with its last line — blocked by an FBA shipment (§5.1). */
+/** §3 remove a product line (its ASIN row goes with its last line). Refused when the ASIN row has an FBA shipment (§5.1). */
 export async function removeLine(query: QueryLike, lineId: string, userId: number | null): Promise<EditResult> {
   const cur = (await query(`SELECT l.*, pa.asin FROM po_line_items l LEFT JOIN po_asins pa ON pa.id = l.po_asin_id WHERE l.id = $1`, [lineId])).rows[0];
   if (!cur) throw new EditError(404, "product line not found");
   const poId = String(cur.po_id);
   const oldPa = cur.po_asin_id == null ? null : String(cur.po_asin_id);
   if (oldPa) {
-    const n = Number((await query(`SELECT COUNT(*)::int AS n FROM po_line_items WHERE po_asin_id = $1`, [oldPa])).rows[0]?.n ?? 0);
-    if (n <= 1) {
-      const ship = await fbaShipmentsOf(query, { poAsinId: oldPa });
-      if (ship.rows > 0) throw new EditError(409, `${cur.asin}: ${shipmentBlockMessage(ship)}`);
-    }
+    // §5.1: a product of an ASIN row with units shipped to FBA cannot be deleted.
+    const ship = await fbaShipmentsOf(query, { poAsinId: oldPa });
+    if (ship.rows > 0) throw new EditError(409, `${cur.asin}: ${shipmentBlockMessage(ship)}`);
   }
   await query(`DELETE FROM po_line_items WHERE id = $1`, [lineId]);
   const changes: FieldChange[] = [{ field: "line removed", old: `${cur.product_name ?? "product"} × ${cur.qty_ordered ?? "?"} → ${cur.asin ?? "?"}`, new: null }];

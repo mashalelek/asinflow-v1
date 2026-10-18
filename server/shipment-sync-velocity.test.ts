@@ -41,7 +41,7 @@ function fakeDb(state: { shipments?: any[]; rows?: any[]; unmatched?: any[]; ide
     if (s.startsWith("SELECT id, po_asin_id, velocity_shipment_id, qty_shipped")) return { rows: state.rows ?? [], rowCount: 0 };
     if (s.startsWith("SELECT id, velocity_shipment_id, velocity_order_id, reason")) return { rows: state.unmatched ?? [], rowCount: 0 };
     if (s.startsWith("SELECT velocity_order_id, child_order_numbers FROM velocity_bundle_identity")) return { rows: state.identity ?? [], rowCount: 0 };
-    if (s.startsWith("SELECT s.velocity_shipment_id, s.velocity_order_number, pa.asin, s.po_asin_id FROM po_asin_shipments")) return { rows: state.pins ?? [], rowCount: 0 };
+    if (s.startsWith("SELECT s.id, s.velocity_shipment_id, s.velocity_order_number, s.qty_shipped")) return { rows: state.pins ?? [], rowCount: 0 };
     writes.push({ sql: s, params }); return { rows: [], rowCount: 1 };
   };
   return { query, connect: async () => ({ query, release: () => { writes.push({ sql: "RELEASE" }); } }), writes };
@@ -151,15 +151,52 @@ describe("syncVelocityShipments", () => {
       { id: "a-2025", po_id: "p-2025", asin: "B07S5R68XZ", units_per_pack: 1, qty_at_prep: null, order_id: "10507736", supplier: "leadersrpmshop.com", order_date: "2025-10-19" },
     ];
     const vline = line({ order_id: "lr1", order_number: "10507736", retailer: "leadersrpmshop.com", asin: "B07S5R68XZ", shipped: 15 });
-    const base = fakeDb({ pins: [{ velocity_shipment_id: SID, velocity_order_number: "10507736", asin: "B07S5R68XZ", po_asin_id: "a-2026" }], rows: [{ id: "r1", po_asin_id: "a-2026", velocity_shipment_id: SID, qty_shipped: "15.00", shipped_at: "2026-10-15" }] });
+    const base = fakeDb({ pins: [{ id: "r1", velocity_shipment_id: SID, velocity_order_number: "10507736", qty_shipped: "15.00", shipped_at: "2026-10-15", asin: "B07S5R68XZ", po_asin_id: "a-2026" }], rows: [{ id: "r1", po_asin_id: "a-2026", velocity_shipment_id: SID, qty_shipped: "15.00", shipped_at: "2026-10-15" }] });
     const db = { ...base, query: async (sql: string, params?: any[]) => sql.trim().startsWith("SELECT pa.id, pa.po_id, pa.asin") ? { rows: AF2, rowCount: 2 } : base.query(sql, params) };
     const r = await syncVelocityShipments({ dryRun: true, deps: deps({ getShipment: async () => ({ orders: [vline] }), listInbound: async () => [], listInventory: async () => [] }), db });
     expect(r.counts).toMatchObject({ linesMatched: 1, linesPinned: 1, rowsInserted: 0, rowsUpdated: 0, rowsUnchanged: 1 });
     // without the pin the same line would land on the 2025 PO
-    const db2 = { ...db, query: async (sql: string, params?: any[]) => sql.trim().startsWith("SELECT s.velocity_shipment_id") ? { rows: [], rowCount: 0 } : db.query(sql, params) };
+    const db2 = { ...db, query: async (sql: string, params?: any[]) => sql.trim().startsWith("SELECT s.id, s.velocity_shipment_id") ? { rows: [], rowCount: 0 } : db.query(sql, params) };
     const r2 = await syncVelocityShipments({ dryRun: true, deps: deps({ getShipment: async () => ({ orders: [vline] }), listInbound: async () => [], listInventory: async () => [] }), db: db2 });
     expect(r2.counts).toMatchObject({ linesPinned: 0, rowsInserted: 1 });
     expect(r2.samples[0]).toMatch(/leadersrpmshop\.com 10507736 B07S5R68XZ/);
+  });
+
+  // Reassign shipment (af-owned §5.2): hand assignments are never moved, only their quantities refresh.
+  it("reassigned (pinned) to another PO: one row → quantity refreshes from Velocity in place; the derived PO gets nothing", async () => {
+    // Velocity line 102003840691113 × 0349125937 (9 units) was reassigned by hand to a-tw1; Velocity now says 9 → row holds 7 → refresh to 9.
+    const db = fakeDb({
+      pins: [{ id: "m1", velocity_shipment_id: SID, velocity_order_number: "102003840691113", qty_shipped: "7.00", shipped_at: "2026-10-15", asin: "0349125937", po_asin_id: "a-tw1" }],
+      rows: [{ id: "m1", po_asin_id: "a-tw1", velocity_shipment_id: SID, qty_shipped: "7.00", shipped_at: "2026-10-15", assigned_by: "manual" }],
+    });
+    const r = await syncVelocityShipments({ dryRun: false, deps: deps({ getShipment: async () => ({ orders: [SHIPMENT_LINES[2]] }), listInbound: async () => [], listInventory: async () => [] }), db });
+    expect(r.counts).toMatchObject({ linesMatched: 1, linesPinned: 1, rowsInserted: 0, rowsUpdated: 1 });
+    const upd = db.writes.filter((w) => w.sql.startsWith("UPDATE po_asin_shipments SET qty_shipped"));
+    expect(upd.map((w) => [w.params?.[0], w.params?.[1]])).toEqual([["m1", 9]]);
+    expect(db.writes.some((w) => w.sql.startsWith("INSERT INTO po_asin_shipments"))).toBe(false); // never re-derived onto a-tw2
+  });
+  it("a line split by hand over two rows: units still add up → untouched; Velocity changed → reported as drift, nothing rewritten", async () => {
+    const pins = [
+      { id: "m1", velocity_shipment_id: SID, velocity_order_number: "102003840691113", qty_shipped: "6.00", shipped_at: "2026-10-15", asin: "0349125937", po_asin_id: "a-tw2" },
+      { id: "m2", velocity_shipment_id: SID, velocity_order_number: "102003840691113", qty_shipped: "3.00", shipped_at: "2026-10-15", asin: "0349125937", po_asin_id: "a-tw1" },
+    ];
+    const rows = pins.map((p) => ({ id: p.id, po_asin_id: p.po_asin_id, velocity_shipment_id: SID, qty_shipped: p.qty_shipped, shipped_at: "2026-10-15", assigned_by: "manual" }));
+    const only = (orders: any[]) => deps({ getShipment: async () => ({ orders }), listInbound: async () => [], listInventory: async () => [] });
+    const ok = fakeDb({ pins, rows });
+    const r = await syncVelocityShipments({ dryRun: false, deps: only([SHIPMENT_LINES[2]]), db: ok });
+    expect(r.counts).toMatchObject({ linesPinned: 1, rowsUpdated: 0, rowsInserted: 0, rowsUnchanged: 2, manualSplitDrift: 0 });
+    expect(ok.writes.some((w) => /po_asin_shipments/.test(w.sql))).toBe(false);
+    const drift = fakeDb({ pins, rows });
+    const r2 = await syncVelocityShipments({ dryRun: false, deps: only([{ ...SHIPMENT_LINES[2], quantity_shipped: 10 }]), db: drift });
+    expect(r2.counts).toMatchObject({ manualSplitDrift: 1, rowsUpdated: 0, rowsInserted: 0 });
+    expect(r2.samples.some((x) => /split by hand over 2 rows holding 9 units; Velocity now says 10 — not rewritten/.test(x))).toBe(true);
+    expect(drift.writes.some((w) => /po_asin_shipments/.test(w.sql))).toBe(false);
+  });
+  it("an auto-derived plan that lands on a row assigned by hand leaves it alone", async () => {
+    const db = fakeDb({ rows: [{ id: "m9", po_asin_id: "a-tw2", velocity_shipment_id: SID, qty_shipped: "4.00", shipped_at: "2026-10-15", assigned_by: "manual" }] });
+    const r = await syncVelocityShipments({ dryRun: false, deps: deps({ getShipment: async () => ({ orders: [SHIPMENT_LINES[2]] }), listInbound: async () => [], listInventory: async () => [] }), db });
+    expect(r.counts).toMatchObject({ manualRowsKept: 1, rowsUpdated: 0, rowsInserted: 0 });
+    expect(db.writes.some((w) => /^(UPDATE|INSERT INTO) po_asin_shipments/.test(w.sql))).toBe(false);
   });
 
   it("fail-closed: a Velocity read error propagates before anything is written", async () => {

@@ -41,7 +41,7 @@ export function poAsinRowsSql(where: string): string {
 
 export interface PoAsinShipmentRow {
   id: string; po_asin_id: string; velocity_shipment_id: string; fba_shipment_ids: string[]; sc_match: string;
-  qty_shipped: string; qty_received: string | null; shipped_at: string | null; source: string;
+  qty_shipped: string; qty_received: string | null; shipped_at: string | null; source: string; assigned_by?: string;
 }
 
 /** ASIN rows for one or many POs, each with its shipments (col 19) attached. */
@@ -50,7 +50,7 @@ export async function loadPoAsinRows(query: QueryLike, poIds: string[]): Promise
   const rows = (await query(poAsinRowsSql(`pa.po_id = ANY($1::uuid[])`), [poIds])).rows;
   const ids = rows.map((r: any) => r.id);
   const ships = ids.length === 0 ? [] : (await query(
-    `SELECT id, po_asin_id, velocity_shipment_id, fba_shipment_ids, sc_match, qty_shipped, qty_received, shipped_at::text AS shipped_at, source
+    `SELECT id, po_asin_id, velocity_shipment_id, fba_shipment_ids, sc_match, qty_shipped, qty_received, shipped_at::text AS shipped_at, source, assigned_by
        FROM po_asin_shipments WHERE po_asin_id = ANY($1::uuid[]) ORDER BY shipped_at NULLS LAST, velocity_shipment_id`, [ids],
   )).rows as PoAsinShipmentRow[];
   const byAsin = new Map<string, PoAsinShipmentRow[]>();

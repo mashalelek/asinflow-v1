@@ -14,6 +14,7 @@ import { ACTION_ITEMS, normalizeActionItems } from "./po-status-map";
 import { asinWriteThrough, unionActionItems, PO_ACTION_ITEMS_SQL } from "./po-action-items";
 import { editPoHeader, editLine, addLine, removeLine, editAsinRow, loadPoHistory, logEdits, changedFields, asLogText, EditError, type EditResult } from "./po-edit";
 import { createPoFromForm, lookupAsins } from "./po-create";
+import { loadPoGuards, deletePo, cancelPo, assertAsinRowCancelable, reassignShipment } from "./po-guards";
 import { syncPoSheet, type PoSyncResult } from "./po-sheet-sync";
 import { syncVelocityShipments, type VelocitySyncResult } from "./shipment-sync-velocity";
 import { syncScShipments, type ScSyncResult } from "./shipment-sync-sc";
@@ -4485,6 +4486,32 @@ export async function registerRoutes(
     try { res.json({ rows: await lookupAsins(poQuery, typeof req.query.q === "string" ? req.query.q : "") }); }
     catch (err: any) { res.status(500).json({ message: err.message }); }
   });
+  // §5 guards: what the PO detail's Cancel PO / Delete PO need to know
+  // (FBA shipments block both; units still at Velocity are named on delete).
+  app.get("/api/pos/:id/guards", async (req: Request, res: Response) => {
+    if (!isDbAvailable()) { res.status(503).json({ message: "Database not available" }); return; }
+    try { res.json(await loadPoGuards(poQuery, String(req.params.id ?? ""))); }
+    catch (err: any) { res.status(err instanceof EditError ? err.status : 500).json({ message: err.message }); }
+  });
+  const sendGuarded = async (res: Response, run: () => Promise<unknown>) => {
+    try { res.json(await run()); }
+    catch (err: any) { res.status(err instanceof EditError ? err.status : 500).json({ message: err?.message ?? String(err) }); }
+  };
+  app.delete("/api/pos/:id", async (req: Request, res: Response) => {
+    if (!isDbAvailable()) { res.status(503).json({ message: "Database not available" }); return; }
+    await sendGuarded(res, () => withPoTx((q) => deletePo(q, String(req.params.id ?? ""), uid(req))));
+  });
+  app.post("/api/pos/:id/cancel", async (req: Request, res: Response) => {
+    if (!isDbAvailable()) { res.status(503).json({ message: "Database not available" }); return; }
+    await sendGuarded(res, () => withPoTx((q) => cancelPo(q, String(req.params.id ?? ""), uid(req))));
+  });
+  app.post("/api/pos/shipments/:id/reassign", async (req: Request, res: Response) => {
+    if (!isDbAvailable()) { res.status(503).json({ message: "Database not available" }); return; }
+    const b = (req.body ?? {}) as Record<string, unknown>;
+    const target = String(b.po_asin_id ?? "").trim();
+    if (!/^[0-9a-f-]{36}$/i.test(target)) { res.status(400).json({ message: "po_asin_id (the target ASIN row) is required" }); return; }
+    await sendGuarded(res, () => withPoTx((q) => reassignShipment(q, String(req.params.id ?? ""), target, b.units, uid(req))));
+  });
   app.get("/api/pos/:id/history", async (req: Request, res: Response) => {
     if (!isDbAvailable()) { res.status(503).json({ message: "Database not available" }); return; }
     try { res.json({ history: await loadPoHistory(poQuery, String(req.params.id ?? "")) }); }
@@ -4535,13 +4562,15 @@ export async function registerRoutes(
 
   // "Mark canceled" on an ASIN row (§2.2): every line mapped to the ASIN gets
   // qty_canceled = qty_ordered; the ASIN's Canceled re-derives (÷ N for a
-  // bundle). Sheet still wins: the next Sync POs re-applies the rows' Status.
+  // bundle). AF-owned (po-af-owned §2.1): Sync POs never touches it again.
+  // Refused while the row has units shipped to FBA (§5.1).
   app.post("/api/pos/asin-rows/:id/cancel", async (req: Request, res: Response) => {
     if (!isDbAvailable()) { res.status(503).json({ message: "Database not available" }); return; }
     const id = String(req.params.id ?? "");
     try {
       const pa = (await query(`SELECT po_id FROM po_asins WHERE id = $1`, [id])).rows[0];
       if (!pa) { res.status(404).json({ message: "ASIN row not found" }); return; }
+      try { await assertAsinRowCancelable(poQuery, id); } catch (e: any) { res.status(e instanceof EditError ? e.status : 500).json({ message: e.message }); return; } // §5.1
       const r = await query(`UPDATE po_line_items SET qty_canceled = qty_ordered WHERE po_asin_id = $1 AND qty_ordered IS NOT NULL AND qty_canceled IS DISTINCT FROM qty_ordered RETURNING id, qty_ordered`, [id]);
       for (const l of r.rows) await logEdits(poQuery, String(pa.po_id), uid(req), "line", String(l.id), [{ field: "qty_canceled", old: null, new: asLogText(l.qty_ordered) }]);
       const close = await evaluateAutoClose(String(pa.po_id), poQuery);
@@ -4658,7 +4687,7 @@ export async function registerRoutes(
       try {
         velocity = await syncVelocityShipments({ dryRun });
         const c = velocity.counts;
-        log(`Shipment sync A ${dryRun ? "DRY RUN" : "live"}: shipments ${c.shipments} (fetched ${c.shipmentsFetched}), lines ${c.lines} matched ${c.linesMatched} (order-only ${c.linesMatchedOrderOnly}) no_order ${c.linesNoOrder} po_not_found ${c.linesPoNotFound}; rows +${c.rowsInserted} ~${c.rowsUpdated} =${c.rowsUnchanged}; unmatched new ${c.unmatchedNew} resolved ${c.unmatchedResolved}; at_prep set ${c.atPrepSet} cleared ${c.atPrepCleared}; POs ${c.posTouched}`, "shipments");
+        log(`Shipment sync A ${dryRun ? "DRY RUN" : "live"}: shipments ${c.shipments} (fetched ${c.shipmentsFetched}), lines ${c.lines} matched ${c.linesMatched} (order-only ${c.linesMatchedOrderOnly}) no_order ${c.linesNoOrder} po_not_found ${c.linesPoNotFound}; rows +${c.rowsInserted} ~${c.rowsUpdated} =${c.rowsUnchanged}; manual kept ${c.manualRowsKept} split drift ${c.manualSplitDrift}; unmatched new ${c.unmatchedNew} resolved ${c.unmatchedResolved}; at_prep set ${c.atPrepSet} cleared ${c.atPrepCleared}; POs ${c.posTouched}`, "shipments");
       } catch (err: any) {
         log(`Shipment sync A error: ${err.message}`, "shipments");
         velocity = { error: err?.message ?? String(err) };

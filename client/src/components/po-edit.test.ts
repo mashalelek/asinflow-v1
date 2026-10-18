@@ -42,3 +42,25 @@ describe("New PO form (po-af-owned §4)", () => {
     expect(dlg).toMatch(/fetch\(`\/api\/pos\/asin-lookup\?q=\$\{encodeURIComponent\(q\)\}`\)/);
   });
 });
+
+describe("§5 delete / cancel / reassign UI", () => {
+  it("the §5.1 block text and the §5.3 confirm text", async () => {
+    const { shipmentBlockText, deleteConfirmText } = await import("./po-edit");
+    expect(shipmentBlockText([])).toBeNull();
+    expect(shipmentBlockText([{ qty_shipped: "9.00", fba_shipment_ids: ["FBA19GQG1TDR"] }, { qty_shipped: "1", fba_shipment_ids: ["FBA19GQHT7BL", "FBA19GQG1TDR"] }]))
+      .toBe("10 units shipped to FBA in FBA19GQG1TDR, FBA19GQHT7BL. Reassign the shipment to another PO first.");
+    expect(deleteConfirmText({ supplier: "walmart.com", orderId: "200015415094735", lineCount: 2, asinCount: 1, atPrepUnits: 0 }))
+      .toBe("Delete PO walmart.com 200015415094735 with its 2 products (1 ASIN)? Sync POs will not import it again.");
+    expect(deleteConfirmText({ supplier: "walmart.com", orderId: "1", lineCount: 1, asinCount: 1, atPrepUnits: 2 })).toMatch(/ 2 units still at Velocity for this PO\.$/);
+  });
+  it("PO detail carries Cancel PO / Delete PO (disabled with the message when blocked); ASIN rows disable cancel when shipped; shipments offer Reassign", () => {
+    const page = readFileSync(resolve(__dirname, "../pages/purchase-orders.tsx"), "utf8");
+    expect(page).toMatch(/<PoDangerActions poId=\{po\.id\} reloadKey=\{version\} onCanceled=\{reload\} onDeleted=\{\(\) => navigate\("\/purchase-orders"\)\} \/>/);
+    const src = readFileSync(resolve(__dirname, "po-edit.tsx"), "utf8");
+    expect(src).toMatch(/disabled=\{!!g\.blocked\} onClick=\{\(\) => setConfirm\("delete"\)\}/);
+    expect(src).toMatch(/disabled=\{!!g\.blocked\} onClick=\{\(\) => setConfirm\("cancel"\)\}/);
+    const rows = readFileSync(resolve(__dirname, "po-asin-rows.tsx"), "utf8");
+    expect(rows).toMatch(/const blocked = shipmentBlockText\(a\.shipments \?\? \[\]\);/);
+    expect(rows).toMatch(/\{editable && <ReassignShipment shipment=\{s\} asin=\{asin\} currentRowId=\{rowId\}/);
+  });
+});

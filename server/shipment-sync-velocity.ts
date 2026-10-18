@@ -49,6 +49,8 @@ export interface VelocitySyncCounts {
   rowsInserted: number;
   rowsUpdated: number;
   rowsUnchanged: number;
+  manualRowsKept: number;       // an auto-derived plan landed on a row assigned by hand — left alone (af-owned §5.2)
+  manualSplitDrift: number;     // a Velocity line split by hand across rows whose units no longer add up — reported, not rewritten
   unmatchedNew: number;
   unmatchedResolved: number;    // previously unmatched lines that now resolve
   atPrepSet: number;            // po_asins.qty_at_prep changed to a number
@@ -155,22 +157,29 @@ export async function syncVelocityShipments(opts: { dryRun: boolean; deps?: Velo
        FROM po_asins pa JOIN purchase_orders p ON p.id = pa.po_id`,
   )).rows as AfAsinRow[];
   const idx = buildAfIndex(afRows);
-  const existingRows = (await db.query(`SELECT id, po_asin_id, velocity_shipment_id, qty_shipped, shipped_at::text AS shipped_at FROM po_asin_shipments WHERE source = 'velocity'`)).rows;
+  const existingRows = (await db.query(`SELECT id, po_asin_id, velocity_shipment_id, qty_shipped, shipped_at::text AS shipped_at, assigned_by FROM po_asin_shipments WHERE source = 'velocity'`)).rows;
   const existingByKey = new Map<string, any>(existingRows.map((r: any) => [`${r.po_asin_id}\u0000${r.velocity_shipment_id}`, r]));
   const unmatchedRows = (await db.query(`SELECT id, velocity_shipment_id, velocity_order_id, reason, resolved_at, resolved_po_asin_id FROM shipment_unmatched`)).rows;
   const unmatchedByKey = new Map<string, any>(unmatchedRows.map((r: any) => [`${r.velocity_shipment_id}\u0000${r.velocity_order_id}`, r]));
   const afById = new Map<string, AfAsinRow>(afRows.map((r) => [String(r.id), r]));
-  // Manual assignments (assigned_by = 'manual', 2026-10-18): a Velocity line
-  // (shipment, Velocity Order #, ASIN) pinned to a PO ASIN row stays there —
-  // its quantities refresh, it is never moved or re-resolved.
+  // Manual assignments (assigned_by = 'manual', 2026-10-18; Reassign
+  // shipment, af-owned §5.2): a Velocity line (shipment, Velocity Order #,
+  // ASIN) pinned to one or more PO ASIN rows stays there — never moved or
+  // re-resolved. One pinned row: its quantity refreshes from Velocity. A line
+  // split by hand across several rows: compared with Velocity's units and
+  // reported when they no longer add up, never rewritten.
   const pinKey = (shipmentId: string, orderNumber: unknown, asin: unknown) => `${shipmentId}\u0000${String(orderNumber ?? "").trim()}\u0000${String(asin ?? "").trim().toUpperCase()}`;
-  const pins = new Map<string, string>();
-  for (const r of (await db.query(`SELECT s.velocity_shipment_id, s.velocity_order_number, pa.asin, s.po_asin_id FROM po_asin_shipments s JOIN po_asins pa ON pa.id = s.po_asin_id WHERE s.assigned_by = 'manual' AND s.source = 'velocity'`)).rows as any[]) {
-    pins.set(pinKey(String(r.velocity_shipment_id), r.velocity_order_number, r.asin), String(r.po_asin_id));
+  type PinRow = { id: string; poAsinId: string; qty: number; shippedAt: string | null };
+  const pins = new Map<string, PinRow[]>();
+  for (const r of (await db.query(`SELECT s.id, s.velocity_shipment_id, s.velocity_order_number, s.qty_shipped, s.shipped_at::text AS shipped_at, pa.asin, s.po_asin_id FROM po_asin_shipments s JOIN po_asins pa ON pa.id = s.po_asin_id WHERE s.assigned_by = 'manual' AND s.source = 'velocity' ORDER BY s.created_at, s.id`)).rows as any[]) {
+    const k = pinKey(String(r.velocity_shipment_id), r.velocity_order_number, r.asin);
+    if (!pins.has(k)) pins.set(k, []);
+    pins.get(k)!.push({ id: String(r.id), poAsinId: String(r.po_asin_id), qty: Number(r.qty_shipped), shippedAt: r.shipped_at ?? null });
   }
+  const pinRowsFor = (shipmentId: string, line: VelocityInboundOrder): PinRow[] => (pins.get(pinKey(shipmentId, line.order_number, line.asin)) ?? []).filter((p) => afById.has(p.poAsinId));
   const pinned = (shipmentId: string, line: VelocityInboundOrder): Resolution | null => {
-    const id = pins.get(pinKey(shipmentId, line.order_number, line.asin));
-    return id && afById.has(id) ? { ok: true, row: afById.get(id)!, how: "pinned" } : null;
+    const rows = pinRowsFor(shipmentId, line);
+    return rows.length > 0 ? { ok: true, row: afById.get(rows[0].poAsinId)!, how: "pinned" } : null;
   };
 
   // Bundle children live only on the list legs; a fully shipped bundle parent
@@ -187,7 +196,7 @@ export async function syncVelocityShipments(opts: { dryRun: boolean; deps?: Velo
   // ── Resolve every shipment line ────────────────────────────────────────────
   const counts: VelocitySyncCounts = {
     shipments: shipments.length, shipmentsFetched: fetchedIds.size, lines: 0, linesMatched: 0, linesMatchedOrderOnly: 0, linesPinned: 0, linesNoOrder: 0, linesPoNotFound: 0,
-    rowsInserted: 0, rowsUpdated: 0, rowsUnchanged: 0, unmatchedNew: 0, unmatchedResolved: 0, atPrepSet: 0, atPrepCleared: 0, atPrepUnchanged: 0, posTouched: 0,
+    rowsInserted: 0, rowsUpdated: 0, rowsUnchanged: 0, manualRowsKept: 0, manualSplitDrift: 0, unmatchedNew: 0, unmatchedResolved: 0, atPrepSet: 0, atPrepCleared: 0, atPrepUnchanged: 0, posTouched: 0,
   };
   const samples: string[] = [];
   const unmatched: VelocitySyncResult["unmatched"] = [];
@@ -197,6 +206,8 @@ export async function syncVelocityShipments(opts: { dryRun: boolean; deps?: Velo
   type UnmatchedPlan = { shipmentId: string; orderId: string; line: any; reason: "no_order" | "po_not_found" };
   const unmatchedPlans = new Map<string, UnmatchedPlan>();
   const resolvedNow = new Set<string>(); // unmatched rows whose line now resolves by key
+  type ManualLine = { rows: PinRow[]; units: number; shippedAt: string | null; label: string };
+  const manualLines = new Map<string, ManualLine>();
 
   for (const s of shipments) {
     const det = details.get(s.shipment_id)!;
@@ -205,10 +216,19 @@ export async function syncVelocityShipments(opts: { dryRun: boolean; deps?: Velo
       counts.lines++;
       const key = `${s.shipment_id}\u0000${String(line.order_id ?? "")}`;
       const prior = unmatchedByKey.get(key);
+      const pinRows = pinRowsFor(s.shipment_id, line);
+      if (pinRows.length > 0) {
+        // Assigned by hand: the rows stay put; only quantities are compared below.
+        counts.linesMatched++; counts.linesPinned++;
+        if (prior && !prior.resolved_at) resolvedNow.add(String(prior.id));
+        const pk = pinKey(s.shipment_id, line.order_number, line.asin);
+        const m = manualLines.get(pk) ?? { rows: pinRows, units: 0, shippedAt, label: `${s.shipment_id.slice(0, 8)} ${line.order_number ?? "?"} ${line.asin ?? "?"}` };
+        m.units += num(line.quantity_shipped);
+        manualLines.set(pk, m);
+        continue;
+      }
       let res: Resolution;
-      const pin = pinned(s.shipment_id, line);
-      if (pin) res = pin;
-      else if (prior?.resolved_po_asin_id && afById.has(String(prior.resolved_po_asin_id))) res = { ok: true, row: afById.get(String(prior.resolved_po_asin_id))!, how: "picker" };
+      if (prior?.resolved_po_asin_id && afById.has(String(prior.resolved_po_asin_id))) res = { ok: true, row: afById.get(String(prior.resolved_po_asin_id))!, how: "picker" };
       else res = resolveLine(line, idx, childrenByOrderId);
       const units = num(line.quantity_shipped);
       if (!res.ok) {
@@ -219,7 +239,6 @@ export async function syncVelocityShipments(opts: { dryRun: boolean; deps?: Velo
       }
       counts.linesMatched++;
       if (res.how === "order_only") counts.linesMatchedOrderOnly++;
-      if (res.how === "pinned") counts.linesPinned++;
       if (prior && !prior.resolved_at) resolvedNow.add(String(prior.id));
       const rk = `${res.row.id}\u0000${s.shipment_id}`;
       const plan = rowPlans.get(rk) ?? { poAsinId: String(res.row.id), shipmentId: s.shipment_id, units: 0, upp: Number(res.row.units_per_pack) || 1, shippedAt, lines: [] };
@@ -235,9 +254,28 @@ export async function syncVelocityShipments(opts: { dryRun: boolean; deps?: Velo
   for (const [rk, plan] of Array.from(rowPlans.entries())) {
     const qty = round2(plan.units / plan.upp);
     const ex = existingByKey.get(rk);
+    if (ex && ex.assigned_by === "manual") { counts.manualRowsKept++; continue; } // a hand assignment is never overwritten by derivation
     if (!ex) { rowOps.push({ kind: "insert", plan, qty }); counts.rowsInserted++; touched.add(afById.get(plan.poAsinId)!.po_id); continue; }
     if (Math.abs(Number(ex.qty_shipped) - qty) > 1e-9 || String(ex.shipped_at ?? "") !== String(plan.shippedAt ?? "")) { rowOps.push({ kind: "update", plan, qty, id: ex.id }); counts.rowsUpdated++; touched.add(afById.get(plan.poAsinId)!.po_id); }
     else counts.rowsUnchanged++;
+  }
+  // Lines assigned by hand (§5.2): one row → refresh its quantity / ship date; split → compare only.
+  for (const m of Array.from(manualLines.values())) {
+    if (m.rows.length === 1) {
+      const r = m.rows[0];
+      const upp = Number(afById.get(r.poAsinId)!.units_per_pack) || 1;
+      const qty = round2(m.units / upp);
+      if (Math.abs(r.qty - qty) > 1e-9 || String(r.shippedAt ?? "") !== String(m.shippedAt ?? "")) {
+        rowOps.push({ kind: "update", plan: { poAsinId: r.poAsinId, shipmentId: "", units: m.units, upp, shippedAt: m.shippedAt, lines: [m.label] }, qty, id: r.id });
+        counts.rowsUpdated++; touched.add(afById.get(r.poAsinId)!.po_id);
+      } else counts.rowsUnchanged++;
+      continue;
+    }
+    const heldUnits = m.rows.reduce((t, r) => t + r.qty * (Number(afById.get(r.poAsinId)!.units_per_pack) || 1), 0);
+    if (Math.abs(heldUnits - m.units) > 1e-6) {
+      counts.manualSplitDrift++;
+      if (samples.length < 10) samples.push(`${m.label}: split by hand over ${m.rows.length} rows holding ${round2(heldUnits)} units; Velocity now says ${m.units} — not rewritten`);
+    } else counts.rowsUnchanged += m.rows.length;
   }
   for (const [key] of Array.from(unmatchedPlans.entries())) if (!unmatchedByKey.has(key)) counts.unmatchedNew++;
   counts.unmatchedResolved = resolvedNow.size;
