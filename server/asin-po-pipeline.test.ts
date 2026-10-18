@@ -63,3 +63,20 @@ describe("loadAsinPipeline", () => {
     expect(PIPELINE_ROWS_SQL).toMatch(/FILTER \(WHERE l\.qty_canceled IS NULL\)/);
   });
 });
+
+describe("pipeline query shape (performance, 2026-10-18)", () => {
+  it("Canceled / Returned come from one grouped aggregate joined in — no per-row subquery over po_line_items", () => {
+    expect(PIPELINE_ROWS_SQL).toMatch(/WITH ln AS \(\s*SELECT l\.po_asin_id,/);
+    expect(PIPELINE_ROWS_SQL).toMatch(/GROUP BY l\.po_asin_id/);
+    expect(PIPELINE_ROWS_SQL).toMatch(/LEFT JOIN ln ON ln\.po_asin_id = pa\.id/);
+    expect(PIPELINE_ROWS_SQL).not.toMatch(/WHERE l\.po_asin_id = pa\.id/);
+    // same NULL rule: no lines, or any untracked line → NULL; bundles ÷ unique products
+    expect(PIPELINE_ROWS_SQL).toMatch(/CASE WHEN COALESCE\(ln\.n, 0\) = 0 OR ln\.canceled_untracked > 0 THEN NULL ELSE ln\.canceled_sum \/ \(CASE WHEN pa\.sold_as = 'bundle' AND COALESCE\(pa\.unique_products, 0\) > 1 THEN pa\.unique_products ELSE 1 END\) END AS qty_canceled_asin/);
+    expect(PIPELINE_ROWS_SQL).toMatch(/ln\.returned_sum \/ \(CASE WHEN pa\.sold_as = 'bundle'/);
+  });
+  it("migration 063 indexes po_line_items(po_asin_id)", async () => {
+    const { readFileSync } = await import("fs");
+    const sql = readFileSync(new URL("../database/migrations/063_po_line_items_po_asin_idx.sql", import.meta.url), "utf8");
+    expect(sql).toMatch(/CREATE INDEX IF NOT EXISTS po_line_items_po_asin_idx ON po_line_items \(po_asin_id\);/);
+  });
+});

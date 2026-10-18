@@ -17,7 +17,6 @@
 // 2026-10-17 (clean-up): Amazon's own inbound ("Sent to FBA") covers the
 // shipped-not-received units.
 import type { QueryLike } from "./scheduler/types";
-import { derivedFromLines } from "./po-queries";
 
 export interface PipelineRow {
   asin: string;
@@ -59,8 +58,6 @@ export function computePipeline(rows: PipelineRow[]): Map<string, AsinPipeline> 
   return out;
 }
 
-const derived = derivedFromLines; // one definition (server/po-queries.ts), bundle ÷ N included
-
 /** VELOCITY_MIN_ORDER_DATE (M/D/YYYY) → YYYY-MM-DD, or null. */
 export function envReconStart(raw = process.env.VELOCITY_MIN_ORDER_DATE): string | null {
   const m = /^(\d{1,2})\/(\d{1,2})\/(\d{4})$/.exec(String(raw ?? "").trim());
@@ -69,13 +66,33 @@ export function envReconStart(raw = process.env.VELOCITY_MIN_ORDER_DATE): string
 
 // $1 = the env fallback date (or NULL). The start is the earliest stored
 // Velocity shipment (Phase 2's backfill start); with none stored, the env floor.
+//
+// Canceled / Returned per ASIN row come from ONE grouped aggregate over the
+// lines, joined in (2026-10-18). It used to be two correlated subqueries per
+// po_asins row (derivedFromLines), each a sequential scan of po_line_items —
+// 3,850 rows × 2 × 3,927 lines ≈ 30 M row checks, 23–24 s per ASINs-page load
+// on production after the history import. Same values: NULL when the ASIN
+// row has no lines or any line's value is NULL (untracked); otherwise
+// Σ(qty × yield), ÷ unique products for a bundle.
+const DIVISOR = `(CASE WHEN pa.sold_as = 'bundle' AND COALESCE(pa.unique_products, 0) > 1 THEN pa.unique_products ELSE 1 END)`;
 export const PIPELINE_ROWS_SQL = `
+  WITH ln AS (
+    SELECT l.po_asin_id,
+           COUNT(*) AS n,
+           COUNT(*) FILTER (WHERE l.qty_canceled IS NULL) AS canceled_untracked,
+           SUM(l.qty_canceled * COALESCE(l.asin_qty_per_product, 1)) AS canceled_sum,
+           COUNT(*) FILTER (WHERE l.qty_returned IS NULL) AS returned_untracked,
+           SUM(l.qty_returned * COALESCE(l.asin_qty_per_product, 1)) AS returned_sum
+      FROM po_line_items l
+     GROUP BY l.po_asin_id
+  )
   SELECT pa.asin, (p.closed_at IS NOT NULL) AS closed,
          (p.order_date >= COALESCE((SELECT MIN(shipped_at) FROM velocity_shipments), $1::date, DATE '9999-12-31')) AS reconciled,
          pa.qty, pa.qty_lost_damaged_us, pa.qty_at_prep, pa.qty_shipped_fba, pa.qty_received_amazon,
-         ${derived("qty_canceled")} AS qty_canceled_asin,
-         ${derived("qty_returned")} AS qty_returned_asin
-    FROM po_asins pa JOIN purchase_orders p ON p.id = pa.po_id`;
+         CASE WHEN COALESCE(ln.n, 0) = 0 OR ln.canceled_untracked > 0 THEN NULL ELSE ln.canceled_sum / ${DIVISOR} END AS qty_canceled_asin,
+         CASE WHEN COALESCE(ln.n, 0) = 0 OR ln.returned_untracked > 0 THEN NULL ELSE ln.returned_sum / ${DIVISOR} END AS qty_returned_asin
+    FROM po_asins pa JOIN purchase_orders p ON p.id = pa.po_id
+    LEFT JOIN ln ON ln.po_asin_id = pa.id`;
 
 /** All ASINs (asins = undefined) or a subset. Missing ASINs are simply absent from the map (no PO rows). */
 export async function loadAsinPipeline(query: QueryLike, asins?: string[]): Promise<Map<string, AsinPipeline>> {

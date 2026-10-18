@@ -28,10 +28,13 @@ describe("derived Canceled / Returned", () => {
     expect(derive([{ qty: 5, yield: 1 }, { qty: 4, yield: 1 }], "individual", 3)).toBe(9);
     expect(derive([{ qty: 5, yield: 1 }, { qty: null, yield: 1 }], "bundle", 2)).toBeNull();
   });
-  it("the SQL divides by unique_products for bundles only, and both readers use the one definition", () => {
+  it("the SQL divides by unique_products for bundles only, and the POs page uses the one definition and the ASINs pipeline the same rule", () => {
     const sql = derivedFromLines("qty_canceled");
     expect(sql).toMatch(/SUM\(l\.qty_canceled \* COALESCE\(l\.asin_qty_per_product, 1\)\)\s+\/ \(CASE WHEN pa\.sold_as = 'bundle' AND COALESCE\(pa\.unique_products, 0\) > 1 THEN pa\.unique_products ELSE 1 END\)/);
     expect(poAsinRowsSql("TRUE")).toContain(derivedFromLines("qty_returned"));
-    expect(PIPELINE_ROWS_SQL).toContain(derivedFromLines("qty_canceled"));
+    // The ASINs-page pipeline aggregates the lines once (performance, 2026-10-18) with the same rule:
+    // Σ(qty × yield) ÷ unique products for a bundle, NULL when any line is untracked.
+    expect(PIPELINE_ROWS_SQL).toContain("SUM(l.qty_canceled * COALESCE(l.asin_qty_per_product, 1))");
+    expect(PIPELINE_ROWS_SQL).toContain("(CASE WHEN pa.sold_as = 'bundle' AND COALESCE(pa.unique_products, 0) > 1 THEN pa.unique_products ELSE 1 END)");
   });
 });
