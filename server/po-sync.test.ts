@@ -47,9 +47,15 @@ const sheetEntries = () =>
   }));
 
 let sheetOverride: Map<string, any> | null = null;
+// Since po-af-owned §2.4 (2026-10-18) the source is the AF PO tables
+// (loadAfAsinCostMap), not the Orders sheet; the scripted map stands in.
+const afCalls: Array<string[] | undefined> = [];
+vi.mock("./po-af-source", () => ({
+  loadAfAsinCostMap: async (_q: unknown, asins?: string[]) => { afCalls.push(asins); return { data: sheetOverride ?? sheetEntries(), rowsRead: rawRowsRead }; },
+}));
 vi.mock("./google-sheets", () => ({
-  fetchSheetData: async () => sheetOverride ?? sheetEntries(),
-  fetchSheetDataWithMeta: async () => ({ data: sheetOverride ?? sheetEntries(), rawRowsRead }),
+  fetchSheetData: async () => { throw new Error("the Orders sheet must not be read"); },
+  fetchSheetDataWithMeta: async () => { throw new Error("the Orders sheet must not be read"); },
   fetchSheetRows: async () => [],
 }));
 
@@ -60,7 +66,21 @@ beforeEach(() => {
   sheetOverride = null;
   staleOrderedAsins = [];
   rawRowsRead = 3;
-  process.env.GOOGLE_SHEET_ID = "test-sheet"; // fetchSheetData is mocked; only the guard reads this
+  afCalls.length = 0;
+});
+
+describe("runSheetsSync reads the AF PO tables (po-af-owned §2.4)", () => {
+  it("works with no GOOGLE_SHEET_ID and passes the ASIN filter to the AF reader", async () => {
+    const saved = process.env.GOOGLE_SHEET_ID; delete process.env.GOOGLE_SHEET_ID;
+    try {
+      sourcesByAsin = { CSVASIN0001: { est: "csv", act: null } };
+      const r = await getRunSheetsSync()(new Set(["CSVASIN0001"]));
+      expect(r.updated).toBe(1);
+      expect(afCalls).toEqual([["CSVASIN0001"]]);
+      await getRunSheetsSync()();
+      expect(afCalls[1]).toBeUndefined();
+    } finally { if (saved !== undefined) process.env.GOOGLE_SHEET_ID = saved; }
+  });
 });
 
 describe("runSheetsSync estimated_cogs rule (§2, corrected 2026-08-11)", () => {

@@ -504,17 +504,16 @@ export async function resolveForOnboard(
   }
 
   try {
-    const sheetId = process.env.GOOGLE_SHEET_ID;
-    if (sheetId) {
-      const { fetchSheetData } = await import("./google-sheets");
-      const po = await fetchSheetData(sheetId);
-      for (const asin of missing) {
-        const row = po.get(asin);
-        if (row) ordersSuppliers.set(asin, row.supplier ?? null);
-      }
+    // Supplier from the AF PO tables (po-af-owned §2.4, 2026-10-18) — the
+    // newest non-canceled PO per ASIN; the Orders sheet is intake-only.
+    const { loadAfAsinCostMap } = await import("./po-af-source");
+    const { data: po } = await loadAfAsinCostMap(query, missing);
+    for (const asin of missing) {
+      const row = po.get(asin);
+      if (row) ordersSuppliers.set(asin, row.supplier ?? null);
     }
   } catch (err: any) {
-    log(`Phase c: Orders-sheet lookup failed (${err?.message ?? err}) — COGS/supplier left unresolved`, "full-scope");
+    log(`Phase c: PO-table supplier lookup failed (${err?.message ?? err}) — COGS/supplier left unresolved`, "full-scope");
   }
 
   const { resolveOnboardData } = await import("./sc-discovery");

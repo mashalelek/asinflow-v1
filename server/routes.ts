@@ -23,7 +23,7 @@ import pool, { query, isDbAvailable } from "./db";
 import { syncInventory } from "./inventory-sync";
 import { syncSalesData } from "./sales-sync";
 import { syncSuppressionData } from "./suppression-sync";
-import { fetchSheetData, fetchSheetDataWithMeta } from "./google-sheets";
+import { loadAfAsinCostMap } from "./po-af-source";
 import { buildVelocityRecords, serializeVelocityCsv, parseMDY, formatYMD, todayLocal } from "./velocity-export";
 import { fetchAllKnownOrders, matchKeysForOrder, createBundleOrder, submitBulkCsv, updateInboundOrder } from "./velocity-api";
 import { recordableBundles, recordBundleIdentities, mapBundleIdentity, hydrateChildlessBundles } from "./velocity-bundle-identity";
@@ -949,10 +949,10 @@ async function writeResult(
 async function runSheetsSync(
   asinFilter?: ReadonlySet<string>,
 ): Promise<{ updated: number; skipped: number; errors: string[]; cleared: number; clearedAsins: string[] }> {
-  const sheetId = process.env.GOOGLE_SHEET_ID;
-  if (!sheetId) throw new Error("GOOGLE_SHEET_ID not configured");
-
-  const { data: sheetData, rawRowsRead } = await fetchSheetDataWithMeta(sheetId);
+  // Source = the AF PO tables (patch po-af-owned §2.4, 2026-10-18): the
+  // newest non-canceled ASIN row per ASIN (order_date, then entry_seq). The
+  // Orders sheet is intake-only and is no longer read here.
+  const { data: sheetData, rowsRead: rawRowsRead } = await loadAfAsinCostMap(query as any, asinFilter && asinFilter.size > 0 ? Array.from(asinFilter) : undefined);
   let updated = 0;
   let skipped = 0;
   const errors: string[] = [];
@@ -1030,7 +1030,7 @@ async function runSheetsSync(
   // ordered_qty any more. `cleared` / `clearedAsins` stay in the result
   // shape for the callers (toast, component 9 ledger) and are always 0.
   // rawRowsRead keeps its fail-closed meaning for the read itself.
-  if (rawRowsRead === 0) log(`PO sync: rawRowsRead=0 — empty/failed sheet read (nothing written beyond the rows above)`, "sheets");
+  if (rawRowsRead === 0) log(`PO sync: rawRowsRead=0 — no PO rows in AF (nothing written)`, "sheets");
   const clearedAsins: string[] = [];
   return { updated, skipped, errors, cleared: clearedAsins.length, clearedAsins };
 }
@@ -4201,13 +4201,6 @@ export async function registerRoutes(
     const asin = String(req.params.asin ?? "");
     if (!isDbAvailable()) { res.status(503).json({ message: "Database not available" }); return; }
 
-    const sheetId = process.env.GOOGLE_SHEET_ID;
-    const credPath = process.env.GOOGLE_CREDENTIALS_PATH;
-    if (!sheetId || !credPath || !fs.existsSync(credPath)) {
-      res.status(400).json({ message: "Google Sheet integration not configured" });
-      return;
-    }
-
     try {
       // Clear the manual override first so the PO sync path can write to this ASIN.
       await query(
@@ -4215,8 +4208,8 @@ export async function registerRoutes(
         [asin],
       );
 
-      // Pull fresh data from the PO sheet and apply the value for this ASIN only.
-      const sheetData = await fetchSheetData(sheetId);
+      // The newest PO cost for this ASIN from the AF PO tables (po-af-owned §2.4).
+      const { data: sheetData } = await loadAfAsinCostMap(query as any, [asin]);
       const entry = sheetData.get(asin);
       if (entry?.cogs != null) {
         await query(
@@ -4237,13 +4230,8 @@ export async function registerRoutes(
   app.post("/api/asins/:asin/cogs/sync-from-po", async (req: Request, res: Response) => {
     const asin = String(req.params.asin ?? "");
     if (!isDbAvailable()) { res.status(503).json({ message: "Database not available" }); return; }
-    const sheetId = process.env.GOOGLE_SHEET_ID;
-    const credPath = process.env.GOOGLE_CREDENTIALS_PATH;
-    if (!sheetId || !credPath || !fs.existsSync(credPath)) {
-      res.status(400).json({ message: "Google Sheet not configured" }); return;
-    }
     try {
-      const sheetData = await fetchSheetData(sheetId);
+      const { data: sheetData } = await loadAfAsinCostMap(query as any, [asin]); // AF PO tables (po-af-owned §2.4)
       const entry = sheetData.get(asin);
       if (entry?.cogs == null) {
         res.json({ synced: false, message: "No PO data found for this ASIN" }); return;
@@ -4265,13 +4253,8 @@ export async function registerRoutes(
     if (!asinList || !Array.isArray(asinList) || asinList.length === 0) {
       res.status(400).json({ message: "No ASINs provided" }); return;
     }
-    const sheetId = process.env.GOOGLE_SHEET_ID;
-    const credPath = process.env.GOOGLE_CREDENTIALS_PATH;
-    if (!sheetId || !credPath || !fs.existsSync(credPath)) {
-      res.status(400).json({ message: "Google Sheet not configured" }); return;
-    }
     try {
-      const sheetData = await fetchSheetData(sheetId);
+      const { data: sheetData } = await loadAfAsinCostMap(query as any, asinList); // AF PO tables (po-af-owned §2.4)
       let synced = 0;
       let skipped = 0;
       for (const asin of asinList) {
