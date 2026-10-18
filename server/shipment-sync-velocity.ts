@@ -43,6 +43,7 @@ export interface VelocitySyncCounts {
   lines: number;                // shipment lines seen
   linesMatched: number;         // resolved to a po_asins row (incl. order-only and picker-resolved)
   linesMatchedOrderOnly: number;// resolved on (Order #, ASIN) alone — retailer spelling differed
+  linesPinned: number;          // kept on a manually assigned row (assigned_by = 'manual'), never re-resolved
   linesNoOrder: number;         // no usable Order # (bundle parent without a single child order, blank)
   linesPoNotFound: number;      // Order # present but no (Order #, retailer, ASIN) in AF
   rowsInserted: number;
@@ -97,7 +98,7 @@ export function buildAfIndex(rows: AfAsinRow[]): AfIndex {
 }
 
 export type Resolution =
-  | { ok: true; row: AfAsinRow; how: "exact" | "order_only" | "picker" }
+  | { ok: true; row: AfAsinRow; how: "exact" | "order_only" | "picker" | "pinned" }
   | { ok: false; reason: "no_order" | "po_not_found"; note?: string; orderNumber: string; retailer: string };
 
 /**
@@ -159,6 +160,18 @@ export async function syncVelocityShipments(opts: { dryRun: boolean; deps?: Velo
   const unmatchedRows = (await db.query(`SELECT id, velocity_shipment_id, velocity_order_id, reason, resolved_at, resolved_po_asin_id FROM shipment_unmatched`)).rows;
   const unmatchedByKey = new Map<string, any>(unmatchedRows.map((r: any) => [`${r.velocity_shipment_id}\u0000${r.velocity_order_id}`, r]));
   const afById = new Map<string, AfAsinRow>(afRows.map((r) => [String(r.id), r]));
+  // Manual assignments (assigned_by = 'manual', 2026-10-18): a Velocity line
+  // (shipment, Velocity Order #, ASIN) pinned to a PO ASIN row stays there —
+  // its quantities refresh, it is never moved or re-resolved.
+  const pinKey = (shipmentId: string, orderNumber: unknown, asin: unknown) => `${shipmentId}\u0000${String(orderNumber ?? "").trim()}\u0000${String(asin ?? "").trim().toUpperCase()}`;
+  const pins = new Map<string, string>();
+  for (const r of (await db.query(`SELECT s.velocity_shipment_id, s.velocity_order_number, pa.asin, s.po_asin_id FROM po_asin_shipments s JOIN po_asins pa ON pa.id = s.po_asin_id WHERE s.assigned_by = 'manual' AND s.source = 'velocity'`)).rows as any[]) {
+    pins.set(pinKey(String(r.velocity_shipment_id), r.velocity_order_number, r.asin), String(r.po_asin_id));
+  }
+  const pinned = (shipmentId: string, line: VelocityInboundOrder): Resolution | null => {
+    const id = pins.get(pinKey(shipmentId, line.order_number, line.asin));
+    return id && afById.has(id) ? { ok: true, row: afById.get(id)!, how: "pinned" } : null;
+  };
 
   // Bundle children live only on the list legs; a fully shipped bundle parent
   // has left both, so the §11 Part C.2 identity record (velocity_bundle_identity)
@@ -173,7 +186,7 @@ export async function syncVelocityShipments(opts: { dryRun: boolean; deps?: Velo
 
   // ── Resolve every shipment line ────────────────────────────────────────────
   const counts: VelocitySyncCounts = {
-    shipments: shipments.length, shipmentsFetched: fetchedIds.size, lines: 0, linesMatched: 0, linesMatchedOrderOnly: 0, linesNoOrder: 0, linesPoNotFound: 0,
+    shipments: shipments.length, shipmentsFetched: fetchedIds.size, lines: 0, linesMatched: 0, linesMatchedOrderOnly: 0, linesPinned: 0, linesNoOrder: 0, linesPoNotFound: 0,
     rowsInserted: 0, rowsUpdated: 0, rowsUnchanged: 0, unmatchedNew: 0, unmatchedResolved: 0, atPrepSet: 0, atPrepCleared: 0, atPrepUnchanged: 0, posTouched: 0,
   };
   const samples: string[] = [];
@@ -193,7 +206,9 @@ export async function syncVelocityShipments(opts: { dryRun: boolean; deps?: Velo
       const key = `${s.shipment_id}\u0000${String(line.order_id ?? "")}`;
       const prior = unmatchedByKey.get(key);
       let res: Resolution;
-      if (prior?.resolved_po_asin_id && afById.has(String(prior.resolved_po_asin_id))) res = { ok: true, row: afById.get(String(prior.resolved_po_asin_id))!, how: "picker" };
+      const pin = pinned(s.shipment_id, line);
+      if (pin) res = pin;
+      else if (prior?.resolved_po_asin_id && afById.has(String(prior.resolved_po_asin_id))) res = { ok: true, row: afById.get(String(prior.resolved_po_asin_id))!, how: "picker" };
       else res = resolveLine(line, idx, childrenByOrderId);
       const units = num(line.quantity_shipped);
       if (!res.ok) {
@@ -204,6 +219,7 @@ export async function syncVelocityShipments(opts: { dryRun: boolean; deps?: Velo
       }
       counts.linesMatched++;
       if (res.how === "order_only") counts.linesMatchedOrderOnly++;
+      if (res.how === "pinned") counts.linesPinned++;
       if (prior && !prior.resolved_at) resolvedNow.add(String(prior.id));
       const rk = `${res.row.id}\u0000${s.shipment_id}`;
       const plan = rowPlans.get(rk) ?? { poAsinId: String(res.row.id), shipmentId: s.shipment_id, units: 0, upp: Number(res.row.units_per_pack) || 1, shippedAt, lines: [] };
@@ -236,7 +252,8 @@ export async function syncVelocityShipments(opts: { dryRun: boolean; deps?: Velo
   for (const line of Array.from(orderLine.values())) {
     const sid = String((line as any).__shipment_id ?? "");
     const prior = sid ? unmatchedByKey.get(`${sid}\u0000${String(line.order_id ?? "")}`) : undefined;
-    const res: Resolution = prior?.resolved_po_asin_id && afById.has(String(prior.resolved_po_asin_id)) ? { ok: true, row: afById.get(String(prior.resolved_po_asin_id))!, how: "picker" } : resolveLine(line, idx, childrenByOrderId);
+    const res: Resolution = (sid ? pinned(sid, line) : null)
+      ?? (prior?.resolved_po_asin_id && afById.has(String(prior.resolved_po_asin_id)) ? { ok: true, row: afById.get(String(prior.resolved_po_asin_id))!, how: "picker" } : resolveLine(line, idx, childrenByOrderId));
     if (!res.ok) continue;
     remainingByAsinRow.set(String(res.row.id), (remainingByAsinRow.get(String(res.row.id)) ?? 0) + num(line.quantity_remaining));
   }

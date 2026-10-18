@@ -32,7 +32,7 @@ const AF: AfAsinRow[] = [
   { id: "a-old", po_id: "p-old", asin: "B0OLDASIN1", units_per_pack: 1, qty_at_prep: "3.00", order_id: "OLD1", supplier: "x.com", order_date: "2026-06-01" }, // no Velocity line any more → NULL
 ];
 
-function fakeDb(state: { shipments?: any[]; rows?: any[]; unmatched?: any[]; identity?: any[] }) {
+function fakeDb(state: { shipments?: any[]; rows?: any[]; unmatched?: any[]; identity?: any[]; pins?: any[] }) {
   const writes: Array<{ sql: string; params?: any[] }> = [];
   const query = async (sql: string, params?: any[]) => {
     const s = sql.trim();
@@ -41,6 +41,7 @@ function fakeDb(state: { shipments?: any[]; rows?: any[]; unmatched?: any[]; ide
     if (s.startsWith("SELECT id, po_asin_id, velocity_shipment_id, qty_shipped")) return { rows: state.rows ?? [], rowCount: 0 };
     if (s.startsWith("SELECT id, velocity_shipment_id, velocity_order_id, reason")) return { rows: state.unmatched ?? [], rowCount: 0 };
     if (s.startsWith("SELECT velocity_order_id, child_order_numbers FROM velocity_bundle_identity")) return { rows: state.identity ?? [], rowCount: 0 };
+    if (s.startsWith("SELECT s.velocity_shipment_id, s.velocity_order_number, pa.asin, s.po_asin_id FROM po_asin_shipments")) return { rows: state.pins ?? [], rowCount: 0 };
     writes.push({ sql: s, params }); return { rows: [], rowCount: 1 };
   };
   return { query, connect: async () => ({ query, release: () => { writes.push({ sql: "RELEASE" }); } }), writes };
@@ -140,6 +141,25 @@ describe("syncVelocityShipments", () => {
     const r = await syncVelocityShipments({ dryRun: true, deps: d, db });
     expect(r.counts).toMatchObject({ lines: 1, linesMatched: 1, linesMatchedOrderOnly: 1, linesNoOrder: 0 });
     expect(r.samples[0]).toMatch(/SHOP533384 B004WZ4CLW: 12 units ÷ 6 → 2 \(order_only\)/);
+  });
+
+  it("a manually assigned line stays on its pinned row even when another PO now matches its Order # exactly (leadersrpmshop.com 10548557_10507736, 2026-10-18)", async () => {
+    // AF after the 2025 history import: the 2026 PO is 10548557_10507736 (Velocity still says 10507736, pinned);
+    // the 2025 PO is 10507736 — an exact (Order #, retailer, ASIN) match for the Velocity line.
+    const AF2 = [
+      { id: "a-2026", po_id: "p-2026", asin: "B07S5R68XZ", units_per_pack: 1, qty_at_prep: "0.00", order_id: "10548557_10507736", supplier: "leadersrpmshop.com", order_date: "2026-06-21" },
+      { id: "a-2025", po_id: "p-2025", asin: "B07S5R68XZ", units_per_pack: 1, qty_at_prep: null, order_id: "10507736", supplier: "leadersrpmshop.com", order_date: "2025-10-19" },
+    ];
+    const vline = line({ order_id: "lr1", order_number: "10507736", retailer: "leadersrpmshop.com", asin: "B07S5R68XZ", shipped: 15 });
+    const base = fakeDb({ pins: [{ velocity_shipment_id: SID, velocity_order_number: "10507736", asin: "B07S5R68XZ", po_asin_id: "a-2026" }], rows: [{ id: "r1", po_asin_id: "a-2026", velocity_shipment_id: SID, qty_shipped: "15.00", shipped_at: "2026-10-15" }] });
+    const db = { ...base, query: async (sql: string, params?: any[]) => sql.trim().startsWith("SELECT pa.id, pa.po_id, pa.asin") ? { rows: AF2, rowCount: 2 } : base.query(sql, params) };
+    const r = await syncVelocityShipments({ dryRun: true, deps: deps({ getShipment: async () => ({ orders: [vline] }), listInbound: async () => [], listInventory: async () => [] }), db });
+    expect(r.counts).toMatchObject({ linesMatched: 1, linesPinned: 1, rowsInserted: 0, rowsUpdated: 0, rowsUnchanged: 1 });
+    // without the pin the same line would land on the 2025 PO
+    const db2 = { ...db, query: async (sql: string, params?: any[]) => sql.trim().startsWith("SELECT s.velocity_shipment_id") ? { rows: [], rowCount: 0 } : db.query(sql, params) };
+    const r2 = await syncVelocityShipments({ dryRun: true, deps: deps({ getShipment: async () => ({ orders: [vline] }), listInbound: async () => [], listInventory: async () => [] }), db: db2 });
+    expect(r2.counts).toMatchObject({ linesPinned: 0, rowsInserted: 1 });
+    expect(r2.samples[0]).toMatch(/leadersrpmshop\.com 10507736 B07S5R68XZ/);
   });
 
   it("fail-closed: a Velocity read error propagates before anything is written", async () => {
