@@ -4,21 +4,25 @@
 // For every 2026 sheet PO already in AF, compares each quantity the importer
 // stored — po_asins.qty (Col N), unreimbursed_loss_qty (Col V), and per line
 // qty_ordered (L), qty_received (M), qty_returned (R), qty_canceled (= L on a
-// canceled row) — with the sheet's exact value. A field is corrected ONLY
+// canceled row) — with the sheet's exact value; and the cost / unit of a
+// merged S=1 group, which the importer weighted by the rounded Col N. A field is corrected ONLY
 // when the sheet value is fractional AND AF still holds exactly the integer
 // it was rounded to (Math.round, as the old importer did): AF owns POs, so a
 // value edited in AF since import is never overwritten — it is reported.
 // Every correction is logged in po_edit_log (user NULL, "re-import").
-// Pre-2026 POs are only counted (out of scope).
+// Pre-2026 POs are counted only, unless --include-history (2026-10-18:
+// extended to the 72 imported pre-2026 POs that still held rounded values).
 //
-//   tsx script/reimport-po-fractional-qty.ts           # dry run (default)
-//   tsx script/reimport-po-fractional-qty.ts --live    # write, one transaction
+//   tsx script/reimport-po-fractional-qty.ts                              # dry run, 2026 only
+//   tsx script/reimport-po-fractional-qty.ts --include-history            # dry run, every year
+//   tsx script/reimport-po-fractional-qty.ts [--include-history] --live   # write, one transaction
 // Idempotent: a second run finds nothing to change.
 import "dotenv/config";
 import pool from "../server/db";
 import { readPoSheet, parsePoSheet, poKey } from "../server/po-sheet-sync";
 
 const live = process.argv.includes("--live");
+const includeHistory = process.argv.includes("--include-history");
 const frac = (x: number | null | undefined) => x != null && Math.abs(x - Math.round(x)) > 1e-9;
 const same = (a: unknown, b: number) => a != null && Math.abs(Number(a) - b) < 1e-9;
 
@@ -39,10 +43,11 @@ async function main() {
     for (const sp of parsed.pos) {
       const poId = poByKey.get(sp.key);
       if (!poId) continue;
-      const anyFrac = sp.poAsins.some((a) => frac(a.qty) || frac(a.lossQty) || a.lines.some((l) => frac(l.qtyOrdered) || frac(l.qtyReceived) || frac(l.qtyReturned)));
+      const anyFrac = sp.poAsins.some((a) => frac(a.qty) || frac(a.lossQty) || a.lines.some((l) => frac(l.qtyOrdered) || frac(l.qtyReceived) || frac(l.qtyReturned))
+        || (a.costPerUnitIntegerEra != null && a.costPerUnitIntegerEra !== a.costPerUnit));
       if (!anyFrac) continue;
-      if (sp.historical) { historyRows++; continue; }
-      const asinRows = (await q(`SELECT id, asin, qty, unreimbursed_loss_qty FROM po_asins WHERE po_id = $1`, [poId])).rows;
+      if (sp.historical && !includeHistory) { historyRows++; continue; }
+      const asinRows = (await q(`SELECT id, asin, qty, unreimbursed_loss_qty, cost_per_unit FROM po_asins WHERE po_id = $1`, [poId])).rows;
       for (const a of sp.poAsins) {
         const ar = asinRows.find((r: any) => String(r.asin) === a.asin);
         if (!ar) continue;
@@ -55,6 +60,15 @@ async function main() {
           else editedInAf.push(`${l} ${field}: AF ${stored}, sheet ${x} — changed in AF since import, left alone`);
         };
         check("po_asins", String(ar.id), "asin", "qty", ar.qty, a.qty, label);
+        // A merged S=1 group's cost / unit was weighted by the rounded Col N: correct it only
+        // where AF still holds exactly that integer-era value.
+        if (a.costPerUnit != null && a.costPerUnitIntegerEra != null && a.costPerUnitIntegerEra !== a.costPerUnit) {
+          const x = Number(a.costPerUnit), old = Number(a.costPerUnitIntegerEra);
+          if (!same(ar.cost_per_unit, x)) {
+            if (same(ar.cost_per_unit, old)) fixes.push({ table: "po_asins", id: String(ar.id), poId, entity: "asin", field: "cost_per_unit", from: Number(ar.cost_per_unit), to: x, label });
+            else editedInAf.push(`${label} cost_per_unit: AF ${ar.cost_per_unit}, sheet ${x} — changed in AF since import, left alone`);
+          }
+        }
         check("po_asins", String(ar.id), "asin", "unreimbursed_loss_qty", ar.unreimbursed_loss_qty, a.lossQty, label);
         const lines = (await q(`SELECT id, position, qty_ordered, qty_received, qty_returned, qty_canceled FROM po_line_items WHERE po_asin_id = $1`, [ar.id])).rows;
         for (const sl of a.lines) {
@@ -68,7 +82,7 @@ async function main() {
         }
       }
     }
-    console.log(`${live ? "LIVE" : "DRY RUN"}: ${fixes.length} field(s) to correct on ${new Set(fixes.map((f) => f.poId)).size} PO(s); ${editedInAf.length} left alone (edited in AF); pre-2026 POs with fractional sheet quantities (not touched): ${historyRows}`);
+    console.log(`${live ? "LIVE" : "DRY RUN"}: ${fixes.length} field(s) to correct on ${new Set(fixes.map((f) => f.poId)).size} PO(s); ${editedInAf.length} left alone (edited in AF); ${includeHistory ? "pre-2026 POs included" : `pre-2026 POs with fractional sheet quantities (not touched): ${historyRows}`}`);
     for (const f of fixes) console.log(`  ${f.label} ${f.field}: ${f.from} → ${f.to}`);
     for (const e of editedInAf) console.log(`  SKIP ${e}`);
     if (!live || fixes.length === 0) return;

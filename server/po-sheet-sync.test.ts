@@ -382,3 +382,20 @@ describe("af-owned intake-only (patch docs/claude_spec-patch-po-af-owned.md §2,
     expect(db.writes.filter((w) => w.sql.startsWith("INSERT INTO purchase_orders")).map((w) => w.params?.[0])).toEqual(["NEW9"]);
   });
 });
+
+describe("decimal quantities (migration 062)", () => {
+  it("Col N keeps its decimals; a merged S=1 group's cost is weighted by the exact Col N, and the integer-era weighting is reported for the one-off re-import", () => {
+    // homedepot.com WN63100522: two rows of B07N13K4SS, N 0.667 @ $17.61 and 0.333 @ $19.17
+    const p = parsePoSheet(HEADER, [
+      row({ orderId: "WN63100522", supplier: "homedepot.com", date: "6/28/2026", asin: "B07N13K4SS", L: "1", N: "0.6666666667", T: "0.67", Y: "$17.61" }),
+      row({ orderId: "WN63100522", supplier: "homedepot.com", date: "6/28/2026", asin: "B07N13K4SS", L: "1", N: "0.3333333333", T: "0.33", Y: "$19.17" }),
+    ]);
+    const a = p.pos[0].poAsins[0];
+    expect(a.qty).toBe(1);
+    expect(a.costPerUnit).toBe("18.12");
+    expect(a.costPerUnitIntegerEra).toBe("17.61");
+    const single = parsePoSheet(HEADER, [row({ orderId: "1", N: "2.5", L: "5", T: "0.5" })]).pos[0].poAsins[0];
+    expect(single.qty).toBe(2.5);
+    expect(single.costPerUnitIntegerEra).toBeNull();
+  });
+});

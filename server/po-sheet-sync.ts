@@ -126,6 +126,8 @@ export interface SheetPoAsin {
   asinName: string | null;
   qty: number;
   costPerUnit: string | null;
+  /** The cost / unit the integer-era importer stored (Col N weights rounded) — a merged S=1 group only; null otherwise. */
+  costPerUnitIntegerEra?: string | null;
   /** NULL = not recorded (pre-2026 rows: Col AS did not exist yet). */
   prep: string | null;
   soldAs: string;
@@ -272,6 +274,10 @@ export function parsePoSheet(header: string[], dataCells: string[][]): ParsedPoS
       }
       let qty: number;
       let costPerUnit: string | null;
+      // What the integer-era importer stored (weights = Col N rounded); only differs from
+      // costPerUnit for a merged S=1 group with a fractional Col N. Read by the one-off
+      // fractional re-import (migration 062); never written by the sync.
+      let costPerUnitIntegerEra: string | null = null;
       if (ars.length > 1 && isS1Group) {
         // S=1 merge rule: additive rows → qty = SUM(Col N); cost verbatim when
         // all rows agree, else a Col-N-weighted average in integer cents.
@@ -281,10 +287,14 @@ export function parsePoSheet(header: string[], dataCells: string[][]): ParsedPoS
         if (yVals.length === 1) {
           costPerUnit = perRow[0].y;
         } else {
-          const usable = perRow.filter((r) => r.y != null && r.n > 0);
-          const totQty = usable.reduce((a, r) => a + r.n, 0);
-          const wCents = totQty > 0 ? Math.round(usable.reduce((a, r) => a + toCents(r.y!) * r.n, 0) / totQty) : null;
-          costPerUnit = wCents != null ? centsToDec(wCents) : null;
+          const weighted = (rows: Array<{ n: number; y: string | null }>) => {
+            const usable = rows.filter((r) => r.y != null && r.n > 0);
+            const totQty = usable.reduce((a, r) => a + r.n, 0);
+            const wCents = totQty > 0 ? Math.round(usable.reduce((a, r) => a + toCents(r.y!) * r.n, 0) / totQty) : null;
+            return wCents != null ? centsToDec(wCents) : null;
+          };
+          costPerUnit = weighted(perRow);
+          costPerUnitIntegerEra = weighted(perRow.map((r) => ({ ...r, n: Math.round(r.n) })));
         }
       } else {
         qty = qtyOrNull(ar.cells[COL.asinQtyTotal]) ?? 0;
@@ -312,7 +322,7 @@ export function parsePoSheet(header: string[], dataCells: string[][]): ParsedPoS
       }
       poAsins.push({
         asin, asinName: t(ar.cells[COL.asinName]) || null,
-        qty, costPerUnit, prep, soldAs, unitsPerPack: upp, lostDamagedUs,
+        qty, costPerUnit, costPerUnitIntegerEra, prep, soldAs, unitsPerPack: upp, lostDamagedUs,
         lossQty: qtyOrNull(ar.cells[COL.lossQty]) ?? 0,
         lossAmount: moneyVerbatim(t(ar.cells[COL.lossAmount])).value ?? "0",
         uniqueProducts: intOrNull(ar.cells[COL.uniqueProductsPerAsin]),
