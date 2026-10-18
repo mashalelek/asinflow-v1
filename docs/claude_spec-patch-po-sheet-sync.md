@@ -2,6 +2,8 @@
 
 > **Superseded in part (2026-10-17):** the PO-level Status mapping of §3.2–§3.3 (first row of each PO applied to the whole PO) is replaced by per-row mapping — see `claude_spec-patch-row-level-status.md` §2.1–2.3.
 
+> **Superseded (2026-10-18):** "sheet wins fully" (D2) and every update / delete path of this patch are replaced by `claude_spec-patch-po-af-owned.md` §2: Sync POs is **intake-only** — it inserts sheet POs that are not in AF and not tombstoned, never writes an existing PO, and reports the drift it no longer applies (`sheetDiffers`). The insert path, the history rules and the fail-closed stops still apply to that insert. AF owns every PO after it exists (SPEC §14, §22 "AF owns POs").
+
 Date: 2026-10-16
 Status: APPROVED 2026-10-16 (approval model: patch, not commits)
 Depends on: `claude_spec-patch-po-expand-by-asin.md` (deployed 2026-10-16)

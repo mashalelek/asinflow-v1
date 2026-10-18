@@ -4,6 +4,8 @@ Date: 2026-10-17
 Status: APPROVED 2026-10-17 (Maria's rules in §2; stop only on pre-flight surprises listed in §1)
 Supersedes: the PO-level Status mapping in `claude_spec-patch-po-sheet-sync.md` §3.2–3.3 and `claude_spec-patch-po-expand-by-asin.md` §6.1/§6.4; decision D1 of `claude_spec-patch-asins-on-order-from-pos.md`.
 
+> **Superseded in part (2026-10-18):** for POs already in AF, the sheet-side mapping of §2.3 (each row's Status → that line's action items / cancel, Closed when every row says Closed, reopen otherwise) no longer runs — `claude_spec-patch-po-af-owned.md` §2 makes Sync POs intake-only and AF the owner of action items, cancels and Closed. The row-level mapping still sets a **new** PO's initial state when it is inserted. The ASIN-level derivations (§2.4, bundle ÷ N, On Order / At Prep over open and closed POs) are unchanged.
+
 ## 0. Why
 
 The Orders sheet's Status is set **per row**, and a row is a Product (a `po_line_items` row). The PO sync reads the Status cell of the **first row of each PO only** and applies it to the whole PO (`server/po-sheet-sync.ts`, `statusCell = t(c[COL.status])`). Result, e.g. target.com 912003733645362: row 1 Kinder's (Closed) closed the PO while row 3 Topps B0HGP5P91F (Received, 2 units still at Velocity) was never read. The same flaw drops action items on rows 2+ and turns a first-row Canceled into a whole-PO cancel. Separately, the ASINs page hides On Order / At Prep for Closed POs (D1), so a wrong Closed hides real units.
