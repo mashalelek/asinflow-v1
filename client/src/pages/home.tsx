@@ -25,7 +25,8 @@ import { useSearch } from "wouter";
 import { loadColumnConfig, type ColumnConfig } from "@/lib/columns";
 import { JobsDialog } from "@/components/jobs-dialog";
 import { useJobs } from "@/hooks/use-jobs";
-import { enqueueRefresh, cancelJob, runningLabel, queuedLabel, completionText, FOCUS_ASIN_EVENT, type Job } from "@/lib/jobs-api";
+import { enqueueRefresh, cancelJob, getJob, runningLabel, queuedLabel, completionText, FOCUS_ASIN_EVENT, type Job } from "@/lib/jobs-api";
+import { refreshPlan, queuedJobIdFromMessage } from "@/lib/upload-flow";
 import { ToastAction } from "@/components/ui/toast";
 import { loadBuyList, saveBuyList, loadOnHoldList, saveOnHoldList } from "@/lib/buy-hold";
 import { planBulkSetToggle, bulkToggleLabel, applyBulkPlan } from "@/lib/bulk-buy-hold";
@@ -341,6 +342,7 @@ export default function Home() {
   const [settings, setSettings] = useState<Settings>(loadSettings);
   const [columnConfig, setColumnConfig] = useState<ColumnConfig>(loadColumnConfig);
   const [asins, setAsins] = useState<AsinInput[]>([]);
+  const queuedJobIdsRef = useRef<number[]>([]);
   const [results, setResults] = useState<AsinResult[]>([]);
   // Shared + persisted (2026-09-09): fba-price-source, same key as Bulk Calc.
   const [priceSource, setPriceSource] = useState<PriceSource>(loadPriceSource);
@@ -566,7 +568,13 @@ export default function Home() {
         if (!line.trim()) continue;
         try {
           const msg = JSON.parse(line);
-          if (msg.type === "progress") {
+          const queuedId = queuedJobIdFromMessage(msg);
+          if (queuedId != null) {
+            // The upload is on the queue now: it is no longer pending (fix
+            // 2026-10-18) — the next Refresh click is a normal Refresh.
+            queuedJobIdsRef.current.push(queuedId);
+            setAsins([]);
+          } else if (msg.type === "progress") {
             setProgress(msg.data);
           } else if (msg.type === "result") {
             const resultData = msg.data;
@@ -850,7 +858,17 @@ export default function Home() {
   // A pending CSV upload is onboarded first (scheduler commit 3 moves that
   // onto the queue too).
   const handleRefresh = useCallback(async (asinsOverride?: string[]) => {
-    if (!asinsOverride && asins.length > 0) { await runAnalysis(asins); return; }
+    // A pending upload is onboarded ONCE; its "job_queued" message clears it,
+    // so every later click is a normal Refresh (fix 2026-10-18).
+    const plan = asinsOverride ? { kind: "refresh" as const } : refreshPlan(asins);
+    if (plan.kind === "onboard_upload") {
+      queuedJobIdsRef.current = [];
+      await runAnalysis(plan.asins);
+      for (const id of queuedJobIdsRef.current) {
+        try { const { job } = await getJob(id); jobs.watch(job); } catch { /* the job dialog still lists it */ }
+      }
+      return;
+    }
     const ws = asinsOverride ?? currentWorkingSet();
     if (ws.length === 0) return;
     try {
