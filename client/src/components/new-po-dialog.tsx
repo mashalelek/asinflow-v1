@@ -11,6 +11,7 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
+import { MoneyCalcInput, calcMoney } from "@/components/money-calc-input";
 import { checkPoForm, emptyPoForm, emptyProduct, SOLD_AS_OPTIONS, type PoFormState, type PoFormProduct } from "@shared/po-form";
 
 const todayYmd = () => { const d = new Date(); return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`; };
@@ -49,6 +50,16 @@ function AsinTypeahead({ value, onChange, rowIndex, known }: { value: string; on
   );
 }
 
+/** Every money field of the form with its expression calculated (shared/money-expr.ts). */
+export function settleMoney(f: PoFormState): { ok: true; form: PoFormState } | { ok: false; error: string } {
+  const one = (v: string): string => { const c = calcMoney(v); if (!c.ok) throw new Error(`"${v}": ${c.error}`); return c.text; };
+  try {
+    const out: PoFormState = { ...f, products: f.products.map((p) => ({ ...p, price: one(p.price), prep_cost: one(p.prep_cost) })), cost_overrides: Object.fromEntries(Object.entries(f.cost_overrides).map(([k, v]) => [k, one(v)])) };
+    for (const k of ["subtotal", "tax", "sh_donations", "discount", "refund_amount", "order_total"] as const) out[k] = one(f[k]);
+    return { ok: true, form: out };
+  } catch (e: any) { return { ok: false, error: e.message }; }
+}
+
 export function NewPoDialog({ open, onOpenChange, onCreated }: { open: boolean; onOpenChange: (v: boolean) => void; onCreated: (poId: string) => void }) {
   const [form, setForm] = useState<PoFormState>(() => emptyPoForm(todayYmd()));
   const [busy, setBusy] = useState(false);
@@ -75,20 +86,26 @@ export function NewPoDialog({ open, onOpenChange, onCreated }: { open: boolean; 
 
   const save = async () => {
     setTouched(true); setServerErr(null);
-    if (!check.ok) return;
+    // A money field still holding an expression (typed, not yet blurred) is calculated first.
+    const settled = settleMoney(form);
+    if (!settled.ok) { setServerErr(`A money field can't be calculated: ${settled.error}`); return; }
+    setForm(settled.form);
+    if (!checkPoForm(settled.form).ok) return;
     setBusy(true);
     try {
-      const res = await fetch("/api/pos", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(form) });
+      const res = await fetch("/api/pos", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(settled.form) });
       const data = await res.json().catch(() => ({}));
       if (!res.ok) throw new Error(data.message || `HTTP ${res.status}`);
       onOpenChange(false); onCreated(String(data.poId));
     } catch (e: any) { setServerErr(e.message); } finally { setBusy(false); }
   };
 
-  const field = (k: keyof PoFormState, label: string, opts: { w?: string; type?: string; ph?: string } = {}) => (
+  const field = (k: keyof PoFormState, label: string, opts: { w?: string; type?: string; ph?: string; money?: boolean } = {}) => (
     <div className="space-y-1">
       <Label className="text-xs text-muted-foreground" htmlFor={`new-po-${k}`}>{label}</Label>
-      <Input id={`new-po-${k}`} type={opts.type ?? "text"} value={form[k] as string} onChange={(e) => set(k, e.target.value)} placeholder={opts.ph} className={`h-8 text-sm ${opts.w ?? ""}`} data-testid={`input-new-po-${k}`} />
+      {opts.money
+        ? <MoneyCalcInput id={`new-po-${k}`} value={form[k] as string} onChange={(v) => set(k, v)} placeholder={opts.ph} className={`h-8 text-sm ${opts.w ?? ""}`} data-testid={`input-new-po-${k}`} />
+        : <Input id={`new-po-${k}`} type={opts.type ?? "text"} value={form[k] as string} onChange={(e) => set(k, e.target.value)} placeholder={opts.ph} className={`h-8 text-sm ${opts.w ?? ""}`} data-testid={`input-new-po-${k}`} />}
     </div>
   );
   const th = "px-2 py-1.5 text-[11px] font-medium text-left whitespace-nowrap text-muted-foreground";
@@ -106,12 +123,12 @@ export function NewPoDialog({ open, onOpenChange, onCreated }: { open: boolean; 
           {field("order_id", "Order #")}
           {field("order_date", "Order date", { type: "date" })}
           {field("purchased_by", "Purchased by")}
-          {field("subtotal", "Subtotal", { ph: check.computedSubtotal.toFixed(2) })}
-          {field("tax", "Tax", { ph: "0.00" })}
-          {field("sh_donations", "S&H + Donations", { ph: "0.00" })}
-          {field("discount", "Discount", { ph: "0.00" })}
-          {field("refund_amount", "Refund amount", { ph: "0.00" })}
-          {field("order_total", "Order total", { ph: check.effectiveOrderTotal.toFixed(2) })}
+          {field("subtotal", "Subtotal", { ph: check.computedSubtotal.toFixed(2), money: true })}
+          {field("tax", "Tax", { ph: "0.00", money: true })}
+          {field("sh_donations", "S&H + Donations", { ph: "0.00", money: true })}
+          {field("discount", "Discount", { ph: "0.00", money: true })}
+          {field("refund_amount", "Refund amount", { ph: "0.00", money: true })}
+          {field("order_total", "Order total", { ph: check.effectiveOrderTotal.toFixed(2), money: true })}
           {field("payment_method", "Payment method")}
           {field("weighted_gc_discount_pct", "Weighted GC %")}
           {field("cashback_site", "Cashback site")}
@@ -136,7 +153,7 @@ export function NewPoDialog({ open, onOpenChange, onCreated }: { open: boolean; 
                     <tr style={{ borderTop: "0.5px solid hsl(var(--border))" }} data-testid={`row-new-po-product-${i}`}>
                       <td className="px-2 py-1.5"><Input value={p.product_name} onChange={(e) => setP(i, "product_name", e.target.value)} className="h-8 text-xs min-w-[14rem]" data-testid={`input-new-po-product_name-${i}`} /></td>
                       <td className="px-2 py-1.5"><Input value={p.supplier_sku} onChange={(e) => setP(i, "supplier_sku", e.target.value)} className="h-8 text-xs w-28" data-testid={`input-new-po-supplier_sku-${i}`} /></td>
-                      <td className="px-2 py-1.5"><Input value={p.price} onChange={(e) => setP(i, "price", e.target.value)} inputMode="decimal" className="h-8 text-xs w-20 text-right" data-testid={`input-new-po-price-${i}`} /></td>
+                      <td className="px-2 py-1.5"><MoneyCalcInput value={p.price} onChange={(v) => setP(i, "price", v)} className="h-8 text-xs w-20 text-right" data-testid={`input-new-po-price-${i}`} /></td>
                       <td className="px-2 py-1.5"><Input value={p.qty_ordered} onChange={(e) => setP(i, "qty_ordered", e.target.value)} inputMode="numeric" className="h-8 text-xs w-16 text-right" data-testid={`input-new-po-qty_ordered-${i}`} /></td>
                       <td className="px-2 py-1.5 align-top"><AsinTypeahead value={p.asin} onChange={(v) => setP(i, "asin", v)} rowIndex={i} known={known} /></td>
                       <td className="px-2 py-1.5"><Input value={p.asin_qty_per_product} onChange={(e) => setP(i, "asin_qty_per_product", e.target.value)} inputMode="decimal" className="h-8 text-xs w-16 text-right" data-testid={`input-new-po-yield-${i}`} /></td>
@@ -146,7 +163,7 @@ export function NewPoDialog({ open, onOpenChange, onCreated }: { open: boolean; 
                         </select>
                       </td>
                       <td className="px-2 py-1.5"><Input value={p.units_per_pack} disabled={p.sold_as === "individual"} onChange={(e) => setP(i, "units_per_pack", e.target.value)} inputMode="numeric" className="h-8 text-xs w-16 text-right" data-testid={`input-new-po-units_per_pack-${i}`} /></td>
-                      <td className="px-2 py-1.5"><Input value={p.prep_cost} onChange={(e) => setP(i, "prep_cost", e.target.value)} inputMode="decimal" className="h-8 text-xs w-16 text-right" data-testid={`input-new-po-prep_cost-${i}`} /></td>
+                      <td className="px-2 py-1.5"><MoneyCalcInput value={p.prep_cost} onChange={(v) => setP(i, "prep_cost", v)} className="h-8 text-xs w-16 text-right" data-testid={`input-new-po-prep_cost-${i}`} /></td>
                       <td className="px-2 py-1.5"><button onClick={() => delP(i)} disabled={form.products.length === 1} className="text-muted-foreground/60 hover:text-destructive disabled:opacity-30" title="Remove product" data-testid={`button-new-po-remove-${i}`}><Trash2 className="h-3.5 w-3.5" /></button></td>
                     </tr>
                     {touched && check.productErrors[i] && (
@@ -176,7 +193,7 @@ export function NewPoDialog({ open, onOpenChange, onCreated }: { open: boolean; 
                     <td className="px-2 py-1 text-right">{a.qty}</td>
                     <td className="px-2 py-1 text-right">{a.lines.length}</td>
                     <td className="px-2 py-1 text-right">
-                      <Input value={form.cost_overrides[a.asin] ?? ""} onChange={(e) => setOverride(a.asin, e.target.value)} placeholder={a.computed_cost_per_unit ?? "—"} inputMode="decimal" className="h-7 w-24 text-right text-xs" data-testid={`input-new-po-cost-${a.asin}`} />
+                      <MoneyCalcInput value={form.cost_overrides[a.asin] ?? ""} onChange={(v) => setOverride(a.asin, v)} placeholder={a.computed_cost_per_unit ?? "—"} className="h-7 w-24 text-right text-xs" data-testid={`input-new-po-cost-${a.asin}`} />
                     </td>
                     <td className="px-2 py-1 text-[10px] text-muted-foreground">{form.cost_overrides[a.asin] ? "typed" : "from price × total ÷ subtotal × (1 − GC %)"}</td>
                   </tr>

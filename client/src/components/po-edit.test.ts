@@ -38,7 +38,7 @@ describe("New PO form (po-af-owned §4)", () => {
     expect(page).toMatch(/onCreated=\{\(id\) => navigate\(`\/purchase-orders\/\$\{id\}`\)\}/);
     const dlg = readFileSync(resolve(__dirname, "new-po-dialog.tsx"), "utf8");
     expect(dlg).toMatch(/const check = useMemo\(\(\) => checkPoForm\(form\), \[form\]\);/);
-    expect(dlg).toMatch(/fetch\("\/api\/pos", \{ method: "POST", headers: \{ "Content-Type": "application\/json" \}, body: JSON\.stringify\(form\) \}\)/);
+    expect(dlg).toMatch(/fetch\("\/api\/pos", \{ method: "POST", headers: \{ "Content-Type": "application\/json" \}, body: JSON\.stringify\(settled\.form\) \}\)/);
     expect(dlg).toMatch(/fetch\(`\/api\/pos\/asin-lookup\?q=\$\{encodeURIComponent\(q\)\}`\)/);
   });
 });

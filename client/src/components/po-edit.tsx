@@ -20,6 +20,7 @@ import { Sheet, SheetContent, SheetHeader, SheetTitle, SheetDescription, SheetFo
 import { useToast } from "@/hooks/use-toast";
 import { fmtQty, productQtyFromAsin } from "@/lib/po-qty";
 import type { PoAsinRowData, PoAsinLine } from "@/components/po-asin-rows";
+import { MoneyCalcInput, calcMoney } from "@/components/money-calc-input";
 
 export const ORDER_ID_WARNING = "order # is how shipments are matched from Velocity; changing it re-matches on the next Sync Shipments";
 
@@ -38,27 +39,37 @@ export function editText(v: unknown): string {
   return /^-?\d+\.\d+$/.test(s) ? String(Number(s)) : s;
 }
 
-export function InlineEdit({ value, children, onSave, align = "left", width = "w-24", testId, title = "Click to edit" }: {
+export function InlineEdit({ value, children, onSave, align = "left", width = "w-24", testId, title = "Click to edit", money = false }: {
   value: unknown; children: React.ReactNode; onSave: (v: string) => Promise<void>; align?: "left" | "right"; width?: string; testId: string; title?: string;
+  /** A cost / money cell: an arithmetic expression is calculated (shared/money-expr.ts) before saving. */
+  money?: boolean;
 }) {
   const [editing, setEditing] = useState(false);
   const [draft, setDraft] = useState("");
   const [err, setErr] = useState<string | null>(null);
+  const [expr, setExpr] = useState<string | null>(null);
   const start = (e: React.MouseEvent) => { e.stopPropagation(); setDraft(editText(value)); setErr(null); setEditing(true); };
   const save = async () => {
+    let next = draft.trim();
+    if (money) {
+      const c = calcMoney(next);
+      if (!c.ok) { setErr(`Can't calculate: ${c.error}`); return; } // stay in the field, keep the text
+      if (c.expression) { setExpr(c.expression); next = c.text; }
+    }
     setEditing(false);
-    if (draft.trim() === editText(value).trim()) return;
-    try { await onSave(draft.trim()); } catch (e: any) { setErr(e.message); }
+    if (next === editText(value).trim()) return;
+    try { await onSave(next); } catch (e: any) { setErr(e.message); }
   };
   if (editing) {
     return (
-      <input autoFocus value={draft} onChange={(e) => setDraft(e.target.value)} onBlur={save} onClick={(e) => e.stopPropagation()}
+      <input autoFocus value={draft} onChange={(e) => { setErr(null); setDraft(e.target.value); }} onBlur={save} onClick={(e) => e.stopPropagation()}
         onKeyDown={(e) => { if (e.key === "Enter") void save(); if (e.key === "Escape") setEditing(false); }}
-        className={`h-6 ${width} rounded border border-input bg-background px-1 text-xs ${align === "right" ? "text-right" : ""}`} data-testid={`input-${testId}`} />
+        title={err ?? (money ? "Amount or a calculation, e.g. 24.99*2/3+1.5" : undefined)} aria-invalid={err ? true : undefined}
+        className={`h-6 ${width} rounded border bg-background px-1 text-xs ${err ? "border-destructive ring-1 ring-destructive" : "border-input"} ${align === "right" ? "text-right" : ""}`} data-testid={`input-${testId}`} />
     );
   }
   return (
-    <button type="button" onClick={start} className={`w-full ${align === "right" ? "text-right" : "text-left"} hover:underline decoration-dotted`} title={err ?? title} data-testid={`edit-${testId}`}>
+    <button type="button" onClick={start} className={`w-full ${align === "right" ? "text-right" : "text-left"} hover:underline decoration-dotted`} title={err ?? (expr ? `= ${expr}` : title)} data-testid={`edit-${testId}`}>
       {children}{err && <span className="ml-1 text-destructive" title={err}>!</span>}
     </button>
   );
@@ -127,7 +138,14 @@ export function PoHeaderDrawer({ po, open, onOpenChange, onSaved }: { po: Record
     if (Object.keys(changes).length === 0) { onOpenChange(false); return; }
     setBusy(true); setErr(null);
     try {
-      const r = await poApi(`/api/pos/${po.id}`, "PATCH", changes);
+      const body: Record<string, string> = {};
+      for (const [k, v] of Object.entries(changes)) {
+        const isMoney = HEADER_GROUPS.some((g) => g.fields.some((f) => f.key === k && f.type === "money"));
+        const c = isMoney ? calcMoney(v) : { ok: true as const, text: v, expression: null };
+        if (!c.ok) throw new Error(`${k}: can't calculate (${c.error})`);
+        body[k] = c.text;
+      }
+      const r = await poApi(`/api/pos/${po.id}`, "PATCH", body);
       toast({ title: `PO updated (${r.changes?.length ?? 0} field${r.changes?.length === 1 ? "" : "s"})`, description: r.warning ?? undefined });
       onOpenChange(false); onSaved();
     } catch (e: any) { setErr(e.message); } finally { setBusy(false); }
@@ -148,8 +166,10 @@ export function PoHeaderDrawer({ po, open, onOpenChange, onSaved }: { po: Record
                   <Label htmlFor={`po-edit-${f.key}`} className="text-xs text-muted-foreground">{f.label}</Label>
                   {f.type === "area" ? (
                     <Textarea id={`po-edit-${f.key}`} value={draft[f.key] ?? ""} onChange={(e) => setDraft({ ...draft, [f.key]: e.target.value })} rows={3} data-testid={`input-po-${f.key}`} />
+                  ) : f.type === "money" ? (
+                    <MoneyCalcInput id={`po-edit-${f.key}`} value={draft[f.key] ?? ""} onChange={(v) => setDraft((d) => ({ ...d, [f.key]: v }))} className="h-8 text-sm" data-testid={`input-po-${f.key}`} />
                   ) : (
-                    <Input id={`po-edit-${f.key}`} type={f.type === "date" ? "date" : "text"} inputMode={f.type === "money" || f.type === "pct" ? "decimal" : undefined}
+                    <Input id={`po-edit-${f.key}`} type={f.type === "date" ? "date" : "text"} inputMode={f.type === "pct" ? "decimal" : undefined}
                       value={draft[f.key] ?? ""} onChange={(e) => setDraft({ ...draft, [f.key]: e.target.value })} className="h-8 text-sm" data-testid={`input-po-${f.key}`} />
                   )}
                 </div>
@@ -213,7 +233,7 @@ export function PoProductsTable({ poId, asins, onChanged }: { poId: string; asin
                 <tr key={l.id} className="table-zebra-stone" style={hairline} data-testid={`row-product-${l.id}`}>
                   <td className="px-3 py-1.5 max-w-[320px]"><InlineEdit value={l.product_name} onSave={patch(l, "product_name")} width="w-64" testId={`product_name-${l.id}`}><span className="truncate block" title={l.product_name ?? ""}>{l.product_name ?? <Muted v="—" />}</span></InlineEdit></td>
                   <td className="px-3 py-1.5 font-mono text-xs"><InlineEdit value={l.supplier_sku} onSave={patch(l, "supplier_sku")} width="w-32" testId={`supplier_sku-${l.id}`}>{l.supplier_sku ?? <Muted v="—" />}</InlineEdit></td>
-                  <td className="px-3 py-1.5 text-right"><InlineEdit value={l.price} onSave={patch(l, "price")} align="right" width="w-20" testId={`price-${l.id}`}><MoneyText v={l.price} /></InlineEdit></td>
+                  <td className="px-3 py-1.5 text-right"><InlineEdit money value={l.price} onSave={patch(l, "price")} align="right" width="w-20" testId={`price-${l.id}`}><MoneyText v={l.price} /></InlineEdit></td>
                   <td className="px-3 py-1.5 text-right"><MoneyText v={l.item_discount} /></td>
                   <td className="px-3 py-1.5 text-right"><InlineEdit value={l.qty_ordered} onSave={patch(l, "qty_ordered")} align="right" width="w-16" testId={`qty_ordered-${l.id}`}><QtyText v={l.qty_ordered} /></InlineEdit></td>
                   <td className="px-3 py-1.5 text-right"><InlineEdit value={l.qty_received} onSave={patch(l, "qty_received")} align="right" width="w-16" testId={`qty_received-${l.id}`}><QtyText v={l.qty_received} /></InlineEdit></td>
