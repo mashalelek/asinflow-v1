@@ -5222,17 +5222,16 @@ before 2026 any non-ASIN value, for 2026 rows only values longer than 10)
 skips that PO, listed with its sheet row and reason (`skippedBadCells`).
 Rows without an ASIN and rows with a blank Order ID are listed
 (`skippedRows`). Once the cell is fixed in the sheet, a normal Sync POs
-inserts the PO. First import (local, 2026-10-18): 1,360 history POs
-inserted, 31 skipped for a bad cell, 135 rows skipped; 6 of the 751 cost
-ASINs sit only on four skipped POs with a bare "%" in the cashback-percent
-cell (webstaurantstore.com 107223560, harborfreight.com 125494885,
-govets.com 000457055, drsquatch.com 10125418393).
+inserts the PO. A cashback-% cell holding only "%" means no cashback
+(site and percent NULL), not a bad cell. First import (local,
+2026-10-18): 1,369 history POs inserted, 22 POs skipped for a bad cell,
+135 rows skipped — all listed in `docs/po-history-skips-2026-10-18.csv`
+(supplier, order_id, sheet row, column, cell value, reason).
 
 **Cost evidence for the AF-owned switch (§3):** for the 751 catalog ASINs
-whose actual COGS came only from pre-2026 sheet rows, 745 now have an AF PO
+whose actual COGS came only from pre-2026 sheet rows, all now have an AF PO
 ASIN row and the sheet reader's cost equals the cost/unit on that ASIN's
-newest non-canceled AF row for all 745 (0 mismatches); the other 6 are the
-skipped POs above. B000GGJCOI: shop.thriftywhite.com 911520, 2025-12-28,
+newest non-canceled AF row: **751 / 751, 0 mismatches**. B000GGJCOI: shop.thriftywhite.com 911520, 2025-12-28,
 $5.86.
 
 **Velocity order 10507736 = AF PO `10548557_10507736`** (leadersrpmshop.com,
