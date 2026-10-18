@@ -1,5 +1,7 @@
 # Spec patch — AF owns POs: sheet is intake-only, POs editable in AF, New PO form
 
+> **P1 blocker resolved (2026-10-18):** the pre-2026 PO history is now in AF (`claude_spec-patch-po-history-import.md`). For 745 of the 751 cost ASINs the sheet reader's cost equals the newest non-canceled AF PO ASIN row (0 mismatches); the other 6 sit on four POs skipped for a bare "%" cell and import once the cell is fixed. `po_asin_shipments.assigned_by` (§5.2) already exists (migration 060). Resume at commit 2 once the import is live on production.
+
 Date: 2026-10-17
 Status: APPROVED 2026-10-17 (Maria's decisions in §7; stop only on the pre-flight conditions in §1)
 Supersedes: "sheet wins fully" in `claude_spec-patch-po-sheet-sync.md` (D2) and the sheet-side Closed/action-item/cancel mapping for existing POs in `claude_spec-patch-row-level-status.md` §2.3.

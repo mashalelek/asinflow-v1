@@ -5191,6 +5191,65 @@ returns the plan with nothing written.
   The dry run and the live run return the same shape; the dev-server log
   prints the counts under `[sheets]`.
 
+### PO history: pre-2026 POs (patch `docs/claude_spec-patch-po-history-import.md`, 2026-10-18)
+
+Profiling report `docs/po-history-import-profile-2026-10-18.md`. Sync POs
+no longer filters by year: every sheet row is considered and existing POs
+are skipped as before. A PO dated before 2026-01-01 is inserted through the
+same path with these history rules (Maria 2026-10-18):
+
+- **Closed** at its order date with `closed_by = 'import'` — shown as
+  "Imported (history)"; the sheet's row Status never reopens it. No
+  shipment rows; On Order already ignores POs before the reconciliation
+  start.
+- **Prep NULL** (not recorded): Col AS did not exist before 2026, so a
+  blank is never read as $0.
+- **Pack size**: Col AX / AY did not exist either. A single-product ASIN
+  whose yield is 1/n (0.5, 0.33, 0.25…) becomes an n-pack (`multi-pack`,
+  units/pack n); everything else individual ×1. First import: 287 n-packs,
+  1,935 individual.
+- Action items are imported as recorded (48 history POs carry some).
+
+Status map additions, all years: **"Lost / Damaged by Us"** →
+`po_asins.qty_lost_damaged_us` = Σ Col V × yield over the rows carrying the
+token (written only when a row carries it, never cleared); **"Partial
+Return"** → treated as Returned (qty from Col R where present).
+
+**Bad cells skip one PO, never the read:** an unparseable cell (percent
+"%", int "5, 1", money) or an ASIN cell that is not one ASIN ("Shipping
+Supplies", "NA", two ASINs in one cell, "B01CY3N2AU_Do Not Use for COGS";
+before 2026 any non-ASIN value, for 2026 rows only values longer than 10)
+skips that PO, listed with its sheet row and reason (`skippedBadCells`).
+Rows without an ASIN and rows with a blank Order ID are listed
+(`skippedRows`). Once the cell is fixed in the sheet, a normal Sync POs
+inserts the PO. First import (local, 2026-10-18): 1,360 history POs
+inserted, 31 skipped for a bad cell, 135 rows skipped; 6 of the 751 cost
+ASINs sit only on four skipped POs with a bare "%" in the cashback-percent
+cell (webstaurantstore.com 107223560, harborfreight.com 125494885,
+govets.com 000457055, drsquatch.com 10125418393).
+
+**Cost evidence for the AF-owned switch (§3):** for the 751 catalog ASINs
+whose actual COGS came only from pre-2026 sheet rows, 745 now have an AF PO
+ASIN row and the sheet reader's cost equals the cost/unit on that ASIN's
+newest non-canceled AF row for all 745 (0 mismatches); the other 6 are the
+skipped POs above. B000GGJCOI: shop.thriftywhite.com 911520, 2025-12-28,
+$5.86.
+
+**Velocity order 10507736 = AF PO `10548557_10507736`** (leadersrpmshop.com,
+2026-06-21): the real order ID is 10548557; Velocity holds the typo
+10507736 and cannot be edited after shipping. The AF PO was renamed in
+place (migration 060; same ids and shipment rows), the sheet row reads
+`10548557_10507736`, and its two shipment rows are pinned
+`assigned_by = 'manual'` with Velocity Order # 10507736, so the 2025 order
+10507736 (imported as its own PO) never captures them.
+
+**Manual shipment assignments** (`po_asin_shipments.assigned_by`,
+`velocity_order_number`, migration 060 — pulled forward from the
+AF-owned patch §5.2): Sync Shipments resolves a Velocity line through a
+manual pin (Velocity shipment + Velocity Order # + ASIN) before anything
+else — the row keeps its PO ASIN row and only its quantities refresh; At
+Prep follows the pin (`linesPinned`).
+
 ### Shipment reconciliation (`server/shipment-sync-velocity.ts`, `server/shipment-sync-sc.ts`, 2026-10-17)
 
 **Sync Shipments** (POs page, D3): a direct call (`POST
