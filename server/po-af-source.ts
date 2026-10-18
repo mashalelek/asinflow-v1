@@ -45,11 +45,28 @@ export async function loadAfAsinCostMap(query: QueryLike, asins?: readonly strin
 }
 
 /**
+ * U for a single-line ASIN row. po_asins.qty is an integer, so a pack order
+ * whose units do not divide by units/pack (5 units of a 2-pack = 2.5 packs)
+ * was stored rounded (3). The sheet carried 2.5 and Upload to Velocity
+ * skipped it as invalid_pack_math; return the fractional pack count in that
+ * case so the same fail-closed skip fires. Otherwise the stored qty (the
+ * stored yields are 2 dp, so qty_ordered × yield is noisy: 48 × 0.33).
+ */
+export function singleLineQty(asinQty: number, ordered: number | null, yieldT: number | null, upp: number): number {
+  if (upp > 1 && ordered != null && yieldT != null) {
+    const units = Math.round(ordered * yieldT * upp);
+    if (Math.abs(ordered * yieldT * upp - units) < 0.05 && units % upp !== 0) return Math.round((units / upp) * 100) / 100;
+  }
+  return asinQty;
+}
+
+/**
  * One SheetRow per product line, newest PO first (the sheet's order). Field
  * mapping: D status ← "Closed" when the PO is closed, "Canceled" when the line
- * is fully canceled; U qty ← the line's ASIN qty (the ASIN row's qty for a
- * single line; ÷ unique_products for a bundle component; qty × yield for an
- * S=1 multi-line group); AZ quantity ← ASIN qty × units/pack; AX / AY /
+ * is fully canceled; U qty ← the line's ASIN qty (singleLineQty for a single
+ * line; ÷ unique_products for a bundle component; qty × yield for an S=1
+ * multi-line group); AZ quantity ← units (bundle: sets × units per bundle,
+ * the sheet's N × AY; otherwise U × units/pack); AX / AY /
  * S / T from the ASIN row and line. rawRowsRead = lines read.
  */
 export async function loadAfPoRows(query: QueryLike): Promise<{ rows: SheetRow[]; rawRowsRead: number; blankAsinRows: number }> {
@@ -65,10 +82,10 @@ export async function loadAfPoRows(query: QueryLike): Promise<{ rows: SheetRow[]
     const asinQty = num(r.asin_qty) ?? 0;
     const lines = Number(r.line_count) || 1;
     const bundle = String(r.sold_as) === "bundle" && (num(r.unique_products) ?? 1) > 1;
-    const lineQty = lines === 1 ? asinQty
-      : bundle ? asinQty / (num(r.unique_products) ?? 1)
-      : Math.round((num(r.qty_ordered) ?? 0) * (num(r.asin_qty_per_product) ?? 1) * 100) / 100;
     const upp = num(r.units_per_pack) ?? 1;
+    const lineQty = bundle ? asinQty / (num(r.unique_products) ?? 1)
+      : lines === 1 ? singleLineQty(asinQty, num(r.qty_ordered), num(r.asin_qty_per_product), upp)
+      : Math.round((num(r.qty_ordered) ?? 0) * (num(r.asin_qty_per_product) ?? 1) * 100) / 100;
     const status = [r.closed ? "Closed" : null, r.canceled ? "Canceled" : null].filter(Boolean).join(", ") || "Ordered";
     return {
       sheetRow: i + 2,
@@ -85,12 +102,13 @@ export async function loadAfPoRows(query: QueryLike): Promise<{ rows: SheetRow[]
       itemName: str(r.asin_name),
       productName: str(r.product_name),
       qtyOrderedL: r.qty_ordered == null ? null : String(r.qty_ordered),
-      setsN: String(asinQty),
+      setsN: String(bundle || lines > 1 ? asinQty : lineQty),
       uniqueS: String(num(r.unique_products) ?? 1),
       yieldT: r.asin_qty_per_product == null ? null : String(Number(r.asin_qty_per_product)),
       soldAs: str(r.sold_as),
       unitsPerPack: String(upp),
-      quantity: String(Math.round(lineQty * (bundle ? 1 : upp) * 100) / 100),
+      // AZ: total units — sets × units per bundle for a bundle, packs × units/pack otherwise.
+      quantity: String(Math.round((bundle ? asinQty : lineQty) * upp * 100) / 100),
     };
   });
   return { rows, rawRowsRead: rows.length, blankAsinRows: 0 };

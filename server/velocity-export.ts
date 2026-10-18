@@ -2,7 +2,8 @@
 // delivery client that consumes the same records). Delivery-agnostic:
 // buildVelocityRecords() returns plain record objects; serialization lives in
 // serializeVelocityCsv(). See SPEC §11 "Velocity upload export".
-import { fetchSheetRows } from "./google-sheets";
+import type { SheetRow } from "./google-sheets";
+import { loadAfPoRows } from "./po-af-source";
 import { query as defaultQuery } from "./db";
 
 type QueryLike = (sql: string, params?: any[]) => Promise<{ rows: any[]; rowCount: number | null }>;
@@ -157,11 +158,9 @@ export function serializeVelocityCsv(records: VelocityRecord[]): string {
 export async function buildVelocityRecords(
   from: Date,
   to: Date,
-  deps: { query?: QueryLike } = {},
+  deps: { query?: QueryLike; loadRows?: () => Promise<SheetRow[]> } = {},
 ): Promise<VelocityBuildResult> {
   const query = deps.query ?? (defaultQuery as any as QueryLike);
-  const sheetId = process.env.GOOGLE_SHEET_ID;
-  if (!sheetId) throw new Error("GOOGLE_SHEET_ID not configured");
 
   // Creation floor clamp (before any sheet fetch — cheap early exit).
   const floor = getVelocityMinOrderDate();
@@ -173,7 +172,9 @@ export async function buildVelocityRecords(
     return { records: [], bundles: [], bundleFlags: [], selfPrepExcluded: 0, skips: [], requestedFrom, effectiveFrom, clamped, rangeBeforeFloor };
   }
 
-  const rows = await fetchSheetRows(sheetId);
+  // Source = the AF PO tables in the sheet's row shape (po-af-owned §2.4,
+  // 2026-10-18); the Orders sheet is intake-only and no longer read here.
+  const rows = deps.loadRows ? await deps.loadRows() : (await loadAfPoRows(query)).rows;
   const skips: VelocitySkip[] = [];
   let selfPrepExcluded = 0;
 

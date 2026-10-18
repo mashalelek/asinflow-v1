@@ -8,7 +8,8 @@
 // check-in case (a partial cancel on the sheet vs. a full check-in in
 // Velocity is a per-PO mismatch on that order) — the former ASIN-level
 // aggregate check was removed 2026-07-30 as redundant with it.
-import { fetchSheetRows } from "./google-sheets";
+import type { SheetRow } from "./google-sheets";
+import { loadAfPoRows } from "./po-af-source";
 import { query as defaultQuery } from "./db";
 import {
   buildVelocityRecords, formatYMD,
@@ -125,14 +126,16 @@ export function withinOneDay(sheetDate: string, velocityDate: string): boolean {
 export async function buildVelocityPlan(
   from: Date,
   to: Date,
-  deps: { query?: QueryLike } = {},
+  deps: { query?: QueryLike; loadRows?: () => Promise<SheetRow[]> } = {},
 ): Promise<VelocityPlan> {
   const query = deps.query ?? (defaultQuery as any as QueryLike);
-  const sheetId = process.env.GOOGLE_SHEET_ID;
-  if (!sheetId) throw new Error("GOOGLE_SHEET_ID not configured");
+  // PO rows come from the AF PO tables (po-af-owned §2.4, 2026-10-18), read
+  // once and shared by the CREATE build and the match below.
+  const poRows = deps.loadRows ? await deps.loadRows() : (await loadAfPoRows(query)).rows;
+  const loadRows = async () => poRows;
 
   // CREATE candidates: full selection rules incl. creation floor + guards.
-  const build = await buildVelocityRecords(from, to, { query });
+  const build = await buildVelocityRecords(from, to, { query, loadRows });
 
   // Matching needs the FULL sheet (audit is status-bound, not date-bound) and
   // the full Velocity list.
@@ -141,10 +144,8 @@ export async function buildVelocityPlan(
   // never classify as CREATE (the duplicate-send near-miss, 2026-08-07).
   // fetchAllKnownOrders is fail-closed: any leg failing throws, the plan
   // build fails, and NOTHING is classified — no partial match set.
-  const [sheetRows, velocityOrders] = await Promise.all([
-    fetchSheetRows(sheetId),
-    fetchAllKnownOrders(),
-  ]);
+  const sheetRows = poRows;
+  const velocityOrders = await fetchAllKnownOrders();
 
   // §11 Part B.3 (2026-09-21): the plan is a preview (dryRun by nature), so
   // the identity recording it WOULD do is computed and reported — never

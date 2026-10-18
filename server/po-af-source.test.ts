@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { loadAfAsinCostMap, loadAfPoRows } from "./po-af-source";
+import { loadAfAsinCostMap, loadAfPoRows, singleLineQty } from "./po-af-source";
 
 // patch docs/claude_spec-patch-po-af-owned.md §2.4 — the AF PO tables replace
 // every Orders-sheet reader. These pin the SQL order (newest = order_date,
@@ -40,13 +40,23 @@ describe("loadAfPoRows", () => {
     expect(r.rows[0]).toMatchObject({ status: "Ordered", orderDate: "5/1/2025", qty: 6, quantity: "6", cogs: 4.99, prepCost: 1, orderNumber: "9929903576", retailer: "staples.com" });
     expect(r.rows[1]).toMatchObject({ status: "Closed, Canceled", orderDate: "4/30/2025" });
   });
-  it("U qty: bundle component = ASIN qty ÷ N (no pack multiply); S=1 multi-line = qty × yield; packs multiply AZ", async () => {
+  it("U qty: bundle component = ASIN qty ÷ N, AZ = sets × units per bundle; S=1 multi-line = qty × yield; packs multiply AZ", async () => {
     const { query } = fake([
       { ...base, sold_as: "bundle", unique_products: 2, asin_qty: 10, line_count: 2, units_per_pack: 3 },
       { ...base, sold_as: "pack", asin_qty: 5, line_count: 2, qty_ordered: 4, asin_qty_per_product: "0.5", units_per_pack: 2 },
     ]);
     const r = await loadAfPoRows(query);
-    expect(r.rows[0]).toMatchObject({ qty: 5, quantity: "5", uniqueS: "2", unitsPerPack: "3" });
+    expect(r.rows[0]).toMatchObject({ qty: 5, quantity: "30", uniqueS: "2", unitsPerPack: "3", setsN: "10" });
     expect(r.rows[1]).toMatchObject({ qty: 2, quantity: "4", yieldT: "0.5" });
+  });
+});
+
+describe("singleLineQty", () => {
+  it("non-divisible pack orders come back fractional (fail-closed invalid_pack_math); everything else is the stored qty", () => {
+    expect(singleLineQty(3, 5, 0.5, 2)).toBe(2.5);   // B007K83C46: 5 units of a 2-pack, stored 3
+    expect(singleLineQty(6, 11, 0.5, 2)).toBe(5.5);  // B006T0U4R4
+    expect(singleLineQty(6, 12, 0.5, 2)).toBe(6);    // divisible — stored qty
+    expect(singleLineQty(16, 48, 0.33, 1)).toBe(16); // individual, 2-dp yield noise — stored qty
+    expect(singleLineQty(4, null, null, 2)).toBe(4);
   });
 });

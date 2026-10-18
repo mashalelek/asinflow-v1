@@ -10,10 +10,12 @@ import { matchKeysForOrder } from "./velocity-api";
 vi.mock("./index", () => ({ log: () => {} }));
 
 let sheetRows: any[] = [];
-vi.mock("./google-sheets", async (importOriginal) => {
-  const real: any = await importOriginal();
-  return { ...real, fetchSheetRows: async () => sheetRows };
-});
+// Since po-af-owned §2.4 (2026-10-18) the rows come from the AF PO tables
+// (loadAfPoRows, sheet-shaped); the scripted rows stand in for them.
+vi.mock("./po-af-source", () => ({
+  loadAfPoRows: async () => ({ rows: sheetRows, rawRowsRead: sheetRows.length, blankAsinRows: 0 }),
+  loadAfAsinCostMap: async () => ({ data: new Map(), rowsRead: 0 }),
+}));
 
 import { buildVelocityRecords } from "./velocity-export";
 
@@ -41,7 +43,6 @@ function bRow(over: Partial<Record<string, any>> = {}) {
 }
 
 const RANGE: [Date, Date] = [new Date(2026, 7, 30), new Date(2026, 7, 30)];
-process.env.GOOGLE_SHEET_ID = "test-sheet";
 process.env.VELOCITY_MIN_ORDER_DATE = "1/1/2026";
 
 describe("bundle derivation (SPEC §11 Bundles)", () => {
