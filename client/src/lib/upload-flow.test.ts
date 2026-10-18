@@ -1,7 +1,7 @@
 import { describe, it, expect } from "vitest";
 import { readFileSync } from "fs";
 import { join } from "path";
-import { refreshPlan, queuedJobIdFromMessage, applyStreamedRow, mergeNonEmpty } from "./upload-flow";
+import { refreshPlan, queuedJobIdFromMessage, applyStreamedRow, mergeNonEmpty, jobTouchesRows } from "./upload-flow";
 
 // Fix 2026-10-18 (the 11-ASIN diagnosis): upload state, stream merge, reload on job completion.
 const read = (rel: string) => readFileSync(join(__dirname, "..", rel), "utf8");
@@ -53,5 +53,20 @@ describe("2. a placeholder never blanks an existing row", () => {
     const home = read("pages/home.tsx");
     expect(home).toMatch(/return applyStreamedRow\(prev, resultData\);/);
     expect(home).not.toMatch(/const mergeWithExisting = /);
+  });
+});
+
+describe("3. a finished onboarding job refetches the rows on screen", () => {
+  it("jobTouchesRows: overlap or whole-catalog scope → true; disjoint → false", () => {
+    const onScreen = new Set(["B09HRDGW17", "B0D2RHBG85"]);
+    expect(jobTouchesRows({ scope_asins: ["b09hrdgw17", "B0XXXXXXX1"] }, onScreen)).toBe(true);
+    expect(jobTouchesRows({ scope_asins: null }, onScreen)).toBe(true);
+    expect(jobTouchesRows({ scope_asins: ["B0XXXXXXX1"] }, onScreen)).toBe(false);
+  });
+  it("the jobs hook hands every finished job that is not this tab's (onboarding included) to onSettled, and the page refetches on overlap", () => {
+    expect(read("hooks/use-jobs.ts")).toMatch(/if \(mineIds\.current\.has\(id\) \|\| job\.trigger === "scheduled"\) onFinishedRef\.current\(job\);\s*else onSettledRef\.current\?\.\(job\);/);
+    const home = read("pages/home.tsx");
+    expect(home).toMatch(/if \(jobTouchesRows\(job, onScreen\)\) void fetchAsins\(/);
+    expect(home).toMatch(/useJobs\(onJobFinished, onJobSettled\)/);
   });
 });

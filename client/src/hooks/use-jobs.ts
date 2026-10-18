@@ -22,12 +22,20 @@ export interface JobsState {
   mine: { job: Job; ahead: number } | null;
 }
 
-export function useJobs(onFinished: (job: Job) => void) {
+/**
+ * `onFinished` fires for jobs this tab is watching (toast + reload).
+ * `onSettled` fires for EVERY other finished job — onboarding jobs from an
+ * upload, other tabs' manual jobs, bulk — so the page can refetch rows the job
+ * touched (fix 2026-10-18: an onboarding job's results never reloaded).
+ */
+export function useJobs(onFinished: (job: Job) => void, onSettled?: (job: Job) => void) {
   const [state, setState] = useState<JobsState>({ scheduled: null, manual: null, queued: [], mine: null });
   const mineIds = useRef<Set<number>>(new Set());
   const activeIds = useRef<Set<number>>(new Set());
   const onFinishedRef = useRef(onFinished);
   onFinishedRef.current = onFinished;
+  const onSettledRef = useRef(onSettled);
+  onSettledRef.current = onSettled;
 
   const poll = useCallback(async () => {
     let cur: Awaited<ReturnType<typeof getCurrent>>;
@@ -45,6 +53,7 @@ export function useJobs(onFinished: (job: Job) => void) {
         const { job } = await getJob(id);
         if (job.status === "done" || job.status === "failed" || job.status === "cancelled") {
           if (mineIds.current.has(id) || job.trigger === "scheduled") onFinishedRef.current(job);
+          else onSettledRef.current?.(job);
           mineIds.current.delete(id);
         }
       } catch { /* a job that vanished entirely is not worth a toast */ }

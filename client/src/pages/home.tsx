@@ -26,7 +26,7 @@ import { loadColumnConfig, type ColumnConfig } from "@/lib/columns";
 import { JobsDialog } from "@/components/jobs-dialog";
 import { useJobs } from "@/hooks/use-jobs";
 import { enqueueRefresh, cancelJob, getJob, runningLabel, queuedLabel, completionText, FOCUS_ASIN_EVENT, type Job } from "@/lib/jobs-api";
-import { refreshPlan, queuedJobIdFromMessage, applyStreamedRow } from "@/lib/upload-flow";
+import { refreshPlan, queuedJobIdFromMessage, applyStreamedRow, jobTouchesRows } from "@/lib/upload-flow";
 import { ToastAction } from "@/components/ui/toast";
 import { loadBuyList, saveBuyList, loadOnHoldList, saveOnHoldList } from "@/lib/buy-hold";
 import { planBulkSetToggle, bulkToggleLabel, applyBulkPlan } from "@/lib/bulk-buy-hold";
@@ -344,6 +344,8 @@ export default function Home() {
   const [asins, setAsins] = useState<AsinInput[]>([]);
   const queuedJobIdsRef = useRef<number[]>([]);
   const [results, setResults] = useState<AsinResult[]>([]);
+  const resultsRef = useRef<AsinResult[]>([]);
+  resultsRef.current = results;
   // Shared + persisted (2026-09-09): fba-price-source, same key as Bulk Calc.
   const [priceSource, setPriceSource] = useState<PriceSource>(loadPriceSource);
   useEffect(() => { savePriceSource(priceSource); }, [priceSource]);
@@ -832,7 +834,13 @@ export default function Home() {
     void fetchAsins(startDate, endDate, showParked, showDead);
     fetchPriceStatus();
   }, [toast, fetchAsins, fetchPriceStatus, startDate, endDate, showParked, showDead]);
-  const jobs = useJobs(onJobFinished);
+  // Any other finished job (onboarding, another tab's Refresh, bulk) whose
+  // scope overlaps the rows on screen → refetch them (fix 2026-10-18).
+  const onJobSettled = useCallback((job: Job) => {
+    const onScreen = new Set(resultsRef.current.map((r) => r.asin.toUpperCase()));
+    if (jobTouchesRows(job, onScreen)) void fetchAsins(startDate, endDate, showParked, showDead);
+  }, [fetchAsins, startDate, endDate, showParked, showDead]);
+  const jobs = useJobs(onJobFinished, onJobSettled);
 
   // Refresh (N): scope = the checkbox selection, else every row of the
   // current filtered view (decision 15). asinsOverride powers Retry failed.
