@@ -1046,6 +1046,18 @@ export function getRunSheetsSync() {
   return runSheetsSync;
 }
 
+/** ASINs list: latest inventory snapshot per ASIN (LATERAL + LIMIT 1 on idx_inventory_latest). Exported for tests. */
+export const LATEST_INVENTORY_SQL = `
+  SELECT a.asin, i.available_fba, i.reserved, i.inbound_shipped, i.inbound_receiving
+    FROM asins a
+    CROSS JOIN LATERAL (
+      SELECT s.available_fba, s.reserved, s.inbound_shipped, s.inbound_receiving
+        FROM inventory_snapshots s
+       WHERE s.asin_id = a.id
+       ORDER BY s.snapshot_at DESC
+       LIMIT 1
+    ) i`;
+
 export async function registerRoutes(
   httpServer: Server,
   app: Express
@@ -1190,14 +1202,11 @@ export async function registerRoutes(
         ORDER BY a.last_refreshed_at DESC NULLS LAST
       `);
 
-      // Latest inventory snapshot per ASIN
-      const invResult = await query(`
-        SELECT DISTINCT ON (i.asin_id)
-          a.asin, i.available_fba, i.reserved, i.inbound_shipped, i.inbound_receiving
-        FROM inventory_snapshots i
-        JOIN asins a ON a.id = i.asin_id
-        ORDER BY i.asin_id, i.snapshot_at DESC
-      `).catch(() => ({ rows: [] as any[] }));
+      // Latest inventory snapshot per ASIN: one index probe per ASIN on
+      // idx_inventory_latest (asin_id, snapshot_at DESC) — never the whole
+      // history. The DISTINCT ON form it replaced read every snapshot (286,677
+      // rows on production, +~2,000 per hourly pass) to keep ~1,940: 2.6–3.3 s.
+      const invResult = await query(LATEST_INVENTORY_SQL).catch(() => ({ rows: [] as any[] }));
       const invMap = new Map<string, any>();
       for (const row of invResult.rows) invMap.set(row.asin, row);
       // On-order figures from the PO tables (patch asins-on-order-from-pos
