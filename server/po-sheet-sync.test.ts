@@ -56,6 +56,7 @@ function fakeDb(state: DbState) {
     if (s.startsWith("SELECT pa.*")) return { rows: state.asins, rowCount: state.asins.length };
     if (s.startsWith("SELECT * FROM po_line_items")) return { rows: state.lines, rowCount: state.lines.length };
     if (s.startsWith("SELECT asin, primary_sku")) return { rows: Object.entries(state.skus ?? {}).map(([asin, primary_sku]) => ({ asin, primary_sku })), rowCount: 0 };
+    if (s.startsWith("SELECT supplier, order_id FROM deleted_pos")) return { rows: (state as any).tombstones ?? [], rowCount: 0 };
     writes.push({ sql: s, params });
     if (s.startsWith("INSERT")) return { rows: [{ id: `new-${writes.length}` }], rowCount: 1 };
     return { rows: [], rowCount: 1 };
@@ -162,12 +163,14 @@ describe("syncPoSheet — dry run computes the §3.9 counts and writes nothing",
     expect(r.stop).toBeNull();
     expect(r.wrote).toBe(false);
     expect(r.counts).toEqual({
-      sheetPos: 7, inserted: 2, updated: 4, unchanged: 1, linesDeleted: 2, poAsinsDeleted: 1, poAsinsKeptWithShipments: 1,
-      canceledKeptOrderedQty: 1, canceledNoOrderedQty: 1, returnedNoQty: 0, lineActionItemsChanged: 0, historyInserted: 0, historyWithActionItems: 0, skippedBadCells: 0, posInAfNotInSheet: 1, unmappedTokens: 0, skippedMixed: 0,
+      // Intake-only (af-owned, 2026-10-18): the 4 existing POs that differ are reported as drift, nothing applied.
+      sheetPos: 7, inserted: 2, updated: 0, unchanged: 1, linesDeleted: 0, poAsinsDeleted: 0, poAsinsKeptWithShipments: 0,
+      canceledKeptOrderedQty: 0, canceledNoOrderedQty: 1, returnedNoQty: 0, lineActionItemsChanged: 0, historyInserted: 0, historyWithActionItems: 0, skippedBadCells: 0,
+      sheetDiffers: 4, tombstoned: 0, posInAfNotInSheet: 1, unmappedTokens: 0, skippedMixed: 0,
     });
     expect(r.inAfNotInSheet).toEqual(["walmart.com GONE (2026-03-01)"]);
-    expect(r.keptWithShipments).toEqual(["walmart.com A4 — B000000009 (2 shipment row(s))"]);
-    expect(r.canceledKept).toEqual(["walmart.com A5"]);
+    expect(r.keptWithShipments).toEqual([]);
+    expect(r.canceledKept).toEqual([]);
     expect(r.canceledNoQty).toEqual(["walmart.com NEWC"]);
     expect(db.writes).toEqual([]);
     const by = Object.fromEntries(r.diffs.map((d) => [d.po, d.changes]));
@@ -198,7 +201,7 @@ describe("syncPoSheet — dry run computes the §3.9 counts and writes nothing",
     expect(r.diffs.find((d) => d.po === "walmart.com A1")?.changes).toEqual(["B000000001 line 0.action_items: [] → [\"Confirm Refund / Replacement\"]"]);
   });
 
-  it("live run applies the plan in one transaction: inserts like the importer, updates in place, lines before ASIN rows, never an AF-owned column", async () => {
+  it("live run (intake-only, af-owned 2026-10-18): inserts new POs like the importer, Open, with entry_seq; never writes an existing PO", async () => {
     const db = fakeDb(state);
     const r = await syncPoSheet({ sheetId: "s", dryRun: false, db, read: read(cells) });
     expect(r.wrote).toBe(true);
@@ -206,39 +209,21 @@ describe("syncPoSheet — dry run computes the §3.9 counts and writes nothing",
     expect(sql[0]).toBe("BEGIN");
     expect(sql[sql.length - 2]).toBe("COMMIT");
     expect(sql[sql.length - 1]).toBe("RELEASE");
-    // Inserts: the importer's column lists, source = 'sheet_import', never `status`.
     const poInserts = db.writes.filter((w) => w.sql.startsWith("INSERT INTO purchase_orders"));
     expect(poInserts).toHaveLength(2);
-    expect(poInserts[0].sql).toMatch(/INSERT INTO purchase_orders \(order_id, order_date, supplier, action_items, closed_at, closed_by,/);
+    expect(poInserts[0].sql).toMatch(/INSERT INTO purchase_orders \(order_id, order_date, supplier, action_items, closed_at, closed_by,[\s\S]*source, entry_seq\)/);
     expect(poInserts[0].sql).toMatch(/'sheet_import'/);
     expect(poInserts[0].sql).not.toMatch(/\bstatus\b/);
+    // Closed is AF-only: NEWC (rows say "Closed, Canceled") arrives Open; nothing new writes closed_by = 'sheet'.
     const newc = poInserts.find((w) => w.params?.[0] === "NEWC")!;
-    expect(newc.params?.[5]).toBe("sheet");
+    expect([newc.params?.[4], newc.params?.[5]]).toEqual([null, null]);
+    expect(newc.params?.[22]).toBe(1); // entry_seq: 7 rows, NEWC on the last row → 7 − 6
     const lineInserts = db.writes.filter((w) => w.sql.startsWith("INSERT INTO po_line_items"));
     expect(lineInserts.find((w) => w.params?.[6] === 0 && w.params?.[11] === 0)).toBeTruthy(); // NEWC: ordered 0, qty_canceled 0 (as-is)
-    // Reopen regardless of 'auto' (D2), close with closed_by = 'sheet', action_items as text[].
-    const poUpdates = db.writes.filter((w) => w.sql.startsWith("UPDATE purchase_orders"));
-    expect(poUpdates.find((w) => w.params?.[0] === "p2")?.sql).toMatch(/closed_at = \$2, closed_by = \$3, updated_at = NOW\(\)/);
-    expect(poUpdates.find((w) => w.params?.[0] === "p3")?.sql).toMatch(/SET closed_at = NOW\(\), closed_by = \$2, updated_at = NOW\(\)/);
-    for (const w of poUpdates) expect(w.sql).not.toMatch(/action_items/); // PO-level column no longer written
-    // A4: both lines of the vanished ASIN deleted BEFORE its po_asins row; the kept ASIN (a4b) is never deleted.
-    const delLines = sql.findIndex((s) => s.startsWith("DELETE FROM po_line_items WHERE id = ANY"));
-    const delAsin = sql.findIndex((s) => s.startsWith("DELETE FROM po_asins"));
-    expect(delLines).toBeGreaterThan(0);
-    expect(delAsin).toBeGreaterThan(delLines);
-    expect(db.writes.filter((w) => w.sql.startsWith("DELETE FROM po_asins")).map((w) => w.params?.[0])).toEqual(["a4"]);
-    // A5: the line update carries qty_canceled = 12 and never touches qty_ordered; the ASIN row's qty is not updated.
-    const l5 = db.writes.find((w) => w.sql.startsWith("UPDATE po_line_items") && w.params?.[0] === "l5")!;
-    expect(l5.sql).toBe("UPDATE po_line_items SET qty_canceled = $2 WHERE id = $1");
-    expect(l5.params).toEqual(["l5", 12]);
-    expect(db.writes.find((w) => w.sql.startsWith("UPDATE po_asins") && w.params?.[0] === "a5")).toBeUndefined();
-    // AF-owned columns are never written (§3.6).
-    for (const w of db.writes.filter((x) => !x.sql.startsWith("INSERT INTO po_asins"))) expect(w.sql).not.toMatch(/qty_shipped_supplier|qty_at_prep|qty_at_warehouse|qty_lost_damaged_us|qty_shipped_fba|qty_received_amazon|po_asin_shipments|item_discount = |notes = /);
-    // INSERT INTO po_asins carries qty_lost_damaged_us since 2026-10-18 ("Lost / Damaged by Us" rows); never the other AF-owned columns.
-    for (const w of db.writes.filter((x) => x.sql.startsWith("INSERT INTO po_asins"))) expect(w.sql).not.toMatch(/qty_shipped_supplier|qty_at_prep|qty_at_warehouse|qty_shipped_fba|qty_received_amazon/);
-    // A PO missing from the sheet is never deleted (§3.5).
-    expect(sql.some((s) => s.startsWith("DELETE FROM purchase_orders"))).toBe(false);
+    // Existing POs are never written: no UPDATE / DELETE of any kind.
+    expect(sql.filter((x) => /^(UPDATE|DELETE)/.test(x))).toEqual([]);
   });
+;
 
   it("a rolled-back apply rethrows and releases the client", async () => {
     const db = fakeDb(state);
@@ -268,7 +253,7 @@ describe("Sync POs button (§4): PO sync first, then the per-ASIN sync; both out
     const page = read("client/src/pages/home.tsx");
     const h = page.slice(page.indexOf("const handleSyncSheet"), page.indexOf("}, [toast, currentWorkingSet, fetchAsins"));
     expect(h).toMatch(/fetchLongSync\("\/api\/sheets\/sync", \{ asins: ws \}\)/);
-    expect(h).toMatch(/POs: \+\$\{po\.counts\.inserted\} new, \$\{po\.counts\.updated\} updated, \$\{po\.counts\.unchanged\} unchanged/);
+    expect(h).toMatch(/POs: \+\$\{po\.counts\.inserted\} new\$\{po\.counts\.sheetDiffers \? `, \$\{po\.counts\.sheetDiffers\} existing differ from the sheet \(AF owns them — not applied\)`/);
     expect(h).toMatch(/POs: STOPPED, nothing written/);
     expect(h).toMatch(/POs: FAILED/);
     expect(h).toMatch(/ASINs: updated \$\{data\.updated\}, skipped \$\{data\.skipped\}/);
@@ -300,11 +285,11 @@ describe("row-level Status: each sheet row's Status maps onto its own line", () 
     expect(ch).toContain('B0H3XJTQVG line 0.action_items: [] → ["See Comments"]');
     expect(ch.some((c) => c.startsWith("B0H4P226KP line 0.action_items"))).toBe(false);
     expect(ch.some((c) => c.startsWith("action_items"))).toBe(false);
-    expect(r.counts.lineActionItemsChanged).toBe(1);
+    expect(r.counts.sheetDiffers).toBe(1); // drift only — intake-only since 2026-10-18
   });
   it("a Returned row with a blank Col R leaves qty_returned as stored and is reported", async () => {
     const r = await syncPoSheet({ sheetId: "s", dryRun: true, db: fakeDb(state), read: read(cells) });
-    expect(r.counts.returnedNoQty).toBe(1);
+    expect(r.counts.returnedNoQty).toBe(0); // existing POs are drift-only now; the note still appears in the drift
     const ch = r.diffs.find((d) => d.po === "target.com 912003733645362")!.changes;
     expect(ch.some((c) => c.includes("qty_returned:"))).toBe(false);
     expect(ch).toContain("B0HGP5P91F line 0: Returned with no qty — qty_returned left at 1");
@@ -386,5 +371,14 @@ describe("pre-2026 history rows", () => {
     const db = fakeDb({ pos: [], asins: [], lines: [] });
     await syncPoSheet({ sheetId: "s", dryRun: false, db, read: read([lr]) });
     expect(db.writes.find((w) => w.sql.startsWith("INSERT INTO po_asins"))?.params?.[12]).toBe(30);
+  });
+});
+
+describe("af-owned intake-only (patch docs/claude_spec-patch-po-af-owned.md §2, §5.3)", () => {
+  it("a PO deleted in AF (deleted_pos tombstone) is never re-imported", async () => {
+    const db = fakeDb({ pos: [], asins: [], lines: [], tombstones: [{ supplier: "walmart.com", order_id: "GONE1" }] } as any);
+    const r = await syncPoSheet({ sheetId: "s", dryRun: false, db, read: read([row({ orderId: "GONE1" }), row({ orderId: "NEW9" })]) });
+    expect(r.counts).toMatchObject({ inserted: 1, tombstoned: 1 });
+    expect(db.writes.filter((w) => w.sql.startsWith("INSERT INTO purchase_orders")).map((w) => w.params?.[0])).toEqual(["NEW9"]);
   });
 });

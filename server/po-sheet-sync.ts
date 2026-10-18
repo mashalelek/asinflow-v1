@@ -32,6 +32,7 @@ import pool from "./db";
 import { getSheetValues } from "./sheet-read";
 import { COL, t, classifyRows } from "./po-import-classify";
 import { mapSheetStatus, ACTION_ITEMS, type ActionItem } from "./po-status-map";
+import { sheetEntrySeqByKey } from "./po-entry-seq";
 
 // ── parsing helpers (ported verbatim from script/import-po-2026.ts) ──────────
 
@@ -376,6 +377,10 @@ export interface PoSyncCounts {
   returnedNoQty: number;
   /** Lines whose action items change (row Status → line, full replace). */
   lineActionItemsChanged: number;
+  /** Existing POs whose sheet rows differ from AF (informational — intake-only, never applied; af-owned §2.2). */
+  sheetDiffers: number;
+  /** Sheet POs not inserted because they were deleted in AF (deleted_pos tombstone, §5.3). */
+  tombstoned: number;
   /** Pre-2026 POs inserted (Closed, closed_by = 'import'), and how many carry action items. */
   historyInserted: number;
   historyWithActionItems: number;
@@ -394,10 +399,10 @@ export interface PoSyncResult {
   wrote: boolean;
   stop: string | null;
   counts: PoSyncCounts;
-  /** First 10 changed EXISTING POs (inserts are just "new PO"), each with its first changes. */
+  /** First 10 EXISTING POs whose sheet rows differ from AF (drift, not applied), each with its first differences. */
   samples: string[];
-  /** Every PO the sync would touch: inserts and updates with their field-level changes. */
-  diffs: Array<{ po: string; kind: "insert" | "update"; changes: string[] }>;
+  /** Inserts, plus the read-only drift of existing POs with their field-level differences. */
+  diffs: Array<{ po: string; kind: "insert" | "drift"; changes: string[] }>;
   unmapped: Array<{ po: string; tokens: string[] }>;
   skippedMixed: string[];
   inAfNotInSheet: string[];
@@ -514,15 +519,18 @@ export async function syncPoSheet(opts: { sheetId: string; dryRun: boolean; db?:
   const counts: PoSyncCounts = {
     sheetPos: parsed.pos.length, inserted: 0, updated: 0, unchanged: 0, linesDeleted: 0, poAsinsDeleted: 0,
     poAsinsKeptWithShipments: 0, canceledKeptOrderedQty: 0, canceledNoOrderedQty: 0, returnedNoQty: 0, lineActionItemsChanged: 0,
-    historyInserted: 0, historyWithActionItems: 0, skippedBadCells: parsed.skippedBadCells.length,
+    historyInserted: 0, historyWithActionItems: 0, skippedBadCells: parsed.skippedBadCells.length, sheetDiffers: 0, tombstoned: 0,
     posInAfNotInSheet: 0, unmappedTokens: parsed.unmapped.length, skippedMixed: parsed.skippedMixed.length,
   };
   const keptWithShipments: string[] = [];
   const canceledKept: string[] = [];
   const canceledNoQty: string[] = [];
 
+  const tombstones = new Set<string>((await db.query(`SELECT supplier, order_id FROM deleted_pos`)).rows.map((r: any) => poKey(r.supplier, r.order_id)));
+  const entrySeq = sheetEntrySeqByKey(dataCells);
   for (const po of parsed.pos) {
     const existing = dbPoByKey.get(po.key) ?? null;
+    if (!existing && tombstones.has(po.key)) { counts.tombstoned++; continue; } // deleted in AF: never re-imported
     const plan: PoPlan = { po, db: existing, changes: [], notes: [], headerSet: {}, asinOps: [], lineOps: [] };
     plans.push(plan);
     if (!existing) {
@@ -612,13 +620,21 @@ export async function syncPoSheet(opts: { sheetId: string; dryRun: boolean; db?:
     if (plan.changes.length > 0) counts.updated++; else counts.unchanged++;
   }
 
+  // Intake-only (af-owned §2.1–2.2, 2026-10-18): AF owns every PO once it
+  // exists. The diff above for existing POs is kept as a read-only drift
+  // report ("sheet differs from AF"); none of it is applied.
+  counts.sheetDiffers = counts.updated;
+  counts.updated = 0; counts.linesDeleted = 0; counts.poAsinsDeleted = 0; counts.poAsinsKeptWithShipments = 0;
+  counts.canceledKeptOrderedQty = 0; counts.returnedNoQty = 0; counts.lineActionItemsChanged = 0;
+  keptWithShipments.length = 0; canceledKept.length = 0;
+
   const sheetKeys = new Set(parsed.pos.map((p) => p.key));
   const inAfNotInSheet = dbPos.filter((r) => !sheetKeys.has(poKey(r.supplier, r.order_id))).map((r) => `${r.supplier} ${r.order_id} (${fmt(r.order_date)})`).sort();
   counts.posInAfNotInSheet = inAfNotInSheet.length;
 
   const diffs = plans.filter((p) => p.changes.length > 0)
-    .map((p) => ({ po: `${p.po.supplier} ${p.po.orderId}`, kind: (p.db ? "update" : "insert") as "insert" | "update", changes: [...p.changes, ...p.notes] }));
-  const samples = diffs.filter((d) => d.kind === "update").slice(0, 10)
+    .map((p) => ({ po: `${p.po.supplier} ${p.po.orderId}`, kind: (p.db ? "drift" : "insert") as "insert" | "drift", changes: [...p.changes, ...p.notes] }));
+  const samples = diffs.filter((d) => d.kind === "drift").slice(0, 10)
     .map((d) => `${d.po}: ${d.changes.slice(0, 6).join("; ")}${d.changes.length > 6 ? `; … (+${d.changes.length - 6})` : ""}`);
 
   const stop = parsed.unmapped.length > 0
@@ -640,55 +656,22 @@ export async function syncPoSheet(opts: { sheetId: string; dryRun: boolean; db?:
       const po = plan.po;
       if (!plan.db) {
         const ins = await client.query(
+          // Closed is AF-only (af-owned §2.3): a new PO arrives Open (the auto-close
+          // rule and the manual toggle decide from here); history arrives Closed as 'import'.
           `INSERT INTO purchase_orders (order_id, order_date, supplier, action_items, closed_at, closed_by, subtotal, tax, sh_donations, discount, refund_amount, order_total,
-             payment_method, weighted_gc_discount_pct, promo, cashback_site, cashback_pct, purchased_by, subscription, email_used, invoice_attached, notes, source)
-           VALUES ($1,$2,$3,$4::text[],$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22,'sheet_import') RETURNING id`,
+             payment_method, weighted_gc_discount_pct, promo, cashback_site, cashback_pct, purchased_by, subscription, email_used, invoice_attached, notes, source, entry_seq)
+           VALUES ($1,$2,$3,$4::text[],$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22,'sheet_import',$23) RETURNING id`,
           [po.orderId, po.orderDate, po.supplier, [],
-           po.historical ? po.orderDate : po.closed ? new Date() : null, po.historical ? "import" : po.closed ? "sheet" : null,
+           po.historical ? po.orderDate : null, po.historical ? "import" : null,
            po.subtotal, po.tax, po.shDonations, po.discount, po.refundAmount, po.orderTotal,
-           po.payment, po.wgc, po.promo, po.cashback, po.cashbackPct, po.purchasedBy, po.subscription, po.email, po.invoiceAttached, po.notes],
+           po.payment, po.wgc, po.promo, po.cashback, po.cashbackPct, po.purchasedBy, po.subscription, po.email, po.invoiceAttached, po.notes,
+           entrySeq.get(po.key) ?? null],
         );
         const poId = ins.rows[0].id;
         for (const a of po.poAsins) await insertPoAsin(client, poId, a, po, skuByAsin.get(a.asin) ?? null);
         continue;
       }
-      if (plan.changes.length === 0) continue;
-      const poId = plan.db.id;
-      const cols = Object.keys(plan.headerSet);
-      if (cols.length > 0) {
-        const sets: string[] = []; const params: any[] = [poId];
-        for (const c of cols) {
-          const v = plan.headerSet[c];
-          if (c === "closed_at" && v === "NOW()") { sets.push(`closed_at = NOW()`); continue; }
-          params.push(v);
-          sets.push(c === "action_items" ? `action_items = $${params.length}::text[]` : `${c} = $${params.length}`);
-        }
-        await client.query(`UPDATE purchase_orders SET ${sets.join(", ")}, updated_at = NOW() WHERE id = $1`, params);
-      } else {
-        await client.query(`UPDATE purchase_orders SET updated_at = NOW() WHERE id = $1`, [poId]);
-      }
-      for (const op of plan.asinOps) {
-        if (op.kind === "insert") await insertPoAsin(client, poId, op.a, po, skuByAsin.get(op.a.asin) ?? null);
-        else if (op.kind === "update") {
-          const ks = Object.keys(op.set); const params: any[] = [op.id];
-          const sets = ks.map((k) => { params.push(op.set[k]); return `${k} = $${params.length}`; });
-          await client.query(`UPDATE po_asins SET ${sets.join(", ")} WHERE id = $1`, params);
-        } else if (op.kind === "delete") {
-          if (op.lineIds.length > 0) await client.query(`DELETE FROM po_line_items WHERE id = ANY($1::uuid[])`, [op.lineIds]);
-          await client.query(`DELETE FROM po_asins WHERE id = $1`, [op.id]);
-        }
-      }
-      for (const op of plan.lineOps) {
-        if (op.kind === "insert") {
-          await insertLine(client, poId, op.poAsinId, op.line, po);
-        } else if (op.kind === "update") {
-          const ks = Object.keys(op.set); const params: any[] = [op.id];
-          const sets = ks.map((k) => { params.push(op.set[k]); return k === "action_items" ? `action_items = $${params.length}::text[]` : `${k} = $${params.length}`; });
-          await client.query(`UPDATE po_line_items SET ${sets.join(", ")} WHERE id = $1`, params);
-        } else {
-          await client.query(`DELETE FROM po_line_items WHERE id = $1`, [op.id]);
-        }
-      }
+      // Existing POs are AF-owned: never written by the sync (intake-only).
     }
     await client.query("COMMIT");
     result.wrote = true;
