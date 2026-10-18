@@ -122,14 +122,16 @@ describe("Products tab status columns (§4.3)", () => {
     expect(productQtyFromAsin(null, "1")).toBeNull();      // not tracked stays not tracked
   });
   it("the Products tab adds At Prep Center / At CQG Warehouse / Lost-damaged, through the yield for 1:1 lines, dash for bundle components", () => {
-    const page = read("client/src/pages/purchase-orders.tsx");
-    const tab = page.slice(page.indexOf('{tab === "products" && ('));
-    for (const h of ["At Prep Center", "At CQG Warehouse", "Lost/damaged by us"]) expect(tab).toContain(`<th className={thNum}>${h}</th>`);
-    expect(tab).toMatch(/l\.soleLine \? productQtyFromAsin\(l\.parent\.qty_at_prep, l\.asin_qty_per_product\) : null/);
-    expect(tab).toMatch(/l\.soleLine \? productQtyFromAsin\(l\.parent\.qty_at_warehouse, l\.asin_qty_per_product\) : null/);
-    expect(tab).toMatch(/l\.soleLine \? productQtyFromAsin\(l\.parent\.qty_lost_damaged_us, l\.asin_qty_per_product\) : null/);
-    expect(page).toMatch(/soleLine: a\.lines\.length === 1/);
+    // Since po-af-owned §3 (2026-10-18) the tab is the editable PoProductsTable (components/po-edit.tsx).
+    expect(read("client/src/pages/purchase-orders.tsx")).toMatch(/\{tab === "products" && <PoProductsTable poId=\{po\.id\} asins=\{asins\} onChanged=\{reload\} \/>\}/);
+    const tab = read("client/src/components/po-edit.tsx");
+    const table = tab.slice(tab.indexOf("export function PoProductsTable"), tab.indexOf("function AddProductRow"));
+    for (const h of ["At Prep Center", "At CQG Warehouse", "Lost/damaged by us"]) expect(table).toContain(`<th className={th(true)}>${h}</th>`);
+    expect(table).toMatch(/sole \? productQtyFromAsin\(l\.parent\.qty_at_prep, l\.asin_qty_per_product\) : null/);
+    expect(table).toMatch(/sole \? productQtyFromAsin\(l\.parent\.qty_at_warehouse, l\.asin_qty_per_product\) : null/);
+    expect(table).toMatch(/sole \? productQtyFromAsin\(l\.parent\.qty_lost_damaged_us, l\.asin_qty_per_product\) : null/);
+    expect(table).toMatch(/const sole = \(l\.parent\.lines \?\? \[\]\)\.length === 1;/);
     // shipment columns stay ASIN-level only
-    expect(tab).not.toMatch(/Shipped FBA|Received by Amazon|Shipment IDs/);
+    expect(table).not.toMatch(/Shipped FBA|Received by Amazon|Shipment IDs/);
   });
 });

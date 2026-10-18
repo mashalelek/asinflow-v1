@@ -12,6 +12,7 @@ import { loadPoAsinRows } from "./po-queries";
 import { evaluateAutoClose, setPoClosedManually, parseQtyInput, MANUAL_QTY_COLUMNS, type ManualQtyColumn } from "./po-close";
 import { ACTION_ITEMS, normalizeActionItems } from "./po-status-map";
 import { asinWriteThrough, unionActionItems, PO_ACTION_ITEMS_SQL } from "./po-action-items";
+import { editPoHeader, editLine, addLine, removeLine, editAsinRow, loadPoHistory, logEdits, changedFields, asLogText, EditError, type EditResult } from "./po-edit";
 import { syncPoSheet, type PoSyncResult } from "./po-sheet-sync";
 import { syncVelocityShipments, type VelocitySyncResult } from "./shipment-sync-velocity";
 import { syncScShipments, type ScSyncResult } from "./shipment-sync-sc";
@@ -4411,6 +4412,62 @@ export async function registerRoutes(
   // po_asin_shipments (AF-owned, SPEC §14). Every quantity or shipment
   // change re-runs the auto-close rule for its PO.
   const poQuery = (sql: string, params?: any[]) => query(sql, params);
+  // One PO edit = one transaction (po-af-owned §3): the field writes, the
+  // derived ASIN qty, the edit-log rows and the auto-close re-run commit
+  // together or not at all.
+  async function withPoTx<T>(fn: (q: typeof poQuery) => Promise<T>): Promise<T> {
+    const client = await (pool as any).connect();
+    try {
+      await client.query("BEGIN");
+      const out = await fn((sql: string, params?: any[]) => client.query(sql, params));
+      await client.query("COMMIT");
+      return out;
+    } catch (err) {
+      await client.query("ROLLBACK").catch(() => {});
+      throw err;
+    } finally { client.release(); }
+  }
+  const sendEdit = async (res: Response, run: () => Promise<EditResult>) => {
+    try {
+      const r = await run();
+      const [po] = (await query(`SELECT p.id, p.closed_at, p.closed_by FROM purchase_orders p WHERE p.id = $1`, [r.poId])).rows;
+      res.json({ ...r, po });
+    } catch (err: any) {
+      if (err instanceof EditError) { res.status(err.status).json({ message: err.message }); return; }
+      if (err?.code === "23505") { res.status(409).json({ message: "a PO with this supplier and order # already exists" }); return; }
+      res.status(500).json({ message: err?.message ?? String(err) });
+    }
+  };
+  const uid = (req: Request): number | null => req.session?.userId ?? null;
+
+  // === AF-owned editing (patch po-af-owned §3, 2026-10-18) ===
+  // Header (edit drawer), product lines (add / edit / remap / remove), ASIN
+  // rows; one po_edit_log row per changed field; auto-close re-run.
+  app.patch("/api/pos/:id", async (req: Request, res: Response) => {
+    if (!isDbAvailable()) { res.status(503).json({ message: "Database not available" }); return; }
+    await sendEdit(res, () => withPoTx((q) => editPoHeader(q, String(req.params.id ?? ""), req.body, uid(req))));
+  });
+  app.post("/api/pos/:id/lines", async (req: Request, res: Response) => {
+    if (!isDbAvailable()) { res.status(503).json({ message: "Database not available" }); return; }
+    await sendEdit(res, () => withPoTx((q) => addLine(q, String(req.params.id ?? ""), req.body, uid(req))));
+  });
+  app.patch("/api/pos/lines/:id", async (req: Request, res: Response) => {
+    if (!isDbAvailable()) { res.status(503).json({ message: "Database not available" }); return; }
+    await sendEdit(res, () => withPoTx((q) => editLine(q, String(req.params.id ?? ""), req.body, uid(req))));
+  });
+  app.delete("/api/pos/lines/:id", async (req: Request, res: Response) => {
+    if (!isDbAvailable()) { res.status(503).json({ message: "Database not available" }); return; }
+    await sendEdit(res, () => withPoTx((q) => removeLine(q, String(req.params.id ?? ""), uid(req))));
+  });
+  app.patch("/api/pos/asin-rows/:id", async (req: Request, res: Response) => {
+    if (!isDbAvailable()) { res.status(503).json({ message: "Database not available" }); return; }
+    await sendEdit(res, () => withPoTx((q) => editAsinRow(q, String(req.params.id ?? ""), req.body, uid(req))));
+  });
+  app.get("/api/pos/:id/history", async (req: Request, res: Response) => {
+    if (!isDbAvailable()) { res.status(503).json({ message: "Database not available" }); return; }
+    try { res.json({ history: await loadPoHistory(poQuery, String(req.params.id ?? "")) }); }
+    catch (err: any) { res.status(500).json({ message: err.message }); }
+  });
 
   // Action Items (row-level Status §2.1, 2026-10-17): they live on the
   // product line. The ASIN editor sends the desired union — added items go
@@ -4428,8 +4485,10 @@ export async function registerRoutes(
       if (!pa) { res.status(404).json({ message: "ASIN row not found" }); return; }
       const lines = (await query(`SELECT id, action_items FROM po_line_items WHERE po_asin_id = $1`, [id])).rows;
       if (lines.length === 0) { res.status(409).json({ message: "this ASIN row has no product lines to carry action items" }); return; }
+      const before = new Map(lines.map((l: any) => [String(l.id), l.action_items]));
       for (const [lineId, items] of Array.from(asinWriteThrough(lines, v.value).entries())) {
         await query(`UPDATE po_line_items SET action_items = $2::text[] WHERE id = $1`, [lineId, items]);
+        await logEdits(poQuery, String(pa.po_id), uid(req), "line", lineId, changedFields({ action_items: before.get(lineId) }, { action_items: items }));
       }
       const close = await evaluateAutoClose(String(pa.po_id), poQuery);
       const [row] = await loadPoAsinRows(poQuery, [String(pa.po_id)]).then((rows) => rows.filter((x: any) => String(x.id) === id));
@@ -4443,8 +4502,10 @@ export async function registerRoutes(
     const v = normalizeActionItems((req.body ?? {}).action_items);
     if (!v.ok) { res.status(400).json({ message: v.error }); return; }
     try {
+      const prev = (await query(`SELECT action_items FROM po_line_items WHERE id = $1`, [id])).rows[0];
       const r = await query(`UPDATE po_line_items SET action_items = $2::text[] WHERE id = $1 RETURNING po_id`, [id, v.value]);
       if (r.rowCount === 0) { res.status(404).json({ message: "product line not found" }); return; }
+      await logEdits(poQuery, String(r.rows[0].po_id), uid(req), "line", id, changedFields({ action_items: prev?.action_items }, { action_items: v.value }));
       const close = await evaluateAutoClose(String(r.rows[0].po_id), poQuery);
       res.json({ ok: true, close });
     } catch (err: any) { res.status(500).json({ message: err.message }); }
@@ -4459,7 +4520,8 @@ export async function registerRoutes(
     try {
       const pa = (await query(`SELECT po_id FROM po_asins WHERE id = $1`, [id])).rows[0];
       if (!pa) { res.status(404).json({ message: "ASIN row not found" }); return; }
-      const r = await query(`UPDATE po_line_items SET qty_canceled = qty_ordered WHERE po_asin_id = $1 AND qty_ordered IS NOT NULL`, [id]);
+      const r = await query(`UPDATE po_line_items SET qty_canceled = qty_ordered WHERE po_asin_id = $1 AND qty_ordered IS NOT NULL AND qty_canceled IS DISTINCT FROM qty_ordered RETURNING id, qty_ordered`, [id]);
+      for (const l of r.rows) await logEdits(poQuery, String(pa.po_id), uid(req), "line", String(l.id), [{ field: "qty_canceled", old: null, new: asLogText(l.qty_ordered) }]);
       const close = await evaluateAutoClose(String(pa.po_id), poQuery);
       const [row] = await loadPoAsinRows(poQuery, [String(pa.po_id)]).then((rows) => rows.filter((x: any) => String(x.id) === id));
       res.json({ row, close, linesCanceled: r.rowCount ?? 0 });
@@ -4473,9 +4535,10 @@ export async function registerRoutes(
     const closed = (req.body ?? {}).closed;
     if (typeof closed !== "boolean") { res.status(400).json({ message: "closed must be a boolean" }); return; }
     try {
-      const exists = (await query(`SELECT id FROM purchase_orders WHERE id = $1`, [id])).rows[0];
+      const exists = (await query(`SELECT id, closed_at FROM purchase_orders WHERE id = $1`, [id])).rows[0];
       if (!exists) { res.status(404).json({ message: "PO not found" }); return; }
       await setPoClosedManually(id, closed, req.session?.userId ?? null, poQuery);
+      if ((exists.closed_at != null) !== closed) await logEdits(poQuery, id, uid(req), "po", id, [{ field: "closed", old: exists.closed_at != null ? "Closed" : "Open", new: closed ? "Closed" : "Open" }]);
       const po = (await query(`SELECT p.id, p.closed_at, p.closed_by, ${PO_ACTION_ITEMS_SQL} AS action_items FROM purchase_orders p WHERE p.id = $1`, [id])).rows[0];
       res.json({ po });
     } catch (err: any) { res.status(500).json({ message: err.message }); }
@@ -4495,9 +4558,12 @@ export async function registerRoutes(
     }
     if (sets.length === 0) { res.status(400).json({ message: `nothing to update (allowed: ${MANUAL_QTY_COLUMNS.join(", ")})` }); return; }
     try {
+      const prev = (await query(`SELECT * FROM po_asins WHERE id = $1`, [id])).rows[0];
       const r = await query(`UPDATE po_asins SET ${sets.join(", ")} WHERE id = $1 RETURNING po_id`, vals);
       if (r.rowCount === 0) { res.status(404).json({ message: "ASIN row not found" }); return; }
       const poId = String(r.rows[0].po_id);
+      const edits: Record<string, unknown> = {}; sets.forEach((s, i) => { edits[s.split(" = ")[0]] = vals[i + 1]; });
+      await logEdits(poQuery, poId, uid(req), "asin", id, changedFields(prev ?? {}, edits));
       const close = await evaluateAutoClose(poId, poQuery);
       const [row] = await loadPoAsinRows(poQuery, [poId]).then((rows) => rows.filter((x: any) => String(x.id) === id));
       res.json({ row, close });
@@ -4526,6 +4592,7 @@ export async function registerRoutes(
          VALUES ($1, 'manual:' || uuid_generate_v4()::text, $2::text[], $3, $4, $5, 'manual', 'none')`,
         [id, fbaIds, shipped.value, received.value, shippedAt],
       );
+      await logEdits(poQuery, String(pa.po_id), uid(req), "shipment", id, [{ field: "manual shipment added", old: null, new: `${shipped.value} → ${fbaIds.join(", ") || "no FBA id"}` }]);
       const close = await evaluateAutoClose(String(pa.po_id), poQuery);
       const [row] = await loadPoAsinRows(poQuery, [String(pa.po_id)]).then((rows) => rows.filter((x: any) => String(x.id) === id));
       res.status(201).json({ row, close });
@@ -4542,9 +4609,10 @@ export async function registerRoutes(
       const cur = (await query(`SELECT source FROM po_asin_shipments WHERE id = $1`, [sid])).rows[0];
       if (!cur) { res.status(404).json({ message: "shipment not found" }); return; }
       if (cur.source !== "manual") { res.status(400).json({ message: "only manual shipment rows can be removed; Velocity rows are sync-owned" }); return; }
-      const r = await query(`DELETE FROM po_asin_shipments s USING po_asins pa WHERE s.id = $1 AND pa.id = s.po_asin_id RETURNING pa.id AS po_asin_id, pa.po_id`, [sid]);
+      const r = await query(`DELETE FROM po_asin_shipments s USING po_asins pa WHERE s.id = $1 AND pa.id = s.po_asin_id RETURNING pa.id AS po_asin_id, pa.po_id, s.qty_shipped, s.fba_shipment_ids`, [sid]);
       if (r.rowCount === 0) { res.status(404).json({ message: "shipment not found" }); return; }
       const poId = String(r.rows[0].po_id); const paId = String(r.rows[0].po_asin_id);
+      await logEdits(poQuery, poId, uid(req), "shipment", paId, [{ field: "manual shipment removed", old: `${asLogText(r.rows[0].qty_shipped)} → ${(r.rows[0].fba_shipment_ids ?? []).join(", ") || "no FBA id"}`, new: null }]);
       const close = await evaluateAutoClose(poId, poQuery);
       const [row] = await loadPoAsinRows(poQuery, [poId]).then((rows) => rows.filter((x: any) => String(x.id) === paId));
       res.json({ row, close });

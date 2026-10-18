@@ -26,9 +26,11 @@ import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover
 import { UploadToVelocityDialog } from "@/components/upload-to-velocity-dialog";
 import { PoAsinTable, PoAsinColGroup, PoAsinHeaderRow, PoAsinRow, ActionItemChips, type PoAsinRowData, type PoAsinLine } from "@/components/po-asin-rows";
 import { loadPoExpanded, savePoExpanded, isPoExpanded, togglePoExpanded, toggleExpandAll, type PoExpandedState } from "@/lib/po-expanded";
-import { productQtyFromAsin, fmtQty } from "@/lib/po-qty";
+import { fmtQty } from "@/lib/po-qty";
 import { fetchLongSync } from "@/lib/long-sync";
 import { useToast } from "@/hooks/use-toast";
+import { PoHeaderDrawer, PoProductsTable, PoHistory } from "@/components/po-edit";
+import { Pencil } from "lucide-react";
 
 interface PoRow {
   id: string;
@@ -548,17 +550,6 @@ function Money({ v }: { v: string | null | undefined }) {
 function Dash({ v }: { v: number | string | null | undefined }) {
   return v == null ? <span className="text-muted-foreground/50">—</span> : <>{v}</>;
 }
-// Qty rendering (§22): NULL = not tracked → muted em-dash; explicit 0 muted.
-function Qty({ v }: { v: number | null | undefined }) {
-  if (v == null) return <span className="text-muted-foreground/50">—</span>;
-  return <span className={v === 0 ? "text-muted-foreground/50" : ""}>{v}</span>;
-}
-// Product-unit view of an ASIN quantity (§4.3): fractional values show 2 dp.
-function ProductQty({ v }: { v: number | null }) {
-  if (v == null) return <span className="text-muted-foreground/50">—</span>;
-  const t = Number.isInteger(v) ? String(v) : v.toFixed(2);
-  return <span className={v === 0 ? "text-muted-foreground/50" : ""}>{t}</span>;
-}
 
 function DetailCard({ title, rows }: { title: string; rows: Array<[string, React.ReactNode]> }) {
   return (
@@ -581,10 +572,13 @@ export function PurchaseOrderDetailPlaceholder() {
   const id = location.split("/").pop() ?? "";
   const [data, setData] = useState<PoDetail | null>(null);
   const [error, setError] = useState<string | null>(null);
-  const [tab, setTab] = useState<"details" | "asins" | "products">("details");
+  const [tab, setTab] = useState<"details" | "asins" | "products" | "history">("details");
   const [copied, setCopied] = useState(false);
+  const [editOpen, setEditOpen] = useState(false);
+  const [version, setVersion] = useState(0); // bumps on every reload so History refetches
 
   const reload = useCallback(() => {
+    setVersion((v) => v + 1);
     fetch(`/api/pos/${id}`)
       .then(async (r) => { if (!r.ok) throw new Error((await r.json().catch(() => ({}))).message || `HTTP ${r.status}`); return r.json(); })
       .then(setData)
@@ -603,12 +597,7 @@ export function PurchaseOrderDetailPlaceholder() {
   const { po, summary, asins } = data;
   const actionItems: string[] = Array.isArray(po.action_items) ? po.action_items : [];
   const hairline = { borderBottom: "0.5px solid hsl(var(--border))" } as const;
-  // Products tab (§4.3): the three manual ASIN quantities convert to product
-  // units through the line's yield for 1:1 lines (one line per ASIN row);
-  // a bundle component line (≥2 lines on the ASIN) shows a dash — a
-  // per-component split is not inferrable from an ASIN-level number.
-  const allLines: Array<PoLine & { parentAsin: string; parent: PoAsinDetail; soleLine: boolean }> =
-    asins.flatMap((a) => a.lines.map((l) => ({ ...l, parentAsin: a.asin, parent: a, soleLine: a.lines.length === 1 })));
+  // Products tab (§4.3, editable since po-af-owned §3): PoProductsTable in components/po-edit.tsx.
 
   const copyInvoiceName = () => {
     navigator.clipboard.writeText(po.invoice_file_name).then(() => {
@@ -617,8 +606,6 @@ export function PurchaseOrderDetailPlaceholder() {
     }).catch(() => {});
   };
 
-  const thNum = "px-3 py-2 text-xs font-medium whitespace-nowrap text-right";
-  const thTxt = "px-3 py-2 text-xs font-medium whitespace-nowrap text-left";
 
   return (
     <div className="px-6 py-4 space-y-4">
@@ -635,10 +622,12 @@ export function PurchaseOrderDetailPlaceholder() {
             <p className="text-sm text-muted-foreground">{po.supplier} · {fmtDate(String(po.order_date))} · {po.closed_at ? "Closed" : "Open"}</p>
           </div>
         </div>
-        <div className="flex gap-1">
+        <div className="flex items-center gap-2">
           <ActionItemChips items={actionItems} testId="po-detail-action-items" />
+          <Button variant="outline" size="sm" onClick={() => setEditOpen(true)} data-testid="button-edit-po"><Pencil className="h-3.5 w-3.5 mr-1" /> Edit PO</Button>
         </div>
       </div>
+      <PoHeaderDrawer po={po} open={editOpen} onOpenChange={setEditOpen} onSaved={reload} />
 
       {/* Summary strip */}
       <div className="flex gap-6 rounded-md px-4 py-3 text-sm" style={{ border: "0.5px solid hsl(var(--border))" }} data-testid="po-summary-strip">
@@ -655,7 +644,7 @@ export function PurchaseOrderDetailPlaceholder() {
 
       {/* Tabs */}
       <div className="flex gap-1" style={{ borderBottom: "0.5px solid hsl(var(--border))" }}>
-        {([["details", "PO Details"], ["asins", "ASINs"], ["products", "Products"]] as const).map(([key, label]) => (
+        {([["details", "PO Details"], ["asins", "ASINs"], ["products", "Products"], ["history", "History"]] as const).map(([key, label]) => (
           <button key={key} onClick={() => setTab(key)} data-testid={`tab-${key}`}
             className={`px-3 py-1.5 text-sm -mb-px ${tab === key ? "border-b-2 border-primary font-medium" : "text-muted-foreground"}`}>
             {label}
@@ -707,52 +696,9 @@ export function PurchaseOrderDetailPlaceholder() {
 
       {tab === "asins" && <PoAsinTable asins={asins} editable onChanged={reload} />}
 
-      {tab === "products" && (
-        <div className="w-full overflow-auto rounded-md" style={{ border: "0.5px solid hsl(var(--border))" }}>
-          <table className="w-full border-collapse text-sm" data-testid="po-products-table">
-            <thead>
-              <tr className="table-header-stone">
-                <th className={thTxt}>Product Name</th>
-                <th className={thTxt}>Supplier SKU / UPC</th>
-                <th className={thNum}>Price</th>
-                <th className={thNum}>Item Discount</th>
-                <th className={thNum}>Ordered</th>
-                <th className={thNum}>Received</th>
-                <th className={thNum}>Canceled</th>
-                <th className={thNum}>Returned</th>
-                <th className={thNum}>At Prep Center</th>
-                <th className={thNum}>At CQG Warehouse</th>
-                <th className={thNum}>Lost/damaged by us</th>
-                <th className={thNum}>Final</th>
-                <th className={thTxt}>ASIN</th>
-                <th className={thTxt}></th>
-              </tr>
-            </thead>
-            <tbody>
-              {allLines.map((l) => (
-                <tr key={l.id} className="table-zebra-stone" style={hairline} data-testid={`row-product-${l.id}`}>
-                  <td className="px-3 py-1.5 max-w-[320px] truncate" title={l.product_name ?? ""}>{l.product_name ?? <span className="text-muted-foreground/50">—</span>}</td>
-                  <td className="px-3 py-1.5 font-mono text-xs"><Dash v={l.supplier_sku} /></td>
-                  <td className="px-3 py-1.5 text-right"><Money v={l.price} /></td>
-                  <td className="px-3 py-1.5 text-right"><Money v={l.item_discount} /></td>
-                  <td className="px-3 py-1.5 text-right"><Qty v={l.qty_ordered} /></td>
-                  <td className="px-3 py-1.5 text-right"><Qty v={l.qty_received} /></td>
-                  <td className="px-3 py-1.5 text-right"><Qty v={l.qty_canceled} /></td>
-                  <td className="px-3 py-1.5 text-right"><Qty v={l.qty_returned} /></td>
-                  <td className="px-3 py-1.5 text-right"><ProductQty v={l.soleLine ? productQtyFromAsin(l.parent.qty_at_prep, l.asin_qty_per_product) : null} /></td>
-                  <td className="px-3 py-1.5 text-right"><ProductQty v={l.soleLine ? productQtyFromAsin(l.parent.qty_at_warehouse, l.asin_qty_per_product) : null} /></td>
-                  <td className="px-3 py-1.5 text-right"><ProductQty v={l.soleLine ? productQtyFromAsin(l.parent.qty_lost_damaged_us, l.asin_qty_per_product) : null} /></td>
-                  <td className="px-3 py-1.5 text-right"><Qty v={l.final_qty} /></td>
-                  <td className="px-3 py-1.5">
-                    <span className="inline-block rounded-sm bg-muted px-1.5 py-0.5 font-mono text-[11px] text-muted-foreground">→ {l.parentAsin}</span>
-                  </td>
-                  <td className="px-3 py-1.5">{l.notes && <StickyNote className="h-3.5 w-3.5 text-muted-foreground" />}</td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
-        </div>
-      )}
+      {tab === "products" && <PoProductsTable poId={po.id} asins={asins} onChanged={reload} />}
+
+      {tab === "history" && <PoHistory poId={po.id} reloadKey={version} />}
     </div>
   );
 }

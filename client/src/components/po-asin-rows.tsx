@@ -13,6 +13,7 @@ import { StickyNote, ChevronRight, ChevronDown, AlertTriangle, Plus, X } from "l
 import { Tooltip, TooltipTrigger, TooltipContent } from "@/components/ui/tooltip";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import { fmtQty, individualUnits, PO_ASIN_COLUMNS } from "@/lib/po-qty";
+import { InlineEdit, SelectEdit, poApi } from "@/components/po-edit";
 
 export interface PoAsinShipment {
   id: string;
@@ -157,7 +158,7 @@ function MarkCanceled({ a, onChanged }: { a: PoAsinRowData; onChanged?: () => vo
   const [err, setErr] = useState<string | null>(null);
   const go = async (e: React.MouseEvent) => {
     e.stopPropagation(); setErr(null);
-    if (!window.confirm(`Mark ${a.asin} canceled? Every product line of this ASIN gets Canceled = Ordered. The next Sync POs re-applies the sheet's Status.`)) return;
+    if (!window.confirm(`Mark ${a.asin} canceled? Every product line of this ASIN gets Canceled = Ordered.`)) return;
     try { await patchJson(`/api/pos/asin-rows/${a.id}/cancel`, "POST"); onChanged?.(); } catch (er: any) { setErr(er.message); }
   };
   return <button onClick={go} className="ml-1 text-[10px] text-muted-foreground hover:text-destructive" title={err ?? "Mark this ASIN canceled"} data-testid={`button-cancel-asin-${a.asin}`}>cancel</button>;
@@ -308,6 +309,8 @@ export function PoAsinRow({ a, indent = false, editable = false, onChanged }: { 
   const lines = a.lines ?? [];
   const multi = lines.length >= 2;
   const pad = indent ? "pl-6" : "";
+  // AF-owned editing (po-af-owned §3): logged server-side, auto-close re-runs.
+  const saveAsin = (field: string) => async (v: string) => { await poApi(`/api/pos/asin-rows/${a.id}`, "PATCH", { [field]: v }); onChanged?.(); };
   return (
     <>
       <tr className={`table-zebra-stone ${indent ? "text-[13px]" : ""}`} style={hairline} data-testid={`row-po-asin-${a.asin}`}>
@@ -334,11 +337,11 @@ export function PoAsinRow({ a, indent = false, editable = false, onChanged }: { 
           )}
         </td>
         <td className="px-3 py-1.5 text-right">{a.qty}</td>
-        <td className="px-3 py-1.5 text-right"><Money v={a.cost_per_unit} /></td>
+        <td className="px-3 py-1.5 text-right">{editable ? <InlineEdit value={a.cost_per_unit} onSave={saveAsin("cost_per_unit")} align="right" width="w-20" testId={`cost_per_unit-${a.id}`}><Money v={a.cost_per_unit} /></InlineEdit> : <Money v={a.cost_per_unit} />}</td>
         <td className="px-3 py-1.5 text-right"><Money v={a.total_cost} /></td>
-        <td className="px-3 py-1.5 text-right"><Money v={a.prep_cost} /></td>
-        <td className="px-3 py-1.5">{a.sold_as}</td>
-        <td className="px-3 py-1.5 text-right">{a.units_per_pack}</td>
+        <td className="px-3 py-1.5 text-right">{editable ? <InlineEdit value={a.prep_cost} onSave={saveAsin("prep_cost")} align="right" width="w-16" testId={`prep_cost-${a.id}`}><Money v={a.prep_cost} /></InlineEdit> : <Money v={a.prep_cost} />}</td>
+        <td className="px-3 py-1.5">{editable ? <SelectEdit value={a.sold_as} options={["individual", "multi-pack", "bundle"]} onSave={saveAsin("sold_as")} testId={`sold_as-${a.id}`} /> : a.sold_as}</td>
+        <td className="px-3 py-1.5 text-right">{editable && a.sold_as !== "individual" ? <InlineEdit value={a.units_per_pack} onSave={saveAsin("units_per_pack")} align="right" width="w-14" testId={`units_per_pack-${a.id}`}>{a.units_per_pack}</InlineEdit> : a.units_per_pack}</td>
         <td className="px-3 py-1.5 text-right">{individualUnits(a.qty, a.units_per_pack)}</td>
         <td className="px-3 py-1.5 text-right"><QtyCell v={a.qty_canceled_asin} />{editable && (a.lines ?? []).length > 0 && <MarkCanceled a={a} onChanged={onChanged} />}</td>
         <td className="px-3 py-1.5 text-right"><QtyCell v={a.qty_returned_asin} /></td>
