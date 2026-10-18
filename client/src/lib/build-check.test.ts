@@ -42,7 +42,7 @@ describe("a page load after a completed upload", () => {
     expect(home).toMatch(/const \[asins, setAsins\] = useState<AsinInput\[\]>\(\[\]\);/);
     // every setAsins is either the freshly parsed file or the clear
     const sets = home.match(/setAsins\([^)]*\)/g) ?? [];
-    expect(sets.sort()).toEqual(["setAsins([])", "setAsins(parsed)"]);
+    expect(Array.from(new Set(sets)).sort()).toEqual(["setAsins([])", "setAsins(parsed)"]); // the clear appears for job_queued and job_duplicate
     expect(home).not.toMatch(/(localStorage|sessionStorage)\.(get|set)Item\([^)]*(upload|pending)/i);
     expect(home).not.toMatch(/URLSearchParams[\s\S]{0,80}upload/i);
   });
@@ -54,5 +54,42 @@ describe("a page load after a completed upload", () => {
     const stored: any = { asin: "B09HRDGW17", catalogData: { title: "Metallica - Exclusive Limited Edition", imageUrl: "https://m.media-amazon.com/x.jpg" }, pricingData: { buyBoxPrice: 50.11, lowestFbaPrice: 50.11, numberOfSellers: 3 } };
     const placeholder: any = { asin: "B09HRDGW17", catalogData: { title: null, imageUrl: null }, pricingData: { buyBoxPrice: null, lowestFbaPrice: null, numberOfSellers: null } };
     expect(applyStreamedRow([stored], placeholder)).toEqual([stored]);
+  });
+});
+
+describe("build id on every API request (2026-10-18)", () => {
+  it("adds X-AF-Build to same-origin /api requests only; a 409 STALE_BUILD fires the banner event", async () => {
+    const { installBuildIdHeader, STALE_BUILD_EVENT } = await import("./build-check");
+    const seen: Array<{ url: string; build: string | null }> = [];
+    const events: string[] = [];
+    const win: any = {
+      location: { origin: "https://af.example" },
+      dispatchEvent: (e: Event) => { events.push(e.type); return true; },
+      fetch: async (input: any, init?: RequestInit) => {
+        const url = typeof input === "string" ? input : input.url;
+        seen.push({ url, build: new Headers(init?.headers).get("X-AF-Build") });
+        return url.includes("/api/analyze") ? new Response(JSON.stringify({ code: "STALE_BUILD", message: "AF was updated — reload this page" }), { status: 409 }) : new Response("{}", { status: 200 });
+      },
+    };
+    installBuildIdHeader("/assets/index-NEW12345.js", win);
+    await win.fetch("/api/asins");
+    await win.fetch("https://cdn.example/x.js");
+    const r = await win.fetch("/api/analyze", { method: "POST", headers: { "Content-Type": "application/json" } });
+    await new Promise((res) => setTimeout(res, 0));
+    expect(seen.map((s) => s.build)).toEqual(["/assets/index-NEW12345.js", null, "/assets/index-NEW12345.js"]);
+    expect(r.status).toBe(409);
+    expect(events).toEqual([STALE_BUILD_EVENT]);
+    installBuildIdHeader(null, { ...win, __afBuildHeader: false }); // no build id (dev): nothing installed
+  });
+  it("main.tsx installs it before rendering; the banner listens for the event", () => {
+    expect(readFileSync(resolve(__dirname, "../main.tsx"), "utf8")).toMatch(/installBuildIdHeader\(currentEntryScript\(document\)\);\s+createRoot/);
+    expect(readFileSync(resolve(__dirname, "../components/update-banner.tsx"), "utf8")).toMatch(/window\.addEventListener\(STALE_BUILD_EVENT, on\)/);
+  });
+  it("the page treats a refused duplicate upload as no longer pending", async () => {
+    const { duplicateJobFromMessage } = await import("./upload-flow");
+    expect(duplicateJobFromMessage({ type: "job_duplicate", data: { jobId: 64, status: "done" } })).toEqual({ jobId: 64, status: "done" });
+    expect(duplicateJobFromMessage({ type: "job_queued", data: { jobId: 64 } })).toBeNull();
+    const home = readFileSync(resolve(__dirname, "../pages/home.tsx"), "utf8");
+    expect(home).toMatch(/if \(dup\) \{\s*\/\/[^\n]*\n\s*setAsins\(\[\]\);/);
   });
 });

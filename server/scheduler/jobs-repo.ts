@@ -148,13 +148,37 @@ export async function asinsCoveredByActiveOnboarding(query: QueryLike = defaultQ
  * lanes discovering the same ASIN). Returns the job, or null when nothing
  * was left to enqueue, plus what was dropped.
  */
+/** Onboarding dedupe window (2026-10-18): the same ASIN set within this many minutes is refused. */
+export const ONBOARDING_DEDUPE_MINUTES = 10;
+
+/**
+ * An onboarding job for EXACTLY this ASIN set (order and case ignored) queued in the
+ * last ONBOARDING_DEDUPE_MINUTES, in any status — the same upload sent again (a stale
+ * tab resent one 11-ASIN upload as jobs 59–68 on 2026-10-18). Null when none.
+ */
+export async function findRecentSameOnboarding(asins: readonly string[], query: QueryLike = defaultQuery as any): Promise<{ id: number; status: string; queued_at: Date } | null> {
+  const set = Array.from(new Set(asins.map((a) => String(a).trim().toUpperCase()).filter(Boolean))).sort();
+  if (set.length === 0) return null;
+  const r = await query(
+    `SELECT id, status, queued_at FROM jobs
+      WHERE trigger = 'onboarding' AND queued_at > NOW() - make_interval(mins => $2)
+        AND (SELECT array_agg(x ORDER BY x) FROM unnest(scope_asins) x) = $1::text[]
+      ORDER BY id DESC LIMIT 1`,
+    [set, ONBOARDING_DEDUPE_MINUTES],
+  );
+  const row = r.rows[0];
+  return row && Number.isInteger(Number(row.id)) && Number(row.id) > 0 ? { id: Number(row.id), status: String(row.status), queued_at: row.queued_at } : null;
+}
+
 export async function enqueueOnboardingJob(
   asins: string[],
   opts: { requestedBy?: number | null } = {},
   query: QueryLike = defaultQuery as any,
-): Promise<{ job: JobRow | null; enqueued: string[]; covered: string[] }> {
+): Promise<{ job: JobRow | null; enqueued: string[]; covered: string[]; duplicateOf?: number }> {
   const wanted = Array.from(new Set(asins.map((a) => String(a).trim().toUpperCase()).filter(Boolean)));
   if (wanted.length === 0) return { job: null, enqueued: [], covered: [] };
+  const dup = await findRecentSameOnboarding(wanted, query);
+  if (dup) return { job: null, enqueued: [], covered: wanted, duplicateOf: dup.id };
   const already = await asinsCoveredByActiveOnboarding(query);
   const enqueued = wanted.filter((a) => !already.has(a));
   const covered = wanted.filter((a) => already.has(a));

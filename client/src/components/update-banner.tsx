@@ -1,7 +1,7 @@
 import { useEffect, useState } from "react";
 import { RefreshCw } from "lucide-react";
 import { Button } from "@/components/ui/button";
-import { currentEntryScript, entryScriptFromHtml, isStaleBuild } from "@/lib/build-check";
+import { currentEntryScript, entryScriptFromHtml, isStaleBuild, STALE_BUILD_EVENT } from "@/lib/build-check";
 
 // Shows a banner when a newer build has been deployed than the one this tab
 // runs (see lib/build-check.ts). Checked on load, every 5 minutes, and when
@@ -10,6 +10,12 @@ const CHECK_MS = 5 * 60 * 1000;
 
 export function UpdateBanner() {
   const [stale, setStale] = useState(false);
+  // The server refused a request from this build (409 STALE_BUILD): show the banner now.
+  useEffect(() => {
+    const on = () => setStale(true);
+    window.addEventListener(STALE_BUILD_EVENT, on);
+    return () => window.removeEventListener(STALE_BUILD_EVENT, on);
+  }, []);
   useEffect(() => {
     if (import.meta.env.DEV) return;
     const mine = currentEntryScript(document);

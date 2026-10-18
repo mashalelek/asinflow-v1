@@ -37,7 +37,7 @@ import { recordSourcingCostExport, listSourcingCostExports } from "./sourcing-co
 import { syncSourcingSheet } from "./sourcing-sync";
 import { refreshPrices } from "./price-sync";
 import { runFeesStage } from "./refresh-job";
-import { enqueueJob, enqueueOnboardingJob } from "./scheduler/jobs-repo";
+import { enqueueJob, enqueueOnboardingJob, findRecentSameOnboarding, ONBOARDING_DEDUPE_MINUTES } from "./scheduler/jobs-repo";
 import { fetchCatalogBatch, fetchFeesBatch } from "./product-info-batch";
 import { applyCatalogDeletedSignal } from "./catalog-deleted-write";
 import { offerAddForAsin, preFilterSubmitSet, type OfferAddResult, type PreFilterResult } from "./offer-add";
@@ -3846,6 +3846,14 @@ export async function registerRoutes(
     trigger: "upload" | "sourcing" | "extension" | "backfill" | "sc_discovery",
     progressPrefix: (i: number) => string | null = () => null,
   ): Promise<{ jobId: number | null }> {
+    // Dedupe (2026-10-18): exactly this ASIN set was onboarded in the last 10 minutes —
+    // refused, not re-run (nothing inserted, no job). The page clears its pending upload.
+    const dup = await findRecentSameOnboarding(asins.map((a) => a.asin), (sql, params) => query(sql, params)).catch(() => null);
+    if (dup) {
+      emit(JSON.stringify({ type: "job_duplicate", data: { jobId: dup.id, status: dup.status, asins: asins.length } }) + "\n");
+      log(`Onboarding (${trigger}): refused — the same ${asins.length} ASIN(s) were onboarded as job #${dup.id} (${dup.status}) within ${ONBOARDING_DEDUPE_MINUTES} min`, "refresh");
+      return { jobId: null };
+    }
     await insertNewAsinRows(asins, emit, sink, progressPrefix);
     let jobId: number | null = null;
     try {

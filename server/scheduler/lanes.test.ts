@@ -73,6 +73,7 @@ describe("onboarding jobs", () => {
   it("enqueueOnboardingJob drops ASINs an active onboarding job already covers; nothing left = no job", async () => {
     const inserts: any[] = [];
     const q: QueryLike = async (text, params) => {
+      if (text.includes("array_agg(x ORDER BY x)")) return { rows: [], rowCount: 0 }; // onboarding dedupe (2026-10-18): no repeat in the window
       if (text.includes("unnest(scope_asins)")) return { rows: [{ asin: "B000000001" }, { asin: "B000000002" }], rowCount: 2 };
       if (text.includes("INSERT INTO jobs")) { inserts.push(params); return { rows: [{ id: 9, trigger: "onboarding", scope_asins: params![4], progress: {} }], rowCount: 1 }; }
       throw new Error(`unexpected ${text.slice(0, 40)}`);
@@ -221,6 +222,7 @@ describe("two lanes in one runner", () => {
     const activeCover = new Set<string>();
     const inserts: any[] = [];
     const q: QueryLike = async (text, params) => {
+      if (text.includes("array_agg(x ORDER BY x)")) return { rows: [], rowCount: 0 }; // onboarding dedupe (2026-10-18): no repeat in the window
       if (text.includes("unnest(scope_asins)")) return { rows: Array.from(activeCover).map((asin) => ({ asin })), rowCount: 0 };
       if (text.includes("INSERT INTO jobs")) { inserts.push(params![4]); for (const a of params![4]) activeCover.add(a); return { rows: [{ id: inserts.length, trigger: "onboarding", scope_asins: params![4], progress: {} }], rowCount: 1 }; }
       throw new Error("unexpected");

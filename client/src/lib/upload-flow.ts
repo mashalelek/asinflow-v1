@@ -27,6 +27,13 @@ export function queuedJobIdFromMessage(msg: any): number | null {
   return Number.isInteger(id) && id > 0 ? id : null;
 }
 
+/** The server refused the upload as a repeat of an onboarding job from the last 10 minutes (2026-10-18). */
+export function duplicateJobFromMessage(msg: any): { jobId: number; status: string } | null {
+  if (msg?.type !== "job_duplicate") return null;
+  const id = Number(msg?.data?.jobId);
+  return Number.isInteger(id) && id > 0 ? { jobId: id, status: String(msg?.data?.status ?? "") } : null;
+}
+
 const isEmpty = (v: unknown) => v === null || v === undefined || v === "";
 const isPlainObject = (v: unknown): v is Record<string, unknown> => v != null && typeof v === "object" && !Array.isArray(v);
 

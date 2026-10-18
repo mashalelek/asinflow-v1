@@ -26,7 +26,7 @@ import { loadColumnConfig, type ColumnConfig } from "@/lib/columns";
 import { JobsDialog } from "@/components/jobs-dialog";
 import { useJobs } from "@/hooks/use-jobs";
 import { enqueueRefresh, cancelJob, getJob, runningLabel, queuedLabel, completionText, FOCUS_ASIN_EVENT, type Job } from "@/lib/jobs-api";
-import { refreshPlan, queuedJobIdFromMessage, applyStreamedRow } from "@/lib/upload-flow";
+import { refreshPlan, queuedJobIdFromMessage, duplicateJobFromMessage, applyStreamedRow } from "@/lib/upload-flow";
 import { rowsToRefresh, mergeRefreshedRows, RowRefresher, staleRowsDue } from "@/lib/row-refresh";
 import { buildFilterChips, addedHiddenReport, type FilterChipKey } from "@/lib/filter-chips";
 import { FilterChipsBar } from "@/components/filter-chips-bar";
@@ -596,7 +596,12 @@ export default function Home() {
         try {
           const msg = JSON.parse(line);
           const queuedId = queuedJobIdFromMessage(msg);
-          if (queuedId != null) {
+          const dup = duplicateJobFromMessage(msg);
+          if (dup) {
+            // Refused as a repeat (same ASINs onboarded < 10 min ago): no longer pending.
+            setAsins([]);
+            toast({ title: "Already onboarded", description: `These ASINs were onboarded a few minutes ago (job #${dup.jobId}, ${dup.status}) — not run again.` });
+          } else if (queuedId != null) {
             // The upload is on the queue now: it is no longer pending (fix
             // 2026-10-18) — the next Refresh click is a normal Refresh.
             queuedJobIdsRef.current.push(queuedId);

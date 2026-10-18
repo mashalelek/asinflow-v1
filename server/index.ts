@@ -8,6 +8,7 @@ import { serveStatic } from "./static";
 import { createServer } from "http";
 import pool, { ensureExtensionTables, query } from "./db";
 import { createSessionMiddleware, createAuthRouter, requireAuth, setAuthLogger } from "./auth";
+import { staleBuildGuard, readServerBuildId } from "./stale-build-guard";
 import { createAdminUsersRouter } from "./admin-users";
 import { runMigrations, setMigrateLogger, MigrationError } from "./migrate";
 
@@ -159,6 +160,12 @@ if (!process.env.VITEST) (async () => {
   app.use(createSessionMiddleware({ secret: sessionSecret, isProduction, pool }));
   app.use(createAuthRouter());
   app.use("/api", requireAuth);
+  // Stale-page guard (2026-10-18): mutating /api requests from a tab on an older
+  // build are refused with 409 — the server's build id is the entry script of the
+  // index.html it serves (production only; null in dev, guard off).
+  const serverBuildId = readServerBuildId();
+  log(serverBuildId ? `Stale-page guard on (build ${serverBuildId})` : "Stale-page guard off (no built index.html — dev)", "express");
+  app.use("/api", staleBuildGuard(serverBuildId));
   // Settings → Users (SPEC §25 commit 3): admin-only, after requireAuth.
   app.use(createAdminUsersRouter());
   // Scheduler v1 (SPEC §11 "Refresh job"): enqueue / current / history / cancel.
