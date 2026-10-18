@@ -8,7 +8,7 @@ import { getInboundHazmat } from "./inbound-hazmat";
 import { verifyPending, resolveSubmissionManual, resolveSubmissionsBulk, dismissFlags, getUnverifiedCount, listNeedsAttention, listInFlight, findRecentPendingIds, countOpenAmong } from "./listing-submissions-repo";
 import { runAuraSyncChain } from "./aura-sync-chain";
 import { probeGatingForAsins } from "./gating-probe";
-import { loadPoAsinRows } from "./po-queries";
+import { loadPoAsinRows, normalizeLineQty } from "./po-queries";
 import { evaluateAutoClose, setPoClosedManually, parseQtyInput, MANUAL_QTY_COLUMNS, type ManualQtyColumn } from "./po-close";
 import { ACTION_ITEMS, normalizeActionItems } from "./po-status-map";
 import { asinWriteThrough, unionActionItems, PO_ACTION_ITEMS_SQL } from "./po-action-items";
@@ -4309,8 +4309,8 @@ export async function registerRoutes(
         `SELECT p.*,
                 ${PO_ACTION_ITEMS_SQL} AS line_action_items,
                 (SELECT COUNT(*)::int FROM po_asins a WHERE a.po_id = p.id) AS asin_count,
-                (SELECT COALESCE(SUM(a.qty), 0)::int FROM po_asins a WHERE a.po_id = p.id) AS units_ordered,
-                (SELECT SUM(l.qty_received)::int FROM po_line_items l WHERE l.po_id = p.id) AS units_received,
+                (SELECT COALESCE(SUM(a.qty), 0)::float8 FROM po_asins a WHERE a.po_id = p.id) AS units_ordered,
+                (SELECT SUM(l.qty_received)::float8 FROM po_line_items l WHERE l.po_id = p.id) AS units_received,
                 (p.notes IS NOT NULL
                   OR EXISTS (SELECT 1 FROM po_asins a WHERE a.po_id = p.id AND a.notes IS NOT NULL)
                   OR EXISTS (SELECT 1 FROM po_line_items l WHERE l.po_id = p.id AND l.notes IS NOT NULL)) AS has_notes
@@ -4370,7 +4370,7 @@ export async function registerRoutes(
       const lineRows = (await query(
         `SELECT * FROM po_line_items WHERE po_id = $1 ORDER BY po_asin_id, position, id`,
         [id],
-      )).rows;
+      )).rows.map((l: any) => normalizeLineQty(l)); // numeric(10,2) → numbers (migration 062)
       const linesByAsin = new Map<string, any[]>();
       for (const l of lineRows) {
         const key = String(l.po_asin_id ?? "");
@@ -4383,7 +4383,7 @@ export async function registerRoutes(
       // Summary rollups (computed, never stored). units_received: SUM over
       // line qty_received — all-NULL stays NULL → em-dash, never 0.
       const num = (v: any) => (v == null ? null : parseFloat(v));
-      const unitsOrdered = asinRows.reduce((t: number, a: any) => t + (a.qty ?? 0), 0);
+      const unitsOrdered = Math.round(asinRows.reduce((t: number, a: any) => t + (Number(a.qty) || 0), 0) * 100) / 100;
       const recVals = lineRows.map((l: any) => l.qty_received).filter((v: any) => v != null);
       const unitsReceived = recVals.length === 0 ? null : recVals.reduce((t: number, v: any) => t + Number(v), 0);
       const nonNullCosts = asinRows.filter((a: any) => a.total_cost != null);

@@ -62,6 +62,16 @@ export function intQty(opts: { nullable?: boolean; min?: number } = {}): Parser 
     return { ok: true, value: n };
   };
 }
+/** A PO quantity (migration 062): ≥ min, at most 2 decimals; "" → null when nullable. */
+export function decQty(opts: { nullable?: boolean; positive?: boolean } = {}): Parser {
+  return (v) => {
+    if (blank(v)) return opts.nullable ? { ok: true, value: null } : { ok: false, error: "is required" };
+    const s = String(v).replace(/,/g, "").trim();
+    if (!/^\d+(\.\d{1,2})?$/.test(s)) return { ok: false, error: "must be a number with at most 2 decimals" };
+    if (opts.positive && Number(s) <= 0) return { ok: false, error: "must be more than 0" };
+    return { ok: true, value: Number(s) };
+  };
+}
 /** Yield (ASIN qty per product): > 0, up to 4 dp. */
 export const yieldParser: Parser = (v) => {
   const s = blank(v) ? "" : String(v).trim();
@@ -85,7 +95,7 @@ export const HEADER_FIELDS: Record<string, Parser> = {
 /** §3 product-line fields (action items keep their own route). `asin` re-maps the line. */
 export const LINE_FIELDS: Record<string, Parser> = {
   product_name: textOrNull, supplier_sku: textOrNull, price: money({ nullable: true }),
-  qty_ordered: intQty({ nullable: false }), qty_received: intQty({ nullable: true }), qty_returned: intQty({ nullable: true }), qty_canceled: intQty({ nullable: true }),
+  qty_ordered: decQty({ positive: true }), qty_received: decQty({ nullable: true }), qty_returned: decQty({ nullable: true }), qty_canceled: decQty({ nullable: true }),
   asin_qty_per_product: yieldParser, notes: textOrNull, asin: asinParser,
 };
 /** §3 ASIN-row fields (the manual quantities, action items and Cancel ASIN keep their routes). */
@@ -142,7 +152,7 @@ export async function logEdits(query: QueryLike, poId: string, userId: number | 
 export class EditError extends Error { constructor(public status: number, message: string) { super(message); } }
 
 /**
- * The importer's Ordered for an ASIN row, rounded to a whole ASIN unit:
+ * The importer's Ordered for an ASIN row, to 2 decimals (migration 062):
  * Σ(qty ordered × yield) for individual / multi-pack lines; for a bundle,
  * each component line gives its sets (qty × yield) and the bundle can only
  * be built as often as its scarcest component — the minimum (equal to the
@@ -150,8 +160,9 @@ export class EditError extends Error { constructor(public status: number, messag
  */
 export function asinQtyFromLines(lines: ReadonlyArray<{ qty_ordered: number | string | null; asin_qty_per_product: number | string | null }>, soldAs: string): { qty: number; uniqueProducts: number | null } {
   const per = lines.map((l) => (Number(l.qty_ordered) || 0) * trueYield(Number(l.asin_qty_per_product ?? 1) || 1));
-  if (soldAs === "bundle") return { qty: per.length === 0 ? 0 : Math.round(Math.min(...per)), uniqueProducts: Math.max(lines.length, 1) };
-  return { qty: Math.round(per.reduce((t, x) => t + x, 0)), uniqueProducts: null };
+  const c2 = (x: number) => Math.round(x * 100) / 100; // numeric(10,2) since migration 062
+  if (soldAs === "bundle") return { qty: per.length === 0 ? 0 : c2(Math.min(...per)), uniqueProducts: Math.max(lines.length, 1) };
+  return { qty: c2(per.reduce((t, x) => t + x, 0)), uniqueProducts: null };
 }
 
 /** Recompute an ASIN row's Ordered (and a bundle's unique products) from its lines; logs a change. */

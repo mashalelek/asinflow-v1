@@ -55,28 +55,18 @@ export function trueYield(t: number): number {
 
 /**
  * Col U for one product line — the sheet's formula, qty ordered × yield ÷
- * unique products (S), so a bundle component, an S>1 group and a pack order
- * whose units do not divide (5 units of a 2-pack = 2.5 packs, which Upload
- * to Velocity skips as invalid_pack_math) come out as the sheet had them.
- * po_asins.qty and po_line_items.qty_ordered are integers (2.5 packs was
- * stored as 3; an L of 13.5 as 14), so on an S=1 row the stored qty wins
- * unless the product is a half / third / quarter / sixth that rounds to it
- * (2.5 → 3, 11 × 1/3 → 4). A line of a multi-line S=1 group is its own
- * product (the stored qty is the group total).
- * Yields are 2 dp (48 × 0.33), hence trueYield. No qty / yield on the line:
- * the stored qty ÷ S.
+ * unique products (S). A one-product S=1 row is its stored Ordered: since
+ * migration 062 po_asins.qty holds the sheet's Col N exactly (2.5 packs is
+ * 2.5, so Upload to Velocity's invalid_pack_math skip still fires), and the
+ * stored 2-dp yields are noisy (48 × 0.33). Multi-line rows use the product
+ * with the yield restored to the fraction it was typed as (trueYield). No
+ * qty / yield on the line: the stored qty ÷ S.
  */
 export function lineAsinQty(asinQty: number, ordered: number | null, yieldT: number | null, uniqueS: number, lines = 1): number {
   const S = uniqueS > 0 ? uniqueS : 1;
   if (ordered == null || yieldT == null) return Math.round((asinQty / S) * 1e6) / 1e6;
-  const p = Math.round(((ordered * trueYield(yieldT)) / S) * 1e6) / 1e6;
-  if (S > 1 || lines > 1) return p; // per line — the stored qty is the ASIN total
-  // S=1, one line: the stored integer qty is the anchor (qty_ordered is an integer
-  // too, so a fractional sheet L like 13.5 was rounded on import). Take the
-  // product only when it is the half / third / quarter / sixth the integer
-  // was rounded from.
-  const clean = Math.abs(p * 12 - Math.round(p * 12)) < 1e-4;
-  return clean && Math.round(p) === asinQty && p !== asinQty ? p : asinQty;
+  if (S === 1 && lines === 1) return asinQty;
+  return Math.round(((ordered * trueYield(yieldT)) / S) * 1e6) / 1e6;
 }
 
 /**

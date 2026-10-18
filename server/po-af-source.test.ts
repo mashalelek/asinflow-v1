@@ -58,16 +58,13 @@ describe("lineAsinQty / trueYield (the sheet's U = L × T ÷ S)", () => {
     expect(trueYield(0.67)).toBeCloseTo(2 / 3, 9);
     expect(trueYield(2.5)).toBe(2.5);
   });
-  it("S>1 lines split by unique products; S=1 keeps the stored integer unless the product is the half / quarter it was rounded from", () => {
+  it("S>1 lines split by unique products; a one-product S=1 row is its stored (exact, numeric) Ordered; multi-line S=1 lines are their own product", () => {
     expect(lineAsinQty(5, 5, 1, 3)).toBeCloseTo(5 / 3, 6);  // B00SKJW2U4 (S=3 group)
     expect(lineAsinQty(10, 60, 0.17, 2)).toBe(5);          // B08QMDXLB1: 60 × 1/6 ÷ 2
-    expect(lineAsinQty(3, 5, 0.5, 1)).toBe(2.5);           // B007K83C46: stored 3, sheet 2.5
-    expect(lineAsinQty(16, 48, 0.33, 1)).toBe(16);         // yield noise
-    expect(lineAsinQty(4, 11, 0.33, 1)).toBeCloseTo(11 / 3, 6); // B0CPCBCYT9: 11 × 1/3, stored 4
-    expect(lineAsinQty(9, 14, 0.5, 1)).toBe(9);            // 7 does not round to the stored 9 — stored qty wins
+    expect(lineAsinQty(2.5, 5, 0.5, 1)).toBe(2.5);         // B007K83C46: stored exactly since migration 062
+    expect(lineAsinQty(16, 48, 0.33, 1)).toBe(16);         // yield noise — the stored qty
+    expect(lineAsinQty(9, 13.5, 0.67, 1)).toBe(9);         // B07N13K4SS: stored N
     expect(lineAsinQty(22, 12, 0.5, 1, 2)).toBe(6);        // multi-line S=1 group: the line's own product
-    expect(lineAsinQty(2, 30, 0.07, 1)).toBe(2);           // 2.1 is not a clean fraction
-    expect(lineAsinQty(18, 1, 24, 1)).toBe(18);            // L 0.75 stored 1
     expect(lineAsinQty(12, null, null, 2)).toBe(6);
   });
 });

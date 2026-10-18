@@ -39,6 +39,15 @@ export function poAsinRowsSql(where: string): string {
            ORDER BY pa.po_id, pa.asin`;
 }
 
+/** PO quantities are numeric(10,2) (migration 062) — pg returns them as strings; the API keeps returning numbers. */
+const qn = (v: unknown): number | null => (v == null || v === "" ? null : Number(v));
+export function normalizeAsinRowQty<T extends Record<string, any>>(r: T): T {
+  return { ...r, qty: qn(r.qty) ?? 0, unreimbursed_loss_qty: qn(r.unreimbursed_loss_qty) };
+}
+export function normalizeLineQty<T extends Record<string, any>>(l: T): T {
+  return { ...l, qty_ordered: qn(l.qty_ordered), qty_received: qn(l.qty_received), qty_returned: qn(l.qty_returned), qty_canceled: qn(l.qty_canceled), final_qty: qn(l.final_qty) };
+}
+
 export interface PoAsinShipmentRow {
   id: string; po_asin_id: string; velocity_shipment_id: string; fba_shipment_ids: string[]; sc_match: string;
   qty_shipped: string; qty_received: string | null; shipped_at: string | null; source: string; assigned_by?: string;
@@ -63,6 +72,6 @@ export async function loadPoAsinRows(query: QueryLike, poIds: string[]): Promise
        FROM po_line_items WHERE po_asin_id = ANY($1::uuid[]) ORDER BY po_asin_id, position, id`, [ids],
   )).rows as any[];
   const linesByAsin = new Map<string, any[]>();
-  for (const l of lines) { const k = String(l.po_asin_id); if (!linesByAsin.has(k)) linesByAsin.set(k, []); linesByAsin.get(k)!.push({ ...l, action_items: unionActionItems([l.action_items]) }); }
-  return rows.map((r: any) => ({ ...r, action_items: unionActionItems([r.action_items]), shipments: byAsin.get(String(r.id)) ?? [], lines: linesByAsin.get(String(r.id)) ?? [] }));
+  for (const l of lines) { const k = String(l.po_asin_id); if (!linesByAsin.has(k)) linesByAsin.set(k, []); linesByAsin.get(k)!.push({ ...normalizeLineQty(l), action_items: unionActionItems([l.action_items]) }); }
+  return rows.map((r: any) => ({ ...normalizeAsinRowQty(r), action_items: unionActionItems([r.action_items]), shipments: byAsin.get(String(r.id)) ?? [], lines: linesByAsin.get(String(r.id)) ?? [] }));
 }

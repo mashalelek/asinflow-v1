@@ -468,8 +468,8 @@ export default function PurchaseOrders() {
                   <td className="px-3 py-2">{po.supplier}</td>
                   <td className={`px-3 py-2 text-right font-mono ${money.muted ? "text-muted-foreground/50" : ""}`}>{money.text}</td>
                   <td className="px-3 py-2 text-right">{po.asin_count}</td>
-                  <td className="px-3 py-2 text-right">{po.units_ordered}</td>
-                  <td className="px-3 py-2 text-right">{po.units_received == null ? <span className="text-muted-foreground/50">—</span> : po.units_received}</td>
+                  <td className="px-3 py-2 text-right">{fmtQty(po.units_ordered)}</td>
+                  <td className="px-3 py-2 text-right">{po.units_received == null ? <span className="text-muted-foreground/50">—</span> : fmtQty(po.units_received)}</td>
                   <td className="px-3 py-2">
                     {po.invoice_attached
                       ? <Paperclip className="h-3.5 w-3.5 text-muted-foreground" />
@@ -630,8 +630,8 @@ export function PurchaseOrderDetailPlaceholder() {
       <div className="flex gap-6 rounded-md px-4 py-3 text-sm" style={{ border: "0.5px solid hsl(var(--border))" }} data-testid="po-summary-strip">
         {[
           ["ASINs", String(summary.asin_count)],
-          ["Units Ordered", String(summary.units_ordered)],
-          ["Units Received", summary.units_received == null ? "—" : String(summary.units_received)],
+          ["Units Ordered", fmtQty(summary.units_ordered)],
+          ["Units Received", fmtQty(summary.units_received)],
         ].map(([k, v]) => (
           <div key={k}><span className="text-muted-foreground mr-1.5">{k}</span><span className="font-medium">{v}</span></div>
         ))}

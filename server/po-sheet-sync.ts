@@ -65,6 +65,16 @@ export function pctToNumber(raw: string): string | null {
   return x;
 }
 
+/** A PO quantity cell (Cols L, M, N, R, V): decimals kept to 2 places (migration 062, 2026-10-18). */
+export function qtyOrNull(raw: string): number | null {
+  const s = t(raw);
+  if (s === "") return null;
+  const n = Number(s.replace(/,/g, ""));
+  if (!Number.isFinite(n)) throw new Error(`unparseable quantity: ${JSON.stringify(s)}`);
+  return Math.round(n * 100) / 100;
+}
+
+/** A count cell (Col S unique products, Col AY units / pack): whole number. */
 export function intOrNull(raw: string): number | null {
   const s = t(raw);
   if (s === "") return null;
@@ -264,8 +274,8 @@ export function parsePoSheet(header: string[], dataCells: string[][]): ParsedPoS
       if (ars.length > 1 && isS1Group) {
         // S=1 merge rule: additive rows → qty = SUM(Col N); cost verbatim when
         // all rows agree, else a Col-N-weighted average in integer cents.
-        const perRow = ars.map((r) => ({ n: intOrNull(r.cells[COL.asinQtyTotal]) ?? 0, y: money(r.cells, COL.adjCogs) }));
-        qty = perRow.reduce((a, r) => a + r.n, 0);
+        const perRow = ars.map((r) => ({ n: qtyOrNull(r.cells[COL.asinQtyTotal]) ?? 0, y: money(r.cells, COL.adjCogs) }));
+        qty = Math.round(perRow.reduce((a, r) => a + r.n, 0) * 100) / 100;
         const yVals = Array.from(new Set(perRow.map((r) => r.y ?? "NULL")));
         if (yVals.length === 1) {
           costPerUnit = perRow[0].y;
@@ -276,7 +286,7 @@ export function parsePoSheet(header: string[], dataCells: string[][]): ParsedPoS
           costPerUnit = wCents != null ? centsToDec(wCents) : null;
         }
       } else {
-        qty = intOrNull(ar.cells[COL.asinQtyTotal]) ?? 0;
+        qty = qtyOrNull(ar.cells[COL.asinQtyTotal]) ?? 0;
         costPerUnit = money(ar.cells, COL.adjCogs);
       }
       const prepRaw = t(ar.cells[COL.prepCost]);
@@ -302,7 +312,7 @@ export function parsePoSheet(header: string[], dataCells: string[][]): ParsedPoS
       poAsins.push({
         asin, asinName: t(ar.cells[COL.asinName]) || null,
         qty, costPerUnit, prep, soldAs, unitsPerPack: upp, lostDamagedUs,
-        lossQty: intOrNull(ar.cells[COL.lossQty]) ?? 0,
+        lossQty: qtyOrNull(ar.cells[COL.lossQty]) ?? 0,
         lossAmount: moneyVerbatim(t(ar.cells[COL.lossAmount])).value ?? "0",
         uniqueProducts: intOrNull(ar.cells[COL.uniqueProductsPerAsin]),
         lines: ars.map((r, i) => {
@@ -314,9 +324,9 @@ export function parsePoSheet(header: string[], dataCells: string[][]): ParsedPoS
           productName: t(r.cells[COL.productName]) || null,
           supplierSku: t(r.cells[COL.skuUpc]) || null,
           price: money(r.cells, COL.price),
-          qtyOrdered: intOrNull(r.cells[COL.qtyOrdered]),
-          qtyReceived: intOrNull(r.cells[COL.qtyReceived]),
-          qtyReturned: intOrNull(r.cells[COL.qtyReturned]) ?? 0,
+          qtyOrdered: qtyOrNull(r.cells[COL.qtyOrdered]),
+          qtyReceived: qtyOrNull(r.cells[COL.qtyReceived]),
+          qtyReturned: qtyOrNull(r.cells[COL.qtyReturned]) ?? 0,
           asinQtyPerProduct: t(r.cells[COL.asinQtyPerProduct]) === "" ? "1" : t(r.cells[COL.asinQtyPerProduct]),
           adjustedProductCost: money(r.cells, COL.adjProductCost),
           statusCell, actionItems: st.actionItems, canceled: st.canceled, returned: st.returned,

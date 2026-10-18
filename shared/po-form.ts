@@ -115,7 +115,7 @@ export function checkPoForm(f: PoFormState): PoFormCheck {
   let computedSubtotal = 0;
   products.forEach((p, i) => {
     const qty = t(p.qty_ordered);
-    if (!/^\d+$/.test(qty) || Number(qty) < 1) perr(i, "qty must be a whole number ≥ 1");
+    if (!/^\d+(\.\d{1,2})?$/.test(qty) || Number(qty) <= 0) perr(i, "qty must be more than 0 (at most 2 decimals)");
     const price = moneyNum(p.price);
     if (price == null || Number.isNaN(price) || price < 0) perr(i, "price must be an amount ≥ 0");
     if (!/^[A-Z0-9]{10}$/.test(t(p.asin).toUpperCase())) perr(i, "map it to an ASIN (10 characters)");
@@ -125,7 +125,7 @@ export function checkPoForm(f: PoFormState): PoFormCheck {
     const upp = t(p.units_per_pack);
     if (p.sold_as !== "individual" && (!/^\d+$/.test(upp) || Number(upp) < 2)) perr(i, `units per pack must be a whole number ≥ 2 for a ${p.sold_as}`);
     const prep = moneyNum(p.prep_cost); if (prep != null && (Number.isNaN(prep) || prep < 0)) perr(i, "prep must be an amount ≥ 0");
-    if (price != null && !Number.isNaN(price) && /^\d+$/.test(qty)) computedSubtotal += price * Number(qty);
+    if (price != null && !Number.isNaN(price) && /^\d+(\.\d{1,2})?$/.test(qty)) computedSubtotal += price * Number(qty);
   });
   computedSubtotal = r2(computedSubtotal);
 

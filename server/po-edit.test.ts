@@ -17,9 +17,11 @@ describe("field parsers", () => {
     expect(parseEdits(HEADER_FIELDS, { status: "Closed" })).toMatchObject({ ok: false, error: expect.stringMatching(/^status is not an editable field/) });
     expect(parseEdits(HEADER_FIELDS, {})).toMatchObject({ ok: false, error: "nothing to update" });
   });
-  it("lines and ASIN rows: whole quantities, yield > 0, ASIN shape, sold-as enum; derived values are not editable", () => {
+  it("lines and ASIN rows: quantities to 2 decimals, yield > 0, ASIN shape, sold-as enum; derived values are not editable", () => {
     expect(parseEdits(LINE_FIELDS, { qty_ordered: "12", asin_qty_per_product: "0.5", asin: "b0test0001" })).toEqual({ ok: true, edits: { qty_ordered: 12, asin_qty_per_product: "0.5", asin: "B0TEST0001" } });
-    expect(parseEdits(LINE_FIELDS, { qty_ordered: "2.5" })).toMatchObject({ ok: false });
+    expect(parseEdits(LINE_FIELDS, { qty_ordered: "2.5", qty_canceled: "0.25" })).toEqual({ ok: true, edits: { qty_ordered: 2.5, qty_canceled: 0.25 } }); // decimals since migration 062
+    expect(parseEdits(LINE_FIELDS, { qty_ordered: "2.555" })).toMatchObject({ ok: false });
+    expect(parseEdits(LINE_FIELDS, { qty_ordered: "0" })).toMatchObject({ ok: false });
     expect(parseEdits(LINE_FIELDS, { asin_qty_per_product: "0" })).toMatchObject({ ok: false });
     expect(parseEdits(LINE_FIELDS, { asin: "B0SHORT" })).toMatchObject({ ok: false });
     expect(parseEdits(ASIN_FIELDS, { sold_as: "pack" })).toMatchObject({ ok: false });

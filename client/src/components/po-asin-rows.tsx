@@ -342,13 +342,13 @@ export function PoAsinRow({ a, indent = false, editable = false, onChanged }: { 
             </Tooltip>
           )}
         </td>
-        <td className="px-3 py-1.5 text-right">{a.qty}</td>
+        <td className="px-3 py-1.5 text-right"><QtyCell v={a.qty} /></td>
         <td className="px-3 py-1.5 text-right">{editable ? <InlineEdit money value={a.cost_per_unit} onSave={saveAsin("cost_per_unit")} align="right" width="w-20" testId={`cost_per_unit-${a.id}`}><Money v={a.cost_per_unit} /></InlineEdit> : <Money v={a.cost_per_unit} />}</td>
         <td className="px-3 py-1.5 text-right"><Money v={a.total_cost} /></td>
         <td className="px-3 py-1.5 text-right">{editable ? <InlineEdit money value={a.prep_cost} onSave={saveAsin("prep_cost")} align="right" width="w-16" testId={`prep_cost-${a.id}`}><Money v={a.prep_cost} /></InlineEdit> : <Money v={a.prep_cost} />}</td>
         <td className="px-3 py-1.5">{editable ? <SelectEdit value={a.sold_as} options={["individual", "multi-pack", "bundle"]} onSave={saveAsin("sold_as")} testId={`sold_as-${a.id}`} /> : a.sold_as}</td>
         <td className="px-3 py-1.5 text-right">{editable && a.sold_as !== "individual" ? <InlineEdit value={a.units_per_pack} onSave={saveAsin("units_per_pack")} align="right" width="w-14" testId={`units_per_pack-${a.id}`}>{a.units_per_pack}</InlineEdit> : a.units_per_pack}</td>
-        <td className="px-3 py-1.5 text-right">{individualUnits(a.qty, a.units_per_pack)}</td>
+        <td className="px-3 py-1.5 text-right"><QtyCell v={individualUnits(Number(a.qty), a.units_per_pack)} /></td>
         <td className="px-3 py-1.5 text-right"><QtyCell v={a.qty_canceled_asin} />{editable && (a.lines ?? []).length > 0 && <MarkCanceled a={a} onChanged={onChanged} />}</td>
         <td className="px-3 py-1.5 text-right"><QtyCell v={a.qty_returned_asin} /></td>
         <td className="px-3 py-1.5 text-right">{editable ? <EditableQty rowId={a.id} col="qty_shipped_supplier" v={a.qty_shipped_supplier} onChanged={onChanged} /> : <QtyCell v={a.qty_shipped_supplier} />}</td>

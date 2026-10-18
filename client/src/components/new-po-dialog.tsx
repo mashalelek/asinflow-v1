@@ -154,7 +154,7 @@ export function NewPoDialog({ open, onOpenChange, onCreated }: { open: boolean; 
                       <td className="px-2 py-1.5"><Input value={p.product_name} onChange={(e) => setP(i, "product_name", e.target.value)} className="h-8 text-xs min-w-[14rem]" data-testid={`input-new-po-product_name-${i}`} /></td>
                       <td className="px-2 py-1.5"><Input value={p.supplier_sku} onChange={(e) => setP(i, "supplier_sku", e.target.value)} className="h-8 text-xs w-28" data-testid={`input-new-po-supplier_sku-${i}`} /></td>
                       <td className="px-2 py-1.5"><MoneyCalcInput value={p.price} onChange={(v) => setP(i, "price", v)} className="h-8 text-xs w-20 text-right" data-testid={`input-new-po-price-${i}`} /></td>
-                      <td className="px-2 py-1.5"><Input value={p.qty_ordered} onChange={(e) => setP(i, "qty_ordered", e.target.value)} inputMode="numeric" className="h-8 text-xs w-16 text-right" data-testid={`input-new-po-qty_ordered-${i}`} /></td>
+                      <td className="px-2 py-1.5"><Input value={p.qty_ordered} onChange={(e) => setP(i, "qty_ordered", e.target.value)} inputMode="decimal" className="h-8 text-xs w-16 text-right" data-testid={`input-new-po-qty_ordered-${i}`} /></td>
                       <td className="px-2 py-1.5 align-top"><AsinTypeahead value={p.asin} onChange={(v) => setP(i, "asin", v)} rowIndex={i} known={known} /></td>
                       <td className="px-2 py-1.5"><Input value={p.asin_qty_per_product} onChange={(e) => setP(i, "asin_qty_per_product", e.target.value)} inputMode="decimal" className="h-8 text-xs w-16 text-right" data-testid={`input-new-po-yield-${i}`} /></td>
                       <td className="px-2 py-1.5">

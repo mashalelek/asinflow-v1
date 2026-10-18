@@ -15,7 +15,7 @@ describe("checkPoForm", () => {
     const c = checkPoForm(f);
     expect(c.ok).toBe(false);
     expect(c.errors).toEqual(expect.arrayContaining(["Supplier is required", "Order # is required"]));
-    expect(c.productErrors[0]).toEqual(expect.arrayContaining(["qty must be a whole number ≥ 1", "map it to an ASIN (10 characters)"]));
+    expect(c.productErrors[0]).toEqual(expect.arrayContaining(["qty must be more than 0 (at most 2 decimals)", "map it to an ASIN (10 characters)"]));
   });
   it("a valid single-product PO: one ASIN row, Ordered = qty × yield, live totals, cost / unit from price", () => {
     const c = checkPoForm(base());

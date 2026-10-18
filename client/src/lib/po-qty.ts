@@ -31,8 +31,8 @@ export function productQtyFromAsin(asinQty: string | number | null | undefined, 
 }
 
 /** Individual Units Ordered (col 10) = Ordered × Units/Pack (P1). */
-export function individualUnits(qty: number, unitsPerPack: number): number {
-  return qty * unitsPerPack;
+export function individualUnits(qty: number | string, unitsPerPack: number): number {
+  return Math.round(Number(qty) * unitsPerPack * 100) / 100; // decimals since migration 062
 }
 
 /** §4 column model — order and names, shared by the nested rows and the detail ASINs tab. */

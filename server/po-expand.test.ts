@@ -26,7 +26,7 @@ describe("§4 column model", () => {
     const comp = read("client/src/components/po-asin-rows.tsx");
     expect(comp).not.toMatch(/unreimbursed/i);
     // Individual Units Ordered = Ordered × Units/Pack (P1)
-    expect(comp).toMatch(/individualUnits\(a\.qty, a\.units_per_pack\)/);
+    expect(comp).toMatch(/individualUnits\(Number\(a\.qty\), a\.units_per_pack\)/);
     // fixed widths so separate instances align under one header
     expect(comp).toMatch(/table-fixed/);
     expect(comp).toMatch(/<colgroup>/);
@@ -47,6 +47,7 @@ describe("quantity semantics (§4.1)", () => {
   it("Individual Units Ordered: 5 three-packs = 15 skeins", () => {
     expect(individualUnits(5, 3)).toBe(15);
     expect(individualUnits(6, 2)).toBe(12);
+    expect(individualUnits("2.50", 2)).toBe(5); // numeric(10,2) since migration 062
   });
 });
 
