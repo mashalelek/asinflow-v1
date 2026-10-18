@@ -19,7 +19,7 @@ This app runs on the following stack. This is settled. Do not suggest alternativ
 ### What exists and is working (do NOT rebuild or remove):
 - PostgreSQL persistence — all ASIN data, estimates, sales, inventory, tags, settings stored in DB
 - Schema defined in `docs/SCHEMA.md` — reference this for all table structures
-- Google Sheets API integration — pulls COGS from PO tracker sheet, pulls ordered qty
+- Google Sheets API integration — the Orders (PO tracker) sheet is **intake only** for new POs (Sync POs inserts a PO not yet in AF and never updates one; 2026-10-18). COGS, cost, prep and supplier come from AF's PO tables (`purchase_orders` / `po_asins` / `po_line_items`, via `server/po-af-source.ts`), not from the sheet
 - SP-API integrations: catalog data, pricing, inventory (`getInventorySummaries`), sales (flat file orders report), listings restrictions, suppression (FYP report)
 - Scheduled refresh passes: 00:00 ET with the daily block, hourly 04–23 ET (`server/scheduler/schedule.ts`, gated by `ENABLE_CRONS=true`; off locally)
 - Toolbar buttons: Upload File, Analyze, Sync PO, Sync Inventory, Sync Sales
@@ -60,7 +60,7 @@ This app runs on the following stack. This is settled. Do not suggest alternativ
 - `psql asinflow` — connect to the local database
 
 ### COGS priority:
-1. Google Sheets PO data (Col Y) → `cogs_source = 'po_sheet'`
+1. AF's PO tables — the newest non-canceled PO ASIN row's cost / unit, prep and supplier (`runSheetsSync` reading `loadAfAsinCostMap`; newest = order date, then entry sequence) → `cogs_source = 'po_sheet'` (label kept). The Google Sheet is intake for new POs only; AF owns every PO after it exists (SPEC §11 banner, §14, §22 "AF owns POs").
 2. CSV upload → `cogs_source = 'csv'`
 3. Manual entry → `cogs_source = 'manual'`
 
@@ -306,8 +306,8 @@ never wait on the scheduled pass (2026-10-16): only SP-API refresh work
 goes on the queue.** Add to SC checks gating live INLINE through
 `server/gating-probe.ts` — the same writer component 8 uses — with no jobs
 row (decision 9, confirmed by test: `putListingsItem` accepts a gated
-ASIN). Push to Aura reads the PO sheet inline (`runSheetsSync`, scoped)
-then pushes. Sync POs, Export SB COGS, Update COGS in SC, Verify now,
+ASIN). Push to Aura runs the cost half inline (`runSheetsSync`, scoped — it
+reads AF's PO tables since 2026-10-18, not the sheet) then pushes. Sync POs, Export SB COGS, Update COGS in SC, Verify now,
 Recheck now, Park/Unpark/Mark dead/Revive stay direct calls; Sync Sourcing
 and Upload File keep their inline sheet/CSV step and only the onboarding
 Refresh they spawn is a job. `jobs.components` (migration 053) remains for
