@@ -2,6 +2,7 @@ import 'dotenv/config';
 import express, { type Request, Response, NextFunction } from "express";
 import { registerRoutes, getOnboardScDiscoveries, getRunSheetsSync, getOnboardSalesAsins } from "./routes";
 import { createJobsRouter } from "./scheduler/routes";
+import { createListingHygieneRouter } from "./listing-hygiene-routes";
 import { startRunner, setRunnerLogger } from "./scheduler/runner";
 import { startSchedule, setScheduleLogger, nextPassAfter } from "./scheduler/schedule";
 import { serveStatic } from "./static";
@@ -171,6 +172,8 @@ if (!process.env.VITEST) (async () => {
   // Scheduler v1 (SPEC §11 "Refresh job"): enqueue / current / history / cancel.
   // nextPassAt feeds Settings → Scheduler; null while the schedule is off.
   app.use(createJobsRouter({ nextPassAt: async () => (process.env.ENABLE_CRONS === "true" ? nextPassAfter(new Date()).at.toISOString() : null) }));
+  // Listing hygiene manual entry points (SPEC §11 components 22 / 24).
+  app.use(createListingHygieneRouter());
 
   await registerRoutes(httpServer, app);
 
