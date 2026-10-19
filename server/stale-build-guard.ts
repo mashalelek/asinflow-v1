@@ -20,8 +20,14 @@ const EXEMPT = [/^\/auth\//, /^\/import-asin$/];
 const SAFE = new Set(["GET", "HEAD", "OPTIONS"]);
 
 /** The production build id: the entry script dist/public/index.html names. Null in dev. */
-export function readServerBuildId(publicDir = path.resolve(__dirname, "public")): string | null {
-  try { return entryScriptFromHtml(fs.readFileSync(path.join(publicDir, "index.html"), "utf8")); } catch { return null; }
+export function readServerBuildId(publicDir?: string): string | null {
+  // __dirname exists only in the production CJS bundle (dist/index.cjs, next
+  // to dist/public). Under `npm run dev` (tsx, ESM) it is undefined — the
+  // default must not be evaluated there, or the server cannot boot; dev has
+  // no built index, so the answer is null (guard off).
+  const dir = publicDir ?? (typeof __dirname !== "undefined" ? path.resolve(__dirname, "public") : null);
+  if (!dir) return null;
+  try { return entryScriptFromHtml(fs.readFileSync(path.join(dir, "index.html"), "utf8")); } catch { return null; }
 }
 
 /** Express middleware mounted on /api (req.path is relative to /api). */
