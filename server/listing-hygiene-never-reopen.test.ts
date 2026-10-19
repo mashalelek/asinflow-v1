@@ -18,7 +18,7 @@ function walk(dir: string, out: string[] = []): string[] {
     if (e === "node_modules" || e.startsWith(".")) continue;
     const p = join(dir, e);
     if (statSync(p).isDirectory()) walk(p, out);
-    else if (/\.(ts|tsx|js|mjs|cjs)$/.test(e) && !/\.test\.(ts|tsx)$/.test(e)) out.push(p);
+    else if (/\.(ts|tsx|js|mjs|cjs)$/.test(e) && !/\.test(-fixtures)?\.(ts|tsx)$/.test(e)) out.push(p);
   }
   return out;
 }
