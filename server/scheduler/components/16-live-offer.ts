@@ -10,6 +10,7 @@
 import { runFullScopePass, type FullScopeReport } from "../../full-scope-pass";
 import { ASIN_CHECKPOINT_EVERY } from "../types";
 import { chunk } from "./shared";
+import { verifyListingActions } from "../../listing-hygiene";
 import type { ComponentDef, ComponentContext, ComponentResult } from "../types";
 
 export const LISTINGS_REPORTS = "listings:reports";
@@ -21,6 +22,7 @@ export const liveOffer: ComponentDef = {
     const counts = { probed: 0, live: 0, no_offer: 0, transient: 0, flips: 0, repoints: 0, discoveries: 0, no_listing: 0 };
     const outcomes: Record<string, string> = {};
     const reports: FullScopeReport[] = (ctx.cache.get(LISTINGS_REPORTS) as FullScopeReport[] | undefined) ?? [];
+    const startedAt = new Date();
     for (const part of chunk(ctx.asins, ASIN_CHECKPOINT_EVERY)) {
       const rep = await runFullScopePass({ dryRun: false, asinFilter: new Set(part), phaseC: false, recordListingState: true });
       reports.push(rep);
@@ -33,6 +35,10 @@ export const liveOffer: ComponentDef = {
       await ctx.checkpoint(part[part.length - 1]);
     }
     ctx.cache.set(LISTINGS_REPORTS, reports);
+    // Listing hygiene: accepted closes / deletes whose SKU this run probed are
+    // verified (or count a pass toward not_effective).
+    const v = await verifyListingActions(ctx.query, startedAt);
+    Object.assign(counts, { actions_verified: v.verified, actions_pending: v.pending, actions_not_effective: v.not_effective });
     return { counts, outcomes };
   },
 };

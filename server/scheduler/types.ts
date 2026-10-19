@@ -69,11 +69,20 @@ export interface Flip {
   to: string;
 }
 
+/** A listing-hygiene SC write Amazon accepted (components 22 / 24) — the completion toast's Changes panel. */
+export interface ListingActionChange {
+  action: "close" | "delete";
+  asin: string;
+  sku: string;
+}
+
 export interface JobSummary {
   asins: number;
   durationMs: number;
   components: Record<string, Record<string, number>>;
   flips: Flip[];
+  /** Listings closed / deleted in this job (2026-10-19); absent = none. */
+  listingActions?: ListingActionChange[];
   /** Component number that failed / was cancelled, if any. */
   stoppedAt?: number;
 }
@@ -109,6 +118,7 @@ export interface ComponentResult {
   /** Per-ASIN outcome strings, Prices & Stock shape; only non-trivial ones need listing. */
   outcomes: Record<string, string>;
   flips?: Flip[];
+  listingActions?: ListingActionChange[];
 }
 
 export type QueryLike = (sql: string, params?: any[]) => Promise<{ rows: any[]; rowCount: number | null }>;

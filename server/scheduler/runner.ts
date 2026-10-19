@@ -195,6 +195,7 @@ export async function runJob(
     }, query);
     summary.components[c.key] = result.counts;
     if (result.flips?.length) summary.flips.push(...result.flips);
+    if (result.listingActions?.length) (summary.listingActions ??= []).push(...result.listingActions);
     progress.done.push(c.n);
     progress.asin_cursor = null;
     await writeProgress(job.id, progress, query);

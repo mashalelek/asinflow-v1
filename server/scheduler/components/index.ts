@@ -26,6 +26,7 @@ import { suppressions } from "./18-suppressions";
 import { sales } from "./19-sales";
 import { refunds } from "./20-refunds";
 import { actualFees } from "./21-actual-fees";
+import { closeOos } from "./22-close-oos";
 import { ledger } from "./23-ledger";
 import type { ComponentDef } from "../types";
 
@@ -33,7 +34,7 @@ export const COMPONENTS: readonly ComponentDef[] = Object.freeze([
   scDiscovery, catalog, catalogDeleted, bsr, meltable, dangerousGood, hazmat, gating,
   poSheet, prices, sellers, cpt, fees, profit, inventory, liveOffer, primarySku,
   suppressions, sales, refunds, actualFees,
-  ledger,
+  closeOos, ledger,
 ]);
 
 // The order is a fact, not a convention: fail loudly at import if it drifts.

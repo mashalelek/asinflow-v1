@@ -34,7 +34,18 @@ const MARKETPLACE = "ATVPDKIKX0DER";
 const PRODUCT_TYPE = "PRODUCT"; // offer-only matching uses the generic PRODUCT type
 // §18 born-closed: past end_at soft-closes the offer at creation. Year-2000
 // per the community-verified pattern; any past date works.
-const BORN_CLOSED_END_AT = "2000-01-01";
+export const BORN_CLOSED_END_AT = "2000-01-01";
+
+/**
+ * THE end_at value AF writes — the one helper both writers use: the
+ * born-closed PUT (buildOfferOnlyPayload) and the component-22 close PATCH
+ * (listing-hygiene.ts). A fixed past date; AF never sends end_at null and
+ * never removes it, so no code path can reopen a listing (§18, enforced by
+ * listing-hygiene-never-reopen.test.ts).
+ */
+export function closedEndAt(): { value: string } {
+  return { value: BORN_CLOSED_END_AT };
+}
 
 export interface OfferAddInput {
   asin: string;
@@ -578,7 +589,7 @@ export function buildOfferOnlyPayload(input: OfferAddInput, dgHzRegulationValue:
         marketplace_id: MARKETPLACE,
         currency: "USD",
         our_price: [{ schedule: [{ value_with_tax: input.price }] }],
-        end_at: { value: BORN_CLOSED_END_AT },
+        end_at: closedEndAt(),
       },
     ],
     fulfillment_availability: [

@@ -21,7 +21,7 @@ setRunnerLogger(() => {});
 
 describe("the component sequence is fixed", () => {
   // 1–21 (scheduler v1) + the listing-hygiene components (SPEC §11, 2026-10-19).
-  const SEQUENCE = [...Array.from({ length: 21 }, (_, i) => i + 1), 23];
+  const SEQUENCE = [...Array.from({ length: 21 }, (_, i) => i + 1), 22, 23];
   it("the components, numbered in array order, daily block = 2..8 + 23 (ledger), hourly otherwise", () => {
     expect(COMPONENTS.map((c) => c.n)).toEqual(SEQUENCE);
     expect(COMPONENTS.filter((c) => c.tier === "daily").map((c) => c.n)).toEqual([2, 3, 4, 5, 6, 7, 8, 23]);
