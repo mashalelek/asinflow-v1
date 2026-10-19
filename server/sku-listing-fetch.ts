@@ -41,12 +41,45 @@ export interface ListingIssueLite {
   message: string;
 }
 
+// Listing state per SKU (listing hygiene, SPEC §11 component 16, 2026-10-19):
+// read only when the caller asks for `attributes` — the same call, a larger
+// payload. Spike 2026-10-18/19: a closed offer serializes
+// purchasable_offer[].end_at as {value: "<ISO timestamp>"} — Amazon REWRITES
+// the date on close (born-closed SKUs sent 2000-01-01 read back 2026-10-13 /
+// -15; an SC-closed SKU read 2026-10-19), so it means "closed now" when
+// <= now(), never "closed since" — and an open offer as {value: null}.
+export interface ListingState {
+  /** summaries[].createdDate, or null. */
+  createdAt: string | null;
+  /** The US offer's end_at.value, or null (open, or no offer entry). */
+  offerEndAt: string | null;
+  /** True when the listing carries a US purchasable_offer entry at all. */
+  hasOffer: boolean;
+  productType: string | null;
+}
+
+/** Pure: a getListingsItem body (summaries + attributes) → the listing state. */
+export function parseListingState(data: any): ListingState {
+  const summary = Array.isArray(data?.summaries) ? data.summaries.find((x: any) => x?.marketplaceId === MARKETPLACE) ?? data.summaries[0] : null;
+  const offers: any[] = Array.isArray(data?.attributes?.purchasable_offer) ? data.attributes.purchasable_offer : [];
+  const us = offers.filter((o) => (o?.marketplace_id ?? MARKETPLACE) === MARKETPLACE);
+  // The consumer offer: audience ALL when several exist (B2B rides its own entry).
+  const offer = us.find((o) => (o?.audience ?? "ALL") === "ALL") ?? us[0] ?? null;
+  const raw = offer?.end_at?.value ?? null;
+  return {
+    createdAt: summary?.createdDate ? String(summary.createdDate) : null,
+    offerEndAt: raw == null || raw === "" ? null : String(raw),
+    hasOffer: offer != null,
+    productType: summary?.productType ? String(summary.productType) : null,
+  };
+}
+
 export type ListingStatusOutcome =
   // `shell: true` distinguishes "200, but no listing behind the SKU" from a
   // plain 404. Both are present=false and both are treated identically for
   // the flag (§18 A1); the discriminator exists so reports can count shells
   // and so a future reader does not have to rediscover that they happen.
-  | { ok: true; present: true; statuses: string[]; issues: ListingIssueLite[] }
+  | { ok: true; present: true; statuses: string[]; issues: ListingIssueLite[]; listing?: ListingState }
   | { ok: true; present: false; shell?: true }
   | { ok: false; reason: "transient_error"; status?: number; message: string; retryable: true };
 
@@ -54,12 +87,14 @@ export async function checkSkuListingStatus(
   sellerId: string,
   sku: string,
   httpGet: HttpGetFn = realSpApiGet,
+  opts: { attributes?: boolean } = {},
 ): Promise<ListingStatusOutcome> {
   try {
     const data = await httpGet(
       `/listings/2021-08-01/items/${sellerId}/${encodeURIComponent(sku)}`,
       // issues ride the same call — §6 item 7 snapshot, zero extra volume.
-      { marketplaceIds: MARKETPLACE, includedData: "summaries,issues" },
+      // attributes only for component 16's listing state (purchasable_offer).
+      { marketplaceIds: MARKETPLACE, includedData: opts.attributes ? "summaries,issues,attributes" : "summaries,issues" },
     );
     // §18 A1: a 200 with no summary is a SKU shell, not a listing. Treated
     // exactly like a 404 — present=false — so it contributes nothing to the
@@ -74,7 +109,9 @@ export async function checkSkuListingStatus(
       severity: String(i?.severity ?? ""),
       message: String(i?.message ?? ""),
     }));
-    return { ok: true, present: true, statuses, issues };
+    return opts.attributes
+      ? { ok: true, present: true, statuses, issues, listing: parseListingState(data) }
+      : { ok: true, present: true, statuses, issues };
   } catch (err: any) {
     const status = err?.response?.status;
     if (status === 404) return { ok: true, present: false };

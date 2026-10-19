@@ -3,6 +3,10 @@
 // Scheduled scope is active + parked (decision 10) via the explicit filter;
 // runFullScopePass itself keeps NO status filter (§18 A3), so a manual
 // Refresh with dead rows on screen can still correct a frozen flag.
+//
+// Listing hygiene (2026-10-19): the probe also reads `attributes` and writes
+// each SKU's listing state (asin_skus.listing_created_at / offer_end_at /
+// listing_checked_at — owner: this component only).
 import { runFullScopePass, type FullScopeReport } from "../../full-scope-pass";
 import { ASIN_CHECKPOINT_EVERY } from "../types";
 import { chunk } from "./shared";
@@ -18,7 +22,7 @@ export const liveOffer: ComponentDef = {
     const outcomes: Record<string, string> = {};
     const reports: FullScopeReport[] = (ctx.cache.get(LISTINGS_REPORTS) as FullScopeReport[] | undefined) ?? [];
     for (const part of chunk(ctx.asins, ASIN_CHECKPOINT_EVERY)) {
-      const rep = await runFullScopePass({ dryRun: false, asinFilter: new Set(part), phaseC: false });
+      const rep = await runFullScopePass({ dryRun: false, asinFilter: new Set(part), phaseC: false, recordListingState: true });
       reports.push(rep);
       const a = rep.phaseA, b = rep.phaseB;
       counts.probed += a.asins + b.asins; counts.live += a.live; counts.no_offer += a.noOffer;

@@ -83,6 +83,25 @@ export interface FullScopeReport {
 
 export type ProgressEmit = (event: Record<string, any>) => void;
 
+export interface SkuListingStateRow { sku: string; createdAt: string | null; offerEndAt: string | null }
+
+/**
+ * Component 16's listing state per SKU (owner, SPEC §14). A SKU with no
+ * listing gets both dates cleared and the stamp moved — "checked, absent";
+ * listing_created_at IS NULL with a stamp is how the hygiene components read
+ * "no listing" and how a delete is verified.
+ */
+export async function writeSkuListingStates(asin: string, states: SkuListingStateRow[], query: QueryLike): Promise<void> {
+  if (states.length === 0) return;
+  await query(
+    `UPDATE asin_skus s
+        SET listing_created_at = u.created_at, offer_end_at = u.end_at, listing_checked_at = NOW()
+       FROM asins a, unnest($2::text[], $3::timestamptz[], $4::timestamptz[]) AS u(sku, created_at, end_at)
+      WHERE a.asin = $1 AND s.asin_id = a.id AND s.sku = u.sku`,
+    [asin, states.map((x) => x.sku), states.map((x) => x.createdAt), states.map((x) => x.offerEndAt)],
+  );
+}
+
 export async function runFullScopePass(opts: {
   dryRun: boolean;                       // REQUIRED — no default; callers state intent
   sellerId?: string;
@@ -107,6 +126,13 @@ export async function runFullScopePass(opts: {
   // ASIN to onboard; the implementation is onboardNewAsins (§14 — the ONE
   // insert path). Not called on a dry run.
   onboard?: (rows: OnboardResolution[]) => Promise<void>;
+  // Component 16 only (SPEC §14 — owner of asin_skus.listing_created_at /
+  // offer_end_at / listing_checked_at): probe with includedData +attributes
+  // and write each SKU's listing state when its ASIN resolved without a
+  // transient. A transient ASIN writes nothing, so its stamps stay old and
+  // the hygiene components read it as not checked this pass. Never on a
+  // dry run.
+  recordListingState?: boolean;
 }): Promise<FullScopeReport> {
   const query = opts.query ?? (defaultQuery as any as QueryLike);
   const httpGet = opts.httpGet ?? realSpApiGet;
@@ -165,12 +191,20 @@ export async function runFullScopePass(opts: {
     // statuses retained (2026-09-15, §23): has_buyable_offer is derived from
     // summaries[].status here — already parsed, no extra call.
     const liveByCreated: { sku: string; created_at: string; issues: ListingIssueLite[]; statuses: string[] }[] = [];
+    const states: SkuListingStateRow[] = [];
     for (const s of skus) {
-      const out = await checkSkuListingStatus(sellerId, s.sku, httpGet);
+      const out = await checkSkuListingStatus(sellerId, s.sku, httpGet, { attributes: opts.recordListingState === true });
       phaseA.skusProbed++;
       if (!out.ok) { transient = true; }
-      else if (out.present) liveByCreated.push({ sku: s.sku, created_at: s.created_at, issues: out.issues, statuses: out.statuses ?? [] });
+      else if (out.present) {
+        liveByCreated.push({ sku: s.sku, created_at: s.created_at, issues: out.issues, statuses: out.statuses ?? [] });
+        states.push({ sku: s.sku, createdAt: out.listing?.createdAt ?? null, offerEndAt: out.listing?.offerEndAt ?? null });
+      } else {
+        // 404 or an empty-summaries shell (§18 A1): no listing behind the SKU.
+        states.push({ sku: s.sku, createdAt: null, offerEndAt: null });
+      }
     }
+    if (!transient && opts.recordListingState === true && !dryRun) await writeSkuListingStates(row.asin, states, query);
     if (transient) {
       phaseA.transientSkipped++;
       recordTransient(row.asin, sink);
