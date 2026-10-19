@@ -54,6 +54,8 @@ const OPERATION_TABLE: { key: string; test: RegExp; spec: BucketSpec }[] = [
   { key: "catalog.search", test: /^\/catalog\/2022-04-01\/items$/, spec: { rate: 2, burst: 2 } },
   // Listings 2021-08-01
   { key: "listings.restrictions", test: /^\/listings\/2021-08-01\/restrictions$/, spec: { rate: 5, burst: 10 } },
+  // One bucket for every method on the items path: GET (probe), PUT (Add to
+  // SC), PATCH (close, component 22) and DELETE (component 24) — SPEC §11.
   { key: "listings.items", test: /^\/listings\/2021-08-01\/items\/[^/]+(\/[^/]+)?$/, spec: { rate: 5, burst: 10 } },
   // FBA Inventory v1
   { key: "inventory.summaries", test: /^\/fba\/inventory\/v1\/summaries$/, spec: { rate: 2, burst: 2 } },

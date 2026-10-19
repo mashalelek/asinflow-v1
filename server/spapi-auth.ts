@@ -106,3 +106,44 @@ export async function spApiPut(
   );
   return res.data;
 }
+
+// Listing hygiene (SPEC §11 components 22 / 24, 2026-10-19): PATCH for
+// patchListingsItem (close) and DELETE for deleteListingsItem. Same single
+// choke point as GET/POST/PUT — the path decides the bucket, so both land in
+// `listings.items` (5 rps / burst 10) with getListingsItem and the PUT. No
+// listings write may be sent outside these wrappers.
+export async function spApiPatch(
+  endpoint: string,
+  body: any,
+  params?: Record<string, any>,
+) {
+  const token = await getAccessToken();
+  const res = await withRateLimit(endpoint, () =>
+    axios.patch(`${SP_API_BASE}${endpoint}`, body, {
+      headers: {
+        Authorization: `Bearer ${token}`,
+        "x-amz-access-token": token,
+        "Content-Type": "application/json",
+      },
+      params,
+      timeout: SP_API_TIMEOUT_MS,
+    }),
+  );
+  return res.data;
+}
+
+export async function spApiDelete(endpoint: string, params?: Record<string, any>) {
+  const token = await getAccessToken();
+  const res = await withRateLimit(endpoint, () =>
+    axios.delete(`${SP_API_BASE}${endpoint}`, {
+      headers: {
+        Authorization: `Bearer ${token}`,
+        "x-amz-access-token": token,
+        "Content-Type": "application/json",
+      },
+      params,
+      timeout: SP_API_TIMEOUT_MS,
+    }),
+  );
+  return res.data;
+}
