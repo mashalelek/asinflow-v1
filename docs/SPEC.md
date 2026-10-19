@@ -2168,23 +2168,25 @@ of the ASIN; `amzn.gr.*` SKUs are excluded entirely.
   `sku_ledger_state.last_stocked_date` (latest Date with Σ Ending
   Warehouse Balance over all dispositions > 0, per MSKU) only moves
   forward. Backfill: one manual one-component job with
-  `params.ledger_window {from, to}`, 18 months, chunked (chunk size from
-  the 2026-10-18 spike). Fail-closed tripwire: a report with zero rows
+  `params.ledger_window {from, to}`, 18 months, in 92-day chunks spaced
+  for the report quota; `QuotaExceeded` waits and retries the same chunk,
+  never skips it. Parsed with a quoted-TSV reader (titles contain quotes). Fail-closed tripwire: a report with zero rows
   while 15 shows any SKU with fulfillable > 0 is `inconclusive` — nothing
   written, and that night's 24 skips everything as `ledger_unavailable`.
 - **24 Delete** — a SKU is deleted when its listing is closed now, every
   FBA bucket is zero (Unfulfillable and Researching included), nothing is
   in the pipeline for the ASIN — `asin_po_pipeline` On Order = 0 and At
-  Prep = 0 (`server/asin-po-pipeline.ts`, §6), no `po_asins` row on an
-  Open PO, and no Velocity units on hand (live `/inbound` + `/inventory`,
-  `quantity_remaining > 0`) — and the OOS clock has run: ever-stocked
+  Prep = 0 (`server/asin-po-pipeline.ts`, §6) and no Velocity units on
+  hand (live `/inbound` + `/inventory`, `quantity_remaining > 0`); there
+  is **no open-PO blocker** (2026-10-19: a PO with nothing left to arrive
+  would hold deletes with no visible cause and no exit) — and the OOS clock has run: ever-stocked
   `max(ledger_last_stocked_date, sku_fba_inventory.last_nonzero_at)` more
   than 60 days ago; never-stocked (no ledger history in the 18-month
   window and never nonzero in 15) `listing_created_at` more than 14 days
   ago. `deleteListingsItem` is asynchronous (ACCEPTED ≠ done); the next
   probe verifies (404 / empty summaries). Outcomes: `deleted` ·
   `would_delete` · `skip_not_closed` · `skip_has_stock:<bucket>` ·
-  `skip_pipeline:on_order|at_prep|open_po|velocity` ·
+  `skip_pipeline:on_order|at_prep|velocity` ·
   `skip_clock:<days>/<threshold>` · `ledger_unavailable` ·
   `velocity_unavailable` (any leg failed — the whole run skips) · `held` ·
   `invalid` / `error`.
@@ -3185,8 +3187,10 @@ the per-row **+** button.
     `end_at` as `{value: <ISO timestamp>}` for a closed offer — not the
     date AF sent (spike 2026-10-18: born-closed SKUs read back
     `2026-10-13T12:29:10Z` / `2026-10-15T01:55:12Z`) — and
-    `{value: null}` for an open one; component 16 stores it as
-    `asin_skus.offer_end_at` and "closed" means `offer_end_at <= now()`.
+    `{value: null}` for an open one (Maria's SC-closed
+    `PRK-HOM-6P4-PIC-001`: `2026-10-19T09:31:29Z`); component 16 stores it
+    as `asin_skus.offer_end_at` and "closed" means `offer_end_at <= now()`
+    — **"closed now" only, never "closed since"**.
   - **AF never reopens.** No code path clears `end_at`, sends it null or
     removes it — not even with stock at FBA. Reopen stays a manual action
     in Seller Central; enforced by test (`listing-hygiene` never-reopen

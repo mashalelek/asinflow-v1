@@ -40,9 +40,12 @@ and **never in the reopen direction**.
    - **nothing in the pipeline for the ASIN**: `asin_po_pipeline(asin)` On
      Order = 0 and At Prep = 0 (`server/asin-po-pipeline.ts`, computed live
      from the PO tables — NOT `asin_estimates.ordered_qty`, which is no longer
-     written; corrected 2026-10-18), no `po_asins` row on an **Open** AF PO,
-     and no Velocity units on hand (live read of `/inbound` + `/inventory`,
-     `quantity_remaining > 0`);
+     written; corrected 2026-10-18) and no Velocity units on hand (live read
+     of `/inbound` + `/inventory`, `quantity_remaining > 0`). **No open-PO
+     blocker** (Maria 2026-10-19): an open PO with nothing left to arrive
+     (stale action items, everything canceled or lost) would hold deletes
+     with no visible cause and no exit (SPEC §14); units shipped but not yet
+     received are already caught by the inbound buckets;
    - the **OOS clock** has run (rule 4).
 4. **OOS clock.**
    - **Ever-stocked SKU:** days since the last day it had units anywhere at FBA
@@ -139,7 +142,12 @@ Owner = component 16 only, on `asin_skus`:
 - `offer_end_at` — `attributes.purchasable_offer[].end_at` (US marketplace)
 - `listing_checked_at`
 
-A SKU is **closed** when `offer_end_at <= now()`. **Spike first:** probe one
+A SKU is **closed** when `offer_end_at <= now()`. **Amazon rewrites
+`end_at` on close** (spike 2026-10-18/19: born-closed SKUs sent `2000-01-01`
+read back `2026-10-13T12:29:10Z` / `2026-10-15T01:55:12Z`; Maria's
+SC-closed `PRK-HOM-6P4-PIC-001` reads `2026-10-19T09:31:29Z`; open offers
+read `{value: null}`), so `offer_end_at` means **"closed now" only, never
+"closed since"** — nothing may compute a duration from it. **Spike first:** probe one
 born-closed SKU and one Maria-closed SKU and confirm `end_at` serializes on GET
 in this shape before anything reads it. If it doesn't, STOP and report — do not
 infer closed from the absence of `BUYABLE` (OOS listings also lack it).
@@ -160,9 +168,15 @@ CREATE TABLE sku_ledger_state (
 ```
 
 - **Backfill:** one-time manual one-component job (the sales-backfill pattern:
-  `params.ledger_window {from, to}`), 18 months back, chunked. Chunk size is
-  found by spike — request 31 days first; Amazon doesn't publish a range limit
-  for the summary view. `createReport` is ~1/min, so expect ~20 min.
+  `params.ledger_window {from, to}`), 18 months back, in **92-day chunks**
+  (spike 2026-10-18: 31 and 92 days accepted, ~20 s each; 548 days refused
+  with `QuotaExceeded` — this report type's createReport quota is tighter
+  than the general bucket). Requests are spaced; on `QuotaExceeded` the
+  component waits and retries **the same chunk** — a chunk is never skipped.
+- **Parsing:** a proper quoted-TSV reader (fields are double-quoted; titles
+  contain quotes and broke 16 of 8,572 rows under split-on-tab). Row grain is
+  Date × MSKU × Disposition (FNSKU 1:1 with MSKU, Location always `US`); a
+  SKU appears only on days it held or moved units, so absence = zero.
 - **Nightly:** last 7 days (overlap on purpose). `last_stocked_date` only moves
   forward.
 - **Fail-closed tripwire:** Amazon's DAILY summary has a known empty-report
@@ -225,7 +239,7 @@ transient for the ASIN this pass) · `skip_amzn_gr` · `held` (breaker) ·
 `invalid` / `error`.
 
 Delete (24): `deleted` · `would_delete` · `skip_not_closed` ·
-`skip_has_stock:<bucket>` · `skip_pipeline:on_order|at_prep|open_po|velocity` ·
+`skip_has_stock:<bucket>` · `skip_pipeline:on_order|at_prep|velocity` ·
 `skip_clock:<days>/<threshold>` · `ledger_unavailable` · `velocity_unavailable`
 (any leg failed — fail-closed, the whole run skips) · `held` · `invalid` /
 `error`.
@@ -281,7 +295,7 @@ expected to trip both — that is the intended review point for the backlog.
 - Close predicate: each blocking bucket alone blocks; unfulfillable alone and
   researching alone do not; On Order / At Prep / open PO / Velocity are never read by 22.
 - Delete predicate: every bucket blocks (incl. unfulfillable, researching); each
-  pipeline source alone blocks (on_order, at_prep, open PO, Velocity); 60-day boundary (60 = no, 61 = yes) and 14-day
+  pipeline source alone blocks (on_order, at_prep, Velocity); an open PO with nothing left to arrive does not; 60-day boundary (60 = no, 61 = yes) and 14-day
   boundary for never-stocked; `max(ledger, inventory)` clock.
 - Fail-closed: incomplete 15 → zero closes; empty ledger with stocked SKUs →
   inconclusive, zero deletes; any Velocity leg failing → zero deletes.
