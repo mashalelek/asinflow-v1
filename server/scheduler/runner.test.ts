@@ -20,18 +20,18 @@ import { ASIN_CHECKPOINT_EVERY, ComponentError } from "./types";
 setRunnerLogger(() => {});
 
 describe("the component sequence is fixed", () => {
-  it("21 components, numbered 1..21 in array order, daily block = 2..8, hourly otherwise", () => {
-    expect(COMPONENTS).toHaveLength(21);
-    expect(COMPONENTS.map((c) => c.n)).toEqual(Array.from({ length: 21 }, (_, i) => i + 1));
-    expect(COMPONENTS.filter((c) => c.tier === "daily").map((c) => c.n)).toEqual([2, 3, 4, 5, 6, 7, 8]);
+  // 1–21 (scheduler v1) + the listing-hygiene components (SPEC §11, 2026-10-19).
+  const SEQUENCE = [...Array.from({ length: 21 }, (_, i) => i + 1), 23];
+  it("the components, numbered in array order, daily block = 2..8 + 23 (ledger), hourly otherwise", () => {
+    expect(COMPONENTS.map((c) => c.n)).toEqual(SEQUENCE);
+    expect(COMPONENTS.filter((c) => c.tier === "daily").map((c) => c.n)).toEqual([2, 3, 4, 5, 6, 7, 8, 23]);
     expect(COMPONENTS[0].key).toBe("01_sc_discovery");
     expect(COMPONENTS[20].key).toBe("21_actual_fees");
-    expect(new Set(COMPONENTS.map((c) => c.key)).size).toBe(21);
+    expect(new Set(COMPONENTS.map((c) => c.key)).size).toBe(SEQUENCE.length);
   });
   it("one file per component in components/, numbered as the table", () => {
     const files = readdirSync(join(__dirname, "components")).filter((f) => /^\d{2}-.*\.ts$/.test(f)).sort();
-    expect(files).toHaveLength(21);
-    expect(files.map((f) => Number(f.slice(0, 2)))).toEqual(Array.from({ length: 21 }, (_, i) => i + 1));
+    expect(files.map((f) => Number(f.slice(0, 2)))).toEqual(SEQUENCE);
   });
   it("componentsForJob: the daily block runs only with include_daily", () => {
     const hourly = componentsForJob({ include_daily: false } as JobRow).map((c) => c.n);

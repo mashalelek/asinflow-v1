@@ -19,11 +19,13 @@ import {
   claimNextJob, writeProgress, readStatus, finishJob, recordComponentRun,
 } from "./jobs-repo";
 import {
-  CancelledError, ComponentError, ONBOARDING_COMPONENTS, laneOf, type ComponentContext, type ComponentDef, type ComponentResult, type JobRow, type JobSummary,
+  CancelledError, ComponentError, ONBOARDING_COMPONENTS, SCHEDULED_ONLY_COMPONENTS, explicitlyAuthorized, laneOf, type ComponentContext, type ComponentDef, type ComponentResult, type JobRow, type JobSummary,
   type JobProgress, type Flip, type QueryLike, type Lane,
 } from "./types";
 
 export const RUNNER_LOCK_KEY = 7342002;
+/** summary.stoppedAt for a failure in the bulk public pass — not a component number (22–24 are listing hygiene). */
+export const BULK_PUBLIC_STOP = 100;
 export const IDLE_POLL_MS = 5000;
 
 type Logger = (message: string, source?: string) => void;
@@ -73,6 +75,15 @@ export async function resolveScope(job: JobRow, query: QueryLike): Promise<strin
  * include_daily.
  */
 export function componentsForJob(job: JobRow, all: readonly ComponentDef[] = COMPONENTS): ComponentDef[] {
+  return planFor(job, all).filter((c) =>
+    !SCHEDULED_ONLY_COMPONENTS.includes(c.n)
+    || job.trigger === "scheduled"
+    // A non-scheduled job reaches 22–24 only through its own entry point:
+    // listed explicitly AND carrying that component's parameters.
+    || ((job.components ?? []).includes(c.n) && explicitlyAuthorized(c.n, job.params)));
+}
+
+function planFor(job: JobRow, all: readonly ComponentDef[]): ComponentDef[] {
   if (job.components && job.components.length > 0) {
     const want = new Set(job.components);
     return all.filter((c) => want.has(c.n));
@@ -208,7 +219,7 @@ export async function runJob(
       log(`job ${job.id} bulk: ${bulk.publicOnly.length} public-only refreshed, ${copied} catalog row(s) copied main → bulk`);
     } catch (err: any) {
       const msg = err?.message ?? String(err);
-      summary.stoppedAt = 22; // the bulk public pass, after the 21 components
+      summary.stoppedAt = BULK_PUBLIC_STOP; // the bulk public pass, after the main components
       summary.durationMs = now() - t0;
       log(`job ${job.id} FAILED in the bulk public pass: ${msg}`);
       await finishJob(job.id, "failed", summary, `bulk public pass: ${msg}`, query);

@@ -26,6 +26,24 @@ export function laneOf(trigger: JobTrigger): Lane { return trigger === "schedule
  * an onboarding job from discovering more ASINs and enqueuing itself again.
  */
 export const ONBOARDING_COMPONENTS: readonly number[] = [2, 3, 4, 5, 6, 7, 8, 10, 11, 12, 13, 14, 15, 16, 17];
+
+/**
+ * Listing hygiene (SPEC §11, 2026-10-19): components that run ONLY in the
+ * scheduled pass — 22 (close, hourly), 23 (ledger, 00:00) and 24 (delete,
+ * 00:00). A Refresh click, an onboarding or a bulk job must never have SC
+ * writes as a side effect. A non-scheduled job runs one of them only when it
+ * lists it in `components` AND carries that component's own parameters —
+ * the manual entry points (POST /api/listing-hygiene/run and /release → 22
+ * or 24 with `params.listing_hygiene`; the ledger backfill → 23 with
+ * `params.ledger_window`).
+ */
+export const SCHEDULED_ONLY_COMPONENTS: readonly number[] = [22, 23, 24];
+export function explicitlyAuthorized(n: number, params: Record<string, any> | null | undefined): boolean {
+  if (n === 23) return params?.ledger_window != null;
+  if (n === 22) return params?.listing_hygiene?.action === "close";
+  if (n === 24) return params?.listing_hygiene?.action === "delete";
+  return true;
+}
 export type JobTarget = "main" | "bulk";
 export type JobStatus = "queued" | "running" | "done" | "failed" | "cancelled";
 

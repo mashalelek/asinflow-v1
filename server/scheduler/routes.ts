@@ -4,11 +4,20 @@
 //   GET   /api/jobs              recent jobs (history dialog)
 //   GET   /api/jobs/:id          one job + its per-component ledger rows
 //   PATCH /api/jobs/:id          { status: 'cancelled' }
+//   POST  /api/jobs/backfill-sales / backfill-ledger   admin: one-component backfill jobs
 import express, { type Router, type Request, type Response } from "express";
 import { query as defaultQuery } from "../db";
 import { enqueueJob, listActive, listJobs, getJob, listComponentRuns, cancelJob, laneAhead } from "./jobs-repo";
 import { requireRole } from "../auth";
 import type { QueryLike } from "./types";
+import { todayEt } from "../ledger-sync";
+
+/** 18 months back (548 days) to yesterday, America/New_York. */
+export function defaultLedgerBackfillWindow(now: Date = new Date()): { from: string; to: string } {
+  const day = (ymd: string, d: number) => { const t = new Date(`${ymd}T00:00:00Z`); t.setUTCDate(t.getUTCDate() + d); return t.toISOString().slice(0, 10); };
+  const to = day(todayEt(now), -1);
+  return { from: day(to, -547), to };
+}
 
 const YMD = /^\d{4}-\d{2}-\d{2}$/;
 /** Validate a backfill window: YYYY-MM-DD pair, from ≤ to, to ≤ today (local). */
@@ -61,6 +70,28 @@ export function createJobsRouter(deps: { query?: QueryLike; nextPassAt?: () => P
         requestedBy: req.session?.userId ?? null,
       }, query);
       const ahead = laneAhead(job, await listActive(query)); // lane M only
+      res.status(202).json({ job, ahead });
+    } catch (err: any) {
+      res.status(500).json({ error: "enqueue_failed", message: err?.message ?? String(err) });
+    }
+  });
+
+  // Inventory Ledger backfill (listing hygiene, 2026-10-19): admin-only. ONE
+  // manual job running component 23 alone over params.ledger_window — 92-day
+  // chunks, spaced for the report quota, QuotaExceeded retried on the same
+  // chunk. Default window: 18 months back to yesterday. No UI button —
+  // `npm run backfill:ledger` or this route.
+  router.post("/api/jobs/backfill-ledger", requireRole("admin"), async (req: Request, res: Response) => {
+    const def = defaultLedgerBackfillWindow();
+    const w = parseBackfillWindow({ from: req.body?.from ?? def.from, to: req.body?.to ?? def.to }, todayEt());
+    if ("error" in w) { res.status(400).json({ error: "invalid_window", message: w.error }); return; }
+    try {
+      const job = await enqueueJob({
+        trigger: "manual", includeDaily: false, components: [23], scopeAsins: null,
+        params: { ledger_window: { from: w.from, to: w.to } },
+        requestedBy: req.session?.userId ?? null,
+      }, query);
+      const ahead = laneAhead(job, await listActive(query));
       res.status(202).json({ job, ahead });
     } catch (err: any) {
       res.status(500).json({ error: "enqueue_failed", message: err?.message ?? String(err) });
