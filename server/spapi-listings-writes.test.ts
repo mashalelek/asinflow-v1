@@ -43,3 +43,20 @@ describe("spApiPatch / spApiDelete go through withRateLimit", () => {
   });
 });
 
+describe("shared auth: the LWA token is read inside the rate-limited send", () => {
+  it("a fresh module (empty token cache) fetches the token only AFTER the limiter releases the request", async () => {
+    // Regression for ledger backfill job 13 (2026-10-19): the token used to be
+    // fetched before the limiter wait, so a request queued across an expiry
+    // left with a dead token → 403 "The access token you provided has expired".
+    vi.resetModules();
+    const order: string[] = [];
+    const limiter: any = await import("./spapi-rate-limit");
+    limiter.withRateLimit.mockImplementationOnce(async (_endpoint: string, fn: () => Promise<any>) => { order.push("released"); return fn(); });
+    const ax: any = (await import("axios")).default;
+    ax.post.mockImplementationOnce(async () => { order.push("token"); return { data: { access_token: "fresh", expires_in: 3600 } }; });
+    ax.delete.mockImplementationOnce(async (_url: string, cfg: any) => { order.push(`sent:${cfg.headers["x-amz-access-token"]}`); return { data: { status: "ACCEPTED" }, headers: {} }; });
+    const fresh = await import("./spapi-auth");
+    await fresh.spApiDelete(PATH, { marketplaceIds: "ATVPDKIKX0DER" });
+    expect(order).toEqual(["released", "token", "sent:fresh"]);
+  });
+});
