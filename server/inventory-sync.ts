@@ -1,4 +1,5 @@
 import { loadAsinPipeline } from "./asin-po-pipeline";
+import { parseSkuBuckets, writeSkuFbaInventory, type SkuBuckets } from "./sku-fba-inventory";
 import { spApiGet } from "./spapi";
 import { query } from "./db";
 import { log } from "./index";
@@ -21,9 +22,20 @@ interface AsinAgg {
 }
 
 
+export interface SyncInventoryOptions {
+  /**
+   * Component 15 only (SPEC §14 — owner of sku_fba_inventory): write every
+   * SKU's buckets, account-wide regardless of asinFilter, after the complete
+   * pull. Other callers (the Sync Inventory button) leave it unset.
+   */
+  recordSkuBuckets?: boolean;
+  jobId?: number | null;
+}
+
 export async function syncInventory(
   asinFilter?: ReadonlySet<string>,
-): Promise<{ synced: number; skipped: number; primaryBootstrapped: number }> {
+  opts: SyncInventoryOptions = {},
+): Promise<{ synced: number; skipped: number; primaryBootstrapped: number; skuRows?: number; skuZeroFilled?: number }> {
   let primaryBootstrapped = 0;
   // Build a map from asin VARCHAR → asins.id UUID for active ASINs.
   // When asinFilter is supplied, restrict to that subset — the SP-API call
@@ -45,6 +57,10 @@ export async function syncInventory(
   let skipped = 0;
   let skuSeenCounter = 0;
   let nextToken: string | undefined;
+  // Every row of every page, before the ASIN filter: sku_fba_inventory is
+  // account-wide. Written only after the loop ends — a page that throws
+  // leaves it untouched (incomplete pull → nothing written).
+  const skuBuckets: SkuBuckets[] = [];
 
   do {
     const params: Record<string, any> = {
@@ -60,6 +76,8 @@ export async function syncInventory(
     nextToken = data?.pagination?.nextToken;
 
     for (const item of summaries) {
+      const b = parseSkuBuckets(item);
+      if (b) skuBuckets.push(b);
       const asin: string = item.asin;
       const asinId = asinIdMap.get(asin);
       if (!asinId) {
@@ -100,6 +118,11 @@ export async function syncInventory(
       await new Promise((r) => setTimeout(r, 1000));
     }
   } while (nextToken);
+
+  let skuWrite: { rows: number; zeroFilled: number } | null = null;
+  if (opts.recordSkuBuckets) {
+    skuWrite = await writeSkuFbaInventory(skuBuckets, opts.jobId ?? null, (sql, params) => query(sql, params));
+  }
 
   // Now insert one aggregated snapshot per ASIN. The snapshot's ordered_qty
   // column records the PO-derived On Order at snapshot time (patch
@@ -174,5 +197,7 @@ export async function syncInventory(
   // The live-offer rider was REMOVED 2026-09-06 (SPEC §11 Refresh job):
   // the Refresh `listings` stage reconciles ALL flag states including TRUE,
   // subsuming the notLiveOnly re-probe entirely.
-  return { synced, skipped, primaryBootstrapped };
+  return skuWrite
+    ? { synced, skipped, primaryBootstrapped, skuRows: skuWrite.rows, skuZeroFilled: skuWrite.zeroFilled }
+    : { synced, skipped, primaryBootstrapped };
 }
