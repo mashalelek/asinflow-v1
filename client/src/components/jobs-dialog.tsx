@@ -2,7 +2,9 @@
  * Jobs / history dialog (SPEC §11 "Refresh job", scheduler patch commit 2).
  * One row per job (trigger, scope size, started, duration, status),
  * expandable to per-component counts and outcome lists, plus Retry failed
- * (N) and the Changes panel (gating / suppression flips, decision 16).
+ * (N) and the Changes panel (gating / suppression flips, decision 16; listings
+ * closed / deleted, listing hygiene 2026-10-19), plus the hygiene panel
+ * (outcomes per SKU, evidence, Release).
  * Replaces the refresh_runs history dialog.
  */
 import { useCallback, useEffect, useState } from "react";
@@ -10,8 +12,9 @@ import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } f
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { StageResultsList } from "@/components/stage-results";
+import { ListingHygienePanel, ListingChangesPanel } from "@/components/listing-hygiene-panel";
 import {
-  listJobs, getJob, cancelJob, formatDuration, groupFlips, failedAsinsFromRuns, componentLabel, jobKindLabel, progressText,
+  listJobs, getJob, cancelJob, formatDuration, groupFlips, groupListingActions, changeCount, failedAsinsFromRuns, componentLabel, jobKindLabel, progressText,
   FOCUS_ASIN_EVENT, type Job, type ComponentRun, type FlipGroups,
 } from "@/lib/jobs-api";
 
@@ -114,7 +117,8 @@ export function JobsDialog({ open, onOpenChange, onRetry, initialJobId }: {
               const isOpen = expanded === j.id;
               const d = detail[j.id];
               const groups = groupFlips(j.summary?.flips);
-              const flipCount = (j.summary?.flips ?? []).length;
+              const listingGroups = groupListingActions(j.summary?.listingActions);
+              const flipCount = changeCount(j.summary);
               return (
                 <div key={j.id} className="py-2" data-testid={`job-row-${j.id}`}>
                   <button type="button" className="w-full text-left flex items-center gap-3" onClick={() => setExpanded(isOpen ? null : j.id)}>
@@ -139,7 +143,10 @@ export function JobsDialog({ open, onOpenChange, onRetry, initialJobId }: {
                       )}
                       <details open={flipCount > 0}>
                         <summary className="cursor-pointer font-semibold">Changes</summary>
-                        <div className="mt-2"><FlipsPanel groups={groups} /></div>
+                        <div className="mt-2 space-y-2">
+                          {((j.summary?.flips ?? []).length > 0 || (j.summary?.listingActions ?? []).length === 0) && <FlipsPanel groups={groups} />}
+                          <ListingChangesPanel closed={listingGroups.closed} deleted={listingGroups.deleted} />
+                        </div>
                       </details>
                       <details>
                         <summary className="cursor-pointer font-semibold">Components{d ? ` (${d.components.length})` : ""}</summary>
@@ -148,6 +155,7 @@ export function JobsDialog({ open, onOpenChange, onRetry, initialJobId }: {
                           {d && <StageResultsList stages={d.components.map((c) => ({ stage: c.error ? `${c.stage} — FAILED: ${c.error}` : c.stage, counts: c.counts ?? {}, outcomes: c.outcomes ?? {} }))} />}
                         </div>
                       </details>
+                      {d && <ListingHygienePanel jobId={j.id} runs={d.components} />}
                       {d && failedAsinsFromRuns(d.components).length > 0 && (
                         <Button size="sm" className="h-7 text-xs" onClick={() => { onOpenChange(false); onRetry(failedAsinsFromRuns(d.components)); }} data-testid={`button-retry-failed-${j.id}`}>
                           Retry failed ({failedAsinsFromRuns(d.components).length})

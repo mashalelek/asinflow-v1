@@ -6,12 +6,15 @@ export type JobTrigger = "scheduled" | "manual" | "onboarding" | "bulk";
 export type JobStatus = "queued" | "running" | "done" | "failed" | "cancelled";
 
 export interface Flip { asin: string; field: "gating" | "suppression"; from: string; to: string }
+/** A listing AF closed (component 22) or deleted (component 24) — Amazon accepted the write. */
+export interface ListingActionChange { action: "close" | "delete"; asin: string; sku: string }
 
 export interface JobSummary {
   asins: number;
   durationMs: number;
   components: Record<string, Record<string, number>>;
   flips: Flip[];
+  listingActions?: ListingActionChange[];
   stoppedAt?: number;
 }
 
@@ -55,6 +58,7 @@ export const COMPONENT_LABELS: Record<number, string> = {
   7: "hazmat", 8: "gating", 9: "PO sheet", 10: "prices", 11: "sellers", 12: "CPT", 13: "fees",
   14: "profit", 15: "inventory", 16: "listings", 17: "primary SKU", 18: "suppressions",
   19: "sales", 20: "refunds", 21: "actual fees",
+  22: "close OOS listings", 23: "inventory ledger", 24: "delete dead listings",
 };
 
 export function componentLabel(n: number | undefined): string {
@@ -78,7 +82,15 @@ export function runningLabel(job: Job): string {
 /** The name of a one-component job's component, with the backfill called out. */
 export function subsetComponentName(job: Job): string {
   const comps = job.components ?? [];
-  return comps.map((n) => (n === 19 && job.params?.sales_window ? "sales backfill" : componentLabel(n))).join(" + ");
+  const h = job.params?.listing_hygiene;
+  return comps.map((n) => {
+    if (n === 19 && job.params?.sales_window) return "sales backfill";
+    if (n === 23 && job.params?.ledger_window) return "ledger backfill";
+    if ((n === 22 || n === 24) && h) {
+      return `${componentLabel(n)} (${h.mode === "release" ? `release #${h.release_of_job}` : h.dry_run ? "dry run" : "live"})`;
+    }
+    return componentLabel(n);
+  }).join(" + ");
 }
 
 /**
@@ -113,12 +125,27 @@ export function completionText(job: Job): { title: string; description: string }
   const who = job.trigger === "scheduled" ? "Scheduled refresh" : "Refresh";
   if (job.status === "failed") return { title: `${who} failed`, description: job.error ?? "unknown error" };
   if (job.status === "cancelled") return { title: `${who} cancelled`, description: `${n.toLocaleString()} ASINs · stopped at ${componentLabel(s?.stoppedAt)}` };
-  const flips = s?.flips?.length ?? 0;
+  const flips = changeCount(s);
   return {
     title: `${who} done`,
     description: `${n.toLocaleString()} ASINs · ${dur}${flips ? ` · ${flips} change${flips === 1 ? "" : "s"}` : ""}`,
   };
 }
+
+/** What the Changes panel lists: gating / suppression flips plus listings closed / deleted (never price counts). */
+export function changeCount(s: JobSummary | null | undefined): number {
+  return (s?.flips?.length ?? 0) + (s?.listingActions?.length ?? 0);
+}
+
+export interface ListingActionGroups { closed: ListingActionChange[]; deleted: ListingActionChange[] }
+export function groupListingActions(list: ListingActionChange[] | undefined | null): ListingActionGroups {
+  const g: ListingActionGroups = { closed: [], deleted: [] };
+  for (const a of list ?? []) (a.action === "close" ? g.closed : g.deleted).push(a);
+  return g;
+}
+
+/** Ledger stages whose outcomes are keyed by SKU (listing hygiene), not ASIN. */
+export const HYGIENE_STAGES: Record<string, "close" | "delete"> = { "22_close_oos": "close", "24_delete_dead": "delete" };
 
 export interface FlipGroups {
   gatedToUngated: string[];
@@ -146,6 +173,9 @@ export function groupFlips(flips: Flip[] | undefined | null): FlipGroups {
 export function failedAsinsFromRuns(runs: ComponentRun[]): string[] {
   const set = new Set<string>();
   for (const r of runs) {
+    // Listing hygiene outcomes are per SKU and are not refreshable data:
+    // Retry failed (a Refresh) cannot redo a close or a delete.
+    if (HYGIENE_STAGES[r.stage] || r.stage === "23_ledger") continue;
     for (const [asin, o] of Object.entries(r.outcomes ?? {})) {
       if (asin.startsWith("_")) continue; // component-level notes, not ASINs
       if (String(o).startsWith("error")) set.add(asin);
@@ -191,6 +221,40 @@ export async function cancelJob(id: number, fetchFn: typeof fetch = fetch): Prom
     body: JSON.stringify({ status: "cancelled" }),
   }));
   return b.job;
+}
+
+// ── Listing hygiene (components 22 / 24) ────────────────────────────────────
+export interface ListingActionRow {
+  id: number; sku: string; asin: string; action: "close" | "delete"; job_id: number | null; dry_run: boolean;
+  status: "would_fire" | "held" | "accepted" | "invalid" | "error" | "verified" | "not_effective";
+  evidence: Record<string, any>; submission_id: string | null; issues: any; fired_at: string; verified_at: string | null; verify_passes: number;
+}
+export interface HygieneActions {
+  actions: ListingActionRow[];
+  releasable: { close: number; delete: number };
+  live: { close: boolean; delete: boolean };
+}
+export async function getHygieneActions(jobId: number, fetchFn: typeof fetch = fetch): Promise<HygieneActions> {
+  return parse(await fetchFn(`/api/listing-hygiene/actions?job_id=${jobId}`, { credentials: "same-origin" }));
+}
+export async function releaseHeld(jobId: number, action: "close" | "delete", fetchFn: typeof fetch = fetch): Promise<{ job: Job; held: number }> {
+  return parse(await fetchFn("/api/listing-hygiene/release", {
+    method: "POST", credentials: "same-origin", headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ job_id: jobId, action }),
+  }));
+}
+
+/** Pure: a hygiene ledger row's SKU outcomes grouped by outcome (clock days folded into one group), largest first. */
+export function groupHygieneOutcomes(outcomes: Record<string, string> | undefined | null): Array<{ outcome: string; skus: string[] }> {
+  const m = new Map<string, string[]>();
+  for (const [sku, o] of Object.entries(outcomes ?? {})) {
+    if (sku.startsWith("_")) continue;
+    const key = String(o).startsWith("skip_clock:") ? "skip_clock" : String(o).startsWith("error") ? "error" : String(o);
+    const l = m.get(key) ?? [];
+    l.push(sku);
+    m.set(key, l);
+  }
+  return Array.from(m.entries()).map(([outcome, skus]) => ({ outcome, skus: skus.sort() })).sort((a, b) => b.skus.length - a.skus.length || a.outcome.localeCompare(b.outcome));
 }
 
 /** Window event the flips panel raises so the ASINs page can focus a row. */

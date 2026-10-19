@@ -25,7 +25,7 @@ import { useSearch } from "wouter";
 import { loadColumnConfig, type ColumnConfig } from "@/lib/columns";
 import { JobsDialog } from "@/components/jobs-dialog";
 import { useJobs } from "@/hooks/use-jobs";
-import { enqueueRefresh, cancelJob, getJob, runningLabel, queuedLabel, completionText, FOCUS_ASIN_EVENT, type Job } from "@/lib/jobs-api";
+import { enqueueRefresh, cancelJob, getJob, runningLabel, queuedLabel, completionText, changeCount, FOCUS_ASIN_EVENT, type Job } from "@/lib/jobs-api";
 import { refreshPlan, queuedJobIdFromMessage, duplicateJobFromMessage, applyStreamedRow } from "@/lib/upload-flow";
 import { rowsToRefresh, mergeRefreshedRows, RowRefresher, staleRowsDue } from "@/lib/row-refresh";
 import { buildFilterChips, addedHiddenReport, type FilterChipKey } from "@/lib/filter-chips";
@@ -889,7 +889,8 @@ export default function Home() {
   // the new values show.
   const onJobFinished = useCallback((job: Job) => {
     const { title, description } = completionText(job);
-    const flips = job.summary?.flips?.length ?? 0;
+    // Changes = gating / suppression flips + listings closed / deleted (listing hygiene).
+    const flips = changeCount(job.summary);
     toast({
       title,
       description,
