@@ -2210,6 +2210,43 @@ of the ASIN; `amzn.gr.*` SKUs are excluded entirely.
 - PATCH and DELETE on `/listings/2021-08-01/items` share the Listings
   limiter bucket and go only through `spApiPatch` / `spApiDelete` in
   `server/spapi-auth.ts`.
+- **Implementation (2026-10-19)** — `server/listing-hygiene.ts` (pure
+  predicates, loaders, SC writes, verification), `listing-hygiene-run.ts`
+  (the run: pass / manual run / release), `ledger-sync.ts`,
+  `sku-fba-inventory.ts`, `listing-hygiene-routes.ts`; components
+  `22-close-oos.ts`, `23-ledger.ts`, `24-delete-dead.ts`.
+  - **"This pass"** is read from the ledger, so the scheduled pass and the
+    manual one-component job decide the same way: inventory counts only if
+    the latest component-15 run succeeded within 2 h and the SKU's
+    `sku_fba_inventory.observed_at` is from it; listing state only if the
+    latest full-scope component-16 run succeeded within 2 h and the SKU's
+    `listing_checked_at` is from it. A failed 15 stops the job before 22
+    anyway (an incomplete pull throws).
+  - **Tonight's 23** = the latest `23_ledger` run, finished within 26 h,
+    `counts.conclusive = 1`; and `settings.hygiene_ledger_coverage`
+    (contiguous `{from, to}` the ledger has covered, written by 23) must
+    reach ≥ 540 days back and end ≤ 2 days ago — so the never-stocked
+    branch is never trusted before the 18-month backfill has run.
+  - **Live re-read before every write** (`getListingsItem`
+    summaries + attributes): the close PATCH takes `productType` from it and
+    is skipped if the SKU is already closed; the DELETE is skipped if the
+    SKU is no longer closed (reopened in SC since the probe).
+  - **Release is a job**: `POST /api/listing-hygiene/release` enqueues a
+    lane-M job `components [22|24]`, `params.listing_hygiene {action,
+    mode: 'release', release_of_job}`; it re-reads listing and inventory
+    live (`getInventorySummaries` by `sellerSkus`), reads the PO pipeline
+    and Velocity live, and updates the held rows in place (the outcome of
+    the re-evaluation in `evidence.release`; a SKU that no longer qualifies
+    stays `held` with its reason). Refused (409) while the gate is unset.
+    `POST /api/listing-hygiene/run` refuses `dryRun: false` the same way.
+  - **Additions beyond the patch text:** outcome `skip_action_pending` (an
+    accepted, unverified action of the same kind for the SKU within 3 h —
+    Amazon applies writes asynchronously, so the next pass does not repeat
+    it); `listing_actions.verify_passes` (the count behind
+    `not_effective`). Outcomes are keyed by SKU in the ledger row, so Retry
+    failed ignores stages 22 / 24.
+  - Ledger backfill: `POST /api/jobs/backfill-ledger {from?, to?}` (admin)
+    or `npm run backfill:ledger` (default 548 days back → yesterday).
 
 Three components are ledger-only in this version, by decision:
 
