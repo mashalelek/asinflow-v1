@@ -42,3 +42,4 @@ describe("spApiPatch / spApiDelete go through withRateLimit", () => {
     expect((axios as any).delete).toHaveBeenCalledWith(expect.stringContaining(PATH), expect.objectContaining({ params: { marketplaceIds: "ATVPDKIKX0DER" }, timeout: 30_000 }));
   });
 });
+

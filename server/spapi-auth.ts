@@ -51,11 +51,15 @@ export async function getAccessToken(): Promise<string> {
 // a frozen job (decision 9: 30 s per API request; the S3 report-document
 // download is a plain URL outside these wrappers and uses its own 120 s).
 const SP_API_TIMEOUT_MS = 30_000;
+// The LWA token is read INSIDE the rate-limited send (2026-10-19): a request
+// can wait in its bucket's queue — minutes for createReport — and a token
+// fetched before the wait can expire before the request leaves (ledger
+// backfill job 13: "The access token you provided has expired").
 
 export async function spApiGet(endpoint: string, params?: Record<string, any>) {
-  const token = await getAccessToken();
-  const res = await withRateLimit(endpoint, () =>
-    axios.get(`${SP_API_BASE}${endpoint}`, {
+  const res = await withRateLimit(endpoint, async () => {
+    const token = await getAccessToken();
+    return axios.get(`${SP_API_BASE}${endpoint}`, {
       headers: {
         Authorization: `Bearer ${token}`,
         "x-amz-access-token": token,
@@ -63,23 +67,23 @@ export async function spApiGet(endpoint: string, params?: Record<string, any>) {
       },
       params,
       timeout: SP_API_TIMEOUT_MS,
-    }),
-  );
+    });
+  });
   return res.data;
 }
 
 export async function spApiPost(endpoint: string, body: any) {
-  const token = await getAccessToken();
-  const res = await withRateLimit(endpoint, () =>
-    axios.post(`${SP_API_BASE}${endpoint}`, body, {
+  const res = await withRateLimit(endpoint, async () => {
+    const token = await getAccessToken();
+    return axios.post(`${SP_API_BASE}${endpoint}`, body, {
       headers: {
         Authorization: `Bearer ${token}`,
         "x-amz-access-token": token,
         "Content-Type": "application/json",
       },
       timeout: SP_API_TIMEOUT_MS,
-    }),
-  );
+    });
+  });
   return res.data;
 }
 
@@ -92,9 +96,9 @@ export async function spApiPut(
   body: any,
   params?: Record<string, any>,
 ) {
-  const token = await getAccessToken();
-  const res = await withRateLimit(endpoint, () =>
-    axios.put(`${SP_API_BASE}${endpoint}`, body, {
+  const res = await withRateLimit(endpoint, async () => {
+    const token = await getAccessToken();
+    return axios.put(`${SP_API_BASE}${endpoint}`, body, {
       headers: {
         Authorization: `Bearer ${token}`,
         "x-amz-access-token": token,
@@ -102,8 +106,8 @@ export async function spApiPut(
       },
       params,
       timeout: SP_API_TIMEOUT_MS,
-    }),
-  );
+    });
+  });
   return res.data;
 }
 
@@ -117,9 +121,9 @@ export async function spApiPatch(
   body: any,
   params?: Record<string, any>,
 ) {
-  const token = await getAccessToken();
-  const res = await withRateLimit(endpoint, () =>
-    axios.patch(`${SP_API_BASE}${endpoint}`, body, {
+  const res = await withRateLimit(endpoint, async () => {
+    const token = await getAccessToken();
+    return axios.patch(`${SP_API_BASE}${endpoint}`, body, {
       headers: {
         Authorization: `Bearer ${token}`,
         "x-amz-access-token": token,
@@ -127,15 +131,15 @@ export async function spApiPatch(
       },
       params,
       timeout: SP_API_TIMEOUT_MS,
-    }),
-  );
+    });
+  });
   return res.data;
 }
 
 export async function spApiDelete(endpoint: string, params?: Record<string, any>) {
-  const token = await getAccessToken();
-  const res = await withRateLimit(endpoint, () =>
-    axios.delete(`${SP_API_BASE}${endpoint}`, {
+  const res = await withRateLimit(endpoint, async () => {
+    const token = await getAccessToken();
+    return axios.delete(`${SP_API_BASE}${endpoint}`, {
       headers: {
         Authorization: `Bearer ${token}`,
         "x-amz-access-token": token,
@@ -143,7 +147,7 @@ export async function spApiDelete(endpoint: string, params?: Record<string, any>
       },
       params,
       timeout: SP_API_TIMEOUT_MS,
-    }),
-  );
+    });
+  });
   return res.data;
 }
