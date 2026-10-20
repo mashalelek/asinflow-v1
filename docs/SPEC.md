@@ -2240,9 +2240,11 @@ of the ASIN; `amzn.gr.*` SKUs are excluded entirely.
     stays `held` with its reason). Refused (409) while the gate is unset.
     `POST /api/listing-hygiene/run` refuses `dryRun: false` the same way.
   - **Additions beyond the patch text:** outcome `skip_action_pending` (an
-    accepted, unverified action of the same kind for the SKU within 3 h —
-    Amazon applies writes asynchronously, so the next pass does not repeat
-    it); `listing_actions.verify_passes` (the count behind
+    accepted, unverified action of EITHER kind — close or delete — for the
+    SKU within 3 h: Amazon applies writes asynchronously, so the next pass
+    neither repeats it nor acts across it; widened 2026-10-20 after
+    CS-ZH3X-SXV9's DELETE read back open, end_at null, for ~5½ min before
+    the 404); `listing_actions.verify_passes` (the count behind
     `not_effective`). Outcomes are keyed by SKU in the ledger row, so Retry
     failed ignores stages 22 / 24.
   - Ledger backfill: `POST /api/jobs/backfill-ledger {from?, to?}` (admin)

@@ -50,7 +50,13 @@ export const LEDGER_MAX_LAG_DAYS = 2;
 export const CLOCK_EVER_STOCKED_DAYS = 60;
 export const CLOCK_NEVER_STOCKED_DAYS = 14;
 export const DEFAULT_BREAKER = 25;
-/** An accepted action not yet verified suppresses a repeat for this long (the next probe verifies it). */
+/**
+ * An accepted action not yet verified — of EITHER kind — suppresses any further
+ * action on the SKU for this long (the next probe verifies it). Cross-kind on
+ * purpose: CS-ZH3X-SXV9's DELETE (2026-10-20) read back open, end_at null, for
+ * ~5½ min before the 404, which an hourly close pass would have taken as a
+ * close candidate.
+ */
 export const PENDING_ACTION_MS = 3 * 3600_000;
 
 /** Close: these buckets block. Unfulfillable and Researching do NOT (rule 2). */
@@ -85,7 +91,7 @@ export interface SkuFacts {
   inventory: InventoryFacts | null;
   /** The newest §19 submission row for the SKU is pending / processing / stale. */
   pendingSubmission: boolean;
-  /** An accepted, unverified action of this kind fired recently. */
+  /** An accepted, unverified action — close OR delete — fired on this SKU recently. */
   actionPending: boolean;
   ledgerLastStocked: string | null;
   pipeline: { on_order: number; at_prep: number };
@@ -228,14 +234,17 @@ export async function loadSkuFacts(query: QueryLike, sel: { asins?: string[]; sk
             i.observed_at, i.last_nonzero_at, (i.sku IS NOT NULL) AS has_inventory,
             l.last_stocked_date,
             (SELECT ls.verify_status FROM listing_submissions ls WHERE ls.sku = s.sku ORDER BY ls.submitted_at DESC LIMIT 1) AS newest_submission,
-            EXISTS (SELECT 1 FROM listing_actions la WHERE la.sku = s.sku AND la.action = $2 AND la.status = 'accepted'
-                     AND la.fired_at > $3::timestamptz) AS action_pending
+            -- ANY accepted action on the SKU, close or delete (2026-10-20): a
+            -- deleting listing reads back open (end_at null) for minutes while
+            -- Amazon processes the DELETE, and must not draw a close.
+            EXISTS (SELECT 1 FROM listing_actions la WHERE la.sku = s.sku AND la.status = 'accepted'
+                     AND la.fired_at > $2::timestamptz) AS action_pending
        FROM asin_skus s JOIN asins a ON a.id = s.asin_id
        LEFT JOIN sku_fba_inventory i ON i.sku = s.sku
        LEFT JOIN sku_ledger_state l ON l.sku = s.sku
       WHERE ${where}
       ORDER BY s.sku, s.listing_checked_at DESC NULLS LAST`,
-    [sel.skus ?? sel.asins ?? [], action, new Date(now.getTime() - PENDING_ACTION_MS).toISOString()],
+    [sel.skus ?? sel.asins ?? [], new Date(now.getTime() - PENDING_ACTION_MS).toISOString()],
   )).rows;
   const by = new Map<string, SkuFacts>();
   for (const r of rows) {
