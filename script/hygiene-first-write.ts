@@ -113,7 +113,7 @@ async function main(): Promise<number> {
     const t = new Date().toISOString();
     if (!back.ok) { console.log(`${t} read-back failed: ${back.message}`); continue; }
     if (action === "close") {
-      console.log(`${t} end_at = ${back.present ? back.state.offerEndAt ?? "null (still open)" : "listing absent"}`);
+      console.log(`${t} read-back end_at → ${back.present ? back.state.offerEndAt ?? "null (still open)" : "listing absent"}`);
       if (back.present && back.state.offerEndAt && Date.parse(back.state.offerEndAt) <= Date.now()) { console.log("CLOSED — end_at is in the past."); return 0; }
     } else {
       console.log(`${t} probe: ${back.present ? `still present (end_at ${back.state.offerEndAt})` : "absent — 404 / empty summaries"}`);
