@@ -31,8 +31,8 @@ export function hygieneParamsOf(job: { params: Record<string, any> | null }, act
 
 const WOULD: Record<HygieneAction, string> = { close: "would_close", delete: "would_delete" };
 
-async function insertAction(query: QueryLike, a: {
-  sku: string; asin: string; action: HygieneAction; jobId: number; dryRun: boolean; evidence: any;
+export async function insertAction(query: QueryLike, a: {
+  sku: string; asin: string; action: HygieneAction; jobId: number | null; dryRun: boolean; evidence: any;
   status: string; submissionId?: string | null; issues?: any;
 }): Promise<void> {
   await query(
