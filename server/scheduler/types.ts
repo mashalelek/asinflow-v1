@@ -29,7 +29,7 @@ export const ONBOARDING_COMPONENTS: readonly number[] = [2, 3, 4, 5, 6, 7, 8, 10
 
 /**
  * Listing hygiene (SPEC §11, 2026-10-19): components that run ONLY in the
- * scheduled pass — 22 (close, hourly), 23 (ledger, 00:00) and 24 (delete,
+ * scheduled pass — 22 (close, 00:00 since 2026-10-20), 23 (ledger, 00:00) and 24 (delete,
  * 00:00). A Refresh click, an onboarding or a bulk job must never have SC
  * writes as a side effect. A non-scheduled job runs one of them only when it
  * lists it in `components` AND carries that component's own parameters —

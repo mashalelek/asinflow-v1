@@ -173,9 +173,22 @@ describe("runHygiene('close')", () => {
 });
 
 describe("22 runs only where it may", () => {
-  it("scheduled hourly pass includes 22; a manual Refresh does not", () => {
-    const row = (p: Partial<JobRow>) => ({ trigger: "scheduled", include_daily: false, components: null, params: null, ...p }) as JobRow;
-    expect(componentsForJob(row({})).map((c) => c.n)).toContain(22);
+  const row = (p: Partial<JobRow>) => ({ trigger: "scheduled", include_daily: false, components: null, params: null, ...p }) as JobRow;
+  it("daily since 2026-10-20: an hourly scheduled pass skips 22", () => {
+    expect(componentsForJob(row({})).map((c) => c.n)).not.toContain(22);
+  });
+  it("the 00:00 pass runs 22, after 15 and 16 and before 23 and 24", () => {
+    const ns = componentsForJob(row({ include_daily: true })).map((c) => c.n);
+    const at = (n: number) => ns.indexOf(n);
+    expect(at(22)).toBeGreaterThan(-1);
+    expect(at(22)).toBeGreaterThan(at(16));
+    expect(at(16)).toBeGreaterThan(at(15));
+    expect(at(22)).toBeLessThan(at(23));
+    expect(at(22)).toBeLessThan(at(24));
+  });
+  it("a manual Refresh never runs it; its own run / release entry still does", () => {
     expect(componentsForJob(row({ trigger: "manual", include_daily: true })).map((c) => c.n)).not.toContain(22);
+    expect(componentsForJob(row({ trigger: "manual", components: [22], params: { listing_hygiene: { action: "close", mode: "run", dry_run: true } } })).map((c) => c.n)).toEqual([22]);
+    expect(componentsForJob(row({ trigger: "manual", components: [22], params: { listing_hygiene: { action: "close", mode: "release", release_of_job: 1 } } })).map((c) => c.n)).toEqual([22]);
   });
 });

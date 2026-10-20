@@ -2129,7 +2129,7 @@ the ledger stage is the `refresh_runs.stage` key the component writes.
 | 19 | Sales units / revenue | hourly | CALL-11 (today: orders report, 48-hour window; `params.sales_window` for the backfill) | `19_sales` | account — every ASIN in `asins`, all statuses (2026-10-16) |
 | 20 | Refunds | hourly | rides CALL-11 | `20_refunds` | " |
 | 21 | Actual fees charged | hourly | rides CALL-11 | `21_actual_fees` | " |
-| 22 | Close OOS listings (listing hygiene, 2026-10-18) | hourly | CALL-12 `patchListingsItem`, per SKU | `22_close_oos` | every SKU 15/16 observed; **scheduled passes only** |
+| 22 | Close OOS listings (listing hygiene, 2026-10-18; daily since 2026-10-20) | daily | CALL-12 `patchListingsItem`, per SKU | `22_close_oos` | every SKU 15/16 observed; **00:00 pass only**, before 24 |
 | 23 | Inventory Ledger (`sku_ledger_state`) | daily | CALL-13 `GET_LEDGER_SUMMARY_VIEW_DATA` (DAILY, COUNTRY); `params.ledger_window` for the backfill | `23_ledger` | account |
 | 24 | Delete long-dead listings (listing hygiene) | daily | CALL-14 `deleteListingsItem`, per SKU + Velocity `/inbound` + `/inventory` | `24_delete_dead` | every closed SKU; **00:00 pass only** |
 
@@ -2139,10 +2139,11 @@ is now derived from the PO tables, not copied from the sheet); 15 before 16
 (listings need the SKU set); 19–21 last so Actual profit uses this hour's
 COGS. **The daily block (2–8) is executed only by the 00:00 pass** and by
 any job enqueued with `include_daily` (the Refresh button, onboarding);
-every other scheduled pass skips it. 1 runs first in every pass. 22 needs
-this pass's 15 (complete) and 16; 23 and 24 run only in the 00:00 pass
-(24 needs this pass's 15, 16 and tonight's 23) — appending them after 21
-satisfies every dependency.
+every other scheduled pass skips it. 1 runs first in every pass. 22, 23
+and 24 are daily too and run only in the 00:00 pass (Maria 2026-10-20:
+close moved from hourly to daily) — 22 needs this pass's 15 (complete) and
+16 and runs before 24; 24 needs this pass's 15, 16 and tonight's 23.
+Appending them after 21, in that order, satisfies every dependency.
 
 **Listing hygiene (22–24, 2026-10-18).** Patch
 `docs/claude_spec-patch-listing-hygiene.md` (decisions confirmed by Maria
@@ -2150,7 +2151,8 @@ satisfies every dependency.
 now"). Evaluated **per SKU**; ASIN-level pipeline data applies to every SKU
 of the ASIN; `amzn.gr.*` SKUs are excluded entirely.
 
-- **22 Close** — a SKU whose listing exists and is not closed is closed
+- **22 Close** (daily, 00:00 pass, before 24 — hourly until 2026-10-20) —
+  a SKU whose listing exists and is not closed is closed
   when Available (fulfillable), Inbound (working + shipped + receiving),
   FC Transfer (reserved › pending transshipment), FC Processing (reserved
   › FC processing), Reserved (reserved › pending customer order) and

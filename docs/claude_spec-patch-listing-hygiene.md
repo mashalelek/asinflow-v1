@@ -316,6 +316,21 @@ expected to trip both — that is the intended review point for the backlog.
   stays manual and AF never reopens (rule 5).
 - `claude/backlog.md`: the "Delete in SC" line points here.
 
+## Amendments
+
+- **2026-10-20 (Maria): component 22 (close) runs daily, not hourly.** It
+  moves into the daily block: it runs only in the 00:00 ET pass, after
+  this pass's 15 and 16 and before 23 and 24, and never in an hourly pass.
+  Rules, breaker, live gate and the manual entry points (`POST
+  /api/listing-hygiene/run`, `/release`) are unchanged — they list 22
+  explicitly and run whatever its tier. Read "Close — hourly" in rule 2,
+  the component table's "hourly" tier for 22, and "observe one pass" in
+  the first-write protocol as the 00:00 pass. A SKU that sells out now
+  waits up to a day to be closed.
+- **2026-10-20: `skip_action_pending` counts any recent accepted action
+  on the SKU, close or delete** (a deleting listing reads back open for
+  minutes; commit e80c123).
+
 ## Out of scope
 
 - Showing the new buckets in the Stock hover (easy follow-up; display only).
