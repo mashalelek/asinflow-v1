@@ -35,7 +35,8 @@ describe("delete predicate (rule 3)", () => {
   });
   it("pending §19 submission and amzn.gr skip", () => {
     expect(evaluateDelete(dead({ pendingSubmission: true }), basis).outcome).toBe("skip_pending_submission");
-    expect(evaluateDelete(dead({ sku: "amzn.gr.x-1" }), basis).outcome).toBe("skip_amzn_gr");
+    // amzn.gr.* follows its own rule since 2026-10-21 (see "amzn_gr rule" below).
+    expect(evaluateDelete(dead({ sku: "amzn.gr.x-1" }), basis).outcome).toBe("would_delete:amzn_gr");
   });
 });
 
@@ -172,5 +173,56 @@ describe("24 runs only in the 00:00 pass (and its own entry points)", () => {
   });
   it("the manual entry point: components [24] + params.listing_hygiene.action = delete", () => {
     expect(componentsForJob(row({ trigger: "manual", components: [24], params: { listing_hygiene: { action: "delete", mode: "run", dry_run: true } } })).map((c) => c.n)).toEqual([24]);
+  });
+});
+
+describe("amzn_gr delete rule (Maria 2026-10-21)", () => {
+  const openListing = { checkedAt: new Date("2026-10-19T13:20:00Z"), createdAt: new Date("2026-10-18T00:00:00Z"), offerEndAt: null };
+  const gr = (p: any = {}, inv: Record<string, number> = {}) =>
+    facts({ sku: "amzn.gr.DG-KQD5-CI6K-wzvNsv2Ebw8vUIXe-VG", listing: openListing, ledgerLastStocked: "2026-10-18", pipeline: { on_order: 9, at_prep: 4 }, velocityOnHand: 7, ...p }, inv);
+
+  it("all buckets 0 and an OPEN listing → delete — no closed state, no clock, no pipeline", () => {
+    const e = evaluateDelete(gr(), basis);
+    expect(e).toMatchObject({ outcome: "would_delete:amzn_gr", candidate: true });
+    expect(e.evidence.rule).toBe("amzn_gr");
+  });
+  it("Velocity not read (run-wide outage) does not matter to it", () => {
+    expect(evaluateDelete(gr({ velocityOnHand: null }), basis).outcome).toBe("would_delete:amzn_gr");
+  });
+  it("any bucket > 0 → skip_has_stock:<bucket> (Unfulfillable and Researching included)", () => {
+    for (const b of BUCKET_FIELDS) expect(evaluateDelete(gr({}, { [b]: 2 }), basis).outcome).toBe(`skip_has_stock:${b}`);
+  });
+  it("keeps the freshness gate and the action-pending guard; no listing → skip_no_listing first", () => {
+    expect(evaluateDelete(gr({ inventory: { ...facts().inventory!, observedAt: new Date("2026-10-19T11:00:00Z") } }), basis).outcome).toBe("skip_no_fresh_inventory");
+    expect(evaluateDelete(gr({ actionPending: true }), basis).outcome).toBe("skip_action_pending");
+    expect(evaluateDelete(gr({ listing: { ...openListing, createdAt: null } }), basis).outcome).toBe("skip_no_listing");
+  });
+  it("component 22 still never closes an amzn.gr SKU; with no listing it reports skip_no_listing", async () => {
+    const { evaluateClose } = await import("./listing-hygiene");
+    expect(evaluateClose(gr(), basis).outcome).toBe("skip_amzn_gr");
+    expect(evaluateClose(gr({ listing: { ...openListing, createdAt: null } }), basis).outcome).toBe("skip_no_listing");
+  });
+  it("live: the DELETE fires on an open listing (no skip_not_closed pre-flight) and records deleted:amzn_gr", async () => {
+    live(true);
+    hygieneDeps.now = () => NOW;
+    const sku = "amzn.gr.DG-KQD5-CI6K-wzvNsv2Ebw8vUIXe-VG";
+    const sc = fakeSc({ [sku]: { end: null } });
+    const row = { ...dbRow(sku), last_stocked_date: "2026-10-18" };
+    const w = world({ rows: [row] });
+    const r = await runHygiene("delete", ctxOf(w.query));
+    expect(sc.deletes.map((e) => decodeURIComponent(e.split("/").pop()!))).toEqual([sku]);
+    expect(r.outcomes[sku]).toBe("deleted:amzn_gr");
+    expect(w.inserts[0][6]).toBe("accepted");
+    expect(JSON.parse(w.inserts[0][5]).rule).toBe("amzn_gr");
+  });
+  it("a run-wide ledger outage skips the regular deletes but still evaluates amzn.gr SKUs", async () => {
+    live(false);
+    hygieneDeps.now = () => NOW;
+    const sku = "amzn.gr.X2-TEST-0000-aaaa-PO";
+    fakeSc({ [sku]: { end: null } });
+    const w = world({ ledgerRun: { ...goodLedger, counts: { conclusive: 0 } }, rows: [deadRow("D-1"), dbRow(sku)] });
+    const r = await runHygiene("delete", ctxOf(w.query));
+    expect(r.outcomes["D-1"]).toBe("ledger_unavailable");
+    expect(r.outcomes[sku]).toBe("would_delete:amzn_gr");
   });
 });

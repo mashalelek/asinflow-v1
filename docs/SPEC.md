@@ -2149,7 +2149,8 @@ Appending them after 21, in that order, satisfies every dependency.
 `docs/claude_spec-patch-listing-hygiene.md` (decisions confirmed by Maria
 2026-10-18; it replaces the backlog line "Delete in SC from AF — not
 now"). Evaluated **per SKU**; ASIN-level pipeline data applies to every SKU
-of the ASIN; `amzn.gr.*` SKUs are excluded entirely.
+of the ASIN; `amzn.gr.*` SKUs are never closed (22) and are deleted only
+by 24's amzn_gr rule (below; excluded entirely until 2026-10-21).
 
 - **22 Close** (daily, 00:00 pass, before 24 — hourly until 2026-10-20) —
   a SKU whose listing exists and is not closed is closed
@@ -2192,6 +2193,14 @@ of the ASIN; `amzn.gr.*` SKUs are excluded entirely.
   `skip_clock:<days>/<threshold>` · `ledger_unavailable` ·
   `velocity_unavailable` (any leg failed — the whole run skips) · `held` ·
   `invalid` / `error`.
+  **amzn_gr rule (2026-10-21):** an `amzn.gr.*` SKU (Amazon Grade & Resell)
+  is deleted when it has a listing and every FBA bucket is 0 (Unfulfillable
+  and Researching included) — no closed-state requirement, no clock, no
+  pipeline, unaffected by a ledger / Velocity outage; the freshness gate,
+  action-pending guard and delete breaker apply. Outcomes
+  `would_delete:amzn_gr` / `deleted:amzn_gr`, evidence `rule: "amzn_gr"`.
+  22 never closes one (`skip_amzn_gr`); in both components the listing
+  checks run first, so one without a listing is `skip_no_listing`.
 - **Every SKU in scope gets an outcome**, and every candidate that fires
   (or would) gets a `listing_actions` row with the full evidence snapshot.
   Component 16 verifies on the next pass (close → `offer_end_at <= now()`;

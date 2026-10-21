@@ -353,6 +353,18 @@ expected to trip both — that is the intended review point for the backlog.
     one (which is then refused as `superseded`, 409), and a released hold
     clears it. A finished pass that tripped a breaker also toasts "Daily
     pass held N closes / N deletes — review needed".
+- **2026-10-21 (Maria): amzn.gr.* SKUs are no longer excluded from
+  component 24** (Amazon Grade & Resell; rule 1 now applies to 22 only).
+  Component 24 deletes one in the 00:00 pass when every FBA bucket is 0
+  (Unfulfillable and Researching included) — no closed-state requirement,
+  no 60/14-day clock, no PO / Velocity pipeline check (so a run-wide ledger
+  or Velocity outage does not block it). Kept: never closed by 22
+  (`skip_amzn_gr`), never primary, the same delete breaker (25, counted
+  together with the regular deletes), the action-pending guard, the
+  fail-closed inventory freshness gate. Evidence `rule: "amzn_gr"`;
+  outcomes `would_delete:amzn_gr` / `deleted:amzn_gr`. The listing-exists
+  check now runs before the amzn.gr rule in 22 and 24, so an amzn.gr SKU
+  with no listing reports `skip_no_listing` (16 of the 17 in pass #123).
 
 ## Out of scope
 

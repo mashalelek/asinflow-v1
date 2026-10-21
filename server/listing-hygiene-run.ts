@@ -13,7 +13,7 @@
 import {
   evaluateClose, evaluateDelete, countKey, loadBasis, loadSkuFacts, attachPipeline, velocityOnHandByAsin,
   ledgerAvailability, breakerFor, liveGate, fireClose, fireDelete, readListingLive, readInventoryLive,
-  realScDeps, type HygieneAction, type ScDeps, type SkuFacts, type Evaluation, type Basis,
+  realScDeps, isAmznGr, type HygieneAction, type ScDeps, type SkuFacts, type Evaluation, type Basis,
 } from "./listing-hygiene";
 import { ComponentError, type ComponentContext, type ComponentResult, type ListingActionChange, type QueryLike } from "./scheduler/types";
 
@@ -29,7 +29,7 @@ export function hygieneParamsOf(job: { params: Record<string, any> | null }, act
   return p && p.action === action ? (p as HygieneParams) : null;
 }
 
-const WOULD: Record<HygieneAction, string> = { close: "would_close", delete: "would_delete" };
+
 
 export async function insertAction(query: QueryLike, a: {
   sku: string; asin: string; action: HygieneAction; jobId: number | null; dryRun: boolean; evidence: any;
@@ -74,8 +74,8 @@ async function deleteRunBlocker(facts: SkuFacts[], query: QueryLike, t: Tally, n
   return null;
 }
 
-async function fire(action: HygieneAction, sellerId: string, sku: string, now: Date) {
-  return action === "close" ? fireClose(sellerId, sku, hygieneDeps.sc, now) : fireDelete(sellerId, sku, hygieneDeps.sc, now);
+async function fire(action: HygieneAction, sellerId: string, sku: string, now: Date, e: Evaluation) {
+  return action === "close" ? fireClose(sellerId, sku, hygieneDeps.sc, now) : fireDelete(sellerId, sku, hygieneDeps.sc, now, { rule: e.evidence?.rule });
 }
 
 export async function runHygiene(action: HygieneAction, ctx: ComponentContext): Promise<ComponentResult> {
@@ -91,12 +91,17 @@ export async function runHygiene(action: HygieneAction, ctx: ComponentContext): 
 
   const basis: Basis = await loadBasis(ctx.query, now);
   t.note("_basis", `inventory from ${basis.inventoryFrom?.toISOString() ?? "none fresh"} · listings from ${basis.listingFrom?.toISOString() ?? "none fresh"}`);
-  const facts = await loadSkuFacts(ctx.query, { asins: ctx.scopeAsins }, action, now);
+  let facts = await loadSkuFacts(ctx.query, { asins: ctx.scopeAsins }, action, now);
 
   if (action === "delete") {
     await attachPipeline(facts, ctx.query);
     const blocker = await deleteRunBlocker(facts, ctx.query, t, now);
-    if (blocker) { for (const f of facts) t.set(f.sku, f.sku.toLowerCase().startsWith("amzn.gr.") ? "skip_amzn_gr" : blocker); return t.result(); }
+    if (blocker) {
+      // The amzn_gr rule reads neither the ledger nor Velocity, so a run-wide
+      // outage blocks only the regular deletes (2026-10-21).
+      for (const f of facts) if (!isAmznGr(f.sku)) t.set(f.sku, blocker);
+      facts = facts.filter((f) => isAmznGr(f.sku));
+    }
   }
 
   const evals: Array<{ f: SkuFacts; e: Evaluation }> = facts.map((f) => ({ f, e: action === "close" ? evaluateClose(f, basis) : evaluateDelete(f, basis) }));
@@ -110,7 +115,7 @@ export async function runHygiene(action: HygieneAction, ctx: ComponentContext): 
     const evidence = { ...e.evidence, live, breaker, candidates: candidates.length, job_id: ctx.job.id };
     if (!live) {
       await insertAction(ctx.query, { sku: f.sku, asin: f.asin, action, jobId: ctx.job.id, dryRun: true, evidence, status: "would_fire" });
-      t.set(f.sku, WOULD[action]);
+      t.set(f.sku, e.outcome);
     } else if (trips) {
       await insertAction(ctx.query, { sku: f.sku, asin: f.asin, action, jobId: ctx.job.id, dryRun: false, evidence, status: "held" });
       t.set(f.sku, "held");
@@ -119,7 +124,7 @@ export async function runHygiene(action: HygieneAction, ctx: ComponentContext): 
   if (!live || trips) return t.result();
 
   for (const { f, e } of candidates) {
-    const r = await fire(action, ctx.sellerId, f.sku, now);
+    const r = await fire(action, ctx.sellerId, f.sku, now, e);
     t.set(f.sku, r.outcome);
     if (r.status === "skipped") continue;
     await insertAction(ctx.query, {
@@ -149,7 +154,7 @@ async function runRelease(action: HygieneAction, ctx: ComponentContext, params: 
   if (held.length === 0) return t.result();
 
   const skus = held.map((h) => String(h.sku));
-  const facts = await loadSkuFacts(ctx.query, { skus }, action, now);
+  let facts = await loadSkuFacts(ctx.query, { skus }, action, now);
   // Live re-reads: listing state per SKU, inventory per SKU (≤ 50 per call).
   const inventory = await readInventoryLive(skus, hygieneDeps.sc, now);
   for (const f of facts) {
@@ -172,8 +177,8 @@ async function runRelease(action: HygieneAction, ctx: ComponentContext, params: 
     await attachPipeline(facts, ctx.query);
     const blocker = await deleteRunBlocker(facts, ctx.query, t, now);
     if (blocker) {
-      for (const f of facts) t.set(f.sku, blocker);
-      return t.result();
+      for (const f of facts) if (!isAmznGr(f.sku)) t.set(f.sku, blocker);
+      facts = facts.filter((f) => isAmznGr(f.sku));
     }
   }
 
@@ -187,7 +192,7 @@ async function runRelease(action: HygieneAction, ctx: ComponentContext, params: 
       t.set(f.sku, e.outcome);
       continue;
     }
-    const r = await fire(action, ctx.sellerId, f.sku, now);
+    const r = await fire(action, ctx.sellerId, f.sku, now, e);
     release.outcome = r.outcome;
     release.preflight = r.preflight ?? null;
     t.set(f.sku, r.outcome);

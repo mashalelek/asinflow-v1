@@ -151,9 +151,12 @@ const hasListing = (l: ListingFacts) => l.createdAt != null;
 export function evaluateClose(f: SkuFacts, b: Basis): Evaluation {
   const ev: Record<string, any> = { ...baseEvidence(f, b), blocking_buckets: CLOSE_BLOCKING };
   const out = (outcome: string, candidate = false): Evaluation => ({ outcome, candidate, evidence: { ...ev, outcome } });
-  if (isAmznGr(f.sku)) return out("skip_amzn_gr");
+  // The listing checks come first (2026-10-21): an amzn.gr SKU with no
+  // listing reports skip_no_listing, like any other.
   if (!fresh(f.listing.checkedAt, b.listingFrom)) return out("skip_probe_transient");
   if (!hasListing(f.listing)) return out("skip_no_listing");
+  // amzn.gr.* are never closed by 22 (rule 1) — only deleted by 24's amzn_gr rule.
+  if (isAmznGr(f.sku)) return out("skip_amzn_gr");
   if (isClosed(f.listing, b.now)) return out("skip_already_closed");
   if (f.pendingSubmission) return out("skip_pending_submission");
   if (!f.inventory || !fresh(f.inventory.observedAt, b.inventoryFrom)) return out("skip_no_fresh_inventory");
@@ -188,9 +191,9 @@ export function evaluateDelete(f: SkuFacts, b: Basis): Evaluation {
   };
   const out = (outcome: string, candidate = false, extra: Record<string, any> = {}): Evaluation =>
     ({ outcome, candidate, evidence: { ...ev, ...extra, outcome } });
-  if (isAmznGr(f.sku)) return out("skip_amzn_gr");
   if (!fresh(f.listing.checkedAt, b.listingFrom)) return out("skip_probe_transient");
   if (!hasListing(f.listing)) return out("skip_no_listing");
+  if (isAmznGr(f.sku)) return evaluateDeleteAmznGr(f, b, out);
   if (!isClosed(f.listing, b.now)) return out("skip_not_closed");
   if (!f.inventory || !fresh(f.inventory.observedAt, b.inventoryFrom)) return out("skip_no_fresh_inventory");
   for (const k of DELETE_BLOCKING) if (f.inventory[k] > 0) return out(`skip_has_stock:${k}`);
@@ -203,6 +206,24 @@ export function evaluateDelete(f: SkuFacts, b: Basis): Evaluation {
   if (!clock.pass) return out(`skip_clock:${clock.days ?? "unknown"}/${clock.threshold}`, false, { clock });
   if (f.actionPending) return out("skip_action_pending", false, { clock });
   return out("would_delete", true, { clock });
+}
+
+/**
+ * The amzn_gr delete rule (Maria 2026-10-21): an amzn.gr.* SKU (Amazon Grade &
+ * Resell) is deleted when every FBA bucket is 0 — Unfulfillable and
+ * Researching included. No closed-state requirement, no 60/14-day clock, no
+ * PO / Velocity pipeline (none of those inputs is read, so a run-wide
+ * ledger / Velocity outage does not block it). Kept: the listing checks
+ * above, the fail-closed inventory freshness gate, the action-pending guard,
+ * the delete breaker. Never closed by 22; never primary.
+ */
+export const AMZN_GR_RULE = "amzn_gr";
+function evaluateDeleteAmznGr(f: SkuFacts, b: Basis, out: (o: string, c?: boolean, extra?: Record<string, any>) => Evaluation): Evaluation {
+  const rule = { rule: AMZN_GR_RULE };
+  if (!f.inventory || !fresh(f.inventory.observedAt, b.inventoryFrom)) return out("skip_no_fresh_inventory", false, rule);
+  for (const k of DELETE_BLOCKING) if (f.inventory[k] > 0) return out(`skip_has_stock:${k}`, false, rule);
+  if (f.actionPending) return out("skip_action_pending", false, rule);
+  return out(`would_delete:${AMZN_GR_RULE}`, true, rule);
 }
 
 /** Ledger counts key: the clock's days vary per SKU, so they share one bucket. */
@@ -408,16 +429,18 @@ export async function fireClose(sellerId: string, sku: string, deps: ScDeps, now
   }
 }
 
-export async function fireDelete(sellerId: string, sku: string, deps: ScDeps, now: Date = new Date()): Promise<FireResult> {
+export async function fireDelete(sellerId: string, sku: string, deps: ScDeps, now: Date = new Date(), opts: { rule?: string } = {}): Promise<FireResult> {
+  const amznGr = opts.rule === AMZN_GR_RULE;
   const live = await readListingLive(sellerId, sku, deps);
   if (!live.ok) return { status: "error", outcome: `error: pre-flight read failed — ${live.message}` };
   if (!live.present) return { status: "skipped", outcome: "skip_no_listing", preflight: { present: false } };
   const st = live.state;
-  const preflight = { present: true, offer_end_at: st.offerEndAt };
-  if (st.offerEndAt == null || Date.parse(st.offerEndAt) > now.getTime()) return { status: "skipped", outcome: "skip_not_closed", preflight };
+  const preflight = { present: true, offer_end_at: st.offerEndAt, rule: opts.rule ?? null };
+  // The amzn_gr rule has no closed-state requirement; every other delete does.
+  if (!amznGr && (st.offerEndAt == null || Date.parse(st.offerEndAt) > now.getTime())) return { status: "skipped", outcome: "skip_not_closed", preflight };
   try {
     const data = await deps.del(itemPath(sellerId, sku), { marketplaceIds: MARKETPLACE });
-    if (data?.status === "ACCEPTED") return { status: "accepted", outcome: "deleted", submissionId: data?.submissionId ?? null, issues: respIssues(data), preflight };
+    if (data?.status === "ACCEPTED") return { status: "accepted", outcome: amznGr ? `deleted:${AMZN_GR_RULE}` : "deleted", submissionId: data?.submissionId ?? null, issues: respIssues(data), preflight };
     return { status: "invalid", outcome: "invalid", submissionId: data?.submissionId ?? null, issues: respIssues(data) ?? data ?? null, preflight };
   } catch (err: any) {
     return { status: "error", outcome: `error: ${errMsg(err)}`, issues: err?.response?.data ?? null, preflight };
