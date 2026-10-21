@@ -113,14 +113,19 @@ export function actionChipClass(item: string): string {
   return "bg-amber-500/10 text-amber-600 dark:text-amber-400";
 }
 export const chipBase = "inline-block rounded-sm px-1.5 py-0.5 text-[11px] whitespace-nowrap";
-const ordered = (items: readonly string[] | undefined) => ACTION_ITEM_OPTIONS.filter((o) => (items ?? []).includes(o));
+/** Shown (never editable): the auto-managed "Review Velocity" (SPEC §26) after the manual items. */
+export const DISPLAY_ACTION_ITEMS = [...ACTION_ITEM_OPTIONS, "Review Velocity"];
+const ordered = (items: readonly string[] | undefined) => DISPLAY_ACTION_ITEMS.filter((o) => (items ?? []).includes(o));
 
 /** Read-only chips (the POs-page column: union over all lines). */
-export function ActionItemChips({ items, testId }: { items: readonly string[] | undefined; testId?: string }) {
+/** `reasons`: the open "Review Velocity" reasons (SPEC §26) — shown on that chip's hover. */
+export function ActionItemChips({ items, testId, reasons }: { items: readonly string[] | undefined; testId?: string; reasons?: readonly string[] | null }) {
   const list = ordered(items);
   return (
     <span className="flex flex-col items-start gap-0.5" data-testid={testId}>
-      {list.length === 0 ? <span className="text-muted-foreground/40 text-[11px]">—</span> : list.map((it) => <span key={it} className={`${chipBase} ${actionChipClass(it)}`}>{it}</span>)}
+      {list.length === 0 ? <span className="text-muted-foreground/40 text-[11px]">—</span> : list.map((it) => (
+        <span key={it} className={`${chipBase} ${actionChipClass(it)}`} title={it === "Review Velocity" && reasons?.length ? reasons.join(" · ") : undefined}>{it}</span>
+      ))}
     </span>
   );
 }

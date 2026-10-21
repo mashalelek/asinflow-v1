@@ -89,7 +89,7 @@ describe("consumers switched (§6.3)", () => {
   it("the page renders Action Items chips with an inline editor and filters on them; no status chips remain", () => {
     const page = read("client/src/pages/purchase-orders.tsx");
     // Row-level Status (2026-10-17): the PO column is the read-only union; editing moved to ASIN / product rows.
-    expect(page).toMatch(/<ActionItemChips items=\{po\.action_items\} testId=\{`po-action-items-\$\{po\.order_id\}`\} \/>/);
+    expect(page).toMatch(/<ActionItemChips items=\{po\.action_items\} reasons=\{po\.review_velocity_reasons\} testId=\{`po-action-items-\$\{po\.order_id\}`\} \/>/);
     expect(page).toMatch(/params\.set\("action", actionKey\)/);
     expect(page).not.toMatch(/statusChipClass|po\.status\b|statusTokens/);
   });

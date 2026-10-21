@@ -123,6 +123,13 @@ export function NewPoDialog({ open, onOpenChange, onCreated }: { open: boolean; 
           {field("order_id", "Order #")}
           {field("order_date", "Order date", { type: "date" })}
           {field("purchased_by", "Purchased by")}
+          <div className="space-y-1">
+            <Label className="text-xs text-muted-foreground" htmlFor="new-po-ships_to">Ships to</Label>
+            <select id="new-po-ships_to" value={form.ships_to ?? "velocity"} onChange={(e) => set("ships_to", e.target.value)} className="h-8 w-full rounded border bg-background px-2 text-sm" data-testid="input-new-po-ships_to">
+              <option value="velocity">Velocity</option>
+              <option value="home">Home</option>
+            </select>
+          </div>
           {field("subtotal", "Subtotal", { ph: check.computedSubtotal.toFixed(2), money: true })}
           {field("tax", "Tax", { ph: "0.00", money: true })}
           {field("sh_donations", "S&H + Donations", { ph: "0.00", money: true })}

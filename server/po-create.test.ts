@@ -32,7 +32,8 @@ describe("createPoFromForm", () => {
     const r = await createPoFromForm(q, form(), 7, now);
     expect(r).toEqual({ poId: "id1", asins: 2, lines: 3 });
     const po = calls.find((c) => /^INSERT INTO purchase_orders/.test(c.sql))!;
-    expect(po.sql).toMatch(/'manual', \$16\)/);
+    expect(po.sql).toMatch(/'manual', \$16, \$17\)/);
+    expect(po.params[16]).toBe("velocity"); // ships_to (SPEC §26) defaults to Velocity
     expect(po.params.slice(0, 4)).toEqual(["zz-200015000000001", "2026-10-18", "walmart.com", "76.20"]);
     expect(po.params[15]).toBe(now.getTime());
     const pas = calls.filter((c) => /^INSERT INTO po_asins/.test(c.sql)).map((c) => c.params);

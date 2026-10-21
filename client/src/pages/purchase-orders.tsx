@@ -30,6 +30,7 @@ import { fmtQty } from "@/lib/po-qty";
 import { fetchLongSync } from "@/lib/long-sync";
 import { useToast } from "@/hooks/use-toast";
 import { PoHeaderDrawer, PoProductsTable, PoHistory, PoDangerActions } from "@/components/po-edit";
+import { PoTrackingTab, SyncTrackingButton, UnmatchedTrackingChip } from "@/components/po-tracking";
 import { NewPoDialog } from "@/components/new-po-dialog";
 import { Pencil } from "lucide-react";
 
@@ -40,6 +41,9 @@ interface PoRow {
   supplier: string;
   /** §6: multi-select Action Items (the old free-text status is no longer read). */
   action_items: string[];
+  /** SPEC §26: the open "Review Velocity" reasons (the chip's hover). */
+  review_velocity_reasons?: string[] | null;
+  ships_to?: "velocity" | "home";
   order_total: string | null;
   invoice_attached: boolean;
   asin_count: number;
@@ -310,6 +314,7 @@ export default function PurchaseOrders() {
   const { toast } = useToast();
   const [isSyncingShipments, setIsSyncingShipments] = useState(false);
   const [unmatchedKey, setUnmatchedKey] = useState(0);
+  const [trackingKey, setTrackingKey] = useState(0);
 
   useEffect(() => {
     const h = setTimeout(() => setDebouncedSearch(search), 250);
@@ -393,6 +398,9 @@ export default function PurchaseOrders() {
           <Button variant="outline" size="sm" onClick={handleSyncShipments} disabled={isSyncingShipments} data-testid="button-sync-shipments">
             <RefreshCw className={`h-4 w-4 mr-1 ${isSyncingShipments ? "animate-spin" : ""}`} /> {isSyncingShipments ? "Syncing…" : "Sync Shipments"}
           </Button>
+          {/* PO tracking → Velocity (SPEC §26). */}
+          <UnmatchedTrackingChip suppliers={data?.suppliers ?? []} reloadKey={trackingKey} onChanged={load} />
+          <SyncTrackingButton onDone={() => { setTrackingKey((k) => k + 1); void load(); }} />
         </div>
       </div>
 
@@ -461,7 +469,7 @@ export default function PurchaseOrders() {
                     </button>
                   </td>
                   <td className="px-3 py-2" onClick={(e) => e.stopPropagation()}>
-                    <ActionItemChips items={po.action_items} testId={`po-action-items-${po.order_id}`} />
+                    <ActionItemChips items={po.action_items} reasons={po.review_velocity_reasons} testId={`po-action-items-${po.order_id}`} />
                   </td>
                   <td className="px-3 py-2 whitespace-nowrap">{fmtDate(po.order_date)}</td>
                   <td className="px-3 py-2 font-mono text-xs">{po.order_id}</td>
@@ -568,7 +576,7 @@ export function PurchaseOrderDetailPlaceholder() {
   const id = location.split("/").pop() ?? "";
   const [data, setData] = useState<PoDetail | null>(null);
   const [error, setError] = useState<string | null>(null);
-  const [tab, setTab] = useState<"details" | "asins" | "products" | "history">("details");
+  const [tab, setTab] = useState<"details" | "asins" | "products" | "tracking" | "history">("details");
   const [copied, setCopied] = useState(false);
   const [editOpen, setEditOpen] = useState(false);
   const [version, setVersion] = useState(0); // bumps on every reload so History refetches
@@ -619,7 +627,7 @@ export function PurchaseOrderDetailPlaceholder() {
           </div>
         </div>
         <div className="flex items-center gap-2">
-          <ActionItemChips items={actionItems} testId="po-detail-action-items" />
+          <ActionItemChips items={actionItems} reasons={po.review_velocity_reasons} testId="po-detail-action-items" />
           <Button variant="outline" size="sm" onClick={() => setEditOpen(true)} data-testid="button-edit-po"><Pencil className="h-3.5 w-3.5 mr-1" /> Edit PO</Button>
           <PoDangerActions poId={po.id} reloadKey={version} onCanceled={reload} onDeleted={() => navigate("/purchase-orders")} />
         </div>
@@ -641,7 +649,7 @@ export function PurchaseOrderDetailPlaceholder() {
 
       {/* Tabs */}
       <div className="flex gap-1" style={{ borderBottom: "0.5px solid hsl(var(--border))" }}>
-        {([["details", "PO Details"], ["asins", "ASINs"], ["products", "Products"], ["history", "History"]] as const).map(([key, label]) => (
+        {([["details", "PO Details"], ["asins", "ASINs"], ["products", "Products"], ["tracking", "Tracking"], ["history", "History"]] as const).map(([key, label]) => (
           <button key={key} onClick={() => setTab(key)} data-testid={`tab-${key}`}
             className={`px-3 py-1.5 text-sm -mb-px ${tab === key ? "border-b-2 border-primary font-medium" : "text-muted-foreground"}`}>
             {label}
@@ -655,6 +663,7 @@ export function PurchaseOrderDetailPlaceholder() {
             ["Order ID", <span className="font-mono text-xs">{po.order_id}</span>],
             ["Date", fmtDate(String(po.order_date))],
             ["Supplier", po.supplier],
+            ["Ships to", po.ships_to === "home" ? "Home" : "Velocity"],
             ["Status", po.closed_at ? "Closed" : "Open"],
             ["Action Items", actionItems.join(", ") || "—"],
           ]} />
@@ -694,6 +703,8 @@ export function PurchaseOrderDetailPlaceholder() {
       {tab === "asins" && <PoAsinTable asins={asins} editable onChanged={reload} />}
 
       {tab === "products" && <PoProductsTable poId={po.id} asins={asins} onChanged={reload} />}
+
+      {tab === "tracking" && <PoTrackingTab poId={po.id} onChanged={reload} />}
 
       {tab === "history" && <PoHistory poId={po.id} reloadKey={version} />}
     </div>

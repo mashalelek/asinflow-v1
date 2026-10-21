@@ -5,6 +5,9 @@
 //   POST /api/tracking/domain-map       {domain, supplier}  map a sender domain once, then re-match
 //   POST /api/tracking/:id/attach       {po_id}  attach to a PO by hand (source manual — the sync never moves it)
 //   POST /api/tracking/:id/dismiss      take a row out of the queue
+//   GET  /api/pos/:id/tracking          the PO's tracking rows (Tracking tab)
+//   POST /api/pos/:id/tracking          {carrier, tracking_number}  add by hand (source manual), then route / push this PO
+//   POST /api/tracking/:id/move         {po_id}  Move to PO… (§10): reassigned_from / reassigned_at / manual, then route / push the new PO
 //   POST /api/pos/:id/review-velocity/clear   manual clear of "Review Velocity": suppresses the PO's
 //                                       tracking rows that exist NOW; a later row may raise it again (§8)
 import express, { type Router, type Request, type Response } from "express";
@@ -89,6 +92,62 @@ export function createTrackingRouter(deps: { query?: QueryLike } = {}): Router {
       const r = await query(`UPDATE po_tracking SET match_reason = 'dismissed', updated_at = NOW() WHERE id = $1 AND status = 'unmatched' RETURNING id`, [id]);
       if (r.rows.length === 0) { res.status(404).json({ error: "not_found" }); return; }
       res.json({ ok: true });
+    } catch (err) { fail(res, err); }
+  });
+
+  const isUuid = (v: string) => /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(v);
+  const CARRIERS = new Set(["UPS", "FEDEX", "USPS", "DHL", "AMAZON", "ONTRAC", "LASERSHIP", "OTHER"]);
+
+  router.get("/api/pos/:id/tracking", async (req: Request, res: Response) => {
+    const poId = String(req.params.id ?? "");
+    if (!isUuid(poId)) { res.status(400).json({ error: "invalid_id" }); return; }
+    try {
+      const rows = (await query(
+        `SELECT t.id, t.carrier, t.tracking_number, t.retailer_order_id, t.shipped_at, t.ship_to_street, t.status, t.review_reason,
+                t.push_error, t.pushed_at, t.pushed_velocity_ids, t.source, t.items_json, t.suppressed_at, t.reassigned_at,
+                f.order_id AS reassigned_from_order_id
+           FROM po_tracking t LEFT JOIN purchase_orders f ON f.id = t.reassigned_from_po_id
+          WHERE t.po_id = $1 ORDER BY t.shipped_at DESC NULLS LAST, t.id DESC`, [poId],
+      )).rows;
+      res.json({ rows });
+    } catch (err) { fail(res, err); }
+  });
+
+  router.post("/api/pos/:id/tracking", async (req: Request, res: Response) => {
+    const poId = String(req.params.id ?? "");
+    const carrier = String(req.body?.carrier ?? "").trim().toUpperCase();
+    const tn = String(req.body?.tracking_number ?? "").trim().toUpperCase().replace(/\s+/g, "");
+    if (!isUuid(poId) || !CARRIERS.has(carrier) || !/^[0-9A-Z]{8,34}$/.test(tn)) { res.status(400).json({ error: "invalid_input", message: "carrier must be one of UPS FEDEX USPS DHL AMAZON ONTRAC LASERSHIP OTHER; tracking 8–34 letters / digits" }); return; }
+    try {
+      const po = (await query(`SELECT id, supplier, order_id FROM purchase_orders WHERE id = $1`, [poId])).rows[0];
+      if (!po) { res.status(404).json({ error: "po_not_found" }); return; }
+      const r = await query(
+        `INSERT INTO po_tracking (po_id, carrier, tracking_number, retailer_order_id, supplier_guess, shipped_at, gmail_message_id, source, status)
+         VALUES ($1, $2, $3, $4, $5, NOW(), 'manual', 'manual', 'matched')
+         ON CONFLICT (carrier, tracking_number) DO NOTHING RETURNING id`,
+        [poId, carrier, tn, po.order_id, po.supplier],
+      );
+      if (r.rows.length === 0) { res.status(409).json({ error: "exists", message: `${carrier} ${tn} is already recorded — use Move to PO… on it` }); return; }
+      res.json({ ok: true, id: r.rows[0].id, push: await pushTracking({ query, poId }) });
+    } catch (err) { fail(res, err); }
+  });
+
+  router.post("/api/tracking/:id/move", async (req: Request, res: Response) => {
+    const id = Number(req.params.id);
+    const poId = String(req.body?.po_id ?? "");
+    if (!Number.isInteger(id) || id <= 0 || !isUuid(poId)) { res.status(400).json({ error: "invalid_input" }); return; }
+    try {
+      const po = (await query(`SELECT id, supplier FROM purchase_orders WHERE id = $1`, [poId])).rows[0];
+      if (!po) { res.status(404).json({ error: "po_not_found" }); return; }
+      const r = await query(
+        `UPDATE po_tracking SET reassigned_from_po_id = COALESCE(po_id, reassigned_from_po_id), reassigned_at = NOW(), source = 'manual',
+                po_id = $2, supplier_guess = $3, status = 'matched', match_reason = NULL, review_reason = NULL, push_error = NULL,
+                suppressed_at = NULL, updated_at = NOW()
+          WHERE id = $1 AND tracking_number NOT LIKE 'email:%' AND po_id IS DISTINCT FROM $2 RETURNING id`,
+        [id, poId, po.supplier],
+      );
+      if (r.rows.length === 0) { res.status(409).json({ error: "not_moved", message: "row not found, a placeholder, or already on that PO" }); return; }
+      res.json({ ok: true, push: await pushTracking({ query, poId }) });
     } catch (err) { fail(res, err); }
   });
 

@@ -91,6 +91,8 @@ export const HEADER_FIELDS: Record<string, Parser> = {
   subtotal: money(), tax: money(), sh_donations: money(), discount: money(), refund_amount: money(), order_total: money(),
   payment_method: textOrNull, weighted_gc_discount_pct: pctOrNull, promo: textOrNull, cashback_site: textOrNull, cashback_pct: pctOrNull,
   purchased_by: textOrNull, notes: textOrNull,
+  // SPEC §26: where the PO ships — drives the tracking routing rules.
+  ships_to: (v) => (v === "velocity" || v === "home" ? { ok: true, value: v } : { ok: false, error: "must be velocity or home" }),
 };
 /** §3 product-line fields (action items keep their own route). `asin` re-maps the line. */
 export const LINE_FIELDS: Record<string, Parser> = {

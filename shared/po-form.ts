@@ -55,6 +55,8 @@ export interface PoFormState {
   cashback_pct: string;
   purchased_by: string;
   notes: string;
+  /** Where the PO ships (SPEC §26): "velocity" (default) | "home". Optional for forms saved before it existed. */
+  ships_to?: string;
   products: PoFormProduct[];
   /** ASIN → cost / unit typed by hand; absent = the computed value. */
   cost_overrides: Record<string, string>;
@@ -63,7 +65,7 @@ export interface PoFormState {
 export const emptyProduct = (): PoFormProduct => ({ product_name: "", supplier_sku: "", price: "", qty_ordered: "", asin: "", asin_qty_per_product: "1", sold_as: "individual", units_per_pack: "1", prep_cost: "1" });
 export const emptyPoForm = (today: string): PoFormState => ({
   supplier: "", order_id: "", order_date: today, subtotal: "", tax: "", sh_donations: "", discount: "", refund_amount: "", order_total: "",
-  payment_method: "", weighted_gc_discount_pct: "", cashback_site: "", cashback_pct: "", purchased_by: "", notes: "",
+  payment_method: "", weighted_gc_discount_pct: "", cashback_site: "", cashback_pct: "", purchased_by: "", notes: "", ships_to: "velocity",
   products: [emptyProduct()], cost_overrides: {},
 });
 

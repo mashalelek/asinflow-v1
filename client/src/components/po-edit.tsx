@@ -89,8 +89,10 @@ export function SelectEdit({ value, options, onSave, testId }: { value: string; 
 }
 
 // ── Header drawer ────────────────────────────────────────────────────────────
-const HEADER_GROUPS: Array<{ title: string; fields: Array<{ key: string; label: string; type?: "date" | "money" | "pct" | "text" | "area" }> }> = [
-  { title: "Order", fields: [{ key: "supplier", label: "Supplier" }, { key: "order_id", label: "Order #" }, { key: "order_date", label: "Order date", type: "date" }] },
+const HEADER_GROUPS: Array<{ title: string; fields: Array<{ key: string; label: string; type?: "date" | "money" | "pct" | "text" | "area" | "select"; options?: Array<[string, string]> }> }> = [
+  { title: "Order", fields: [{ key: "supplier", label: "Supplier" }, { key: "order_id", label: "Order #" }, { key: "order_date", label: "Order date", type: "date" },
+    // SPEC §26: where it ships — drives the tracking routing rules.
+    { key: "ships_to", label: "Ships to", type: "select", options: [["velocity", "Velocity"], ["home", "Home"]] }] },
   { title: "Money", fields: [
     { key: "subtotal", label: "Subtotal", type: "money" }, { key: "tax", label: "Tax", type: "money" }, { key: "sh_donations", label: "S&H + Donations", type: "money" },
     { key: "discount", label: "Discount", type: "money" }, { key: "refund_amount", label: "Refund amount", type: "money" }, { key: "order_total", label: "Order total", type: "money" },
@@ -164,7 +166,11 @@ export function PoHeaderDrawer({ po, open, onOpenChange, onSaved }: { po: Record
               {g.fields.map((f) => (
                 <div key={f.key} className="grid grid-cols-[9rem_1fr] items-center gap-2">
                   <Label htmlFor={`po-edit-${f.key}`} className="text-xs text-muted-foreground">{f.label}</Label>
-                  {f.type === "area" ? (
+                  {f.type === "select" ? (
+                    <select id={`po-edit-${f.key}`} value={draft[f.key] ?? ""} onChange={(e) => setDraft({ ...draft, [f.key]: e.target.value })} className="h-8 rounded border bg-background px-2 text-sm" data-testid={`input-po-${f.key}`}>
+                      {(f.options ?? []).map(([v, l]) => <option key={v} value={v}>{l}</option>)}
+                    </select>
+                  ) : f.type === "area" ? (
                     <Textarea id={`po-edit-${f.key}`} value={draft[f.key] ?? ""} onChange={(e) => setDraft({ ...draft, [f.key]: e.target.value })} rows={3} data-testid={`input-po-${f.key}`} />
                   ) : f.type === "money" ? (
                     <MoneyCalcInput id={`po-edit-${f.key}`} value={draft[f.key] ?? ""} onChange={(v) => setDraft((d) => ({ ...d, [f.key]: v }))} className="h-8 text-sm" data-testid={`input-po-${f.key}`} />

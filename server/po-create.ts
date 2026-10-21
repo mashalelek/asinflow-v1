@@ -26,11 +26,11 @@ export async function createPoFromForm(query: QueryLike, form: PoFormState, user
   const subtotal = txt(form.subtotal) == null ? check.computedSubtotal.toFixed(2) : moneyOr0(form.subtotal);
   const ins = await query(
     `INSERT INTO purchase_orders (order_id, order_date, supplier, action_items, subtotal, tax, sh_donations, discount, refund_amount, order_total,
-       payment_method, weighted_gc_discount_pct, promo, cashback_site, cashback_pct, purchased_by, notes, source, entry_seq)
-     VALUES ($1, $2, $3, '{}'::text[], $4, $5, $6, $7, $8, $9, $10, $11, NULL, $12, $13, $14, $15, 'manual', $16) RETURNING id`,
+       payment_method, weighted_gc_discount_pct, promo, cashback_site, cashback_pct, purchased_by, notes, source, entry_seq, ships_to)
+     VALUES ($1, $2, $3, '{}'::text[], $4, $5, $6, $7, $8, $9, $10, $11, NULL, $12, $13, $14, $15, 'manual', $16, $17) RETURNING id`,
     [orderId, form.order_date.trim(), supplier, subtotal, moneyOr0(form.tax), moneyOr0(form.sh_donations), moneyOr0(form.discount), moneyOr0(form.refund_amount),
      check.effectiveOrderTotal.toFixed(2), txt(form.payment_method), pct(form.weighted_gc_discount_pct), txt(form.cashback_site), pct(form.cashback_pct),
-     txt(form.purchased_by), txt(form.notes), afEntrySeq(now)],
+     txt(form.purchased_by), txt(form.notes), afEntrySeq(now), form.ships_to === "home" ? "home" : "velocity"],
   );
   const poId = String(ins.rows[0].id);
   let lines = 0;

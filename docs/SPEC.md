@@ -5208,7 +5208,7 @@ revealing component line items.
 | 10 | **Individual Units Ordered** | Ordered × Units/Pack (D4) |
 | 11 | Canceled | derived from the lines (above) |
 | 12 | Returned | derived from the lines |
-| 13 | Shipped by Supplier | `qty_shipped_supplier` — hand-entered until email tracking (Phase 2) |
+| 13 | Shipped by Supplier | `qty_shipped_supplier` — hand-entered (supplier tracking numbers now arrive by email, §26; quantities from them are a later step) |
 | 14 | At Prep Center | `qty_at_prep` — Velocity (Phase 2); may be fractional |
 | 15 | At CQG Warehouse | `qty_at_warehouse` — hand-entered |
 | 16 | Lost/damaged by us | `qty_lost_damaged_us` — hand-entered |
@@ -5697,7 +5697,8 @@ replaces it. Migration 061 adds `po_edit_log`, `deleted_pos` and
 | `purchase_orders` / `po_asins` / `po_line_items` (every field) | **AF** (2026-10-18, "AF owns POs" above) — the PO module UI and the auto-close rule. The Orders sheet only inserts POs that are not in AF and not tombstoned; it never writes an existing one (drift counted, not applied) |
 | `po_line_items.action_items`, `qty_canceled`; `purchase_orders.closed_at`, `closed_by` | **AF**: the ASIN / product Action Items editors, Cancel ASIN / Cancel PO / the product qty-canceled cell, the Closed toggle, the auto-close rule. The intake sets them once, on insert, from the row-level Status mapping. `closed_by = 'sheet'` remains on history only. `purchase_orders.action_items` is deprecated, written by nothing |
 | **`po_asins.qty_at_prep`** | **Shipment sync (component A)** — Σ Velocity `quantity_remaining` ÷ units_per_pack; NULL when no Velocity line references the key (D6). Overwritten every Sync Shipments; not hand-editable. |
-| **`po_asins.qty_shipped_supplier`, `qty_at_warehouse`, `qty_lost_damaged_us`** | **AF-owned**: the inline quantity editor today; email tracking later. Never the importer, never a sync. |
+| **`po_asins.qty_shipped_supplier`, `qty_at_warehouse`, `qty_lost_damaged_us`** | **AF-owned**: the inline quantity editor today; email tracking (§26) records tracking numbers, not quantities, so far. Never the importer, never a sync. |
+| **`purchase_orders.ships_to`**, **`po_tracking`** | **AF-owned** (§26): Ships to on the PO / New PO form; tracking rows from the Gmail ingest, the Tracking tab (add, Move to PO…) and the unmatched queue. |
 | **`po_asins.qty_shipped_fba`, `qty_received_amazon`** | **Trigger-maintained** from `po_asin_shipments` — Shipped FBA from Velocity rows (component A), Received by Amazon from the SC allocation (component B); manual rows add to both. |
 | `po_asin_shipments` (`source = 'velocity'`), `velocity_shipments`, `sc_inbound_*` | **Shipment sync-owned**: component A writes the row and `qty_shipped` / `shipped_at`; component B writes `fba_shipment_ids`, `sc_match`, `qty_received`. Hand edits only through the Unmatched picker. A `po_asins` row with shipment rows survives leaving the sheet. |
 | `po_asin_shipments` (`source = 'manual'`) | AF-owned: hand-entered rows from the Shipment IDs chip (home-shipped POs); the only rows the chip can delete. |
@@ -6448,3 +6449,30 @@ quantity, item or status; nothing but carrier + tracking leaves AF.
   probe pushed the §10 fix: both UPS packages of PO 4800667218's email
   (1ZE3652C0344289436, 1ZXH28660311288515) onto 4798028553's order; no
   other field changed.
+
+### UI (`client/src/components/po-tracking.tsx`)
+
+- **PO → Tracking tab:** carrier, tracking # (link to the carrier's
+  page), order # as printed, shipped date, ship-to street, status chip,
+  review reason (struck through once cleared), when it was pushed and to
+  how many Velocity orders (ids on hover), items, "moved from <order #>",
+  **Move to PO…** (by order #), **Add tracking** (carrier + number, source
+  manual). A "Review Velocity" banner lists the open reasons with
+  **Clear**. Routes: `GET /api/pos/:id/tracking`, `POST
+  /api/pos/:id/tracking {carrier, tracking_number}`, `POST
+  /api/tracking/:id/move {po_id}` — both re-run routing and the push for
+  the PO they land on (§10: moving 4800667218's package onto 4798028553
+  pushes it to 4798028553's Velocity orders when they are in Inbound).
+  A move never removes a number already pushed to the old PO's orders
+  (the push never removes entries).
+- **POs toolbar:** **Sync tracking** (ingest → match → push; a "dry run"
+  link opens the plan, nothing written) and **Unmatched tracking (N)**
+  (hidden when empty) → the queue: reason, sender, order #, number (or "no
+  number in the email" for a placeholder), subject; **Map** the sender
+  domain to a supplier (for `unknown_sender`), **Attach** to a PO by order
+  #, **dismiss**.
+- **Ships to** (Velocity | Home): PO Details card, the Edit PO drawer
+  (`HEADER_FIELDS.ships_to`), the New PO form (default Velocity).
+- **Review Velocity** chip: shown after the manual items on the POs column
+  and PO Details, the open reasons on hover; never offered in the
+  Action Items editor.
