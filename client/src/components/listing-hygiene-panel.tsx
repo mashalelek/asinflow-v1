@@ -7,8 +7,9 @@
 import { useEffect, useState } from "react";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
+import { useReleaseConfirm } from "@/components/release-confirm";
 import {
-  getHygieneActions, releaseHeld, groupHygieneOutcomes, FOCUS_ASIN_EVENT,
+  getHygieneActions, groupHygieneOutcomes, FOCUS_ASIN_EVENT,
   type ComponentRun, type HygieneActions, type ListingActionRow,
 } from "@/lib/jobs-api";
 
@@ -60,8 +61,9 @@ function ActionRow({ a }: { a: ListingActionRow }) {
 export function ListingHygienePanel({ jobId, runs }: { jobId: number; runs: ComponentRun[] }) {
   const hygieneRuns = runs.filter((r) => r.stage === "22_close_oos" || r.stage === "24_delete_dead");
   const [data, setData] = useState<HygieneActions | null>(null);
-  const [busy, setBusy] = useState<string | null>(null);
   const [message, setMessage] = useState<string | null>(null);
+  // Release goes through the in-app confirm; nothing is queued before it.
+  const { request: requestRelease, dialog: releaseDialog } = useReleaseConfirm(setMessage);
 
   useEffect(() => {
     if (hygieneRuns.length === 0) return;
@@ -72,18 +74,6 @@ export function ListingHygienePanel({ jobId, runs }: { jobId: number; runs: Comp
 
   if (hygieneRuns.length === 0) return null;
 
-  const release = async (action: "close" | "delete") => {
-    setBusy(action);
-    setMessage(null);
-    try {
-      const r = await releaseHeld(jobId, action);
-      setMessage(`Release queued as job #${r.job.id} — ${r.held} held SKU(s) are re-evaluated live; only those that still qualify are ${action === "close" ? "closed" : "deleted"}.`);
-    } catch (err: any) {
-      setMessage(err?.message ?? "Release failed.");
-    } finally {
-      setBusy(null);
-    }
-  };
 
   return (
     <div className="space-y-3 min-w-0" data-testid={`hygiene-panel-${jobId}`}>
@@ -102,9 +92,9 @@ export function ListingHygienePanel({ jobId, runs }: { jobId: number; runs: Comp
               {run.outcomes?._mode && <span className="text-muted-foreground">{run.outcomes._mode}</span>}
               {releasable > 0 && (
                 <Button
-                  size="sm" className="h-6 text-xs ml-auto" disabled={!live || busy != null}
+                  size="sm" className="h-6 text-xs ml-auto" disabled={!live}
                   title={live ? "Re-evaluate every held SKU live and fire the ones that still qualify" : `${action === "close" ? "LISTING_CLOSE_LIVE" : "LISTING_DELETE_LIVE"} is not set`}
-                  onClick={() => void release(action)}
+                  onClick={() => requestRelease(jobId, action, releasable)}
                   data-testid={`button-release-${action}-${jobId}`}
                 >
                   Release ({releasable})
@@ -138,6 +128,7 @@ export function ListingHygienePanel({ jobId, runs }: { jobId: number; runs: Comp
         );
       })}
       {message && <p className="text-xs">{message}</p>}
+      {releaseDialog}
     </div>
   );
 }
