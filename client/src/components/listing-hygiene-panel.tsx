@@ -52,7 +52,7 @@ function ActionRow({ a }: { a: ListingActionRow }) {
         </Badge>{" "}
         <span className="text-muted-foreground">{evidenceLine(a.evidence)}</span>
       </summary>
-      <pre className="mt-1 max-h-48 overflow-auto rounded bg-muted p-2 text-[10px]">{JSON.stringify({ ...a.evidence, submission_id: a.submission_id, issues: a.issues }, null, 2)}</pre>
+      <pre className="mt-1 max-h-48 max-w-full overflow-auto whitespace-pre-wrap rounded bg-muted p-2 text-[10px]">{JSON.stringify({ ...a.evidence, submission_id: a.submission_id, issues: a.issues }, null, 2)}</pre>
     </details>
   );
 }
@@ -86,7 +86,7 @@ export function ListingHygienePanel({ jobId, runs }: { jobId: number; runs: Comp
   };
 
   return (
-    <div className="space-y-3" data-testid={`hygiene-panel-${jobId}`}>
+    <div className="space-y-3 min-w-0" data-testid={`hygiene-panel-${jobId}`}>
       {hygieneRuns.map((run) => {
         const action = run.stage === "22_close_oos" ? "close" : "delete";
         const groups = groupHygieneOutcomes(run.outcomes);
@@ -97,7 +97,7 @@ export function ListingHygienePanel({ jobId, runs }: { jobId: number; runs: Comp
         const notEffective = actions.filter((a) => a.status === "not_effective");
         return (
           <div key={run.id} className="border rounded p-2 space-y-1">
-            <div className="flex items-center gap-2">
+            <div className="flex flex-wrap items-center gap-2 min-w-0">
               <span className="font-semibold">{TITLE[action]}</span>
               {run.outcomes?._mode && <span className="text-muted-foreground">{run.outcomes._mode}</span>}
               {releasable > 0 && (

@@ -101,7 +101,12 @@ export function JobsDialog({ open, onOpenChange, onRetry, initialJobId }: {
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="sm:max-w-3xl max-h-[85vh] overflow-y-auto" data-testid="dialog-jobs">
+      {/* Layout (2026-10-21): DialogContent is a CSS grid, and a grid item's
+          min-width defaults to its longest unbreakable line — one long outcome
+          widened every job row to 1,737 px and pushed Release off-screen.
+          overflow-wrap:anywhere shrinks min-content; min-w-0 lets the items
+          shrink; overflow-x-hidden keeps it so. */}
+      <DialogContent className="sm:max-w-3xl max-h-[85vh] overflow-y-auto overflow-x-hidden [overflow-wrap:anywhere] [&>*]:min-w-0" data-testid="dialog-jobs">
         <DialogHeader>
           <DialogTitle>Refresh jobs</DialogTitle>
           <DialogDescription>
@@ -112,7 +117,7 @@ export function JobsDialog({ open, onOpenChange, onRetry, initialJobId }: {
         {!jobs && !error && <p className="text-xs text-muted-foreground">Loading…</p>}
         {jobs && jobs.length === 0 && <p className="text-xs text-muted-foreground">No jobs yet.</p>}
         {jobs && jobs.length > 0 && (
-          <div className="divide-y text-xs">
+          <div className="divide-y text-xs min-w-0">
             {jobs.map((j) => {
               const isOpen = expanded === j.id;
               const d = detail[j.id];
@@ -121,7 +126,7 @@ export function JobsDialog({ open, onOpenChange, onRetry, initialJobId }: {
               const flipCount = changeCount(j.summary);
               return (
                 <div key={j.id} className="py-2" data-testid={`job-row-${j.id}`}>
-                  <button type="button" className="w-full text-left flex items-center gap-3" onClick={() => setExpanded(isOpen ? null : j.id)}>
+                  <button type="button" className="w-full min-w-0 text-left flex items-center gap-3" onClick={() => setExpanded(isOpen ? null : j.id)}>
                     <span className="font-mono w-10 text-muted-foreground">#{j.id}</span>
                     <Badge variant={statusVariant(j.status)} className="w-20 justify-center">{j.status}</Badge>
                     <span className="w-40">{jobKindLabel(j)}</span>
@@ -132,10 +137,10 @@ export function JobsDialog({ open, onOpenChange, onRetry, initialJobId }: {
                     {j.status === "running" && j.progress?.component != null && (
                       <span className="text-muted-foreground">{componentLabel(j.progress.component)} {progressText(j.progress) || `${j.progress.position ?? 0}/${j.progress.total ?? "?"}`}</span>
                     )}
-                    {j.error && <span className="text-destructive truncate">{j.error}</span>}
+                    {j.error && <span className="text-destructive truncate min-w-0 flex-1">{j.error}</span>}
                   </button>
                   {isOpen && (
-                    <div className="mt-2 pl-3 space-y-3">
+                    <div className="mt-2 pl-3 space-y-3 min-w-0">
                       {(j.status === "queued" || j.status === "running") && (
                         <Button size="sm" variant="outline" className="h-7 text-xs" onClick={async () => { await cancelJob(j.id).catch(() => {}); void reload(); }} data-testid={`button-cancel-job-${j.id}`}>
                           Cancel
