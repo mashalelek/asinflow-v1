@@ -330,6 +330,29 @@ expected to trip both — that is the intended review point for the backlog.
 - **2026-10-20: `skip_action_pending` counts any recent accepted action
   on the SKU, close or delete** (a deleting listing reads back open for
   minutes; commit e80c123).
+- **2026-10-21 (Maria), after the first live 00:00 pass** (#123: 24 closed,
+  162 deletes held, then released through #136 before the CSV review —
+  the Release button sat off-screen in a dialog widened to 1,737 px, and
+  #137 / #138 were enqueued a second later for the same hold):
+  - **Breakers:** `hygiene_close_breaker` = 50, `hygiene_delete_breaker` =
+    25 (migration 065; code defaults per action).
+  - **Jobs dialog layout:** job rows never widen the dialog; Release is
+    visible without horizontal scroll.
+  - **Release confirmation:** every Release opens an in-app confirm —
+    "Delete N listings in Seller Central? Each is re-checked live first."
+    ("Close N listings…" for closes). Nothing is queued until confirmed.
+  - **One release per job + action:** a release while one is queued,
+    running or done for the same job + action is refused (409, shown inline
+    in the confirm); a failed or cancelled release may be retried. The
+    check and the enqueue share one transaction under an advisory lock.
+  - **"Action required":** whenever a close or delete hold is unreleased,
+    an amber control in the top nav on every AF page reads e.g. "Action
+    required: 30 deletes held for review"; clicking it opens the held list
+    with Release (and the confirm). One pending hold per action — the
+    newest job that held any; a later night's hold supersedes the earlier
+    one (which is then refused as `superseded`, 409), and a released hold
+    clears it. A finished pass that tripped a breaker also toasts "Daily
+    pass held N closes / N deletes — review needed".
 
 ## Out of scope
 

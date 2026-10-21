@@ -2197,11 +2197,25 @@ of the ASIN; `amzn.gr.*` SKUs are excluded entirely.
   Component 16 verifies on the next pass (close → `offer_end_at <= now()`;
   delete → absent); still not effective after two passes →
   `not_effective`, surfaced in the jobs dialog.
-- **Circuit breakers:** more than `settings.hygiene_close_breaker` (25)
-  closes or `hygiene_delete_breaker` (25) deletes in one run → write
-  nothing, every candidate `held`. **Release** in the jobs dialog (or
-  `POST /api/listing-hygiene/release {job_id, action}`) re-evaluates each
-  held SKU live and fires only those that still qualify.
+- **Circuit breakers:** more than `settings.hygiene_close_breaker` (50
+  since 2026-10-21, migration 065) closes or `hygiene_delete_breaker` (25)
+  deletes in one run → write nothing, every candidate `held`. **Release**
+  in the jobs dialog or the top-nav "Action required" list (or `POST
+  /api/listing-hygiene/release {job_id, action}`) re-evaluates each held
+  SKU live and fires only those that still qualify. Every Release opens an
+  in-app confirm first ("Delete N listings in Seller Central? Each is
+  re-checked live first."); nothing is queued until confirmed. **One
+  release per job + action**: a second while one is queued, running or done
+  is refused (409); a failed / cancelled one may be retried (one
+  transaction, advisory lock 7342101).
+- **"Action required" (2026-10-21):** `GET /api/listing-hygiene/pending`
+  returns at most one pending hold per action — the newest job that held
+  any candidates, while it has open held rows and no release job. The top
+  nav shows it on every page in §7 amber ("Action required: 30 deletes held
+  for review") until released; a later night's hold supersedes the earlier
+  one, and releasing a superseded hold is refused (409 `superseded`). A
+  finished pass that tripped a breaker toasts "Daily pass held N closes / N
+  deletes — review needed".
 - **Live gates:** `LISTING_CLOSE_LIVE` / `LISTING_DELETE_LIVE` env vars,
   unset → dry run (`would_*`, `listing_actions.dry_run = true`, zero SC
   writes).
