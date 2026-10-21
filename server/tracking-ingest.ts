@@ -15,6 +15,7 @@
 import type { gmail_v1 } from "googleapis";
 import { listMessageIds, getMessage, type GmailMessage } from "./gmail-client";
 import { parseTrackingEmail, type ParsedEmail } from "./tracking-parse";
+import { extractorFor, extractLinkTracking, type FetchLike } from "./tracking-links";
 import type { QueryLike } from "./scheduler/types";
 
 export const WATERMARK_KEY = "tracking.gmail_watermark";
@@ -67,6 +68,10 @@ export function rowsFromEmail(msg: Pick<GmailMessage, "id" | "threadId" | "date"
 
 export interface IngestResult {
   scanned: number; candidates: number; rows: number; inserted: number; refreshed: number; ignored_repeats: number; placeholders: number;
+  /** Emails whose numbers came from a tracking link (Michaels). */
+  link_resolved: number;
+  /** Earlier placeholders re-read and resolved through a tracking link. */
+  placeholders_resolved?: number;
   since: string | null; until: string;
   /** Per new / refreshed row: what was read (dry runs report these too). */
   drafts?: TrackingRowDraft[];
@@ -76,6 +81,49 @@ export interface IngestDeps {
   gmail: gmail_v1.Gmail;
   list?: typeof listMessageIds;
   get?: typeof getMessage;
+  /** The tracking-link extractors' redirect follower (tests inject one). */
+  fetch?: FetchLike;
+}
+
+/**
+ * Pure-ish: when the body carries no number and the sender has a tracking-link
+ * extractor (Michaels), the numbers behind its links become the shipments.
+ */
+export async function withLinkTracking(msg: Pick<GmailMessage, "text">, p: ParsedEmail, fetchFn?: FetchLike): Promise<ParsedEmail> {
+  if (p.shipments.length > 0 || !extractorFor(p.senderDomain)) return p;
+  const found = await extractLinkTracking(msg.text, p.senderDomain, fetchFn);
+  return found.length ? { ...p, shipments: found.map((f) => ({ ...f, items: [] })) } : p;
+}
+
+/** Drop an order's "email:" placeholder once a real number exists for it (it was a queue entry, not history). */
+async function dropPlaceholder(query: QueryLike, domain: string | null, orderId: string | null): Promise<void> {
+  if (!orderId) return;
+  await query(`DELETE FROM po_tracking WHERE tracking_number = $1 AND status = 'unmatched'`, [placeholderTracking(domain, orderId)]);
+}
+
+/**
+ * Re-read the emails behind existing placeholders whose sender now has a
+ * tracking-link extractor (the Michaels placeholders queued before it
+ * existed); each one resolved becomes real rows and its placeholder goes.
+ */
+export async function resolveLinkPlaceholders(query: QueryLike, deps: IngestDeps, opts: { dryRun?: boolean } = {}): Promise<{ placeholders: number; resolved: number; rows: number }> {
+  const get = deps.get ?? getMessage;
+  const ph = (await query(
+    `SELECT id, gmail_message_id, sender_domain, retailer_order_id FROM po_tracking
+      WHERE tracking_number LIKE 'email:%' AND status = 'unmatched'`,
+  )).rows.filter((r: any) => extractorFor(r.sender_domain));
+  const out = { placeholders: ph.length, resolved: 0, rows: 0 };
+  for (const r of ph) {
+    const msg = await get(deps.gmail, String(r.gmail_message_id));
+    const p = await withLinkTracking(msg, parseTrackingEmail(msg), deps.fetch);
+    const drafts = rowsFromEmail(msg, p).filter((d) => !isPlaceholder(d.tracking_number));
+    if (drafts.length === 0) continue;
+    out.resolved++; out.rows += drafts.length;
+    if (opts.dryRun) continue;
+    for (const d of drafts) await upsertTrackingRow(query, d);
+    await dropPlaceholder(query, r.sender_domain, r.retailer_order_id);
+  }
+  return out;
 }
 
 export async function readWatermark(query: QueryLike): Promise<Date | null> {
@@ -98,13 +146,16 @@ export async function ingestTracking(opts: {
   const from = since ? new Date(since.getTime() - OVERLAP_MS) : null;
   const q = `-category:promotions${from ? ` after:${Math.floor(from.getTime() / 1000)}` : ""}`;
   const ids = await list(opts.deps.gmail, q, opts.maxMessages ?? 5000);
-  const r: IngestResult = { scanned: ids.length, candidates: 0, rows: 0, inserted: 0, refreshed: 0, ignored_repeats: 0, placeholders: 0, since: from?.toISOString() ?? null, until: now.toISOString() };
+  const r: IngestResult = { scanned: ids.length, candidates: 0, rows: 0, inserted: 0, refreshed: 0, ignored_repeats: 0, placeholders: 0, link_resolved: 0, since: from?.toISOString() ?? null, until: now.toISOString() };
   const drafts: TrackingRowDraft[] = [];
   for (const id of ids) {
     const msg = await get(opts.deps.gmail, id);
-    const p = parseTrackingEmail(msg);
-    if (!p.candidate) continue;
+    const parsed = parseTrackingEmail(msg);
+    if (!parsed.candidate) continue;
     r.candidates++;
+    const p = await withLinkTracking(msg, parsed, opts.deps.fetch);
+    if (p !== parsed) r.link_resolved++;
+    if (p !== parsed && !opts.dryRun) await dropPlaceholder(opts.query, p.senderDomain, p.orderIds.length === 1 ? p.orderIds[0] : null);
     for (const d of rowsFromEmail(msg, p)) {
       drafts.push(d);
       r.rows++;
@@ -114,6 +165,7 @@ export async function ingestTracking(opts: {
       if (w === "inserted") r.inserted++; else if (w === "refreshed") r.refreshed++; else r.ignored_repeats++;
     }
   }
+  r.placeholders_resolved = (await resolveLinkPlaceholders(opts.query, opts.deps, { dryRun: opts.dryRun })).resolved;
   if (!opts.dryRun) {
     await opts.query(
       `INSERT INTO settings (key, value, updated_at) VALUES ($1, $2::jsonb, NOW())

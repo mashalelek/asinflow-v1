@@ -132,6 +132,12 @@ function classify(token: string, ctxCarrier: Carrier | null, hasLabel: boolean):
   return null;
 }
 
+/** Carrier for a number with no surrounding context (a tracking link's id parameter): shape only. */
+export function carrierForNumber(token: string): Carrier {
+  const t = stripZipPrefix(token.toUpperCase());
+  return classify(t, null, true) ?? "OTHER";
+}
+
 const URL_PARAM = /https?:\/\/[^\s)>"']*?[?&](?:trknbr|tracknums?|tracknum|tlabels|tracking_?numbers?|trackingnumber|inquirynumber1|qtc_tlabels1|tn)=([0-9A-Z]{8,34})/gi;
 
 export function extractTracking(text: string, orderIds: string[]): Array<{ carrier: Carrier; trackingNumber: string; at: number }> {

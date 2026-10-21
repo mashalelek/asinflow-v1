@@ -6323,11 +6323,27 @@ Settings: `tracking.velocity_street` ("805 grandy"),
   truncated name).
 - **Forwards** from our own mailboxes (coastalqualitygoods.com, gmail.com)
   are attributed to the original `From:` domain.
-- **No tracking in a shipped email** (Michaels: only its own 33-digit
-  shipment ids): one placeholder row per (sender domain, order #) —
-  carrier OTHER, `tracking_number = email:<domain>:<order#>`,
-  `match_reason = ai_disabled` (until the AI fallback reads it); never
-  pushed. Only a shipped-type *subject* queues one.
+- **Tracking links** (`server/tracking-links.ts`, Maria 2026-10-21): a
+  per-domain extractor for retailers that print no number, only a link.
+  **Michaels** — the "Tracking Information" link is a click tracker
+  (`…michaels.com/ls/click?upn=…`) that redirects to
+  `https://www.michaels.com/track?id=<tracking>&order=…&lastName=…&email=…`;
+  the number is `id`. The link must start within 400 characters after the
+  label (it is read whole — real ones run ~750 chars); the redirect is
+  followed by `Location` headers only — HEAD with `redirect: manual`, GET
+  if HEAD is refused, the body never read, ≤ 5 hops, `&amp;` unescaped —
+  until the final URL matches; the carrier comes from the number's shape
+  (`carrierForNumber`). It runs when the body yields no number; a real
+  number replaces (deletes) that order's placeholder, and every ingest
+  re-reads existing placeholders of an extractor domain
+  (`resolveLinkPlaceholders`). Local run 2026-10-21: all 4 Michaels
+  placeholders resolved (e.g. order 3500109099878917 → UPS
+  1Z09482W0312114120) and matched.
+- **No tracking in a shipped email** and no extractor: one placeholder row
+  per (sender domain, order #) — carrier OTHER, `tracking_number =
+  email:<domain>:<order#>`, `match_reason = ai_disabled` (until the AI
+  fallback reads it); never pushed. Only a shipped-type *subject* queues
+  one.
 - **Dedup:** a repeat email for the same number refreshes
   `gmail_message_id` / `shipped_at` only while the row is unmatched.
 - Fixtures: 15 real orders@ emails, people and numbers scrubbed

@@ -13,6 +13,7 @@ function harness(opts: { existing?: Record<string, "unmatched" | "matched"> } = 
   const rows = new Map<string, string>(Object.entries(opts.existing ?? {}));
   const query = async (sql: string, params?: any[]) => {
     if (sql.startsWith("SELECT value FROM settings")) return { rows: [{ value: { last_scanned_at: "2026-10-20T04:00:00.000Z" } }], rowCount: 1 };
+    if (sql.includes("tracking_number LIKE 'email:%'")) return { rows: [], rowCount: 0 }; // resolveLinkPlaceholders' read
     writes.push({ sql, params: params ?? [] });
     if (sql.includes("INSERT INTO po_tracking")) {
       const key = `${params![0]}|${params![1]}`;
