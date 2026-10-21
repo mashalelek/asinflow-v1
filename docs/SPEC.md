@@ -6328,3 +6328,28 @@ Settings: `tracking.velocity_street` ("805 grandy"),
   `gmail_message_id` / `shipped_at` only while the row is unmatched.
 - Fixtures: 15 real orders@ emails, people and numbers scrubbed
   (`server/__fixtures__/tracking-emails/`).
+
+### Matching (`server/tracking-match.ts`) and the unmatched queue
+
+- **Supplier** from the sender domain: `tracking.supplier_domain_map` wins;
+  otherwise an obvious pair — the registrable domain is a supplier name
+  (`oe.target.com` → `target.com`), or exactly one supplier shares it
+  (`equalexchange.coop` ↔ `shop.equalexchange.coop`), or for a hosted
+  notification platform (Narvar, Shopify email, ShipStation, ParcelPanel,
+  AfterShip, Veeqo) the first label + ".com" is
+  (`tractorsupply.narvar.com` → `tractorsupply.com`). A live run writes the
+  obvious pairs it used into the map (the editable record, Settings).
+  Unknown → `unmatched / unknown_sender`; mapping the domain once re-opens
+  its rows and re-matches.
+- **PO:** `supplier = guess` and `base(order_id) = retailer order #`,
+  punctuation-insensitive (Walmart / JCPenney print hyphens AF does not
+  store); base drops a trailing `_N` (D4); an order_id holding two ids
+  ("115449859 / 115450009") matches either. 0 → `no_po` (re-tried every
+  run), 1 → `matched`, >1 → `ambiguous`.
+- **Never moved by the sync:** `source = manual` or `reassigned_at` set;
+  dismissed rows and `ai_disabled` placeholders are not re-matched.
+- **Routes** (`server/tracking-routes.ts`, behind requireAuth): `GET
+  /api/tracking/unmatched` (the queue, with reason), `POST
+  /api/tracking/domain-map {domain, supplier}` (supplier must be a known PO
+  supplier; null removes), `POST /api/tracking/:id/attach {po_id}` (manual —
+  not for placeholders), `POST /api/tracking/:id/dismiss`.

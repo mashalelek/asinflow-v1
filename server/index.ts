@@ -3,6 +3,7 @@ import express, { type Request, Response, NextFunction } from "express";
 import { registerRoutes, getOnboardScDiscoveries, getRunSheetsSync, getOnboardSalesAsins } from "./routes";
 import { createJobsRouter } from "./scheduler/routes";
 import { createListingHygieneRouter } from "./listing-hygiene-routes";
+import { createTrackingRouter } from "./tracking-routes";
 import { requestLogLine } from "./request-log";
 import { startRunner, setRunnerLogger } from "./scheduler/runner";
 import { startSchedule, setScheduleLogger, nextPassAfter } from "./scheduler/schedule";
@@ -169,6 +170,8 @@ if (!process.env.VITEST) (async () => {
   app.use(createJobsRouter({ nextPassAt: async () => (process.env.ENABLE_CRONS === "true" ? nextPassAfter(new Date()).at.toISOString() : null) }));
   // Listing hygiene manual entry points (SPEC §11 components 22 / 24).
   app.use(createListingHygieneRouter());
+  // PO tracking → Velocity (SPEC §26): the unmatched queue, domain map, attach.
+  app.use(createTrackingRouter());
 
   await registerRoutes(httpServer, app);
 
