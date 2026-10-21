@@ -6360,10 +6360,14 @@ Settings: `tracking.velocity_street` ("805 grandy"),
 
 ### Routing rules and "Review Velocity" (`server/tracking-route-rules.ts`)
 
-Per matched row, on every run (the push component evaluates it — it is the
-one that reads Velocity's Inbound): **in Velocity** = at least one
-`GET /inbound` order whose `normKey(order_number)` = the PO's order_id,
-`status = inbound`, `unit_status` pending / partially_received.
+Per matched row, on every run (the push component evaluates it — it reads
+Velocity). **In Velocity** (2026-10-21, stop b) = the PO appears anywhere
+in Velocity — inbound, inventory or shipments (`fetchAllKnownOrders`,
+coverage tripwires: a partial read throws, nothing is evaluated). Pushes
+target only inbound pending / partially_received orders, so a PO is
+**inbound** (push — the "yes" rows), **known** (Velocity already received
+or shipped it: no push, no warning — counted `received_by_velocity`), or
+**absent** (the "no" rows: Velocity has never seen it).
 
 | PO in Velocity | email ship-to | `ships_to` | result |
 |---|---|---|---|

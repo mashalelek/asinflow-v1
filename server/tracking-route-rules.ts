@@ -2,6 +2,13 @@
 // po-tracking-velocity §7). Pure — evaluated on every run and every new row,
 // by the push component (it is the one that knows Velocity's Inbound state).
 //
+// "PO in Velocity" (Maria 2026-10-21, stop b): the PO appears ANYWHERE in
+// Velocity — inbound, inventory or shipments. Pushing still targets only
+// inbound pending / partially_received orders, so the PO is one of:
+//   inbound — pushable (the table's "yes" rows);
+//   known   — Velocity already received / shipped it: no push, no warning
+//             (the push window has passed; this is not a missed upload);
+//   absent  — Velocity has never seen it (the table's "no" rows).
 // | PO in Velocity | email ship-to                | ships_to | result                               |
 // |----------------|------------------------------|----------|--------------------------------------|
 // | yes            | none, or agrees with ships_to| —        | push                                 |
@@ -25,8 +32,10 @@ export const REASON = {
   canceled: "shipped but canceled",
 } as const;
 
+export type VelocityPresence = "inbound" | "known" | "absent";
+
 export function routeTracking(i: {
-  inVelocity: boolean;
+  velocity: VelocityPresence;
   emailStreet: string | null;
   shipsTo: ShipsTo;
   velocityStreet: string;
@@ -38,7 +47,8 @@ export function routeTracking(i: {
   const isVelocity = street != null && street === i.velocityStreet;
   const isHome = street != null && i.homeStreets.includes(street);
   const unknown = street != null && !isVelocity && !isHome;
-  if (i.inVelocity) {
+  if (i.velocity === "known") return { push: false, held: false, reasons: [] };
+  if (i.velocity === "inbound") {
     const agrees = street == null || (i.shipsTo === "velocity" ? isVelocity : isHome);
     return { push: true, held: false, reasons: agrees ? [] : [REASON.addressMismatch] };
   }

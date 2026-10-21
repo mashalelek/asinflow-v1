@@ -38,7 +38,7 @@ describe("buildTrackingPutBody — echo-merge", () => {
   });
 });
 
-function world(o: { rows: any[]; inbound: any[]; putFails?: string[] }) {
+function world(o: { rows: any[]; inbound: any[]; known?: any[]; putFails?: string[] }) {
   const updates: any[][] = [];
   const puts: Array<{ id: string; body: any }> = [];
   const gets: string[] = [];
@@ -50,6 +50,7 @@ function world(o: { rows: any[]; inbound: any[]; putFails?: string[] }) {
   };
   const deps: VelocityDeps = {
     list: async () => o.inbound,
+    known: async () => [...o.inbound, ...(o.known ?? [])],
     get: async (id) => { gets.push(id); return o.inbound.find((x) => x.order_id === id); },
     put: async (id, body) => { if (o.putFails?.includes(id)) throw new Error("Velocity PUT failed (HTTP 400) | message: bad"); puts.push({ id, body }); return {}; },
   };
@@ -94,6 +95,17 @@ describe("pushTracking", () => {
     w = world({ rows: [row({ order_id: "999", ships_to: "home", ship_to_street: "65 rivercrest" })], inbound: [] });
     await pushTracking({ query: w.query as any, deps: w.deps });
     expect(w.updates[0]).toEqual([1, "held", null]);
+  });
+  it("stop b: a PO Velocity already checked in / shipped → no PUT, no warning; never seen → not in Velocity", async () => {
+    let w = world({ rows: [row({ order_id: "555" })], inbound: [], known: [ord({ order_id: "i1", order_number: "555", status: "inventory" })] });
+    let r = await pushTracking({ query: w.query as any, deps: w.deps });
+    expect(w.puts).toHaveLength(0);
+    expect(r).toMatchObject({ received_by_velocity: 1, review: 0 });
+    expect(w.updates[0]).toEqual([1, "matched", null]);
+    w = world({ rows: [row({ order_id: "556" })], inbound: [], known: [ord({ order_id: "i1", order_number: "555" })] });
+    r = await pushTracking({ query: w.query as any, deps: w.deps });
+    expect(r.review).toBe(1);
+    expect(w.updates[0]).toEqual([1, "matched", "not in Velocity"]);
   });
   it("a bundle parent is never written — the row asks for a hand push", async () => {
     const w = world({ rows: [row({ order_id: "111" })], inbound: [ord({ order_id: "b1", order_number: null, sold_as: "bundle", bundle_children: [{ order_number: "111" }] })] });

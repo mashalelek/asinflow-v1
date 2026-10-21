@@ -5,7 +5,7 @@ import { unionActionItems, asinWriteThrough, PO_ACTION_ITEMS_SQL, REVIEW_VELOCIT
 import { normalizeActionItems, REVIEW_VELOCITY, ACTION_ITEMS } from "./po-status-map";
 
 const base = { velocityStreet: "805 grandy", homeStreets: ["65 rivercrest"], poCanceledOrReturned: false };
-const r = (inVelocity: boolean, emailStreet: string | null, shipsTo: "velocity" | "home") => routeTracking({ ...base, inVelocity, emailStreet, shipsTo });
+const r = (inVelocity: boolean, emailStreet: string | null, shipsTo: "velocity" | "home") => routeTracking({ ...base, velocity: inVelocity ? "inbound" : "absent", emailStreet, shipsTo });
 
 describe("routing table (§7)", () => {
   it("in Velocity, ship-to none or agreeing → push, no warning", () => {
@@ -32,7 +32,12 @@ describe("routing table (§7)", () => {
     expect(joinReasons(r(false, "12 elm", "velocity").reasons)).toBe("not in Velocity; unknown address");
   });
   it("a canceled / returned PO → shipped but canceled, never pushed", () => {
-    expect(routeTracking({ ...base, poCanceledOrReturned: true, inVelocity: true, emailStreet: null, shipsTo: "velocity" })).toEqual({ push: false, held: false, reasons: [REASON.canceled] });
+    expect(routeTracking({ ...base, poCanceledOrReturned: true, velocity: "inbound", emailStreet: null, shipsTo: "velocity" })).toEqual({ push: false, held: false, reasons: [REASON.canceled] });
+  });
+  it("stop b: a PO Velocity already received / shipped (known, not inbound) → no push, no warning — whatever the address", () => {
+    for (const street of [null, "805 grandy", "65 rivercrest", "12 elm"]) {
+      expect(routeTracking({ ...base, velocity: "known", emailStreet: street, shipsTo: "velocity" })).toEqual({ push: false, held: false, reasons: [] });
+    }
   });
 });
 

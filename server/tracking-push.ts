@@ -16,7 +16,7 @@
 // Never removes an entry. Idempotent: every target already has the number →
 // pushed, no PUT; partial coverage → PUT only the missing orders. Any PUT
 // error → push_failed with the error; the other orders still get theirs.
-import { fetchAllInboundOrders, getInboundOrder, updateInboundOrder, type VelocityInboundOrder } from "./velocity-api";
+import { fetchAllInboundOrders, fetchAllKnownOrders, getInboundOrder, updateInboundOrder, type VelocityInboundOrder } from "./velocity-api";
 import { routeTracking, joinReasons, type ShipsTo } from "./tracking-route-rules";
 import { isPlaceholder } from "./tracking-ingest";
 import type { QueryLike } from "./scheduler/types";
@@ -36,11 +36,25 @@ export type TrackingElementShape = "object" | "string";
 export let TRACKING_ELEMENT_SHAPE: TrackingElementShape = "string";
 
 export interface VelocityDeps {
+  /** GET /inbound — the push targets. */
   list: () => Promise<VelocityInboundOrder[]>;
+  /** Every order Velocity has (inbound ∪ inventory ∪ shipments) — "is the PO in Velocity at all" (stop b). */
+  known: () => Promise<VelocityInboundOrder[]>;
   get: (orderId: string) => Promise<VelocityInboundOrder>;
   put: (orderId: string, body: Record<string, any>) => Promise<any>;
 }
-export const realVelocityDeps: VelocityDeps = { list: fetchAllInboundOrders, get: getInboundOrder, put: updateInboundOrder };
+export const realVelocityDeps: VelocityDeps = { list: fetchAllInboundOrders, known: fetchAllKnownOrders, get: getInboundOrder, put: updateInboundOrder };
+
+/** Pure: every order number Velocity knows (own + bundle children), any lifecycle. */
+export function knownOrderNumbers(orders: readonly VelocityInboundOrder[]): Set<string> {
+  const s = new Set<string>();
+  for (const o of orders) {
+    const own = String(o.order_number ?? "").trim();
+    if (own) s.add(own);
+    for (const c of o.bundle_children ?? []) { const n = String(c?.order_number ?? "").trim(); if (n) s.add(n); }
+  }
+  return s;
+}
 
 /** Pure: Velocity's inbound orders, indexed by the PO order number they belong to (bundles through their children). */
 export function indexInbound(orders: readonly VelocityInboundOrder[]): Map<string, VelocityInboundOrder[]> {
@@ -108,11 +122,13 @@ export function buildTrackingPutBody(current: VelocityInboundOrder, additions: A
 
 export interface PoPushPlan {
   po_id: string; order_id: string; bundle_orders?: string[];
-  rows: Array<{ id: number; tracking_number: string; decision: "push" | "held" | "review"; reasons: string[] }>;
+  rows: Array<{ id: number; tracking_number: string; decision: "push" | "held" | "review" | "received_by_velocity"; reasons: string[] }>;
   targets: Array<{ velocity_order_id: string; asin: string; already: string[]; to_add: string[] }>;
 }
 export interface PushResult {
   rows_evaluated: number; pushed: number; already_present: number; push_failed: number; held: number; review: number;
+  /** PO already received / shipped by Velocity — past the push window, no warning (stop b). */
+  received_by_velocity: number;
   puts: number; put_errors: number;
   plans: PoPushPlan[];
 }
@@ -149,9 +165,12 @@ export async function pushTracking(opts: { query: QueryLike; deps?: VelocityDeps
   const deps = opts.deps ?? realVelocityDeps;
   const settings = await loadSettings(opts.query);
   const rows = await loadRows(opts.query, opts.poId);
-  const res: PushResult = { rows_evaluated: rows.length, pushed: 0, already_present: 0, push_failed: 0, held: 0, review: 0, puts: 0, put_errors: 0, plans: [] };
+  const res: PushResult = { rows_evaluated: rows.length, pushed: 0, already_present: 0, push_failed: 0, held: 0, review: 0, received_by_velocity: 0, puts: 0, put_errors: 0, plans: [] };
   if (rows.length === 0) return res;
+  // Both reads fail closed: a partial Velocity read would make POs look
+  // never-uploaded (the coverage tripwires in velocity-api throw instead).
   const inbound = indexInbound(await deps.list());
+  const known = knownOrderNumbers(await deps.known());
   const byPo = new Map<string, RowFacts[]>();
   for (const r of rows) { const l = byPo.get(r.po_id) ?? []; l.push(r); byPo.set(r.po_id, l); }
 
@@ -166,10 +185,10 @@ export async function pushTracking(opts: { query: QueryLike; deps?: VelocityDeps
     const toPush: RowFacts[] = [];
     for (const row of list) {
       const d = routeTracking({
-        inVelocity: all.length > 0, emailStreet: row.ship_to_street, shipsTo: (row.ships_to === "home" ? "home" : "velocity"),
+        velocity: all.length > 0 ? "inbound" : known.has(orderId) ? "known" : "absent", emailStreet: row.ship_to_street, shipsTo: (row.ships_to === "home" ? "home" : "velocity"),
         velocityStreet: settings.velocityStreet, homeStreets: settings.homeStreets, poCanceledOrReturned: row.canceled_or_returned,
       });
-      const decision = d.push ? "push" : d.held ? "held" : "review";
+      const decision = d.push ? "push" : d.held ? "held" : d.reasons.length ? "review" : "received_by_velocity";
       if (d.push && bundles.length > 0) d.reasons.push(`bundle order in Velocity (${bundles.map((b) => b.order_id).join(", ")}) — add tracking by hand`);
       plan.rows.push({ id: row.id, tracking_number: row.tracking_number, decision, reasons: d.reasons });
       if (d.push) toPush.push(row);
@@ -179,7 +198,7 @@ export async function pushTracking(opts: { query: QueryLike; deps?: VelocityDeps
           [row.id, d.held ? "held" : "matched", joinReasons(d.reasons)],
         );
       }
-      if (d.held) res.held++; else if (!d.push) res.review++;
+      if (d.held) res.held++; else if (decision === "review") res.review++; else if (decision === "received_by_velocity") res.received_by_velocity++;
     }
     // Targets: what each order already has and what it needs.
     const additions = toPush.map((r) => ({ id: r.id, carrier: settings.carrierMap[r.carrier] ?? r.carrier, tracking_number: r.tracking_number.toUpperCase() }));
