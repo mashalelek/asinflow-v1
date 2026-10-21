@@ -1,5 +1,6 @@
 // PO tracking routes (SPEC §26; patch po-tracking-velocity §5, §6, §11).
 // Mounted behind requireAuth.
+//   POST /api/tracking/sync             {dryRun}  "Sync tracking": ingest (Gmail) → match → push (Velocity)
 //   GET  /api/tracking/unmatched        the queue: unmatched rows (not dismissed) with reason
 //   POST /api/tracking/domain-map       {domain, supplier}  map a sender domain once, then re-match
 //   POST /api/tracking/:id/attach       {po_id}  attach to a PO by hand (source manual — the sync never moves it)
@@ -9,12 +10,30 @@
 import express, { type Router, type Request, type Response } from "express";
 import { query as defaultQuery } from "./db";
 import { matchTrackingRows, setDomainMapEntry } from "./tracking-match";
+import { ingestTracking } from "./tracking-ingest";
+import { pushTracking } from "./tracking-push";
+import { gmailClient } from "./gmail-client";
 import type { QueryLike } from "./scheduler/types";
 
 export function createTrackingRouter(deps: { query?: QueryLike } = {}): Router {
   const query = deps.query ?? (defaultQuery as any as QueryLike);
   const router = express.Router();
   const fail = (res: Response, err: any) => res.status(500).json({ error: "tracking_failed", message: err?.message ?? String(err) });
+
+  // "Sync tracking" (POs toolbar): the same three steps as the 00:00
+  // components po_tracking_ingest → po_tracking_push. dryRun: reads Gmail
+  // and Velocity, writes nothing anywhere; the push plan is per PO (target
+  // orders, numbers to add, numbers already present).
+  router.post("/api/tracking/sync", async (req: Request, res: Response) => {
+    const dryRun = req.body?.dryRun === true || req.query.dryRun === "true";
+    try {
+      const ingest = await ingestTracking({ query, deps: { gmail: gmailClient() }, dryRun });
+      const match = await matchTrackingRows(query, { dryRun });
+      const push = await pushTracking({ query, dryRun });
+      if (dryRun && ingest.drafts) ingest.drafts = ingest.drafts.slice(0, 200);
+      res.json({ dryRun, ingest, match, push });
+    } catch (err) { fail(res, err); }
+  });
 
   router.get("/api/tracking/unmatched", async (_req: Request, res: Response) => {
     try {

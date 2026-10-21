@@ -37,6 +37,10 @@ export interface VelocityInboundOrder {
   quantity_missing?: number;
   quantity_removed?: number;
   unit_status?: string;         // "pending" | "partially_received" | "fully_received"
+  // Tracking on the order (probe 2026-10-21): GET serializes it as
+  // trackings[{carrier, tracking_number, tracking_status}]; the PUT field is
+  // trackingNumbers (SPEC §11 / §26).
+  trackings?: Array<{ carrier?: string; tracking_number?: string; tracking_status?: string | null } | string>;
   // Bundles (SPEC §11, 2026-08-31): parent rows carry order_number null and
   // nest their components here; each child is order-like with its own
   // order_number/retailer and a bundle_order_id pointing at the parent.
@@ -280,6 +284,17 @@ export async function updateInboundOrder(orderId: string, fields: Record<string,
     body: JSON.stringify(body),
   });
   return res.data ?? null;
+}
+
+// One inbound order — GET /inbound/:order_id (also addresses bundle children).
+// Read-only. PO tracking (SPEC §26) re-reads the order immediately before
+// each tracking PUT, so the echo-merge never works from a stale snapshot.
+export async function getInboundOrder(orderId: string): Promise<VelocityInboundOrder> {
+  const body = await velocityFetch(`/inbound/${encodeURIComponent(orderId)}`);
+  const d = body.data ?? {};
+  const o = d.order ?? d.orders?.[0] ?? d;
+  if (!o || typeof o !== "object" || !o.order_id) throw new Error(`Velocity GET /inbound/${orderId}: no order in the response`);
+  return o as VelocityInboundOrder;
 }
 
 // ── Complete-coverage order fetch (dedup blind-spot fix, diagnosed 2026-08-07) ──

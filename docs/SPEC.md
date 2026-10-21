@@ -1178,7 +1178,9 @@ their own `order_id` and a `bundle_order_id` pointing at the parent.
   `order_number`/`retailer`, which is exactly where they actually live;
   (4) pagination metadata documented as `total` is actually
   `total_results`, and `tracking_numbers` (POST docs) serializes as
-  `trackings` on GET.
+  `trackings` on GET. The PUT field is `trackingNumbers` (always sent);
+  GET's element is `{carrier, tracking_number, tracking_status}`. PO
+  tracking (§26) adds numbers through it — element shape per §26.
 
 **Record columns** (exact header + order, CRLF line endings, matches Velocity's
 sample):
@@ -6387,3 +6389,35 @@ It clears itself when the condition goes away (the next evaluation nulls
 `review_reason`). **Manual clear** — `POST /api/pos/:id/review-velocity/clear`
 — sets `suppressed_at` on the rows that exist at that moment only; a new
 tracking row for the PO re-evaluates and may raise it again.
+
+### Velocity push (`server/tracking-push.ts`)
+
+Tracking-only (D1): never creates a Velocity order, never changes a
+quantity, item or status; nothing but carrier + tracking leaves AF.
+- **Targets** for a PO = every `GET /inbound` order whose trimmed
+  `order_number` (bundle parents: their children's) equals the PO's
+  `order_id`, `status = inbound`, `unit_status` pending /
+  partially_received. Pushed to **every** target (each Velocity order is
+  one ASIN row of the PO; the receivers see the same package for all).
+  **Bundle parents are not written** (a PUT on one is unverified and the
+  PUT is full-replace): the row's review reason asks for a hand push.
+- **Echo-merge**, re-read with `GET /inbound/:order_id`
+  (`getInboundOrder`) immediately before each PUT: `trackingNumbers` =
+  the order's existing `trackings` + the PO's numbers not already there
+  (compared on `tracking_number`), every other field echoed from the fresh
+  read — date, retailer, orderNumber, itemName, asin, amazonSKU, sold_as,
+  units_per_pack, **quantity** (unchanged; omitting it would null it under
+  full-replace), fulfilledBy. Never removes an entry. Carrier string via
+  `tracking.carrier_map`.
+- **Idempotent:** every target has the number → row `pushed`, no PUT;
+  partial coverage → PUT only the missing orders; `pushed_velocity_ids`
+  records where it is. A PUT error → `push_failed`, `push_error` and the
+  review reason carry the Velocity error; the other targets still get
+  theirs.
+- **Dry run** (`POST /api/tracking/sync {dryRun: true}`): reads Gmail and
+  Velocity, writes nothing; per PO the target orders, numbers to add,
+  numbers already present.
+- **Element shape** of `trackingNumbers` in the PUT: PENDING the
+  commit-5 probe (`npm run velocity:tracking-probe -- --order <id>
+  --carrier <c> --tracking <n> [--live]`); the push sends objects
+  `{carrier, tracking_number}` until it is recorded here.
