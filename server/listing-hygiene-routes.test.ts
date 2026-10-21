@@ -8,7 +8,7 @@ import { componentsForJob } from "./scheduler/runner";
 let close: (() => void) | null = null;
 afterEach(() => { close?.(); close = null; });
 
-async function serve(opts: { role?: string; env?: Record<string, string>; held?: number }) {
+async function serve(opts: { role?: string; env?: Record<string, string>; held?: number; priorRelease?: { id: number; status: string } }) {
   const inserted: any[] = [];
   const query = async (sql: string, params?: any[]) => {
     if (sql.includes("INSERT INTO jobs")) {
@@ -17,18 +17,26 @@ async function serve(opts: { role?: string; env?: Record<string, string>; held?:
       return { rows: [job], rowCount: 1 };
     }
     if (sql.includes("count(*)::int AS n FROM listing_actions")) return { rows: [{ n: opts.held ?? 0 }], rowCount: 1 };
+    if (sql.includes("params->'listing_hygiene'->>'mode' = 'release'")) {
+      const p = opts.priorRelease;
+      return { rows: p && ["queued", "running", "done"].includes(p.status) ? [p] : [], rowCount: p ? 1 : 0 };
+    }
     if (sql.includes("FROM jobs")) return { rows: [], rowCount: 0 };
     throw new Error(`unexpected ${sql.slice(0, 60)}`);
   };
   const app = express();
   app.use(express.json());
   app.use((req: any, _res, next) => { req.session = { userId: 1, role: opts.role ?? "admin" }; next(); });
-  app.use(createListingHygieneRouter({ query: query as any, env: () => (opts.env ?? {}) as any }));
+  const locks: Array<[number, string]> = [];
+  app.use(createListingHygieneRouter({
+    query: query as any, env: () => (opts.env ?? {}) as any,
+    inReleaseLock: async (jobId, action, fn) => { locks.push([jobId, action]); return fn(query as any); },
+  }));
   const server = app.listen(0);
   close = () => server.close();
   const base = `http://127.0.0.1:${(server.address() as AddressInfo).port}`;
   const post = (path: string, body: any) => fetch(base + path, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
-  return { post, inserted };
+  return { post, inserted, locks };
 }
 
 describe("POST /api/listing-hygiene/run", () => {
@@ -71,5 +79,29 @@ describe("POST /api/listing-hygiene/release", () => {
   it("refused when the gate is unset, or nothing is held", async () => {
     expect((await (await serve({ held: 30 })).post("/api/listing-hygiene/release", { job_id: 41, action: "close" })).status).toBe(409);
     expect((await (await serve({ env: { LISTING_CLOSE_LIVE: "true" }, held: 0 })).post("/api/listing-hygiene/release", { job_id: 41, action: "close" })).status).toBe(409);
+  });
+});
+
+describe("no duplicate releases (Maria 2026-10-21)", () => {
+  for (const status of ["queued", "running", "done"]) {
+    it(`a release already ${status} for the job + action → 409 already_released, nothing enqueued`, async () => {
+      const s = await serve({ env: { LISTING_DELETE_LIVE: "true" }, held: 162, priorRelease: { id: 136, status } });
+      const r = await s.post("/api/listing-hygiene/release", { job_id: 123, action: "delete" });
+      expect(r.status).toBe(409);
+      const b = await r.json();
+      expect(b.error).toBe("already_released");
+      expect(b.message).toMatch(/already released \(job #136/);
+      expect(s.inserted).toHaveLength(0);
+    });
+  }
+  it("a failed (or cancelled) release does not block a retry", async () => {
+    const s = await serve({ env: { LISTING_DELETE_LIVE: "true" }, held: 5, priorRelease: { id: 136, status: "failed" } });
+    expect((await s.post("/api/listing-hygiene/release", { job_id: 123, action: "delete" })).status).toBe(202);
+  });
+  it("the check and the enqueue run inside the per-(job, action) lock", async () => {
+    const s = await serve({ env: { LISTING_CLOSE_LIVE: "true" }, held: 3 });
+    await s.post("/api/listing-hygiene/release", { job_id: 41, action: "close" });
+    expect(s.locks).toEqual([[41, "close"]]);
+    expect(s.inserted).toHaveLength(1);
   });
 });

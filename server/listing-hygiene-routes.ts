@@ -6,7 +6,7 @@
 // Components 22 and 24 never run in a manual Refresh; these are their only
 // manual triggers (componentsForJob: listed explicitly AND params.listing_hygiene).
 import express, { type Router, type Request, type Response } from "express";
-import { query as defaultQuery } from "./db";
+import pool, { query as defaultQuery } from "./db";
 import { requireRole } from "./auth";
 import { enqueueJob, listActive, laneAhead } from "./scheduler/jobs-repo";
 import { liveGate, type HygieneAction } from "./listing-hygiene";
@@ -16,9 +16,52 @@ const COMPONENT: Record<HygieneAction, number> = { close: 22, delete: 24 };
 const GATE: Record<HygieneAction, string> = { close: "LISTING_CLOSE_LIVE", delete: "LISTING_DELETE_LIVE" };
 const actionOf = (v: unknown): HygieneAction | null => (v === "close" || v === "delete" ? v : null);
 
-export function createListingHygieneRouter(deps: { query?: QueryLike; env?: () => NodeJS.ProcessEnv } = {}): Router {
+/** Advisory-lock namespace for "one release per job + action" (the jobs runner holds 7342002). */
+export const RELEASE_LOCK_NS = 7342101;
+
+/**
+ * Run fn in ONE transaction holding an advisory lock for (job, action): two
+ * Release clicks a second apart (production jobs #137 / #138, 2026-10-21)
+ * serialize, and the second sees the first's job row.
+ */
+async function withReleaseLock<T>(jobId: number, action: HygieneAction, fn: (q: QueryLike) => Promise<T>): Promise<T> {
+  const c = await pool.connect();
+  try {
+    await c.query("BEGIN");
+    await c.query(`SELECT pg_advisory_xact_lock($1, $2)`, [RELEASE_LOCK_NS, jobId * 2 + (action === "delete" ? 1 : 0)]);
+    const out = await fn((sql, params) => c.query(sql, params) as any);
+    await c.query("COMMIT");
+    return out;
+  } catch (err) {
+    await c.query("ROLLBACK").catch(() => {});
+    throw err;
+  } finally {
+    c.release();
+  }
+}
+
+/** The release job already enqueued for this job + action (queued, running or done), if any. */
+export async function existingRelease(jobId: number, action: HygieneAction, query: QueryLike): Promise<{ id: number; status: string } | null> {
+  const r = await query(
+    `SELECT id, status FROM jobs
+      WHERE params->'listing_hygiene'->>'mode' = 'release'
+        AND params->'listing_hygiene'->>'action' = $2
+        AND (params->'listing_hygiene'->>'release_of_job')::bigint = $1
+        AND status IN ('queued','running','done')
+      ORDER BY id LIMIT 1`,
+    [jobId, action],
+  );
+  return r.rows[0] ? { id: Number(r.rows[0].id), status: String(r.rows[0].status) } : null;
+}
+
+export function createListingHygieneRouter(deps: {
+  query?: QueryLike; env?: () => NodeJS.ProcessEnv;
+  /** Test seam: the transaction + lock around the release checks and enqueue. */
+  inReleaseLock?: <T>(jobId: number, action: HygieneAction, fn: (q: QueryLike) => Promise<T>) => Promise<T>;
+} = {}): Router {
   const query = deps.query ?? (defaultQuery as any as QueryLike);
   const env = deps.env ?? (() => process.env);
+  const inReleaseLock = deps.inReleaseLock ?? withReleaseLock;
   const router = express.Router();
 
   router.post("/api/listing-hygiene/run", requireRole("admin"), async (req: Request, res: Response) => {
@@ -52,17 +95,26 @@ export function createListingHygieneRouter(deps: { query?: QueryLike; env?: () =
       return;
     }
     try {
-      const n = Number((await query(
-        `SELECT count(*)::int AS n FROM listing_actions WHERE job_id = $1 AND action = $2 AND status = 'held' AND NOT (evidence ? 'release')`,
-        [jobId, action],
-      )).rows[0]?.n ?? 0);
-      if (n === 0) { res.status(409).json({ error: "nothing_held", message: `job #${jobId} has no held ${action} candidates left` }); return; }
-      const job = await enqueueJob({
-        trigger: "manual", includeDaily: false, components: [COMPONENT[action]], scopeAsins: null,
-        params: { listing_hygiene: { action, mode: "release", release_of_job: jobId } },
-        requestedBy: req.session?.userId ?? null,
-      }, query);
-      res.status(202).json({ job, held: n, ahead: laneAhead(job, await listActive(query)) });
+      // One release per job + action, ever (queued, running or done) — checked
+      // and enqueued under the lock, in one transaction. A failed or
+      // cancelled release does not count, so it can be retried.
+      const out = await inReleaseLock(jobId, action, async (q) => {
+        const prior = await existingRelease(jobId, action, q);
+        if (prior) return { status: 409, body: { error: "already_released", message: `job #${jobId}'s held ${action}s were already released (job #${prior.id}, ${prior.status})` } };
+        const n = Number((await q(
+          `SELECT count(*)::int AS n FROM listing_actions WHERE job_id = $1 AND action = $2 AND status = 'held' AND NOT (evidence ? 'release')`,
+          [jobId, action],
+        )).rows[0]?.n ?? 0);
+        if (n === 0) return { status: 409, body: { error: "nothing_held", message: `job #${jobId} has no held ${action} candidates left` } };
+        const job = await enqueueJob({
+          trigger: "manual", includeDaily: false, components: [COMPONENT[action]], scopeAsins: null,
+          params: { listing_hygiene: { action, mode: "release", release_of_job: jobId } },
+          requestedBy: req.session?.userId ?? null,
+        }, q);
+        return { status: 202, body: { job, held: n } };
+      });
+      if (out.status !== 202) { res.status(out.status).json(out.body); return; }
+      res.status(202).json({ ...out.body, ahead: laneAhead((out.body as any).job, await listActive(query)) });
     } catch (err: any) {
       res.status(500).json({ error: "enqueue_failed", message: err?.message ?? String(err) });
     }
