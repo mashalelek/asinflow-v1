@@ -6252,3 +6252,79 @@ VA-restricted view and per-route permission enforcement beyond the admin
 page (on hold); password reset by email (no outbound email yet); MFA;
 ledger attribution of syncs to users; Chrome extension authentication
 (rebuild).
+
+## 26. PO tracking (supplier tracking numbers → Velocity)
+
+Patch `docs/claude_spec-patch-po-tracking-velocity.md` (approved
+2026-10-21). Supplier shipping emails arriving at
+`orders@coastalqualitygoods.com` are read, their carrier + tracking number +
+retailer order # attached to the AF PO, and pushed to the matching Velocity
+inbound orders so Velocity can check POs in accurately. Tracking only
+matters while the PO is in Velocity's Inbound (`unit_status` pending /
+partially_received).
+
+### Data (migration 066)
+
+`po_tracking` — one row per `(carrier, tracking_number)` (UNIQUE): `po_id`
+(NULL = unmatched), `carrier` (UPS / FEDEX / USPS / DHL / AMAZON / ONTRAC /
+LASERSHIP / OTHER), `tracking_number`, `retailer_order_id` (as printed),
+`supplier_guess`, `sender_domain`, `ship_to_street` (normalized "<number>
+<first street word>"), `shipped_at` (email date), `items_json` ([{name,
+qty}] when the email lists them per shipment), `gmail_message_id` /
+`gmail_thread_id` / `email_subject`, `source` (regex | ai | manual),
+`status` (unmatched | matched | pushed | push_failed | held),
+`match_reason` (why unmatched), `review_reason` (why it raises "Review
+Velocity"), `push_error`, `pushed_at`, `pushed_velocity_ids`,
+`suppressed_at`, `reassigned_from_po_id` / `reassigned_at`.
+`purchase_orders.ships_to` ('velocity' | 'home', default 'velocity').
+Settings: `tracking.velocity_street` ("805 grandy"),
+`tracking.home_streets` (["65 rivercrest"]),
+`tracking.supplier_domain_map`, `tracking.carrier_map`,
+`tracking.gmail_watermark` ({last_scanned_at}).
+
+### Gmail ingestion (`server/gmail-client.ts`, `tracking-parse.ts`, `tracking-ingest.ts`)
+
+- **Auth (D2):** the `asinflow-sheets` service account (the same
+  `GOOGLE_CREDENTIALS_PATH` key file as the Sheets reader) with domain-wide
+  delegation, a JWT with `subject = orders@coastalqualitygoods.com`
+  (`GMAIL_SUBJECT` overrides), scope `gmail.readonly`. The key's
+  `client_email` / `private_key` are passed explicitly — `JWT({keyFile})`
+  leaves the issuer null ("invalid_grant: Invalid issuer: null").
+  `npm run gmail:check` lists the 5 newest subjects (delegation verified
+  2026-10-21).
+- **Body:** text/plain unless it is a short preview (< 300 chars — Macy's
+  plain part is one line), then plus the HTML converted to text.
+- **Query:** `-category:promotions after:<watermark − 24 h>`; the
+  watermark advances to the run's start; dedup absorbs the overlap.
+- **Candidate** = a carrier-pattern match or shipped-type language;
+  others are skipped.
+- **Tracking extraction**, in this order: carrier-site URL parameters
+  (`trknbr=`, `trackNums=`, `tracknum=`, …); then tokens in the text.
+  UPS `1Z…`, Amazon `TBA…`, LaserShip `1LS…` count anywhere (also inside a
+  URL, case-insensitive — Narvar prints `1z…`); OnTrac `C\d{14}`, USPS
+  `[A-Z]{2}\d{9}US` and every all-digit number only with a tracking label
+  or a carrier word in the 60 / 80 characters before it, never inside a
+  URL, never after a UPC / SKU / item / phone / order / reference label,
+  never equal to the email's own order #. All-digit by length: 20–22
+  starting with 9 → USPS, 12 / 15 / 20 / 22 / 34 → FedEx, the nearest
+  carrier word overriding. USPS IMpb `420` + ZIP prefixes are stripped.
+- **Order #:** "Order #/number/no./ID" tokens, subject first (when the
+  subject has exactly one it wins); a lower-case run-on after the digits is
+  cut (Target: "#102003876318342are"). Several distinct → no order on the
+  rows, `match_reason = unpaired`.
+- **Ship-to:** the first street after a "Delivers to / Ship to / Shipping
+  address / Delivery address" label, normalized.
+- **Items:** "Qty: N" lines between one tracking number and the next, the
+  longest name-like line among the four above (Macy's prints a full and a
+  truncated name).
+- **Forwards** from our own mailboxes (coastalqualitygoods.com, gmail.com)
+  are attributed to the original `From:` domain.
+- **No tracking in a shipped email** (Michaels: only its own 33-digit
+  shipment ids): one placeholder row per (sender domain, order #) —
+  carrier OTHER, `tracking_number = email:<domain>:<order#>`,
+  `match_reason = ai_disabled` (until the AI fallback reads it); never
+  pushed. Only a shipped-type *subject* queues one.
+- **Dedup:** a repeat email for the same number refreshes
+  `gmail_message_id` / `shipped_at` only while the row is unmatched.
+- Fixtures: 15 real orders@ emails, people and numbers scrubbed
+  (`server/__fixtures__/tracking-emails/`).
