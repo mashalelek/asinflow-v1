@@ -49,7 +49,8 @@ export const LEDGER_REQUIRED_DAYS = 540;
 export const LEDGER_MAX_LAG_DAYS = 2;
 export const CLOCK_EVER_STOCKED_DAYS = 60;
 export const CLOCK_NEVER_STOCKED_DAYS = 14;
-export const DEFAULT_BREAKER = 25;
+/** Per-run breakers when settings has none (Maria 2026-10-21: close 50, delete 25; migration 065). */
+export const DEFAULT_BREAKER: Record<HygieneAction, number> = { close: 50, delete: 25 };
 /**
  * An accepted action not yet verified — of EITHER kind — suppresses any further
  * action on the SKU for this long (the next probe verifies it). Cross-kind on
@@ -320,7 +321,7 @@ export async function ledgerAvailability(query: QueryLike, now: Date = new Date(
 export async function breakerFor(action: HygieneAction, query: QueryLike): Promise<number> {
   const key = action === "close" ? "hygiene_close_breaker" : "hygiene_delete_breaker";
   const v = Number((await query(`SELECT value FROM settings WHERE key = $1`, [key])).rows[0]?.value);
-  return Number.isFinite(v) && v >= 0 ? v : DEFAULT_BREAKER;
+  return Number.isFinite(v) && v >= 0 ? v : DEFAULT_BREAKER[action];
 }
 
 export function liveGate(action: HygieneAction, env: NodeJS.ProcessEnv = process.env): boolean {

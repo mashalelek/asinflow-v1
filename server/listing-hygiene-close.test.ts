@@ -192,3 +192,20 @@ describe("22 runs only where it may", () => {
     expect(componentsForJob(row({ trigger: "manual", components: [22], params: { listing_hygiene: { action: "close", mode: "release", release_of_job: 1 } } })).map((c) => c.n)).toEqual([22]);
   });
 });
+
+describe("breaker defaults (Maria 2026-10-21)", () => {
+  it("close 50, delete 25 when settings has no row; a settings row wins", async () => {
+    const { breakerFor, DEFAULT_BREAKER } = await import("./listing-hygiene");
+    expect(DEFAULT_BREAKER).toEqual({ close: 50, delete: 25 });
+    const none = async () => ({ rows: [], rowCount: 0 });
+    expect(await breakerFor("close", none as any)).toBe(50);
+    expect(await breakerFor("delete", none as any)).toBe(25);
+    expect(await breakerFor("close", (async () => ({ rows: [{ value: 40 }], rowCount: 1 })) as any)).toBe(40);
+  });
+  it("migration 065 sets production to close 50 / delete 25", () => {
+    const sql = require("fs").readFileSync(require("path").join(__dirname, "..", "database", "migrations", "065_hygiene_close_breaker_50.sql"), "utf8");
+    expect(sql).toMatch(/'hygiene_close_breaker', '50'::jsonb/);
+    expect(sql).toMatch(/'hygiene_delete_breaker', '25'::jsonb/);
+    expect(sql).not.toMatch(/\bBEGIN\b|\bCOMMIT\b/);
+  });
+});
