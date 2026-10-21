@@ -1,6 +1,6 @@
 // Tracking → Velocity push (SPEC §26, patch commit 5).
 import { describe, it, expect, afterEach } from "vitest";
-import { indexInbound, buildTrackingPutBody, pushTracking, trackingNumbersOf, setTrackingElementShape, type VelocityDeps } from "./tracking-push";
+import { indexInbound, buildTrackingPutBody, pushTracking, trackingNumbersOf, setTrackingElementShape, velocityDate, type VelocityDeps } from "./tracking-push";
 
 const ord = (o: any) => ({ status: "inbound", unit_status: "pending", sold_as: "multi-pack", units_per_pack: 4, quantity: 20, date: "10/09/2026", retailer: "macys.com", item_name: "Frango", asin: "B081S8MTJ5", amazon_sku: "BC-DO62-O14S", fulfillment_type: "fba", trackings: [], ...o });
 afterEach(() => setTrackingElementShape("object"));
@@ -106,5 +106,13 @@ describe("pushTracking", () => {
   });
   it("tracking numbers on a GET order, objects or strings", () => {
     expect(trackingNumbersOf({ trackings: [{ tracking_number: "1za" }, "875" as any] })).toEqual(["1ZA", "875"]);
+  });
+});
+
+describe("velocityDate", () => {
+  it("the single-order GET's RFC-1123 date is echoed as the list's MM/DD/YYYY, in UTC (no day slip)", () => {
+    expect(velocityDate("Fri, 09 Oct 2026 00:00:00 GMT")).toBe("10/09/2026");
+    expect(velocityDate("10/09/2026")).toBe("10/09/2026");
+    expect(buildTrackingPutBody(ord({ order_id: "a", date: "Fri, 09 Oct 2026 00:00:00 GMT" }) as any, []).date).toBe("10/09/2026");
   });
 });

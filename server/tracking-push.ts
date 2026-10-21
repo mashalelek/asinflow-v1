@@ -71,12 +71,26 @@ const echoElement = (t: any, shape: TrackingElementShape): any =>
  * trackingNumbers = existing + additions. Never quantities changed, never
  * cogs / list price (cost privacy), fulfilledBy echoed verbatim.
  */
+/**
+ * Pure: the order date in the form the reconcile PUTs have always echoed
+ * (the list's MM/DD/YYYY). GET /inbound/:id serializes it RFC-1123
+ * ("Fri, 09 Oct 2026 00:00:00 GMT") — read in UTC so it cannot slip a day.
+ */
+export function velocityDate(d: unknown): string {
+  const s = String(d ?? "").trim();
+  if (/^\d{2}\/\d{2}\/\d{4}$/.test(s)) return s;
+  const t = Date.parse(s);
+  if (!Number.isFinite(t)) return s;
+  const x = new Date(t);
+  return `${String(x.getUTCMonth() + 1).padStart(2, "0")}/${String(x.getUTCDate()).padStart(2, "0")}/${x.getUTCFullYear()}`;
+}
+
 export function buildTrackingPutBody(current: VelocityInboundOrder, additions: Array<{ carrier: string; tracking_number: string }>, shape: TrackingElementShape = TRACKING_ELEMENT_SHAPE): Record<string, any> {
   const existing = Array.isArray(current.trackings) ? current.trackings : [];
   const have = new Set(trackingNumbersOf(current));
   const add = additions.filter((a) => !have.has(a.tracking_number.toUpperCase()));
   return {
-    date: current.date,
+    date: velocityDate(current.date),
     retailer: current.retailer ?? "",
     orderNumber: String(current.order_number ?? ""),
     itemName: current.item_name ?? "",
