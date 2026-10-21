@@ -8,7 +8,7 @@ import { componentsForJob } from "./scheduler/runner";
 let close: (() => void) | null = null;
 afterEach(() => { close?.(); close = null; });
 
-async function serve(opts: { role?: string; env?: Record<string, string>; held?: number; priorRelease?: { id: number; status: string } }) {
+async function serve(opts: { role?: string; env?: Record<string, string>; held?: number; priorRelease?: { id: number; status: string }; holdGroups?: any[] }) {
   const inserted: any[] = [];
   const query = async (sql: string, params?: any[]) => {
     if (sql.includes("INSERT INTO jobs")) {
@@ -17,6 +17,7 @@ async function serve(opts: { role?: string; env?: Record<string, string>; held?:
       return { rows: [job], rowCount: 1 };
     }
     if (sql.includes("count(*)::int AS n FROM listing_actions")) return { rows: [{ n: opts.held ?? 0 }], rowCount: 1 };
+    if (sql.includes("GROUP BY la.job_id, la.action")) return { rows: opts.holdGroups ?? [], rowCount: (opts.holdGroups ?? []).length };
     if (sql.includes("params->'listing_hygiene'->>'mode' = 'release'")) {
       const p = opts.priorRelease;
       return { rows: p && ["queued", "running", "done"].includes(p.status) ? [p] : [], rowCount: p ? 1 : 0 };
@@ -35,8 +36,9 @@ async function serve(opts: { role?: string; env?: Record<string, string>; held?:
   const server = app.listen(0);
   close = () => server.close();
   const base = `http://127.0.0.1:${(server.address() as AddressInfo).port}`;
+  const get = (path: string) => fetch(base + path);
   const post = (path: string, body: any) => fetch(base + path, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
-  return { post, inserted, locks };
+  return { post, get, inserted, locks };
 }
 
 describe("POST /api/listing-hygiene/run", () => {
@@ -103,5 +105,22 @@ describe("no duplicate releases (Maria 2026-10-21)", () => {
     await s.post("/api/listing-hygiene/release", { job_id: 41, action: "close" });
     expect(s.locks).toEqual([[41, "close"]]);
     expect(s.inserted).toHaveLength(1);
+  });
+});
+
+describe("superseded holds and the pending endpoint (Action required)", () => {
+  const g = (job_id: number, action: string, total: number, open: number, released = false) => ({ job_id, action, total, open, released, held_at: "2026-10-21T05:42:49Z" });
+  it("releasing an older hold after a newer night's hold → 409 superseded", async () => {
+    const s = await serve({ env: { LISTING_DELETE_LIVE: "true" }, held: 30, holdGroups: [g(123, "delete", 162, 30), g(140, "delete", 31, 31)] });
+    const r = await s.post("/api/listing-hygiene/release", { job_id: 123, action: "delete" });
+    expect(r.status).toBe(409);
+    expect((await r.json()).message).toMatch(/superseded by job #140/);
+    expect(s.inserted).toHaveLength(0);
+  });
+  it("GET /pending returns the newest unreleased hold per action", async () => {
+    const s = await serve({ holdGroups: [g(123, "delete", 162, 162, true), g(140, "delete", 31, 31), g(140, "close", 60, 60)] });
+    const b = await (await s.get("/api/listing-hygiene/pending")).json();
+    expect(b.pending.delete).toMatchObject({ job_id: 140, count: 31 });
+    expect(b.pending.close).toMatchObject({ job_id: 140, count: 60 });
   });
 });

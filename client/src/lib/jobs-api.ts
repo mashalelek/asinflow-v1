@@ -257,5 +257,32 @@ export function groupHygieneOutcomes(outcomes: Record<string, string> | undefine
   return Array.from(m.entries()).map(([outcome, skus]) => ({ outcome, skus: skus.sort() })).sort((a, b) => b.skus.length - a.skus.length || a.outcome.localeCompare(b.outcome));
 }
 
+// ── "Action required" (Maria 2026-10-21) ───────────────────────────────────
+export interface PendingHold { job_id: number; action: "close" | "delete"; count: number; held_at: string }
+export interface PendingHolds { pending: { close: PendingHold | null; delete: PendingHold | null }; live: { close: boolean; delete: boolean } }
+export async function getPendingHolds(fetchFn: typeof fetch = fetch): Promise<PendingHolds> {
+  return parse(await fetchFn("/api/listing-hygiene/pending", { credentials: "same-origin" }));
+}
+
+/** "Action required: 30 deletes held for review" — or both kinds; null when nothing is held. */
+export function pendingLabel(p: PendingHolds["pending"] | null | undefined): string | null {
+  const parts: string[] = [];
+  const n = (c: number, w: string) => `${c} ${w}${c === 1 ? "" : "s"}`;
+  if (p?.close) parts.push(n(p.close.count, "close"));
+  if (p?.delete) parts.push(n(p.delete.count, "delete"));
+  return parts.length ? `Action required: ${parts.join(" and ")} held for review` : null;
+}
+
+/** The breaker toast for a finished pass: "Daily pass held 60 closes / 30 deletes — review needed"; null when nothing tripped. */
+export function breakerHeldText(job: Job): string | null {
+  const c = job.summary?.components ?? {};
+  const closes = Number(c["22_close_oos"]?.held ?? 0);
+  const deletes = Number(c["24_delete_dead"]?.held ?? 0);
+  if (closes + deletes === 0) return null;
+  const who = job.trigger === "scheduled" ? (job.include_daily ? "Daily pass" : "Scheduled pass") : "Job";
+  const parts = [closes ? `${closes} close${closes === 1 ? "" : "s"}` : null, deletes ? `${deletes} delete${deletes === 1 ? "" : "s"}` : null].filter(Boolean);
+  return `${who} held ${parts.join(" / ")} — review needed`;
+}
+
 /** Window event the flips panel raises so the ASINs page can focus a row. */
 export const FOCUS_ASIN_EVENT = "asinflow:focus-asin";

@@ -43,7 +43,7 @@ function evidenceLine(e: Record<string, any>): string {
   return parts.join(" · ");
 }
 
-function ActionRow({ a }: { a: ListingActionRow }) {
+export function ActionRow({ a }: { a: ListingActionRow }) {
   return (
     <details className="pl-2">
       <summary className="cursor-pointer">

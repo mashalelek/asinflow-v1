@@ -25,7 +25,8 @@ import { useSearch } from "wouter";
 import { loadColumnConfig, type ColumnConfig } from "@/lib/columns";
 import { JobsDialog } from "@/components/jobs-dialog";
 import { useJobs } from "@/hooks/use-jobs";
-import { enqueueRefresh, cancelJob, getJob, runningLabel, queuedLabel, completionText, changeCount, FOCUS_ASIN_EVENT, type Job } from "@/lib/jobs-api";
+import { enqueueRefresh, cancelJob, getJob, runningLabel, queuedLabel, completionText, changeCount, breakerHeldText, FOCUS_ASIN_EVENT, type Job } from "@/lib/jobs-api";
+import { HYGIENE_CHANGED_EVENT } from "@/components/release-confirm";
 import { refreshPlan, queuedJobIdFromMessage, duplicateJobFromMessage, applyStreamedRow } from "@/lib/upload-flow";
 import { rowsToRefresh, mergeRefreshedRows, RowRefresher, staleRowsDue } from "@/lib/row-refresh";
 import { buildFilterChips, addedHiddenReport, type FilterChipKey } from "@/lib/filter-chips";
@@ -899,6 +900,11 @@ export default function Home() {
         ? <ToastAction altText="Show changes" onClick={() => { setJobsInitialId(job.id); setJobsOpen(true); }}>Changes</ToastAction>
         : undefined,
     });
+    // Listing hygiene: a pass that tripped a breaker says so (the amber
+    // Action-required control in the top nav stays until it is released).
+    const held = breakerHeldText(job);
+    if (held) toast({ title: held, description: "Open \"Action required\" in the top bar to review and release." });
+    window.dispatchEvent(new CustomEvent(HYGIENE_CHANGED_EVENT));
     refreshJobRows(job);
     fetchPriceStatus();
   }, [toast, refreshJobRows, fetchPriceStatus]);

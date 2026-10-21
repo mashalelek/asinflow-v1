@@ -2,7 +2,7 @@
 // delete (2026-10-20). CS-ZH3X-SXV9's DELETE read back open (end_at null) for
 // ~5½ min before the 404; a close pass in that window must skip it.
 import { describe, it, expect } from "vitest";
-import { loadSkuFacts, evaluateClose, PENDING_ACTION_MS } from "./listing-hygiene";
+import { loadSkuFacts, evaluateClose, PENDING_ACTION_MS, pendingHolds, type HoldGroup } from "./listing-hygiene";
 import { dbRow, PASS } from "./listing-hygiene.test-fixtures";
 
 const NOW = new Date("2026-10-19T14:00:00Z");
@@ -52,5 +52,28 @@ describe("skip_action_pending across action kinds", () => {
     expect(db.sql()).not.toMatch(/la\.action\s*=/);
     expect(db.sql()).toMatch(/la\.sku = s\.sku AND la\.status = 'accepted'/);
     expect(db.params()).toHaveLength(2);
+  });
+});
+
+// ── "Action required": the pending hold per action (Maria 2026-10-21) ──────
+const grp = (job_id: number, action: "close" | "delete", total: number, open: number, released = false): HoldGroup =>
+  ({ job_id, action, total, open, released, held_at: `2026-10-${String(job_id % 28 + 1).padStart(2, "0")}T05:42:49.000Z` });
+
+describe("pendingHolds — the Action-required indicator's source", () => {
+  it("shows with an unreleased hold", () => {
+    expect(pendingHolds([grp(123, "delete", 162, 162)])).toEqual({ close: null, delete: { job_id: 123, action: "delete", count: 162, held_at: grp(123, "delete", 1, 1).held_at } });
+  });
+  it("clears after release — a release job exists, or every held row carries its release result", () => {
+    expect(pendingHolds([grp(123, "delete", 162, 162, true)]).delete).toBeNull();
+    expect(pendingHolds([grp(123, "delete", 162, 0)]).delete).toBeNull();
+  });
+  it("a newer night's hold supersedes the older one, and a released newer hold never resurfaces the older", () => {
+    expect(pendingHolds([grp(123, "delete", 162, 162), grp(140, "delete", 30, 30)]).delete).toMatchObject({ job_id: 140, count: 30 });
+    expect(pendingHolds([grp(123, "delete", 162, 162), grp(140, "delete", 30, 30, true)]).delete).toBeNull();
+  });
+  it("one pending hold per action, independently", () => {
+    const p = pendingHolds([grp(140, "close", 60, 60), grp(123, "delete", 162, 162, true)]);
+    expect(p.close).toMatchObject({ job_id: 140, count: 60 });
+    expect(p.delete).toBeNull();
   });
 });

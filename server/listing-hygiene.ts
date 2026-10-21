@@ -484,3 +484,53 @@ export async function verifyListingActions(query: QueryLike, since: Date): Promi
   }
   return r;
 }
+
+// ── Pending holds ("Action required", Maria 2026-10-21) ────────────────────
+
+export interface HoldGroup {
+  job_id: number;
+  action: HygieneAction;
+  /** Rows that were ever held in this job (still held, or released). */
+  total: number;
+  /** Still held and not yet released. */
+  open: number;
+  /** A release job for (job, action) is queued, running or done. */
+  released: boolean;
+  held_at: string;
+}
+export interface PendingHold { job_id: number; action: HygieneAction; count: number; held_at: string }
+
+/**
+ * Pure: at most ONE pending hold per action — the newest job that held any
+ * candidates for it. It is pending while it still has open held rows and no
+ * release job; a later night's hold supersedes it (an older hold never
+ * resurfaces, even when the newer one is released).
+ */
+export function pendingHolds(groups: HoldGroup[]): Record<HygieneAction, PendingHold | null> {
+  const out: Record<HygieneAction, PendingHold | null> = { close: null, delete: null };
+  for (const action of ["close", "delete"] as const) {
+    const newest = groups.filter((g) => g.action === action && g.total > 0).sort((a, b) => b.job_id - a.job_id)[0];
+    if (newest && newest.open > 0 && !newest.released) out[action] = { job_id: newest.job_id, action, count: newest.open, held_at: newest.held_at };
+  }
+  return out;
+}
+
+export async function loadHoldGroups(query: QueryLike): Promise<HoldGroup[]> {
+  const r = await query(
+    `SELECT la.job_id, la.action, count(*)::int AS total,
+            count(*) FILTER (WHERE la.status = 'held' AND NOT (la.evidence ? 'release'))::int AS open,
+            min(la.fired_at) AS held_at,
+            EXISTS (SELECT 1 FROM jobs j
+                     WHERE j.params->'listing_hygiene'->>'mode' = 'release'
+                       AND j.params->'listing_hygiene'->>'action' = la.action
+                       AND (j.params->'listing_hygiene'->>'release_of_job')::bigint = la.job_id
+                       AND j.status IN ('queued','running','done')) AS released
+       FROM listing_actions la
+      WHERE la.job_id IS NOT NULL AND (la.status = 'held' OR la.evidence ? 'release')
+      GROUP BY la.job_id, la.action`,
+  );
+  return r.rows.map((x: any) => ({
+    job_id: Number(x.job_id), action: x.action, total: Number(x.total), open: Number(x.open),
+    released: x.released === true, held_at: new Date(x.held_at).toISOString(),
+  }));
+}

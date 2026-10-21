@@ -8,6 +8,7 @@ import {
 import { useDateRange } from "@/contexts/date-range-context";
 import { useAuth } from "@/contexts/auth-context";
 import { DataStudioDatePicker } from "@/components/data-studio-date-picker";
+import { ActionRequired } from "@/components/action-required";
 
 interface NavItem {
   path: string;
@@ -97,6 +98,9 @@ export function TopNav() {
 
       {/* Right side utilities — order: Date Picker | Theme toggle | Settings | User */}
       <div className="ml-auto flex items-center gap-2">
+        {/* Listing hygiene: a held close / delete run, on every page until released. */}
+        {user && <ActionRequired />}
+
         {showDatePicker && (
           <DataStudioDatePicker value={range} onApply={setRange} />
         )}

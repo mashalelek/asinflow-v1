@@ -1,7 +1,7 @@
 // Listing hygiene in the jobs UI (SPEC §11 components 22 / 24, 2026-10-19).
 import { describe, it, expect } from "vitest";
 import {
-  completionText, changeCount, groupListingActions, groupHygieneOutcomes, failedAsinsFromRuns, jobKindLabel, componentLabel,
+  completionText, changeCount, groupListingActions, pendingLabel, breakerHeldText, groupHygieneOutcomes, failedAsinsFromRuns, jobKindLabel, componentLabel,
   type Job, type ComponentRun,
 } from "./jobs-api";
 
@@ -51,5 +51,21 @@ describe("hygiene outcomes", () => {
     expect(jobKindLabel({ ...base, trigger: "manual", components: [22], params: { listing_hygiene: { action: "close", mode: "run", dry_run: true } } })).toBe("manual · close OOS listings (dry run)");
     expect(jobKindLabel({ ...base, trigger: "manual", components: [24], params: { listing_hygiene: { action: "delete", mode: "release", release_of_job: 41 } } })).toBe("manual · delete dead listings (release #41)");
     expect(jobKindLabel({ ...base, trigger: "manual", components: [23], params: { ledger_window: { from: "a", to: "b" } } })).toBe("manual · ledger backfill");
+  });
+});
+
+describe("Action required (Maria 2026-10-21)", () => {
+  const hold = (action: "close" | "delete", count: number) => ({ job_id: 140, action, count, held_at: "2026-10-22T05:42:49Z" });
+  it("label shows while a hold is unreleased; null (indicator hidden) when nothing is pending", () => {
+    expect(pendingLabel({ close: null, delete: hold("delete", 30) })).toBe("Action required: 30 deletes held for review");
+    expect(pendingLabel({ close: hold("close", 1), delete: hold("delete", 30) })).toBe("Action required: 1 close and 30 deletes held for review");
+    expect(pendingLabel({ close: null, delete: null })).toBeNull();
+    expect(pendingLabel(undefined)).toBeNull();
+  });
+  it("breaker toast for a pass that held candidates; none when nothing tripped", () => {
+    const j = (c: any) => ({ ...base, trigger: "scheduled" as const, include_daily: true, summary: { asins: 1, durationMs: 1, flips: [], components: c } });
+    expect(breakerHeldText(j({ "22_close_oos": { held: 60 }, "24_delete_dead": { held: 30 } }))).toBe("Daily pass held 60 closes / 30 deletes — review needed");
+    expect(breakerHeldText(j({ "24_delete_dead": { held: 162, skip_clock: 83 } }))).toBe("Daily pass held 162 deletes — review needed");
+    expect(breakerHeldText(j({ "22_close_oos": { closed: 24 } }))).toBeNull();
   });
 });

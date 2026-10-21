@@ -3,13 +3,14 @@
 //   POST /api/listing-hygiene/run      {action, dryRun}   one-component lane-M job over the scheduled scope
 //   POST /api/listing-hygiene/release  {job_id, action}   re-evaluate that job's held candidates live, fire the ones that still qualify
 //   GET  /api/listing-hygiene/actions  ?job_id=N | ?status=not_effective   listing_actions rows (jobs dialog)
+//   GET  /api/listing-hygiene/pending  the unreleased hold per action ("Action required" indicator)
 // Components 22 and 24 never run in a manual Refresh; these are their only
 // manual triggers (componentsForJob: listed explicitly AND params.listing_hygiene).
 import express, { type Router, type Request, type Response } from "express";
 import pool, { query as defaultQuery } from "./db";
 import { requireRole } from "./auth";
 import { enqueueJob, listActive, laneAhead } from "./scheduler/jobs-repo";
-import { liveGate, type HygieneAction } from "./listing-hygiene";
+import { liveGate, pendingHolds, loadHoldGroups, type HygieneAction } from "./listing-hygiene";
 import type { QueryLike } from "./scheduler/types";
 
 const COMPONENT: Record<HygieneAction, number> = { close: 22, delete: 24 };
@@ -101,6 +102,9 @@ export function createListingHygieneRouter(deps: {
       const out = await inReleaseLock(jobId, action, async (q) => {
         const prior = await existingRelease(jobId, action, q);
         if (prior) return { status: 409, body: { error: "already_released", message: `job #${jobId}'s held ${action}s were already released (job #${prior.id}, ${prior.status})` } };
+        // A later night's hold supersedes this one: only the newest hold per action is releasable.
+        const newer = (await loadHoldGroups(q)).filter((g) => g.action === action && g.total > 0 && g.job_id > jobId).sort((a, b) => b.job_id - a.job_id)[0];
+        if (newer) return { status: 409, body: { error: "superseded", message: `job #${jobId}'s held ${action}s are superseded by job #${newer.job_id}'s hold — review that one` } };
         const n = Number((await q(
           `SELECT count(*)::int AS n FROM listing_actions WHERE job_id = $1 AND action = $2 AND status = 'held' AND NOT (evidence ? 'release')`,
           [jobId, action],
@@ -117,6 +121,14 @@ export function createListingHygieneRouter(deps: {
       res.status(202).json({ ...out.body, ahead: laneAhead((out.body as any).job, await listActive(query)) });
     } catch (err: any) {
       res.status(500).json({ error: "enqueue_failed", message: err?.message ?? String(err) });
+    }
+  });
+
+  router.get("/api/listing-hygiene/pending", async (_req: Request, res: Response) => {
+    try {
+      res.json({ pending: pendingHolds(await loadHoldGroups(query)), live: { close: liveGate("close", env()), delete: liveGate("delete", env()) } });
+    } catch (err: any) {
+      res.status(500).json({ error: "pending_failed", message: err?.message ?? String(err) });
     }
   });
 
