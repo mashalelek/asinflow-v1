@@ -48,3 +48,19 @@ describe("the scheduled pass and the explicit entry points", () => {
     expect(ns(row({ trigger: "manual", include_daily: false, components: [23], params: { ledger_window: { from: "2025-04-01", to: "2026-10-18" } } }))).toEqual([23]);
   });
 });
+
+describe("PO tracking 25 (ingest) / 26 (push) — SPEC §26", () => {
+  const n = (j: JobRow) => componentsForJob(j).map((c) => c.n);
+  it("the 00:00 pass runs 25 then 26, after Sync POs (9); never an hourly pass", () => {
+    const daily = n(row({ trigger: "scheduled", include_daily: true }));
+    expect(daily.indexOf(25)).toBeGreaterThan(daily.indexOf(9));
+    expect(daily.indexOf(26)).toBe(daily.indexOf(25) + 1);
+    const hourly = n(row({ trigger: "scheduled", include_daily: false }));
+    expect(hourly).not.toContain(25);
+    expect(hourly).not.toContain(26);
+  });
+  it("a manual Refresh (even with the daily block) never pushes to Velocity as a side effect", () => {
+    expect(n(row({ trigger: "manual", include_daily: true }))).not.toContain(26);
+    expect(n(row({ trigger: "onboarding", include_daily: true }))).not.toContain(25);
+  });
+});

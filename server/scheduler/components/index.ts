@@ -29,6 +29,8 @@ import { actualFees } from "./21-actual-fees";
 import { closeOos } from "./22-close-oos";
 import { ledger } from "./23-ledger";
 import { deleteDead } from "./24-delete-dead";
+import { poTrackingIngest } from "./25-po-tracking-ingest";
+import { poTrackingPush } from "./26-po-tracking-push";
 import type { ComponentDef } from "../types";
 
 export const COMPONENTS: readonly ComponentDef[] = Object.freeze([
@@ -36,6 +38,7 @@ export const COMPONENTS: readonly ComponentDef[] = Object.freeze([
   poSheet, prices, sellers, cpt, fees, profit, inventory, liveOffer, primarySku,
   suppressions, sales, refunds, actualFees,
   closeOos, ledger, deleteDead,
+  poTrackingIngest, poTrackingPush,
 ]);
 
 // The order is a fact, not a convention: fail loudly at import if it drifts.

@@ -144,6 +144,16 @@ SESSION_SECRET     # Signs the login cookie (SPEC §25). Required by `npm start`
 Full list with purposes: SPEC §24 "Environment variables". `APP_PASSWORD`
 no longer exists.
 
+**PO tracking (SPEC §26):** Gmail is read with the SAME service-account key
+as the Sheets reader (`GOOGLE_CREDENTIALS_PATH`, `asinflow-sheets`) through
+domain-wide delegation — a JWT with `subject = orders@coastalqualitygoods.com`
+(`GMAIL_SUBJECT` overrides), scope `gmail.readonly`. `npm run gmail:check`
+lists the 5 newest subjects (verifies delegation). `ANTHROPIC_API_KEY` is
+optional: without it the AI fallback is off and number-less shipping emails
+queue as `ai_disabled`. `npm run velocity:tracking-probe -- --order <id>
+--carrier <c> --tracking <n[,n]> [--live]` — read-only without `--live`.
+Velocity's PUT takes `trackingNumbers` as plain strings (probe 2026-10-21).
+
 **Auth (SPEC §25):** every `/api` route except `/api/auth/*` and `/health`
 needs a session. First account, once, against an empty `users` table:
 

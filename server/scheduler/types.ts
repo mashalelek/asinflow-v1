@@ -29,7 +29,9 @@ export const ONBOARDING_COMPONENTS: readonly number[] = [2, 3, 4, 5, 6, 7, 8, 10
 
 /**
  * Listing hygiene (SPEC §11, 2026-10-19): components that run ONLY in the
- * scheduled pass — 22 (close, 00:00 since 2026-10-20), 23 (ledger, 00:00) and 24 (delete,
+ * scheduled pass — 22 (close, 00:00 since 2026-10-20), 23 (ledger, 00:00), 24 (delete,
+ * 00:00), and PO tracking 25 (ingest) / 26 (push to Velocity) — SPEC §26; their manual
+ * trigger is POs → Sync tracking, not a job. Below: 24 (delete,
  * 00:00). A Refresh click, an onboarding or a bulk job must never have SC
  * writes as a side effect. A non-scheduled job runs one of them only when it
  * lists it in `components` AND carries that component's own parameters —
@@ -37,11 +39,13 @@ export const ONBOARDING_COMPONENTS: readonly number[] = [2, 3, 4, 5, 6, 7, 8, 10
  * or 24 with `params.listing_hygiene`; the ledger backfill → 23 with
  * `params.ledger_window`).
  */
-export const SCHEDULED_ONLY_COMPONENTS: readonly number[] = [22, 23, 24];
+export const SCHEDULED_ONLY_COMPONENTS: readonly number[] = [22, 23, 24, 25, 26];
 export function explicitlyAuthorized(n: number, params: Record<string, any> | null | undefined): boolean {
   if (n === 23) return params?.ledger_window != null;
   if (n === 22) return params?.listing_hygiene?.action === "close";
   if (n === 24) return params?.listing_hygiene?.action === "delete";
+  // PO tracking has no job entry point — Sync tracking is a direct call.
+  if (n === 25 || n === 26) return false;
   return true;
 }
 export type JobTarget = "main" | "bulk";

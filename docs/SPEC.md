@@ -1377,6 +1377,8 @@ dedup → `submitBulkCsv` → JSON report
 `{sent, alreadyInVelocity, selfPrepExcluded, skips[]}`. `&dryRun=1` does
 everything EXCEPT the POST and reports what would be sent.
 
+(Order creation / quantity changes: never on a schedule — §14 "Velocity
+writes"; tracking-only pushes are the one scheduled write, §26.)
 No cron, no UI button yet — those come only after the first real upload
 succeeds. First-write protocol: a single deliberately-fake row
 (`AF-TEST-001`, obviously-fake item name, qty 1, real ASIN+SKU) round-tripped
@@ -2134,6 +2136,8 @@ the ledger stage is the `refresh_runs.stage` key the component writes.
 | 22 | Close OOS listings (listing hygiene, 2026-10-18; daily since 2026-10-20) | daily | CALL-12 `patchListingsItem`, per SKU | `22_close_oos` | every SKU 15/16 observed; **00:00 pass only**, before 24 |
 | 23 | Inventory Ledger (`sku_ledger_state`) | daily | CALL-13 `GET_LEDGER_SUMMARY_VIEW_DATA` (DAILY, COUNTRY); `params.ledger_window` for the backfill | `23_ledger` | account |
 | 24 | Delete long-dead listings (listing hygiene) | daily | CALL-14 `deleteListingsItem`, per SKU + Velocity `/inbound` + `/inventory` | `24_delete_dead` | every closed SKU; **00:00 pass only** |
+| 25 | PO tracking ingest (§26, 2026-10-21) | daily | Gmail API (orders@, DWD, `gmail.readonly`) + matching | `25_po_tracking_ingest` | the mailbox since the watermark; **00:00 pass only**, after 9 |
+| 26 | PO tracking push (§26) | daily | Velocity `GET /inbound` + known orders, `GET` / `PUT /inbound/:order_id` | `26_po_tracking_push` | matched tracking rows; **00:00 pass only**, right after 25 |
 
 Dependencies the order encodes: 10 before 13 (fees need the fresh price)
 (9 before 15 was retired 2026-10-17 — the inventory snapshot's ordered_qty
@@ -2560,8 +2564,8 @@ labels ("Never synced" / "Older than" / "Within last").
 **Future (not this patch):** ANY_OFFER_CHANGED push notifications belong
 with the Repricer module; the consumer would write through the same
 `writePrice` and the pull path would narrow to no-live-offer ASINs. Keepa
-components land as 25+ when their cadence is decided (22–24 are listing
-hygiene, 2026-10-18).
+components land as 27+ when their cadence is decided (22–24 are listing
+hygiene, 2026-10-18; 25–26 PO tracking, 2026-10-21).
 
 ### Scheduled passes (`ENABLE_CRONS`)
 
@@ -2787,6 +2791,14 @@ that writes it:
 
 When a code path needs to touch a field outside its ownership, that's a red
 flag. Either the architecture is wrong, or the workflow is misnamed.
+
+**Velocity writes (2026-10-21, PO tracking D1).** Creating Velocity orders
+and changing their quantities stay **manual-only** (Upload to Velocity, the
+reconcile execute — never on a schedule). The one exception is
+**tracking-only** pushes (§26): components 25–26 in the 00:00 pass (gated
+by `ENABLE_CRONS`) and the Sync tracking button add tracking numbers to
+existing inbound orders — never an order, never a quantity, item or
+status.
 
 ### Analyze path constraints
 
