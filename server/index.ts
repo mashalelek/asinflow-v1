@@ -3,6 +3,7 @@ import express, { type Request, Response, NextFunction } from "express";
 import { registerRoutes, getOnboardScDiscoveries, getRunSheetsSync, getOnboardSalesAsins } from "./routes";
 import { createJobsRouter } from "./scheduler/routes";
 import { createListingHygieneRouter } from "./listing-hygiene-routes";
+import { requestLogLine } from "./request-log";
 import { startRunner, setRunnerLogger } from "./scheduler/runner";
 import { startSchedule, setScheduleLogger, nextPassAfter } from "./scheduler/schedule";
 import { serveStatic } from "./static";
@@ -92,15 +93,9 @@ app.use((req, res, next) => {
   };
 
   res.on("finish", () => {
-    const duration = Date.now() - start;
-    if (path.startsWith("/api")) {
-      let logLine = `${req.method} ${path} ${res.statusCode} in ${duration}ms`;
-      if (capturedJsonResponse) {
-        logLine += ` :: ${JSON.stringify(capturedJsonResponse)}`;
-      }
-
-      log(logLine);
-    }
+    // Never the response body (server/request-log.ts): only error / message
+    // strings on a failure.
+    if (path.startsWith("/api")) log(requestLogLine(req.method, path, res.statusCode, Date.now() - start, capturedJsonResponse));
   });
 
   next();
