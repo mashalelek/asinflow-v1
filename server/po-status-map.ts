@@ -20,6 +20,16 @@ export const ACTION_ITEMS = [
 ] as const;
 export type ActionItem = (typeof ACTION_ITEMS)[number];
 
+/**
+ * Auto-managed action items (PO tracking, SPEC §26 / §22, 2026-10-21): never
+ * stored on lines (not in the CHECK), derived from po_tracking — "Review
+ * Velocity" while any of the PO's tracking rows has a review reason and has
+ * not been cleared by hand. Shown after the manual items.
+ */
+export const REVIEW_VELOCITY = "Review Velocity";
+export const AUTO_ACTION_ITEMS = [REVIEW_VELOCITY] as const;
+export const DISPLAY_ACTION_ITEMS: readonly string[] = [...ACTION_ITEMS, ...AUTO_ACTION_ITEMS];
+
 export function isActionItem(s: string): s is ActionItem {
   return (ACTION_ITEMS as readonly string[]).includes(s);
 }
@@ -31,6 +41,9 @@ export function normalizeActionItems(input: unknown): { ok: true; value: ActionI
   for (const x of input) {
     const s = String(x ?? "").trim();
     if (!s) continue;
+    // Auto items (Review Velocity) are derived, never stored: an editor that
+    // echoes the displayed union may send one — drop it, do not refuse.
+    if ((AUTO_ACTION_ITEMS as readonly string[]).includes(s)) continue;
     if (!isActionItem(s)) return { ok: false, error: `unknown action item: ${s}` };
     set.add(s);
   }

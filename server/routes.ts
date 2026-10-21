@@ -10,8 +10,8 @@ import { runAuraSyncChain } from "./aura-sync-chain";
 import { probeGatingForAsins } from "./gating-probe";
 import { loadPoAsinRows, normalizeLineQty } from "./po-queries";
 import { evaluateAutoClose, setPoClosedManually, parseQtyInput, MANUAL_QTY_COLUMNS, type ManualQtyColumn } from "./po-close";
-import { ACTION_ITEMS, normalizeActionItems } from "./po-status-map";
-import { asinWriteThrough, unionActionItems, PO_ACTION_ITEMS_SQL } from "./po-action-items";
+import { ACTION_ITEMS, DISPLAY_ACTION_ITEMS, REVIEW_VELOCITY, normalizeActionItems } from "./po-status-map";
+import { asinWriteThrough, unionActionItems, PO_ACTION_ITEMS_SQL, REVIEW_VELOCITY_EXISTS_SQL, REVIEW_VELOCITY_REASONS_SQL } from "./po-action-items";
 import { editPoHeader, editLine, addLine, removeLine, editAsinRow, loadPoHistory, logEdits, changedFields, asLogText, EditError, type EditResult } from "./po-edit";
 import { createPoFromForm, lookupAsins } from "./po-create";
 import { loadPoGuards, deletePo, cancelPo, assertAsinRowCancelable, reassignShipment } from "./po-guards";
@@ -4319,8 +4319,14 @@ export async function registerRoutes(
     // commas). Both facets accept comma-separated multi-selects: OR within a
     // facet, AND across facets.
     if (action) {
-      const items = action.split(",").map((x) => x.trim()).filter((x) => (ACTION_ITEMS as readonly string[]).includes(x));
-      if (items.length > 0) { params.push(items); conds.push(`EXISTS (SELECT 1 FROM po_line_items l WHERE l.po_id = p.id AND l.action_items && $${params.length}::text[])`); }
+      const wanted = action.split(",").map((x) => x.trim());
+      const items = wanted.filter((x) => (ACTION_ITEMS as readonly string[]).includes(x));
+      // "Review Velocity" is derived (SPEC §26) — OR'd in from po_tracking.
+      const review = wanted.includes(REVIEW_VELOCITY);
+      const any: string[] = [];
+      if (items.length > 0) { params.push(items); any.push(`EXISTS (SELECT 1 FROM po_line_items l WHERE l.po_id = p.id AND l.action_items && $${params.length}::text[])`); }
+      if (review) any.push(REVIEW_VELOCITY_EXISTS_SQL);
+      if (any.length > 0) conds.push(`(${any.join(" OR ")})`);
     }
     if (supplier) {
       const list = supplier.split(",").map((x) => x.trim()).filter(Boolean);
@@ -4337,6 +4343,7 @@ export async function registerRoutes(
       const rows = (await query(
         `SELECT p.*,
                 ${PO_ACTION_ITEMS_SQL} AS line_action_items,
+                ${REVIEW_VELOCITY_REASONS_SQL} AS review_velocity_reasons,
                 (SELECT COUNT(*)::int FROM po_asins a WHERE a.po_id = p.id) AS asin_count,
                 (SELECT COALESCE(SUM(a.qty), 0)::float8 FROM po_asins a WHERE a.po_id = p.id) AS units_ordered,
                 (SELECT SUM(l.qty_received)::float8 FROM po_line_items l WHERE l.po_id = p.id) AS units_received,
@@ -4367,7 +4374,7 @@ export async function registerRoutes(
       const unmatchedCount = (await query(
         `SELECT (SELECT COUNT(*)::int FROM shipment_unmatched WHERE resolved_at IS NULL) + (SELECT COUNT(*)::int FROM velocity_shipments WHERE sc_match = 'ambiguous') AS n`,
       )).rows[0].n;
-      res.json({ pos: rows, total, page, pageSize: PAGE_SIZE, suppliers, actionItems: ACTION_ITEMS, closed, unmatchedCount });
+      res.json({ pos: rows, total, page, pageSize: PAGE_SIZE, suppliers, actionItems: DISPLAY_ACTION_ITEMS, closed, unmatchedCount });
     } catch (err: any) {
       res.status(500).json({ message: err.message });
     }
@@ -4387,7 +4394,7 @@ export async function registerRoutes(
     // (that 500'd the Unmatched panel, found 2026-10-18).
     if (!/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(id)) { next(); return; }
     try {
-      const poRes = await query(`SELECT p.*, ${PO_ACTION_ITEMS_SQL} AS line_action_items FROM purchase_orders p WHERE p.id = $1`, [id]);
+      const poRes = await query(`SELECT p.*, ${PO_ACTION_ITEMS_SQL} AS line_action_items, ${REVIEW_VELOCITY_REASONS_SQL} AS review_velocity_reasons FROM purchase_orders p WHERE p.id = $1`, [id]);
       if (poRes.rows.length === 0) { res.status(404).json({ message: "PO not found" }); return; }
       const po = poRes.rows[0];
       po.action_items = unionActionItems([po.line_action_items]); delete po.line_action_items;

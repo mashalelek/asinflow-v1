@@ -62,7 +62,8 @@ describe("consumers switched (§6.3)", () => {
     // Row-level Status (2026-10-17): the filter is any-of over the PO's LINE action items.
     expect(list).toMatch(/l\.action_items && \$\$\{params\.length\}::text\[\]/);
     expect(list).not.toMatch(/p\.status ILIKE|string_to_array\(status/);
-    expect(list).toMatch(/actionItems: ACTION_ITEMS/);
+    // The filter options: the stored items + the derived "Review Velocity" (SPEC §26).
+    expect(list).toMatch(/actionItems: DISPLAY_ACTION_ITEMS/);
     const block = routes.slice(routes.indexOf("// === PO status + quantities"), routes.indexOf("// === Bulk Profit Calculator"));
     expect(block).toMatch(/app\.patch\("\/api\/pos\/asin-rows\/:id\/action-items"/);
     expect(block).toMatch(/app\.patch\("\/api\/pos\/lines\/:id\/action-items"/);

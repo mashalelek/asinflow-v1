@@ -4,6 +4,8 @@
 //   POST /api/tracking/domain-map       {domain, supplier}  map a sender domain once, then re-match
 //   POST /api/tracking/:id/attach       {po_id}  attach to a PO by hand (source manual — the sync never moves it)
 //   POST /api/tracking/:id/dismiss      take a row out of the queue
+//   POST /api/pos/:id/review-velocity/clear   manual clear of "Review Velocity": suppresses the PO's
+//                                       tracking rows that exist NOW; a later row may raise it again (§8)
 import express, { type Router, type Request, type Response } from "express";
 import { query as defaultQuery } from "./db";
 import { matchTrackingRows, setDomainMapEntry } from "./tracking-match";
@@ -68,6 +70,19 @@ export function createTrackingRouter(deps: { query?: QueryLike } = {}): Router {
       const r = await query(`UPDATE po_tracking SET match_reason = 'dismissed', updated_at = NOW() WHERE id = $1 AND status = 'unmatched' RETURNING id`, [id]);
       if (r.rows.length === 0) { res.status(404).json({ error: "not_found" }); return; }
       res.json({ ok: true });
+    } catch (err) { fail(res, err); }
+  });
+
+  router.post("/api/pos/:id/review-velocity/clear", async (req: Request, res: Response) => {
+    const poId = String(req.params.id ?? "");
+    if (!/^[0-9a-f-]{36}$/i.test(poId)) { res.status(400).json({ error: "invalid_id" }); return; }
+    try {
+      const r = await query(
+        `UPDATE po_tracking SET suppressed_at = NOW(), updated_at = NOW()
+          WHERE po_id = $1 AND review_reason IS NOT NULL AND suppressed_at IS NULL RETURNING id`,
+        [poId],
+      );
+      res.json({ ok: true, suppressed: r.rows.length });
     } catch (err) { fail(res, err); }
   });
 

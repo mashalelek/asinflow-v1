@@ -5268,7 +5268,9 @@ describes the 2026-10-16 PO-level model it replaces.
 `purchase_orders.action_items text[]`, multi-select, values and display
 order: **Need to Return · Missing / Damaged from Supplier · Confirm
 Refund / Replacement · ATTN: Velocity · See Comments · SHIP · Received -
-FBM** (the last two only meaningful when the PO ships from the house).
+FBM** (the last two only meaningful when the PO ships from the house). **Review Velocity** (2026-10-21) is
+auto-managed and appears after them — derived from PO tracking, never
+stored or hand-set (§26).
 Rendered as tinted chips in the (renamed) **Action Items** column with an
 inline multi-select editor on the POs table and on PO Details; the list
 filter is any-of over them (`action=`), beside the Open/Closed filter.
@@ -6353,3 +6355,35 @@ Settings: `tracking.velocity_street` ("805 grandy"),
   /api/tracking/domain-map {domain, supplier}` (supplier must be a known PO
   supplier; null removes), `POST /api/tracking/:id/attach {po_id}` (manual —
   not for placeholders), `POST /api/tracking/:id/dismiss`.
+
+### Routing rules and "Review Velocity" (`server/tracking-route-rules.ts`)
+
+Per matched row, on every run (the push component evaluates it — it is the
+one that reads Velocity's Inbound): **in Velocity** = at least one
+`GET /inbound` order whose `normKey(order_number)` = the PO's order_id,
+`status = inbound`, `unit_status` pending / partially_received.
+
+| PO in Velocity | email ship-to | `ships_to` | result |
+|---|---|---|---|
+| yes | none, or agrees with `ships_to` | — | push |
+| yes | disagrees | — | push + review "address mismatch" |
+| no | home street | home | `held`, no review |
+| no | none / Velocity street | any | review "not in Velocity" |
+| no | any | velocity | review "not in Velocity" |
+| no | unknown street | any | review "unknown address" |
+
+A PO fully canceled or returned in AF → review "shipped but canceled",
+never pushed. A failed push → `push_failed`, review = the Velocity error.
+When several apply every reason is kept (`review_reason`, "; "-joined).
+
+**"Review Velocity"** is an **auto-managed** action item: derived, never
+stored on lines (not in the CHECK list; the editors drop it if echoed). The
+PO's union (`PO_ACTION_ITEMS_SQL`) includes it while any of the PO's
+tracking rows has a `review_reason` and no `suppressed_at`, so the POs
+column, PO Details, the `action=` filter (OR'd in) and the auto-close rule
+all see it — an open review keeps the PO from auto-closing. The reasons
+ride the list / detail payload as `review_velocity_reasons` (the hover).
+It clears itself when the condition goes away (the next evaluation nulls
+`review_reason`). **Manual clear** — `POST /api/pos/:id/review-velocity/clear`
+— sets `suppressed_at` on the rows that exist at that moment only; a new
+tracking row for the PO re-evaluates and may raise it again.

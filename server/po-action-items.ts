@@ -3,13 +3,13 @@
 // ASIN row shows the union of its lines; the PO the union of all its lines.
 // Setting an item on an ASIN writes it to ALL its lines; removing it removes
 // it from all its lines; a product edit touches that line only. Pure.
-import { ACTION_ITEMS } from "./po-status-map";
+import { DISPLAY_ACTION_ITEMS, REVIEW_VELOCITY } from "./po-status-map";
 
 /** Display-ordered union of several action-item arrays. */
 export function unionActionItems(lists: ReadonlyArray<readonly string[] | null | undefined>): string[] {
   const set = new Set<string>();
   for (const l of lists) for (const x of l ?? []) set.add(x);
-  return (ACTION_ITEMS as readonly string[]).filter((a) => set.has(a));
+  return DISPLAY_ACTION_ITEMS.filter((a) => set.has(a));
 }
 
 /**
@@ -21,7 +21,8 @@ export function unionActionItems(lists: ReadonlyArray<readonly string[] | null |
  */
 export function asinWriteThrough(lines: Array<{ id: string; action_items: readonly string[] | null }>, desired: readonly string[]): Map<string, string[]> {
   const current = new Set(unionActionItems(lines.map((l) => l.action_items)));
-  const want = new Set(desired);
+  // Auto items are derived, never written to lines.
+  const want = new Set(desired.filter((x) => x !== REVIEW_VELOCITY));
   const added = Array.from(want).filter((x) => !current.has(x));
   const removed = new Set(Array.from(current).filter((x) => !want.has(x)));
   const out = new Map<string, string[]>();
@@ -35,4 +36,14 @@ export function asinWriteThrough(lines: Array<{ id: string; action_items: readon
 
 /** SQL: the union of line action items for an ASIN row (alias pa) / a PO (alias p). Unordered; order with unionActionItems. */
 export const ASIN_ACTION_ITEMS_SQL = `ARRAY(SELECT DISTINCT x FROM po_line_items l, unnest(l.action_items) x WHERE l.po_asin_id = pa.id)`;
-export const PO_ACTION_ITEMS_SQL = `ARRAY(SELECT DISTINCT x FROM po_line_items l, unnest(l.action_items) x WHERE l.po_id = p.id)`;
+/**
+ * "Review Velocity" (SPEC §26): while a tracking row of the PO has a review
+ * reason and was not cleared by hand. Rides the PO union, so the POs column,
+ * PO Details and the auto-close rule (no action items → may close) all see it.
+ */
+export const REVIEW_VELOCITY_EXISTS_SQL = `EXISTS (SELECT 1 FROM po_tracking t WHERE t.po_id = p.id AND t.review_reason IS NOT NULL AND t.suppressed_at IS NULL)`;
+export const PO_ACTION_ITEMS_SQL = `ARRAY(SELECT DISTINCT x FROM po_line_items l, unnest(l.action_items) x WHERE l.po_id = p.id
+  UNION SELECT '${REVIEW_VELOCITY}' WHERE ${REVIEW_VELOCITY_EXISTS_SQL})`;
+/** The open review reasons of a PO (alias p), for the Action Items tooltip. */
+export const REVIEW_VELOCITY_REASONS_SQL = `ARRAY(SELECT DISTINCT r FROM po_tracking t, unnest(string_to_array(t.review_reason, '; ')) r
+  WHERE t.po_id = p.id AND t.review_reason IS NOT NULL AND t.suppressed_at IS NULL)`;

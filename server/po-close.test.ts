@@ -34,7 +34,8 @@ function fakePo(state: { closed_at: Date | null; closed_by: string | null; actio
   const query: QueryLike = async (sql, params) => {
     const s = sql.replace(/\s+/g, " ").trim();
     // Row-level Status (2026-10-17): (b) reads the union of the PO's line action items.
-    if (s.startsWith("SELECT p.closed_at, p.closed_by, ARRAY(SELECT DISTINCT x FROM po_line_items l, unnest(l.action_items) x WHERE l.po_id = p.id) AS action_items FROM purchase_orders p")) return { rows: [state], rowCount: 1 };
+    // PO_ACTION_ITEMS_SQL (the line union + the derived "Review Velocity", SPEC §26).
+    if (s.startsWith("SELECT p.closed_at, p.closed_by, ARRAY(SELECT DISTINCT x FROM po_line_items l, unnest(l.action_items) x WHERE l.po_id = p.id") && s.includes("AS action_items FROM purchase_orders p")) return { rows: [state], rowCount: 1 };
     if (s.startsWith("SELECT pa.*")) return { rows, rowCount: rows.length };
     if (s.startsWith("UPDATE purchase_orders SET closed_at = NOW(), closed_by = 'auto'")) { writes.push("close:auto"); state.closed_at = new Date(); state.closed_by = "auto"; return { rows: [], rowCount: 1 }; }
     if (s.startsWith("UPDATE purchase_orders SET closed_at = NULL, closed_by = NULL") && s.includes("closed_by = 'auto'")) { writes.push("reopen:auto"); state.closed_at = null; state.closed_by = null; return { rows: [], rowCount: 1 }; }
