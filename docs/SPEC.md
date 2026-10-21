@@ -6417,7 +6417,14 @@ quantity, item or status; nothing but carrier + tracking leaves AF.
 - **Dry run** (`POST /api/tracking/sync {dryRun: true}`): reads Gmail and
   Velocity, writes nothing; per PO the target orders, numbers to add,
   numbers already present.
-- **Element shape** of `trackingNumbers` in the PUT: PENDING the
-  commit-5 probe (`npm run velocity:tracking-probe -- --order <id>
-  --carrier <c> --tracking <n> [--live]`); the push sends objects
-  `{carrier, tracking_number}` until it is recorded here.
+- **Element shape** of `trackingNumbers` in the PUT: **plain strings**.
+  Probe 2026-10-21 (`npm run velocity:tracking-probe`, order
+  `be85fad3-68fe-4e25-aeeb-4d745f4c8f40`, PO 4798028553): an object
+  element `{carrier, tracking_number}` is refused — HTTP 400 "unhashable
+  type: 'dict'", nothing written; strings land, and GET returns them as
+  `[{tracking_number}]` with no carrier. Existing GET objects are re-sent
+  as their `tracking_number` strings. Velocity therefore keeps no carrier
+  for pushed numbers; `tracking.carrier_map` stays for display only. The
+  probe pushed the §10 fix: both UPS packages of PO 4800667218's email
+  (1ZE3652C0344289436, 1ZXH28660311288515) onto 4798028553's order; no
+  other field changed.

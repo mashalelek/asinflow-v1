@@ -3,7 +3,7 @@ import { describe, it, expect, afterEach } from "vitest";
 import { indexInbound, buildTrackingPutBody, pushTracking, trackingNumbersOf, setTrackingElementShape, velocityDate, type VelocityDeps } from "./tracking-push";
 
 const ord = (o: any) => ({ status: "inbound", unit_status: "pending", sold_as: "multi-pack", units_per_pack: 4, quantity: 20, date: "10/09/2026", retailer: "macys.com", item_name: "Frango", asin: "B081S8MTJ5", amazon_sku: "BC-DO62-O14S", fulfillment_type: "fba", trackings: [], ...o });
-afterEach(() => setTrackingElementShape("object"));
+afterEach(() => setTrackingElementShape("string"));
 
 describe("indexInbound", () => {
   it("only inbound + pending / partially_received; trimmed order numbers; bundle parents through their children", () => {
@@ -19,11 +19,16 @@ describe("indexInbound", () => {
 });
 
 describe("buildTrackingPutBody — echo-merge", () => {
-  it("echoes every field incl. quantity (PUT is full-replace), appends only missing numbers, never removes", () => {
+  it("object shape (refused by Velocity — kept only as the probe's first try): carrier + number", () => {
+    setTrackingElementShape("object");
+    const b = buildTrackingPutBody(ord({ order_id: "a", trackings: [] }) as any, [{ carrier: "UPS", tracking_number: "1Z1" }]);
+    expect(b.trackingNumbers).toEqual([{ carrier: "UPS", tracking_number: "1Z1" }]);
+  });
+  it("echoes every field incl. quantity (PUT is full-replace), appends only missing numbers, never removes; strings by default (probe 2026-10-21)", () => {
     const cur = ord({ order_id: "a", order_number: "4798028553", trackings: [{ carrier: "FedEx", tracking_number: "875279827111", tracking_status: null }] });
     const b = buildTrackingPutBody(cur as any, [{ carrier: "UPS", tracking_number: "1ZE3652C0344289436" }, { carrier: "FedEx", tracking_number: "875279827111" }]);
     expect(b).toMatchObject({ date: "10/09/2026", retailer: "macys.com", orderNumber: "4798028553", itemName: "Frango", asin: "B081S8MTJ5", amazonSKU: "BC-DO62-O14S", sold_as: "multi-pack", units_per_pack: 4, quantity: 20, fulfilledBy: "fba" });
-    expect(b.trackingNumbers).toEqual([{ carrier: "FedEx", tracking_number: "875279827111" }, { carrier: "UPS", tracking_number: "1ZE3652C0344289436" }]);
+    expect(b.trackingNumbers).toEqual(["875279827111", "1ZE3652C0344289436"]);
     expect(JSON.stringify(b)).not.toMatch(/cogs|unit_cost|list_price|listPrice/);
   });
   it("string shape (if the probe says so) sends plain numbers, the existing ones too", () => {
@@ -58,7 +63,7 @@ describe("pushTracking", () => {
     const r = await pushTracking({ query: w.query as any, deps: w.deps });
     expect(w.puts.map((p) => p.id)).toEqual(["v1", "v2"]);
     expect(w.gets).toEqual(["v1", "v2"]);
-    expect(w.puts[0].body.trackingNumbers).toEqual([{ carrier: "UPS", tracking_number: "1ZE3652C0344289436" }]);
+    expect(w.puts[0].body.trackingNumbers).toEqual(["1ZE3652C0344289436"]);
     expect(r).toMatchObject({ pushed: 1, puts: 2 });
     expect(w.updates[0].slice(1, 5)).toEqual(["pushed", null, null, ["v1", "v2"]]);
   });

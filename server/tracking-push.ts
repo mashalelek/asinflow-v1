@@ -25,13 +25,15 @@ export const CARRIER_MAP_KEY = "tracking.carrier_map";
 const INBOUND_UNIT_STATUSES = new Set(["pending", "partially_received"]);
 
 /**
- * The element shape PUT /inbound/:id accepts in trackingNumbers. GET returns
- * objects {carrier, tracking_number, tracking_status}; the PUT shape is
- * settled by the commit-5 probe (npm run velocity:tracking-probe) and
- * recorded in SPEC §26.
+ * The element shape PUT /inbound/:id accepts in trackingNumbers — PLAIN
+ * STRINGS. Settled by the commit-5 probe, 2026-10-21, on order be85fad3…
+ * (PO 4798028553): an object element {carrier, tracking_number} is refused
+ * with HTTP 400 "unhashable type: 'dict'" (nothing written); strings land and
+ * GET returns them as [{tracking_number}] — Velocity stores no carrier for
+ * them. Existing GET objects are re-sent as their tracking_number strings.
  */
 export type TrackingElementShape = "object" | "string";
-export let TRACKING_ELEMENT_SHAPE: TrackingElementShape = "object";
+export let TRACKING_ELEMENT_SHAPE: TrackingElementShape = "string";
 
 export interface VelocityDeps {
   list: () => Promise<VelocityInboundOrder[]>;
