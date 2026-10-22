@@ -47,7 +47,10 @@ export function normalizeStreet(s: string): string | null {
 }
 
 const STREET = /\b(\d{1,6})\s+([A-Za-z][A-Za-z'-]*)(?:\s+[A-Za-z][A-Za-z'-]*){0,2}\s+(Ave|Avenue|St|Street|Rd|Road|Dr|Drive|Ln|Lane|Blvd|Boulevard|Way|Ct|Court|Pl|Place|Cir|Circle|Pkwy|Parkway|Hwy|Highway|Ter|Terrace|Trl|Trail|Loop|Run|Pike|Crest|Row)\b\.?/i;
-const SHIP_TO_LABEL = /(deliver(?:s|y|ing)?\s*(?:to|address)|ship(?:ping)?\s*(?:to|address)|shipped\s+to|ship-to|shipping\s+information|delivery\s+address)/gi;
+// A bare "Delivery" heading on its own line also counts (Walmart: "Delivery ⏎
+// Arrives Thu, Sep 3 ⏎ 805 Grandy Ave…") — own line only, so "Delivery
+// method: Standard" / "delivery date" never match.
+const SHIP_TO_LABEL = /(deliver(?:s|y|ing)?\s*(?:to|address)|ship(?:ping)?\s*(?:to|address)|shipped\s+to|ship-to|shipping\s+information|delivery\s+address|^[ \t]*delivery[ \t]*$)/gim;
 
 export function extractShipTo(text: string): string | null {
   for (const m of Array.from(text.matchAll(SHIP_TO_LABEL))) {

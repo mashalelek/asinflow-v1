@@ -68,6 +68,15 @@ describe("tracking parser on mailbox fixtures", () => {
     expect(p.senderDomain).toBe("t.kohls.com");
     expect(rowsFromEmail({ id: "k", threadId: null, date: new Date(m.date), subject: m.subject }, p)).toEqual([]);
   });
+  it("Bath & Body Works (self-prep): the Ship To block parses as the home street", () => {
+    const p = parse("bathandbodyworks-home-ship-to");
+    expect(p.shipToStreet).toBe("65 rivercrest");
+    expect(sh("bathandbodyworks-home-ship-to")).toEqual(["USPS:9339812091092559280522"]);
+  });
+  it("Walmart: a bare 'Delivery' heading line is a ship-to label; 'Delivery method' alone is not", () => {
+    expect(extractShipTo("What to expect\nDelivery\n \n \nArrives Thu, Sep 3\n \n805 Grandy Ave, La Grande, OR, 97850, USA\n")).toBe("805 grandy");
+    expect(extractShipTo("Delivery method: Standard\n151 West 34th Street, New York")).toBeNull();
+  });
   it("a promo yields no rows", () => {
     const m = fx("promo-not-shipping");
     expect(rowsFromEmail({ id: "g", threadId: null, date: new Date(m.date), subject: m.subject }, parseTrackingEmail(m))).toEqual([]);
