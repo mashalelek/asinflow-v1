@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { readFileSync } from "fs";
+import { readFileSync, existsSync } from "fs";
 import { resolve } from "path";
 import { buildFilterChips } from "./filter-chips";
 
@@ -19,14 +19,19 @@ describe("active-filter chips (2026-10-18)", () => {
     expect(chips.map((c) => c.label)).toEqual(["Tile: Profitable", "Uncalculated only", 'Search: "tetley"', "Gated: hidden", "Meltable: hidden", "ROI: > 20", "Supplier: any of: walmart.com"]);
     expect(buildFilterChips({ ...base, searchQuery: "x", selectedCount: 3 }, label, value).map((c) => c.key)).toEqual(["selection"]);
   });
-  it("the ASINs page renders the bar above the table with a per-chip clear and Clear filters — no hidden count (removed 2026-10-22)", () => {
+  it("no chips row above the ASINs table (removed 2026-10-22) — every active filter lives in the Active filters panel: the pill counts all of them, each is removable, Clear All / ✕ clear all", () => {
     const home = readFileSync(resolve(__dirname, "../pages/home.tsx"), "utf8");
-    expect(home).toMatch(/<FilterChipsBar chips=\{filterChips\} onClear=\{clearFilterChip\} onClearAll=\{clearAllFilters\} \/>/);
-    expect(home).not.toMatch(/hiddenByFilters/);
+    expect(home).not.toMatch(/FilterChipsBar|filter-chips-bar|hidden by filters/);
+    expect(existsSync(resolve(__dirname, "../components/filter-chips-bar.tsx"))).toBe(false);
+    expect(home).toMatch(/const activeFilterCount = filterChips\.length;/);
+    expect(home).toMatch(/otherFilters=\{otherFilterChips\}/);
+    expect(home).toMatch(/onRemoveOther=\{\(key\) => clearFilterChip\(key as FilterChipKey\)\}/);
+    expect(home).toMatch(/onClearAll=\{clearAllFilters\}/);
+    expect(home).toMatch(/onClick=\{clearAllFilters\}/);
     expect(home).toMatch(/else if \(key === "gated"\) \{ setShowGated\(true\); saveShowGated\(true\); \}/);
-    const bar = readFileSync(resolve(__dirname, "../components/filter-chips-bar.tsx"), "utf8");
-    expect(bar).not.toMatch(/hidden by filters|hiddenCount/);
-    expect(bar).toMatch(/>Clear filters</);
+    const modal = readFileSync(resolve(__dirname, "../components/active-filters-modal.tsx"), "utf8");
+    expect(modal).toMatch(/onRemoveOther\?\.\(f\.key\)/);
+    expect(modal).toMatch(/>Clear All</);
   });
 });
 

@@ -30,7 +30,6 @@ import { HYGIENE_CHANGED_EVENT } from "@/components/release-confirm";
 import { refreshPlan, queuedJobIdFromMessage, duplicateJobFromMessage, applyStreamedRow } from "@/lib/upload-flow";
 import { rowsToRefresh, mergeRefreshedRows, RowRefresher, staleRowsDue } from "@/lib/row-refresh";
 import { buildFilterChips, addedHiddenReport, type FilterChipKey } from "@/lib/filter-chips";
-import { FilterChipsBar } from "@/components/filter-chips-bar";
 import { formatFilterValue } from "@/components/active-filters-modal";
 import { ALL_COLUMNS as ALL_COLUMN_DEFS } from "@shared/schema";
 import { ToastAction } from "@/components/ui/toast";
@@ -64,7 +63,7 @@ import { type ColFilter, type FilterMap, matchesFilters } from "@/components/col
 import { VisibilityToggles, loadShowGated, saveShowGated, loadShowMeltable, saveShowMeltable, loadShowParked, saveShowParked, loadShowDead, saveShowDead } from "@/components/visibility-toggles";
 import { getEstimatedProfit } from "@/lib/profit";
 import { isProfitable, isReplens } from "@shared/profitability";
-import { ActiveFiltersModal, getActiveFilterCount } from "@/components/active-filters-modal";
+import { ActiveFiltersModal } from "@/components/active-filters-modal";
 import { Filter, Loader2 } from "lucide-react";
 
 const DATE_PREFS_KEY = "fba-date-prefs";
@@ -1595,8 +1594,6 @@ export default function Home() {
     setSelectedSet(new Set(paginatedResults.map((r) => r.asin)));
   }, [paginatedResults]);
 
-  const activeFilterCount = getActiveFilterCount(colFilters, searchQuery, selectedSearchAsins.size) + (filterUncalculated ? 1 : 0);
-
   function clearSearchFilters() {
     setSearchQuery("");
     setSelectedSearchAsins(new Set());
@@ -1604,14 +1601,20 @@ export default function Home() {
     setFilterUncalculated(false);
   }
 
-  // Active filters, always visible (2026-10-18): a chip per filter that can hide a
-  // loaded ASIN — the visibility toggles included — and how many rows they hide.
+  // Every active filter that can hide a loaded ASIN — the visibility toggles
+  // included (2026-10-18: a saved "hide gated" hid new leads with no sign of it).
+  // Since 2026-10-22 they live in the Active filters panel only (the chips row
+  // above the table is gone): the toolbar pill counts them all, the panel lists
+  // each with its own ×, and Clear All / the pill's ✕ clear every one.
   const colLabelById = useMemo(() => new Map(ALL_COLUMN_DEFS.map((c) => [c.id as string, c.label])), []);
   const filterChips = useMemo(() => buildFilterChips(
     { activeFilter, filterUncalculated, searchQuery, selectedCount: selectedSearchAsins.size, showGated, showMeltable, colFilters, revealedCount: results.filter((r) => revealAsins.has(r.asin.toUpperCase())).length },
     (id) => colLabelById.get(id) ?? id,
     (id) => (colFilters[id] ? formatFilterValue(colFilters[id]) : ""),
   ), [activeFilter, filterUncalculated, searchQuery, selectedSearchAsins, showGated, showMeltable, colFilters, colLabelById, revealAsins, results]);
+  const activeFilterCount = filterChips.length;
+  // The panel's own groups already list column filters and search / selection.
+  const otherFilterChips = filterChips.filter((c) => !c.key.startsWith("col:") && c.key !== "search" && c.key !== "selection");
   function clearFilterChip(key: FilterChipKey) {
     if (key === "tile") setActiveFilter("all");
     else if (key === "uncalculated") setFilterUncalculated(false);
@@ -1818,7 +1821,6 @@ export default function Home() {
           )}
         </div>
 
-        <FilterChipsBar chips={filterChips} onClear={clearFilterChip} onClearAll={clearAllFilters} />
         {listLoad.state === "loading" && results.length > 0 && (
           <div className="mx-4 mb-1 flex items-center gap-2 text-xs text-muted-foreground" role="status" aria-live="polite" data-testid="asins-reloading">
             <Loader2 className="h-3.5 w-3.5 animate-spin" /> Updating the list…
@@ -1842,8 +1844,8 @@ export default function Home() {
                   </span>
                 )}
                 {/* MERGED Active-filters pill: body opens modal, ✕ clears ALL filters
-                    (calls clearSearchFilters — same handler the modal's "Clear All" uses).
-                    Hidden entirely when activeFilterCount === 0. */}
+                    (calls clearAllFilters — same handler the modal's "Clear All" uses).
+                    Counts every active filter, visibility toggles included; hidden when none. */}
                 {activeFilterCount > 0 && (
                   <div className="inline-flex items-center h-8 rounded-md border border-amber-300 dark:border-amber-700 text-amber-600 dark:text-amber-400 text-xs overflow-hidden">
                     <button
@@ -1855,7 +1857,7 @@ export default function Home() {
                       Active filters ({activeFilterCount})
                     </button>
                     <button
-                      onClick={clearSearchFilters}
+                      onClick={clearAllFilters}
                       className="px-1.5 h-full border-l border-amber-300 dark:border-amber-700 hover:bg-amber-100 dark:hover:bg-amber-900 flex items-center"
                       aria-label="Clear all filters"
                       data-testid="button-clear-filters"
@@ -2074,7 +2076,9 @@ export default function Home() {
         onRemoveFilter={(colId) => setColFilters((prev) => { const next = { ...prev }; delete next[colId]; return next; })}
         onClearSearch={() => { setSearchQuery(""); setSelectedSearchAsins(new Set()); }}
         onClearSelectedAsins={() => setSelectedSearchAsins(new Set())}
-        onClearAll={clearSearchFilters}
+        onClearAll={clearAllFilters}
+        otherFilters={otherFilterChips}
+        onRemoveOther={(key) => clearFilterChip(key as FilterChipKey)}
       />
 
       <Dialog open={!!sbResult} onOpenChange={(o) => { if (!o) setSbResult(null); }}>

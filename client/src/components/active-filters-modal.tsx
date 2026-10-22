@@ -53,10 +53,14 @@ interface ActiveFiltersModalProps {
   onClearSearch: () => void;
   onClearSelectedAsins?: () => void;
   onClearAll: () => void;
+  /** Filters that are not column / search filters (ASINs page: scorecard tile, Uncalculated only,
+   *  hide gated / meltable, added ASINs shown past filters) — one removable entry each. */
+  otherFilters?: Array<{ key: string; label: string }>;
+  onRemoveOther?: (key: string) => void;
 }
 
 export function ActiveFiltersModal({
-  open, onOpenChange, colFilters, searchQuery, selectedAsins, onRemoveFilter, onClearSearch, onClearSelectedAsins, onClearAll,
+  open, onOpenChange, colFilters, searchQuery, selectedAsins, onRemoveFilter, onClearSearch, onClearSelectedAsins, onClearAll, otherFilters, onRemoveOther,
 }: ActiveFiltersModalProps) {
   const filters = Object.values(colFilters);
   const hasSearch = searchQuery.trim().length > 0;
@@ -118,6 +122,21 @@ export function ActiveFiltersModal({
               </div>
             </div>
           ))}
+          {otherFilters && otherFilters.length > 0 && (
+            <div>
+              <h3 className="text-xs font-semibold text-muted-foreground uppercase tracking-wider mb-2">Other</h3>
+              <div className="space-y-1.5">
+                {otherFilters.map((f) => (
+                  <div key={f.key} className="flex items-center justify-between gap-2 px-2 py-1.5 rounded bg-muted/50" data-testid={`active-filter-${f.key}`}>
+                    <span className="text-sm font-medium">{f.label}</span>
+                    <button className="text-muted-foreground/60 hover:text-red-500 transition-colors flex-shrink-0" onClick={() => onRemoveOther?.(f.key)} aria-label={`Clear ${f.label}`}>
+                      <X className="h-3.5 w-3.5" />
+                    </button>
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
         </div>
         <DialogFooter className="flex gap-2">
           <Button variant="outline" size="sm" onClick={() => onOpenChange(false)}>Close</Button>
