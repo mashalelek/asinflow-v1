@@ -6387,9 +6387,29 @@ Settings: `tracking.velocity_street` ("805 grandy"),
   punctuation-insensitive (Walmart / JCPenney print hyphens AF does not
   store); base drops a trailing `_N` (D4); an order_id holding two ids
   ("115449859 / 115450009") matches either. 0 → `no_po` (re-tried every
-  run), 1 → `matched`, >1 → `ambiguous`.
+  run), 1 → `matched`, >1 → `ambiguous`. The email's number is also tried
+  without a trailing `-N` shipment suffix (WorldPantry `70633076-1`).
+- **Platform senders** (2026-10-22; `tracking.platform_senders`, migration
+  068 — registrable domains: Narvar, Shopify email, ShipStation,
+  ParcelPanel, AfterShip, Veeqo, Zendesk, WorldPantry). With no map entry
+  and no first-label supplier, the store is read from the **subject**
+  ("your Los Poblanos order", "order with Tetley and WorldPantry.com") and
+  matched by name to exactly one supplier's domain label (`lospoblanos` ↔
+  `shop.lospoblanos.com`; a 5+-letter prefix: `tetley` ↔
+  `shop.tetleyusa.com`) → `matched`, `match_reason = retailer_name`. Only
+  the subject is read (the body is not stored). A platform domain is
+  never seeded into the map.
+- **Order-#-unique** (2026-10-22): when the sender resolves to **no**
+  supplier, the order # is compared digits-only (also without a trailing
+  `-N` / `_N`; 5+ digits) against every AF PO; exactly one → `matched`,
+  `match_reason = order_id_unique`, the supplier taken from that PO; zero
+  or several → still `unknown_sender`. A sender that resolves keeps its
+  supplier — its `no_po` is never attached to another store's PO by number
+  alone. Production 2026-10-22: of 44 `unknown_sender` rows, 28 cleared by
+  this and 6 by `retailer_name`.
 - **Never moved by the sync:** `source = manual` or `reassigned_at` set;
-  dismissed rows and `ai_disabled` placeholders are not re-matched.
+  dismissed rows, `ai_disabled` placeholders and `return` rows are not
+  re-matched.
 - **Routes** (`server/tracking-routes.ts`, behind requireAuth): `GET
   /api/tracking/unmatched` (the queue, with reason), `POST
   /api/tracking/domain-map {domain, supplier}` (supplier must be a known PO

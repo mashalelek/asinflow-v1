@@ -1,6 +1,6 @@
 // PO tracking matching + supplier domain map (SPEC §26, patch commit 3).
 import { describe, it, expect } from "vitest";
-import { resolveSupplier, findPos, matchRow, baseOrderId, matchTrackingRows, type PoRef } from "./tracking-match";
+import { resolveSupplier, findPos, matchRow, baseOrderId, matchTrackingRows, retailerNameFromSubject, supplierByName, findPosByOrderDigits, type PoRef } from "./tracking-match";
 
 const SUPPLIERS = ["target.com", "walmart.com", "macys.com", "michaels.com", "homedepot.com", "staples.com", "zoro.com", "tractorsupply.com", "shop.equalexchange.coop", "communitycoffee.com"];
 const POS: PoRef[] = [
@@ -79,5 +79,43 @@ describe("matchTrackingRows", () => {
     const d = db([{ id: 1, sender_domain: "notify.macys.com", retailer_order_id: "4800667218" }]);
     await matchTrackingRows(d.query as any, { dryRun: true });
     expect(d.writes).toHaveLength(0);
+  });
+});
+
+describe("platform senders + order-#-unique (Maria 2026-10-22)", () => {
+  const SUP = [...SUPPLIERS, "shop.lospoblanos.com", "shop.tetleyusa.com", "us.typology.com", "yvesrocherusa.com"];
+  const P: PoRef[] = [...POS,
+    { id: "po-lospoblanos", supplier: "shop.lospoblanos.com", order_id: "635389" },
+    { id: "po-tetley", supplier: "shop.tetleyusa.com", order_id: "70633076" },
+    { id: "po-typology", supplier: "us.typology.com", order_id: "U1283797" },
+    { id: "po-yves", supplier: "yvesrocherusa.com", order_id: "130097" },
+    { id: "po-dup-a", supplier: "a.com", order_id: "55555" }, { id: "po-dup-b", supplier: "b.com", order_id: "55555" },
+  ];
+  it("the store a platform subject names", () => {
+    expect(retailerNameFromSubject("Maria P, your Los Poblanos order has been delivered!")).toBe("Los Poblanos");
+    expect(retailerNameFromSubject("Your order with Tetley and WorldPantry.com has Shipped (70633076-1)")).toBe("Tetley");
+    expect(retailerNameFromSubject("Your order has been delivered!")).toBeNull();
+    expect(supplierByName("Los Poblanos", SUP)).toBe("shop.lospoblanos.com");
+    expect(supplierByName("Tetley", SUP)).toBe("shop.tetleyusa.com");
+    expect(supplierByName("ADVANTAGE DISTRIBUTING LLC", SUP)).toBeNull();
+  });
+  it("the supplier route also reads a trailing -N off the email's number", () => {
+    expect(matchRow({ sender_domain: "worldpantry.com", retailer_order_id: "70633076-1", email_subject: "Your order with Tetley and WorldPantry.com has Shipped (70633076-1)" }, {}, SUP, P))
+      .toMatchObject({ status: "matched", po_id: "po-tetley", via: "retailer_name" });
+  });
+  it("a platform sender is matched by the subject's store → retailer_name, and never seeded", () => {
+    expect(matchRow({ sender_domain: "shipstation.com", retailer_order_id: "635389", email_subject: "Your Los Poblanos order 635389 has been shipped!" }, {}, SUP, P))
+      .toMatchObject({ status: "matched", po_id: "po-lospoblanos", via: "retailer_name", obvious: false });
+  });
+  it("unmapped sender, order # names exactly one PO digits-only (incl. a trailing -N) → order_id_unique", () => {
+    expect(matchRow({ sender_domain: "worldpantry.com", retailer_order_id: "70633076-1", email_subject: "Shipped" }, {}, SUP, P)).toMatchObject({ status: "matched", po_id: "po-tetley", via: "order_id_unique", supplier: "shop.tetleyusa.com", obvious: false });
+    expect(matchRow({ sender_domain: "parcelpanel.net", retailer_order_id: "U1283797" }, {}, SUP, P)).toMatchObject({ po_id: "po-typology", via: "order_id_unique" });
+    expect(matchRow({ sender_domain: "yvesrocher.us", retailer_order_id: "130097" }, {}, SUP, P)).toMatchObject({ po_id: "po-yves", via: "order_id_unique" });
+  });
+  it("zero or several POs, a short number, or a mapped sender's no_po → still queued", () => {
+    expect(matchRow({ sender_domain: "yvesrocher.us", retailer_order_id: "55555" }, {}, SUP, P)).toMatchObject({ status: "unmatched", reason: "unknown_sender" });
+    expect(matchRow({ sender_domain: "yvesrocher.us", retailer_order_id: "999999" }, {}, SUP, P)).toMatchObject({ reason: "unknown_sender" });
+    expect(findPosByOrderDigits("1234", P)).toEqual([]);
+    expect(matchRow({ sender_domain: "oe.target.com", retailer_order_id: "4800667218" }, {}, SUP, P)).toMatchObject({ reason: "no_po" });
   });
 });
