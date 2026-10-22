@@ -29,7 +29,7 @@ async function main() {
   if (!live) { console.log("dry run — nothing written"); await pool.end(); return; }
   for (const x of changes) {
     await pool.query(`UPDATE purchase_orders SET ships_to = $2 WHERE id = $1`, [x.f.id, x.shipsTo]);
-    await pool.query(`INSERT INTO po_edit_log (po_id, user_id, entity, entity_id, field, old_value, new_value) VALUES ($1, NULL, 'po', $1, 'ships_to', $2, $3)`, [x.f.id, x.f.ships_to, `${x.shipsTo} (backfill: prep ${x.f.max_prep ?? "none"})`]);
+    await pool.query(`INSERT INTO po_edit_log (po_id, user_id, entity, entity_id, field, old_value, new_value) VALUES ($1::uuid, NULL, 'po', $1::text, 'ships_to', $2, $3)`, [x.f.id, x.f.ships_to, `${x.shipsTo} (backfill: prep ${x.f.max_prep ?? "none"})`]);
   }
   console.log(`LIVE — ships_to changed on ${changes.length} PO(s)`);
   await pool.end();
