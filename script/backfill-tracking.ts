@@ -4,6 +4,8 @@
 //   npm run backfill:tracking -- --live       # ingest + match + push for real
 //   --live --stage ingest   ingest + match only (sets the watermark) — then backfill ships_to / apply moves
 //   --live --stage push     the push only
+//   [--live] --stage links  re-read EVERY ai_disabled placeholder's email through the
+//                           tracking-link follow (any age), then re-match (2026-10-22)
 //
 // 1. GET /inbound → the order numbers with unit_status pending /
 //    partially_received → their AF POs → the oldest order date among them.
@@ -23,7 +25,7 @@ import "dotenv/config";
 import pool from "../server/db";
 import { gmailClient, listMessageIds, getMessage } from "../server/gmail-client";
 import { parseTrackingEmail } from "../server/tracking-parse";
-import { rowsFromEmail, withLinkTracking, ingestTracking, isPlaceholder, type TrackingRowDraft } from "../server/tracking-ingest";
+import { rowsFromEmail, withLinkTracking, ingestTracking, isPlaceholder, resolveLinkPlaceholders, type TrackingRowDraft } from "../server/tracking-ingest";
 import { matchRow, loadDomainMap, matchTrackingRows, type PoRef } from "../server/tracking-match";
 import { routeTracking, joinReasons } from "../server/tracking-route-rules";
 import { indexInbound, knownOrderNumbersHydrated, trackingNumbersOf, pushTracking } from "../server/tracking-push";
@@ -32,10 +34,17 @@ import type { QueryLike } from "../server/scheduler/types";
 
 const live = process.argv.includes("--live");
 const stageArg = (() => { const i = process.argv.indexOf("--stage"); return i >= 0 ? process.argv[i + 1] : "all"; })();
-if (!["all", "ingest", "push"].includes(stageArg)) throw new Error("--stage must be ingest, push or all");
+if (!["all", "ingest", "push", "links"].includes(stageArg)) throw new Error("--stage must be ingest, push, links or all");
 const query: QueryLike = (sql, params) => pool.query(sql, params) as any;
 
 async function main(): Promise<void> {
+  if (stageArg === "links") {
+    const r = await resolveLinkPlaceholders(query, { gmail: gmailClient() }, { dryRun: !live, allAges: true });
+    const m = live ? await matchTrackingRows(query) : null;
+    console.log(`${live ? "LIVE" : "DRY RUN"} — placeholders read ${r.placeholders}, resolved ${r.resolved} (${r.rows} rows)${m ? ` · re-match ${JSON.stringify(m)}` : ""}`);
+    await pool.end();
+    return;
+  }
   const inboundOrders = await fetchAllInboundOrders();
   const inbound = indexInbound(inboundOrders);
   // ships_to as the prep-cost backfill sets it (server/ships-to-backfill.ts) —

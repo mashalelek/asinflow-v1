@@ -6352,6 +6352,23 @@ Settings: `tracking.velocity_street` ("805 grandy"),
   (`resolveLinkPlaceholders`). Local run 2026-10-21: all 4 Michaels
   placeholders resolved (e.g. order 3500109099878917 → UPS
   1Z09482W0312114120) and matched.
+- **Generic tracking links** (2026-10-22, any sender): for an email that
+  would otherwise queue a placeholder, the candidate links are the HTML's
+  anchors whose text — then whose URL — says "track" (`trackAnchors`;
+  `htmlToText` drops hrefs, which is why most were invisible), then text
+  URLs after a "track" label or containing "track", ≤ 6 per email. Each
+  is followed the same way (Location only, body never read, ≤ 5 hops)
+  until a URL in the chain carries a number the carrier-URL parser reads:
+  a carrier-site parameter, a distinctive shape, or Narvar's
+  `tracking.narvar.com/<store>/tracking/<carrier>?t=<number>`. The routine
+  ingest re-reads placeholders shipped within 30 days;
+  `npm run backfill:tracking -- --stage links [--live]` reads all.
+  Production 2026-10-22: of 53 `ai_disabled` placeholders, 11 resolved
+  (SupplyHouse 5, Summit Racing 2, Narvar — Dick's, Merle Norman — 2,
+  King Arthur 1, LIXIL 1); 42 have no number reachable: 19 emails carry no
+  track link at all (Sephora, LG, gift-card outlet, Lowe's…), the rest
+  land on a retailer order page that needs a login or JavaScript (Shopify
+  stores, Walgreens, Ace, Zara, Ubiquiti, Duluth's dead links).
 - **No tracking in a shipped email** and no extractor: one placeholder row
   per (sender domain, order #) — carrier OTHER, `tracking_number =
   email:<domain>:<order#>`, `match_reason = ai_disabled` (until the AI

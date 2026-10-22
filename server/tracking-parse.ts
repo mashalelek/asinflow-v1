@@ -152,6 +152,11 @@ export function carrierForNumber(token: string): Carrier {
 
 const URL_PARAM = /https?:\/\/[^\s)>"']*?[?&](?:trknbr|tracknums?|tracknum|tlabels|tracking_?numbers?|trackingnumber|inquirynumber1|qtc_tlabels1|tn)=([0-9A-Z]{8,34})/gi;
 
+// Narvar's tracking page names the carrier in the path and the number as `t`:
+// tracking.narvar.com/dickssportinggoods/tracking/fedex?t=…&bzip=… (2026-10-22).
+const NARVAR_PAGE = /https?:\/\/tracking\.narvar\.com\/[^\/\s?]+\/tracking\/([a-z-]+)\?(?:[^\s#]*?&)?t=([0-9A-Z]{8,34})/gi;
+const NARVAR_CARRIER: Record<string, Carrier> = { ups: "UPS", fedex: "FEDEX", usps: "USPS", dhl: "DHL", ontrac: "ONTRAC", lasership: "LASERSHIP", amazon: "AMAZON" };
+
 export function extractTracking(text: string, orderIds: string[]): Array<{ carrier: Carrier; trackingNumber: string; at: number }> {
   const out: Array<{ carrier: Carrier; trackingNumber: string; at: number }> = [];
   const orders = new Set(orderIds.map(norm));
@@ -167,6 +172,11 @@ export function extractTracking(text: string, orderIds: string[]): Array<{ carri
   for (const m of Array.from(text.matchAll(URL_PARAM))) {
     const token = m[1].toUpperCase();
     add(classify(token, carrierFromHost(m[0]), true) ?? carrierFromHost(m[0]), token, m.index!);
+  }
+  for (const m of Array.from(text.matchAll(NARVAR_PAGE))) {
+    const token = m[2].toUpperCase();
+    const ctx = NARVAR_CARRIER[m[1].toLowerCase()] ?? null;
+    add(classify(token, ctx, true) ?? ctx, token, m.index!);
   }
   // 2. Tokens in the text, judged by the 60 characters before them.
   // Case-insensitive: Narvar prints "1z6y6f820322432042".

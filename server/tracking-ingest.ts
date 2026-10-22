@@ -15,7 +15,7 @@
 import type { gmail_v1 } from "googleapis";
 import { listMessageIds, getMessage, type GmailMessage } from "./gmail-client";
 import { parseTrackingEmail, type ParsedEmail } from "./tracking-parse";
-import { extractorFor, extractLinkTracking, type FetchLike } from "./tracking-links";
+import { extractorFor, extractLinkTracking, extractGenericLinkTracking, type FetchLike } from "./tracking-links";
 import { AI_DISABLED_REASON } from "./tracking-ai";
 import type { QueryLike } from "./scheduler/types";
 
@@ -89,15 +89,26 @@ export interface IngestDeps {
   fetch?: FetchLike;
 }
 
+/** Pure: would this email queue an "email:" placeholder (a shipped email naming one order, with no number)? */
+export const wouldQueuePlaceholder = (subject: string, p: ParsedEmail): boolean =>
+  p.shipments.length === 0 && p.orderIds.length === 1 && p.kind === "shipped" && SHIPPED_SUBJECT.test(subject);
+
 /**
- * Pure-ish: when the body carries no number and the sender has a tracking-link
- * extractor (Michaels), the numbers behind its links become the shipments.
+ * Pure-ish: when the body carries no number, the numbers behind its tracking
+ * links become the shipments — the sender's own extractor (Michaels) first;
+ * otherwise, only for an email that would queue a placeholder, the generic
+ * follow (tracking-links.ts: any "track" link whose redirect chain reaches a
+ * carrier URL; 2026-10-22).
  */
-export async function withLinkTracking(msg: Pick<GmailMessage, "text">, p: ParsedEmail, fetchFn?: FetchLike): Promise<ParsedEmail> {
-  if (p.shipments.length > 0 || !extractorFor(p.senderDomain)) return p;
-  const found = await extractLinkTracking(msg.text, p.senderDomain, fetchFn);
+export async function withLinkTracking(msg: Pick<GmailMessage, "text"> & Partial<Pick<GmailMessage, "subject" | "trackLinks">>, p: ParsedEmail, fetchFn?: FetchLike): Promise<ParsedEmail> {
+  if (p.shipments.length > 0) return p;
+  let found = extractorFor(p.senderDomain) ? await extractLinkTracking(msg.text, p.senderDomain, fetchFn) : [];
+  if (found.length === 0 && wouldQueuePlaceholder(msg.subject ?? "", p)) found = await extractGenericLinkTracking(msg.text, p.orderIds, fetchFn, msg.trackLinks ?? []);
   return found.length ? { ...p, shipments: found.map((f) => ({ ...f, items: [] })) } : p;
 }
+
+/** Placeholders older than this are not re-read by the routine ingest (the backfill's --stage links reads all). */
+export const PLACEHOLDER_RECHECK_DAYS = 30;
 
 /** Drop an order's "email:" placeholder once a real number exists for it (it was a queue entry, not history). */
 async function dropPlaceholder(query: QueryLike, domain: string | null, orderId: string | null): Promise<void> {
@@ -106,16 +117,18 @@ async function dropPlaceholder(query: QueryLike, domain: string | null, orderId:
 }
 
 /**
- * Re-read the emails behind existing placeholders whose sender now has a
- * tracking-link extractor (the Michaels placeholders queued before it
- * existed); each one resolved becomes real rows and its placeholder goes.
+ * Re-read the emails behind existing placeholders — every one whose sender
+ * has an extractor, and (generic follow) every other one shipped within
+ * PLACEHOLDER_RECHECK_DAYS, or all with `allAges`; each one resolved becomes
+ * real rows and its placeholder goes.
  */
-export async function resolveLinkPlaceholders(query: QueryLike, deps: IngestDeps, opts: { dryRun?: boolean } = {}): Promise<{ placeholders: number; resolved: number; rows: number }> {
+export async function resolveLinkPlaceholders(query: QueryLike, deps: IngestDeps, opts: { dryRun?: boolean; allAges?: boolean; now?: Date } = {}): Promise<{ placeholders: number; resolved: number; rows: number }> {
   const get = deps.get ?? getMessage;
+  const floor = (opts.now ?? new Date()).getTime() - PLACEHOLDER_RECHECK_DAYS * 86400_000;
   const ph = (await query(
-    `SELECT id, gmail_message_id, sender_domain, retailer_order_id FROM po_tracking
+    `SELECT id, gmail_message_id, sender_domain, retailer_order_id, shipped_at FROM po_tracking
       WHERE tracking_number LIKE 'email:%' AND status = 'unmatched'`,
-  )).rows.filter((r: any) => extractorFor(r.sender_domain));
+  )).rows.filter((r: any) => extractorFor(r.sender_domain) || opts.allAges || (r.shipped_at && new Date(r.shipped_at).getTime() >= floor));
   const out = { placeholders: ph.length, resolved: 0, rows: 0 };
   for (const r of ph) {
     const msg = await get(deps.gmail, String(r.gmail_message_id));

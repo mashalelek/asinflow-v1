@@ -34,6 +34,8 @@ export interface GmailMessage {
   subject: string;
   /** Plain-text body, plus the HTML part converted to text when the plain part is missing or a short preview. */
   text: string;
+  /** HTML anchors that say "track" (anchor text first, then href) — htmlToText drops hrefs (2026-10-22). */
+  trackLinks?: string[];
   labelIds: string[];
 }
 
@@ -66,6 +68,18 @@ export function htmlToText(html: string): string {
     .trim();
 }
 
+/** Pure: hrefs of the HTML's anchors whose text — then whose URL — says "track", de-duplicated, in order. */
+export function trackAnchors(html: string): string[] {
+  const byText: string[] = [], byHref: string[] = [];
+  for (const m of Array.from(html.matchAll(/<a\b[^>]*?\bhref\s*=\s*(["'])(https?:\/\/[^"']+)\1[^>]*>([\s\S]*?)<\/a>/gi))) {
+    const href = m[2].replace(/&amp;/gi, "&");
+    const label = htmlToText(m[3]);
+    if (/\btrack/i.test(label)) byText.push(href);
+    else if (/track/i.test(href)) byHref.push(href);
+  }
+  return Array.from(new Set([...byText, ...byHref]));
+}
+
 function walkParts(p: gmail_v1.Schema$MessagePart | undefined, out: { plain: string[]; html: string[] }): void {
   if (!p) return;
   const mime = (p.mimeType ?? "").toLowerCase();
@@ -92,7 +106,7 @@ export function parseGmailMessage(m: gmail_v1.Schema$Message): GmailMessage {
   return {
     id: String(m.id), threadId: m.threadId ?? null,
     date: new Date(Number(m.internalDate ?? 0)),
-    from, fromDomain, subject: h("subject"), text, labelIds: m.labelIds ?? [],
+    from, fromDomain, subject: h("subject"), text, trackLinks: parts.html.length ? trackAnchors(parts.html.join("\n")) : [], labelIds: m.labelIds ?? [],
   };
 }
 
