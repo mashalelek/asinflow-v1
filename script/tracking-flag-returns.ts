@@ -5,6 +5,8 @@
 // patch — or 'dismissed' for the numbers named in --dismiss.
 //   npm run tracking:flag-returns                                  # report only
 //   npm run tracking:flag-returns -- --dismiss 798190555249 --live # write
+//   --return <n,…>  also re-flag these DISMISSED return rows as 'return'
+//                   (798190555249, Maria 2026-10-22: same marker as the others)
 // A row already PUSHED to Velocity is reported and left alone (its number
 // is in Velocity; removing it is a hand step). Talks to DATABASE_URL directly.
 import "dotenv/config";
@@ -15,11 +17,14 @@ import { RETURN_REASON } from "../server/tracking-ingest";
 const arg = (n: string) => { const i = process.argv.indexOf(`--${n}`); return i >= 0 ? process.argv[i + 1] : undefined; };
 
 async function main(): Promise<number> {
+  const reflag = new Set((arg("return") ?? "").split(",").map((x) => x.trim().toUpperCase()).filter(Boolean));
   const dismiss = new Set((arg("dismiss") ?? "").split(",").map((x) => x.trim().toUpperCase()).filter(Boolean));
   const rows = (await pool.query(
     `SELECT t.id, t.carrier, t.tracking_number, t.status, t.match_reason, t.email_subject, p.order_id AS on_po
        FROM po_tracking t LEFT JOIN purchase_orders p ON p.id = t.po_id
-      WHERE COALESCE(t.match_reason, '') NOT IN ('return', 'dismissed') ORDER BY t.id`,
+      WHERE COALESCE(t.match_reason, '') <> 'return'
+        AND (COALESCE(t.match_reason, '') <> 'dismissed' OR UPPER(t.tracking_number) = ANY($1::text[])) ORDER BY t.id`,
+    [Array.from(reflag)],
   )).rows.filter((r: any) => isReturnEmail(String(r.email_subject ?? "")));
   const live = process.argv.includes("--live");
   let written = 0;
