@@ -2,6 +2,8 @@
 //
 //   npm run backfill:tracking                 # DRY RUN (default): reads Gmail + Velocity + AF, writes nothing
 //   npm run backfill:tracking -- --live       # ingest + match + push for real
+//   --live --stage ingest   ingest + match only (sets the watermark) — then backfill ships_to / apply moves
+//   --live --stage push     the push only
 //
 // 1. GET /inbound → the order numbers with unit_status pending /
 //    partially_received → their AF POs → the oldest order date among them.
@@ -29,6 +31,8 @@ import { fetchAllInboundOrders, fetchAllKnownOrders } from "../server/velocity-a
 import type { QueryLike } from "../server/scheduler/types";
 
 const live = process.argv.includes("--live");
+const stageArg = (() => { const i = process.argv.indexOf("--stage"); return i >= 0 ? process.argv[i + 1] : "all"; })();
+if (!["all", "ingest", "push"].includes(stageArg)) throw new Error("--stage must be ingest, push or all");
 const query: QueryLike = (sql, params) => pool.query(sql, params) as any;
 
 async function main(): Promise<void> {
@@ -52,10 +56,17 @@ async function main(): Promise<void> {
   const since = new Date(`${oldest}T00:00:00Z`);
 
   if (live) {
-    const ing = await ingestTracking({ query, deps: { gmail: gmailClient() }, since, log: console.log });
-    const m = await matchTrackingRows(query);
-    const p = await pushTracking({ query, log: console.log });
-    console.log(JSON.stringify({ ingest: { ...ing, drafts: undefined }, match: m, push: { ...p, plans: p.plans.length } }, null, 1));
+    if (stageArg !== "push") {
+      const ing = await ingestTracking({ query, deps: { gmail: gmailClient() }, since, log: console.log });
+      const m = await matchTrackingRows(query);
+      console.log(JSON.stringify({ ingest: { ...ing, drafts: undefined }, match: m }, null, 1));
+    }
+    if (stageArg !== "ingest") {
+      const p = await pushTracking({ query, log: console.log });
+      console.log(JSON.stringify({ push: { ...p, plans: undefined } }, null, 1));
+      for (const pl of p.plans) for (const t of pl.targets) if (t.to_add.length) console.log(`  PUT ${t.velocity_order_id}  PO ${pl.order_id}  ${t.asin}  +${t.to_add.join(", ")}`);
+      for (const pl of p.plans) for (const r of pl.rows) if (r.decision === "review") console.log(`  REVIEW PO ${pl.order_id} ${r.tracking_number}: ${r.reasons.join("; ")}`);
+    }
     await pool.end();
     return;
   }
