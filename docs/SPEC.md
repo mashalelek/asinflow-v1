@@ -1926,9 +1926,53 @@ COGS parsing: Col S goes through the shared `parseMoney` helper
 unparseable. Null cogs is acceptable: the new ASIN inserts with `cogs = 0`
 (intentionally diverges from the CSV path, which skips NaN-cogs rows).
 
+#### Second source: the ER leads sheet (2026-10-22, patch er-leads-sheet-sync)
+
+- **Sheet:** "SAS Leads Sheet | ER", `ER_LEADS_SHEET_ID`
+  (`12daJUqkYALr9YMCVpPS_KQupRXX6fNA_m59CYcyP0Wk`), tab **`Leads`** (gid 0),
+  range `Leads!A1:AM`; client `server/er-leads-sheet.ts` (tab hardcoded, like
+  the other two clients). Other tabs are never read.
+- **Header tripwire:** row 1 must equal the 39 headers A–AM exactly
+  (trimmed; F has no header) — drift aborts the ER leg with the per-column
+  diff in the report. Never a guessed column.
+- **Filter:** keep a row iff Approved (A) `.trim().toLowerCase() === "yes"`
+  AND Date (B) parses (ISO `YYYY-MM-DD` as observed, or `M/D/YYYY`;
+  rolled-over dates rejected) AND Date ≥ `ER_LEADS_MIN_DATE` (env, default
+  `2026-10-20`, a **fixed floor**). Approved = Yes rows with a blank or
+  unparseable Date are skipped and listed (`unparseableDates`: row, ASIN,
+  value) — never treated as old or new. A row whose Approved flips to Yes
+  later is picked up on the next run if its Date clears the floor.
+- **Insert-only, same contract as the Master leg:** an ASIN already in
+  `asins` (any status) is skipped untouched; rows collapse per ASIN, first
+  non-empty wins, top row canonical (its Date is the lead date). The legs
+  run Master first, then ER; an ASIN new in BOTH sheets in one run is
+  inserted once, by the Master leg, and listed as `inMasterLeg` in the ER
+  report. Both legs' new ASINs go through **one** `onboardNewAsins` call —
+  one stream, one Refresh job.
+- **Per inserted ASIN:** `lead_source = 'ER'` (no col-G normalisation —
+  the sheet is the source); `buy_link` from H (supplier via
+  `extractDomain`); `promo_notes` from I; `estimated_cogs` from M (Cost
+  Price, per ASIN as-is) via `parseMoney`, `estimated_cogs_source = 'csv'`,
+  unparseable → NULL → `cogs = 0`; `notes = "{AM}\nVA: {AJ}"` (Maria /
+  Emelie, the Master rule); **`added_at` = the Date** (midnight America/New_York),
+  set on the rows the leg just created after the onboarding insert —
+  "Date Added IS the lead date". **No archive rule** (no status column).
+- **Report:** `sheets[]` in the run result, one entry per sheet — read /
+  filtered out / already in AF / inserted / failed (no `asins` row after
+  the insert), plus `error` / `warning`; the ER entry also carries
+  `unparseableDates`, `inMasterLeg` and `rows` (ASIN, date, buy link, COGS,
+  lead source — what it inserts, or would insert on a dry run). The toast
+  shows one line per sheet.
+- **Fail-closed per leg:** a thrown read (either sheet), header drift or a
+  malformed `ER_LEADS_MIN_DATE` aborts that leg only, reported in
+  `errors` and its `sheets[]` entry; the other leg still runs. An ER read
+  of 0 data rows is a **warning** (creds / share), not "nothing new".
+  `ER_LEADS_SHEET_ID` unset → the ER leg is skipped with a logged warning.
+
 Triggers:
 - Manual: `POST /api/sync/sourcing-sheet` (NDJSON-streaming, auth-gated). Wired
-  to the "Sync Sourcing" toolbar button on the home page.
+  to the "Sync Sourcing" toolbar button on the home page. `?dryRun=true`
+  reads both sheets and reports, writing nothing.
 - Scheduled: **none** (2026-10-15). The 09:00 host-local cron
   (`sourcing-sync-cron.ts`) was deleted with the scheduler patch; Sync
   Sourcing is on-demand (§11 "Scheduled passes").
@@ -2769,13 +2813,13 @@ that writes it:
 | `primary_sku`, `asin_skus.is_primary` | component 17 (bootstrap / re-point); the Add-Offer path on creation (§18) |
 | `is_search_suppressed` | component 18 (stage-then-swap) |
 | Sales, refunds, actual fees | components 19–21 (20–21 ledger-only until the Finances patch) |
-| `estimated_cogs` | CSV upload / manual edit / Chrome extension / PO sync (when source ≠ manual) |
+| `estimated_cogs` | CSV upload / manual edit / Chrome extension / PO sync (when source ≠ manual) / Sourcing sync — Master col S and ER col M, new-ASIN INSERT only |
 | `actual_cogs` | PO sync only (eventually FIFO calc) |
 | `prep_override` | PO sync |
-| `buy_link`, `supplier` | CSV upload / manual edit / Chrome extension |
+| `buy_link`, `supplier` | CSV upload / manual edit / Chrome extension / Sourcing sync — Master col N and ER col H, new-ASIN INSERT only |
 | `supplier_sku` | CSV upload / manual edit — analyze MUST NOT write it (asymmetric-UPSERT INSERT branch only on the main path; never in the bulk sink's SET list) |
-| Tags, notes | Manual / CSV upload / Chrome extension |
-| `promo_notes` | Manual edit / Sourcing sync / main CSV upload (2026-09-27) — all three write the new-ASIN INSERT branch only; never rewritten on re-sync/re-analyze/re-upload, so manual edits are never overwritten |
+| Tags, notes | Manual / CSV upload / Chrome extension; notes also Sourcing sync (Master AS/AP, ER AM/AJ), new-ASIN INSERT only |
+| `promo_notes` | Manual edit / Sourcing sync (Master col O, ER col I) / main CSV upload (2026-09-27) — all three write the new-ASIN INSERT branch only; never rewritten on re-sync/re-analyze/re-upload, so manual edits are never overwritten |
 | `is_wholesale`, `is_oa` | Manual edit |
 | `status` (active/parked/dead — replaced `is_active` 2026-09-07, migration 033) | Manual Park/Unpark/Mark-dead/Revive; Sourcing sync writes `parked`+`discontinued` on freshly-inserted discontinued rows only; the prices stage's `invalid_asin` outcome and the catalog-404 signal (DA-2) write `dead` with their reasons |
 | Aura listing cost (external, not an AF column) | Aura cost sync path (§11) — reads `asin_estimates` after an inline PO-sheet read for the selection (decision 9), writes only to Aura |
@@ -3817,7 +3861,7 @@ live write to Seller Central:
 | Offer price at creation | Add-Offer path (price resolver) |
 | `primary_sku`, `asin_skus.is_primary` | Add-Offer path (promotes the live-offer SKU on creation); inventory-sync may set them only as bootstrap when no primary exists, never overwrite |
 | `has_live_offer`, `has_buyable_offer` + both stamps, `current_issues`, `issues_checked_at` | **`writeLiveOfferVerdict` — the one primitive (§18 A2, 2026-10-10).** Called ONLY by probes: the listings reconcile stage (Prices & Stock + Product Info), the §19 post-submit ladder, and the §19 verdict / 48h-stale re-probes. No verdict, submission response, or human determination writes any of these fields. Supersedes the previous owners list, which named `live-offer-sync.ts` (deleted), the sweep's `'live'` transition, and the manual `'live'` verdict (2026-08-28, now a re-probe trigger) |
-| `asins.lead_source` (§6) | **USER-CONTROLLED.** The INSERT paths (CSV upload, sourcing sync, bulk promote) and `PUT /api/asins/:asin/lead-source`. Absent from the asins UPSERT's ON CONFLICT SET list, so a re-analyze of an existing ASIN can never overwrite it. Analyze, Product Info and Prices & Stock NEVER write it |
+| `asins.lead_source` (§6) | **USER-CONTROLLED.** The INSERT paths (CSV upload, sourcing sync — Master col G, and the ER leg, which writes `ER` on every ASIN it inserts — bulk promote) and `PUT /api/asins/:asin/lead-source`. Absent from the asins UPSERT's ON CONFLICT SET list, so a re-analyze of an existing ASIN can never overwrite it. Analyze, Product Info and Prices & Stock NEVER write it |
 | `sku_legend` entries (brand/dept codes, aliases) | Add-Offer approval flow |
 | `category`, `brand` (self-heal) | Add-Offer catalog fetch (per §14 catalog ownership) |
 
@@ -5942,6 +5986,8 @@ platform's values always win.
 | `GOOGLE_CREDENTIALS_PATH` | no (points at a secret) | Path to the service-account JSON. On Render this is a **secret file** (`google-credentials.json` uploaded in the service's Secret Files) and the variable holds that file's mount path. Gates every Sheets route. |
 | `GOOGLE_SHEET_ID` | no | Orders / PO tracker sheet. |
 | `SOURCING_SHEET_ID` | no | Sourcing leads sheet. |
+| `ER_LEADS_SHEET_ID` | no | "SAS Leads Sheet \| ER" — the second Sync Sourcing source (tab `Leads`). Unset → the ER leg is skipped with a warning. |
+| `ER_LEADS_MIN_DATE` | no | ER leg date floor, `YYYY-MM-DD`; default `2026-10-20`. A fixed floor, not a high-water mark. |
 | `AURA_API_KEY` | yes | Aura repricer API, HTTP Basic username. |
 | `VELOCITY_API_KEY` | yes | Velocity prep-service API. |
 | `VELOCITY_WAREHOUSE_ID` | no | Velocity warehouse. |
