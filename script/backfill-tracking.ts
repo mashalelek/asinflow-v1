@@ -34,8 +34,12 @@ const query: QueryLike = (sql, params) => pool.query(sql, params) as any;
 async function main(): Promise<void> {
   const inboundOrders = await fetchAllInboundOrders();
   const inbound = indexInbound(inboundOrders);
+  // ships_to as the prep-cost backfill sets it (server/ships-to-backfill.ts) —
+  // computed here, so a dry run before the backfill (or before migration 066)
+  // routes exactly as the live run will after it.
   const pos: Array<PoRef & { order_date: string; ships_to: string; canceled_or_returned: boolean }> = (await query(
-    `SELECT p.id, p.supplier, p.order_id, p.order_date::text AS order_date, p.ships_to,
+    `SELECT p.id, p.supplier, p.order_id, p.order_date::text AS order_date,
+            CASE WHEN (SELECT MAX(a.prep_cost) FROM po_asins a WHERE a.po_id = p.id) > 0 THEN 'velocity' ELSE 'home' END AS ships_to,
             (EXISTS (SELECT 1 FROM po_line_items l WHERE l.po_id = p.id)
               AND NOT EXISTS (SELECT 1 FROM po_line_items l WHERE l.po_id = p.id
                                AND COALESCE(l.qty_canceled, 0) + COALESCE(l.qty_returned, 0) < COALESCE(l.qty_ordered, 0))) AS canceled_or_returned

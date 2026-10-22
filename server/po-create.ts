@@ -6,7 +6,7 @@
 // primary SKU from the catalog), source 'manual', entry_seq = creation time
 // (po-entry-seq.ts), Open. One po_edit_log row records the creation.
 import type { QueryLike } from "./scheduler/types";
-import { checkPoForm, type PoFormState } from "@shared/po-form";
+import { checkPoForm, shipsToFromForm, type PoFormState } from "@shared/po-form";
 import { afEntrySeq } from "./po-entry-seq";
 import { logEdits, EditError } from "./po-edit";
 
@@ -30,7 +30,9 @@ export async function createPoFromForm(query: QueryLike, form: PoFormState, user
      VALUES ($1, $2, $3, '{}'::text[], $4, $5, $6, $7, $8, $9, $10, $11, NULL, $12, $13, $14, $15, 'manual', $16, $17) RETURNING id`,
     [orderId, form.order_date.trim(), supplier, subtotal, moneyOr0(form.tax), moneyOr0(form.sh_donations), moneyOr0(form.discount), moneyOr0(form.refund_amount),
      check.effectiveOrderTotal.toFixed(2), txt(form.payment_method), pct(form.weighted_gc_discount_pct), txt(form.cashback_site), pct(form.cashback_pct),
-     txt(form.purchased_by), txt(form.notes), afEntrySeq(now), form.ships_to === "home" ? "home" : "velocity"],
+     txt(form.purchased_by), txt(form.notes), afEntrySeq(now),
+     // As chosen on the form; absent → derived from prep cost (SPEC §26).
+     form.ships_to === "home" || form.ships_to === "velocity" ? form.ships_to : shipsToFromForm(form)],
   );
   const poId = String(ins.rows[0].id);
   let lines = 0;

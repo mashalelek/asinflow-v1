@@ -12,7 +12,7 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
 import { MoneyCalcInput, calcMoney } from "@/components/money-calc-input";
-import { checkPoForm, emptyPoForm, emptyProduct, SOLD_AS_OPTIONS, type PoFormState, type PoFormProduct } from "@shared/po-form";
+import { checkPoForm, emptyPoForm, emptyProduct, shipsToFromForm, SOLD_AS_OPTIONS, type PoFormState, type PoFormProduct } from "@shared/po-form";
 
 const todayYmd = () => { const d = new Date(); return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`; };
 const money = (n: number) => `$${n.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
@@ -65,8 +65,11 @@ export function NewPoDialog({ open, onOpenChange, onCreated }: { open: boolean; 
   const [busy, setBusy] = useState(false);
   const [serverErr, setServerErr] = useState<string | null>(null);
   const [touched, setTouched] = useState(false);
+  // Ships to follows prep cost until it is changed by hand (SPEC §26).
+  const [shipsToEdited, setShipsToEdited] = useState(false);
   const known = useMemo(() => new Map<string, Lookup>(), []);
-  useEffect(() => { if (open) { setForm(emptyPoForm(todayYmd())); setServerErr(null); setTouched(false); } }, [open]);
+  useEffect(() => { if (open) { setForm(emptyPoForm(todayYmd())); setServerErr(null); setTouched(false); setShipsToEdited(false); } }, [open]);
+  const shipsTo = shipsToEdited && (form.ships_to === "home" || form.ships_to === "velocity") ? form.ships_to : shipsToFromForm(form);
   const check = useMemo(() => checkPoForm(form), [form]);
 
   const set = (k: keyof PoFormState, v: string) => setForm((f) => ({ ...f, [k]: v }));
@@ -93,7 +96,7 @@ export function NewPoDialog({ open, onOpenChange, onCreated }: { open: boolean; 
     if (!checkPoForm(settled.form).ok) return;
     setBusy(true);
     try {
-      const res = await fetch("/api/pos", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(settled.form) });
+      const res = await fetch("/api/pos", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ ...settled.form, ships_to: shipsTo }) });
       const data = await res.json().catch(() => ({}));
       if (!res.ok) throw new Error(data.message || `HTTP ${res.status}`);
       onOpenChange(false); onCreated(String(data.poId));
@@ -125,7 +128,7 @@ export function NewPoDialog({ open, onOpenChange, onCreated }: { open: boolean; 
           {field("purchased_by", "Purchased by")}
           <div className="space-y-1">
             <Label className="text-xs text-muted-foreground" htmlFor="new-po-ships_to">Ships to</Label>
-            <select id="new-po-ships_to" value={form.ships_to ?? "velocity"} onChange={(e) => set("ships_to", e.target.value)} className="h-8 w-full rounded border bg-background px-2 text-sm" data-testid="input-new-po-ships_to">
+            <select id="new-po-ships_to" value={shipsTo} onChange={(e) => { set("ships_to", e.target.value); setShipsToEdited(true); }} className="h-8 w-full rounded border bg-background px-2 text-sm" data-testid="input-new-po-ships_to" title={shipsToEdited ? "Set by hand" : "From prep cost: any product with prep > 0 → Velocity"}>
               <option value="velocity">Velocity</option>
               <option value="home">Home</option>
             </select>

@@ -6500,3 +6500,18 @@ the unmatched queue shows "no number in the email"). Building it later:
 plain text → `{carrier, tracking_number, retailer_order_id, ship_to,
 items[]}`, `source = 'ai'`, only for those placeholders. The 2026-10-21
 local backfill dry run had 53 such rows.
+
+### `ships_to` from prep cost (2026-10-22)
+
+`npm run backfill:ships-to [-- --live]` (`server/ships-to-backfill.ts`)
+replaces migration 066's blanket 'velocity': **prep cost only** — any ASIN
+row of the PO with `po_asins.prep_cost > 0` (Maria enters $1 for Velocity)
+→ `velocity`; every row 0 / NULL, or no ASIN rows → `home`. Each change
+writes a `po_edit_log` row. `VELOCITY_MIN_ORDER_DATE` is **not a rule** —
+a sanity check only: a PO dated before it that comes out `velocity` is
+reported as a data error and left as computed. The New PO form derives its
+Ships to default the same way (`shipsToFromForm`: any product with prep >
+0 → Velocity), editable; the server uses the rule when the form sends none.
+Local data 2026-10-22: prep > 0 starts in April 2026 (75 April POs), so
+the local `VELOCITY_MIN_ORDER_DATE = 7/30/2026` flags 269 pre-cutoff
+POs, a May 1 cutoff 75.

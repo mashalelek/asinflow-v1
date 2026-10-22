@@ -62,10 +62,19 @@ export interface PoFormState {
   cost_overrides: Record<string, string>;
 }
 
+/**
+ * Ships to from prep cost (SPEC §26, Maria 2026-10-22): any product line with
+ * prep > 0 (Maria enters $1 for Velocity) → "velocity"; otherwise "home".
+ * The New PO form's default — editable; the same rule as the backfill.
+ */
+export function shipsToFromForm(form: Pick<PoFormState, "products">): "velocity" | "home" {
+  return form.products.some((p) => { const v = Number(String(p.prep_cost ?? "").replace(/[$,\s]/g, "")); return Number.isFinite(v) && v > 0; }) ? "velocity" : "home";
+}
+
 export const emptyProduct = (): PoFormProduct => ({ product_name: "", supplier_sku: "", price: "", qty_ordered: "", asin: "", asin_qty_per_product: "1", sold_as: "individual", units_per_pack: "1", prep_cost: "1" });
 export const emptyPoForm = (today: string): PoFormState => ({
   supplier: "", order_id: "", order_date: today, subtotal: "", tax: "", sh_donations: "", discount: "", refund_amount: "", order_total: "",
-  payment_method: "", weighted_gc_discount_pct: "", cashback_site: "", cashback_pct: "", purchased_by: "", notes: "", ships_to: "velocity",
+  payment_method: "", weighted_gc_discount_pct: "", cashback_site: "", cashback_pct: "", purchased_by: "", notes: "",
   products: [emptyProduct()], cost_overrides: {},
 });
 
