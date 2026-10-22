@@ -38,7 +38,7 @@ describe("buildTrackingPutBody — echo-merge", () => {
   });
 });
 
-function world(o: { rows: any[]; inbound: any[]; known?: any[]; putFails?: string[] }) {
+function world(o: { rows: any[]; inbound: any[]; known?: any[]; putFails?: string[]; identities?: any[] }) {
   const updates: any[][] = [];
   const puts: Array<{ id: string; body: any }> = [];
   const gets: string[] = [];
@@ -46,6 +46,7 @@ function world(o: { rows: any[]; inbound: any[]; known?: any[]; putFails?: strin
     if (sql.includes("FROM settings WHERE key = ANY")) return { rows: [{ key: "tracking.velocity_street", value: "805 grandy" }, { key: "tracking.home_streets", value: ["65 rivercrest"] }, { key: "tracking.carrier_map", value: { UPS: "UPS", FEDEX: "FedEx" } }], rowCount: 3 };
     if (sql.includes("FROM po_tracking t JOIN purchase_orders p")) return { rows: o.rows, rowCount: o.rows.length };
     if (sql.startsWith("UPDATE po_tracking")) { updates.push(params!); return { rows: [], rowCount: 1 }; }
+    if (sql.includes("FROM velocity_bundle_identity")) { const r = (o.identities ?? []).filter((x) => params![0].includes(x.velocity_order_id)); return { rows: r, rowCount: r.length }; }
     throw new Error(`unexpected ${sql.slice(0, 60)}`);
   };
   const deps: VelocityDeps = {
@@ -105,6 +106,17 @@ describe("pushTracking", () => {
     w = world({ rows: [row({ order_id: "556" })], inbound: [], known: [ord({ order_id: "i1", order_number: "555" })] });
     r = await pushTracking({ query: w.query as any, deps: w.deps });
     expect(r.review).toBe(1);
+    expect(w.updates[0]).toEqual([1, "matched", "not in Velocity"]);
+  });
+  it("a fully-shipped bundle (shipments leg: no order number, no children) counts as in Velocity through velocity_bundle_identity", async () => {
+    const shipped = () => ord({ order_id: "c0835a42", order_number: "", sold_as: "bundle", status: "shipped" });
+    let w = world({ rows: [row({ order_id: "200015523189765" })], inbound: [], known: [shipped()], identities: [{ velocity_order_id: "c0835a42", asin: "B0GNHTYGPF", child_order_numbers: ["200015523189765"], child_order_ids: null, source: "manual_seed" }] });
+    let r = await pushTracking({ query: w.query as any, deps: w.deps });
+    expect(r).toMatchObject({ received_by_velocity: 1, review: 0 });
+    expect(w.updates[0]).toEqual([1, "matched", null]);
+    // no identity record → still never seen
+    w = world({ rows: [row({ order_id: "200015523189765" })], inbound: [], known: [shipped()] });
+    r = await pushTracking({ query: w.query as any, deps: w.deps });
     expect(w.updates[0]).toEqual([1, "matched", "not in Velocity"]);
   });
   it("a bundle parent is never written — the row asks for a hand push", async () => {

@@ -19,6 +19,7 @@
 import { fetchAllInboundOrders, fetchAllKnownOrders, getInboundOrder, updateInboundOrder, type VelocityInboundOrder } from "./velocity-api";
 import { routeTracking, joinReasons, type ShipsTo } from "./tracking-route-rules";
 import { isPlaceholder } from "./tracking-ingest";
+import { hydrateChildlessBundles } from "./velocity-bundle-identity";
 import type { QueryLike } from "./scheduler/types";
 
 export const CARRIER_MAP_KEY = "tracking.carrier_map";
@@ -69,6 +70,19 @@ export function indexInbound(orders: readonly VelocityInboundOrder[]): Map<strin
     for (const n of Array.from(nums)) { const l = by.get(n) ?? []; l.push(o); by.set(n, l); }
   }
   return by;
+}
+
+/**
+ * Every order number Velocity knows, with fully-shipped bundles counted. A
+ * shipped bundle parent comes back from the shipments leg with order_number
+ * empty and no children (200015523189765 → parent c0835a42, 2026-10-22), so
+ * its PO's number is nowhere in the response; it is restored from
+ * velocity_bundle_identity — the same hydration Upload to Velocity uses
+ * (§11 Part C.2). Mutates the orders (adds minimal bundle_children).
+ */
+export async function knownOrderNumbersHydrated(orders: VelocityInboundOrder[], query: QueryLike): Promise<Set<string>> {
+  await hydrateChildlessBundles(orders, { query: query as any });
+  return knownOrderNumbers(orders);
 }
 
 export const trackingNumbersOf = (o: Pick<VelocityInboundOrder, "trackings">): string[] =>
@@ -170,7 +184,7 @@ export async function pushTracking(opts: { query: QueryLike; deps?: VelocityDeps
   // Both reads fail closed: a partial Velocity read would make POs look
   // never-uploaded (the coverage tripwires in velocity-api throw instead).
   const inbound = indexInbound(await deps.list());
-  const known = knownOrderNumbers(await deps.known());
+  const known = await knownOrderNumbersHydrated(await deps.known(), opts.query);
   const byPo = new Map<string, RowFacts[]>();
   for (const r of rows) { const l = byPo.get(r.po_id) ?? []; l.push(r); byPo.set(r.po_id, l); }
 

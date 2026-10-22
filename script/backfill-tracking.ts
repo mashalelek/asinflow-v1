@@ -26,7 +26,7 @@ import { parseTrackingEmail } from "../server/tracking-parse";
 import { rowsFromEmail, withLinkTracking, ingestTracking, isPlaceholder, type TrackingRowDraft } from "../server/tracking-ingest";
 import { matchRow, loadDomainMap, matchTrackingRows, type PoRef } from "../server/tracking-match";
 import { routeTracking, joinReasons } from "../server/tracking-route-rules";
-import { indexInbound, knownOrderNumbers, trackingNumbersOf, pushTracking } from "../server/tracking-push";
+import { indexInbound, knownOrderNumbersHydrated, trackingNumbersOf, pushTracking } from "../server/tracking-push";
 import { fetchAllInboundOrders, fetchAllKnownOrders } from "../server/velocity-api";
 import type { QueryLike } from "../server/scheduler/types";
 
@@ -85,7 +85,7 @@ async function main(): Promise<void> {
     if (p !== parsed) linkResolved++;
     for (const d of rowsFromEmail(msg, p)) { const k = `${d.carrier}|${d.tracking_number}`; if (!drafts.has(k)) drafts.set(k, d); }
   }
-  const known = knownOrderNumbers(await fetchAllKnownOrders());
+  const known = await knownOrderNumbersHydrated(await fetchAllKnownOrders(), query);
   const map = await loadDomainMap(query);
   const suppliers = Array.from(new Set(pos.map((p) => p.supplier)));
   const settings = Object.fromEntries((await query(`SELECT key, value FROM settings WHERE key LIKE 'tracking.%'`)).rows.map((r: any) => [r.key, r.value]));

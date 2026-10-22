@@ -6397,6 +6397,12 @@ target only inbound pending / partially_received orders, so a PO is
 **inbound** (push — the "yes" rows), **known** (Velocity already received
 or shipped it: no push, no warning — counted `received_by_velocity`), or
 **absent** (the "no" rows: Velocity has never seen it).
+A **fully-shipped bundle** counts as known (2026-10-22): the shipments leg
+returns its parent with `order_number` empty and no children (PO
+200015523189765 → parent `c0835a42`), so the PO's number is restored from
+`velocity_bundle_identity` — the same hydration Upload to Velocity uses
+(§11 Part C.2, `knownOrderNumbersHydrated`). A shipped parent with no
+identity record stays absent.
 
 | PO in Velocity | email ship-to | `ships_to` | result |
 |---|---|---|---|
