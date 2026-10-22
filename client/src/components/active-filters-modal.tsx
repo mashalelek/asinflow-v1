@@ -108,7 +108,7 @@ export function ActiveFiltersModal({
                       <span className="text-muted-foreground">{item.display}</span>
                     </span>
                     <button
-                      className="text-muted-foreground/60 hover:text-red-500 transition-colors flex-shrink-0"
+                      className="text-muted-foreground hover:text-foreground transition-colors flex-shrink-0"
                       onClick={() => {
                         if (item.label === "Selected ASINs") { onClearSelectedAsins?.(); onClearSearch(); }
                         else if (item.colId === "product" && group === "Search") onClearSearch();
@@ -129,7 +129,7 @@ export function ActiveFiltersModal({
                 {otherFilters.map((f) => (
                   <div key={f.key} className="flex items-center justify-between gap-2 px-2 py-1.5 rounded bg-muted/50" data-testid={`active-filter-${f.key}`}>
                     <span className="text-sm font-medium">{f.label}</span>
-                    <button className="text-muted-foreground/60 hover:text-red-500 transition-colors flex-shrink-0" onClick={() => onRemoveOther?.(f.key)} aria-label={`Clear ${f.label}`}>
+                    <button className="text-muted-foreground hover:text-foreground transition-colors flex-shrink-0" onClick={() => onRemoveOther?.(f.key)} aria-label={`Clear ${f.label}`}>
                       <X className="h-3.5 w-3.5" />
                     </button>
                   </div>
@@ -140,7 +140,7 @@ export function ActiveFiltersModal({
         </div>
         <DialogFooter className="flex gap-2">
           <Button variant="outline" size="sm" onClick={() => onOpenChange(false)}>Close</Button>
-          <Button variant="destructive" size="sm" onClick={() => { onClearAll(); onOpenChange(false); }}>Clear All</Button>
+          <Button variant="outline" size="sm" onClick={() => { onClearAll(); onOpenChange(false); }}>Clear All</Button>
         </DialogFooter>
       </DialogContent>
     </Dialog>

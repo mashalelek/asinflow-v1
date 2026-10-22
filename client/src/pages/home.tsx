@@ -1847,18 +1847,20 @@ export default function Home() {
                     (calls clearAllFilters — same handler the modal's "Clear All" uses).
                     Counts every active filter, visibility toggles included; hidden when none. */}
                 {activeFilterCount > 0 && (
-                  <div className="inline-flex items-center h-8 rounded-md border border-amber-300 dark:border-amber-700 text-amber-600 dark:text-amber-400 text-xs overflow-hidden">
+                  // Neutral, like the "Custom" / "Columns" buttons beside it (outline tokens; Custom's count badge).
+                  <div className="inline-flex items-center h-8 rounded-md border [border-color:var(--button-outline)] shadow-xs text-xs font-medium overflow-hidden">
                     <button
                       onClick={() => setFiltersModalOpen(true)}
-                      className="pl-2.5 pr-2 h-full flex items-center gap-1.5 hover:bg-amber-50 dark:hover:bg-amber-950"
+                      className="pl-3 pr-2 h-full flex items-center gap-1.5 hover-elevate"
                       data-testid="button-active-filters"
                     >
                       <Filter className="h-3.5 w-3.5" />
-                      Active filters ({activeFilterCount})
+                      Active filters
+                      <span className="ml-1 bg-primary/20 text-primary text-[10px] px-1 rounded-full" data-testid="active-filters-count">{activeFilterCount}</span>
                     </button>
                     <button
                       onClick={clearAllFilters}
-                      className="px-1.5 h-full border-l border-amber-300 dark:border-amber-700 hover:bg-amber-100 dark:hover:bg-amber-900 flex items-center"
+                      className="px-1.5 h-full border-l [border-color:var(--button-outline)] text-muted-foreground hover:text-foreground hover-elevate flex items-center"
                       aria-label="Clear all filters"
                       data-testid="button-clear-filters"
                     >

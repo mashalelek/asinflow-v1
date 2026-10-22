@@ -453,10 +453,11 @@ export default function Analytics() {
                   variant="outline"
                   size="sm"
                   onClick={() => setFiltersModalOpen(true)}
-                  className="h-9 text-xs text-amber-600 border-amber-300 hover:bg-amber-50 dark:text-amber-400 dark:border-amber-700 dark:hover:bg-amber-950"
+                  className="h-9 text-xs"
                 >
                   <Filter className="h-3.5 w-3.5 mr-1.5" />
-                  Active filters ({activeFilterCount})
+                  Active filters
+                  <span className="ml-1 bg-primary/20 text-primary text-[10px] px-1 rounded-full">{activeFilterCount}</span>
                 </Button>
               )}
               {filteredResults.length !== results.length && (
