@@ -286,6 +286,21 @@ export async function updateInboundOrder(orderId: string, fields: Record<string,
   return res.data ?? null;
 }
 
+// Append tracking — PUT /inbound/bulk {order_ids, tracking_numbers}. Per the
+// docs (API → Inbound, "Bulk update"): the numbers are APPENDED to each
+// order, carrier auto-detected; with no other field sent only the trackings
+// are attached — no echo, nothing else rewritten (unlike the single PUT,
+// which is full-replace in practice). Plain strings.
+export async function appendTrackingBulk(orderIds: string[], trackingNumbers: string[]): Promise<any> {
+  if (orderIds.length === 0 || trackingNumbers.length === 0) throw new Error("appendTrackingBulk: order_ids and tracking_numbers are both required");
+  const res = await velocityFetch(`/inbound/bulk`, {
+    method: "PUT",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ order_ids: orderIds, tracking_numbers: trackingNumbers }),
+  });
+  return res.data ?? null;
+}
+
 // One inbound order — GET /inbound/:order_id (also addresses bundle children).
 // Read-only. PO tracking (SPEC §26) re-reads the order immediately before
 // each tracking PUT, so the echo-merge never works from a stale snapshot.
