@@ -16,6 +16,7 @@ import type { gmail_v1 } from "googleapis";
 import { listMessageIds, getMessage, type GmailMessage } from "./gmail-client";
 import { parseTrackingEmail, type ParsedEmail } from "./tracking-parse";
 import { extractorFor, extractLinkTracking, type FetchLike } from "./tracking-links";
+import { AI_DISABLED_REASON } from "./tracking-ai";
 import type { QueryLike } from "./scheduler/types";
 
 export const WATERMARK_KEY = "tracking.gmail_watermark";
@@ -60,7 +61,7 @@ export function rowsFromEmail(msg: Pick<GmailMessage, "id" | "threadId" | "date"
   if (single && p.kind === "shipped" && SHIPPED_SUBJECT.test(msg.subject)) {
     return [{
       ...base, carrier: "OTHER", tracking_number: placeholderTracking(p.senderDomain, single),
-      retailer_order_id: single, items_json: null, source: "regex", match_reason: "ai_disabled",
+      retailer_order_id: single, items_json: null, source: "regex", match_reason: AI_DISABLED_REASON,
     }];
   }
   return [];

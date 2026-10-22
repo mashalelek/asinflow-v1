@@ -6488,3 +6488,15 @@ quantity, item or status; nothing but carrier + tracking leaves AF.
 - **Review Velocity** chip: shown after the manual items on the POs column
   and PO Details, the open reasons on hover; never offered in the
   Action Items editor.
+
+### AI fallback (§4 D3) — not built (2026-10-21)
+
+`ANTHROPIC_API_KEY` is not configured locally or on Render, so per the
+patch the fallback is skipped (`server/tracking-ai.ts`,
+`aiFallbackAvailable() = false`): a shipped-type email that neither the
+regex nor a tracking-link extractor can read is queued as unmatched,
+`match_reason = ai_disabled` (one placeholder per sender domain + order #;
+the unmatched queue shows "no number in the email"). Building it later:
+plain text → `{carrier, tracking_number, retailer_order_id, ship_to,
+items[]}`, `source = 'ai'`, only for those placeholders. The 2026-10-21
+local backfill dry run had 53 such rows.
