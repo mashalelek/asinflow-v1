@@ -18,13 +18,14 @@ describe("routing table (§7)", () => {
     expect(r(true, "805 grandy", "home")).toEqual({ push: true, held: false, reasons: [REASON.addressMismatch] });
     expect(r(true, "12 elm", "velocity")).toEqual({ push: true, held: false, reasons: [REASON.addressMismatch] });
   });
-  it("not in Velocity: Velocity street / none / ships_to velocity → not in Velocity", () => {
+  it("not in Velocity: Velocity street / none on a Velocity PO / ships_to velocity → not in Velocity", () => {
     expect(r(false, "805 grandy", "home").reasons).toEqual([REASON.notInVelocity]);
-    expect(r(false, null, "home").reasons).toEqual([REASON.notInVelocity]);
+    expect(r(false, null, "velocity").reasons).toEqual([REASON.notInVelocity]);
     expect(r(false, "65 rivercrest", "velocity").reasons).toEqual([REASON.notInVelocity]);
   });
-  it("not in Velocity, home street on a home PO → held, no warning", () => {
+  it("not in Velocity, home street — or no street — on a home PO → held, no warning (Maria 2026-10-22)", () => {
     expect(r(false, "65 rivercrest", "home")).toEqual({ push: false, held: true, reasons: [] });
+    expect(r(false, null, "home")).toEqual({ push: false, held: true, reasons: [] });
   });
   it("not in Velocity, unknown street → unknown address (and not-in-Velocity too on a Velocity PO)", () => {
     expect(r(false, "12 elm", "home").reasons).toEqual([REASON.unknownAddress]);

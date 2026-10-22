@@ -14,7 +14,9 @@
 // | yes            | none, or agrees with ships_to| —        | push                                 |
 // | yes            | disagrees with ships_to      | —        | push + review "address mismatch"     |
 // | no             | home street                  | home     | held, no review                      |
-// | no             | none / Velocity street       | any      | review "not in Velocity"             |
+// | no             | none                         | home     | held, no review (Maria 2026-10-22)   |
+// | no             | none / Velocity street       | velocity | review "not in Velocity"             |
+// | no             | Velocity street              | home     | review "not in Velocity"             |
 // | no             | any                          | velocity | review "not in Velocity"             |
 // | no             | unknown street               | any      | review "unknown address"             |
 // Plus: a PO canceled / returned in AF → review "shipped but canceled" (no push).
@@ -52,7 +54,9 @@ export function routeTracking(i: {
     const agrees = street == null || (i.shipsTo === "velocity" ? isVelocity : isHome);
     return { push: true, held: false, reasons: agrees ? [] : [REASON.addressMismatch] };
   }
-  if (isHome && i.shipsTo === "home") return { push: false, held: true, reasons: [] };
+  // A home PO whose email names the home street — or no street at all (USPS
+  // emails often carry none) — is going where AF expects: held, no review.
+  if ((isHome || street == null) && i.shipsTo === "home") return { push: false, held: true, reasons: [] };
   const reasons: string[] = [];
   if (street == null || isVelocity || i.shipsTo === "velocity") reasons.push(REASON.notInVelocity);
   if (unknown) reasons.push(REASON.unknownAddress);

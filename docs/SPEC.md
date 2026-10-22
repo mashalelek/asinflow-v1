@@ -6408,8 +6408,9 @@ identity record stays absent.
 |---|---|---|---|
 | yes | none, or agrees with `ships_to` | — | push |
 | yes | disagrees | — | push + review "address mismatch" |
-| no | home street | home | `held`, no review |
-| no | none / Velocity street | any | review "not in Velocity" |
+| no | home street, or none | home | `held`, no review (none: 2026-10-22) |
+| no | Velocity street | any | review "not in Velocity" |
+| no | none | velocity | review "not in Velocity" |
 | no | any | velocity | review "not in Velocity" |
 | no | unknown street | any | review "unknown address" |
 

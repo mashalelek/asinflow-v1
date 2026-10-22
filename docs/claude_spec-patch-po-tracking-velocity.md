@@ -99,9 +99,10 @@ Seeded by Claude Code from the distinct supplier names in `purchase_orders` vs s
 | yes | none, or agrees with `ships_to` | — | push tracking, no warning |
 | yes | disagrees with `ships_to` | — | push tracking + action item (reason: address mismatch) |
 | no | Velocity street | any | action item (reason: not in Velocity) |
-| no | none | any | action item (reason: not in Velocity) |
+| no | none | velocity | action item (reason: not in Velocity) |
 | no | any | velocity | action item (reason: not in Velocity) |
 | no | home street | home | `held`, no warning |
+| no | none | home | `held`, no warning (amended 2026-10-22, Maria: was "any → not in Velocity") |
 | no | unknown street (neither Velocity nor home) | any | action item (reason: unknown address) |
 
 Address agreement = normalized street equality (§4); any street that is neither the Velocity street nor a home street counts as "unknown".
