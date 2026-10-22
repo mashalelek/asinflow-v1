@@ -2,23 +2,24 @@
 //   npm run backfill:ships-to            # dry run
 //   npm run backfill:ships-to -- --live  # write ships_to (+ a po_edit_log row per change)
 // Rule and sanity check: server/ships-to-backfill.ts. Cutoff for the sanity
-// check = VELOCITY_MIN_ORDER_DATE (--cutoff overrides). Talks to DATABASE_URL directly.
+// check = the tracking.velocity_start_date setting (migration 067; --cutoff
+// overrides) — not VELOCITY_MIN_ORDER_DATE, the Upload to Velocity creation
+// floor. Talks to DATABASE_URL directly.
 import "dotenv/config";
 import pool from "../server/db";
-import { shipsToFromPrep, isPreVelocityDataError, loadShipsToFacts } from "../server/ships-to-backfill";
-import { envReconStart } from "../server/asin-po-pipeline";
+import { shipsToFromPrep, isPreVelocityDataError, loadShipsToFacts, readVelocityStartDate } from "../server/ships-to-backfill";
 
 const arg = (n: string) => { const i = process.argv.indexOf(`--${n}`); return i >= 0 ? process.argv[i + 1] : undefined; };
 const live = process.argv.includes("--live");
 
 async function main() {
-  const cutoff = arg("cutoff") ?? envReconStart();
-  if (!cutoff) throw new Error("no cutoff: pass --cutoff YYYY-MM-DD or set VELOCITY_MIN_ORDER_DATE");
+  const cutoff = arg("cutoff") ?? await readVelocityStartDate((s, p) => pool.query(s, p) as any);
+  if (!cutoff) throw new Error("no cutoff: pass --cutoff YYYY-MM-DD or set tracking.velocity_start_date");
   const facts = await loadShipsToFacts((s, p) => pool.query(s, p) as any);
   const d = facts.map((f) => ({ f, shipsTo: shipsToFromPrep(f.max_prep) }));
   const pre = d.filter((x) => x.f.order_date < cutoff), post = d.filter((x) => x.f.order_date >= cutoff);
   const c = (l: typeof d, v: string) => l.filter((x) => x.shipsTo === v).length;
-  console.log(`sanity cutoff (VELOCITY_MIN_ORDER_DATE) ${cutoff} · POs ${facts.length}`);
+  console.log(`sanity cutoff (tracking.velocity_start_date) ${cutoff} · POs ${facts.length}`);
   console.log(`  pre-cutoff:  home ${c(pre, "home")} · velocity ${c(pre, "velocity")}`);
   console.log(`  post-cutoff: home ${c(post, "home")} · velocity ${c(post, "velocity")}`);
   const errors = d.filter((x) => isPreVelocityDataError(x.f.order_date, cutoff, x.shipsTo));

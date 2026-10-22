@@ -6513,9 +6513,16 @@ local backfill dry run had 53 such rows.
 replaces migration 066's blanket 'velocity': **prep cost only** — any ASIN
 row of the PO with `po_asins.prep_cost > 0` (Maria enters $1 for Velocity)
 → `velocity`; every row 0 / NULL, or no ASIN rows → `home`. Each change
-writes a `po_edit_log` row. `VELOCITY_MIN_ORDER_DATE` is **not a rule** —
-a sanity check only: a PO dated before it that comes out `velocity` is
-reported as a data error and left as computed. The New PO form derives its
+writes a `po_edit_log` row. The Velocity start date is **not a rule** —
+a sanity check only: a PO dated before `tracking.velocity_start_date`
+(migration 067: the first PO with prep > 0, **2026-04-07** on production,
+stored once — not recomputed) that comes out `velocity` is reported as a
+data error and left as computed. It is separate from
+`VELOCITY_MIN_ORDER_DATE` (env, 7/30/2026), which stays the Upload to
+Velocity **creation floor** (`getVelocityMinOrderDate`, both upload routes)
+and the On Order reconciliation-start fallback (`envReconStart`); widening
+it to 4/7 would have offered 35 extra creates (Apr 7 – Jul 28 POs Velocity
+never had) and 141 skips (production, 2026-10-22), so it is not moved. The New PO form derives its
 Ships to default the same way (`shipsToFromForm`: any product with prep >
 0 → Velocity), editable; the server uses the rule when the form sends none.
 Local data 2026-10-22: prep > 0 starts in April 2026 (75 April POs), so

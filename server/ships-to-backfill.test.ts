@@ -1,6 +1,6 @@
 // ships_to from prep cost (SPEC §26, Maria 2026-10-22).
 import { describe, it, expect } from "vitest";
-import { shipsToFromPrep, isPreVelocityDataError } from "./ships-to-backfill";
+import { shipsToFromPrep, isPreVelocityDataError, readVelocityStartDate } from "./ships-to-backfill";
 import { shipsToFromForm, emptyPoForm, emptyProduct } from "@shared/po-form";
 
 describe("ships_to from prep cost only", () => {
@@ -19,5 +19,11 @@ describe("ships_to from prep cost only", () => {
     expect(shipsToFromForm(emptyPoForm("2026-10-22"))).toBe("velocity");
     expect(shipsToFromForm({ products: [{ ...emptyProduct(), prep_cost: "0" }, { ...emptyProduct(), prep_cost: "" }] })).toBe("home");
     expect(shipsToFromForm({ products: [{ ...emptyProduct(), prep_cost: "0" }, { ...emptyProduct(), prep_cost: "$1.00" }] })).toBe("velocity");
+  });
+  it("the cutoff is the tracking.velocity_start_date setting (YYYY-MM-DD); absent or malformed → null", async () => {
+    const q = (value: any) => (async () => ({ rows: value === undefined ? [] : [{ value }] })) as any;
+    expect(await readVelocityStartDate(q("2026-04-07"))).toBe("2026-04-07");
+    expect(await readVelocityStartDate(q(undefined))).toBeNull();
+    expect(await readVelocityStartDate(q("7/30/2026"))).toBeNull();
   });
 });
