@@ -2,8 +2,8 @@ import { X, Filter } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import type { FilterChip, FilterChipKey } from "@/lib/filter-chips";
 
-/** Active filters above the ASINs table: one chip per filter (× clears it), "N hidden by filters", Clear filters. */
-export function FilterChipsBar({ chips, hiddenCount, onClear, onClearAll }: { chips: FilterChip[]; hiddenCount: number; onClear: (key: FilterChipKey) => void; onClearAll: () => void }) {
+/** Active filters above the ASINs table: one chip per filter (× clears it), Clear filters. */
+export function FilterChipsBar({ chips, onClear, onClearAll }: { chips: FilterChip[]; onClear: (key: FilterChipKey) => void; onClearAll: () => void }) {
   if (chips.length === 0) return null;
   return (
     <div className="mx-4 mb-2 flex flex-wrap items-center gap-1.5 text-xs" data-testid="filter-chips-bar">
@@ -16,9 +16,6 @@ export function FilterChipsBar({ chips, hiddenCount, onClear, onClearAll }: { ch
           </button>
         </span>
       ))}
-      <span className={`ml-1 ${hiddenCount > 0 ? "font-medium text-amber-700 dark:text-amber-400" : "text-muted-foreground"}`} data-testid="filter-hidden-count">
-        {hiddenCount} hidden by filters
-      </span>
       <Button variant="ghost" size="sm" className="h-6 px-2 text-xs" onClick={onClearAll} data-testid="button-clear-all-filters">Clear filters</Button>
     </div>
   );

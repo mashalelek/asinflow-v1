@@ -1612,7 +1612,6 @@ export default function Home() {
     (id) => colLabelById.get(id) ?? id,
     (id) => (colFilters[id] ? formatFilterValue(colFilters[id]) : ""),
   ), [activeFilter, filterUncalculated, searchQuery, selectedSearchAsins, showGated, showMeltable, colFilters, colLabelById, revealAsins, results]);
-  const hiddenByFilters = results.length - queryFilteredResults.length;
   function clearFilterChip(key: FilterChipKey) {
     if (key === "tile") setActiveFilter("all");
     else if (key === "uncalculated") setFilterUncalculated(false);
@@ -1819,7 +1818,7 @@ export default function Home() {
           )}
         </div>
 
-        <FilterChipsBar chips={filterChips} hiddenCount={hiddenByFilters} onClear={clearFilterChip} onClearAll={clearAllFilters} />
+        <FilterChipsBar chips={filterChips} onClear={clearFilterChip} onClearAll={clearAllFilters} />
         {listLoad.state === "loading" && results.length > 0 && (
           <div className="mx-4 mb-1 flex items-center gap-2 text-xs text-muted-foreground" role="status" aria-live="polite" data-testid="asins-reloading">
             <Loader2 className="h-3.5 w-3.5 animate-spin" /> Updating the list…

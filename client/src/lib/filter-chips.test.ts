@@ -19,13 +19,13 @@ describe("active-filter chips (2026-10-18)", () => {
     expect(chips.map((c) => c.label)).toEqual(["Tile: Profitable", "Uncalculated only", 'Search: "tetley"', "Gated: hidden", "Meltable: hidden", "ROI: > 20", "Supplier: any of: walmart.com"]);
     expect(buildFilterChips({ ...base, searchQuery: "x", selectedCount: 3 }, label, value).map((c) => c.key)).toEqual(["selection"]);
   });
-  it("the ASINs page renders the bar above the table with the hidden count, a per-chip clear and Clear filters", () => {
+  it("the ASINs page renders the bar above the table with a per-chip clear and Clear filters — no hidden count (removed 2026-10-22)", () => {
     const home = readFileSync(resolve(__dirname, "../pages/home.tsx"), "utf8");
-    expect(home).toMatch(/<FilterChipsBar chips=\{filterChips\} hiddenCount=\{hiddenByFilters\} onClear=\{clearFilterChip\} onClearAll=\{clearAllFilters\} \/>/);
-    expect(home).toMatch(/const hiddenByFilters = results\.length - queryFilteredResults\.length;/);
+    expect(home).toMatch(/<FilterChipsBar chips=\{filterChips\} onClear=\{clearFilterChip\} onClearAll=\{clearAllFilters\} \/>/);
+    expect(home).not.toMatch(/hiddenByFilters/);
     expect(home).toMatch(/else if \(key === "gated"\) \{ setShowGated\(true\); saveShowGated\(true\); \}/);
     const bar = readFileSync(resolve(__dirname, "../components/filter-chips-bar.tsx"), "utf8");
-    expect(bar).toMatch(/\{hiddenCount\} hidden by filters/);
+    expect(bar).not.toMatch(/hidden by filters|hiddenCount/);
     expect(bar).toMatch(/>Clear filters</);
   });
 });
