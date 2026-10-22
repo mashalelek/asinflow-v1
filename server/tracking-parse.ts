@@ -24,7 +24,8 @@ export interface ParsedShipment { carrier: Carrier; trackingNumber: string; item
 export interface ParsedEmail {
   /** Carrier-pattern match OR shipped-type language. Non-candidates are skipped. */
   candidate: boolean;
-  kind: "shipped" | "out_for_delivery" | "delivered" | "other";
+  /** "return": a return pickup / return label email — its number is the return package, never inbound. */
+  kind: "shipped" | "out_for_delivery" | "delivered" | "return" | "other";
   /** The sender's domain — the ORIGINAL sender for a forward from our own mailboxes. */
   senderDomain: string | null;
   /** Distinct retailer order #s as printed (subject first). */
@@ -35,6 +36,14 @@ export interface ParsedEmail {
 
 /** Mailboxes that FORWARD retailer mail into orders@ (patch §1: incl. mpeters.cqg+alias@gmail.com). */
 export const OWN_DOMAINS = new Set(["coastalqualitygoods.com", "gmail.com", "googlemail.com"]);
+
+// Return pickup / return label emails (Walmart "Return pickup confirmation",
+// "Drop off your return at FedEx…"): the tracking number is the package going
+// BACK to the retailer. Subject first; the body phrases are specific enough
+// that a shipped email's "free returns" footer does not trip them.
+const RETURN_SUBJECT = /\breturns?\b/i;
+const RETURN_BODY = /\b(return pickup|prepaid return label|return label (?:is|has been) (?:attached|created|ready)|your return (?:is|has been) (?:scheduled|started|created|initiated))\b/i;
+export const isReturnEmail = (subject: string, text = ""): boolean => RETURN_SUBJECT.test(subject) || RETURN_BODY.test(text);
 
 const SHIPPED_WORDS = /\b(shipped|has shipped|on the way|on its way|about to ship|ready to ship|getting ready to ship|tracking|out for delivery|delivered|left our warehouse|shipment)\b/i;
 
@@ -214,7 +223,8 @@ export function parseTrackingEmail(msg: { subject: string; text: string; fromDom
     carrier: f.carrier, trackingNumber: f.trackingNumber,
     items: extractItems(text.slice(f.at, i + 1 < found.length ? found[i + 1].at : undefined)),
   }));
-  const kind: ParsedEmail["kind"] = /\bdelivered\b/i.test(msg.subject) ? "delivered"
+  const kind: ParsedEmail["kind"] = isReturnEmail(msg.subject, text) ? "return"
+    : /\bdelivered\b/i.test(msg.subject) ? "delivered"
     : /out for delivery/i.test(msg.subject) ? "out_for_delivery"
     : SHIPPED_WORDS.test(all) ? "shipped" : "other";
   return {

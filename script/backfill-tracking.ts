@@ -100,7 +100,7 @@ async function main(): Promise<void> {
   const puts = new Map<string, { po: string; asin: string; add: Set<string> }>();
   for (const d of Array.from(drafts.values())) {
     if (isPlaceholder(d.tracking_number)) { placeholders++; unmatched.ai_disabled = (unmatched.ai_disabled ?? 0) + 1; continue; }
-    if (d.match_reason === "unpaired") { unmatched.unpaired = (unmatched.unpaired ?? 0) + 1; continue; }
+    if (d.match_reason === "unpaired" || d.match_reason === "return") { unmatched[d.match_reason] = (unmatched[d.match_reason] ?? 0) + 1; continue; }
     const m = matchRow(d, map, suppliers, pos);
     if (m.obvious && d.sender_domain) seeded.add(`${d.sender_domain}→${m.supplier}`);
     if (m.status !== "matched") { unmatched[m.reason] = (unmatched[m.reason] ?? 0) + 1; continue; }

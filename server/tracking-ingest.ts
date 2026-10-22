@@ -38,6 +38,9 @@ export interface TrackingRowDraft {
   match_reason: string | null;
 }
 
+/** Queue marker for a return pickup / label email's numbers — never matched or pushed; the cancellations patch consumes them. */
+export const RETURN_REASON = "return";
+
 export const placeholderTracking = (domain: string | null, orderId: string) => `email:${domain ?? "?"}:${orderId}`;
 export const isPlaceholder = (trackingNumber: string) => trackingNumber.startsWith("email:");
 
@@ -55,7 +58,7 @@ export function rowsFromEmail(msg: Pick<GmailMessage, "id" | "threadId" | "date"
     return p.shipments.map((s) => ({
       ...base, carrier: s.carrier, tracking_number: s.trackingNumber,
       retailer_order_id: single, items_json: s.items.length ? s.items : null,
-      source: "regex" as const, match_reason: unpaired ? "unpaired" : null,
+      source: "regex" as const, match_reason: p.kind === "return" ? RETURN_REASON : unpaired ? "unpaired" : null,
     }));
   }
   if (single && p.kind === "shipped" && SHIPPED_SUBJECT.test(msg.subject)) {

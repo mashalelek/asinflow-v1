@@ -4,7 +4,7 @@
 import { describe, it, expect } from "vitest";
 import { readFileSync, readdirSync } from "fs";
 import { join } from "path";
-import { parseTrackingEmail, normalizeStreet, extractShipTo, stripZipPrefix, extractOrderIds } from "./tracking-parse";
+import { parseTrackingEmail, normalizeStreet, extractShipTo, stripZipPrefix, extractOrderIds, isReturnEmail } from "./tracking-parse";
 import { rowsFromEmail } from "./tracking-ingest";
 
 const DIR = join(__dirname, "__fixtures__", "tracking-emails");
@@ -72,6 +72,22 @@ describe("tracking parser on mailbox fixtures", () => {
     const p = parse("bathandbodyworks-home-ship-to");
     expect(p.shipToStreet).toBe("65 rivercrest");
     expect(sh("bathandbodyworks-home-ship-to")).toEqual(["USPS:9339812091092559280522"]);
+  });
+  it("Walmart return pickup: kind return, its FedEx number queued with the 'return' marker — never matched or pushed", () => {
+    const m = fx("walmart-return-pickup");
+    const p = parseTrackingEmail(m);
+    expect(p.kind).toBe("return");
+    expect(sh("walmart-return-pickup")).toEqual(["FEDEX:798101666350"]);
+    const rows = rowsFromEmail({ id: "r", threadId: null, date: new Date(m.date), subject: m.subject }, p);
+    expect(rows.map((r) => [r.tracking_number, r.match_reason])).toEqual([["798101666350", "return"]]);
+  });
+  it("return detection: subject 'return' or a specific body phrase; a shipped email's returns footer is not one; no other fixture is", () => {
+    expect(isReturnEmail("Drop off your return at FedEx by Thu, Oct 8")).toBe(true);
+    expect(isReturnEmail("Your order", "Your return has been scheduled for pickup")).toBe(true);
+    expect(isReturnEmail("Your order has shipped!", "Free returns within 90 days. Start a return online.")).toBe(false);
+    for (const f of readdirSync(DIR).filter((x) => x.endsWith(".json") && x !== "walmart-return-pickup.json")) {
+      expect(parse(f.replace(/\.json$/, "")).kind, f).not.toBe("return");
+    }
   });
   it("Walmart: a bare 'Delivery' heading line is a ship-to label; 'Delivery method' alone is not", () => {
     expect(extractShipTo("What to expect\nDelivery\n \n \nArrives Thu, Sep 3\n \n805 Grandy Ave, La Grande, OR, 97850, USA\n")).toBe("805 grandy");

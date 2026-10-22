@@ -89,14 +89,14 @@ export interface MatchRunResult { considered: number; matched: number; unmatched
 
 /**
  * Match every open unmatched row the sync may move (not manual, not
- * reassigned, not dismissed, not an ai_disabled placeholder). Dry run:
+ * reassigned, not dismissed, not an ai_disabled placeholder, not a return). Dry run:
  * computes, writes nothing.
  */
 export async function matchTrackingRows(query: QueryLike, opts: { dryRun?: boolean } = {}): Promise<MatchRunResult> {
   const rows = (await query(
     `SELECT id, sender_domain, retailer_order_id FROM po_tracking
       WHERE status = 'unmatched' AND source <> 'manual' AND reassigned_at IS NULL
-        AND COALESCE(match_reason, '') NOT IN ('dismissed', 'ai_disabled')`,
+        AND COALESCE(match_reason, '') NOT IN ('dismissed', 'ai_disabled', 'return')`,
   )).rows;
   const r: MatchRunResult = { considered: rows.length, matched: 0, unmatched: {}, seeded: {} };
   if (rows.length === 0) return r;

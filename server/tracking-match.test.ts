@@ -69,11 +69,11 @@ describe("matchTrackingRows", () => {
     expect(up[0].sql).toMatch(/source <> 'manual' AND reassigned_at IS NULL/);
     expect(d.writes.filter((w) => w.sql.includes("INSERT INTO settings")).map((w) => w.params[1])).toEqual(["notify.macys.com", "oe.target.com"]);
   });
-  it("only rows the sync may move are selected — never manual, reassigned, dismissed or ai_disabled", async () => {
+  it("only rows the sync may move are selected — never manual, reassigned, dismissed, ai_disabled or return", async () => {
     let seen = "";
     await matchTrackingRows((async (sql: string) => { if (sql.includes("FROM po_tracking")) seen = sql; return { rows: [], rowCount: 0 }; }) as any);
     expect(seen).toMatch(/source <> 'manual' AND reassigned_at IS NULL/);
-    expect(seen).toMatch(/NOT IN \('dismissed', 'ai_disabled'\)/);
+    expect(seen).toMatch(/NOT IN \('dismissed', 'ai_disabled', 'return'\)/);
   });
   it("a dry run writes nothing", async () => {
     const d = db([{ id: 1, sender_domain: "notify.macys.com", retailer_order_id: "4800667218" }]);

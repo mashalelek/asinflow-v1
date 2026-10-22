@@ -6357,9 +6357,18 @@ Settings: `tracking.velocity_street` ("805 grandy"),
   email:<domain>:<order#>`, `match_reason = ai_disabled` (until the AI
   fallback reads it); never pushed. Only a shipped-type *subject* queues
   one.
+- **Return pickup / return label emails** (2026-10-22; `isReturnEmail`:
+  "return" in the subject, or a specific body phrase such as "return
+  pickup" — a shipped email's "free returns" footer does not count) are
+  `kind = return`: their numbers are the package going back, so the rows
+  are queued `unmatched` with `match_reason = return`, never matched or
+  pushed, and stay visible in the unmatched queue for the cancellations
+  patch to consume. Rows ingested before this
+  (`npm run tracking:flag-returns [-- --dismiss <n,…>] [--live]`) leave
+  their PO the same way; one already pushed is reported, not touched.
 - **Dedup:** a repeat email for the same number refreshes
   `gmail_message_id` / `shipped_at` only while the row is unmatched.
-- Fixtures: 15 real orders@ emails, people and numbers scrubbed
+- Fixtures: 17 real orders@ emails, people and numbers scrubbed
   (`server/__fixtures__/tracking-emails/`).
 
 ### Matching (`server/tracking-match.ts`) and the unmatched queue

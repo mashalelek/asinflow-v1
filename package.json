@@ -23,6 +23,7 @@
     "backfill:tracking": "tsx script/backfill-tracking.ts",
     "backfill:ships-to": "tsx script/backfill-ships-to.ts",
     "tracking:move": "tsx script/tracking-move.ts",
+    "tracking:flag-returns": "tsx script/tracking-flag-returns.ts",
     "migrate:po-status": "tsx script/migrate-po-status.ts",
     "db:push": "drizzle-kit push"
   },
