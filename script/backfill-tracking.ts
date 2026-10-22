@@ -118,7 +118,6 @@ async function main(): Promise<void> {
     if (r.reasons.length) review.push(`PO ${orderId} (${po.supplier}) ${d.carrier} ${d.tracking_number}: ${joinReasons(r.reasons)}`);
     if (!r.push) continue;
     for (const t of targets) {
-      if (String(t.sold_as ?? "").toLowerCase() === "bundle") continue;
       if (trackingNumbersOf(t).includes(d.tracking_number)) continue;
       const e = puts.get(t.order_id) ?? { po: orderId, asin: t.asin, add: new Set<string>() };
       e.add.add(d.tracking_number);

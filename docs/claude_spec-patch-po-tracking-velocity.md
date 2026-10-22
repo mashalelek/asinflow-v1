@@ -132,7 +132,8 @@ What Velocity has (`server/velocity-api.ts`, `server/routes.ts:2251–2253`, SPE
 
 Push rules:
 - Target set for a PO = every `GET /inbound` order whose `normKey(order_number)` = PO order_id and `status = 'inbound'` and `unit_status IN ('pending','partially_received')`. Push the PO's tracking numbers to **every** order in that set (Velocity's receivers see the same package for all ASIN rows). `items_json` is not used for per-ASIN targeting in this patch.
-- Echo-merge per order: fresh GET immediately before each PUT; `trackingNumbers` = existing `trackings` + any of the PO's tracking rows not already present (compare on `tracking_number`); all other fields echoed unchanged. Never remove an existing entry; never touch quantities, items or status.
+- **Amended 2026-10-22 (Maria, after the TEST-BUNDLE-001 probe):** every push — bundles (to the parent) and ordinary orders — goes through `PUT /inbound/bulk {order_ids, tracking_numbers}`, append-only, no echo, one call per target order with the numbers it lacks. The echo-merge below is superseded for tracking (SPEC §26 "Velocity push"); bundles are no longer hand pushes.
+- ~~Echo-merge~~ (superseded) per order: fresh GET immediately before each PUT; `trackingNumbers` = existing `trackings` + any of the PO's tracking rows not already present (compare on `tracking_number`); all other fields echoed unchanged. Never remove an existing entry; never touch quantities, items or status.
 - Carrier string via `tracking.carrier_map`.
 - Idempotent: if every target order already has the number → row `pushed`, no PUT. Partial coverage → PUT only the missing orders. `pushed_velocity_ids` records where it landed.
 - Any PUT error → row `push_failed` with the error text; the other orders in the set still get their PUT.

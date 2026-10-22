@@ -6442,41 +6442,58 @@ tracking row for the PO re-evaluates and may raise it again.
 ### Velocity push (`server/tracking-push.ts`)
 
 Tracking-only (D1): never creates a Velocity order, never changes a
-quantity, item or status; nothing but carrier + tracking leaves AF.
+quantity, item or status; nothing but tracking numbers leaves AF.
 - **Targets** for a PO = every `GET /inbound` order whose trimmed
   `order_number` (bundle parents: their children's) equals the PO's
   `order_id`, `status = inbound`, `unit_status` pending /
   partially_received. Pushed to **every** target (each Velocity order is
   one ASIN row of the PO; the receivers see the same package for all).
-  **Bundle parents are not written** (a PUT on one is unverified and the
-  PUT is full-replace): the row's review reason asks for a hand push.
-- **Echo-merge**, re-read with `GET /inbound/:order_id`
-  (`getInboundOrder`) immediately before each PUT: `trackingNumbers` =
-  the order's existing `trackings` + the PO's numbers not already there
-  (compared on `tracking_number`), every other field echoed from the fresh
-  read — date, retailer, orderNumber, itemName, asin, amazonSKU, sold_as,
-  units_per_pack, **quantity** (unchanged; omitting it would null it under
-  full-replace), fulfilledBy. Never removes an entry. Carrier string via
-  `tracking.carrier_map`.
-- **Idempotent:** every target has the number → row `pushed`, no PUT;
-  partial coverage → PUT only the missing orders; `pushed_velocity_ids`
-  records where it is. A PUT error → `push_failed`, `push_error` and the
+  A **bundle is a target like any order** — the number goes on the
+  **parent** (2026-10-22, probe below).
+- **Append-only, no echo (2026-10-22):** `PUT /inbound/bulk`
+  `{order_ids: [<order>], tracking_numbers: [<numbers it lacks>]}`
+  (`appendTrackingBulk`), one call per target order. Nothing else is sent,
+  so nothing else can be rewritten. Never removes an entry. Carrier is
+  auto-detected by Velocity; `tracking.carrier_map` is display only.
+- **Idempotent:** every target has the number → row `pushed`, no call;
+  partial coverage → only the missing orders; `pushed_velocity_ids`
+  records where it is. Velocity itself drops a number the order already
+  has (probe: re-sending one present number with one new one left exactly
+  the two, no duplicate). An error → `push_failed`, `push_error` and the
   review reason carry the Velocity error; the other targets still get
   theirs.
 - **Dry run** (`POST /api/tracking/sync {dryRun: true}`): reads Gmail and
   Velocity, writes nothing; per PO the target orders, numbers to add,
   numbers already present.
-- **Element shape** of `trackingNumbers` in the PUT: **plain strings**.
-  Probe 2026-10-21 (`npm run velocity:tracking-probe`, order
-  `be85fad3-68fe-4e25-aeeb-4d745f4c8f40`, PO 4798028553): an object
-  element `{carrier, tracking_number}` is refused — HTTP 400 "unhashable
-  type: 'dict'", nothing written; strings land, and GET returns them as
-  `[{tracking_number}]` with no carrier. Existing GET objects are re-sent
-  as their `tracking_number` strings. Velocity therefore keeps no carrier
-  for pushed numbers; `tracking.carrier_map` stays for display only. The
-  probe pushed the §10 fix: both UPS packages of PO 4800667218's email
-  (1ZE3652C0344289436, 1ZXH28660311288515) onto 4798028553's order; no
-  other field changed.
+- **The single PUT** (`PUT /inbound/:order_id`) is full-replace in
+  practice (it nulled an omitted `date`, 2026-07-30) despite the docs
+  saying it changes only the fields sent; it needs the echo-merge and is
+  no longer used for tracking. The reconcile execute route keeps its own
+  echo; `buildTrackingPutBody` survives only for
+  `npm run velocity:tracking-probe`. Its element shape is **plain
+  strings** (probe 2026-10-21, order `be85fad3`, PO 4798028553: an object
+  `{carrier, tracking_number}` is refused with HTTP 400 "unhashable type:
+  'dict'").
+- **Bundle probe (2026-10-22)**, throwaway order TEST-BUNDLE-001 (parent
+  `fd6e328c`, ASIN B0ZZTEST01, qty 2 / 2 per pack; children `a5fb978b`
+  and `c7cf3ebf`, qty 1 each, retailer TEST). Read back after each path:
+  the inbound list (parent + children), `GET` of the parent and of each
+  child — 101 fields compared. (c) bulk append on the parent, (a) single
+  echo-merge PUT on the parent, (b) single echo-merge PUT on a child: each
+  changed **only the trackings of the order it addressed** — the parent's
+  for (c) and (a), that child's alone for (b); children count,
+  quantities, `units_per_pack`, `bundle_order_id` links and every other
+  field unchanged, no stray rows. A bundle's quantity rule: parent
+  `quantity` = total component units and must divide by `units_per_pack`
+  (create refused "Units per pack must be divisible by the total quantity
+  ordered" for 1 / 2). `GET /inbound/:id` on a parent carries no
+  `bundle_children` (only the list does). Velocity has no DELETE: the
+  test order is removed by hand in the Velocity UI.
+- **`tracking_status`** is null on every inbound tracking (96 of 96,
+  2026-10-22, hand-entered ones included); the docs describe no values and
+  no tracking-events or webhook endpoint. `GET /inbound/:id` returns
+  trackings as `{tracking_number}` only; the list adds `carrier` and
+  `tracking_status`.
 
 ### UI (`client/src/components/po-tracking.tsx`)
 

@@ -40,8 +40,8 @@ describe("buildTrackingPutBody — echo-merge", () => {
 
 function world(o: { rows: any[]; inbound: any[]; known?: any[]; putFails?: string[]; identities?: any[] }) {
   const updates: any[][] = [];
-  const puts: Array<{ id: string; body: any }> = [];
-  const gets: string[] = [];
+  // One entry per append call — the bulk endpoint gets ids + numbers, nothing else.
+  const puts: Array<{ id: string; numbers: string[] }> = [];
   const query = async (sql: string, params?: any[]) => {
     if (sql.includes("FROM settings WHERE key = ANY")) return { rows: [{ key: "tracking.velocity_street", value: "805 grandy" }, { key: "tracking.home_streets", value: ["65 rivercrest"] }, { key: "tracking.carrier_map", value: { UPS: "UPS", FEDEX: "FedEx" } }], rowCount: 3 };
     if (sql.includes("FROM po_tracking t JOIN purchase_orders p")) return { rows: o.rows, rowCount: o.rows.length };
@@ -52,20 +52,18 @@ function world(o: { rows: any[]; inbound: any[]; known?: any[]; putFails?: strin
   const deps: VelocityDeps = {
     list: async () => o.inbound,
     known: async () => [...o.inbound, ...(o.known ?? [])],
-    get: async (id) => { gets.push(id); return o.inbound.find((x) => x.order_id === id); },
-    put: async (id, body) => { if (o.putFails?.includes(id)) throw new Error("Velocity PUT failed (HTTP 400) | message: bad"); puts.push({ id, body }); return {}; },
+    append: async (ids, numbers) => { expect(ids).toHaveLength(1); if (o.putFails?.includes(ids[0])) throw new Error("Velocity PUT /inbound/bulk failed (HTTP 400) | message: bad"); puts.push({ id: ids[0], numbers }); return []; },
   };
-  return { query, deps, updates, puts, gets };
+  return { query, deps, updates, puts };
 }
 const row = (p: any = {}) => ({ id: 1, po_id: "po-1", carrier: "UPS", tracking_number: "1ZE3652C0344289436", ship_to_street: "805 grandy", status: "matched", pushed_velocity_ids: null, order_id: "4798028553", ships_to: "velocity", canceled_or_returned: false, ...p });
 
 describe("pushTracking", () => {
-  it("pushes to EVERY target order of the PO, re-reading each right before its PUT; row → pushed with the order ids", async () => {
+  it("appends to EVERY target order of the PO through the bulk endpoint — numbers only, no echoed fields; row → pushed with the order ids", async () => {
     const w = world({ rows: [row()], inbound: [ord({ order_id: "v1", order_number: "4798028553" }), ord({ order_id: "v2", order_number: "4798028553", asin: "B0OTHER" })] });
     const r = await pushTracking({ query: w.query as any, deps: w.deps });
     expect(w.puts.map((p) => p.id)).toEqual(["v1", "v2"]);
-    expect(w.gets).toEqual(["v1", "v2"]);
-    expect(w.puts[0].body.trackingNumbers).toEqual(["1ZE3652C0344289436"]);
+    expect(w.puts[0]).toEqual({ id: "v1", numbers: ["1ZE3652C0344289436"] });
     expect(r).toMatchObject({ pushed: 1, puts: 2 });
     expect(w.updates[0].slice(1, 5)).toEqual(["pushed", null, null, ["v1", "v2"]]);
   });
@@ -86,7 +84,7 @@ describe("pushTracking", () => {
     expect(w.puts.map((p) => p.id)).toEqual(["v2"]);
     expect(r.push_failed).toBe(1);
     expect(w.updates[0][1]).toBe("push_failed");
-    expect(w.updates[0][2]).toMatch(/v1: Velocity PUT failed/);
+    expect(w.updates[0][2]).toMatch(/v1: Velocity PUT \/inbound\/bulk failed/);
   });
   it("not in Velocity → review, no PUT; home PO with a home street → held", async () => {
     let w = world({ rows: [row({ order_id: "999" })], inbound: [] });
@@ -119,18 +117,18 @@ describe("pushTracking", () => {
     r = await pushTracking({ query: w.query as any, deps: w.deps });
     expect(w.updates[0]).toEqual([1, "matched", "not in Velocity"]);
   });
-  it("a bundle parent is never written — the row asks for a hand push", async () => {
+  it("a bundle is pushed like any order — the append goes to the parent (probe TEST-BUNDLE-001, 2026-10-22); no hand-push reason", async () => {
     const w = world({ rows: [row({ order_id: "111" })], inbound: [ord({ order_id: "b1", order_number: null, sold_as: "bundle", bundle_children: [{ order_number: "111" }] })] });
-    await pushTracking({ query: w.query as any, deps: w.deps });
-    expect(w.puts).toHaveLength(0);
-    expect(w.updates[0][2]).toMatch(/bundle order in Velocity \(b1\) — add tracking by hand/);
+    const r = await pushTracking({ query: w.query as any, deps: w.deps });
+    expect(w.puts).toEqual([{ id: "b1", numbers: ["1ZE3652C0344289436"] }]);
+    expect(r.pushed).toBe(1);
+    expect(w.updates[0].slice(1, 3)).toEqual(["pushed", null]);
   });
-  it("a dry run plans per PO and writes nothing — no PUT, no row update, no fresh GET", async () => {
+  it("a dry run plans per PO and writes nothing — no append, no row update", async () => {
     const w = world({ rows: [row()], inbound: [ord({ order_id: "v1", order_number: "4798028553" })] });
     const r = await pushTracking({ query: w.query as any, deps: w.deps, dryRun: true });
     expect(w.puts).toHaveLength(0);
     expect(w.updates).toHaveLength(0);
-    expect(w.gets).toHaveLength(0);
     expect(r.plans[0].targets).toEqual([{ velocity_order_id: "v1", asin: "B081S8MTJ5", already: [], to_add: ["1ZE3652C0344289436"] }]);
   });
   it("tracking numbers on a GET order, objects or strings", () => {

@@ -9,14 +9,16 @@
 // review. Target set for a PO = every GET /inbound order whose order number
 // (trimmed; bundle parents through their children) equals the PO's order_id,
 // status "inbound", unit_status pending / partially_received. Push to EVERY
-// order in the set. Echo-merge per order, re-read with GET /inbound/:id
-// immediately before its PUT: trackingNumbers = the order's existing
-// trackings + the PO's numbers not already there (by tracking_number); every
-// other field echoed from the fresh read (PUT is full-replace, SPEC §11).
-// Never removes an entry. Idempotent: every target already has the number →
-// pushed, no PUT; partial coverage → PUT only the missing orders. Any PUT
+// order in the set — a bundle's PARENT included (2026-10-22). Append-only:
+// PUT /inbound/bulk {order_ids, tracking_numbers} with the PO's numbers the
+// order lacks — no echo, nothing else sent, nothing else rewritten (probe on
+// TEST-BUNDLE-001, SPEC §26). Never removes an entry; Velocity drops a
+// number the order already has. Idempotent: every target already has the
+// number → pushed, no call; partial coverage → only the missing orders. Any
 // error → push_failed with the error; the other orders still get theirs.
-import { fetchAllInboundOrders, fetchAllKnownOrders, getInboundOrder, updateInboundOrder, type VelocityInboundOrder } from "./velocity-api";
+// The single-PUT echo-merge (buildTrackingPutBody) is kept for the probe
+// script only — the push never uses it.
+import { fetchAllInboundOrders, fetchAllKnownOrders, appendTrackingBulk, type VelocityInboundOrder } from "./velocity-api";
 import { routeTracking, joinReasons, type ShipsTo } from "./tracking-route-rules";
 import { isPlaceholder } from "./tracking-ingest";
 import { hydrateChildlessBundles } from "./velocity-bundle-identity";
@@ -41,10 +43,10 @@ export interface VelocityDeps {
   list: () => Promise<VelocityInboundOrder[]>;
   /** Every order Velocity has (inbound ∪ inventory ∪ shipments) — "is the PO in Velocity at all" (stop b). */
   known: () => Promise<VelocityInboundOrder[]>;
-  get: (orderId: string) => Promise<VelocityInboundOrder>;
-  put: (orderId: string, body: Record<string, any>) => Promise<any>;
+  /** PUT /inbound/bulk — append these numbers to these orders, nothing else. */
+  append: (orderIds: string[], trackingNumbers: string[]) => Promise<any>;
 }
-export const realVelocityDeps: VelocityDeps = { list: fetchAllInboundOrders, known: fetchAllKnownOrders, get: getInboundOrder, put: updateInboundOrder };
+export const realVelocityDeps: VelocityDeps = { list: fetchAllInboundOrders, known: fetchAllKnownOrders, append: appendTrackingBulk };
 
 /** Pure: every order number Velocity knows (own + bundle children), any lifecycle. */
 export function knownOrderNumbers(orders: readonly VelocityInboundOrder[]): Set<string> {
@@ -135,7 +137,7 @@ export function buildTrackingPutBody(current: VelocityInboundOrder, additions: A
 }
 
 export interface PoPushPlan {
-  po_id: string; order_id: string; bundle_orders?: string[];
+  po_id: string; order_id: string;
   rows: Array<{ id: number; tracking_number: string; decision: "push" | "held" | "review" | "received_by_velocity"; reasons: string[] }>;
   targets: Array<{ velocity_order_id: string; asin: string; already: string[]; to_add: string[] }>;
 }
@@ -191,11 +193,10 @@ export async function pushTracking(opts: { query: QueryLike; deps?: VelocityDeps
   for (const [poId, list] of Array.from(byPo.entries())) {
     const orderId = String(list[0].order_id).trim();
     const all = inbound.get(orderId) ?? [];
-    // A bundle parent's PUT is unverified (full-replace could drop its
-    // children): never written — the row asks for a hand push instead.
-    const bundles = all.filter((o) => String(o.sold_as ?? "").toLowerCase() === "bundle");
-    const targets = all.filter((o) => String(o.sold_as ?? "").toLowerCase() !== "bundle");
-    const plan: PoPushPlan = { po_id: poId, order_id: orderId, rows: [], targets: [], ...(bundles.length ? { bundle_orders: bundles.map((b) => b.order_id) } : {}) };
+    // Bundles are targets like any order: the append reaches the parent and
+    // leaves its children, quantities and links alone (probe 2026-10-22).
+    const targets = all;
+    const plan: PoPushPlan = { po_id: poId, order_id: orderId, rows: [], targets: [] };
     const toPush: RowFacts[] = [];
     for (const row of list) {
       const d = routeTracking({
@@ -203,7 +204,6 @@ export async function pushTracking(opts: { query: QueryLike; deps?: VelocityDeps
         velocityStreet: settings.velocityStreet, homeStreets: settings.homeStreets, poCanceledOrReturned: row.canceled_or_returned,
       });
       const decision = d.push ? "push" : d.held ? "held" : d.reasons.length ? "review" : "received_by_velocity";
-      if (d.push && bundles.length > 0) d.reasons.push(`bundle order in Velocity (${bundles.map((b) => b.order_id).join(", ")}) — add tracking by hand`);
       plan.rows.push({ id: row.id, tracking_number: row.tracking_number, decision, reasons: d.reasons });
       if (d.push) toPush.push(row);
       else if (!opts.dryRun) {
@@ -225,13 +225,8 @@ export async function pushTracking(opts: { query: QueryLike; deps?: VelocityDeps
       for (const a of additions) if (have.has(a.tracking_number)) (landed.get(a.id) ?? landed.set(a.id, new Set()).get(a.id)!).add(t.order_id);
       if (missing.length === 0 || opts.dryRun) continue;
       try {
-        const fresh = await deps.get(t.order_id); // re-read immediately before the PUT
-        const freshHave = new Set(trackingNumbersOf(fresh));
-        const still = missing.filter((a) => !freshHave.has(a.tracking_number));
-        if (still.length > 0) {
-          await deps.put(t.order_id, buildTrackingPutBody(fresh, still.map((a) => ({ carrier: a.carrier, tracking_number: a.tracking_number }))));
-          res.puts++;
-        }
+        await deps.append([t.order_id], missing.map((a) => a.tracking_number));
+        res.puts++;
         for (const a of missing) (landed.get(a.id) ?? landed.set(a.id, new Set()).get(a.id)!).add(t.order_id);
       } catch (err: any) {
         res.put_errors++;
