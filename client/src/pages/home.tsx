@@ -1078,7 +1078,7 @@ export default function Home() {
   const handleSyncSourcing = useCallback(async () => {
     setIsSyncingSourcing(true);
     let plan: { newCount: number; skippedExisting: number; toArchiveCount: number } | null = null;
-    let final: { inserted: number; archivedNew: number; skippedExisting: number; errors: string[] } | null = null;
+    let final: { inserted: number; archivedNew: number; skippedExisting: number; errors: string[]; sheets?: Array<{ sheet: string; configured: boolean; read: number; inserted: number; alreadyInAf: number; failed: number; error?: string; warning?: string; unparseableDates?: unknown[] }> } | null = null;
     const addedAsins = new Set<string>();
     try {
       const res = await fetch("/api/sync/sourcing-sheet", {
@@ -1127,7 +1127,15 @@ export default function Home() {
       const f = final ?? { inserted: plan?.newCount ?? 0, archivedNew: 0, skippedExisting: plan?.skippedExisting ?? 0, errors: [] };
       await fetchAsins(startDate, endDate, showParked, showDead);
       // One toast: the sync counts + how many of the added ASINs the filters hide [Show].
-      setPendingAdded({ asins: Array.from(addedAsins), title: "Sourcing sheet synced", base: `${f.inserted} inserted, ${f.archivedNew} archived (discontinued), ${f.skippedExisting} already in AF` });
+      // Per sheet (ER leads patch): an ER-side problem is visible on its own.
+      const perSheet = (f.sheets ?? []).map((l) => {
+        const name = l.sheet === "er" ? "ER" : "Master";
+        if (!l.configured) return `${name}: skipped (not configured)`;
+        if (l.error) return `${name}: ${l.error}`;
+        const extra = [l.failed ? `${l.failed} failed` : "", l.unparseableDates?.length ? `${l.unparseableDates.length} bad date(s)` : "", l.warning ?? ""].filter(Boolean).join(", ");
+        return `${name}: ${l.inserted} inserted, ${l.alreadyInAf} already in AF${extra ? `, ${extra}` : ""}`;
+      }).join(" · ");
+      setPendingAdded({ asins: Array.from(addedAsins), title: "Sourcing sheet synced", base: `${f.inserted} inserted, ${f.archivedNew} archived (discontinued), ${f.skippedExisting} already in AF${perSheet ? ` — ${perSheet}` : ""}` });
       await checkRevivalCandidates(); // DA-3
     } catch (err: any) {
       toast({ title: "Sourcing sync failed", description: err.message, variant: "destructive" });
