@@ -20,6 +20,7 @@
     "backfill:ledger": "tsx script/backfill-ledger.ts",
     "gmail:check": "tsx script/gmail-check.ts",
     "velocity:tracking-probe": "tsx script/velocity-tracking-probe.ts",
+    "backfill:tracking": "tsx script/backfill-tracking.ts",
     "migrate:po-status": "tsx script/migrate-po-status.ts",
     "db:push": "drizzle-kit push"
   },
