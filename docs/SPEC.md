@@ -6428,10 +6428,19 @@ Settings: `tracking.velocity_street` ("805 grandy"),
   dismissed rows, `ai_disabled` placeholders and `return` rows are not
   re-matched.
 - **Routes** (`server/tracking-routes.ts`, behind requireAuth): `GET
-  /api/tracking/unmatched` (the queue, with reason), `POST
+  /api/tracking/unmatched` (the queue, with reason, and per row up to 3
+  `suggestions` — the guessed supplier's PO, then digits-only order # hits
+  across suppliers, `suggestPos`), `POST
   /api/tracking/domain-map {domain, supplier}` (supplier must be a known PO
   supplier; null removes), `POST /api/tracking/:id/attach {po_id}` (manual —
   not for placeholders), `POST /api/tracking/:id/dismiss`.
+
+- **Queue dialog** (POs toolbar, "Unmatched tracking (N)", 2026-10-22):
+  one-click **Attach to <order #>** per suggestion, "other PO…" for a
+  free-text order # override, per-row dismiss, checkboxes with **Dismiss
+  selected (N)** (one dismiss call per row); fixed column widths so Reason
+  no longer wraps letter by letter (the old `overflow-wrap: anywhere` on
+  the dialog).
 
 ### Routing rules and "Review Velocity" (`server/tracking-route-rules.ts`)
 

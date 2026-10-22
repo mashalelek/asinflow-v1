@@ -6,7 +6,7 @@ import type { AddressInfo } from "net";
 const pushCalls: any[] = [];
 vi.mock("./tracking-push", () => ({ pushTracking: vi.fn(async (o: any) => { pushCalls.push(o.poId); return { pushed: 1 }; }) }));
 vi.mock("./gmail-client", () => ({ gmailClient: () => ({}) }));
-import { createTrackingRouter } from "./tracking-routes";
+import { createTrackingRouter, suggestPos } from "./tracking-routes";
 import { HEADER_FIELDS } from "./po-edit";
 
 const PO_A = "11111111-1111-4111-8111-111111111111";
@@ -72,5 +72,17 @@ describe("ships_to on the PO header", () => {
   it("velocity | home only", () => {
     expect(HEADER_FIELDS.ships_to("home")).toEqual({ ok: true, value: "home" });
     expect(HEADER_FIELDS.ships_to("warehouse")).toMatchObject({ ok: false });
+  });
+});
+
+describe("unmatched queue suggestions (2026-10-22)", () => {
+  const pos = [
+    { id: "p-rhode", supplier: "rhode.com", order_id: "8547348" },
+    { id: "p-a", supplier: "a.com", order_id: "55555" }, { id: "p-b", supplier: "b.com", order_id: "55555_2" },
+  ];
+  it("digits-only hits across suppliers (a mapped sender's no_po: rhodeskin.com → rhode.com's PO); several kept for one-click choice; none without an order #", () => {
+    expect(suggestPos({ retailer_order_id: "8547348", supplier_guess: "rhodeskin.com" }, pos)).toEqual([{ po_id: "p-rhode", order_id: "8547348", supplier: "rhode.com" }]);
+    expect(suggestPos({ retailer_order_id: "55555", supplier_guess: null }, pos).map((x) => x.po_id)).toEqual(["p-a", "p-b"]);
+    expect(suggestPos({ retailer_order_id: null, supplier_guess: "a.com" }, pos)).toEqual([]);
   });
 });

@@ -205,16 +205,34 @@ export function SyncTrackingButton({ onDone }: { onDone?: () => void }) {
   );
 }
 
-interface UnmatchedRow { id: number; carrier: string; tracking_number: string; retailer_order_id: string | null; sender_domain: string | null; email_subject: string | null; match_reason: string | null; shipped_at: string | null }
+interface UnmatchedRow {
+  id: number; carrier: string; tracking_number: string; retailer_order_id: string | null; sender_domain: string | null; email_subject: string | null; match_reason: string | null; shipped_at: string | null;
+  /** Up to 3 likely POs (server: guessed supplier's PO, then digits-only order # hits). */
+  suggestions?: Array<{ po_id: string; order_id: string; supplier: string }>;
+}
 
 /** POs toolbar: "Unmatched tracking (N)" → the queue. Hidden when empty. */
 export function UnmatchedTrackingChip({ suppliers, reloadKey, onChanged }: { suppliers: readonly string[]; reloadKey?: number; onChanged?: () => void }) {
   const [rows, setRows] = useState<UnmatchedRow[]>([]);
   const [open, setOpen] = useState(false);
   const [err, setErr] = useState<string | null>(null);
-  const load = useCallback(() => { api<{ rows: UnmatchedRow[] }>("/api/tracking/unmatched").then((r) => setRows(r.rows)).catch(() => {}); }, []);
+  const [picked, setPicked] = useState<Set<number>>(new Set());
+  const [busy, setBusy] = useState(false);
+  const load = useCallback(() => { api<{ rows: UnmatchedRow[] }>("/api/tracking/unmatched").then((r) => { setRows(r.rows); setPicked((p) => new Set(Array.from(p).filter((id) => r.rows.some((x) => x.id === id)))); }).catch(() => {}); }, []);
   useEffect(() => { load(); }, [load, reloadKey]);
   const act = async (fn: () => Promise<any>) => { setErr(null); try { await fn(); load(); onChanged?.(); } catch (e: any) { setErr(e.message); } };
+  const toggle = (id: number) => setPicked((p) => { const n = new Set(p); if (n.has(id)) n.delete(id); else n.add(id); return n; });
+  const allPicked = rows.length > 0 && rows.every((r) => picked.has(r.id));
+  const dismissPicked = async () => {
+    setBusy(true);
+    await act(async () => {
+      const failed: number[] = [];
+      for (const id of Array.from(picked)) await api(`/api/tracking/${id}/dismiss`, { method: "POST" }).catch(() => failed.push(id));
+      setPicked(new Set());
+      if (failed.length) throw new Error(`${failed.length} row(s) could not be dismissed`);
+    });
+    setBusy(false);
+  };
   if (rows.length === 0) return null;
   return (
     <>
@@ -222,36 +240,55 @@ export function UnmatchedTrackingChip({ suppliers, reloadKey, onChanged }: { sup
         <AlertTriangle className="h-3.5 w-3.5" /> Unmatched tracking ({rows.length})
       </button>
       <Dialog open={open} onOpenChange={setOpen}>
-        <DialogContent className="sm:max-w-4xl max-h-[85vh] overflow-y-auto overflow-x-hidden [overflow-wrap:anywhere] [&>*]:min-w-0" data-testid="dialog-unmatched-tracking">
+        <DialogContent className="max-w-6xl w-[95vw] max-h-[85vh] overflow-y-auto" data-testid="dialog-unmatched-tracking">
           <DialogHeader>
             <DialogTitle>Unmatched tracking</DialogTitle>
-            <DialogDescription>Map a sender to a supplier once, attach a number to its PO, or dismiss it.</DialogDescription>
+            <DialogDescription>Attach a number to its PO, map a sender to a supplier once, or dismiss it.</DialogDescription>
           </DialogHeader>
           {err && <p className="text-xs text-destructive">{err}</p>}
-          <table className="w-full text-xs">
-            <thead className="text-left text-muted-foreground"><tr><th className="py-1 pr-2">Reason</th><th className="pr-2">Sender</th><th className="pr-2">Order #</th><th className="pr-2">Tracking</th><th className="pr-2">Email</th><th /></tr></thead>
-            <tbody>
-              {rows.map((r) => <UnmatchedQueueRow key={r.id} r={r} suppliers={suppliers} act={act} />)}
-            </tbody>
-          </table>
+          <div className="flex items-center gap-2 text-xs">
+            <Button size="sm" variant="outline" className="h-7 text-xs" disabled={picked.size === 0 || busy} onClick={() => void dismissPicked()} data-testid="button-dismiss-selected">
+              Dismiss selected ({picked.size})
+            </Button>
+          </div>
+          <div className="overflow-x-auto">
+            <table className="w-full min-w-[60rem] table-fixed text-xs">
+              <colgroup>
+                <col className="w-7" /><col className="w-28" /><col className="w-48" /><col className="w-36" /><col className="w-48" /><col /><col className="w-72" />
+              </colgroup>
+              <thead className="text-left text-muted-foreground">
+                <tr>
+                  <th className="py-1"><input type="checkbox" aria-label="Select all" checked={allPicked} onChange={() => setPicked(allPicked ? new Set() : new Set(rows.map((r) => r.id)))} /></th>
+                  <th className="pr-2">Reason</th><th className="pr-2">Sender</th><th className="pr-2">Order #</th><th className="pr-2">Tracking</th><th className="pr-2">Email</th><th>Attach</th>
+                </tr>
+              </thead>
+              <tbody>
+                {rows.map((r) => <UnmatchedQueueRow key={r.id} r={r} suppliers={suppliers} act={act} picked={picked.has(r.id)} onPick={() => toggle(r.id)} />)}
+              </tbody>
+            </table>
+          </div>
         </DialogContent>
       </Dialog>
     </>
   );
 }
 
-function UnmatchedQueueRow({ r, suppliers, act }: { r: UnmatchedRow; suppliers: readonly string[]; act: (fn: () => Promise<any>) => Promise<void> }) {
+function UnmatchedQueueRow({ r, suppliers, act, picked, onPick }: { r: UnmatchedRow; suppliers: readonly string[]; act: (fn: () => Promise<any>) => Promise<void>; picked: boolean; onPick: () => void }) {
   const [supplier, setSupplier] = useState("");
-  const [order, setOrder] = useState(r.retailer_order_id ?? "");
+  const [order, setOrder] = useState("");
+  const [override, setOverride] = useState(false);
   const placeholder = r.tracking_number.startsWith("email:");
+  const attach = (poId: string) => act(() => api(`/api/tracking/${r.id}/attach`, { method: "POST", body: JSON.stringify({ po_id: poId }) }));
+  const suggestions = r.suggestions ?? [];
   return (
-    <tr className="border-t align-top">
-      <td className="py-1 pr-2">{r.match_reason ?? "—"}</td>
-      <td className="pr-2">
+    <tr className="border-t align-top" data-testid={`row-unmatched-${r.id}`}>
+      <td className="py-1"><input type="checkbox" aria-label={`Select ${r.tracking_number}`} checked={picked} onChange={onPick} /></td>
+      <td className="py-1 pr-2 whitespace-nowrap">{r.match_reason ?? "—"}</td>
+      <td className="py-1 pr-2 break-words">
         {r.sender_domain ?? "—"}
         {r.match_reason === "unknown_sender" && r.sender_domain && (
           <div className="flex items-center gap-1 mt-0.5">
-            <select className="h-6 rounded border px-1" value={supplier} onChange={(e) => setSupplier(e.target.value)}>
+            <select className="h-6 min-w-0 flex-1 rounded border bg-background px-1 text-foreground" value={supplier} onChange={(e) => setSupplier(e.target.value)}>
               <option value="">map to supplier…</option>
               {suppliers.map((s) => <option key={s}>{s}</option>)}
             </select>
@@ -259,21 +296,32 @@ function UnmatchedQueueRow({ r, suppliers, act }: { r: UnmatchedRow; suppliers: 
           </div>
         )}
       </td>
-      <td className="pr-2 font-mono">{r.retailer_order_id ?? "—"}</td>
-      <td className="pr-2 font-mono">{placeholder ? <span className="text-muted-foreground">no number in the email</span> : `${r.carrier} ${r.tracking_number}`}</td>
-      <td className="pr-2 text-muted-foreground">{r.email_subject ?? ""}</td>
-      <td className="whitespace-nowrap">
-        {!placeholder && (
-          <span className="inline-flex items-center gap-1">
-            <input className="h-6 w-32 rounded border px-1 font-mono" placeholder="PO order #" value={order} onChange={(e) => setOrder(e.target.value)} />
+      <td className="py-1 pr-2 font-mono break-all">{r.retailer_order_id ?? "—"}</td>
+      <td className="py-1 pr-2 font-mono break-all">{placeholder ? <span className="font-sans text-muted-foreground">no number in the email</span> : `${r.carrier} ${r.tracking_number}`}</td>
+      <td className="py-1 pr-2 text-muted-foreground break-words">{r.email_subject ?? ""}</td>
+      <td className="py-1">
+        <div className="flex flex-wrap items-center gap-1">
+          {!placeholder && suggestions.map((sg) => (
+            <Button key={sg.po_id} size="sm" className="h-6 text-xs" title={sg.supplier} onClick={() => void attach(sg.po_id)} data-testid={`button-attach-suggested-${r.id}`}>
+              Attach to {sg.order_id}
+            </Button>
+          ))}
+          {!placeholder && !override && (
+            <button className="text-primary hover:underline" onClick={() => setOverride(true)}>{suggestions.length ? "other PO…" : "attach to PO…"}</button>
+          )}
+          <button className="text-muted-foreground hover:underline" onClick={() => void act(() => api(`/api/tracking/${r.id}/dismiss`, { method: "POST" }))}>dismiss</button>
+        </div>
+        {!placeholder && override && (
+          <div className="mt-1 flex items-center gap-1">
+            <input className="h-6 w-36 rounded border bg-background px-1 font-mono" placeholder="PO order #" value={order} autoFocus onChange={(e) => setOrder(e.target.value)} />
             <Button size="sm" variant="outline" className="h-6 text-xs" disabled={!order.trim()} onClick={() => void act(async () => {
               const po = await findPo(order);
               if ("error" in po) throw new Error(po.error);
               await api(`/api/tracking/${r.id}/attach`, { method: "POST", body: JSON.stringify({ po_id: po.id }) });
             })}>Attach</Button>
-          </span>
+            <button className="text-muted-foreground hover:underline" onClick={() => setOverride(false)}>cancel</button>
+          </div>
         )}
-        <button className="ml-2 text-muted-foreground hover:underline" onClick={() => void act(() => api(`/api/tracking/${r.id}/dismiss`, { method: "POST" }))}>dismiss</button>
       </td>
     </tr>
   );

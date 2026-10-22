@@ -1,7 +1,8 @@
 // PO tracking routes (SPEC §26; patch po-tracking-velocity §5, §6, §11).
 // Mounted behind requireAuth.
 //   POST /api/tracking/sync             {dryRun}  "Sync tracking": ingest (Gmail) → match → push (Velocity)
-//   GET  /api/tracking/unmatched        the queue: unmatched rows (not dismissed) with reason
+//   GET  /api/tracking/unmatched        the queue: unmatched rows (not dismissed) with reason, and per row up to
+//                                       3 suggested POs (the guessed supplier's PO, then digits-only order # hits)
 //   POST /api/tracking/domain-map       {domain, supplier}  map a sender domain once, then re-match
 //   POST /api/tracking/:id/attach       {po_id}  attach to a PO by hand (source manual — the sync never moves it)
 //   POST /api/tracking/:id/dismiss      take a row out of the queue
@@ -12,11 +13,20 @@
 //                                       tracking rows that exist NOW; a later row may raise it again (§8)
 import express, { type Router, type Request, type Response } from "express";
 import { query as defaultQuery } from "./db";
-import { matchTrackingRows, setDomainMapEntry } from "./tracking-match";
+import { matchTrackingRows, setDomainMapEntry, findPos, findPosByOrderDigits, type PoRef } from "./tracking-match";
 import { ingestTracking } from "./tracking-ingest";
 import { pushTracking } from "./tracking-push";
 import { gmailClient } from "./gmail-client";
 import type { QueryLike } from "./scheduler/types";
+
+/** Pure: the POs a queued row most likely belongs to — the guessed supplier's PO first, then digits-only order # hits; ≤ 3. */
+export function suggestPos(row: { retailer_order_id: string | null; supplier_guess: string | null }, pos: readonly PoRef[]): Array<{ po_id: string; order_id: string; supplier: string }> {
+  if (!row.retailer_order_id) return [];
+  const hits = [...(row.supplier_guess ? findPos(row.supplier_guess, row.retailer_order_id, pos) : []), ...findPosByOrderDigits(row.retailer_order_id, pos)];
+  const out: Array<{ po_id: string; order_id: string; supplier: string }> = [];
+  for (const h of hits) if (!out.some((x) => x.po_id === h.id) && out.length < 3) out.push({ po_id: h.id, order_id: h.order_id, supplier: h.supplier });
+  return out;
+}
 
 export function createTrackingRouter(deps: { query?: QueryLike } = {}): Router {
   const query = deps.query ?? (defaultQuery as any as QueryLike);
@@ -47,6 +57,10 @@ export function createTrackingRouter(deps: { query?: QueryLike } = {}): Router {
           WHERE status = 'unmatched' AND COALESCE(match_reason, '') <> 'dismissed'
           ORDER BY shipped_at DESC NULLS LAST, id DESC LIMIT 1000`,
       )).rows;
+      const pos: PoRef[] = rows.some((r: any) => r.retailer_order_id)
+        ? (await query(`SELECT id, supplier, order_id FROM purchase_orders`)).rows.map((x: any) => ({ id: String(x.id), supplier: String(x.supplier), order_id: String(x.order_id) }))
+        : [];
+      for (const r of rows as any[]) r.suggestions = suggestPos(r, pos);
       res.json({ rows, count: rows.length });
     } catch (err) { fail(res, err); }
   });
