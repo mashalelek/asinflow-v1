@@ -203,11 +203,10 @@ describe("buildOfferOnlyPayload — spec guarantees", () => {
     expect(p.attributes.purchasable_offer[0].currency).toBe("USD");
   });
 
-  it("is born closed: purchasable_offer carries a past end_at (§18)", () => {
+  it("carries NO end_at (2026-10-23): a create-time end_at is stored but not applied — the offer is closed right after creation instead", () => {
     const p = buildOfferOnlyPayload(sample, "not_applicable");
-    const endAt = p.attributes.purchasable_offer[0].end_at;
-    expect(endAt).toBeDefined();
-    expect(new Date(endAt.value).getTime()).toBeLessThan(Date.now());
+    expect(p.attributes.purchasable_offer[0]).not.toHaveProperty("end_at");
+    expect(JSON.stringify(p)).not.toMatch(/end_at/);
   });
 });
 

@@ -37,9 +37,9 @@ const PRODUCT_TYPE = "PRODUCT"; // offer-only matching uses the generic PRODUCT 
 export const BORN_CLOSED_END_AT = "2000-01-01";
 
 /**
- * THE end_at value AF writes — the one helper both writers use: the
- * born-closed PUT (buildOfferOnlyPayload) and the component-22 close PATCH
- * (listing-hygiene.ts). A fixed past date; AF never sends end_at null and
+ * THE end_at value AF writes — the one helper, used by the component-22 close
+ * PATCH (listing-hygiene.ts; also close-after-create). The create payload no
+ * longer carries end_at (2026-10-23). A fixed past date; AF never sends end_at null and
  * never removes it, so no code path can reopen a listing (§18, enforced by
  * listing-hygiene-never-reopen.test.ts).
  */
@@ -579,17 +579,16 @@ export function buildOfferOnlyPayload(input: OfferAddInput, dgHzRegulationValue:
     supplier_declared_dg_hz_regulation: attr(dgHzRegulationValue),
 
     // Price + FBA fulfillment. Critically OMITS quantity (FBA-owned).
-    // BORN CLOSED (§18): end_at in the past soft-closes the offer at creation
-    // — SC's "Close listing" is literally this field. Verified live 2026-08-01
-    // and -02 (accepted at create, persists through async processing, listing
-    // settles DISCOVERABLE-not-BUYABLE, §19 verifies live). Reopening is done
-    // in Seller Central directly by the user.
+    // NO end_at (2026-10-23, close-after-create): a past end_at sent at
+    // CREATE is stored by Amazon but not applied — the listing stays open
+    // ("Out of stock"). The §19 ladder's first probe that sees the listing
+    // sends the component-22 close PATCH instead (listing-hygiene.ts
+    // closeAfterCreate), which does close it.
     purchasable_offer: [
       {
         marketplace_id: MARKETPLACE,
         currency: "USD",
         our_price: [{ schedule: [{ value_with_tax: input.price }] }],
-        end_at: closedEndAt(),
       },
     ],
     fulfillment_availability: [

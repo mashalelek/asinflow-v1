@@ -1,7 +1,8 @@
 // Listing hygiene rule 5 (SPEC §18, 2026-10-18): AF NEVER reopens a listing.
 // No source file sends end_at null or removes it; the only end_at writer is
 // the shared helper with the fixed past date (closedEndAt in offer-add.ts),
-// used by the born-closed PUT and the component-22 close PATCH. Reopen stays a
+// used by the component-22 close PATCH (the create payload carries none since
+// 2026-10-23 — close-after-create). Reopen stays a
 // manual action in Seller Central.
 import { describe, it, expect } from "vitest";
 import { readFileSync, readdirSync, statSync } from "fs";
@@ -46,7 +47,7 @@ describe("never-reopen guard", () => {
       }
     }
     expect(bad).toEqual([]);
-    expect(writers).toBe(2); // the born-closed PUT and the close PATCH
+    expect(writers).toBe(1); // the close PATCH (the create payload carries no end_at since 2026-10-23)
   });
 
   it("no source assigns, nulls or deletes end_at, and no patch removes purchasable_offer", () => {
@@ -60,11 +61,11 @@ describe("never-reopen guard", () => {
     expect(bad).toEqual([]);
   });
 
-  it("the helper is a fixed date in the past, and both writers send exactly it", () => {
+  it("the helper is a fixed date in the past; the close PATCH sends exactly it and the create sends none", () => {
     expect(Date.parse(BORN_CLOSED_END_AT)).toBeLessThan(Date.parse("2001-01-01"));
     expect(closedEndAt()).toEqual({ value: BORN_CLOSED_END_AT });
     const put = buildOfferOnlyPayload({ asin: "B000000001", productNumber: 1, price: 10, cogs: 5 } as any, "not_applicable");
-    expect(put.attributes.purchasable_offer[0].end_at).toEqual({ value: BORN_CLOSED_END_AT });
+    expect(put.attributes.purchasable_offer[0]).not.toHaveProperty("end_at");
     expect(buildClosePatchBody("PRODUCT").patches[0].value[0].end_at).toEqual({ value: BORN_CLOSED_END_AT });
   });
 
