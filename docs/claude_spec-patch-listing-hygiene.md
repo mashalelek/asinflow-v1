@@ -366,6 +366,28 @@ expected to trip both — that is the intended review point for the backlog.
   check now runs before the amzn.gr rule in 22 and 24, so an amzn.gr SKU
   with no listing reports `skip_no_listing` (16 of the 17 in pass #123).
 
+- **2026-10-23 (Maria): born-closed becomes close-after-create.** The
+  sub-status probe (2026-10-23) found no Amazon field — Listings API,
+  searchListingsItems or any listings report — that tells SC's "Closed"
+  from "Out of stock"; and a past `end_at` sent at CREATE is stored by
+  Amazon but not applied (the listing stays open, "Out of stock"), while
+  the same value sent by the component-22 PATCH does close it. So:
+  1. Add to SC no longer sends `end_at` in the create payload.
+  2. Close-after-create: on the first §19 probe that sees the new listing
+     (200 with summaries), AF sends the component-22 close PATCH through
+     the same helper — forbidden-quantity guard, a `listing_actions` row
+     with reason `born_closed`, verified as usual, sent once. If the ladder
+     never sees the listing, the nightly component 22 closes it.
+  3. The closed test, everywhere `offer_end_at` is read as "closed": closed
+     when `end_at` is a real close timestamp, OR it is the literal
+     `2000-01-01` AND AF has an accepted close PATCH on that SKU after its
+     latest creation; otherwise not closed. BUYABLE always means open.
+  4. SPEC §18: born-closed = close-after-create; the "verified live
+     2026-08-01/02" claim is removed; no Amazon source exposes SC's inactive
+     sub-status (probe 2026-10-23). Add-to-SC preview note: "Offers are
+     closed right after they're created."
+  No SC confirmation step (Maria).
+
 ## Out of scope
 
 - Showing the new buckets in the Stock hover (easy follow-up; display only).
