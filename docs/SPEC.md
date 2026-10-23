@@ -2203,7 +2203,8 @@ of the ASIN; `amzn.gr.*` SKUs are never closed (22) and are deleted only
 by 24's amzn_gr rule (below; excluded entirely until 2026-10-21).
 
 - **22 Close** (daily, 00:00 pass, before 24 — hourly until 2026-10-20) —
-  a SKU whose listing exists and is not closed is closed
+  a SKU whose listing exists and is not closed (the closed test, §18 —
+  `isOfferClosed`: a create-only literal `2000-01-01` is NOT closed) is closed
   when Available (fulfillable), Inbound (working + shipped + receiving),
   FC Transfer (reserved › pending transshipment), FC Processing (reserved
   › FC processing), Reserved (reserved › pending customer order) and
@@ -2211,9 +2212,10 @@ by 24's amzn_gr rule (below; excluded entirely until 2026-10-21).
   stages before FBA (On Order, At Prep, POs, Velocity) are never read.
   The write is `patchListingsItem` `op: "merge"` on
   `/attributes/purchasable_offer` setting `end_at` to
-  `BORN_CLOSED_END_AT`, built by the same helper the born-closed payload
-  uses, with the `findForbiddenQuantityPaths` pre-flight abort before every
-  PATCH. Outcomes: `closed` · `would_close` · `skip_has_stock:<bucket>` ·
+  `BORN_CLOSED_END_AT`, built by the one helper (`closedEndAt`; the create
+  payload carries no `end_at` since 2026-10-23 — close-after-create sends
+  this same PATCH), with the `findForbiddenQuantityPaths` pre-flight abort
+  before every PATCH. Outcomes: `closed` · `would_close` · `skip_has_stock:<bucket>` ·
   `skip_already_closed` · `skip_no_listing` · `skip_pending_submission` ·
   `skip_no_fresh_inventory` · `skip_probe_transient` · `skip_amzn_gr` ·
   `held` · `invalid` / `error`.
@@ -2253,7 +2255,8 @@ by 24's amzn_gr rule (below; excluded entirely until 2026-10-21).
   checks run first, so one without a listing is `skip_no_listing`.
 - **Every SKU in scope gets an outcome**, and every candidate that fires
   (or would) gets a `listing_actions` row with the full evidence snapshot.
-  Component 16 verifies on the next pass (close → `offer_end_at <= now()`;
+  Component 16 verifies on the next pass (close → the closed test holds with
+  this action as the PATCH;
   delete → absent); still not effective after two passes →
   `not_effective`, surfaced in the jobs dialog.
 - **Circuit breakers:** more than `settings.hygiene_close_breaker` (50
@@ -3286,12 +3289,19 @@ the per-row **+** button.
   **omit the quantity field entirely.** For an AFN/FBA SKU, quantity is owned
   by Amazon (set from warehouse receipts); sending any quantity value
   (including `0`) risks flipping the SKU to merchant-fulfilled.
-- **Born closed (close-on-create):** every created offer includes
-  `purchasable_offer.end_at` set to a past date, so the listing materializes
-  in SC already **Closed**. This is the documented "soft-close" — SC's "Close
-  listing" button is literally this field; the SKU, listing data, and report
-  presence are retained, nothing is deleted, and no quantity /
-  `fulfillment_availability` field is involved (MF-flip rail untouched).
+- **Born closed = close-after-create (2026-10-23).** Every offer AF creates
+  is closed right after it materializes. The create payload carries **no**
+  `end_at`: a past `end_at` sent at CREATE is stored by Amazon but **not
+  applied** — the listing stays open and SC shows it "Out of stock /
+  Replenish inventory" (the 2026-10-22 Add to SC batch, 22 SKUs, all still
+  open 20 h later). Instead the first §19 probe that sees the new listing
+  (200 with summaries) sends component 22's close PATCH through the same
+  helper (`closeAfterCreate`, `listing-hygiene-run.ts`): forbidden-quantity
+  guard, a `listing_actions` row with `evidence.reason = born_closed`,
+  verified by component 16 like any close, sent once. If the ladder never
+  sees the listing, the nightly component 22 closes it (a zero-stock open
+  SKU). The Add to SC preview says "Offers are closed right after they're
+  created."
   - **Reopen is done in Seller Central directly by the user** (2026-08-03: the
     in-app reopen action was removed as unnecessary). For reference, the API
     mechanism — should it ever be needed again — is a `patchListingsItem`
@@ -3299,20 +3309,33 @@ the per-row **+** button.
     never `op: "replace"` (wipes the price) and never with price fields in the
     same patch (a high-price error makes Amazon silently ignore the `end_at`).
     Round-trip was verified live on `CAM-HOM-M64-RQR-003` before removal.
-  - **Implemented (2026-08-02):** `end_at` is set unconditionally in
-    `buildOfferOnlyPayload` (`BORN_CLOSED_END_AT = "2000-01-01"`). The
-    offer-add preview's "Ready to create" section carries a plain one-line
-    note that offers are created closed.
+  - **The closed test (2026-10-23, `server/listing-closed.ts`
+    `isOfferClosed` — the one definition; every reader of `offer_end_at`
+    goes through it).** No Amazon source exposes SC's inactive sub-status:
+    probe 2026-10-23 — getListingsItem (summaries, attributes, offers,
+    fulfillmentAvailability, issues), searchListingsItems, and the listings
+    reports (`GET_MERCHANT_LISTINGS_ALL_DATA` Active/Inactive only;
+    `_INACTIVE_DATA`, `_DATA`, `_BACK_COMPAT`, FYP, cancelled, FBA MYI
+    all/unsuppressed) show SC's Closed and Out of stock alike. What
+    `end_at`'s form says instead:
+    - a **real close timestamp** — Amazon rewrites the date when a close is
+      applied (an SC close: `PRK-HOM-6P4-PIC-001` read
+      `2026-10-19T09:31:29Z`) → **closed** when `<= now`;
+    - the **literal `2000-01-01`** — Amazon stored the value AF sent.
+      Applied when sent by AF's close PATCH (`RHO-BPC-6WB-PLS-002`, PATCHed
+      2026-10-20, shown Closed in SC), not when sent at create → **closed
+      only if AF has an accepted (or verified) close PATCH on the SKU after
+      its latest creation**;
+    - `null` → open.
+    **BUYABLE always means open** (known on live reads: the fire pre-flights;
+    component 16's stored state carries no per-SKU status). Derived from the
+    account on 2026-10-23 this reproduced SC's counts within 2 (Active 207 =
+    207, Closed 247 vs 249, Approval required 2 = 2 — issue 18299).
   - **AF also closes existing listings (2026-10-18, listing hygiene):**
-    component 22 closes a SKU whose FBA buckets are all zero, with the same
-    `end_at` value through the same helper (§11). On GET, Amazon returns
-    `end_at` as `{value: <ISO timestamp>}` for a closed offer — not the
-    date AF sent (spike 2026-10-18: born-closed SKUs read back
-    `2026-10-13T12:29:10Z` / `2026-10-15T01:55:12Z`) — and
-    `{value: null}` for an open one (Maria's SC-closed
-    `PRK-HOM-6P4-PIC-001`: `2026-10-19T09:31:29Z`); component 16 stores it
-    as `asin_skus.offer_end_at` and "closed" means `offer_end_at <= now()`
-    — **"closed now" only, never "closed since"**.
+    component 22 closes a SKU whose FBA buckets are all zero and which the
+    closed test says is open, through the same helper (§11); component 16
+    stores Amazon's `end_at` as `asin_skus.offer_end_at` verbatim — "closed"
+    is always the closed test, never `offer_end_at <= now()` on its own.
   - **AF never reopens.** No code path clears `end_at`, sends it null or
     removes it — not even with stock at FBA. Reopen stays a manual action
     in Seller Central; enforced by test (`listing-hygiene` never-reopen

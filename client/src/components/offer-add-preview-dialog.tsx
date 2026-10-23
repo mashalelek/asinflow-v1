@@ -347,7 +347,7 @@ export function OfferAddPreviewDialog({
             {buckets && buckets.ready.length > 0 && (
               <Section title="Ready to create" count={buckets.ready.length}>
                 {/* §18 born-closed: every creation carries a past end_at */}
-                <p className="text-[11px] text-muted-foreground">Offers are created closed.</p>
+                <p className="text-[11px] text-muted-foreground">Offers are closed right after they're created.</p>
                 {buckets.ready.map((row) => {
                   if (row.outcome.kind !== "preview") return null;
                   const isExpanded = expanded.has(row.asin);
