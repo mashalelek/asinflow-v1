@@ -43,6 +43,40 @@ export async function insertAction(query: QueryLike, a: {
   );
 }
 
+// ── Close-after-create (2026-10-23, listing-hygiene amendment) ──────────────
+// A past end_at sent at CREATE is stored by Amazon but not applied, so Add to
+// SC no longer sends one. Instead, the first §19 probe that sees the new
+// listing (200 with summaries) sends THIS: component 22's close PATCH through
+// fireClose — the same helper, pre-flight read, forbidden-quantity guard —
+// and a listing_actions row with reason born_closed, verified by component 16
+// like any close. Sent once: any live close row for the SKU since the
+// submission means it is done (whatever its status); a pre-flight read that
+// fails sends nothing and writes nothing, so the next probe retries. If the
+// ladder never sees the listing, the nightly component 22 closes it.
+export const BORN_CLOSED_REASON = "born_closed";
+
+export async function closeAfterCreate(
+  query: QueryLike, sellerId: string,
+  row: { asin: string; sku: string; submittedAt: Date | string },
+  deps: ScDeps = hygieneDeps.sc, now: Date = new Date(),
+): Promise<{ status: string; outcome: string } | null> {
+  const since = new Date(row.submittedAt).toISOString();
+  const prior = (await query(
+    `SELECT 1 FROM listing_actions WHERE sku = $1 AND action = 'close' AND dry_run = FALSE AND fired_at >= $2::timestamptz LIMIT 1`,
+    [row.sku, since],
+  )).rows;
+  if (prior.length > 0) return null;
+  const r = await fireClose(sellerId, row.sku, deps, now);
+  const sent = r.status === "accepted" || r.status === "invalid" || (r.status === "error" && !r.outcome.startsWith("error: pre-flight"));
+  if (!sent) return { status: r.status, outcome: r.outcome };
+  await insertAction(query, {
+    sku: row.sku, asin: row.asin, action: "close", jobId: null, dryRun: false,
+    evidence: { reason: BORN_CLOSED_REASON, live: true, submitted_at: since, preflight: r.preflight ?? null, outcome: r.outcome },
+    status: r.status, submissionId: r.submissionId, issues: r.issues,
+  });
+  return { status: r.status, outcome: r.outcome };
+}
+
 class Tally {
   counts: Record<string, number> = {};
   outcomes: Record<string, string> = {};

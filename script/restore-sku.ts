@@ -7,12 +7,12 @@
 //   price    — fetchCompetingOffers + resolveOfferPrice on the submit rows /
 //              settings the route loads (same SQL)
 //   DG       — fetchDgHzLive + fetchDgHzRegulationEnum + resolveDgHzRegulation
-//   payload  — buildOfferOnlyPayload (condition new, FBA, no quantity,
-//              BORN CLOSED end_at), the forbidden-quantity pre-flight
+//   payload  — buildOfferOnlyPayload (condition new, FBA, no quantity, no
+//              end_at since 2026-10-23), the forbidden-quantity pre-flight
 //   PUT      — putListingsItem → mapPutListingsResponse
 //   DB       — the same primary promotion statement and recordSubmission
 //   after    — poll getListingsItem until the SKU resolves, then verifyPending
-//              scoped to the new ledger row.
+//              scoped to the new ledger row, which closes it (close-after-create).
 // Never a different SKU: if Amazon refuses this one, it reports and stops.
 //   npx tsx script/restore-sku.ts --asin B078MYRN9V --sku KZ-K3SV-T350          # plan only
 //   npx tsx script/restore-sku.ts --asin B078MYRN9V --sku KZ-K3SV-T350 --live   # PUT + writes + verify
@@ -29,6 +29,7 @@ import { buildOfferOnlyPayload, findForbiddenQuantityPaths } from "../server/off
 import { putListingsItem } from "../server/listings-write";
 import { mapPutListingsResponse } from "../server/listings-error-map";
 import { recordSubmission, verifyPending } from "../server/listing-submissions-repo";
+import { closeAfterCreate } from "../server/listing-hygiene-run";
 
 const PRODUCT_TYPE = "PRODUCT"; // offer-add.ts: offer-only matching uses the generic PRODUCT type
 const arg = (n: string) => { const i = process.argv.indexOf(`--${n}`); return i >= 0 ? process.argv[i + 1]?.trim() : undefined; };
@@ -133,7 +134,8 @@ async function main(): Promise<number> {
     if (s.ok && s.present) break;
     if (mins >= 30) { console.log("not resolved within 30 min — leaving the ledger row pending for the §19 sweep"); break; }
   }
-  if (sub?.id) console.log(`verifyPending: ${JSON.stringify(await verifyPending(sellerId, { ids: [sub.id], query: (s: string, p?: any[]) => pool.query(s, p) as any }))}`);
+  const q = (s: string, p?: any[]) => pool.query(s, p) as any;
+  if (sub?.id) console.log(`verifyPending: ${JSON.stringify(await verifyPending(sellerId, { ids: [sub.id], query: q, closeAfterCreate: (row) => closeAfterCreate(q, sellerId, row) }))}`);
   return 0;
 }
 main().then(async (c) => { await pool.end(); process.exit(c); }).catch(async (e) => { console.error(e?.stack ?? e); await pool.end().catch(() => {}); process.exit(1); });

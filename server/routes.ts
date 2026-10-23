@@ -5,6 +5,7 @@ import Papa from "papaparse";
 import * as XLSX from "xlsx";
 import { getPricing, getFees, getCatalogData, estimateFeeFallback, getEligibility } from "./spapi";
 import { getInboundHazmat } from "./inbound-hazmat";
+import { closeAfterCreate } from "./listing-hygiene-run";
 import { verifyPending, resolveSubmissionManual, resolveSubmissionsBulk, dismissFlags, getUnverifiedCount, listNeedsAttention, listInFlight, findRecentPendingIds, countOpenAmong } from "./listing-submissions-repo";
 import { runAuraSyncChain } from "./aura-sync-chain";
 import { probeGatingForAsins } from "./gating-probe";
@@ -484,7 +485,7 @@ function scheduleBatchVerify(
         const delay = ladderMs[step] - (step > 0 ? ladderMs[step - 1] : 0);
         const t = setTimeout(async () => {
           try {
-            const s = await verifyPending(sellerId, { ids });
+            const s = await verifyPending(sellerId, { ids, closeAfterCreate: (r) => closeAfterCreate(query as any, sellerId, r) });
             log(`Auto-verify probe ${step + 1}/${ladderMs.length} (${ids.length} scoped): checked=${s.checked} live=${s.live} failed=${s.failed} processing=${s.processing} stale=${s.stale} throttled=${s.throttled}`, "verify");
             const open = await countOpenAmong(ids);
             if (open === 0) {
@@ -2711,7 +2712,7 @@ export async function registerRoutes(
     const sellerId = process.env.SP_API_SELLER_ID;
     if (!sellerId) { res.status(400).json({ error: "SP_API_SELLER_ID not set" }); return; }
     try {
-      const summary = await verifyPending(sellerId);
+      const summary = await verifyPending(sellerId, { closeAfterCreate: (r) => closeAfterCreate(query as any, sellerId, r) });
       const needsAttention = await listNeedsAttention();
       res.json({ summary, needsAttention });
     } catch (err: any) {

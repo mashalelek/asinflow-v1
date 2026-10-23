@@ -76,7 +76,12 @@ export interface VerifySweepSummary {
 // scoped re-run over the same ids only probes what's still open.
 export async function verifyPending(
   sellerId: string,
-  opts: { httpGet?: HttpGetFn; query?: QueryLike; delayMs?: number; staleHours?: number; ids?: string[] } = {},
+  opts: {
+    httpGet?: HttpGetFn; query?: QueryLike; delayMs?: number; staleHours?: number; ids?: string[];
+    /** Close-after-create (2026-10-23): called once per probe that sees the submitted SKU listed
+     *  (200 with summaries). Production callers pass listing-hygiene-run's closeAfterCreate; absent → no close. */
+    closeAfterCreate?: (row: { asin: string; sku: string; submittedAt: Date | string }) => Promise<unknown>;
+  } = {},
 ): Promise<VerifySweepSummary> {
   const query = opts.query ?? (defaultQuery as any);
   const delayMs = opts.delayMs ?? 1100;
@@ -157,6 +162,13 @@ export async function verifyPending(
         },
         { query, outcomes: (asin, outcome) => { flagOutcomes[asin] = outcome; } },
       );
+    }
+    // Close-after-create: the first probe that sees the listing closes it
+    // (the hook is idempotent — sent once). A failure is logged, never fatal
+    // to the sweep: the nightly component 22 still closes an open zero-stock SKU.
+    if (probe.input.listed && opts.closeAfterCreate) {
+      try { await opts.closeAfterCreate({ asin: row.asin, sku: row.sku, submittedAt: row.submitted_at }); }
+      catch (err: any) { console.error(`[verify] close-after-create failed for ${row.sku}: ${err?.message ?? err}`); }
     }
     // A 'failed' verdict RE-PROBES; it does not write the flag (§18 Writers,
     // 2026-10-10). It used to revert has_live_offer to FALSE directly, guarded
