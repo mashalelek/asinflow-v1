@@ -108,8 +108,9 @@ async function deleteRunBlocker(facts: SkuFacts[], query: QueryLike, t: Tally, n
   return null;
 }
 
-async function fire(action: HygieneAction, sellerId: string, sku: string, now: Date, e: Evaluation) {
-  return action === "close" ? fireClose(sellerId, sku, hygieneDeps.sc, now) : fireDelete(sellerId, sku, hygieneDeps.sc, now, { rule: e.evidence?.rule });
+async function fire(action: HygieneAction, sellerId: string, f: SkuFacts, now: Date, e: Evaluation) {
+  const closePatchAt = f.listing.closePatchAt ?? null;
+  return action === "close" ? fireClose(sellerId, f.sku, hygieneDeps.sc, now, { closePatchAt }) : fireDelete(sellerId, f.sku, hygieneDeps.sc, now, { rule: e.evidence?.rule, closePatchAt });
 }
 
 export async function runHygiene(action: HygieneAction, ctx: ComponentContext): Promise<ComponentResult> {
@@ -158,7 +159,7 @@ export async function runHygiene(action: HygieneAction, ctx: ComponentContext): 
   if (!live || trips) return t.result();
 
   for (const { f, e } of candidates) {
-    const r = await fire(action, ctx.sellerId, f.sku, now, e);
+    const r = await fire(action, ctx.sellerId, f, now, e);
     t.set(f.sku, r.outcome);
     if (r.status === "skipped") continue;
     await insertAction(ctx.query, {
@@ -197,7 +198,7 @@ async function runRelease(action: HygieneAction, ctx: ComponentContext, params: 
       ? { checkedAt: null, createdAt: null, offerEndAt: null } // transient → skip_probe_transient
       : !l.present
         ? { checkedAt: now, createdAt: null, offerEndAt: null }
-        : { checkedAt: now, createdAt: l.state.createdAt ? new Date(l.state.createdAt) : null, offerEndAt: l.state.offerEndAt ? new Date(l.state.offerEndAt) : null };
+        : { checkedAt: now, createdAt: l.state.createdAt ? new Date(l.state.createdAt) : null, offerEndAt: l.state.offerEndAt ? new Date(l.state.offerEndAt) : null, buyable: l.state.buyable, closePatchAt: f.listing.closePatchAt ?? null };
     const inv = inventory.get(f.sku);
     f.inventory = inv ? { ...inv, lastNonzeroAt: f.inventory?.lastNonzeroAt ?? null } : null;
   }
@@ -226,7 +227,7 @@ async function runRelease(action: HygieneAction, ctx: ComponentContext, params: 
       t.set(f.sku, e.outcome);
       continue;
     }
-    const r = await fire(action, ctx.sellerId, f.sku, now, e);
+    const r = await fire(action, ctx.sellerId, f, now, e);
     release.outcome = r.outcome;
     release.preflight = r.preflight ?? null;
     t.set(f.sku, r.outcome);

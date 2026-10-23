@@ -28,6 +28,7 @@
 // no longer closed (delete) is not written.
 import { BUCKET_FIELDS, parseSkuBuckets, type BucketField, type SkuBuckets } from "./sku-fba-inventory";
 import { parseListingState } from "./sku-listing-fetch";
+import { isOfferClosed } from "./listing-closed";
 import { closedEndAt, findForbiddenQuantityPaths } from "./offer-add";
 import { loadAsinPipeline } from "./asin-po-pipeline";
 import { fetchAllInboundOrders, fetchAllInventoryOrders, type VelocityInboundOrder } from "./velocity-api";
@@ -82,6 +83,10 @@ export interface ListingFacts {
   /** null with a checkedAt = probed, no listing (404 / empty summaries). */
   createdAt: Date | null;
   offerEndAt: Date | null;
+  /** Live reads only (summaries BUYABLE); null = not known (component 16's stored state). */
+  buyable?: boolean | null;
+  /** The newest accepted / verified live close PATCH AF sent on the SKU. */
+  closePatchAt?: Date | null;
 }
 export interface SkuFacts {
   sku: string;
@@ -144,7 +149,8 @@ function baseEvidence(f: SkuFacts, b: Basis) {
 }
 
 const fresh = (at: Date | null | undefined, from: Date | null) => at != null && from != null && at.getTime() >= from.getTime();
-const isClosed = (l: ListingFacts, now: Date) => l.offerEndAt != null && l.offerEndAt.getTime() <= now.getTime();
+// The closed test (listing-closed.ts): end_at's form + AF's own close PATCH; BUYABLE = open.
+const isClosed = (l: ListingFacts, now: Date) => isOfferClosed({ endAt: l.offerEndAt, buyable: l.buyable, createdAt: l.createdAt, closePatchAt: l.closePatchAt }, now);
 const hasListing = (l: ListingFacts) => l.createdAt != null;
 
 /** Pure: the close decision for one SKU (rule 2). Pipeline stages are never read. */
@@ -260,7 +266,10 @@ export async function loadSkuFacts(query: QueryLike, sel: { asins?: string[]; sk
             -- deleting listing reads back open (end_at null) for minutes while
             -- Amazon processes the DELETE, and must not draw a close.
             EXISTS (SELECT 1 FROM listing_actions la WHERE la.sku = s.sku AND la.status = 'accepted'
-                     AND la.fired_at > $2::timestamptz) AS action_pending
+                     AND la.fired_at > $2::timestamptz) AS action_pending,
+            -- The closed test (2026-10-23): AF's newest live close PATCH on the SKU.
+            (SELECT MAX(cp.fired_at) FROM listing_actions cp WHERE cp.sku = s.sku AND cp.action = 'close'
+                     AND cp.dry_run = FALSE AND cp.status IN ('accepted', 'verified')) AS close_patch_at
        FROM asin_skus s JOIN asins a ON a.id = s.asin_id
        LEFT JOIN sku_fba_inventory i ON i.sku = s.sku
        LEFT JOIN sku_ledger_state l ON l.sku = s.sku
@@ -282,7 +291,7 @@ export async function loadSkuFacts(query: QueryLike, sel: { asins?: string[]; sk
     } : null;
     by.set(sku, {
       sku, asin: String(r.asin), asins: [String(r.asin)],
-      listing: { checkedAt: d(r.listing_checked_at), createdAt: d(r.listing_created_at), offerEndAt: d(r.offer_end_at) },
+      listing: { checkedAt: d(r.listing_checked_at), createdAt: d(r.listing_created_at), offerEndAt: d(r.offer_end_at), buyable: null, closePatchAt: d(r.close_patch_at) },
       inventory: inv,
       pendingSubmission: r.newest_submission != null && PENDING_SUBMISSION.has(String(r.newest_submission)),
       actionPending: r.action_pending === true,
@@ -407,13 +416,13 @@ export async function readListingLive(sellerId: string, sku: string, deps: ScDep
 const respIssues = (data: any) => (Array.isArray(data?.issues) && data.issues.length ? data.issues : null);
 const errMsg = (err: any) => `HTTP ${err?.response?.status ?? "?"}: ${err?.response?.data?.errors?.[0]?.message ?? err?.message ?? "unknown"}`;
 
-export async function fireClose(sellerId: string, sku: string, deps: ScDeps, now: Date = new Date()): Promise<FireResult> {
+export async function fireClose(sellerId: string, sku: string, deps: ScDeps, now: Date = new Date(), opts: { closePatchAt?: Date | null } = {}): Promise<FireResult> {
   const live = await readListingLive(sellerId, sku, deps);
   if (!live.ok) return { status: "error", outcome: `error: pre-flight read failed — ${live.message}` };
   if (!live.present) return { status: "skipped", outcome: "skip_no_listing", preflight: { present: false } };
   const st = live.state;
-  const preflight = { present: true, offer_end_at: st.offerEndAt, product_type: st.productType, has_offer: st.hasOffer };
-  if (st.offerEndAt != null && Date.parse(st.offerEndAt) <= now.getTime()) return { status: "skipped", outcome: "skip_already_closed", preflight };
+  const preflight = { present: true, offer_end_at: st.offerEndAt, product_type: st.productType, has_offer: st.hasOffer, buyable: st.buyable };
+  if (isOfferClosed({ endAt: st.offerEndAt, buyable: st.buyable, createdAt: st.createdAt, closePatchAt: opts.closePatchAt }, now)) return { status: "skipped", outcome: "skip_already_closed", preflight };
   if (!st.hasOffer) return { status: "skipped", outcome: "skip_no_listing", preflight };
   if (!st.productType) return { status: "error", outcome: "error: no productType on the listing", preflight };
   const body = buildClosePatchBody(st.productType);
@@ -429,15 +438,15 @@ export async function fireClose(sellerId: string, sku: string, deps: ScDeps, now
   }
 }
 
-export async function fireDelete(sellerId: string, sku: string, deps: ScDeps, now: Date = new Date(), opts: { rule?: string } = {}): Promise<FireResult> {
+export async function fireDelete(sellerId: string, sku: string, deps: ScDeps, now: Date = new Date(), opts: { rule?: string; closePatchAt?: Date | null } = {}): Promise<FireResult> {
   const amznGr = opts.rule === AMZN_GR_RULE;
   const live = await readListingLive(sellerId, sku, deps);
   if (!live.ok) return { status: "error", outcome: `error: pre-flight read failed — ${live.message}` };
   if (!live.present) return { status: "skipped", outcome: "skip_no_listing", preflight: { present: false } };
   const st = live.state;
-  const preflight = { present: true, offer_end_at: st.offerEndAt, rule: opts.rule ?? null };
+  const preflight = { present: true, offer_end_at: st.offerEndAt, rule: opts.rule ?? null, buyable: st.buyable };
   // The amzn_gr rule has no closed-state requirement; every other delete does.
-  if (!amznGr && (st.offerEndAt == null || Date.parse(st.offerEndAt) > now.getTime())) return { status: "skipped", outcome: "skip_not_closed", preflight };
+  if (!amznGr && !isOfferClosed({ endAt: st.offerEndAt, buyable: st.buyable, createdAt: st.createdAt, closePatchAt: opts.closePatchAt }, now)) return { status: "skipped", outcome: "skip_not_closed", preflight };
   try {
     const data = await deps.del(itemPath(sellerId, sku), { marketplaceIds: MARKETPLACE });
     if (data?.status === "ACCEPTED") return { status: "accepted", outcome: amznGr ? `deleted:${AMZN_GR_RULE}` : "deleted", submissionId: data?.submissionId ?? null, issues: respIssues(data), preflight };
@@ -480,7 +489,7 @@ export async function readInventoryLive(skus: string[], deps: ScDeps, now: Date 
  */
 export async function verifyListingActions(query: QueryLike, since: Date): Promise<{ verified: number; pending: number; not_effective: number }> {
   const rows = (await query(
-    `SELECT la.id, la.action, la.verify_passes, s.listing_checked_at, s.listing_created_at, s.offer_end_at
+    `SELECT la.id, la.action, la.verify_passes, la.fired_at, s.listing_checked_at, s.listing_created_at, s.offer_end_at
        FROM listing_actions la
        JOIN asins a ON a.asin = la.asin
        JOIN asin_skus s ON s.asin_id = a.id AND s.sku = la.sku
@@ -491,8 +500,9 @@ export async function verifyListingActions(query: QueryLike, since: Date): Promi
   const r = { verified: 0, pending: 0, not_effective: 0 };
   const now = Date.now();
   for (const x of rows) {
+    // A close took effect when the closed test holds, THIS action being the PATCH.
     const effective = x.action === "close"
-      ? x.offer_end_at != null && d(x.offer_end_at)!.getTime() <= now
+      ? isOfferClosed({ endAt: x.offer_end_at, createdAt: x.listing_created_at, closePatchAt: x.fired_at }, new Date(now))
       : x.listing_created_at == null;
     if (effective) {
       await query(`UPDATE listing_actions SET status = 'verified', verified_at = NOW() WHERE id = $1`, [x.id]);

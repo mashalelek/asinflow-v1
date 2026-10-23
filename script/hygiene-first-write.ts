@@ -61,9 +61,10 @@ async function main(): Promise<number> {
   // Live re-reads — the same inputs the Release path uses.
   const l = await readListingLive(sellerId, sku, sc);
   if (!l.ok) { console.error(`REFUSED: listing read failed — ${l.message}`); return 2; }
+  const closePatchAt = f.listing.closePatchAt ?? null;
   f.listing = !l.present
     ? { checkedAt: now, createdAt: null, offerEndAt: null }
-    : { checkedAt: now, createdAt: l.state.createdAt ? new Date(l.state.createdAt) : null, offerEndAt: l.state.offerEndAt ? new Date(l.state.offerEndAt) : null };
+    : { checkedAt: now, createdAt: l.state.createdAt ? new Date(l.state.createdAt) : null, offerEndAt: l.state.offerEndAt ? new Date(l.state.offerEndAt) : null, buyable: l.state.buyable, closePatchAt };
   const inv = (await readInventoryLive([sku], sc, now)).get(sku)!;
   f.inventory = { ...inv, lastNonzeroAt: f.inventory?.lastNonzeroAt ?? null };
   await attachPipeline(facts, query);
@@ -94,7 +95,7 @@ async function main(): Promise<number> {
     return 0;
   }
 
-  const r = action === "close" ? await fireClose(sellerId, sku, sc, new Date()) : await fireDelete(sellerId, sku, sc, new Date());
+  const r = action === "close" ? await fireClose(sellerId, sku, sc, new Date(), { closePatchAt }) : await fireDelete(sellerId, sku, sc, new Date(), { closePatchAt });
   console.log("result:", JSON.stringify(r, null, 2));
   if (r.status !== "skipped") {
     await insertAction(query, {

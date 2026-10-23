@@ -12,8 +12,13 @@ const body = (endAt: string | null, extra: any = {}) => ({
 describe("parseListingState — the spike shapes", () => {
   it("a closed offer: end_at.value is a past timestamp (PRK-HOM-6P4-PIC-001, closed in SC 2026-10-19)", () => {
     expect(parseListingState(body("2026-10-19T09:31:29.082Z"))).toEqual({
-      createdAt: "2026-09-18T20:29:43.610Z", offerEndAt: "2026-10-19T09:31:29.082Z", hasOffer: true, productType: "FOOD_STORAGE_CONTAINER",
+      createdAt: "2026-09-18T20:29:43.610Z", offerEndAt: "2026-10-19T09:31:29.082Z", hasOffer: true, productType: "FOOD_STORAGE_CONTAINER", buyable: false,
     });
+  });
+  it("buyable: summaries status carries BUYABLE (always open — the closed test)", () => {
+    const b = body("2000-01-01");
+    b.summaries[0].status = ["BUYABLE", "DISCOVERABLE"];
+    expect(parseListingState(b)).toMatchObject({ buyable: true, offerEndAt: "2000-01-01" });
   });
   it("an open offer: end_at.value is null", () => {
     expect(parseListingState(body(null)).offerEndAt).toBeNull();

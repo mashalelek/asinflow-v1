@@ -43,11 +43,11 @@ export interface ListingIssueLite {
 
 // Listing state per SKU (listing hygiene, SPEC §11 component 16, 2026-10-19):
 // read only when the caller asks for `attributes` — the same call, a larger
-// payload. Spike 2026-10-18/19: a closed offer serializes
-// purchasable_offer[].end_at as {value: "<ISO timestamp>"} — Amazon REWRITES
-// the date on close (born-closed SKUs sent 2000-01-01 read back 2026-10-13 /
-// -15; an SC-closed SKU read 2026-10-19), so it means "closed now" when
-// <= now(), never "closed since" — and an open offer as {value: null}.
+// payload. end_at.value is a close timestamp when Amazon applied a close
+// (an SC close), the literal 2000-01-01 when it stored the value AF sent
+// (applied after AF's close PATCH, NOT when sent at create), or null (open).
+// Which of those means "closed" is listing-closed.ts's isOfferClosed — never
+// read end_at directly (probe 2026-10-23).
 export interface ListingState {
   /** summaries[].createdDate, or null. */
   createdAt: string | null;
@@ -56,6 +56,8 @@ export interface ListingState {
   /** True when the listing carries a US purchasable_offer entry at all. */
   hasOffer: boolean;
   productType: string | null;
+  /** summaries[].status includes BUYABLE — always open (the closed test, listing-closed.ts). */
+  buyable: boolean;
 }
 
 /** Pure: a getListingsItem body (summaries + attributes) → the listing state. */
@@ -71,6 +73,7 @@ export function parseListingState(data: any): ListingState {
     offerEndAt: raw == null || raw === "" ? null : String(raw),
     hasOffer: offer != null,
     productType: summary?.productType ? String(summary.productType) : null,
+    buyable: Array.isArray(summary?.status) && summary.status.includes("BUYABLE"),
   };
 }
 
