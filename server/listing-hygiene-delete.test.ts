@@ -92,6 +92,7 @@ function world(o: { ledgerRun?: any; coverage?: any; rows: any[]; breaker?: numb
     }
     if (sql.includes("po_asins")) return { rows: [], rowCount: 0 };
     if (sql.includes("INSERT INTO listing_actions")) { inserts.push(params!); return { rows: [], rowCount: 1 }; }
+    if (sql.includes("a.status = 'dead'")) return { rows: [], rowCount: 0 }; // hygiene scope: no dead ASIN with a listing here
     throw new Error(`unexpected SQL: ${sql.slice(0, 80)}`);
   };
   return { query, inserts };

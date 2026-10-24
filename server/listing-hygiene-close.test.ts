@@ -209,3 +209,31 @@ describe("breaker defaults (Maria 2026-10-21)", () => {
     expect(sql).not.toMatch(/\bBEGIN\b|\bCOMMIT\b/);
   });
 });
+
+describe("hygiene scope: every SKU with an SC listing, whatever the ASIN's AF status (Maria 2026-10-24)", () => {
+  beforeEach(() => { hygieneDeps.now = () => NOW; });
+  const dead = (sku: string, listing: Parameters<typeof dbRow>[2] = {}) => ({ ...dbRow(sku, {}, listing), asin: "B0DEAD0001" });
+  it("a dead ASIN's SKU with an open listing and 0 stock is closed", async () => {
+    live(true);
+    const sc = fakeSc({});
+    const db = fakeQuery({ run15: okRun, run16: okRun, rows: [dbRow("A-1", { fulfillable: 3 }), dead("D-1")], breaker: 25, deadWithListing: ["B0DEAD0001"] });
+    const r = await runHygiene("close", ctxOf(db.query)); // scheduled scope = ["B000000001"] only
+    expect(r.outcomes["D-1"]).toBe("closed");
+    expect(sc.patches.map((p) => decodeURIComponent(p.endpoint.split("/").pop()))).toEqual(["D-1"]);
+  });
+  it("a dead ASIN with no SC listing stays out of scope — no outcome, no PATCH", async () => {
+    live(true);
+    const sc = fakeSc({});
+    const db = fakeQuery({ run15: okRun, run16: okRun, rows: [dead("D-1")], breaker: 25, deadWithListing: [] });
+    const r = await runHygiene("close", ctxOf(db.query));
+    expect(r.outcomes["D-1"]).toBeUndefined();
+    expect(sc.patches).toHaveLength(0);
+  });
+  it("a subset job (scope_asins) never widens to dead ASINs", async () => {
+    const { hygieneScope } = await import("./listing-hygiene");
+    const q = (async () => ({ rows: [{ asin: "B0DEAD0001" }] })) as any;
+    expect(await hygieneScope(q, ["B000000001"], ["B000000001"])).toEqual(["B000000001"]);
+    expect(await hygieneScope(q, ["B000000001"], null)).toEqual(["B000000001", "B0DEAD0001"]);
+    expect(await hygieneScope(q, ["B0DEAD0001"], null)).toEqual(["B0DEAD0001"]);
+  });
+});

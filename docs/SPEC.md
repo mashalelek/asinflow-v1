@@ -2201,6 +2201,16 @@ Appending them after 21, in that order, satisfies every dependency.
 now"). Evaluated **per SKU**; ASIN-level pipeline data applies to every SKU
 of the ASIN; `amzn.gr.*` SKUs are never closed (22) and are deleted only
 by 24's amzn_gr rule (below; excluded entirely until 2026-10-21).
+**Scope (Maria 2026-10-24): every SKU with a listing in Seller Central,
+whatever the ASIN's AF status.** A full-scope job (scheduled pass, or the
+`/api/listing-hygiene/run` full run) evaluates the scheduled scope (active
++ parked) plus the **dead** ASINs whose SKUs have an SC listing per the last
+probe (`asin_skus.listing_created_at IS NOT NULL` — `hygieneScope` /
+`deadAsinsWithListing`, `listing-hygiene.ts`). Component 16 probes the same
+dead ASINs on every full-scope pass (counted `dead_with_listing`), so their
+listing state is from this pass; component 15's `sku_fba_inventory` is
+account-wide already. A dead ASIN with no SC listing stays out, a subset
+job never widens, and dead ASINs stay out of every other component.
 
 - **22 Close** (daily, 00:00 pass, before 24 — hourly until 2026-10-20) —
   a SKU whose listing exists and is not closed (the closed test, §18 —

@@ -13,7 +13,7 @@
 import {
   evaluateClose, evaluateDelete, countKey, loadBasis, loadSkuFacts, attachPipeline, velocityOnHandByAsin,
   ledgerAvailability, breakerFor, liveGate, fireClose, fireDelete, readListingLive, readInventoryLive,
-  realScDeps, isAmznGr, type HygieneAction, type ScDeps, type SkuFacts, type Evaluation, type Basis,
+  realScDeps, isAmznGr, hygieneScope, type HygieneAction, type ScDeps, type SkuFacts, type Evaluation, type Basis,
 } from "./listing-hygiene";
 import { ComponentError, type ComponentContext, type ComponentResult, type ListingActionChange, type QueryLike } from "./scheduler/types";
 
@@ -126,7 +126,9 @@ export async function runHygiene(action: HygieneAction, ctx: ComponentContext): 
 
   const basis: Basis = await loadBasis(ctx.query, now);
   t.note("_basis", `inventory from ${basis.inventoryFrom?.toISOString() ?? "none fresh"} · listings from ${basis.listingFrom?.toISOString() ?? "none fresh"}`);
-  let facts = await loadSkuFacts(ctx.query, { asins: ctx.scopeAsins }, action, now);
+  // Every SKU with an SC listing, whatever its ASIN's AF status (Maria 2026-10-24).
+  const scope = await hygieneScope(ctx.query, ctx.scopeAsins, ctx.job.scope_asins);
+  let facts = await loadSkuFacts(ctx.query, { asins: scope }, action, now);
 
   if (action === "delete") {
     await attachPipeline(facts, ctx.query);

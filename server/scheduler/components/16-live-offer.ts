@@ -10,7 +10,7 @@
 import { runFullScopePass, type FullScopeReport } from "../../full-scope-pass";
 import { ASIN_CHECKPOINT_EVERY } from "../types";
 import { chunk } from "./shared";
-import { verifyListingActions } from "../../listing-hygiene";
+import { verifyListingActions, hygieneScope } from "../../listing-hygiene";
 import type { ComponentDef, ComponentContext, ComponentResult } from "../types";
 
 export const LISTINGS_REPORTS = "listings:reports";
@@ -19,11 +19,18 @@ export const liveOffer: ComponentDef = {
   n: 16, key: "16_live_offer", name: "Live offer / buyable / issues", tier: "hourly", kind: "asin",
   call: "CALL-9 getListingsItem, per SKU",
   async run(ctx: ComponentContext): Promise<ComponentResult> {
-    const counts = { probed: 0, live: 0, no_offer: 0, transient: 0, flips: 0, repoints: 0, discoveries: 0, no_listing: 0 };
+    const counts: Record<string, number> = { probed: 0, live: 0, no_offer: 0, transient: 0, flips: 0, repoints: 0, discoveries: 0, no_listing: 0 };
     const outcomes: Record<string, string> = {};
     const reports: FullScopeReport[] = (ctx.cache.get(LISTINGS_REPORTS) as FullScopeReport[] | undefined) ?? [];
     const startedAt = new Date();
-    for (const part of chunk(ctx.asins, ASIN_CHECKPOINT_EVERY)) {
+    // Listing hygiene (Maria 2026-10-24): 22/24 act on every SKU with an SC
+    // listing, dead ASINs included — so a full-scope pass probes those too.
+    // Dead ASINs stay out of every other component.
+    const extra = (await hygieneScope(ctx.query, ctx.scopeAsins, ctx.job.scope_asins)).slice(ctx.scopeAsins.length);
+    const have = new Set(ctx.asins);
+    const asins = [...ctx.asins, ...extra.filter((a) => !have.has(a))];
+    counts.dead_with_listing = extra.length;
+    for (const part of chunk(asins, ASIN_CHECKPOINT_EVERY)) {
       const rep = await runFullScopePass({ dryRun: false, asinFilter: new Set(part), phaseC: false, recordListingState: true });
       reports.push(rep);
       const a = rep.phaseA, b = rep.phaseB;

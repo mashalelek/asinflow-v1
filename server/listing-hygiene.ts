@@ -252,6 +252,30 @@ export async function loadBasis(query: QueryLike, now: Date = new Date()): Promi
   return { now, inventoryFrom: ok(inv) ? d(inv.started_at) : null, listingFrom: ok(lst) ? d(lst.started_at) : null };
 }
 
+/**
+ * Hygiene scope (Maria 2026-10-24): components 22 and 24 evaluate EVERY SKU
+ * that has a listing in Seller Central, whatever the ASIN's AF status. The
+ * scheduled scope is active + parked; this adds the DEAD ASINs with an SKU
+ * whose last listing probe found a listing. Component 16 probes the same set
+ * so their listing state is fresh every pass (component 15's buckets are
+ * account-wide already). A dead ASIN with no SC listing stays out.
+ */
+export async function deadAsinsWithListing(query: QueryLike): Promise<string[]> {
+  const r = await query(
+    `SELECT DISTINCT a.asin FROM asins a JOIN asin_skus s ON s.asin_id = a.id
+      WHERE a.status = 'dead' AND s.listing_created_at IS NOT NULL ORDER BY a.asin`,
+  );
+  return r.rows.map((x: any) => String(x.asin));
+}
+
+/** The scheduled scope plus the dead-with-listing ASINs — only for a full-scope job (no scope_asins). */
+export async function hygieneScope(query: QueryLike, scope: readonly string[], jobScopeAsins: readonly string[] | null | undefined): Promise<string[]> {
+  if (jobScopeAsins && jobScopeAsins.length > 0) return [...scope];
+  const extra = await deadAsinsWithListing(query);
+  const have = new Set(scope);
+  return [...scope, ...extra.filter((a) => !have.has(a))];
+}
+
 /** Per-SKU facts for the SKUs of `asins` (or exactly `skus`), pipeline and Velocity left for the caller. */
 export async function loadSkuFacts(query: QueryLike, sel: { asins?: string[]; skus?: string[] }, action: HygieneAction, now: Date = new Date()): Promise<SkuFacts[]> {
   const where = sel.skus ? `s.sku = ANY($1::text[])` : `a.asin = ANY($1::text[])`;

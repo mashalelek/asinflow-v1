@@ -22,6 +22,8 @@ interface World {
   rows: any[];
   breaker?: number;
   held?: any[];
+  /** Dead ASINs whose SKUs have an SC listing (hygiene scope, 2026-10-24). */
+  deadWithListing?: string[];
 }
 export function fakeQuery(w: World) {
   const inserts: any[][] = [];
@@ -31,7 +33,12 @@ export function fakeQuery(w: World) {
       const r = params?.[0] === "15_inventory" ? w.run15 : params?.[0] === "16_live_offer" ? w.run16 : null;
       return { rows: r ? [r] : [], rowCount: r ? 1 : 0 };
     }
-    if (sql.includes("FROM asin_skus s JOIN asins a")) return { rows: w.rows, rowCount: w.rows.length };
+    if (sql.includes("a.status = 'dead'")) return { rows: (w.deadWithListing ?? []).map((asin) => ({ asin })), rowCount: (w.deadWithListing ?? []).length };
+    if (sql.includes("FROM asin_skus s JOIN asins a")) {
+      // loadSkuFacts by ASIN: only the rows of the ASINs asked for (the scope).
+      const rows = sql.includes("a.asin = ANY") ? w.rows.filter((r) => (params?.[0] ?? []).includes(r.asin)) : w.rows;
+      return { rows, rowCount: rows.length };
+    }
     if (sql.includes("FROM settings WHERE key")) return { rows: w.breaker == null ? [] : [{ value: w.breaker }], rowCount: 1 };
     if (sql.includes("INSERT INTO listing_actions")) { inserts.push(params!); return { rows: [], rowCount: 1 }; }
     if (sql.includes("FROM listing_actions") && sql.includes("status = 'held'")) return { rows: w.held ?? [], rowCount: (w.held ?? []).length };
