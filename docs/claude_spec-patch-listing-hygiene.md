@@ -388,6 +388,16 @@ expected to trip both — that is the intended review point for the backlog.
      closed right after they're created."
   No SC confirmation step (Maria).
 
+- **2026-10-24 (Maria): scope = every SKU with a listing in Seller Central,
+  whatever the ASIN's AF status** (active, parked or dead). Components 22
+  and 24 evaluate the dead ASINs whose SKUs have an SC listing (per the last
+  listing probe) alongside the scheduled scope (active + parked); component
+  16 probes the same dead ASINs every full-scope pass so 22/24 never act on
+  stale listing data for them (component 15's SKU buckets are account-wide
+  already). A dead ASIN with no SC listing stays out; dead ASINs stay out of
+  every other component. Trigger: LIN-GRO-4SQ-CBS-001 (B00032C4SQ) was marked
+  dead 5 minutes before the 2026-10-23 manual close run and was left open.
+
 ## Out of scope
 
 - Showing the new buckets in the Stock hover (easy follow-up; display only).
