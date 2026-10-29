@@ -5427,6 +5427,19 @@ any ASIN row where `qty_received_amazon` is known and ≠ `qty_shipped_fba`
 source of truth — Shipped FBA is the number of record — so it does not
 block auto-close (`PO_CLOSE_ACTION_ITEMS_SQL` leaves it out), and nothing
 (quantities, matching, the On Order pipeline) derives from received.
+**Extra units shipped** (Maria 2026-10-29) is derived on any ASIN row whose
+`qty_shipped_fba` is over `qty` (Ordered) — from Sync Shipments or a
+confirmed manual link — as a **red** chip so it stands out. It blocks
+auto-close and clears by itself when the row reconciles. Clearing it by
+hand needs a note (`POST /api/pos/asin-rows/:id/extra-units/clear`): the note
+is stored on the row (`extra_units_note`, migration 073, shown on the chip's
+hover), logged in PO History (`extra_units_cleared`), and the shipped value
+at that moment is kept, so the item returns only if more units ship past
+it. The Unmatched shipments link (candidate button or picker) refuses a link
+that would put Shipped FBA past Ordered (`409`, code `overshoot`) until it
+is confirmed with a note; the note goes on the row and into History
+(`extra_units_shipped`). Dismissing unmatched lines takes an optional note
+(`shipment_unmatched.dismiss_note`), shown in the Dismissed list.
 Rendered as tinted chips in the (renamed) **Action Items** column with an
 inline multi-select editor on the POs table and on PO Details; the list
 filter is any-of over them (`action=`), beside the Open/Closed filter.
