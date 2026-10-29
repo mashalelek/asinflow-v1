@@ -265,7 +265,7 @@ export async function syncVelocityShipments(opts: { dryRun: boolean; deps?: Velo
   /** A line recorded as linked (picker, or a §3 b / §4 link from an earlier run). */
   const priorLink = (prior: any): Resolution | null => {
     if (!prior?.resolved_po_asin_id || !afById.has(String(prior.resolved_po_asin_id))) return null;
-    const how = prior.match_reason === "candidate_unique" ? "candidate" : prior.match_reason === "base_id" ? "base_id" : "picker";
+    const how = prior.match_reason === "candidate_unique" ? "candidate" : prior.match_reason === "base_id" ? "base_id" : prior.match_reason === "col_p" ? "col_p" : "picker";
     return { ok: true, row: afById.get(String(prior.resolved_po_asin_id))!, how };
   };
   // Col P: FBA id → candidate PO ASIN rows; Velocity shipment → its FBA ids (component B's match).
@@ -283,8 +283,10 @@ export async function syncVelocityShipments(opts: { dryRun: boolean; deps?: Velo
   const fbaIdsByShipment = new Map<string, string[]>(
     (await db.query(`SELECT id, sc_shipment_ids FROM velocity_shipments WHERE sc_shipment_ids IS NOT NULL`)).rows.map((r: any) => [String(r.id), (r.sc_shipment_ids ?? []).map(String)]),
   );
+  // Col P in the main pass: no-Order # lines only (as approved 2026-10-29); a
+  // line with an Order # AF lacks gets Col P in the units pass, with fit.
   const withColP = (res: Resolution, line: VelocityInboundOrder, shipmentId: string | null): Resolution =>
-    shipmentId ? resolveByColP(res, line, fbaIdsByShipment.get(shipmentId) ?? [], colP, afById) : res;
+    shipmentId && !res.ok && res.reason === "no_order" ? resolveByColP(res, line, fbaIdsByShipment.get(shipmentId) ?? [], colP, afById) : res;
   // Manual assignments (assigned_by = 'manual', 2026-10-18; Reassign
   // shipment, af-owned §5.2): a Velocity line (shipment, Velocity Order #,
   // ASIN) pinned to one or more PO ASIN rows stays there — never moved or
@@ -385,8 +387,8 @@ export async function syncVelocityShipments(opts: { dryRun: boolean; deps?: Velo
   // Lines the main pass could not place: settled after it, once every other placement is known (§3 b, §4).
   type Deferred = { key: string; shipmentId: string; shippedAt: string | null; line: VelocityInboundOrder; res: Extract<Resolution, { ok: false }>; prior: any; units: number };
   const deferred: Deferred[] = [];
-  // §3 b / §4 links, recorded on shipment_unmatched like a picker link.
-  const linkPlans: Array<{ key: string; shipmentId: string; orderId: string; line: any; reason: "no_order" | "po_not_found"; poAsinId: string; poId: string; how: "base_id" | "candidate"; units: number }> = [];
+  // Units-pass links (Col P with fit, §3 b, §4), recorded on shipment_unmatched like a picker link.
+  const linkPlans: Array<{ key: string; shipmentId: string; orderId: string; line: any; reason: "no_order" | "po_not_found"; poAsinId: string; poId: string; how: "col_p" | "base_id" | "candidate"; units: number }> = [];
   const noteRuleLink = (s: { shipment_id: string }, shippedAt: string | null, line: VelocityInboundOrder, row: AfAsinRow, how: string, units: number, wasUnmatched: boolean) => {
     const vDate = velocityDate(line);
     ruleLinks.push({ shipment: s.shipment_id, shippedAt, orderId: String(line.order_id ?? ""), orderNumber: String(line.order_number ?? ""), retailer: String(line.retailer ?? ""), asin: String(line.asin ?? ""), units, how,
@@ -441,55 +443,76 @@ export async function syncVelocityShipments(opts: { dryRun: boolean; deps?: Velo
   for (const r of (await db.query(`SELECT po_asin_id, qty_shipped FROM po_asin_shipments WHERE source = 'manual'`)).rows as any[]) {
     const row = afById.get(String(r.po_asin_id)); if (row) addPlaced(String(r.po_asin_id), Number(r.qty_shipped) * (Number(row.units_per_pack) || 1));
   }
+  const byVelocityDate = (a: Deferred, b: Deferred) => String(velocityDate(a.line) ?? "9999").localeCompare(String(velocityDate(b.line) ?? "9999")) || String(a.line.order_id ?? "").localeCompare(String(b.line.order_id ?? "")) || a.key.localeCompare(b.key);
+  const remainingFor = (line: VelocityInboundOrder) => { const upp = velocityPack(line)?.upp ?? null; return (row: AfAsinRow) => capacityUnits(row, upp) - (placedUnits.get(String(row.id)) ?? 0); };
+  const linkLines = (lines: Deferred[], row: AfAsinRow, how: "col_p" | "base_id" | "candidate") => {
+    addPlaced(String(row.id), lines.reduce((t, d) => t + d.units, 0));
+    for (const d of lines) {
+      counts.linesMatched++;
+      if (how === "col_p") counts.linesMatchedColP++; else if (how === "base_id") counts.linesMatchedBaseId++; else counts.linesMatchedCandidate++;
+      const rk = `${row.id}\u0000${d.shipmentId}`;
+      const plan = rowPlans.get(rk) ?? { poAsinId: String(row.id), shipmentId: d.shipmentId, units: 0, upp: Number(row.units_per_pack) || 1, shippedAt: d.shippedAt, lines: [] };
+      plan.units += d.units; plan.lines.push(`${row.supplier} ${row.order_id} ${row.asin} ${d.units}u (${how})`);
+      rowPlans.set(rk, plan);
+      linkPlans.push({ key: d.key, shipmentId: d.shipmentId, orderId: String(d.line.order_id ?? ""), line: d.line, reason: d.res.reason, poAsinId: String(row.id), poId: String(row.po_id), how, units: d.units });
+      noteRuleLink({ shipment_id: d.shipmentId }, d.shippedAt, d.line, row, how, d.units, !!d.prior && !d.prior.resolved_at);
+      if (samples.length < 10) samples.push(`${d.shipmentId.slice(0, 8)} ${d.shippedAt ?? "?"} · ${row.supplier} ${row.order_id} ${row.asin}: ${d.units} units ÷ ${plan.upp} → ${round2(d.units / plan.upp)} (${how})`);
+    }
+  };
+  // Col P for a line WITH an Order # AF lacks (INSH-era, _N): the sheet row
+  // must also fit the units — the line's own order # disagrees with the sheet,
+  // so Col P alone could place it past Ordered (CAR118805142_1 onto a fully
+  // shipped CAR118908837, 2026-10-29). Per line: one row that fits → placed;
+  // one that doesn't → kept as the candidate with the reason; several → candidates.
+  const colPMiss = new Map<string, string>();
+  const rest: Deferred[] = [];
+  for (const d of [...deferred].sort(byVelocityDate)) {
+    if (d.res.reason === "po_not_found") {
+      const cp = resolveByColP(d.res, d.line, fbaIdsByShipment.get(d.shipmentId) ?? [], colP, afById);
+      if (cp.ok) {
+        const left = remainingFor(d.line)(cp.row);
+        if (left + 1e-9 >= d.units) { linkLines([d], cp.row, "col_p"); continue; }
+        d.res = { ...d.res, candidates: [{ po_asin_id: String(cp.row.id), order_id: cp.row.order_id, supplier: cp.row.supplier, asin: cp.row.asin, source: "col_p" }] };
+        colPMiss.set(d.key, `Col P names PO ${cp.row.order_id} (${cp.row.supplier}), but it has ${round2(Math.max(0, left))} units left, the line needs ${d.units}`);
+      } else if (cp.candidates) d.res = cp;
+    }
+    rest.push(d);
+  }
   // One decision per Velocity order: its split shipments go to one row.
   const groups = new Map<string, Deferred[]>();
-  for (const d of deferred) { const g = String(d.line.order_id ?? "") || d.key; if (!groups.has(g)) groups.set(g, []); groups.get(g)!.push(d); }
-  const ordered = Array.from(groups.values()).sort((a, b) => String(velocityDate(a[0].line) ?? "9999").localeCompare(String(velocityDate(b[0].line) ?? "9999")) || String(a[0].line.order_id ?? "").localeCompare(String(b[0].line.order_id ?? "")));
-  for (const g of ordered) {
+  for (const d of rest) { const g = String(d.line.order_id ?? "") || d.key; if (!groups.has(g)) groups.set(g, []); groups.get(g)!.push(d); }
+  for (const g of Array.from(groups.values()).sort((a, b) => byVelocityDate(a[0], b[0]))) {
     const first = g[0];
     const asin = String(first.line.asin ?? "").trim().toUpperCase();
     const units = g.reduce((t, d) => t + d.units, 0);
-    const fallbackUpp = velocityPack(first.line)?.upp ?? null;
-    const remaining = (row: AfAsinRow) => capacityUnits(row, fallbackUpp) - (placedUnits.get(String(row.id)) ?? 0);
+    const remaining = remainingFor(first.line);
     const ret: RetailerResolution = resolveRetailer(first.res.retailer, ctx.aliases, ctx.suppliers);
     const orderNumber = first.res.orderNumber;
     let row: AfAsinRow | null = null; let how: "base_id" | "candidate" | null = null;
-    let cands: MatchCandidate[] = (first.res.candidates ?? []).slice();
-    let miss: string | null = null;
+    const colPCands = new Map<string, MatchCandidate>();
+    for (const d of g) for (const c of d.res.candidates ?? []) colPCands.set(c.po_asin_id, c);
+    let cands: MatchCandidate[] = Array.from(colPCands.values());
+    let miss: string | null = g.map((d) => colPMiss.get(d.key)).find(Boolean) ?? null;
     // §3 b: base order #, exactly one row, units fit.
     const base = orderNumber ? baseKeyRows(orderNumber, asin, ret, ctx.ki) : [];
     if (base.length === 1) {
       if (remaining(base[0]) + 1e-9 >= units) { row = base[0]; how = "base_id"; }
-      else miss = `base PO ${base[0].order_id} (${base[0].supplier}) has ${Math.max(0, Math.round(remaining(base[0]) * 100) / 100)} units left, the line needs ${units} — the ${orderNumber} PO may be missing from AF`;
+      else miss = miss ?? `base PO ${base[0].order_id} (${base[0].supplier}) has ${round2(Math.max(0, remaining(base[0])))} units left, the line needs ${units} — the ${orderNumber} PO may be missing from AF`;
     }
-    // §4: candidates, only when Col P named nobody (Col P's own several stay for review).
+    // §4: candidates, only when Col P named nobody (Col P's own stay for review).
     if (!row && cands.length === 0) {
       const ranked = rankCandidates({ asin, retailer: ret, units, vDate: velocityDate(first.line), orderNumber }, ctx.ki, remaining);
       if (ranked.candidates.length === 1) { row = ranked.candidates[0].row; how = "candidate"; }
       else if (ranked.candidates.length > 1) { cands = ranked.candidates.slice(0, 5).map(({ row: _r, ...c }) => c); counts.linesCandidateAmbiguous += g.length; }
       else miss = miss ?? ranked.miss;
     }
-    if (row && how) {
-      addPlaced(String(row.id), units);
-      for (const d of g) {
-        counts.linesMatched++;
-        if (how === "base_id") counts.linesMatchedBaseId++; else counts.linesMatchedCandidate++;
-        const rk = `${row.id}\u0000${d.shipmentId}`;
-        const plan = rowPlans.get(rk) ?? { poAsinId: String(row.id), shipmentId: d.shipmentId, units: 0, upp: Number(row.units_per_pack) || 1, shippedAt: d.shippedAt, lines: [] };
-        plan.units += d.units; plan.lines.push(`${row.supplier} ${row.order_id} ${row.asin} ${d.units}u (${how})`);
-        rowPlans.set(rk, plan);
-        linkPlans.push({ key: d.key, shipmentId: d.shipmentId, orderId: String(d.line.order_id ?? ""), line: d.line, reason: d.res.reason, poAsinId: String(row.id), poId: String(row.po_id), how, units: d.units });
-        noteRuleLink({ shipment_id: d.shipmentId }, d.shippedAt, d.line, row, how, d.units, !!d.prior && !d.prior.resolved_at);
-        if (samples.length < 10) samples.push(`${d.shipmentId.slice(0, 8)} ${d.shippedAt ?? "?"} · ${row.supplier} ${row.order_id} ${row.asin}: ${d.units} units ÷ ${plan.upp} → ${round2(d.units / plan.upp)} (${how})`);
-      }
-      continue;
-    }
+    if (row && how) { linkLines(g, row, how); continue; }
     if (cands.length === 0 && miss == null) miss = nearestMiss({ asin, retailer: ret, units, vDate: velocityDate(first.line), orderNumber }, ctx.ki, remaining);
     for (const d of g) {
       if (d.res.reason === "no_order") counts.linesNoOrder++; else counts.linesPoNotFound++;
-      if (d.res.candidates) counts.linesColPAmbiguous++;
-      unmatchedPlans.set(d.key, { shipmentId: d.shipmentId, orderId: String(d.line.order_id ?? ""), line: d.line, reason: d.res.reason, candidates: cands.length > 0 ? cands : null, miss: cands.length > 0 ? null : miss });
-      unmatched.push({ shipment: d.shipmentId, shippedAt: d.shippedAt, orderId: String(d.line.order_id ?? ""), orderNumber: d.res.orderNumber, retailer: d.res.retailer, asin: String(d.line.asin ?? ""), units: d.units, reason: d.res.reason, note: d.res.note, candidates: cands.length > 0 ? cands : undefined, miss: cands.length > 0 ? null : miss, vDate: velocityDate(d.line) });
+      if (cands.some((c) => c.source === "col_p")) counts.linesColPAmbiguous++;
+      unmatchedPlans.set(d.key, { shipmentId: d.shipmentId, orderId: String(d.line.order_id ?? ""), line: d.line, reason: d.res.reason, candidates: cands.length > 0 ? cands : null, miss });
+      unmatched.push({ shipment: d.shipmentId, shippedAt: d.shippedAt, orderId: String(d.line.order_id ?? ""), orderNumber: d.res.orderNumber, retailer: d.res.retailer, asin: String(d.line.asin ?? ""), units: d.units, reason: d.res.reason, note: d.res.note, candidates: cands.length > 0 ? cands : undefined, miss, vDate: velocityDate(d.line) });
     }
   }
 
@@ -598,7 +621,7 @@ export async function syncVelocityShipments(opts: { dryRun: boolean; deps?: Velo
     for (const l of linkPlans) {
       const prior = unmatchedByKey.get(l.key);
       if (prior?.resolved_at) continue;
-      const reason = l.how === "candidate" ? "candidate_unique" : "base_id";
+      const reason = l.how === "candidate" ? "candidate_unique" : l.how;
       await client.query(
         `INSERT INTO shipment_unmatched (velocity_shipment_id, velocity_order_id, line, reason, resolved_at, resolved_po_asin_id, match_reason)
          VALUES ($1, $2, $3::jsonb, $4, $5, $6, $7)

@@ -114,6 +114,37 @@ describe("§4 candidate rule", () => {
   });
 });
 
+describe("Col P on a line WITH an Order # AF lacks must fit the units (dry run 2026-10-29)", () => {
+  const colPRow = (id: string, order: string, asin: string, fba: string) => ({ fba_shipment_id: fba, po_asin_id: id, order_id: order, supplier: "carters.com", asin });
+  it("CAR118805142_1 never lands on a fully shipped CAR118908837 just because its FBA shipment is in that row's Col P", async () => {
+    const full = row({ id: "c9", asin: "B0DZ33XH15", order_id: "CAR118908837", supplier: "carters.com", order_date: "2026-08-24", qty: 5 });
+    const lines = [
+      { line: vline({ order_id: "vo-own", order_number: "CAR118908837", retailer: "carters.com", asin: "B0DZ33XH15", date: "08/24/2026" }) },
+      { line: vline({ order_id: "vo-1", order_number: "CAR118805142_1", retailer: "carters.com", asin: "B0DZ33XH15", date: "09/02/2026" }) },
+    ];
+    const r = await harness([full], lines, { colP: [colPRow("c9", "CAR118908837", "B0DZ33XH15", "FBA1")], fbaIds: [{ id: SID, sc_shipment_ids: ["FBA1"] }] }).run(true);
+    expect(r.counts).toMatchObject({ linesMatched: 1, linesMatchedColP: 0, linesPoNotFound: 1 });
+    expect(r.unmatched[0].candidates?.map((c) => [c.order_id, c.source])).toEqual([["CAR118908837", "col_p"]]);
+    expect(r.unmatched[0].miss).toBe("Col P names PO CAR118908837 (carters.com), but it has 0 units left, the line needs 5");
+  });
+  it("…and with room it is placed (col_p) and recorded like a picker link", async () => {
+    const room = row({ id: "c9", asin: "B0DZ33XH15", order_id: "CAR118908837", supplier: "carters.com", order_date: "2026-08-24", qty: 10 });
+    const h = harness([room], [{ line: vline({ order_id: "vo-1", order_number: "INSH-1", asin: "B0DZ33XH15", date: "08/24/2026" }) }],
+      { colP: [colPRow("c9", "CAR118908837", "B0DZ33XH15", "FBA1")], fbaIds: [{ id: SID, sc_shipment_ids: ["FBA1"] }] });
+    const r = await h.run();
+    expect(r.counts).toMatchObject({ linesMatched: 1, linesMatchedColP: 1 });
+    expect(h.writes.find((w) => w.sql.startsWith("INSERT INTO shipment_unmatched") && /resolved_po_asin_id/.test(w.sql))?.params?.[6]).toBe("col_p");
+  });
+  it("a no-Order # line keeps today's Col P rule (no fit test — Monin 73 of 72 stands)", async () => {
+    const monin = row({ id: "m", asin: "B015EVCRQY", order_id: "126768935", supplier: "webstaurantstore.com", order_date: "2026-06-09", qty: 72 });
+    const r = await harness([monin], [
+      { line: vline({ order_id: "vo-own", order_number: "126768935", retailer: "webstaurantstore.com", asin: "B015EVCRQY", quantity_shipped: 72, date: "06/09/2026" }) },
+      { line: vline({ order_id: "vo-monin", order_number: null, retailer: "Monin", asin: "B015EVCRQY", quantity_shipped: 1, date: "06/15/2026" }) },
+    ], { colP: [{ fba_shipment_id: "FBA1", po_asin_id: "m", order_id: "126768935", supplier: "webstaurantstore.com", asin: "B015EVCRQY" }], fbaIds: [{ id: SID, sc_shipment_ids: ["FBA1"] }] }).run(true);
+    expect(r.counts).toMatchObject({ linesMatched: 2, linesMatchedColP: 1 });
+  });
+});
+
 describe("§3 exact rules past the legacy keys", () => {
   it("base order # links only when the units fit — CAR118805142_1 never lands on a fully shipped CAR118805142", async () => {
     const base = row({ id: "car", asin: "B0DZ33XH15", order_id: "CAR118805142", supplier: "carters.com", order_date: "2026-08-17", qty: 5 });
