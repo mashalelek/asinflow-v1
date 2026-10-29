@@ -4,7 +4,8 @@ import { describe, it, expect } from "vitest";
 import { readFileSync } from "fs";
 import { join } from "path";
 import { lineDetailTitle, ACTION_ITEM_OPTIONS, DISPLAY_ACTION_ITEMS, MAX_CHIPS } from "./po-asin-rows";
-import { poLineCount } from "../pages/purchase-orders";
+import { poLineCount, nextPoSort, PO_LIST_COLUMNS } from "../pages/purchase-orders";
+import { PO_SORT_KEYS } from "../../../server/po-queries";
 
 const rows = readFileSync(join(__dirname, "po-asin-rows.tsx"), "utf8");
 const page = readFileSync(join(__dirname, "..", "pages", "purchase-orders.tsx"), "utf8");
@@ -39,5 +40,25 @@ describe("apply-to-all confirm", () => {
     expect(rows).toMatch(/Apply to all \{lineCount\} lines/);
     expect(rows).toMatch(/url=\{`\/api\/pos\/asin-rows\/\$\{a\.id\}\/action-items`\} onSaved=\{onChanged\} testId=\{`button-action-items-asin-\$\{a\.asin\}`\} lineCount=\{lines\.length\}/);
     expect(rows).toMatch(/url=\{`\/api\/pos\/lines\/\$\{l\.id\}\/action-items`\}/);
+  });
+});
+
+describe("sortable headers (commit 4)", () => {
+  it("a click cycles asc → desc → off; another column starts at asc", () => {
+    const a = nextPoSort(null, "supplier");
+    expect(a).toEqual({ key: "supplier", dir: "asc" });
+    const b = nextPoSort(a, "supplier");
+    expect(b).toEqual({ key: "supplier", dir: "desc" });
+    expect(nextPoSort(b, "supplier")).toBeNull();
+    expect(nextPoSort(b, "order_total")).toEqual({ key: "order_total", dir: "asc" });
+  });
+  it("every sortable column is a server-whitelisted key; Invoice and Notes do not sort", () => {
+    const keys = PO_LIST_COLUMNS.filter((c) => c.sortKey).map((c) => c.sortKey!).concat("status");
+    expect(keys.sort()).toEqual(Object.keys(PO_SORT_KEYS).sort());
+    expect(PO_LIST_COLUMNS.filter((c) => !c.sortKey).map((c) => c.label)).toEqual(["Invoice", "Notes"]);
+  });
+  it("the list sends sort/dir and a sort change resets to page 1", () => {
+    expect(page).toMatch(/if \(sort\) \{ params\.set\("sort", sort\.key\); params\.set\("dir", sort\.dir\); \}/);
+    expect(page).toMatch(/useEffect\(\(\) => \{ setPage\(1\); \}, \[[^\]]*sortKey\]\)/);
   });
 });

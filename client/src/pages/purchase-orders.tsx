@@ -12,7 +12,7 @@
  */
 import React, { useState, useEffect, useCallback } from "react";
 import { useLocation, Link } from "wouter";
-import { Upload, Paperclip, StickyNote, Plus, Search, Copy, Check, ChevronRight, ChevronDown, ChevronsDownUp, ChevronsUpDown, CheckCircle2, Circle, RefreshCw, AlertTriangle } from "lucide-react";
+import { Upload, Paperclip, StickyNote, Plus, Search, Copy, Check, ChevronRight, ChevronDown, ChevronsDownUp, ChevronsUpDown, CheckCircle2, Circle, RefreshCw, AlertTriangle, ArrowUp, ArrowDown, ArrowUpDown } from "lucide-react";
 import {
   AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle,
 } from "@/components/ui/alert-dialog";
@@ -423,6 +423,40 @@ function UnmatchedRow({ l, suppliers, picked, onPick, busy, act, onLinked }: {
 export const poLineCount = (po: { asins?: ReadonlyArray<{ lines?: readonly unknown[] }> }): number =>
   (po.asins ?? []).reduce((t, a) => t + (a.lines?.length ?? 0), 0);
 
+/**
+ * The POs list columns (PO table v2 §4): sort key (the server whitelist,
+ * PO_SORT_KEYS in server/po-queries.ts) where the column sorts.
+ */
+export const PO_LIST_COLUMNS: ReadonlyArray<{ id: string; label: string; sortKey?: string; align?: "right" }> = [
+  { id: "action_items", label: "Action Items", sortKey: "action_items" },
+  { id: "order_date", label: "PO Date", sortKey: "order_date" },
+  { id: "order_id", label: "Order ID", sortKey: "order_id" },
+  { id: "supplier", label: "Supplier", sortKey: "supplier" },
+  { id: "order_total", label: "Order Total", sortKey: "order_total", align: "right" },
+  { id: "asins", label: "ASINs", sortKey: "asins", align: "right" },
+  { id: "units_ordered", label: "Units Ordered", sortKey: "units_ordered", align: "right" },
+  { id: "invoice", label: "Invoice" },
+  { id: "notes", label: "Notes" },
+];
+export type PoSort = { key: string; dir: "asc" | "desc" } | null;
+/** One key at a time; a click cycles asc → desc → off (off = the default order, newest PO first). */
+export function nextPoSort(cur: PoSort, key: string): PoSort {
+  if (!cur || cur.key !== key) return { key, dir: "asc" };
+  return cur.dir === "asc" ? { key, dir: "desc" } : null;
+}
+
+function SortHeader({ label, sortKey, sort, onSort, className }: { label: string; sortKey: string; sort: PoSort; onSort: (k: string) => void; className?: string }) {
+  const active = sort?.key === sortKey;
+  return (
+    <th className={className} aria-sort={active ? (sort!.dir === "asc" ? "ascending" : "descending") : "none"}>
+      <button type="button" onClick={() => onSort(sortKey)} className="inline-flex items-center gap-1 hover:text-foreground" data-testid={`sort-po-${sortKey}`}>
+        {label}
+        {active ? (sort!.dir === "asc" ? <ArrowUp className="h-3 w-3" /> : <ArrowDown className="h-3 w-3" />) : <ArrowUpDown className="h-3 w-3 opacity-30" />}
+      </button>
+    </th>
+  );
+}
+
 function fmtMoney(v: string | null): { text: string; muted: boolean } {
   const n = v != null ? parseFloat(v) : null;
   if (n == null) return { text: "—", muted: true };
@@ -451,6 +485,7 @@ export default function PurchaseOrders() {
   const [from, setFrom] = useState("");
   const [to, setTo] = useState("");
   const [page, setPage] = useState(1);
+  const [sort, setSort] = useState<PoSort>(null);
   const [data, setData] = useState<PosResponse | null>(null);
   const [error, setError] = useState<string | null>(null);
   // Expand by ASIN (§3.4): persisted per browser, default all collapsed.
@@ -468,7 +503,8 @@ export default function PurchaseOrders() {
 
   const actionKey = Array.from(actionSel).sort().join(",");
   const supplierKey = Array.from(supplierSel).sort().join(",");
-  useEffect(() => { setPage(1); }, [debouncedSearch, actionKey, supplierKey, from, to, closedFilter]);
+  const sortKey = sort ? `${sort.key}:${sort.dir}` : "";
+  useEffect(() => { setPage(1); }, [debouncedSearch, actionKey, supplierKey, from, to, closedFilter, sortKey]);
 
   const load = useCallback(async () => {
     setError(null);
@@ -479,6 +515,7 @@ export default function PurchaseOrders() {
     if (supplierKey) params.set("supplier", supplierKey);
     if (from) params.set("from", from);
     if (to) params.set("to", to);
+    if (sort) { params.set("sort", sort.key); params.set("dir", sort.dir); }
     params.set("page", String(page));
     try {
       const res = await fetch(`/api/pos?${params.toString()}`);
@@ -487,7 +524,7 @@ export default function PurchaseOrders() {
     } catch (e: any) {
       setError(e.message);
     }
-  }, [debouncedSearch, actionKey, supplierKey, from, to, page, closedFilter]);
+  }, [debouncedSearch, actionKey, supplierKey, from, to, page, closedFilter, sort]);
 
   useEffect(() => { load(); }, [load]);
 
@@ -582,11 +619,14 @@ export default function PurchaseOrders() {
         <table className="w-full border-collapse text-sm" data-testid="po-table">
           <thead>
             <tr className="table-header-stone">
-              <th className="px-2 py-2 text-xs font-medium whitespace-nowrap text-left w-12">Status</th>
+              <SortHeader label="Status" sortKey="status" sort={sort} onSort={(k) => setSort((s) => nextPoSort(s, k))} className="px-2 py-2 text-xs font-medium whitespace-nowrap text-left w-12" />
               <th className="w-8 px-2 py-2" aria-label="Expand by ASIN" />
-              {["Action Items", "PO Date", "Order ID", "Supplier", "Order Total", "ASINs", "Units Ordered", "Invoice", "Notes"].map((h, i) => (
-                <th key={h} className={`px-3 py-2 text-xs font-medium whitespace-nowrap ${i >= 4 && i <= 6 ? "text-right" : "text-left"}`}>{h}</th>
-              ))}
+              {PO_LIST_COLUMNS.map((c) => {
+                const cls = `px-3 py-2 text-xs font-medium whitespace-nowrap ${c.align === "right" ? "text-right" : "text-left"}`;
+                return c.sortKey
+                  ? <SortHeader key={c.id} label={c.label} sortKey={c.sortKey} sort={sort} onSort={(k) => setSort((s) => nextPoSort(s, k))} className={cls} />
+                  : <th key={c.id} className={cls}>{c.label}</th>;
+              })}
             </tr>
           </thead>
           <tbody>
