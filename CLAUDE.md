@@ -370,6 +370,21 @@ before `tracking.velocity_start_date` (`velocityIneligible` in
 `server/shipment-match.ts`); the picker's free-text search still lists it,
 with a warning.
 
+## PO action items live in `po_line_action_items`
+
+Since PO table v2 (migration 074, 2026-10-29) action items are rows in
+`po_line_action_items`, one per open item per product line (`cleared_at
+IS NULL` = open; clearing stamps, never deletes). **`purchase_orders.
+action_items` and `po_line_items.action_items` are dead** — nothing reads
+or writes them, and they are scheduled for removal; do not write new code
+against either array. Read through `openLineItemsSql` / the
+`*_ACTION_ITEMS_SQL` unions in `server/po-action-items.ts`, write through
+`writeLineItems` / `insertLineItems` in `server/line-action-items.ts`.
+Review Velocity is stored (mirrored by `reconcileReviewVelocity`); Extra
+units shipped, Pack size missing / mismatch and Receiving mismatch stay
+derived. Labels are sentence case; old spellings map via
+`LEGACY_ACTION_ITEMS`. SPEC §22 "Action Items", §26.
+
 ## Velocity API: `offset` is a page index
 
 Every Velocity list endpoint (`/inbound`, `/inventory`, `/shipments`)

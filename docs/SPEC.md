@@ -5393,6 +5393,50 @@ ASIN-level only.
 
 ### Action Items (replaces the free-text status, 2026-10-16; per product since 2026-10-17)
 
+**PO table v2 (patch `docs/claude_spec-patch-po-table-v2.md`, 2026-10-29) —
+the current model; the paragraphs below are the history it builds on.**
+- **Storage:** one row per open item per product line in
+  `po_line_action_items` (migration 074): `po_line_item_id`, `item`,
+  `source` (`manual` | `sheet` | `auto`), `reason`, `set_at`, `cleared_at`,
+  `cleared_by`. Open = `cleared_at IS NULL`; a unique partial index allows
+  one open row per (line, item). Clearing stamps the row, never deletes it.
+  Migration 074 backfilled it in the same transaction from
+  `po_line_items.action_items` (source `sheet`) and from Review Velocity
+  (source `auto`), one History row per PO (`action_items_moved`).
+  `po_line_items.action_items` and `purchase_orders.action_items` are
+  **dead** — nothing reads or writes them; they are scheduled for removal.
+- **Labels are sentence case:** Need to return · Missing / damaged from
+  supplier · Confirm refund / replacement · ATTN: Velocity · See comments ·
+  SHIP · Received - FBM, then the auto items Extra units shipped · Review
+  Velocity · Pack size missing · Pack size mismatch · Receiving mismatch.
+  The old title-case spellings are accepted on input (`LEGACY_ACTION_ITEMS`:
+  the editors, the `action=` filter, sheet intake) and mapped.
+- **Stored vs derived:** the seven manual items and Review Velocity are
+  stored. Extra units shipped (Shipped FBA > Ordered on the ASIN row, red
+  chip), Pack size missing / mismatch and Receiving mismatch stay derived
+  and are never stored.
+- **Rollup:** a line's items show on its own product row; the ASIN row
+  shows the union of its lines (plus the derived items); the PO row shows
+  the union over every line. The PO chip carries a **·N** badge when only
+  N of the PO's lines have the item, and its hover names the lines and
+  ASINs plus any auto reason (`action_item_lines` on the list payload).
+  Two chips at most, then **+N**; a chip too long for the column ends in an
+  ellipsis with the full label on hover.
+- **Editing:** the editor on a product row sets that line
+  (`PATCH /api/pos/lines/:id/action-items`); on an ASIN row, every line of
+  that ASIN (`PATCH /api/pos/asin-rows/:id/action-items`); on the PO row,
+  every product line of the PO (`PATCH /api/pos/:id/action-items`). When
+  the scope has more than one line the editor asks **"Add / Remove "X"
+  to / from all N lines?" → Apply to all N lines** before writing. An
+  added item goes onto every line in scope; a removed item is cleared on
+  every line in scope (`cleared_by = 'manual'`); one History row per line
+  that changed. Review Velocity is never offered and is dropped if echoed.
+- **Filter:** `action=` is any-of over the PO's open line items (one line
+  of one ASIN is enough), OR'd with the derived items' conditions.
+- **Auto-close:** an open stored item on any line, or a blocking derived
+  item, keeps the PO open; clearing the last one lets the rule close it;
+  a new item on any line reopens an auto-closed PO.
+
 **Row-level Status (patch `docs/claude_spec-patch-row-level-status.md`,
 pre-flight `docs/row-level-status-preflight-2026-10-17.md`, 2026-10-17):**
 a sheet row is a product, so action items live on
@@ -5813,6 +5857,19 @@ reconstructed (those POs are Closed from the sheet).
   (three tabs: PO Details · ASINs · Products). Read-only in the frame; **+
   New PO renders disabled** until the entry form ships. The Upload to
   Velocity toolbar action (§11) is unchanged and stays on this page.
+- **Sort and resize (PO table v2, 2026-10-29):** Status, Action Items
+  (open-item count), PO Date, Order ID, Supplier, Order Total, ASINs and
+  Units Ordered sort by a header click — one key at a time, asc → desc →
+  off (off = PO Date newest first), with a caret; `GET /api/pos` takes
+  `sort` / `dir` over a whitelist (`PO_SORT_KEYS`) and always ends on
+  `p.id`, and a sort change returns to page 1. Invoice and Notes do not
+  sort. Every list column resizes by dragging its header edge, through
+  the ASINs table's shared hook (`useColumnWidths` + `ResizeHandle`,
+  `client/src/hooks/use-column-widths.tsx`) under the key
+  `af-po-col-widths`; **Reset widths** appears once a width is stored.
+  Action Items defaults to 160 px. Widths are per browser (localStorage),
+  the same as the Buy List; both move into a user-scoped table with the
+  queued Buy-List-to-DB patch.
 - Search spans order_id, ASIN, and product name in one box. Supplier and
   Action Items filters are **searchable multi-selects** (OR within a facet,
   AND across facets), beside the Open / Closed / All select (default Open).
@@ -5942,7 +5999,7 @@ replaces it. Migration 061 adds `po_edit_log`, `deleted_pos` and
 | Field | Owner |
 |---|---|
 | `purchase_orders` / `po_asins` / `po_line_items` (every field) | **AF** (2026-10-18, "AF owns POs" above) — the PO module UI and the auto-close rule. The Orders sheet only inserts POs that are not in AF and not tombstoned; it never writes an existing one (drift counted, not applied) |
-| `po_line_items.action_items`, `qty_canceled`; `purchase_orders.closed_at`, `closed_by` | **AF**: the ASIN / product Action Items editors, Cancel ASIN / Cancel PO / the product qty-canceled cell, the Closed toggle, the auto-close rule. The intake sets them once, on insert, from the row-level Status mapping. `closed_by = 'sheet'` remains on history only. `purchase_orders.action_items` is deprecated, written by nothing |
+| `po_line_items.action_items`, `qty_canceled`; `purchase_orders.closed_at`, `closed_by` | **AF**: the ASIN / product Action Items editors, Cancel ASIN / Cancel PO / the product qty-canceled cell, the Closed toggle, the auto-close rule. The intake sets them once, on insert, from the row-level Status mapping. `closed_by = 'sheet'` remains on history only. `purchase_orders.action_items` is deprecated, written by nothing. **Since PO table v2 (2026-10-29, migration 074) the items live in `po_line_action_items`; `po_line_items.action_items` is dead too** |
 | **`po_asins.qty_at_prep`** | **Shipment sync (component A)** — Σ Velocity `quantity_remaining` ÷ units_per_pack; NULL when no Velocity line references the key (D6). Overwritten every Sync Shipments; not hand-editable. |
 | **`po_asins.qty_shipped_supplier`, `qty_at_warehouse`, `qty_lost_damaged_us`** | **AF-owned**: the inline quantity editor today; email tracking (§26) records tracking numbers, not quantities, so far. Never the importer, never a sync. |
 | **`purchase_orders.ships_to`**, **`po_tracking`** | **AF-owned** (§26): Ships to on the PO / New PO form; tracking rows from the Gmail ingest, the Tracking tab (add, Move to PO…) and the unmatched queue. |
@@ -6715,12 +6772,18 @@ A PO fully canceled or returned in AF → review "shipped but canceled",
 never pushed. A failed push → `push_failed`, review = the Velocity error.
 When several apply every reason is kept (`review_reason`, "; "-joined).
 
-**"Review Velocity"** is an **auto-managed** action item: derived, never
-stored on lines (not in the CHECK list; the editors drop it if echoed). The
-PO's union (`PO_ACTION_ITEMS_SQL`) includes it while any of the PO's
-tracking rows has a `review_reason` and no `suppressed_at`, so the POs
-column, PO Details, the `action=` filter (OR'd in) and the auto-close rule
-all see it — an open review keeps the PO from auto-closing. The reasons
+**"Review Velocity"** is an **auto-managed** action item. **Since PO table
+v2 (2026-10-29) it is stored** in `po_line_action_items` on every product
+line of the PO (`source = 'auto'`, `reason` = the open review reasons),
+mirrored by `reconcileReviewVelocity` (`server/line-action-items.ts`) after
+the tracking push, Move to PO (old and new PO) and the manual clear: open
+while any of the PO's tracking rows has a `review_reason` and no
+`suppressed_at`, re-reasoned when the reasons change, cleared
+`cleared_by = 'auto'` when the condition goes away or `'manual'` after the
+manual clear. The editors never offer it and drop it if echoed. Because it
+is stored, the POs column, PO Details, the `action=` filter and the
+auto-close rule read it like any other item — an open review keeps the PO
+from auto-closing. The reasons
 ride the list / detail payload as `review_velocity_reasons` (the hover).
 It clears itself when the condition goes away (the next evaluation nulls
 `review_reason`). **Manual clear** — `POST /api/pos/:id/review-velocity/clear`
