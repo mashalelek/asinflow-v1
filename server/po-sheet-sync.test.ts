@@ -166,7 +166,7 @@ describe("syncPoSheet — dry run computes the §3.9 counts and writes nothing",
       // Intake-only (af-owned, 2026-10-18): the 4 existing POs that differ are reported as drift, nothing applied.
       sheetPos: 7, inserted: 2, updated: 0, unchanged: 1, linesDeleted: 0, poAsinsDeleted: 0, poAsinsKeptWithShipments: 0,
       canceledKeptOrderedQty: 0, canceledNoOrderedQty: 1, returnedNoQty: 0, lineActionItemsChanged: 0, historyInserted: 0, historyWithActionItems: 0, skippedBadCells: 0,
-      sheetDiffers: 4, tombstoned: 0, posInAfNotInSheet: 1, unmappedTokens: 0, skippedMixed: 0,
+      colPEntries: 0, sheetDiffers: 4, tombstoned: 0, posInAfNotInSheet: 1, unmappedTokens: 0, skippedMixed: 0,
     });
     expect(r.inAfNotInSheet).toEqual(["walmart.com GONE (2026-03-01)"]);
     expect(r.keptWithShipments).toEqual([]);
@@ -220,8 +220,9 @@ describe("syncPoSheet — dry run computes the §3.9 counts and writes nothing",
     expect(newc.params?.[22]).toBe(1); // entry_seq: 7 rows, NEWC on the last row → 7 − 6
     const lineInserts = db.writes.filter((w) => w.sql.startsWith("INSERT INTO po_line_items"));
     expect(lineInserts.find((w) => w.params?.[6] === 0 && w.params?.[11] === 0)).toBeTruthy(); // NEWC: ordered 0, qty_canceled 0 (as-is)
-    // Existing POs are never written: no UPDATE / DELETE of any kind.
-    expect(sql.filter((x) => /^(UPDATE|DELETE)/.test(x))).toEqual([]);
+    // Existing POs are never written: no UPDATE / DELETE of any PO table. The
+    // only DELETE is the Col P signal table's full refresh (not PO data).
+    expect(sql.filter((x) => /^(UPDATE|DELETE)/.test(x))).toEqual(["DELETE FROM po_sheet_fba_shipments"]);
   });
 ;
 

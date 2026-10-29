@@ -15,7 +15,7 @@
 export const COL = {
   rcpt: 0, orderId: 1, orderDate: 2, status: 3, supplier: 4,
   skuUpc: 5, productName: 6, asin: 7, asinName: 8,
-  price: 10, qtyOrdered: 11, qtyReceived: 12, asinQtyTotal: 13,
+  price: 10, qtyOrdered: 11, qtyReceived: 12, asinQtyTotal: 13, fbaShipmentIds: 15,
   qtyReturned: 17, uniqueProductsPerAsin: 18, asinQtyPerProduct: 19, // Col R (renamed qty_returned, migration 030)
   lossQty: 21, lossAmount: 22, adjProductCost: 23, adjCogs: 24,
   subtotal: 27, tax: 28, shDonations: 29, discount: 30, refundAmount: 31, orderTotal: 32,

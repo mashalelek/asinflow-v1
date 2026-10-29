@@ -119,6 +119,32 @@ export interface SheetLine {
   returned: boolean;
   /** Col R blank (as opposed to 0) — a Returned row with no qty leaves qty_returned as stored. */
   qtyReturnedBlank: boolean;
+  /** Col P "FBA Shipment ID" — the shipments this row went out in (a matching signal, po_sheet_fba_shipments). */
+  fbaShipments: ColPEntry[];
+}
+
+export interface ColPEntry { fbaShipmentId: string; qty: number | null; qtyRaw: string | null }
+
+/**
+ * Col P (2026-10-29): "FBA19H4BCJP4 (4), FBA19H4BK2W6 (4)" — comma / semicolon
+ * separated, qty in parentheses, sometimes "ID(4)", "ID" alone or "ID (3/5)".
+ * [ ] notes are stripped first, including any shipment ids written inside
+ * them ("[FBA19N00D6L5 (1)] - might've shipped the wrong product"). Free text
+ * ("FBM", "Canceled by walmart") yields nothing. qty is a plain number or
+ * NULL; the parenthesised text is kept verbatim.
+ */
+export function parseColP(raw: string | undefined): ColPEntry[] {
+  const cell = String(raw ?? "").replace(/\[[^\]]*\]/g, " ");
+  const out = new Map<string, ColPEntry>();
+  for (const m of Array.from(cell.matchAll(/\b(FBA[0-9A-Z]{8,10})\b\s*(?:\(\s*([^)]*?)\s*\))?/gi))) {
+    const id = m[1].toUpperCase();
+    const qtyRaw = m[2] == null || m[2] === "" ? null : m[2];
+    const qty = qtyRaw != null && /^\d+(\.\d+)?$/.test(qtyRaw) ? Number(qtyRaw) : null;
+    const prev = out.get(id);
+    // The same id twice on one row: quantities add when both are numbers.
+    out.set(id, prev ? { fbaShipmentId: id, qty: prev.qty != null && qty != null ? prev.qty + qty : prev.qty ?? qty, qtyRaw: [prev.qtyRaw, qtyRaw].filter(Boolean).join(" + ") || null } : { fbaShipmentId: id, qty, qtyRaw });
+  }
+  return Array.from(out.values());
 }
 
 export interface SheetPoAsin {
@@ -347,6 +373,7 @@ export function parsePoSheet(header: string[], dataCells: string[][]): ParsedPoS
           adjustedProductCost: money(r.cells, COL.adjProductCost),
           statusCell, actionItems: st.actionItems, canceled: st.canceled, returned: st.returned,
           qtyReturnedBlank: t(r.cells[COL.qtyReturned]) === "",
+          fbaShipments: parseColP(r.cells[COL.fbaShipmentIds]),
         }; }),
       });
     }
@@ -405,6 +432,8 @@ export interface PoSyncCounts {
   lineActionItemsChanged: number;
   /** Existing POs whose sheet rows differ from AF (informational — intake-only, never applied; af-owned §2.2). */
   sheetDiffers: number;
+  /** Col P shipment entries read (po_sheet_fba_shipments rows on a live run). */
+  colPEntries: number;
   /** Sheet POs not inserted because they were deleted in AF (deleted_pos tombstone, §5.3). */
   tombstoned: number;
   /** Pre-2026 POs inserted (Closed, closed_by = 'import'), and how many carry action items. */
@@ -545,7 +574,7 @@ export async function syncPoSheet(opts: { sheetId: string; dryRun: boolean; db?:
   const counts: PoSyncCounts = {
     sheetPos: parsed.pos.length, inserted: 0, updated: 0, unchanged: 0, linesDeleted: 0, poAsinsDeleted: 0,
     poAsinsKeptWithShipments: 0, canceledKeptOrderedQty: 0, canceledNoOrderedQty: 0, returnedNoQty: 0, lineActionItemsChanged: 0,
-    historyInserted: 0, historyWithActionItems: 0, skippedBadCells: parsed.skippedBadCells.length, sheetDiffers: 0, tombstoned: 0,
+    historyInserted: 0, historyWithActionItems: 0, skippedBadCells: parsed.skippedBadCells.length, sheetDiffers: 0, colPEntries: 0, tombstoned: 0,
     posInAfNotInSheet: 0, unmappedTokens: parsed.unmapped.length, skippedMixed: parsed.skippedMixed.length,
   };
   const keptWithShipments: string[] = [];
@@ -674,6 +703,9 @@ export async function syncPoSheet(opts: { sheetId: string; dryRun: boolean; db?:
     unmapped: parsed.unmapped, skippedMixed: parsed.skippedMixed, inAfNotInSheet, keptWithShipments, canceledKept, canceledNoQty,
     skippedBadCells: parsed.skippedBadCells, skippedRows: parsed.skippedRows, historyPack: parsed.historyPack, rawRowsRead: parsed.rawRowsRead,
   };
+  const colPRows = parsed.pos.flatMap((po) => po.poAsins.flatMap((a) => a.lines.flatMap((l) =>
+    l.fbaShipments.map((e) => ({ supplier: po.supplier, orderId: po.orderId, asin: a.asin, position: l.position, ...e })))));
+  counts.colPEntries = colPRows.length;
   if (opts.dryRun || stop) return result;
 
   // Apply, one transaction.
@@ -700,6 +732,15 @@ export async function syncPoSheet(opts: { sheetId: string; dryRun: boolean; db?:
         continue;
       }
       // Existing POs are AF-owned: never written by the sync (intake-only).
+    }
+    // Col P is a matching signal, not PO data: the whole table is replaced
+    // from the sheet on every live run, for new and existing POs alike.
+    await client.query(`DELETE FROM po_sheet_fba_shipments`);
+    for (const r of colPRows) {
+      await client.query(
+        `INSERT INTO po_sheet_fba_shipments (supplier, order_id, asin, line_position, fba_shipment_id, qty, qty_raw) VALUES ($1,$2,$3,$4,$5,$6,$7)`,
+        [r.supplier, r.orderId, r.asin, r.position, r.fbaShipmentId, r.qty, r.qtyRaw],
+      );
     }
     await client.query("COMMIT");
     result.wrote = true;
