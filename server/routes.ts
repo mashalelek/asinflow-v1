@@ -24,6 +24,8 @@ import { log } from "./index";
 import { type AsinInput, type AsinResult, type ColumnMapping, extractDomain, cleanBuyLink, getFeePriceForAsin, LEAD_SOURCES, normalizeLeadSource, type LeadSource } from "@shared/schema";
 import { parseMoney } from "@shared/parse-money";
 import pool, { query, isDbAvailable } from "./db";
+import { loadSubmitRows, loadSettingsForSubmit } from "./offer-add-load";
+import { runRelist } from "./relist";
 import { syncInventory } from "./inventory-sync";
 import { syncSalesData } from "./sales-sync";
 import { syncSuppressionData } from "./suppression-sync";
@@ -329,50 +331,6 @@ function delay(ms: number) {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
-// Shared loader for the offer-add preview + submit endpoints. Single source of
-// truth so preview and submit can't diverge on which DB fields they read.
-async function loadSubmitRows(asins: string[]): Promise<SubmitAsinRow[]> {
-  const rowsRes = await pool.query(
-    `SELECT a.asin,
-            a.is_catalog_deleted,
-            COALESCE(e.eligibility_status, NULL) AS eligibility_status,
-            a.gating_checked_at,
-            COALESCE(a.is_hazmat, false) AS is_hazmat,
-            a.category,
-            a.weight_lb,
-            COALESCE(e.estimated_cogs, e.cogs) AS cogs,
-            e.fba_fee,
-            e.referral_fee,
-            e.fees_estimate_price,
-            e.prep_override,
-            e.storage_override
-       FROM asins a
-       LEFT JOIN asin_estimates e ON e.asin = a.asin
-      WHERE a.asin = ANY($1::text[])`,
-    [asins],
-  );
-  const rowByAsin = new Map<string, any>(rowsRes.rows.map((r: any) => [r.asin, r]));
-  const settings = await loadSettingsForSubmit();
-  return asins.map((asin) => {
-    const r = rowByAsin.get(asin);
-    return {
-      asin,
-      is_catalog_deleted: r?.is_catalog_deleted ?? false,
-      eligibility_status: r?.eligibility_status ?? null,
-      gating_checked_at: r?.gating_checked_at ? new Date(r.gating_checked_at).toISOString() : null,
-      is_hazmat: r?.is_hazmat === true,
-      cogs: r?.cogs != null ? parseFloat(r.cogs) : null,
-      fbaFee: r?.fba_fee != null ? parseFloat(r.fba_fee) : null,
-      referralFee: r?.referral_fee != null ? parseFloat(r.referral_fee) : null,
-      feesEstimatePrice: r?.fees_estimate_price != null ? parseFloat(r.fees_estimate_price) : null,
-      weightLbs: r?.weight_lb != null ? parseFloat(r.weight_lb) : null,
-      category: r?.category ?? null,
-      prepCost: r?.prep_override != null ? parseFloat(r.prep_override) : settings.prepCost,
-      storageCost: r?.storage_override != null ? parseFloat(r.storage_override) : settings.storageFee,
-    };
-  });
-}
-
 // Maps the submit orchestrator's SubmitOutcome → the OfferAddResult shape the
 // preview dialog already understands. "would_submit" maps to "preview" (UI
 // renders payload + sku); skip reasons collapse onto blocked outcome kinds.
@@ -423,32 +381,6 @@ function mapSubmitOutcomeToOfferAddResult(outcome: any): OfferAddResult {
     default:
       return { kind: "resurrection_error", asin: outcome.asin, reason: "unknown", details: "unknown outcome" };
   }
-}
-
-// Settings DB-key → settingsSchema field mapping. Used by the offer-add submit
-// endpoint to construct the typed Settings object that the price resolver needs.
-// Matches the diag script's loadSettings pattern (script/diag-price-resolver-sample.ts).
-async function loadSettingsForSubmit(): Promise<Settings> {
-  const result = await pool.query("SELECT key, value FROM settings");
-  const raw: Record<string, any> = {};
-  for (const r of result.rows) {
-    const n = parseFloat(r.value);
-    raw[r.key] = isNaN(n) ? r.value : n;
-  }
-  const mapped = {
-    inboundShippingCost: raw.inbound_shipping_per_lb,
-    prepCost: raw.prep_cost,
-    storageFee: raw.storage_fee,
-    lowInventorySurcharge: raw.low_inventory_surcharge,
-    hazmatShipSurcharge: raw.hazmat_ship_surcharge,
-    hazmatPrepSurcharge: raw.hazmat_prep_surcharge,
-    minRoiThreshold: raw.min_roi,
-    minMarginThreshold: raw.min_margin,
-  };
-  const cleaned = Object.fromEntries(
-    Object.entries(mapped).filter(([_, v]) => v !== undefined && v !== null && !isNaN(v as number)),
-  );
-  return settingsSchema.parse(cleaned);
 }
 
 // §19 auto verify after submit: one-shot in-process follow-up to a batch
@@ -2705,15 +2637,7 @@ export async function registerRoutes(
   // === §18 Relist: re-create a deleted listing under its original SKU ===
   //
   // Body: { items: [{asin, sku}], openOnCreate?: boolean, dryRun?: boolean }
-  //
-  // The exact-SKU reuse path through the SAME submitOfferAddBatch pipeline as
-  // Add to SC (getDefinitionsProductType, LISTING_OFFER_ONLY, FBA, no quantity
-  // key, DG pass-through, price resolver) — the only differences are that the
-  // SKU is forced to the requested prior SKU (which must be AF history in
-  // asin_skus and must 404 live; format-agnostic, so legacy / Amazon-random
-  // SKUs relist under their original names) and that openOnCreate=true makes
-  // the §19 ladder skip close-after-create so the offer comes up OPEN.
-  // dryRun=true runs phase4Mode="preview" (everything but the PUT).
+  // The pipeline lives in server/relist.ts (shared with script/relist.ts).
   app.post("/api/listings/relist", async (req: Request, res: Response) => {
     if (!isDbAvailable()) { res.status(503).json({ message: "Database not available" }); return; }
     const sellerId = process.env.SP_API_SELLER_ID;
@@ -2728,40 +2652,12 @@ export async function registerRoutes(
     if (cleaned.some((it) => !it.asin || !it.sku)) {
       res.status(400).json({ message: "Every item needs both asin and sku" }); return;
     }
-    const asins = cleaned.map((it) => it.asin);
-    const relist = Object.fromEntries(cleaned.map((it) => [it.asin, { sku: it.sku, openOnCreate: openOnCreate === true }]));
-
     await respondLongSync(res, async () => {
-      // Gating probe, inline (decision 9) — same as the offer-add preview.
-      const gating = await probeGatingForAsins(asins, { query: (sql, params) => query(sql, params) });
-      log(`Relist gating probe (${asins.length} ASINs): yes=${gating.counts.yes} no=${gating.counts.no} error=${gating.counts.error + gating.counts.missing_row}`, "offer-add");
-
-      const submitRows = await loadSubmitRows(asins);
-      const settings = await loadSettingsForSubmit();
-      const inboundRow = await query(`SELECT value FROM settings WHERE key='include_inbound_shipping'`);
-      const includeInboundShipping = inboundRow.rows[0]?.value === "true" || inboundRow.rows[0]?.value === true;
-      const skusRes = await query(`SELECT sku FROM asin_skus`);
-      const allExistingSkus = skusRes.rows.map((r: any) => String(r.sku));
-
-      log(`Relist ${dryRun ? "PREVIEW" : "SUBMIT (LIVE)"} for ${cleaned.length} SKU(s): ${cleaned.map((it) => `${it.asin}→${it.sku}`).join(", ")}${openOnCreate ? " [openOnCreate]" : ""}`, "offer-add");
-
-      const result = await submitOfferAddBatch(submitRows, {
-        queryFn: (sql, params) => query(sql, params),
-        sellerId,
-        settings,
-        includeInboundShipping,
-        allExistingSkus,
-        relist,
-        productRegistry: makeProductRegistryRepo((sql, params) => query(sql, params)),
-        phase4Mode: dryRun ? "preview" : "live",
+      const { result, createdPairs } = await runRelist(cleaned, {
+        sellerId, openOnCreate: openOnCreate === true, dryRun: dryRun === true,
+        log: (m) => log(m, "offer-add"),
       });
-
-      if (!dryRun) {
-        const createdPairs = result.perAsin
-          .filter((p) => p.outcome.kind === "created")
-          .map((p) => ({ asin: p.outcome.asin, sku: (p.outcome as any).sku as string }));
-        if (createdPairs.length > 0) scheduleBatchVerify(sellerId, createdPairs);
-      }
+      if (!dryRun && createdPairs.length > 0) scheduleBatchVerify(sellerId, createdPairs);
       return result;
     });
   });
