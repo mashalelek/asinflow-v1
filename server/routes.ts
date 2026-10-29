@@ -11,8 +11,8 @@ import { runAuraSyncChain } from "./aura-sync-chain";
 import { probeGatingForAsins } from "./gating-probe";
 import { loadPoAsinRows, normalizeLineQty } from "./po-queries";
 import { evaluateAutoClose, setPoClosedManually, parseQtyInput, MANUAL_QTY_COLUMNS, type ManualQtyColumn } from "./po-close";
-import { ACTION_ITEMS, DISPLAY_ACTION_ITEMS, REVIEW_VELOCITY, PACK_SIZE_MISSING, PACK_SIZE_MISMATCH, normalizeActionItems } from "./po-status-map";
-import { asinWriteThrough, unionActionItems, PO_ACTION_ITEMS_SQL, REVIEW_VELOCITY_EXISTS_SQL, REVIEW_VELOCITY_REASONS_SQL, PACK_SIZE_MISSING_EXISTS_SQL, PACK_SIZE_MISMATCH_EXISTS_SQL } from "./po-action-items";
+import { ACTION_ITEMS, DISPLAY_ACTION_ITEMS, REVIEW_VELOCITY, PACK_SIZE_MISSING, PACK_SIZE_MISMATCH, RECEIVING_MISMATCH, normalizeActionItems } from "./po-status-map";
+import { asinWriteThrough, unionActionItems, PO_ACTION_ITEMS_SQL, REVIEW_VELOCITY_EXISTS_SQL, REVIEW_VELOCITY_REASONS_SQL, PACK_SIZE_MISSING_EXISTS_SQL, PACK_SIZE_MISMATCH_EXISTS_SQL, RECEIVING_MISMATCH_EXISTS_SQL } from "./po-action-items";
 import { editPoHeader, editLine, addLine, removeLine, editAsinRow, loadPoHistory, logEdits, changedFields, asLogText, EditError, type EditResult } from "./po-edit";
 import { createPoFromForm, lookupAsins } from "./po-create";
 import { loadPoGuards, deletePo, cancelPo, assertAsinRowCancelable, reassignShipment } from "./po-guards";
@@ -4290,6 +4290,7 @@ export async function registerRoutes(
       // The pack-size items are derived from po_asins (2026-10-29).
       if (wanted.includes(PACK_SIZE_MISSING)) any.push(PACK_SIZE_MISSING_EXISTS_SQL);
       if (wanted.includes(PACK_SIZE_MISMATCH)) any.push(PACK_SIZE_MISMATCH_EXISTS_SQL);
+      if (wanted.includes(RECEIVING_MISMATCH)) any.push(RECEIVING_MISMATCH_EXISTS_SQL);
       if (any.length > 0) conds.push(`(${any.join(" OR ")})`);
     }
     if (supplier) {
@@ -4720,7 +4721,8 @@ export async function registerRoutes(
       const lines = (await query(
         `SELECT u.id, u.velocity_shipment_id, u.velocity_order_id, u.reason, u.created_at, v.shipped_at::text AS shipped_at,
                 u.line->>'order_number' AS order_number, u.line->>'retailer' AS retailer, u.line->>'asin' AS asin, u.line->>'amazon_sku' AS amazon_sku,
-                u.line->>'item_name' AS item_name, u.line->>'sold_as' AS sold_as, (u.line->>'units_per_pack')::numeric AS units_per_pack, (u.line->>'quantity_shipped')::numeric AS quantity_shipped
+                u.line->>'item_name' AS item_name, u.line->>'sold_as' AS sold_as, (u.line->>'units_per_pack')::numeric AS units_per_pack, (u.line->>'quantity_shipped')::numeric AS quantity_shipped,
+                u.candidates
            FROM shipment_unmatched u JOIN velocity_shipments v ON v.id = u.velocity_shipment_id
           WHERE u.resolved_at IS NULL
           ORDER BY v.shipped_at DESC NULLS LAST, u.created_at`,

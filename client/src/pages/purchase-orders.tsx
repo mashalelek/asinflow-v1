@@ -168,7 +168,9 @@ const ALL = "__all__";
 
 // ── Shipment reconciliation (patch docs/claude_spec-patch-shipment-reconciliation.md §5) ──
 
-interface UnmatchedLine { id: string; velocity_shipment_id: string; velocity_order_id: string; reason: "no_order" | "po_not_found"; shipped_at: string | null; order_number: string | null; retailer: string | null; asin: string | null; amazon_sku: string | null; item_name: string | null; sold_as: string | null; units_per_pack: string | null; quantity_shipped: string | null }
+interface UnmatchedLine { id: string; velocity_shipment_id: string; velocity_order_id: string; reason: "no_order" | "po_not_found"; shipped_at: string | null; order_number: string | null; retailer: string | null; asin: string | null; amazon_sku: string | null; item_name: string | null; sold_as: string | null; units_per_pack: string | null; quantity_shipped: string | null;
+  /** Col P (2026-10-29): the PO ASIN rows the sheet's FBA Shipment ID column points this line at, when more than one. */
+  candidates: Array<{ po_asin_id: string; order_id: string; supplier: string; asin: string }> | null }
 interface UnmatchedResponse { lines: UnmatchedLine[]; ambiguous: Array<{ id: string; shipped_at: string | null; rows: number }>; count: number }
 interface PickerRow { id: string; asin: string; asin_name: string | null; qty: number; units_per_pack: number; order_id: string; supplier: string; order_date: string }
 
@@ -210,6 +212,18 @@ function LinkPicker({ line, onLinked }: { line: UnmatchedLine; onLinked: () => v
         <Button variant="outline" size="sm" className="h-7 text-xs" data-testid={`button-link-unmatched-${line.id}`}>Link to PO ASIN</Button>
       </PopoverTrigger>
       <PopoverContent className="w-[28rem] p-2 text-xs space-y-1" align="end">
+        {line.candidates && line.candidates.length > 0 && (
+          <div className="space-y-0.5 pb-1" data-testid={`colp-candidates-${line.id}`}>
+            <div className="text-muted-foreground">Col P (FBA Shipment ID) names these rows:</div>
+            {line.candidates.map((c) => (
+              <button key={c.po_asin_id} onClick={() => link({ id: c.po_asin_id } as PickerRow)} className="flex w-full items-center gap-2 px-1 py-1 text-left hover:bg-muted/60" data-testid={`button-pick-colp-${c.po_asin_id}`}>
+                <span className="font-mono">{c.order_id}</span>
+                <span className="text-muted-foreground truncate">{c.supplier}</span>
+                <span className="font-mono">{c.asin}</span>
+              </button>
+            ))}
+          </div>
+        )}
         <Input value={q} onChange={(e) => setQ(e.target.value)} placeholder="Order #, ASIN or supplier" className="h-7 text-xs" data-testid={`input-link-search-${line.id}`} />
         <div className="max-h-64 overflow-auto divide-y divide-border/50">
           {rows.map((r) => (
@@ -259,7 +273,7 @@ function UnmatchedPanel({ onChanged }: { onChanged: () => void }) {
                     <td className="py-1 pr-2 font-mono">{l.asin}</td>
                     <td className="py-1 pr-2 truncate max-w-[16rem]" title={l.item_name ?? ""}>{l.item_name}</td>
                     <td className="py-1 pr-2 text-right">{l.quantity_shipped}{l.units_per_pack && Number(l.units_per_pack) > 1 ? ` (÷${l.units_per_pack})` : ""}</td>
-                    <td className="py-1 pr-2 text-muted-foreground">{l.reason === "no_order" ? "no Order # at Velocity" : "Order # not in AF"}</td>
+                    <td className="py-1 pr-2 text-muted-foreground">{l.reason === "no_order" ? (l.candidates?.length ? `no Order # at Velocity; Col P names ${l.candidates.length} rows` : "no Order # at Velocity") : "Order # not in AF"}</td>
                     <td className="py-1 text-right"><LinkPicker line={l} onLinked={() => { load(); onChanged(); }} /></td>
                   </tr>
                 ))}
@@ -439,8 +453,8 @@ export default function PurchaseOrders() {
             <tr className="table-header-stone">
               <th className="px-2 py-2 text-xs font-medium whitespace-nowrap text-left w-12">Status</th>
               <th className="w-8 px-2 py-2" aria-label="Expand by ASIN" />
-              {["Action Items", "PO Date", "Order ID", "Supplier", "Order Total", "ASINs", "Units Ordered", "Units Received", "Invoice", "Notes"].map((h, i) => (
-                <th key={h} className={`px-3 py-2 text-xs font-medium whitespace-nowrap ${i >= 4 && i <= 7 ? "text-right" : "text-left"}`}>{h}</th>
+              {["Action Items", "PO Date", "Order ID", "Supplier", "Order Total", "ASINs", "Units Ordered", "Invoice", "Notes"].map((h, i) => (
+                <th key={h} className={`px-3 py-2 text-xs font-medium whitespace-nowrap ${i >= 4 && i <= 6 ? "text-right" : "text-left"}`}>{h}</th>
               ))}
             </tr>
           </thead>
@@ -477,7 +491,6 @@ export default function PurchaseOrders() {
                   <td className={`px-3 py-2 text-right font-mono ${money.muted ? "text-muted-foreground/50" : ""}`}>{money.text}</td>
                   <td className="px-3 py-2 text-right">{po.asin_count}</td>
                   <td className="px-3 py-2 text-right">{fmtQty(po.units_ordered)}</td>
-                  <td className="px-3 py-2 text-right">{po.units_received == null ? <span className="text-muted-foreground/50">—</span> : fmtQty(po.units_received)}</td>
                   <td className="px-3 py-2">
                     {po.invoice_attached
                       ? <Paperclip className="h-3.5 w-3.5 text-muted-foreground" />
@@ -487,7 +500,7 @@ export default function PurchaseOrders() {
                 </tr>
                 {open && (
                   <tr data-testid={`row-po-asins-${po.order_id}`}>
-                    <td colSpan={12} className="p-0 pl-6 bg-muted/20">
+                    <td colSpan={11} className="p-0 pl-6 bg-muted/20">
                       {/* Nested rows: same column model as the detail ASINs tab (§3.2, §4);
                           po_asins default order; sorting/filtering stays at PO level. */}
                       <table className="w-full border-collapse text-sm table-fixed" style={{ minWidth: "140rem" }}>
@@ -508,7 +521,7 @@ export default function PurchaseOrders() {
               });
             })()}
             {data && data.pos.length === 0 && (
-              <tr><td colSpan={12} className="px-3 py-8 text-center text-sm text-muted-foreground">No purchase orders match.</td></tr>
+              <tr><td colSpan={11} className="px-3 py-8 text-center text-sm text-muted-foreground">No purchase orders match.</td></tr>
             )}
           </tbody>
         </table>
@@ -639,7 +652,6 @@ export function PurchaseOrderDetailPlaceholder() {
         {[
           ["ASINs", String(summary.asin_count)],
           ["Units Ordered", fmtQty(summary.units_ordered)],
-          ["Units Received", fmtQty(summary.units_received)],
         ].map(([k, v]) => (
           <div key={k}><span className="text-muted-foreground mr-1.5">{k}</span><span className="font-medium">{v}</span></div>
         ))}
