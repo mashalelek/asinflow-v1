@@ -3,7 +3,7 @@ import { describe, it, expect, vi, beforeEach } from "vitest";
 
 const pages: Array<() => any> = [];
 const queries: { sql: string; params?: any[] }[] = [];
-vi.mock("./index", () => ({ log: () => {} }));
+vi.mock("./log", () => ({ log: () => {} }));
 vi.mock("./spapi", () => ({ spApiGet: vi.fn(async () => { const next = pages.shift(); if (!next) throw new Error("no page"); return next(); }) }));
 vi.mock("./db", () => ({ query: vi.fn(async (sql: string, params?: any[]) => { queries.push({ sql, params }); return { rows: [], rowCount: 0 }; }) }));
 vi.mock("./asin-po-pipeline", () => ({ loadAsinPipeline: vi.fn(async () => new Map()) }));

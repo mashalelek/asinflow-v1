@@ -9,7 +9,7 @@ import * as XLSX from "xlsx";
 // server/index.ts is mocked (importing it boots Express). ./db and
 // ./google-sheets are mocked so the builder runs against a scripted PO sheet
 // and scripted cost rows.
-vi.mock("./index", () => ({ log: () => {} }));
+vi.mock("./log", () => ({ log: () => {} }));
 vi.mock("./db", () => ({ query: async () => ({ rows: [] }), isDbAvailable: () => true }));
 
 let sheetRows: any[] = [];

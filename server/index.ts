@@ -6,6 +6,7 @@ import { createListingHygieneRouter } from "./listing-hygiene-routes";
 import { createTrackingRouter } from "./tracking-routes";
 import { requestLogLine } from "./request-log";
 import { startRunner, setRunnerLogger } from "./scheduler/runner";
+import { log } from "./log";
 import { startSchedule, setScheduleLogger, nextPassAfter } from "./scheduler/schedule";
 import { serveStatic } from "./static";
 import { createServer } from "http";
@@ -68,16 +69,7 @@ app.use(
 
 app.use(express.urlencoded({ extended: false }));
 
-export function log(message: string, source = "express") {
-  const formattedTime = new Date().toLocaleTimeString("en-US", {
-    hour: "numeric",
-    minute: "2-digit",
-    second: "2-digit",
-    hour12: true,
-  });
-
-  console.log(`${formattedTime} [${source}] ${message}`);
-}
+export { log };
 // auth.ts must not import this module (it would boot the server from
 // script/create-admin.ts), so it receives the logger instead.
 setAuthLogger(log);

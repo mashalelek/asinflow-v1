@@ -1,6 +1,6 @@
 import { query } from "./db";
 import { normalizeLeadSource } from "@shared/schema";
-import { log } from "./index";
+import { log } from "./log";
 import { fetchSourcingSheet, type RawSourcingRow } from "./sourcing-sheet";
 import { fetchErLeadsSheet, type RawErRow } from "./er-leads-sheet";
 import type { AsinInput } from "@shared/schema";

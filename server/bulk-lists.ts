@@ -21,7 +21,7 @@
 //     computed nor stored here
 
 import { query } from "./db";
-import { log } from "./index";
+import { log } from "./log";
 import { cleanBuyLink, extractDomain, normalizeLeadSource } from "@shared/schema";
 import type { AsinInput } from "@shared/schema";
 // Pure lead-date helpers live in bulk-lead-dates.ts (no Express-boot import

@@ -19,7 +19,7 @@ import { join } from "path";
 // instant the submit response lands, because the ledger row exists instantly.
 // What is gone is a flag asserting SC has a listing before SC said so.
 
-vi.mock("./index", () => ({ log: () => {} }));
+vi.mock("./log", () => ({ log: () => {} }));
 const read = (f: string) => readFileSync(join(__dirname, f), "utf8");
 const stripComments = (src: string) =>
   src.replace(/\/\*[\s\S]*?\*\//g, "").replace(/^[ \t]*\/\/.*$/gm, "").replace(/[ \t]+\/\/.*$/gm, "");

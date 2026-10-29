@@ -24,7 +24,7 @@
 import { spApiPost } from "./spapi-auth";
 import { parseOffersPayload, type ParsedOffers } from "./offers-parse";
 import { query } from "./db";
-import { log } from "./index";
+import { log } from "./log";
 
 const MARKETPLACE = "ATVPDKIKX0DER";
 const BATCH_URI = "/batches/products/pricing/v0/itemOffers";

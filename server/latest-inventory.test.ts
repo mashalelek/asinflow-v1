@@ -1,5 +1,5 @@
 import { describe, it, expect, vi } from "vitest";
-vi.mock("./index", () => ({ log: () => {} }));
+vi.mock("./log", () => ({ log: () => {} }));
 import { LATEST_INVENTORY_SQL } from "./routes";
 
 // ASINs page performance (2026-10-18): the latest snapshot per ASIN is one

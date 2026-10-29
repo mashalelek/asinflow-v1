@@ -4,7 +4,7 @@ import { describe, it, expect, vi, beforeEach } from "vitest";
 // write. These tests pin the doc's field table, the skip-existing rule,
 // per-ASIN transaction independence, the tag-failure-is-error rule, and
 // (below) that promote stays the ONLY bulk module touching asins.
-vi.mock("./index", () => ({ log: () => {} }));
+vi.mock("./log", () => ({ log: () => {} }));
 
 const clientQueries: Array<{ text: string; values?: any[] }> = [];
 let existsResult: { rows: any[] } = { rows: [] };

@@ -14,7 +14,7 @@ import axios from "axios";
 import type pg from "pg";
 import { spApiGet, spApiPost } from "./spapi";
 import pool from "./db";
-import { log } from "./index";
+import { log } from "./log";
 
 const MARKETPLACE_ID = "ATVPDKIKX0DER";
 const POLL_INTERVAL_MS = 10_000;

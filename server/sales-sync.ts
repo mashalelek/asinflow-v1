@@ -17,7 +17,7 @@
 import axios from "axios";
 import { spApiGet, spApiPost } from "./spapi";
 import { query } from "./db";
-import { log } from "./index";
+import { log } from "./log";
 
 const MARKETPLACE_ID = "ATVPDKIKX0DER";
 /** Test seam: polling / pacing delays. */

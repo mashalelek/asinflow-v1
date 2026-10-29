@@ -12,7 +12,7 @@
 
 import { pushAuraCosts } from "./aura-cost-sync";
 import { getRunSheetsSync } from "./routes";
-import { log } from "./index";
+import { log } from "./log";
 
 export interface PoSheetReadResult {
   updated: number;

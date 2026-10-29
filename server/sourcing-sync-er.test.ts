@@ -12,7 +12,7 @@ vi.mock("./db", () => ({
     return { rows: [], rowCount: 0 };
   }),
 }));
-vi.mock("./index", () => ({ log: () => {} }));
+vi.mock("./log", () => ({ log: () => {} }));
 const master = vi.fn();
 const erSheet = vi.fn();
 vi.mock("./sourcing-sheet", () => ({ fetchSourcingSheet: (...a: any[]) => master(...a) }));

@@ -7,7 +7,7 @@ import { describe, it, expect, vi } from "vitest";
 import { matchKeysForOrder } from "./velocity-api";
 
 // ── buildVelocityRecords harness: mocked sheet + db ─────────────────────────
-vi.mock("./index", () => ({ log: () => {} }));
+vi.mock("./log", () => ({ log: () => {} }));
 
 let sheetRows: any[] = [];
 // Since po-af-owned §2.4 (2026-10-18) the rows come from the AF PO tables

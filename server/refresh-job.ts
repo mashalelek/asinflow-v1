@@ -8,7 +8,7 @@
 // Every stage persists a refresh_runs row (migration 032): counts, per-item
 // outcomes, rate-limit stats — "which failed" is a row, not scrollback.
 import { query } from "./db";
-import { log } from "./index";
+import { log } from "./log";
 import { refreshPrices, type PriceRefreshResult } from "./price-sync";
 import { syncInventory } from "./inventory-sync";
 import { syncSalesData } from "./sales-sync";

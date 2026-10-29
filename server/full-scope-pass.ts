@@ -37,7 +37,7 @@ import { writeLiveOfferVerdict, recordTransient, recordError, type OutcomeSink }
 import { fetchAllAccountListings, type OnboardResolution } from "./sc-discovery";
 import { spApiGet as realSpApiGet } from "./spapi-auth";
 import type { HttpGetFn } from "./sku-catalog-fetch";
-import { log } from "./index";
+import { log } from "./log";
 
 type QueryLike = (sql: string, params?: any[]) => Promise<{ rows: any[]; rowCount: number | null }>;
 

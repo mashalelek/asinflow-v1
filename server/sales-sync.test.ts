@@ -8,7 +8,7 @@ import { describe, it, expect, vi, beforeEach } from "vitest";
 //   - "Date range exceeded" is a failure, not "no data";
 //   - refund / fee columns are never touched beyond the first-insert 0.
 
-vi.mock("./index", () => ({ log: () => {} }));
+vi.mock("./log", () => ({ log: () => {} }));
 
 // ── SP-API + download fakes ──────────────────────────────────────────────────
 type Script = { report?: string; status?: "DONE" | "FATAL" };

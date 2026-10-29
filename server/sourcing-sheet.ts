@@ -1,5 +1,5 @@
 import { google } from "googleapis";
-import { log } from "./index";
+import { log } from "./log";
 import { parseMoney } from "@shared/parse-money";
 
 // Sourcing sheet column indices (0-based from col A) — tab "ASINs".

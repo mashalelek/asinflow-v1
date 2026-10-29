@@ -23,7 +23,7 @@ type Row = { asin: string; gating_checked_at: string | null; hazmat_checked_at: 
 let table: Row[] = [];
 let sql: string[] = [];
 
-vi.mock("./index", () => ({ log: () => {} }));
+vi.mock("./log", () => ({ log: () => {} }));
 vi.mock("./db", () => ({
   isDbAvailable: () => true,
   pool: {},

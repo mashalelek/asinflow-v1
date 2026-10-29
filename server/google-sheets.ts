@@ -1,4 +1,4 @@
-import { log } from "./index";
+import { log } from "./log";
 import { parseMoney } from "@shared/parse-money";
 import { getSheetValues } from "./sheet-read";
 

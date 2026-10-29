@@ -1,6 +1,6 @@
 import axios from "axios";
 import { parseOffersPayload } from "./offers-parse";
-import { log } from "./index";
+import { log } from "./log";
 import { isDangerousGoodFromAttributes } from "./hazmat-classify";
 
 // Auth + thin HTTP wrappers live in spapi-auth.ts so SKU-gen modules can

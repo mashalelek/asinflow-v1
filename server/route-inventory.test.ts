@@ -17,7 +17,7 @@ import { createServer } from "http";
 //
 // server/index.ts is mocked: importing it boots Express (async IIFE —
 // DB init + listen), which must never happen inside a test.
-vi.mock("./index", () => ({ log: () => {} }));
+vi.mock("./log", () => ({ log: () => {} }));
 
 const EXPECTED_ROUTES = [
   "DELETE /api/bulk-lists/:id",

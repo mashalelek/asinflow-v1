@@ -2,7 +2,7 @@ import { loadAsinPipeline } from "./asin-po-pipeline";
 import { parseSkuBuckets, writeSkuFbaInventory, type SkuBuckets } from "./sku-fba-inventory";
 import { spApiGet } from "./spapi";
 import { query } from "./db";
-import { log } from "./index";
+import { log } from "./log";
 
 const MARKETPLACE_ID = "ATVPDKIKX0DER";
 

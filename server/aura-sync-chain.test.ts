@@ -8,7 +8,7 @@ import { join } from "path";
 // selection — a sheet read + COGS upsert, not SP-API refresh work — with no
 // jobs row, so Push to Aura never waits on the scheduled pass.
 
-vi.mock("./index", () => ({ log: () => {} }));
+vi.mock("./log", () => ({ log: () => {} }));
 vi.mock("./aura-cost-sync", () => ({ pushAuraCosts: vi.fn() }));
 
 const sheetCalls: any[] = [];

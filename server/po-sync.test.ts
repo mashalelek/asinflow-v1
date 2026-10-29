@@ -8,7 +8,7 @@ import { describe, it, expect, vi, beforeEach } from "vitest";
 // server/index.ts is mocked (importing it boots Express — same rationale as
 // route-inventory.test.ts). ./db and ./google-sheets are mocked so
 // runSheetsSync runs against a scripted sheet + captured SQL.
-vi.mock("./index", () => ({ log: () => {} }));
+vi.mock("./log", () => ({ log: () => {} }));
 
 const updates: Array<{ sql: string; params: any[] }> = [];
 let sourcesByAsin: Record<string, { est: string | null; act: string | null }> = {};

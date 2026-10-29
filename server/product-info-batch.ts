@@ -8,7 +8,7 @@
 // is inconclusive for every ASIN in it — fail-closed, no catalog_deleted.
 import { spApiGet, spApiPost } from "./spapi-auth";
 import { parseCatalogItem, parseFeeResult, type AsinCatalogResult, type AsinFeesResult } from "./spapi";
-import { log } from "./index";
+import { log } from "./log";
 
 const MARKETPLACE = "ATVPDKIKX0DER";
 const PER_CALL = 20;

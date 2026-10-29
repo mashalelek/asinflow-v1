@@ -20,7 +20,7 @@ import { syncPoSheet, type PoSyncResult } from "./po-sheet-sync";
 import { syncVelocityShipments, type VelocitySyncResult } from "./shipment-sync-velocity";
 import { syncScShipments, type ScSyncResult } from "./shipment-sync-sc";
 import { loadAsinPipeline, EMPTY_PIPELINE } from "./asin-po-pipeline";
-import { log } from "./index";
+import { log } from "./log";
 import { type AsinInput, type AsinResult, type ColumnMapping, extractDomain, cleanBuyLink, getFeePriceForAsin, LEAD_SOURCES, normalizeLeadSource, type LeadSource } from "@shared/schema";
 import { parseMoney } from "@shared/parse-money";
 import pool, { query, isDbAvailable } from "./db";

@@ -13,7 +13,7 @@
 // untouched — 'already_in_database'.
 import pool, { query } from "./db";
 import { upsertTagsForAsin } from "./tags-repo";
-import { log } from "./index";
+import { log } from "./log";
 
 export interface PromoteResult {
   asin: string;
