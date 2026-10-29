@@ -10,6 +10,7 @@ import { verifyPending, resolveSubmissionManual, resolveSubmissionsBulk, dismiss
 import { runAuraSyncChain } from "./aura-sync-chain";
 import { probeGatingForAsins } from "./gating-probe";
 import { loadPoAsinRows, normalizeLineQty } from "./po-queries";
+import { loadAliases, resolveRetailer, setAlias } from "./supplier-aliases";
 import { evaluateAutoClose, setPoClosedManually, parseQtyInput, MANUAL_QTY_COLUMNS, type ManualQtyColumn } from "./po-close";
 import { ACTION_ITEMS, DISPLAY_ACTION_ITEMS, REVIEW_VELOCITY, PACK_SIZE_MISSING, PACK_SIZE_MISMATCH, RECEIVING_MISMATCH, normalizeActionItems } from "./po-status-map";
 import { asinWriteThrough, unionActionItems, PO_ACTION_ITEMS_SQL, REVIEW_VELOCITY_EXISTS_SQL, REVIEW_VELOCITY_REASONS_SQL, PACK_SIZE_MISSING_EXISTS_SQL, PACK_SIZE_MISMATCH_EXISTS_SQL, RECEIVING_MISMATCH_EXISTS_SQL } from "./po-action-items";
@@ -4337,7 +4338,7 @@ export async function registerRoutes(
       const suppliers = (await query(`SELECT DISTINCT supplier FROM purchase_orders ORDER BY supplier`)).rows.map((r: any) => r.supplier);
       // Shipment reconciliation §5.3: the Unmatched badge = open Velocity lines + ambiguous Velocity shipments.
       const unmatchedCount = (await query(
-        `SELECT (SELECT COUNT(*)::int FROM shipment_unmatched WHERE resolved_at IS NULL) + (SELECT COUNT(*)::int FROM velocity_shipments WHERE sc_match = 'ambiguous') AS n`,
+        `SELECT (SELECT COUNT(*)::int FROM shipment_unmatched WHERE resolved_at IS NULL AND dismissed_at IS NULL) + (SELECT COUNT(*)::int FROM velocity_shipments WHERE sc_match = 'ambiguous') AS n`,
       )).rows[0].n;
       res.json({ pos: rows, total, page, pageSize: PAGE_SIZE, suppliers, actionItems: DISPLAY_ACTION_ITEMS, closed, unmatchedCount });
     } catch (err: any) {
@@ -4715,23 +4716,56 @@ export async function registerRoutes(
 
   // Unmatched panel (§5.3): open Velocity lines (no_order / po_not_found) and
   // the rare ambiguous SC match. Nothing else lands here by design.
+  // PO matching patch §6: visible = unresolved and not dismissed; each line
+  // carries its ranked candidates (Col P / §4), its nearest miss, and whether
+  // its Velocity retailer maps to an AF supplier (else "Map → supplier").
   app.get("/api/pos/unmatched", async (_req: Request, res: Response) => {
     if (!isDbAvailable()) { res.status(503).json({ message: "Database not available" }); return; }
     try {
-      const lines = (await query(
+      const all = (await query(
         `SELECT u.id, u.velocity_shipment_id, u.velocity_order_id, u.reason, u.created_at, v.shipped_at::text AS shipped_at,
                 u.line->>'order_number' AS order_number, u.line->>'retailer' AS retailer, u.line->>'asin' AS asin, u.line->>'amazon_sku' AS amazon_sku,
                 u.line->>'item_name' AS item_name, u.line->>'sold_as' AS sold_as, (u.line->>'units_per_pack')::numeric AS units_per_pack, (u.line->>'quantity_shipped')::numeric AS quantity_shipped,
-                u.candidates
+                u.candidates, u.nearest_miss, u.dismissed_at
            FROM shipment_unmatched u JOIN velocity_shipments v ON v.id = u.velocity_shipment_id
           WHERE u.resolved_at IS NULL
           ORDER BY v.shipped_at DESC NULLS LAST, u.created_at, u.id`,
       )).rows;
+      const aliases = await loadAliases(poQuery);
+      const suppliers = (await query(`SELECT DISTINCT supplier FROM purchase_orders`)).rows.map((r: any) => String(r.supplier));
+      for (const l of all) l.retailer_unmapped = resolveRetailer(l.retailer, aliases, suppliers).kind === "unresolved";
+      const lines = all.filter((l: any) => !l.dismissed_at);
+      const dismissed = all.filter((l: any) => l.dismissed_at);
       const ambiguous = (await query(
         `SELECT v.id, v.shipped_at::text AS shipped_at, (SELECT COUNT(*)::int FROM po_asin_shipments s WHERE s.velocity_shipment_id = v.id) AS rows
-           FROM velocity_shipments v WHERE v.sc_match = 'ambiguous' ORDER BY v.shipped_at DESC`,
+           FROM velocity_shipments v WHERE v.sc_match = 'ambiguous' ORDER BY v.shipped_at DESC, v.id`,
       )).rows;
-      res.json({ lines, ambiguous, count: lines.length + ambiguous.length });
+      res.json({ lines, dismissed, ambiguous, count: lines.length + ambiguous.length });
+    } catch (err: any) { res.status(500).json({ message: err.message }); }
+  });
+
+  // Bulk dismiss (§6): hidden, listed under "Dismissed (N)", never deleted.
+  app.post("/api/pos/unmatched/dismiss", async (req: Request, res: Response) => {
+    if (!isDbAvailable()) { res.status(503).json({ message: "Database not available" }); return; }
+    const ids = Array.isArray((req.body ?? {}).ids) ? (req.body.ids as unknown[]).map(String).filter((x) => /^[0-9a-f-]{36}$/i.test(x)) : [];
+    if (ids.length === 0) { res.status(400).json({ message: "ids are required" }); return; }
+    try {
+      const r = await query(`UPDATE shipment_unmatched SET dismissed_at = now() WHERE id = ANY($1::uuid[]) AND resolved_at IS NULL AND dismissed_at IS NULL`, [ids]);
+      res.json({ dismissed: r.rowCount ?? 0 });
+    } catch (err: any) { res.status(500).json({ message: err.message }); }
+  });
+
+  // "Map → supplier" (§3.1, §6): a Velocity retailer string → an AF supplier (source 'manual').
+  app.post("/api/supplier-aliases", async (req: Request, res: Response) => {
+    if (!isDbAvailable()) { res.status(503).json({ message: "Database not available" }); return; }
+    const alias = String((req.body ?? {}).alias ?? "").trim();
+    const supplier = String((req.body ?? {}).supplier ?? "").trim();
+    if (!alias || !supplier) { res.status(400).json({ message: "alias and supplier are required" }); return; }
+    try {
+      const known = (await query(`SELECT 1 FROM purchase_orders WHERE supplier = $1 LIMIT 1`, [supplier])).rows.length > 0;
+      if (!known) { res.status(400).json({ message: `unknown supplier ${supplier}` }); return; }
+      await setAlias(poQuery, alias, supplier, "manual");
+      res.json({ alias: alias.toLowerCase(), supplier });
     } catch (err: any) { res.status(500).json({ message: err.message }); }
   });
 
@@ -4776,7 +4810,7 @@ export async function registerRoutes(
          ON CONFLICT (po_asin_id, velocity_shipment_id) DO UPDATE SET qty_shipped = po_asin_shipments.qty_shipped + EXCLUDED.qty_shipped, updated_at = now()`,
         [pa.id, u.velocity_shipment_id, matched ? u.fba_shipment_ids : [], u.sc_match === "none" ? "none" : u.sc_match, qty, u.shipped_at],
       );
-      await query(`UPDATE shipment_unmatched SET resolved_at = now(), resolved_po_asin_id = $2 WHERE id = $1`, [id, pa.id]);
+      await query(`UPDATE shipment_unmatched SET resolved_at = now(), resolved_po_asin_id = $2, match_reason = 'picker' WHERE id = $1`, [id, pa.id]);
       const close = await evaluateAutoClose(String(pa.po_id), poQuery);
       const [row] = await loadPoAsinRows(poQuery, [String(pa.po_id)]).then((rows) => rows.filter((x: any) => String(x.id) === String(pa.id)));
       res.json({ row, close, qty });

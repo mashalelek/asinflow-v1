@@ -169,9 +169,15 @@ const ALL = "__all__";
 // ── Shipment reconciliation (patch docs/claude_spec-patch-shipment-reconciliation.md §5) ──
 
 interface UnmatchedLine { id: string; velocity_shipment_id: string; velocity_order_id: string; reason: "no_order" | "po_not_found"; shipped_at: string | null; order_number: string | null; retailer: string | null; asin: string | null; amazon_sku: string | null; item_name: string | null; sold_as: string | null; units_per_pack: string | null; quantity_shipped: string | null;
-  /** Col P (2026-10-29): the PO ASIN rows the sheet's FBA Shipment ID column points this line at, when more than one. */
-  candidates: Array<{ po_asin_id: string; order_id: string; supplier: string; asin: string }> | null }
-interface UnmatchedResponse { lines: UnmatchedLine[]; ambiguous: Array<{ id: string; shipped_at: string | null; rows: number }>; count: number }
+  /** Ranked candidates, best first (PO matching §4): Col P rows (sheet FBA Shipment ID) or the ASIN + date + units rule. */
+  candidates: UnmatchedCandidate[] | null;
+  /** Why no PO fits (§4), when there is no candidate — or why the one Col P row was not taken. */
+  nearest_miss: string | null;
+  /** The Velocity retailer resolves to no AF supplier (no alias, not a supplier name) → "Map → supplier". */
+  retailer_unmapped: boolean;
+  dismissed_at: string | null }
+interface UnmatchedCandidate { po_asin_id: string; order_id: string; supplier: string; asin: string; source?: "col_p" | "candidate"; order_date?: string; days?: number; remaining_units?: number; units?: number }
+interface UnmatchedResponse { lines: UnmatchedLine[]; dismissed: UnmatchedLine[]; ambiguous: Array<{ id: string; shipped_at: string | null; rows: number }>; count: number }
 interface PickerRow { id: string; asin: string; asin_name: string | null; qty: number; units_per_pack: number; order_id: string; supplier: string; order_date: string }
 
 /** Toast text for a Sync Shipments result (§5.2). */
@@ -212,18 +218,6 @@ function LinkPicker({ line, onLinked }: { line: UnmatchedLine; onLinked: () => v
         <Button variant="outline" size="sm" className="h-7 text-xs" data-testid={`button-link-unmatched-${line.id}`}>Link to PO ASIN</Button>
       </PopoverTrigger>
       <PopoverContent className="w-[28rem] p-2 text-xs space-y-1" align="end">
-        {line.candidates && line.candidates.length > 0 && (
-          <div className="space-y-0.5 pb-1" data-testid={`colp-candidates-${line.id}`}>
-            <div className="text-muted-foreground">Col P (FBA Shipment ID) names these rows:</div>
-            {line.candidates.map((c) => (
-              <button key={c.po_asin_id} onClick={() => link({ id: c.po_asin_id } as PickerRow)} className="flex w-full items-center gap-2 px-1 py-1 text-left hover:bg-muted/60" data-testid={`button-pick-colp-${c.po_asin_id}`}>
-                <span className="font-mono">{c.order_id}</span>
-                <span className="text-muted-foreground truncate">{c.supplier}</span>
-                <span className="font-mono">{c.asin}</span>
-              </button>
-            ))}
-          </div>
-        )}
         <Input value={q} onChange={(e) => setQ(e.target.value)} placeholder="Order #, ASIN or supplier" className="h-7 text-xs" data-testid={`input-link-search-${line.id}`} />
         <div className="max-h-64 overflow-auto divide-y divide-border/50">
           {rows.map((r) => (
@@ -242,15 +236,53 @@ function LinkPicker({ line, onLinked }: { line: UnmatchedLine; onLinked: () => v
   );
 }
 
-/** Unmatched panel (§5.3): hidden when empty; only data-entry gaps on Velocity's side and the exact-tie SC case. */
-function UnmatchedPanel({ onChanged }: { onChanged: () => void }) {
+/** One-click link to a ranked candidate (PO matching §6) — the same POST as the picker. */
+async function linkUnmatched(lineId: string, poAsinId: string): Promise<void> {
+  const res = await fetch(`/api/pos/unmatched/${lineId}/link`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ po_asin_id: poAsinId }) });
+  if (!res.ok) throw new Error((await res.json().catch(() => ({}))).message || `HTTP ${res.status}`);
+}
+
+/** Text for a candidate button: order #, then why it ranks where it does. */
+export function candidateLabel(c: UnmatchedCandidate): string {
+  if (c.source === "candidate" && c.days != null) return `${c.order_id} · ${c.days === 0 ? "same day" : `${c.days > 0 ? "+" : ""}${c.days}d`} · ${c.remaining_units} left`;
+  return `${c.order_id} · Col P`;
+}
+
+function whyText(l: UnmatchedLine): string {
+  if (l.nearest_miss) return l.nearest_miss;
+  if (l.candidates?.length) return l.candidates.some((c) => c.source === "candidate") ? `${l.candidates.length} POs fit — pick one` : `Col P names ${l.candidates.length} rows — pick one`;
+  return l.reason === "no_order" ? "no Order # at Velocity" : "Order # not in AF";
+}
+
+/**
+ * Unmatched shipments panel (PO matching §6): hidden when empty; only the
+ * lines no rule could place — ranked candidates on the row, the nearest miss
+ * when there are none, "Map → supplier" for an unmapped Velocity retailer,
+ * bulk dismiss (hidden, never deleted). The count is the visible rows.
+ */
+function UnmatchedPanel({ onChanged, suppliers }: { onChanged: () => void; suppliers: readonly string[] }) {
   const [data, setData] = useState<UnmatchedResponse | null>(null);
   const [open, setOpen] = useState(false);
+  const [showDismissed, setShowDismissed] = useState(false);
+  const [picked, setPicked] = useState<Set<string>>(new Set());
+  const [err, setErr] = useState<string | null>(null);
+  const [busy, setBusy] = useState(false);
   const load = useCallback(() => {
-    fetch("/api/pos/unmatched").then((r) => r.json()).then(setData).catch(() => setData(null));
+    fetch("/api/pos/unmatched").then((r) => r.json()).then((d) => { setData(d); setPicked(new Set()); }).catch(() => setData(null));
   }, []);
   useEffect(() => { load(); }, [load]);
-  if (!data || data.count === 0) return null;
+  const act = async (fn: () => Promise<unknown>) => {
+    setErr(null); setBusy(true);
+    try { await fn(); load(); onChanged(); } catch (e: any) { setErr(e.message); } finally { setBusy(false); }
+  };
+  if (!data || (data.count === 0 && (data.dismissed ?? []).length === 0)) return null;
+  const lines = data.lines;
+  const allPicked = lines.length > 0 && lines.every((l) => picked.has(l.id));
+  const toggle = (id: string) => setPicked((p) => { const n = new Set(p); if (n.has(id)) n.delete(id); else n.add(id); return n; });
+  const dismiss = () => act(async () => {
+    const res = await fetch("/api/pos/unmatched/dismiss", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ ids: Array.from(picked) }) });
+    if (!res.ok) throw new Error((await res.json().catch(() => ({}))).message || `HTTP ${res.status}`);
+  });
   return (
     <div className="rounded-md" style={{ border: "0.5px solid hsl(var(--border))" }} data-testid="po-unmatched-panel">
       <button className="flex w-full items-center justify-between px-3 py-2 text-sm" onClick={() => setOpen((o) => !o)} data-testid="button-po-unmatched-toggle">
@@ -261,24 +293,26 @@ function UnmatchedPanel({ onChanged }: { onChanged: () => void }) {
       </button>
       {open && (
         <div className="px-3 pb-3 space-y-2 text-xs">
-          {data.lines.length > 0 && (
-            <table className="w-full">
-              <thead><tr className="text-muted-foreground text-left"><th className="py-1 pr-2">Shipped</th><th className="py-1 pr-2">Order #</th><th className="py-1 pr-2">Retailer</th><th className="py-1 pr-2">ASIN</th><th className="py-1 pr-2">Item</th><th className="py-1 pr-2 text-right">Units</th><th className="py-1 pr-2">Why</th><th></th></tr></thead>
-              <tbody>
-                {data.lines.map((l) => (
-                  <tr key={l.id} style={{ borderTop: "0.5px solid hsl(var(--border))" }} data-testid={`row-unmatched-${l.id}`}>
-                    <td className="py-1 pr-2 whitespace-nowrap">{l.shipped_at ?? "—"}</td>
-                    <td className="py-1 pr-2 font-mono">{l.order_number || <span className="text-muted-foreground">(none)</span>}</td>
-                    <td className="py-1 pr-2">{l.retailer || "—"}</td>
-                    <td className="py-1 pr-2 font-mono">{l.asin}</td>
-                    <td className="py-1 pr-2 truncate max-w-[16rem]" title={l.item_name ?? ""}>{l.item_name}</td>
-                    <td className="py-1 pr-2 text-right">{l.quantity_shipped}{l.units_per_pack && Number(l.units_per_pack) > 1 ? ` (÷${l.units_per_pack})` : ""}</td>
-                    <td className="py-1 pr-2 text-muted-foreground">{l.reason === "no_order" ? (l.candidates?.length ? `no Order # at Velocity; Col P names ${l.candidates.length} rows` : "no Order # at Velocity") : "Order # not in AF"}</td>
-                    <td className="py-1 text-right"><LinkPicker line={l} onLinked={() => { load(); onChanged(); }} /></td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
+          {err && <div className="text-destructive">{err}</div>}
+          {lines.length > 0 && (
+            <>
+              <Button size="sm" variant="outline" className="h-7 text-xs" disabled={picked.size === 0 || busy} onClick={() => void dismiss()} data-testid="button-unmatched-dismiss-selected">
+                Dismiss selected ({picked.size})
+              </Button>
+              <div className="overflow-x-auto">
+                <table className="w-full min-w-[64rem]">
+                  <thead><tr className="text-muted-foreground text-left">
+                    <th className="py-1 pr-2"><input type="checkbox" aria-label="Select all" checked={allPicked} onChange={() => setPicked(allPicked ? new Set() : new Set(lines.map((l) => l.id)))} /></th>
+                    <th className="py-1 pr-2">Shipped</th><th className="py-1 pr-2">Order #</th><th className="py-1 pr-2">Retailer</th><th className="py-1 pr-2">ASIN</th><th className="py-1 pr-2">Item</th><th className="py-1 pr-2 text-right">Units</th><th className="py-1 pr-2">Why</th><th className="py-1">Link</th>
+                  </tr></thead>
+                  <tbody>
+                    {lines.map((l) => (
+                      <UnmatchedRow key={l.id} l={l} suppliers={suppliers} picked={picked.has(l.id)} onPick={() => toggle(l.id)} busy={busy} act={act} onLinked={() => { load(); onChanged(); }} />
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            </>
           )}
           {data.ambiguous.length > 0 && (
             <div className="space-y-1">
@@ -286,9 +320,66 @@ function UnmatchedPanel({ onChanged }: { onChanged: () => void }) {
               {data.ambiguous.map((a) => <div key={a.id} className="font-mono" data-testid={`row-ambiguous-${a.id}`}>Velocity {a.id} · {a.shipped_at ?? "?"} · {a.rows} PO ASIN rows</div>)}
             </div>
           )}
+          {(data.dismissed ?? []).length > 0 && (
+            <div>
+              <button className="inline-flex items-center gap-1 text-muted-foreground" onClick={() => setShowDismissed((v) => !v)} data-testid="button-unmatched-dismissed-toggle">
+                {showDismissed ? <ChevronDown className="h-3 w-3" /> : <ChevronRight className="h-3 w-3" />} Dismissed ({data.dismissed.length})
+              </button>
+              {showDismissed && (
+                <div className="mt-1 space-y-0.5 text-muted-foreground" data-testid="list-unmatched-dismissed">
+                  {data.dismissed.map((l) => <div key={l.id} className="font-mono">{l.shipped_at ?? "—"} · {l.order_number || "(none)"} · {l.retailer || "—"} · {l.asin} · {l.quantity_shipped}u · dismissed {String(l.dismissed_at).slice(0, 10)}</div>)}
+                </div>
+              )}
+            </div>
+          )}
         </div>
       )}
     </div>
+  );
+}
+
+function UnmatchedRow({ l, suppliers, picked, onPick, busy, act, onLinked }: {
+  l: UnmatchedLine; suppliers: readonly string[]; picked: boolean; onPick: () => void; busy: boolean;
+  act: (fn: () => Promise<unknown>) => Promise<void>; onLinked: () => void;
+}) {
+  const [supplier, setSupplier] = useState("");
+  const cands = l.candidates ?? [];
+  return (
+    <tr className="align-top" style={{ borderTop: "0.5px solid hsl(var(--border))" }} data-testid={`row-unmatched-${l.id}`}>
+      <td className="py-1 pr-2"><input type="checkbox" aria-label={`Select ${l.order_number || l.asin}`} checked={picked} onChange={onPick} /></td>
+      <td className="py-1 pr-2 whitespace-nowrap">{l.shipped_at ?? "—"}</td>
+      <td className="py-1 pr-2 font-mono break-all">{l.order_number || <span className="text-muted-foreground">(none)</span>}</td>
+      <td className="py-1 pr-2">
+        {l.retailer || "—"}
+        {l.retailer_unmapped && l.retailer && (
+          <div className="flex items-center gap-1 mt-0.5" data-testid={`map-retailer-${l.id}`}>
+            <select className="h-6 min-w-0 max-w-[10rem] rounded border bg-background px-1 text-foreground" value={supplier} onChange={(e) => setSupplier(e.target.value)}>
+              <option value="">map to supplier…</option>
+              {suppliers.map((s) => <option key={s}>{s}</option>)}
+            </select>
+            <Button size="sm" className="h-6 text-xs" disabled={!supplier || busy} onClick={() => void act(async () => {
+              const res = await fetch("/api/supplier-aliases", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ alias: l.retailer, supplier }) });
+              if (!res.ok) throw new Error((await res.json().catch(() => ({}))).message || `HTTP ${res.status}`);
+            })}>Map</Button>
+          </div>
+        )}
+      </td>
+      <td className="py-1 pr-2 font-mono">{l.asin}</td>
+      <td className="py-1 pr-2 truncate max-w-[14rem]" title={l.item_name ?? ""}>{l.item_name}</td>
+      <td className="py-1 pr-2 text-right">{l.quantity_shipped}{l.units_per_pack && Number(l.units_per_pack) > 1 ? ` (÷${l.units_per_pack})` : ""}</td>
+      <td className="py-1 pr-2 text-muted-foreground" data-testid={`text-unmatched-why-${l.id}`}>{whyText(l)}</td>
+      <td className="py-1">
+        <div className="flex flex-wrap items-center gap-1">
+          {cands.map((c) => (
+            <Button key={c.po_asin_id} size="sm" variant="secondary" className="h-6 text-xs font-mono" disabled={busy} title={`${c.supplier} ${c.asin}${c.order_date ? ` · PO ${c.order_date}` : ""}`}
+              onClick={() => void act(() => linkUnmatched(l.id, c.po_asin_id))} data-testid={`button-link-candidate-${l.id}-${c.po_asin_id}`}>
+              Link to {candidateLabel(c)}
+            </Button>
+          ))}
+          <LinkPicker line={l} onLinked={onLinked} />
+        </div>
+      </td>
+    </tr>
   );
 }
 
@@ -418,7 +509,7 @@ export default function PurchaseOrders() {
         </div>
       </div>
 
-      <UnmatchedPanel key={unmatchedKey} onChanged={load} />
+      <UnmatchedPanel key={unmatchedKey} onChanged={load} suppliers={data?.suppliers ?? []} />
 
       {/* Toolbar: search · status token · supplier · date range */}
       <div className="flex items-center gap-2 flex-wrap">
