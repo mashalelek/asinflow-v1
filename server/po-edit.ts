@@ -353,6 +353,24 @@ export async function editAsinRow(query: QueryLike, poAsinId: string, body: unkn
   return { poId, changes, close: await evaluateAutoClose(poId, query) };
 }
 
+/**
+ * Pack-size backfill (2026-10-29): a 2026 row whose Col AX was blank was
+ * imported as individual ×1. Reset it to NULL (not filled in) so shipment
+ * sync A fills it from Velocity, or it shows "Pack size missing". Only an
+ * untouched default is reset — individual ×1 with no sold_as /
+ * units_per_pack edit in the log; anything else is left alone.
+ */
+export async function resetDefaultedPackSize(query: QueryLike, poAsinId: string, userId: number | null): Promise<{ poId: string; reset: boolean }> {
+  const cur = (await query(`SELECT id, po_id, sold_as, units_per_pack FROM po_asins WHERE id = $1`, [poAsinId])).rows[0];
+  if (!cur) throw new EditError(404, "ASIN row not found");
+  const poId = String(cur.po_id);
+  const edited = (await query(`SELECT 1 FROM po_edit_log WHERE entity = 'asin' AND entity_id = $1 AND field IN ('sold_as', 'units_per_pack') LIMIT 1`, [poAsinId])).rows.length > 0;
+  if (cur.sold_as !== "individual" || Number(cur.units_per_pack ?? 1) !== 1 || edited) return { poId, reset: false };
+  await query(`UPDATE po_asins SET sold_as = NULL, units_per_pack = NULL WHERE id = $1`, [poAsinId]);
+  await logEdits(query, poId, userId, "asin", poAsinId, [{ field: "sold_as", old: "individual", new: null }, { field: "units_per_pack", old: "1", new: null }]);
+  return { poId, reset: true };
+}
+
 /** History tab: the PO's edit log, newest first, with the editor's name. */
 export async function loadPoHistory(query: QueryLike, poId: string, limit = 500): Promise<any[]> {
   return (await query(
