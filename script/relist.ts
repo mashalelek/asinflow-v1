@@ -4,6 +4,9 @@
 //   tsx script/relist.ts --items B0XXXXXXXX:SKU-1,B0YYYYYYYY:SKU-2 [--open]          # dry run (preview, no PUT)
 //   tsx script/relist.ts --items B0XXXXXXXX:SKU-1,B0YYYYYYYY:SKU-2 [--open] --live   # submit + §19 ladder
 //
+// --open = openOnCreate: the offer comes up OPEN. New offers are born-closed
+// (SPEC §18); pass --open only when Maria says so for this run.
+//
 // Dry run prints each outcome and the exact payload it would send, with the
 // three things a relist payload must get right called out: no quantity key,
 // no end_at, and the DG attribute when the catalog declares one.

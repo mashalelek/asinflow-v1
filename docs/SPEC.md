@@ -3828,10 +3828,18 @@ discriminator.
 /api/listings/relist` `{items: [{asin, sku}], openOnCreate?, dryRun?}`
 re-creates a deleted listing under its ORIGINAL SKU name — including
 non-conforming ones (Amazon-random, legacy), which the resurrection filter
-above would otherwise regenerate. Origin: the seven listing-hygiene deletes
-of SKUs with units still in the Velocity pipeline (2026-10-29); FBA labels
-carry the FNSKU of the original SKU, so the recovery listing must be the
-same SKU, not a new conforming one.
+above would otherwise regenerate. Origin: seven SKUs deleted in SC with
+units still in the Velocity pipeline (2026-10-29 — not by AF: no
+`listing_actions` row for any of them); FBA labels carry the FNSKU of the
+original SKU, so the recovery listing must be the same SKU, not a new
+conforming one. The relist kept all seven FNSKUs.
+
+**Every new offer is born-closed (Maria, 2026-10-29).** Add to SC and
+Relist both close the offer right after creation (§19 close-after-create),
+unless Maria explicitly says otherwise **for that run**. `openOnCreate` is
+that explicit opt-in: default FALSE everywhere — the route, `runRelist`,
+`script/relist.ts` (`--open`) — and never set by default in any script,
+caller or prompt. An instruction to relist is not an instruction to open.
 
 - Same pipeline as Add to SC (`submitOfferAddBatch` → `offerAddForAsin`):
   inline gating probe, `getDefinitionsProductType` first,
@@ -3843,7 +3851,7 @@ same SKU, not a new conforming one.
   must 404 live (`duplicate_warning` if it still exists). The gated check
   and the format-agnostic SC-presence check are NOT bypassed.
 - Exact reuse: no NNN allocation, no registry reservation, no legend.
-- **`openOnCreate`** — recorded on the ledger row
+- **`openOnCreate`** (explicit opt-in only, see above) — recorded on the ledger row
   (`listing_submissions.open_on_create`, migration 069, default FALSE): the
   §19 ladder **skips close-after-create** for that submission, so the offer
   comes up OPEN. Everything else is unchanged: the create payload carries no

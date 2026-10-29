@@ -341,6 +341,15 @@ ASIN in `asins` and onboards ASINs the report names that AF lacks (tag
 watch `[scheduler]` in the dev-server log; the ledger rows are
 `refresh_runs WHERE job_id = N`. Jobs and ledger rows are history and stay.
 
+## New offers are born-closed (SPEC §18)
+
+Every new offer — Add to SC and Relist — is closed right after creation
+(§19 close-after-create) unless Maria explicitly says otherwise **for that
+run**. `openOnCreate` (`--open` on `script/relist.ts`) is that opt-in:
+default false, never set by default in any script, caller or prompt, and
+never inferred from "relist" or from units being in the pipeline. Approval
+to open one batch does not carry to the next.
+
 ## Velocity API: `offset` is a page index
 
 Every Velocity list endpoint (`/inbound`, `/inventory`, `/shipments`)
