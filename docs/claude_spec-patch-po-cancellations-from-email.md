@@ -13,7 +13,7 @@ Once a cancel is on the line, every reader must use the **net** quantity: On Ord
 
 - **D1 — AF owns `qty_canceled`.** Confirmed cancellations are written by AF. The Orders sheet's Col BA is read **once, on intake** of a new PO (cheap, and it's what the VA fills today); after that the sheet is never consulted for cancels. The Sync POs drift report shows a BA edit on an already-imported PO as "sheet differs from AF" so nothing is lost silently. The "sheet-owned for now" rider from 2026-10-21 is dropped.
 - **D2 — Refund tracking:** date, amount, payment method.
-- **D3 — No AI.** Per-retailer/regex extraction for the big senders; anything the parser can't read still lands in the review list with the email link and empty fields for Maria to fill. The extraction sits behind one interface so an LLM step can be added later (Anthropic API, minimal use — Maria 2026-10-23) if the unparsed pile grows.
+- **D3 — AI fallback, minimal (amended 2026-10-29).** Per-retailer/regex extraction for the big senders first. A cancellation candidate the parsers can't fully read (no scope, no items, or no qty) goes through one Claude API call (Haiku-class, fixed JSON schema `{scope, reason, items:[{name, qty}], refund_amount, refund_method}`, plain-text body only, no images) before landing in the review list; `source = 'ai'`. Rows the model can't fill either still land in the list with the email link and empty fields. Requires `ANTHROPIC_API_KEY` in Render env; without it the row is queued as `source = 'regex'` with reason `ai_disabled`, exactly like the tracking parser. Maria 2026-10-29: AI may be used where it makes sense — this is one such place; tracking stays regex-only.
 - **D4 — "Delayed" emails are ignored.**
 - From the Col BA patch, adopted as decided here: blank BA at intake → `qty_canceled` NULL (not tracked), as today; On Order / auto-close use per-line COALESCE (a tracked cancel always counts, an untracked line counts 0); Status "Canceled" with a smaller BA → BA wins.
 
@@ -38,7 +38,7 @@ po_cancellations
   gmail_message_id      text NOT NULL UNIQUE
   gmail_thread_id       text
   email_date            timestamptz
-  source                text NOT NULL   -- 'regex' | 'manual'
+  source                text NOT NULL   -- 'regex' | 'ai' | 'manual'
   status                text NOT NULL   -- 'pending_review' | 'confirmed' | 'dismissed' | 'unmatched'
   qty_confirmed         numeric         -- what Maria confirmed (product units)
   confirmed_at          timestamptz
@@ -101,6 +101,7 @@ Scan window = same as tracking backfill (2026-07-29 →), cancellation candidate
 1. Migration: `po_cancellations`; intake Col BA read (header expectation, bad-cell rule) + drift report column; tests.
 2. Net quantities: `loadAfPoRows` + `PIPELINE_ROWS_SQL` + `po-close` per §6.1–6.2; tests (single line, multi-line S=1, multi-pack, bundle; one canceled line on a two-line ASIN row). Gate: Velocity plan preview against production, read-only — report any Qty-mismatch rows it now surfaces.
 3. Cancellation classifier + retailer parsers + fixtures (≥ 8 from the mailbox, scrubbed) + matching + line proposal.
+3b. AI fallback behind the same extractor interface (Haiku, JSON schema, `ai_disabled` path when no key); tests with a recorded response fixture, no live calls in the suite.
 4. Review list UI + Confirm / Refund received / Dismiss / Attach / Add manually + PO Cancellations tab + action-item set/clear.
 5. Return rows mirrored from §26.
 6. Backfill (dry → report → live) + SPEC/CLAUDE.md; retire the Col BA patch doc.
