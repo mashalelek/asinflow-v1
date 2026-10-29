@@ -37,10 +37,12 @@ export function asinWriteThrough(lines: Array<{ id: string; action_items: readon
 /**
  * Pack-size conditions on an ASIN row, alias `a` (see PACK_SIZE_MISSING / PACK_SIZE_MISMATCH).
  * Missing fires only while the row has a live line — ordered > 0, not fully
- * canceled, final qty not 0 (2026-10-29): a 0-qty or canceled line needs no pack size.
+ * canceled, final qty not 0 (2026-10-29): a 0-qty or canceled line needs no pack size —
+ * and only on an Open PO: a closed PO keeps its NULL silently (Maria 2026-10-29).
  */
 const packMissing = (a: string) => `(${a}.sold_as IS NULL AND EXISTS (SELECT 1 FROM po_line_items lx WHERE lx.po_asin_id = ${a}.id
-  AND COALESCE(lx.qty_ordered, 0) > 0 AND COALESCE(lx.qty_canceled, 0) < lx.qty_ordered AND (lx.final_qty IS NULL OR lx.final_qty > 0)))`;
+  AND COALESCE(lx.qty_ordered, 0) > 0 AND COALESCE(lx.qty_canceled, 0) < lx.qty_ordered AND (lx.final_qty IS NULL OR lx.final_qty > 0))
+  AND EXISTS (SELECT 1 FROM purchase_orders px WHERE px.id = ${a}.po_id AND px.closed_at IS NULL))`;
 /** Received known and different from shipped (NULL received = SC has reported nothing yet: no flag). */
 const receivingMismatch = (a: string) => `(${a}.qty_received_amazon IS NOT NULL AND ${a}.qty_received_amazon <> COALESCE(${a}.qty_shipped_fba, 0))`;
 export const RECEIVING_MISMATCH_EXISTS_SQL = `EXISTS (SELECT 1 FROM po_asins pk WHERE pk.po_id = p.id AND ${receivingMismatch("pk")})`;

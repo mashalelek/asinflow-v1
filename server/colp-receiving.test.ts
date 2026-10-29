@@ -104,6 +104,12 @@ describe("Received by Amazon is information only", () => {
     const fn = p.slice(p.indexOf("export function computePipeline"), p.indexOf("export function envReconStart"));
     expect(fn).not.toMatch(/received/);
   });
+  it("Pack size missing fires on Open POs only; a closed PO keeps its NULL silently", () => {
+    const openOnly = "AND EXISTS (SELECT 1 FROM purchase_orders px WHERE px.id = pa.po_id AND px.closed_at IS NULL))";
+    expect(ASIN_ACTION_ITEMS_SQL).toContain(openOnly);
+    expect(PO_ACTION_ITEMS_SQL).toContain("px.id = pk.po_id AND px.closed_at IS NULL");
+    expect(PO_CLOSE_ACTION_ITEMS_SQL).toContain("px.id = pk.po_id AND px.closed_at IS NULL");
+  });
   it("Pack size missing needs a live line: ordered > 0, not fully canceled, final qty not 0", () => {
     expect(ASIN_ACTION_ITEMS_SQL).toMatch(/COALESCE\(lx\.qty_ordered, 0\) > 0 AND COALESCE\(lx\.qty_canceled, 0\) < lx\.qty_ordered AND \(lx\.final_qty IS NULL OR lx\.final_qty > 0\)/);
   });
