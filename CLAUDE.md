@@ -19,7 +19,7 @@ This app runs on the following stack. This is settled. Do not suggest alternativ
 ### What exists and is working (do NOT rebuild or remove):
 - PostgreSQL persistence — all ASIN data, estimates, sales, inventory, tags, settings stored in DB
 - Schema defined in `docs/SCHEMA.md` — reference this for all table structures
-- Google Sheets API integration — the Orders (PO tracker) sheet is **intake only** for new POs (Sync POs inserts a PO not yet in AF and never updates one; 2026-10-18). COGS, cost, prep and supplier come from AF's PO tables (`purchase_orders` / `po_asins` / `po_line_items`, via `server/po-af-source.ts`), not from the sheet
+- Google Sheets API integration — the Orders (PO tracker) sheet is **intake only** for new POs (Sync POs inserts a PO not yet in AF and never updates one; 2026-10-18 — **one exception, 2026-10-29: Col AS prep cost**, applied to an existing PO when it differs, with ships_to following; SPEC §14). COGS, cost, prep and supplier come from AF's PO tables (`purchase_orders` / `po_asins` / `po_line_items`, via `server/po-af-source.ts`), not from the sheet
 - SP-API integrations: catalog data, pricing, inventory (`getInventorySummaries`), sales (flat file orders report), listings restrictions, suppression (FYP report)
 - Scheduled refresh passes: 00:00 ET with the daily block, hourly 04–23 ET (`server/scheduler/schedule.ts`, gated by `ENABLE_CRONS=true`; off locally)
 - Toolbar buttons: Upload File, Analyze, Sync PO, Sync Inventory, Sync Sales

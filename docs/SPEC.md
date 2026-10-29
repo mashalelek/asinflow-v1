@@ -1078,9 +1078,20 @@ existing orders regardless of floor.
    silently dropped).
 2. **Status not `canceled`** (`.toLowerCase().includes()`, same as the COGS
    sync). `closed` rows remain uploadable — closed ≠ canceled for prep.
-3. **Col AS (prep cost) > 0.** `AS = 0` or empty (per §3, empty on a real row
-   means 0) → the order is **self-prepped** and never goes to Velocity. Counted
-   as **`excluded (self-prep): N`** — a separate, intentional tally, NOT a skip.
+3. **Ships to (2026-10-29): a Home PO is never pre-ticked.** Every row of a
+   PO with `purchase_orders.ships_to = 'home'` — bundles and multi-ASIN rows
+   included, any prep — is built through the same guards but kept apart
+   (`homeRecords` / `homeBundles` → the plan's `homeCreates` /
+   `homeBundleCreates`, minus what Velocity already has). The review dialog
+   lists them in a collapsed **"Self-prep — not uploaded"** group with the
+   reason ("Ships to Home"), **unticked**; only a deliberate tick sends one
+   (execute takes whatever is ticked). The CSV export leaves them out. Their
+   skips are counted (`homeSkipped`), not listed. Motivated by 482270182
+   (2026-10-23): a home-shipped PO that reached Velocity.
+4. **Col AS (prep cost) > 0** (Velocity POs). `AS = 0` or empty (per §3,
+   empty on a real row means 0) → the row is **self-prepped** and never goes
+   to Velocity. Counted as **`excluded (self-prep): N`** — a separate,
+   intentional tally, NOT a skip.
 
 **SKU join:** for each selected row's ASIN, use `asins.primary_sku` where
 `has_live_offer = TRUE`.
@@ -2851,7 +2862,7 @@ that writes it:
 | `is_wholesale`, `is_oa` | Manual edit |
 | `status` (active/parked/dead — replaced `is_active` 2026-09-07, migration 033) | Manual Park/Unpark/Mark-dead/Revive; Sourcing sync writes `parked`+`discontinued` on freshly-inserted discontinued rows only; the prices stage's `invalid_asin` outcome and the catalog-404 signal (DA-2) write `dead` with their reasons |
 | Aura listing cost (external, not an AF column) | Aura cost sync path (§11) — reads `asin_estimates` after an inline PO-sheet read for the selection (decision 9), writes only to Aura |
-| `purchase_orders`, `po_asins`, `po_line_items` — every field, incl. action items, `closed_at` / `closed_by`, `qty_canceled`, `unique_products`, `entry_seq` | **AF** (2026-10-18, patch po-af-owned): the PO module UI — edit drawer, Products / ASIN-row inline edits, New PO form, Cancel / Delete PO, Cancel ASIN, Closed toggle, the auto-close rule. **The Orders sheet is intake only**: Sync POs inserts a PO that is not in AF and not tombstoned (`deleted_pos`) and never writes an existing one — its drift is reported (`sheetDiffers`), not applied. `closed_by = 'sheet'` stays on history; nothing new writes it |
+| `purchase_orders`, `po_asins`, `po_line_items` — every field, incl. action items, `closed_at` / `closed_by`, `qty_canceled`, `unique_products`, `entry_seq` | **AF** (2026-10-18, patch po-af-owned): the PO module UI — edit drawer, Products / ASIN-row inline edits, New PO form, Cancel / Delete PO, Cancel ASIN, Closed toggle, the auto-close rule. **The Orders sheet is intake only**: Sync POs inserts a PO that is not in AF and not tombstoned (`deleted_pos`) and never writes an existing one — its drift is reported (`sheetDiffers`), not applied. **One exception (Maria 2026-10-29, Option 2): Col AS prep cost.** When a 2026 ASIN row's sheet prep differs from AF, Sync POs applies it to `po_asins.prep_cost` and, when that changes the PO's derived ships_to (any prep > 0 → velocity, else home), `purchase_orders.ships_to` too — a History row per change ("prep_cost (from sheet)", "ships_to (from sheet)"), counted as `prepApplied` / `shipsToApplied` and listed in the result. A ships_to set by hand stays unless a sync changes that PO's prep. No other field is ever written to an existing PO. `closed_by = 'sheet'` stays on history; nothing new writes it |
 | `po_edit_log` | Every PO-module writer (one row per changed field, §22 "AF owns POs"); read by the History tab |
 | `deleted_pos` | Delete PO (tombstone); read by Sync POs' intake |
 | `po_asin_shipments.assigned_by`, `velocity_order_number` | Reassign shipment (§22) and the 060 data fix write `'manual'` + the Velocity line identity; component A refreshes a manual row's quantity, never moves it (a hand-split line is compared, not rewritten) |
@@ -6006,7 +6017,7 @@ replaces it. Migration 061 adds `po_edit_log`, `deleted_pos` and
 | `po_line_items.action_items`, `qty_canceled`; `purchase_orders.closed_at`, `closed_by` | **AF**: the ASIN / product Action Items editors, Cancel ASIN / Cancel PO / the product qty-canceled cell, the Closed toggle, the auto-close rule. The intake sets them once, on insert, from the row-level Status mapping. `closed_by = 'sheet'` remains on history only. `purchase_orders.action_items` is deprecated, written by nothing. **Since PO table v2 (2026-10-29, migration 074) the items live in `po_line_action_items`; `po_line_items.action_items` is dead too** |
 | **`po_asins.qty_at_prep`** | **Shipment sync (component A)** — Σ Velocity `quantity_remaining` ÷ units_per_pack; NULL when no Velocity line references the key (D6). Overwritten every Sync Shipments; not hand-editable. |
 | **`po_asins.qty_shipped_supplier`, `qty_at_warehouse`, `qty_lost_damaged_us`** | **AF-owned**: the inline quantity editor today; email tracking (§26) records tracking numbers, not quantities, so far. Never the importer, never a sync. |
-| **`purchase_orders.ships_to`**, **`po_tracking`** | **AF-owned** (§26): Ships to on the PO / New PO form; tracking rows from the Gmail ingest, the Tracking tab (add, Move to PO…) and the unmatched queue. |
+| **`purchase_orders.ships_to`**, **`po_tracking`** | **AF-owned** (§26): Ships to on the PO / New PO form; set from Col AS prep by Sync POs on insert, and moved by it when Col AS prep changes on an existing PO (the §14 prep exception, 2026-10-29); tracking rows from the Gmail ingest, the Tracking tab (add, Move to PO…) and the unmatched queue. |
 | **`po_asins.qty_shipped_fba`, `qty_received_amazon`** | **Trigger-maintained** from `po_asin_shipments` — Shipped FBA from Velocity rows (component A), Received by Amazon from the SC allocation (component B); manual rows add to both. |
 | `po_asin_shipments` (`source = 'velocity'`), `velocity_shipments`, `sc_inbound_*` | **Shipment sync-owned**: component A writes the row and `qty_shipped` / `shipped_at`; component B writes `fba_shipment_ids`, `sc_match`, `qty_received`. Hand edits only through the Unmatched picker. A `po_asins` row with shipment rows survives leaving the sheet. |
 | `po_asin_shipments` (`source = 'manual'`) | AF-owned: hand-entered rows from the Shipment IDs chip (home-shipped POs); the only rows the chip can delete. |
@@ -6764,13 +6775,29 @@ identity record stays absent.
 
 | PO in Velocity | email ship-to | `ships_to` | result |
 |---|---|---|---|
-| yes | none, or agrees with `ships_to` | — | push |
-| yes | disagrees | — | push + review "address mismatch" |
+| yes | Velocity street | home | **`held`** + review "Home PO in Velocity; address mismatch" (hold rule) |
+| yes | home street, none, unknown | home | **no push**, review "Home PO in Velocity" |
+| yes | home street | velocity | **`held`** + review "address mismatch" (hold rule) |
+| yes | none, or Velocity street | velocity | push |
+| yes | unknown street | velocity | push + review "address mismatch" |
 | no | home street, or none | home | `held`, no review (none: 2026-10-22) |
 | no | Velocity street | any | review "not in Velocity" |
 | no | none | velocity | review "not in Velocity" |
 | no | any | velocity | review "not in Velocity" |
 | no | unknown street | any | review "unknown address" |
+
+**Ships-to gate and hold rule (Maria 2026-10-29, after 482270182 — ten
+UPS numbers addressed to 65 Rivercrest were pushed to a Velocity order):**
+a Home PO is **never pushed**, even when Velocity has an inbound order for
+it; the order there is the mistake, so the row only raises Review Velocity.
+And when the email names the **other** known address than `ships_to` — the
+home street on a Velocity PO, or the Velocity street on a Home PO — the row
+is **held** on the PO (`status = 'held'`, kept for re-evaluation every run)
+with a review reason, never pushed. An unknown street on a Velocity PO
+still pushes with "address mismatch" (the address may be a supplier's
+warehouse). Production dry run before the rule shipped: 10 past pushes
+(1 PO, 482270182) would have been held; 0 of the 84 rows on POs with an
+inbound Velocity order that day routed differently.
 
 A PO fully canceled or returned in AF → review "shipped but canceled",
 never pushed. A failed push → `push_failed`, review = the Velocity error.
@@ -6907,6 +6934,10 @@ it to 4/7 would have offered 35 extra creates (Apr 7 – Jul 28 POs Velocity
 never had) and 141 skips (production, 2026-10-22), so it is not moved. The New PO form derives its
 Ships to default the same way (`shipsToFromForm`: any product with prep >
 0 → Velocity), editable; the server uses the rule when the form sends none.
+**Sync POs intake (2026-10-29)** sets it on insert by the same rule from
+Col AS (`maxSheetPrep`); it used to fall to the column default 'velocity'.
+When Col AS later changes on an existing PO, Sync POs applies the prep and
+ships_to follows (§14 ownership exception).
 Local data 2026-10-22: prep > 0 starts in April 2026 (75 April POs), so
 the local `VELOCITY_MIN_ORDER_DATE = 7/30/2026` flags 269 pre-cutoff
 POs, a May 1 cutoff 75.
