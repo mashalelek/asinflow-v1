@@ -5390,7 +5390,12 @@ order: **Need to Return · Missing / Damaged from Supplier · Confirm
 Refund / Replacement · ATTN: Velocity · See Comments · SHIP · Received -
 FBM** (the last two only meaningful when the PO ships from the house). **Review Velocity** (2026-10-21) is
 auto-managed and appears after them — derived from PO tracking, never
-stored or hand-set (§26).
+stored or hand-set (§26). **Pack size missing** and **Pack size mismatch**
+(2026-10-29) are derived the same way, from `po_asins`: missing while
+`sold_as` is NULL; mismatch while a non-bundle row's
+`velocity_units_per_pack` differs from its `units_per_pack`. Both block
+auto-close (and reopen an auto-closed PO) like any action item, and clear
+when the row is fixed.
 Rendered as tinted chips in the (renamed) **Action Items** column with an
 inline multi-select editor on the POs table and on PO Details; the list
 filter is any-of over them (`action=`), beside the Open/Closed filter.
@@ -5472,7 +5477,9 @@ returns the plan with nothing written.
 - **Update (sheet wins):** every header field the importer reads, every
   line field (product, supplier SKU, price, Col L ordered, Col M received,
   Col R returned, Col N ASIN qty, Col T yield, Col X/Y costs, prep,
-  sold_as / units_per_pack, loss qty/amount, Col S → `po_asins.unique_products`),
+  sold_as / units_per_pack, loss qty/amount, Col S → `po_asins.unique_products`;
+  a blank Col AX on a 2026 row is NULL — not filled in, never read as
+  individual (2026-10-29); pre-2026 rows keep the history reading),
   and the Status cell **per row** (row-level Status, 2026-10-17 — it used
   to read the first row of each PO only): each row's action items → that
   line's `action_items` (full replace); a row's Canceled → that line's
@@ -5615,6 +5622,19 @@ before Velocity's `shipped_at`.
   rounded to 2 dp (fractions legal — Equal Exchange 60 ÷ 6 = 10),
   `shipped_at` = the Eastern date, `source = 'velocity'`; lines sharing
   one (ASIN row, Velocity shipment) sum.
+- **Pack size (2026-10-29).** The divisor is always AF's
+  `units_per_pack`, and nothing is capped at Ordered. Velocity's own pack
+  size for the row (individual → 1, multi-pack → its `units_per_pack`;
+  bundles not compared), from every line that resolves to it — shipment
+  lines and the `/inbound` + `/inventory` legs — is stored in
+  `po_asins.velocity_units_per_pack` (migration 070). A row whose
+  `sold_as` is NULL (blank Col AX, §22 intake) takes `sold_as` /
+  `units_per_pack` from Velocity before any ÷ when all its Velocity lines
+  agree, logged in `po_edit_log` with user NULL; otherwise it stays NULL.
+  Origin: 33 lines on 25 POs imported individual ×1 from a blank Col AX
+  while Velocity had them as multi-packs — Velocity's component units ÷ 1
+  linked e.g. 46 "shipped" against 24 ordered (PO 126768935, Anchor
+  Hocking 2-pack).
 - Not resolvable → `shipment_unmatched` (`no_order` | `po_not_found`), one
   row per line, updated on re-sync, stamped `resolved_at` when it later
   resolves by key or through the picker (`resolved_po_asin_id` is honoured
