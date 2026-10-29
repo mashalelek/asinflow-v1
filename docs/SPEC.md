@@ -3824,6 +3824,35 @@ the current format and is therefore regenerated, never reused. No legacy
 allowlist, no subtypes, no quarantine — the format check is the sole
 discriminator.
 
+**Relist (2026-10-29): exact-SKU reuse, format-agnostic.** `POST
+/api/listings/relist` `{items: [{asin, sku}], openOnCreate?, dryRun?}`
+re-creates a deleted listing under its ORIGINAL SKU name — including
+non-conforming ones (Amazon-random, legacy), which the resurrection filter
+above would otherwise regenerate. Origin: the seven listing-hygiene deletes
+of SKUs with units still in the Velocity pipeline (2026-10-29); FBA labels
+carry the FNSKU of the original SKU, so the recovery listing must be the
+same SKU, not a new conforming one.
+
+- Same pipeline as Add to SC (`submitOfferAddBatch` → `offerAddForAsin`):
+  inline gating probe, `getDefinitionsProductType` first,
+  `LISTING_OFFER_ONLY`, `merchant_suggested_asin`, FBA channel code, no
+  quantity key, DG pass-through, price resolver, §19 ledger + probe ladder,
+  primary-SKU promotion. `dryRun` runs phase 4 in preview mode (no PUT).
+- The requested SKU must be **AF history** — an `asin_skus` row for that
+  ASIN (`relist_sku_unknown` otherwise; relist never invents a SKU) — and
+  must 404 live (`duplicate_warning` if it still exists). The gated check
+  and the format-agnostic SC-presence check are NOT bypassed.
+- Exact reuse: no NNN allocation, no registry reservation, no legend.
+- **`openOnCreate`** — recorded on the ledger row
+  (`listing_submissions.open_on_create`, migration 069, default FALSE): the
+  §19 ladder **skips close-after-create** for that submission, so the offer
+  comes up OPEN. Everything else is unchanged: the create payload carries no
+  `end_at` either way, component 22 still closes the SKU on its own
+  evidence once its buckets read all-zero (an open relist survives the
+  nightly pass only while Inbound/Available > 0), and **AF still never
+  reopens** — `openOnCreate` skips a close at creation, it does not clear
+  `end_at` on anything.
+
 **`asin_skus` membership ≠ "listing is alive."** It means "FBA inventory has
 observed this SKU **or** AF optimistically wrote it at submit time." Because
 that submit-time write fires on ACCEPTED — before any inventory, and even for
