@@ -24,32 +24,6 @@ import {
   type LeadSource,
 } from "@shared/schema";
 
-function ResizeHandle({ onMouseDown }: { onMouseDown: (e: React.MouseEvent) => void }) {
-  const lineRef = useRef<HTMLDivElement>(null);
-  return (
-    <div
-      onMouseDown={onMouseDown}
-      onMouseEnter={() => { if (lineRef.current) lineRef.current.style.background = "hsl(var(--primary) / 0.5)"; }}
-      onMouseLeave={() => { if (lineRef.current) lineRef.current.style.background = "transparent"; }}
-      style={{ position: "absolute", right: -3, top: 0, bottom: 0, width: 7, cursor: "col-resize", zIndex: 10 }}
-    >
-      <div
-        ref={lineRef}
-        style={{
-          position: "absolute",
-          right: 3,
-          top: "15%",
-          bottom: "15%",
-          width: 2,
-          borderRadius: 1,
-          background: "transparent",
-          transition: "background 0.15s",
-        }}
-      />
-    </div>
-  );
-}
-
 const DEFAULT_COL_WIDTHS: Partial<Record<ColumnId, number>> = {
   product: 400, category: 160, brand: 100, supplier: 100,
   stock: 75, availableFba: 80, onOrder: 80, atPrep: 75, fbaStock: 85, reserved: 75, sentToFba: 80, daysLeft: 80,
@@ -72,6 +46,7 @@ import { useTagGroups, useAllTags, compareTagKeys } from "@/lib/use-tag-groups";
 import { submissionCategory } from "@/lib/submissions-api";
 import { TagEditor } from "@/components/tag-editor";
 import { NoteEditor } from "@/components/note-editor";
+import { useColumnWidths, ResizeHandle } from "@/hooks/use-column-widths";
 
 function getSourcingLabel(r: AsinResult): string {
   const w = r.isWholesale ?? false;
@@ -747,60 +722,14 @@ export function ResultsTable({
     ];
   }, [allResults]);
 
-  // Column resize state — persisted in localStorage
-  const [colWidths, setColWidths] = useState<Record<string, number>>(() => {
-    try {
-      const stored = localStorage.getItem("fba-col-widths");
-      if (stored) return JSON.parse(stored);
-    } catch {}
-    return {};
-  });
-  const resizeRef = useRef<{ colId: string; startX: number; startW: number } | null>(null);
-  const widthSaveTimer = useRef<ReturnType<typeof setTimeout>>();
+  // Column resize state — persisted in localStorage (shared hook, also the POs table)
+  const { colWidths, handleResizeStart } = useColumnWidths("fba-col-widths");
   // Collision boundary for in-cell popups that must flip away from the sticky
   // header. State-backed callback ref (not useRef): a plain ref is null on the
   // first render pass and setting .current never re-renders, so Radix would read
   // null and silently fall back to viewport collision. setScrollEl re-renders
   // once the element mounts, so collisionBoundary reliably gets the container.
   const [scrollEl, setScrollEl] = useState<HTMLDivElement | null>(null);
-  // Debounced save to localStorage
-  const saveWidths = useCallback((widths: Record<string, number>) => {
-    clearTimeout(widthSaveTimer.current);
-    widthSaveTimer.current = setTimeout(() => {
-      localStorage.setItem("fba-col-widths", JSON.stringify(widths));
-    }, 300);
-  }, []);
-
-  const handleResizeStart = useCallback((e: React.MouseEvent, colId: string) => {
-    e.preventDefault();
-    e.stopPropagation();
-    const th = (e.target as HTMLElement).closest("th");
-    if (!th) return;
-    const startW = th.getBoundingClientRect().width;
-    resizeRef.current = { colId, startX: e.clientX, startW };
-
-    const onMove = (ev: MouseEvent) => {
-      if (!resizeRef.current) return;
-      const delta = ev.clientX - resizeRef.current.startX;
-      const newW = Math.max(50, resizeRef.current.startW + delta);
-      setColWidths((prev) => {
-        const next = { ...prev, [resizeRef.current!.colId]: newW };
-        saveWidths(next);
-        return next;
-      });
-    };
-    const onUp = () => {
-      resizeRef.current = null;
-      document.removeEventListener("mousemove", onMove);
-      document.removeEventListener("mouseup", onUp);
-      document.body.style.cursor = "";
-      document.body.style.userSelect = "";
-    };
-    document.addEventListener("mousemove", onMove);
-    document.addEventListener("mouseup", onUp);
-    document.body.style.cursor = "col-resize";
-    document.body.style.userSelect = "none";
-  }, []);
 
   const visibleCols = useMemo(
     // Column order is locked to schema definition (COLUMN_GROUPS order).

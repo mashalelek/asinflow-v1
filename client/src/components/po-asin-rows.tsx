@@ -141,14 +141,14 @@ export const MAX_CHIPS = 2;
  */
 export function ActionItemChips({ items, testId, reasons, titles, lines }: { items: readonly string[] | undefined; testId?: string; reasons?: readonly string[] | null; titles?: Readonly<Record<string, string>>; lines?: Readonly<Record<string, ActionItemLines>> }) {
   const list = ordered(items);
-  const shown = list.length > MAX_CHIPS + 1 ? list.slice(0, MAX_CHIPS) : list;
+  const shown = list.length > MAX_CHIPS ? list.slice(0, MAX_CHIPS) : list;
   const rest = list.slice(shown.length);
   return (
     <span className="flex flex-wrap items-start gap-0.5" data-testid={testId}>
       {list.length === 0 ? <span className="text-muted-foreground/40 text-[11px]">—</span> : shown.map((it) => {
         const d = lines?.[it];
         return (
-          <span key={it} className={`${chipBase} ${actionChipClass(it)}`} title={titles?.[it] ?? lineDetailTitle(it, d) ?? (it === "Review Velocity" && reasons?.length ? reasons.join(" · ") : undefined)}>
+          <span key={it} className={`${chipBase} ${actionChipClass(it)} max-w-full truncate`} title={titles?.[it] ?? lineDetailTitle(it, d) ?? (it === "Review Velocity" && reasons?.length ? reasons.join(" · ") : it)}>
             {it}{d && d.lines < d.of ? <span className="ml-1 opacity-70" data-testid={`chip-count-${it}`}>·{d.lines}</span> : null}
           </span>
         );
@@ -184,7 +184,7 @@ export function ActionItemsEditor({ items, url, onSaved, testId, titles, lines, 
   return (
     <Popover open={open} onOpenChange={(v) => { setOpen(v); setPending(null); if (v) setDraft(new Set(items ?? [])); }}>
       <PopoverTrigger asChild>
-        <button type="button" onClick={(e) => e.stopPropagation()} className="min-h-[1.25rem] min-w-[3rem] text-left" data-testid={testId} title="Edit action items">
+        <button type="button" onClick={(e) => e.stopPropagation()} className="min-h-[1.25rem] min-w-[3rem] max-w-full text-left" data-testid={testId} title="Edit action items">
           <ActionItemChips items={items} titles={titles} lines={lines} reasons={reasons} />
         </button>
       </PopoverTrigger>

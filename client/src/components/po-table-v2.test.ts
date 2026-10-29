@@ -4,7 +4,7 @@ import { describe, it, expect } from "vitest";
 import { readFileSync } from "fs";
 import { join } from "path";
 import { lineDetailTitle, ACTION_ITEM_OPTIONS, DISPLAY_ACTION_ITEMS, MAX_CHIPS } from "./po-asin-rows";
-import { poLineCount, nextPoSort, PO_LIST_COLUMNS } from "../pages/purchase-orders";
+import { poLineCount, nextPoSort, PO_LIST_COLUMNS, poColStyle, PO_COL_WIDTHS_KEY, PO_DEFAULT_COL_WIDTHS } from "../pages/purchase-orders";
 import { PO_SORT_KEYS } from "../../../server/po-queries";
 
 const rows = readFileSync(join(__dirname, "po-asin-rows.tsx"), "utf8");
@@ -25,7 +25,7 @@ describe("PO row chips", () => {
   });
   it("two chips at most, then +N", () => {
     expect(MAX_CHIPS).toBe(2);
-    expect(rows).toMatch(/list\.length > MAX_CHIPS \+ 1 \? list\.slice\(0, MAX_CHIPS\) : list/);
+    expect(rows).toMatch(/list\.length > MAX_CHIPS \? list\.slice\(0, MAX_CHIPS\) : list/);
   });
   it("the PO row edits every line through PATCH /api/pos/:id/action-items, confirming when the PO has more than one line", () => {
     expect(page).toMatch(/<ActionItemsEditor items=\{po\.action_items\}[\s\S]{0,200}url=\{`\/api\/pos\/\$\{po\.id\}\/action-items`\}[\s\S]{0,80}lineCount=\{poLineCount\(po\)\}/);
@@ -60,5 +60,34 @@ describe("sortable headers (commit 4)", () => {
   it("the list sends sort/dir and a sort change resets to page 1", () => {
     expect(page).toMatch(/if \(sort\) \{ params\.set\("sort", sort\.key\); params\.set\("dir", sort\.dir\); \}/);
     expect(page).toMatch(/useEffect\(\(\) => \{ setPage\(1\); \}, \[[^\]]*sortKey\]\)/);
+  });
+});
+
+describe("resizable columns (commit 5): one shared mechanism", () => {
+  const hook = readFileSync(join(__dirname, "..", "hooks", "use-column-widths.tsx"), "utf8");
+  const results = readFileSync(join(__dirname, "results-table.tsx"), "utf8");
+  const grouped = readFileSync(join(__dirname, "grouped-table.tsx"), "utf8");
+  it("the ASINs tables (flat + grouped) and the POs table all use the hook; nobody keeps a local copy", () => {
+    for (const src of [results, grouped, page]) {
+      expect(src).toMatch(/import \{ useColumnWidths, ResizeHandle \} from "@\/hooks\/use-column-widths"/);
+      expect(src).not.toMatch(/function ResizeHandle\(|const saveWidths = useCallback|localStorage\.(get|set)Item\("fba-col-widths"/);
+    }
+    expect(results).toMatch(/useColumnWidths\("fba-col-widths"\)/); // the ASINs widths keep their key — nobody loses a layout
+    expect(grouped).toMatch(/useColumnWidths\("fba-col-widths"\)/);
+    expect(page).toMatch(/useColumnWidths\(PO_COL_WIDTHS_KEY\)/);
+    expect(PO_COL_WIDTHS_KEY).not.toBe("fba-col-widths");
+  });
+  it("the hook saves debounced under the caller's key, has a 50 px floor and a reset that removes the key", () => {
+    expect(hook).toMatch(/localStorage\.setItem\(storageKey, JSON\.stringify\(widths\)\)/);
+    expect(hook).toMatch(/}, 300\);/);
+    expect(hook).toMatch(/minWidth = 50/);
+    expect(hook).toMatch(/localStorage\.removeItem\(storageKey\)/);
+  });
+  it("Action Items defaults to 160 px (≈60% of the old 272 px); a dragged width wins; other columns size to content", () => {
+    expect(PO_DEFAULT_COL_WIDTHS.action_items).toBe(160);
+    expect(poColStyle({}, "action_items")).toEqual({ width: 160, minWidth: 160, maxWidth: 160, overflow: "hidden" });
+    expect(poColStyle({ action_items: 220 }, "action_items")).toEqual({ width: 220, minWidth: 220, maxWidth: 220, overflow: "hidden" });
+    expect(poColStyle({}, "supplier")).toBeUndefined();
+    expect(page).toMatch(/onClick=\{resetWidths\} data-testid="button-po-reset-widths">Reset widths</);
   });
 });

@@ -33,6 +33,7 @@ import { PoHeaderDrawer, PoProductsTable, PoHistory, PoDangerActions } from "@/c
 import { PoTrackingTab, SyncTrackingButton, UnmatchedTrackingChip } from "@/components/po-tracking";
 import { NewPoDialog } from "@/components/new-po-dialog";
 import { Pencil } from "lucide-react";
+import { useColumnWidths, ResizeHandle } from "@/hooks/use-column-widths";
 
 interface PoRow {
   id: string;
@@ -438,6 +439,15 @@ export const PO_LIST_COLUMNS: ReadonlyArray<{ id: string; label: string; sortKey
   { id: "invoice", label: "Invoice" },
   { id: "notes", label: "Notes" },
 ];
+/** Column widths: the ASINs table's shared mechanism under the POs table's own key (§4). */
+export const PO_COL_WIDTHS_KEY = "af-po-col-widths";
+/** Defaults; a column without one sizes to its content. Action Items ≈ 60% of its old auto width (272 px). */
+export const PO_DEFAULT_COL_WIDTHS: Readonly<Record<string, number>> = { action_items: 160 };
+export function poColStyle(widths: Record<string, number>, id: string): React.CSSProperties | undefined {
+  const w = widths[id] ?? PO_DEFAULT_COL_WIDTHS[id];
+  return w != null ? { width: w, minWidth: w, maxWidth: w, overflow: "hidden" } : undefined;
+}
+
 export type PoSort = { key: string; dir: "asc" | "desc" } | null;
 /** One key at a time; a click cycles asc → desc → off (off = the default order, newest PO first). */
 export function nextPoSort(cur: PoSort, key: string): PoSort {
@@ -445,14 +455,15 @@ export function nextPoSort(cur: PoSort, key: string): PoSort {
   return cur.dir === "asc" ? { key, dir: "desc" } : null;
 }
 
-function SortHeader({ label, sortKey, sort, onSort, className }: { label: string; sortKey: string; sort: PoSort; onSort: (k: string) => void; className?: string }) {
+function SortHeader({ label, sortKey, sort, onSort, className, style, children }: { label: string; sortKey: string; sort: PoSort; onSort: (k: string) => void; className?: string; style?: React.CSSProperties; children?: React.ReactNode }) {
   const active = sort?.key === sortKey;
   return (
-    <th className={className} aria-sort={active ? (sort!.dir === "asc" ? "ascending" : "descending") : "none"}>
+    <th className={className} style={style} aria-sort={active ? (sort!.dir === "asc" ? "ascending" : "descending") : "none"}>
       <button type="button" onClick={() => onSort(sortKey)} className="inline-flex items-center gap-1 hover:text-foreground" data-testid={`sort-po-${sortKey}`}>
         {label}
         {active ? (sort!.dir === "asc" ? <ArrowUp className="h-3 w-3" /> : <ArrowDown className="h-3 w-3" />) : <ArrowUpDown className="h-3 w-3 opacity-30" />}
       </button>
+      {children}
     </th>
   );
 }
@@ -486,6 +497,7 @@ export default function PurchaseOrders() {
   const [to, setTo] = useState("");
   const [page, setPage] = useState(1);
   const [sort, setSort] = useState<PoSort>(null);
+  const { colWidths, handleResizeStart, resetWidths } = useColumnWidths(PO_COL_WIDTHS_KEY);
   const [data, setData] = useState<PosResponse | null>(null);
   const [error, setError] = useState<string | null>(null);
   // Expand by ASIN (§3.4): persisted per browser, default all collapsed.
@@ -611,6 +623,9 @@ export default function PurchaseOrders() {
         <span className="text-xs text-muted-foreground">to</span>
         <input type="date" value={to} onChange={(e) => setTo(e.target.value)}
           className="h-8 rounded-md border border-input bg-background px-2 text-sm" data-testid="input-po-to" />
+        {Object.keys(colWidths).length > 0 && (
+          <Button variant="ghost" size="sm" className="h-8 text-xs text-muted-foreground" onClick={resetWidths} data-testid="button-po-reset-widths">Reset widths</Button>
+        )}
       </div>
 
       {error && <div className="text-sm text-destructive" data-testid="text-po-error">{error}</div>}
@@ -622,10 +637,12 @@ export default function PurchaseOrders() {
               <SortHeader label="Status" sortKey="status" sort={sort} onSort={(k) => setSort((s) => nextPoSort(s, k))} className="px-2 py-2 text-xs font-medium whitespace-nowrap text-left w-12" />
               <th className="w-8 px-2 py-2" aria-label="Expand by ASIN" />
               {PO_LIST_COLUMNS.map((c) => {
-                const cls = `px-3 py-2 text-xs font-medium whitespace-nowrap ${c.align === "right" ? "text-right" : "text-left"}`;
+                const cls = `relative px-3 py-2 text-xs font-medium whitespace-nowrap overflow-hidden ${c.align === "right" ? "text-right" : "text-left"}`;
+                const style = poColStyle(colWidths, c.id);
+                const handle = <ResizeHandle onMouseDown={(e) => handleResizeStart(e, c.id)} />;
                 return c.sortKey
-                  ? <SortHeader key={c.id} label={c.label} sortKey={c.sortKey} sort={sort} onSort={(k) => setSort((s) => nextPoSort(s, k))} className={cls} />
-                  : <th key={c.id} className={cls}>{c.label}</th>;
+                  ? <SortHeader key={c.id} label={c.label} sortKey={c.sortKey} sort={sort} onSort={(k) => setSort((s) => nextPoSort(s, k))} className={cls} style={style}>{handle}</SortHeader>
+                  : <th key={c.id} className={cls} style={style} data-testid={`th-po-${c.id}`}>{c.label}{handle}</th>;
               })}
             </tr>
           </thead>
@@ -653,23 +670,23 @@ export default function PurchaseOrders() {
                       {open ? <ChevronDown className="h-3.5 w-3.5" /> : <ChevronRight className="h-3.5 w-3.5" />}
                     </button>
                   </td>
-                  <td className="px-3 py-2" onClick={(e) => e.stopPropagation()}>
+                  <td style={poColStyle(colWidths, "action_items")} className="px-3 py-2" onClick={(e) => e.stopPropagation()}>
                     {/* PO table v2: set on the PO row = set on every product line (confirm when > 1). */}
                     <ActionItemsEditor items={po.action_items} reasons={po.review_velocity_reasons} lines={po.action_item_lines}
                       url={`/api/pos/${po.id}/action-items`} onSaved={() => void load()} lineCount={poLineCount(po)} testId={`po-action-items-${po.order_id}`} />
                   </td>
-                  <td className="px-3 py-2 whitespace-nowrap">{fmtDate(po.order_date)}</td>
-                  <td className="px-3 py-2 font-mono text-xs">{po.order_id}</td>
-                  <td className="px-3 py-2">{po.supplier}</td>
-                  <td className={`px-3 py-2 text-right font-mono ${money.muted ? "text-muted-foreground/50" : ""}`}>{money.text}</td>
-                  <td className="px-3 py-2 text-right">{po.asin_count}</td>
-                  <td className="px-3 py-2 text-right">{fmtQty(po.units_ordered)}</td>
-                  <td className="px-3 py-2">
+                  <td style={poColStyle(colWidths, "order_date")} className="px-3 py-2 whitespace-nowrap">{fmtDate(po.order_date)}</td>
+                  <td style={poColStyle(colWidths, "order_id")} className="px-3 py-2 font-mono text-xs">{po.order_id}</td>
+                  <td style={poColStyle(colWidths, "supplier")} className="px-3 py-2">{po.supplier}</td>
+                  <td style={poColStyle(colWidths, "order_total")} className={`px-3 py-2 text-right font-mono ${money.muted ? "text-muted-foreground/50" : ""}`}>{money.text}</td>
+                  <td style={poColStyle(colWidths, "asins")} className="px-3 py-2 text-right">{po.asin_count}</td>
+                  <td style={poColStyle(colWidths, "units_ordered")} className="px-3 py-2 text-right">{fmtQty(po.units_ordered)}</td>
+                  <td style={poColStyle(colWidths, "invoice")} className="px-3 py-2">
                     {po.invoice_attached
                       ? <Paperclip className="h-3.5 w-3.5 text-muted-foreground" />
                       : <span className="text-muted-foreground/40">—</span>}
                   </td>
-                  <td className="px-3 py-2">{po.has_notes && <StickyNote className="h-3.5 w-3.5 text-muted-foreground" />}</td>
+                  <td style={poColStyle(colWidths, "notes")} className="px-3 py-2">{po.has_notes && <StickyNote className="h-3.5 w-3.5 text-muted-foreground" />}</td>
                 </tr>
                 {open && (
                   <tr data-testid={`row-po-asins-${po.order_id}`}>

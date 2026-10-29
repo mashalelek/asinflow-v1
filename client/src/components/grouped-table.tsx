@@ -19,6 +19,7 @@ import { type AnalyticsMetrics } from "@/lib/analytics";
 import { ColumnFilterButton, type ColFilter, type FilterMap, type MultiSelectOption } from "./column-filter";
 import { useTagGroups, compareTagKeys } from "@/lib/use-tag-groups";
 import { renderCell } from "./results-table";
+import { useColumnWidths, ResizeHandle } from "@/hooks/use-column-widths";
 
 // ── Types ────────────────────────────────────────────────────────────
 export interface GroupData {
@@ -118,38 +119,8 @@ export function GroupedTable({
 }: GroupedTableProps) {
   const colMap = useMemo(() => new Map(ALL_COLUMNS.map((c) => [c.id, c])), []);
 
-  // Column resize state
-  const [colWidths, setColWidths] = useState<Record<string, number>>(() => {
-    try { const s = localStorage.getItem("fba-col-widths"); if (s) return JSON.parse(s); } catch {} return {};
-  });
-  const resizeRef = useRef<{ colId: string; startX: number; startW: number } | null>(null);
-  const widthSaveTimer = useRef<ReturnType<typeof setTimeout>>();
-  const saveWidths = useCallback((widths: Record<string, number>) => {
-    clearTimeout(widthSaveTimer.current);
-    widthSaveTimer.current = setTimeout(() => localStorage.setItem("fba-col-widths", JSON.stringify(widths)), 300);
-  }, []);
-  const handleResizeStart = useCallback((e: React.MouseEvent, colId: string) => {
-    e.preventDefault(); e.stopPropagation();
-    const th = (e.target as HTMLElement).closest("th");
-    if (!th) return;
-    const startW = th.getBoundingClientRect().width;
-    resizeRef.current = { colId, startX: e.clientX, startW };
-    const onMove = (ev: MouseEvent) => {
-      if (!resizeRef.current) return;
-      const delta = ev.clientX - resizeRef.current.startX;
-      const newW = Math.max(50, resizeRef.current.startW + delta);
-      setColWidths((prev) => { const next = { ...prev, [resizeRef.current!.colId]: newW }; saveWidths(next); return next; });
-    };
-    const onUp = () => {
-      resizeRef.current = null;
-      document.removeEventListener("mousemove", onMove);
-      document.removeEventListener("mouseup", onUp);
-      document.body.style.cursor = ""; document.body.style.userSelect = "";
-    };
-    document.addEventListener("mousemove", onMove);
-    document.addEventListener("mouseup", onUp);
-    document.body.style.cursor = "col-resize"; document.body.style.userSelect = "none";
-  }, [saveWidths]);
+  // Column resize state (shared hook, same key as the flat table)
+  const { colWidths, handleResizeStart } = useColumnWidths("fba-col-widths");
 
   // Multi-select filter options
   const tagMeta = useTagGroups();
@@ -211,19 +182,6 @@ export function GroupedTable({
   const frozenColWidth = { rowNum: 36, sel: 32 };
   const selLeft = frozenColWidth.rowNum;
   const productLeft = selLeft + frozenColWidth.sel;
-
-  function ResizeHandle({ onMouseDown }: { onMouseDown: (e: React.MouseEvent) => void }) {
-    const lineRef = useRef<HTMLDivElement>(null);
-    return (
-      <div onMouseDown={onMouseDown}
-        onMouseEnter={() => { if (lineRef.current) lineRef.current.style.background = "hsl(var(--primary) / 0.5)"; }}
-        onMouseLeave={() => { if (lineRef.current) lineRef.current.style.background = "transparent"; }}
-        style={{ position: "absolute", right: -3, top: 0, bottom: 0, width: 7, cursor: "col-resize", zIndex: 10 }}
-      >
-        <div ref={lineRef} style={{ position: "absolute", right: 3, top: "15%", bottom: "15%", width: 2, borderRadius: 1, background: "transparent", transition: "background 0.15s" }} />
-      </div>
-    );
-  }
 
   return (
     <div className="w-full overflow-auto relative" style={{ maxHeight: "calc(100vh - 280px)" }}>
