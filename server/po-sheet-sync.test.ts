@@ -167,7 +167,7 @@ describe("syncPoSheet — dry run computes the §3.9 counts and writes nothing",
       // Intake-only (af-owned, 2026-10-18): the 4 existing POs that differ are reported as drift, nothing applied.
       sheetPos: 7, inserted: 2, updated: 0, unchanged: 1, linesDeleted: 0, poAsinsDeleted: 0, poAsinsKeptWithShipments: 0,
       canceledKeptOrderedQty: 0, canceledNoOrderedQty: 1, returnedNoQty: 0, lineActionItemsChanged: 0, historyInserted: 0, historyWithActionItems: 0, skippedBadCells: 0,
-      colPEntries: 0, sheetDiffers: 4, tombstoned: 0, posInAfNotInSheet: 1, unmappedTokens: 0, skippedMixed: 0,
+      colPEntries: 0, sheetDiffers: 4, prepApplied: 0, shipsToApplied: 0, tombstoned: 0, posInAfNotInSheet: 1, unmappedTokens: 0, skippedMixed: 0,
     });
     expect(r.inAfNotInSheet).toEqual(["walmart.com GONE (2026-03-01)"]);
     expect(r.keptWithShipments).toEqual([]);
@@ -238,6 +238,54 @@ describe("syncPoSheet — dry run computes the §3.9 counts and writes nothing",
     expect(shipsTo).toEqual({ NEWHOME: "home", NEWVEL: "velocity", NEWBLANK: "home" });
   });
 
+  describe("the prep exception (Option 2, 2026-10-29): Col AS prep applies to an existing PO, ships_to follows", () => {
+    const st = (prep: string, shipsTo: string): DbState => ({
+      pos: [po({ id: "p1", order_id: "E1", ships_to: shipsTo })],
+      asins: [pa({ id: "a1", po_id: "p1", asin: "B000000001", prep_cost: prep })],
+      lines: [line({ id: "l1", po_id: "p1", po_asin_id: "a1" })],
+    });
+    const historyOf = (db: any) => db.writes.filter((w: any) => w.sql.startsWith("INSERT INTO po_edit_log")).map((w: any) => w.params.slice(2));
+    it("$1 in AF, $0 on the sheet → prep 0 and ships_to home, a History row each (482270182's shape)", async () => {
+      const db = fakeDb(st("1.00", "velocity"));
+      const r = await syncPoSheet({ sheetId: "s", dryRun: false, db, read: read([row({ orderId: "E1", prep: "$0.00" })]) });
+      expect(r.counts).toMatchObject({ prepApplied: 1, shipsToApplied: 1 });
+      expect(r.prepApplied).toEqual([{ po: "walmart.com E1", asin: "B000000001", sheetPrep: "0.00", afPrep: "1.00", shipsTo: { from: "velocity", to: "home" } }]);
+      const upd = db.writes.filter((w) => /^UPDATE (po_asins|purchase_orders)/.test(w.sql));
+      expect(upd.map((w) => [w.sql.split(" SET ")[0], w.params])).toEqual([["UPDATE po_asins", ["a1", "0.00"]], ["UPDATE purchase_orders", ["p1", "home"]]]);
+      expect(historyOf(db)).toEqual([["asin", "a1", "prep_cost (from sheet)", "1.00", "0.00"], ["po", "p1", "ships_to (from sheet)", "velocity", "home"]]);
+    });
+    it("the dry run reports the same and writes nothing", async () => {
+      const db = fakeDb(st("1.00", "velocity"));
+      const r = await syncPoSheet({ sheetId: "s", dryRun: true, db, read: read([row({ orderId: "E1", prep: "$0.00" })]) });
+      expect(r.counts.prepApplied).toBe(1);
+      expect(db.writes).toEqual([]);
+    });
+    it("same prep → nothing; a ships_to set by hand on an unchanged PO stays", async () => {
+      const db = fakeDb(st("1.00", "home"));
+      const r = await syncPoSheet({ sheetId: "s", dryRun: false, db, read: read([row({ orderId: "E1", prep: "$1.00" })]) });
+      expect(r.counts).toMatchObject({ prepApplied: 0, shipsToApplied: 0 });
+      expect(db.writes.filter((w) => /^UPDATE (po_asins|purchase_orders)/.test(w.sql))).toEqual([]);
+    });
+    it("prep changes but ships_to already agrees → prep only", async () => {
+      const db = fakeDb(st("1.00", "velocity"));
+      const r = await syncPoSheet({ sheetId: "s", dryRun: false, db, read: read([row({ orderId: "E1", prep: "$2.00" })]) });
+      expect(r.counts).toMatchObject({ prepApplied: 1, shipsToApplied: 0 });
+      expect(historyOf(db)).toEqual([["asin", "a1", "prep_cost (from sheet)", "1.00", "2.00"]]);
+    });
+    it("a pre-2026 row (no Col AS) never applies", async () => {
+      const s0 = st("1.00", "velocity"); s0.pos[0].order_date = "2025-06-01";
+      const db = fakeDb(s0);
+      const r = await syncPoSheet({ sheetId: "s", dryRun: false, db, read: read([row({ orderId: "E1", date: "6/1/2025", prep: "" })]) });
+      expect(r.counts.prepApplied).toBe(0);
+    });
+    it("no other field is written to an existing PO", async () => {
+      const db = fakeDb(st("1.00", "velocity"));
+      await syncPoSheet({ sheetId: "s", dryRun: false, db, read: read([row({ orderId: "E1", prep: "$0.00", notes: "changed", Y: "$99.00" })]) });
+      const upd = db.writes.filter((w) => /^(UPDATE|DELETE)/.test(w.sql)).map((w) => w.sql.split(" WHERE ")[0]);
+      expect(upd).toEqual(["UPDATE po_asins SET prep_cost = $2", "UPDATE purchase_orders SET ships_to = $2, updated_at = NOW()", "DELETE FROM po_sheet_fba_shipments"]);
+    });
+  });
+
   it("Col P: one multi-row insert per run (column arrays), however many entries", async () => {
     const withP = cells.map((c, i) => { const x = [...c]; if (i < 2) x[COL.fbaShipmentIds] = i === 0 ? "FBA19H4BCJP4 (4), FBA19H4BK2W6 (4) [note]" : "FBA19H9RS9TJ"; return x; });
     const db = fakeDb(state);
@@ -279,7 +327,8 @@ describe("Sync POs button (§4): PO sync first, then the per-ASIN sync; both out
     const page = read("client/src/pages/home.tsx");
     const h = page.slice(page.indexOf("const handleSyncSheet"), page.indexOf("}, [toast, currentWorkingSet, fetchAsins"));
     expect(h).toMatch(/fetchLongSync\("\/api\/sheets\/sync", \{ asins: ws \}\)/);
-    expect(h).toMatch(/POs: \+\$\{po\.counts\.inserted\} new\$\{po\.counts\.sheetDiffers \? `, \$\{po\.counts\.sheetDiffers\} existing differ from the sheet \(AF owns them — not applied\)`/);
+    expect(h).toMatch(/POs: \+\$\{po\.counts\.inserted\} new\$\{po\.counts\.prepApplied \? `, prep from the sheet applied on \$\{po\.counts\.prepApplied\} ASIN row\(s\)/);
+    expect(h).toMatch(/\$\{po\.counts\.sheetDiffers \? `, \$\{po\.counts\.sheetDiffers\} existing differ from the sheet \(AF owns them — not applied\)`/);
     expect(h).toMatch(/POs: STOPPED, nothing written/);
     expect(h).toMatch(/POs: FAILED/);
     expect(h).toMatch(/ASINs: updated \$\{data\.updated\}, skipped \$\{data\.skipped\}/);

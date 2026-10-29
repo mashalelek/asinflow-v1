@@ -35,6 +35,7 @@ import { mapSheetStatus, ACTION_ITEMS, type ActionItem } from "./po-status-map";
 import { sheetEntrySeqByKey } from "./po-entry-seq";
 import { insertLineItems } from "./line-action-items";
 import { shipsToFromPrep } from "./ships-to-backfill";
+import { logEdits } from "./po-edit";
 
 // ── parsing helpers (ported verbatim from script/import-po-2026.ts) ──────────
 
@@ -432,8 +433,11 @@ export interface PoSyncCounts {
   returnedNoQty: number;
   /** Lines whose action items change (row Status → line, full replace). */
   lineActionItemsChanged: number;
-  /** Existing POs whose sheet rows differ from AF (informational — intake-only, never applied; af-owned §2.2). */
+  /** Existing POs whose sheet rows differ from AF (informational — never applied; af-owned §2.2), except Col AS prep (prepApplied). */
   sheetDiffers: number;
+  /** The one exception (Maria 2026-10-29): ASIN rows whose Col AS prep was applied to an existing PO, and POs whose ships_to followed. */
+  prepApplied: number;
+  shipsToApplied: number;
   /** Col P shipment entries read (po_sheet_fba_shipments rows on a live run). */
   colPEntries: number;
   /** Sheet POs not inserted because they were deleted in AF (deleted_pos tombstone, §5.3). */
@@ -458,6 +462,8 @@ export interface PoSyncResult {
   counts: PoSyncCounts;
   /** First 10 EXISTING POs whose sheet rows differ from AF (drift, not applied), each with its first differences. */
   samples: string[];
+  /** Col AS prep applied to existing POs (and the ships_to it implies), one entry per ASIN row. */
+  prepApplied: Array<{ po: string; asin: string; sheetPrep: string; afPrep: string | null; shipsTo: { from: string; to: string } | null }>;
   /** Inserts, plus the read-only drift of existing POs with their field-level differences. */
   diffs: Array<{ po: string; kind: "insert" | "drift"; changes: string[] }>;
   unmapped: Array<{ po: string; tokens: string[] }>;
@@ -575,12 +581,15 @@ export async function syncPoSheet(opts: { sheetId: string; dryRun: boolean; db?:
   type LineOp = { kind: "insert"; poAsinId: string | null; asinIdx: number; line: SheetLine } | { kind: "update"; id: string; set: Record<string, any> } | { kind: "delete"; id: string };
   type AsinOp = { kind: "insert"; a: SheetPoAsin } | { kind: "update"; id: string; set: Record<string, any> } | { kind: "delete"; id: string; lineIds: string[] } | { kind: "keep"; id: string };
   /** `changes` are writes; `notes` are reported facts that write nothing (kept rows) and do not make a PO "updated". */
-  interface PoPlan { po: SheetPo; db: any | null; changes: string[]; notes: string[]; headerSet: Record<string, any>; asinOps: AsinOp[]; lineOps: LineOp[] }
+  interface PoPlan { po: SheetPo; db: any | null; changes: string[]; notes: string[]; headerSet: Record<string, any>; asinOps: AsinOp[]; lineOps: LineOp[];
+    /** Applied to an existing PO (the prep exception): Col AS per ASIN row, and the ships_to it implies. */
+    prepSet: Array<{ id: string; asin: string; from: string | null; to: string }>; shipsToSet: { from: string; to: string } | null }
+  const prepApplied: PoSyncResult["prepApplied"] = [];
   const plans: PoPlan[] = [];
   const counts: PoSyncCounts = {
     sheetPos: parsed.pos.length, inserted: 0, updated: 0, unchanged: 0, linesDeleted: 0, poAsinsDeleted: 0,
     poAsinsKeptWithShipments: 0, canceledKeptOrderedQty: 0, canceledNoOrderedQty: 0, returnedNoQty: 0, lineActionItemsChanged: 0,
-    historyInserted: 0, historyWithActionItems: 0, skippedBadCells: parsed.skippedBadCells.length, sheetDiffers: 0, colPEntries: 0, tombstoned: 0,
+    historyInserted: 0, historyWithActionItems: 0, skippedBadCells: parsed.skippedBadCells.length, sheetDiffers: 0, prepApplied: 0, shipsToApplied: 0, colPEntries: 0, tombstoned: 0,
     posInAfNotInSheet: 0, unmappedTokens: parsed.unmapped.length, skippedMixed: parsed.skippedMixed.length,
   };
   const keptWithShipments: string[] = [];
@@ -592,7 +601,7 @@ export async function syncPoSheet(opts: { sheetId: string; dryRun: boolean; db?:
   for (const po of parsed.pos) {
     const existing = dbPoByKey.get(po.key) ?? null;
     if (!existing && tombstones.has(po.key)) { counts.tombstoned++; continue; } // deleted in AF: never re-imported
-    const plan: PoPlan = { po, db: existing, changes: [], notes: [], headerSet: {}, asinOps: [], lineOps: [] };
+    const plan: PoPlan = { po, db: existing, changes: [], notes: [], headerSet: {}, asinOps: [], lineOps: [], prepSet: [], shipsToSet: null };
     plans.push(plan);
     if (!existing) {
       counts.inserted++; plan.changes.push(po.historical ? "new PO (history, imported Closed)" : "new PO");
@@ -679,13 +688,32 @@ export async function syncPoSheet(opts: { sheetId: string; dryRun: boolean; db?:
         plan.changes.push(`${ex.asin}: ASIN row deleted (not in sheet; ${lineIds.length} line(s))`);
       }
     }
+    // The prep exception (Option 2, Maria 2026-10-29): Col AS prep is applied
+    // to an existing PO's ASIN rows when it differs, and ships_to follows the
+    // new prep. Only 2026 rows (pre-2026 rows predate Col AS: null = not
+    // recorded, never applied); ships_to moves only when this sync changes a
+    // prep on the PO, so a ships_to set by hand on an unchanged PO stays.
+    for (const a of po.poAsins) {
+      const ex = dbAByAsin.get(a.asin);
+      if (!ex || a.prep == null || numEq(ex.prep_cost, a.prep)) continue;
+      plan.prepSet.push({ id: String(ex.id), asin: a.asin, from: ex.prep_cost == null ? null : String(ex.prep_cost), to: a.prep });
+    }
+    if (plan.prepSet.length > 0) {
+      const after = dbA.map((x) => plan.prepSet.find((p) => p.id === String(x.id))?.to ?? x.prep_cost).map((v) => (v == null ? null : Number(v))).filter((v): v is number => v != null);
+      const derived = shipsToFromPrep(after.length ? Math.max(...after) : null);
+      if (derived !== existing.ships_to) plan.shipsToSet = { from: String(existing.ships_to), to: derived };
+      counts.prepApplied += plan.prepSet.length;
+      if (plan.shipsToSet) counts.shipsToApplied++;
+      for (const p of plan.prepSet) prepApplied.push({ po: `${po.supplier} ${po.orderId}`, asin: p.asin, sheetPrep: p.to, afPrep: p.from, shipsTo: plan.shipsToSet });
+    }
     if (keptOnCancel) { counts.canceledKeptOrderedQty++; canceledKept.push(`${po.supplier} ${po.orderId}`); plan.notes.push("canceled: sheet qty 0 ignored, stored ordered qty kept"); }
     if (plan.changes.length > 0) counts.updated++; else counts.unchanged++;
   }
 
   // Intake-only (af-owned §2.1–2.2, 2026-10-18): AF owns every PO once it
   // exists. The diff above for existing POs is kept as a read-only drift
-  // report ("sheet differs from AF"); none of it is applied.
+  // report ("sheet differs from AF"); none of it is applied — except Col AS
+  // prep and the ships_to it implies (plan.prepSet / shipsToSet, 2026-10-29).
   counts.sheetDiffers = counts.updated;
   counts.updated = 0; counts.linesDeleted = 0; counts.poAsinsDeleted = 0; counts.poAsinsKeptWithShipments = 0;
   counts.canceledKeptOrderedQty = 0; counts.returnedNoQty = 0; counts.lineActionItemsChanged = 0;
@@ -705,7 +733,7 @@ export async function syncPoSheet(opts: { sheetId: string; dryRun: boolean; db?:
     : parsed.skippedMixed.length > 0 ? `mixed Col S on ${parsed.skippedMixed.length} PO(s): ${parsed.skippedMixed.slice(0, 3).join("; ")}` : null;
 
   const result: PoSyncResult = {
-    dryRun: opts.dryRun, wrote: false, stop, counts, samples, diffs,
+    dryRun: opts.dryRun, wrote: false, stop, counts, samples, diffs, prepApplied,
     unmapped: parsed.unmapped, skippedMixed: parsed.skippedMixed, inAfNotInSheet, keptWithShipments, canceledKept, canceledNoQty,
     skippedBadCells: parsed.skippedBadCells, skippedRows: parsed.skippedRows, historyPack: parsed.historyPack, rawRowsRead: parsed.rawRowsRead,
   };
@@ -737,7 +765,16 @@ export async function syncPoSheet(opts: { sheetId: string; dryRun: boolean; db?:
         for (const a of po.poAsins) await insertPoAsin(client, poId, a, po, skuByAsin.get(a.asin) ?? null);
         continue;
       }
-      // Existing POs are AF-owned: never written by the sync (intake-only).
+      // Existing POs are AF-owned: never written by the sync (intake-only) —
+      // except Col AS prep and the ships_to it implies (Option 2, 2026-10-29).
+      for (const p of plan.prepSet) {
+        await client.query(`UPDATE po_asins SET prep_cost = $2 WHERE id = $1`, [p.id, p.to]);
+        await logEdits((sql, params) => client.query(sql, params), String(plan.db.id), null, "asin", p.id, [{ field: "prep_cost (from sheet)", old: p.from, new: p.to }]);
+      }
+      if (plan.shipsToSet) {
+        await client.query(`UPDATE purchase_orders SET ships_to = $2, updated_at = NOW() WHERE id = $1`, [plan.db.id, plan.shipsToSet.to]);
+        await logEdits((sql, params) => client.query(sql, params), String(plan.db.id), null, "po", String(plan.db.id), [{ field: "ships_to (from sheet)", old: plan.shipsToSet.from, new: plan.shipsToSet.to }]);
+      }
     }
     // Col P is a matching signal, not PO data: the whole table is replaced
     // from the sheet on every live run, for new and existing POs alike.

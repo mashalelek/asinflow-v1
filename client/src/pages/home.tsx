@@ -835,7 +835,7 @@ export default function Home() {
       const poLine = !po ? "POs: not run"
         : "error" in po ? `POs: FAILED — ${po.error}`
         : po.stop ? `POs: STOPPED, nothing written — ${po.stop}`
-        : `POs: +${po.counts.inserted} new${po.counts.sheetDiffers ? `, ${po.counts.sheetDiffers} existing differ from the sheet (AF owns them — not applied)` : ""}${po.counts.tombstoned ? `, ${po.counts.tombstoned} deleted in AF (not re-imported)` : ""}${po.counts.skippedBadCells ? `, ${po.counts.skippedBadCells} skipped (bad cell)` : ""}`;
+        : `POs: +${po.counts.inserted} new${po.counts.prepApplied ? `, prep from the sheet applied on ${po.counts.prepApplied} ASIN row(s)${po.counts.shipsToApplied ? ` (Ships to changed on ${po.counts.shipsToApplied} PO(s))` : ""}` : ""}${po.counts.sheetDiffers ? `, ${po.counts.sheetDiffers} existing differ from the sheet (AF owns them — not applied)` : ""}${po.counts.tombstoned ? `, ${po.counts.tombstoned} deleted in AF (not re-imported)` : ""}${po.counts.skippedBadCells ? `, ${po.counts.skippedBadCells} skipped (bad cell)` : ""}`;
       const asinLine = `ASINs: updated ${data.updated}, skipped ${data.skipped}${data.cleared ? `, cleared ${data.cleared} stale qty` : ""}`;
       const poFailed = !po || "error" in po || Boolean(po.stop);
       toast({ title: poFailed ? "Synced ASINs; PO sync did not complete" : "Synced POs and ASINs", description: `${poLine}. ${asinLine}`, variant: poFailed ? "destructive" : undefined });
