@@ -350,6 +350,19 @@ default false, never set by default in any script, caller or prompt, and
 never inferred from "relist" or from units being in the pipeline. Approval
 to open one batch does not carry to the next.
 
+## PO matchers: exactly one → link, never past Ordered
+
+Shipment sync A and the tracking matcher auto-link only when exactly one
+PO fits; several → a review row with ranked candidates, none → a review row
+with the reason (SPEC §14, §26). Any rule that places Velocity units on a
+PO ASIN row without an exact order-# key — Col P on a line whose Order #
+AF lacks, the base order #, the candidate rule — must pass the units fit
+(ordered × pack − units already placed ≥ the line's units). A new matching
+rule is dry-run on production and its link list checked for Shipped >
+Ordered before `--live` (the 2026-10-29 dry run caught two). Order-#
+handling lives in `server/order-number.ts`; retailer → supplier in
+`server/supplier-aliases.ts` — don't add a third copy.
+
 ## Velocity API: `offset` is a page index
 
 Every Velocity list endpoint (`/inbound`, `/inventory`, `/shipments`)

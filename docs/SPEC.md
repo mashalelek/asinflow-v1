@@ -2790,6 +2790,13 @@ do not flow into AsinFlow's inventory state.
 
 A few things that aren't strictly rules but inform how decisions get made.
 
+### PO matchers: exactly one → link, otherwise review
+
+AF's PO matchers (shipment sync A, tracking) auto-link only when exactly
+one PO fits, and never past its ordered units; several → a review row with
+the candidates ranked; none → a review row that says why (2026-10-29, PO
+matching patch).
+
 ### Source of truth
 
 Every piece of data has exactly one canonical source. Most current examples:
@@ -5668,13 +5675,50 @@ before Velocity's `shipped_at`.
   meet Col P for exactly one PO ASIN row of the same ASIN is placed there
   (`linesMatchedColP`); several rows → stays `no_order` with
   `shipment_unmatched.candidates` (jsonb), shown as one-click links in the
-  picker (`linesColPAmbiguous`). `po_not_found` is not overridden. Origin:
-  PO 126768935 Heath 3-pack, a Velocity order with no Order # shipped in
-  six FBA shipments (72 component units = 24 packs).
+  picker (`linesColPAmbiguous`). Origin: PO 126768935 Heath 3-pack, a
+  Velocity order with no Order # shipped in six FBA shipments (72
+  component units = 24 packs). Extended to `po_not_found` lines by the PO
+  matching patch below, with a units-fit test.
+- **PO matching (2026-10-29, `docs/claude_spec-patch-po-matching.md`).**
+  Past the two legacy keys, in order. *Main pass:* the Velocity retailer
+  through `supplier_aliases` (migration 072; lowercased retailer → AF
+  supplier, source `seed` | `manual`; a blank retailer matches any
+  supplier) on the exact key (`alias`); the **normalized** order #
+  (`server/order-number.ts`: a free-text prefix such as "Confirmation #"
+  dropped, uppercase, `[A-Z0-9]` only; each id of a two-id AF order_id)
+  + ASIN, exactly one row (`normalized`); Col P for a no-Order # line.
+  *Units pass*, once every other placement is known, oldest Velocity
+  order first, one decision per Velocity order (split shipments sum):
+  Col P for a line whose Order # AF lacks — the row must also **fit** the
+  units (ASIN qty × pack − units already placed ≥ the line's units); the
+  **base** order # (without `_N` / `-N`, 1–2 digits) + ASIN, exactly one
+  row that fits (`base_id`); the **candidate rule** — same ASIN, supplier
+  via alias (any when blank, none when unresolved), PO date within ±30
+  days of the Velocity order date (`line.date`), units fit; ranked by
+  |Δdays| then the tightest fit; exactly one → linked (`candidate`).
+  **Nothing is ever placed past Ordered by these rules** (the production
+  dry run caught Col P alone placing CAR118805142_1 at 10 of 5). Every
+  units-pass link is recorded like a picker link
+  (`shipment_unmatched.resolved_po_asin_id`, `match_reason` col_p /
+  base_id / candidate_unique) plus one `po_edit_log` row (entity
+  `shipment`, field `link`, user NULL), so later runs keep it.
 - Not resolvable → `shipment_unmatched` (`no_order` | `po_not_found`), one
-  row per line, updated on re-sync, stamped `resolved_at` when it later
-  resolves by key or through the picker (`resolved_po_asin_id` is honoured
-  by every later run).
+  row per line, updated on re-sync, with its ranked `candidates` (Col P
+  rows, or the candidate rule's top 5 with Δdays and units left) or a
+  `nearest_miss` sentence (the order # is in AF without this ASIN / no AF
+  PO has the ASIN / the retailer is not mapped / only other suppliers /
+  nearest PO N days away / PO X has R units left / base PO fully shipped
+  / the Col P row has no room); stamped `resolved_at` (with `match_reason`)
+  when it later resolves by rule or through the picker
+  (`resolved_po_asin_id` is honoured by every later run).
+- **One-time backfill** (`npm run backfill:shipment-matching`, dry run by
+  default): proposes alias seeds, dry-runs component A with them in
+  memory, reports every link and every line left; `--live` writes the
+  seeds, then A, B, A (pack size / At Prep for the new links), and
+  auto-close. Production 2026-10-29: 5 seeds (Carters, Monin, the Tetley /
+  WorldPantry string, Walmart, Webstraunt Store); 53 lines linked (50 Col
+  P, 1 normalized, 2 candidate); the panel 62 → 9; walmart.com
+  200015597445090 auto-closed.
 - `qty_at_prep` (D6): one live line per Velocity order (inbound >
   inventory > newest shipment), Σ `quantity_remaining` ÷ units_per_pack
   per ASIN row; 0 once fully shipped; NULL when no Velocity line
@@ -5722,10 +5766,16 @@ grouped by Velocity ship date ("FBA19T81WC… (5)"); a Velocity row whose
 warning glyph; "received 7 of 10" per row; manual rows (home-shipped POs:
 `manual:<uuid>`, FBA ids typed as a list) are removable, Velocity rows are
 not (the next sync would recreate them). **Unmatched panel** (badge count,
-hidden when empty): only `no_order` / `po_not_found` lines with a "Link
-to PO ASIN" picker, and the exact-tie `ambiguous` case. Nothing else lands
-there by design (Maria 2026-10-17: the point of the patch is to remove
-manual reconciliation).
+hidden when empty): only `no_order` / `po_not_found` lines no rule could
+place, and the exact-tie `ambiguous` case. Nothing else lands there by
+design (Maria 2026-10-17: the point of the patch is to remove manual
+reconciliation). PO matching (2026-10-29): each line shows its ranked
+candidates as one-click "Link to <order #>" buttons (Col P, or "Δd · N
+left"), else its nearest miss; the free-text "Link to PO ASIN" picker
+stays as override; an unmapped Velocity retailer gets "Map → supplier"
+(`POST /api/supplier-aliases`, source `manual`); ticked lines → "Dismiss
+selected (N)" (`dismissed_at`; hidden, listed under "Dismissed (N)",
+never deleted). The badge and the POs page count only visible lines.
 
 **Backfill (§6), local 2026-10-17:** 57 Velocity shipments, 822 lines →
 752 placed (19 order-only), 11 `no_order`, 59 `po_not_found` (PrepBusiness
@@ -6590,6 +6640,11 @@ Settings: `tracking.velocity_street` ("805 grandy"),
   supplier — its `no_po` is never attached to another store's PO by number
   alone. Production 2026-10-22: of 44 `unknown_sender` rows, 28 cleared by
   this and 6 by `retailer_name`.
+- **Shared with shipment sync A** (2026-10-29, PO matching patch §7): the
+  order-# handling (punctuation, a free-text prefix, `_N`, a retailer's
+  `-N`, two-id AF order_ids) is `server/order-number.ts`; a platform
+  email's subject name resolves through `supplier_aliases` before the
+  name match. Production dry run: no change to the 78-row queue.
 - **Never moved by the sync:** `source = manual` or `reassigned_at` set;
   dismissed rows, `ai_disabled` placeholders and `return` rows are not
   re-matched.

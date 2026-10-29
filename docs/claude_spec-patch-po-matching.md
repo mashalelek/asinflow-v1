@@ -1,6 +1,6 @@
 # Spec patch — PO matching: Unmatched shipments cleanup + matcher rules
 
-Status: AMENDED 2026-10-29 (reconciled with the Col P matcher, commits 11055c3 / 6b2ca36 / fa46b18) — decisions taken with Maria 2026-10-22; DRAFT 2026-10-23. One-time backfill + a small set of permanent rules.
+Status: IMPLEMENTED 2026-10-29 (commits f98616b…; production backfill live 2026-10-29: 5 seeds, 53 links, panel 62 → 9). AMENDED 2026-10-29 (reconciled with the Col P matcher, commits 11055c3 / 6b2ca36 / fa46b18) — decisions taken with Maria 2026-10-22; DRAFT 2026-10-23. One-time backfill + a small set of permanent rules.
 Repo path: `docs/claude_spec-patch-po-matching.md`. Touches SPEC §11 (Velocity), §22 (PO module), §26 (PO tracking).
 
 ## 0. Reconciliation with Col P (2026-10-29)
