@@ -34,6 +34,7 @@ import { COL, t, classifyRows } from "./po-import-classify";
 import { mapSheetStatus, ACTION_ITEMS, type ActionItem } from "./po-status-map";
 import { sheetEntrySeqByKey } from "./po-entry-seq";
 import { insertLineItems } from "./line-action-items";
+import { shipsToFromPrep } from "./ships-to-backfill";
 
 // ── parsing helpers (ported verbatim from script/import-po-2026.ts) ──────────
 
@@ -724,13 +725,13 @@ export async function syncPoSheet(opts: { sheetId: string; dryRun: boolean; db?:
           // Closed is AF-only (af-owned §2.3): a new PO arrives Open (the auto-close
           // rule and the manual toggle decide from here); history arrives Closed as 'import'.
           `INSERT INTO purchase_orders (order_id, order_date, supplier, action_items, closed_at, closed_by, subtotal, tax, sh_donations, discount, refund_amount, order_total,
-             payment_method, weighted_gc_discount_pct, promo, cashback_site, cashback_pct, purchased_by, subscription, email_used, invoice_attached, notes, source, entry_seq)
-           VALUES ($1,$2,$3,$4::text[],$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22,'sheet_import',$23) RETURNING id`,
+             payment_method, weighted_gc_discount_pct, promo, cashback_site, cashback_pct, purchased_by, subscription, email_used, invoice_attached, notes, source, entry_seq, ships_to)
+           VALUES ($1,$2,$3,$4::text[],$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22,'sheet_import',$23,$24) RETURNING id`,
           [po.orderId, po.orderDate, po.supplier, [],
            po.historical ? po.orderDate : null, po.historical ? "import" : null,
            po.subtotal, po.tax, po.shDonations, po.discount, po.refundAmount, po.orderTotal,
            po.payment, po.wgc, po.promo, po.cashback, po.cashbackPct, po.purchasedBy, po.subscription, po.email, po.invoiceAttached, po.notes,
-           entrySeq.get(po.key) ?? null],
+           entrySeq.get(po.key) ?? null, shipsToFromPrep(maxSheetPrep(po))],
         );
         const poId = ins.rows[0].id;
         for (const a of po.poAsins) await insertPoAsin(client, poId, a, po, skuByAsin.get(a.asin) ?? null);
@@ -760,6 +761,12 @@ export async function syncPoSheet(opts: { sheetId: string; dryRun: boolean; db?:
     client.release();
   }
   return result;
+}
+
+/** Highest Col AS prep over the PO's ASIN rows (null when none recorded) — ships_to follows it (SPEC §26). */
+export function maxSheetPrep(po: SheetPo): number | null {
+  const v = po.poAsins.map((a) => (a.prep == null ? null : Number(a.prep))).filter((x): x is number => x != null && Number.isFinite(x));
+  return v.length ? Math.max(...v) : null;
 }
 
 async function insertPoAsin(client: Q, poId: string, a: SheetPoAsin, po: SheetPo, sku: string | null): Promise<void> {

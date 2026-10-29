@@ -212,7 +212,7 @@ describe("syncPoSheet — dry run computes the §3.9 counts and writes nothing",
     expect(sql[sql.length - 1]).toBe("RELEASE");
     const poInserts = db.writes.filter((w) => w.sql.startsWith("INSERT INTO purchase_orders"));
     expect(poInserts).toHaveLength(2);
-    expect(poInserts[0].sql).toMatch(/INSERT INTO purchase_orders \(order_id, order_date, supplier, action_items, closed_at, closed_by,[\s\S]*source, entry_seq\)/);
+    expect(poInserts[0].sql).toMatch(/INSERT INTO purchase_orders \(order_id, order_date, supplier, action_items, closed_at, closed_by,[\s\S]*source, entry_seq, ships_to\)/);
     expect(poInserts[0].sql).toMatch(/'sheet_import'/);
     expect(poInserts[0].sql).not.toMatch(/\bstatus\b/);
     // Closed is AF-only: NEWC (rows say "Closed, Canceled") arrives Open; nothing new writes closed_by = 'sheet'.
@@ -226,6 +226,17 @@ describe("syncPoSheet — dry run computes the §3.9 counts and writes nothing",
     expect(sql.filter((x) => /^(UPDATE|DELETE)/.test(x))).toEqual(["DELETE FROM po_sheet_fba_shipments"]);
   });
 ;
+
+  it("a new PO's ships_to follows its Col AS prep: any ASIN row > $0 → velocity, all $0 / blank → home (2026-10-29)", async () => {
+    const db = fakeDb(state);
+    await syncPoSheet({ sheetId: "s", dryRun: false, db, read: read([
+      row({ orderId: "NEWHOME", asin: "B0HOME0001", prep: "$0.00" }),
+      row({ orderId: "NEWVEL", asin: "B0VEL00001", prep: "$1.00" }),
+      row({ orderId: "NEWBLANK", asin: "B0BLANK001", prep: "" }),
+    ]) });
+    const shipsTo = Object.fromEntries(db.writes.filter((w) => w.sql.startsWith("INSERT INTO purchase_orders")).map((w) => [w.params?.[0], w.params?.[23]]));
+    expect(shipsTo).toEqual({ NEWHOME: "home", NEWVEL: "velocity", NEWBLANK: "home" });
+  });
 
   it("Col P: one multi-row insert per run (column arrays), however many entries", async () => {
     const withP = cells.map((c, i) => { const x = [...c]; if (i < 2) x[COL.fbaShipmentIds] = i === 0 ? "FBA19H4BCJP4 (4), FBA19H4BK2W6 (4) [note]" : "FBA19H9RS9TJ"; return x; });
