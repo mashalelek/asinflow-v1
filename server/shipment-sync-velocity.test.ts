@@ -32,7 +32,7 @@ const AF: AfAsinRow[] = [
   { id: "a-old", po_id: "p-old", asin: "B0OLDASIN1", units_per_pack: 1, qty_at_prep: "3.00", order_id: "OLD1", supplier: "x.com", order_date: "2026-06-01" }, // no Velocity line any more → NULL
 ];
 
-function fakeDb(state: { shipments?: any[]; rows?: any[]; unmatched?: any[]; identity?: any[]; pins?: any[] }) {
+function fakeDb(state: { shipments?: any[]; rows?: any[]; unmatched?: any[]; identity?: any[]; pins?: any[]; colP?: any[]; fbaIds?: any[] }) {
   const writes: Array<{ sql: string; params?: any[] }> = [];
   const query = async (sql: string, params?: any[]) => {
     const s = sql.trim();
@@ -42,6 +42,8 @@ function fakeDb(state: { shipments?: any[]; rows?: any[]; unmatched?: any[]; ide
     if (s.startsWith("SELECT id, velocity_shipment_id, velocity_order_id, reason")) return { rows: state.unmatched ?? [], rowCount: 0 };
     if (s.startsWith("SELECT velocity_order_id, child_order_numbers FROM velocity_bundle_identity")) return { rows: state.identity ?? [], rowCount: 0 };
     if (s.startsWith("SELECT s.id, s.velocity_shipment_id, s.velocity_order_number, s.qty_shipped")) return { rows: state.pins ?? [], rowCount: 0 };
+    if (s.startsWith("SELECT DISTINCT c.fba_shipment_id")) return { rows: state.colP ?? [], rowCount: 0 };
+    if (s.startsWith("SELECT id, sc_shipment_ids FROM velocity_shipments")) return { rows: state.fbaIds ?? [], rowCount: 0 };
     writes.push({ sql: s, params }); return { rows: [], rowCount: 1 };
   };
   return { query, connect: async () => ({ query, release: () => { writes.push({ sql: "RELEASE" }); } }), writes };
