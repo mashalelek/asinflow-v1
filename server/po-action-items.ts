@@ -3,7 +3,7 @@
 // ASIN row shows the union of its lines; the PO the union of all its lines.
 // Setting an item on an ASIN writes it to ALL its lines; removing it removes
 // it from all its lines; a product edit touches that line only. Pure.
-import { DISPLAY_ACTION_ITEMS, REVIEW_VELOCITY } from "./po-status-map";
+import { AUTO_ACTION_ITEMS, DISPLAY_ACTION_ITEMS, PACK_SIZE_MISMATCH, PACK_SIZE_MISSING, REVIEW_VELOCITY } from "./po-status-map";
 
 /** Display-ordered union of several action-item arrays. */
 export function unionActionItems(lists: ReadonlyArray<readonly string[] | null | undefined>): string[] {
@@ -22,7 +22,7 @@ export function unionActionItems(lists: ReadonlyArray<readonly string[] | null |
 export function asinWriteThrough(lines: Array<{ id: string; action_items: readonly string[] | null }>, desired: readonly string[]): Map<string, string[]> {
   const current = new Set(unionActionItems(lines.map((l) => l.action_items)));
   // Auto items are derived, never written to lines.
-  const want = new Set(desired.filter((x) => x !== REVIEW_VELOCITY));
+  const want = new Set(desired.filter((x) => !(AUTO_ACTION_ITEMS as readonly string[]).includes(x)));
   const added = Array.from(want).filter((x) => !current.has(x));
   const removed = new Set(Array.from(current).filter((x) => !want.has(x)));
   const out = new Map<string, string[]>();
@@ -34,8 +34,16 @@ export function asinWriteThrough(lines: Array<{ id: string; action_items: readon
   return out;
 }
 
-/** SQL: the union of line action items for an ASIN row (alias pa) / a PO (alias p). Unordered; order with unionActionItems. */
-export const ASIN_ACTION_ITEMS_SQL = `ARRAY(SELECT DISTINCT x FROM po_line_items l, unnest(l.action_items) x WHERE l.po_asin_id = pa.id)`;
+/** Pack-size conditions on an ASIN row, alias `a` (see PACK_SIZE_MISSING / PACK_SIZE_MISMATCH). */
+const packMissing = (a: string) => `${a}.sold_as IS NULL`;
+const packMismatch = (a: string) => `(${a}.sold_as IS NOT NULL AND ${a}.sold_as <> 'bundle' AND ${a}.velocity_units_per_pack IS NOT NULL AND ${a}.velocity_units_per_pack <> COALESCE(${a}.units_per_pack, 1))`;
+export const PACK_SIZE_MISSING_EXISTS_SQL = `EXISTS (SELECT 1 FROM po_asins pk WHERE pk.po_id = p.id AND ${packMissing("pk")})`;
+export const PACK_SIZE_MISMATCH_EXISTS_SQL = `EXISTS (SELECT 1 FROM po_asins pk WHERE pk.po_id = p.id AND ${packMismatch("pk")})`;
+
+/** SQL: the union of line action items for an ASIN row (alias pa) / a PO (alias p), plus the derived ones. Unordered; order with unionActionItems. */
+export const ASIN_ACTION_ITEMS_SQL = `ARRAY(SELECT DISTINCT x FROM po_line_items l, unnest(l.action_items) x WHERE l.po_asin_id = pa.id
+  UNION SELECT '${PACK_SIZE_MISSING}' WHERE ${packMissing("pa")}
+  UNION SELECT '${PACK_SIZE_MISMATCH}' WHERE ${packMismatch("pa")})`;
 /**
  * "Review Velocity" (SPEC §26): while a tracking row of the PO has a review
  * reason and was not cleared by hand. Rides the PO union, so the POs column,
@@ -43,7 +51,9 @@ export const ASIN_ACTION_ITEMS_SQL = `ARRAY(SELECT DISTINCT x FROM po_line_items
  */
 export const REVIEW_VELOCITY_EXISTS_SQL = `EXISTS (SELECT 1 FROM po_tracking t WHERE t.po_id = p.id AND t.review_reason IS NOT NULL AND t.suppressed_at IS NULL)`;
 export const PO_ACTION_ITEMS_SQL = `ARRAY(SELECT DISTINCT x FROM po_line_items l, unnest(l.action_items) x WHERE l.po_id = p.id
-  UNION SELECT '${REVIEW_VELOCITY}' WHERE ${REVIEW_VELOCITY_EXISTS_SQL})`;
+  UNION SELECT '${REVIEW_VELOCITY}' WHERE ${REVIEW_VELOCITY_EXISTS_SQL}
+  UNION SELECT '${PACK_SIZE_MISSING}' WHERE ${PACK_SIZE_MISSING_EXISTS_SQL}
+  UNION SELECT '${PACK_SIZE_MISMATCH}' WHERE ${PACK_SIZE_MISMATCH_EXISTS_SQL})`;
 /** The open review reasons of a PO (alias p), for the Action Items tooltip. */
 export const REVIEW_VELOCITY_REASONS_SQL = `ARRAY(SELECT DISTINCT r FROM po_tracking t, unnest(string_to_array(t.review_reason, '; ')) r
   WHERE t.po_id = p.id AND t.review_reason IS NOT NULL AND t.suppressed_at IS NULL)`;

@@ -27,7 +27,16 @@ export type ActionItem = (typeof ACTION_ITEMS)[number];
  * not been cleared by hand. Shown after the manual items.
  */
 export const REVIEW_VELOCITY = "Review Velocity";
-export const AUTO_ACTION_ITEMS = [REVIEW_VELOCITY] as const;
+/**
+ * Pack size (2026-10-29), derived from po_asins like Review Velocity is from
+ * po_tracking: "Pack size missing" while sold_as is NULL (not filled in on the
+ * sheet, and Velocity could not fill it); "Pack size mismatch" while AF's
+ * units_per_pack disagrees with Velocity's (po_asins.velocity_units_per_pack,
+ * written by shipment sync A). Both clear as soon as the row is fixed.
+ */
+export const PACK_SIZE_MISSING = "Pack size missing";
+export const PACK_SIZE_MISMATCH = "Pack size mismatch";
+export const AUTO_ACTION_ITEMS = [REVIEW_VELOCITY, PACK_SIZE_MISSING, PACK_SIZE_MISMATCH] as const;
 export const DISPLAY_ACTION_ITEMS: readonly string[] = [...ACTION_ITEMS, ...AUTO_ACTION_ITEMS];
 
 export function isActionItem(s: string): s is ActionItem {

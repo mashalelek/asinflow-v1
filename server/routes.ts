@@ -11,8 +11,8 @@ import { runAuraSyncChain } from "./aura-sync-chain";
 import { probeGatingForAsins } from "./gating-probe";
 import { loadPoAsinRows, normalizeLineQty } from "./po-queries";
 import { evaluateAutoClose, setPoClosedManually, parseQtyInput, MANUAL_QTY_COLUMNS, type ManualQtyColumn } from "./po-close";
-import { ACTION_ITEMS, DISPLAY_ACTION_ITEMS, REVIEW_VELOCITY, normalizeActionItems } from "./po-status-map";
-import { asinWriteThrough, unionActionItems, PO_ACTION_ITEMS_SQL, REVIEW_VELOCITY_EXISTS_SQL, REVIEW_VELOCITY_REASONS_SQL } from "./po-action-items";
+import { ACTION_ITEMS, DISPLAY_ACTION_ITEMS, REVIEW_VELOCITY, PACK_SIZE_MISSING, PACK_SIZE_MISMATCH, normalizeActionItems } from "./po-status-map";
+import { asinWriteThrough, unionActionItems, PO_ACTION_ITEMS_SQL, REVIEW_VELOCITY_EXISTS_SQL, REVIEW_VELOCITY_REASONS_SQL, PACK_SIZE_MISSING_EXISTS_SQL, PACK_SIZE_MISMATCH_EXISTS_SQL } from "./po-action-items";
 import { editPoHeader, editLine, addLine, removeLine, editAsinRow, loadPoHistory, logEdits, changedFields, asLogText, EditError, type EditResult } from "./po-edit";
 import { createPoFromForm, lookupAsins } from "./po-create";
 import { loadPoGuards, deletePo, cancelPo, assertAsinRowCancelable, reassignShipment } from "./po-guards";
@@ -4287,6 +4287,9 @@ export async function registerRoutes(
       const any: string[] = [];
       if (items.length > 0) { params.push(items); any.push(`EXISTS (SELECT 1 FROM po_line_items l WHERE l.po_id = p.id AND l.action_items && $${params.length}::text[])`); }
       if (review) any.push(REVIEW_VELOCITY_EXISTS_SQL);
+      // The pack-size items are derived from po_asins (2026-10-29).
+      if (wanted.includes(PACK_SIZE_MISSING)) any.push(PACK_SIZE_MISSING_EXISTS_SQL);
+      if (wanted.includes(PACK_SIZE_MISMATCH)) any.push(PACK_SIZE_MISMATCH_EXISTS_SQL);
       if (any.length > 0) conds.push(`(${any.join(" OR ")})`);
     }
     if (supplier) {
