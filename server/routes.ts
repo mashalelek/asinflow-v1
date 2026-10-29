@@ -12,6 +12,7 @@ import { probeGatingForAsins } from "./gating-probe";
 import { loadPoAsinRows, normalizeLineQty } from "./po-queries";
 import { loadAliases, resolveRetailer, setAlias } from "./supplier-aliases";
 import { linkUnmatchedLine } from "./shipment-link";
+import { likeContains, stripShipmentSuffix } from "./order-number";
 import { clearExtraUnits } from "./extra-units";
 import { velocityIneligible, ineligibleText } from "./shipment-match";
 import { readVelocityStartDate } from "./ships-to-backfill";
@@ -4790,14 +4791,16 @@ export async function registerRoutes(
     const q = typeof req.query.q === "string" ? req.query.q.trim() : "";
     if (q.length < 2) { res.json({ rows: [] }); return; }
     try {
+      // The text matches literally (_ and % escaped); a Velocity _N / -N
+      // shipment suffix also finds the base order (CAR118805142_1 → CAR118805142).
       // Velocity-eligible POs first; a Home or pre-start PO is still listed
       // (free-text override) but carries the reason as a warning (2026-10-29).
       const start = await readVelocityStartDate(query);
       const rows = (await query(
         `SELECT pa.id, pa.asin, pa.asin_name, pa.qty, pa.units_per_pack, p.order_id, p.supplier, p.order_date::text AS order_date, p.ships_to
            FROM po_asins pa JOIN purchase_orders p ON p.id = pa.po_id
-          WHERE p.order_id ILIKE $1 OR pa.asin ILIKE $1 OR p.supplier ILIKE $1
-          ORDER BY (p.ships_to = 'home' OR ($2::date IS NOT NULL AND p.order_date < $2::date)), p.order_date DESC, p.order_id, pa.asin, pa.id LIMIT 20`, [`%${q}%`, start],
+          WHERE p.order_id ILIKE $1 ESCAPE '\\' OR pa.asin ILIKE $1 ESCAPE '\\' OR p.supplier ILIKE $1 ESCAPE '\\' OR p.order_id ILIKE $3 ESCAPE '\\'
+          ORDER BY (p.ships_to = 'home' OR ($2::date IS NOT NULL AND p.order_date < $2::date)), p.order_date DESC, p.order_id, pa.asin, pa.id LIMIT 20`, [likeContains(q), start, likeContains(stripShipmentSuffix(q))],
       )).rows;
       for (const r of rows) { const why = velocityIneligible(r, start); r.velocity_warning = why ? ineligibleText(why, start) : null; }
       res.json({ rows });

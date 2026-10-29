@@ -39,3 +39,6 @@ export const digitForms = (s: string): string[] => {
   const t = stripOrderPrefix(s).trim();
   return Array.from(new Set([t, t.replace(/[-_]\d{1,2}$/, "")].map((x) => x.replace(/\D/g, "")).filter((d) => d.length >= 5)));
 };
+
+/** ILIKE "contains" pattern with \, % and _ escaped (use with ESCAPE '\'): "CAR118805142_1" matches literally. */
+export const likeContains = (s: string): string => `%${s.replace(/[\\%_]/g, (c) => `\\${c}`)}%`;

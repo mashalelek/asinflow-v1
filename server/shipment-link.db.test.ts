@@ -3,6 +3,7 @@ import pg from "pg";
 import { linkUnmatchedLine } from "./shipment-link";
 import { clearExtraUnits } from "./extra-units";
 import { extraUnits } from "./po-action-items";
+import { likeContains, stripShipmentSuffix } from "./order-number";
 
 // "Link to PO ASIN" against the REAL schema (2026-10-29): the route selected
 // v.fba_shipment_ids, which velocity_shipments never had, and every link
@@ -112,5 +113,18 @@ describe("Extra units shipped on the real schema (rolled back, 2026-10-29)", () 
       expect((await clearExtraUnits(q as any, pa, "x", null)).status).toBe(409);
     } finally { await q("ROLLBACK"); }
     expect((await client.query(`SELECT count(*)::int AS n FROM purchase_orders WHERE order_id = 'zz-extra-test'`)).rows[0].n).toBe(0);
+  });
+});
+
+describe("picker search pattern on real Postgres (2026-10-29)", () => {
+  it("CAR118805142_1 matches literally (_ is not a wildcard); its base finds CAR118805142", async (ctx) => {
+    if (!client) return ctx.skip();
+    const hit = async (text: string, q: string) => (await client!.query(`SELECT $1::text ILIKE $2 ESCAPE '\\' AS m`, [text, q])).rows[0].m;
+    expect(likeContains("CAR118805142_1")).toBe("%CAR118805142\\_1%");
+    expect(await hit("CAR118805142_1", likeContains("CAR118805142_1"))).toBe(true);
+    expect(await hit("CAR118805142X1", likeContains("CAR118805142_1"))).toBe(false);
+    expect(await hit("50% off", likeContains("50%"))).toBe(true);
+    expect(await hit("500 off", likeContains("50%"))).toBe(false);
+    expect(await hit("CAR118805142", likeContains(stripShipmentSuffix("CAR118805142_1")))).toBe(true);
   });
 });
