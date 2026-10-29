@@ -133,6 +133,8 @@ export interface SheetRow {
   soldAs: string | null;       // AX — verbatim
   unitsPerPack: string | null; // AY — verbatim
   quantity: string | null;     // AZ — verbatim
+  /** AF rows only (loadAfPoRows): the PO's ships_to. A Home PO is never pre-ticked for Velocity (SPEC §11). */
+  shipsTo?: "home" | "velocity";
 }
 
 // Trim to string, empty → null. Velocity fields pass through verbatim otherwise.

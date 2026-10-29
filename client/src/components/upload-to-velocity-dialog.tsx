@@ -64,6 +64,7 @@ interface ReviewData {
   deleteCandidates: Array<{ order_id: string; order_number: string; asin: string; item_name: string | null; sheet_status: string }>;
   unchanged: number; closedInVelocity: number; unmatchedVelocity: number;
   selfPrepExcluded: number; skips: SkipRow[];
+  homeCreates?: VelocityRecord[]; homeBundleCreates?: VelocityBundleRecord[]; homeSkipped?: number;
 }
 type ExecResult = { action: string; order_number?: string; order_id?: string; asin?: string; outcome: string; error?: string };
 
@@ -157,6 +158,8 @@ export function UploadToVelocityDialog({ open, onOpenChange }: { open: boolean; 
     }
   }, [bundleReleased, data]);
   const [countsOpen, setCountsOpen] = useState(false);
+  // Home POs (ships_to = 'home'): listed apart, collapsed and unticked (SPEC §11).
+  const [homeOpen, setHomeOpen] = useState(false);
   const [confirming, setConfirming] = useState(false);
   const [sending, setSending] = useState(false);
   const [results, setResults] = useState<ExecResult[] | null>(null);
@@ -188,8 +191,12 @@ export function UploadToVelocityDialog({ open, onOpenChange }: { open: boolean; 
   const allCreates = useMemo(() => [...(data?.creates ?? []), ...promoted], [data, promoted]);
   const actionableUpdates = useMemo(() => (data?.updates ?? []).filter((u) => u.actionable), [data]);
   const flagOnlyUpdates = useMemo(() => (data?.updates ?? []).filter((u) => !u.actionable), [data]);
+  const homeCreates = data?.homeCreates ?? [];
+  const homeBundleCreates = data?.homeBundleCreates ?? [];
   const nCreates = allCreates.filter((r) => selCreates.has(recKey(r))).length
-    + (data?.bundleCreates ?? []).filter((b) => selCreates.has(bundleKey(b))).length;
+    + (data?.bundleCreates ?? []).filter((b) => selCreates.has(bundleKey(b))).length
+    + homeCreates.filter((r) => selCreates.has(recKey(r))).length
+    + homeBundleCreates.filter((b) => selCreates.has(bundleKey(b))).length;
   const nUpdates = actionableUpdates.filter((u) => selUpdates.has(u.order_id)).length;
   const nTotal = nCreates + nUpdates;
 
@@ -309,8 +316,9 @@ export function UploadToVelocityDialog({ open, onOpenChange }: { open: boolean; 
     if (!SEND_ENABLED) return;
     setSending(true);
     try {
-      const creates = allCreates.filter((r) => selCreates.has(recKey(r)));
-      const bundles = (data?.bundleCreates ?? []).filter((b) => selCreates.has(bundleKey(b)));
+      // A Home PO row goes only when ticked by hand (never pre-ticked).
+      const creates = [...allCreates, ...homeCreates].filter((r) => selCreates.has(recKey(r)));
+      const bundles = [...(data?.bundleCreates ?? []), ...homeBundleCreates].filter((b) => selCreates.has(bundleKey(b)));
       const updates = actionableUpdates.filter((u) => selUpdates.has(u.order_id));
       const body = await fetchLongSync("/api/velocity/execute", { creates, updates, bundles });
       setResults(body.results as ExecResult[]);
@@ -474,6 +482,64 @@ export function UploadToVelocityDialog({ open, onOpenChange }: { open: boolean; 
                   </div>
                 )}
               </section>
+
+              {/* a2. HOME POs — ships_to = 'home': self-prep, not uploaded unless ticked by hand */}
+              {(homeCreates.length > 0 || homeBundleCreates.length > 0) && (
+                <section data-testid="velocity-home-group">
+                  <button className="flex items-center gap-1 text-sm font-semibold" onClick={() => setHomeOpen((v) => !v)} data-testid="button-velocity-home-toggle">
+                    {homeOpen ? <ChevronDown className="h-3.5 w-3.5" /> : <ChevronRight className="h-3.5 w-3.5" />}
+                    Self-prep — not uploaded <span className="text-muted-foreground font-normal">({homeCreates.length + homeBundleCreates.length})</span>
+                  </button>
+                  {homeOpen && (
+                    <div className="mt-2 pl-5">
+                      <div className="text-xs text-muted-foreground mb-2">
+                        Ships to Home on the PO — prepped in-house, so these are skipped. Tick one only if it really goes to Velocity (and fix Ships to on the PO).
+                        {(data.homeSkipped ?? 0) > 0 ? ` ${data.homeSkipped} more could not be built (no SKU / pack math).` : ""}
+                      </div>
+                      <table className="w-full text-sm">
+                        <tbody>
+                          {homeCreates.map((r) => {
+                            const key = recKey(r);
+                            return (
+                              <tr key={key} className="border-b border-border/50 text-muted-foreground">
+                                <td className="py-1.5 pr-2 w-8">
+                                  <Checkbox checked={selCreates.has(key)} onCheckedChange={() => toggleCreate(key)} disabled={!!results} data-testid={`checkbox-velocity-home-${r.order_number}-${r.asin}`} />
+                                </td>
+                                <td className="py-1.5 pr-3 whitespace-nowrap">{r.date}</td>
+                                <td className="py-1.5 pr-3 max-w-[140px] truncate">{r.retailer}</td>
+                                <td className="py-1.5 pr-3 whitespace-nowrap">{r.order_number}</td>
+                                <td className="py-1.5 pr-3 max-w-[280px] truncate" title={r.item_name}>{r.item_name}</td>
+                                <td className="py-1.5 pr-3 text-right">{r.quantity}</td>
+                                <td className="py-1.5 pr-3 font-mono text-xs">{r.asin}</td>
+                                <td className="py-1.5 pr-3 text-xs">Ships to Home</td>
+                                <td className="py-1.5">{resultBadge(resultFor("create", key))}</td>
+                              </tr>
+                            );
+                          })}
+                          {homeBundleCreates.map((b) => {
+                            const key = bundleKey(b);
+                            return (
+                              <tr key={key} className="border-b border-border/50 text-muted-foreground">
+                                <td className="py-1.5 pr-2 w-8">
+                                  <Checkbox checked={selCreates.has(key)} onCheckedChange={() => toggleCreate(key)} disabled={!!results} />
+                                </td>
+                                <td className="py-1.5 pr-3 whitespace-nowrap">{b.date}</td>
+                                <td className="py-1.5 pr-3 max-w-[140px] truncate">{b.bundle_items[0]?.retailer}</td>
+                                <td className="py-1.5 pr-3 whitespace-nowrap">{b.orderNumbers[0]}</td>
+                                <td className="py-1.5 pr-3 max-w-[280px] truncate" title={b.item_name}>{b.item_name}</td>
+                                <td className="py-1.5 pr-3 text-right whitespace-nowrap">{b.quantity} units · bundle ×{b.units_per_pack}</td>
+                                <td className="py-1.5 pr-3 font-mono text-xs">{b.asin}</td>
+                                <td className="py-1.5 pr-3 text-xs">Ships to Home</td>
+                                <td className="py-1.5">{resultBadge(resultFor("create_bundle", key))}</td>
+                              </tr>
+                            );
+                          })}
+                        </tbody>
+                      </table>
+                    </div>
+                  )}
+                </section>
+              )}
 
               {/* b. QTY MISMATCHES */}
               <section>
@@ -716,7 +782,7 @@ export function UploadToVelocityDialog({ open, onOpenChange }: { open: boolean; 
                     <div><span className="font-medium">Unchanged</span> — matched orders where sheet and Velocity agree; nothing to do.</div>
                     <div><span className="font-medium">Shipped</span> — matched orders already shipped/received with no quantity mismatch; not editable.</div>
                     <div><span className="font-medium">Unmatched</span> — orders in Velocity with no sheet row (order # + ASIN); never touched.</div>
-                    {data.selfPrepExcluded > 0 && <div><span className="font-medium">Self-prep</span> — prep cost 0 on the sheet; these never go to Velocity.</div>}
+                    {data.selfPrepExcluded > 0 && <div><span className="font-medium">Self-prep</span> — prep cost 0 on a Velocity PO's ASIN row; these never go to Velocity. Home POs are listed above under "Self-prep — not uploaded".</div>}
                   </div>
                 )}
               </section>

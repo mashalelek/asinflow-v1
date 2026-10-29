@@ -92,6 +92,12 @@ export interface VelocityBuildResult {
   bundleFlags: BundleFlag[];
   selfPrepExcluded: number; // Col AS <= 0 / empty — intentional, not a skip
   skips: VelocitySkip[];
+  // Home POs (ships_to = 'home', 2026-10-29): built through the same guards
+  // but kept apart — never pre-ticked, listed as "Self-prep — not uploaded"
+  // so a deliberate manual tick is still possible. Their skips are counted.
+  homeRecords: VelocityRecord[];
+  homeBundles: VelocityBundleRecord[];
+  homeSkipped: number;
   // Order-date floor (SPEC §11): creation clamp applied inside the builder so
   // every delivery path (CSV export, API upload) inherits it.
   requestedFrom: Date;
@@ -169,7 +175,7 @@ export async function buildVelocityRecords(
   const clamped = effectiveFrom.getTime() > requestedFrom.getTime();
   const rangeBeforeFloor = to.getTime() < floor.getTime();
   if (rangeBeforeFloor) {
-    return { records: [], bundles: [], bundleFlags: [], selfPrepExcluded: 0, skips: [], requestedFrom, effectiveFrom, clamped, rangeBeforeFloor };
+    return { records: [], bundles: [], bundleFlags: [], selfPrepExcluded: 0, skips: [], homeRecords: [], homeBundles: [], homeSkipped: 0, requestedFrom, effectiveFrom, clamped, rangeBeforeFloor };
   }
 
   // Source = the AF PO tables in the sheet's row shape (po-af-owned §2.4,
@@ -178,8 +184,10 @@ export async function buildVelocityRecords(
   const skips: VelocitySkip[] = [];
   let selfPrepExcluded = 0;
 
-  // Selection: date-range (floor-clamped) -> not-canceled -> prep > 0.
+  // Selection: date-range (floor-clamped) -> not-canceled -> Home PO (kept
+  // apart, any prep) -> prep > 0.
   const selected = [];
+  const homeKeys = new Set<string>();
   const fromMs = effectiveFrom.getTime(), toMs = to.getTime();
   for (const row of rows) {
     const dt = parseMDY(row.orderDate);
@@ -191,6 +199,7 @@ export async function buildVelocityRecords(
     if (ms < fromMs || ms > toMs) continue; // out of range — silent, expected
     const status = (row.status ?? "").toLowerCase();
     if (status.includes("canceled")) continue; // canceled — silent, matches COGS sync
+    if (row.shipsTo === "home") { homeKeys.add(homeKey(row.orderNumber, row.retailer)); selected.push(row); continue; }
     const prep = row.prepCost == null ? 0 : row.prepCost; // empty AS on a real row = 0 (§3)
     if (!(prep > 0)) { selfPrepExcluded++; continue; } // self-prep — intentional, not a skip
     selected.push(row);
@@ -333,5 +342,21 @@ export async function buildVelocityRecords(
     });
   }
 
-  return { records, bundles, bundleFlags, selfPrepExcluded, skips, requestedFrom, effectiveFrom, clamped, rangeBeforeFloor };
+  // Home POs out of the upload: records, bundles (and their AY/AZ flags), skips.
+  const home = (orderNumber: string | null | undefined, retailer: string | null | undefined) => homeKeys.has(homeKey(orderNumber, retailer));
+  const homeRecords = records.filter((r) => home(r.order_number, r.retailer));
+  const homeBundles = bundles.filter((b) => home(b.orderNumbers[0], b.bundle_items[0]?.retailer));
+  const homeBundleIds = new Set(homeBundles.map((b) => `${(b.orderNumbers[0] ?? "").trim()}\u0000${b.asin}`));
+  const outSkips = skips.filter((s) => !home(s.orderNumber, s.row?.retailer));
+  return {
+    records: records.filter((r) => !homeRecords.includes(r)),
+    bundles: bundles.filter((b) => !homeBundles.includes(b)),
+    bundleFlags: bundleFlags.filter((f) => !homeBundleIds.has(`${f.orderNumber}\u0000${f.asin}`)),
+    selfPrepExcluded, skips: outSkips,
+    homeRecords, homeBundles, homeSkipped: skips.length - outSkips.length,
+    requestedFrom, effectiveFrom, clamped, rangeBeforeFloor,
+  };
 }
+
+const homeKey = (orderNumber: string | null | undefined, retailer: string | null | undefined) =>
+  `${(orderNumber ?? "").trim()}\u0000${(retailer ?? "").trim().toLowerCase()}`;

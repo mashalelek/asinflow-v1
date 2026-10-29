@@ -79,7 +79,7 @@ export function lineAsinQty(asinQty: number, ordered: number | null, yieldT: num
  */
 export async function loadAfPoRows(query: QueryLike): Promise<{ rows: SheetRow[]; rawRowsRead: number; blankAsinRows: number }> {
   const rs = (await query(
-    `SELECT p.order_id, p.order_date, p.supplier, p.closed_at IS NOT NULL AS closed,
+    `SELECT p.order_id, p.order_date, p.supplier, p.closed_at IS NOT NULL AS closed, p.ships_to,
             pa.asin, pa.asin_name, pa.qty AS asin_qty, pa.cost_per_unit, pa.prep_cost, pa.sold_as, pa.units_per_pack, pa.unique_products,
             l.position, l.product_name, l.qty_ordered, l.asin_qty_per_product, ${lineCanceled} AS canceled,
             (SELECT COUNT(*)::int FROM po_line_items l2 WHERE l2.po_asin_id = pa.id) AS line_count
@@ -115,6 +115,7 @@ export async function loadAfPoRows(query: QueryLike): Promise<{ rows: SheetRow[]
       unitsPerPack: String(upp),
       // AZ: total units — sets × units per bundle for a bundle, packs × units/pack otherwise.
       quantity: String(Math.round((bundle ? asinQty : lineQty) * upp * 100) / 100),
+      shipsTo: r.ships_to === "home" ? "home" : "velocity",
     };
   });
   return { rows, rawRowsRead: rows.length, blankAsinRows: 0 };

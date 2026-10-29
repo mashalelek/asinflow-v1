@@ -76,6 +76,12 @@ export interface VelocityPlan {
   unmatchedVelocity: number;  // Velocity orders with no sheet row — counted, never touched
   selfPrepExcluded: number;
   skips: VelocitySkip[];
+  // Home POs (ships_to = 'home', 2026-10-29): what a create WOULD send for
+  // them, minus anything Velocity already has. The dialog lists these under
+  // "Self-prep — not uploaded", unticked; only a deliberate tick sends one.
+  homeCreates: VelocityRecord[];
+  homeBundleCreates: VelocityBundleRecord[];
+  homeSkipped: number;
   // §11 Part B.3 (2026-09-21): identity recording the plan WOULD perform.
   // Computed here, written only by execute — the plan is a preview.
   identityWouldRecord: BundleIdentityRow[];
@@ -354,6 +360,9 @@ export async function buildVelocityPlan(
     unmatchedVelocity,
     selfPrepExcluded: build.selfPrepExcluded,
     skips: build.skips,
+    homeCreates: build.homeRecords.filter((r) => !matchedVelocityByKey.has(normKey(r.order_number, r.asin))),
+    homeBundleCreates: build.homeBundles.filter((b) => !b.orderNumbers.some((n) => matchedVelocityByKey.has(normKey(n, b.asin)))),
+    homeSkipped: build.homeSkipped,
     identityWouldRecord: wouldRecordRows,
     // Part C.3/D: unplaced parents, incl. those holding nothing (info only).
     unplacedBundles: unplacedInfo,
