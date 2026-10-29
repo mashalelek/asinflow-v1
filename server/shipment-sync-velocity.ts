@@ -9,6 +9,16 @@
 // units ÷ po_asins.units_per_pack (AF's own pack size, D-probe: Equal
 // Exchange 60 ÷ 6 = 10), rounded to 2 dp (fractions are legal, §3.4).
 //
+// Pack size (2026-10-29): the divisor is AF's units_per_pack, never Velocity's,
+// and nothing is capped at Ordered. Velocity's own pack size for the row
+// (1 for individual; bundles not compared) is recorded in
+// po_asins.velocity_units_per_pack, so a disagreement surfaces as the derived
+// "Pack size mismatch" action item instead of a silent ÷. A row whose
+// sold_as is NULL (not filled in on the sheet) takes sold_as /
+// units_per_pack from Velocity when every Velocity line for it agrees —
+// logged in po_edit_log (user NULL) — and otherwise stays NULL, which is
+// the derived "Pack size missing" item.
+//
 // Not written here (component B owns them): fba_shipment_ids, sc_match,
 // qty_received. Not written at all: the manual quantity columns.
 //
@@ -17,6 +27,7 @@
 // computes everything and writes nothing.
 import pool from "./db";
 import type { QueryLike } from "./scheduler/types";
+import { logEdits } from "./po-edit";
 import {
   listAllShipments, getShipmentDetail, fetchAllInboundOrders, fetchAllInventoryOrders,
   type VelocityInboundOrder, type VelocityShipmentRow,
@@ -56,6 +67,11 @@ export interface VelocitySyncCounts {
   atPrepSet: number;            // po_asins.qty_at_prep changed to a number
   atPrepCleared: number;        // changed to NULL (no Velocity line references the key any more)
   atPrepUnchanged: number;
+  packVelocitySet: number;      // po_asins.velocity_units_per_pack changed
+  packFilled: number;           // sold_as NULL → filled from Velocity
+  packMismatch: number;         // rows whose AF pack size disagrees with Velocity's (flagged, still ÷ AF's)
+  packMissing: number;          // rows still sold_as NULL after the fill (flagged)
+  packConflicting: number;      // Velocity lines for one row disagree with each other
   posTouched: number;
 }
 
@@ -65,6 +81,8 @@ export interface VelocitySyncResult {
   counts: VelocitySyncCounts;
   /** First 10 line placements, human-readable (§6 dry-run contract). */
   samples: string[];
+  /** First 10 pack-size fills / mismatches, human-readable. */
+  packSamples: string[];
   unmatched: Array<{ shipment: string; shippedAt: string | null; orderId: string; orderNumber: string; retailer: string; asin: string; units: number; reason: "no_order" | "po_not_found"; note?: string }>;
   touchedPoIds: string[];
 }
@@ -85,7 +103,23 @@ export function etDate(ts: string | Date | null | undefined): string | null {
   return `${p.year}-${p.month}-${p.day}`;
 }
 
-export interface AfAsinRow { id: string; po_id: string; asin: string; units_per_pack: number; qty_at_prep: string | null; order_id: string; supplier: string; order_date: string }
+export interface AfAsinRow {
+  id: string; po_id: string; asin: string; units_per_pack: number | null; qty_at_prep: string | null; order_id: string; supplier: string; order_date: string;
+  /** null = not filled in (blank on the sheet); undefined is treated as known. */
+  sold_as?: string | null;
+  velocity_units_per_pack?: number | null;
+}
+
+/** Velocity's pack size for one line: individual → 1, multi-pack → its units_per_pack; bundles and unknowns → null (not compared). */
+export function velocityPack(line: { sold_as?: unknown; units_per_pack?: unknown }): { soldAs: "individual" | "multi-pack"; upp: number } | null {
+  const sold = String(line.sold_as ?? "").trim().toLowerCase();
+  if (sold === "individual") return { soldAs: "individual", upp: 1 };
+  if (sold === "multi-pack") {
+    const n = Number(line.units_per_pack);
+    return Number.isInteger(n) && n >= 1 ? { soldAs: "multi-pack", upp: n } : null;
+  }
+  return null;
+}
 const k3 = (supplier: string, orderId: string, asin: string) => `${supplier.trim().toLowerCase()}\u0000${orderId.trim()}\u0000${asin.trim().toUpperCase()}`;
 const k2 = (orderId: string, asin: string) => `${orderId.trim()}\u0000${asin.trim().toUpperCase()}`;
 
@@ -153,7 +187,8 @@ export async function syncVelocityShipments(opts: { dryRun: boolean; deps?: Velo
 
   // ── AF state ───────────────────────────────────────────────────────────────
   const afRows = (await db.query(
-    `SELECT pa.id, pa.po_id, pa.asin, pa.units_per_pack, pa.qty_at_prep, p.order_id, p.supplier, p.order_date::text AS order_date
+    `SELECT pa.id, pa.po_id, pa.asin, pa.units_per_pack, pa.qty_at_prep, p.order_id, p.supplier, p.order_date::text AS order_date,
+            pa.sold_as, pa.velocity_units_per_pack
        FROM po_asins pa JOIN purchase_orders p ON p.id = pa.po_id`,
   )).rows as AfAsinRow[];
   const idx = buildAfIndex(afRows);
@@ -196,11 +231,63 @@ export async function syncVelocityShipments(opts: { dryRun: boolean; deps?: Velo
   // ── Resolve every shipment line ────────────────────────────────────────────
   const counts: VelocitySyncCounts = {
     shipments: shipments.length, shipmentsFetched: fetchedIds.size, lines: 0, linesMatched: 0, linesMatchedOrderOnly: 0, linesPinned: 0, linesNoOrder: 0, linesPoNotFound: 0,
-    rowsInserted: 0, rowsUpdated: 0, rowsUnchanged: 0, manualRowsKept: 0, manualSplitDrift: 0, unmatchedNew: 0, unmatchedResolved: 0, atPrepSet: 0, atPrepCleared: 0, atPrepUnchanged: 0, posTouched: 0,
+    rowsInserted: 0, rowsUpdated: 0, rowsUnchanged: 0, manualRowsKept: 0, manualSplitDrift: 0, unmatchedNew: 0, unmatchedResolved: 0, atPrepSet: 0, atPrepCleared: 0, atPrepUnchanged: 0,
+    packVelocitySet: 0, packFilled: 0, packMismatch: 0, packMissing: 0, packConflicting: 0, posTouched: 0,
   };
   const samples: string[] = [];
+  const packSamples: string[] = [];
   const unmatched: VelocitySyncResult["unmatched"] = [];
   const touched = new Set<string>();
+
+  // ── Pack size, before any ÷ (2026-10-29) ───────────────────────────────────
+  // Every Velocity line that resolves to an AF row — shipment lines, the
+  // inventory and inbound legs — contributes its own pack size. A NULL
+  // sold_as is filled from them (in memory here, so the ÷ below uses it);
+  // the recorded Velocity value drives the derived mismatch item.
+  const resolveForPack = (line: VelocityInboundOrder, shipmentId: string | null): Resolution => {
+    const pin = shipmentId ? pinned(shipmentId, line) : null;
+    if (pin) return pin;
+    const prior = shipmentId ? unmatchedByKey.get(`${shipmentId}\u0000${String(line.order_id ?? "")}`) : undefined;
+    if (prior?.resolved_po_asin_id && afById.has(String(prior.resolved_po_asin_id))) return { ok: true, row: afById.get(String(prior.resolved_po_asin_id))!, how: "picker" };
+    return resolveLine(line, idx, childrenByOrderId);
+  };
+  const packsByRow = new Map<string, Map<string, { soldAs: "individual" | "multi-pack"; upp: number }>>();
+  const notePack = (line: VelocityInboundOrder, shipmentId: string | null) => {
+    const vp = velocityPack(line);
+    if (!vp) return;
+    const res = resolveForPack(line, shipmentId);
+    if (!res.ok) return;
+    const id = String(res.row.id);
+    if (!packsByRow.has(id)) packsByRow.set(id, new Map());
+    packsByRow.get(id)!.set(`${vp.soldAs}:${vp.upp}`, vp);
+  };
+  for (const s of shipments) for (const line of details.get(s.shipment_id)!.orders) notePack(line, s.shipment_id);
+  for (const o of [...inventory, ...inbound]) notePack(o, null);
+  const fillOps: Array<{ id: string; poId: string; from: { sold_as: string | null; units_per_pack: number | null }; soldAs: string; upp: number }> = [];
+  const packOps: Array<{ id: string; value: number | null }> = [];
+  for (const r of afRows) {
+    const packs = Array.from(packsByRow.get(String(r.id))?.values() ?? []);
+    if (packs.length > 1) counts.packConflicting++;
+    if (r.sold_as === null && packs.length === 1) {
+      fillOps.push({ id: String(r.id), poId: String(r.po_id), from: { sold_as: null, units_per_pack: r.units_per_pack ?? null }, soldAs: packs[0].soldAs, upp: packs[0].upp });
+      r.sold_as = packs[0].soldAs; r.units_per_pack = packs[0].upp;
+      counts.packFilled++; touched.add(String(r.po_id));
+      if (packSamples.length < 10) packSamples.push(`filled ${r.supplier} ${r.order_id} ${r.asin}: ${packs[0].soldAs} ×${packs[0].upp} from Velocity`);
+    }
+    const afUpp = Number(r.units_per_pack) || 1;
+    const comparable = r.sold_as !== null && r.sold_as !== "bundle";
+    // One Velocity value for the row; when its lines disagree, the one that disagrees with AF (so the row flags).
+    let vUpp: number | null = null;
+    if (packs.length === 1) vUpp = packs[0].upp;
+    else if (packs.length > 1 && comparable) vUpp = (packs.find((p) => p.upp !== afUpp) ?? packs[0]).upp;
+    const stored = r.velocity_units_per_pack == null ? null : Number(r.velocity_units_per_pack);
+    if (stored !== vUpp) { packOps.push({ id: String(r.id), value: vUpp }); counts.packVelocitySet++; touched.add(String(r.po_id)); }
+    if (r.sold_as === null) counts.packMissing++;
+    else if (comparable && vUpp != null && vUpp !== afUpp) {
+      counts.packMismatch++;
+      if (packSamples.length < 10) packSamples.push(`mismatch ${r.supplier} ${r.order_id} ${r.asin}: AF ${r.sold_as} ×${afUpp}, Velocity ×${vUpp}`);
+    }
+  }
   type RowPlan = { poAsinId: string; shipmentId: string; units: number; upp: number; shippedAt: string | null; lines: string[] };
   const rowPlans = new Map<string, RowPlan>();
   type UnmatchedPlan = { shipmentId: string; orderId: string; line: any; reason: "no_order" | "po_not_found" };
@@ -308,7 +395,7 @@ export async function syncVelocityShipments(opts: { dryRun: boolean; deps?: Velo
   }
   counts.posTouched = touched.size;
 
-  const result: VelocitySyncResult = { dryRun: opts.dryRun, wrote: false, counts, samples, unmatched, touchedPoIds: Array.from(touched) };
+  const result: VelocitySyncResult = { dryRun: opts.dryRun, wrote: false, counts, samples, packSamples, unmatched, touchedPoIds: Array.from(touched) };
   if (opts.dryRun) return result;
 
   // ── Apply ──────────────────────────────────────────────────────────────────
@@ -347,6 +434,15 @@ export async function syncVelocityShipments(opts: { dryRun: boolean; deps?: Velo
     }
     if (resolvedNow.size > 0) await client.query(`UPDATE shipment_unmatched SET resolved_at = $2 WHERE id = ANY($1::uuid[]) AND resolved_at IS NULL`, [Array.from(resolvedNow), now]);
     for (const op of atPrepOps) await client.query(`UPDATE po_asins SET qty_at_prep = $2 WHERE id = $1`, [op.id, op.value]);
+    for (const op of fillOps) {
+      const r = await client.query(`UPDATE po_asins SET sold_as = $2, units_per_pack = $3 WHERE id = $1 AND sold_as IS NULL`, [op.id, op.soldAs, op.upp]);
+      if ((r as any).rowCount === 0) continue; // filled by hand since the read
+      await logEdits(client.query.bind(client), op.poId, null, "asin", op.id, [
+        { field: "sold_as", old: null, new: op.soldAs },
+        ...(op.from.units_per_pack === op.upp ? [] : [{ field: "units_per_pack", old: op.from.units_per_pack == null ? null : String(op.from.units_per_pack), new: String(op.upp) }]),
+      ]);
+    }
+    for (const op of packOps) await client.query(`UPDATE po_asins SET velocity_units_per_pack = $2 WHERE id = $1`, [op.id, op.value]);
     await client.query("COMMIT");
     result.wrote = true;
   } catch (err) {
