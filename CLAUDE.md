@@ -363,6 +363,13 @@ Ordered before `--live` (the 2026-10-29 dry run caught two). Order-#
 handling lives in `server/order-number.ts`; retailer → supplier in
 `server/supplier-aliases.ts` — don't add a third copy.
 
+A Col P hit that fails the fit is a hint, not a verdict: the line still
+falls through to the base order # and candidate rules. Every rule, and the
+picker's suggestions, skip a PO with `ships_to = 'home'` or an order date
+before `tracking.velocity_start_date` (`velocityIneligible` in
+`server/shipment-match.ts`); the picker's free-text search still lists it,
+with a warning.
+
 ## Velocity API: `offset` is a page index
 
 Every Velocity list endpoint (`/inbound`, `/inventory`, `/shipments`)

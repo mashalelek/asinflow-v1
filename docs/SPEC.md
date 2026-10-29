@@ -2797,6 +2797,14 @@ one PO fits, and never past its ordered units; several → a review row with
 the candidates ranked; none → a review row that says why (2026-10-29, PO
 matching patch).
 
+A Velocity line is matched only to a Velocity-eligible PO: not
+`ships_to = 'home'`, not dated before `tracking.velocity_start_date`. That
+holds for every rule (keys, alias, normalized, Col P, base order #,
+candidate) and for the picker's suggestions; the picker's free-text search
+still lists such a PO, marked with the reason, and linking it stays allowed.
+A Col P hit that fails the units fit is a hint only — the line still goes
+through the base order # and candidate rules (Maria 2026-10-29).
+
 ### Source of truth
 
 Every piece of data has exactly one canonical source. Most current examples:
