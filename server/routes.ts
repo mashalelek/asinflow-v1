@@ -4317,7 +4317,7 @@ export async function registerRoutes(
                   OR EXISTS (SELECT 1 FROM po_line_items l WHERE l.po_id = p.id AND l.notes IS NOT NULL)) AS has_notes
            FROM purchase_orders p
            ${where}
-          ORDER BY p.order_date DESC, p.created_at DESC
+          ORDER BY p.order_date DESC, p.created_at DESC, p.id DESC
           LIMIT ${PAGE_SIZE} OFFSET ${(page - 1) * PAGE_SIZE}`,
         params,
       )).rows;
@@ -4725,7 +4725,7 @@ export async function registerRoutes(
                 u.candidates
            FROM shipment_unmatched u JOIN velocity_shipments v ON v.id = u.velocity_shipment_id
           WHERE u.resolved_at IS NULL
-          ORDER BY v.shipped_at DESC NULLS LAST, u.created_at`,
+          ORDER BY v.shipped_at DESC NULLS LAST, u.created_at, u.id`,
       )).rows;
       const ambiguous = (await query(
         `SELECT v.id, v.shipped_at::text AS shipped_at, (SELECT COUNT(*)::int FROM po_asin_shipments s WHERE s.velocity_shipment_id = v.id) AS rows
@@ -4745,7 +4745,7 @@ export async function registerRoutes(
         `SELECT pa.id, pa.asin, pa.asin_name, pa.qty, pa.units_per_pack, p.order_id, p.supplier, p.order_date::text AS order_date
            FROM po_asins pa JOIN purchase_orders p ON p.id = pa.po_id
           WHERE p.order_id ILIKE $1 OR pa.asin ILIKE $1 OR p.supplier ILIKE $1
-          ORDER BY p.order_date DESC, p.order_id, pa.asin LIMIT 20`, [`%${q}%`],
+          ORDER BY p.order_date DESC, p.order_id, pa.asin, pa.id LIMIT 20`, [`%${q}%`],
       )).rows;
       res.json({ rows });
     } catch (err: any) { res.status(500).json({ message: err.message }); }
