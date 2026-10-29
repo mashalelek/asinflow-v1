@@ -5698,8 +5698,12 @@ and its retailer equal to the supplier; `quantity_shipped` and every other
 Velocity quantity are **individual units**; the public API has **no Amazon
 FBA shipment id** (the dashboard reads a session-only admin endpoint). SC
 Fulfillment Inbound **v0** is the working source (`getShipments` /
-`getShipmentItems`, 837 shipments back to 2024-09-04; v2024-03-20 shows
-only empty draft plans), in **sellable packs** — AF's unit. One Velocity
+`getShipmentItems`, 837 shipments back to 2024-09-04), in **sellable
+packs** — AF's unit. v2024-03-20 is not empty (corrected 2026-10-29): the
+2026-10-17 probe saw only `listInboundPlans`' ACTIVE list (abandoned
+drafts); `status=SHIPPED` returns 212 plans back to 2024-09-04, and
+`getShipment` / `listTransportationOptions` / `listShipmentBoxes` return
+carrier, quote cost and box weights for closed shipments. One Velocity
 shipment fans out to N SC shipments named `FBA STA (MM/DD/YYYY HH:MM)-<FC>`,
 ship-from Velocity Prep, the name timestamp in **UTC** a few minutes
 before Velocity's `shipped_at`.
