@@ -39,13 +39,13 @@ describe("wiring", () => {
     expect(routes).toMatch(/r\.action_items = unionActionItems\(\[r\.line_action_items\]\)/);
     expect(read("server/po-close.ts")).toMatch(/\$\{PO_CLOSE_ACTION_ITEMS_SQL\} AS action_items FROM purchase_orders p/); // Receiving mismatch is display-only
   });
-  it("UI: ASIN rows edit with write-through, product rows edit their own line, the POs page shows read-only chips", () => {
+  it("UI: ASIN rows edit with write-through, product rows edit their own line, the PO row edits all lines (PO table v2)", () => {
     const c = read("client/src/components/po-asin-rows.tsx");
     expect(c).toMatch(/url=\{`\/api\/pos\/asin-rows\/\$\{a\.id\}\/action-items`\}/);
     expect(c).toMatch(/url=\{`\/api\/pos\/lines\/\$\{l\.id\}\/action-items`\}/);
     expect(c).toMatch(/\/api\/pos\/asin-rows\/\$\{a\.id\}\/cancel/);
     const page = read("client/src/pages/purchase-orders.tsx");
-    expect(page).toMatch(/<ActionItemChips items=\{po\.action_items\}/);
-    expect(page).not.toMatch(/\/api\/pos\/\$\{po\.id\}\/action-items/);
+    // PO table v2: the PO row edits every line through the PO route
+    expect(page).toMatch(/url=\{`\/api\/pos\/\$\{po\.id\}\/action-items`\}/);
   });
 });

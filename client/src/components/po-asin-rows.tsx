@@ -125,41 +125,86 @@ const ordered = (items: readonly string[] | undefined) => DISPLAY_ACTION_ITEMS.f
 
 /** Read-only chips (the POs-page column: union over all lines). */
 /** `reasons`: the open "Review Velocity" reasons (SPEC §26) — shown on that chip's hover. `titles`: hover text per item (Extra units shipped). */
-export function ActionItemChips({ items, testId, reasons, titles }: { items: readonly string[] | undefined; testId?: string; reasons?: readonly string[] | null; titles?: Readonly<Record<string, string>> }) {
+/** Per item: how many of the PO's lines carry it (PO table v2 §4 `action_item_lines`). */
+export interface ActionItemLines { lines: number; of: number; asins: string[]; reasons: string[] }
+/** Hover for a PO-row chip: which lines carry it, and the auto reasons. */
+export function lineDetailTitle(item: string, d: ActionItemLines | undefined): string | undefined {
+  if (!d) return undefined;
+  const where = d.lines === d.of ? `all ${d.of} line${d.of === 1 ? "" : "s"}` : `${d.lines} of ${d.of} lines`;
+  return `${item}: ${where} — ${d.asins.join(", ")}${d.reasons.length ? ` · ${d.reasons.join(" · ")}` : ""}`;
+}
+/** At most this many chips show; the rest collapse into "+N" (PO table v2 §5). */
+export const MAX_CHIPS = 2;
+/**
+ * `reasons`: the open "Review Velocity" reasons (SPEC §26) — shown on that chip's hover. `titles`: hover text per item (Extra units shipped).
+ * `lines`: per-item line counts — a "·N" badge when fewer than all lines carry it, the lines on hover.
+ */
+export function ActionItemChips({ items, testId, reasons, titles, lines }: { items: readonly string[] | undefined; testId?: string; reasons?: readonly string[] | null; titles?: Readonly<Record<string, string>>; lines?: Readonly<Record<string, ActionItemLines>> }) {
   const list = ordered(items);
+  const shown = list.length > MAX_CHIPS + 1 ? list.slice(0, MAX_CHIPS) : list;
+  const rest = list.slice(shown.length);
   return (
-    <span className="flex flex-col items-start gap-0.5" data-testid={testId}>
-      {list.length === 0 ? <span className="text-muted-foreground/40 text-[11px]">—</span> : list.map((it) => (
-        <span key={it} className={`${chipBase} ${actionChipClass(it)}`} title={titles?.[it] ?? (it === "Review Velocity" && reasons?.length ? reasons.join(" · ") : undefined)}>{it}</span>
-      ))}
+    <span className="flex flex-wrap items-start gap-0.5" data-testid={testId}>
+      {list.length === 0 ? <span className="text-muted-foreground/40 text-[11px]">—</span> : shown.map((it) => {
+        const d = lines?.[it];
+        return (
+          <span key={it} className={`${chipBase} ${actionChipClass(it)}`} title={titles?.[it] ?? lineDetailTitle(it, d) ?? (it === "Review Velocity" && reasons?.length ? reasons.join(" · ") : undefined)}>
+            {it}{d && d.lines < d.of ? <span className="ml-1 opacity-70" data-testid={`chip-count-${it}`}>·{d.lines}</span> : null}
+          </span>
+        );
+      })}
+      {rest.length > 0 && <span className={`${chipBase} bg-muted text-muted-foreground`} title={rest.join(" · ")} data-testid="chip-more">+{rest.length}</span>}
     </span>
   );
 }
 
-/** Chips + multi-select editor. `url` is the ASIN route (write-through to every line) or the product-line route. */
-export function ActionItemsEditor({ items, url, onSaved, testId, titles }: { items: readonly string[] | undefined; url: string; onSaved?: () => void; testId: string; titles?: Readonly<Record<string, string>> }) {
+/**
+ * Chips + multi-select editor. `url` is the PO route (every line), the ASIN
+ * route (every line of the ASIN) or the product-line route. `lineCount` > 1 →
+ * each change asks "Apply to all N lines" before it is saved (PO table v2 §5).
+ */
+export function ActionItemsEditor({ items, url, onSaved, testId, titles, lines, lineCount = 1, reasons }: {
+  items: readonly string[] | undefined; url: string; onSaved?: () => void; testId: string; titles?: Readonly<Record<string, string>>;
+  lines?: Readonly<Record<string, ActionItemLines>>; lineCount?: number; reasons?: readonly string[] | null;
+}) {
   const [open, setOpen] = useState(false);
   const [draft, setDraft] = useState<Set<string>>(new Set(items ?? []));
+  const [pending, setPending] = useState<{ next: Set<string>; label: string } | null>(null);
   const [err, setErr] = useState<string | null>(null);
   const save = async (next: Set<string>) => {
-    setDraft(next); setErr(null);
+    setDraft(next); setErr(null); setPending(null);
     try { await patchJson(url, "PATCH", { action_items: Array.from(next) }); onSaved?.(); } catch (e: any) { setErr(e.message); }
   };
+  const toggle = (opt: string) => {
+    const next = new Set(draft); const adding = !next.has(opt);
+    if (adding) next.add(opt); else next.delete(opt);
+    if (lineCount > 1) setPending({ next, label: `${adding ? "Add" : "Remove"} "${opt}" ${adding ? "to" : "from"} all ${lineCount} lines?` });
+    else void save(next);
+  };
   return (
-    <Popover open={open} onOpenChange={(v) => { setOpen(v); if (v) setDraft(new Set(items ?? [])); }}>
+    <Popover open={open} onOpenChange={(v) => { setOpen(v); setPending(null); if (v) setDraft(new Set(items ?? [])); }}>
       <PopoverTrigger asChild>
-        <button type="button" onClick={(e) => e.stopPropagation()} className="min-h-[1.25rem] min-w-[4rem] text-left" data-testid={testId} title="Edit action items">
-          <ActionItemChips items={items} titles={titles} />
+        <button type="button" onClick={(e) => e.stopPropagation()} className="min-h-[1.25rem] min-w-[3rem] text-left" data-testid={testId} title="Edit action items">
+          <ActionItemChips items={items} titles={titles} lines={lines} reasons={reasons} />
         </button>
       </PopoverTrigger>
       <PopoverContent className="w-72 p-2 space-y-1" align="end" onClick={(e) => e.stopPropagation()}>
         <div className="text-[10px] uppercase tracking-wider text-muted-foreground px-1">Action items</div>
         {ACTION_ITEM_OPTIONS.map((opt) => (
           <label key={opt} className="flex items-center gap-2 px-2 py-1 rounded hover:bg-muted cursor-pointer text-xs">
-            <input type="checkbox" checked={draft.has(opt)} onChange={() => { const next = new Set(draft); if (next.has(opt)) next.delete(opt); else next.add(opt); void save(next); }} className="h-3 w-3 accent-blue-500" />
+            <input type="checkbox" checked={pending ? pending.next.has(opt) : draft.has(opt)} disabled={pending != null} onChange={() => toggle(opt)} className="h-3 w-3 accent-blue-500" />
             <span className={`${chipBase} ${actionChipClass(opt)}`}>{opt}</span>
           </label>
         ))}
+        {pending && (
+          <div className="rounded border border-border bg-muted/50 p-2 text-xs space-y-1" data-testid={`${testId}-confirm`}>
+            <div>{pending.label}</div>
+            <div className="flex gap-1">
+              <button type="button" onClick={() => void save(pending.next)} className="rounded bg-primary px-2 py-0.5 text-primary-foreground" data-testid={`${testId}-confirm-apply`}>Apply to all {lineCount} lines</button>
+              <button type="button" onClick={() => setPending(null)} className="rounded px-2 py-0.5 hover:bg-muted">Cancel</button>
+            </div>
+          </div>
+        )}
         {err && <div className="px-2 text-xs text-destructive">{err}</div>}
       </PopoverContent>
     </Popover>
@@ -402,7 +447,7 @@ export function PoAsinRow({ a, indent = false, editable = false, onChanged }: { 
         <td className="px-3 py-1.5 text-right"><QtyCell v={a.qty_received_amazon} /></td>
         <td className="px-3 py-1.5"><ShipmentChips rowId={a.id} asin={a.asin} shipments={a.shipments ?? []} editable={editable} onChanged={onChanged} /></td>
         <td className="px-3 py-1.5">{editable && lines.length > 0
-          ? <ActionItemsEditor items={a.action_items} titles={extraTitles(a)} url={`/api/pos/asin-rows/${a.id}/action-items`} onSaved={onChanged} testId={`button-action-items-asin-${a.asin}`} />
+          ? <ActionItemsEditor items={a.action_items} titles={extraTitles(a)} url={`/api/pos/asin-rows/${a.id}/action-items`} onSaved={onChanged} testId={`button-action-items-asin-${a.asin}`} lineCount={lines.length} />
           : <ActionItemChips items={a.action_items} titles={extraTitles(a)} />}
           {editable && (a.action_items ?? []).includes(EXTRA_UNITS_SHIPPED) && <ClearExtraUnits a={a} onChanged={onChanged} />}</td>
         <td className="px-2 py-1.5">{a.notes && <StickyNote className="h-3.5 w-3.5 text-muted-foreground" />}</td>

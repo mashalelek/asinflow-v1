@@ -24,7 +24,7 @@ import {
 import { Tooltip, TooltipTrigger, TooltipContent } from "@/components/ui/tooltip";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import { UploadToVelocityDialog } from "@/components/upload-to-velocity-dialog";
-import { PoAsinTable, PoAsinColGroup, PoAsinHeaderRow, PoAsinRow, ActionItemChips, type PoAsinRowData, type PoAsinLine } from "@/components/po-asin-rows";
+import { PoAsinTable, PoAsinColGroup, PoAsinHeaderRow, PoAsinRow, ActionItemChips, ActionItemsEditor, type ActionItemLines, type PoAsinRowData, type PoAsinLine } from "@/components/po-asin-rows";
 import { loadPoExpanded, savePoExpanded, isPoExpanded, togglePoExpanded, toggleExpandAll, type PoExpandedState } from "@/lib/po-expanded";
 import { fmtQty } from "@/lib/po-qty";
 import { fetchLongSync } from "@/lib/long-sync";
@@ -43,6 +43,8 @@ interface PoRow {
   action_items: string[];
   /** SPEC §26: the open "Review Velocity" reasons (the chip's hover). */
   review_velocity_reasons?: string[] | null;
+  /** PO table v2 §4: per stored item, lines carrying it of the PO's lines, ASINs, auto reasons. */
+  action_item_lines?: Record<string, ActionItemLines>;
   ships_to?: "velocity" | "home";
   order_total: string | null;
   invoice_attached: boolean;
@@ -417,6 +419,10 @@ function UnmatchedRow({ l, suppliers, picked, onPick, busy, act, onLinked }: {
   );
 }
 
+/** Product lines on a PO (they ride the list payload under each ASIN row). */
+export const poLineCount = (po: { asins?: ReadonlyArray<{ lines?: readonly unknown[] }> }): number =>
+  (po.asins ?? []).reduce((t, a) => t + (a.lines?.length ?? 0), 0);
+
 function fmtMoney(v: string | null): { text: string; muted: boolean } {
   const n = v != null ? parseFloat(v) : null;
   if (n == null) return { text: "—", muted: true };
@@ -608,7 +614,9 @@ export default function PurchaseOrders() {
                     </button>
                   </td>
                   <td className="px-3 py-2" onClick={(e) => e.stopPropagation()}>
-                    <ActionItemChips items={po.action_items} reasons={po.review_velocity_reasons} testId={`po-action-items-${po.order_id}`} />
+                    {/* PO table v2: set on the PO row = set on every product line (confirm when > 1). */}
+                    <ActionItemsEditor items={po.action_items} reasons={po.review_velocity_reasons} lines={po.action_item_lines}
+                      url={`/api/pos/${po.id}/action-items`} onSaved={() => void load()} lineCount={poLineCount(po)} testId={`po-action-items-${po.order_id}`} />
                   </td>
                   <td className="px-3 py-2 whitespace-nowrap">{fmtDate(po.order_date)}</td>
                   <td className="px-3 py-2 font-mono text-xs">{po.order_id}</td>
