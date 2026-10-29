@@ -70,7 +70,7 @@ export type ResurrectionOutcome =
   | { kind: "dead_asin"; details: string }
   | { kind: "legend_pending"; pending: LegendPending; details: string }
   | { kind: "gated"; eligibilityStatus: string }
-  | { kind: "error"; reason: "no_brand" | "transient_error" | "listings_search_failed"; details: string };
+  | { kind: "error"; reason: "no_brand" | "transient_error" | "listings_search_failed" | "relist_sku_unknown"; details: string };
 
 export interface ResurrectionDeps {
   queryFn: QueryFn;
@@ -99,6 +99,13 @@ export async function resurrectOrGenerateSku(
   productNumber: number,
   deps: ResurrectionDeps,
   variantSuffix?: string,
+  // §18 Relist (2026-10-29): force reuse of THIS exact prior SKU, bypassing
+  // the conforming-format filter — for relisting a deleted listing under its
+  // original SKU name (legacy / Amazon-random SKUs included). The SKU must
+  // already be in asin_skus for this ASIN (AF history only — never an
+  // arbitrary string), and the gated / SC-presence / live-status gates all
+  // still apply. Never falls through to generate.
+  relistSku?: string,
 ): Promise<ResurrectionOutcome> {
   // 1. Gated check (cheap DB lookup, no API calls)
   const gateRes = await deps.queryFn(GATED_SQL, [asin]);
@@ -122,6 +129,34 @@ export async function resurrectOrGenerateSku(
   }
   if (presence.present) {
     return { kind: "already_in_catalog", items: presence.items };
+  }
+
+  // 2b. Relist mode — exact-SKU reuse, format-agnostic (§18 Relist,
+  // 2026-10-29). The requested SKU must be AF history for this ASIN; the
+  // per-SKU live check still runs (defensive — step 2 already proved no
+  // listing exists for the ASIN, but the SKU namespace is per-SKU).
+  if (relistSku) {
+    const skuRes = await deps.queryFn(CANDIDATE_SKU_SQL, [asin]);
+    const row = skuRes.rows.find((r: any) => String(r.sku) === relistSku);
+    if (!row) {
+      return {
+        kind: "error",
+        reason: "relist_sku_unknown",
+        details: `relist SKU '${relistSku}' is not in asin_skus for ${asin} — relist only reuses AF-recorded SKU history`,
+      };
+    }
+    const status = await checkSkuListingStatus(deps.sellerId, relistSku, deps.httpGet);
+    if (!status.ok) {
+      return {
+        kind: "error",
+        reason: "transient_error",
+        details: `listing status check failed (${status.status ?? "?"}): ${status.message}`,
+      };
+    }
+    if (status.present) {
+      return { kind: "duplicate_warning", existingSku: relistSku, statuses: status.statuses };
+    }
+    return { kind: "reuse", sku: relistSku, lastCreatedAt: row.created_at };
   }
 
   // 3. variantSuffix bypass — explicit additional-offer mode (post-step-2

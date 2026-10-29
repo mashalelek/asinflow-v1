@@ -82,6 +82,7 @@ const EXPECTED_ROUTES = [
   "POST /api/import-asin",
   "POST /api/inventory/sync",
   "POST /api/listings/full-scope-pass",
+  "POST /api/listings/relist",
   "POST /api/offer-add/preview",
   "POST /api/offer-add/submit",
   "POST /api/parse-file",

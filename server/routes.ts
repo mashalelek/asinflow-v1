@@ -2702,6 +2702,70 @@ export async function registerRoutes(
     }
   });
 
+  // === §18 Relist: re-create a deleted listing under its original SKU ===
+  //
+  // Body: { items: [{asin, sku}], openOnCreate?: boolean, dryRun?: boolean }
+  //
+  // The exact-SKU reuse path through the SAME submitOfferAddBatch pipeline as
+  // Add to SC (getDefinitionsProductType, LISTING_OFFER_ONLY, FBA, no quantity
+  // key, DG pass-through, price resolver) — the only differences are that the
+  // SKU is forced to the requested prior SKU (which must be AF history in
+  // asin_skus and must 404 live; format-agnostic, so legacy / Amazon-random
+  // SKUs relist under their original names) and that openOnCreate=true makes
+  // the §19 ladder skip close-after-create so the offer comes up OPEN.
+  // dryRun=true runs phase4Mode="preview" (everything but the PUT).
+  app.post("/api/listings/relist", async (req: Request, res: Response) => {
+    if (!isDbAvailable()) { res.status(503).json({ message: "Database not available" }); return; }
+    const sellerId = process.env.SP_API_SELLER_ID;
+    if (!sellerId) { res.status(503).json({ message: "SP_API_SELLER_ID not configured" }); return; }
+    const { items, openOnCreate, dryRun } = (req.body ?? {}) as {
+      items?: Array<{ asin?: string; sku?: string }>; openOnCreate?: boolean; dryRun?: boolean;
+    };
+    if (!items || !Array.isArray(items) || items.length === 0) {
+      res.status(400).json({ message: "No items provided — expected [{asin, sku}]" }); return;
+    }
+    const cleaned = items.map((it) => ({ asin: String(it.asin ?? "").trim().toUpperCase(), sku: String(it.sku ?? "").trim() }));
+    if (cleaned.some((it) => !it.asin || !it.sku)) {
+      res.status(400).json({ message: "Every item needs both asin and sku" }); return;
+    }
+    const asins = cleaned.map((it) => it.asin);
+    const relist = Object.fromEntries(cleaned.map((it) => [it.asin, { sku: it.sku, openOnCreate: openOnCreate === true }]));
+
+    await respondLongSync(res, async () => {
+      // Gating probe, inline (decision 9) — same as the offer-add preview.
+      const gating = await probeGatingForAsins(asins, { query: (sql, params) => query(sql, params) });
+      log(`Relist gating probe (${asins.length} ASINs): yes=${gating.counts.yes} no=${gating.counts.no} error=${gating.counts.error + gating.counts.missing_row}`, "offer-add");
+
+      const submitRows = await loadSubmitRows(asins);
+      const settings = await loadSettingsForSubmit();
+      const inboundRow = await query(`SELECT value FROM settings WHERE key='include_inbound_shipping'`);
+      const includeInboundShipping = inboundRow.rows[0]?.value === "true" || inboundRow.rows[0]?.value === true;
+      const skusRes = await query(`SELECT sku FROM asin_skus`);
+      const allExistingSkus = skusRes.rows.map((r: any) => String(r.sku));
+
+      log(`Relist ${dryRun ? "PREVIEW" : "SUBMIT (LIVE)"} for ${cleaned.length} SKU(s): ${cleaned.map((it) => `${it.asin}→${it.sku}`).join(", ")}${openOnCreate ? " [openOnCreate]" : ""}`, "offer-add");
+
+      const result = await submitOfferAddBatch(submitRows, {
+        queryFn: (sql, params) => query(sql, params),
+        sellerId,
+        settings,
+        includeInboundShipping,
+        allExistingSkus,
+        relist,
+        productRegistry: makeProductRegistryRepo((sql, params) => query(sql, params)),
+        phase4Mode: dryRun ? "preview" : "live",
+      });
+
+      if (!dryRun) {
+        const createdPairs = result.perAsin
+          .filter((p) => p.outcome.kind === "created")
+          .map((p) => ({ asin: p.outcome.asin, sku: (p.outcome as any).sku as string }));
+        if (createdPairs.length > 0) scheduleBatchVerify(sellerId, createdPairs);
+      }
+      return result;
+    });
+  });
+
   // === Post-submit verification ledger ===
   //
   // On-demand (no job infra). Verify sweeps pending/processing/stale rows

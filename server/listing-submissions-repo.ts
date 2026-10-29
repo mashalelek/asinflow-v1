@@ -35,6 +35,9 @@ export async function recordSubmission(
   args: {
     asin: string; sku: string; submissionId: string | null; submittedPrice: number | null;
     pricing?: PricingDecision;
+    /** §18 Relist (2026-10-29): the §19 ladder skips close-after-create for
+     *  this row — the offer comes up OPEN. Default false (normal Add to SC). */
+    openOnCreate?: boolean;
   },
   query: QueryLike = defaultQuery as any,
 ): Promise<void> {
@@ -43,14 +46,16 @@ export async function recordSubmission(
     `INSERT INTO listing_submissions (
        asin, sku, submission_id, submitted_price, verify_status,
        price_source, price_detail, anchor_offer_price, anchor_offer_feedback,
-       cpt_seen, resulting_roi, price_warning, qualified_offer_count, disqualified_offers)
-     VALUES ($1, $2, $3, $4, 'pending', $5, $6, $7, $8, $9, $10, $11, $12, $13::jsonb)`,
+       cpt_seen, resulting_roi, price_warning, qualified_offer_count, disqualified_offers,
+       open_on_create)
+     VALUES ($1, $2, $3, $4, 'pending', $5, $6, $7, $8, $9, $10, $11, $12, $13::jsonb, $14)`,
     [
       args.asin, args.sku, args.submissionId, args.submittedPrice,
       p?.source ?? null, p?.detail ?? null, p?.anchorOfferPrice ?? null,
       p?.anchorOfferFeedback ?? null, p?.cptSeen ?? null, p?.resultingRoi ?? null,
       p?.warning ?? null, p?.qualifiedOfferCount ?? null,
       p?.disqualifiedOffers != null ? JSON.stringify(p.disqualifiedOffers) : null,
+      args.openOnCreate === true,
     ],
   );
 }
@@ -90,7 +95,7 @@ export async function verifyPending(
 
   const scoped = opts.ids != null && opts.ids.length > 0;
   const rows = (await query(
-    `SELECT id, asin, sku, submitted_at,
+    `SELECT id, asin, sku, submitted_at, open_on_create,
             EXTRACT(EPOCH FROM (now() - submitted_at))/3600 AS age_hours
        FROM listing_submissions
       WHERE verify_status IN ('pending','processing','stale')
@@ -166,7 +171,10 @@ export async function verifyPending(
     // Close-after-create: the first probe that sees the listing closes it
     // (the hook is idempotent — sent once). A failure is logged, never fatal
     // to the sweep: the nightly component 22 still closes an open zero-stock SKU.
-    if (probe.input.listed && opts.closeAfterCreate) {
+    // §18 Relist: a row submitted with open_on_create stays OPEN — the hook is
+    // skipped for it. (Component 22 may still close it later on its own
+    // evidence; this only removes the automatic close tied to creation.)
+    if (probe.input.listed && opts.closeAfterCreate && !row.open_on_create) {
       try { await opts.closeAfterCreate({ asin: row.asin, sku: row.sku, submittedAt: row.submitted_at }); }
       catch (err: any) { console.error(`[verify] close-after-create failed for ${row.sku}: ${err?.message ?? err}`); }
     }

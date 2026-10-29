@@ -88,7 +88,9 @@ export type SkipReason =
   | "needs_cogs" | "offers_fetch_failed" | "unreachable_roi"
   // Phase 4 override validation + registry validation
   | "invalid_sku_override" | "sku_collision"
-  | "nnn_taken" | "registry_reserve_failed" | "invalid_sku_format";
+  | "nnn_taken" | "registry_reserve_failed" | "invalid_sku_format"
+  // §18 Relist: the requested SKU is not in asin_skus for the ASIN
+  | "relist_sku_unknown";
 
 export interface SubmitResult {
   preFilter: { excluded: PreFilterResult["excluded"] };
@@ -161,6 +163,15 @@ export interface SubmitDeps {
   // to edit). Validation: format regex + BRD-DEP-AS3 invariant inside
   // offerAddForAsin, plus a final batch-wide collision sweep here.
   skuOverrides?: Record<string, string>;
+  // §18 Relist (2026-10-29), keyed by ASIN: reuse THIS exact prior SKU
+  // (format-agnostic — the SKU must be AF history in asin_skus and must 404
+  // live), optionally coming up OPEN (openOnCreate → the §19 ladder skips
+  // close-after-create for that submission). Threaded into BOTH phase 1
+  // (classification resolves the requested SKU, not a conforming candidate)
+  // and phase 4. Relist is an exact-reuse path: no NNN allocation, no
+  // registry reservation, and the skuOverrides collision sweep does not
+  // apply (the SKU exists in asin_skus by design).
+  relist?: Record<string, { sku: string; openOnCreate?: boolean }>;
   // Registry repo for reserve-then-PUT in live mode. Required for any live
   // submit; preview mode uses it only to LOAD the brand's registry into
   // would_submit outcomes (no reservation).
@@ -240,7 +251,7 @@ export async function submitOfferAddBatch(
     const result = await offerAddFn(
       // cogs passed for completeness — this probe resolves the SKU only
       // (price 0, dryRun), so the cap it computes is never submitted.
-      { asin: row.asin, productNumber: 1, price: 0, cogs: row.cogs },
+      { asin: row.asin, productNumber: 1, price: 0, cogs: row.cogs, relistSku: deps.relist?.[row.asin]?.sku },
       innerDeps,
       true, // dryRun
     );
@@ -472,9 +483,12 @@ export async function submitOfferAddBatch(
       // Registry repo: live mode only. Preview never reserves.
       productRegistry: phase4Mode === "live" ? deps.productRegistry : undefined,
     };
+    const relistEntry = deps.relist?.[p.asin];
     const result = await offerAddFn(
       {
         asin: p.asin, productNumber, price: priced.price, cogs: priced.cogs, skuOverride,
+        relistSku: relistEntry?.sku,
+        openOnCreate: relistEntry?.openOnCreate === true,
         // §18 v2: persist WHY this price on the ledger row. Only in live mode —
         // preview fires no PUT and writes no submission.
         pricingDecision: phase4Mode === "live" ? {
@@ -613,6 +627,7 @@ function mapBlockedOutcomeToSkip(result: OfferAddResult): SubmitOutcome | null {
               : result.reason === "nnn_taken" ? "nnn_taken"
               : result.reason === "registry_reserve_failed" ? "registry_reserve_failed"
               : result.reason === "invalid_sku_format" ? "invalid_sku_format"
+              : result.reason === "relist_sku_unknown" ? "relist_sku_unknown"
               : "resurrection_error",
         details: result.details };
     case "dg_value_unresolved":

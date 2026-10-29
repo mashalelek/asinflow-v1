@@ -69,6 +69,18 @@ export interface OfferAddInput {
   // resurrection-computed SKU (no brand/dept/asin swap). Server-side
   // collision checks live in the submit orchestrator (offer-add-submit.ts).
   skuOverride?: string;
+  // §18 Relist (2026-10-29): reuse THIS exact prior SKU (format-agnostic —
+  // legacy / Amazon-random SKUs included), for relisting a deleted listing
+  // under its original SKU name. Mutually exclusive with skuOverride /
+  // variantSuffix in spirit: relist is an exact-reuse path, so the registry
+  // is never touched and no NNN is allocated. Validated inside resurrection:
+  // the SKU must be AF history (asin_skus) for this ASIN and must 404 live.
+  relistSku?: string;
+  // §18 Relist: when true, the §19 ladder skips close-after-create for this
+  // submission — the offer comes up OPEN. Recorded on the ledger row
+  // (listing_submissions.open_on_create). Default false: normal Add to SC
+  // offers are still closed right after they're created.
+  openOnCreate?: boolean;
   // §18 v2 (2026-10-07): the resolver's decision, threaded through so the
   // verification-ledger row records WHY this price — source, anchor offer,
   // CPT seen, resulting ROI, warning, qualified/disqualified. Optional: the
@@ -147,6 +159,7 @@ export async function offerAddForAsin(
       selfHealWrite: dryRun ? undefined : deps.selfHealWrite,
     },
     input.variantSuffix,
+    input.relistSku,
   );
 
   // 2. Pre-PUT failure pass-throughs
@@ -454,6 +467,7 @@ export async function offerAddForAsin(
             asin: input.asin, sku, submissionId: outcome.submissionId ?? null,
             submittedPrice: input.price ?? null,
             pricing: input.pricingDecision,
+            openOnCreate: input.openOnCreate === true,
           },
           deps.queryFn as any,
         );
