@@ -77,7 +77,7 @@ Nothing else about Sync Shipments changes: allocation, Shipped FBA / At Prep der
 
 `npm run backfill:shipment-matching` — dry run by default, `--live` to write.
 
-1. Proposes alias seeds: every distinct Velocity retailer (stored shipments + unmatched lines) that is not an AF supplier, with the supplier it obviously names (alnum-equal to a supplier's first label — "WALMART" → walmart.com, "Carters" → carters.com; a "a / b" value whose first part is a supplier; near-spelling within 2 edits of a supplier label — "Webstraunt Store" → webstaurantstore.com) or "no proposal".
+1. Proposes alias seeds: every distinct Velocity retailer (stored shipments + unmatched lines) that is not an AF supplier, with the supplier it obviously names (alnum-equal to a supplier's first label — "WALMART" → walmart.com, "Carters" → carters.com; a "a / b" value whose first part is a supplier; near-spelling within 2 edits of a supplier label (3 for a 12+ character name) — "Webstraunt Store" → webstaurantstore.com) or "no proposal".
 2. Runs Sync Shipments component A as a dry run **with the proposed seeds in memory**, and reports per line: kind (§2), rule that matched (exact / alias / normalized / base_id / col_p / candidate_unique), PO linked, date delta, units, or candidates / nearest miss. Totals: linked by exact rule, by Col P, by candidate, ambiguous, no_po. CSV in `Claude outputs/`.
 3. Maria reviews; `--live` inserts the seeds (source `seed`), then runs Sync Shipments live (A, then B, then auto-close for touched POs), which writes the links.
 4. Bundle pinning (draft §5.4): none of the 62 rows is a bundle — not built; a bundle parent that fails stays in the panel.
