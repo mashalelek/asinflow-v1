@@ -9,12 +9,12 @@ import { closeAfterCreate } from "./listing-hygiene-run";
 import { verifyPending, resolveSubmissionManual, resolveSubmissionsBulk, dismissFlags, getUnverifiedCount, listNeedsAttention, listInFlight, findRecentPendingIds, countOpenAmong } from "./listing-submissions-repo";
 import { runAuraSyncChain } from "./aura-sync-chain";
 import { probeGatingForAsins } from "./gating-probe";
-import { loadPoAsinRows, normalizeLineQty } from "./po-queries";
+import { loadPoAsinRows, normalizeLineQty, poListOrderBy } from "./po-queries";
 import { loadAliases, resolveRetailer, setAlias } from "./supplier-aliases";
 import { linkUnmatchedLine } from "./shipment-link";
 import { likeContains, stripShipmentSuffix } from "./order-number";
 import { clearExtraUnits } from "./extra-units";
-import { writeLineItems } from "./line-action-items";
+import { writeLineItems, loadActionItemLines } from "./line-action-items";
 import { velocityIneligible, ineligibleText } from "./shipment-match";
 import { readVelocityStartDate } from "./ships-to-backfill";
 import { evaluateAutoClose, setPoClosedManually, parseQtyInput, MANUAL_QTY_COLUMNS, type ManualQtyColumn } from "./po-close";
@@ -4314,6 +4314,7 @@ export async function registerRoutes(
       const rows = (await query(
         `SELECT p.*,
                 ${PO_ACTION_ITEMS_SQL} AS line_action_items,
+                cardinality(${PO_ACTION_ITEMS_SQL}) AS action_item_count,
                 ${REVIEW_VELOCITY_REASONS_SQL} AS review_velocity_reasons,
                 (SELECT COUNT(*)::int FROM po_asins a WHERE a.po_id = p.id) AS asin_count,
                 (SELECT COALESCE(SUM(a.qty), 0)::float8 FROM po_asins a WHERE a.po_id = p.id) AS units_ordered,
@@ -4323,7 +4324,7 @@ export async function registerRoutes(
                   OR EXISTS (SELECT 1 FROM po_line_items l WHERE l.po_id = p.id AND l.notes IS NOT NULL)) AS has_notes
            FROM purchase_orders p
            ${where}
-          ORDER BY p.order_date DESC, p.created_at DESC, p.id DESC
+          ORDER BY ${poListOrderBy(req.query.sort, req.query.dir)}
           LIMIT ${PAGE_SIZE} OFFSET ${(page - 1) * PAGE_SIZE}`,
         params,
       )).rows;
@@ -4333,10 +4334,14 @@ export async function registerRoutes(
       const asinRows = await loadPoAsinRows((sql, params) => query(sql, params), rows.map((r: any) => String(r.id)));
       const asinsByPo = new Map<string, any[]>();
       for (const a of asinRows) { const k = String(a.po_id); if (!asinsByPo.has(k)) asinsByPo.set(k, []); asinsByPo.get(k)!.push(a); }
+      // Per stored item: how many of the PO's lines carry it, on which ASINs,
+      // with which auto reasons — the chip's count badge and hover (PO table v2 §5).
+      const detail = await loadActionItemLines((sql, params) => query(sql, params), rows.map((r: any) => String(r.id)));
       for (const r of rows) {
         r.asins = asinsByPo.get(String(r.id)) ?? [];
-        // Row-level Status: the PO's Action Items = union over its lines (read-only here).
+        // Row-level Status: the PO's Action Items = union over its lines.
         r.action_items = unionActionItems([r.line_action_items]); delete r.line_action_items;
+        r.action_item_lines = detail.get(String(r.id)) ?? {};
       }
       // Filter options for the toolbar: suppliers (distinct across the whole
       // table) + the fixed Action Items list in display order (§6.1).
@@ -4555,6 +4560,24 @@ export async function registerRoutes(
     try {
       const out = await withPoTx((q) => clearExtraUnits(q, String(req.params.id ?? ""), (req.body ?? {}).note, uid(req)));
       res.status(out.status).json(out.body);
+    } catch (err: any) { res.status(500).json({ message: err.message }); }
+  });
+
+  // PO-level set (PO table v2 §4): the desired union applies to EVERY product
+  // line of the PO — items added go onto all lines, items removed come off all.
+  app.patch("/api/pos/:id/action-items", async (req: Request, res: Response) => {
+    if (!isDbAvailable()) { res.status(503).json({ message: "Database not available" }); return; }
+    const id = String(req.params.id ?? "");
+    if (!/^[0-9a-f-]{36}$/i.test(id)) { res.status(400).json({ message: "invalid PO id" }); return; }
+    const v = normalizeActionItems((req.body ?? {}).action_items);
+    if (!v.ok) { res.status(400).json({ message: v.error }); return; }
+    try {
+      const lines = (await query(`SELECT id FROM po_line_items WHERE po_id = $1`, [id])).rows.map((l: any) => String(l.id));
+      if (lines.length === 0) { res.status(404).json({ message: "PO not found, or it has no product lines" }); return; }
+      const changed = await withPoTx((q) => writeLineItems(q, id, lines, v.value, uid(req)));
+      const close = await evaluateAutoClose(id, poQuery);
+      const po = (await query(`SELECT ${PO_ACTION_ITEMS_SQL} AS items FROM purchase_orders p WHERE p.id = $1`, [id])).rows[0];
+      res.json({ action_items: unionActionItems([po?.items]), lines_changed: changed.length, lines: lines.length, close });
     } catch (err: any) { res.status(500).json({ message: err.message }); }
   });
 

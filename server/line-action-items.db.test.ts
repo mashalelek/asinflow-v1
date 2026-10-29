@@ -1,6 +1,7 @@
 import { describe, it, expect, beforeAll, afterAll } from "vitest";
 import pg from "pg";
-import { writeLineItems, reconcileReviewVelocity, insertLineItems } from "./line-action-items";
+import { writeLineItems, reconcileReviewVelocity, insertLineItems, loadActionItemLines } from "./line-action-items";
+import { poListOrderBy, PO_SORT_KEYS } from "./po-queries";
 import { openLineItemsSql, PO_ACTION_ITEMS_SQL } from "./po-action-items";
 import { evaluateAutoClose } from "./po-close";
 import { loadPoAsinRows } from "./po-queries";
@@ -100,5 +101,31 @@ describe("po_line_action_items on the real schema (rolled back)", () => {
       await writeLineItems(q, s.po, [s.b1], ["Review Velocity", "SHIP"], null);
       expect((await open(q, s.b1)).map((r: any) => r.item)).toEqual(["SHIP"]);
     });
+  });
+});
+
+describe("PO table v2 commit 2 on the real schema (rolled back)", () => {
+  it("the PO-level set puts an item on every line; the detail counts lines, ASINs and reasons", async (ctx) => {
+    if (!client) return ctx.skip();
+    await inTx(async (q) => {
+      const s = await seed(q);
+      await writeLineItems(q, s.po, [s.a1, s.a2, s.b1], ["SHIP"], null);
+      await insertLineItems(q, s.a2, ["Need to return"], "manual");
+      await insertLineItems(q, s.b1, ["Review Velocity"], "auto", "not in Velocity");
+      const d = (await loadActionItemLines(q as any, [s.po])).get(s.po)!;
+      expect(d["SHIP"]).toEqual({ lines: 3, of: 3, asins: ["B0ZZV2000A", "B0ZZV2000B"], reasons: [] });
+      expect(d["Need to return"]).toEqual({ lines: 1, of: 3, asins: ["B0ZZV2000A"], reasons: [] });
+      expect(d["Review Velocity"]).toEqual({ lines: 1, of: 3, asins: ["B0ZZV2000B"], reasons: ["not in Velocity"] });
+    });
+  });
+  it("every whitelisted sort runs against the list's real SELECT", async (ctx) => {
+    if (!client) return ctx.skip();
+    for (const k of Object.keys(PO_SORT_KEYS)) for (const dir of ["asc", "desc"]) {
+      const r = await client!.query(`SELECT p.id, cardinality(${PO_ACTION_ITEMS_SQL}) AS action_item_count,
+          (SELECT COUNT(*)::int FROM po_asins a WHERE a.po_id = p.id) AS asin_count,
+          (SELECT COALESCE(SUM(a.qty), 0)::float8 FROM po_asins a WHERE a.po_id = p.id) AS units_ordered
+        FROM purchase_orders p ORDER BY ${poListOrderBy(k, dir)} LIMIT 3`);
+      expect(r.rows.length).toBeLessThanOrEqual(3);
+    }
   });
 });

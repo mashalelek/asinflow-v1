@@ -76,3 +76,27 @@ export async function loadPoAsinRows(query: QueryLike, poIds: string[]): Promise
   for (const l of lines) { const k = String(l.po_asin_id); if (!linesByAsin.has(k)) linesByAsin.set(k, []); linesByAsin.get(k)!.push({ ...normalizeLineQty(l), action_items: unionActionItems([l.action_items]) }); }
   return rows.map((r: any) => ({ ...normalizeAsinRowQty(r), action_items: unionActionItems([r.action_items]), shipments: byAsin.get(String(r.id)) ?? [], lines: linesByAsin.get(String(r.id)) ?? [] }));
 }
+
+/**
+ * POs list sort (PO table v2 §4): `?sort=<key>&dir=asc|desc`, whitelisted —
+ * anything else falls back to the default (PO date, newest first). Every
+ * ORDER BY ends on p.id so equal keys page deterministically. The keys
+ * name the list's output columns (asin_count, units_ordered,
+ * action_item_count) or columns of p.
+ */
+export const PO_SORT_KEYS: Readonly<Record<string, string>> = {
+  order_date: "p.order_date",
+  order_id: "p.order_id",
+  supplier: "lower(p.supplier)",
+  status: "(p.closed_at IS NOT NULL)",
+  order_total: "p.order_total",
+  asins: "asin_count",
+  units_ordered: "units_ordered",
+  action_items: "action_item_count",
+};
+export function poListOrderBy(sort: unknown, dir: unknown): string {
+  const expr = typeof sort === "string" ? PO_SORT_KEYS[sort] : undefined;
+  if (!expr) return "p.order_date DESC, p.created_at DESC, p.id DESC";
+  const d = dir === "asc" ? "ASC" : "DESC";
+  return `${expr} ${d} NULLS LAST, p.id ${d}`;
+}

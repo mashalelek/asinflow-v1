@@ -68,7 +68,7 @@ describe("consumers switched (§6.3)", () => {
     expect(block).toMatch(/app\.patch\("\/api\/pos\/asin-rows\/:id\/action-items"/);
     expect(block).toMatch(/app\.patch\("\/api\/pos\/lines\/:id\/action-items"/);
     expect(block).toMatch(/normalizeActionItems\(/);
-    expect((block.match(/await evaluateAutoClose\(/g) ?? []).length).toBe(7); // ASIN + product action items, ASIN cancel, quantities, shipments ×2, Sync Shipments (the unmatched link: shipment-link.ts)
+    expect((block.match(/await evaluateAutoClose\(/g) ?? []).length).toBe(8); // PO + ASIN + product action items, ASIN cancel, quantities, shipments ×2, Sync Shipments (the unmatched link: shipment-link.ts)
   });
   it("the importer writes action_items / closed_at / qty_canceled and never the status column", () => {
     const imp = read("script/import-po-2026.ts");

@@ -99,3 +99,30 @@ export async function reconcileReviewVelocity(query: QueryLike, poIds: readonly 
   }
   return { set, cleared };
 }
+
+export interface ActionItemLines { lines: number; of: number; asins: string[]; reasons: string[] }
+/**
+ * Per PO, per stored open item: lines carrying it of all the PO's lines, the
+ * ASINs they belong to, and the auto reasons — for the PO row chip's count
+ * badge ("·2" when not every line has it) and hover.
+ */
+export async function loadActionItemLines(query: QueryLike, poIds: readonly string[]): Promise<Map<string, Record<string, ActionItemLines>>> {
+  const out = new Map<string, Record<string, ActionItemLines>>();
+  if (poIds.length === 0) return out;
+  const rows = (await query(
+    `SELECT l.po_id, ai.item, count(DISTINCT l.id)::int AS lines,
+            (SELECT count(*)::int FROM po_line_items x WHERE x.po_id = l.po_id) AS of,
+            array_agg(DISTINCT pa.asin ORDER BY pa.asin) AS asins,
+            COALESCE(array_agg(DISTINCT ai.reason) FILTER (WHERE ai.reason IS NOT NULL), '{}') AS reasons
+       FROM po_line_action_items ai JOIN po_line_items l ON l.id = ai.po_line_item_id
+       LEFT JOIN po_asins pa ON pa.id = l.po_asin_id
+      WHERE ai.cleared_at IS NULL AND l.po_id = ANY($1::uuid[])
+      GROUP BY l.po_id, ai.item`, [poIds],
+  )).rows as Array<{ po_id: string; item: string } & ActionItemLines>;
+  for (const r of rows) {
+    const k = String(r.po_id);
+    if (!out.has(k)) out.set(k, {});
+    out.get(k)![r.item] = { lines: r.lines, of: r.of, asins: (r.asins ?? []).filter(Boolean), reasons: r.reasons ?? [] };
+  }
+  return out;
+}

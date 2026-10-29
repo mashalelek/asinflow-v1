@@ -29,7 +29,8 @@ describe("wiring", () => {
     expect(routes).toMatch(/app\.patch\("\/api\/pos\/asin-rows\/:id\/action-items"[\s\S]*?writeLineItems\(q, String\(pa\.po_id\), lines, v\.value, uid\(req\)\)/);
     expect(routes).toMatch(/app\.patch\("\/api\/pos\/lines\/:id\/action-items"[\s\S]*?writeLineItems\(q, String\(line\.po_id\), \[id\], v\.value, uid\(req\)\)/);
     expect(routes).not.toMatch(/SET action_items =/);
-    expect(routes).not.toMatch(/app\.patch\("\/api\/pos\/:id\/action-items"/);
+    // PO table v2 §4: the PO-level set applies to every product line
+    expect(routes).toMatch(/app\.patch\("\/api\/pos\/:id\/action-items"[\s\S]*?SELECT id FROM po_line_items WHERE po_id = \$1[\s\S]*?writeLineItems\(q, id, lines, v\.value, uid\(req\)\)/);
     expect(routes).not.toMatch(/UPDATE purchase_orders SET action_items/);
     expect(routes).toMatch(/app\.post\("\/api\/pos\/asin-rows\/:id\/cancel"[\s\S]*?UPDATE po_line_items SET qty_canceled = qty_ordered WHERE po_asin_id = \$1/);
   });
