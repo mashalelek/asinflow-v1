@@ -18,6 +18,7 @@ import { ingestTracking } from "./tracking-ingest";
 import { pushTracking } from "./tracking-push";
 import { gmailClient } from "./gmail-client";
 import type { QueryLike } from "./scheduler/types";
+import { reconcileReviewVelocity } from "./line-action-items";
 
 /** Pure: the POs a queued row most likely belongs to — the guessed supplier's PO first, then digits-only order # hits; ≤ 3. */
 export function suggestPos(row: { retailer_order_id: string | null; supplier_guess: string | null }, pos: readonly PoRef[]): Array<{ po_id: string; order_id: string; supplier: string }> {
@@ -157,11 +158,14 @@ export function createTrackingRouter(deps: { query?: QueryLike } = {}): Router {
         `UPDATE po_tracking SET reassigned_from_po_id = COALESCE(po_id, reassigned_from_po_id), reassigned_at = NOW(), source = 'manual',
                 po_id = $2, supplier_guess = $3, status = 'matched', match_reason = NULL, review_reason = NULL, push_error = NULL,
                 suppressed_at = NULL, updated_at = NOW()
-          WHERE id = $1 AND tracking_number NOT LIKE 'email:%' AND po_id IS DISTINCT FROM $2 RETURNING id`,
+          WHERE id = $1 AND tracking_number NOT LIKE 'email:%' AND po_id IS DISTINCT FROM $2 RETURNING id, reassigned_from_po_id`,
         [id, poId, po.supplier],
       );
       if (r.rows.length === 0) { res.status(409).json({ error: "not_moved", message: "row not found, a placeholder, or already on that PO" }); return; }
-      res.json({ ok: true, push: await pushTracking({ query, poId }) });
+      const push = await pushTracking({ query, poId });
+      // The PO the row left may lose its Review Velocity; the new PO is reconciled by the push.
+      await reconcileReviewVelocity(query, [String(r.rows[0].reassigned_from_po_id ?? ""), poId]);
+      res.json({ ok: true, push });
     } catch (err) { fail(res, err); }
   });
 
@@ -174,6 +178,8 @@ export function createTrackingRouter(deps: { query?: QueryLike } = {}): Router {
           WHERE po_id = $1 AND review_reason IS NOT NULL AND suppressed_at IS NULL RETURNING id`,
         [poId],
       );
+      // Cleared by hand → the Review Velocity line items clear as 'manual'.
+      await reconcileReviewVelocity(query, [poId]);
       res.json({ ok: true, suppressed: r.rows.length });
     } catch (err) { fail(res, err); }
   });

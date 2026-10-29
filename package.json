@@ -16,6 +16,7 @@
     "test:watch": "vitest",
     "migrate": "tsx script/migrate.ts",
     "migrate:status": "tsx script/migrate.ts --status",
+    "backfill:line-action-items": "tsx script/backfill-line-action-items.ts",
     "backfill:sales": "tsx script/backfill-sales.ts",
     "backfill:ledger": "tsx script/backfill-ledger.ts",
     "gmail:check": "tsx script/gmail-check.ts",

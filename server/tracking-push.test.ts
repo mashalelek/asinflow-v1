@@ -40,6 +40,7 @@ describe("buildTrackingPutBody — echo-merge", () => {
 
 function world(o: { rows: any[]; inbound: any[]; known?: any[]; putFails?: string[]; identities?: any[] }) {
   const updates: any[][] = [];
+  const reconciled: string[][] = [];
   // One entry per append call — the bulk endpoint gets ids + numbers, nothing else.
   const puts: Array<{ id: string; numbers: string[] }> = [];
   const query = async (sql: string, params?: any[]) => {
@@ -47,6 +48,8 @@ function world(o: { rows: any[]; inbound: any[]; known?: any[]; putFails?: strin
     if (sql.includes("FROM po_tracking t JOIN purchase_orders p")) return { rows: o.rows, rowCount: o.rows.length };
     if (sql.startsWith("UPDATE po_tracking")) { updates.push(params!); return { rows: [], rowCount: 1 }; }
     if (sql.includes("FROM velocity_bundle_identity")) { const r = (o.identities ?? []).filter((x) => params![0].includes(x.velocity_order_id)); return { rows: r, rowCount: r.length }; }
+    // Review Velocity mirror (PO table v2): its condition read; no writes when nothing is open.
+    if (sql.trimStart().startsWith("SELECT p.id,") && sql.includes("FROM purchase_orders p WHERE p.id = ANY")) { reconciled.push(params![0]); return { rows: [], rowCount: 0 }; }
     throw new Error(`unexpected ${sql.slice(0, 60)}`);
   };
   const deps: VelocityDeps = {

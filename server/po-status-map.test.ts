@@ -10,8 +10,8 @@ const read = (rel: string) => readFileSync(join(__dirname, "..", rel), "utf8");
 
 describe("mapSheetStatus", () => {
   it("maps every token P5 found in the PO mirror — nothing unmapped", () => {
-    const p5 = ["Closed", "Ordered", "SHIP", "Canceled", "See Comments", "Missing / Damaged from Supplier", "ATTN: Velocity",
-      "Received Partial", "Received", "Received - FBM", "Returned", "Confirm Refund / Replacement"];
+    const p5 = ["Closed", "Ordered", "SHIP", "Canceled", "See comments", "Missing / damaged from supplier", "ATTN: Velocity",
+      "Received Partial", "Received", "Received - FBM", "Returned", "Confirm refund / replacement"];
     for (const t of p5) expect(mapSheetStatus(t).unmapped, t).toEqual([]);
   });
   it("\"Lost / Damaged by Us\" and \"Partial Return\" are mapped, never a stop (Maria 2026-10-18, all years)", () => {
@@ -19,12 +19,12 @@ describe("mapSheetStatus", () => {
     expect(mapSheetStatus("Partial Return")).toMatchObject({ returned: true, unmapped: [] });
   });
   it("\"Shipped FBA\" (appeared 2026-10-16, fleetfarm MW7400517) maps to nothing — never an action item, never a stop", () => {
-    const m = mapSheetStatus("Shipped FBA, Confirm Refund / Replacement");
-    expect(m).toMatchObject({ shippedFba: true, unmapped: [], actionItems: ["Confirm Refund / Replacement"], closed: false });
+    const m = mapSheetStatus("Shipped FBA, Confirm refund / replacement");
+    expect(m).toMatchObject({ shippedFba: true, unmapped: [], actionItems: ["Confirm refund / replacement"], closed: false });
   });
   it("splits on commas, keeps action items in display order, dedupes", () => {
-    const m = mapSheetStatus("See Comments, ATTN: Velocity, see comments");
-    expect(m.actionItems).toEqual(["ATTN: Velocity", "See Comments"]);
+    const m = mapSheetStatus("See comments, ATTN: Velocity, see comments");
+    expect(m.actionItems).toEqual(["ATTN: Velocity", "See comments"]);
     expect(m.closed).toBe(false);
   });
   it("Closed → closed; Canceled → canceled; Returned / Received / Received Partial / Ordered → flags only", () => {
@@ -47,7 +47,7 @@ describe("mapSheetStatus", () => {
 
 describe("normalizeActionItems", () => {
   it("accepts known values, dedupes, orders; rejects unknown", () => {
-    expect(normalizeActionItems(["SHIP", "Need to Return", "SHIP"])).toEqual({ ok: true, value: ["Need to Return", "SHIP"] });
+    expect(normalizeActionItems(["SHIP", "Need to return", "SHIP"])).toEqual({ ok: true, value: ["Need to return", "SHIP"] });
     expect(normalizeActionItems([])).toEqual({ ok: true, value: [] });
     expect(normalizeActionItems(["Lost"]).ok).toBe(false);
     expect(normalizeActionItems("SHIP").ok).toBe(false);
@@ -60,7 +60,7 @@ describe("consumers switched (§6.3)", () => {
     const routes = read("server/routes.ts");
     const list = routes.slice(routes.indexOf('app.get("/api/pos"'), routes.indexOf('app.get("/api/pos/:id"'));
     // Row-level Status (2026-10-17): the filter is any-of over the PO's LINE action items.
-    expect(list).toMatch(/l\.action_items && \$\$\{params\.length\}::text\[\]/);
+    expect(list).toMatch(/ai\.item = ANY\(\$\$\{params\.length\}::text\[\]\)/);
     expect(list).not.toMatch(/p\.status ILIKE|string_to_array\(status/);
     // The filter options: the stored items + the derived "Review Velocity" (SPEC §26).
     expect(list).toMatch(/actionItems: DISPLAY_ACTION_ITEMS/);

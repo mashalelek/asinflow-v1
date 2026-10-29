@@ -68,7 +68,8 @@ export async function loadPoAsinRows(query: QueryLike, poIds: string[]): Promise
   // edit action items per product, so the list needs them too.
   const lines = ids.length === 0 ? [] : (await query(
     `SELECT id, po_asin_id, position, product_name, supplier_sku, price, item_discount, qty_ordered, qty_received, qty_canceled, qty_returned,
-            final_qty, asin_qty_per_product, adjusted_product_cost, notes, action_items
+            final_qty, asin_qty_per_product, adjusted_product_cost, notes,
+            ARRAY(SELECT ai.item FROM po_line_action_items ai WHERE ai.po_line_item_id = po_line_items.id AND ai.cleared_at IS NULL) AS action_items
        FROM po_line_items WHERE po_asin_id = ANY($1::uuid[]) ORDER BY po_asin_id, position, id`, [ids],
   )).rows as any[];
   const linesByAsin = new Map<string, any[]>();

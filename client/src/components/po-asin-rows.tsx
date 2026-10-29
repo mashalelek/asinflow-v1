@@ -105,8 +105,9 @@ async function patchJson(url: string, method: string, body?: unknown): Promise<a
 }
 
 // ── Action Items (row-level Status, patch row-level-status §2.1) ─────────────
-export const ACTION_ITEM_OPTIONS = ["Need to Return", "Missing / Damaged from Supplier", "Confirm Refund / Replacement", "ATTN: Velocity", "See Comments", "SHIP", "Received - FBM"];
-// §7: tinted chips only. SHIP indigo; Received - FBM green; Need to Return orange; the attention items amber.
+// Sentence case (Maria 2026-10-29) — the server stores these exact labels (po_line_action_items, migration 074).
+export const ACTION_ITEM_OPTIONS = ["Need to return", "Missing / damaged from supplier", "Confirm refund / replacement", "ATTN: Velocity", "See comments", "SHIP", "Received - FBM"];
+// §7: tinted chips only. SHIP indigo; Received - FBM green; Need to return orange; the attention items amber.
 export const EXTRA_UNITS_SHIPPED = "Extra units shipped";
 export function actionChipClass(item: string): string {
   const t = item.toLowerCase();

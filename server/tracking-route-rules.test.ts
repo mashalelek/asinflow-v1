@@ -42,9 +42,9 @@ describe("routing table (§7)", () => {
   });
 });
 
-describe("Review Velocity — auto-managed, never stored", () => {
+describe("Review Velocity — auto-managed, stored per line by the mirror only (PO table v2)", () => {
   it("shows after the manual items in the union", () => {
-    expect(unionActionItems([["See Comments", REVIEW_VELOCITY, "ATTN: Velocity"]])).toEqual(["ATTN: Velocity", "See Comments", REVIEW_VELOCITY]);
+    expect(unionActionItems([["See comments", REVIEW_VELOCITY, "ATTN: Velocity"]])).toEqual(["ATTN: Velocity", "See comments", REVIEW_VELOCITY]);
   });
   it("the editors drop it rather than refuse, and never write it to lines", () => {
     expect(normalizeActionItems(["SHIP", REVIEW_VELOCITY])).toEqual({ ok: true, value: ["SHIP"] });
@@ -54,6 +54,8 @@ describe("Review Velocity — auto-managed, never stored", () => {
   });
   it("derived from open, unsuppressed review reasons on the PO's tracking rows", () => {
     expect(REVIEW_VELOCITY_EXISTS_SQL).toMatch(/t\.review_reason IS NOT NULL AND t\.suppressed_at IS NULL/);
-    expect(PO_ACTION_ITEMS_SQL).toMatch(/UNION SELECT 'Review Velocity' WHERE EXISTS/);
+    // the PO union reads it from po_line_action_items, where reconcileReviewVelocity puts it
+    expect(PO_ACTION_ITEMS_SQL).not.toMatch(/UNION SELECT 'Review Velocity'/);
+    expect(PO_ACTION_ITEMS_SQL).toMatch(/FROM po_line_action_items ai JOIN po_line_items l ON l\.id = ai\.po_line_item_id WHERE ai\.cleared_at IS NULL AND l\.po_id = p\.id/);
   });
 });

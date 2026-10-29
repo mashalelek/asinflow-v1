@@ -33,6 +33,7 @@ import { getSheetValues } from "./sheet-read";
 import { COL, t, classifyRows } from "./po-import-classify";
 import { mapSheetStatus, ACTION_ITEMS, type ActionItem } from "./po-status-map";
 import { sheetEntrySeqByKey } from "./po-entry-seq";
+import { insertLineItems } from "./line-action-items";
 
 // ── parsing helpers (ported verbatim from script/import-po-2026.ts) ──────────
 
@@ -557,7 +558,11 @@ export async function syncPoSheet(opts: { sheetId: string; dryRun: boolean; db?:
   const dbAsins = (await db.query(`SELECT pa.*, (SELECT COUNT(*)::int FROM po_asin_shipments s WHERE s.po_asin_id = pa.id) AS shipment_rows FROM po_asins pa`)).rows;
   const dbAsinsByPo = new Map<string, any[]>();
   for (const a of dbAsins) { if (!dbAsinsByPo.has(a.po_id)) dbAsinsByPo.set(a.po_id, []); dbAsinsByPo.get(a.po_id)!.push(a); }
-  const dbLines = (await db.query(`SELECT * FROM po_line_items ORDER BY po_asin_id, position`)).rows;
+  // Action items for the drift compare come from po_line_action_items (open, manual vocabulary).
+  const dbLines = (await db.query(
+    `SELECT l.*, ARRAY(SELECT ai.item FROM po_line_action_items ai WHERE ai.po_line_item_id = l.id AND ai.cleared_at IS NULL AND ai.item = ANY($1::text[])) AS open_action_items
+       FROM po_line_items l ORDER BY l.po_asin_id, l.position`, [ACTION_ITEMS],
+  )).rows.map((r: any) => ({ ...r, action_items: ACTION_ITEMS.filter((a) => (r.open_action_items ?? []).includes(a)) }));
   const dbLinesByAsinId = new Map<string, any[]>();
   for (const l of dbLines) { const k = String(l.po_asin_id); if (!dbLinesByAsinId.has(k)) dbLinesByAsinId.set(k, []); dbLinesByAsinId.get(k)!.push(l); }
   const allAsins = Array.from(new Set(parsed.pos.flatMap((p) => p.poAsins.map((a) => a.asin))));
@@ -768,9 +773,13 @@ async function insertPoAsin(client: Q, poId: string, a: SheetPoAsin, po: SheetPo
 
 async function insertLine(client: Q, poId: string, poAsinId: string | null, l: SheetLine, po: SheetPo): Promise<void> {
   // final_qty is GENERATED — never inserted. item_discount stays 0 as the importer wrote it.
-  await client.query(
-    `INSERT INTO po_line_items (po_id, po_asin_id, position, product_name, supplier_sku, price, item_discount, qty_ordered, qty_received, qty_returned, asin_qty_per_product, adjusted_product_cost, qty_canceled, action_items)
-     VALUES ($1,$2,$3,$4,$5,$6,0,$7,$8,$9,$10,$11,$12,$13::text[])`,
-    [poId, poAsinId, l.position, l.productName, l.supplierSku, l.price, l.qtyOrdered, l.qtyReceived, l.qtyReturned, l.asinQtyPerProduct, l.adjustedProductCost, l.canceled ? l.qtyOrdered : null, l.actionItems],
+  // The row's action items go to po_line_action_items (PO table v2, source 'sheet');
+  // the deprecated po_line_items.action_items column is left empty.
+  const ins = await client.query(
+    `INSERT INTO po_line_items (po_id, po_asin_id, position, product_name, supplier_sku, price, item_discount, qty_ordered, qty_received, qty_returned, asin_qty_per_product, adjusted_product_cost, qty_canceled)
+     VALUES ($1,$2,$3,$4,$5,$6,0,$7,$8,$9,$10,$11,$12) RETURNING id`,
+    [poId, poAsinId, l.position, l.productName, l.supplierSku, l.price, l.qtyOrdered, l.qtyReceived, l.qtyReturned, l.asinQtyPerProduct, l.adjustedProductCost, l.canceled ? l.qtyOrdered : null],
   );
+  const lineId = ins.rows?.[0]?.id;
+  if (lineId != null) await insertLineItems((sql, params) => client.query(sql, params), String(lineId), l.actionItems, "sheet");
 }

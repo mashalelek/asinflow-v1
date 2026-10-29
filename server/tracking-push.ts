@@ -23,6 +23,7 @@ import { routeTracking, joinReasons, type ShipsTo } from "./tracking-route-rules
 import { isPlaceholder } from "./tracking-ingest";
 import { hydrateChildlessBundles } from "./velocity-bundle-identity";
 import type { QueryLike } from "./scheduler/types";
+import { reconcileReviewVelocity } from "./line-action-items";
 
 export const CARRIER_MAP_KEY = "tracking.carrier_map";
 const INBOUND_UNIT_STATUSES = new Set(["pending", "partially_received"]);
@@ -255,6 +256,8 @@ export async function pushTracking(opts: { query: QueryLike; deps?: VelocityDeps
     }
     res.plans.push(plan);
   }
+  // Review Velocity lives on the PO's product lines (PO table v2): mirror the new review reasons.
+  if (!opts.dryRun) await reconcileReviewVelocity(opts.query, Array.from(byPo.keys()));
   opts.log?.(`push: ${res.rows_evaluated} rows, ${res.pushed} pushed, ${res.already_present} already present, ${res.push_failed} failed, ${res.held} held, ${res.review} review; ${res.puts} PUTs`);
   return res;
 }

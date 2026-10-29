@@ -53,28 +53,29 @@ export const EXTRA_UNITS_EXISTS_SQL = `EXISTS (SELECT 1 FROM po_asins pk WHERE p
 export const PACK_SIZE_MISSING_EXISTS_SQL = `EXISTS (SELECT 1 FROM po_asins pk WHERE pk.po_id = p.id AND ${packMissing("pk")})`;
 export const PACK_SIZE_MISMATCH_EXISTS_SQL = `EXISTS (SELECT 1 FROM po_asins pk WHERE pk.po_id = p.id AND ${packMismatch("pk")})`;
 
+/** Open stored items (po_line_action_items, migration 074) of the lines matching `where` (alias l). */
+export const openLineItemsSql = (where: string) =>
+  `SELECT ai.item FROM po_line_action_items ai JOIN po_line_items l ON l.id = ai.po_line_item_id WHERE ai.cleared_at IS NULL AND ${where}`;
 /** SQL: the union of line action items for an ASIN row (alias pa) / a PO (alias p), plus the derived ones. Unordered; order with unionActionItems. */
-export const ASIN_ACTION_ITEMS_SQL = `ARRAY(SELECT DISTINCT x FROM po_line_items l, unnest(l.action_items) x WHERE l.po_asin_id = pa.id
+export const ASIN_ACTION_ITEMS_SQL = `ARRAY(${openLineItemsSql("l.po_asin_id = pa.id")}
   UNION SELECT '${EXTRA_UNITS_SHIPPED}' WHERE ${extraUnits("pa")}
   UNION SELECT '${PACK_SIZE_MISSING}' WHERE ${packMissing("pa")}
   UNION SELECT '${PACK_SIZE_MISMATCH}' WHERE ${packMismatch("pa")}
   UNION SELECT '${RECEIVING_MISMATCH}' WHERE ${receivingMismatch("pa")})`;
 /**
- * "Review Velocity" (SPEC §26): while a tracking row of the PO has a review
- * reason and was not cleared by hand. Rides the PO union, so the POs column,
- * PO Details and the auto-close rule (no action items → may close) all see it.
+ * "Review Velocity" (SPEC §26) condition: a tracking row of the PO has a
+ * review reason and was not cleared by hand. Since PO table v2 the item itself
+ * is stored on every line (reconcileReviewVelocity mirrors this condition).
  */
 export const REVIEW_VELOCITY_EXISTS_SQL = `EXISTS (SELECT 1 FROM po_tracking t WHERE t.po_id = p.id AND t.review_reason IS NOT NULL AND t.suppressed_at IS NULL)`;
 /** The PO's items that block auto-close: everything except Receiving mismatch (received never drives anything). */
-export const PO_CLOSE_ACTION_ITEMS_SQL = `ARRAY(SELECT DISTINCT x FROM po_line_items l, unnest(l.action_items) x WHERE l.po_id = p.id
+export const PO_CLOSE_ACTION_ITEMS_SQL = `ARRAY(${openLineItemsSql("l.po_id = p.id")}
   UNION SELECT '${EXTRA_UNITS_SHIPPED}' WHERE ${EXTRA_UNITS_EXISTS_SQL}
-  UNION SELECT '${REVIEW_VELOCITY}' WHERE ${REVIEW_VELOCITY_EXISTS_SQL}
   UNION SELECT '${PACK_SIZE_MISSING}' WHERE ${PACK_SIZE_MISSING_EXISTS_SQL}
   UNION SELECT '${PACK_SIZE_MISMATCH}' WHERE ${PACK_SIZE_MISMATCH_EXISTS_SQL})`;
 /** The PO's displayed items: the close set plus Receiving mismatch. */
-export const PO_ACTION_ITEMS_SQL = `ARRAY(SELECT DISTINCT x FROM po_line_items l, unnest(l.action_items) x WHERE l.po_id = p.id
+export const PO_ACTION_ITEMS_SQL = `ARRAY(${openLineItemsSql("l.po_id = p.id")}
   UNION SELECT '${EXTRA_UNITS_SHIPPED}' WHERE ${EXTRA_UNITS_EXISTS_SQL}
-  UNION SELECT '${REVIEW_VELOCITY}' WHERE ${REVIEW_VELOCITY_EXISTS_SQL}
   UNION SELECT '${PACK_SIZE_MISSING}' WHERE ${PACK_SIZE_MISSING_EXISTS_SQL}
   UNION SELECT '${PACK_SIZE_MISMATCH}' WHERE ${PACK_SIZE_MISMATCH_EXISTS_SQL}
   UNION SELECT '${RECEIVING_MISMATCH}' WHERE ${RECEIVING_MISMATCH_EXISTS_SQL})`;

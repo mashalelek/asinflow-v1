@@ -8,23 +8,35 @@
 // as closed_at / closed_by = 'sheet'), and state words that are now
 // per-ASIN quantities or nothing at all.
 
-/** §6.1 allowed values, display order. Mirrors the CHECK in migration 056. */
+/**
+ * §6.1 allowed values, display order — sentence case (Maria 2026-10-29). Mirrors
+ * the CHECK on po_line_action_items.item (migration 074), which also allows
+ * the auto "Review Velocity".
+ */
 export const ACTION_ITEMS = [
-  "Need to Return",
-  "Missing / Damaged from Supplier",
-  "Confirm Refund / Replacement",
+  "Need to return",
+  "Missing / damaged from supplier",
+  "Confirm refund / replacement",
   "ATTN: Velocity",
-  "See Comments",
+  "See comments",
   "SHIP",            // only meaningful when the PO ships from the house (manual)
   "Received - FBM",  // only when the PO ships from the house (manual)
 ] as const;
+/** Pre-2026-10-29 spellings (migrations 056 / 058) → today's label. */
+export const LEGACY_ACTION_ITEMS: Readonly<Record<string, ActionItem>> = {
+  "Need to Return": "Need to return",
+  "Missing / Damaged from Supplier": "Missing / damaged from supplier",
+  "Confirm Refund / Replacement": "Confirm refund / replacement",
+  "See Comments": "See comments",
+};
 export type ActionItem = (typeof ACTION_ITEMS)[number];
 
 /**
- * Auto-managed action items (PO tracking, SPEC §26 / §22, 2026-10-21): never
- * stored on lines (not in the CHECK), derived from po_tracking — "Review
- * Velocity" while any of the PO's tracking rows has a review reason and has
- * not been cleared by hand. Shown after the manual items.
+ * "Review Velocity" (PO tracking, SPEC §26): stored on every product line of
+ * the PO in po_line_action_items (source 'auto', PO table v2 2026-10-29),
+ * mirrored from po_tracking by reconcileReviewVelocity — open while any of
+ * the PO's tracking rows has a review reason and has not been cleared by
+ * hand. Never set from an editor. Shown after the manual items.
  */
 export const REVIEW_VELOCITY = "Review Velocity";
 /**
@@ -67,11 +79,12 @@ export function normalizeActionItems(input: unknown): { ok: true; value: ActionI
   for (const x of input) {
     const s = String(x ?? "").trim();
     if (!s) continue;
-    // Auto items (Review Velocity) are derived, never stored: an editor that
-    // echoes the displayed union may send one — drop it, do not refuse.
+    // Auto items (Review Velocity, the derived ones) are never set from an
+    // editor: one that echoes the displayed union may send one — drop it.
     if ((AUTO_ACTION_ITEMS as readonly string[]).includes(s)) continue;
-    if (!isActionItem(s)) return { ok: false, error: `unknown action item: ${s}` };
-    set.add(s);
+    const v = LEGACY_ACTION_ITEMS[s] ?? s;
+    if (!isActionItem(v)) return { ok: false, error: `unknown action item: ${s}` };
+    set.add(v);
   }
   return { ok: true, value: ACTION_ITEMS.filter((a) => set.has(a)) };
 }

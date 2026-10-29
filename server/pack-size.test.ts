@@ -135,9 +135,9 @@ describe("Pack size missing / mismatch are derived action items", () => {
     expect(PO_ACTION_ITEMS_SQL).toContain(`'${PACK_SIZE_MISMATCH}' WHERE EXISTS (SELECT 1 FROM po_asins pk WHERE pk.po_id = p.id AND (pk.sold_as IS NOT NULL`);
   });
   it("never stored: the editor's echo is dropped, not refused, and never written to lines", () => {
-    expect(normalizeActionItems(["See Comments", PACK_SIZE_MISSING, PACK_SIZE_MISMATCH])).toEqual({ ok: true, value: ["See Comments"] });
-    const out = asinWriteThrough([{ id: "l1", action_items: [] }], [PACK_SIZE_MISMATCH, "See Comments"]);
-    expect(out.get("l1")).toEqual(["See Comments"]);
+    expect(normalizeActionItems(["See comments", PACK_SIZE_MISSING, PACK_SIZE_MISMATCH])).toEqual({ ok: true, value: ["See comments"] });
+    const out = asinWriteThrough([{ id: "l1", action_items: [] }], [PACK_SIZE_MISMATCH, "See comments"]);
+    expect(out.get("l1")).toEqual(["See comments"]);
   });
 });
 

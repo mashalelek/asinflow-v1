@@ -14,11 +14,12 @@ import { loadAliases, resolveRetailer, setAlias } from "./supplier-aliases";
 import { linkUnmatchedLine } from "./shipment-link";
 import { likeContains, stripShipmentSuffix } from "./order-number";
 import { clearExtraUnits } from "./extra-units";
+import { writeLineItems } from "./line-action-items";
 import { velocityIneligible, ineligibleText } from "./shipment-match";
 import { readVelocityStartDate } from "./ships-to-backfill";
 import { evaluateAutoClose, setPoClosedManually, parseQtyInput, MANUAL_QTY_COLUMNS, type ManualQtyColumn } from "./po-close";
-import { ACTION_ITEMS, DISPLAY_ACTION_ITEMS, REVIEW_VELOCITY, EXTRA_UNITS_SHIPPED, PACK_SIZE_MISSING, PACK_SIZE_MISMATCH, RECEIVING_MISMATCH, normalizeActionItems } from "./po-status-map";
-import { asinWriteThrough, unionActionItems, PO_ACTION_ITEMS_SQL, REVIEW_VELOCITY_EXISTS_SQL, REVIEW_VELOCITY_REASONS_SQL, PACK_SIZE_MISSING_EXISTS_SQL, PACK_SIZE_MISMATCH_EXISTS_SQL, RECEIVING_MISMATCH_EXISTS_SQL, EXTRA_UNITS_EXISTS_SQL } from "./po-action-items";
+import { ACTION_ITEMS, LEGACY_ACTION_ITEMS, DISPLAY_ACTION_ITEMS, REVIEW_VELOCITY, EXTRA_UNITS_SHIPPED, PACK_SIZE_MISSING, PACK_SIZE_MISMATCH, RECEIVING_MISMATCH, normalizeActionItems } from "./po-status-map";
+import { openLineItemsSql, unionActionItems, PO_ACTION_ITEMS_SQL, REVIEW_VELOCITY_REASONS_SQL, PACK_SIZE_MISSING_EXISTS_SQL, PACK_SIZE_MISMATCH_EXISTS_SQL, RECEIVING_MISMATCH_EXISTS_SQL, EXTRA_UNITS_EXISTS_SQL } from "./po-action-items";
 import { editPoHeader, editLine, addLine, removeLine, editAsinRow, loadPoHistory, logEdits, changedFields, asLogText, EditError, type EditResult } from "./po-edit";
 import { createPoFromForm, lookupAsins } from "./po-create";
 import { loadPoGuards, deletePo, cancelPo, assertAsinRowCancelable, reassignShipment } from "./po-guards";
@@ -4282,17 +4283,15 @@ export async function registerRoutes(
         OR EXISTS (SELECT 1 FROM po_asins a WHERE a.po_id = p.id AND a.asin ILIKE $${n})
         OR EXISTS (SELECT 1 FROM po_line_items l WHERE l.po_id = p.id AND l.product_name ILIKE $${n}))`);
     }
-    // Action Items filter: any-of over action_items[] (values never contain
+    // Action Items filter: any-of, a PO matches when ANY product line has an
+    // open item (po_line_action_items, PO table v2; values never contain
     // commas). Both facets accept comma-separated multi-selects: OR within a
-    // facet, AND across facets.
+    // facet, AND across facets. Old label spellings map to today's.
     if (action) {
-      const wanted = action.split(",").map((x) => x.trim());
-      const items = wanted.filter((x) => (ACTION_ITEMS as readonly string[]).includes(x));
-      // "Review Velocity" is derived (SPEC §26) — OR'd in from po_tracking.
-      const review = wanted.includes(REVIEW_VELOCITY);
+      const wanted = action.split(",").map((x) => x.trim()).map((x): string => LEGACY_ACTION_ITEMS[x] ?? x);
+      const items = wanted.filter((x) => (ACTION_ITEMS as readonly string[]).includes(x) || x === REVIEW_VELOCITY);
       const any: string[] = [];
-      if (items.length > 0) { params.push(items); any.push(`EXISTS (SELECT 1 FROM po_line_items l WHERE l.po_id = p.id AND l.action_items && $${params.length}::text[])`); }
-      if (review) any.push(REVIEW_VELOCITY_EXISTS_SQL);
+      if (items.length > 0) { params.push(items); any.push(`EXISTS (${openLineItemsSql(`l.po_id = p.id AND ai.item = ANY($${params.length}::text[])`)})`); }
       // The pack-size items are derived from po_asins (2026-10-29).
       if (wanted.includes(PACK_SIZE_MISSING)) any.push(PACK_SIZE_MISSING_EXISTS_SQL);
       if (wanted.includes(PACK_SIZE_MISMATCH)) any.push(PACK_SIZE_MISMATCH_EXISTS_SQL);
@@ -4540,13 +4539,10 @@ export async function registerRoutes(
     try {
       const pa = (await query(`SELECT po_id FROM po_asins WHERE id = $1`, [id])).rows[0];
       if (!pa) { res.status(404).json({ message: "ASIN row not found" }); return; }
-      const lines = (await query(`SELECT id, action_items FROM po_line_items WHERE po_asin_id = $1`, [id])).rows;
+      const lines = (await query(`SELECT id FROM po_line_items WHERE po_asin_id = $1`, [id])).rows.map((l: any) => String(l.id));
       if (lines.length === 0) { res.status(409).json({ message: "this ASIN row has no product lines to carry action items" }); return; }
-      const before = new Map(lines.map((l: any) => [String(l.id), l.action_items]));
-      for (const [lineId, items] of Array.from(asinWriteThrough(lines, v.value).entries())) {
-        await query(`UPDATE po_line_items SET action_items = $2::text[] WHERE id = $1`, [lineId, items]);
-        await logEdits(poQuery, String(pa.po_id), uid(req), "line", lineId, changedFields({ action_items: before.get(lineId) }, { action_items: items }));
-      }
+      // Write-through to every product line of the ASIN row (po_line_action_items).
+      await withPoTx((q) => writeLineItems(q, String(pa.po_id), lines, v.value, uid(req)));
       const close = await evaluateAutoClose(String(pa.po_id), poQuery);
       const [row] = await loadPoAsinRows(poQuery, [String(pa.po_id)]).then((rows) => rows.filter((x: any) => String(x.id) === id));
       res.json({ row, close });
@@ -4568,11 +4564,10 @@ export async function registerRoutes(
     const v = normalizeActionItems((req.body ?? {}).action_items);
     if (!v.ok) { res.status(400).json({ message: v.error }); return; }
     try {
-      const prev = (await query(`SELECT action_items FROM po_line_items WHERE id = $1`, [id])).rows[0];
-      const r = await query(`UPDATE po_line_items SET action_items = $2::text[] WHERE id = $1 RETURNING po_id`, [id, v.value]);
-      if (r.rowCount === 0) { res.status(404).json({ message: "product line not found" }); return; }
-      await logEdits(poQuery, String(r.rows[0].po_id), uid(req), "line", id, changedFields({ action_items: prev?.action_items }, { action_items: v.value }));
-      const close = await evaluateAutoClose(String(r.rows[0].po_id), poQuery);
+      const line = (await query(`SELECT po_id FROM po_line_items WHERE id = $1`, [id])).rows[0];
+      if (!line) { res.status(404).json({ message: "product line not found" }); return; }
+      await withPoTx((q) => writeLineItems(q, String(line.po_id), [id], v.value, uid(req)));
+      const close = await evaluateAutoClose(String(line.po_id), poQuery);
       res.json({ ok: true, close });
     } catch (err: any) { res.status(500).json({ message: err.message }); }
   });

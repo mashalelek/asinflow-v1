@@ -54,7 +54,8 @@ function fakeDb(state: DbState) {
     const s = sql.trim();
     if (s.startsWith("SELECT * FROM purchase_orders")) return { rows: state.pos, rowCount: state.pos.length };
     if (s.startsWith("SELECT pa.*")) return { rows: state.asins, rowCount: state.asins.length };
-    if (s.startsWith("SELECT * FROM po_line_items")) return { rows: state.lines, rowCount: state.lines.length };
+    // Lines with their open items from po_line_action_items (PO table v2) — the fixture's action_items stand in.
+    if (s.startsWith("SELECT l.*, ARRAY(SELECT ai.item FROM po_line_action_items ai")) return { rows: state.lines.map((l: any) => ({ ...l, open_action_items: l.action_items ?? [] })), rowCount: state.lines.length };
     if (s.startsWith("SELECT asin, primary_sku")) return { rows: Object.entries(state.skus ?? {}).map(([asin, primary_sku]) => ({ asin, primary_sku })), rowCount: 0 };
     if (s.startsWith("SELECT supplier, order_id FROM deleted_pos")) return { rows: (state as any).tombstones ?? [], rowCount: 0 };
     writes.push({ sql: s, params });
@@ -196,9 +197,9 @@ describe("syncPoSheet — dry run computes the §3.9 counts and writes nothing",
 
   it("\"Shipped FBA\" is a no-op token, not a stop (decision 1, 2026-10-16)", async () => {
     const db = fakeDb(state);
-    const r = await syncPoSheet({ sheetId: "s", dryRun: true, db, read: read([row({ orderId: "A1", status: "Shipped FBA, Confirm Refund / Replacement" })]) });
+    const r = await syncPoSheet({ sheetId: "s", dryRun: true, db, read: read([row({ orderId: "A1", status: "Shipped FBA, Confirm refund / replacement" })]) });
     expect(r.stop).toBeNull();
-    expect(r.diffs.find((d) => d.po === "walmart.com A1")?.changes).toEqual(["B000000001 line 0.action_items: [] → [\"Confirm Refund / Replacement\"]"]);
+    expect(r.diffs.find((d) => d.po === "walmart.com A1")?.changes).toEqual(["B000000001 line 0.action_items: [] → [\"Confirm refund / replacement\"]"]);
   });
 
   it("live run (intake-only, af-owned 2026-10-18): inserts new POs like the importer, Open, with entry_seq; never writes an existing PO", async () => {
@@ -289,14 +290,14 @@ describe("row-level Status: each sheet row's Status maps onto its own line", () 
   };
   const cells = [
     row({ orderId: "912003733645362", supplier: "target.com", asin: "B0H4P226KP", status: "Closed" }),
-    row({ orderId: "912003733645362", supplier: "target.com", asin: "B0H3XJTQVG", status: "Closed, See Comments" }),
+    row({ orderId: "912003733645362", supplier: "target.com", asin: "B0H3XJTQVG", status: "Closed, See comments" }),
     row({ orderId: "912003733645362", supplier: "target.com", asin: "B0HGP5P91F", status: "Received, Returned", L: "2", N: "2", R: "" }),
   ];
   it("PO is Open unless EVERY row says Closed; action items go to their own line only; PO-level array untouched", async () => {
     const r = await syncPoSheet({ sheetId: "s", dryRun: true, db: fakeDb(state), read: read(cells) });
     const ch = r.diffs.find((d) => d.po === "target.com 912003733645362")!.changes;
     expect(ch).toContain("closed: closed (sheet) → open");
-    expect(ch).toContain('B0H3XJTQVG line 0.action_items: [] → ["See Comments"]');
+    expect(ch).toContain('B0H3XJTQVG line 0.action_items: [] → ["See comments"]');
     expect(ch.some((c) => c.startsWith("B0H4P226KP line 0.action_items"))).toBe(false);
     expect(ch.some((c) => c.startsWith("action_items"))).toBe(false);
     expect(r.counts.sheetDiffers).toBe(1); // drift only — intake-only since 2026-10-18
@@ -323,8 +324,11 @@ describe("row-level Status: each sheet row's Status maps onto its own line", () 
       row({ orderId: "NB", asin: "B0BUNDLE01", S: "2", status: "Canceled" }),
     ]) });
     const li = db.writes.filter((w) => w.sql.startsWith("INSERT INTO po_line_items"));
-    expect(li.map((w) => [w.params?.[11], w.params?.[12]])).toEqual([[null, ["SHIP"]], [4, []]]);
-    expect(li[0].sql).toMatch(/\$13::text\[\]/);
+    expect(li.map((w) => w.params?.[11])).toEqual([null, 4]);
+    expect(li[0].sql).not.toMatch(/action_items/); // the deprecated column is no longer written
+    // the row's items go to po_line_action_items on that line only, source 'sheet'
+    const items = db.writes.filter((w) => w.sql.startsWith("INSERT INTO po_line_action_items"));
+    expect(items.map((w) => [w.params?.[1], w.params?.[2]])).toEqual([[["SHIP"], "sheet"]]); // the Canceled row has none
     const ai = db.writes.find((w) => w.sql.startsWith("INSERT INTO po_asins"))!;
     expect(ai.params?.[11]).toBe(2);
     const pi = db.writes.find((w) => w.sql.startsWith("INSERT INTO purchase_orders"))!;
