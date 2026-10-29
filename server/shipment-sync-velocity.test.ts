@@ -32,18 +32,20 @@ const AF: AfAsinRow[] = [
   { id: "a-old", po_id: "p-old", asin: "B0OLDASIN1", units_per_pack: 1, qty_at_prep: "3.00", order_id: "OLD1", supplier: "x.com", order_date: "2026-06-01" }, // no Velocity line any more → NULL
 ];
 
-function fakeDb(state: { shipments?: any[]; rows?: any[]; unmatched?: any[]; identity?: any[]; pins?: any[]; colP?: any[]; fbaIds?: any[] }) {
+function fakeDb(state: { shipments?: any[]; rows?: any[]; unmatched?: any[]; identity?: any[]; pins?: any[]; colP?: any[]; fbaIds?: any[]; aliases?: any[]; manual?: any[]; af?: AfAsinRow[] }) {
   const writes: Array<{ sql: string; params?: any[] }> = [];
   const query = async (sql: string, params?: any[]) => {
     const s = sql.trim();
     if (s.startsWith("SELECT id, status, shipped_at_ts, raw FROM velocity_shipments")) return { rows: state.shipments ?? [], rowCount: 0 };
-    if (s.startsWith("SELECT pa.id, pa.po_id, pa.asin")) return { rows: AF, rowCount: AF.length };
+    if (s.startsWith("SELECT pa.id, pa.po_id, pa.asin")) { const af = state.af ?? AF; return { rows: af, rowCount: af.length }; }
     if (s.startsWith("SELECT id, po_asin_id, velocity_shipment_id, qty_shipped")) return { rows: state.rows ?? [], rowCount: 0 };
     if (s.startsWith("SELECT id, velocity_shipment_id, velocity_order_id, reason")) return { rows: state.unmatched ?? [], rowCount: 0 };
     if (s.startsWith("SELECT velocity_order_id, child_order_numbers FROM velocity_bundle_identity")) return { rows: state.identity ?? [], rowCount: 0 };
     if (s.startsWith("SELECT s.id, s.velocity_shipment_id, s.velocity_order_number, s.qty_shipped")) return { rows: state.pins ?? [], rowCount: 0 };
     if (s.startsWith("SELECT DISTINCT c.fba_shipment_id")) return { rows: state.colP ?? [], rowCount: 0 };
     if (s.startsWith("SELECT id, sc_shipment_ids FROM velocity_shipments")) return { rows: state.fbaIds ?? [], rowCount: 0 };
+    if (s.startsWith("SELECT alias, supplier FROM supplier_aliases")) return { rows: state.aliases ?? [], rowCount: 0 };
+    if (s.startsWith("SELECT po_asin_id, qty_shipped FROM po_asin_shipments WHERE source = 'manual'")) return { rows: state.manual ?? [], rowCount: 0 };
     writes.push({ sql: s, params }); return { rows: [], rowCount: 1 };
   };
   return { query, connect: async () => ({ query, release: () => { writes.push({ sql: "RELEASE" }); } }), writes };
@@ -89,7 +91,7 @@ describe("syncVelocityShipments", () => {
     expect(r.samples[1]).toBe("73917fcd 2026-10-15 · target.com 102003843107733 0349125937: 1 units ÷ 1 → 1");
     expect(r.samples[2]).toBe("73917fcd 2026-10-15 · target.com 102003840691113 0349125937: 9 units ÷ 1 → 9");
     expect(r.samples[5]).toMatch(/opentip\.com 6461301 B011SESMB0: 10 units ÷ 1 → 10 \(order_only\)/);
-    expect(r.unmatched.map((u) => u.reason)).toEqual(["po_not_found", "no_order"]);
+    expect(r.unmatched.map((u) => u.reason).sort()).toEqual(["no_order", "po_not_found"]); // units pass: oldest Velocity order first
     // qty_at_prep: inbound/inventory lines win (a-gr1 5 → 2); a shipped-out order reads 0; an ASIN row with no Velocity line goes NULL.
     expect(r.counts).toMatchObject({ atPrepSet: 6, atPrepCleared: 1, atPrepUnchanged: 0 });
     expect(r.touchedPoIds.sort()).toEqual(["p-eql", "p-gr1", "p-gr2", "p-old", "p-ot1", "p-tw1", "p-tw2"]);
@@ -108,8 +110,9 @@ describe("syncVelocityShipments", () => {
     expect(ins.map((w) => [w.params?.[0], w.params?.[2]])).toEqual([["a-eql", 10], ["a-tw1", 1], ["a-tw2", 9], ["a-gr1", 1], ["a-gr2", 4], ["a-ot1", 10]]);
     expect(ins.every((w) => w.params?.[1] === SID && w.params?.[3] === "2026-10-15")).toBe(true);
     const un = db.writes.filter((w) => w.sql.startsWith("INSERT INTO shipment_unmatched"));
-    expect(un.map((w) => [w.params?.[1], w.params?.[3]])).toEqual([["deadbeef", "po_not_found"], ["bundle01", "no_order"]]);
-    expect(db.writes.find((w) => w.sql.startsWith("UPDATE shipment_unmatched SET resolved_at"))?.params?.[0]).toEqual(["u-old"]);
+    expect(un.map((w) => [w.params?.[1], w.params?.[3]]).sort()).toEqual([["bundle01", "no_order"], ["deadbeef", "po_not_found"]]);
+    const stamp = db.writes.find((w) => w.sql.startsWith("UPDATE shipment_unmatched SET resolved_at"));
+    expect([stamp?.params?.[0], stamp?.params?.[2]]).toEqual(["u-old", "exact"]); // match_reason = the rule that placed it
     const prep = db.writes.filter((w) => w.sql.startsWith("UPDATE po_asins SET qty_at_prep"));
     expect(Object.fromEntries(prep.map((w) => [w.params?.[0], w.params?.[1]]))).toEqual({ "a-eql": 0, "a-tw1": 2, "a-tw2": 0, "a-gr1": 2, "a-gr2": 0, "a-ot1": 0, "a-old": null });
     for (const w of db.writes) expect(w.sql).not.toMatch(/fba_shipment_ids|sc_match|qty_received|qty_at_warehouse|qty_lost_damaged_us|qty_shipped_supplier/);

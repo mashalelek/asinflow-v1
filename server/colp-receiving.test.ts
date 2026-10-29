@@ -48,15 +48,15 @@ describe("resolveByColP", () => {
   it("several → stays no_order, with the candidates", () => {
     const colP = new Map([["FBA19H4BCJP4", [c("heath", "126768935"), c("heath2", "999")]]]);
     const r = resolveByColP(noOrder, heathLine, ["FBA19H4BCJP4"], colP, byId);
-    expect(r).toMatchObject({ ok: false, reason: "no_order", note: "Col P names 2 PO ASIN rows" });
+    expect(r).toMatchObject({ ok: false, reason: "no_order", note: "Col P names 2 PO ASIN rows", candidates: [{ source: "col_p" }, { source: "col_p" }] });
     expect((r as any).candidates.map((x: any) => x.po_asin_id)).toEqual(["heath", "heath2"]);
   });
-  it("only a no-Order # line uses it; other ASINs and unknown FBA ids are ignored", () => {
+  it("any line the keys could not place uses it (po_not_found too — 2026-10-29 amendment); other ASINs and unknown FBA ids are ignored", () => {
     const colP = new Map([["FBA19H4BCJP4", [{ ...c("heath", "126768935"), asin: "B0OTHER001" }]]]);
     expect(resolveByColP(noOrder, heathLine, ["FBA19H4BCJP4"], colP, byId)).toBe(noOrder);
     expect(resolveByColP(noOrder, heathLine, ["FBA0UNKNOWN1"], colP, byId)).toBe(noOrder);
     const notFound: Resolution = { ok: false, reason: "po_not_found", orderNumber: "X", retailer: "y" };
-    expect(resolveByColP(notFound, heathLine, ["FBA19H4BCJP4"], new Map([["FBA19H4BCJP4", [c("heath", "126768935")]]]), byId)).toBe(notFound);
+    expect(resolveByColP(notFound, heathLine, ["FBA19H4BCJP4"], new Map([["FBA19H4BCJP4", [c("heath", "126768935")]]]), byId)).toMatchObject({ ok: true, how: "col_p", row: { id: "heath" } });
   });
 });
 
