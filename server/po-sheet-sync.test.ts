@@ -226,6 +226,19 @@ describe("syncPoSheet — dry run computes the §3.9 counts and writes nothing",
   });
 ;
 
+  it("Col P: one multi-row insert per run (column arrays), however many entries", async () => {
+    const withP = cells.map((c, i) => { const x = [...c]; if (i < 2) x[COL.fbaShipmentIds] = i === 0 ? "FBA19H4BCJP4 (4), FBA19H4BK2W6 (4) [note]" : "FBA19H9RS9TJ"; return x; });
+    const db = fakeDb(state);
+    const r = await syncPoSheet({ sheetId: "s", dryRun: false, db, read: read(withP) });
+    expect(r.counts.colPEntries).toBe(3);
+    const ins = db.writes.filter((w) => w.sql.startsWith("INSERT INTO po_sheet_fba_shipments"));
+    expect(ins).toHaveLength(1);
+    expect(ins[0].sql).toMatch(/unnest\(\$1::text\[\], \$2::text\[\], \$3::text\[\], \$4::int\[\], \$5::text\[\], \$6::numeric\[\], \$7::text\[\]\)/);
+    expect(ins[0].params).toHaveLength(7);
+    expect(ins[0].params?.[4]).toEqual(["FBA19H4BCJP4", "FBA19H4BK2W6", "FBA19H9RS9TJ"]);
+    expect(ins[0].params?.[5]).toEqual([4, 4, null]);
+  });
+
   it("a rolled-back apply rethrows and releases the client", async () => {
     const db = fakeDb(state);
     const failing = { ...db, connect: async () => ({ query: async (sql: string) => { if (sql.startsWith("INSERT")) throw new Error("boom"); return { rows: [], rowCount: 0 }; }, release: () => db.writes.push({ sql: "RELEASE" }) }) };

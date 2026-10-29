@@ -735,11 +735,15 @@ export async function syncPoSheet(opts: { sheetId: string; dryRun: boolean; db?:
     }
     // Col P is a matching signal, not PO data: the whole table is replaced
     // from the sheet on every live run, for new and existing POs alike.
+    // One multi-row insert per run (column arrays through unnest: ~14k entries
+    // × 7 values would pass Postgres's 65,535-parameter limit as VALUES).
     await client.query(`DELETE FROM po_sheet_fba_shipments`);
-    for (const r of colPRows) {
+    if (colPRows.length > 0) {
       await client.query(
-        `INSERT INTO po_sheet_fba_shipments (supplier, order_id, asin, line_position, fba_shipment_id, qty, qty_raw) VALUES ($1,$2,$3,$4,$5,$6,$7)`,
-        [r.supplier, r.orderId, r.asin, r.position, r.fbaShipmentId, r.qty, r.qtyRaw],
+        `INSERT INTO po_sheet_fba_shipments (supplier, order_id, asin, line_position, fba_shipment_id, qty, qty_raw)
+         SELECT * FROM unnest($1::text[], $2::text[], $3::text[], $4::int[], $5::text[], $6::numeric[], $7::text[])`,
+        [colPRows.map((r) => r.supplier), colPRows.map((r) => r.orderId), colPRows.map((r) => r.asin), colPRows.map((r) => r.position),
+         colPRows.map((r) => r.fbaShipmentId), colPRows.map((r) => r.qty), colPRows.map((r) => r.qtyRaw)],
       );
     }
     await client.query("COMMIT");
