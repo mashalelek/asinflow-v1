@@ -36,7 +36,15 @@ export const REVIEW_VELOCITY = "Review Velocity";
  */
 export const PACK_SIZE_MISSING = "Pack size missing";
 export const PACK_SIZE_MISMATCH = "Pack size mismatch";
-export const AUTO_ACTION_ITEMS = [REVIEW_VELOCITY, PACK_SIZE_MISSING, PACK_SIZE_MISMATCH] as const;
+/**
+ * Receiving (2026-10-29): Received by Amazon is information, never a source
+ * of truth — Shipped FBA is the number of record. "Receiving mismatch" shows
+ * on a row whose received (once SC reports any) differs from shipped, over or
+ * under, so it can be addressed. Display only: it does NOT block auto-close
+ * (PO_CLOSE_ACTION_ITEMS_SQL leaves it out) and nothing derives from it.
+ */
+export const RECEIVING_MISMATCH = "Receiving mismatch";
+export const AUTO_ACTION_ITEMS = [REVIEW_VELOCITY, PACK_SIZE_MISSING, PACK_SIZE_MISMATCH, RECEIVING_MISMATCH] as const;
 export const DISPLAY_ACTION_ITEMS: readonly string[] = [...ACTION_ITEMS, ...AUTO_ACTION_ITEMS];
 
 export function isActionItem(s: string): s is ActionItem {

@@ -129,9 +129,9 @@ describe("shipment sync A: pack size", () => {
 // ── derived action items ──────────────────────────────────────────────────────
 describe("Pack size missing / mismatch are derived action items", () => {
   it("the ASIN and PO unions carry both, from po_asins", () => {
-    expect(ASIN_ACTION_ITEMS_SQL).toContain(`SELECT '${PACK_SIZE_MISSING}' WHERE pa.sold_as IS NULL`);
+    expect(ASIN_ACTION_ITEMS_SQL).toContain(`SELECT '${PACK_SIZE_MISSING}' WHERE (pa.sold_as IS NULL AND EXISTS (SELECT 1 FROM po_line_items lx WHERE lx.po_asin_id = pa.id`);
     expect(ASIN_ACTION_ITEMS_SQL).toMatch(/'Pack size mismatch' WHERE \(pa\.sold_as IS NOT NULL AND pa\.sold_as <> 'bundle' AND pa\.velocity_units_per_pack IS NOT NULL AND pa\.velocity_units_per_pack <> COALESCE\(pa\.units_per_pack, 1\)\)/);
-    expect(PO_ACTION_ITEMS_SQL).toContain(`'${PACK_SIZE_MISSING}' WHERE EXISTS (SELECT 1 FROM po_asins pk WHERE pk.po_id = p.id AND pk.sold_as IS NULL)`);
+    expect(PO_ACTION_ITEMS_SQL).toContain(`'${PACK_SIZE_MISSING}' WHERE EXISTS (SELECT 1 FROM po_asins pk WHERE pk.po_id = p.id AND (pk.sold_as IS NULL AND EXISTS`);
     expect(PO_ACTION_ITEMS_SQL).toContain(`'${PACK_SIZE_MISMATCH}' WHERE EXISTS (SELECT 1 FROM po_asins pk WHERE pk.po_id = p.id AND (pk.sold_as IS NOT NULL`);
   });
   it("never stored: the editor's echo is dropped, not refused, and never written to lines", () => {

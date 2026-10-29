@@ -16,7 +16,7 @@
 // until the rule next becomes true after a change.
 import type { QueryLike } from "./scheduler/types";
 import { poAsinRowsSql } from "./po-queries";
-import { PO_ACTION_ITEMS_SQL } from "./po-action-items";
+import { PO_CLOSE_ACTION_ITEMS_SQL } from "./po-action-items";
 
 export interface PoCloseRow {
   qty: number;
@@ -50,7 +50,8 @@ export type AutoCloseOutcome = { closed: boolean; closedBy: string | null; chang
 
 /** Re-evaluate one PO after a change and apply the rule. Returns the resulting state. */
 export async function evaluateAutoClose(poId: string, query: QueryLike): Promise<AutoCloseOutcome> {
-  const po = (await query(`SELECT p.closed_at, p.closed_by, ${PO_ACTION_ITEMS_SQL} AS action_items FROM purchase_orders p WHERE p.id = $1`, [poId])).rows[0];
+  // Receiving mismatch is display-only: the close set leaves it out (received never drives auto-close).
+  const po = (await query(`SELECT p.closed_at, p.closed_by, ${PO_CLOSE_ACTION_ITEMS_SQL} AS action_items FROM purchase_orders p WHERE p.id = $1`, [poId])).rows[0];
   if (!po) throw new Error(`PO ${poId} not found`);
   const rows = (await query(poAsinRowsSql(`pa.po_id = $1`), [poId])).rows as PoCloseRow[];
   const shouldClose = autoCloseVerdict(rows, Array.isArray(po.action_items) ? po.action_items : []);

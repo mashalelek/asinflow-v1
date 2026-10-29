@@ -35,7 +35,7 @@ describe("wiring", () => {
   it("the list filter and the PO column read the union over lines; auto-close (b) reads lines", () => {
     expect(routes).toMatch(/EXISTS \(SELECT 1 FROM po_line_items l WHERE l\.po_id = p\.id AND l\.action_items && \$\$\{params\.length\}::text\[\]\)/);
     expect(routes).toMatch(/r\.action_items = unionActionItems\(\[r\.line_action_items\]\)/);
-    expect(read("server/po-close.ts")).toMatch(/\$\{PO_ACTION_ITEMS_SQL\} AS action_items FROM purchase_orders p/);
+    expect(read("server/po-close.ts")).toMatch(/\$\{PO_CLOSE_ACTION_ITEMS_SQL\} AS action_items FROM purchase_orders p/); // Receiving mismatch is display-only
   });
   it("UI: ASIN rows edit with write-through, product rows edit their own line, the POs page shows read-only chips", () => {
     const c = read("client/src/components/po-asin-rows.tsx");
