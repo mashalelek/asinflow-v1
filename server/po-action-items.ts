@@ -3,7 +3,7 @@
 // ASIN row shows the union of its lines; the PO the union of all its lines.
 // Setting an item on an ASIN writes it to ALL its lines; removing it removes
 // it from all its lines; a product edit touches that line only. Pure.
-import { AUTO_ACTION_ITEMS, DISPLAY_ACTION_ITEMS, PACK_SIZE_MISMATCH, PACK_SIZE_MISSING, RECEIVING_MISMATCH, REVIEW_VELOCITY } from "./po-status-map";
+import { AUTO_ACTION_ITEMS, DISPLAY_ACTION_ITEMS, EXTRA_UNITS_SHIPPED, PACK_SIZE_MISMATCH, PACK_SIZE_MISSING, RECEIVING_MISMATCH, REVIEW_VELOCITY } from "./po-status-map";
 
 /** Display-ordered union of several action-item arrays. */
 export function unionActionItems(lists: ReadonlyArray<readonly string[] | null | undefined>): string[] {
@@ -47,11 +47,15 @@ const packMissing = (a: string) => `(${a}.sold_as IS NULL AND EXISTS (SELECT 1 F
 const receivingMismatch = (a: string) => `(${a}.qty_received_amazon IS NOT NULL AND ${a}.qty_received_amazon <> COALESCE(${a}.qty_shipped_fba, 0))`;
 export const RECEIVING_MISMATCH_EXISTS_SQL = `EXISTS (SELECT 1 FROM po_asins pk WHERE pk.po_id = p.id AND ${receivingMismatch("pk")})`;
 const packMismatch = (a: string) => `(${a}.sold_as IS NOT NULL AND ${a}.sold_as <> 'bundle' AND ${a}.velocity_units_per_pack IS NOT NULL AND ${a}.velocity_units_per_pack <> COALESCE(${a}.units_per_pack, 1))`;
+/** Shipped FBA over Ordered, not cleared by hand at (or above) the current shipped. */
+export const extraUnits = (a: string) => `(COALESCE(${a}.qty_shipped_fba, 0) > ${a}.qty AND (${a}.extra_units_cleared_shipped IS NULL OR ${a}.qty_shipped_fba > ${a}.extra_units_cleared_shipped))`;
+export const EXTRA_UNITS_EXISTS_SQL = `EXISTS (SELECT 1 FROM po_asins pk WHERE pk.po_id = p.id AND ${extraUnits("pk")})`;
 export const PACK_SIZE_MISSING_EXISTS_SQL = `EXISTS (SELECT 1 FROM po_asins pk WHERE pk.po_id = p.id AND ${packMissing("pk")})`;
 export const PACK_SIZE_MISMATCH_EXISTS_SQL = `EXISTS (SELECT 1 FROM po_asins pk WHERE pk.po_id = p.id AND ${packMismatch("pk")})`;
 
 /** SQL: the union of line action items for an ASIN row (alias pa) / a PO (alias p), plus the derived ones. Unordered; order with unionActionItems. */
 export const ASIN_ACTION_ITEMS_SQL = `ARRAY(SELECT DISTINCT x FROM po_line_items l, unnest(l.action_items) x WHERE l.po_asin_id = pa.id
+  UNION SELECT '${EXTRA_UNITS_SHIPPED}' WHERE ${extraUnits("pa")}
   UNION SELECT '${PACK_SIZE_MISSING}' WHERE ${packMissing("pa")}
   UNION SELECT '${PACK_SIZE_MISMATCH}' WHERE ${packMismatch("pa")}
   UNION SELECT '${RECEIVING_MISMATCH}' WHERE ${receivingMismatch("pa")})`;
@@ -63,11 +67,13 @@ export const ASIN_ACTION_ITEMS_SQL = `ARRAY(SELECT DISTINCT x FROM po_line_items
 export const REVIEW_VELOCITY_EXISTS_SQL = `EXISTS (SELECT 1 FROM po_tracking t WHERE t.po_id = p.id AND t.review_reason IS NOT NULL AND t.suppressed_at IS NULL)`;
 /** The PO's items that block auto-close: everything except Receiving mismatch (received never drives anything). */
 export const PO_CLOSE_ACTION_ITEMS_SQL = `ARRAY(SELECT DISTINCT x FROM po_line_items l, unnest(l.action_items) x WHERE l.po_id = p.id
+  UNION SELECT '${EXTRA_UNITS_SHIPPED}' WHERE ${EXTRA_UNITS_EXISTS_SQL}
   UNION SELECT '${REVIEW_VELOCITY}' WHERE ${REVIEW_VELOCITY_EXISTS_SQL}
   UNION SELECT '${PACK_SIZE_MISSING}' WHERE ${PACK_SIZE_MISSING_EXISTS_SQL}
   UNION SELECT '${PACK_SIZE_MISMATCH}' WHERE ${PACK_SIZE_MISMATCH_EXISTS_SQL})`;
 /** The PO's displayed items: the close set plus Receiving mismatch. */
 export const PO_ACTION_ITEMS_SQL = `ARRAY(SELECT DISTINCT x FROM po_line_items l, unnest(l.action_items) x WHERE l.po_id = p.id
+  UNION SELECT '${EXTRA_UNITS_SHIPPED}' WHERE ${EXTRA_UNITS_EXISTS_SQL}
   UNION SELECT '${REVIEW_VELOCITY}' WHERE ${REVIEW_VELOCITY_EXISTS_SQL}
   UNION SELECT '${PACK_SIZE_MISSING}' WHERE ${PACK_SIZE_MISSING_EXISTS_SQL}
   UNION SELECT '${PACK_SIZE_MISMATCH}' WHERE ${PACK_SIZE_MISMATCH_EXISTS_SQL}

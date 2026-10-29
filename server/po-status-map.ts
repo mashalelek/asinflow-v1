@@ -44,7 +44,16 @@ export const PACK_SIZE_MISMATCH = "Pack size mismatch";
  * (PO_CLOSE_ACTION_ITEMS_SQL leaves it out) and nothing derives from it.
  */
 export const RECEIVING_MISMATCH = "Receiving mismatch";
-export const AUTO_ACTION_ITEMS = [REVIEW_VELOCITY, PACK_SIZE_MISSING, PACK_SIZE_MISMATCH, RECEIVING_MISMATCH] as const;
+/**
+ * Extra units shipped (Maria 2026-10-29): Shipped FBA over Ordered on a PO
+ * ASIN row — from Sync Shipments or a confirmed manual link. Red chip. Clears
+ * by itself when the row reconciles (shipped ≤ ordered), or by hand with a
+ * required note (po_asins.extra_units_*, migration 073); after a hand clear
+ * it comes back only if shipped goes past the value it was cleared at.
+ * Blocks auto-close.
+ */
+export const EXTRA_UNITS_SHIPPED = "Extra units shipped";
+export const AUTO_ACTION_ITEMS = [EXTRA_UNITS_SHIPPED, REVIEW_VELOCITY, PACK_SIZE_MISSING, PACK_SIZE_MISMATCH, RECEIVING_MISMATCH] as const;
 export const DISPLAY_ACTION_ITEMS: readonly string[] = [...ACTION_ITEMS, ...AUTO_ACTION_ITEMS];
 
 export function isActionItem(s: string): s is ActionItem {

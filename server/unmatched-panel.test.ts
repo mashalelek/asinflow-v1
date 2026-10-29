@@ -17,7 +17,7 @@ describe("server", () => {
     expect(routes).toMatch(/l\.retailer_unmapped = resolveRetailer\(l\.retailer, aliases, suppliers\)\.kind === "unresolved"/);
   });
   it("dismiss stamps dismissed_at, never deletes; aliases from the panel are 'manual' and only to a real supplier; the picker records match_reason", () => {
-    expect(routes).toMatch(/UPDATE shipment_unmatched SET dismissed_at = now\(\) WHERE id = ANY\(\$1::uuid\[\]\) AND resolved_at IS NULL AND dismissed_at IS NULL/);
+    expect(routes).toMatch(/UPDATE shipment_unmatched SET dismissed_at = now\(\), dismiss_note = \$2 WHERE id = ANY\(\$1::uuid\[\]\) AND resolved_at IS NULL AND dismissed_at IS NULL`, \[ids, note\]/);
     expect(routes).not.toMatch(/DELETE FROM shipment_unmatched/);
     expect(routes).toMatch(/SELECT 1 FROM purchase_orders WHERE supplier = \$1 LIMIT 1[\s\S]{0,200}setAlias\(poQuery, alias, supplier, "manual"\)/);
     expect(read("server/shipment-link.ts")).toMatch(/resolved_po_asin_id = \$2, match_reason = 'picker' WHERE id = \$1/);
@@ -26,8 +26,8 @@ describe("server", () => {
 
 describe("client", () => {
   it("candidate buttons on the row, best first, through the picker's link route; free-text picker kept", () => {
-    expect(page).toMatch(/cands\.map\(\(c\) => \([\s\S]{0,400}linkUnmatched\(l\.id, c\.po_asin_id\)[\s\S]{0,200}Link to \{candidateLabel\(c\)\}/);
-    expect(page).toMatch(/<LinkPicker line=\{l\} onLinked=\{onLinked\} \/>/);
+    expect(page).toMatch(/cands\.map\(\(c\) => \([\s\S]{0,400}tryLink\(c\.po_asin_id, c\.order_id\)[\s\S]{0,200}Link to \{candidateLabel\(c\)\}/);
+    expect(page).toMatch(/<LinkPicker line=\{l\} onPick=\{\(r\) => tryLink\(r\.id, r\.order_id\)\} \/>/);
     expect(page).toMatch(/fetch\(`\/api\/pos\/unmatched\/\$\{lineId\}\/link`/);
   });
   it("nearest miss in Why, Map → supplier for an unmapped retailer, Dismiss selected, Dismissed (N)", () => {
@@ -52,5 +52,25 @@ describe("picker suggestions and Velocity eligibility (Maria 2026-10-29)", () =>
     expect(routes).toMatch(/ORDER BY \(p\.ships_to = 'home' OR \(\$2::date IS NOT NULL AND p\.order_date < \$2::date\)\), p\.order_date DESC/);
     expect(routes).toMatch(/r\.velocity_warning = why \? ineligibleText\(why, start\) : null/);
     expect(page).toMatch(/r\.velocity_warning && <span className="text-amber-500"/);
+  });
+});
+
+describe("Extra units shipped and the dismiss note (Maria 2026-10-29)", () => {
+  const rows = read("client/src/components/po-asin-rows.tsx");
+  it("an overshoot comes back as a confirm that needs a note; candidate buttons and the picker both go through it", () => {
+    expect(page).toMatch(/if \(res\.status === 409 && data\.code === "overshoot"\) return \{ overshoot:/);
+    expect(page).toMatch(/if \(r\.overshoot\) \{ setPending\(/);
+    expect(page).toMatch(/disabled=\{!note\.trim\(\) \|\| busy\}[\s\S]{0,120}linkUnmatched\(l\.id, pending\.poAsinId, note\.trim\(\)\)/);
+  });
+  it("dismiss sends the optional note; the Dismissed list shows it", () => {
+    expect(page).toMatch(/JSON\.stringify\(\{ ids: Array\.from\(picked\), note: dismissNote \}\)/);
+    expect(page).toMatch(/l\.dismiss_note \? ` — \$\{l\.dismiss_note\}` : ""/);
+  });
+  it("the chip is red, its hover carries the note, and clearing by hand needs one", () => {
+    expect(rows).toMatch(/if \(item === EXTRA_UNITS_SHIPPED\) return "bg-red-500\/15 text-red-600/);
+    expect(rows).toMatch(/titles=\{extraTitles\(a\)\}/);
+    expect(rows).toMatch(/disabled=\{!note\.trim\(\)\} onClick=\{\(\) => void save\(\)\}/);
+    expect(routes).toMatch(/app\.post\("\/api\/pos\/asin-rows\/:id\/extra-units\/clear"/);
+    expect(routes).toMatch(/if \(wanted\.includes\(EXTRA_UNITS_SHIPPED\)\) any\.push\(EXTRA_UNITS_EXISTS_SQL\)/);
   });
 });

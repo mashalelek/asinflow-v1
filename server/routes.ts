@@ -12,11 +12,12 @@ import { probeGatingForAsins } from "./gating-probe";
 import { loadPoAsinRows, normalizeLineQty } from "./po-queries";
 import { loadAliases, resolveRetailer, setAlias } from "./supplier-aliases";
 import { linkUnmatchedLine } from "./shipment-link";
+import { clearExtraUnits } from "./extra-units";
 import { velocityIneligible, ineligibleText } from "./shipment-match";
 import { readVelocityStartDate } from "./ships-to-backfill";
 import { evaluateAutoClose, setPoClosedManually, parseQtyInput, MANUAL_QTY_COLUMNS, type ManualQtyColumn } from "./po-close";
-import { ACTION_ITEMS, DISPLAY_ACTION_ITEMS, REVIEW_VELOCITY, PACK_SIZE_MISSING, PACK_SIZE_MISMATCH, RECEIVING_MISMATCH, normalizeActionItems } from "./po-status-map";
-import { asinWriteThrough, unionActionItems, PO_ACTION_ITEMS_SQL, REVIEW_VELOCITY_EXISTS_SQL, REVIEW_VELOCITY_REASONS_SQL, PACK_SIZE_MISSING_EXISTS_SQL, PACK_SIZE_MISMATCH_EXISTS_SQL, RECEIVING_MISMATCH_EXISTS_SQL } from "./po-action-items";
+import { ACTION_ITEMS, DISPLAY_ACTION_ITEMS, REVIEW_VELOCITY, EXTRA_UNITS_SHIPPED, PACK_SIZE_MISSING, PACK_SIZE_MISMATCH, RECEIVING_MISMATCH, normalizeActionItems } from "./po-status-map";
+import { asinWriteThrough, unionActionItems, PO_ACTION_ITEMS_SQL, REVIEW_VELOCITY_EXISTS_SQL, REVIEW_VELOCITY_REASONS_SQL, PACK_SIZE_MISSING_EXISTS_SQL, PACK_SIZE_MISMATCH_EXISTS_SQL, RECEIVING_MISMATCH_EXISTS_SQL, EXTRA_UNITS_EXISTS_SQL } from "./po-action-items";
 import { editPoHeader, editLine, addLine, removeLine, editAsinRow, loadPoHistory, logEdits, changedFields, asLogText, EditError, type EditResult } from "./po-edit";
 import { createPoFromForm, lookupAsins } from "./po-create";
 import { loadPoGuards, deletePo, cancelPo, assertAsinRowCancelable, reassignShipment } from "./po-guards";
@@ -4295,6 +4296,7 @@ export async function registerRoutes(
       if (wanted.includes(PACK_SIZE_MISSING)) any.push(PACK_SIZE_MISSING_EXISTS_SQL);
       if (wanted.includes(PACK_SIZE_MISMATCH)) any.push(PACK_SIZE_MISMATCH_EXISTS_SQL);
       if (wanted.includes(RECEIVING_MISMATCH)) any.push(RECEIVING_MISMATCH_EXISTS_SQL);
+      if (wanted.includes(EXTRA_UNITS_SHIPPED)) any.push(EXTRA_UNITS_EXISTS_SQL);
       if (any.length > 0) conds.push(`(${any.join(" OR ")})`);
     }
     if (supplier) {
@@ -4550,6 +4552,15 @@ export async function registerRoutes(
     } catch (err: any) { res.status(500).json({ message: err.message }); }
   });
 
+  // "Extra units shipped" cleared by hand — a note is required (Maria 2026-10-29).
+  app.post("/api/pos/asin-rows/:id/extra-units/clear", async (req: Request, res: Response) => {
+    if (!isDbAvailable()) { res.status(503).json({ message: "Database not available" }); return; }
+    try {
+      const out = await withPoTx((q) => clearExtraUnits(q, String(req.params.id ?? ""), (req.body ?? {}).note, uid(req)));
+      res.status(out.status).json(out.body);
+    } catch (err: any) { res.status(500).json({ message: err.message }); }
+  });
+
   app.patch("/api/pos/lines/:id/action-items", async (req: Request, res: Response) => {
     if (!isDbAvailable()) { res.status(503).json({ message: "Database not available" }); return; }
     const id = String(req.params.id ?? "");
@@ -4729,7 +4740,7 @@ export async function registerRoutes(
         `SELECT u.id, u.velocity_shipment_id, u.velocity_order_id, u.reason, u.created_at, v.shipped_at::text AS shipped_at,
                 u.line->>'order_number' AS order_number, u.line->>'retailer' AS retailer, u.line->>'asin' AS asin, u.line->>'amazon_sku' AS amazon_sku,
                 u.line->>'item_name' AS item_name, u.line->>'sold_as' AS sold_as, (u.line->>'units_per_pack')::numeric AS units_per_pack, (u.line->>'quantity_shipped')::numeric AS quantity_shipped,
-                u.candidates, u.nearest_miss, u.dismissed_at
+                u.candidates, u.nearest_miss, u.dismissed_at, u.dismiss_note
            FROM shipment_unmatched u JOIN velocity_shipments v ON v.id = u.velocity_shipment_id
           WHERE u.resolved_at IS NULL
           ORDER BY v.shipped_at DESC NULLS LAST, u.created_at, u.id`,
@@ -4752,8 +4763,9 @@ export async function registerRoutes(
     if (!isDbAvailable()) { res.status(503).json({ message: "Database not available" }); return; }
     const ids = Array.isArray((req.body ?? {}).ids) ? (req.body.ids as unknown[]).map(String).filter((x) => /^[0-9a-f-]{36}$/i.test(x)) : [];
     if (ids.length === 0) { res.status(400).json({ message: "ids are required" }); return; }
+    const note = String((req.body ?? {}).note ?? "").trim() || null; // optional (2026-10-29)
     try {
-      const r = await query(`UPDATE shipment_unmatched SET dismissed_at = now() WHERE id = ANY($1::uuid[]) AND resolved_at IS NULL AND dismissed_at IS NULL`, [ids]);
+      const r = await query(`UPDATE shipment_unmatched SET dismissed_at = now(), dismiss_note = $2 WHERE id = ANY($1::uuid[]) AND resolved_at IS NULL AND dismissed_at IS NULL`, [ids, note]);
       res.json({ dismissed: r.rowCount ?? 0 });
     } catch (err: any) { res.status(500).json({ message: err.message }); }
   });
@@ -4800,7 +4812,8 @@ export async function registerRoutes(
   app.post("/api/pos/unmatched/:id/link", async (req: Request, res: Response) => {
     if (!isDbAvailable()) { res.status(503).json({ message: "Database not available" }); return; }
     try {
-      const out = await linkUnmatchedLine(poQuery, String(req.params.id ?? ""), String((req.body ?? {}).po_asin_id ?? "").trim());
+      const b = req.body ?? {};
+      const out = await withPoTx((q) => linkUnmatchedLine(q, String(req.params.id ?? ""), String(b.po_asin_id ?? "").trim(), { confirmOvershoot: b.confirm_overshoot === true, note: b.note, userId: uid(req) }));
       res.status(out.status).json(out.body);
     } catch (err: any) { res.status(500).json({ message: err.message }); }
   });

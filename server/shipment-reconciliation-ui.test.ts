@@ -22,7 +22,7 @@ describe("Sync Shipments route (§5.2, D3)", () => {
     const un = routes.slice(routes.indexOf('app.get("/api/pos/unmatched"'), routes.indexOf('app.get("/api/pos/asin-rows/search"'));
     expect(un).toMatch(/WHERE u\.resolved_at IS NULL/);
     expect(un).toMatch(/WHERE v\.sc_match = 'ambiguous'/);
-    expect(routes.slice(routes.indexOf('app.post("/api/pos/unmatched/:id/link"'), routes.indexOf("// === Bulk Profit Calculator"))).toMatch(/linkUnmatchedLine\(poQuery, /);
+    expect(routes.slice(routes.indexOf('app.post("/api/pos/unmatched/:id/link"'), routes.indexOf("// === Bulk Profit Calculator"))).toMatch(/withPoTx\(\(q\) => linkUnmatchedLine\(q, String\(req\.params\.id \?\? ""\), String\(b\.po_asin_id \?\? ""\)\.trim\(\), \{ confirmOvershoot: b\.confirm_overshoot === true, note: b\.note, userId: uid\(req\) \}\)\)/);
     const link = readFileSync(join(__dirname, "shipment-link.ts"), "utf8"); // the action itself (2026-10-29); run against the real schema in shipment-link.db.test.ts
     expect(link).toMatch(/UPDATE shipment_unmatched SET resolved_at = now\(\), resolved_po_asin_id = \$2/);
     expect(link).toMatch(/units \/ \(Number\(pa\.units_per_pack\) \|\| 1\)/);
@@ -52,7 +52,7 @@ describe("POs page (§5.1 chip, §5.2 button + toast, §5.3 panel)", () => {
     expect(page).toMatch(/fetchLongSync\("\/api\/pos\/sync-shipments"\)/);
     expect(page).toMatch(/data-testid="button-sync-shipments"/);
     expect(page).toMatch(/if \(!data \|\| \(data\.count === 0 && \(data\.dismissed \?\? \[\]\)\.length === 0\)\) return null;/); // PO matching §6: a Dismissed list keeps it
-    expect(page).toMatch(/\/api\/pos\/unmatched\/\$\{line\.id\}\/link/);
+    expect(page).toMatch(/<LinkPicker line=\{l\} onPick=\{\(r\) => tryLink\(r\.id, r\.order_id\)\} \/>/);
     expect(page).toMatch(/<UnmatchedPanel key=\{unmatchedKey\} onChanged=\{load\} suppliers=\{data\?\.suppliers \?\? \[\]\} \/>/);
   });
   it("syncShipmentsToast: counts for both components; destructive when either failed", async () => {

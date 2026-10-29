@@ -175,7 +175,9 @@ interface UnmatchedLine { id: string; velocity_shipment_id: string; velocity_ord
   nearest_miss: string | null;
   /** The Velocity retailer resolves to no AF supplier (no alias, not a supplier name) → "Map → supplier". */
   retailer_unmapped: boolean;
-  dismissed_at: string | null }
+  dismissed_at: string | null;
+  /** Optional note given when the line was dismissed (2026-10-29). */
+  dismiss_note?: string | null }
 interface UnmatchedCandidate { po_asin_id: string; order_id: string; supplier: string; asin: string; source?: "col_p" | "candidate"; order_date?: string; days?: number; remaining_units?: number; units?: number }
 interface UnmatchedResponse { lines: UnmatchedLine[]; dismissed: UnmatchedLine[]; ambiguous: Array<{ id: string; shipped_at: string | null; rows: number }>; count: number }
 interface PickerRow { id: string; asin: string; asin_name: string | null; qty: number; units_per_pack: number; order_id: string; supplier: string; order_date: string; velocity_warning?: string | null }
@@ -193,7 +195,7 @@ export function syncShipmentsToast(data: any): { title: string; description: str
 }
 
 /** "Link to PO ASIN" picker: search PO ASIN rows by order #, ASIN or supplier. */
-function LinkPicker({ line, onLinked }: { line: UnmatchedLine; onLinked: () => void }) {
+function LinkPicker({ line, onPick }: { line: UnmatchedLine; onPick: (r: PickerRow) => Promise<void> }) {
   const [q, setQ] = useState(line.order_number || line.asin || "");
   const [rows, setRows] = useState<PickerRow[]>([]);
   const [err, setErr] = useState<string | null>(null);
@@ -206,11 +208,7 @@ function LinkPicker({ line, onLinked }: { line: UnmatchedLine; onLinked: () => v
   }, [q]);
   const link = async (r: PickerRow) => {
     setErr(null);
-    try {
-      const res = await fetch(`/api/pos/unmatched/${line.id}/link`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ po_asin_id: r.id }) });
-      if (!res.ok) throw new Error((await res.json().catch(() => ({}))).message || `HTTP ${res.status}`);
-      onLinked();
-    } catch (e: any) { setErr(e.message); }
+    try { await onPick(r); } catch (e: any) { setErr(e.message); }
   };
   return (
     <Popover>
@@ -237,10 +235,19 @@ function LinkPicker({ line, onLinked }: { line: UnmatchedLine; onLinked: () => v
   );
 }
 
-/** One-click link to a ranked candidate (PO matching §6) — the same POST as the picker. */
-async function linkUnmatched(lineId: string, poAsinId: string): Promise<void> {
-  const res = await fetch(`/api/pos/unmatched/${lineId}/link`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ po_asin_id: poAsinId }) });
-  if (!res.ok) throw new Error((await res.json().catch(() => ({}))).message || `HTTP ${res.status}`);
+export interface Overshoot { ordered: number; shipped_before: number; shipped_after: number }
+/**
+ * Link a line to a PO ASIN row — candidate buttons and the picker alike.
+ * A link past Ordered comes back as an overshoot (nothing written) until it
+ * is confirmed with a note (2026-10-29: "Extra units shipped").
+ */
+async function linkUnmatched(lineId: string, poAsinId: string, confirmNote?: string): Promise<{ overshoot?: Overshoot }> {
+  const body = confirmNote == null ? { po_asin_id: poAsinId } : { po_asin_id: poAsinId, confirm_overshoot: true, note: confirmNote };
+  const res = await fetch(`/api/pos/unmatched/${lineId}/link`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
+  const data = await res.json().catch(() => ({}));
+  if (res.status === 409 && data.code === "overshoot") return { overshoot: { ordered: data.ordered, shipped_before: data.shipped_before, shipped_after: data.shipped_after } };
+  if (!res.ok) throw new Error(data.message || `HTTP ${res.status}`);
+  return {};
 }
 
 /** Text for a candidate button: order #, then why it ranks where it does. */
@@ -268,6 +275,7 @@ function UnmatchedPanel({ onChanged, suppliers }: { onChanged: () => void; suppl
   const [picked, setPicked] = useState<Set<string>>(new Set());
   const [err, setErr] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
+  const [dismissNote, setDismissNote] = useState("");
   const load = useCallback(() => {
     fetch("/api/pos/unmatched").then((r) => r.json()).then((d) => { setData(d); setPicked(new Set()); }).catch(() => setData(null));
   }, []);
@@ -281,8 +289,9 @@ function UnmatchedPanel({ onChanged, suppliers }: { onChanged: () => void; suppl
   const allPicked = lines.length > 0 && lines.every((l) => picked.has(l.id));
   const toggle = (id: string) => setPicked((p) => { const n = new Set(p); if (n.has(id)) n.delete(id); else n.add(id); return n; });
   const dismiss = () => act(async () => {
-    const res = await fetch("/api/pos/unmatched/dismiss", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ ids: Array.from(picked) }) });
+    const res = await fetch("/api/pos/unmatched/dismiss", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ ids: Array.from(picked), note: dismissNote }) });
     if (!res.ok) throw new Error((await res.json().catch(() => ({}))).message || `HTTP ${res.status}`);
+    setDismissNote("");
   });
   return (
     <div className="rounded-md" style={{ border: "0.5px solid hsl(var(--border))" }} data-testid="po-unmatched-panel">
@@ -297,9 +306,12 @@ function UnmatchedPanel({ onChanged, suppliers }: { onChanged: () => void; suppl
           {err && <div className="text-destructive">{err}</div>}
           {lines.length > 0 && (
             <>
-              <Button size="sm" variant="outline" className="h-7 text-xs" disabled={picked.size === 0 || busy} onClick={() => void dismiss()} data-testid="button-unmatched-dismiss-selected">
-                Dismiss selected ({picked.size})
-              </Button>
+              <div className="flex items-center gap-2">
+                <Button size="sm" variant="outline" className="h-7 text-xs" disabled={picked.size === 0 || busy} onClick={() => void dismiss()} data-testid="button-unmatched-dismiss-selected">
+                  Dismiss selected ({picked.size})
+                </Button>
+                <Input value={dismissNote} onChange={(e) => setDismissNote(e.target.value)} placeholder="note (optional)" className="h-7 w-72 text-xs" data-testid="input-unmatched-dismiss-note" />
+              </div>
               <div className="overflow-x-auto">
                 <table className="w-full min-w-[64rem]">
                   <thead><tr className="text-muted-foreground text-left">
@@ -328,7 +340,7 @@ function UnmatchedPanel({ onChanged, suppliers }: { onChanged: () => void; suppl
               </button>
               {showDismissed && (
                 <div className="mt-1 space-y-0.5 text-muted-foreground" data-testid="list-unmatched-dismissed">
-                  {data.dismissed.map((l) => <div key={l.id} className="font-mono">{l.shipped_at ?? "—"} · {l.order_number || "(none)"} · {l.retailer || "—"} · {l.asin} · {l.quantity_shipped}u · dismissed {String(l.dismissed_at).slice(0, 10)}</div>)}
+                  {data.dismissed.map((l) => <div key={l.id} className="font-mono">{l.shipped_at ?? "—"} · {l.order_number || "(none)"} · {l.retailer || "—"} · {l.asin} · {l.quantity_shipped}u · dismissed {String(l.dismissed_at).slice(0, 10)}{l.dismiss_note ? ` — ${l.dismiss_note}` : ""}</div>)}
                 </div>
               )}
             </div>
@@ -344,7 +356,14 @@ function UnmatchedRow({ l, suppliers, picked, onPick, busy, act, onLinked }: {
   act: (fn: () => Promise<unknown>) => Promise<void>; onLinked: () => void;
 }) {
   const [supplier, setSupplier] = useState("");
+  const [pending, setPending] = useState<{ poAsinId: string; label: string; o: Overshoot } | null>(null);
+  const [note, setNote] = useState("");
   const cands = l.candidates ?? [];
+  const tryLink = async (poAsinId: string, label: string) => {
+    const r = await linkUnmatched(l.id, poAsinId);
+    if (r.overshoot) { setPending({ poAsinId, label, o: r.overshoot }); setNote(""); return; }
+    onLinked();
+  };
   return (
     <tr className="align-top" style={{ borderTop: "0.5px solid hsl(var(--border))" }} data-testid={`row-unmatched-${l.id}`}>
       <td className="py-1 pr-2"><input type="checkbox" aria-label={`Select ${l.order_number || l.asin}`} checked={picked} onChange={onPick} /></td>
@@ -373,12 +392,26 @@ function UnmatchedRow({ l, suppliers, picked, onPick, busy, act, onLinked }: {
         <div className="flex flex-wrap items-center gap-1">
           {cands.map((c) => (
             <Button key={c.po_asin_id} size="sm" variant="secondary" className="h-6 text-xs font-mono" disabled={busy} title={`${c.supplier} ${c.asin}${c.order_date ? ` · PO ${c.order_date}` : ""}`}
-              onClick={() => void act(() => linkUnmatched(l.id, c.po_asin_id))} data-testid={`button-link-candidate-${l.id}-${c.po_asin_id}`}>
+              onClick={() => void act(() => tryLink(c.po_asin_id, c.order_id))} data-testid={`button-link-candidate-${l.id}-${c.po_asin_id}`}>
               Link to {candidateLabel(c)}
             </Button>
           ))}
-          <LinkPicker line={l} onLinked={onLinked} />
+          <LinkPicker line={l} onPick={(r) => tryLink(r.id, r.order_id)} />
         </div>
+        {pending && (
+          <div className="mt-1 space-y-1 rounded border border-red-500/40 bg-red-500/5 p-2" data-testid={`overshoot-${l.id}`}>
+            <div className="text-red-600 dark:text-red-400">
+              Linking to {pending.label} puts Shipped FBA at {fmtQty(pending.o.shipped_after)} of {fmtQty(pending.o.ordered)} ordered — the row gets "Extra units shipped".
+            </div>
+            <textarea value={note} onChange={(e) => setNote(e.target.value)} rows={2} placeholder="Why (required) — stored on the row and in PO History"
+              className="w-full rounded border border-input bg-background p-1 text-xs" data-testid={`input-overshoot-note-${l.id}`} />
+            <div className="flex gap-1">
+              <Button size="sm" variant="destructive" className="h-6 text-xs" disabled={!note.trim() || busy}
+                onClick={() => void act(async () => { await linkUnmatched(l.id, pending.poAsinId, note.trim()); setPending(null); })} data-testid={`button-overshoot-confirm-${l.id}`}>Link anyway</Button>
+              <Button size="sm" variant="ghost" className="h-6 text-xs" onClick={() => setPending(null)}>Cancel</Button>
+            </div>
+          </div>
+        )}
       </td>
     </tr>
   );

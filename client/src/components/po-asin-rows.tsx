@@ -72,6 +72,8 @@ export interface PoAsinRowData {
   shipments: PoAsinShipment[];
   /** Union of the product lines' action items (row-level Status 2026-10-17). */
   action_items?: string[];
+  /** "Extra units shipped" note — the picker's overshoot confirm or the manual clear (migration 073). */
+  extra_units_note?: string | null;
   lines?: PoAsinLine[];
 }
 
@@ -105,8 +107,11 @@ async function patchJson(url: string, method: string, body?: unknown): Promise<a
 // ── Action Items (row-level Status, patch row-level-status §2.1) ─────────────
 export const ACTION_ITEM_OPTIONS = ["Need to Return", "Missing / Damaged from Supplier", "Confirm Refund / Replacement", "ATTN: Velocity", "See Comments", "SHIP", "Received - FBM"];
 // §7: tinted chips only. SHIP indigo; Received - FBM green; Need to Return orange; the attention items amber.
+export const EXTRA_UNITS_SHIPPED = "Extra units shipped";
 export function actionChipClass(item: string): string {
   const t = item.toLowerCase();
+  // Red so it stands out (Maria 2026-10-29).
+  if (item === EXTRA_UNITS_SHIPPED) return "bg-red-500/15 text-red-600 dark:text-red-400 font-medium";
   if (t === "ship") return "bg-indigo-500/10 text-indigo-600 dark:text-indigo-400";
   if (t === "received - fbm") return "bg-green-500/10 text-green-700 dark:text-green-400";
   if (t === "need to return") return "bg-orange-500/10 text-orange-600 dark:text-orange-400";
@@ -114,24 +119,24 @@ export function actionChipClass(item: string): string {
 }
 export const chipBase = "inline-block rounded-sm px-1.5 py-0.5 text-[11px] whitespace-nowrap";
 /** Shown (never editable): the auto-managed "Review Velocity" (SPEC §26) and the pack-size items (derived from the ASIN row) after the manual items. */
-export const DISPLAY_ACTION_ITEMS = [...ACTION_ITEM_OPTIONS, "Review Velocity", "Pack size missing", "Pack size mismatch", "Receiving mismatch"];
+export const DISPLAY_ACTION_ITEMS = [...ACTION_ITEM_OPTIONS, EXTRA_UNITS_SHIPPED, "Review Velocity", "Pack size missing", "Pack size mismatch", "Receiving mismatch"];
 const ordered = (items: readonly string[] | undefined) => DISPLAY_ACTION_ITEMS.filter((o) => (items ?? []).includes(o));
 
 /** Read-only chips (the POs-page column: union over all lines). */
-/** `reasons`: the open "Review Velocity" reasons (SPEC §26) — shown on that chip's hover. */
-export function ActionItemChips({ items, testId, reasons }: { items: readonly string[] | undefined; testId?: string; reasons?: readonly string[] | null }) {
+/** `reasons`: the open "Review Velocity" reasons (SPEC §26) — shown on that chip's hover. `titles`: hover text per item (Extra units shipped). */
+export function ActionItemChips({ items, testId, reasons, titles }: { items: readonly string[] | undefined; testId?: string; reasons?: readonly string[] | null; titles?: Readonly<Record<string, string>> }) {
   const list = ordered(items);
   return (
     <span className="flex flex-col items-start gap-0.5" data-testid={testId}>
       {list.length === 0 ? <span className="text-muted-foreground/40 text-[11px]">—</span> : list.map((it) => (
-        <span key={it} className={`${chipBase} ${actionChipClass(it)}`} title={it === "Review Velocity" && reasons?.length ? reasons.join(" · ") : undefined}>{it}</span>
+        <span key={it} className={`${chipBase} ${actionChipClass(it)}`} title={titles?.[it] ?? (it === "Review Velocity" && reasons?.length ? reasons.join(" · ") : undefined)}>{it}</span>
       ))}
     </span>
   );
 }
 
 /** Chips + multi-select editor. `url` is the ASIN route (write-through to every line) or the product-line route. */
-export function ActionItemsEditor({ items, url, onSaved, testId }: { items: readonly string[] | undefined; url: string; onSaved?: () => void; testId: string }) {
+export function ActionItemsEditor({ items, url, onSaved, testId, titles }: { items: readonly string[] | undefined; url: string; onSaved?: () => void; testId: string; titles?: Readonly<Record<string, string>> }) {
   const [open, setOpen] = useState(false);
   const [draft, setDraft] = useState<Set<string>>(new Set(items ?? []));
   const [err, setErr] = useState<string | null>(null);
@@ -143,7 +148,7 @@ export function ActionItemsEditor({ items, url, onSaved, testId }: { items: read
     <Popover open={open} onOpenChange={(v) => { setOpen(v); if (v) setDraft(new Set(items ?? [])); }}>
       <PopoverTrigger asChild>
         <button type="button" onClick={(e) => e.stopPropagation()} className="min-h-[1.25rem] min-w-[4rem] text-left" data-testid={testId} title="Edit action items">
-          <ActionItemChips items={items} />
+          <ActionItemChips items={items} titles={titles} />
         </button>
       </PopoverTrigger>
       <PopoverContent className="w-72 p-2 space-y-1" align="end" onClick={(e) => e.stopPropagation()}>
@@ -155,6 +160,38 @@ export function ActionItemsEditor({ items, url, onSaved, testId }: { items: read
           </label>
         ))}
         {err && <div className="px-2 text-xs text-destructive">{err}</div>}
+      </PopoverContent>
+    </Popover>
+  );
+}
+
+/** Hover for "Extra units shipped": shipped vs ordered, then the note. */
+export function extraUnitsTitle(a: Pick<PoAsinRowData, "qty" | "qty_shipped_fba" | "extra_units_note">): string {
+  return `Shipped FBA ${fmtQty(a.qty_shipped_fba ?? 0)} of ${fmtQty(a.qty)} ordered${a.extra_units_note ? ` — ${a.extra_units_note}` : ""}`;
+}
+const extraTitles = (a: PoAsinRowData): Record<string, string> => ({ [EXTRA_UNITS_SHIPPED]: extraUnitsTitle(a) });
+
+/** Clear "Extra units shipped" by hand — the note is required (stored on the row, logged in History). */
+function ClearExtraUnits({ a, onChanged }: { a: PoAsinRowData; onChanged?: () => void }) {
+  const [open, setOpen] = useState(false);
+  const [note, setNote] = useState("");
+  const [err, setErr] = useState<string | null>(null);
+  const save = async () => {
+    setErr(null);
+    try { await patchJson(`/api/pos/asin-rows/${a.id}/extra-units/clear`, "POST", { note }); setOpen(false); setNote(""); onChanged?.(); }
+    catch (e: any) { setErr(e.message); }
+  };
+  return (
+    <Popover open={open} onOpenChange={setOpen}>
+      <PopoverTrigger asChild>
+        <button type="button" onClick={(e) => e.stopPropagation()} className="mt-0.5 block text-[10px] text-muted-foreground hover:text-foreground" data-testid={`button-clear-extra-units-${a.asin}`}>clear…</button>
+      </PopoverTrigger>
+      <PopoverContent className="w-80 p-2 space-y-1 text-xs" align="end" onClick={(e) => e.stopPropagation()}>
+        <div>{extraUnitsTitle(a)}</div>
+        <textarea value={note} onChange={(e) => setNote(e.target.value)} placeholder="Why the extra units are OK (required)" rows={3}
+          className="w-full rounded border border-input bg-background p-1 text-xs" data-testid={`input-clear-extra-units-${a.asin}`} />
+        <button type="button" disabled={!note.trim()} onClick={() => void save()} className="rounded bg-primary px-2 py-1 text-primary-foreground disabled:opacity-50" data-testid={`button-confirm-clear-extra-units-${a.asin}`}>Clear with note</button>
+        {err && <div className="text-destructive">{err}</div>}
       </PopoverContent>
     </Popover>
   );
@@ -364,8 +401,9 @@ export function PoAsinRow({ a, indent = false, editable = false, onChanged }: { 
         <td className="px-3 py-1.5 text-right"><QtyCell v={a.qty_received_amazon} /></td>
         <td className="px-3 py-1.5"><ShipmentChips rowId={a.id} asin={a.asin} shipments={a.shipments ?? []} editable={editable} onChanged={onChanged} /></td>
         <td className="px-3 py-1.5">{editable && lines.length > 0
-          ? <ActionItemsEditor items={a.action_items} url={`/api/pos/asin-rows/${a.id}/action-items`} onSaved={onChanged} testId={`button-action-items-asin-${a.asin}`} />
-          : <ActionItemChips items={a.action_items} />}</td>
+          ? <ActionItemsEditor items={a.action_items} titles={extraTitles(a)} url={`/api/pos/asin-rows/${a.id}/action-items`} onSaved={onChanged} testId={`button-action-items-asin-${a.asin}`} />
+          : <ActionItemChips items={a.action_items} titles={extraTitles(a)} />}
+          {editable && (a.action_items ?? []).includes(EXTRA_UNITS_SHIPPED) && <ClearExtraUnits a={a} onChanged={onChanged} />}</td>
         <td className="px-2 py-1.5">{a.notes && <StickyNote className="h-3.5 w-3.5 text-muted-foreground" />}</td>
       </tr>
       {multi && open && lines.map((l) => (
