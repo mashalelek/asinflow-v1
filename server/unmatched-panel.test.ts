@@ -20,7 +20,7 @@ describe("server", () => {
     expect(routes).toMatch(/UPDATE shipment_unmatched SET dismissed_at = now\(\) WHERE id = ANY\(\$1::uuid\[\]\) AND resolved_at IS NULL AND dismissed_at IS NULL/);
     expect(routes).not.toMatch(/DELETE FROM shipment_unmatched/);
     expect(routes).toMatch(/SELECT 1 FROM purchase_orders WHERE supplier = \$1 LIMIT 1[\s\S]{0,200}setAlias\(poQuery, alias, supplier, "manual"\)/);
-    expect(routes).toMatch(/resolved_po_asin_id = \$2, match_reason = 'picker' WHERE id = \$1/);
+    expect(read("server/shipment-link.ts")).toMatch(/resolved_po_asin_id = \$2, match_reason = 'picker' WHERE id = \$1/);
   });
 });
 

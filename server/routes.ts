@@ -11,6 +11,7 @@ import { runAuraSyncChain } from "./aura-sync-chain";
 import { probeGatingForAsins } from "./gating-probe";
 import { loadPoAsinRows, normalizeLineQty } from "./po-queries";
 import { loadAliases, resolveRetailer, setAlias } from "./supplier-aliases";
+import { linkUnmatchedLine } from "./shipment-link";
 import { evaluateAutoClose, setPoClosedManually, parseQtyInput, MANUAL_QTY_COLUMNS, type ManualQtyColumn } from "./po-close";
 import { ACTION_ITEMS, DISPLAY_ACTION_ITEMS, REVIEW_VELOCITY, PACK_SIZE_MISSING, PACK_SIZE_MISMATCH, RECEIVING_MISMATCH, normalizeActionItems } from "./po-status-map";
 import { asinWriteThrough, unionActionItems, PO_ACTION_ITEMS_SQL, REVIEW_VELOCITY_EXISTS_SQL, REVIEW_VELOCITY_REASONS_SQL, PACK_SIZE_MISSING_EXISTS_SQL, PACK_SIZE_MISMATCH_EXISTS_SQL, RECEIVING_MISMATCH_EXISTS_SQL } from "./po-action-items";
@@ -4792,28 +4793,9 @@ export async function registerRoutes(
   // the next Sync Shipments.
   app.post("/api/pos/unmatched/:id/link", async (req: Request, res: Response) => {
     if (!isDbAvailable()) { res.status(503).json({ message: "Database not available" }); return; }
-    const id = String(req.params.id ?? "");
-    const poAsinId = String((req.body ?? {}).po_asin_id ?? "").trim();
-    if (!/^[0-9a-f-]{36}$/i.test(poAsinId)) { res.status(400).json({ message: "po_asin_id is required" }); return; }
     try {
-      const u = (await query(`SELECT u.*, v.shipped_at, v.fba_shipment_ids, v.sc_match FROM shipment_unmatched u JOIN velocity_shipments v ON v.id = u.velocity_shipment_id WHERE u.id = $1`, [id])).rows[0];
-      if (!u) { res.status(404).json({ message: "unmatched line not found" }); return; }
-      if (u.resolved_at) { res.status(409).json({ message: "already resolved" }); return; }
-      const pa = (await query(`SELECT id, po_id, units_per_pack FROM po_asins WHERE id = $1`, [poAsinId])).rows[0];
-      if (!pa) { res.status(404).json({ message: "ASIN row not found" }); return; }
-      const units = Number(u.line?.quantity_shipped ?? 0) || 0;
-      const qty = Math.round((units / (Number(pa.units_per_pack) || 1)) * 100) / 100;
-      const matched = u.sc_match === "matched";
-      await query(
-        `INSERT INTO po_asin_shipments (po_asin_id, velocity_shipment_id, fba_shipment_ids, sc_match, qty_shipped, shipped_at, source)
-         VALUES ($1, $2, $3::text[], $4, $5, $6, 'velocity')
-         ON CONFLICT (po_asin_id, velocity_shipment_id) DO UPDATE SET qty_shipped = po_asin_shipments.qty_shipped + EXCLUDED.qty_shipped, updated_at = now()`,
-        [pa.id, u.velocity_shipment_id, matched ? u.fba_shipment_ids : [], u.sc_match === "none" ? "none" : u.sc_match, qty, u.shipped_at],
-      );
-      await query(`UPDATE shipment_unmatched SET resolved_at = now(), resolved_po_asin_id = $2, match_reason = 'picker' WHERE id = $1`, [id, pa.id]);
-      const close = await evaluateAutoClose(String(pa.po_id), poQuery);
-      const [row] = await loadPoAsinRows(poQuery, [String(pa.po_id)]).then((rows) => rows.filter((x: any) => String(x.id) === String(pa.id)));
-      res.json({ row, close, qty });
+      const out = await linkUnmatchedLine(poQuery, String(req.params.id ?? ""), String((req.body ?? {}).po_asin_id ?? "").trim());
+      res.status(out.status).json(out.body);
     } catch (err: any) { res.status(500).json({ message: err.message }); }
   });
 

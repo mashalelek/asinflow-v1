@@ -22,10 +22,11 @@ describe("Sync Shipments route (§5.2, D3)", () => {
     const un = routes.slice(routes.indexOf('app.get("/api/pos/unmatched"'), routes.indexOf('app.get("/api/pos/asin-rows/search"'));
     expect(un).toMatch(/WHERE u\.resolved_at IS NULL/);
     expect(un).toMatch(/WHERE v\.sc_match = 'ambiguous'/);
-    const link = routes.slice(routes.indexOf('app.post("/api/pos/unmatched/:id/link"'), routes.indexOf("// === Bulk Profit Calculator"));
+    expect(routes.slice(routes.indexOf('app.post("/api/pos/unmatched/:id/link"'), routes.indexOf("// === Bulk Profit Calculator"))).toMatch(/linkUnmatchedLine\(poQuery, /);
+    const link = readFileSync(join(__dirname, "shipment-link.ts"), "utf8"); // the action itself (2026-10-29); run against the real schema in shipment-link.db.test.ts
     expect(link).toMatch(/UPDATE shipment_unmatched SET resolved_at = now\(\), resolved_po_asin_id = \$2/);
     expect(link).toMatch(/units \/ \(Number\(pa\.units_per_pack\) \|\| 1\)/);
-    expect(link).toMatch(/evaluateAutoClose\(String\(pa\.po_id\), poQuery\)/);
+    expect(link).toMatch(/evaluateAutoClose\(String\(pa\.po_id\), query\)/);
   });
   it("manual rows use manual:<uuid> and an FBA id array; only manual rows can be deleted", () => {
     const manual = routes.slice(routes.indexOf('app.post("/api/pos/asin-rows/:id/shipments"'), routes.indexOf('app.delete("/api/pos/shipments/:id"'));
