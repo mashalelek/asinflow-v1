@@ -28,7 +28,15 @@
 //   'order_id_unique'). Zero or several → queued as before. 5+ digits only.
 //   A sender that does resolve keeps its supplier: its no_po is never
 //   attached to another store's PO by number alone.
+//
+// 2026-10-29 (PO matching patch §7): the order-# handling (punctuation, a
+// free-text prefix, AF's _N, a retailer's -N, two-id AF order_ids) is the
+// shared server/order-number.ts, the same functions shipment sync A uses;
+// a platform email's subject name resolves through supplier_aliases first.
 import type { QueryLike } from "./scheduler/types";
+import { normOrder, baseOrderId, orderIdParts, stripShipmentSuffix, digitForms } from "./order-number";
+import { loadAliases, aliasKey } from "./supplier-aliases";
+export { normOrder, baseOrderId, orderIdParts } from "./order-number";
 
 export const DOMAIN_MAP_KEY = "tracking.supplier_domain_map";
 export const PLATFORM_SENDERS_KEY = "tracking.platform_senders";
@@ -36,11 +44,6 @@ export const PLATFORM_SENDERS_KEY = "tracking.platform_senders";
 export const DEFAULT_PLATFORM_SENDERS = ["narvar.com", "narvarnotify.com", "shopifyemail.com", "shipstation.com", "parcelpanel.net", "aftership.com", "veeqo.com", "zendesk.com", "worldpantry.com"];
 
 export const registrable = (domain: string): string => domain.toLowerCase().split(".").slice(-2).join(".");
-export const normOrder = (s: string): string => s.toUpperCase().replace(/[^A-Z0-9]/g, "");
-/** D4: AF's "_N" suffix (a second PO for one retailer order) matches on the base id. */
-export const baseOrderId = (orderId: string): string => orderId.trim().replace(/_\d+$/, "");
-/** Every id an AF order_id field holds ("115449859 / 115450009" → both). */
-export const orderIdParts = (orderId: string): string[] => orderId.split(/\s*[/,]\s*/).map(baseOrderId).filter(Boolean);
 
 /** Pure. */
 export function resolveSupplier(domain: string | null, map: Record<string, string>, suppliers: readonly string[], platforms: readonly string[] = DEFAULT_PLATFORM_SENDERS): { supplier: string | null; obvious: boolean } {
@@ -68,7 +71,7 @@ export function findPos(supplier: string, retailerOrderId: string, pos: readonly
   // The email's number as printed, and without a retailer's trailing -N
   // shipment suffix (WorldPantry 70633076-1 → 70633076).
   const raw = baseOrderId(retailerOrderId);
-  const want = new Set([raw, raw.replace(/-\d{1,2}$/, "")].map(normOrder).filter(Boolean));
+  const want = new Set([raw, stripShipmentSuffix(raw)].map(normOrder).filter(Boolean));
   if (want.size === 0) return [];
   return pos.filter((p) => p.supplier === supplier && orderIdParts(p.order_id).some((x) => want.has(normOrder(x))));
 }
@@ -102,12 +105,6 @@ export function supplierByName(name: string, suppliers: readonly string[]): stri
   return hits.length === 1 ? hits[0] : null;
 }
 
-/** Digits-only forms of an order #: as is, and without a trailing -N / _N (WorldPantry 70633076-1 → 70633076). */
-const digitForms = (s: string): string[] => {
-  const t = s.trim();
-  return Array.from(new Set([t, t.replace(/[-_]\d{1,2}$/, "")].map((x) => x.replace(/\D/g, "")).filter((d) => d.length >= 5)));
-};
-
 /** Pure: every AF PO whose order # equals this one digits-only, any supplier. */
 export function findPosByOrderDigits(retailerOrderId: string, pos: readonly PoRef[]): PoRef[] {
   const want = new Set(digitForms(retailerOrderId));
@@ -119,12 +116,13 @@ export function findPosByOrderDigits(retailerOrderId: string, pos: readonly PoRe
 export function matchRow(
   row: { sender_domain: string | null; retailer_order_id: string | null; email_subject?: string | null },
   map: Record<string, string>, suppliers: readonly string[], pos: readonly PoRef[], platforms: readonly string[] = DEFAULT_PLATFORM_SENDERS,
+  aliases: ReadonlyMap<string, string> = new Map(),
 ): MatchOutcome & { supplier: string | null; obvious: boolean } {
   let s = resolveSupplier(row.sender_domain, map, suppliers, platforms);
   let via: MatchVia | undefined;
   if (!s.supplier && row.sender_domain && platforms.includes(registrable(row.sender_domain))) {
     const name = retailerNameFromSubject(row.email_subject ?? null);
-    const sup = name ? supplierByName(name, suppliers) : null;
+    const sup = name ? (aliases.get(aliasKey(name)) ?? supplierByName(name, suppliers)) : null;
     if (sup) { s = { supplier: sup, obvious: false }; via = "retailer_name"; }
   }
   if (!row.retailer_order_id) return { status: "unmatched", reason: s.supplier ? "unpaired" : "unknown_sender", ...s };
@@ -176,10 +174,11 @@ export async function matchTrackingRows(query: QueryLike, opts: { dryRun?: boole
   if (rows.length === 0) return r;
   const map = await loadDomainMap(query);
   const platforms = await loadPlatformSenders(query);
+  const aliases = await loadAliases(query);
   const pos: PoRef[] = (await query(`SELECT id, supplier, order_id FROM purchase_orders`)).rows.map((x: any) => ({ id: String(x.id), supplier: String(x.supplier), order_id: String(x.order_id) }));
   const suppliers = Array.from(new Set(pos.map((p) => p.supplier)));
   for (const row of rows) {
-    const m = matchRow(row, { ...map, ...r.seeded }, suppliers, pos, platforms);
+    const m = matchRow(row, { ...map, ...r.seeded }, suppliers, pos, platforms, aliases);
     if (m.obvious && m.supplier && row.sender_domain && !map[row.sender_domain]) r.seeded[String(row.sender_domain).toLowerCase()] = m.supplier;
     if (m.status === "matched") { r.matched++; const k = m.via ?? "supplier"; r.matched_via[k] = (r.matched_via[k] ?? 0) + 1; } else r.unmatched[m.reason] = (r.unmatched[m.reason] ?? 0) + 1;
     if (opts.dryRun) continue;

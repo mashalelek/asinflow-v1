@@ -51,6 +51,7 @@ describe("matchTrackingRows", () => {
       if (sql.includes("FROM po_tracking") && sql.trimStart().startsWith("SELECT")) return { rows, rowCount: rows.length };
       if (sql.startsWith("SELECT value FROM settings")) return { rows: [{ value: map }], rowCount: 1 };
       if (sql.includes("FROM purchase_orders")) return { rows: POS, rowCount: POS.length };
+      if (sql.startsWith("SELECT alias, supplier FROM supplier_aliases")) return { rows: [], rowCount: 0 };
       writes.push({ sql, params: params ?? [] });
       return { rows: [], rowCount: 1 };
     };
@@ -79,6 +80,19 @@ describe("matchTrackingRows", () => {
     const d = db([{ id: 1, sender_domain: "notify.macys.com", retailer_order_id: "4800667218" }]);
     await matchTrackingRows(d.query as any, { dryRun: true });
     expect(d.writes).toHaveLength(0);
+  });
+});
+
+describe("shared order-# functions and supplier_aliases (PO matching patch §7, 2026-10-29)", () => {
+  const SUP = [...SUPPLIERS, "carters.com"];
+  const P: PoRef[] = [...POS, { id: "po-car", supplier: "carters.com", order_id: "CAR118805142" }];
+  it("a platform email's subject name resolves through supplier_aliases first", () => {
+    const row = { sender_domain: "shopifyemail.com", retailer_order_id: "CAR118805142", email_subject: "Your Carters order has shipped" };
+    expect(matchRow(row, {}, SUP, P, undefined, new Map([["carters", "carters.com"]]))).toMatchObject({ status: "matched", po_id: "po-car", via: "retailer_name", supplier: "carters.com" });
+  });
+  it("a free-text prefix on the email's order # drops (shared normOrder)", () => {
+    expect(findPos("carters.com", "Order #CAR118805142", P).map((p) => p.id)).toEqual(["po-car"]);
+    expect(findPosByOrderDigits("Order #200015279183885", [{ id: "w", supplier: "walmart.com", order_id: "2000152-79183885" }]).map((p) => p.id)).toEqual(["w"]);
   });
 });
 
