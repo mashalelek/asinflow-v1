@@ -463,8 +463,11 @@ export async function syncVelocityShipments(opts: { dryRun: boolean; deps?: Velo
   // must also fit the units — the line's own order # disagrees with the sheet,
   // so Col P alone could place it past Ordered (CAR118805142_1 onto a fully
   // shipped CAR118908837, 2026-10-29). Per line: one row that fits → placed;
-  // one that doesn't → kept as the candidate with the reason; several → candidates.
+  // one that doesn't → a hint only: the line still falls through to the base
+  // order # and §4 rules, and the hint is shown only if they place nothing
+  // (Maria 2026-10-29: "Col P is a hint, not a verdict"); several → candidates.
   const colPMiss = new Map<string, string>();
+  const colPHint = new Map<string, MatchCandidate>();
   const rest: Deferred[] = [];
   for (const d of [...deferred].sort(byVelocityDate)) {
     if (d.res.reason === "po_not_found") {
@@ -472,7 +475,7 @@ export async function syncVelocityShipments(opts: { dryRun: boolean; deps?: Velo
       if (cp.ok) {
         const left = remainingFor(d.line)(cp.row);
         if (left + 1e-9 >= d.units) { linkLines([d], cp.row, "col_p"); continue; }
-        d.res = { ...d.res, candidates: [{ po_asin_id: String(cp.row.id), order_id: cp.row.order_id, supplier: cp.row.supplier, asin: cp.row.asin, source: "col_p" }] };
+        colPHint.set(d.key, { po_asin_id: String(cp.row.id), order_id: cp.row.order_id, supplier: cp.row.supplier, asin: cp.row.asin, source: "col_p" });
         colPMiss.set(d.key, `Col P names PO ${cp.row.order_id} (${cp.row.supplier}), but it has ${round2(Math.max(0, left))} units left, the line needs ${d.units}`);
       } else if (cp.candidates) d.res = cp;
     }
@@ -499,7 +502,8 @@ export async function syncVelocityShipments(opts: { dryRun: boolean; deps?: Velo
       if (remaining(base[0]) + 1e-9 >= units) { row = base[0]; how = "base_id"; }
       else miss = miss ?? `base PO ${base[0].order_id} (${base[0].supplier}) has ${round2(Math.max(0, remaining(base[0])))} units left, the line needs ${units} — the ${orderNumber} PO may be missing from AF`;
     }
-    // §4: candidates, only when Col P named nobody (Col P's own stay for review).
+    // §4: candidates, unless Col P named several rows (those stay for review).
+    // A non-fitting Col P hint does not count — it never blocks §4.
     if (!row && cands.length === 0) {
       const ranked = rankCandidates({ asin, retailer: ret, units, vDate: velocityDate(first.line), orderNumber }, ctx.ki, remaining);
       if (ranked.candidates.length === 1) { row = ranked.candidates[0].row; how = "candidate"; }
@@ -507,6 +511,7 @@ export async function syncVelocityShipments(opts: { dryRun: boolean; deps?: Velo
       else miss = miss ?? ranked.miss;
     }
     if (row && how) { linkLines(g, row, how); continue; }
+    for (const d of g) { const h = colPHint.get(d.key); if (h && !cands.some((c) => c.po_asin_id === h.po_asin_id)) cands = [...cands, h]; }
     if (cands.length === 0 && miss == null) miss = nearestMiss({ asin, retailer: ret, units, vDate: velocityDate(first.line), orderNumber }, ctx.ki, remaining);
     for (const d of g) {
       if (d.res.reason === "no_order") counts.linesNoOrder++; else counts.linesPoNotFound++;

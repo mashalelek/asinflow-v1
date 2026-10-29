@@ -127,6 +127,23 @@ describe("Col P on a line WITH an Order # AF lacks must fit the units (dry run 2
     expect(r.unmatched[0].candidates?.map((c) => [c.order_id, c.source])).toEqual([["CAR118908837", "col_p"]]);
     expect(r.unmatched[0].miss).toBe("Col P names PO CAR118908837 (carters.com), but it has 0 units left, the line needs 5");
   });
+  it("a non-fitting Col P hit is a hint, not a verdict: the line still reaches base and §4 (prod shape 2026-10-29)", async () => {
+    const own = row({ id: "c5", asin: "B0DZ33XH15", order_id: "CAR118805142", supplier: "carters.com", order_date: "2026-08-17", qty: 5 });
+    const full = row({ id: "c9", asin: "B0DZ33XH15", order_id: "CAR118908837", supplier: "carters.com", order_date: "2026-08-24", qty: 5 });
+    const open = row({ id: "c3", asin: "B0DZ33XH15", order_id: "CAR119308842", supplier: "carters.com", order_date: "2026-09-07", qty: 10 });
+    const lines = [
+      { line: vline({ order_id: "vo-a", order_number: "CAR118805142", retailer: "carters.com", asin: "B0DZ33XH15", date: "08/17/2026" }) },
+      { line: vline({ order_id: "vo-b", order_number: "CAR118908837", retailer: "carters.com", asin: "B0DZ33XH15", date: "08/24/2026" }) },
+      { sid: SID2, line: vline({ order_id: "vo-1", order_number: "CAR118805142_1", retailer: "carters.com", asin: "B0DZ33XH15", date: "09/02/2026" }) },
+    ];
+    const opts = { colP: [colPRow("c9", "CAR118908837", "B0DZ33XH15", "FBA1")], fbaIds: [{ id: SID2, sc_shipment_ids: ["FBA1"] }] };
+    const r = await harness([own, full, open], lines, opts).run(true);
+    expect(r.counts).toMatchObject({ linesMatched: 3, linesMatchedCandidate: 1, linesPoNotFound: 0 });
+    expect(r.ruleLinks.find((l) => l.orderNumber === "CAR118805142_1")?.poAsinId).toBe("c3");
+    // base with room wins over §4 even after a failed Col P hit
+    const r2 = await harness([{ ...own, qty: 10 }, full, open], lines, opts).run(true);
+    expect(r2.ruleLinks.find((l) => l.orderNumber === "CAR118805142_1")).toMatchObject({ poAsinId: "c5", how: "base_id" });
+  });
   it("…and with room it is placed (col_p) and recorded like a picker link", async () => {
     const room = row({ id: "c9", asin: "B0DZ33XH15", order_id: "CAR118908837", supplier: "carters.com", order_date: "2026-08-24", qty: 10 });
     const h = harness([room], [{ line: vline({ order_id: "vo-1", order_number: "INSH-1", asin: "B0DZ33XH15", date: "08/24/2026" }) }],
