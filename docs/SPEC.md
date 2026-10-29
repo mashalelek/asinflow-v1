@@ -5402,7 +5402,8 @@ stored or hand-set (§26). **Pack size missing** and **Pack size mismatch**
 (2026-10-29) are derived the same way, from `po_asins`: missing while
 `sold_as` is NULL **and** the row has a live line (ordered > 0, not fully
 canceled, `final_qty` not 0 — 2026-10-29: a qty-0 or canceled line needs no
-pack size); mismatch while a non-bundle row's
+pack size) **and the PO is Open** (Maria 2026-10-29: a closed PO keeps its
+NULL silently); mismatch while a non-bundle row's
 `velocity_units_per_pack` differs from its `units_per_pack`. Both block
 auto-close (and reopen an auto-closed PO) like any action item, and clear
 when the row is fixed. **Receiving mismatch** (2026-10-29) is derived on
@@ -5491,7 +5492,8 @@ returns the plan with nothing written.
   insert time, `item_discount = 0`).
 - **Col P (2026-10-29):** every live run also replaces
   `po_sheet_fba_shipments` (per supplier, order, ASIN, row position, FBA
-  id, qty) from Col P — a shipment-matching signal for §26 component A,
+  id, qty) from Col P in one multi-row insert (column arrays through
+  `unnest`) — a shipment-matching signal for §26 component A,
   read even for POs it does not insert. Col M (supplier-received, product
   units) is still stored on the line at insert but is no longer shown:
   the POs list and PO Details dropped "Units Received" (it was never
