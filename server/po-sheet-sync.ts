@@ -130,8 +130,9 @@ export interface SheetPoAsin {
   costPerUnitIntegerEra?: string | null;
   /** NULL = not recorded (pre-2026 rows: Col AS did not exist yet). */
   prep: string | null;
-  soldAs: string;
-  unitsPerPack: number;
+  /** null = blank on the sheet, 2026 rows (not filled in — never read as individual; 2026-10-29). */
+  soldAs: string | null;
+  unitsPerPack: number | null;
   lossQty: number;
   lossAmount: string;
   /** "Lost / Damaged by Us" rows of this ASIN (2026-10-18): Σ Col V × yield, ASIN qty; null = no such row. */
@@ -303,8 +304,12 @@ export function parsePoSheet(header: string[], dataCells: string[][]): ParsedPoS
       const prepRaw = t(ar.cells[COL.prepCost]);
       // Pre-2026 rows predate Col AS: blank = not recorded (NULL), never $0 (Maria 2026-10-18).
       const prep: string | null = prepRaw === "" ? (historical ? null : "0") : moneyVerbatim(prepRaw).value ?? (historical ? null : "0");
-      let soldAs = t(ar.cells[COL.soldAs]) || "individual";
-      let upp = soldAs === "individual" ? 1 : (intOrNull(ar.cells[COL.unitsPerPack]) ?? 1);
+      // Blank Col AX on a 2026 row = not filled in (2026-10-29): NULL, never
+      // "individual" — shipment sync A fills it from Velocity when Velocity
+      // has the order, else the row shows the derived "Pack size missing".
+      // Pre-2026 rows keep the old reading (individual, or the yield rule below).
+      let soldAs: string | null = t(ar.cells[COL.soldAs]) || (historical ? "individual" : null);
+      let upp: number | null = soldAs === null ? null : soldAs === "individual" ? 1 : (intOrNull(ar.cells[COL.unitsPerPack]) ?? 1);
       if (historical && t(ar.cells[COL.soldAs]) === "") {
         // Pre-2026 rows predate Col AX/AY: a single-product ASIN whose yield is 1/n (0.5, 0.33, 0.25…) is an n-pack.
         const yld = Number(t(ar.cells[COL.asinQtyPerProduct]) || "1");
@@ -592,6 +597,8 @@ export async function syncPoSheet(opts: { sheetId: string; dryRun: boolean; db?:
       const aEff: SheetPoAsin = a.lines.length > 0 && a.lines.every((l) => l.canceled) && isZero(a.qty) && Number(ex.qty) > 0 ? { ...a, qty: Number(ex.qty) } : a;
       if (aEff !== a) keptOnCancel = true;
       for (const f of ASIN_FIELDS) {
+        // A blank sold_as says nothing (not filled in): no pack-size drift against AF's value.
+        if (aEff.soldAs === null && (f.col === "sold_as" || f.col === "units_per_pack")) continue;
         const sv = f.sheet(aEff);
         if (!f.eq(ex[f.col], sv)) { set[f.col] = sv; plan.changes.push(`${a.asin}.${f.col}: ${fmt(ex[f.col])} → ${fmt(sv)}`); }
       }
