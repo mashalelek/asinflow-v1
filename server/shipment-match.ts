@@ -27,6 +27,22 @@ export interface MatchCandidate {
 
 export const CANDIDATE_WINDOW_DAYS = 30;
 
+/**
+ * Velocity eligibility (Maria 2026-10-29): a Velocity line is never offered
+ * or auto-linked to a PO that ships to Home or is dated before
+ * tracking.velocity_start_date — on every rule (keys, Col P, base order #,
+ * §4) and in the picker's suggestions. The picker's free-text search still
+ * lists such a PO, with this reason as a warning. null = eligible.
+ */
+export type VelocityIneligible = "home" | "pre_velocity";
+export function velocityIneligible(row: { ships_to?: string | null; order_date: string }, velocityStartDate: string | null): VelocityIneligible | null {
+  if (row.ships_to === "home") return "home";
+  if (velocityStartDate && String(row.order_date).slice(0, 10) < velocityStartDate) return "pre_velocity";
+  return null;
+}
+export const ineligibleText = (why: VelocityIneligible, velocityStartDate: string | null): string =>
+  why === "home" ? "ships to Home, not Velocity" : `dated before the Velocity start (${velocityStartDate})`;
+
 export interface KeyIndex<R extends MatchRow = MatchRow> {
   full: Map<string, R[]>; base: Map<string, R[]>;
   /** order key (full or base) → every row of that PO, any ASIN — for the "Order # in AF without this ASIN" miss. */

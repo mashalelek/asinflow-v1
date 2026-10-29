@@ -12,6 +12,8 @@ import { probeGatingForAsins } from "./gating-probe";
 import { loadPoAsinRows, normalizeLineQty } from "./po-queries";
 import { loadAliases, resolveRetailer, setAlias } from "./supplier-aliases";
 import { linkUnmatchedLine } from "./shipment-link";
+import { velocityIneligible, ineligibleText } from "./shipment-match";
+import { readVelocityStartDate } from "./ships-to-backfill";
 import { evaluateAutoClose, setPoClosedManually, parseQtyInput, MANUAL_QTY_COLUMNS, type ManualQtyColumn } from "./po-close";
 import { ACTION_ITEMS, DISPLAY_ACTION_ITEMS, REVIEW_VELOCITY, PACK_SIZE_MISSING, PACK_SIZE_MISMATCH, RECEIVING_MISMATCH, normalizeActionItems } from "./po-status-map";
 import { asinWriteThrough, unionActionItems, PO_ACTION_ITEMS_SQL, REVIEW_VELOCITY_EXISTS_SQL, REVIEW_VELOCITY_REASONS_SQL, PACK_SIZE_MISSING_EXISTS_SQL, PACK_SIZE_MISMATCH_EXISTS_SQL, RECEIVING_MISMATCH_EXISTS_SQL } from "./po-action-items";
@@ -4776,12 +4778,16 @@ export async function registerRoutes(
     const q = typeof req.query.q === "string" ? req.query.q.trim() : "";
     if (q.length < 2) { res.json({ rows: [] }); return; }
     try {
+      // Velocity-eligible POs first; a Home or pre-start PO is still listed
+      // (free-text override) but carries the reason as a warning (2026-10-29).
+      const start = await readVelocityStartDate(query);
       const rows = (await query(
-        `SELECT pa.id, pa.asin, pa.asin_name, pa.qty, pa.units_per_pack, p.order_id, p.supplier, p.order_date::text AS order_date
+        `SELECT pa.id, pa.asin, pa.asin_name, pa.qty, pa.units_per_pack, p.order_id, p.supplier, p.order_date::text AS order_date, p.ships_to
            FROM po_asins pa JOIN purchase_orders p ON p.id = pa.po_id
           WHERE p.order_id ILIKE $1 OR pa.asin ILIKE $1 OR p.supplier ILIKE $1
-          ORDER BY p.order_date DESC, p.order_id, pa.asin, pa.id LIMIT 20`, [`%${q}%`],
+          ORDER BY (p.ships_to = 'home' OR ($2::date IS NOT NULL AND p.order_date < $2::date)), p.order_date DESC, p.order_id, pa.asin, pa.id LIMIT 20`, [`%${q}%`, start],
       )).rows;
+      for (const r of rows) { const why = velocityIneligible(r, start); r.velocity_warning = why ? ineligibleText(why, start) : null; }
       res.json({ rows });
     } catch (err: any) { res.status(500).json({ message: err.message }); }
   });

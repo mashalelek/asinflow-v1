@@ -178,7 +178,7 @@ interface UnmatchedLine { id: string; velocity_shipment_id: string; velocity_ord
   dismissed_at: string | null }
 interface UnmatchedCandidate { po_asin_id: string; order_id: string; supplier: string; asin: string; source?: "col_p" | "candidate"; order_date?: string; days?: number; remaining_units?: number; units?: number }
 interface UnmatchedResponse { lines: UnmatchedLine[]; dismissed: UnmatchedLine[]; ambiguous: Array<{ id: string; shipped_at: string | null; rows: number }>; count: number }
-interface PickerRow { id: string; asin: string; asin_name: string | null; qty: number; units_per_pack: number; order_id: string; supplier: string; order_date: string }
+interface PickerRow { id: string; asin: string; asin_name: string | null; qty: number; units_per_pack: number; order_id: string; supplier: string; order_date: string; velocity_warning?: string | null }
 
 /** Toast text for a Sync Shipments result (§5.2). */
 export function syncShipmentsToast(data: any): { title: string; description: string; failed: boolean } {
@@ -226,6 +226,7 @@ function LinkPicker({ line, onLinked }: { line: UnmatchedLine; onLinked: () => v
               <span className="text-muted-foreground truncate">{r.supplier}</span>
               <span className="font-mono">{r.asin}</span>
               <span className="text-muted-foreground">{r.order_date} · {fmtQty(r.qty)}{r.units_per_pack > 1 ? ` × ${r.units_per_pack}` : ""}</span>
+              {r.velocity_warning && <span className="text-amber-500" title={`Not a Velocity PO: ${r.velocity_warning}. Linking is still allowed.`} data-testid={`warn-pick-${r.id}`}>⚠ {r.velocity_warning}</span>}
             </button>
           ))}
           {q.trim().length >= 2 && rows.length === 0 && <div className="px-1 py-2 text-muted-foreground">No PO ASIN rows match.</div>}

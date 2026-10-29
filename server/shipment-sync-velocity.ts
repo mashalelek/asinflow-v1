@@ -46,7 +46,8 @@ import pool from "./db";
 import type { QueryLike } from "./scheduler/types";
 import { logEdits } from "./po-edit";
 import { loadAliases, resolveRetailer, type RetailerResolution } from "./supplier-aliases";
-import { buildKeyIndex, matchFullKey, baseKeyRows, rankCandidates, nearestMiss, velocityDate, capacityUnits, dayDiff, type KeyIndex, type MatchCandidate } from "./shipment-match";
+import { buildKeyIndex, matchFullKey, baseKeyRows, rankCandidates, nearestMiss, velocityDate, capacityUnits, dayDiff, velocityIneligible, ineligibleText, type KeyIndex, type MatchCandidate } from "./shipment-match";
+import { readVelocityStartDate } from "./ships-to-backfill";
 import {
   listAllShipments, getShipmentDetail, fetchAllInboundOrders, fetchAllInventoryOrders,
   type VelocityInboundOrder, type VelocityShipmentRow,
@@ -138,6 +139,8 @@ export interface AfAsinRow {
   /** null = not filled in (blank on the sheet); undefined is treated as known. */
   sold_as?: string | null;
   velocity_units_per_pack?: number | null;
+  /** 'velocity' | 'home' — a home PO is never a Velocity match. */
+  ships_to?: string | null;
 }
 
 /** Velocity's pack size for one line: individual → 1, multi-pack → its units_per_pack; bundles and unknowns → null (not compared). */
@@ -249,19 +252,26 @@ export async function syncVelocityShipments(opts: { dryRun: boolean; deps?: Velo
   // ── AF state ───────────────────────────────────────────────────────────────
   const afRows = (await db.query(
     `SELECT pa.id, pa.po_id, pa.asin, pa.units_per_pack, pa.qty_at_prep, p.order_id, p.supplier, p.order_date::text AS order_date,
-            pa.sold_as, pa.velocity_units_per_pack, pa.qty
+            pa.sold_as, pa.velocity_units_per_pack, pa.qty, p.ships_to
        FROM po_asins pa JOIN purchase_orders p ON p.id = pa.po_id`,
   )).rows as AfAsinRow[];
-  const idx = buildAfIndex(afRows);
+  // Every rule matches only Velocity-eligible POs (not Home, not before
+  // tracking.velocity_start_date; Maria 2026-10-29). afById keeps every row
+  // for recorded links and hand pins.
+  const velocityStart = await readVelocityStartDate(db.query.bind(db));
+  const matchRows = afRows.filter((r) => velocityIneligible(r, velocityStart) == null);
+  const idx = buildAfIndex(matchRows);
   const existingRows = (await db.query(`SELECT id, po_asin_id, velocity_shipment_id, qty_shipped, shipped_at::text AS shipped_at, assigned_by FROM po_asin_shipments WHERE source = 'velocity'`)).rows;
   const existingByKey = new Map<string, any>(existingRows.map((r: any) => [`${r.po_asin_id}\u0000${r.velocity_shipment_id}`, r]));
   const unmatchedRows = (await db.query(`SELECT id, velocity_shipment_id, velocity_order_id, reason, resolved_at, resolved_po_asin_id, match_reason FROM shipment_unmatched`)).rows;
   const unmatchedByKey = new Map<string, any>(unmatchedRows.map((r: any) => [`${r.velocity_shipment_id}\u0000${r.velocity_order_id}`, r]));
   const afById = new Map<string, AfAsinRow>(afRows.map((r) => [String(r.id), r]));
+  const matchById = new Map<string, AfAsinRow>(matchRows.map((r) => [String(r.id), r]));
+  const kiAll = buildKeyIndex(afRows);
   // §3 / §4 context: normalized-key index, retailer aliases (+ a backfill's proposed seeds), AF suppliers.
   const aliases = new Map<string, string>(await loadAliases(db.query.bind(db)));
   for (const [k, v] of Array.from(opts.extraAliases?.entries() ?? [])) if (!aliases.has(k)) aliases.set(k, v);
-  const ctx: MatchContext = { ki: buildKeyIndex(afRows), aliases, suppliers: Array.from(new Set(afRows.map((r) => r.supplier))) };
+  const ctx: MatchContext = { ki: buildKeyIndex(matchRows), aliases, suppliers: Array.from(new Set(afRows.map((r) => r.supplier))) };
   /** A line recorded as linked (picker, or a §3 b / §4 link from an earlier run). */
   const priorLink = (prior: any): Resolution | null => {
     if (!prior?.resolved_po_asin_id || !afById.has(String(prior.resolved_po_asin_id))) return null;
@@ -286,7 +296,7 @@ export async function syncVelocityShipments(opts: { dryRun: boolean; deps?: Velo
   // Col P in the main pass: no-Order # lines only (as approved 2026-10-29); a
   // line with an Order # AF lacks gets Col P in the units pass, with fit.
   const withColP = (res: Resolution, line: VelocityInboundOrder, shipmentId: string | null): Resolution =>
-    shipmentId && !res.ok && res.reason === "no_order" ? resolveByColP(res, line, fbaIdsByShipment.get(shipmentId) ?? [], colP, afById) : res;
+    shipmentId && !res.ok && res.reason === "no_order" ? resolveByColP(res, line, fbaIdsByShipment.get(shipmentId) ?? [], colP, matchById) : res;
   // Manual assignments (assigned_by = 'manual', 2026-10-18; Reassign
   // shipment, af-owned §5.2): a Velocity line (shipment, Velocity Order #,
   // ASIN) pinned to one or more PO ASIN rows stays there — never moved or
@@ -471,7 +481,7 @@ export async function syncVelocityShipments(opts: { dryRun: boolean; deps?: Velo
   const rest: Deferred[] = [];
   for (const d of [...deferred].sort(byVelocityDate)) {
     if (d.res.reason === "po_not_found") {
-      const cp = resolveByColP(d.res, d.line, fbaIdsByShipment.get(d.shipmentId) ?? [], colP, afById);
+      const cp = resolveByColP(d.res, d.line, fbaIdsByShipment.get(d.shipmentId) ?? [], colP, matchById);
       if (cp.ok) {
         const left = remainingFor(d.line)(cp.row);
         if (left + 1e-9 >= d.units) { linkLines([d], cp.row, "col_p"); continue; }
@@ -501,6 +511,12 @@ export async function syncVelocityShipments(opts: { dryRun: boolean; deps?: Velo
     if (base.length === 1) {
       if (remaining(base[0]) + 1e-9 >= units) { row = base[0]; how = "base_id"; }
       else miss = miss ?? `base PO ${base[0].order_id} (${base[0].supplier}) has ${round2(Math.max(0, remaining(base[0])))} units left, the line needs ${units} — the ${orderNumber} PO may be missing from AF`;
+    }
+    if (miss == null && orderNumber) {
+      // The line's own order # names a PO the eligibility rule excludes — say so.
+      const hit = matchFullKey(orderNumber, asin, ret, kiAll) ?? baseKeyRows(orderNumber, asin, ret, kiAll)[0] ?? null;
+      const why = hit ? velocityIneligible(hit, velocityStart) : null;
+      if (hit && why) miss = `PO ${hit.order_id} (${hit.supplier}) ${ineligibleText(why, velocityStart)} — not offered`;
     }
     // §4: candidates, unless Col P named several rows (those stay for review).
     // A non-fitting Col P hint does not count — it never blocks §4.

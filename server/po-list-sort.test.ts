@@ -13,6 +13,6 @@ describe("PO lists sort deterministically", () => {
   });
   it("the Unmatched panel and the link picker end on a unique key", () => {
     expect(routes).toContain("ORDER BY v.shipped_at DESC NULLS LAST, u.created_at, u.id`");
-    expect(routes).toContain("ORDER BY p.order_date DESC, p.order_id, pa.asin, pa.id LIMIT 20`");
+    expect(routes).toContain("p.order_date DESC, p.order_id, pa.asin, pa.id LIMIT 20`, [`%${q}%`, start]");
   });
 });
