@@ -8,15 +8,18 @@ const base = { velocityStreet: "805 grandy", homeStreets: ["65 rivercrest"], poC
 const r = (inVelocity: boolean, emailStreet: string | null, shipsTo: "velocity" | "home") => routeTracking({ ...base, velocity: inVelocity ? "inbound" : "absent", emailStreet, shipsTo });
 
 describe("routing table (§7)", () => {
-  it("in Velocity, ship-to none or agreeing → push, no warning", () => {
+  it("in Velocity, ship-to none or agreeing on a Velocity PO → push, no warning", () => {
     expect(r(true, null, "velocity")).toEqual({ push: true, held: false, reasons: [] });
     expect(r(true, "805 grandy", "velocity")).toEqual({ push: true, held: false, reasons: [] });
-    expect(r(true, "65 rivercrest", "home")).toEqual({ push: true, held: false, reasons: [] });
   });
-  it("in Velocity, ship-to disagreeing with ships_to → push + address mismatch", () => {
+  it("in Velocity, ship-to disagreeing on a Velocity PO → push + address mismatch", () => {
     expect(r(true, "65 rivercrest", "velocity")).toEqual({ push: true, held: false, reasons: [REASON.addressMismatch] });
-    expect(r(true, "805 grandy", "home")).toEqual({ push: true, held: false, reasons: [REASON.addressMismatch] });
     expect(r(true, "12 elm", "velocity")).toEqual({ push: true, held: false, reasons: [REASON.addressMismatch] });
+  });
+  it("a Home PO is never pushed, even when Velocity has an order for it — review only (2026-10-29)", () => {
+    for (const street of [null, "65 rivercrest", "805 grandy", "12 elm"]) {
+      expect(r(true, street, "home")).toEqual({ push: false, held: false, reasons: [REASON.homeInVelocity] });
+    }
   });
   it("not in Velocity: Velocity street / none on a Velocity PO / ships_to velocity → not in Velocity", () => {
     expect(r(false, "805 grandy", "home").reasons).toEqual([REASON.notInVelocity]);

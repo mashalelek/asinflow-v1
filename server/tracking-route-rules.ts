@@ -11,8 +11,9 @@
 //   absent  — Velocity has never seen it (the table's "no" rows).
 // | PO in Velocity | email ship-to                | ships_to | result                               |
 // |----------------|------------------------------|----------|--------------------------------------|
-// | yes            | none, or agrees with ships_to| —        | push                                 |
-// | yes            | disagrees with ships_to      | —        | push + review "address mismatch"     |
+// | yes            | any                          | home     | review "Home PO in Velocity", no push|
+// | yes            | none, or agrees with ships_to| velocity | push                                 |
+// | yes            | disagrees with ships_to      | velocity | push + review "address mismatch"     |
 // | no             | home street                  | home     | held, no review                      |
 // | no             | none                         | home     | held, no review (Maria 2026-10-22)   |
 // | no             | none / Velocity street       | velocity | review "not in Velocity"             |
@@ -29,6 +30,7 @@ export type RouteResult = { push: boolean; held: boolean; reasons: string[] };
 
 export const REASON = {
   addressMismatch: "address mismatch",
+  homeInVelocity: "Home PO in Velocity",
   notInVelocity: "not in Velocity",
   unknownAddress: "unknown address",
   canceled: "shipped but canceled",
@@ -51,6 +53,9 @@ export function routeTracking(i: {
   const unknown = street != null && !isVelocity && !isHome;
   if (i.velocity === "known") return { push: false, held: false, reasons: [] };
   if (i.velocity === "inbound") {
+    // A Home PO is never pushed, even when Velocity has an order for it
+    // (Maria 2026-10-29): the order there is the mistake — review only.
+    if (i.shipsTo === "home") return { push: false, held: false, reasons: [REASON.homeInVelocity] };
     const agrees = street == null || (i.shipsTo === "velocity" ? isVelocity : isHome);
     return { push: true, held: false, reasons: agrees ? [] : [REASON.addressMismatch] };
   }
