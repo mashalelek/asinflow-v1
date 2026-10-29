@@ -5400,10 +5400,17 @@ FBM** (the last two only meaningful when the PO ships from the house). **Review 
 auto-managed and appears after them — derived from PO tracking, never
 stored or hand-set (§26). **Pack size missing** and **Pack size mismatch**
 (2026-10-29) are derived the same way, from `po_asins`: missing while
-`sold_as` is NULL; mismatch while a non-bundle row's
+`sold_as` is NULL **and** the row has a live line (ordered > 0, not fully
+canceled, `final_qty` not 0 — 2026-10-29: a qty-0 or canceled line needs no
+pack size); mismatch while a non-bundle row's
 `velocity_units_per_pack` differs from its `units_per_pack`. Both block
 auto-close (and reopen an auto-closed PO) like any action item, and clear
-when the row is fixed.
+when the row is fixed. **Receiving mismatch** (2026-10-29) is derived on
+any ASIN row where `qty_received_amazon` is known and ≠ `qty_shipped_fba`
+(over or under). It is **display-only**: Received by Amazon is never a
+source of truth — Shipped FBA is the number of record — so it does not
+block auto-close (`PO_CLOSE_ACTION_ITEMS_SQL` leaves it out), and nothing
+(quantities, matching, the On Order pipeline) derives from received.
 Rendered as tinted chips in the (renamed) **Action Items** column with an
 inline multi-select editor on the POs table and on PO Details; the list
 filter is any-of over them (`action=`), beside the Open/Closed filter.
@@ -5482,6 +5489,13 @@ returns the plan with nothing written.
 - **Insert:** a PO not in AF is inserted exactly as the importer did
   (`source = 'sheet_import'`, Amazon SKU from `asins.primary_sku` at
   insert time, `item_discount = 0`).
+- **Col P (2026-10-29):** every live run also replaces
+  `po_sheet_fba_shipments` (per supplier, order, ASIN, row position, FBA
+  id, qty) from Col P — a shipment-matching signal for §26 component A,
+  read even for POs it does not insert. Col M (supplier-received, product
+  units) is still stored on the line at insert but is no longer shown:
+  the POs list and PO Details dropped "Units Received" (it was never
+  maintained and means nothing on a Velocity-shipped PO).
 - **Update (sheet wins):** every header field the importer reads, every
   line field (product, supplier SKU, price, Col L ordered, Col M received,
   Col R returned, Col N ASIN qty, Col T yield, Col X/Y costs, prep,
@@ -5643,6 +5657,18 @@ before Velocity's `shipped_at`.
   while Velocity had them as multi-packs — Velocity's component units ÷ 1
   linked e.g. 46 "shipped" against 24 ordered (PO 126768935, Anchor
   Hocking 2-pack).
+- **Col P (2026-10-29).** Sync POs reads the Orders sheet's Col P (FBA
+  Shipment ID, "FBA19H4BCJP4 (4), FBA19H4BK2W6 (4)"; `[ ]` notes stripped,
+  ids inside them ignored; bare id → qty NULL) into
+  `po_sheet_fba_shipments` (migration 071), a full replace on every live
+  run — a matching signal, not PO data, so intake-only still holds. A line
+  that would be `no_order` whose Velocity shipment's `sc_shipment_ids`
+  meet Col P for exactly one PO ASIN row of the same ASIN is placed there
+  (`linesMatchedColP`); several rows → stays `no_order` with
+  `shipment_unmatched.candidates` (jsonb), shown as one-click links in the
+  picker (`linesColPAmbiguous`). `po_not_found` is not overridden. Origin:
+  PO 126768935 Heath 3-pack, a Velocity order with no Order # shipped in
+  six FBA shipments (72 component units = 24 packs).
 - Not resolvable → `shipment_unmatched` (`no_order` | `po_not_found`), one
   row per line, updated on re-sync, stamped `resolved_at` when it later
   resolves by key or through the picker (`resolved_po_asin_id` is honoured
@@ -5681,7 +5707,9 @@ before Velocity's `shipped_at`.
   are mixed in the shipment, so which PO is short or over is not knowable.
   0 when matched but not yet received, NULL while unmatched. The rollup
   trigger fills `qty_received_amazon`; the auto-close rule reads Shipped
-  FBA only.
+  FBA only. Received is information only (Maria 2026-10-29): a difference
+  shows as the derived **Receiving mismatch** item and is never corrected
+  into any quantity.
 - SC `QuantityShipped` is never compared or flagged (§4.4): Velocity says
   what left the warehouse, SC what Amazon received; the gap is read off
   the two columns. No review queue beyond the Unmatched panel.
