@@ -11,9 +11,15 @@
 //   absent  — Velocity has never seen it (the table's "no" rows).
 // | PO in Velocity | email ship-to                | ships_to | result                               |
 // |----------------|------------------------------|----------|--------------------------------------|
-// | yes            | any                          | home     | review "Home PO in Velocity", no push|
-// | yes            | none, or agrees with ships_to| velocity | push                                 |
-// | yes            | disagrees with ships_to      | velocity | push + review "address mismatch"     |
+// | yes            | Velocity street              | home     | HELD + review "Home PO in Velocity; address mismatch" |
+// | yes            | other                        | home     | review "Home PO in Velocity", no push|
+// | yes            | home street                  | velocity | HELD + review "address mismatch"     |
+// | yes            | none, or Velocity street     | velocity | push                                 |
+// | yes            | unknown street               | velocity | push + review "address mismatch"     |
+// The HELD rows (hold rule, Maria 2026-10-29): the email names the OTHER
+// known address than ships_to, so the parcel is going somewhere AF does not
+// expect — never push it; the tracking stays on the PO (status held) and the
+// review reason raises Review Velocity.
 // | no             | home street                  | home     | held, no review                      |
 // | no             | none                         | home     | held, no review (Maria 2026-10-22)   |
 // | no             | none / Velocity street       | velocity | review "not in Velocity"             |
@@ -55,9 +61,14 @@ export function routeTracking(i: {
   if (i.velocity === "inbound") {
     // A Home PO is never pushed, even when Velocity has an order for it
     // (Maria 2026-10-29): the order there is the mistake — review only.
-    if (i.shipsTo === "home") return { push: false, held: false, reasons: [REASON.homeInVelocity] };
-    const agrees = street == null || (i.shipsTo === "velocity" ? isVelocity : isHome);
-    return { push: true, held: false, reasons: agrees ? [] : [REASON.addressMismatch] };
+    if (i.shipsTo === "home") {
+      return isVelocity
+        ? { push: false, held: true, reasons: [REASON.homeInVelocity, REASON.addressMismatch] }
+        : { push: false, held: false, reasons: [REASON.homeInVelocity] };
+    }
+    // Hold rule: a Velocity PO whose email names the home street.
+    if (isHome) return { push: false, held: true, reasons: [REASON.addressMismatch] };
+    return { push: true, held: false, reasons: unknown ? [REASON.addressMismatch] : [] };
   }
   // A home PO whose email names the home street — or no street at all (USPS
   // emails often carry none) — is going where AF expects: held, no review.

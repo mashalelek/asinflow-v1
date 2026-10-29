@@ -12,12 +12,17 @@ describe("routing table (§7)", () => {
     expect(r(true, null, "velocity")).toEqual({ push: true, held: false, reasons: [] });
     expect(r(true, "805 grandy", "velocity")).toEqual({ push: true, held: false, reasons: [] });
   });
-  it("in Velocity, ship-to disagreeing on a Velocity PO → push + address mismatch", () => {
-    expect(r(true, "65 rivercrest", "velocity")).toEqual({ push: true, held: false, reasons: [REASON.addressMismatch] });
+  it("in Velocity, an unknown street on a Velocity PO → push + address mismatch", () => {
     expect(r(true, "12 elm", "velocity")).toEqual({ push: true, held: false, reasons: [REASON.addressMismatch] });
   });
+  it("hold rule: a Velocity PO whose email names the home street → held, review, never pushed (482270182, 2026-10-29)", () => {
+    expect(r(true, "65 rivercrest", "velocity")).toEqual({ push: false, held: true, reasons: [REASON.addressMismatch] });
+  });
+  it("hold rule, reverse: a Home PO whose email names the Velocity street → held, review", () => {
+    expect(r(true, "805 grandy", "home")).toEqual({ push: false, held: true, reasons: [REASON.homeInVelocity, REASON.addressMismatch] });
+  });
   it("a Home PO is never pushed, even when Velocity has an order for it — review only (2026-10-29)", () => {
-    for (const street of [null, "65 rivercrest", "805 grandy", "12 elm"]) {
+    for (const street of [null, "65 rivercrest", "12 elm"]) {
       expect(r(true, street, "home")).toEqual({ push: false, held: false, reasons: [REASON.homeInVelocity] });
     }
   });
