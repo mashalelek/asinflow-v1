@@ -14,7 +14,7 @@
  * eyeballed the review screen once (SPEC hold). Flipping it to true is the
  * only change needed to go live.
  */
-import { Fragment, useCallback, useEffect, useMemo, useState } from "react";
+import { Fragment, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { fetchLongSync } from "@/lib/long-sync";
 import {
   Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription, DialogFooter,
@@ -76,6 +76,9 @@ function ymdToMdy(ymd: string): string {
 // Mid-typing, a date input emits partial/garbled values — never fetch on
 // those (each keystroke would 400 against the API).
 const isCompleteYmd = (s: string) => /^\d{4}-\d{2}-\d{2}$/.test(s) && Number(s.slice(0, 4)) > 2000;
+// Typing a date passes through complete-but-wrong values (10/4 → 1/4/2026
+// on the way to 11/4/2026): wait for the typing to pause before fetching.
+export const DATE_DEBOUNCE_MS = 400;
 function todayYmd(): string {
   const n = new Date();
   const p = (x: number) => String(x).padStart(2, "0");
@@ -164,12 +167,25 @@ export function UploadToVelocityDialog({ open, onOpenChange }: { open: boolean; 
   const [sending, setSending] = useState(false);
   const [results, setResults] = useState<ExecResult[] | null>(null);
 
+  // Only the newest plan request may update the dialog: every request (and
+  // every date change that schedules one) bumps reqSeq, and a response whose
+  // seq is no longer current is dropped — otherwise a late answer for a
+  // superseded range overwrote the list and reset the ticks.
+  const reqSeq = useRef(0);
+  const reqAbort = useRef<AbortController | null>(null);
+  const dateTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+
   const fetchReview = useCallback(async (fYmd: string, tYmd: string) => {
+    const seq = ++reqSeq.current;
+    reqAbort.current?.abort();
+    const ctrl = new AbortController();
+    reqAbort.current = ctrl;
     setLoading(true); setError(null); setResults(null); setConfirming(false);
     setPromoted([]); setSkuCreate({});
     try {
-      const res = await fetch(`/api/velocity/plan?from=${encodeURIComponent(ymdToMdy(fYmd))}&to=${encodeURIComponent(ymdToMdy(tYmd))}`);
+      const res = await fetch(`/api/velocity/plan?from=${encodeURIComponent(ymdToMdy(fYmd))}&to=${encodeURIComponent(ymdToMdy(tYmd))}`, { signal: ctrl.signal });
       const body = await res.json();
+      if (seq !== reqSeq.current) return;
       if (!res.ok) throw new Error(body?.message ?? `HTTP ${res.status}`);
       setData(body as ReviewData);
       // NEW ORDERS pre-ticked; QTY MISMATCHES opt-in (unticked).
@@ -180,13 +196,34 @@ export function UploadToVelocityDialog({ open, onOpenChange }: { open: boolean; 
       ]));
       setSelUpdates(new Set());
     } catch (e: any) {
+      if (seq !== reqSeq.current) return;
       setData(null); setError(e?.message ?? String(e));
     } finally {
-      setLoading(false);
+      if (seq === reqSeq.current) setLoading(false);
     }
   }, []);
 
-  useEffect(() => { if (open) fetchReview(fromYmd, toYmd); }, [open]); // eslint-disable-line react-hooks/exhaustive-deps
+  // A date edit: invalidate whatever is in flight at once, then fetch once
+  // the typing pauses (DATE_DEBOUNCE_MS) and both dates are complete.
+  const scheduleReview = useCallback((fYmd: string, tYmd: string) => {
+    if (dateTimer.current) clearTimeout(dateTimer.current);
+    reqSeq.current++;
+    reqAbort.current?.abort();
+    if (!isCompleteYmd(fYmd) || !isCompleteYmd(tYmd)) { setLoading(false); return; }
+    setLoading(true);
+    dateTimer.current = setTimeout(() => { dateTimer.current = null; void fetchReview(fYmd, tYmd); }, DATE_DEBOUNCE_MS);
+  }, [fetchReview]);
+
+  useEffect(() => {
+    if (open) fetchReview(fromYmd, toYmd);
+    // Closing (or unmounting) drops a pending fetch and any late response.
+    return () => {
+      if (dateTimer.current) clearTimeout(dateTimer.current);
+      dateTimer.current = null;
+      reqSeq.current++;
+      reqAbort.current?.abort();
+    };
+  }, [open]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const allCreates = useMemo(() => [...(data?.creates ?? []), ...promoted], [data, promoted]);
   const actionableUpdates = useMemo(() => (data?.updates ?? []).filter((u) => u.actionable), [data]);
@@ -357,10 +394,10 @@ export function UploadToVelocityDialog({ open, onOpenChange }: { open: boolean; 
           <DialogDescription className="flex items-center gap-2">
             <span>Order date range:</span>
             <Input type="date" className="h-8 w-40" value={fromYmd}
-              onChange={(e) => { setFromYmd(e.target.value); if (isCompleteYmd(e.target.value) && isCompleteYmd(toYmd)) fetchReview(e.target.value, toYmd); }} />
+              onChange={(e) => { setFromYmd(e.target.value); scheduleReview(e.target.value, toYmd); }} />
             <span>–</span>
             <Input type="date" className="h-8 w-40" value={toYmd}
-              onChange={(e) => { setToYmd(e.target.value); if (isCompleteYmd(fromYmd) && isCompleteYmd(e.target.value)) fetchReview(fromYmd, e.target.value); }} />
+              onChange={(e) => { setToYmd(e.target.value); scheduleReview(fromYmd, e.target.value); }} />
             {data?.clamped && (
               <Badge variant="outline" className="text-amber-600 dark:text-amber-400 border-amber-400/50">
                 clamped to {data.effectiveFrom} by order-date floor
