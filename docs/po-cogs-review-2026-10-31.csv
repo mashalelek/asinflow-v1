@@ -1,0 +1,68 @@
+sheet_row,order_id,order_date,supplier,asin,status,product_price_K,gift_card_pct_AJ,X_formula,X_value,Y_formula,Y_value,AR_value,af_cost_per_unit,why_it_looks_wrong
+66,143264,2026-10-17,yvesrocherusa.com,B0DWXWHXP1,Ordered,42,0,=(K65*5+K66)*0.7,148.4,=X66/T66,29.68,29.68,29.68,X > 1.5 × product price
+221,137736,2026-09-26,yvesrocherusa.com,B0DWXWHXP1,Closed,11.9,0,=(K221+K222/5),20.3,=X221/T221,20.3,20.3,20.3,X > 1.5 × product price
+222,137736,2026-09-26,yvesrocherusa.com,B0DWXWHXP1,Closed,42,0,=(K221*5+K222),101.5,=X222/T222,20.3,20.3,20.3,X > 1.5 × product price
+247,137083,2026-09-24,yvesrocherusa.com,B0DWXWHXP1,Closed,42,0,=(K246*5+K247)*0.75,159,=X247/T247,31.8,31.8,31.8,X > 1.5 × product price
+522,200015138003869,2026-08-28,walmart.com,B00N9BDS6A,Closed,11.76,0.05,=K522,11.76,=X522/T522,0.98,1.0316,0.98,"X = K: list price, gift-card % not applied (AJ>0)"
+550,130097,2026-08-16,yvesrocherusa.com,B0DWXWHXP1,Closed,42,0,=(K549*5+K550)*0.7,148.4,=X550/T550,29.68,29.68,29.68,X > 1.5 × product price
+849,200014781989040,2026-05-24,walmart.com,B09LVG5CHH,Closed,29.96,0.07,=AG849/L849,31.97,=X849/T849,31.97,34.3763,31.97,X formula ignores the gift-card % (AJ>0)
+926,467231369-001,2026-05-06,officedepot.com,B00RJ4VRFM,Received,1.69,0.08,=AG926/L926,1.69,=X926/T926,1.69,1.837,1.69,X formula ignores the gift-card % (AJ>0)
+1099,HFUS09070407637,2026-04-01,yankeecandle.com,B0CWPMQS51,Closed,3,0.0765,=AG1099/120,3.21,=X1099/T1099,12.84,13.9036,12.84,X formula ignores the gift-card % (AJ>0)
+1100,HFUS09070407637,2026-04-01,yankeecandle.com,B0CWPP9Q48,Closed,3,0.0765,=AG1100/120,3.21,=X1100/T1100,12.84,13.9036,12.84,X formula ignores the gift-card % (AJ>0)
+1101,HFUS09070407637,2026-04-01,yankeecandle.com,B0CWPPQBN4,Closed,3,0.0765,=AG1101/120,3.21,=X1101/T1101,12.84,13.9036,12.84,X formula ignores the gift-card % (AJ>0)
+1105,50SFGJHQFZ84,2026-03-31,spoiledchild.com,B0F9LRJ9BT,Closed,49,0,=(AG1105+AG1110)/5,82.794,=X1105/T1105,82.794,82.794,82.79,X > 1.5 × product price
+1134,1113633269,2026-03-30,petsmart.com,B08QMDXLB1,SHIP,1.18,0.09,=K1134*1.07*0.8*(1-AJ1134)*2,1.8383,=X1134/T1134,11.0301,12.121,11.03,X > 1.5 × product price
+1135,1113633269,2026-03-30,petsmart.com,B08QMDXLB1,SHIP,1.18,0.09,=K1135*1.07*0.8*(1-AJ1135)*2,1.8383,=X1135/T1135,11.0301,12.121,11.03,X > 1.5 × product price
+1160,5430797,2026-03-27,sodastream.com,B01454Z2MC,Closed,20.24,0.0396,=AG1160/L1160,17.204,=X1160/T1160,4.301,4.4783,4.3,X formula ignores the gift-card % (AJ>0)
+1170,HFUS09051949538,2026-03-25,yankeecandle.com,B0D9WKT9FW,Closed,7.5,0.091,=AG1170/L1170,4.0125,=X1170/T1170,16.05,17.6568,16.05,X formula ignores the gift-card % (AJ>0)
+1368,200014348381441,2026-02-28,walmart.com,B09LVG5CHH,"Received Partial, Closed",29.96,0.07,=AG1368/L1368,29.96,=X1368/T1368,29.96,32.2151,29.96,X formula ignores the gift-card % (AJ>0)
+1442,HFUS08909344440,2026-02-11,yankeecandle.com,B0DC7SQJVT,"Closed, Received",4,0.0765,=AG1442/L1442,3.71,=X1442/T1442,22.26,24.104,22.26,X formula ignores the gift-card % (AJ>0)
+1496,HFUS08896206761,2026-02-07,yankeecandle.com,B00O60KPUU,Closed,3,0.0735,=AG1496/($L$1496+$L$1497),17.655,=X1496/T1496,17.655,19.0556,17.66,X formula ignores the gift-card % (AJ>0); X > 1.5 × product price
+1497,HFUS08896206761,2026-02-07,yankeecandle.com,B01MQVATVD,Closed,3,0.0735,=AG1497/($L$1496+$L$1497),17.655,=X1497/T1497,70.62,76.2223,70.62,X formula ignores the gift-card % (AJ>0); X > 1.5 × product price
+1498,HFUS08896085255,2026-02-07,yankeecandle.com,B001KWHAHI,Closed,4,0.0735,=K1498*1.07,4.28,=X1498/T1498,8.56,9.2391,8.56,X formula ignores the gift-card % (AJ>0)
+1499,HFUS08896085255,2026-02-07,yankeecandle.com,B01N49HUEY,Closed,4,0.0735,=K1499*1.07,4.28,=X1499/T1499,8.56,9.2391,8.56,X formula ignores the gift-card % (AJ>0)
+1631,WH20981883,2026-01-16,homedepot.com,B0CKJNCZLY,Closed,27.23,0.0826,=AG1631/L1631,27.23,=X1631/T1631,5.446,5.9365,5.45,X formula ignores the gift-card % (AJ>0)
+1654,102003198584027,2026-01-07,target.com,B003VD5SKU,Closed,8.99,0.07,=K1654,8.99,=X1654/T1654,8.99,9.6667,8.99,"X = K: list price, gift-card % not applied (AJ>0)"
+1655,102003198584027,2026-01-07,target.com,B003XCR7TO,Closed,14.96,0.07,=K1655,14.96,=X1655/T1655,14.96,16.086,14.96,"X = K: list price, gift-card % not applied (AJ>0)"
+1900,1071371369,2025-11-29,belk.com,B07NMPCH47,Closed,24,0.0917,=AG1900/L1900,18,=X1900/T1900,18,19.8165,18,X formula ignores the gift-card % (AJ>0)
+1941,CAR113016317,2025-11-20,carters.com,B0FHKDD7JG,Closed,8,0.1312,=K1941*(1-0.16)*1.07,7.1904,=X1941/T1941,7.1904,8.2761,7.19,X formula ignores the gift-card % (AJ>0)
+2156,2600109855371513,2025-10-10,michaels.com,B01B3KV25W,Closed,37.68,0.12,=AG2156/L2156,37.68,=X2156/T2156,3.14,3.5682,3.14,X formula ignores the gift-card % (AJ>0)
+2159,200013776709407,2025-10-09,walmart.com,B00QOKOF5Q,Closed,5.94,0.07,=AG2159/L2159,5.94,=X2159/T2159,3.96,4.2581,3.96,X formula ignores the gift-card % (AJ>0)
+2253,HFUS08001317110,2025-09-28,yankeecandle.com,B07HCB6PJ7,Closed,5.99,0.0625,=(AG2253+20)/L2253,4.7345,=X2253/T2253,4.7345,5.0501,4.73,X formula ignores the gift-card % (AJ>0)
+2394,102002826035922,2025-09-07,target.com,B0030453IM,Closed,25.49,0.06,=AG2394/L2394,27.274,=X2394/T2394,27.274,29.0149,27.27,X formula ignores the gift-card % (AJ>0)
+2415,200013396107244,2025-09-03,walmart.com,B09LVG5CHH,Closed,29.96,0.09,=AG2415/L2415,29.96,=X2415/T2415,29.96,32.9231,29.96,X formula ignores the gift-card % (AJ>0)
+2691,300901200251279184,2025-07-19,lowes.com,B00JV0KADM,Closed,7.38,0.161,=K2691*(1-AE2691/AB2691),7.38,=X2691/T2691,7.38,8.7962,7.38,X formula ignores the gift-card % (AJ>0)
+2724,2100110456599417,2025-07-17,michaels.com,B08YDC2FPC,Closed,27.45,0.0967,=K2724*(1-AE2724/AB2724),27.45,=X2724/T2724,2.2875,2.5323,2.29,X formula ignores the gift-card % (AJ>0)
+2725,2100110456599417,2025-07-17,michaels.com,B07VRQM27X,Closed,27.73,0.0967,=K2725*(1-AE2725/AB2725),27.73,=X2725/T2725,2.3108,2.5581,2.31,X formula ignores the gift-card % (AJ>0)
+2726,2100110456599417,2025-07-17,michaels.com,B011QB5Q1O,Closed,28.74,0.0967,=K2726*(1-AE2726/AB2726),28.74,=X2726/T2726,4.79,5.3026,4.79,X formula ignores the gift-card % (AJ>0)
+2849,102002642719773,2025-06-28,target.com,B014GKAOQ4,Closed,4.82,0.05,=AG2849/L2849,5.157,=X2849/T2849,5.157,5.4284,5.16,X formula ignores the gift-card % (AJ>0)
+2871,457458157,2025-06-25,scheels.com,B09B4GFKQD,"Closed, Returned",2.79,0.05,=AF2871/L2871,2.9853,=X2871/T2871,5.9707,6.2849,5.97,X formula ignores the gift-card % (AJ>0)
+3040,0 Spend Placeholder for Graph,2025-05-25,,,,NaN,0,,NaN,=X3040/T3040,NaN,NaN,,Y shows #DIV/0! (Function DIVIDE parameter 2 cannot be zero.)
+3041,0 Spend Placeholder for Graph,2025-05-24,,,,NaN,0,,NaN,=X3041/T3041,NaN,NaN,,Y shows #DIV/0! (Function DIVIDE parameter 2 cannot be zero.)
+3042,0 Spend Placeholder for Graph,2025-05-23,,,,NaN,0,,NaN,=X3042/T3042,NaN,NaN,,Y shows #DIV/0! (Function DIVIDE parameter 2 cannot be zero.)
+3043,0 Spend Placeholder for Graph,2025-05-22,,,,NaN,0,,NaN,=X3043/T3043,NaN,NaN,,Y shows #DIV/0! (Function DIVIDE parameter 2 cannot be zero.)
+3044,0 Spend Placeholder for Graph,2025-05-21,,,,NaN,0,,NaN,=X3044/T3044,NaN,NaN,,Y shows #DIV/0! (Function DIVIDE parameter 2 cannot be zero.)
+3045,0 Spend Placeholder for Graph,2025-05-20,,,,NaN,0,,NaN,=X3045/T3045,NaN,NaN,,Y shows #DIV/0! (Function DIVIDE parameter 2 cannot be zero.)
+3046,0 Spend Placeholder for Graph,2025-05-19,,,,NaN,0,,NaN,=X3046/T3046,NaN,NaN,,Y shows #DIV/0! (Function DIVIDE parameter 2 cannot be zero.)
+3121,HFUS07509209765,2025-05-03,woodwick.yankeecandle.com,B01NANEHX5,Closed,17,0.1004,=($AG$3121/SUM($L$3121:$L$3124))*(1-$AJ$3121),16.3638,=X3121/T3121,16.3638,18.19,16.36,X formula ignores the gift-card % (AJ>0)
+3122,HFUS07509209765,2025-05-03,woodwick.yankeecandle.com,B00DK2EOFC,Closed,17,0.1004,=($AG$3121/SUM($L$3121:$L$3124))*(1-$AJ$3121),16.3638,=X3122/T3122,16.3638,18.19,16.36,X formula ignores the gift-card % (AJ>0)
+3123,HFUS07509209765,2025-05-03,woodwick.yankeecandle.com,B074WCR96T,Closed,17,0.1004,=($AG$3121/SUM($L$3121:$L$3124))*(1-$AJ$3121),16.3638,=X3123/T3123,16.3638,18.19,16.36,X formula ignores the gift-card % (AJ>0)
+3124,HFUS07509209765,2025-05-03,woodwick.yankeecandle.com,B074HSB7FD,Closed,17,0.1004,=($AG$3121/SUM($L$3121:$L$3124))*(1-$AJ$3121),16.3638,=X3124/T3124,16.3638,18.19,16.36,X formula ignores the gift-card % (AJ>0)
+3191,0 Spend Placeholder for Graph,2025-04-20,,,,NaN,0,=K3191*(1-AJ3191)*(1-AE3191/AB3191)*(1+AD3191/AB3191),NaN,=X3191/T3191,NaN,NaN,,Y shows #DIV/0! (Function DIVIDE parameter 2 cannot be zero.)
+3192,0 Spend Placeholder for Graph,2025-04-19,,,,NaN,0,=K3192*(1-AJ3192)*(1-AE3192/AB3192)*(1+AD3192/AB3192),NaN,=X3192/T3192,NaN,NaN,,Y shows #DIV/0! (Function DIVIDE parameter 2 cannot be zero.)
+3193,0 Spend Placeholder for Graph,2025-04-18,,,,NaN,0,=K3193*(1-AJ3193)*(1-AE3193/AB3193)*(1+AD3193/AB3193),NaN,=X3193/T3193,NaN,NaN,,Y shows #DIV/0! (Function DIVIDE parameter 2 cannot be zero.)
+3194,0 Spend Placeholder for Graph,2025-04-17,,,,NaN,0,=K3194*(1-AJ3194)*(1-AE3194/AB3194)*(1+AD3194/AB3194),NaN,=X3194/T3194,NaN,NaN,,Y shows #DIV/0! (Function DIVIDE parameter 2 cannot be zero.)
+3787,102002281403766,2024-12-29,target.com,B07ZGDR7YG,"Closed, Returned",17.63,0.0396,=(AH3787/L3787)*(1-AJ3787),0,=X3787/T3787,0,0,0,Y ≤ 0 with a product price > 0; Y = AR though AJ>0
+3860,200012730853216,2024-11-29,walmart.com,B07B7Q9RHY,Closed,158,0,0,0,0,0,0,0,Y ≤ 0 with a product price > 0
+3902,1500109007351737,2024-11-19,michaels.com,B011QB5Q1O,Closed,28.74,0.1295,=K3902*(1-AE3902/AB3902),28.454,=X3902/T3902,4.7423,5.4478,4.74,X formula ignores the gift-card % (AJ>0)
+3903,1500109007351737,2024-11-19,michaels.com,B09KM64DMF,Closed,111.22,0.1295,=K3903*(1-AE3903/AB3903),110.113,=X3903/T3903,9.1761,10.5412,9.18,X formula ignores the gift-card % (AJ>0)
+3940,2000122-62166802,2024-11-04,walmart.com,B019CXX2Q4,Closed,1.48,0,2.96,2.96,=X3940/T3940,5.92,5.92,5.92,X > 1.5 × product price
+3943,2000123-16061264,2024-11-04,walmart.com,Shipping Supplies,Closed,69.11,0,0,0,=X3943/T3943,NaN,NaN,,Y shows #DIV/0! (Function DIVIDE parameter 2 cannot be zero.)
+3950,In-store,2024-11-04,walmart.com,B019CXX2Q4,Closed,1.68,0,3.36,3.36,=X3950/T3950,6.72,6.72,6.72,X > 1.5 × product price
+3965,200012422352173,2024-10-21,walmart.com,B0772MVP72,Closed,2.68,0,5.36,5.36,=X3965/T3965,10.72,10.72,10.72,X > 1.5 × product price
+3976,6149515,2024-10-17,officesupply.com,B071NSNS9S,"Closed, Returned",3.54,0,5.83,5.83,=X3976/T3976,11.66,11.66,11.66,X > 1.5 × product price
+4048,200012429977861,2024-09-21,walmart.com,B07H47Y122,Closed,8.48,0.045,,NaN,=X4048/T4048,0,0,0,Y ≤ 0 with a product price > 0; Y = AR though AJ>0
+4049,200012429977861,2024-09-21,walmart.com,B01MQVHD44,Closed,1.24,0,,NaN,=X4049/T4049,0,0,0,Y ≤ 0 with a product price > 0
+4050,200012429977861,2024-09-21,walmart.com,B017A3133M,Closed,1.24,0,,NaN,=X4050/T4050,0,0,0,Y ≤ 0 with a product price > 0
+4098,211690438545,2024-08-30,walgreens.com,B07JNY2HFD,Closed,7.1175,0,13.781484,13.7815,=X4098/T4098,27.563,27.563,27.56,X > 1.5 × product price
+4100,211690672079,2024-08-30,walgreens.com,B07JNY2HFD,Closed,7.1175,0,13.781484,13.7815,=X4100/T4100,27.563,27.563,27.56,X > 1.5 × product price

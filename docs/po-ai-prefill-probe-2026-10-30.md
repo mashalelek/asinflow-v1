@@ -82,3 +82,38 @@ Not exact: **AQ "Product Cost"**. `AQ = K × AG ÷ AB` fits 110/150 (73.3 %, the
 - `ANTHROPIC_API_KEY` is already an optional env var (tracking AI fallback, SPEC §26); no `server/config/ai.ts` exists yet.
 - Latest migration: `074_po_line_action_items.sql`; the patch's migration is 075.
 - `source` values: `sheet_import` (import + Sync POs), `manual` (form). `po_edit_log` (id, po_id, user_id, entity, entity_id, field, old_value, new_value, at) is the History table.
+
+## Item 5, resolved 2026-10-31: the source sheet's formulas (read-only)
+
+Maria shared the source spreadsheet (`💵 Orders`, tab `Orders`, 4,134 data rows) with the service account; the formulas were read with `valueRenderOption: FORMULA`. **Nothing was recomputed or changed** — this section records what the cells hold. The per-order variation below is by design (Maria adjusts X/Y per order); the "review list" at the end names rows that look like clear errors, for Maria's review only.
+
+**Every derived column is one formula, sheet-wide:** `N = L × T` (3,745; 223 typed), `U = N ÷ S` (4,128), `Z = Y × N` (4,133), `AA = Z ÷ S` (4,133), `AW = Y + AS` (4,134), `AZ = AY × N` (696 — AX/AY are filled on 2026 rows only), **`AQ = X ÷ (1 − AJ)` (4,125) and `AR = Y ÷ (1 − AJ)` (4,125)** — so "Product Cost" and "COGS" are derived *back* from the adjusted columns, never keyed: AR is Y before the gift-card discount (confirmed on 3,940 of 3,946 rows with values; the 6 others are #DIV/0! rows). `AJ` is typed (1,698) or `=<gift-card savings>/AG` (183 shapes, e.g. `=(46*0.06+87*0.07+151.98*0.1596)/AG`).
+
+**X "Adjusted Product Cost" is a per-order formula (161 shapes; 159 typed):**
+
+| Shape | Rows | Reading |
+|---|---|---|
+| `=K×(1−AJ)` | 1,115 | list price × gift-card factor; no discount / tax / shipping |
+| `=AG÷L×(1−AJ)` / `=AG÷L` / `=(AH÷L)×(1−AJ)` / `=(AG÷L)×(1−AJ)` | 433 / 427 / 82 / 49 | single-product orders: the order **total** ÷ qty — which does fold tax, shipping and the discount into the unit cost |
+| `=K×(1−AJ)×(1−AE÷AB)` and the `(1−AE/AB)` family | 351 + 61 + 52 + 49 + 33 + 13 | order-level discount allocated pro rata |
+| `… ×(1+AD÷AB)` / `×(1+AC÷AB)` / `×1.06` / `×1.07` | 170 / 61 / 37 / 29 + 27 + 25 + 17 + 14 | shipping or tax **added** pro rata or as a flat 6–7 % |
+| `=K` | 226 | list price as is (gift-card factor not applied — 3 of these have AJ > 0, see the review list) |
+| `=K×0.85` / `×0.8` / `×0.7` / `×0.9` / `×0.5…` / `×2/3` | 47 / 30 / 23 / 14 / … / 13 | a per-row item-level sale keyed by the VA |
+
+**Y "Adjusted COGS"** is `=X ÷ T` on 3,847 rows (51 typed); the 13 other shapes are per-row adjustments: `=X/T×S` (17, bundles), `=X/T+X/T` (12), `=X+X` (10), `=X+X+X` (6), `=X×2+X` (4), `=X/T×3` (3), `=X/T+X` (2), `=(X/T)×(8/15)+(X/T)×(7/15)` (2), `=(AG+AG)/(L+L)` (2), `=X/T+3` (1, "prep materials"), `=1.25×6` (1).
+
+So the historical allocation is *not* one rule — tax and shipping are allocated on roughly a third of rows (the AG÷L and ×1.07 families) and not on the rest — which is why no single function matched more than 73.7 % and why Maria's 2026-10-31 instruction stands: **historical values stay exactly as imported (never recomputed); new POs use the §7.1 rule as corrected** (AQ = the captured per-item price actually paid, item-level promos in it; promos with `counts_toward_cogs = false` added back; tax and shipping never allocated).
+
+**AF vs the sheet.** AF's `po_asins.cost_per_unit` matches the sheet's Y on 3,814 of 3,865 ASIN rows found in the sheet (34 AF rows are not in the sheet — the pre-2026 merges). 42 of the 51 differences are the importer's cent rounding (10.985 → 10.99). The 9 that differ by more than two cents are in `docs/po-cogs-af-vs-sheet-2026-10-31.csv` — the sheet was edited after the import, or AF was (e.g. walmart.com 200015550741831 B07GLVS7FV: sheet 16.92, AF 79.44). Not changed; Maria decides which side is right.
+
+**Review list — `docs/po-cogs-review-2026-10-31.csv` (67 rows, non-canceled only).** Each row: sheet row, order #, date, supplier, ASIN, status, K, AJ, the X and Y formulas and values, AR, AF's cost / unit, and why it looks wrong:
+
+| Why | Rows |
+|---|---|
+| X formula ignores the gift-card % although AJ > 0 (e.g. `=K×0.85`, `=AG/L` with AJ = 0.07) → COGS overstated by the GC % | 33 |
+| `=K` list price with AJ > 0 | 3 |
+| X > 1.5 × the product price (bundle sums `=(K65*5+K66)*0.7` keyed on one row, `=K*1.07*0.8*(1-AJ)*2`) — may be intended; listed so Maria can confirm | 16 |
+| Y shows `#DIV/0!` (T = 0 or blank) — AF holds NULL cost for these | 12 |
+| Y ≤ 0 with a product price > 0 | 5 |
+
+Nothing changes without Maria's say-so. The AI-prefill patch does not touch any of these rows.
