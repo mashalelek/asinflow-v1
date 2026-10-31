@@ -31,6 +31,7 @@ import { fetchLongSync } from "@/lib/long-sync";
 import { useToast } from "@/hooks/use-toast";
 import { PoHeaderDrawer, PoProductsTable, PoHistory, PoDangerActions } from "@/components/po-edit";
 import { PoTrackingTab, SyncTrackingButton, UnmatchedTrackingChip } from "@/components/po-tracking";
+import { PoMoneyTab, type PoPayment, type PoPromo, type PoRefund } from "@/components/po-money";
 import { NewPoDialog } from "@/components/new-po-dialog";
 import { Pencil } from "lucide-react";
 import { useColumnWidths, ResizeHandle } from "@/hooks/use-column-widths";
@@ -746,6 +747,10 @@ interface PoDetail {
   po: Record<string, any> & { invoice_file_name: string };
   summary: { asin_count: number; units_ordered: number; units_received: number | null; order_total: string | null; cogs_total: string | null };
   asins: PoAsinDetail[];
+  /** Capture PO patch §8: the Payments tab. */
+  payments?: PoPayment[];
+  promos?: PoPromo[];
+  refunds?: PoRefund[];
 }
 
 // NULL → muted em-dash; $0.00 muted; all money neutral.
@@ -779,7 +784,7 @@ export function PurchaseOrderDetailPlaceholder() {
   const id = location.split("/").pop() ?? "";
   const [data, setData] = useState<PoDetail | null>(null);
   const [error, setError] = useState<string | null>(null);
-  const [tab, setTab] = useState<"details" | "asins" | "products" | "tracking" | "history">("details");
+  const [tab, setTab] = useState<"details" | "asins" | "products" | "payments" | "tracking" | "history">("details");
   const [copied, setCopied] = useState(false);
   const [editOpen, setEditOpen] = useState(false);
   const [version, setVersion] = useState(0); // bumps on every reload so History refetches
@@ -851,7 +856,7 @@ export function PurchaseOrderDetailPlaceholder() {
 
       {/* Tabs */}
       <div className="flex gap-1" style={{ borderBottom: "0.5px solid hsl(var(--border))" }}>
-        {([["details", "PO Details"], ["asins", "ASINs"], ["products", "Products"], ["tracking", "Tracking"], ["history", "History"]] as const).map(([key, label]) => (
+        {([["details", "PO Details"], ["asins", "ASINs"], ["products", "Products"], ["payments", "Payments"], ["tracking", "Tracking"], ["history", "History"]] as const).map(([key, label]) => (
           <button key={key} onClick={() => setTab(key)} data-testid={`tab-${key}`}
             className={`px-3 py-1.5 text-sm -mb-px ${tab === key ? "border-b-2 border-primary font-medium" : "text-muted-foreground"}`}>
             {label}
@@ -887,6 +892,7 @@ export function PurchaseOrderDetailPlaceholder() {
           <DetailCard title="Meta" rows={[
             ["Purchased by", <Dash v={po.purchased_by} />],
             ["Email used", <Dash v={po.email_used} />],
+            ["Source", <Dash v={po.source === "sheet_import" ? "Orders sheet" : po.source === "extension" ? "Capture PO" : po.source === "email_renewal" ? "Subscription renewal (email)" : po.source === "manual" ? "New PO form" : po.source} />],
             ["Subscription", po.subscription ? "Yes" : "No"],
             ["Invoice attached", po.invoice_attached ? "Yes" : "No"],
             ["Invoice File Name", (
@@ -905,6 +911,8 @@ export function PurchaseOrderDetailPlaceholder() {
       {tab === "asins" && <PoAsinTable asins={asins} editable onChanged={reload} />}
 
       {tab === "products" && <PoProductsTable poId={po.id} asins={asins} onChanged={reload} />}
+
+      {tab === "payments" && <PoMoneyTab po={po} asins={asins} payments={data.payments ?? []} promos={data.promos ?? []} refunds={data.refunds ?? []} onChanged={reload} />}
 
       {tab === "tracking" && <PoTrackingTab poId={po.id} onChanged={reload} />}
 

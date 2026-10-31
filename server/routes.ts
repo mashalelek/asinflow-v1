@@ -20,7 +20,9 @@ import { readVelocityStartDate } from "./ships-to-backfill";
 import { evaluateAutoClose, setPoClosedManually, parseQtyInput, MANUAL_QTY_COLUMNS, type ManualQtyColumn } from "./po-close";
 import { ACTION_ITEMS, LEGACY_ACTION_ITEMS, DISPLAY_ACTION_ITEMS, REVIEW_VELOCITY, EXTRA_UNITS_SHIPPED, PACK_SIZE_MISSING, PACK_SIZE_MISMATCH, RECEIVING_MISMATCH, normalizeActionItems } from "./po-status-map";
 import { openLineItemsSql, unionActionItems, PO_ACTION_ITEMS_SQL, REVIEW_VELOCITY_REASONS_SQL, PACK_SIZE_MISSING_EXISTS_SQL, PACK_SIZE_MISMATCH_EXISTS_SQL, RECEIVING_MISMATCH_EXISTS_SQL, EXTRA_UNITS_EXISTS_SQL } from "./po-action-items";
-import { editPoHeader, editLine, addLine, removeLine, editAsinRow, loadPoHistory, logEdits, changedFields, asLogText, EditError, type EditResult } from "./po-edit";
+import { editPoHeader, editLine, addLine, removeLine, editAsinRow, loadPoHistory, logEdits, changedFields, asLogText, EditError, COST_RELEVANT_FIELDS, type EditResult } from "./po-edit";
+import { recomputePoCosts } from "./po-costs";
+import { addMoneyRow, editMoneyRow, removeMoneyRow, loadPoMoney } from "./po-money-edit";
 import { createPoFromForm, lookupAsins } from "./po-create";
 import { suggestAsins, asinInfo } from "./asin-suggest";
 import { applyAsinPackUpdate, parsePack } from "./asin-pack";
@@ -4396,6 +4398,8 @@ export async function registerRoutes(
       }
       const asins = asinRows.map((a: any) => ({ ...a, lines: linesByAsin.get(String(a.id)) ?? [] }));
       const orphanLines = linesByAsin.get("") ?? []; // po_asin_id NULL (SET NULL on delete) — none expected in the frame
+      // Capture PO patch §8: payments, promos, refunds (the PO editor's Payments tab).
+      const moneyRows = await loadPoMoney((sql, params) => query(sql, params), id);
 
       // Summary rollups (computed, never stored). units_received: SUM over
       // line qty_received — all-NULL stays NULL → em-dash, never 0.
@@ -4424,6 +4428,7 @@ export async function registerRoutes(
         },
         asins,
         orphanLines,
+        ...moneyRows,
       });
     } catch (err: any) {
       res.status(500).json({ message: err.message });
@@ -4466,9 +4471,14 @@ export async function registerRoutes(
   // === AF-owned editing (patch po-af-owned §3, 2026-10-18) ===
   // Header (edit drawer), product lines (add / edit / remap / remove), ASIN
   // rows; one po_edit_log row per changed field; auto-close re-run.
+  // A cost-relevant change on a v2 PO recomputes its costs (po-ai-prefill §7; recomputePoCosts leaves an imported PO alone).
+  const withRecompute = async (q: typeof poQuery, r: EditResult, userId: number | null): Promise<EditResult> => {
+    if (r.changes.some((c) => COST_RELEVANT_FIELDS.has(c.field))) { const rc = await recomputePoCosts(q, r.poId, userId); if (!rc.skipped && rc.changed > 0) r.warning = [r.warning, `costs recomputed (${rc.changed} change${rc.changed === 1 ? "" : "s"})`].filter(Boolean).join(" · "); }
+    return r;
+  };
   app.patch("/api/pos/:id", async (req: Request, res: Response) => {
     if (!isDbAvailable()) { res.status(503).json({ message: "Database not available" }); return; }
-    await sendEdit(res, () => withPoTx((q) => editPoHeader(q, String(req.params.id ?? ""), req.body, uid(req))));
+    await sendEdit(res, () => withPoTx(async (q) => withRecompute(q, await editPoHeader(q, String(req.params.id ?? ""), req.body, uid(req)), uid(req))));
   });
   app.post("/api/pos/:id/lines", async (req: Request, res: Response) => {
     if (!isDbAvailable()) { res.status(503).json({ message: "Database not available" }); return; }
@@ -4476,7 +4486,7 @@ export async function registerRoutes(
   });
   app.patch("/api/pos/lines/:id", async (req: Request, res: Response) => {
     if (!isDbAvailable()) { res.status(503).json({ message: "Database not available" }); return; }
-    await sendEdit(res, () => withPoTx((q) => editLine(q, String(req.params.id ?? ""), req.body, uid(req))));
+    await sendEdit(res, () => withPoTx(async (q) => withRecompute(q, await editLine(q, String(req.params.id ?? ""), req.body, uid(req)), uid(req))));
   });
   app.delete("/api/pos/lines/:id", async (req: Request, res: Response) => {
     if (!isDbAvailable()) { res.status(503).json({ message: "Database not available" }); return; }
@@ -4484,8 +4494,24 @@ export async function registerRoutes(
   });
   app.patch("/api/pos/asin-rows/:id", async (req: Request, res: Response) => {
     if (!isDbAvailable()) { res.status(503).json({ message: "Database not available" }); return; }
-    await sendEdit(res, () => withPoTx((q) => editAsinRow(q, String(req.params.id ?? ""), req.body, uid(req))));
+    await sendEdit(res, () => withPoTx(async (q) => withRecompute(q, await editAsinRow(q, String(req.params.id ?? ""), req.body, uid(req)), uid(req))));
   });
+  // === Payments, promos, refunds per line (po-ai-prefill §8, commit 8) ===
+  const moneyRoutes = (plural: "payments" | "promos" | "refunds", table: "po_payments" | "po_promos" | "po_line_refunds") => {
+    app.post(`/api/pos/:id/${plural}`, async (req: Request, res: Response) => {
+      if (!isDbAvailable()) { res.status(503).json({ message: "Database not available" }); return; }
+      await sendGuarded(res, () => withPoTx((q) => addMoneyRow(q, table, String(req.params.id ?? ""), req.body, uid(req))));
+    });
+    app.patch(`/api/pos/${plural}/:id`, async (req: Request, res: Response) => {
+      if (!isDbAvailable()) { res.status(503).json({ message: "Database not available" }); return; }
+      await sendGuarded(res, () => withPoTx((q) => editMoneyRow(q, table, Number(req.params.id), req.body, uid(req))));
+    });
+    app.delete(`/api/pos/${plural}/:id`, async (req: Request, res: Response) => {
+      if (!isDbAvailable()) { res.status(503).json({ message: "Database not available" }); return; }
+      await sendGuarded(res, () => withPoTx((q) => removeMoneyRow(q, table, Number(req.params.id), uid(req))));
+    });
+  };
+  moneyRoutes("payments", "po_payments"); moneyRoutes("promos", "po_promos"); moneyRoutes("refunds", "po_line_refunds");
   // New PO form (po-af-owned §4): the body is shared/po-form.ts's PoFormState.
   app.post("/api/pos", async (req: Request, res: Response) => {
     if (!isDbAvailable()) { res.status(503).json({ message: "Database not available" }); return; }

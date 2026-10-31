@@ -99,9 +99,11 @@ const HEADER_GROUPS: Array<{ title: string; fields: Array<{ key: string; label: 
   ] },
   { title: "Payment", fields: [
     { key: "payment_method", label: "Payment method" }, { key: "weighted_gc_discount_pct", label: "Weighted GC %", type: "pct" },
-    { key: "cashback_site", label: "Cashback site" }, { key: "cashback_pct", label: "Cashback %", type: "pct" }, { key: "promo", label: "Promo" },
+    { key: "cashback_site", label: "Cashback site" }, { key: "cashback_pct", label: "Cashback %", type: "pct" },
+    { key: "cashback_status", label: "Cashback status", type: "select", options: [["", "—"], ["pending", "pending"], ["received", "received"], ["denied", "denied"]] },
+    { key: "promo", label: "Promo (sheet text)" },
   ] },
-  { title: "Meta", fields: [{ key: "purchased_by", label: "Purchased by" }, { key: "notes", label: "Notes", type: "area" }] },
+  { title: "Meta", fields: [{ key: "purchased_by", label: "Purchased by" }, { key: "email_used", label: "Email used" }, { key: "notes", label: "Notes", type: "area" }] },
 ];
 
 /** YYYY-MM-DD for a pg DATE that arrived as an ISO string. */

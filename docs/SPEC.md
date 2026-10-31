@@ -6140,6 +6140,25 @@ replaces it. Migration 061 adds `po_edit_log`, `deleted_pos` and
   catalog when a line maps to a new ASIN and removed with its last line.
   Routes: `PATCH /api/pos/:id`, `POST /api/pos/:id/lines`, `PATCH|DELETE
   /api/pos/lines/:id`, `PATCH /api/pos/asin-rows/:id`; one transaction each.
+- **Payments, promos, refunds, costs (Capture PO patch §8, 2026-10-31).** PO
+  detail gets a **Payments** tab: payments (method, nickname, last 4,
+  amount, GC % for gift cards; Σ vs the order total shown), promos (type,
+  description, amount, %, **counts toward COGS** toggle — a promo that does
+  not count is added back; a row with no type, from the backfill's low
+  confidence, says "choose"), refunds per line (line, qty ≤ the line's qty
+  ordered, amount, date, method, note; a PO-level placeholder from the
+  sheet backfill is assigned to a line from the row), and the costs per
+  ASIN row (Sourcing, COGS, Paid, the **COGS adjustment** with its reason).
+  Routes `POST /api/pos/:id/{payments|promos|refunds}`, `PATCH|DELETE
+  /api/pos/{payments|promos|refunds}/:id` (`server/po-money-edit.ts`); one
+  transaction each, one History row per change ("payment added", "promo
+  counts_toward_cogs", "refund removed" …). **Recompute:** a promo's type /
+  amount / counts flip, an adjustment, a header subtotal / discount / GC %
+  or a line price / qty / yield re-runs `recomputePoCosts` for a PO saved
+  under the v2 rule; an imported PO (`cost_formula_version` NULL) is never
+  recomputed and its tab says so. The edit drawer also carries Email used
+  and Cashback status; the Details tab shows the PO's source (Orders sheet /
+  New PO form / Capture PO / Subscription renewal).
 - **Edit log.** Every writer — the routes above, action items, Cancel ASIN,
   the Closed toggle, the manual quantities, manual shipments, New PO,
   Cancel / Delete PO, Reassign — writes one `po_edit_log` row per changed

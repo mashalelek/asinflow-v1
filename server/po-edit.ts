@@ -91,6 +91,10 @@ export const HEADER_FIELDS: Record<string, Parser> = {
   subtotal: money(), tax: money(), sh_donations: money(), discount: money(), refund_amount: money(), order_total: money(),
   payment_method: textOrNull, weighted_gc_discount_pct: pctOrNull, promo: textOrNull, cashback_site: textOrNull, cashback_pct: pctOrNull,
   purchased_by: textOrNull, notes: textOrNull,
+  // Capture PO patch (2026-10-31): the sheet fields AF lacked.
+  email_used: textOrNull,
+  cashback_status: (v) => (blank(v) ? { ok: true, value: null } : ["pending", "received", "denied"].includes(String(v)) ? { ok: true, value: String(v) } : { ok: false, error: "must be pending, received or denied" }),
+  purchased_by_user_id: (v) => (blank(v) ? { ok: true, value: null } : /^\d+$/.test(String(v)) ? { ok: true, value: Number(v) } : { ok: false, error: "must be a user id" }),
   // SPEC §26: where the PO ships — drives the tracking routing rules.
   ships_to: (v) => (v === "velocity" || v === "home" ? { ok: true, value: v } : { ok: false, error: "must be velocity or home" }),
 };
@@ -104,7 +108,11 @@ export const LINE_FIELDS: Record<string, Parser> = {
 export const ASIN_FIELDS: Record<string, Parser> = {
   sold_as: soldAsParser, units_per_pack: intQty({ nullable: false, min: 1 }), cost_per_unit: money({ nullable: true }), prep_cost: money({ nullable: true }),
   asin_name: textOrNull, notes: textOrNull,
+  // Capture PO patch §7 (2026-10-31): the COGS adjustment (a v2 PO recomputes its COGS from it) and the two other costs.
+  cogs_adjustment: money({ nullable: true, negative: true }), cogs_adjustment_reason: textOrNull, sourcing_cost: money({ nullable: true }), paid_cost: money({ nullable: true }),
 };
+/** Header / line / ASIN-row fields whose change should recompute a v2 PO's costs (routes call recomputePoCosts after the edit). */
+export const COST_RELEVANT_FIELDS = new Set(["subtotal", "discount", "weighted_gc_discount_pct", "price", "qty_ordered", "asin_qty_per_product", "cogs_adjustment"]);
 
 /** Validate a body against a field spec. Unknown keys are an error (a typo never silently does nothing). */
 export function parseEdits(spec: Record<string, Parser>, body: unknown): { ok: true; edits: Record<string, unknown> } | { ok: false; error: string } {
