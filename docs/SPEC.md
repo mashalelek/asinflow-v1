@@ -6299,6 +6299,11 @@ replaces it. Migration 061 adds `po_edit_log`, `deleted_pos` and
 | `po_asin_shipments` (`source = 'manual'`) | AF-owned: hand-entered rows from the Shipment IDs chip (home-shipped POs); the only rows the chip can delete. |
 | `shipment_unmatched` | Component A writes and resolves; the Unmatched picker sets `resolved_po_asin_id`. |
 | `po_asins.notes`, `po_asins.sku` (after insert), `po_line_items.notes`, `item_discount` | AF-owned: the sheet does not carry them; the sync never writes them |
+| **`po_payments`, `po_promos`, `po_line_refunds`** (Capture PO patch, 2026-10-31) | **AF-owned**: the New PO form / capture on save, the PO editor's Payments tab, the renewal-from-email (a payment row from the email's card last 4), and the one-time backfills (`backfill:po-model`, `backfill:po-promos`) on POs that have no rows yet. The sheet never writes them |
+| **`po_asins.sourcing_cost`, `paid_cost`, `cogs_adjustment`(+reason)**; `po_asins.cost_per_unit` on a v2 PO | **AF-owned**: the form on save, the Payments tab's costs block, and `recomputePoCosts` on a v2 PO (promo / adjustment / header money / line edits). An imported PO's values are the sheet's, verbatim, forever; the backfill set its sourcing_cost from col AR once |
+| **`asins.sold_as`, `asins.units_per_pack`** | **AF-owned**: the form's "Update ASIN in AF" (`applyAsinPackUpdate`, with `asin_field_log`), `POST /api/asins/:asin/pack`, the one-time backfill where the PO rows agreed; Maria fills the gaps CSV by hand. Never a sync |
+| **`subscriptions`** | **AF-owned** (§27): the form / capture on save, the Subscriptions page, the renewal-from-email (last PO, next date), component 28 (nothing — it writes action items only); the sheet backfill once |
+| **`po_prefill_log`** | Written by `/api/pos/prefill` and the promo backfill; `po_id` set by `POST /api/pos`. History, never cleaned up |
 | `settings.po_*` lookup lists | Migrations (seed/append) + entry form (layer 1) |
 
 The PO module writes nothing outside its own tables. `asin_estimates`
@@ -6312,16 +6317,29 @@ the first consumer of the PO module outside the POs page.
 ### Deferred (agreed order)
 
 1. Entry form — **plain New PO form shipped 2026-10-18** ("AF owns POs");
-   still open: managed dropdowns, bundle merge prompt, AI prefill
-2. Edit — **shipped 2026-10-18**; still open: the COGS formula engine
-   (recompute cost / unit and adjusted product cost from header money on
-   edit; per-item discount math)
+   **AI prefill / Capture PO shipped 2026-10-31** (patch
+   `docs/claude_spec-patch-po-ai-prefill.md`: extension capture, `/api/pos/prefill`,
+   the §6 form, payments / promos / refunds, subscriptions §27). Still open:
+   managed dropdowns, bundle merge prompt; the screenshot fallback for
+   canvas / iframe checkouts (§4.2, not in v1); the multi-promo block falling
+   back to one text field if it proves tedious (Maria's call)
+2. Edit — **shipped 2026-10-18**; **cost recompute shipped 2026-10-31** for
+   POs saved under the v2 rule (`recomputePoCosts`); still open: per-item
+   discount math on imported POs (never recomputed by decision)
 3. Invoice file upload (indicator → stored file)
 4. POs-by-ASIN cross-PO view
 5. Cutover — **readers repointed 2026-10-18** ("AF owns POs"); still open:
-   retire the mirror once the intake moves off the sheet; POs sub-nav
-6. Later: gift-card ledger, subscription alerts, Velocity bundles, %-type
-   product discounts, §15 FIFO/lots, pre-2026 import
+   **Orders-sheet retirement** (the follow-on patch, po-ai-prefill §10: Sync
+   POs intake, the prep-drift apply, Push to Aura's PO-sheet read, the
+   hourly PO-sheet COGS component, Export SB COGS, Col P as the matcher's
+   backup signal, the §11 PO mirror sheet; import the Missing Orders tab;
+   drop `purchase_orders.payment_method` / `promo` once the backfills are
+   verified); POs sub-nav
+6. Later: gift-card ledger, ~~subscription alerts~~ (§27, 2026-10-31),
+   Velocity bundles, %-type product discounts, §15 FIFO/lots, pre-2026
+   import; the Paid cost on the sales / profit dashboard; the PO documents
+   patch (uses `rcpt`-derived state); the cancellations patch now writes
+   `po_line_refunds` (§8.3), not a PO-level triple
 0. Cleanup migration dropping `asin_estimates.ordered_qty` (unwritten and
    unread since 2026-10-17) together with `purchase_orders.status` (D5 of
    the expand-by-ASIN patch).
@@ -6535,6 +6553,7 @@ platform's values always win.
 | `PORT` | no | Set by Render; the code defaults to 5000 when absent. |
 | `CORS_ALLOWED_ORIGIN` | no | Optional extra allowed origin beside `chrome-extension://*`. |
 | `ENABLE_CRONS` | no | `true` switches on the scheduled passes (§11 "Scheduled passes": 00:00 ET with the daily block, hourly 04–23 ET). Set it on Render **after** the scheduler patch's final commit deploys (2026-10-15); unset = no schedule, manual Refresh only. See below. |
+| `ANTHROPIC_API_KEY` | yes | Capture PO's one model call per capture and the promo backfill (§22 "Capture PO", `server/config/ai.ts`: `claude-haiku-5-5`). Optional: unset → `POST /api/pos/prefill` answers 503 "AI prefill is off" and the tracking AI fallback stays off. |
 | `SESSION_SECRET` | yes | Signs the `af.sid` session cookie (§25). **Required in production: the server refuses to start without it.** Generate with `openssl rand -hex 32`. Locally it must be in `.env` too, because `npm start` sets `NODE_ENV=production` itself; `npm run dev` falls back to a logged, insecure dev value. Add it to Render **before** the first auth commit deploys. |
 
 `APP_PASSWORD` is gone (auth v1, 2026-10-14): `POST /api/verify-password`
@@ -6715,7 +6734,7 @@ exception.**
 5. **Roles:** `admin` and `member`. Both see the full app. The only
    role-gated surface is Settings → Users. VA restrictions are a later patch
    that builds on the `role` column and nothing else.
-6. **Chrome extension:** treated as dead. Its routes (`GET /api/settings`,
+6. **Chrome extension:** ~~treated as dead~~ — **revived 2026-10-31 (Capture PO, §11 "Chrome extension — Capture PO")**: it sends the session cookie (`credentials: "include"`, the server URL in its `host_permissions`), so a signed-in Chrome is the session; no token, no CORS change. Previously: treated as dead. Its routes (`GET /api/settings`,
    `GET /api/asins/check/:asin`, `POST /api/import-asin`) get the same auth
    as everything else; the `chrome-extension://*` CORS allowance is removed.
    The ledger shows zero `extension`-trigger runs, ever. `CORS_ALLOWED_ORIGIN`

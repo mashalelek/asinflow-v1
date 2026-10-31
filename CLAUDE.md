@@ -52,6 +52,9 @@ This app runs on the following stack. This is settled. Do not suggest alternativ
 - `client/src/pages/home.tsx` — Main page with table, filters, scorecards
 - `client/src/components/results-table.tsx` — Table rendering and column logic
 - `shared/schema.ts` — Column definitions, profit calculation, types
+- `shared/po-form.ts` / `shared/po-cost.ts` — New PO form state + validation; the ONE cost formula (v2, SPEC §22 "Costs")
+- `server/config/ai.ts` — the one place the Claude model id / tokens / effort / price live (Capture PO, promo backfill)
+- `server/po-prefill.ts` — `/api/pos/prefill`: capture → one Haiku call → form prefill + markers; `chrome-extension/` is the capture side
 - `docs/SCHEMA.md` — Database schema documentation
 - `docs/ROADMAP.md` — Feature roadmap
 
@@ -110,7 +113,7 @@ and any introduced error must be fixed forward before committing.
 
 ## Tests
 
-`npm test` (vitest). **905 tests across 59 files** as of 2026-10-13 — this
+`npm test` (vitest). **1,766 tests across 157 files** as of 2026-10-31 — this
 codebase IS tested; the old "there are no tests" line was years stale.
 
 **A gate report must cover BOTH typecheck commands, labelled separately:**
@@ -118,7 +121,7 @@ codebase IS tested; the old "there are no tests" line was years stale.
 ```
 npm run check        -> 4 baseline TS1252, 0 introduced
 npm run check:tests  -> 4 baseline TS1252, 0 introduced
-npm test             -> 905/905
+npm test             -> 1766/1766
 ```
 
 `npm run check` alone is NOT a complete gate. The base `tsconfig.json`
@@ -153,6 +156,34 @@ optional: without it the AI fallback is off and number-less shipping emails
 queue as `ai_disabled`. `npm run velocity:tracking-probe -- --order <id>
 --carrier <c> --tracking <n[,n]> [--live]` — read-only without `--live`.
 Velocity's PUT takes `trackingNumbers` as plain strings (probe 2026-10-21).
+
+**AI config (SPEC §22 "Capture PO", 2026-10-31):** `server/config/ai.ts` is
+the ONE place the model (`claude-haiku-5-5`, Haiku-class by decision),
+`max_tokens`, effort and the price estimate live; `ANTHROPIC_API_KEY` (Render
+env var, optional) switches AI on — without it `POST /api/pos/prefill`
+answers 503 "AI prefill is off". One call per capture, one batch call for
+the promo backfill (`npm run backfill:po-promos`), every call logged in
+`po_prefill_log`. Only `server/config/ai.ts` constructs an Anthropic client
+(`server/tracking-ai.test.ts` enforces it). The capture's scrubber
+(`chrome-extension/scrub.js`) runs inside the page; its fixtures are
+hand-written with public test card numbers only — never real ones.
+
+**Chrome extension dev (SPEC §11 "Chrome extension — Capture PO"):** load
+`chrome-extension/` unpacked at chrome://extensions; set the server URL on
+its options page (localhost:3000 by default; production
+`https://asinflow-cqg.onrender.com` is in `host_permissions`); sign in to
+AsinFlow in a normal tab first — the extension sends the session cookie
+(`credentials: "include"`). On a retailer checkout tab the side panel shows
+Capture PO: Capture this page (grants the site's host permission on first
+use) → Open in AF → `/pos/new?prefill=<id>`. No build step: plain scripts
+(`scrub.js`, `capture.js`, `capture-panel.js`, `background.js`).
+
+**PO patch scripts (2026-10-31):** `npm run backfill:po-model` (migration-075
+backfills, dry run by default, `--live`), `npm run backfill:po-promos` (needs
+`ANTHROPIC_API_KEY`), `tsx script/sourcing-cost-switch-dryrun.ts` (the
+Update COGS in SC → col AR switch report), `npm run po:reconcile-confirmations`
+(`--live`, `--since`). All dry-run by default; production runs need
+`DATABASE_URL` pointed at Render.
 
 **Auth (SPEC §25):** every `/api` route except `/api/auth/*` and `/health`
 needs a session. First account, once, against an empty `users` table:
@@ -369,6 +400,16 @@ picker's suggestions, skip a PO with `ships_to = 'home'` or an order date
 before `tracking.velocity_start_date` (`velocityIneligible` in
 `server/shipment-match.ts`); the picker's free-text search still lists it,
 with a warning.
+
+## No stored COGS / AQ / AR / Y value is ever recomputed (Maria 2026-10-31)
+
+A sheet-imported PO (`purchase_orders.cost_formula_version IS NULL`) keeps
+the sheet's col Y / col AR values verbatim, forever — the sheet's X / Y
+formulas vary per order by design (`docs/po-ai-prefill-probe-2026-10-30.md`,
+item 5). `recomputePoCosts` skips such POs; the formula v2 in
+`shared/po-cost.ts` applies to POs saved by the form / capture only. Rows
+that look wrong go on a review list for Maria
+(`docs/po-cogs-review-2026-10-31.csv`); nothing changes without her say-so.
 
 ## PO action items live in `po_line_action_items`
 
