@@ -5211,7 +5211,7 @@ is Phase 2 (below).
 ### Tables (migrations 028–029; 056 for the expand-by-ASIN columns; 057 for shipment reconciliation)
 
 - `purchase_orders` — one row per order. `UNIQUE (supplier, order_id)` (order
-  IDs collide across suppliers, §10). `source ∈ {manual, sheet_import}`.
+  IDs collide across suppliers, §10). `source ∈ {manual, sheet_import, extension, email_renewal}` (migration 075).
 - `po_asins` — one row per ASIN per order. `UNIQUE (po_id, asin)`. Carries
   qty, `cost_per_unit` (adjusted-COGS snapshot), prep, sold_as /
   units_per_pack, unreimbursed loss, Amazon SKU, notes.
@@ -5247,6 +5247,72 @@ revival.
 (13), `po_cashback_sites` (5), `po_emails` (2), `po_purchasers` (1).
 **List order is meaningful: element 0 is the default** (mpeters.cqg@gmail.com;
 Maria). The entry form must preserve order; never sort these lists.
+
+### Capture PO data model (migration 075, 2026-10-31; patch `docs/claude_spec-patch-po-ai-prefill.md` §8–§9 as amended)
+
+Everything the Orders sheet still carried that AF lacked, so the sheet can be
+retired. Money stays in dollars (no `_cents` twins — Maria 2026-10-31);
+NULL = not recorded, never 0 on import. Schema only; the data backfills run
+from `npm run backfill:po-model` (dry run by default, `--live` after the
+production dry run is reviewed; idempotent — rows already present are
+skipped). **No stored COGS / AQ / AR / Y value is ever recomputed.**
+
+- `purchase_orders`: `purchased_by_user_id` (→ `users`, nullable; "Anna" has
+  no user and keeps the text with a NULL id), `cashback_status`
+  (pending | received | denied | NULL), `cost_formula_version` (NULL =
+  sheet-imported / pre-rule, never recomputed; 2 = the §7.1 allocation),
+  `source` widened to `sheet_import | manual | extension | email_renewal`.
+  The existing `discount`, `tax`, `sh_donations`, `refund_amount`,
+  `cashback_site` / `cashback_pct`, `email_used`, `subscription`, `notes`,
+  `promo`, `payment_method`, `weighted_gc_discount_pct` stay.
+- `po_asins`: `sourcing_cost` (col AR — COGS before the gift-card discount,
+  promos applied; what Update COGS in SC sends), `paid_cost` (every
+  discount counted; = COGS for imported rows), `cogs_adjustment` +
+  `cogs_adjustment_reason` (added onto COGS, e.g. prep materials $3).
+  `cost_per_unit` stays COGS (col Y) and feeds `actual_cogs`.
+- `asins.sold_as` / `asins.units_per_pack` — the ASIN-level pack fields the
+  New PO form reads ("AF knows the ASIN") and its pack override writes. Backfilled
+  from the 2026 PO ASIN rows (sheet AX/AY as imported), non-canceled rows:
+  every row agrees → set; rows disagree, or no row has a value → left NULL and
+  listed in `docs/pack-size-gaps-<date>.csv` (ASIN, title, distinct values
+  with PO counts) for Maria to fill in. `asin_field_log` is the History for
+  ASIN-level fields (`po_edit_log` is PO-scoped).
+- `po_payments` — several per PO: `method` (card | gift_card | store_credit |
+  paypal | other), `nickname`, `last4`, `amount` (NULL = not recorded),
+  `gift_card_discount_pct`, `raw_text`, `needs_review`, `position`. Σ amount
+  should equal the order total (a form warning, never a constraint). Backfilled
+  from `payment_method` by `server/po-payments-parse.ts` ("Name (1234)" →
+  nickname + last 4; "Name: $amt, Name: $amt" → one row per part; "(through
+  PayPal)" → paypal; "Gift cards: 7204, 9283" → one gift card per last 4;
+  unreadable text → one `other` row holding it, `needs_review`, listed in
+  `docs/payment-review-<date>.csv`). `payment_method` stays until the sheet
+  retirement patch drops it.
+- `po_promos` — several per PO: `type` (sale | coupon | rewards; NULL =
+  awaiting Maria), `description`, `amount` / `percent`, `counts_toward_cogs`
+  (§7.2: sale and coupon count, rewards does not, each a toggle), `raw_text`
+  (col AK / the captured line, verbatim), `confidence`, `source`
+  (manual | capture | backfill). Col AK backfill = one Haiku batch call over
+  the distinct values (§8.4 as amended; `npm run backfill:po-promos`).
+- `po_line_refunds` — per supplier line: `qty`, `amount`, `refunded_at`,
+  `method` / `nickname` / `last4`, `source` (manual | email | sheet),
+  `email_message_id`, `note`; a PO-level placeholder has `po_line_item_id`
+  NULL and `needs_split`. Backfill of col AF: one line → on it; several lines
+  of which exactly one has a returned qty (col R) → that line; otherwise the
+  placeholder. The cancellations patch writes here.
+- `po_prefill_log` — one row per model call (§5): `kind` (capture | backfill
+  | promo_classify), retailer, model, input chars / tokens, output tokens,
+  cost estimate, duration, `schema_ok`, error, `po_id` once saved. Nothing
+  from the page text is stored.
+- `subscriptions` (§27) — `supplier`, `po_asin_id` (the originating PO's
+  ASIN row), `asin`, `product_name`, `frequency_weeks`, `next_order_date`,
+  `status` (active | paused | canceled), `last_po_id`, `created_from`
+  (capture | manual | email | sheet), `notes`. Backfill: one row per
+  (supplier, ASIN) over the POs flagged `subscription`, newest PO; frequency
+  parsed from the notes ("Every 12 weeks", "Every 3 months" → 12, "Monthly"
+  → 4; unknown → NULL for Maria), canceled when the note says so,
+  `next_order_date` = order date + frequency while active.
+- `po_line_action_items.item` gains **Confirm order details** (§6.7),
+  **Subscription renews** and **Review renewal PO** (§27).
 
 ### Stored vs. computed
 
