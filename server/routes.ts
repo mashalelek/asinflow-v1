@@ -26,6 +26,7 @@ import { suggestAsins, asinInfo } from "./asin-suggest";
 import { applyAsinPackUpdate, parsePack } from "./asin-pack";
 import { CaptureSchema, extractPrefill, enrichPrefill, mergedPagesText, storePrefill, getPrefill, logPrefill } from "./po-prefill";
 import { aiAvailable, AI_OFF_MESSAGE } from "./config/ai";
+import { listSubscriptions, createSubscription, updateSubscription } from "./subscriptions";
 import { loadPoGuards, deletePo, cancelPo, assertAsinRowCancelable, reassignShipment } from "./po-guards";
 import { syncPoSheet, type PoSyncResult } from "./po-sheet-sync";
 import { syncVelocityShipments, type VelocitySyncResult } from "./shipment-sync-velocity";
@@ -4563,6 +4564,21 @@ export async function registerRoutes(
       const suppliers = (await query(`SELECT DISTINCT lower(supplier) AS s FROM purchase_orders ORDER BY 1`)).rows.map((r: any) => String(r.s));
       res.json({ velocityStreet: String(v("tracking.velocity_street") ?? "805 grandy"), homeStreets: (v("tracking.home_streets") as string[]) ?? ["65 rivercrest"], prepCost: Number(v("prep_cost") ?? 1) || 1, suppliers });
     } catch (err: any) { res.status(500).json({ message: err.message }); }
+  });
+  // === Subscriptions (po-ai-prefill §9, SPEC §27) ===
+  app.get("/api/subscriptions", async (_req: Request, res: Response) => {
+    if (!isDbAvailable()) { res.status(503).json({ message: "Database not available" }); return; }
+    try { res.json({ subscriptions: await listSubscriptions(poQuery) }); } catch (err: any) { res.status(500).json({ message: err.message }); }
+  });
+  app.post("/api/subscriptions", async (req: Request, res: Response) => {
+    if (!isDbAvailable()) { res.status(503).json({ message: "Database not available" }); return; }
+    await sendGuarded(res, () => withPoTx((q) => createSubscription(q, req.body, uid(req))));
+  });
+  app.patch("/api/subscriptions/:id", async (req: Request, res: Response) => {
+    if (!isDbAvailable()) { res.status(503).json({ message: "Database not available" }); return; }
+    const id = Number(req.params.id);
+    if (!Number.isInteger(id)) { res.status(400).json({ message: "bad id" }); return; }
+    await sendGuarded(res, () => withPoTx((q) => updateSubscription(q, id, req.body, uid(req))));
   });
   // Purchased by (users) and Email used (settings.po_emails) for the form.
   app.get("/api/pos/purchasers", async (_req: Request, res: Response) => {

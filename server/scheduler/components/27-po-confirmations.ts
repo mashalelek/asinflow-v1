@@ -6,6 +6,7 @@
 // /api/pos/reconcile-confirmations. A Gmail failure is recorded, not thrown.
 import { gmailClient } from "../../gmail-client";
 import { reconcileConfirmations } from "../../po-confirm-reconcile";
+import { tryRenewalFromEmail } from "../../subscriptions";
 import type { ComponentDef, ComponentContext, ComponentResult } from "../types";
 
 /** Test seam. */
@@ -18,8 +19,19 @@ export const poConfirmations: ComponentDef = {
     const counts: Record<string, number> = {};
     const outcomes: Record<string, string> = {};
     try {
-      const r = await reconcileConfirmations({ query: ctx.query, deps: { gmail: confirmDeps.gmail() }, log: ctx.log });
-      Object.assign(counts, { scanned: r.scanned, confirmations: r.confirmations, matched: r.matched, agreed: r.agreed, differed: r.differed, raised: r.raised, unmatched: r.unmatched, ambiguous: r.ambiguous });
+      const r = await reconcileConfirmations({
+        query: ctx.query, log: ctx.log,
+        deps: {
+          gmail: confirmDeps.gmail(),
+          // §27: an unmatched confirmation may be a subscription renewal → a renewal PO with "Review renewal PO".
+          onUnmatched: async (msg, p, supplier) => {
+            const res = await tryRenewalFromEmail(ctx.query, supplier, { id: msg.id, subject: msg.subject, text: msg.text, date: msg.date, orderId: p.orderIds[0] ?? null, total: p.total });
+            if (res.created) outcomes[`renewal ${supplier} ${p.orderIds[0] ?? msg.id}`] = `PO ${res.poId} created — Review renewal PO`;
+            return res.created;
+          },
+        },
+      });
+      Object.assign(counts, { scanned: r.scanned, confirmations: r.confirmations, matched: r.matched, agreed: r.agreed, differed: r.differed, raised: r.raised, unmatched: r.unmatched, ambiguous: r.ambiguous, renewals: r.renewals });
       for (const d of r.diffs) outcomes[`${d.supplier} ${d.order_id}`] = d.differences.join("; ");
       outcomes._window = `${r.since ?? "start"}..${r.until}`;
     } catch (err: any) {

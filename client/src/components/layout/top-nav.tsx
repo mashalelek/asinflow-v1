@@ -1,6 +1,6 @@
 import { useLocation, Link } from "wouter";
 import { useTheme } from "@/components/theme-provider";
-import { Sun, Moon, Package, BarChart3, Calculator, ShoppingCart, CreditCard, TrendingUp, Truck, Settings, LogOut, UserRound } from "lucide-react";
+import { Sun, Moon, Package, BarChart3, Calculator, ShoppingCart, CreditCard, TrendingUp, Truck, Settings, LogOut, UserRound, Repeat } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import {
   DropdownMenu, DropdownMenuTrigger, DropdownMenuContent, DropdownMenuItem, DropdownMenuLabel, DropdownMenuSeparator,
@@ -22,6 +22,7 @@ const NAV_ITEMS: NavItem[] = [
   { path: "/bulk-calc", label: "Bulk Calc", icon: Calculator },
   { path: "/analytics", label: "Analytics", icon: BarChart3 },
   { path: "/purchase-orders", label: "POs", icon: ShoppingCart },
+  { path: "/subscriptions", label: "Subscriptions", icon: Repeat },
   { path: "/gift-cards", label: "Gift Cards", icon: CreditCard, disabled: true },
   { path: "/repricer", label: "Repricer", icon: TrendingUp },
   { path: "/fba-shipments", label: "Shipments", icon: Truck, disabled: true },

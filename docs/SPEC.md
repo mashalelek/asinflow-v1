@@ -2193,7 +2193,8 @@ the ledger stage is the `refresh_runs.stage` key the component writes.
 | 24 | Delete long-dead listings (listing hygiene) | daily | CALL-14 `deleteListingsItem`, per SKU + Velocity `/inbound` + `/inventory` | `24_delete_dead` | every closed SKU; **00:00 pass only** |
 | 25 | PO tracking ingest (§26, 2026-10-21) | daily | Gmail API (orders@, DWD, `gmail.readonly`) + matching | `25_po_tracking_ingest` | the mailbox since the watermark; **00:00 pass only**, after 9 |
 | 26 | PO tracking push (§26) | daily | Velocity `GET /inbound` + known orders, `GET` / `PUT /inbound/:order_id` | `26_po_tracking_push` | matched tracking rows; **00:00 pass only**, right after 25 |
-| 27 | PO confirmation reconcile (§26 "Confirmation emails", 2026-10-31) | daily | Gmail API (orders@) — no AI | `27_po_confirmations` | order-confirmation mail since the watermark vs AF POs; **00:00 pass only**, after 26; manual: `POST /api/pos/reconcile-confirmations` |
+| 27 | PO confirmation reconcile (§26 "Confirmation emails", 2026-10-31) | daily | Gmail API (orders@) — no AI | `27_po_confirmations` | order-confirmation mail since the watermark vs AF POs, and §27 renewal POs for unmatched confirmations; **00:00 pass only**, after 26; manual: `POST /api/pos/reconcile-confirmations` |
+| 28 | Subscription alerts (§27, 2026-10-31) | daily | none (AF tables) | `28_subscriptions` | every subscription; "Subscription renews" raised / cleared; **00:00 pass only**, after 27 |
 
 Dependencies the order encodes: 10 before 13 (fees need the fresh price)
 (9 before 15 was retired 2026-10-17 — the inventory snapshot's ordered_qty
@@ -7210,3 +7211,52 @@ ships_to follows (§14 ownership exception).
 Local data 2026-10-22: prep > 0 starts in April 2026 (75 April POs), so
 the local `VELOCITY_MIN_ORDER_DATE = 7/30/2026` flags 269 pre-cutoff
 POs, a May 1 cutoff 75.
+
+---
+
+## 27. Subscriptions
+
+Patch `docs/claude_spec-patch-po-ai-prefill.md` §9 (approved 2026-10-30,
+amended 2026-10-31). Some retailers re-ship on a schedule (autoship,
+"every 3 months"); AF keeps one `subscriptions` row per (supplier, ASIN):
+`frequency_weeks`, `next_order_date`, `status` (active | paused |
+canceled), `po_asin_id` (the originating PO's ASIN row), `last_po_id`,
+`created_from` (capture | manual | email | sheet), `product_name`, `notes`
+(migration 075; data model in §22 "Capture PO data model"). Backfill: the
+48 POs the sheet flagged → one row per (supplier, ASIN) from the newest
+such PO, frequency parsed from the notes where it said one (months × 4),
+canceled when the note said so; unknown frequencies are NULL for Maria.
+
+- **Capture / form hook.** The New PO form's "Subscription: yes · every N
+  weeks" (prefilled when the checkout showed a subscription) writes or
+  refreshes one row per ASIN row of the PO on save (`subscriptionsFromForm`,
+  upsert on supplier + ASIN; `next_order_date` = order date + N weeks;
+  `created_from` = capture when the form was prefilled, else manual).
+- **Alert (component 28, 00:00 pass).** For every active subscription with
+  `next_order_date − 7 days ≤ today` — and the date not more than 14 days
+  in the past (older = overdue on the page, not an item on a months-old PO)
+  — raise **Subscription renews** on the last PO's lines (source auto,
+  reason "<supplier> <ASIN>: next order <date>"); cleared by the same pass,
+  by a pause / cancel on the page, or by a renewal PO. `alertDue` is the
+  pure rule.
+- **Renewal from the confirmation email (component 27).** An
+  order-confirmation email that matches **no** PO, from a sender whose
+  supplier has an active subscription, and naming a product of that
+  subscription's last PO (normalized token overlap ≥ 0.5 or the name
+  verbatim) creates the renewal PO: `source = email_renewal`, order # from
+  the email (else `renewal-<message id>`), date = the email's, header
+  money from the email's total (the rest copied from the last PO), ASIN
+  rows and lines copied from the last PO with the email's quantity / price
+  where printed near the product name, a payment row when the email shows a
+  card's last 4; **Review renewal PO** on every line; the subscription's
+  `last_po_id` moves to it and `next_order_date` advances by the frequency;
+  the previous PO's "Subscription renews" clears. An existing (supplier,
+  order #) is never duplicated.
+- **Subscriptions page** (nav, after POs; `/subscriptions`; `GET
+  /api/subscriptions`, `POST /api/subscriptions`, `PATCH
+  /api/subscriptions/:id`): supplier, product / ASIN (thumbnail, inline
+  edit), every N weeks, next order ("in N days" amber within 7 days, "N
+  days overdue" red), status (inline select), last PO (link + date), notes;
+  Active / All filter; sortable, resizable through the shared hook; "+
+  Subscription" for a manual row. Edits on a subscription with a last PO
+  are logged in that PO's History ("subscription <field>").

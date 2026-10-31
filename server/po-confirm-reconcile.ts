@@ -79,10 +79,14 @@ export function compareConfirmation(p: ParsedConfirmation, po: PoFacts): string[
 }
 
 export interface ReconcileResult {
-  scanned: number; confirmations: number; matched: number; agreed: number; differed: number; raised: number; unmatched: number; ambiguous: number;
+  scanned: number; confirmations: number; matched: number; agreed: number; differed: number; raised: number; unmatched: number; ambiguous: number; renewals: number;
   since: string | null; until: string; diffs: ConfirmDiff[]; dryRun: boolean;
 }
-export interface ReconcileDeps { gmail: gmail_v1.Gmail; list?: typeof listMessageIds; get?: typeof getMessage }
+export interface ReconcileDeps {
+  gmail: gmail_v1.Gmail; list?: typeof listMessageIds; get?: typeof getMessage;
+  /** §27: a confirmation that matched no PO — may create a renewal PO for an active subscription (server/subscriptions.ts). Returns true when it did. */
+  onUnmatched?: (msg: GmailMessage, parsed: ParsedConfirmation, supplier: string | null) => Promise<boolean>;
+}
 
 export async function reconcileConfirmations(opts: { query: QueryLike; deps: ReconcileDeps; now?: Date; since?: Date | null; dryRun?: boolean; maxMessages?: number; log?: (m: string) => void }): Promise<ReconcileResult> {
   const now = opts.now ?? new Date();
@@ -91,7 +95,7 @@ export async function reconcileConfirmations(opts: { query: QueryLike; deps: Rec
   const from = wm ? new Date(wm.getTime() - OVERLAP_MS) : null;
   const q = `-category:promotions${from ? ` after:${Math.floor(from.getTime() / 1000)}` : ""}`;
   const ids = await list(opts.deps.gmail, q, opts.maxMessages ?? 5000);
-  const r: ReconcileResult = { scanned: ids.length, confirmations: 0, matched: 0, agreed: 0, differed: 0, raised: 0, unmatched: 0, ambiguous: 0, since: from?.toISOString() ?? null, until: now.toISOString(), diffs: [], dryRun: !!opts.dryRun };
+  const r: ReconcileResult = { scanned: ids.length, confirmations: 0, matched: 0, agreed: 0, differed: 0, raised: 0, unmatched: 0, ambiguous: 0, renewals: 0, since: from?.toISOString() ?? null, until: now.toISOString(), diffs: [], dryRun: !!opts.dryRun };
   const pos = (await opts.query(
     `SELECT p.id, p.supplier, p.order_id, p.order_total::float AS order_total, (SELECT COUNT(*)::int FROM po_line_items l WHERE l.po_id = p.id) AS line_count FROM purchase_orders p`,
   )).rows as PoFacts[];
@@ -104,7 +108,10 @@ export async function reconcileConfirmations(opts: { query: QueryLike; deps: Rec
     r.confirmations++;
     const supplier = resolveSupplier(p.senderDomain, domainMap, suppliers, platforms).supplier;
     const hits = findPoForConfirmation(p, pos, supplier);
-    if (hits.length === 0) { r.unmatched++; continue; }
+    if (hits.length === 0) {
+      if (opts.deps.onUnmatched && !opts.dryRun && (await opts.deps.onUnmatched(msg, p, supplier))) { r.renewals++; continue; }
+      r.unmatched++; continue;
+    }
     if (hits.length > 1) { r.ambiguous++; continue; }
     const po = hits[0];
     r.matched++;
@@ -123,7 +130,7 @@ export async function reconcileConfirmations(opts: { query: QueryLike; deps: Rec
       [CONFIRM_WATERMARK_KEY, JSON.stringify({ last_scanned_at: now.toISOString() })],
     );
   }
-  opts.log?.(`confirmations: scanned ${r.scanned}, confirmations ${r.confirmations}, matched ${r.matched} (agreed ${r.agreed}, differed ${r.differed}, raised ${r.raised}), unmatched ${r.unmatched}, ambiguous ${r.ambiguous}`);
+  opts.log?.(`confirmations: scanned ${r.scanned}, confirmations ${r.confirmations}, matched ${r.matched} (agreed ${r.agreed}, differed ${r.differed}, raised ${r.raised}), unmatched ${r.unmatched}, ambiguous ${r.ambiguous}, renewals ${r.renewals}`);
   return r;
 }
 

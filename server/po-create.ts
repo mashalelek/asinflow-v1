@@ -15,6 +15,7 @@ import { checkPoForm, shipsToFromForm, COST_FORMULA_VERSION_SAVED, type PoFormSt
 import { afEntrySeq } from "./po-entry-seq";
 import { logEdits, EditError } from "./po-edit";
 import { applyAsinPackUpdate, parsePack } from "./asin-pack";
+import { subscriptionsFromForm } from "./subscriptions";
 
 const txt = (s: unknown) => { const v = typeof s === "string" ? s.trim() : ""; return v === "" ? null : v; };
 const moneyOr0 = (s: unknown) => { const v = typeof s === "string" ? s.replace(/[$,\s]/g, "") : ""; return v === "" ? "0" : v; };
@@ -47,6 +48,7 @@ export async function createPoFromForm(query: QueryLike, form: PoFormState, user
   );
   const poId = String(ins.rows[0].id);
   let lines = 0;
+  const asinRows: Array<{ id: string; asin: string; asin_name: string | null }> = [];
   for (const a of check.asins) {
     const cat = (await query(`SELECT title, primary_sku FROM asins WHERE asin = $1`, [a.asin])).rows[0];
     const pa = await query(
@@ -56,6 +58,7 @@ export async function createPoFromForm(query: QueryLike, form: PoFormState, user
        a.sourcing_cost, a.paid_cost, a.cogs_adjustment, a.cogs_adjustment_reason],
     );
     const paId = String(pa.rows[0].id);
+    asinRows.push({ id: paId, asin: a.asin, asin_name: cat?.title ?? null });
     for (const l of a.lines) {
       await query(
         `INSERT INTO po_line_items (po_id, po_asin_id, position, product_name, supplier_sku, price, item_discount, qty_ordered, qty_returned, asin_qty_per_product, adjusted_product_cost, action_items, notes)
@@ -86,6 +89,8 @@ export async function createPoFromForm(query: QueryLike, form: PoFormState, user
     );
   }
   await logEdits(query, poId, userId, "po", poId, [{ field: "PO created", old: null, new: `${supplier} ${orderId} — ${check.asins.length} ASIN(s), ${lines} product(s)` }]);
+  // §9: "Subscription: yes · every N weeks" → a subscriptions row per ASIN row (SPEC §27).
+  await subscriptionsFromForm(query, poId, form, asinRows);
   // §6.5 "Update ASIN in AF": the chosen ASINs' pack fields follow this PO's rows (History row, open POs brought along).
   for (const a of check.asins) {
     if (form.pack_updates?.[a.asin] !== true) continue;
