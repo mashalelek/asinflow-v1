@@ -24,6 +24,8 @@ import { editPoHeader, editLine, addLine, removeLine, editAsinRow, loadPoHistory
 import { createPoFromForm, lookupAsins } from "./po-create";
 import { suggestAsins, asinInfo } from "./asin-suggest";
 import { applyAsinPackUpdate, parsePack } from "./asin-pack";
+import { CaptureSchema, extractPrefill, enrichPrefill, mergedPagesText, storePrefill, getPrefill, logPrefill } from "./po-prefill";
+import { aiAvailable, AI_OFF_MESSAGE } from "./config/ai";
 import { loadPoGuards, deletePo, cancelPo, assertAsinRowCancelable, reassignShipment } from "./po-guards";
 import { syncPoSheet, type PoSyncResult } from "./po-sheet-sync";
 import { syncVelocityShipments, type VelocitySyncResult } from "./shipment-sync-velocity";
@@ -4488,6 +4490,10 @@ export async function registerRoutes(
     if (!isDbAvailable()) { res.status(503).json({ message: "Database not available" }); return; }
     try {
       const r = await withPoTx((q) => createPoFromForm(q, req.body, uid(req)));
+      // Capture PO (§5): the prefill's log row gets the PO it became.
+      const prefillId = typeof req.body?.prefill?.id === "string" ? req.body.prefill.id : null;
+      const entry = prefillId ? getPrefill(prefillId) : null;
+      if (entry?.logId != null) await query(`UPDATE po_prefill_log SET po_id = $1 WHERE id = $2`, [r.poId, entry.logId]).catch((e: any) => log(`po_prefill_log link failed: ${e?.message ?? e}`, "po"));
       res.status(201).json(r);
     } catch (err: any) {
       if (err instanceof EditError) { res.status(err.status).json({ message: err.message }); return; }
@@ -4526,6 +4532,27 @@ export async function registerRoutes(
       const r = await enqueueOnboardingJob([asin], { requestedBy: req.session?.userId ?? null });
       res.json({ inserted: (ins.rowCount ?? 0) > 0, jobId: r.job?.id ?? r.duplicateOf ?? null, info: await asinInfo(poQuery, asin) });
     } catch (err: any) { res.status(500).json({ message: err.message }); }
+  });
+  // Capture PO (po-ai-prefill §4.5 / §5): the extension's scrubbed pages → one Claude call → the prefilled form under a 10-minute key.
+  app.post("/api/pos/prefill", async (req: Request, res: Response) => {
+    if (!isDbAvailable()) { res.status(503).json({ message: "Database not available" }); return; }
+    if (!aiAvailable()) { res.status(503).json({ message: AI_OFF_MESSAGE }); return; }
+    const parsed = CaptureSchema.safeParse(req.body);
+    if (!parsed.success) { res.status(400).json({ message: `capture: ${parsed.error.issues.slice(0, 3).map((i) => `${i.path.join(".")}: ${i.message}`).join("; ")}` }); return; }
+    const capture = parsed.data;
+    try {
+      const { extraction, usage } = await extractPrefill(capture);
+      const logId = await logPrefill(poQuery, { user_id: uid(req), kind: "capture", retailer: capture.retailerHost, ...usage });
+      const payload = await enrichPrefill(poQuery, capture, extraction, extraction ? null : mergedPagesText(capture), { id: "", capturedAt: capture.capturedAt ?? new Date().toISOString() });
+      const id = storePrefill(payload, logId);
+      log(`prefill ${capture.retailerHost}: ${capture.pages.length} page(s), ${usage.input_tokens} in / ${usage.output_tokens} out, ${usage.cost_estimate}, schema ${usage.schema_ok ? "ok" : "FAILED"} → ${id}`, "po");
+      res.json({ id, url: `/pos/new?prefill=${id}`, schema_ok: usage.schema_ok, warnings: payload.prefill.warnings ?? [], lines: payload.form.products?.length ?? 0, supplier: payload.prefill.supplier ?? null });
+    } catch (err: any) { res.status(500).json({ message: err?.message ?? String(err) }); }
+  });
+  app.get("/api/pos/prefill/:id", async (req: Request, res: Response) => {
+    const e = getPrefill(String(req.params.id ?? ""));
+    if (!e) { res.status(404).json({ message: "This capture has expired (10 minutes) — capture the pages again" }); return; }
+    res.json(e.payload);
   });
   // Purchased by (users) and Email used (settings.po_emails) for the form.
   app.get("/api/pos/purchasers", async (_req: Request, res: Response) => {

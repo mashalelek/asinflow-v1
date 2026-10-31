@@ -28,10 +28,12 @@
     "tracking:flag-returns": "tsx script/tracking-flag-returns.ts",
     "supplier:merge": "tsx script/merge-supplier.ts",
     "backfill:po-model": "tsx script/backfill-po-model.ts",
+    "backfill:po-promos": "tsx script/backfill-po-promos.ts",
     "migrate:po-status": "tsx script/migrate-po-status.ts",
     "db:push": "drizzle-kit push"
   },
   "dependencies": {
+    "@anthropic-ai/sdk": "^1.3.0",
     "@hookform/resolvers": "^3.10.0",
     "@jridgewell/trace-mapping": "^0.3.25",
     "@octokit/rest": "^22.0.0",

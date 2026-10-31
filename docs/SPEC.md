@@ -5353,6 +5353,48 @@ IS NULL; Maria 2026-10-31):
   its Sourcing / Paid cost still follow; every change is logged. An
   imported PO is skipped.
 
+### Capture PO — `/api/pos/prefill` and the AI config (patch po-ai-prefill §4.5, §5; 2026-10-31)
+
+- **AI config** lives in `server/config/ai.ts`: model `claude-haiku-5-5`
+  (Haiku-class by decision), `max_tokens`, effort low, the price used for
+  the per-call estimate. `ANTHROPIC_API_KEY` (Render env var; optional)
+  switches every AI feature on; without it `POST /api/pos/prefill` answers
+  503 "AI prefill is off" and the extension shows that — never a silent
+  fallback. One call per capture; the promo backfill is one batch call.
+- **`POST /api/pos/prefill`** (session required, like every `/api` route):
+  body `{ retailerHost, capturedAt?, pages: [{step, url, title, text,
+  fields}] }`, already scrubbed by the extension (§11 "Capture PO"). One
+  `messages.parse` call with a zod output format (`PrefillSchema`:
+  retailer, order id / date, lines with product name / SKU / qty / retailer
+  units per pack / unit price paid / line total / ASIN guess, subtotal /
+  discount / tax / shipping / total, promos typed by the same rules as the
+  backfill (`PROMO_RULES`, michaels.com exception included), payments
+  (method / nickname / last 4 / amount), ship-to street, subscription,
+  purchased email, confidence notes). A schema failure or API error is the
+  **raw-text fallback**: the form opens with only the supplier and the
+  captured text in its drawer. Then, with no AI: supplier from the hostname
+  (AF's supplier is the domain; exact → alias → same registrable domain →
+  else the hostname, flagged new), `ships_to` / prep from the ship-to
+  street through the same settings the tracking router uses (§4.4), ASIN
+  candidates per line (§6.4 — history first, stone; else the model's guess,
+  amber), totals cross-checks (lines vs subtotal, payments vs total) and
+  the model's notes → warnings. The result is a `PoFormState` partial plus
+  the §6.1 markers, parked under a **10-minute in-memory key** (not a
+  table, not a draft) — the response is `{ id, url: "/pos/new?prefill=<id>",
+  schema_ok, warnings, lines, supplier }`; `GET /api/pos/prefill/:id`
+  returns the payload (404 once expired).
+- **`po_prefill_log`**: one row per call (user, kind capture | backfill,
+  retailer, model, input chars / tokens, output tokens, cost estimate,
+  duration, schema ok, error); `po_id` is set when the prefilled form is
+  saved (`POST /api/pos` reads `prefill.id`). Nothing from the page text
+  is stored.
+- **Promo backfill**: `npm run backfill:po-promos` (dry run by default; the
+  one classification call runs either way and is logged with kind
+  `backfill`; `--live` inserts) — the distinct col AK texts, paired with
+  the supplier for the michaels.com rule; high confidence applied, low
+  confidence stored with type NULL and listed in
+  `docs/promo-classification-review-<date>.csv`.
+
 ### Stored vs. computed
 
 Stored snapshots, written at save/import, recomputed only on edit (layer 2):
