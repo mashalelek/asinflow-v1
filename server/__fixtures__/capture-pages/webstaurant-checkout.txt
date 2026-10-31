@@ -1,0 +1,16 @@
+WebstaurantStore
+Checkout
+Shipping address
+65 Rivercrest Dr, Chesapeake, VA
+Shipping method: Ground
+Items (2)
+Choice 16 oz. Clear PET Plastic Cold Cup - 1000/Case   Qty: 2   $64.99 /case
+Lavex Janitorial 33" x 40" Trash Bags   Qty: 1   $29.49
+Payment
+Webstaurant Visa •••• 7927
+Card 4111-1111-1111-1111  Exp. 12/29  CVC: 999
+Rewards: $24.62 applied
+Subtotal $159.47
+Shipping $18.31
+Tax $0.00
+Total $153.16

@@ -1,6 +1,20 @@
 // AsinFlow Chrome Extension — Background Service Worker
+//
+// Every request to AsinFlow sends the session cookie (credentials: "include",
+// SPEC §25 — every /api route needs a session; the server URL must be in
+// host_permissions). Sign in to AsinFlow in a normal tab first; a 401 is
+// reported as "Sign in to AsinFlow".
+//
+// Capture PO (patch docs/claude_spec-patch-po-ai-prefill.md §4): the panel's
+// "Capture this page" injects scrub.js + capture.js into the active tab and
+// stores the scrubbed result in chrome.storage.session under the tab id,
+// one entry per checkout step (the latest capture of a step replaces the
+// previous one). "Open in AF" POSTs the pages to /api/pos/prefill (one AI
+// call, server side) and opens /pos/new?prefill=<id> in a new tab; the
+// capture is cleared on success, on Clear, or when the tab closes.
 
 const DEFAULT_SERVER_URL = "http://localhost:3000";
+const AF_FETCH = { credentials: "include" };
 const SETTINGS_REFRESH_INTERVAL = 5 * 60 * 1000; // 5 minutes
 
 let cachedSettings = null;
@@ -16,7 +30,7 @@ async function getServerUrl() {
 async function fetchSettings() {
   try {
     const serverUrl = await getServerUrl();
-    const response = await fetch(`${serverUrl}/api/settings`);
+    const response = await fetch(`${serverUrl}/api/settings`, AF_FETCH);
     if (response.ok) {
       cachedSettings = await response.json();
       await chrome.storage.local.set({ afSettings: cachedSettings, afConnected: true });
@@ -208,7 +222,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
         const serverUrl = await getServerUrl();
         const asin = (message.asin || "").toUpperCase();
         const response = await fetch(`${serverUrl}/api/asins/check/${encodeURIComponent(asin)}`, {
-          signal: AbortSignal.timeout(5000),
+          ...AF_FETCH, signal: AbortSignal.timeout(5000),
         });
         if (response.ok) {
           const result = await response.json();
@@ -228,7 +242,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
       try {
         const serverUrl = await getServerUrl();
         const response = await fetch(`${serverUrl}/api/import-asin`, {
-          method: "POST",
+          ...AF_FETCH, method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify(message.data),
         });
@@ -249,11 +263,11 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     (async () => {
       try {
         const serverUrl = message.serverUrl || await getServerUrl();
-        const response = await fetch(`${serverUrl}/api/credentials-status`, { signal: AbortSignal.timeout(5000) });
+        const response = await fetch(`${serverUrl}/api/credentials-status`, { ...AF_FETCH, signal: AbortSignal.timeout(5000) });
         if (response.ok) {
           sendResponse({ success: true });
         } else {
-          sendResponse({ success: false, message: `Server returned ${response.status}` });
+          sendResponse({ success: false, message: response.status === 401 ? "Sign in to AsinFlow in a tab first (the extension uses your session)" : `Server returned ${response.status}` });
         }
       } catch (err) {
         sendResponse({ success: false, message: err.message });
@@ -266,7 +280,93 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     fetchSettings().then(() => sendResponse({ success: true }));
     return true;
   }
+
+  // ── Capture PO ──────────────────────────────────────────────────────────
+  if (message.type === "CAPTURE_PAGE") {
+    (async () => {
+      try {
+        const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
+        if (!tab?.id || !tab.url || !/^https?:/.test(tab.url)) { sendResponse({ success: false, message: "Open the retailer's checkout page in the active tab first" }); return; }
+        const origin = new URL(tab.url).origin;
+        let results;
+        try {
+          results = await chrome.scripting.executeScript({ target: { tabId: tab.id }, files: ["scrub.js", "capture.js"] });
+        } catch (err) {
+          // No host permission for this site yet: the panel asks for it (a user gesture) and retries.
+          sendResponse({ success: false, needsPermission: `${origin}/*`, message: err.message });
+          return;
+        }
+        const page = results?.[0]?.result;
+        if (!page || page.error) { sendResponse({ success: false, message: page?.error || "Nothing could be read from this page" }); return; }
+        const key = captureKey(tab.id);
+        const cur = (await chrome.storage.session.get([key]))[key] || { host: new URL(tab.url).hostname, pages: {}, others: [], updatedAt: null, count: 0 };
+        const entry = { ...page, capturedAt: new Date().toISOString() };
+        if (page.step === "other") { cur.others = [...(cur.others || []).filter((p) => p.url !== page.url), entry].slice(-6); }
+        else cur.pages[page.step] = entry;
+        cur.host = new URL(tab.url).hostname; cur.updatedAt = entry.capturedAt;
+        cur.count = Object.keys(cur.pages).length + (cur.others || []).length;
+        await chrome.storage.session.set({ [key]: cur });
+        sendResponse({ success: true, capture: cur, step: page.step, chars: page.chars });
+      } catch (err) { sendResponse({ success: false, message: err.message }); }
+    })();
+    return true;
+  }
+  if (message.type === "GET_CAPTURE") {
+    (async () => {
+      const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
+      const key = tab?.id ? captureKey(tab.id) : null;
+      const cur = key ? (await chrome.storage.session.get([key]))[key] : null;
+      let host = null; try { host = tab?.url ? new URL(tab.url).hostname : null; } catch { /* about:, chrome: */ }
+      sendResponse({ capture: cur || null, tabId: tab?.id ?? null, host, isAmazonProduct: isAmazonProductPage(tab?.url) });
+    })();
+    return true;
+  }
+  if (message.type === "CLEAR_CAPTURE") {
+    (async () => {
+      const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
+      if (tab?.id) await chrome.storage.session.remove([captureKey(tab.id)]);
+      sendResponse({ success: true });
+    })();
+    return true;
+  }
+  if (message.type === "GET_CAPTURE_CONFIG") {
+    (async () => {
+      try {
+        const serverUrl = await getServerUrl();
+        const r = await fetch(`${serverUrl}/api/pos/capture-config`, { ...AF_FETCH, signal: AbortSignal.timeout(5000) });
+        sendResponse(r.ok ? { success: true, config: await r.json() } : { success: false, status: r.status });
+      } catch (err) { sendResponse({ success: false, message: err.message }); }
+    })();
+    return true;
+  }
+  if (message.type === "OPEN_IN_AF") {
+    (async () => {
+      try {
+        const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
+        const key = tab?.id ? captureKey(tab.id) : null;
+        const cur = key ? (await chrome.storage.session.get([key]))[key] : null;
+        if (!cur || !cur.count) { sendResponse({ success: false, message: "Nothing captured yet" }); return; }
+        const pages = [...Object.values(cur.pages), ...(cur.others || [])].map((p) => ({ step: p.step, url: p.url, title: p.title, text: p.text, fields: p.fields || [] }));
+        const serverUrl = await getServerUrl();
+        const r = await fetch(`${serverUrl}/api/pos/prefill`, {
+          ...AF_FETCH, method: "POST", headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ retailerHost: cur.host, capturedAt: cur.updatedAt, pages }),
+          signal: AbortSignal.timeout(90000),
+        });
+        const data = await r.json().catch(() => ({}));
+        if (r.status === 401) { sendResponse({ success: false, message: "Sign in to AsinFlow in a tab first — the extension uses your session" }); return; }
+        if (!r.ok) { sendResponse({ success: false, message: data.message || `AsinFlow answered ${r.status}` }); return; }
+        await chrome.tabs.create({ url: `${serverUrl}${data.url}` });
+        await chrome.storage.session.remove([key]);
+        sendResponse({ success: true, lines: data.lines, warnings: data.warnings || [], schema_ok: data.schema_ok });
+      } catch (err) { sendResponse({ success: false, message: /abort|timeout/i.test(err.message) ? "AsinFlow did not answer in time — the capture is kept, try again" : `AsinFlow is unreachable — the capture is kept (${err.message})` }); }
+    })();
+    return true;
+  }
 });
+
+const captureKey = (tabId) => `capture:${tabId}`;
+chrome.tabs.onRemoved.addListener((tabId) => { chrome.storage.session.remove([captureKey(tabId)]).catch(() => {}); });
 
 // Listen for storage changes (when product data is updated by content script)
 chrome.storage.session.onChanged.addListener((changes) => {

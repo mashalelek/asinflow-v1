@@ -1,25 +1,40 @@
 {
   "manifest_version": 3,
   "name": "AsinFlow",
-  "version": "1.0.0",
-  "description": "FBA Profit Calculator & AsinFlow Import",
-  "permissions": ["sidePanel", "activeTab", "storage", "tabs"],
-  "host_permissions": ["https://www.amazon.com/*", "https://amazon.com/*", "http://localhost:3000/*"],
+  "version": "1.1.0",
+  "description": "FBA Profit Calculator, AsinFlow Import & Capture PO",
+  "permissions": [
+    "sidePanel",
+    "activeTab",
+    "storage",
+    "tabs",
+    "scripting"
+  ],
+  "host_permissions": [
+    "https://www.amazon.com/*",
+    "https://amazon.com/*",
+    "http://localhost:3000/*",
+    "https://asinflow-cqg.onrender.com/*"
+  ],
   "side_panel": {
     "default_path": "sidepanel.html"
   },
   "background": {
     "service_worker": "background.js"
   },
-  "content_scripts": [{
-    "matches": [
-      "https://www.amazon.com/dp/*",
-      "https://www.amazon.com/*/dp/*",
-      "https://www.amazon.com/gp/product/*"
-    ],
-    "js": ["content.js"],
-    "run_at": "document_idle"
-  }],
+  "content_scripts": [
+    {
+      "matches": [
+        "https://www.amazon.com/dp/*",
+        "https://www.amazon.com/*/dp/*",
+        "https://www.amazon.com/gp/product/*"
+      ],
+      "js": [
+        "content.js"
+      ],
+      "run_at": "document_idle"
+    }
+  ],
   "options_page": "options.html",
   "action": {
     "default_icon": {
@@ -32,5 +47,9 @@
     "16": "icons/icon16.png",
     "48": "icons/icon48.png",
     "128": "icons/icon128.png"
-  }
+  },
+  "optional_host_permissions": [
+    "https://*/*",
+    "http://*/*"
+  ]
 }

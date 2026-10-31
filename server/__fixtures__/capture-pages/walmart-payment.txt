@@ -1,0 +1,20 @@
+Walmart
+Checkout
+Delivery
+Arrives Thu, Nov 6
+805 Grandy Ave, Norfolk, VA 23510
+Payment method
+Visa ending in 7927
+Card number 4111 1111 1111 1111
+Expiration 09/28
+CVV 123
+Gift card
+Gift card number 6006 4921 1234 5678 9012
+PIN 4321
+Order summary
+Items (3)
+Subtotal $87.57
+Shipping Free
+Tax $5.25
+Total $92.82
+Contact maria@example.com

@@ -2520,6 +2520,61 @@ is set — the runner is always on; only the **schedule** is gated.
   File keep their inline sheet/CSV step; only the onboarding Refresh they
   spawn is a queue job.
 
+### Chrome extension — Capture PO (patch `docs/claude_spec-patch-po-ai-prefill.md` §4, 2026-10-31; `chrome-extension/` v1.1.0)
+
+The existing extension (the Amazon side-panel calculator, `content.js` on
+`/dp` pages) gains **Capture PO** in the same side panel: on any tab that is
+not an Amazon product page the panel shows the capture UI instead of the
+"navigate to a product page" state.
+
+- **Auth.** Every request the extension makes to AsinFlow sends the session
+  cookie (`credentials: "include"`; the server URL from the options page must
+  be in `host_permissions` — localhost and `asinflow-cqg.onrender.com` are).
+  Sign in to AsinFlow in a normal tab first; a 401 is shown as "Sign in to
+  AsinFlow". No token, no server CORS change (host-permission fetches are
+  not subject to CORS). **To verify once against a logged-in Chrome**
+  (amendment 5): open the panel on a checkout page, Capture, Open in AF —
+  the form must open prefilled; if it reports "Sign in", Chrome did not
+  attach the `SameSite=Lax` cookie to the extension's request and the
+  fallback is a short-lived token minted by the logged-in AF tab.
+- **Panel (§4.1).** Retailer (hostname; "new supplier" when AF has no PO for
+  it — `GET /api/pos/capture-config` lists AF's suppliers and the ship-to
+  streets), order # once a captured page shows one, a Home / Velocity badge
+  from the ship-to street (the same `tracking.velocity_street` /
+  `tracking.home_streets` the tracking router uses, §26), chips Cart ·
+  Shipping · Payment · Review (hints: a chip ticks when a page of that step
+  was captured; the latest capture of a step replaces the previous one),
+  **Capture this page**, the status line "N pages captured · card numbers
+  masked before anything leaves the browser", **Found so far** (regex-level:
+  qty lines, ship-to, subtotal / discount / tax / shipping / total, masked
+  payment lines — anything unclear is simply not shown), **Open in AF** and
+  **Clear**, caption "One AI call runs when you open it".
+- **Capture (§4.2).** "Capture this page" injects `scrub.js` + `capture.js`
+  into the active tab (`chrome.scripting`; a site not yet allowed asks for
+  the host permission once — `optional_host_permissions`). The page gives
+  `document.title`, the URL without its query string, the rendered text
+  (`innerText` of body — hidden elements excluded) and the current values of
+  visible `input` / `select` / `textarea` elements with their labels;
+  password inputs are never read; never raw HTML, never a screenshot (the
+  screenshot fallback is not in v1). Stored in `chrome.storage.session`
+  under the tab id, one entry per step; cleared on Clear, on a successful
+  Open in AF, or when the tab closes. A page under ~200 characters of text
+  gets a hint to capture the review page instead.
+- **Scrubbing (§4.3, `scrub.js`, inside the page before anything leaves the
+  browser):** any run of 13–19 digits (spaces / dashes allowed) that passes
+  Luhn → `•••• ` + last 4; a 3–4 digit value whose label says cvv / cvc /
+  security code → removed; an expiry (MM/YY, MM/YYYY) within 40 characters
+  after "exp" / "valid" → removed; a gift-card / e-gift number → last 4
+  kept; emails kept. Fixtures: hand-written synthetic checkout texts for
+  Walmart, Michaels, Bed Bath & Beyond, Lakeshore and Webstaurant with
+  public test card numbers only (`server/__fixtures__/capture-pages/`,
+  `server/extension-scrub.test.ts`).
+- **Open in AF (§4.5).** `POST /api/pos/prefill` with the scrubbed pages →
+  the server's one AI call (§22 "Capture PO") → a new tab on
+  `/pos/new?prefill=<id>`; the capture is cleared on success. If AsinFlow is
+  unreachable, is not signed in, or AI is off (`ANTHROPIC_API_KEY`), the
+  panel says so and keeps the capture.
+
 #### Component details that carry over
 
 The stage code moved; its rules did not. Still true, now per component:

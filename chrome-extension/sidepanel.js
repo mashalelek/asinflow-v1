@@ -228,7 +228,9 @@
   // ── Product Display ───────────────────────────────────────────────────
   function displayProduct(product) {
     if (!product || !product.asin) {
-      emptyState.style.display = "";
+      // Capture PO (capture-panel.js) owns the panel on non-Amazon tabs: the empty state shows only while it is hidden.
+      const captureRoot = document.getElementById("capture-content");
+      emptyState.style.display = captureRoot && captureRoot.style.display !== "none" ? "none" : "";
       productContent.style.display = "none";
       displayedAsin = null;
       return;

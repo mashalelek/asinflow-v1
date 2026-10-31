@@ -1,0 +1,11 @@
+Bed Bath & Beyond
+Your order is confirmed.
+Order number: 123456789012
+Delivery address: 805 Grandy Ave
+Mastercard 5555-5555-5555-4444 Valid thru 03/27
+e-Gift card: 7777 8888 9999 0000 1234 applied $50.00
+Items 2
+Subtotal $120.00
+Tax $7.20
+Shipping $9.99
+Total $137.19

@@ -13,10 +13,36 @@
     <span id="status-text">Checking connection...</span>
   </div>
 
-  <!-- Empty State -->
+  <!-- Empty State (Amazon, no product yet) -->
   <div id="empty-state" class="empty-state">
     <div class="empty-icon">&#128269;</div>
     <p>Navigate to an Amazon product page to get started</p>
+  </div>
+
+  <!-- Capture PO (any retailer checkout; patch po-ai-prefill §4.1) -->
+  <div id="capture-content" class="capture" style="display:none;">
+    <div class="capture-header">
+      <div class="capture-retailer"><span id="capture-retailer">—</span><span id="capture-new-supplier" class="capture-note" style="display:none;">new supplier</span></div>
+      <div class="capture-meta"><span id="capture-order">Order # not seen yet</span><span id="capture-shipto-badge" class="capture-badge" style="display:none;"></span></div>
+    </div>
+    <div class="capture-chips" id="capture-chips">
+      <span class="capture-chip" data-step="cart">Cart</span>
+      <span class="capture-chip" data-step="shipping">Shipping</span>
+      <span class="capture-chip" data-step="payment">Payment</span>
+      <span class="capture-chip" data-step="review">Review</span>
+    </div>
+    <button id="capture-btn" class="capture-btn">Capture this page</button>
+    <div id="capture-status" class="capture-status">0 pages captured · card numbers masked before anything leaves the browser</div>
+    <div class="capture-found">
+      <div class="capture-found-title">Found so far</div>
+      <dl id="capture-found" class="capture-found-list"><dd class="capture-muted">Nothing captured yet</dd></dl>
+    </div>
+    <div class="capture-footer">
+      <button id="capture-open-btn" class="capture-open" disabled>Open in AF</button>
+      <button id="capture-clear-btn" class="capture-clear" disabled>Clear</button>
+    </div>
+    <div class="capture-caption">One AI call runs when you open it</div>
+    <div id="capture-feedback" class="capture-feedback" style="display:none;"></div>
   </div>
 
   <!-- Product Content (hidden until product data arrives) -->
@@ -135,5 +161,6 @@
 
   <script src="fee-engine/feeEngine.js"></script>
   <script src="sidepanel.js"></script>
+  <script src="capture-panel.js"></script>
 </body>
 </html>

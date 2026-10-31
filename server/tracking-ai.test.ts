@@ -15,9 +15,14 @@ describe("AI fallback: disabled", () => {
     const msg = { id: "m", threadId: null, date: new Date(), subject: "Your order #12345 has shipped", text: "Your order #12345 has shipped. Track it in your account.", fromDomain: "shop.example.com" };
     expect(rowsFromEmail(msg, parseTrackingEmail(msg))).toEqual([expect.objectContaining({ match_reason: AI_DISABLED_REASON, tracking_number: "email:shop.example.com:12345", carrier: "OTHER" })]);
   });
-  it("no server module talks to an Anthropic client", () => {
+  it("the Anthropic client is constructed in server/config/ai.ts only (Capture PO patch, 2026-10-31); no other server module builds one", () => {
+    // The tracking fallback is still not built; the Capture PO patch added ONE client, in config/ai.ts.
+    // Other modules may import the SDK's zod output-format helper (a type-level helper, no client).
     for (const f of readdirSync(__dirname).filter((x) => x.endsWith(".ts") && !x.endsWith(".test.ts"))) {
-      expect(readFileSync(join(__dirname, f), "utf8")).not.toMatch(/@anthropic-ai|api\.anthropic\.com/);
+      const src = readFileSync(join(__dirname, f), "utf8");
+      expect(src).not.toMatch(/api\.anthropic\.com|new Anthropic\(/);
+      expect(src.replace(/@anthropic-ai\/sdk\/helpers\/zod/g, "")).not.toMatch(/@anthropic-ai/);
     }
+    expect(readFileSync(join(__dirname, "config", "ai.ts"), "utf8")).toMatch(/new Anthropic\(\)/);
   });
 });

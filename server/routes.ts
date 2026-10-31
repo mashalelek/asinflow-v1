@@ -4554,6 +4554,16 @@ export async function registerRoutes(
     if (!e) { res.status(404).json({ message: "This capture has expired (10 minutes) — capture the pages again" }); return; }
     res.json(e.payload);
   });
+  // The extension's capture panel (§4.1 / §4.4): the ship-to streets the tracking router uses, the Velocity prep rate, AF's suppliers (the "new supplier" note).
+  app.get("/api/pos/capture-config", async (_req: Request, res: Response) => {
+    if (!isDbAvailable()) { res.status(503).json({ message: "Database not available" }); return; }
+    try {
+      const rows = (await query(`SELECT key, value FROM settings WHERE key = ANY($1::text[])`, [["tracking.velocity_street", "tracking.home_streets", "prep_cost"]])).rows;
+      const v = (k: string) => rows.find((r: any) => r.key === k)?.value;
+      const suppliers = (await query(`SELECT DISTINCT lower(supplier) AS s FROM purchase_orders ORDER BY 1`)).rows.map((r: any) => String(r.s));
+      res.json({ velocityStreet: String(v("tracking.velocity_street") ?? "805 grandy"), homeStreets: (v("tracking.home_streets") as string[]) ?? ["65 rivercrest"], prepCost: Number(v("prep_cost") ?? 1) || 1, suppliers });
+    } catch (err: any) { res.status(500).json({ message: err.message }); }
+  });
   // Purchased by (users) and Email used (settings.po_emails) for the form.
   app.get("/api/pos/purchasers", async (_req: Request, res: Response) => {
     if (!isDbAvailable()) { res.status(503).json({ message: "Database not available" }); return; }
