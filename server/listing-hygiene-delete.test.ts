@@ -1,6 +1,6 @@
 // Listing hygiene — component 24, delete (SPEC §11, patch rules 3 + 4).
 import { describe, it, expect, beforeEach } from "vitest";
-import { evaluateDelete, oosClock, velocityOnHandByAsin, DELETE_BLOCKING, type Basis } from "./listing-hygiene";
+import { evaluateDelete, oosClock, velocityOnHandByAsin, velocityInShipmentsByAsin, DELETE_BLOCKING, type Basis } from "./listing-hygiene";
 import { BUCKET_FIELDS } from "./sku-fba-inventory";
 import { runHygiene, hygieneDeps } from "./listing-hygiene-run";
 import { componentsForJob } from "./scheduler/runner";
@@ -225,5 +225,99 @@ describe("amzn_gr delete rule (Maria 2026-10-21)", () => {
     const r = await runHygiene("delete", ctxOf(w.query));
     expect(r.outcomes["D-1"]).toBe("ledger_unavailable");
     expect(r.outcomes[sku]).toBe("would_delete:amzn_gr");
+  });
+});
+
+// ── Patch 2026-10-31 (job-324 incident): units packed into an unshipped Velocity shipment ──
+
+describe("delete predicate — Velocity shipments leg (patch 2026-10-31)", () => {
+  it("units in an unshipped Velocity shipment block the delete even with nothing on hand", () => {
+    const r = evaluateDelete(dead({ velocityOnHand: 0, velocityInShipments: 4, velocityShipmentIds: ["3e958fff"] }), basis);
+    expect(r.outcome).toBe("skip_pipeline:velocity");
+    expect(r.evidence.pipeline).toMatchObject({ velocity_on_hand: 0, velocity_in_shipments: 4, velocity_shipment_ids: ["3e958fff"] });
+  });
+  it("shipments leg not read → velocity_unavailable, even when on hand was read as 0", () => {
+    expect(evaluateDelete(dead({ velocityOnHand: 0, velocityInShipments: null }), basis).outcome).toBe("velocity_unavailable");
+  });
+  it("both legs zero → would_delete (the pre-patch behaviour for a truly empty pipeline)", () => {
+    expect(evaluateDelete(dead({ velocityOnHand: 0, velocityInShipments: 0 }), basis).outcome).toBe("would_delete");
+  });
+});
+
+describe("velocityInShipmentsByAsin", () => {
+  it("Σ line quantity per ASIN, one count per (shipment_id, order_id), shipment ids collected", () => {
+    const m = velocityInShipmentsByAsin([
+      { __shipment_id: "S1", order_id: "o1", asin: "b000000001", quantity: 4 } as any,
+      { __shipment_id: "S1", order_id: "o1", asin: "B000000001", quantity: 4 } as any, // duplicate line
+      { __shipment_id: "S2", order_id: "o1", asin: "B000000001", quantity: 2 } as any, // same order, another shipment
+      { __shipment_id: "S1", order_id: "o2", asin: "B000000001", quantity: 0 } as any, // nothing packed
+      { __shipment_id: "S1", order_id: "o3", asin: "B000000002", quantity: 36 } as any,
+    ]);
+    expect(Object.fromEntries(m)).toEqual({
+      B000000001: { units: 6, shipments: ["S1", "S2"] },
+      B000000002: { units: 36, shipments: ["S1"] },
+    });
+  });
+});
+
+describe("OOS clock — a relisted SKU starts over (patch 2026-10-31)", () => {
+  it("listing created after the last stock date → the clock runs from the relist, not the old ledger", () => {
+    // QM-UL2V-D9HN on 2026-10-30: ledger last stocked 2026-06-30, relisted 2026-10-29 17:58Z.
+    const f = dead({ ledgerLastStocked: "2026-06-30", listing: { ...closedListing, createdAt: new Date("2026-10-29T17:58:11Z") } });
+    expect(oosClock(f, new Date("2026-10-30T05:44:52Z"))).toMatchObject({ branch: "ever_stocked", days: 1, pass: false, last_stocked: "2026-06-30", created: "2026-10-29", created_considered: true });
+  });
+  it("listing older than its stock dates → unchanged: measured from the last stock date", () => {
+    const f = dead({ ledgerLastStocked: "2026-07-01" }); // created 2026-03-01
+    expect(oosClock(f, NOW)).toMatchObject({ branch: "ever_stocked", days: 110, pass: true, created_considered: false });
+  });
+});
+
+describe("runHygiene('delete') — Velocity shipments leg", () => {
+  beforeEach(() => { hygieneDeps.now = () => NOW; });
+  const live = (on: boolean) => { hygieneDeps.env = () => (on ? { LISTING_DELETE_LIVE: "true" } : {}) as any; };
+  const okRun = { error: null, started_at: PASS, finished_at: new Date("2026-10-19T13:40:00Z") };
+  const goodLedger = { error: null, finished_at: new Date("2026-10-19T04:30:00Z"), counts: { conclusive: 1 } };
+  function world(rows: any[]) {
+    const inserts: any[][] = [];
+    const query = async (sql: string, params?: any[]) => {
+      if (sql.includes("stage = '23_ledger'")) return { rows: [goodLedger], rowCount: 1 };
+      if (sql.includes("FROM refresh_runs")) return { rows: [okRun], rowCount: 1 };
+      if (sql.includes("FROM asin_skus s JOIN asins a")) return { rows, rowCount: rows.length };
+      if (sql.includes("FROM settings WHERE key")) {
+        if (params?.[0] === "hygiene_ledger_coverage") return { rows: [{ value: { from: "2025-04-19", to: "2026-10-18" } }], rowCount: 1 };
+        return { rows: [{ value: 25 }], rowCount: 1 };
+      }
+      if (sql.includes("po_asins")) return { rows: [], rowCount: 0 };
+      if (sql.includes("INSERT INTO listing_actions")) { inserts.push(params!); return { rows: [], rowCount: 1 }; }
+      if (sql.includes("a.status = 'dead'")) return { rows: [], rowCount: 0 };
+      throw new Error(`unexpected SQL: ${sql.slice(0, 80)}`);
+    };
+    return { query, inserts };
+  }
+  const deadRow = (sku: string) => ({ ...dbRow(sku, {}, { end: "2026-10-13T12:29:10Z" }), last_stocked_date: "2026-07-01" });
+
+  it("a closed, empty SKU whose ASIN sits in a working Velocity shipment is NOT deleted (job-324 shape)", async () => {
+    live(true);
+    const sc = fakeSc({ "D-1": { end: "2026-10-13T12:29:10Z" }, "D-2": { end: "2026-10-13T12:29:10Z" } });
+    hygieneDeps.sc.velocityShipments = async () => [
+      { __shipment_id: "3e958fff", __shipment_status: "working", order_id: "29608e67", asin: "B000000001", quantity: 4, status: "shipped" } as any,
+    ];
+    const w = world([deadRow("D-1"), { ...deadRow("D-2"), asin: "B000000009" }]);
+    const r = await runHygiene("delete", ctxOf(w.query));
+    expect(r.outcomes["D-1"]).toBe("skip_pipeline:velocity");
+    expect(r.outcomes["D-2"]).toBe("deleted"); // the other ASIN has nothing anywhere
+    expect(sc.deletes.map((e) => decodeURIComponent(e.split("/").pop()!))).toEqual(["D-2"]);
+    expect(r.outcomes._velocity).toMatch(/1 line\(s\) in 1 unshipped shipment\(s\), 1 ASIN\(s\) with units packed/);
+  });
+
+  it("the shipments leg failing → zero deletes, every SKU velocity_unavailable", async () => {
+    live(true);
+    const sc = fakeSc({ "D-1": { end: "2026-10-13T12:29:10Z" } });
+    hygieneDeps.sc.velocityShipments = async () => { throw new Error("Velocity /shipments coverage incomplete: fetched 63 of 64"); };
+    const r = await runHygiene("delete", ctxOf(world([deadRow("D-1"), deadRow("D-2")]).query));
+    expect(r.outcomes["D-1"]).toBe("velocity_unavailable");
+    expect(r.outcomes["D-2"]).toBe("velocity_unavailable");
+    expect(r.outcomes._velocity).toMatch(/unavailable: Velocity \/shipments/);
+    expect(sc.deletes).toHaveLength(0);
   });
 });

@@ -38,7 +38,7 @@ function evidenceLine(e: Record<string, any>): string {
   if (e?.listing?.offer_end_at) parts.push(`closed (end_at ${String(e.listing.offer_end_at).slice(0, 10)})`);
   else if (e?.listing) parts.push("open");
   if (e?.clock) parts.push(`${e.clock.branch === "ever_stocked" ? `last stocked ${e.clock.last_stocked}` : `never stocked, created ${e.clock.created}`} · ${e.clock.days}d > ${e.clock.threshold}d`);
-  if (e?.pipeline) parts.push(`on order ${e.pipeline.on_order}, at prep ${e.pipeline.at_prep}, Velocity ${e.pipeline.velocity_on_hand ?? "?"}`);
+  if (e?.pipeline) parts.push(`on order ${e.pipeline.on_order}, at prep ${e.pipeline.at_prep}, Velocity on hand ${e.pipeline.velocity_on_hand ?? "?"}, in Velocity shipments ${e.pipeline.velocity_in_shipments ?? "?"}${e.pipeline.velocity_shipment_ids?.length ? ` (${e.pipeline.velocity_shipment_ids.join(", ")})` : ""}`);
   if (e?.release?.outcome) parts.push(`release → ${e.release.outcome}`);
   return parts.join(" · ");
 }

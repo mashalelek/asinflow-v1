@@ -31,7 +31,7 @@ import { parseListingState } from "./sku-listing-fetch";
 import { isOfferClosed } from "./listing-closed";
 import { closedEndAt, findForbiddenQuantityPaths } from "./offer-add";
 import { loadAsinPipeline } from "./asin-po-pipeline";
-import { fetchAllInboundOrders, fetchAllInventoryOrders, type VelocityInboundOrder } from "./velocity-api";
+import { fetchAllInboundOrders, fetchAllInventoryOrders, fetchUnshippedShipmentLines, type VelocityInboundOrder } from "./velocity-api";
 import { spApiGet, spApiPatch, spApiDelete } from "./spapi-auth";
 import { COVERAGE_SETTING, todayEt } from "./ledger-sync";
 import type { QueryLike } from "./scheduler/types";
@@ -103,6 +103,10 @@ export interface SkuFacts {
   pipeline: { on_order: number; at_prep: number };
   /** Velocity units on hand for the SKU's ASIN(s) — delete only; null when not read. */
   velocityOnHand: number | null;
+  /** Velocity units packed into shipments that have not shipped (status ≠ shipped) for the SKU's ASIN(s) — delete only; null when not read (patch 2026-10-31). */
+  velocityInShipments: number | null;
+  /** The unshipped Velocity shipment ids holding those units (evidence). */
+  velocityShipmentIds: string[];
 }
 
 /** "This pass": when the runs the decision relies on started, or null when there is none fresh. */
@@ -171,7 +175,7 @@ export function evaluateClose(f: SkuFacts, b: Basis): Evaluation {
   return out("would_close", true);
 }
 
-export interface ClockResult { pass: boolean; days: number | null; threshold: number; branch: "ever_stocked" | "never_stocked"; last_stocked: string | null; created: string | null }
+export interface ClockResult { pass: boolean; days: number | null; threshold: number; branch: "ever_stocked" | "never_stocked"; last_stocked: string | null; created: string | null; created_considered?: boolean }
 
 /** Pure: the OOS clock (rule 4). */
 export function oosClock(f: Pick<SkuFacts, "ledgerLastStocked" | "inventory" | "listing">, now: Date): ClockResult {
@@ -180,8 +184,13 @@ export function oosClock(f: Pick<SkuFacts, "ledgerLastStocked" | "inventory" | "
   const last = dates.length ? dates[dates.length - 1] : null;
   const created = f.listing.createdAt ? etDate(f.listing.createdAt) : null;
   if (last) {
-    const days = daysSince(last, now);
-    return { pass: days > CLOCK_EVER_STOCKED_DAYS, days, threshold: CLOCK_EVER_STOCKED_DAYS, branch: "ever_stocked", last_stocked: last, created };
+    // A relisted SKU starts over (patch 2026-10-31): the new listing's createdDate
+    // is later than every stock date, so the 60-day clock measures from the relist.
+    // A SKU never relisted has a listing older than its stock dates — unchanged.
+    const createdConsidered = created != null && created > last;
+    const from = createdConsidered ? created! : last;
+    const days = daysSince(from, now);
+    return { pass: days > CLOCK_EVER_STOCKED_DAYS, days, threshold: CLOCK_EVER_STOCKED_DAYS, branch: "ever_stocked", last_stocked: last, created, created_considered: createdConsidered };
   }
   if (!created) return { pass: false, days: null, threshold: CLOCK_NEVER_STOCKED_DAYS, branch: "never_stocked", last_stocked: null, created: null };
   const days = daysSince(created, now);
@@ -192,7 +201,7 @@ export function oosClock(f: Pick<SkuFacts, "ledgerLastStocked" | "inventory" | "
 export function evaluateDelete(f: SkuFacts, b: Basis): Evaluation {
   const ev: Record<string, any> = {
     ...baseEvidence(f, b), blocking_buckets: DELETE_BLOCKING,
-    pipeline: { on_order: f.pipeline.on_order, at_prep: f.pipeline.at_prep, velocity_on_hand: f.velocityOnHand },
+    pipeline: { on_order: f.pipeline.on_order, at_prep: f.pipeline.at_prep, velocity_on_hand: f.velocityOnHand, velocity_in_shipments: f.velocityInShipments, velocity_shipment_ids: f.velocityShipmentIds },
     ledger_last_stocked: f.ledgerLastStocked,
   };
   const out = (outcome: string, candidate = false, extra: Record<string, any> = {}): Evaluation =>
@@ -206,8 +215,8 @@ export function evaluateDelete(f: SkuFacts, b: Basis): Evaluation {
   if (f.pendingSubmission) return out("skip_pending_submission");
   if (f.pipeline.on_order > 0) return out("skip_pipeline:on_order");
   if (f.pipeline.at_prep > 0) return out("skip_pipeline:at_prep");
-  if (f.velocityOnHand == null) return out("velocity_unavailable");
-  if (f.velocityOnHand > 0) return out("skip_pipeline:velocity");
+  if (f.velocityOnHand == null || f.velocityInShipments == null) return out("velocity_unavailable");
+  if (f.velocityOnHand > 0 || f.velocityInShipments > 0) return out("skip_pipeline:velocity");
   const clock = oosClock(f, b.now);
   if (!clock.pass) return out(`skip_clock:${clock.days ?? "unknown"}/${clock.threshold}`, false, { clock });
   if (f.actionPending) return out("skip_action_pending", false, { clock });
@@ -322,6 +331,8 @@ export async function loadSkuFacts(query: QueryLike, sel: { asins?: string[]; sk
       ledgerLastStocked: ymd(r.last_stocked_date),
       pipeline: { on_order: 0, at_prep: 0 },
       velocityOnHand: null,
+      velocityInShipments: null,
+      velocityShipmentIds: [],
     });
   }
   return Array.from(by.values());
@@ -338,6 +349,30 @@ export async function attachPipeline(facts: SkuFacts[], query: QueryLike): Promi
       return { on_order: acc.on_order + (x?.on_order ?? 0), at_prep: acc.at_prep + (x?.at_prep ?? 0) };
     }, { on_order: 0, at_prep: 0 });
   }
+}
+
+/**
+ * Pure: Velocity units packed into shipments that have NOT shipped, per ASIN —
+ * Σ line quantity over `fetchUnshippedShipmentLines`, one count per
+ * (shipment_id, order_id) — with the shipment ids holding them (patch 2026-10-31).
+ */
+export function velocityInShipmentsByAsin(lines: VelocityInboundOrder[]): Map<string, { units: number; shipments: string[] }> {
+  const seen = new Set<string>();
+  const out = new Map<string, { units: number; shipments: string[] }>();
+  for (const o of lines) {
+    const sid = String((o as any).__shipment_id ?? "");
+    const key = `${sid}|${String(o.order_id ?? "")}`;
+    if (seen.has(key)) continue;
+    seen.add(key);
+    const q = Number(o.quantity ?? 0);
+    if (!(q > 0)) continue;
+    const a = String(o.asin ?? "").toUpperCase();
+    const cur = out.get(a) ?? { units: 0, shipments: [] };
+    cur.units += q;
+    if (sid && !cur.shipments.includes(sid)) cur.shipments.push(sid);
+    out.set(a, cur);
+  }
+  return out;
 }
 
 /** Pure: Velocity units on hand per ASIN — Σ quantity_remaining over /inbound ∪ /inventory, one count per order_id. */
@@ -407,10 +442,13 @@ export interface ScDeps {
   patch: (endpoint: string, body: any, params?: Record<string, any>) => Promise<any>;
   del: (endpoint: string, params?: Record<string, any>) => Promise<any>;
   velocity: () => Promise<VelocityInboundOrder[]>;
+  /** Lines of Velocity shipments that have not shipped (patch 2026-10-31). */
+  velocityShipments: () => Promise<VelocityInboundOrder[]>;
 }
 export const realScDeps: ScDeps = {
   get: spApiGet, patch: spApiPatch, del: spApiDelete,
   velocity: async () => [...(await fetchAllInboundOrders()), ...(await fetchAllInventoryOrders())],
+  velocityShipments: fetchUnshippedShipmentLines,
 };
 
 export interface FireResult {

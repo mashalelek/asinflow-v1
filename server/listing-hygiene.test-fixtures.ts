@@ -12,7 +12,7 @@ export function facts(p: Partial<SkuFacts> = {}, inv: Record<string, number> = {
     listing: { checkedAt: new Date("2026-10-19T13:20:00Z"), createdAt: new Date("2026-03-01T00:00:00Z"), offerEndAt: null },
     inventory: { ...zero(), ...inv, observedAt: new Date("2026-10-19T13:05:00Z"), lastNonzeroAt: null },
     pendingSubmission: false, actionPending: false, ledgerLastStocked: null,
-    pipeline: { on_order: 0, at_prep: 0 }, velocityOnHand: 0, ...p,
+    pipeline: { on_order: 0, at_prep: 0 }, velocityOnHand: 0, velocityInShipments: 0, velocityShipmentIds: [], ...p,
   };
 }
 
@@ -79,6 +79,7 @@ export function fakeSc(listing: Record<string, { end: string | null } | "404">, 
     patch: async (endpoint: string, body: any) => { patches.push({ endpoint, body }); return { status: "ACCEPTED", submissionId: `sub-${patches.length}` }; },
     del: async (endpoint: string) => { deletes.push(endpoint); return { status: "ACCEPTED", submissionId: `del-${deletes.length}` }; },
     velocity: async () => { velocityCalls++; return []; },
+    velocityShipments: async () => [],
   };
   return { patches, deletes, velocity: () => velocityCalls };
 }

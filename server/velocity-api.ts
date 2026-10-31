@@ -436,6 +436,26 @@ export function shipmentOrdersFrom(detailData: any, shipmentId: string): Velocit
   });
 }
 
+/**
+ * Lines of every Velocity shipment that has NOT shipped — `status !== "shipped"`
+ * (`working` today; an unknown status counts too, so a new Velocity state can
+ * only hold a listing-hygiene delete, never allow one). Listing hygiene
+ * component 24 reads this (patch 2026-10-31, job-324 incident: units packed
+ * into a working shipment have quantity_remaining 0 and no FBA bucket yet).
+ * Fail-closed: `listAllShipments` coverage tripwire; a detail without orders[]
+ * throws. Each line carries `__shipment_id` and `__shipment_status`.
+ */
+export async function fetchUnshippedShipmentLines(): Promise<VelocityInboundOrder[]> {
+  const shipments = await listAllShipments();
+  const out: VelocityInboundOrder[] = [];
+  for (const sh of shipments) {
+    if (String(sh.status ?? "").toLowerCase() === "shipped") continue;
+    const det = await getShipmentDetail(sh.shipment_id);
+    for (const line of shipmentOrdersFrom(det, sh.shipment_id)) out.push({ ...line, __shipment_status: String(sh.status ?? "") });
+  }
+  return out;
+}
+
 // Pure union by (order_number, asin), first-source-wins with the precedence
 // inbound > inventory > shipment. Exported for tests.
 export function unionKnownOrders(

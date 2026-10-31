@@ -11,7 +11,7 @@
 //              SKUs that still qualify fire; no breaker (Release is the
 //              override). Refused unless the action's live gate is set.
 import {
-  evaluateClose, evaluateDelete, countKey, loadBasis, loadSkuFacts, attachPipeline, velocityOnHandByAsin,
+  evaluateClose, evaluateDelete, countKey, loadBasis, loadSkuFacts, attachPipeline, velocityOnHandByAsin, velocityInShipmentsByAsin,
   ledgerAvailability, breakerFor, liveGate, fireClose, fireDelete, readListingLive, readInventoryLive,
   realScDeps, isAmznGr, hygieneScope, type HygieneAction, type ScDeps, type SkuFacts, type Evaluation, type Basis,
 } from "./listing-hygiene";
@@ -94,17 +94,23 @@ class Tally {
   }
 }
 
-/** Run-wide blockers for delete: ledger, then Velocity. Returns the outcome every SKU gets, or null. */
+/** Run-wide blockers for delete: ledger, then Velocity (on hand AND unshipped shipments — both legs in one try, either failing skips the run). Returns the outcome every SKU gets, or null. */
 async function deleteRunBlocker(facts: SkuFacts[], query: QueryLike, t: Tally, now: Date): Promise<string | null> {
   const ledger = await ledgerAvailability(query, now);
   if (!ledger.ok) { t.note("_ledger", ledger.reason); return "ledger_unavailable"; }
   t.note("_ledger", `coverage ${ledger.coverage.from}..${ledger.coverage.to}`);
-  let orders;
-  try { orders = await hygieneDeps.sc.velocity(); }
+  let orders, lines;
+  try { orders = await hygieneDeps.sc.velocity(); lines = await hygieneDeps.sc.velocityShipments(); }
   catch (err: any) { t.note("_velocity", `unavailable: ${err?.message ?? err}`); return "velocity_unavailable"; }
   const onHand = velocityOnHandByAsin(orders);
-  for (const f of facts) f.velocityOnHand = f.asins.reduce((s, a) => s + (onHand.get(a.toUpperCase()) ?? 0), 0);
-  t.note("_velocity", `${orders.length} order(s) read, ${onHand.size} ASIN(s) with units on hand`);
+  const inShipments = velocityInShipmentsByAsin(lines);
+  for (const f of facts) {
+    f.velocityOnHand = f.asins.reduce((s, a) => s + (onHand.get(a.toUpperCase()) ?? 0), 0);
+    f.velocityInShipments = f.asins.reduce((s, a) => s + (inShipments.get(a.toUpperCase())?.units ?? 0), 0);
+    f.velocityShipmentIds = Array.from(new Set(f.asins.flatMap((a) => inShipments.get(a.toUpperCase())?.shipments ?? [])));
+  }
+  const shipmentIds = new Set(lines.map((l) => String((l as any).__shipment_id ?? "")).filter(Boolean));
+  t.note("_velocity", `${orders.length} order(s) read, ${onHand.size} ASIN(s) with units on hand; ${lines.length} line(s) in ${shipmentIds.size} unshipped shipment(s), ${inShipments.size} ASIN(s) with units packed`);
   return null;
 }
 
