@@ -29,6 +29,7 @@
     "supplier:merge": "tsx script/merge-supplier.ts",
     "backfill:po-model": "tsx script/backfill-po-model.ts",
     "backfill:po-promos": "tsx script/backfill-po-promos.ts",
+    "po:reconcile-confirmations": "tsx script/po-confirm-reconcile.ts",
     "migrate:po-status": "tsx script/migrate-po-status.ts",
     "db:push": "drizzle-kit push"
   },

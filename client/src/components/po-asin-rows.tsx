@@ -106,7 +106,9 @@ async function patchJson(url: string, method: string, body?: unknown): Promise<a
 
 // ── Action Items (row-level Status, patch row-level-status §2.1) ─────────────
 // Sentence case (Maria 2026-10-29) — the server stores these exact labels (po_line_action_items, migration 074).
-export const ACTION_ITEM_OPTIONS = ["Need to return", "Missing / damaged from supplier", "Confirm refund / replacement", "ATTN: Velocity", "See comments", "SHIP", "Received - FBM"];
+export const ACTION_ITEM_OPTIONS = ["Need to return", "Missing / damaged from supplier", "Confirm refund / replacement", "ATTN: Velocity", "See comments", "SHIP", "Received - FBM",
+  // Capture PO patch (2026-10-31): set by the system (confirmation-email reconcile, subscriptions), cleared by hand.
+  "Confirm order details", "Subscription renews", "Review renewal PO"];
 // §7: tinted chips only. SHIP indigo; Received - FBM green; Need to return orange; the attention items amber.
 export const EXTRA_UNITS_SHIPPED = "Extra units shipped";
 export function actionChipClass(item: string): string {
@@ -116,6 +118,7 @@ export function actionChipClass(item: string): string {
   if (t === "ship") return "bg-indigo-500/10 text-indigo-600 dark:text-indigo-400";
   if (t === "received - fbm") return "bg-green-500/10 text-green-700 dark:text-green-400";
   if (t === "need to return") return "bg-orange-500/10 text-orange-600 dark:text-orange-400";
+  if (t === "subscription renews") return "bg-sky-500/10 text-sky-700 dark:text-sky-400";
   return "bg-amber-500/10 text-amber-600 dark:text-amber-400";
 }
 export const chipBase = "inline-block rounded-sm px-1.5 py-0.5 text-[11px] whitespace-nowrap";

@@ -15,6 +15,7 @@ import express, { type Router, type Request, type Response } from "express";
 import { query as defaultQuery } from "./db";
 import { matchTrackingRows, setDomainMapEntry, findPos, findPosByOrderDigits, type PoRef } from "./tracking-match";
 import { ingestTracking } from "./tracking-ingest";
+import { reconcileConfirmations } from "./po-confirm-reconcile";
 import { pushTracking } from "./tracking-push";
 import { gmailClient } from "./gmail-client";
 import type { QueryLike } from "./scheduler/types";
@@ -49,6 +50,14 @@ export function createTrackingRouter(deps: { query?: QueryLike } = {}): Router {
     } catch (err) { fail(res, err); }
   });
 
+  // Confirmation-email reconcile (po-ai-prefill §6.7, SPEC §26): the manual trigger of component 27. `{ dryRun: true }` returns the diffs and writes nothing.
+  router.post("/api/pos/reconcile-confirmations", async (req: Request, res: Response) => {
+    const dryRun = req.body?.dryRun === true;
+    try {
+      const r = await reconcileConfirmations({ query, deps: { gmail: gmailClient() }, dryRun });
+      res.json(r);
+    } catch (err: any) { res.status(500).json({ message: err?.message ?? String(err) }); }
+  });
   router.get("/api/tracking/unmatched", async (_req: Request, res: Response) => {
     try {
       const rows = (await query(

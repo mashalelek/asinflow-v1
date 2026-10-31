@@ -2193,6 +2193,7 @@ the ledger stage is the `refresh_runs.stage` key the component writes.
 | 24 | Delete long-dead listings (listing hygiene) | daily | CALL-14 `deleteListingsItem`, per SKU + Velocity `/inbound` + `/inventory` | `24_delete_dead` | every closed SKU; **00:00 pass only** |
 | 25 | PO tracking ingest (§26, 2026-10-21) | daily | Gmail API (orders@, DWD, `gmail.readonly`) + matching | `25_po_tracking_ingest` | the mailbox since the watermark; **00:00 pass only**, after 9 |
 | 26 | PO tracking push (§26) | daily | Velocity `GET /inbound` + known orders, `GET` / `PUT /inbound/:order_id` | `26_po_tracking_push` | matched tracking rows; **00:00 pass only**, right after 25 |
+| 27 | PO confirmation reconcile (§26 "Confirmation emails", 2026-10-31) | daily | Gmail API (orders@) — no AI | `27_po_confirmations` | order-confirmation mail since the watermark vs AF POs; **00:00 pass only**, after 26; manual: `POST /api/pos/reconcile-confirmations` |
 
 Dependencies the order encodes: 10 before 13 (fees need the fresh price)
 (9 before 15 was retired 2026-10-17 — the inventory snapshot's ordered_qty
@@ -7158,6 +7159,31 @@ the unmatched queue shows "no number in the email"). Building it later:
 plain text → `{carrier, tracking_number, retailer_order_id, ship_to,
 items[]}`, `source = 'ai'`, only for those placeholders. The 2026-10-21
 local backfill dry run had 53 such rows.
+
+### Confirmation emails → "Confirm order details" (patch po-ai-prefill §6.7, 2026-10-31)
+
+`server/po-confirm-reconcile.ts`, component **27** (00:00 pass, after the
+tracking pass) and `POST /api/pos/reconcile-confirmations` (`{ dryRun }`
+returns the diffs). No AI. The mailbox is read like the tracking ingest
+(`-category:promotions after:<watermark − 24 h>`, watermark
+`confirm.gmail_watermark`); an email is an order confirmation by its
+subject ("order confirmed / confirmation", "Thanks for your (delivery)
+order", "Thank you for your JCPenney.com order #…", "We've received your
+order", "Your order is confirmed.") and not a shipping, cancel, refund or
+return email. From it: the order #(s) (the tracking parser's extractor —
+Walmart's dashed `2000152-48695719` matches AF's `200015248695719`), the
+**total** ("Order total" / "Grand total" first, else the last "Total"), the
+**line count** (Qty / Quantity / × N occurrences; absent → not compared).
+The PO is found by the order # (exact key, then the base id for `_N`
+suffixes), narrowed by the sender's supplier (the tracking domain map)
+when ids collide across suppliers; several left → ambiguous, counted, not
+raised. The comparison is order #, total (> $0.01) and line count; any
+difference raises **Confirm order details** on every line of the PO
+(`po_line_action_items`, source auto, reason = the diff, e.g. "total $20.00
+in AF, $18.47 in the email; 3 lines in AF, 2 in the email"), once (the
+open-item unique index). **Nothing is written to the PO.** Maria clears
+the item by hand once she has checked. `npm run po:reconcile-confirmations
+[-- --live] [--since YYYY-MM-DD]` is the read-only check / backfill.
 
 ### `ships_to` from prep cost (2026-10-22)
 

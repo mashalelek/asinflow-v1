@@ -20,11 +20,11 @@ import { ASIN_CHECKPOINT_EVERY, ComponentError } from "./types";
 setRunnerLogger(() => {});
 
 describe("the component sequence is fixed", () => {
-  // 1–21 (scheduler v1) + the listing-hygiene components (SPEC §11, 2026-10-19).
-  const SEQUENCE = Array.from({ length: 26 }, (_, i) => i + 1);
-  it("the components, numbered in array order, daily block = 2..8 + 22–24 (listing hygiene) + 25–26 (PO tracking), hourly otherwise", () => {
+  // 1–21 (scheduler v1) + the listing-hygiene components (SPEC §11, 2026-10-19) + PO tracking 25–26 + the confirmation reconcile 27 (2026-10-31).
+  const SEQUENCE = Array.from({ length: 27 }, (_, i) => i + 1);
+  it("the components, numbered in array order, daily block = 2..8 + 22–24 (listing hygiene) + 25–27 (PO tracking, confirmations), hourly otherwise", () => {
     expect(COMPONENTS.map((c) => c.n)).toEqual(SEQUENCE);
-    expect(COMPONENTS.filter((c) => c.tier === "daily").map((c) => c.n)).toEqual([2, 3, 4, 5, 6, 7, 8, 22, 23, 24, 25, 26]);
+    expect(COMPONENTS.filter((c) => c.tier === "daily").map((c) => c.n)).toEqual([2, 3, 4, 5, 6, 7, 8, 22, 23, 24, 25, 26, 27]);
     expect(COMPONENTS[0].key).toBe("01_sc_discovery");
     expect(COMPONENTS[20].key).toBe("21_actual_fees");
     expect(new Set(COMPONENTS.map((c) => c.key)).size).toBe(SEQUENCE.length);

@@ -21,7 +21,14 @@ export const ACTION_ITEMS = [
   "See comments",
   "SHIP",            // only meaningful when the PO ships from the house (manual)
   "Received - FBM",  // only when the PO ships from the house (manual)
+  // Capture PO patch (2026-10-31): set by the system, cleared by hand (or by the system when resolved).
+  "Confirm order details", // §6.7: the order-confirmation email differs from the PO (order #, total, line count)
+  "Subscription renews",   // §27: a subscription's next order is within 7 days
+  "Review renewal PO",     // §27: a renewal PO created from a confirmation email
 ] as const;
+export const CONFIRM_ORDER_DETAILS = "Confirm order details";
+export const SUBSCRIPTION_RENEWS = "Subscription renews";
+export const REVIEW_RENEWAL_PO = "Review renewal PO";
 /** Pre-2026-10-29 spellings (migrations 056 / 058) → today's label. */
 export const LEGACY_ACTION_ITEMS: Readonly<Record<string, ActionItem>> = {
   "Need to Return": "Need to return",

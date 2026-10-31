@@ -39,13 +39,14 @@ export const ONBOARDING_COMPONENTS: readonly number[] = [2, 3, 4, 5, 6, 7, 8, 10
  * or 24 with `params.listing_hygiene`; the ledger backfill → 23 with
  * `params.ledger_window`).
  */
-export const SCHEDULED_ONLY_COMPONENTS: readonly number[] = [22, 23, 24, 25, 26];
+export const SCHEDULED_ONLY_COMPONENTS: readonly number[] = [22, 23, 24, 25, 26, 27, 28];
 export function explicitlyAuthorized(n: number, params: Record<string, any> | null | undefined): boolean {
   if (n === 23) return params?.ledger_window != null;
   if (n === 22) return params?.listing_hygiene?.action === "close";
   if (n === 24) return params?.listing_hygiene?.action === "delete";
-  // PO tracking has no job entry point — Sync tracking is a direct call.
-  if (n === 25 || n === 26) return false;
+  // PO tracking has no job entry point — Sync tracking is a direct call. Same for the
+  // confirmation reconcile (27) and the subscription pass (28): their manual triggers are routes.
+  if (n === 25 || n === 26 || n === 27 || n === 28) return false;
   return true;
 }
 export type JobTarget = "main" | "bulk";
