@@ -2255,11 +2255,23 @@ job never widens, and dead ASINs stay out of every other component.
   FBA bucket is zero (Unfulfillable and Researching included), nothing is
   in the pipeline for the ASIN — `asin_po_pipeline` On Order = 0 and At
   Prep = 0 (`server/asin-po-pipeline.ts`, §6) and no Velocity units on
-  hand (live `/inbound` + `/inventory`, `quantity_remaining > 0`); there
+  hand (live `/inbound` + `/inventory`, `quantity_remaining > 0`) **and
+  none packed into a Velocity shipment that has not shipped** (2026-10-31:
+  every `GET /shipments` row with `status ≠ shipped` — `working` today, any
+  unknown status counts — its detail lines' quantity, one count per
+  shipment × order; evidence `pipeline.velocity_in_shipments` +
+  `velocity_shipment_ids`; either leg failing → `velocity_unavailable`).
+  Origin: job 324 (2026-10-30) deleted 11 closed SKUs whose 76 units sat
+  in one `working` Velocity shipment — packed units have
+  `quantity_remaining = 0` and no FBA bucket until Velocity creates the FBA
+  shipment, which then failed on the deleted MSKUs
+  (`claude_spec-patch-hygiene-velocity-shipments.md`); there
   is **no open-PO blocker** (2026-10-19: a PO with nothing left to arrive
   would hold deletes with no visible cause and no exit) — and the OOS clock has run: ever-stocked
-  `max(ledger_last_stocked_date, sku_fba_inventory.last_nonzero_at)` more
-  than 60 days ago; never-stocked (no ledger history in the 18-month
+  `max(ledger_last_stocked_date, sku_fba_inventory.last_nonzero_at,
+  listing createdDate)` more than 60 days ago (the createdDate term,
+  2026-10-31, restarts the clock for a RELISTED SKU, whose new listing is
+  younger than its old stock history; evidence `clock.created_considered`); never-stocked (no ledger history in the 18-month
   window and never nonzero in 15) `listing_created_at` more than 14 days
   ago. `deleteListingsItem` is asynchronous (ACCEPTED ≠ done); the next
   probe verifies (404 / empty summaries). Outcomes: `deleted` ·

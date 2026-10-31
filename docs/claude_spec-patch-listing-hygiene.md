@@ -398,6 +398,26 @@ expected to trip both — that is the intended review point for the backlog.
   every other component. Trigger: LIN-GRO-4SQ-CBS-001 (B00032C4SQ) was marked
   dead 5 minutes before the 2026-10-23 manual close run and was left open.
 
+- **2026-10-31 (Maria): rule 3 — the Velocity pipeline check also counts
+  units packed into a Velocity shipment that has not shipped; rule 4 — a
+  relisted SKU's ever-stocked clock restarts at the relist.** Job 324
+  (2026-10-30 05:45 UTC) deleted 11 closed SKUs — 76 units — that sat in one
+  Velocity shipment in status `working`: packed lines carry
+  `quantity_remaining = 0` (so "on hand" was 0) and the FBA shipment does
+  not exist yet (so every inbound bucket was 0); rule 3's note "units
+  shipped but not yet received are caught by the inbound buckets" holds only
+  after Velocity has created the FBA shipment, which then failed on the
+  deleted MSKUs. Now: Σ line quantity over the detail of every
+  `GET /shipments` row with `status ≠ shipped` (any unknown status counts),
+  one count per shipment × order, per ASIN like on-hand; either > 0 →
+  `skip_pipeline:velocity`; the shipments leg is read in the same try as
+  on-hand, so a failure of either is `velocity_unavailable` for the run.
+  Evidence: `pipeline.velocity_in_shipments`, `pipeline.velocity_shipment_ids`.
+  Clock: `max(ledger_last_stocked_date, inventory_last_nonzero_at, listing
+  createdDate)` — only a relisted SKU has a listing younger than its stock
+  dates, so nothing changes for the rest; evidence `clock.created_considered`.
+  Component 22 is unchanged. Patch: `claude_spec-patch-hygiene-velocity-shipments.md`.
+
 ## Out of scope
 
 - Showing the new buckets in the Stock hover (easy follow-up; display only).
