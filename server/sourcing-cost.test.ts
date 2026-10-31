@@ -436,3 +436,24 @@ describe("parseYMDLocal", () => {
     expect(parseYMDLocal(null)).toBeNull();
   });
 });
+
+// po-ai-prefill §7.1 (Maria 2026-10-31): the submitted cost is the newest PO
+// row's Sourcing cost (col AR, before the gift-card discount); a row with no
+// sourcing_cost yet falls back to actual_cogs and is counted as such.
+describe("Sourcing cost (col AR) is what gets submitted", () => {
+  const mkQuery2 = (costs: Record<string, { actual_cogs: any; cogs_source: string | null; sourcing_cost?: any }>) =>
+    async (_sql: string, params?: any[]) => ({ rows: (params?.[0] ?? []).map((asin: string) => ({ asin, actual_cogs: costs[asin]?.actual_cogs ?? null, cogs_source: costs[asin]?.cogs_source ?? null, sourcing_cost: costs[asin]?.sourcing_cost ?? null })) });
+  it("prefers sourcing_cost over actual_cogs, falls back when it is missing, and reports both counts", async () => {
+    sheetRows = [poRow("B001", "8/12/2026"), poRow("B002", "8/12/2026")];
+    rawRowsRead = 2;
+    const wb = makeWorkbook([["B001", "X001", 1, 1, "AMAZON"], ["B002", "X002", 1, 1, "AMAZON"]]);
+    const { buffer, summary, details } = await buildSourcingCost(wb, FROM, TO, mkQuery2({
+      B001: { actual_cogs: "4.96", cogs_source: "po_sheet", sourcing_cost: "5.33" },
+      B002: { actual_cogs: "7.00", cogs_source: "po_sheet" },
+    }));
+    expect(readBack(buffer).map((r) => r["Seller New Cost"])).toEqual([5.33, 7]);
+    expect(summary.sourcingFromAr).toBe(1);
+    expect(summary.sourcingFallback).toBe(1);
+    expect(details.written.map((w) => [w.asin, w.basis])).toEqual([["B001", "sourcing_cost"], ["B002", "actual_cogs"]]);
+  });
+});

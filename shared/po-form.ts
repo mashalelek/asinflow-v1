@@ -15,17 +15,35 @@
 //     must give the same number of sets.
 //   - live totals: subtotal = Σ price × qty (a typed subtotal that differs is
 //     a warning, not an error).
-// Cost / unit per ASIN is prefilled by shared/po-cost.ts (the one formula,
-// measured against the imported 2026 cost / unit — v1 matches 74%) and can
-// be overridden per ASIN.
+// Costs per ASIN row come from shared/po-cost.ts (formula v2, patch
+// po-ai-prefill §7.1 as corrected 2026-10-31): Sourcing cost (col AR), COGS
+// (col Y, + the per-ASIN adjustment) and Paid cost; COGS can be overridden
+// per ASIN. Promos (several per PO, §7.2) decide what counts: a promo with
+// counts_toward_cogs = false (rewards, by default) is added back.
 
-import { adjustedProductCost, costPerUnitPrefill, type CostHeader } from "./po-cost";
+import { adjustedProductCost, allocateAsinCosts, COST_FORMULA_VERSION, type CostHeader } from "./po-cost";
+/** Stamped on purchase_orders.cost_formula_version by every form save; NULL = imported, never recomputed. */
+export const COST_FORMULA_VERSION_SAVED = COST_FORMULA_VERSION;
 
 /** Shown (not blocking) on an ASIN whose Ordered is not a whole number. */
 export const WHOLE_PACKS_WARNING = "Upload to Velocity will skip this line — Velocity only accepts whole packs";
 
 export const SOLD_AS_OPTIONS = ["individual", "multi-pack", "bundle"] as const;
 export type SoldAs = (typeof SOLD_AS_OPTIONS)[number];
+export const PROMO_TYPES = ["sale", "coupon", "rewards"] as const;
+export type PromoType = (typeof PROMO_TYPES)[number];
+/** §7.2 default: sale and coupon count toward COGS, rewards does not. */
+export const promoCountsByDefault = (type: string): boolean => type !== "rewards";
+
+export interface PoFormPromo {
+  type: PromoType | "";
+  description: string;
+  amount: string;   // $ off the order, when stated
+  percent: string;  // % off, when stated
+  counts_toward_cogs: boolean;
+}
+export interface PoFormAdjustment { amount: string; reason: string }
+export const emptyPromo = (type: PromoType = "sale"): PoFormPromo => ({ type, description: "", amount: "", percent: "", counts_toward_cogs: promoCountsByDefault(type) });
 
 export interface PoFormProduct {
   product_name: string;
@@ -60,6 +78,10 @@ export interface PoFormState {
   products: PoFormProduct[];
   /** ASIN → cost / unit typed by hand; absent = the computed value. */
   cost_overrides: Record<string, string>;
+  /** §7.2: the order's promos; absent on forms saved before they existed. */
+  promos?: PoFormPromo[];
+  /** §6.5: ASIN → COGS adjustment (amount + reason, e.g. "prep materials $3"). */
+  cogs_adjustments?: Record<string, PoFormAdjustment>;
 }
 
 /**
@@ -75,7 +97,7 @@ export const emptyProduct = (): PoFormProduct => ({ product_name: "", supplier_s
 export const emptyPoForm = (today: string): PoFormState => ({
   supplier: "", order_id: "", order_date: today, subtotal: "", tax: "", sh_donations: "", discount: "", refund_amount: "", order_total: "",
   payment_method: "", weighted_gc_discount_pct: "", cashback_site: "", cashback_pct: "", purchased_by: "", notes: "",
-  products: [emptyProduct()], cost_overrides: {},
+  products: [emptyProduct()], cost_overrides: {}, promos: [], cogs_adjustments: {},
 });
 
 const t = (s: unknown) => (typeof s === "string" ? s.trim() : s == null ? "" : String(s).trim());
@@ -95,8 +117,12 @@ export interface PoFormAsin {
   prep_cost: string;
   qty: number;                 // Ordered, ASIN units
   unique_products: number | null;
-  cost_per_unit: string | null;
-  computed_cost_per_unit: string | null;
+  cost_per_unit: string | null;          // COGS as saved: the override, else computed (adjustment included)
+  computed_cost_per_unit: string | null; // COGS computed (adjustment included)
+  sourcing_cost: string | null;          // col AR
+  paid_cost: string | null;
+  cogs_adjustment: string | null;
+  cogs_adjustment_reason: string | null;
   lines: Array<{ index: number; product_name: string | null; supplier_sku: string | null; price: string | null; qty_ordered: number; asin_qty_per_product: string; adjusted_product_cost: string | null; position: number }>;
 }
 
@@ -107,6 +133,8 @@ export interface PoFormCheck {
   productErrors: Record<number, string[]>; // by product index
   computedSubtotal: number;
   effectiveOrderTotal: number;
+  /** Σ amount of the promos that do not count toward COGS (added back). */
+  nonCountingPromoAmount: number;
   asins: PoFormAsin[];
 }
 
@@ -126,6 +154,21 @@ export function checkPoForm(f: PoFormState): PoFormCheck {
   }
   const products = Array.isArray(f.products) ? f.products : [];
   if (products.length === 0) errors.push("Add at least one product");
+  // §7.2 promos: type, money / percent shape; a non-counting promo without an amount cannot be added back.
+  let nonCountingPromoAmount = 0;
+  (Array.isArray(f.promos) ? f.promos : []).forEach((p, i) => {
+    const label = `Promo ${i + 1}${t(p.description) ? ` (${t(p.description)})` : ""}`;
+    if (!(PROMO_TYPES as readonly string[]).includes(String(p.type))) errors.push(`${label}: type must be sale, coupon or rewards`);
+    const amt = moneyNum(p.amount ?? "");
+    if (amt != null && (Number.isNaN(amt) || amt < 0)) errors.push(`${label}: amount must be an amount with at most 2 decimals`);
+    const pc = t(p.percent ?? "").replace("%", "");
+    if (pc !== "" && (!/^\d+(\.\d{1,4})?$/.test(pc) || Number(pc) > 100)) errors.push(`${label}: percent must be between 0 and 100`);
+    if (p.counts_toward_cogs === false) {
+      if (amt != null && !Number.isNaN(amt)) nonCountingPromoAmount += amt;
+      else warnings.push(`${label} does not count toward COGS but has no amount, so it cannot be added back — it counts until an amount is entered`);
+    }
+  });
+  nonCountingPromoAmount = r2(nonCountingPromoAmount);
 
   let computedSubtotal = 0;
   products.forEach((p, i) => {
@@ -154,10 +197,10 @@ export function checkPoForm(f: PoFormState): PoFormCheck {
   const effectiveOrderTotal = typedTotal != null && !Number.isNaN(typedTotal) ? typedTotal : r2(subtotal + n("tax") + n("sh_donations") - n("discount"));
   const gcRaw = t(f.weighted_gc_discount_pct).replace("%", "");
   const cbRaw = t(f.cashback_pct).replace("%", "");
-  // Cost / unit prefill: the one formula in shared/po-cost.ts (measured against the imported 2026 costs).
+  // Costs: the one formula in shared/po-cost.ts (v2 — discount pro rata, rewards added back, no tax / shipping).
   const costHeader: CostHeader = {
-    subtotal, orderTotal: effectiveOrderTotal, gcPct: /^\d+(\.\d+)?$/.test(gcRaw) ? Number(gcRaw) : null,
-    tax: n("tax"), shDonations: n("sh_donations"), discount: n("discount"), cashbackPct: /^\d+(\.\d+)?$/.test(cbRaw) ? Number(cbRaw) : null,
+    subtotal, discount: n("discount"), gcPct: /^\d+(\.\d+)?$/.test(gcRaw) ? Number(gcRaw) : null, nonCountingPromoAmount,
+    orderTotal: effectiveOrderTotal, tax: n("tax"), shDonations: n("sh_donations"), cashbackPct: /^\d+(\.\d+)?$/.test(cbRaw) ? Number(cbRaw) : null,
   };
 
   // Group by ASIN (first appearance order).
@@ -193,17 +236,25 @@ export function checkPoForm(f: PoFormState): PoFormCheck {
       const adj = price == null || Number.isNaN(price) ? null : adjustedProductCost(price, costHeader);
       return { index: i, product_name: t(p.product_name) || null, supplier_sku: t(p.supplier_sku) || null, price: price == null || Number.isNaN(price) ? null : price.toFixed(2), qty_ordered: Number(t(p.qty_ordered)) || 0, asin_qty_per_product: t(p.asin_qty_per_product) || "1", adjusted_product_cost: adj == null ? null : adj.toFixed(2), position: pos };
     });
-    const prefill = costPerUnitPrefill(costHeader, lines.map((l) => ({ price: l.price == null ? null : Number(l.price), qty: l.qty_ordered })), qty);
-    const computed = prefill == null ? null : prefill.toFixed(2);
+    const adjRaw = f.cogs_adjustments?.[asin];
+    const adjAmt = adjRaw == null || t(adjRaw.amount) === "" ? null : moneyNum(adjRaw.amount);
+    if (adjAmt != null && Number.isNaN(adjAmt)) errors.push(`${asin}: COGS adjustment must be an amount with at most 2 decimals`);
+    if (adjAmt != null && !Number.isNaN(adjAmt) && adjAmt !== 0 && !t(adjRaw?.reason)) errors.push(`${asin}: a COGS adjustment needs a reason`);
+    const adjustment = adjAmt != null && !Number.isNaN(adjAmt) ? adjAmt : 0;
+    const costs = allocateAsinCosts(costHeader, lines.map((l) => ({ price: l.price == null ? null : Number(l.price), qty: l.qty_ordered })), qty, adjustment);
+    const computed = costs == null ? null : costs.cogs.toFixed(2);
     const ovRaw = t(f.cost_overrides?.[asin] ?? "");
     const ov = ovRaw === "" ? null : moneyNum(ovRaw);
     if (ov != null && (Number.isNaN(ov) || ov < 0)) errors.push(`${asin}: cost / unit must be an amount ≥ 0`);
     asins.push({
       asin, sold_as: first.sold_as, units_per_pack: first.sold_as === "individual" ? 1 : Number(t(first.units_per_pack)) || 1,
       prep_cost: r2(moneyNum(first.prep_cost) ?? 0).toFixed(2), qty, unique_products: first.sold_as === "bundle" ? idx.length : null,
-      cost_per_unit: ov != null && !Number.isNaN(ov) ? ov.toFixed(2) : computed, computed_cost_per_unit: computed, lines,
+      cost_per_unit: ov != null && !Number.isNaN(ov) ? ov.toFixed(2) : computed, computed_cost_per_unit: computed,
+      sourcing_cost: costs == null ? null : costs.sourcing.toFixed(2), paid_cost: costs == null ? null : costs.paid.toFixed(2),
+      cogs_adjustment: adjustment !== 0 ? adjustment.toFixed(2) : null, cogs_adjustment_reason: adjustment !== 0 ? t(adjRaw?.reason) || null : null,
+      lines,
     });
   }
   const ok = errors.length === 0 && Object.keys(productErrors).length === 0;
-  return { ok, errors, warnings, productErrors, computedSubtotal, effectiveOrderTotal: r2(effectiveOrderTotal), asins };
+  return { ok, errors, warnings, productErrors, computedSubtotal, effectiveOrderTotal: r2(effectiveOrderTotal), nonCountingPromoAmount, asins };
 }

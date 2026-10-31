@@ -10,16 +10,22 @@
 // "Bulk Update" button on the Manage Your Sourcing Cost page, run it through
 // here, upload the result. That round-trip is the whole integration.
 //
-// Cost source is actual_cogs AND ONLY where cogs_source = 'po_sheet'. Sourcing
-// cost sets Amazon's reimbursement valuation for lost/damaged units and is
-// gated on invoice review, so only a cost with a PO behind it is defensible.
-// estimated_cogs and manual/csv-sourced actuals are never submitted — an ASIN
-// without a PO cost is skipped and named in the summary, never guessed.
+// Cost source (po-ai-prefill §7.1, Maria 2026-10-31): the newest non-canceled
+// PO ASIN row's **Sourcing cost** (col AR — COGS before the gift-card
+// discount, promos applied; the gift-card discount is financing, not product
+// cost), AND ONLY where asin_estimates.cogs_source = 'po_sheet'. A row with
+// no sourcing_cost yet falls back to actual_cogs (col Y) and is counted
+// (sourcingFallback). Sourcing cost sets Amazon's reimbursement valuation
+// for lost/damaged units and is gated on invoice review, so only a cost with
+// a PO behind it is defensible. estimated_cogs and manual/csv-sourced
+// actuals are never submitted — an ASIN without a PO cost is skipped and
+// named in the summary, never guessed.
 import * as XLSX from "xlsx";
 import type { SheetRow } from "./google-sheets";
 import { loadAfPoRows } from "./po-af-source";
 import { parseMDY, formatYMD } from "./velocity-export";
 import { query as defaultQuery } from "./db";
+import { NEWEST_PO_ORDER } from "./po-entry-seq";
 
 // Amazon's header row, verbatim. Columns are located BY HEADER TEXT, never by
 // index — Amazon has reordered download templates before and a silent index
@@ -49,7 +55,9 @@ export interface ScSummary {
   includedRows: number;         // in-range purchase rows
   purchasedAsins: number;       // distinct ASINs from includedRows
   // ── DB (cost resolution) ──
-  asinsWithPoCogs: number;      // purchased ASINs carrying a usable po_sheet actual_cogs
+  asinsWithPoCogs: number;      // purchased ASINs carrying a usable po_sheet cost
+  sourcingFromAr: number;       // of those, cost = the newest PO row's sourcing_cost (col AR)
+  sourcingFallback: number;     // of those, cost = actual_cogs (no sourcing_cost on the newest row yet)
   // ── Workbook (write) ──
   sheetsScanned: number;
   workbookRowsRead: number;     // data rows across all Part_N sheets
@@ -78,7 +86,7 @@ export interface ScDetails {
   // Rows the reduction guard held back, with both numbers so the gap is visible.
   wouldLowerAsins: Array<{ asin: string; approved: number; cost: number; source: string | null }>;
   // Every cost actually written, for the server log and the summary modal.
-  written: Array<{ asin: string; fnskus: string[]; cost: number; wasApproved: number | null; source: string | null }>;
+  written: Array<{ asin: string; fnskus: string[]; cost: number; wasApproved: number | null; source: string | null; basis?: "sourcing_cost" | "actual_cogs" }>;
 }
 
 export interface ScResult {
@@ -158,9 +166,11 @@ export async function buildSourcingCost(
     purchased.add(row.asin.trim().toUpperCase());
   }
 
-  // ── 2. Resolve cost: actual_cogs, po_sheet-sourced only ───────────────────
+  // ── 2. Resolve cost: the newest PO row's sourcing_cost, po_sheet-sourced only ──
   const asinList = Array.from(purchased);
   const costByAsin = new Map<string, number>();
+  const basisByAsin = new Map<string, "sourcing_cost" | "actual_cogs">();
+  let sourcingFromAr = 0, sourcingFallback = 0;
   const details: ScDetails = {
     noCogsRowAsins: [], notPoSourcedAsins: [], badCostAsins: [],
     notInWorkbookAsins: [], alreadyApprovedAsins: [], wouldLowerAsins: [], written: [],
@@ -168,14 +178,18 @@ export async function buildSourcingCost(
 
   if (asinList.length > 0) {
     const { rows: costRows } = await q(
-      `SELECT a.asin, e.actual_cogs, e.cogs_source
+      `SELECT a.asin, e.actual_cogs, e.cogs_source,
+              (SELECT pa.sourcing_cost FROM po_asins pa JOIN purchase_orders p ON p.id = pa.po_id
+                WHERE pa.asin = a.asin
+                  AND NOT COALESCE((SELECT bool_and(l.qty_canceled IS NOT NULL AND l.qty_canceled >= COALESCE(l.qty_ordered, 0)) FROM po_line_items l WHERE l.po_asin_id = pa.id), false)
+                ORDER BY ${NEWEST_PO_ORDER} LIMIT 1) AS sourcing_cost
          FROM asins a
          LEFT JOIN asin_estimates e ON e.asin = a.asin
         WHERE a.asin = ANY($1::text[])`,
       [asinList],
     );
-    const seen = new Map<string, { cogs: any; source: string | null }>();
-    for (const r of costRows) seen.set(String(r.asin).toUpperCase(), { cogs: r.actual_cogs, source: r.cogs_source ?? null });
+    const seen = new Map<string, { cogs: any; source: string | null; sourcing: any }>();
+    for (const r of costRows) seen.set(String(r.asin).toUpperCase(), { cogs: r.actual_cogs, source: r.cogs_source ?? null, sourcing: r.sourcing_cost ?? null });
 
     for (const asin of asinList) {
       const hit = seen.get(asin);
@@ -185,11 +199,16 @@ export async function buildSourcingCost(
       if (hit.source !== "po_sheet") {
         skips.notPoSourced++; details.notPoSourcedAsins.push({ asin, source: hit.source }); continue;
       }
-      const n = hit.cogs == null ? NaN : Number(hit.cogs);
+      // Sourcing cost (col AR) when the newest PO row carries one; else the COGS it was before the switch.
+      const s = hit.sourcing == null ? NaN : Number(hit.sourcing);
+      const useSourcing = Number.isFinite(s) && s > 0;
+      const n = useSourcing ? s : hit.cogs == null ? NaN : Number(hit.cogs);
       if (!Number.isFinite(n) || n <= 0) {
         skips.badCost++; details.badCostAsins.push({ asin, cogs: String(hit.cogs) }); continue;
       }
       costByAsin.set(asin, round2(n));
+      basisByAsin.set(asin, useSourcing ? "sourcing_cost" : "actual_cogs");
+      if (useSourcing) sourcingFromAr++; else sourcingFallback++;
     }
   }
 
@@ -287,7 +306,7 @@ export async function buildSourcingCost(
 
   for (const [asin, fnskus] of Array.from(matchedFnskus.entries())) {
     const a = approvedByAsin.get(asin);
-    details.written.push({ asin, fnskus, cost: costByAsin.get(asin)!, wasApproved: a?.was ?? null, source: a?.source ?? null });
+    details.written.push({ asin, fnskus, cost: costByAsin.get(asin)!, wasApproved: a?.was ?? null, source: a?.source ?? null, basis: basisByAsin.get(asin) });
   }
   details.written.sort((x, y) => x.asin.localeCompare(y.asin));
 
@@ -308,6 +327,7 @@ export async function buildSourcingCost(
       rawRowsRead, blankAsinRows, includedRows,
       purchasedAsins: purchased.size,
       asinsWithPoCogs: costByAsin.size,
+      sourcingFromAr, sourcingFallback,
       sheetsScanned: partSheets.length,
       workbookRowsRead,
       workbookAsins: workbookAsins.size,

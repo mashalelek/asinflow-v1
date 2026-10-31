@@ -25,14 +25,29 @@ describe("checkPoForm", () => {
     expect(c.asins).toHaveLength(1);
     expect(c.asins[0]).toMatchObject({ asin: "B0TEST0001", qty: 5, sold_as: "individual", units_per_pack: 1, cost_per_unit: "5.44", prep_cost: "1.00", unique_products: null });
   });
-  it("cost / unit follows price × (order total ÷ subtotal) × (1 − weighted GC %) and can be overridden", () => {
-    // tetley 2026: price 25.61, subtotal 512.20, total 362.49 → 18.12 (the imported cost / unit)
-    const tetley = base({ subtotal: "512.20", order_total: "362.49", products: [{ ...emptyProduct(), price: "25.61", qty_ordered: "20", asin: "B001AXZ7Q8" }] });
-    expect(checkPoForm(tetley).asins[0].cost_per_unit).toBe("18.12");
-    // target 2026: gc 2.15 %, price 25.49 → 24.94
-    expect(checkPoForm(base({ weighted_gc_discount_pct: "2.15", products: [{ ...emptyProduct(), price: "25.49", qty_ordered: "5", asin: "B0TEST0002" }] })).asins[0].cost_per_unit).toBe("24.94");
+  it("costs (formula v2, §7.1): the order discount pro rata and the GC % as a factor; tax / shipping never; the override wins", () => {
+    // tetley 2026: price 25.61, subtotal 512.20, discount 149.71 → X = 25.61 × (1 − 149.71 ÷ 512.20) = 18.12; tax and S&H change nothing
+    const tetley = base({ subtotal: "512.20", discount: "149.71", tax: "30", sh_donations: "9.99", products: [{ ...emptyProduct(), price: "25.61", qty_ordered: "20", asin: "B001AXZ7Q8" }] });
+    expect(checkPoForm(tetley).asins[0]).toMatchObject({ cost_per_unit: "18.12", sourcing_cost: "18.12", paid_cost: "18.12", cogs_adjustment: null });
+    // target 2026: gc 2.15 %, price 25.49 → COGS 24.94, Sourcing (before the GC discount) 25.49
+    expect(checkPoForm(base({ weighted_gc_discount_pct: "2.15", products: [{ ...emptyProduct(), price: "25.49", qty_ordered: "5", asin: "B0TEST0002" }] })).asins[0]).toMatchObject({ cost_per_unit: "24.94", sourcing_cost: "25.49" });
     const ov = checkPoForm({ ...tetley, cost_overrides: { B001AXZ7Q8: "17.50" } });
     expect(ov.asins[0]).toMatchObject({ cost_per_unit: "17.50", computed_cost_per_unit: "18.12" });
+  });
+  it("promos (§7.2): a rewards promo is added back onto COGS / Sourcing, Paid keeps it; one without an amount only warns; the adjustment needs a reason", () => {
+    const item = { ...emptyProduct(), price: "10", qty_ordered: "1", asin: "B0TEST0009" };
+    const rewards = base({ discount: "5", products: [item], promos: [{ type: "rewards", description: "Michaels rewards", amount: "5", percent: "", counts_toward_cogs: false }] });
+    const c = checkPoForm(rewards);
+    expect(c.ok).toBe(true);
+    expect(c.nonCountingPromoAmount).toBe(5);
+    expect(c.asins[0]).toMatchObject({ cost_per_unit: "10.00", sourcing_cost: "10.00", paid_cost: "5.00" });
+    const noAmount = checkPoForm({ ...rewards, promos: [{ type: "rewards", description: "Michaels rewards", amount: "", percent: "", counts_toward_cogs: false }] });
+    expect(noAmount.asins[0].cost_per_unit).toBe("5.00");
+    expect(noAmount.warnings.join()).toMatch(/cannot be added back/);
+    expect(checkPoForm({ ...rewards, promos: [{ type: "" as any, description: "", amount: "", percent: "", counts_toward_cogs: true }] }).errors).toContain("Promo 1: type must be sale, coupon or rewards");
+    const adj = checkPoForm(base({ products: [item], cogs_adjustments: { B0TEST0009: { amount: "3", reason: "prep materials" } } }));
+    expect(adj.asins[0]).toMatchObject({ cost_per_unit: "13.00", computed_cost_per_unit: "13.00", sourcing_cost: "10.00", cogs_adjustment: "3.00", cogs_adjustment_reason: "prep materials" });
+    expect(checkPoForm(base({ products: [item], cogs_adjustments: { B0TEST0009: { amount: "3", reason: "" } } })).errors).toContain("B0TEST0009: a COGS adjustment needs a reason");
   });
   it("pack math: 5 units of a 2-pack (2.5 ASIN units) is allowed with the whole-packs warning, not blocked", () => {
     const p = { ...emptyProduct(), price: "6.56", qty_ordered: "5", asin: "B007K83C46", asin_qty_per_product: "0.5", sold_as: "multi-pack" as const, units_per_pack: "2" };

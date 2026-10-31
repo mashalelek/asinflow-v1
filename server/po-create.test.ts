@@ -32,19 +32,30 @@ describe("createPoFromForm", () => {
     const r = await createPoFromForm(q, form(), 7, now);
     expect(r).toEqual({ poId: "id1", asins: 2, lines: 3 });
     const po = calls.find((c) => /^INSERT INTO purchase_orders/.test(c.sql))!;
-    expect(po.sql).toMatch(/'manual', \$16, \$17\)/);
+    expect(po.sql).toMatch(/'manual', \$16, \$17, \$18\)/);
     expect(po.params[16]).toBe("velocity"); // ships_to (SPEC §26) defaults to Velocity
+    expect(po.params[17]).toBe(2);          // cost_formula_version: the §7.1 rule — recomputable; imported POs carry NULL
     expect(po.params.slice(0, 4)).toEqual(["zz-200015000000001", "2026-10-18", "walmart.com", "76.20"]);
     expect(po.params[15]).toBe(now.getTime());
     const pas = calls.filter((c) => /^INSERT INTO po_asins/.test(c.sql)).map((c) => c.params);
+    // … then the three costs (Sourcing, Paid) and the adjustment (none here).
     expect(pas).toEqual([
-      ["id1", "B0GNHTYGPF", "Catalog title", "SKU-1", 7, "7.00", "1.00", "bundle", 2, 2],
-      ["id1", "B0TEST0001", "Catalog title", "SKU-1", 5, "5.44", "1.00", "individual", 1, null],
+      ["id1", "B0GNHTYGPF", "Catalog title", "SKU-1", 7, "7.00", "1.00", "bundle", 2, 2, "7.00", "7.00", null, null],
+      ["id1", "B0TEST0001", "Catalog title", "SKU-1", 5, "5.44", "1.00", "individual", 1, null, "5.44", "5.44", null, null],
     ]);
     const lines = calls.filter((c) => /^INSERT INTO po_line_items/.test(c.sql)).map((c) => [c.params[1], c.params[2], c.params[3], c.params[6]]);
     expect(lines).toEqual([["id2", 0, "Epsom Salt Soak", 7], ["id2", 1, "Body Wash", 7], ["id3", 0, "Pens", 5]]);
     const log = calls.find((c) => /INSERT INTO po_edit_log/.test(c.sql))!;
     expect(log.params).toEqual(["id1", 7, "po", "id1", "PO created", null, "walmart.com zz-200015000000001 — 2 ASIN(s), 3 product(s)"]);
+    expect(calls.some((c) => /INSERT INTO po_promos/.test(c.sql))).toBe(false);
+  });
+  it("writes the promos, and logs a hand-typed cost / unit so a later recompute leaves it alone", async () => {
+    const { q, calls } = fake();
+    await createPoFromForm(q, { ...form(), cost_overrides: { B0TEST0001: "4.00" }, promos: [{ type: "rewards", description: "Rewards $5", amount: "5", percent: "", counts_toward_cogs: false }] }, 7, new Date(2026, 9, 18));
+    const promo = calls.find((c) => /INSERT INTO po_promos/.test(c.sql))!;
+    expect(promo.params).toEqual(["id1", 0, "rewards", "Rewards $5", "5", null, false, "Rewards $5"]);
+    const typed = calls.find((c) => /INSERT INTO po_edit_log/.test(c.sql) && c.params[4] === "cost_per_unit")!;
+    expect(typed.params).toEqual(["id1", 7, "asin", "id3", "cost_per_unit", "5.80", "4.00"]); // computed 5.80: the $5 rewards with no order discount is added back pro rata (item-level rewards)
   });
   it("refuses an invalid form (400) and an existing (supplier, order #) (409) before writing anything", async () => {
     const bad = fake();
