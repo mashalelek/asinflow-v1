@@ -39,7 +39,8 @@ describe("New PO form (po-af-owned §4)", () => {
     const dlg = readFileSync(resolve(__dirname, "new-po-dialog.tsx"), "utf8");
     expect(dlg).toMatch(/const check = useMemo\(\(\) => checkPoForm\(form\), \[form\]\);/);
     expect(dlg).toMatch(/fetch\("\/api\/pos", \{ method: "POST", headers: \{ "Content-Type": "application\/json" \}, body: JSON\.stringify\(\{ \.\.\.settled\.form, ships_to: shipsTo \}\) \}\)/);
-    expect(dlg).toMatch(/fetch\(`\/api\/pos\/asin-lookup\?q=\$\{encodeURIComponent\(q\)\}`\)/);
+    // The ASIN picker (po-ai-prefill §6.4, 2026-10-31): history from the same supplier first, then title matches, then the typed search.
+    expect(dlg).toMatch(/fetch\(`\/api\/pos\/asin-suggest\?\$\{u\}`\)/);
   });
 });
 

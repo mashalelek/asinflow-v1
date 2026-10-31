@@ -6047,7 +6047,46 @@ replaces it. Migration 061 adds `po_edit_log`, `deleted_pos` and
   field (`entity` po / line / asin / shipment, old → new as text, the
   user). History tab on PO detail (`GET /api/pos/:id/history`). Every edit
   re-runs the auto-close rule for its PO.
-- **New PO form (§4).** "+ New PO" on the POs page. State =
+- **New PO form — Capture PO patch (`docs/claude_spec-patch-po-ai-prefill.md`
+  §6, 2026-10-31).** Also reachable as a page, `/pos/new` (`?prefill=<id>`
+  opens it filled from a capture, §4.5). Order fields: supplier, order #,
+  date, **Purchased by** (a user; the logged-in one by default; `GET
+  /api/pos/purchasers`), Ships to, **Email used** (settings `po_emails`
+  suggested), subtotal, **Discount, Tax, Shipping** (separate), order
+  total, weighted GC %, cashback site / % / **status**, **Subscription**
+  (yes · every N weeks), PO notes. **Lines as bought** (§6.3): product
+  name, retailer SKU, price, qty, **retailer units / pack**, per-line
+  notes; the ASIN row beneath each — **ASIN qty = qty × retailer units ÷
+  ASIN units per pack**, shown as the math and editable (typing it pins the
+  yield; "reset" returns to the math); a bundle = several lines → one
+  ASIN; a split = "Add ASIN to this line" (the same line again with its own
+  qty / ASIN). **ASIN picker** (§6.4, `GET /api/pos/asin-suggest`,
+  `server/asin-suggest.ts`): before typing, ASINs on past PO lines from the
+  same supplier whose product name matches (exact normalized, then token
+  overlap ≥ 0.5, newest first) → AF title-word matches → the model's guess
+  (amber); typing searches ASIN, title, SKU, brand. AF's title / SKU / pack
+  fields win when AF knows the ASIN (stone); "Not in AF — Add to AF"
+  (`POST /api/pos/add-asin`) inserts it and runs the onboarding refresh.
+  **Pack override** (§6.5): changing a known ASIN's sold as / units per pack
+  asks once — *This PO only* (default) or *Update ASIN in AF* (`pack_updates`
+  → `applyAsinPackUpdate`, `server/asin-pack.ts`, also `POST
+  /api/asins/:asin/pack`: writes `asins` with an `asin_field_log` row, moves
+  every open PO's row to the new size with its lines' yields scaled so the
+  units stay, recomputes Ordered and a v2 PO's costs; "Pack size mismatch"
+  then shows on any open PO whose Velocity order was created with the old
+  size; closed POs untouched). **ASIN rows** show Sourcing cost, COGS / unit
+  (override wins), Paid cost and the **COGS adjustment** (amount + required
+  reason). **Promos** (type, description, amount / %, *counts toward COGS*
+  toggle — rewards off by default) and **Payments** (method, nickname, last
+  4, amount, GC % for gift cards; Σ vs the order total is a warning) are
+  blocks on the form. **Markers** (§6.1): amber ring = from the model,
+  stone ring = from AF, none = typed; editing clears the marker; the banner
+  names the supplier, pages and time, lists the prefill's warnings, and
+  can show the captured text (the raw-text fallback). Save writes
+  `po_payments` / `po_promos`, `email_used`, `purchased_by_user_id`,
+  `cashback_status`, `subscription`, line notes, `source = extension` when
+  prefilled (`manual` otherwise), then applies the chosen pack updates.
+- **New PO form (§4, 2026-10-18 — the base).** "+ New PO" on the POs page. State =
   `shared/po-form.ts` `PoFormState`, a plain JSON shape (every value a
   string as typed) so the AI prefill can fill it. `checkPoForm` runs live
   and again on the server: supplier, order #, real date; (supplier, order

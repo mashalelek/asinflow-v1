@@ -16,6 +16,7 @@ import Repricer from "@/pages/repricer";
 import Analytics from "@/pages/analytics";
 import ComingSoon from "@/pages/coming-soon";
 import PurchaseOrders, { PurchaseOrderDetailPlaceholder } from "@/pages/purchase-orders";
+import PoNew from "@/pages/po-new";
 import { CreditCard, TrendingUp, Truck } from "lucide-react";
 
 function Router() {
@@ -30,6 +31,8 @@ function Router() {
         <Route path="/analytics" component={Analytics} />
         <Route path="/purchase-orders" component={PurchaseOrders} />
         <Route path="/purchase-orders/:id" component={PurchaseOrderDetailPlaceholder} />
+        {/* Capture PO (po-ai-prefill §4.5): the extension opens /pos/new?prefill=<id>. */}
+        <Route path="/pos/new" component={PoNew} />
         <Route path="/gift-cards">
           <ComingSoon title="Gift Cards" icon={CreditCard} />
         </Route>

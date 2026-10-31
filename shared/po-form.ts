@@ -43,6 +43,31 @@ export interface PoFormPromo {
   counts_toward_cogs: boolean;
 }
 export interface PoFormAdjustment { amount: string; reason: string }
+export const PAYMENT_METHODS = ["card", "gift_card", "store_credit", "paypal", "other"] as const;
+export type PaymentMethod = (typeof PAYMENT_METHODS)[number];
+export interface PoFormPayment {
+  method: PaymentMethod | "";
+  nickname: string;
+  last4: string;
+  amount: string;
+  gift_card_discount_pct: string; // gift cards only
+}
+export const emptyPayment = (method: PaymentMethod = "card"): PoFormPayment => ({ method, nickname: "", last4: "", amount: "", gift_card_discount_pct: "" });
+export const CASHBACK_STATUSES = ["pending", "received", "denied"] as const;
+/** Where a prefilled value came from (§6.1 markers): "model" = amber, "af" = stone; absent = typed. */
+export type PrefillSource = "model" | "af";
+export interface PoFormPrefill {
+  /** The server-side cache key of the capture (po_prefill_log.po_id is set from it on save). */
+  id?: string;
+  supplier?: string | null;
+  pages?: number;
+  captured_at?: string | null;
+  warnings?: string[];
+  /** Field path → source. Header: "supplier"; product: "products.0.price"; ASIN rows: "asin.B0…"; promo: "promos.0". */
+  sources: Record<string, PrefillSource>;
+  /** The raw-text fallback (schema failure): the captured text for the side drawer. */
+  raw_text?: string | null;
+}
 export const emptyPromo = (type: PromoType = "sale"): PoFormPromo => ({ type, description: "", amount: "", percent: "", counts_toward_cogs: promoCountsByDefault(type) });
 
 export interface PoFormProduct {
@@ -50,11 +75,16 @@ export interface PoFormProduct {
   supplier_sku: string;
   price: string;
   qty_ordered: string;
+  /** The retailer's pack (e.g. a 12-count) — drives the yield: qty × retailer units ÷ ASIN units per pack (§6.5). Form-only. */
+  retailer_units_per_pack?: string;
   asin: string;
   asin_qty_per_product: string; // yield
+  /** The yield / ASIN qty was typed by hand (the pack math no longer overwrites it). Form-only. */
+  yield_manual?: boolean;
   sold_as: SoldAs;
   units_per_pack: string;
   prep_cost: string;
+  notes?: string;
 }
 
 export interface PoFormState {
@@ -82,6 +112,18 @@ export interface PoFormState {
   promos?: PoFormPromo[];
   /** §6.5: ASIN → COGS adjustment (amount + reason, e.g. "prep materials $3"). */
   cogs_adjustments?: Record<string, PoFormAdjustment>;
+  /** §8.2: the order's payments; Σ amount should equal the order total (a warning). */
+  payments?: PoFormPayment[];
+  email_used?: string;
+  /** users.id of the purchaser (defaults to the logged-in user); purchased_by keeps the display name. */
+  purchased_by_user_id?: string;
+  cashback_status?: string;
+  /** §9: the checkout showed a subscription. */
+  subscription?: { present: boolean; frequency_weeks: string };
+  /** §6.5 pack override: ASIN → true = "Update ASIN in AF" (false / absent = this PO only). */
+  pack_updates?: Record<string, boolean>;
+  /** §6.1: where the prefilled values came from; absent on a hand-typed form. */
+  prefill?: PoFormPrefill;
 }
 
 /**
@@ -93,11 +135,19 @@ export function shipsToFromForm(form: Pick<PoFormState, "products">): "velocity"
   return form.products.some((p) => { const v = Number(String(p.prep_cost ?? "").replace(/[$,\s]/g, "")); return Number.isFinite(v) && v > 0; }) ? "velocity" : "home";
 }
 
-export const emptyProduct = (): PoFormProduct => ({ product_name: "", supplier_sku: "", price: "", qty_ordered: "", asin: "", asin_qty_per_product: "1", sold_as: "individual", units_per_pack: "1", prep_cost: "1" });
+export const emptyProduct = (): PoFormProduct => ({ product_name: "", supplier_sku: "", price: "", qty_ordered: "", retailer_units_per_pack: "1", asin: "", asin_qty_per_product: "1", sold_as: "individual", units_per_pack: "1", prep_cost: "1", notes: "" });
+/** §6.5 pack math: yield = retailer units per pack ÷ ASIN units per pack (so ASIN qty = qty × retailer ÷ ASIN). */
+export function yieldFromPacks(retailerUnitsPerPack: string | undefined, asinUnitsPerPack: string | undefined, soldAs: string): string {
+  const r = Number(String(retailerUnitsPerPack ?? "1").trim()) || 1;
+  const u = soldAs === "individual" ? 1 : Number(String(asinUnitsPerPack ?? "1").trim()) || 1;
+  const y = Math.round((r / u) * 10000) / 10000;
+  return String(y > 0 ? y : 1);
+}
 export const emptyPoForm = (today: string): PoFormState => ({
   supplier: "", order_id: "", order_date: today, subtotal: "", tax: "", sh_donations: "", discount: "", refund_amount: "", order_total: "",
   payment_method: "", weighted_gc_discount_pct: "", cashback_site: "", cashback_pct: "", purchased_by: "", notes: "",
-  products: [emptyProduct()], cost_overrides: {}, promos: [], cogs_adjustments: {},
+  products: [emptyProduct()], cost_overrides: {}, promos: [], cogs_adjustments: {}, payments: [], email_used: "", purchased_by_user_id: "", cashback_status: "",
+  subscription: { present: false, frequency_weeks: "" }, pack_updates: {},
 });
 
 const t = (s: unknown) => (typeof s === "string" ? s.trim() : s == null ? "" : String(s).trim());
@@ -123,7 +173,7 @@ export interface PoFormAsin {
   paid_cost: string | null;
   cogs_adjustment: string | null;
   cogs_adjustment_reason: string | null;
-  lines: Array<{ index: number; product_name: string | null; supplier_sku: string | null; price: string | null; qty_ordered: number; asin_qty_per_product: string; adjusted_product_cost: string | null; position: number }>;
+  lines: Array<{ index: number; product_name: string | null; supplier_sku: string | null; price: string | null; qty_ordered: number; asin_qty_per_product: string; adjusted_product_cost: string | null; position: number; notes: string | null }>;
 }
 
 export interface PoFormCheck {
@@ -169,6 +219,22 @@ export function checkPoForm(f: PoFormState): PoFormCheck {
     }
   });
   nonCountingPromoAmount = r2(nonCountingPromoAmount);
+  // §8.2 payments: method, last 4, amount; Σ amount vs the order total is checked after the total is known.
+  let paymentsSum = 0, paymentsWithAmount = 0;
+  (Array.isArray(f.payments) ? f.payments : []).forEach((p, i) => {
+    const label = `Payment ${i + 1}${t(p.nickname) ? ` (${t(p.nickname)})` : ""}`;
+    if (!(PAYMENT_METHODS as readonly string[]).includes(String(p.method))) errors.push(`${label}: method must be card, gift card, store credit, PayPal or other`);
+    if (t(p.last4) !== "" && !/^\d{4}$/.test(t(p.last4))) errors.push(`${label}: last 4 must be four digits`);
+    const amt = moneyNum(p.amount ?? "");
+    if (amt != null && (Number.isNaN(amt) || amt < 0)) errors.push(`${label}: amount must be an amount with at most 2 decimals`);
+    else if (amt != null) { paymentsSum += amt; paymentsWithAmount++; }
+    const gc = t(p.gift_card_discount_pct ?? "").replace("%", "");
+    if (gc !== "" && (!/^\d+(\.\d{1,4})?$/.test(gc) || Number(gc) > 100)) errors.push(`${label}: gift-card discount must be a percentage between 0 and 100`);
+  });
+  if (t(f.email_used ?? "") !== "" && !/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(t(f.email_used ?? ""))) errors.push("Email used must be an email address");
+  if (t(f.cashback_status ?? "") !== "" && !(CASHBACK_STATUSES as readonly string[]).includes(t(f.cashback_status ?? ""))) errors.push("Cashback status must be pending, received or denied");
+  if (f.subscription?.present && t(f.subscription.frequency_weeks) !== "" && !(/^\d+$/.test(t(f.subscription.frequency_weeks)) && Number(f.subscription.frequency_weeks) > 0)) errors.push("Subscription frequency must be a whole number of weeks");
+  if (t(f.purchased_by_user_id ?? "") !== "" && !/^\d+$/.test(t(f.purchased_by_user_id ?? ""))) errors.push("Purchased by must be a user");
 
   let computedSubtotal = 0;
   products.forEach((p, i) => {
@@ -182,6 +248,8 @@ export function checkPoForm(f: PoFormState): PoFormCheck {
     if (!(SOLD_AS_OPTIONS as readonly string[]).includes(p.sold_as)) perr(i, "sold as must be individual, multi-pack or bundle");
     const upp = t(p.units_per_pack);
     if (p.sold_as !== "individual" && (!/^\d+$/.test(upp) || Number(upp) < 2)) perr(i, `units per pack must be a whole number ≥ 2 for a ${p.sold_as}`);
+    const rupp = t(p.retailer_units_per_pack ?? "1");
+    if (rupp !== "" && (!/^\d+$/.test(rupp) || Number(rupp) < 1)) perr(i, "retailer units / pack must be a whole number ≥ 1");
     const prep = moneyNum(p.prep_cost); if (prep != null && (Number.isNaN(prep) || prep < 0)) perr(i, "prep must be an amount ≥ 0");
     if (price != null && !Number.isNaN(price) && /^\d+(\.\d{1,2})?$/.test(qty)) computedSubtotal += price * Number(qty);
   });
@@ -195,6 +263,7 @@ export function checkPoForm(f: PoFormState): PoFormCheck {
   const n = (k: "tax" | "sh_donations" | "discount") => { const v = moneyNum(f[k]); return v == null || Number.isNaN(v) ? 0 : v; };
   const typedTotal = moneyNum(f.order_total);
   const effectiveOrderTotal = typedTotal != null && !Number.isNaN(typedTotal) ? typedTotal : r2(subtotal + n("tax") + n("sh_donations") - n("discount"));
+  if (paymentsWithAmount > 0 && Math.abs(r2(paymentsSum) - r2(effectiveOrderTotal)) > 0.005) warnings.push(`Payments add up to ${r2(paymentsSum).toFixed(2)}, the order total is ${r2(effectiveOrderTotal).toFixed(2)}`);
   const gcRaw = t(f.weighted_gc_discount_pct).replace("%", "");
   const cbRaw = t(f.cashback_pct).replace("%", "");
   // Costs: the one formula in shared/po-cost.ts (v2 — discount pro rata, rewards added back, no tax / shipping).
@@ -234,7 +303,7 @@ export function checkPoForm(f: PoFormState): PoFormCheck {
     const lines = idx.map((i, pos) => {
       const p = products[i]; const price = moneyNum(p.price);
       const adj = price == null || Number.isNaN(price) ? null : adjustedProductCost(price, costHeader);
-      return { index: i, product_name: t(p.product_name) || null, supplier_sku: t(p.supplier_sku) || null, price: price == null || Number.isNaN(price) ? null : price.toFixed(2), qty_ordered: Number(t(p.qty_ordered)) || 0, asin_qty_per_product: t(p.asin_qty_per_product) || "1", adjusted_product_cost: adj == null ? null : adj.toFixed(2), position: pos };
+      return { index: i, product_name: t(p.product_name) || null, supplier_sku: t(p.supplier_sku) || null, price: price == null || Number.isNaN(price) ? null : price.toFixed(2), qty_ordered: Number(t(p.qty_ordered)) || 0, asin_qty_per_product: t(p.asin_qty_per_product) || "1", adjusted_product_cost: adj == null ? null : adj.toFixed(2), position: pos, notes: t(p.notes ?? "") || null };
     });
     const adjRaw = f.cogs_adjustments?.[asin];
     const adjAmt = adjRaw == null || t(adjRaw.amount) === "" ? null : moneyNum(adjRaw.amount);

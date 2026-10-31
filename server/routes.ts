@@ -22,6 +22,8 @@ import { ACTION_ITEMS, LEGACY_ACTION_ITEMS, DISPLAY_ACTION_ITEMS, REVIEW_VELOCIT
 import { openLineItemsSql, unionActionItems, PO_ACTION_ITEMS_SQL, REVIEW_VELOCITY_REASONS_SQL, PACK_SIZE_MISSING_EXISTS_SQL, PACK_SIZE_MISMATCH_EXISTS_SQL, RECEIVING_MISMATCH_EXISTS_SQL, EXTRA_UNITS_EXISTS_SQL } from "./po-action-items";
 import { editPoHeader, editLine, addLine, removeLine, editAsinRow, loadPoHistory, logEdits, changedFields, asLogText, EditError, type EditResult } from "./po-edit";
 import { createPoFromForm, lookupAsins } from "./po-create";
+import { suggestAsins, asinInfo } from "./asin-suggest";
+import { applyAsinPackUpdate, parsePack } from "./asin-pack";
 import { loadPoGuards, deletePo, cancelPo, assertAsinRowCancelable, reassignShipment } from "./po-guards";
 import { syncPoSheet, type PoSyncResult } from "./po-sheet-sync";
 import { syncVelocityShipments, type VelocitySyncResult } from "./shipment-sync-velocity";
@@ -4498,6 +4500,42 @@ export async function registerRoutes(
     try { res.json({ rows: await lookupAsins(poQuery, typeof req.query.q === "string" ? req.query.q : "") }); }
     catch (err: any) { res.status(500).json({ message: err.message }); }
   });
+  // === New PO form, Capture PO patch (po-ai-prefill §6.4 / §6.5, 2026-10-31) ===
+  // ASIN picker: history from the same supplier, then title matches, then the typed search.
+  app.get("/api/pos/asin-suggest", async (req: Request, res: Response) => {
+    if (!isDbAvailable()) { res.status(503).json({ message: "Database not available" }); return; }
+    const str = (k: string) => (typeof req.query[k] === "string" ? String(req.query[k]) : "");
+    try { res.json({ rows: await suggestAsins(poQuery, { supplier: str("supplier"), product: str("product"), q: str("q"), limit: Number(str("limit")) || 8 }) }); }
+    catch (err: any) { res.status(500).json({ message: err.message }); }
+  });
+  // One ASIN's AF facts (title, SKU, pack fields) — "AF knows the ASIN".
+  app.get("/api/pos/asin-info/:asin", async (req: Request, res: Response) => {
+    if (!isDbAvailable()) { res.status(503).json({ message: "Database not available" }); return; }
+    const asin = String(req.params.asin ?? "").toUpperCase();
+    if (!/^[A-Z0-9]{10}$/.test(asin)) { res.status(400).json({ message: "a 10-character ASIN is required" }); return; }
+    try { const info = await asinInfo(poQuery, asin); res.json({ info }); }
+    catch (err: any) { res.status(500).json({ message: err.message }); }
+  });
+  // "Not in AF — Add to AF": insert the ASIN and run the normal onboarding refresh for it.
+  app.post("/api/pos/add-asin", async (req: Request, res: Response) => {
+    if (!isDbAvailable()) { res.status(503).json({ message: "Database not available" }); return; }
+    const asin = String((req.body ?? {}).asin ?? "").trim().toUpperCase();
+    if (!/^[A-Z0-9]{10}$/.test(asin)) { res.status(400).json({ message: "a 10-character ASIN is required" }); return; }
+    try {
+      const ins = await query(`INSERT INTO asins (asin) VALUES ($1) ON CONFLICT (asin) DO NOTHING RETURNING asin`, [asin]);
+      const r = await enqueueOnboardingJob([asin], { requestedBy: req.session?.userId ?? null });
+      res.json({ inserted: (ins.rowCount ?? 0) > 0, jobId: r.job?.id ?? r.duplicateOf ?? null, info: await asinInfo(poQuery, asin) });
+    } catch (err: any) { res.status(500).json({ message: err.message }); }
+  });
+  // Purchased by (users) and Email used (settings.po_emails) for the form.
+  app.get("/api/pos/purchasers", async (_req: Request, res: Response) => {
+    if (!isDbAvailable()) { res.status(503).json({ message: "Database not available" }); return; }
+    try {
+      const users = (await query(`SELECT id, display_name FROM users WHERE is_active ORDER BY id`)).rows;
+      const emails = (await query(`SELECT value FROM settings WHERE key = 'po_emails'`)).rows[0]?.value ?? [];
+      res.json({ users, emails: Array.isArray(emails) ? emails : [] });
+    } catch (err: any) { res.status(500).json({ message: err.message }); }
+  });
   // §5 guards: what the PO detail's Cancel PO / Delete PO need to know
   // (FBA shipments block both; units still at Velocity are named on delete).
   app.get("/api/pos/:id/guards", async (req: Request, res: Response) => {
@@ -4509,6 +4547,11 @@ export async function registerRoutes(
     try { res.json(await run()); }
     catch (err: any) { res.status(err instanceof EditError ? err.status : 500).json({ message: err?.message ?? String(err) }); }
   };
+  // §6.5 "Update ASIN in AF" from the PO editor (the form applies it on save through createPoFromForm).
+  app.post("/api/asins/:asin/pack", async (req: Request, res: Response) => {
+    if (!isDbAvailable()) { res.status(503).json({ message: "Database not available" }); return; }
+    await sendGuarded(res, () => withPoTx((q) => applyAsinPackUpdate(q, String(req.params.asin ?? ""), parsePack(req.body ?? {}), uid(req), "manual")));
+  });
   app.delete("/api/pos/:id", async (req: Request, res: Response) => {
     if (!isDbAvailable()) { res.status(503).json({ message: "Database not available" }); return; }
     await sendGuarded(res, () => withPoTx((q) => deletePo(q, String(req.params.id ?? ""), uid(req))));

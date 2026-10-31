@@ -32,7 +32,8 @@ describe("createPoFromForm", () => {
     const r = await createPoFromForm(q, form(), 7, now);
     expect(r).toEqual({ poId: "id1", asins: 2, lines: 3 });
     const po = calls.find((c) => /^INSERT INTO purchase_orders/.test(c.sql))!;
-    expect(po.sql).toMatch(/'manual', \$16, \$17, \$18\)/);
+    expect(po.sql).toMatch(/\$22, \$16, \$17, \$18, \$19, \$20, \$21, \$23\)/);
+    expect(po.params[21]).toBe("manual"); // source; "extension" when the form was prefilled from a capture
     expect(po.params[16]).toBe("velocity"); // ships_to (SPEC §26) defaults to Velocity
     expect(po.params[17]).toBe(2);          // cost_formula_version: the §7.1 rule — recomputable; imported POs carry NULL
     expect(po.params.slice(0, 4)).toEqual(["zz-200015000000001", "2026-10-18", "walmart.com", "76.20"]);

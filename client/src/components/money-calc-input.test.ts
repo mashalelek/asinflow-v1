@@ -22,7 +22,8 @@ describe("calculator in the money fields", () => {
   });
   it("every cost / money field uses the calculator: New PO (header money, price, prep, cost / unit), the PO edit drawer's money fields, the price / cost / prep cells", () => {
     const dlg = readFileSync(resolve(__dirname, "new-po-dialog.tsx"), "utf8");
-    for (const k of ["subtotal", "tax", "sh_donations", "discount", "refund_amount", "order_total"]) expect(dlg).toMatch(new RegExp(`field\\("${k}", "[^"]+", \\{[^}]*money: true \\}\\)`));
+    // refund_amount left the form 2026-10-31 (refunds are per line, po_line_refunds — the PO editor); Discount, Tax and Shipping are separate fields.
+    for (const k of ["subtotal", "tax", "sh_donations", "discount", "order_total"]) expect(dlg).toMatch(new RegExp(`field\\("${k}", "[^"]+", \\{[^}]*money: true \\}\\)`));
     expect(dlg).toMatch(/<MoneyCalcInput value=\{p\.price\}/);
     expect(dlg).toMatch(/<MoneyCalcInput value=\{p\.prep_cost\}/);
     expect(dlg).toMatch(/<MoneyCalcInput value=\{form\.cost_overrides\[a\.asin\]/);

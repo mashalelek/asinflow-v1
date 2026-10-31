@@ -14,6 +14,7 @@ import type { QueryLike } from "./scheduler/types";
 import { checkPoForm, shipsToFromForm, COST_FORMULA_VERSION_SAVED, type PoFormState } from "@shared/po-form";
 import { afEntrySeq } from "./po-entry-seq";
 import { logEdits, EditError } from "./po-edit";
+import { applyAsinPackUpdate, parsePack } from "./asin-pack";
 
 const txt = (s: unknown) => { const v = typeof s === "string" ? s.trim() : ""; return v === "" ? null : v; };
 const moneyOr0 = (s: unknown) => { const v = typeof s === "string" ? s.replace(/[$,\s]/g, "") : ""; return v === "" ? "0" : v; };
@@ -32,14 +33,17 @@ export async function createPoFromForm(query: QueryLike, form: PoFormState, user
   const subtotal = txt(form.subtotal) == null ? check.computedSubtotal.toFixed(2) : moneyOr0(form.subtotal);
   const ins = await query(
     `INSERT INTO purchase_orders (order_id, order_date, supplier, action_items, subtotal, tax, sh_donations, discount, refund_amount, order_total,
-       payment_method, weighted_gc_discount_pct, promo, cashback_site, cashback_pct, purchased_by, notes, source, entry_seq, ships_to, cost_formula_version)
-     VALUES ($1, $2, $3, '{}'::text[], $4, $5, $6, $7, $8, $9, $10, $11, NULL, $12, $13, $14, $15, 'manual', $16, $17, $18) RETURNING id`,
+       payment_method, weighted_gc_discount_pct, promo, cashback_site, cashback_pct, purchased_by, notes, source, entry_seq, ships_to, cost_formula_version,
+       email_used, purchased_by_user_id, cashback_status, subscription)
+     VALUES ($1, $2, $3, '{}'::text[], $4, $5, $6, $7, $8, $9, $10, $11, NULL, $12, $13, $14, $15, $22, $16, $17, $18, $19, $20, $21, $23) RETURNING id`,
     [orderId, form.order_date.trim(), supplier, subtotal, moneyOr0(form.tax), moneyOr0(form.sh_donations), moneyOr0(form.discount), moneyOr0(form.refund_amount),
      check.effectiveOrderTotal.toFixed(2), txt(form.payment_method), pct(form.weighted_gc_discount_pct), txt(form.cashback_site), pct(form.cashback_pct),
      txt(form.purchased_by), txt(form.notes), afEntrySeq(now),
      // As chosen on the form; absent → derived from prep cost (SPEC §26).
      form.ships_to === "home" || form.ships_to === "velocity" ? form.ships_to : shipsToFromForm(form),
-     COST_FORMULA_VERSION_SAVED],
+     COST_FORMULA_VERSION_SAVED,
+     txt(form.email_used), txt(form.purchased_by_user_id) == null ? null : Number(form.purchased_by_user_id), txt(form.cashback_status),
+     form.prefill?.id ? "extension" : "manual", form.subscription?.present === true],
   );
   const poId = String(ins.rows[0].id);
   let lines = 0;
@@ -54,9 +58,9 @@ export async function createPoFromForm(query: QueryLike, form: PoFormState, user
     const paId = String(pa.rows[0].id);
     for (const l of a.lines) {
       await query(
-        `INSERT INTO po_line_items (po_id, po_asin_id, position, product_name, supplier_sku, price, item_discount, qty_ordered, qty_returned, asin_qty_per_product, adjusted_product_cost, action_items)
-         VALUES ($1, $2, $3, $4, $5, $6, 0, $7, 0, $8, $9, '{}'::text[])`,
-        [poId, paId, l.position, l.product_name, l.supplier_sku, l.price, l.qty_ordered, l.asin_qty_per_product, l.adjusted_product_cost],
+        `INSERT INTO po_line_items (po_id, po_asin_id, position, product_name, supplier_sku, price, item_discount, qty_ordered, qty_returned, asin_qty_per_product, adjusted_product_cost, action_items, notes)
+         VALUES ($1, $2, $3, $4, $5, $6, 0, $7, 0, $8, $9, '{}'::text[], $10)`,
+        [poId, paId, l.position, l.product_name, l.supplier_sku, l.price, l.qty_ordered, l.asin_qty_per_product, l.adjusted_product_cost, l.notes],
       );
       lines++;
     }
@@ -73,7 +77,20 @@ export async function createPoFromForm(query: QueryLike, form: PoFormState, user
       [poId, i, p.type || null, txt(p.description), moneyOrNull(p.amount), pct(p.percent), p.counts_toward_cogs !== false, txt(p.description)],
     );
   }
+  const payments = Array.isArray(form.payments) ? form.payments : [];
+  for (let i = 0; i < payments.length; i++) {
+    const p = payments[i];
+    await query(
+      `INSERT INTO po_payments (po_id, position, method, nickname, last4, amount, gift_card_discount_pct) VALUES ($1, $2, $3, $4, $5, $6, $7)`,
+      [poId, i, p.method, txt(p.nickname), txt(p.last4), moneyOrNull(p.amount), pct(p.gift_card_discount_pct)],
+    );
+  }
   await logEdits(query, poId, userId, "po", poId, [{ field: "PO created", old: null, new: `${supplier} ${orderId} — ${check.asins.length} ASIN(s), ${lines} product(s)` }]);
+  // §6.5 "Update ASIN in AF": the chosen ASINs' pack fields follow this PO's rows (History row, open POs brought along).
+  for (const a of check.asins) {
+    if (form.pack_updates?.[a.asin] !== true) continue;
+    await applyAsinPackUpdate(query, a.asin, parsePack({ sold_as: a.sold_as, units_per_pack: a.units_per_pack }), userId, "po_form");
+  }
   return { poId, asins: check.asins.length, lines };
 }
 
