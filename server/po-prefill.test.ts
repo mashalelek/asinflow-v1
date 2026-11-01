@@ -1,5 +1,5 @@
 import { describe, it, expect, vi } from "vitest";
-import { CaptureSchema, PrefillSchema, extractPrefill, enrichPrefill, mergedPagesText, supplierForHost, shipsToForStreet, resolveShipTo, storePrefill, getPrefill, _clearPrefillCache, PREFILL_TTL_MS, visibleQtys, inferLineQty, QTY_INFERRED_HINT } from "./po-prefill";
+import { CaptureSchema, PrefillSchema, extractPrefill, enrichPrefill, mergedPagesText, supplierForHost, shipsToForStreet, resolveShipTo, todayEt, storePrefill, getPrefill, _clearPrefillCache, PREFILL_TTL_MS, visibleQtys, inferLineQty, QTY_INFERRED_HINT } from "./po-prefill";
 
 vi.mock("./log", () => ({ log: () => {} }));
 
@@ -73,6 +73,17 @@ describe("enrichment (no AI)", () => {
     expect(out.prefill.sources).toMatchObject({ supplier: "af", order_id: "model", "products.0.price": "model", "products.0.asin": "af", "asin.B08BR4NC22": "af", "promos.0": "model", "payments.0": "model", ships_to: "af" });
     expect(out.prefill.warnings).toEqual(["Payments add up to 38.46, the order total is 40.00"]);
     expect(out.prefill).toMatchObject({ supplier: "michaels.com", pages: 2, captured_at: "2026-10-31T15:00:00Z", raw_text: null });
+  });
+  // v1.2.1 (Maria 2026-11-01): a confirmation page shows no order date → today on the form, plain marker, no warning.
+  it("no order date on the pages → today (America/New_York), no source marker, and the model's note about it is dropped", async () => {
+    const q = async (sql: string) => (/FROM settings WHERE key = ANY/.test(sql) ? { rows: [{ key: "prep_cost", value: 1 }], rowCount: 1 } : { rows: [], rowCount: 0 });
+    const out = await enrichPrefill(q, capture, { ...extraction, orderDate: null, lines: [], payments: [], promos: [], notes: ["Order id and order date are not shown on the pages.", "Shipping is shown as free."] }, null, { id: "", capturedAt: null });
+    expect(out.form.order_date).toBe(todayEt());
+    expect(out.form.order_date).toMatch(/^\d{4}-\d{2}-\d{2}$/);
+    expect(out.prefill.sources.order_date).toBeUndefined();
+    expect(out.prefill.warnings).not.toContain("Order id and order date are not shown on the pages.");
+    expect(out.prefill.warnings).toContain("Shipping is shown as free.");
+    expect(todayEt(new Date("2026-11-02T03:30:00Z"))).toBe("2026-11-01"); // 11:30 pm ET on the 1st
   });
   // Extension v1.2 (SPEC §11): the capture's SELECTED address rides along as `shipTo`; ambiguous pages leave Ships to blank.
   describe("ship-to from the extension", () => {

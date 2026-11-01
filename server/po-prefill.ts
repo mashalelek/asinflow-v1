@@ -70,6 +70,7 @@ export const PREFILL_SYSTEM = `You read captured text from a retailer's checkout
 - subtotal / discount / tax / shipping / total are the order-level figures; discount is the order-level discount (positive).
 - Payments: one entry per method shown with its amount. Gift cards are method "gift_card"; store credit, rewards balance and similar are "store_credit".
 - subscription.present is true only when the pages show a subscription / autoship for this order; frequencyWeeks in weeks (monthly = 4).
+- orderDate null when the pages show no order date (a delivery estimate is not one) — no note about it; AF defaults the date.
 - Promos: ${PROMO_RULES}`;
 
 export function mergedPagesText(c: Capture): string {
@@ -117,6 +118,8 @@ export function supplierForHost(host: string, suppliers: readonly string[], alia
   if (same.length === 1) return { supplier: same[0], known: true };
   return { supplier: h, known: false };
 }
+/** Today's date in the business time zone (YYYY-MM-DD) — the form's order date when the pages show none. */
+export function todayEt(now: Date = new Date()): string { return now.toLocaleDateString("en-CA", { timeZone: "America/New_York" }); }
 /** Pure (v1.2): the extension's selected ship-to beats the model's reading; ambiguous pages (two candidates of different kinds) leave Ships to blank with a warning. */
 export function resolveShipTo(modelStreet: string | null, ext: Capture["shipTo"] | undefined, s: { velocityStreet: string; homeStreets: readonly string[]; prepCost: number }): { ships_to: "velocity" | "home" | ""; prep: string; warning: string } {
   if (ext && !ext.street && ext.candidates.length >= 2) {
@@ -185,6 +188,7 @@ export async function enrichPrefill(query: QueryLike, capture: Capture, x: Prefi
   const mark = (k: string, v: string | null | undefined, src: PrefillSource = "model") => { if (v != null && String(v) !== "") sources[k] = src; };
   form.order_id = x.orderId ?? ""; mark("order_id", form.order_id);
   if (x.orderDate && /^\d{4}-\d{2}-\d{2}$/.test(x.orderDate)) { form.order_date = x.orderDate; mark("order_date", form.order_date); }
+  else form.order_date = todayEt(); // no date on the pages (a confirmation page rarely shows one) → today, plain (typed) marker, no warning (Maria 2026-11-01, v1.2.1)
   form.subtotal = m2(x.subtotal); mark("subtotal", form.subtotal);
   form.discount = m2(x.discount); mark("discount", form.discount);
   form.tax = m2(x.tax); mark("tax", form.tax);
@@ -238,7 +242,7 @@ export async function enrichPrefill(query: QueryLike, capture: Capture, x: Prefi
   form.payments = x.payments.map((p, i) => { sources[`payments.${i}`] = "model"; return { method: p.method, nickname: p.nickname ?? "", last4: p.last4 && /^\d{4}$/.test(p.last4) ? p.last4 : "", amount: m2(p.amount), gift_card_discount_pct: "" }; });
   const paySum = x.payments.reduce((t, p) => t + (p.amount ?? 0), 0);
   if (x.total != null && x.payments.some((p) => p.amount != null) && Math.abs(r2(paySum) - x.total) > 0.01) warnings.push(`Payments add up to ${r2(paySum).toFixed(2)}, the order total is ${x.total.toFixed(2)}`);
-  for (const n of x.notes) warnings.push(n);
+  for (const n of x.notes) if (!/\border\s*date\b/i.test(n) || sources.order_date) warnings.push(n);
   return { form, prefill };
 }
 
