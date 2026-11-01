@@ -25,7 +25,6 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
-import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import { MoneyCalcInput, calcMoney } from "@/components/money-calc-input";
 import { useAuth } from "@/contexts/auth-context";
 import {
@@ -69,9 +68,16 @@ export function settleMoney(f: PoFormState): { ok: true; form: PoFormState } | {
   } catch (e: any) { return { ok: false, error: e.message }; }
 }
 
-// ── ASIN picker (§6.4) ───────────────────────────────────────────────────────
+// ── ASIN picker (§6.4) — a type-ahead combobox (Maria 2026-11-01: never a bare dropdown) ──
 function viaLabel(v: AsinInfo["via"]): string {
   return v === "history_exact" ? "bought before (same name)" : v === "history_tokens" ? "bought before (similar name)" : v === "title" ? "title match" : v === "model" ? "model's guess" : "";
+}
+const ASIN_RE = /^[A-Z0-9]{10}$/;
+/** Pure: the suggestions that match what is typed (ASIN / title / SKU / brand), so the list narrows while the server search is in flight. */
+export function filterSuggestions(opts: readonly AsinInfo[], q: string): AsinInfo[] {
+  const needle = q.trim().toLowerCase();
+  if (!needle) return [...opts];
+  return opts.filter((o) => [o.asin, o.title, o.primary_sku, o.brand, o.matched_name].some((s) => String(s ?? "").toLowerCase().includes(needle)));
 }
 function AsinPicker({ value, product, supplier, guess, known, onPick, onChange, rowIndex, mark }: {
   value: string; product: string; supplier: string; guess: string | null; known: Map<string, AsinInfo>;
@@ -79,48 +85,58 @@ function AsinPicker({ value, product, supplier, guess, known, onPick, onChange, 
 }) {
   const [opts, setOpts] = useState<AsinInfo[]>([]);
   const [open, setOpen] = useState(false);
+  const [hi, setHi] = useState(0);
   const [adding, setAdding] = useState(false);
   const timer = useRef<number | undefined>(undefined);
   const q = value.trim();
+  const qUp = q.toUpperCase();
+  // Suggestions: history → title → the typed search (server), the model's guess appended; 180 ms after the last keystroke.
   useEffect(() => {
     window.clearTimeout(timer.current);
     if (!open) return;
     timer.current = window.setTimeout(() => {
-      const u = new URLSearchParams({ supplier, product, q: q.length >= 2 && !known.has(q.toUpperCase()) ? q : "" });
+      const u = new URLSearchParams({ supplier, product, q: q.length >= 2 && !known.has(qUp) ? q : "" });
       fetch(`/api/pos/asin-suggest?${u}`).then((r) => r.json()).then((d) => {
         const rows: AsinInfo[] = d.rows ?? [];
         for (const r of rows) known.set(r.asin, r);
-        if (guess && /^[A-Z0-9]{10}$/.test(guess) && !rows.some((r) => r.asin === guess)) rows.push({ asin: guess, title: null, primary_sku: null, image_url: null, brand: null, sold_as: null, units_per_pack: null, in_af: known.get(guess)?.in_af ?? false, via: "model" });
-        setOpts(rows);
+        if (guess && ASIN_RE.test(guess) && !rows.some((r) => r.asin === guess)) rows.push({ asin: guess, title: null, primary_sku: null, image_url: null, brand: null, sold_as: null, units_per_pack: null, in_af: known.get(guess)?.in_af ?? false, via: "model" });
+        setOpts(rows); setHi(0);
       }).catch(() => setOpts([]));
     }, 180);
     return () => window.clearTimeout(timer.current);
-  }, [q, product, supplier, open, guess, known]);
+  }, [q, qUp, product, supplier, open, guess, known]);
   // A full ASIN typed or pasted: fetch its AF facts once.
   useEffect(() => {
-    const a = q.toUpperCase();
-    if (!/^[A-Z0-9]{10}$/.test(a) || known.has(a)) return;
-    fetch(`/api/pos/asin-info/${a}`).then((r) => r.json()).then((d) => { known.set(a, d.info ?? { asin: a, title: null, primary_sku: null, image_url: null, brand: null, sold_as: null, units_per_pack: null, in_af: false }); onPick(d.info ?? null, a); }).catch(() => {});
-  }, [q, known, onPick]);
-  const hit = known.get(q.toUpperCase());
+    if (!ASIN_RE.test(qUp) || known.has(qUp)) return;
+    fetch(`/api/pos/asin-info/${qUp}`).then((r) => r.json()).then((d) => { known.set(qUp, d.info ?? { asin: qUp, title: null, primary_sku: null, image_url: null, brand: null, sold_as: null, units_per_pack: null, in_af: false }); onPick(d.info ?? null, qUp); }).catch(() => {});
+  }, [qUp, known, onPick]);
+  const hit = known.get(qUp);
+  const shown = useMemo(() => filterSuggestions(opts, q.length >= 2 && !known.has(qUp) ? q : ""), [opts, q, qUp, known]);
+  const notInAf = ASIN_RE.test(qUp) && hit != null && !hit.in_af;
+  const pick = (o: AsinInfo) => { onChange(o.asin); onPick(o, o.asin); setOpen(false); };
   const addToAf = async () => {
     setAdding(true);
     try {
-      const r = await fetch("/api/pos/add-asin", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ asin: q.toUpperCase() }) });
+      const r = await fetch("/api/pos/add-asin", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ asin: qUp }) });
       const d = await r.json();
       if (!r.ok) throw new Error(d.message || `HTTP ${r.status}`);
-      if (d.info) { known.set(q.toUpperCase(), d.info); onPick(d.info, q.toUpperCase()); }
+      if (d.info) { known.set(qUp, d.info); onPick(d.info, qUp); }
     } catch { /* the status line keeps "not in AF" */ } finally { setAdding(false); }
   };
+  const onKey = (e: React.KeyboardEvent<HTMLInputElement>) => {
+    if (e.key === "ArrowDown") { e.preventDefault(); setOpen(true); setHi((h) => Math.min(h + 1, Math.max(shown.length - 1, 0))); }
+    else if (e.key === "ArrowUp") { e.preventDefault(); setHi((h) => Math.max(h - 1, 0)); }
+    else if (e.key === "Enter") { if (open && shown[hi]) { e.preventDefault(); pick(shown[hi]); } else if (open && shown.length === 0 && notInAf) { e.preventDefault(); void addToAf(); } }
+    else if (e.key === "Escape" || e.key === "Tab") setOpen(false);
+  };
   return (
-    <div className="min-w-[11rem]">
-      <Popover open={open} onOpenChange={setOpen}>
-        <PopoverTrigger asChild>
-          <Input value={value} onChange={(e) => { onChange(e.target.value.toUpperCase()); setOpen(true); }} onFocus={() => setOpen(true)} placeholder="ASIN, title, SKU…" className={`h-8 font-mono text-xs ${mark}`} data-testid={`input-new-po-asin-${rowIndex}`} autoComplete="off" />
-        </PopoverTrigger>
-        <PopoverContent align="start" className="w-[28rem] p-1" onOpenAutoFocus={(e) => e.preventDefault()} data-testid={`asin-suggestions-${rowIndex}`}>
-          {opts.length === 0 ? <div className="px-2 py-1.5 text-xs text-muted-foreground">{product.trim() ? "No suggestions yet — type an ASIN, title or SKU" : "Type an ASIN, title or SKU"}</div> : opts.map((o) => (
-            <button key={o.asin} type="button" className="flex w-full items-start gap-2 rounded px-2 py-1.5 text-left text-xs hover:bg-muted" onClick={() => { onChange(o.asin); onPick(o, o.asin); setOpen(false); }} data-testid={`asin-suggestion-${o.asin}`}>
+    <div className="relative min-w-[11rem]" data-testid={`asin-picker-${rowIndex}`}>
+      <Input value={value} role="combobox" aria-expanded={open} aria-autocomplete="list" onChange={(e) => { onChange(e.target.value.toUpperCase()); setOpen(true); setHi(0); }} onFocus={() => setOpen(true)} onBlur={() => setOpen(false)} onKeyDown={onKey} placeholder="ASIN, title, SKU, brand…" className={`h-8 font-mono text-xs ${mark}`} data-testid={`input-new-po-asin-${rowIndex}`} autoComplete="off" />
+      {open && (
+        <div className="absolute left-0 top-full z-50 mt-1 w-[28rem] rounded-md border bg-popover p-1 text-popover-foreground shadow-md" role="listbox" onMouseDown={(e) => e.preventDefault()} data-testid={`asin-suggestions-${rowIndex}`}>
+          {shown.length === 0 && !notInAf && <div className="px-2 py-1.5 text-xs text-muted-foreground">{q.length >= 2 ? "No match — keep typing an ASIN, title, SKU or brand" : product.trim() ? "No suggestions yet — type an ASIN, title or SKU" : "Type an ASIN, title or SKU"}</div>}
+          {shown.map((o, i) => (
+            <button key={o.asin} type="button" role="option" aria-selected={i === hi} className={`flex w-full items-start gap-2 rounded px-2 py-1.5 text-left text-xs hover:bg-muted ${i === hi ? "bg-muted" : ""}`} onMouseEnter={() => setHi(i)} onClick={() => pick(o)} data-testid={`asin-suggestion-${o.asin}`}>
               {o.image_url ? <img src={o.image_url} alt="" className="h-8 w-8 rounded object-contain bg-white" /> : <div className="h-8 w-8 rounded bg-muted" />}
               <span className="min-w-0 flex-1">
                 <span className="font-mono">{o.asin}</span>
@@ -128,15 +144,16 @@ function AsinPicker({ value, product, supplier, guess, known, onPick, onChange, 
                 {o.via && o.via !== "model" && <span className="ml-1.5 text-[10px] text-muted-foreground">{viaLabel(o.via)}{o.last_ordered ? ` · ${o.last_ordered}` : ""}</span>}
                 {!o.in_af && <span className="ml-1.5 text-[10px] text-amber-700 dark:text-amber-400">not in AF</span>}
                 <span className="block truncate text-muted-foreground" title={o.title ?? o.matched_name ?? ""}>{o.title ?? o.matched_name ?? "—"}</span>
-                {(o.sold_as || o.primary_sku) && <span className="block truncate text-[10px] text-muted-foreground">{[o.primary_sku, o.sold_as ? `${o.sold_as}${o.units_per_pack && o.units_per_pack > 1 ? ` × ${o.units_per_pack}` : ""}` : null].filter(Boolean).join(" · ")}</span>}
+                {(o.sold_as || o.primary_sku || o.brand) && <span className="block truncate text-[10px] text-muted-foreground">{[o.brand, o.primary_sku, o.sold_as ? `${o.sold_as}${o.units_per_pack && o.units_per_pack > 1 ? ` × ${o.units_per_pack}` : ""}` : null].filter(Boolean).join(" · ")}</span>}
               </span>
             </button>
           ))}
-        </PopoverContent>
-      </Popover>
+          {notInAf && <button type="button" className="flex w-full items-center gap-1.5 rounded px-2 py-1.5 text-left text-xs text-amber-700 hover:bg-muted dark:text-amber-400" onClick={addToAf} disabled={adding} data-testid={`button-add-to-af-${rowIndex}`}><Plus className="h-3 w-3" /> {adding ? "Adding…" : `${qUp} is not in AF — Add to AF`}</button>}
+        </div>
+      )}
       <div className="mt-0.5 flex items-center gap-1 truncate text-[10px] text-muted-foreground max-w-[18rem]" title={hit?.title ?? ""}>
         {hit?.in_af ? <><Database className="h-2.5 w-2.5 shrink-0" />{hit.title ?? "in AF"}{hit.primary_sku ? ` · ${hit.primary_sku}` : ""}</>
-          : q.length === 10 ? <><span className="text-amber-600">Not in AF</span><button type="button" onClick={addToAf} disabled={adding} className="underline" data-testid={`button-add-to-af-${rowIndex}`}>{adding ? "Adding…" : "— Add to AF"}</button></> : null}
+          : notInAf ? <><span className="text-amber-600">Not in AF</span><button type="button" onClick={addToAf} disabled={adding} className="underline" data-testid={`button-add-to-af-status-${rowIndex}`}>{adding ? "Adding…" : "— Add to AF"}</button></> : null}
       </div>
     </div>
   );

@@ -6246,7 +6246,12 @@ replaces it. Migration 061 adds `po_edit_log`, `deleted_pos` and
   `server/asin-suggest.ts`): before typing, ASINs on past PO lines from the
   same supplier whose product name matches (exact normalized, then token
   overlap ≥ 0.5, newest first) → AF title-word matches → the model's guess
-  (amber); typing searches ASIN, title, SKU, brand. AF's title / SKU / pack
+  (amber); typing searches ASIN, title, SKU, brand. **The picker is a
+  type-ahead combobox (Maria 2026-11-01), never a bare dropdown:** the
+  list narrows as she types (client-side at once, the server search 180 ms
+  later), ↑ ↓ move, Enter picks the highlighted suggestion, Escape / Tab
+  close, and a 10-character ASIN AF lacks offers "… is not in AF — Add to
+  AF" in the list. AF's title / SKU / pack
   fields win when AF knows the ASIN (stone); "Not in AF — Add to AF"
   (`POST /api/pos/add-asin`) inserts it and runs the onboarding refresh.
   **Pack override** (§6.5): changing a known ASIN's sold as / units per pack
