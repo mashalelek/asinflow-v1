@@ -25,36 +25,55 @@ export function addWeeks(ymd: string, weeks: number): string {
   return `${dt.getFullYear()}-${String(dt.getMonth() + 1).padStart(2, "0")}-${String(dt.getDate()).padStart(2, "0")}`;
 }
 
-export interface PackSource { asin: string; title: string | null; sold_as: string; units_per_pack: number | null; pos: number }
+export type PackValue = { sold_as: string; units_per_pack: number | null };
+/**
+ * The sheet's Col AX / AY, literally (Maria 2026-11-01, review answer 3):
+ * blank AX = no information (null — never "individual"); "individual" = 1
+ * per pack; any other value takes AY (blank AY → null units).
+ */
+export function packFromSheetCells(ax: string | undefined, ay: string | undefined): PackValue | null {
+  const soldAs = String(ax ?? "").trim().toLowerCase();
+  if (!soldAs) return null;
+  if (soldAs === "individual") return { sold_as: "individual", units_per_pack: 1 };
+  const n = Number(String(ay ?? "").trim().replace(/,/g, ""));
+  return { sold_as: soldAs, units_per_pack: Number.isInteger(n) && n >= 1 ? n : null };
+}
+export const packKey = (v: PackValue): string => `${v.sold_as}×${v.units_per_pack ?? "?"}`;
+
+export interface PackRow { asin: string; title: string | null; po: string; pack: PackValue | null }
 export interface PackPlan {
-  set: Array<{ asin: string; sold_as: string; units_per_pack: number }>;
-  gaps: Array<{ asin: string; title: string | null; values: Array<{ sold_as: string; units_per_pack: number; pos: number }> }>;
+  /** Every row with a value agrees → the ASIN takes it (from the newest row). */
+  set: Array<{ asin: string; sold_as: string; units_per_pack: number | null; from_po: string; rows: number }>;
+  /** Rows with a value disagree → "possible mismatch": each distinct pair with its PO numbers, newest first. */
+  mismatches: Array<{ asin: string; title: string | null; values: Array<{ key: string; sold_as: string; units_per_pack: number | null; pos: string[] }> }>;
+  /** No row carries a value at all. */
+  noInfo: Array<{ asin: string; title: string | null; rows: number }>;
 }
 /**
- * asins.sold_as / units_per_pack from the PO rows (amendment 3): every
- * non-canceled 2026 ASIN row with a pack value, grouped per ASIN; all agree →
- * set; disagree → a gap row listing each distinct value with its PO count.
- * ASINs with no row at all are passed in `noValue` (title only) → gap rows.
+ * asins.sold_as / units_per_pack from the sheet-literal pack of every PO
+ * ASIN row (rows newest first). A pair with unknown units ("multi-pack×?")
+ * is its own value, so it never silently agrees with a known count.
  */
-export function planAsinPack(rows: readonly PackSource[], noValue: ReadonlyArray<{ asin: string; title: string | null }>): PackPlan {
-  const byAsin = new Map<string, Map<string, { sold_as: string; units_per_pack: number; pos: number; title: string | null }>>();
+export function planAsinPack(rows: readonly PackRow[]): PackPlan {
+  const byAsin = new Map<string, { title: string | null; rows: number; values: Map<string, { v: PackValue; pos: string[] }> }>();
   for (const r of rows) {
-    const upp = r.sold_as === "individual" ? 1 : Number(r.units_per_pack ?? 1) || 1;
-    const k = `${r.sold_as}×${upp}`;
-    if (!byAsin.has(r.asin)) byAsin.set(r.asin, new Map());
-    const m = byAsin.get(r.asin)!;
-    const cur = m.get(k);
-    if (cur) cur.pos += r.pos; else m.set(k, { sold_as: r.sold_as, units_per_pack: upp, pos: r.pos, title: r.title });
+    if (!byAsin.has(r.asin)) byAsin.set(r.asin, { title: r.title, rows: 0, values: new Map() });
+    const a = byAsin.get(r.asin)!;
+    a.rows++;
+    if (!a.title && r.title) a.title = r.title;
+    if (!r.pack) continue;
+    const k = packKey(r.pack);
+    const cur = a.values.get(k);
+    if (cur) cur.pos.push(r.po); else a.values.set(k, { v: r.pack, pos: [r.po] });
   }
-  const plan: PackPlan = { set: [], gaps: [] };
-  for (const [asin, m] of Array.from(byAsin.entries())) {
-    const vals = Array.from(m.values()).sort((a, b) => b.pos - a.pos);
-    if (vals.length === 1) plan.set.push({ asin, sold_as: vals[0].sold_as, units_per_pack: vals[0].units_per_pack });
-    else plan.gaps.push({ asin, title: vals[0].title, values: vals.map(({ sold_as, units_per_pack, pos }) => ({ sold_as, units_per_pack, pos })) });
+  const plan: PackPlan = { set: [], mismatches: [], noInfo: [] };
+  for (const [asin, a] of Array.from(byAsin.entries())) {
+    const vals = Array.from(a.values.entries());
+    if (vals.length === 0) plan.noInfo.push({ asin, title: a.title, rows: a.rows });
+    else if (vals.length === 1) plan.set.push({ asin, sold_as: vals[0][1].v.sold_as, units_per_pack: vals[0][1].v.units_per_pack, from_po: vals[0][1].pos[0], rows: vals[0][1].pos.length });
+    else plan.mismatches.push({ asin, title: a.title, values: vals.map(([key, x]) => ({ key, sold_as: x.v.sold_as, units_per_pack: x.v.units_per_pack, pos: x.pos })) });
   }
-  for (const n of noValue) if (!byAsin.has(n.asin)) plan.gaps.push({ asin: n.asin, title: n.title, values: [] });
-  plan.set.sort((a, b) => a.asin.localeCompare(b.asin));
-  plan.gaps.sort((a, b) => a.asin.localeCompare(b.asin));
+  for (const l of [plan.set, plan.mismatches, plan.noInfo] as Array<Array<{ asin: string }>>) l.sort((x, y) => x.asin.localeCompare(y.asin));
   return plan;
 }
 

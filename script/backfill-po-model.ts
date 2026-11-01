@@ -16,7 +16,9 @@
 //   payments      purchase_orders.payment_method → po_payments (server/po-payments-parse.ts)
 //   refunds       purchase_orders.refund_amount (+ po_line_items.qty_returned) → po_line_refunds (source 'sheet')
 //   subscriptions purchase_orders.subscription → subscriptions, one per (supplier, ASIN), newest PO (created_from 'sheet')
-//   pack          asins.sold_as / units_per_pack from the 2026 PO ASIN rows (agree → set; else docs/pack-size-gaps-<date>.csv)
+//   pack          po_asins.sold_as / units_per_pack ← the sheet's literal AX/AY (blank → NULL, never individual; Maria 2026-11-01), then
+//                 asins.sold_as / units_per_pack from the rows that have a value, newest first (agree → set; disagree →
+//                 docs/pack-size-mismatch-<date>.csv; none → docs/pack-size-gaps-<date>.csv)
 //   sourcing      po_asins.sourcing_cost ← the Orders sheet's col AR, verbatim, by (supplier, order #, ASIN);
 //                 po_asins.paid_cost ← cost_per_unit (= COGS for imported rows, §7.1). Never touches cost_per_unit.
 // Needs DATABASE_URL; the sourcing stage also needs GOOGLE_SHEET_ID / GOOGLE_CREDENTIALS_PATH.
@@ -26,7 +28,7 @@ import fs from "fs";
 import path from "path";
 import pg from "pg";
 import { parsePaymentMethod } from "../server/po-payments-parse";
-import { frequencyWeeksFromText, subscriptionStatusFromText, addWeeks, planAsinPack, planRefund, csv, type PackSource } from "../server/po-model-backfill";
+import { frequencyWeeksFromText, subscriptionStatusFromText, addWeeks, planAsinPack, packFromSheetCells, packKey, planRefund, csv, type PackRow } from "../server/po-model-backfill";
 import { readPoSheet, moneyVerbatim } from "../server/po-sheet-sync";
 import { COL, t } from "../server/po-import-classify";
 import { NEWEST_PO_ORDER } from "../server/po-entry-seq";
@@ -60,6 +62,25 @@ async function main() {
   if (!has075) console.log("  migration 075 is not applied here — the dry run plans against the empty post-075 state (nothing backfilled yet)");
   const writes: Array<() => Promise<void>> = [];
   const report: string[] = [];
+  // The Orders sheet, read once for the payments / pack / sourcing stages:
+  // rows by (supplier, order #) and by (supplier, order #, ASIN).
+  let sheetCache: { dataCells: string[][]; byPo: Map<string, string[][]>; byRow: Map<string, string[][]> } | null = null;
+  const sheetIndex = async () => {
+    if (sheetCache) return sheetCache;
+    const sheetId = process.env.GOOGLE_SHEET_ID;
+    if (!sheetId) throw new Error("GOOGLE_SHEET_ID not set (payments / pack / sourcing stages read the Orders sheet)");
+    const { dataCells } = await readPoSheet(sheetId);
+    const byPo = new Map<string, string[][]>(), byRow = new Map<string, string[][]>();
+    const push = (m: Map<string, string[][]>, k: string, v: string[]) => { const l = m.get(k); if (l) l.push(v); else m.set(k, [v]); };
+    for (const cells of dataCells) {
+      let supplier = t(cells[COL.supplier]); if (supplier === "shop.tetleyusa.com / WorldPantry.com") supplier = "shop.tetleyusa.com";
+      const orderId = t(cells[COL.orderId]); if (!orderId) continue;
+      push(byPo, `${supplier}\u0000${orderId}`, cells);
+      push(byRow, `${supplier}\u0000${orderId}\u0000${t(cells[COL.asin]).toUpperCase()}`, cells);
+    }
+    sheetCache = { dataCells, byPo, byRow };
+    return sheetCache;
+  };
 
   // ── purchased_by ──────────────────────────────────────────────────────────
   if (stages.has("purchased_by")) {
@@ -78,20 +99,36 @@ async function main() {
 
   // ── payments ──────────────────────────────────────────────────────────────
   if (stages.has("payments")) {
-    const pos = (await q(`SELECT p.id, p.payment_method FROM purchase_orders p
+    const pos = (await q(`SELECT p.id, p.supplier, p.order_id, p.payment_method FROM purchase_orders p
       WHERE COALESCE(trim(p.payment_method), '') <> '' ${has075 ? "AND NOT EXISTS (SELECT 1 FROM po_payments x WHERE x.po_id = p.id)" : ""} ORDER BY p.order_date DESC`)).rows;
     const plan: Array<{ po_id: string; position: number; d: ReturnType<typeof parsePaymentMethod>[number]; raw: string }> = [];
     const byMethod: Record<string, number> = {}; let review = 0, posWithRows = 0;
+    // Maria 2026-11-01 (review answer 2): a text the parser cannot read is
+    // re-read from the Orders sheet (col AI) — she corrects it there. A
+    // differing sheet text replaces purchase_orders.payment_method (an
+    // intake-only exception, like col AS) and is parsed instead.
+    const reread: Array<{ po_id: string; from: string; to: string }> = [];
+    let sheetRows: Map<string, string[][]> | null = null;
     for (const p of pos) {
-      const ds = parsePaymentMethod(p.payment_method);
+      let text: string = p.payment_method;
+      if (parsePaymentMethod(text).some((d) => d.needs_review)) {
+        sheetRows ??= (await sheetIndex()).byPo;
+        const cells = sheetRows.get(`${p.supplier}\u0000${p.order_id}`)?.[0];
+        const sheetText = cells ? t(cells[COL.paymentMethod]) : "";
+        if (sheetText && sheetText !== String(text).trim()) { reread.push({ po_id: p.id, from: text, to: sheetText }); text = sheetText; }
+      }
+      const ds = parsePaymentMethod(text);
       if (ds.length === 0) continue;
       posWithRows++;
-      ds.forEach((d, i) => { plan.push({ po_id: p.id, position: i, d, raw: p.payment_method }); byMethod[d.method] = (byMethod[d.method] ?? 0) + 1; if (d.needs_review) review++; });
+      ds.forEach((d, i) => { plan.push({ po_id: p.id, position: i, d, raw: text }); byMethod[d.method] = (byMethod[d.method] ?? 0) + 1; if (d.needs_review) review++; });
     }
+    if (reread.length) report.push(`  payment text re-read from the sheet on ${reread.length} PO(s): ${reread.map((x) => `${x.po_id.slice(0, 8)}… "${x.from}" → "${x.to}"`).join("; ")}`);
     report.push(`payments: ${pos.length} PO(s) with a payment_method and no po_payments rows → ${plan.length} row(s) on ${posWithRows} PO(s); by method ${JSON.stringify(byMethod)}; needs_review ${review}`);
     const rv = plan.filter((x) => x.d.needs_review);
     if (rv.length) { const f = path.join(outDir, `payment-review-${today}.csv`); fs.writeFileSync(f, csv([["po_id", "raw_text", "method", "nickname", "last4", "amount"], ...rv.map((x) => [x.po_id, x.raw, x.d.method, x.d.nickname, x.d.last4, x.d.amount])])); report.push(`  review list → ${f}`); }
     writes.push(async () => {
+      for (const x of reread) await q(`UPDATE purchase_orders SET payment_method = $2 WHERE id = $1`, [x.po_id, x.to]);
+      if (reread.length) console.log(`  purchase_orders.payment_method re-read from the sheet on ${reread.length} PO(s)`);
       for (const x of plan) await q(`INSERT INTO po_payments (po_id, position, method, nickname, last4, amount, raw_text, needs_review) VALUES ($1,$2,$3,$4,$5,$6,$7,$8)`, [x.po_id, x.position, x.d.method, x.d.nickname, x.d.last4, x.d.amount, x.raw, x.d.needs_review]);
       console.log(`  po_payments: ${plan.length} row(s) inserted`);
     });
@@ -135,26 +172,54 @@ async function main() {
 
   // ── pack ──────────────────────────────────────────────────────────────────
   if (stages.has("pack")) {
-    const rows = (await q(`SELECT pa.asin, a.title, pa.sold_as, pa.units_per_pack, COUNT(*)::int AS pos
+    // Maria 2026-11-01 (review answer 3): blank Col AX/AY = no information,
+    // never "individual". Before 2026-10-29 the intake defaulted a blank AX to
+    // individual × 1 (and derived n-packs from the yield on pre-2026 rows);
+    // those stored values are not data. Per sheet-imported ASIN row the
+    // sheet's literal AX/AY wins: blank → NULL on the po_asins row (open and
+    // closed), a value → that value. Then asins.sold_as / units_per_pack from
+    // the rows that HAVE a value, newest first: all agree → set; disagree →
+    // the "possible mismatch" list; no row with a value → the gaps list.
+    const { byRow } = await sheetIndex();
+    const rows = (await q(`SELECT pa.id, pa.asin, a.title, pa.sold_as, pa.units_per_pack, p.supplier, p.order_id, p.order_date, p.source
         FROM po_asins pa JOIN purchase_orders p ON p.id = pa.po_id LEFT JOIN asins a ON a.asin = pa.asin
-       WHERE p.order_date >= '2026-01-01' AND pa.sold_as IS NOT NULL AND NOT ${asinCanceled}
-       GROUP BY pa.asin, a.title, pa.sold_as, pa.units_per_pack`)).rows as PackSource[];
-    const none = (await q(`SELECT DISTINCT pa.asin, a.title FROM po_asins pa JOIN purchase_orders p ON p.id = pa.po_id LEFT JOIN asins a ON a.asin = pa.asin
-       WHERE p.order_date >= '2026-01-01' AND NOT EXISTS (SELECT 1 FROM po_asins x JOIN purchase_orders px ON px.id = x.po_id WHERE x.asin = pa.asin AND px.order_date >= '2026-01-01' AND x.sold_as IS NOT NULL)`)).rows;
-    const plan = planAsinPack(rows, none);
-    const inAsins = new Set((await q(`SELECT asin FROM asins${has075 ? " WHERE sold_as IS NULL" : ""}`)).rows.map((r) => String(r.asin)));
-    const known = (await q(`SELECT asin FROM asins`)).rows.map((r) => String(r.asin));
-    const knownSet = new Set(known);
-    const toSet = plan.set.filter((s) => inAsins.has(s.asin));
-    report.push(`pack: ${plan.set.length} ASIN(s) agree (${toSet.length} to set — ${plan.set.length - toSet.length} already set or not in asins), ${plan.gaps.length} gap(s) (${plan.gaps.filter((g) => g.values.length > 0).length} disagree, ${plan.gaps.filter((g) => g.values.length === 0).length} blank on every row; ${plan.gaps.filter((g) => !knownSet.has(g.asin)).length} not in asins)`);
+       WHERE p.source = 'sheet_import' ORDER BY ${NEWEST_PO_ORDER}`)).rows;
+    const fixes: Array<{ id: string; sold_as: string | null; upp: number | null; kind: string }> = [];
+    const packRows: PackRow[] = [];
+    let noSheetRow = 0, same = 0;
+    for (const r of rows) {
+      const cells = byRow.get(`${r.supplier}\u0000${r.order_id}\u0000${String(r.asin).toUpperCase()}`)?.[0];
+      const label = `${r.supplier} ${r.order_id} (${ymd(r.order_date)})`;
+      if (!cells) { noSheetRow++; continue; }
+      const pack = packFromSheetCells(cells[COL.soldAs], cells[COL.unitsPerPack]);
+      packRows.push({ asin: String(r.asin).toUpperCase(), title: r.title ?? null, po: label, pack });
+      const afUpp = r.units_per_pack == null ? null : Number(r.units_per_pack);
+      if (!pack) {
+        if (r.sold_as != null || afUpp != null) fixes.push({ id: r.id, sold_as: null, upp: null, kind: r.sold_as === "individual" && afUpp === 1 ? "default individual×1 → NULL" : `${r.sold_as}×${afUpp ?? "?"} (not from AX/AY) → NULL` });
+        else same++;
+      } else if (r.sold_as !== pack.sold_as || afUpp !== pack.units_per_pack) fixes.push({ id: r.id, sold_as: pack.sold_as, upp: pack.units_per_pack, kind: `${r.sold_as ?? "NULL"}×${afUpp ?? "?"} → sheet ${packKey(pack)}` });
+      else same++;
+    }
+    const byKind: Record<string, number> = {}; for (const f of fixes) byKind[f.kind] = (byKind[f.kind] ?? 0) + 1;
+    report.push(`pack rows: ${rows.length} sheet-imported ASIN row(s); ${same} already match the sheet's AX/AY, ${fixes.length} to fix (${Object.entries(byKind).sort((a, b) => b[1] - a[1]).map(([k, n]) => `${k}: ${n}`).join("; ")}), ${noSheetRow} not found in the sheet (untouched)`);
+    const plan = planAsinPack(packRows);
+    const asinsNow = new Map((await q(`SELECT asin, ${has075 ? "sold_as, units_per_pack" : "NULL::text AS sold_as, NULL::int AS units_per_pack"} FROM asins`)).rows.map((x) => [String(x.asin), x]));
+    const toSet = plan.set.filter((s) => asinsNow.has(s.asin) && asinsNow.get(s.asin)!.sold_as == null);
+    const alreadySet = plan.set.filter((s) => asinsNow.has(s.asin) && asinsNow.get(s.asin)!.sold_as != null);
+    const differs = alreadySet.filter((s) => { const c = asinsNow.get(s.asin)!; return c.sold_as !== s.sold_as || (c.units_per_pack == null ? null : Number(c.units_per_pack)) !== s.units_per_pack; });
+    report.push(`pack asins: ${plan.set.length} ASIN(s) whose sheet rows agree (${toSet.length} to set, ${alreadySet.length} already set${differs.length ? ` — ${differs.length} set to a DIFFERENT value, left as they are` : ""}, ${plan.set.length - toSet.length - alreadySet.length} not in asins); ${plan.mismatches.length} possible mismatch(es); ${plan.noInfo.length} with no AX/AY on any row (${plan.noInfo.filter((g) => !asinsNow.has(g.asin)).length} not in asins)`);
     const f = path.join(outDir, `pack-size-gaps-${today}.csv`);
-    fs.writeFileSync(f, csv([["asin", "title", "in_af_catalog", "distinct_values_seen (sold_as×units_per_pack: PO rows)", "sold_as (fill in)", "units_per_pack (fill in)"],
-      ...plan.gaps.map((g) => [g.asin, g.title, knownSet.has(g.asin) ? "yes" : "no", g.values.length === 0 ? "blank on every 2026 row" : g.values.map((v) => `${v.sold_as}×${v.units_per_pack}: ${v.pos}`).join("; "), "", ""])]));
-    report.push(`  gaps → ${f}`);
+    fs.writeFileSync(f, csv([["asin", "title", "in_af_catalog", "po_rows_seen (all blank AX/AY)", "sold_as (fill in)", "units_per_pack (fill in)"], ...plan.noInfo.map((g) => [g.asin, g.title, asinsNow.has(g.asin) ? "yes" : "no", g.rows, "", ""])]));
+    const f2 = path.join(outDir, `pack-size-mismatch-${today}.csv`);
+    fs.writeFileSync(f2, csv([["asin", "title", "in_af_catalog", "sold_as×units", "po_rows (supplier order# (date), newest first)", "correct value (fill in)"],
+      ...plan.mismatches.flatMap((g) => g.values.map((v) => [g.asin, g.title, asinsNow.has(g.asin) ? "yes" : "no", v.key, v.pos.join("; "), ""]))]));
+    report.push(`  gaps → ${f} · possible mismatches → ${f2}`);
     writes.push(async () => {
+      for (const x of fixes) await q(`UPDATE po_asins SET sold_as = $2, units_per_pack = $3 WHERE id = $1`, [x.id, x.sold_as, x.upp]);
+      console.log(`  po_asins pack fields fixed on ${fixes.length} row(s) (sheet AX/AY literal; blank → NULL)`);
       for (const s of toSet) {
         await q(`UPDATE asins SET sold_as = $2, units_per_pack = $3 WHERE asin = $1 AND sold_as IS NULL`, [s.asin, s.sold_as, s.units_per_pack]);
-        await q(`INSERT INTO asin_field_log (asin, field, old_value, new_value, source) VALUES ($1,'sold_as',NULL,$2,'backfill'), ($1,'units_per_pack',NULL,$3,'backfill')`, [s.asin, s.sold_as, String(s.units_per_pack)]);
+        await q(`INSERT INTO asin_field_log (asin, field, old_value, new_value, source) VALUES ($1,'sold_as',NULL,$2,'backfill'), ($1,'units_per_pack',NULL,$3,'backfill')`, [s.asin, s.sold_as, s.units_per_pack == null ? null : String(s.units_per_pack)]);
       }
       console.log(`  asins pack fields set on ${toSet.length} ASIN(s)`);
     });
@@ -162,9 +227,7 @@ async function main() {
 
   // ── sourcing ──────────────────────────────────────────────────────────────
   if (stages.has("sourcing")) {
-    const sheetId = process.env.GOOGLE_SHEET_ID;
-    if (!sheetId) throw new Error("GOOGLE_SHEET_ID not set (sourcing stage)");
-    const { dataCells } = await readPoSheet(sheetId);
+    const { dataCells } = await sheetIndex();
     const AR = 43, AJ = 35;
     const ar = new Map<string, { value: string | null; divzero: boolean; aj: string }>();
     for (const cells of dataCells) {

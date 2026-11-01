@@ -1,6 +1,6 @@
 import { describe, it, expect } from "vitest";
 import { parsePaymentMethod } from "./po-payments-parse";
-import { frequencyWeeksFromText, subscriptionStatusFromText, addWeeks, planAsinPack, planRefund } from "./po-model-backfill";
+import { frequencyWeeksFromText, subscriptionStatusFromText, addWeeks, planAsinPack, packFromSheetCells, packKey, planRefund } from "./po-model-backfill";
 
 // Migration-075 backfills (patch po-ai-prefill §8, amended 2026-10-31).
 describe("parsePaymentMethod", () => {
@@ -48,19 +48,31 @@ describe("subscriptions from the sheet's notes", () => {
   });
 });
 
-describe("planAsinPack", () => {
-  it("sets an ASIN whose rows agree; a disagreement or no value at all is a gap, never a pick", () => {
+describe("packFromSheetCells / planAsinPack (Maria 2026-11-01: the sheet's AX/AY literally, blank = no information)", () => {
+  it("blank AX is null, never individual; individual is 1 per pack; other values take AY, blank AY → unknown units", () => {
+    expect(packFromSheetCells("", "")).toBeNull();
+    expect(packFromSheetCells(undefined, "3")).toBeNull();
+    expect(packFromSheetCells("individual", "")).toEqual({ sold_as: "individual", units_per_pack: 1 });
+    expect(packFromSheetCells("Multi-pack", "6")).toEqual({ sold_as: "multi-pack", units_per_pack: 6 });
+    expect(packFromSheetCells("bundle", "")).toEqual({ sold_as: "bundle", units_per_pack: null });
+    expect(packKey({ sold_as: "bundle", units_per_pack: null })).toBe("bundle×?");
+  });
+  it("agreeing rows set the ASIN from the newest row; disagreeing rows are a possible mismatch with PO numbers; rows without a value are no-info, and never count as individual", () => {
     const plan = planAsinPack([
-      { asin: "B0A", title: "A", sold_as: "multi-pack", units_per_pack: 12, pos: 3 },
-      { asin: "B0A", title: "A", sold_as: "multi-pack", units_per_pack: 12, pos: 2 },
-      { asin: "B0B", title: "B", sold_as: "multi-pack", units_per_pack: 6, pos: 1 },
-      { asin: "B0B", title: "B", sold_as: "individual", units_per_pack: null, pos: 4 },
-    ], [{ asin: "B0C", title: "C" }, { asin: "B0A", title: "A" }]);
-    expect(plan.set).toEqual([{ asin: "B0A", sold_as: "multi-pack", units_per_pack: 12 }]);
-    expect(plan.gaps).toEqual([
-      { asin: "B0B", title: "B", values: [{ sold_as: "individual", units_per_pack: 1, pos: 4 }, { sold_as: "multi-pack", units_per_pack: 6, pos: 1 }] },
-      { asin: "B0C", title: "C", values: [] },
+      { asin: "B001", title: "Agree", po: "a.com 3 (2026-10-01)", pack: { sold_as: "multi-pack", units_per_pack: 6 } },
+      { asin: "B001", title: "Agree", po: "a.com 2 (2026-09-01)", pack: null },
+      { asin: "B001", title: "Agree", po: "a.com 1 (2026-08-01)", pack: { sold_as: "multi-pack", units_per_pack: 6 } },
+      { asin: "B002", title: "Disagree", po: "b.com 9 (2026-10-01)", pack: { sold_as: "individual", units_per_pack: 1 } },
+      { asin: "B002", title: "Disagree", po: "b.com 8 (2026-09-01)", pack: { sold_as: "multi-pack", units_per_pack: 2 } },
+      { asin: "B003", title: "Blank", po: "c.com 7 (2026-10-01)", pack: null },
+      { asin: "B003", title: "Blank", po: "c.com 6 (2026-09-01)", pack: null },
     ]);
+    expect(plan.set).toEqual([{ asin: "B001", sold_as: "multi-pack", units_per_pack: 6, from_po: "a.com 3 (2026-10-01)", rows: 2 }]);
+    expect(plan.mismatches).toEqual([{ asin: "B002", title: "Disagree", values: [
+      { key: "individual×1", sold_as: "individual", units_per_pack: 1, pos: ["b.com 9 (2026-10-01)"] },
+      { key: "multi-pack×2", sold_as: "multi-pack", units_per_pack: 2, pos: ["b.com 8 (2026-09-01)"] },
+    ] }]);
+    expect(plan.noInfo).toEqual([{ asin: "B003", title: "Blank", rows: 2 }]);
   });
 });
 
