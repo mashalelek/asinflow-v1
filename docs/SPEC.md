@@ -5475,7 +5475,16 @@ IS NULL; Maria 2026-10-31):
   street through the same settings the tracking router uses (§4.4), ASIN
   candidates per line (§6.4 — history first, stone; else the model's guess,
   amber), totals cross-checks (lines vs subtotal, payments vs total) and
-  the model's notes → warnings. The result is a `PoFormState` partial plus
+  the model's notes → warnings. **Qty cross-check (Maria 2026-11-01, after
+  a Walmart "12 × $7.97 = $95.64" line came through as qty 1):** the prompt
+  says qty is the ORDERED quantity (the cart stepper / "Qty" / the
+  multiplier), never a "Multipack Quantity"; and when the lines do not add
+  up to the subtotal, a line whose total ÷ unit price is a whole number the
+  pages visibly show as a quantity (a qty / quantity form field, "Qty 12",
+  "12 × $", "$ × 12", or an integer on its own line — `visibleQtys`) gets
+  that qty (`inferLineQty`): amber, with the tooltip "qty inferred from
+  subtotal" (`prefill.hints`, cleared when the field is edited). A line
+  that still does not reconcile keeps the "Lines add up to …" warning. The result is a `PoFormState` partial plus
   the §6.1 markers, parked under a **10-minute in-memory key** (not a
   table, not a draft) — the response is `{ id, url: "/pos/new?prefill=<id>",
   schema_ok, warnings, lines, supplier }`; `GET /api/pos/prefill/:id`

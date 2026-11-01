@@ -44,7 +44,7 @@ export const PrefillSchema = z.object({
   lines: z.array(z.object({
     productName: z.string(),
     retailerSku: z.string().nullable(),
-    qty: z.number().nullable(),
+    qty: z.number().nullable().describe("the ordered quantity of this line: the cart quantity stepper / 'Qty' / the multiplier in '12 × $7.97' — NEVER a 'Multipack Quantity' or pack count"),
     unitsPerPack: z.number().int().nullable().describe("the retailer's pack, e.g. 12 for a 12-count; 1 when sold singly"),
     unitPrice: money.describe("the price actually paid per item after item-level discounts"),
     lineTotal: money,
@@ -63,7 +63,7 @@ export type PrefillExtraction = z.infer<typeof PrefillSchema>;
 export const PREFILL_SYSTEM = `You read captured text from a retailer's checkout pages (cart, shipping, payment, review, order confirmation) and extract the purchase order exactly as the retailer shows it. Rules:
 - Use only what the pages say. Unknown → null. Never invent an order id, price or ASIN.
 - Card and gift-card numbers were masked before you see them ("•••• 1234"): report only the nickname (Visa, Amex, Chase…) and the last 4 digits.
-- unitPrice is the price actually paid per item after any item-level sale or coupon; qty is the number of retailer items; unitsPerPack is the retailer's pack (a "12 ct" is 12), 1 when sold singly.
+- unitPrice is the price actually paid per item after any item-level sale or coupon; qty is the ORDERED quantity of the line — the cart's quantity stepper / "Qty" / the multiplier in "12 × $7.97 = $95.64" (12) — never a "Multipack Quantity", pack count or units per pack; unitsPerPack is the retailer's pack (a "12 ct" is 12), 1 when sold singly. qty × unitPrice must equal lineTotal.
 - subtotal / discount / tax / shipping / total are the order-level figures; discount is the order-level discount (positive).
 - Payments: one entry per method shown with its amount. Gift cards are method "gift_card"; store credit, rewards balance and similar are "store_credit".
 - subscription.present is true only when the pages show a subscription / autoship for this order; frequencyWeeks in weeks (monthly = 4).
@@ -124,6 +124,32 @@ export function shipsToForStreet(street: string | null, s: { velocityStreet: str
 const m2 = (v: number | null | undefined): string => (v == null || !Number.isFinite(v) ? "" : (Math.round(v * 100) / 100).toFixed(2));
 const r2 = (x: number) => Math.round(x * 100) / 100;
 
+// ── Qty cross-check (Maria 2026-11-01: a Walmart "12 × $7.97 = $95.64" line came through as qty 1) ──
+/** Pure: the numbers the captured pages show as a quantity — a form field labelled qty / quantity or holding a bare integer (the cart stepper), "Qty 12", "12 × $7.97", "$7.97 × 12", or an integer on a line of its own. */
+export function visibleQtys(c: Pick<Capture, "pages">): Set<number> {
+  const out = new Set<number>();
+  const add = (s: string | undefined) => { const n = Number(s); if (Number.isInteger(n) && n >= 1 && n <= 9999) out.add(n); };
+  for (const p of c.pages) {
+    for (const f of p.fields) { const v = f.value.trim(); if (/qty|quantity/i.test(f.label) || /^\d{1,4}$/.test(v)) add(/^\d{1,4}/.exec(v)?.[0]); }
+    for (const re of [/\b(?:qty|quantity)\s*[:.]?\s*(\d{1,4})\b/gi, /\b(\d{1,4})\s*[×x]\s*\$/gi, /\$\s*[\d,]+(?:\.\d+)?\s*[×x]\s*(\d{1,4})\b/gi, /^\s*(\d{1,4})\s*$/gm]) {
+      for (const m of Array.from(p.text.matchAll(re))) add(m[1]);
+    }
+  }
+  return out;
+}
+export const QTY_INFERRED_HINT = "qty inferred from subtotal";
+/** Pure: when the line's qty does not explain its total (the subtotal, for a single-line order) but total ÷ price is a whole number the page shows as a quantity, that number is the qty. Null = keep the model's. */
+export function inferLineQty(l: { qty: number | null; unitPrice: number | null; lineTotal: number | null }, subtotal: number | null, singleLine: boolean, visible: ReadonlySet<number>): number | null {
+  if (l.unitPrice == null || !(l.unitPrice > 0)) return null;
+  const total = l.lineTotal ?? (singleLine ? subtotal : null);
+  if (total == null) return null;
+  const fits = (q: number) => Math.abs(q * l.unitPrice! - total) <= 0.005 * q + 0.01;
+  if (l.qty != null && fits(l.qty)) return null;
+  const whole = Math.round(total / l.unitPrice);
+  if (whole < 1 || whole === l.qty || !fits(whole)) return null;
+  return visible.has(whole) ? whole : null;
+}
+
 export interface PrefillPayload { form: Partial<PoFormState>; prefill: PoFormPrefill }
 
 /** Turn the extraction into the form's state with markers and warnings. */
@@ -159,13 +185,21 @@ export async function enrichPrefill(query: QueryLike, capture: Capture, x: Prefi
   // Lines → products with ASIN candidates (§6.4: history, then title, then the model's guess).
   const products: PoFormProduct[] = [];
   let linesSum = 0;
+  // Qty cross-check: only when the model's lines do not add up to the subtotal.
+  const modelSum = r2(x.lines.reduce((t, l) => t + (l.unitPrice != null && l.qty != null ? l.unitPrice * l.qty : 0), 0));
+  const checkQty = x.subtotal != null && x.lines.length > 0 && Math.abs(modelSum - x.subtotal) > 0.01;
+  const visible = checkQty ? visibleQtys(capture) : new Set<number>();
+  const hints: Record<string, string> = {};
   for (let i = 0; i < x.lines.length; i++) {
     const l = x.lines[i];
     const rupp = l.unitsPerPack != null && l.unitsPerPack >= 1 ? String(l.unitsPerPack) : "1";
-    const p: PoFormProduct = { product_name: l.productName, supplier_sku: l.retailerSku ?? "", price: m2(l.unitPrice), qty_ordered: l.qty == null ? "" : String(l.qty), retailer_units_per_pack: rupp, asin: "", asin_qty_per_product: "1", sold_as: "individual", units_per_pack: "1", prep_cost: st.prep, notes: "" };
+    const inferred = checkQty ? inferLineQty(l, x.subtotal, x.lines.length === 1, visible) : null;
+    const qty = inferred ?? l.qty;
+    const p: PoFormProduct = { product_name: l.productName, supplier_sku: l.retailerSku ?? "", price: m2(l.unitPrice), qty_ordered: qty == null ? "" : String(qty), retailer_units_per_pack: rupp, asin: "", asin_qty_per_product: "1", sold_as: "individual", units_per_pack: "1", prep_cost: st.prep, notes: "" };
     for (const k of ["product_name", "supplier_sku", "price", "qty_ordered"] as const) mark(`products.${i}.${k}`, p[k]);
+    if (inferred != null) hints[`products.${i}.qty_ordered`] = QTY_INFERRED_HINT;
     if (l.unitsPerPack != null) mark(`products.${i}.retailer_units_per_pack`, rupp);
-    if (l.unitPrice != null && l.qty != null) linesSum += l.unitPrice * l.qty;
+    if (l.unitPrice != null && qty != null) linesSum += l.unitPrice * qty;
     const guess = l.asinGuess && /^[A-Z0-9]{10}$/i.test(l.asinGuess) ? l.asinGuess.toUpperCase() : null;
     const cands = await suggestAsins(query, { supplier: sup.supplier, product: l.productName, limit: 3 });
     const top = cands.find((c) => c.via === "history_exact" || c.via === "history_tokens") ?? cands.find((c) => c.via === "title") ?? null;
@@ -178,6 +212,7 @@ export async function enrichPrefill(query: QueryLike, capture: Capture, x: Prefi
     products.push(p);
   }
   form.products = products;
+  if (Object.keys(hints).length) prefill.hints = hints;
   if (x.subtotal != null && x.lines.length > 0 && Math.abs(r2(linesSum) - x.subtotal) > 0.01) warnings.push(`Lines add up to ${r2(linesSum).toFixed(2)}, the subtotal is ${x.subtotal.toFixed(2)}`);
   form.promos = x.promos.map((p, i) => { sources[`promos.${i}`] = "model"; return { type: p.confidence === "high" ? p.type : "", description: p.description, amount: m2(p.amount), percent: m2(p.percent), counts_toward_cogs: promoCountsByDefault(p.type) }; });
   if (x.promos.some((p) => p.confidence === "low")) warnings.push("A promo's type is uncertain — choose sale, coupon or rewards");

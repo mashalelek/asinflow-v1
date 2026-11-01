@@ -1,5 +1,5 @@
 import { describe, it, expect, vi } from "vitest";
-import { CaptureSchema, PrefillSchema, extractPrefill, enrichPrefill, mergedPagesText, supplierForHost, shipsToForStreet, storePrefill, getPrefill, _clearPrefillCache, PREFILL_TTL_MS } from "./po-prefill";
+import { CaptureSchema, PrefillSchema, extractPrefill, enrichPrefill, mergedPagesText, supplierForHost, shipsToForStreet, storePrefill, getPrefill, _clearPrefillCache, PREFILL_TTL_MS, visibleQtys, inferLineQty, QTY_INFERRED_HINT } from "./po-prefill";
 
 vi.mock("./log", () => ({ log: () => {} }));
 
@@ -73,6 +73,42 @@ describe("enrichment (no AI)", () => {
     expect(out.prefill.sources).toMatchObject({ supplier: "af", order_id: "model", "products.0.price": "model", "products.0.asin": "af", "asin.B08BR4NC22": "af", "promos.0": "model", "payments.0": "model", ships_to: "af" });
     expect(out.prefill.warnings).toEqual(["Payments add up to 38.46, the order total is 40.00"]);
     expect(out.prefill).toMatchObject({ supplier: "michaels.com", pages: 2, captured_at: "2026-10-31T15:00:00Z", raw_text: null });
+  });
+  // Maria 2026-11-01: a Walmart cart line "12 × $7.97 = $95.64" came through as qty 1 (the model read "Multipack Quantity").
+  describe("qty cross-check", () => {
+    const walmart = CaptureSchema.parse({ retailerHost: "www.walmart.com", pages: [{ step: "cart", url: "https://www.walmart.com/cart", title: "Cart", text: "Cart (1 item)\nGreat Value Peanut Butter 40oz\nMultipack Quantity: 1\n$7.97\n12\nSubtotal (12 items) $95.64", fields: [{ label: "Multipack Quantity", value: "1" }, { label: "Quantity", value: "12" }] }] });
+    const line = { productName: "Great Value Peanut Butter 40oz", retailerSku: "10450114", qty: 1, unitsPerPack: 1, unitPrice: 7.97, lineTotal: 95.64, asinGuess: null };
+    const q = async (sql: string) => (/FROM settings WHERE key = ANY/.test(sql) ? { rows: [{ key: "prep_cost", value: 1 }], rowCount: 1 } : { rows: [], rowCount: 0 });
+    it("visibleQtys reads form fields, 'Qty 12', '12 × $', '$ × 12' and a bare integer line", () => {
+      expect(Array.from(visibleQtys(walmart)).sort((a, b) => a - b)).toEqual([1, 12]);
+      expect(Array.from(visibleQtys({ pages: [{ step: "cart", url: "", title: "", text: "Qty: 3\n4 × $2.00\n$5.00 x 5", fields: [] }] })).sort((a, b) => a - b)).toEqual([3, 4, 5]);
+    });
+    it("inferLineQty: total ÷ price a whole number the page shows → that qty; already reconciled, not visible, or not whole → null", () => {
+      const vis = new Set([1, 12]);
+      expect(inferLineQty(line, 95.64, true, vis)).toBe(12);
+      expect(inferLineQty({ ...line, qty: 12 }, 95.64, true, vis)).toBeNull();
+      expect(inferLineQty(line, 95.64, true, new Set([1]))).toBeNull();
+      expect(inferLineQty({ ...line, lineTotal: 90 }, 90, true, new Set([11, 12]))).toBeNull();
+      expect(inferLineQty({ ...line, lineTotal: null }, 95.64, true, vis)).toBe(12);   // single line: the subtotal stands in
+      expect(inferLineQty({ ...line, lineTotal: null }, 95.64, false, vis)).toBeNull(); // several lines: no line total, no inference
+      expect(inferLineQty({ ...line, unitPrice: null }, 95.64, true, vis)).toBeNull();
+    });
+    it("enrichPrefill uses the inferred qty, marks it amber with the hint, and drops the lines-vs-subtotal warning", async () => {
+      const x = { ...extraction, lines: [line], subtotal: 95.64, total: 101.9, payments: [], promos: [], shipToStreet: null, notes: [] };
+      const out = await enrichPrefill(q, walmart, x, null, { id: "", capturedAt: null });
+      expect(out.form.products?.[0]).toMatchObject({ qty_ordered: "12", price: "7.97" });
+      expect(out.prefill.sources["products.0.qty_ordered"]).toBe("model");
+      expect(out.prefill.hints).toEqual({ "products.0.qty_ordered": QTY_INFERRED_HINT });
+      expect(out.prefill.warnings?.some((w) => /Lines add up/.test(w))).toBe(false);
+    });
+    it("when the page never shows that quantity the model's qty stays and the existing warning remains", async () => {
+      const cap = CaptureSchema.parse({ retailerHost: "www.walmart.com", pages: [{ step: "cart", url: "https://www.walmart.com/cart", title: "Cart", text: "Great Value Peanut Butter 40oz $7.97\nSubtotal $95.64", fields: [] }] });
+      const x = { ...extraction, lines: [line], subtotal: 95.64, total: 101.9, payments: [], promos: [], shipToStreet: null, notes: [] };
+      const out = await enrichPrefill(q, cap, x, null, { id: "", capturedAt: null });
+      expect(out.form.products?.[0].qty_ordered).toBe("1");
+      expect(out.prefill.hints).toBeUndefined();
+      expect(out.prefill.warnings).toContain("Lines add up to 7.97, the subtotal is 95.64");
+    });
   });
   it("with no extraction: the form carries only the supplier, the raw text and the fallback warning", async () => {
     const q = async (sql: string) => (/DISTINCT supplier/.test(sql) ? { rows: [], rowCount: 0 } : { rows: [], rowCount: 0 });

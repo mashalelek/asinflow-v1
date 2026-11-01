@@ -190,10 +190,13 @@ export function NewPoDialog({ open, onOpenChange, onCreated, prefill }: { open: 
   const check = useMemo(() => checkPoForm(form), [form]);
   const sources = form.prefill?.sources ?? {};
   const mark = (key: string) => markClass(sources[key]);
+  /** A server-side correction's tooltip on an amber field ("qty inferred from subtotal"); gone once the field is edited. */
+  const hint = (key: string): string | undefined => form.prefill?.hints?.[key];
   const clearMark = (f: PoFormState, key: string): PoFormState => {
-    if (!f.prefill?.sources?.[key]) return f;
-    const next = { ...f.prefill.sources }; delete next[key];
-    return { ...f, prefill: { ...f.prefill, sources: next } };
+    if (!f.prefill?.sources?.[key] && !f.prefill?.hints?.[key]) return f;
+    const next = { ...f.prefill!.sources }; delete next[key];
+    const hints = { ...(f.prefill!.hints ?? {}) }; delete hints[key];
+    return { ...f, prefill: { ...f.prefill!, sources: next, hints } };
   };
   const setMark = (f: PoFormState, key: string, src: PrefillSource): PoFormState => ({ ...f, prefill: { ...(f.prefill ?? { sources: {} }), sources: { ...(f.prefill?.sources ?? {}), [key]: src } } });
 
@@ -372,7 +375,7 @@ export function NewPoDialog({ open, onOpenChange, onCreated, prefill }: { open: 
                         <td className="px-2 py-1.5 align-top"><Input value={p.product_name} onChange={(e) => setP(i, "product_name", e.target.value)} className={`h-8 text-xs min-w-[14rem] ${mark(`products.${i}.product_name`)}`} data-testid={`input-new-po-product_name-${i}`} /></td>
                         <td className="px-2 py-1.5 align-top"><Input value={p.supplier_sku} onChange={(e) => setP(i, "supplier_sku", e.target.value)} className={`h-8 text-xs w-24 ${mark(`products.${i}.supplier_sku`)}`} data-testid={`input-new-po-supplier_sku-${i}`} /></td>
                         <td className="px-2 py-1.5 align-top"><MoneyCalcInput value={p.price} onChange={(v) => setP(i, "price", v)} className={`h-8 text-xs w-20 text-right ${mark(`products.${i}.price`)}`} data-testid={`input-new-po-price-${i}`} /></td>
-                        <td className="px-2 py-1.5 align-top"><Input value={p.qty_ordered} onChange={(e) => setP(i, "qty_ordered", e.target.value)} inputMode="decimal" className={`h-8 text-xs w-14 text-right ${mark(`products.${i}.qty_ordered`)}`} data-testid={`input-new-po-qty_ordered-${i}`} /></td>
+                        <td className="px-2 py-1.5 align-top"><Input value={p.qty_ordered} onChange={(e) => setP(i, "qty_ordered", e.target.value)} inputMode="decimal" title={hint(`products.${i}.qty_ordered`)} className={`h-8 text-xs w-14 text-right ${mark(`products.${i}.qty_ordered`)}`} data-testid={`input-new-po-qty_ordered-${i}`} /></td>
                         <td className="px-2 py-1.5 align-top"><Input value={p.retailer_units_per_pack ?? "1"} onChange={(e) => setP(i, "retailer_units_per_pack", e.target.value)} inputMode="numeric" className={`h-8 text-xs w-14 text-right ${mark(`products.${i}.retailer_units_per_pack`)}`} data-testid={`input-new-po-retailer_upp-${i}`} /></td>
                         <td className="px-2 py-1.5 align-top"><AsinPicker value={p.asin} product={p.product_name} supplier={form.supplier} guess={guess} known={known} onPick={onPick(i)} onChange={(v) => setP(i, "asin", v)} rowIndex={i} mark={mark(`products.${i}.asin`)} /></td>
                         <td className="px-2 py-1.5 align-top">

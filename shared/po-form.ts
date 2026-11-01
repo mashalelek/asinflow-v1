@@ -65,6 +65,8 @@ export interface PoFormPrefill {
   warnings?: string[];
   /** Field path → source. Header: "supplier"; product: "products.0.price"; ASIN rows: "asin.B0…"; promo: "promos.0". */
   sources: Record<string, PrefillSource>;
+  /** Field path → a tooltip on an amber field explaining a server-side correction (2026-11-01: "qty inferred from subtotal"). Cleared with the marker. */
+  hints?: Record<string, string>;
   /** The raw-text fallback (schema failure): the captured text for the side drawer. */
   raw_text?: string | null;
 }
