@@ -4,6 +4,8 @@
 
 > **Status: APPROVED 2026-10-30.** Implementation order: commit 0 probe → stop → commits 1–9. After this patch ships, the Orders sheet is no longer a PO record source (follow-on patch, §10).
 >
+> **Amendment 2026-11-01 (Maria, after the local SC-switch dry run — 423 of 830 ASINs would have changed):** item 4's switch is **scoped to v2 POs only**. Update COGS in SC sends `sourcing_cost` for an ASIN whose newest non-canceled PO was created by this patch forward (cost formula v2 / source `extension` / `email_renewal`); every other ASIN keeps sending `actual_cogs`. The backfilled col AR on sheet-imported rows stays stored and is never submitted. Production scripts take `--prod` (`script/env.ts`, `.env.production.local`).
+>
 > **Amendments after the probe (Maria, 2026-10-31; probe report `docs/po-ai-prefill-probe-2026-10-30.md`):**
 > 1. The source sheet was shared; X/Y/AQ/AR formulas read for understanding only (they vary per order by design). **No historical COGS / AQ / AR / Y value is ever recomputed or changed.** Clear-looking errors go on a review list for Maria. §7.1 corrected for new POs: AQ = captured per-item paid price; non-counting promos added back; tax and shipping never allocated.
 > 2. §8.1: no `_cents` twins — the existing dollar columns stay; add `purchased_by_user_id` (nullable) and widen `source` to `sheet_import | manual | extension | email_renewal`. "Anna" keeps the text with a NULL id.

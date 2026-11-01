@@ -457,3 +457,22 @@ describe("Sourcing cost (col AR) is what gets submitted", () => {
     expect(details.written.map((w) => [w.asin, w.basis])).toEqual([["B001", "sourcing_cost"], ["B002", "actual_cogs"]]);
   });
 });
+
+// Maria 2026-11-01: the switch is scoped to POs created by the Capture PO
+// patch forward. The query hands back the newest row's sourcing_cost only
+// when that PO is v2 / extension / email_renewal; an imported or pre-patch
+// PO yields NULL there, which is the actual_cogs fallback above.
+describe("Sourcing cost is sent only for patch-forward POs", () => {
+  it("the cost query gates sourcing_cost on cost_formula_version / source, in the newest-row subquery", async () => {
+    sheetRows = [poRow("B001", "8/12/2026")];
+    rawRowsRead = 1;
+    const seen: string[] = [];
+    const q = async (sql: string, params?: any[]) => { seen.push(sql); return { rows: (params?.[0] ?? []).map((asin: string) => ({ asin, actual_cogs: "4.96", cogs_source: "po_sheet", sourcing_cost: null })) }; };
+    const { summary } = await buildSourcingCost(makeWorkbook([["B001", "X001", 1, 1, "AMAZON"]]), FROM, TO, q);
+    const costSql = seen.find((s) => /sourcing_cost/.test(s))!;
+    expect(costSql).toContain("CASE WHEN (p.cost_formula_version IS NOT NULL OR p.source IN ('extension', 'email_renewal')) THEN pa.sourcing_cost END");
+    expect(costSql).toMatch(/ORDER BY [\s\S]* LIMIT 1\) AS sourcing_cost/);
+    expect(summary.sourcingFallback).toBe(1);
+    expect(summary.sourcingFromAr).toBe(0);
+  });
+});

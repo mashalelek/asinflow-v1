@@ -10,12 +10,16 @@
 // "Bulk Update" button on the Manage Your Sourcing Cost page, run it through
 // here, upload the result. That round-trip is the whole integration.
 //
-// Cost source (po-ai-prefill §7.1, Maria 2026-10-31): the newest non-canceled
-// PO ASIN row's **Sourcing cost** (col AR — COGS before the gift-card
-// discount, promos applied; the gift-card discount is financing, not product
-// cost), AND ONLY where asin_estimates.cogs_source = 'po_sheet'. A row with
-// no sourcing_cost yet falls back to actual_cogs (col Y) and is counted
-// (sourcingFallback). Sourcing cost sets Amazon's reimbursement valuation
+// Cost source (po-ai-prefill §7.1, Maria 2026-10-31, scoped 2026-11-01):
+// where the ASIN's newest non-canceled PO was created by the Capture PO
+// patch — cost formula v2 (the form), or source 'extension' /
+// 'email_renewal' — the submitted cost is that row's **Sourcing cost**
+// (COGS before the gift-card discount, promos applied; the gift-card
+// discount is financing, not product cost). Every other ASIN — newest PO
+// imported from the Orders sheet, or saved by the pre-patch form — keeps
+// sending what it sent before: actual_cogs (col Y). Both are counted
+// (sourcingFromAr / sourcingFallback). ONLY where asin_estimates.cogs_source
+// = 'po_sheet'. Sourcing cost sets Amazon's reimbursement valuation
 // for lost/damaged units and is gated on invoice review, so only a cost with
 // a PO behind it is defensible. estimated_cogs and manual/csv-sourced
 // actuals are never submitted — an ASIN without a PO cost is skipped and
@@ -56,8 +60,8 @@ export interface ScSummary {
   purchasedAsins: number;       // distinct ASINs from includedRows
   // ── DB (cost resolution) ──
   asinsWithPoCogs: number;      // purchased ASINs carrying a usable po_sheet cost
-  sourcingFromAr: number;       // of those, cost = the newest PO row's sourcing_cost (col AR)
-  sourcingFallback: number;     // of those, cost = actual_cogs (no sourcing_cost on the newest row yet)
+  sourcingFromAr: number;       // of those, cost = the newest PO row's sourcing_cost (newest PO is patch-forward)
+  sourcingFallback: number;     // of those, cost = actual_cogs (newest PO imported / pre-patch, or no sourcing_cost yet)
   // ── Workbook (write) ──
   sheetsScanned: number;
   workbookRowsRead: number;     // data rows across all Part_N sheets
@@ -96,6 +100,13 @@ export interface ScResult {
 }
 
 type QueryLike = (sql: string, params?: any[]) => Promise<{ rows: any[] }>;
+
+// A PO "created by the Capture PO patch forward" (Maria 2026-11-01): saved by
+// the v2 form (cost_formula_version set — the pre-patch form left it NULL),
+// captured by the extension, or a renewal PO from a confirmation email. The
+// dry run (script/sourcing-cost-switch-dryrun.ts) applies the same test.
+// `p` is the purchase_orders alias.
+export const PATCH_FORWARD_PO_SQL = "(p.cost_formula_version IS NOT NULL OR p.source IN ('extension', 'email_renewal'))";
 
 // Money to cents, half-up, so 4.955 -> 4.96 rather than float noise.
 function round2(n: number): number {
@@ -166,7 +177,7 @@ export async function buildSourcingCost(
     purchased.add(row.asin.trim().toUpperCase());
   }
 
-  // ── 2. Resolve cost: the newest PO row's sourcing_cost, po_sheet-sourced only ──
+  // ── 2. Resolve cost: po_sheet-sourced only; the newest PO row's sourcing_cost when that PO is patch-forward, else actual_cogs ──
   const asinList = Array.from(purchased);
   const costByAsin = new Map<string, number>();
   const basisByAsin = new Map<string, "sourcing_cost" | "actual_cogs">();
@@ -179,7 +190,7 @@ export async function buildSourcingCost(
   if (asinList.length > 0) {
     const { rows: costRows } = await q(
       `SELECT a.asin, e.actual_cogs, e.cogs_source,
-              (SELECT pa.sourcing_cost FROM po_asins pa JOIN purchase_orders p ON p.id = pa.po_id
+              (SELECT CASE WHEN ${PATCH_FORWARD_PO_SQL} THEN pa.sourcing_cost END FROM po_asins pa JOIN purchase_orders p ON p.id = pa.po_id
                 WHERE pa.asin = a.asin
                   AND NOT COALESCE((SELECT bool_and(l.qty_canceled IS NOT NULL AND l.qty_canceled >= COALESCE(l.qty_ordered, 0)) FROM po_line_items l WHERE l.po_asin_id = pa.id), false)
                 ORDER BY ${NEWEST_PO_ORDER} LIMIT 1) AS sourcing_cost
@@ -199,7 +210,7 @@ export async function buildSourcingCost(
       if (hit.source !== "po_sheet") {
         skips.notPoSourced++; details.notPoSourcedAsins.push({ asin, source: hit.source }); continue;
       }
-      // Sourcing cost (col AR) when the newest PO row carries one; else the COGS it was before the switch.
+      // Sourcing cost when the newest PO is patch-forward and carries one; else actual_cogs, as before the switch.
       const s = hit.sourcing == null ? NaN : Number(hit.sourcing);
       const useSourcing = Number.isFinite(s) && s > 0;
       const n = useSourcing ? s : hit.cogs == null ? NaN : Number(hit.cogs);

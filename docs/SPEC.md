@@ -872,7 +872,7 @@ pair (route paths did NOT change; they are not user-facing):
 | 4 | **Sync POs** | Sync PO | plural |
 | 5 | **Push to Aura** | — | unchanged |
 | 6 | **Export SB COGS** | — | unchanged |
-| 7 | **Update COGS in SC** | Export Sourcing Cost | its history clock stays beside it. **Since 2026-10-31 it submits the Sourcing cost (col AR — COGS before the gift-card discount, promos applied; §22 "Costs"), not `actual_cogs`** |
+| 7 | **Update COGS in SC** | Export Sourcing Cost | its history clock stays beside it. **Since 2026-11-01 it submits the Sourcing cost (COGS before the gift-card discount, promos applied; §22 "Costs") for an ASIN whose newest non-canceled PO was created by the Capture PO patch — cost formula v2 (the form), source `extension` or `email_renewal` (`PATCH_FORWARD_PO_SQL`); every other ASIN keeps sending `actual_cogs` as before (Maria 2026-11-01: a sheet-imported PO's col AR is never submitted)** |
 
 Upload File and Export stay on the right. The Archive action is now
 **Park** / **Unpark**, plus **Mark dead** (reason: preset `ip_complaint`,
@@ -5400,11 +5400,18 @@ IS NULL; Maria 2026-10-31):
   cannot be added back and counts until one is entered (form warning).
 - **Sourcing cost** (`po_asins.sourcing_cost`, col AR) = Σ(AQ × product qty)
   ÷ ASIN qty — COGS before the gift-card discount. **This is what Update
-  COGS in SC submits** (the gift-card discount is financing, not product
-  cost); a row with no sourcing cost yet falls back to `actual_cogs` and the
-  export counts it (`sourcingFallback`). Dry run before the switch:
-  `tsx script/sourcing-cost-switch-dryrun.ts` — per ASIN before / after,
-  the count that changes, min / median / max delta.
+  COGS in SC submits for an ASIN whose newest non-canceled PO is
+  patch-forward** — cost formula v2 (saved by this form), source
+  `extension` or `email_renewal` (`PATCH_FORWARD_PO_SQL` in
+  `server/sourcing-cost.ts`; the gift-card discount is financing, not
+  product cost). An ASIN whose newest PO was imported from the sheet or
+  saved by the pre-patch form keeps sending `actual_cogs` (Maria
+  2026-11-01: the switch is scoped to v2 POs; the backfilled col AR on
+  imported rows is never submitted), as does a patch-forward row with no
+  sourcing cost yet; the export counts both (`sourcingFallback`). Dry run:
+  `tsx script/sourcing-cost-switch-dryrun.ts [--prod]` — per ASIN before /
+  after, the count that changes, min / median / max delta (0 until the
+  first patch-forward PO exists).
 - **COGS** (`po_asins.cost_per_unit`, col Y) = Sourcing × (1 − weighted
   gift-card %) **+ the per-ASIN adjustment** (`cogs_adjustment` with a
   required reason, e.g. "prep materials $3"). Feeds `actual_cogs`
