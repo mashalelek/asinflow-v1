@@ -55,7 +55,26 @@ export interface AsinCosts {
 const r2 = (x: number) => Math.round(x * 100) / 100;
 const gcFactor = (h: CostHeader) => 1 - (h.gcPct != null && Number.isFinite(h.gcPct) ? h.gcPct / 100 : 0);
 const ratio = (h: CostHeader, discount: number) => (h.subtotal > 0 ? (h.subtotal - discount) / h.subtotal : 1);
-const countingDiscount = (h: CostHeader) => (h.discount || 0) - (h.nonCountingPromoAmount || 0);
+// Never below 0: a non-counting promo larger than the header discount cannot raise the cost above the price paid.
+const countingDiscount = (h: CostHeader) => Math.max(0, (h.discount || 0) - (h.nonCountingPromoAmount || 0));
+
+/**
+ * Maria 2026-11-01 (the first real PO, Walmart): the line price $7.97 was already the sale price and the
+ * "sale $36.12" promo was subtracted again → COGS 29.76 instead of 47.82. A discount / promo reduces a cost
+ * ONLY when the line prices are pre-discount — Σ price × qty equals the subtotal BEFORE the discount. When
+ * Σ price × qty already equals the post-discount subtotal (order total − tax − shipping), the discount and
+ * the promos are informational: nothing reduces COGS or Paid, the COGS toggle defaults off, nothing is
+ * "added back". Pure.
+ */
+export function discountReflectedInLines(a: { linesSum: number; discount: number; promoAmounts?: number; postDiscountSubtotal: number | null }): boolean {
+  const d = (a.discount || 0) + (a.promoAmounts || 0);
+  if (!(d > 0) || !(a.linesSum > 0) || a.postDiscountSubtotal == null || !Number.isFinite(a.postDiscountSubtotal)) return false;
+  return Math.abs(a.linesSum - a.postDiscountSubtotal) <= 0.005;
+}
+/** The cost header with the reflected rule applied: a reflected discount / promo set counts for nothing. */
+export function effectiveCostHeader(h: CostHeader, reflected: boolean): CostHeader {
+  return reflected ? { ...h, discount: 0, nonCountingPromoAmount: 0 } : h;
+}
 
 /** Unrounded paid price of one product after the counting discounts (AQ); null when the price is unknown. */
 function paidExact(price: number | null, h: CostHeader, allDiscounts: boolean): number | null {

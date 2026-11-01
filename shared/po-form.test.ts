@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { checkPoForm, emptyPoForm, emptyProduct, type PoFormState } from "./po-form";
+import { checkPoForm, emptyPoForm, emptyProduct, canonicalPaymentName, promoCountsByDefault, PROMO_REFLECTED_NOTE, type PoFormState } from "./po-form";
 
 // po-af-owned §4 (2026-10-18): the New PO form's validation and derived rows.
 const base = (over: Partial<PoFormState> = {}): PoFormState => ({
@@ -48,6 +48,42 @@ describe("checkPoForm", () => {
     const adj = checkPoForm(base({ products: [item], cogs_adjustments: { B0TEST0009: { amount: "3", reason: "prep materials" } } }));
     expect(adj.asins[0]).toMatchObject({ cost_per_unit: "13.00", computed_cost_per_unit: "13.00", sourcing_cost: "10.00", cogs_adjustment: "3.00", cogs_adjustment_reason: "prep materials" });
     expect(checkPoForm(base({ products: [item], cogs_adjustments: { B0TEST0009: { amount: "3", reason: "" } } })).errors).toContain("B0TEST0009: a COGS adjustment needs a reason");
+  });
+  // Maria 2026-11-01, PO 200015336732726: the line price 7.97 was already the sale price; "sale $36.12, counts" subtracted it again (29.76 instead of 47.82).
+  it("double-discount rule: when Σ price × qty already equals the post-discount subtotal, the discount / promo is informational — COGS = Sourcing = Paid, nothing added back", () => {
+    const line = { ...emptyProduct(), product_name: "Keystone All Natural Chicken, 28 oz Can", price: "7.97", qty_ordered: "12", asin: "B0756KB8N1", sold_as: "multi-pack" as const, units_per_pack: "6", asin_qty_per_product: "0.1667" };
+    const po = base({ subtotal: "95.64", discount: "36.12", tax: "0", sh_donations: "0", order_total: "95.64", products: [line], promos: [{ type: "sale", description: "Now $7.97, was $10.98", amount: "36.12", percent: "", counts_toward_cogs: true }] });
+    const c = checkPoForm(po);
+    expect(c.discountReflected).toBe(true);
+    expect(c.nonCountingPromoAmount).toBe(0);
+    expect(c.asins[0]).toMatchObject({ qty: 2, cost_per_unit: "47.82", sourcing_cost: "47.82", paid_cost: "47.82" });
+    // The same with the promo off (its default when reflected) and with no header discount at all: still 47.82.
+    expect(checkPoForm({ ...po, promos: [{ ...po.promos![0], counts_toward_cogs: false }] }).asins[0].cost_per_unit).toBe("47.82");
+    expect(checkPoForm({ ...po, discount: "", promos: [] }).asins[0].cost_per_unit).toBe("47.82");
+    expect(promoCountsByDefault("sale", true)).toBe(false);
+    expect(promoCountsByDefault("sale")).toBe(true);
+    expect(PROMO_REFLECTED_NOTE).toBe("already reflected in line prices");
+    // Pre-discount lines (Michaels: subtotal 77.82 before a 23.35 discount, total 58.28 with tax 3.81) still allocate the discount.
+    const pre = base({ subtotal: "77.82", discount: "23.35", tax: "3.81", order_total: "58.28", products: [{ ...emptyProduct(), price: "5.99", qty_ordered: "6", asin: "B0TEST0003" }, { ...emptyProduct(), price: "3.49", qty_ordered: "12", asin: "B0TEST0004" }] });
+    const pc = checkPoForm(pre);
+    expect(pc.discountReflected).toBe(false);
+    expect(pc.asins[0].cost_per_unit).toBe("4.19"); // 5.99 × (1 − 23.35 ÷ 77.82)
+    // A non-counting promo larger than the header discount never raises the cost above the price paid.
+    expect(checkPoForm(base({ discount: "0", products: [{ ...emptyProduct(), price: "10", qty_ordered: "1", asin: "B0TEST0009" }], promos: [{ type: "rewards", description: "r", amount: "5", percent: "", counts_toward_cogs: false }] })).asins[0].cost_per_unit).toBe("10.00");
+  });
+  it("weighted GC % is computed live from the gift-card payments (Σ amount × GC % ÷ order total), beats the typed field, and feeds COGS", () => {
+    const item = { ...emptyProduct(), price: "100", qty_ordered: "1", asin: "B0TEST0010" };
+    const c = checkPoForm(base({ order_total: "100", weighted_gc_discount_pct: "9", products: [item], payments: [{ method: "gift_card", nickname: "", last4: "", amount: "50", gift_card_discount_pct: "10" }, { method: "card", nickname: "Amex", last4: "1001", amount: "50", gift_card_discount_pct: "" }] }));
+    expect(c.weightedGcPct).toBe(5);
+    expect(c.asins[0]).toMatchObject({ cost_per_unit: "95.00", sourcing_cost: "100.00" });
+    expect(checkPoForm(base({ products: [item], payments: [{ method: "card", nickname: "Amex", last4: "1001", amount: "100", gift_card_discount_pct: "" }] })).weightedGcPct).toBeNull();
+  });
+  it("payment-method aliases: OnePay Cash is the Walmart card; other names pass through trimmed", () => {
+    const aliases = { "OnePay Cash": "Walmart card" };
+    expect(canonicalPaymentName("OnePay Cash", aliases)).toBe("Walmart card");
+    expect(canonicalPaymentName("onepay cashrewards", aliases)).toBe("Walmart card");
+    expect(canonicalPaymentName(" Amex ", aliases)).toBe("Amex");
+    expect(canonicalPaymentName("Chase (7927)", null)).toBe("Chase (7927)");
   });
   it("pack math: 5 units of a 2-pack (2.5 ASIN units) is allowed with the whole-packs warning, not blocked", () => {
     const p = { ...emptyProduct(), price: "6.56", qty_ordered: "5", asin: "B007K83C46", asin_qty_per_product: "0.5", sold_as: "multi-pack" as const, units_per_pack: "2" };

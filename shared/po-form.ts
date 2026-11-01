@@ -21,7 +21,7 @@
 // per ASIN. Promos (several per PO, §7.2) decide what counts: a promo with
 // counts_toward_cogs = false (rewards, by default) is added back.
 
-import { adjustedProductCost, allocateAsinCosts, COST_FORMULA_VERSION, type CostHeader } from "./po-cost";
+import { adjustedProductCost, allocateAsinCosts, discountReflectedInLines, effectiveCostHeader, COST_FORMULA_VERSION, type CostHeader } from "./po-cost";
 /** Stamped on purchase_orders.cost_formula_version by every form save; NULL = imported, never recomputed. */
 export const COST_FORMULA_VERSION_SAVED = COST_FORMULA_VERSION;
 
@@ -32,8 +32,26 @@ export const SOLD_AS_OPTIONS = ["individual", "multi-pack", "bundle"] as const;
 export type SoldAs = (typeof SOLD_AS_OPTIONS)[number];
 export const PROMO_TYPES = ["sale", "coupon", "rewards"] as const;
 export type PromoType = (typeof PROMO_TYPES)[number];
-/** §7.2 default: sale and coupon count toward COGS, rewards does not. */
-export const promoCountsByDefault = (type: string): boolean => type !== "rewards";
+/** §7.2 default: sale and coupon count toward COGS, rewards does not. A promo already reflected in the line prices (Maria 2026-11-01) defaults off whatever its type. */
+export const promoCountsByDefault = (type: string, discountReflected = false): boolean => !discountReflected && type !== "rewards";
+/** The note beside a promo's COGS toggle when the line prices already carry the discount. */
+export const PROMO_REFLECTED_NOTE = "already reflected in line prices";
+
+/**
+ * Payment-method aliases (settings.po_payment_method_aliases, Maria 2026-11-01): "OnePay Cash" = "Walmart card" —
+ * one instrument, two names — so history matches. The canonical name wins when the typed / captured nickname is the
+ * alias or starts with it (case and punctuation ignored); anything else is returned trimmed. Pure.
+ */
+export function canonicalPaymentName(nickname: string, aliases: Record<string, string> | null | undefined): string {
+  const norm = (x: string) => String(x ?? "").toLowerCase().replace(/[^a-z0-9]+/g, "");
+  const n = norm(nickname);
+  if (!n || !aliases) return String(nickname ?? "").trim();
+  for (const [alias, canonical] of Object.entries(aliases)) {
+    const a = norm(alias);
+    if (a && (n === a || n.startsWith(a))) return String(canonical).trim();
+  }
+  return String(nickname ?? "").trim();
+}
 
 export interface PoFormPromo {
   type: PromoType | "";
@@ -160,7 +178,7 @@ const t = (s: unknown) => (typeof s === "string" ? s.trim() : s == null ? "" : S
 const moneyNum = (s: string): number | null => { const v = t(s).replace(/[$,\s]/g, ""); return v === "" ? null : /^-?\d+(\.\d{1,2})?$/.test(v) ? Number(v) : NaN; };
 const r2 = (x: number) => Math.round(x * 100) / 100;
 /** A 2-dp yield back to the small fraction it stands for (0.33 → 1/3). Same rule as server/po-af-source.ts trueYield. */
-function trueYield(y: number): number {
+export function trueYield(y: number): number {
   for (let d = 1; d <= 12; d++) { const n = Math.round(y * d); if (n > 0 && Math.abs(y - n / d) < 0.006) return n / d; }
   return y;
 }
@@ -189,8 +207,12 @@ export interface PoFormCheck {
   productErrors: Record<number, string[]>; // by product index
   computedSubtotal: number;
   effectiveOrderTotal: number;
-  /** Σ amount of the promos that do not count toward COGS (added back). */
+  /** Σ amount of the promos that do not count toward COGS (added back); 0 when the discount is already in the line prices. */
   nonCountingPromoAmount: number;
+  /** Maria 2026-11-01: Σ price × qty already equals the post-discount subtotal — the discount / promos are informational, nothing reduces a cost. */
+  discountReflected: boolean;
+  /** Weighted gift-card % = Σ(gift-card amount × its GC %) ÷ order total, from the Payments block; null when no gift-card payment carries both. */
+  weightedGcPct: number | null;
   asins: PoFormAsin[];
 }
 
@@ -210,23 +232,21 @@ export function checkPoForm(f: PoFormState): PoFormCheck {
   }
   const products = Array.isArray(f.products) ? f.products : [];
   if (products.length === 0) errors.push("Add at least one product");
-  // §7.2 promos: type, money / percent shape; a non-counting promo without an amount cannot be added back.
-  let nonCountingPromoAmount = 0;
-  (Array.isArray(f.promos) ? f.promos : []).forEach((p, i) => {
+  // §7.2 promos: type, money / percent shape. The counting pass runs once the totals are known (the reflected rule needs them).
+  const promoList = Array.isArray(f.promos) ? f.promos : [];
+  let promoAmounts = 0;
+  promoList.forEach((p, i) => {
     const label = `Promo ${i + 1}${t(p.description) ? ` (${t(p.description)})` : ""}`;
     if (!(PROMO_TYPES as readonly string[]).includes(String(p.type))) errors.push(`${label}: type must be sale, coupon or rewards`);
     const amt = moneyNum(p.amount ?? "");
     if (amt != null && (Number.isNaN(amt) || amt < 0)) errors.push(`${label}: amount must be an amount with at most 2 decimals`);
+    else if (amt != null) promoAmounts += amt;
     const pc = t(p.percent ?? "").replace("%", "");
     if (pc !== "" && (!/^\d+(\.\d{1,4})?$/.test(pc) || Number(pc) > 100)) errors.push(`${label}: percent must be between 0 and 100`);
-    if (p.counts_toward_cogs === false) {
-      if (amt != null && !Number.isNaN(amt)) nonCountingPromoAmount += amt;
-      else warnings.push(`${label} does not count toward COGS but has no amount, so it cannot be added back — it counts until an amount is entered`);
-    }
   });
-  nonCountingPromoAmount = r2(nonCountingPromoAmount);
   // §8.2 payments: method, last 4, amount; Σ amount vs the order total is checked after the total is known.
-  let paymentsSum = 0, paymentsWithAmount = 0;
+  // The weighted gift-card % (Maria 2026-11-01) = Σ(gift-card amount × its GC %) ÷ order total — live from this block, read-only on the form.
+  let paymentsSum = 0, paymentsWithAmount = 0, gcWeighted = 0, gcAny = false;
   (Array.isArray(f.payments) ? f.payments : []).forEach((p, i) => {
     const label = `Payment ${i + 1}${t(p.nickname) ? ` (${t(p.nickname)})` : ""}`;
     if (!(PAYMENT_METHODS as readonly string[]).includes(String(p.method))) errors.push(`${label}: method must be card, gift card, store credit, PayPal or other`);
@@ -236,6 +256,7 @@ export function checkPoForm(f: PoFormState): PoFormCheck {
     else if (amt != null) { paymentsSum += amt; paymentsWithAmount++; }
     const gc = t(p.gift_card_discount_pct ?? "").replace("%", "");
     if (gc !== "" && (!/^\d+(\.\d{1,4})?$/.test(gc) || Number(gc) > 100)) errors.push(`${label}: gift-card discount must be a percentage between 0 and 100`);
+    else if (p.method === "gift_card" && gc !== "" && amt != null && !Number.isNaN(amt)) { gcWeighted += amt * Number(gc); gcAny = true; }
   });
   if (t(f.email_used ?? "") !== "" && !/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(t(f.email_used ?? ""))) errors.push("Email used must be an email address");
   if (t(f.cashback_status ?? "") !== "" && !(CASHBACK_STATUSES as readonly string[]).includes(t(f.cashback_status ?? ""))) errors.push("Cashback status must be pending, received or denied");
@@ -270,13 +291,26 @@ export function checkPoForm(f: PoFormState): PoFormCheck {
   const typedTotal = moneyNum(f.order_total);
   const effectiveOrderTotal = typedTotal != null && !Number.isNaN(typedTotal) ? typedTotal : r2(subtotal + n("tax") + n("sh_donations") - n("discount"));
   if (paymentsWithAmount > 0 && Math.abs(r2(paymentsSum) - r2(effectiveOrderTotal)) > 0.005) warnings.push(`Payments add up to ${r2(paymentsSum).toFixed(2)}, the order total is ${r2(effectiveOrderTotal).toFixed(2)}`);
+  const weightedGcPct = gcAny && effectiveOrderTotal > 0 ? Math.round((gcWeighted / effectiveOrderTotal) * 100) / 100 : null;
+  // The reflected rule (Maria 2026-11-01): Σ price × qty already equals the post-discount subtotal → the discount / promos count for nothing.
+  const discountReflected = discountReflectedInLines({ linesSum: computedSubtotal, discount: n("discount"), promoAmounts: r2(promoAmounts), postDiscountSubtotal: r2(effectiveOrderTotal - n("tax") - n("sh_donations")) });
+  // §7.2 counting pass: a non-counting promo without an amount cannot be added back (moot when the discount is reflected).
+  let nonCountingPromoAmount = 0;
+  if (!discountReflected) promoList.forEach((p, i) => {
+    if (p.counts_toward_cogs !== false) return;
+    const label = `Promo ${i + 1}${t(p.description) ? ` (${t(p.description)})` : ""}`;
+    const amt = moneyNum(p.amount ?? "");
+    if (amt != null && !Number.isNaN(amt)) nonCountingPromoAmount += amt;
+    else warnings.push(`${label} does not count toward COGS but has no amount, so it cannot be added back — it counts until an amount is entered`);
+  });
+  nonCountingPromoAmount = r2(nonCountingPromoAmount);
   const gcRaw = t(f.weighted_gc_discount_pct).replace("%", "");
   const cbRaw = t(f.cashback_pct).replace("%", "");
-  // Costs: the one formula in shared/po-cost.ts (v2 — discount pro rata, rewards added back, no tax / shipping).
-  const costHeader: CostHeader = {
-    subtotal, discount: n("discount"), gcPct: /^\d+(\.\d+)?$/.test(gcRaw) ? Number(gcRaw) : null, nonCountingPromoAmount,
+  // Costs: the one formula in shared/po-cost.ts (v2 — discount pro rata, rewards added back, no tax / shipping); the computed GC % beats a typed one.
+  const costHeader: CostHeader = effectiveCostHeader({
+    subtotal, discount: n("discount"), gcPct: weightedGcPct ?? (/^\d+(\.\d+)?$/.test(gcRaw) ? Number(gcRaw) : null), nonCountingPromoAmount,
     orderTotal: effectiveOrderTotal, tax: n("tax"), shDonations: n("sh_donations"), cashbackPct: /^\d+(\.\d+)?$/.test(cbRaw) ? Number(cbRaw) : null,
-  };
+  }, discountReflected);
 
   // Group by ASIN (first appearance order).
   const groups = new Map<string, number[]>();
@@ -331,5 +365,5 @@ export function checkPoForm(f: PoFormState): PoFormCheck {
     });
   }
   const ok = errors.length === 0 && Object.keys(productErrors).length === 0;
-  return { ok, errors, warnings, productErrors, computedSubtotal, effectiveOrderTotal: r2(effectiveOrderTotal), nonCountingPromoAmount, asins };
+  return { ok, errors, warnings, productErrors, computedSubtotal, effectiveOrderTotal: r2(effectiveOrderTotal), nonCountingPromoAmount, discountReflected, weightedGcPct, asins };
 }

@@ -56,7 +56,7 @@ describe("createPoFromForm", () => {
     const promo = calls.find((c) => /INSERT INTO po_promos/.test(c.sql))!;
     expect(promo.params).toEqual(["id1", 0, "rewards", "Rewards $5", "5", null, false, "Rewards $5"]);
     const typed = calls.find((c) => /INSERT INTO po_edit_log/.test(c.sql) && c.params[4] === "cost_per_unit")!;
-    expect(typed.params).toEqual(["id1", 7, "asin", "id3", "cost_per_unit", "5.80", "4.00"]); // computed 5.80: the $5 rewards with no order discount is added back pro rata (item-level rewards)
+    expect(typed.params).toEqual(["id1", 7, "asin", "id3", "cost_per_unit", "5.44", "4.00"]); // computed 5.44: a $5 rewards promo with no order discount is never added back above the price paid (clamped 2026-11-01; it used to read 5.80)
   });
   it("refuses an invalid form (400) and an existing (supplier, order #) (409) before writing anything", async () => {
     const bad = fake();
