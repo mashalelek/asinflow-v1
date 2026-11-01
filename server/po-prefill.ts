@@ -18,6 +18,7 @@ import { PROMO_RULES } from "./promo-classify";
 import { suggestAsins } from "./asin-suggest";
 import { normalizeStreet } from "./tracking-parse";
 import { loadAliases, aliasKey } from "./supplier-aliases";
+import { defaultEmailForSupplier } from "./supplier-defaults";
 import { promoCountsByDefault, yieldFromPacks, type PoFormState, type PoFormProduct, type PoFormPrefill, type PrefillSource } from "@shared/po-form";
 
 // ── Input (from the extension, already scrubbed) ─────────────────────────────
@@ -176,6 +177,8 @@ export async function enrichPrefill(query: QueryLike, capture: Capture, x: Prefi
   form.sh_donations = m2(x.shipping); mark("sh_donations", form.sh_donations);
   form.order_total = m2(x.total); mark("order_total", form.order_total);
   form.email_used = x.purchasedEmail ?? ""; mark("email_used", form.email_used);
+  // No email on the pages → the supplier's default (stone): server/supplier-defaults.ts.
+  if (!form.email_used) { const d = await defaultEmailForSupplier(query, sup.supplier); if (d.email) { form.email_used = d.email; sources.email_used = "af"; } }
   form.subscription = { present: x.subscription.present, frequency_weeks: x.subscription.frequencyWeeks == null ? "" : String(x.subscription.frequencyWeeks) };
   if (x.subscription.present) sources.subscription = "model";
   const st = shipsToForStreet(x.shipToStreet, streets);

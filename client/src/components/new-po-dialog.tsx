@@ -182,9 +182,30 @@ export function NewPoDialog({ open, onOpenChange, onCreated, prefill }: { open: 
     const seeded: PoFormState = prefill ? { ...base, ...prefill.form, products: (prefill.form.products?.length ? prefill.form.products : base.products).map((p) => ({ ...emptyProduct(), ...p })), prefill: prefill.prefill } : base;
     if (!seeded.purchased_by_user_id && user) { seeded.purchased_by_user_id = String(user.id); seeded.purchased_by = user.displayName; }
     if (prefill?.prefill.sources && Object.keys(prefill.prefill.sources).some((k) => k === "ships_to")) setShipsToEdited(true); else setShipsToEdited(false);
+    emailDefaultRef.current = seeded.prefill?.sources?.email_used === "af" ? (seeded.email_used ?? "") : "";
     setForm(seeded); setServerErr(null); setTouched(false); setRawOpen(false);
     fetch("/api/pos/purchasers").then((r) => r.json()).then((d) => setPeople({ users: d.users ?? [], emails: d.emails ?? [] })).catch(() => {});
   }, [open, prefill, user]);
+  // Email used default per supplier (Maria 2026-11-01; GET /api/pos/email-default): fills an empty field, or one still holding
+  // the previous supplier's default, with a stone marker; a typed or model-read email is left alone.
+  const emailDefaultRef = useRef<string>("");
+  useEffect(() => {
+    if (!open) return;
+    const s = form.supplier.trim();
+    const t = window.setTimeout(() => {
+      fetch(`/api/pos/email-default?supplier=${encodeURIComponent(s)}`).then((r) => r.json()).then((d) => {
+        const email = typeof d?.email === "string" ? d.email : "";
+        setForm((f) => {
+          const cur = (f.email_used ?? "").trim();
+          if (cur !== "" && cur !== emailDefaultRef.current) return f;
+          emailDefaultRef.current = email;
+          if (cur === email) return f;
+          return setMark({ ...f, email_used: email }, "email_used", "af");
+        });
+      }).catch(() => {});
+    }, 250);
+    return () => window.clearTimeout(t);
+  }, [open, form.supplier]);
 
   const shipsTo = shipsToEdited && (form.ships_to === "home" || form.ships_to === "velocity") ? form.ships_to : shipsToFromForm(form);
   const check = useMemo(() => checkPoForm(form), [form]);

@@ -6012,6 +6012,20 @@ before Velocity's `shipped_at`.
   Velocity order with no Order # shipped in six FBA shipments (72
   component units = 24 packs). Extended to `po_not_found` lines by the PO
   matching patch below, with a units-fit test.
+- **Suppliers (migration 077, 2026-11-01 — PO form polish).** `suppliers`
+  is the supplier record: one row per AF supplier (the lowercased domain
+  `purchase_orders.supplier` carries; seeded from today's POs) with
+  `supplier_defaults` JSONB. Its one key today is **`email_used`** — the
+  Email used the New PO form and Capture PO fill in for that supplier
+  (`server/supplier-defaults.ts`, `GET /api/pos/email-default?supplier=`):
+  the supplier's default (walmart.com → orders@coastalqualitygoods.com,
+  seeded) → else the email on the supplier's newest PO that has one → else
+  `settings.po_email_unknown_supplier` (mpeters.cqg@gmail.com; a supplier
+  with no PO yet). The form applies it with a stone marker when the field
+  is empty or still holds the previous supplier's default, never over a
+  typed or page-read email; the prefill does the same when the pages show
+  no email. Edited with SQL until a Settings → Suppliers page exists; that
+  page writes the same column.
 - **PO matching (2026-10-29, `docs/claude_spec-patch-po-matching.md`).**
   Past the two legacy keys, in order. *Main pass:* the Velocity retailer
   through `supplier_aliases` (migration 072; lowercased retailer → AF
@@ -6219,7 +6233,8 @@ replaces it. Migration 061 adds `po_edit_log`, `deleted_pos` and
   opens it filled from a capture, §4.5). Order fields: supplier, order #,
   date, **Purchased by** (a user; the logged-in one by default; `GET
   /api/pos/purchasers`), Ships to, **Email used** (settings `po_emails`
-  suggested), subtotal, **Discount, Tax, Shipping** (separate), order
+  suggested; the per-supplier default fills it — §22 "Suppliers",
+  2026-11-01), subtotal, **Discount, Tax, Shipping** (separate), order
   total, weighted GC %, cashback site / % / **status**, **Subscription**
   (yes · every N weeks), PO notes. **Lines as bought** (§6.3): product
   name, SKU / UPC, price, qty, **retailer units / pack**, per-line

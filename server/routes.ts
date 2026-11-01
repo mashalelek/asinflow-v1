@@ -25,6 +25,7 @@ import { recomputePoCosts } from "./po-costs";
 import { addMoneyRow, editMoneyRow, removeMoneyRow, loadPoMoney } from "./po-money-edit";
 import { createPoFromForm, lookupAsins } from "./po-create";
 import { suggestAsins, asinInfo } from "./asin-suggest";
+import { defaultEmailForSupplier } from "./supplier-defaults";
 import { applyAsinPackUpdate, parsePack } from "./asin-pack";
 import { CaptureSchema, extractPrefill, enrichPrefill, mergedPagesText, storePrefill, getPrefill, logPrefill } from "./po-prefill";
 import { aiAvailable, AI_OFF_MESSAGE } from "./config/ai";
@@ -4614,6 +4615,12 @@ export async function registerRoutes(
       const emails = (await query(`SELECT value FROM settings WHERE key = 'po_emails'`)).rows[0]?.value ?? [];
       res.json({ users, emails: Array.isArray(emails) ? emails : [] });
     } catch (err: any) { res.status(500).json({ message: err.message }); }
+  });
+  // Email used default for a supplier (Maria 2026-11-01; server/supplier-defaults.ts): the supplier's default → its newest PO's email → the unknown-supplier setting.
+  app.get("/api/pos/email-default", async (req: Request, res: Response) => {
+    if (!isDbAvailable()) { res.status(503).json({ message: "Database not available" }); return; }
+    try { res.json(await defaultEmailForSupplier(poQuery, typeof req.query.supplier === "string" ? req.query.supplier : "")); }
+    catch (err: any) { res.status(500).json({ message: err.message }); }
   });
   // §5 guards: what the PO detail's Cancel PO / Delete PO need to know
   // (FBA shipments block both; units still at Velocity are named on delete).
