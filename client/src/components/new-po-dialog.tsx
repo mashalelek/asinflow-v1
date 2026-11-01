@@ -28,7 +28,7 @@ import { Label } from "@/components/ui/label";
 import { MoneyCalcInput, calcMoney } from "@/components/money-calc-input";
 import { useAuth } from "@/contexts/auth-context";
 import {
-  checkPoForm, emptyPoForm, emptyProduct, emptyPromo, emptyPayment, shipsToFromForm, yieldFromPacks, promoCountsByDefault,
+  checkPoForm, emptyPoForm, emptyProduct, emptyPromo, emptyPayment, shipsToFromForm, yieldFromPacks, promoCountsByDefault, canonicalPaymentName, PROMO_REFLECTED_NOTE,
   SOLD_AS_OPTIONS, PROMO_TYPES, PAYMENT_METHODS, CASHBACK_STATUSES,
   type PoFormState, type PoFormProduct, type PoFormPromo, type PoFormPayment, type PoFormPrefill, type PrefillSource,
 } from "@shared/po-form";
@@ -133,8 +133,8 @@ function AsinPicker({ value, product, supplier, guess, known, onPick, onChange, 
     else if (e.key === "Escape" || e.key === "Tab") setOpen(false);
   };
   return (
-    <div className="relative min-w-[11rem]" data-testid={`asin-picker-${rowIndex}`}>
-      <Input value={value} role="combobox" aria-expanded={open} aria-autocomplete="list" onChange={(e) => { onChange(e.target.value.toUpperCase()); setOpen(true); setHi(0); }} onFocus={() => setOpen(true)} onBlur={() => setOpen(false)} onKeyDown={onKey} placeholder="ASIN / title / SKU" className={`h-8 font-mono text-xs ${mark}`} data-testid={`input-new-po-asin-${rowIndex}`} autoComplete="off" />
+    <div className={compact ? "relative w-full" : "relative min-w-[11rem]"} data-testid={`asin-picker-${rowIndex}`}>
+      <Input value={value} role="combobox" aria-expanded={open} aria-autocomplete="list" onChange={(e) => { onChange(e.target.value.toUpperCase()); setOpen(true); setHi(0); }} onFocus={() => setOpen(true)} onBlur={() => setOpen(false)} onKeyDown={onKey} placeholder={compact ? "ASIN / title" : "ASIN / title / SKU"} className={`h-8 font-mono text-xs ${mark}`} data-testid={`input-new-po-asin-${rowIndex}`} autoComplete="off" />
       {open && (
         <div className="absolute left-0 top-full z-50 mt-1 w-[28rem] rounded-md border bg-popover p-1 text-popover-foreground shadow-md" role="listbox" onMouseDown={(e) => e.preventDefault()} data-testid={`asin-suggestions-${rowIndex}`}>
           {shown.length === 0 && !notInAf && <div className="px-2 py-1.5 text-xs text-muted-foreground">{q.length >= 2 ? "No match — keep typing an ASIN, title, SKU or brand" : product.trim() ? "No suggestions yet — type an ASIN, title or SKU" : "Type an ASIN, title or SKU"}</div>}
@@ -192,7 +192,9 @@ export function NewPoForm({ open, onOpenChange, onCreated, prefill }: { open: bo
   const [serverErr, setServerErr] = useState<string | null>(null);
   const [touched, setTouched] = useState(false);
   const [shipsToEdited, setShipsToEdited] = useState(false);
-  const [people, setPeople] = useState<{ users: Array<{ id: number; display_name: string }>; emails: string[] }>({ users: [], emails: [] });
+  /** The form's lists (GET /api/pos/purchasers, round 2 2026-11-01): purchasers, every email used + the defaults, cashback sites in order, canonical payment names + aliases, the Velocity prep rate. */
+  const [people, setPeople] = useState<{ users: Array<{ id: number; display_name: string }>; emails: string[]; cashback_sites: string[]; payment_methods: string[]; payment_aliases: Record<string, string>; velocity_prep: number | null }>({ users: [], emails: [], cashback_sites: [], payment_methods: [], payment_aliases: {}, velocity_prep: null });
+  const [emailOther, setEmailOther] = useState(false);
   const [packAsk, setPackAsk] = useState<{ asin: string; from: string; to: string } | null>(null);
   const [rawOpen, setRawOpen] = useState(false);
   const known = useMemo(() => new Map<string, AsinInfo>(), []);
@@ -206,7 +208,8 @@ export function NewPoForm({ open, onOpenChange, onCreated, prefill }: { open: bo
     if (prefill?.prefill.sources && Object.keys(prefill.prefill.sources).some((k) => k === "ships_to")) setShipsToEdited(true); else setShipsToEdited(false);
     emailDefaultRef.current = seeded.prefill?.sources?.email_used === "af" ? (seeded.email_used ?? "") : "";
     setForm(seeded); setServerErr(null); setTouched(false); setRawOpen(false);
-    fetch("/api/pos/purchasers").then((r) => r.json()).then((d) => setPeople({ users: d.users ?? [], emails: d.emails ?? [] })).catch(() => {});
+    setEmailOther(false);
+    fetch("/api/pos/purchasers").then((r) => r.json()).then((d) => setPeople({ users: d.users ?? [], emails: d.emails ?? [], cashback_sites: d.cashback_sites ?? [], payment_methods: d.payment_methods ?? [], payment_aliases: d.payment_aliases ?? {}, velocity_prep: typeof d.velocity_prep === "number" ? d.velocity_prep : null })).catch(() => {});
   }, [open, prefill, user]);
   // Email used default per supplier (Maria 2026-11-01; GET /api/pos/email-default): fills an empty field, or one still holding
   // the previous supplier's default, with a stone marker; a typed or model-read email is left alone.
@@ -231,6 +234,20 @@ export function NewPoForm({ open, onOpenChange, onCreated, prefill }: { open: bo
 
   const shipsTo = shipsToEdited && (form.ships_to === "home" || form.ships_to === "velocity") ? form.ships_to : shipsToFromForm(form);
   const check = useMemo(() => checkPoForm(form), [form]);
+  // Prep default (Maria 2026-11-01, 11c — a Velocity PO saved with prep $0.00): Ships to = Velocity and a blank prep → the Velocity
+  // prep rate from settings; Home → 0.00. Stone marker, editable; a typed prep is never touched.
+  const prepAutoRef = useRef<string>("");
+  useEffect(() => {
+    if (!open || people.velocity_prep == null) return;
+    const want = shipsTo === "velocity" ? people.velocity_prep.toFixed(2) : "0.00";
+    const prev = prepAutoRef.current;
+    prepAutoRef.current = want;
+    setForm((f) => {
+      let changed = false;
+      const products = f.products.map((p) => { const cur = (p.prep_cost ?? "").trim(); if ((cur !== "" && cur !== prev) || cur === want) return p; changed = true; return { ...p, prep_cost: want }; });
+      return changed ? setMark({ ...f, products }, "prep_cost", "af") : f;
+    });
+  }, [open, shipsTo, people.velocity_prep]);
   const sources = form.prefill?.sources ?? {};
   const mark = (key: string) => markClass(sources[key]);
   /** A server-side correction's tooltip on an amber field ("qty inferred from subtotal"); gone once the field is edited. */
@@ -297,12 +314,13 @@ export function NewPoForm({ open, onOpenChange, onCreated, prefill }: { open: bo
   };
   const answerPack = (updateAf: boolean) => { if (packAsk) setForm((f) => ({ ...f, pack_updates: { ...(f.pack_updates ?? {}), [packAsk.asin]: updateAf } })); setPackAsk(null); };
 
-  const setPromo = (i: number, patch: Partial<PoFormPromo>) => setForm((f0) => { const f = clearMark(f0, `promos.${i}`); return { ...f, promos: (f.promos ?? []).map((p, j) => (j === i ? { ...p, ...patch, ...(patch.type !== undefined && patch.type !== p.type ? { counts_toward_cogs: promoCountsByDefault(String(patch.type)) } : {}) } : p)) }; });
+  const setPromo = (i: number, patch: Partial<PoFormPromo>) => setForm((f0) => { const f = clearMark(f0, `promos.${i}`); return { ...f, promos: (f.promos ?? []).map((p, j) => (j === i ? { ...p, ...patch, ...(patch.type !== undefined && patch.type !== p.type ? { counts_toward_cogs: promoCountsByDefault(String(patch.type), check.discountReflected) } : {}) } : p)) }; });
   const setPay = (i: number, patch: Partial<PoFormPayment>) => setForm((f0) => { const f = clearMark(f0, `payments.${i}`); return { ...f, payments: (f.payments ?? []).map((p, j) => (j === i ? { ...p, ...patch } : p)) }; });
 
   const save = async () => {
     setTouched(true); setServerErr(null);
-    const settled = settleMoney(form);
+    // Weighted GC % is read-only on the form: the computed value is what gets stored (the server recomputes it too).
+    const settled = settleMoney({ ...form, weighted_gc_discount_pct: check.weightedGcPct != null ? check.weightedGcPct.toFixed(2) : "" });
     if (!settled.ok) { setServerErr(`A money field can't be calculated: ${settled.error}`); return; }
     setForm(settled.form);
     if (!checkPoForm(settled.form).ok) return;
@@ -315,30 +333,32 @@ export function NewPoForm({ open, onOpenChange, onCreated, prefill }: { open: bo
     } catch (e: any) { setServerErr(e.message); } finally { setBusy(false); }
   };
 
-  const field = (k: keyof PoFormState, label: string, opts: { w?: string; type?: string; ph?: string; money?: boolean; list?: string } = {}) => (
-    <div className="min-w-0 space-y-0.5">
+  /** One header field at a fixed, content-sized width (Maria 2026-11-01: fields no longer stretch to the page; rows wrap). */
+  const field = (k: keyof PoFormState, label: string, opts: { px: number; type?: string; ph?: string; money?: boolean } ) => (
+    <div className="shrink-0 space-y-0.5" style={{ width: opts.px }}>
       <Label className="text-[11px] text-muted-foreground" htmlFor={`new-po-${String(k)}`}>{label}</Label>
       {opts.money
-        ? <MoneyCalcInput id={`new-po-${String(k)}`} value={(form[k] as string) ?? ""} onChange={(v) => set(k, v)} placeholder={opts.ph} className={`h-8 text-sm ${opts.w ?? ""} ${mark(String(k))}`} data-testid={`input-new-po-${String(k)}`} />
-        : <Input id={`new-po-${String(k)}`} type={opts.type ?? "text"} list={opts.list} value={(form[k] as string) ?? ""} onChange={(e) => set(k, e.target.value)} placeholder={opts.ph} className={`h-8 text-sm ${opts.w ?? ""} ${mark(String(k))}`} data-testid={`input-new-po-${String(k)}`} />}
+        ? <MoneyCalcInput id={`new-po-${String(k)}`} value={(form[k] as string) ?? ""} onChange={(v) => set(k, v)} placeholder={opts.ph} className={`h-8 text-sm ${mark(String(k))}`} data-testid={`input-new-po-${String(k)}`} />
+        : <Input id={`new-po-${String(k)}`} type={opts.type ?? "text"} value={(form[k] as string) ?? ""} onChange={(e) => set(k, e.target.value)} placeholder={opts.ph} className={`h-8 text-sm ${mark(String(k))}`} data-testid={`input-new-po-${String(k)}`} />}
     </div>
   );
-  const th = "px-2 py-1 text-[11px] font-medium text-left whitespace-nowrap text-muted-foreground";
   const sel = "h-8 rounded border border-input bg-background px-1 text-xs";
   const hairline = { border: "0.5px solid hsl(var(--border))" } as const;
   const pf = form.prefill;
   const totalPayments = r2((form.payments ?? []).reduce((t, p) => t + (Number(String(p.amount).replace(/[$,\s]/g, "")) || 0), 0));
-  // The line grid (Maria's whiteboard): product row · ↳ ASIN rows beneath. Column templates shared by the header and the rows.
-  const G_LINE = "grid grid-cols-[7.5rem_minmax(12rem,1fr)_5.5rem_4rem_4.5rem_1.75rem] items-start gap-x-2";
-  const G_ASIN = "grid grid-cols-[1rem_11rem_minmax(8rem,1fr)_5rem_6.5rem_4rem_4rem_8rem_1.75rem_auto] items-start gap-x-2";
+  const emailInList = people.emails.includes((form.email_used ?? "").trim());
+  const emailSelectValue = emailOther || (!emailInList && (form.email_used ?? "").trim() !== "") ? "__other" : (form.email_used ?? "");
+  // The line grid (Maria's whiteboard): product row · ↳ ASIN rows beneath. The product name flexes up to ~640 px; the ASIN row's
+  // cells keep fixed widths and wrap on a narrow window (no horizontal scroll at any width ≥ 1024).
+  const G_LINE = "grid grid-cols-[7.5rem_minmax(12rem,40rem)_5.5rem_4rem_4.5rem_1.75rem] items-start gap-x-2";
+  const A = { arrow: 16, asin: 176, qty: 72, sold: 92, upp: 60, prep: 64, sourcing: 72, cogs: 88, paid: 72, adj: 72, reason: 96, notes: 100, rm: 24 } as const;
+  const cell = (w: number, cls = "") => ({ className: `shrink-0 ${cls}`, style: { width: w } });
+  const ASIN_LABELS: Array<[string, number | "title", string?]> = [["↳", A.arrow, "text-center"], ["ASIN", A.asin], ["Title", "title"], ["ASIN qty", A.qty, "text-right"], ["Sold as", A.sold], ["Units/pack", A.upp, "text-right"], ["Prep", A.prep, "text-right"], ["Sourcing", A.sourcing, "text-right"], ["COGS", A.cogs, "text-right"], ["Paid", A.paid, "text-right"], ["Adjustment", A.adj, "text-right"], ["Reason", A.reason], ["Notes", A.notes], ["", A.rm]];
   if (!open) return null;
 
   return (
     <div className="relative flex min-h-[calc(100vh-64px)] flex-col" data-testid="new-po-page">
-      <div className="flex flex-wrap items-baseline justify-between gap-x-4 gap-y-1">
-        <h1 className="text-xl font-semibold">New PO</h1>
-        <p className="text-xs text-muted-foreground">Creates the PO, its products and ASIN rows in AF. Sync POs never overwrites it.</p>
-      </div>
+      <h1 className="text-xl font-semibold">New PO</h1>
 
       {pf && (
         <div className="mt-1.5 rounded-md px-3 py-1.5 text-xs" style={{ ...hairline, background: "hsl(var(--muted) / 0.4)" }} data-testid="new-po-prefill-banner">
@@ -352,12 +372,12 @@ export function NewPoForm({ open, onOpenChange, onCreated, prefill }: { open: bo
         </div>
       )}
 
-      {/* §6.2 order fields — two rows at 1440: identity, then money. */}
-      <div className="mt-2 grid grid-cols-3 gap-x-3 gap-y-1.5 md:grid-cols-5 xl:grid-cols-9" data-testid="new-po-order-fields">
-        {field("supplier", "Supplier", { ph: "walmart.com" })}
-        {field("order_id", "Order #")}
-        {field("order_date", "Order date", { type: "date" })}
-        <div className="min-w-0 space-y-0.5">
+      {/* Row A — identity (fixed widths, wraps; PO notes takes the rest of the row). */}
+      <div className="mt-2 flex flex-wrap items-start gap-x-3 gap-y-1.5" data-testid="new-po-order-fields">
+        {field("supplier", "Supplier", { px: 220, ph: "walmart.com" })}
+        {field("order_id", "Order #", { px: 180 })}
+        {field("order_date", "Order date", { px: 140, type: "date" })}
+        <div className="shrink-0 space-y-0.5" style={{ width: 140 }}>
           <Label className="text-[11px] text-muted-foreground" htmlFor="new-po-purchased_by">Purchased by</Label>
           {people.users.length > 0
             ? <select id="new-po-purchased_by" value={form.purchased_by_user_id ?? ""} onChange={(e) => { const u = people.users.find((x) => String(x.id) === e.target.value); setForm((f) => ({ ...f, purchased_by_user_id: e.target.value, purchased_by: u?.display_name ?? f.purchased_by })); }} className={`${sel} h-8 w-full text-sm`} data-testid="input-new-po-purchased_by">
@@ -365,16 +385,24 @@ export function NewPoForm({ open, onOpenChange, onCreated, prefill }: { open: bo
               </select>
             : <Input id="new-po-purchased_by" value={form.purchased_by} onChange={(e) => set("purchased_by", e.target.value)} className="h-8 text-sm" data-testid="input-new-po-purchased_by" />}
         </div>
-        <div className="min-w-0 space-y-0.5">
+        <div className="shrink-0 space-y-0.5" style={{ width: 140 }}>
           <Label className="text-[11px] text-muted-foreground" htmlFor="new-po-ships_to">Ships to</Label>
           <select id="new-po-ships_to" value={shipsTo} onChange={(e) => { set("ships_to", e.target.value); setShipsToEdited(true); }} className={`${sel} h-8 w-full text-sm ${mark("ships_to")}`} data-testid="input-new-po-ships_to" title={shipsToEdited ? "Set by hand" : "From prep cost: any product with prep > 0 → Velocity"}>
             <option value="velocity">Velocity</option>
             <option value="home">Home</option>
           </select>
         </div>
-        {field("email_used", "Email used", { list: "new-po-emails", ph: people.emails[0] ?? "" })}
-        <datalist id="new-po-emails">{people.emails.map((e) => <option key={e} value={e} />)}</datalist>
-        <div className="min-w-0 space-y-0.5">
+        {/* Email used (Maria 2026-11-01): every email ever used + the two defaults, the resolved default preselected; "Other…" frees the text. */}
+        <div className="shrink-0 space-y-0.5" style={{ width: 260 }}>
+          <Label className="text-[11px] text-muted-foreground" htmlFor="new-po-email_used">Email used</Label>
+          <select id="new-po-email_used" value={emailSelectValue} onChange={(e) => { if (e.target.value === "__other") { setEmailOther(true); set("email_used", ""); } else { setEmailOther(false); set("email_used", e.target.value); } }} className={`${sel} h-8 w-full text-sm ${mark("email_used")}`} data-testid="input-new-po-email_used">
+            <option value="">—</option>
+            {people.emails.map((e) => <option key={e} value={e}>{e}</option>)}
+            <option value="__other">Other…</option>
+          </select>
+          {emailSelectValue === "__other" && <Input value={form.email_used ?? ""} onChange={(e) => set("email_used", e.target.value)} placeholder="name@example.com" className="h-8 text-sm" data-testid="input-new-po-email_used-other" autoFocus={emailOther} />}
+        </div>
+        <div className="shrink-0 space-y-0.5" style={{ width: 160 }}>
           <Label className="text-[11px] text-muted-foreground">Subscription</Label>
           <div className={`flex h-8 items-center gap-2 text-sm ${mark("subscription")}`}>
             <input type="checkbox" checked={form.subscription?.present ?? false} onChange={(e) => setForm((f) => clearMark({ ...f, subscription: { present: e.target.checked, frequency_weeks: f.subscription?.frequency_weeks ?? "" } }, "subscription"))} data-testid="input-new-po-subscription" />
@@ -382,19 +410,33 @@ export function NewPoForm({ open, onOpenChange, onCreated, prefill }: { open: bo
             {!form.subscription?.present && <span className="text-xs text-muted-foreground">No</span>}
           </div>
         </div>
-        <div className="col-span-2 min-w-0 space-y-0.5">
+        <div className="min-w-[200px] flex-1 space-y-0.5">
           <Label className="text-[11px] text-muted-foreground" htmlFor="new-po-notes">PO notes</Label>
           <Input id="new-po-notes" value={form.notes} onChange={(e) => set("notes", e.target.value)} className={`h-8 text-sm ${mark("notes")}`} data-testid="input-new-po-notes" />
         </div>
-        {field("subtotal", "Subtotal", { ph: check.computedSubtotal.toFixed(2), money: true })}
-        {field("discount", "Discount", { ph: "0.00", money: true })}
-        {field("tax", "Tax", { ph: "0.00", money: true })}
-        {field("sh_donations", "Shipping (S&H + donations)", { ph: "0.00", money: true })}
-        {field("order_total", "Order total", { ph: check.effectiveOrderTotal.toFixed(2), money: true })}
-        {field("weighted_gc_discount_pct", "Weighted GC %")}
-        {field("cashback_site", "Cashback site")}
-        {field("cashback_pct", "Cashback %")}
-        <div className="min-w-0 space-y-0.5">
+      </div>
+
+      {/* Row B — money. Weighted GC % is computed from the Payments block, read-only. */}
+      <div className="mt-1.5 flex flex-wrap items-start gap-x-3 gap-y-1.5" data-testid="new-po-money-fields">
+        {field("subtotal", "Subtotal", { px: 120, ph: check.computedSubtotal.toFixed(2), money: true })}
+        {field("discount", "Discount", { px: 120, ph: "0.00", money: true })}
+        {field("tax", "Tax", { px: 120, ph: "0.00", money: true })}
+        {field("sh_donations", "Shipping", { px: 120, ph: "0.00", money: true })}
+        {field("order_total", "Order total", { px: 120, ph: check.effectiveOrderTotal.toFixed(2), money: true })}
+        <div className="shrink-0 space-y-0.5" style={{ width: 120 }}>
+          <Label className="text-[11px] text-muted-foreground">Weighted GC %</Label>
+          <div className="flex h-8 items-center rounded border border-input bg-muted/40 px-2 font-mono text-sm" title="Σ(gift-card payment amount × its GC %) ÷ order total — from the Payments block; stored on save" data-testid="new-po-weighted-gc">{check.weightedGcPct != null ? `${check.weightedGcPct}%` : <span className="text-muted-foreground/60">—</span>}</div>
+        </div>
+        <div className="shrink-0 space-y-0.5" style={{ width: 180 }}>
+          <Label className="text-[11px] text-muted-foreground" htmlFor="new-po-cashback_site">Cashback site</Label>
+          <select id="new-po-cashback_site" value={form.cashback_site} onChange={(e) => set("cashback_site", e.target.value)} className={`${sel} h-8 w-full text-sm ${mark("cashback_site")}`} data-testid="input-new-po-cashback_site">
+            <option value="">None</option>
+            {people.cashback_sites.map((c) => <option key={c} value={c}>{c}</option>)}
+            {form.cashback_site && !people.cashback_sites.includes(form.cashback_site) && <option value={form.cashback_site}>{form.cashback_site}</option>}
+          </select>
+        </div>
+        {field("cashback_pct", "Cashback %", { px: 80 })}
+        <div className="shrink-0 space-y-0.5" style={{ width: 120 }}>
           <Label className="text-[11px] text-muted-foreground" htmlFor="new-po-cashback_status">Cashback status</Label>
           <select id="new-po-cashback_status" value={form.cashback_status ?? ""} onChange={(e) => set("cashback_status", e.target.value)} className={`${sel} h-8 w-full text-sm`} data-testid="input-new-po-cashback_status">
             <option value="">—</option>{CASHBACK_STATUSES.map((s) => <option key={s} value={s}>{s}</option>)}
@@ -402,15 +444,59 @@ export function NewPoForm({ open, onOpenChange, onCreated, prefill }: { open: bo
         </div>
       </div>
 
-      {/* §6.3 lines — Maria's whiteboard (2026-11-01): the product row, ↳ one ASIN row per ASIN beneath it; a bundle = several product rows in one outlined box with one ↳ ASIN row. */}
+      {/* Rows C / D — §7.2 promos and §8.2 payments: full-width blocks, side by side from 1440 px. */}
+      <div className="mt-2 grid gap-x-6 gap-y-2 min-[1440px]:grid-cols-2">
+        <div className="space-y-1" data-testid="new-po-promos">
+          <div className="flex items-center justify-between"><span className="text-[11px] font-semibold uppercase tracking-wider text-muted-foreground">Promos</span><Button size="sm" variant="ghost" className="h-7" onClick={() => setForm((f) => ({ ...f, promos: [...(f.promos ?? []), { ...emptyPromo(), counts_toward_cogs: promoCountsByDefault("sale", check.discountReflected) }] }))} data-testid="button-new-po-add-promo"><Plus className="h-3.5 w-3.5 mr-1" /> Promo</Button></div>
+          {(form.promos ?? []).length === 0 && <p className="text-xs text-muted-foreground">None. Sale and coupon count toward COGS; rewards do not (toggle each).</p>}
+          {(form.promos ?? []).map((p, i) => (
+            <div key={i} className={`flex flex-wrap items-center gap-1.5 rounded px-1 py-0.5 ${mark(`promos.${i}`)}`} data-testid={`row-new-po-promo-${i}`}>
+              <select value={p.type} onChange={(e) => setPromo(i, { type: e.target.value as PoFormPromo["type"] })} className={sel} data-testid={`select-new-po-promo-type-${i}`}>
+                <option value="">type…</option>{PROMO_TYPES.map((t) => <option key={t} value={t}>{t}</option>)}
+              </select>
+              <Input value={p.description} onChange={(e) => setPromo(i, { description: e.target.value })} placeholder="15% off with WELCOME15" className="h-8 min-w-[12rem] flex-1 text-xs" data-testid={`input-new-po-promo-desc-${i}`} />
+              <MoneyCalcInput value={p.amount} onChange={(v) => setPromo(i, { amount: v })} placeholder="$" className="h-8 w-20 text-right text-xs" data-testid={`input-new-po-promo-amount-${i}`} />
+              <Input value={p.percent} onChange={(e) => setPromo(i, { percent: e.target.value })} placeholder="%" inputMode="decimal" className="h-8 w-14 text-right text-xs" data-testid={`input-new-po-promo-pct-${i}`} />
+              <label className="flex items-center gap-1 text-xs" title="Counts toward COGS"><input type="checkbox" checked={p.counts_toward_cogs} onChange={(e) => setPromo(i, { counts_toward_cogs: e.target.checked })} data-testid={`input-new-po-promo-counts-${i}`} /> COGS</label>
+              {check.discountReflected && <span className="text-[11px] text-muted-foreground" title="Σ price × qty already equals the post-discount subtotal: this promo reduces no cost" data-testid={`new-po-promo-reflected-${i}`}>{PROMO_REFLECTED_NOTE}</span>}
+              <button type="button" onClick={() => setForm((f) => ({ ...f, promos: (f.promos ?? []).filter((_, j) => j !== i) }))} className="text-muted-foreground/60 hover:text-destructive" data-testid={`button-new-po-remove-promo-${i}`}><Trash2 className="h-3.5 w-3.5" /></button>
+            </div>
+          ))}
+        </div>
+        <div className="space-y-1" data-testid="new-po-payments">
+          <div className="flex items-center justify-between"><span className="text-[11px] font-semibold uppercase tracking-wider text-muted-foreground">Payments</span><Button size="sm" variant="ghost" className="h-7" onClick={() => setForm((f) => ({ ...f, payments: [...(f.payments ?? []), emptyPayment()] }))} data-testid="button-new-po-add-payment"><Plus className="h-3.5 w-3.5 mr-1" /> Payment</Button></div>
+          {(form.payments ?? []).length === 0 && <p className="text-xs text-muted-foreground">None recorded.</p>}
+          <datalist id="new-po-payment-names">{people.payment_methods.map((n) => <option key={n} value={n} />)}</datalist>
+          {(form.payments ?? []).map((p, i) => (
+            <div key={i} className={`flex flex-wrap items-center gap-1.5 rounded px-1 py-0.5 ${mark(`payments.${i}`)}`} data-testid={`row-new-po-payment-${i}`}>
+              <select value={p.method} onChange={(e) => setPay(i, { method: e.target.value as PoFormPayment["method"] })} className={sel} data-testid={`select-new-po-payment-method-${i}`}>
+                <option value="">method…</option>{PAYMENT_METHODS.map((m) => <option key={m} value={m}>{m.replace("_", " ")}</option>)}
+              </select>
+              <Input value={p.nickname} list="new-po-payment-names" onChange={(e) => setPay(i, { nickname: e.target.value })} onBlur={() => { const c = canonicalPaymentName(p.nickname, people.payment_aliases); if (c !== p.nickname) setPay(i, { nickname: c }); }} placeholder="Amex" className="h-8 w-36 text-xs" data-testid={`input-new-po-payment-nick-${i}`} />
+              <Input value={p.last4} onChange={(e) => setPay(i, { last4: e.target.value.replace(/\D/g, "").slice(0, 4) })} placeholder="last 4" inputMode="numeric" className="h-8 w-16 font-mono text-xs" data-testid={`input-new-po-payment-last4-${i}`} />
+              <MoneyCalcInput value={p.amount} onChange={(v) => setPay(i, { amount: v })} placeholder="$" className="h-8 w-20 text-right text-xs" data-testid={`input-new-po-payment-amount-${i}`} />
+              {p.method === "gift_card" && <label className="flex items-center gap-1 text-xs" title="The gift card's discount % — feeds the weighted GC %">GC % <Input value={p.gift_card_discount_pct} onChange={(e) => setPay(i, { gift_card_discount_pct: e.target.value })} placeholder="GC %" inputMode="decimal" className="h-8 w-14 text-right text-xs" data-testid={`input-new-po-payment-gc-${i}`} /></label>}
+              <button type="button" onClick={() => setForm((f) => ({ ...f, payments: (f.payments ?? []).filter((_, j) => j !== i) }))} className="text-muted-foreground/60 hover:text-destructive" data-testid={`button-new-po-remove-payment-${i}`}><Trash2 className="h-3.5 w-3.5" /></button>
+            </div>
+          ))}
+          {(form.payments ?? []).some((p) => p.amount.trim() !== "") && <p className="text-[11px] text-muted-foreground">Payments {money(totalPayments)} · order total {money(check.effectiveOrderTotal)}</p>}
+        </div>
+      </div>
+
+      {/* §6.3 lines — Maria's whiteboard (2026-11-01): the product row, ↳ one ASIN row per ASIN beneath it (its costs on the row since round 2); a bundle = several product rows in one outlined box with one ↳ ASIN row. */}
       <div className="mt-2 space-y-1" data-testid="new-po-lines">
         <div className="flex items-center justify-between">
           <span className="text-[11px] font-semibold uppercase tracking-wider text-muted-foreground">Lines as bought · ASIN rows beneath</span>
           <Button size="sm" variant="outline" className="h-7" onClick={addLine} data-testid="button-new-po-add-product"><Plus className="h-3.5 w-3.5 mr-1" /> Add line</Button>
         </div>
         <div className="rounded-md" style={hairline} data-testid="new-po-products">
-          <div className={`${G_LINE} rounded-t-md bg-muted/40 px-2 py-1 text-[11px] font-medium text-muted-foreground`}>
-            <span>SKU / UPC</span><span>Product name</span><span>Price</span><span className="text-right">Qty</span><span className="text-right" title="The retailer's pack — a 12-count is 12">Units / pack</span><span />
+          <div className="rounded-t-md bg-muted/40 px-2 py-1 text-[11px] font-medium text-muted-foreground">
+            <div className={G_LINE}>
+              <span>SKU / UPC</span><span>Product name</span><span>Price</span><span className="text-right">Qty</span><span className="text-right" title="The retailer's pack — a 12-count is 12">Units / pack</span><span />
+            </div>
+            <div className="mt-1 flex flex-wrap items-center gap-x-2 border-t border-border/60 pt-1" data-testid="new-po-asin-labels">
+              {ASIN_LABELS.map(([label, w, cls], n) => w === "title" ? <span key={n} className="min-w-[7.5rem] flex-1">{label}</span> : <span key={n} {...cell(w, cls)}>{label}</span>)}
+            </div>
           </div>
           {boxes.map((box, bi) => {
             const errRows = box.lines.flatMap((l) => l.copies).filter((i) => touched && check.productErrors[i]);
@@ -437,126 +523,60 @@ export function NewPoForm({ open, onOpenChange, onCreated, prefill }: { open: bo
                     const i = slot[0]; const p = form.products[i];
                     const units = slotUnits(form.products, slot, box.bundle); const frac = isFractional(units);
                     const anyQty = slot.some((j) => Number(form.products[j].qty_ordered) > 0);
-                    const qty = Number(p.qty_ordered) || 0, r = Number(p.retailer_units_per_pack ?? "1") || 1, u = p.sold_as === "individual" ? 1 : Number(p.units_per_pack) || 1; // the math, shown on hover
+                    const qty = Number(p.qty_ordered) || 0, r = Number(p.retailer_units_per_pack ?? "1") || 1, u = p.sold_as === "individual" ? 1 : Number(p.units_per_pack) || 1;
                     const info = known.get(p.asin.toUpperCase());
                     const guess = p.asin.length === 10 && sources[`products.${i}.asin`] === "model" ? p.asin : null;
                     const manual = slot.some((j) => form.products[j].yield_manual);
+                    const a = check.asins.find((x) => x.asin === p.asin.toUpperCase()) ?? null; // this ASIN row's three costs (§7)
+                    const adj = a ? form.cogs_adjustments?.[a.asin] : undefined;
                     return (
-                      <div key={`${box.key}-${k}`} className={`${G_ASIN} py-0.5`} data-testid={`row-new-po-asin-${i}`}>
-                        <span className="pt-1.5 text-center text-sm leading-none text-muted-foreground" aria-hidden>↳</span>
-                        <AsinPicker value={p.asin} product={p.product_name} supplier={form.supplier} guess={guess} known={known} onPick={onPick(slot)} onChange={(v) => setMany(slot, "asin", v)} rowIndex={i} mark={mark(`products.${i}.asin`)} compact />
-                        <div className="flex h-8 min-w-0 items-center truncate text-xs text-muted-foreground" title={info?.title ?? ""} data-testid={`new-po-asin-title-${i}`}>
-                          {info?.in_af ? <><Database className="mr-1 h-2.5 w-2.5 shrink-0" /><span className="truncate">{info.title ?? "in AF"}</span></> : p.asin.length === 10 ? <span className="text-amber-600">Not in AF</span> : <span className="opacity-60">title from AF</span>}
+                      <div key={`${box.key}-${k}`} className="py-0.5" data-testid={`row-new-po-asin-${i}`}>
+                        <div className="flex flex-wrap items-start gap-x-2 gap-y-1">
+                          <span {...cell(A.arrow, "pt-1.5 text-center text-sm leading-none text-muted-foreground")} aria-hidden>↳</span>
+                          <div {...cell(A.asin)}><AsinPicker value={p.asin} product={p.product_name} supplier={form.supplier} guess={guess} known={known} onPick={onPick(slot)} onChange={(v) => setMany(slot, "asin", v)} rowIndex={i} mark={mark(`products.${i}.asin`)} compact /></div>
+                          <div className="flex h-8 min-w-[7.5rem] flex-1 items-center truncate text-xs text-muted-foreground" title={info?.title ?? ""} data-testid={`new-po-asin-title-${i}`}>
+                            {info?.in_af ? <><Database className="mr-1 h-2.5 w-2.5 shrink-0" /><span className="truncate">{info.title ?? "in AF"}</span></> : p.asin.length === 10 ? <span className="text-amber-600">Not in AF</span> : <span className="opacity-60">title from AF</span>}
+                          </div>
+                          <Input {...cell(A.qty)} value={anyQty ? String(units) : ""} onChange={(e) => onSlotUnits(box.key, k, e.target.value)} inputMode="decimal" placeholder="ASIN qty" className={`h-8 shrink-0 text-xs text-right ${frac ? "font-semibold text-destructive" : ""}`} title={box.bundle ? `sets: the smallest member's qty × yield = ${units}` : `${qty} × ${r} ÷ ${u} = ${units}`} data-testid={`input-new-po-asin-qty-${i}`} />
+                          {box.bundle
+                            ? <div {...cell(A.sold, "flex h-8 items-center text-xs")} data-testid={`select-new-po-sold_as-${i}`}>bundle</div>
+                            : <select value={p.sold_as} onChange={(e) => setMany(slot, "sold_as", e.target.value)} onBlur={() => onPackBlur(i)} className={`${sel} shrink-0 ${mark(`asin.${p.asin.toUpperCase()}`)}`} style={{ width: A.sold }} data-testid={`select-new-po-sold_as-${i}`}>
+                                {SOLD_AS_OPTIONS.filter((o) => o !== "bundle" || p.sold_as === "bundle").map((o) => <option key={o} value={o}>{o}</option>)}
+                              </select>}
+                          <Input {...cell(A.upp)} value={p.units_per_pack} disabled={p.sold_as === "individual"} onChange={(e) => setMany(slot, "units_per_pack", e.target.value)} onBlur={() => onPackBlur(i)} inputMode="numeric" title="ASIN units / pack" className={`h-8 shrink-0 text-xs text-right ${mark(`asin.${p.asin.toUpperCase()}`)}`} data-testid={`input-new-po-units_per_pack-${i}`} />
+                          <div {...cell(A.prep)}><MoneyCalcInput value={p.prep_cost} onChange={(v) => setMany(slot, "prep_cost", v)} placeholder="prep" className={`h-8 text-xs text-right ${mark("prep_cost")}`} data-testid={`input-new-po-prep_cost-${i}`} /></div>
+                          <div {...cell(A.sourcing, "flex h-8 items-center justify-end font-mono text-xs")} title="Col AR: before the gift-card discount, promos applied — what Update COGS in SC sends" data-testid={a ? `new-po-sourcing-${a.asin}` : undefined}>{a?.sourcing_cost ?? "—"}</div>
+                          <div {...cell(A.cogs)}>
+                            {a ? <MoneyCalcInput value={form.cost_overrides[a.asin] ?? ""} onChange={(v) => setOverride(a.asin, v)} placeholder={a.computed_cost_per_unit ?? "—"} className="h-8 text-right text-xs" data-testid={`input-new-po-cost-${a.asin}`} title={form.cost_overrides[a.asin] ? "typed" : `Col Y: ${a.sourcing_cost ?? "?"} × (1 − GC %)${a.cogs_adjustment ? ` + ${a.cogs_adjustment}` : ""}`} />
+                              : <div className="flex h-8 items-center justify-end font-mono text-xs">—</div>}
+                          </div>
+                          <div {...cell(A.paid, "flex h-8 items-center justify-end font-mono text-xs")} title="Every discount counted (rewards too)">{a?.paid_cost ?? "—"}</div>
+                          <div {...cell(A.adj)}>{a ? <MoneyCalcInput value={adj?.amount ?? ""} onChange={(v) => setAdj(a.asin, "amount", v)} placeholder="0.00" className="h-8 text-right text-xs" data-testid={`input-new-po-adj-${a.asin}`} /> : <span />}</div>
+                          <div {...cell(A.reason)}>{a ? <Input value={adj?.reason ?? ""} onChange={(e) => setAdj(a.asin, "reason", e.target.value)} placeholder="reason" className="h-8 text-xs" data-testid={`input-new-po-adj-reason-${a.asin}`} /> : <span />}</div>
+                          <Input {...cell(A.notes)} value={p.notes ?? ""} onChange={(e) => setMany(slot, "notes", e.target.value)} placeholder="notes" className="h-8 shrink-0 text-xs" data-testid={`input-new-po-line-notes-${i}`} />
+                          <button type="button" {...cell(A.rm, "mt-2 text-muted-foreground/60 hover:text-destructive disabled:opacity-30")} onClick={() => onRemoveAsin(box.key, k)} disabled={box.slots.length === 1} title="Remove this ASIN row" data-testid={`button-new-po-remove-asin-${i}`}><Trash2 className="h-3.5 w-3.5" /></button>
                         </div>
-                        <div>
-                          <Input value={anyQty ? String(units) : ""} onChange={(e) => onSlotUnits(box.key, k, e.target.value)} inputMode="decimal" placeholder="ASIN qty" className={`h-8 text-xs text-right ${frac ? "font-semibold text-destructive" : ""}`} title={box.bundle ? `sets: the smallest member's qty × yield = ${units}` : `${qty} × ${r} ÷ ${u} = ${units}`} data-testid={`input-new-po-asin-qty-${i}`} />
-                          {(frac || manual) && <div className={`mt-0.5 whitespace-nowrap text-[10px] ${frac ? "text-destructive" : "text-muted-foreground"}`} data-testid={frac ? `new-po-fractional-${i}` : undefined}>
-                            {frac ? FRACTIONAL_UNITS_NOTE : "typed"}
-                            {manual && <button type="button" className="ml-1 underline" onClick={() => onResetSlot(box.key, k)} title="Back to the pack math">reset</button>}
-                          </div>}
+                        {/* The math line: pack math and the cost allocation for this row. */}
+                        <div className={`ml-6 mt-0.5 flex flex-wrap gap-x-3 text-[10px] ${frac ? "text-destructive" : "text-muted-foreground"}`} data-testid={`new-po-asin-math-${i}`}>
+                          <span>{box.bundle ? `sets = the smallest member's qty × yield = ${anyQty ? units : "—"}` : `${qty} × ${r} ÷ ${u} = ${anyQty ? units : "—"} ASIN units`}</span>
+                          {a?.sourcing_cost && <span>sourcing = Σ(paid price × qty) ÷ {a.qty} = {a.sourcing_cost}</span>}
+                          {a?.computed_cost_per_unit && <span>COGS = {a.sourcing_cost} × (1 − {check.weightedGcPct ?? 0}%){a.cogs_adjustment ? ` + ${a.cogs_adjustment}` : ""} = {a.computed_cost_per_unit}</span>}
+                          {frac && <span data-testid={`new-po-fractional-${i}`}>{FRACTIONAL_UNITS_NOTE}</span>}
+                          {manual && <span>typed <button type="button" className="underline" onClick={() => onResetSlot(box.key, k)} title="Back to the pack math">reset</button></span>}
+                          {form.pack_updates?.[p.asin] === true && <span>updates ASIN in AF</span>}
                         </div>
-                        {box.bundle
-                          ? <div className="flex h-8 items-center text-xs" data-testid={`select-new-po-sold_as-${i}`}>bundle</div>
-                          : <select value={p.sold_as} onChange={(e) => setMany(slot, "sold_as", e.target.value)} onBlur={() => onPackBlur(i)} className={`${sel} ${mark(`asin.${p.asin.toUpperCase()}`)}`} data-testid={`select-new-po-sold_as-${i}`}>
-                              {SOLD_AS_OPTIONS.filter((o) => o !== "bundle" || p.sold_as === "bundle").map((o) => <option key={o} value={o}>{o}</option>)}
-                            </select>}
-                        <Input value={p.units_per_pack} disabled={p.sold_as === "individual"} onChange={(e) => setMany(slot, "units_per_pack", e.target.value)} onBlur={() => onPackBlur(i)} inputMode="numeric" title="ASIN units / pack" className={`h-8 text-xs text-right ${mark(`asin.${p.asin.toUpperCase()}`)}`} data-testid={`input-new-po-units_per_pack-${i}`} />
-                        <MoneyCalcInput value={p.prep_cost} onChange={(v) => setMany(slot, "prep_cost", v)} placeholder="prep" className={`h-8 text-xs text-right ${mark("prep_cost")}`} data-testid={`input-new-po-prep_cost-${i}`} />
-                        <Input value={p.notes ?? ""} onChange={(e) => setMany(slot, "notes", e.target.value)} placeholder="notes" className="h-8 text-xs" data-testid={`input-new-po-line-notes-${i}`} />
-                        <button type="button" onClick={() => onRemoveAsin(box.key, k)} disabled={box.slots.length === 1} className="mt-2 text-muted-foreground/60 hover:text-destructive disabled:opacity-30" title="Remove this ASIN row" data-testid={`button-new-po-remove-asin-${i}`}><Trash2 className="h-3.5 w-3.5" /></button>
-                        {k === box.slots.length - 1
-                          ? <div className="flex h-8 items-center gap-3 whitespace-nowrap pl-1 text-[11px]">
-                              <button type="button" className="text-primary hover:underline" onClick={() => onAddAsin(box.key)} data-testid={`button-new-po-add-asin-${bi}`}>+ Add ASIN</button>
-                              <button type="button" className="text-primary hover:underline" onClick={() => onAddToBundle(box.key)} data-testid={`button-new-po-add-to-bundle-${bi}`}>+ Add product to bundle</button>
-                            </div>
-                          : <span />}
                       </div>
                     );
                   })}
+                  <div className="ml-6 flex items-center gap-3 whitespace-nowrap text-[11px]">
+                    <button type="button" className="text-primary hover:underline" onClick={() => onAddAsin(box.key)} data-testid={`button-new-po-add-asin-${bi}`}>+ Add ASIN</button>
+                    <button type="button" className="text-primary hover:underline" onClick={() => onAddToBundle(box.key)} data-testid={`button-new-po-add-to-bundle-${bi}`}>+ Add product to bundle</button>
+                  </div>
                   {errRows.map((i) => <p key={i} className="ml-6 text-xs text-destructive" data-testid={`new-po-product-error-${i}`}>{form.products[i].asin || form.products[i].product_name || `row ${i + 1}`}: {check.productErrors[i].join(" · ")}</p>)}
                 </div>
               </div>
             );
           })}
-        </div>
-      </div>
-
-      {/* §6.5 / §7 ASIN rows with the three costs */}
-      {check.asins.length > 0 && (
-        <div className="mt-2 space-y-1">
-          <div className="text-[11px] font-semibold uppercase tracking-wider text-muted-foreground">ASIN rows this PO will create</div>
-          <table className="text-sm" data-testid="new-po-asin-summary">
-            <thead><tr>
-              <th className={th}>ASIN</th><th className={th}>Sold as</th><th className={`${th} text-right`}>Ordered</th><th className={`${th} text-right`}>Lines</th>
-              <th className={`${th} text-right`} title="Col AR: before the gift-card discount, promos applied — what Update COGS in SC sends">Sourcing cost</th>
-              <th className={`${th} text-right`} title="Col Y: Sourcing × (1 − GC %) + adjustment — feeds profitability, Aura, repricing">COGS / unit</th>
-              <th className={`${th} text-right`} title="Every discount counted (rewards too)">Paid cost</th>
-              <th className={th}>Adjustment</th><th className={th}>Pack</th>
-            </tr></thead>
-            <tbody>
-              {check.asins.map((a) => {
-                const adj = form.cogs_adjustments?.[a.asin];
-                const pu = form.pack_updates?.[a.asin];
-                return (
-                  <tr key={a.asin} data-testid={`row-new-po-asin-${a.asin}`}>
-                    <td className="px-2 py-0.5 font-mono text-xs">{a.asin}</td>
-                    <td className="px-2 py-0.5 text-xs">{a.sold_as}{a.sold_as !== "individual" ? ` × ${a.units_per_pack}` : ""}</td>
-                    <td className={`px-2 py-0.5 text-right ${isFractional(a.qty) ? "font-semibold text-destructive" : ""}`}>{a.qty}</td>
-                    <td className="px-2 py-0.5 text-right">{a.lines.length}</td>
-                    <td className="px-2 py-0.5 text-right font-mono text-xs" data-testid={`new-po-sourcing-${a.asin}`}>{a.sourcing_cost ?? "—"}</td>
-                    <td className="px-2 py-0.5 text-right">
-                      <MoneyCalcInput value={form.cost_overrides[a.asin] ?? ""} onChange={(v) => setOverride(a.asin, v)} placeholder={a.computed_cost_per_unit ?? "—"} className="h-7 w-24 text-right text-xs" data-testid={`input-new-po-cost-${a.asin}`} title={form.cost_overrides[a.asin] ? "typed" : `${a.sourcing_cost ?? "?"} × (1 − GC %)${a.cogs_adjustment ? ` + ${a.cogs_adjustment}` : ""}`} />
-                    </td>
-                    <td className="px-2 py-0.5 text-right font-mono text-xs">{a.paid_cost ?? "—"}</td>
-                    <td className="px-2 py-0.5">
-                      <span className="inline-flex items-center gap-1">
-                        <MoneyCalcInput value={adj?.amount ?? ""} onChange={(v) => setAdj(a.asin, "amount", v)} placeholder="0.00" className="h-7 w-16 text-right text-xs" data-testid={`input-new-po-adj-${a.asin}`} />
-                        <Input value={adj?.reason ?? ""} onChange={(e) => setAdj(a.asin, "reason", e.target.value)} placeholder="reason" className="h-7 w-32 text-xs" data-testid={`input-new-po-adj-reason-${a.asin}`} />
-                      </span>
-                    </td>
-                    <td className="px-2 py-0.5 text-[10px] text-muted-foreground">{pu === true ? "updates ASIN in AF" : pu === false ? "this PO only" : ""}</td>
-                  </tr>
-                );
-              })}
-            </tbody>
-          </table>
-        </div>
-      )}
-
-      {/* §7.2 promos and §8.2 payments — side by side */}
-      <div className="mt-2 grid gap-4 md:grid-cols-2">
-        <div className="space-y-1" data-testid="new-po-promos">
-          <div className="flex items-center justify-between"><span className="text-[11px] font-semibold uppercase tracking-wider text-muted-foreground">Promos</span><Button size="sm" variant="ghost" className="h-7" onClick={() => setForm((f) => ({ ...f, promos: [...(f.promos ?? []), emptyPromo()] }))} data-testid="button-new-po-add-promo"><Plus className="h-3.5 w-3.5 mr-1" /> Promo</Button></div>
-          {(form.promos ?? []).length === 0 && <p className="text-xs text-muted-foreground">None. Sale and coupon count toward COGS; rewards do not (toggle each).</p>}
-          {(form.promos ?? []).map((p, i) => (
-            <div key={i} className={`flex flex-wrap items-center gap-1.5 rounded px-1 py-0.5 ${mark(`promos.${i}`)}`} data-testid={`row-new-po-promo-${i}`}>
-              <select value={p.type} onChange={(e) => setPromo(i, { type: e.target.value as PoFormPromo["type"] })} className={sel} data-testid={`select-new-po-promo-type-${i}`}>
-                <option value="">type…</option>{PROMO_TYPES.map((t) => <option key={t} value={t}>{t}</option>)}
-              </select>
-              <Input value={p.description} onChange={(e) => setPromo(i, { description: e.target.value })} placeholder="15% off with WELCOME15" className="h-8 min-w-[12rem] flex-1 text-xs" data-testid={`input-new-po-promo-desc-${i}`} />
-              <MoneyCalcInput value={p.amount} onChange={(v) => setPromo(i, { amount: v })} placeholder="$" className="h-8 w-20 text-right text-xs" data-testid={`input-new-po-promo-amount-${i}`} />
-              <Input value={p.percent} onChange={(e) => setPromo(i, { percent: e.target.value })} placeholder="%" inputMode="decimal" className="h-8 w-14 text-right text-xs" data-testid={`input-new-po-promo-pct-${i}`} />
-              <label className="flex items-center gap-1 text-xs" title="Counts toward COGS"><input type="checkbox" checked={p.counts_toward_cogs} onChange={(e) => setPromo(i, { counts_toward_cogs: e.target.checked })} data-testid={`input-new-po-promo-counts-${i}`} /> COGS</label>
-              <button type="button" onClick={() => setForm((f) => ({ ...f, promos: (f.promos ?? []).filter((_, j) => j !== i) }))} className="text-muted-foreground/60 hover:text-destructive" data-testid={`button-new-po-remove-promo-${i}`}><Trash2 className="h-3.5 w-3.5" /></button>
-            </div>
-          ))}
-        </div>
-        <div className="space-y-1" data-testid="new-po-payments">
-          <div className="flex items-center justify-between"><span className="text-[11px] font-semibold uppercase tracking-wider text-muted-foreground">Payments</span><Button size="sm" variant="ghost" className="h-7" onClick={() => setForm((f) => ({ ...f, payments: [...(f.payments ?? []), emptyPayment()] }))} data-testid="button-new-po-add-payment"><Plus className="h-3.5 w-3.5 mr-1" /> Payment</Button></div>
-          {(form.payments ?? []).length === 0 && <p className="text-xs text-muted-foreground">None recorded.</p>}
-          {(form.payments ?? []).map((p, i) => (
-            <div key={i} className={`flex flex-wrap items-center gap-1.5 rounded px-1 py-0.5 ${mark(`payments.${i}`)}`} data-testid={`row-new-po-payment-${i}`}>
-              <select value={p.method} onChange={(e) => setPay(i, { method: e.target.value as PoFormPayment["method"] })} className={sel} data-testid={`select-new-po-payment-method-${i}`}>
-                <option value="">method…</option>{PAYMENT_METHODS.map((m) => <option key={m} value={m}>{m.replace("_", " ")}</option>)}
-              </select>
-              <Input value={p.nickname} onChange={(e) => setPay(i, { nickname: e.target.value })} placeholder="Amex" className="h-8 w-28 text-xs" data-testid={`input-new-po-payment-nick-${i}`} />
-              <Input value={p.last4} onChange={(e) => setPay(i, { last4: e.target.value.replace(/\D/g, "").slice(0, 4) })} placeholder="last 4" inputMode="numeric" className="h-8 w-16 font-mono text-xs" data-testid={`input-new-po-payment-last4-${i}`} />
-              <MoneyCalcInput value={p.amount} onChange={(v) => setPay(i, { amount: v })} placeholder="$" className="h-8 w-20 text-right text-xs" data-testid={`input-new-po-payment-amount-${i}`} />
-              {p.method === "gift_card" && <Input value={p.gift_card_discount_pct} onChange={(e) => setPay(i, { gift_card_discount_pct: e.target.value })} placeholder="GC %" inputMode="decimal" className="h-8 w-14 text-right text-xs" data-testid={`input-new-po-payment-gc-${i}`} />}
-              <button type="button" onClick={() => setForm((f) => ({ ...f, payments: (f.payments ?? []).filter((_, j) => j !== i) }))} className="text-muted-foreground/60 hover:text-destructive" data-testid={`button-new-po-remove-payment-${i}`}><Trash2 className="h-3.5 w-3.5" /></button>
-            </div>
-          ))}
-          {(form.payments ?? []).some((p) => p.amount.trim() !== "") && <p className="text-[11px] text-muted-foreground">Payments {money(totalPayments)} · order total {money(check.effectiveOrderTotal)}</p>}
         </div>
       </div>
 

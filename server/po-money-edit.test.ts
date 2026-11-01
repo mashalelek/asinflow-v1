@@ -7,7 +7,7 @@ function fake(opts: { version?: number | null; row?: any; line?: any } = {}) {
   const q = async (sql: string, params: any[] = []) => {
     calls.push({ sql, params });
     if (/SELECT id FROM purchase_orders WHERE id/.test(sql)) return { rows: [{ id: params[0] }], rowCount: 1 };
-    if (/SELECT id, subtotal, discount, weighted_gc_discount_pct, cost_formula_version FROM purchase_orders/.test(sql)) return { rows: [{ id: "p1", subtotal: "10", discount: "0", weighted_gc_discount_pct: null, cost_formula_version: opts.version ?? null }], rowCount: 1 };
+    if (/SELECT id, subtotal, discount, tax, sh_donations, order_total, weighted_gc_discount_pct, cost_formula_version FROM purchase_orders/.test(sql)) return { rows: [{ id: "p1", subtotal: "10", discount: "0", tax: "0", sh_donations: "0", order_total: "10", weighted_gc_discount_pct: null, cost_formula_version: opts.version ?? null }], rowCount: 1 };
     if (/SELECT \* FROM po_(payments|promos|line_refunds) WHERE id/.test(sql)) return { rows: opts.row ? [opts.row] : [], rowCount: opts.row ? 1 : 0 };
     if (/SELECT qty_ordered FROM po_line_items WHERE id/.test(sql)) return { rows: opts.line ? [opts.line] : [], rowCount: opts.line ? 1 : 0 };
     if (/RETURNING \*/.test(sql)) { const cols = /\(po_id(.*?)\) VALUES/.exec(sql)![1].split(",").map((s) => s.trim()).filter(Boolean); const row: any = { id: 11, po_id: params[0] }; let i = 1; for (const c of cols) { if (c === "position" || c === "source") continue; row[c] = params[i++]; } return { rows: [row], rowCount: 1 }; }
