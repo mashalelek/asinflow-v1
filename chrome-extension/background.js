@@ -5,13 +5,18 @@
 // host_permissions). Sign in to AsinFlow in a normal tab first; a 401 is
 // reported as "Sign in to AsinFlow".
 //
-// Capture PO (patch docs/claude_spec-patch-po-ai-prefill.md §4): the panel's
-// "Capture this page" injects scrub.js + capture.js into the active tab and
-// stores the scrubbed result in chrome.storage.session under the tab id,
-// one entry per checkout step (the latest capture of a step replaces the
-// previous one). "Open in AF" POSTs the pages to /api/pos/prefill (one AI
-// call, server side) and opens /pos/new?prefill=<id> in a new tab; the
-// capture is cleared on success, on Clear, or when the tab closes.
+// Capture PO (patch docs/claude_spec-patch-po-ai-prefill.md §4; v1.2 SPEC
+// §11): the panel's "Capture this page" injects scrub.js + capture.js into
+// the active tab and stores the scrubbed result in chrome.storage.session
+// under the tab id (one record per tab — buckets.js applyPage): one page
+// entry per checkout step (the latest capture of a step replaces the
+// previous one) plus the six data buckets, merged newest-wins per field.
+// "Open in AF" POSTs the pages (and the selected ship-to) to
+// /api/pos/prefill (one AI call, server side) and opens /pos/new?prefill=<id>
+// in a new tab; the capture is cleared on success, on Clear, or when the
+// tab closes.
+
+importScripts("buckets.js");
 
 const DEFAULT_SERVER_URL = "http://localhost:3000";
 const AF_FETCH = { credentials: "include" };
@@ -298,13 +303,9 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
         }
         const page = results?.[0]?.result;
         if (!page || page.error) { sendResponse({ success: false, message: page?.error || "Nothing could be read from this page" }); return; }
-        const key = captureKey(tab.id);
-        const cur = (await chrome.storage.session.get([key]))[key] || { host: new URL(tab.url).hostname, pages: {}, others: [], updatedAt: null, count: 0 };
-        const entry = { ...page, capturedAt: new Date().toISOString() };
-        if (page.step === "other") { cur.others = [...(cur.others || []).filter((p) => p.url !== page.url), entry].slice(-6); }
-        else cur.pages[page.step] = entry;
-        cur.host = new URL(tab.url).hostname; cur.updatedAt = entry.capturedAt;
-        cur.count = Object.keys(cur.pages).length + (cur.others || []).length;
+        const key = AfBuckets.captureKey(tab.id);
+        const prev = (await chrome.storage.session.get([key]))[key] || null;
+        const cur = AfBuckets.applyPage(prev, page, new URL(tab.url).hostname, new Date().toISOString());
         await chrome.storage.session.set({ [key]: cur });
         sendResponse({ success: true, capture: cur, step: page.step, chars: page.chars });
       } catch (err) { sendResponse({ success: false, message: err.message }); }
@@ -314,17 +315,19 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   if (message.type === "GET_CAPTURE") {
     (async () => {
       const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
-      const key = tab?.id ? captureKey(tab.id) : null;
-      const cur = key ? (await chrome.storage.session.get([key]))[key] : null;
+      const all = await chrome.storage.session.get(null);
+      const cur = tab?.id ? all[AfBuckets.captureKey(tab.id)] : null;
       let host = null; try { host = tab?.url ? new URL(tab.url).hostname : null; } catch { /* about:, chrome: */ }
-      sendResponse({ capture: cur || null, tabId: tab?.id ?? null, host, isAmazonProduct: isAmazonProductPage(tab?.url) });
+      // v1.2: captures are per tab; the panel lists the other tabs with a capture in progress.
+      const others = tab?.id != null ? AfBuckets.othersCapturing(all, tab.id) : [];
+      sendResponse({ capture: cur || null, tabId: tab?.id ?? null, host, title: tab?.title ?? null, isAmazonProduct: isAmazonProductPage(tab?.url), others });
     })();
     return true;
   }
   if (message.type === "CLEAR_CAPTURE") {
     (async () => {
       const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
-      if (tab?.id) await chrome.storage.session.remove([captureKey(tab.id)]);
+      if (tab?.id) await chrome.storage.session.remove([AfBuckets.captureKey(tab.id)]);
       sendResponse({ success: true });
     })();
     return true;
@@ -343,14 +346,15 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     (async () => {
       try {
         const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
-        const key = tab?.id ? captureKey(tab.id) : null;
+        const key = tab?.id ? AfBuckets.captureKey(tab.id) : null;
         const cur = key ? (await chrome.storage.session.get([key]))[key] : null;
         if (!cur || !cur.count) { sendResponse({ success: false, message: "Nothing captured yet" }); return; }
-        const pages = [...Object.values(cur.pages), ...(cur.others || [])].map((p) => ({ step: p.step, url: p.url, title: p.title, text: p.text, fields: p.fields || [] }));
+        const pages = AfBuckets.pagesForPrefill(cur);
+        const shipTo = AfBuckets.shipToForPrefill(cur); // the SELECTED address (or the ambiguous candidates) — the server leaves Ships to blank when ambiguous
         const serverUrl = await getServerUrl();
         const r = await fetch(`${serverUrl}/api/pos/prefill`, {
           ...AF_FETCH, method: "POST", headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ retailerHost: cur.host, capturedAt: cur.updatedAt, pages }),
+          body: JSON.stringify({ retailerHost: cur.host, capturedAt: cur.updatedAt, pages, ...(shipTo ? { shipTo } : {}) }),
           signal: AbortSignal.timeout(90000),
         });
         const data = await r.json().catch(() => ({}));
@@ -365,8 +369,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   }
 });
 
-const captureKey = (tabId) => `capture:${tabId}`;
-chrome.tabs.onRemoved.addListener((tabId) => { chrome.storage.session.remove([captureKey(tabId)]).catch(() => {}); });
+chrome.tabs.onRemoved.addListener((tabId) => { chrome.storage.session.remove([AfBuckets.captureKey(tabId)]).catch(() => {}); });
 
 // Listen for storage changes (when product data is updated by content script)
 chrome.storage.session.onChanged.addListener((changes) => {

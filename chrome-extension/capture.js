@@ -7,7 +7,10 @@
 // screenshot: document.title, the URL without its query string, the
 // rendered text (innerText of body, hidden elements excluded by the browser)
 // and the current values of input / select / textarea elements with their
-// labels — password inputs are never read.
+// labels — password inputs are never read. A checked radio / checkbox gives
+// the text of the option it sits in as a "selected: <label>" field (v1.2),
+// so the SELECTED shipping address, payment method and subscription choice
+// reach the buckets and the AI, not the first block on the page.
 (function () {
   "use strict";
   var S = globalThis.AfScrub;
@@ -33,6 +36,17 @@
     return cs.visibility !== "hidden" && cs.display !== "none";
   }
 
+  /** The text of the option a checked radio / checkbox sits in (its label or the nearest ancestor with 12–400 characters of text): the SELECTED shipping address, payment method or subscription choice, not the first block on the page. */
+  function selectionContext(el) {
+    var node = el.closest("label") || el.parentElement;
+    for (var depth = 0; node && depth < 6; depth++, node = node.parentElement) {
+      var t = String(node.innerText || "").replace(/[ \t]+/g, " ").replace(/\n{2,}/g, "\n").trim();
+      if (t.length > 400) break;
+      if (t.length >= 12) return t;
+    }
+    return "";
+  }
+
   function fields() {
     var out = [];
     var els = document.querySelectorAll("input, select, textarea");
@@ -42,7 +56,13 @@
       if (type === "password" || type === "hidden" || type === "submit" || type === "button" || type === "file" || type === "image") continue;
       if (!visible(el)) continue;
       var value;
-      if (type === "checkbox" || type === "radio") { if (!el.checked) continue; value = el.value && el.value !== "on" ? el.value : "checked"; }
+      if (type === "checkbox" || type === "radio") {
+        if (!el.checked) continue;
+        var ctx = selectionContext(el);
+        var sel = S.scrubField("selected: " + labelFor(el), (ctx || (el.value && el.value !== "on" ? el.value : "checked")).slice(0, 600));
+        if (sel) out.push(sel);
+        continue;
+      }
       else if (el.tagName === "SELECT") { var o = el.options[el.selectedIndex]; value = o ? (o.text || o.value) : ""; }
       else value = el.value;
       value = String(value == null ? "" : value).trim();

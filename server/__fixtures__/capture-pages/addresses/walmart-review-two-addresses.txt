@@ -1,0 +1,17 @@
+Walmart
+Review your order
+Shipping address
+Coastal Quality Goods
+805 Grandy Ave
+Norfolk, VA 23504
+Change
+Billing address
+Accounts Payable
+65 Rivercrest Dr
+Chesapeake, VA 23320
+Payment
+Visa ending in 4242
+Items subtotal $176.40
+Taxes $10.58
+Total $186.98
+Place order
