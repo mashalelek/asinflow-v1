@@ -118,12 +118,14 @@ async function main() {
        ORDER BY p.supplier, pa.asin, ${NEWEST_PO_ORDER}`)).rows;
     const plan = rows.map((r) => {
       const text = [r.notes, r.promo].filter(Boolean).join(" · ");
-      const freq = frequencyWeeksFromText(text); const status = subscriptionStatusFromText(r.notes);
+      // Maria 2026-11-01: every sheet-flagged subscription is backfilled as CANCELED (the notes cannot say which still
+      // run); a confirmation email for one creates the PO with "Subscription may be active" and Maria flips it.
+      const freq = frequencyWeeksFromText(text); const status = "canceled" as const; const textStatus = subscriptionStatusFromText(r.notes);
       const od = ymd(r.order_date);
-      return { ...r, order_date: od, freq, status, next: status === "active" && freq ? addWeeks(od, freq) : null };
+      return { ...r, order_date: od, freq, status, textStatus, next: null as string | null };
     });
-    report.push(`subscriptions: ${plan.length} (supplier, ASIN) pair(s) from ${new Set(plan.map((x) => x.po_id)).size} flagged PO(s); active ${plan.filter((x) => x.status === "active").length}, canceled ${plan.filter((x) => x.status === "canceled").length}; frequency unknown ${plan.filter((x) => x.freq == null).length}`);
-    for (const x of plan.slice(0, 60)) report.push(`  ${x.supplier} ${x.asin} (${x.order_date}) ${x.status} every ${x.freq ?? "?"} wk → next ${x.next ?? "—"} · "${String(x.notes ?? "").slice(0, 50)}"`);
+    report.push(`subscriptions: ${plan.length} (supplier, ASIN) pair(s) from ${new Set(plan.map((x) => x.po_id)).size} flagged PO(s) — all backfilled as canceled (Maria 2026-11-01; the notes read active on ${plan.filter((x) => x.textStatus === "active").length}, canceled on ${plan.filter((x) => x.textStatus === "canceled").length}); frequency unknown ${plan.filter((x) => x.freq == null).length}`);
+    for (const x of plan.slice(0, 60)) report.push(`  ${x.supplier} ${x.asin} (${x.order_date}) canceled · every ${x.freq ?? "?"} wk · "${String(x.notes ?? "").replace(/\s+/g, " ").slice(0, 50)}"`);
     writes.push(async () => {
       for (const x of plan) await q(`INSERT INTO subscriptions (supplier, po_asin_id, asin, product_name, frequency_weeks, next_order_date, status, last_po_id, created_from, notes) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,'sheet',$9)`,
         [x.supplier, x.po_asin_id, x.asin, x.asin_name, x.freq, x.next, x.status, x.po_id, x.notes]);

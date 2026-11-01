@@ -25,10 +25,12 @@ export const ACTION_ITEMS = [
   "Confirm order details", // §6.7: the order-confirmation email differs from the PO (order #, total, line count)
   "Subscription renews",   // §27: a subscription's next order is within 7 days
   "Review renewal PO",     // §27: a renewal PO created from a confirmation email
+  "Subscription may be active", // §27: a renewal PO created for a CANCELED subscription (Maria 2026-11-01; migration 076)
 ] as const;
 export const CONFIRM_ORDER_DETAILS = "Confirm order details";
 export const SUBSCRIPTION_RENEWS = "Subscription renews";
 export const REVIEW_RENEWAL_PO = "Review renewal PO";
+export const SUBSCRIPTION_MAY_BE_ACTIVE = "Subscription may be active";
 /** Pre-2026-10-29 spellings (migrations 056 / 058) → today's label. */
 export const LEGACY_ACTION_ITEMS: Readonly<Record<string, ActionItem>> = {
   "Need to Return": "Need to return",

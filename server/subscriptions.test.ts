@@ -64,10 +64,10 @@ describe("renewal from a confirmation email", () => {
   });
   it("creates the renewal PO from the last PO with the email's qty / price, a payment row, Review renewal PO, and advances the subscription", async () => {
     const calls: Array<{ sql: string; params: any[] }> = [];
-    let n = 0;
+    let n = 0, subStatus = "active";
     const q = async (sql: string, params: any[] = []) => {
       calls.push({ sql, params });
-      if (/FROM subscriptions s WHERE s.status = 'active'/.test(sql)) return { rows: [{ id: 5, last_po_id: "old", frequency_weeks: 4, asin: "B0DS6KY94H" }], rowCount: 1 };
+      if (/FROM subscriptions s WHERE s.status IN \('active', 'canceled'\)/.test(sql)) return { rows: [{ id: 5, status: subStatus, last_po_id: "old", frequency_weeks: 4, asin: "B0DS6KY94H" }], rowCount: 1 };
       if (/SELECT \* FROM purchase_orders WHERE id/.test(sql)) return { rows: [{ id: "old", supplier: "drmartypets.com", order_id: "ORD-174000000", subtotal: "70.00", order_total: "70.00", payment_method: "Visa (7927)", weighted_gc_discount_pct: null, purchased_by: "Maria", purchased_by_user_id: 1, email_used: null, ships_to: "velocity" }], rowCount: 1 };
       if (/SELECT \* FROM po_asins WHERE po_id/.test(sql)) return { rows: [{ id: "pa-old", asin: "B0DS6KY94H", asin_name: "Nature's Blend", sku: "NB-1", qty: "2", cost_per_unit: "35.00", prep_cost: "1.00", sold_as: "individual", units_per_pack: 1, unique_products: null, sourcing_cost: "35.00", paid_cost: "35.00" }], rowCount: 1 };
       if (/SELECT \* FROM po_line_items WHERE po_id/.test(sql)) return { rows: [{ id: "l-old", po_asin_id: "pa-old", position: 0, product_name: "Dr. Marty Nature's Blend Essential Wellness 16oz", supplier_sku: null, price: "35.00", qty_ordered: "2", asin_qty_per_product: "1", adjusted_product_cost: "35.00" }], rowCount: 1 };
@@ -76,7 +76,7 @@ describe("renewal from a confirmation email", () => {
       return { rows: [], rowCount: 1 };
     };
     const r = await tryRenewalFromEmail(q, "drmartypets.com", email);
-    expect(r).toEqual({ created: true, poId: "new1", subscriptionIds: [5] });
+    expect(r).toEqual({ created: true, poId: "new1", subscriptionIds: [5], item: "Review renewal PO" });
     const po = calls.find((c) => /INSERT INTO purchase_orders/.test(c.sql))!;
     expect(po.sql).toMatch(/'email_renewal'/);
     expect(po.params.slice(0, 5)).toEqual(["ORD-175000001", "2026-10-31", "drmartypets.com", 73.05, 73.05]);
@@ -88,5 +88,12 @@ describe("renewal from a confirmation email", () => {
     expect(calls.find((c) => /UPDATE subscriptions SET last_po_id/.test(c.sql))!.params).toEqual([5, "new1", "2026-11-28"]);
     expect(calls.some((c) => /UPDATE po_line_action_items/.test(c.sql) && c.params[0] === "old")).toBe(true);
     expect(await tryRenewalFromEmail(q, null, email)).toEqual({ created: false, reason: "unknown sender" });
+
+    // Maria 2026-11-01: a CANCELED subscription still gets the PO, with "Subscription may be active"; its status and date stay.
+    subStatus = "canceled"; calls.length = 0; n = 0;
+    const c = await tryRenewalFromEmail(q, "drmartypets.com", email);
+    expect(c).toEqual({ created: true, poId: "new1", subscriptionIds: [5], item: "Subscription may be active" });
+    expect(calls.find((x) => /INSERT INTO po_line_action_items/.test(x.sql))!.params.slice(0, 3)).toEqual(["new3", ["Subscription may be active"], "auto"]);
+    expect(calls.find((x) => /UPDATE subscriptions SET last_po_id/.test(x.sql))!.params).toEqual([5, "new1", null]);
   });
 });

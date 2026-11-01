@@ -5378,10 +5378,11 @@ skipped). **No stored COGS / AQ / AR / Y value is ever recomputed.**
   (capture | manual | email | sheet), `notes`. Backfill: one row per
   (supplier, ASIN) over the POs flagged `subscription`, newest PO; frequency
   parsed from the notes ("Every 12 weeks", "Every 3 months" → 12, "Monthly"
-  → 4; unknown → NULL for Maria), canceled when the note says so,
-  `next_order_date` = order date + frequency while active.
+  → 4; unknown → NULL for Maria), every row canceled (Maria 2026-11-01),
+  `next_order_date` NULL until Maria activates one.
 - `po_line_action_items.item` gains **Confirm order details** (§6.7),
-  **Subscription renews** and **Review renewal PO** (§27).
+  **Subscription renews** and **Review renewal PO** (§27), and
+  **Subscription may be active** (migration 076, §27).
 
 ### Costs (patch `docs/claude_spec-patch-po-ai-prefill.md` §7 as corrected 2026-10-31; formula v2, `shared/po-cost.ts`)
 
@@ -7286,9 +7287,11 @@ amended 2026-10-31). Some retailers re-ship on a schedule (autoship,
 canceled), `po_asin_id` (the originating PO's ASIN row), `last_po_id`,
 `created_from` (capture | manual | email | sheet), `product_name`, `notes`
 (migration 075; data model in §22 "Capture PO data model"). Backfill: the
-48 POs the sheet flagged → one row per (supplier, ASIN) from the newest
+POs the sheet flagged → one row per (supplier, ASIN) from the newest
 such PO, frequency parsed from the notes where it said one (months × 4),
-canceled when the note said so; unknown frequencies are NULL for Maria.
+**every one `canceled`** (Maria 2026-11-01: the notes cannot say which
+still run; a confirmation email is the evidence — see the renewal bullet);
+unknown frequencies are NULL for Maria.
 
 - **Capture / form hook.** The New PO form's "Subscription: yes · every N
   weeks" (prefilled when the checkout showed a subscription) writes or
@@ -7304,7 +7307,7 @@ canceled when the note said so; unknown frequencies are NULL for Maria.
   pure rule.
 - **Renewal from the confirmation email (component 27).** An
   order-confirmation email that matches **no** PO, from a sender whose
-  supplier has an active subscription, and naming a product of that
+  supplier has an active **or canceled** subscription, and naming a product of that
   subscription's last PO (normalized token overlap ≥ 0.5 or the name
   verbatim) creates the renewal PO: `source = email_renewal`, order # from
   the email (else `renewal-<message id>`), date = the email's, header
@@ -7314,7 +7317,13 @@ canceled when the note said so; unknown frequencies are NULL for Maria.
   card's last 4; **Review renewal PO** on every line; the subscription's
   `last_po_id` moves to it and `next_order_date` advances by the frequency;
   the previous PO's "Subscription renews" clears. An existing (supplier,
-  order #) is never duplicated.
+  order #) is never duplicated. **Canceled subscription** (Maria
+  2026-11-01, migration 076): the PO is created the same way, its lines
+  get **Subscription may be active** instead, and the subscription stays
+  canceled with its date untouched (only `last_po_id` moves) until Maria
+  sets it active on the Subscriptions page — that flip clears the item
+  and, when no next date is set, sets one from the renewal PO's date +
+  frequency (`updateSubscription`).
 - **Subscriptions page** (nav, after POs; `/subscriptions`; `GET
   /api/subscriptions`, `POST /api/subscriptions`, `PATCH
   /api/subscriptions/:id`): supplier, product / ASIN (thumbnail, inline

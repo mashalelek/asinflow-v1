@@ -51,7 +51,7 @@ describe("normalizeActionItems", () => {
     expect(normalizeActionItems([])).toEqual({ ok: true, value: [] });
     expect(normalizeActionItems(["Lost"]).ok).toBe(false);
     expect(normalizeActionItems("SHIP").ok).toBe(false);
-    expect(ACTION_ITEMS).toHaveLength(10); // 7 + Confirm order details, Subscription renews, Review renewal PO (Capture PO patch, 2026-10-31)
+    expect(ACTION_ITEMS).toHaveLength(11); // 7 + Confirm order details, Subscription renews, Review renewal PO (Capture PO patch, 2026-10-31) + Subscription may be active (2026-11-01)
   });
 });
 

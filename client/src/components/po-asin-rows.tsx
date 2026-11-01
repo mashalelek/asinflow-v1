@@ -108,7 +108,7 @@ async function patchJson(url: string, method: string, body?: unknown): Promise<a
 // Sentence case (Maria 2026-10-29) — the server stores these exact labels (po_line_action_items, migration 074).
 export const ACTION_ITEM_OPTIONS = ["Need to return", "Missing / damaged from supplier", "Confirm refund / replacement", "ATTN: Velocity", "See comments", "SHIP", "Received - FBM",
   // Capture PO patch (2026-10-31): set by the system (confirmation-email reconcile, subscriptions), cleared by hand.
-  "Confirm order details", "Subscription renews", "Review renewal PO"];
+  "Confirm order details", "Subscription renews", "Review renewal PO", "Subscription may be active"];
 // §7: tinted chips only. SHIP indigo; Received - FBM green; Need to return orange; the attention items amber.
 export const EXTRA_UNITS_SHIPPED = "Extra units shipped";
 export function actionChipClass(item: string): string {

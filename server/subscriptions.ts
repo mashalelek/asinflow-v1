@@ -14,7 +14,7 @@
 import type { QueryLike } from "./scheduler/types";
 import { EditError, logEdits, parseEdits, isoDate, intQty, textOrNull, asinParser, requiredText, type Parsed } from "./po-edit";
 import { insertLineItems } from "./line-action-items";
-import { SUBSCRIPTION_RENEWS, REVIEW_RENEWAL_PO } from "./po-status-map";
+import { SUBSCRIPTION_RENEWS, REVIEW_RENEWAL_PO, SUBSCRIPTION_MAY_BE_ACTIVE } from "./po-status-map";
 import { addWeeks } from "./po-model-backfill";
 import { nameTokens, tokenOverlap } from "./asin-suggest";
 import { afEntrySeq } from "./po-entry-seq";
@@ -75,14 +75,25 @@ export async function updateSubscription(query: QueryLike, id: number, body: unk
   await query(`UPDATE subscriptions SET ${changed.map(([k], i) => `${k} = $${i + 2}`).join(", ")}, updated_at = NOW() WHERE id = $1`, [id, ...changed.map(([, v]) => v)]);
   // A pause / cancel clears the open alert on the last PO right away.
   if (changed.some(([k, v]) => k === "status" && v !== "active") && cur.last_po_id) await clearRenewsItem(query, String(cur.last_po_id), "manual");
+  // Maria confirming a renewal of a canceled subscription (status → active,
+  // Maria 2026-11-01): the "Subscription may be active" item on the renewal
+  // PO clears, and the next order date is set from that PO when none is set.
+  if (changed.some(([k, v]) => k === "status" && v === "active") && cur.last_po_id) {
+    await clearItem(query, String(cur.last_po_id), SUBSCRIPTION_MAY_BE_ACTIVE, "manual");
+    if (!cur.next_order_date && !("next_order_date" in p.edits) && cur.frequency_weeks) {
+      const od = ymd((await query(`SELECT order_date FROM purchase_orders WHERE id = $1`, [String(cur.last_po_id)])).rows[0]?.order_date);
+      if (od) await query(`UPDATE subscriptions SET next_order_date = $2, updated_at = NOW() WHERE id = $1`, [id, addWeeks(od, Number(cur.frequency_weeks))]);
+    }
+  }
   if (cur.last_po_id) await logEdits(query, String(cur.last_po_id), userId, "po", String(cur.last_po_id), changed.map(([k, v]) => ({ field: `subscription ${k}`, old: ymd(cur[k]) ?? (cur[k] == null ? null : String(cur[k])), new: v == null ? null : String(v) })));
   return { id, changes: changed.map(([k]) => k) };
 }
 
-async function clearRenewsItem(query: QueryLike, poId: string, by: "manual" | "auto"): Promise<number> {
-  const r = await query(`UPDATE po_line_action_items a SET cleared_at = now(), cleared_by = $3 FROM po_line_items l WHERE l.id = a.po_line_item_id AND l.po_id = $1 AND a.item = $2 AND a.cleared_at IS NULL`, [poId, SUBSCRIPTION_RENEWS, by]);
+async function clearItem(query: QueryLike, poId: string, item: string, by: "manual" | "auto"): Promise<number> {
+  const r = await query(`UPDATE po_line_action_items a SET cleared_at = now(), cleared_by = $3 FROM po_line_items l WHERE l.id = a.po_line_item_id AND l.po_id = $1 AND a.item = $2 AND a.cleared_at IS NULL`, [poId, item, by]);
   return r.rowCount ?? 0;
 }
+const clearRenewsItem = (query: QueryLike, poId: string, by: "manual" | "auto") => clearItem(query, poId, SUBSCRIPTION_RENEWS, by);
 async function raiseOnPo(query: QueryLike, poId: string, item: string, reason: string): Promise<void> {
   const lines = (await query(`SELECT id FROM po_line_items WHERE po_id = $1`, [poId])).rows;
   for (const l of lines) await insertLineItems(query, String(l.id), [item], "auto", reason);
@@ -127,7 +138,7 @@ export async function subscriptionsFromForm(query: QueryLike, poId: string, form
 
 // ── Renewal from a confirmation email (§9) ───────────────────────────────────
 export interface RenewalEmail { id: string; subject: string; text: string; date: Date; orderId: string | null; total: number | null }
-export interface RenewalResult { created: boolean; poId?: string; subscriptionIds?: number[]; reason?: string }
+export interface RenewalResult { created: boolean; poId?: string; subscriptionIds?: number[]; reason?: string; item?: string }
 
 /** Pure: the email's qty and unit price printed near a product name, when any. */
 export function qtyPriceNear(text: string, productName: string): { qty: number | null; price: number | null } {
@@ -153,8 +164,13 @@ export function qtyPriceNear(text: string, productName: string): { qty: number |
  */
 export async function tryRenewalFromEmail(query: QueryLike, supplier: string | null, email: RenewalEmail): Promise<RenewalResult> {
   if (!supplier) return { created: false, reason: "unknown sender" };
-  const subs = (await query(`SELECT s.id, s.last_po_id, s.frequency_weeks, s.asin FROM subscriptions s WHERE s.status = 'active' AND lower(s.supplier) = lower($1) AND s.last_po_id IS NOT NULL`, [supplier])).rows;
-  if (subs.length === 0) return { created: false, reason: "no active subscription for the supplier" };
+  // Active AND canceled subscriptions (Maria 2026-11-01): the sheet backfill
+  // marked every one canceled, and a confirmation for one of those is the
+  // evidence it still runs — the PO is created either way; a canceled
+  // subscription gets "Subscription may be active" instead of "Review
+  // renewal PO" and stays canceled until Maria flips it (updateSubscription).
+  const subs = (await query(`SELECT s.id, s.status, s.last_po_id, s.frequency_weeks, s.asin FROM subscriptions s WHERE s.status IN ('active', 'canceled') AND lower(s.supplier) = lower($1) AND s.last_po_id IS NOT NULL`, [supplier])).rows;
+  if (subs.length === 0) return { created: false, reason: "no active or canceled subscription for the supplier" };
   const byPo = new Map<string, any[]>();
   for (const s of subs) { const k = String(s.last_po_id); if (!byPo.has(k)) byPo.set(k, []); byPo.get(k)!.push(s); }
   for (const [lastPoId, group] of Array.from(byPo.entries())) {
@@ -195,14 +211,16 @@ export async function tryRenewalFromEmail(query: QueryLike, supplier: string | n
     // Payments from the email where present ("•••• 1234" / "ending in 1234"), else none.
     const pay = /(?:•{4}|\*{4}|ending in|ending with)\s*(\d{4})/i.exec(email.text);
     if (pay) await query(`INSERT INTO po_payments (po_id, position, method, nickname, last4, amount) VALUES ($1, 0, 'card', $2, $3, $4)`, [newPoId, /(visa|amex|mastercard|discover|chase|citi)[^\n]{0,20}?(?=•|\*|ending)/i.exec(email.text)?.[1] ?? null, pay[1], email.total]);
-    for (const id of newLineIds) await insertLineItems(query, id, [REVIEW_RENEWAL_PO], "auto", `renewal from "${email.subject.slice(0, 80)}"`);
+    const wasCanceled = group.some((s) => s.status === "canceled");
+    for (const id of newLineIds) await insertLineItems(query, id, [wasCanceled ? SUBSCRIPTION_MAY_BE_ACTIVE : REVIEW_RENEWAL_PO], "auto", wasCanceled ? `confirmation "${email.subject.slice(0, 80)}" for a canceled subscription — review the lines; set it active on the Subscriptions page if it still runs` : `renewal from "${email.subject.slice(0, 80)}"`);
     await logEdits(query, newPoId, null, "po", newPoId, [{ field: "PO created", old: null, new: `renewal of ${po.supplier} ${po.order_id} from the confirmation email` }]);
     for (const s of group) {
-      const next = s.frequency_weeks ? addWeeks(orderDate, Number(s.frequency_weeks)) : null;
+      // A canceled subscription keeps its status and date; only the link to the new PO moves.
+      const next = s.status === "active" && s.frequency_weeks ? addWeeks(orderDate, Number(s.frequency_weeks)) : null;
       await query(`UPDATE subscriptions SET last_po_id = $2, next_order_date = COALESCE($3, next_order_date), updated_at = NOW() WHERE id = $1`, [s.id, newPoId, next]);
     }
     await clearRenewsItem(query, lastPoId, "auto");
-    return { created: true, poId: newPoId, subscriptionIds: group.map((s) => Number(s.id)) };
+    return { created: true, poId: newPoId, subscriptionIds: group.map((s) => Number(s.id)), item: wasCanceled ? SUBSCRIPTION_MAY_BE_ACTIVE : REVIEW_RENEWAL_PO };
   }
   return { created: false, reason: "no subscription product named in the email" };
 }

@@ -26,7 +26,7 @@ export const poConfirmations: ComponentDef = {
           // §27: an unmatched confirmation may be a subscription renewal → a renewal PO with "Review renewal PO".
           onUnmatched: async (msg, p, supplier) => {
             const res = await tryRenewalFromEmail(ctx.query, supplier, { id: msg.id, subject: msg.subject, text: msg.text, date: msg.date, orderId: p.orderIds[0] ?? null, total: p.total });
-            if (res.created) outcomes[`renewal ${supplier} ${p.orderIds[0] ?? msg.id}`] = `PO ${res.poId} created — Review renewal PO`;
+            if (res.created) outcomes[`renewal ${supplier} ${p.orderIds[0] ?? msg.id}`] = `PO ${res.poId} created — ${res.item}`;
             return res.created;
           },
         },
