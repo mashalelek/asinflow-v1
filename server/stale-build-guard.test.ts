@@ -23,10 +23,13 @@ describe("stale-page guard (2026-10-18)", () => {
     }
     expect(STALE_BUILD_MESSAGE).toBe("AF was updated — reload this page");
   });
-  it("read-only requests keep working without a build id; auth and the Chrome extension's import are exempt", () => {
+  it("read-only requests keep working without a build id; auth and the Chrome extension's two mutating endpoints are exempt, the PO form's POST is not", () => {
     for (const m of ["GET", "HEAD", "OPTIONS"]) expect(call(m, "/asins")).toMatchObject({ nexted: true });
     expect(call("POST", "/auth/login")).toMatchObject({ nexted: true });
     expect(call("POST", "/import-asin")).toMatchObject({ nexted: true });
+    expect(call("POST", "/pos/prefill")).toMatchObject({ nexted: true }); // Capture PO (2026-11-01: the production check hit the 409)
+    expect(call("POST", "/pos")).toMatchObject({ status: 409 });
+    expect(call("GET", "/pos/prefill/abc")).toMatchObject({ nexted: true });
   });
   it("no server build id (dev) → guard off", () => {
     expect(call("POST", "/analyze", undefined, null)).toMatchObject({ nexted: true });

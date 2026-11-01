@@ -2549,7 +2549,11 @@ not an Amazon product page the panel shows the capture UI instead of the
   `optional_host_permissions`. Without the host the service worker's fetch
   falls under CORS, which the server allows for no extension origin by
   design, and Open in AF fails with "Failed to fetch" — the 2026-11-01
-  production check).
+  production check). `POST /api/pos/prefill` is exempt from the stale-page
+  guard (`server/stale-build-guard.ts`, like `/api/import-asin`): the
+  extension is not an AF page and sends no `X-AF-Build`; the form it opens
+  is, and its `POST /api/pos` carries the build id as usual (the same
+  check, 2026-11-01, met the 409).
   Sign in to AsinFlow in a normal tab first; a 401 is shown as "Sign in to
   AsinFlow". No token, no server CORS change (host-permission fetches are
   not subject to CORS). **To verify once against a logged-in Chrome**

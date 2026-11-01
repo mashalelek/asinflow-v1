@@ -7,16 +7,19 @@
 // script its own index.html names; in dev (Vite, no built index) there is
 // none and the guard is off.
 //
-// Exempt: /api/auth/* (login / logout must work from any page) and
-// /api/import-asin — the Chrome extension's endpoint; the extension is not
-// an AF page and has no build id.
+// Exempt: /api/auth/* (login / logout must work from any page) and the
+// Chrome extension's two mutating endpoints, /api/import-asin and
+// /api/pos/prefill (Capture PO, 2026-11-01) — the extension is not an AF
+// page and has no build id. Everything else it calls is a GET. The PO form
+// the capture opens (/pos/new?prefill=<id>) is an AF page and its POST
+// /api/pos carries the page's build id like any other.
 import fs from "fs";
 import path from "path";
 import type { Request, Response, NextFunction } from "express";
 import { BUILD_HEADER, entryScriptFromHtml } from "@shared/build-id";
 
 export const STALE_BUILD_MESSAGE = "AF was updated — reload this page";
-const EXEMPT = [/^\/auth\//, /^\/import-asin$/];
+const EXEMPT = [/^\/auth\//, /^\/import-asin$/, /^\/pos\/prefill$/];
 const SAFE = new Set(["GET", "HEAD", "OPTIONS"]);
 
 /** The production build id: the entry script dist/public/index.html names. Null in dev. */
