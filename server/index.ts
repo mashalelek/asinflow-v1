@@ -131,10 +131,14 @@ if (!process.env.VITEST) (async () => {
   // a trivial read of the main table succeeds; 503 with a FIXED body otherwise.
   // The pg error goes to the server log only — it can carry the database host,
   // and this route is public.
+  // `commit` = the deployed git commit (Render sets RENDER_GIT_COMMIT; absent
+  // locally), so a deploy can be confirmed from outside: the client bundle's
+  // hash does not change on a server-only commit (2026-11-01).
+  const commit = (process.env.RENDER_GIT_COMMIT ?? "").slice(0, 7) || null;
   app.get("/health", async (_req: Request, res: Response) => {
     try {
       await query("SELECT 1 FROM asins LIMIT 1");
-      res.json({ ok: true });
+      res.json({ ok: true, commit });
     } catch (err: any) {
       log(`health check failed: ${err?.message ?? err}`, "health");
       res.status(503).json({ ok: false });

@@ -6552,7 +6552,7 @@ now satisfies.
 | Install | Render's default `npm install` | Every package the build imports is in `dependencies` (tsx, vite, esbuild, typescript, @vitejs/plugin-react, autoprefixer, tailwindcss, postcss, @tailwindcss/typography, the Replit runtime-error plugin), so a production-only install still builds. Verified with `npm ci --omit=dev && npm run build` in a clean copy. |
 | Build | `npm run build` | `tsx script/build.ts`: Vite builds the client into `dist/public`, esbuild bundles the server into `dist/index.cjs` with `NODE_ENV` baked in as `production`. `dist/` is gitignored and never committed. |
 | Start | `npm start` | `NODE_ENV=production node dist/index.cjs`. The script sets `NODE_ENV` itself; do **not** set `NODE_ENV` in the Render environment. |
-| Health check | `GET /health` | Unauthenticated. `200 {"ok":true}` only when `SELECT 1 FROM asins LIMIT 1` succeeds; `503 {"ok":false}` otherwise, with the pg error written to the server log only. Registered before the SPA catch-all, which answers 200 for any unknown path and would otherwise mask a dead database. |
+| Health check | `GET /health` | Unauthenticated. `200 {"ok":true,"commit":"<7 chars of RENDER_GIT_COMMIT, null locally>"}` only when `SELECT 1 FROM asins LIMIT 1` succeeds; `503 {"ok":false}` otherwise, with the pg error written to the server log only. `commit` is how a deploy is confirmed from outside (2026-11-01: a server-only commit leaves the client bundle hash unchanged). Registered before the SPA catch-all, which answers 200 for any unknown path and would otherwise mask a dead database. |
 
 ### Environment variables
 
