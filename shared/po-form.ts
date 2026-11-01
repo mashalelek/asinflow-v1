@@ -83,6 +83,10 @@ export interface PoFormProduct {
   asin_qty_per_product: string; // yield
   /** The yield / ASIN qty was typed by hand (the pack math no longer overwrites it). Form-only. */
   yield_manual?: boolean;
+  /** The retailer line this product row belongs to — a split's copies share it (shared/po-lines.ts). Form-only; the server ignores it. */
+  line_id?: string;
+  /** The bundle box this line sits in (several products → one ASIN). Form-only; the server ignores it. */
+  bundle_id?: string;
   sold_as: SoldAs;
   units_per_pack: string;
   prep_cost: string;
