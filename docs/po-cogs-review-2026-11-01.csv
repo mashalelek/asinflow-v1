@@ -1,0 +1,3 @@
+supplier,order_id,order_date,asin,af_cost_per_unit,sheet_computed (Σ X×L ÷ N),sheet_col_Y,reason,Maria: correct value / note
+thehappyplanner.com,2478443,2026-09-27,B00XHBT7AS,9.99,7.5,7.5,"AF 9.99 matches neither sheet Y 7.5 nor computed 7.5; 9.99 is the row's price, not a per-ASIN cost from the arithmetic.",
+iherb.com,943568870,2026-04-20,B00SKJW2U4,18.17,15.54,18.17,"AF 18.17 does not equal sheet Y 18.17 only by coincidence of label; rows give computed 15.54 (77.68/5), and Y 18.17 is the sheet value, so AF matches Y exactly and is explainable as the sheet's Y.",
