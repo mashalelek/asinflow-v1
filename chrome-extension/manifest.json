@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "AsinFlow",
-  "version": "1.1.0",
+  "version": "1.1.1",
   "description": "FBA Profit Calculator, AsinFlow Import & Capture PO",
   "permissions": [
     "sidePanel",
@@ -14,7 +14,8 @@
     "https://www.amazon.com/*",
     "https://amazon.com/*",
     "http://localhost:3000/*",
-    "https://asinflow-cqg.onrender.com/*"
+    "https://asinflow-cqg.onrender.com/*",
+    "https://asinflow.coastalqualitygoods.com/*"
   ],
   "side_panel": {
     "default_path": "sidepanel.html"

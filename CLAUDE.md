@@ -171,7 +171,9 @@ hand-written with public test card numbers only — never real ones.
 **Chrome extension dev (SPEC §11 "Chrome extension — Capture PO"):** load
 `chrome-extension/` unpacked at chrome://extensions; set the server URL on
 its options page (localhost:3000 by default; production
-`https://asinflow-cqg.onrender.com` is in `host_permissions`); sign in to
+`https://asinflow-cqg.onrender.com` and the custom domain
+`https://asinflow.coastalqualitygoods.com` are in `host_permissions`; the
+options page requests any other host once); sign in to
 AsinFlow in a normal tab first — the extension sends the session cookie
 (`credentials: "include"`). On a retailer checkout tab the side panel shows
 Capture PO: Capture this page (grants the site's host permission on first

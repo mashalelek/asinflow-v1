@@ -2543,7 +2543,13 @@ not an Amazon product page the panel shows the capture UI instead of the
 
 - **Auth.** Every request the extension makes to AsinFlow sends the session
   cookie (`credentials: "include"`; the server URL from the options page must
-  be in `host_permissions` — localhost and `asinflow-cqg.onrender.com` are).
+  be in `host_permissions` — localhost, `asinflow-cqg.onrender.com` and the
+  custom domain `asinflow.coastalqualitygoods.com` are, since 1.1.1; the
+  options page asks for any other saved URL's host once through
+  `optional_host_permissions`. Without the host the service worker's fetch
+  falls under CORS, which the server allows for no extension origin by
+  design, and Open in AF fails with "Failed to fetch" — the 2026-11-01
+  production check).
   Sign in to AsinFlow in a normal tab first; a 401 is shown as "Sign in to
   AsinFlow". No token, no server CORS change (host-permission fetches are
   not subject to CORS). **To verify once against a logged-in Chrome**
