@@ -14,6 +14,7 @@ import React, { useEffect, useState } from "react";
 import { AlertTriangle, Plus, Trash2, StickyNote } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
+import { trueYield } from "@shared/po-form";
 import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
 import { Sheet, SheetContent, SheetHeader, SheetTitle, SheetDescription, SheetFooter } from "@/components/ui/sheet";
@@ -230,7 +231,7 @@ export function PoProductsTable({ poId, asins, onChanged }: { poId: string; asin
             <tr className="table-header-stone">
               <th className={th()}>Product Name</th><th className={th()}>SKU / UPC</th><th className={th(true)}>Price</th><th className={th(true)}>Item Discount</th>
               <th className={th(true)}>Ordered</th><th className={th(true)}>Received</th><th className={th(true)}>Canceled</th><th className={th(true)}>Returned</th>
-              <th className={th(true)}>Yield</th><th className={th(true)}>At Prep Center</th><th className={th(true)}>At CQG Warehouse</th><th className={th(true)}>Lost/damaged by us</th>
+              <th className={th(true)} title="ASIN units attributed to this line: qty ordered × yield">ASIN units</th><th className={th(true)}>At Prep Center</th><th className={th(true)}>At CQG Warehouse</th><th className={th(true)}>Lost/damaged by us</th>
               <th className={th(true)}>Final</th><th className={th()}>ASIN</th><th className={th()}></th>
             </tr>
           </thead>
@@ -247,7 +248,8 @@ export function PoProductsTable({ poId, asins, onChanged }: { poId: string; asin
                   <td className="px-3 py-1.5 text-right"><InlineEdit value={l.qty_received} onSave={patch(l, "qty_received")} align="right" width="w-16" testId={`qty_received-${l.id}`}><QtyText v={l.qty_received} /></InlineEdit></td>
                   <td className="px-3 py-1.5 text-right"><InlineEdit value={l.qty_canceled} onSave={patch(l, "qty_canceled")} align="right" width="w-16" testId={`qty_canceled-${l.id}`}><QtyText v={l.qty_canceled} /></InlineEdit></td>
                   <td className="px-3 py-1.5 text-right"><InlineEdit value={l.qty_returned} onSave={patch(l, "qty_returned")} align="right" width="w-16" testId={`qty_returned-${l.id}`}><QtyText v={l.qty_returned} /></InlineEdit></td>
-                  <td className="px-3 py-1.5 text-right"><InlineEdit value={l.asin_qty_per_product} onSave={patch(l, "asin_qty_per_product")} align="right" width="w-16" testId={`yield-${l.id}`}><QtyText v={l.asin_qty_per_product} /></InlineEdit></td>
+                  {/* Round 2 (Maria 2026-11-01): "Yield 0.17" was the col-T ratio — the column is the ASIN units this line yields (12 × 1/6 = 2); typing units sets the yield (units ÷ qty). */}
+                  <td className="px-3 py-1.5 text-right"><InlineEdit value={lineAsinUnits(l)} onSave={async (v) => { const q = Number(l.qty_ordered) || 0; if (!(q > 0) || !(Number(v) > 0)) return; await patch(l, "asin_qty_per_product")(String(Math.round((Number(v) / q) * 10000) / 10000)); }} align="right" width="w-16" testId={`asin-units-${l.id}`}><QtyText v={lineAsinUnits(l)} /></InlineEdit></td>
                   <td className="px-3 py-1.5 text-right"><QtyText v={sole ? productQtyFromAsin(l.parent.qty_at_prep, l.asin_qty_per_product) : null} /></td>
                   <td className="px-3 py-1.5 text-right"><QtyText v={sole ? productQtyFromAsin(l.parent.qty_at_warehouse, l.asin_qty_per_product) : null} /></td>
                   <td className="px-3 py-1.5 text-right"><QtyText v={sole ? productQtyFromAsin(l.parent.qty_lost_damaged_us, l.asin_qty_per_product) : null} /></td>
@@ -276,6 +278,13 @@ export function PoProductsTable({ poId, asins, onChanged }: { poId: string; asin
   );
 }
 
+/** The ASIN units a product line yields: qty ordered × its yield (a 2-dp yield read as the fraction it stands for). */
+export function lineAsinUnits(l: { qty_ordered: number | string | null; asin_qty_per_product: number | string | null }): string | null {
+  const q = Number(l.qty_ordered), y = Number(l.asin_qty_per_product);
+  if (!Number.isFinite(q) || !Number.isFinite(y) || !(q > 0) || !(y > 0)) return null;
+  return String(Math.round(q * trueYield(y) * 100) / 100);
+}
+
 function AddProductRow({ poId, onAdded }: { poId: string; onAdded: () => void }) {
   const empty = { product_name: "", supplier_sku: "", price: "", qty_ordered: "", asin: "", asin_qty_per_product: "1" };
   const [d, setD] = useState(empty);
@@ -291,7 +300,7 @@ function AddProductRow({ poId, onAdded }: { poId: string; onAdded: () => void })
   return (
     <div className="flex flex-wrap items-center gap-2" data-testid="po-add-line">
       {f("product_name", "Product name", "w-64")}{f("supplier_sku", "SKU / UPC", "w-32")}{f("price", "Price", "w-20")}{f("qty_ordered", "Qty", "w-16")}
-      {f("asin", "ASIN", "w-28")}{f("asin_qty_per_product", "Yield", "w-16")}
+      {f("asin", "ASIN", "w-28")}{f("asin_qty_per_product", "Yield", "w-16")}{/* a yield here: the server derives the ASIN units */}
       <Button size="sm" variant="outline" onClick={add} disabled={busy} data-testid="button-add-line"><Plus className="h-3.5 w-3.5 mr-1" /> Add product</Button>
       {err && <span className="text-xs text-destructive" data-testid="add-line-error">{err}</span>}
     </div>

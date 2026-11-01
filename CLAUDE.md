@@ -195,7 +195,9 @@ as before and, with `--prod`, `.env.production.local` — its
 its values are never printed or pasted, and the server never reads it
 (`server/env-prod.test.ts`). Examples: `npm run migrate:status -- --prod`,
 `npm run backfill:po-model -- --prod [--live]`,
-`tsx script/sourcing-cost-switch-dryrun.ts --prod`. A new script that can
+`tsx script/sourcing-cost-switch-dryrun.ts --prod`,
+`tsx script/fix-po-prep.ts --order <id> --prep 1.00 --prod [--live]` (an
+ASIN row's prep with a History row, as the PO editor would). A new script that can
 touch a database gets `import "./env";` first and inherits the flag.
 
 **Auth (SPEC §25):** every `/api` route except `/api/auth/*` and `/health`

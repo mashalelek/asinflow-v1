@@ -5466,6 +5466,21 @@ IS NULL; Maria 2026-10-31):
   the discount before allocating. **Tax and shipping are never allocated
   into cost; cashback never counts.** A non-counting promo with no amount
   cannot be added back and counts until one is entered (form warning).
+- **Double-discount rule (Maria 2026-11-01, PO 200015336732726).** On the
+  first real PO the line price ($7.97) was already the sale price and the
+  "sale $36.12, counts toward COGS" promo subtracted it again → COGS 29.76
+  instead of 47.82. A discount / promo reduces a cost **only when the
+  captured line prices are pre-discount** — Σ price × qty equals the
+  subtotal BEFORE the discount. When Σ price × qty already equals the
+  post-discount subtotal (order total − tax − shipping), the discount and
+  the promos are **informational**: the COGS toggle defaults OFF with the
+  note "already reflected in line prices", Paid cost is not reduced
+  either, nothing is "added back" (`discountReflectedInLines` /
+  `effectiveCostHeader` in `shared/po-cost.ts`; `checkPoForm.
+  discountReflected`; the prefill and the recompute apply the same rule).
+  Test: that PO's numbers give COGS = Sourcing = Paid = $47.82. Also: a
+  non-counting promo larger than the header discount is never added back
+  above the price paid (the counting discount is clamped at 0).
 - **Sourcing cost** (`po_asins.sourcing_cost`, col AR) = Σ(AQ × product qty)
   ÷ ASIN qty — COGS before the gift-card discount. **This is what Update
   COGS in SC submits for an ASIN whose newest non-canceled PO is
@@ -6313,6 +6328,56 @@ replaces it. Migration 061 adds `po_edit_log`, `deleted_pos` and
   importer would (checked 2026-11-01: a split → two ASIN rows of one
   product each, a bundle → one ASIN row with two lines and
   `unique_products = 2`).
+- **New PO form — polish round 2 (Maria 2026-11-01, after PO
+  200015336732726).** **Widths:** fields no longer stretch to the page —
+  fixed, content-sized widths (Supplier 220, Order # 180, Order date 140,
+  Purchased by 140, Ships to 140, Email used 260, money fields 120,
+  Cashback site 180, Cashback % 80, Cashback status 120, Subscription 160;
+  PO notes fills the rest of its row; the product name flexes up to
+  ~640 px); rows wrap (`flex-wrap`), so fields keep their widths and flow
+  to the next line on a narrower window — no horizontal scroll at any
+  width ≥ 1024 (checked at 1280 and 1440). The subtitle under "New PO" is
+  gone. **Layout, top to bottom:** Row A — Supplier · Order # · Order
+  date · Purchased by · Ships to · Email used · Subscription · PO notes;
+  Row B — Subtotal · Discount · Tax · Shipping · Order total · Weighted
+  GC % (read-only, computed) · Cashback site · Cashback % · Cashback
+  status; Row C — Promos ("+ Promo"); Row D — Payments ("+ Payment"),
+  C and D side by side from 1440 px; then LINES AS BOUGHT; the footer is
+  unchanged. **Email used** is a dropdown of every distinct `email_used`
+  on `purchase_orders` plus the two defaults
+  (orders@coastalqualitygoods.com, mpeters.cqg@gmail.com), the resolved
+  default preselected, "Other…" for free text. **Cashback site** is a
+  dropdown — None · BeFrugal · TopCashback · RetailMeNot · Rakuten ·
+  Coupert — read from `settings.po_cashback_sites` (seeded in that order
+  by migration 078). **ASIN row:** a label row under the product header,
+  aligned to its columns — ASIN · Title · ASIN qty · Sold as · Units/pack ·
+  Prep · Sourcing · COGS · Paid · Adjustment · Reason · Notes; the "ASIN
+  rows this PO will create" table is gone and its Sourcing cost, COGS
+  (labelled "COGS"), Paid cost, Adjustment and Reason sit on the ASIN row
+  after Prep; "Lines" and "Pack" are gone from the form; the math line
+  under the ASIN row stays (pack math, the sourcing and COGS allocation,
+  "check qty or pack size", typed · reset). **Weighted GC %** =
+  Σ(gift-card payment amount × its discount %) ÷ order total, computed
+  live from the Payments block (each gift-card payment row has a "GC %"
+  field), read-only on the form, stored on save (`checkPoForm.
+  weightedGcPct`; the server stores the same); it feeds COGS per §7.2 —
+  the gift-card discount always counts. **Payment-method aliases**
+  (`settings.po_payment_method_aliases`, seeded `"OnePay Cash" = "Walmart
+  card"`): one instrument, two names, so history matches — the form's
+  nickname picker lists the canonical names (`settings.po_payment_methods`
+  through the aliases) and a typed or captured alias becomes the canonical
+  name on blur / on save / on prefill (`canonicalPaymentName`). **Prep
+  default:** Ships to = Velocity and a blank prep → the Velocity prep rate
+  from settings (`prep_cost`, $1.00); Home → $0.00; stone marker,
+  editable, a typed prep is never touched (PO 200015336732726's prep was
+  set to $1.00 with a History row by `script/fix-po-prep.ts`). **PO
+  detail:** the Products tab's "Yield" (the col-T ratio, "0.17") is now
+  **ASIN units** = qty ordered × yield (2 there; typing units sets the
+  yield); PO Details → Payment reads `po_payments` (method · nickname ·
+  last 4 · amount per row) and `po_promos` (type · description · amount /
+  %), with the weighted GC % from the payments — not the legacy
+  `payment_method` / `promo` text. The **double-discount rule** is under
+  "Costs" below.
 - **New PO form — Capture PO patch (`docs/claude_spec-patch-po-ai-prefill.md`
   §6, 2026-10-31).** Also reachable as a page, `/pos/new` (`?prefill=<id>`
   opens it filled from a capture, §4.5; since 2026-11-01 the ONLY way the

@@ -760,6 +760,28 @@ function Dash({ v }: { v: number | string | null | undefined }) {
   return v == null ? <span className="text-muted-foreground/50">—</span> : <>{v}</>;
 }
 
+/**
+ * PO Details → Payment card (round 2, Maria 2026-11-01): the po_payments rows (method · nickname · last 4, the amount) and the
+ * po_promos rows (type · description, the amount / %) — no longer the legacy payment_method / promo text — with the weighted GC %
+ * computed from the gift-card payments (Σ amount × GC % ÷ order total), the stored value when no payment carries one. Pure.
+ */
+export function paymentCardRows(po: Record<string, any>, payments: PoPayment[], promos: PoPromo[]): Array<[string, React.ReactNode]> {
+  const method = (m: string) => m.replace("_", " ");
+  const rows: Array<[string, React.ReactNode]> = [];
+  if (payments.length === 0) rows.push(["Payment", <span className="text-muted-foreground/50">—</span>]);
+  payments.forEach((p, i) => rows.push([`Payment${payments.length > 1 ? ` ${i + 1}` : ""}`, <span data-testid={`po-payment-card-${p.id}`}>{[method(p.method), p.nickname, p.last4 ? `•••• ${p.last4}` : null].filter(Boolean).join(" · ")}{p.amount != null ? <> · <Money v={p.amount} /></> : null}{p.method === "gift_card" && p.gift_card_discount_pct != null ? ` · GC ${Number(p.gift_card_discount_pct)}%` : ""}</span>]));
+  const total = Number(po.order_total);
+  const gc = payments.filter((p) => p.method === "gift_card" && p.amount != null && p.gift_card_discount_pct != null);
+  const weighted = gc.length && total > 0 ? Math.round((gc.reduce((t, p) => t + Number(p.amount) * Number(p.gift_card_discount_pct), 0) / total) * 100) / 100 : null;
+  const stored = po.weighted_gc_discount_pct == null ? null : parseFloat(po.weighted_gc_discount_pct);
+  rows.push(["Weighted GC %", weighted != null ? `${weighted}%` : stored != null ? `${stored}%` : <span className="text-muted-foreground/50">—</span>]);
+  rows.push(["Cashback Site", <Dash v={po.cashback_site} />]);
+  rows.push(["Cashback %", po.cashback_pct == null ? <span className="text-muted-foreground/50">—</span> : `${parseFloat(po.cashback_pct)}%`]);
+  if (promos.length === 0) rows.push(["Promo", <span className="text-muted-foreground/50">—</span>]);
+  promos.forEach((p, i) => rows.push([`Promo${promos.length > 1 ? ` ${i + 1}` : ""}`, <span data-testid={`po-promo-card-${p.id}`}>{[p.type ?? "choose", p.description].filter(Boolean).join(" · ")}{p.amount != null ? <> · <Money v={p.amount} /></> : p.percent != null ? ` · ${Number(p.percent)}%` : ""}{p.counts_toward_cogs ? "" : " · not in COGS"}</span>]));
+  return rows;
+}
+
 function DetailCard({ title, rows }: { title: string; rows: Array<[string, React.ReactNode]> }) {
   return (
     <div className="rounded-md p-3" style={{ border: "0.5px solid hsl(var(--border))" }}>
@@ -879,13 +901,7 @@ export function PurchaseOrderDetailPlaceholder() {
             ["Refund Amount", <Money v={po.refund_amount} />],
             ["Order Total", <Money v={po.order_total} />],
           ]} />
-          <DetailCard title="Payment" rows={[
-            ["Method", <Dash v={po.payment_method} />],
-            ["Weighted GC %", po.weighted_gc_discount_pct == null ? <span className="text-muted-foreground/50">—</span> : `${parseFloat(po.weighted_gc_discount_pct)}%`],
-            ["Cashback Site", <Dash v={po.cashback_site} />],
-            ["Cashback %", po.cashback_pct == null ? <span className="text-muted-foreground/50">—</span> : `${parseFloat(po.cashback_pct)}%`],
-            ["Promo", <Dash v={po.promo} />],
-          ]} />
+          <DetailCard title="Payment" rows={paymentCardRows(po, data.payments ?? [], data.promos ?? [])} />
           <DetailCard title="Meta" rows={[
             ["Purchased by", <Dash v={po.purchased_by} />],
             ["Email used", <Dash v={po.email_used} />],
