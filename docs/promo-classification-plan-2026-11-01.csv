@@ -1,0 +1,763 @@
+po_id,raw_text,type,description,amount,percent,confidence
+c6ff5339-c7b5-4dd5-bfea-841ae26007c1,sale: 50% off,sale,50% off,,50,high
+45c7a7ee-a1cf-4986-9274-f42abacc958b,"sale, coupon: B3G1, 2 for $70, $20 off with WELHQLKPMS4D33T",,"B3G1, 2 for $70, $20 off with WELHQLKPMS4D33T",20,,low
+b0be3f34-bfa1-49c2-9ca6-3bc3a6aab95a,sale: 50% off,sale,50% off,,50,high
+316befe7-74be-4e52-a6a6-33128b726e62,coupon: 10% with WELCOME10,coupon,10% off with WELCOME10,,10,high
+4a15f5c5-88c3-4c16-bf54-7ee410a2ebd4,sale + coupon: B1G1 50% with 2110 (limit 1),,B1G1 50% with 2110 (limit 1),,50,low
+7a4ed741-3720-46ce-9c5b-2e6dd9e9a68b,sale,,Sale,,,low
+fc518014-55c9-46e7-b9f5-44e2cee0df75,coupon: 10% off with WEL10M5GSQLPS,coupon,10% off with WEL10M5GSQLPS,,10,high
+fb2f0a1b-c1be-412e-a0fd-942d190b30fe,coupon: 50% off with TODAY,coupon,50% off with TODAY,,50,high
+453721f9-d950-48b2-936c-ea2ea26d3339,sale: B1G1 50% off,sale,B1G1 50% off,,50,high
+14162e96-5b1e-448c-b2ed-00095b409bd7,coupon: 20% off,,20% off,,20,low
+9cf70506-84df-4e43-8280-3dea13ff55a3,sale: B4G1,sale,B4G1,,,high
+7b882d80-488d-4f45-bee1-77e2214fc0f1,sale: B4G1,sale,B4G1,,,high
+a012fb90-063d-4c42-b14c-dfa71cadf329,coupon: 15% off with LETSGLOW,coupon,15% off with LETSGLOW,,15,high
+bc20d1d2-4476-48ca-8980-76e20f682dc9,coupon: 15% off with CC24,coupon,15% off with CC24,,15,high
+6ebadacc-3fb9-47e3-9962-280d8f8dc2b2,coupon: 10% off with OURFRIENDS10,coupon,10% off with OURFRIENDS10,,10,high
+1535711c-90d0-427c-89ca-9e6f6cef0290,coupon: 15% off with LETSGLOW,coupon,15% off with LETSGLOW,,15,high
+786f6e60-371a-4d65-aa65-883e87af8fa5,coupon: 15% off with W4CY956C,coupon,15% off with W4CY956C,,15,high
+ca65b378-90bc-43a3-81cc-8c5e47a53195,sale: 50% off Frango,sale,50% off Frango,,50,high
+2553fce3-cd01-4d91-bc89-98e8e57928ee,coupon: 10% off with 10WELCOME,coupon,10% off with 10WELCOME,,10,high
+0188a9f3-bd7e-4c69-b983-adcc04531c99,sale: $2.60 off + 25% off 1 toy,sale,$2.60 off + 25% off 1 toy,2.6,25,high
+af6464b2-6511-40ed-8df1-92efcbb9560b,sale: $4.12 (reg. $5.49) + $15 Rewards,rewards,$4.12 (reg. $5.49) + $15 Rewards,15,,high
+fdbebaab-d13c-4798-98fb-2e607c70ae5c,coupon: 30% off with COMEBACK47Z5,coupon,30% off with COMEBACK47Z5,,30,high
+d9710bbe-4b1f-4614-9c4e-e86a5f68637d,couon: 30% off with CHICISMYNICHE30 on single items,coupon,30% off with CHICISMYNICHE30 on single items,,30,high
+899f1a11-b716-4b6a-811a-971db2a29d60,coupon: 15% off with AFKJ1323,coupon,15% off with AFKJ1323,,15,high
+bc36b00e-a5a4-494c-9e59-7e2350436795,coupon: 10% off with DETAILEDIMAGE6997,coupon,10% off with DETAILEDIMAGE6997,,10,high
+bec27a3c-1fc4-40a7-827f-de47cd826b49,coupon: 15% off with WELCOME15,coupon,15% off with WELCOME15,,15,high
+01f52e0f-6aa8-40ed-8cfa-4bef34064296,50% off sale,sale,50% off sale,,50,high
+bd0d8eb9-7e38-4cee-a32e-b9d0a9366b32,sale: 50% off Frango,sale,50% off Frango,,50,high
+9302cef7-6e1e-4170-b7fb-f73bb88f55bb,30% off with AUTUMN26 + $20 Rewards,coupon,30% off with AUTUMN26 + $20 Rewards,,30,high
+28dc5353-2daa-4f62-b12a-ccbfd4155d15,30% off with SPOOKY30 + $20 Rewards,coupon,30% off with SPOOKY30 + $20 Rewards,,30,high
+fb91962b-667c-4a7a-b025-f8279effd14e,10% off with SOCIAL10,coupon,10% off with SOCIAL10,,10,high
+c5f714e8-2b7d-49c1-8a2c-e53fa014acee,30% off with FRIENDLYSUDS30,coupon,30% off with FRIENDLYSUDS30,,30,high
+ccaccb69-2b84-41f2-80eb-07822ceefe8b,40% off FRANGO,sale,40% off FRANGO,,40,high
+b08bee03-5c20-4978-b144-21c7654f7f63,10% off with SAVE10,coupon,10% off with SAVE10,,10,high
+47b3d2e8-019f-44b3-a721-6c13fc006f79,20% off with SPARK,coupon,20% off with SPARK,,20,high
+ede62604-3a32-4dd3-9015-3f904342e5f1,40% off FRANGO,sale,40% off FRANGO,,40,high
+ed0dfa3f-cb25-4a2a-880a-cb8b6abbe8fd,25% of with FALL25,coupon,25% off with FALL25,,25,high
+8a951936-44bb-4d07-a658-43d8fa6a360a,10% of with M98ZZ3,coupon,10% off with M98ZZ3,,10,high
+6471bee3-a80f-4944-b901-a4e0af4c2a78,$10 off on $40+ on toys,sale,$10 off on $40+ on toys,10,,high
+95ff73ac-9f9b-44ee-bdf1-74eae02df5cf,15% off with FAIRFALL26,coupon,15% off with FAIRFALL26,,15,high
+c90ff1ff-9f40-4a66-9bf0-43af1e1b4f54,"B2G1 books, music, and more",sale,"B2G1 books, music, and more",,,high
+9ed52c53-7304-46cf-8e5f-f5c3db7e945e,"B2G1 books, music, and more",sale,"B2G1 books, music, and more",,,high
+a2069a99-8ada-42ac-8db4-a6248ad3edc8,"B2G1 books, music, and more",sale,"B2G1 books, music, and more",,,high
+aec44819-780b-469a-ac83-cbc48c33c769,40% off FRANGO,sale,40% off FRANGO,,40,high
+c2037e13-c37b-4c76-a6b6-b5abd345684d,15% off with FAIRFALL26,coupon,15% off with FAIRFALL26,,15,high
+90a3d5e3-fb79-458f-b1c1-36f18f2074ab,$20 Rewards,rewards,$20 Rewards,20,,high
+0001672e-a518-476b-867e-3689fb2020d1,40% off every regular price purchase with code FLASH40 $43.86 Rewards,coupon,40% off every regular price purchase with code FLASH40 $43.86 Rewards,,40,high
+dec1806f-63b7-4d14-987a-5f8288207dc1,15% off with LETSGLOW,coupon,15% off with LETSGLOW,,15,high
+e95f374b-698c-4a0c-bcfa-4b96f6ffdda3,30% off with AUTUMN26 + $20 Rewards,coupon,30% off with AUTUMN26 + $20 Rewards,,30,high
+00561363-ef8e-460f-990e-2ba8455eb66a,20% off with NEWS20,coupon,20% off with NEWS20,,20,high
+1952291b-2b61-4f12-91fd-47222e24d213,$20 off $100+ + $5 rewards,sale,$20 off $100+ + $5 rewards,20,,high
+22c51199-b352-4b19-b645-774e1cbd1c6a,40% off FRANGO,sale,40% off FRANGO,,40,high
+b28847be-36a3-46c8-a002-d0f161f7d422,"B2G1 books, music, and more",sale,"B2G1 books, music, and more",,,high
+6daee6f5-3713-488f-a504-37b804f0a793,15% off with WSDTT44P93VXR,coupon,15% off with WSDTT44P93VXR,,15,high
+9087f295-86b3-4d07-bcfe-1c35e9955d47,20% wuth SAFETYN1026,coupon,20% off with SAFETYN1026,,20,high
+98487979-7a57-4ee6-bee9-7d680b6e0a2f,$10 off on $40+ on toys,sale,$10 off on $40+ on toys,10,,high
+2bc44f6e-fd02-4a01-b04c-5cabedf9c1ed,40% off FRANGO,sale,40% off FRANGO,,40,high
+b183c7ce-4ce2-49ac-abaa-a29dd632ecbf,10% off with HAPPYHEARTS,coupon,10% off with HAPPYHEARTS,,10,high
+0be769b3-b67f-4d95-8498-822a45a3da11,5% off with SH5COLLEGE + 5% off with 6393048,coupon,5% off with SH5COLLEGE + 5% off with 6393048,,5,high
+19d403f4-fea0-4e42-8304-da5ba83490a6,10% off with SAVETENAMST,coupon,10% off with SAVETENAMST,,10,high
+a362382a-5afc-470e-867c-f5d8f35db676,Rewards,,Rewards,,,low
+815da5e4-ba00-4c8c-935c-85e085890c19,15% off with LETSGLOW,coupon,15% off with LETSGLOW,,15,high
+cc7963a9-b175-44f3-b0fa-cb38b2d08d9b,$25 Off $250 / $50 Off $500 with Code: VALUE,,$25 Off $250 / $50 Off $500 with Code: VALUE,25,,low
+407b282a-364c-414f-9759-5abbe4608b44,5% off with SH5COLLEGE + 5% off with 6393048,coupon,5% off with SH5COLLEGE + 5% off with 6393048,,5,high
+90fb47c9-62ee-4933-9e51-d51a9dba59cd,50% off sitewide sale,sale,50% off sitewide sale,,50,high
+c6c3fbea-f329-4e5d-aa24-f69c198639f3,10% off with SAVE10,coupon,10% off with SAVE10,,10,high
+433ed393-b1b1-4f00-983b-679cd8abd106,Rewards,,Rewards,,,low
+75fe3a22-c719-428b-a998-9593cd776d43,65% off with MONOI65,coupon,65% off with MONOI65,,65,high
+65058b8a-62a1-4fe1-8c39-0e51ecfd3dc0,20% off with SPARK,coupon,20% off with SPARK,,20,high
+757bb30a-7f04-4b5a-bfa6-ddd4cce863fa,30% off regular priced items with GETMY30 + $35 Rewards,coupon,30% off regular priced items with GETMY30 + $35 Rewards,,30,high
+d0f1663e-abef-4ba7-a21c-304667eddd87,$10 off with WC-LWH24CPN (email signup),coupon,$10 off with WC-LWH24CPN (email signup),10,,high
+7ad544a7-9882-4e64-9fff-390fa01bf06f,15% off with SAMBTC15,coupon,15% off with SAMBTC15,,15,high
+0c140175-d621-4a2e-b31c-b611dd923ff1,Sale,,Sale,,,low
+d6dc15c3-5288-489e-bba6-07140aeb3f3a,10% off with shagtools10 on 1st order,coupon,10% off with shagtools10 on 1st order,,10,high
+f9744968-0a12-4036-a828-7eb2a80c316d,Final sale + 25% off with HPFRIENDS25,sale,Final sale + 25% off with HPFRIENDS25,,25,high
+ccc3cb35-ff70-43fb-a4cc-07fafac34d9b,B1G1 at 20% off (has to be different color),sale,B1G1 at 20% off (has to be different color),,20,high
+113ce09c-a866-4176-936f-ab10db07c3f8,5% off with FIOA,,5% off with FIOA,,5,low
+9195b88d-2b18-471d-9d43-1dc44b39f800,30% off with COMEBACK47Z5,coupon,30% off with COMEBACK47Z5,,30,high
+f97d60fd-7111-4cf1-a3a0-67d16aa5d120,5% with SAVE5,coupon,5% with SAVE5,,5,high
+470cbd3d-1f94-4f41-95dd-9cf2b3e4aa9d,Sale,,Sale,,,low
+6ddc3df1-5d44-4024-8d57-9fa78473548a,65% off with MONOI65 on single items,coupon,65% off with MONOI65 on single items,,65,high
+3b9bcd8d-cfbb-489e-8f79-1999ec981379,15% off with 15OFF,coupon,15% off with 15OFF,,15,high
+f6e62760-a014-4968-9eb8-12d4a427276f,5% off with COFFEEBOSS,coupon,5% off with COFFEEBOSS,,5,high
+29512334-5336-41b0-88b7-2d6e2c8e5e15,5% off with SH5COLLEGE + 5% off with 6393048,coupon,5% off with SH5COLLEGE + 5% off with 6393048,,5,high
+c4101fdc-c00b-4b7d-982c-4b1b569dd80a,20% off with HTGCQDL3D4HQ (mpeters.cqg coupon),coupon,20% off with HTGCQDL3D4HQ (mpeters.cqg coupon),,20,high
+8594a055-83c1-43c2-93fe-d756d3bc9f42,35% off every regular price purchase with code BONUS35 + Buy 1 Get 1 50% off - Add 2 items to qualify + $25 Rewards,coupon,35% off every regular price purchase with code BONUS35 + Buy 1 Get 1 50% off - Add 2 items to qualify + $25 Rewards,,35,high
+40b4f643-9fbe-4aa2-b614-894a019339cf,15% off with 15OFF1ST,coupon,15% off with 15OFF1ST,,15,high
+fe525ca8-1f10-43e2-b767-ff353e72fc24,25% off with NEWSLETTER25,coupon,25% off with NEWSLETTER25,,25,high
+826d8f6b-be19-4bef-853e-4ff77b89fc82,20% off,,20% off,,20,low
+d7a7364e-0822-499b-9c64-5f2d927c34f9,10% off with CART10,coupon,10% off with CART10,,10,high
+ec1ec613-daf6-432c-bee1-6efc11553e2e,30% off with FRIENDLYSUDS30,coupon,30% off with FRIENDLYSUDS30,,30,high
+f6982867-5f52-45f6-b414-e3c6f2379954,15% off with K3KNZCLNCL (1-time email signup code),coupon,15% off with K3KNZCLNCL (1-time email signup code),,15,high
+068c0e06-8d3c-401f-81ac-b921239429b3,10% off with SAVE10,coupon,10% off with SAVE10,,10,high
+8c4f94f1-3089-4f56-9e9a-6dbb276098e3,5% with SAVE5,coupon,5% with SAVE5,,5,high
+ca4b8409-b6a8-48e9-ba41-5f2aa2857c8a,15% off with LETSGLOW,coupon,15% off with LETSGLOW,,15,high
+aa81c43d-4836-4164-951e-7c516b70a629,5% off with MPSEMAIL5,coupon,5% off with MPSEMAIL5,,5,high
+f4938290-0287-4352-b720-dc0d582da911,5% off with WELCOME5,coupon,5% off with WELCOME5,,5,high
+ebbdb2f5-163d-4105-8241-739224f8307c,30% off with CHICISMYNICHE30,coupon,30% off with CHICISMYNICHE30,,30,high
+08b422e5-ca42-4428-9b7e-2f7dcc7fb048,30% OFF on orders over $125 = 20% off with RZEUUBJGYBKK,coupon,30% OFF on orders over $125 = 20% off with RZEUUBJGYBKK,,30,high
+91b1f5f7-b8e8-4032-924a-51c6e05b27a0,$40 Rewards,rewards,$40 Rewards,40,,high
+49b1d182-26d0-4ba1-82fe-41eb21816f9a,"Buy 2 or 3, Get 2 or 3 Free + DM2609001",,"Buy 2 or 3, Get 2 or 3 Free + DM2609001",,,low
+4206f37d-d972-466c-813d-3f5f88639337,10% off with DETAILEDIMAGE6997,coupon,10% off with DETAILEDIMAGE6997,,10,high
+59f2f71d-9fd9-4840-8afd-91c96f77b45b,15% off with SAMBTC15,coupon,15% off with SAMBTC15,,15,high
+61d2b7ff-8005-43aa-90c9-6626a1749af0,10% off with autoship,coupon,10% off with autoship,,10,high
+68c6bfa9-48b3-45fc-aed1-5873fe98a3f8,20% with autoship,coupon,20% with autoship,,20,high
+cbdf1353-ca63-4b65-9e23-5a65a2347119,30% off with CHICISMYNICHE30,coupon,30% off with CHICISMYNICHE30,,30,high
+661ed729-f4d6-4e05-b7dd-da12fa401d4b,15% off with LETSGLOW,coupon,15% off with LETSGLOW,,15,high
+1bbef3ed-37ec-4728-8bf0-bf164b6b1fac,20% off sitewide + $1 Rewards,sale,20% off sitewide + $1 Rewards,,20,high
+a9c2a00a-eec0-43ad-8a6b-9db6b8d82bde,10% off with EMAIL10,coupon,10% off with EMAIL10,,10,high
+ab302cc3-2e02-4e72-982b-5da11f259a01,5% off with email subscription WELCOME 5,coupon,5% off with email subscription WELCOME 5,,5,high
+b376147a-c86f-4165-8214-410e013cbea5,15% off Maintenance Essentials with FACILITY8M26,coupon,15% off Maintenance Essentials with FACILITY8M26,,15,high
+63f3e65f-e878-4b18-80af-44c665cf0ddb,10% off Purchase of $75 with AFCAP26,coupon,10% off Purchase of $75 with AFCAP26,,10,high
+2e1a98d7-5971-4937-be48-b5fac671427a,25% off music,sale,25% off music,,25,high
+2cd6d424-4787-426e-a0bf-bc5f5d7b88ec,30% off with LV2TEACH,coupon,30% off with LV2TEACH,,30,high
+9236cda3-7157-4db7-81be-385d42a8420e,10% off with SAVE10,coupon,10% off with SAVE10,,10,high
+912116ad-bab0-4b89-b330-455e768e933e,30% off with ISAL30,coupon,30% off with ISAL30,,30,high
+997843d8-e710-4d1c-b349-3c9351b652c0,10% off with FIRSTORDER10,coupon,10% off with FIRSTORDER10,,10,high
+bb8b0dd1-f9ab-42ee-ace5-c64f91c99ec2,30% off with LV2TEACH + $10 Rewards,coupon,30% off with LV2TEACH + $10 Rewards,,30,high
+5b37e2bc-d908-49f9-ace1-54e0d2f5dafc,10% off with JSTD8LXXDF8FK (email coupon),coupon,10% off with JSTD8LXXDF8FK (email coupon),,10,high
+112e2f8a-5295-46b9-882d-aab634b5e9db,35% off sitewide,sale,35% off sitewide,,35,high
+20fecd06-b4d5-42e9-b438-ca93fba9464b,5% off with ANY3U on 3 items,coupon,5% off with ANY3U on 3 items,,5,high
+e37a1194-65b6-4079-9de0-77b412e9244c,Labor Day Sale,,Labor Day Sale,,,low
+39bda586-1853-4a5f-ade1-9b80a3900786,$25 off with XGYVDH8C3CKC (email coupon),coupon,$25 off with XGYVDH8C3CKC (email coupon),25,,high
+00fcf14d-3ab5-4b30-8954-925b18611535,40% off with WOW40 + $50 Rewards,coupon,40% off with WOW40 + $50 Rewards,,40,high
+56e70222-1026-4ad4-96cb-cb1abfdff331,40% off with WOW40,coupon,40% on regular priced items with WOW40,,40,high
+08371fbb-d257-429a-ad6b-feaa4190758b,5% off with SAVE5,coupon,5% off with SAVE5,,5,high
+0fd4c3a6-80a8-47a3-8c64-69b922a0ab93,Sale on yarn and Lemax (included in Product Cost) + $75 Rewards,,Sale on yarn and Lemax (included in Product Cost) + $75 Rewards,,,low
+c8e57aef-180a-4dce-a377-910285d8d489,20% off with MYWAG20,coupon,20% off with MYWAG20,,20,high
+667bd72f-ed36-4fa8-bb1f-0776bfc50e14,20% off with MYWAG20,coupon,20% off with MYWAG20,,20,high
+a4424864-b62c-4b2a-8aa4-416bdd79c282,15% off with 15OFF1ST,coupon,15% off with 15OFF1ST,,15,high
+5bfa4291-c96e-4c0c-a45d-8abe9c1ee0ab,20% off a single non-sale item with 9386 + $35 Rewards,coupon,20% off a single non-sale item with 9386 + $35 Rewards,,20,high
+9b1a032a-19e7-429f-83b3-ed1f79641a82,15% off with FIRST15,coupon,15% off with FIRST15,,15,high
+c569c774-9c70-4e24-98e0-f6d0632ca56e,Labor day sale,,Labor day sale,,,low
+dac28e58-9ae4-402b-b876-327df7f1164c,10% off with shagtools10 on 1st order,coupon,10% off with shagtools10 on 1st order,,10,high
+6372494c-f809-4589-9b28-ccf9ead4d35e,Buy 3+ get 20% off,sale,Buy 3+ get 20% off,,20,high
+ee403f5f-8dd2-48cd-bb2c-12fd1f25ae23,15% off with BETTERMORNINGS,coupon,15% off with BETTERMORNINGS,,15,high
+8e23cbc3-0294-401a-9efe-f85acf1a56bb,Sale,,Sale,,,low
+2c88fc01-070b-4b57-b64e-354d31eac0ee,15% off with AFKJ8264,coupon,15% off with AFKJ8264,,15,high
+242d0ac6-af92-4226-a9da-e977f408a325,20% off with SPARK,coupon,20% off with SPARK,,20,high
+78f8b638-72f3-43ba-923d-993748502fdd,5% off with SH5COLLEGE + 5% off with 6393048,coupon,5% off with SH5COLLEGE + 5% off with 6393048,,5,high
+9973e3d5-7089-42b3-befd-eaebcd3d4160,10% off with RAJALA10,coupon,10% off with RAJALA10,,10,high
+99894723-f5f0-4318-b7bf-0075070a3d16,Sale,,Sale,,,low
+076a3630-ab20-4c80-9344-e3fdb129e58e,15% off with TREAT15 (email/sms signup),coupon,15% off with TREAT15 (email/sms signup),,15,high
+5597da57-e7f3-4ef6-bf46-b4cec01012fd,$30 off with WELCOME30,coupon,$30 off with WELCOME30,30,,high
+00555038-9629-42fe-8df4-d4d5b7b1e5b1,Rewards,,Rewards,,,low
+a73bf434-68c6-43a1-b4a1-2719fe386fa6,B8G2 free (no code needed),sale,B8G2 free (no code needed),,,high
+b75833d9-0c60-4a40-9f45-ebbd568a10b9,Sale,,Sale,,,low
+70986fbe-6c5d-42b3-ba36-fc4d8d971a29,B8G2 free (no code needed),sale,B8G2 free (no code needed),,,high
+ac23aee8-8167-426a-9110-9805e799f670,Sale,,Sale,,,low
+e9dc22d4-9ea5-4685-bfae-4ec772e2023b,20% off with AFA-20,coupon,20% off with AFA-20,,20,high
+4c84d596-2432-4147-bd17-6df6f92dc1e0,10% off with autoship,coupon,10% off with autoship,,10,high
+14c43b46-1d4f-4121-b5a0-c31c0bb820d2,Sale,,Sale,,,low
+b6a59fc1-06fb-4974-81a6-1eb8fe9b1eb0,15% off with SAMBTC15,coupon,15% off with SAMBTC15,,15,high
+4444ba02-7492-447d-a374-f601aef8bcb2,Sale,,Sale,,,low
+14dbb05a-3578-4a06-8ee9-5ed544af401a,30% off with GETMY30 + $40 Rewards,coupon,30% off with GETMY30 + $40 Rewards,,30,high
+3d024c9d-8be5-45dd-a13f-c902ad259af4,25% off sale,sale,25% off sale,,25,high
+99a323b7-5cce-4ffe-a43f-fc04a6fe1bfb,Sale,,Sale,,,low
+c30c2f01-6b7c-4240-9f5d-5ad03281ced6,30% off with COMEBACK47Z5,coupon,30% off with COMEBACK47Z5,,30,high
+85efffa5-9e72-4df9-a4f4-492a1d2f432e,20% off with GROW20,coupon,20% off with GROW20,,20,high
+b6828de6-4c98-48a4-a810-46ff2e3b889e,20% with autoship,coupon,20% with autoship,,20,high
+88d79fe8-e31b-4a39-bfd7-35207275a52a,Last chance sale,,Last chance sale,,,low
+c5229b87-d96c-491a-9af4-ec4dc9abb4ff,15% off with TEAMAGIC15,coupon,15% off with TEAMAGIC15,,15,high
+10b4c067-da6c-47fb-b438-8c707a13c4ae,45% off k-cups + $2 Rewards,coupon,45% off k-cups + $2 Rewards,,45,high
+08e78a17-01ad-42ba-9518-629d4852cc09,20% with autoship,coupon,20% with autoship,,20,high
+74fab704-f730-44f4-b3c8-bfb778201cba,5% off with thankyou26 on certain products,coupon,5% off with thankyou26 on certain products,,5,high
+ee9f5421-a71d-4d9d-8886-3625997d88bc,20% off with MISSYOU20 + 15% off sitewide back-to-school sale,coupon,20% off with MISSYOU20 + 15% off sitewide back-to-school sale,,20,high
+7f969a24-4ffd-4172-8338-30859fe9e6ea,5% off with HELLO,coupon,5% off with HELLO,,5,high
+6e9d04d8-5011-4041-9548-db6507b0cf5f,$85 off with SAFETYL926,coupon,$85 off with SAFETYL926,85,,high
+7e6969d5-8f22-4322-9a94-2918e43e5dc3,5% off with ANY3U on 3 items,coupon,5% off with ANY3U on 3 items,,5,high
+0b8268ca-faee-4cd8-8035-ae299ed313f3,$15 off with AUGUST15,coupon,$15 off with AUGUST15,15,,high
+5ea0f9f0-1b6d-447c-8e82-858b226302c7,$85 off with SAFETYL926,coupon,$85 off with SAFETYL926,85,,high
+7eb55f03-9ae4-4c14-a0b4-b2deb403b6f4,20% with autoship,coupon,20% with autoship,,20,high
+e69423df-0b1e-4017-9e25-f1e71c713704,Last chance sale,,Last chance sale,,,low
+dd64d6b4-c04a-413b-b6f3-9674bc54c5e6,GLOWS30,,GLOWS30,,30,low
+5b1b027f-a6e1-46d5-b212-e5d9505c2886,HAPPYB25,,HAPPYB25,,25,low
+ed7976cb-469a-4ecf-ad96-eb17fa299b71,$5 off with GIVEMEA5,coupon,$5 off with GIVEMEA5,5,,high
+9598690d-16c7-40f1-ba83-7dd4d4987c1e,20% off with SUMMER,coupon,20% off with SUMMER,,20,high
+1b9e4ce6-7026-48a5-b684-be51a926996d,10% off with BABYCOMEBACK,coupon,10% off with BABYCOMEBACK,,10,high
+e25ab071-18aa-4688-890c-6ba5f175191a,30% off with COMEBACK47Z5,coupon,30% off with COMEBACK47Z5,,30,high
+9087bdb5-6aa7-4695-9a51-ab357ec9e736,5% off with MLU329JJL,coupon,5% off with MLU329JJL,,5,high
+17a5eeeb-ebd2-40a0-9bb6-e0733ac4001c,45% off k-cups + $2 Rewards,coupon,45% off k-cups + $2 Rewards,,45,high
+b7847aee-8da2-4948-8fc5-45894e90ba0e,15% off with REVIEW15,coupon,15% off with REVIEW15,,15,high
+5b784a31-1667-4983-9544-2f6fcb59055b,10% off with shagtools10,coupon,10% off with shagtools10,,10,high
+a2788417-9cd5-4a7a-bb49-f199c2e28049,10% off with 888158,coupon,10% off with 888158,,10,high
+8b6dc3ed-08ff-48eb-b162-3b82067352f0,20% off with DOGDAYS,coupon,20% off with DOGDAYS,,20,high
+05e7e3ea-2ef9-417e-be56-a1a32f882528,10% off with autoship,coupon,10% off with autoship,,10,high
+305e3e2a-2164-4d39-b2c0-1ef056d03360,30% off every regular price purchase with code MERRY30 + $10 Rewards,coupon,30% off every regular price purchase with code MERRY30 + $10 Rewards,,30,high
+c04d1739-4302-42e1-bdad-1d0246c146e2,5% off with MPSEMAIL5,coupon,5% off with MPSEMAIL5,,5,high
+f2acd864-215c-4446-aefa-ccd34cb33519,20% off a single non-sale item with 9386 (Coupert),coupon,20% off a single non-sale item with 9386 (Coupert),,20,high
+64a150b0-c4fb-4d03-bea1-9e0c2af3d351,$10 off with WELC7HKG648Y,coupon,$10 off with WELC7HKG648Y,10,,high
+3dfc0d28-aa47-481e-8907-e306f1d84afe,15% off with FIRST15,coupon,15% off with FIRST15,,15,high
+1c9347df-e4b3-43bc-ae21-68b48d587d17,15% off with SAMBTC15,coupon,15% off with SAMBTC15,,15,high
+ce14154a-6f44-4036-bf7b-99bce3b2c109,20% with autoship,coupon,20% with autoship,,20,high
+21bba416-55db-4c10-8cf5-21a357d3d7c2,Rewards,,Rewards,,,low
+b33ebe76-02cb-4cfa-ab1e-ca5a2145fb9d,5% off with MPSEMAIL5,coupon,5% off with MPSEMAIL5,,5,high
+1bfecbc7-c2bf-4323-ba48-80129c48e927,20% with autoship + $20 off with THANKYOU428,coupon,20% with autoship + $20 off with THANKYOU428,20,20,high
+d5a51a12-f459-44d9-9eb3-cd8fe8d0daf0,Rewards,,Rewards,,,low
+11fa6784-c906-4aa6-ab39-03bbbb78e23d,$10 off with WELCOME10,coupon,$10 off with WELCOME10,10,,high
+9ad37afe-b69b-4b83-8c9a-4f68e3a8b3ca,5% off with MPSEMAIL5,coupon,5% off with MPSEMAIL5,,5,high
+96d15593-1a92-4fce-afa2-0dc0d8129634,5% off with WELCOME5,coupon,5% off with WELCOME5,,5,high
+13103116-9bd2-4ff7-bf65-8cb40a052594,30% off with COMEBACK47Z5,coupon,30% off with COMEBACK47Z5,,30,high
+ef283db0-1ae3-44e9-a0ab-0f574f6dc8d2,10% with SHOP10,coupon,10% with SHOP10,,10,high
+e7f9f842-7f13-4a00-96d7-fcd762dc3a9d,15% off with lighting726 (electrical & lighting),coupon,15% off with lighting726 (electrical & lighting),,15,high
+bde8760c-1ea4-4676-9662-c76a3513061d,COREYS GIFT - NEXT 30 MINUTES ONLY (-$8.85) + $18.49 off with SEWSUPPORTIVE,,COREYS GIFT - NEXT 30 MINUTES ONLY (-$8.85) + $18.49 off with SEWSUPPORTIVE,18.49,,low
+a69f3438-4c8d-47fd-8d3a-144de13fe900,$20 off with THANKYOU428,coupon,$20 off with THANKYOU428,20,,high
+d097821f-965c-4725-82c9-b26bd816624d,5% with a coupon (birthday),,5% with a coupon (birthday),,5,low
+d73464ce-8aae-4d23-b53a-54b03cf61956,20% off with WELCOME,coupon,20% off with WELCOME,,20,high
+7c759c04-d837-4a18-9892-c4d8bbfaadbc,Rewards,,Rewards,,,low
+35abe799-15c8-4d2b-9f17-c7672d406023,30% off with COMEBACK47Z5,coupon,30% off with COMEBACK47Z5,,30,high
+65cd2804-1201-45ec-be5b-0f0bfda3f5a5,"BUY 2 TOYS OR TREATS, GET 1 FREE",sale,"BUY 2 TOYS OR TREATS, GET 1 FREE",,,high
+95db64e9-032a-4c65-a9e3-d641ffa2523b,$10 off with NEW10,coupon,$10 off with NEW10,10,,high
+0fc0d4ef-6d7b-4b71-a492-d9ad1f2dee3d,10% off with HAPPYHEARTS,coupon,10% off with HAPPYHEARTS,,10,high
+1dbd479c-a787-488f-b57f-ed50a7a801ca,$10 off with save10,coupon,$10 off with save10,10,,high
+1e79d85d-d9dc-482d-a9e7-377968063a85,20% off with POWER726,coupon,20% off with POWER726,,20,high
+f51d313e-5627-402f-8e55-68131346fab8,20% with autoship + $20 off with THANKYOU428,coupon,20% with autoship + $20 off with THANKYOU428,20,20,high
+f6abafc5-b91a-414b-ba00-9efcedb4c398,$10 off with save10,coupon,$10 off with save10,10,,high
+2de123bc-bcac-4925-b93e-86b6bb474602,30% off regular priced items with MAKEIT30 + $100 Rewards,coupon,30% off regular priced items with MAKEIT30 + $100 Rewards,,30,high
+85432132-ef74-4f00-945f-9b842cb62ba5,On sale,,On sale,,,low
+5f96261c-afc5-43be-ab31-ca1b44c0f992,15% off with TEAMAGIC15,coupon,15% off with TEAMAGIC15,,15,high
+0c076df2-4794-42fd-9c22-c7da403b0d62,B1G1 Free,sale,B1G1 Free,,,high
+44506497-9a12-4674-9124-d24d9fedf451,40% off regular priced items + $20 in rewards,sale,40% off regular priced items + $20 in rewards,,40,high
+182ae920-d171-4ed1-8de1-2f12f1d79925,10% off with WELCOME10,coupon,10% off with WELCOME10,,10,high
+8995c479-8237-40f6-a04b-a7e028ef4acf,10% off with RAJALA10,coupon,10% off with RAJALA10,,10,high
+fa2d8ddc-aecd-4e28-9574-04f503e1b075,5% off with MPSEMAIL5,coupon,5% off with MPSEMAIL5,,5,high
+e791235a-1721-4180-839f-754a917b51d9,10% off with RAJALA10,coupon,10% off with RAJALA10,,10,high
+0e57c425-5663-4fe6-b5bd-0c13c175c6fc,Last chance sale + 20% off with FR2BX42D42,sale,Last chance sale + 20% off with FR2BX42D42,,20,high
+0bceddcb-e651-4238-abb1-beacc40fcb9a,$20 off with THANKYOU428,coupon,$20 off with THANKYOU428,20,,high
+137ab31c-a9f9-41b9-b955-03471644aeb5,$10 off with WELCOME10,coupon,$10 off with WELCOME10,10,,high
+2f8411d0-0939-4ca3-b121-505e7a068d72,45% off k-cups + $2 Rewards,coupon,45% off k-cups + $2 Rewards,,45,high
+850d12da-4bd6-4084-8297-087b34d4dccd,Last chance sale,,Last chance sale,,,low
+667829bc-977a-4f1f-a48a-ec590634de57,Rewards,,Rewards,,,low
+be1ae2ce-3792-41e1-ad56-718cf9a81005,Limited-Time Sale: Buy 2 for $35 or 4 for $65! + $10 Rewards,,Limited-Time Sale: Buy 2 for $35 or 4 for $65! + $10 Rewards,,,low
+f39a3e41-6a8d-4ef2-b4d8-750947ee95bb,30% off with ULTIMATE30 + $5 Rewards,coupon,30% off with ULTIMATE30 + $5 Rewards,,30,high
+2f2daee6-3e97-4805-b656-b3a32c178269,They sent a refund check for the full amount of $499.90 which was originally paid by 8% gift card.,,They sent a refund check for the full amount of $499.90 which was originally paid by 8% gift card.,,,low
+1c969f7f-8ddf-4255-bdbd-3bce1d596feb,20% off with SUNSHINE,coupon,20% off with SUNSHINE,,20,high
+d9dc3654-4c96-4bb5-8bb8-2369b9fedb81,5% off with MPSEMAIL5,coupon,5% off with MPSEMAIL5,,5,high
+e7ea6415-b3c7-482e-9f54-f6992e4fc1d3,B2G1 free Memorial Day sale,sale,B2G1 free Memorial Day sale,,,high
+1b61cf0e-eaca-4ea9-9985-9054ff278323,50% off most full-price items with SPARKJOY,coupon,50% off most full-price items with SPARKJOY,,50,high
+b074905b-33ed-45b5-8c58-c7f32e4d99f5,Last chance sale + 15% off with NEWBUBBLES,sale,Last chance sale + 15% off with NEWBUBBLES,,15,high
+c8bbb088-ad9b-4876-9419-9670c372b5b3,B2G2 free,sale,B2G2 free,,,high
+33a7e694-a14d-4a44-b00a-58ebc9f76922,B2G1 free Memorial Day sale,sale,B2G1 free Memorial Day sale,,,high
+ab498a98-9870-4e6a-afeb-e90dcfbefbf3,45% off k-cups + $1 Rewards,coupon,45% off k-cups + $1 Rewards,,45,high
+0e4a8a9e-5659-4b1e-80fb-f1dc98dd6ffc,15% off with REVIEW15,coupon,15% off with REVIEW15,,15,high
+e1b79247-f676-412a-b6a6-46500e8a2143,Last chance sale + 15% off with NEWBUBBLES,sale,Last chance sale + 15% off with NEWBUBBLES,,15,high
+c8e55586-b888-44cc-8133-e6549d9da231,Sale,,Sale,,,low
+6cab4728-aa88-4e3f-9cae-439f29ff1059,15% off with FIRST15,coupon,15% off with FIRST15,,15,high
+86317b5a-7a67-4458-b15f-c7887b974fb7,50% off with SPARKJOY,coupon,50% off with SPARKJOY,,50,high
+5a2c73fe-2faa-4e19-b47f-8dc2abe2cf7d,10% off with FRESH10,coupon,10% off with FRESH10,,10,high
+02ca271c-26f3-4dee-8860-650da7bc0ec8,15% off with BETTERMORNINGS,coupon,15% off with BETTERMORNINGS,,15,high
+0ed297a2-1d4a-42f0-bbe6-fc12e7772147,20% with autoship + $20 off with THANKYOU428,coupon,20% with autoship + $20 off with THANKYOU428,20,20,high
+395bed6c-1d0d-4549-be86-2839e2a85af1,15% off with NEWCUST7,coupon,15% off with NEWCUST7,,15,high
+985cac78-3280-4a55-992d-6afcc41ae580,15% off with ANNIVERSARY15,coupon,15% off with ANNIVERSARY15,,15,high
+4bf509d3-940d-463f-8e9a-a2476e47be4c,Last chance sale + $20 off $135+,sale,Last chance sale + $20 off $135+,20,,high
+c4480622-e87b-41ee-887b-57aa0a638e11,25% off with BCST01,coupon,25% off with BCST01,,25,high
+d33811fa-3420-4833-b969-5bb9d69ea530,$20 off with THANKYOU428,coupon,$20 off with THANKYOU428,20,,high
+97278fe0-7bae-4df5-86f3-9126d01be3a0,10% OFF 6+ COFFEE PODS (included in price),sale,10% OFF 6+ COFFEE PODS (included in price),,10,high
+49e3ffa6-e107-4ef2-aa95-e838fd34a399,25% off flavors + 15% with NEWBUBBLES,sale,25% off flavors + 15% with NEWBUBBLES,,15,high
+589009f1-e6ed-4f31-87dc-374730df6b62,15% off with FIRST15,coupon,15% off with FIRST15,,15,high
+6d4b2e85-7885-476c-8d45-3da50a11c0eb,10% with SHOP10,coupon,10% with SHOP10,,10,high
+cfe9ab4c-2676-4eb8-8c1a-99839f547942,$6 Rewards,rewards,$6 Rewards,6,,high
+801b90e1-2afe-4947-8e46-39622618a073,30% off with SPRING30 + $55 Rewards,coupon,30% off with SPRING30 + $55 Rewards,,30,high
+ae7b5391-79aa-468f-beaf-aaf4c4b55caf,$10 off $79+ orders with DHDNYC,coupon,$10 off $79+ orders with DHDNYC,10,,high
+08c486af-bfd0-473f-98ae-9cf88426989c,45-53% off k-cups + $4 Rewards,,45-53% off k-cups + $4 Rewards,,45,low
+9e755853-d6f1-4350-af5e-f602701e94e3,45-53% off k-cups + $4 Rewards,,45-53% off k-cups + $4 Rewards,,45,low
+fda12e49-d9bc-40a5-bee2-019b6213000a,45-53% off k-cups + $4 Rewards,,45-53% off k-cups + $4 Rewards,,45,low
+ad85e082-0528-4403-b5ab-dff41267394c,$20 rewards + On sale. See price notes.,rewards,$20 rewards + On sale. See price notes.,20,,high
+62816143-5721-4db3-92a2-a02d25b335dc,B1G1 30% off,sale,B1G1 30% off,,30,high
+642aab52-9424-4207-9ae2-f2c898d75ad8,20% off with SAVINGS20 + $2 Rewards,coupon,20% off with SAVINGS20 + $2 Rewards,,20,high
+b3357fc0-a9f3-4f50-b7fe-4ac884caad1b,15% off with REVIEW15,coupon,15% off with REVIEW15,,15,high
+a11d272f-1a5c-4426-b6de-19e1215c4e1c,$15 off with WELCOME15,coupon,$15 off with WELCOME15,15,,high
+33050506-9c22-47cc-9714-b638743941a0,60% off with TULIPS,,60% off with TULIPS,,60,low
+4738f0bf-f7df-4bd9-b152-43d33d6f12be,B1G1 with BB2604001,,B1G1 with BB2604001,,,low
+a89827d4-7268-426e-b91c-9879cf5febec,"Buy 1, get the 2nd 25% off ALL dog & cat grooming wipes + $12 Rewards",sale,"Buy 1, get the 2nd 25% off ALL dog & cat grooming wipes + $12 Rewards",,25,high
+14d2f2ad-7fb0-4adc-8c60-02a85e0bf1fd,20% off with 40YRSFAIR,coupon,20% off with 40YRSFAIR,,20,high
+823e9658-b6c6-415f-a5ba-efd773488d8e,25% off flavors + 15% with NEWBUBBLES,sale,25% off flavors + 15% with NEWBUBBLES,,15,high
+00794a88-03b0-4353-8d39-77c23e75c4c3,On sale. B1G1.,sale,On sale. B1G1.,,,high
+30f78ff6-8d7f-4609-af70-b4d0d81d1bad,25% off flavors + 15% off with NEWBUBBLES,sale,25% off flavors + 15% off with NEWBUBBLES,,15,high
+a7eb90bb-984a-4346-aa36-37b6adcb1285,B1G1 50% off,sale,B1G1 50% off,,50,high
+6819719a-de42-40a1-a462-9092397035e3,20% with autoship + $20 off with THANKYOU428,coupon,20% with autoship + $20 off with THANKYOU428,20,20,high
+e00f1f81-949a-4ac8-8ede-03862456d009,20% off with SPARK,coupon,20% off with SPARK,,20,high
+8b437bf7-6581-41d9-9d24-5cc01b1e400d,30% off with COMEBACK47Z5,coupon,30% off with COMEBACK47Z5,,30,high
+ffeec7cc-af6e-4cb4-9cea-82c298fc57f4,20% off with BLOSSOM,coupon,20% off with BLOSSOM,,20,high
+2f5e2e3e-2a22-4734-92c5-d9caa8f720b8,15% off with SPOT15,coupon,15% off with SPOT15,,15,high
+72e51d2a-040c-4248-bf8d-76b625548818,50% off with TODAY,coupon,50% off with TODAY,,50,high
+aec31e69-ac17-4fa5-9ef8-f7dfbd75c82c,25% off with NEWSLETTER25,coupon,25% off with NEWSLETTER25,,25,high
+be9bc99d-950f-4fa0-8f27-da30b27043ed,25% off flavors + 15% with NEWBUBBLES,sale,25% off flavors + 15% with NEWBUBBLES,,15,high
+b36e3a44-f8bf-40bb-9411-0b47ce8ce474,25% off flavors + 15% with NEWBUBBLES,sale,25% off flavors + 15% with NEWBUBBLES,,15,high
+2c6697e5-9116-47e6-85e8-f22c9354592f,50% off with TODAY,coupon,50% off with TODAY,,50,high
+6a9f3c25-eebd-4e88-b048-0df295945811,$30 gift card on $100+ orders,,$30 gift card on $100+ orders,30,,low
+6ba870e7-86c6-42ca-980a-d654dcfaa86a,15% off with REVIEW15,coupon,15% off with REVIEW15,,15,high
+7dbecf19-d37d-4192-a18d-c2c0e6794244,$15.95 Each for Fragrance Family Members,,$15.95 Each for Fragrance Family Members,,,low
+b3c08810-60f1-4e23-8b83-3f82e1e2cc20,50% off with SPARKJOY,coupon,50% off with SPARKJOY,,50,high
+33928827-f7b1-48f9-a04c-b2aeff8af1d4,On sale. 20% off.,sale,On sale. 20% off.,,20,high
+cae545eb-44bc-4fd2-88c1-2eddde1fa9a1,On sale,,On sale,,,low
+86f95ac1-9c8e-4b08-86e1-8c9fe7812ffe,On sale,,On sale,,,low
+f26fce5d-1222-4c49-a645-39cc991f1915,15% off with REVIEW15,coupon,15% off with REVIEW15,,15,high
+fc6d7f6c-65f1-4032-9978-ac1e411863bf,$10 off on Orders of $79+ with LARSON10,coupon,$10 off on Orders of $79+ with LARSON10,10,,high
+c5cbbc22-0ef4-4f9d-9c49-0e06fd7ff600,B1G1 with BB2604001,,B1G1 with BB2604001,,,low
+bca0575d-052c-49a0-95df-19622b7398b4,10% off with JAYSUE,coupon,10% off with JAYSUE,,10,high
+60a67e16-fe01-41d4-81f6-649e793df4b2,25% off flavors + 15% with NEWBUBBLES,sale,25% off flavors + 15% with NEWBUBBLES,,15,high
+2bec17a4-6292-4f1d-9c0f-0da5f0666906,10% off with FRESH10,coupon,10% off with FRESH10,,10,high
+525491ca-c03b-40b9-9112-e03f8a451cb9,20% off with SAFETY426,coupon,20% off with SAFETY426,,20,high
+3f54751c-ce76-4a63-8814-2c73bbf9aae9,50% off car fragrance,sale,50% off car fragrance,,50,high
+2697aee9-cb5f-4116-a752-486b49a86de7,Buy 3 Get 1 Free Select Dog Treats (-$22.45) + Buy 1 Get the 2nd 50% OFF Select Aquatic Media! (-$18.00) + SMART20 (-$10.80) + Autoship savings (-$3.80),,Buy 3 Get 1 Free Select Dog Treats (-$22.45) + Buy 1 Get the 2nd 50% OFF Select Aquatic Media! (-$18.00) + SMART20 (-$10.80) + Autoship savings (-$3.80),,,low
+8149d7a9-56b7-4867-ab8a-6a9bc2cc71c8,$20 off with THANKYOU428,coupon,$20 off with THANKYOU428,20,,high
+13830397-816e-45a1-9aae-b8c219f9e06b,30% off every regular price purchase with code APRIL30NOW,coupon,30% off every regular price purchase with code APRIL30NOW,,30,high
+74d4662f-a975-4daf-91bf-d8fee309c307,B1G1 50% off yarn,sale,B1G1 50% off yarn,,50,high
+1d7317e1-f171-4b52-978b-c33f1e61a7fe,B1G1 with BB2604001,,B1G1 with BB2604001,,,low
+74393151-172f-48fb-855f-222d64955e3e,$10 off $50+ spent on toys,sale,$10 off $50+ spent on toys,10,,high
+22a61b50-986d-49d8-9126-4cd60c3504dd,25% off with EXCHANGE25 + 20% off with VCSOCIAL20,coupon,25% off with EXCHANGE25 + 20% off with VCSOCIAL20,,25,high
+1ad4758c-6df3-40a3-9f57-329ff48ea8c7,5% off with WELCOME5,coupon,5% off with WELCOME5,,5,high
+1e95ad82-1a46-4067-ab58-32a7754a5444,$10 off $50+ spent on toys,sale,$10 off $50+ spent on toys,10,,high
+b5355b8e-9db3-47dd-8bc8-8ef5c52cda66,$10 off $50+ spent on toys,sale,$10 off $50+ spent on toys,10,,high
+b2dd3c5f-da4a-4081-b7c1-86cc9562048b,25% off with BCST01,coupon,25% off with BCST01,,25,high
+dbca8fda-ac2e-430a-97f2-fb777bd5690d,25% off flavors,sale,25% off flavors,,25,high
+fba1d5e3-0337-479b-b8ef-a05b35d9242e,Buy 3 Get 1 Free Select Dog Treats (-$22.45) + Buy 1 Get the 2nd 50% OFF Select Aquatic Media! (-$9.00) + SMART20 (-$58.90),,Buy 3 Get 1 Free Select Dog Treats (-$22.45) + Buy 1 Get the 2nd 50% OFF Select Aquatic Media! (-$9.00) + SMART20 (-$58.90),,,low
+0ebf9867-d8eb-4723-8d2d-c474b2f759d9,"Buy 1, Get the 2nd 50% Off All Dog and Cat Collars, Leashes and Harnesses (-$50.00) + Buy 1 Get the 2nd 50% OFF Select Aquatic Media! (-$18.00) + 20% off with SMART20 + $4 rewards",,"Buy 1, Get the 2nd 50% Off All Dog and Cat Collars, Leashes and Harnesses (-$50.00) + Buy 1 Get the 2nd 50% OFF Select Aquatic Media! (-$18.00) + 20% off with SMART20 + $4 rewards",,20,low
+93585ad7-0a4b-4a61-8348-8196fe60f083,50% off + $65 Rewards,sale,50% off + $65 Rewards,,50,high
+f062ccb4-22da-44e4-b97b-060c72b3b454,BOGO 50% off + 20% off with VCSOCIAL20,sale,BOGO 50% off + 20% off with VCSOCIAL20,,20,high
+df371e24-b4b1-4d48-b1f7-d223c140d38e,20% with autoship + $20 off with THANKYOU428,coupon,20% with autoship + $20 off with THANKYOU428,20,20,high
+88586063-c3a6-40cc-a4a3-97c5ca5a0702,18% off with HEART18,coupon,18% off with HEART18,,18,high
+205ac71d-04b6-4c5f-9f1a-8ac1b0bce120,30% off every regular price purchase with code MAKEIT30,coupon,30% off every regular price purchase with code MAKEIT30,,30,high
+ee9bbf0e-fcc7-4dc9-a4f0-e743ed171676,Clearance $1 Car Jar + $5 Each: Full-Price Home Fragrance Refill Singles & Basic Diffusers,,Clearance $1 Car Jar + $5 Each: Full-Price Home Fragrance Refill Singles & Basic Diffusers,,,low
+3b9e1ea1-813d-417f-a2e7-dec9b9a528ee,20% off with SPRING20,coupon,20% off with SPRING20,,20,high
+f59642e5-b5ce-4dde-959e-99fe73a58110,25% off flavors + 15% with NEWBUBBLES,sale,25% off flavors + 15% with NEWBUBBLES,,15,high
+39a7eec9-6648-4132-8265-d38db8456821,25% off flavors + 15% with NEWBUBBLES,sale,25% off flavors + 15% with NEWBUBBLES,,15,high
+c2a799ca-8f86-4322-8a52-f70826228f1b,$20 off with autoship + $6 Rewards,coupon,$20 off with autoship + $6 Rewards,20,,high
+dd834bab-dcad-473b-b950-c59b7f01236c,BOGO with BB2604001,,BOGO with BB2604001,,,low
+cb3f8da5-0da6-4f08-86ad-f81805d84f06,BOGO with BB2604001,,BOGO with BB2604001,,,low
+1ae164c7-0b37-4677-b618-7d0d4f373b21,15% off with REVIEW15,coupon,15% off with REVIEW15,,15,high
+2a121d7f-34c3-4461-bfea-0f224a3d2ef4,10% off with JSTDDFPQHR4X,coupon,10% off with JSTDDFPQHR4X,,10,high
+47285198-70ea-49fa-ac4f-35a9705e27dd,20% off with SPARK,coupon,20% off with SPARK,,20,high
+a7a01830-3081-4bb2-b9b7-d2ed359e7fcb,$10 off with Welcome Code (UNOIQJHKRH9P),coupon,$10 off with Welcome Code (UNOIQJHKRH9P),10,,high
+c3ff20ee-0987-42a8-8488-cdbf155059ed,10% off with HELLOZUM,coupon,10% off with HELLOZUM,,10,high
+c2af58ca-45dd-4dde-8914-08582f6c9465,B1G1 + 20% off with MAR20,sale,B1G1 + 20% off with MAR20,,20,high
+3e6a37c3-f3f4-4fa4-9622-f437f0efc671,$30 rewards + On sale. See price notes.,rewards,$30 rewards + On sale. See price notes.,30,,high
+89ff418a-2101-469e-a842-8a5af0b49523,50% off with BB2604001,,50% off with BB2604001,,50,low
+b1907a67-bd68-4c1f-a813-09048b8a498d,B1G1 Glasses + 20% off with MAR20,sale,B1G1 Glasses + 20% off with MAR20,,20,high
+a89dcec0-c25d-4f60-805f-95d4a259da1d,25% off flavors + 15% off with YOURFLAVORS,sale,25% off flavors + 15% off with YOURFLAVORS,,15,high
+4c2556bb-650c-4732-b1f1-951360bbf6bf,20% off with NEWS20,coupon,20% off with NEWS20,,20,high
+ed516370-2d9b-4a3f-9d35-3cf6723c839a,25% off flavors,sale,25% off flavors,,25,high
+e9943a1d-3c4c-47e4-a366-165312414731,25% off flavors,sale,25% off flavors,,25,high
+d798b70b-bedc-48c0-9f02-66b23ee40bf0,B1G1 with BB2604001,,B1G1 with BB2604001,,,low
+35dbab9b-46fd-4f61-9853-b97fd3ce8592,B1G1 with BB2604001,,B1G1 with BB2604001,,,low
+3df34aac-e208-4e72-97e3-7a0b287cacf7,B1G1 with BB2604001 + $15 Rewards,,B1G1 with BB2604001 + $15 Rewards,,,low
+18fa4315-ec5d-4f4f-a0a0-899230cb322f,B1G1 + 20% off with MAR20,sale,B1G1 + 20% off with MAR20,,20,high
+c0722f2a-225e-45da-ba78-4d1ac0384adb,B1G1 + 20% off with MAR20,sale,B1G1 + 20% off with MAR20,,20,high
+bdcf2cb2-516b-4804-9d14-cc5541257ca9,15% off with FIRST15,coupon,15% off with FIRST15,,15,high
+03d992d7-5e83-43a7-9bff-87672f07ae59,30% off every regular price purchase with code SPRING30,coupon,30% off every regular price purchase with code SPRING30,,30,high
+79f5adb6-49c8-4b8b-b9f6-de9e84c83e9c,B1G1 with BB2604001 (Most Full-Price Yankee Candle® Brand Items Promo Applied),,B1G1 with BB2604001 (Most Full-Price Yankee Candle® Brand Items Promo Applied),,,low
+86758070-1f2d-4397-8c36-37fc0d67c764,40% off with SHOPWITHUS,coupon,40% off with SHOPWITHUS,,40,high
+7232e6f2-1b42-43d5-b2b7-4f7108bebe71,B2G2 free,sale,B2G2 free,,,high
+c5cd172b-ea56-4ea5-bb49-2eaf88ed1c60,$60 Rewards,rewards,$60 Rewards,60,,high
+0d8f523b-8947-4bb1-8367-303ba94bf49c,18% off with HEART18,coupon,18% off with HEART18,,18,high
+c077d170-459a-473f-9091-454d1794d537,20% off with WOMEN20 + 20% off with VCSOCIAL20,coupon,20% off with WOMEN20 + 20% off with VCSOCIAL20,,20,high
+d4e71aa4-e92d-4c38-b0fd-c15e68f3bc3c,10% off with AC10ALTY3KMWW,coupon,10% off with AC10ALTY3KMWW,,10,high
+b211d0d5-c17b-46ff-a8fd-90145421737c,B3G1 free,sale,B3G1 free,,,high
+89760b80-5967-4199-8519-2d380d26b95a,20% off with NEWS20,coupon,20% off with NEWS20,,20,high
+b8fcf300-562b-4215-b4c9-45a4e454898f,10% off with FRESH10,coupon,10% off with FRESH10,,10,high
+73b95feb-432b-4f5f-bc8b-568a91e1b490,10% off with CLEAN10,coupon,10% off with CLEAN10,,10,high
+f8b42057-bc87-4f47-895b-6dd179f15fa2,30% off on regular priced items + $25 rewards,sale,30% off on regular priced items + $25 rewards,,30,high
+9dde9d31-b4a7-4284-88ce-141f90023351,"20% off with MISSYOU20 + on sale for $3.59 (reg. 5.99, 40% off)",coupon,"20% off with MISSYOU20 + on sale for $3.59 (reg. 5.99, 40% off)",,20,high
+e5884354-f5c3-42dc-990c-a73b5468edd5,B2G2 or B3G3 Candles + additional discount on candles with DM2602001 + $40 rewards,,B2G2 or B3G3 Candles + additional discount on candles with DM2602001 + $40 rewards,,,low
+1022c1ba-61da-46bf-8c12-749b2e659d2b,45% off k-cups,sale,45% off k-cups,,45,high
+6286896e-9b61-4767-bc2c-9a4991a013f9,20% off with AFA-20,coupon,20% off with AFA-20,,20,high
+a6ec3a74-816a-45a9-88a5-5c21a7939544,$4 Rewards + 45% off k-cups,rewards,$4 Rewards + 45% off k-cups,4,45,high
+248d459d-a180-4128-ab35-8fea8b978923,10% off with BLOSSOM,coupon,10% off with BLOSSOM,,10,high
+cce82697-015d-44e3-b23e-e0e9f2c616d6,45% off k-cups,sale,45% off k-cups,,45,high
+a9e15cd4-2057-41a3-b692-5d8c2d421633,Buy 3 Get 1 Free Select Dog Treats (-$8.98) + Buy 1 Get the 2nd 50% OFF Select Aquatic Media! (-$31.50) + SAVE20 (-$46.80) + $2 Rewards,,Buy 3 Get 1 Free Select Dog Treats (-$8.98) + Buy 1 Get the 2nd 50% OFF Select Aquatic Media! (-$31.50) + SAVE20 (-$46.80) + $2 Rewards,,,low
+6b443cb6-b6db-4a5b-905b-bc13a007a8c7,B1G1 + 20% off with MAR20,sale,B1G1 + 20% off with MAR20,,20,high
+064eb5c2-2cd9-464a-ab27-50d1644221d7,15% off with FIRST15,coupon,15% off with FIRST15,,15,high
+ccc7766a-4c7d-4423-ad0b-4f758588f3d7,B3G3 + $20 Rewards,,B3G3 + $20 Rewards,,,low
+7b253bf7-81e1-4c78-8b48-9d721c8c0f53,10% off with WELCOME10,coupon,10% off with WELCOME10,,10,high
+fc040f44-883a-459d-aefe-82526b2cfc6e,B1G1 + 20% off with MAR20,sale,B1G1 + 20% off with MAR20,,20,high
+46a9978d-6bd1-4cbf-aa01-a5e3169aae46,10% off with RAJALA10,coupon,10% off with RAJALA10,,10,high
+67b0675f-2b3f-47de-bd50-22a5403fd94c,$15 off with WELCOME15,coupon,$15 off with WELCOME15,15,,high
+3ef53831-6f5b-4db6-96db-df764542293f,50% off promotion (MIX&MATCH: BUY 12 SAVE 50% CORELLE ONLY) + 15% off with RMN15,sale,50% off promotion (MIX&MATCH: BUY 12 SAVE 50% CORELLE ONLY) + 15% off with RMN15,,15,high
+040130c8-668e-460a-83f9-6eddd741bee6,Buy 3 Get 1 Free Select Dog Treats (-$22.45) + Buy 1 Get the 2nd 50% OFF Select Aquatic Media! (-$18.00) + SAVE20 (-$65.90) + $2 Rewards,,Buy 3 Get 1 Free Select Dog Treats (-$22.45) + Buy 1 Get the 2nd 50% OFF Select Aquatic Media! (-$18.00) + SAVE20 (-$65.90) + $2 Rewards,,,low
+205c2f8a-2b0d-47f3-bfd5-da65475870f8,10% off with JSTN3MF7VPLD,coupon,10% off with JSTN3MF7VPLD,,10,high
+d350f4fc-4b5c-45a1-bd64-e35dbb1d2508,15% off with AFHG3251,coupon,15% off with AFHG3251,,15,high
+0569016d-fb53-4fae-98ab-0c2c69e9ded0,15% off with ELECTRICAL326 (electrical & lighting),coupon,15% off with ELECTRICAL326 (electrical & lighting),,15,high
+0b159f87-eafc-4b5f-9ead-84e2da8ab720,15% off with ELECTRICAL326 (electrical & lighting),coupon,15% off with ELECTRICAL326 (electrical & lighting),,15,high
+7156b5c1-30e9-4de8-9b0b-f6ceaa2c904a,Buy 3 Get 1 Free Select Dog Treats (-$22.45) + Buy 1 Get the 2nd 50% OFF Select Aquatic Media! (-$18.00) + SAVE20 (-$37.90),,Buy 3 Get 1 Free Select Dog Treats (-$22.45) + Buy 1 Get the 2nd 50% OFF Select Aquatic Media! (-$18.00) + SAVE20 (-$37.90),,,low
+3e9cebee-002f-48af-889d-1fbf79dc3b83,$15 off with WELCOME15,coupon,$15 off with WELCOME15,15,,high
+2987d648-1926-4660-8ff2-102dbf876c4e,25% off with HAPPYB25,coupon,25% off with HAPPYB25,,25,high
+da8b88b4-924a-4a17-be89-0f139aa7f131,50% off promotion (MIX&MATCH: BUY 12 SAVE 50% CORELLE ONLY) + 15% off with RMN15,sale,50% off promotion (MIX&MATCH: BUY 12 SAVE 50% CORELLE ONLY) + 15% off with RMN15,,15,high
+bb46d530-3926-4d76-8f31-4678b155c9af,20% off with SPRING10,coupon,20% off with SPRING10,,20,high
+3b8ffa3e-c6e1-4558-9f1c-3e08d1fba473,15% off with REVIEW15,coupon,15% off with REVIEW15,,15,high
+b8208b78-62e1-436c-be7d-50223d931bca,30% off with HPYT9E6WDMBDY + Free sample (10.99 value included in subtotal and discount),coupon,30% off with HPYT9E6WDMBDY + Free sample (10.99 value included in subtotal and discount),,30,high
+63dda0d7-d69b-441d-953a-2a2608cbe935,$20 off with THANKYOU428,coupon,$20 off with THANKYOU428,20,,high
+881ce810-9342-47fa-8b43-24f41b33930e,30% off with MINDBODYGREEN,coupon,30% off with MINDBODYGREEN,,30,high
+d0db05ed-37a2-490a-be3d-d9f3557442f8,5% off Buy 7+ + $10 off with COMEBACK,coupon,5% off Buy 7+ + $10 off with COMEBACK,10,5,high
+313ced2d-0d14-4004-80a9-593c1a28279f,15% off with TREAT15 (email/sms signup),coupon,15% off with TREAT15 (email/sms signup),,15,high
+2d3ae229-9625-4317-9e05-a59e7e4d52ac,30% off with MINDBODYGREEN,coupon,30% off with MINDBODYGREEN,,30,high
+73d9afd8-3881-442e-a80c-dc244b742ee2,$20 off with THANKYOU428,coupon,$20 off with THANKYOU428,20,,high
+06f041a8-c81b-4a0a-9e8f-b181befc7bb7,$55 in rewards,rewards,$55 in rewards,55,,high
+3ec19512-943d-4aeb-838a-6ea52c5c47cb,15% off with REVIEW15,coupon,15% off with REVIEW15,,15,high
+dc17cc1d-ded9-4729-805b-c70d4c3f0c99,15% off with BVZP-367V-SPZT-D9Q3 (email signup),coupon,15% off with BVZP-367V-SPZT-D9Q3 (email signup),,15,high
+6d71e8bb-a5af-4802-9bad-c4e8f8c9629a,30% off with COMEBACK47Z5,coupon,30% off with COMEBACK47Z5,,30,high
+5e581078-997c-4f78-b1f5-47dae52259da,50% off + $65 Rewards,sale,50% off + $65 Rewards,,50,high
+7f6f0b00-9334-4bf4-bb36-1488e6a93e7e,50% off + $20 Rewards,coupon,50% off + $20 Rewards,,50,high
+5fd2bdc7-f92a-455e-8568-ef0630e1abea,HAPPYB25,,HAPPYB25,,25,low
+5167f77d-6df0-4f50-97ee-46747f4fb273,15% off with REVIEW15,coupon,15% off with REVIEW15,,15,high
+85fb3402-8f45-4c1f-aed7-ccacc365a8bf,Buy 2 for $7 select Pop-Tarts pastries,sale,Buy 2 for $7 select Pop-Tarts pastries,,,high
+9fb3eaa7-5bc2-4a55-b40b-e47f564caf8e,10% off with AC10ARNTPHJX5 (email coupon),coupon,10% off with AC10ARNTPHJX5 (email coupon),,10,high
+1e2aeccb-05a6-43f2-950d-59a9dce108c2,10% off with SHESEWSSEAMS,coupon,10% off with SHESEWSSEAMS,,10,high
+f23ff117-765b-4227-976d-b0c1f025f8c6,BOGO 50% OFF,sale,BOGO 50% OFF,,50,high
+c2bb53e5-b7af-4cc0-aa46-aaf6c053bfa4,15% off with HEALTH15,coupon,15% off with HEALTH15,,15,high
+b34ebf32-273c-427c-a68b-619718e92299,30% off with HPYT9E6WDMBDY (Happy Birthday 30),coupon,30% off with HPYT9E6WDMBDY (Happy Birthday 30),,30,high
+2a811754-ee67-4e1b-856e-60059357d022,25% off sale Feb 13-16,sale,25% off sale Feb 13-16,,25,high
+e008d701-2944-4b9d-95eb-90f4712241c6,10% off with DMPW1XO,coupon,10% off with DMPW1XO,,10,high
+587338dc-0665-49f6-99e3-ed98e4c12105,10% off with HERSHEY10,coupon,10% off with HERSHEY10,,10,high
+64424aa8-95a0-4d1d-8d99-7b5c73d98e3e,20% off with SNACKING20 + $10 off with TEXT10,coupon,20% off with SNACKING20 + $10 off with TEXT10,10,20,high
+f5210c53-4dab-49f4-88a0-c7e4d243a7ef,B2G2 Candles,sale,B2G2 Candles,,,high
+b8fd6d18-fcac-46be-8770-035ca83393ed,10% off with GOLD60,coupon,10% off with GOLD60,,10,high
+ac6297c0-5d5f-45fd-88f5-c82ec154817f,5% off with DMPW1XO,coupon,5% off with DMPW1XO,,5,high
+e7fc88e1-22de-4fb6-9889-fd34f225119d,5 ScentPlug's for $20 with DM2601003,,5 ScentPlug's for $20 with DM2601003,,,low
+dea74a29-9f59-4995-bb3f-194625ed05c2,30% off with SW30,coupon,30% off with SW30,,30,high
+9243382b-5241-4b67-b0c7-c467a3b25240,15% off with REVIEW15,coupon,15% off with REVIEW15,,15,high
+0d0fea5e-9c29-42cd-9d86-cb38fd4ef502,5 for $20 ScentPlug refills + 6 for $24 Diffuser (limit 24),,5 for $20 ScentPlug refills + 6 for $24 Diffuser (limit 24),,,low
+b7c9c4a0-f46d-4ccd-a994-0a123916cfa8,"15% off with COLD226 (Coupert, 15% off Cold & Flu Season + Cold Weather products)",coupon,"15% off with COLD226 (Coupert, 15% off Cold & Flu Season + Cold Weather products)",,15,high
+fb101b88-2c8c-4397-ac10-4e82a2758987,"Buy 1 Get the 2nd for 50% Off Select Aquatic Filter Media!: -$31.50
+Associate discount 6603430327: -$15.51",,Buy 1 Get the 2nd for 50% Off Select Aquatic Filter Media!: -$31.50 Associate discount 6603430327: -$15.51,,50,low
+d015e238-64dd-4593-979f-3ee05b846b3e,30% off with SW30,coupon,30% off with SW30,,30,high
+e98a84af-4cce-4451-afa4-78297d7ca27e,15% off with HONEY15,coupon,15% off with HONEY15,,15,high
+447fc44b-6a69-4c0a-822d-faeb4f6b297d,"Buy 3, get the 4th FREE select dog treats: -$34.95
+Buy 1 Get the 2nd for 50% Off Select Aquatic Filter Media!: -$31.50
+Buy 1, get the 2nd 20% OFF dry dog food: -$15.00
+Associate discount with code 7637870416: -$173.01",,"Buy 3, get the 4th FREE select dog treats: -$34.95 Buy 1 Get the 2nd for 50% Off Select Aquatic Filter Media!: -$31.50 Buy 1, get the 2nd 20% OFF dry dog food: -$15.00 Associate discount with code 7637870416: -$173.01",,,low
+f0209f88-dde8-4771-a196-586b99f1b22f,30% off with SW30,coupon,30% off with SW30,,30,high
+b0af7bef-0b64-46c3-81f4-8c97984cfd10,5% off with WELCOME5,coupon,5% off with WELCOME5,,5,high
+7bcabc23-1916-4cdf-94e2-6d9b9b2f250b,20% off with HEART20,coupon,20% off with HEART20,,20,high
+5763e613-196a-4074-a144-cb54996781ad,B2G1 on yarn (included in Product Cost) + $20 Rewards,,B2G1 on yarn (included in Product Cost) + $20 Rewards,,,low
+52136c4b-d0a4-4c1a-bec8-0f53e1552fb7,40% off regular price items with CYBER40,coupon,40% off regular price items with CYBER40,,40,high
+44e1f04a-4dfb-4145-b9eb-b59cd99c576f,30% off with COMEBACK47Z5,coupon,30% off with COMEBACK47Z5,,30,high
+3ba0d471-f1c6-4337-8f86-59c5406ce9e9,5 ScentPlug's for $20 with DM2601003,,5 ScentPlug's for $20 with DM2601003,,,low
+1a8b5b80-83ed-4cb2-8b6c-56743794b923,5 ScentPlug's for $20 with DM2601003,,5 ScentPlug's for $20 with DM2601003,,,low
+719ad093-fffc-4922-9467-fd880c4c6189,30% off with COMEBACK47Z5,coupon,30% off with COMEBACK47Z5,,30,high
+389aa8cb-486e-41fe-910b-bb5fa72bb77e,10% off with RAJALA10,coupon,10% off with RAJALA10,,10,high
+86807443-4e07-4320-a575-de9317a3e7c4,18% off with HEART18,coupon,18% off with HEART18,,18,high
+38f68420-9c57-4618-94a9-50d2a44749fa,"Walmart cash: $2.50, Gift cards: $159.59",,"Walmart cash: $2.50, Gift cards: $159.59",,,low
+da4ed173-72ed-4cbf-916f-acd87037b1ac,15% off with NEWBUBBLES,coupon,15% off with NEWBUBBLES,,15,high
+90f583e8-1d1e-4b0b-bd40-9a484b682ca4,15% off with NEWBUBBLES,coupon,15% off with NEWBUBBLES,,15,high
+e22ec4df-1133-415c-91c8-91b2b9f25f12,40% off promotion (MIX&MATCH: BUY 8 SAVE 40% CORELLE ONLY) + 35% off with SAVE35,sale,40% off promotion (MIX&MATCH: BUY 8 SAVE 40% CORELLE ONLY) + 35% off with SAVE35,,35,high
+1692d6b9-1512-4af0-9b90-8db4685be039,$20 off $100+ spent on toys,sale,$20 off $100+ spent on toys,20,,high
+3b31fb43-6f82-4267-9679-19d135921adf,40% off promotion (MIX&MATCH: BUY 8 SAVE 40% CORELLE ONLY) + 35% off with SAVE35,sale,40% off promotion (MIX&MATCH: BUY 8 SAVE 40% CORELLE ONLY) + 35% off with SAVE35,,35,high
+a679d61d-7884-4670-af08-006f570ec893,$10 off $99+ orders,sale,$10 off $99+ orders,10,,high
+d0b225fc-e624-433c-974d-af8c59214410,20% off with SPARK,coupon,20% off with SPARK,,20,high
+020d4f60-3792-49ee-bd3f-5fe88c09360e,B2G1 free yarn,sale,B2G1 free yarn,,,high
+9d5109ca-cfbe-435c-8d18-b661c0561cc4,50% off,sale,50% off,,50,high
+3085aa00-d189-4c80-a83e-a4c9988e4195,"15% off with FIRST15 for new customers (this item only, included in Product Price)",coupon,"15% off with FIRST15 for new customers (this item only, included in Product Price)",,15,high
+132fcf9a-b77b-4440-bae6-374443b5799b,"Buy 1, get the 2nd 25% off ALL dog & cat grooming wipes + $10 Rewards",sale,"Buy 1, get the 2nd 25% off ALL dog & cat grooming wipes + $10 Rewards",,25,high
+cd22b51b-fe49-439a-b5f5-4692142caafd,10% off with JSTD3JF7VW3J,coupon,10% off with JSTD3JF7VW3J,,10,high
+473d8550-2960-4c10-a485-a0bb05d7592a,10% off with JSTNJD8V3CYW,coupon,10% off with JSTNJD8V3CYW,,10,high
+e09a5014-0286-4910-9293-9ddfde3ce305,Rewards,,Rewards,,,low
+8eca2293-feb5-4167-86e4-ec14c3b5e5c2,40% off promotion (MIX&MATCH: BUY 8 SAVE 40% CORELLE ONLY) + 35% off with SAVE35,sale,40% off promotion (MIX&MATCH: BUY 8 SAVE 40% CORELLE ONLY) + 35% off with SAVE35,,35,high
+9a97dd69-4317-4923-8368-eb8a38687905,15% off with FRESHIE,coupon,15% off with FRESHIE,,15,high
+fdeacc90-3c46-420d-a7be-4b64b48031aa,10% off with WELCOME10,coupon,10% off with WELCOME10,,10,high
+bb061ba8-0e99-40e5-a41c-7890e5fe3165,20% off with NEW20 (new customers only),coupon,20% off with NEW20 (new customers only),,20,high
+466fd616-9143-4131-98f5-90fa0d8c1f51,B2G1 on yarn,sale,B2G1 on yarn,,,high
+142e5dba-7b32-47e5-9ed9-5c7eb1d51fa4,40% off promotion (MIX&MATCH: BUY 8 SAVE 40% CORELLE ONLY) + 30% off with JANUARY30,sale,40% off promotion (MIX&MATCH: BUY 8 SAVE 40% CORELLE ONLY) + 30% off with JANUARY30,,30,high
+df149202-58cb-4ca9-bb70-b528b0794899,30% off on regular priced items + $10 rewards,sale,30% off on regular priced items + $10 rewards,,30,high
+78fe66f1-7bdb-4e48-b39c-2d25dd75456d,B2G1 on Yarn + $25 Rewards,,B2G1 on Yarn + $25 Rewards,,,low
+20f48796-608e-4304-9af9-e5e0c3b869c3,15% off with HONEY15,coupon,15% off with HONEY15,,15,high
+ba345c2a-6f29-4bde-ac00-a8ce52c65249,15% off up to $40 spend,sale,15% off up to $40 spend,,15,high
+73f1651f-0111-4ceb-892c-dff53e3be10d,"15% off with FIRST15 for new customers (this item only, included in Product Price)",coupon,"15% off with FIRST15 for new customers (this item only, included in Product Price)",,15,high
+ff10c6f7-f90b-439d-9ed2-317d3942d872,40% off promotion (MIX&MATCH: BUY 8 SAVE 40% CORELLE ONLY) + 30% off with JANUARY30,sale,40% off promotion (MIX&MATCH: BUY 8 SAVE 40% CORELLE ONLY) + 30% off with JANUARY30,,30,high
+9c3413ef-774e-4328-8b59-6c9dacb065e7,25% off with EMAIL25,coupon,25% off with EMAIL25,,25,high
+a42c69aa-a492-4aaa-a317-d12df86bbeef,40% off when you buy 4 or more select dog treats! Online Only + $4 Rewards,sale,40% off when you buy 4 or more select dog treats! Online Only + $4 Rewards,,40,high
+353df175-c022-4efc-9dc4-d69203cf6faa,50% off with TRUELOVE50,coupon,50% off with TRUELOVE50,,50,high
+257ae310-31f4-4f3d-8e33-0228eaf73dd6,50% off with TRUELOVE50,coupon,50% off with TRUELOVE50,,50,high
+83022e95-27d8-4a40-af61-9138f4beda51,20% with SAVE20,coupon,20% with SAVE20,,20,high
+e887b0ca-9d37-4d6f-a16b-053bac08b8eb,B3G1 Free + 20% with SAVE20 + $2 Rewards,sale,B3G1 Free + 20% with SAVE20 + $2 Rewards,,20,high
+0e93aa99-938c-4d5c-bfb6-866146c5ab51,"ALLFOODSAVE applied, 20.00% off your order.",sale,"ALLFOODSAVE applied, 20.00% off your order.",,20,high
+c59c81f1-9c33-461d-b4a6-8db60091097a,10% off with autoship,coupon,10% off with autoship,,10,high
+1adc07de-60b5-4915-93b8-da2127e79bfc,15% off with CHECKMEOUT,coupon,15% off with CHECKMEOUT,,15,high
+7f7c366a-f671-4ae7-86ec-1ec2390f2e5a,10% off entire order with JSTDQ9T983KW3,coupon,10% off entire order with JSTDQ9T983KW3,,10,high
+7396c5d7-c481-48e0-b7c2-dd5d7390fdd2,15% off with HERSHEY10,coupon,15% off with HERSHEY10,,15,high
+5fdd1856-7a2a-4a79-8c12-bc54591f8799,10% off with SCONZALOVE,coupon,10% off with SCONZALOVE,,10,high
+68ed99c7-a44e-4e5e-9c86-ccf303b7339e,10% off with COMPA10,coupon,10% off with COMPA10,,10,high
+7c9eae94-b616-4522-8079-88a8a11c90d6,15% off with Q425ZB,coupon,15% off with Q425ZB,,15,high
+5be3c250-11a2-4a65-b7ac-738dcfbd4a55,15% off with BETTERMORNINGS,coupon,15% off with BETTERMORNINGS,,15,high
+3116f1a4-2342-4524-aa8d-65161f50748f,10% off with JSTN5XVX74KV,coupon,10% off with JSTN5XVX74KV,,10,high
+13e57074-13f8-49e1-8f95-c9490443bac1,$15 Rewards + 25% off with JAN25OFF (included in Product Price),rewards,$15 Rewards + 25% off with JAN25OFF (included in Product Price),15,25,high
+53a5a3b6-019e-416c-84e5-2894b03f583f,30% off with COMEBACK47Z5,coupon,30% off with COMEBACK47Z5,,30,high
+22dcef21-8bf7-4f44-9d5b-bd1f1ae664af,$15 coupon code for messed up boxes delivery,,$15 coupon code for messed up boxes delivery,15,,low
+cb96336c-4651-4a34-8230-4bd2f8577a9b,Clearance,,Clearance,,,low
+34b63878-cc6b-414d-a1bf-a6aa14e0d439,"• 15SAVEPATH applied, 15.00% off your product(s).
+• SITEWIDE20 applied, 20.00% off your order.",sale,"15SAVEPATH applied, 15.00% off your product(s). SITEWIDE20 applied, 20.00% off your order.",,20,high
+f95d223c-49ff-448a-ac0b-0b898ce70e89,30% off with HPYT9E6WDMBDY,coupon,30% off with HPYT9E6WDMBDY,,30,high
+a79ac974-9bdd-4dd9-a2dc-0de5c0b0ec61,HAPPYB25,,HAPPYB25,,25,low
+9218aebc-7c35-4dd2-96ac-7dbafaa34200,15% off with HONEY15,coupon,15% off with HONEY15,,15,high
+38c999a9-fd0b-4792-ac3d-1adbe00e9186,30% off with COMEBACK47Z5,coupon,30% off with COMEBACK47Z5,,30,high
+47423812-fd73-494e-98e9-87f86e0fb0d3,20% off +$50 off with X14423_2000000,coupon,20% off +$50 off with X14423_2000000,50,20,high
+92dc20b1-0dd3-44f6-99b6-95bdcfefa4b0,15% off with FRESHIE,coupon,15% off with FRESHIE,,15,high
+5c0c57b1-165d-4f45-b705-946c33eabc7b,25% off with SAVE25,coupon,25% off with SAVE25,,25,high
+c69bda8f-bb35-458a-aef5-fb31cd7f8c6f,20% off with SAVE20 + $6 Rewards,coupon,20% off with SAVE20 + $6 Rewards,,20,high
+ca3e8e7f-a9f1-46fd-a3d6-5ba6b2a836d4,20% off with promo code (Coupert),,20% off with promo code (Coupert),,20,low
+630103c0-5cf1-400f-aaed-a17cd253d81b,60% off Clearance,sale,60% off Clearance,,60,high
+eca83b79-2a51-4acf-a98d-ca54edd0464c,60% off Clearance,sale,60% off Clearance,,60,high
+9c14774c-f784-4237-894d-a5e18717b25a,60% off Clearance,sale,60% off Clearance,,60,high
+f1072b87-aa73-4c04-b388-d97a395bbccc,$15 Rewards,rewards,$15 Rewards,15,,high
+7cf782cb-1767-4cd0-97be-cdfafb203437,10% off autoship,coupon,10% off autoship,,10,high
+3da53fed-12cc-416a-a3fe-0e3bdfb627ae,50% off sale on Frango + $50 off with X14423_2000000,sale,50% off sale on Frango + $50 off with X14423_2000000,50,50,high
+5298a79d-2823-46af-9da8-15d6fd59dc66,15% off with WELCOME15,coupon,15% off with WELCOME15,,15,high
+8ca23106-c76e-48fa-b563-40ed15518edf,$6.99 Syrups Warehouse Sale,,$6.99 Syrups Warehouse Sale,,,low
+9fca8d0f-26ba-40cf-bed0-1bfd1bae5d3c,50% off sale on Frango + $50 off with X14423_2000000,sale,50% off sale on Frango + $50 off with X14423_2000000,50,50,high
+23e280fe-07ba-485d-a3f0-bbb3a0d598b8,50% off sale on Frango + $50 off with X14423_2000000,sale,50% off sale on Frango + $50 off with X14423_2000000,50,50,high
+2f6ba628-9f4f-4320-9191-745818528024,50% off sale on Frango + $50 off with X14423_2000000,sale,50% off sale on Frango + $50 off with X14423_2000000,50,50,high
+65497d26-e9aa-47a9-a02a-2c5896c68aef,50% off sale on Frango + $50 off with X14423_2000000,sale,50% off sale on Frango + $50 off with X14423_2000000,50,50,high
+edc3586b-a015-464d-8780-0ea01291a1f6,B3G1 Free (25% off),sale,B3G1 Free (25% off),,25,high
+6571de15-760c-45e4-9850-154ab75c865f,50% off sale on Frango + $50 off with X14423_2000000,sale,50% off sale on Frango + $50 off with X14423_2000000,50,50,high
+804482d5-0ada-473d-a1b9-43e369451d18,50% off sale on Frango + $50 off with X14423_2000000,sale,50% off sale on Frango + $50 off with X14423_2000000,50,50,high
+374de379-1d56-423c-9293-524fb557dc88,10% off with VMG (Coupert),coupon,10% off with VMG (Coupert),,10,high
+c70a523f-cc00-4d0b-a130-a279fecc8b94,15% off with CHECKMEOUT,coupon,15% off with CHECKMEOUT,,15,high
+2747a439-16f5-498c-b35e-8e7dcee7ef6b,20% off with SAVEBIG20 + 3 for $10,coupon,20% off with SAVEBIG20 + 3 for $10,,20,high
+e90b352d-a140-4332-8833-4722bcfdc470,3 for $10 + 20% off with SAVEBIG20,coupon,3 for $10 + 20% off with SAVEBIG20,,20,high
+d22e696c-5dcd-4e89-b239-360d4dfd0a70,30% off this item + 20% off with GIFT20,coupon,30% off this item + 20% off with GIFT20,,30,high
+a268cc92-cbb8-4d7c-9d3e-8381bef1fe56,20% off with ABTD75LQQDMC (mail-in coupon) up to $500,coupon,20% off with ABTD75LQQDMC (mail-in coupon) up to $500,,20,high
+b9266391-0290-44b3-930f-b529c07ddbf7,B1G1 50% off + 20% off with FLASH20,sale,B1G1 50% off + 20% off with FLASH20,,20,high
+f23e5812-b1f5-49fe-b3c6-3850a6b0b1e8,Buy 2 for $30 or 4 for $55 (until 1/3/2026) + $10 Rewards,,Buy 2 for $30 or 4 for $55 (until 1/3/2026) + $10 Rewards,,,low
+27ef893d-03fa-4519-9183-9ce6a1ebd06a,20% off Apply Honey (included in Product Price),coupon,20% off Apply Honey (included in Product Price),,20,high
+e2ae8d25-7a94-4f01-9ed4-8e3d52cacf7c,$5 Rewards,rewards,$5 Rewards,5,,high
+88017dd7-e1bc-4411-948e-7e81f34765ca,$15 off $125,coupon,$15 off $125,15,,high
+f616b14c-23f6-4689-a8e7-524f863aad08,40% off with HOLIDAY40,coupon,40% off with HOLIDAY40,,40,high
+f2b55d28-254d-4378-9f9b-e981554ca3cb,45% off k-cups + $6 Rewards,coupon,45% off k-cups + $6 Rewards,,45,high
+2ee1b6b5-0ae6-4260-9a07-6063e05e9860,30% off regular price items with MAKEIT30 + 35% Off yarn (included in Product Price) + $65 Rewards,coupon,30% off regular price items with MAKEIT30 + 35% Off yarn (included in Product Price) + $65 Rewards,,30,high
+aa8d642a-4e90-4cc2-8a02-96f117cb94d4,20% off Apply Honey (included in Product Price),coupon,20% off Apply Honey (included in Product Price),,20,high
+4314284f-48bd-4da1-a231-c62a882397f3,3/$29.99 Foster Grant glasses + 20% off with CYBERMON,sale,3/$29.99 Foster Grant glasses + 20% off with CYBERMON,,20,high
+0ac70c16-4601-425c-ae41-def558f265b4,15% off with PCBEAUTY15 + 20% off with SAVECYBER,coupon,15% off with PCBEAUTY15 + 20% off with SAVECYBER,,15,high
+e9a54860-849e-41aa-ac83-0c6879111fec,30% off with COMEBACK47Z5,coupon,30% off with COMEBACK47Z5,,30,high
+301822c8-061d-490a-a38f-6f2516b333c3,BOGO 50% Select Aquatic Filter Media + 20% with CYBER20 + $2 Rewards,sale,BOGO 50% Select Aquatic Filter Media + 20% with CYBER20 + $2 Rewards,,20,high
+9f9013c2-6999-4c2a-bff1-b164be4b6290,15% off with CRAZYCOFFEEQUEEN,coupon,15% off with CRAZYCOFFEEQUEEN,,15,high
+8dd64e00-ee36-469f-91a0-7ecae6b38f4a,5% off on 10+ items + $20 Rewards with maxrewards20.8PA18JCK,coupon,5% off on 10+ items + $20 Rewards with maxrewards20.8PA18JCK,,5,high
+0f75e2a3-2bfa-40db-9f2e-f554db634a71,45% off k-cups,sale,45% off k-cups,,45,high
+777eea65-6aa6-4777-829a-5b008932ab07,15% off with CHOCOLATE15 on reg. priced items (Intense Dark only),coupon,15% off with CHOCOLATE15 on reg. priced items (Intense Dark only),,15,high
+3c4039e4-2165-42e7-bd5f-d3b3a295ab00,45% off k-cups,sale,45% off k-cups,,45,high
+2f652d1b-010e-404a-a72b-c61487a161b1,$30 Rewards + 40% off with CYBER40 (included in Product Price),coupon,$30 Rewards + 40% off with CYBER40 (included in Product Price),,40,high
+6a83e825-fa1d-43b4-b795-d798acc98f73,$40 Rewards + 10% off autoship,coupon,$40 Rewards + 10% off autoship,,10,high
+a1303a07-fa11-44a7-9dbd-f55d5a47f71f,$30 rewards + 45% off k-cups,coupon,$30 rewards + 45% off k-cups,,45,high
+7f643f47-7b3a-496a-849d-97cd9b047200,3/$29.99 Foster Grant glasses + 20% off with CYBERMON,sale,3/$29.99 Foster Grant glasses + 20% off with CYBERMON,,20,high
+70cc6f3c-f58a-4fcc-a0d6-42014b671f95,$40 Rewards + 10% off autoship,coupon,$40 Rewards + 10% off autoship,,10,high
+16f30c9b-d3c6-43a4-b2d3-c4f7a144f186,3/$29.99 Foster Grant glasses + 20% off with CYBER20 + $5 Rewards,sale,3/$29.99 Foster Grant glasses + 20% off with CYBER20 + $5 Rewards,,20,high
+35170e9d-681e-45cc-903f-f2a6eabe2f3b,"20% Off $100+ and 30% Off $150+, Plus Free Shipping, With Code: CYBER",,"20% Off $100+ and 30% Off $150+, Plus Free Shipping, With Code: CYBER",,20,low
+668e22e4-849f-46a8-ada2-5fa868e0248b,30% Off Online or Buy Two Get One Free mix & match in stores (included in Product Price),sale,30% Off Online or Buy Two Get One Free mix & match in stores (included in Product Price),,30,high
+45f2ad6a-d0eb-4d60-b259-98b9abf00959,20% off with SAVECYBER (up to $100),coupon,20% off with SAVECYBER (up to $100),,20,high
+60bb7ed6-1500-48ff-9567-be41c1e25886,25% off with CYBER25,coupon,25% off with CYBER25,,25,high
+cfd0cdfb-2f62-47cf-b01b-0ad6b4360baa,15% off with BFCM25-2,coupon,15% off with BFCM25-2,,15,high
+06f7d9fd-20b6-414f-8b12-36d5c66015ce,$70 in Rewards + 40% off with CYBER40 on regular priced items (3 items) + B2G1 on yarn,sale,$70 in Rewards + 40% off with CYBER40 on regular priced items (3 items) + B2G1 on yarn,,40,high
+f238262e-89cb-4c33-a7f8-7ca6f49ec781,10% off with JSTNRRBVNHPP,coupon,10% off with JSTNRRBVNHPP,,10,high
+b30caf37-194a-497c-8d1b-c85da9d3a975,B2G3 Free (limit 12 free items),sale,B2G3 Free (limit 12 free items),,,high
+0aed5f94-e370-4157-8e97-d2d3f1580070,B2G3 Free (limit 12 free items) + 10% off with DM2512002,sale,B2G3 Free (limit 12 free items) + 10% off with DM2512002,,10,high
+68daedeb-27f2-4954-b0e4-036ab8211f97,25% off with BLACKFRIDAY25,coupon,25% off with BLACKFRIDAY25,,25,high
+8ebfcb18-3604-4e26-83ca-028b0057ac67,20% off with BLACKFRIDAY20,coupon,20% off with BLACKFRIDAY20,,20,high
+931c2bef-e262-4190-9ab8-b78163b7c7a0,10% off with DMPW1XO,coupon,10% off with DMPW1XO,,10,high
+e10ed527-2911-402a-862e-a3313ab1f184,5% off with autoship,coupon,5% off with autoship,,5,high
+c7321e6c-5491-4d0e-92bb-405c979c9fdf,25% off with BFISHERE,coupon,25% off with BFISHERE,,25,high
+44c327f3-8aee-4f52-9e0f-68faf41d0b46,10% off with AMEX,coupon,10% off with AMEX,,10,high
+121aee15-f143-4c0b-b5ff-5abf8336e766,B1G1 50% off on Our Generation set,sale,B1G1 50% off on Our Generation set,,50,high
+be195d58-7459-408b-976c-5a9647805760,10% off with JSTDNVNQXM5R,coupon,10% off with JSTDNVNQXM5R,,10,high
+50d919ad-aa1b-4522-b121-943a304e97c8,20% off with FALLHAUL20 + BOGO 50% off,sale,20% off with FALLHAUL20 + BOGO 50% off,,20,high
+33979139-43ba-47b9-9407-980a6533f86a,30% off with HOLIDAY30,coupon,30% off with HOLIDAY30,,30,high
+26952a62-b486-40b0-b67d-322d999c44ab,$5 Rewards,rewards,$5 Rewards,5,,high
+53f02a1a-47cf-4bc1-9728-0a6396cf2272,Free shipping on orders over $99 with 289166,,Free shipping on orders over $99 with 289166,,,low
+53da72c2-7f84-4e1c-b1df-0f4fc46cd26c,35% off with VIP2025,coupon,35% off with VIP2025,,35,high
+f432f3e7-a485-40ae-be2e-223a54759207,$10 off $100 with TEN254ESS,coupon,$10 off $100 with TEN254ESS,10,,high
+91416f7c-8b43-41c8-b1ba-9293bfff9e70,10% with CLEAN10,coupon,10% with CLEAN10,,10,high
+140215dd-ce3e-498e-ae45-b42d923d47ee,15% off with CHECKMEOUT,coupon,15% off with CHECKMEOUT,,15,high
+9d0aaed2-555c-4fc4-9ebe-e3e7eb42dc13,Ordered 10. 1 was canceled (OOS). Confirmed refund.,,Ordered 10. 1 was canceled (OOS). Confirmed refund.,,,low
+84a2c46c-80d7-486e-ab96-498c1e19e3e6,40% off almost everything,sale,40% off almost everything,,40,high
+5bd2875c-4002-4bba-8d42-fa86d03dd773,30% off with HOLIDAY30,coupon,30% off with HOLIDAY30,,30,high
+94f2ba50-e757-400c-8f42-9223dceba089,20% off with FOODSAVE20 (up to $100),coupon,20% off with FOODSAVE20 (up to $100),,20,high
+052524eb-2552-4208-906b-15fc6dcba494,$40 Rewards + 30% off with MAKEIT30 on regular priced items,coupon,$40 Rewards + 30% off with MAKEIT30 on regular priced items,,30,high
+d9a8bcd5-5b59-451e-8b3b-d4885442594b,20% off with FOODSAVE20,coupon,20% off with FOODSAVE20,,20,high
+1d8e6157-80b7-44c8-baef-1f678c5e4166,30% off with HOLIDAY30,coupon,30% off with HOLIDAY30,,30,high
+f9b9327c-b347-4e59-945f-7be5945892c2,30% off with HOLIDAY30,coupon,30% off with HOLIDAY30,,30,high
+f63cde6b-99a7-481c-87b6-5f31fcd700b8,25% off with BCST01,coupon,25% off with BCST01,,25,high
+c25c8caf-9607-47e3-8f1a-995862a5f48c,10% off with JSTDMDJ755FY,coupon,10% off with JSTDMDJ755FY,,10,high
+63dddba5-ef57-476e-a693-fe1356187713,$5 Walmart cash promo,rewards,$5 Walmart cash promo,5,,high
+9329a7df-e99e-4927-954b-cc332671328f,Buy 2 for $6 select Stur water enhancer drink mixes,sale,Buy 2 for $6 select Stur water enhancer drink mixes,,,high
+afef6327-cbcf-42e2-8f65-8e1570535772,15% off with FRESHIE (Coupert),coupon,15% off with FRESHIE (Coupert),,15,high
+3810cdc2-50e6-4daa-a166-76f5df6507e4,B2G2,sale,B2G2,,,high
+9ad886c2-03a3-4454-ac11-39fdff1da01c,25% off with 25RAK,coupon,25% off with 25RAK,,25,high
+680f6220-f93f-4e56-ace2-0a54ff274f67,B2G2,sale,B2G2,,,high
+6f5bfcde-00fb-4484-be35-15ff4a3fd4ba,15% off with AKPSLIP,coupon,15% off with AKPSLIP,,15,high
+738c9a6b-8cc8-4b35-bfed-a59c99bacf3f,10% off with JSTNFRRPRTCK,coupon,10% off with JSTNFRRPRTCK,,10,high
+c5c94455-1187-4a34-9a66-a540fac5b5c2,20% off autoship,coupon,20% off autoship,,20,high
+c5e4dff3-860d-4a3e-83c1-3f947687ec85,B2G2,sale,B2G2,,,high
+f47e254f-258d-46f8-87f9-46693f5d3f75,40% off on regular priced items + $30 rewards,sale,40% off on regular priced items + $30 rewards,,40,high
+dc6f5469-ed9c-4fd5-a1b8-f3a0c5ee5a92,B2G2,sale,B2G2,,,high
+02f8a585-0672-45e2-995e-28e7068a16d9,HAPPYB25,,HAPPYB25,,25,low
+b9c17cdd-b047-42ac-9438-22f91a46d72e,On sale + 25% off 1 kids toy or book,sale,On sale + 25% off 1 kids toy or book,,25,high
+a0259b14-3d67-4219-8bbe-81f939a630a5,20% off with NEW20,coupon,20% off with NEW20,,20,high
+8a4b59b1-cf84-4306-a114-b3593513c151,$40 Rewards + 10% off autoship,coupon,$40 Rewards + 10% off autoship,,10,high
+35f800b6-3020-4b06-b1d9-0b1f88c85749,B1G1 50% off,sale,B1G1 50% off,,50,high
+9540dfe7-aebf-4f00-92c0-2a9c96b512c9,10% off with autoship,coupon,10% off with autoship,,10,high
+736ce09d-1b14-4374-99af-d02ea6a250ae,25% off with code from Coupert,,25% off with code from Coupert,,25,low
+b792aca0-6bef-4af6-8884-fbc67d0d2852,$15 off with TEXT15,coupon,$15 off with TEXT15,15,,high
+967a0e0a-c49d-4c57-abb2-db92c4e0ec18,20% off Apply Honey,coupon,20% off Apply Honey,,20,high
+fa9cc4bd-5b07-4119-96b3-d9e857eb0f87,30% Off with ACG30,coupon,30% Off with ACG30,,30,high
+307ff924-b6d0-4e5c-8dba-299d4c2feaf9,$14 Rewards,rewards,$14 Rewards,14,,high
+5e50c101-c9e0-4422-8cbe-85f05ee5c052,$20 Rewards + 30% off with MONSTER30,coupon,$20 Rewards + 30% off with MONSTER30,20,30,high
+01aefd1e-2fcb-412e-b964-bc4c6d984df5,10% off with autoship,coupon,10% off with autoship,,10,high
+690f905e-60a9-4440-9f4c-85e724386753,30% off with HPYT9E6WDMBDY,coupon,30% off with HPYT9E6WDMBDY,,30,high
+91f12b6a-dc4a-4893-ac13-50d42dbc7e51,20% off with 20SMS,coupon,20% off with 20SMS,,20,high
+da25bfe3-eddc-4314-8db5-a552941bbb70,Rewards,,Rewards,,,low
+f28dba89-ed22-44a8-b12e-bc190a256e4d,20% off with FITNESS20,coupon,20% off with FITNESS20,,20,high
+a97516b6-40d6-494a-b1f4-4feee48ad2af,$10.00 off $100+ with RZFF53GW for new customers,coupon,$10.00 off $100+ with RZFF53GW for new customers,10,,high
+815c741e-5f93-4e7d-9071-025c1fe6a507,30% off with MAKEIT30 + $10 Rewards vauchers,coupon,30% off with MAKEIT30 + $10 Rewards vauchers,,30,high
+a8a188b4-d95c-4480-86b8-81883108a360,15% off with CHECKMEOUT,coupon,15% off with CHECKMEOUT,,15,high
+4e14b9c8-9a2e-44b9-926c-7594da88bd86,50% off select fall items,sale,50% off select fall items,,50,high
+85e4b1f1-5333-40a4-b09b-a0eea3b51724,25% off with FLAVOR25,coupon,25% off with FLAVOR25,,25,high
+29ac63e1-bba1-4cd0-8330-53ddc18585be,"$21.59 Sale, $26.99 Reg",,"$21.59 Sale, $26.99 Reg",,,low
+215065ff-7ddd-400a-be97-f28d4eba4df5,$40 Rewards,rewards,$40 Rewards,40,,high
+47eb1f00-2e02-4391-96af-43099ac1d3ee,15% off with FIRST15 for new customers,coupon,15% off with FIRST15 for new customers,,15,high
+581f5c5f-d2c5-41ca-ac4e-d138f4b48ccd,"$21.59 Sale, $26.99 Reg",,"$21.59 Sale, $26.99 Reg",,,low
+5071838d-4a97-4c0e-9cca-1a061955f92b,$55 Rewards + 50% off fall items,sale,$55 Rewards + 50% off fall items,,50,high
+6c5b7390-f797-463b-84e2-88801a7cef97,$20 off on $75+ orders on toys,sale,$20 off on $75+ orders on toys,20,,high
+fe63acfb-8920-4f1e-a395-a7b2dfde88ff,25% off every regular price purchase with code CRAFTY25 Online only (already included in product price),coupon,25% off every regular price purchase with code CRAFTY25 Online only (already included in product price),,25,high
+b0cb42da-187c-4a65-9cb8-bd8211ecefa6,25% off with BCST01,coupon,25% off with BCST01,,25,high
+73098e4d-4a77-47dd-8214-0de8c9dbfc46,25% off with 25PLANT,coupon,25% off with 25PLANT,,25,high
+b4ec82bf-9d48-4f27-bb0a-782ab8a57994,$10 Rewards,rewards,$10 Rewards,10,,high
+71f5e5a3-ce12-4b1a-960c-3666617724d5,25% off with HAPPYB25,coupon,25% off with HAPPYB25,,25,high
+ac7bb2bd-66c5-4ca5-999c-4c8e32a89d24,20% off with 20SITEWIDE,coupon,20% off with 20SITEWIDE,,20,high
+dbab0c6d-e4a9-4f5e-8305-f59751b1d1dc,$15 Rewards + 40% off with FLASH40 on 1 item (included in product cost),coupon,$15 Rewards + 40% off with FLASH40 on 1 item (included in product cost),15,40,high
+2ec2acfb-d169-441f-805f-b3ad702ce914,20% off with 20SITEWIDE,coupon,20% off with 20SITEWIDE,,20,high
+ba13aeb0-57ef-446b-a295-a5fea48ccd8d,10% off with JSTN7FF98DN3,coupon,10% off with JSTN7FF98DN3,,10,high
+db528b41-cce6-415a-b9c7-55d3cd147f9b,10% off with SURPRISE10,coupon,10% off with SURPRISE10,,10,high
+dad7144c-2b05-49e5-bb16-3085d4fcb641,10% off with autoship,coupon,10% off with autoship,,10,high
+81eb96f2-cfd5-4b12-99c8-751eb448d170,10% off with HNDT7BC8T5D4.,coupon,10% off with HNDT7BC8T5D4.,,10,high
+df63c7f5-e6d5-4bc3-b31b-64bdd6c0e9e0,50% off for Rewards members,sale,50% off for Rewards members,,50,high
+481b1e09-cd3a-43d8-a283-29ed363594b7,$80 Rewards + 50% off for Rewards members,sale,$80 Rewards + 50% off for Rewards members,,50,high
+afe36fb8-3a10-41fc-b05c-47a7edc0afc4,Rewards,,Rewards,,,low
+f5acf834-4d14-441b-83c8-f90cdd172a41,HAPPYB25,,HAPPYB25,,25,low
+0cda9b0b-d19c-4287-be58-fe0d4d4d180f,20% off with NONGMOSAVE20,coupon,20% off with NONGMOSAVE20,,20,high
+2c891bba-6a9f-4a75-bd62-fcc6e0e08447,Buy 3 Get 1 Free,sale,Buy 3 Get 1 Free,,,high
+fd1a9faf-51f8-4900-a72b-f9c1fed48862,Buy More Save More | Buy 10 Save 10% Buy 20 Save 20%,,Buy More Save More | Buy 10 Save 10% Buy 20 Save 20%,,,low
+3f416650-9f13-4e3a-96d2-1d7fffe76fdf,Wasn't charged. Cancelled by the brand.,,Wasn't charged. Cancelled by the brand.,,,low
+102a7cb8-cf9f-4eae-ba7f-d5033477813c,Wasn't charged. Cancelled by the brand.,,Wasn't charged. Cancelled by the brand.,,,low
+a5f6a7ea-73a9-458f-8855-f7821b4daab2,30% off with 40THANNIVERSARY,coupon,30% off with 40THANNIVERSARY,,30,high
+2eed2e53-6073-45a8-b4cf-433a4ad5696c,Rewards,,Rewards,,,low
+545ebc61-9b8a-4e21-ba0e-d5f67508ceba,Rewards,,Rewards,,,low
+fbdf19be-9f91-41ba-b07f-4c4387964471,15% off with CHECKMEOUT,coupon,15% off with CHECKMEOUT,,15,high
+f9f9689a-e0e7-4176-82d0-5c72558c0580,15% off on writing supplies,sale,15% off on writing supplies,,15,high
+9688b14b-7bd7-48e8-8bb0-f0171997c83e,10% with CLEAN10,coupon,10% with CLEAN10,,10,high
+54a15119-95b6-4d54-86e8-72915bc9af4e,25% off with 25TOP + $20 Rewards,coupon,25% off with 25TOP + $20 Rewards,,25,high
+46524d23-ea1d-477b-9d1f-23ae72521488,On sale. Reg. 28.99,,On sale. Reg. 28.99,,,low
+b8bf4f45-7649-46cf-9e42-89ebaae85722,30% off with HPYT9E6WDMBDY,coupon,30% off with HPYT9E6WDMBDY,,30,high
+e8f3ea16-1f84-411a-b323-69d916eceed9,15% off with WELCOME15,coupon,15% off with WELCOME15,,15,high
+693ecec4-ab3a-4cec-9d53-1a163ebbeeb8,$65 Rewards + 30% off with CRE8WITH30,coupon,$65 Rewards + 30% off with CRE8WITH30,65,30,high
+7253ca24-751a-47c6-affe-d7086241ad2e,Rewards,,Rewards,,,low
+c5540037-707a-42a9-ab80-95d841878762,20% off with FOODBEAUTY,coupon,20% off with FOODBEAUTY,,20,high
+3660954b-5d15-4663-8486-4a2926466d47,50% off,sale,50% off,,50,high
+25088aef-92d4-49f3-af96-d1b84881d5bd,$5 off with 288490 (on $25+ orders),coupon,$5 off with 288490 (on $25+ orders),5,,high
+9bdf466a-dc5a-4e0d-9db0-b7ac0091e529,37% off with 37OFF,coupon,37% off with 37OFF,,37,high
+3056962f-a7ba-4bad-9418-75704e869a08,37% off with 37OFF,coupon,37% off with 37OFF,,37,high
+99119855-5635-4e53-8098-66bd5cf51580,20% off with 75SITEWIDE + 25% off with 28WOS25,coupon,20% off with 75SITEWIDE + 25% off with 28WOS25,,20,high
+5214d7b8-6200-4d51-8f07-935d99becf2d,B2G2 with DM2509002,,B2G2 with DM2509002,,,low
+dd26c1da-9b7d-48a6-804d-d69c19340853,20% off with 75SITEWIDE,coupon,20% off with 75SITEWIDE,,20,high
+c2ee60a2-a7aa-4b68-b278-96df9a79f739,20% off with BUA-PXWKJ3J (mailed coupon),coupon,20% off with BUA-PXWKJ3J (mailed coupon),,20,high
+45fbdca6-eea6-48f3-91b5-67d10f117f9e,Clearance,,Clearance,,,low
+11790b57-1148-4467-ae62-8d972c865125,10% off with KJV (Coupert),coupon,10% off with KJV (Coupert),,10,high
+4eeff251-23f1-4e85-bab9-b4fde6e54512,B2G2 with DM2509002 + $20 Rewards,,B2G2 with DM2509002 + $20 Rewards,,,low
+b4bde6e3-50e1-4edb-9b17-d789792a3e40,B2G2 with DM2509002,,B2G2 with DM2509002,,,low
+55acb61f-f148-44d5-88a4-20a9bc6230e3,B2G2 with DM2509002 + $25 Rewards,,B2G2 with DM2509002 + $25 Rewards,,,low
+9c17270f-ccce-41f0-afa6-4cc8fe8bcd78,20% off with STAYANDSAVE,coupon,20% off with STAYANDSAVE,,20,high
+80a50c72-84e3-4a01-ab04-c3eaa4b2f502,50% off with DM2509002,,50% off with DM2509002,,50,low
+fe8fc169-672d-49ad-b09a-62dc0ffe82f5,40% off sale,sale,40% off sale,,40,high
+96117cfc-f457-4727-bddc-394406ce3800,5% off on 10+ items + $20 Rewards,coupon,5% off on 10+ items + $20 Rewards,,5,high
+a1b87459-66de-45e4-8829-323b758500a2,15% off with SAVE15 for new customers,coupon,15% off with SAVE15 for new customers,,15,high
+3abb20e1-93d8-4415-bf38-d0dbc1e139d5,10% off with JSTDWVL43H3R,coupon,10% off with JSTDWVL43H3R,,10,high
+af54ceb4-f2d1-49e1-820e-891cfc4f4d88,$10.00 off $100+ with 7SWK48ZR for new customers,coupon,$10.00 off $100+ with 7SWK48ZR for new customers,10,,high
+a6109f65-cc53-46c2-92ab-d879eac4f4c6,20% off autoship,coupon,20% off autoship,,20,high
+c2cfe557-b52d-4931-91ce-c27788d5a528,50% off Sale + $40 Rewards vauchers,sale,50% off Sale + $40 Rewards vauchers,,50,high
+ed130fb5-8951-421a-b2c6-1a13c1ef4c10,B2G2 with DM2509002 + $20 Rewards vaucher,,B2G2 with DM2509002 + $20 Rewards vaucher,,,low
+9849b2db-0531-4ed3-a887-09adfb960524,25% off with HAPPYB25,coupon,25% off with HAPPYB25,,25,high
+385b37dd-87d9-447f-bfef-9160dc8479aa,B2G2 with DM2509002,,B2G2 with DM2509002,,,low
+1aab415f-2376-409e-9b8c-0ad219c583a3,B2G2 with DM2509002,,B2G2 with DM2509002,,,low
+2d0aef7f-37f1-48b7-a967-fb390a892446,B2G2 with DM2509002 + $10 Rewards,,B2G2 with DM2509002 + $10 Rewards,,,low
+857d9095-a124-473f-b220-b4b69490ff0e,B2G2 with DM2509002,,B2G2 with DM2509002,,,low
+1c17c8bf-a479-485a-8477-7db6deb69734,25% off on 3+,sale,25% off on 3+,,25,high
+f5db5b59-1d6d-4268-b1b4-981ae7c58312,Rewards,,Rewards,,,low
+97dbcc6b-ab06-4899-ae4b-d507eb27f784,B2G2 with DM2509002,,B2G2 with DM2509002,,,low
+37d0746e-8ec1-4356-9d48-b4286cf836be,15% off on select school supplies,sale,15% off on select school supplies,,15,high
+10b8b912-eaec-4f83-bb7c-db13a4c3ccce,$10 off with TEXT10,coupon,$10 off with TEXT10,10,,high
+47bd13e4-b313-4202-a7d2-e789da359549,"30.00% off your product(s) with 26WOS30
+15.00% off your order with MLRFAN15",coupon,30.00% off your product(s) with 26WOS30 15.00% off your order with MLRFAN15,,30,high
+bb06aac6-e9a1-4ff6-bd52-70df2d704437,25% off on 3+,sale,25% off on 3+,,25,high
+5eb4a4cd-37dd-4a7b-a119-051553395079,$10 off with GET10,coupon,$10 off with GET10,10,,high
+fbeea4fa-4a6d-4929-bc9c-7d30ecf6dfaa,Refund confirmed,,Refund confirmed,,,low
+93439956-2581-45f3-9394-6650d1f90201,25% off with BCST01,coupon,25% off with BCST01,,25,high
+12c2d360-cec9-4cd1-b9b7-266e668a29da,18% off with BMSMLABOR,coupon,18% off with BMSMLABOR,,18,high
+e9d5149c-3fc7-451f-a2ac-fdcfeed74be3,BOGO with DM2509002,,BOGO with DM2509002,,,low
+bf9b9a6b-449d-4a7e-a5b4-649b8a037c22,10% off with AMEX,coupon,10% off with AMEX,,10,high
+7a52e517-1d5f-48b2-8f22-ba7bfef5f392,5% of with SHCOLLEGE5,coupon,5% off with SHCOLLEGE5,,5,high
+c8549b24-2662-4da6-9a03-1e2ace77634d,12% off with LABOR12%,coupon,12% off with LABOR12%,,12,high
+35683df9-dd87-4212-990a-e3f3b6319fad,40% off with GET40NOW + $50 Rewards vauchers,coupon,40% off with GET40NOW + $50 Rewards vauchers,,40,high
+33256208-4051-4a24-ac02-f20c3c35ba37,Rewards points,rewards,Rewards points,,,high
+83aa6696-cba6-4f87-ab39-4e074dfabcec,15% off with BETTERMORNINGS,coupon,15% off with BETTERMORNINGS,,15,high
+0b86d75f-1d47-476d-8492-2a2636ed9171,$10 off on Orders of $79+ with LARSON10,coupon,$10 off on Orders of $79+ with LARSON10,10,,high
+f0a9214e-83b1-4ef4-afc8-f736d8490787,BOGO 50% OFF,sale,BOGO 50% OFF,,50,high
+e3b86842-11a0-469c-b59b-00a7e02940aa,10% off with LABORDAY,coupon,10% off with LABORDAY,,10,high
+bd33c09f-078b-41af-af23-ac3e3ffe272c,5% off with GOOGLE5,coupon,5% off with GOOGLE5,,5,high
+16207049-4f1b-4b34-a31a-64f7ef79b27e,10% off with AUTOPARTS10,coupon,10% off with AUTOPARTS10,,10,high
+01972c4e-3046-4b6d-953c-2d436447ea0e,40% with GET40NOW on regular priced items,coupon,40% with GET40NOW on regular priced items,,40,high
+21ec2905-e370-4a27-a454-bdfacc8c1bf1,25% with AUG25OFF (on non-bulk items) + $50 in rewards,coupon,25% with AUG25OFF (on non-bulk items) + $50 in rewards,,25,high
+71b6da3a-f743-4a2f-b3f0-967d915ecf61,15% off with CHECKMEOUT,coupon,15% off with CHECKMEOUT,,15,high
+3aa2c15c-8489-471c-adb2-b4af0554ebba,B2G1,sale,B2G1,,,high
+34a995bd-903f-48bd-9b36-08af6f4cc446,$10 off $100 with TEN253ESS,coupon,$10 off $100 with TEN253ESS,10,,high
+18aaf09d-677e-4cd9-a18e-bf15e4a2f07c,"15.00% off with LABORDAY15 + 20% off with
+FLASHFOOD",coupon,15.00% off with LABORDAY15 + 20% off with FLASHFOOD,,15,high
+9bd2fb95-88c4-4e9b-a6dd-85039d948d09,50% off with MAYNEWCONCEPT50,coupon,50% off with MAYNEWCONCEPT50,,50,high
+b6f595d3-9f64-4c4d-a394-96e4e741d214,$20 Rewards + 30% off with SUPER30,coupon,$20 Rewards + 30% off with SUPER30,20,30,high
+151df2ff-f6b7-4fa7-b2c2-8b6bb9c0c412,15% off with CHECKMEOUT,coupon,15% off with CHECKMEOUT,,15,high
+0055c48f-d675-481a-be90-d6ce92b2d7b5,10% with CLEAN10,coupon,10% with CLEAN10,,10,high
+844564f3-b2da-47b4-911c-8a05e33693d9,15% off on school supplies up to $75,sale,15% off on school supplies up to $75,,15,high
+8f3c749d-841a-472c-8d85-31932abd7310,15% off on school supplies up to $75,sale,15% off on school supplies up to $75,,15,high
+b471d9d7-2d0c-4d30-82bd-ec9369fe197a,Sale (34%),sale,Sale (34%),,34,high
+20267c8a-1af5-40a0-8761-3f5b81eb72bb,15% off with SOILMAMA15,coupon,15% off with SOILMAMA15,,15,high
+ad7942f7-66d9-43cf-8ab6-637d7c910730,Rewards,,Rewards,,,low
+07248d9b-00e8-4af9-b97a-643de45d0e73,15% off with GOTIME15,coupon,15% off with GOTIME15,,15,high
+da2bc32b-a3be-40e3-981e-780d4c784495,20% off autoship,coupon,20% off autoship,,20,high
+33402015-e223-4cfa-baf4-8aacdd59ab54,15% off on select school supplies,sale,15% off on select school supplies,,15,high
+30d81b48-0c5e-46c1-9dc7-d47a5dc1702d,20% of with AUGUST,coupon,20% of with AUGUST,,20,high
+313f4b5a-244c-4bc5-a6ef-c8e8b3ee88bf,"20% off with 20SUMMER
+15% off with ALLMAXSAVE",coupon,20% off with 20SUMMER 15% off with ALLMAXSAVE,,20,high
+46635d6d-7cbd-464b-ab7b-8641c1d1ba87,10% off with JSTN3K4Q3QWD,coupon,10% off with JSTN3K4Q3QWD,,10,high
+ed8718af-bffa-40b7-8522-f2f1f595d8e8,10% autoship,coupon,10% autoship,,10,high
+c632c11d-f01a-40b4-a1b0-e530d95cf303,20% sitewide + BOGO 50% brand,sale,20% sitewide + BOGO 50% brand,,20,high
+015347fd-d894-42ff-beae-e3535041884b,25% off with 25RMN,coupon,25% off with 25RMN,,25,high
+36a16bc9-dc7c-4c51-9050-2a0869b87b58,50% off with MAYNEWCONCEPT50,coupon,50% off with MAYNEWCONCEPT50,,50,high
+7975af8d-6d35-4696-991a-ca10631795ce,20% sitewide + 15% brand,sale,20% sitewide + 15% brand,,20,high
+34935294-3f59-4314-a5b3-cc256086fff9,20% sitewide + 15% brand,sale,20% sitewide + 15% brand,,20,high
+c6ca86c3-b454-41ca-aad1-66267cba82e2,50% off with MAYNEWCONCEPT50,coupon,50% off with MAYNEWCONCEPT50,,50,high
+38ee51eb-6073-4de9-938f-143f5806ce71,25% off on 3+,sale,25% off on 3+,,25,high
+33a1c41d-3a83-476a-b8e5-4fde73cc4c2b,10% for 1st time customers,coupon,10% for 1st time customers,,10,high
+a6bda0ba-6ea3-49c2-96c5-9ef6fa428c07,10% off with KJV (Coupert),coupon,10% off with KJV (Coupert),,10,high
+fdd6cf43-cc52-42ea-88ed-c60910316f22,Cohl's cash,,Cohl's cash,,,low
+3a924754-f681-4bf6-bab7-4818322fa159,10% off autoship,coupon,10% off autoship,,10,high
+1da89f7f-841b-4f5b-bd34-6bd97132b53d,25% off on 3+,sale,25% off on 3+,,25,high
+1fd7d199-d011-41c6-87fb-6975f01bcbfb,30% off with R-BD8854-3722 (Happy Birthday 30),coupon,30% off with R-BD8854-3722 (Happy Birthday 30),,30,high
+e29c1920-865e-4963-8552-5c9600afba7f,"BOGO 50% off, 20% on orders over $50 with HEALTH20",sale,"BOGO 50% off, 20% on orders over $50 with HEALTH20",,20,high
+997bb91e-dd6e-4aa1-8b84-a7606664c722,20% off with JFRDFDMW35NK%,coupon,20% off with JFRDFDMW35NK%,,20,high
+6c08e8d6-b34c-4994-a026-d2a4731d6e27,5% off Autoship,coupon,5% off Autoship,,5,high
+09eb6e52-6750-4c0e-aaad-0990a831d73a,20% with ALLFAMILY20,coupon,20% with ALLFAMILY20,,20,high
+ec7a3f7f-81f3-4276-bb01-23bc3611809a,50% off with MAYNEWCONCEPT50,coupon,50% off with MAYNEWCONCEPT50,,50,high
+8b73235d-988b-405b-b85d-4fdcfe69c5ac,20% off with ALLFAMILY20,coupon,20% off with ALLFAMILY20,,20,high
+d19e4126-b75a-43e1-a5b2-467233f2c549,BOGO 50%OFF,sale,BOGO 50%OFF,,50,high
+7e8cbf6a-98da-4f90-b8ff-b714652f390c,20% off with FBPLANS20,coupon,20% off with FBPLANS20,,20,high
+8fbb8459-8360-4253-8a64-9dbf5931cb83,WELCOME15,,WELCOME15,,15,low
+ee659614-0468-499f-aec5-250eabb3de18,HAPPYB25,,HAPPYB25,,25,low
+0ee8aa5b-f885-4b7d-b057-0a839adab7ee,BOGO,sale,BOGO,,,high
+b82be9fd-189e-4169-b020-5a6b1b44c9ff,BOGO,sale,BOGO,,,high
+5c007f6a-4387-41f8-a742-381bb401f97c,BOGO,sale,BOGO,,,high
+b68256b4-10e7-478e-866e-d803058f3608,BOGO,sale,BOGO,,,high
+6dc159cf-960b-4139-9383-a3a778cc6a72,BOGO,sale,BOGO,,,high
+0694098d-c5ac-4f90-b1b4-51c497f317a9,$10 off $100 with TEN252ESS,coupon,$10 off $100 with TEN252ESS,10,,high
+5e3641c6-4d5d-40a5-8953-a2c314191b14,15% off,,15% off,,15,low
+8e86641e-eba8-452e-81bb-892031d96940,BOGO50 promo on the website (no code needed),sale,BOGO50 promo on the website (no code needed),,50,high
+7cefb82e-1f61-4b42-b875-837c4da8c7e3,20% off with code FRIENDS20,coupon,20% off with code FRIENDS20,,20,high
+26622e20-cd46-466d-ba24-e45d22039e2b,20% off with JFRDFPMNQDN5,coupon,20% off with JFRDFPMNQDN5,,20,high
+56ac751d-53a0-4524-b657-54529c6d5b0e,10% off autoship,coupon,10% off autoship,,10,high

@@ -5436,7 +5436,13 @@ IS NULL; Maria 2026-10-31):
   the per-call estimate. `ANTHROPIC_API_KEY` (Render env var; optional)
   switches every AI feature on; without it `POST /api/pos/prefill` answers
   503 "AI prefill is off" and the extension shows that — never a silent
-  fallback. One call per capture; the promo backfill is one batch call.
+  fallback. One call per capture; the promo backfill is one batch call —
+  streamed, **thinking off**, `batchMaxTokens` (64K): with adaptive
+  thinking on and the 16K capture ceiling, the first production dry run
+  (2026-11-01, 487 distinct texts) spent the whole budget thinking and
+  stopped at `max_tokens` with 2K chars of JSON. A reply that stops at
+  `max_tokens` is never applied (`schema_ok` false, the stop reason in
+  the log's `error`); the fixed run: 11.8K in / 26.4K out, $0.014, 72 s.
 - **`POST /api/pos/prefill`** (session required, like every `/api` route):
   body `{ retailerHost, capturedAt?, pages: [{step, url, title, text,
   fields}] }`, already scrubbed by the extension (§11 "Capture PO"). One
