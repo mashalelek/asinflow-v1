@@ -3,7 +3,7 @@
 //
 //   import "./env";
 //
-// Without --prod: .env, exactly as `import "dotenv/config"` did. With --prod:
+// Without --prod: .env (dotenv.config()), exactly as `import "dotenv/config"` did. With --prod:
 // .env.production.local is read as well and its DATABASE_URL_PROD becomes
 // DATABASE_URL (every other key in it, e.g. ANTHROPIC_API_KEY, is applied
 // too, overriding .env). The file is gitignored (.env*.local) and the dev
@@ -13,10 +13,13 @@
 //
 // Render's external URL carries sslmode=require; pg verifies the server
 // certificate against the system CAs. The URL's value is never printed.
-import "./env";
 import fs from "node:fs";
 import path from "node:path";
 import dotenv from "dotenv";
+
+// .env first, by an explicit call (what `import "dotenv/config"` did in every
+// script before 2026-11-01).
+dotenv.config({ quiet: true });
 
 export const PROD_FILE = ".env.production.local";
 export const PROD = process.argv.includes("--prod");
