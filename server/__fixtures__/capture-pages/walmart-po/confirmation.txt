@@ -1,0 +1,30 @@
+Walmart
+Thanks for your order!
+You saved $36.12 today
+Order# 200012345678902
+We'll email you at maria@example.com
+Delivery
+Arrives Tue, Nov 4
+Coastal Quality Goods
+805 Grandy Ave, Norfolk, VA 23504
+Payment method
+Visa ending in 1111
+Card 4111 1111 1111 1111
+Items
+Great Value Creamy Peanut Butter, 40 oz
+Qty 12
+$95.64
+Items subtotal
+$95.64
+Taxes
+$5.74
+Order total
+$101.38
+Have a promo code?
+My Items
+Jif Creamy Peanut Butter, 40 oz
+Now $6.98
+Bought 5 times
+Hefty Slider Freezer Bags, Gallon, 56 Count
+$9.48
+Buy again

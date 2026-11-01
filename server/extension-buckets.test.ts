@@ -32,11 +32,12 @@ describe("buckets: extraction (regex-level, no AI)", () => {
     expect(missing(b)).toEqual(["Shipping", "Payment", "Promos", "Order"]);
     expect(canOpen(b)).toBe(true);
   });
-  it("the cart stepper's value is a form field, not page text: qty fields align with the lines in order", () => {
-    const page = { ...walmartCart, text: walmartCart.text.replace(/\n12\n/, "\n").replace(/\n6\n/, "\n").replace(/\n4\n/, "\n") };
+  it("the cart stepper's value is a form field, not page text: qty fields fill the blocks that show a quantity control, in order", () => {
+    const page = { ...walmartCart, text: walmartCart.text.replace(/\n12\n/, "\nQuantity\n").replace(/\n6\n/, "\nQuantity\n").replace(/\n4\n/, "\nQuantity\n") };
     expect(extractProducts(page).map((p) => p.qty)).toEqual([12, 6, 4]);
-    // No quantity anywhere on the page → a name + price is not a product line.
+    // No quantity value anywhere → not product lines (v1.2.1: title + price + quantity, or nothing).
     expect(extractProducts({ ...page, fields: [] })).toEqual([]);
+    expect(extractProducts({ ...walmartCart, text: walmartCart.text.replace(/\n12\n|\n6\n|\n4\n/g, "\n"), fields: [] })).toEqual([]);
   });
   it("a pack-size dropdown's options (Multipack Quantity: 1 / 2 on their own lines) are never the quantity; the Quantity fields fill it (the 2026-11-01 browser check)", () => {
     const page = {
@@ -81,6 +82,44 @@ describe("buckets: extraction (regex-level, no AI)", () => {
   });
 });
 
+// v1.2.1 (Maria 2026-11-01): the first real Walmart PO — 42–58 "products" on a 1-item cart, "Unknown: 100 ct" addresses, Total from "You saved", "Have a promo code?" as a promo.
+describe("buckets: the first real Walmart PO (synthetic cart + confirmation pair, walmart-po/)", () => {
+  const po = (name: string, extra: Partial<{ step: string; fields: { label: string; value: string }[] }> = {}) =>
+    ({ step: extra.step ?? "other", url: `https://www.walmart.com/${name}`, title: name, text: scrubText(readFileSync(resolve(FIX, `walmart-po/${name}.txt`), "utf8")), fields: extra.fields ?? [] });
+  const cart = po("cart", { step: "cart", fields: [{ label: "Multipack Quantity: 1 2", value: "1" }, { label: "Quantity", value: "12" }, { label: "selected: 100 ct", value: "100 ct" }, { label: "selected: 12 Ct", value: "12 Ct" }] });
+  const confirmation = po("confirmation", { step: "review" });
+  it("cart: one product (title + price + the quantity control), none from the rollback / Bought N times / recommendation strips; totals from the labelled lines, the promo prompt ignored", () => {
+    const b = extractBuckets(cart);
+    expect(b.products).toEqual([{ name: "Great Value Creamy Peanut Butter, 40 oz", qty: 12, price: "$7.97", total: null, sku: null }]);
+    expect(b.totals).toEqual({ subtotal: "$95.64", total: "$95.64" }); // "Taxes / Calculated at checkout" is no amount
+    expect(b.promos).toEqual([]);
+    expect(b.shipping).toBeNull(); // the size-variant radios "100 ct" / "12 Ct" are not addresses
+  });
+  it("confirmation: the one real address (Velocity), Total from 'Order total' not from 'You saved' (a discount candidate), the order #, the card — and the 'My Items' strip is not products", () => {
+    const b = extractBuckets(confirmation);
+    expect(b.shipping).toEqual({ street: "805 Grandy Ave", candidates: ["805 Grandy Ave"], selected: false });
+    expect(b.totals).toEqual({ subtotal: "$95.64", discount: "$36.12", tax: "$5.74", total: "$101.38" });
+    expect(b.order.number).toBe("200012345678902");
+    expect(b.payment.cards).toEqual([{ nickname: "Visa", last4: "1111", amount: null }]);
+    expect(b.products.map((p) => p.name)).toEqual(["Great Value Creamy Peanut Butter, 40 oz"]);
+    expect(b.promos).toEqual([]);
+  });
+  it("merged: one product with the cart's unit price and the confirmation's line total, Ships to Velocity with no ambiguity, Open in AF enabled", () => {
+    let c = applyPage(null, cart, "www.walmart.com", "2026-11-01T20:00:00Z");
+    c = applyPage(c, confirmation, "www.walmart.com", "2026-11-01T20:01:00Z");
+    expect(c.buckets.products).toEqual([{ name: "Great Value Creamy Peanut Butter, 40 oz", qty: 12, price: "$7.97", total: "$95.64", sku: null }]);
+    expect(describeShipping(c.buckets.shipping, config)).toEqual(["Velocity · 805 Grandy Ave"]);
+    expect(shipToForPrefill(c)).toEqual({ street: "805 Grandy Ave", candidates: ["805 Grandy Ave"] });
+    expect(c.buckets.totals.total).toBe("$101.38");
+    expect(missing(c.buckets)).toEqual(["Promos"]);
+    expect(canOpen(c.buckets)).toBe(true);
+  });
+  it("a promo line carries a code, an amount or a percent; a question or an empty prompt is not one", () => {
+    const b = extractBuckets({ url: "x", text: "Have a promo code?\nPromo code\nApply\nPromo applied: 30% off with COMEBACK47Z5\nRewards: $5.00 applied\nCoupon SAVE20 applied" });
+    expect(b.promos).toEqual(["Promo applied: 30% off with COMEBACK47Z5", "Rewards: $5.00 applied", "Coupon SAVE20 applied"]);
+  });
+});
+
 describe("buckets: the SELECTED address, not the first address block", () => {
   it("a review page with a shipping block and a billing block → the shipping street only", () => {
     const s = extractShipping(fixture("walmart-review-two-addresses"));
@@ -90,8 +129,8 @@ describe("buckets: the SELECTED address, not the first address block", () => {
     const page = fixture("michaels-address-picker", { fields: [{ label: "selected: Accounts Payable 65 Rivercrest Dr", value: "Accounts Payable\n65 Rivercrest Dr, Chesapeake, VA 23320" }] });
     expect(extractShipping(page)).toEqual({ street: "65 Rivercrest Dr", candidates: ["65 Rivercrest Dr"], selected: true });
     expect(describeShipping(extractShipping(page), config)).toEqual(["Home · 65 Rivercrest Dr"]);
-    // Nothing checked and no ship-to heading → no address at all, rather than a guess.
-    expect(extractShipping(fixture("michaels-address-picker"))).toBeNull();
+    // Nothing checked → the address under the "Choose a shipping address" heading, as on a review page (v1.2.1 scopes text detection to deliver / ship / address headings).
+    expect(extractShipping(fixture("michaels-address-picker"))).toEqual({ street: "805 Grandy Ave", candidates: ["805 Grandy Ave"], selected: false });
   });
   it("ambiguous — two selected address options, or two ship-to blocks — shows both and leaves the street blank (the form's Ships to stays empty)", () => {
     const two = extractShipping({ url: "x", text: "Checkout", fields: [{ label: "selected: ship", value: "Coastal Quality Goods\n805 Grandy Ave, Norfolk, VA" }, { label: "selected: pickup", value: "Accounts Payable\n65 Rivercrest Dr, Chesapeake, VA" }] });
@@ -152,7 +191,7 @@ describe("buckets: captures are per tab", () => {
     expect(store["capture:11"].buckets.shipping.street).toBe("805 Grandy Ave");
     expect(store["capture:22"].count).toBe(2);
     expect(store["capture:22"].buckets.products.map((p: any) => p.name)).toEqual(["Liquitex BASICS Acrylic Paint, 4oz., Blue Gray", "Red Heart Super Saver Yarn, Light Blue"]);
-    expect(store["capture:22"].buckets.shipping.street).toBe("65 Rivercrest Dr"); // the picker page showed no selection → the review page's address stays
+    expect(store["capture:22"].buckets.shipping.street).toBe("805 Grandy Ave"); // the picker page's heading block (nothing checked) is the newer value
     expect(othersCapturing(store, 11)).toEqual([{ tabId: 22, host: "michaels.com", count: 2 }]);
     expect(othersCapturing(store, 22)).toEqual([{ tabId: 11, host: "walmart.com", count: 2 }]);
     expect(othersCapturing(store, 33)).toHaveLength(2);

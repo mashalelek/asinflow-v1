@@ -23,19 +23,26 @@
   var MULT = /(?:^|\s)(\d{1,4})\s*[×x]\s*(\$\s?\d[\d,]*\.\d{2})|(\$\s?\d[\d,]*\.\d{2})\s*[×x]\s*(\d{1,4})\b/i;
   var PACK_LABEL = /\b(?:multipack|pack\s+(?:quantity|count|size)|case\s+(?:quantity|count|size))\b/i;
   var SKU = /\b(?:item\s*(?:#|no\.?|number)|sku|upc|model\s*(?:#|no\.?)|product\s*(?:code|id))\s*:?\s*#?\s*([A-Za-z0-9][A-Za-z0-9-]{3,23})\b/i;
-  var STREET = /\b(\d{1,6}[A-Za-z]?)\s+((?:[A-Za-z][A-Za-z0-9.'-]*\s+){0,4}?)(st|street|ave|avenue|rd|road|dr|drive|ln|lane|blvd|boulevard|ct|court|way|pl|place|cir|circle|pkwy|parkway|hwy|highway|ter|terrace|trl|trail|loop|run)\b\.?/i;
-  var SHIP_HEADING = /^(?:shipping|delivery|ship(?:ping)?\s+to|deliver(?:s|y|ing)?\s+to|delivery\s+address|shipping\s+address|deliver\s+to|ships?\s+to)\b/i;
+  // Street number + at least one street-name word + a suffix: "805 Grandy Ave". "100 ct" / "12 Ct" (a size variant) is not an address.
+  var STREET = /\b(\d{1,6}[A-Za-z]?)\s+((?:[A-Za-z][A-Za-z0-9.'-]*\s+){1,4}?)(st|street|ave|avenue|rd|road|dr|drive|ln|lane|blvd|boulevard|ct|court|way|pl|place|cir|circle|pkwy|parkway|hwy|highway|ter|terrace|trl|trail|loop|run)\b\.?/i;
+  // Address detection is scoped to blocks under a deliver / ship / address heading (v1.2.1).
+  var SHIP_HEADING = /\b(?:shipping|delivery|deliver(?:s|ed|ing)?\s+to|ships?\s+to|address)\b/i;
   var BILLING = /\b(?:billing|payment|card)\b/i;
   var TOTALS_START = /\b(?:sub\s*total|order\s+total|estimated\s+total|grand\s+total)\b/i;
   var TOTAL_LINE = /^(?:items?\s+)?(?:sub\s*total|order\s+total|estimated\s+total|grand\s+total|total|tax(?:es)?|estimated\s+tax|sales\s+tax|shipping|estimated\s+shipping|discount|savings|promotion)\b/i;
-  var NOISE = /^(?:cart|your\s+cart|basket|bag|items?\b|review|checkout|order\b|subtotal|total|tax|shipping|delivery|deliver|arrives|free\s+shipping|payment|pay\b|place\s+order|continue|edit|remove|save\s+for\s+later|move\s+to|change|add\b|apply|promo|coupon|gift|rewards|contact|email|phone|account|sign|secure|qty|quantity|price|each|sold\s+by|ship|pickup|in\s+stock|out\s+of\s+stock|select|choose|see\b|view|learn|earn|get\b|you\b|your\b|we\b|thank|hello|hi\b|name|address|city|state|zip|united\s+states|usa\b|visa|mastercard|amex|discover|card\b|ending\s+in|••••|\*\*\*\*|exp\b|cvv|billing|summary|details|estimated|protect|warranty|plan\b|add-on|recommended|also\b|customers|people|frequently|sponsored|more\b|multipack|subscri|one-?time|\d)/i;
+  var NOISE = /^(?:now\$|now\s+\$|bought\s+\d|free\s+delivery|snap\b|best\s+seller|manufacturer\s+offer|saved\s+for\s+later|notify\s+me|skip\s+to|rollback|was\s+\$|sold\s+(?:and|&)\s+shipped|ships?\s+from|my\s+items|buy\s+again|reorder|add\s+to|cart|your\s+cart|basket|bag|items?\b|review|checkout|order\b|subtotal|total|tax|shipping|delivery|deliver|arrives|free\s+shipping|payment|pay\b|place\s+order|continue|edit|remove|save\s+for\s+later|move\s+to|change|add\b|apply|promo|coupon|gift|rewards|contact|email|phone|account|sign|secure|qty|quantity|price|each|sold\s+by|ship|pickup|in\s+stock|out\s+of\s+stock|select|choose|see\b|view|learn|earn|get\b|you\b|your\b|we\b|thank|hello|hi\b|name|address|city|state|zip|united\s+states|usa\b|visa|mastercard|amex|discover|card\b|ending\s+in|••••|\*\*\*\*|exp\b|cvv|billing|summary|details|estimated|protect|warranty|plan\b|add-on|recommended|also\b|customers|people|frequently|sponsored|more\b|multipack|subscri|one-?time|\d)/i;
   var PROMO = /\b(?:promo(?:tion)?(?:\s*code)?|coupon|discount\s+code|code\s+applied|%\s*off|rewards?\s+applied|rewards?:|applied:?\s*-?\$)/i;
+  // A promo line carries a code, an amount or a percent; "Have a promo code?" is a form prompt (v1.2.1).
+  var PROMO_VALUE = /\$\s?\d|\d+(?:\.\d+)?\s*%|\b[A-Z0-9]{5,}\b/;
+  var STEPPER = /^[−–\-+]$/;
+  var QTY_LABEL = /^(?:qty|quantity)\s*:?$/i;
   var CARDISH = /••••|\*{4}|\bending\s+(?:in|with)\b|\b(?:visa|mastercard|amex|american\s+express|discover|paypal|affirm|klarna|afterpay)\b/i;
   var CARD_LAST4 = /^(.*?)\s*(?:•••• ?|\*{4} ?|x{4} ?|ending\s+(?:in|with)\s+|ending\s+)(\d{4})\b/i;
   var GIFT = /\b(?:e-?gift|gift\s*card|gift\s*certificate|egc|store\s+credit)\b/i;
   var SUBSCRIBE = /\b(?:subscri(?:be|ption)|auto-?ship|autoship|repeat\s+delivery|deliver\s+every)\b/i;
   var ONE_TIME = /\bone-?\s?time\b/i;
   var EVERY = /\bevery\s+(\d+)\s+(week|month)s?\b|\b(monthly|weekly|bi-?weekly|every\s+(?:week|month))\b/i;
+  var ORDER_NO_LINE = /\border\s*(?:#|number|no\.?|id|confirmation)/i;
   var ORDER_NO = /\border\s*(?:#|number|no\.?|id|confirmation(?:\s*(?:#|number))?)\s*:?\s*#?\s*([A-Z0-9][A-Z0-9-]{4,})/i;
   var ORDER_DATE = /\b(?:order(?:ed)?\s*(?:date|placed|on)?|placed\s*(?:on)?|date)\s*:?\s*((?:jan|feb|mar|apr|may|jun|jul|aug|sep|sept|oct|nov|dec)[a-z]*\.?\s+\d{1,2},?\s+\d{4}|\d{1,2}\/\d{1,2}\/\d{2,4}|\d{4}-\d{2}-\d{2})/i;
 
@@ -86,8 +93,8 @@
 
   // ── Products: one line per product actually parsed (never a count of "Qty" strings) ──
   function nameLike(l) {
-    if (l.length < 6 || l.length > 160) return false;
-    if (!/[A-Za-z]{3}/.test(l)) return false;
+    if (l.length < 12 || l.length > 160) return false;
+    if (!/[A-Za-z]{3}/.test(l) || !/\S\s+\S/.test(l)) return false;
     if (MONEY.test(l) || /^\d+$/.test(l)) return false;
     if (QTY.test(l) || NOISE.test(l) || TOTAL_LINE.test(l) || PROMO.test(l)) return false;
     if (STREET.test(l) || CARDISH.test(l)) return false;
@@ -116,23 +123,27 @@
     var region = stop > 0 ? L.slice(0, stop) : L;
     var out = parseRegion(region);
     if (!out.length && stop > 0) out = parseRegion(L);
-    // The cart stepper's value is a form field, not page text: align the page's qty fields with the lines in order when the counts match.
+    // The cart stepper's value is a form field, not page text: the page's qty fields fill the blocks that show a quantity control, in order, when the counts match.
     var qtyFields = fieldsOf(page).filter(function (f) { return /^(?:qty|quantity)\b/i.test(String(f.label || "")) && /^\d{1,4}$/.test(String(f.value || "").trim()); }).map(function (f) { return Number(f.value); });
-    // A name + price with no quantity anywhere on the page is not a product line (recommendation strips show prices, never quantities).
-    if (!qtyFields.length && !out.some(function (p) { return p.qty != null; })) return [];
-    if (qtyFields.length && qtyFields.length === out.length) out.forEach(function (p, i) { if (p.qty == null) p.qty = qtyFields[i]; });
-    // Price and line total from the block's money lines, once the qty is known: unit price first, a later money equal to price × qty is the line total (or the other way round).
+    var controlled = out.filter(function (p) { return p.control && p.qty == null; });
+    if (qtyFields.length && qtyFields.length === controlled.length) controlled.forEach(function (p, i) { p.qty = qtyFields[i]; });
     out.forEach(function (p) {
-      var monies = p.monies || []; delete p.monies;
-      if (p.price != null || !monies.length) return;
-      p.price = monies[0];
-      if (p.qty != null && monies.length > 1) {
-        var t = monies.slice(1).filter(function (m) { return Math.abs(toNum(m) - toNum(p.price) * p.qty) < 0.011; })[0];
-        if (t) p.total = t;
-        else if (Math.abs(toNum(monies[0]) - toNum(monies[1]) * p.qty) < 0.011) { p.total = monies[0]; p.price = monies[1]; }
+      var monies = p.monies || [], ints = p.ints || [];
+      // A bare integer between two money lines where the second is price × n ("$7.97 / 12 / $95.64") is the quantity.
+      if (p.qty == null && ints.length && monies.length > 1) { var n = ints.filter(function (k) { return monies.some(function (m) { return Math.abs(toNum(m) - toNum(monies[0]) * k) < 0.011 && m !== monies[0]; }); })[0]; if (n != null) p.qty = n; }
+      if (p.qty == null && p.control && ints.length) p.qty = ints[0];
+      // Price and line total from the block's money lines, once the qty is known: unit price first, a later money equal to price × qty is the line total (or the other way round).
+      if (p.price == null && monies.length) {
+        p.price = monies[0];
+        if (p.qty != null && monies.length > 1) {
+          var t = monies.slice(1).filter(function (m) { return Math.abs(toNum(m) - toNum(p.price) * p.qty) < 0.011; })[0];
+          if (t) p.total = t;
+          else if (Math.abs(toNum(monies[0]) - toNum(monies[1]) * p.qty) < 0.011) { p.total = monies[0]; p.price = monies[1]; }
+        }
       }
     });
-    return out;
+    // A product line has a title AND a price AND a quantity (a "Qty N", a stepper, a quantity field) in its own container; a strip's name + price is not one (v1.2.1).
+    return out.filter(function (p) { return p.price != null && p.qty != null; }).map(function (p) { return { name: p.name, qty: p.qty, price: p.price, total: p.total, sku: p.sku }; });
   }
   function parseRegion(L) {
     var out = [], i = 0;
@@ -141,22 +152,29 @@
       var single = singleLineItem(l);
       if (single) { out.push(single); i++; continue; }
       if (!nameLike(l)) { i++; continue; }
-      var p = { name: l, qty: null, price: null, total: null, sku: null }, monies = [], j = i + 1, packInts = false;
-      for (; j < L.length && j <= i + 6; j++) {
+      var p = { name: l, qty: null, price: null, total: null, sku: null, control: false, monies: [], ints: [] }, j = i + 1, packInts = false;
+      for (; j < L.length && j <= i + 14; j++) {
         var x = L[j];
         if (TOTAL_LINE.test(x) || singleLineItem(x) || (nameLike(x) && !SKU.test(x))) break;
         if (PROMO.test(x) || GIFT.test(x) || CARDISH.test(x)) continue;
         var mu = MULT.exec(x);
-        if (mu) { p.qty = Number(mu[1] || mu[4]); monies.push((mu[2] || mu[3]).replace(/\s/g, "")); continue; }
-        var q = QTY.exec(x); if (q && p.qty == null) p.qty = Number(q[1]);
+        if (mu) { p.qty = Number(mu[1] || mu[4]); p.control = true; p.monies.push((mu[2] || mu[3]).replace(/\s/g, "")); continue; }
+        var q = QTY.exec(x); if (q) { p.control = true; if (p.qty == null) p.qty = Number(q[1]); }
+        if (QTY_LABEL.test(x)) { p.control = true; packInts = false; continue; }
         // A pack-size dropdown ("Multipack Quantity:" then its options 1, 2 on their own lines) is never the order's quantity.
         if (PACK_LABEL.test(x)) { packInts = true; continue; }
-        if (/^\d{1,4}$/.test(x)) { if (!packInts && p.qty == null) p.qty = Number(x); continue; }
+        if (/^\d{1,4}$/.test(x)) {
+          if (packInts) continue;
+          var stepper = (j > 0 && STEPPER.test(L[j - 1])) || (j + 1 < L.length && STEPPER.test(L[j + 1]));
+          if (stepper) { p.control = true; if (p.qty == null) p.qty = Number(x); } else p.ints.push(Number(x));
+          continue;
+        }
+        if (STEPPER.test(x)) { p.control = true; continue; }
         packInts = false;
         var sk = SKU.exec(x); if (sk && !p.sku) p.sku = sk[1];
-        var mm = x.match(MONEY_G); if (mm && !/\b(?:was|reg\.?|regular|list|save|saved|savings)\b/i.test(x)) monies = monies.concat(mm.map(function (m) { return m.replace(/\s/g, ""); }));
+        var mm = x.match(MONEY_G); if (mm && !/\b(?:was|reg\.?|regular|list|save|saved|savings)\b/i.test(x)) p.monies = p.monies.concat(mm.map(function (m) { return m.replace(/\s/g, ""); }));
       }
-      if (monies.length) { p.monies = monies; out.push(p); }
+      if (p.monies.length) out.push(p);
       i = j > i + 1 ? j : i + 1;
     }
     return out;
@@ -173,7 +191,7 @@
           if (g.last4 || g.amount) gifts.push(g);
           return;
         }
-        if (!m) return;
+        if (!m || ORDER_NO_LINE.test(l)) return; // an order number that happens to pass Luhn is masked by the scrubber — never a card
         var nick = m[1].replace(/^selected:\s*/i, "").replace(/\b(?:payment\s+method|card\s+number|number|pay\s+with|paying\s+with|selected)\b/gi, "").replace(/[\s:·•|-]+$/, "").replace(/^[\s:·•|-]+/, "").trim();
         nick = nick.split(/\s{2,}/).pop().split(/\s+/).slice(-3).join(" ");
         into.push({ nickname: nick || "Card", last4: m[2], amount: money(l.slice(m.index + m[0].length)) });
@@ -188,24 +206,25 @@
 
   // ── Totals ──
   function amount(all, label) {
-    // "Subtotal (22 items) $176.40", "Shipping Free": the amount is the first money on the label's line.
-    var m = new RegExp("\\b" + label + "\\b[^\\n$]{0,30}?(" + MONEY_SRC + "|\\bfree\\b)", "i").exec(all);
+    // The label starts its line; the amount is the first money on that line or on the next one ("Subtotal (12 items)" / "$95.64" — Walmart puts them on two lines). "Shipping Free" → Free.
+    var m = new RegExp("(?:^|\\n)[ \\t]*" + label + "\\b[^\\n$]{0,30}?(?:\\n[^\\n$]{0,12}?)?(" + MONEY_SRC + "|\\bfree\\b)", "i").exec(all);
     return m ? (/^free$/i.test(m[1]) ? "Free" : m[1].replace(/\s/g, "")) : null;
   }
   function extractTotals(page) {
     var all = String(page.text || "");
     var t = {};
     var sub = amount(all, "(?:items?\\s+)?sub\\s*total"); if (sub) t.subtotal = sub;
-    var disc = amount(all, "(?:discounts?|savings|you\\s+save)"); if (disc) t.discount = disc;
+    // "You saved $36.12 today" is a discount candidate, never the total.
+    var disc = amount(all, "(?:(?:total\\s+)?(?:discounts?|savings)|you\\s+saved?)"); if (disc) t.discount = disc;
     var tax = amount(all, "(?:estimated\\s+|sales\\s+)?tax(?:es)?"); if (tax) t.tax = tax;
     var ship = amount(all, "(?:estimated\\s+)?shipping(?:\\s*(?:&|and)\\s*handling)?"); if (ship) t.shipping = ship;
-    var tot = amount(all, "(?:order\\s+|estimated\\s+|grand\\s+)?total(?!\\s+savings)"); if (tot) t.total = tot;
+    var tot = amount(all, "(?:order\\s+|estimated\\s+|grand\\s+)?total(?!\\s*(?:savings|saved))"); if (tot) t.total = tot;
     return t;
   }
 
   // ── Promos ──
   function extractPromos(page) {
-    return uniq(lines(page.text).filter(function (l) { return PROMO.test(l) && !TOTAL_LINE.test(l) && !GIFT.test(l) && l.length <= 100; }));
+    return uniq(lines(page.text).filter(function (l) { return PROMO.test(l) && PROMO_VALUE.test(l) && !/\?\s*$/.test(l) && !TOTAL_LINE.test(l) && !GIFT.test(l) && l.length <= 100; }));
   }
 
   // ── Order ──
@@ -249,10 +268,18 @@
   }
 
   /** prev + next → merged: newest value wins per field; nothing is replaced wholesale, nothing is dropped. Pure. */
+  /** A confirmation line shows one money per item — the line total ("Qty 12 / $95.64"): when the newer price is the known unit price × qty, it is the total, not a new price. */
+  function reconcileProduct(existing, incoming) {
+    var p = Object.assign({}, incoming);
+    if (existing.price != null && p.price != null && p.qty != null && p.qty > 1 && Math.abs(toNum(p.price) - toNum(existing.price) * p.qty) < 0.011) { p.total = p.price; p.price = existing.price; }
+    return p;
+  }
   function mergeBuckets(prev, next) {
     var a = prev || emptyBuckets(), b = next || {};
+    var prevProducts = a.products || [];
+    var incoming = (b.products || []).map(function (p) { var e = prevProducts.filter(function (x) { return productKey(x) === productKey(p); })[0]; return e ? reconcileProduct(e, p) : p; });
     return {
-      products: upsert(a.products || [], b.products || [], productKey),
+      products: upsert(prevProducts, incoming, productKey),
       shipping: b.shipping ? b.shipping : (a.shipping || null),
       payment: {
         cards: upsert((a.payment || {}).cards || [], (b.payment || {}).cards || [], function (c) { return c.last4 || normName(c.nickname); }),

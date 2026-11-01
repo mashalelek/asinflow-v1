@@ -10,8 +10,8 @@ import { join } from "node:path";
 const manifest = JSON.parse(readFileSync(join(__dirname, "..", "chrome-extension", "manifest.json"), "utf8"));
 
 describe("chrome-extension/manifest.json", () => {
-  it("is v1.2.0 (the Capture PO panel redesign: buckets, selected address, per-tab captures, warm stone)", () => {
-    expect(manifest.version).toBe("1.2.0");
+  it("is v1.2.1 (the Capture PO panel redesign: buckets, selected address, per-tab captures, warm stone; 1.2.1 = the pre-parser fixes from the first real PO)", () => {
+    expect(manifest.version).toBe("1.2.1");
     expect(readFileSync(join(__dirname, "..", "chrome-extension", "sidepanel.html"), "utf8")).toMatch(/<script src="buckets\.js"><\/script>/);
   });
   it("lists every AsinFlow host the extension may be pointed at: localhost, the Render host and the custom domain", () => {

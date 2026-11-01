@@ -2534,7 +2534,7 @@ is set — the runner is always on; only the **schedule** is gated.
   File keep their inline sheet/CSV step; only the onboarding Refresh they
   spawn is a queue job.
 
-### Chrome extension — Capture PO (patch `docs/claude_spec-patch-po-ai-prefill.md` §4, 2026-10-31; `chrome-extension/` v1.2.0 — panel redesign 2026-11-01)
+### Chrome extension — Capture PO (patch `docs/claude_spec-patch-po-ai-prefill.md` §4, 2026-10-31; `chrome-extension/` v1.2.1 — panel redesign 2026-11-01, pre-parser fixes from the first real PO the same day)
 
 The existing extension (the Amazon side-panel calculator, `content.js` on
 `/dp` pages) gains **Capture PO** in the same side panel: on any tab that is
@@ -2585,7 +2585,22 @@ not an Amazon product page the panel shows the capture UI instead of the
   confirmation). Every capture fills whatever buckets it can; the
   background merges **newest value wins per field** — nothing replaced
   wholesale, nothing dropped (a product / card / promo once seen stays; a
-  page without a value never clears it). **Open in AF** is enabled once
+  page without a value never clears it). **Pre-parser rules (v1.2.1, from
+  the first real Walmart PO):** a product line needs a title AND a price
+  AND a quantity (a "Qty N", a stepper, a quantity field) in its own
+  container — rollback badges, "Bought N times" chips, recommendation
+  strips and the confirmation's "My Items" strip are not products, and
+  titles matching now$ / bought N / free delivery / snap / best seller /
+  manufacturer offer / saved for later / notify me / skip to are dropped
+  (the model still receives the full page text); an address candidate must
+  be street-number + street-name + suffix (a size-variant radio's "100 ct"
+  is not one) and text detection is scoped to deliver / ship / address
+  headings; Total comes only from a line starting total / order total /
+  estimated total — "You saved $36.12 today" is a discount candidate; a
+  promo line must carry a code, an amount or a percent ("Have a promo
+  code?" is a prompt); no order date on the pages → today on the form,
+  plain marker, no warning (`todayEt`). Fixtures:
+  `server/__fixtures__/capture-pages/walmart-po/`. **Open in AF** is enabled once
   Products and Totals are filled (the rest is optional); **Clear**;
   caption "One AI call runs when you open it · card numbers are masked
   before anything leaves the browser". **Per tab:** the record lives under

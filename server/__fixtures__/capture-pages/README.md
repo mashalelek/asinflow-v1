@@ -6,3 +6,8 @@ addresses beyond the two business ship-to streets. `addresses/` holds the two-ad
 pages (`walmart-review-two-addresses`, `michaels-address-picker`): the
 selected-address fixtures for `server/extension-buckets.test.ts` (v1.2),
 kept out of the scrubber sweep (no prices on them).
+`walmart-po/` is a synthetic cart + confirmation pair shaped like the first
+real Walmart PO (2026-11-01; order # and card invented): the rollback /
+"Bought N times" / recommendation strips, the "You saved" headline, the
+"Have a promo code?" prompt and the size-variant radios the v1.2.1 parser
+rules are tested against.

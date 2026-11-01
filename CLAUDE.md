@@ -168,7 +168,7 @@ the promo backfill (`npm run backfill:po-promos`), every call logged in
 (`chrome-extension/scrub.js`) runs inside the page; its fixtures are
 hand-written with public test card numbers only — never real ones.
 
-**Chrome extension dev (SPEC §11 "Chrome extension — Capture PO", v1.2.0):** load
+**Chrome extension dev (SPEC §11 "Chrome extension — Capture PO", v1.2.1):** load
 `chrome-extension/` unpacked at chrome://extensions; set the server URL on
 its options page (localhost:3000 by default; production
 `https://asinflow-cqg.onrender.com` and the custom domain
