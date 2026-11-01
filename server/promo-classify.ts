@@ -6,8 +6,8 @@
 // backfill (script/backfill-po-promos.ts). High confidence is applied; low
 // confidence is stored with type NULL for Maria (the review CSV).
 import { z } from "zod/v4";
-import { zodOutputFormat } from "@anthropic-ai/sdk/helpers/zod";
-import { AI, anthropicClient, estimateCost } from "./config/ai";
+import { AI, estimateCost } from "./config/ai";
+import { structuredBatchCall } from "./ai-batch";
 
 /** Maria's rules (2026-10-31), verbatim in both prompts. */
 export const PROMO_RULES = `Classify each retailer promotion as exactly one type:
@@ -41,28 +41,8 @@ export function promoUserMessage(items: readonly PromoClassifyInput[]): string {
   return `Classify these ${items.length} promotions. Return every id exactly once.\n` + items.map((i) => `${i.id}\t${i.supplier ?? "?"}\t${i.text.replace(/\s+/g, " ").trim()}`).join("\n");
 }
 
-// One streamed call (long output), thinking OFF — a rule lookup needs none, and
-// with adaptive thinking on the 16K ceiling was spent thinking before the JSON
-// finished (production dry run 2026-11-01: stop_reason max_tokens, 2K chars of
-// text). The events are accumulated by hand so a truncated reply still comes
-// back with its stop_reason and usage instead of an SDK parse exception.
-async function defaultCall(system: string, user: string): Promise<{ parsed: unknown; input_tokens: number; output_tokens: number; stop_reason: string | null }> {
-  const client = anthropicClient();
-  const stream = await client.messages.create({
-    model: AI.model, max_tokens: AI.batchMaxTokens, thinking: { type: "disabled" },
-    output_config: { effort: AI.effort, format: zodOutputFormat(PromoClassificationSchema) },
-    system, messages: [{ role: "user", content: user }], stream: true,
-  });
-  let text = "", input_tokens = 0, output_tokens = 0, stop_reason: string | null = null;
-  for await (const ev of stream) {
-    if (ev.type === "message_start") input_tokens = ev.message.usage.input_tokens;
-    else if (ev.type === "content_block_delta" && ev.delta.type === "text_delta") text += ev.delta.text;
-    else if (ev.type === "message_delta") { stop_reason = ev.delta.stop_reason ?? stop_reason; output_tokens = ev.usage.output_tokens; }
-  }
-  let parsed: unknown = null;
-  try { parsed = JSON.parse(text); } catch { parsed = null; }
-  return { parsed, input_tokens, output_tokens, stop_reason };
-}
+// The call itself: server/ai-batch.ts (streamed, thinking off, the batch ceiling).
+const defaultCall = (system: string, user: string) => structuredBatchCall(system, user, PromoClassificationSchema);
 
 /** One batch call; items the model did not return (or returned with an unknown id) come back absent — the caller treats them as low confidence. */
 export async function classifyPromos(items: readonly PromoClassifyInput[], deps: PromoClassifyDeps = {}): Promise<{ results: Map<number, PromoClassification>; usage: PromoClassifyUsage }> {

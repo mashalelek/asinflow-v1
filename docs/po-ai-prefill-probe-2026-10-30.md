@@ -117,3 +117,16 @@ So the historical allocation is *not* one rule — tax and shipping are allocate
 | Y ≤ 0 with a product price > 0 | 5 |
 
 Nothing changes without Maria's say-so. The AI-prefill patch does not touch any of these rows.
+
+**Superseded 2026-11-01 (Maria, review answer 4).** The two lists above
+(`po-cogs-review-2026-10-31.csv`, `po-cogs-af-vs-sheet-2026-10-31.csv`)
+compared the stale local database against per-row sheet cells, and AF's
+PO-level cost — the N-weighted average over an S=1 merge, the bundle sum —
+is correct where they said "wrong". Both are deleted. The one list that
+replaces them is built against production by `npm run po:cogs-review --
+--prod`: per sheet-imported ASIN row, AF's cost vs the sheet's PO-level
+Adjusted COGS computed AF's way (Σ col X × col L ÷ col N, bundle-aware,
+`server/po-cogs-review.ts`), rows Maria already answered excluded, and —
+when more than 10 differ — one Haiku pass over each row's sheet context
+answering "is AF's value explainable from these rows?"; only the "no" rows
+reach `docs/po-cogs-review-<date>.csv`, with the reason.

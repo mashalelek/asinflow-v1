@@ -78,9 +78,11 @@ export function compareConfirmation(p: ParsedConfirmation, po: PoFacts): string[
   return out;
 }
 
+/** A confirmation that matched no PO — listed so Maria can see whether a PO is missing from AF (review answer 6, 2026-11-01). */
+export interface UnmatchedConfirmation { message_id: string; date: string | null; supplier: string | null; sender_domain: string | null; order_ids: string[]; total: number | null; subject: string }
 export interface ReconcileResult {
   scanned: number; confirmations: number; matched: number; agreed: number; differed: number; raised: number; unmatched: number; ambiguous: number; renewals: number;
-  since: string | null; until: string; diffs: ConfirmDiff[]; dryRun: boolean;
+  since: string | null; until: string; diffs: ConfirmDiff[]; unmatchedList: UnmatchedConfirmation[]; dryRun: boolean;
 }
 export interface ReconcileDeps {
   gmail: gmail_v1.Gmail; list?: typeof listMessageIds; get?: typeof getMessage;
@@ -95,7 +97,7 @@ export async function reconcileConfirmations(opts: { query: QueryLike; deps: Rec
   const from = wm ? new Date(wm.getTime() - OVERLAP_MS) : null;
   const q = `-category:promotions${from ? ` after:${Math.floor(from.getTime() / 1000)}` : ""}`;
   const ids = await list(opts.deps.gmail, q, opts.maxMessages ?? 5000);
-  const r: ReconcileResult = { scanned: ids.length, confirmations: 0, matched: 0, agreed: 0, differed: 0, raised: 0, unmatched: 0, ambiguous: 0, renewals: 0, since: from?.toISOString() ?? null, until: now.toISOString(), diffs: [], dryRun: !!opts.dryRun };
+  const r: ReconcileResult = { scanned: ids.length, confirmations: 0, matched: 0, agreed: 0, differed: 0, raised: 0, unmatched: 0, ambiguous: 0, renewals: 0, since: from?.toISOString() ?? null, until: now.toISOString(), diffs: [], unmatchedList: [], dryRun: !!opts.dryRun };
   const pos = (await opts.query(
     `SELECT p.id, p.supplier, p.order_id, p.order_total::float AS order_total, (SELECT COUNT(*)::int FROM po_line_items l WHERE l.po_id = p.id) AS line_count FROM purchase_orders p`,
   )).rows as PoFacts[];
@@ -110,7 +112,9 @@ export async function reconcileConfirmations(opts: { query: QueryLike; deps: Rec
     const hits = findPoForConfirmation(p, pos, supplier);
     if (hits.length === 0) {
       if (opts.deps.onUnmatched && !opts.dryRun && (await opts.deps.onUnmatched(msg, p, supplier))) { r.renewals++; continue; }
-      r.unmatched++; continue;
+      r.unmatched++;
+      r.unmatchedList.push({ message_id: msg.id, date: msg.date ? new Date(msg.date).toISOString().slice(0, 10) : null, supplier, sender_domain: p.senderDomain, order_ids: p.orderIds, total: p.total, subject: msg.subject ?? "" });
+      continue;
     }
     if (hits.length > 1) { r.ambiguous++; continue; }
     const po = hits[0];
