@@ -76,7 +76,7 @@ async function main() {
   for (const m of LADDER_MIN) {
     await new Promise((r) => setTimeout(r, (m - elapsed) * 60_000));
     elapsed = m;
-    const s = await verifyPending(sellerId, { ids, closeAfterCreate: (r) => closeAfterCreate(pool as any, sellerId, r) });
+    const s = await verifyPending(sellerId, { ids, closeAfterCreate: (r) => closeAfterCreate((sql, params) => pool.query(sql, params), sellerId, r) });
     const open = await countOpenAmong(ids);
     console.log(`  T+${m}m: checked=${s.checked} live=${s.live} failed=${s.failed} processing=${s.processing} stale=${s.stale} throttled=${s.throttled} — ${open} still open`);
     if (open === 0) break;
