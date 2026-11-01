@@ -11,7 +11,7 @@
 // to po_promos. A hand-typed cost / unit is logged as such, so a later
 // recompute leaves it alone. One po_edit_log row records the creation.
 import type { QueryLike } from "./scheduler/types";
-import { checkPoForm, shipsToFromForm, COST_FORMULA_VERSION_SAVED, type PoFormState } from "@shared/po-form";
+import { checkPoForm, shipsToFromForm, canonicalPaymentName, COST_FORMULA_VERSION_SAVED, type PoFormState } from "@shared/po-form";
 import { afEntrySeq } from "./po-entry-seq";
 import { logEdits, EditError } from "./po-edit";
 import { applyAsinPackUpdate, parsePack } from "./asin-pack";
@@ -38,7 +38,8 @@ export async function createPoFromForm(query: QueryLike, form: PoFormState, user
        email_used, purchased_by_user_id, cashback_status, subscription)
      VALUES ($1, $2, $3, '{}'::text[], $4, $5, $6, $7, $8, $9, $10, $11, NULL, $12, $13, $14, $15, $22, $16, $17, $18, $19, $20, $21, $23) RETURNING id`,
     [orderId, form.order_date.trim(), supplier, subtotal, moneyOr0(form.tax), moneyOr0(form.sh_donations), moneyOr0(form.discount), moneyOr0(form.refund_amount),
-     check.effectiveOrderTotal.toFixed(2), txt(form.payment_method), pct(form.weighted_gc_discount_pct), txt(form.cashback_site), pct(form.cashback_pct),
+     // Weighted GC % is computed from the gift-card payments (round 2, 2026-11-01); the typed field only stands in when no payment carries a GC %.
+     check.effectiveOrderTotal.toFixed(2), txt(form.payment_method), check.weightedGcPct != null ? check.weightedGcPct.toFixed(2) : pct(form.weighted_gc_discount_pct), txt(form.cashback_site), pct(form.cashback_pct),
      txt(form.purchased_by), txt(form.notes), afEntrySeq(now),
      // As chosen on the form; absent → derived from prep cost (SPEC §26).
      form.ships_to === "home" || form.ships_to === "velocity" ? form.ships_to : shipsToFromForm(form),
@@ -81,11 +82,14 @@ export async function createPoFromForm(query: QueryLike, form: PoFormState, user
     );
   }
   const payments = Array.isArray(form.payments) ? form.payments : [];
+  // Nicknames through the alias table ("OnePay Cash" = "Walmart card") so history matches on the canonical name.
+  const aliasRow = payments.length ? (await query(`SELECT value FROM settings WHERE key = 'po_payment_method_aliases'`)).rows[0]?.value : null;
+  const aliases = aliasRow && typeof aliasRow === "object" ? (aliasRow as Record<string, string>) : {};
   for (let i = 0; i < payments.length; i++) {
     const p = payments[i];
     await query(
       `INSERT INTO po_payments (po_id, position, method, nickname, last4, amount, gift_card_discount_pct) VALUES ($1, $2, $3, $4, $5, $6, $7)`,
-      [poId, i, p.method, txt(p.nickname), txt(p.last4), moneyOrNull(p.amount), pct(p.gift_card_discount_pct)],
+      [poId, i, p.method, txt(canonicalPaymentName(p.nickname, aliases)), txt(p.last4), moneyOrNull(p.amount), pct(p.gift_card_discount_pct)],
     );
   }
   await logEdits(query, poId, userId, "po", poId, [{ field: "PO created", old: null, new: `${supplier} ${orderId} — ${check.asins.length} ASIN(s), ${lines} product(s)` }]);

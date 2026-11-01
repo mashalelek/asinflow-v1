@@ -19,7 +19,8 @@ import { suggestAsins } from "./asin-suggest";
 import { normalizeStreet } from "./tracking-parse";
 import { loadAliases, aliasKey } from "./supplier-aliases";
 import { defaultEmailForSupplier } from "./supplier-defaults";
-import { promoCountsByDefault, yieldFromPacks, type PoFormState, type PoFormProduct, type PoFormPrefill, type PrefillSource } from "@shared/po-form";
+import { promoCountsByDefault, yieldFromPacks, canonicalPaymentName, type PoFormState, type PoFormProduct, type PoFormPrefill, type PrefillSource } from "@shared/po-form";
+import { discountReflectedInLines } from "@shared/po-cost";
 
 // ── Input (from the extension, already scrubbed) ─────────────────────────────
 export const CapturePageSchema = z.object({
@@ -237,9 +238,14 @@ export async function enrichPrefill(query: QueryLike, capture: Capture, x: Prefi
   if (noAsin.length) warnings.push(noAsin.length === 1 ? `Line ${noAsin[0]}: no ASIN found in AF — pick one` : `Lines ${noAsin.join(", ")}: no ASIN found in AF — pick one`);
   if (Object.keys(hints).length) prefill.hints = hints;
   if (x.subtotal != null && x.lines.length > 0 && Math.abs(r2(linesSum) - x.subtotal) > 0.01) warnings.push(`Lines add up to ${r2(linesSum).toFixed(2)}, the subtotal is ${x.subtotal.toFixed(2)}`);
-  form.promos = x.promos.map((p, i) => { sources[`promos.${i}`] = "model"; return { type: p.confidence === "high" ? p.type : "", description: p.description, amount: m2(p.amount), percent: m2(p.percent), counts_toward_cogs: promoCountsByDefault(p.type) }; });
+  // The double-discount rule (Maria 2026-11-01): line prices that already carry the discount → every promo defaults to not counting.
+  const reflected = discountReflectedInLines({ linesSum: r2(linesSum), discount: x.discount ?? 0, promoAmounts: x.promos.reduce((t, p) => t + (p.amount ?? 0), 0), postDiscountSubtotal: x.total == null ? null : r2(x.total - (x.tax ?? 0) - (x.shipping ?? 0)) });
+  form.promos = x.promos.map((p, i) => { sources[`promos.${i}`] = "model"; return { type: p.confidence === "high" ? p.type : "", description: p.description, amount: m2(p.amount), percent: m2(p.percent), counts_toward_cogs: promoCountsByDefault(p.type, reflected) }; });
   if (x.promos.some((p) => p.confidence === "low")) warnings.push("A promo's type is uncertain — choose sale, coupon or rewards");
-  form.payments = x.payments.map((p, i) => { sources[`payments.${i}`] = "model"; return { method: p.method, nickname: p.nickname ?? "", last4: p.last4 && /^\d{4}$/.test(p.last4) ? p.last4 : "", amount: m2(p.amount), gift_card_discount_pct: "" }; });
+  // Payment nicknames through the alias table (settings.po_payment_method_aliases): "OnePay Cash…" → "Walmart card".
+  const aliasRow = (await query(`SELECT value FROM settings WHERE key = 'po_payment_method_aliases'`)).rows[0]?.value;
+  const aliases = aliasRow && typeof aliasRow === "object" ? (aliasRow as Record<string, string>) : {};
+  form.payments = x.payments.map((p, i) => { sources[`payments.${i}`] = "model"; return { method: p.method, nickname: canonicalPaymentName(p.nickname ?? "", aliases), last4: p.last4 && /^\d{4}$/.test(p.last4) ? p.last4 : "", amount: m2(p.amount), gift_card_discount_pct: "" }; });
   const paySum = x.payments.reduce((t, p) => t + (p.amount ?? 0), 0);
   if (x.total != null && x.payments.some((p) => p.amount != null) && Math.abs(r2(paySum) - x.total) > 0.01) warnings.push(`Payments add up to ${r2(paySum).toFixed(2)}, the order total is ${x.total.toFixed(2)}`);
   for (const n of x.notes) if (!/\border\s*date\b/i.test(n) || sources.order_date) warnings.push(n);

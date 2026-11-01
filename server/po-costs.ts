@@ -7,13 +7,13 @@
 // cost_per_unit) keeps its COGS; its Sourcing / Paid cost still follow the
 // rule. Every change is logged.
 import type { QueryLike } from "./scheduler/types";
-import { allocateAsinCosts, adjustedProductCost, type CostHeader } from "@shared/po-cost";
+import { allocateAsinCosts, adjustedProductCost, discountReflectedInLines, effectiveCostHeader, type CostHeader } from "@shared/po-cost";
 import { logEdits, changedFields } from "./po-edit";
 
 export interface RecomputeResult { poId: string; skipped: "imported" | null; asinRows: number; changed: number }
 
 export async function recomputePoCosts(query: QueryLike, poId: string, userId: number | null): Promise<RecomputeResult> {
-  const po = (await query(`SELECT id, subtotal, discount, weighted_gc_discount_pct, cost_formula_version FROM purchase_orders WHERE id = $1`, [poId])).rows[0];
+  const po = (await query(`SELECT id, subtotal, discount, tax, sh_donations, order_total, weighted_gc_discount_pct, cost_formula_version FROM purchase_orders WHERE id = $1`, [poId])).rows[0];
   if (!po) return { poId, skipped: null, asinRows: 0, changed: 0 };
   if (po.cost_formula_version == null) return { poId, skipped: "imported", asinRows: 0, changed: 0 };
   const promos = (await query(`SELECT amount, counts_toward_cogs FROM po_promos WHERE po_id = $1`, [poId])).rows as Array<{ amount: string | null; counts_toward_cogs: boolean }>;
@@ -23,11 +23,18 @@ export async function recomputePoCosts(query: QueryLike, poId: string, userId: n
     (await query(`SELECT DISTINCT entity_id FROM po_edit_log WHERE po_id = $1 AND entity = 'asin' AND field = 'cost_per_unit'`, [poId])).rows.map((r: any) => String(r.entity_id)),
   );
   const subtotalStored = Number(po.subtotal);
+  // The double-discount rule (Maria 2026-11-01): line prices that already carry the discount → the discount / promos count for nothing.
+  const allLines = (await query(`SELECT price, qty_ordered FROM po_line_items WHERE po_id = $1`, [poId])).rows as Array<{ price: string | null; qty_ordered: string | null }>;
+  const linesSum = allLines.reduce((t, l) => t + (Number(l.price) || 0) * (Number(l.qty_ordered) || 0), 0);
+  const reflected = discountReflectedInLines({
+    linesSum: Math.round(linesSum * 100) / 100, discount: Number(po.discount) || 0, promoAmounts: promos.reduce((t, p) => t + (p.amount == null ? 0 : Number(p.amount)), 0),
+    postDiscountSubtotal: po.order_total == null ? null : Math.round(((Number(po.order_total) || 0) - (Number(po.tax) || 0) - (Number(po.sh_donations) || 0)) * 100) / 100,
+  });
   let changed = 0;
   for (const pa of rows) {
     const lines = (await query(`SELECT id, price, qty_ordered, adjusted_product_cost FROM po_line_items WHERE po_asin_id = $1 ORDER BY position`, [pa.id])).rows;
     const subtotal = subtotalStored > 0 ? subtotalStored : lines.reduce((t: number, l: any) => t + (Number(l.price) || 0) * (Number(l.qty_ordered) || 0), 0);
-    const h: CostHeader = { subtotal, discount: Number(po.discount) || 0, gcPct: po.weighted_gc_discount_pct == null ? null : Number(po.weighted_gc_discount_pct), nonCountingPromoAmount: nonCounting };
+    const h: CostHeader = effectiveCostHeader({ subtotal, discount: Number(po.discount) || 0, gcPct: po.weighted_gc_discount_pct == null ? null : Number(po.weighted_gc_discount_pct), nonCountingPromoAmount: nonCounting }, reflected);
     const costs = allocateAsinCosts(h, lines.map((l: any) => ({ price: l.price == null ? null : Number(l.price), qty: Number(l.qty_ordered) || 0 })), Number(pa.qty), pa.cogs_adjustment == null ? 0 : Number(pa.cogs_adjustment));
     if (!costs) continue;
     const next: Record<string, unknown> = { sourcing_cost: costs.sourcing.toFixed(2), paid_cost: costs.paid.toFixed(2) };

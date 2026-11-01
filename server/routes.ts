@@ -26,6 +26,7 @@ import { addMoneyRow, editMoneyRow, removeMoneyRow, loadPoMoney } from "./po-mon
 import { createPoFromForm, lookupAsins } from "./po-create";
 import { suggestAsins, asinInfo } from "./asin-suggest";
 import { defaultEmailForSupplier } from "./supplier-defaults";
+import { canonicalPaymentName } from "@shared/po-form";
 import { applyAsinPackUpdate, parsePack } from "./asin-pack";
 import { CaptureSchema, extractPrefill, enrichPrefill, mergedPagesText, storePrefill, getPrefill, logPrefill } from "./po-prefill";
 import { aiAvailable, AI_OFF_MESSAGE } from "./config/ai";
@@ -4607,13 +4608,22 @@ export async function registerRoutes(
     if (!Number.isInteger(id)) { res.status(400).json({ message: "bad id" }); return; }
     await sendGuarded(res, () => withPoTx((q) => updateSubscription(q, id, req.body, uid(req))));
   });
-  // Purchased by (users) and Email used (settings.po_emails) for the form.
+  // The New PO form's lists (round 2, Maria 2026-11-01): Purchased by (users), Email used (every distinct email_used on
+  // purchase_orders + the two defaults), Cashback site (settings.po_cashback_sites, in order), payment-method names
+  // (settings.po_payment_methods, canonical through settings.po_payment_method_aliases) and the Velocity prep rate.
   app.get("/api/pos/purchasers", async (_req: Request, res: Response) => {
     if (!isDbAvailable()) { res.status(503).json({ message: "Database not available" }); return; }
     try {
       const users = (await query(`SELECT id, display_name FROM users WHERE is_active ORDER BY id`)).rows;
-      const emails = (await query(`SELECT value FROM settings WHERE key = 'po_emails'`)).rows[0]?.value ?? [];
-      res.json({ users, emails: Array.isArray(emails) ? emails : [] });
+      const sRows = (await query(`SELECT key, value FROM settings WHERE key = ANY($1::text[])`, [["po_emails", "po_cashback_sites", "po_payment_methods", "po_payment_method_aliases", "po_email_unknown_supplier", "prep_cost"]])).rows;
+      const sv = (k: string) => sRows.find((r: any) => r.key === k)?.value;
+      const list = (v: unknown): string[] => (Array.isArray(v) ? v.map((x) => String(x)) : []);
+      const used = (await query(`SELECT DISTINCT email_used FROM purchase_orders WHERE email_used IS NOT NULL AND email_used <> '' ORDER BY 1`)).rows.map((r: any) => String(r.email_used));
+      const defaults = ["orders@coastalqualitygoods.com", "mpeters.cqg@gmail.com", ...(typeof sv("po_email_unknown_supplier") === "string" ? [String(sv("po_email_unknown_supplier"))] : [])];
+      const emails = Array.from(new Set([...defaults, ...list(sv("po_emails")), ...used]));
+      const aliases = (sv("po_payment_method_aliases") && typeof sv("po_payment_method_aliases") === "object" ? sv("po_payment_method_aliases") : {}) as Record<string, string>;
+      const payment_methods = Array.from(new Set(list(sv("po_payment_methods")).map((n) => canonicalPaymentName(n, aliases)).filter(Boolean)));
+      res.json({ users, emails, cashback_sites: list(sv("po_cashback_sites")), payment_methods, payment_aliases: aliases, velocity_prep: Number(sv("prep_cost") ?? 1) || 1 });
     } catch (err: any) { res.status(500).json({ message: err.message }); }
   });
   // Email used default for a supplier (Maria 2026-11-01; server/supplier-defaults.ts): the supplier's default → its newest PO's email → the unknown-supplier setting.

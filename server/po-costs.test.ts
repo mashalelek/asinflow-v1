@@ -12,6 +12,7 @@ function fake(po: Record<string, any>, promos: any[], asins: any[], lines: Recor
     if (/FROM po_asins WHERE po_id/.test(sql)) return { rows: asins, rowCount: asins.length };
     if (/FROM po_edit_log/.test(sql)) return { rows: manualIds.map((id) => ({ entity_id: id })), rowCount: manualIds.length };
     if (/FROM po_line_items WHERE po_asin_id/.test(sql)) return { rows: lines[params[0]] ?? [], rowCount: 0 };
+    if (/FROM po_line_items WHERE po_id/.test(sql)) return { rows: Object.values(lines).flat(), rowCount: 0 };
     return { rows: [], rowCount: 1 };
   };
   return { q, calls };
@@ -24,6 +25,16 @@ const asins = [
 const lines = { a1: [{ id: "l1", price: "10.00", qty_ordered: "1", adjusted_product_cost: "6.75" }], a2: [{ id: "l2", price: "10.00", qty_ordered: "1", adjusted_product_cost: "6.75" }] };
 
 describe("recomputePoCosts", () => {
+  // Maria 2026-11-01, PO 200015336732726: the line price was already the sale price — the recompute must not subtract the discount again.
+  it("the double-discount rule: Σ price × qty equal to the post-discount subtotal → the discount / promo count for nothing (COGS = Sourcing = Paid)", async () => {
+    const wal = { id: "p1", subtotal: "95.64", discount: "36.12", tax: "0.00", sh_donations: "0.00", order_total: "95.64", weighted_gc_discount_pct: null, cost_formula_version: 2 };
+    const rows = [{ id: "a1", asin: "B0756KB8N1", qty: "2.00", cost_per_unit: "29.76", sourcing_cost: "29.76", paid_cost: "29.76", cogs_adjustment: null }];
+    const f = fake(wal, [{ amount: "36.12", counts_toward_cogs: true }], rows, { a1: [{ id: "l1", price: "7.97", qty_ordered: "12.00", adjusted_product_cost: "4.96" }] });
+    await recomputePoCosts(f.q, "p1", 1);
+    const up = f.calls.find((c) => /UPDATE po_asins SET/.test(c.sql) && c.params[0] === "a1")!;
+    expect(up.params).toEqual(["a1", "47.82", "47.82", "47.82"]);
+    expect(f.calls.find((c) => /UPDATE po_line_items/.test(c.sql))!.params).toEqual(["l1", "7.97"]);
+  });
   it("a sheet-imported PO (cost_formula_version NULL) is never recomputed", async () => {
     const f = fake({ ...po, cost_formula_version: null }, [], asins, lines);
     expect(await recomputePoCosts(f.q, "p1", 1)).toEqual({ poId: "p1", skipped: "imported", asinRows: 0, changed: 0 });

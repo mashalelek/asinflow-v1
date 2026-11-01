@@ -74,6 +74,17 @@ describe("enrichment (no AI)", () => {
     expect(out.prefill.warnings).toEqual(["Payments add up to 38.46, the order total is 40.00"]);
     expect(out.prefill).toMatchObject({ supplier: "michaels.com", pages: 2, captured_at: "2026-10-31T15:00:00Z", raw_text: null });
   });
+  // Round 2 (Maria 2026-11-01): a discount already in the line prices → the promo defaults to not counting; nicknames through the alias table.
+  it("a promo whose discount the line prices already carry defaults to not counting; a payment nickname is canonical (OnePay Cash → Walmart card)", async () => {
+    const q = async (sql: string) => (/FROM settings WHERE key = ANY/.test(sql) ? { rows: [{ key: "prep_cost", value: 1 }], rowCount: 1 } : /po_payment_method_aliases/.test(sql) ? { rows: [{ value: { "OnePay Cash": "Walmart card" } }], rowCount: 1 } : { rows: [], rowCount: 0 });
+    const x = { ...extraction, lines: [{ productName: "Keystone All Natural Chicken, 28 oz Can", retailerSku: null, qty: 12, unitsPerPack: 1, unitPrice: 7.97, lineTotal: 95.64, asinGuess: null }], subtotal: 95.64, discount: 36.12, tax: 0, shipping: 0, total: 95.64, promos: [{ type: "sale" as const, description: "Now $7.97, was $10.98", amount: 36.12, percent: null, confidence: "high" as const }], payments: [{ method: "card" as const, nickname: "OnePay CashRewards", last4: "0302", amount: 95.64 }], notes: [] };
+    const out = await enrichPrefill(q, capture, x, null, { id: "", capturedAt: null });
+    expect(out.form.promos?.[0].counts_toward_cogs).toBe(false);
+    expect(out.form.payments?.[0].nickname).toBe("Walmart card");
+    // Pre-discount lines keep the §7.2 default.
+    const pre = await enrichPrefill(q, capture, { ...x, discount: 23.35, subtotal: 95.64, total: 72.29 }, null, { id: "", capturedAt: null });
+    expect(pre.form.promos?.[0].counts_toward_cogs).toBe(true);
+  });
   // v1.2.1 (Maria 2026-11-01): a confirmation page shows no order date → today on the form, plain marker, no warning.
   it("no order date on the pages → today (America/New_York), no source marker, and the model's note about it is dropped", async () => {
     const q = async (sql: string) => (/FROM settings WHERE key = ANY/.test(sql) ? { rows: [{ key: "prep_cost", value: 1 }], rowCount: 1 } : { rows: [], rowCount: 0 });
