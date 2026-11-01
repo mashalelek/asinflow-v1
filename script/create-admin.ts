@@ -9,7 +9,7 @@
 // Runs against DATABASE_URL from the environment / .env, locally first; on
 // Render via the service's Shell tab only if the restored database somehow
 // lacks the local admin row (the pg_dump/pg_restore in SPEC §24 carries it).
-import "dotenv/config";
+import "./env";
 import readline from "readline";
 import pool from "../server/db";
 import { createFirstAdmin } from "../server/auth";

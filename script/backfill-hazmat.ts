@@ -11,7 +11,7 @@
  *
  * Run in background:  npx tsx script/backfill-hazmat.ts
  */
-import "dotenv/config";
+import "./env";
 import axios from "axios";
 import pg from "pg";
 

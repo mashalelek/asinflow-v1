@@ -5,7 +5,7 @@
 // Sets reassigned_from_po_id / reassigned_at, source = 'manual' (the sync never
 // moves it back), status = matched. Does NOT push — the push runs separately.
 // Talks to DATABASE_URL directly.
-import "dotenv/config";
+import "./env";
 import pool from "../server/db";
 
 const arg = (n: string) => { const i = process.argv.indexOf(`--${n}`); return i >= 0 ? process.argv[i + 1] : undefined; };

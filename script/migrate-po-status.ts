@@ -14,7 +14,7 @@
 //   Ordered              → nothing
 //   anything else        → STOP, nothing written
 // The old `status` column is left as is (D5); nothing reads it after this.
-import "dotenv/config";
+import "./env";
 import pool from "../server/db";
 import { mapSheetStatus } from "../server/po-status-map";
 

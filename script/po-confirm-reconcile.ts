@@ -4,7 +4,7 @@
 // moves the watermark. --since YYYY-MM-DD scans from that date instead of the
 // watermark (the first run / a backfill). Needs DATABASE_URL and the Gmail
 // delegation (GOOGLE_CREDENTIALS_PATH).
-import "dotenv/config";
+import "./env";
 import pool from "../server/db";
 import { gmailClient } from "../server/gmail-client";
 import { reconcileConfirmations } from "../server/po-confirm-reconcile";

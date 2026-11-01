@@ -10,7 +10,7 @@
 //
 // Needs GOOGLE_SHEET_ID / GOOGLE_CREDENTIALS_PATH (the Orders sheet) and
 // DATABASE_URL. Then run script/sync-shipments.ts.
-import "dotenv/config";
+import "./env";
 import pool from "../server/db";
 import { readPoSheet, parsePoSheet } from "../server/po-sheet-sync";
 import { resetDefaultedPackSize } from "../server/po-edit";

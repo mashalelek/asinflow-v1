@@ -182,8 +182,19 @@ use) → Open in AF → `/pos/new?prefill=<id>`. No build step: plain scripts
 backfills, dry run by default, `--live`), `npm run backfill:po-promos` (needs
 `ANTHROPIC_API_KEY`), `tsx script/sourcing-cost-switch-dryrun.ts` (the
 Update COGS in SC → col AR switch report), `npm run po:reconcile-confirmations`
-(`--live`, `--since`). All dry-run by default; production runs need
-`DATABASE_URL` pointed at Render.
+(`--live`, `--since`). All dry-run by default.
+
+**Production DB: run scripts with `--prod`; the URL lives in
+`.env.production.local`, never in prompts.** `script/env.ts` (every
+database script's first import, replacing `dotenv/config`) loads `.env`
+as before and, with `--prod`, `.env.production.local` — its
+`DATABASE_URL_PROD` becomes `DATABASE_URL` and its other keys
+(`ANTHROPIC_API_KEY`) apply too. The file is gitignored (`.env*.local`),
+its values are never printed or pasted, and the server never reads it
+(`server/env-prod.test.ts`). Examples: `npm run migrate:status -- --prod`,
+`npm run backfill:po-model -- --prod [--live]`,
+`tsx script/sourcing-cost-switch-dryrun.ts --prod`. A new script that can
+touch a database gets `import "./env";` first and inherits the flag.
 
 **Auth (SPEC §25):** every `/api` route except `/api/auth/*` and `/health`
 needs a session. First account, once, against an empty `users` table:

@@ -21,7 +21,7 @@
 // ingestTracking → matchTrackingRows → pushTracking (since = the oldest order
 // date), i.e. exactly what Sync tracking does, with a wider window.
 // Talks to DATABASE_URL directly (no API token for scripts).
-import "dotenv/config";
+import "./env";
 import pool from "../server/db";
 import { gmailClient, listMessageIds, getMessage } from "../server/gmail-client";
 import { parseTrackingEmail } from "../server/tracking-parse";

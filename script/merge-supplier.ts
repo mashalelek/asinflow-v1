@@ -3,7 +3,7 @@
 //   npm run supplier:merge -- --from rhode.com --into rhodeskin.com --live   # write, then re-match tracking
 // purchase_orders.supplier (a po_edit_log row per PO), asins.supplier,
 // tracking.supplier_domain_map values, po_tracking.supplier_guess. Talks to DATABASE_URL directly.
-import "dotenv/config";
+import "./env";
 import pool from "../server/db";
 import { matchTrackingRows, DOMAIN_MAP_KEY } from "../server/tracking-match";
 

@@ -5,7 +5,7 @@
 // check = the tracking.velocity_start_date setting (migration 067; --cutoff
 // overrides) — not VELOCITY_MIN_ORDER_DATE, the Upload to Velocity creation
 // floor. Talks to DATABASE_URL directly.
-import "dotenv/config";
+import "./env";
 import pool from "../server/db";
 import { shipsToFromPrep, isPreVelocityDataError, loadShipsToFacts, readVelocityStartDate } from "../server/ships-to-backfill";
 

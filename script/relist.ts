@@ -15,7 +15,7 @@
 // 30, 60 min, scoped to this batch's ledger rows, stopping once all resolve)
 // with close-after-create wired exactly as the route's ladder — rows recorded
 // open_on_create skip it. Needs DATABASE_URL and the SP-API credentials.
-import "dotenv/config";
+import "./env";
 import pool from "../server/db";
 import { runRelist, type RelistItem } from "../server/relist";
 import { verifyPending, findRecentPendingIds, countOpenAmong } from "../server/listing-submissions-repo";

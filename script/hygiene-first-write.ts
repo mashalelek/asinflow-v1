@@ -24,7 +24,7 @@
 // are NOT consulted — they govern the scheduled components, and stay unset
 // until Maria sets them. Needs DATABASE_URL and the SP-API (and, for delete,
 // Velocity) credentials in the environment.
-import "dotenv/config";
+import "./env";
 import pool from "../server/db";
 import {
   loadSkuFacts, attachPipeline, readListingLive, readInventoryLive, evaluateClose, evaluateDelete,

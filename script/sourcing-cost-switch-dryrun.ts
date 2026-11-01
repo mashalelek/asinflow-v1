@@ -9,7 +9,7 @@
 //
 //   npx tsx script/sourcing-cost-switch-dryrun.ts [--from YYYY-MM-DD] [--to YYYY-MM-DD] [--out <dir>]
 // Default window: Jan 1 of this year … today. Needs DATABASE_URL.
-import "dotenv/config";
+import "./env";
 import fs from "fs";
 import path from "path";
 import pg from "pg";

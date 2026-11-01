@@ -9,7 +9,7 @@
 // from .env) because there is no API token for scripts. The running server's
 // job runner executes it, serialized behind the hourly passes; follow it in
 // the jobs dialog or `SELECT … FROM jobs WHERE id = N`.
-import "dotenv/config";
+import "./env";
 import pool from "../server/db";
 import { enqueueJob, listActive } from "../server/scheduler/jobs-repo";
 import { parseBackfillWindow } from "../server/scheduler/routes";

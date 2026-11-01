@@ -8,7 +8,7 @@
 // an admin session; talks to the database directly (DATABASE_URL from .env).
 // The running server's runner executes it in 92-day chunks spaced for the
 // report quota (~6 chunks, ~30 min); follow it in the jobs dialog.
-import "dotenv/config";
+import "./env";
 import pool from "../server/db";
 import { enqueueJob, listActive } from "../server/scheduler/jobs-repo";
 import { parseBackfillWindow, defaultLedgerBackfillWindow } from "../server/scheduler/routes";

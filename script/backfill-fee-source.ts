@@ -7,7 +7,7 @@
 //
 // Marked rows become visible immediately (amber indicator) and self-heal on
 // the next successful real fee fetch ('spapi' always wins the write gate).
-import "dotenv/config";
+import "./env";
 // server/spapi transitively imports server/index (its log()), whose module
 // side effect boots Express. PORT=0 → ephemeral port, no conflict with the
 // dev server; the explicit process.exit() below ends the process despite the

@@ -9,7 +9,7 @@
 //                   (798190555249, Maria 2026-10-22: same marker as the others)
 // A row already PUSHED to Velocity is reported and left alone (its number
 // is in Velocity; removing it is a hand step). Talks to DATABASE_URL directly.
-import "dotenv/config";
+import "./env";
 import pool from "../server/db";
 import { isReturnEmail } from "../server/tracking-parse";
 import { RETURN_REASON } from "../server/tracking-ingest";

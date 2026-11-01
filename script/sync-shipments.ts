@@ -7,7 +7,7 @@
 //   tsx script/sync-shipments.ts --live --show 126768935  # also print that PO's ASIN rows after
 //
 // Needs DATABASE_URL, the Velocity key and the SP-API credentials.
-import "dotenv/config";
+import "./env";
 import pool from "../server/db";
 import { syncVelocityShipments } from "../server/shipment-sync-velocity";
 import { syncScShipments } from "../server/shipment-sync-sc";

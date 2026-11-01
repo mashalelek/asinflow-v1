@@ -31,7 +31,7 @@
 // Usage (CSV fallback): npx tsx script/import-po-2026.ts --csv <orders.csv> [--live]
 //   Identical parsing/gates/identity; the CSV's line 1 is the header row, so
 //   data rows start at source row 2 in both modes and row numbering matches.
-import "dotenv/config";
+import "./env";
 import fs from "fs";
 import Papa from "papaparse";
 import pg from "pg";

@@ -6,7 +6,7 @@
 // the fees API. Reports before/after per row.
 //
 // Pass --dry-run to fetch + report without writing.
-import "dotenv/config";
+import "./env";
 // server/spapi transitively imports server/index (its log()), whose module
 // side effect boots Express. PORT=0 → ephemeral port, no conflict with the
 // dev server; the explicit process.exit() below ends the process despite the

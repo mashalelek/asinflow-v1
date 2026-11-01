@@ -7,7 +7,7 @@
 //   npx tsx script/set-po-home.ts --po <order_id> --supplier <supplier> --live   # writes, one transaction
 //
 // Needs DATABASE_URL. Refuses when the order # + supplier match no PO.
-import "dotenv/config";
+import "./env";
 import pg from "pg";
 import { logEdits } from "../server/po-edit";
 

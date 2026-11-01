@@ -7,7 +7,7 @@
 //
 // Needs GOOGLE_SHEET_ID / GOOGLE_CREDENTIALS_PATH and DATABASE_URL. Then run
 // script/sync-shipments.ts so the Col P signal is used.
-import "dotenv/config";
+import "./env";
 import pool from "../server/db";
 import { syncPoSheet } from "../server/po-sheet-sync";
 

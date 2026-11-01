@@ -9,3 +9,4 @@ google-credentials.json
 velocity-upload*.csv
 data/
 script/scratch/venv/
+.env*.local

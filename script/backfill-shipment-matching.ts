@@ -14,7 +14,7 @@
 // --live: inserts the seeds (source 'seed'), then runs component A, B, A again
 // (so pack size and At Prep see the new links), and auto-close for the POs
 // touched. Needs DATABASE_URL, the Velocity key and the SP-API credentials.
-import "dotenv/config";
+import "./env";
 import { writeFileSync } from "fs";
 import { join } from "path";
 import pool from "../server/db";

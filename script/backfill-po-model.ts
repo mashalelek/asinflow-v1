@@ -6,7 +6,8 @@
 // stored — each is skipped, never rewritten.
 //
 //   npm run backfill:po-model                       # dry run (all stages)
-//   npm run backfill:po-model -- --live             # apply
+//   npm run backfill:po-model -- --live
+//   npm run backfill:po-model -- --prod [--live]   # production (script/env.ts); a dry run works before 075 is applied there             # apply
 //   npm run backfill:po-model -- --stage pack,sourcing   # a subset
 //   --out <dir>   where the CSVs go (default docs/)
 //
@@ -19,7 +20,7 @@
 //   sourcing      po_asins.sourcing_cost ← the Orders sheet's col AR, verbatim, by (supplier, order #, ASIN);
 //                 po_asins.paid_cost ← cost_per_unit (= COGS for imported rows, §7.1). Never touches cost_per_unit.
 // Needs DATABASE_URL; the sourcing stage also needs GOOGLE_SHEET_ID / GOOGLE_CREDENTIALS_PATH.
-import "dotenv/config";
+import "./env";
 import fs from "fs";
 import path from "path";
 import pg from "pg";
@@ -49,7 +50,14 @@ async function main() {
   const host = (() => { try { return new URL(url).host || "local"; } catch { return "?"; } })();
   console.log(`${LIVE ? "LIVE" : "DRY RUN"} against ${host} · stages: ${Array.from(stages).join(", ")}`);
   const col = (name: string) => (await_ok(q(`SELECT 1 FROM information_schema.columns WHERE table_name = 'purchase_orders' AND column_name = $1`, [name])));
-  if (!(await col("purchased_by_user_id"))) throw new Error("migration 075 is not applied on this database — apply it first (npm run migrate), then rerun");
+  // Pre-075 database (production before the deploy that applies 075): a DRY
+  // RUN plans against the empty post-075 state — every new column reads NULL,
+  // every new table is empty — so the plan is exactly what --live will do
+  // once 075 is applied. --live itself needs 075 (Maria 2026-11-01: dry-run on
+  // production before the migration lands).
+  const has075 = await col("purchased_by_user_id");
+  if (!has075 && LIVE) throw new Error("migration 075 is not applied on this database — apply it first (npm run migrate), then rerun");
+  if (!has075) console.log("  migration 075 is not applied here — the dry run plans against the empty post-075 state (nothing backfilled yet)");
   const writes: Array<() => Promise<void>> = [];
   const report: string[] = [];
 
@@ -58,7 +66,7 @@ async function main() {
     const rows = (await q(`
       SELECT p.purchased_by AS name, u.id AS user_id, COUNT(*)::int AS n
         FROM purchase_orders p LEFT JOIN users u ON lower(u.display_name) = lower(trim(p.purchased_by)) OR lower(split_part(u.email, '@', 1)) = lower(trim(p.purchased_by))
-       WHERE p.purchased_by_user_id IS NULL AND COALESCE(trim(p.purchased_by), '') <> ''
+       WHERE ${has075 ? "p.purchased_by_user_id IS NULL AND " : ""}COALESCE(trim(p.purchased_by), '') <> ''
        GROUP BY 1, 2 ORDER BY 3 DESC`)).rows;
     for (const r of rows) report.push(`purchased_by "${r.name}" × ${r.n} → ${r.user_id == null ? "no users row (text kept, id NULL)" : `user ${r.user_id}`}`);
     writes.push(async () => {
@@ -71,7 +79,7 @@ async function main() {
   // ── payments ──────────────────────────────────────────────────────────────
   if (stages.has("payments")) {
     const pos = (await q(`SELECT p.id, p.payment_method FROM purchase_orders p
-      WHERE COALESCE(trim(p.payment_method), '') <> '' AND NOT EXISTS (SELECT 1 FROM po_payments x WHERE x.po_id = p.id) ORDER BY p.order_date DESC`)).rows;
+      WHERE COALESCE(trim(p.payment_method), '') <> '' ${has075 ? "AND NOT EXISTS (SELECT 1 FROM po_payments x WHERE x.po_id = p.id)" : ""} ORDER BY p.order_date DESC`)).rows;
     const plan: Array<{ po_id: string; position: number; d: ReturnType<typeof parsePaymentMethod>[number]; raw: string }> = [];
     const byMethod: Record<string, number> = {}; let review = 0, posWithRows = 0;
     for (const p of pos) {
@@ -93,7 +101,7 @@ async function main() {
   if (stages.has("refunds")) {
     const pos = (await q(`SELECT p.id, p.refund_amount::text AS refund_amount,
         COALESCE((SELECT json_agg(json_build_object('id', l.id, 'qty_returned', l.qty_returned::float) ORDER BY l.position) FROM po_line_items l WHERE l.po_id = p.id), '[]') AS lines
-      FROM purchase_orders p WHERE p.refund_amount > 0 AND NOT EXISTS (SELECT 1 FROM po_line_refunds r WHERE r.po_id = p.id)`)).rows;
+      FROM purchase_orders p WHERE p.refund_amount > 0 ${has075 ? "AND NOT EXISTS (SELECT 1 FROM po_line_refunds r WHERE r.po_id = p.id)" : ""}`)).rows;
     const plans = pos.map((p) => planRefund({ po_id: p.id, refund_amount: p.refund_amount, lines: p.lines })).filter((x): x is NonNullable<typeof x> => x != null);
     report.push(`refunds: ${pos.length} PO(s) with refund_amount > 0 and no po_line_refunds → ${plans.filter((x) => !x.needs_split).length} attached to a line, ${plans.filter((x) => x.needs_split).length} PO-level needs_split`);
     writes.push(async () => {
@@ -106,7 +114,7 @@ async function main() {
   if (stages.has("subscriptions")) {
     const rows = (await q(`SELECT DISTINCT ON (p.supplier, pa.asin) p.id AS po_id, p.supplier, p.order_date, p.notes, p.promo, pa.id AS po_asin_id, pa.asin, pa.asin_name
         FROM purchase_orders p JOIN po_asins pa ON pa.po_id = p.id
-       WHERE p.subscription = true AND NOT EXISTS (SELECT 1 FROM subscriptions s WHERE s.supplier = p.supplier AND s.asin = pa.asin)
+       WHERE p.subscription = true ${has075 ? "AND NOT EXISTS (SELECT 1 FROM subscriptions s WHERE s.supplier = p.supplier AND s.asin = pa.asin)" : ""}
        ORDER BY p.supplier, pa.asin, ${NEWEST_PO_ORDER}`)).rows;
     const plan = rows.map((r) => {
       const text = [r.notes, r.promo].filter(Boolean).join(" · ");
@@ -132,7 +140,7 @@ async function main() {
     const none = (await q(`SELECT DISTINCT pa.asin, a.title FROM po_asins pa JOIN purchase_orders p ON p.id = pa.po_id LEFT JOIN asins a ON a.asin = pa.asin
        WHERE p.order_date >= '2026-01-01' AND NOT EXISTS (SELECT 1 FROM po_asins x JOIN purchase_orders px ON px.id = x.po_id WHERE x.asin = pa.asin AND px.order_date >= '2026-01-01' AND x.sold_as IS NOT NULL)`)).rows;
     const plan = planAsinPack(rows, none);
-    const inAsins = new Set((await q(`SELECT asin FROM asins WHERE sold_as IS NULL`)).rows.map((r) => String(r.asin)));
+    const inAsins = new Set((await q(`SELECT asin FROM asins${has075 ? " WHERE sold_as IS NULL" : ""}`)).rows.map((r) => String(r.asin)));
     const known = (await q(`SELECT asin FROM asins`)).rows.map((r) => String(r.asin));
     const knownSet = new Set(known);
     const toSet = plan.set.filter((s) => inAsins.has(s.asin));
@@ -165,8 +173,8 @@ async function main() {
       try { v = moneyVerbatim(cells[AR] ?? ""); } catch { v = { value: null, divzero: false }; }
       ar.set(key, { ...v, aj: t(cells[AJ]) });
     }
-    const rows = (await q(`SELECT pa.id, p.supplier, p.order_id, pa.asin, pa.cost_per_unit::text AS y, pa.sourcing_cost, pa.paid_cost, p.weighted_gc_discount_pct::float AS gc
-        FROM po_asins pa JOIN purchase_orders p ON p.id = pa.po_id WHERE pa.sourcing_cost IS NULL OR pa.paid_cost IS NULL`)).rows;
+    const rows = (await q(`SELECT pa.id, p.supplier, p.order_id, pa.asin, pa.cost_per_unit::text AS y, ${has075 ? "pa.sourcing_cost, pa.paid_cost" : "NULL::numeric AS sourcing_cost, NULL::numeric AS paid_cost"}, p.weighted_gc_discount_pct::float AS gc
+        FROM po_asins pa JOIN purchase_orders p ON p.id = pa.po_id ${has075 ? "WHERE pa.sourcing_cost IS NULL OR pa.paid_cost IS NULL" : ""}`)).rows;
     const upd: Array<{ id: string; sourcing: string | null; paid: string | null }> = [];
     let matched = 0, unmatched = 0, divzero = 0, arNull = 0, consistent = 0, inconsistent = 0;
     for (const r of rows) {

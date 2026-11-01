@@ -6,7 +6,7 @@
 // Runs against DATABASE_URL from the environment / .env. The server runs the
 // same runner on every startup; this exists for Render's Shell tab and for a
 // first local setup without starting the server.
-import "dotenv/config";
+import "./env";
 import pool from "../server/db";
 import { runMigrations, migrationStatus, MigrationError } from "../server/migrate";
 
