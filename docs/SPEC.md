@@ -6228,9 +6228,40 @@ replaces it. Migration 061 adds `po_edit_log`, `deleted_pos` and
   field (`entity` po / line / asin / shipment, old → new as text, the
   user). History tab on PO detail (`GET /api/pos/:id/history`). Every edit
   re-runs the auto-close rule for its PO.
+- **New PO form — polish (Maria 2026-11-01).** The form is a **full page**,
+  `/pos/new` — "+ New PO" on the POs page navigates there; it is no longer a
+  modal. At 1440 px a 1–3 line PO shows without horizontal or vertical
+  scroll (checked in headless Chrome at 1440×900 with a Walmart capture:
+  900/900). Sections stack: the prefill banner (warnings as wrapped chips),
+  order fields in **two rows** (identity: supplier · order # · date ·
+  purchased by · ships to · email used · subscription · PO notes; money:
+  subtotal · discount · tax · shipping · order total · weighted GC % ·
+  cashback site / % / status), the lines, the ASIN rows summary, promos and
+  payments side by side, warnings / errors, and a footer that stays at the
+  bottom with the live totals, Cancel and Create PO. **Lines (Maria's
+  whiteboard; `shared/po-lines.ts`):** the state is still the flat
+  `PoFormProduct` list (one row per product × ASIN, form-only `line_id` /
+  `bundle_id`), rendered as a **product row** — SKU / UPC · product name ·
+  price · qty · units / pack — with one **↳ ASIN row** per ASIN beneath it:
+  ASIN (type-ahead) · title (read-only, from AF) · ASIN qty (editable) ·
+  sold as · ASIN units / pack · prep · notes. The three shapes: one product
+  → one ASIN (the plain line); one product → two ASINs ("+ Add ASIN", a
+  split: each ↳ row holds its share of the qty, the product row shows the
+  sum); two products → one ASIN ("+ Add product to bundle": the product
+  rows sit in one outlined box with a single ↳ row, sold as bundle, units
+  / pack ≥ 2; a member removed from a two-member bundle leaves a plain
+  line). Typing an ASIN qty on a line with one ↳ row keeps the qty as bought
+  and pins the yield ("typed · reset"); on a split it sets that row's
+  share; on a bundle the sets. A **fractional ASIN qty** is red with "check
+  qty or pack size" — saving is still allowed (partial units are allowed by
+  rule), it just never passes silently. Save writes exactly the rows the
+  importer would (checked 2026-11-01: a split → two ASIN rows of one
+  product each, a bundle → one ASIN row with two lines and
+  `unique_products = 2`).
 - **New PO form — Capture PO patch (`docs/claude_spec-patch-po-ai-prefill.md`
   §6, 2026-10-31).** Also reachable as a page, `/pos/new` (`?prefill=<id>`
-  opens it filled from a capture, §4.5). Order fields: supplier, order #,
+  opens it filled from a capture, §4.5; since 2026-11-01 the ONLY way the
+  form opens — see the polish entry above). Order fields: supplier, order #,
   date, **Purchased by** (a user; the logged-in one by default; `GET
   /api/pos/purchasers`), Ships to, **Email used** (settings `po_emails`
   suggested; the per-supplier default fills it — §22 "Suppliers",
@@ -6239,10 +6270,10 @@ replaces it. Migration 061 adds `po_edit_log`, `deleted_pos` and
   (yes · every N weeks), PO notes. **Lines as bought** (§6.3): product
   name, SKU / UPC, price, qty, **retailer units / pack**, per-line
   notes; the ASIN row beneath each — **ASIN qty = qty × retailer units ÷
-  ASIN units per pack**, shown as the math and editable (typing it pins the
+  ASIN units per pack**, the math on hover and editable (typing it pins the
   yield; "reset" returns to the math); a bundle = several lines → one
-  ASIN; a split = "Add ASIN to this line" (the same line again with its own
-  qty / ASIN). **ASIN picker** (§6.4, `GET /api/pos/asin-suggest`,
+  ASIN; a split = "+ Add ASIN" (the same line again with its own share of
+  the qty / its own ASIN) — the 2026-11-01 layout above. **ASIN picker** (§6.4, `GET /api/pos/asin-suggest`,
   `server/asin-suggest.ts`): before typing, ASINs on past PO lines from the
   same supplier whose product name matches (exact normalized, then token
   overlap ≥ 0.5, newest first) → AF title-word matches → the model's guess

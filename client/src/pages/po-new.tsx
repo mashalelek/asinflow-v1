@@ -2,13 +2,14 @@
  * /pos/new — the New PO form as a page (Capture PO patch §4.5 / §6):
  * the extension opens /pos/new?prefill=<id> after POST /api/pos/prefill;
  * the page fetches the prefill (a 10-minute server-side cache key — not a
- * draft; nothing is stored until Save) and opens the dialog with it. With
- * no ?prefill the form opens empty. Closing returns to the POs page; a save
- * goes to the new PO.
+ * draft; nothing is stored until Save) and renders the form with it. With
+ * no ?prefill the form opens empty ("+ New PO" on the POs page lands here —
+ * a full page, not a modal, Maria 2026-11-01). Cancel returns to the POs
+ * page; a save goes to the new PO.
  */
 import { useEffect, useState } from "react";
 import { useLocation, useSearch } from "wouter";
-import { NewPoDialog, type PrefillResponse } from "@/components/new-po-dialog";
+import { NewPoForm, type PrefillResponse } from "@/components/new-po-dialog";
 
 export default function PoNew() {
   const [, navigate] = useLocation();
@@ -27,9 +28,9 @@ export default function PoNew() {
   }, [id]);
   if (prefill === undefined) return <div className="px-6 py-8 text-sm text-muted-foreground" data-testid="po-new-loading">Loading the capture…</div>;
   return (
-    <div className="px-6 py-4">
+    <div className="px-6 pt-3">
       {error && <p className="mb-3 text-sm text-destructive" data-testid="po-new-error">{error}</p>}
-      <NewPoDialog open onOpenChange={(v) => { if (!v) navigate("/purchase-orders"); }} onCreated={(poId) => navigate(`/purchase-orders/${poId}`)} prefill={prefill} />
+      <NewPoForm open onOpenChange={(v) => { if (!v) navigate("/purchase-orders"); }} onCreated={(id) => navigate(`/purchase-orders/${id}`)} prefill={prefill} />
     </div>
   );
 }

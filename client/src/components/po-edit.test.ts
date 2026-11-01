@@ -33,9 +33,12 @@ describe("PO edit drawer", () => {
 describe("New PO form (po-af-owned §4)", () => {
   it("the POs page's + New PO opens the form (no longer disabled 'Soon'); the dialog validates with the shared checkPoForm and posts the plain JSON state", () => {
     const page = readFileSync(resolve(__dirname, "../pages/purchase-orders.tsx"), "utf8");
-    expect(page).toMatch(/<Button variant="default" size="sm" onClick=\{\(\) => setNewPoOpen\(true\)\} data-testid="button-new-po">/);
+    // Since 2026-11-01 the form is a full page: "+ New PO" navigates to /pos/new; the page lands on the new PO after a save.
+    expect(page).toMatch(/<Button variant="default" size="sm" onClick=\{\(\) => navigate\("\/pos\/new"\)\} data-testid="button-new-po">/);
     expect(page).not.toMatch(/Soon — arrives with the entry form/);
-    expect(page).toMatch(/onCreated=\{\(id\) => navigate\(`\/purchase-orders\/\$\{id\}`\)\}/);
+    expect(page).not.toMatch(/NewPoDialog|NewPoForm/);
+    const poNew = readFileSync(resolve(__dirname, "../pages/po-new.tsx"), "utf8");
+    expect(poNew).toMatch(/onCreated=\{\(id\) => navigate\(`\/purchase-orders\/\$\{id\}`\)\}/);
     const dlg = readFileSync(resolve(__dirname, "new-po-dialog.tsx"), "utf8");
     expect(dlg).toMatch(/const check = useMemo\(\(\) => checkPoForm\(form\), \[form\]\);/);
     expect(dlg).toMatch(/fetch\("\/api\/pos", \{ method: "POST", headers: \{ "Content-Type": "application\/json" \}, body: JSON\.stringify\(\{ \.\.\.settled\.form, ships_to: shipsTo \}\) \}\)/);

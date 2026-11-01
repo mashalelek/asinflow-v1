@@ -2,7 +2,7 @@
  * POs page — PO module v1 frame, list view (docs/po-module-v1-frame-plan.md §3).
  *
  * READ-ONLY frame over the migrated 2026 data: list + filters + pagination.
- * + New PO opens the New PO form (po-af-owned §4, 2026-10-18). The
+ * + New PO opens the New PO form page, /pos/new (po-af-owned §4, 2026-10-18; a page since 2026-11-01). The
  * Upload to Velocity toolbar ACTION (SPEC §11) stays exactly where it was.
  * Row click navigates to the expanded-view route (placeholder until step 4).
  *
@@ -32,7 +32,6 @@ import { useToast } from "@/hooks/use-toast";
 import { PoHeaderDrawer, PoProductsTable, PoHistory, PoDangerActions } from "@/components/po-edit";
 import { PoTrackingTab, SyncTrackingButton, UnmatchedTrackingChip } from "@/components/po-tracking";
 import { PoMoneyTab, type PoPayment, type PoPromo, type PoRefund } from "@/components/po-money";
-import { NewPoDialog } from "@/components/new-po-dialog";
 import { Pencil } from "lucide-react";
 import { useColumnWidths, ResizeHandle } from "@/hooks/use-column-widths";
 
@@ -484,7 +483,6 @@ function fmtDate(iso: string): string {
 export default function PurchaseOrders() {
   const [, navigate] = useLocation();
   const [velocityOpen, setVelocityOpen] = useState(false);
-  const [newPoOpen, setNewPoOpen] = useState(false);
   // Deep link from the ASINs page's On Order cell (patch asins-on-order §3.2):
   // /purchase-orders?asin=B0… opens the list searched on that ASIN, Open and
   // Closed (row-level Status §2.4: On Order counts closed POs too).
@@ -578,11 +576,10 @@ export default function PurchaseOrders() {
       <div className="flex items-center justify-between">
         <h1 className="text-2xl font-semibold">Purchase Orders</h1>
         <div className="flex items-center gap-2">
-          {/* New PO form (po-af-owned §4). */}
-          <Button variant="default" size="sm" onClick={() => setNewPoOpen(true)} data-testid="button-new-po">
+          {/* New PO form (po-af-owned §4) — a full page since 2026-11-01. */}
+          <Button variant="default" size="sm" onClick={() => navigate("/pos/new")} data-testid="button-new-po">
             <Plus className="h-4 w-4 mr-1" /> New PO
           </Button>
-          <NewPoDialog open={newPoOpen} onOpenChange={setNewPoOpen} onCreated={(id) => navigate(`/purchase-orders/${id}`)} />
           <Button variant="outline" size="sm" onClick={() => applyExpanded(toggleExpandAll(expandedState))} data-testid="button-po-expand-all">
             {expandedState.all ? <ChevronsDownUp className="h-4 w-4 mr-1" /> : <ChevronsUpDown className="h-4 w-4 mr-1" />}
             {expandedState.all ? "Collapse All" : "Expand All"}

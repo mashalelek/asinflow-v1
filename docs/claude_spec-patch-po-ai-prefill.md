@@ -107,6 +107,8 @@ Every field shows where its value came from: **amber** = model (from captured pa
 Supplier, Order #, Order date, Ships to, Prep cost/unit, Subtotal, **Discount**, **Tax**, **Shipping** (S&H + donations), Order total, Purchased by (= logged-in user; editable), Email used, Subscription (§9), PO notes. Tax and Shipping are separate fields (Maria 2026-10-30).
 
 ### 6.3 Lines
+> **Amended 2026-11-01 (PO form polish, Maria's whiteboard):** the field is "SKU / UPC"; the product row (SKU / UPC · name · price · qty · units / pack) has one ↳ ASIN row per ASIN beneath it (ASIN type-ahead · title from AF · ASIN qty · sold as · ASIN units / pack · prep · notes); a bundle = two product rows in one outlined box with one ↳ ASIN row ("+ Add product to bundle"); a split = "+ Add ASIN". A fractional ASIN qty is red with "check qty or pack size" (saving allowed). The form is a full page, no modal; the ASIN picker is a type-ahead combobox (§6.4); Email used defaults per supplier (SPEC §22 "Suppliers"); the capture's qty is cross-checked against the subtotal (SPEC §22 "Capture PO"). SPEC §22 "New PO form — polish" is the current text.
+
 Retailer line as bought: product name, retailer SKU, Qty, **Units/pack** (retailer pack, e.g. 12), unit price, line total. Beneath, one or more ASIN rows (bundle = several retailer lines → one ASIN row; split = one retailer line → several ASIN rows; "+ Add ASIN to this line"). Per-line notes field. Per-line refund entries (§8.3) are added later from the PO editor, not the New PO form.
 
 ### 6.4 ASIN picker

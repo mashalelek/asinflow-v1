@@ -193,6 +193,7 @@ export async function enrichPrefill(query: QueryLike, capture: Capture, x: Prefi
   const checkQty = x.subtotal != null && x.lines.length > 0 && Math.abs(modelSum - x.subtotal) > 0.01;
   const visible = checkQty ? visibleQtys(capture) : new Set<number>();
   const hints: Record<string, string> = {};
+  const noAsin: number[] = [];
   for (let i = 0; i < x.lines.length; i++) {
     const l = x.lines[i];
     const rupp = l.unitsPerPack != null && l.unitsPerPack >= 1 ? String(l.unitsPerPack) : "1";
@@ -210,11 +211,12 @@ export async function enrichPrefill(query: QueryLike, capture: Capture, x: Prefi
       p.asin = top.asin; sources[`products.${i}.asin`] = "af";
       if (top.in_af && top.sold_as) { p.sold_as = top.sold_as as PoFormProduct["sold_as"]; p.units_per_pack = String(top.units_per_pack ?? 1); sources[`asin.${top.asin}`] = "af"; }
     } else if (guess) { p.asin = guess; sources[`products.${i}.asin`] = "model"; }
-    else warnings.push(`Line ${i + 1} "${l.productName.slice(0, 50)}": no ASIN found in AF — pick one`);
+    else noAsin.push(i + 1);
     p.asin_qty_per_product = yieldFromPacks(p.retailer_units_per_pack, p.units_per_pack, p.sold_as);
     products.push(p);
   }
   form.products = products;
+  if (noAsin.length) warnings.push(noAsin.length === 1 ? `Line ${noAsin[0]}: no ASIN found in AF — pick one` : `Lines ${noAsin.join(", ")}: no ASIN found in AF — pick one`);
   if (Object.keys(hints).length) prefill.hints = hints;
   if (x.subtotal != null && x.lines.length > 0 && Math.abs(r2(linesSum) - x.subtotal) > 0.01) warnings.push(`Lines add up to ${r2(linesSum).toFixed(2)}, the subtotal is ${x.subtotal.toFixed(2)}`);
   form.promos = x.promos.map((p, i) => { sources[`promos.${i}`] = "model"; return { type: p.confidence === "high" ? p.type : "", description: p.description, amount: m2(p.amount), percent: m2(p.percent), counts_toward_cogs: promoCountsByDefault(p.type) }; });
