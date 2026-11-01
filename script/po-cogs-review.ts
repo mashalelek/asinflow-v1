@@ -55,7 +55,7 @@ async function main() {
      WHERE p.source = 'sheet_import' ${has075 ? "AND p.cost_formula_version IS NULL" : ""} ORDER BY p.order_date DESC, p.order_id, pa.asin`)).rows;
   type Cand = { id: number; po_asin_id: string; supplier: string; order_id: string; order_date: string; asin: string; af_cost: number | null; af_qty: number | null; gc: number | null; sheet: SheetCogs; products: SheetProductRow[] };
   const cands: Cand[] = [];
-  let notInSheet = 0, answered = 0, match = 0, matchesSheetY = 0, uncomputable = 0;
+  let notInSheet = 0, answered = 0, match = 0, matchesSheetY = 0, uncomputable = 0, bothBlank = 0;
   for (const r of rows) {
     const cells = byRow.get(`${r.supplier}\u0000${r.order_id}\u0000${String(r.asin).toUpperCase()}`);
     if (!cells) { notInSheet++; continue; }
@@ -66,6 +66,8 @@ async function main() {
     }));
     const sheet = sheetCogsForAsin(products);
     if (isAnswered(String(r.order_id), String(r.asin))) { answered++; continue; }
+    // Both sides blank (AF NULL, the sheet's X and Y blank — typically a canceled-only row): nothing to review.
+    if (r.af_cost == null && sheet.computed == null && sheet.sheetY == null) { bothBlank++; continue; }
     if (sheet.computed == null) { uncomputable++; }
     else if (!differs(r.af_cost, sheet.computed)) { match++; continue; }
     if (sheet.computed == null && !differs(r.af_cost, sheet.sheetY)) { match++; continue; }
@@ -73,7 +75,7 @@ async function main() {
     const od = r.order_date instanceof Date ? r.order_date.toISOString().slice(0, 10) : String(r.order_date).slice(0, 10);
     cands.push({ id: cands.length + 1, po_asin_id: String(r.id), supplier: r.supplier, order_id: r.order_id, order_date: od, asin: String(r.asin).toUpperCase(), af_cost: r.af_cost, af_qty: r.qty, gc: r.gc, sheet, products });
   }
-  console.log(`COGS review against ${DB_TARGET}: ${rows.length} sheet-imported ASIN row(s); ${match} match the sheet's computed COGS (±2¢), ${answered} already answered by Maria (excluded), ${notInSheet} not in the sheet, ${uncomputable} not computable from the sheet rows (mixed S / missing X)`);
+  console.log(`COGS review against ${DB_TARGET}: ${rows.length} sheet-imported ASIN row(s); ${match} match the sheet's computed COGS (±2¢), ${answered} already answered by Maria (excluded), ${notInSheet} not in the sheet, ${bothBlank} blank on both sides (nothing to review), ${uncomputable} not computable from the sheet rows (mixed S / missing X)`);
   console.log(`  differ: ${cands.length} row(s) — of which ${matchesSheetY} equal the sheet's own col Y (the sheet's Y formula differs from Σ(X×L)÷N on that row)`);
   const outDir = arg("--out") ?? "docs";
   const ctx = (x: Cand) => `AF cost/unit ${x.af_cost ?? "NULL"} · AF ASIN qty ${x.af_qty ?? "?"} · GC% ${x.gc ?? 0} · sheet mode ${x.sheet.mode} · sheet ASIN qty ${x.sheet.asinQty ?? "?"} · Σ(X×L) ${x.sheet.productSum ?? "?"} · computed ${x.sheet.computed ?? "n/a"} · sheet Y ${x.sheet.sheetY ?? "blank"} · rows: ` +
