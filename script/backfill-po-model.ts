@@ -21,6 +21,7 @@
 //                 po_asins.paid_cost ← cost_per_unit (= COGS for imported rows, §7.1). Never touches cost_per_unit.
 // Needs DATABASE_URL; the sourcing stage also needs GOOGLE_SHEET_ID / GOOGLE_CREDENTIALS_PATH.
 import "./env";
+import { DB_TARGET } from "./env";
 import fs from "fs";
 import path from "path";
 import pg from "pg";
@@ -44,11 +45,10 @@ const asinCanceled = `COALESCE((SELECT bool_and(${lineCanceled}) FROM po_line_it
 async function main() {
   const url = process.env.DATABASE_URL;
   if (!url) throw new Error("DATABASE_URL not set");
-  const c = new pg.Client({ connectionString: url, ssl: /localhost|127\.0\.0\.1/.test(url) ? undefined : { rejectUnauthorized: false } });
+  const c = (client = new pg.Client({ connectionString: url, ssl: /localhost|127\.0\.0\.1/.test(url) ? undefined : { rejectUnauthorized: false } }));
   await c.connect();
   const q = (sql: string, params?: any[]) => c.query(sql, params);
-  const host = (() => { try { return new URL(url).host || "local"; } catch { return "?"; } })();
-  console.log(`${LIVE ? "LIVE" : "DRY RUN"} against ${host} · stages: ${Array.from(stages).join(", ")}`);
+  console.log(`${LIVE ? "LIVE" : "DRY RUN"} against ${DB_TARGET} · stages: ${Array.from(stages).join(", ")}`);
   const col = (name: string) => (await_ok(q(`SELECT 1 FROM information_schema.columns WHERE table_name = 'purchase_orders' AND column_name = $1`, [name])));
   // Pre-075 database (production before the deploy that applies 075): a DRY
   // RUN plans against the empty post-075 state — every new column reads NULL,
@@ -206,4 +206,7 @@ async function main() {
 }
 async function await_ok(p: Promise<pg.QueryResult>): Promise<boolean> { return ((await p).rowCount ?? 0) > 0; }
 
-main().catch((e) => { console.error("FATAL", e?.message ?? e); process.exitCode = 1; });
+// An error after connect must still close the client, or the open socket
+// keeps the process alive forever (the first --prod dry run, 2026-11-01).
+let client: pg.Client | undefined;
+main().catch((e) => { console.error("FATAL", e?.message ?? e); process.exitCode = 1; }).finally(() => client?.end().catch(() => {}));

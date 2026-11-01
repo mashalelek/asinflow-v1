@@ -14,6 +14,7 @@
 // database (the one call runs and the CSVs are written; the call is logged
 // in po_prefill_log only where the table exists).
 import "./env";
+import { DB_TARGET } from "./env";
 import fs from "fs";
 import path from "path";
 import pg from "pg";
@@ -30,7 +31,7 @@ const today = (() => { const d = new Date(); return `${d.getFullYear()}-${String
 async function main() {
   if (!aiAvailable()) throw new Error(AI_OFF_MESSAGE);
   const url = process.env.DATABASE_URL; if (!url) throw new Error("DATABASE_URL not set");
-  const c = new pg.Client({ connectionString: url, ssl: /localhost|127\.0\.0\.1/.test(url) ? undefined : { rejectUnauthorized: false } });
+  const c = (client = new pg.Client({ connectionString: url, ssl: /localhost|127\.0\.0\.1/.test(url) ? undefined : { rejectUnauthorized: false } }));
   await c.connect();
   const q = (sql: string, params?: any[]) => c.query(sql, params);
   const has075 = ((await q(`SELECT 1 FROM information_schema.tables WHERE table_name = 'po_promos'`)).rowCount ?? 0) > 0;
@@ -45,8 +46,9 @@ async function main() {
   const list = Array.from(items.values());
   console.log(`${LIVE ? "LIVE" : "DRY RUN"} · ${pos.length} PO(s) with a promo and no po_promos rows · ${list.length} distinct text(s) → one ${LIVE ? "" : "(dry-run) "}classification call`);
   const { results, usage } = await classifyPromos(list);
-  const logId = has075 ? await logPrefill(q, { user_id: null, kind: "backfill", retailer: null, ...usage, error: usage.schema_ok ? null : "schema failure" }) : null;
-  console.log(`  model ${usage.model} · ${usage.input_tokens} in / ${usage.output_tokens} out · ${usage.cost_estimate} · ${usage.duration_ms} ms · schema ${usage.schema_ok ? "ok" : "FAILED"} · po_prefill_log ${logId == null ? "not written (075 not applied)" : `#${logId}`}`);
+  const logId = has075 ? await logPrefill(q, { user_id: null, kind: "backfill", retailer: null, ...usage, error: usage.schema_ok ? null : `schema failure (stop_reason ${usage.stop_reason ?? "?"})` }) : null;
+  if (!usage.schema_ok) throw new Error(`classification failed (stop_reason ${usage.stop_reason ?? "?"}, ${usage.output_tokens} output tokens) — nothing planned`);
+  console.log(`  model ${usage.model} · ${usage.input_tokens} in / ${usage.output_tokens} out · ${usage.cost_estimate} · ${usage.duration_ms} ms · stop ${usage.stop_reason ?? "?"} · schema ${usage.schema_ok ? "ok" : "FAILED"} · po_prefill_log ${logId == null ? "not written (075 not applied)" : `#${logId}`}`);
   const byType: Record<string, number> = {}; let high = 0, low = 0, missing = 0;
   const review: unknown[][] = [["order_id", "supplier", "raw_text", "proposed_type", "proposed_description", "amount", "percent", "type (fill in: sale | coupon | rewards)"]];
   const plan: Array<{ po_id: string; type: string | null; description: string | null; amount: number | null; percent: number | null; confidence: string; raw: string }> = [];
@@ -74,4 +76,7 @@ async function main() {
     await q("COMMIT"); console.log(`\nCOMMIT — ${plan.length} po_promos row(s) inserted`);
   } catch (e) { await q("ROLLBACK").catch(() => {}); throw e; } finally { await c.end(); }
 }
-main().catch((e) => { console.error("FATAL", e?.message ?? e); process.exitCode = 1; });
+// An error after connect must still close the client, or the open socket
+// keeps the process alive forever (the first --prod dry run, 2026-11-01).
+let client: pg.Client | undefined;
+main().catch((e) => { console.error("FATAL", e?.message ?? e); process.exitCode = 1; }).finally(() => client?.end().catch(() => {}));

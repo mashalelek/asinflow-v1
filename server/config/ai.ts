@@ -13,6 +13,11 @@ import Anthropic from "@anthropic-ai/sdk";
 export const AI = {
   model: "claude-haiku-5-5",
   maxTokens: 16000,
+  /** The promo backfill's one batch call (server/promo-classify.ts): ~500
+   *  distinct texts ≈ 20K output tokens of JSON, so a higher ceiling, with
+   *  thinking off — the 16K ceiling was spent on thinking before the JSON
+   *  finished (production dry run 2026-11-01, stop_reason max_tokens). */
+  batchMaxTokens: 64000,
   effort: "low" as const,
   /** $ per million tokens — the ≤ 100K-token rate card (prompts are far smaller). */
   pricePerMTok: { input: 0.1, output: 0.5 },

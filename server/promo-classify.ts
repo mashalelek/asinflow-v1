@@ -31,23 +31,37 @@ export const PromoClassificationSchema = z.object({
 export type PromoClassification = z.infer<typeof PromoClassificationSchema>["items"][number];
 
 export interface PromoClassifyInput { id: number; text: string; supplier: string | null }
-export interface PromoClassifyUsage { model: string; input_tokens: number; output_tokens: number; cost_estimate: number; duration_ms: number; schema_ok: boolean; input_chars: number }
+export interface PromoClassifyUsage { model: string; input_tokens: number; output_tokens: number; cost_estimate: number; duration_ms: number; schema_ok: boolean; input_chars: number; stop_reason: string | null }
 export interface PromoClassifyDeps {
-  /** Test seam: the model call. Returns the parsed object (or null on a schema failure) and usage. */
-  call?: (system: string, user: string) => Promise<{ parsed: unknown; input_tokens: number; output_tokens: number }>;
+  /** Test seam: the model call. Returns the parsed object (or null when the text is not JSON) and usage. */
+  call?: (system: string, user: string) => Promise<{ parsed: unknown; input_tokens: number; output_tokens: number; stop_reason?: string | null }>;
 }
 
 export function promoUserMessage(items: readonly PromoClassifyInput[]): string {
   return `Classify these ${items.length} promotions. Return every id exactly once.\n` + items.map((i) => `${i.id}\t${i.supplier ?? "?"}\t${i.text.replace(/\s+/g, " ").trim()}`).join("\n");
 }
 
-async function defaultCall(system: string, user: string): Promise<{ parsed: unknown; input_tokens: number; output_tokens: number }> {
+// One streamed call (long output), thinking OFF — a rule lookup needs none, and
+// with adaptive thinking on the 16K ceiling was spent thinking before the JSON
+// finished (production dry run 2026-11-01: stop_reason max_tokens, 2K chars of
+// text). The events are accumulated by hand so a truncated reply still comes
+// back with its stop_reason and usage instead of an SDK parse exception.
+async function defaultCall(system: string, user: string): Promise<{ parsed: unknown; input_tokens: number; output_tokens: number; stop_reason: string | null }> {
   const client = anthropicClient();
-  const res = await client.messages.parse({
-    model: AI.model, max_tokens: AI.maxTokens, output_config: { effort: AI.effort, format: zodOutputFormat(PromoClassificationSchema) },
-    system, messages: [{ role: "user", content: user }],
+  const stream = await client.messages.create({
+    model: AI.model, max_tokens: AI.batchMaxTokens, thinking: { type: "disabled" },
+    output_config: { effort: AI.effort, format: zodOutputFormat(PromoClassificationSchema) },
+    system, messages: [{ role: "user", content: user }], stream: true,
   });
-  return { parsed: res.parsed_output ?? null, input_tokens: res.usage.input_tokens, output_tokens: res.usage.output_tokens };
+  let text = "", input_tokens = 0, output_tokens = 0, stop_reason: string | null = null;
+  for await (const ev of stream) {
+    if (ev.type === "message_start") input_tokens = ev.message.usage.input_tokens;
+    else if (ev.type === "content_block_delta" && ev.delta.type === "text_delta") text += ev.delta.text;
+    else if (ev.type === "message_delta") { stop_reason = ev.delta.stop_reason ?? stop_reason; output_tokens = ev.usage.output_tokens; }
+  }
+  let parsed: unknown = null;
+  try { parsed = JSON.parse(text); } catch { parsed = null; }
+  return { parsed, input_tokens, output_tokens, stop_reason };
 }
 
 /** One batch call; items the model did not return (or returned with an unknown id) come back absent — the caller treats them as low confidence. */
@@ -59,9 +73,12 @@ export async function classifyPromos(items: readonly PromoClassifyInput[], deps:
   const parsed = PromoClassificationSchema.safeParse(r.parsed);
   const results = new Map<number, PromoClassification>();
   const ids = new Set(items.map((i) => i.id));
-  if (parsed.success) for (const it of parsed.data.items) if (ids.has(it.id) && !results.has(it.id)) results.set(it.id, it);
+  const stop_reason = r.stop_reason ?? null;
+  // A reply cut off at max_tokens is never applied, even if its prefix parsed.
+  const ok = parsed.success && stop_reason !== "max_tokens";
+  if (ok) for (const it of parsed.data.items) if (ids.has(it.id) && !results.has(it.id)) results.set(it.id, it);
   return {
     results,
-    usage: { model: AI.model, input_tokens: r.input_tokens, output_tokens: r.output_tokens, cost_estimate: estimateCost(r.input_tokens, r.output_tokens), duration_ms: Date.now() - t0, schema_ok: parsed.success, input_chars: system.length + user.length },
+    usage: { model: AI.model, input_tokens: r.input_tokens, output_tokens: r.output_tokens, cost_estimate: estimateCost(r.input_tokens, r.output_tokens), duration_ms: Date.now() - t0, schema_ok: ok, input_chars: system.length + user.length, stop_reason },
   };
 }

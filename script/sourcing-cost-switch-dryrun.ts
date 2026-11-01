@@ -35,7 +35,7 @@ const local = (s: string) => { const [y, m, d] = s.split("-").map(Number); retur
 
 async function main() {
   const url = process.env.DATABASE_URL; if (!url) throw new Error("DATABASE_URL not set");
-  const c = new pg.Client({ connectionString: url, ssl: /localhost|127\.0\.0\.1/.test(url) ? undefined : { rejectUnauthorized: false } });
+  const c = (client = new pg.Client({ connectionString: url, ssl: /localhost|127\.0\.0\.1/.test(url) ? undefined : { rejectUnauthorized: false } }));
   await c.connect();
   const q = (sql: string, params?: any[]) => c.query(sql, params);
   const has075 = ((await q(`SELECT 1 FROM information_schema.columns WHERE table_name = 'purchase_orders' AND column_name = 'cost_formula_version'`)).rowCount ?? 0) > 0;
@@ -84,4 +84,7 @@ async function main() {
   console.log(`  list → ${f}`);
   await c.end();
 }
-main().catch((e) => { console.error("FATAL", e?.message ?? e); process.exitCode = 1; });
+// An error after connect must still close the client, or the open socket
+// keeps the process alive forever (the first --prod dry run, 2026-11-01).
+let client: pg.Client | undefined;
+main().catch((e) => { console.error("FATAL", e?.message ?? e); process.exitCode = 1; }).finally(() => client?.end().catch(() => {}));
