@@ -5341,10 +5341,14 @@ skipped). **No stored COGS / AQ / AR / Y value is ever recomputed.**
   `cost_per_unit` stays COGS (col Y) and feeds `actual_cogs`.
 - `asins.sold_as` / `asins.units_per_pack` — the ASIN-level pack fields the
   New PO form reads ("AF knows the ASIN") and its pack override writes. Backfilled
-  from the 2026 PO ASIN rows (sheet AX/AY as imported), non-canceled rows:
-  every row agrees → set; rows disagree, or no row has a value → left NULL and
-  listed in `docs/pack-size-gaps-<date>.csv` (ASIN, title, distinct values
-  with PO counts) for Maria to fill in. `asin_field_log` is the History for
+  (Maria 2026-11-01) from the sheet's **literal** Col AX/AY on every
+  sheet-imported PO ASIN row, newest first: a blank AX is no information,
+  never "individual" (the pre-2026-10-29 intake default, individual × 1, and
+  the pre-2026 yield-derived n-packs are set back to NULL on the `po_asins`
+  rows first — col T is a product-to-ASIN ratio, not a pack size); every row
+  with a value agrees → set; rows disagree → `docs/pack-size-mismatch-<date>.csv`
+  (each distinct pair with its PO numbers); no row has a value →
+  `docs/pack-size-gaps-<date>.csv`, both for Maria to fill in. `asin_field_log` is the History for
   ASIN-level fields (`po_edit_log` is PO-scoped).
 - `po_payments` — several per PO: `method` (card | gift_card | store_credit |
   paypal | other), `nickname`, `last4`, `amount` (NULL = not recorded),

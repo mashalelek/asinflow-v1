@@ -67,13 +67,15 @@ async function main() {
   fs.writeFileSync(f2, csv([["po_id", "raw_text", "type", "description", "amount", "percent", "confidence"], ...plan.map((x) => [x.po_id, x.raw, x.type ?? "", x.description ?? "", x.amount ?? "", x.percent ?? "", x.confidence])]));
   console.log(`  full plan → ${f2}`);
   if (!LIVE) { console.log("\nDry run — nothing inserted."); await c.end(); return; }
+  const count = async () => Number((await q(`SELECT COUNT(*)::int AS n FROM po_promos`)).rows[0].n);
+  console.log(`\nBEFORE: po_promos ${await count()}`);
   await q("BEGIN");
   try {
     for (const x of plan) {
       await q(`INSERT INTO po_promos (po_id, position, type, description, amount, percent, counts_toward_cogs, raw_text, confidence, source) VALUES ($1, 0, $2, $3, $4, $5, $6, $7, $8, 'backfill')`,
         [x.po_id, x.type, x.description, x.amount, x.percent, x.type ? promoCountsByDefault(x.type) : true, x.raw, x.confidence]);
     }
-    await q("COMMIT"); console.log(`\nCOMMIT — ${plan.length} po_promos row(s) inserted`);
+    await q("COMMIT"); console.log(`\nCOMMIT — ${plan.length} po_promos row(s) inserted`); console.log(`AFTER:  po_promos ${await count()}`);
   } catch (e) { await q("ROLLBACK").catch(() => {}); throw e; } finally { await c.end(); }
 }
 // An error after connect must still close the client, or the open socket

@@ -263,9 +263,25 @@ async function main() {
   }
 
   console.log(report.map((l) => (l.startsWith("  ") ? l : `\n${l}`)).join("\n"));
+  // Before / after counts of everything a live run writes (Maria 2026-11-01).
+  const counts = async () => {
+    const one = async (sql: string) => Number((await q(sql)).rows[0].n);
+    return {
+      purchased_by_user_id: await one(`SELECT COUNT(*)::int AS n FROM purchase_orders WHERE purchased_by_user_id IS NOT NULL`),
+      po_payments: await one(`SELECT COUNT(*)::int AS n FROM po_payments`),
+      po_line_refunds: await one(`SELECT COUNT(*)::int AS n FROM po_line_refunds`),
+      subscriptions: await one(`SELECT COUNT(*)::int AS n FROM subscriptions`),
+      po_asins_with_pack: await one(`SELECT COUNT(*)::int AS n FROM po_asins WHERE sold_as IS NOT NULL`),
+      asins_with_pack: await one(`SELECT COUNT(*)::int AS n FROM asins WHERE sold_as IS NOT NULL`),
+      po_asins_sourcing_cost: await one(`SELECT COUNT(*)::int AS n FROM po_asins WHERE sourcing_cost IS NOT NULL`),
+      po_asins_paid_cost: await one(`SELECT COUNT(*)::int AS n FROM po_asins WHERE paid_cost IS NOT NULL`),
+    };
+  };
+  const fmt = (c: Record<string, number>) => Object.entries(c).map(([k, v]) => `${k} ${v}`).join(" · ");
+  if (LIVE) console.log(`\nBEFORE: ${fmt(await counts())}`);
   if (!LIVE) { console.log(`\nDry run — nothing written. Re-run with --live to apply.`); await c.end(); return; }
   await q("BEGIN");
-  try { for (const w of writes) await w(); await q("COMMIT"); console.log("\nCOMMIT"); }
+  try { for (const w of writes) await w(); await q("COMMIT"); console.log("\nCOMMIT"); console.log(`AFTER:  ${fmt(await counts())}`); }
   catch (e) { await q("ROLLBACK").catch(() => {}); throw e; }
   finally { await c.end(); }
 }
