@@ -33,6 +33,8 @@ export const CaptureSchema = z.object({
   retailerHost: z.string().max(253),
   capturedAt: z.string().optional(),
   pages: z.array(CapturePageSchema).min(1).max(12),
+  // Extension v1.2 (SPEC §11): the SELECTED ship-to the captures showed — the checked address radio's street, or, when the pages are ambiguous (two selected options, two ship-to blocks), the candidates with street null.
+  shipTo: z.object({ street: z.string().max(200).nullable(), candidates: z.array(z.string().max(200)).max(6) }).optional(),
 });
 export type Capture = z.infer<typeof CaptureSchema>;
 
@@ -115,6 +117,18 @@ export function supplierForHost(host: string, suppliers: readonly string[], alia
   if (same.length === 1) return { supplier: same[0], known: true };
   return { supplier: h, known: false };
 }
+/** Pure (v1.2): the extension's selected ship-to beats the model's reading; ambiguous pages (two candidates of different kinds) leave Ships to blank with a warning. */
+export function resolveShipTo(modelStreet: string | null, ext: Capture["shipTo"] | undefined, s: { velocityStreet: string; homeStreets: readonly string[]; prepCost: number }): { ships_to: "velocity" | "home" | ""; prep: string; warning: string } {
+  if (ext && !ext.street && ext.candidates.length >= 2) {
+    const kinds = ext.candidates.map((c) => shipsToForStreet(c, s));
+    const first = kinds[0];
+    if (first.ships_to && kinds.every((k) => k.ships_to === first.ships_to)) return { ...first, warning: "" };
+    return { ships_to: "", prep: "", warning: `Two delivery addresses on the pages (${ext.candidates.join(" / ")}) — choose Ships to` };
+  }
+  const street = ext?.street ?? modelStreet;
+  const st = shipsToForStreet(street, s);
+  return { ...st, warning: st.ships_to ? "" : street ? `Ship-to "${street}" is neither Velocity nor Home — choose Ships to` : "No ship-to address found — choose Ships to" };
+}
 /** Pure: §4.4 ship-to street → ships_to / prep (the same settings the tracking router uses). */
 export function shipsToForStreet(street: string | null, s: { velocityStreet: string; homeStreets: readonly string[]; prepCost: number }): { ships_to: "velocity" | "home" | ""; prep: string } {
   const n = street ? normalizeStreet(street) : null;
@@ -181,9 +195,9 @@ export async function enrichPrefill(query: QueryLike, capture: Capture, x: Prefi
   if (!form.email_used) { const d = await defaultEmailForSupplier(query, sup.supplier); if (d.email) { form.email_used = d.email; sources.email_used = "af"; } }
   form.subscription = { present: x.subscription.present, frequency_weeks: x.subscription.frequencyWeeks == null ? "" : String(x.subscription.frequencyWeeks) };
   if (x.subscription.present) sources.subscription = "model";
-  const st = shipsToForStreet(x.shipToStreet, streets);
+  const st = resolveShipTo(x.shipToStreet, capture.shipTo, streets);
   if (st.ships_to) { form.ships_to = st.ships_to; sources.ships_to = "af"; sources.prep_cost = "af"; }
-  else warnings.push(x.shipToStreet ? `Ship-to "${x.shipToStreet}" is neither Velocity nor Home — choose Ships to` : "No ship-to address found — choose Ships to");
+  else warnings.push(st.warning);
 
   // Lines → products with ASIN candidates (§6.4: history, then title, then the model's guess).
   const products: PoFormProduct[] = [];

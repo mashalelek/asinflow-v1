@@ -1,5 +1,5 @@
 import { describe, it, expect, vi } from "vitest";
-import { CaptureSchema, PrefillSchema, extractPrefill, enrichPrefill, mergedPagesText, supplierForHost, shipsToForStreet, storePrefill, getPrefill, _clearPrefillCache, PREFILL_TTL_MS, visibleQtys, inferLineQty, QTY_INFERRED_HINT } from "./po-prefill";
+import { CaptureSchema, PrefillSchema, extractPrefill, enrichPrefill, mergedPagesText, supplierForHost, shipsToForStreet, resolveShipTo, storePrefill, getPrefill, _clearPrefillCache, PREFILL_TTL_MS, visibleQtys, inferLineQty, QTY_INFERRED_HINT } from "./po-prefill";
 
 vi.mock("./log", () => ({ log: () => {} }));
 
@@ -73,6 +73,30 @@ describe("enrichment (no AI)", () => {
     expect(out.prefill.sources).toMatchObject({ supplier: "af", order_id: "model", "products.0.price": "model", "products.0.asin": "af", "asin.B08BR4NC22": "af", "promos.0": "model", "payments.0": "model", ships_to: "af" });
     expect(out.prefill.warnings).toEqual(["Payments add up to 38.46, the order total is 40.00"]);
     expect(out.prefill).toMatchObject({ supplier: "michaels.com", pages: 2, captured_at: "2026-10-31T15:00:00Z", raw_text: null });
+  });
+  // Extension v1.2 (SPEC §11): the capture's SELECTED address rides along as `shipTo`; ambiguous pages leave Ships to blank.
+  describe("ship-to from the extension", () => {
+    const s = { velocityStreet: "805 grandy", homeStreets: ["65 rivercrest"], prepCost: 1 };
+    it("the selected street beats the model's reading; without one the model's street stands", () => {
+      expect(resolveShipTo("65 Rivercrest Dr", { street: "805 Grandy Ave", candidates: ["805 Grandy Ave"] }, s)).toEqual({ ships_to: "velocity", prep: "1.00", warning: "" });
+      expect(resolveShipTo("65 Rivercrest Dr", undefined, s)).toEqual({ ships_to: "home", prep: "0", warning: "" });
+      expect(resolveShipTo(null, undefined, s).warning).toBe("No ship-to address found — choose Ships to");
+    });
+    it("two candidates of different kinds → blank with both named; two candidates of one kind resolve", () => {
+      expect(resolveShipTo("805 Grandy Ave", { street: null, candidates: ["805 Grandy Ave", "65 Rivercrest Dr"] }, s)).toEqual({ ships_to: "", prep: "", warning: "Two delivery addresses on the pages (805 Grandy Ave / 65 Rivercrest Dr) — choose Ships to" });
+      expect(resolveShipTo(null, { street: null, candidates: ["805 Grandy Ave", "12 Elsewhere St"] }, s).ships_to).toBe("");
+      expect(resolveShipTo(null, { street: null, candidates: ["805 Grandy Ave", "805 Grandy Avenue"] }, s)).toMatchObject({ ships_to: "velocity", prep: "1.00" });
+    });
+    it("enrichPrefill: the payload's shipTo is optional (1.1 extensions send none) and an ambiguous one leaves ships_to blank with the warning", async () => {
+      const q = async (sql: string) => (/FROM settings WHERE key = ANY/.test(sql) ? { rows: [{ key: "prep_cost", value: 1 }], rowCount: 1 } : { rows: [], rowCount: 0 });
+      const cap = CaptureSchema.parse({ ...capture, shipTo: { street: null, candidates: ["805 Grandy Ave", "65 Rivercrest Dr"] } });
+      const out = await enrichPrefill(q, cap, { ...extraction, lines: [], payments: [], promos: [] }, null, { id: "", capturedAt: null });
+      expect(out.form.ships_to).toBeUndefined();
+      expect(out.prefill.sources.ships_to).toBeUndefined();
+      expect(out.prefill.warnings).toContain("Two delivery addresses on the pages (805 Grandy Ave / 65 Rivercrest Dr) — choose Ships to");
+      const plain = await enrichPrefill(q, capture, { ...extraction, lines: [], payments: [], promos: [] }, null, { id: "", capturedAt: null });
+      expect(plain.form.ships_to).toBe("velocity");
+    });
   });
   // Maria 2026-11-01: a Walmart cart line "12 × $7.97 = $95.64" came through as qty 1 (the model read "Multipack Quantity").
   describe("qty cross-check", () => {
