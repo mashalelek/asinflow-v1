@@ -2534,7 +2534,7 @@ is set — the runner is always on; only the **schedule** is gated.
   File keep their inline sheet/CSV step; only the onboarding Refresh they
   spawn is a queue job.
 
-### Chrome extension — Capture PO (patch `docs/claude_spec-patch-po-ai-prefill.md` §4, 2026-10-31; `chrome-extension/` v1.1.0)
+### Chrome extension — Capture PO (patch `docs/claude_spec-patch-po-ai-prefill.md` §4, 2026-10-31; `chrome-extension/` v1.2.0 — panel redesign 2026-11-01)
 
 The existing extension (the Amazon side-panel calculator, `content.js` on
 `/dp` pages) gains **Capture PO** in the same side panel: on any tab that is
@@ -2561,28 +2561,61 @@ not an Amazon product page the panel shows the capture UI instead of the
   the form must open prefilled; if it reports "Sign in", Chrome did not
   attach the `SameSite=Lax` cookie to the extension's request and the
   fallback is a short-lived token minted by the logged-in AF tab.
-- **Panel (§4.1).** Retailer (hostname; "new supplier" when AF has no PO for
-  it — `GET /api/pos/capture-config` lists AF's suppliers and the ship-to
-  streets), order # once a captured page shows one, a Home / Velocity badge
-  from the ship-to street (the same `tracking.velocity_street` /
-  `tracking.home_streets` the tracking router uses, §26), chips Cart ·
-  Shipping · Payment · Review (hints: a chip ticks when a page of that step
-  was captured; the latest capture of a step replaces the previous one),
-  **Capture this page**, the status line "N pages captured · card numbers
-  masked before anything leaves the browser", **Found so far** (regex-level:
-  qty lines, ship-to, subtotal / discount / tax / shipping / total, masked
-  payment lines — anything unclear is simply not shown), **Open in AF** and
-  **Clear**, caption "One AI call runs when you open it".
+- **Panel (§4.1; v1.2, Maria 2026-11-01).** Title line: retailer (hostname;
+  "new supplier — no PO in AF yet" when AF has no PO for it — `GET
+  /api/pos/capture-config` lists AF's suppliers and the ship-to streets)
+  **+ order #** once a captured page shows one, with a quiet **Velocity /
+  Home** badge from the selected ship-to street (the same
+  `tracking.velocity_street` / `tracking.home_streets` the tracking router
+  uses, §26). One **Capture this page** button, the line "N pages
+  captured", and under it "Still missing: Payment, Order" (the buckets
+  still empty). **Found so far** is six **data buckets** (`buckets.js`,
+  regex-level, no AI; the page chips Cart · Shipping · Payment · Review and
+  the "N qty lines" counter — which counted every "Qty" string on the page,
+  recommendation strips included — are gone), each ✓ when filled, "—" when
+  not: **Products** (one line per product actually parsed: qty × name ·
+  SKU / UPC · price; the count in the header), **Shipping** (the SELECTED
+  address → "Velocity · 805 Grandy Ave" / "Home · …" / "Unknown: <street>";
+  when the pages are ambiguous — two checked address options, two ship-to
+  blocks — both are shown and the form's Ships to stays blank), **Payment**
+  (the checked card's nickname + last 4, gift cards + amounts), **Totals**
+  (subtotal, discount, tax, shipping, total), **Promos** (codes / sales
+  applied), **Order** (order #, date, subscription on/off + frequency —
+  the subscription from any page; # and date usually only from the
+  confirmation). Every capture fills whatever buckets it can; the
+  background merges **newest value wins per field** — nothing replaced
+  wholesale, nothing dropped (a product / card / promo once seen stays; a
+  page without a value never clears it). **Open in AF** is enabled once
+  Products and Totals are filled (the rest is optional); **Clear**;
+  caption "One AI call runs when you open it · card numbers are masked
+  before anything leaves the browser". **Per tab:** the record lives under
+  `capture:<tabId>` (`chrome.storage.session`); the panel shows the active
+  tab's capture and a thin line under the header lists the other tabs with
+  one in progress ("Also capturing: michaels.com (2 pages)"); switching
+  tabs switches the panel. **Look:** warm stone per §7 — header `#292524`
+  with the AF rising-bars mark (the favicon's) and the connection state as
+  plain text on the right ("Connected" / "Offline — check server URL in
+  options"; no status dots); body `#F5F4EF`, dark `#1C1917` / card
+  `#292524` by `prefers-color-scheme`; primary buttons `#44403C` →
+  `#292524`, secondary neutral outline; values in primary text, labels
+  secondary, tertiary never for a value; Inter via the system stack,
+  13 px base, 16 px gutters, 44 px buttons. The toolbar icons are the same
+  mark. The options page (server URL, Test connection, the Amazon
+  auto-open toggle the background still reads) shares the palette.
 - **Capture (§4.2).** "Capture this page" injects `scrub.js` + `capture.js`
   into the active tab (`chrome.scripting`; a site not yet allowed asks for
   the host permission once — `optional_host_permissions`). The page gives
   `document.title`, the URL without its query string, the rendered text
   (`innerText` of body — hidden elements excluded) and the current values of
-  visible `input` / `select` / `textarea` elements with their labels;
+  visible `input` / `select` / `textarea` elements with their labels; a
+  checked radio / checkbox gives the text of the option it sits in as a
+  `selected: <label>` field (v1.2 — the SELECTED shipping address, payment
+  method and subscription choice, not the first block on the page);
   password inputs are never read; never raw HTML, never a screenshot (the
   screenshot fallback is not in v1). Stored in `chrome.storage.session`
-  under the tab id, one entry per step; cleared on Clear, on a successful
-  Open in AF, or when the tab closes. A page under ~200 characters of text
+  under the tab id — one page entry per step (the latest capture of a step
+  replaces the previous one) plus the six buckets; cleared on Clear, on a
+  successful Open in AF, or when the tab closes. A page under ~200 characters of text
   gets a hint to capture the review page instead.
 - **Scrubbing (§4.3, `scrub.js`, inside the page before anything leaves the
   browser):** any run of 13–19 digits (spaces / dashes allowed) that passes
@@ -2593,8 +2626,13 @@ not an Amazon product page the panel shows the capture UI instead of the
   Walmart, Michaels, Bed Bath & Beyond, Lakeshore and Webstaurant with
   public test card numbers only (`server/__fixtures__/capture-pages/`,
   `server/extension-scrub.test.ts`).
-- **Open in AF (§4.5).** `POST /api/pos/prefill` with the scrubbed pages →
-  the server's one AI call (§22 "Capture PO") → a new tab on
+- **Open in AF (§4.5).** `POST /api/pos/prefill` with the scrubbed pages
+  (all captured pages, as before) and, since v1.2, `shipTo` — the selected
+  street, or the ambiguous candidates with `street: null`, which the server
+  turns into a blank Ships to plus the warning "Two delivery addresses on
+  the pages (…) — choose Ships to" (`resolveShipTo`; a selected street
+  beats the model's reading) → the server's one AI call (§22 "Capture PO")
+  → a new tab on
   `/pos/new?prefill=<id>`; the capture is cleared on success. If AsinFlow is
   unreachable, is not signed in, or AI is off (`ANTHROPIC_API_KEY`), the
   panel says so and keeps the capture.
@@ -5460,7 +5498,9 @@ IS NULL; Maria 2026-10-31):
   the log's `error`); the fixed run: 11.8K in / 26.4K out, $0.014, 72 s.
 - **`POST /api/pos/prefill`** (session required, like every `/api` route):
   body `{ retailerHost, capturedAt?, pages: [{step, url, title, text,
-  fields}] }`, already scrubbed by the extension (§11 "Capture PO"). One
+  fields}], shipTo?: { street, candidates } }` (`shipTo` since extension
+  v1.2: the selected ship-to, or the ambiguous candidates — §11), already
+  scrubbed by the extension (§11 "Capture PO"). One
   `messages.parse` call with a zod output format (`PrefillSchema`:
   retailer, order id / date, lines with product name / SKU / qty / retailer
   units per pack / unit price paid / line total / ASIN guess, subtotal /

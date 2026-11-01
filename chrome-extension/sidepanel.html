@@ -7,41 +7,46 @@
   <link rel="stylesheet" href="sidepanel.css">
 </head>
 <body>
-  <!-- Connection Status Bar -->
-  <div id="status-bar" class="status-bar disconnected">
-    <span class="status-dot"></span>
-    <span id="status-text">Checking connection...</span>
-  </div>
+  <!-- Header: the AF mark, the connection state as plain text (no status dots — SPEC §7) -->
+  <header id="status-bar" class="af-header">
+    <div class="af-brand">
+      <svg class="af-mark" viewBox="0 0 32 32" width="22" height="22" aria-hidden="true"><rect width="32" height="32" rx="7" fill="#44403C"/><rect x="7" y="18" width="4" height="7" rx="1" fill="#A8A29E"/><rect x="14" y="13" width="4" height="12" rx="1" fill="#D6D3D1"/><rect x="21" y="7" width="4" height="18" rx="1" fill="#F5F5F4"/></svg>
+      <span>AsinFlow</span>
+    </div>
+    <span id="status-text" class="af-conn">Checking connection…</span>
+  </header>
+  <!-- v1.2: captures are per tab; the other tabs with a capture in progress -->
+  <div id="also-capturing" class="also-line" style="display:none;"></div>
 
   <!-- Empty State (Amazon, no product yet) -->
   <div id="empty-state" class="empty-state">
-    <div class="empty-icon">&#128269;</div>
     <p>Navigate to an Amazon product page to get started</p>
   </div>
 
-  <!-- Capture PO (any retailer checkout; patch po-ai-prefill §4.1) -->
+  <!-- Capture PO (any retailer checkout; SPEC §11 "Chrome extension — Capture PO", v1.2 buckets) -->
   <div id="capture-content" class="capture" style="display:none;">
-    <div class="capture-header">
-      <div class="capture-retailer"><span id="capture-retailer">—</span><span id="capture-new-supplier" class="capture-note" style="display:none;">new supplier</span></div>
-      <div class="capture-meta"><span id="capture-order">Order # not seen yet</span><span id="capture-shipto-badge" class="capture-badge" style="display:none;"></span></div>
+    <div class="capture-title">
+      <div class="capture-title-main">
+        <span id="capture-retailer" class="capture-retailer">—</span>
+        <span id="capture-order" class="capture-order"></span>
+        <span id="capture-shipto-badge" class="badge" style="display:none;"></span>
+      </div>
+      <span id="capture-new-supplier" class="capture-note" style="display:none;">new supplier — no PO in AF yet</span>
     </div>
-    <div class="capture-chips" id="capture-chips">
-      <span class="capture-chip" data-step="cart">Cart</span>
-      <span class="capture-chip" data-step="shipping">Shipping</span>
-      <span class="capture-chip" data-step="payment">Payment</span>
-      <span class="capture-chip" data-step="review">Review</span>
+    <button id="capture-btn" class="btn btn-primary">Capture this page</button>
+    <div class="capture-lines">
+      <div id="capture-status" class="capture-status">0 pages captured</div>
+      <div id="capture-missing" class="capture-missing"></div>
     </div>
-    <button id="capture-btn" class="capture-btn">Capture this page</button>
-    <div id="capture-status" class="capture-status">0 pages captured · card numbers masked before anything leaves the browser</div>
     <div class="capture-found">
-      <div class="capture-found-title">Found so far</div>
-      <dl id="capture-found" class="capture-found-list"><dd class="capture-muted">Nothing captured yet</dd></dl>
+      <div class="section-title">Found so far</div>
+      <div id="capture-buckets" class="buckets"></div>
     </div>
     <div class="capture-footer">
-      <button id="capture-open-btn" class="capture-open" disabled>Open in AF</button>
-      <button id="capture-clear-btn" class="capture-clear" disabled>Clear</button>
+      <button id="capture-open-btn" class="btn btn-primary" disabled>Open in AF</button>
+      <button id="capture-clear-btn" class="btn btn-secondary" disabled>Clear</button>
     </div>
-    <div class="capture-caption">One AI call runs when you open it</div>
+    <div class="capture-caption">One AI call runs when you open it · card numbers are masked before anything leaves the browser</div>
     <div id="capture-feedback" class="capture-feedback" style="display:none;"></div>
   </div>
 
@@ -159,6 +164,7 @@
     </div>
   </div>
 
+  <script src="buckets.js"></script>
   <script src="fee-engine/feeEngine.js"></script>
   <script src="sidepanel.js"></script>
   <script src="capture-panel.js"></script>

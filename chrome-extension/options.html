@@ -5,132 +5,59 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>AsinFlow Extension Settings</title>
   <style>
+    /* Warm stone (SPEC §7), the side panel's palette. */
+    :root { --bg: #F5F4EF; --card: #FFFFFF; --controls: #E7E5E4; --hair: #E7E5E4; --text: #1C1917; --text-2: #78716C; --btn: #44403C; --btn-hover: #292524; --btn-text: #F5F5F4; --outline: #D6D3D1; --input: #FFFFFF; --input-border: #D6D3D1; --focus: #78716C; --green: #15803D; --green-bg: #DCFCE7; --red: #B91C1C; --red-bg: #FEE2E2; }
+    @media (prefers-color-scheme: dark) { :root { --bg: #1C1917; --card: #292524; --controls: #292524; --hair: #44403C; --text: #F5F5F4; --text-2: #A8A29E; --btn: #44403C; --btn-hover: #57534E; --outline: #57534E; --input: #1C1917; --input-border: #57534E; --focus: #A8A29E; --green: #4ADE80; --green-bg: #14532D; --red: #F87171; --red-bg: #7F1D1D; } }
     * { margin: 0; padding: 0; box-sizing: border-box; }
-    body {
-      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
-      background: #1a1a2e;
-      color: #e0e0e0;
-      padding: 32px;
-      max-width: 500px;
-      margin: 0 auto;
-    }
-    h1 {
-      font-size: 20px;
-      margin-bottom: 24px;
-      color: #00b4d8;
-    }
-    .form-group {
-      margin-bottom: 16px;
-    }
-    label {
-      display: block;
-      font-size: 12px;
-      font-weight: 600;
-      color: #94a3b8;
-      margin-bottom: 4px;
-      text-transform: uppercase;
-      letter-spacing: 0.5px;
-    }
-    input[type="text"], input[type="url"] {
-      width: 100%;
-      padding: 8px 12px;
-      background: #0f3460;
-      border: 1px solid #1e40af;
-      border-radius: 6px;
-      color: #e0e0e0;
-      font-size: 14px;
-      outline: none;
-    }
-    input:focus {
-      border-color: #0ea5e9;
-    }
-    .checkbox-group {
-      display: flex;
-      align-items: center;
-      gap: 8px;
-    }
-    .checkbox-group input[type="checkbox"] {
-      width: 16px;
-      height: 16px;
-      accent-color: #0ea5e9;
-    }
-    .checkbox-group label {
-      text-transform: none;
-      font-size: 14px;
-      color: #e0e0e0;
-      margin-bottom: 0;
-    }
-    .btn-row {
-      display: flex;
-      gap: 8px;
-      margin-top: 24px;
-    }
-    button {
-      padding: 8px 16px;
-      border: none;
-      border-radius: 6px;
-      font-size: 14px;
-      font-weight: 600;
-      cursor: pointer;
-      transition: background 0.2s;
-    }
-    .btn-primary {
-      background: #0ea5e9;
-      color: #fff;
-    }
-    .btn-primary:hover { background: #0284c7; }
-    .btn-secondary {
-      background: #334155;
-      color: #e0e0e0;
-    }
-    .btn-secondary:hover { background: #475569; }
-    #test-result {
-      margin-top: 12px;
-      font-size: 13px;
-      padding: 8px 12px;
-      border-radius: 6px;
-      display: none;
-    }
-    #test-result.success {
-      background: rgba(74, 222, 128, 0.15);
-      color: #4ade80;
-      display: block;
-    }
-    #test-result.error {
-      background: rgba(248, 113, 113, 0.15);
-      color: #f87171;
-      display: block;
-    }
-    #save-result {
-      margin-top: 8px;
-      font-size: 13px;
-      color: #4ade80;
-      display: none;
-    }
+    body { font-family: Inter, -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; background: var(--bg); color: var(--text); font-size: 13px; line-height: 1.45; padding: 32px 16px; max-width: 520px; margin: 0 auto; }
+    h1 { display: flex; align-items: center; gap: 10px; font-size: 18px; font-weight: 600; letter-spacing: -0.01em; margin-bottom: 20px; }
+    .card { background: var(--card); border-radius: 10px; padding: 16px; }
+    .form-group { margin-bottom: 16px; }
+    label { display: block; font-size: 11px; font-weight: 600; color: var(--text-2); margin-bottom: 6px; text-transform: uppercase; letter-spacing: 0.05em; }
+    input[type="text"], input[type="url"] { width: 100%; min-height: 44px; padding: 10px 12px; background: var(--input); border: 1px solid var(--input-border); border-radius: 8px; color: var(--text); font: inherit; font-size: 14px; outline: none; }
+    input:focus { border-color: var(--focus); }
+    .hint { font-size: 12px; color: var(--text-2); margin-top: 6px; }
+    .checkbox-group { display: flex; align-items: center; gap: 10px; min-height: 44px; }
+    .checkbox-group input[type="checkbox"] { width: 16px; height: 16px; accent-color: var(--btn); }
+    .checkbox-group label { text-transform: none; font-size: 13px; font-weight: 500; color: var(--text); margin: 0; letter-spacing: 0; }
+    .btn-row { display: flex; gap: 8px; margin-top: 20px; }
+    button { min-height: 44px; padding: 10px 16px; border-radius: 8px; font: inherit; font-size: 13px; font-weight: 600; cursor: pointer; border: 1px solid transparent; transition: background 0.15s; }
+    .btn-primary { background: var(--btn); color: var(--btn-text); flex: 1; }
+    .btn-primary:hover { background: var(--btn-hover); }
+    .btn-secondary { background: transparent; color: var(--text); border-color: var(--outline); }
+    .btn-secondary:hover { background: var(--controls); }
+    button:disabled { opacity: 0.45; cursor: default; }
+    #test-result { margin-top: 12px; font-size: 13px; padding: 10px 12px; border-radius: 8px; display: none; color: var(--text); }
+    #test-result.success { background: var(--green-bg); color: var(--green); display: block; }
+    #test-result.error { background: var(--red-bg); color: var(--red); display: block; }
+    #save-result { margin-top: 8px; font-size: 13px; color: var(--green); display: none; }
   </style>
 </head>
 <body>
-  <h1>AsinFlow Settings</h1>
+  <h1><svg viewBox="0 0 32 32" width="24" height="24" aria-hidden="true"><rect width="32" height="32" rx="7" fill="#292524"/><rect x="7" y="18" width="4" height="7" rx="1" fill="#A8A29E"/><rect x="14" y="13" width="4" height="12" rx="1" fill="#D6D3D1"/><rect x="21" y="7" width="4" height="18" rx="1" fill="#F5F5F4"/></svg>AsinFlow extension</h1>
 
-  <div class="form-group">
-    <label for="server-url">AsinFlow Server URL</label>
-    <input type="url" id="server-url" placeholder="http://localhost:3000">
-  </div>
-
-  <div class="form-group">
-    <div class="checkbox-group">
-      <input type="checkbox" id="auto-open" checked>
-      <label for="auto-open">Auto-open side panel on Amazon product pages</label>
+  <div class="card">
+    <div class="form-group">
+      <label for="server-url">AsinFlow server URL</label>
+      <input type="url" id="server-url" placeholder="http://localhost:3000">
+      <div class="hint">Sign in to AsinFlow in a normal tab first — the extension uses that session.</div>
     </div>
-  </div>
 
-  <div class="btn-row">
-    <button class="btn-primary" id="save-btn">Save Settings</button>
-    <button class="btn-secondary" id="test-btn">Test Connection</button>
-  </div>
+    <div class="form-group">
+      <div class="checkbox-group">
+        <input type="checkbox" id="auto-open" checked>
+        <label for="auto-open">Auto-open the side panel on Amazon product pages</label>
+      </div>
+    </div>
 
-  <div id="test-result"></div>
-  <div id="save-result">Settings saved!</div>
+    <div class="btn-row">
+      <button class="btn-primary" id="save-btn">Save</button>
+      <button class="btn-secondary" id="test-btn">Test connection</button>
+    </div>
+
+    <div id="test-result"></div>
+    <div id="save-result">Saved</div>
+  </div>
 
   <script src="options.js"></script>
 </body>

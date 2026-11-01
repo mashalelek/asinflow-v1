@@ -59,20 +59,20 @@ testBtn.addEventListener("click", async () => {
   testResult.className = "";
   testResult.style.display = "none";
   testBtn.disabled = true;
-  testBtn.textContent = "Testing...";
+  testBtn.textContent = "Testing…";
   const perm = await ensureHostPermission(serverUrl);
   if (!perm.ok) {
-    testBtn.disabled = false; testBtn.textContent = "Test Connection";
+    testBtn.disabled = false; testBtn.textContent = "Test connection";
     testResult.textContent = "Connection failed: " + perm.message; testResult.className = "error"; testResult.style.display = "block";
     return;
   }
 
   chrome.runtime.sendMessage({ type: "TEST_CONNECTION", serverUrl }, (response) => {
     testBtn.disabled = false;
-    testBtn.textContent = "Test Connection";
+    testBtn.textContent = "Test connection";
 
     if (response?.success) {
-      testResult.textContent = "Connected to AsinFlow server!";
+      testResult.textContent = "Connected";
       testResult.className = "success";
     } else {
       testResult.textContent = "Connection failed: " + (response?.message || "Unknown error");

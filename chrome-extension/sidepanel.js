@@ -220,9 +220,10 @@
     });
   }
 
+  // v1.2: a plain text line in the header, no status dot (SPEC §7).
   function updateConnectionStatus(connected) {
-    statusBar.className = "status-bar " + (connected ? "connected" : "disconnected");
-    statusText.textContent = connected ? "Connected to AsinFlow" : "AsinFlow offline";
+    statusBar.classList.toggle("connected", !!connected);
+    statusText.textContent = connected ? "Connected" : "Offline — check server URL in options";
   }
 
   // ── Product Display ───────────────────────────────────────────────────
