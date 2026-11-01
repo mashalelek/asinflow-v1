@@ -228,7 +228,7 @@ export function PoProductsTable({ poId, asins, onChanged }: { poId: string; asin
         <table className="w-full border-collapse text-sm" data-testid="po-products-table">
           <thead>
             <tr className="table-header-stone">
-              <th className={th()}>Product Name</th><th className={th()}>Supplier SKU / UPC</th><th className={th(true)}>Price</th><th className={th(true)}>Item Discount</th>
+              <th className={th()}>Product Name</th><th className={th()}>SKU / UPC</th><th className={th(true)}>Price</th><th className={th(true)}>Item Discount</th>
               <th className={th(true)}>Ordered</th><th className={th(true)}>Received</th><th className={th(true)}>Canceled</th><th className={th(true)}>Returned</th>
               <th className={th(true)}>Yield</th><th className={th(true)}>At Prep Center</th><th className={th(true)}>At CQG Warehouse</th><th className={th(true)}>Lost/damaged by us</th>
               <th className={th(true)}>Final</th><th className={th()}>ASIN</th><th className={th()}></th>
@@ -290,7 +290,7 @@ function AddProductRow({ poId, onAdded }: { poId: string; onAdded: () => void })
   );
   return (
     <div className="flex flex-wrap items-center gap-2" data-testid="po-add-line">
-      {f("product_name", "Product name", "w-64")}{f("supplier_sku", "Supplier SKU", "w-32")}{f("price", "Price", "w-20")}{f("qty_ordered", "Qty", "w-16")}
+      {f("product_name", "Product name", "w-64")}{f("supplier_sku", "SKU / UPC", "w-32")}{f("price", "Price", "w-20")}{f("qty_ordered", "Qty", "w-16")}
       {f("asin", "ASIN", "w-28")}{f("asin_qty_per_product", "Yield", "w-16")}
       <Button size="sm" variant="outline" onClick={add} disabled={busy} data-testid="button-add-line"><Plus className="h-3.5 w-3.5 mr-1" /> Add product</Button>
       {err && <span className="text-xs text-destructive" data-testid="add-line-error">{err}</span>}

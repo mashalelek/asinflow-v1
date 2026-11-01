@@ -691,7 +691,7 @@ export const ALL_COLUMNS: ColumnDef[] = [
   // DERIVED domain of this same value (cleanBuyLink + extractDomain, §14) —
   // one stored field, two columns, one writer (BuyLinkEditor).
   { id: "buyLink", label: "Buy Link", defaultVisible: false, align: "left", group: "description" },
-  { id: "supplierSku", label: "Supplier SKU", defaultVisible: false, align: "left", group: "description" },
+  { id: "supplierSku", label: "SKU / UPC", defaultVisible: false, align: "left", group: "description" },
   // Group 2 — Stock
   { id: "stock", label: "Stock", defaultVisible: true, align: "right", group: "stock" },
   { id: "availableFba", label: "Available (FBA)", defaultVisible: false, align: "right", group: "stock" },

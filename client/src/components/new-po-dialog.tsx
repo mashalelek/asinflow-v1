@@ -356,7 +356,7 @@ export function NewPoDialog({ open, onOpenChange, onCreated, prefill }: { open: 
           <div className="overflow-x-auto rounded-md" style={{ border: "0.5px solid hsl(var(--border))" }}>
             <table className="w-full border-collapse text-sm" data-testid="new-po-products">
               <thead><tr className="bg-muted/40">
-                <th className={th}>Product name</th><th className={th}>Retailer SKU</th><th className={th}>Price</th><th className={th}>Qty</th><th className={th} title="The retailer's pack — a 12-count is 12">Units / pack</th>
+                <th className={th}>Product name</th><th className={th}>SKU / UPC</th><th className={th}>Price</th><th className={th}>Qty</th><th className={th} title="The retailer's pack — a 12-count is 12">Units / pack</th>
                 <th className={th}>ASIN</th><th className={th} title="ASIN qty = qty × retailer units ÷ ASIN units per pack">ASIN qty</th><th className={th}>Sold as</th><th className={th}>ASIN units / pack</th><th className={th}>Prep</th><th className={th}>Notes</th><th className={th}></th>
               </tr></thead>
               <tbody>

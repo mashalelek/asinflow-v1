@@ -283,7 +283,7 @@ representations of the same logical "narrow to specific ASIN(s)" intent.
 
 ### Six groups (canonical order)
 
-1. **Description** — Product, Category, Brand, Supplier, Buy Link, Supplier SKU
+1. **Description** — Product, Category, Brand, Supplier, Buy Link, SKU / UPC
 2. **Stock** — Stock, Available (FBA), On Order, At Prep, **FBA Stock**,
    Reserved, Sent to FBA, Days Left
 3. **Actuals** — Actual COGS, Actual Prep Cost, Actual Units Sold, Refunds,
@@ -338,7 +338,7 @@ absence message (the 2026-09-09 poisoned-cell incident, §14).
 ### Buy Link column (2026-10-03)
 
 The full `asins.buy_link` URL as its own Description-group column, sitting
-between Supplier and Supplier SKU. Renders as a clickable link
+between Supplier and SKU / UPC. Renders as a clickable link
 (`target="_blank"`, `rel="noopener noreferrer"`) truncated at 30 chars with
 the value on hover — the same truncate-with-tooltip interaction as Notes and
 Promos.
@@ -388,10 +388,10 @@ aliases:
   `prepCost`) blocks that. Renaming the headers is what made this reachable;
   before it, both columns read "COGS" and the first one won regardless.
 
-### Supplier SKU column (2026-08-05)
+### SKU / UPC column (2026-08-05; labeled "Supplier SKU" until 2026-11-01)
 
 The supplier's own catalog/item number — NEVER from Amazon, unrelated to
-`primary_sku` / `asin_skus`. Labeled "Supplier SKU" everywhere. Lives on both
+`primary_sku` / `asin_skus`. Labeled **"SKU / UPC"** everywhere since 2026-11-01 (Maria: ONE name for the field — ASIN table column, Bulk Calc upload mapper, inline editor, exports, and the PO line field in the New PO form / PO editor / expanded view; the old "Supplier SKU" / "Retailer SKU" labels are gone; the DB columns stay `supplier_sku`). Lives on both
 `asins` and `bulk_list_asins` (migration 025). Sources: CSV upload (mapper
 alias, both upload paths) or manual inline edit; analyze never writes it
 (§14). `defaultVisible: false` — not in any main-page preset by default.
@@ -4908,7 +4908,7 @@ ever wired to a live call site, it must remain unwired on this page.
   behind an open dialog is invisible and reads as a silent no-op.
 - COGS: CSV column or manual inline edit. `estimated_cogs_source` is `'csv'`
   or `'manual'` only.
-- Supplier SKU: CSV column (mapper alias) or manual inline edit — same
+- SKU / UPC (`supplier_sku`): CSV column (mapper alias) or manual inline edit — same
   user-controlled contract as COGS (§14); the bulk sink never writes it.
 - Buy link / Supplier (2026-09-04): CSV `buyLink` column (aliases incl.
   "source url") or inline edit of the URL — supplier is ALWAYS derived via
@@ -5022,7 +5022,7 @@ That is the isolation working, not a sync bug.
 Subset of `COLUMN_GROUPS`:
 
 - **Description** — Product, Category, Brand, Supplier (domain linked to
-  buy_link, populated since 2026-09-04; editable via the URL), Supplier SKU
+  buy_link, populated since 2026-09-04; editable via the URL), SKU / UPC
 - **Estimates** — full group
 - **Sellers** — full group
 - **Additional info** — Tags, Promos, Meltable, Hazmat, Suppressed, Date
@@ -5169,7 +5169,7 @@ it is reachable only from an explicit user action:
 
 Per promoted ASIN, one transaction: a new `asins` row (status `active`)
 plus its `asin_estimates` row, carrying the bulk row's user-controlled
-fields (buy link/supplier, supplier SKU, est. COGS + source, notes,
+fields (buy link/supplier, SKU / UPC, est. COGS + source, notes,
 promos, tags — missing tag names created ungrouped, matched
 case-insensitively, existing tags never modified; tag creation runs
 AFTER the insert commits, in the same per-ASIN unit of work, and a tag
@@ -5239,7 +5239,7 @@ fields are how the pages drifted. A test pins the component/key sharing
 and that the disabled set is exactly {showParked, showDead, resetCogs}.
 
 Export CSV downloads `bulk-<listname>.csv` with the visible §21 column set —
-including Supplier SKU — honoring the checkbox selection (above).
+including SKU / UPC — honoring the checkbox selection (above).
 
 Absent: Add to SC, Sync PO, Push to Aura, Sync Inventory, Sync Sales,
 Sync Sourcing, Export SB COGS, Archive, Buy List.
@@ -5298,7 +5298,7 @@ is Phase 2 (below).
   (`ON DELETE SET NULL`). Carries price, per-item discount, qtys
   (`qty_ordered`, `qty_received`, `qty_canceled`, `qty_returned`,
   generated `final_qty` — migration 030, below), `asin_qty_per_product`
-  (yield), `adjusted_product_cost` snapshot, Supplier SKU / UPC, notes.
+  (yield), `adjusted_product_cost` snapshot, SKU / UPC, notes.
 - **Migration 056 (2026-10-16):** `po_asins` gains six ASIN-quantity
   columns, `numeric(10,2) NULL` — `qty_shipped_supplier`, `qty_at_prep`,
   `qty_at_warehouse`, `qty_lost_damaged_us`, `qty_shipped_fba`,
@@ -5826,7 +5826,7 @@ returns the plan with nothing written.
   the POs list and PO Details dropped "Units Received" (it was never
   maintained and means nothing on a Velocity-shipped PO).
 - **Update (sheet wins):** every header field the importer reads, every
-  line field (product, supplier SKU, price, Col L ordered, Col M received,
+  line field (product, SKU / UPC, price, Col L ordered, Col M received,
   Col R returned, Col N ASIN qty, Col T yield, Col X/Y costs, prep,
   sold_as / units_per_pack, loss qty/amount, Col S → `po_asins.unique_products`;
   a blank Col AX on a 2026 row is NULL — not filled in, never read as
@@ -6139,7 +6139,7 @@ reconstructed (those POs are Closed from the sheet).
   sheet's free-text status, imported verbatim; see "Action Items".)
 - **SKU labels are never ambiguous:** column headers read **"Amazon SKU"**
   (ours, ASIN-level; amber "No SKU — create offer first" warning when NULL)
-  and **"Supplier SKU / UPC"** (theirs, product-level). Component rows under
+  and **"SKU / UPC"** (theirs, product-level; labeled "Supplier SKU / UPC" until 2026-11-01). Component rows under
   an expander show a muted dash for Amazon SKU.
 - **All money renders neutral** — no red/green on any money field (Discount
   and Refund included). `$0.00` renders muted. NULL money renders a muted
@@ -6168,7 +6168,7 @@ replaces it. Migration 061 adds `po_edit_log`, `deleted_pos` and
   are intentional), order date, subtotal, tax, S&H + donations, discount,
   refund, order total, payment method, weighted GC %, cashback site / %,
   promo, purchased by, notes; (supplier, order #) stays unique (409).
-  Products tab: inline name, supplier SKU, price, qty ordered / received /
+  Products tab: inline name, SKU / UPC, price, qty ordered / received /
   canceled / returned (≤ ordered), yield, notes, ASIN re-map, Add product,
   remove. ASIN rows (detail tab and the POs page's nested rows): sold as,
   units / pack (1 for individual), cost / unit, prep inline, plus the
@@ -6213,7 +6213,7 @@ replaces it. Migration 061 adds `po_edit_log`, `deleted_pos` and
   suggested), subtotal, **Discount, Tax, Shipping** (separate), order
   total, weighted GC %, cashback site / % / **status**, **Subscription**
   (yes · every N weeks), PO notes. **Lines as bought** (§6.3): product
-  name, retailer SKU, price, qty, **retailer units / pack**, per-line
+  name, SKU / UPC, price, qty, **retailer units / pack**, per-line
   notes; the ASIN row beneath each — **ASIN qty = qty × retailer units ÷
   ASIN units per pack**, shown as the math and editable (typing it pins the
   yield; "reset" returns to the math); a bundle = several lines → one

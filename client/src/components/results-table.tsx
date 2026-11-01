@@ -307,7 +307,7 @@ interface ResultsTableProps {
   columns?: ColumnDef[];                                   // column subset (default ALL_COLUMNS)
   productBadge?: (result: AsinResult) => React.ReactNode;  // replaces the has_live_offer icon slot in ProductCell
   cogsSaveUrl?: (asin: string) => string;                  // CogsEditor save target (default PUT /api/asins/:asin/cogs); also disables PO sync
-  onSupplierSkuSave?: (asin: string, value: string | null) => Promise<{ supplierSku: string | null }>; // enables inline Supplier SKU editing
+  onSupplierSkuSave?: (asin: string, value: string | null) => Promise<{ supplierSku: string | null }>; // enables inline SKU / UPC editing
   // §21 bulk page user-controlled editors (2026-09-04). When present they
   // REPLACE the main-page editors for their columns — the main TagEditor and
   // the main /api/asins promos endpoint are never used on the bulk page.
@@ -1164,7 +1164,7 @@ export function ResultsTable({
   );
 }
 
-// Inline Supplier SKU editor — §21 bulk page only (enabled by the
+// Inline SKU / UPC (supplier_sku) editor — §21 bulk page only (enabled by the
 // onSupplierSkuSave prop; the main table renders the value read-only).
 // Empty input clears the value.
 // §21 bulk inline editor (2026-09-04): generic display + pencil-popover text
@@ -1262,13 +1262,13 @@ function SupplierSkuEditor({
         : <span className="text-muted-foreground text-sm">-</span>}
       <Popover open={open} onOpenChange={(v) => { setOpen(v); if (v) { setVal(value ?? ""); setError(null); } }}>
         <PopoverTrigger asChild>
-          <button className="text-muted-foreground/40 hover:text-muted-foreground p-0 ml-0.5" onClick={(e) => e.stopPropagation()} title="Edit Supplier SKU">
+          <button className="text-muted-foreground/40 hover:text-muted-foreground p-0 ml-0.5" onClick={(e) => e.stopPropagation()} title="Edit SKU / UPC">
             <Pencil className="h-2.5 w-2.5" />
           </button>
         </PopoverTrigger>
         <PopoverContent className="w-56 p-3" align="start" sideOffset={4} onClick={(e) => e.stopPropagation()}>
           <div className="space-y-2">
-            <label className="text-xs text-muted-foreground">Edit Supplier SKU</label>
+            <label className="text-xs text-muted-foreground">Edit SKU / UPC</label>
             <input type="text" maxLength={100} value={val} onChange={(e) => setVal(e.target.value)}
               className="w-full text-sm p-2 rounded border border-border bg-background focus:outline-none focus:ring-1 focus:ring-ring"
               onKeyDown={(e) => { if (e.key === "Enter") save(); }}

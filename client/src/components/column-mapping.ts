@@ -76,7 +76,7 @@ export const MAPPING_FIELDS: MappingField[] = [
   },
   {
     key: "supplierSku",
-    label: "Supplier SKU",
+    label: "SKU / UPC",
     required: false,
     matchPatterns: [/supplier\s*_?\s*sku/i, /^sku$/i, /vendor\s*(sku|item)/i, /item\s*(number|no\.?|#)/i, /catalog\s*number/i, /part\s*number/i, /\bmpn\b/i],
   },

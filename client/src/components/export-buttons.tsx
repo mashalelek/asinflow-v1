@@ -18,7 +18,7 @@ interface ExportButtonsProps {
   filename?: string; // §21 bulk page: bulk-<listname>.csv; default fba-analysis.csv
   // §21 bulk page passes false: no Amazon SKUs exist there, so the Product
   // expansion's SKU sub-column would always be empty — the SKU-named column
-  // in the bulk export is the standalone Supplier SKU column instead.
+  // in the bulk export is the standalone SKU / UPC column instead.
   includeSkuSubColumn?: boolean;
   /** ONE profit computation (2026-09-09): export consults the same inbound
       toggle the rendered cells do. */
