@@ -1,8 +1,8 @@
 // Schedule definition (SPEC §11 "Refresh job", scheduler patch decision 7).
 //
-// ONE definition, node-cron with `timezone: 'America/New_York'` passed
-// explicitly — never host-local again (the old crons' "EST/UTC" comments
-// described a timezone they never passed, so they fired in host time).
+// ONE definition in Eastern time — never host-local again (the old crons'
+// "EST/UTC" comments described a timezone they never passed, so they fired
+// in host time). Written as cron lines for the record:
 //
 //   0 0 * * *       enqueue refresh { trigger: scheduled, include_daily: true }
 //   0 4-23 * * *    enqueue refresh { trigger: scheduled, include_daily: false }
@@ -19,9 +19,22 @@
 // count — a long manual job delays the next pass but never produces
 // back-to-back identical passes.
 //
-// Express-free; the cron library, the enqueue and the clock are injectable
-// so the tests drive the ticks and the DST arithmetic without a timer.
-import cron from "node-cron";
+// The timer is OURS (2026-11-01): one setTimeout per pass, armed at the
+// instant `nextPassAfter` returns. node-cron 4.2.1 computed the next run by
+// editing the wall-clock fields of a date and re-reading them with the UTC
+// offset of the date it started from, so a walk that crossed a DST change
+// landed on the wrong instant: after the 22:00 EDT pass of 2026-10-31 it
+// scheduled the next hourly run for 23:00 EST on 2026-11-01 — no 23:00 EDT
+// pass, none of Nov 1's 04:00–22:00 EST passes (jobs #364 → #367 were
+// nine passes apart; the restart at the deploy recomputed from a post-DST
+// date and the 13:00 EST pass fired). The spring-forward walk lost the
+// 04:00 EDT pass and the following day's midnight pass the same way.
+// `nextPassAfter` walks hour-aligned UTC instants and asks Intl for each
+// one's ET hour, so there is no offset to carry; its DST tests are the
+// schedule's DST tests.
+//
+// Express-free; the clock, the timer and the enqueue are injectable so the
+// tests drive the chain across both DST nights without waiting.
 import { enqueueJob, listActive, setIncludeDaily, type EnqueueInput } from "./jobs-repo";
 import type { JobRow, QueryLike } from "./types";
 
@@ -67,12 +80,22 @@ type Logger = (message: string) => void;
 let scheduleLog: Logger = (m) => console.log(`[schedule] ${m}`);
 export function setScheduleLogger(fn: Logger): void { scheduleLog = fn; }
 
+export interface ScheduleTimer {
+  setTimeout: (fn: () => void, ms: number) => unknown;
+  clearTimeout: (handle: unknown) => void;
+}
+
 export interface ScheduleDeps {
   query?: QueryLike;
   enqueue?: (input: EnqueueInput) => Promise<JobRow>;
-  /** Injected cron library (tests pass a fake that captures the registrations). */
-  cronLib?: { schedule: (expr: string, fn: () => unknown, opts: { timezone: string; name?: string }) => { stop(): unknown } };
+  /** Injected clock (tests drive the chain without waiting). */
+  now?: () => Date;
+  /** Injected timer (tests capture the armed instants). */
+  timer?: ScheduleTimer;
 }
+
+/** A tick that fires this late is logged (the event loop was blocked, or the host slept). */
+export const LATE_TICK_WARN_MS = 60_000;
 
 export interface ScheduleHandle {
   stop: () => void;
@@ -117,19 +140,44 @@ export async function runScheduledTick(includeDaily: boolean, deps: ScheduleDeps
   return job;
 }
 
-/** Register both cron lines. Call only when ENABLE_CRONS === 'true'. */
+/**
+ * Arm the schedule: one timer per pass, at the instant `nextPassAfter`
+ * returns for the clock now; when it fires, run the tick and re-arm from
+ * that pass's instant (never from a clock that may read a few ms early,
+ * which would arm the same pass twice). A late wake-up still runs its pass
+ * (late, not lost) and re-arms from the clock, so a wake-up more than one
+ * pass late skips the passes it slept through — no stacking, as before.
+ * Call only when ENABLE_CRONS === 'true'.
+ */
 export function startSchedule(deps: ScheduleDeps = {}): ScheduleHandle {
-  const lib = deps.cronLib ?? cron;
-  const guard = (includeDaily: boolean) => async () => {
-    try { await runScheduledTick(includeDaily, deps); }
-    catch (err: any) { scheduleLog(`scheduled tick failed to enqueue: ${err?.message ?? err}`); }
+  const now = deps.now ?? (() => new Date());
+  const timer: ScheduleTimer = deps.timer ?? {
+    setTimeout: (fn, ms) => setTimeout(fn, ms),
+    clearTimeout: (h) => clearTimeout(h as ReturnType<typeof setTimeout>),
   };
-  const midnight = lib.schedule(MIDNIGHT_EXPR, guard(true), { timezone: SCHEDULE_TZ, name: "refresh-midnight" });
-  const hourly = lib.schedule(HOURLY_EXPR, guard(false), { timezone: SCHEDULE_TZ, name: "refresh-hourly" });
-  const next = nextPassAfter(new Date());
-  scheduleLog(`schedule registered (${SCHEDULE_TZ}): "${MIDNIGHT_EXPR}" daily block, "${HOURLY_EXPR}" hourly; next pass ${next.at.toISOString()}${next.includeDaily ? " (daily block)" : ""}`);
+  let handle: unknown = null;
+  let stopped = false;
+
+  const arm = (from: Date) => {
+    if (stopped) return;
+    const next = nextPassAfter(from);
+    const delay = Math.max(0, next.at.getTime() - now().getTime());
+    handle = timer.setTimeout(async () => {
+      handle = null;
+      const fired = now();
+      const late = fired.getTime() - next.at.getTime();
+      if (late > LATE_TICK_WARN_MS) scheduleLog(`tick for ${next.at.toISOString()} fired ${Math.round(late / 60_000)} min late`);
+      try { await runScheduledTick(next.includeDaily, deps, fired); }
+      catch (err: any) { scheduleLog(`scheduled tick failed to enqueue: ${err?.message ?? err}`); }
+      arm(new Date(Math.max(next.at.getTime(), now().getTime())));
+    }, delay);
+  };
+
+  arm(now());
+  const next = nextPassAfter(now());
+  scheduleLog(`schedule registered (${SCHEDULE_TZ}): "${MIDNIGHT_EXPR}" daily block, "${HOURLY_EXPR}" hourly, own timer on nextPassAfter; next pass ${next.at.toISOString()}${next.includeDaily ? " (daily block)" : ""}`);
   return {
-    stop: () => { midnight.stop(); hourly.stop(); },
+    stop: () => { stopped = true; if (handle != null) timer.clearTimeout(handle); handle = null; },
     tick: (includeDaily) => runScheduledTick(includeDaily, deps),
   };
 }
