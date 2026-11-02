@@ -35,6 +35,9 @@ export function individualUnits(qty: number | string, unitsPerPack: number): num
   return Math.round(Number(qty) * unitsPerPack * 100) / 100; // decimals since migration 062
 }
 
+/** Tooltip on Received by Velocity and At Prep Center (Maria 2026-11-02). */
+export const VELOCITY_QTY_TITLE = "Received by Velocity = all units Velocity has ever checked in for this line; At Prep Center = of those, still at Velocity.";
+
 /** §4 column model — order and names, shared by the nested rows and the detail ASINs tab. */
 export const PO_ASIN_COLUMNS = [
   { key: "asin", label: "ASIN", align: "left" },
@@ -50,6 +53,8 @@ export const PO_ASIN_COLUMNS = [
   { key: "canceled", label: "Canceled", align: "right" },
   { key: "returned", label: "Returned", align: "right" },
   { key: "shipped_supplier", label: "Shipped by Supplier", align: "right" },
+  // Received by Velocity (Maria 2026-11-02): Velocity's cumulative check-in count, which At Prep Center (quantity_remaining) loses once units ship.
+  { key: "received_velocity", label: "Received by Velocity", align: "right" },
   { key: "at_prep", label: "At Prep Center", align: "right" },
   { key: "at_warehouse", label: "At CQG Warehouse", align: "right" },
   { key: "lost_damaged_us", label: "Lost/damaged by us", align: "right" },

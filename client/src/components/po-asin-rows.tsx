@@ -12,7 +12,7 @@ import { Link } from "wouter";
 import { StickyNote, ChevronRight, ChevronDown, AlertTriangle, Plus, X } from "lucide-react";
 import { Tooltip, TooltipTrigger, TooltipContent } from "@/components/ui/tooltip";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
-import { fmtQty, individualUnits, PO_ASIN_COLUMNS } from "@/lib/po-qty";
+import { fmtQty, individualUnits, PO_ASIN_COLUMNS, VELOCITY_QTY_TITLE } from "@/lib/po-qty";
 import { InlineEdit, SelectEdit, poApi, ReassignShipment, shipmentBlockText } from "@/components/po-edit";
 
 export interface PoAsinShipment {
@@ -64,6 +64,8 @@ export interface PoAsinRowData {
   qty_returned_asin: string | null;
   // stored ASIN quantities (NULL = not tracked)
   qty_shipped_supplier: string | null;
+  /** Received by Velocity (2026-11-02): cumulative units Velocity ever checked in, ASIN units; NULL = never seen at Velocity. */
+  received_velocity: string | null;
   qty_at_prep: string | null;
   qty_at_warehouse: string | null;
   qty_lost_damaged_us: string | null;
@@ -81,9 +83,13 @@ const COL_WIDTHS: Record<(typeof PO_ASIN_COLUMNS)[number]["key"], string> = {
   asin: "7rem", title: "18rem", sku: "11rem", ordered: "4.5rem", cost_per_unit: "5.5rem", total_cost: "6rem", prep: "4.5rem",
   // Widths hold two-line header labels (2026-11-01: "Individual Units Ordered", "Shipped by Supplier", "Lost/damaged by us" overlapped their neighbours).
   sold_as: "6rem", units_per_pack: "5rem", individual_units: "7.5rem", canceled: "5rem", returned: "5rem", shipped_supplier: "7rem",
-  at_prep: "6rem", at_warehouse: "7rem", lost_damaged_us: "7.5rem", shipped_fba: "5.5rem", received_amazon: "7rem", shipments: "11rem", action_items: "12rem",
+  received_velocity: "7rem", at_prep: "6rem", at_warehouse: "7rem", lost_damaged_us: "7.5rem", shipped_fba: "5.5rem", received_amazon: "7rem", shipments: "11rem", action_items: "12rem",
 };
 const LEAD_WIDTH = "2.75rem";
+/** Σ of the fixed widths plus the lead and trailing columns (159.75rem) — the table's minWidth; the table scrolls inside its own overflow box, never the page. */
+export const PO_ASIN_TABLE_MIN_WIDTH = "160rem";
+/** Header tooltips (Maria 2026-11-02): the two Velocity quantities explain each other. */
+const COL_TITLES: Partial<Record<(typeof PO_ASIN_COLUMNS)[number]["key"], string>> = { received_velocity: VELOCITY_QTY_TITLE, at_prep: VELOCITY_QTY_TITLE };
 
 function Money({ v }: { v: string | null | undefined }) {
   if (v == null) return <span className="text-muted-foreground/50">—</span>;
@@ -393,7 +399,7 @@ export function PoAsinHeaderRow({ sub = false }: { sub?: boolean }) {
     <tr className={sub ? "bg-muted/40" : "table-header-stone"} data-testid="po-asin-header">
       <th className={base}></th>
       {PO_ASIN_COLUMNS.map((c) => (
-        <th key={c.key} className={`${base} ${c.align === "right" ? "text-right" : "text-left"}`}>{c.label}</th>
+        <th key={c.key} className={`${base} ${c.align === "right" ? "text-right" : "text-left"}`} title={COL_TITLES[c.key]}>{c.label}</th>
       ))}
       <th className={base}></th>
     </tr>
@@ -445,7 +451,8 @@ export function PoAsinRow({ a, indent = false, editable = false, onChanged }: { 
         <td className="px-3 py-1.5 text-right"><QtyCell v={a.qty_canceled_asin} />{editable && (a.lines ?? []).length > 0 && <MarkCanceled a={a} onChanged={onChanged} />}</td>
         <td className="px-3 py-1.5 text-right"><QtyCell v={a.qty_returned_asin} /></td>
         <td className="px-3 py-1.5 text-right">{editable ? <EditableQty rowId={a.id} col="qty_shipped_supplier" v={a.qty_shipped_supplier} onChanged={onChanged} /> : <QtyCell v={a.qty_shipped_supplier} />}</td>
-        <td className="px-3 py-1.5 text-right"><QtyCell v={a.qty_at_prep} /></td>
+        <td className="px-3 py-1.5 text-right" title={VELOCITY_QTY_TITLE}><QtyCell v={a.received_velocity} /></td>
+        <td className="px-3 py-1.5 text-right" title={VELOCITY_QTY_TITLE}><QtyCell v={a.qty_at_prep} /></td>
         <td className="px-3 py-1.5 text-right">{editable ? <EditableQty rowId={a.id} col="qty_at_warehouse" v={a.qty_at_warehouse} onChanged={onChanged} /> : <QtyCell v={a.qty_at_warehouse} />}</td>
         <td className="px-3 py-1.5 text-right">{editable ? <EditableQty rowId={a.id} col="qty_lost_damaged_us" v={a.qty_lost_damaged_us} onChanged={onChanged} /> : <QtyCell v={a.qty_lost_damaged_us} />}</td>
         <td className="px-3 py-1.5 text-right"><QtyCell v={a.qty_shipped_fba} /></td>
@@ -480,7 +487,7 @@ export function PoAsinRow({ a, indent = false, editable = false, onChanged }: { 
 export function PoAsinTable({ asins, testId = "po-asins-table", editable = false, onChanged }: { asins: PoAsinRowData[]; testId?: string; editable?: boolean; onChanged?: () => void }) {
   return (
     <div className="w-full overflow-auto rounded-md" style={{ border: "0.5px solid hsl(var(--border))" }}>
-      <table className="w-full border-collapse text-sm table-fixed" style={{ minWidth: "140rem" }} data-testid={testId}>
+      <table className="w-full border-collapse text-sm table-fixed" style={{ minWidth: PO_ASIN_TABLE_MIN_WIDTH }} data-testid={testId}>
         <PoAsinColGroup />
         <thead><PoAsinHeaderRow /></thead>
         <tbody>{asins.map((a) => <PoAsinRow key={a.id} a={a} editable={editable} onChanged={onChanged} />)}</tbody>

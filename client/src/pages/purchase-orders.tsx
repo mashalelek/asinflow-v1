@@ -24,9 +24,9 @@ import {
 import { Tooltip, TooltipTrigger, TooltipContent } from "@/components/ui/tooltip";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import { UploadToVelocityDialog } from "@/components/upload-to-velocity-dialog";
-import { PoAsinTable, PoAsinColGroup, PoAsinHeaderRow, PoAsinRow, ActionItemChips, ActionItemsEditor, type ActionItemLines, type PoAsinRowData, type PoAsinLine } from "@/components/po-asin-rows";
+import { PoAsinTable, PoAsinColGroup, PoAsinHeaderRow, PoAsinRow, PO_ASIN_TABLE_MIN_WIDTH, ActionItemChips, ActionItemsEditor, type ActionItemLines, type PoAsinRowData, type PoAsinLine } from "@/components/po-asin-rows";
 import { loadPoExpanded, savePoExpanded, isPoExpanded, togglePoExpanded, toggleExpandAll, type PoExpandedState } from "@/lib/po-expanded";
-import { fmtQty } from "@/lib/po-qty";
+import { fmtQty, PO_ASIN_COLUMNS } from "@/lib/po-qty";
 import { fetchLongSync } from "@/lib/long-sync";
 import { useToast } from "@/hooks/use-toast";
 import { PoHeaderDrawer, PoProductsTable, PoHistory, PoDangerActions } from "@/components/po-edit";
@@ -691,12 +691,12 @@ export default function PurchaseOrders() {
                     <td colSpan={11} className="p-0 pl-6 bg-muted/20">
                       {/* Nested rows: same column model as the detail ASINs tab (§3.2, §4);
                           po_asins default order; sorting/filtering stays at PO level. */}
-                      <table className="w-full border-collapse text-sm table-fixed" style={{ minWidth: "140rem" }}>
+                      <table className="w-full border-collapse text-sm table-fixed" style={{ minWidth: PO_ASIN_TABLE_MIN_WIDTH }}>
                         <PoAsinColGroup />
                         {firstExpandedId === po.id && <thead><PoAsinHeaderRow sub /></thead>}
                         <tbody>
                           {po.asins.length === 0 && (
-                            <tr><td colSpan={21} className="px-3 py-2 text-xs text-muted-foreground">No ASIN rows.</td></tr>
+                            <tr><td colSpan={PO_ASIN_COLUMNS.length + 2} className="px-3 py-2 text-xs text-muted-foreground">No ASIN rows.</td></tr>
                           )}
                           {po.asins.map((a) => <PoAsinRow key={a.id} a={a} indent editable onChanged={load} />)}
                         </tbody>

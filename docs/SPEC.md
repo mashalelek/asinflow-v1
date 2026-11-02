@@ -579,6 +579,13 @@ e.g. target.com 912003733645362):
 | **On Order** | Σ max(Expected − Shipped FBA, 0), where Expected = Ordered − Canceled − Returned − Lost/damaged by us (NULLs read 0), over rows whose PO is dated on/after the **reconciliation start** (the earliest stored Velocity shipment, 2026-05-20; `VELOCITY_MIN_ORDER_DATE` when none is stored). Older rows contribute 0 — no shipment data exists for them | shown |
 | **At Prep** | Σ At Prep Center — Velocity's quantity on every row | hidden |
 
+**Received by Velocity** (`po_asins.received_velocity`, Maria 2026-11-02)
+is a PO-row column only — Velocity's cumulative check-in count for the
+line, which At Prep Center (`quantity_remaining`) loses once the units
+ship. Nothing here reads it: On Order, At Prep and the Stock identity are
+unchanged (the On Order / At Prep exclusivity item on the backlog stays
+separate).
+
 Shipped-not-received units are Amazon's own number, **Sent to FBA**
 (inbound shipped + receiving + working from the FBA inventory sync),
 unchanged; the PO-derived Inbound FBA / Pipeline columns of the first cut
@@ -3050,7 +3057,7 @@ that writes it:
 | `po_edit_log` | Every PO-module writer (one row per changed field, §22 "AF owns POs"); read by the History tab |
 | `deleted_pos` | Delete PO (tombstone); read by Sync POs' intake |
 | `po_asin_shipments.assigned_by`, `velocity_order_number` | Reassign shipment (§22) and the 060 data fix write `'manual'` + the Velocity line identity; component A refreshes a manual row's quantity, never moves it (a hand-split line is compared, not rewritten) |
-| `po_asins.qty_at_prep`; `po_asin_shipments` (`source = 'velocity'`: row, `qty_shipped`, `shipped_at`); `velocity_shipments`; `shipment_unmatched` | **Shipment sync, component A** (`server/shipment-sync-velocity.ts`, Sync Shipments button, 2026-10-17) — never the sheet sync, never the UI except the Unmatched picker |
+| `po_asins.qty_at_prep`, `received_velocity`; `po_asin_shipments` (`source = 'velocity'`: row, `qty_shipped`, `shipped_at`); `velocity_shipments`; `shipment_unmatched` | **Shipment sync, component A** (`server/shipment-sync-velocity.ts`, Sync Shipments button, 2026-10-17) — never the sheet sync, never the UI except the Unmatched picker |
 | `po_asin_shipments.fba_shipment_ids`, `sc_match`, `qty_received`; `velocity_shipments.sc_shipment_ids` / `sc_match`; `sc_inbound_shipments`, `sc_inbound_items` | **Shipment sync, component B** (`server/shipment-sync-sc.ts`) |
 | `po_asins.qty_shipped_fba`, `qty_received_amazon` | Trigger over `po_asin_shipments` (both components' rows + manual rows) |
 | `po_asins.qty_shipped_supplier`, `qty_at_warehouse`, `qty_lost_damaged_us`; `po_asin_shipments` (`source = 'manual'`) | PO module (§22): inline editor / Shipment IDs chip — AF-owned, never the importer, never a sync |
@@ -5407,7 +5414,8 @@ is Phase 2 (below).
 - **Migration 056 (2026-10-16):** `po_asins` gains six ASIN-quantity
   columns, `numeric(10,2) NULL` — `qty_shipped_supplier`, `qty_at_prep`,
   `qty_at_warehouse`, `qty_lost_damaged_us`, `qty_shipped_fba`,
-  `qty_received_amazon`; `po_asin_shipments` (as re-keyed by **migration
+  `qty_received_amazon` — and **migration 079** (2026-11-02) a seventh,
+  `received_velocity` (Received by Velocity, above); `po_asin_shipments` (as re-keyed by **migration
   057**, 2026-10-17: one row per **Velocity shipment** per ASIN row —
   `velocity_shipment_id text NOT NULL` (or `manual:<uuid>` for a hand
   row), `fba_shipment_ids text[]` (the SC shipments it fanned out to, one
@@ -5736,20 +5744,26 @@ revealing component line items.
 | 11 | Canceled | derived from the lines (above) |
 | 12 | Returned | derived from the lines |
 | 13 | Shipped by Supplier | `qty_shipped_supplier` — hand-entered (supplier tracking numbers now arrive by email, §26; quantities from them are a later step) |
-| 14 | At Prep Center | `qty_at_prep` — Velocity (Phase 2); may be fractional |
-| 15 | At CQG Warehouse | `qty_at_warehouse` — hand-entered |
-| 16 | Lost/damaged by us | `qty_lost_damaged_us` — hand-entered |
-| 17 | Shipped FBA | `qty_shipped_fba` = Σ `po_asin_shipments.qty_shipped` (trigger) |
-| 18 | Received by Amazon | `qty_received_amazon` = Σ `po_asin_shipments.qty_received` (trigger) |
-| 19 | Shipment IDs | chip "N shipments · qty" → per-shipment list; manual add/remove allowed (source `manual`) |
+| 14 | **Received by Velocity** | `received_velocity` (migration 079, Maria 2026-11-02) — Σ Velocity `quantity_received` over the row's live lines ÷ `units_per_pack` (the Shipped FBA conversion; a pack-size disagreement is the "Pack size mismatch" item, never a silent ÷): all units Velocity has ever checked in for the line, shipped or not; never capped at Ordered (over-receipt stays visible); NULL = never seen at Velocity. Written by Sync Shipments (component A) only |
+| 15 | At Prep Center | `qty_at_prep` — Velocity (Phase 2); may be fractional; of the received units, those still at Velocity (`quantity_remaining`) |
+| 16 | At CQG Warehouse | `qty_at_warehouse` — hand-entered |
+| 17 | Lost/damaged by us | `qty_lost_damaged_us` — hand-entered |
+| 18 | Shipped FBA | `qty_shipped_fba` = Σ `po_asin_shipments.qty_shipped` (trigger) |
+| 19 | Received by Amazon | `qty_received_amazon` = Σ `po_asin_shipments.qty_received` (trigger) |
+| 20 | Shipment IDs | chip "N shipments · qty" → per-shipment list; manual add/remove allowed (source `manual`) |
 
 All quantities are ASIN quantities, `numeric(10,2)`; **NULL = not
 tracked** (em-dash, never 0 by default); fractional values are legal
 (7 units of a 6-pack = 1.17) and show 2 dp only when non-integer. There is
 no derived "Received" column (D1): At Prep Center and At CQG Warehouse are
 separate. Unreimb. Loss is gone from the table (DB column untouched).
-Cells 13, 15 and 16 edit inline (click, Enter/blur saves, empty = NULL);
-every quantity or shipment change re-runs the auto-close rule.
+Cells 13, 16 and 17 edit inline (click, Enter/blur saves, empty = NULL);
+every quantity or shipment change re-runs the auto-close rule. Columns 14
+and 15 share one tooltip, on the header and the cells: "Received by
+Velocity = all units Velocity has ever checked in for this line; At Prep
+Center = of those, still at Velocity." The header wraps to two lines like
+the others; the table scrolls inside its own overflow box (min width
+160rem), never the page.
 
 **Products tab** (§4.3): Ordered · Received · Canceled · Returned ·
 **At Prep Center · At CQG Warehouse · Lost/damaged by us** · Final. The
@@ -5988,7 +6002,7 @@ returns the plan with nothing written.
   `…_1`, inserts under the new key and leaves the old row for a manual
   delete).
 - **AF-owned, never written:** `po_asins.qty_shipped_supplier`,
-  `qty_at_prep`, `qty_at_warehouse`, `qty_lost_damaged_us`,
+  `received_velocity`, `qty_at_prep`, `qty_at_warehouse`, `qty_lost_damaged_us`,
   `qty_shipped_fba`, `qty_received_amazon`, `po_asin_shipments`,
   `po_asins.notes`, `po_asins.sku` after insert, `po_line_items.notes`,
   `item_discount` — anything the sheet does not carry.
@@ -6192,6 +6206,25 @@ before Velocity's `shipped_at`.
   inventory > newest shipment), Σ `quantity_remaining` ÷ units_per_pack
   per ASIN row; 0 once fully shipped; NULL when no Velocity line
   references the key.
+- `received_velocity` (Received by Velocity, Maria 2026-11-02): Σ
+  `quantity_received` over the same live lines ÷ units_per_pack — the
+  cumulative check-in count `quantity_remaining` loses once the units
+  ship. Probe 2026-11-02 (58 inbound, 58 inventory, 64 shipments / 1036
+  lines): `quantity_received` is on every `/inbound`, `/inventory` and
+  shipment-detail line (= Σ `check_ins[].quantity_checked_in`, 116/116);
+  it is order-level — identical on every shipment's line of an order
+  that shipped in parts (190/190) — and a fully shipped order, gone from
+  `/inbound` ∪ `/inventory` (774 of 805 order ids), keeps it on its
+  shipment-detail line (`status outbound`, none null), so no extra
+  endpoint is read; a bundle parent's count is complete bundles ×
+  components (component units, like its `quantity`), resolved to the ASIN
+  row through its children's order numbers as before; one Velocity order
+  per (order #, ASIN) in both lists, so a multi-ASIN PO has one Velocity
+  order per ASIN row (several split orders sum). Never capped at Ordered;
+  NULL when no line references the key (a line re-linked elsewhere clears
+  it, like At Prep). Counts `receivedVelocitySet / Cleared / Unchanged`;
+  the dry run lists every change (`receivedVelocityOps`), which
+  `script/sync-shipments.ts` groups per PO (`--received-csv` writes them).
 - One transaction; dry run writes nothing; a Velocity read error aborts
   before BEGIN. Never writes `fba_shipment_ids`, `sc_match`, `qty_received`.
 
@@ -6553,6 +6586,7 @@ replaces it. Migration 061 adds `po_edit_log`, `deleted_pos` and
 | `purchase_orders` / `po_asins` / `po_line_items` (every field) | **AF** (2026-10-18, "AF owns POs" above) — the PO module UI and the auto-close rule. The Orders sheet only inserts POs that are not in AF and not tombstoned; it never writes an existing one (drift counted, not applied) |
 | `po_line_items.action_items`, `qty_canceled`; `purchase_orders.closed_at`, `closed_by` | **AF**: the ASIN / product Action Items editors, Cancel ASIN / Cancel PO / the product qty-canceled cell, the Closed toggle, the auto-close rule. The intake sets them once, on insert, from the row-level Status mapping. `closed_by = 'sheet'` remains on history only. `purchase_orders.action_items` is deprecated, written by nothing. **Since PO table v2 (2026-10-29, migration 074) the items live in `po_line_action_items`; `po_line_items.action_items` is dead too** |
 | **`po_asins.qty_at_prep`** | **Shipment sync (component A)** — Σ Velocity `quantity_remaining` ÷ units_per_pack; NULL when no Velocity line references the key (D6). Overwritten every Sync Shipments; not hand-editable. |
+| **`po_asins.received_velocity`** | **Shipment sync (component A)** — Σ Velocity `quantity_received` ÷ units_per_pack, the cumulative check-in count (Received by Velocity, 2026-11-02); NULL when no Velocity line references the key. Overwritten every Sync Shipments; not hand-editable. |
 | **`po_asins.qty_shipped_supplier`, `qty_at_warehouse`, `qty_lost_damaged_us`** | **AF-owned**: the inline quantity editor today; email tracking (§26) records tracking numbers, not quantities, so far. Never the importer, never a sync. |
 | **`purchase_orders.ships_to`**, **`po_tracking`** | **AF-owned** (§26): Ships to on the PO / New PO form; set from Col AS prep by Sync POs on insert, and moved by it when Col AS prep changes on an existing PO (the §14 prep exception, 2026-10-29); tracking rows from the Gmail ingest, the Tracking tab (add, Move to PO…) and the unmatched queue. |
 | **`po_asins.qty_shipped_fba`, `qty_received_amazon`** | **Trigger-maintained** from `po_asin_shipments` — Shipped FBA from Velocity rows (component A), Received by Amazon from the SC allocation (component B); manual rows add to both. |

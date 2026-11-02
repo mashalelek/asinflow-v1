@@ -36,6 +36,11 @@
 // (resolved_po_asin_id, match_reason), so later runs keep it. A line that
 // still fails is unmatched with its ranked candidates or a nearest miss.
 //
+// Received by Velocity (2026-11-02): po_asins.received_velocity = Σ Velocity
+// quantity_received over the same live lines as qty_at_prep ÷ units_per_pack
+// — the cumulative check-in count, which quantity_remaining loses once the
+// units ship. Never capped at Ordered; NULL when no line references the key.
+//
 // Not written here (component B owns them): fba_shipment_ids, sc_match,
 // qty_received. Not written at all: the manual quantity columns.
 //
@@ -94,6 +99,9 @@ export interface VelocitySyncCounts {
   atPrepSet: number;            // po_asins.qty_at_prep changed to a number
   atPrepCleared: number;        // changed to NULL (no Velocity line references the key any more)
   atPrepUnchanged: number;
+  receivedVelocitySet: number;  // po_asins.received_velocity changed to a number (Received by Velocity, 2026-11-02)
+  receivedVelocityCleared: number; // changed to NULL (no Velocity line references the key any more)
+  receivedVelocityUnchanged: number;
   packVelocitySet: number;      // po_asins.velocity_units_per_pack changed
   packFilled: number;           // sold_as NULL → filled from Velocity
   packMismatch: number;         // rows whose AF pack size disagrees with Velocity's (flagged, still ÷ AF's)
@@ -113,6 +121,8 @@ export interface VelocitySyncResult {
   unmatched: Array<{ shipment: string; shippedAt: string | null; orderId: string; orderNumber: string; retailer: string; asin: string; units: number; reason: "no_order" | "po_not_found"; note?: string; candidates?: MatchCandidate[]; miss?: string | null; vDate?: string | null }>;
   /** Every line placed by a rule past the legacy keys this run (alias / normalized / col_p / base_id / candidate), for the backfill report. */
   ruleLinks: Array<{ shipment: string; shippedAt: string | null; orderId: string; orderNumber: string; retailer: string; asin: string; units: number; how: string; poAsinId: string; poOrderId: string; supplier: string; poDate: string; vDate: string | null; days: number | null; wasUnmatched: boolean }>;
+  /** Every po_asins.received_velocity change this run (set or cleared), for the backfill's per-PO report. */
+  receivedVelocityOps: Array<{ id: string; poId: string; orderId: string; supplier: string; asin: string; from: number | null; to: number | null }>;
   touchedPoIds: string[];
 }
 
@@ -134,6 +144,8 @@ export function etDate(ts: string | Date | null | undefined): string | null {
 
 export interface AfAsinRow {
   id: string; po_id: string; asin: string; units_per_pack: number | null; qty_at_prep: string | null; order_id: string; supplier: string; order_date: string;
+  /** Received by Velocity (2026-11-02): the stored cumulative count; undefined reads as NULL. */
+  received_velocity?: string | null;
   /** Ordered ASIN qty (the §3 b / §4 units-fit capacity). */
   qty?: number | string | null;
   /** null = not filled in (blank on the sheet); undefined is treated as known. */
@@ -252,7 +264,7 @@ export async function syncVelocityShipments(opts: { dryRun: boolean; deps?: Velo
   // ── AF state ───────────────────────────────────────────────────────────────
   const afRows = (await db.query(
     `SELECT pa.id, pa.po_id, pa.asin, pa.units_per_pack, pa.qty_at_prep, p.order_id, p.supplier, p.order_date::text AS order_date,
-            pa.sold_as, pa.velocity_units_per_pack, pa.qty, p.ships_to
+            pa.sold_as, pa.velocity_units_per_pack, pa.qty, p.ships_to, pa.received_velocity
        FROM po_asins pa JOIN purchase_orders p ON p.id = pa.po_id`,
   )).rows as AfAsinRow[];
   // Every rule matches only Velocity-eligible POs (not Home, not before
@@ -332,7 +344,7 @@ export async function syncVelocityShipments(opts: { dryRun: boolean; deps?: Velo
   const counts: VelocitySyncCounts = {
     shipments: shipments.length, shipmentsFetched: fetchedIds.size, lines: 0, linesMatched: 0, linesMatchedOrderOnly: 0, linesPinned: 0, linesNoOrder: 0, linesMatchedColP: 0, linesColPAmbiguous: 0, linesPoNotFound: 0,
     linesMatchedAlias: 0, linesMatchedNormalized: 0, linesMatchedBaseId: 0, linesMatchedCandidate: 0, linesCandidateAmbiguous: 0,
-    rowsInserted: 0, rowsUpdated: 0, rowsUnchanged: 0, manualRowsKept: 0, manualSplitDrift: 0, unmatchedNew: 0, unmatchedResolved: 0, atPrepSet: 0, atPrepCleared: 0, atPrepUnchanged: 0,
+    rowsInserted: 0, rowsUpdated: 0, rowsUnchanged: 0, manualRowsKept: 0, manualSplitDrift: 0, unmatchedNew: 0, unmatchedResolved: 0, atPrepSet: 0, atPrepCleared: 0, atPrepUnchanged: 0, receivedVelocitySet: 0, receivedVelocityCleared: 0, receivedVelocityUnchanged: 0,
     packVelocitySet: 0, packFilled: 0, packMismatch: 0, packMissing: 0, packConflicting: 0, posTouched: 0,
   };
   const samples: string[] = [];
@@ -569,13 +581,19 @@ export async function syncVelocityShipments(opts: { dryRun: boolean; deps?: Velo
   for (const [key] of Array.from(unmatchedPlans.entries())) if (!unmatchedByKey.has(key)) counts.unmatchedNew++;
   counts.unmatchedResolved = resolvedNow.size + linkPlans.filter((l) => { const p = unmatchedByKey.get(l.key); return p && !p.resolved_at; }).length;
 
-  // ── qty_at_prep (§3.3, D6): one live line per Velocity order; inbound > inventory > newest shipment ──
+  // ── qty_at_prep (§3.3, D6) and received_velocity (2026-11-02): one live line per Velocity order; inbound > inventory > newest shipment ──
+  // Received by Velocity = Σ quantity_received over the same lines — Velocity's
+  // cumulative check-in count, order-level (identical on every shipment's line
+  // of the order; a fully shipped order keeps it in the shipment detail) —
+  // ÷ AF's units_per_pack, never capped at Ordered (over-receipt stays
+  // visible); NULL when no Velocity line references the key, like At Prep.
   const orderLine = new Map<string, VelocityInboundOrder>();
   const shipmentsNewestFirst = [...shipments].sort((a, b) => (parseTs(b.shipped_at)?.getTime() ?? 0) - (parseTs(a.shipped_at)?.getTime() ?? 0));
   for (const s of shipmentsNewestFirst) for (const line of details.get(s.shipment_id)!.orders) { const oid = String(line.order_id ?? ""); if (oid && !orderLine.has(oid)) orderLine.set(oid, { ...line, __shipment_id: s.shipment_id } as any); }
   for (const o of inventory) { const oid = String(o.order_id ?? ""); if (oid) orderLine.set(oid, o); }
   for (const o of inbound) { const oid = String(o.order_id ?? ""); if (oid) orderLine.set(oid, o); }
   const remainingByAsinRow = new Map<string, number>();
+  const receivedByAsinRow = new Map<string, number>();
   for (const line of Array.from(orderLine.values())) {
     const sid = String((line as any).__shipment_id ?? "");
     const prior = sid ? unmatchedByKey.get(`${sid}\u0000${String(line.order_id ?? "")}`) : undefined;
@@ -583,6 +601,7 @@ export async function syncVelocityShipments(opts: { dryRun: boolean; deps?: Velo
       ?? priorLink(prior) ?? withColP(resolveLine(line, idx, childrenByOrderId, ctx), line, sid || null);
     if (!res.ok) continue;
     remainingByAsinRow.set(String(res.row.id), (remainingByAsinRow.get(String(res.row.id)) ?? 0) + num(line.quantity_remaining));
+    receivedByAsinRow.set(String(res.row.id), (receivedByAsinRow.get(String(res.row.id)) ?? 0) + num(line.quantity_received));
   }
   const atPrepOps: Array<{ id: string; poId: string; value: number | null }> = [];
   for (const r of afRows) {
@@ -595,10 +614,21 @@ export async function syncVelocityShipments(opts: { dryRun: boolean; deps?: Velo
     if (next == null) counts.atPrepCleared++; else counts.atPrepSet++;
     touched.add(String(r.po_id));
   }
+  const receivedOps: VelocitySyncResult["receivedVelocityOps"] = [];
+  for (const r of afRows) {
+    const has = receivedByAsinRow.has(String(r.id));
+    const next = has ? round2(receivedByAsinRow.get(String(r.id))! / (Number(r.units_per_pack) || 1)) : null;
+    const cur = r.received_velocity == null ? null : Number(r.received_velocity);
+    const same = (cur == null && next == null) || (cur != null && next != null && Math.abs(cur - next) < 1e-9);
+    if (same) { counts.receivedVelocityUnchanged++; continue; }
+    receivedOps.push({ id: String(r.id), poId: String(r.po_id), orderId: String(r.order_id), supplier: String(r.supplier), asin: String(r.asin), from: cur, to: next });
+    if (next == null) counts.receivedVelocityCleared++; else counts.receivedVelocitySet++;
+    touched.add(String(r.po_id));
+  }
 
   for (const l of linkPlans) touched.add(l.poId);
   counts.posTouched = touched.size;
-  const result: VelocitySyncResult = { dryRun: opts.dryRun, wrote: false, counts, samples, packSamples, unmatched, ruleLinks, touchedPoIds: Array.from(touched) };
+  const result: VelocitySyncResult = { dryRun: opts.dryRun, wrote: false, counts, samples, packSamples, unmatched, ruleLinks, receivedVelocityOps: receivedOps, touchedPoIds: Array.from(touched) };
   if (opts.dryRun) return result;
 
   // ── Apply ──────────────────────────────────────────────────────────────────
@@ -656,6 +686,7 @@ export async function syncVelocityShipments(opts: { dryRun: boolean; deps?: Velo
       }]);
     }
     for (const op of atPrepOps) await client.query(`UPDATE po_asins SET qty_at_prep = $2 WHERE id = $1`, [op.id, op.value]);
+    for (const op of receivedOps) await client.query(`UPDATE po_asins SET received_velocity = $2 WHERE id = $1`, [op.id, op.to]);
     for (const op of fillOps) {
       const r = await client.query(`UPDATE po_asins SET sold_as = $2, units_per_pack = $3 WHERE id = $1 AND sold_as IS NULL`, [op.id, op.soldAs, op.upp]);
       if ((r as any).rowCount === 0) continue; // filled by hand since the read

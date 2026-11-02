@@ -29,7 +29,7 @@ const AF: AfAsinRow[] = [
   { id: "a-gr1", po_id: "p-gr1", asin: "B076YKY47B", units_per_pack: 1, qty_at_prep: "5.00", order_id: "200015279183885", supplier: "walmart.com", order_date: "2026-10-09" },
   { id: "a-gr2", po_id: "p-gr2", asin: "B076YKY47B", units_per_pack: 1, qty_at_prep: null, order_id: "200015295664067", supplier: "walmart.com", order_date: "2026-10-04" },
   { id: "a-ot1", po_id: "p-ot1", asin: "B011SESMB0", units_per_pack: 1, qty_at_prep: null, order_id: "6461301", supplier: "opentip.com", order_date: "2026-10-04" },
-  { id: "a-old", po_id: "p-old", asin: "B0OLDASIN1", units_per_pack: 1, qty_at_prep: "3.00", order_id: "OLD1", supplier: "x.com", order_date: "2026-06-01" }, // no Velocity line any more → NULL
+  { id: "a-old", po_id: "p-old", asin: "B0OLDASIN1", units_per_pack: 1, qty_at_prep: "3.00", received_velocity: "3.00", order_id: "OLD1", supplier: "x.com", order_date: "2026-06-01" }, // no Velocity line any more → NULL
 ];
 
 function fakeDb(state: { shipments?: any[]; rows?: any[]; unmatched?: any[]; identity?: any[]; pins?: any[]; colP?: any[]; fbaIds?: any[]; aliases?: any[]; manual?: any[]; af?: AfAsinRow[] }) {
@@ -95,6 +95,12 @@ describe("syncVelocityShipments", () => {
     expect(r.unmatched.map((u) => u.reason).sort()).toEqual(["no_order", "po_not_found"]); // units pass: oldest Velocity order first
     // qty_at_prep: inbound/inventory lines win (a-gr1 5 → 2); a shipped-out order reads 0; an ASIN row with no Velocity line goes NULL.
     expect(r.counts).toMatchObject({ atPrepSet: 6, atPrepCleared: 1, atPrepUnchanged: 0 });
+    // received_velocity (2026-11-02): Σ quantity_received over the same lines ÷ units_per_pack — the Equal Exchange
+    // 6-pack reads 60 → 10 even though it is fully shipped (At Prep 0); the partially received Golden Rewards order
+    // reads 3 of its 12; a row with no Velocity line goes NULL.
+    expect(r.counts).toMatchObject({ receivedVelocitySet: 6, receivedVelocityCleared: 1, receivedVelocityUnchanged: 0 });
+    expect(Object.fromEntries(r.receivedVelocityOps.map((o) => [o.id, o.to]))).toEqual({ "a-eql": 10, "a-tw1": 3, "a-tw2": 9, "a-gr1": 3, "a-gr2": 9, "a-ot1": 10, "a-old": null });
+    expect(r.receivedVelocityOps.find((o) => o.id === "a-old")).toMatchObject({ poId: "p-old", orderId: "OLD1", supplier: "x.com", asin: "B0OLDASIN1", from: 3, to: null });
     expect(r.touchedPoIds.sort()).toEqual(["p-eql", "p-gr1", "p-gr2", "p-old", "p-ot1", "p-tw1", "p-tw2"]);
   });
 
@@ -116,6 +122,8 @@ describe("syncVelocityShipments", () => {
     expect([stamp?.params?.[0], stamp?.params?.[2]]).toEqual(["u-old", "exact"]); // match_reason = the rule that placed it
     const prep = db.writes.filter((w) => w.sql.startsWith("UPDATE po_asins SET qty_at_prep"));
     expect(Object.fromEntries(prep.map((w) => [w.params?.[0], w.params?.[1]]))).toEqual({ "a-eql": 0, "a-tw1": 2, "a-tw2": 0, "a-gr1": 2, "a-gr2": 0, "a-ot1": 0, "a-old": null });
+    const recv = db.writes.filter((w) => w.sql.startsWith("UPDATE po_asins SET received_velocity"));
+    expect(Object.fromEntries(recv.map((w) => [w.params?.[0], w.params?.[1]]))).toEqual({ "a-eql": 10, "a-tw1": 3, "a-tw2": 9, "a-gr1": 3, "a-gr2": 9, "a-ot1": 10, "a-old": null });
     for (const w of db.writes) expect(w.sql).not.toMatch(/fba_shipment_ids|sc_match|qty_received|qty_at_warehouse|qty_lost_damaged_us|qty_shipped_supplier/);
   });
 

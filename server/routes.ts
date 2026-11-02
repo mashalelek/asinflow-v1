@@ -4861,7 +4861,7 @@ export async function registerRoutes(
       try {
         velocity = await syncVelocityShipments({ dryRun });
         const c = velocity.counts;
-        log(`Shipment sync A ${dryRun ? "DRY RUN" : "live"}: shipments ${c.shipments} (fetched ${c.shipmentsFetched}), lines ${c.lines} matched ${c.linesMatched} (order-only ${c.linesMatchedOrderOnly}) no_order ${c.linesNoOrder} po_not_found ${c.linesPoNotFound}; rows +${c.rowsInserted} ~${c.rowsUpdated} =${c.rowsUnchanged}; manual kept ${c.manualRowsKept} split drift ${c.manualSplitDrift}; unmatched new ${c.unmatchedNew} resolved ${c.unmatchedResolved}; at_prep set ${c.atPrepSet} cleared ${c.atPrepCleared}; POs ${c.posTouched}`, "shipments");
+        log(`Shipment sync A ${dryRun ? "DRY RUN" : "live"}: shipments ${c.shipments} (fetched ${c.shipmentsFetched}), lines ${c.lines} matched ${c.linesMatched} (order-only ${c.linesMatchedOrderOnly}) no_order ${c.linesNoOrder} po_not_found ${c.linesPoNotFound}; rows +${c.rowsInserted} ~${c.rowsUpdated} =${c.rowsUnchanged}; manual kept ${c.manualRowsKept} split drift ${c.manualSplitDrift}; unmatched new ${c.unmatchedNew} resolved ${c.unmatchedResolved}; at_prep set ${c.atPrepSet} cleared ${c.atPrepCleared}; received_velocity set ${c.receivedVelocitySet} cleared ${c.receivedVelocityCleared}; POs ${c.posTouched}`, "shipments");
       } catch (err: any) {
         log(`Shipment sync A error: ${err.message}`, "shipments");
         velocity = { error: err?.message ?? String(err) };

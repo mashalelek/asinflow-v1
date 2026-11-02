@@ -2,7 +2,7 @@ import { describe, it, expect } from "vitest";
 import { readFileSync } from "fs";
 import { join } from "path";
 import { poAsinRowsSql } from "./po-queries";
-import { fmtQty, qtyNumber, individualUnits, productQtyFromAsin, PO_ASIN_COLUMNS } from "../client/src/lib/po-qty";
+import { fmtQty, qtyNumber, individualUnits, productQtyFromAsin, PO_ASIN_COLUMNS, VELOCITY_QTY_TITLE } from "../client/src/lib/po-qty";
 
 // PO expand-by-ASIN patch (docs/claude_spec-patch-po-expand-by-asin.md).
 // Commit 3: the §4 column model is ONE component for the detail tab and the
@@ -12,10 +12,10 @@ import { fmtQty, qtyNumber, individualUnits, productQtyFromAsin, PO_ASIN_COLUMNS
 const read = (rel: string) => readFileSync(join(__dirname, "..", rel), "utf8");
 
 describe("§4 column model", () => {
-  it("has the 19 columns in the patch's order and names", () => {
+  it("has the 21 columns in the patch's order and names (Received by Velocity before At Prep Center, 2026-11-02)", () => {
     expect(PO_ASIN_COLUMNS.map((c) => c.label)).toEqual([
       "ASIN", "Title", "Amazon SKU", "Ordered", "Cost/Unit", "Total Cost", "Prep", "Sold As", "Units/Pack",
-      "Individual Units Ordered", "Canceled", "Returned", "Shipped by Supplier", "At Prep Center", "At CQG Warehouse",
+      "Individual Units Ordered", "Canceled", "Returned", "Shipped by Supplier", "Received by Velocity", "At Prep Center", "At CQG Warehouse",
       "Lost/damaged by us", "Shipped FBA", "Received by Amazon", "Shipment IDs", "Action Items", // row-level Status 2026-10-17
     ]);
   });
@@ -30,6 +30,22 @@ describe("§4 column model", () => {
     // fixed widths so separate instances align under one header
     expect(comp).toMatch(/table-fixed/);
     expect(comp).toMatch(/<colgroup>/);
+  });
+  it("Received by Velocity (2026-11-02): the cell sits right before At Prep Center, both carry the shared tooltip, the header too; the tables' minWidth holds the extra column", () => {
+    const comp = read("client/src/components/po-asin-rows.tsx");
+    const recv = comp.indexOf("<QtyCell v={a.received_velocity} />"), prep = comp.indexOf("<QtyCell v={a.qty_at_prep} />");
+    expect(recv).toBeGreaterThan(0);
+    expect(prep).toBeGreaterThan(recv);
+    expect(comp.slice(recv + 1, prep)).not.toMatch(/<QtyCell/); // adjacent cells
+    expect(comp).toMatch(/title=\{VELOCITY_QTY_TITLE\}><QtyCell v=\{a\.received_velocity\}/);
+    expect(comp).toMatch(/title=\{VELOCITY_QTY_TITLE\}><QtyCell v=\{a\.qty_at_prep\}/);
+    expect(comp).toMatch(/received_velocity: VELOCITY_QTY_TITLE, at_prep: VELOCITY_QTY_TITLE/);
+    expect(comp).toMatch(/title=\{COL_TITLES\[c\.key\]\}>\{c\.label\}/);
+    expect(VELOCITY_QTY_TITLE).toBe("Received by Velocity = all units Velocity has ever checked in for this line; At Prep Center = of those, still at Velocity.");
+    expect(comp).not.toMatch(/minWidth: "140rem"/);
+    expect(read("client/src/pages/purchase-orders.tsx")).toMatch(/minWidth: PO_ASIN_TABLE_MIN_WIDTH/);
+    // Received by Velocity is a PO-row column only: the ASIN-level pipeline (On Order / At Prep / Stock) never reads it.
+    expect(read("server/asin-po-pipeline.ts")).not.toMatch(/received_velocity/);
   });
 });
 
