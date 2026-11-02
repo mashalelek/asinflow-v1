@@ -11,3 +11,10 @@ real Walmart PO (2026-11-01; order # and card invented): the rollback /
 "Bought N times" / recommendation strips, the "You saved" headline, the
 "Have a promo code?" prompt and the size-variant radios the v1.2.1 parser
 rules are tested against.
+
+`shagtools/cart.txt` is a synthetic table-style cart shaped like the
+shagtools.com cart (2026-11-02; names and prices invented): one `<tr>` per
+product whose cells (title, price, quantity stepper, line total) innerText
+joins with tabs, a header row, a recommendation row without a quantity, and
+one coupon shown four ways (banner, "GET 10% OFF", cart notice, COUPON: row)
+— the v1.2.2 row rule and promo dedupe are tested against it.

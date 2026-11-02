@@ -20,6 +20,7 @@ export function extractShipping(page: CapturePage): BucketShipping | null;
 export function extractPayment(page: CapturePage): Buckets["payment"];
 export function extractTotals(page: CapturePage): BucketTotals;
 export function extractPromos(page: CapturePage): string[];
+export function dedupePromos(lines: string[]): string[];
 export function extractOrder(page: CapturePage): BucketOrder;
 export function filled(b: Buckets | null): Record<BucketKey, boolean>;
 export function missing(b: Buckets | null): string[];

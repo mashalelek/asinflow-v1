@@ -1,7 +1,7 @@
 import { describe, it, expect } from "vitest";
 import { readFileSync } from "fs";
 import { resolve } from "path";
-import { extractBuckets, mergeBuckets, emptyBuckets, filled, missing, canOpen, applyPage, captureKey, pagesForPrefill, shipToForPrefill, othersCapturing, describeShipping, extractShipping, extractProducts } from "../chrome-extension/buckets.js";
+import { extractBuckets, mergeBuckets, emptyBuckets, filled, missing, canOpen, applyPage, captureKey, pagesForPrefill, shipToForPrefill, othersCapturing, describeShipping, extractShipping, extractProducts, extractPromos, dedupePromos } from "../chrome-extension/buckets.js";
 import { scrubText } from "../chrome-extension/scrub.js";
 
 // Capture PO v1.2 (SPEC §11 "Chrome extension — Capture PO"): six data
@@ -173,6 +173,41 @@ describe("buckets: merge — newest wins per field, nothing replaced wholesale, 
     expect(b.promos).toEqual(["Promo applied: 30% off", "Rewards: $5.00 applied"]);
     expect(b.order).toEqual({ number: "A1", date: "Nov 1, 2026" });
     expect(mergeBuckets(null, null)).toEqual(emptyBuckets());
+  });
+});
+
+// v1.2.2 (Maria 2026-11-02): a shagtools.com cart — table-style rows (one <tr> per product; innerText joins the cells with tabs) left Products empty, and one coupon counted as four promos.
+describe("buckets: v1.2.2 — table-style cart rows and promo dedupe (shagtools)", () => {
+  const qtyFields = [{ label: "quantity", value: "1" }, { label: "quantity", value: "2" }, { label: "quantity", value: "1" }];
+  const cart = { step: "cart", url: "https://www.shagtools.com/cart", title: "cart", text: scrubText(readFileSync(resolve(FIX, "shagtools/cart.txt"), "utf8")), fields: qtyFields };
+  it("a table row whose cells hold a title, a price and a quantity stepper as siblings is a product; the stepper's value comes from the quantity fields; the header row and the 'You may also like' row (no quantity) are not products", () => {
+    const b = extractBuckets(cart);
+    expect(b.products).toEqual([
+      { name: "Shag Carpet Kicker Pro 12 Inch Adjustable Head", qty: 1, price: "$133.90", total: "$133.90", sku: null },
+      { name: "Shag Tools Loop Pile Cutter Blades, 10 Pack", qty: 2, price: "$24.50", total: "$49.00", sku: null },
+      { name: "Shag Tools Seam Roller 3 Inch Steel Handle", qty: 1, price: "$18.75", total: "$18.75", sku: null },
+    ]);
+    expect(b.totals).toMatchObject({ subtotal: "$201.65", shipping: "$12.00", tax: "$0.00", total: "$200.26" });
+    expect(canOpen(b)).toBe(true);
+    // No quantity value anywhere (no fields, no count in the row) → not product lines, as for a block (v1.2.1).
+    expect(extractProducts({ ...cart, fields: [] })).toEqual([]);
+  });
+  it("a row whose quantity is visible text ('− 2 +' or a bare count that the line total confirms) needs no field", () => {
+    const text = cart.text.replace("\t−\t+\t$133.90", "\t−\t1\t+\t$133.90").replace("\t−\t+\t$49.00", "\t−\t2\t+\t$49.00").replace("\t−\t+\t$18.75", "\t1\t$18.75");
+    expect(extractProducts({ ...cart, text, fields: [] }).map((p) => [p.qty, p.price, p.total])).toEqual([[1, "$133.90", "$133.90"], [2, "$24.50", "$49.00"], [1, "$18.75", "$18.75"]]);
+  });
+  it("one coupon, one promo: the banner, the 'GET 10% OFF' line, the cart notice and the COUPON: row dedupe to the line with the most detail (code + amount + percent)", () => {
+    expect(extractPromos(cart)).toEqual(["COUPON: SHAGTOOLS10 (10% off)  −$13.39"]);
+    expect(filled(extractBuckets(cart)).promos).toBe(true);
+  });
+  it("dedupe: by code case-insensitively, a code-less line joins the code whose amount or percent it repeats, else by normalized wording; the merge dedupes the same way; distinct promos stay", () => {
+    expect(dedupePromos(["Use code SHAGTOOLS10 at checkout", "Coupon shagtools10 applied", "GET 10% OFF your first order", "COUPON: SHAGTOOLS10 (10% off)  −$13.39"])).toEqual(["COUPON: SHAGTOOLS10 (10% off)  −$13.39"]);
+    expect(dedupePromos(["Promo applied: 30% off with COMEBACK47Z5", "Rewards: $5.00 applied", "Coupon SAVE20 applied", "Promo applied: 30% off with comeback47z5"])).toEqual(["Promo applied: 30% off with COMEBACK47Z5", "Rewards: $5.00 applied", "Coupon SAVE20 applied"]);
+    expect(dedupePromos(["Promo applied: 30% off", "Promo applied: 30% off"])).toEqual(["Promo applied: 30% off"]);
+    expect(dedupePromos(["Rewards: $5.00 applied", "rewards: $5.00 APPLIED"])).toEqual(["Rewards: $5.00 applied"]); // same wording (case / spacing aside) is one; the first wins a tie
+    expect(dedupePromos(["Rewards: $5.00 applied", "Rewards: $5.00 applied today"])).toHaveLength(2); // different wording, no code → two
+    const merged = mergeBuckets(mergeBuckets(null, { promos: ["Use code SHAGTOOLS10 at checkout"] }), { promos: ["COUPON: SHAGTOOLS10 (10% off)  −$13.39"] });
+    expect(merged.promos).toEqual(["COUPON: SHAGTOOLS10 (10% off)  −$13.39"]);
   });
 });
 

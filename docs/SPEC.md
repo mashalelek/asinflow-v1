@@ -2593,7 +2593,7 @@ is set — the runner is always on; only the **schedule** is gated.
   File keep their inline sheet/CSV step; only the onboarding Refresh they
   spawn is a queue job.
 
-### Chrome extension — Capture PO (patch `docs/claude_spec-patch-po-ai-prefill.md` §4, 2026-10-31; `chrome-extension/` v1.2.1 — panel redesign 2026-11-01, pre-parser fixes from the first real PO the same day)
+### Chrome extension — Capture PO (patch `docs/claude_spec-patch-po-ai-prefill.md` §4, 2026-10-31; `chrome-extension/` v1.2.2 — panel redesign 2026-11-01, pre-parser fixes from the first real PO the same day, table-row products and promo dedupe from a shagtools.com cart 2026-11-02)
 
 The existing extension (the Amazon side-panel calculator, `content.js` on
 `/dp` pages) gains **Capture PO** in the same side panel: on any tab that is
@@ -2659,7 +2659,19 @@ not an Amazon product page the panel shows the capture UI instead of the
   promo line must carry a code, an amount or a percent ("Have a promo
   code?" is a prompt); no order date on the pages → today on the form,
   plain marker, no warning (`todayEt`). Fixtures:
-  `server/__fixtures__/capture-pages/walmart-po/`. **Open in AF** is enabled once
+  `server/__fixtures__/capture-pages/walmart-po/`. **v1.2.2 (a
+  shagtools.com cart, 2026-11-02):** a table / grid row — one line whose
+  cells (innerText joins a `<tr>`'s cells with tabs) hold a title, a price
+  and a quantity stepper / input / count as siblings — is a product line
+  too (the stepper's value still comes from the page's quantity fields; a
+  header row or a recommendation row without a quantity is not one);
+  **Promos are deduped per promo:** lines sharing a code (case-insensitive)
+  are one entry, a code-less line joins the coded promo whose amount or
+  percent it repeats ("GET 10% OFF" → SHAGTOOLS10), otherwise lines with
+  the same wording are one; the line with the most detail (code + amount +
+  percent) is kept, so a banner, a cart notice, the COUPON: row and the
+  "GET 10% OFF" line show as one promo, not four. Fixture:
+  `server/__fixtures__/capture-pages/shagtools/cart.txt`. **Open in AF** is enabled once
   Products and Totals are filled (the rest is optional); **Clear**;
   caption "One AI call runs when you open it · card numbers are masked
   before anything leaves the browser". **Per tab:** the record lives under

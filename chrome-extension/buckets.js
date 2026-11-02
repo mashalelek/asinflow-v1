@@ -9,6 +9,12 @@
 // text). Plain script (no bundler): defines globalThis.AfBuckets for the
 // service worker (importScripts) and the side panel, and exports the same
 // object for the vitest fixtures (server/extension-buckets.test.ts).
+// v1.2.2 (a shagtools.com cart): a TABLE-STYLE cart row — one line whose
+// cells (innerText joins a <tr>'s cells with tabs) hold a title, a price and
+// a quantity stepper / input / count as siblings — is a product; promos are
+// deduped by code (case-insensitive; a code-less line joins the code whose
+// amount or percent it repeats, else its normalized wording), keeping the
+// line with the most detail (code + amount + percent).
 (function (root) {
   "use strict";
 
@@ -117,6 +123,30 @@
     if (monies.length > 1 && p.qty != null) { var t = monies.filter(function (m) { return Math.abs(toNum(m) - toNum(p.price) * p.qty) < 0.011; })[0]; if (t && t !== p.price) p.total = t; }
     return p;
   }
+  /** A table / grid row (v1.2.2): cells side by side on one line — a title cell, a price cell and a quantity cell (a stepper "−" / "+", a "Qty" label, a "Qty N" or a bare count); the stepper's value comes from the page's quantity fields like any control. */
+  function rowItem(l) {
+    if (!MONEY.test(l)) return null;
+    var cells = l.split(/\s{2,}/).map(function (c) { return c.trim(); }).filter(Boolean);
+    if (cells.length < 3) return null;
+    var p = { name: null, qty: null, price: null, total: null, sku: null, control: false, monies: [], ints: [] }, sawQty = false;
+    for (var k = 0; k < cells.length; k++) {
+      var c = cells[k];
+      if (p.name == null && nameLike(c)) { p.name = c; continue; }
+      if (STEPPER.test(c) || QTY_LABEL.test(c)) { p.control = true; sawQty = true; continue; }
+      var q = QTY.exec(c); if (q) { if (p.qty == null) p.qty = Number(q[1]); p.control = true; sawQty = true; continue; }
+      if (/^\d{1,4}$/.test(c)) {
+        sawQty = true;
+        var stepper = (k > 0 && STEPPER.test(cells[k - 1])) || (k + 1 < cells.length && STEPPER.test(cells[k + 1]));
+        if (stepper) { p.control = true; if (p.qty == null) p.qty = Number(c); } else p.ints.push(Number(c));
+        continue;
+      }
+      var sk = SKU.exec(c); if (sk && !p.sku) p.sku = sk[1];
+      var mm = c.match(MONEY_G); if (mm && !/\b(?:was|reg\.?|regular|list|save|saved|savings)\b/i.test(c)) p.monies = p.monies.concat(mm.map(function (m) { return m.replace(/\s/g, ""); }));
+    }
+    // One bare count in the row and a total cell equal to price × count (a count of 1 makes them equal — explicit here, unlike a block's repeated price).
+    if (p.qty == null && p.ints.length === 1 && p.monies.length >= 2 && Math.abs(toNum(p.monies[1]) - toNum(p.monies[0]) * p.ints[0]) < 0.011) p.qty = p.ints[0];
+    return p.name && p.monies.length && sawQty ? p : null;
+  }
   function extractProducts(page) {
     var L = lines(page.text);
     var stop = L.findIndex(function (l) { return TOTALS_START.test(l); });
@@ -151,11 +181,13 @@
       var l = L[i];
       var single = singleLineItem(l);
       if (single) { out.push(single); i++; continue; }
+      var row = rowItem(l);
+      if (row) { out.push(row); i++; continue; }
       if (!nameLike(l)) { i++; continue; }
       var p = { name: l, qty: null, price: null, total: null, sku: null, control: false, monies: [], ints: [] }, j = i + 1, packInts = false;
       for (; j < L.length && j <= i + 14; j++) {
         var x = L[j];
-        if (TOTAL_LINE.test(x) || singleLineItem(x) || (nameLike(x) && !SKU.test(x))) break;
+        if (TOTAL_LINE.test(x) || singleLineItem(x) || rowItem(x) || (nameLike(x) && !SKU.test(x))) break;
         if (PROMO.test(x) || GIFT.test(x) || CARDISH.test(x)) continue;
         var mu = MULT.exec(x);
         if (mu) { p.qty = Number(mu[1] || mu[4]); p.control = true; p.monies.push((mu[2] || mu[3]).replace(/\s/g, "")); continue; }
@@ -224,7 +256,41 @@
 
   // ── Promos ──
   function extractPromos(page) {
-    return uniq(lines(page.text).filter(function (l) { return PROMO.test(l) && PROMO_VALUE.test(l) && !/\?\s*$/.test(l) && !TOTAL_LINE.test(l) && !GIFT.test(l) && l.length <= 100; }));
+    return dedupePromos(lines(page.text).filter(function (l) { return PROMO.test(l) && PROMO_VALUE.test(l) && !/\?\s*$/.test(l) && !TOTAL_LINE.test(l) && !GIFT.test(l) && l.length <= 100; }));
+  }
+  // The code on a promo line: a token of 5+ letters and digits, any case ("SHAGTOOLS10", "shagtools10", "COMEBACK47Z5"), else an all-caps word that is not a label ("COUPON", "APPLIED").
+  var PROMO_LABEL_WORD = /^(?:COUPON|CODE|PROMO|PROMOTION|APPLIED|DISCOUNT|SAVINGS|SAVE|REWARD|REWARDS|OFF|FREE|SHIPPING|ORDER|TOTAL|GET|YOUR|WITH|USE|ENTER|CHECKOUT|CART|SALE|OFFER|DEAL|TODAY|ONLY|NOW|FIRST|EXTRA|BONUS|MEMBER|MEMBERS)$/;
+  function promoCode(l) {
+    var toks = String(l || "").match(/\b[A-Za-z0-9]{5,}\b/g) || [];
+    var mixed = toks.filter(function (t) { return /[A-Za-z]/.test(t) && /\d/.test(t); });
+    if (mixed.length) return mixed[0];
+    return toks.filter(function (t) { return /^[A-Z]+$/.test(t) && !PROMO_LABEL_WORD.test(t); })[0] || null;
+  }
+  function promoPercents(l) { return (String(l || "").match(/\d+(?:\.\d+)?\s*%/g) || []).map(function (x) { return String(Number(x.replace(/[^\d.]/g, ""))); }); }
+  function promoMonies(l) { return (String(l || "").match(MONEY_G) || []).map(function (x) { return x.replace(/[^\d.]/g, ""); }); }
+  function promoDesc(l) { return String(l || "").toLowerCase().replace(MONEY_G, " ").replace(/\d+(?:\.\d+)?\s*%/g, " ").replace(/[^a-z]+/g, " ").trim(); }
+  /** One entry per promo (v1.2.2): lines sharing a code (case-insensitive) are one; a code-less line joins the coded promo whose amount or percent it repeats ("GET 10% OFF" → SHAGTOOLS10), else lines with the same wording are one; the line with the most detail (code, amount, percent — then the longer) is kept, in first-seen order. */
+  function dedupePromos(list) {
+    var items = (list || []).map(function (l, i) {
+      var code = promoCode(l), pct = promoPercents(l), money = promoMonies(l);
+      return { l: l, i: i, code: code ? code.toLowerCase() : null, pct: pct, money: money, desc: promoDesc(l), score: (code ? 1 : 0) + (money.length ? 1 : 0) + (pct.length ? 1 : 0) };
+    });
+    var groups = [];
+    items.filter(function (it) { return it.code; }).forEach(function (it) {
+      var g = groups.filter(function (g) { return g.code === it.code; })[0];
+      if (!g) { g = { code: it.code, desc: null, items: [] }; groups.push(g); }
+      g.items.push(it);
+    });
+    items.filter(function (it) { return !it.code; }).forEach(function (it) {
+      var g = groups.filter(function (g) { return g.code && g.items.some(function (x) { return it.pct.some(function (v) { return x.pct.indexOf(v) >= 0; }) || it.money.some(function (v) { return x.money.indexOf(v) >= 0; }); }); })[0]
+        || groups.filter(function (g) { return !g.code && g.desc === it.desc; })[0];
+      if (!g) { g = { code: null, desc: it.desc, items: [] }; groups.push(g); }
+      g.items.push(it);
+    });
+    return groups.map(function (g) {
+      var best = g.items.reduce(function (b, x) { return x.score > b.score || (x.score === b.score && x.l.length > b.l.length) ? x : b; });
+      return { first: Math.min.apply(null, g.items.map(function (x) { return x.i; })), l: best.l };
+    }).sort(function (a, b) { return a.first - b.first; }).map(function (g) { return g.l; });
   }
 
   // ── Order ──
@@ -286,7 +352,7 @@
         giftCards: upsert((a.payment || {}).giftCards || [], (b.payment || {}).giftCards || [], function (g) { return g.last4 || g.amount; }),
       },
       totals: assignNewer(Object.assign({}, a.totals || {}), b.totals || {}),
-      promos: uniq((a.promos || []).concat(b.promos || [])),
+      promos: dedupePromos((a.promos || []).concat(b.promos || [])),
       order: assignNewer(Object.assign({}, a.order || {}), b.order || {}),
     };
   }
@@ -358,7 +424,7 @@
 
   var api = {
     BUCKETS: BUCKETS, LABELS: LABELS, emptyBuckets: emptyBuckets, extractBuckets: extractBuckets, mergeBuckets: mergeBuckets,
-    extractProducts: extractProducts, extractShipping: extractShipping, extractPayment: extractPayment, extractTotals: extractTotals, extractPromos: extractPromos, extractOrder: extractOrder,
+    extractProducts: extractProducts, extractShipping: extractShipping, extractPayment: extractPayment, extractTotals: extractTotals, extractPromos: extractPromos, dedupePromos: dedupePromos, extractOrder: extractOrder,
     filled: filled, missing: missing, canOpen: canOpen, streetIn: streetIn, normStreet: normStreet,
     captureKey: captureKey, newCapture: newCapture, applyPage: applyPage, pagesForPrefill: pagesForPrefill, shipToForPrefill: shipToForPrefill, othersCapturing: othersCapturing,
     shipToKind: shipToKind, describeShipping: describeShipping,
