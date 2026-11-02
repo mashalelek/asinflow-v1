@@ -51,7 +51,7 @@ export function TopNav() {
 
   return (
     <header
-      className="sticky top-0 z-50 flex items-center h-[52px] px-4 gap-6"
+      className="sticky top-0 z-50 flex items-center h-[52px] px-4 gap-3 xl:gap-6 min-w-0"
       style={{ backgroundColor: "hsl(var(--nav))", color: "hsl(var(--nav-foreground))" }}
     >
       {/* Logo */}
@@ -61,7 +61,8 @@ export function TopNav() {
       </Link>
 
       {/* Nav items */}
-      <nav className="flex items-center gap-1">
+      {/* 2026-11-01: the menu overflowed ~60 px at 1024 — padding, gaps, the "Soon" tags and the user name tighten below xl. */}
+      <nav className="flex items-center gap-0.5 xl:gap-1 min-w-0">
         {NAV_ITEMS.map((item) => {
           const isActive = location === item.path || (item.path === "/asins" && location === "/");
           const Icon = item.icon;
@@ -70,11 +71,11 @@ export function TopNav() {
             return (
               <span
                 key={item.path}
-                className="flex items-center gap-1.5 px-3 py-1.5 rounded text-xs opacity-40 cursor-default select-none"
+                className="flex items-center gap-1.5 px-2 xl:px-3 py-1.5 rounded text-xs opacity-40 cursor-default select-none whitespace-nowrap"
               >
                 <Icon className="h-3.5 w-3.5" />
                 {item.label}
-                <span className="text-[9px] uppercase tracking-wider opacity-60">Soon</span>
+                <span className="hidden xl:inline text-[9px] uppercase tracking-wider opacity-60">Soon</span>
               </span>
             );
           }
@@ -83,7 +84,7 @@ export function TopNav() {
             <Link
               key={item.path}
               href={item.path}
-              className={`flex items-center gap-1.5 px-3 py-1.5 rounded text-xs transition-colors ${
+              className={`flex items-center gap-1.5 px-2 xl:px-3 py-1.5 rounded text-xs transition-colors whitespace-nowrap ${
                 isActive
                   ? "font-medium"
                   : "opacity-70 hover:opacity-100"
@@ -98,7 +99,7 @@ export function TopNav() {
       </nav>
 
       {/* Right side utilities — order: Date Picker | Theme toggle | Settings | User */}
-      <div className="ml-auto flex items-center gap-2">
+      <div className="ml-auto flex items-center gap-2 min-w-0 shrink-0">
         {/* Listing hygiene: a held close / delete run, on every page until released. */}
         {user && <ActionRequired />}
 
@@ -142,7 +143,7 @@ export function TopNav() {
                 data-testid="button-user-menu"
               >
                 <UserRound className="h-4 w-4" />
-                <span className="max-w-[12rem] truncate">{user.displayName}</span>
+                <span className="max-w-[6rem] xl:max-w-[12rem] truncate">{user.displayName}</span>
               </Button>
             </DropdownMenuTrigger>
             <DropdownMenuContent align="end" className="min-w-[12rem]">

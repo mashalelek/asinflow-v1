@@ -79,8 +79,9 @@ export interface PoAsinRowData {
 
 const COL_WIDTHS: Record<(typeof PO_ASIN_COLUMNS)[number]["key"], string> = {
   asin: "7rem", title: "18rem", sku: "11rem", ordered: "4.5rem", cost_per_unit: "5.5rem", total_cost: "6rem", prep: "4.5rem",
-  sold_as: "6rem", units_per_pack: "5rem", individual_units: "7rem", canceled: "5rem", returned: "5rem", shipped_supplier: "6.5rem",
-  at_prep: "6rem", at_warehouse: "6.5rem", lost_damaged_us: "6.5rem", shipped_fba: "5.5rem", received_amazon: "6.5rem", shipments: "11rem", action_items: "12rem",
+  // Widths hold two-line header labels (2026-11-01: "Individual Units Ordered", "Shipped by Supplier", "Lost/damaged by us" overlapped their neighbours).
+  sold_as: "6rem", units_per_pack: "5rem", individual_units: "7.5rem", canceled: "5rem", returned: "5rem", shipped_supplier: "7rem",
+  at_prep: "6rem", at_warehouse: "7rem", lost_damaged_us: "7.5rem", shipped_fba: "5.5rem", received_amazon: "7rem", shipments: "11rem", action_items: "12rem",
 };
 const LEAD_WIDTH = "2.75rem";
 
@@ -386,7 +387,8 @@ export function PoAsinColGroup() {
 }
 
 export function PoAsinHeaderRow({ sub = false }: { sub?: boolean }) {
-  const base = `px-3 py-2 text-xs font-medium whitespace-nowrap ${sub ? "text-muted-foreground" : ""}`;
+  // Header labels wrap to two lines inside their fixed column (never nowrap: the labels overlapped at every width).
+  const base = `px-3 py-2 text-xs font-medium leading-tight align-bottom whitespace-normal ${sub ? "text-muted-foreground" : ""}`;
   return (
     <tr className={sub ? "bg-muted/40" : "table-header-stone"} data-testid="po-asin-header">
       <th className={base}></th>
