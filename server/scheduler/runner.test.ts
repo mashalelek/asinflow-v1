@@ -153,6 +153,9 @@ describe("runJob", () => {
     expect(seen[10]).toEqual(["A1", "A2", "A3", "A4"]); // untouched component → whole scope
     expect(db.ledger.map((l) => l.stage)).toEqual(["07_stub", "10_stub"]);
     expect(db.ledger[0].requested).toBe(2);
+    // The remainder row says so and carries the original requested count; the untouched component's row does not.
+    expect(db.ledger[0].outcomes._resumed).toBe("remainder after a restart: this row covers 2 of 4 ASINs (resumed after A2); the 2 before it were refreshed in the earlier segment, which has no ledger row");
+    expect(db.ledger[1].outcomes._resumed).toBeUndefined();
     expect(db.job.progress.done).toEqual([1, 7, 10]);
   });
 

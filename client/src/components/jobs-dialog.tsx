@@ -14,7 +14,7 @@ import { Badge } from "@/components/ui/badge";
 import { StageResultsList } from "@/components/stage-results";
 import { ListingHygienePanel, ListingChangesPanel } from "@/components/listing-hygiene-panel";
 import {
-  listJobs, getJob, cancelJob, formatDuration, groupFlips, groupListingActions, changeCount, failedAsinsFromRuns, componentLabel, jobKindLabel, progressText,
+  listJobs, getJob, cancelJob, formatDuration, jobDurationMs, groupFlips, groupListingActions, changeCount, failedAsinsFromRuns, componentLabel, jobKindLabel, progressText,
   FOCUS_ASIN_EVENT, type Job, type ComponentRun, type FlipGroups,
 } from "@/lib/jobs-api";
 
@@ -32,10 +32,9 @@ function fmt(ts: string | null): string {
 }
 
 function durationOf(j: Job): string {
-  if (j.summary) return formatDuration(j.summary.durationMs);
-  if (j.started_at && !j.finished_at) return formatDuration(Date.now() - new Date(j.started_at).getTime()) + " so far";
-  if (j.started_at && j.finished_at) return formatDuration(new Date(j.finished_at).getTime() - new Date(j.started_at).getTime());
-  return "—";
+  const ms = jobDurationMs(j);
+  if (ms == null) return "—";
+  return formatDuration(ms) + (j.started_at && !j.finished_at ? " so far" : "");
 }
 
 export function FlipsPanel({ groups }: { groups: FlipGroups }) {

@@ -135,6 +135,14 @@ export async function runJob(
     // its cursor, and only for per-ASIN / batch kinds.
     const resumingThis = progress.component === c.n && (c.kind === "asin" || c.kind === "batch");
     const asins = resumingThis ? remainingAfterCursor(scope, progress.asin_cursor) : scope;
+    // A resumed component's ledger row covers only the remainder: `requested`
+    // is the remaining count and the `_resumed` note carries the original
+    // (jobs #367 / #374, 2026-11-01: 10_prices requested 1041 of 2541).
+    const resumeNote = resumingThis
+      ? `remainder after a restart: this row covers ${asins.length} of ${scope.length} ASINs (resumed after ${progress.asin_cursor ?? "the start"}); the ${scope.length - asins.length} before it were refreshed in the earlier segment, which has no ledger row`
+      : null;
+    const noted = (r: ComponentResult | null): ComponentResult | null =>
+      r && resumeNote ? { ...r, outcomes: { _resumed: resumeNote, ...r.outcomes } } : r;
     if (!resumingThis) { progress.component = c.n; progress.asin_cursor = null; progress.position = 0; }
     progress.total = scope.length;
     progress.unit = undefined;
@@ -174,7 +182,7 @@ export async function runJob(
       const partial: ComponentResult | null = err instanceof ComponentError ? err.partial : null;
       await recordComponentRun({
         jobId: job.id, trigger: job.trigger, stage: c.key, scope: ledgerScope,
-        requested: asins.length, startedAt, result: partial, error: msg,
+        requested: asins.length, startedAt, result: noted(partial), error: msg,
       }, query);
       if (partial) summary.components[c.key] = partial.counts;
       summary.stoppedAt = c.n;
@@ -191,7 +199,7 @@ export async function runJob(
 
     await recordComponentRun({
       jobId: job.id, trigger: job.trigger, stage: c.key, scope: ledgerScope,
-      requested: asins.length, startedAt, result, error: null,
+      requested: asins.length, startedAt, result: noted(result), error: null,
     }, query);
     summary.components[c.key] = result.counts;
     if (result.flips?.length) summary.flips.push(...result.flips);

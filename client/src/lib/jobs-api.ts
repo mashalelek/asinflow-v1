@@ -117,11 +117,26 @@ export function formatDuration(ms: number): string {
   return `${Math.floor(m / 60)} h ${m % 60} min`;
 }
 
+/**
+ * How long a job took, wall clock: started_at → finished_at (→ now while it
+ * runs). `summary.durationMs` is the LAST runner invocation's time, so a job
+ * resumed after a restart reports only its final segment (jobs #367 / #374,
+ * 2026-11-01: 6 min shown for 48-min runs); it is the fallback only when the
+ * row has no timestamps. Null when nothing is known.
+ */
+export function jobDurationMs(job: Pick<Job, "status" | "started_at" | "finished_at" | "summary">, now: () => number = Date.now): number | null {
+  if (job.started_at && job.finished_at) return new Date(job.finished_at).getTime() - new Date(job.started_at).getTime();
+  if (job.started_at && job.status === "running") return now() - new Date(job.started_at).getTime();
+  if (job.summary) return job.summary.durationMs;
+  return null;
+}
+
 /** Completion toast title + description (decision 16: never price counts). */
 export function completionText(job: Job): { title: string; description: string } {
   const s = job.summary;
   const n = s?.asins ?? job.scope_asins?.length ?? 0;
-  const dur = s ? formatDuration(s.durationMs) : "";
+  const ms = jobDurationMs(job);
+  const dur = ms != null ? formatDuration(ms) : "";
   const who = job.trigger === "scheduled" ? "Scheduled refresh" : "Refresh";
   if (job.status === "failed") return { title: `${who} failed`, description: job.error ?? "unknown error" };
   if (job.status === "cancelled") return { title: `${who} cancelled`, description: `${n.toLocaleString()} ASINs · stopped at ${componentLabel(s?.stoppedAt)}` };

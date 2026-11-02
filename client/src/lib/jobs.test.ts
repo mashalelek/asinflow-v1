@@ -2,7 +2,7 @@ import { describe, it, expect, vi } from "vitest";
 import { readFileSync } from "fs";
 import { join } from "path";
 import {
-  runningLabel, queuedLabel, completionText, groupFlips, failedAsinsFromRuns, formatDuration, jobKindLabel,
+  runningLabel, queuedLabel, completionText, groupFlips, failedAsinsFromRuns, formatDuration, jobDurationMs, jobKindLabel,
   enqueueRefresh, type Job, type ComponentRun,
 } from "./jobs-api";
 
@@ -41,6 +41,21 @@ describe("toolbar labels", () => {
     expect(formatDuration(42_000)).toBe("42 s");
     expect(formatDuration(44 * 60_000)).toBe("44 min");
     expect(formatDuration(95 * 60_000)).toBe("1 h 35 min");
+  });
+});
+
+describe("jobDurationMs — wall clock, not the last runner segment (jobs #367 / #374, 2026-11-01)", () => {
+  const summary = { asins: 2541, durationMs: 6 * 60_000, components: {}, flips: [] };
+  it("a finished job reads started_at → finished_at even when summary.durationMs is the resumed segment's 6 min", () => {
+    const j = { ...base, status: "done" as const, summary, started_at: "2026-11-01T18:00:25Z", finished_at: "2026-11-01T18:47:25Z" };
+    expect(jobDurationMs(j)).toBe(47 * 60_000);
+    expect(completionText(j).description).toBe("2,541 ASINs · 47 min");
+  });
+  it("a running job reads started_at → now; a finished row without timestamps falls back to the summary; nothing known → null", () => {
+    const now = () => Date.parse("2026-11-01T18:10:25Z");
+    expect(jobDurationMs({ ...base, started_at: "2026-11-01T18:00:25Z", finished_at: null }, now)).toBe(10 * 60_000);
+    expect(jobDurationMs({ ...base, status: "done", summary, started_at: "2026-11-01T18:00:25Z", finished_at: null }, now)).toBe(6 * 60_000);
+    expect(jobDurationMs({ ...base, status: "queued", summary: null, started_at: null, finished_at: null })).toBeNull();
   });
 });
 
