@@ -233,7 +233,7 @@ export function OfferAddPreviewDialog({
 
   return (
     <Dialog open={open} onOpenChange={(o) => !o && onClose()}>
-      <DialogContent className="max-w-4xl max-h-[90vh] overflow-y-auto">
+      <DialogContent dialogId="add-to-sc-preview" className="max-w-4xl">
         <DialogHeader>
           <DialogTitle>Add to Seller Central — Preview</DialogTitle>
           <DialogDescription>

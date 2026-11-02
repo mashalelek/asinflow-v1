@@ -807,6 +807,58 @@ page modes — that's intentional.
   - Decorative tile accents (left-borders)
   - Warning indicators (amber)
 
+### Dialogs — one shared frame (Maria 2026-11-01)
+
+Every modal in AF renders through the one wrapper in
+`client/src/components/ui/dialog.tsx` (`DialogContent`, and
+`AlertDialogContent` on the same frame), each with a `dialogId`:
+
+- **Resizable** by dragging the right edge, the bottom edge or the
+  bottom-right corner; min 480×320; max = the viewport minus a 32 px
+  margin. The size is remembered per dialog in localStorage under
+  `af-dialog-size:<dialogId>` — per browser, like the column widths and the
+  Buy List; all of them move into a user-scoped table with the queued
+  Buy-List-to-DB patch.
+- **Default size** = the content's size, capped at 90 % of the viewport
+  both ways (the width is the dialog's designed `max-w-*`, min 480).
+- The **body scrolls vertically** when the content exceeds the height; the
+  `DialogHeader` and `DialogFooter` children stay pinned (the frame splits
+  its children by type).
+- **Never a horizontal scroll:** the body hides x-overflow and wraps text
+  (`overflow-wrap: anywhere`, items may shrink); a table inside a dialog
+  sits in `<DialogTable>` — its own `overflow-x: auto` box with the first
+  column sticky.
+- **Close** with Esc, × or a backdrop click; a **confirm** dialog
+  (`confirm`, or an `AlertDialogContent`) ignores the backdrop.
+
+Migrated 2026-11-01 (dialogId): Add to SC preview (`add-to-sc-preview`),
+Refresh jobs (`jobs`), Upload to Velocity (`upload-to-velocity`), the
+Unmatched tracking table (`unmatched-tracking`) and the Sync tracking dry
+run (`tracking-dry-run`), the verification panel (`verification`), Legend
+approval (`legend-approval`), Revival (`revival`), Active filters
+(`active-filters`), Action required (`action-required`), Users admin +
+Add user + Edit user (`users-admin`, `user-add`, `user-edit`), Column
+mapping (`column-mapping`), the **column manager** (`column-manager` — a
+dialog now, no longer a popover), Settings (`settings`), the pack-override
+question (`pack-override`, confirm), SellerBoard COGS export
+(`sb-cogs-export`), Update COGS in SC (`update-cogs-sc`), COGS update
+history (`cogs-update-history`), Bulk Calc's Save / Set confirm / Refresh
+results / Rename / Delete list (`bulk-save-list`, `bulk-set-confirm`
+confirm, `bulk-refresh-results`, `bulk-rename-list`, `bulk-delete-list`
+confirm), the **PO editor** (`po-edit` — a dialog now, no longer a side
+sheet) and its Cancel / Delete PO confirm (`po-danger-confirm`), the
+Close / Reopen PO confirm (`po-close-confirm`) and the listing-hygiene
+Release confirm (`release-confirm`). `client/src/components/ui/dialog.test.ts`
+sweeps every `DialogContent` for a `dialogId` and refuses a leftover
+`SheetContent` or a per-dialog scroll class.
+
+**Also 2026-11-01:** the POs page's expanded ASIN table wraps its header
+labels to two lines inside fixed column widths (Individual Units Ordered,
+Shipped by Supplier, Lost/damaged by us, Received by Amazon … no longer
+overlap); the top nav tightens below `xl` (padding, gaps, the "Soon" tags
+hidden, the user name clipped at 6rem) so no page scrolls horizontally at
+≥ 1024.
+
 ### Typography & spacing
 
 Small/muted for metadata, larger/primary for values. Minimum form element
@@ -6220,7 +6272,8 @@ reconstructed (those POs are Closed from the sheet).
   `client/src/hooks/use-column-widths.tsx`) under the key
   `af-po-col-widths`; **Reset widths** appears once a width is stored.
   Action Items defaults to 160 px. Widths are per browser (localStorage),
-  the same as the Buy List; both move into a user-scoped table with the
+  the same as the Buy List and the dialog sizes (`af-dialog-size:<id>`,
+  §7 "Dialogs"); all of them move into a user-scoped table with the
   queued Buy-List-to-DB patch.
 - Search spans order_id, ASIN, and product name in one box. Supplier and
   Action Items filters are **searchable multi-selects** (OR within a facet,

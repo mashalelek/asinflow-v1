@@ -97,7 +97,7 @@ function ClosedToggle({ po, onToggled, size = "sm" }: { po: { id: string; order_
       <button type="button" onClick={(e) => { e.stopPropagation(); setOpen(true); }} title={isClosed ? who : "Open"}
         className="inline-flex items-center" data-testid={`button-po-closed-${po.order_id}`} aria-pressed={isClosed}>{icon}</button>
       <AlertDialog open={open} onOpenChange={setOpen}>
-        <AlertDialogContent onClick={(e) => e.stopPropagation()}>
+        <AlertDialogContent dialogId="po-close-confirm" onClick={(e) => e.stopPropagation()}>
           <AlertDialogHeader>
             <AlertDialogTitle>{isClosed ? "Reopen this PO?" : "Close this PO?"}</AlertDialogTitle>
             <AlertDialogDescription>

@@ -2,6 +2,7 @@ import * as React from "react"
 import * as AlertDialogPrimitive from "@radix-ui/react-alert-dialog"
 
 import { cn } from "@/lib/utils"
+import { useDialogFrame, DIALOG_FRAME_CLASS, DIALOG_BODY_CLASS } from "@/components/ui/dialog"
 import { buttonVariants } from "@/components/ui/button"
 
 const AlertDialog = AlertDialogPrimitive.Root
@@ -25,22 +26,36 @@ const AlertDialogOverlay = React.forwardRef<
 ))
 AlertDialogOverlay.displayName = AlertDialogPrimitive.Overlay.displayName
 
+export interface AlertDialogContentProps extends React.ComponentPropsWithoutRef<typeof AlertDialogPrimitive.Content> {
+  /** The localStorage key for the remembered size; one per dialog (the shared frame in ui/dialog.tsx). */
+  dialogId: string
+}
+
+// A confirm dialog on the ONE dialog frame (AF-wide dialog rule, 2026-11-01): resizable, remembered size, pinned
+// header / footer, a scrolling body; Esc closes it, the backdrop does nothing (Radix AlertDialog semantics).
 const AlertDialogContent = React.forwardRef<
   React.ElementRef<typeof AlertDialogPrimitive.Content>,
-  React.ComponentPropsWithoutRef<typeof AlertDialogPrimitive.Content>
->(({ className, ...props }, ref) => (
-  <AlertDialogPortal>
-    <AlertDialogOverlay />
-    <AlertDialogPrimitive.Content
-      ref={ref}
-      className={cn(
-        "fixed left-[50%] top-[50%] z-50 grid w-full max-w-lg translate-x-[-50%] translate-y-[-50%] gap-4 border bg-background p-6 shadow-lg duration-200 data-[state=open]:animate-in data-[state=closed]:animate-out data-[state=closed]:fade-out-0 data-[state=open]:fade-in-0 data-[state=closed]:zoom-out-95 data-[state=open]:zoom-in-95 data-[state=closed]:slide-out-to-left-1/2 data-[state=closed]:slide-out-to-top-[48%] data-[state=open]:slide-in-from-left-1/2 data-[state=open]:slide-in-from-top-[48%] sm:rounded-lg",
-        className
-      )}
-      {...props}
-    />
-  </AlertDialogPortal>
-))
+  AlertDialogContentProps
+>(({ className, children, dialogId, ...props }, ref) => {
+  const f = useDialogFrame(dialogId, children, [AlertDialogHeader, AlertDialogFooter])
+  return (
+    <AlertDialogPortal>
+      <AlertDialogOverlay />
+      <AlertDialogPrimitive.Content
+        ref={(el) => { f.box.current = el; if (typeof ref === "function") ref(el); else if (ref) (ref as React.MutableRefObject<HTMLDivElement | null>).current = el }}
+        className={cn(DIALOG_FRAME_CLASS, className)}
+        style={f.style}
+        data-dialog-id={dialogId}
+        {...props}
+      >
+        {f.pinned.length > 0 && <div className="shrink-0 px-6 pb-2 pt-6">{f.pinned}</div>}
+        <div className={cn(DIALOG_BODY_CLASS, f.pinned.length === 0 && "pt-6", f.footers.length === 0 && "pb-6")}>{f.body}</div>
+        {f.footers.length > 0 && <div className="shrink-0 px-6 pb-6 pt-2">{f.footers}</div>}
+        {f.handles}
+      </AlertDialogPrimitive.Content>
+    </AlertDialogPortal>
+  )
+})
 AlertDialogContent.displayName = AlertDialogPrimitive.Content.displayName
 
 const AlertDialogHeader = ({

@@ -79,7 +79,7 @@ function HeldReviewDialog({ open, onOpenChange, state, onChanged }: {
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="sm:max-w-3xl max-h-[85vh] overflow-y-auto overflow-x-hidden [overflow-wrap:anywhere] [&>*]:min-w-0" data-testid="dialog-held">
+      <DialogContent dialogId="action-required" className="sm:max-w-3xl" data-testid="dialog-held">
         <DialogHeader>
           <DialogTitle>Held for review</DialogTitle>
           <DialogDescription>

@@ -6,7 +6,7 @@
 import { useCallback, useEffect, useState } from "react";
 import { RefreshCw, AlertTriangle, ExternalLink } from "lucide-react";
 import { Button } from "@/components/ui/button";
-import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from "@/components/ui/dialog";
+import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle, DialogTable } from "@/components/ui/dialog";
 import { useToast } from "@/hooks/use-toast";
 
 export interface TrackingRow {
@@ -114,7 +114,7 @@ export function PoTrackingTab({ poId, onChanged }: { poId: string; onChanged?: (
         </div>
       )}
       {rows.length === 0 ? <p className="text-muted-foreground">No tracking for this PO yet.</p> : (
-        <table className="w-full text-xs">
+        <DialogTable><table className="w-full text-xs">
           <thead className="text-muted-foreground text-left">
             <tr><th className="py-1 pr-2">Carrier</th><th className="pr-2">Tracking #</th><th className="pr-2">Order # (email)</th><th className="pr-2">Shipped</th><th className="pr-2">Ship-to</th><th className="pr-2">Status</th><th className="pr-2">Velocity</th><th /></tr>
           </thead>
@@ -142,7 +142,7 @@ export function PoTrackingTab({ poId, onChanged }: { poId: string; onChanged?: (
               );
             })}
           </tbody>
-        </table>
+        </table></DialogTable>
       )}
       <div className="flex items-center gap-2 text-xs" data-testid="add-tracking">
         <span className="text-muted-foreground">Add tracking</span>
@@ -182,7 +182,7 @@ export function SyncTrackingButton({ onDone }: { onDone?: () => void }) {
       </Button>
       <button className="text-xs text-muted-foreground hover:underline" onClick={() => void run(true)} disabled={busy} data-testid="button-sync-tracking-dry">dry run</button>
       <Dialog open={result?.dryRun === true} onOpenChange={(o) => { if (!o) setResult(null); }}>
-        <DialogContent className="sm:max-w-3xl max-h-[85vh] overflow-y-auto overflow-x-hidden [overflow-wrap:anywhere] [&>*]:min-w-0">
+        <DialogContent dialogId="tracking-dry-run" className="sm:max-w-3xl">
           <DialogHeader>
             <DialogTitle>Sync tracking — dry run</DialogTitle>
             <DialogDescription>Nothing was written to AF or Velocity.</DialogDescription>
@@ -192,11 +192,11 @@ export function SyncTrackingButton({ onDone }: { onDone?: () => void }) {
               <p>Gmail: {result.ingest.scanned} scanned · {result.ingest.candidates} candidates · {result.ingest.rows} rows · {result.ingest.placeholders} without a number</p>
               <p>Match: {result.match.matched} matched · {Object.entries(result.match.unmatched).map(([k, v]) => `${v} ${k}`).join(" · ") || "none unmatched"}</p>
               <p>Push: {result.push.plans.filter((p: any) => p.targets.some((t: any) => t.to_add.length)).length} POs to push · {result.push.review} to review · {result.push.received_by_velocity} already received by Velocity · {result.push.held} held</p>
-              <table className="w-full"><tbody>
+              <DialogTable><table className="w-full"><tbody>
                 {result.push.plans.filter((p: any) => p.targets.some((t: any) => t.to_add.length)).map((p: any) => (
                   <tr key={p.po_id} className="border-t"><td className="py-1 pr-2 font-mono">{p.order_id}</td><td>{p.targets.map((t: any) => `${t.asin}: +${t.to_add.join(", ")}${t.already.length ? ` (has ${t.already.join(", ")})` : ""}`).join(" · ")}</td></tr>
                 ))}
-              </tbody></table>
+              </tbody></table></DialogTable>
             </div>
           )}
         </DialogContent>
@@ -240,7 +240,7 @@ export function UnmatchedTrackingChip({ suppliers, reloadKey, onChanged }: { sup
         <AlertTriangle className="h-3.5 w-3.5" /> Unmatched tracking ({rows.length})
       </button>
       <Dialog open={open} onOpenChange={setOpen}>
-        <DialogContent className="max-w-6xl w-[95vw] max-h-[85vh] overflow-y-auto" data-testid="dialog-unmatched-tracking">
+        <DialogContent dialogId="unmatched-tracking" className="max-w-6xl" data-testid="dialog-unmatched-tracking">
           <DialogHeader>
             <DialogTitle>Unmatched tracking</DialogTitle>
             <DialogDescription>Attach a number to its PO, map a sender to a supplier once, or dismiss it.</DialogDescription>
@@ -251,7 +251,7 @@ export function UnmatchedTrackingChip({ suppliers, reloadKey, onChanged }: { sup
               Dismiss selected ({picked.size})
             </Button>
           </div>
-          <div className="overflow-x-auto">
+          <DialogTable>
             <table className="w-full min-w-[60rem] table-fixed text-xs">
               <colgroup>
                 <col className="w-7" /><col className="w-28" /><col className="w-48" /><col className="w-36" /><col className="w-48" /><col /><col className="w-72" />
@@ -265,8 +265,7 @@ export function UnmatchedTrackingChip({ suppliers, reloadKey, onChanged }: { sup
               <tbody>
                 {rows.map((r) => <UnmatchedQueueRow key={r.id} r={r} suppliers={suppliers} act={act} picked={picked.has(r.id)} onPick={() => toggle(r.id)} />)}
               </tbody>
-            </table>
-          </div>
+            </table></DialogTable>
         </DialogContent>
       </Dialog>
     </>

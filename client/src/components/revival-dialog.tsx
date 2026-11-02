@@ -58,7 +58,7 @@ export function RevivalDialog({ candidates, open, onClose, onConfirm }: RevivalD
 
   return (
     <Dialog open={open} onOpenChange={(o) => !o && !busy && onClose()}>
-      <DialogContent className="max-w-2xl">
+      <DialogContent dialogId="revival" className="max-w-2xl">
         <DialogHeader>
           <DialogTitle>Catalog restored</DialogTitle>
           <DialogDescription>

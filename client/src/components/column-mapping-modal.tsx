@@ -100,7 +100,7 @@ export function ColumnMappingModal({
 
   return (
     <Dialog open={open} onOpenChange={(isOpen) => { if (!isOpen) onCancel(); }}>
-      <DialogContent className="sm:max-w-md" data-testid="dialog-column-mapping">
+      <DialogContent dialogId="column-mapping" className="sm:max-w-md" data-testid="dialog-column-mapping">
         <DialogHeader>
           <DialogTitle data-testid="text-mapping-title">Match your columns</DialogTitle>
           <DialogDescription>

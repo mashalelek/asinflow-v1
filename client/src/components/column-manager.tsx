@@ -1,7 +1,7 @@
-import { useCallback } from "react";
+import { useCallback, useState } from "react";
 import { Button } from "@/components/ui/button";
 import { Checkbox } from "@/components/ui/checkbox";
-import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
+import { Dialog, DialogContent, DialogTrigger, DialogHeader, DialogTitle, DialogDescription } from "@/components/ui/dialog";
 import { Separator } from "@/components/ui/separator";
 import { Columns3, RotateCcw } from "lucide-react";
 import { ALL_COLUMNS, COLUMN_GROUPS, type ColumnDef, type ColumnId } from "@shared/schema";
@@ -43,26 +43,29 @@ export function ColumnManager({ config, onChange, columns = ALL_COLUMNS, storage
     colsByGroup.set(col.group, arr);
   }
 
+  const [open, setOpen] = useState(false);
   return (
-    <Popover>
-      <PopoverTrigger asChild>
+    // The column manager on the shared dialog frame (AF-wide dialog rule, 2026-11-01) — no longer a popover.
+    <Dialog open={open} onOpenChange={setOpen}>
+      <DialogTrigger asChild>
         <Button variant="secondary" size="sm" data-testid="button-column-manager">
           <Columns3 className="h-4 w-4 mr-1.5" />
           Columns
         </Button>
-      </PopoverTrigger>
-      <PopoverContent className="w-64 p-0" align="end" side="bottom">
-        <div className="p-3 pb-2">
-          <div className="flex items-center justify-between gap-2">
-            <span className="text-sm font-medium">Manage Columns</span>
+      </DialogTrigger>
+      <DialogContent dialogId="column-manager" className="max-w-md" data-testid="dialog-column-manager">
+        <DialogHeader>
+          <DialogTitle className="flex items-center justify-between gap-2 pr-6">
+            <span>Manage Columns</span>
             <Button variant="ghost" size="sm" onClick={resetToDefault} className="h-7 text-xs" data-testid="button-reset-columns">
               <RotateCcw className="h-3 w-3 mr-1" />
               Reset
             </Button>
-          </div>
-        </div>
+          </DialogTitle>
+          <DialogDescription>Show, hide and order the table's columns.</DialogDescription>
+        </DialogHeader>
         <Separator />
-        <div className="max-h-[400px] overflow-y-auto p-1">
+        <div className="p-1">
           {COLUMN_GROUPS.map((group) => {
             const cols = colsByGroup.get(group.key) ?? [];
             if (cols.length === 0) return null;
@@ -89,7 +92,7 @@ export function ColumnManager({ config, onChange, columns = ALL_COLUMNS, storage
             );
           })}
         </div>
-      </PopoverContent>
-    </Popover>
+      </DialogContent>
+    </Dialog>
   );
 }

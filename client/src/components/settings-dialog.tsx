@@ -108,7 +108,7 @@ export function SettingsDialog({
           </Button>
         </DialogTrigger>
       )}
-      <DialogContent className="sm:max-w-lg max-h-[85vh] overflow-y-auto">
+      <DialogContent dialogId="settings" className="sm:max-w-lg">
         <DialogHeader>
           <DialogTitle className="text-lg font-semibold">Settings</DialogTitle>
         </DialogHeader>

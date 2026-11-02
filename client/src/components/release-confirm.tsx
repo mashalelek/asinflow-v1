@@ -40,7 +40,7 @@ export function useReleaseConfirm(onQueued?: (message: string) => void) {
 
   const dialog = (
     <AlertDialog open={prompt != null} onOpenChange={(o) => { if (!o && !busy) cancel(); }}>
-      <AlertDialogContent data-testid="release-confirm">
+      <AlertDialogContent dialogId="release-confirm" data-testid="release-confirm">
         <AlertDialogHeader>
           <AlertDialogTitle>{prompt?.action === "close" ? "Close listings" : "Delete listings"}</AlertDialogTitle>
           <AlertDialogDescription>{prompt?.text}</AlertDialogDescription>

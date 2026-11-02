@@ -168,7 +168,7 @@ function PackOverrideDialog({ ask, onChoose }: { ask: { asin: string; from: stri
   useEffect(() => { if (ask) setChoice("po"); }, [ask]);
   return (
     <Dialog open={!!ask} onOpenChange={(v) => { if (!v) onChoose(false); }}>
-      <DialogContent className="max-w-md" data-testid="pack-override-dialog">
+      <DialogContent dialogId="pack-override" confirm className="max-w-md" data-testid="pack-override-dialog">
         <DialogHeader>
           <DialogTitle>Pack size changed</DialogTitle>
           <DialogDescription>{ask ? `${ask.asin}: units / pack changed from AF's ${ask.from} to ${ask.to}. Apply to:` : ""}</DialogDescription>

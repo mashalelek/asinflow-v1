@@ -17,7 +17,7 @@
 import { Fragment, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { fetchLongSync } from "@/lib/long-sync";
 import {
-  Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription, DialogFooter,
+  Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription, DialogFooter, DialogTable,
 } from "@/components/ui/dialog";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
@@ -386,7 +386,7 @@ export function UploadToVelocityDialog({ open, onOpenChange }: { open: boolean; 
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="max-w-6xl w-[95vw] h-[92vh] flex flex-col overflow-hidden">
+      <DialogContent dialogId="upload-to-velocity" className="max-w-6xl">
         <DialogHeader>
           <DialogTitle className="flex items-center gap-2">
             <Upload className="h-5 w-5" /> Upload to Velocity
@@ -406,7 +406,7 @@ export function UploadToVelocityDialog({ open, onOpenChange }: { open: boolean; 
           </DialogDescription>
         </DialogHeader>
 
-        <div className="flex-1 overflow-y-auto space-y-6 pr-1">
+        <div className="space-y-6">
           {loading && (
             <div className="flex items-center gap-2 text-muted-foreground py-8 justify-center">
               <Loader2 className="h-4 w-4 animate-spin" /> Checking sheet against Velocity…
@@ -424,7 +424,7 @@ export function UploadToVelocityDialog({ open, onOpenChange }: { open: boolean; 
                 {allCreates.length === 0 ? (
                   <div className="text-sm text-muted-foreground">None in range.</div>
                 ) : (
-                  <table className="w-full text-sm">
+                  <DialogTable><table className="w-full text-sm">
                     <thead>
                       <tr className="text-xs text-muted-foreground text-left border-b border-border">
                         <th className="py-1 pr-2 w-8"></th>
@@ -462,7 +462,7 @@ export function UploadToVelocityDialog({ open, onOpenChange }: { open: boolean; 
                         );
                       })}
                     </tbody>
-                  </table>
+                  </table></DialogTable>
                 )}
                 {/* Bundles (SPEC §11 Bundles, 2026-08-31): parent row +
                     nested component sub-rows (PO-module ASINs-tab pattern),
@@ -472,7 +472,7 @@ export function UploadToVelocityDialog({ open, onOpenChange }: { open: boolean; 
                     <h4 className="text-xs font-semibold text-muted-foreground mb-1">
                       Bundles ({(data.bundleCreates ?? []).length})
                     </h4>
-                    <table className="w-full text-sm">
+                    <DialogTable><table className="w-full text-sm">
                       <tbody>
                         {(data.bundleCreates ?? []).map((b) => {
                           const key = bundleKey(b);
@@ -506,7 +506,7 @@ export function UploadToVelocityDialog({ open, onOpenChange }: { open: boolean; 
                           );
                         })}
                       </tbody>
-                    </table>
+                    </table></DialogTable>
                   </div>
                 )}
                 {(data.bundleFlags ?? []).length > 0 && (
@@ -533,7 +533,7 @@ export function UploadToVelocityDialog({ open, onOpenChange }: { open: boolean; 
                         Ships to Home on the PO — prepped in-house, so these are skipped. Tick one only if it really goes to Velocity (and fix Ships to on the PO).
                         {(data.homeSkipped ?? 0) > 0 ? ` ${data.homeSkipped} more could not be built (no SKU / pack math).` : ""}
                       </div>
-                      <table className="w-full text-sm">
+                      <DialogTable><table className="w-full text-sm">
                         <tbody>
                           {homeCreates.map((r) => {
                             const key = recKey(r);
@@ -572,7 +572,7 @@ export function UploadToVelocityDialog({ open, onOpenChange }: { open: boolean; 
                             );
                           })}
                         </tbody>
-                      </table>
+                      </table></DialogTable>
                     </div>
                   )}
                 </section>
@@ -586,7 +586,7 @@ export function UploadToVelocityDialog({ open, onOpenChange }: { open: boolean; 
                 {(data.updates ?? []).length === 0 ? (
                   <div className="text-sm text-muted-foreground">Sheet and Velocity agree on every matched order.</div>
                 ) : (
-                  <table className="w-full text-sm">
+                  <DialogTable><table className="w-full text-sm">
                     <thead>
                       <tr className="text-xs text-muted-foreground text-left border-b border-border">
                         <th className="py-1 pr-2 w-8"></th>
@@ -622,7 +622,7 @@ export function UploadToVelocityDialog({ open, onOpenChange }: { open: boolean; 
                         );
                       })}
                     </tbody>
-                  </table>
+                  </table></DialogTable>
                 )}
               </section>
 
@@ -632,7 +632,7 @@ export function UploadToVelocityDialog({ open, onOpenChange }: { open: boolean; 
                   <h3 className="text-sm font-semibold mb-2">
                     Skipped <span className="text-muted-foreground font-normal">({data.skips.length})</span>
                   </h3>
-                  <table className="w-full text-sm">
+                  <DialogTable><table className="w-full text-sm">
                     <tbody>
                       {data.skips.map((s, i) => {
                         const st = skuCreate[s.asin];
@@ -784,7 +784,7 @@ export function UploadToVelocityDialog({ open, onOpenChange }: { open: boolean; 
                         );
                       })}
                     </tbody>
-                  </table>
+                  </table></DialogTable>
                 </section>
               )}
 

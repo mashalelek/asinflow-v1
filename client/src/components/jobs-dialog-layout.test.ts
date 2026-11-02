@@ -8,11 +8,13 @@ import { join } from "path";
 const src = (f: string) => readFileSync(join(__dirname, f), "utf8");
 
 describe("jobs dialog never scrolls sideways", () => {
-  it("the dialog's grid lets its items shrink, wraps long tokens, and hides x-overflow", () => {
+  it("the dialog renders through the shared frame (dialogId), whose body lets its items shrink, wraps long tokens, and hides x-overflow", () => {
     const s = src("jobs-dialog.tsx");
-    const m = /<DialogContent className="([^"]+)" data-testid="dialog-jobs">/.exec(s)!;
+    expect(s).toMatch(/<DialogContent dialogId="jobs" className="sm:max-w-3xl" data-testid="dialog-jobs">/);
+    const frame = src("ui/dialog.tsx");
+    const m = /DIALOG_BODY_CLASS = "([^"]+)"/.exec(frame)!;
     expect(m).not.toBeNull();
-    for (const c of ["overflow-x-hidden", "[overflow-wrap:anywhere]", "[&>*]:min-w-0"]) expect(m[1].split(" ")).toContain(c);
+    for (const c of ["overflow-y-auto", "overflow-x-hidden", "[overflow-wrap:anywhere]", "[&>*]:min-w-0"]) expect(m[1].split(" ")).toContain(c);
   });
   it("job rows and the expanded body can shrink; the error is truncated inside the row", () => {
     const s = src("jobs-dialog.tsx");

@@ -46,7 +46,7 @@ export function UsersAdminDialog({ open, onOpenChange }: { open: boolean; onOpen
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="sm:max-w-3xl max-h-[85vh] overflow-y-auto">
+      <DialogContent dialogId="users-admin" className="sm:max-w-3xl">
         <DialogHeader>
           <DialogTitle className="text-lg font-semibold">Users</DialogTitle>
           <DialogDescription>
@@ -132,7 +132,7 @@ function AddUserDialog({ open, onOpenChange, onCreated }: { open: boolean; onOpe
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="sm:max-w-md">
+      <DialogContent dialogId="user-add" className="sm:max-w-md">
         <DialogHeader>
           <DialogTitle>Add user</DialogTitle>
           <DialogDescription>Share the password with them directly; it is not emailed.</DialogDescription>
@@ -215,7 +215,7 @@ function EditUserDialog({ user, isSelf, onOpenChange, onSaved }: {
 
   return (
     <Dialog open={true} onOpenChange={onOpenChange}>
-      <DialogContent className="sm:max-w-md">
+      <DialogContent dialogId="user-edit" className="sm:max-w-md">
         <DialogHeader>
           <DialogTitle>Edit {user.displayName}</DialogTitle>
           <DialogDescription>{user.email}</DialogDescription>

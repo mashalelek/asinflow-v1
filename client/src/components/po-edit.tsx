@@ -17,7 +17,7 @@ import { Input } from "@/components/ui/input";
 import { trueYield } from "@shared/po-form";
 import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
-import { Sheet, SheetContent, SheetHeader, SheetTitle, SheetDescription, SheetFooter } from "@/components/ui/sheet";
+import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription, DialogFooter } from "@/components/ui/dialog";
 import { useToast } from "@/hooks/use-toast";
 import { fmtQty, productQtyFromAsin } from "@/lib/po-qty";
 import type { PoAsinRowData, PoAsinLine } from "@/components/po-asin-rows";
@@ -156,12 +156,13 @@ export function PoHeaderDrawer({ po, open, onOpenChange, onSaved }: { po: Record
     } catch (e: any) { setErr(e.message); } finally { setBusy(false); }
   };
   return (
-    <Sheet open={open} onOpenChange={onOpenChange}>
-      <SheetContent side="right" className="w-[28rem] sm:max-w-[28rem] overflow-y-auto" data-testid="po-edit-drawer">
-        <SheetHeader>
-          <SheetTitle>Edit PO</SheetTitle>
-          <SheetDescription>{po.supplier} · {po.order_id}. Every change is logged in History.</SheetDescription>
-        </SheetHeader>
+    <Dialog open={open} onOpenChange={onOpenChange}>
+      {/* The PO editor on the shared dialog frame (AF-wide dialog rule, 2026-11-01) — no longer a side sheet. */}
+      <DialogContent dialogId="po-edit" className="max-w-[32rem]" data-testid="po-edit-drawer">
+        <DialogHeader>
+          <DialogTitle>Edit PO</DialogTitle>
+          <DialogDescription>{po.supplier} · {po.order_id}. Every change is logged in History.</DialogDescription>
+        </DialogHeader>
         <div className="space-y-5 py-4">
           {HEADER_GROUPS.map((g) => (
             <div key={g.title} className="space-y-2">
@@ -192,12 +193,12 @@ export function PoHeaderDrawer({ po, open, onOpenChange, onSaved }: { po: Record
           ))}
           {err && <p className="text-sm text-destructive" data-testid="po-edit-error">{err}</p>}
         </div>
-        <SheetFooter>
+        <DialogFooter>
           <Button variant="outline" onClick={() => onOpenChange(false)} disabled={busy}>Cancel</Button>
           <Button onClick={save} disabled={busy} data-testid="button-po-edit-save">{busy ? "Saving…" : `Save${Object.keys(changes).length > 0 ? ` (${Object.keys(changes).length})` : ""}`}</Button>
-        </SheetFooter>
-      </SheetContent>
-    </Sheet>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
   );
 }
 
@@ -383,20 +384,20 @@ export function PoDangerActions({ poId, reloadKey, onCanceled, onDeleted }: { po
         <Button variant="outline" size="sm" disabled={!!g.blocked} onClick={() => setConfirm("delete")} className="text-destructive hover:text-destructive" data-testid="button-delete-po"><Trash2 className="h-3.5 w-3.5 mr-1" /> Delete PO</Button>
       </span>
       {g.blocked && <span className="max-w-[28rem] text-xs text-amber-700 dark:text-amber-400" data-testid="po-blocked-message">{g.blocked}</span>}
-      <Sheet open={confirm != null} onOpenChange={(v) => { if (!v) setConfirm(null); }}>
-        <SheetContent side="bottom" className="max-w-xl mx-auto rounded-t-lg" data-testid="po-danger-confirm">
-          <SheetHeader>
-            <SheetTitle>{confirm === "delete" ? "Delete PO?" : "Cancel PO?"}</SheetTitle>
-            <SheetDescription data-testid="po-danger-confirm-text">
+      <Dialog open={confirm != null} onOpenChange={(v) => { if (!v) setConfirm(null); }}>
+        <DialogContent dialogId="po-danger-confirm" confirm className="max-w-xl" data-testid="po-danger-confirm">
+          <DialogHeader>
+            <DialogTitle>{confirm === "delete" ? "Delete PO?" : "Cancel PO?"}</DialogTitle>
+            <DialogDescription data-testid="po-danger-confirm-text">
               {confirm === "delete" ? deleteConfirmText(g) : `Cancel every product of ${g.supplier} ${g.orderId} (${g.lineCount}): Canceled = Ordered on each. Logged in History.`}
-            </SheetDescription>
-          </SheetHeader>
-          <SheetFooter className="mt-4">
+            </DialogDescription>
+          </DialogHeader>
+          <DialogFooter>
             <Button variant="outline" onClick={() => setConfirm(null)} disabled={busy}>Keep it</Button>
             <Button variant="destructive" onClick={run} disabled={busy} data-testid="button-po-danger-confirm">{busy ? "Working…" : confirm === "delete" ? "Delete PO" : "Cancel PO"}</Button>
-          </SheetFooter>
-        </SheetContent>
-      </Sheet>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
     </span>
   );
 }

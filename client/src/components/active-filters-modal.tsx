@@ -92,7 +92,7 @@ export function ActiveFiltersModal({
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="sm:max-w-md max-h-[70vh] overflow-y-auto">
+      <DialogContent dialogId="active-filters" className="sm:max-w-md">
         <DialogHeader>
           <DialogTitle>Active Filters</DialogTitle>
         </DialogHeader>

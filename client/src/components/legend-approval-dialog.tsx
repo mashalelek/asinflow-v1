@@ -183,7 +183,7 @@ export function LegendApprovalDialog({
 
   return (
     <Dialog open={open} onOpenChange={(o) => !o && !busy && onClose()}>
-      <DialogContent className="max-w-5xl max-h-[90vh] overflow-y-auto">
+      <DialogContent dialogId="legend-approval" className="max-w-5xl">
         <DialogHeader>
           <DialogTitle>Legend approvals</DialogTitle>
           <DialogDescription>

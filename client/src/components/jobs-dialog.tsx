@@ -106,7 +106,7 @@ export function JobsDialog({ open, onOpenChange, onRetry, initialJobId }: {
           widened every job row to 1,737 px and pushed Release off-screen.
           overflow-wrap:anywhere shrinks min-content; min-w-0 lets the items
           shrink; overflow-x-hidden keeps it so. */}
-      <DialogContent className="sm:max-w-3xl max-h-[85vh] overflow-y-auto overflow-x-hidden [overflow-wrap:anywhere] [&>*]:min-w-0" data-testid="dialog-jobs">
+      <DialogContent dialogId="jobs" className="sm:max-w-3xl" data-testid="dialog-jobs">
         <DialogHeader>
           <DialogTitle>Refresh jobs</DialogTitle>
           <DialogDescription>

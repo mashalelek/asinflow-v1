@@ -2084,7 +2084,7 @@ export default function Home() {
       />
 
       <Dialog open={!!sbResult} onOpenChange={(o) => { if (!o) setSbResult(null); }}>
-        <DialogContent className="max-w-md">
+        <DialogContent dialogId="sb-cogs-export" className="max-w-md">
           <DialogHeader>
             <DialogTitle>SellerBoard COGS export</DialogTitle>
             <DialogDescription>
@@ -2149,7 +2149,7 @@ export default function Home() {
       </Dialog>
 
       <Dialog open={!!scResult} onOpenChange={(o) => { if (!o) setScResult(null); }}>
-        <DialogContent className="max-w-md">
+        <DialogContent dialogId="update-cogs-sc" className="max-w-md">
           <DialogHeader>
             <DialogTitle>Update COGS in SC</DialogTitle>
             <DialogDescription>
@@ -2258,7 +2258,7 @@ export default function Home() {
       </Dialog>
 
       <Dialog open={scHistoryOpen} onOpenChange={setScHistoryOpen}>
-        <DialogContent className="max-w-lg">
+        <DialogContent dialogId="cogs-update-history" className="max-w-lg">
           <DialogHeader>
             <DialogTitle>COGS update history</DialogTitle>
             <DialogDescription>

@@ -832,7 +832,7 @@ export default function BulkCalc() {
 
       {/* Name-the-list dialog (after upload mapping) */}
       <Dialog open={pendingUpload != null} onOpenChange={(v) => { if (!v) { setPendingUpload(null); setCreateError(null); } }}>
-        <DialogContent className="sm:max-w-sm" data-testid="dialog-name-list">
+        <DialogContent dialogId="bulk-save-list" className="sm:max-w-sm" data-testid="dialog-name-list">
           <DialogHeader>
             <DialogTitle>Save list</DialogTitle>
             <DialogDescription>
@@ -856,7 +856,7 @@ export default function BulkCalc() {
           names the promote count, which is the side effect the button
           label does not mention. */}
       <Dialog open={pendingBulkSet != null} onOpenChange={(v) => { if (!v) setPendingBulkSet(null); }}>
-        <DialogContent className="sm:max-w-md" data-testid="dialog-bulk-set-confirm">
+        <DialogContent dialogId="bulk-set-confirm" confirm className="sm:max-w-md" data-testid="dialog-bulk-set-confirm">
           <DialogHeader>
             <DialogTitle>
               {pendingBulkSet
@@ -889,7 +889,7 @@ export default function BulkCalc() {
           page: per-stage counts, expandable outcomes, rate deltas, Retry
           failed (N). Title matches the refresh_runs scope string. */}
       <Dialog open={refreshResultOpen} onOpenChange={setRefreshResultOpen}>
-        <DialogContent className="max-w-2xl max-h-[80vh] overflow-y-auto" data-testid="dialog-bulk-refresh-results">
+        <DialogContent dialogId="bulk-refresh-results" className="max-w-2xl" data-testid="dialog-bulk-refresh-results">
           <DialogHeader>
             <DialogTitle>Refresh · bulk:{selectedList?.name ?? ""}</DialogTitle>
             <DialogDescription>
@@ -940,7 +940,7 @@ export default function BulkCalc() {
 
       {/* Rename dialog */}
       <Dialog open={renameOpen} onOpenChange={setRenameOpen}>
-        <DialogContent className="sm:max-w-sm" data-testid="dialog-rename-list">
+        <DialogContent dialogId="bulk-rename-list" className="sm:max-w-sm" data-testid="dialog-rename-list">
           <DialogHeader><DialogTitle>Rename list</DialogTitle></DialogHeader>
           <Input value={renameVal} onChange={(e) => setRenameVal(e.target.value)}
             onKeyDown={(e) => { if (e.key === "Enter") renameList(); }} autoFocus data-testid="input-rename" />
@@ -953,7 +953,7 @@ export default function BulkCalc() {
 
       {/* Delete confirm */}
       <Dialog open={deleteOpen} onOpenChange={setDeleteOpen}>
-        <DialogContent className="sm:max-w-sm" data-testid="dialog-delete-list">
+        <DialogContent dialogId="bulk-delete-list" confirm className="sm:max-w-sm" data-testid="dialog-delete-list">
           <DialogHeader>
             <DialogTitle>Delete list?</DialogTitle>
             <DialogDescription>
