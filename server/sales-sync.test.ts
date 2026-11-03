@@ -32,36 +32,71 @@ vi.mock("axios", () => ({ default: { get: vi.fn(async (url: string) => ({ data: 
 // ── DB fake ──────────────────────────────────────────────────────────────────
 let asinsTable: { id: string; asin: string }[] = [];
 const sql: { text: string; params?: any[] }[] = [];
+/** Test seam: make an INSERT fail (the fail-closed transaction test). */
+let failInsertFor: string | null = null;
+const mockQuery = vi.fn(async (text: string, params?: any[]) => {
+  sql.push({ text, params });
+  const t = text.replace(/\s+/g, " ").trim();
+  if (t === "BEGIN" || t === "COMMIT" || t === "ROLLBACK") return { rows: [], rowCount: 0 };
+  if (t === "SELECT id, asin FROM asins") return { rows: asinsTable, rowCount: asinsTable.length };
+  if (t.startsWith("SELECT id, asin FROM asins WHERE asin = ANY")) return { rows: asinsTable.filter((r) => params![0].includes(r.asin)), rowCount: 0 };
+  if (t.startsWith("DELETE FROM sales_daily") || t.startsWith("DELETE FROM sales_orders")) return { rows: [], rowCount: 0 };
+  if (t.startsWith("INSERT INTO sales_daily")) { if (failInsertFor && params![0] === failInsertFor) throw new Error("boom: disk full"); return { rows: [], rowCount: 1 }; }
+  if (t.startsWith("INSERT INTO sales_orders")) return { rows: [], rowCount: 1 };
+  throw new Error(`unexpected sql ${t.slice(0, 60)}`);
+});
 vi.mock("./db", () => ({
-  query: vi.fn(async (text: string, params?: any[]) => {
-    sql.push({ text, params });
-    const t = text.replace(/\s+/g, " ").trim();
-    if (t === "SELECT id, asin FROM asins") return { rows: asinsTable, rowCount: asinsTable.length };
-    if (t.startsWith("SELECT id, asin FROM asins WHERE asin = ANY")) return { rows: asinsTable.filter((r) => params![0].includes(r.asin)), rowCount: 0 };
-    if (t.startsWith("INSERT INTO sales_daily")) return { rows: [], rowCount: 1 };
-    throw new Error(`unexpected sql ${t.slice(0, 60)}`);
-  }),
+  query: (text: string, params?: any[]) => mockQuery(text, params),
+  // The delete + reload runs on a pool client inside BEGIN … COMMIT; the same log sees it.
+  default: { connect: async () => ({ query: (text: string, params?: any[]) => mockQuery(text, params), release: () => {} }) },
 }));
 
-import { syncSalesData, parseOrdersReport, buildDateChunks, salesTiming, SalesSyncError, MAX_RANGE_DAYS } from "./sales-sync";
+import { syncSalesData, parseOrdersReport, buildDateChunks, salesTiming, salesDb, SalesSyncError, MAX_RANGE_DAYS, pacificDay, pacificToUtc, reportWindowUtc, tzOffsetMinutes } from "./sales-sync";
 
 const HEADER = "amazon-order-id\tpurchase-date\torder-status\tasin\tquantity\titem-price";
-const row = (date: string, asin: string, qty: number, price: number, status = "Shipped") => `o\t${date}T15:00:00+00:00\t${status}\t${asin}\t${qty}\t${price}`;
+// 15:00 UTC = 08:00 Pacific (PDT) / 07:00 (PST): the Pacific day equals the date given.
+const row = (date: string, asin: string, qty: number, price: number, status = "Shipped", orderId = `o-${date}-${asin}`) => `${orderId}\t${date}T15:00:00+00:00\t${status}\t${asin}\t${qty}\t${price}`;
+const rowAt = (iso: string, asin: string, qty: number, price: number, orderId: string) => `${orderId}\t${iso}\tShipped\t${asin}\t${qty}\t${price}`;
 const report = (...rows: string[]) => [HEADER, ...rows].join("\n") + "\n";
 
 beforeEach(() => {
   scripts = []; created = 0; posts.length = 0; sql.length = 0;
   asinsTable = [{ id: "id-A", asin: "A000000001" }, { id: "id-D", asin: "D00000DEAD" }];
   salesTiming.pollMs = 0; salesTiming.chunkDelayMs = 0; salesTiming.pollTimeoutMs = 5_000;
+  failInsertFor = null; salesDb.now = () => new Date("2026-11-03T12:00:00Z");
 });
 
 describe("parseOrdersReport / buildDateChunks", () => {
   it("drops cancelled lines, cuts the date to the day, parses qty and price", () => {
     const lines = report(row("2026-06-01", "A000000001", 2, 19.98), row("2026-06-01", "A000000001", 1, 9.99, "Cancelled"), row("2026-06-02", "B000000002", 1, 5)).split("\n").filter(Boolean);
     expect(parseOrdersReport(lines)).toEqual([
-      { asin: "A000000001", date: "2026-06-01", qty: 2, price: 19.98 },
-      { asin: "B000000002", date: "2026-06-02", qty: 1, price: 5 },
+      { orderId: "o-2026-06-01-A000000001", asin: "A000000001", date: "2026-06-01", qty: 2, price: 19.98 },
+      { orderId: "o-2026-06-02-B000000002", asin: "B000000002", date: "2026-06-02", qty: 1, price: 5 },
     ]);
+  });
+  it("the sale day is the US Pacific day of purchase-date (D7), around midnight UTC and midnight Pacific, PDT and PST", () => {
+    expect(pacificDay("2026-06-02T03:00:00+00:00")).toBe("2026-06-01"); // 20:00 PDT the day before
+    expect(pacificDay("2026-06-02T06:59:59Z")).toBe("2026-06-01");
+    expect(pacificDay("2026-06-02T07:00:00Z")).toBe("2026-06-02"); // Pacific midnight (PDT = UTC−7)
+    expect(pacificDay("2026-01-15T07:59:59Z")).toBe("2026-01-14"); // PST = UTC−8
+    expect(pacificDay("2026-01-15T08:00:00Z")).toBe("2026-01-15");
+    expect(pacificDay("2026-06-01T15:00:00-07:00")).toBe("2026-06-01");
+    expect(pacificDay("garbage-date-xx")).toBe("garbage-da");
+    expect(tzOffsetMinutes(new Date("2026-06-01T12:00:00Z"), "America/Los_Angeles")).toBe(-420);
+    expect(tzOffsetMinutes(new Date("2026-01-15T12:00:00Z"), "America/Los_Angeles")).toBe(-480);
+    const lines = report(rowAt("2026-06-02T03:00:00+00:00", "A000000001", 1, 5, "o1"), rowAt("2026-06-02T07:00:00+00:00", "A000000001", 1, 5, "o2")).split("\n").filter(Boolean);
+    expect(parseOrdersReport(lines).map((l) => l.date)).toEqual(["2026-06-01", "2026-06-02"]);
+  });
+  it("report windows are Pacific day boundaries in UTC — DST-correct, the end clamped to now", () => {
+    expect(pacificToUtc("2026-06-01", "00:00:00")).toBe("2026-06-01T07:00:00Z");
+    expect(pacificToUtc("2026-06-30", "23:59:59")).toBe("2026-07-01T06:59:59Z");
+    expect(pacificToUtc("2026-01-15", "00:00:00")).toBe("2026-01-15T08:00:00Z");
+    expect(pacificToUtc("2026-01-15", "23:59:59")).toBe("2026-01-16T07:59:59Z");
+    // fall-back day 2026-11-01: midnight is still PDT, 23:59:59 is PST
+    expect(pacificToUtc("2026-11-01", "00:00:00")).toBe("2026-11-01T07:00:00Z");
+    expect(pacificToUtc("2026-11-01", "23:59:59")).toBe("2026-11-02T07:59:59Z");
+    expect(reportWindowUtc("2026-06-01", "2026-06-30", new Date("2026-11-03T12:00:00Z"))).toEqual({ dataStartTime: "2026-06-01T07:00:00Z", dataEndTime: "2026-07-01T06:59:59Z" });
+    expect(reportWindowUtc("2026-11-02", "2026-11-03", new Date("2026-11-03T12:00:00.400Z"))).toEqual({ dataStartTime: "2026-11-02T08:00:00Z", dataEndTime: "2026-11-03T12:00:00Z" });
   });
   it("30-day inclusive chunks, the last one cut at `to`", () => {
     expect(MAX_RANGE_DAYS).toBe(30);
@@ -186,6 +221,49 @@ describe("syncSalesData failure semantics", () => {
     const r = await syncSalesData("2024-05-01", "2024-06-15");
     expect(r.minDate).toBe("2024-05-09"); // not 2024-05-01 — the window asked, the report answered
     expect(r.maxDate).toBe("2024-06-02");
-    expect(posts[0]).toMatchObject({ dataStartTime: "2024-05-01T00:00:00Z", dataEndTime: "2024-05-30T23:59:59Z" }); // UTC bounds, unchanged
+    expect(posts[0]).toMatchObject({ dataStartTime: "2024-05-01T07:00:00Z", dataEndTime: "2024-05-31T06:59:59Z" }); // Pacific day bounds, as UTC (D7)
+  });
+});
+
+describe("delete + reload per chunk (fail-closed) and sales_orders", () => {
+  const norm = (t: string) => t.replace(/\s+/g, " ").trim();
+  const kinds = () => sql.map((q) => norm(q.text)).filter((t) => /^(BEGIN|COMMIT|ROLLBACK|DELETE FROM sales_daily|DELETE FROM sales_orders|INSERT INTO sales_daily|INSERT INTO sales_orders)/.test(t)).map((t) => t.split(" ").slice(0, 3).join(" "));
+  it("the window's sales_daily and sales_orders rows are deleted and the parsed rows inserted inside ONE transaction, the delete after the report was parsed", async () => {
+    scripts = [{ report: report(row("2026-06-01", "A000000001", 2, 20, "Shipped", "111-1"), row("2026-06-01", "A000000001", 1, 10, "Shipped", "111-1"), row("2026-06-02", "A000000001", 1, 10, "Shipped", "222-2")) }];
+    const r = await syncSalesData("2026-06-01", "2026-06-30");
+    expect(kinds()).toEqual(["BEGIN", "DELETE FROM sales_daily", "DELETE FROM sales_orders", "INSERT INTO sales_daily", "INSERT INTO sales_daily", "INSERT INTO sales_orders", "INSERT INTO sales_orders", "COMMIT"]);
+    const del = sql.find((q) => norm(q.text).startsWith("DELETE FROM sales_daily"))!;
+    expect(norm(del.text)).toBe("DELETE FROM sales_daily WHERE sale_date >= $1::date AND sale_date <= $2::date"); // unfiltered: every ASIN's rows in the window
+    expect(del.params).toEqual(["2026-06-01", "2026-06-30"]);
+    // the two lines of order 111-1 on the same ASIN are ONE sales_orders row with units 3
+    const orders = sql.filter((q) => norm(q.text).startsWith("INSERT INTO sales_orders")).map((q) => q.params);
+    expect(orders).toEqual([["111-1", "id-A", "2026-06-01", 3], ["222-2", "id-A", "2026-06-02", 1]]);
+    expect(r.chunks[0]).toMatchObject({ orders: 3, distinctOrders: 2, days: 2 });
+  });
+  it("an explicit selection deletes and reloads only the selected ASINs' rows", async () => {
+    scripts = [{ report: report(row("2026-06-01", "A000000001", 1, 10), row("2026-06-01", "D00000DEAD", 1, 10)) }];
+    await syncSalesData("2026-06-01", "2026-06-01", new Set(["A000000001"]));
+    const del = sql.find((q) => norm(q.text).startsWith("DELETE FROM sales_daily"))!;
+    expect(norm(del.text)).toContain("AND asin_id = ANY($3::uuid[])");
+    expect(del.params).toEqual(["2026-06-01", "2026-06-01", ["id-A"]]);
+  });
+  it("a chunk whose report fails issues NO delete — the old rows stay (fail-closed)", async () => {
+    scripts = [{ report: report(row("2024-05-03", "A000000001", 1, 10)) }, { status: "FATAL" }];
+    await expect(syncSalesData("2024-05-01", "2024-06-15")).rejects.toBeInstanceOf(SalesSyncError);
+    const dels = sql.filter((q) => norm(q.text).startsWith("DELETE FROM sales_daily"));
+    expect(dels).toHaveLength(1); // chunk 1 only
+    expect(dels[0].params).toEqual(["2024-05-01", "2024-05-30"]);
+  });
+  it("a write that fails mid-chunk rolls the whole chunk back and fails the sync", async () => {
+    scripts = [{ report: report(row("2026-06-01", "A000000001", 1, 10), row("2026-06-01", "D00000DEAD", 1, 10)) }];
+    failInsertFor = "id-D";
+    await expect(syncSalesData("2026-06-01", "2026-06-01")).rejects.toThrow(/boom: disk full/);
+    expect(kinds()).toEqual(["BEGIN", "DELETE FROM sales_daily", "DELETE FROM sales_orders", "INSERT INTO sales_daily", "INSERT INTO sales_daily", "ROLLBACK"]);
+  });
+  it("an empty report still clears the window (a cancelled-only day loses its stale units), in the same transaction shape", async () => {
+    scripts = [{ report: HEADER + "\n" }];
+    const r = await syncSalesData("2026-06-01", "2026-06-01");
+    expect(r.chunks[0].status).toBe("empty");
+    expect(kinds()).toEqual(["BEGIN", "DELETE FROM sales_daily", "DELETE FROM sales_orders", "COMMIT"]);
   });
 });

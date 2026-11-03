@@ -36,7 +36,7 @@ function ctxFor(j: JobRow, inject: Record<string, unknown> = {}) {
 
 const okResult = (over: Partial<SalesSyncResult> = {}): SalesSyncResult => ({
   daysProcessed: 3, asinsUpdated: 2, totalOrders: 5, onboarded: [], invalidAsins: [], minDate: "2024-05-02", maxDate: "2024-05-29",
-  chunks: [{ start: "2024-05-01", end: "2024-05-30", status: "ok", orders: 5, days: 3, asins: 2, onboarded: [], invalidAsins: [], minDate: "2024-05-02", maxDate: "2024-05-29" }],
+  chunks: [{ start: "2024-05-01", end: "2024-05-30", status: "ok", orders: 5, distinctOrders: 4, days: 3, asins: 2, onboarded: [], invalidAsins: [], minDate: "2024-05-02", maxDate: "2024-05-29" }],
   ...over,
 });
 
@@ -66,7 +66,7 @@ describe("the sales component", () => {
     expect(r.outcomes._window).toBe("2024-05-01..2024-05-30 (params)");
     expect(r.outcomes._earliest_sale_date_returned).toBe("2024-05-02");
     expect(r.outcomes._latest_sale_date_returned).toBe("2024-05-29");
-    expect(r.outcomes["_chunk_01 2024-05-01..2024-05-30"]).toBe("ok · orders 5 · days 3 · asins 2 · onboarded 0 · returned 2024-05-02..2024-05-29");
+    expect(r.outcomes["_chunk_01 2024-05-01..2024-05-30"]).toBe("ok · orders 5 (4 ids) · days 3 · asins 2 · onboarded 0 · returned 2024-05-02..2024-05-29");
   });
 
   it("a backfill (window from params) reports progress in chunks: 0/N at start, then i/N after each chunk", async () => {
@@ -111,8 +111,8 @@ describe("the sales component", () => {
     const partial = okResult({
       onboarded: ["N1"],
       chunks: [
-        { start: "2024-05-01", end: "2024-05-30", status: "ok", orders: 5, days: 3, asins: 2, onboarded: ["N1"], invalidAsins: [], minDate: "2024-05-02", maxDate: "2024-05-29" },
-        { start: "2024-05-31", end: "2024-06-29", status: "failed", orders: 0, days: 0, asins: 0, onboarded: [], invalidAsins: [], minDate: null, maxDate: null, error: "Report R2 failed: FATAL" },
+        { start: "2024-05-01", end: "2024-05-30", status: "ok", orders: 5, distinctOrders: 5, days: 3, asins: 2, onboarded: ["N1"], invalidAsins: [], minDate: "2024-05-02", maxDate: "2024-05-29" },
+        { start: "2024-05-31", end: "2024-06-29", status: "failed", orders: 0, distinctOrders: 0, days: 0, asins: 0, onboarded: [], invalidAsins: [], minDate: null, maxDate: null, error: "Report R2 failed: FATAL" },
       ],
     });
     salesDeps.sync = async () => { throw new SalesSyncError("chunk 2/2 failed: Report R2 failed: FATAL", partial); };

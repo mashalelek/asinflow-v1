@@ -5,7 +5,9 @@
 //
 // Window: `job.params.sales_window = {from, to}` (YYYY-MM-DD) when the job
 // carries one — the history backfill (POST /api/jobs/backfill-sales) — else
-// the last 48 hours, overlapping on purpose: the upsert is idempotent.
+// the last 48 hours, overlapping on purpose: each chunk deletes and reloads
+// its window (Dashboard patch D7, 2026-11-03: Pacific days; the sync requests
+// Pacific day boundaries and clamps the end to now).
 //
 // Scope (2026-10-16): every ASIN in `asins`, all statuses. ASINs the report
 // names that AF lacks are inserted through the standard onboarding path
@@ -59,7 +61,7 @@ export function salesResultToComponent(r: SalesSyncResult, window: { start: stri
     const key = `_chunk_${String(i + 1).padStart(2, "0")} ${c.start}..${c.end}`;
     outcomes[key] = c.status === "failed"
       ? `error: ${c.error}`
-      : `${c.status} · orders ${c.orders} · days ${c.days} · asins ${c.asins} · onboarded ${c.onboarded.length} · returned ${c.minDate ?? "-"}..${c.maxDate ?? "-"}`;
+      : `${c.status} · orders ${c.orders} (${c.distinctOrders} ids) · days ${c.days} · asins ${c.asins} · onboarded ${c.onboarded.length} · returned ${c.minDate ?? "-"}..${c.maxDate ?? "-"}`;
   });
   if (r.onboarded.length > 0) outcomes._onboarded_from_sales = r.onboarded.join(", ");
   if (r.invalidAsins.length > 0) outcomes._invalid_asins_skipped = r.invalidAsins.join(", ");

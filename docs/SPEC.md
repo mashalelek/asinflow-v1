@@ -2266,7 +2266,7 @@ the ledger stage is the `refresh_runs.stage` key the component writes.
 | 16 | Live offer / buyable / issues (§18 reconcile) + listing state per SKU (`asin_skus.listing_created_at` / `offer_end_at` / `listing_checked_at`, 2026-10-18) | hourly | CALL-9 getListingsItem, per SKU, `includedData` + `attributes` | `16_live_offer` | active+parked |
 | 17 | Primary SKU | hourly | derived from 15–16 | `17_primary_sku` | " |
 | 18 | Suppressions (FYP) | hourly | CALL-10 FYP report | `18_suppressions` | account |
-| 19 | Sales units / revenue | hourly | CALL-11 (today: orders report, 48-hour window; `params.sales_window` for the backfill) | `19_sales` | account — every ASIN in `asins`, all statuses (2026-10-16) |
+| 19 | Sales units / revenue (+ `sales_orders`, Pacific day — 2026-11-03) | hourly | CALL-11 (today: orders report, 48-hour window requested with Pacific day bounds; `params.sales_window` for the backfill) | `19_sales` | account — every ASIN in `asins`, all statuses (2026-10-16) |
 | 20 | Refunds | hourly | rides CALL-11 | `20_refunds` | " |
 | 21 | Actual fees charged | hourly | rides CALL-11 | `21_actual_fees` | " |
 | 22 | Close OOS listings (listing hygiene, 2026-10-18; daily since 2026-10-20) | daily | CALL-12 `patchListingsItem`, per SKU | `22_close_oos` | every SKU 15/16 observed; **00:00 pass only**, before 24 |
@@ -2473,9 +2473,32 @@ Three components are ledger-only in this version, by decision:
   `_earliest_sale_date_returned` / `_latest_sale_date_returned` for the
   whole run. **A failed chunk fails the component** (a `ComponentError`
   whose partial result is ledgered), never skipped; a "Date range
-  exceeded" answer is a failure, not an empty chunk. The UTC day boundary
-  of the report request and of `purchase-date` is unchanged — noted for
-  the Finances patch.
+  exceeded" answer is a failure, not an empty chunk.
+
+  **Pacific day + delete/reload (Dashboard patch D7 / C2, 2026-11-03;
+  §28).** Amazon's sales basis is US Pacific: `sale_date` is the
+  `America/Los_Angeles` calendar day of `purchase-date` (`pacificDay` in
+  `server/sales-sync.ts`), and every chunk's report is requested with
+  Pacific day boundaries converted to UTC (`reportWindowUtc`, DST-correct,
+  the end clamped to now; the hourly window is unchanged in length).
+  Before a chunk's rows are written, the window's `sales_daily` and
+  `sales_orders` rows are **deleted and reloaded inside one transaction,
+  and only after the report was fully read and parsed** (fail-closed, §14
+  manual-trigger completeness): a failed report leaves the old rows
+  untouched, a failed write rolls the whole chunk back, an empty report
+  clears the window (a day whose only order was cancelled loses its stale
+  units), and the pre-patch UTC-keyed rows disappear as the backfill passes
+  over them. An explicit ASIN selection deletes and reloads only its own
+  rows. `sales_orders` (migration 082: `amazon_order_id`, `asin_id`,
+  `sale_date`, `units`; PK order id + ASIN) gets one row per (order id,
+  ASIN) from the same parse, cancelled orders skipped as before — the
+  Dashboard's Orders count is `COUNT(DISTINCT amazon_order_id)` per range.
+  Every reader of `sales_daily` (the ASINs page's Actuals, the Repricer
+  tab, the Dashboard) moves to the Pacific day with it — one basis
+  everywhere; the Finances patch inherits it. **After deploying this
+  change, `npm run backfill:sales` must be re-run over the full coverage
+  (local, then `--prod`)**; until it has run the Dashboard's coverage
+  header says so (§28).
 
   **Sales history backfill.** `POST /api/jobs/backfill-sales {from, to}`
   (admin only) or `npm run backfill:sales [-- --from … --to …]` (defaults
@@ -2483,10 +2506,11 @@ Three components are ledger-only in this version, by decision:
   token for scripts) enqueues ONE manual job with `components: [19]` and
   `params.sales_window` (migration 054 `jobs.params JSONB`). It serializes
   behind the hourly passes like any job, chunks 30 days at a time as the
-  hourly sync does, writes only `sales_daily.units_sold` / `revenue` (the
-  refund and fee columns keep their first-insert 0 and are never in the
-  SET list), and shows in the jobs dialog like any other job. No UI
-  button.
+  hourly sync does, deletes and reloads each chunk's window of
+  `sales_daily` (`units_sold` / `revenue` only — the refund and fee
+  columns keep their first-insert 0 and are never in the SET list) and
+  `sales_orders` (2026-11-03, above), and shows in the jobs dialog like
+  any other job. No UI button.
 - **17 is derived**: it re-points `primary_sku` from what 15 and 16 wrote
   (inventory bootstrap when NULL; listings latest-live-wins), and reports
   `from_cache` / `bootstrapped_by_inventory` / `repointed_by_listings`.
