@@ -1,7 +1,7 @@
 import { describe, it, expect } from "vitest";
 import { readFileSync } from "fs";
 import { resolve } from "path";
-import { extractBuckets, mergeBuckets, emptyBuckets, filled, missing, canOpen, applyPage, captureKey, pagesForPrefill, shipToForPrefill, othersCapturing, describeShipping, extractShipping, extractProducts, extractPromos, dedupePromos } from "../chrome-extension/buckets.js";
+import { extractBuckets, mergeBuckets, emptyBuckets, filled, missing, canOpen, applyPage, captureKey, pagesForPrefill, shipToForPrefill, othersCapturing, describeShipping, extractShipping, extractProducts, extractPromos, debugText, dedupePromos } from "../chrome-extension/buckets.js";
 import { scrubText } from "../chrome-extension/scrub.js";
 
 // Capture PO v1.2 (SPEC §11 "Chrome extension — Capture PO"): six data
@@ -176,38 +176,84 @@ describe("buckets: merge — newest wins per field, nothing replaced wholesale, 
   });
 });
 
-// v1.2.2 (Maria 2026-11-02): a shagtools.com cart — table-style rows (one <tr> per product; innerText joins the cells with tabs) left Products empty, and one coupon counted as four promos.
-describe("buckets: v1.2.2 — table-style cart rows and promo dedupe (shagtools)", () => {
-  const qtyFields = [{ label: "quantity", value: "1" }, { label: "quantity", value: "2" }, { label: "quantity", value: "1" }];
-  const cart = { step: "cart", url: "https://www.shagtools.com/cart", title: "cart", text: scrubText(readFileSync(resolve(FIX, "shagtools/cart.txt"), "utf8")), fields: qtyFields };
-  it("a table row whose cells hold a title, a price and a quantity stepper as siblings is a product; the stepper's value comes from the quantity fields; the header row and the 'You may also like' row (no quantity) are not products", () => {
+// v1.2.2 / v1.2.3 (Maria 2026-11-02): a shagtools.com cart — table-style rows (one <tr> per product; innerText joins the cells with tabs) left Products empty, and one coupon counted as four promos. v1.2.3: still empty on the real cart (name / $8.93 / stepper (15) / $133.95 in separate cells) and on the checkout (title, "× 15" as plain text under it, line subtotal $133.95 — no unit price, no quantity input). The fixtures are SYNTHETIC, shaped from Maria's description, until the real "Copy page text" paste replaces them.
+describe("buckets: v1.2.3 — product rows with a plain-text quantity or no quantity text at all (shagtools cart + checkout)", () => {
+  const cart = { step: "cart", url: "https://www.shagtools.com/cart", title: "cart", text: scrubText(readFileSync(resolve(FIX, "shagtools/cart.txt"), "utf8")), fields: [{ label: "quantity", value: "15" }] };
+  const checkout = { step: "review", url: "https://www.shagtools.com/checkout", title: "Checkout", text: scrubText(readFileSync(resolve(FIX, "shagtools/checkout.txt"), "utf8")), fields: [] };
+  const kicker = { name: "Shag Carpet Kicker Pro 12 Inch Adjustable Head", qty: 15, price: "$8.93", total: "$133.95", sku: null };
+  const pg = (text: string) => ({ step: "other", url: "https://www.shagtools.com/x", title: "x", text, fields: [] as { label: string; value: string }[] });
+  const rowOf = (cells: string) => `Product\tPrice\tQuantity\tTotal\n${cells}\nSubtotal\t$133.95\n`;
+  it("(b) cart: a table row whose cells are title / unit price / stepper / line total is a product; the quantity comes from the quantity field, and without one from the total ÷ price; the header row and the 'You may also like' row are not products", () => {
     const b = extractBuckets(cart);
-    expect(b.products).toEqual([
-      { name: "Shag Carpet Kicker Pro 12 Inch Adjustable Head", qty: 1, price: "$133.90", total: "$133.90", sku: null },
-      { name: "Shag Tools Loop Pile Cutter Blades, 10 Pack", qty: 2, price: "$24.50", total: "$49.00", sku: null },
-      { name: "Shag Tools Seam Roller 3 Inch Steel Handle", qty: 1, price: "$18.75", total: "$18.75", sku: null },
-    ]);
-    expect(b.totals).toMatchObject({ subtotal: "$201.65", shipping: "$12.00", tax: "$0.00", total: "$200.26" });
+    expect(b.products).toEqual([kicker]);
+    expect(extractProducts({ ...cart, fields: [] })).toEqual([kicker]);
+    expect(b.totals).toMatchObject({ subtotal: "$133.95", shipping: "$12.00", tax: "$0.00", total: "$132.56" });
+    expect(b.promos).toEqual(["COUPON: SHAGTOOLS10 (10% off)  −$13.39"]);
     expect(canOpen(b)).toBe(true);
-    // No quantity value anywhere (no fields, no count in the row) → not product lines, as for a block (v1.2.1).
-    expect(extractProducts({ ...cart, fields: [] })).toEqual([]);
   });
-  it("a row whose quantity is visible text ('− 2 +' or a bare count that the line total confirms) needs no field", () => {
-    const text = cart.text.replace("\t−\t+\t$133.90", "\t−\t1\t+\t$133.90").replace("\t−\t+\t$49.00", "\t−\t2\t+\t$49.00").replace("\t−\t+\t$18.75", "\t1\t$18.75");
-    expect(extractProducts({ ...cart, text, fields: [] }).map((p) => [p.qty, p.price, p.total])).toEqual([[1, "$133.90", "$133.90"], [2, "$24.50", "$49.00"], [1, "$18.75", "$18.75"]]);
+  it("(b) the quantity cell in every rendering: '− 15 +' as three cells or one, a bare 15, a 'Qty' cell + 15, '× 15', 'Qty: 15', an input with nothing visible — and the cells in any order", () => {
+    const title = "Shag Carpet Kicker Pro 12 Inch Adjustable Head";
+    for (const cells of [
+      `${title}\t$8.93\t−\t15\t+\t$133.95`, `${title}\t$8.93\t− 15 +\t$133.95`, `${title}\t$8.93\t-15+\t$133.95`, `${title}\t$8.93\t− +\t$133.95`,
+      `${title}\t$8.93\t15\t$133.95`, `${title}\t$8.93\tQty\t15\t$133.95`, `${title}\t$8.93\t× 15\t$133.95`, `${title}\t$8.93\tQty: 15\t$133.95`,
+      `${title}\t$8.93\t$133.95`, `$133.95\t${title}\t15\t$8.93`, `${title}\t15\t$133.95\t$8.93`,
+    ]) expect(extractProducts(pg(rowOf(cells))), cells).toEqual([kicker]);
+    // a row with one money and no quantity anywhere is still not a product (a strip); a bare count that the monies do not confirm is not the quantity
+    expect(extractProducts(pg(rowOf(`${title}\t$133.95`)))).toEqual([]);
+    expect(extractProducts(pg(rowOf(`${title}\t$8.93\t7\t$133.95`)))).toEqual([kicker]); // 7 is not it; 133.95 ÷ 8.93 = 15 is
   });
-  it("one coupon, one promo: the banner, the 'GET 10% OFF' line, the cart notice and the COUPON: row dedupe to the line with the most detail (code + amount + percent)", () => {
-    expect(extractPromos(cart)).toEqual(["COUPON: SHAGTOOLS10 (10% off)  −$13.39"]);
-    expect(filled(extractBuckets(cart)).promos).toBe(true);
+  it("(a) checkout: title, '× 15' on the line under it, the line total — qty 15, unit price derived as total ÷ 15; the address, shipping method and card lines around it are not products", () => {
+    const b = extractBuckets(checkout);
+    expect(b.products).toEqual([kicker]);
+    expect(b.shipping).toMatchObject({ street: "805 Grandy Ave" });
+    expect(b.payment.cards[0]).toMatchObject({ last4: "4242" });
+    expect(b.totals).toMatchObject({ subtotal: "$133.95", shipping: "$12.00", total: "$132.56" });
   });
-  it("dedupe: by code case-insensitively, a code-less line joins the code whose amount or percent it repeats, else by normalized wording; the merge dedupes the same way; distinct promos stay", () => {
+  it("(a) the mark in every spelling and position: 'x 15', '15 ×', '(x15)', on the title line, on the total's line, in one tab-joined row; two monies keep the printed unit price", () => {
+    const title = "Shag Carpet Kicker Pro 12 Inch Adjustable Head";
+    const block = (lines: string) => `Order summary\n${lines}\nSubtotal\t$133.95\n`;
+    for (const lines of [`${title}\n× 15\n$133.95`, `${title}\nx 15\n$133.95`, `${title}\n15 ×\n$133.95`, `${title}\n(x15)\n$133.95`, `${title} × 15\n$133.95`, `15 × ${title}\n$133.95`, `${title}\n× 15  $133.95`, `${title}  × 15  $133.95`, `${title}\t× 15\t$133.95`, `${title}\n× 15\n$8.93\n$133.95`, `${title}\n× 15\n$133.95\n$8.93`])
+      expect(extractProducts(pg(block(lines))), lines).toEqual([kicker]);
+    // a mark with a unit price adjacent is the old "12 × $7.97" form: the money is the unit price, not a total
+    expect(extractProducts(pg(block(`${title}\n15 × $8.93`)))).toEqual([{ ...kicker, total: null }]);
+    // "Qty: 15" with one money keeps that money as the unit price (the Walmart review line is that shape; the merge turns a confirmation's line total into the total)
+    expect(extractProducts(pg(block(`${title}\nQty: 15\n$133.95`)))).toEqual([{ ...kicker, price: "$133.95", total: null }]);
+  });
+  it("cart then checkout merge to one product with the cart's unit price and the line total; the promo is one entry", () => {
+    const m = mergeBuckets(extractBuckets(cart), extractBuckets(checkout));
+    expect(m.products).toEqual([kicker]);
+    expect(m.promos).toEqual(["COUPON: SHAGTOOLS10 (10% off)  −$13.39"]);
+    expect(m.shipping).toMatchObject({ street: "805 Grandy Ave" });
+  });
+  it("promos: the banner, the 'GET 10% OFF' line, the cart notice and the COUPON: row dedupe by code (case-insensitive), a code-less line joins the code whose amount or percent it repeats, else by wording; distinct promos stay", () => {
     expect(dedupePromos(["Use code SHAGTOOLS10 at checkout", "Coupon shagtools10 applied", "GET 10% OFF your first order", "COUPON: SHAGTOOLS10 (10% off)  −$13.39"])).toEqual(["COUPON: SHAGTOOLS10 (10% off)  −$13.39"]);
     expect(dedupePromos(["Promo applied: 30% off with COMEBACK47Z5", "Rewards: $5.00 applied", "Coupon SAVE20 applied", "Promo applied: 30% off with comeback47z5"])).toEqual(["Promo applied: 30% off with COMEBACK47Z5", "Rewards: $5.00 applied", "Coupon SAVE20 applied"]);
     expect(dedupePromos(["Promo applied: 30% off", "Promo applied: 30% off"])).toEqual(["Promo applied: 30% off"]);
-    expect(dedupePromos(["Rewards: $5.00 applied", "rewards: $5.00 APPLIED"])).toEqual(["Rewards: $5.00 applied"]); // same wording (case / spacing aside) is one; the first wins a tie
-    expect(dedupePromos(["Rewards: $5.00 applied", "Rewards: $5.00 applied today"])).toHaveLength(2); // different wording, no code → two
-    const merged = mergeBuckets(mergeBuckets(null, { promos: ["Use code SHAGTOOLS10 at checkout"] }), { promos: ["COUPON: SHAGTOOLS10 (10% off)  −$13.39"] });
-    expect(merged.promos).toEqual(["COUPON: SHAGTOOLS10 (10% off)  −$13.39"]);
+    expect(dedupePromos(["Rewards: $5.00 applied", "rewards: $5.00 APPLIED"])).toEqual(["Rewards: $5.00 applied"]);
+    expect(dedupePromos(["Rewards: $5.00 applied", "Rewards: $5.00 applied today"])).toHaveLength(2);
+  });
+  it("debugText — 'Copy page text': every page oldest first with step / URL / title / time / size, the text verbatim (tabs kept, counted in the header) and the fields as JSON lines", () => {
+    let c = applyPage(null, checkout, "www.shagtools.com", "2026-11-02T22:00:02.000Z");
+    c = applyPage(c, cart, "www.shagtools.com", "2026-11-02T22:00:01.000Z");
+    const d = debugText(c, "2026-11-02T22:05:00.000Z");
+    const L = d.split("\n");
+    expect(L[0]).toBe("AsinFlow capture · www.shagtools.com · 2 pages · 15 tab-joined lines · copied 2026-11-02T22:05:00.000Z · card numbers were masked in the page");
+    expect(L[2]).toBe("=== page 1 · step cart · https://www.shagtools.com/cart · cart · captured 2026-11-02T22:00:01.000Z · " + cart.text.length + " chars ===");
+    expect(d).toContain("\n" + cart.text + "\n--- fields (1) ---\n" + JSON.stringify({ label: "quantity", value: "15" }) + "\n");
+    expect(d).toContain("=== page 2 · step review · https://www.shagtools.com/checkout · Checkout · captured 2026-11-02T22:00:02.000Z");
+    expect(d).toContain("\n" + checkout.text + "\n--- fields (0) ---");
+    expect(debugText({ host: "x.com", pages: {}, others: [], count: 0 }, "t")).toBe("AsinFlow capture · x.com · 0 pages · 0 tab-joined lines · copied t · card numbers were masked in the page");
+  });
+  it("the panel's Copy page text button is shown only with the options page's debug toggle and copies debugText(); nothing is sent anywhere", () => {
+    const panel = readFileSync(resolve(__dirname, "../chrome-extension/capture-panel.js"), "utf8");
+    expect(panel).toMatch(/B\.debugText\(current\)/);
+    expect(panel).toMatch(/navigator\.clipboard\.writeText\(payload\)/);
+    expect(panel).toMatch(/chrome\.storage\.sync\.get\(\["debugCapture"\]/);
+    expect(panel).not.toMatch(/fetch\(/);
+    expect(readFileSync(resolve(__dirname, "../chrome-extension/sidepanel.html"), "utf8")).toMatch(/<button id="capture-copy-btn"[^>]*style="display:none;"/);
+    const options = readFileSync(resolve(__dirname, "../chrome-extension/options.js"), "utf8");
+    expect(options).toMatch(/chrome\.storage\.sync\.set\(\{ serverUrl, autoOpen, debugCapture \}/);
+    expect(readFileSync(resolve(__dirname, "../chrome-extension/options.html"), "utf8")).toMatch(/id="debug-capture"/);
   });
 });
 

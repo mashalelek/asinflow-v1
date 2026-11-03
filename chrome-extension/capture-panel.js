@@ -13,7 +13,8 @@
   const root = el("capture-content"), emptyState = el("empty-state"), productContent = el("product-content");
   const retailerEl = el("capture-retailer"), newSupplierEl = el("capture-new-supplier"), orderEl = el("capture-order"), badgeEl = el("capture-shipto-badge");
   const captureBtn = el("capture-btn"), statusEl = el("capture-status"), missingEl = el("capture-missing"), bucketsEl = el("capture-buckets");
-  const openBtn = el("capture-open-btn"), clearBtn = el("capture-clear-btn"), feedback = el("capture-feedback"), alsoEl = el("also-capturing");
+  const openBtn = el("capture-open-btn"), clearBtn = el("capture-clear-btn"), copyBtn = el("capture-copy-btn"), feedback = el("capture-feedback"), alsoEl = el("also-capturing");
+  let debugCapture = false; // options page: "Show Copy page text" (v1.2.3)
   let config = null; // { velocityStreet, homeStreets, prepCost, suppliers }
   let current = null; // the stored capture for the active tab
 
@@ -93,6 +94,7 @@
     openBtn.disabled = !(n && B.canOpen(b));
     openBtn.title = n && !B.canOpen(b) ? "Open in AF needs Products and Totals" : "";
     clearBtn.disabled = !n;
+    copyBtn.disabled = !n;
     renderBuckets(b, f);
     const others = info.others || [];
     alsoEl.style.display = others.length ? "" : "none";
@@ -138,6 +140,23 @@
 
   async function clear() { hush(); await send({ type: "CLEAR_CAPTURE" }); await refresh(); }
 
+  // "Copy page text" (debug, v1.2.3): the tab's captured pages — the scrubbed innerText and the fields, exactly what buckets.js parsed — to the clipboard, so a page whose products the parser missed can be pasted into the chat and become a fixture. Nothing is sent anywhere.
+  async function copyPageText() {
+    hush();
+    if (!current || !current.count) { say("Nothing captured yet", "error"); return; }
+    const payload = B.debugText(current);
+    let ok = false;
+    try { await navigator.clipboard.writeText(payload); ok = true; } catch (e) { ok = false; }
+    if (!ok) {
+      const ta = document.createElement("textarea"); ta.value = payload; ta.setAttribute("readonly", ""); ta.style.position = "fixed"; ta.style.opacity = "0";
+      document.body.append(ta); ta.select();
+      try { ok = document.execCommand("copy"); } catch (e) { ok = false; }
+      ta.remove();
+    }
+    say(ok ? `Copied ${plural(current.count, "page")} · ${payload.length.toLocaleString()} characters — paste it into the chat as a code block so the tabs survive` : "Could not copy — click the panel first, then try again", ok ? "ok" : "error");
+  }
+  function applyDebug() { copyBtn.style.display = debugCapture ? "" : "none"; }
+
   async function loadConfig() {
     const r = await send({ type: "GET_CAPTURE_CONFIG" });
     config = r && r.success ? r.config : null;
@@ -147,9 +166,14 @@
   captureBtn.addEventListener("click", capture);
   openBtn.addEventListener("click", openInAf);
   clearBtn.addEventListener("click", clear);
+  copyBtn.addEventListener("click", copyPageText);
+  chrome.storage.sync.get(["debugCapture"], (s) => { debugCapture = !!(s && s.debugCapture); applyDebug(); });
   chrome.tabs.onActivated.addListener(() => refresh());
   chrome.tabs.onUpdated.addListener((_id, change) => { if (change.status === "complete" || change.url) refresh(); });
-  chrome.storage.onChanged.addListener((_changes, area) => { if (area === "session") refresh(); });
+  chrome.storage.onChanged.addListener((changes, area) => {
+    if (area === "session") refresh();
+    if (area === "sync" && changes.debugCapture) { debugCapture = !!changes.debugCapture.newValue; applyDebug(); }
+  });
   window.addEventListener("focus", refresh);
   document.addEventListener("visibilitychange", () => { if (document.visibilityState === "visible") refresh(); });
   loadConfig().then(refresh);

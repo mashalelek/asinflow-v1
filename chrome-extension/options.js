@@ -4,15 +4,17 @@ const DEFAULT_SERVER_URL = "http://localhost:3000";
 
 const serverUrlInput = document.getElementById("server-url");
 const autoOpenCheckbox = document.getElementById("auto-open");
+const debugCaptureCheckbox = document.getElementById("debug-capture"); // v1.2.3: "Copy page text" in the Capture PO panel
 const saveBtn = document.getElementById("save-btn");
 const testBtn = document.getElementById("test-btn");
 const testResult = document.getElementById("test-result");
 const saveResult = document.getElementById("save-result");
 
 // Load saved settings
-chrome.storage.sync.get(["serverUrl", "autoOpen"], (stored) => {
+chrome.storage.sync.get(["serverUrl", "autoOpen", "debugCapture"], (stored) => {
   serverUrlInput.value = stored.serverUrl || DEFAULT_SERVER_URL;
   autoOpenCheckbox.checked = stored.autoOpen !== false;
+  debugCaptureCheckbox.checked = stored.debugCapture === true;
 });
 
 // The server URL must be a host the extension may fetch with the session
@@ -37,6 +39,7 @@ async function ensureHostPermission(serverUrl) {
 saveBtn.addEventListener("click", async () => {
   const serverUrl = serverUrlInput.value.trim().replace(/\/+$/, "") || DEFAULT_SERVER_URL;
   const autoOpen = autoOpenCheckbox.checked;
+  const debugCapture = debugCaptureCheckbox.checked;
 
   const perm = await ensureHostPermission(serverUrl);
   if (!perm.ok) {
@@ -44,7 +47,7 @@ saveBtn.addEventListener("click", async () => {
     testResult.className = "error";
     testResult.style.display = "block";
   }
-  chrome.storage.sync.set({ serverUrl, autoOpen }, () => {
+  chrome.storage.sync.set({ serverUrl, autoOpen, debugCapture }, () => {
     saveResult.style.display = "block";
     setTimeout(() => { saveResult.style.display = "none"; }, 2000);
 

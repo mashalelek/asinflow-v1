@@ -168,7 +168,7 @@ the promo backfill (`npm run backfill:po-promos`), every call logged in
 (`chrome-extension/scrub.js`) runs inside the page; its fixtures are
 hand-written with public test card numbers only — never real ones.
 
-**Chrome extension dev (SPEC §11 "Chrome extension — Capture PO", v1.2.2):** load
+**Chrome extension dev (SPEC §11 "Chrome extension — Capture PO", v1.2.3):** load
 `chrome-extension/` unpacked at chrome://extensions; set the server URL on
 its options page (localhost:3000 by default; production
 `https://asinflow-cqg.onrender.com` and the custom domain
@@ -179,6 +179,10 @@ AsinFlow in a normal tab first — the extension sends the session cookie
 Capture PO: Capture this page (grants the site's host permission on first
 use) → Open in AF → `/pos/new?prefill=<id>`. No build step: plain scripts
 (`scrub.js`, `capture.js`, `buckets.js` — the six data buckets, tested in `server/extension-buckets.test.ts` — `capture-panel.js`, `background.js`).
+A page the parser missed: tick "Show Copy page text" on the options page,
+capture it, click **Copy page text** in the panel and paste the text (as a
+code block, so the tabs survive) — it becomes a fixture under
+`server/__fixtures__/capture-pages/`.
 
 **PO patch scripts (2026-10-31):** `npm run backfill:po-model` (migration-075
 backfills, dry run by default, `--live`), `npm run backfill:po-promos` (needs

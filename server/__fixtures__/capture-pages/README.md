@@ -12,9 +12,14 @@ real Walmart PO (2026-11-01; order # and card invented): the rollback /
 "Have a promo code?" prompt and the size-variant radios the v1.2.1 parser
 rules are tested against.
 
-`shagtools/cart.txt` is a synthetic table-style cart shaped like the
-shagtools.com cart (2026-11-02; names and prices invented): one `<tr>` per
-product whose cells (title, price, quantity stepper, line total) innerText
-joins with tabs, a header row, a recommendation row without a quantity, and
-one coupon shown four ways (banner, "GET 10% OFF", cart notice, COUPON: row)
-— the v1.2.2 row rule and promo dedupe are tested against it.
+`shagtools/` is SYNTHETIC — shaped from Maria's description of the
+shagtools.com cart and checkout (2026-11-02), to be replaced by the real
+text from the panel's "Copy page text" when she pastes it. `cart.txt`: one
+`<tr>` per product whose cells (title, $8.93, quantity stepper, $133.95)
+innerText joins with tabs, a header row, a recommendation row without a
+quantity, and one coupon shown four ways (banner, "GET 10% OFF", cart
+notice, COUPON: row). `checkout.txt`: the product as a title line, "× 15"
+on the line under it and the line subtotal — no unit price, no quantity
+input — among the address, shipping-method and card lines. The v1.2.2 row
+rule and promo dedupe and the v1.2.3 quantity shapes are tested against
+them.

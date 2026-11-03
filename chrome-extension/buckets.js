@@ -15,6 +15,16 @@
 // deduped by code (case-insensitive; a code-less line joins the code whose
 // amount or percent it repeats, else its normalized wording), keeping the
 // line with the most detail (code + amount + percent).
+// v1.2.3 (shagtools.com cart + checkout, Maria 2026-11-02): (a) a product
+// whose quantity is plain text — "× N", "x N", "N ×" (or "Qty: N") anywhere in
+// the row, on the title line or on a line of its own — with a line total and
+// no unit price: the unit price is derived as total ÷ N; (b) a table row whose
+// cells are title / unit price / quantity / line total in any order, the
+// quantity an input (its value is not in the text), a stepper cell ("− +",
+// "− 15 +"), a bare number or nothing visible at all: two monies whose ratio
+// is a whole number give the quantity, price and total. debugText() is the
+// panel's "Copy page text" (options page, debug): the captured text and
+// fields exactly as the parser saw them.
 (function (root) {
   "use strict";
 
@@ -41,6 +51,10 @@
   // A promo line carries a code, an amount or a percent; "Have a promo code?" is a form prompt (v1.2.1).
   var PROMO_VALUE = /\$\s?\d|\d+(?:\.\d+)?\s*%|\b[A-Z0-9]{5,}\b/;
   var STEPPER = /^[−–\-+]$/;
+  // A quantity shown as plain text: "× 15", "x 15", "(x15)", "15 ×" — tested after MULT, so "12 × $7.97" / "$7.97 × 12" keep their unit price (v1.2.3).
+  var QTY_MARK = /(?:^|[\s(])[×x]\s*(\d{1,4})\b|\b(\d{1,4})\s*[×x](?=[\s)]|$)/i;
+  // The mark at the end / start of a title line: "Shag Carpet Kicker … × 15".
+  var NAME_MARK = /\s[×x]\s*(\d{1,4})$|^(\d{1,4})\s*[×x]\s+/i;
   var QTY_LABEL = /^(?:qty|quantity)\s*:?$/i;
   var CARDISH = /••••|\*{4}|\bending\s+(?:in|with)\b|\b(?:visa|mastercard|amex|american\s+express|discover|paypal|affirm|klarna|afterpay)\b/i;
   var CARD_LAST4 = /^(.*?)\s*(?:•••• ?|\*{4} ?|x{4} ?|ending\s+(?:in|with)\s+|ending\s+)(\d{4})\b/i;
@@ -60,6 +74,34 @@
   function normStreet(s) { var m = /\b(\d{1,6})\s+([A-Za-z][A-Za-z'-]*)/.exec(String(s || "")); return m ? m[1] + " " + m[2].toLowerCase() : null; }
   function money(s) { var m = MONEY.exec(String(s || "")); return m ? m[0].replace(/\s/g, "") : null; }
   function toNum(s) { return s == null ? null : Number(String(s).replace(/[^\d.-]/g, "")); }
+  /** "$133.95" ÷ 15 → "$8.93" (v1.2.3: a unit price derived from a line total). */
+  function unitOf(total, qty) { return "$" + (Math.round((toNum(total) / qty) * 100) / 100).toFixed(2); }
+  /** Two monies where one is the other × qty → { price, total }, either order; qty 1 needs two equal monies. */
+  function pairFor(monies, qty) {
+    for (var i = 0; i < monies.length; i++) for (var j = 0; j < monies.length; j++) {
+      if (i === j) continue;
+      if (Math.abs(toNum(monies[j]) - toNum(monies[i]) * qty) < 0.011) return { price: monies[i], total: monies[j] };
+    }
+    return null;
+  }
+  /** Two monies whose ratio is a whole number 1–999 → { qty, price, total } (the quantity is not in the text: an input, an icon stepper). The first money is tried as the unit price first. */
+  function ratioPair(monies) {
+    for (var i = 0; i < monies.length; i++) for (var j = 0; j < monies.length; j++) {
+      if (i === j) continue;
+      var a = toNum(monies[i]), b = toNum(monies[j]);
+      if (!(a > 0) || !(b > 0) || b < a) continue;
+      var n = Math.round(b / a);
+      if (n >= 1 && n <= 999 && Math.abs(b - a * n) < 0.011) return { qty: n, price: monies[i], total: monies[j] };
+    }
+    return null;
+  }
+  /** A stepper cell: "−", "+", "− +", "− 15 +", "-15+" → { qty } (null when the value is not in the text). */
+  function stepperCell(c) {
+    if (!/[−–\-+]/.test(c) || !/^[−–\-+\s\d]+$/.test(c)) return null;
+    var d = c.match(/\d{1,4}/g);
+    if (d && d.length > 1) return null;
+    return { qty: d ? Number(d[0]) : null };
+  }
   function uniq(arr, key) { var out = [], seen = {}; arr.forEach(function (x) { var k = key ? key(x) : x; if (k == null || seen[k]) return; seen[k] = true; out.push(x); }); return out; }
   function fieldsOf(page) { return Array.isArray(page && page.fields) ? page.fields : []; }
   function selectedFields(page) { return fieldsOf(page).filter(function (f) { return /^selected:/i.test(String(f.label || "")); }); }
@@ -107,44 +149,55 @@
     return true;
   }
   function singleLineItem(l) {
-    // "Name   Item #LC1234   Qty 1   $199.00" / "Name   Qty: 6   $5.99" / "Name × 6 $5.99" / "Name 12 × $7.97"
+    // "Name   Item #LC1234   Qty 1   $199.00" / "Name   Qty: 6   $5.99" / "Name × 6 $5.99" / "Name 12 × $7.97" / "Name  × 15  $133.95" (v1.2.3: the mark, the price derived)
     if (!MONEY.test(l)) return null;
-    var q = QTY.exec(l), mu = MULT.exec(l);
-    if (!q && !mu) return null;
+    var q = QTY.exec(l), mu = MULT.exec(l), mk = !mu && QTY_MARK.exec(l);
+    if (!q && !mu && !mk) return null;
     var cut = l.length;
-    [QTY, SKU, MULT, MONEY].forEach(function (re) { var m = re.exec(l); if (m && m.index < cut) cut = m.index; });
+    [QTY, SKU, MULT, MONEY].concat(mk ? [QTY_MARK] : []).forEach(function (re) { var m = re.exec(l); if (m && m.index < cut) cut = m.index; });
     var name = l.slice(0, cut).replace(/[\s|,:·•-]+$/, "").trim();
     if (!nameLike(name)) return null;
-    var p = { name: name, qty: q ? Number(q[1]) : Number(mu[1] || mu[4]), price: null, total: null, sku: null };
+    var p = { name: name, qty: q ? Number(q[1]) : mu ? Number(mu[1] || mu[4]) : Number(mk[1] || mk[2]), price: null, total: null, sku: null };
     var sk = SKU.exec(l); if (sk) p.sku = sk[1];
     var monies = l.match(MONEY_G).map(function (m) { return m.replace(/\s/g, ""); });
     if (mu) { p.price = (mu[2] || mu[3]).replace(/\s/g, ""); }
+    else if (mk && !q && monies.length === 1 && p.qty > 0) { p.total = monies[0]; p.price = unitOf(monies[0], p.qty); }
     else p.price = monies[0];
-    if (monies.length > 1 && p.qty != null) { var t = monies.filter(function (m) { return Math.abs(toNum(m) - toNum(p.price) * p.qty) < 0.011; })[0]; if (t && t !== p.price) p.total = t; }
+    if (monies.length > 1 && p.qty != null) { var pt = pairFor(monies, p.qty); if (pt) { p.price = pt.price; p.total = pt.total; } }
     return p;
   }
-  /** A table / grid row (v1.2.2): cells side by side on one line — a title cell, a price cell and a quantity cell (a stepper "−" / "+", a "Qty" label, a "Qty N" or a bare count); the stepper's value comes from the page's quantity fields like any control. */
+  /** A table / grid row (v1.2.2, widened in v1.2.3): cells side by side on one line, in any order — a title cell, a unit price and / or a line total, and a quantity cell: a stepper ("−" / "+", "− 15 +"), a "Qty" label, a "Qty N", a "× N" / "N ×" mark, a bare count, or nothing visible (an input's value is not in the text — then two monies whose ratio is a whole number give the quantity). The stepper's value comes from the page's quantity fields when the text lacks it. */
   function rowItem(l) {
     if (!MONEY.test(l)) return null;
     var cells = l.split(/\s{2,}/).map(function (c) { return c.trim(); }).filter(Boolean);
     if (cells.length < 3) return null;
-    var p = { name: null, qty: null, price: null, total: null, sku: null, control: false, monies: [], ints: [] }, sawQty = false;
+    var p = { name: null, qty: null, price: null, total: null, sku: null, control: false, mark: false, monies: [], ints: [] }, sawQty = false;
     for (var k = 0; k < cells.length; k++) {
       var c = cells[k];
       if (p.name == null && nameLike(c)) { p.name = c; continue; }
-      if (STEPPER.test(c) || QTY_LABEL.test(c)) { p.control = true; sawQty = true; continue; }
+      var st = stepperCell(c);
+      if (st) { p.control = true; sawQty = true; if (st.qty != null && p.qty == null) p.qty = st.qty; continue; }
+      if (QTY_LABEL.test(c)) { p.control = true; sawQty = true; continue; }
       var q = QTY.exec(c); if (q) { if (p.qty == null) p.qty = Number(q[1]); p.control = true; sawQty = true; continue; }
+      var mu = MULT.exec(c);
+      if (mu) { if (p.qty == null) p.qty = Number(mu[1] || mu[4]); p.control = true; sawQty = true; p.monies.push((mu[2] || mu[3]).replace(/\s/g, "")); continue; }
+      var mk = QTY_MARK.exec(c);
+      if (mk) { if (p.qty == null) p.qty = Number(mk[1] || mk[2]); p.control = true; p.mark = true; sawQty = true; c = c.replace(QTY_MARK, " ").trim(); if (!c) continue; }
       if (/^\d{1,4}$/.test(c)) {
         sawQty = true;
-        var stepper = (k > 0 && STEPPER.test(cells[k - 1])) || (k + 1 < cells.length && STEPPER.test(cells[k + 1]));
-        if (stepper) { p.control = true; if (p.qty == null) p.qty = Number(c); } else p.ints.push(Number(c));
+        var near = function (x) { return x != null && (!!stepperCell(x) || QTY_LABEL.test(x)); };
+        if (near(cells[k - 1]) || near(cells[k + 1])) { p.control = true; if (p.qty == null) p.qty = Number(c); } else p.ints.push(Number(c));
         continue;
       }
       var sk = SKU.exec(c); if (sk && !p.sku) p.sku = sk[1];
       var mm = c.match(MONEY_G); if (mm && !/\b(?:was|reg\.?|regular|list|save|saved|savings)\b/i.test(c)) p.monies = p.monies.concat(mm.map(function (m) { return m.replace(/\s/g, ""); }));
     }
-    // One bare count in the row and a total cell equal to price × count (a count of 1 makes them equal — explicit here, unlike a block's repeated price).
-    if (p.qty == null && p.ints.length === 1 && p.monies.length >= 2 && Math.abs(toNum(p.monies[1]) - toNum(p.monies[0]) * p.ints[0]) < 0.011) p.qty = p.ints[0];
+    // One bare count in the row confirmed by a total cell equal to price × count, either order (a count of 1 makes them equal — explicit here, unlike a block's repeated price).
+    if (p.qty == null && p.ints.length === 1 && p.monies.length >= 2 && pairFor(p.monies, p.ints[0])) p.qty = p.ints[0];
+    // (b) No quantity in the text (an input, an icon stepper): a unit price and a line total whose ratio is a whole number.
+    if (p.qty == null && p.monies.length >= 2) { var rp = ratioPair(p.monies); if (rp) { p.qty = rp.qty; p.price = rp.price; p.total = rp.total; p.control = true; sawQty = true; } }
+    // (a) A "× N" mark with a lone money: the line total; the unit price is derived.
+    if (p.mark && p.qty > 0 && p.monies.length === 1 && p.price == null) { p.total = p.monies[0]; p.price = unitOf(p.monies[0], p.qty); }
     return p.name && p.monies.length && sawQty ? p : null;
   }
   function extractProducts(page) {
@@ -162,6 +215,8 @@
       // A bare integer between two money lines where the second is price × n ("$7.97 / 12 / $95.64") is the quantity.
       if (p.qty == null && ints.length && monies.length > 1) { var n = ints.filter(function (k) { return monies.some(function (m) { return Math.abs(toNum(m) - toNum(monies[0]) * k) < 0.011 && m !== monies[0]; }); })[0]; if (n != null) p.qty = n; }
       if (p.qty == null && p.control && ints.length) p.qty = ints[0];
+      // (a) A "× N" mark and one money: the money is the line total, the unit price is derived (v1.2.3).
+      if (p.price == null && p.mark && p.qty > 0 && monies.length === 1) { p.total = monies[0]; p.price = unitOf(monies[0], p.qty); }
       // Price and line total from the block's money lines, once the qty is known: unit price first, a later money equal to price × qty is the line total (or the other way round).
       if (p.price == null && monies.length) {
         p.price = monies[0];
@@ -183,8 +238,10 @@
       if (single) { out.push(single); i++; continue; }
       var row = rowItem(l);
       if (row) { out.push(row); i++; continue; }
-      if (!nameLike(l)) { i++; continue; }
-      var p = { name: l, qty: null, price: null, total: null, sku: null, control: false, monies: [], ints: [] }, j = i + 1, packInts = false;
+      // The title line may end with the quantity mark ("… Adjustable Head × 15", v1.2.3).
+      var nm = NAME_MARK.exec(l), title = nm ? l.replace(nm[0], " ").trim() : l;
+      if (!nameLike(title)) { i++; continue; }
+      var p = { name: title, qty: nm ? Number(nm[1] || nm[2]) : null, price: null, total: null, sku: null, control: !!nm, mark: !!nm, monies: [], ints: [] }, j = i + 1, packInts = false;
       for (; j < L.length && j <= i + 14; j++) {
         var x = L[j];
         if (TOTAL_LINE.test(x) || singleLineItem(x) || rowItem(x) || (nameLike(x) && !SKU.test(x))) break;
@@ -192,6 +249,9 @@
         var mu = MULT.exec(x);
         if (mu) { p.qty = Number(mu[1] || mu[4]); p.control = true; p.monies.push((mu[2] || mu[3]).replace(/\s/g, "")); continue; }
         var q = QTY.exec(x); if (q) { p.control = true; if (p.qty == null) p.qty = Number(q[1]); }
+        // "× 15" on a line of its own (or with the total on the same line): the quantity as plain text (v1.2.3).
+        var mk = !q && QTY_MARK.exec(x);
+        if (mk) { p.control = true; p.mark = true; if (p.qty == null) p.qty = Number(mk[1] || mk[2]); x = x.replace(QTY_MARK, " ").trim(); if (!x) continue; }
         if (QTY_LABEL.test(x)) { p.control = true; packInts = false; continue; }
         // A pack-size dropdown ("Multipack Quantity:" then its options 1, 2 on their own lines) is never the order's quantity.
         if (PACK_LABEL.test(x)) { packInts = true; continue; }
@@ -392,6 +452,18 @@
     c.buckets = mergeBuckets(c.buckets, extractBuckets(page));
     return c;
   }
+  /** "Copy page text" (v1.2.3, options page → debug): every captured page of the tab, oldest first — step, URL, title, time, size, the scrubbed innerText EXACTLY as stored (tabs included — the header counts the tab-joined lines so a paste that lost them is recognisable) and every field as one JSON line. */
+  function debugText(cap, now) {
+    var pages = pagesOf(cap).slice().sort(function (p, q) { return String(p.capturedAt || "").localeCompare(String(q.capturedAt || "")); });
+    var tabbed = pages.reduce(function (n, p) { return n + String(p.text || "").split("\n").filter(function (l) { return l.indexOf("\t") >= 0; }).length; }, 0);
+    var out = ["AsinFlow capture · " + String((cap && cap.host) || "—") + " · " + pages.length + " page" + (pages.length === 1 ? "" : "s") + " · " + tabbed + " tab-joined line" + (tabbed === 1 ? "" : "s") + " · copied " + (now || new Date().toISOString()) + " · card numbers were masked in the page"];
+    pages.forEach(function (p, i) {
+      var f = Array.isArray(p.fields) ? p.fields : [];
+      out.push("", "=== page " + (i + 1) + " · step " + String(p.step || "other") + " · " + String(p.url || "") + " · " + String(p.title || "").replace(/\s+/g, " ") + " · captured " + String(p.capturedAt || "") + " · " + String(p.text || "").length + " chars ===", String(p.text || ""), "--- fields (" + f.length + ") ---");
+      f.forEach(function (x) { out.push(JSON.stringify(x)); });
+    });
+    return out.join("\n");
+  }
   function pagesForPrefill(cap) { return pagesOf(cap).map(function (p) { return { step: p.step, url: p.url, title: p.title, text: p.text, fields: p.fields || [] }; }); }
   /** The selected ship-to for the prefill payload: null when no page showed an address. */
   function shipToForPrefill(cap) {
@@ -426,7 +498,7 @@
     BUCKETS: BUCKETS, LABELS: LABELS, emptyBuckets: emptyBuckets, extractBuckets: extractBuckets, mergeBuckets: mergeBuckets,
     extractProducts: extractProducts, extractShipping: extractShipping, extractPayment: extractPayment, extractTotals: extractTotals, extractPromos: extractPromos, dedupePromos: dedupePromos, extractOrder: extractOrder,
     filled: filled, missing: missing, canOpen: canOpen, streetIn: streetIn, normStreet: normStreet,
-    captureKey: captureKey, newCapture: newCapture, applyPage: applyPage, pagesForPrefill: pagesForPrefill, shipToForPrefill: shipToForPrefill, othersCapturing: othersCapturing,
+    captureKey: captureKey, newCapture: newCapture, applyPage: applyPage, pagesForPrefill: pagesForPrefill, shipToForPrefill: shipToForPrefill, othersCapturing: othersCapturing, debugText: debugText,
     shipToKind: shipToKind, describeShipping: describeShipping,
   };
   root.AfBuckets = api;

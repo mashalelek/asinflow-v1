@@ -2602,7 +2602,7 @@ is set — the runner is always on; only the **schedule** is gated.
   File keep their inline sheet/CSV step; only the onboarding Refresh they
   spawn is a queue job.
 
-### Chrome extension — Capture PO (patch `docs/claude_spec-patch-po-ai-prefill.md` §4, 2026-10-31; `chrome-extension/` v1.2.2 — panel redesign 2026-11-01, pre-parser fixes from the first real PO the same day, table-row products and promo dedupe from a shagtools.com cart 2026-11-02)
+### Chrome extension — Capture PO (patch `docs/claude_spec-patch-po-ai-prefill.md` §4, 2026-10-31; `chrome-extension/` v1.2.3 — panel redesign 2026-11-01, pre-parser fixes from the first real PO the same day, table-row products and promo dedupe from a shagtools.com cart 2026-11-02, plain-text / no-text quantities and the "Copy page text" debug action the same day)
 
 The existing extension (the Amazon side-panel calculator, `content.js` on
 `/dp` pages) gains **Capture PO** in the same side panel: on any tab that is
@@ -2679,8 +2679,35 @@ not an Amazon product page the panel shows the capture UI instead of the
   percent it repeats ("GET 10% OFF" → SHAGTOOLS10), otherwise lines with
   the same wording are one; the line with the most detail (code + amount +
   percent) is kept, so a banner, a cart notice, the COUPON: row and the
-  "GET 10% OFF" line show as one promo, not four. Fixture:
-  `server/__fixtures__/capture-pages/shagtools/cart.txt`. **Open in AF** is enabled once
+  "GET 10% OFF" line show as one promo, not four. **v1.2.3 (the same
+  cart and its checkout, still empty after 1.2.2, Maria 2026-11-02 — "stop
+  guessing the shape"):** two more product shapes. **(a)** a product whose
+  quantity is plain text — "× N", "x N", "N ×", "(xN)" — anywhere in the
+  row: on the title line, on a line of its own under it, or beside the
+  total; a line total with no unit price is accepted and the unit price is
+  derived as total ÷ N ("Shag Carpet Kicker … / × 15 / $133.95" → 15 ×
+  $8.93, total $133.95); "N × $price" keeps meaning N at that unit price,
+  and "Qty: N" with one money keeps that money as the unit price (the
+  Walmart review line's shape — the merge turns a confirmation's line
+  total into the total). **(b)** a table row whose cells are title / unit
+  price / quantity / line total **in any order**, the quantity an input
+  (its value is not in the text), a stepper cell in any rendering ("−",
+  "+", "− +", "− 15 +", "-15+"), a bare number, a "Qty" cell + number, or
+  nothing visible at all: two monies whose ratio is a whole number give
+  the quantity, price and total (a bare count the monies do not confirm
+  is ignored; a row with one money and no quantity is still not a
+  product). **"Copy page text"** (debug): the options page's "Show Copy
+  page text in the Capture PO panel" toggle (`debugCapture`,
+  `chrome.storage.sync`) adds a third footer button that copies
+  `debugText(capture)` to the clipboard — every captured page of the tab,
+  oldest first, with step / URL / title / time / size, the scrubbed
+  innerText verbatim (tabs kept; the header counts the tab-joined lines so
+  a paste that lost them is recognisable) and every field as one JSON
+  line — so a page the parser missed can be pasted into the chat and
+  become a fixture. Nothing is sent anywhere; card numbers were masked in
+  the page. Fixtures: `server/__fixtures__/capture-pages/shagtools/`
+  (`cart.txt`, `checkout.txt` — synthetic, shaped from Maria's
+  description, to be replaced by the real paste). **Open in AF** is enabled once
   Products and Totals are filled (the rest is optional); **Clear**;
   caption "One AI call runs when you open it · card numbers are masked
   before anything leaves the browser". **Per tab:** the record lives under

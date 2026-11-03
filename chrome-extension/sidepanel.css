@@ -92,7 +92,8 @@ button { font: inherit; }
 .bucket-pairs span { white-space: nowrap; font-variant-numeric: tabular-nums; }
 .bucket-pairs .k { color: var(--text-2); margin-right: 4px; }
 .bucket-note { font-size: 12px; color: var(--amber); }
-.capture-footer { display: flex; gap: 8px; align-items: stretch; }
+.capture-footer { display: flex; flex-wrap: wrap; gap: 8px; align-items: stretch; }
+#capture-copy-btn { flex-basis: 100%; }
 .capture-footer .btn-primary { flex: 1; }
 .capture-footer .btn-secondary { width: auto; padding: 10px 16px; }
 .capture-caption { font-size: 11px; color: var(--text-2); text-align: center; margin-top: 8px; }
