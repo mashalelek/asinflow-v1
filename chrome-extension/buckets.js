@@ -30,6 +30,12 @@
 // number of cents (Walmart's confirmation "Qty 12 / $95.64" → 12 × $7.97);
 // otherwise the money stays the unit price ("Qty: 10 / $7.97" — 0.797 is no
 // price). canOpen() is gone: the buckets are a preview, not a gate.
+// v1.2.5 (shagtools.com/checkout, Maria 2026-11-02): the address was in form
+// fields (street, city, state select, ZIP), not in the text — Shipping now
+// also builds a candidate from the captured fields whose labels / names say
+// street | address | city | state | zip | postal (billing, email and phone
+// fields excluded; a checked radio still wins), and the street is matched
+// against the two known addresses the same way (normStreet).
 (function (root) {
   "use strict";
 
@@ -123,6 +129,22 @@
   }
 
   // ── Shipping: the SELECTED address, never just the first address block ──
+  // v1.2.5: an address typed into form fields (street / city / state / ZIP). Labels are what capture.js labelFor() gives: a <label>, aria-label, placeholder, name or id — so "shipping_address_line1", "Street address", "address1", "zip", "postal_code". Billing / email / phone fields are skipped; a second line, apt / suite / unit never is the street; the value must look like a street ("805 Grandy Ave", or "65 Rivercrest" without a suffix).
+  var ADDR_SKIP = /bill|email|e-mail|phone|tel\b|company|search|name/i;
+  var ADDR_LINE2 = /line[ _-]?2|address[ _-]?2|addr2|street[ _-]?2|\b2\b|apt|suite|unit|floor|type/i;
+  function addressFromFields(page) {
+    var street = null, city = null, state = null, zip = null;
+    fieldsOf(page).forEach(function (f) {
+      var lab = String(f.label || ""), val = String(f.value || "").replace(/\s+/g, " ").trim();
+      if (!val || /^selected:/i.test(lab) || ADDR_SKIP.test(lab)) return;
+      if (street == null && /street|address|addr/i.test(lab) && !ADDR_LINE2.test(lab) && /^\d{1,6}[A-Za-z]?\s+[A-Za-z]/.test(val)) street = streetIn(val) || val.slice(0, 80);
+      else if (city == null && /city|town/i.test(lab)) city = val.slice(0, 60);
+      else if (state == null && /state|province|region/i.test(lab)) state = val.slice(0, 40);
+      else if (zip == null && /zip|postal|postcode/i.test(lab)) { var z = /\d{5}(?:-\d{4})?/.exec(val); zip = z ? z[0] : val.slice(0, 12); }
+    });
+    if (!street) return null;
+    return { street: street, candidates: [street], selected: false, fromFields: true, city: city, state: state, zip: zip };
+  }
   function extractShipping(page) {
     var sel = [];
     selectedFields(page).forEach(function (f) {
@@ -133,6 +155,8 @@
     });
     sel = uniq(sel, normStreet);
     if (sel.length) return { street: sel.length === 1 ? sel[0] : null, candidates: sel, selected: true };
+    var typed = addressFromFields(page);
+    if (typed) return typed;
     var L = lines(page.text), cands = [];
     for (var i = 0; i < L.length; i++) {
       var l = L[i];
@@ -501,14 +525,16 @@
   function describeShipping(shipping, config) {
     if (!shipping) return [];
     var one = function (st) { var k = shipToKind(st, config); return k ? k + " · " + st : "Unknown: " + st; };
-    if (shipping.street) return [one(shipping.street)];
+    // v1.2.5: a typed address shows its city / state / ZIP after the street.
+    var tail = shipping.fromFields ? [shipping.city, [shipping.state, shipping.zip].filter(Boolean).join(" ")].filter(Boolean).join(", ") : "";
+    if (shipping.street) return [one(shipping.street) + (tail ? " (" + tail + ")" : "")];
     return (shipping.candidates || []).map(one);
   }
 
   var api = {
     BUCKETS: BUCKETS, LABELS: LABELS, emptyBuckets: emptyBuckets, extractBuckets: extractBuckets, mergeBuckets: mergeBuckets,
     extractProducts: extractProducts, extractShipping: extractShipping, extractPayment: extractPayment, extractTotals: extractTotals, extractPromos: extractPromos, dedupePromos: dedupePromos, extractOrder: extractOrder,
-    filled: filled, missing: missing, streetIn: streetIn, normStreet: normStreet,
+    filled: filled, missing: missing, streetIn: streetIn, normStreet: normStreet, addressFromFields: addressFromFields,
     captureKey: captureKey, newCapture: newCapture, applyPage: applyPage, pagesForPrefill: pagesForPrefill, shipToForPrefill: shipToForPrefill, othersCapturing: othersCapturing, debugText: debugText,
     shipToKind: shipToKind, describeShipping: describeShipping,
   };

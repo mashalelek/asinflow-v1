@@ -1,7 +1,7 @@
 import { describe, it, expect } from "vitest";
 import { readFileSync } from "fs";
 import { resolve } from "path";
-import { extractBuckets, mergeBuckets, emptyBuckets, filled, missing, applyPage, captureKey, pagesForPrefill, shipToForPrefill, othersCapturing, describeShipping, extractShipping, extractProducts, extractPromos, debugText, dedupePromos } from "../chrome-extension/buckets.js";
+import { extractBuckets, mergeBuckets, emptyBuckets, filled, missing, applyPage, newCapture, captureKey, pagesForPrefill, shipToForPrefill, othersCapturing, describeShipping, extractShipping, extractProducts, extractPromos, debugText, dedupePromos } from "../chrome-extension/buckets.js";
 import { scrubText } from "../chrome-extension/scrub.js";
 
 // Capture PO v1.2 (SPEC §11 "Chrome extension — Capture PO"): six data
@@ -271,6 +271,32 @@ describe("buckets: v1.2.3 — product rows with a plain-text quantity or no quan
     const options = readFileSync(resolve(__dirname, "../chrome-extension/options.js"), "utf8");
     expect(options).toMatch(/chrome\.storage\.sync\.set\(\{ serverUrl, autoOpen, debugCapture \}/);
     expect(readFileSync(resolve(__dirname, "../chrome-extension/options.html"), "utf8")).toMatch(/id="debug-capture"/);
+  });
+});
+
+// v1.2.5 (Maria 2026-11-02): shagtools.com/checkout had the address in form fields (street, city, state select, ZIP), not in the text — the Shipping bucket missed it.
+describe("buckets: v1.2.5 — the Shipping bucket from form fields", () => {
+  const text = "Shag Tools\nCheckout\nContact\nShipping address\nShipping method\nGround $12.00\nSubtotal $133.95";
+  it("street / city / state / ZIP fields → the typed address; the street is matched like any other (Velocity); city, state and ZIP ride along; email, billing and phone fields are ignored", () => {
+    const fields = [{ label: "Email address", value: "buyer@example.com" }, { label: "First name", value: "Coastal" }, { label: "Street address", value: "805 Grandy Ave" }, { label: "Apartment, suite, etc.", value: "Unit B" }, { label: "City", value: "Norfolk" }, { label: "State", value: "Virginia" }, { label: "ZIP code", value: "23504" }, { label: "Phone", value: "7575550100" }, { label: "billing_address1", value: "1 Other St" }];
+    const s = extractShipping({ url: "x", text, fields });
+    expect(s).toEqual({ street: "805 Grandy Ave", candidates: ["805 Grandy Ave"], selected: false, fromFields: true, city: "Norfolk", state: "Virginia", zip: "23504" });
+    expect(describeShipping(s, config)).toEqual(["Velocity · 805 Grandy Ave (Norfolk, Virginia 23504)"]);
+    expect(filled(extractBuckets({ url: "x", text, fields })).shipping).toBe(true);
+    expect(shipToForPrefill({ ...newCapture("www.shagtools.com"), buckets: { ...emptyBuckets(), shipping: s } })).toEqual({ street: "805 Grandy Ave", candidates: ["805 Grandy Ave"] });
+  });
+  it("labels as capture.js gives them (name / id / placeholder): shipping_address_line1, address1, zip, postal_code; a street without a suffix is kept as typed; a line-2 field is never the street; an unknown street says so", () => {
+    expect(extractShipping({ url: "x", text, fields: [{ label: "shipping_address_line1", value: "65 Rivercrest" }, { label: "shipping_address_line2", value: "12 Fake Rd" }, { label: "postal_code", value: "23456-1234" }] })).toMatchObject({ street: "65 Rivercrest", zip: "23456-1234", fromFields: true });
+    expect(describeShipping(extractShipping({ url: "x", text, fields: [{ label: "address1", value: "65 Rivercrest Dr" }, { label: "zip", value: "23456" }] }), config)).toEqual(["Home · 65 Rivercrest Dr (23456)"]);
+    expect(describeShipping(extractShipping({ url: "x", text, fields: [{ label: "Address", value: "12 Elsewhere St" }, { label: "City", value: "Reno" }, { label: "State", value: "NV" }] }), config)).toEqual(["Unknown: 12 Elsewhere St (Reno, NV)"]);
+    expect(extractShipping({ url: "x", text, fields: [{ label: "Address", value: "Elsewhere" }, { label: "Email address", value: "805 Grandy Ave" }] })).toBeNull();
+  });
+  it("a checked address radio still wins over typed fields; the text block is read only when neither exists; the merge keeps the newer", () => {
+    const fields = [{ label: "selected: ship", value: "Coastal Quality Goods\n65 Rivercrest Dr, Norfolk, VA 23456" }, { label: "Street address", value: "805 Grandy Ave" }];
+    expect(extractShipping({ url: "x", text, fields })).toEqual({ street: "65 Rivercrest Dr", candidates: ["65 Rivercrest Dr"], selected: true });
+    expect(extractShipping({ url: "x", text: "Shipping address\n805 Grandy Ave\nNorfolk, VA 23504", fields: [{ label: "City", value: "Norfolk" }] })).toEqual({ street: "805 Grandy Ave", candidates: ["805 Grandy Ave"], selected: false });
+    const m = mergeBuckets(extractBuckets({ url: "x", text: "Cart\nSubtotal $1.00" }), extractBuckets({ url: "x", text, fields: [{ label: "Street address", value: "805 Grandy Ave" }] }));
+    expect(m.shipping?.street).toBe("805 Grandy Ave");
   });
 });
 

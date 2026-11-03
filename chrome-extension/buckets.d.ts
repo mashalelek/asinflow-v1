@@ -22,6 +22,7 @@ export function extractTotals(page: CapturePage): BucketTotals;
 export function extractPromos(page: CapturePage): string[];
 export function dedupePromos(lines: string[]): string[];
 export function debugText(cap: any, now?: string): string;
+export function addressFromFields(page: CapturePage): any;
 export function extractOrder(page: CapturePage): BucketOrder;
 export function filled(b: Buckets | null): Record<BucketKey, boolean>;
 export function missing(b: Buckets | null): string[];

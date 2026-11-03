@@ -2725,7 +2725,19 @@ not an Amazon product page the panel shows the capture UI instead of the
   supplier seeded (`initialSupplier`, `client/src/pages/po-new.tsx`), no
   model call, no server request. `canOpen()` and the "needs Products and
   Totals" tooltip are gone; the buckets are a preview, not a gate ("Still
-  missing: …" is information). **Clear**;
+  missing: …" is information). **v1.2.5 (shagtools.com/checkout, Maria
+  2026-11-02): the Shipping bucket reads form fields** — the address was
+  typed into street / city / state (a select) / ZIP inputs, not shown as
+  text. After the checked-radio rule and before the text headings,
+  `addressFromFields` builds one candidate from the captured fields whose
+  label / name / id / placeholder says street | address | addr (not a
+  line 2, apt, suite, unit; never a billing, email, phone, company or
+  name field; the value must start like a street — "805 Grandy Ave", or
+  "65 Rivercrest" kept as typed when no suffix is recognised), with city |
+  town, state | province | region and zip | postal | postcode riding
+  along (`fromFields: true`); the street is matched against the two known
+  addresses exactly as before (`normStreet`), and the panel shows
+  "Velocity · 805 Grandy Ave (Norfolk, Virginia 23504)". **Clear**;
   caption "One AI call runs when you open it · card numbers are masked
   before anything leaves the browser". **Per tab:** the record lives under
   `capture:<tabId>` (`chrome.storage.session`); the panel shows the active
