@@ -51,7 +51,13 @@ describe("shared/yield", () => {
     expect(ratioFromStoredYield("0.5", 2)).toEqual({ retailer: 1, asinUnits: 2, fit: "0.02" });
     expect(ratioFromStoredYield("12", 1)).toEqual({ retailer: 12, asinUnits: 1, fit: "0.02" });
     expect(ratioFromStoredYield("0.08", 15)).toBeNull();     // 1.2: 0.2 off, beyond both bounds
-    expect(ratioFromStoredYield("0.07", null)).toBeNull();   // the walmart row: no units_per_pack on the ASIN row
+    expect(ratioFromStoredYield("0.07", null)).toBeNull();   // the walmart row: no units_per_pack on the ASIN row and a fractional yield
+    // no pack size but a whole-number yield → yield / 1, lossless (second rule, Maria 2026-11-02)
+    expect(ratioFromStoredYield("1.00", null)).toEqual({ retailer: 1, asinUnits: 1, fit: "whole" });
+    expect(ratioFromStoredYield("12", null)).toEqual({ retailer: 12, asinUnits: 1, fit: "whole" });
+    expect(ratioFromStoredYield("0.50", null)).toBeNull();
+    expect(ratioFromStoredYield("0", null)).toBeNull();
+    expect(ratioFromStoredYield(null, null)).toBeNull();
     expect(ratioFromStoredYield("0.07", 1)).toBeNull();      // 0.07 is not within 0.02 of a whole number
     expect(ratioFromStoredYield("0", 2)).toBeNull();
     expect(ratioFromStoredYield(null, 2)).toBeNull();

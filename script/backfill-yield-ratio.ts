@@ -4,7 +4,9 @@
 // units_per_pack is within 0.02 of a whole number ≥ 1 (widened to the error a
 // 2-dp yield can carry, 0.005 × pack — 1/15 is stored as 0.07 and 0.07 × 15 =
 // 1.05; shared/yield.ts ratioFromStoredYield says which bound matched). Every
-// other line goes to the gaps CSV and is left alone. Ordered (po_asins.qty) is
+// other line goes to the gaps CSV and is left alone. Second rule (Maria
+// 2026-11-02, after the first run): no units_per_pack on the ASIN row and a
+// whole-number stored yield → retailer = the yield, asin = 1 (lossless). Ordered (po_asins.qty) is
 // rewritten only where the row agreed with its lines before (Σ qty × 2-dp
 // yield = the stored Ordered) and the exact sum differs — a precision change,
 // with a History row; a row that already disagreed with its lines (the yield
@@ -49,7 +51,7 @@ interface Row { pa_id: string; po_id: string; asin: string; sold_as: string | nu
       if (!row) { row = { pa_id: String(r.pa_id), po_id: String(r.po_id), asin: r.asin, sold_as: r.sold_as, units_per_pack: r.units_per_pack == null ? null : Number(r.units_per_pack), qty: r.qty, order_id: r.order_id, supplier: r.supplier, order_date: String(r.order_date).slice(0, 10), closed: r.closed, imported: r.imported, lines: [] }; rows.set(row.pa_id, row); }
       if (r.line_id != null) row.lines.push({ id: String(r.line_id), po_asin_id: row.pa_id, position: r.position, product_name: r.product_name, qty_ordered: r.qty_ordered, asin_qty_per_product: r.asin_qty_per_product, retailer_units_per_product: r.retailer_units_per_product == null ? null : Number(r.retailer_units_per_product), asin_units_per_pack: r.asin_units_per_pack == null ? null : Number(r.asin_units_per_pack), qty_canceled: r.qty_canceled });
     }
-    const c = { lines: 0, already: 0, set: 0, setBy2dp: 0, gaps: 0, rows: rows.size, rowsConsistent: 0, rowsPrecision: 0, rowsLeftMismatch: 0, rowsLeftGap: 0, rowsNoLines: 0, unitsBefore: 0, unitsAfter: 0 };
+    const c = { lines: 0, already: 0, set: 0, setBy2dp: 0, setByWhole: 0, gaps: 0, rows: rows.size, rowsConsistent: 0, rowsPrecision: 0, rowsLeftMismatch: 0, rowsLeftGap: 0, rowsNoLines: 0, unitsBefore: 0, unitsAfter: 0 };
     const gapRows: string[] = ["po_number,supplier,asin,order_date,status,sold_as,units_per_pack,line_position,product,qty_ordered,yield,reason,k"];
     const report: string[] = ["po_number,supplier,asin,order_date,status,imported,sold_as,units_per_pack,lines,lines_with_ratio,lines_set_now,gaps,ordered_before,ordered_after,delta,lines_before_2dp,action"];
     const lineUpdates: Array<{ id: string; r: YieldRatio }> = [];
@@ -64,10 +66,10 @@ interface Row { pa_id: string; po_id: string; asin: string; sold_as: string | nu
         c.lines++;
         if (lineRatio(l)) { c.already++; withRatio++; return l; }
         const r = ratioFromStoredYield(l.asin_qty_per_product, row.units_per_pack);
-        if (r) { c.set++; if (r.fit === "2dp") c.setBy2dp++; setNow++; withRatio++; lineUpdates.push({ id: l.id, r }); return { ...l, retailer_units_per_product: r.retailer, asin_units_per_pack: r.asinUnits }; }
+        if (r) { c.set++; if (r.fit === "2dp") c.setBy2dp++; if (r.fit === "whole") c.setByWhole++; setNow++; withRatio++; lineUpdates.push({ id: l.id, r }); return { ...l, retailer_units_per_product: r.retailer, asin_units_per_pack: r.asinUnits }; }
         c.gaps++; gaps++;
         const y = n2(l.asin_qty_per_product), k = y != null && row.units_per_pack != null ? Math.round(y * row.units_per_pack * 1000) / 1000 : null;
-        const reason = row.units_per_pack == null ? "no units_per_pack on the ASIN row" : y == null ? "yield NULL" : !(y > 0) ? "yield 0" : k != null && Math.round(k) < 1 ? "yield × pack rounds to 0" : "yield × pack not within 0.02 (or the 2-dp bound) of a whole number";
+        const reason = row.units_per_pack == null ? "no units_per_pack on the ASIN row and a fractional yield" : y == null ? "yield NULL" : !(y > 0) ? "yield 0" : k != null && Math.round(k) < 1 ? "yield × pack rounds to 0" : "yield × pack not within 0.02 (or the 2-dp bound) of a whole number";
         gapRows.push([row.order_id, row.supplier, row.asin, row.order_date, row.closed ? "closed" : "open", soldAs, row.units_per_pack ?? "", l.position, l.product_name ?? "", l.qty_ordered ?? "", l.asin_qty_per_product ?? "", reason, k ?? ""].map(csv).join(","));
         return l;
       });

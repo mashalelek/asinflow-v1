@@ -52,10 +52,15 @@ export function ratioForUnits(units: number, qty: number, asinUnitsPerPack: numb
  * stored yield can carry, 0.005 × pack size, because 1/15 is stored as 0.07
  * and 0.07 × 15 = 1.05 — the example itself would miss a flat 0.02. `fit`
  * says which bound matched ("0.02" or "2dp") so the report can show it.
+ * Second rule (Maria 2026-11-02, after the first run left 3084 lines on
+ * rows with no pack size): no units_per_pack on the ASIN row and a stored
+ * whole-number yield → retailer = the yield, asin = 1 (lossless; fit
+ * "whole"). A fractional yield on such a row stays a gap.
  */
-export function ratioFromStoredYield(y: number | string | null | undefined, asinUnitsPerPack: number | string | null | undefined): (YieldRatio & { fit: "0.02" | "2dp" }) | null {
+export function ratioFromStoredYield(y: number | string | null | undefined, asinUnitsPerPack: number | string | null | undefined): (YieldRatio & { fit: "0.02" | "2dp" | "whole" }) | null {
   const a = toInt(asinUnitsPerPack), yn = Number(y);
-  if (!isPosInt(a) || !(yn > 0)) return null;
+  if (!isPosInt(a)) return Number.isNaN(a) && yn >= 1 && Math.abs(yn - Math.round(yn)) < 1e-9 ? { retailer: Math.round(yn), asinUnits: 1, fit: "whole" } : null;
+  if (!(yn > 0)) return null;
   const k = yn * a, n = Math.round(k), off = Math.abs(k - n);
   if (n < 1) return null;
   if (off <= 0.02 + 1e-9) return { retailer: n, asinUnits: a, fit: "0.02" };
