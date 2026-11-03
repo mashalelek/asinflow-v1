@@ -1,6 +1,6 @@
 # Spec patch — PO cancellations from email (+ net quantities everywhere)
 
-Status: DRAFT 2026-10-23 — decisions D1–D4 answered by Maria 2026-10-23. Absorbs the still-valid parts (§2, §3) of the on-hold Col BA patch (`claude/spec-patch-canceled-qty-col-ba.md`), which is retired by this one.
+Status: DRAFT 2026-10-23 — decisions D1–D4 answered by Maria 2026-10-23. Absorbs the still-valid parts (§2, §3) of the on-hold Col BA patch (`claude/spec-patch-canceled-qty-col-ba.md`), which is retired by this one. **Amended 2026-11-03 by the Dashboard patch (`docs/claude_spec-patch-analytics-dashboard.md` §2.3 C1, built):** the expected-refund piece of this data model now lives in `po_line_refunds` (`status = 'due'`, migration 082) — §3 and §5 below are amended accordingly; no `po_cancellations.refund_*` columns.
 Repo path: `docs/claude_spec-patch-po-cancellations-from-email.md`. Adds SPEC §27 "PO cancellations"; touches §11, §22, §26.
 
 ## 1. Goal
@@ -31,8 +31,8 @@ po_cancellations
   reason                text            -- 'out_of_stock' | 'payment' | 'security' | 'customer' | 'other' | NULL
   items_json            jsonb           -- [{name, qty, sku?}] as printed in the email
   qty_proposed          numeric         -- product units AF proposes for the line (NULL when it can't)
-  refund_amount_email   numeric         -- as stated in the email, if any
-  refund_method_email   text            -- e.g. "OnePay CashRewards ending in 0302"
+  refund_amount_email   numeric         -- as stated in the email, if any (becomes the due row's amount on confirm — amended 2026-11-03)
+  refund_method_email   text            -- e.g. "OnePay CashRewards ending in 0302" (the due row's note)
   retailer_order_id     text
   supplier_guess        text
   gmail_message_id      text NOT NULL UNIQUE
@@ -42,12 +42,19 @@ po_cancellations
   status                text NOT NULL   -- 'pending_review' | 'confirmed' | 'dismissed' | 'unmatched'
   qty_confirmed         numeric         -- what Maria confirmed (product units)
   confirmed_at          timestamptz
-  refund_received_at    timestamptz
-  refund_amount         numeric
-  refund_method         text
+  po_line_refund_id     bigint          -- the po_line_refunds row this confirm wrote (amended 2026-11-03; replaces refund_received_at / refund_amount / refund_method)
   notes                 text
   created_at / updated_at
 ```
+
+**Amended 2026-11-03 (Dashboard patch §2.3 C1):** this table carries **no
+`refund_*` columns of its own**. On confirm, AF writes one `po_line_refunds`
+row with `status = 'due'`, `amount = refund_amount_email` (else the Cancel
+qty proposal of SPEC §22 "Refunds: due and received": qty × line price ×
+(1 − discount ÷ subtotal) + the tax share), `source = 'email'`,
+`email_message_id = gmail_message_id`, `note = refund_method_email`, and
+keeps its id in `po_line_refund_id`. The Dashboard's Spend subtracts it at
+once and its Refunds due row lists it until it is marked received.
 
 `po_line_items.qty_canceled` is the target (product units; cap `qty_ordered`; existing FBA-shipment guard applies). No new quantity columns.
 
@@ -66,8 +73,8 @@ Settings: `cancellations.sender_rules` is not a setting — retailer parsers are
 
 POs page toolbar chip **Cancellations (N)** (pending_review + unmatched). Each row: PO (link), supplier, email date, scope/reason, items as printed, proposed line + qty, refund amount/method from the email, link to the email. Actions:
 
-- **Confirm** — line picker (prefilled when proposed), qty (prefilled; capped at `qty_ordered − qty_canceled`), optional note. Writes `qty_canceled += qty` on the line (edit-log row), sets `status = confirmed`, and adds the **"Confirm Refund / Replacement"** action item to that line (per-line model from PO table v2; until that ships, on the PO). Full-scope confirm on a multi-line PO confirms every line at once with a single click after review.
-- **Refund received** — date (default today), amount (prefilled from the email), method (prefilled). Clears "Confirm Refund / Replacement" for that line if no other open cancellation on it.
+- **Confirm** — line picker (prefilled when proposed), qty (prefilled; capped at `qty_ordered − qty_canceled`), optional note, and the **due refund amount** (prefilled from `refund_amount_email`, else the §22 proposal; editable; may be left empty — then no refund row and the probe's "no $ amount" list shows it). Writes `qty_canceled += qty` on the line (edit-log row), the `po_line_refunds` due row (§3 as amended 2026-11-03), sets `status = confirmed`, and adds the **"Confirm Refund / Replacement"** action item to that line (per-line model from PO table v2). Full-scope confirm on a multi-line PO confirms every line at once with a single click after review.
+- **Refund received** — the PO editor's **Mark received** on the due row (SPEC §22: date default today, the amount corrected to what arrived, method / nickname / last 4; every change in the edit log) — this list only links to it. Clears "Confirm Refund / Replacement" for that line if no other open cancellation on it. (Amended 2026-11-03: no refund fields of its own.)
 - **Dismiss** — not a real cancellation / already handled; keeps the row under a "Dismissed" toggle.
 - **Attach to PO** on unmatched rows (one-click when the order # suggests one), **Add cancellation manually** for ones that never came by email.
 

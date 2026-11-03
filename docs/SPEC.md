@@ -666,7 +666,10 @@ Semantics differ by column **PROVENANCE**, not by null-ness:
 **A. Event-derived** — computed from order records: Actual Units Sold,
 Actual Revenue, Refunds, Refund %, Actual Avg. Sale Price, and any other
 order-event aggregate. **Absence of orders in the range IS zero**: 0 sold,
-$0.00 revenue. Render plain `0` / `$0.00` in NORMAL text, styled
+$0.00 revenue. (Since 2026-11-03 the order day is Amazon's **US Pacific**
+day — `sales_daily.sale_date`, §11 component 19 / §28 D7 — the same basis
+SellerBoard and Seller Central report on; the global date picker's dates
+are read against it.) Render plain `0` / `$0.00` in NORMAL text, styled
 identically to any other number — no muted colour, no indicator, no
 "no data" tooltip. No exceptions.
 
@@ -7017,10 +7020,12 @@ the schedule is on (§11 "Scheduled passes"), otherwise the last button
 run — and stale data must be VISIBLE, never mistaken for a dead ASIN. The page shows, from the `refresh_runs` ledger plus the
 data itself:
 
-- **Sales through** — the newest ingested `sales_daily.sale_date`, plus the
-  last `sales` stage run time. A gap here silently manufactures
-  "zero sales". (The coverage guard above handles the other end of the
-  same problem: a range starting before the earliest order date.)
+- **Sales through** — the newest ingested `sales_daily.sale_date` (a US
+  Pacific day since 2026-11-03, §11 component 19 — the zero-sales window is
+  read on that basis too), plus the last `sales` stage run time. A gap here
+  silently manufactures "zero sales". (The coverage guard above handles the
+  other end of the same problem: a range starting before the earliest order
+  date.)
 - **Inventory as of** — the newest `inventory_snapshots.snapshot_at`.
 - **Listings checked** — the newest `buyable_checked_at` and the count of
   in-scope ASINs still lacking one.
@@ -7871,3 +7876,131 @@ unknown frequencies are NULL for Maria.
   Active / All filter; sortable, resizable through the shared hook; "+
   Subscription" for a manual row. Edits on a subscription with a last PO
   are logged in that PO's History ("subscription <field>").
+
+## 28. Dashboard
+
+Patch `docs/claude_spec-patch-analytics-dashboard.md` (APPROVED 2026-11-02
+v4, built 2026-11-03; probe `docs/dashboard-probe-2026-11-03.md`). Nav tab
+**Dashboard** in the slot Analytics held (the old page is **ASIN
+Analytics**, §8, untouched). Route `/dashboard`; `client/src/pages/
+dashboard.tsx`, `client/src/components/metric-grid.tsx`,
+`dashboard-chart.tsx`, `dashboard-charts.tsx`; server `server/dashboard.ts`
+(+ `server/dashboard-range.ts`), shapes in `shared/dashboard.ts`. No ASINs
+table on the Dashboard (D1).
+
+**Ranges are page-local.** The Dashboard never reads or writes the global
+date range (the §23 Repricer rule; `/dashboard` is not in the shared
+date-picker route list). "Today" is resolved on the **server**, in
+`America/New_York` for Spend (`purchase_orders.order_date`) and in
+`America/Los_Angeles` for Sales (`sales_daily.sale_date`, D7); every grid
+column carries both ranges and the column header shows the Eastern dates
+with the pair on hover. "N days" **includes today** (AF's `last_30_days`
+preset ends yesterday, so the Dashboard has its own resolver), weeks start
+**Monday** (D2), Last month is the previous calendar month.
+
+### Range set selector
+
+One segmented control above the grid, remembered per browser
+(`af-dashboard-range-set`; moves with the Buy-List-to-DB patch):
+
+| Set | Columns |
+|---|---|
+| 1 | Today · This week (Monday → today) · MTD · 30 days |
+| 2 | Today · Yesterday · MTD · Last month |
+| 3 | Today · Yesterday · 7 days · 14 days · 30 days |
+| 4 | Custom — one column, a two-date control local to the grid |
+
+### The grid (`GET /api/dashboard/grid?set=1|2|3|4&from&to`)
+
+Rows in three groups, a rule between groups, the group's main metric in the
+larger weight; quiet chrome (Card tokens, no red / orange); text never
+wears a data colour. Every row key, the API shape and the placeholders are
+final — the Finances API patch only supplies numbers.
+
+**SPEND** (`purchase_orders` / `po_asins` / `po_line_items` /
+`po_line_refunds`, by `order_date`):
+
+| Row | Definition |
+|---|---|
+| Spend | Σ per PO of `order_total − refunds(PO)`, refund rows of **any status** (due or received); a **fully-canceled PO** (every line `qty_canceled ≥ qty_ordered`) is forced to **$0** whatever its rows say (D5); gift-card % is never applied, cashback never counts. **Probe P1 rule (2026-11-03, for Maria's confirmation):** a sheet-imported PO's `order_total` is col AG verbatim, which D3 expects to be net of the refund already, so a refund row with `source = 'sheet'` on a PO whose stored header already nets its refund — `|order_total − (subtotal + tax + sh_donations − discount − refund_amount)| ≤ $0.01`, `refund_amount > 0` — is **not subtracted a second time** (108 POs / $13,824 on production); every other row (manual, email, a due row, a sheet row on a gross-AG PO — the D3 data-error list) is subtracted. One SQL expression, `HEADER_NETS_REFUND_SQL` |
+| Refunds due | Σ `po_line_refunds.amount` where `status = 'due'` over the column's POs (canceled POs included). **Clickable** when > 0 → `/purchase-orders?refunds=due&closed=all&from=…&to=…` (the column's Eastern range) |
+| ASIN units ordered | Σ `po_asins.qty` − canceled ASIN units (Σ lines `COALESCE(qty_canceled, 0) × yield`, bundles ÷ unique products — the §22 derivation with per-line COALESCE); fully-canceled POs → 0 |
+| Individual units ordered | Σ ASIN units × `units_per_pack`; a row with NULL `units_per_pack` contributes its ASIN units and the cell says "n rows missing pack size" — **never ×1 silently** (2026-11-01 rule; 3,022 of 3,906 rows on production at the probe) |
+| Avg. PO value | Spend ÷ PO count, "—" at 0 POs, the count in small text; fully-canceled POs not counted |
+
+**SALES** (`sales_daily` + `sales_orders`, by the Pacific `sale_date`):
+
+| Row | Definition | Status |
+|---|---|---|
+| Sales | Σ `revenue` | real |
+| Orders / Units | `COUNT(DISTINCT amazon_order_id)` from `sales_orders` / Σ `units_sold` | real (C2); Orders shows "— / units · orders after the re-backfill" until `sales_orders` has rows |
+| Refunds | Σ `refund_amount` (units in small text) | **placeholder** — Finances API patch |
+
+**PROFIT** — SellerBoard's definitions, so the numbers will compare with SB:
+
+| Row | SB definition | Status |
+|---|---|---|
+| Gross profit | Sales − refunds − Amazon fees (referral, FBA, other) − promo / other Amazon charges | placeholder |
+| Net profit | Gross profit − COGS (actual COGS + prep for the units sold) − indirect expenses | placeholder |
+| Est. payout | Sales − refunds − Amazon fees (what Amazon pays out, before COGS) | placeholder |
+
+Placeholder = "—" with the tooltip "after the Finances API patch"
+(`pending: true`, `value: null` in the API).
+
+**Coverage guard** (the §23 rule): a Sales cell whose column starts before
+the earliest `sale_date` shows its value with "data from <date>"; the
+header shows once "Sales through <newest sale_date> · synced <last
+component-19 run> · data from <earliest>", and — while `sales_orders` does
+not yet cover `sales_daily` (`coverage.rebackfillPending`) — "Orders from
+<date> / not loaded yet — run `backfill:sales` for the Pacific-day basis".
+Spend needs no guard (POs are complete back to the import floor).
+
+### Charts (`GET /api/dashboard/series?kind=running30|monthly|weekly&from&to`)
+
+Three charts stacked under the grid, one shared `DashboardChart`
+(recharts): **Sales as bars on the left $ axis, Spend as a line on the right
+$ axis** (Maria's whiteboard 2026-11-02 — a deliberate dual axis; the
+dataviz guideline prefers one axis, noted and overruled by the design), a
+checkbox per series that removes the series **and** its axis (both on by
+default; the checkbox row is the legend), one tooltip per hovered period
+(period · Sales · Spend · POs · units sold · orders, "(to date)" on the
+partial period), a table-view twin per chart.
+
+| Chart | X | Sales | Spend |
+|---|---|---|---|
+| 30-day running | day | Σ revenue over [d−29, d] | Σ Spend over [d−29, d] |
+| Monthly | calendar month | Σ revenue | Σ Spend |
+| Weekly | week starting Monday | Σ revenue | Σ Spend |
+
+One range control for all three — **Last 12 months** (default: 12 calendar
+months ending with the current one, the partial period "to date"; the
+server resolves it) or **Custom** (two dates) — local state remembered per
+browser (`af-dashboard-chart-range`). Running sums are computed in SQL
+(`generate_series` + a 29-PRECEDING window over 0-filled days, started 29
+days early), never on the client. A Sales series whose range starts before
+the earliest `sale_date` is drawn from that date and the chart says so.
+Series colours: AF's `--chart-1` / `--chart-2` in light mode, validated
+darker steps in dark mode (`SERIES_COLORS`). The 30-day running series is
+the slow one (~1.1 s locally: a distinct-orders count per day).
+
+### Sales ingestion (component 19, D7 / C2) — see §11
+
+`sale_date` is the Pacific day; each chunk's window is deleted and reloaded
+fail-closed; `sales_orders` is written beside `sales_daily`; a report with
+no data rows leaves the window alone (Amazon's retention horizon). **After
+deploying, run `npm run backfill:sales -- --prod --from <first day Amazon
+still returns>`** (2024-10-31 on 2026-11-03; local run: 31 chunks,
+sales_daily 2024-10-31 → 2026-11-03, sales_orders 34,233 rows); until it
+has run on Render the header says so. The ASINs page's Actuals and the
+Repricer tab read the same `sales_daily` and move to the Pacific day with
+it — one basis everywhere; the Finances patch inherits it.
+
+### Pending, and which patch fills it
+
+| Item | Fills it |
+|---|---|
+| Refunds (Sales), Gross profit, Net profit, Est. payout | the Finances API patch (listTransactions): writes `sales_daily.refund_amount` / `units_refunded` / the fee columns; the grid only reads them |
+| Due refunds from supplier emails | `docs/claude_spec-patch-po-cancellations-from-email.md` (writes `po_line_refunds` due rows, §22) |
+| Pack sizes on the 2024–2025 rows ("n rows missing pack size") | Maria's `docs/pack-size-gaps-*.csv` work |
+| The D3 data-error list (AG not netting the refund) and the "no $ amount" list | Maria, over time, through the cancellations emails and the Orders sheet; nothing here depends on them being clean |
+

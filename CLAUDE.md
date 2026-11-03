@@ -55,6 +55,7 @@ This app runs on the following stack. This is settled. Do not suggest alternativ
 - `shared/po-form.ts` / `shared/po-cost.ts` — New PO form state + validation; the ONE cost formula (v2, SPEC §22 "Costs")
 - `server/config/ai.ts` — the one place the Claude model id / tokens / effort / price live (Capture PO, promo backfill)
 - `server/po-prefill.ts` — `/api/pos/prefill`: capture → one Haiku call → form prefill + markers; `chrome-extension/` is the capture side
+- `server/dashboard.ts` / `server/dashboard-range.ts` / `shared/dashboard.ts` — the Dashboard (SPEC §28): range sets, the Spend · Sales · Profit grid SQL, the chart series; `client/src/pages/dashboard.tsx`, `metric-grid.tsx`, `dashboard-chart.tsx`
 - `docs/SCHEMA.md` — Database schema documentation
 - `docs/ROADMAP.md` — Feature roadmap
 
@@ -384,7 +385,19 @@ that calls a sync function directly; enqueue a job.
 enqueues a component-19-only job (needs the dev server running); the
 per-chunk results are in the job's ledger row. Component 19 covers every
 ASIN in `asins` and onboards ASINs the report names that AF lacks (tag
-`Sales import`).
+`Sales import`). **Since 2026-11-03 (Dashboard patch, SPEC §28 / §11)
+`sale_date` is Amazon's US Pacific day, each chunk's window is deleted and
+reloaded fail-closed, and `sales_orders` is written beside `sales_daily`
+— so after a deploy that changes the day basis the history must be
+re-backfilled: locally first (`npm run backfill:sales -- --from
+<first day Amazon still returns>`), then on production (`npm run
+backfill:sales -- --prod --from …`, enqueued against the production DB;
+Render's running server executes it — watch the jobs dialog). Start no
+earlier than the first day the report returns (2024-10-31 on 2026-11-03):
+Amazon's orders report has a retention horizon, a header-only answer
+leaves the window alone, but the horizon can fall mid-chunk. The
+Dashboard's coverage header says "run backfill:sales" until `sales_orders`
+covers `sales_daily`.**
 
 **Verifying a job locally without a login cookie:** `INSERT INTO jobs
 (kind, trigger, target, include_daily, scope_asins[, components])` and
@@ -440,6 +453,16 @@ write the two integers (`editLine`, `addLine`, the form check's lines,
 `script/fix-po-yield.ts --retailer-units/--asin-units`). A line with NULLs
 (an unresolved sheet import, `docs/yield-ratio-gaps-2026-11-02.csv`) reads
 its stored yield as before. SPEC §22 "Yield is an exact ratio".
+
+## Spend never subtracts a sheet refund twice (Dashboard, probe P1 2026-11-03)
+
+A sheet-imported PO's `order_total` is col AG verbatim and, on 108 of 151
+production POs with a refund, already **nets** the refund (D3 expects it
+to). The col-AF backfill rows in `po_line_refunds` (`source = 'sheet'`)
+therefore stay out of Spend on a PO whose stored header nets its refund
+(`HEADER_NETS_REFUND_SQL` in `server/dashboard.ts`); every other refund
+row is subtracted, and a fully-canceled PO is $0 regardless. Pending
+Maria's confirmation (SPEC §28); it is one SQL expression either way.
 
 ## PO action items live in `po_line_action_items`
 
