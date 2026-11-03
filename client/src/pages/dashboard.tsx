@@ -1,7 +1,7 @@
 /**
  * Dashboard (SPEC §28, patch docs/claude_spec-patch-analytics-dashboard.md):
  * the Spend · Sales · Profit grid over one of four range sets, the coverage
- * header, and (commit 6) the three charts under it.
+ * header, and the three charts under it (DashboardCharts, their own range).
  *
  * Rule (§2.1): this page NEVER reads or writes the global date range — the
  * set selector and the charts' own picker are its only range controls; the
@@ -11,6 +11,7 @@ import { useCallback, useEffect, useState } from "react";
 import { ToggleGroup, ToggleGroupItem } from "@/components/ui/toggle-group";
 import { Button } from "@/components/ui/button";
 import { MetricGrid, fmtRangeLabel } from "@/components/metric-grid";
+import { DashboardCharts } from "@/components/dashboard-charts";
 import { SET_COLUMN_LABELS, type RangeSetKey } from "@/lib/dashboard-sets";
 import type { DashboardGrid } from "@shared/dashboard";
 
@@ -89,6 +90,7 @@ export default function Dashboard() {
         </div>
       )}
       <MetricGrid grid={grid} loading={loading} />
+      <DashboardCharts />
     </div>
   );
 }
