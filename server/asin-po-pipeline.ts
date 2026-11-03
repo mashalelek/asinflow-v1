@@ -3,21 +3,27 @@
 // docs/asins-on-order-preflight-2026-10-17.md). No stored column (D3): the
 // PO tables are the source, the Orders sheet's ordered_qty is no longer read.
 //
-// Per po_asins row (all ASIN / sellable-pack units):
-//   expected    = qty − canceled − returned − lost/damaged by us   (NULLs read 0)
-//   on_order    = max(expected − shipped_fba, 0)  only for OPEN POs dated on or
-//                 after the reconciliation start (earliest Velocity shipment;
-//                 VELOCITY_MIN_ORDER_DATE when none is stored) — older rows
-//                 have no shipment data and contribute 0, and a closed PO
-//                 contributes 0, always (Maria 2026-11-02: §2.4 of 2026-10-17
-//                 had counted closed POs too so a wrong Closed could not hide
-//                 units, but a closed PO that never reached Velocity — ships_to
-//                 'home', or shipped before tracking — keeps shipped_fba NULL
-//                 forever and so leaked its whole Ordered onto the ASINs page,
-//                 e.g. walmart 200014971489745 B071G486Q7, 22 rows / 108.5
-//                 units on production that day; a wrong Closed is fixed by
-//                 reopening the PO)
-//   at_prep     = qty_at_prep (Velocity's quantity), every row (open or closed)
+// Per po_asins row (all ASIN / sellable-pack units). The three stages are
+// mutually exclusive (Maria 2026-11-02): a unit is On Order, OR At Prep, OR
+// At CQG Warehouse, never two at once.
+//   expected     = qty − canceled − returned − lost/damaged by us   (NULLs read 0)
+//   on_order     = max(expected − shipped_fba − at_prep − at_warehouse, 0)
+//                  only for OPEN POs dated on or after the reconciliation
+//                  start (earliest Velocity shipment; VELOCITY_MIN_ORDER_DATE
+//                  when none is stored) — older rows have no shipment data and
+//                  contribute 0, and a closed PO contributes 0, always (Maria
+//                  2026-11-02: §2.4 of 2026-10-17 had counted closed POs too so
+//                  a wrong Closed could not hide units, but a closed PO that
+//                  never reached Velocity — ships_to 'home', or shipped before
+//                  tracking — keeps shipped_fba NULL forever and so leaked its
+//                  whole Ordered onto the ASINs page, e.g. walmart
+//                  200014971489745 B071G486Q7, 22 rows / 108.5 units on
+//                  production that day; a wrong Closed is fixed by reopening)
+//   at_prep      = qty_at_prep (Velocity's quantity), every row (open or closed)
+//   at_warehouse = qty_at_warehouse (At CQG Warehouse, hand-kept), every row
+// Stock = available + reserved + Sent to FBA + on_order + at_prep +
+// at_warehouse; FBA Stock = Stock − on_order − at_prep − at_warehouse
+// (routes.ts, the ASINs list).
 // Canceled / Returned are the §22 derived ASIN values (Σ line qty × yield,
 // ÷ N for bundles, NULL when any line is untracked → read 0 here). Inbound FBA / Pipeline were removed on
 // 2026-10-17 (clean-up): Amazon's own inbound ("Sent to FBA") covers the
@@ -35,6 +41,7 @@ export interface PipelineRow {
   qty_returned_asin: number | string | null;
   qty_lost_damaged_us: number | string | null;
   qty_at_prep: number | string | null;
+  qty_at_warehouse: number | string | null;
   qty_shipped_fba: number | string | null;
   qty_received_amazon: number | string | null;
 }
@@ -42,6 +49,8 @@ export interface PipelineRow {
 export interface AsinPipeline {
   on_order: number;
   at_prep: number;
+  /** At CQG Warehouse (po_asins.qty_at_warehouse), every row. */
+  at_warehouse: number;
   open_po_count: number;
 }
 
@@ -53,15 +62,17 @@ export function computePipeline(rows: PipelineRow[]): Map<string, AsinPipeline> 
   const out = new Map<string, AsinPipeline>();
   for (const r of rows) {
     const asin = String(r.asin).trim().toUpperCase();
-    const p = out.get(asin) ?? { on_order: 0, at_prep: 0, open_po_count: 0 };
+    const p = out.get(asin) ?? { on_order: 0, at_prep: 0, at_warehouse: 0, open_po_count: 0 };
     const expected = n(r.qty) - n(r.qty_canceled_asin) - n(r.qty_returned_asin) - n(r.qty_lost_damaged_us);
-    const shipped = n(r.qty_shipped_fba);
-    if (r.reconciled && !r.closed) p.on_order += Math.max(expected - shipped, 0);
-    p.at_prep += n(r.qty_at_prep);
+    const shipped = n(r.qty_shipped_fba), atPrep = n(r.qty_at_prep), atWarehouse = n(r.qty_at_warehouse);
+    // Exclusive stages: what is at Velocity or at the warehouse is no longer on order.
+    if (r.reconciled && !r.closed) p.on_order += Math.max(expected - shipped - atPrep - atWarehouse, 0);
+    p.at_prep += atPrep;
+    p.at_warehouse += atWarehouse;
     if (!r.closed) p.open_po_count += 1;
     out.set(asin, p);
   }
-  for (const p of Array.from(out.values())) { p.on_order = r2(p.on_order); p.at_prep = r2(p.at_prep); }
+  for (const p of Array.from(out.values())) { p.on_order = r2(p.on_order); p.at_prep = r2(p.at_prep); p.at_warehouse = r2(p.at_warehouse); }
   return out;
 }
 
@@ -95,7 +106,7 @@ export const PIPELINE_ROWS_SQL = `
   )
   SELECT pa.asin, (p.closed_at IS NOT NULL) AS closed,
          (p.order_date >= COALESCE((SELECT MIN(shipped_at) FROM velocity_shipments), $1::date, DATE '9999-12-31')) AS reconciled,
-         pa.qty, pa.qty_lost_damaged_us, pa.qty_at_prep, pa.qty_shipped_fba, pa.qty_received_amazon,
+         pa.qty, pa.qty_lost_damaged_us, pa.qty_at_prep, pa.qty_at_warehouse, pa.qty_shipped_fba, pa.qty_received_amazon,
          CASE WHEN COALESCE(ln.n, 0) = 0 OR ln.canceled_untracked > 0 THEN NULL ELSE ln.canceled_sum / ${DIVISOR} END AS qty_canceled_asin,
          CASE WHEN COALESCE(ln.n, 0) = 0 OR ln.returned_untracked > 0 THEN NULL ELSE ln.returned_sum / ${DIVISOR} END AS qty_returned_asin
     FROM po_asins pa JOIN purchase_orders p ON p.id = pa.po_id
@@ -110,4 +121,4 @@ export async function loadAsinPipeline(query: QueryLike, asins?: string[]): Prom
   return computePipeline(rows as PipelineRow[]);
 }
 
-export const EMPTY_PIPELINE: AsinPipeline = { on_order: 0, at_prep: 0, open_po_count: 0 };
+export const EMPTY_PIPELINE: AsinPipeline = { on_order: 0, at_prep: 0, at_warehouse: 0, open_po_count: 0 };

@@ -484,14 +484,13 @@ export default function PurchaseOrders() {
   const [, navigate] = useLocation();
   const [velocityOpen, setVelocityOpen] = useState(false);
   // Deep link from the ASINs page's On Order cell (patch asins-on-order §3.2):
-  // /purchase-orders?asin=B0… opens the list searched on that ASIN, Open and
-  // Closed (On Order counts open POs only since 2026-11-02; the closed ones
-  // are still shown here for the history).
+  // /purchase-orders?asin=B0… opens the list searched on that ASIN, Open POs
+  // only — the ones On Order counts (2026-11-02); the Closed filter is a click away.
   const linkedAsin = (() => { try { return new URLSearchParams(window.location.search).get("asin")?.trim().toUpperCase() ?? ""; } catch { return ""; } })();
   const [search, setSearch] = useState(linkedAsin);
   const [debouncedSearch, setDebouncedSearch] = useState(linkedAsin);
   const [actionSel, setActionSel] = useState<Set<string>>(new Set());
-  const [closedFilter, setClosedFilter] = useState<ClosedFilter>(linkedAsin ? "all" : "open"); // D3: default Open only; the ASINs-page link opens All
+  const [closedFilter, setClosedFilter] = useState<ClosedFilter>("open"); // D3: default Open only — the ASINs-page On Order link too (open POs are what it counts)
   const [supplierSel, setSupplierSel] = useState<Set<string>>(new Set());
   const [from, setFrom] = useState("");
   const [to, setTo] = useState("");

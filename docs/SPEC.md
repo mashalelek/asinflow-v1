@@ -585,25 +585,31 @@ Prep still sums every row, open or closed:
 
 | Column | Formula (Σ over the ASIN's `po_asins` rows) | Default |
 |---|---|---|
-| **On Order** | Σ max(Expected − Shipped FBA, 0), where Expected = Ordered − Canceled − Returned − Lost/damaged by us (NULLs read 0), over rows whose PO is **open** and dated on/after the **reconciliation start** (the earliest stored Velocity shipment, 2026-05-20; `VELOCITY_MIN_ORDER_DATE` when none is stored). A closed PO contributes 0, always (2026-11-02); older rows contribute 0 — no shipment data exists for them | shown |
+| **On Order** | Σ max(Expected − Shipped FBA − At Prep Center − At CQG Warehouse, 0), where Expected = Ordered − Canceled − Returned − Lost/damaged by us (NULLs read 0), over rows whose PO is **open** and dated on/after the **reconciliation start** (the earliest stored Velocity shipment, 2026-05-20; `VELOCITY_MIN_ORDER_DATE` when none is stored). A closed PO contributes 0, always (2026-11-02); older rows contribute 0 — no shipment data exists for them. **The three stages are mutually exclusive (Maria 2026-11-02):** a unit is On Order, or At Prep, or At CQG Warehouse, never two at once | shown |
 | **At Prep** | Σ At Prep Center — Velocity's quantity on every row | hidden |
+| **At CQG Warehouse** | Σ At CQG Warehouse — the row's hand-kept quantity on every row (`atWarehouse`, 2026-11-02) | hidden |
 
 **Received by Velocity** (`po_asins.received_velocity`, Maria 2026-11-02)
 is a PO-row column only — Velocity's cumulative check-in count for the
 line, which At Prep Center (`quantity_remaining`) loses once the units
 ship. Nothing here reads it: On Order, At Prep and the Stock identity are
-unchanged (the On Order / At Prep exclusivity item on the backlog stays
-separate).
+unchanged (the On Order / At Prep exclusivity landed separately, below,
+2026-11-02).
 
 Shipped-not-received units are Amazon's own number, **Sent to FBA**
 (inbound shipped + receiving + working from the FBA inventory sync),
 unchanged; the PO-derived Inbound FBA / Pipeline columns of the first cut
 were removed in the clean-up. Each cell's tooltip names its formula; the
 On Order cell links to `/purchase-orders?asin=<ASIN>`, which opens the
-POs page searched on that ASIN, Open and Closed. **Stock total = available +
-reserved + Sent to FBA + On Order** and **FBA Stock = Stock − On Order** —
-the identity below unchanged. The Stock tooltip reads Available (FBA),
-Reserved, Sent to FBA, On Order (POs) — nothing else. Days Left inherits
+POs page searched on that ASIN, Open POs only (2026-11-02 — the ones On
+Order counts; Open and Closed until then). **Stock total = available +
+reserved + Sent to FBA + On Order + At Prep + At CQG Warehouse** and
+**FBA Stock = Stock − On Order − At Prep − At CQG Warehouse** (Maria
+2026-11-02; Stock = … + On Order and FBA Stock = Stock − On Order from
+2026-10-17 until then) — the identity below unchanged in spirit: FBA Stock
+is still Available + Reserved + Sent to FBA. The Stock tooltip reads
+Available (FBA), Reserved, Sent to FBA, On Order (POs), At Prep (POs),
+At CQG Warehouse (POs) — nothing else. Days Left inherits
 the Stock change. The history modal shows On Order (POs); the
 `inventory_snapshots.ordered_qty` column now records On Order at snapshot
 time. Bulk Calc excludes the whole Stock group and is untouched; Analytics
@@ -614,7 +620,8 @@ written or read and is dropped by a later cleanup migration. Fixture
 
 ### FBA Stock column (2026-09-17)
 
-**FBA Stock = Stock − On Order** (Stock − Ordered until 2026-10-17), a REAL
+**FBA Stock = Stock − On Order − At Prep − At CQG Warehouse** (Stock − On
+Order from 2026-10-17 to 2026-11-02; Stock − Ordered before), a REAL
 numeric field on the row model
 (`AsinResult.fbaStock`) computed ONCE server-side where rows are built, from
 the same two values the Stock and On Order cells render — never at render

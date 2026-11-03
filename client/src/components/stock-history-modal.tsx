@@ -25,6 +25,7 @@ interface HistoryData {
     inbound: number;
     on_order: number;
     at_prep: number;
+    at_warehouse?: number;
   };
 }
 

@@ -110,7 +110,7 @@ describe("quantity input + routes", () => {
   });
   it("the page: col 1 is the Closed toggle with confirm; Open/Closed/All filter defaults to open; nested rows editable", () => {
     const page = readFileSync(join(__dirname, "..", "client", "src", "pages", "purchase-orders.tsx"), "utf8");
-    expect(page).toMatch(/useState<ClosedFilter>\(linkedAsin \? "all" : "open"\)/); // default Open; the ASINs-page On Order link opens All (row-level Status §2.4)
+    expect(page).toMatch(/useState<ClosedFilter>\("open"\)/); // default Open — the ASINs-page On Order link too: On Order counts open POs only (2026-11-02)
     expect(page).toMatch(/params\.set\("closed", closedFilter\)/);
     expect(page).toMatch(/<ClosedToggle po=\{po\} onToggled=\{load\} \/>/);
     expect(page).toMatch(/data-testid="button-po-closed-confirm"/);

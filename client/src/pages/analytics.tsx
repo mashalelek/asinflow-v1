@@ -234,6 +234,7 @@ export default function Analytics() {
             case "availableFba": return r.stock?.available_fba ?? null;
             case "onOrder": return r.stock?.on_order ?? null;
             case "atPrep": return r.stock?.at_prep ?? null;
+            case "atWarehouse": return r.stock?.at_warehouse ?? null;
             case "reserved": return r.stock?.reserved ?? null;
             case "sentToFba": return r.stock?.inbound ?? null;
             case "actAvgSalePrice": { const u = r.actuals?.units_sold ?? 0; return u > 0 ? r.actuals!.revenue / u : null; }

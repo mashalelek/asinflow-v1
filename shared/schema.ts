@@ -85,11 +85,12 @@ export interface StockData {
   reserved: number;
   /** Amazon's own inbound (shipped + receiving + working), from the FBA inventory sync — "Sent to FBA". */
   inbound: number;
-  // Derived from the PO tables (patch asins-on-order-from-pos §2), never the sheet:
-  on_order: number;     // Σ max(expected − shipped FBA, 0) over POs dated from the reconciliation start, open or closed
+  // Derived from the PO tables (patch asins-on-order-from-pos §2), never the sheet. The three stages are mutually exclusive (2026-11-02):
+  on_order: number;     // Σ max(expected − shipped FBA − at prep − at warehouse, 0) over OPEN POs dated from the reconciliation start
   at_prep: number;      // Σ At Prep Center (Velocity) over every PO, open or closed
+  at_warehouse: number; // Σ At CQG Warehouse over every PO, open or closed
   open_po_count: number;
-  /** available_fba + reserved + inbound + on_order. */
+  /** available_fba + reserved + inbound + on_order + at_prep + at_warehouse. */
   total: number;
   hasSnapshot: boolean;
 }
@@ -646,7 +647,7 @@ export const DEFAULT_COLUMNS = [
   // Group 1 — Description
   "product", "category", "brand", "supplier", "buyLink", "supplierSku",
   // Group 2 — Stock
-  "stock", "availableFba", "onOrder", "atPrep", "fbaStock", "reserved", "sentToFba", "daysLeft",
+  "stock", "availableFba", "onOrder", "atPrep", "atWarehouse", "fbaStock", "reserved", "sentToFba", "daysLeft",
   // Group 3 — Actuals
   "cogs", "actPrepCost", "actUnitsSold", "actRefunds", "actRefundPct",
   "actAvgSalePrice", "actRevenue", "actProfit", "actProfitPerUnit", "actRoi", "actMargin",
@@ -700,6 +701,7 @@ export const ALL_COLUMNS: ColumnDef[] = [
   // one number, one meaning). On Order is shown by default, At Prep hidden.
   { id: "onOrder", label: "On Order", defaultVisible: true, align: "right", group: "stock" },
   { id: "atPrep", label: "At Prep", defaultVisible: false, align: "right", group: "stock" },
+  { id: "atWarehouse", label: "At CQG Warehouse", defaultVisible: false, align: "right", group: "stock" },
   // §6 FBA Stock (2026-09-17) = Stock − On Order, computed from the SAME
   // values those two cells render so the identity holds row by row.
   // Default-VISIBLE wherever Stock/On Order are (revised same day).

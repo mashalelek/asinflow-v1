@@ -26,7 +26,7 @@ import {
 
 const DEFAULT_COL_WIDTHS: Partial<Record<ColumnId, number>> = {
   product: 400, category: 160, brand: 100, supplier: 100,
-  stock: 75, availableFba: 80, onOrder: 80, atPrep: 75, fbaStock: 85, reserved: 75, sentToFba: 80, daysLeft: 80,
+  stock: 75, availableFba: 80, onOrder: 80, atPrep: 75, atWarehouse: 95, fbaStock: 85, reserved: 75, sentToFba: 80, daysLeft: 80,
   cogs: 90, actPrepCost: 85, actUnitsSold: 85, actRefunds: 80, actRefundPct: 80,
   actAvgSalePrice: 100, actRevenue: 95, actProfit: 100, actProfitPerUnit: 90, actRoi: 80, actMargin: 80,
   estCogs: 90, salePrice: 95, profit: 90, margin: 80, roi: 80,
@@ -484,6 +484,7 @@ function computeRowValue(
     case "availableFba": return result.stock?.available_fba ?? null;
     case "onOrder": return result.stock?.on_order ?? null;
     case "atPrep": return result.stock?.at_prep ?? null;
+    case "atWarehouse": return result.stock?.at_warehouse ?? null;
     // §6 FBA Stock (2026-09-17): READ the row-model field — one number for
     // sort, filter, CSV, and the cell. Never recomputed here.
     case "fbaStock": return result.fbaStock ?? 0;
@@ -1021,12 +1022,12 @@ export function ResultsTable({
                               <div>Available (FBA): <span className="font-semibold">{result.stock.available_fba}</span></div>
                               <div>Reserved: <span className="font-semibold">{result.stock.reserved}</span></div>
                               <div>Sent to FBA: <span className="font-semibold">{result.stock.inbound}</span></div>
-                              <div>On Order (POs): <span className="font-semibold">{result.stock.on_order}</span></div>
+                              <div>On Order (POs): <span className="font-semibold">{result.stock.on_order}</span></div><div>At Prep (POs): <span className="font-semibold">{result.stock.at_prep}</span></div><div>At CQG Warehouse (POs): <span className="font-semibold">{result.stock.at_warehouse}</span></div>
                             </>
                           ) : (
                             <>
                               <div className="text-muted-foreground">Not yet synced from SC</div>
-                              <div>On Order (POs): <span className="font-semibold">{result.stock.on_order}</span></div>
+                              <div>On Order (POs): <span className="font-semibold">{result.stock.on_order}</span></div><div>At Prep (POs): <span className="font-semibold">{result.stock.at_prep}</span></div><div>At CQG Warehouse (POs): <span className="font-semibold">{result.stock.at_warehouse}</span></div>
                             </>
                           )}
                           <div className="text-muted-foreground pt-1">Click for history graph</div>
@@ -1759,7 +1760,7 @@ function ProductCell({ result, price, settings, onResultUpdate, collisionBoundar
                 <div>Available (FBA): <span className="font-semibold">{stock.available_fba}</span></div>
                 <div>Reserved: <span className="font-semibold">{stock.reserved}</span></div>
                 <div>Sent to FBA: <span className="font-semibold">{stock.inbound}</span></div>
-                <div>On Order (POs): <span className="font-semibold">{stock.on_order}</span></div>
+                <div>On Order (POs): <span className="font-semibold">{stock.on_order}</span></div><div>At Prep (POs): <span className="font-semibold">{stock.at_prep}</span></div><div>At CQG Warehouse (POs): <span className="font-semibold">{stock.at_warehouse}</span></div>
               </TooltipContent>
             </Tooltip>
           )}
@@ -2180,13 +2181,15 @@ export function renderCell(
               {result.stock?.on_order ?? 0}
             </Link>
           </TooltipTrigger>
-          <TooltipContent side="top" className="text-xs">On Order = Σ open POs since reconciliation start: Ordered − Canceled − Returned − Lost/damaged − Shipped FBA (a closed PO counts 0) · click for the POs</TooltipContent>
+          <TooltipContent side="top" className="text-xs">On Order = Σ open POs since reconciliation start: Ordered − Canceled − Returned − Lost/damaged − Shipped FBA − At Prep − At CQG Warehouse, floored at 0 (a closed PO counts 0; a unit is on order, at prep or at the warehouse, never two) · click for the open POs</TooltipContent>
         </Tooltip>
       );
     case "atPrep":
-      return <Tooltip><TooltipTrigger asChild><span className="font-mono text-sm cursor-help">{result.stock?.at_prep ?? 0}</span></TooltipTrigger><TooltipContent side="top" className="text-xs">At Prep = units at Velocity for this ASIN, across every PO</TooltipContent></Tooltip>;
+      return <Tooltip><TooltipTrigger asChild><span className="font-mono text-sm cursor-help">{result.stock?.at_prep ?? 0}</span></TooltipTrigger><TooltipContent side="top" className="text-xs">At Prep = units at Velocity for this ASIN, across every PO (not in On Order)</TooltipContent></Tooltip>;
+    case "atWarehouse":
+      return <Tooltip><TooltipTrigger asChild><span className="font-mono text-sm cursor-help">{result.stock?.at_warehouse ?? 0}</span></TooltipTrigger><TooltipContent side="top" className="text-xs">At CQG Warehouse = units at the house for this ASIN, across every PO (not in On Order)</TooltipContent></Tooltip>;
     case "fbaStock":
-      return numCell(String(result.fbaStock ?? 0));
+      return <Tooltip><TooltipTrigger asChild><span className="font-mono text-sm cursor-help">{numCell(String(result.fbaStock ?? 0))}</span></TooltipTrigger><TooltipContent side="top" className="text-xs">FBA Stock = Stock − On Order − At Prep − At CQG Warehouse (= Available + Reserved + Sent to FBA)</TooltipContent></Tooltip>;
     case "reserved":
       return numCell(String(result.stock?.reserved ?? 0));
     case "sentToFba":
@@ -2332,12 +2335,12 @@ export function renderCell(
                 <div>Available (FBA): <span className="font-semibold">{s.available_fba}</span></div>
                 <div>Reserved: <span className="font-semibold">{s.reserved}</span></div>
                 <div>Sent to FBA: <span className="font-semibold">{s.inbound}</span></div>
-                <div>On Order (POs): <span className="font-semibold">{s.on_order}</span></div>
+                <div>On Order (POs): <span className="font-semibold">{s.on_order}</span></div><div>At Prep (POs): <span className="font-semibold">{s.at_prep}</span></div><div>At CQG Warehouse (POs): <span className="font-semibold">{s.at_warehouse}</span></div>
               </>
             ) : (
               <>
                 <div className="text-muted-foreground">Not yet synced from SC</div>
-                <div>On Order (POs): <span className="font-semibold">{s.on_order}</span></div>
+                <div>On Order (POs): <span className="font-semibold">{s.on_order}</span></div><div>At Prep (POs): <span className="font-semibold">{s.at_prep}</span></div><div>At CQG Warehouse (POs): <span className="font-semibold">{s.at_warehouse}</span></div>
               </>
             )}
           </TooltipContent>
