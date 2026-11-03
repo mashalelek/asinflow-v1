@@ -1,0 +1,2 @@
+order_date,supplier,order_id,source,header_refund,line_refunds,line_refund_rows,diff
+2026-08-29,walmart.com,200015329998748,sheet_import,-9.97,0,0,-9.97

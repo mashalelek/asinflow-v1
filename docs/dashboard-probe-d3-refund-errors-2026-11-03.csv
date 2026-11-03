@@ -1,0 +1,47 @@
+sheet_row,order_date,supplier,order_id,AB_subtotal,AC_tax,AD_sh,AE_discount,AF_refund,AG_order_total,AH_total_no_dup,expected_AG,AG_minus_expected,note
+77,2026-10-17,macys.com,4800667218,1550,0,0,775,112.5,775,775,662.5,112.5,AG does not net the refund
+740,2026-07-05,rei.com,A402960277,247.3,0,0,0,123.65,0,0,123.65,-123.65,
+1130,2026-03-30,petsmart.com,1113649539,325.36,14.2,0,90.35,34.19,217.27,217.27,215.02,2.25,
+1228,2026-03-19,walmart.com,200014567737149,32.35,0,0,0,32.35,32.35,0,0,32.35,AG does not net the refund
+1237,2026-03-18,walmart.com,200014773635805,47.64,0,0,0,15.88,47.64,47.64,31.76,15.88,AG does not net the refund
+1323,2026-03-05,corelle.com,W0382649,1051.14,31.3,0,604.04,478.4,478.4,0,0,478.4,AG does not net the refund
+1381,2026-02-27,yankeecandle.com,HFUS08968698990,279.8,15.04,0,65,229.84,229.84,0,0,229.84,AG does not net the refund
+1429,2026-02-13,walmart.com,200014743418498,256.76,0,0,0,9.98,199.6,199.6,246.78,-47.18,
+1603,2026-01-19,walmart.com,200014348143007,230.63,0,0,0,9.97,230.63,230.63,220.66,9.97,AG does not net the refund
+1783,2025-12-08,webstaurantstore.com,119512500,134.97,0,0,0,44.99,134.97,134.97,89.98,44.99,AG does not net the refund
+1823,2025-12-05,shop.smucker.com,10266671,233.6,0,0,0,233.6,233.6,0,0,233.6,AG does not net the refund
+1840,2025-12-01,zoro.com,WB8751491317,71.28,0,0,7.13,64.15,64.15,0,0,64.15,AG does not net the refund
+1989,2025-11-14,walmart.com,200013962474607,84.7,0,0,0,24.24,16.94,16.94,60.46,-43.52,
+2103,2025-10-19,dkhardware.com,DKH-2729004,204.03,0,11.41,22.67,215.44,215.44,0,-22.67,238.11,
+2141,2025-10-12,homedepot.com,WH11755491,59.7,0,0,0,59.7,59.7,0,0,59.7,AG does not net the refund
+2142,2025-10-10,walmart.com,200013668744864,179.4,0,0,0,179.4,179.4,0,0,179.4,AG does not net the refund
+2157,2025-10-10,shop.smucker.com,Order #10260047 / Confirmation #PR0Q116XE,51.9,0,0,10,44.12,7.78,7.78,-2.22,10,
+2165,2025-10-08,walmart.com,200013798614378,556.7,0,0,0,30.03,556.7,556.7,526.67,30.03,AG does not net the refund
+2170,2025-10-08,vitacost.com,321695434,293.4,9.72,0,58.68,128.78,105.94,105.94,115.66,-9.72,
+2221,2025-09-29,penzeys.com,V8132026,134.9,0,0,13.49,121.41,121.41,0,0,121.41,AG does not net the refund
+2222,2025-09-29,howieshockeytape.com,Order #211112 / Confirmation #0V8Q8DHFP,216,0,0,0,216,216,0,0,216,AG does not net the refund
+2226,2025-09-29,staples.com,9932899219,199.95,0,0,0,199.95,199.95,0,0,199.95,AG does not net the refund
+2237,2025-09-28,walmart.com,200013751035021,456.71,0,0,0,64.6,456.71,456.71,392.11,64.6,AG does not net the refund
+2249,2025-09-28,webstaurantstore.com,116717080,134.97,0,0,0,44.99,134.97,134.97,89.98,44.99,AG does not net the refund
+2352,2025-09-12,costco.com,1223690854,119.9,8.39,0,0,128.29,128.29,0,0,128.29,AG does not net the refund
+2379,2025-09-07,skinnymixes.com,Order #2234882 / Confirmation #LUEYLI04G,97.08,0,0,16.18,80.9,80.9,0,0,80.9,AG does not net the refund
+2397,2025-09-07,norwex.com,196533558,189.9,12.59,9.95,10,202.44,202.44,0,0,202.44,AG does not net the refund
+2398,2025-09-07,dwhome.com,635062,210,0,0,0,210,210,0,0,210,AG does not net the refund
+2439,2025-08-31,365cycles.com,75484,172,0,0,0,172,172,0,0,172,AG does not net the refund
+2457,2025-08-28,walmart.com,200013729927341,38.9,0,0,0,38.9,38.9,0,0,38.9,AG does not net the refund
+2577,2025-08-06,kohls.com,6651214894,59.97,0,0,0,59.97,59.97,0,0,59.97,AG does not net the refund
+2582,2025-08-05,swansonvitamins.com,8024105,178.9,9.39,0,44.7,143.59,143.59,0,0,143.59,AG does not net the refund
+2677,2025-07-23,partselect.com,26638392,111.25,7.77,10.99,11.25,118.76,118.76,0,0,118.76,AG does not net the refund
+2692,2025-07-19,walmart.com,200013463977666,185.72,0,0,0,35.46,185.72,185.72,150.26,35.46,AG does not net the refund
+2911,2025-06-17,iherb.com,936978048,1235.4,73.51,0,185.31,1123.6,1123.6,0,0,1123.6,AG does not net the refund
+2966,2025-06-09,webstaurantstore.com,112219387,316.42,0,0,0,12.54,316.42,316.42,303.88,12.54,AG does not net the refund
+3081,2025-05-14,walgreens.com,213061531413,38.96,2.73,0,0,41.69,41.69,0,0,41.69,AG does not net the refund
+3148,2025-04-30,zoro.com,WB1128157524,179.91,0,0,35.99,143.92,143.92,0,0,143.92,AG does not net the refund
+3161,2025-04-26,zoro.com,WB5117928327,171.98,0,0,34.4,137.58,137.58,0,0,137.58,AG does not net the refund
+3647,2025-01-22,webstaurantstore.com,106859778,255.52,0,0,0,4.29,255.52,255.52,251.23,4.29,AG does not net the refund
+3854,2024-11-30,walmart.com,200012678274538,0,0,0,0,474,0,0,-474,474,AG does not net the refund
+3855,2024-11-30,walmart.com,200012688021161,474,0,1,0,316,158,158,159,-1,
+3865,2024-11-29,walmart.com,200012737879397,240.8,0,0,0,44.16,240.8,240.8,196.64,44.16,AG does not net the refund
+3980,2024-10-14,walmart.com,200012170748458,122.96,0,0,0,0.04,123,123,122.92,0.08,
+4116,2024-07-20,charlottetilbury.com,10405108,420,20.04,0,0,354.04,0,0,86,-86,
+4119,2024-07-20,walgreens.com,211467512488,27.47,1.89,0,4,29.36,0,0,-4,4,

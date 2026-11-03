@@ -1,0 +1,19 @@
+order_date,supplier,order_id,source,order_total,header_refund,line_refunds,net_spend_before_rule,lines,closed
+2026-07-06,shop.tetleyusa.com,70295779,sheet_import,362.49,0,0,362.49,1,true
+2026-06-08,dkhardware.com,DKH-3192308,sheet_import,77.23,0,0,77.23,1,true
+2026-04-28,walmart.com,200014704088011,sheet_import,254.7,0,0,254.7,1,true
+2026-04-20,petsmart.com,1114636282,sheet_import,162.8,0,0,162.8,1,true
+2026-04-07,groomerschoice.com,794412,sheet_import,106.65,0,0,106.65,1,true
+2026-03-29,cvs.com,755997954,sheet_import,63.08,0,0,63.08,1,true
+2026-03-21,walgreens.com,214822511936,sheet_import,100.97,0,0,100.97,4,true
+2026-02-13,vitacost.com,32327316,sheet_import,133.6,0,0,133.6,1,true
+2026-02-05,sodastream.com,5299496,sheet_import,462.96,0,0,462.96,3,true
+2026-01-04,homedepot.com,WH20091467,sheet_import,108.92,0,0,108.92,1,true
+2025-10-09,bigelowtea.com,Order #78783 / Confirmation #PKEYNCYNC,sheet_import,130.45,0,0,130.45,1,true
+2025-07-12,dkhardware.com,DKH-2556115,sheet_import,76.45,0,0,76.45,1,true
+2025-07-02,1800petmeds.com,O77241731,sheet_import,58.67,0,0,58.67,1,true
+2025-06-20,walmart.com,200013538404208,sheet_import,38.88,0,0,38.88,2,true
+2025-05-27,menards.com,62160205,sheet_import,14.89,0,0,14.89,1,true
+2025-04-25,groomerschoice.com,719781,sheet_import,107.98,0,0,107.98,1,true
+2024-09-30,quill.com,180281912,sheet_import,5031.1,0,0,5031.1,2,true
+2024-09-09,sonnyangelusa.com,JW0XFXYQV,sheet_import,119,0,0,119,2,true

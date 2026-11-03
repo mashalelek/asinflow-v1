@@ -1,0 +1,54 @@
+order_date,supplier,order_id,product_name,qty_ordered,qty_canceled,price,line_fully_canceled,po_has_any_refund_row,header_refund,order_total
+2026-06-08,dkhardware.com,DKH-3192308,Echo 6450025GDS 2.5 Gal Powerblend Gold Oil Mix 8-6.4 Oz 6 Pack Bottles Per Case,10,10,6.61,true,false,0,77.23
+2026-05-01,simplicity.com,15848232,New Look Sewing Pattern Misses' Dresses Item Number N6352,5,5,3.99,true,true,19.95,59.85
+2026-04-28,walmart.com,200014704088011,Fujifilm Instax Mini Twin Pack Film (20 sheets),15,15,16.98,true,false,0,254.7
+2026-04-25,jcpenney.com,2026115412305399,Stafford Super Soft Mens 4 Pack Short Sleeve Crew Neck T-Shirt | large | regular | White,8,8,38,true,true,467.2,0
+2026-04-25,jcpenney.com,2026115412305399,Jockey Classics Bonus Pack Mens 4 Pack Short Sleeve Crew Neck Moisture Wicking T-Shirt | large | White,8,8,32,true,true,467.2,0
+2026-04-25,jcpenney.com,2026115412305399,Jockey Classics Bonus Pack Mens 4 Pack Short Sleeve Crew Neck Moisture Wicking T-Shirt  | medium | White,8,8,32,true,true,467.2,0
+2026-04-25,jcpenney.com,2026115412305399,Stafford Heavyweight Cotton Mens 3 Pack Short Sleeve Crew Neck T-Shirt  Item #5045006 | large | Black Gray,8,8,44,true,true,467.2,0
+2026-03-29,cvs.com,755997954,"BIC Intensity Permanent Marker, Ultra Fine Point, Assorted Colors, 12 ct",5,5,11.79,true,false,0,63.08
+2026-03-21,walgreens.com,214822511936,"Foster Grant Dani Reading Glasses Purple, +2.75, 1.0 ea",2,2,27.99,true,false,0,100.97
+2026-03-21,walgreens.com,214822511936,"Foster Grant Ironman 2002 Reading Glasses, +2.00 - 1 pr",2,2,29.99,true,false,0,100.97
+2026-03-21,walgreens.com,214822511936,"Foster Grant IM1001 Ironman Reading Glasses, +1.75 -  1.0 ea",2,2,29.99,true,false,0,100.97
+2026-03-21,walgreens.com,214822511936,"Foster Grant Ironman 2002 Reading Glasses, +1.50 - 1 pr",2,2,29.99,true,false,0,100.97
+2026-02-27,yankeecandle.com,HFUS08968698990,Pink Sands™ Scenterpiece® Easy MeltCup,40,40,6,true,true,229.84,229.84
+2026-02-27,yankeecandle.com,HFUS08968698990,"Sprinkle Dots ScentPlug® Diffuser
+ScentPlug® Diffuser",20,20,6.99,true,true,229.84,229.84
+2026-02-27,yankeecandle.com,HFUS08968698990,Sicilian Lemon Scenterpiece® Easy MeltCup,20,20,6,true,true,229.84,229.84
+2026-02-27,yankeecandle.com,HFUS08968698990,"Pink Sands, Style: Scenterpiece® Easy MeltCup",10,10,6,true,true,229.84,229.84
+2026-02-13,vitacost.com,32327316,Good Sense Organic Pumpkin Seeds Pepitas - Salted Roasted -- 6 oz,50,50,3.59,true,false,0,133.6
+2026-02-05,sodastream.com,5299496,Sodastream Classics Cranberry & Raspberry Zero Sugar Drink Mix 4 Pack 440ml,5,5,26.99,true,false,0,462.96
+2026-02-05,sodastream.com,5299496,Sodastream Classics Diet Xtreme Energy Drink Mix 440ml,20,20,6.99,true,false,0,462.96
+2026-02-05,sodastream.com,5299496,Sodastream Classics Caffeine Free Diet Cola Drink Mix 4 Pack 440ml,10,10,26.99,true,false,0,462.96
+2026-01-05,walmart.com,200014030603715,"Fujifilm Instax Mini Instant Film Value Pack (Mini Rainbow and Mini Confetti), 20 exposures",5,5,19.84,true,true,99.2,679.84
+2026-01-04,homedepot.com,WH20091467,Simpson Strong-Tie PSCL 3/4 in. 20-Gauge Galvanized Panel Sheathing Clip (250-Qty),4,4,27.23,true,false,0,108.92
+2025-12-27,macys.com,4704938595,Frango Chocolates 2 Pack Holiday 1 LB Wrapped Box of Mint Milk Chocolates,7,7,40,true,true,233.33,16.67
+2025-12-05,shop.smucker.com,10266671,"Folgers Coffee Singles Classic Decaf Coffee Bags, 19 Count",20,20,5.84,true,true,233.6,233.6
+2025-12-05,shop.smucker.com,10266671,"Folgers Coffee Singles Classic Decaf Coffee Bags, 19 Count",20,20,5.84,true,true,233.6,233.6
+2025-11-20,walmart.com,200013961993995,"AND1 Men's and Big Men's All Court Colorblock Short, 11"" inseam, up to Size 3XL",3,3,9.98,true,false,0,81.94
+2025-11-11,knitpicks.com,KPP-1046-1051033364,"Kookaburra Woolwash, 16 oz",10,10,11.99,true,false,0,0
+2025-10-22,baileypottery.com,000199680,Mudtools Do All Trim Tool,10,10,21.25,true,false,0,0
+2025-10-13,kohls.com,6663250650,SodaStream Diet Cola Caffeine Free 14.8-oz. Sparkling Drink Mix - 4-pk,5,5,21.59,true,false,0,0
+2025-10-13,kohls.com,6663250650,SodaStream Diet Root Beer 14.8-oz. Sparkling Drink Mix - 4-pk,5,5,21.59,true,false,0,0
+2025-10-12,kohls.com,6663059653,SodaStream Diet Root Beer 14.8-oz. Sparkling Drink Mix - 4-pk,10,10,21.59,true,false,0,0
+2025-10-09,bigelowtea.com,Order #78783 / Confirmation #PKEYNCYNC,Tropical Iced Green Tea Brew Over Ice K-Cup® Pods 22 Count (Pack of 4),5,5,30,true,false,0,130.45
+2025-08-24,walmart.com,200013548402569,"Crisp Fall Leaves Scented Wax Melts, Better Homes & Gardens, 2.5 oz (5-Pack)",32,32,9.87,true,true,454.34,0
+2025-08-24,walmart.com,200013548402569,"(4 pack) Ball®Wide Mouth Quart 32oz. Glass Mason Jars with Lids and Bands, 12 Count",1,1,16.44,true,true,454.34,0
+2025-08-24,walmart.com,200013548402569,"Spring Valley Cranberry Urinary Tract Support Dietary Supplement Softgels, 500mg, 60 Count",10,10,7.93,true,true,454.34,0
+2025-07-17,bookstorestaging.hope.edu,SO31595,BIC Intensity Permanent Markers Ultra Fine 12 Pack,20,20,8.99,true,false,0,0
+2025-07-12,dkhardware.com,DKH-2556115,Echo 6450025GDSClick To Copy 2.5 Gal Powerblend Gold Oil Mix 8-6.4 Oz 6 Pack Bottles Per Case,11,11,6.42,true,false,0,76.45
+2025-07-02,amsoil.com,43331962,"AMSOIL SEVERE GEAR® 75W-90 100% Synthetic Gear Lube, Quart Easy-Packs, Case of 12 (SVGPK-CA)",1,1,196.45,true,true,983.17,0
+2025-07-02,amsoil.com,43331962,"AMSOIL SEVERE GEAR® 75W-140 100% Synthetic Gear Lube, Quart Easy-Packs, Case of 12 (SVOPK-CA)",1,1,216,true,true,983.17,0
+2025-07-02,amsoil.com,43331962,"AMSOIL 20W-50 100% Synthetic V-Twin Motorcycle Oil, Gallon Jugs, Case of 4 (MCV1G-CA)",2,2,182.8,true,true,983.17,0
+2025-07-02,amsoil.com,43331962,"AMSOIL INTERCEPTOR® 100% Synthetic 2-Stroke Oil, Quart Bottles, Case of 12 (AITQT-CA)",1,1,140.8,true,true,983.17,0
+2025-07-02,1800petmeds.com,O77241731,"EZ Soft Collar , Small",10,10,7.76,true,false,0,58.67
+2025-06-20,walmart.com,200013409917780,"Chicken Helper Chicken Fried Rice Made with Real Vegetables, 7 Ounces Box",12,12,1.68,true,false,0,57.6
+2025-06-20,walmart.com,200013538404208,"(2 pack) Ivory Ultra Concentrated Liquid Dish Soap, Classic Fresh Scent, 24 fl Ounce",3,3,6.24,true,false,0,38.88
+2025-06-20,walmart.com,200013538404208,"Chicken Helper Chicken Fried Rice Made with Real Vegetables, 7 Ounces Box",12,12,1.68,true,false,0,38.88
+2025-05-27,menards.com,62160205,TheraPearl® Eye-ssential® Mask,4,4,1.11,true,false,0,14.89
+2025-05-14,bergsskishop.com,320204,Burton M6 Channel Inserts - 4 Pack (Max Four Sets),10,10,8,true,false,0,0
+2025-04-25,groomerschoice.com,719781,"Fresh 'N Clean Dog Cologne Spray, Baby Powder Scent",15,15,7.99,true,false,0,107.98
+2024-12-04,staples.com,9926671967,"Caribou Coffee Daybreak Morning Blend Coffee Keurig® K-Cup® Pods, Light Roast, 96/Carton (6994)",1,1,34.99,true,true,34.99,1649.55
+2024-09-30,quill.com,180281912,"Cafe Escapes Cafe Caramel Coffee, Keurig K-Cup Pod, 96/Carton (GMT6813CT)",13,13,34.99,true,false,0,5031.1
+2024-09-09,sonnyangelusa.com,JW0XFXYQV,,5,5,10,true,false,0,119
+2024-09-09,sonnyangelusa.com,JW0XFXYQV,,6,6,11.5,true,false,0,119
