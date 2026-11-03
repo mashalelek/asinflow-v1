@@ -72,10 +72,12 @@ export function TopNav() {
           const Icon = item.icon;
 
           if (item.disabled) {
+            // 2026-11-03: with the Dashboard tab and the longer "ASIN Analytics" the menu overflowed at 1024 again
+            // (the Shipments tag ran under the theme toggle); the two "Soon" placeholders now show from xl up only.
             return (
               <span
                 key={item.path}
-                className="flex items-center gap-1.5 px-2 xl:px-3 py-1.5 rounded text-xs opacity-40 cursor-default select-none whitespace-nowrap"
+                className="hidden xl:flex items-center gap-1.5 px-2 xl:px-3 py-1.5 rounded text-xs opacity-40 cursor-default select-none whitespace-nowrap"
               >
                 <Icon className="h-3.5 w-3.5" />
                 {item.label}
