@@ -1,10 +1,11 @@
-// Set the yield (asin_qty_per_product) of one ASIN row's product lines, optionally
-// its pack size, with History rows (po_edit_log) — the way the PO editor does it
-// (editLine / editAsinRow → recomputeAsinQty → evaluateAutoClose, then the route's
-// cost recompute, which leaves a sheet-imported PO alone).
+// Set the yield of one ASIN row's product lines as the two integers it is since
+// migration 080 (retailer units / product ÷ ASIN units / pack — never a decimal),
+// optionally the row's pack size, with History rows (po_edit_log) — the way the PO
+// editor does it (editLine / editAsinRow → recomputeAsinQty → evaluateAutoClose, then
+// the route's cost recompute, which leaves a sheet-imported PO alone).
 // Maria 2026-11-02: PO 6433257 (opentip.com) B07J9QQDSS was imported with yield 1 →
-// Ordered 100; the ASIN is a 2-pack, so 100 retailer units = 50 ASIN units (yield 0.5).
-//   tsx script/fix-po-yield.ts --order 6433257 --asin B07J9QQDSS --yield 0.5 [--units-per-pack 2] [--prod] [--live]
+// Ordered 100; the ASIN is a 2-pack, so 100 retailer units = 50 ASIN units (1 / 2).
+//   tsx script/fix-po-yield.ts --order 6433257 --asin B07J9QQDSS --retailer-units 1 --asin-units 2 [--units-per-pack 2] [--prod] [--live]
 // Dry run by default: runs the whole edit in a transaction, prints before / after and
 // rolls back. `--prod` reads .env.production.local (script/env.ts).
 import "./env";
@@ -14,9 +15,10 @@ import { recomputePoCosts } from "../server/po-costs";
 import { loadAsinPipeline } from "../server/asin-po-pipeline";
 
 const arg = (k: string) => { const i = process.argv.indexOf(k); return i >= 0 ? process.argv[i + 1] : undefined; };
-const order = arg("--order"), asin = (arg("--asin") ?? "").toUpperCase(), yld = arg("--yield"), upp = arg("--units-per-pack"), live = process.argv.includes("--live");
-if (!order || !/^B0[A-Z0-9]{8}$/.test(asin) || !yld || !/^\d+(\.\d{1,4})?$/.test(yld) || Number(yld) <= 0 || (upp != null && !/^[1-9]\d*$/.test(upp))) {
-  console.error("usage: --order <order id> --asin <ASIN> --yield <n> [--units-per-pack <n>] [--prod] [--live]");
+const order = arg("--order"), asin = (arg("--asin") ?? "").toUpperCase(), rUnits = arg("--retailer-units"), aUnits = arg("--asin-units"), upp = arg("--units-per-pack"), live = process.argv.includes("--live");
+const INT = /^[1-9]\d*$/;
+if (!order || !/^B0[A-Z0-9]{8}$/.test(asin) || !rUnits || !INT.test(rUnits) || !aUnits || !INT.test(aUnits) || (upp != null && !INT.test(upp))) {
+  console.error("usage: --order <order id> --asin <ASIN> --retailer-units <n> --asin-units <n> [--units-per-pack <n>] [--prod] [--live]  (yield = retailer-units ÷ asin-units; whole numbers only)");
   process.exit(2);
 }
 
@@ -27,14 +29,14 @@ if (!order || !/^B0[A-Z0-9]{8}$/.test(asin) || !yld || !/^\d+(\.\d{1,4})?$/.test
   const snapshot = async (poId: string, paId: string) => {
     const po = (await query(`SELECT closed_at, closed_by, cost_formula_version FROM purchase_orders WHERE id = $1`, [poId])).rows[0];
     const row = (await query(`SELECT sold_as, units_per_pack, qty, qty_shipped_fba, qty_at_prep, received_velocity, cost_per_unit FROM po_asins WHERE id = $1`, [paId])).rows[0];
-    const lines = (await query(`SELECT id, product_name, qty_ordered, asin_qty_per_product FROM po_line_items WHERE po_asin_id = $1 ORDER BY position`, [paId])).rows;
+    const lines = (await query(`SELECT id, product_name, qty_ordered, asin_qty_per_product, retailer_units_per_product, asin_units_per_pack FROM po_line_items WHERE po_asin_id = $1 ORDER BY position`, [paId])).rows;
     const pipe = (await loadAsinPipeline(query, [asin])).get(asin);
     return { po, row, lines, onOrder: pipe?.on_order ?? 0, openPos: pipe?.open_po_count ?? 0 };
   };
   const show = (label: string, s: Awaited<ReturnType<typeof snapshot>>) => {
     console.log(`${label}: PO ${s.po.closed_at ? `closed (${s.po.closed_by}, ${new Date(s.po.closed_at).toISOString().slice(0, 10)})` : "open"}, ${s.po.cost_formula_version == null ? "sheet-imported" : "formula v" + s.po.cost_formula_version}`);
     console.log(`  ASIN row: sold_as ${s.row.sold_as} × ${s.row.units_per_pack}, Ordered ${s.row.qty}, Shipped FBA ${s.row.qty_shipped_fba}, At Prep ${s.row.qty_at_prep}, Received by Velocity ${s.row.received_velocity}, cost/unit ${s.row.cost_per_unit}`);
-    for (const l of s.lines) console.log(`  line: ${l.product_name} — qty ${l.qty_ordered} × yield ${l.asin_qty_per_product}`);
+    for (const l of s.lines) console.log(`  line: ${l.product_name} — qty ${l.qty_ordered} × ${l.retailer_units_per_product ?? "∅"} / ${l.asin_units_per_pack ?? "∅"} (yield ${l.asin_qty_per_product})`);
     console.log(`  On Order for ${asin} (all POs): ${s.onOrder}; open POs ${s.openPos}`);
   };
   try {
@@ -51,7 +53,7 @@ if (!order || !/^B0[A-Z0-9]{8}$/.test(asin) || !yld || !/^\d+(\.\d{1,4})?$/.test
     await query("BEGIN");
     const results: EditResult[] = [];
     if (upp != null) results.push(await editAsinRow(query, paId, { sold_as: Number(upp) === 1 ? "individual" : "multi-pack", units_per_pack: upp }, null));
-    for (const l of before.lines) results.push(await editLine(query, String(l.id), { asin_qty_per_product: yld }, null));
+    for (const l of before.lines) results.push(await editLine(query, String(l.id), { retailer_units_per_product: rUnits, asin_units_per_pack: aUnits }, null));
     const changes = results.flatMap((r) => r.changes);
     const rc = changes.some((c) => COST_RELEVANT_FIELDS.has(c.field)) ? await recomputePoCosts(query, String(po.id), null) : null;
     const after = await snapshot(String(po.id), paId);

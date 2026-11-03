@@ -23,6 +23,7 @@
 // 2026-10-17 (clean-up): Amazon's own inbound ("Sent to FBA") covers the
 // shipped-not-received units.
 import type { QueryLike } from "./scheduler/types";
+import { LINE_YIELD_SQL } from "./po-queries";
 
 export interface PipelineRow {
   asin: string;
@@ -86,9 +87,9 @@ export const PIPELINE_ROWS_SQL = `
     SELECT l.po_asin_id,
            COUNT(*) AS n,
            COUNT(*) FILTER (WHERE l.qty_canceled IS NULL) AS canceled_untracked,
-           SUM(l.qty_canceled * COALESCE(l.asin_qty_per_product, 1)) AS canceled_sum,
+           SUM(l.qty_canceled * ${LINE_YIELD_SQL}) AS canceled_sum,
            COUNT(*) FILTER (WHERE l.qty_returned IS NULL) AS returned_untracked,
-           SUM(l.qty_returned * COALESCE(l.asin_qty_per_product, 1)) AS returned_sum
+           SUM(l.qty_returned * ${LINE_YIELD_SQL}) AS returned_sum
       FROM po_line_items l
      GROUP BY l.po_asin_id
   )

@@ -11,6 +11,7 @@
 // "canceled" when every line is canceled for its full ordered quantity.
 // Imports nothing that boots Express (no ./index) — scripts may use it.
 import type { QueryLike } from "./scheduler/types";
+import { lineRatio, ratioYield } from "../shared/yield";
 import type { SheetAsinData, SheetRow } from "./google-sheets";
 import { NEWEST_PO_ORDER } from "./po-entry-seq";
 
@@ -62,11 +63,12 @@ export function trueYield(t: number): number {
  * with the yield restored to the fraction it was typed as (trueYield). No
  * qty / yield on the line: the stored qty ÷ S.
  */
-export function lineAsinQty(asinQty: number, ordered: number | null, yieldT: number | null, uniqueS: number, lines = 1): number {
+export function lineAsinQty(asinQty: number, ordered: number | null, yieldT: number | null, uniqueS: number, lines = 1, exact = false): number {
   const S = uniqueS > 0 ? uniqueS : 1;
   if (ordered == null || yieldT == null) return Math.round((asinQty / S) * 1e6) / 1e6;
   if (S === 1 && lines === 1) return asinQty;
-  return Math.round(((ordered * trueYield(yieldT)) / S) * 1e6) / 1e6;
+  // `exact`: the yield is the line's integer ratio (migration 080) — no 2-dp snapping.
+  return Math.round(((ordered * (exact ? yieldT : trueYield(yieldT))) / S) * 1e6) / 1e6;
 }
 
 /**
@@ -81,7 +83,7 @@ export async function loadAfPoRows(query: QueryLike): Promise<{ rows: SheetRow[]
   const rs = (await query(
     `SELECT p.order_id, p.order_date, p.supplier, p.closed_at IS NOT NULL AS closed, p.ships_to,
             pa.asin, pa.asin_name, pa.qty AS asin_qty, pa.cost_per_unit, pa.prep_cost, pa.sold_as, pa.units_per_pack, pa.unique_products,
-            l.position, l.product_name, l.qty_ordered, l.asin_qty_per_product, ${lineCanceled} AS canceled,
+            l.position, l.product_name, l.qty_ordered, l.asin_qty_per_product, l.retailer_units_per_product, l.asin_units_per_pack, ${lineCanceled} AS canceled,
             (SELECT COUNT(*)::int FROM po_line_items l2 WHERE l2.po_asin_id = pa.id) AS line_count
        FROM po_line_items l JOIN po_asins pa ON pa.id = l.po_asin_id JOIN purchase_orders p ON p.id = pa.po_id
       ORDER BY ${NEWEST_PO_ORDER}, pa.asin, l.position`,
@@ -91,7 +93,8 @@ export async function loadAfPoRows(query: QueryLike): Promise<{ rows: SheetRow[]
     const lines = Number(r.line_count) || 1;
     const bundle = String(r.sold_as) === "bundle" && (num(r.unique_products) ?? 1) > 1;
     const upp = num(r.units_per_pack) ?? 1;
-    const lineQty = lineAsinQty(asinQty, num(r.qty_ordered), num(r.asin_qty_per_product), num(r.unique_products) ?? 1, lines);
+    const ratio = lineRatio(r);
+    const lineQty = lineAsinQty(asinQty, num(r.qty_ordered), ratio ? ratio.retailer / ratio.asinUnits : num(r.asin_qty_per_product), num(r.unique_products) ?? 1, lines, !!ratio);
     const status = [r.closed ? "Closed" : null, r.canceled ? "Canceled" : null].filter(Boolean).join(", ") || "Ordered";
     return {
       sheetRow: i + 2,
@@ -110,7 +113,7 @@ export async function loadAfPoRows(query: QueryLike): Promise<{ rows: SheetRow[]
       qtyOrderedL: r.qty_ordered == null ? null : String(r.qty_ordered),
       setsN: String(bundle || lines > 1 ? asinQty : lineQty),
       uniqueS: String(num(r.unique_products) ?? 1),
-      yieldT: r.asin_qty_per_product == null ? null : String(Number(r.asin_qty_per_product)),
+      yieldT: ratio ? ratioYield(ratio) : r.asin_qty_per_product == null ? null : String(Number(r.asin_qty_per_product)),
       soldAs: str(r.sold_as),
       unitsPerPack: String(upp),
       // AZ: total units — sets × units per bundle for a bundle, packs × units/pack otherwise.

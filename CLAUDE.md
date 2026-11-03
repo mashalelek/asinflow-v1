@@ -430,6 +430,17 @@ item 5). `recomputePoCosts` skips such POs; the formula v2 in
 that look wrong go on a review list for Maria
 (`docs/po-cogs-review-2026-10-31.csv`); nothing changes without her say-so.
 
+## Line yield is two integers, never a decimal (migration 080, 2026-11-02)
+
+`po_line_items.retailer_units_per_product` ÷ `asin_units_per_pack` is the
+yield; Ordered = Σ qty × retailer ÷ asin in exact arithmetic
+(`shared/yield.ts`), rounded once. `asin_qty_per_product` is derived,
+history only — never write it from new code, never accept it on a route;
+write the two integers (`editLine`, `addLine`, the form check's lines,
+`script/fix-po-yield.ts --retailer-units/--asin-units`). A line with NULLs
+(an unresolved sheet import, `docs/yield-ratio-gaps-2026-11-02.csv`) reads
+its stored yield as before. SPEC §22 "Yield is an exact ratio".
+
 ## PO action items live in `po_line_action_items`
 
 Since PO table v2 (migration 074, 2026-10-29) action items are rows in

@@ -8,6 +8,7 @@
 // open PO whose Velocity order was created with the old size
 // (velocity_units_per_pack ≠ units_per_pack). Closed POs are untouched.
 import type { QueryLike } from "./scheduler/types";
+import { lineRatio, ratioYield } from "../shared/yield";
 import { logEdits, changedFields, recomputeAsinQty, EditError } from "./po-edit";
 import { recomputePoCosts } from "./po-costs";
 
@@ -45,8 +46,18 @@ export async function applyAsinPackUpdate(query: QueryLike, asin: string, next: 
     await logEdits(query, String(r.po_id), userId, "asin", String(r.id), rc.map((c) => ({ ...c, field: `${c.field} (ASIN pack update)` })));
     if (oldUpp !== newUpp && r.sold_as !== "bundle" && next.sold_as !== "bundle") {
       // The units a line stands for are unchanged: its yield scales by old ÷ new.
-      const lines = (await query(`SELECT id, asin_qty_per_product FROM po_line_items WHERE po_asin_id = $1`, [r.id])).rows;
+      const lines = (await query(`SELECT id, asin_qty_per_product, retailer_units_per_product, asin_units_per_pack FROM po_line_items WHERE po_asin_id = $1`, [r.id])).rows;
       for (const l of lines) {
+        // Exact yield (migration 080): the retailer units stay, the ASIN units / pack become the new size (the derived yield follows).
+        const ratio = lineRatio(l);
+        if (ratio) {
+          if (ratio.asinUnits !== newUpp) {
+            const next = { retailer: ratio.retailer, asinUnits: newUpp };
+            await query(`UPDATE po_line_items SET asin_units_per_pack = $2, asin_qty_per_product = $3 WHERE id = $1`, [l.id, newUpp, ratioYield(next)]);
+            await logEdits(query, String(r.po_id), userId, "line", String(l.id), [{ field: "asin_units_per_pack (ASIN pack update)", old: String(ratio.asinUnits), new: String(newUpp) }]);
+          }
+          continue;
+        }
         const y = Number(l.asin_qty_per_product ?? 1) || 1;
         const ny = Math.round((y * oldUpp / newUpp) * 10000) / 10000;
         if (ny !== y) {

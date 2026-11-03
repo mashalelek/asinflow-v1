@@ -6405,6 +6405,37 @@ replaces it. Migration 061 adds `po_edit_log`, `deleted_pos` and
   from the lines (Σ qty × yield; a bundle's sets = its scarcest component)
   when a line's qty, yield or ASIN changes. An ASIN row is created from the
   catalog when a line maps to a new ASIN and removed with its last line.
+  **Yield is an exact ratio (migration 080, Maria 2026-11-02):** a line
+  stores two integers, `retailer_units_per_product` (the retailer's pack: 1
+  for a single, 9 for a 9-pack) and `asin_units_per_pack` (the ASIN row's
+  pack size at the time), and Ordered = Σ qty × retailer ÷ asin in exact
+  rational arithmetic (`shared/yield.ts`, BigInt fractions), rounded once
+  to the 2 dp the stored Ordered holds. `asin_qty_per_product` stays as the
+  derived yield (retailer ÷ asin, 4 dp) for history and display only — a
+  2-dp yield made 30 × 0.07 = 2.1 where the sheet's 1/15 said 2. The New PO
+  form (pack math: retailer units / pack ÷ the ASIN's units / pack; a typed
+  unit count becomes the fraction units ÷ qty, `ratioForUnits`), the PO
+  editor (typing a line's ASIN units PATCHes the two integers; Add product
+  takes retailer units / product and ASIN units / pack, the latter
+  defaulting to the row's pack size), `script/fix-po-yield.ts`
+  (`--retailer-units` / `--asin-units`) and an ASIN pack update (the ASIN
+  units / pack follow the new size) write the integers, never a decimal;
+  `PATCH /api/pos/lines/:id` no longer accepts `asin_qty_per_product`. A
+  line without the integers (a sheet-imported line the backfill could not
+  resolve) reads its stored yield as before. Backfill `npm run
+  backfill:yield-ratio [-- --prod] [--live]`: a line whose stored yield ×
+  the ASIN row's `units_per_pack` is within 0.02 of a whole number ≥ 1 gets
+  that ratio (1/15 × 15 = 1 → 1 / 15); every other line goes to
+  `docs/yield-ratio-gaps-2026-11-02.csv` and is left alone (no
+  `units_per_pack` on the row, e.g. walmart 200014971489745 B071G486Q7 —
+  Ordered stays 2). Ordered is rewritten only where the row agreed with its
+  lines before (Σ qty × 2-dp yield = the stored Ordered) and the exact sum
+  differs — a precision change, with a History row; a row that already
+  disagreed with its lines (the yield review's shape B) is left for Maria.
+  `docs/yield-ratio-ordered-before-after-2026-11-02.csv` lists every ASIN
+  row's Ordered before / after. SQL readers (Canceled / Returned, the
+  On Order pipeline) use `LINE_YIELD_SQL`: the ratio when present, else
+  the stored yield.
   Routes: `PATCH /api/pos/:id`, `POST /api/pos/:id/lines`, `PATCH|DELETE
   /api/pos/lines/:id`, `PATCH /api/pos/asin-rows/:id`; one transaction each.
 - **Payments, promos, refunds, costs (Capture PO patch §8, 2026-10-31).** PO

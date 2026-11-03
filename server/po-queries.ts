@@ -20,9 +20,11 @@ import { ASIN_ACTION_ITEMS_SQL, unionActionItems } from "./po-action-items";
  * bundle = 1/3). Multi-packs and non-bundle groups keep the plain sum.
  * `pa` must be the po_asins alias in the enclosing query.
  */
+/** A line's yield in SQL (migration 080): the exact ratio when the line carries it, else its stored 2-dp yield, else 1. `l` must be the po_line_items alias. */
+export const LINE_YIELD_SQL = `COALESCE(l.retailer_units_per_product::numeric / l.asin_units_per_pack, l.asin_qty_per_product, 1)`;
 export const derivedFromLines = (col: string) =>
   `(SELECT CASE WHEN COUNT(*) = 0 OR COUNT(*) FILTER (WHERE l.${col} IS NULL) > 0 THEN NULL
-                ELSE SUM(l.${col} * COALESCE(l.asin_qty_per_product, 1))
+                ELSE SUM(l.${col} * ${LINE_YIELD_SQL})
                      / (CASE WHEN pa.sold_as = 'bundle' AND COALESCE(pa.unique_products, 0) > 1 THEN pa.unique_products ELSE 1 END) END
       FROM po_line_items l WHERE l.po_asin_id = pa.id)`;
 
@@ -68,7 +70,7 @@ export async function loadPoAsinRows(query: QueryLike, poIds: string[]): Promise
   // edit action items per product, so the list needs them too.
   const lines = ids.length === 0 ? [] : (await query(
     `SELECT id, po_asin_id, position, product_name, supplier_sku, price, item_discount, qty_ordered, qty_received, qty_canceled, qty_returned,
-            final_qty, asin_qty_per_product, adjusted_product_cost, notes,
+            final_qty, asin_qty_per_product, retailer_units_per_product, asin_units_per_pack, adjusted_product_cost, notes,
             ARRAY(SELECT ai.item FROM po_line_action_items ai WHERE ai.po_line_item_id = po_line_items.id AND ai.cleared_at IS NULL) AS action_items
        FROM po_line_items WHERE po_asin_id = ANY($1::uuid[]) ORDER BY po_asin_id, position, id`, [ids],
   )).rows as any[];

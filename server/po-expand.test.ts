@@ -72,7 +72,7 @@ describe("derived Canceled / Returned (pre-flight decision 1)", () => {
     const sql = poAsinRowsSql("pa.po_id = $1").replace(/\s+/g, " ");
     for (const col of ["qty_canceled", "qty_returned"]) {
       expect(sql).toContain(`COUNT(*) FILTER (WHERE l.${col} IS NULL) > 0 THEN NULL`);
-      expect(sql).toContain(`SUM(l.${col} * COALESCE(l.asin_qty_per_product, 1))`);
+      expect(sql).toContain(`SUM(l.${col} * COALESCE(l.retailer_units_per_product::numeric / l.asin_units_per_pack, l.asin_qty_per_product, 1))`); // the exact ratio when the line has one (migration 080)
     }
     expect(sql).toMatch(/AS qty_canceled_asin/);
     expect(sql).toMatch(/AS qty_returned_asin/);
@@ -144,9 +144,10 @@ describe("Products tab status columns (§4.3)", () => {
     const tab = read("client/src/components/po-edit.tsx");
     const table = tab.slice(tab.indexOf("export function PoProductsTable"), tab.indexOf("function AddProductRow"));
     for (const h of ["At Prep Center", "At CQG Warehouse", "Lost/damaged by us"]) expect(table).toContain(`<th className={th(true)}>${h}</th>`);
-    expect(table).toMatch(/sole \? productQtyFromAsin\(l\.parent\.qty_at_prep, l\.asin_qty_per_product\) : null/);
-    expect(table).toMatch(/sole \? productQtyFromAsin\(l\.parent\.qty_at_warehouse, l\.asin_qty_per_product\) : null/);
-    expect(table).toMatch(/sole \? productQtyFromAsin\(l\.parent\.qty_lost_damaged_us, l\.asin_qty_per_product\) : null/);
+    // lineYield(l): the line's exact ratio (migration 080), else its stored 2-dp yield read as the fraction it stands for.
+    expect(table).toMatch(/sole \? productQtyFromAsin\(l\.parent\.qty_at_prep, lineYield\(l\)\) : null/);
+    expect(table).toMatch(/sole \? productQtyFromAsin\(l\.parent\.qty_at_warehouse, lineYield\(l\)\) : null/);
+    expect(table).toMatch(/sole \? productQtyFromAsin\(l\.parent\.qty_lost_damaged_us, lineYield\(l\)\) : null/);
     expect(table).toMatch(/const sole = \(l\.parent\.lines \?\? \[\]\)\.length === 1;/);
     // shipment columns stay ASIN-level only
     expect(table).not.toMatch(/Shipped FBA|Received by Amazon|Shipment IDs/);

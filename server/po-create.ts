@@ -62,9 +62,9 @@ export async function createPoFromForm(query: QueryLike, form: PoFormState, user
     asinRows.push({ id: paId, asin: a.asin, asin_name: cat?.title ?? null });
     for (const l of a.lines) {
       await query(
-        `INSERT INTO po_line_items (po_id, po_asin_id, position, product_name, supplier_sku, price, item_discount, qty_ordered, qty_returned, asin_qty_per_product, adjusted_product_cost, action_items, notes)
-         VALUES ($1, $2, $3, $4, $5, $6, 0, $7, 0, $8, $9, '{}'::text[], $10)`,
-        [poId, paId, l.position, l.product_name, l.supplier_sku, l.price, l.qty_ordered, l.asin_qty_per_product, l.adjusted_product_cost, l.notes],
+        `INSERT INTO po_line_items (po_id, po_asin_id, position, product_name, supplier_sku, price, item_discount, qty_ordered, qty_returned, asin_qty_per_product, retailer_units_per_product, asin_units_per_pack, adjusted_product_cost, action_items, notes)
+         VALUES ($1, $2, $3, $4, $5, $6, 0, $7, 0, $8, $9, $10, $11, '{}'::text[], $12)`,
+        [poId, paId, l.position, l.product_name, l.supplier_sku, l.price, l.qty_ordered, l.asin_qty_per_product, l.retailer_units_per_product, l.asin_units_per_pack, l.adjusted_product_cost, l.notes],
       );
       lines++;
     }

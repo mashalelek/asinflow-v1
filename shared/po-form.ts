@@ -22,6 +22,7 @@
 // counts_toward_cogs = false (rewards, by default) is added back.
 
 import { adjustedProductCost, allocateAsinCosts, discountReflectedInLines, effectiveCostHeader, COST_FORMULA_VERSION, type CostHeader } from "./po-cost";
+import { asinUnitsFromLines, fracToNumber, lineRatio, lineUnitsExact, ratioForUnits, ratioYield, type YieldRatio } from "./yield";
 /** Stamped on purchase_orders.cost_formula_version by every form save; NULL = imported, never recomputed. */
 export const COST_FORMULA_VERSION_SAVED = COST_FORMULA_VERSION;
 
@@ -167,6 +168,24 @@ export function yieldFromPacks(retailerUnitsPerPack: string | undefined, asinUni
   const y = Math.round((r / u) * 10000) / 10000;
   return String(y > 0 ? y : 1);
 }
+/**
+ * A product row's exact yield: the pack math (retailer units / pack ÷ the
+ * ASIN's units / pack, 1 for individual) unless the yield was typed by hand —
+ * then the typed ASIN units (qty × yield, read through trueYield) as a
+ * fraction of the qty (shared/yield.ts ratioForUnits). Two integers, never a
+ * decimal, reach the server.
+ */
+export function productRatio(p: PoFormProduct): YieldRatio {
+  const qty = Number(String(p.qty_ordered ?? "").trim()) || 0;
+  const r = Math.round(Number(String(p.retailer_units_per_pack ?? "1").trim())) || 1;
+  const a = p.sold_as === "individual" ? 1 : Math.round(Number(String(p.units_per_pack ?? "1").trim())) || 1;
+  const pack: YieldRatio = { retailer: Math.max(1, r), asinUnits: Math.max(1, a) };
+  const typed = String(p.asin_qty_per_product ?? "").trim();
+  const manual = p.yield_manual === true || (typed !== "" && Math.abs(Number(typed) - Number(yieldFromPacks(p.retailer_units_per_pack, p.units_per_pack, p.sold_as))) > 1e-9);
+  if (!manual || !(qty > 0) || !(Number(typed) > 0)) return pack;
+  const units = Math.round(qty * trueYield(Number(typed)) * 100) / 100;
+  return ratioForUnits(units, qty, pack.asinUnits) ?? pack;
+}
 export const emptyPoForm = (today: string): PoFormState => ({
   supplier: "", order_id: "", order_date: today, subtotal: "", tax: "", sh_donations: "", discount: "", refund_amount: "", order_total: "",
   payment_method: "", weighted_gc_discount_pct: "", cashback_site: "", cashback_pct: "", purchased_by: "", notes: "",
@@ -197,7 +216,8 @@ export interface PoFormAsin {
   paid_cost: string | null;
   cogs_adjustment: string | null;
   cogs_adjustment_reason: string | null;
-  lines: Array<{ index: number; product_name: string | null; supplier_sku: string | null; price: string | null; qty_ordered: number; asin_qty_per_product: string; adjusted_product_cost: string | null; position: number; notes: string | null }>;
+  /** Exact yield (2026-11-02): the two integers the line stores; asin_qty_per_product is the derived yield (history). */
+  lines: Array<{ index: number; product_name: string | null; supplier_sku: string | null; price: string | null; qty_ordered: number; asin_qty_per_product: string; retailer_units_per_product: number; asin_units_per_pack: number; adjusted_product_cost: string | null; position: number; notes: string | null }>;
 }
 
 export interface PoFormCheck {
@@ -324,18 +344,19 @@ export function checkPoForm(f: PoFormState): PoFormCheck {
         errors.push(`${asin}: its products disagree on sold as / units per pack / prep`); break;
       }
     }
-    const per = idx.map((i) => (Number(t(products[i].qty_ordered)) || 0) * trueYield(Number(t(products[i].asin_qty_per_product)) || 1));
+    // Exact yield (2026-11-02): each row's ratio (retailer units / product ÷ ASIN units / pack, or a typed unit count as a fraction), summed exactly, rounded once.
+    const ratios = idx.map((i) => productRatio(products[i]));
+    const yLines = idx.map((i, k) => ({ qty_ordered: Number(t(products[i].qty_ordered)) || 0, retailer_units_per_product: ratios[k].retailer, asin_units_per_pack: ratios[k].asinUnits }));
+    const per = yLines.map((l) => fracToNumber(lineUnitsExact(l.qty_ordered, lineRatio(l)!)));
     let qty: number;
-    const c2 = (x: number) => Math.round(x * 100) / 100;
     if (first.sold_as === "bundle") {
       if (idx.length < 2) errors.push(`${asin}: a bundle needs at least two products`);
-      const sets = per.map((x) => c2(x));
-      if (new Set(sets).size > 1) {
-        errors.push(`${asin}: pack math — every bundle component must give the same number of sets (qty × yield = ${sets.join(", ")})`);
+      if (new Set(per).size > 1) {
+        errors.push(`${asin}: pack math — every bundle component must give the same number of sets (qty × yield = ${per.join(", ")})`);
       }
-      qty = Math.min(...sets);
+      qty = asinUnitsFromLines(yLines, "bundle").qty;
     } else {
-      qty = c2(per.reduce((a, b) => a + b, 0));
+      qty = asinUnitsFromLines(yLines, first.sold_as).qty;
     }
     // A non-whole number of ASIN units is allowed (2026-10-18, Maria) — Velocity is the only consumer that refuses it.
     if (qty > 0 && Math.abs(qty - Math.round(qty)) > 1e-9) warnings.push(`${asin}: ${qty} ASIN units — ${WHOLE_PACKS_WARNING}`);
@@ -343,7 +364,7 @@ export function checkPoForm(f: PoFormState): PoFormCheck {
     const lines = idx.map((i, pos) => {
       const p = products[i]; const price = moneyNum(p.price);
       const adj = price == null || Number.isNaN(price) ? null : adjustedProductCost(price, costHeader);
-      return { index: i, product_name: t(p.product_name) || null, supplier_sku: t(p.supplier_sku) || null, price: price == null || Number.isNaN(price) ? null : price.toFixed(2), qty_ordered: Number(t(p.qty_ordered)) || 0, asin_qty_per_product: t(p.asin_qty_per_product) || "1", adjusted_product_cost: adj == null ? null : adj.toFixed(2), position: pos, notes: t(p.notes ?? "") || null };
+      return { index: i, product_name: t(p.product_name) || null, supplier_sku: t(p.supplier_sku) || null, price: price == null || Number.isNaN(price) ? null : price.toFixed(2), qty_ordered: Number(t(p.qty_ordered)) || 0, asin_qty_per_product: ratioYield(ratios[pos]), retailer_units_per_product: ratios[pos].retailer, asin_units_per_pack: ratios[pos].asinUnits, adjusted_product_cost: adj == null ? null : adj.toFixed(2), position: pos, notes: t(p.notes ?? "") || null };
     });
     const adjRaw = f.cogs_adjustments?.[asin];
     const adjAmt = adjRaw == null || t(adjRaw.amount) === "" ? null : moneyNum(adjRaw.amount);

@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { derivedFromLines, poAsinRowsSql } from "./po-queries";
+import { derivedFromLines, poAsinRowsSql, LINE_YIELD_SQL } from "./po-queries";
 import { PIPELINE_ROWS_SQL } from "./asin-po-pipeline";
 
 // Row-level Status patch, P2 decision (Maria 2026-10-17): keep stored yields;
@@ -30,11 +30,13 @@ describe("derived Canceled / Returned", () => {
   });
   it("the SQL divides by unique_products for bundles only, and the POs page uses the one definition and the ASINs pipeline the same rule", () => {
     const sql = derivedFromLines("qty_canceled");
-    expect(sql).toMatch(/SUM\(l\.qty_canceled \* COALESCE\(l\.asin_qty_per_product, 1\)\)\s+\/ \(CASE WHEN pa\.sold_as = 'bundle' AND COALESCE\(pa\.unique_products, 0\) > 1 THEN pa\.unique_products ELSE 1 END\)/);
+    // The line's yield is its exact ratio when it has one (migration 080), else the stored yield, else 1.
+    expect(LINE_YIELD_SQL).toBe("COALESCE(l.retailer_units_per_product::numeric / l.asin_units_per_pack, l.asin_qty_per_product, 1)");
+    expect(sql).toMatch(/SUM\(l\.qty_canceled \* COALESCE\(l\.retailer_units_per_product::numeric \/ l\.asin_units_per_pack, l\.asin_qty_per_product, 1\)\)\s+\/ \(CASE WHEN pa\.sold_as = 'bundle' AND COALESCE\(pa\.unique_products, 0\) > 1 THEN pa\.unique_products ELSE 1 END\)/);
     expect(poAsinRowsSql("TRUE")).toContain(derivedFromLines("qty_returned"));
     // The ASINs-page pipeline aggregates the lines once (performance, 2026-10-18) with the same rule:
     // Σ(qty × yield) ÷ unique products for a bundle, NULL when any line is untracked.
-    expect(PIPELINE_ROWS_SQL).toContain("SUM(l.qty_canceled * COALESCE(l.asin_qty_per_product, 1))");
+    expect(PIPELINE_ROWS_SQL).toContain(`SUM(l.qty_canceled * ${LINE_YIELD_SQL})`);
     expect(PIPELINE_ROWS_SQL).toContain("(CASE WHEN pa.sold_as = 'bundle' AND COALESCE(pa.unique_products, 0) > 1 THEN pa.unique_products ELSE 1 END)");
   });
 });

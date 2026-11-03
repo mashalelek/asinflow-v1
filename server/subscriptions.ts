@@ -203,8 +203,8 @@ export async function tryRenewalFromEmail(query: QueryLike, supplier: string | n
     for (const l of lines) {
       const near = l.product_name ? qtyPriceNear(email.text, String(l.product_name)) : { qty: null, price: null };
       const li = await query(
-        `INSERT INTO po_line_items (po_id, po_asin_id, position, product_name, supplier_sku, price, item_discount, qty_ordered, qty_returned, asin_qty_per_product, adjusted_product_cost, action_items) VALUES ($1,$2,$3,$4,$5,$6,0,$7,0,$8,$9,'{}'::text[]) RETURNING id`,
-        [newPoId, l.po_asin_id ? idMap.get(String(l.po_asin_id)) ?? null : null, l.position, l.product_name, l.supplier_sku, near.price != null ? near.price.toFixed(2) : l.price, near.qty ?? l.qty_ordered, l.asin_qty_per_product, l.adjusted_product_cost],
+        `INSERT INTO po_line_items (po_id, po_asin_id, position, product_name, supplier_sku, price, item_discount, qty_ordered, qty_returned, asin_qty_per_product, adjusted_product_cost, action_items, retailer_units_per_product, asin_units_per_pack) VALUES ($1,$2,$3,$4,$5,$6,0,$7,0,$8,$9,'{}'::text[],$10,$11) RETURNING id`,
+        [newPoId, l.po_asin_id ? idMap.get(String(l.po_asin_id)) ?? null : null, l.position, l.product_name, l.supplier_sku, near.price != null ? near.price.toFixed(2) : l.price, near.qty ?? l.qty_ordered, l.asin_qty_per_product, l.adjusted_product_cost, l.retailer_units_per_product ?? null, l.asin_units_per_pack ?? null],
       );
       newLineIds.push(String(li.rows[0].id));
     }

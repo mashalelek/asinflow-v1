@@ -40,6 +40,9 @@ export interface PoAsinLine {
   qty_returned: number | null;
   final_qty: number | null;
   asin_qty_per_product: string | null;
+  /** Exact yield (migration 080): retailer units / product ÷ ASIN units / pack; NULL on an unresolved sheet-imported line. */
+  retailer_units_per_product?: number | null;
+  asin_units_per_pack?: number | null;
   adjusted_product_cost: string | null;
   notes: string | null;
   /** Row-level Status: this product's action items. */

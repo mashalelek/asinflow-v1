@@ -10,9 +10,9 @@ function fake(opts: { asin?: any; openRows?: any[]; lines?: Record<string, any[]
     calls.push({ sql, params });
     if (/SELECT asin, sold_as, units_per_pack FROM asins/.test(sql)) return { rows: opts.asin === null ? [] : [opts.asin ?? { asin: "B0A", sold_as: "multi-pack", units_per_pack: 6 }], rowCount: 1 };
     if (/FROM po_asins pa JOIN purchase_orders p ON p.id = pa.po_id WHERE pa.asin/.test(sql)) return { rows: opts.openRows ?? [], rowCount: 0 };
-    if (/SELECT id, asin_qty_per_product FROM po_line_items WHERE po_asin_id/.test(sql)) return { rows: opts.lines?.[params[0]] ?? [], rowCount: 0 };
+    if (/SELECT id, asin_qty_per_product, retailer_units_per_product, asin_units_per_pack FROM po_line_items WHERE po_asin_id/.test(sql)) return { rows: opts.lines?.[params[0]] ?? [], rowCount: 0 };
     if (/SELECT id, po_id, qty, sold_as, unique_products FROM po_asins WHERE id/.test(sql)) return { rows: [{ id: params[0], po_id: "p1", qty: "3", sold_as: "multi-pack", unique_products: null }], rowCount: 1 };
-    if (/SELECT qty_ordered, asin_qty_per_product FROM po_line_items WHERE po_asin_id/.test(sql)) return { rows: (opts.lines?.[params[0]] ?? []).map((l) => ({ qty_ordered: 6, asin_qty_per_product: 0.0833 })), rowCount: 1 };
+    if (/SELECT qty_ordered, asin_qty_per_product, retailer_units_per_product, asin_units_per_pack FROM po_line_items WHERE po_asin_id/.test(sql)) return { rows: (opts.lines?.[params[0]] ?? []).map((l) => ({ qty_ordered: 6, asin_qty_per_product: 0.0833 })), rowCount: 1 };
     if (/FROM purchase_orders WHERE id/.test(sql)) return { rows: [{ id: "p1", subtotal: "60", discount: "0", weighted_gc_discount_pct: null, cost_formula_version: opts.version ?? null }], rowCount: 1 };
     return { rows: [], rowCount: 1 };
   };

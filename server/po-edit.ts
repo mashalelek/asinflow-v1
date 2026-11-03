@@ -16,6 +16,7 @@
 import type { QueryLike } from "./scheduler/types";
 import { evaluateAutoClose, type AutoCloseOutcome } from "./po-close";
 import { trueYield } from "./po-af-source";
+import { asinUnitsFromLines, lineRatio, ratioYield, type YieldLine } from "../shared/yield";
 
 export type Parsed = { ok: true; value: unknown } | { ok: false; error: string };
 type Parser = (v: unknown) => Parsed;
@@ -102,7 +103,8 @@ export const HEADER_FIELDS: Record<string, Parser> = {
 export const LINE_FIELDS: Record<string, Parser> = {
   product_name: textOrNull, supplier_sku: textOrNull, price: money({ nullable: true }),
   qty_ordered: decQty({ positive: true }), qty_received: decQty({ nullable: true }), qty_returned: decQty({ nullable: true }), qty_canceled: decQty({ nullable: true }),
-  asin_qty_per_product: yieldParser, notes: textOrNull, asin: asinParser,
+  // Exact yield (migration 080, 2026-11-02): two integers, never a decimal — the derived asin_qty_per_product is written alongside, read-only.
+  retailer_units_per_product: intQty({ nullable: false, min: 1 }), asin_units_per_pack: intQty({ nullable: false, min: 1 }), notes: textOrNull, asin: asinParser,
 };
 /** §3 ASIN-row fields (the manual quantities, action items and Cancel ASIN keep their routes). */
 export const ASIN_FIELDS: Record<string, Parser> = {
@@ -112,7 +114,7 @@ export const ASIN_FIELDS: Record<string, Parser> = {
   cogs_adjustment: money({ nullable: true, negative: true }), cogs_adjustment_reason: textOrNull, sourcing_cost: money({ nullable: true }), paid_cost: money({ nullable: true }),
 };
 /** Header / line / ASIN-row fields whose change should recompute a v2 PO's costs (routes call recomputePoCosts after the edit). */
-export const COST_RELEVANT_FIELDS = new Set(["subtotal", "discount", "weighted_gc_discount_pct", "price", "qty_ordered", "asin_qty_per_product", "cogs_adjustment"]);
+export const COST_RELEVANT_FIELDS = new Set(["subtotal", "discount", "weighted_gc_discount_pct", "price", "qty_ordered", "retailer_units_per_product", "asin_units_per_pack", "cogs_adjustment"]);
 
 /** Validate a body against a field spec. Unknown keys are an error (a typo never silently does nothing). */
 export function parseEdits(spec: Record<string, Parser>, body: unknown): { ok: true; edits: Record<string, unknown> } | { ok: false; error: string } {
@@ -168,18 +170,16 @@ export class EditError extends Error { constructor(public status: number, messag
  * be built as often as its scarcest component — the minimum (equal to the
  * sheet's N whenever the components agree). S = the bundle's line count.
  */
-export function asinQtyFromLines(lines: ReadonlyArray<{ qty_ordered: number | string | null; asin_qty_per_product: number | string | null }>, soldAs: string): { qty: number; uniqueProducts: number | null } {
-  const per = lines.map((l) => (Number(l.qty_ordered) || 0) * trueYield(Number(l.asin_qty_per_product ?? 1) || 1));
-  const c2 = (x: number) => Math.round(x * 100) / 100; // numeric(10,2) since migration 062
-  if (soldAs === "bundle") return { qty: per.length === 0 ? 0 : c2(Math.min(...per)), uniqueProducts: Math.max(lines.length, 1) };
-  return { qty: c2(per.reduce((t, x) => t + x, 0)), uniqueProducts: null };
+export function asinQtyFromLines(lines: ReadonlyArray<YieldLine>, soldAs: string): { qty: number; uniqueProducts: number | null } {
+  // Exact since migration 080: a line with its two integers adds qty × retailer ÷ asin as a fraction, rounded once (2 dp, numeric(10,2)); a line without them adds qty × its stored yield read as the fraction it stands for (trueYield), as before.
+  return asinUnitsFromLines(lines, soldAs, trueYield);
 }
 
 /** Recompute an ASIN row's Ordered (and a bundle's unique products) from its lines; logs a change. */
 export async function recomputeAsinQty(query: QueryLike, poAsinId: string, userId: number | null): Promise<void> {
   const pa = (await query(`SELECT id, po_id, qty, sold_as, unique_products FROM po_asins WHERE id = $1`, [poAsinId])).rows[0];
   if (!pa) return;
-  const lines = (await query(`SELECT qty_ordered, asin_qty_per_product FROM po_line_items WHERE po_asin_id = $1`, [poAsinId])).rows;
+  const lines = (await query(`SELECT qty_ordered, asin_qty_per_product, retailer_units_per_product, asin_units_per_pack FROM po_line_items WHERE po_asin_id = $1`, [poAsinId])).rows;
   if (lines.length === 0) return;
   const next = asinQtyFromLines(lines, String(pa.sold_as ?? "individual"));
   const changes = changedFields({ qty: pa.qty }, { qty: next.qty });
@@ -281,8 +281,14 @@ export async function editLine(query: QueryLike, lineId: string, body: unknown, 
   }
   const remap = changes.find((c) => c.field === "asin");
   const cols = changes.map((c) => c.field).filter((f) => f !== "asin");
+  const vals: unknown[] = cols.map((c) => p.edits[c]);
+  // The derived yield follows the two integers (history / display column, migration 080).
+  if (cols.includes("retailer_units_per_product") || cols.includes("asin_units_per_pack")) {
+    const r = lineRatio({ retailer_units_per_product: (p.edits.retailer_units_per_product ?? cur.retailer_units_per_product) as number | null, asin_units_per_pack: (p.edits.asin_units_per_pack ?? cur.asin_units_per_pack) as number | null });
+    if (r) { cols.push("asin_qty_per_product"); vals.push(ratioYield(r)); }
+  }
   if (cols.length > 0) {
-    await query(`UPDATE po_line_items SET ${cols.map((c, i) => `${c} = $${i + 2}`).join(", ")} WHERE id = $1`, [lineId, ...cols.map((c) => p.edits[c])]);
+    await query(`UPDATE po_line_items SET ${cols.map((c, i) => `${c} = $${i + 2}`).join(", ")} WHERE id = $1`, [lineId, ...vals]);
   }
   await logEdits(query, poId, userId, "line", lineId, changes);
   const oldPa = cur.po_asin_id == null ? null : String(cur.po_asin_id);
@@ -291,7 +297,7 @@ export async function editLine(query: QueryLike, lineId: string, body: unknown, 
     await query(`UPDATE po_line_items SET po_asin_id = $2 WHERE id = $1`, [lineId, target]);
     await recomputeAsinQty(query, target, userId);
     if (oldPa) await dropAsinRowIfEmpty(query, oldPa, userId);
-  } else if (oldPa && changes.some((c) => c.field === "qty_ordered" || c.field === "asin_qty_per_product")) {
+  } else if (oldPa && changes.some((c) => c.field === "qty_ordered" || c.field === "retailer_units_per_product" || c.field === "asin_units_per_pack")) {
     await recomputeAsinQty(query, oldPa, userId);
   }
   return { poId, changes, close: await evaluateAutoClose(poId, query) };
@@ -302,17 +308,20 @@ export async function addLine(query: QueryLike, poId: string, body: unknown, use
   const b = (body ?? {}) as Record<string, unknown>;
   if (!("asin" in b)) throw new EditError(400, "asin is required");
   if (!("qty_ordered" in b)) throw new EditError(400, "qty_ordered is required");
-  const p = parseEdits(LINE_FIELDS, { asin_qty_per_product: "1", ...b });
+  // Exact yield (migration 080): retailer units / product defaults to 1, ASIN units / pack to the ASIN row's pack size; never a decimal.
+  const p = parseEdits(LINE_FIELDS, { retailer_units_per_product: "1", ...b });
   if (!p.ok) throw new EditError(400, p.error);
   const po = (await query(`SELECT id FROM purchase_orders WHERE id = $1`, [poId])).rows[0];
   if (!po) throw new EditError(404, "PO not found");
   const paId = await ensureAsinRow(query, poId, String(p.edits.asin), userId);
   const pos = (await query(`SELECT COALESCE(MAX(position), -1) + 1 AS n FROM po_line_items WHERE po_asin_id = $1`, [paId])).rows[0]?.n ?? 0;
   const e = p.edits;
+  const rowPack = (await query(`SELECT sold_as, units_per_pack FROM po_asins WHERE id = $1`, [paId])).rows[0];
+  const ratio = lineRatio({ retailer_units_per_product: e.retailer_units_per_product as number, asin_units_per_pack: (e.asin_units_per_pack as number | undefined) ?? (rowPack?.sold_as === "individual" ? 1 : Number(rowPack?.units_per_pack) || 1) }) ?? { retailer: 1, asinUnits: 1 };
   const ins = await query(
-    `INSERT INTO po_line_items (po_id, po_asin_id, position, product_name, supplier_sku, price, item_discount, qty_ordered, qty_received, qty_returned, qty_canceled, asin_qty_per_product, notes)
-     VALUES ($1, $2, $3, $4, $5, $6, 0, $7, $8, $9, $10, $11, $12) RETURNING id`,
-    [poId, paId, pos, e.product_name ?? null, e.supplier_sku ?? null, e.price ?? null, e.qty_ordered, e.qty_received ?? null, e.qty_returned ?? 0, e.qty_canceled ?? null, e.asin_qty_per_product, e.notes ?? null],
+    `INSERT INTO po_line_items (po_id, po_asin_id, position, product_name, supplier_sku, price, item_discount, qty_ordered, qty_received, qty_returned, qty_canceled, asin_qty_per_product, retailer_units_per_product, asin_units_per_pack, notes)
+     VALUES ($1, $2, $3, $4, $5, $6, 0, $7, $8, $9, $10, $11, $12, $13, $14) RETURNING id`,
+    [poId, paId, pos, e.product_name ?? null, e.supplier_sku ?? null, e.price ?? null, e.qty_ordered, e.qty_received ?? null, e.qty_returned ?? 0, e.qty_canceled ?? null, ratioYield(ratio), ratio.retailer, ratio.asinUnits, e.notes ?? null],
   );
   const lineId = String(ins.rows[0].id);
   const changes: FieldChange[] = [{ field: "line added", old: null, new: `${e.product_name ?? "product"} × ${e.qty_ordered} → ${e.asin}` }];

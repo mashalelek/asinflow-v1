@@ -11,6 +11,7 @@
  * the caller reloads the PO afterwards.
  */
 import React, { useEffect, useState } from "react";
+import { effectiveYield, fracToNumber, lineRatio, lineUnitsExact, ratioForUnits } from "@shared/yield";
 import { AlertTriangle, Plus, Trash2, StickyNote } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -250,10 +251,10 @@ export function PoProductsTable({ poId, asins, onChanged }: { poId: string; asin
                   <td className="px-3 py-1.5 text-right"><InlineEdit value={l.qty_canceled} onSave={patch(l, "qty_canceled")} align="right" width="w-16" testId={`qty_canceled-${l.id}`}><QtyText v={l.qty_canceled} /></InlineEdit></td>
                   <td className="px-3 py-1.5 text-right"><InlineEdit value={l.qty_returned} onSave={patch(l, "qty_returned")} align="right" width="w-16" testId={`qty_returned-${l.id}`}><QtyText v={l.qty_returned} /></InlineEdit></td>
                   {/* Round 2 (Maria 2026-11-01): "Yield 0.17" was the col-T ratio — the column is the ASIN units this line yields (12 × 1/6 = 2); typing units sets the yield (units ÷ qty). */}
-                  <td className="px-3 py-1.5 text-right"><InlineEdit value={lineAsinUnits(l)} onSave={async (v) => { const q = Number(l.qty_ordered) || 0; if (!(q > 0) || !(Number(v) > 0)) return; await patch(l, "asin_qty_per_product")(String(Math.round((Number(v) / q) * 10000) / 10000)); }} align="right" width="w-16" testId={`asin-units-${l.id}`}><QtyText v={lineAsinUnits(l)} /></InlineEdit></td>
-                  <td className="px-3 py-1.5 text-right"><QtyText v={sole ? productQtyFromAsin(l.parent.qty_at_prep, l.asin_qty_per_product) : null} /></td>
-                  <td className="px-3 py-1.5 text-right"><QtyText v={sole ? productQtyFromAsin(l.parent.qty_at_warehouse, l.asin_qty_per_product) : null} /></td>
-                  <td className="px-3 py-1.5 text-right"><QtyText v={sole ? productQtyFromAsin(l.parent.qty_lost_damaged_us, l.asin_qty_per_product) : null} /></td>
+                  <td className="px-3 py-1.5 text-right"><InlineEdit value={lineAsinUnits(l)} onSave={async (v) => { const q = Number(l.qty_ordered) || 0; if (!(q > 0) || !(Number(v) > 0)) return; const r = ratioForUnits(Number(v), q, l.parent.sold_as === "individual" ? 1 : Number(l.parent.units_per_pack) || 1); if (!r) return; await poApi(`/api/pos/lines/${l.id}`, "PATCH", { retailer_units_per_product: String(r.retailer), asin_units_per_pack: String(r.asinUnits) }); onChanged(); }} align="right" width="w-16" testId={`asin-units-${l.id}`}><QtyText v={lineAsinUnits(l)} /></InlineEdit></td>
+                  <td className="px-3 py-1.5 text-right"><QtyText v={sole ? productQtyFromAsin(l.parent.qty_at_prep, lineYield(l)) : null} /></td>
+                  <td className="px-3 py-1.5 text-right"><QtyText v={sole ? productQtyFromAsin(l.parent.qty_at_warehouse, lineYield(l)) : null} /></td>
+                  <td className="px-3 py-1.5 text-right"><QtyText v={sole ? productQtyFromAsin(l.parent.qty_lost_damaged_us, lineYield(l)) : null} /></td>
                   <td className="px-3 py-1.5 text-right"><QtyText v={l.final_qty} /></td>
                   <td className="px-3 py-1.5">
                     <InlineEdit value={l.parent.asin} onSave={patch(l, "asin")} width="w-28" testId={`asin-${l.id}`} title="Re-map this product to another ASIN">
@@ -279,21 +280,28 @@ export function PoProductsTable({ poId, asins, onChanged }: { poId: string; asin
   );
 }
 
-/** The ASIN units a product line yields: qty ordered × its yield (a 2-dp yield read as the fraction it stands for). */
-export function lineAsinUnits(l: { qty_ordered: number | string | null; asin_qty_per_product: number | string | null }): string | null {
-  const q = Number(l.qty_ordered), y = Number(l.asin_qty_per_product);
+/** The line's yield as a number: its exact ratio (migration 080), else its 2-dp yield read as the fraction it stands for. */
+export function lineYield(l: { asin_qty_per_product: number | string | null; retailer_units_per_product?: number | string | null; asin_units_per_pack?: number | string | null }): number {
+  return effectiveYield(l, trueYield);
+}
+/** The ASIN units a product line yields: qty ordered × its yield, exact when the line carries its ratio. */
+export function lineAsinUnits(l: { qty_ordered: number | string | null; asin_qty_per_product: number | string | null; retailer_units_per_product?: number | string | null; asin_units_per_pack?: number | string | null }): string | null {
+  const q = Number(l.qty_ordered), y = lineYield(l);
   if (!Number.isFinite(q) || !Number.isFinite(y) || !(q > 0) || !(y > 0)) return null;
-  return String(Math.round(q * trueYield(y) * 100) / 100);
+  const r = lineRatio(l);
+  return String(r ? fracToNumber(lineUnitsExact(q, r)) : Math.round(q * y * 100) / 100);
 }
 
 function AddProductRow({ poId, onAdded }: { poId: string; onAdded: () => void }) {
-  const empty = { product_name: "", supplier_sku: "", price: "", qty_ordered: "", asin: "", asin_qty_per_product: "1" };
+  // Exact yield (2026-11-02): two integers — retailer units / product (1 for a single) and ASIN units / pack (blank = the ASIN row's pack size); never a decimal.
+  const empty = { product_name: "", supplier_sku: "", price: "", qty_ordered: "", asin: "", retailer_units_per_product: "1", asin_units_per_pack: "" };
   const [d, setD] = useState(empty);
   const [err, setErr] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const add = async () => {
     setBusy(true); setErr(null);
-    try { await poApi(`/api/pos/${poId}/lines`, "POST", d); setD(empty); onAdded(); } catch (e: any) { setErr(e.message); } finally { setBusy(false); }
+    const body = Object.fromEntries(Object.entries(d).filter(([k, v]) => !(k === "asin_units_per_pack" && String(v).trim() === "")));
+    try { await poApi(`/api/pos/${poId}/lines`, "POST", body); setD(empty); onAdded(); } catch (e: any) { setErr(e.message); } finally { setBusy(false); }
   };
   const f = (k: keyof typeof empty, ph: string, w: string) => (
     <Input value={d[k]} onChange={(e) => setD({ ...d, [k]: e.target.value })} placeholder={ph} className={`h-8 text-xs ${w}`} data-testid={`input-add-line-${k}`} />
@@ -301,7 +309,7 @@ function AddProductRow({ poId, onAdded }: { poId: string; onAdded: () => void })
   return (
     <div className="flex flex-wrap items-center gap-2" data-testid="po-add-line">
       {f("product_name", "Product name", "w-64")}{f("supplier_sku", "SKU / UPC", "w-32")}{f("price", "Price", "w-20")}{f("qty_ordered", "Qty", "w-16")}
-      {f("asin", "ASIN", "w-28")}{f("asin_qty_per_product", "Yield", "w-16")}{/* a yield here: the server derives the ASIN units */}
+      {f("asin", "ASIN", "w-28")}{f("retailer_units_per_product", "Retailer units / product", "w-40")}{f("asin_units_per_pack", "ASIN units / pack", "w-32")}{/* the server derives the yield and the ASIN units from the two integers */}
       <Button size="sm" variant="outline" onClick={add} disabled={busy} data-testid="button-add-line"><Plus className="h-3.5 w-3.5 mr-1" /> Add product</Button>
       {err && <span className="text-xs text-destructive" data-testid="add-line-error">{err}</span>}
     </div>
