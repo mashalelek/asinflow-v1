@@ -2694,9 +2694,12 @@ not an Amazon product page the panel shows the capture UI instead of the
   total; a line total with no unit price is accepted and the unit price is
   derived as total ÷ N ("Shag Carpet Kicker … / × 15 / $133.95" → 15 ×
   $8.93, total $133.95); "N × $price" keeps meaning N at that unit price,
-  and "Qty: N" with one money keeps that money as the unit price (the
-  Walmart review line's shape — the merge turns a confirmation's line
-  total into the total). **(b)** a table row whose cells are title / unit
+  and "Qty: N" with one money derives the unit price too when the money
+  is N × a plausible unit price — money ÷ N a whole number of cents
+  (v1.2.4, Maria 2026-11-02: Walmart's confirmation "Qty 12 / $95.64" →
+  12 × $7.97, total $95.64) — otherwise that money stays the unit price
+  (the Walmart review line "Qty: 10 / $7.97": 0.797 is no price; the
+  merge still turns a confirmation's line total into the total). **(b)** a table row whose cells are title / unit
   price / quantity / line total **in any order**, the quantity an input
   (its value is not in the text), a stepper cell in any rendering ("−",
   "+", "− +", "− 15 +", "-15+"), a bare number, a "Qty" cell + number, or

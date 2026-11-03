@@ -100,7 +100,8 @@ describe("buckets: the first real Walmart PO (synthetic cart + confirmation pair
     expect(b.totals).toEqual({ subtotal: "$95.64", discount: "$36.12", tax: "$5.74", total: "$101.38" });
     expect(b.order.number).toBe("200012345678902");
     expect(b.payment.cards).toEqual([{ nickname: "Visa", last4: "1111", amount: null }]);
-    expect(b.products.map((p) => p.name)).toEqual(["Great Value Creamy Peanut Butter, 40 oz"]);
+    // v1.2.4: "Qty 12" + one money: 95.64 ÷ 12 = 7.97 exactly → the money is the line total, the unit price derived
+    expect(b.products).toEqual([{ name: "Great Value Creamy Peanut Butter, 40 oz", qty: 12, price: "$7.97", total: "$95.64", sku: null }]);
     expect(b.promos).toEqual([]);
   });
   it("merged: one product with the cart's unit price and the confirmation's line total, Ships to Velocity with no ambiguity, Open in AF enabled", () => {
@@ -152,7 +153,7 @@ describe("buckets: merge — newest wins per field, nothing replaced wholesale, 
   it("a product seen again is updated in place (qty 12 → 10), the others stay; totals update per field; a bucket the page lacks is kept", () => {
     const m = mergeBuckets(cart, review);
     expect(m.products.map((p) => [p.name, p.qty])).toEqual([["Great Value Creamy Peanut Butter, 40 oz", 10], ["Hefty Slider Freezer Bags, Gallon, 56 Count", 6], ["Scotch-Brite Heavy Duty Scrub Sponges, 9 Count", 4]]);
-    expect(m.products[0].total).toBe("$95.64"); // the review line shows no line total → the cart's stays
+    expect(m.products[0].total).toBe("$95.64"); // the review line's "Qty: 10 / $7.97" is a unit price (0.797 is no price, v1.2.4) → no line total → the cart's stays
     expect(m.totals).toEqual({ subtotal: "$160.46", tax: "$9.63", total: "$170.09" });
     expect(m.shipping?.street).toBe("805 Grandy Ave");
     expect(m.payment.cards).toEqual([{ nickname: "Visa", last4: "4242", amount: null }]);
@@ -213,8 +214,13 @@ describe("buckets: v1.2.3 — product rows with a plain-text quantity or no quan
       expect(extractProducts(pg(block(lines))), lines).toEqual([kicker]);
     // a mark with a unit price adjacent is the old "12 × $7.97" form: the money is the unit price, not a total
     expect(extractProducts(pg(block(`${title}\n15 × $8.93`)))).toEqual([{ ...kicker, total: null }]);
-    // "Qty: 15" with one money keeps that money as the unit price (the Walmart review line is that shape; the merge turns a confirmation's line total into the total)
-    expect(extractProducts(pg(block(`${title}\nQty: 15\n$133.95`)))).toEqual([{ ...kicker, price: "$133.95", total: null }]);
+    // v1.2.4: "Qty: N" with one money derives too when the money is N × a cent-exact price (133.95 ÷ 15 = 8.93); otherwise the money stays the unit price (7.97 ÷ 10 = 0.797 is no price — the Walmart review line)
+    expect(extractProducts(pg(block(`${title}\nQty: 15\n$133.95`)))).toEqual([kicker]);
+    expect(extractProducts(pg(block(`${title}  Qty: 15  $133.95`)))).toEqual([kicker]);
+    expect(extractProducts(pg(`Product\tPrice\tQuantity\tTotal\n${title}\tQty: 15\t$133.95\nSubtotal\t$133.95\n`))).toEqual([kicker]);
+    expect(extractProducts(pg(block(`${title}\nQty: 10\n$7.97`)))).toEqual([{ ...kicker, qty: 10, price: "$7.97", total: null }]);
+    expect(extractProducts(pg(block(`${title}  Qty: 10  $7.97`)))).toEqual([{ ...kicker, qty: 10, price: "$7.97", total: null }]);
+    expect(extractProducts(pg(block(`${title}\nQty: 1\n$8.93`)))).toEqual([{ ...kicker, qty: 1, price: "$8.93", total: null }]); // N = 1: nothing to derive
   });
   it("cart then checkout merge to one product with the cart's unit price and the line total; the promo is one entry", () => {
     const m = mergeBuckets(extractBuckets(cart), extractBuckets(checkout));

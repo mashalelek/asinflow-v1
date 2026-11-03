@@ -25,6 +25,11 @@
 // is a whole number give the quantity, price and total. debugText() is the
 // panel's "Copy page text" (options page, debug): the captured text and
 // fields exactly as the parser saw them.
+// v1.2.4 (Maria 2026-11-02): "Qty: N" with ONE money derives the unit price too
+// — when the money is N × a plausible unit price, i.e. money ÷ N is a whole
+// number of cents (Walmart's confirmation "Qty 12 / $95.64" → 12 × $7.97);
+// otherwise the money stays the unit price ("Qty: 10 / $7.97" — 0.797 is no
+// price). canOpen() is gone: the buckets are a preview, not a gate.
 (function (root) {
   "use strict";
 
@@ -76,6 +81,8 @@
   function toNum(s) { return s == null ? null : Number(String(s).replace(/[^\d.-]/g, "")); }
   /** "$133.95" ÷ 15 → "$8.93" (v1.2.3: a unit price derived from a line total). */
   function unitOf(total, qty) { return "$" + (Math.round((toNum(total) / qty) * 100) / 100).toFixed(2); }
+  /** v1.2.4: total ÷ qty when it is a whole number of cents (a plausible unit price), else null. */
+  function unitIfExact(total, qty) { var u = toNum(total) / qty; return qty > 1 && Math.abs(u * 100 - Math.round(u * 100)) < 1e-6 ? "$" + u.toFixed(2) : null; }
   /** Two monies where one is the other × qty → { price, total }, either order; qty 1 needs two equal monies. */
   function pairFor(monies, qty) {
     for (var i = 0; i < monies.length; i++) for (var j = 0; j < monies.length; j++) {
@@ -162,6 +169,7 @@
     var monies = l.match(MONEY_G).map(function (m) { return m.replace(/\s/g, ""); });
     if (mu) { p.price = (mu[2] || mu[3]).replace(/\s/g, ""); }
     else if (mk && !q && monies.length === 1 && p.qty > 0) { p.total = monies[0]; p.price = unitOf(monies[0], p.qty); }
+    else if (q && monies.length === 1 && unitIfExact(monies[0], p.qty)) { p.total = monies[0]; p.price = unitIfExact(monies[0], p.qty); } // v1.2.4: "Qty: N" + one money that is N × a cent-exact price
     else p.price = monies[0];
     if (monies.length > 1 && p.qty != null) { var pt = pairFor(monies, p.qty); if (pt) { p.price = pt.price; p.total = pt.total; } }
     return p;
@@ -171,14 +179,14 @@
     if (!MONEY.test(l)) return null;
     var cells = l.split(/\s{2,}/).map(function (c) { return c.trim(); }).filter(Boolean);
     if (cells.length < 3) return null;
-    var p = { name: null, qty: null, price: null, total: null, sku: null, control: false, mark: false, monies: [], ints: [] }, sawQty = false;
+    var p = { name: null, qty: null, price: null, total: null, sku: null, control: false, mark: false, qtyLabel: false, monies: [], ints: [] }, sawQty = false;
     for (var k = 0; k < cells.length; k++) {
       var c = cells[k];
       if (p.name == null && nameLike(c)) { p.name = c; continue; }
       var st = stepperCell(c);
       if (st) { p.control = true; sawQty = true; if (st.qty != null && p.qty == null) p.qty = st.qty; continue; }
       if (QTY_LABEL.test(c)) { p.control = true; sawQty = true; continue; }
-      var q = QTY.exec(c); if (q) { if (p.qty == null) p.qty = Number(q[1]); p.control = true; sawQty = true; continue; }
+      var q = QTY.exec(c); if (q) { if (p.qty == null) p.qty = Number(q[1]); p.control = true; p.qtyLabel = true; sawQty = true; continue; }
       var mu = MULT.exec(c);
       if (mu) { if (p.qty == null) p.qty = Number(mu[1] || mu[4]); p.control = true; sawQty = true; p.monies.push((mu[2] || mu[3]).replace(/\s/g, "")); continue; }
       var mk = QTY_MARK.exec(c);
@@ -198,6 +206,8 @@
     if (p.qty == null && p.monies.length >= 2) { var rp = ratioPair(p.monies); if (rp) { p.qty = rp.qty; p.price = rp.price; p.total = rp.total; p.control = true; sawQty = true; } }
     // (a) A "× N" mark with a lone money: the line total; the unit price is derived.
     if (p.mark && p.qty > 0 && p.monies.length === 1 && p.price == null) { p.total = p.monies[0]; p.price = unitOf(p.monies[0], p.qty); }
+    // v1.2.4: "Qty: N" with a lone money that is N × a cent-exact price: the line total, the unit price derived.
+    if (p.qtyLabel && !p.mark && p.monies.length === 1 && p.price == null) { var ue = unitIfExact(p.monies[0], p.qty); if (ue) { p.total = p.monies[0]; p.price = ue; } }
     return p.name && p.monies.length && sawQty ? p : null;
   }
   function extractProducts(page) {
@@ -217,6 +227,8 @@
       if (p.qty == null && p.control && ints.length) p.qty = ints[0];
       // (a) A "× N" mark and one money: the money is the line total, the unit price is derived (v1.2.3).
       if (p.price == null && p.mark && p.qty > 0 && monies.length === 1) { p.total = monies[0]; p.price = unitOf(monies[0], p.qty); }
+      // v1.2.4: "Qty N" and one money that is N × a cent-exact price (Walmart's confirmation "Qty 12 / $95.64"): the line total, the unit price derived.
+      if (p.price == null && p.qtyLabel && monies.length === 1) { var ue = unitIfExact(monies[0], p.qty); if (ue) { p.total = monies[0]; p.price = ue; } }
       // Price and line total from the block's money lines, once the qty is known: unit price first, a later money equal to price × qty is the line total (or the other way round).
       if (p.price == null && monies.length) {
         p.price = monies[0];
@@ -241,14 +253,14 @@
       // The title line may end with the quantity mark ("… Adjustable Head × 15", v1.2.3).
       var nm = NAME_MARK.exec(l), title = nm ? l.replace(nm[0], " ").trim() : l;
       if (!nameLike(title)) { i++; continue; }
-      var p = { name: title, qty: nm ? Number(nm[1] || nm[2]) : null, price: null, total: null, sku: null, control: !!nm, mark: !!nm, monies: [], ints: [] }, j = i + 1, packInts = false;
+      var p = { name: title, qty: nm ? Number(nm[1] || nm[2]) : null, price: null, total: null, sku: null, control: !!nm, mark: !!nm, qtyLabel: false, monies: [], ints: [] }, j = i + 1, packInts = false;
       for (; j < L.length && j <= i + 14; j++) {
         var x = L[j];
         if (TOTAL_LINE.test(x) || singleLineItem(x) || rowItem(x) || (nameLike(x) && !SKU.test(x))) break;
         if (PROMO.test(x) || GIFT.test(x) || CARDISH.test(x)) continue;
         var mu = MULT.exec(x);
         if (mu) { p.qty = Number(mu[1] || mu[4]); p.control = true; p.monies.push((mu[2] || mu[3]).replace(/\s/g, "")); continue; }
-        var q = QTY.exec(x); if (q) { p.control = true; if (p.qty == null) p.qty = Number(q[1]); }
+        var q = QTY.exec(x); if (q) { p.control = true; p.qtyLabel = true; if (p.qty == null) p.qty = Number(q[1]); }
         // "× 15" on a line of its own (or with the total on the same line): the quantity as plain text (v1.2.3).
         var mk = !q && QTY_MARK.exec(x);
         if (mk) { p.control = true; p.mark = true; if (p.qty == null) p.qty = Number(mk[1] || mk[2]); x = x.replace(QTY_MARK, " ").trim(); if (!x) continue; }
