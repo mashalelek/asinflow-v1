@@ -18,8 +18,11 @@ text from the panel's "Copy page text" when she pastes it. `cart.txt`: one
 `<tr>` per product whose cells (title, $8.93, quantity stepper, $133.95)
 innerText joins with tabs, a header row, a recommendation row without a
 quantity, and one coupon shown four ways (banner, "GET 10% OFF", cart
-notice, COUPON: row). `checkout.txt`: the product as a title line, "× 15"
-on the line under it and the line subtotal — no unit price, no quantity
-input — among the address, shipping-method and card lines. The v1.2.2 row
-rule and promo dedupe and the v1.2.3 quantity shapes are tested against
-them.
+notice, COUPON: row). `checkout.txt` (reshaped 2026-11-03 after Maria's first real
+"Copy page text", a WooCommerce review table): the title line ending "× 15",
+"Available on backorder" and the line subtotal on the next line (no unit
+price, no quantity input), and the Shipping row listing the methods — "Free
+shipping" then "Flat rate: $24.77" — with the Total reconciling to the free
+one; the address and card lines around it. The v1.2.2 row rule and promo
+dedupe, the v1.2.3 quantity shapes and the v1.2.6 availability-line and
+shipping-method rules are tested against them.

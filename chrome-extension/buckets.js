@@ -30,6 +30,17 @@
 // number of cents (Walmart's confirmation "Qty 12 / $95.64" → 12 × $7.97);
 // otherwise the money stays the unit price ("Qty: 10 / $7.97" — 0.797 is no
 // price). canOpen() is gone: the buckets are a preview, not a gate.
+// v1.2.6 (shagtools.com/checkout, Maria 2026-11-03, the first real "Copy page
+// text"): the product row read "× 10" / "Available on backorder" / $89.30 —
+// the availability line looked like a new title and cut the block before its
+// money, so Products stayed empty; availability lines (available, backorder,
+// usually ships, low stock, only N left) are noise now. And Totals showed
+// Shipping $24.77 on a page whose Total was $89.30: the "Shipping" row lists
+// the shipping METHODS ("Flat rate: $24.77" / "Free shipping" — WooCommerce's
+// radios) and the old rule took the first money after the label. A method list
+// resolves by the checked radio (a "selected:" field), else by the method
+// whose amount reconciles with Total, else stays empty — never the first
+// option's price. A plain "Shipping  $12.00" reads as before.
 // v1.2.5 (shagtools.com/checkout, Maria 2026-11-02): the address was in form
 // fields (street, city, state select, ZIP), not in the text — Shipping now
 // also builds a candidate from the captured fields whose labels / names say
@@ -57,7 +68,7 @@
   var BILLING = /\b(?:billing|payment|card)\b/i;
   var TOTALS_START = /\b(?:sub\s*total|order\s+total|estimated\s+total|grand\s+total)\b/i;
   var TOTAL_LINE = /^(?:items?\s+)?(?:sub\s*total|order\s+total|estimated\s+total|grand\s+total|total|tax(?:es)?|estimated\s+tax|sales\s+tax|shipping|estimated\s+shipping|discount|savings|promotion)\b/i;
-  var NOISE = /^(?:now\$|now\s+\$|bought\s+\d|free\s+delivery|snap\b|best\s+seller|manufacturer\s+offer|saved\s+for\s+later|notify\s+me|skip\s+to|rollback|was\s+\$|sold\s+(?:and|&)\s+shipped|ships?\s+from|my\s+items|buy\s+again|reorder|add\s+to|cart|your\s+cart|basket|bag|items?\b|review|checkout|order\b|subtotal|total|tax|shipping|delivery|deliver|arrives|free\s+shipping|payment|pay\b|place\s+order|continue|edit|remove|save\s+for\s+later|move\s+to|change|add\b|apply|promo|coupon|gift|rewards|contact|email|phone|account|sign|secure|qty|quantity|price|each|sold\s+by|ship|pickup|in\s+stock|out\s+of\s+stock|select|choose|see\b|view|learn|earn|get\b|you\b|your\b|we\b|thank|hello|hi\b|name|address|city|state|zip|united\s+states|usa\b|visa|mastercard|amex|discover|card\b|ending\s+in|••••|\*\*\*\*|exp\b|cvv|billing|summary|details|estimated|protect|warranty|plan\b|add-on|recommended|also\b|customers|people|frequently|sponsored|more\b|multipack|subscri|one-?time|\d)/i;
+  var NOISE = /^(?:now\$|now\s+\$|bought\s+\d|free\s+delivery|snap\b|best\s+seller|manufacturer\s+offer|saved\s+for\s+later|notify\s+me|skip\s+to|rollback|was\s+\$|sold\s+(?:and|&)\s+shipped|ships?\s+from|my\s+items|buy\s+again|reorder|add\s+to|cart|your\s+cart|basket|bag|items?\b|review|checkout|order\b|subtotal|total|tax|shipping|delivery|deliver|arrives|free\s+shipping|payment|pay\b|place\s+order|continue|edit|remove|save\s+for\s+later|move\s+to|change|add\b|apply|promo|coupon|gift|rewards|contact|email|phone|account|sign|secure|qty|quantity|price|each|sold\s+by|ship|pickup|in\s+stock|out\s+of\s+stock|available\b|backorder|usually\s+ships|ready\s+to\s+ship|low\s+stock|limited\s+stock|only\s+\d|select|choose|see\b|view|learn|earn|get\b|you\b|your\b|we\b|thank|hello|hi\b|name|address|city|state|zip|united\s+states|usa\b|visa|mastercard|amex|discover|card\b|ending\s+in|••••|\*\*\*\*|exp\b|cvv|billing|summary|details|estimated|protect|warranty|plan\b|add-on|recommended|also\b|customers|people|frequently|sponsored|more\b|multipack|subscri|one-?time|\d)/i;
   var PROMO = /\b(?:promo(?:tion)?(?:\s*code)?|coupon|discount\s+code|code\s+applied|%\s*off|rewards?\s+applied|rewards?:|applied:?\s*-?\$)/i;
   // A promo line carries a code, an amount or a percent; "Have a promo code?" is a form prompt (v1.2.1).
   var PROMO_VALUE = /\$\s?\d|\d+(?:\.\d+)?\s*%|\b[A-Z0-9]{5,}\b/;
@@ -338,6 +349,41 @@
     var m = new RegExp("(?:^|\\n)[ \\t]*" + label + "\\b[^\\n$]{0,30}?(?:\\n[^\\n$]{0,12}?)?(" + MONEY_SRC + "|\\bfree\\b)", "i").exec(all);
     return m ? (/^free$/i.test(m[1]) ? "Free" : m[1].replace(/\s/g, "")) : null;
   }
+  var SHIP_LABEL = /^(?:estimated\s+)?shipping(?:\s*(?:&|and)\s*handling)?\b/i;
+  var METHOD_WORD = /\b(?:shipping|delivery|flat\s+rate|ground|express|standard|economy|expedited|priority|overnight|next[\s-]day|two[\s-]day|2[\s-]day|pickup|pick\s+up|ups|usps|fedex|dhl|freight|local|free)\b/i;
+  /** A shipping-method line: words plus a price or "free" — "Flat rate: $24.77", "Free shipping", "UPS Ground  $9.99". */
+  function methodLine(l) { return !!l && /[A-Za-z]{3}/.test(l) && METHOD_WORD.test(l) && (MONEY.test(l) || /\bfree\b/i.test(l)) && !TOTAL_LINE.test(l) && !PROMO.test(l); }
+  function methodAmount(l) { var m = money(l); return m ? m : (/\bfree\b/i.test(l) ? "Free" : null); }
+  /** v1.2.6: the shipping amount. "Shipping  $12.00" / "Shipping Free" / the amount on the next line read as before. When the label is followed by shipping METHODS instead ("Flat rate: $24.77" / "Free shipping" — WooCommerce lists its radios in the Shipping row), one method is its amount; several resolve by the checked radio (a "selected:" field naming the method), else by the method whose amount reconciles with Total (subtotal − discount + tax + shipping), else none — never the first option's price. */
+  function shippingAmount(page, all, t) {
+    var L = lines(all);
+    for (var i = 0; i < L.length; i++) {
+      if (!SHIP_LABEL.test(L[i])) continue;
+      var rest = L[i].replace(SHIP_LABEL, "").replace(/^[\s:·•|-]+/, "").trim();
+      if (rest && !methodLine(rest)) { var a = methodAmount(rest); if (a) return a; continue; }
+      var methods = [];
+      if (rest) methods.push(rest);
+      for (var j = i + 1; j < L.length && j <= i + 5; j++) {
+        if (!methods.length && !rest) { var a2 = methodAmount(L[j]); if (a2 && !methodLine(L[j]) && L[j].length <= 14) return a2; } // "Shipping" / "$12.00" on two lines (Walmart)
+        if (!methodLine(L[j])) break;
+        methods.push(L[j]);
+      }
+      if (!methods.length) continue;
+      if (methods.length === 1) return methodAmount(methods[0]);
+      // Several methods: the checked radio names one of them.
+      var sel = selectedFields(page).map(function (f) { return normName(String(f.label || "").replace(/^selected:\s*/i, "")); }).filter(Boolean);
+      var chosen = methods.filter(function (m) { var k = normName(m); return sel.some(function (s) { return s.indexOf(k) >= 0 || k.indexOf(s) >= 0; }); });
+      if (chosen.length === 1) return methodAmount(chosen[0]);
+      // Else the one whose amount reconciles with Total.
+      if (t.total && t.subtotal) {
+        var base = toNum(t.subtotal) - (t.discount ? Math.abs(toNum(t.discount)) : 0) + (t.tax ? toNum(t.tax) : 0), total = toNum(t.total);
+        var fits = methods.filter(function (m) { var a3 = methodAmount(m); return a3 != null && Math.abs(base + (a3 === "Free" ? 0 : toNum(a3)) - total) < 0.011; });
+        if (fits.length === 1) return methodAmount(fits[0]);
+      }
+      return null;
+    }
+    return null;
+  }
   function extractTotals(page) {
     var all = String(page.text || "");
     var t = {};
@@ -345,8 +391,8 @@
     // "You saved $36.12 today" is a discount candidate, never the total.
     var disc = amount(all, "(?:(?:total\\s+)?(?:discounts?|savings)|you\\s+saved?)"); if (disc) t.discount = disc;
     var tax = amount(all, "(?:estimated\\s+|sales\\s+)?tax(?:es)?"); if (tax) t.tax = tax;
-    var ship = amount(all, "(?:estimated\\s+)?shipping(?:\\s*(?:&|and)\\s*handling)?"); if (ship) t.shipping = ship;
     var tot = amount(all, "(?:order\\s+|estimated\\s+|grand\\s+)?total(?!\\s*(?:savings|saved))"); if (tot) t.total = tot;
+    var ship = shippingAmount(page, all, t); if (ship) t.shipping = ship;
     return t;
   }
 

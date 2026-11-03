@@ -205,7 +205,7 @@ describe("buckets: v1.2.3 — product rows with a plain-text quantity or no quan
     expect(b.products).toEqual([kicker]);
     expect(b.shipping).toMatchObject({ street: "805 Grandy Ave" });
     expect(b.payment.cards[0]).toMatchObject({ last4: "4242" });
-    expect(b.totals).toMatchObject({ subtotal: "$133.95", shipping: "$12.00", total: "$132.56" });
+    expect(b.totals).toMatchObject({ subtotal: "$133.95", shipping: "Free", total: "$120.56" });
   });
   it("(a) the mark in every spelling and position: 'x 15', '15 ×', '(x15)', on the title line, on the total's line, in one tab-joined row; two monies keep the printed unit price", () => {
     const title = "Shag Carpet Kicker Pro 12 Inch Adjustable Head";
@@ -240,7 +240,7 @@ describe("buckets: v1.2.3 — product rows with a plain-text quantity or no quan
     c = applyPage(c, cart, "www.shagtools.com", "2026-11-02T22:00:01.000Z");
     const d = debugText(c, "2026-11-02T22:05:00.000Z");
     const L = d.split("\n");
-    expect(L[0]).toBe("AsinFlow capture · www.shagtools.com · 2 pages · 15 tab-joined lines · copied 2026-11-02T22:05:00.000Z · card numbers were masked in the page");
+    expect(L[0]).toBe("AsinFlow capture · www.shagtools.com · 2 pages · 16 tab-joined lines · copied 2026-11-02T22:05:00.000Z · card numbers were masked in the page");
     expect(L[2]).toBe("=== page 1 · step cart · https://www.shagtools.com/cart · cart · captured 2026-11-02T22:00:01.000Z · " + cart.text.length + " chars ===");
     expect(d).toContain("\n" + cart.text + "\n--- fields (1) ---\n" + JSON.stringify({ label: "quantity", value: "15" }) + "\n");
     expect(d).toContain("=== page 2 · step review · https://www.shagtools.com/checkout · Checkout · captured 2026-11-02T22:00:02.000Z");
@@ -271,6 +271,45 @@ describe("buckets: v1.2.3 — product rows with a plain-text quantity or no quan
     const options = readFileSync(resolve(__dirname, "../chrome-extension/options.js"), "utf8");
     expect(options).toMatch(/chrome\.storage\.sync\.set\(\{ serverUrl, autoOpen, debugCapture \}/);
     expect(readFileSync(resolve(__dirname, "../chrome-extension/options.html"), "utf8")).toMatch(/id="debug-capture"/);
+  });
+});
+
+// v1.2.6 (Maria 2026-11-03, the first real "Copy page text" from shagtools.com/checkout): the product row read "× 10" / "Available on backorder" / $89.30 and Products stayed empty — the availability line looked like a new title. Totals showed Shipping $24.77 on a page whose Total was $89.30: the Shipping row lists the shipping methods (WooCommerce radios) and the old rule took the first money after the label.
+describe("buckets: v1.2.6 — availability lines are noise; a shipping-method list resolves by the checked radio or by Total", () => {
+  const pg = (text: string, fields: { label: string; value: string }[] = []) => ({ step: "review", url: "https://www.shagtools.com/checkout", title: "Checkout", text, fields });
+  const title = "Shag Carpet Kicker Pro 12 Inch Adjustable Head";
+  const ten = { name: title, qty: 10, price: "$8.93", total: "$89.30", sku: null };
+  it("the real row: title × 10, 'Available on backorder', $89.30 — in every line / tab arrangement — is one product, qty 10, unit price derived", () => {
+    for (const rows of [`${title} × 10\nAvailable on backorder\n$89.30`, `${title}\n× 10\nAvailable on backorder\n$89.30`, `${title} × 10\nAvailable on backorder\t$89.30`, `${title}\nAvailable on backorder\n× 10\n$89.30`, `Product\tSubtotal\n${title} × 10\nAvailable on backorder\t$89.30`])
+      expect(extractProducts(pg(`Your order\n${rows}\nSubtotal\t$89.30\nTotal\t$89.30`)), rows).toEqual([ten]);
+    // every availability wording is noise — never a title, never the end of a block
+    for (const avail of ["Available on backorder", "Backordered", "Usually ships in 2-3 days", "Ships in 5 business days", "Low stock", "Only 3 left in stock", "In stock", "Out of stock"])
+      expect(extractProducts(pg(`Your order\n${title} × 10\n${avail}\n$89.30\nSubtotal\t$89.30`)), avail).toEqual([ten]);
+  });
+  it("Totals: the Shipping row lists the methods — the one whose amount reconciles with Total wins (Free when Total = Subtotal), a checked radio decides first, an unresolvable list leaves Shipping empty, one method is its amount", () => {
+    const woo = (total: string, order = "Flat rate: $24.77\nFree shipping") => `Subtotal\t$89.30\nShipping\t${order}\nTaxes\t$0.00\nTotal\t${total}`;
+    expect(extractBuckets(pg(woo("$89.30"))).totals).toEqual({ subtotal: "$89.30", tax: "$0.00", total: "$89.30", shipping: "Free" });
+    expect(extractBuckets(pg(woo("$89.30", "Free shipping\nFlat rate: $24.77"))).totals).toMatchObject({ shipping: "Free" });
+    expect(extractBuckets(pg(woo("$114.07"))).totals).toMatchObject({ shipping: "$24.77" });
+    expect(extractBuckets(pg(`Subtotal\t$89.30\nShipping\nFlat rate: $24.77\nFree shipping\nTotal\t$89.30`)).totals).toMatchObject({ shipping: "Free" }); // the label on its own line
+    // the checked radio names the method, whatever Total says
+    expect(extractBuckets(pg(woo("$89.30"), [{ label: "selected: Flat rate: $24.77", value: "checked" }])).totals).toMatchObject({ shipping: "$24.77" });
+    expect(extractBuckets(pg(woo("$114.07"), [{ label: "selected: Free shipping", value: "checked" }])).totals).toMatchObject({ shipping: "Free" });
+    // nothing decides → no Shipping figure, never the first option's price
+    expect(extractBuckets(pg(`Shipping\nFlat rate: $24.77\nFree shipping\nTotal\t$1.00`)).totals).toEqual({ total: "$1.00" });
+    expect(extractBuckets(pg(`Subtotal\t$89.30\nShipping\nFlat rate: $24.77\nUPS Ground $9.99\nTotal\t$100.00`)).totals).not.toHaveProperty("shipping");
+    // one method listed is the shipping
+    expect(extractBuckets(pg(`Subtotal\t$89.30\nShipping\tGround $12.00\nTotal\t$101.30`)).totals).toMatchObject({ shipping: "$12.00" });
+    // with a discount in the reconciliation
+    expect(extractBuckets(pg(`Discount code SHAGTOOLS10\t−$13.39\nSubtotal\t$133.95\nShipping\tFree shipping\nFlat rate: $24.77\nTaxes\t$0.00\nTotal\t$120.56`)).totals).toMatchObject({ discount: "$13.39", shipping: "Free", total: "$120.56" });
+  });
+  it("Totals: a plain shipping amount reads exactly as before — on the label's line, 'Free', '& handling', Walmart's two lines, 'Shipping method' heading ignored", () => {
+    expect(extractBuckets(pg(`Subtotal\t$89.30\nShipping\t$12.00\nTotal\t$101.30`)).totals).toMatchObject({ shipping: "$12.00" });
+    expect(extractBuckets(pg(`Subtotal\t$89.30\nShipping\tFree\nTotal\t$89.30`)).totals).toMatchObject({ shipping: "Free" });
+    expect(extractBuckets(pg(`Subtotal\t$89.30\nShipping & handling: $5.00\nTotal\t$94.30`)).totals).toMatchObject({ shipping: "$5.00" });
+    expect(extractBuckets(pg(`Subtotal (12 items)\n$95.64\nShipping\n$12.00\nTotal\n$107.64`)).totals).toMatchObject({ subtotal: "$95.64", shipping: "$12.00", total: "$107.64" });
+    expect(extractBuckets(pg(`Shipping method\nGround $12.00\nSubtotal\t$89.30\nShipping\t$12.00\nTotal\t$101.30`)).totals).toMatchObject({ shipping: "$12.00" });
+    expect(extractBuckets(pg(`Free shipping on orders over $199\nSubtotal\t$89.30\nTotal\t$89.30`)).totals).toEqual({ subtotal: "$89.30", total: "$89.30" });
   });
 });
 

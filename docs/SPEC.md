@@ -2737,7 +2737,25 @@ not an Amazon product page the panel shows the capture UI instead of the
   town, state | province | region and zip | postal | postcode riding
   along (`fromFields: true`); the street is matched against the two known
   addresses exactly as before (`normStreet`), and the panel shows
-  "Velocity · 805 Grandy Ave (Norfolk, Virginia 23504)". **Clear**;
+  "Velocity · 805 Grandy Ave (Norfolk, Virginia 23504)". **v1.2.6
+  (shagtools.com/checkout, Maria 2026-11-03, the first real "Copy page
+  text"): availability lines and shipping-method lists.** The review
+  table's product row read "… × 10" / "Available on backorder" / "$89.30":
+  the availability line passed as a new title and cut the block before its
+  money, so Products stayed empty — availability lines (available,
+  backorder, usually ships, low stock, only N left) are noise now, like "in
+  stock" / "out of stock" already were. And Totals showed Shipping $24.77
+  on a page whose Total was $89.30: WooCommerce's Shipping row lists the
+  shipping METHODS ("Flat rate: $24.77", "Free shipping" — its radios) and
+  the old rule took the first money after the label. `shippingAmount`: a
+  plain amount on the label's line or the next ("Shipping  $12.00",
+  "Shipping Free", Walmart's two lines) reads as before; one method line is
+  its amount; several resolve by the checked radio (a "selected:" field
+  naming the method), else by the method whose amount reconciles with
+  Total (subtotal − discount + tax + shipping, "Free" = 0), else the
+  Shipping figure stays empty — never the first option's price. The totals
+  are read Subtotal / Discount / Tax / Total first so Shipping can
+  reconcile. **Clear**;
   caption "One AI call runs when you open it · card numbers are masked
   before anything leaves the browser". **Per tab:** the record lives under
   `capture:<tabId>` (`chrome.storage.session`); the panel shows the active
