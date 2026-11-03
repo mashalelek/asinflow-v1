@@ -14,6 +14,7 @@ import Home from "@/pages/home";
 import BulkCalc from "@/pages/bulk-calc";
 import Repricer from "@/pages/repricer";
 import Analytics from "@/pages/analytics";
+import Dashboard from "@/pages/dashboard";
 import ComingSoon from "@/pages/coming-soon";
 import PurchaseOrders, { PurchaseOrderDetailPlaceholder } from "@/pages/purchase-orders";
 import PoNew from "@/pages/po-new";
@@ -29,6 +30,8 @@ function Router() {
         </Route>
         <Route path="/asins" component={Home} />
         <Route path="/bulk-calc" component={BulkCalc} />
+        {/* SPEC §28: the Dashboard owns its ranges and never touches the global date range; /analytics is "ASIN Analytics" since 2026-11-03 (D1). */}
+        <Route path="/dashboard" component={Dashboard} />
         <Route path="/analytics" component={Analytics} />
         <Route path="/purchase-orders" component={PurchaseOrders} />
         <Route path="/purchase-orders/:id" component={PurchaseOrderDetailPlaceholder} />

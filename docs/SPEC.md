@@ -896,7 +896,13 @@ Items in order:
 
 - **AsinFlow** (logo, far left)
 - **ASINs** — active route
-- **Analytics** — active route
+- **Dashboard** — active route (2026-11-03, D1 of the Dashboard patch): the
+  Spend · Sales · Profit grid and charts (§28). Takes the slot Analytics
+  held. **Not** in the shared date-picker route list — it owns its ranges
+  (same rule as Repricer below).
+- **ASIN Analytics** — active route (was **Analytics** until 2026-11-03;
+  only the label / §8 row changed — the page, its global date picker,
+  `fba-include-inbound` toggle, grouping and export are untouched)
 - **POs** — active route: the **PO module frame** (§22) — list + read-only
   expanded view over the in-app PO database (768 imported 2026 orders). No
   longer a minimal shell. The toolbar hosts the "Upload to Velocity" action

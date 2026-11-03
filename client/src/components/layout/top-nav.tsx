@@ -1,6 +1,6 @@
 import { useLocation, Link } from "wouter";
 import { useTheme } from "@/components/theme-provider";
-import { Sun, Moon, Package, BarChart3, Calculator, ShoppingCart, CreditCard, TrendingUp, Truck, Settings, LogOut, UserRound, Repeat } from "lucide-react";
+import { Sun, Moon, Package, BarChart3, Calculator, ShoppingCart, CreditCard, TrendingUp, Truck, Settings, LogOut, UserRound, Repeat, LayoutDashboard } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import {
   DropdownMenu, DropdownMenuTrigger, DropdownMenuContent, DropdownMenuItem, DropdownMenuLabel, DropdownMenuSeparator,
@@ -20,7 +20,9 @@ interface NavItem {
 const NAV_ITEMS: NavItem[] = [
   { path: "/asins", label: "ASINs", icon: Package },
   { path: "/bulk-calc", label: "Bulk Calc", icon: Calculator },
-  { path: "/analytics", label: "Analytics", icon: BarChart3 },
+  // D1 (2026-11-02): Dashboard takes the slot Analytics held; the old page is "ASIN Analytics" right after it (SPEC §8, §28).
+  { path: "/dashboard", label: "Dashboard", icon: LayoutDashboard },
+  { path: "/analytics", label: "ASIN Analytics", icon: BarChart3 },
   { path: "/purchase-orders", label: "POs", icon: ShoppingCart },
   { path: "/subscriptions", label: "Subscriptions", icon: Repeat },
   { path: "/gift-cards", label: "Gift Cards", icon: CreditCard, disabled: true },
@@ -31,6 +33,8 @@ const NAV_ITEMS: NavItem[] = [
 // Routes that opt into the global date picker.
 // /purchase-orders dropped: the shell page has no date-driven content; the
 // Velocity upload dialog (§11) carries its own date-range picker.
+// /dashboard is deliberately absent (SPEC §28, same rule as §23 Repricer): its
+// ranges are page-local and must never read or mutate the global range.
 const DATE_PICKER_ROUTES = ["/", "/asins", "/analytics"];
 // Routes that expose a Settings icon (each page owns its own dialog and
 // listens for the custom event below).
