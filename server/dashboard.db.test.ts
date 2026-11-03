@@ -173,7 +173,8 @@ describe("Dashboard series on the real schema (rolled back)", () => {
       expect(m.points[m.points.length - 1].sales).not.toBeNull();
       const g = await loadGrid(q, 4, { from, to: first }, NOW);
       expect(g.columns[0].cells.sales.dataFrom).toBe(first);
-      expect(typeof cov.rebackfillPending).toBe("boolean");
+      // Pending only while sales_orders is empty: rows before the re-backfill's start day stay on the old basis by design.
+      expect(cov.rebackfillPending).toBe(cov.ordersFrom == null);
     });
   });
 });

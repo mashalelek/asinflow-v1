@@ -73,7 +73,7 @@ export interface DashboardCoverage {
   lastSalesSyncAt: string | null;
   /** Earliest sales_orders.sale_date — null until the Pacific-day re-backfill has run. */
   ordersFrom: string | null;
-  /** sales_orders does not yet cover sales_daily: `npm run backfill:sales` has not run since the Pacific switch. */
+  /** sales_orders is still empty: `npm run backfill:sales` has not run since the Pacific switch (rows before its start day stay on the old basis — ordersFrom later than earliestSaleDate is the normal end state). */
   rebackfillPending: boolean;
 }
 

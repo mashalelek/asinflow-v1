@@ -103,7 +103,13 @@ export async function loadCoverage(query: QueryLike): Promise<DashboardCoverage>
     newestSaleDate: r.newest ?? null,
     lastSalesSyncAt: r.last_sync ? new Date(r.last_sync).toISOString() : null,
     ordersFrom,
-    rebackfillPending: earliest != null && (ordersFrom == null || ordersFrom > earliest),
+    // Pending only while sales_orders is EMPTY. Rows before the re-backfill's
+    // start day (the first day Amazon's report still returned — 2024-10-31 on
+    // 2026-11-03) are left on the old basis on purpose, so an orders start
+    // later than the sales start is the expected end state, not a pending
+    // backfill; the header then says "orders from <date>" and the per-cell
+    // dataFrom markers cover the columns that reach before it.
+    rebackfillPending: earliest != null && ordersFrom == null,
   };
 }
 

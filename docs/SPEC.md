@@ -7950,9 +7950,16 @@ Placeholder = "—" with the tooltip "after the Finances API patch"
 **Coverage guard** (the §23 rule): a Sales cell whose column starts before
 the earliest `sale_date` shows its value with "data from <date>"; the
 header shows once "Sales through <newest sale_date> · synced <last
-component-19 run> · data from <earliest>", and — while `sales_orders` does
-not yet cover `sales_daily` (`coverage.rebackfillPending`) — "Orders from
-<date> / not loaded yet — run `backfill:sales` for the Pacific-day basis".
+component-19 run> · data from <earliest>", and — while `sales_orders` is
+still empty (`coverage.rebackfillPending`) — "Orders not loaded yet — run
+`backfill:sales` for the Pacific-day basis". Once it has rows, an orders
+start later than the sales start is the normal end state (the re-backfill
+begins at the first day Amazon still returns and the rows before it stay on
+the old basis): the header says "Orders from <date> (earlier sales stay on
+the old day basis)" and the per-cell markers cover columns that reach
+before it. Production 2026-11-03: job #417, 25 chunks, 0 failed,
+`sales_orders` 34,239 rows from 2024-10-31; `sales_daily` 2024-09-09 →
+2026-11-03.
 Spend needs no guard (POs are complete back to the import floor).
 
 ### Charts (`GET /api/dashboard/series?kind=running30|monthly|weekly&from&to`)

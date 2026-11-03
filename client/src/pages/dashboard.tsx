@@ -62,7 +62,10 @@ export default function Dashboard() {
           <div className="text-right text-xs text-muted-foreground" data-testid="dashboard-coverage">
             <div>Sales through <span className="text-foreground">{cov.newestSaleDate ? fmtRangeLabel(cov.newestSaleDate, cov.newestSaleDate) : "—"}</span> · synced {fmtTime(cov.lastSalesSyncAt)}{cov.earliestSaleDate ? ` · data from ${fmtRangeLabel(cov.earliestSaleDate, cov.earliestSaleDate)}` : ""}</div>
             {cov.rebackfillPending && (
-              <div data-testid="dashboard-rebackfill-pending">Orders {cov.ordersFrom ? `from ${fmtRangeLabel(cov.ordersFrom, cov.ordersFrom)}` : "not loaded yet"} — run <code className="font-mono">backfill:sales</code> for the Pacific-day basis</div>
+              <div data-testid="dashboard-rebackfill-pending">Orders not loaded yet — run <code className="font-mono">backfill:sales</code> for the Pacific-day basis</div>
+            )}
+            {!cov.rebackfillPending && cov.ordersFrom && cov.earliestSaleDate && cov.ordersFrom > cov.earliestSaleDate && (
+              <div data-testid="dashboard-orders-from">Orders from {fmtRangeLabel(cov.ordersFrom, cov.ordersFrom)} (earlier sales stay on the old day basis)</div>
             )}
           </div>
         )}

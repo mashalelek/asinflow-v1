@@ -396,8 +396,9 @@ Render's running server executes it — watch the jobs dialog). Start no
 earlier than the first day the report returns (2024-10-31 on 2026-11-03):
 Amazon's orders report has a retention horizon, a header-only answer
 leaves the window alone, but the horizon can fall mid-chunk. The
-Dashboard's coverage header says "run backfill:sales" until `sales_orders`
-covers `sales_daily`.**
+Dashboard's coverage header says "run backfill:sales" while `sales_orders`
+is empty; afterwards "Orders from <date>" is the normal end state. Done on
+production 2026-11-03 (job #417, from 2024-10-31).**
 
 **Verifying a job locally without a login cookie:** `INSERT INTO jobs
 (kind, trigger, target, include_daily, scope_asins[, components])` and
