@@ -4,6 +4,8 @@
 // 5.22 like the two earlier opentip POs. The ASINs page's COGS follows at the next
 // pass (component 9, runSheetsSync: newest non-canceled PO row per ASIN).
 //   tsx script/fix-po-cost.ts --order 6433257 --asin B07J9QQDSS --cost 5.22 [--prod] [--live]
+// `--sourcing <amount>` / `--paid <amount>` set the row's sourcing cost / paid cost the same
+// way (any combination of the three; Maria 2026-11-02: align 6433257's to 5.22 too).
 // Dry run by default. `--prod` reads .env.production.local (script/env.ts).
 import "./env";
 import { Pool } from "pg";
@@ -11,8 +13,12 @@ import { editAsinRow } from "../server/po-edit";
 import { loadAfAsinCostMap } from "../server/po-af-source";
 
 const arg = (k: string) => { const i = process.argv.indexOf(k); return i >= 0 ? process.argv[i + 1] : undefined; };
-const order = arg("--order"), asin = (arg("--asin") ?? "").toUpperCase(), cost = arg("--cost"), live = process.argv.includes("--live");
-if (!order || !/^B0[A-Z0-9]{8}$/.test(asin) || !cost || !/^\d+(\.\d{1,2})?$/.test(cost)) { console.error("usage: --order <order id> --asin <ASIN> --cost <amount> [--prod] [--live]"); process.exit(2); }
+const order = arg("--order"), asin = (arg("--asin") ?? "").toUpperCase(), live = process.argv.includes("--live");
+const AMOUNT = /^\d+(\.\d{1,2})?$/;
+const FLAGS: Array<[string, string]> = [["--cost", "cost_per_unit"], ["--sourcing", "sourcing_cost"], ["--paid", "paid_cost"]];
+const edits: Record<string, string> = {};
+for (const [flag, field] of FLAGS) { const v = arg(flag); if (v == null) continue; if (!AMOUNT.test(v)) { console.error(`${flag} must be an amount with up to 2 decimals`); process.exit(2); } edits[field] = Number(v).toFixed(2); }
+if (!order || !/^B0[A-Z0-9]{8}$/.test(asin) || Object.keys(edits).length === 0) { console.error("usage: --order <order id> --asin <ASIN> [--cost <amount>] [--sourcing <amount>] [--paid <amount>] [--prod] [--live]"); process.exit(2); }
 
 (async () => {
   const pool = new Pool({ connectionString: process.env.DATABASE_URL, ssl: /render\.com/.test(process.env.DATABASE_URL ?? "") ? { rejectUnauthorized: false } : undefined });
@@ -34,10 +40,10 @@ if (!order || !/^B0[A-Z0-9]{8}$/.test(asin) || !cost || !/^\d+(\.\d{1,2})?$/.tes
     console.log(`${po.supplier} ${po.order_id} (${po.ships_to}, ${po.cost_formula_version == null ? "sheet-imported" : "formula v" + po.cost_formula_version}), ASIN row ${paId}`);
     console.log(`before: ${await state(paId)}`);
     await query("BEGIN");
-    const res = await editAsinRow(query, paId, { cost_per_unit: Number(cost).toFixed(2) }, null);
+    const res = await editAsinRow(query, paId, edits, null);
     console.log(`changes: ${res.changes.length === 0 ? "none" : res.changes.map((c) => `${c.field} ${c.old ?? "∅"} → ${c.new ?? "∅"}`).join("; ")}; auto-close: ${res.close.changed ?? (res.close.closed ? "stays closed" : "stays open")}`);
     console.log(`${live ? "after" : "after (dry run, rolled back)"}: ${await state(paId)}`);
-    const log = (await query(`SELECT field, old_value, new_value, at FROM po_edit_log WHERE po_id = $1 AND entity_id = $2 AND field = 'cost_per_unit' ORDER BY at DESC LIMIT 3`, [po.id, paId])).rows;
+    const log = (await query(`SELECT field, old_value, new_value, at FROM po_edit_log WHERE po_id = $1 AND entity_id = $2 AND field = ANY($3::text[]) ORDER BY at DESC LIMIT 6`, [po.id, paId, Object.keys(edits)])).rows;
     console.log(`History: ${JSON.stringify(log)}`);
     if (!live) { await query("ROLLBACK"); console.log("dry run — rolled back; add --live to write"); return; }
     await query("COMMIT");
