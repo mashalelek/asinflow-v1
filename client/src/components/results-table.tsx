@@ -2180,7 +2180,7 @@ export function renderCell(
               {result.stock?.on_order ?? 0}
             </Link>
           </TooltipTrigger>
-          <TooltipContent side="top" className="text-xs">On Order = Σ POs since reconciliation start (open or closed): Ordered − Canceled − Returned − Lost/damaged − Shipped FBA · click for the POs</TooltipContent>
+          <TooltipContent side="top" className="text-xs">On Order = Σ open POs since reconciliation start: Ordered − Canceled − Returned − Lost/damaged − Shipped FBA (a closed PO counts 0) · click for the POs</TooltipContent>
         </Tooltip>
       );
     case "atPrep":

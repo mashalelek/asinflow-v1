@@ -15,9 +15,17 @@ describe("computePipeline", () => {
     const p = computePipeline([row({ asin: "B0091CZ7WO", closed: true, reconciled: false, qty: 12 }), row({ asin: "B0091CZ7WO", reconciled: false, qty: 5 })]).get("B0091CZ7WO")!;
     expect(p).toEqual({ on_order: 0, at_prep: 0, open_po_count: 1 });
   });
-  it("target.com 912003733645362 — a CLOSED reconciled PO still counts: Topps 2 ordered, 0 shipped, 2 at Velocity → On Order 2 / At Prep 2 (§2.4 supersedes D1)", () => {
+  it("a CLOSED PO contributes 0 to On Order, always (Maria 2026-11-02, reverting §2.4): walmart 200014971489745 B071G486Q7, ships_to home, 2 ordered, shipped FBA NULL, closed by the sheet → On Order 0; target.com 912003733645362 (2 ordered, 0 shipped, 2 at Velocity) → On Order 0 / At Prep 2 — a wrong Closed is fixed by reopening", () => {
+    expect(computePipeline([row({ asin: "B071G486Q7", closed: true, qty: "2.00", qty_shipped_fba: null })]).get("B071G486Q7")).toEqual({ on_order: 0, at_prep: 0, open_po_count: 0 });
     const p = computePipeline([row({ asin: "B0HGP5P91F", closed: true, qty: 2, qty_shipped_fba: null, qty_at_prep: "2.00" })]).get("B0HGP5P91F")!;
-    expect(p).toEqual({ on_order: 2, at_prep: 2, open_po_count: 0 });
+    expect(p).toEqual({ on_order: 0, at_prep: 2, open_po_count: 0 });
+    // the same row reopened counts its full expected again
+    expect(computePipeline([row({ asin: "B0HGP5P91F", closed: false, qty: 2, qty_shipped_fba: null, qty_at_prep: "2.00" })]).get("B0HGP5P91F")).toEqual({ on_order: 2, at_prep: 2, open_po_count: 1 });
+    // mixed: only the open row's remainder is On Order; At Prep sums both
+    expect(computePipeline([
+      row({ asin: "B0F9LRJ9BT", closed: true, qty: 3, qty_shipped_fba: null, qty_at_prep: "1.00" }),
+      row({ asin: "B0F9LRJ9BT", closed: false, qty: 5, qty_shipped_fba: "2.00", qty_at_prep: "3.00" }),
+    ]).get("B0F9LRJ9BT")).toEqual({ on_order: 3, at_prep: 4, open_po_count: 1 });
   });
   it("open PO partly shipped: On Order = expected − shipped; At Prep from Velocity", () => {
     const p = computePipeline([

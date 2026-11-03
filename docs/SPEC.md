@@ -569,14 +569,23 @@ Orders sheet's open quantity that never decreased when units shipped) is
 **gone** (D2 — one number, one meaning). Two columns in the Stock group
 are computed live from `po_asins` ⋈ `purchase_orders` by
 `server/asin-po-pipeline.ts` (`loadAsinPipeline`, one query folded per
-ASIN; no stored column, D3), in ASIN / sellable-pack units, over **open
-and closed** POs alike (row-level Status patch §2.4, 2026-10-17 — the
-earlier "open POs only" rule (D1) let a wrong Closed hide real units,
-e.g. target.com 912003733645362):
+ASIN; no stored column, D3), in ASIN / sellable-pack units. **On Order
+counts open POs only — a closed PO contributes 0, always** (Maria
+2026-11-02, reverting row-level Status patch §2.4 of 2026-10-17, which had
+counted closed POs too so that a wrong Closed could not hide real units,
+e.g. target.com 912003733645362). Why: a closed PO that never reached
+Velocity — `ships_to = 'home'`, or shipped before tracking — keeps Shipped
+FBA NULL forever, so §2.4 left its whole Ordered on the ASINs page
+indefinitely (walmart 200014971489745 B071G486Q7, closed by the sheet
+2026-08-21, still showed 2 On Order; on production that day 22 such rows
+on 21 sheet-closed POs, 17 ASINs, 108.5 units —
+`docs/on-order-closed-po-before-after-2026-11-02.csv`, every one listed).
+A wrong Closed is fixed by reopening the PO, which counts it again. At
+Prep still sums every row, open or closed:
 
 | Column | Formula (Σ over the ASIN's `po_asins` rows) | Default |
 |---|---|---|
-| **On Order** | Σ max(Expected − Shipped FBA, 0), where Expected = Ordered − Canceled − Returned − Lost/damaged by us (NULLs read 0), over rows whose PO is dated on/after the **reconciliation start** (the earliest stored Velocity shipment, 2026-05-20; `VELOCITY_MIN_ORDER_DATE` when none is stored). Older rows contribute 0 — no shipment data exists for them | shown |
+| **On Order** | Σ max(Expected − Shipped FBA, 0), where Expected = Ordered − Canceled − Returned − Lost/damaged by us (NULLs read 0), over rows whose PO is **open** and dated on/after the **reconciliation start** (the earliest stored Velocity shipment, 2026-05-20; `VELOCITY_MIN_ORDER_DATE` when none is stored). A closed PO contributes 0, always (2026-11-02); older rows contribute 0 — no shipment data exists for them | shown |
 | **At Prep** | Σ At Prep Center — Velocity's quantity on every row | hidden |
 
 **Received by Velocity** (`po_asins.received_velocity`, Maria 2026-11-02)

@@ -3,15 +3,21 @@
 // docs/asins-on-order-preflight-2026-10-17.md). No stored column (D3): the
 // PO tables are the source, the Orders sheet's ordered_qty is no longer read.
 //
-// Per po_asins row (all ASIN / sellable-pack units), open AND closed POs
-// (patch row-level-status §2.4, 2026-10-17 — supersedes D1, because a wrong
-// Closed hid real units, e.g. target.com 912003733645362):
+// Per po_asins row (all ASIN / sellable-pack units):
 //   expected    = qty − canceled − returned − lost/damaged by us   (NULLs read 0)
-//   on_order    = max(expected − shipped_fba, 0)  only for POs dated on or after
-//                 the reconciliation start (earliest Velocity shipment;
+//   on_order    = max(expected − shipped_fba, 0)  only for OPEN POs dated on or
+//                 after the reconciliation start (earliest Velocity shipment;
 //                 VELOCITY_MIN_ORDER_DATE when none is stored) — older rows
-//                 have no shipment data and contribute 0
-//   at_prep     = qty_at_prep (Velocity's quantity), every row
+//                 have no shipment data and contribute 0, and a closed PO
+//                 contributes 0, always (Maria 2026-11-02: §2.4 of 2026-10-17
+//                 had counted closed POs too so a wrong Closed could not hide
+//                 units, but a closed PO that never reached Velocity — ships_to
+//                 'home', or shipped before tracking — keeps shipped_fba NULL
+//                 forever and so leaked its whole Ordered onto the ASINs page,
+//                 e.g. walmart 200014971489745 B071G486Q7, 22 rows / 108.5
+//                 units on production that day; a wrong Closed is fixed by
+//                 reopening the PO)
+//   at_prep     = qty_at_prep (Velocity's quantity), every row (open or closed)
 // Canceled / Returned are the §22 derived ASIN values (Σ line qty × yield,
 // ÷ N for bundles, NULL when any line is untracked → read 0 here). Inbound FBA / Pipeline were removed on
 // 2026-10-17 (clean-up): Amazon's own inbound ("Sent to FBA") covers the
@@ -49,7 +55,7 @@ export function computePipeline(rows: PipelineRow[]): Map<string, AsinPipeline> 
     const p = out.get(asin) ?? { on_order: 0, at_prep: 0, open_po_count: 0 };
     const expected = n(r.qty) - n(r.qty_canceled_asin) - n(r.qty_returned_asin) - n(r.qty_lost_damaged_us);
     const shipped = n(r.qty_shipped_fba);
-    if (r.reconciled) p.on_order += Math.max(expected - shipped, 0);
+    if (r.reconciled && !r.closed) p.on_order += Math.max(expected - shipped, 0);
     p.at_prep += n(r.qty_at_prep);
     if (!r.closed) p.open_po_count += 1;
     out.set(asin, p);

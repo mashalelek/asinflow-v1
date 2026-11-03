@@ -485,7 +485,8 @@ export default function PurchaseOrders() {
   const [velocityOpen, setVelocityOpen] = useState(false);
   // Deep link from the ASINs page's On Order cell (patch asins-on-order §3.2):
   // /purchase-orders?asin=B0… opens the list searched on that ASIN, Open and
-  // Closed (row-level Status §2.4: On Order counts closed POs too).
+  // Closed (On Order counts open POs only since 2026-11-02; the closed ones
+  // are still shown here for the history).
   const linkedAsin = (() => { try { return new URLSearchParams(window.location.search).get("asin")?.trim().toUpperCase() ?? ""; } catch { return ""; } })();
   const [search, setSearch] = useState(linkedAsin);
   const [debouncedSearch, setDebouncedSearch] = useState(linkedAsin);
