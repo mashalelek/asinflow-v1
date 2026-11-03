@@ -14,10 +14,12 @@ import { useToast } from "@/hooks/use-toast";
 import { InlineEdit, SelectEdit, poApi } from "@/components/po-edit";
 import type { PoAsinRowData, PoAsinLine } from "@/components/po-asin-rows";
 import { PAYMENT_METHODS, PROMO_TYPES, CASHBACK_STATUSES } from "@shared/po-form";
+import { MarkReceivedDialog, type DueRefundRow } from "@/components/refund-due-dialog";
 
 export interface PoPayment { id: number; method: string; nickname: string | null; last4: string | null; amount: string | null; gift_card_discount_pct: string | null; needs_review: boolean; raw_text: string | null }
 export interface PoPromo { id: number; type: string | null; description: string | null; amount: string | null; percent: string | null; counts_toward_cogs: boolean; raw_text: string | null; confidence: string | null; source: string }
-export interface PoRefund { id: number; po_line_item_id: string | null; product_name: string | null; qty: number | string | null; amount: string | null; refunded_at: string | null; method: string | null; nickname: string | null; last4: string | null; note: string | null; needs_split: boolean; source: string }
+/** status (migration 082): due = the supplier owes it; received = it arrived (Dashboard patch C1). */
+export interface PoRefund { id: number; po_line_item_id: string | null; product_name: string | null; qty: number | string | null; amount: string | null; refunded_at: string | null; method: string | null; nickname: string | null; last4: string | null; note: string | null; needs_split: boolean; source: string; status: "due" | "received" }
 
 const money = (v: string | number | null | undefined) => (v == null || v === "" ? "—" : `$${Number(v).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`);
 const sum = (rows: Array<{ amount: string | null }>) => rows.reduce((t, r) => t + (Number(r.amount) || 0), 0);
@@ -32,7 +34,9 @@ export function PoMoneyTab({ po, asins, payments, promos, refunds, onChanged }: 
   const [newPay, setNewPay] = useState({ method: "card", nickname: "", last4: "", amount: "" });
   const [newPromo, setNewPromo] = useState({ type: "coupon", description: "", amount: "", percent: "" });
   const lines = asins.flatMap((a) => (a.lines ?? []).map((l) => ({ ...l, asin: a.asin })));
-  const [newRefund, setNewRefund] = useState({ po_line_item_id: "", qty: "", amount: "", refunded_at: "", note: "" });
+  const [newRefund, setNewRefund] = useState({ po_line_item_id: "", qty: "", amount: "", refunded_at: "", note: "", status: "received" as "due" | "received" });
+  const [receiving, setReceiving] = useState<DueRefundRow | null>(null);
+  const due = refunds.filter((r) => r.status === "due"), received = refunds.filter((r) => r.status !== "due");
   const total = Number(po.order_total) || 0, paid = sum(payments);
   const imported = po.cost_formula_version == null;
 
@@ -104,12 +108,13 @@ export function PoMoneyTab({ po, asins, payments, promos, refunds, onChanged }: 
       <section className="space-y-2" data-testid="po-refunds">
         <div className="flex items-baseline justify-between">
           <h3 className="text-[11px] font-semibold uppercase tracking-wider text-muted-foreground">Refunds</h3>
-          <span className="text-xs text-muted-foreground">{refunds.length ? `${money(sum(refunds))} refunded` : Number(po.refund_amount) > 0 ? `sheet refund amount ${money(po.refund_amount)}` : ""}</span>
+          <span className="text-xs text-muted-foreground" data-testid="po-refunds-summary">{[received.length ? `${money(sum(received))} received` : null, due.length ? `${money(sum(due))} due` : null].filter(Boolean).join(" · ") || (Number(po.refund_amount) > 0 ? `sheet refund amount ${money(po.refund_amount)}` : "")}</span>
         </div>
+        <MarkReceivedDialog refund={receiving} onClose={() => setReceiving(null)} onSaved={onChanged} />
         <table className="w-full border-collapse text-sm" style={{ border: "0.5px solid hsl(var(--border))" }}>
-          <thead><tr className="table-header-stone"><th className={th}>Line</th><th className={`${th} text-right`}>Qty</th><th className={`${th} text-right`}>Amount</th><th className={th}>Date</th><th className={th}>Method</th><th className={th}>Note</th><th className={th}></th></tr></thead>
+          <thead><tr className="table-header-stone"><th className={th}>Line</th><th className={`${th} text-right`}>Qty</th><th className={`${th} text-right`}>Amount</th><th className={th}>Status</th><th className={th}>Date</th><th className={th}>Method</th><th className={th}>Note</th><th className={th}></th></tr></thead>
           <tbody>
-            {refunds.length === 0 && <tr><td colSpan={7} className="px-3 py-2 text-xs text-muted-foreground">No refunds.</td></tr>}
+            {refunds.length === 0 && <tr><td colSpan={8} className="px-3 py-2 text-xs text-muted-foreground">No refunds.</td></tr>}
             {refunds.map((r) => (
               <tr key={r.id} className="table-zebra-stone" style={hairline} data-testid={`row-refund-${r.id}`}>
                 <td className="px-3 py-1.5 text-xs">
@@ -122,6 +127,11 @@ export function PoMoneyTab({ po, asins, payments, promos, refunds, onChanged }: 
                 </td>
                 <td className="px-3 py-1.5 text-right"><InlineEdit value={r.qty} onSave={patch(`/api/pos/refunds/${r.id}`, "qty")} align="right" width="w-14" testId={`refund-qty-${r.id}`}>{r.qty ?? <Muted v="—" />}</InlineEdit></td>
                 <td className="px-3 py-1.5 text-right font-mono"><InlineEdit money value={r.amount} onSave={patch(`/api/pos/refunds/${r.id}`, "amount")} align="right" width="w-20" testId={`refund-amount-${r.id}`}>{money(r.amount)}</InlineEdit></td>
+                <td className="px-3 py-1.5 text-xs whitespace-nowrap" data-testid={`refund-status-${r.id}`}>
+                  {r.status === "due"
+                    ? <>due <button onClick={() => setReceiving(r)} className="ml-1.5 text-[10px] underline-offset-2 hover:underline text-muted-foreground hover:text-foreground" data-testid={`button-refund-mark-received-${r.id}`}>Mark received</button></>
+                    : <span className="text-muted-foreground">received</span>}
+                </td>
                 <td className="px-3 py-1.5 text-xs"><InlineEdit value={r.refunded_at} onSave={patch(`/api/pos/refunds/${r.id}`, "refunded_at")} width="w-28" testId={`refund-date-${r.id}`}>{r.refunded_at ?? <Muted v="—" />}</InlineEdit></td>
                 <td className="px-3 py-1.5"><SelectEdit value={r.method ?? ""} options={["", ...PAYMENT_METHODS]} onSave={patch(`/api/pos/refunds/${r.id}`, "method")} testId={`refund-method-${r.id}`} /></td>
                 <td className="px-3 py-1.5 text-xs"><InlineEdit value={r.note} onSave={patch(`/api/pos/refunds/${r.id}`, "note")} width="w-56" testId={`refund-note-${r.id}`}><span className="truncate block max-w-[16rem] text-muted-foreground" title={r.note ?? ""}>{r.note ?? "—"}</span></InlineEdit></td>
@@ -136,9 +146,10 @@ export function PoMoneyTab({ po, asins, payments, promos, refunds, onChanged }: 
           </select>
           <Input value={newRefund.qty} onChange={(e) => setNewRefund({ ...newRefund, qty: e.target.value })} placeholder="qty" className="h-8 w-14 text-right text-xs" data-testid="input-add-refund-qty" />
           <Input value={newRefund.amount} onChange={(e) => setNewRefund({ ...newRefund, amount: e.target.value })} placeholder="$" className="h-8 w-20 text-right text-xs" data-testid="input-add-refund-amount" />
-          <input type="date" value={newRefund.refunded_at} onChange={(e) => setNewRefund({ ...newRefund, refunded_at: e.target.value })} className="h-8 rounded-md border border-input bg-background px-2 text-xs" data-testid="input-add-refund-date" />
+          <select value={newRefund.status} onChange={(e) => setNewRefund({ ...newRefund, status: e.target.value as "due" | "received" })} className="h-8 rounded border border-input bg-background px-1 text-xs" title="due = the supplier owes it; received = it arrived" data-testid="select-add-refund-status"><option value="received">received</option><option value="due">due</option></select>
+          {newRefund.status === "received" && <input type="date" value={newRefund.refunded_at} onChange={(e) => setNewRefund({ ...newRefund, refunded_at: e.target.value })} className="h-8 rounded-md border border-input bg-background px-2 text-xs" data-testid="input-add-refund-date" />}
           <Input value={newRefund.note} onChange={(e) => setNewRefund({ ...newRefund, note: e.target.value })} placeholder="note" className="h-8 w-40 text-xs" data-testid="input-add-refund-note" />
-          <Button size="sm" variant="outline" onClick={() => void call(`/api/pos/${po.id}/refunds`, "POST", { ...newRefund, po_line_item_id: newRefund.po_line_item_id || null, needs_split: !newRefund.po_line_item_id }).then(() => setNewRefund({ po_line_item_id: "", qty: "", amount: "", refunded_at: "", note: "" }))} data-testid="button-add-refund"><Plus className="h-3.5 w-3.5 mr-1" /> Refund</Button>
+          <Button size="sm" variant="outline" onClick={() => void call(`/api/pos/${po.id}/refunds`, "POST", { ...newRefund, refunded_at: newRefund.status === "due" ? null : newRefund.refunded_at, po_line_item_id: newRefund.po_line_item_id || null, needs_split: !newRefund.po_line_item_id }).then(() => setNewRefund({ po_line_item_id: "", qty: "", amount: "", refunded_at: "", note: "", status: "received" }))} data-testid="button-add-refund"><Plus className="h-3.5 w-3.5 mr-1" /> Refund</Button>
         </div>
       </section>
 

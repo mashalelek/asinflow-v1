@@ -23,6 +23,7 @@ import { useToast } from "@/hooks/use-toast";
 import { fmtQty, productQtyFromAsin } from "@/lib/po-qty";
 import type { PoAsinRowData, PoAsinLine } from "@/components/po-asin-rows";
 import { MoneyCalcInput, calcMoney } from "@/components/money-calc-input";
+import { RefundProposalDialog, type PoHeaderMoney, type CanceledLine } from "@/components/refund-due-dialog";
 
 export const ORDER_ID_WARNING = "order # is how shipments are matched from Velocity; changing it re-matches on the next Sync Shipments";
 
@@ -214,10 +215,19 @@ function QtyText({ v }: { v: number | string | null | undefined }) { const t = f
 
 type LineWithParent = PoAsinLine & { parent: PoAsinRowData };
 
-export function PoProductsTable({ poId, asins, onChanged }: { poId: string; asins: PoAsinRowData[]; onChanged: () => void }) {
+export function PoProductsTable({ poId, asins, onChanged, po }: { poId: string; asins: PoAsinRowData[]; onChanged: () => void; /** The header money the due-refund proposal allocates with (Dashboard patch C1). */ po?: PoHeaderMoney }) {
   const { toast } = useToast();
   const lines: LineWithParent[] = asins.flatMap((a) => (a.lines ?? []).map((l) => ({ ...l, parent: a })));
-  const patch = (l: LineWithParent, field: string) => async (v: string) => { await poApi(`/api/pos/lines/${l.id}`, "PATCH", { [field]: v }); onChanged(); };
+  // Cancel qty (C1): raising a line's Canceled proposes a DUE refund row for the added qty; saving the cancel without one is allowed (Skip).
+  const [proposal, setProposal] = useState<CanceledLine[]>([]);
+  const patch = (l: LineWithParent, field: string) => async (v: string) => {
+    await poApi(`/api/pos/lines/${l.id}`, "PATCH", { [field]: v });
+    if (field === "qty_canceled") {
+      const added = (Number(v) || 0) - (Number(l.qty_canceled) || 0);
+      if (added > 0) setProposal([{ lineId: l.id, productName: l.product_name, qty: added, price: l.price }]);
+    }
+    onChanged();
+  };
   const remove = async (l: LineWithParent) => {
     if (!window.confirm(`Remove "${l.product_name ?? "this product"}" from the PO?${(l.parent.lines ?? []).length === 1 ? ` It is the only product of ${l.parent.asin}, so that ASIN row goes too.` : ""}`)) return;
     try { await poApi(`/api/pos/lines/${l.id}`, "DELETE"); onChanged(); }
@@ -227,6 +237,7 @@ export function PoProductsTable({ poId, asins, onChanged }: { poId: string; asin
   const hairline = { borderBottom: "0.5px solid hsl(var(--border))" } as const;
   return (
     <div className="space-y-3">
+      <RefundProposalDialog po={po ?? { id: poId }} lines={proposal} onClose={() => setProposal([])} onSaved={onChanged} />
       <div className="w-full overflow-auto rounded-md" style={{ border: "0.5px solid hsl(var(--border))" }}>
         <table className="w-full border-collapse text-sm" data-testid="po-products-table">
           <thead>

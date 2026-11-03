@@ -7,6 +7,7 @@
  * up: the POs page shows the header once, under the first expanded PO, and
  * every later expanded PO's rows align with it.
  */
+import { RefundProposalDialog, type PoHeaderMoney, type CanceledLine } from "@/components/refund-due-dialog";
 import React, { useState } from "react";
 import { Link } from "wouter";
 import { StickyNote, ChevronRight, ChevronDown, AlertTriangle, Plus, X } from "lucide-react";
@@ -256,18 +257,29 @@ function ClearExtraUnits({ a, onChanged }: { a: PoAsinRowData; onChanged?: () =>
   );
 }
 
-/** "Mark canceled" (§2.2): every line of the ASIN gets qty_canceled = qty_ordered. */
-function MarkCanceled({ a, onChanged }: { a: PoAsinRowData; onChanged?: () => void }) {
+/** "Mark canceled" (§2.2): every line of the ASIN gets qty_canceled = qty_ordered — then one DUE refund row per newly canceled line is proposed (Dashboard patch C1; Skip allowed). */
+function MarkCanceled({ a, onChanged, po }: { a: PoAsinRowData; onChanged?: () => void; po?: PoHeaderMoney }) {
   const [err, setErr] = useState<string | null>(null);
+  const [proposal, setProposal] = useState<CanceledLine[]>([]);
   // §5.1: no cancel while this ASIN row has units shipped to FBA.
   const blocked = shipmentBlockText(a.shipments ?? []);
   if (blocked) return <span className="ml-1 text-[10px] text-muted-foreground/40 cursor-not-allowed" title={blocked} data-testid={`button-cancel-asin-${a.asin}-blocked`}>cancel</span>;
   const go = async (e: React.MouseEvent) => {
     e.stopPropagation(); setErr(null);
     if (!window.confirm(`Mark ${a.asin} canceled? Every product line of this ASIN gets Canceled = Ordered.`)) return;
-    try { await patchJson(`/api/pos/asin-rows/${a.id}/cancel`, "POST"); onChanged?.(); } catch (er: any) { setErr(er.message); }
+    try {
+      await patchJson(`/api/pos/asin-rows/${a.id}/cancel`, "POST");
+      // The lines as they were before the cancel: the newly canceled qty of each.
+      setProposal((a.lines ?? []).map((l) => ({ lineId: l.id, productName: l.product_name, qty: (Number(l.qty_ordered) || 0) - (Number(l.qty_canceled) || 0), price: l.price })).filter((l) => l.qty > 0));
+      onChanged?.();
+    } catch (er: any) { setErr(er.message); }
   };
-  return <button onClick={go} className="ml-1 text-[10px] text-muted-foreground hover:text-destructive" title={err ?? "Mark this ASIN canceled"} data-testid={`button-cancel-asin-${a.asin}`}>cancel</button>;
+  return (
+    <>
+      <button onClick={go} className="ml-1 text-[10px] text-muted-foreground hover:text-destructive" title={err ?? "Mark this ASIN canceled"} data-testid={`button-cancel-asin-${a.asin}`}>cancel</button>
+      <RefundProposalDialog po={po ?? { id: a.po_id }} lines={proposal} onClose={() => setProposal([])} onSaved={() => onChanged?.()} />
+    </>
+  );
 }
 
 /**
@@ -412,7 +424,7 @@ export function PoAsinHeaderRow({ sub = false }: { sub?: boolean }) {
 const hairline = { borderBottom: "0.5px solid hsl(var(--border))" } as const;
 
 /** One ASIN row (plus its bundle component lines when expanded). `editable` enables the hand-entered quantities and manual shipments. */
-export function PoAsinRow({ a, indent = false, editable = false, onChanged }: { a: PoAsinRowData; indent?: boolean; editable?: boolean; onChanged?: () => void }) {
+export function PoAsinRow({ a, indent = false, editable = false, onChanged, po }: { a: PoAsinRowData; indent?: boolean; editable?: boolean; onChanged?: () => void; /** The PO header money for the due-refund proposal after "cancel". */ po?: PoHeaderMoney }) {
   const [open, setOpen] = useState(false);
   const lines = a.lines ?? [];
   const multi = lines.length >= 2;
@@ -451,7 +463,7 @@ export function PoAsinRow({ a, indent = false, editable = false, onChanged }: { 
         <td className="px-3 py-1.5">{editable ? <SelectEdit value={a.sold_as} options={["individual", "multi-pack", "bundle"]} onSave={saveAsin("sold_as")} testId={`sold_as-${a.id}`} /> : a.sold_as}</td>
         <td className="px-3 py-1.5 text-right">{editable && a.sold_as !== "individual" ? <InlineEdit value={a.units_per_pack} onSave={saveAsin("units_per_pack")} align="right" width="w-14" testId={`units_per_pack-${a.id}`}>{a.units_per_pack}</InlineEdit> : a.units_per_pack}</td>
         <td className="px-3 py-1.5 text-right"><QtyCell v={individualUnits(Number(a.qty), a.units_per_pack)} /></td>
-        <td className="px-3 py-1.5 text-right"><QtyCell v={a.qty_canceled_asin} />{editable && (a.lines ?? []).length > 0 && <MarkCanceled a={a} onChanged={onChanged} />}</td>
+        <td className="px-3 py-1.5 text-right"><QtyCell v={a.qty_canceled_asin} />{editable && (a.lines ?? []).length > 0 && <MarkCanceled a={a} onChanged={onChanged} po={po} />}</td>
         <td className="px-3 py-1.5 text-right"><QtyCell v={a.qty_returned_asin} /></td>
         <td className="px-3 py-1.5 text-right">{editable ? <EditableQty rowId={a.id} col="qty_shipped_supplier" v={a.qty_shipped_supplier} onChanged={onChanged} /> : <QtyCell v={a.qty_shipped_supplier} />}</td>
         <td className="px-3 py-1.5 text-right" title={VELOCITY_QTY_TITLE}><QtyCell v={a.received_velocity} /></td>
@@ -487,13 +499,13 @@ export function PoAsinRow({ a, indent = false, editable = false, onChanged }: { 
 }
 
 /** A complete ASINs table (the detail tab). */
-export function PoAsinTable({ asins, testId = "po-asins-table", editable = false, onChanged }: { asins: PoAsinRowData[]; testId?: string; editable?: boolean; onChanged?: () => void }) {
+export function PoAsinTable({ asins, testId = "po-asins-table", editable = false, onChanged, po }: { asins: PoAsinRowData[]; testId?: string; editable?: boolean; onChanged?: () => void; po?: PoHeaderMoney }) {
   return (
     <div className="w-full overflow-auto rounded-md" style={{ border: "0.5px solid hsl(var(--border))" }}>
       <table className="w-full border-collapse text-sm table-fixed" style={{ minWidth: PO_ASIN_TABLE_MIN_WIDTH }} data-testid={testId}>
         <PoAsinColGroup />
         <thead><PoAsinHeaderRow /></thead>
-        <tbody>{asins.map((a) => <PoAsinRow key={a.id} a={a} editable={editable} onChanged={onChanged} />)}</tbody>
+        <tbody>{asins.map((a) => <PoAsinRow key={a.id} a={a} editable={editable} onChanged={onChanged} po={po} />)}</tbody>
       </table>
     </div>
   );

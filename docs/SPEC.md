@@ -5669,6 +5669,44 @@ skipped). **No stored COGS / AQ / AR / Y value is ever recomputed.**
   **Subscription renews** and **Review renewal PO** (§27), and
   **Subscription may be active** (migration 076, §27).
 
+### Refunds: due and received (Dashboard patch, 2026-11-03; migration 082)
+
+`po_line_refunds.status ∈ {due, received}` (NOT NULL, default `received`;
+every pre-patch row — the col AF backfill, manual entries — is received). A
+**due** row is a refund the supplier owes (canceled items, returns): `amount`
+is the expected amount; `refunded_at` / `method` / `nickname` / `last4` stay
+NULL until it arrives. **Mark received** sets `status = 'received'`, the date
+and the method fields, and lets the amount be corrected to what actually
+arrived — every change is a `po_edit_log` row ("refund status due → received",
+"refund amount …"). **From this patch on the line rows are the money of record
+for refunds**; `purchase_orders.refund_amount` (col AF) is history the
+Dashboard never reads (the probe `docs/dashboard-probe-2026-11-03.md` lists
+the one PO where the two differ).
+
+Entry points:
+- **Cancel qty** — raising a line's Canceled in the Products tab, or an ASIN
+  row's "cancel" (every line of the ASIN) — proposes one due row per newly
+  canceled line: `amount = qty × line price × (1 − discount ÷ subtotal) + tax
+  × line value ÷ subtotal` (`proposeRefund`, `shared/po-refund.ts`; plain
+  qty × price when the PO has no subtotal), each amount editable in the
+  calculator input before saving, each line ticked by default; **Skip** saves
+  no row — the cancel stands and the probe's "no $ amount" list shows it.
+- The Payments tab lists the PO's refund rows with their status, **Add
+  refund** takes a status (due hides the date), **Mark received** on a due row.
+- The cancellations-from-email patch, when built, writes its confirmed
+  cancellations here as due rows and its "Refund received" marks them
+  received (`docs/claude_spec-patch-po-cancellations-from-email.md` §3/§5 as
+  amended 2026-11-03).
+
+**POs page.** Filter **Refunds: any / due / none** beside Open / Closed
+(`GET /api/pos?refunds=due|none`; `none` = no refund row of any status); a
+quiet "refund due $X" line under the Order Total when the PO has due rows
+(`refund_due` on the list row — text, no chip). The Dashboard's Refunds due
+cell links `/purchase-orders?refunds=due&closed=all&from=…&to=…`; the page
+reads those params once on mount (`readPoPageParams`). The Dashboard's Spend
+subtracts refund rows of any status; its Refunds due row sums the due ones
+(§28).
+
 ### Costs (patch `docs/claude_spec-patch-po-ai-prefill.md` §7 as corrected 2026-10-31; formula v2, `shared/po-cost.ts`)
 
 Three costs per ASIN row, for POs created by the New PO form (and the

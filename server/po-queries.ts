@@ -102,3 +102,18 @@ export function poListOrderBy(sort: unknown, dir: unknown): string {
   const d = dir === "asc" ? "ASC" : "DESC";
   return `${expr} ${d} NULLS LAST, p.id ${d}`;
 }
+
+/**
+ * POs list — the Refunds filter (Dashboard patch §2.4, 2026-11-03): `due` =
+ * the PO has at least one po_line_refunds row with status 'due'; `none` = no
+ * refund row of any status; anything else = no condition. `p` must be the
+ * purchase_orders alias. The Dashboard's "Refunds due" cell links here.
+ */
+export function refundsFilterCond(raw: unknown): string | null {
+  const v = String(raw ?? "").trim().toLowerCase();
+  if (v === "due") return `EXISTS (SELECT 1 FROM po_line_refunds r WHERE r.po_id = p.id AND r.status = 'due')`;
+  if (v === "none") return `NOT EXISTS (SELECT 1 FROM po_line_refunds r WHERE r.po_id = p.id)`;
+  return null;
+}
+/** The PO's refunds still due (Σ status = 'due'), for the list row's money area. */
+export const REFUND_DUE_SQL = `(SELECT COALESCE(SUM(r.amount), 0)::float8 FROM po_line_refunds r WHERE r.po_id = p.id AND r.status = 'due')`;

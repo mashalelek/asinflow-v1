@@ -9,7 +9,7 @@ import { closeAfterCreate } from "./listing-hygiene-run";
 import { verifyPending, resolveSubmissionManual, resolveSubmissionsBulk, dismissFlags, getUnverifiedCount, listNeedsAttention, listInFlight, findRecentPendingIds, countOpenAmong } from "./listing-submissions-repo";
 import { runAuraSyncChain } from "./aura-sync-chain";
 import { probeGatingForAsins } from "./gating-probe";
-import { loadPoAsinRows, normalizeLineQty, poListOrderBy } from "./po-queries";
+import { loadPoAsinRows, normalizeLineQty, poListOrderBy, refundsFilterCond, REFUND_DUE_SQL } from "./po-queries";
 import { loadAliases, resolveRetailer, setAlias } from "./supplier-aliases";
 import { linkUnmatchedLine } from "./shipment-link";
 import { likeContains, stripShipmentSuffix } from "./order-number";
@@ -4283,6 +4283,9 @@ export async function registerRoutes(
     // §5 / D3: Status filter = open | closed | all; default view = Open only.
     const closedRaw = typeof req.query.closed === "string" ? req.query.closed.trim().toLowerCase() : "open";
     const closed = closedRaw === "closed" ? "closed" : closedRaw === "all" ? "all" : "open";
+    // Dashboard patch §2.4: refunds = due | none (anything else = any).
+    const refundsRaw = typeof req.query.refunds === "string" ? req.query.refunds.trim().toLowerCase() : "";
+    const refunds = refundsRaw === "due" || refundsRaw === "none" ? refundsRaw : "any";
     const page = Math.max(1, parseInt(String(req.query.page ?? "1"), 10) || 1);
     const PAGE_SIZE = 25;
 
@@ -4320,6 +4323,8 @@ export async function registerRoutes(
     if (to) add(`p.order_date <= $?`, to);
     if (closed === "open") conds.push(`p.closed_at IS NULL`);
     else if (closed === "closed") conds.push(`p.closed_at IS NOT NULL`);
+    const refundsCond = refundsFilterCond(refunds);
+    if (refundsCond) conds.push(refundsCond);
     const where = conds.length > 0 ? `WHERE ${conds.join(" AND ")}` : "";
 
     try {
@@ -4332,6 +4337,7 @@ export async function registerRoutes(
                 (SELECT COUNT(*)::int FROM po_asins a WHERE a.po_id = p.id) AS asin_count,
                 (SELECT COALESCE(SUM(a.qty), 0)::float8 FROM po_asins a WHERE a.po_id = p.id) AS units_ordered,
                 (SELECT SUM(l.qty_received)::float8 FROM po_line_items l WHERE l.po_id = p.id) AS units_received,
+                ${REFUND_DUE_SQL} AS refund_due,
                 (p.notes IS NOT NULL
                   OR EXISTS (SELECT 1 FROM po_asins a WHERE a.po_id = p.id AND a.notes IS NOT NULL)
                   OR EXISTS (SELECT 1 FROM po_line_items l WHERE l.po_id = p.id AND l.notes IS NOT NULL)) AS has_notes
@@ -4363,7 +4369,7 @@ export async function registerRoutes(
       const unmatchedCount = (await query(
         `SELECT (SELECT COUNT(*)::int FROM shipment_unmatched WHERE resolved_at IS NULL AND dismissed_at IS NULL) + (SELECT COUNT(*)::int FROM velocity_shipments WHERE sc_match = 'ambiguous') AS n`,
       )).rows[0].n;
-      res.json({ pos: rows, total, page, pageSize: PAGE_SIZE, suppliers, actionItems: DISPLAY_ACTION_ITEMS, closed, unmatchedCount });
+      res.json({ pos: rows, total, page, pageSize: PAGE_SIZE, suppliers, actionItems: DISPLAY_ACTION_ITEMS, closed, refunds, unmatchedCount });
     } catch (err: any) {
       res.status(500).json({ message: err.message });
     }

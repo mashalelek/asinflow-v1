@@ -58,6 +58,11 @@ interface PoRow {
   closed_by: string | null;
   /** Expand by ASIN (§3): the PO's ASIN rows, same model as the detail tab. */
   asins: PoAsinRowData[];
+  /** Σ refund rows still due (Dashboard patch §2.4); 0 when none. */
+  refund_due?: number;
+  subtotal?: string | null;
+  discount?: string | null;
+  tax?: string | null;
 }
 
 interface PosResponse {
@@ -69,11 +74,26 @@ interface PosResponse {
   /** The §6.1 list, display order. */
   actionItems: string[];
   closed: "open" | "closed" | "all";
+  refunds?: "any" | "due" | "none";
   /** Shipment reconciliation §5.3: open unmatched Velocity lines + ambiguous SC matches. */
   unmatchedCount?: number;
 }
 
 type ClosedFilter = "open" | "closed" | "all";
+/** Dashboard patch §2.4: Refunds filter — any / due (a refund row still due) / none (no refund row at all); `?refunds=due` deep-links from the Dashboard's Refunds due cell. */
+type RefundsFilter = "any" | "due" | "none";
+/** The POs page's deep-link params (asin, refunds, closed, from, to), read once on mount. Exported for tests. */
+export function readPoPageParams(search: string): { asin: string; refunds: RefundsFilter; closed: ClosedFilter | null; from: string; to: string } {
+  const p = new URLSearchParams(search);
+  const refundsRaw = p.get("refunds"), closedRaw = p.get("closed");
+  const ymd = (v: string | null) => (v && /^\d{4}-\d{2}-\d{2}$/.test(v) ? v : "");
+  return {
+    asin: p.get("asin")?.trim().toUpperCase() ?? "",
+    refunds: refundsRaw === "due" || refundsRaw === "none" ? refundsRaw : "any",
+    closed: closedRaw === "open" || closedRaw === "closed" || closedRaw === "all" ? closedRaw : null,
+    from: ymd(p.get("from")), to: ymd(p.get("to")),
+  };
+}
 
 /** §5 col 1: green check when Closed, open-order outline when Open. Click toggles with confirm. */
 function ClosedToggle({ po, onToggled, size = "sm" }: { po: { id: string; order_id: string; closed_at: string | null; closed_by: string | null }; onToggled: () => void; size?: "sm" | "lg" }) {
@@ -486,14 +506,17 @@ export default function PurchaseOrders() {
   // Deep link from the ASINs page's On Order cell (patch asins-on-order §3.2):
   // /purchase-orders?asin=B0… opens the list searched on that ASIN, Open POs
   // only — the ones On Order counts (2026-11-02); the Closed filter is a click away.
-  const linkedAsin = (() => { try { return new URLSearchParams(window.location.search).get("asin")?.trim().toUpperCase() ?? ""; } catch { return ""; } })();
+  // The Dashboard's Refunds due cell links /purchase-orders?refunds=due&closed=all&from=…&to=… (SPEC §28).
+  const linked = (() => { try { return readPoPageParams(window.location.search); } catch { return readPoPageParams(""); } })();
+  const linkedAsin = linked.asin;
   const [search, setSearch] = useState(linkedAsin);
   const [debouncedSearch, setDebouncedSearch] = useState(linkedAsin);
   const [actionSel, setActionSel] = useState<Set<string>>(new Set());
-  const [closedFilter, setClosedFilter] = useState<ClosedFilter>("open"); // D3: default Open only — the ASINs-page On Order link too (open POs are what it counts)
+  const [closedFilter, setClosedFilter] = useState<ClosedFilter>(linked.closed ?? "open"); // D3: default Open only — the ASINs-page On Order link too (open POs are what it counts)
+  const [refundsFilter, setRefundsFilter] = useState<RefundsFilter>(linked.refunds);
   const [supplierSel, setSupplierSel] = useState<Set<string>>(new Set());
-  const [from, setFrom] = useState("");
-  const [to, setTo] = useState("");
+  const [from, setFrom] = useState(linked.from);
+  const [to, setTo] = useState(linked.to);
   const [page, setPage] = useState(1);
   const [sort, setSort] = useState<PoSort>(null);
   const { colWidths, handleResizeStart, resetWidths } = useColumnWidths(PO_COL_WIDTHS_KEY);
@@ -515,7 +538,7 @@ export default function PurchaseOrders() {
   const actionKey = Array.from(actionSel).sort().join(",");
   const supplierKey = Array.from(supplierSel).sort().join(",");
   const sortKey = sort ? `${sort.key}:${sort.dir}` : "";
-  useEffect(() => { setPage(1); }, [debouncedSearch, actionKey, supplierKey, from, to, closedFilter, sortKey]);
+  useEffect(() => { setPage(1); }, [debouncedSearch, actionKey, supplierKey, from, to, closedFilter, refundsFilter, sortKey]);
 
   const load = useCallback(async () => {
     setError(null);
@@ -523,6 +546,7 @@ export default function PurchaseOrders() {
     if (debouncedSearch) params.set("search", debouncedSearch);
     if (actionKey) params.set("action", actionKey);
     params.set("closed", closedFilter);
+    if (refundsFilter !== "any") params.set("refunds", refundsFilter);
     if (supplierKey) params.set("supplier", supplierKey);
     if (from) params.set("from", from);
     if (to) params.set("to", to);
@@ -535,7 +559,7 @@ export default function PurchaseOrders() {
     } catch (e: any) {
       setError(e.message);
     }
-  }, [debouncedSearch, actionKey, supplierKey, from, to, page, closedFilter, sort]);
+  }, [debouncedSearch, actionKey, supplierKey, from, to, page, closedFilter, refundsFilter, sort]);
 
   useEffect(() => { load(); }, [load]);
 
@@ -614,6 +638,14 @@ export default function PurchaseOrders() {
             <SelectItem value="all">All</SelectItem>
           </SelectContent>
         </Select>
+        <Select value={refundsFilter} onValueChange={(v) => setRefundsFilter(v as RefundsFilter)}>
+          <SelectTrigger className="h-8 w-[140px] text-xs" data-testid="select-po-refunds"><SelectValue /></SelectTrigger>
+          <SelectContent>
+            <SelectItem value="any">Refunds: any</SelectItem>
+            <SelectItem value="due">Refunds: due</SelectItem>
+            <SelectItem value="none">Refunds: none</SelectItem>
+          </SelectContent>
+        </Select>
         <FacetMultiSelect label="Action Items" options={data?.actionItems ?? []} selected={actionSel} onChange={setActionSel} testId="select-po-action-items" />
         <FacetMultiSelect label="Supplier" options={data?.suppliers ?? []} selected={supplierSel} onChange={setSupplierSel} testId="select-po-supplier" />
         <input type="date" value={from} onChange={(e) => setFrom(e.target.value)}
@@ -676,7 +708,11 @@ export default function PurchaseOrders() {
                   <td style={poColStyle(colWidths, "order_date")} className="px-3 py-2 whitespace-nowrap">{fmtDate(po.order_date)}</td>
                   <td style={poColStyle(colWidths, "order_id")} className="px-3 py-2 font-mono text-xs">{po.order_id}</td>
                   <td style={poColStyle(colWidths, "supplier")} className="px-3 py-2">{po.supplier}</td>
-                  <td style={poColStyle(colWidths, "order_total")} className={`px-3 py-2 text-right font-mono ${money.muted ? "text-muted-foreground/50" : ""}`}>{money.text}</td>
+                  <td style={poColStyle(colWidths, "order_total")} className={`px-3 py-2 text-right font-mono ${money.muted ? "text-muted-foreground/50" : ""}`}>
+                    {money.text}
+                    {/* §2.4: a quiet "refund due" line under the total when the PO has due rows — text, no chip. */}
+                    {Number(po.refund_due) > 0 && <div className="text-[10px] font-sans text-muted-foreground whitespace-nowrap" data-testid={`po-refund-due-${po.order_id}`}>refund due {fmtMoney(String(po.refund_due)).text}</div>}
+                  </td>
                   <td style={poColStyle(colWidths, "asins")} className="px-3 py-2 text-right">{po.asin_count}</td>
                   <td style={poColStyle(colWidths, "units_ordered")} className="px-3 py-2 text-right">{fmtQty(po.units_ordered)}</td>
                   <td style={poColStyle(colWidths, "invoice")} className="px-3 py-2">
@@ -698,7 +734,7 @@ export default function PurchaseOrders() {
                           {po.asins.length === 0 && (
                             <tr><td colSpan={PO_ASIN_COLUMNS.length + 2} className="px-3 py-2 text-xs text-muted-foreground">No ASIN rows.</td></tr>
                           )}
-                          {po.asins.map((a) => <PoAsinRow key={a.id} a={a} indent editable onChanged={load} />)}
+                          {po.asins.map((a) => <PoAsinRow key={a.id} a={a} indent editable onChanged={load} po={{ id: po.id, subtotal: po.subtotal, discount: po.discount, tax: po.tax }} />)}
                         </tbody>
                       </table>
                     </td>
@@ -921,9 +957,9 @@ export function PurchaseOrderDetailPlaceholder() {
         </div>
       )}
 
-      {tab === "asins" && <PoAsinTable asins={asins} editable onChanged={reload} />}
+      {tab === "asins" && <PoAsinTable asins={asins} editable onChanged={reload} po={{ id: po.id, subtotal: po.subtotal, discount: po.discount, tax: po.tax }} />}
 
-      {tab === "products" && <PoProductsTable poId={po.id} asins={asins} onChanged={reload} />}
+      {tab === "products" && <PoProductsTable poId={po.id} asins={asins} onChanged={reload} po={{ id: po.id, subtotal: po.subtotal, discount: po.discount, tax: po.tax }} />}
 
       {tab === "payments" && <PoMoneyTab po={po} asins={asins} payments={data.payments ?? []} promos={data.promos ?? []} refunds={data.refunds ?? []} onChanged={reload} />}
 

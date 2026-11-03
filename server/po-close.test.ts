@@ -110,11 +110,11 @@ describe("quantity input + routes", () => {
   });
   it("the page: col 1 is the Closed toggle with confirm; Open/Closed/All filter defaults to open; nested rows editable", () => {
     const page = readFileSync(join(__dirname, "..", "client", "src", "pages", "purchase-orders.tsx"), "utf8");
-    expect(page).toMatch(/useState<ClosedFilter>\("open"\)/); // default Open — the ASINs-page On Order link too: On Order counts open POs only (2026-11-02)
+    expect(page).toMatch(/useState<ClosedFilter>\(linked\.closed \?\? "open"\)/); // default Open — the ASINs-page On Order link too: On Order counts open POs only (2026-11-02)
     expect(page).toMatch(/params\.set\("closed", closedFilter\)/);
     expect(page).toMatch(/<ClosedToggle po=\{po\} onToggled=\{load\} \/>/);
     expect(page).toMatch(/data-testid="button-po-closed-confirm"/);
-    expect(page).toMatch(/<PoAsinRow key=\{a\.id\} a=\{a\} indent editable onChanged=\{load\} \/>/);
-    expect(page).toMatch(/<PoAsinTable asins=\{asins\} editable onChanged=\{reload\} \/>/);
+    expect(page).toMatch(/<PoAsinRow key=\{a\.id\} a=\{a\} indent editable onChanged=\{load\} po=\{\{ id: po\.id/);
+    expect(page).toMatch(/<PoAsinTable asins=\{asins\} editable onChanged=\{reload\} po=\{\{ id: po\.id/);
   });
 });

@@ -56,4 +56,23 @@ describe("payments / promos / refunds", () => {
     expect(f.calls.find((c) => /DELETE FROM po_line_refunds/.test(c.sql))!.params).toEqual([5]);
     expect(f.calls.filter((c) => /INSERT INTO po_edit_log/.test(c.sql)).pop()!.params.slice(4)).toEqual(["refund removed", "1 × $4.00", null]);
   });
+
+  it("refund status (migration 082): a new row defaults to received, 'due' is accepted and named in the History summary; Mark received logs status + date + amount", async () => {
+    const f = fake({ line: { qty_ordered: "4" } });
+    await addMoneyRow(f.q, "po_line_refunds", "p1", { po_line_item_id: "l1", qty: "2", amount: "19.50" }, 7);
+    const ins = f.calls.find((c) => /INSERT INTO po_line_refunds/.test(c.sql))!;
+    expect(ins.sql).toMatch(/status\)/);
+    expect(ins.params[ins.params.length - 1]).toBe("received");
+    const due = fake({ line: { qty_ordered: "4" } });
+    await addMoneyRow(due.q, "po_line_refunds", "p1", { po_line_item_id: "l1", qty: "2", amount: "19.50", status: "due" }, 7);
+    expect(due.calls.find((c) => /INSERT INTO po_edit_log/.test(c.sql))!.params.slice(4)).toEqual(["refund added", null, "2 × $19.50 (due)"]);
+    await expect(addMoneyRow(due.q, "po_line_refunds", "p1", { amount: "1", status: "pending" }, 7)).rejects.toMatchObject({ status: 400, message: /status/ });
+    const recv = fake({ row: { id: 9, po_id: "p1", po_line_item_id: null, qty: null, amount: "19.50", refunded_at: null, method: null, nickname: null, last4: null, note: null, needs_split: false, status: "due" } });
+    await editMoneyRow(recv.q, "po_line_refunds", 9, { status: "received", refunded_at: "2026-11-03", method: "card", last4: "1005", amount: "18.00" }, 7);
+    const up = recv.calls.find((c) => /UPDATE po_line_refunds SET/.test(c.sql))!;
+    expect(up.sql).toMatch(/status = \$2, refunded_at = \$3, method = \$4, last4 = \$5, amount = \$6/);
+    expect(up.params).toEqual([9, "received", "2026-11-03", "card", "1005", "18.00"]);
+    const logged = recv.calls.filter((c) => /INSERT INTO po_edit_log/.test(c.sql)).map((c) => c.params.slice(4));
+    expect(logged).toEqual(expect.arrayContaining([["refund status", "due", "received"], ["refund amount", "19.5", "18"], ["refund refunded_at", null, "2026-11-03"]]));
+  });
 });

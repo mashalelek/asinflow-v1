@@ -10,6 +10,7 @@ import type { QueryLike } from "./scheduler/types";
 import { EditError, logEdits, parseEdits, money, pctOrNull, textOrNull, isoDate, decQty, type Parsed } from "./po-edit";
 import { recomputePoCosts } from "./po-costs";
 import { PAYMENT_METHODS, PROMO_TYPES, promoCountsByDefault } from "@shared/po-form";
+import { REFUND_STATUSES } from "@shared/po-refund";
 
 const oneOf = (list: readonly string[], nullable = false) => (v: unknown): Parsed => (v == null || v === "" ? (nullable ? { ok: true, value: null } : { ok: false, error: "is required" }) : (list as readonly string[]).includes(String(v)) ? { ok: true, value: String(v) } : { ok: false, error: `must be one of ${list.join(", ")}` });
 const last4 = (v: unknown): Parsed => (v == null || v === "" ? { ok: true, value: null } : /^\d{4}$/.test(String(v).trim()) ? { ok: true, value: String(v).trim() } : { ok: false, error: "must be four digits" });
@@ -18,7 +19,8 @@ const dateOrNull = (v: unknown): Parsed => (v == null || v === "" ? { ok: true, 
 
 export const PAYMENT_FIELDS = { method: oneOf(PAYMENT_METHODS), nickname: textOrNull, last4, amount: money({ nullable: true }), gift_card_discount_pct: pctOrNull, needs_review: bool } as const;
 export const PROMO_FIELDS = { type: oneOf(PROMO_TYPES, true), description: textOrNull, amount: money({ nullable: true }), percent: pctOrNull, counts_toward_cogs: bool } as const;
-export const REFUND_FIELDS = { po_line_item_id: textOrNull, qty: decQty({ nullable: true }), amount: money({ nullable: true }), refunded_at: dateOrNull, method: oneOf(PAYMENT_METHODS, true), nickname: textOrNull, last4, note: textOrNull, needs_split: bool } as const;
+// status (migration 082, Dashboard patch C1): due = the supplier owes it (refunded_at / method NULL until received); received = the money arrived. Default received (every pre-patch row is).
+export const REFUND_FIELDS = { po_line_item_id: textOrNull, qty: decQty({ nullable: true }), amount: money({ nullable: true }), refunded_at: dateOrNull, method: oneOf(PAYMENT_METHODS, true), nickname: textOrNull, last4, note: textOrNull, needs_split: bool, status: oneOf(REFUND_STATUSES) } as const;
 
 type Table = "po_payments" | "po_promos" | "po_line_refunds";
 const label: Record<Table, string> = { po_payments: "payment", po_promos: "promo", po_line_refunds: "refund" };
@@ -31,7 +33,7 @@ async function rowAndPo(query: QueryLike, table: Table, id: number): Promise<{ r
 const summary = (table: Table, r: Record<string, any>): string =>
   table === "po_payments" ? `${r.method}${r.nickname ? ` ${r.nickname}` : ""}${r.last4 ? ` (${r.last4})` : ""}${r.amount != null ? ` $${Number(r.amount).toFixed(2)}` : ""}`
   : table === "po_promos" ? `${r.type ?? "?"}: ${r.description ?? ""}${r.amount != null ? ` $${Number(r.amount).toFixed(2)}` : ""}${r.percent != null ? ` ${Number(r.percent)}%` : ""}${r.counts_toward_cogs === false ? " (not in COGS)" : ""}`
-  : `${r.qty != null ? `${r.qty} × ` : ""}$${r.amount != null ? Number(r.amount).toFixed(2) : "?"}${r.po_line_item_id ? "" : " (PO-level)"}`;
+  : `${r.qty != null ? `${r.qty} × ` : ""}$${r.amount != null ? Number(r.amount).toFixed(2) : "?"}${r.po_line_item_id ? "" : " (PO-level)"}${r.status === "due" ? " (due)" : ""}`;
 
 export interface MoneyEditResult { poId: string; id: number; recomputed?: { changed: number; skipped: string | null } }
 
@@ -43,7 +45,7 @@ export async function addMoneyRow(query: QueryLike, table: Table, poId: string, 
   if (!po) throw new EditError(404, "PO not found");
   const e = { ...p.edits } as Record<string, any>;
   if (table === "po_promos" && e.counts_toward_cogs == null) e.counts_toward_cogs = e.type ? promoCountsByDefault(String(e.type)) : true;
-  if (table === "po_line_refunds") await checkRefundLine(query, poId, e);
+  if (table === "po_line_refunds") { if (e.status == null) e.status = "received"; await checkRefundLine(query, poId, e); }
   const cols = Object.keys(e);
   const pos = table === "po_line_refunds" ? "" : `, position`;
   const posVal = table === "po_line_refunds" ? "" : `, (SELECT COALESCE(MAX(position), -1) + 1 FROM ${table} WHERE po_id = $1)`;
