@@ -2485,10 +2485,17 @@ Three components are ledger-only in this version, by decision:
   `sales_orders` rows are **deleted and reloaded inside one transaction,
   and only after the report was fully read and parsed** (fail-closed, §14
   manual-trigger completeness): a failed report leaves the old rows
-  untouched, a failed write rolls the whole chunk back, an empty report
-  clears the window (a day whose only order was cancelled loses its stale
-  units), and the pre-patch UTC-keyed rows disappear as the backfill passes
-  over them. An explicit ASIN selection deletes and reloads only its own
+  untouched, a failed write rolls the whole chunk back, a report whose rows
+  are all cancelled clears the window (a day whose only order was cancelled
+  loses its stale units), **a report with no data rows at all leaves the
+  window alone** — Amazon's orders report has a retention horizon (the
+  2026-11-03 local backfill got header-only answers for every chunk before
+  2024-10-28 while AF held rows for Sept–Oct 2024; an empty answer is not
+  evidence of no sales), and the pre-patch UTC-keyed rows disappear as the
+  backfill passes over them. The oldest days inside the first chunk Amazon
+  still answers can still be replaced by nothing (the horizon falls
+  mid-chunk), so a re-backfill starts no earlier than the first day the
+  report returns. An explicit ASIN selection deletes and reloads only its own
   rows. `sales_orders` (migration 082: `amazon_order_id`, `asin_id`,
   `sale_date`, `units`; PK order id + ASIN) gets one row per (order id,
   ASIN) from the same parse, cancelled orders skipped as before — the

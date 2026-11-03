@@ -287,21 +287,25 @@ async function fetchChunk(
   if (rawData.includes("Date range exceeded")) {
     throw new Error(`Amazon refused the range ${startDate}..${endDate}: ${rawData.substring(0, 120).trim()}`);
   }
-  // An empty report is a complete, trustworthy answer for the window: the
-  // window's rows are cleared (a day whose only order was cancelled must not
-  // keep its old units), inside the same fail-closed transaction.
-  const empty = async () => {
-    await replaceWindow(startDate, endDate, scopeAsinIds, [], []);
-    return { chunk: { start: startDate, end: endDate, status: "empty" as const, orders: 0, distinctOrders: 0, days: 0, asins: 0, onboarded: [], invalidAsins: [], minDate: null, maxDate: null }, dates: new Set<string>(), asins: new Set<string>() };
-  };
+  // A report with NO data rows is not evidence of "no sales": Amazon's orders
+  // report has a retention horizon (the 2026-11-03 local backfill got header-
+  // only answers for every chunk before 2024-10-28 while AF held rows for
+  // Sept–Oct 2024), so such a chunk leaves the window's rows exactly as they
+  // are — nothing read, nothing replaced. A report that HAS rows is a complete
+  // answer for the window even when every row is cancelled: the window is
+  // cleared (a day whose only order was cancelled must not keep stale units).
+  const emptyChunk = { start: startDate, end: endDate, status: "empty" as const, orders: 0, distinctOrders: 0, days: 0, asins: 0, onboarded: [], invalidAsins: [], minDate: null, maxDate: null };
   if (lines.length < 2) {
-    log(`Chunk ${startDate}-${endDate}: no data (${rawData.substring(0, 100)})`, "sales-sync");
-    return empty();
+    log(`Chunk ${startDate}-${endDate}: no data rows — the window's stored rows are left untouched (${rawData.substring(0, 100)})`, "sales-sync");
+    return { chunk: emptyChunk, dates: new Set<string>(), asins: new Set<string>() };
   }
 
   // 4. Parse TSV
   const parsed = parseOrdersReport(lines);
-  if (parsed.length === 0) return empty();
+  if (parsed.length === 0) {
+    await replaceWindow(startDate, endDate, scopeAsinIds, [], []);
+    return { chunk: emptyChunk, dates: new Set<string>(), asins: new Set<string>() };
+  }
 
   // 4b. Onboard ASINs AF does not have at all, BEFORE the upsert (2026-10-16),
   // so their rows land in this chunk. The insert path adds the rows; the

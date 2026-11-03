@@ -260,10 +260,16 @@ describe("delete + reload per chunk (fail-closed) and sales_orders", () => {
     await expect(syncSalesData("2026-06-01", "2026-06-01")).rejects.toThrow(/boom: disk full/);
     expect(kinds()).toEqual(["BEGIN", "DELETE FROM sales_daily", "DELETE FROM sales_orders", "INSERT INTO sales_daily", "INSERT INTO sales_daily", "ROLLBACK"]);
   });
-  it("an empty report still clears the window (a cancelled-only day loses its stale units), in the same transaction shape", async () => {
-    scripts = [{ report: HEADER + "\n" }];
+  it("a report whose rows are all cancelled clears the window (a cancelled-only day loses its stale units), in the same transaction shape", async () => {
+    scripts = [{ report: report(row("2026-06-01", "A000000001", 1, 10, "Cancelled")) }];
     const r = await syncSalesData("2026-06-01", "2026-06-01");
     expect(r.chunks[0].status).toBe("empty");
     expect(kinds()).toEqual(["BEGIN", "DELETE FROM sales_daily", "DELETE FROM sales_orders", "COMMIT"]);
+  });
+  it("a report with NO data rows (Amazon's retention horizon) leaves the window's stored rows untouched — no delete at all", async () => {
+    scripts = [{ report: HEADER + "\n" }];
+    const r = await syncSalesData("2024-09-01", "2024-09-30");
+    expect(r.chunks[0]).toMatchObject({ status: "empty", orders: 0, minDate: null });
+    expect(kinds()).toEqual([]);
   });
 });
