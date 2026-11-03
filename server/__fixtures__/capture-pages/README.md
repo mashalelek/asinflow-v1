@@ -12,17 +12,22 @@ real Walmart PO (2026-11-01; order # and card invented): the rollback /
 "Have a promo code?" prompt and the size-variant radios the v1.2.1 parser
 rules are tested against.
 
-`shagtools/` is SYNTHETIC — shaped from Maria's description of the
-shagtools.com cart and checkout (2026-11-02), to be replaced by the real
-text from the panel's "Copy page text" when she pastes it. `cart.txt`: one
-`<tr>` per product whose cells (title, $8.93, quantity stepper, $133.95)
-innerText joins with tabs, a header row, a recommendation row without a
-quantity, and one coupon shown four ways (banner, "GET 10% OFF", cart
-notice, COUPON: row). `checkout.txt` (reshaped 2026-11-03 after Maria's first real
-"Copy page text", a WooCommerce review table): the title line ending "× 15",
-"Available on backorder" and the line subtotal on the next line (no unit
-price, no quantity input), and the Shipping row listing the methods — "Free
-shipping" then "Flat rate: $24.77" — with the Total reconciling to the free
-one; the address and card lines around it. The v1.2.2 row rule and promo
-dedupe, the v1.2.3 quantity shapes and the v1.2.6 availability-line and
-shipping-method rules are tested against them.
+`shagtools/` is TRANSCRIBED from Maria's screenshots of the real
+shagtools.com pages (2026-11-03; a WooCommerce store) — line for line as
+Chrome's innerText joins them, cells with tabs — and is replaced verbatim by
+the panel's "Copy page text" when that paste lands (it was dropped twice in
+transit). `cart.txt`: the Driftwood caulk × 10 on backorder — the table
+header "PRODUCT PRICE QUANTITY SUBTOTAL", the title line, "Available on
+backorder", then "REMOVE / $8.93 / − / + / $89.30" tab-joined (the stepper's
+value is in the input, captured as the field "<product name> quantity"),
+the free-shipping meter, the shipping-policy line, and CART TOTALS with the
+three shipping radios ("Ground: $24.77" selected, "2 Day", "Next Day", each
+with a "(Delivery by …)" line), "TAX  Taxes will be calculated at checkout"
+and TOTAL $114.07. `cart-alabaster.txt`: the same cart later with the
+Alabaster caulk × 5 (Ground $22.99, Total $67.64). `checkout.txt`: the
+checkout before an address is entered — the title line, "× 10" under it,
+"Available on backorder" tab-joined with $89.30, SUBTOTAL, "SHIPPING  Enter
+your address to view shipping options.", TAX $0.00, TOTAL $89.30; the
+address is in the captured fields, not the text. The v1.2.2 row rule, the
+v1.2.3 quantity shapes, the v1.2.6 availability / shipping-method rules and
+the v1.2.7 cart-table and rebuild rules are tested against them.

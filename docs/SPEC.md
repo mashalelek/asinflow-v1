@@ -2737,25 +2737,55 @@ not an Amazon product page the panel shows the capture UI instead of the
   town, state | province | region and zip | postal | postcode riding
   along (`fromFields: true`); the street is matched against the two known
   addresses exactly as before (`normStreet`), and the panel shows
-  "Velocity · 805 Grandy Ave (Norfolk, Virginia 23504)". **v1.2.6
-  (shagtools.com/checkout, Maria 2026-11-03, the first real "Copy page
-  text"): availability lines and shipping-method lists.** The review
-  table's product row read "… × 10" / "Available on backorder" / "$89.30":
-  the availability line passed as a new title and cut the block before its
-  money, so Products stayed empty — availability lines (available,
-  backorder, usually ships, low stock, only N left) are noise now, like "in
-  stock" / "out of stock" already were. And Totals showed Shipping $24.77
-  on a page whose Total was $89.30: WooCommerce's Shipping row lists the
-  shipping METHODS ("Flat rate: $24.77", "Free shipping" — its radios) and
-  the old rule took the first money after the label. `shippingAmount`: a
-  plain amount on the label's line or the next ("Shipping  $12.00",
-  "Shipping Free", Walmart's two lines) reads as before; one method line is
-  its amount; several resolve by the checked radio (a "selected:" field
-  naming the method), else by the method whose amount reconciles with
-  Total (subtotal − discount + tax + shipping, "Free" = 0), else the
-  Shipping figure stays empty — never the first option's price. The totals
-  are read Subtotal / Discount / Tax / Total first so Shipping can
-  reconcile. **Clear**;
+  "Velocity · 805 Grandy Ave (Norfolk, Virginia 23504)". **v1.2.6 / v1.2.7
+  (shagtools.com, Maria 2026-11-03, the first real captures — a WooCommerce
+  store): availability lines, the cart table, shipping-method lists, and
+  buckets rebuilt from the pages.** (1) The checkout's product row read
+  "… × 10" / "Available on backorder" / "$89.30": the availability line
+  passed as a new title and cut the block before its money, so Products
+  stayed empty — availability lines (available, backorder, usually ships,
+  low stock, only N left) are noise now, like "in stock" / "out of stock"
+  already were, and up to two other note lines (a colour, a status, a SKU
+  line) may sit between the quantity and the line total; a third, or any
+  title once the money is in, starts the next product. (2) The cart table
+  (name / $8.93 / − 10 + / $89.30) never parsed: its header row ("PRODUCT
+  PRICE QUANTITY SUBTOTAL") was read as the start of the totals, so the
+  product region ended before the first row (a header row — product, item,
+  price, quantity — is never the totals' start); the row's text joins the
+  "REMOVE" link, the two monies and the stepper's "−" / "+" on one
+  tab-joined line after the title line (a stepper cell in a joined line
+  marks the block's quantity control and may carry the value); and the
+  quantity input's label is "<product name> quantity" (WooCommerce's
+  screen-reader label) — a quantity field now matches when its label
+  CONTAINS qty / quantity (never a pack-size field), and a block with a
+  control and no quantity in its text takes the whole ratio line total ÷
+  unit price (89.30 ÷ 8.93 = 10), as a table row already did. (3) Totals
+  carried Shipping $24.77 — the Ground rate selected on an EARLIER cart
+  capture (Total $114.07) — into a checkout that lists no shipping ("Enter
+  your address to view shipping options") and into the next cart (Ground
+  $22.99): the buckets were merged incrementally per capture, so a value
+  from a page since replaced survived. `applyPage` now REBUILDS the buckets
+  from the tab's pages (oldest first, newest wins) on every capture, so
+  the latest capture of a step replaces that step's values, and the newest
+  page that shows totals replaces the whole Totals figure — a field it
+  lacks is gone, not kept from an older page (a page with no totals at all,
+  a product page, leaves the figure alone; Order fields still merge per
+  field). Clear removes the tab's record (`chrome.storage.session`), so the
+  next capture starts empty; Clear is per tab — a capture in another tab
+  keeps its own record. (4) `shippingAmount`: a plain amount on the
+  label's line or the next ("Shipping  $12.00", "Shipping Free", Walmart's
+  two lines) reads as before; a Shipping row followed by shipping METHODS
+  ("Ground: $24.77" / "(Delivery by November 10, 2026)" / "2 Day: $120.02"
+  / … — the cart's radios; the "(Delivery by …)" lines are skipped) takes
+  one method's amount, and several resolve by the checked radio (a
+  "selected:" field naming the method), else by the method whose amount
+  reconciles with Total (subtotal − discount + tax + shipping, "Free" =
+  0), else the Shipping figure stays empty — never the first option's
+  price. The totals are read Subtotal / Discount / Tax / Total first so
+  Shipping can reconcile. The fixtures under
+  `server/__fixtures__/capture-pages/shagtools/` are transcribed from the
+  screenshots and are replaced verbatim by the "Copy page text" paste when
+  it lands. **Clear**;
   caption "One AI call runs when you open it · card numbers are masked
   before anything leaves the browser". **Per tab:** the record lives under
   `capture:<tabId>` (`chrome.storage.session`); the panel shows the active

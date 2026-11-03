@@ -30,17 +30,29 @@
 // number of cents (Walmart's confirmation "Qty 12 / $95.64" → 12 × $7.97);
 // otherwise the money stays the unit price ("Qty: 10 / $7.97" — 0.797 is no
 // price). canOpen() is gone: the buckets are a preview, not a gate.
-// v1.2.6 (shagtools.com/checkout, Maria 2026-11-03, the first real "Copy page
-// text"): the product row read "× 10" / "Available on backorder" / $89.30 —
-// the availability line looked like a new title and cut the block before its
+// v1.2.6 / v1.2.7 (shagtools.com, Maria 2026-11-03, the first real captures):
+// the checkout row read "× 10" / "Available on backorder" / $89.30 — the
+// availability line looked like a new title and cut the block before its
 // money, so Products stayed empty; availability lines (available, backorder,
-// usually ships, low stock, only N left) are noise now. And Totals showed
-// Shipping $24.77 on a page whose Total was $89.30: the "Shipping" row lists
-// the shipping METHODS ("Flat rate: $24.77" / "Free shipping" — WooCommerce's
-// radios) and the old rule took the first money after the label. A method list
-// resolves by the checked radio (a "selected:" field), else by the method
-// whose amount reconciles with Total, else stays empty — never the first
-// option's price. A plain "Shipping  $12.00" reads as before.
+// usually ships, low stock, only N left) are noise now, and up to two other
+// note lines (a colour, a SKU, a status) may sit between the quantity and the
+// line total. The cart table (name / $8.93 / − 10 + / $89.30, WooCommerce)
+// never parsed: the row's text joins a "REMOVE" link, the two monies and the
+// stepper's "−" / "+" on one tab-joined line after the title line, and the
+// quantity input's label is "<product name> quantity" — a stepper cell in a
+// joined line marks the block, a quantity field whose label CONTAINS qty /
+// quantity fills it, and two monies in a whole ratio give the quantity when the
+// block shows a control. Totals carried Shipping $24.77 — the Ground rate
+// selected on an EARLIER cart capture — into a checkout that lists no
+// shipping ("Enter your address to view shipping options") and into the next
+// cart: the buckets were merged incrementally per capture, so a value from a
+// page since replaced survived. Now the buckets are REBUILT from the pages on
+// every capture (the latest capture of a step replaces that step's values)
+// and the newest page's Totals replace the whole figure — a field the newest
+// page lacks is gone. The cart's shipping radios ("Ground: $24.77" / "2 Day:
+// $120.02" / "Next Day: $180.02", each with a "(Delivery by …)" line) resolve
+// by the checked radio (a "selected:" field), else by the one that reconciles
+// with Total, else stay empty — never the first option's price.
 // v1.2.5 (shagtools.com/checkout, Maria 2026-11-02): the address was in form
 // fields (street, city, state select, ZIP), not in the text — Shipping now
 // also builds a candidate from the captured fields whose labels / names say
@@ -67,6 +79,7 @@
   var SHIP_HEADING = /\b(?:shipping|delivery|deliver(?:s|ed|ing)?\s+to|ships?\s+to|address)\b/i;
   var BILLING = /\b(?:billing|payment|card)\b/i;
   var TOTALS_START = /\b(?:sub\s*total|order\s+total|estimated\s+total|grand\s+total)\b/i;
+  var HEADER_ROW = /\b(?:product|item|price|quantity|qty)\b/i;
   var TOTAL_LINE = /^(?:items?\s+)?(?:sub\s*total|order\s+total|estimated\s+total|grand\s+total|total|tax(?:es)?|estimated\s+tax|sales\s+tax|shipping|estimated\s+shipping|discount|savings|promotion)\b/i;
   var NOISE = /^(?:now\$|now\s+\$|bought\s+\d|free\s+delivery|snap\b|best\s+seller|manufacturer\s+offer|saved\s+for\s+later|notify\s+me|skip\s+to|rollback|was\s+\$|sold\s+(?:and|&)\s+shipped|ships?\s+from|my\s+items|buy\s+again|reorder|add\s+to|cart|your\s+cart|basket|bag|items?\b|review|checkout|order\b|subtotal|total|tax|shipping|delivery|deliver|arrives|free\s+shipping|payment|pay\b|place\s+order|continue|edit|remove|save\s+for\s+later|move\s+to|change|add\b|apply|promo|coupon|gift|rewards|contact|email|phone|account|sign|secure|qty|quantity|price|each|sold\s+by|ship|pickup|in\s+stock|out\s+of\s+stock|available\b|backorder|usually\s+ships|ready\s+to\s+ship|low\s+stock|limited\s+stock|only\s+\d|select|choose|see\b|view|learn|earn|get\b|you\b|your\b|we\b|thank|hello|hi\b|name|address|city|state|zip|united\s+states|usa\b|visa|mastercard|amex|discover|card\b|ending\s+in|••••|\*\*\*\*|exp\b|cvv|billing|summary|details|estimated|protect|warranty|plan\b|add-on|recommended|also\b|customers|people|frequently|sponsored|more\b|multipack|subscri|one-?time|\d)/i;
   var PROMO = /\b(?:promo(?:tion)?(?:\s*code)?|coupon|discount\s+code|code\s+applied|%\s*off|rewards?\s+applied|rewards?:|applied:?\s*-?\$)/i;
@@ -247,12 +260,14 @@
   }
   function extractProducts(page) {
     var L = lines(page.text);
-    var stop = L.findIndex(function (l) { return TOTALS_START.test(l); });
+    // v1.2.7: the cart table's header row ("PRODUCT  PRICE  QUANTITY  SUBTOTAL") is not where the totals start — the rows come after it.
+    var stop = L.findIndex(function (l) { return TOTALS_START.test(l) && !HEADER_ROW.test(l); });
     var region = stop > 0 ? L.slice(0, stop) : L;
     var out = parseRegion(region);
     if (!out.length && stop > 0) out = parseRegion(L);
     // The cart stepper's value is a form field, not page text: the page's qty fields fill the blocks that show a quantity control, in order, when the counts match.
-    var qtyFields = fieldsOf(page).filter(function (f) { return /^(?:qty|quantity)\b/i.test(String(f.label || "")) && /^\d{1,4}$/.test(String(f.value || "").trim()); }).map(function (f) { return Number(f.value); });
+    // v1.2.7: the label may END with the word ("Mapei Keracaulk … quantity" — WooCommerce's screen-reader label); a pack-size field never counts.
+    var qtyFields = fieldsOf(page).filter(function (f) { var lab = String(f.label || ""); return /\b(?:qty|quantity)\b/i.test(lab) && !PACK_LABEL.test(lab) && /^\d{1,4}$/.test(String(f.value || "").trim()); }).map(function (f) { return Number(f.value); });
     var controlled = out.filter(function (p) { return p.control && p.qty == null; });
     if (qtyFields.length && qtyFields.length === controlled.length) controlled.forEach(function (p, i) { p.qty = qtyFields[i]; });
     out.forEach(function (p) {
@@ -260,6 +275,8 @@
       // A bare integer between two money lines where the second is price × n ("$7.97 / 12 / $95.64") is the quantity.
       if (p.qty == null && ints.length && monies.length > 1) { var n = ints.filter(function (k) { return monies.some(function (m) { return Math.abs(toNum(m) - toNum(monies[0]) * k) < 0.011 && m !== monies[0]; }); })[0]; if (n != null) p.qty = n; }
       if (p.qty == null && p.control && ints.length) p.qty = ints[0];
+      // v1.2.7: a block with a quantity control (or a page with quantity fields) and no quantity in its text: two monies in a whole ratio — the unit price and the line total (the cart table's "$8.93 … $89.30" with the value inside the input).
+      if (p.qty == null && (p.control || qtyFields.length) && monies.length >= 2) { var rp = ratioPair(monies); if (rp) { p.qty = rp.qty; p.price = rp.price; p.total = rp.total; } }
       // (a) A "× N" mark and one money: the money is the line total, the unit price is derived (v1.2.3).
       if (p.price == null && p.mark && p.qty > 0 && monies.length === 1) { p.total = monies[0]; p.price = unitOf(monies[0], p.qty); }
       // v1.2.4: "Qty N" and one money that is N × a cent-exact price (Walmart's confirmation "Qty 12 / $95.64"): the line total, the unit price derived.
@@ -288,11 +305,16 @@
       // The title line may end with the quantity mark ("… Adjustable Head × 15", v1.2.3).
       var nm = NAME_MARK.exec(l), title = nm ? l.replace(nm[0], " ").trim() : l;
       if (!nameLike(title)) { i++; continue; }
-      var p = { name: title, qty: nm ? Number(nm[1] || nm[2]) : null, price: null, total: null, sku: null, control: !!nm, mark: !!nm, qtyLabel: false, monies: [], ints: [] }, j = i + 1, packInts = false;
+      var p = { name: title, qty: nm ? Number(nm[1] || nm[2]) : null, price: null, total: null, sku: null, control: !!nm, mark: !!nm, qtyLabel: false, monies: [], ints: [] }, j = i + 1, packInts = false, notes = 0;
       for (; j < L.length && j <= i + 14; j++) {
         var x = L[j];
-        if (TOTAL_LINE.test(x) || singleLineItem(x) || rowItem(x) || (nameLike(x) && !SKU.test(x))) break;
+        if (TOTAL_LINE.test(x) || singleLineItem(x) || rowItem(x)) break;
+        // v1.2.7: up to two note lines (a colour, a status, a SKU line) may sit between the quantity and the line total; a third, or any title once the money is in, starts the next product.
+        if (nameLike(x) && !SKU.test(x)) { if (p.control && !p.monies.length && notes < 2) { notes++; continue; } break; }
         if (PROMO.test(x) || GIFT.test(x) || CARDISH.test(x)) continue;
+        // v1.2.7: the cart row's stepper in a tab-joined line ("REMOVE  $8.93  −  +  $89.30", "− 10 +"): the cells mark the quantity control and may carry the value.
+        var stepCells = x.indexOf("  ") >= 0 ? x.split(/\s{2,}/).map(stepperCell).filter(Boolean) : [];
+        if (stepCells.length) { p.control = true; var sv = stepCells.filter(function (c) { return c.qty != null; })[0]; if (sv && p.qty == null) p.qty = sv.qty; }
         var mu = MULT.exec(x);
         if (mu) { p.qty = Number(mu[1] || mu[4]); p.control = true; p.monies.push((mu[2] || mu[3]).replace(/\s/g, "")); continue; }
         var q = QTY.exec(x); if (q) { p.control = true; p.qtyLabel = true; if (p.qty == null) p.qty = Number(q[1]); }
@@ -365,6 +387,7 @@
       if (rest) methods.push(rest);
       for (var j = i + 1; j < L.length && j <= i + 5; j++) {
         if (!methods.length && !rest) { var a2 = methodAmount(L[j]); if (a2 && !methodLine(L[j]) && L[j].length <= 14) return a2; } // "Shipping" / "$12.00" on two lines (Walmart)
+        if (/^\(.*\)$/.test(L[j]) || /^(?:delivery|arrives|est\.?|estimated)\b/i.test(L[j])) continue; // "(Delivery by November 10, 2026)" under each option
         if (!methodLine(L[j])) break;
         methods.push(L[j]);
       }
@@ -493,7 +516,8 @@
         cards: upsert((a.payment || {}).cards || [], (b.payment || {}).cards || [], function (c) { return c.last4 || normName(c.nickname); }),
         giftCards: upsert((a.payment || {}).giftCards || [], (b.payment || {}).giftCards || [], function (g) { return g.last4 || g.amount; }),
       },
-      totals: assignNewer(Object.assign({}, a.totals || {}), b.totals || {}),
+      // v1.2.7: the newest page that shows totals replaces the whole figure — a field it lacks (a checkout that says "Enter your address to view shipping options") is gone, not kept from an older page.
+      totals: Object.assign({}, (b.totals && (b.totals.subtotal || b.totals.total)) ? b.totals : (a.totals || {})),
       promos: dedupePromos((a.promos || []).concat(b.promos || [])),
       order: assignNewer(Object.assign({}, a.order || {}), b.order || {}),
     };
@@ -521,16 +545,15 @@
   function rebuild(cap) {
     return pagesOf(cap).slice().sort(function (p, q) { return String(p.capturedAt || "").localeCompare(String(q.capturedAt || "")); }).reduce(function (b, p) { return mergeBuckets(b, extractBuckets(p)); }, emptyBuckets());
   }
-  /** Add one captured page to a tab's capture. Pure: returns the new record. Buckets merge newest-wins; the step entry is replaced as before. */
+  /** Add one captured page to a tab's capture. Pure: returns the new record. v1.2.7: the buckets are rebuilt from the pages (oldest first, newest wins) on every capture, so re-capturing a step replaces that step's values — nothing from a page since replaced survives. */
   function applyPage(cur, page, host, now) {
     var c = cur ? JSON.parse(JSON.stringify(cur)) : newCapture(host);
-    if (!c.buckets) c.buckets = rebuild(c);
     var entry = Object.assign({}, page, { capturedAt: now });
     if (page.step === "other" || !page.step) c.others = (c.others || []).filter(function (p) { return p.url !== page.url; }).concat([entry]).slice(-6);
     else { c.pages = c.pages || {}; c.pages[page.step] = entry; }
     c.host = host; c.updatedAt = now;
     c.count = Object.keys(c.pages || {}).length + (c.others || []).length;
-    c.buckets = mergeBuckets(c.buckets, extractBuckets(page));
+    c.buckets = rebuild(c);
     return c;
   }
   /** "Copy page text" (v1.2.3, options page → debug): every captured page of the tab, oldest first — step, URL, title, time, size, the scrubbed innerText EXACTLY as stored (tabs included — the header counts the tab-joined lines so a paste that lost them is recognisable) and every field as one JSON line. */

@@ -34,8 +34,9 @@ describe("buckets: extraction (regex-level, no AI)", () => {
   it("the cart stepper's value is a form field, not page text: qty fields fill the blocks that show a quantity control, in order", () => {
     const page = { ...walmartCart, text: walmartCart.text.replace(/\n12\n/, "\nQuantity\n").replace(/\n6\n/, "\nQuantity\n").replace(/\n4\n/, "\nQuantity\n") };
     expect(extractProducts(page).map((p) => p.qty)).toEqual([12, 6, 4]);
-    // No quantity value anywhere → not product lines (v1.2.1: title + price + quantity, or nothing).
-    expect(extractProducts({ ...page, fields: [] })).toEqual([]);
+    // v1.2.7: a quantity control with its value inside the input and no field captured — the whole ratio line total ÷ unit price is the quantity (12 × $7.97 = $95.64), as a table row already did.
+    expect(extractProducts({ ...page, fields: [] }).map((p) => p.qty)).toEqual([12, 6, 4]);
+    // No quantity control and no value anywhere → not product lines (v1.2.1: title + price + quantity, or nothing).
     expect(extractProducts({ ...walmartCart, text: walmartCart.text.replace(/\n12\n|\n6\n|\n4\n/g, "\n"), fields: [] })).toEqual([]);
   });
   it("a pack-size dropdown's options (Multipack Quantity: 1 / 2 on their own lines) are never the quantity; the Quantity fields fill it (the 2026-11-01 browser check)", () => {
@@ -175,19 +176,26 @@ describe("buckets: merge — newest wins per field, nothing replaced wholesale, 
   });
 });
 
-// v1.2.2 / v1.2.3 (Maria 2026-11-02): a shagtools.com cart — table-style rows (one <tr> per product; innerText joins the cells with tabs) left Products empty, and one coupon counted as four promos. v1.2.3: still empty on the real cart (name / $8.93 / stepper (15) / $133.95 in separate cells) and on the checkout (title, "× 15" as plain text under it, line subtotal $133.95 — no unit price, no quantity input). The fixtures are SYNTHETIC, shaped from Maria's description, until the real "Copy page text" paste replaces them.
+// v1.2.2 / v1.2.3 (Maria 2026-11-02): a shagtools.com cart — table-style rows (one <tr> per product; innerText joins the cells with tabs) left Products empty, and one coupon counted as four promos. v1.2.3: still empty on the real cart (name / $8.93 / stepper / line total in separate cells) and on the checkout (title, "× N" as plain text under it, the line subtotal — no unit price, no quantity input). The shagtools fixtures are transcribed from Maria's screenshots of 2026-11-03 (cart with the Driftwood caulk × 10 on backorder, cart-alabaster × 5, the checkout before an address is entered) — the "Copy page text" paste, when it lands, replaces them verbatim.
+const DRIFTWOOD = "Mapei Keracaulk S Sanded Siliconized Acrylic Caulk (10.5 oz.) - 5105 Driftwood", ALABASTER = "Mapei Keracaulk S Sanded Siliconized Acrylic Caulk (10.5 oz.) - 5001 Alabaster";
+const shagCart = { step: "cart", url: "https://www.shagtools.com/cart/", title: "Cart", text: scrubText(readFileSync(resolve(FIX, "shagtools/cart.txt"), "utf8")), fields: [{ label: DRIFTWOOD + " quantity", value: "10" }, { label: "selected: Ground: $24.77", value: "Ground: $24.77\n(Delivery by November 10, 2026)" }] };
+const shagCartAlabaster = { step: "cart", url: "https://www.shagtools.com/cart/", title: "Cart", text: scrubText(readFileSync(resolve(FIX, "shagtools/cart-alabaster.txt"), "utf8")), fields: [{ label: ALABASTER + " quantity", value: "5" }, { label: "selected: Ground: $22.99", value: "Ground: $22.99\n(Delivery by November 10, 2026)" }] };
+const shagCheckout = { step: "review", url: "https://www.shagtools.com/checkout/", title: "Checkout", text: scrubText(readFileSync(resolve(FIX, "shagtools/checkout.txt"), "utf8")), fields: [{ label: "First name", value: "Maria" }, { label: "Last name", value: "Peters" }, { label: "Country / Region", value: "United States (US)" }, { label: "Street address", value: "805 Grandy Ave" }, { label: "Town / City", value: "La Grande" }, { label: "State", value: "Select an option..." }, { label: "ZIP Code", value: "97850" }] };
+const driftwood10 = { name: DRIFTWOOD, qty: 10, price: "$8.93", total: "$89.30", sku: null };
+const alabaster5 = { name: ALABASTER, qty: 5, price: "$8.93", total: "$44.65", sku: null };
 describe("buckets: v1.2.3 — product rows with a plain-text quantity or no quantity text at all (shagtools cart + checkout)", () => {
-  const cart = { step: "cart", url: "https://www.shagtools.com/cart", title: "cart", text: scrubText(readFileSync(resolve(FIX, "shagtools/cart.txt"), "utf8")), fields: [{ label: "quantity", value: "15" }] };
-  const checkout = { step: "review", url: "https://www.shagtools.com/checkout", title: "Checkout", text: scrubText(readFileSync(resolve(FIX, "shagtools/checkout.txt"), "utf8")), fields: [] };
+  const cart = shagCart, checkout = shagCheckout;
   const kicker = { name: "Shag Carpet Kicker Pro 12 Inch Adjustable Head", qty: 15, price: "$8.93", total: "$133.95", sku: null };
   const pg = (text: string) => ({ step: "other", url: "https://www.shagtools.com/x", title: "x", text, fields: [] as { label: string; value: string }[] });
   const rowOf = (cells: string) => `Product\tPrice\tQuantity\tTotal\n${cells}\nSubtotal\t$133.95\n`;
-  it("(b) cart: a table row whose cells are title / unit price / stepper / line total is a product; the quantity comes from the quantity field, and without one from the total ÷ price; the header row and the 'You may also like' row are not products", () => {
+  it("(b) cart: the real table — title line, the backorder note, then REMOVE / $8.93 / − / + / $89.30 tab-joined — is one product; the quantity comes from the '… quantity' field, and without one from the total ÷ price; the header row, the shipping-policy line and the free-shipping meter are not products", () => {
     const b = extractBuckets(cart);
-    expect(b.products).toEqual([kicker]);
-    expect(extractProducts({ ...cart, fields: [] })).toEqual([kicker]);
-    expect(b.totals).toMatchObject({ subtotal: "$133.95", shipping: "$12.00", tax: "$0.00", total: "$132.56" });
-    expect(b.promos).toEqual(["COUPON: SHAGTOOLS10 (10% off)  −$13.39"]);
+    expect(b.products).toEqual([driftwood10]);
+    expect(extractProducts({ ...cart, fields: [] })).toEqual([driftwood10]);
+    expect(b.totals).toEqual({ subtotal: "$89.30", shipping: "$24.77", total: "$114.07" }); // "TAX  Taxes will be calculated at checkout" is no amount
+    expect(b.promos).toEqual(["GET 10% OFF your first order"]);
+    expect(extractBuckets(shagCartAlabaster).products).toEqual([alabaster5]);
+    expect(extractBuckets(shagCartAlabaster).totals).toEqual({ subtotal: "$44.65", shipping: "$22.99", total: "$67.64" });
   });
   it("(b) the quantity cell in every rendering: '− 15 +' as three cells or one, a bare 15, a 'Qty' cell + 15, '× 15', 'Qty: 15', an input with nothing visible — and the cells in any order", () => {
     const title = "Shag Carpet Kicker Pro 12 Inch Adjustable Head";
@@ -200,12 +208,12 @@ describe("buckets: v1.2.3 — product rows with a plain-text quantity or no quan
     expect(extractProducts(pg(rowOf(`${title}\t$133.95`)))).toEqual([]);
     expect(extractProducts(pg(rowOf(`${title}\t$8.93\t7\t$133.95`)))).toEqual([kicker]); // 7 is not it; 133.95 ÷ 8.93 = 15 is
   });
-  it("(a) checkout: title, '× 15' on the line under it, the line total — qty 15, unit price derived as total ÷ 15; the address, shipping method and card lines around it are not products", () => {
+  it("(a) checkout: title, '× 10' under it, 'Available on backorder' and the line total $89.30 on one tab-joined line — qty 10, unit price derived as total ÷ 10; the typed address is the Shipping bucket; no shipping figure (\"Enter your address to view shipping options\")", () => {
     const b = extractBuckets(checkout);
-    expect(b.products).toEqual([kicker]);
-    expect(b.shipping).toMatchObject({ street: "805 Grandy Ave" });
-    expect(b.payment.cards[0]).toMatchObject({ last4: "4242" });
-    expect(b.totals).toMatchObject({ subtotal: "$133.95", shipping: "Free", total: "$120.56" });
+    expect(b.products).toEqual([driftwood10]);
+    expect(b.shipping).toMatchObject({ street: "805 Grandy Ave", fromFields: true, city: "La Grande", zip: "97850" });
+    expect(b.payment.cards).toEqual([]);
+    expect(b.totals).toEqual({ subtotal: "$89.30", tax: "$0.00", total: "$89.30" });
   });
   it("(a) the mark in every spelling and position: 'x 15', '15 ×', '(x15)', on the title line, on the total's line, in one tab-joined row; two monies keep the printed unit price", () => {
     const title = "Shag Carpet Kicker Pro 12 Inch Adjustable Head";
@@ -222,11 +230,12 @@ describe("buckets: v1.2.3 — product rows with a plain-text quantity or no quan
     expect(extractProducts(pg(block(`${title}  Qty: 10  $7.97`)))).toEqual([{ ...kicker, qty: 10, price: "$7.97", total: null }]);
     expect(extractProducts(pg(block(`${title}\nQty: 1\n$8.93`)))).toEqual([{ ...kicker, qty: 1, price: "$8.93", total: null }]); // N = 1: nothing to derive
   });
-  it("cart then checkout merge to one product with the cart's unit price and the line total; the promo is one entry", () => {
+  it("cart then checkout merge to one product; the promo is one entry; the checkout's totals replace the cart's (no shipping figure survives)", () => {
     const m = mergeBuckets(extractBuckets(cart), extractBuckets(checkout));
-    expect(m.products).toEqual([kicker]);
-    expect(m.promos).toEqual(["COUPON: SHAGTOOLS10 (10% off)  −$13.39"]);
+    expect(m.products).toEqual([driftwood10]);
+    expect(m.promos).toEqual(["GET 10% OFF your first order"]);
     expect(m.shipping).toMatchObject({ street: "805 Grandy Ave" });
+    expect(m.totals).toEqual({ subtotal: "$89.30", tax: "$0.00", total: "$89.30" });
   });
   it("promos: the banner, the 'GET 10% OFF' line, the cart notice and the COUPON: row dedupe by code (case-insensitive), a code-less line joins the code whose amount or percent it repeats, else by wording; distinct promos stay", () => {
     expect(dedupePromos(["Use code SHAGTOOLS10 at checkout", "Coupon shagtools10 applied", "GET 10% OFF your first order", "COUPON: SHAGTOOLS10 (10% off)  −$13.39"])).toEqual(["COUPON: SHAGTOOLS10 (10% off)  −$13.39"]);
@@ -240,11 +249,11 @@ describe("buckets: v1.2.3 — product rows with a plain-text quantity or no quan
     c = applyPage(c, cart, "www.shagtools.com", "2026-11-02T22:00:01.000Z");
     const d = debugText(c, "2026-11-02T22:05:00.000Z");
     const L = d.split("\n");
-    expect(L[0]).toBe("AsinFlow capture · www.shagtools.com · 2 pages · 16 tab-joined lines · copied 2026-11-02T22:05:00.000Z · card numbers were masked in the page");
-    expect(L[2]).toBe("=== page 1 · step cart · https://www.shagtools.com/cart · cart · captured 2026-11-02T22:00:01.000Z · " + cart.text.length + " chars ===");
-    expect(d).toContain("\n" + cart.text + "\n--- fields (1) ---\n" + JSON.stringify({ label: "quantity", value: "15" }) + "\n");
-    expect(d).toContain("=== page 2 · step review · https://www.shagtools.com/checkout · Checkout · captured 2026-11-02T22:00:02.000Z");
-    expect(d).toContain("\n" + checkout.text + "\n--- fields (0) ---");
+    expect(L[0]).toBe("AsinFlow capture · www.shagtools.com · 2 pages · 11 tab-joined lines · copied 2026-11-02T22:05:00.000Z · card numbers were masked in the page");
+    expect(L[2]).toBe("=== page 1 · step cart · https://www.shagtools.com/cart/ · Cart · captured 2026-11-02T22:00:01.000Z · " + cart.text.length + " chars ===");
+    expect(d).toContain("\n" + cart.text + "\n--- fields (2) ---\n" + cart.fields.map((f) => JSON.stringify(f)).join("\n") + "\n");
+    expect(d).toContain("=== page 2 · step review · https://www.shagtools.com/checkout/ · Checkout · captured 2026-11-02T22:00:02.000Z");
+    expect(d).toContain("\n" + checkout.text + "\n--- fields (7) ---");
     expect(debugText({ host: "x.com", pages: {}, others: [], count: 0 }, "t")).toBe("AsinFlow capture · x.com · 0 pages · 0 tab-joined lines · copied t · card numbers were masked in the page");
   });
   it("Open in AF is never gated (v1.2.4): no canOpen anywhere, the button is enabled with zero pages, and the background opens /pos/new?supplier=<host> with no model call when nothing is captured", () => {
@@ -271,6 +280,68 @@ describe("buckets: v1.2.3 — product rows with a plain-text quantity or no quan
     const options = readFileSync(resolve(__dirname, "../chrome-extension/options.js"), "utf8");
     expect(options).toMatch(/chrome\.storage\.sync\.set\(\{ serverUrl, autoOpen, debugCapture \}/);
     expect(readFileSync(resolve(__dirname, "../chrome-extension/options.html"), "utf8")).toMatch(/id="debug-capture"/);
+  });
+});
+
+// v1.2.7 (Maria 2026-11-03, three findings from the real shagtools.com captures): (1) a status line between "× 10" and the total; (2) the cart table never parsed — its header row ("PRODUCT PRICE QUANTITY SUBTOTAL") was read as the start of the totals, the stepper's "−" / "+" and the "REMOVE" link share the row's tab-joined line, and the quantity input's label is "<product> quantity"; (3) Shipping $24.77 — the Ground rate selected on an earlier cart — survived into a checkout that lists no shipping and into the next cart: the buckets merged incrementally per capture instead of being rebuilt from the pages.
+describe("buckets: v1.2.7 — note lines inside a row, the cart table, and buckets rebuilt from the pages on every capture", () => {
+  const pg = (text: string, fields: { label: string; value: string }[] = []) => ({ step: "cart", url: "https://www.shagtools.com/cart/", title: "Cart", text, fields });
+  const title = "Shag Carpet Kicker Pro 12 Inch Adjustable Head";
+  const kicker15 = { name: title, qty: 15, price: "$8.93", total: "$133.95", sku: null };
+  it("(1) up to two note lines (a status, a colour, a SKU line) may sit between the quantity and the line total; a third starts the next product; a title after the money always does", () => {
+    expect(extractProducts(pg(`${title}\n× 15\nColor: Sandstone Beige\nShips from our Ohio warehouse\n$133.95`))).toEqual([kicker15]);
+    expect(extractProducts(pg(`${title}\n× 15\nColor: Sandstone Beige\nItem # KP-1200\n$133.95`))).toEqual([{ ...kicker15, sku: "KP-1200" }]);
+    expect(extractProducts(pg(`${title}\n× 15\nColor: Sandstone Beige\nFinish: Brushed Nickel\nPattern: Herringbone Weave\n$133.95`))).toEqual([]); // three notes: not one row
+    expect(extractProducts(pg(`${title}\n× 15\n$133.95\nColor: Sandstone Beige\nAnother Product Entirely Named\n× 2\n$10.00`))).toEqual([kicker15, { name: "Another Product Entirely Named", qty: 2, price: "$5.00", total: "$10.00", sku: null }]);
+  });
+  it("(2) the cart table: the header row is not where the totals start; the row's tab-joined line carries REMOVE, the two monies and the stepper; the quantity from the '… quantity' field, the stepper's value, or the whole ratio total ÷ price", () => {
+    const row = (cells: string) => `PRODUCT\tPRICE\tQUANTITY\tSUBTOTAL\n${DRIFTWOOD}\nAvailable on backorder\n${cells}\nCART TOTALS\nSUBTOTAL\t$89.30\nTOTAL\t$114.07`;
+    const qtyField = [{ label: DRIFTWOOD + " quantity", value: "10" }];
+    expect(extractProducts(pg(row("REMOVE\t$8.93\t−\t+\t$89.30"), qtyField))).toEqual([driftwood10]);
+    expect(extractProducts(pg(row("REMOVE\t$8.93\t−\t+\t$89.30")))).toEqual([driftwood10]); // no field: 89.30 ÷ 8.93 = 10
+    expect(extractProducts(pg(row("REMOVE\t$8.93\t− 10 +\t$89.30")))).toEqual([driftwood10]); // the value in the text
+    expect(extractProducts(pg(row("$8.93\t\t$89.30"), qtyField))).toEqual([driftwood10]); // an icon stepper: no text at all, the field decides
+    expect(extractProducts(pg(row("REMOVE\t$8.93\t−\t+\t$89.30"), [{ label: "Multipack quantity", value: "3" }]))).toEqual([driftwood10]); // a pack-size field is not the quantity
+    // the field count must match the controlled rows; a mismatch falls back to the ratio
+    expect(extractProducts(pg(row("REMOVE\t$8.93\t−\t+\t$89.30"), [{ label: "quantity", value: "4" }, { label: "quantity", value: "7" }]))).toEqual([driftwood10]);
+    // a totals line that really is one still ends the region
+    expect(extractProducts(pg(`SUBTOTAL\t$89.30\n${DRIFTWOOD}\nREMOVE\t$8.93\t−\t+\t$89.30`, qtyField))).toEqual([driftwood10]); // (nothing before it → the whole page is read, as before)
+  });
+  it("(2) the cart's shipping radios: 'Ground: $24.77' / '(Delivery by …)' / '2 Day: $120.02' / '(Delivery by …)' / 'Next Day: $180.02' — the checked one (a selected: field) is the shipping; without it the one that reconciles with Total; never the first by default", () => {
+    const text = (total: string) => `SUBTOTAL\t$89.30\nSHIPPING\nGround: $24.77\n(Delivery by November 10, 2026)\n2 Day: $120.02\n(Delivery by November 6, 2026)\nNext Day: $180.02\n(Delivery by November 5, 2026)\nShipping to 805 Grandy Ave, La Grande, OR 97850.\nTAX\tTaxes will be calculated at checkout\nTOTAL\t${total}`;
+    expect(extractBuckets(pg(text("$114.07"), [{ label: "selected: Ground: $24.77", value: "checked" }])).totals).toEqual({ subtotal: "$89.30", shipping: "$24.77", total: "$114.07" });
+    expect(extractBuckets(pg(text("$209.32"), [{ label: "selected: 2 Day: $120.02", value: "checked" }])).totals).toMatchObject({ shipping: "$120.02" });
+    expect(extractBuckets(pg(text("$269.32"))).totals).toMatchObject({ shipping: "$180.02" });
+    expect(extractBuckets(pg(text("$1.00"))).totals).toEqual({ subtotal: "$89.30", total: "$1.00" });
+  });
+  it("(3) applyPage rebuilds the buckets from the pages: a checkout that lists no shipping drops the cart's figure; re-capturing the cart replaces its values; a cleared record (null) starts empty", () => {
+    let c = applyPage(null, shagCart, "www.shagtools.com", "2026-11-03T20:00:00.000Z");
+    expect(c.buckets.totals).toEqual({ subtotal: "$89.30", shipping: "$24.77", total: "$114.07" });
+    c = applyPage(c, shagCheckout, "www.shagtools.com", "2026-11-03T20:01:00.000Z");
+    expect(c.buckets.totals).toEqual({ subtotal: "$89.30", tax: "$0.00", total: "$89.30" }); // "Enter your address to view shipping options" — no $24.77 kept
+    expect(c.buckets.products).toEqual([driftwood10]);
+    // the cart captured again (a different cart now): its step entry and its values are replaced, the checkout's product stays — same order, 2 pages
+    c = applyPage(c, shagCartAlabaster, "www.shagtools.com", "2026-11-03T20:02:00.000Z");
+    expect(c.count).toBe(2);
+    expect(c.buckets.totals).toEqual({ subtotal: "$44.65", shipping: "$22.99", total: "$67.64" });
+    expect(c.buckets.products).toEqual([driftwood10, alabaster5]);
+    // Clear removes the tab's record; the next capture starts from nothing
+    const fresh = applyPage(null, shagCartAlabaster, "www.shagtools.com", "2026-11-03T20:03:00.000Z");
+    expect(fresh.count).toBe(1);
+    expect(fresh.buckets.products).toEqual([alabaster5]);
+    expect(fresh.buckets.totals).toEqual({ subtotal: "$44.65", shipping: "$22.99", total: "$67.64" });
+    expect(filled(newCapture("www.shagtools.com").buckets)).toEqual({ products: false, shipping: false, payment: false, totals: false, promos: false, order: false });
+    // a page that shows no totals at all (a product page) leaves the figure alone; a stored record without buckets is rebuilt too
+    const other = applyPage(fresh, { step: "other", url: "https://www.shagtools.com/product/x", title: "x", text: "Some Product Page Title Here\nAdd to cart", fields: [] }, "www.shagtools.com", "2026-11-03T20:04:00.000Z");
+    expect(other.buckets.totals).toEqual({ subtotal: "$44.65", shipping: "$22.99", total: "$67.64" });
+    const { buckets: _b, ...noBuckets } = fresh;
+    expect(applyPage(noBuckets as typeof fresh, shagCheckout, "www.shagtools.com", "2026-11-03T20:05:00.000Z").buckets.totals).toEqual({ subtotal: "$89.30", tax: "$0.00", total: "$89.30" });
+  });
+  it("(3) mergeBuckets: the newer page's totals replace the whole figure when it shows totals; otherwise the older figure stays; order fields still merge per field", () => {
+    const a = { ...emptyBuckets(), totals: { subtotal: "$89.30", shipping: "$24.77", total: "$114.07" }, order: { number: "1001" } };
+    expect(mergeBuckets(a, { ...emptyBuckets(), totals: { subtotal: "$89.30", tax: "$0.00", total: "$89.30" } }).totals).toEqual({ subtotal: "$89.30", tax: "$0.00", total: "$89.30" });
+    expect(mergeBuckets(a, { ...emptyBuckets(), totals: { shipping: "$5.00" } }).totals).toEqual({ subtotal: "$89.30", shipping: "$24.77", total: "$114.07" });
+    expect(mergeBuckets(a, { ...emptyBuckets(), order: { date: "2026-11-03" } }).order).toEqual({ number: "1001", date: "2026-11-03" });
   });
 });
 
@@ -362,12 +433,12 @@ describe("buckets: captures are per tab", () => {
     expect(shipToForPrefill(store["capture:11"])).toEqual({ street: "805 Grandy Ave", candidates: ["805 Grandy Ave"] });
     expect(shipToForPrefill(null)).toBeNull();
   });
-  it("re-capturing a step replaces that page for the prefill, but the buckets keep what the earlier capture found", () => {
+  it("re-capturing a step replaces that page for the prefill AND its values in the buckets (v1.2.7: rebuilt from the pages — the earlier capture's products are gone with its page)", () => {
     let c = applyPage(null, walmartCart, "www.walmart.com", now(1));
     c = applyPage(c, { ...walmartCart, text: "Cart (1 item)\nScotch-Brite Heavy Duty Scrub Sponges, 9 Count\n$5.97\n5\n$29.85\nSubtotal (5 items) $29.85", fields: [] }, "www.walmart.com", now(2));
     expect(c.count).toBe(1);
     expect(pagesForPrefill(c)).toHaveLength(1);
-    expect(c.buckets.products.map((p: any) => [p.name.split(" ")[0], p.qty])).toEqual([["Great", 12], ["Hefty", 6], ["Scotch-Brite", 5]]);
+    expect(c.buckets.products.map((p: any) => [p.name.split(" ")[0], p.qty])).toEqual([["Scotch-Brite", 5]]);
     expect(c.buckets.totals.subtotal).toBe("$29.85");
   });
   it("a record stored before 1.2 (no buckets) is rebuilt from its pages on the next capture", () => {
