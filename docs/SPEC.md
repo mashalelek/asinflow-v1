@@ -2714,8 +2714,15 @@ not an Amazon product page the panel shows the capture UI instead of the
   become a fixture. Nothing is sent anywhere; card numbers were masked in
   the page. Fixtures: `server/__fixtures__/capture-pages/shagtools/`
   (`cart.txt`, `checkout.txt` — synthetic, shaped from Maria's
-  description, to be replaced by the real paste). **Open in AF** is enabled once
-  Products and Totals are filled (the rest is optional); **Clear**;
+  description, to be replaced by the real paste). **v1.2.4 (Maria
+  2026-11-02): Open in AF is NEVER gated** — enabled from the moment the
+  panel opens, zero pages captured. With pages captured it runs the one
+  model call and opens the prefilled form; with none the background opens
+  `/pos/new?supplier=<hostname without www>` — a blank New PO with the
+  supplier seeded (`initialSupplier`, `client/src/pages/po-new.tsx`), no
+  model call, no server request. `canOpen()` and the "needs Products and
+  Totals" tooltip are gone; the buckets are a preview, not a gate ("Still
+  missing: …" is information). **Clear**;
   caption "One AI call runs when you open it · card numbers are masked
   before anything leaves the browser". **Per tab:** the record lives under
   `capture:<tabId>` (`chrome.storage.session`); the panel shows the active

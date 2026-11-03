@@ -25,7 +25,6 @@ export function debugText(cap: any, now?: string): string;
 export function extractOrder(page: CapturePage): BucketOrder;
 export function filled(b: Buckets | null): Record<BucketKey, boolean>;
 export function missing(b: Buckets | null): string[];
-export function canOpen(b: Buckets | null): boolean;
 export function streetIn(text: string): string | null;
 export function normStreet(s: string): string | null;
 export function captureKey(tabId: number): string;

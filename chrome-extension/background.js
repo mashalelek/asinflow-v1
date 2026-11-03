@@ -348,7 +348,14 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
         const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
         const key = tab?.id ? AfBuckets.captureKey(tab.id) : null;
         const cur = key ? (await chrome.storage.session.get([key]))[key] : null;
-        if (!cur || !cur.count) { sendResponse({ success: false, message: "Nothing captured yet" }); return; }
+        if (!cur || !cur.count) {
+          // v1.2.4: never gated — no pages captured → a blank New PO with the supplier prefilled from the tab's hostname, no model call.
+          const serverUrl0 = await getServerUrl();
+          let host = ""; try { host = new URL(tab?.url || "").hostname.replace(/^www\./, ""); } catch (e) { host = ""; }
+          await chrome.tabs.create({ url: `${serverUrl0}/pos/new${host ? `?supplier=${encodeURIComponent(host)}` : ""}` });
+          sendResponse({ success: true, blank: true, host });
+          return;
+        }
         const pages = AfBuckets.pagesForPrefill(cur);
         const shipTo = AfBuckets.shipToForPrefill(cur); // the SELECTED address (or the ambiguous candidates) — the server leaves Ships to blank when ambiguous
         const serverUrl = await getServerUrl();

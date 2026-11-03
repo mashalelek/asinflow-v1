@@ -185,7 +185,7 @@ function PackOverrideDialog({ ask, onChoose }: { ask: { asin: string; from: stri
 
 // ── The form ─────────────────────────────────────────────────────────────────
 /** The New PO form — a full page (/pos/new), not a modal (Maria 2026-11-01). `onOpenChange(false)` = Cancel (the page navigates away). */
-export function NewPoForm({ open, onOpenChange, onCreated, prefill }: { open: boolean; onOpenChange: (v: boolean) => void; onCreated: (poId: string) => void; prefill?: PrefillResponse | null }) {
+export function NewPoForm({ open, onOpenChange, onCreated, prefill, initialSupplier }: { open: boolean; onOpenChange: (v: boolean) => void; onCreated: (poId: string) => void; prefill?: PrefillResponse | null; /** /pos/new?supplier=<host>: the extension's blank Open in AF (v1.2.4). */ initialSupplier?: string }) {
   const { user } = useAuth();
   const [form, setForm] = useState<PoFormState>(() => emptyPoForm(todayYmd()));
   const [busy, setBusy] = useState(false);
@@ -204,13 +204,14 @@ export function NewPoForm({ open, onOpenChange, onCreated, prefill }: { open: bo
     const base = emptyPoForm(todayYmd());
     const seeded: PoFormState = prefill ? { ...base, ...prefill.form, products: (prefill.form.products?.length ? prefill.form.products : base.products).map((p) => ({ ...emptyProduct(), ...p })), prefill: prefill.prefill } : base;
     seeded.products = ensureLineIds(seeded.products);
+    if (!prefill && initialSupplier && !seeded.supplier) seeded.supplier = initialSupplier;
     if (!seeded.purchased_by_user_id && user) { seeded.purchased_by_user_id = String(user.id); seeded.purchased_by = user.displayName; }
     if (prefill?.prefill.sources && Object.keys(prefill.prefill.sources).some((k) => k === "ships_to")) setShipsToEdited(true); else setShipsToEdited(false);
     emailDefaultRef.current = seeded.prefill?.sources?.email_used === "af" ? (seeded.email_used ?? "") : "";
     setForm(seeded); setServerErr(null); setTouched(false); setRawOpen(false);
     setEmailOther(false);
     fetch("/api/pos/purchasers").then((r) => r.json()).then((d) => setPeople({ users: d.users ?? [], emails: d.emails ?? [], cashback_sites: d.cashback_sites ?? [], payment_methods: d.payment_methods ?? [], payment_aliases: d.payment_aliases ?? {}, velocity_prep: typeof d.velocity_prep === "number" ? d.velocity_prep : null })).catch(() => {});
-  }, [open, prefill, user]);
+  }, [open, prefill, user, initialSupplier]);
   // Email used default per supplier (Maria 2026-11-01; GET /api/pos/email-default): fills an empty field, or one still holding
   // the previous supplier's default, with a stone marker; a typed or model-read email is left alone.
   const emailDefaultRef = useRef<string>("");

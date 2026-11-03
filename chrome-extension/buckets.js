@@ -429,8 +429,7 @@
     };
   }
   function missing(b) { var f = filled(b); return BUCKETS.filter(function (k) { return !f[k]; }).map(function (k) { return LABELS[k]; }); }
-  /** Open in AF needs Products and Totals; the rest is optional. */
-  function canOpen(b) { var f = filled(b); return f.products && f.totals; }
+  // canOpen() is gone (v1.2.4): the buckets are a preview, not a gate — Open in AF is always enabled.
 
   // ── The per-tab capture record (chrome.storage.session, key capture:<tabId>) ──
   function captureKey(tabId) { return "capture:" + tabId; }
@@ -497,7 +496,7 @@
   var api = {
     BUCKETS: BUCKETS, LABELS: LABELS, emptyBuckets: emptyBuckets, extractBuckets: extractBuckets, mergeBuckets: mergeBuckets,
     extractProducts: extractProducts, extractShipping: extractShipping, extractPayment: extractPayment, extractTotals: extractTotals, extractPromos: extractPromos, dedupePromos: dedupePromos, extractOrder: extractOrder,
-    filled: filled, missing: missing, canOpen: canOpen, streetIn: streetIn, normStreet: normStreet,
+    filled: filled, missing: missing, streetIn: streetIn, normStreet: normStreet,
     captureKey: captureKey, newCapture: newCapture, applyPage: applyPage, pagesForPrefill: pagesForPrefill, shipToForPrefill: shipToForPrefill, othersCapturing: othersCapturing, debugText: debugText,
     shipToKind: shipToKind, describeShipping: describeShipping,
   };

@@ -3,9 +3,12 @@
 // Amazon product page (the calculator keeps those). One "Capture this page"
 // button; "Found so far" is the tab's six data buckets (buckets.js, regex
 // level, no AI — the background merges every capture newest-wins per field);
-// "Open in AF" is enabled once Products and Totals are filled and makes the
-// one AI call, server side. Captures are per tab: the panel shows the active
-// tab's and lists the other tabs with a capture in progress.
+// "Open in AF" is NEVER gated (v1.2.4, Maria 2026-11-02 — the buckets are a
+// preview, not a gate): with pages captured it makes the one AI call, server
+// side, and opens the prefilled form; with none it opens /pos/new blank with
+// the supplier prefilled from the tab's hostname (no model call). Captures
+// are per tab: the panel shows the active tab's and lists the other tabs with
+// a capture in progress.
 (function () {
   "use strict";
   const B = globalThis.AfBuckets;
@@ -91,8 +94,8 @@
     statusEl.textContent = `${plural(n, "page")} captured`;
     const miss = B.missing(b);
     missingEl.textContent = !n ? "Capture the cart, then the review page — any page, any number of times" : miss.length ? `Still missing: ${miss.join(", ")}` : "Everything found";
-    openBtn.disabled = !(n && B.canOpen(b));
-    openBtn.title = n && !B.canOpen(b) ? "Open in AF needs Products and Totals" : "";
+    openBtn.disabled = false; // never gated (v1.2.4)
+    openBtn.title = n ? "" : `Opens a blank PO for ${host} — capture pages first to prefill it`;
     clearBtn.disabled = !n;
     copyBtn.disabled = !n;
     renderBuckets(b, f);
@@ -133,9 +136,10 @@
     try {
       const r = await send({ type: "OPEN_IN_AF" });
       if (!r || !r.success) { say(r?.message || "Could not open in AF — the capture is kept", "error"); return; }
+      if (r.blank) { say(`Opened a blank PO for ${r.host || "this site"} — nothing was captured, so nothing was prefilled`, "ok"); return; }
       say(`Opened in AF${r.lines != null ? ` · ${plural(r.lines, "line")} read` : ""}${r.schema_ok === false ? " · the pages could not be read into the form; the text is in the form's drawer" : ""}${r.warnings && r.warnings.length ? `\n${r.warnings.join("\n")}` : ""}`, "ok");
       await refresh();
-    } finally { openBtn.textContent = "Open in AF"; openBtn.disabled = !(current && current.count && B.canOpen(current.buckets)); }
+    } finally { openBtn.textContent = "Open in AF"; openBtn.disabled = false; }
   }
 
   async function clear() { hush(); await send({ type: "CLEAR_CAPTURE" }); await refresh(); }

@@ -1,7 +1,7 @@
 import { describe, it, expect } from "vitest";
 import { readFileSync } from "fs";
 import { resolve } from "path";
-import { extractBuckets, mergeBuckets, emptyBuckets, filled, missing, canOpen, applyPage, captureKey, pagesForPrefill, shipToForPrefill, othersCapturing, describeShipping, extractShipping, extractProducts, extractPromos, debugText, dedupePromos } from "../chrome-extension/buckets.js";
+import { extractBuckets, mergeBuckets, emptyBuckets, filled, missing, applyPage, captureKey, pagesForPrefill, shipToForPrefill, othersCapturing, describeShipping, extractShipping, extractProducts, extractPromos, debugText, dedupePromos } from "../chrome-extension/buckets.js";
 import { scrubText } from "../chrome-extension/scrub.js";
 
 // Capture PO v1.2 (SPEC §11 "Chrome extension — Capture PO"): six data
@@ -30,7 +30,6 @@ describe("buckets: extraction (regex-level, no AI)", () => {
     expect(b.shipping).toBeNull();
     expect(filled(b)).toEqual({ products: true, shipping: false, payment: false, totals: true, promos: false, order: false });
     expect(missing(b)).toEqual(["Shipping", "Payment", "Promos", "Order"]);
-    expect(canOpen(b)).toBe(true);
   });
   it("the cart stepper's value is a form field, not page text: qty fields fill the blocks that show a quantity control, in order", () => {
     const page = { ...walmartCart, text: walmartCart.text.replace(/\n12\n/, "\nQuantity\n").replace(/\n6\n/, "\nQuantity\n").replace(/\n4\n/, "\nQuantity\n") };
@@ -112,7 +111,6 @@ describe("buckets: the first real Walmart PO (synthetic cart + confirmation pair
     expect(shipToForPrefill(c)).toEqual({ street: "805 Grandy Ave", candidates: ["805 Grandy Ave"] });
     expect(c.buckets.totals.total).toBe("$101.38");
     expect(missing(c.buckets)).toEqual(["Promos"]);
-    expect(canOpen(c.buckets)).toBe(true);
   });
   it("a promo line carries a code, an amount or a percent; a question or an empty prompt is not one", () => {
     const b = extractBuckets({ url: "x", text: "Have a promo code?\nPromo code\nApply\nPromo applied: 30% off with COMEBACK47Z5\nRewards: $5.00 applied\nCoupon SAVE20 applied" });
@@ -189,7 +187,6 @@ describe("buckets: v1.2.3 — product rows with a plain-text quantity or no quan
     expect(extractProducts({ ...cart, fields: [] })).toEqual([kicker]);
     expect(b.totals).toMatchObject({ subtotal: "$133.95", shipping: "$12.00", tax: "$0.00", total: "$132.56" });
     expect(b.promos).toEqual(["COUPON: SHAGTOOLS10 (10% off)  −$13.39"]);
-    expect(canOpen(b)).toBe(true);
   });
   it("(b) the quantity cell in every rendering: '− 15 +' as three cells or one, a bare 15, a 'Qty' cell + 15, '× 15', 'Qty: 15', an input with nothing visible — and the cells in any order", () => {
     const title = "Shag Carpet Kicker Pro 12 Inch Adjustable Head";
@@ -243,6 +240,20 @@ describe("buckets: v1.2.3 — product rows with a plain-text quantity or no quan
     expect(d).toContain("=== page 2 · step review · https://www.shagtools.com/checkout · Checkout · captured 2026-11-02T22:00:02.000Z");
     expect(d).toContain("\n" + checkout.text + "\n--- fields (0) ---");
     expect(debugText({ host: "x.com", pages: {}, others: [], count: 0 }, "t")).toBe("AsinFlow capture · x.com · 0 pages · 0 tab-joined lines · copied t · card numbers were masked in the page");
+  });
+  it("Open in AF is never gated (v1.2.4): no canOpen anywhere, the button is enabled with zero pages, and the background opens /pos/new?supplier=<host> with no model call when nothing is captured", () => {
+    const panel = readFileSync(resolve(__dirname, "../chrome-extension/capture-panel.js"), "utf8");
+    const bg = readFileSync(resolve(__dirname, "../chrome-extension/background.js"), "utf8");
+    const buckets = readFileSync(resolve(__dirname, "../chrome-extension/buckets.js"), "utf8");
+    expect(panel).not.toMatch(/canOpen|needs Products and Totals/);
+    expect(buckets).not.toMatch(/function canOpen/);
+    expect(panel).toMatch(/openBtn\.disabled = false/);
+    expect(bg).toMatch(/if \(!cur \|\| !cur\.count\) \{\s*\n\s*\/\/ v1\.2\.4/);
+    expect(bg).toMatch(/\/pos\/new\$\{host \? `\?supplier=\$\{encodeURIComponent\(host\)\}` : ""\}/);
+    expect(bg).toMatch(/sendResponse\(\{ success: true, blank: true, host \}\)/);
+    const poNew = readFileSync(resolve(__dirname, "../client/src/pages/po-new.tsx"), "utf8");
+    expect(poNew).toMatch(/get\("supplier"\)/);
+    expect(poNew).toMatch(/initialSupplier=\{supplier\}/);
   });
   it("the panel's Copy page text button is shown only with the options page's debug toggle and copies debugText(); nothing is sent anywhere", () => {
     const panel = readFileSync(resolve(__dirname, "../chrome-extension/capture-panel.js"), "utf8");

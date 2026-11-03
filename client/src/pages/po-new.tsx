@@ -4,8 +4,10 @@
  * the page fetches the prefill (a 10-minute server-side cache key — not a
  * draft; nothing is stored until Save) and renders the form with it. With
  * no ?prefill the form opens empty ("+ New PO" on the POs page lands here —
- * a full page, not a modal, Maria 2026-11-01). Cancel returns to the POs
- * page; a save goes to the new PO.
+ * a full page, not a modal, Maria 2026-11-01); ?supplier=<host> seeds the
+ * supplier (the extension's Open in AF with nothing captured, v1.2.4 —
+ * never gated, no model call). Cancel returns to the POs page; a save goes
+ * to the new PO.
  */
 import { useEffect, useState } from "react";
 import { useLocation, useSearch } from "wouter";
@@ -15,6 +17,7 @@ export default function PoNew() {
   const [, navigate] = useLocation();
   const search = useSearch();
   const id = new URLSearchParams(search).get("prefill");
+  const supplier = (new URLSearchParams(search).get("supplier") ?? "").trim().toLowerCase().replace(/^www\./, "") || undefined;
   const [prefill, setPrefill] = useState<PrefillResponse | null | undefined>(undefined);
   const [error, setError] = useState<string | null>(null);
   useEffect(() => {
@@ -30,7 +33,7 @@ export default function PoNew() {
   return (
     <div className="px-6 pt-3">
       {error && <p className="mb-3 text-sm text-destructive" data-testid="po-new-error">{error}</p>}
-      <NewPoForm open onOpenChange={(v) => { if (!v) navigate("/purchase-orders"); }} onCreated={(id) => navigate(`/purchase-orders/${id}`)} prefill={prefill} />
+      <NewPoForm open onOpenChange={(v) => { if (!v) navigate("/purchase-orders"); }} onCreated={(id) => navigate(`/purchase-orders/${id}`)} prefill={prefill} initialSupplier={supplier} />
     </div>
   );
 }
