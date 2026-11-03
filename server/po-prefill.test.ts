@@ -76,11 +76,22 @@ describe("enrichment (no AI)", () => {
   });
   // Round 2 (Maria 2026-11-01): a discount already in the line prices → the promo defaults to not counting; nicknames through the alias table.
   it("a promo whose discount the line prices already carry defaults to not counting; a payment nickname is canonical (OnePay Cash → Walmart card)", async () => {
-    const q = async (sql: string) => (/FROM settings WHERE key = ANY/.test(sql) ? { rows: [{ key: "prep_cost", value: 1 }], rowCount: 1 } : /po_payment_method_aliases/.test(sql) ? { rows: [{ value: { "OnePay Cash": "Walmart card" } }], rowCount: 1 } : { rows: [], rowCount: 0 });
+    const q = async (sql: string, params?: any[]) => (/FROM settings WHERE key = ANY/.test(sql) ? { rows: params?.[0]?.includes("po_payment_methods") ? [{ key: "po_payment_methods", value: ["Walmart card", "Amex (1001)", "Amex Gold", "Amex Plus"] }, { key: "po_payment_method_aliases", value: { "OnePay Cash": "Walmart card", "Amex Plus (1005)": "Amex Plus" } }, { key: "po_payment_method_last4", value: { "Amex (1001)": "1001", "Amex Gold": "1005", "Amex Plus": "1005" } }] : [{ key: "prep_cost", value: 1 }], rowCount: 1 } : { rows: [], rowCount: 0 });
     const x = { ...extraction, lines: [{ productName: "Keystone All Natural Chicken, 28 oz Can", retailerSku: null, qty: 12, unitsPerPack: 1, unitPrice: 7.97, lineTotal: 95.64, asinGuess: null }], subtotal: 95.64, discount: 36.12, tax: 0, shipping: 0, total: 95.64, promos: [{ type: "sale" as const, description: "Now $7.97, was $10.98", amount: 36.12, percent: null, confidence: "high" as const }], payments: [{ method: "card" as const, nickname: "OnePay CashRewards", last4: "0302", amount: 95.64 }], notes: [] };
     const out = await enrichPrefill(q, capture, x, null, { id: "", capturedAt: null });
     expect(out.form.promos?.[0].counts_toward_cogs).toBe(false);
     expect(out.form.payments?.[0].nickname).toBe("Walmart card");
+    // Maria 2026-11-02: a captured card resolves by nickname first, last 4 second, and stays blank with an amber hint when two methods share the last 4.
+    const pays = async (payments: any[]) => enrichPrefill(q, capture, { ...x, payments }, null, { id: "", capturedAt: null });
+    const byLast4 = await pays([{ method: "card", nickname: "Amex", last4: "1001", amount: 95.64 }]);
+    expect(byLast4.form.payments?.[0]).toMatchObject({ nickname: "Amex (1001)", last4: "1001" });
+    expect(byLast4.prefill.hints?.["payments.0.nickname"]).toBeUndefined();
+    const plus = await pays([{ method: "card", nickname: "Amex Plus (1005)", last4: "1005", amount: 95.64 }]);
+    expect(plus.form.payments?.[0]).toMatchObject({ nickname: "Amex Plus", last4: "1005" });
+    const amb = await pays([{ method: "card", nickname: "Amex", last4: "1005", amount: 95.64 }]);
+    expect(amb.form.payments?.[0]).toMatchObject({ nickname: "", last4: "1005" });
+    expect(amb.prefill.hints?.["payments.0.nickname"]).toBe("Two cards end in 1005 — pick Amex Gold or Amex Plus");
+    expect(amb.prefill.warnings).toEqual(expect.arrayContaining([expect.stringContaining("Two cards end in 1005")]));
     // Pre-discount lines keep the §7.2 default.
     const pre = await enrichPrefill(q, capture, { ...x, discount: 23.35, subtotal: 95.64, total: 72.29 }, null, { id: "", capturedAt: null });
     expect(pre.form.promos?.[0].counts_toward_cogs).toBe(true);

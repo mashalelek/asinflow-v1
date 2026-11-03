@@ -48,7 +48,9 @@ describe("New PO form — round 2 layout", () => {
     expect(src).not.toMatch(/field\("weighted_gc_discount_pct"/);
     expect(src).toMatch(/min-\[1440px\]:grid-cols-2/);
     expect(src).toMatch(/GC % <Input value=\{p\.gift_card_discount_pct\}/);
-    expect(src).toMatch(/canonicalPaymentName\(p\.nickname, people\.payment_aliases\)/);
+    // Maria 2026-11-02: the picker resolves by nickname first, last 4 second, never by a shared last 4 alone (resolvePaymentNickname on blur of both fields; amber hint).
+    expect(src).toMatch(/resolvePaymentNickname\(p\.nickname, p\.last4, \{ methods: people\.payment_methods, aliases: people\.payment_aliases, last4: people\.payment_last4 \}\)/);
+    expect(src).toMatch(/onBlur=\{\(\) => resolvePay\(i\)\}[^\n]*input-new-po-payment-last4/);
     expect(src).toMatch(/\{PROMO_REFLECTED_NOTE\}/);
   });
   it("the ASIN row carries a label row (ASIN · Title · ASIN qty · Sold as · Units/pack · Prep · Sourcing · COGS · Paid · Adjustment · Reason · Notes) and the three costs; the summary table, Lines and Pack are gone; the math line stays; prep defaults from Ships to", () => {

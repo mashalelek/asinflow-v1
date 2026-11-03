@@ -54,6 +54,39 @@ export function canonicalPaymentName(nickname: string, aliases: Record<string, s
   return String(nickname ?? "").trim();
 }
 
+/** The three payment lists from settings: canonical names (ordered), aliases → canonical, canonical → last 4. */
+export interface PaymentLists { methods: readonly string[]; aliases: Record<string, string> | null | undefined; last4: Record<string, string> | null | undefined }
+/**
+ * Resolve a typed / captured card to a canonical method (Maria 2026-11-02 —
+ * two Amex cards end in 1005): by NICKNAME first (an alias or a canonical
+ * name, case and punctuation ignored), by LAST 4 second (the one method with
+ * that last 4; a nickname that narrows a shared last 4 — "Gold" → Amex Gold —
+ * still counts), and never by last 4 alone when two methods share it: then
+ * the nickname comes back blank and `ambiguous` lists the candidates for the
+ * amber warning. Anything unknown passes through trimmed. Pure.
+ */
+export function resolvePaymentNickname(nickname: string, last4: string, lists: PaymentLists): { nickname: string; ambiguous: string[] } {
+  const norm = (x: string) => String(x ?? "").toLowerCase().replace(/[^a-z0-9]+/g, "");
+  const methods = Array.isArray(lists.methods) ? lists.methods.map((m) => String(m)) : [];
+  const canonical = canonicalPaymentName(nickname, lists.aliases);
+  const exact = canonical ? methods.find((m) => norm(m) === norm(canonical)) : undefined;
+  if (exact) return { nickname: exact, ambiguous: [] };
+  const l4 = String(last4 ?? "").trim();
+  const map = lists.last4 && typeof lists.last4 === "object" ? lists.last4 : {};
+  const byLast4 = /^\d{4}$/.test(l4) ? methods.filter((m) => String(map[m] ?? "") === l4) : [];
+  if (byLast4.length === 1) return { nickname: byLast4[0], ambiguous: [] };
+  if (byLast4.length > 1) {
+    const narrowed = norm(canonical) ? byLast4.filter((m) => norm(m).includes(norm(canonical))) : byLast4;
+    if (narrowed.length === 1) return { nickname: narrowed[0], ambiguous: [] };
+    return { nickname: "", ambiguous: byLast4 };
+  }
+  return { nickname: canonical, ambiguous: [] };
+}
+/** The warning / hint for a card two methods could be. */
+export function ambiguousPaymentHint(last4: string, candidates: readonly string[]): string {
+  return `Two cards end in ${last4} — pick ${candidates.join(" or ")}`;
+}
+
 export interface PoFormPromo {
   type: PromoType | "";
   description: string;

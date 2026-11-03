@@ -4619,7 +4619,7 @@ export async function registerRoutes(
     if (!isDbAvailable()) { res.status(503).json({ message: "Database not available" }); return; }
     try {
       const users = (await query(`SELECT id, display_name FROM users WHERE is_active ORDER BY id`)).rows;
-      const sRows = (await query(`SELECT key, value FROM settings WHERE key = ANY($1::text[])`, [["po_emails", "po_cashback_sites", "po_payment_methods", "po_payment_method_aliases", "po_email_unknown_supplier", "prep_cost"]])).rows;
+      const sRows = (await query(`SELECT key, value FROM settings WHERE key = ANY($1::text[])`, [["po_emails", "po_cashback_sites", "po_payment_methods", "po_payment_method_aliases", "po_payment_method_last4", "po_email_unknown_supplier", "prep_cost"]])).rows;
       const sv = (k: string) => sRows.find((r: any) => r.key === k)?.value;
       const list = (v: unknown): string[] => (Array.isArray(v) ? v.map((x) => String(x)) : []);
       const used = (await query(`SELECT DISTINCT email_used FROM purchase_orders WHERE email_used IS NOT NULL AND email_used <> '' ORDER BY 1`)).rows.map((r: any) => String(r.email_used));
@@ -4627,7 +4627,9 @@ export async function registerRoutes(
       const emails = Array.from(new Set([...defaults, ...list(sv("po_emails")), ...used]));
       const aliases = (sv("po_payment_method_aliases") && typeof sv("po_payment_method_aliases") === "object" ? sv("po_payment_method_aliases") : {}) as Record<string, string>;
       const payment_methods = Array.from(new Set(list(sv("po_payment_methods")).map((n) => canonicalPaymentName(n, aliases)).filter(Boolean)));
-      res.json({ users, emails, cashback_sites: list(sv("po_cashback_sites")), payment_methods, payment_aliases: aliases, velocity_prep: Number(sv("prep_cost") ?? 1) || 1 });
+      // Each method's last 4 (settings.po_payment_method_last4, migration 081): the form resolves a card by nickname first, last 4 second, never by a shared last 4 alone.
+      const payment_last4 = (sv("po_payment_method_last4") && typeof sv("po_payment_method_last4") === "object" ? sv("po_payment_method_last4") : {}) as Record<string, string>;
+      res.json({ users, emails, cashback_sites: list(sv("po_cashback_sites")), payment_methods, payment_aliases: aliases, payment_last4, velocity_prep: Number(sv("prep_cost") ?? 1) || 1 });
     } catch (err: any) { res.status(500).json({ message: err.message }); }
   });
   // Email used default for a supplier (Maria 2026-11-01; server/supplier-defaults.ts): the supplier's default → its newest PO's email → the unknown-supplier setting.

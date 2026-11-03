@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { checkPoForm, emptyPoForm, emptyProduct, canonicalPaymentName, promoCountsByDefault, PROMO_REFLECTED_NOTE, type PoFormState } from "./po-form";
+import { checkPoForm, emptyPoForm, emptyProduct, canonicalPaymentName, resolvePaymentNickname, ambiguousPaymentHint, promoCountsByDefault, PROMO_REFLECTED_NOTE, type PoFormState } from "./po-form";
 
 // po-af-owned §4 (2026-10-18): the New PO form's validation and derived rows.
 const base = (over: Partial<PoFormState> = {}): PoFormState => ({
@@ -84,6 +84,24 @@ describe("checkPoForm", () => {
     expect(canonicalPaymentName("onepay cashrewards", aliases)).toBe("Walmart card");
     expect(canonicalPaymentName(" Amex ", aliases)).toBe("Amex");
     expect(canonicalPaymentName("Chase (7927)", null)).toBe("Chase (7927)");
+  });
+  // Maria 2026-11-02: two Amex cards end in 1005 — Amex Gold and Amex Plus.
+  it("resolvePaymentNickname: nickname first (alias or canonical), last 4 second (the one method with it), never a shared last 4 alone — blank + the candidates; a narrowing nickname still resolves", () => {
+    const lists = { methods: ["Gift cards", "Amex (1001)", "Amex Gold", "Amex Plus", "Chase (7927)", "Chase Ink (7927)", "Walmart card"], aliases: { "OnePay Cash": "Walmart card", "Amex (1005) - Gold": "Amex Gold", "Amex Gold (1005)": "Amex Gold", "Amex Plus (1005)": "Amex Plus" }, last4: { "Amex (1001)": "1001", "Amex Gold": "1005", "Amex Plus": "1005", "Chase (7927)": "7927", "Chase Ink (7927)": "7927" } };
+    expect(resolvePaymentNickname("Amex Plus", "1005", lists)).toEqual({ nickname: "Amex Plus", ambiguous: [] });
+    expect(resolvePaymentNickname("amex gold (1005)", "1005", lists)).toEqual({ nickname: "Amex Gold", ambiguous: [] });
+    expect(resolvePaymentNickname("Amex (1005) - Gold", "", lists)).toEqual({ nickname: "Amex Gold", ambiguous: [] });
+    expect(resolvePaymentNickname("Gold", "1005", lists)).toEqual({ nickname: "Amex Gold", ambiguous: [] });
+    expect(resolvePaymentNickname("Amex", "1001", lists)).toEqual({ nickname: "Amex (1001)", ambiguous: [] });
+    expect(resolvePaymentNickname("Visa", "1001", lists)).toEqual({ nickname: "Amex (1001)", ambiguous: [] }); // the brand is not the nickname; the last 4 is unique
+    expect(resolvePaymentNickname("Amex", "1005", lists)).toEqual({ nickname: "", ambiguous: ["Amex Gold", "Amex Plus"] });
+    expect(resolvePaymentNickname("Amex (1005)", "1005", lists)).toEqual({ nickname: "", ambiguous: ["Amex Gold", "Amex Plus"] });
+    expect(resolvePaymentNickname("", "1005", lists)).toEqual({ nickname: "", ambiguous: ["Amex Gold", "Amex Plus"] });
+    expect(resolvePaymentNickname("Chase", "7927", lists)).toEqual({ nickname: "", ambiguous: ["Chase (7927)", "Chase Ink (7927)"] });
+    expect(resolvePaymentNickname("OnePay Cash", "", lists)).toEqual({ nickname: "Walmart card", ambiguous: [] });
+    expect(resolvePaymentNickname(" Discover ", "4242", lists)).toEqual({ nickname: "Discover", ambiguous: [] }); // unknown: passes through trimmed
+    expect(resolvePaymentNickname("Amex", "", { methods: [], aliases: null, last4: null })).toEqual({ nickname: "Amex", ambiguous: [] });
+    expect(ambiguousPaymentHint("1005", ["Amex Gold", "Amex Plus"])).toBe("Two cards end in 1005 — pick Amex Gold or Amex Plus");
   });
   it("pack math: 5 units of a 2-pack (2.5 ASIN units) is allowed with the whole-packs warning, not blocked", () => {
     const p = { ...emptyProduct(), price: "6.56", qty_ordered: "5", asin: "B007K83C46", asin_qty_per_product: "0.5", sold_as: "multi-pack" as const, units_per_pack: "2" };

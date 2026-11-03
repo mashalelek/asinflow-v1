@@ -28,7 +28,7 @@ import { Label } from "@/components/ui/label";
 import { MoneyCalcInput, calcMoney } from "@/components/money-calc-input";
 import { useAuth } from "@/contexts/auth-context";
 import {
-  checkPoForm, emptyPoForm, emptyProduct, emptyPromo, emptyPayment, shipsToFromForm, yieldFromPacks, promoCountsByDefault, canonicalPaymentName, PROMO_REFLECTED_NOTE,
+  checkPoForm, emptyPoForm, emptyProduct, emptyPromo, emptyPayment, shipsToFromForm, yieldFromPacks, promoCountsByDefault, resolvePaymentNickname, ambiguousPaymentHint, PROMO_REFLECTED_NOTE,
   SOLD_AS_OPTIONS, PROMO_TYPES, PAYMENT_METHODS, CASHBACK_STATUSES,
   type PoFormState, type PoFormProduct, type PoFormPromo, type PoFormPayment, type PoFormPrefill, type PrefillSource,
 } from "@shared/po-form";
@@ -193,7 +193,7 @@ export function NewPoForm({ open, onOpenChange, onCreated, prefill, initialSuppl
   const [touched, setTouched] = useState(false);
   const [shipsToEdited, setShipsToEdited] = useState(false);
   /** The form's lists (GET /api/pos/purchasers, round 2 2026-11-01): purchasers, every email used + the defaults, cashback sites in order, canonical payment names + aliases, the Velocity prep rate. */
-  const [people, setPeople] = useState<{ users: Array<{ id: number; display_name: string }>; emails: string[]; cashback_sites: string[]; payment_methods: string[]; payment_aliases: Record<string, string>; velocity_prep: number | null }>({ users: [], emails: [], cashback_sites: [], payment_methods: [], payment_aliases: {}, velocity_prep: null });
+  const [people, setPeople] = useState<{ users: Array<{ id: number; display_name: string }>; emails: string[]; cashback_sites: string[]; payment_methods: string[]; payment_aliases: Record<string, string>; payment_last4: Record<string, string>; velocity_prep: number | null }>({ users: [], emails: [], cashback_sites: [], payment_methods: [], payment_aliases: {}, payment_last4: {}, velocity_prep: null });
   const [emailOther, setEmailOther] = useState(false);
   const [packAsk, setPackAsk] = useState<{ asin: string; from: string; to: string } | null>(null);
   const [rawOpen, setRawOpen] = useState(false);
@@ -210,7 +210,7 @@ export function NewPoForm({ open, onOpenChange, onCreated, prefill, initialSuppl
     emailDefaultRef.current = seeded.prefill?.sources?.email_used === "af" ? (seeded.email_used ?? "") : "";
     setForm(seeded); setServerErr(null); setTouched(false); setRawOpen(false);
     setEmailOther(false);
-    fetch("/api/pos/purchasers").then((r) => r.json()).then((d) => setPeople({ users: d.users ?? [], emails: d.emails ?? [], cashback_sites: d.cashback_sites ?? [], payment_methods: d.payment_methods ?? [], payment_aliases: d.payment_aliases ?? {}, velocity_prep: typeof d.velocity_prep === "number" ? d.velocity_prep : null })).catch(() => {});
+    fetch("/api/pos/purchasers").then((r) => r.json()).then((d) => setPeople({ users: d.users ?? [], emails: d.emails ?? [], cashback_sites: d.cashback_sites ?? [], payment_methods: d.payment_methods ?? [], payment_aliases: d.payment_aliases ?? {}, payment_last4: d.payment_last4 ?? {}, velocity_prep: typeof d.velocity_prep === "number" ? d.velocity_prep : null })).catch(() => {});
   }, [open, prefill, user, initialSupplier]);
   // Email used default per supplier (Maria 2026-11-01; GET /api/pos/email-default): fills an empty field, or one still holding
   // the previous supplier's default, with a stone marker; a typed or model-read email is left alone.
@@ -317,6 +317,15 @@ export function NewPoForm({ open, onOpenChange, onCreated, prefill, initialSuppl
 
   const setPromo = (i: number, patch: Partial<PoFormPromo>) => setForm((f0) => { const f = clearMark(f0, `promos.${i}`); return { ...f, promos: (f.promos ?? []).map((p, j) => (j === i ? { ...p, ...patch, ...(patch.type !== undefined && patch.type !== p.type ? { counts_toward_cogs: promoCountsByDefault(String(patch.type), check.discountReflected) } : {}) } : p)) }; });
   const setPay = (i: number, patch: Partial<PoFormPayment>) => setForm((f0) => { const f = clearMark(f0, `payments.${i}`); return { ...f, payments: (f.payments ?? []).map((p, j) => (j === i ? { ...p, ...patch } : p)) }; });
+  // The payment picker (Maria 2026-11-02): on blur of the nickname or the last 4, resolve by nickname first, last 4 second — never by a last 4 two methods share (Amex Gold / Amex Plus, 1005): the nickname stays blank and the row shows the amber hint until one is picked.
+  const [payHint, setPayHint] = useState<Record<number, string>>({});
+  const resolvePay = (i: number) => {
+    const p = form.payments?.[i]; if (!p) return;
+    const r = resolvePaymentNickname(p.nickname, p.last4, { methods: people.payment_methods, aliases: people.payment_aliases, last4: people.payment_last4 });
+    setPayHint((h) => { const n = { ...h }; if (r.ambiguous.length) n[i] = ambiguousPaymentHint(p.last4, r.ambiguous); else delete n[i]; return n; });
+    if (r.ambiguous.length) { if (p.nickname !== "" && !r.ambiguous.includes(p.nickname)) setPay(i, { nickname: "" }); return; }
+    if (r.nickname !== p.nickname) setPay(i, { nickname: r.nickname });
+  };
 
   const save = async () => {
     setTouched(true); setServerErr(null);
@@ -473,8 +482,9 @@ export function NewPoForm({ open, onOpenChange, onCreated, prefill, initialSuppl
               <select value={p.method} onChange={(e) => setPay(i, { method: e.target.value as PoFormPayment["method"] })} className={sel} data-testid={`select-new-po-payment-method-${i}`}>
                 <option value="">method…</option>{PAYMENT_METHODS.map((m) => <option key={m} value={m}>{m.replace("_", " ")}</option>)}
               </select>
-              <Input value={p.nickname} list="new-po-payment-names" onChange={(e) => setPay(i, { nickname: e.target.value })} onBlur={() => { const c = canonicalPaymentName(p.nickname, people.payment_aliases); if (c !== p.nickname) setPay(i, { nickname: c }); }} placeholder="Amex" className="h-8 w-36 text-xs" data-testid={`input-new-po-payment-nick-${i}`} />
-              <Input value={p.last4} onChange={(e) => setPay(i, { last4: e.target.value.replace(/\D/g, "").slice(0, 4) })} placeholder="last 4" inputMode="numeric" className="h-8 w-16 font-mono text-xs" data-testid={`input-new-po-payment-last4-${i}`} />
+              <Input value={p.nickname} list="new-po-payment-names" onChange={(e) => setPay(i, { nickname: e.target.value })} onBlur={() => resolvePay(i)} placeholder="Amex Gold" title={payHint[i] ?? hint(`payments.${i}.nickname`)} className={`h-8 w-36 text-xs ${payHint[i] || hint(`payments.${i}.nickname`) ? "ring-1 ring-amber-400/80" : ""}`} data-testid={`input-new-po-payment-nick-${i}`} />
+              <Input value={p.last4} onChange={(e) => setPay(i, { last4: e.target.value.replace(/\D/g, "").slice(0, 4) })} onBlur={() => resolvePay(i)} placeholder="last 4" inputMode="numeric" className="h-8 w-16 font-mono text-xs" data-testid={`input-new-po-payment-last4-${i}`} />
+              {(payHint[i] ?? hint(`payments.${i}.nickname`)) && <span className="text-[11px] text-amber-700 dark:text-amber-400" data-testid={`new-po-payment-ambiguous-${i}`}>{payHint[i] ?? hint(`payments.${i}.nickname`)}</span>}
               <MoneyCalcInput value={p.amount} onChange={(v) => setPay(i, { amount: v })} placeholder="$" className="h-8 w-20 text-right text-xs" data-testid={`input-new-po-payment-amount-${i}`} />
               {p.method === "gift_card" && <label className="flex items-center gap-1 text-xs" title="The gift card's discount % — feeds the weighted GC %">GC % <Input value={p.gift_card_discount_pct} onChange={(e) => setPay(i, { gift_card_discount_pct: e.target.value })} placeholder="GC %" inputMode="decimal" className="h-8 w-14 text-right text-xs" data-testid={`input-new-po-payment-gc-${i}`} /></label>}
               <button type="button" onClick={() => setForm((f) => ({ ...f, payments: (f.payments ?? []).filter((_, j) => j !== i) }))} className="text-muted-foreground/60 hover:text-destructive" data-testid={`button-new-po-remove-payment-${i}`}><Trash2 className="h-3.5 w-3.5" /></button>

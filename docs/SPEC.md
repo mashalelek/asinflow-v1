@@ -5513,7 +5513,10 @@ Migration 021 dropped an older same-named scaffold; 028 is fresh, not a
 revival.
 
 **Lookup lists** live in `settings` as JSONB arrays: `po_payment_methods`
-(13), `po_cashback_sites` (5), `po_emails` (2), `po_purchasers` (1).
+(14 since migration 081: Amex Gold + Amex Plus replace Amex (1005)),
+`po_cashback_sites` (5), `po_emails` (2), `po_purchasers` (1); maps:
+`po_payment_method_aliases` (alias → canonical) and
+`po_payment_method_last4` (canonical → last 4, migration 081).
 **List order is meaningful: element 0 is the default** (mpeters.cqg@gmail.com;
 Maria). The entry form must preserve order; never sort these lists.
 
@@ -6560,7 +6563,31 @@ replaces it. Migration 061 adds `po_edit_log`, `deleted_pos` and
   card"`): one instrument, two names, so history matches — the form's
   nickname picker lists the canonical names (`settings.po_payment_methods`
   through the aliases) and a typed or captured alias becomes the canonical
-  name on blur / on save / on prefill (`canonicalPaymentName`). **Prep
+  name on blur / on save / on prefill (`canonicalPaymentName`). **Two Amex
+  cards end in 1005 (Maria 2026-11-02, migration 081):** "Amex (1005)" was
+  one method and is two — **Amex Gold** and **Amex Plus**, both last 4
+  1005 — renamed in place in `po_payment_methods` (Amex Plus right after
+  Amex Gold), with the aliases "Amex (1005) - Gold" / "Amex Gold (1005)" →
+  Amex Gold and "Amex Plus (1005)" → Amex Plus, and a new map
+  `settings.po_payment_method_last4` (canonical name → last 4, seeded from
+  the "(NNNN)" in the names plus the two Amex). `resolvePaymentNickname`
+  (`shared/po-form.ts`) resolves a card **by nickname first** (an alias or
+  a canonical name), **by last 4 second** (the one method with that last 4;
+  a nickname that narrows a shared last 4 — "Gold" → Amex Gold — still
+  counts) and **never by a last 4 alone that two methods share** (Amex
+  Gold / Amex Plus, also Chase (7927) / Chase Ink (7927)): the nickname
+  stays blank and the candidates are named. The form's picker runs it on
+  blur of the nickname and of the last 4 (`resolvePay`; an amber ring and
+  "Two cards end in 1005 — pick Amex Gold or Amex Plus" until one is
+  chosen); the prefill does the same and leaves the nickname blank with
+  that hint (`prefill.hints["payments.N.nickname"]`) plus a warning;
+  `/api/pos/purchasers` returns `payment_last4`. Backfill `npm run
+  backfill:amex-split [-- --prod] [--live]`: every `po_payments` card row
+  with last 4 1005 — its source text (`raw_text`, else the PO's
+  `payment_method`) says Plus → Amex Plus, Gold → Amex Gold, a bare
+  "Amex (1005)" → Amex Gold **and** a line in
+  `docs/amex-ambiguous-2026-11-02.csv` for Maria; History rows like the
+  PO Details payment editor's. **Prep
   default:** Ships to = Velocity and a blank prep → the Velocity prep rate
   from settings (`prep_cost`, $1.00); Home → $0.00; stone marker,
   editable, a typed prep is never touched (PO 200015336732726's prep was
