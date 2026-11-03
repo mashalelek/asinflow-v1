@@ -2,6 +2,7 @@ import 'dotenv/config';
 import express, { type Request, Response, NextFunction } from "express";
 import { registerRoutes, getOnboardScDiscoveries, getRunSheetsSync, getOnboardSalesAsins } from "./routes";
 import { createJobsRouter } from "./scheduler/routes";
+import { createDashboardRouter } from "./dashboard";
 import { createListingHygieneRouter } from "./listing-hygiene-routes";
 import { createTrackingRouter } from "./tracking-routes";
 import { requestLogLine } from "./request-log";
@@ -168,6 +169,8 @@ if (!process.env.VITEST) (async () => {
   app.use(createListingHygieneRouter());
   // PO tracking → Velocity (SPEC §26): the unmatched queue, domain map, attach.
   app.use(createTrackingRouter());
+  // Dashboard (SPEC §28): the Spend · Sales · Profit grid and the chart series — read-only.
+  app.use(createDashboardRouter());
 
   await registerRoutes(httpServer, app);
 
