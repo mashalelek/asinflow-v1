@@ -56,7 +56,10 @@ export function MetricTile({ col, index, count, coverage }: { col: DashboardColu
   const sameDates = col.eastern.from === col.pacific.from && col.eastern.to === col.pacific.to;
   const t = (k: string) => `tile-${col.key}-${k}`;
   return (
-    <div className="rounded-[10px] border bg-card text-card-foreground overflow-hidden flex flex-col min-w-0" data-testid={`dashboard-tile-${col.key}`}>
+    // lg+: the card is a 4-row subgrid of the tiles grid (band / Spend / Sales / Profit), so the sections line up across a row
+    // whatever wraps inside one card (headless check 2026-11-04: at 1024 and at 1280 × 5 tiles the widest card pushed its Sales
+    // and Profit sections below its neighbours').
+    <div className="rounded-[10px] border bg-card text-card-foreground overflow-hidden flex flex-col min-w-0 lg:grid lg:grid-rows-subgrid lg:row-span-4" data-testid={`dashboard-tile-${col.key}`}>
       {/* Header band */}
       <div className="px-[18px] pt-[14px] pb-3 flex flex-col gap-0.5" style={{ backgroundColor: bandVar(index, count) }}
            title={sameDates ? undefined : `Spend (Eastern): ${fmtRangeLabel(col.eastern.from, col.eastern.to)} · Sales (Pacific): ${fmtRangeLabel(col.pacific.from, col.pacific.to)}`} data-testid={t("band")}>
@@ -74,7 +77,7 @@ export function MetricTile({ col, index, count, coverage }: { col: DashboardColu
               : <span>{due.main}</span>}
           </Sub>
           <Sub label="Avg. PO value" testId={t("avg-po")}>
-            <span className={avg.muted ? DIM : ""}>{avg.main}</span> <span className="text-xs font-normal text-muted-foreground">· {avg.small}</span>
+            <span className={`inline-flex flex-wrap items-baseline gap-x-1 ${avg.muted ? DIM : ""}`}><span>{avg.main}</span><span className="text-xs font-normal text-muted-foreground whitespace-nowrap">· {avg.small}</span></span>
           </Sub>
           <Sub label="ASIN units ordered" testId={t("asin-units")}>{asin.main}</Sub>
           <Sub label="Individual units ordered" note={ind.small} testId={t("individual-units")}>{ind.main}</Sub>
@@ -86,7 +89,7 @@ export function MetricTile({ col, index, count, coverage }: { col: DashboardColu
         <Main label="Sales" value={sales.main} testId={t("sales-main")} />
         {sales.small && <div className="-mt-2 text-[11px] text-muted-foreground">{sales.small}</div>}
         <div className="grid grid-cols-2 gap-x-4 gap-y-3">
-          <Sub label="Orders / Units" note={ou.small} testId={t("orders-units")}><span className={ou.muted ? DIM : ""}>{ou.main}</span></Sub>
+          <Sub label="Orders / Units" note={ou.small} testId={t("orders-units")}><span className={`whitespace-nowrap text-[15px] xl:text-base ${ou.muted ? DIM : ""}`}>{ou.main}</span></Sub>
           <Sub label="Refunds" testId={t("refunds")} dim>—</Sub>
         </div>
       </section>
@@ -94,7 +97,7 @@ export function MetricTile({ col, index, count, coverage }: { col: DashboardColu
       <section className={`${SECTION} border-t pb-[18px]`} data-testid={t("profit")}>
         <div className="flex items-baseline justify-between gap-3">
           <div className={LABEL}>Profit</div>
-          <div className={`text-[11px] ${DIM}`} data-testid={t("profit-note")}>{PENDING_TOOLTIP}</div>
+          <div className={`text-[11px] text-right ${DIM}`} data-testid={t("profit-note")}>{PENDING_TOOLTIP}</div>
         </div>
         <Main label="Gross profit" value="—" dim testId={t("gross-profit")} />
         <div className="grid grid-cols-2 gap-x-4 gap-y-3">
@@ -111,7 +114,7 @@ export function MetricTiles({ grid, loading }: { grid: DashboardGrid | null; loa
   const coverage = coverageTooltip(grid?.coverage);
   if (!grid) return <div className="text-xs text-muted-foreground" data-testid="dashboard-tiles" aria-busy={loading}>{loading ? "Loading…" : ""}</div>;
   return (
-    <div className={`grid grid-cols-1 gap-4 lg:[grid-template-columns:repeat(var(--tiles),minmax(0,1fr))] transition-opacity ${loading ? "opacity-60" : ""} ${cols.length === 1 ? "lg:max-w-[28rem]" : ""}`}
+    <div className={`grid grid-cols-1 gap-4 lg:[grid-template-columns:repeat(var(--tiles),minmax(0,1fr))] lg:[grid-auto-rows:auto] transition-opacity ${loading ? "opacity-60" : ""} ${cols.length === 1 ? "lg:max-w-[28rem]" : ""}`}
          style={{ ["--tiles" as string]: String(cols.length) }} data-testid="dashboard-tiles" aria-busy={loading}>
       {cols.map((col, i) => <MetricTile key={col.key} col={col} index={i} count={cols.length} coverage={coverage} />)}
     </div>

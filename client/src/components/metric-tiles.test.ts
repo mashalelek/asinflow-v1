@@ -32,6 +32,8 @@ describe("card anatomy", () => {
     expect(tiles).toMatch(/\["--tiles" as string\]: String\(cols\.length\)/);
     expect(tiles).toMatch(/cols\.length === 1 \? "lg:max-w-\[28rem\]" : ""/);
     expect(tiles).toMatch(/cols\.map\(\(col, i\) => <MetricTile key=\{col\.key\} col=\{col\} index=\{i\} count=\{cols\.length\}/);
+    // lg+: each card is a 4-row subgrid so the band / Spend / Sales / Profit sections align across a row whatever wraps inside one card
+    expect(tiles).toMatch(/lg:grid lg:grid-rows-subgrid lg:row-span-4/);
   });
   it("three sections separated by hairlines; main values 28 px / 700; sub-metrics 16 px / 600 in a 2-column grid; labels 11 px with .08em tracking", () => {
     expect(tiles.match(/<section className=\{`\$\{SECTION\} border-t/g)).toHaveLength(2);
