@@ -18,10 +18,10 @@ interface NavItem {
 }
 
 const NAV_ITEMS: NavItem[] = [
+  // Dashboard tiles patch (2026-11-04): Dashboard is the FIRST tab; the default landing page stays /asins (SPEC §8, §28).
+  { path: "/dashboard", label: "Dashboard", icon: LayoutDashboard },
   { path: "/asins", label: "ASINs", icon: Package },
   { path: "/bulk-calc", label: "Bulk Calc", icon: Calculator },
-  // D1 (2026-11-02): Dashboard takes the slot Analytics held; the old page is "ASIN Analytics" right after it (SPEC §8, §28).
-  { path: "/dashboard", label: "Dashboard", icon: LayoutDashboard },
   { path: "/analytics", label: "ASIN Analytics", icon: BarChart3 },
   { path: "/purchase-orders", label: "POs", icon: ShoppingCart },
   { path: "/subscriptions", label: "Subscriptions", icon: Repeat },

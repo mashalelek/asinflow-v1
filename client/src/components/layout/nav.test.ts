@@ -16,10 +16,10 @@ function navItems(src: string): Array<{ path: string; label: string }> {
 
 describe("top nav — Dashboard slot and the ASIN Analytics rename", () => {
   const items = navItems(nav);
-  it("Dashboard sits where Analytics was, ASIN Analytics right after it; no tab is still called Analytics", () => {
+  it("Dashboard is the FIRST tab (tiles patch 2026-11-04), then ASINs · Bulk Calc · ASIN Analytics · POs …; no tab is still called Analytics", () => {
     const paths = items.map((i) => i.path);
-    expect(paths.indexOf("/dashboard")).toBe(paths.indexOf("/bulk-calc") + 1);
-    expect(paths.indexOf("/analytics")).toBe(paths.indexOf("/dashboard") + 1);
+    expect(paths.slice(0, 5)).toEqual(["/dashboard", "/asins", "/bulk-calc", "/analytics", "/purchase-orders"]);
+    expect(app).toMatch(/<Route path="\/">\s*<Redirect to="\/asins" \/>/); // default landing page unchanged
     expect(items.find((i) => i.path === "/dashboard")?.label).toBe("Dashboard");
     expect(items.find((i) => i.path === "/analytics")?.label).toBe("ASIN Analytics");
     expect(items.some((i) => i.label === "Analytics")).toBe(false);

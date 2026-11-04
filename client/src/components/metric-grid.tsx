@@ -7,7 +7,7 @@
  */
 import { Link } from "wouter";
 import { Card } from "@/components/ui/card";
-import { DASHBOARD_ROWS, PENDING_TOOLTIP, type DashboardCell, type DashboardColumn, type DashboardGrid, type DashboardGroup, type DashboardRowDef } from "@shared/dashboard";
+import { DASHBOARD_ROWS, PENDING_TOOLTIP, type DashboardCell, type DashboardColumn, type DashboardCoverage, type DashboardGrid, type DashboardGroup, type DashboardRowDef } from "@shared/dashboard";
 
 const GROUP_LABEL: Record<DashboardGroup, string> = { spend: "Spend", sales: "Sales", profit: "Profit" };
 const MONTHS = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
@@ -34,6 +34,20 @@ export function fmtRangeLabel(from: string, to: string, currentYear = new Date()
 /** The Refunds due cell's link (C1): the POs page filtered to POs with refunds due, any status, over the column's Spend range. */
 export function refundsDueHref(col: Pick<DashboardColumn, "eastern">): string {
   return `/purchase-orders?refunds=due&closed=all&from=${col.eastern.from}&to=${col.eastern.to}`;
+}
+
+const fmtTime = (iso: string | null) => (iso ? new Date(iso).toLocaleString(undefined, { hour: "numeric", minute: "2-digit" }) : "never");
+/** The coverage line (tiles patch 2026-11-04: a tooltip on every tile's SALES label, no longer a header line): "Sales through Nov 3 · synced 6:47 PM · data from Sep 9, 2024 · Orders from Oct 31, 2024". */
+export function coverageTooltip(cov: DashboardCoverage | null | undefined): string {
+  if (!cov) return "";
+  const parts = [
+    `Sales through ${cov.newestSaleDate ? fmtRangeLabel(cov.newestSaleDate, cov.newestSaleDate) : "—"}`,
+    `synced ${fmtTime(cov.lastSalesSyncAt)}`,
+  ];
+  if (cov.earliestSaleDate) parts.push(`data from ${fmtRangeLabel(cov.earliestSaleDate, cov.earliestSaleDate)}`);
+  if (cov.rebackfillPending) parts.push("Orders not loaded yet — run backfill:sales for the Pacific-day basis");
+  else if (cov.ordersFrom && cov.earliestSaleDate && cov.ordersFrom > cov.earliestSaleDate) parts.push(`Orders from ${fmtRangeLabel(cov.ordersFrom, cov.ordersFrom)} (earlier sales stay on the old day basis)`);
+  return parts.join(" · ");
 }
 
 export interface CellText { main: string; small?: string; tooltip?: string; muted?: boolean }
@@ -74,7 +88,7 @@ export function MetricGrid({ grid, loading }: { grid: DashboardGrid | null; load
         </thead>
         <tbody>
           {groups.map((g, gi) => (
-            <GroupRows key={g} group={g} first={gi === 0} cols={cols} />
+            <GroupRows key={g} group={g} first={gi === 0} cols={cols} tooltip={g === "sales" ? coverageTooltip(grid?.coverage) : undefined} />
           ))}
         </tbody>
       </table>
@@ -82,12 +96,12 @@ export function MetricGrid({ grid, loading }: { grid: DashboardGrid | null; load
   );
 }
 
-function GroupRows({ group, first, cols }: { group: DashboardGroup; first: boolean; cols: DashboardColumn[] }) {
+function GroupRows({ group, first, cols, tooltip }: { group: DashboardGroup; first: boolean; cols: DashboardColumn[]; tooltip?: string }) {
   const rows = DASHBOARD_ROWS.filter((r) => r.group === group);
   return (
     <>
       <tr style={first ? undefined : { borderTop: "0.5px solid hsl(var(--border))" }}>
-        <td colSpan={cols.length + 1} className="px-4 pt-4 pb-1 text-[11px] font-semibold uppercase tracking-wider text-muted-foreground">{GROUP_LABEL[group]}</td>
+        <td colSpan={cols.length + 1} className="px-4 pt-4 pb-1 text-[11px] font-semibold uppercase tracking-wider text-muted-foreground" title={tooltip || undefined} data-testid={`dashboard-group-${group}`}>{GROUP_LABEL[group]}</td>
       </tr>
       {rows.map((r) => (
         <tr key={r.key} data-testid={`dashboard-row-${r.key}`} className={r.primary ? "text-base" : "text-sm"}>

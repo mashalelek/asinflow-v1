@@ -898,11 +898,13 @@ to the "no container borders" rule.
 Items in order:
 
 - **AsinFlow** (logo, far left)
+- **Dashboard** — active route, the **first tab** since 2026-11-04 (tiles
+  patch; on 2026-11-03 it took the slot Analytics held): the Spend · Sales
+  · Profit tiles and charts (§28). **Not** in the shared date-picker route
+  list — it owns its ranges (same rule as Repricer below). The default
+  landing page stays `/asins`.
 - **ASINs** — active route
-- **Dashboard** — active route (2026-11-03, D1 of the Dashboard patch): the
-  Spend · Sales · Profit grid and charts (§28). Takes the slot Analytics
-  held. **Not** in the shared date-picker route list — it owns its ranges
-  (same rule as Repricer below).
+- **Bulk Calc** — active route (§21)
 - **ASIN Analytics** — active route (was **Analytics** until 2026-11-03;
   only the label / §8 row changed — the page, its global date picker,
   `fba-include-inbound` toggle, grouping and export are untouched)

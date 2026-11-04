@@ -22,8 +22,8 @@ interface NavItem {
 }
 
 const NAV_ITEMS: NavItem[] = [
-  { path: "/asins", label: "ASINs", icon: Package },
   { path: "/dashboard", label: "Dashboard", icon: LayoutDashboard },
+  { path: "/asins", label: "ASINs", icon: Package },
   { path: "/analytics", label: "ASIN Analytics", icon: BarChart3 },
   { path: "/purchase-orders", label: "Purchase Orders", icon: ShoppingCart },
   { path: "/gift-cards", label: "Gift Cards", icon: CreditCard },

@@ -1,0 +1,170 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>AsinFlow Dashboard — tile layout</title>
+<script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Noto+Sans:wght@400;500;600;700&display=swap" rel="stylesheet">
+<style>
+body{margin:0}
+a{color:#93c5fd}a:hover{color:#bfdbfe}
+</style>
+</helmet>
+<div style="min-height: 820px; box-sizing: border-box; background: {{c.page}}; color: {{c.text}}; font-family: 'Noto Sans', system-ui, sans-serif; display: flex; flex-direction: column;">
+
+  <!-- top nav (context only) -->
+  <div style="background: {{c.nav}}; color: #fafaf9; display: flex; align-items: center; gap: 28px; padding: 0 24px; height: 48px; font-size: 13px; flex-wrap: wrap;">
+    <div style="display: flex; align-items: center; gap: 8px; font-weight: 700; font-size: 15px;">
+      <svg width="18" height="18" viewBox="0 0 18 18" aria-hidden="true"><rect x="2" y="10" width="3" height="6" fill="#fafaf9"/><rect x="7.5" y="6" width="3" height="10" fill="#fafaf9"/><rect x="13" y="2" width="3" height="14" fill="#fafaf9"/></svg>
+      AsinFlow
+    </div>
+    <div style="display: flex; gap: 22px; align-items: center; color: #d6d3d1;">
+      <span style="background: #44403C; color: #fafaf9; padding: 5px 10px; border-radius: 6px; font-weight: 600;">Dashboard</span>
+      <span>ASINs</span><span>Bulk Calc</span><span>ASIN Analytics</span><span>POs</span><span>Subscriptions</span><span>Repricer</span>
+    </div>
+    <div style="margin-left: auto; color: #d6d3d1;">Maria</div>
+  </div>
+
+  <div style="padding: 24px 24px 32px; display: flex; flex-direction: column; gap: 18px; max-width: 1600px; width: 100%; box-sizing: border-box; margin: 0 auto;">
+
+    <!-- page header -->
+    <div style="display: flex; justify-content: space-between; align-items: center; gap: 24px; flex-wrap: wrap;">
+      <h1 style="margin: 0; font-size: 26px; font-weight: 700; letter-spacing: -0.01em;">Dashboard</h1>
+      <div style="display: flex; align-items: center; gap: 10px;">
+        <label for="range-set" style="font-size: 13px; color: {{c.sub}};">Date ranges</label>
+        <div style="position: relative; display: inline-flex; align-items: center;">
+          <select id="range-set" style="font: inherit; font-size: 13px; font-weight: 600; padding: 9px 36px 9px 14px; border-radius: 8px; border: 1px solid {{c.border}}; background: {{c.card}}; color: {{c.text}}; appearance: none; -webkit-appearance: none; cursor: pointer;">
+            <option selected>Today · This week · MTD · 30 days</option>
+            <option>Today · Yesterday · MTD · Last month</option>
+            <option>Today · Yesterday · 7 · 14 · 30 days</option>
+            <option>Custom range…</option>
+          </select>
+          <svg width="14" height="14" viewBox="0 0 14 14" aria-hidden="true" style="position: absolute; right: 12px; pointer-events: none;"><path d="M3 5l4 4 4-4" fill="none" stroke="{{c.sub}}" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/></svg>
+        </div>
+      </div>
+    </div>
+
+    <!-- tiles -->
+    <div style="display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 16px;">
+      <sc-for list="{{tiles}}" as="t" hint-placeholder-count="4">
+        <div style="background: {{c.card}}; border: 1px solid {{c.border}}; border-radius: 10px; overflow: hidden; display: flex; flex-direction: column; min-width: 0;">
+
+          <!-- header band -->
+          <div style="padding: 14px 18px 12px; background: {{t.band}}; display: flex; flex-direction: column; gap: 2px;">
+            <div style="font-size: 16px; font-weight: 700; color: #fafaf9;">{{t.name}}</div>
+            <div style="font-size: 12px; color: #e7e5e4;">{{t.dates}}</div>
+          </div>
+
+          <!-- SPEND -->
+          <div style="padding: 14px 18px 16px; display: flex; flex-direction: column; gap: 12px;">
+            <div style="font-size: 11px; letter-spacing: 0.08em; font-weight: 700; color: {{c.sub}};">SPEND</div>
+            <div style="display: flex; flex-direction: column; gap: 2px;">
+              <div style="font-size: 13px; color: {{c.sub}};">Spend</div>
+              <div style="font-size: 28px; font-weight: 700; letter-spacing: -0.01em; line-height: 1.15;">{{t.spend}}</div>
+            </div>
+            <div style="display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px 16px;">
+              <div style="display: flex; flex-direction: column; gap: 2px;">
+                <div style="font-size: 12px; color: {{c.sub}};">Refunds due</div>
+                <a href="#refunds-due" style="font-size: 16px; font-weight: 600; text-decoration: none;">{{t.refundsDue}}</a>
+              </div>
+              <div style="display: flex; flex-direction: column; gap: 2px;">
+                <div style="font-size: 12px; color: {{c.sub}};">Avg. PO value</div>
+                <div style="font-size: 16px; font-weight: 600;">{{t.avgPo}} <span style="font-size: 12px; font-weight: 400; color: {{c.sub}};">· {{t.pos}}</span></div>
+              </div>
+              <div style="display: flex; flex-direction: column; gap: 2px;">
+                <div style="font-size: 12px; color: {{c.sub}};">ASIN units ordered</div>
+                <div style="font-size: 16px; font-weight: 600;">{{t.asinUnits}}</div>
+              </div>
+              <div style="display: flex; flex-direction: column; gap: 2px;">
+                <div style="font-size: 12px; color: {{c.sub}};">Individual units ordered</div>
+                <div style="font-size: 16px; font-weight: 600;">{{t.indUnits}}</div>
+              </div>
+            </div>
+          </div>
+
+          <!-- SALES -->
+          <div style="padding: 14px 18px 16px; border-top: 1px solid {{c.border}}; display: flex; flex-direction: column; gap: 12px;">
+            <div style="font-size: 11px; letter-spacing: 0.08em; font-weight: 700; color: {{c.sub}};">SALES</div>
+            <div style="display: flex; flex-direction: column; gap: 2px;">
+              <div style="font-size: 13px; color: {{c.sub}};">Sales</div>
+              <div style="font-size: 28px; font-weight: 700; letter-spacing: -0.01em; line-height: 1.15;">{{t.sales}}</div>
+            </div>
+            <div style="display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px 16px;">
+              <div style="display: flex; flex-direction: column; gap: 2px;">
+                <div style="font-size: 12px; color: {{c.sub}};">Orders / Units</div>
+                <div style="font-size: 16px; font-weight: 600;">{{t.ordersUnits}}</div>
+              </div>
+              <div style="display: flex; flex-direction: column; gap: 2px;">
+                <div style="font-size: 12px; color: {{c.sub}};">Refunds</div>
+                <div style="font-size: 16px; font-weight: 600; color: {{c.dim}};" title="after the Finances API patch">—</div>
+              </div>
+            </div>
+          </div>
+
+          <!-- PROFIT -->
+          <div style="padding: 14px 18px 18px; border-top: 1px solid {{c.border}}; display: flex; flex-direction: column; gap: 12px;">
+            <div style="display: flex; justify-content: space-between; align-items: baseline;">
+              <div style="font-size: 11px; letter-spacing: 0.08em; font-weight: 700; color: {{c.sub}};">PROFIT</div>
+              <div style="font-size: 11px; color: {{c.dim}};">after the Finances API patch</div>
+            </div>
+            <div style="display: flex; flex-direction: column; gap: 2px;">
+              <div style="font-size: 13px; color: {{c.sub}};">Gross profit</div>
+              <div style="font-size: 28px; font-weight: 700; color: {{c.dim}}; line-height: 1.15;">—</div>
+            </div>
+            <div style="display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px 16px;">
+              <div style="display: flex; flex-direction: column; gap: 2px;">
+                <div style="font-size: 12px; color: {{c.sub}};">Net profit</div>
+                <div style="font-size: 16px; font-weight: 600; color: {{c.dim}};">—</div>
+              </div>
+              <div style="display: flex; flex-direction: column; gap: 2px;">
+                <div style="font-size: 12px; color: {{c.sub}};">Est. payout</div>
+                <div style="font-size: 16px; font-weight: 600; color: {{c.dim}};">—</div>
+              </div>
+            </div>
+          </div>
+
+        </div>
+      </sc-for>
+    </div>
+
+    <!-- charts stub -->
+    <div style="display: flex; align-items: center; gap: 10px; margin-top: 6px; font-size: 13px; color: {{c.sub}};">
+      <span>Charts</span>
+      <button type="button" style="font: inherit; font-size: 13px; padding: 7px 12px; border-radius: 8px; border: 1px solid {{c.border}}; background: {{c.card}}; color: {{c.text}}; cursor: pointer; font-weight: 600;">Last 12 months</button>
+      <button type="button" style="font: inherit; font-size: 13px; padding: 7px 12px; border-radius: 8px; border: 1px solid {{c.border}}; background: transparent; color: {{c.sub}}; cursor: pointer;">Custom</button>
+      <span style="margin-left: 8px;">three charts below — Spend as bars, Sales as a line</span>
+    </div>
+
+  </div>
+</div>
+</x-dc>
+<script type="text/x-dc" data-dc-script data-props='{"theme":{"editor":"enum","options":["dark","light"],"default":"dark","section":"Look"},"$preview":{"width":1440,"height":820}}'>
+class Component extends DCLogic {
+  renderVals() {
+    const dark = (this.props.theme ?? 'dark') !== 'light';
+    const c = dark ? {
+      page: '#1C1917', card: '#292524', nav: '#292524', border: 'rgba(168,162,158,0.22)',
+      text: '#FAFAF9', sub: '#A8A29E', dim: '#78716C'
+    } : {
+      page: '#F5F4EF', card: '#FFFFFF', nav: '#292524', border: 'rgba(120,113,108,0.22)',
+      text: '#1C1917', sub: '#78716C', dim: '#A8A29E'
+    };
+    // four muted, analogous dusk-blue → slate-teal bands; same lightness, low chroma, sit with warm stone
+    const band = dark ? ['#3A4F68', '#3E5B6E', '#45666E', '#4E6E6B'] : ['#4A5F78', '#4E6B7E', '#55767E', '#5E7E7B'];
+    const tiles = [
+      { name: 'Today',     dates: 'Nov 3',          spend: '$226.20',    refundsDue: '$0.00', avgPo: '$226.20', pos: '1 PO',    asinUnits: '20',    indUnits: '60',    sales: '$1,716.92',  ordersUnits: '39 / 56' },
+      { name: 'This week', dates: 'Nov 2 – 3',      spend: '$589.55',    refundsDue: '$0.00', avgPo: '$147.39', pos: '4 POs',   asinUnits: '52',    indUnits: '132',   sales: '$3,593.42',  ordersUnits: '95 / 120' },
+      { name: 'MTD',       dates: 'Nov 1 – 3',      spend: '$780.83',    refundsDue: '$0.00', avgPo: '$130.14', pos: '6 POs',   asinUnits: '56',    indUnits: '156',   sales: '$5,580.32',  ordersUnits: '149 / 184' },
+      { name: '30 days',   dates: 'Oct 5 – Nov 3',  spend: '$25,924.54', refundsDue: '$0.00', avgPo: '$202.54', pos: '128 POs', asinUnits: '1,409', indUnits: '2,244', sales: '$50,970.80', ordersUnits: '1,464 / 1,698' }
+    ].map((t, i) => ({ ...t, band: band[i] }));
+    return { c, tiles };
+  }
+}
+</script>
+</body>
+</html>

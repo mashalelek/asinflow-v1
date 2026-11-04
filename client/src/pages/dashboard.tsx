@@ -1,16 +1,17 @@
 /**
  * Dashboard (SPEC §28, patch docs/claude_spec-patch-analytics-dashboard.md):
- * the Spend · Sales · Profit grid over one of four range sets, the coverage
- * header, and the three charts under it (DashboardCharts, their own range).
+ * the Spend · Sales · Profit grid over one of four range sets (the range-set
+ * dropdown in the header), and the three charts under it (DashboardCharts,
+ * their own range). The coverage line lives in a tooltip on the SALES label.
  *
  * Rule (§2.1): this page NEVER reads or writes the global date range — the
  * set selector and the charts' own picker are its only range controls; the
  * server resolves "today" (Eastern for Spend, Pacific for Sales).
  */
 import { useCallback, useEffect, useState } from "react";
-import { ToggleGroup, ToggleGroupItem } from "@/components/ui/toggle-group";
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Button } from "@/components/ui/button";
-import { MetricGrid, fmtRangeLabel } from "@/components/metric-grid";
+import { MetricGrid } from "@/components/metric-grid";
 import { DashboardCharts } from "@/components/dashboard-charts";
 import { SET_COLUMN_LABELS, type RangeSetKey } from "@/lib/dashboard-sets";
 import type { DashboardGrid } from "@shared/dashboard";
@@ -24,7 +25,6 @@ function loadSet(): RangeSetKey {
 function saveSet(set: RangeSetKey) { try { localStorage.setItem(RANGE_SET_KEY, String(set)); } catch { /* per-browser convenience only */ } }
 
 const ymdLocal = (d: Date) => `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
-const fmtTime = (iso: string | null) => (iso ? new Date(iso).toLocaleString(undefined, { month: "short", day: "numeric", hour: "numeric", minute: "2-digit" }) : "never");
 
 export default function Dashboard() {
   const [set, setSet] = useState<RangeSetKey>(loadSet);
@@ -48,43 +48,31 @@ export default function Dashboard() {
   }, [set, custom.from, custom.to]);
   useEffect(() => { void load(); }, [load]);
 
-  const cov = grid?.coverage;
   return (
     <div className="p-6 space-y-4" data-testid="page-dashboard">
-      <div className="flex flex-wrap items-end gap-x-6 gap-y-2">
-        <div>
-          <h1 className="text-2xl font-semibold">Dashboard</h1>
-          <p className="text-xs text-muted-foreground">Spend by PO date (Eastern) · Sales by Amazon's Pacific day</p>
+      {/* Page header (tiles patch 2026-11-04): the title only on the left; on the right the range-set dropdown
+          ("Date ranges", the four sets; "Custom range…" shows the two-date control beside it). The coverage
+          lines moved into a tooltip on every tile's SALES label (coverageTooltip). */}
+      <div className="flex flex-wrap items-center justify-between gap-x-6 gap-y-2">
+        <h1 className="text-2xl font-semibold">Dashboard</h1>
+        <div className="flex flex-wrap items-center gap-2.5" data-testid="dashboard-range-set">
+          <label htmlFor="dashboard-range-set" className="text-xs text-muted-foreground">Date ranges</label>
+          <Select value={String(set)} onValueChange={(v) => { const n = Number(v) as RangeSetKey; setSet(n); saveSet(n); }}>
+            <SelectTrigger id="dashboard-range-set" className="h-8 w-auto gap-2 text-xs font-medium" data-testid="select-dashboard-range-set"><SelectValue /></SelectTrigger>
+            <SelectContent align="end">
+              {([1, 2, 3, 4] as RangeSetKey[]).map((n) => (
+                <SelectItem key={n} value={String(n)} className="text-xs" data-testid={`dashboard-set-${n}`}>{SET_COLUMN_LABELS[n]}</SelectItem>
+              ))}
+            </SelectContent>
+          </Select>
+          {set === 4 && (
+            <div className="flex items-center gap-2 text-xs text-muted-foreground" data-testid="dashboard-custom-range">
+              <input type="date" value={custom.from} max={custom.to} onChange={(e) => setCustom({ ...custom, from: e.target.value })} className="h-8 rounded-md border border-input bg-background px-2 text-xs text-foreground" data-testid="input-dashboard-from" />
+              <span>to</span>
+              <input type="date" value={custom.to} min={custom.from} onChange={(e) => setCustom({ ...custom, to: e.target.value })} className="h-8 rounded-md border border-input bg-background px-2 text-xs text-foreground" data-testid="input-dashboard-to" />
+            </div>
+          )}
         </div>
-        <div className="flex-1" />
-        {/* Coverage header (§2.3 guard): what the Sales cells can know. */}
-        {cov && (
-          <div className="text-right text-xs text-muted-foreground" data-testid="dashboard-coverage">
-            <div>Sales through <span className="text-foreground">{cov.newestSaleDate ? fmtRangeLabel(cov.newestSaleDate, cov.newestSaleDate) : "—"}</span> · synced {fmtTime(cov.lastSalesSyncAt)}{cov.earliestSaleDate ? ` · data from ${fmtRangeLabel(cov.earliestSaleDate, cov.earliestSaleDate)}` : ""}</div>
-            {cov.rebackfillPending && (
-              <div data-testid="dashboard-rebackfill-pending">Orders not loaded yet — run <code className="font-mono">backfill:sales</code> for the Pacific-day basis</div>
-            )}
-            {!cov.rebackfillPending && cov.ordersFrom && cov.earliestSaleDate && cov.ordersFrom > cov.earliestSaleDate && (
-              <div data-testid="dashboard-orders-from">Orders from {fmtRangeLabel(cov.ordersFrom, cov.ordersFrom)} (earlier sales stay on the old day basis)</div>
-            )}
-          </div>
-        )}
-      </div>
-
-      {/* Range set selector (§2.2): one segmented control, the choice remembered per browser; set 4 adds a two-date control local to the grid. */}
-      <div className="flex flex-wrap items-center gap-3">
-        <ToggleGroup type="single" variant="outline" size="sm" value={String(set)} onValueChange={(v) => { if (v) { const n = Number(v) as RangeSetKey; setSet(n); saveSet(n); } }} className="justify-start flex-wrap" data-testid="dashboard-range-set">
-          {([1, 2, 3, 4] as RangeSetKey[]).map((n) => (
-            <ToggleGroupItem key={n} value={String(n)} className="h-8 px-3 text-xs" data-testid={`dashboard-set-${n}`}>{SET_COLUMN_LABELS[n]}</ToggleGroupItem>
-          ))}
-        </ToggleGroup>
-        {set === 4 && (
-          <div className="flex items-center gap-2 text-xs text-muted-foreground" data-testid="dashboard-custom-range">
-            <input type="date" value={custom.from} max={custom.to} onChange={(e) => setCustom({ ...custom, from: e.target.value })} className="h-8 rounded-md border border-input bg-background px-2 text-xs text-foreground" data-testid="input-dashboard-from" />
-            <span>to</span>
-            <input type="date" value={custom.to} min={custom.from} onChange={(e) => setCustom({ ...custom, to: e.target.value })} className="h-8 rounded-md border border-input bg-background px-2 text-xs text-foreground" data-testid="input-dashboard-to" />
-          </div>
-        )}
       </div>
 
       {error && (

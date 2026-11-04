@@ -6,5 +6,5 @@ export const SET_COLUMN_LABELS: Readonly<Record<RangeSetKey, string>> = {
   1: "Today · This week · MTD · 30 days",
   2: "Today · Yesterday · MTD · Last month",
   3: "Today · Yesterday · 7 · 14 · 30 days",
-  4: "Custom",
+  4: "Custom range…",
 };
