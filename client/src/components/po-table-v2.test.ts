@@ -4,7 +4,7 @@ import { describe, it, expect } from "vitest";
 import { readFileSync } from "fs";
 import { join } from "path";
 import { lineDetailTitle, ACTION_ITEM_OPTIONS, DISPLAY_ACTION_ITEMS, MAX_CHIPS } from "./po-asin-rows";
-import { poLineCount, nextPoSort, PO_LIST_COLUMNS, poColStyle, PO_COL_WIDTHS_KEY, PO_DEFAULT_COL_WIDTHS } from "../pages/purchase-orders";
+import { poLineCount, nextPoSort, PO_LIST_COLUMNS, poColStyle, poTableWidth, PO_COL_WIDTHS_KEY, PO_DEFAULT_COL_WIDTHS } from "../pages/purchase-orders";
 import { PO_SORT_KEYS } from "../../../server/po-queries";
 
 const rows = readFileSync(join(__dirname, "po-asin-rows.tsx"), "utf8");
@@ -83,11 +83,20 @@ describe("resizable columns (commit 5): one shared mechanism", () => {
     expect(hook).toMatch(/minWidth = 50/);
     expect(hook).toMatch(/localStorage\.removeItem\(storageKey\)/);
   });
-  it("Action Items defaults to 160 px (≈60% of the old 272 px); a dragged width wins; other columns size to content", () => {
-    expect(PO_DEFAULT_COL_WIDTHS.action_items).toBe(160);
-    expect(poColStyle({}, "action_items")).toEqual({ width: 160, minWidth: 160, maxWidth: 160, overflow: "hidden" });
+  it("every column has a default width (Maria 2026-11-04); a dragged width wins; the table is fixed at their sum", () => {
+    expect(PO_DEFAULT_COL_WIDTHS).toEqual({ status: 60, action_items: 170, order_date: 100, order_id: 170, supplier: 200, order_total: 110, asins: 60, units_ordered: 110, invoice: 70, notes: 60 });
+    for (const c of PO_LIST_COLUMNS) expect(PO_DEFAULT_COL_WIDTHS[c.id], c.id).toBeGreaterThan(0);
+    expect(poColStyle({}, "action_items")).toEqual({ width: 170, minWidth: 170, maxWidth: 170, overflow: "hidden" });
     expect(poColStyle({ action_items: 220 }, "action_items")).toEqual({ width: 220, minWidth: 220, maxWidth: 220, overflow: "hidden" });
-    expect(poColStyle({}, "supplier")).toBeUndefined();
+    expect(poTableWidth({})).toBe(1142); // inside 1280 − the page's 48 px padding
+    expect(poTableWidth({ supplier: 260 })).toBe(1202);
+    expect(page).toMatch(/className="border-collapse text-sm table-fixed" style=\{\{ width: poTableWidth\(colWidths\), minWidth: "100%" \}\}/);
+    expect(page).toMatch(/<colgroup>/);
     expect(page).toMatch(/onClick=\{resetWidths\} data-testid="button-po-reset-widths">Reset widths</);
+  });
+  it("long Order IDs and suppliers truncate with the full text as the title; the nested ASIN table scrolls in its own box", () => {
+    expect(page).toMatch(/font-mono text-xs truncate" title=\{po\.order_id\}/);
+    expect(page).toMatch(/px-3 py-2 truncate" title=\{po\.supplier\}/);
+    expect(page).toMatch(/<div className="overflow-x-auto">\s*<table className="w-full border-collapse text-sm table-fixed" style=\{\{ minWidth: PO_ASIN_TABLE_MIN_WIDTH \}\}>/);
   });
 });

@@ -461,10 +461,22 @@ export const PO_LIST_COLUMNS: ReadonlyArray<{ id: string; label: string; sortKey
 ];
 /** Column widths: the ASINs table's shared mechanism under the POs table's own key (§4). */
 export const PO_COL_WIDTHS_KEY = "af-po-col-widths";
-/** Defaults; a column without one sizes to its content. Action Items ≈ 60% of its old auto width (272 px). */
-export const PO_DEFAULT_COL_WIDTHS: Readonly<Record<string, number>> = { action_items: 160 };
+/**
+ * Default widths, px (Maria 2026-11-04; docs/UI_RULES.md): every column has one and the table is
+ * table-layout fixed — auto layout gave Order ID and Supplier a third of the page each and pushed
+ * Units Ordered / Invoice / Notes off-screen at 1440. Σ + the expand column = 1,142 px, inside 1280.
+ */
+export const PO_DEFAULT_COL_WIDTHS: Readonly<Record<string, number>> = {
+  status: 60, action_items: 170, order_date: 100, order_id: 170, supplier: 200, order_total: 110, asins: 60, units_ordered: 110, invoice: 70, notes: 60,
+};
+/** The chevron ("Expand by ASIN") column — not resizable. */
+export const PO_EXPAND_COL_WIDTH = 32;
+export const PO_COL_IDS = ["status", ...PO_LIST_COLUMNS.map((c) => c.id)] as const;
+export const poColWidth = (widths: Record<string, number>, id: string): number => widths[id] ?? PO_DEFAULT_COL_WIDTHS[id];
+/** The table's width: the columns' sum (saved widths over defaults), never auto. */
+export const poTableWidth = (widths: Record<string, number>): number => PO_COL_IDS.reduce((t, id) => t + poColWidth(widths, id), PO_EXPAND_COL_WIDTH);
 export function poColStyle(widths: Record<string, number>, id: string): React.CSSProperties | undefined {
-  const w = widths[id] ?? PO_DEFAULT_COL_WIDTHS[id];
+  const w = poColWidth(widths, id);
   return w != null ? { width: w, minWidth: w, maxWidth: w, overflow: "hidden" } : undefined;
 }
 
@@ -661,11 +673,20 @@ export default function PurchaseOrders() {
       {error && <div className="text-sm text-destructive" data-testid="text-po-error">{error}</div>}
 
       <div className="w-full overflow-auto rounded-md" style={{ border: "0.5px solid hsl(var(--border))" }}>
-        <table className="w-full border-collapse text-sm" data-testid="po-table">
+        <table className="border-collapse text-sm table-fixed" style={{ width: poTableWidth(colWidths), minWidth: "100%" }} data-testid="po-table">
+          <colgroup>
+            <col style={{ width: poColWidth(colWidths, "status") }} />
+            <col style={{ width: PO_EXPAND_COL_WIDTH }} />
+            {PO_LIST_COLUMNS.map((c) => <col key={c.id} style={{ width: poColWidth(colWidths, c.id) }} />)}
+            {/* Filler: takes the page's spare width so every column keeps its own (fixed layout would spread it). */}
+            <col />
+          </colgroup>
           <thead>
             <tr className="table-header-stone">
-              <SortHeader label="Status" sortKey="status" sort={sort} onSort={(k) => setSort((s) => nextPoSort(s, k))} className="px-2 py-2 text-xs font-medium whitespace-nowrap text-left w-12" />
-              <th className="w-8 px-2 py-2" aria-label="Expand by ASIN" />
+              <SortHeader label="Status" sortKey="status" sort={sort} onSort={(k) => setSort((s) => nextPoSort(s, k))} className="relative px-2 py-2 text-xs font-medium whitespace-nowrap overflow-hidden text-left" style={poColStyle(colWidths, "status")}>
+                <ResizeHandle onMouseDown={(e) => handleResizeStart(e, "status")} />
+              </SortHeader>
+              <th className="px-2 py-2" style={{ width: PO_EXPAND_COL_WIDTH }} aria-label="Expand by ASIN" />
               {PO_LIST_COLUMNS.map((c) => {
                 const cls = `relative px-3 py-2 text-xs font-medium whitespace-nowrap overflow-hidden ${c.align === "right" ? "text-right" : "text-left"}`;
                 const style = poColStyle(colWidths, c.id);
@@ -674,6 +695,7 @@ export default function PurchaseOrders() {
                   ? <SortHeader key={c.id} label={c.label} sortKey={c.sortKey} sort={sort} onSort={(k) => setSort((s) => nextPoSort(s, k))} className={cls} style={style}>{handle}</SortHeader>
                   : <th key={c.id} className={cls} style={style} data-testid={`th-po-${c.id}`}>{c.label}{handle}</th>;
               })}
+              <th aria-hidden />
             </tr>
           </thead>
           <tbody>
@@ -689,11 +711,11 @@ export default function PurchaseOrders() {
                 <tr className="table-zebra-stone cursor-pointer hover:bg-muted/40" style={hairline}
                   onClick={() => navigate(`/purchase-orders/${po.id}`)} data-testid={`row-po-${po.order_id}`}>
                   {/* §5 col 1: Open / Closed */}
-                  <td className="px-2 py-2 w-12" onClick={(e) => e.stopPropagation()}>
+                  <td style={poColStyle(colWidths, "status")} className="px-2 py-2" onClick={(e) => e.stopPropagation()}>
                     <ClosedToggle po={po} onToggled={load} />
                   </td>
                   {/* §3.1: the chevron is the ONLY expand target; the rest of the row still opens the PO. */}
-                  <td className="px-2 py-2 w-8" onClick={(e) => e.stopPropagation()}>
+                  <td className="px-2 py-2" onClick={(e) => e.stopPropagation()}>
                     <button type="button" className="text-muted-foreground hover:text-foreground"
                       onClick={() => applyExpanded(togglePoExpanded(expandedState, po.id, visibleIds))}
                       aria-expanded={open} data-testid={`button-po-expand-${po.order_id}`}>
@@ -706,8 +728,8 @@ export default function PurchaseOrders() {
                       url={`/api/pos/${po.id}/action-items`} onSaved={() => void load()} lineCount={poLineCount(po)} testId={`po-action-items-${po.order_id}`} />
                   </td>
                   <td style={poColStyle(colWidths, "order_date")} className="px-3 py-2 whitespace-nowrap">{fmtDate(po.order_date)}</td>
-                  <td style={poColStyle(colWidths, "order_id")} className="px-3 py-2 font-mono text-xs">{po.order_id}</td>
-                  <td style={poColStyle(colWidths, "supplier")} className="px-3 py-2">{po.supplier}</td>
+                  <td style={poColStyle(colWidths, "order_id")} className="px-3 py-2 font-mono text-xs truncate" title={po.order_id} data-testid={`po-order-id-${po.order_id}`}>{po.order_id}</td>
+                  <td style={poColStyle(colWidths, "supplier")} className="px-3 py-2 truncate" title={po.supplier}>{po.supplier}</td>
                   <td style={poColStyle(colWidths, "order_total")} className={`px-3 py-2 text-right font-mono ${money.muted ? "text-muted-foreground/50" : ""}`}>
                     {money.text}
                     {/* §2.4: a quiet "refund due" line under the total when the PO has due rows — text, no chip. */}
@@ -721,12 +743,15 @@ export default function PurchaseOrders() {
                       : <span className="text-muted-foreground/40">—</span>}
                   </td>
                   <td style={poColStyle(colWidths, "notes")} className="px-3 py-2">{po.has_notes && <StickyNote className="h-3.5 w-3.5 text-muted-foreground" />}</td>
+                  <td aria-hidden />
                 </tr>
                 {open && (
                   <tr data-testid={`row-po-asins-${po.order_id}`}>
-                    <td colSpan={11} className="p-0 pl-6 bg-muted/20">
+                    <td colSpan={12} className="p-0 pl-6 bg-muted/20">
                       {/* Nested rows: same column model as the detail ASINs tab (§3.2, §4);
                           po_asins default order; sorting/filtering stays at PO level. */}
+                      {/* The nested table scrolls in its own box — the POs table keeps its fixed width (docs/UI_RULES.md). */}
+                      <div className="overflow-x-auto">
                       <table className="w-full border-collapse text-sm table-fixed" style={{ minWidth: PO_ASIN_TABLE_MIN_WIDTH }}>
                         <PoAsinColGroup />
                         {firstExpandedId === po.id && <thead><PoAsinHeaderRow sub /></thead>}
@@ -737,6 +762,7 @@ export default function PurchaseOrders() {
                           {po.asins.map((a) => <PoAsinRow key={a.id} a={a} indent editable onChanged={load} po={{ id: po.id, subtotal: po.subtotal, discount: po.discount, tax: po.tax }} />)}
                         </tbody>
                       </table>
+                      </div>
                     </td>
                   </tr>
                 )}
@@ -745,7 +771,7 @@ export default function PurchaseOrders() {
               });
             })()}
             {data && data.pos.length === 0 && (
-              <tr><td colSpan={11} className="px-3 py-8 text-center text-sm text-muted-foreground">No purchase orders match.</td></tr>
+              <tr><td colSpan={12} className="px-3 py-8 text-center text-sm text-muted-foreground">No purchase orders match.</td></tr>
             )}
           </tbody>
         </table>

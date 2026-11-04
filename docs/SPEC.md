@@ -6513,10 +6513,23 @@ reconstructed (those POs are Closed from the sheet).
   the ASINs table's shared hook (`useColumnWidths` + `ResizeHandle`,
   `client/src/hooks/use-column-widths.tsx`) under the key
   `af-po-col-widths`; **Reset widths** appears once a width is stored.
-  Action Items defaults to 160 px. Widths are per browser (localStorage),
+  Widths are per browser (localStorage),
   the same as the Buy List and the dialog sizes (`af-dialog-size:<id>`,
   §7 "Dialogs"); all of them move into a user-scoped table with the
   queued Buy-List-to-DB patch.
+- **Column widths (2026-11-04, `docs/UI_RULES.md`):** the table is
+  `table-layout: fixed` and every column has a default (px) — Status 60,
+  Action Items 170, PO Date 100, Order ID 170, Supplier 200, Order Total
+  110, ASINs 60, Units Ordered 110, Invoice 70, Notes 60, plus the 32 px
+  expand chevron (`PO_DEFAULT_COL_WIDTHS`; 1,142 px in all, inside 1280).
+  A trailing empty filler column takes the spare width, so no column
+  grows past its own. Long Order IDs and suppliers truncate with an
+  ellipsis and the full text as the cell's title. Status resizes too;
+  a dragged width wins over its default, and **Reset widths** returns to
+  these. Auto layout gave Order ID and Supplier ⅓ of the page each and
+  pushed Units Ordered / Invoice / Notes off-screen at 1440. The expanded
+  ASIN rows' table (160 rem) scrolls inside its own box; the POs table
+  never widens with it.
 - Search spans order_id, ASIN, and product name in one box. Supplier and
   Action Items filters are **searchable multi-selects** (OR within a facet,
   AND across facets), beside the Open / Closed / All select (default Open).
