@@ -114,3 +114,46 @@ export async function getMessage(gmail: gmail_v1.Gmail, id: string): Promise<Gma
   const r = await gmail.users.messages.get({ userId: "me", id, format: "full" });
   return parseGmailMessage(r.data);
 }
+
+// ---- PO documents (SPEC §22 "PO documents"): the email as a printable page ----
+
+export interface RenderableMessage { id: string; html: string; subject: string; from: string; to: string; date: Date }
+
+const escapeHtml = (s: string) => s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;");
+
+/** Pure: the message's HTML (or its plain text as <pre>) with cid: images inlined and a From / Date / Subject header on top. */
+export function renderableHtml(m: { html: string | null; plain: string | null; subject: string; from: string; to: string; date: Date }, cid: Record<string, string> = {}): string {
+  let body = m.html ?? `<pre style="white-space:pre-wrap;font:13px/1.4 Arial,Helvetica,sans-serif">${escapeHtml(m.plain ?? "")}</pre>`;
+  body = body.replace(/(["'(])cid:([^"')\s]+)/gi, (all, q, id) => (cid[id] ? `${q}${cid[id]}` : all));
+  const head = `<div style="font:12px/1.5 Arial,Helvetica,sans-serif;color:#333;border-bottom:1px solid #ccc;margin:0 0 12px;padding:0 0 8px">`
+    + `<div><b>From:</b> ${escapeHtml(m.from)}</div><div><b>To:</b> ${escapeHtml(m.to)}</div>`
+    + `<div><b>Date:</b> ${escapeHtml(m.date.toUTCString())}</div><div><b>Subject:</b> ${escapeHtml(m.subject)}</div></div>`;
+  const doc = /<body[^>]*>/i.test(body) ? body.replace(/<body[^>]*>/i, (b) => `${b}${head}`) : `<!doctype html><html><head><meta charset="utf-8"></head><body>${head}${body}</body></html>`;
+  return /<meta[^>]+charset/i.test(doc) ? doc : doc.replace(/<head[^>]*>/i, (h) => `${h}<meta charset="utf-8">`);
+}
+
+/** The full message for rendering: the first HTML part (else the plain text), its inline (cid:) images fetched and inlined as data: URIs. */
+export async function getRenderableMessage(gmail: gmail_v1.Gmail, id: string): Promise<RenderableMessage> {
+  const r = await gmail.users.messages.get({ userId: "me", id, format: "full" });
+  const m = r.data;
+  const headers = m.payload?.headers ?? [];
+  const h = (p: gmail_v1.Schema$MessagePart | undefined, name: string) => (p?.headers ?? []).find((x) => (x.name ?? "").toLowerCase() === name)?.value ?? "";
+  const parts = { plain: [] as string[], html: [] as string[] };
+  walkParts(m.payload, parts);
+  const cid: Record<string, string> = {};
+  const inline: gmail_v1.Schema$MessagePart[] = [];
+  const collect = (p: gmail_v1.Schema$MessagePart | undefined) => { if (!p) return; if (/^image\//i.test(p.mimeType ?? "") && h(p, "content-id")) inline.push(p); (p.parts ?? []).forEach(collect); };
+  collect(m.payload);
+  for (const p of inline) {
+    const key = h(p, "content-id").replace(/^<|>$/g, "");
+    let data = p.body?.data ?? null;
+    if (!data && p.body?.attachmentId) data = (await gmail.users.messages.attachments.get({ userId: "me", messageId: id, id: p.body.attachmentId })).data.data ?? null;
+    if (data) cid[key] = `data:${p.mimeType};base64,${data.replace(/-/g, "+").replace(/_/g, "/")}`;
+  }
+  const subject = headers.find((x) => (x.name ?? "").toLowerCase() === "subject")?.value ?? "";
+  const from = headers.find((x) => (x.name ?? "").toLowerCase() === "from")?.value ?? "";
+  const to = headers.find((x) => (x.name ?? "").toLowerCase() === "to")?.value ?? "";
+  const date = new Date(Number(m.internalDate ?? 0));
+  const html = renderableHtml({ html: parts.html[0] ?? null, plain: parts.plain.join("\n") || null, subject, from, to, date }, cid);
+  return { id, html, subject, from, to, date };
+}

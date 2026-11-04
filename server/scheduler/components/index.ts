@@ -33,6 +33,7 @@ import { poTrackingIngest } from "./25-po-tracking-ingest";
 import { poTrackingPush } from "./26-po-tracking-push";
 import { poConfirmations } from "./27-po-confirmations";
 import { subscriptionAlerts } from "./28-subscriptions";
+import { poDocuments } from "./29-po-documents";
 import type { ComponentDef } from "../types";
 
 export const COMPONENTS: readonly ComponentDef[] = Object.freeze([
@@ -42,6 +43,7 @@ export const COMPONENTS: readonly ComponentDef[] = Object.freeze([
   closeOos, ledger, deleteDead,
   poTrackingIngest, poTrackingPush,
   poConfirmations, subscriptionAlerts,
+  poDocuments,
 ]);
 
 // The order is a fact, not a convention: fail loudly at import if it drifts.

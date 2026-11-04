@@ -30,6 +30,7 @@
     "backfill:po-model": "tsx script/backfill-po-model.ts",
     "backfill:po-promos": "tsx script/backfill-po-promos.ts",
     "po:reconcile-confirmations": "tsx script/po-confirm-reconcile.ts",
+    "po-docs": "tsx script/po-docs.ts",
     "migrate:po-status": "tsx script/migrate-po-status.ts",
     "db:push": "drizzle-kit push",
     "po:cogs-review": "tsx script/po-cogs-review.ts",
