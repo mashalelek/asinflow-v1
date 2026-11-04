@@ -13,15 +13,17 @@
 //     number of ASIN units is allowed with a warning (Upload to Velocity
 //     skips it — Velocity only accepts whole packs); a bundle's components
 //     must give the same number of sets.
-//   - live totals: subtotal = Σ price × qty (a typed subtotal that differs is
-//     a warning, not an error).
-// Costs per ASIN row come from shared/po-cost.ts (formula v2, patch
-// po-ai-prefill §7.1 as corrected 2026-10-31): Sourcing cost (col AR), COGS
+//   - live totals: subtotal = Σ line totals (a typed subtotal that differs is
+//     a warning, not an error). A line's total is the captured line_total
+//     when it agrees with price × qty to the cent of the price (79.70 ÷ 30
+//     shows 2.66), else price × qty; the price takes up to 6 decimals.
+// Costs per ASIN row come from shared/po-cost.ts (formula v3, patch
+// po-ai-prefill §7.1 as corrected 2026-11-04): Sourcing cost (col AR), COGS
 // (col Y, + the per-ASIN adjustment) and Paid cost; COGS can be overridden
 // per ASIN. Promos (several per PO, §7.2) decide what counts: a promo with
 // counts_toward_cogs = false (rewards, by default) is added back.
 
-import { adjustedProductCost, allocateAsinCosts, discountReflectedInLines, effectiveCostHeader, COST_FORMULA_VERSION, type CostHeader } from "./po-cost";
+import { adjustedProductCost, allocateAsinCosts, discountReflectedInLines, effectiveCostHeader, COST_FORMULA_VERSION, REFLECTED_TOLERANCE, type CostHeader } from "./po-cost";
 import { asinUnitsFromLines, fracToNumber, lineRatio, lineUnitsExact, ratioForUnits, ratioYield, type YieldRatio } from "./yield";
 /** Stamped on purchase_orders.cost_formula_version by every form save; NULL = imported, never recomputed. */
 export const COST_FORMULA_VERSION_SAVED = COST_FORMULA_VERSION;
@@ -118,7 +120,10 @@ export interface PoFormPrefill {
   supplier?: string | null;
   pages?: number;
   captured_at?: string | null;
+  /** Only what Maria must act on: an unknown ASIN, totals that still do not reconcile, an ambiguous card, an uncertain promo type. */
   warnings?: string[];
+  /** The model's explanations and other information (a new supplier) — the collapsed "Notes from capture" line. */
+  notes?: string[];
   /** Field path → source. Header: "supplier"; product: "products.0.price"; ASIN rows: "asin.B0…"; promo: "promos.0". */
   sources: Record<string, PrefillSource>;
   /** Field path → a tooltip on an amber field explaining a server-side correction (2026-11-01: "qty inferred from subtotal"). Cleared with the marker. */
@@ -133,6 +138,8 @@ export interface PoFormProduct {
   supplier_sku: string;
   price: string;
   qty_ordered: string;
+  /** The line's total as captured (2026-11-04: 79.70 for 30 × "2.66" — total ÷ qty is not whole cents); absent / "" = price × qty. Cleared when price or qty is typed. */
+  line_total?: string;
   /** The retailer's pack (e.g. a 12-count) — drives the yield: qty × retailer units ÷ ASIN units per pack (§6.5). Form-only. */
   retailer_units_per_pack?: string;
   asin: string;
@@ -236,6 +243,21 @@ export const emptyPoForm = (today: string): PoFormState => ({
 
 const t = (s: unknown) => (typeof s === "string" ? s.trim() : s == null ? "" : String(s).trim());
 const moneyNum = (s: string): number | null => { const v = t(s).replace(/[$,\s]/g, ""); return v === "" ? null : /^-?\d+(\.\d{1,2})?$/.test(v) ? Number(v) : NaN; };
+/** A unit price: up to 6 decimals (2026-11-04 — a price typed or derived from a line total that is not whole cents). */
+const priceNum = (s: string): number | null => { const v = t(s).replace(/[$,\s]/g, ""); return v === "" ? null : /^-?\d+(\.\d{1,6})?$/.test(v) ? Number(v) : NaN; };
+/** Full-precision text of a unit price (≤ 6 dp, no trailing zeros past the cents). */
+export const priceText = (x: number): string => { const s = (Math.round(x * 1e6) / 1e6).toFixed(6).replace(/0+$/, ""); const [i, d = ""] = s.split("."); return `${i}.${d.padEnd(2, "0")}`; };
+/**
+ * A product row's money: the captured line total when it agrees with the price (round(total ÷ qty) to the
+ * cent = the price, to the cent), else price × qty. `unit` = the full-precision unit price the costs use.
+ */
+export function productLineMoney(p: Pick<PoFormProduct, "price" | "qty_ordered" | "line_total">): { total: number; unit: number; lineTotal: number | null } | null {
+  const price = priceNum(p.price ?? ""), qty = Number(t(p.qty_ordered ?? ""));
+  if (price == null || Number.isNaN(price) || !(qty > 0)) return null;
+  const lt = moneyNum(p.line_total ?? "");
+  if (lt != null && !Number.isNaN(lt) && lt >= 0 && Math.abs(lt / qty - price) <= 0.005 + 1e-9) return { total: lt, unit: lt / qty, lineTotal: lt };
+  return { total: price * qty, unit: price, lineTotal: null };
+}
 const r2 = (x: number) => Math.round(x * 100) / 100;
 /** A 2-dp yield back to the small fraction it stands for (0.33 → 1/3). Same rule as server/po-af-source.ts trueYield. */
 export function trueYield(y: number): number {
@@ -258,7 +280,7 @@ export interface PoFormAsin {
   cogs_adjustment: string | null;
   cogs_adjustment_reason: string | null;
   /** Exact yield (2026-11-02): the two integers the line stores; asin_qty_per_product is the derived yield (history). */
-  lines: Array<{ index: number; product_name: string | null; supplier_sku: string | null; price: string | null; qty_ordered: number; asin_qty_per_product: string; retailer_units_per_product: number; asin_units_per_pack: number; adjusted_product_cost: string | null; position: number; notes: string | null }>;
+  lines: Array<{ index: number; product_name: string | null; supplier_sku: string | null; price: string | null; line_total: string | null; qty_ordered: number; asin_qty_per_product: string; retailer_units_per_product: number; asin_units_per_pack: number; adjusted_product_cost: string | null; position: number; notes: string | null }>;
 }
 
 export interface PoFormCheck {
@@ -270,7 +292,7 @@ export interface PoFormCheck {
   effectiveOrderTotal: number;
   /** Σ amount of the promos that do not count toward COGS (added back); 0 when the discount is already in the line prices. */
   nonCountingPromoAmount: number;
-  /** Maria 2026-11-01: Σ price × qty already equals the post-discount subtotal — the discount / promos are informational, nothing reduces a cost. */
+  /** Maria 2026-11-01: Σ line totals already equals the post-discount subtotal (within 1¢) — the discount / promos are informational, nothing reduces a cost. */
   discountReflected: boolean;
   /** Weighted gift-card % = Σ(gift-card amount × its GC %) ÷ order total, from the Payments block; null when no gift-card payment carries both. */
   weightedGcPct: number | null;
@@ -328,8 +350,8 @@ export function checkPoForm(f: PoFormState): PoFormCheck {
   products.forEach((p, i) => {
     const qty = t(p.qty_ordered);
     if (!/^\d+(\.\d{1,2})?$/.test(qty) || Number(qty) <= 0) perr(i, "qty must be more than 0 (at most 2 decimals)");
-    const price = moneyNum(p.price);
-    if (price == null || Number.isNaN(price) || price < 0) perr(i, "price must be an amount ≥ 0");
+    const price = priceNum(p.price);
+    if (price == null || Number.isNaN(price) || price < 0) perr(i, "price must be an amount ≥ 0 (at most 6 decimals)");
     if (!/^[A-Z0-9]{10}$/.test(t(p.asin).toUpperCase())) perr(i, "map it to an ASIN (10 characters)");
     const y = t(p.asin_qty_per_product);
     if (!/^\d+(\.\d{1,4})?$/.test(y) || Number(y) <= 0) perr(i, "yield must be a number > 0");
@@ -339,22 +361,30 @@ export function checkPoForm(f: PoFormState): PoFormCheck {
     const rupp = t(p.retailer_units_per_pack ?? "1");
     if (rupp !== "" && (!/^\d+$/.test(rupp) || Number(rupp) < 1)) perr(i, "retailer units / pack must be a whole number ≥ 1");
     const prep = moneyNum(p.prep_cost); if (prep != null && (Number.isNaN(prep) || prep < 0)) perr(i, "prep must be an amount ≥ 0");
-    if (price != null && !Number.isNaN(price) && /^\d+(\.\d{1,2})?$/.test(qty)) computedSubtotal += price * Number(qty);
+    const lm = /^\d+(\.\d{1,2})?$/.test(qty) ? productLineMoney(p) : null;
+    if (lm) computedSubtotal += lm.total;
+    const ltTyped = moneyNum(p.line_total ?? "");
+    if (ltTyped != null && lm && lm.lineTotal == null) warnings.push(`Product ${i + 1}: line total ${Number.isNaN(ltTyped) ? t(p.line_total ?? "") : ltTyped.toFixed(2)} does not match price × qty — price × qty is used`);
   });
   computedSubtotal = r2(computedSubtotal);
 
   const typedSubtotal = moneyNum(f.subtotal);
-  const subtotal = typedSubtotal != null && !Number.isNaN(typedSubtotal) ? typedSubtotal : computedSubtotal;
-  if (typedSubtotal != null && !Number.isNaN(typedSubtotal) && Math.abs(typedSubtotal - computedSubtotal) > 0.005) {
-    warnings.push(`Subtotal ${typedSubtotal.toFixed(2)} differs from Σ price × qty = ${computedSubtotal.toFixed(2)}`);
-  }
+  const hasTypedSubtotal = typedSubtotal != null && !Number.isNaN(typedSubtotal);
+  const subtotal = hasTypedSubtotal ? typedSubtotal! : computedSubtotal;
   const n = (k: "tax" | "sh_donations" | "discount") => { const v = moneyNum(f[k]); return v == null || Number.isNaN(v) ? 0 : v; };
   const typedTotal = moneyNum(f.order_total);
   const effectiveOrderTotal = typedTotal != null && !Number.isNaN(typedTotal) ? typedTotal : r2(subtotal + n("tax") + n("sh_donations") - n("discount"));
   if (paymentsWithAmount > 0 && Math.abs(r2(paymentsSum) - r2(effectiveOrderTotal)) > 0.005) warnings.push(`Payments add up to ${r2(paymentsSum).toFixed(2)}, the order total is ${r2(effectiveOrderTotal).toFixed(2)}`);
   const weightedGcPct = gcAny && effectiveOrderTotal > 0 ? Math.round((gcWeighted / effectiveOrderTotal) * 100) / 100 : null;
-  // The reflected rule (Maria 2026-11-01): Σ price × qty already equals the post-discount subtotal → the discount / promos count for nothing.
-  const discountReflected = discountReflectedInLines({ linesSum: computedSubtotal, discount: n("discount"), promoAmounts: r2(promoAmounts), postDiscountSubtotal: r2(effectiveOrderTotal - n("tax") - n("sh_donations")) });
+  // The reflected rule (Maria 2026-11-01; 1¢, 2026-11-04): Σ line totals already equals the post-discount subtotal → the discount / promos count for nothing.
+  const postDiscountSubtotal = r2(effectiveOrderTotal - n("tax") - n("sh_donations"));
+  const discountReflected = discountReflectedInLines({ linesSum: computedSubtotal, discount: n("discount"), promoAmounts: r2(promoAmounts), postDiscountSubtotal });
+  if (hasTypedSubtotal && !discountReflected && Math.abs(typedSubtotal! - computedSubtotal) > REFLECTED_TOLERANCE + 1e-9) {
+    const d = n("discount") + promoAmounts;
+    warnings.push(d > 0
+      ? `Line totals ${computedSubtotal.toFixed(2)} match neither the subtotal ${typedSubtotal!.toFixed(2)} nor the subtotal after discount ${postDiscountSubtotal.toFixed(2)}`
+      : `Subtotal ${typedSubtotal!.toFixed(2)} differs from the line totals ${computedSubtotal.toFixed(2)}`);
+  }
   // §7.2 counting pass: a non-counting promo without an amount cannot be added back (moot when the discount is reflected).
   let nonCountingPromoAmount = 0;
   if (!discountReflected) promoList.forEach((p, i) => {
@@ -367,9 +397,10 @@ export function checkPoForm(f: PoFormState): PoFormCheck {
   nonCountingPromoAmount = r2(nonCountingPromoAmount);
   const gcRaw = t(f.weighted_gc_discount_pct).replace("%", "");
   const cbRaw = t(f.cashback_pct).replace("%", "");
-  // Costs: the one formula in shared/po-cost.ts (v2 — discount pro rata, rewards added back, no tax / shipping); the computed GC % beats a typed one.
+  // Costs: the one formula in shared/po-cost.ts (v3 — tax and shipping in, discount pro rata, rewards added back), allocated over the
+  // line totals (the typed subtotal when the lines are pre-discount); the computed GC % beats a typed one.
   const costHeader: CostHeader = effectiveCostHeader({
-    subtotal, discount: n("discount"), gcPct: weightedGcPct ?? (/^\d+(\.\d+)?$/.test(gcRaw) ? Number(gcRaw) : null), nonCountingPromoAmount,
+    subtotal: discountReflected ? computedSubtotal : subtotal, discount: n("discount"), gcPct: weightedGcPct ?? (/^\d+(\.\d+)?$/.test(gcRaw) ? Number(gcRaw) : null), nonCountingPromoAmount,
     orderTotal: effectiveOrderTotal, tax: n("tax"), shDonations: n("sh_donations"), cashbackPct: /^\d+(\.\d+)?$/.test(cbRaw) ? Number(cbRaw) : null,
   }, discountReflected);
 
@@ -403,16 +434,16 @@ export function checkPoForm(f: PoFormState): PoFormCheck {
     if (qty > 0 && Math.abs(qty - Math.round(qty)) > 1e-9) warnings.push(`${asin}: ${qty} ASIN units — ${WHOLE_PACKS_WARNING}`);
     if (!(qty > 0) && !idx.some((i) => productErrors[i])) errors.push(`${asin}: Ordered works out to 0 ASIN units`);
     const lines = idx.map((i, pos) => {
-      const p = products[i]; const price = moneyNum(p.price);
-      const adj = price == null || Number.isNaN(price) ? null : adjustedProductCost(price, costHeader);
-      return { index: i, product_name: t(p.product_name) || null, supplier_sku: t(p.supplier_sku) || null, price: price == null || Number.isNaN(price) ? null : price.toFixed(2), qty_ordered: Number(t(p.qty_ordered)) || 0, asin_qty_per_product: ratioYield(ratios[pos]), retailer_units_per_product: ratios[pos].retailer, asin_units_per_pack: ratios[pos].asinUnits, adjusted_product_cost: adj == null ? null : adj.toFixed(2), position: pos, notes: t(p.notes ?? "") || null };
+      const p = products[i]; const lm = productLineMoney(p);
+      const adj = lm == null ? null : adjustedProductCost(lm.unit, costHeader);
+      return { index: i, product_name: t(p.product_name) || null, supplier_sku: t(p.supplier_sku) || null, price: lm == null ? null : priceText(lm.unit), line_total: lm?.lineTotal == null ? null : lm.lineTotal.toFixed(2), qty_ordered: Number(t(p.qty_ordered)) || 0, asin_qty_per_product: ratioYield(ratios[pos]), retailer_units_per_product: ratios[pos].retailer, asin_units_per_pack: ratios[pos].asinUnits, adjusted_product_cost: adj == null ? null : adj.toFixed(2), position: pos, notes: t(p.notes ?? "") || null };
     });
     const adjRaw = f.cogs_adjustments?.[asin];
     const adjAmt = adjRaw == null || t(adjRaw.amount) === "" ? null : moneyNum(adjRaw.amount);
     if (adjAmt != null && Number.isNaN(adjAmt)) errors.push(`${asin}: COGS adjustment must be an amount with at most 2 decimals`);
     if (adjAmt != null && !Number.isNaN(adjAmt) && adjAmt !== 0 && !t(adjRaw?.reason)) errors.push(`${asin}: a COGS adjustment needs a reason`);
     const adjustment = adjAmt != null && !Number.isNaN(adjAmt) ? adjAmt : 0;
-    const costs = allocateAsinCosts(costHeader, lines.map((l) => ({ price: l.price == null ? null : Number(l.price), qty: l.qty_ordered })), qty, adjustment);
+    const costs = allocateAsinCosts(costHeader, lines.map((l) => ({ price: l.price == null ? null : Number(l.price), qty: l.qty_ordered, lineTotal: l.line_total == null ? null : Number(l.line_total) })), qty, adjustment);
     const computed = costs == null ? null : costs.cogs.toFixed(2);
     const ovRaw = t(f.cost_overrides?.[asin] ?? "");
     const ov = ovRaw === "" ? null : moneyNum(ovRaw);

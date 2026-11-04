@@ -17,7 +17,7 @@
 // No stored COGS / Sourcing / Paid value is recomputed here (CLAUDE.md,
 // Maria 2026-10-31): a cost is written only when its field was changed; a
 // v2 PO's costs follow the server's recomputePoCosts as with every edit.
-import { checkPoForm, emptyPoForm, productRatio, yieldFromPacks, SOLD_AS_OPTIONS, type PoFormState, type PoFormProduct, type PoFormPromo, type PoFormPayment, type PoFormCheck, type SoldAs } from "./po-form";
+import { checkPoForm, emptyPoForm, productRatio, productLineMoney, priceText, yieldFromPacks, SOLD_AS_OPTIONS, type PoFormState, type PoFormProduct, type PoFormPromo, type PoFormPayment, type PoFormCheck, type SoldAs } from "./po-form";
 import { ratioYield } from "./yield";
 
 type Row = Record<string, any>;
@@ -25,6 +25,7 @@ export interface StoredPo { po: Row; asins: Array<Row & { lines: Row[] }>; payme
 
 const str = (v: unknown): string => (v == null ? "" : String(v).trim());
 const moneyText = (v: unknown): string => { if (v == null || v === "") return ""; const n = Number(v); return Number.isFinite(n) ? n.toFixed(2) : String(v); };
+const isWholeCents = (v: unknown): boolean => { const n = Number(v); return v == null || v === "" || !Number.isFinite(n) || Math.abs(n * 100 - Math.round(n * 100)) < 1e-6; };
 const numText = (v: unknown): string => { if (v == null || v === "") return ""; const n = Number(v); return Number.isFinite(n) ? String(n) : String(v); };
 /** YYYY-MM-DD for a pg DATE (a local-midnight Date or an ISO string). */
 export function ymdOfStored(v: unknown): string {
@@ -58,7 +59,9 @@ export function poToForm(d: StoredPo): PoFormState {
       } else { yieldManual = true; y = numText(l.asin_qty_per_product) || "1"; }
       products.push({
         line_item_id: String(l.id), line_id: `l-${l.id}`, ...(soldAs === "bundle" ? { bundle_id: `b-${a.id}` } : {}),
-        product_name: str(l.product_name), supplier_sku: str(l.supplier_sku), price: moneyText(l.price), qty_ordered: numText(l.qty_ordered),
+        // A stored line total (migration 087) shows its price to the cent; a price typed past the cent shows as typed.
+        product_name: str(l.product_name), supplier_sku: str(l.supplier_sku), price: l.line_total != null || isWholeCents(l.price) ? moneyText(l.price) : numText(l.price), qty_ordered: numText(l.qty_ordered),
+        ...(l.line_total != null ? { line_total: moneyText(l.line_total) } : {}),
         retailer_units_per_pack: retailer, asin: str(a.asin).toUpperCase(), asin_qty_per_product: y, yield_manual: yieldManual,
         sold_as: soldAs, units_per_pack: upp, prep_cost: moneyText(a.prep_cost), notes: str(l.notes),
       });
@@ -132,7 +135,7 @@ export interface PoEditPlan {
 
 /** Header fields the form edits, in HEADER_FIELDS order (server/po-edit.ts). */
 export const EDIT_HEADER_KEYS = ["supplier", "order_id", "order_date", "subtotal", "tax", "sh_donations", "discount", "refund_amount", "order_total", "weighted_gc_discount_pct", "cashback_site", "cashback_pct", "purchased_by", "purchased_by_user_id", "notes", "email_used", "cashback_status", "ships_to", "alt_order_ids"] as const;
-const NUMERIC = new Set(["subtotal", "tax", "sh_donations", "discount", "refund_amount", "order_total", "weighted_gc_discount_pct", "cashback_pct", "price", "qty_ordered", "amount", "percent", "gift_card_discount_pct", "prep_cost", "cogs_adjustment", "cost_per_unit", "units_per_pack"]);
+const NUMERIC = new Set(["subtotal", "tax", "sh_donations", "discount", "refund_amount", "order_total", "weighted_gc_discount_pct", "cashback_pct", "price", "line_total", "qty_ordered", "amount", "percent", "gift_card_discount_pct", "prep_cost", "cogs_adjustment", "cost_per_unit", "units_per_pack"]);
 /** The comparable text of a form value: trimmed; a number without $ , % and trailing zeros. */
 export function canonField(key: string, v: unknown): string {
   const s = str(v);
@@ -175,12 +178,18 @@ export function planPoEdit(stored: PoFormState, next: PoFormState, opts: { impor
       for (const k of LINE_TEXT) if (str(p[k]) !== str(s[k])) body[k] = str(p[k]);
       if (canonField("price", p.price) !== canonField("price", s.price)) body.price = str(p.price);
       if (canonField("qty_ordered", p.qty_ordered) !== canonField("qty_ordered", s.qty_ordered)) body.qty_ordered = str(p.qty_ordered);
+      if (canonField("line_total", p.line_total) !== canonField("line_total", s.line_total)) {
+        body.line_total = str(p.line_total);
+        // A dropped line total takes the price as shown (the stored one may carry more decimals than the field).
+        if (str(p.line_total) === "" && !("price" in body)) body.price = str(p.price);
+      }
       if (str(p.asin).toUpperCase() !== str(s.asin).toUpperCase()) body.asin = str(p.asin).toUpperCase();
       const ratioTouched = RATIO_INPUTS.some((k) => canonField(k, p[k]) !== canonField(k, s[k])) || (p.yield_manual === true) !== (s.yield_manual === true);
       if (ratioTouched) { const sr = productRatio(s); if (r.retailer * sr.asinUnits !== sr.retailer * r.asinUnits || r.asinUnits !== sr.asinUnits) { body.retailer_units_per_product = r.retailer; body.asin_units_per_pack = r.asinUnits; } }
       if (Object.keys(body).length) plan.lineEdits.push({ id, body });
     } else {
-      plan.lineAdds.push({ asin: str(p.asin).toUpperCase(), qty_ordered: str(p.qty_ordered), product_name: str(p.product_name), supplier_sku: str(p.supplier_sku), price: str(p.price), notes: str(p.notes), retailer_units_per_product: r.retailer, asin_units_per_pack: r.asinUnits });
+      const lm = productLineMoney(p);
+      plan.lineAdds.push({ asin: str(p.asin).toUpperCase(), qty_ordered: str(p.qty_ordered), product_name: str(p.product_name), supplier_sku: str(p.supplier_sku), price: lm?.lineTotal != null ? priceText(lm.unit) : str(p.price), ...(lm?.lineTotal != null ? { line_total: lm.lineTotal.toFixed(2) } : {}), notes: str(p.notes), retailer_units_per_product: r.retailer, asin_units_per_pack: r.asinUnits });
     }
   }
   for (const id of Array.from(storedById.keys())) if (!seen.has(id)) plan.lineRemoves.push(id);

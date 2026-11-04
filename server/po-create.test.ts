@@ -35,7 +35,7 @@ describe("createPoFromForm", () => {
     expect(po.sql).toMatch(/\$22, \$16, \$17, \$18, \$19, \$20, \$21, \$23\)/);
     expect(po.params[21]).toBe("manual"); // source; "extension" when the form was prefilled from a capture
     expect(po.params[16]).toBe("velocity"); // ships_to (SPEC §26) defaults to Velocity
-    expect(po.params[17]).toBe(2);          // cost_formula_version: the §7.1 rule — recomputable; imported POs carry NULL
+    expect(po.params[17]).toBe(3);          // cost_formula_version: the §7.1 rule — recomputable; imported POs carry NULL
     expect(po.params.slice(0, 4)).toEqual(["zz-200015000000001", "2026-10-18", "walmart.com", "76.20"]);
     expect(po.params[15]).toBe(now.getTime());
     const pas = calls.filter((c) => /^INSERT INTO po_asins/.test(c.sql)).map((c) => c.params);

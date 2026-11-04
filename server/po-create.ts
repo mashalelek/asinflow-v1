@@ -1,13 +1,14 @@
 // New PO from the form (patch docs/claude_spec-patch-po-af-owned.md §4,
 // 2026-10-18; costs and promos per po-ai-prefill §7 as corrected
-// 2026-10-31). The form state is shared/po-form.ts's plain JSON shape; the
+// 2026-11-04, formula v3). The form state is shared/po-form.ts's plain JSON shape; the
 // same checkPoForm the browser runs live is re-run here before any write.
 // Creates the PO + ASIN rows + product lines the way the importer lays them
 // out (one po_asins row per ASIN, lines under it by position, ASIN title and
 // primary SKU from the catalog), source 'manual', entry_seq = creation time
-// (po-entry-seq.ts), Open, cost_formula_version 2 (so the editor may
+// (po-entry-seq.ts), Open, cost_formula_version 3 (so the editor may
 // recompute its costs — a sheet-imported PO never is). Every ASIN row
-// carries its three costs (Sourcing / COGS / Paid) and adjustment; promos go
+// carries its three costs (Sourcing / COGS / Paid) and adjustment, each line
+// its price (6 dp) and captured line total (migration 087); promos go
 // to po_promos. A hand-typed cost / unit is logged as such, so a later
 // recompute leaves it alone. One po_edit_log row records the creation.
 import type { QueryLike } from "./scheduler/types";
@@ -62,9 +63,9 @@ export async function createPoFromForm(query: QueryLike, form: PoFormState, user
     asinRows.push({ id: paId, asin: a.asin, asin_name: cat?.title ?? null });
     for (const l of a.lines) {
       await query(
-        `INSERT INTO po_line_items (po_id, po_asin_id, position, product_name, supplier_sku, price, item_discount, qty_ordered, qty_returned, asin_qty_per_product, retailer_units_per_product, asin_units_per_pack, adjusted_product_cost, action_items, notes)
-         VALUES ($1, $2, $3, $4, $5, $6, 0, $7, 0, $8, $9, $10, $11, '{}'::text[], $12)`,
-        [poId, paId, l.position, l.product_name, l.supplier_sku, l.price, l.qty_ordered, l.asin_qty_per_product, l.retailer_units_per_product, l.asin_units_per_pack, l.adjusted_product_cost, l.notes],
+        `INSERT INTO po_line_items (po_id, po_asin_id, position, product_name, supplier_sku, price, item_discount, qty_ordered, qty_returned, asin_qty_per_product, retailer_units_per_product, asin_units_per_pack, adjusted_product_cost, action_items, notes, line_total)
+         VALUES ($1, $2, $3, $4, $5, $6, 0, $7, 0, $8, $9, $10, $11, '{}'::text[], $12, $13)`,
+        [poId, paId, l.position, l.product_name, l.supplier_sku, l.price, l.qty_ordered, l.asin_qty_per_product, l.retailer_units_per_product, l.asin_units_per_pack, l.adjusted_product_cost, l.notes, l.line_total],
       );
       lines++;
     }

@@ -45,7 +45,7 @@ export interface PrefillResponse { form: Partial<PoFormState>; prefill: PoFormPr
 export interface AsinInfo {
   asin: string; title: string | null; primary_sku: string | null; image_url: string | null; brand: string | null;
   sold_as: string | null; units_per_pack: number | null; in_af: boolean;
-  via?: "history_exact" | "history_tokens" | "title" | "search" | "model"; matched_name?: string | null; last_ordered?: string | null;
+  via?: "part_number" | "history_exact" | "history_tokens" | "title" | "search" | "model"; matched_name?: string | null; last_ordered?: string | null;
 }
 
 /** §6.1: the ring class for a field's source. */
@@ -72,7 +72,7 @@ export function settleMoney(f: PoFormState): { ok: true; form: PoFormState } | {
 
 // ── ASIN picker (§6.4) — a type-ahead combobox (Maria 2026-11-01: never a bare dropdown) ──
 function viaLabel(v: AsinInfo["via"]): string {
-  return v === "history_exact" ? "bought before (same name)" : v === "history_tokens" ? "bought before (similar name)" : v === "title" ? "title match" : v === "model" ? "model's guess" : "";
+  return v === "part_number" ? "part # match" : v === "history_exact" ? "bought before (same name)" : v === "history_tokens" ? "bought before (similar name)" : v === "title" ? "title match" : v === "model" ? "model's guess" : "";
 }
 const ASIN_RE = /^[A-Z0-9]{10}$/;
 /** Pure: the suggestions that match what is typed (ASIN / title / SKU / brand), so the list narrows while the server search is in flight. */
@@ -81,8 +81,8 @@ export function filterSuggestions(opts: readonly AsinInfo[], q: string): AsinInf
   if (!needle) return [...opts];
   return opts.filter((o) => [o.asin, o.title, o.primary_sku, o.brand, o.matched_name].some((s) => String(s ?? "").toLowerCase().includes(needle)));
 }
-function AsinPicker({ value, product, supplier, guess, known, onPick, onChange, rowIndex, mark, compact = false }: {
-  value: string; product: string; supplier: string; guess: string | null; known: Map<string, AsinInfo>;
+function AsinPicker({ value, product, sku = "", supplier, guess, known, onPick, onChange, rowIndex, mark, compact = false }: {
+  value: string; product: string; sku?: string; supplier: string; guess: string | null; known: Map<string, AsinInfo>;
   onPick: (info: AsinInfo | null, asin: string) => void; onChange: (v: string) => void; rowIndex: number; mark: string;
   /** The ASIN row shows the title in its own column: the status line only says "Not in AF — Add to AF". */
   compact?: boolean;
@@ -99,7 +99,9 @@ function AsinPicker({ value, product, supplier, guess, known, onPick, onChange, 
     window.clearTimeout(timer.current);
     if (!open) return;
     timer.current = window.setTimeout(() => {
-      const u = new URLSearchParams({ supplier, product, q: q.length >= 2 && !known.has(qUp) ? q : "" });
+      const typed = q.length >= 2 && !known.has(qUp) ? q : "";
+      // Before typing: the top 3 of part # → history → title words (2026-11-04).
+      const u = new URLSearchParams({ supplier, product, sku, q: typed, ...(typed ? {} : { limit: "3" }) });
       fetch(`/api/pos/asin-suggest?${u}`).then((r) => r.json()).then((d) => {
         const rows: AsinInfo[] = d.rows ?? [];
         for (const r of rows) known.set(r.asin, r);
@@ -108,7 +110,7 @@ function AsinPicker({ value, product, supplier, guess, known, onPick, onChange, 
       }).catch(() => setOpts([]));
     }, 180);
     return () => window.clearTimeout(timer.current);
-  }, [q, qUp, product, supplier, open, guess, known]);
+  }, [q, qUp, product, sku, supplier, open, guess, known]);
   // A full ASIN typed or pasted: fetch its AF facts once.
   useEffect(() => {
     if (!ASIN_RE.test(qUp) || known.has(qUp)) return;
@@ -293,6 +295,8 @@ export function NewPoForm({ open, onOpenChange, onCreated, prefill, initialSuppl
     const products = f.products.map((p, j) => {
       if (!idx.includes(j)) return p;
       const next = { ...p, [k]: v } as PoFormProduct;
+      // A captured line total holds only for the captured price and qty (2026-11-04); typing either one goes back to price × qty.
+      if ((k === "price" || k === "qty_ordered") && next.line_total) next.line_total = "";
       if (k === "sold_as" && v === "individual") next.units_per_pack = "1";
       if (k === "sold_as" && v !== "individual" && (next.units_per_pack === "1" || next.units_per_pack === "")) next.units_per_pack = "2";
       // §6.5 pack math keeps the yield in step until it is typed by hand.
@@ -421,6 +425,13 @@ export function NewPoForm({ open, onOpenChange, onCreated, prefill, initialSuppl
             {pf.raw_text && <button type="button" className="inline-flex items-center gap-1 underline" onClick={() => setRawOpen((v) => !v)} data-testid="button-new-po-raw-text"><FileText className="h-3 w-3" /> {rawOpen ? "Hide" : "Show"} captured text</button>}
           </div>
           {(pf.warnings ?? []).length > 0 && <div className="mt-1 flex flex-wrap gap-x-3 gap-y-0.5">{(pf.warnings ?? []).map((w) => <span key={w} className="inline-flex items-center gap-1 text-amber-700 dark:text-amber-400" data-testid="new-po-prefill-warning"><AlertTriangle className="h-3 w-3 shrink-0" />{w}</span>)}</div>}
+          {/* Model explanations (2026-11-04): collapsed — the warnings above are only what Maria must act on. */}
+          {(pf.notes ?? []).length > 0 && (
+            <details className="mt-1 text-muted-foreground" data-testid="new-po-prefill-notes">
+              <summary className="cursor-pointer select-none">Notes from capture ({(pf.notes ?? []).length})</summary>
+              <ul className="mt-0.5 list-disc pl-5">{(pf.notes ?? []).map((n) => <li key={n}>{n}</li>)}</ul>
+            </details>
+          )}
           {rawOpen && pf.raw_text && <pre className="mt-2 max-h-64 overflow-auto whitespace-pre-wrap rounded bg-background p-2 text-[11px]" data-testid="new-po-raw-text">{pf.raw_text}</pre>}
         </div>
       )}
@@ -597,7 +608,7 @@ export function NewPoForm({ open, onOpenChange, onCreated, prefill, initialSuppl
                       <div key={`${box.key}-${k}`} className="py-0.5" data-testid={`row-new-po-asin-${i}`}>
                         <div className="flex flex-wrap items-start gap-x-2 gap-y-1">
                           <span {...cell(A.arrow, "pt-1.5 text-center text-sm leading-none text-muted-foreground")} aria-hidden>↳</span>
-                          <div {...cell(A.asin)}><AsinPicker value={p.asin} product={p.product_name} supplier={form.supplier} guess={guess} known={known} onPick={onPick(slot)} onChange={(v) => setMany(slot, "asin", v)} rowIndex={i} mark={mark(`products.${i}.asin`)} compact /></div>
+                          <div {...cell(A.asin)}><AsinPicker value={p.asin} product={p.product_name} sku={p.supplier_sku} supplier={form.supplier} guess={guess} known={known} onPick={onPick(slot)} onChange={(v) => setMany(slot, "asin", v)} rowIndex={i} mark={mark(`products.${i}.asin`)} compact /></div>
                           <div className="flex h-8 min-w-[7.5rem] flex-1 items-center truncate text-xs text-muted-foreground" title={info?.title ?? ""} data-testid={`new-po-asin-title-${i}`}>
                             {info?.in_af ? <><Database className="mr-1 h-2.5 w-2.5 shrink-0" /><span className="truncate">{info.title ?? "in AF"}</span></> : p.asin.length === 10 ? <span className="text-amber-600">Not in AF</span> : <span className="opacity-60">title from AF</span>}
                           </div>
@@ -658,7 +669,7 @@ export function NewPoForm({ open, onOpenChange, onCreated, prefill, initialSuppl
       {/* Totals, then Cancel / Create PO — stay in view at the bottom of the page. */}
       <div className="sticky bottom-0 z-20 -mx-6 mt-auto flex items-center gap-2 border-t bg-background/95 px-6 py-2 pt-2 backdrop-blur" style={{ marginTop: "auto" }} data-testid="new-po-footer">
         <div className="flex flex-1 flex-wrap items-center gap-x-6 gap-y-1 text-sm" data-testid="new-po-totals">
-          <div><span className="text-muted-foreground mr-1.5">Subtotal (Σ price × qty)</span><span className="font-mono">{money(check.computedSubtotal)}</span></div>
+          <div><span className="text-muted-foreground mr-1.5">Subtotal (Σ line totals)</span><span className="font-mono">{money(check.computedSubtotal)}</span></div>
           <div><span className="text-muted-foreground mr-1.5">Order total</span><span className="font-mono">{money(check.effectiveOrderTotal)}</span></div>
           <div><span className="text-muted-foreground mr-1.5">ASIN units</span><span>{check.asins.reduce((t, a) => t + a.qty, 0)}</span></div>
           {check.nonCountingPromoAmount > 0 && <div><span className="text-muted-foreground mr-1.5">Added back (rewards)</span><span className="font-mono">{money(check.nonCountingPromoAmount)}</span></div>}

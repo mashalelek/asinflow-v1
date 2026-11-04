@@ -157,6 +157,18 @@ export function visibleQtys(c: Pick<Capture, "pages">): Set<number> {
   return out;
 }
 export const QTY_INFERRED_HINT = "qty inferred from subtotal";
+/**
+ * Pure: a captured line total → the form's price (to the cent, for display) and line_total, when the line has a
+ * total and a qty and the page's unit price is that total ÷ qty to the cent (79.70 ÷ 30 → "$2.66/item"). The
+ * costs use total ÷ qty at full precision (shared/po-form.ts productLineMoney). Null = keep the model's price
+ * (a qty the total does not explain is the qty cross-check's business).
+ */
+export function lineTotalPrice(lineTotal: number | null, qty: number | null, unitPrice: number | null): { price: string; line_total: string } | null {
+  if (lineTotal == null || !Number.isFinite(lineTotal) || lineTotal < 0 || qty == null || !(qty > 0)) return null;
+  const unit = lineTotal / qty;
+  if (unitPrice != null && Math.abs(unitPrice - unit) > 0.005 + 1e-9) return null;
+  return { price: (Math.round(unit * 100) / 100).toFixed(2), line_total: lineTotal.toFixed(2) };
+}
 /** Pure: when the line's qty does not explain its total (the subtotal, for a single-line order) but total ÷ price is a whole number the page shows as a quantity, that number is the qty. Null = keep the model's. */
 export function inferLineQty(l: { qty: number | null; unitPrice: number | null; lineTotal: number | null }, subtotal: number | null, singleLine: boolean, visible: ReadonlySet<number>): number | null {
   if (l.unitPrice == null || !(l.unitPrice > 0)) return null;
@@ -174,16 +186,16 @@ export interface PrefillPayload { form: Partial<PoFormState>; prefill: PoFormPre
 /** Turn the extraction into the form's state with markers and warnings. */
 export async function enrichPrefill(query: QueryLike, capture: Capture, x: PrefillExtraction | null, rawText: string | null, meta: { id: string; capturedAt: string | null }): Promise<PrefillPayload> {
   const sources: Record<string, PrefillSource> = {};
-  const warnings: string[] = [];
+  const warnings: string[] = [], notes: string[] = [];
   const suppliers = (await query(`SELECT DISTINCT supplier FROM purchase_orders`)).rows.map((r: any) => String(r.supplier));
   const sup = supplierForHost(capture.retailerHost, suppliers, await loadAliases(query));
-  if (!sup.known) warnings.push(`New supplier: ${sup.supplier} has no PO in AF yet`);
+  if (!sup.known) notes.push(`New supplier: ${sup.supplier} has no PO in AF yet`);
   const settingsRows = (await query(`SELECT key, value FROM settings WHERE key = ANY($1::text[])`, [["tracking.velocity_street", "tracking.home_streets", "prep_cost"]])).rows;
   const sv = (k: string) => settingsRows.find((r: any) => r.key === k)?.value;
   const streets = { velocityStreet: String(sv("tracking.velocity_street") ?? "805 grandy"), homeStreets: (sv("tracking.home_streets") as string[]) ?? ["65 rivercrest"], prepCost: Number(sv("prep_cost") ?? 1) || 1 };
   const form: Partial<PoFormState> = { supplier: sup.supplier };
   sources.supplier = sup.known ? "af" : "model";
-  const prefill: PoFormPrefill = { id: meta.id, supplier: sup.supplier, pages: capture.pages.length, captured_at: meta.capturedAt, warnings, sources, raw_text: rawText };
+  const prefill: PoFormPrefill = { id: meta.id, supplier: sup.supplier, pages: capture.pages.length, captured_at: meta.capturedAt, warnings, notes, sources, raw_text: rawText };
   if (!x) { warnings.unshift("The capture could not be read into the form — the captured text is in the drawer; fill the form from it"); return { form, prefill }; }
 
   const mark = (k: string, v: string | null | undefined, src: PrefillSource = "model") => { if (v != null && String(v) !== "") sources[k] = src; };
@@ -218,14 +230,18 @@ export async function enrichPrefill(query: QueryLike, capture: Capture, x: Prefi
     const rupp = l.unitsPerPack != null && l.unitsPerPack >= 1 ? String(l.unitsPerPack) : "1";
     const inferred = checkQty ? inferLineQty(l, x.subtotal, x.lines.length === 1, visible) : null;
     const qty = inferred ?? l.qty;
-    const p: PoFormProduct = { product_name: l.productName, supplier_sku: l.retailerSku ?? "", price: m2(l.unitPrice), qty_ordered: qty == null ? "" : String(qty), retailer_units_per_pack: rupp, asin: "", asin_qty_per_product: "1", sold_as: "individual", units_per_pack: "1", prep_cost: st.prep, notes: "" };
+    // The line total as captured (2026-11-04, acmetools 42838131: 30 × $79.70 ÷ 30 is not whole cents) carries the cost; the price shows it to the cent.
+    const lt = lineTotalPrice(l.lineTotal, qty, l.unitPrice);
+    const p: PoFormProduct = { product_name: l.productName, supplier_sku: l.retailerSku ?? "", price: lt ? lt.price : m2(l.unitPrice), qty_ordered: qty == null ? "" : String(qty), retailer_units_per_pack: rupp, asin: "", asin_qty_per_product: "1", sold_as: "individual", units_per_pack: "1", prep_cost: st.prep, notes: "" };
+    if (lt) p.line_total = lt.line_total;
     for (const k of ["product_name", "supplier_sku", "price", "qty_ordered"] as const) mark(`products.${i}.${k}`, p[k]);
     if (inferred != null) hints[`products.${i}.qty_ordered`] = QTY_INFERRED_HINT;
     if (l.unitsPerPack != null) mark(`products.${i}.retailer_units_per_pack`, rupp);
-    if (l.unitPrice != null && qty != null) linesSum += l.unitPrice * qty;
+    if (lt) linesSum += Number(lt.line_total); else if (l.unitPrice != null && qty != null) linesSum += l.unitPrice * qty;
     const guess = l.asinGuess && /^[A-Z0-9]{10}$/i.test(l.asinGuess) ? l.asinGuess.toUpperCase() : null;
-    const cands = await suggestAsins(query, { supplier: sup.supplier, product: l.productName, limit: 3 });
-    const top = cands.find((c) => c.via === "history_exact" || c.via === "history_tokens") ?? cands.find((c) => c.via === "title") ?? null;
+    const cands = await suggestAsins(query, { supplier: sup.supplier, product: l.productName, sku: l.retailerSku, limit: 3 });
+    // Part-number hit → past lines from this supplier → brand + title words (2026-11-04); the model's guess only when nothing scores.
+    const top = cands.find((c) => c.via === "part_number") ?? cands.find((c) => c.via === "history_exact" || c.via === "history_tokens") ?? cands.find((c) => c.via === "title") ?? null;
     if (top) {
       p.asin = top.asin; sources[`products.${i}.asin`] = "af";
       if (top.in_af && top.sold_as) { p.sold_as = top.sold_as as PoFormProduct["sold_as"]; p.units_per_pack = String(top.units_per_pack ?? 1); sources[`asin.${top.asin}`] = "af"; }
@@ -236,9 +252,10 @@ export async function enrichPrefill(query: QueryLike, capture: Capture, x: Prefi
   }
   form.products = products;
   if (noAsin.length) warnings.push(noAsin.length === 1 ? `Line ${noAsin[0]}: no ASIN found in AF — pick one` : `Lines ${noAsin.join(", ")}: no ASIN found in AF — pick one`);
-  if (x.subtotal != null && x.lines.length > 0 && Math.abs(r2(linesSum) - x.subtotal) > 0.01) warnings.push(`Lines add up to ${r2(linesSum).toFixed(2)}, the subtotal is ${x.subtotal.toFixed(2)}`);
-  // The double-discount rule (Maria 2026-11-01): line prices that already carry the discount → every promo defaults to not counting.
+  // The double-discount rule (Maria 2026-11-01; 1¢, 2026-11-04): line totals that already carry the discount → every promo defaults to not counting.
   const reflected = discountReflectedInLines({ linesSum: r2(linesSum), discount: x.discount ?? 0, promoAmounts: x.promos.reduce((t, p) => t + (p.amount ?? 0), 0), postDiscountSubtotal: x.total == null ? null : r2(x.total - (x.tax ?? 0) - (x.shipping ?? 0)) });
+  // Totals that still do not reconcile: the lines match neither the subtotal nor (when the lines are net) the subtotal after discount.
+  if (x.subtotal != null && x.lines.length > 0 && !reflected && Math.abs(r2(linesSum) - x.subtotal) > 0.01) warnings.push(`Lines add up to ${r2(linesSum).toFixed(2)}, the subtotal is ${x.subtotal.toFixed(2)}`);
   form.promos = x.promos.map((p, i) => { sources[`promos.${i}`] = "model"; return { type: p.confidence === "high" ? p.type : "", description: p.description, amount: m2(p.amount), percent: m2(p.percent), counts_toward_cogs: promoCountsByDefault(p.type, reflected) }; });
   if (x.promos.some((p) => p.confidence === "low")) warnings.push("A promo's type is uncertain — choose sale, coupon or rewards");
   // Payment nicknames (Maria 2026-11-02): by nickname first (settings.po_payment_method_aliases: "OnePay Cash…" → "Walmart card"), by last 4 second (settings.po_payment_method_last4), and blank with an amber hint when the last 4 alone is ambiguous (Amex Gold / Amex Plus both end in 1005).
@@ -254,7 +271,8 @@ export async function enrichPrefill(query: QueryLike, capture: Capture, x: Prefi
   });
   const paySum = x.payments.reduce((t, p) => t + (p.amount ?? 0), 0);
   if (x.total != null && x.payments.some((p) => p.amount != null) && Math.abs(r2(paySum) - x.total) > 0.01) warnings.push(`Payments add up to ${r2(paySum).toFixed(2)}, the order total is ${x.total.toFixed(2)}`);
-  for (const n of x.notes) if (!/\border\s*date\b/i.test(n) || sources.order_date) warnings.push(n);
+  // The model's notes explain; they never ask for anything (2026-11-04) — the collapsed "Notes from capture" line.
+  for (const n of x.notes) if (!/\border\s*date\b/i.test(n) || sources.order_date) notes.push(n);
   if (Object.keys(hints).length) prefill.hints = hints;
   return { form, prefill };
 }

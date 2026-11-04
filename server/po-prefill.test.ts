@@ -1,5 +1,5 @@
 import { describe, it, expect, vi } from "vitest";
-import { CaptureSchema, PrefillSchema, extractPrefill, enrichPrefill, mergedPagesText, supplierForHost, shipsToForStreet, resolveShipTo, todayEt, storePrefill, getPrefill, _clearPrefillCache, PREFILL_TTL_MS, visibleQtys, inferLineQty, QTY_INFERRED_HINT } from "./po-prefill";
+import { CaptureSchema, PrefillSchema, extractPrefill, enrichPrefill, mergedPagesText, supplierForHost, shipsToForStreet, resolveShipTo, todayEt, storePrefill, getPrefill, _clearPrefillCache, PREFILL_TTL_MS, visibleQtys, inferLineQty, QTY_INFERRED_HINT, lineTotalPrice } from "./po-prefill";
 
 vi.mock("./log", () => ({ log: () => {} }));
 
@@ -104,7 +104,9 @@ describe("enrichment (no AI)", () => {
     expect(out.form.order_date).toMatch(/^\d{4}-\d{2}-\d{2}$/);
     expect(out.prefill.sources.order_date).toBeUndefined();
     expect(out.prefill.warnings).not.toContain("Order id and order date are not shown on the pages.");
-    expect(out.prefill.warnings).toContain("Shipping is shown as free.");
+    // The model's notes explain, never ask (2026-11-04): the collapsed "Notes from capture" line, not the warnings.
+    expect(out.prefill.warnings).not.toContain("Shipping is shown as free.");
+    expect(out.prefill.notes).toContain("Shipping is shown as free.");
     expect(todayEt(new Date("2026-11-02T03:30:00Z"))).toBe("2026-11-01"); // 11:30 pm ET on the 1st
   });
   // Extension v1.2 (SPEC §11): the capture's SELECTED address rides along as `shipTo`; ambiguous pages leave Ships to blank.
@@ -173,7 +175,20 @@ describe("enrichment (no AI)", () => {
     expect(out.form).toEqual({ supplier: "michaels.com" });
     expect(out.prefill.raw_text).toBe("RAW");
     expect(out.prefill.warnings?.[0]).toMatch(/could not be read into the form/);
-    expect(out.prefill.warnings).toContain("New supplier: michaels.com has no PO in AF yet");
+    expect(out.prefill.notes).toContain("New supplier: michaels.com has no PO in AF yet");
+  });
+});
+
+describe("line totals (2026-11-04, acmetools 42838131)", () => {
+  it("a total that is not whole cents per unit: the price to the cent for display, the total kept for the costs", () => {
+    expect(lineTotalPrice(79.7, 30, 2.66)).toEqual({ price: "2.66", line_total: "79.70" });
+    expect(lineTotalPrice(79.7, 30, null)).toEqual({ price: "2.66", line_total: "79.70" });
+    expect(lineTotalPrice(95.64, 12, 7.97)).toEqual({ price: "7.97", line_total: "95.64" });
+  });
+  it("a page price the total does not explain keeps the model's price (the qty cross-check's business); no total or qty → nothing", () => {
+    expect(lineTotalPrice(95.64, 1, 7.97)).toBeNull();
+    expect(lineTotalPrice(null, 30, 2.66)).toBeNull();
+    expect(lineTotalPrice(79.7, null, 2.66)).toBeNull();
   });
 });
 

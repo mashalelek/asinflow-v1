@@ -1,16 +1,17 @@
 import { describe, it, expect } from "vitest";
 import { readFileSync } from "fs";
 import { resolve } from "path";
-import { costPerUnitPrefill, adjustedProductCost, allocateAsinCosts, COST_FORMULA_VERSION } from "./po-cost";
+import { costPerUnitPrefill, adjustedProductCost, allocateAsinCosts, discountReflectedInLines, lineMoney, COST_FORMULA_VERSION } from "./po-cost";
 
 // The allocation measured against the imported 2026 cost / unit (sheet Col Y).
-// v1 (price × total ÷ subtotal × (1 − GC)) reproduced 1,166 of 1,582. v2 is
-// Maria's rule for NEW POs (2026-10-31: no tax / shipping in cost, the
-// order discount pro rata, rewards added back) — not a reproduction of the
-// sheet, whose X formula varies per order (probe doc). The count below is
-// the measured v2 figure, kept so a later change is noticed, not a target.
+// v1 (price × total ÷ subtotal × (1 − GC)) reproduced 1,166 of 1,582; v2
+// (2026-10-31, no tax / shipping) 1,019. v3 is Maria's corrected rule for
+// NEW and EDITED POs (2026-11-04: tax and shipping in, the order discount pro
+// rata, rewards added back) — not a reproduction of the sheet, whose X
+// formula varies per order (probe doc). The count below is the measured v3
+// figure, kept so a later change is noticed, not a target.
 // Regenerate the fixture with `tsx script/export-po-cost-fixture.ts`.
-const BASELINE = { version: 2, rows: 1582, matched: 1019 }; // v1 was 1,166 (73.7 %); v2 measures 1,019 (64.4 %) — expected, see above
+const BASELINE = { version: 3, rows: 1582, matched: 1198 }; // v3 1,198 (75.7 %); v1 1,166 (73.7 %), v2 1,019 (64.4 %) — see above
 
 type Row = { supplier: string; order_id: string; asin: string; qty: number; cost: number; subtotal: number; order_total: number; gc_pct: number | null; tax: number; sh: number; discount: number; cashback_pct: number | null; lines: Array<{ price: number; qty: number }> };
 const rows: Row[] = JSON.parse(readFileSync(resolve(__dirname, "__fixtures__/po-cost-2026.json"), "utf8"));
@@ -20,7 +21,7 @@ export function measure(): { matched: number; total: number; misses: Row[] } {
   let matched = 0;
   for (const r of rows) {
     const subtotal = r.subtotal > 0 ? r.subtotal : r.lines.reduce((t, l) => t + l.price * l.qty, 0);
-    const got = costPerUnitPrefill({ subtotal, discount: r.discount, gcPct: r.gc_pct }, r.lines, r.qty);
+    const got = costPerUnitPrefill({ subtotal, discount: r.discount, gcPct: r.gc_pct, tax: r.tax, shDonations: r.sh }, r.lines, r.qty);
     if (got != null && Math.abs(got - r.cost) <= 0.01 + 1e-9) matched++; else misses.push(r);
   }
   return { matched, total: rows.length, misses };
@@ -34,12 +35,29 @@ describe("cost allocation vs the imported 2026 cost / unit", () => {
     expect(m.total).toBe(BASELINE.rows);
     expect(m.matched).toBeGreaterThanOrEqual(BASELINE.matched);
   });
-  it("§7.1: the order discount is pro rata, the gift-card % is a flat factor, tax and shipping never enter", () => {
-    // macys 2026-01-03: subtotal 280, discount 56, GC 11 %, price 40 → X = 40 × 0.8 × 0.89 = 28.48; the row's qty 7 → ASIN qty 4 (yield): COGS 49.84
-    expect(adjustedProductCost(40, { subtotal: 280, discount: 56, gcPct: 11 })).toBe(28.48);
+  it("§7.1 v3: tax and shipping are in, the order discount is pro rata, the gift-card % is a flat factor", () => {
+    // subtotal 280, discount 56, tax 20, shipping 9.99, GC 11 %: base = 280 − 56 + 29.99 = 253.99; X = 40 × 253.99 ÷ 280 × 0.89
+    expect(adjustedProductCost(40, { subtotal: 280, discount: 56, gcPct: 11, tax: 20, shDonations: 9.99 })).toBe(32.29);
     const h = { subtotal: 280, discount: 56, gcPct: 11, tax: 20, shDonations: 9.99 };
-    expect(allocateAsinCosts(h, [{ price: 40, qty: 7 }], 4)).toEqual({ sourcing: 56, cogsBeforeAdjustment: 49.84, cogs: 49.84, paid: 49.84 });
+    // the row's qty 7 → ASIN qty 4 (yield): 280 × 253.99 ÷ 280 ÷ 4 = 63.4975 → Sourcing 63.50, COGS × 0.89 = 56.51
+    expect(allocateAsinCosts(h, [{ price: 40, qty: 7 }], 4)).toEqual({ sourcing: 63.5, cogsBeforeAdjustment: 56.51, cogs: 56.51, paid: 56.51 });
     expect(allocateAsinCosts({ subtotal: 234.8, discount: 0, gcPct: null }, [{ price: 11.74, qty: 20 }], 10)!.cogs).toBe(23.48); // 2-pack
+  });
+  it("acmetools.com 42838131: the line total 79.70 already nets the $10 code → Sourcing = COGS = Paid = 86.19 ÷ 10 (8.62)", () => {
+    // Lenox 20350GOLD5C, 30 × (79.70 ÷ 30 — not whole cents), shipping 6.49, tax 0, 3-pack → 10 ASIN units
+    const reflected = discountReflectedInLines({ linesSum: 79.7, discount: 10, postDiscountSubtotal: 86.19 - 0 - 6.49 });
+    expect(reflected).toBe(true);
+    const h = { subtotal: 79.7, discount: 0, gcPct: null, tax: 0, shDonations: 6.49 };
+    expect(allocateAsinCosts(h, [{ price: 79.7 / 30, qty: 30, lineTotal: 79.7 }], 10)).toEqual({ sourcing: 8.62, cogsBeforeAdjustment: 8.62, cogs: 8.62, paid: 8.62 });
+    // the 2-dp price × qty would be 79.80 — the line total, not the rounded price, carries the cost
+    expect(lineMoney({ price: 2.66, qty: 30, lineTotal: 79.7 })).toBe(79.7);
+    expect(lineMoney({ price: 2.5, qty: 4 })).toBe(10);
+  });
+  it("the reflected check: within 1¢ of the post-discount subtotal", () => {
+    expect(discountReflectedInLines({ linesSum: 79.71, discount: 10, postDiscountSubtotal: 79.7 })).toBe(true);
+    expect(discountReflectedInLines({ linesSum: 79.72, discount: 10, postDiscountSubtotal: 79.7 })).toBe(false);
+    expect(discountReflectedInLines({ linesSum: 89.7, discount: 10, postDiscountSubtotal: 79.7 })).toBe(false);
+    expect(discountReflectedInLines({ linesSum: 79.7, discount: 0, postDiscountSubtotal: 79.7 })).toBe(false);
   });
   it("a rewards promo (not counting) is added back onto COGS and Sourcing, but Paid cost keeps every discount", () => {
     // $10 item, $5 Michaels rewards applied as the order discount: COGS stays $10, Paid is $5 (the §1 trigger case)

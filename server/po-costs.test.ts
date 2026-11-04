@@ -1,8 +1,9 @@
 import { describe, it, expect } from "vitest";
 import { recomputePoCosts } from "./po-costs";
 
-// po-ai-prefill §7 / §8.4: the recompute follows the v2 rule for POs saved
-// under it, never touches an imported PO, and keeps a hand-typed COGS.
+// po-ai-prefill §7 / §8.4: the recompute follows the current rule (v3, 2026-11-04 — tax and
+// shipping in) for POs saved by the form, stamps the version, never touches an imported PO,
+// and keeps a hand-typed COGS.
 function fake(po: Record<string, any>, promos: any[], asins: any[], lines: Record<string, any[]>, manualIds: string[] = []) {
   const calls: Array<{ sql: string; params: any[] }> = [];
   const q = async (sql: string, params: any[] = []) => {
@@ -53,6 +54,21 @@ describe("recomputePoCosts", () => {
     const lineUp = f.calls.filter((c) => /UPDATE po_line_items SET adjusted_product_cost/.test(c.sql));
     expect(lineUp.map((c) => c.params)).toEqual([["l1", "9.00"], ["l2", "9.00"]]);
     const logs = f.calls.filter((c) => /INSERT INTO po_edit_log/.test(c.sql)).map((c) => [c.params[3], c.params[4], c.params[5], c.params[6]]);
-    expect(logs).toEqual([["a1", "sourcing_cost", "5", "10"], ["a1", "paid_cost", "4.5", "6.75"], ["a1", "cost_per_unit", "4.5", "9"], ["a2", "sourcing_cost", "7.5", "10"]]);
+    expect(logs).toEqual([["a1", "sourcing_cost", "5", "10"], ["a1", "paid_cost", "4.5", "6.75"], ["a1", "cost_per_unit", "4.5", "9"], ["a2", "sourcing_cost", "7.5", "10"], ["p1", "cost_formula_version", 2, "3"]]);
+    expect(f.calls.find((c) => /UPDATE purchase_orders SET cost_formula_version/.test(c.sql))!.params).toEqual(["p1", 3]);
+  });
+  it("v3: tax and shipping are allocated into every cost; a stored line total beats price × qty; a dry run writes nothing", async () => {
+    // acmetools 42838131: line total 79.70 (price 2.656667 × 30), already net of the $10 code; shipping 6.49 → 86.19 ÷ 10 ASIN units
+    const acme = { id: "p1", subtotal: "89.70", discount: "10.00", tax: "0.00", sh_donations: "6.49", order_total: "86.19", weighted_gc_discount_pct: null, cost_formula_version: 2 };
+    const rows = [{ id: "a1", asin: "B07VH2L2QF", qty: "10.00", cost_per_unit: "8.61", sourcing_cost: "8.61", paid_cost: "7.65", cogs_adjustment: null }];
+    const ls = { a1: [{ id: "l1", price: "2.656667", line_total: "79.70", qty_ordered: "30.00", adjusted_product_cost: "2.87" }] };
+    const dry = fake(acme, [{ amount: "10.00", counts_toward_cogs: false }], rows, ls);
+    const plan = await recomputePoCosts(dry.q, "p1", 1, { dryRun: true });
+    expect(dry.calls.some((c) => /^\s*(UPDATE|INSERT)/.test(c.sql))).toBe(false);
+    expect(plan.plan!.map((p) => [p.field, p.old, p.new])).toEqual([["sourcing_cost", "8.61", "8.62"], ["paid_cost", "7.65", "8.62"], ["cost_per_unit", "8.61", "8.62"], ["adjusted_product_cost", "2.87", "2.87"], ["cost_formula_version", 2, 3]].filter((x) => x[1] !== x[2]));
+    // tax 2.00 and shipping 3.00 on a pre-discount $20 order with $5 off, GC 10 %: (20 − 5 + 5) ÷ 20 = 1 per dollar of lines
+    const f = fake({ ...po, tax: "2.00", sh_donations: "3.00", order_total: "20.00" }, [], asins, lines, ["a2"]);
+    await recomputePoCosts(f.q, "p1", 1);
+    expect(f.calls.find((c) => /UPDATE po_asins SET/.test(c.sql) && c.params[0] === "a1")!.params).toEqual(["a1", "10.00", "9.00", "9.00"]);
   });
 });

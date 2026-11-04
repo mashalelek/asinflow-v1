@@ -5721,40 +5721,57 @@ reads those params once on mount (`readPoPageParams`). The Dashboard's Spend
 subtracts refund rows of any status; its Refunds due row sums the due ones
 (§28).
 
-### Costs (patch `docs/claude_spec-patch-po-ai-prefill.md` §7 as corrected 2026-10-31; formula v2, `shared/po-cost.ts`)
+### Costs (patch `docs/claude_spec-patch-po-ai-prefill.md` §7 as corrected 2026-11-04; formula v3, `shared/po-cost.ts`)
 
 Three costs per ASIN row, for POs created by the New PO form (and the
-capture) from 2026-10-31 — **historical rows keep the sheet's col Y / col
-AR verbatim and are never recomputed** (`purchase_orders.cost_formula_version`
-IS NULL; Maria 2026-10-31):
+capture) and for such POs when edited — **historical rows keep the sheet's
+col Y / col AR verbatim and are never recomputed**
+(`purchase_orders.cost_formula_version` IS NULL; Maria 2026-10-31). Formula
+v3 (Maria 2026-11-04, "my 10/31 instruction was wrong") replaces v2 for
+every save and every recompute; a recompute stamps version 3.
 
-- Per product line the **paid price AQ** is the unit price actually paid
-  (an item-level sale or coupon is already in it). The order-level
-  **Discount** is allocated pro rata over the subtotal. A promo whose
-  `counts_toward_cogs` is false (**rewards**, by default; sale and coupon
-  count, each a toggle, §7.2) is **added back**: its amount is taken out of
-  the discount before allocating. **Tax and shipping are never allocated
-  into cost; cashback never counts.** A non-counting promo with no amount
-  cannot be added back and counts until one is entered (form warning).
+- **What counts.** COGS **includes the supplier's tax and shipping /
+  handling** (`tax`, `sh_donations`), **minus** coupons, sales and the
+  gift-card discount %. **Rewards** are Maria's call per PO (the promo's
+  COGS toggle, default off; sale and coupon default on, §7.2). **Cashback
+  never counts.** Open with Maria: `sh_donations` also holds donations,
+  allocated with shipping for now.
+- **Line totals (migration 087).** A product line's money is its total as
+  captured (`po_line_items.line_total`) — the prefill keeps it when the
+  page's unit price is total ÷ qty to the cent — else price × qty. The
+  unit price is stored at full precision (`price` numeric(12,6)) and shown
+  to 2 dp; the form's price field takes up to 6 decimals when typed, and
+  typing a price or qty drops the captured total (back to price × qty). A
+  line total that no longer fits its price is ignored with a warning.
+  L = Σ line totals (the typed subtotal when the lines are pre-discount).
+- Per product line the **paid price AQ** = unit price × (L − counting
+  discount + tax + shipping) ÷ L. The order-level **Discount** counts
+  minus the amounts of promos whose `counts_toward_cogs` is false — they
+  are **added back**. A non-counting promo with no amount cannot be added
+  back and counts until one is entered (form warning).
 - **Double-discount rule (Maria 2026-11-01, PO 200015336732726).** On the
   first real PO the line price ($7.97) was already the sale price and the
   "sale $36.12, counts toward COGS" promo subtracted it again → COGS 29.76
   instead of 47.82. A discount / promo reduces a cost **only when the
-  captured line prices are pre-discount** — Σ price × qty equals the
-  subtotal BEFORE the discount. When Σ price × qty already equals the
-  post-discount subtotal (order total − tax − shipping), the discount and
+  captured line totals are pre-discount**. When Σ line totals already
+  equals the post-discount subtotal (order total − tax − shipping) within
+  1¢ (2026-11-04), the discount and
   the promos are **informational**: the COGS toggle defaults OFF with the
   note "already reflected in line prices", Paid cost is not reduced
   either, nothing is "added back" (`discountReflectedInLines` /
   `effectiveCostHeader` in `shared/po-cost.ts`; `checkPoForm.
   discountReflected`; the prefill and the recompute apply the same rule).
-  Test: that PO's numbers give COGS = Sourcing = Paid = $47.82. Also: a
+  Test: that PO's numbers give COGS = Sourcing = Paid = $47.82;
+  acmetools.com 42838131 (line total 79.70 net of code DHDNYC −$10,
+  shipping 6.49) gives 86.19 ÷ 10 = $8.62. The form warns only when the
+  line totals match neither the subtotal nor the subtotal after discount;
+  the footer's "Added back" never shows on net lines. Also: a
   non-counting promo larger than the header discount is never added back
   above the price paid (the counting discount is clamped at 0).
-- **Sourcing cost** (`po_asins.sourcing_cost`, col AR) = Σ(AQ × product qty)
-  ÷ ASIN qty — COGS before the gift-card discount. **This is what Update
+- **Sourcing cost** (`po_asins.sourcing_cost`, col AR) = Σ(line total ×
+  AQ ÷ unit price) ÷ ASIN qty — COGS before the gift-card discount. **This is what Update
   COGS in SC submits for an ASIN whose newest non-canceled PO is
-  patch-forward** — cost formula v2 (saved by this form), source
+  patch-forward** — a cost formula version set (saved by this form), source
   `extension` or `email_renewal` (`PATCH_FORWARD_PO_SQL` in
   `server/sourcing-cost.ts`; the gift-card discount is financing, not
   product cost). An ASIN whose newest PO was imported from the sheet or
@@ -5776,11 +5793,16 @@ IS NULL; Maria 2026-10-31):
   dashboard). Equal to COGS on imported rows.
 - The line's `adjusted_product_cost` (col X) = AQ × (1 − GC %).
 - **Recompute** (`server/po-costs.ts` `recomputePoCosts`): the PO editor
-  re-runs the rule for a v2 PO when a promo's `counts_toward_cogs` flips,
-  a promo / line / header money field changes or an adjustment is edited;
+  re-runs the rule for a form-saved PO (version not NULL) when a promo's
+  `counts_toward_cogs` flips, a promo / line (price, line total, qty,
+  yield) / header money field (subtotal, discount, tax, shipping, order
+  total, GC %) changes or an adjustment is edited, and stamps version 3
+  (a History row);
   an ASIN row whose cost / unit was ever typed by hand keeps its COGS while
   its Sourcing / Paid cost still follow; every change is logged. An
-  imported PO is skipped.
+  imported PO is skipped. `tsx script/fix-po-line-total.ts --order <#>
+  [--sku <sku>] --line-total <amount> [--prod] [--live]` sets one line's
+  captured total (price = total ÷ qty) and recomputes, dry run by default.
 
 ### Capture PO — `/api/pos/prefill` and the AI config (patch po-ai-prefill §4.5, §5; 2026-10-31)
 
@@ -6805,10 +6827,17 @@ replaces it. Migration 061 adds `po_edit_log`, `deleted_pos` and
   yield; "reset" returns to the math); a bundle = several lines → one
   ASIN; a split = "+ Add ASIN" (the same line again with its own share of
   the qty / its own ASIN) — the 2026-11-01 layout above. **ASIN picker** (§6.4, `GET /api/pos/asin-suggest`,
-  `server/asin-suggest.ts`): before typing, ASINs on past PO lines from the
+  `server/asin-suggest.ts`): before typing, the top 3 of — a **normalized
+  part-number hit** (2026-11-04: the line's SKU / UPC and model #s in its
+  name, dashes / spaces / dots / case dropped, "20350GOLD5C" =
+  "20350-GOLD5C", searched inside ASIN titles and SKUs; a name word counts
+  at ≥ 5 characters with ≥ 3 digits) → ASINs on past PO lines from the
   same supplier whose product name matches (exact normalized, then token
-  overlap ≥ 0.5, newest first) → AF title-word matches → the model's guess
-  (amber); typing searches ASIN, title, SKU, brand. **The picker is a
+  overlap ≥ 0.5, newest first) → brand + title-word overlap (any of the
+  name's longest words; the brand named in the line nudges) → the model's
+  guess (amber), whenever anything scores; typing searches ASIN, title,
+  SKU, brand and the typed text as a normalized part number. The prefill
+  maps a line to the first of those (acmetools 42838131 → B07VH2L2QF). **The picker is a
   type-ahead combobox (Maria 2026-11-01), never a bare dropdown:** the
   list narrows as she types (client-side at once, the server search 180 ms
   later), ↑ ↓ move, Enter picks the highlighted suggestion, Escape / Tab
@@ -6830,8 +6859,12 @@ replaces it. Migration 061 adds `po_edit_log`, `deleted_pos` and
   4, amount, GC % for gift cards; Σ vs the order total is a warning) are
   blocks on the form. **Markers** (§6.1): amber ring = from the model,
   stone ring = from AF, none = typed; editing clears the marker; the banner
-  names the supplier, pages and time, lists the prefill's warnings, and
-  can show the captured text (the raw-text fallback). Save writes
+  names the supplier, pages and time, lists the prefill's warnings —
+  **only what Maria must act on** (2026-11-04: an unknown ASIN, totals that
+  still do not reconcile, an ambiguous card, an uncertain promo type, an
+  unresolved ship-to) — puts the model's explanations and other notes (a
+  new supplier) in a collapsed **"Notes from capture"** line
+  (`prefill.notes`), and can show the captured text (the raw-text fallback). Save writes
   `po_payments` / `po_promos`, `email_used`, `purchased_by_user_id`,
   `cashback_status`, `subscription`, line notes, `source = extension` when
   prefilled (`manual` otherwise), then applies the chosen pack updates.

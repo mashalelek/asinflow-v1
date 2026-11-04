@@ -35,12 +35,14 @@ export const isoDate: Parser = (v) => {
   const d = new Date(Number(m[1]), Number(m[2]) - 1, Number(m[3]));
   return d.getMonth() === Number(m[2]) - 1 && d.getDate() === Number(m[3]) ? { ok: true, value: s } : { ok: false, error: "is not a real date" };
 };
-/** Money: a number (≥ 0 unless negative allowed), at most 2 dp; "$1,234.50" accepted. "" → null when nullable, else 0. */
-export function money(opts: { nullable?: boolean; negative?: boolean } = {}): Parser {
+/** Money: a number (≥ 0 unless negative allowed), at most 2 dp (`decimals`: a unit price takes 6); "$1,234.50" accepted. "" → null when nullable, else 0. */
+export function money(opts: { nullable?: boolean; negative?: boolean; decimals?: number } = {}): Parser {
+  const dp = opts.decimals ?? 2;
+  const re = new RegExp(`^-?\\d+(\\.\\d{1,${dp}})?$`);
   return (v) => {
     if (blank(v)) return { ok: true, value: opts.nullable ? null : "0" };
     const s = String(v).replace(/[$,\s]/g, "");
-    if (!/^-?\d+(\.\d{1,2})?$/.test(s)) return { ok: false, error: "must be an amount with at most 2 decimals" };
+    if (!re.test(s)) return { ok: false, error: `must be an amount with at most ${dp} decimals` };
     if (!opts.negative && s.startsWith("-")) return { ok: false, error: "must not be negative" };
     return { ok: true, value: s };
   };
@@ -103,7 +105,8 @@ export const HEADER_FIELDS: Record<string, Parser> = {
 };
 /** §3 product-line fields (action items keep their own route). `asin` re-maps the line. */
 export const LINE_FIELDS: Record<string, Parser> = {
-  product_name: textOrNull, supplier_sku: textOrNull, price: money({ nullable: true }),
+  // A unit price takes 6 decimals; line_total = the line's money as captured (migration 087, 2026-11-04), NULL = price × qty.
+  product_name: textOrNull, supplier_sku: textOrNull, price: money({ nullable: true, decimals: 6 }), line_total: money({ nullable: true }),
   qty_ordered: decQty({ positive: true }), qty_received: decQty({ nullable: true }), qty_returned: decQty({ nullable: true }), qty_canceled: decQty({ nullable: true }),
   // Exact yield (migration 080, 2026-11-02): two integers, never a decimal — the derived asin_qty_per_product is written alongside, read-only.
   retailer_units_per_product: intQty({ nullable: false, min: 1 }), asin_units_per_pack: intQty({ nullable: false, min: 1 }), notes: textOrNull, asin: asinParser,
@@ -116,7 +119,8 @@ export const ASIN_FIELDS: Record<string, Parser> = {
   cogs_adjustment: money({ nullable: true, negative: true }), cogs_adjustment_reason: textOrNull, sourcing_cost: money({ nullable: true }), paid_cost: money({ nullable: true }),
 };
 /** Header / line / ASIN-row fields whose change should recompute a v2 PO's costs (routes call recomputePoCosts after the edit). */
-export const COST_RELEVANT_FIELDS = new Set(["subtotal", "discount", "weighted_gc_discount_pct", "price", "qty_ordered", "retailer_units_per_product", "asin_units_per_pack", "cogs_adjustment"]);
+// v3 (2026-11-04): tax and shipping are in COGS; the order total decides whether the line totals already net the discount.
+export const COST_RELEVANT_FIELDS = new Set(["subtotal", "discount", "tax", "sh_donations", "order_total", "weighted_gc_discount_pct", "price", "line_total", "qty_ordered", "retailer_units_per_product", "asin_units_per_pack", "cogs_adjustment"]);
 
 /** Validate a body against a field spec. Unknown keys are an error (a typo never silently does nothing). */
 export function parseEdits(spec: Record<string, Parser>, body: unknown): { ok: true; edits: Record<string, unknown> } | { ok: false; error: string } {
@@ -275,6 +279,8 @@ export async function editLine(query: QueryLike, lineId: string, body: unknown, 
     const v = k in p.edits ? p.edits[k] : cur[k];
     if (v != null && Number(v) > ordered) throw new EditError(400, `${k} (${v}) cannot exceed qty ordered (${ordered})`);
   }
+  // A captured line total holds only for its price and qty: a new price or qty without one goes back to price × qty.
+  if (cur.line_total != null && !("line_total" in p.edits) && (("price" in p.edits && changedFields(cur, { price: p.edits.price }).length) || ("qty_ordered" in p.edits && changedFields(cur, { qty_ordered: p.edits.qty_ordered }).length))) p.edits.line_total = null;
   const changes = changedFields(cur, p.edits);
   // §5.1: no cancel on a product whose ASIN row has units shipped to FBA.
   if (cur.po_asin_id != null && changes.some((c) => c.field === "qty_canceled" && Number(c.new ?? 0) > Number(c.old ?? 0))) {
@@ -321,9 +327,9 @@ export async function addLine(query: QueryLike, poId: string, body: unknown, use
   const rowPack = (await query(`SELECT sold_as, units_per_pack FROM po_asins WHERE id = $1`, [paId])).rows[0];
   const ratio = lineRatio({ retailer_units_per_product: e.retailer_units_per_product as number, asin_units_per_pack: (e.asin_units_per_pack as number | undefined) ?? (rowPack?.sold_as === "individual" ? 1 : Number(rowPack?.units_per_pack) || 1) }) ?? { retailer: 1, asinUnits: 1 };
   const ins = await query(
-    `INSERT INTO po_line_items (po_id, po_asin_id, position, product_name, supplier_sku, price, item_discount, qty_ordered, qty_received, qty_returned, qty_canceled, asin_qty_per_product, retailer_units_per_product, asin_units_per_pack, notes)
-     VALUES ($1, $2, $3, $4, $5, $6, 0, $7, $8, $9, $10, $11, $12, $13, $14) RETURNING id`,
-    [poId, paId, pos, e.product_name ?? null, e.supplier_sku ?? null, e.price ?? null, e.qty_ordered, e.qty_received ?? null, e.qty_returned ?? 0, e.qty_canceled ?? null, ratioYield(ratio), ratio.retailer, ratio.asinUnits, e.notes ?? null],
+    `INSERT INTO po_line_items (po_id, po_asin_id, position, product_name, supplier_sku, price, item_discount, qty_ordered, qty_received, qty_returned, qty_canceled, asin_qty_per_product, retailer_units_per_product, asin_units_per_pack, notes, line_total)
+     VALUES ($1, $2, $3, $4, $5, $6, 0, $7, $8, $9, $10, $11, $12, $13, $14, $15) RETURNING id`,
+    [poId, paId, pos, e.product_name ?? null, e.supplier_sku ?? null, e.price ?? null, e.qty_ordered, e.qty_received ?? null, e.qty_returned ?? 0, e.qty_canceled ?? null, ratioYield(ratio), ratio.retailer, ratio.asinUnits, e.notes ?? null, e.line_total ?? null],
   );
   const lineId = String(ins.rows[0].id);
   const changes: FieldChange[] = [{ field: "line added", old: null, new: `${e.product_name ?? "product"} × ${e.qty_ordered} → ${e.asin}` }];

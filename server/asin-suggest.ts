@@ -1,8 +1,10 @@
-// ASIN picker suggestions for the New PO form (patch po-ai-prefill §6.4).
-// Order before typing: (1) ASINs on past PO lines from the same supplier
-// whose product name matches this line's — exact (normalized) first, then a
-// token match; history wins; (2) AF title-word matches; (3) the model's
-// guess is appended by the client (amber). Typed text searches ASIN, title,
+// ASIN picker suggestions for the New PO form (patch po-ai-prefill §6.4;
+// ranking 2026-11-04). Order before typing: (1) a normalized part-number hit
+// (the line's SKU / UPC or a model # in its name, inside an ASIN's title or
+// SKUs); (2) ASINs on past PO lines from the same supplier whose product name
+// matches this line's — exact (normalized) first, then a token match;
+// (3) brand + title-word overlap; (4) the model's guess is appended by the
+// client (amber). Typed text searches ASIN, title,
 // SKU and brand. Every suggestion carries AF's title / SKU / pack fields so
 // the form can mark them "from AF" (stone).
 import type { QueryLike } from "./scheduler/types";
@@ -17,7 +19,7 @@ export interface AsinSuggestion {
   units_per_pack: number | null;
   /** The ASIN exists in AF's catalog (asins). */
   in_af: boolean;
-  via: "history_exact" | "history_tokens" | "title" | "search";
+  via: "part_number" | "history_exact" | "history_tokens" | "title" | "search";
   /** Supplier product name the history match came from. */
   matched_name?: string | null;
   /** Newest PO date the history match came from (YYYY-MM-DD). */
@@ -62,7 +64,39 @@ export function rankHistory(product: string, rows: readonly HistoryLine[], minOv
 const catalogCols = `a.asin, a.title, a.primary_sku, a.image_url, a.brand, a.sold_as, a.units_per_pack`;
 type CatalogRow = { asin: string; title: string | null; primary_sku: string | null; image_url: string | null; brand: string | null; sold_as: string | null; units_per_pack: number | null };
 
-export async function suggestAsins(query: QueryLike, opts: { supplier?: string | null; product?: string | null; q?: string | null; limit?: number }): Promise<AsinSuggestion[]> {
+/**
+ * Pure: the part numbers in a line's SKU / UPC and product name, normalized (dashes, spaces, dots and case
+ * dropped: "20350-GOLD5C" = "20350gold5c"). A name word counts when, normalized, it is ≥ 5 characters with
+ * ≥ 3 digits (a model #, a UPC) — "5-pack", "3/4in", "12oz" do not; the SKU counts whole when ≥ 4.
+ */
+export const normPart = (s: string | null | undefined): string => String(s ?? "").toLowerCase().normalize("NFKD").replace(/[^a-z0-9]/g, "");
+export function partNumbers(sku: string | null | undefined, product: string | null | undefined): string[] {
+  const out = new Set<string>();
+  const sk = normPart(sku);
+  if (sk.length >= 4) out.add(sk);
+  for (const w of String(product ?? "").split(/[\s,;()[\]/|]+/)) {
+    const n = normPart(w);
+    if (n.length >= 5 && (n.match(/\d/g) ?? []).length >= 3) out.add(n);
+  }
+  return Array.from(out);
+}
+/** Pure: brand + title-word score of a catalog row for a product name (0 = nothing in common). */
+export function titleScore(product: string, title: string | null, brand: string | null): number {
+  const target = nameTokens(product);
+  const overlap = tokenOverlap(target, nameTokens(title));
+  if (overlap === 0) return 0;
+  const b = nameTokens(brand);
+  return overlap + (b.length > 0 && b.every((t) => target.includes(t)) ? 0.25 : 0);
+}
+
+const NORM_SQL = (col: string) => `regexp_replace(lower(COALESCE(${col}, '')), '[^a-z0-9]', '', 'g')`;
+
+/**
+ * Ranked (Maria 2026-11-04, acmetools 42838131 — Lenox 20350GOLD5C → B07VH2L2QF): (1) a normalized part-number
+ * hit in an ASIN's title or SKUs, (2) past PO lines from this supplier, (3) brand + title-word overlap; the
+ * model's guess is appended by the client / prefill. Anything that scores is shown (the picker asks for 3).
+ */
+export async function suggestAsins(query: QueryLike, opts: { supplier?: string | null; product?: string | null; sku?: string | null; q?: string | null; limit?: number }): Promise<AsinSuggestion[]> {
   const limit = Math.max(1, Math.min(opts.limit ?? 8, 25));
   const out: AsinSuggestion[] = [];
   const seen = new Set<string>();
@@ -77,39 +111,53 @@ export async function suggestAsins(query: QueryLike, opts: { supplier?: string |
 
   const product = String(opts.product ?? "").trim();
   const supplier = String(opts.supplier ?? "").trim();
-  // 1. History from the same supplier.
-  if (product && supplier) {
+  // 1. Part numbers (the line's SKU / UPC, model #s in its name) inside ASIN titles and SKUs, normalized.
+  const parts = partNumbers(opts.sku, product);
+  if (parts.length > 0) {
+    const like = parts.map((x) => `%${x}%`);
+    const rows = (await query(
+      `SELECT ${catalogCols} FROM asins a
+        WHERE ${NORM_SQL("a.title")} LIKE ANY($1::text[]) OR ${NORM_SQL("a.primary_sku")} LIKE ANY($1::text[])
+           OR EXISTS (SELECT 1 FROM asin_skus s WHERE s.asin_id = a.id AND ${NORM_SQL("s.sku")} LIKE ANY($1::text[]))
+        LIMIT 50`, [like],
+    )).rows as CatalogRow[];
+    rows.map((r) => ({ r, score: 3 + titleScore(product, r.title, r.brand) })).sort((a, b) => b.score - a.score || a.r.asin.localeCompare(b.r.asin))
+      .slice(0, limit).forEach(({ r, score }) => push(fromCatalog(r.asin, r, "part_number", score)));
+  }
+  // 2. History from the same supplier.
+  if (product && supplier && out.length < limit) {
     const rows = (await query(
       `SELECT pa.asin, l.product_name, MAX(p.order_date)::text AS last_ordered
          FROM po_line_items l JOIN po_asins pa ON pa.id = l.po_asin_id JOIN purchase_orders p ON p.id = pa.po_id
         WHERE p.supplier = $1 AND l.product_name IS NOT NULL
         GROUP BY pa.asin, l.product_name`, [supplier],
     )).rows as HistoryLine[];
-    const ranked = rankHistory(product, rows).slice(0, limit);
+    const ranked = rankHistory(product, rows).filter((r) => !seen.has(r.asin)).slice(0, limit - out.length);
     const cat = await catalog(ranked.map((r) => r.asin));
     for (const r of ranked) push(fromCatalog(r.asin, cat.get(r.asin), r.via, r.score, { matched_name: r.matched_name, last_ordered: r.last_ordered }));
   }
-  // 2. Title-word matches in AF's catalog.
+  // 3. Brand + title-word overlap in AF's catalog: any of the name's longest words, ranked by overlap (brand named → a nudge).
   if (product && out.length < limit) {
-    const toks = nameTokens(product).sort((a, b) => b.length - a.length).slice(0, 3);
+    const toks = nameTokens(product).sort((a, b) => b.length - a.length).slice(0, 6);
     if (toks.length > 0) {
       const rows = (await query(
-        `SELECT ${catalogCols} FROM asins a WHERE ${toks.map((_, i) => `a.title ILIKE $${i + 1}`).join(" AND ")} LIMIT 50`,
-        toks.map((t) => `%${t}%`),
+        `SELECT ${catalogCols} FROM asins a WHERE a.title ILIKE ANY($1::text[]) LIMIT 300`,
+        [toks.map((t) => `%${t}%`)],
       )).rows as CatalogRow[];
-      const target = nameTokens(product);
-      rows.map((r) => ({ r, score: tokenOverlap(target, nameTokens(r.title)) })).sort((a, b) => b.score - a.score)
+      rows.map((r) => ({ r, score: titleScore(product, r.title, r.brand) })).filter((x) => x.score > 0).sort((a, b) => b.score - a.score || a.r.asin.localeCompare(b.r.asin))
         .slice(0, limit - out.length).forEach(({ r, score }) => push(fromCatalog(r.asin, r, "title", score)));
     }
   }
-  // 3. Typed search: ASIN prefix, title, SKU, brand.
+  // 4. Typed search: ASIN prefix, title, SKU, brand — and the typed text as a normalized part number.
   const q = String(opts.q ?? "").trim();
   if (q.length >= 2) {
+    const nq = normPart(q);
     const rows = (await query(
       `SELECT ${catalogCols} FROM asins a
         WHERE a.asin ILIKE $1 OR a.title ILIKE $2 OR a.primary_sku ILIKE $2 OR a.brand ILIKE $2
            OR EXISTS (SELECT 1 FROM asin_skus s WHERE s.asin_id = a.id AND s.sku ILIKE $2)
-        ORDER BY (a.asin ILIKE $1) DESC, a.asin LIMIT $3`, [`${q.toUpperCase()}%`, `%${q}%`, limit],
+           OR ($4 <> '' AND (${NORM_SQL("a.title")} LIKE '%' || $4 || '%' OR EXISTS (SELECT 1 FROM asin_skus s WHERE s.asin_id = a.id AND ${NORM_SQL("s.sku")} LIKE '%' || $4 || '%')))
+        ORDER BY (a.asin ILIKE $1) DESC, a.asin LIMIT $3`, [`${q.toUpperCase()}%`, `%${q}%`, limit, nq.length >= 4 ? nq : ""],
     )).rows as CatalogRow[];
     for (const r of rows) push(fromCatalog(r.asin, r, "search", 0));
   }

@@ -132,8 +132,12 @@ When the order-confirmation email for an AF PO arrives (matched on order #), com
 
 ## 7. Costs
 
-### 7.1 Three costs per ASIN row (corrected 2026-10-31, Maria — applies to NEW POs only)
-- **AQ, the per-product paid price** = the captured per-item price actually paid (item-level promos are already in it). Promos with `counts_toward_cogs = false` (rewards, by default) are **added back** onto it, pro rata over the order subtotal. **Tax and shipping are never allocated into cost.** The order-level discount (header Discount) is allocated pro rata the same way, minus the non-counting promos' amounts.
+### 7.1 Three costs per ASIN row (corrected 2026-11-04, Maria — applies to NEW and EDITED POs only; formula v3)
+> **2026-11-04 correction (Maria: "my 10/31 instruction was wrong").** COGS **includes the supplier's tax and shipping / handling**, minus coupons, sales and the gift-card discount %. Rewards are Maria's call per PO (the promo's COGS toggle, default off). Cashback never counts. Applies to POs created or edited from 2026-11-04 (a recompute stamps `cost_formula_version = 3`); historical COGS is untouched. Open question for Maria: `sh_donations` holds shipping **and donations** — donations are allocated with shipping until she says otherwise.
+
+- **Allocation base: the line totals.** Each product line's money is its total as captured (`po_line_items.line_total`, migration 087), else price × qty; the unit price is total ÷ qty at full precision (6 dp), shown to 2 dp (acmetools.com 42838131: 30 × 79.70 ÷ 30 is not whole cents). L = Σ line totals (the typed subtotal when the lines are pre-discount).
+- **AQ, the per-product paid price** = unit price × (L − counting discount + tax + shipping) ÷ L. The order-level discount (header Discount) counts minus the amounts of promos with `counts_toward_cogs = false` (rewards, by default), which are **added back**.
+- **Already net:** when Σ line totals equals the post-discount subtotal (order total − tax − shipping) **within 1¢**, the discount and promos are informational — not subtracted again from COGS or Paid, nothing "added back". 42838131: line total 79.70, tax 0, shipping 6.49 → Sourcing = COGS = Paid = 86.19 ÷ 10 = 8.619 (8.62).
 - **Sourcing cost** (col AR) per ASIN unit = Σ(AQ × product qty) ÷ ASIN qty — COGS before the gift-card discount, promos applied. This is what **Update COGS in SC** sends (confirmed 2026-10-31: the gift-card discount is financing, not product cost; dry-run on production first, STOP until Maria has seen the changed-SKU list).
 - **COGS** (col Y) = Sourcing cost × (1 − weighted gift-card %) **+ adjustment**. Feeds profitability, Aura push, repricing. This is what `actual_cogs` is (`po_asins.cost_per_unit`).
 - **Paid cost** = the same allocation with **every** discount counted (rewards too) × (1 − gift-card %). Unused today; for the sales/profit dashboard.

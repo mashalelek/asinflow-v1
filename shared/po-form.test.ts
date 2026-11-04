@@ -25,14 +25,14 @@ describe("checkPoForm", () => {
     expect(c.asins).toHaveLength(1);
     expect(c.asins[0]).toMatchObject({ asin: "B0TEST0001", qty: 5, sold_as: "individual", units_per_pack: 1, cost_per_unit: "5.44", prep_cost: "1.00", unique_products: null });
   });
-  it("costs (formula v2, §7.1): the order discount pro rata and the GC % as a factor; tax / shipping never; the override wins", () => {
-    // tetley 2026: price 25.61, subtotal 512.20, discount 149.71 → X = 25.61 × (1 − 149.71 ÷ 512.20) = 18.12; tax and S&H change nothing
+  it("costs (formula v3, §7.1): the order discount pro rata, tax and shipping in, the GC % as a factor; the override wins", () => {
+    // tetley 2026: 20 × 25.61 = 512.20, discount 149.71, tax 30, S&H 9.99 → (512.20 − 149.71 + 39.99) ÷ 20 = 20.124 → 20.12
     const tetley = base({ subtotal: "512.20", discount: "149.71", tax: "30", sh_donations: "9.99", products: [{ ...emptyProduct(), price: "25.61", qty_ordered: "20", asin: "B001AXZ7Q8" }] });
-    expect(checkPoForm(tetley).asins[0]).toMatchObject({ cost_per_unit: "18.12", sourcing_cost: "18.12", paid_cost: "18.12", cogs_adjustment: null });
+    expect(checkPoForm(tetley).asins[0]).toMatchObject({ cost_per_unit: "20.12", sourcing_cost: "20.12", paid_cost: "20.12", cogs_adjustment: null });
     // target 2026: gc 2.15 %, price 25.49 → COGS 24.94, Sourcing (before the GC discount) 25.49
     expect(checkPoForm(base({ weighted_gc_discount_pct: "2.15", products: [{ ...emptyProduct(), price: "25.49", qty_ordered: "5", asin: "B0TEST0002" }] })).asins[0]).toMatchObject({ cost_per_unit: "24.94", sourcing_cost: "25.49" });
     const ov = checkPoForm({ ...tetley, cost_overrides: { B001AXZ7Q8: "17.50" } });
-    expect(ov.asins[0]).toMatchObject({ cost_per_unit: "17.50", computed_cost_per_unit: "18.12" });
+    expect(ov.asins[0]).toMatchObject({ cost_per_unit: "17.50", computed_cost_per_unit: "20.12" });
   });
   it("promos (§7.2): a rewards promo is added back onto COGS / Sourcing, Paid keeps it; one without an amount only warns; the adjustment needs a reason", () => {
     const item = { ...emptyProduct(), price: "10", qty_ordered: "1", asin: "B0TEST0009" };
@@ -67,9 +67,33 @@ describe("checkPoForm", () => {
     const pre = base({ subtotal: "77.82", discount: "23.35", tax: "3.81", order_total: "58.28", products: [{ ...emptyProduct(), price: "5.99", qty_ordered: "6", asin: "B0TEST0003" }, { ...emptyProduct(), price: "3.49", qty_ordered: "12", asin: "B0TEST0004" }] });
     const pc = checkPoForm(pre);
     expect(pc.discountReflected).toBe(false);
-    expect(pc.asins[0].cost_per_unit).toBe("4.19"); // 5.99 × (1 − 23.35 ÷ 77.82)
+    expect(pc.asins[0].cost_per_unit).toBe("4.49"); // 5.99 × (77.82 − 23.35 + 3.81 tax) ÷ 77.82
     // A non-counting promo larger than the header discount never raises the cost above the price paid.
     expect(checkPoForm(base({ discount: "0", products: [{ ...emptyProduct(), price: "10", qty_ordered: "1", asin: "B0TEST0009" }], promos: [{ type: "rewards", description: "r", amount: "5", percent: "", counts_toward_cogs: false }] })).asins[0].cost_per_unit).toBe("10.00");
+  });
+  // Maria 2026-11-04, acmetools.com 42838131: 30 Lenox blades for $79.70 after code DHDNYC −$10 (79.70 ÷ 30 is not whole cents), shipping 6.49.
+  it("line totals: the captured total carries the cost; already net → Sourcing = COGS = Paid = 86.19 ÷ 10, nothing added back; the price takes 6 decimals", () => {
+    const line = { ...emptyProduct(), product_name: "Lenox 20350GOLD5C", price: "2.66", line_total: "79.70", qty_ordered: "30", asin: "B07VH2L2QF", sold_as: "multi-pack" as const, units_per_pack: "3", asin_qty_per_product: "0.3333" };
+    const po = base({ subtotal: "89.70", discount: "10.00", tax: "0", sh_donations: "6.49", order_total: "86.19", products: [line], promos: [{ type: "coupon", description: "Code DHDNYC", amount: "10.00", percent: "", counts_toward_cogs: false }] });
+    const c = checkPoForm(po);
+    expect(c.ok).toBe(true);
+    expect(c.computedSubtotal).toBe(79.7);
+    expect(c.discountReflected).toBe(true);
+    expect(c.nonCountingPromoAmount).toBe(0);
+    expect(c.warnings).toEqual([]);
+    expect(c.asins[0]).toMatchObject({ qty: 10, cost_per_unit: "8.62", sourcing_cost: "8.62", paid_cost: "8.62" });
+    expect(c.asins[0].lines[0]).toMatchObject({ price: "2.656667", line_total: "79.70" });
+    // A line total that no longer fits the price (the price was retyped) is ignored with a warning: price × qty.
+    const off = checkPoForm({ ...po, products: [{ ...line, price: "2.99" }] });
+    expect(off.computedSubtotal).toBe(89.7);
+    expect(off.warnings.join()).toMatch(/line total 79.70 does not match price × qty/);
+    // A price typed past the cent is accepted and kept; 7 decimals is not.
+    const typed = checkPoForm({ ...po, products: [{ ...line, price: "2.656667", line_total: "" }] });
+    expect(typed.asins[0].lines[0]).toMatchObject({ price: "2.656667", line_total: null });
+    expect(checkPoForm({ ...po, products: [{ ...line, price: "2.6566667", line_total: "" }] }).productErrors[0]).toEqual(["price must be an amount ≥ 0 (at most 6 decimals)"]);
+    // Lines that match neither the subtotal nor the subtotal after discount: the one totals warning.
+    const neither = checkPoForm({ ...po, products: [{ ...line, price: "2.80", line_total: "" }] });
+    expect(neither.warnings).toEqual(["Line totals 84.00 match neither the subtotal 89.70 nor the subtotal after discount 79.70"]);
   });
   it("weighted GC % is computed live from the gift-card payments (Σ amount × GC % ÷ order total), beats the typed field, and feeds COGS", () => {
     const item = { ...emptyProduct(), price: "100", qty_ordered: "1", asin: "B0TEST0010" };
@@ -131,7 +155,7 @@ describe("checkPoForm", () => {
     expect(checkPoForm(base({ products: [a, { ...a, prep_cost: "0" }] })).errors.join()).toMatch(/B0TEST0004: its products disagree/);
     const w = checkPoForm(base({ subtotal: "30.00" }));
     expect(w.ok).toBe(true);
-    expect(w.warnings).toEqual(["Subtotal 30.00 differs from Σ price × qty = 27.20"]);
+    expect(w.warnings).toEqual(["Subtotal 30.00 differs from the line totals 27.20"]);
   });
   it("header validation: real date, money, percentages", () => {
     expect(checkPoForm(base({ order_date: "2026-02-30" })).errors).toContain("Order date must be a real date (YYYY-MM-DD)");
