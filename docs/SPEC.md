@@ -7251,7 +7251,7 @@ platform's values always win.
 | `PORT` | no | Set by Render; the code defaults to 5000 when absent. |
 | `CORS_ALLOWED_ORIGIN` | no | Optional extra allowed origin beside `chrome-extension://*`. |
 | `ENABLE_CRONS` | no | `true` switches on the scheduled passes (§11 "Scheduled passes": 00:00 ET with the daily block, hourly 04–23 ET). Set it on Render **after** the scheduler patch's final commit deploys (2026-10-15); unset = no schedule, manual Refresh only. See below. |
-| `ANTHROPIC_API_KEY` | yes | Capture PO's one model call per capture and the promo backfill (§22 "Capture PO", `server/config/ai.ts`: `claude-haiku-5-5`). Optional: unset → `POST /api/pos/prefill` answers 503 "AI prefill is off" and the tracking AI fallback stays off. |
+| `ANTHROPIC_API_KEY` | yes | Capture PO's one model call per capture and the promo backfill (§22 "Capture PO", `server/config/ai.ts`: `claude-haiku-5-5`). Optional: unset → `POST /api/pos/prefill` answers 503 "AI prefill is off", and the tracking AI fallback (§26) and the PO documents AI typing stay off. |
 | `DRIVE_SUBJECT` | no | The Drive user AF writes PO documents as (§22 "PO documents"); default `maria@coastalqualitygoods.com`. Same service-account key as Gmail / Sheets (`GOOGLE_CREDENTIALS_PATH`), scope `drive` by domain-wide delegation. |
 | `DRIVE_INVOICES_ROOT_ID` | no | The Invoices root folder (D1); default `1oBeUBKnmpjfcxcwD_w-hCAPLCd-Bbm13`. AF only ever touches files under it. |
 | `SESSION_SECRET` | yes | Signs the `af.sid` session cookie (§25). **Required in production: the server refuses to start without it.** Generate with `openssl rand -hex 32`. Locally it must be in `.env` too, because `npm start` sets `NODE_ENV=production` itself; `npm run dev` falls back to a logged, insecure dev value. Add it to Render **before** the first auth commit deploys. |
@@ -7676,15 +7676,18 @@ Settings: `tracking.velocity_street` ("805 grandy"),
 - **No tracking in a shipped email** and no extractor: one placeholder row
   per (sender domain, order #) — carrier OTHER, `tracking_number =
   email:<domain>:<order#>`, `match_reason = ai_disabled` (until the AI
-  fallback reads it); never pushed. Only a shipped-type *subject* queues
+  fallback reads it, below); never pushed.
+- **A reference number is never a tracking number:** UPS notices print
+  "Reference Number 1: 212355503949", sometimes run into the previous
+  field ("Shipment Type: LetterReference Number 1:", 2026-11-04). Only a shipped-type *subject* queues
   one.
 - **Return pickup / return label emails** (2026-10-22; `isReturnEmail`:
   "return" in the subject, or a specific body phrase such as "return
   pickup" — a shipped email's "free returns" footer does not count) are
   `kind = return`: their numbers are the package going back, so the rows
   are queued `unmatched` with `match_reason = return`, never matched or
-  pushed, and stay visible in the unmatched queue for the cancellations
-  patch to consume. Rows ingested before this
+  pushed, and kept out of the unmatched queue (2026-11-04) for the
+  cancellations patch to consume. Rows ingested before this
   (`npm run tracking:flag-returns [-- --dismiss <n,…>] [--live]`) leave
   their PO the same way; one already pushed is reported, not touched.
 - **Dedup:** a repeat email for the same number refreshes
@@ -7751,11 +7754,25 @@ Settings: `tracking.velocity_street` ("805 grandy"),
   `-N`, two-id AF order_ids) is `server/order-number.ts`; a platform
   email's subject name resolves through `supplier_aliases` before the
   name match. Production dry run: no change to the 78-row queue.
+- **Replacement orders** (2026-11-04, Maria — the "PO not in AF" rows;
+  `server/tracking-replacement.ts`): a retailer that replaces missing or
+  damaged items opens a new order # whose shipping emails name only it.
+  For a `no_po` row the matcher searches Gmail for the row's order # and
+  reads the retailer's replacement email — Walmart "Original order number
+  … Replacement order number …", Target "replacing an item from your
+  order: #… your replacement (order number #…)"; an email that prints a
+  replacement # must print this one. Exactly one of the supplier's POs
+  with the original # → `matched`, `match_reason = replacement`, and the
+  original PO's notes gain "Replacement order #<id> (<date>) — <carrier>
+  <tracking>" with a History row (`po_edit_log`, entity po, field notes),
+  so the POs search finds it by the replacement #.
 - **Never moved by the sync:** `source = manual` or `reassigned_at` set;
-  dismissed rows, `ai_disabled` placeholders and `return` rows are not
-  re-matched.
+  dismissed rows, `ai_disabled` / `ai_no_tracking` placeholders and
+  `return` rows are not re-matched.
 - **Routes** (`server/tracking-routes.ts`, behind requireAuth): `GET
-  /api/tracking/unmatched` (the queue, with reason, and per row up to 3
+  /api/tracking/unmatched` (the queue — never a dismissed row or a
+  `return`, which is our shipment back to the supplier, by design,
+  2026-11-04 — with reason, and per row up to 3
   `suggestions` — the guessed supplier's PO, then digits-only order # hits
   across suppliers, `suggestPos`), `POST
   /api/tracking/domain-map {domain, supplier}` (supplier must be a known PO
@@ -7917,17 +7934,29 @@ quantity, item or status; nothing but tracking numbers leaves AF.
   and PO Details, the open reasons on hover; never offered in the
   Action Items editor.
 
-### AI fallback (§4 D3) — not built (2026-10-21)
+### AI fallback (§4 D3) — built 2026-11-04 (`server/tracking-ai.ts`)
 
-`ANTHROPIC_API_KEY` is not configured locally or on Render, so per the
-patch the fallback is skipped (`server/tracking-ai.ts`,
-`aiFallbackAvailable() = false`): a shipped-type email that neither the
-regex nor a tracking-link extractor can read is queued as unmatched,
-`match_reason = ai_disabled` (one placeholder per sender domain + order #;
-the unmatched queue shows "no number in the email"). Building it later:
-plain text → `{carrier, tracking_number, retailer_order_id, ship_to,
-items[]}`, `source = 'ai'`, only for those placeholders. The 2026-10-21
-local backfill dry run had 53 such rows.
+A shipped-type email that neither the regex nor a tracking-link extractor
+can read is queued as an `email:<domain>:<order#>` placeholder,
+`match_reason = ai_disabled` (one per sender domain + order #; the queue
+shows "no number in the email"). With `ANTHROPIC_API_KEY` set, every pass
+of the ingest (component 25, Sync tracking) then asks **one Haiku call per
+placeholder whose order # names exactly one AF PO** (`matchRow`, the
+matcher's own rule; `server/config/ai.ts` holds the model): the carrier +
+tracking numbers the email prints, else the URL of its "track your order"
+link. Nothing the model returns is trusted as is — a number counts only
+when it is printed in the email (alnum-compared, a USPS ZIP prefix
+allowed; never the order #), a link only when it is one of the email's own
+URLs, followed by the generic redirect follow (Location headers only, the
+page body never read — no retailer page is scraped). Found → real rows
+(`source = 'ai'`) replace the placeholder and the matcher attaches them;
+none → `match_reason = ai_no_tracking` (kept in the queue, never asked
+again); a failed call leaves the placeholder for the next pass. At most
+25 calls per pass (`TRACKING_AI_MAX_CALLS`); a dry run never calls the
+model (it counts the emails it would ask about); every call is logged in
+`po_prefill_log`, kind `tracking_fallback` (migration 085). Manual entry:
+`npm run backfill:tracking -- --stage ai [--live] [--ai-max N] [--prod]`
+(prints per placeholder what it found, then re-matches).
 
 ### Confirmation emails → "Confirm order details" (patch po-ai-prefill §6.7, 2026-10-31)
 

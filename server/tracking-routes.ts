@@ -1,7 +1,8 @@
 // PO tracking routes (SPEC §26; patch po-tracking-velocity §5, §6, §11).
 // Mounted behind requireAuth.
 //   POST /api/tracking/sync             {dryRun}  "Sync tracking": ingest (Gmail) → match → push (Velocity)
-//   GET  /api/tracking/unmatched        the queue: unmatched rows (not dismissed) with reason, and per row up to
+//   GET  /api/tracking/unmatched        the queue: unmatched rows (not dismissed, not a return — a return
+//                                       label / pickup is our shipment to the supplier, by design) with reason, and per row up to
 //                                       3 suggested POs (the guessed supplier's PO, then digits-only order # hits)
 //   POST /api/tracking/domain-map       {domain, supplier}  map a sender domain once, then re-match
 //   POST /api/tracking/:id/attach       {po_id}  attach to a PO by hand (source manual — the sync never moves it)
@@ -18,6 +19,7 @@ import { ingestTracking } from "./tracking-ingest";
 import { reconcileConfirmations } from "./po-confirm-reconcile";
 import { pushTracking } from "./tracking-push";
 import { gmailClient, emailTextFor } from "./gmail-client";
+import { replacementLookup } from "./tracking-replacement";
 import type { QueryLike } from "./scheduler/types";
 import { reconcileReviewVelocity } from "./line-action-items";
 
@@ -44,7 +46,7 @@ export function createTrackingRouter(deps: { query?: QueryLike } = {}): Router {
     try {
       const gmail = gmailClient();
       const ingest = await ingestTracking({ query, deps: { gmail }, dryRun });
-      const match = await matchTrackingRows(query, { dryRun, textFor: emailTextFor(gmail) });
+      const match = await matchTrackingRows(query, { dryRun, textFor: emailTextFor(gmail), replacementFor: replacementLookup(gmail) });
       const push = await pushTracking({ query, dryRun });
       if (dryRun && ingest.drafts) ingest.drafts = ingest.drafts.slice(0, 200);
       res.json({ dryRun, ingest, match, push });
@@ -65,7 +67,7 @@ export function createTrackingRouter(deps: { query?: QueryLike } = {}): Router {
         `SELECT id, carrier, tracking_number, retailer_order_id, sender_domain, supplier_guess, ship_to_street, shipped_at,
                 email_subject, source, match_reason, created_at
            FROM po_tracking
-          WHERE status = 'unmatched' AND COALESCE(match_reason, '') <> 'dismissed'
+          WHERE status = 'unmatched' AND COALESCE(match_reason, '') NOT IN ('dismissed', 'return')
           ORDER BY shipped_at DESC NULLS LAST, id DESC LIMIT 1000`,
       )).rows;
       const pos: PoRef[] = rows.some((r: any) => r.retailer_order_id)
@@ -89,7 +91,8 @@ export function createTrackingRouter(deps: { query?: QueryLike } = {}): Router {
       await setDomainMapEntry(query, domain, supplier);
       // Re-open this domain's unknown_sender rows for matching.
       await query(`UPDATE po_tracking SET match_reason = NULL WHERE status = 'unmatched' AND sender_domain = $1 AND match_reason = 'unknown_sender'`, [domain]);
-      res.json({ ok: true, rematch: await matchTrackingRows(query, { textFor: emailTextFor(gmailClient()) }) });
+      const gmail = gmailClient();
+      res.json({ ok: true, rematch: await matchTrackingRows(query, { textFor: emailTextFor(gmail), replacementFor: replacementLookup(gmail) }) });
     } catch (err) { fail(res, err); }
   });
 

@@ -30,7 +30,7 @@ async function serve(opts: { moveRows?: number; insertRows?: number } = {}) {
   close = () => server.close();
   const base = `http://127.0.0.1:${(server.address() as AddressInfo).port}`;
   const post = (p: string, b: any) => fetch(base + p, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(b) });
-  return { post, sqls };
+  return { post, sqls, get: (p: string) => fetch(base + p) };
 }
 
 describe("Move to PO… (§10)", () => {
@@ -84,5 +84,13 @@ describe("unmatched queue suggestions (2026-10-22)", () => {
     expect(suggestPos({ retailer_order_id: "8547348", supplier_guess: "rhodeskin.com" }, pos)).toEqual([{ po_id: "p-rhode", order_id: "8547348", supplier: "rhode.com" }]);
     expect(suggestPos({ retailer_order_id: "55555", supplier_guess: null }, pos).map((x) => x.po_id)).toEqual(["p-a", "p-b"]);
     expect(suggestPos({ retailer_order_id: null, supplier_guess: "a.com" }, pos)).toEqual([]);
+  });
+});
+
+describe("the Unmatched queue (2026-11-04)", () => {
+  it("never lists a return (our shipment back to the supplier, by design) or a dismissed row", async () => {
+    const s = await serve();
+    expect((await s.get("/api/tracking/unmatched")).status).toBe(200);
+    expect(s.sqls.find((x) => x.sql.includes("FROM po_tracking"))!.sql).toMatch(/NOT IN \('dismissed', 'return'\)/);
   });
 });

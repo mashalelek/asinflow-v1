@@ -43,9 +43,16 @@
 // after the email → matched (match_reason 'order_in_text'). The text comes
 // from Gmail by the row's message id (textFor) — only for rows the labelled
 // # left unmatched.
+//
+// 2026-11-04 (Maria — the "PO not in AF" rows): a no_po row whose order # is
+// a REPLACEMENT order — the retailer's replacement email names the original
+// (tracking-replacement.ts) — attaches to the one supplier PO with that
+// original # (match_reason 'replacement') and notes it on the PO with a
+// History row.
 import type { QueryLike } from "./scheduler/types";
 import { normOrder, baseOrderId, orderIdParts, stripShipmentSuffix, digitForms, posNamedInText } from "./order-number";
 import { loadAliases, aliasKey } from "./supplier-aliases";
+import { appendPoNote, replacementNote, type ReplacementLookup } from "./tracking-replacement";
 export { normOrder, baseOrderId, orderIdParts } from "./order-number";
 
 export const DOMAIN_MAP_KEY = "tracking.supplier_domain_map";
@@ -87,7 +94,7 @@ export function findPos(supplier: string, retailerOrderId: string, pos: readonly
   return pos.filter((p) => p.supplier === supplier && orderIdParts(p.order_id).some((x) => want.has(lz(normOrder(x)))));
 }
 
-export type MatchVia = "order_id_unique" | "retailer_name" | "order_in_text";
+export type MatchVia = "order_id_unique" | "retailer_name" | "order_in_text" | "replacement";
 export type MatchOutcome = { status: "matched"; po_id: string; via?: MatchVia } | { status: "unmatched"; reason: "unknown_sender" | "no_po" | "ambiguous" | "unpaired"; candidates?: string[] };
 
 const NAME_PATTERNS = [/\byour\s+(.{2,40}?)\s+order\b/i, /\border with\s+(.{2,40}?)\s+(?:and|has|is)\b/i];
@@ -176,6 +183,19 @@ export async function setDomainMapEntry(query: QueryLike, domain: string, suppli
   );
 }
 
+/** The ONE AF PO a placeholder's order # names (matchRow's rule — the tracking AI fallback asks only about these), else null. */
+export async function onePoResolver(query: QueryLike): Promise<(row: { sender_domain: string | null; retailer_order_id: string | null; email_subject: string | null }) => { po_id: string; supplier: string } | null> {
+  const map = await loadDomainMap(query);
+  const platforms = await loadPlatformSenders(query);
+  const aliases = await loadAliases(query);
+  const pos: PoRef[] = (await query(`SELECT id, supplier, order_id FROM purchase_orders`)).rows.map((x: any) => ({ id: String(x.id), supplier: String(x.supplier), order_id: String(x.order_id) }));
+  const suppliers = Array.from(new Set(pos.map((p) => p.supplier)));
+  return (row) => {
+    const m = matchRow(row, map, suppliers, pos, platforms, aliases);
+    return m.status === "matched" ? { po_id: m.po_id, supplier: pos.find((p) => p.id === m.po_id)!.supplier } : null;
+  };
+}
+
 /** The email behind a row, for the text rule: Gmail by message id (null when it cannot be read). */
 export type EmailTextFor = (gmailMessageId: string) => Promise<{ text: string; date: Date | null } | null>;
 
@@ -187,14 +207,14 @@ export interface MatchRunResult {
 
 /**
  * Match every open unmatched row the sync may move (not manual, not
- * reassigned, not dismissed, not an ai_disabled placeholder, not a return). Dry run:
+ * reassigned, not dismissed, not an ai_disabled / ai_no_tracking placeholder, not a return). Dry run:
  * computes, writes nothing.
  */
-export async function matchTrackingRows(query: QueryLike, opts: { dryRun?: boolean; textFor?: EmailTextFor } = {}): Promise<MatchRunResult> {
+export async function matchTrackingRows(query: QueryLike, opts: { dryRun?: boolean; textFor?: EmailTextFor; replacementFor?: ReplacementLookup } = {}): Promise<MatchRunResult> {
   const rows = (await query(
-    `SELECT id, sender_domain, retailer_order_id, email_subject, gmail_message_id FROM po_tracking
+    `SELECT id, carrier, tracking_number, sender_domain, retailer_order_id, email_subject, gmail_message_id FROM po_tracking
       WHERE status = 'unmatched' AND source <> 'manual' AND reassigned_at IS NULL
-        AND COALESCE(match_reason, '') NOT IN ('dismissed', 'ai_disabled', 'return')`,
+        AND COALESCE(match_reason, '') NOT IN ('dismissed', 'ai_disabled', 'ai_no_tracking', 'return')`,
   )).rows;
   const r: MatchRunResult = { considered: rows.length, matched: 0, matched_via: {}, unmatched: {}, seeded: {}, links: [] };
   if (rows.length === 0) return r;
@@ -210,6 +230,16 @@ export async function matchTrackingRows(query: QueryLike, opts: { dryRun?: boole
       const po = email ? poNamedInEmail(`${row.email_subject ?? ""}\n${email.text}`, email.date, m.supplier, pos) : null;
       if (po) m = { status: "matched", po_id: po.id, via: "order_in_text", supplier: po.supplier, obvious: m.supplier ? m.obvious : false };
     }
+    // A replacement order (2026-11-04): the retailer's replacement email names the original order #.
+    let note: string | null = null;
+    if (m.status === "unmatched" && m.reason === "no_po" && m.supplier && row.retailer_order_id && opts.replacementFor) {
+      const rep = await opts.replacementFor(String(row.retailer_order_id));
+      const hits = rep ? findPos(m.supplier, rep.original, pos) : [];
+      if (rep && hits.length === 1) {
+        m = { status: "matched", po_id: hits[0].id, via: "replacement", supplier: m.supplier, obvious: m.obvious };
+        note = replacementNote(String(row.retailer_order_id), rep.date, String(row.carrier), String(row.tracking_number));
+      }
+    }
     if (m.obvious && m.supplier && row.sender_domain && !map[row.sender_domain]) r.seeded[String(row.sender_domain).toLowerCase()] = m.supplier;
     if (m.status === "matched") { r.matched++; const k = m.via ?? "supplier"; r.matched_via[k] = (r.matched_via[k] ?? 0) + 1; r.links.push({ id: Number(row.id), po_id: m.po_id, supplier: m.supplier, via: k }); } else r.unmatched[m.reason] = (r.unmatched[m.reason] ?? 0) + 1;
     if (opts.dryRun) continue;
@@ -218,6 +248,7 @@ export async function matchTrackingRows(query: QueryLike, opts: { dryRun?: boole
         WHERE id = $1 AND status = 'unmatched' AND source <> 'manual' AND reassigned_at IS NULL`,
       [row.id, m.supplier, m.status === "matched" ? m.po_id : null, m.status, m.status === "matched" ? m.via ?? null : m.reason],
     );
+    if (note && m.status === "matched") await appendPoNote(query, m.po_id, note);
   }
   if (!opts.dryRun) for (const [d, s] of Object.entries(r.seeded)) await setDomainMapEntry(query, d, s);
   return r;

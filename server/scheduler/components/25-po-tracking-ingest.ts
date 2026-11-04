@@ -7,6 +7,7 @@
 import { gmailClient, emailTextFor } from "../../gmail-client";
 import { ingestTracking } from "../../tracking-ingest";
 import { matchTrackingRows } from "../../tracking-match";
+import { replacementLookup } from "../../tracking-replacement";
 import type { ComponentDef, ComponentContext, ComponentResult } from "../types";
 
 /** Test seam. */
@@ -23,13 +24,14 @@ export const poTrackingIngest: ComponentDef = {
       gmail = trackingIngestDeps.gmail();
       const r = await ingestTracking({ query: ctx.query, deps: { gmail }, log: ctx.log });
       Object.assign(counts, { scanned: r.scanned, candidates: r.candidates, rows: r.rows, inserted: r.inserted, refreshed: r.refreshed, placeholders: r.placeholders, link_resolved: r.link_resolved, placeholders_resolved: r.placeholders_resolved ?? 0 });
+      if (r.ai) Object.assign(counts, { ai_calls: r.ai.calls, ai_resolved: r.ai.resolved, ai_rows: r.ai.rows, ai_none: r.ai.none, ai_failed: r.ai.failed, ai_over_cap: r.ai.skipped_cap });
       outcomes._window = `${r.since ?? "start"}..${r.until}`;
     } catch (err: any) {
       counts.failed = 1;
       outcomes._ingest = `error: ${err?.message ?? err}`;
       ctx.log(outcomes._ingest);
     }
-    const m = await matchTrackingRows(ctx.query, gmail ? { textFor: emailTextFor(gmail) } : {});
+    const m = await matchTrackingRows(ctx.query, gmail ? { textFor: emailTextFor(gmail), replacementFor: replacementLookup(gmail) } : {});
     Object.assign(counts, { matched: m.matched, ...Object.fromEntries(Object.entries(m.unmatched).map(([k, v]) => [`unmatched_${k}`, v])) });
     if (Object.keys(m.seeded).length) outcomes._domain_map_seeded = Object.entries(m.seeded).map(([d, s]) => `${d}→${s}`).join(", ");
     return { counts, outcomes };

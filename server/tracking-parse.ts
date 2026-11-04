@@ -190,7 +190,8 @@ export function extractTracking(text: string, orderIds: string[]): Array<{ carri
     // Inside a URL: only the distinctive shapes count (track.amazon.com/tracking/TBA…);
     // an all-digit number in a URL is trusted only as a known parameter (step 1).
     if (!distinctive && /https?:\/\/\S*$/.test(before)) continue;
-    if (/\b(upc|sku|item\s*(?:no|#)|model|phone|tel|fax|po\s*box|order\s*(?:#|number|no)?|reference\s*(?:number|no\.?|#)?\s*\d?)\s*[:#]?\s*$/i.test(before)) continue;
+    // "Reference" needs no word boundary: UPS run "Shipment Type: LetterReference Number 1: 212355503949" together (2026-11-04).
+    if (/(?:\b(?:upc|sku|item\s*(?:no|#)|model|phone|tel|fax|po\s*box|order\s*(?:#|number|no)?)|reference\s*(?:number|no\.?|#)?\s*\d?)\s*[:#]?\s*$/i.test(before)) continue;
     const hasLabel = TRACK_LABEL.test(before.replace(/\s+/g, " ").trimEnd()) || /tracking/i.test(before.slice(-40));
     const ctx = text.slice(Math.max(0, m.index! - 80), m.index!);
     add(classify(token, carrierFromContext(ctx), hasLabel), token, m.index!);

@@ -10,13 +10,15 @@
 // A shipped-type email with an order # but no tracking number (Michaels:
 // only its own shipment ids) is queued as ONE placeholder row per (sender
 // domain, order #): carrier OTHER, tracking_number "email:<domain>:<order>",
-// match_reason "ai_disabled" until the AI fallback (§4 D3) can read it. It is
-// never pushed.
+// match_reason "ai_disabled" until the AI fallback (§4 D3, tracking-ai.ts,
+// 2026-11-04) reads it: found numbers replace it, none → "ai_no_tracking".
+// It is never pushed.
 import type { gmail_v1 } from "googleapis";
 import { listMessageIds, getMessage, type GmailMessage } from "./gmail-client";
 import { parseTrackingEmail, type ParsedEmail } from "./tracking-parse";
 import { extractorFor, extractLinkTracking, extractGenericLinkTracking, type FetchLike } from "./tracking-links";
-import { AI_DISABLED_REASON } from "./tracking-ai";
+import { AI_DISABLED_REASON, aiFallbackAvailable, resolvePlaceholdersWithAi, type TrackingAiCall, type AiPlaceholderResult } from "./tracking-ai";
+import { onePoResolver } from "./tracking-match";
 import type { QueryLike } from "./scheduler/types";
 
 export const WATERMARK_KEY = "tracking.gmail_watermark";
@@ -76,6 +78,8 @@ export interface IngestResult {
   link_resolved: number;
   /** Earlier placeholders re-read and resolved through a tracking link. */
   placeholders_resolved?: number;
+  /** The AI fallback over the placeholders that name one AF PO (absent when AI is off). */
+  ai?: AiPlaceholderResult;
   since: string | null; until: string;
   /** Per new / refreshed row: what was read (dry runs report these too). */
   drafts?: TrackingRowDraft[];
@@ -87,6 +91,16 @@ export interface IngestDeps {
   get?: typeof getMessage;
   /** The tracking-link extractors' redirect follower (tests inject one). */
   fetch?: FetchLike;
+  /** The AI fallback's model call (tests inject one); null = off. Default: on when a key is configured. */
+  ai?: TrackingAiCall | null;
+  aiMaxCalls?: number;
+}
+
+/** The AI fallback over the open placeholders (tracking-ai.ts); undefined when AI is off. */
+export async function aiPlaceholders(query: QueryLike, deps: IngestDeps, opts: { dryRun?: boolean } = {}): Promise<AiPlaceholderResult | undefined> {
+  if (deps.ai === null || (deps.ai === undefined && !aiFallbackAvailable())) return undefined;
+  const onePo = await onePoResolver(query);
+  return resolvePlaceholdersWithAi(query, { gmail: deps.gmail, get: deps.get, fetch: deps.fetch, ai: deps.ai, onePo, upsert: (d: TrackingRowDraft) => upsertTrackingRow(query, d) }, { dryRun: opts.dryRun, maxCalls: deps.aiMaxCalls });
 }
 
 /** Pure: would this email queue an "email:" placeholder (a shipped email naming one order, with no number)? */
@@ -183,6 +197,7 @@ export async function ingestTracking(opts: {
     }
   }
   r.placeholders_resolved = (await resolveLinkPlaceholders(opts.query, opts.deps, { dryRun: opts.dryRun })).resolved;
+  r.ai = await aiPlaceholders(opts.query, opts.deps, { dryRun: opts.dryRun });
   if (!opts.dryRun) {
     await opts.query(
       `INSERT INTO settings (key, value, updated_at) VALUES ($1, $2::jsonb, NOW())

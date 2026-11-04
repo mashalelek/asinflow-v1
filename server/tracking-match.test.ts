@@ -74,7 +74,7 @@ describe("matchTrackingRows", () => {
     let seen = "";
     await matchTrackingRows((async (sql: string) => { if (sql.includes("FROM po_tracking")) seen = sql; return { rows: [], rowCount: 0 }; }) as any);
     expect(seen).toMatch(/source <> 'manual' AND reassigned_at IS NULL/);
-    expect(seen).toMatch(/NOT IN \('dismissed', 'ai_disabled', 'return'\)/);
+    expect(seen).toMatch(/NOT IN \('dismissed', 'ai_disabled', 'ai_no_tracking', 'return'\)/);
   });
   it("a dry run writes nothing", async () => {
     const d = db([{ id: 1, sender_domain: "notify.macys.com", retailer_order_id: "4800667218" }]);

@@ -8,6 +8,9 @@
 //                           tracking-link follow (any age), then re-match (2026-10-22)
 //   [--live] --stage match  re-run the matcher alone over the unmatched queue, the
 //                           email-text rule included; prints the link list (2026-11-04)
+//   [--live] --stage ai     the tracking AI fallback over every ai_disabled placeholder
+//                           naming one AF PO (dry run: counts, no model call), then
+//                           re-match; --ai-max N caps the calls (default 25; 2026-11-04)
 //
 // 1. GET /inbound → the order numbers with unit_status pending /
 //    partially_received → their AF POs → the oldest order date among them.
@@ -27,8 +30,9 @@ import "./env";
 import pool from "../server/db";
 import { gmailClient, listMessageIds, getMessage, emailTextFor } from "../server/gmail-client";
 import { parseTrackingEmail } from "../server/tracking-parse";
-import { rowsFromEmail, withLinkTracking, ingestTracking, isPlaceholder, resolveLinkPlaceholders, type TrackingRowDraft } from "../server/tracking-ingest";
+import { rowsFromEmail, withLinkTracking, ingestTracking, isPlaceholder, resolveLinkPlaceholders, aiPlaceholders, type TrackingRowDraft } from "../server/tracking-ingest";
 import { matchRow, loadDomainMap, matchTrackingRows, type PoRef } from "../server/tracking-match";
+import { replacementLookup } from "../server/tracking-replacement";
 import { routeTracking, joinReasons } from "../server/tracking-route-rules";
 import { indexInbound, knownOrderNumbersHydrated, trackingNumbersOf, pushTracking } from "../server/tracking-push";
 import { fetchAllInboundOrders, fetchAllKnownOrders } from "../server/velocity-api";
@@ -36,17 +40,27 @@ import type { QueryLike } from "../server/scheduler/types";
 
 const live = process.argv.includes("--live");
 const stageArg = (() => { const i = process.argv.indexOf("--stage"); return i >= 0 ? process.argv[i + 1] : "all"; })();
-if (!["all", "ingest", "push", "links", "match"].includes(stageArg)) throw new Error("--stage must be ingest, push, links, match or all");
+if (!["all", "ingest", "push", "links", "match", "ai"].includes(stageArg)) throw new Error("--stage must be ingest, push, links, match, ai or all");
 const query: QueryLike = (sql, params) => pool.query(sql, params) as any;
 
 async function main(): Promise<void> {
   if (stageArg === "match") {
-    const m = await matchTrackingRows(query, { dryRun: !live, textFor: emailTextFor(gmailClient()) });
+    const m = await matchTrackingRows(query, { dryRun: !live, textFor: emailTextFor(gmailClient()), replacementFor: replacementLookup(gmailClient()) });
     console.log(`${live ? "LIVE" : "DRY RUN"} — ${JSON.stringify({ ...m, links: undefined })}`);
     for (const l of m.links) {
       const t = (await query(`SELECT t.retailer_order_id, t.sender_domain, t.email_subject, p.supplier, p.order_id, p.order_date::text AS order_date FROM po_tracking t, purchase_orders p WHERE t.id = $1 AND p.id = $2`, [l.id, l.po_id])).rows[0];
       console.log(`  #${l.id} ${l.via} · ${t?.sender_domain} "${String(t?.email_subject ?? "").slice(0, 60)}" (printed ${t?.retailer_order_id ?? "—"}) → ${t?.supplier} ${t?.order_id} (${t?.order_date})`);
     }
+    await pool.end();
+    return;
+  }
+  if (stageArg === "ai") {
+    const i = process.argv.indexOf("--ai-max");
+    const r = await aiPlaceholders(query, { gmail: gmailClient(), aiMaxCalls: i > 0 ? Number(process.argv[i + 1]) : undefined }, { dryRun: !live });
+    if (!r) { console.log("AI is off (no ANTHROPIC_API_KEY)"); await pool.end(); return; }
+    console.log(`${live ? "LIVE" : "DRY RUN"} — placeholders ${r.placeholders} · naming one AF PO ${r.one_po} · not one PO ${r.no_single_po} · calls ${r.calls} (resolved ${r.resolved} → ${r.rows} rows, none ${r.none}, failed ${r.failed}, over cap ${r.skipped_cap}, would ask ${r.dry_run}) ≈ $${r.cost}`);
+    for (const x of r.items) console.log(`  #${x.id} ${x.sender_domain} ${x.order_id} ${x.outcome}${x.numbers ? ` → ${x.numbers.join(", ")} (${x.via})` : ""}${x.error ? ` ${x.error}` : ""}`);
+    if (live) { const m = await matchTrackingRows(query, { textFor: emailTextFor(gmailClient()), replacementFor: replacementLookup(gmailClient()) }); console.log(`re-match: matched ${m.matched} ${JSON.stringify(m.unmatched)}`); }
     await pool.end();
     return;
   }

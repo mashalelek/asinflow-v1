@@ -4,7 +4,7 @@
 import { describe, it, expect } from "vitest";
 import { readFileSync, readdirSync } from "fs";
 import { join } from "path";
-import { parseTrackingEmail, normalizeStreet, extractShipTo, stripZipPrefix, extractOrderIds, isReturnEmail } from "./tracking-parse";
+import { parseTrackingEmail, normalizeStreet, extractShipTo, stripZipPrefix, extractOrderIds, isReturnEmail, extractTracking } from "./tracking-parse";
 import { rowsFromEmail } from "./tracking-ingest";
 
 const DIR = join(__dirname, "__fixtures__", "tracking-emails");
@@ -123,5 +123,12 @@ describe("parser pieces", () => {
 describe("extractOrderIds — a parenthesised # (2026-11-04)", () => {
   it("Pyramyd AIR's subject", () => {
     expect(extractOrderIds("Your Pyramyd AIR order has shipped (#115450009)", "")).toEqual(["115450009"]);
+  });
+});
+
+describe("a UPS reference number is never a tracking number (2026-11-04)", () => {
+  it("\"LetterReference Number 1:\" run together still reads as a reference", () => {
+    const text = "Tracking Number: 1ZV5503JYW00243199 Ship To: MARIA PETERS UPS Service: UPS Ground Saver Shipment Type: LetterReference Number 1: 212355503949 Reference Number 2: 21235550394900100038";
+    expect(extractTracking(text, []).map((x) => x.trackingNumber)).toEqual(["1ZV5503JYW00243199"]);
   });
 });
