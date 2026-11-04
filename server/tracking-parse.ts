@@ -73,6 +73,7 @@ export function extractShipTo(text: string): string | null {
 const ORDER_PATTERNS: RegExp[] = [
   /\border\s*(?:#|number|no\.?|num(?:ber)?|id)\s*:?\s*#?\s*\(?([A-Z0-9][A-Z0-9-]{2,30}[A-Z0-9])\)?/gi,
   /\border\s+#?\(?([A-Z0-9-]*\d[A-Z0-9-]*)\)?/gi,
+  /\(#\s*([A-Z0-9][A-Z0-9-]*\d[A-Z0-9-]*)\)/gi, // "has shipped (#115450009)" — Pyramyd AIR, Tetley (2026-11-04)
   /\border\s*#\s*:?\s*([A-Z0-9-]*\d[A-Z0-9-]*)/gi,
 ];
 

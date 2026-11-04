@@ -42,3 +42,40 @@ export const digitForms = (s: string): string[] => {
 
 /** ILIKE "contains" pattern with \, % and _ escaped (use with ESCAPE '\'): "CAR118805142_1" matches literally. */
 export const likeContains = (s: string): string => `%${s.replace(/[\\%_]/g, (c) => `\\${c}`)}%`;
+
+// Order # named in an email's text (2026-11-04, Maria — the ShagTools PO and
+// the unmatched tracking queue): carrier notices (UPS, FedEx), platform
+// senders (ShipStation) and emails whose labelled number is the wrong one
+// (Groomer's Choice prints a customer # beside the order #) still print the
+// AF order # somewhere. A PO counts as named when one of its ids is a WHOLE
+// token of the text — compared alnum-only, also with leading zeros dropped
+// (Summit Racing prints 0412645 for AF's 412645), and a hyphenated token
+// also joined (Walmart 2000152-79183885). Short ids are too easy to hit by
+// chance: 6+ characters with a digit, and across every supplier (no sender
+// to narrow by) 8+ characters or letters mixed with digits.
+
+const dropZeros = (k: string): string => k.replace(/^0+(?=\d)/, "");
+
+/** Pure: the comparable forms of every token in a text — as is, hyphen parts, hyphen-joined, leading zeros dropped. */
+export function orderTokens(text: string): Set<string> {
+  const out = new Set<string>();
+  for (const m of Array.from((text ?? "").matchAll(/[A-Za-z0-9]+(?:[-_][A-Za-z0-9]+)*/g))) {
+    const t = m[0].toUpperCase();
+    const forms = [t.replace(/[-_]/g, ""), ...t.split(/[-_]/)];
+    for (const f of forms) if (f) { out.add(f); out.add(dropZeros(f)); }
+  }
+  return out;
+}
+
+/** Pure: an AF order id is specific enough to be matched from free text. */
+export const namedIdOk = (key: string, scope: "supplier" | "any"): boolean =>
+  key.length >= 6 && /\d/.test(key) && (scope === "supplier" || key.length >= 8 || /[A-Z]/.test(key));
+
+/** Pure: the POs whose order # (any id the order_id holds, without AF's _N) is a whole token of the text. */
+export function posNamedInText<T extends { order_id: string }>(text: string, pos: readonly T[], scope: "supplier" | "any"): T[] {
+  const tokens = orderTokens(text);
+  return pos.filter((p) => orderIdParts(p.order_id).some((x) => {
+    const k = dropZeros(normOrder(x));
+    return namedIdOk(k, scope) && tokens.has(k);
+  }));
+}

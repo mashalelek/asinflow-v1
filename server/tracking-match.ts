@@ -33,8 +33,18 @@
 // free-text prefix, AF's _N, a retailer's -N, two-id AF order_ids) is the
 // shared server/order-number.ts, the same functions shipment sync A uses;
 // a platform email's subject name resolves through supplier_aliases first.
+//
+// 2026-11-04 (Maria — the 81-row queue): a leading zero on the printed #
+// (Summit Racing 0412645 ↔ 412645) compares equal; and when the labelled #
+// finds nothing, the email's TEXT is read for an AF order # as a whole
+// token (posNamedInText, server/order-number.ts): the resolved supplier's
+// POs, or every PO for a sender that resolves to none (a carrier notice, a
+// platform). Exactly one PO named, with an order date no later than a day
+// after the email → matched (match_reason 'order_in_text'). The text comes
+// from Gmail by the row's message id (textFor) — only for rows the labelled
+// # left unmatched.
 import type { QueryLike } from "./scheduler/types";
-import { normOrder, baseOrderId, orderIdParts, stripShipmentSuffix, digitForms } from "./order-number";
+import { normOrder, baseOrderId, orderIdParts, stripShipmentSuffix, digitForms, posNamedInText } from "./order-number";
 import { loadAliases, aliasKey } from "./supplier-aliases";
 export { normOrder, baseOrderId, orderIdParts } from "./order-number";
 
@@ -64,19 +74,20 @@ export function resolveSupplier(domain: string | null, map: Record<string, strin
   return { supplier: null, obvious: false };
 }
 
-export interface PoRef { id: string; supplier: string; order_id: string }
+export interface PoRef { id: string; supplier: string; order_id: string; order_date?: Date | string | null }
 
 /** Pure: the POs a tracking row's order # names for that supplier. */
 export function findPos(supplier: string, retailerOrderId: string, pos: readonly PoRef[]): PoRef[] {
   // The email's number as printed, and without a retailer's trailing -N
   // shipment suffix (WorldPantry 70633076-1 → 70633076).
   const raw = baseOrderId(retailerOrderId);
-  const want = new Set([raw, stripShipmentSuffix(raw)].map(normOrder).filter(Boolean));
+  const lz = (k: string) => k.replace(/^0+(?=\d)/, "");
+  const want = new Set([raw, stripShipmentSuffix(raw)].map((x) => lz(normOrder(x))).filter(Boolean));
   if (want.size === 0) return [];
-  return pos.filter((p) => p.supplier === supplier && orderIdParts(p.order_id).some((x) => want.has(normOrder(x))));
+  return pos.filter((p) => p.supplier === supplier && orderIdParts(p.order_id).some((x) => want.has(lz(normOrder(x)))));
 }
 
-export type MatchVia = "order_id_unique" | "retailer_name";
+export type MatchVia = "order_id_unique" | "retailer_name" | "order_in_text";
 export type MatchOutcome = { status: "matched"; po_id: string; via?: MatchVia } | { status: "unmatched"; reason: "unknown_sender" | "no_po" | "ambiguous" | "unpaired"; candidates?: string[] };
 
 const NAME_PATTERNS = [/\byour\s+(.{2,40}?)\s+order\b/i, /\border with\s+(.{2,40}?)\s+(?:and|has|is)\b/i];
@@ -110,6 +121,14 @@ export function findPosByOrderDigits(retailerOrderId: string, pos: readonly PoRe
   const want = new Set(digitForms(retailerOrderId));
   if (want.size === 0) return [];
   return pos.filter((p) => orderIdParts(p.order_id).some((x) => digitForms(x).some((d) => want.has(d))));
+}
+
+/** Pure: the ONE PO the email's text names (supplier's POs, or all when the sender resolves to none), ordered no later than a day after the email. */
+export function poNamedInEmail(text: string, emailDate: Date | null, supplier: string | null, pos: readonly PoRef[]): PoRef | null {
+  const scope = supplier ? pos.filter((p) => p.supplier === supplier) : pos;
+  const hits = posNamedInText(text, scope, supplier ? "supplier" : "any").filter((p) =>
+    !emailDate || p.order_date == null || new Date(p.order_date).getTime() <= emailDate.getTime() + 86_400_000);
+  return hits.length === 1 ? hits[0] : null;
 }
 
 /** Pure: one row's match. */
@@ -157,30 +176,42 @@ export async function setDomainMapEntry(query: QueryLike, domain: string, suppli
   );
 }
 
-export interface MatchRunResult { considered: number; matched: number; matched_via: Record<string, number>; unmatched: Record<string, number>; seeded: Record<string, string> }
+/** The email behind a row, for the text rule: Gmail by message id (null when it cannot be read). */
+export type EmailTextFor = (gmailMessageId: string) => Promise<{ text: string; date: Date | null } | null>;
+
+export interface MatchRunResult {
+  considered: number; matched: number; matched_via: Record<string, number>; unmatched: Record<string, number>; seeded: Record<string, string>;
+  /** Every row this run matches (live) or would (dry run) — the link list a new rule is checked against. */
+  links: Array<{ id: number; po_id: string; supplier: string | null; via: string }>;
+}
 
 /**
  * Match every open unmatched row the sync may move (not manual, not
  * reassigned, not dismissed, not an ai_disabled placeholder, not a return). Dry run:
  * computes, writes nothing.
  */
-export async function matchTrackingRows(query: QueryLike, opts: { dryRun?: boolean } = {}): Promise<MatchRunResult> {
+export async function matchTrackingRows(query: QueryLike, opts: { dryRun?: boolean; textFor?: EmailTextFor } = {}): Promise<MatchRunResult> {
   const rows = (await query(
-    `SELECT id, sender_domain, retailer_order_id, email_subject FROM po_tracking
+    `SELECT id, sender_domain, retailer_order_id, email_subject, gmail_message_id FROM po_tracking
       WHERE status = 'unmatched' AND source <> 'manual' AND reassigned_at IS NULL
         AND COALESCE(match_reason, '') NOT IN ('dismissed', 'ai_disabled', 'return')`,
   )).rows;
-  const r: MatchRunResult = { considered: rows.length, matched: 0, matched_via: {}, unmatched: {}, seeded: {} };
+  const r: MatchRunResult = { considered: rows.length, matched: 0, matched_via: {}, unmatched: {}, seeded: {}, links: [] };
   if (rows.length === 0) return r;
   const map = await loadDomainMap(query);
   const platforms = await loadPlatformSenders(query);
   const aliases = await loadAliases(query);
-  const pos: PoRef[] = (await query(`SELECT id, supplier, order_id FROM purchase_orders`)).rows.map((x: any) => ({ id: String(x.id), supplier: String(x.supplier), order_id: String(x.order_id) }));
+  const pos: PoRef[] = (await query(`SELECT id, supplier, order_id, order_date FROM purchase_orders`)).rows.map((x: any) => ({ id: String(x.id), supplier: String(x.supplier), order_id: String(x.order_id), order_date: x.order_date ?? null }));
   const suppliers = Array.from(new Set(pos.map((p) => p.supplier)));
   for (const row of rows) {
-    const m = matchRow(row, { ...map, ...r.seeded }, suppliers, pos, platforms, aliases);
+    let m: ReturnType<typeof matchRow> = matchRow(row, { ...map, ...r.seeded }, suppliers, pos, platforms, aliases);
+    if (m.status === "unmatched" && m.reason !== "ambiguous" && opts.textFor && row.gmail_message_id) {
+      const email = await opts.textFor(String(row.gmail_message_id)).catch(() => null);
+      const po = email ? poNamedInEmail(`${row.email_subject ?? ""}\n${email.text}`, email.date, m.supplier, pos) : null;
+      if (po) m = { status: "matched", po_id: po.id, via: "order_in_text", supplier: po.supplier, obvious: m.supplier ? m.obvious : false };
+    }
     if (m.obvious && m.supplier && row.sender_domain && !map[row.sender_domain]) r.seeded[String(row.sender_domain).toLowerCase()] = m.supplier;
-    if (m.status === "matched") { r.matched++; const k = m.via ?? "supplier"; r.matched_via[k] = (r.matched_via[k] ?? 0) + 1; } else r.unmatched[m.reason] = (r.unmatched[m.reason] ?? 0) + 1;
+    if (m.status === "matched") { r.matched++; const k = m.via ?? "supplier"; r.matched_via[k] = (r.matched_via[k] ?? 0) + 1; r.links.push({ id: Number(row.id), po_id: m.po_id, supplier: m.supplier, via: k }); } else r.unmatched[m.reason] = (r.unmatched[m.reason] ?? 0) + 1;
     if (opts.dryRun) continue;
     await query(
       `UPDATE po_tracking SET supplier_guess = $2, po_id = $3, status = $4, match_reason = $5, updated_at = NOW()

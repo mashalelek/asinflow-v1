@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { normOrder, orderKey, orderBaseKey, afOrderKeys, afOrderBaseKeys, baseOrderId, orderIdParts, digitForms } from "./order-number";
+import { normOrder, orderKey, orderBaseKey, afOrderKeys, afOrderBaseKeys, baseOrderId, orderIdParts, digitForms, orderTokens, posNamedInText, namedIdOk } from "./order-number";
 import { resolveRetailer, proposeAlias, editDistance, supplierLabel } from "./supplier-aliases";
 
 // Patch docs/claude_spec-patch-po-matching.md §3 — the real Unmatched rows (2026-10-29).
@@ -57,5 +57,26 @@ describe("retailer → supplier", () => {
     expect(editDistance("webstrauntstore", "webstaurantstore")).toBe(3);
     expect(editDistance("carters", "carter")).toBe(1);
     expect(editDistance("ab", "ba")).toBe(1); // a transposition is one edit
+  });
+});
+
+describe("posNamedInText (2026-11-04)", () => {
+  it("tokens: as is, hyphen-joined, hyphen parts, leading zeros dropped", () => {
+    const t = orderTokens("Order 2000152-79183885 · ref 0412645 · CAR118805142_1");
+    for (const k of ["200015279183885", "2000152", "79183885", "0412645", "412645", "CAR1188051421", "CAR118805142"]) expect(t.has(k)).toBe(true);
+  });
+  it("an AF order id counts from free text only when specific enough", () => {
+    expect(namedIdOk("833416", "supplier")).toBe(true);
+    expect(namedIdOk("833416", "any")).toBe(false);
+    expect(namedIdOk("18807E", "any")).toBe(true);
+    expect(namedIdOk("12345", "supplier")).toBe(false);
+    expect(namedIdOk("ABCDEFGH", "any")).toBe(false);
+  });
+  it("whole tokens only; either id of a two-id order_id; AF's _N dropped", () => {
+    const pos = [{ id: "a", order_id: "115449859 / 115450009" }, { id: "b", order_id: "200015279183885" }, { id: "c", order_id: "28686630_1" }];
+    expect(posNamedInText("shipped (#115450009)", pos, "supplier").map((p) => p.id)).toEqual(["a"]);
+    expect(posNamedInText("Order# 2000152-79183885", pos, "any").map((p) => p.id)).toEqual(["b"]);
+    expect(posNamedInText("order 28686630 has shipped", pos, "supplier").map((p) => p.id)).toEqual(["c"]);
+    expect(posNamedInText("x1150000098595", pos, "supplier")).toEqual([]);
   });
 });

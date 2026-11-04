@@ -119,3 +119,9 @@ describe("parser pieces", () => {
     expect(p.shipments.map((s) => s.trackingNumber)).toEqual(["1ZE3652C0344289436"]);
   });
 });
+
+describe("extractOrderIds — a parenthesised # (2026-11-04)", () => {
+  it("Pyramyd AIR's subject", () => {
+    expect(extractOrderIds("Your Pyramyd AIR order has shipped (#115450009)", "")).toEqual(["115450009"]);
+  });
+});

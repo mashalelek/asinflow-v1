@@ -115,6 +115,12 @@ export async function getMessage(gmail: gmail_v1.Gmail, id: string): Promise<Gma
   return parseGmailMessage(r.data);
 }
 
+/** The tracking matcher's text rule (tracking-match.ts EmailTextFor): a row's email text and date by message id. */
+export const emailTextFor = (gmail: gmail_v1.Gmail) => async (id: string): Promise<{ text: string; date: Date | null }> => {
+  const m = await getMessage(gmail, id);
+  return { text: m.text, date: m.date };
+};
+
 // ---- PO documents (SPEC §22 "PO documents"): the email as a printable page ----
 
 export interface RenderableMessage { id: string; html: string; subject: string; from: string; to: string; date: Date }

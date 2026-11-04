@@ -4,7 +4,7 @@
 // (SCHEDULED_ONLY_COMPONENTS); the manual trigger is POs → Sync tracking.
 // A Gmail failure is recorded, not thrown: 26 still evaluates the rows that
 // already exist.
-import { gmailClient } from "../../gmail-client";
+import { gmailClient, emailTextFor } from "../../gmail-client";
 import { ingestTracking } from "../../tracking-ingest";
 import { matchTrackingRows } from "../../tracking-match";
 import type { ComponentDef, ComponentContext, ComponentResult } from "../types";
@@ -18,8 +18,10 @@ export const poTrackingIngest: ComponentDef = {
   async run(ctx: ComponentContext): Promise<ComponentResult> {
     const counts: Record<string, number> = {};
     const outcomes: Record<string, string> = {};
+    let gmail: ReturnType<typeof trackingIngestDeps.gmail> | null = null;
     try {
-      const r = await ingestTracking({ query: ctx.query, deps: { gmail: trackingIngestDeps.gmail() }, log: ctx.log });
+      gmail = trackingIngestDeps.gmail();
+      const r = await ingestTracking({ query: ctx.query, deps: { gmail }, log: ctx.log });
       Object.assign(counts, { scanned: r.scanned, candidates: r.candidates, rows: r.rows, inserted: r.inserted, refreshed: r.refreshed, placeholders: r.placeholders, link_resolved: r.link_resolved, placeholders_resolved: r.placeholders_resolved ?? 0 });
       outcomes._window = `${r.since ?? "start"}..${r.until}`;
     } catch (err: any) {
@@ -27,7 +29,7 @@ export const poTrackingIngest: ComponentDef = {
       outcomes._ingest = `error: ${err?.message ?? err}`;
       ctx.log(outcomes._ingest);
     }
-    const m = await matchTrackingRows(ctx.query);
+    const m = await matchTrackingRows(ctx.query, gmail ? { textFor: emailTextFor(gmail) } : {});
     Object.assign(counts, { matched: m.matched, ...Object.fromEntries(Object.entries(m.unmatched).map(([k, v]) => [`unmatched_${k}`, v])) });
     if (Object.keys(m.seeded).length) outcomes._domain_map_seeded = Object.entries(m.seeded).map(([d, s]) => `${d}→${s}`).join(", ");
     return { counts, outcomes };

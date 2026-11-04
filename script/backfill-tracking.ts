@@ -6,6 +6,8 @@
 //   --live --stage push     the push only
 //   [--live] --stage links  re-read EVERY ai_disabled placeholder's email through the
 //                           tracking-link follow (any age), then re-match (2026-10-22)
+//   [--live] --stage match  re-run the matcher alone over the unmatched queue, the
+//                           email-text rule included; prints the link list (2026-11-04)
 //
 // 1. GET /inbound → the order numbers with unit_status pending /
 //    partially_received → their AF POs → the oldest order date among them.
@@ -23,7 +25,7 @@
 // Talks to DATABASE_URL directly (no API token for scripts).
 import "./env";
 import pool from "../server/db";
-import { gmailClient, listMessageIds, getMessage } from "../server/gmail-client";
+import { gmailClient, listMessageIds, getMessage, emailTextFor } from "../server/gmail-client";
 import { parseTrackingEmail } from "../server/tracking-parse";
 import { rowsFromEmail, withLinkTracking, ingestTracking, isPlaceholder, resolveLinkPlaceholders, type TrackingRowDraft } from "../server/tracking-ingest";
 import { matchRow, loadDomainMap, matchTrackingRows, type PoRef } from "../server/tracking-match";
@@ -34,10 +36,20 @@ import type { QueryLike } from "../server/scheduler/types";
 
 const live = process.argv.includes("--live");
 const stageArg = (() => { const i = process.argv.indexOf("--stage"); return i >= 0 ? process.argv[i + 1] : "all"; })();
-if (!["all", "ingest", "push", "links"].includes(stageArg)) throw new Error("--stage must be ingest, push, links or all");
+if (!["all", "ingest", "push", "links", "match"].includes(stageArg)) throw new Error("--stage must be ingest, push, links, match or all");
 const query: QueryLike = (sql, params) => pool.query(sql, params) as any;
 
 async function main(): Promise<void> {
+  if (stageArg === "match") {
+    const m = await matchTrackingRows(query, { dryRun: !live, textFor: emailTextFor(gmailClient()) });
+    console.log(`${live ? "LIVE" : "DRY RUN"} — ${JSON.stringify({ ...m, links: undefined })}`);
+    for (const l of m.links) {
+      const t = (await query(`SELECT t.retailer_order_id, t.sender_domain, t.email_subject, p.supplier, p.order_id, p.order_date::text AS order_date FROM po_tracking t, purchase_orders p WHERE t.id = $1 AND p.id = $2`, [l.id, l.po_id])).rows[0];
+      console.log(`  #${l.id} ${l.via} · ${t?.sender_domain} "${String(t?.email_subject ?? "").slice(0, 60)}" (printed ${t?.retailer_order_id ?? "—"}) → ${t?.supplier} ${t?.order_id} (${t?.order_date})`);
+    }
+    await pool.end();
+    return;
+  }
   if (stageArg === "links") {
     const r = await resolveLinkPlaceholders(query, { gmail: gmailClient() }, { dryRun: !live, allAges: true });
     const m = live ? await matchTrackingRows(query) : null;

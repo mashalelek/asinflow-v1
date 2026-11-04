@@ -17,7 +17,7 @@ import { matchTrackingRows, setDomainMapEntry, findPos, findPosByOrderDigits, ty
 import { ingestTracking } from "./tracking-ingest";
 import { reconcileConfirmations } from "./po-confirm-reconcile";
 import { pushTracking } from "./tracking-push";
-import { gmailClient } from "./gmail-client";
+import { gmailClient, emailTextFor } from "./gmail-client";
 import type { QueryLike } from "./scheduler/types";
 import { reconcileReviewVelocity } from "./line-action-items";
 
@@ -42,8 +42,9 @@ export function createTrackingRouter(deps: { query?: QueryLike } = {}): Router {
   router.post("/api/tracking/sync", async (req: Request, res: Response) => {
     const dryRun = req.body?.dryRun === true || req.query.dryRun === "true";
     try {
-      const ingest = await ingestTracking({ query, deps: { gmail: gmailClient() }, dryRun });
-      const match = await matchTrackingRows(query, { dryRun });
+      const gmail = gmailClient();
+      const ingest = await ingestTracking({ query, deps: { gmail }, dryRun });
+      const match = await matchTrackingRows(query, { dryRun, textFor: emailTextFor(gmail) });
       const push = await pushTracking({ query, dryRun });
       if (dryRun && ingest.drafts) ingest.drafts = ingest.drafts.slice(0, 200);
       res.json({ dryRun, ingest, match, push });
@@ -88,7 +89,7 @@ export function createTrackingRouter(deps: { query?: QueryLike } = {}): Router {
       await setDomainMapEntry(query, domain, supplier);
       // Re-open this domain's unknown_sender rows for matching.
       await query(`UPDATE po_tracking SET match_reason = NULL WHERE status = 'unmatched' AND sender_domain = $1 AND match_reason = 'unknown_sender'`, [domain]);
-      res.json({ ok: true, rematch: await matchTrackingRows(query) });
+      res.json({ ok: true, rematch: await matchTrackingRows(query, { textFor: emailTextFor(gmailClient()) }) });
     } catch (err) { fail(res, err); }
   });
 

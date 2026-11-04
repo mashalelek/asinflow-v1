@@ -1,6 +1,6 @@
 // PO tracking matching + supplier domain map (SPEC §26, patch commit 3).
 import { describe, it, expect } from "vitest";
-import { resolveSupplier, findPos, matchRow, baseOrderId, matchTrackingRows, retailerNameFromSubject, supplierByName, findPosByOrderDigits, type PoRef } from "./tracking-match";
+import { resolveSupplier, findPos, matchRow, baseOrderId, matchTrackingRows, retailerNameFromSubject, supplierByName, findPosByOrderDigits, poNamedInEmail, type PoRef } from "./tracking-match";
 
 const SUPPLIERS = ["target.com", "walmart.com", "macys.com", "michaels.com", "homedepot.com", "staples.com", "zoro.com", "tractorsupply.com", "shop.equalexchange.coop", "communitycoffee.com"];
 const POS: PoRef[] = [
@@ -131,5 +131,57 @@ describe("platform senders + order-#-unique (Maria 2026-10-22)", () => {
     expect(matchRow({ sender_domain: "yvesrocher.us", retailer_order_id: "999999" }, {}, SUP, P)).toMatchObject({ reason: "unknown_sender" });
     expect(findPosByOrderDigits("1234", P)).toEqual([]);
     expect(matchRow({ sender_domain: "oe.target.com", retailer_order_id: "4800667218" }, {}, SUP, P)).toMatchObject({ reason: "no_po" });
+  });
+});
+
+describe("the 81-row queue (2026-11-04): leading zeros, the AF order # named in the email's text", () => {
+  const P: PoRef[] = [
+    { id: "summit", supplier: "summitracing.com", order_id: "412645", order_date: "2026-09-01" },
+    { id: "groom", supplier: "groomerschoice.com", order_id: "833416", order_date: "2026-10-01" },
+    { id: "ph", supplier: "perfectlyhealthy.com", order_id: "18807E", order_date: "2026-10-05" },
+    { id: "zara", supplier: "zara.com", order_id: "54480940897", order_date: "2026-10-01" },
+    { id: "sh1", supplier: "supplyhouse.com", order_id: "28686630", order_date: "2026-09-01" },
+    { id: "sh2", supplier: "supplyhouse.com", order_id: "28686630_1", order_date: "2026-09-01" },
+    { id: "late", supplier: "zara.com", order_id: "99999999999", order_date: "2026-12-01" },
+  ];
+  const SUP = Array.from(new Set(P.map((p) => p.supplier)));
+  it("Summit Racing's 0412645 is AF's 412645", () => {
+    expect(findPos("summitracing.com", "0412645", P).map((p) => p.id)).toEqual(["summit"]);
+  });
+  it("the text names one PO: the supplier's (a wrong labelled #), any PO's for a carrier or a platform (8+ chars or letters + digits)", () => {
+    expect(poNamedInEmail("Customer # 1408851\nOrder 833416 shipped", null, "groomerschoice.com", P)?.id).toBe("groom");
+    expect(poNamedInEmail("Order 18807E from Perfectly Healthy", null, null, P)?.id).toBe("ph");
+    expect(poNamedInEmail("UPS Ship Notification — Reference 54480940897", new Date("2026-10-07"), null, P)?.id).toBe("zara");
+    // Across every supplier a 6-digit # alone is too easy to hit by chance.
+    expect(poNamedInEmail("Call 833416 today", null, null, P)).toBeNull();
+    // A substring is not a token.
+    expect(poNamedInEmail("ref 5448094089712", null, null, P)).toBeNull();
+    // Two POs named (AF's _N): none, it stays for review.
+    expect(poNamedInEmail("Part of your order 28686630 has shipped", null, "supplyhouse.com", P)).toBeNull();
+    // A PO ordered after the email is not what the email is about.
+    expect(poNamedInEmail("Ref 99999999999", new Date("2026-10-07"), null, P)).toBeNull();
+  });
+  it("matchTrackingRows reads the text only for rows the labelled # left unmatched, and lists every link", async () => {
+    const rows = [
+      { id: 190, sender_domain: "ups.com", retailer_order_id: null, email_subject: "UPS Ship Notification", gmail_message_id: "g190" },
+      { id: 176, sender_domain: "groomerschoice.com", retailer_order_id: "1408851", email_subject: "Your order has Shipped!", gmail_message_id: "g176" },
+      { id: 762, sender_domain: "summitracing.com", retailer_order_id: "0412645", email_subject: "Your Order Has Shipped", gmail_message_id: "g762" },
+    ];
+    const read: string[] = [];
+    const texts: Record<string, string> = { g190: "Reference Number 54480940897", g176: "Customer # 1408851 Order # 833416" };
+    const query = async (sql: string) => {
+      if (sql.includes("FROM po_tracking") && sql.trimStart().startsWith("SELECT")) return { rows, rowCount: rows.length };
+      if (sql.startsWith("SELECT value FROM settings")) return { rows: [{ value: {} }], rowCount: 1 };
+      if (sql.includes("FROM purchase_orders")) return { rows: P, rowCount: P.length };
+      return { rows: [], rowCount: 0 };
+    };
+    const r = await matchTrackingRows(query as any, { dryRun: true, textFor: async (id) => { read.push(id); return { text: texts[id] ?? "", date: new Date("2026-10-08") }; } });
+    expect(read).toEqual(["g190", "g176"]);
+    expect(r.links).toEqual([
+      { id: 190, po_id: "zara", supplier: "zara.com", via: "order_in_text" },
+      { id: 176, po_id: "groom", supplier: "groomerschoice.com", via: "order_in_text" },
+      { id: 762, po_id: "summit", supplier: "summitracing.com", via: "supplier" },
+    ]);
+    expect(SUP.length).toBeGreaterThan(0);
   });
 });
