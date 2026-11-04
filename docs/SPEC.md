@@ -2282,6 +2282,7 @@ the ledger stage is the `refresh_runs.stage` key the component writes.
 | 26 | PO tracking push (§26) | daily | Velocity `GET /inbound` + known orders, `GET` / `PUT /inbound/:order_id` | `26_po_tracking_push` | matched tracking rows; **00:00 pass only**, right after 25 |
 | 27 | PO confirmation reconcile (§26 "Confirmation emails", 2026-10-31) | daily | Gmail API (orders@) — no AI | `27_po_confirmations` | order-confirmation mail since the watermark vs AF POs, and §27 renewal POs for unmatched confirmations; **00:00 pass only**, after 26; manual: `POST /api/pos/reconcile-confirmations` |
 | 28 | Subscription alerts (§27, 2026-10-31) | daily | none (AF tables) | `28_subscriptions` | every subscription; "Subscription renews" raised / cleared; **00:00 pass only**, after 27 |
+| 29 | PO documents (§22 "PO documents", 2026-11-04) | hourly | Gmail API (orders@) + Drive API (Invoices root, as Maria) + headless Chromium | `29_po_documents` | order-confirmation / shipped / delivered mail since the watermark, rendered to PDF and saved to Drive; the 00:00 pass also links PDFs saved by hand (D1); **scheduled passes only** (00:00 and hourly), after 28; manual: `npm run po-docs` |
 
 Dependencies the order encodes: 10 before 13 (fees need the fresh price)
 (9 before 15 was retired 2026-10-17 — the inventory snapshot's ordered_qty
@@ -6901,6 +6902,79 @@ replaces it. Migration 061 adds `po_edit_log`, `deleted_pos` and
   fixed `/api/pos/unmatched` (the Unmatched panel — it 500'd before) and
   `/api/pos/asin-lookup` are reachable.
 
+### PO documents (patch `docs/claude_spec-patch-po-documents.md`, 2026-11-04; migration 083)
+
+PDFs kept for a PO in **Maria's Google Drive**, under the Invoices root
+(`DRIVE_INVOICES_ROOT_ID`; `Invoices / Invoices - YYYY / <month>`), one
+`po_documents` row each: `type` order_confirmation · shipped · delivered ·
+invoice_manual, `source` email (an order email AF rendered) · upload (the
+Documents tab) · linked_existing (a PDF Maria saved, linked by name),
+`gmail_message_id`, `drive_file_id`, `file_name`, `bytes`, `document_at`
+(the document's own date: the email's, the Drive file's created time, the
+upload's — shown as its date), `created_by_user_id` (NULL = the system;
+not `created_by`, which migration 050's guard reserves). Unique per
+(gmail_message_id, type) and per (po_id, drive_file_id). Drive access:
+`server/drive-client.ts`, the service account as Maria (`DRIVE_SUBJECT`),
+scope `drive`; Render's disk is ephemeral, so nothing is stored locally.
+**AF only adds files and creates missing year / month folders; it never
+renames or moves a file, and never deletes one it did not create** (Maria
+2026-11-04).
+
+- **Name** (Orders sheet col AU, `shared/po-documents.ts`):
+  `YYYY-MM-DD_supplier_POID.pdf` — the PO's order date (local date
+  components) and AF's supplier, verbatim; `_shipped` / `_delivered` for
+  those emails, `_invoice` for an upload (D3); a second document of the
+  same type `-2`, `-3`, the first name free in the folder and on the PO
+  (case-insensitive). The PO Details "Invoice File Name" line is the
+  same builder.
+- **Folders (D2, decision 4):** the month folder is found under either
+  spelling — `Invoices YYYY-MM` (2026) or `Receipts_YYYY-MM` (2025, as
+  Maria named them) — and `Invoices - YYYY` / `Invoices YYYY-MM` are
+  created only when missing, never a duplicate of an existing name.
+- **Linking existing PDFs (D1; Maria's rules 2026-11-04):** the whole
+  tree under the root is searched, not only the expected month folder.
+  Rule 1: the §2 name, case- and space-insensitive, with an optional type
+  suffix / `-N` — every file found links (a name in Drive twice links
+  both). Otherwise rule 2: the same order date as the name's prefix, the
+  order # anywhere after it as a whole token, any supplier spelling
+  (`2025-07-12_Blains Farm and Fleet_31885729.pdf`) — linked only when
+  exactly one file fits and it fits no other PO. Several candidates go to
+  `docs/invoice-link-review-<date>.csv` for Maria; nothing else needs
+  review. PDFs only; the type is the name's suffix, else order
+  confirmation. A PO with no file stays "no document" — expected for
+  older POs, no warning. Re-runs link nothing twice.
+- **Order emails (§26 "PO documents ingest"):** rendered and saved by
+  component 29.
+- **"Invoice attached" is derived:** Yes when the PO has a
+  `po_documents` row, No otherwise (decision 5). The sheet's Rcpt flag
+  (`purchase_orders.invoice_attached`) is history only — the list and the
+  detail answer with the derived value.
+- **UI:** the POs table's Invoice cell is a paperclip — full weight with
+  at least one document (a click downloads it; several → a menu by type
+  and date with the count), the outline at 40 % with none (a click opens
+  the PO on its **Documents** tab, `?tab=documents`). The Documents tab
+  (between Payments and Tracking) lists type · file name · date · source
+  with Download and Open in Drive, **Upload invoice** (a PDF, or an image
+  converted to PDF by the renderer; 20 MB) and Delete with a confirm
+  (`po-document-delete`): an AF file (email / upload) goes to Drive's
+  trash with its row; a linked existing file is only unlinked and stays
+  in Drive. An upload or a delete writes a History row (entity
+  `document`). Downloads stream through AF
+  (`GET /api/pos/documents/:id/download`) — the browser never needs Drive
+  access. Routes: `server/po-documents-routes.ts`.
+- **Renderer (`server/pdf-render.ts`):** headless Chromium (puppeteer,
+  its browser cached inside the project by `.puppeteerrc.cjs` so Render
+  keeps it from build to runtime), one browser per render, closed after,
+  page scripts off, laid out at the printable width in print media,
+  remote images until the network is quiet (20 s), a failed image blank.
+  Every image larger than twice its printed size is redrawn at 2× (a
+  Walmart confirmation with 3000 × 3000 AVIF photos printed at 15.7 MB,
+  1.06 MB after). The probe (`server/pdf-probe.ts`) renders a fixed page
+  once per deployed commit after boot and on `GET /api/admin/pdf-probe`;
+  the result is the setting `pdf.render_probe` (Render 2026-11-04: ok,
+  38 KB, 2.5 s, inline / remote / dead images right; CJK glyphs narrower
+  than locally — fewer fonts in the image, 18 families).
+
 ### Source-of-truth ownership (additions to §14)
 
 | Field | Owner |
@@ -6954,8 +7028,11 @@ the first consumer of the PO module outside the POs page.
    verified); POs sub-nav
 6. Later: gift-card ledger, ~~subscription alerts~~ (§27, 2026-10-31),
    Velocity bundles, %-type product discounts, §15 FIFO/lots, pre-2026
-   import; the Paid cost on the sales / profit dashboard; the PO documents
-   patch (uses `rcpt`-derived state); the cancellations patch now writes
+   import; the Paid cost on the sales / profit dashboard; ~~the PO documents
+   patch~~ (§22 "PO documents", 2026-11-04 — follow-ups: the 7 link-review
+   cases in `docs/invoice-link-review-2026-11-04.csv` await Maria; drop
+   `purchase_orders.invoice_attached` once nothing shows the sheet flag;
+   CJK fonts in the Render image if a supplier ever sends one); the cancellations patch now writes
    `po_line_refunds` (§8.3), not a PO-level triple
 0. Cleanup migration dropping `asin_estimates.ordered_qty` (unwritten and
    unread since 2026-10-17) together with `purchase_orders.status` (D5 of
@@ -7173,6 +7250,8 @@ platform's values always win.
 | `CORS_ALLOWED_ORIGIN` | no | Optional extra allowed origin beside `chrome-extension://*`. |
 | `ENABLE_CRONS` | no | `true` switches on the scheduled passes (§11 "Scheduled passes": 00:00 ET with the daily block, hourly 04–23 ET). Set it on Render **after** the scheduler patch's final commit deploys (2026-10-15); unset = no schedule, manual Refresh only. See below. |
 | `ANTHROPIC_API_KEY` | yes | Capture PO's one model call per capture and the promo backfill (§22 "Capture PO", `server/config/ai.ts`: `claude-haiku-5-5`). Optional: unset → `POST /api/pos/prefill` answers 503 "AI prefill is off" and the tracking AI fallback stays off. |
+| `DRIVE_SUBJECT` | no | The Drive user AF writes PO documents as (§22 "PO documents"); default `maria@coastalqualitygoods.com`. Same service-account key as Gmail / Sheets (`GOOGLE_CREDENTIALS_PATH`), scope `drive` by domain-wide delegation. |
+| `DRIVE_INVOICES_ROOT_ID` | no | The Invoices root folder (D1); default `1oBeUBKnmpjfcxcwD_w-hCAPLCd-Bbm13`. AF only ever touches files under it. |
 | `SESSION_SECRET` | yes | Signs the `af.sid` session cookie (§25). **Required in production: the server refuses to start without it.** Generate with `openssl rand -hex 32`. Locally it must be in `.env` too, because `npm start` sets `NODE_ENV=production` itself; `npm run dev` falls back to a logged, insecure dev value. Add it to Render **before** the first auth commit deploys. |
 
 `APP_PASSWORD` is gone (auth v1, 2026-10-14): `POST /api/verify-password`
@@ -7854,6 +7933,32 @@ in AF, $18.47 in the email; 3 lines in AF, 2 in the email"), once (the
 open-item unique index). **Nothing is written to the PO.** Maria clears
 the item by hand once she has checked. `npm run po:reconcile-confirmations
 [-- --live] [--since YYYY-MM-DD]` is the read-only check / backfill.
+
+### PO documents ingest (component 29, patch po-documents §5, 2026-11-04)
+
+`server/po-documents.ts` `ingestDocuments`, component **29** (hourly
+tier: the 00:00 pass and every hourly pass; scheduled passes only) and
+`npm run po-docs [-- --ingest] [--since YYYY-MM-DD] [--live] [--prod]`
+(dry run by default — counts only, no Drive file or folder, no row, no
+watermark). The mailbox is read like the reconcile
+(`-category:promotions after:<watermark − 6 h>`, watermark
+`docs.gmail_watermark`). An email is an **order confirmation** by the
+reconcile's rule (above), else **shipped** (the tracking parser's
+shipped kind and a shipped subject) or **delivered** (the parser's
+delivered kind); cancel / refund / return subjects are none. The PO is
+found by the order # exactly as the reconcile does (exact key, the base
+id, narrowed by the sender's supplier) — **exactly one PO, or nothing**.
+Rendered (`getRenderableMessage`: the first HTML part, else the plain
+text; `cid:` images inlined; a From / To / Date / Subject header), saved
+under the §22 name into the PO's month folder, one row per
+(gmail_message_id, type) — a re-run skips it. **D4:** an email received
+before the ingest's first live run (`live_since` on the watermark)
+counts only for a PO created in AF (source manual / extension /
+email_renewal); sheet-era POs get D1 linking only. The first scan starts
+the day before the oldest AF-created PO. A failed render or upload is
+counted and keeps the watermark where it was, so the next pass retries
+(idempotent). The 00:00 pass then runs the D1 link (§22) for PDFs saved
+by hand since.
 
 ### `ships_to` from prep cost (2026-10-22)
 

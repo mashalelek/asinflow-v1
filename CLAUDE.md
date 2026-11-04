@@ -57,6 +57,7 @@ This app runs on the following stack. This is settled. Do not suggest alternativ
 - `shared/po-edit-form.ts` / `server/po-edit-form.ts` — Edit PO as a page (`/pos/:id/edit`, `client/src/pages/po-edit-page.tsx`): the stored PO as the New PO form, the edited form diffed into the existing per-field editors (one History row per field, one transaction)
 - `server/po-prefill.ts` — `/api/pos/prefill`: capture → one Haiku call → form prefill + markers; `chrome-extension/` is the capture side
 - `server/dashboard.ts` / `server/dashboard-range.ts` / `shared/dashboard.ts` — the Dashboard (SPEC §28): range sets, the Spend · Sales · Profit grid SQL, the chart series; `client/src/pages/dashboard.tsx`, `metric-grid.tsx`, `dashboard-chart.tsx`
+- `server/po-documents.ts` / `server/po-documents-routes.ts` / `server/drive-client.ts` / `server/pdf-render.ts` / `shared/po-documents.ts` — PO documents (SPEC §22 "PO documents", §26, component 29): order emails rendered to PDF in Maria's Drive, existing PDFs linked by name, the paperclip and the Documents tab (`client/src/components/po-documents.tsx`)
 - `docs/SCHEMA.md` — Database schema documentation
 - `docs/ROADMAP.md` — Feature roadmap
 
@@ -124,7 +125,7 @@ and any introduced error must be fixed forward before committing.
 
 ## Tests
 
-`npm test` (vitest). **1,766 tests across 157 files** as of 2026-10-31 — this
+`npm test` (vitest). **1,983 tests across 183 files** as of 2026-11-04 — this
 codebase IS tested; the old "there are no tests" line was years stale.
 
 **A gate report must cover BOTH typecheck commands, labelled separately:**
@@ -132,7 +133,7 @@ codebase IS tested; the old "there are no tests" line was years stale.
 ```
 npm run check        -> 4 baseline TS1252, 0 introduced
 npm run check:tests  -> 4 baseline TS1252, 0 introduced
-npm test             -> 1766/1766
+npm test             -> 1983/1983
 ```
 
 `npm run check` alone is NOT a complete gate. The base `tsconfig.json`
@@ -474,6 +475,22 @@ therefore stay out of Spend on a PO whose stored header nets its refund
 (`HEADER_NETS_REFUND_SQL` in `server/dashboard.ts`); every other refund
 row is subtracted, and a fully-canceled PO is $0 regardless. Pending
 Maria's confirmation (SPEC §28); it is one SQL expression either way.
+
+## PO documents: AF never renames, moves or deletes a file it did not create
+
+PO documents (SPEC §22 "PO documents", migration 083) live in Maria's
+Drive under the Invoices root, written as Maria by the service account
+(`server/drive-client.ts`, scope `drive`). AF only adds files and creates
+missing `Invoices - YYYY` / `Invoices YYYY-MM` folders (an existing
+`Receipts_YYYY-MM` is used as is). A linked existing file
+(`source = linked_existing`) is never renamed, moved, re-rendered or
+trashed — Delete on the Documents tab only unlinks it; only AF's own
+files (email / upload) go to Drive's trash. "Invoice attached" is derived
+from `po_documents`; the sheet's Rcpt flag is history. `npm run po-docs`
+is dry run by default (`--link`, `--ingest`, `--live`, `--prod`). The
+renderer is headless Chromium (puppeteer; `.puppeteerrc.cjs` keeps the
+browser inside the project so Render has it at runtime); the setting
+`pdf.render_probe` holds the last per-deploy probe.
 
 ## PO action items live in `po_line_action_items`
 

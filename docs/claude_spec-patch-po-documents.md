@@ -2,7 +2,12 @@
 
 *Drafted 2026-11-04 with Maria. Amends §22 (PO module), §26 (email ingestion).*
 
-> **Status: APPROVED 2026-11-04.**
+> **Status: APPROVED 2026-11-04. Implemented 2026-11-04 (SPEC §22 "PO
+> documents", §26 "PO documents ingest"; probe decisions: Maria
+> 2026-11-04 — Chromium on Render confirmed; matching = the §2 name case-
+> and space-insensitive plus the looser date + order # rule, exactly one
+> candidate; the whole root searched; Receipts_YYYY-MM month folders used
+> as they are; "Invoice attached" derived from po_documents only).**
 
 ## 1. Why
 
