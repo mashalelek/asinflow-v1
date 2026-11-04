@@ -6530,6 +6530,21 @@ reconstructed (those POs are Closed from the sheet).
   pushed Units Ordered / Invoice / Notes off-screen at 1440. The expanded
   ASIN rows' table (160 rem) scrolls inside its own box; the POs table
   never widens with it.
+- **Inline notes (2026-11-04, `client/src/components/inline-note.tsx`):**
+  every note on the PO pages is edited where it shows — the POs table's
+  Notes cell (the PO's note), the expanded ASIN rows (the ASIN-row note)
+  and product lines (the line note), the Products tab (the line note) and
+  the PO Details NOTES box (click the text; no Edit PO round trip). Hover
+  the icon shows the full note; a click opens a textarea in place (a
+  popover anchored to the cell; in the NOTES box, the box itself):
+  Enter saves, Shift+Enter is a newline, Esc cancels, blur saves; blank
+  saves no note (NULL). Each save is the existing PATCH (`/api/pos/:id`,
+  `/api/pos/asin-rows/:id`, `/api/pos/lines/:id` with `notes`) — one
+  History row per save; a toast only when it fails. The icon is filled
+  when a note exists and an outline when empty, in the same muted
+  colour. The POs table's icon now reflects the PO's own note only
+  (before, it showed when any ASIN row or line had one — those notes show
+  on the expanded rows).
 - Search spans order_id, ASIN, and product name in one box. Supplier and
   Action Items filters are **searchable multi-selects** (OR within a facet,
   AND across facets), beside the Open / Closed / All select (default Open).

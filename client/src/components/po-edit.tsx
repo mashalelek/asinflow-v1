@@ -12,7 +12,8 @@
  */
 import React, { useEffect, useState } from "react";
 import { effectiveYield, fracToNumber, lineRatio, lineUnitsExact, ratioForUnits } from "@shared/yield";
-import { Plus, Trash2, StickyNote } from "lucide-react";
+import { Plus, Trash2 } from "lucide-react";
+import { InlineNoteCell } from "@/components/inline-note";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { trueYield } from "@shared/po-form";
@@ -158,9 +159,7 @@ export function PoProductsTable({ poId, asins, onChanged, po }: { poId: string; 
                   </td>
                   <td className="px-3 py-1.5 whitespace-nowrap">
                     <span className="inline-flex items-center gap-2">
-                      <InlineEdit value={l.notes} onSave={patch(l, "notes")} width="w-48" testId={`notes-${l.id}`} title={l.notes ?? "Add a note"}>
-                        <StickyNote className={`h-3.5 w-3.5 ${l.notes ? "text-muted-foreground" : "text-muted-foreground/30"}`} />
-                      </InlineEdit>
+                      <span className="w-5"><InlineNoteCell value={l.notes} label="line note" testId={`products-line-${l.id}`} onSave={async (v) => { await poApi(`/api/pos/lines/${l.id}`, "PATCH", { notes: v }); onChanged(); }} /></span>
                       <button onClick={() => remove(l)} className="text-muted-foreground/60 hover:text-destructive" title="Remove product" data-testid={`button-remove-line-${l.id}`}><Trash2 className="h-3.5 w-3.5" /></button>
                     </span>
                   </td>

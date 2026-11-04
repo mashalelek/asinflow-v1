@@ -12,7 +12,7 @@
  */
 import React, { useState, useEffect, useCallback } from "react";
 import { useLocation, Link } from "wouter";
-import { Upload, Paperclip, StickyNote, Plus, Search, Copy, Check, ChevronRight, ChevronDown, ChevronsDownUp, ChevronsUpDown, CheckCircle2, Circle, RefreshCw, AlertTriangle, ArrowUp, ArrowDown, ArrowUpDown } from "lucide-react";
+import { Upload, Paperclip, Plus, Search, Copy, Check, ChevronRight, ChevronDown, ChevronsDownUp, ChevronsUpDown, CheckCircle2, Circle, RefreshCw, AlertTriangle, ArrowUp, ArrowDown, ArrowUpDown } from "lucide-react";
 import {
   AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle,
 } from "@/components/ui/alert-dialog";
@@ -29,7 +29,8 @@ import { loadPoExpanded, savePoExpanded, isPoExpanded, togglePoExpanded, toggleE
 import { fmtQty, PO_ASIN_COLUMNS } from "@/lib/po-qty";
 import { fetchLongSync } from "@/lib/long-sync";
 import { useToast } from "@/hooks/use-toast";
-import { PoProductsTable, PoHistory, PoDangerActions } from "@/components/po-edit";
+import { PoProductsTable, PoHistory, PoDangerActions, poApi } from "@/components/po-edit";
+import { InlineNoteCell, InlineNoteBox } from "@/components/inline-note";
 import { PoTrackingTab, SyncTrackingButton, UnmatchedTrackingChip } from "@/components/po-tracking";
 import { PoMoneyTab, type PoPayment, type PoPromo, type PoRefund } from "@/components/po-money";
 import { Pencil } from "lucide-react";
@@ -53,6 +54,8 @@ interface PoRow {
   units_ordered: number;
   units_received: number | null; // null = not tracked on any line → "—"
   has_notes: boolean;
+  /** The PO's own note (p.* on the list) — the Notes cell edits it inline. */
+  notes?: string | null;
   /** §5: NULL = Open. closed_by 'auto' | 'sheet' | 'import' (pre-2026 history, "Imported (history)") | a user id. */
   closed_at: string | null;
   closed_by: string | null;
@@ -742,7 +745,11 @@ export default function PurchaseOrders() {
                       ? <Paperclip className="h-3.5 w-3.5 text-muted-foreground" />
                       : <span className="text-muted-foreground/40">—</span>}
                   </td>
-                  <td style={poColStyle(colWidths, "notes")} className="px-3 py-2">{po.has_notes && <StickyNote className="h-3.5 w-3.5 text-muted-foreground" />}</td>
+                  {/* Inline note (2026-11-04): the PO's own note; ASIN-row / line notes are edited on the expanded rows. */}
+                  <td style={poColStyle(colWidths, "notes")} className="p-0" onClick={(e) => e.stopPropagation()}>
+                    <InlineNoteCell value={po.notes} label="PO note" className="px-3 py-2" testId={`po-${po.order_id}`}
+                      onSave={async (v) => { await poApi(`/api/pos/${po.id}`, "PATCH", { notes: v }); void load(); }} />
+                  </td>
                   <td aria-hidden />
                 </tr>
                 {open && (
@@ -977,7 +984,11 @@ export function PurchaseOrderDetailPlaceholder() {
               </span>
             )],
           ]} />
-          <DetailCard title="Notes" rows={[["", po.notes ? <span className="whitespace-pre-wrap text-left block">{po.notes}</span> : <span className="text-muted-foreground/50">—</span>]]} />
+          {/* Click-to-edit in place (2026-11-04) — no Edit PO round trip. */}
+          <div className="rounded-md p-3" style={{ border: "0.5px solid hsl(var(--border))" }} data-testid="po-detail-notes">
+            <div className="text-[11px] font-semibold uppercase tracking-wider text-muted-foreground mb-2">Notes</div>
+            <InlineNoteBox value={po.notes} label="PO note" testId="po-detail" onSave={async (v) => { await poApi(`/api/pos/${po.id}`, "PATCH", { notes: v }); reload(); }} />
+          </div>
         </div>
       )}
 

@@ -10,11 +10,12 @@
 import { RefundProposalDialog, type PoHeaderMoney, type CanceledLine } from "@/components/refund-due-dialog";
 import React, { useState } from "react";
 import { Link } from "wouter";
-import { StickyNote, ChevronRight, ChevronDown, AlertTriangle, Plus, X } from "lucide-react";
+import { ChevronRight, ChevronDown, AlertTriangle, Plus, X } from "lucide-react";
 import { Tooltip, TooltipTrigger, TooltipContent } from "@/components/ui/tooltip";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import { fmtQty, individualUnits, PO_ASIN_COLUMNS, VELOCITY_QTY_TITLE } from "@/lib/po-qty";
 import { InlineEdit, SelectEdit, poApi, ReassignShipment, shipmentBlockText } from "@/components/po-edit";
+import { InlineNoteCell, NoteIcon } from "@/components/inline-note";
 
 export interface PoAsinShipment {
   id: string;
@@ -430,7 +431,7 @@ export function PoAsinRow({ a, indent = false, editable = false, onChanged, po }
   const multi = lines.length >= 2;
   const pad = indent ? "pl-6" : "";
   // AF-owned editing (po-af-owned §3): logged server-side, auto-close re-runs.
-  const saveAsin = (field: string) => async (v: string) => { await poApi(`/api/pos/asin-rows/${a.id}`, "PATCH", { [field]: v }); onChanged?.(); };
+  const saveAsin = (field: string) => async (v: string | null) => { await poApi(`/api/pos/asin-rows/${a.id}`, "PATCH", { [field]: v }); onChanged?.(); };
   return (
     <>
       <tr className={`table-zebra-stone ${indent ? "text-[13px]" : ""}`} style={hairline} data-testid={`row-po-asin-${a.asin}`}>
@@ -477,7 +478,10 @@ export function PoAsinRow({ a, indent = false, editable = false, onChanged, po }
           ? <ActionItemsEditor items={a.action_items} titles={extraTitles(a)} url={`/api/pos/asin-rows/${a.id}/action-items`} onSaved={onChanged} testId={`button-action-items-asin-${a.asin}`} lineCount={lines.length} />
           : <ActionItemChips items={a.action_items} titles={extraTitles(a)} />}
           {editable && (a.action_items ?? []).includes(EXTRA_UNITS_SHIPPED) && <ClearExtraUnits a={a} onChanged={onChanged} />}</td>
-        <td className="px-2 py-1.5">{a.notes && <StickyNote className="h-3.5 w-3.5 text-muted-foreground" />}</td>
+        {/* ASIN-row note, inline (2026-11-04); read-only tables show the icon with the note on hover. */}
+        <td className={editable ? "p-0" : "px-2 py-1.5"}>{editable
+          ? <InlineNoteCell value={a.notes} label="ASIN note" className="px-2 py-1.5" testId={`asin-${a.id}`} onSave={saveAsin("notes")} />
+          : a.notes ? <span title={a.notes}><NoteIcon has /></span> : null}</td>
       </tr>
       {multi && open && lines.map((l) => (
         <tr key={l.id} style={hairline} data-testid={`row-component-${a.asin}-${l.position}`}>
@@ -491,7 +495,10 @@ export function PoAsinRow({ a, indent = false, editable = false, onChanged, po }
           <td className="px-3 py-1">{editable
             ? <ActionItemsEditor items={l.action_items} url={`/api/pos/lines/${l.id}/action-items`} onSaved={onChanged} testId={`button-action-items-line-${a.asin}-${l.position}`} />
             : <ActionItemChips items={l.action_items} />}</td>
-          <td className="px-2 py-1" />
+          {/* Product-line note, inline (2026-11-04). */}
+          <td className={editable ? "p-0" : "px-2 py-1"}>{editable
+            ? <InlineNoteCell value={l.notes} label="line note" className="px-2 py-1" testId={`line-${l.id}`} onSave={async (v) => { await poApi(`/api/pos/lines/${l.id}`, "PATCH", { notes: v }); onChanged?.(); }} />
+            : l.notes ? <span title={l.notes}><NoteIcon has /></span> : null}</td>
         </tr>
       ))}
     </>
