@@ -49,7 +49,7 @@ describe("ingestTracking", () => {
     const r = await ingestTracking({ query: h.query as any, deps: h.deps });
     expect(r).toMatchObject({ inserted: 1, refreshed: 1, ignored_repeats: 1 });
     const up = h.writes.find((w) => w.sql.includes("INSERT INTO po_tracking"))!.sql;
-    expect(up).toMatch(/ON CONFLICT \(carrier, tracking_number\) DO UPDATE SET\s+gmail_message_id = EXCLUDED\.gmail_message_id/);
+    expect(up).toMatch(/ON CONFLICT \(carrier, tracking_number\) WHERE split_of IS NULL DO UPDATE SET\s+gmail_message_id = EXCLUDED\.gmail_message_id/);
     expect(up).toMatch(/WHERE po_tracking\.status = 'unmatched'/);
   });
   it("a dry run writes nothing — no rows, no watermark — and returns the drafts", async () => {

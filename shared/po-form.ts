@@ -179,6 +179,8 @@ export interface PoFormState {
   /** §8.2: the order's payments; Σ amount should equal the order total (a warning). */
   payments?: PoFormPayment[];
   email_used?: string;
+  /** Other order #s the retailer uses for this order (comma-separated; migration 086) — every email matcher reads them. */
+  alt_order_ids?: string;
   /** users.id of the purchaser (defaults to the logged-in user); purchased_by keeps the display name. */
   purchased_by_user_id?: string;
   cashback_status?: string;

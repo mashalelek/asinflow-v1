@@ -978,6 +978,7 @@ export function PurchaseOrderDetailPlaceholder() {
           <DetailCard title="Meta" rows={[
             ["Purchased by", <Dash v={po.purchased_by} />],
             ["Email used", <Dash v={po.email_used} />],
+            ...(po.alt_order_ids ? [["Alternate order #s", <span className="font-mono text-xs">{po.alt_order_ids}</span>] as [string, JSX.Element]] : []),
             ["Source", <Dash v={po.source === "sheet_import" ? "Orders sheet" : po.source === "extension" ? "Capture PO" : po.source === "email_renewal" ? "Subscription renewal (email)" : po.source === "manual" ? "New PO form" : po.source} />],
             ["Subscription", po.subscription ? "Yes" : "No"],
             // Derived (SPEC §22 "PO documents"): Yes when the PO has a document; the sheet's old Rcpt flag is not read.

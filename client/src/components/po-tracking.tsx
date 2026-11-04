@@ -4,7 +4,7 @@
  * tracking (N)" queue.
  */
 import { useCallback, useEffect, useState } from "react";
-import { RefreshCw, AlertTriangle, ExternalLink } from "lucide-react";
+import { RefreshCw, AlertTriangle, ExternalLink, Copy, Check } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle, DialogTable } from "@/components/ui/dialog";
 import { useToast } from "@/hooks/use-toast";
@@ -15,6 +15,8 @@ export interface TrackingRow {
   push_error: string | null; pushed_at: string | null; pushed_velocity_ids: string[] | null; source: string;
   items_json: Array<{ name: string; qty: number }> | null; suppressed_at: string | null; reassigned_at: string | null;
   reassigned_from_order_id?: string | null;
+  /** 2026-11-04 (migration 086): this PO's units in the shipment, when the email states them; shared_with = the other PO(s) on the same number. */
+  qty?: string | number | null; shared_with?: string[] | null;
 }
 
 /** Pure: the carrier's public tracking page for a number (null for OTHER). */
@@ -127,6 +129,7 @@ export function PoTrackingTab({ poId, onChanged }: { poId: string; onChanged?: (
                   <td className="pr-2 font-mono">
                     {url ? <a className="text-primary hover:underline inline-flex items-center gap-0.5" href={url} target="_blank" rel="noreferrer">{r.tracking_number}<ExternalLink className="h-3 w-3" /></a> : r.tracking_number}
                     {r.reassigned_from_order_id && <div className="text-[10px] text-muted-foreground">moved from {r.reassigned_from_order_id}</div>}
+                    {(r.qty != null || r.shared_with?.length) ? <div className="text-[10px] text-muted-foreground">{r.qty != null ? `${Number(r.qty)} unit${Number(r.qty) === 1 ? "" : "s"} of this PO` : ""}{r.qty != null && r.shared_with?.length ? " · " : ""}{r.shared_with?.length ? `also on ${r.shared_with.join(", ")}` : ""}</div> : null}
                     {r.items_json?.length ? <div className="text-[10px] text-muted-foreground">{r.items_json.map((i) => `${i.qty} × ${i.name}`).join("; ")}</div> : null}
                   </td>
                   <td className="pr-2 font-mono">{r.retailer_order_id ?? "—"}</td>
@@ -206,19 +209,27 @@ export function SyncTrackingButton({ onDone }: { onDone?: () => void }) {
 }
 
 interface UnmatchedRow {
-  id: number; carrier: string; tracking_number: string; retailer_order_id: string | null; sender_domain: string | null; email_subject: string | null; match_reason: string | null; shipped_at: string | null;
+  id: number; carrier: string; tracking_number: string; retailer_order_id: string | null; sender_domain: string | null; supplier_guess?: string | null; email_subject: string | null; match_reason: string | null; shipped_at: string | null;
+  /** 2026-11-04: "needs_you" counts toward the badge; "no_number" (the AI found no number, or no single PO) does not. */
+  tab?: "needs_you" | "no_number";
+  /** The message in Gmail, orders@ mailbox (server: authuser); null for a row typed by hand. */
+  gmail_url?: string | null;
   /** Up to 3 likely POs (server: guessed supplier's PO, then digits-only order # hits). */
   suggestions?: Array<{ po_id: string; order_id: string; supplier: string }>;
 }
 
-/** POs toolbar: "Unmatched tracking (N)" → the queue. Hidden when empty. */
+/** POs toolbar: "Unmatched tracking (N)" → the queue; N = the "Needs you" rows. Hidden when the queue is empty. */
 export function UnmatchedTrackingChip({ suppliers, reloadKey, onChanged }: { suppliers: readonly string[]; reloadKey?: number; onChanged?: () => void }) {
-  const [rows, setRows] = useState<UnmatchedRow[]>([]);
+  const [all, setAll] = useState<UnmatchedRow[]>([]);
+  const [tab, setTab] = useState<"needs_you" | "no_number">("needs_you");
   const [open, setOpen] = useState(false);
   const [err, setErr] = useState<string | null>(null);
   const [picked, setPicked] = useState<Set<number>>(new Set());
   const [busy, setBusy] = useState(false);
-  const load = useCallback(() => { api<{ rows: UnmatchedRow[] }>("/api/tracking/unmatched").then((r) => { setRows(r.rows); setPicked((p) => new Set(Array.from(p).filter((id) => r.rows.some((x) => x.id === id)))); }).catch(() => {}); }, []);
+  const load = useCallback(() => { api<{ rows: UnmatchedRow[] }>("/api/tracking/unmatched").then((r) => { setAll(r.rows); setPicked((p) => new Set(Array.from(p).filter((id) => r.rows.some((x) => x.id === id)))); }).catch(() => {}); }, []);
+  const needs = all.filter((r) => (r.tab ?? "needs_you") === "needs_you");
+  const noNumber = all.filter((r) => r.tab === "no_number");
+  const rows = tab === "needs_you" ? needs : noNumber;
   useEffect(() => { load(); }, [load, reloadKey]);
   const act = async (fn: () => Promise<any>) => { setErr(null); try { await fn(); load(); onChanged?.(); } catch (e: any) { setErr(e.message); } };
   const toggle = (id: number) => setPicked((p) => { const n = new Set(p); if (n.has(id)) n.delete(id); else n.add(id); return n; });
@@ -233,11 +244,11 @@ export function UnmatchedTrackingChip({ suppliers, reloadKey, onChanged }: { sup
     });
     setBusy(false);
   };
-  if (rows.length === 0) return null;
+  if (all.length === 0) return null;
   return (
     <>
-      <button className="inline-flex items-center gap-1 rounded bg-amber-500/15 px-2 py-1 text-xs text-amber-800 dark:text-amber-300" onClick={() => setOpen(true)} data-testid="chip-unmatched-tracking">
-        <AlertTriangle className="h-3.5 w-3.5" /> Unmatched tracking ({rows.length})
+      <button className={needs.length ? "inline-flex items-center gap-1 rounded bg-amber-500/15 px-2 py-1 text-xs text-amber-800 dark:text-amber-300" : "inline-flex items-center gap-1 rounded px-2 py-1 text-xs text-muted-foreground hover:text-foreground"} onClick={() => { setTab(needs.length ? "needs_you" : "no_number"); setOpen(true); }} data-testid="chip-unmatched-tracking">
+        <AlertTriangle className="h-3.5 w-3.5" /> Unmatched tracking ({needs.length})
       </button>
       <Dialog open={open} onOpenChange={setOpen}>
         <DialogContent dialogId="unmatched-tracking" className="max-w-6xl" data-testid="dialog-unmatched-tracking">
@@ -246,6 +257,13 @@ export function UnmatchedTrackingChip({ suppliers, reloadKey, onChanged }: { sup
             <DialogDescription>Attach a number to its PO, map a sender to a supplier once, or dismiss it.</DialogDescription>
           </DialogHeader>
           {err && <p className="text-xs text-destructive">{err}</p>}
+          <div className="flex items-center gap-1 border-b text-xs" role="tablist" data-testid="tabs-unmatched-tracking">
+            {([["needs_you", `Needs you (${needs.length})`], ["no_number", `No number in email (${noNumber.length})`]] as const).map(([k, label]) => (
+              <button key={k} role="tab" aria-selected={tab === k} onClick={() => { setTab(k); setPicked(new Set()); }}
+                className={`-mb-px border-b-2 px-2 py-1 ${tab === k ? "border-foreground font-medium text-foreground" : "border-transparent text-muted-foreground hover:text-foreground"}`} data-testid={`tab-unmatched-${k}`}>{label}</button>
+            ))}
+          </div>
+          {tab === "no_number" && <p className="text-xs text-muted-foreground">The email prints no tracking number (the AI read it), or its order # names no single AF PO. Not counted in the badge.</p>}
           <div className="flex items-center gap-2 text-xs">
             <Button size="sm" variant="outline" className="h-7 text-xs" disabled={picked.size === 0 || busy} onClick={() => void dismissPicked()} data-testid="button-dismiss-selected">
               Dismiss selected ({picked.size})
@@ -254,12 +272,12 @@ export function UnmatchedTrackingChip({ suppliers, reloadKey, onChanged }: { sup
           <DialogTable>
             <table className="w-full min-w-[60rem] table-fixed text-xs">
               <colgroup>
-                <col className="w-7" /><col className="w-28" /><col className="w-48" /><col className="w-36" /><col className="w-48" /><col /><col className="w-72" />
+                <col className="w-7" /><col className="w-28" /><col className="w-44" /><col className="w-36" /><col className="w-44" /><col /><col className="w-72" />
               </colgroup>
               <thead className="text-left text-muted-foreground">
                 <tr>
                   <th className="py-1"><input type="checkbox" aria-label="Select all" checked={allPicked} onChange={() => setPicked(allPicked ? new Set() : new Set(rows.map((r) => r.id)))} /></th>
-                  <th className="pr-2">Reason</th><th className="pr-2">Sender</th><th className="pr-2">Order #</th><th className="pr-2">Tracking</th><th className="pr-2">Email</th><th>Attach</th>
+                  <th className="pr-2">Reason</th><th className="pr-2">Supplier</th><th className="pr-2">Order #</th><th className="pr-2">Tracking</th><th className="pr-2">Email</th><th>Attach</th>
                 </tr>
               </thead>
               <tbody>
@@ -284,7 +302,8 @@ function UnmatchedQueueRow({ r, suppliers, act, picked, onPick }: { r: Unmatched
       <td className="py-1"><input type="checkbox" aria-label={`Select ${r.tracking_number}`} checked={picked} onChange={onPick} /></td>
       <td className="py-1 pr-2 whitespace-nowrap">{r.match_reason ?? "—"}</td>
       <td className="py-1 pr-2 break-words">
-        {r.sender_domain ?? "—"}
+        {r.supplier_guess ?? r.sender_domain ?? "—"}
+        {r.supplier_guess && r.sender_domain && r.supplier_guess !== r.sender_domain && <div className="text-[11px] text-muted-foreground">via {r.sender_domain}</div>}
         {r.match_reason === "unknown_sender" && r.sender_domain && (
           <div className="flex items-center gap-1 mt-0.5">
             <select className="h-6 min-w-0 flex-1 rounded border bg-background px-1 text-foreground" value={supplier} onChange={(e) => setSupplier(e.target.value)}>
@@ -297,7 +316,10 @@ function UnmatchedQueueRow({ r, suppliers, act, picked, onPick }: { r: Unmatched
       </td>
       <td className="py-1 pr-2 font-mono break-all">{r.retailer_order_id ?? "—"}</td>
       <td className="py-1 pr-2 font-mono break-all">{placeholder ? <span className="font-sans text-muted-foreground">no number in the email</span> : `${r.carrier} ${r.tracking_number}`}</td>
-      <td className="py-1 pr-2 text-muted-foreground break-words">{r.email_subject ?? ""}</td>
+      <td className="py-1 pr-2 break-words">
+        <div><span className="text-muted-foreground">{r.shipped_at ? new Date(r.shipped_at).toLocaleDateString(undefined, { month: "short", day: "numeric", year: "numeric" }) : "—"}</span> · {r.email_subject ?? ""}</div>
+        {r.gmail_url && <GmailLink url={r.gmail_url} />}
+      </td>
       <td className="py-1">
         <div className="flex flex-wrap items-center gap-1">
           {!placeholder && suggestions.map((sg) => (
@@ -323,5 +345,19 @@ function UnmatchedQueueRow({ r, suppliers, act, picked, onPick }: { r: Unmatched
         )}
       </td>
     </tr>
+  );
+}
+
+/** "Open in Gmail" (the orders@ mailbox) and a copy-link icon copying the same URL. */
+function GmailLink({ url }: { url: string }) {
+  const [copied, setCopied] = useState(false);
+  const copy = () => { void navigator.clipboard?.writeText(url).then(() => { setCopied(true); setTimeout(() => setCopied(false), 1500); }).catch(() => {}); };
+  return (
+    <span className="mt-0.5 inline-flex items-center gap-1.5 text-[11px]">
+      <a href={url} target="_blank" rel="noreferrer" className="inline-flex items-center gap-0.5 text-primary hover:underline" data-testid="link-open-in-gmail"><ExternalLink className="h-3 w-3" /> Open in Gmail</a>
+      <button type="button" onClick={copy} className="text-muted-foreground/70 hover:text-foreground" title="Copy Gmail link" aria-label="Copy Gmail link" data-testid="button-copy-gmail-link">
+        {copied ? <Check className="h-3 w-3" /> : <Copy className="h-3 w-3" />}
+      </button>
+    </span>
   );
 }

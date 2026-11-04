@@ -92,6 +92,8 @@ export const HEADER_FIELDS: Record<string, Parser> = {
   subtotal: money(), tax: money(), sh_donations: money(), discount: money(), refund_amount: money(), order_total: money(),
   payment_method: textOrNull, weighted_gc_discount_pct: pctOrNull, promo: textOrNull, cashback_site: textOrNull, cashback_pct: pctOrNull,
   purchased_by: textOrNull, notes: textOrNull,
+  // Alternate order #s (migration 086): comma-separated, as typed.
+  alt_order_ids: (v) => { const r = textOrNull(v); return r.ok && r.value ? { ok: true, value: String(r.value).split(/[\s,;/]+/).filter(Boolean).join(", ") } : r; },
   // Capture PO patch (2026-10-31): the sheet fields AF lacked.
   email_used: textOrNull,
   cashback_status: (v) => (blank(v) ? { ok: true, value: null } : ["pending", "received", "denied"].includes(String(v)) ? { ok: true, value: String(v) } : { ok: false, error: "must be pending, received or denied" }),

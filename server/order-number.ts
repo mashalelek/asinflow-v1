@@ -22,6 +22,10 @@ export const stripShipmentSuffix = (s: string): string => s.trim().replace(/[-_]
 /** Every id an AF order_id field holds ("115449859 / 115450009" → both). */
 export const orderIdParts = (orderId: string): string[] => orderId.split(/\s*[/,]\s*/).map(baseOrderId).filter(Boolean);
 
+/** Every id a PO is matched by: its order # and its alternate order #s (purchase_orders.alt_order_ids, comma-separated; migration 086), as one order_id string orderIdParts / afOrderKeys read. */
+export const matchOrderId = (po: { order_id: string; alt_order_ids?: string | null }): string =>
+  po.alt_order_ids && po.alt_order_ids.trim() ? `${po.order_id} / ${po.alt_order_ids}` : po.order_id;
+
 /** The full key: normalized as written (a suffixed id keeps its suffix). */
 export const orderKey = (s: string): string => normOrder(s);
 /** The base key: without "_N" / "-N" (1–2 digits), then normalized. */
@@ -72,9 +76,9 @@ export const namedIdOk = (key: string, scope: "supplier" | "any"): boolean =>
   key.length >= 6 && /\d/.test(key) && (scope === "supplier" || key.length >= 8 || /[A-Z]/.test(key));
 
 /** Pure: the POs whose order # (any id the order_id holds, without AF's _N) is a whole token of the text. */
-export function posNamedInText<T extends { order_id: string }>(text: string, pos: readonly T[], scope: "supplier" | "any"): T[] {
+export function posNamedInText<T extends { order_id: string; alt_order_ids?: string | null }>(text: string, pos: readonly T[], scope: "supplier" | "any"): T[] {
   const tokens = orderTokens(text);
-  return pos.filter((p) => orderIdParts(p.order_id).some((x) => {
+  return pos.filter((p) => orderIdParts(matchOrderId(p)).some((x) => {
     const k = dropZeros(normOrder(x));
     return namedIdOk(k, scope) && tokens.has(k);
   }));

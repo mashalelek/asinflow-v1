@@ -197,7 +197,7 @@ export async function ingestDocuments(opts: { query: QueryLike; deps: IngestDeps
     by_type: {}, by_rule: {}, folders_created: [], since: from?.toISOString() ?? null, until: now.toISOString(), dryRun: !!opts.dryRun, failures: [], items: [],
   };
   const pos = (await opts.query(
-    `SELECT p.id, p.supplier, p.order_id, p.order_date, p.source, p.order_total::float AS order_total, 0 AS line_count FROM purchase_orders p`,
+    `SELECT p.id, p.supplier, p.order_id, p.alt_order_ids, p.order_date, p.source, p.order_total::float AS order_total, 0 AS line_count FROM purchase_orders p`,
   )).rows as IngestPo[];
   const suppliers = Array.from(new Set(pos.map((p) => p.supplier)));
   const domainMap = await loadDomainMap(opts.query), platforms = await loadPlatformSenders(opts.query), aliases = await loadAliases(opts.query);

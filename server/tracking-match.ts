@@ -50,7 +50,7 @@
 // original # (match_reason 'replacement') and notes it on the PO with a
 // History row.
 import type { QueryLike } from "./scheduler/types";
-import { normOrder, baseOrderId, orderIdParts, stripShipmentSuffix, digitForms, posNamedInText } from "./order-number";
+import { normOrder, baseOrderId, orderIdParts, stripShipmentSuffix, digitForms, posNamedInText, matchOrderId } from "./order-number";
 import { loadAliases, aliasKey } from "./supplier-aliases";
 import { appendPoNote, replacementNote, type ReplacementLookup } from "./tracking-replacement";
 export { normOrder, baseOrderId, orderIdParts } from "./order-number";
@@ -81,7 +81,7 @@ export function resolveSupplier(domain: string | null, map: Record<string, strin
   return { supplier: null, obvious: false };
 }
 
-export interface PoRef { id: string; supplier: string; order_id: string; order_date?: Date | string | null }
+export interface PoRef { id: string; supplier: string; order_id: string; order_date?: Date | string | null; alt_order_ids?: string | null }
 
 /** Pure: the POs a tracking row's order # names for that supplier. */
 export function findPos(supplier: string, retailerOrderId: string, pos: readonly PoRef[]): PoRef[] {
@@ -91,7 +91,7 @@ export function findPos(supplier: string, retailerOrderId: string, pos: readonly
   const lz = (k: string) => k.replace(/^0+(?=\d)/, "");
   const want = new Set([raw, stripShipmentSuffix(raw)].map((x) => lz(normOrder(x))).filter(Boolean));
   if (want.size === 0) return [];
-  return pos.filter((p) => p.supplier === supplier && orderIdParts(p.order_id).some((x) => want.has(lz(normOrder(x)))));
+  return pos.filter((p) => p.supplier === supplier && orderIdParts(matchOrderId(p)).some((x) => want.has(lz(normOrder(x)))));
 }
 
 export type MatchVia = "order_id_unique" | "retailer_name" | "order_in_text" | "replacement";
@@ -127,7 +127,7 @@ export function supplierByName(name: string, suppliers: readonly string[]): stri
 export function findPosByOrderDigits(retailerOrderId: string, pos: readonly PoRef[]): PoRef[] {
   const want = new Set(digitForms(retailerOrderId));
   if (want.size === 0) return [];
-  return pos.filter((p) => orderIdParts(p.order_id).some((x) => digitForms(x).some((d) => want.has(d))));
+  return pos.filter((p) => orderIdParts(matchOrderId(p)).some((x) => digitForms(x).some((d) => want.has(d))));
 }
 
 /** Pure: the ONE PO the email's text names (supplier's POs, or all when the sender resolves to none), ordered no later than a day after the email. */
@@ -188,7 +188,7 @@ export async function onePoResolver(query: QueryLike): Promise<(row: { sender_do
   const map = await loadDomainMap(query);
   const platforms = await loadPlatformSenders(query);
   const aliases = await loadAliases(query);
-  const pos: PoRef[] = (await query(`SELECT id, supplier, order_id FROM purchase_orders`)).rows.map((x: any) => ({ id: String(x.id), supplier: String(x.supplier), order_id: String(x.order_id) }));
+  const pos: PoRef[] = (await query(`SELECT id, supplier, order_id, alt_order_ids FROM purchase_orders`)).rows.map((x: any) => ({ id: String(x.id), supplier: String(x.supplier), order_id: String(x.order_id), alt_order_ids: x.alt_order_ids ?? null }));
   const suppliers = Array.from(new Set(pos.map((p) => p.supplier)));
   return (row) => {
     const m = matchRow(row, map, suppliers, pos, platforms, aliases);
@@ -221,7 +221,7 @@ export async function matchTrackingRows(query: QueryLike, opts: { dryRun?: boole
   const map = await loadDomainMap(query);
   const platforms = await loadPlatformSenders(query);
   const aliases = await loadAliases(query);
-  const pos: PoRef[] = (await query(`SELECT id, supplier, order_id, order_date FROM purchase_orders`)).rows.map((x: any) => ({ id: String(x.id), supplier: String(x.supplier), order_id: String(x.order_id), order_date: x.order_date ?? null }));
+  const pos: PoRef[] = (await query(`SELECT id, supplier, order_id, order_date, alt_order_ids FROM purchase_orders`)).rows.map((x: any) => ({ id: String(x.id), supplier: String(x.supplier), order_id: String(x.order_id), order_date: x.order_date ?? null, alt_order_ids: x.alt_order_ids ?? null }));
   const suppliers = Array.from(new Set(pos.map((p) => p.supplier)));
   for (const row of rows) {
     let m: ReturnType<typeof matchRow> = matchRow(row, { ...map, ...r.seeded }, suppliers, pos, platforms, aliases);

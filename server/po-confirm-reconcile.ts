@@ -10,7 +10,7 @@ import type { gmail_v1 } from "googleapis";
 import { listMessageIds, getMessage, type GmailMessage } from "./gmail-client";
 import { extractOrderIds, isReturnEmail, OWN_DOMAINS } from "./tracking-parse";
 import { resolveSupplier, loadDomainMap, loadPlatformSenders } from "./tracking-match";
-import { afOrderKeys, afOrderBaseKeys, orderKey, orderBaseKey } from "./order-number";
+import { afOrderKeys, afOrderBaseKeys, orderKey, orderBaseKey, matchOrderId } from "./order-number";
 import { insertLineItems } from "./line-action-items";
 import { CONFIRM_ORDER_DETAILS } from "./po-status-map";
 import type { QueryLike } from "./scheduler/types";
@@ -55,15 +55,15 @@ export function parseConfirmationEmail(msg: Pick<GmailMessage, "subject" | "text
   return { isConfirmation, orderIds: extractOrderIds(subject, text), total: extractTotal(text), lineCount: extractLineCount(text), senderDomain };
 }
 
-export interface PoFacts { id: string; supplier: string; order_id: string; order_total: number | null; line_count: number }
+export interface PoFacts { id: string; supplier: string; order_id: string; alt_order_ids?: string | null; order_total: number | null; line_count: number }
 export interface ConfirmDiff { po_id: string; supplier: string; order_id: string; differences: string[] }
 
 /** Pure: the PO(s) an email's order ids name, narrowed by the sender's supplier when several match. */
 export function findPoForConfirmation(p: ParsedConfirmation, pos: readonly PoFacts[], supplier: string | null): PoFacts[] {
   if (p.orderIds.length === 0) return [];
   const keys = new Set(p.orderIds.map(orderKey)), baseKeys = new Set(p.orderIds.map(orderBaseKey));
-  const exact = pos.filter((po) => afOrderKeys(po.order_id).some((k) => keys.has(k)));
-  let hits = exact.length ? exact : pos.filter((po) => afOrderBaseKeys(po.order_id).some((k) => baseKeys.has(k)));
+  const exact = pos.filter((po) => afOrderKeys(matchOrderId(po)).some((k) => keys.has(k)));
+  let hits = exact.length ? exact : pos.filter((po) => afOrderBaseKeys(matchOrderId(po)).some((k) => baseKeys.has(k)));
   if (hits.length > 1 && supplier) { const same = hits.filter((h) => h.supplier.toLowerCase() === supplier.toLowerCase()); if (same.length) hits = same; }
   return hits;
 }
@@ -72,7 +72,8 @@ export function findPoForConfirmation(p: ParsedConfirmation, pos: readonly PoFac
 export function compareConfirmation(p: ParsedConfirmation, po: PoFacts): string[] {
   const out: string[] = [];
   const emailId = p.orderIds.find((id) => afOrderKeys(po.order_id).includes(orderKey(id))) ?? p.orderIds[0];
-  if (emailId && orderKey(emailId) !== orderKey(po.order_id)) out.push(`order # ${po.order_id} in AF, ${emailId} in the email`);
+  // An alternate order # (migration 086) is the same order, not a difference.
+  if (emailId && orderKey(emailId) !== orderKey(po.order_id) && !afOrderKeys(matchOrderId(po)).includes(orderKey(emailId))) out.push(`order # ${po.order_id} in AF, ${emailId} in the email`);
   if (p.total != null && po.order_total != null && Math.abs(p.total - po.order_total) > 0.01) out.push(`total $${po.order_total.toFixed(2)} in AF, $${p.total.toFixed(2)} in the email`);
   if (p.lineCount != null && p.lineCount !== po.line_count) out.push(`${po.line_count} line${po.line_count === 1 ? "" : "s"} in AF, ${p.lineCount} in the email`);
   return out;
@@ -99,7 +100,7 @@ export async function reconcileConfirmations(opts: { query: QueryLike; deps: Rec
   const ids = await list(opts.deps.gmail, q, opts.maxMessages ?? 5000);
   const r: ReconcileResult = { scanned: ids.length, confirmations: 0, matched: 0, agreed: 0, differed: 0, raised: 0, unmatched: 0, ambiguous: 0, renewals: 0, since: from?.toISOString() ?? null, until: now.toISOString(), diffs: [], unmatchedList: [], dryRun: !!opts.dryRun };
   const pos = (await opts.query(
-    `SELECT p.id, p.supplier, p.order_id, p.order_total::float AS order_total, (SELECT COUNT(*)::int FROM po_line_items l WHERE l.po_id = p.id) AS line_count FROM purchase_orders p`,
+    `SELECT p.id, p.supplier, p.order_id, p.alt_order_ids, p.order_total::float AS order_total, (SELECT COUNT(*)::int FROM po_line_items l WHERE l.po_id = p.id) AS line_count FROM purchase_orders p`,
   )).rows as PoFacts[];
   const suppliers = Array.from(new Set(pos.map((p) => p.supplier)));
   const domainMap = await loadDomainMap(opts.query), platforms = await loadPlatformSenders(opts.query);

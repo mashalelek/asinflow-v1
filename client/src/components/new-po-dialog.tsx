@@ -429,6 +429,8 @@ export function NewPoForm({ open, onOpenChange, onCreated, prefill, initialSuppl
       <div className="mt-2 flex flex-wrap items-start gap-x-3 gap-y-1.5" data-testid="new-po-order-fields">
         {field("supplier", "Supplier", { px: 220, ph: "walmart.com" })}
         {field("order_id", "Order #", { px: 180 })}
+        {/* Alternate order #s (migration 086): the same order under another number in the retailer's emails. Edit only. */}
+        {edit && field("alt_order_ids", "Alternate order #s", { px: 180, ph: "e.g. 3029684" })}
         {field("order_date", "Order date", { px: 140, type: "date" })}
         <div className="shrink-0 space-y-0.5" style={{ width: 140 }}>
           <Label className="text-[11px] text-muted-foreground" htmlFor="new-po-purchased_by">Purchased by</Label>

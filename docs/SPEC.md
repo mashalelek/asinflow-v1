@@ -7768,6 +7768,27 @@ Settings: `tracking.velocity_street` ("805 grandy"),
   original PO's notes gain "Replacement order #<id> (<date>) — <carrier>
   <tracking>" with a History row (`po_edit_log`, entity po, field notes),
   so the POs search finds it by the replacement #.
+- **One number on several POs** (2026-11-04, migration 086;
+  `server/tracking-attach.ts`): a box holding two POs (SupplyHouse
+  28686630 and 28686630_1) — the queued row goes to the first PO and each
+  further PO gets its own row with `split_of` = the first, so every PO
+  routes and pushes the number to its own Velocity orders. `(carrier,
+  tracking_number)` is unique among primary rows only. When the email
+  states the shipped quantity (its parsed items, or "7 of 20 units") it
+  is split in the order given — each PO up to its ordered units not
+  already placed on its other tracking rows, the remainder to the last —
+  and shown on the Tracking tab ("7 units of this PO · also on …");
+  otherwise no qty. `POST /api/tracking/:id/attach {po_ids}`, `tsx
+  script/attach-tracking.ts --row … --order A --order B`.
+- **Alternate order #s** (migration 086): `purchase_orders.alt_order_ids`,
+  comma-separated, edited on Edit PO ("Alternate order #s", History like
+  any header field), shown on PO Details and found by the POs search. The
+  tracking matcher, the confirmation reconcile and the documents ingest
+  match an email's order # against them as against the order # itself
+  (`matchOrderId`, `server/order-number.ts`); a confirmation naming an
+  alternate # is not a difference.
+- **Dismiss keeps why:** `POST /api/tracking/:id/dismiss {reason}` →
+  `dismiss_reason` (e.g. "personal order").
 - **Never moved by the sync:** `source = manual` or `reassigned_at` set;
   dismissed rows, `ai_disabled` / `ai_no_tracking` placeholders and
   `return` rows are not re-matched.
@@ -7781,6 +7802,14 @@ Settings: `tracking.velocity_street` ("805 grandy"),
   supplier; null removes), `POST /api/tracking/:id/attach {po_id}` (manual —
   not for placeholders), `POST /api/tracking/:id/dismiss`.
 
+- **Queue tabs** (2026-11-04): **Needs you** — counted in the toolbar
+  badge — and **No number in email** (not counted): rows the AI read and
+  found no number in (`ai_no_tracking`) and placeholders whose order #
+  names no single AF PO. Every row shows the supplier (with the sender
+  domain when it differs), the email's date and subject, **Open in Gmail**
+  (the message in orders@ — `https://mail.google.com/mail/?authuser=<GMAIL_SUBJECT>#all/<message id>`)
+  and a copy-link icon copying that URL. Internal row ids are never shown;
+  emails are named by supplier + date + subject, in reports too.
 - **Queue dialog** (POs toolbar, "Unmatched tracking (N)", 2026-10-22):
   one-click **Attach to <order #>** per suggestion, "other PO…" for a
   free-text order # override, per-row dismiss, checkboxes with **Dismiss

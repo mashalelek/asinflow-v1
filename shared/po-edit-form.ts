@@ -72,7 +72,7 @@ export function poToForm(d: StoredPo): PoFormState {
     payment_method: str(po.payment_method), weighted_gc_discount_pct: numText(po.weighted_gc_discount_pct),
     cashback_site: str(po.cashback_site), cashback_pct: numText(po.cashback_pct), purchased_by: str(po.purchased_by), notes: str(po.notes),
     ships_to: po.ships_to === "home" ? "home" : "velocity",
-    email_used: str(po.email_used), purchased_by_user_id: po.purchased_by_user_id == null ? "" : String(po.purchased_by_user_id), cashback_status: str(po.cashback_status),
+    email_used: str(po.email_used), alt_order_ids: str(po.alt_order_ids), purchased_by_user_id: po.purchased_by_user_id == null ? "" : String(po.purchased_by_user_id), cashback_status: str(po.cashback_status),
     subscription: { present: po.subscription === true, frequency_weeks: "" },
     products, cost_overrides: {}, cogs_adjustments: {}, pack_updates: {},
     promos: d.promos.map((p): PoFormPromo => ({ id: Number(p.id), type: (["sale", "coupon", "rewards"].includes(String(p.type)) ? p.type : "") as PoFormPromo["type"], description: str(p.description), amount: moneyText(p.amount), percent: numText(p.percent), counts_toward_cogs: p.counts_toward_cogs !== false })),
@@ -131,7 +131,7 @@ export interface PoEditPlan {
 }
 
 /** Header fields the form edits, in HEADER_FIELDS order (server/po-edit.ts). */
-export const EDIT_HEADER_KEYS = ["supplier", "order_id", "order_date", "subtotal", "tax", "sh_donations", "discount", "refund_amount", "order_total", "weighted_gc_discount_pct", "cashback_site", "cashback_pct", "purchased_by", "purchased_by_user_id", "notes", "email_used", "cashback_status", "ships_to"] as const;
+export const EDIT_HEADER_KEYS = ["supplier", "order_id", "order_date", "subtotal", "tax", "sh_donations", "discount", "refund_amount", "order_total", "weighted_gc_discount_pct", "cashback_site", "cashback_pct", "purchased_by", "purchased_by_user_id", "notes", "email_used", "cashback_status", "ships_to", "alt_order_ids"] as const;
 const NUMERIC = new Set(["subtotal", "tax", "sh_donations", "discount", "refund_amount", "order_total", "weighted_gc_discount_pct", "cashback_pct", "price", "qty_ordered", "amount", "percent", "gift_card_discount_pct", "prep_cost", "cogs_adjustment", "cost_per_unit", "units_per_pack"]);
 /** The comparable text of a form value: trimmed; a number without $ , % and trailing zeros. */
 export function canonField(key: string, v: unknown): string {
