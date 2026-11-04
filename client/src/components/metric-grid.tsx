@@ -1,15 +1,12 @@
 /**
- * Dashboard grid (SPEC §28 §2.3): columns = the range set's ranges, rows =
- * the metrics in three groups (SPEND / SALES / PROFIT), one value per cell.
- * Quiet chrome — Card tokens, a rule between groups, the group's main metric
- * in the larger weight like a SellerBoard tile, the rest in the row weight,
- * no red / orange anywhere. Text never wears a data color.
+ * Dashboard cell formatting (SPEC §28): the pure helpers the tiles render
+ * with — money / int / range labels, the Refunds due link, each row's cell
+ * text (value, small line, tooltip) and the coverage tooltip. The table
+ * grid this file used to render was replaced by the tile cards
+ * (client/src/components/metric-tiles.tsx, tiles patch 2026-11-04).
  */
-import { Link } from "wouter";
-import { Card } from "@/components/ui/card";
-import { DASHBOARD_ROWS, PENDING_TOOLTIP, type DashboardCell, type DashboardColumn, type DashboardCoverage, type DashboardGrid, type DashboardGroup, type DashboardRowDef } from "@shared/dashboard";
+import { PENDING_TOOLTIP, type DashboardCell, type DashboardColumn, type DashboardCoverage, type DashboardRowDef } from "@shared/dashboard";
 
-const GROUP_LABEL: Record<DashboardGroup, string> = { spend: "Spend", sales: "Sales", profit: "Profit" };
 const MONTHS = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
 
 export function fmtMoney(v: number | null | undefined): string {
@@ -65,62 +62,4 @@ export function cellText(row: DashboardRowDef, cell: DashboardCell): CellText {
     case "refunds": return { main: fmtMoney(cell.value), small: cell.secondary != null ? `${fmtInt(cell.secondary)} units` : undefined };
     default: return { main: row.format === "money" ? fmtMoney(cell.value) : fmtInt(cell.value), muted: cell.value == null };
   }
-}
-
-export function MetricGrid({ grid, loading }: { grid: DashboardGrid | null; loading: boolean }) {
-  const hairline = { borderBottom: "0.5px solid hsl(var(--border))" } as const;
-  const groups: DashboardGroup[] = ["spend", "sales", "profit"];
-  const cols = grid?.columns ?? [];
-  return (
-    <Card className={`overflow-x-auto transition-opacity ${loading && grid ? "opacity-60" : ""}`} data-testid="dashboard-grid" aria-busy={loading}>
-      <table className="w-full border-collapse text-sm">
-        <thead>
-          <tr style={hairline}>
-            <th className="px-4 py-3 text-left text-xs font-medium text-muted-foreground w-[14rem]">{grid ? "" : loading ? "Loading…" : ""}</th>
-            {cols.map((c) => (
-              <th key={c.key} className="px-4 py-3 text-right align-bottom whitespace-nowrap" data-testid={`dashboard-col-${c.key}`}
-                  title={c.eastern.from === c.pacific.from && c.eastern.to === c.pacific.to ? undefined : `Spend (Eastern): ${fmtRangeLabel(c.eastern.from, c.eastern.to)} · Sales (Pacific): ${fmtRangeLabel(c.pacific.from, c.pacific.to)}`}>
-                <div className="text-sm font-medium">{c.label}</div>
-                <div className="text-[11px] font-normal text-muted-foreground">{fmtRangeLabel(c.eastern.from, c.eastern.to)}</div>
-              </th>
-            ))}
-          </tr>
-        </thead>
-        <tbody>
-          {groups.map((g, gi) => (
-            <GroupRows key={g} group={g} first={gi === 0} cols={cols} tooltip={g === "sales" ? coverageTooltip(grid?.coverage) : undefined} />
-          ))}
-        </tbody>
-      </table>
-    </Card>
-  );
-}
-
-function GroupRows({ group, first, cols, tooltip }: { group: DashboardGroup; first: boolean; cols: DashboardColumn[]; tooltip?: string }) {
-  const rows = DASHBOARD_ROWS.filter((r) => r.group === group);
-  return (
-    <>
-      <tr style={first ? undefined : { borderTop: "0.5px solid hsl(var(--border))" }}>
-        <td colSpan={cols.length + 1} className="px-4 pt-4 pb-1 text-[11px] font-semibold uppercase tracking-wider text-muted-foreground" title={tooltip || undefined} data-testid={`dashboard-group-${group}`}>{GROUP_LABEL[group]}</td>
-      </tr>
-      {rows.map((r) => (
-        <tr key={r.key} data-testid={`dashboard-row-${r.key}`} className={r.primary ? "text-base" : "text-sm"}>
-          <td className={`px-4 py-1.5 whitespace-nowrap ${r.primary ? "font-semibold" : "text-muted-foreground"}`} title={r.definition}>{r.label}</td>
-          {cols.map((c) => {
-            const cell = c.cells[r.key];
-            const t = cellText(r, cell);
-            const link = r.key === "refunds_due" && (cell.value ?? 0) > 0;
-            return (
-              <td key={c.key} className="px-4 py-1.5 text-right align-top tabular-nums" title={t.tooltip} data-testid={`dashboard-cell-${r.key}-${c.key}`}>
-                {link
-                  ? <Link href={refundsDueHref(c)} className={`underline-offset-4 hover:underline ${r.primary ? "font-semibold" : ""}`} data-testid={`link-refunds-due-${c.key}`}>{t.main}</Link>
-                  : <span className={`${r.primary ? "font-semibold" : ""} ${t.muted ? "text-muted-foreground/60" : ""}`}>{t.main}</span>}
-                {t.small && <div className="text-[11px] font-normal text-muted-foreground">{t.small}</div>}
-              </td>
-            );
-          })}
-        </tr>
-      ))}
-    </>
-  );
 }

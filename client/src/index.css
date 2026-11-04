@@ -64,6 +64,13 @@
   --chart-3: 43 90% 45%;
   --chart-4: 27 87% 50%;
   --chart-5: 340 75% 48%;
+  /* Dashboard tile header bands (SPEC §28, tiles patch 2026-11-04): a muted dusk-blue → slate-teal ramp by column
+     position, the only colour on the page; band-5 is set 3's fifth column, Custom takes band-1. */
+  --dash-band-1: #4A5F78;
+  --dash-band-2: #4E6B7E;
+  --dash-band-3: #55767E;
+  --dash-band-4: #5E7E7B;
+  --dash-band-5: #66847A;
   --font-sans: Open Sans, sans-serif;
   --font-serif: Georgia, serif;
   --font-mono: Menlo, monospace;
@@ -163,6 +170,11 @@
   --chart-3: 43 90% 70%;
   --chart-4: 27 87% 70%;
   --chart-5: 340 75% 68%;
+  --dash-band-1: #3A4F68;
+  --dash-band-2: #3E5B6E;
+  --dash-band-3: #45666E;
+  --dash-band-4: #4E6E6B;
+  --dash-band-5: #56746A;
   --shadow-2xs: 0px 2px 0px 0px hsl(0 0% 0% / 0.00);
   --shadow-xs: 0px 2px 0px 0px hsl(0 0% 0% / 0.00);
   --shadow-sm: 0px 2px 0px 0px hsl(0 0% 0% / 0.00), 0px 1px 2px -1px hsl(0 0% 0% / 0.00);

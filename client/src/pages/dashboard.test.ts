@@ -8,11 +8,12 @@ import { DASHBOARD_ROWS, PENDING_TOOLTIP } from "@shared/dashboard";
 // placeholders with the tooltip, the Refunds due link.
 const page = readFileSync(resolve(__dirname, "dashboard.tsx"), "utf8");
 const grid = readFileSync(resolve(__dirname, "../components/metric-grid.tsx"), "utf8");
+const tiles = readFileSync(resolve(__dirname, "../components/metric-tiles.tsx"), "utf8");
 const row = (key: string) => DASHBOARD_ROWS.find((r) => r.key === key)!;
 
 describe("the page never touches the global date range and keeps quiet chrome", () => {
   it("imports neither useDateRange nor the date-range context nor computePresetRange; remembers the set under af-dashboard-range-set", () => {
-    for (const src of [page, grid]) {
+    for (const src of [page, grid, tiles]) {
       expect(src).not.toMatch(/useDateRange|date-range-context|computePresetRange|DataStudioDatePicker/);
       expect(src).not.toMatch(/text-red|bg-red|text-orange|bg-orange|amber|destructive/);
     }
@@ -25,16 +26,16 @@ describe("the page never touches the global date range and keeps quiet chrome", 
     expect(page).toMatch(/\(\[1, 2, 3, 4\] as RangeSetKey\[\]\)\.map\(\(n\) => \([\s\S]*?<SelectItem key=\{n\} value=\{String\(n\)\}/);
     expect(page).toMatch(/onValueChange=\{\(v\) => \{ const n = Number\(v\) as RangeSetKey; setSet\(n\); saveSet\(n\); \}\}/);
     expect(page).toMatch(/\{set === 4 && \([\s\S]*?data-testid="dashboard-custom-range"/);
-    expect(grid).toMatch(/tooltip=\{g === "sales" \? coverageTooltip\(grid\?\.coverage\) : undefined\}/);
+    expect(tiles).toMatch(/<div className=\{LABEL\} title=\{coverage \|\| undefined\} data-testid=\{t\("sales-label"\)\}>Sales<\/div>/);
     const cov = { earliestSaleDate: "2024-09-09", newestSaleDate: "2026-11-03", lastSalesSyncAt: "2026-11-03T23:47:19.213Z", ordersFrom: "2024-10-31", rebackfillPending: false };
     expect(coverageTooltip(cov)).toMatch(/^Sales through Nov 3 · synced \d{1,2}:\d{2} [AP]M · data from Sep 9, 2024 · Orders from Oct 31, 2024 \(earlier sales stay on the old day basis\)$/);
     expect(coverageTooltip({ ...cov, ordersFrom: null, rebackfillPending: true })).toMatch(/Orders not loaded yet — run backfill:sales/);
     expect(coverageTooltip(null)).toBe("");
   });
-  it("the grid: a rule between groups, the primary rows in the larger weight, placeholders with the tooltip, Refunds due linked only when > 0", () => {
-    expect(grid).toMatch(/borderTop: "0\.5px solid hsl\(var\(--border\)\)"/);
-    expect(grid).toMatch(/r\.primary \? "text-base" : "text-sm"/);
-    expect(grid).toMatch(/const link = r\.key === "refunds_due" && \(cell\.value \?\? 0\) > 0;/);
+  it("the tiles replaced the grid: placeholders with the tooltip, Refunds due linked only when > 0", () => {
+    expect(page).toMatch(/<MetricTiles grid=\{grid\} loading=\{loading\} \/>/);
+    expect(page).not.toMatch(/MetricGrid/);
+    expect(tiles).toMatch(/\(c\.refunds_due\.value \?\? 0\) > 0\s*\? <Link href=\{refundsDueHref\(col\)\}/);
     expect(cellText(row("gross_profit"), { value: null, pending: true })).toEqual({ main: "—", tooltip: PENDING_TOOLTIP, muted: true });
     expect(cellText(row("refunds"), { value: null, pending: true, secondary: null }).tooltip).toBe("after the Finances API patch");
   });

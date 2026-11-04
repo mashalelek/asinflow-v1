@@ -1,6 +1,6 @@
 /**
  * Dashboard (SPEC §28, patch docs/claude_spec-patch-analytics-dashboard.md):
- * the Spend · Sales · Profit grid over one of four range sets (the range-set
+ * the Spend · Sales · Profit tiles over one of four range sets (the range-set
  * dropdown in the header), and the three charts under it (DashboardCharts,
  * their own range). The coverage line lives in a tooltip on the SALES label.
  *
@@ -11,7 +11,7 @@
 import { useCallback, useEffect, useState } from "react";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Button } from "@/components/ui/button";
-import { MetricGrid } from "@/components/metric-grid";
+import { MetricTiles } from "@/components/metric-tiles";
 import { DashboardCharts } from "@/components/dashboard-charts";
 import { SET_COLUMN_LABELS, type RangeSetKey } from "@/lib/dashboard-sets";
 import type { DashboardGrid } from "@shared/dashboard";
@@ -80,7 +80,7 @@ export default function Dashboard() {
           Couldn't load the grid: {error}. <Button variant="ghost" size="sm" className="h-7 text-xs" onClick={() => void load()}>Retry</Button>
         </div>
       )}
-      <MetricGrid grid={grid} loading={loading} />
+      <MetricTiles grid={grid} loading={loading} />
       <DashboardCharts />
     </div>
   );
