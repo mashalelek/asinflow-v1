@@ -7912,12 +7912,43 @@ One segmented control above the grid, remembered per browser
 | 3 | Today · Yesterday · 7 days · 14 days · 30 days |
 | 4 | Custom — one column, a two-date control local to the grid |
 
-### The grid (`GET /api/dashboard/grid?set=1|2|3|4&from&to`)
+### Layout (tiles patch `docs/claude_spec-patch-dashboard-tiles.md`, APPROVED 2026-11-04; mockup `docs/dashboard-tiles-mockup-2026-11-04.dc.html`)
 
-Rows in three groups, a rule between groups, the group's main metric in the
-larger weight; quiet chrome (Card tokens, no red / orange); text never
-wears a data colour. Every row key, the API shape and the placeholders are
-final — the Finances API patch only supplies numbers.
+UI only — the data, the API, the range resolver, the link targets and the
+placeholders are the ones below. **Page header:** the title "Dashboard" on
+the left; on the right a labeled **Date ranges** dropdown with the four
+sets ("Today · This week · MTD · 30 days" / "Today · Yesterday · MTD · Last
+month" / "Today · Yesterday · 7 · 14 · 30 days" / "Custom range…" — the
+custom choice shows the two-date control beside it; `af-dashboard-range-set`
+as before). No subtitle; the coverage lines ("Sales through … · synced … ·
+data from … · Orders from …") are the **tooltip of every tile's SALES
+label** (`coverageTooltip`). **Tiles** replace the table grid: one card per
+range column — `repeat(N, minmax(0, 1fr))`, 16 px gap, N = 4 / 4 / 5 / 1 by
+set (a lone Custom column capped at 28 rem), one column below 1024 — with
+a **header band** by column position (`--dash-band-1…5` under `:root` and
+`.dark`, a muted dusk-blue → slate-teal ramp: dark `#3A4F68 · #3E5B6E ·
+#45666E · #4E6E6B · #56746A`, light `#4A5F78 · #4E6B7E · #55767E ·
+#5E7E7B · #66847A`; Custom takes band-1 — the only colour on the page;
+range name 16 px / 700 `#FAFAF9`, dates 12 px `#E7E5E4`), then three
+hairline-separated sections padded 14 18 16: **SPEND** (11 px / 700 /
+.08em label → Spend 28 px / 700 → a 2 × 2 grid: Refunds due (an underlined
+link when > 0), Avg. PO value "· N POs", ASIN units ordered, Individual
+units ordered with the missing-pack-size note), **SALES** (Sales 28 px →
+Orders / Units · Refunds as a dim "—" with the "after the Finances API
+patch" tooltip), **PROFIT** (the label row carries "after the Finances API
+patch" on the right → Gross profit as a dim 28 px "—" → Net profit · Est.
+payout dim; the rows stay visible, Maria 2026-11-04 — the Finances patch
+replaces the dashes and drops the note). Sub-metric labels 12 px muted,
+values 16 px / 600. No "More" link. Components:
+`client/src/components/metric-tiles.tsx` (cards), `metric-grid.tsx` (the
+pure cell / coverage formatting it renders with).
+
+### The grid data (`GET /api/dashboard/grid?set=1|2|3|4&from&to`)
+
+Rows in three groups (rendered as the tile sections above); quiet chrome
+(Card tokens, no red / orange); text never wears a data colour. Every row
+key, the API shape and the placeholders are final — the Finances API patch
+only supplies numbers.
 
 **SPEND** (`purchase_orders` / `po_asins` / `po_line_items` /
 `po_line_refunds`, by `order_date`):
@@ -7966,20 +7997,22 @@ Spend needs no guard (POs are complete back to the import floor).
 
 ### Charts (`GET /api/dashboard/series?kind=running30|monthly|weekly&from&to`)
 
-Three charts stacked under the grid, one shared `DashboardChart`
-(recharts): **Sales as bars on the left $ axis, Spend as a line on the right
-$ axis** (Maria's whiteboard 2026-11-02 — a deliberate dual axis; the
-dataviz guideline prefers one axis, noted and overruled by the design), a
-checkbox per series that removes the series **and** its axis (both on by
-default; the checkbox row is the legend), one tooltip per hovered period
-(period · Sales · Spend · POs · units sold · orders, "(to date)" on the
-partial period), a table-view twin per chart.
+Three charts stacked under the tiles, one shared `DashboardChart`
+(recharts): **Spend as bars on the left $ axis, Sales as a line on the
+right $ axis** (tiles patch 2026-11-04 — the 2026-11-03 build had Sales
+as the bars; a deliberate dual axis either way: the dataviz guideline
+prefers one axis, noted and overruled by the design), a checkbox per
+series that removes the series **and** its axis (both on by default; the
+checkbox row is the legend, Spend first), one tooltip per hovered period
+(period · Spend · Sales · POs · units sold · orders, "(to date)" on the
+partial period), a table-view twin per chart. Colour follows the entity,
+not the mark: Sales keeps the blue slot, Spend the teal one.
 
-| Chart | X | Sales | Spend |
+| Chart | X | Spend (bars, left) | Sales (line, right) |
 |---|---|---|---|
-| 30-day running | day | Σ revenue over [d−29, d] | Σ Spend over [d−29, d] |
-| Monthly | calendar month | Σ revenue | Σ Spend |
-| Weekly | week starting Monday | Σ revenue | Σ Spend |
+| 30-day running | day | Σ Spend over [d−29, d] | Σ revenue over [d−29, d] |
+| Monthly | calendar month | Σ Spend | Σ revenue |
+| Weekly | week starting Monday | Σ Spend | Σ revenue |
 
 One range control for all three — **Last 12 months** (default: 12 calendar
 months ending with the current one, the partial period "to date"; the
