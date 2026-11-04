@@ -6546,7 +6546,9 @@ reconstructed (those POs are Closed from the sheet).
   colour. The POs table's icon now reflects the PO's own note only
   (before, it showed when any ASIN row or line had one — those notes show
   on the expanded rows).
-- Search spans order_id, ASIN, and product name in one box. Supplier and
+- Search spans order_id, ASIN, product name and notes — the PO's, its ASIN
+  rows' and its product lines' (2026-11-04: a replacement order # noted on
+  the original PO finds it) — in one box. Supplier and
   Action Items filters are **searchable multi-selects** (OR within a facet,
   AND across facets), beside the Open / Closed / All select (default Open).
   Column 1 is the Open/Closed toggle, column 2 the expand chevron, then

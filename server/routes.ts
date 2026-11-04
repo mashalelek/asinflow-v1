@@ -4298,9 +4298,11 @@ export async function registerRoutes(
     if (q) {
       params.push(`%${q}%`);
       const n = params.length;
-      conds.push(`(p.order_id ILIKE $${n}
-        OR EXISTS (SELECT 1 FROM po_asins a WHERE a.po_id = p.id AND a.asin ILIKE $${n})
-        OR EXISTS (SELECT 1 FROM po_line_items l WHERE l.po_id = p.id AND l.product_name ILIKE $${n}))`);
+      // Notes too (2026-11-04): the PO's, its ASIN rows' and its product
+      // lines' — a replacement order # noted on the original PO finds it.
+      conds.push(`(p.order_id ILIKE $${n} OR p.notes ILIKE $${n}
+        OR EXISTS (SELECT 1 FROM po_asins a WHERE a.po_id = p.id AND (a.asin ILIKE $${n} OR a.notes ILIKE $${n}))
+        OR EXISTS (SELECT 1 FROM po_line_items l WHERE l.po_id = p.id AND (l.product_name ILIKE $${n} OR l.notes ILIKE $${n})))`);
     }
     // Action Items filter: any-of, a PO matches when ANY product line has an
     // open item (po_line_action_items, PO table v2; values never contain

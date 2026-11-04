@@ -645,7 +645,7 @@ export default function PurchaseOrders() {
         <div className="relative">
           <Search className="h-3.5 w-3.5 absolute left-2.5 top-1/2 -translate-y-1/2 text-muted-foreground" />
           <Input value={search} onChange={(e) => setSearch(e.target.value)}
-            placeholder="Search order ID, ASIN, product name..."
+            placeholder="Search order #, ASIN, product, notes"
             className="h-8 w-[280px] pl-8 text-sm" data-testid="input-po-search" />
         </div>
         <Select value={closedFilter} onValueChange={(v) => setClosedFilter(v as ClosedFilter)}>
