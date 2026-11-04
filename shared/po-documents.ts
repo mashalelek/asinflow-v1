@@ -5,18 +5,21 @@
 // Name (Orders sheet col AU): `YYYY-MM-DD_supplier_POID.pdf` — the PO's order
 // date and AF's supplier name, verbatim. Shipped / delivered emails append
 // `_shipped` / `_delivered`, a manual upload `_invoice` (D3); a second
-// document of the same type gets `-2`, `-3`.
+// document of the same type gets `-2`, `-3`. A supplier's own invoice email
+// ("[ShagTools] Invoice 4126643 for order 4126643", migration 084,
+// 2026-11-04) is type invoice and also takes `_invoice` — the -N counter
+// runs across both invoice types, so a manual upload never collides.
 
-export type PoDocumentType = "order_confirmation" | "shipped" | "delivered" | "invoice_manual";
+export type PoDocumentType = "order_confirmation" | "invoice" | "shipped" | "delivered" | "invoice_manual";
 export type PoDocumentSource = "email" | "upload" | "linked_existing";
 
-export const DOCUMENT_TYPES: readonly PoDocumentType[] = ["order_confirmation", "shipped", "delivered", "invoice_manual"];
+export const DOCUMENT_TYPES: readonly PoDocumentType[] = ["order_confirmation", "invoice", "shipped", "delivered", "invoice_manual"];
 
 export const DOCUMENT_TYPE_LABEL: Record<PoDocumentType, string> = {
-  order_confirmation: "Order confirmation", shipped: "Shipped", delivered: "Delivered", invoice_manual: "Invoice",
+  order_confirmation: "Order confirmation", invoice: "Invoice", shipped: "Shipped", delivered: "Delivered", invoice_manual: "Invoice",
 };
 
-const TYPE_SUFFIX: Record<PoDocumentType, string> = { order_confirmation: "", shipped: "_shipped", delivered: "_delivered", invoice_manual: "_invoice" };
+const TYPE_SUFFIX: Record<PoDocumentType, string> = { order_confirmation: "", invoice: "_invoice", shipped: "_shipped", delivered: "_delivered", invoice_manual: "_invoice" };
 
 /** YYYY-MM-DD of a PO order date. A pg DATE arrives as a JS Date at local midnight: local components, never toISOString (TZ shift). */
 export function orderYmd(d: Date | string): string {

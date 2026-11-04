@@ -57,7 +57,7 @@ This app runs on the following stack. This is settled. Do not suggest alternativ
 - `shared/po-edit-form.ts` / `server/po-edit-form.ts` — Edit PO as a page (`/pos/:id/edit`, `client/src/pages/po-edit-page.tsx`): the stored PO as the New PO form, the edited form diffed into the existing per-field editors (one History row per field, one transaction)
 - `server/po-prefill.ts` — `/api/pos/prefill`: capture → one Haiku call → form prefill + markers; `chrome-extension/` is the capture side
 - `server/dashboard.ts` / `server/dashboard-range.ts` / `shared/dashboard.ts` — the Dashboard (SPEC §28): range sets, the Spend · Sales · Profit grid SQL, the chart series; `client/src/pages/dashboard.tsx`, `metric-grid.tsx`, `dashboard-chart.tsx`
-- `server/po-documents.ts` / `server/po-documents-routes.ts` / `server/drive-client.ts` / `server/pdf-render.ts` / `shared/po-documents.ts` — PO documents (SPEC §22 "PO documents", §26, component 29): order emails rendered to PDF in Maria's Drive, existing PDFs linked by name, the paperclip and the Documents tab (`client/src/components/po-documents.tsx`)
+- `server/po-documents.ts` / `server/po-documents-routes.ts` / `server/drive-client.ts` / `server/pdf-render.ts` / `shared/po-documents.ts` — PO documents (SPEC §22 "PO documents", §26, component 29): order emails rendered to PDF in Maria's Drive (type by subject: `server/order-email-classify.ts`, the AI fallback for the rest), existing PDFs linked by name, the paperclip and the Documents tab (`client/src/components/po-documents.tsx`)
 - `docs/SCHEMA.md` — Database schema documentation
 - `docs/ROADMAP.md` — Feature roadmap
 
@@ -125,7 +125,7 @@ and any introduced error must be fixed forward before committing.
 
 ## Tests
 
-`npm test` (vitest). **1,983 tests across 183 files** as of 2026-11-04 — this
+`npm test` (vitest). **1,999 tests across 184 files** as of 2026-11-04 — this
 codebase IS tested; the old "there are no tests" line was years stale.
 
 **A gate report must cover BOTH typecheck commands, labelled separately:**
@@ -133,7 +133,7 @@ codebase IS tested; the old "there are no tests" line was years stale.
 ```
 npm run check        -> 4 baseline TS1252, 0 introduced
 npm run check:tests  -> 4 baseline TS1252, 0 introduced
-npm test             -> 1983/1983
+npm test             -> 1999/1999
 ```
 
 `npm run check` alone is NOT a complete gate. The base `tsconfig.json`

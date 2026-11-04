@@ -278,7 +278,7 @@ export function getPrefill(id: string, now = Date.now()): { payload: PrefillPayl
 export function _clearPrefillCache(): void { cache.clear(); }
 
 /** po_prefill_log row (no page text). Returns the row id. */
-export async function logPrefill(query: QueryLike, row: { user_id: number | null; kind: "capture" | "backfill" | "promo_classify"; retailer: string | null; input_chars: number; input_tokens: number; output_tokens: number; cost_estimate: number; duration_ms: number; schema_ok: boolean; error: string | null }): Promise<number | null> {
+export async function logPrefill(query: QueryLike, row: { user_id: number | null; kind: "capture" | "backfill" | "promo_classify" | "doc_classify"; retailer: string | null; input_chars: number; input_tokens: number; output_tokens: number; cost_estimate: number; duration_ms: number; schema_ok: boolean; error: string | null }): Promise<number | null> {
   const r = await query(
     `INSERT INTO po_prefill_log (user_id, kind, retailer, model, input_chars, input_tokens, output_tokens, cost_estimate, duration_ms, schema_ok, error) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11) RETURNING id`,
     [row.user_id, row.kind, row.retailer, AI.model, row.input_chars, row.input_tokens, row.output_tokens, row.cost_estimate, row.duration_ms, row.schema_ok, row.error],

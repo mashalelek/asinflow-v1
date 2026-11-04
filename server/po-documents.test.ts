@@ -9,13 +9,16 @@ import type { JobRow } from "./scheduler/types";
 function fakeDb(pos: any[]) {
   const docs: any[] = [];
   const settings: Record<string, any> = {};
+  const aiLog: any[] = [];
   const query = async (sql: string, p: any[] = []) => {
     const s = sql.replace(/\s+/g, " ").trim();
     if (s.startsWith("SELECT to_regclass")) return { rows: [{ t: "po_documents" }], rowCount: 1 };
     if (s.startsWith("SELECT id, order_date, supplier, order_id FROM purchase_orders") || s.startsWith("SELECT p.id, p.supplier")) return { rows: pos, rowCount: pos.length };
     if (s.startsWith("SELECT MIN(order_date)")) { const d = pos.filter((x) => p[0].includes(x.source)).map((x) => x.order_date).sort()[0]; return { rows: [{ d: d ?? null }], rowCount: 1 }; }
     if (s.startsWith("SELECT drive_file_id FROM po_documents")) return { rows: docs, rowCount: docs.length };
-    if (s.startsWith("SELECT 1 FROM po_documents WHERE gmail_message_id")) { const r = docs.filter((d) => d.gmail_message_id === p[0] && d.type === p[1]); return { rows: r, rowCount: r.length }; }
+    if (s.startsWith("SELECT 1 FROM po_documents WHERE gmail_message_id")) { const r = docs.filter((d) => d.gmail_message_id === p[0] && (p.length < 2 || d.type === p[1])); return { rows: r, rowCount: r.length }; }
+    if (s.startsWith("SELECT alias, supplier FROM supplier_aliases")) return { rows: [], rowCount: 0 };
+    if (s.startsWith("INSERT INTO po_prefill_log")) { aiLog.push({ kind: p[1], retailer: p[2], schema_ok: p[9], error: p[10] }); return { rows: [{ id: aiLog.length }], rowCount: 1 }; }
     if (s.startsWith("SELECT file_name FROM po_documents WHERE po_id")) { const r = docs.filter((d) => d.po_id === p[0]); return { rows: r, rowCount: r.length }; }
     if (s.startsWith("SELECT value FROM settings")) return { rows: settings[p[0]] ? [{ value: settings[p[0]] }] : [], rowCount: 0 };
     if (s.startsWith("INSERT INTO settings")) { settings[p[0]] = JSON.parse(p[1]); return { rows: [], rowCount: 1 }; }
@@ -23,7 +26,7 @@ function fakeDb(pos: any[]) {
     if (s.startsWith("INSERT INTO po_documents")) { docs.push({ po_id: p[0], type: p[1], gmail_message_id: p[2], drive_file_id: p[3], file_name: p[4], source: "email" }); return { rows: [], rowCount: 1 }; }
     throw new Error(`unexpected SQL: ${s.slice(0, 80)}`);
   };
-  return { query: query as any, docs, settings };
+  return { query: query as any, docs, settings, aiLog };
 }
 
 /** Drive with the 2026 year folder and its October month folder; records uploads and folder creates. */
@@ -63,7 +66,9 @@ describe("classifyEmail", () => {
     expect(classifyEmail({ subject: "Your order has shipped", text: "Order# 200015000000001 UPS 1Z999AA10123456784", fromDomain: "walmart.com" })?.type).toBe("shipped");
     expect(classifyEmail({ subject: "Delivered: your package", text: "Order# 200015000000001", fromDomain: "walmart.com" })?.type).toBe("delivered");
     expect(classifyEmail({ subject: "Your order was canceled", text: "Order# 200015000000001", fromDomain: "walmart.com" })).toBeNull();
-    expect(classifyEmail({ subject: "Big savings this week", text: "Shop now", fromDomain: "walmart.com" })).toBeNull();
+    // No rule and no exclusion: unknown — the AI fallback's input, asked only once the email names one PO.
+    expect(classifyEmail({ subject: "Big savings this week", text: "Shop now", fromDomain: "walmart.com" })?.type).toBe("unknown");
+    expect(classifyEmail({ subject: "Complete your order and save 10%", text: "", fromDomain: "walmart.com" })).toBeNull();
   });
 });
 
@@ -76,7 +81,7 @@ describe("ingestDocuments", () => {
   const deps = (drive: any) => ({
     gmail: {} as any, drive, list: async () => Object.keys(msgs), get: async (_g: any, id: string) => msgs[id],
     getRenderable: async (_g: any, id: string) => ({ id, html: "<p>x</p>", subject: "", from: "", to: "", date: new Date() }),
-    render: async () => Buffer.from("%PDF-1.4 fake"),
+    render: async () => Buffer.from("%PDF-1.4 fake"), ai: null,
   });
   const now = new Date("2026-11-04T20:00:00Z");
 
@@ -154,3 +159,65 @@ describe("component 29", () => {
     expect(componentsForJob({ trigger: "manual", components: [29] } as JobRow).map((c) => c.n)).toEqual([]);
   });
 });
+
+describe("ingestDocuments — the 2026-11-04 rules (ShagTools PO 4126643)", () => {
+  const shag = { id: "shag", supplier: "shagtools.com", order_id: "4126643", order_date: "2026-11-02", source: "extension", order_total: 10 };
+  const other = { id: "zoro", supplier: "zoro.com", order_id: "Z8812345AB", order_date: "2026-11-01", source: "extension", order_total: 10 };
+  const mail = (id: string, subject: string, text: string, fromDomain = "shagtools.com", labelIds: string[] = []) =>
+    ({ id, threadId: null, date: new Date("2026-11-03T15:00:00Z"), from: `x <x@${fromDomain}>`, fromDomain, subject, text, labelIds });
+  const msgs: Record<string, any> = {
+    // Filed under Promotions by Gmail — read all the same.
+    a: mail("a", "Your ShagTools order has been received!", "Order #4126643\nTotal $10.00", "shagtools.com", ["CATEGORY_PROMOTIONS"]),
+    b: mail("b", "[ShagTools] Invoice 4126643 for order 4126643 from November 2, 2026", "Invoice 4126643"),
+    c: mail("c", "Your ShagTools order is now complete", "Order #4126643 shipped via UPS 1Z999AA10123456784"),
+    // A carrier notice: no labelled order #, but AF's order # in the text.
+    d: mail("d", "Your package has been delivered!", "Reference: Z8812345AB\nThanks for shopping", "ups.com"),
+    // No subject rule: the AI types it, because it names exactly one PO.
+    e: mail("e", "Your Zoro order Z8812345AB", "Order # Z8812345AB — the details", "zoro.com"),
+    // No rule and no PO: the AI is never asked.
+    f: mail("f", "Fall favorites are here", "Shop now", "zoro.com"),
+  };
+  const deps = (drive: any, ai: any) => ({
+    gmail: {} as any, drive, list: async (_g: any, q: string) => { lastQ = q; return Object.keys(msgs); }, get: async (_g: any, id: string) => msgs[id],
+    getRenderable: async (_g: any, id: string) => ({ id, html: "<p>x</p>", subject: "", from: "", to: "", date: new Date() }),
+    render: async () => Buffer.from("%PDF-1.4 fake"), ai,
+  });
+  let lastQ = "";
+  const now = new Date("2026-11-04T20:00:00Z");
+
+  it("confirmation, invoice and shipped for one PO; the Promotions filter is gone; a PO named in a carrier's text; the AI types a subject no rule names", async () => {
+    const db = fakeDb([shag, other]), d = fakeDrive();
+    const calls: string[] = [];
+    const ai = async (subject: string) => { calls.push(subject); return { type: "order_confirmation" as const, input_tokens: 900, output_tokens: 20 }; };
+    const r = await ingestDocuments({ query: db.query, deps: deps(d.drive, ai), now, since: new Date("2026-11-01T00:00:00Z") });
+    expect(lastQ).not.toMatch(/promotions/);
+    expect(r.items.map((i) => [i.po_id, i.type, i.rule])).toEqual([
+      ["shag", "order_confirmation", "received"], ["shag", "invoice", "invoice_for_order"], ["shag", "shipped", "order_complete"],
+      ["zoro", "delivered", "delivered"], ["zoro", "order_confirmation", "ai"],
+    ]);
+    expect(d.uploads.filter((u) => u.includes("4126643"))).toEqual([
+      "2026-11-02_shagtools.com_4126643.pdf", "2026-11-02_shagtools.com_4126643_invoice.pdf", "2026-11-02_shagtools.com_4126643_shipped.pdf",
+    ]);
+    expect(calls).toEqual(["Your Zoro order Z8812345AB"]);
+    expect(r.ai).toMatchObject({ calls: 1, typed: 1, off: false });
+    expect(db.aiLog).toEqual([{ kind: "doc_classify", retailer: "zoro.com", schema_ok: true, error: null }]);
+  });
+
+  it("without AI (no key) an unknown subject is counted, never filed; a dry run never calls it; the cap stops calls; an AI 'none' files nothing", async () => {
+    const off = await ingestDocuments({ query: fakeDb([shag, other]).query, deps: deps(fakeDrive().drive, null), now, since: null, dryRun: true });
+    expect(off.ai).toMatchObject({ calls: 0, off: true });
+    expect(off.untyped).toBe(1);
+    expect(off.items.map((i) => i.rule)).not.toContain("ai");
+    let called = 0;
+    const dry = await ingestDocuments({ query: fakeDb([shag, other]).query, deps: deps(fakeDrive().drive, async () => { called++; return { type: "invoice", input_tokens: 1, output_tokens: 1 }; }), now, since: null, dryRun: true });
+    expect([called, dry.ai.dry_run]).toEqual([0, 1]);
+    const capped = await ingestDocuments({ query: fakeDb([shag, other]).query, deps: deps(fakeDrive().drive, async () => { called++; return { type: "invoice", input_tokens: 1, output_tokens: 1 }; }), now, since: null, aiMaxCalls: 0 });
+    expect([called, capped.ai.skipped_cap]).toEqual([0, 1]);
+    const db = fakeDb([shag, other]);
+    const none = await ingestDocuments({ query: db.query, deps: deps(fakeDrive().drive, async () => ({ type: "none", input_tokens: 1, output_tokens: 1 })), now, since: null });
+    expect(none.ai).toMatchObject({ calls: 1, none: 1 });
+    expect(none.items).toHaveLength(4);
+    expect(db.aiLog).toHaveLength(1);
+  });
+});
+

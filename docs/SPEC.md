@@ -6906,8 +6906,10 @@ replaces it. Migration 061 adds `po_edit_log`, `deleted_pos` and
 
 PDFs kept for a PO in **Maria's Google Drive**, under the Invoices root
 (`DRIVE_INVOICES_ROOT_ID`; `Invoices / Invoices - YYYY / <month>`), one
-`po_documents` row each: `type` order_confirmation · shipped · delivered ·
-invoice_manual, `source` email (an order email AF rendered) · upload (the
+`po_documents` row each: `type` order_confirmation · invoice (a
+supplier's invoice email, migration 084, 2026-11-04) · shipped · delivered ·
+invoice_manual (an upload; both invoice types file as `_invoice`, the -N
+counter shared), `source` email (an order email AF rendered) · upload (the
 Documents tab) · linked_existing (a PDF Maria saved, linked by name),
 `gmail_message_id`, `drive_file_id`, `file_name`, `bytes`, `document_at`
 (the document's own date: the email's, the Drive file's created time, the
@@ -7718,6 +7720,24 @@ Settings: `tracking.velocity_street` ("805 grandy"),
   `shop.tetleyusa.com`) → `matched`, `match_reason = retailer_name`. Only
   the subject is read (the body is not stored). A platform domain is
   never seeded into the map.
+- **Leading zeros** (2026-11-04): the printed # and AF's compare equal
+  without leading zeros (Summit Racing `0412645` ↔ `412645`). A
+  parenthesised `(#115450009)` in a subject is an order # (Pyramyd AIR,
+  Tetley).
+- **Order # in the email's text** (2026-11-04, Maria — the 81-row queue):
+  when the labelled # finds nothing (no_po, unpaired, unknown_sender),
+  the email is read from Gmail by its message id and AF's order #s are
+  looked for as **whole tokens** (`posNamedInText`,
+  `server/order-number.ts`: alnum-only, leading zeros dropped, a
+  hyphenated token also joined) — among the resolved supplier's POs, or
+  every PO when the sender resolves to none (a carrier notice from UPS /
+  FedEx, a platform such as ShipStation). An id counts from text only
+  when 6+ characters with a digit; across every supplier, 8+ characters
+  or letters mixed with digits. The PO's order date must be no later than
+  a day after the email. **Exactly one PO named → `matched`, `match_reason
+  = order_in_text`**; two or more (AF's `_N` pair) stays for review. The
+  run's result lists every link (`npm run backfill:tracking -- --stage
+  match [--live] [--prod]` prints it).
 - **Order-#-unique** (2026-10-22): when the sender resolves to **no**
   supplier, the order # is compared digits-only (also without a trailing
   `-N` / `_N`; 5+ digits) against every AF PO; exactly one → `matched`,
@@ -7938,16 +7958,50 @@ the item by hand once she has checked. `npm run po:reconcile-confirmations
 
 `server/po-documents.ts` `ingestDocuments`, component **29** (hourly
 tier: the 00:00 pass and every hourly pass; scheduled passes only) and
-`npm run po-docs [-- --ingest] [--since YYYY-MM-DD] [--live] [--prod]`
+`npm run po-docs [-- --ingest] [--since YYYY-MM-DD] [--order <#>] [--ai-max N] [--live] [--prod]`
 (dry run by default — counts only, no Drive file or folder, no row, no
-watermark). The mailbox is read like the reconcile
-(`-category:promotions after:<watermark − 6 h>`, watermark
-`docs.gmail_watermark`). An email is an **order confirmation** by the
-reconcile's rule (above), else **shipped** (the tracking parser's
-shipped kind and a shipped subject) or **delivered** (the parser's
-delivered kind); cancel / refund / return subjects are none. The PO is
-found by the order # exactly as the reconcile does (exact key, the base
-id, narrowed by the sender's supplier) — **exactly one PO, or nothing**.
+watermark). The mailbox is read **including
+Promotions** (`after:<watermark − 6 h>`, watermark `docs.gmail_watermark`;
+2026-11-04: ShagTools' "order has been received", most Zoro and all Yankee
+Candle order mail sit in Promotions — spam and trash are not searched).
+
+**Type by subject** (`server/order-email-classify.ts`, 2026-11-04; rules
+built from a 90-day sample of orders@ across the top 30 suppliers by PO
+count, wording common across retailers): exclusions first — cancel /
+refund / return / exchange, cart reminders ("complete your order"),
+review and survey requests, coupons / gift cards / subscriptions /
+reminders, "new arrivals" marketing, in-between notices ("out for
+delivery", "should arrive by", "almost here", "ready to ship", "delay") —
+then **delivered** ("has been delivered", "Delivered:", "your order has
+arrived", "items have arrived from order #", "Arrived:"), **shipped**
+("shipped", "on its way", "heading your way", "left our warehouse",
+"shipment / shipping confirmation", "now with the carrier", "your order is
+now complete"), **invoice** ("Invoice … for order", "receipt for order",
+"order receipt"), **order confirmation** ("we've received your order",
+"your … order has been received / placed", "order … confirmed",
+"confirmation for / of your order", "thanks for your order / ordering",
+"here's your … order"). A later stage wins over an earlier one's leftover
+words. A subject no rule names and no exclusion stops is **unknown**.
+
+**PO:** the labelled order # as the reconcile matches it (exact key, the
+base id, narrowed by the sender's supplier — for a platform sender, the
+store its subject names), else an AF order # named in the text (the
+tracking matcher's rule above) — **exactly one PO, or nothing**.
+
+**AI fallback** (2026-11-04): an unknown subject that names exactly one PO
+(and passes D4) is typed by one Haiku call (`server/config/ai.ts`;
+order_confirmation · invoice · shipped · delivered · none), at most 40 per
+pass (`--ai-max`), each call logged in `po_prefill_log` (kind
+`doc_classify`, migration 084). Without `ANTHROPIC_API_KEY` it is off and
+the email is counted untyped; a dry run never calls it (it counts the
+emails it would ask about). The 90-day sample had 77 such emails.
+
+Sample counts (2026-11-04, top 30 suppliers, an email = classified + one
+PO): before 481 (Promotions excluded, the old rules), after 748 by the
+rules, plus 16 for the AI — e.g. Walmart 222 → 348, Target 36 → 93, Zoro
+11 → 39 (11 invoices), Carter's 17 → 49, JCPenney 5 → 10, SupplyHouse
+5 → 10.
+
 Rendered (`getRenderableMessage`: the first HTML part, else the plain
 text; `cid:` images inlined; a From / To / Date / Subject header), saved
 under the §22 name into the PO's month folder, one row per
