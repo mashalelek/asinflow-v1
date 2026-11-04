@@ -125,7 +125,7 @@ and any introduced error must be fixed forward before committing.
 
 ## Tests
 
-`npm test` (vitest). **1,999 tests across 184 files** as of 2026-11-04 — this
+`npm test` (vitest). **2,017 tests across 186 files** as of 2026-11-04 — this
 codebase IS tested; the old "there are no tests" line was years stale.
 
 **A gate report must cover BOTH typecheck commands, labelled separately:**
@@ -133,7 +133,7 @@ codebase IS tested; the old "there are no tests" line was years stale.
 ```
 npm run check        -> 4 baseline TS1252, 0 introduced
 npm run check:tests  -> 4 baseline TS1252, 0 introduced
-npm test             -> 1999/1999
+npm test             -> 2017/2017
 ```
 
 `npm run check` alone is NOT a complete gate. The base `tsconfig.json`
@@ -165,7 +165,12 @@ domain-wide delegation — a JWT with `subject = orders@coastalqualitygoods.com`
 (`GMAIL_SUBJECT` overrides), scope `gmail.readonly`. `npm run gmail:check`
 lists the 5 newest subjects (verifies delegation). `ANTHROPIC_API_KEY` is
 optional: without it the AI fallback is off and number-less shipping emails
-queue as `ai_disabled`. `npm run velocity:tracking-probe -- --order <id>
+queue as `ai_disabled`; with it, each pass reads the placeholders that name
+one AF PO (`server/tracking-ai.ts`, ≤ 25 Haiku calls, logged as
+`tracking_fallback`; `npm run backfill:tracking -- --stage ai [--live]`).
+A replacement order's tracking attaches to the original PO with a note
+(`server/tracking-replacement.ts`); `tsx script/attach-tracking.ts` is the
+queue's Attach / Dismiss from the shell (dry run by default). `npm run velocity:tracking-probe -- --order <id>
 --carrier <c> --tracking <n[,n]> [--live]` — read-only without `--live`.
 Velocity's PUT takes `trackingNumbers` as plain strings (probe 2026-10-21).
 
