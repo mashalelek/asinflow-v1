@@ -27,6 +27,7 @@ import { createPoFromForm, lookupAsins } from "./po-create";
 import { loadPoForm, savePoForm } from "./po-edit-form";
 import { suggestAsins, asinInfo } from "./asin-suggest";
 import { defaultEmailForSupplier } from "./supplier-defaults";
+import { documentBaseName } from "@shared/po-documents";
 import { canonicalPaymentName } from "@shared/po-form";
 import { applyAsinPackUpdate, parsePack } from "./asin-pack";
 import { CaptureSchema, extractPrefill, enrichPrefill, mergedPagesText, storePrefill, getPrefill, logPrefill } from "./po-prefill";
@@ -4422,11 +4423,8 @@ export async function registerRoutes(
       const unitsReceived = recVals.length === 0 ? null : recVals.reduce((t: number, v: any) => t + Number(v), 0);
       const nonNullCosts = asinRows.filter((a: any) => a.total_cost != null);
       const cogsTotal = nonNullCosts.reduce((t: number, a: any) => t + (num(a.total_cost) ?? 0), 0);
-      // pg DATE → JS Date (midnight local): build YYYY-MM-DD from local
-      // components — String()/toISOString() would garble or TZ-shift it.
-      const od = po.order_date instanceof Date ? po.order_date : new Date(po.order_date);
-      const ymd = `${od.getFullYear()}-${String(od.getMonth() + 1).padStart(2, "0")}-${String(od.getDate()).padStart(2, "0")}`;
-      const invoiceFileName = `${ymd}_${po.supplier}_${po.order_id}`;
+      // The §2 / col AU name (shared/po-documents.ts — local date components, never a TZ shift).
+      const invoiceFileName = documentBaseName(po);
 
       res.json({
         po: { ...po, invoice_file_name: invoiceFileName },
