@@ -59,8 +59,8 @@ export async function linkExistingDocuments(opts: { query: QueryLike; drive: dri
     r.linked[l.rule]++;
     if (opts.dryRun) continue;
     await opts.query(
-      `INSERT INTO po_documents (po_id, type, drive_file_id, file_name, bytes, source) VALUES ($1, $2, $3, $4, $5, 'linked_existing') ON CONFLICT DO NOTHING`,
-      [l.po_id, l.type, l.file.id, l.file.name, l.file.size ?? null],
+      `INSERT INTO po_documents (po_id, type, drive_file_id, file_name, bytes, document_at, source) VALUES ($1, $2, $3, $4, $5, $6, 'linked_existing') ON CONFLICT DO NOTHING`,
+      [l.po_id, l.type, l.file.id, l.file.name, l.file.size ?? null, l.file.createdTime ?? null],
     );
   }
   opts.log?.(`documents link: ${r.files} files (${r.pdfs} PDF), ${r.linked.name + r.linked.loose} linked (name ${r.linked.name}, loose ${r.linked.loose}) on ${r.pos_linked} POs, review ${r.review.length}${r.dryRun ? " (dry run)" : ""}`);
@@ -177,8 +177,8 @@ export async function ingestDocuments(opts: { query: QueryLike; deps: IngestDeps
       const name = nextDocumentFileName(documentBaseName(po), c.type, [...(await folderFileNames(deps.drive, folder.id)), ...onPo]);
       const up = await uploadPdf(deps.drive, folder.id, name, pdf);
       await opts.query(
-        `INSERT INTO po_documents (po_id, type, gmail_message_id, drive_file_id, file_name, bytes, source) VALUES ($1, $2, $3, $4, $5, $6, 'email') ON CONFLICT DO NOTHING`,
-        [po.id, c.type, msg.id, up.id, name, up.bytes],
+        `INSERT INTO po_documents (po_id, type, gmail_message_id, drive_file_id, file_name, bytes, document_at, source) VALUES ($1, $2, $3, $4, $5, $6, $7, 'email') ON CONFLICT DO NOTHING`,
+        [po.id, c.type, msg.id, up.id, name, up.bytes, msg.date.toISOString()],
       );
       r.items.push({ ...item, file_name: name });
     } catch (err: any) {

@@ -38,7 +38,7 @@ async function listChildren(drive: drive_v3.Drive, parentId: string, extra = "")
   do {
     const r = await drive.files.list({
       q: `${lit(parentId)} in parents and trashed = false${extra}`, pageSize: 1000, pageToken,
-      fields: "nextPageToken, files(id, name, mimeType, size, parents)", supportsAllDrives: true, includeItemsFromAllDrives: true,
+      fields: "nextPageToken, files(id, name, mimeType, size, parents, createdTime)", supportsAllDrives: true, includeItemsFromAllDrives: true,
     });
     out.push(...(r.data.files ?? []));
     pageToken = r.data.nextPageToken ?? undefined;
@@ -60,7 +60,7 @@ export async function listInvoiceTree(drive: drive_v3.Drive, rootId: string = IN
         tree.folders.push({ id: String(f.id), name: String(f.name), parentId: id, path: p });
         queue.push({ id: String(f.id), path: p });
       } else {
-        tree.files.push({ id: String(f.id), name: String(f.name), mimeType: f.mimeType ?? null, size: f.size == null ? null : Number(f.size), path, parentId: id });
+        tree.files.push({ id: String(f.id), name: String(f.name), mimeType: f.mimeType ?? null, size: f.size == null ? null : Number(f.size), createdTime: f.createdTime ?? null, path, parentId: id });
       }
     }
   }

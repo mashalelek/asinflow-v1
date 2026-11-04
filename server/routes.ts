@@ -28,6 +28,7 @@ import { loadPoForm, savePoForm } from "./po-edit-form";
 import { suggestAsins, asinInfo } from "./asin-suggest";
 import { defaultEmailForSupplier } from "./supplier-defaults";
 import { documentBaseName } from "@shared/po-documents";
+import { listPoDocuments, PO_DOCUMENTS_SQL } from "./po-documents-routes";
 import { canonicalPaymentName } from "@shared/po-form";
 import { applyAsinPackUpdate, parsePack } from "./asin-pack";
 import { CaptureSchema, extractPrefill, enrichPrefill, mergedPagesText, storePrefill, getPrefill, logPrefill } from "./po-prefill";
@@ -4342,7 +4343,8 @@ export async function registerRoutes(
                 ${REFUND_DUE_SQL} AS refund_due,
                 (p.notes IS NOT NULL
                   OR EXISTS (SELECT 1 FROM po_asins a WHERE a.po_id = p.id AND a.notes IS NOT NULL)
-                  OR EXISTS (SELECT 1 FROM po_line_items l WHERE l.po_id = p.id AND l.notes IS NOT NULL)) AS has_notes
+                  OR EXISTS (SELECT 1 FROM po_line_items l WHERE l.po_id = p.id AND l.notes IS NOT NULL)) AS has_notes,
+                ${PO_DOCUMENTS_SQL} AS documents
            FROM purchase_orders p
            ${where}
           ORDER BY ${poListOrderBy(req.query.sort, req.query.dir)}
@@ -4360,6 +4362,8 @@ export async function registerRoutes(
       const detail = await loadActionItemLines((sql, params) => query(sql, params), rows.map((r: any) => String(r.id)));
       for (const r of rows) {
         r.asins = asinsByPo.get(String(r.id)) ?? [];
+        // PO documents (SPEC §22): "Invoice attached" is derived — a po_documents row exists; the sheet's Rcpt flag is history only.
+        r.invoice_attached = r.documents.length > 0;
         // Row-level Status: the PO's Action Items = union over its lines.
         r.action_items = unionActionItems([r.line_action_items]); delete r.line_action_items;
         r.action_item_lines = detail.get(String(r.id)) ?? {};
@@ -4425,9 +4429,11 @@ export async function registerRoutes(
       const cogsTotal = nonNullCosts.reduce((t: number, a: any) => t + (num(a.total_cost) ?? 0), 0);
       // The §2 / col AU name (shared/po-documents.ts — local date components, never a TZ shift).
       const invoiceFileName = documentBaseName(po);
+      const documents = await listPoDocuments((sql, params) => query(sql, params), id);
 
       res.json({
-        po: { ...po, invoice_file_name: invoiceFileName },
+        po: { ...po, invoice_file_name: invoiceFileName, invoice_attached: documents.length > 0 },
+        documents,
         summary: {
           asin_count: asinRows.length,
           units_ordered: unitsOrdered,

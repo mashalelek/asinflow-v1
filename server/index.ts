@@ -16,6 +16,7 @@ import { createSessionMiddleware, createAuthRouter, requireAuth, setAuthLogger }
 import { staleBuildGuard, readServerBuildId } from "./stale-build-guard";
 import { createAdminUsersRouter } from "./admin-users";
 import { createPdfProbeRouter, schedulePdfProbeOnBoot } from "./pdf-probe";
+import { createPoDocumentsRouter } from "./po-documents-routes";
 import { runMigrations, setMigrateLogger, MigrationError } from "./migrate";
 
 const app = express();
@@ -174,6 +175,8 @@ if (!process.env.VITEST) (async () => {
   app.use(createDashboardRouter());
   // PO documents (SPEC §22): the renderer probe — admin-only, and once per deploy after boot.
   app.use(createPdfProbeRouter(query));
+  // PO documents (SPEC §22): the Documents tab, the paperclip download, upload, delete.
+  app.use(createPoDocumentsRouter());
 
   await registerRoutes(httpServer, app);
 

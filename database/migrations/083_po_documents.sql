@@ -18,6 +18,9 @@ CREATE TABLE po_documents (
   drive_file_id text NOT NULL,
   file_name text NOT NULL,
   bytes bigint,
+  -- When the document itself is from (shown as its date): the email's date, the linked
+  -- Drive file's created time, the upload time. created_at = when AF recorded it.
+  document_at timestamptz,
   created_at timestamptz NOT NULL DEFAULT now(),
   created_by_user_id integer REFERENCES users(id) ON DELETE SET NULL,
   source text NOT NULL CHECK (source IN ('email', 'upload', 'linked_existing'))

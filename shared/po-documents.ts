@@ -59,7 +59,7 @@ export function typeFromFileName(name: string): PoDocumentType {
   return "order_confirmation";
 }
 
-export interface DriveFileLite { id: string; name: string; mimeType?: string | null; size?: number | null; path?: string }
+export interface DriveFileLite { id: string; name: string; mimeType?: string | null; size?: number | null; createdTime?: string | null; path?: string }
 export interface PoLite { id: string; order_date: Date | string; supplier: string; order_id: string }
 
 export const isPdf = (f: DriveFileLite): boolean => f.mimeType === "application/pdf" || /\.pdf\s*$/i.test(f.name);

@@ -12,7 +12,7 @@
  */
 import React, { useState, useEffect, useCallback } from "react";
 import { useLocation, Link } from "wouter";
-import { Upload, Paperclip, Plus, Search, Copy, Check, ChevronRight, ChevronDown, ChevronsDownUp, ChevronsUpDown, CheckCircle2, Circle, RefreshCw, AlertTriangle, ArrowUp, ArrowDown, ArrowUpDown } from "lucide-react";
+import { Upload, Plus, Search, Copy, Check, ChevronRight, ChevronDown, ChevronsDownUp, ChevronsUpDown, CheckCircle2, Circle, RefreshCw, AlertTriangle, ArrowUp, ArrowDown, ArrowUpDown } from "lucide-react";
 import {
   AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle,
 } from "@/components/ui/alert-dialog";
@@ -30,6 +30,7 @@ import { fmtQty, PO_ASIN_COLUMNS } from "@/lib/po-qty";
 import { fetchLongSync } from "@/lib/long-sync";
 import { useToast } from "@/hooks/use-toast";
 import { PoProductsTable, PoHistory, PoDangerActions, poApi } from "@/components/po-edit";
+import { DocumentsPaperclip, PoDocumentsTab, type PoDocumentLite, type PoDocument } from "@/components/po-documents";
 import { InlineNoteCell, InlineNoteBox } from "@/components/inline-note";
 import { PoTrackingTab, SyncTrackingButton, UnmatchedTrackingChip } from "@/components/po-tracking";
 import { PoMoneyTab, type PoPayment, type PoPromo, type PoRefund } from "@/components/po-money";
@@ -50,6 +51,8 @@ interface PoRow {
   ships_to?: "velocity" | "home";
   order_total: string | null;
   invoice_attached: boolean;
+  /** PO documents (SPEC §22), oldest first — the paperclip. */
+  documents?: PoDocumentLite[];
   asin_count: number;
   units_ordered: number;
   units_received: number | null; // null = not tracked on any line → "—"
@@ -740,10 +743,9 @@ export default function PurchaseOrders() {
                   </td>
                   <td style={poColStyle(colWidths, "asins")} className="px-3 py-2 text-right">{po.asin_count}</td>
                   <td style={poColStyle(colWidths, "units_ordered")} className="px-3 py-2 text-right">{fmtQty(po.units_ordered)}</td>
-                  <td style={poColStyle(colWidths, "invoice")} className="px-3 py-2">
-                    {po.invoice_attached
-                      ? <Paperclip className="h-3.5 w-3.5 text-muted-foreground" />
-                      : <span className="text-muted-foreground/40">—</span>}
+                  {/* PO documents (SPEC §22): download one, a menu for several, none → the Documents tab. */}
+                  <td style={poColStyle(colWidths, "invoice")} className="px-2 py-1.5" onClick={(e) => e.stopPropagation()}>
+                    <DocumentsPaperclip docs={po.documents ?? []} orderId={po.order_id} onOpenTab={() => navigate(`/purchase-orders/${po.id}?tab=documents`)} />
                   </td>
                   {/* Inline note (2026-11-04): the PO's own note; ASIN-row / line notes are edited on the expanded rows. */}
                   <td style={poColStyle(colWidths, "notes")} className="p-0" onClick={(e) => e.stopPropagation()}>
@@ -817,6 +819,8 @@ interface PoDetail {
   payments?: PoPayment[];
   promos?: PoPromo[];
   refunds?: PoRefund[];
+  /** PO documents (SPEC §22): the Documents tab. */
+  documents?: PoDocument[];
 }
 
 // NULL → muted em-dash; $0.00 muted; all money neutral.
@@ -872,7 +876,9 @@ export function PurchaseOrderDetailPlaceholder() {
   const id = location.split("/").pop() ?? "";
   const [data, setData] = useState<PoDetail | null>(null);
   const [error, setError] = useState<string | null>(null);
-  const [tab, setTab] = useState<"details" | "asins" | "products" | "payments" | "tracking" | "history">("details");
+  // ?tab=documents: the paperclip of a PO with no documents opens straight onto its Documents tab.
+  const [tab, setTab] = useState<"details" | "asins" | "products" | "payments" | "documents" | "tracking" | "history">(() =>
+    new URLSearchParams(window.location.search).get("tab") === "documents" ? "documents" : "details");
   const [copied, setCopied] = useState(false);
   const [version, setVersion] = useState(0); // bumps on every reload so History refetches
 
@@ -942,7 +948,7 @@ export function PurchaseOrderDetailPlaceholder() {
 
       {/* Tabs */}
       <div className="flex gap-1" style={{ borderBottom: "0.5px solid hsl(var(--border))" }}>
-        {([["details", "PO Details"], ["asins", "ASINs"], ["products", "Products"], ["payments", "Payments"], ["tracking", "Tracking"], ["history", "History"]] as const).map(([key, label]) => (
+        {([["details", "PO Details"], ["asins", "ASINs"], ["products", "Products"], ["payments", "Payments"], ["documents", "Documents"], ["tracking", "Tracking"], ["history", "History"]] as const).map(([key, label]) => (
           <button key={key} onClick={() => setTab(key)} data-testid={`tab-${key}`}
             className={`px-3 py-1.5 text-sm -mb-px ${tab === key ? "border-b-2 border-primary font-medium" : "text-muted-foreground"}`}>
             {label}
@@ -974,6 +980,7 @@ export function PurchaseOrderDetailPlaceholder() {
             ["Email used", <Dash v={po.email_used} />],
             ["Source", <Dash v={po.source === "sheet_import" ? "Orders sheet" : po.source === "extension" ? "Capture PO" : po.source === "email_renewal" ? "Subscription renewal (email)" : po.source === "manual" ? "New PO form" : po.source} />],
             ["Subscription", po.subscription ? "Yes" : "No"],
+            // Derived (SPEC §22 "PO documents"): Yes when the PO has a document; the sheet's old Rcpt flag is not read.
             ["Invoice attached", po.invoice_attached ? "Yes" : "No"],
             ["Invoice File Name", (
               <span className="inline-flex items-center gap-1">
@@ -995,6 +1002,8 @@ export function PurchaseOrderDetailPlaceholder() {
       {tab === "asins" && <PoAsinTable asins={asins} editable onChanged={reload} po={{ id: po.id, subtotal: po.subtotal, discount: po.discount, tax: po.tax }} />}
 
       {tab === "products" && <PoProductsTable poId={po.id} asins={asins} onChanged={reload} po={{ id: po.id, subtotal: po.subtotal, discount: po.discount, tax: po.tax }} />}
+
+      {tab === "documents" && <PoDocumentsTab poId={po.id} documents={data.documents ?? []} onChanged={reload} />}
 
       {tab === "payments" && <PoMoneyTab po={po} asins={asins} payments={data.payments ?? []} promos={data.promos ?? []} refunds={data.refunds ?? []} onChanged={reload} />}
 
