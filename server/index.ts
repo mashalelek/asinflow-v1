@@ -15,6 +15,7 @@ import pool, { ensureExtensionTables, query } from "./db";
 import { createSessionMiddleware, createAuthRouter, requireAuth, setAuthLogger } from "./auth";
 import { staleBuildGuard, readServerBuildId } from "./stale-build-guard";
 import { createAdminUsersRouter } from "./admin-users";
+import { createPdfProbeRouter, schedulePdfProbeOnBoot } from "./pdf-probe";
 import { runMigrations, setMigrateLogger, MigrationError } from "./migrate";
 
 const app = express();
@@ -171,6 +172,8 @@ if (!process.env.VITEST) (async () => {
   app.use(createTrackingRouter());
   // Dashboard (SPEC §28): the Spend · Sales · Profit grid and the chart series — read-only.
   app.use(createDashboardRouter());
+  // PO documents (SPEC §22): the renderer probe — admin-only, and once per deploy after boot.
+  app.use(createPdfProbeRouter(query));
 
   await registerRoutes(httpServer, app);
 
@@ -232,6 +235,7 @@ if (!process.env.VITEST) (async () => {
     },
     () => {
       log(`serving on port ${port}`);
+      if (process.env.DATABASE_URL) schedulePdfProbeOnBoot(query, (m) => log(m, "pdf"));
     },
   );
 })();

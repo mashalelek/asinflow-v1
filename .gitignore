@@ -10,3 +10,4 @@ velocity-upload*.csv
 data/
 script/scratch/venv/
 .env*.local
+.cache/
