@@ -2653,12 +2653,44 @@ is set — the runner is always on; only the **schedule** is gated.
   File keep their inline sheet/CSV step; only the onboarding Refresh they
   spawn is a queue job.
 
-### Chrome extension — Capture PO (patch `docs/claude_spec-patch-po-ai-prefill.md` §4, 2026-10-31; `chrome-extension/` v1.2.3 — panel redesign 2026-11-01, pre-parser fixes from the first real PO the same day, table-row products and promo dedupe from a shagtools.com cart 2026-11-02, plain-text / no-text quantities and the "Copy page text" debug action the same day)
+### Chrome extension — Capture PO (patch `docs/claude_spec-patch-po-ai-prefill.md` §4, 2026-10-31; `chrome-extension/` v1.3.0 — the AI preview 2026-11-04; v1.2.3 — panel redesign 2026-11-01, pre-parser fixes from the first real PO the same day, table-row products and promo dedupe from a shagtools.com cart 2026-11-02, plain-text / no-text quantities and the "Copy page text" debug action the same day)
 
 The existing extension (the Amazon side-panel calculator, `content.js` on
 `/dp` pages) gains **Capture PO** in the same side panel: on any tab that is
 not an Amazon product page the panel shows the capture UI instead of the
 "navigate to a product page" state.
+
+- **AI preview (v1.3.0, Maria 2026-11-04 — instead of more per-site
+  rules).** The trigger pages: a gordonelectricsupply.com cart (Qty input
+  in the first column, "ea", "$2.89 / ea", "Sub Total", "Estimated
+  Freight", "Estimated Total" → no Products, no Totals), an acmetools.com
+  checkout (Products 2, one the "PPE & SAFETY" category link; Totals empty;
+  Promos 4, only code DHDNYC real; the card field is a processor iframe, so
+  Payment stays empty by design) and its confirmation (no Products; the row
+  is title / Brand / SKU / promotion lines, "Qty 30" in its own column, the
+  money block "$89.70 ($2.66/item) Promo Code −$10.00 Total $79.70").
+  On each Capture click the background worker posts that page's scrubbed
+  text to **`POST /api/pos/capture-preview`** (`server/capture-preview.ts`):
+  one small Haiku extraction (`server/config/ai.ts`, the prefill's schema
+  and prompt — products with qty / price / line total / SKU, subtotal /
+  discount / tax / shipping-or-freight + handling / total, payment, promos,
+  order # / date, ship-to, checkout email) turned into the six buckets. The
+  panel shows the rule-based buckets at once and replaces that page's when
+  the model answers (`overlayPreview` in `buckets.js`: the AI's products,
+  payment, totals and promos; the rules keep the SELECTED ship-to; order
+  fields merge); its status line says "AI reading…", "AI read" or why not
+  ("AI preview is off" without `ANTHROPIC_API_KEY`). **Cached per page** — a
+  SHA-256 of host + text + fields, in the tab's record (`previews`) and on
+  the server (24 h, 500 pages): recapturing the same page never calls
+  again. Every call is logged in `po_prefill_log` as **`capture_preview`**
+  with its cost (migration 088); a cache hit is not. **"Open in AF" stays
+  the one full prefill call.** The **checkout email** — the AI's reading or
+  a filled email field (`order.email`, shown in the Order bucket) — rides
+  along as `checkoutEmail` and fills Email used, overriding the supplier
+  default (the full call's own reading still wins). Fixtures:
+  `server/__fixtures__/capture-pages/ai-preview/` (synthetic, transcribed
+  from the description; the model's reading mocked in
+  `server/capture-preview.test.ts`).
 
 - **Auth.** Every request the extension makes to AsinFlow sends the session
   cookie (`credentials: "include"`; the server URL from the options page must

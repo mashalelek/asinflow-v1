@@ -32,6 +32,7 @@ import { listPoDocuments, PO_DOCUMENTS_SQL } from "./po-documents-routes";
 import { canonicalPaymentName } from "@shared/po-form";
 import { applyAsinPackUpdate, parsePack } from "./asin-pack";
 import { CaptureSchema, extractPrefill, enrichPrefill, mergedPagesText, storePrefill, getPrefill, logPrefill } from "./po-prefill";
+import { PreviewRequestSchema, capturePreview } from "./capture-preview";
 import { aiAvailable, AI_OFF_MESSAGE } from "./config/ai";
 import { listSubscriptions, createSubscription, updateSubscription } from "./subscriptions";
 import { loadPoGuards, deletePo, cancelPo, assertAsinRowCancelable, reassignShipment } from "./po-guards";
@@ -4612,6 +4613,18 @@ export async function registerRoutes(
       const id = storePrefill(payload, logId);
       log(`prefill ${capture.retailerHost}: ${capture.pages.length} page(s), ${usage.input_tokens} in / ${usage.output_tokens} out, ${usage.cost_estimate}, schema ${usage.schema_ok ? "ok" : "FAILED"} → ${id}`, "po");
       res.json({ id, url: `/pos/new?prefill=${id}`, schema_ok: usage.schema_ok, warnings: payload.prefill.warnings ?? [], lines: payload.form.products?.length ?? 0, supplier: payload.prefill.supplier ?? null });
+    } catch (err: any) { res.status(500).json({ message: err?.message ?? String(err) }); }
+  });
+  // The extension's AI preview (SPEC §11 v1.3, 2026-11-04): one page → one small extraction → the panel's buckets; cached per page; logged as capture_preview.
+  app.post("/api/pos/capture-preview", async (req: Request, res: Response) => {
+    if (!isDbAvailable()) { res.status(503).json({ message: "Database not available" }); return; }
+    if (!aiAvailable()) { res.status(503).json({ message: AI_OFF_MESSAGE }); return; }
+    const parsed = PreviewRequestSchema.safeParse(req.body);
+    if (!parsed.success) { res.status(400).json({ message: `preview: ${parsed.error.issues.slice(0, 3).map((i) => `${i.path.join(".")}: ${i.message}`).join("; ")}` }); return; }
+    try {
+      const r = await capturePreview(poQuery, parsed.data, uid(req));
+      if (!r.cached) log(`capture preview ${parsed.data.retailerHost}: ${r.schema_ok ? `${r.buckets?.products.length ?? 0} product(s)` : `FAILED (${r.error})`}, ${r.cost_estimate}`, "po");
+      res.json(r);
     } catch (err: any) { res.status(500).json({ message: err?.message ?? String(err) }); }
   });
   app.get("/api/pos/prefill/:id", async (req: Request, res: Response) => {

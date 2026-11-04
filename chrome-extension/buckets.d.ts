@@ -1,14 +1,14 @@
 // Types for buckets.js (plain script shared by the extension and the vitest fixtures).
-export interface CapturePage { step?: string; url: string; title?: string; text: string; fields?: { label: string; value: string }[]; capturedAt?: string; chars?: number }
+export interface CapturePage { step?: string; url: string; title?: string; text: string; fields?: { label: string; value: string }[]; capturedAt?: string; chars?: number; previewKey?: string }
 export interface BucketProduct { name: string; qty: number | null; price: string | null; total: string | null; sku: string | null }
 export interface BucketShipping { street: string | null; candidates: string[]; selected: boolean }
 export interface BucketCard { nickname: string; last4: string | null; amount: string | null }
 export interface BucketGiftCard { last4: string | null; amount: string | null }
 export interface BucketTotals { subtotal?: string; discount?: string; tax?: string; shipping?: string; total?: string }
-export interface BucketOrder { number?: string; date?: string; subscription?: { on: boolean; every: string | null } }
+export interface BucketOrder { number?: string; date?: string; subscription?: { on: boolean; every: string | null }; email?: string }
 export interface Buckets { products: BucketProduct[]; shipping: BucketShipping | null; payment: { cards: BucketCard[]; giftCards: BucketGiftCard[] }; totals: BucketTotals; promos: string[]; order: BucketOrder }
 export type BucketKey = "products" | "shipping" | "payment" | "totals" | "promos" | "order";
-export interface CaptureRecord { host: string; pages: Record<string, CapturePage>; others: CapturePage[]; count: number; updatedAt: string | null; buckets: Buckets }
+export interface CaptureRecord { host: string; pages: Record<string, CapturePage>; others: CapturePage[]; count: number; updatedAt: string | null; buckets: Buckets; previews?: Record<string, any>; previewPending?: string[]; previewError?: string | null }
 export interface ShipConfig { velocityStreet: string; homeStreets: string[]; prepCost?: number; suppliers?: string[] }
 export const BUCKETS: BucketKey[];
 export const LABELS: Record<BucketKey, string>;
@@ -36,3 +36,9 @@ export function shipToForPrefill(cap: CaptureRecord | null): { street: string | 
 export function othersCapturing(store: Record<string, any>, tabId: number): { tabId: number; host: string; count: number }[];
 export function shipToKind(street: string | null, config: ShipConfig | null): "Velocity" | "Home" | null;
 export function describeShipping(shipping: BucketShipping | null, config: ShipConfig | null): string[];
+/** v1.3: the AI preview of a page laid over its rule-based buckets. */
+export function overlayPreview(rule: any, ai: any): any;
+export function applyPreview(cur: any, key: string, buckets: any, error: string | null): any;
+export function previewStatus(cap: any): string | null;
+export function needsPreview(cap: any, key: string | null | undefined): boolean;
+export function checkoutEmailForPrefill(cap: any): string | null;

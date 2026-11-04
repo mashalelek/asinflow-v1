@@ -1,0 +1,19 @@
+Thank you for your order!
+Order #42838131
+A confirmation email has been sent to orders@example.com
+Item	Qty	Total
+Lenox Gold Titanium Utility Knife Blades 5-Pack
+Brand: Lenox
+SKU: 20350GOLD5C
+Promotion: Code DHDNYC applied
+Free shipping on orders over $199 (not applied)
+	Qty 30	$89.70
+($2.66/item)
+Promo Code	-$10.00
+Total	$79.70
+Subtotal	$89.70
+Discount	-$10.00
+Shipping	$6.49
+Handling	$0.00
+Sales Tax	$0.00
+Order Total	$86.19

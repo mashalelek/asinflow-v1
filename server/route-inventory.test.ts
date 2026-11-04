@@ -49,6 +49,7 @@ const EXPECTED_ROUTES = [
   "GET /api/pos/purchasers",
   "GET /api/pos/email-default",
   "POST /api/pos/prefill",
+  "POST /api/pos/capture-preview",
   "GET /api/pos/prefill/:id",
   "GET /api/pos/capture-config",
   "POST /api/pos/:id/payments", "PATCH /api/pos/payments/:id", "DELETE /api/pos/payments/:id",

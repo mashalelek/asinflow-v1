@@ -1,0 +1,12 @@
+Shopping Cart
+Qty	Item	Price	Total
+4	Leviton 5325-W Duplex Receptacle 15A 125V White
+Item # LEV5325W
+ea	$2.89 / ea	$11.56
+2	Hubbell HBL2621 Twist-Lock Receptacle 30A 250V
+Item # HBLHBL2621
+ea	$28.40 / ea	$56.80
+Sub Total	$68.36
+Estimated Freight	$9.95
+Estimated Total	$78.31
+Checkout

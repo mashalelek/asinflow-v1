@@ -15,6 +15,13 @@
 // /api/pos/prefill (one AI call, server side) and opens /pos/new?prefill=<id>
 // in a new tab; the capture is cleared on success, on Clear, or when the
 // tab closes.
+//
+// v1.3 (Maria 2026-11-04): after each capture the page's scrubbed text goes
+// to /api/pos/capture-preview — one small AI extraction that fills the
+// buckets (the rule-based ones show at once; these replace them when they
+// answer). Cached per page key (a SHA-256 of host + text + fields): a page
+// recaptured unchanged never calls again. "Open in AF" stays the one full
+// prefill call and also sends the checkout email the buckets found.
 
 importScripts("buckets.js");
 
@@ -304,10 +311,14 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
         const page = results?.[0]?.result;
         if (!page || page.error) { sendResponse({ success: false, message: page?.error || "Nothing could be read from this page" }); return; }
         const key = AfBuckets.captureKey(tab.id);
+        const host = new URL(tab.url).hostname;
+        page.previewKey = await pageKey(host, page);
         const prev = (await chrome.storage.session.get([key]))[key] || null;
-        const cur = AfBuckets.applyPage(prev, page, new URL(tab.url).hostname, new Date().toISOString());
+        const cur = AfBuckets.applyPage(prev, page, host, new Date().toISOString());
         await chrome.storage.session.set({ [key]: cur });
         sendResponse({ success: true, capture: cur, step: page.step, chars: page.chars });
+        // The AI preview, after answering: the panel shows the rules now and the AI's buckets when they land.
+        if (AfBuckets.needsPreview(prev, page.previewKey)) requestPreview(key, host, page);
       } catch (err) { sendResponse({ success: false, message: err.message }); }
     })();
     return true;
@@ -358,10 +369,11 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
         }
         const pages = AfBuckets.pagesForPrefill(cur);
         const shipTo = AfBuckets.shipToForPrefill(cur); // the SELECTED address (or the ambiguous candidates) — the server leaves Ships to blank when ambiguous
+        const checkoutEmail = AfBuckets.checkoutEmailForPrefill(cur); // v1.3: the email the checkout showed beats the supplier default
         const serverUrl = await getServerUrl();
         const r = await fetch(`${serverUrl}/api/pos/prefill`, {
           ...AF_FETCH, method: "POST", headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ retailerHost: cur.host, capturedAt: cur.updatedAt, pages, ...(shipTo ? { shipTo } : {}) }),
+          body: JSON.stringify({ retailerHost: cur.host, capturedAt: cur.updatedAt, pages, ...(shipTo ? { shipTo } : {}), ...(checkoutEmail ? { checkoutEmail } : {}) }),
           signal: AbortSignal.timeout(90000),
         });
         const data = await r.json().catch(() => ({}));
@@ -375,6 +387,36 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     return true;
   }
 });
+
+// ── Capture PO v1.3: the AI preview ────────────────────────────────────────
+/** SHA-256 (hex, 32 chars) of host + text + fields — the per-page cache key. */
+async function pageKey(host, page) {
+  const fields = (page.fields || []).map((f) => `${f.label}\u0001${f.value}`).join("\n");
+  const data = new TextEncoder().encode(`${String(host).toLowerCase().replace(/^www\./, "")}\n\u0000${page.text || ""}\n\u0000${fields}`);
+  const digest = await crypto.subtle.digest("SHA-256", data);
+  return Array.from(new Uint8Array(digest)).map((b) => b.toString(16).padStart(2, "0")).join("").slice(0, 32);
+}
+/** POST one page to /api/pos/capture-preview and lay the answer over the tab's buckets (re-reading the record — another capture may have landed meanwhile). */
+async function requestPreview(storeKey, host, page) {
+  let buckets = null, error = null;
+  try {
+    const serverUrl = await getServerUrl();
+    const r = await fetch(`${serverUrl}/api/pos/capture-preview`, {
+      ...AF_FETCH, method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ retailerHost: host, page: { step: page.step, url: page.url, title: page.title, text: page.text, fields: page.fields || [] } }),
+      signal: AbortSignal.timeout(60000),
+    });
+    const data = await r.json().catch(() => ({}));
+    if (r.status === 401) error = "AI preview: sign in to AsinFlow";
+    else if (r.status === 503) error = "AI preview is off";
+    else if (!r.ok) error = `AI preview failed (${r.status})`;
+    else if (!data.buckets) error = "AI preview could not read this page";
+    else buckets = data.buckets;
+  } catch (err) { error = /abort|timeout/i.test(err.message) ? "AI preview timed out" : "AI preview: AsinFlow is unreachable"; }
+  const cur = (await chrome.storage.session.get([storeKey]))[storeKey];
+  if (!cur) return; // cleared or opened meanwhile
+  await chrome.storage.session.set({ [storeKey]: AfBuckets.applyPreview(cur, page.previewKey, buckets, error) });
+}
 
 chrome.tabs.onRemoved.addListener((tabId) => { chrome.storage.session.remove([AfBuckets.captureKey(tabId)]).catch(() => {}); });
 

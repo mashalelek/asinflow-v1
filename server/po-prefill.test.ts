@@ -179,6 +179,26 @@ describe("enrichment (no AI)", () => {
   });
 });
 
+describe("the checkout email (extension v1.3, 2026-11-04)", () => {
+  const q = async (sql: string) => {
+    if (/FROM settings WHERE key = ANY/.test(sql)) return { rows: [{ key: "prep_cost", value: 1 }, { key: "po_email_unknown_supplier", value: "default@example.com" }], rowCount: 2 };
+    if (/email_used/.test(sql)) return { rows: [{ email_used: "default@example.com", supplier_defaults: { email_used: "default@example.com" } }], rowCount: 1 };
+    return { rows: [], rowCount: 0 };
+  };
+  const x = { ...extraction, lines: [], payments: [], promos: [], purchasedEmail: null, notes: [] };
+  it("the email the panel found on the checkout beats the supplier default (amber, from the page)", async () => {
+    const out = await enrichPrefill(q, { ...capture, checkoutEmail: "Buyer@Example.com" }, x, null, { id: "", capturedAt: null });
+    expect(out.form.email_used).toBe("buyer@example.com");
+    expect(out.prefill.sources.email_used).toBe("model");
+  });
+  it("the model's reading wins over the panel's; neither → the supplier default (stone)", async () => {
+    expect((await enrichPrefill(q, { ...capture, checkoutEmail: "panel@example.com" }, { ...x, purchasedEmail: "model@example.com" }, null, { id: "", capturedAt: null })).form.email_used).toBe("model@example.com");
+    const none = await enrichPrefill(q, capture, x, null, { id: "", capturedAt: null });
+    expect(none.form.email_used).not.toBe("buyer@example.com");
+    expect(none.prefill.sources.email_used === undefined || none.prefill.sources.email_used === "af").toBe(true);
+  });
+});
+
 describe("line totals (2026-11-04, acmetools 42838131)", () => {
   it("a total that is not whole cents per unit: the price to the cent for display, the total kept for the costs", () => {
     expect(lineTotalPrice(79.7, 30, 2.66)).toEqual({ price: "2.66", line_total: "79.70" });

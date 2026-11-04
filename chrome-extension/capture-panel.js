@@ -8,7 +8,9 @@
 // side, and opens the prefilled form; with none it opens /pos/new blank with
 // the supplier prefilled from the tab's hostname (no model call). Captures
 // are per tab: the panel shows the active tab's and lists the other tabs with
-// a capture in progress.
+// a capture in progress. v1.3: each capture is also read by a small AI
+// extraction (background.js requestPreview); the buckets switch to its
+// reading when it lands, and the status line says where it stands.
 (function () {
   "use strict";
   const B = globalThis.AfBuckets;
@@ -74,6 +76,7 @@
     const ol = [];
     if (b.order.number) ol.push(["#", b.order.number]);
     if (b.order.date) ol.push(["Date", b.order.date]);
+    if (b.order.email) ol.push(["Email", b.order.email]);
     if (b.order.subscription) ol.push(["Subscription", b.order.subscription.on ? (b.order.subscription.every || "on") : "off"]);
     if (ol.length) ord.append(pairs(ol));
     bucketsEl.append(bucket("order", f.order, null, ord));
@@ -91,7 +94,9 @@
     const kind = b.shipping && b.shipping.street ? B.shipToKind(b.shipping.street, config) : null;
     badgeEl.style.display = kind ? "" : "none"; badgeEl.textContent = kind || "";
     const n = cap ? cap.count : 0;
-    statusEl.textContent = `${plural(n, "page")} captured`;
+    // v1.3: the AI preview's state beside the page count ("AI reading…", "AI read", "AI preview is off").
+    const ai = B.previewStatus(cap);
+    statusEl.textContent = `${plural(n, "page")} captured${ai ? ` · ${ai}` : ""}`;
     const miss = B.missing(b);
     missingEl.textContent = !n ? "Capture the cart, then the review page — any page, any number of times" : miss.length ? `Still missing: ${miss.join(", ")}` : "Everything found";
     openBtn.disabled = false; // never gated (v1.2.4)

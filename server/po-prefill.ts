@@ -36,6 +36,8 @@ export const CaptureSchema = z.object({
   pages: z.array(CapturePageSchema).min(1).max(12),
   // Extension v1.2 (SPEC §11): the SELECTED ship-to the captures showed — the checked address radio's street, or, when the pages are ambiguous (two selected options, two ship-to blocks), the candidates with street null.
   shipTo: z.object({ street: z.string().max(200).nullable(), candidates: z.array(z.string().max(200)).max(6) }).optional(),
+  // v1.3 (2026-11-04): the checkout email the panel found (the AI preview or a filled email field) — beats the supplier default.
+  checkoutEmail: z.string().max(254).optional(),
 });
 export type Capture = z.infer<typeof CaptureSchema>;
 
@@ -207,7 +209,9 @@ export async function enrichPrefill(query: QueryLike, capture: Capture, x: Prefi
   form.tax = m2(x.tax); mark("tax", form.tax);
   form.sh_donations = m2(x.shipping); mark("sh_donations", form.sh_donations);
   form.order_total = m2(x.total); mark("order_total", form.order_total);
-  form.email_used = x.purchasedEmail ?? ""; mark("email_used", form.email_used);
+  // The checkout email on the pages (the model's, else the panel's) beats the supplier default (2026-11-04).
+  const pageEmail = [x.purchasedEmail, capture.checkoutEmail].map((e) => String(e ?? "").trim().toLowerCase()).find((e) => /^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(e)) ?? "";
+  form.email_used = pageEmail; mark("email_used", form.email_used);
   // No email on the pages → the supplier's default (stone): server/supplier-defaults.ts.
   if (!form.email_used) { const d = await defaultEmailForSupplier(query, sup.supplier); if (d.email) { form.email_used = d.email; sources.email_used = "af"; } }
   form.subscription = { present: x.subscription.present, frequency_weeks: x.subscription.frequencyWeeks == null ? "" : String(x.subscription.frequencyWeeks) };
@@ -296,7 +300,7 @@ export function getPrefill(id: string, now = Date.now()): { payload: PrefillPayl
 export function _clearPrefillCache(): void { cache.clear(); }
 
 /** po_prefill_log row (no page text). Returns the row id. */
-export async function logPrefill(query: QueryLike, row: { user_id: number | null; kind: "capture" | "backfill" | "promo_classify" | "doc_classify" | "tracking_fallback"; retailer: string | null; input_chars: number; input_tokens: number; output_tokens: number; cost_estimate: number; duration_ms: number; schema_ok: boolean; error: string | null }): Promise<number | null> {
+export async function logPrefill(query: QueryLike, row: { user_id: number | null; kind: "capture" | "backfill" | "promo_classify" | "doc_classify" | "tracking_fallback" | "capture_preview"; retailer: string | null; input_chars: number; input_tokens: number; output_tokens: number; cost_estimate: number; duration_ms: number; schema_ok: boolean; error: string | null }): Promise<number | null> {
   const r = await query(
     `INSERT INTO po_prefill_log (user_id, kind, retailer, model, input_chars, input_tokens, output_tokens, cost_estimate, duration_ms, schema_ok, error) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11) RETURNING id`,
     [row.user_id, row.kind, row.retailer, AI.model, row.input_chars, row.input_tokens, row.output_tokens, row.cost_estimate, row.duration_ms, row.schema_ok, row.error],

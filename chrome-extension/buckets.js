@@ -6,7 +6,15 @@
 // newest value wins PER FIELD; a page that lacks a value never clears it;
 // a product / card / promo once seen is never dropped. Anything the regexes
 // cannot read with confidence is simply not shown (the AI reads the whole
-// text). Plain script (no bundler): defines globalThis.AfBuckets for the
+// text). v1.3 (Maria 2026-11-04): each captured page is ALSO read by one
+// small AI extraction server side (/api/pos/capture-preview, the prefill's
+// schema) — instead of more per-site rules. Its buckets replace that page's
+// rule-based ones when they answer (overlayPreview: the AI's products,
+// payment, totals and promos; the rules keep the SELECTED ship-to; the order
+// fields merge), cached in the record by page key (previews) so recapturing
+// the same page never calls again. The checkout email (order.email) comes
+// from the AI or a filled email field and goes to the prefill.
+// Plain script (no bundler): defines globalThis.AfBuckets for the
 // service worker (importScripts) and the side panel, and exports the same
 // object for the vitest fixtures (server/extension-buckets.test.ts).
 // v1.2.2 (a shagtools.com cart): a TABLE-STYLE cart row — one line whose
@@ -459,10 +467,14 @@
   }
 
   // ── Order ──
+  var EMAIL_RE = /^[^@\s]+@[^@\s]+\.[^@\s]+$/;
   function extractOrder(page) {
     var all = String(page.text || ""), o = {};
     var n = ORDER_NO.exec(all); if (n) o.number = n[1];
     var d = ORDER_DATE.exec(all); if (d) o.date = d[1];
+    // v1.3: the checkout email — a filled email field (the form's "Email used" beats the supplier default with it).
+    var em = fieldsOf(page).filter(function (f) { return /e-?mail/i.test(String(f.label || "")) && EMAIL_RE.test(String(f.value || "").trim()); })[0];
+    if (em) o.email = String(em.value).trim().toLowerCase();
     var sel = selectedFields(page).map(function (f) { return String(f.label || "") + " " + String(f.value || ""); });
     var on = sel.filter(function (s) { return SUBSCRIBE.test(s); })[0];
     var off = sel.filter(function (s) { return ONE_TIME.test(s); })[0];
@@ -539,11 +551,56 @@
 
   // ── The per-tab capture record (chrome.storage.session, key capture:<tabId>) ──
   function captureKey(tabId) { return "capture:" + tabId; }
-  function newCapture(host) { return { host: host, pages: {}, others: [], count: 0, updatedAt: null, buckets: emptyBuckets() }; }
+  function newCapture(host) { return { host: host, pages: {}, others: [], count: 0, updatedAt: null, buckets: emptyBuckets(), previews: {}, previewPending: [], previewError: null }; }
+  /** v1.3: does this page still need its AI preview? (false when the record already holds one for its key) */
+  function needsPreview(cap, key) { return !!key && !(cap && cap.previews && cap.previews[key]); }
   /** The pages the prefill endpoint receives: one per checkout step (the latest capture of a step) plus up to six "other" pages — as before 1.2. */
   function pagesOf(cap) { return [].concat(Object.keys((cap && cap.pages) || {}).map(function (k) { return cap.pages[k]; }), (cap && cap.others) || []); }
+  /**
+   * v1.3: one page's buckets with its AI preview laid over the rules. The AI's products (when it read any), payment
+   * (when it read any), totals (when it read a subtotal or total) and promos (whenever it answered — it tells a real
+   * code from a category link) win; the rules keep the SELECTED ship-to (the checked radio), the AI's street fills
+   * in when they found none; the order fields merge, the AI's newest. Pure.
+   */
+  function overlayPreview(rule, ai) {
+    if (!ai) return rule;
+    var r = rule || emptyBuckets();
+    var aiPay = ai.payment || { cards: [], giftCards: [] };
+    var shipFilled = !!(r.shipping && (r.shipping.street || (r.shipping.candidates || []).length));
+    return {
+      products: (ai.products || []).length ? ai.products : r.products,
+      shipping: shipFilled ? r.shipping : (ai.shipping || r.shipping || null),
+      payment: ((aiPay.cards || []).length || (aiPay.giftCards || []).length) ? aiPay : r.payment,
+      totals: ai.totals && (ai.totals.subtotal || ai.totals.total) ? ai.totals : r.totals,
+      promos: Array.isArray(ai.promos) ? ai.promos : r.promos,
+      order: assignNewer(Object.assign({}, r.order || {}), ai.order || {}),
+    };
+  }
+  function pageBuckets(cap, p) {
+    var ai = p.previewKey && cap && cap.previews ? cap.previews[p.previewKey] : null;
+    return overlayPreview(extractBuckets(p), ai || null);
+  }
   function rebuild(cap) {
-    return pagesOf(cap).slice().sort(function (p, q) { return String(p.capturedAt || "").localeCompare(String(q.capturedAt || "")); }).reduce(function (b, p) { return mergeBuckets(b, extractBuckets(p)); }, emptyBuckets());
+    return pagesOf(cap).slice().sort(function (p, q) { return String(p.capturedAt || "").localeCompare(String(q.capturedAt || "")); }).reduce(function (b, p) { return mergeBuckets(b, pageBuckets(cap, p)); }, emptyBuckets());
+  }
+  /** v1.3: the AI preview of one page arrived (or failed: buckets null) — store it under the page key, rebuild. Pure. */
+  function applyPreview(cur, key, buckets, error) {
+    if (!cur) return cur;
+    var c = JSON.parse(JSON.stringify(cur));
+    c.previews = c.previews || {};
+    if (buckets) c.previews[key] = buckets;
+    c.previewPending = (c.previewPending || []).filter(function (k) { return k !== key; });
+    c.previewError = buckets ? null : (error || "the AI preview failed");
+    c.buckets = rebuild(c);
+    return c;
+  }
+  /** v1.3: the panel's AI line — "reading…" while a page waits, "off" / the error when it failed, "read" when every page has one. */
+  function previewStatus(cap) {
+    if (!cap || !cap.count) return null;
+    if ((cap.previewPending || []).length) return "AI reading…";
+    if (cap.previewError) return cap.previewError;
+    var all = pagesOf(cap), read = all.filter(function (p) { return p.previewKey && cap.previews && cap.previews[p.previewKey]; }).length;
+    return read ? (read === all.length ? "AI read" : "AI read " + read + " of " + all.length) : null;
   }
   /** Add one captured page to a tab's capture. Pure: returns the new record. v1.2.7: the buckets are rebuilt from the pages (oldest first, newest wins) on every capture, so re-capturing a step replaces that step's values — nothing from a page since replaced survives. */
   function applyPage(cur, page, host, now) {
@@ -553,6 +610,11 @@
     else { c.pages = c.pages || {}; c.pages[page.step] = entry; }
     c.host = host; c.updatedAt = now;
     c.count = Object.keys(c.pages || {}).length + (c.others || []).length;
+    // v1.3: previews of pages no longer in the record go; a page whose preview is already here needs no call.
+    var keys = pagesOf(c).map(function (p) { return p.previewKey; }).filter(Boolean);
+    c.previews = Object.keys(c.previews || {}).reduce(function (o, k) { if (keys.indexOf(k) >= 0) o[k] = c.previews[k]; return o; }, {});
+    if (page.previewKey && !c.previews[page.previewKey] && (c.previewPending || []).indexOf(page.previewKey) < 0) c.previewPending = (c.previewPending || []).concat([page.previewKey]);
+    c.previewPending = (c.previewPending || []).filter(function (k) { return keys.indexOf(k) >= 0; });
     c.buckets = rebuild(c);
     return c;
   }
@@ -569,6 +631,8 @@
     return out.join("\n");
   }
   function pagesForPrefill(cap) { return pagesOf(cap).map(function (p) { return { step: p.step, url: p.url, title: p.title, text: p.text, fields: p.fields || [] }; }); }
+  /** v1.3: the checkout email the buckets found, for the prefill (beats the supplier default); null when none. */
+  function checkoutEmailForPrefill(cap) { var e = cap && cap.buckets && cap.buckets.order && cap.buckets.order.email; return e && EMAIL_RE.test(e) ? e : null; }
   /** The selected ship-to for the prefill payload: null when no page showed an address. */
   function shipToForPrefill(cap) {
     var s = cap && cap.buckets && cap.buckets.shipping;
@@ -604,7 +668,7 @@
     BUCKETS: BUCKETS, LABELS: LABELS, emptyBuckets: emptyBuckets, extractBuckets: extractBuckets, mergeBuckets: mergeBuckets,
     extractProducts: extractProducts, extractShipping: extractShipping, extractPayment: extractPayment, extractTotals: extractTotals, extractPromos: extractPromos, dedupePromos: dedupePromos, extractOrder: extractOrder,
     filled: filled, missing: missing, streetIn: streetIn, normStreet: normStreet, addressFromFields: addressFromFields,
-    captureKey: captureKey, newCapture: newCapture, applyPage: applyPage, pagesForPrefill: pagesForPrefill, shipToForPrefill: shipToForPrefill, othersCapturing: othersCapturing, debugText: debugText,
+    captureKey: captureKey, newCapture: newCapture, applyPage: applyPage, overlayPreview: overlayPreview, applyPreview: applyPreview, previewStatus: previewStatus, needsPreview: needsPreview, checkoutEmailForPrefill: checkoutEmailForPrefill, pagesForPrefill: pagesForPrefill, shipToForPrefill: shipToForPrefill, othersCapturing: othersCapturing, debugText: debugText,
     shipToKind: shipToKind, describeShipping: describeShipping,
   };
   root.AfBuckets = api;

@@ -125,7 +125,7 @@ and any introduced error must be fixed forward before committing.
 
 ## Tests
 
-`npm test` (vitest). **2,017 tests across 186 files** as of 2026-11-04 — this
+`npm test` (vitest). **2,045 tests across 188 files** as of 2026-11-04 — this
 codebase IS tested; the old "there are no tests" line was years stale.
 
 **A gate report must cover BOTH typecheck commands, labelled separately:**
@@ -133,7 +133,7 @@ codebase IS tested; the old "there are no tests" line was years stale.
 ```
 npm run check        -> 4 baseline TS1252, 0 introduced
 npm run check:tests  -> 4 baseline TS1252, 0 introduced
-npm test             -> 2017/2017
+npm test             -> 2045/2045
 ```
 
 `npm run check` alone is NOT a complete gate. The base `tsconfig.json`
@@ -185,7 +185,7 @@ the promo backfill (`npm run backfill:po-promos`), every call logged in
 (`chrome-extension/scrub.js`) runs inside the page; its fixtures are
 hand-written with public test card numbers only — never real ones.
 
-**Chrome extension dev (SPEC §11 "Chrome extension — Capture PO", v1.2.7):** load
+**Chrome extension dev (SPEC §11 "Chrome extension — Capture PO", v1.3.0):** load
 `chrome-extension/` unpacked at chrome://extensions; set the server URL on
 its options page (localhost:3000 by default; production
 `https://asinflow-cqg.onrender.com` and the custom domain
@@ -194,7 +194,9 @@ options page requests any other host once); sign in to
 AsinFlow in a normal tab first — the extension sends the session cookie
 (`credentials: "include"`). On a retailer checkout tab the side panel shows
 Capture PO: Capture this page (grants the site's host permission on first
-use) → Open in AF → `/pos/new?prefill=<id>`. No build step: plain scripts
+use; each capture is also read by a small AI preview, `POST
+/api/pos/capture-preview`, cached per page, logged as `capture_preview`) →
+Open in AF → `/pos/new?prefill=<id>`. No build step: plain scripts
 (`scrub.js`, `capture.js`, `buckets.js` — the six data buckets, tested in `server/extension-buckets.test.ts` — `capture-panel.js`, `background.js`).
 A page the parser missed: tick "Show Copy page text" on the options page,
 capture it, click **Copy page text** in the panel and paste the text (as a
