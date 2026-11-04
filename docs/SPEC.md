@@ -6657,7 +6657,9 @@ replaces it. Migration 061 adds `po_edit_log`, `deleted_pos` and
   200015336732726).** **Widths:** fields no longer stretch to the page —
   fixed, content-sized widths (Supplier 220, Order # 180, Order date 140,
   Purchased by 140, Ships to 140, Email used 260, money fields 120,
-  Cashback site 180, Cashback % 80, Cashback status 120, Subscription 160;
+  Cashback site 180, Cashback % 120 (a numeric field like the money
+  ones, so the three cashback fields line up — Maria 2026-11-04),
+  Cashback status 120, Subscription 160;
   PO notes fills the rest of its row; the product name flexes up to
   ~640 px); rows wrap (`flex-wrap`), so fields keep their widths and flow
   to the next line on a narrower window — no horizontal scroll at any
@@ -6674,8 +6676,10 @@ replaces it. Migration 061 adds `po_edit_log`, `deleted_pos` and
   default preselected, "Other…" for free text. **Cashback site** is a
   dropdown — None · BeFrugal · TopCashback · RetailMeNot · Rakuten ·
   Coupert — read from `settings.po_cashback_sites` (seeded in that order
-  by migration 078). **ASIN row:** a label row under the product header,
-  aligned to its columns — ASIN · Title · ASIN qty · Sold as · Units/pack ·
+  by migration 078). **ASIN row:** a label row aligned to its columns —
+  since 2026-11-04 (Maria) one per product group, directly under that
+  group's product row(s) and before its first ↳ ASIN row, no longer in
+  the table header — ASIN · Title · ASIN qty · Sold as · Units/pack ·
   Prep · Sourcing · COGS · Paid · Adjustment · Reason · Notes; the "ASIN
   rows this PO will create" table is gone and its Sourcing cost, COGS
   (labelled "COGS"), Paid cost, Adjustment and Reason sit on the ASIN row

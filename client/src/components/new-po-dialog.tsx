@@ -344,12 +344,14 @@ export function NewPoForm({ open, onOpenChange, onCreated, prefill, initialSuppl
   };
 
   /** One header field at a fixed, content-sized width (Maria 2026-11-01: fields no longer stretch to the page; rows wrap). */
-  const field = (k: keyof PoFormState, label: string, opts: { px: number; type?: string; ph?: string; money?: boolean } ) => (
+  const field = (k: keyof PoFormState, label: string, opts: { px: number; type?: string; ph?: string; money?: boolean; pct?: boolean } ) => (
     <div className="shrink-0 space-y-0.5" style={{ width: opts.px }}>
       <Label className="text-[11px] text-muted-foreground" htmlFor={`new-po-${String(k)}`}>{label}</Label>
       {opts.money
         ? <MoneyCalcInput id={`new-po-${String(k)}`} value={(form[k] as string) ?? ""} onChange={(v) => set(k, v)} placeholder={opts.ph} className={`h-8 text-sm ${mark(String(k))}`} data-testid={`input-new-po-${String(k)}`} />
-        : <Input id={`new-po-${String(k)}`} type={opts.type ?? "text"} value={(form[k] as string) ?? ""} onChange={(e) => set(k, e.target.value)} placeholder={opts.ph} className={`h-8 text-sm ${mark(String(k))}`} data-testid={`input-new-po-${String(k)}`} />}
+        : opts.pct
+          ? <Input id={`new-po-${String(k)}`} type="number" inputMode="decimal" min={0} max={100} step="0.01" value={(form[k] as string) ?? ""} onChange={(e) => set(k, e.target.value)} placeholder={opts.ph} className={`h-8 text-right text-sm [appearance:textfield] [&::-webkit-inner-spin-button]:appearance-none [&::-webkit-outer-spin-button]:appearance-none ${mark(String(k))}`} data-testid={`input-new-po-${String(k)}`} />
+          : <Input id={`new-po-${String(k)}`} type={opts.type ?? "text"} value={(form[k] as string) ?? ""} onChange={(e) => set(k, e.target.value)} placeholder={opts.ph} className={`h-8 text-sm ${mark(String(k))}`} data-testid={`input-new-po-${String(k)}`} />}
     </div>
   );
   const sel = "h-8 rounded border border-input bg-background px-1 text-xs";
@@ -445,7 +447,8 @@ export function NewPoForm({ open, onOpenChange, onCreated, prefill, initialSuppl
             {form.cashback_site && !people.cashback_sites.includes(form.cashback_site) && <option value={form.cashback_site}>{form.cashback_site}</option>}
           </select>
         </div>
-        {field("cashback_pct", "Cashback %", { px: 80 })}
+        {/* A numeric field at the money / percent width, so Cashback site · Cashback % · Cashback status line up (Maria 2026-11-04). */}
+        {field("cashback_pct", "Cashback %", { px: 120, ph: "0.00", pct: true })}
         <div className="shrink-0 space-y-0.5" style={{ width: 120 }}>
           <Label className="text-[11px] text-muted-foreground" htmlFor="new-po-cashback_status">Cashback status</Label>
           <select id="new-po-cashback_status" value={form.cashback_status ?? ""} onChange={(e) => set("cashback_status", e.target.value)} className={`${sel} h-8 w-full text-sm`} data-testid="input-new-po-cashback_status">
@@ -505,9 +508,6 @@ export function NewPoForm({ open, onOpenChange, onCreated, prefill, initialSuppl
             <div className={G_LINE}>
               <span>SKU / UPC</span><span>Product name</span><span>Price</span><span className="text-right">Qty</span><span className="text-right" title="The retailer's pack — a 12-count is 12">Units / pack</span><span />
             </div>
-            <div className="mt-1 flex flex-wrap items-center gap-x-2 border-t border-border/60 pt-1" data-testid="new-po-asin-labels">
-              {ASIN_LABELS.map(([label, w, cls], n) => w === "title" ? <span key={n} className="min-w-[7.5rem] flex-1">{label}</span> : <span key={n} {...cell(w, cls)}>{label}</span>)}
-            </div>
           </div>
           {boxes.map((box, bi) => {
             const errRows = box.lines.flatMap((l) => l.copies).filter((i) => touched && check.productErrors[i]);
@@ -530,6 +530,10 @@ export function NewPoForm({ open, onOpenChange, onCreated, prefill, initialSuppl
                       </div>
                     );
                   })}
+                  {/* The ↳ ASIN label row sits between the product row(s) and the group's first ↳ ASIN row (Maria 2026-11-04), one per group. */}
+                  <div className="mt-0.5 flex flex-wrap items-center gap-x-2 text-[10px] font-medium text-muted-foreground" data-testid={`new-po-asin-labels-${bi}`}>
+                    {ASIN_LABELS.map(([label, w, cls], n) => w === "title" ? <span key={n} className="min-w-[7.5rem] flex-1">{label}</span> : <span key={n} {...cell(w, cls)}>{label}</span>)}
+                  </div>
                   {box.slots.map((slot, k) => {
                     const i = slot[0]; const p = form.products[i];
                     const units = slotUnits(form.products, slot, box.bundle); const frac = isFractional(units);

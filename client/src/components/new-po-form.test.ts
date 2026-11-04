@@ -27,11 +27,29 @@ describe("ASIN picker — a type-ahead, not a dropdown", () => {
   });
 });
 
+// Cosmetics (Maria 2026-11-04): the ↳ ASIN label row under each product group; Cashback % a numeric field like the money ones.
+describe("New PO form — cosmetics 2026-11-04", () => {
+  const src = readFileSync(resolve(__dirname, "new-po-dialog.tsx"), "utf8");
+  it("the ASIN label row renders once per group, after the group's product rows and before its first ↳ ASIN row — not in the table header", () => {
+    const header = src.slice(src.indexOf('data-testid="new-po-products"'), src.indexOf("{boxes.map((box, bi) =>"));
+    expect(header).not.toMatch(/ASIN_LABELS/);
+    const box = src.slice(src.indexOf("{boxes.map((box, bi) =>"));
+    const products = box.indexOf("{box.lines.map((line) =>"), labels = box.indexOf("data-testid={`new-po-asin-labels-${bi}`}"), slots = box.indexOf("{box.slots.map((slot, k) =>");
+    expect(products).toBeGreaterThan(0);
+    expect(labels).toBeGreaterThan(products);
+    expect(slots).toBeGreaterThan(labels);
+  });
+  it("Cashback % is a numeric input (type number, decimal keypad, right-aligned) at the 120 px money / percent width", () => {
+    expect(src).toMatch(/field\("cashback_pct", "Cashback %", \{ px: 120, ph: "0\.00", pct: true \}\)/);
+    expect(src).toMatch(/opts\.pct\s*\? <Input id=\{`new-po-\$\{String\(k\)\}`\} type="number" inputMode="decimal"/);
+  });
+});
+
 // Round 2 (Maria 2026-11-01): fixed widths that wrap, the rows in order, the ASIN row with its costs, no summary table.
 describe("New PO form — round 2 layout", () => {
   const src = readFileSync(resolve(__dirname, "new-po-dialog.tsx"), "utf8");
   it("fields have fixed, content-sized widths and the rows wrap; PO notes fills the rest of its row; the product name caps at 40rem", () => {
-    for (const [k, px] of [["supplier", 220], ["order_id", 180], ["order_date", 140], ["cashback_pct", 80]] as const) expect(src).toMatch(new RegExp(`field\\("${k}", "[^"]+", \\{ px: ${px}`));
+    for (const [k, px] of [["supplier", 220], ["order_id", 180], ["order_date", 140], ["cashback_pct", 120]] as const) expect(src).toMatch(new RegExp(`field\\("${k}", "[^"]+", \\{ px: ${px}`));
     for (const k of ["subtotal", "discount", "tax", "sh_donations", "order_total"]) expect(src).toMatch(new RegExp(`field\\("${k}", "[^"]+", \\{ px: 120, [^}]*money: true \\}\\)`));
     expect(src).toMatch(/data-testid="new-po-order-fields">/);
     expect(src).toMatch(/className="mt-2 flex flex-wrap items-start gap-x-3 gap-y-1\.5" data-testid="new-po-order-fields"/);
