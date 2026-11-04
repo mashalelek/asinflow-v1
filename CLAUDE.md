@@ -76,6 +76,15 @@ This app runs on the following stack. This is settled. Do not suggest alternativ
 - Profitability thresholds (min ROI %, min margin %)
 
 
+## UI changes: read `docs/UI_RULES.md` first
+
+**Required read before any UI change.** No horizontal scroll at ≥ 1280 on
+any page or dialog; tables use fixed layout with content-sized default
+widths, never auto; fields fixed width, rows wrap; labels never overlap;
+warm-stone palette, quiet chrome (SPEC §7). Every UI browser check asserts
+page scroll width == viewport at 1280 and 1440 and lists anything a user
+would notice as wrong before reporting.
+
 ## Commands
 
 ```bash
