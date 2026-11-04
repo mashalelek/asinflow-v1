@@ -102,7 +102,8 @@ const insertAfter = (products: PoFormProduct[], at: number, rows: PoFormProduct[
 function blankCopy(src: PoFormProduct, bundle: boolean): PoFormProduct {
   const sold_as = bundle ? "bundle" : "individual";
   const units_per_pack = bundle ? (Number(src.units_per_pack) >= 2 ? src.units_per_pack : "2") : "1";
-  return { ...src, asin: "", qty_ordered: "", yield_manual: false, sold_as, units_per_pack, asin_qty_per_product: yieldFromPacks(src.retailer_units_per_pack, units_per_pack, sold_as), notes: "" };
+  const { line_item_id: _stored, ...rest } = src; // a new row is a new po_line_items row (Edit PO), never the stored line's second copy
+  return { ...rest, asin: "", qty_ordered: "", yield_manual: false, sold_as, units_per_pack, asin_qty_per_product: yieldFromPacks(src.retailer_units_per_pack, units_per_pack, sold_as), notes: "" };
 }
 
 /** "+ Add ASIN": one more ASIN row beneath the line (a split) — for a bundle, one more slot (a row per member). */

@@ -18,6 +18,7 @@ import Dashboard from "@/pages/dashboard";
 import ComingSoon from "@/pages/coming-soon";
 import PurchaseOrders, { PurchaseOrderDetailPlaceholder } from "@/pages/purchase-orders";
 import PoNew from "@/pages/po-new";
+import PoEditPage from "@/pages/po-edit-page";
 import Subscriptions from "@/pages/subscriptions";
 import { CreditCard, TrendingUp, Truck } from "lucide-react";
 
@@ -37,6 +38,8 @@ function Router() {
         <Route path="/purchase-orders/:id" component={PurchaseOrderDetailPlaceholder} />
         {/* Capture PO (po-ai-prefill §4.5): the extension opens /pos/new?prefill=<id>. */}
         <Route path="/pos/new" component={PoNew} />
+        {/* Edit PO as a page (Maria 2026-11-04), replacing the PO editor dialog. */}
+        <Route path="/pos/:id/edit" component={PoEditPage} />
         <Route path="/subscriptions" component={Subscriptions} />
         <Route path="/gift-cards">
           <ComingSoon title="Gift Cards" icon={CreditCard} />

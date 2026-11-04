@@ -20,7 +20,7 @@ describe("calculator in the money fields", () => {
     expect(s.ok && s.form.cost_overrides).toEqual({ B0TEST0001: "2.50" });
     expect(settleMoney({ ...f, discount: "1/(2-2)" })).toEqual({ ok: false, error: '"1/(2-2)": division by zero' });
   });
-  it("every cost / money field uses the calculator: New PO (header money, price, prep, cost / unit), the PO edit drawer's money fields, the price / cost / prep cells", () => {
+  it("every cost / money field uses the calculator: New PO (header money, price, prep, cost / unit), Edit PO (the same form since 2026-11-04), the price / cost / prep cells", () => {
     const dlg = readFileSync(resolve(__dirname, "new-po-dialog.tsx"), "utf8");
     // refund_amount left the form 2026-10-31 (refunds are per line, po_line_refunds — the PO editor); Discount, Tax and Shipping are separate fields.
     for (const k of ["subtotal", "tax", "sh_donations", "discount", "order_total"]) expect(dlg).toMatch(new RegExp(`field\\("${k}", "[^"]+", \\{[^}]*money: true \\}\\)`));
@@ -28,7 +28,7 @@ describe("calculator in the money fields", () => {
     expect(dlg).toMatch(/<MoneyCalcInput value=\{p\.prep_cost\}/);
     expect(dlg).toMatch(/<MoneyCalcInput value=\{form\.cost_overrides\[a\.asin\]/);
     const edit = readFileSync(resolve(__dirname, "po-edit.tsx"), "utf8");
-    expect(edit).toMatch(/f\.type === "money" \? \(\s*<MoneyCalcInput/);
+    expect(readFileSync(resolve(__dirname, "../pages/po-edit-page.tsx"), "utf8")).toMatch(/<NewPoForm open edit=\{edit\}/);
     expect(edit).toMatch(/<InlineEdit money value=\{l\.price\}/);
     const rows = readFileSync(resolve(__dirname, "po-asin-rows.tsx"), "utf8");
     expect(rows).toMatch(/<InlineEdit money value=\{a\.cost_per_unit\}/);

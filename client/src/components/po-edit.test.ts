@@ -1,24 +1,44 @@
 import { describe, it, expect } from "vitest";
 import { readFileSync } from "fs";
 import { resolve } from "path";
-import { headerChanges, editText, ymdOf, ORDER_ID_WARNING } from "./po-edit";
+import { editText, ORDER_ID_WARNING } from "./po-edit";
 
-// po-af-owned §3 (2026-10-18): the PO edit drawer sends only changed fields.
-describe("PO edit drawer", () => {
-  const po = { id: "p", supplier: "walmart.com", order_id: "111", order_date: "2026-10-18T04:00:00.000Z", subtotal: "12.50", tax: "0.00", notes: null, cashback_pct: null };
-  it("stored values read without float noise; dates as YYYY-MM-DD", () => {
+// Edit PO is a page since 2026-11-04 (/pos/:id/edit, the New PO form with `edit`); the header dialog is gone.
+describe("Edit PO page", () => {
+  it("stored values read without float noise", () => {
     expect(editText("12.50")).toBe("12.5");
     expect(editText(null)).toBe("");
-    expect(ymdOf("2026-10-18")).toBe("2026-10-18");
   });
-  it("only the edited fields are sent", () => {
-    const draft = { supplier: "walmart.com", order_id: "111_1", order_date: ymdOf(po.order_date), subtotal: "12.5", tax: "0", notes: "dented", cashback_pct: "" };
-    expect(headerChanges(po, draft)).toEqual({ order_id: "111_1", notes: "dented" });
-  });
-  it("the order # warning text is the patch's, and the drawer shows it when supplier / order # change", () => {
+  it("the order # warning text is the patch's (the save returns it when the order # changes)", () => {
     expect(ORDER_ID_WARNING).toBe("order # is how shipments are matched from Velocity; changing it re-matches on the next Sync Shipments");
+  });
+  it("Edit PO on the detail page navigates to /pos/:id/edit; the route renders the New PO form in edit mode; the old dialog is gone, the Cancel / Delete confirms stay", () => {
+    const page = readFileSync(resolve(__dirname, "../pages/purchase-orders.tsx"), "utf8");
+    expect(page).toMatch(/onClick=\{\(\) => navigate\(`\/pos\/\$\{po\.id\}\/edit`\)\} data-testid="button-edit-po"/);
+    expect(page).not.toMatch(/PoHeaderDrawer|editOpen/);
+    const app = readFileSync(resolve(__dirname, "../App.tsx"), "utf8");
+    expect(app).toMatch(/<Route path="\/pos\/:id\/edit" component=\{PoEditPage\} \/>/);
+    const edit = readFileSync(resolve(__dirname, "../pages/po-edit-page.tsx"), "utf8");
+    expect(edit).toMatch(/fetch\(`\/api\/pos\/\$\{encodeURIComponent\(id\)\}\/form`\)/);
+    expect(edit).toMatch(/<NewPoForm open edit=\{edit\}/);
     const src = readFileSync(resolve(__dirname, "po-edit.tsx"), "utf8");
-    expect(src).toMatch(/const orderKeyChanged = "order_id" in changes \|\| "supplier" in changes;/);
+    expect(src).not.toMatch(/PoHeaderDrawer|dialogId="po-edit"|HEADER_GROUPS/);
+    expect(src).toMatch(/dialogId="po-danger-confirm"/);
+  });
+  it("in edit mode the form: no prefill banner, a Last edited line, Save PO through PUT /form, the stored PO's ASINs seeded so loading never re-picks a pack, no default fills", () => {
+    const dlg = readFileSync(resolve(__dirname, "new-po-dialog.tsx"), "utf8");
+    expect(dlg).toMatch(/\{pf && !edit && \(/);
+    expect(dlg).toMatch(/data-testid="edit-po-last-edited"/);
+    expect(dlg).toMatch(/fetch\(`\/api\/pos\/\$\{edit\.poId\}\/form`, \{ method: "PUT"/);
+    expect(dlg).toMatch(/edit \? \(busy \? "Saving…" : "Save PO"\)/);
+    expect(dlg).toMatch(/new Map<string, AsinInfo>\(\(edit\?\.known \?\? \[\]\)/);
+    expect(dlg).toMatch(/if \(!open \|\| edit\) return; \/\/ Edit PO: the stored email stays as stored/);
+    expect(dlg).toMatch(/if \(!open \|\| edit \|\| people\.velocity_prep == null\) return;/);
+    expect(dlg).toMatch(/<PackOverrideDialog ask=\{packAsk\} onChoose=\{answerPack\} \/>/);
+    expect(dlg).toMatch(/Refunds per line are edited on the PO's Payments tab\./);
+    // A yield kept from the stored line reads "stored yield", a hand-typed one "typed"; an imported PO's rows show their stored costs.
+    expect(dlg).toMatch(/\{storedYield \? "stored yield" : "typed"\}/);
+    expect(dlg).toMatch(/const stored = edit\?\.imported && a \? edit\.storedCosts\[a\.asin\] : undefined;/);
   });
   it("PO detail has Edit PO, editable Products and a History tab; ASIN rows edit cost / prep / sold as / units per pack", () => {
     const page = readFileSync(resolve(__dirname, "../pages/purchase-orders.tsx"), "utf8");

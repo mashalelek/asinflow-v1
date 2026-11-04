@@ -54,6 +54,7 @@ This app runs on the following stack. This is settled. Do not suggest alternativ
 - `shared/schema.ts` — Column definitions, profit calculation, types
 - `shared/po-form.ts` / `shared/po-cost.ts` — New PO form state + validation; the ONE cost formula (v2, SPEC §22 "Costs")
 - `server/config/ai.ts` — the one place the Claude model id / tokens / effort / price live (Capture PO, promo backfill)
+- `shared/po-edit-form.ts` / `server/po-edit-form.ts` — Edit PO as a page (`/pos/:id/edit`, `client/src/pages/po-edit-page.tsx`): the stored PO as the New PO form, the edited form diffed into the existing per-field editors (one History row per field, one transaction)
 - `server/po-prefill.ts` — `/api/pos/prefill`: capture → one Haiku call → form prefill + markers; `chrome-extension/` is the capture side
 - `server/dashboard.ts` / `server/dashboard-range.ts` / `shared/dashboard.ts` — the Dashboard (SPEC §28): range sets, the Spend · Sales · Profit grid SQL, the chart series; `client/src/pages/dashboard.tsx`, `metric-grid.tsx`, `dashboard-chart.tsx`
 - `docs/SCHEMA.md` — Database schema documentation

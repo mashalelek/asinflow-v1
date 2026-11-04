@@ -32,6 +32,7 @@ import {
   SOLD_AS_OPTIONS, PROMO_TYPES, PAYMENT_METHODS, CASHBACK_STATUSES,
   type PoFormState, type PoFormProduct, type PoFormPromo, type PoFormPayment, type PoFormPrefill, type PrefillSource,
 } from "@shared/po-form";
+import { editBlockingErrors } from "@shared/po-edit-form";
 import { groupLines, newLineId, lineQty, slotUnits, setSlotUnits, resetSlotYield, addAsinRow, addProductToBundle, removeAsinRow, removeLine, ensureLineIds, isFractional, FRACTIONAL_UNITS_NOTE, type LineBox } from "@shared/po-lines";
 
 const todayYmd = () => { const d = new Date(); return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`; };
@@ -184,10 +185,25 @@ function PackOverrideDialog({ ask, onChoose }: { ask: { asin: string; from: stri
 }
 
 // ── The form ─────────────────────────────────────────────────────────────────
-/** The New PO form — a full page (/pos/new), not a modal (Maria 2026-11-01). `onOpenChange(false)` = Cancel (the page navigates away). */
-export function NewPoForm({ open, onOpenChange, onCreated, prefill, initialSupplier }: { open: boolean; onOpenChange: (v: boolean) => void; onCreated: (poId: string) => void; prefill?: PrefillResponse | null; /** /pos/new?supplier=<host>: the extension's blank Open in AF (v1.2.4). */ initialSupplier?: string }) {
+/** Edit PO (/pos/:id/edit, Maria 2026-11-04): what GET /api/pos/:id/form returns, handed to the same form. */
+export interface EditPoContext {
+  poId: string;
+  /** The stored PO as form state — also the baseline the save is diffed against (and pre-existing problems are told apart from new ones). */
+  form: PoFormState;
+  /** A sheet-imported PO: its stored Sourcing / COGS / Paid are shown as stored, never the formula's (CLAUDE.md, Maria 2026-10-31). */
+  imported: boolean;
+  storedCosts: Record<string, { sourcing_cost: string | null; cost_per_unit: string | null; paid_cost: string | null }>;
+  lastEdit: { at: string; user_name: string | null; field: string } | null;
+  known: AsinInfo[];
+  closed: boolean;
+  onSaved: (r: { changes: number; warning?: string }) => void;
+}
+const cloneForm = (f: PoFormState): PoFormState => JSON.parse(JSON.stringify(f));
+
+/** The New PO form — a full page (/pos/new), not a modal (Maria 2026-11-01). `onOpenChange(false)` = Cancel (the page navigates away). With `edit` it is the Edit PO page. */
+export function NewPoForm({ open, onOpenChange, onCreated, prefill, initialSupplier, edit }: { open: boolean; onOpenChange: (v: boolean) => void; onCreated: (poId: string) => void; prefill?: PrefillResponse | null; /** /pos/new?supplier=<host>: the extension's blank Open in AF (v1.2.4). */ initialSupplier?: string; edit?: EditPoContext }) {
   const { user } = useAuth();
-  const [form, setForm] = useState<PoFormState>(() => emptyPoForm(todayYmd()));
+  const [form, setForm] = useState<PoFormState>(() => (edit ? cloneForm(edit.form) : emptyPoForm(todayYmd())));
   const [busy, setBusy] = useState(false);
   const [serverErr, setServerErr] = useState<string | null>(null);
   const [touched, setTouched] = useState(false);
@@ -197,26 +213,27 @@ export function NewPoForm({ open, onOpenChange, onCreated, prefill, initialSuppl
   const [emailOther, setEmailOther] = useState(false);
   const [packAsk, setPackAsk] = useState<{ asin: string; from: string; to: string } | null>(null);
   const [rawOpen, setRawOpen] = useState(false);
-  const known = useMemo(() => new Map<string, AsinInfo>(), []);
+  // Seeded synchronously with the stored PO's ASINs (Edit PO): a picker that finds its ASIN known never re-picks it, so loading never resets a pack.
+  const known = useMemo(() => new Map<string, AsinInfo>((edit?.known ?? []).map((k) => [k.asin, k] as [string, AsinInfo])), [edit]);
 
   useEffect(() => {
     if (!open) return;
     const base = emptyPoForm(todayYmd());
-    const seeded: PoFormState = prefill ? { ...base, ...prefill.form, products: (prefill.form.products?.length ? prefill.form.products : base.products).map((p) => ({ ...emptyProduct(), ...p })), prefill: prefill.prefill } : base;
+    const seeded: PoFormState = edit ? cloneForm(edit.form) : prefill ? { ...base, ...prefill.form, products: (prefill.form.products?.length ? prefill.form.products : base.products).map((p) => ({ ...emptyProduct(), ...p })), prefill: prefill.prefill } : base;
     seeded.products = ensureLineIds(seeded.products);
     if (!prefill && initialSupplier && !seeded.supplier) seeded.supplier = initialSupplier;
-    if (!seeded.purchased_by_user_id && user) { seeded.purchased_by_user_id = String(user.id); seeded.purchased_by = user.displayName; }
-    if (prefill?.prefill.sources && Object.keys(prefill.prefill.sources).some((k) => k === "ships_to")) setShipsToEdited(true); else setShipsToEdited(false);
+    if (!edit && !seeded.purchased_by_user_id && user) { seeded.purchased_by_user_id = String(user.id); seeded.purchased_by = user.displayName; }
+    if (edit || (prefill?.prefill.sources && Object.keys(prefill.prefill.sources).some((k) => k === "ships_to"))) setShipsToEdited(true); else setShipsToEdited(false);
     emailDefaultRef.current = seeded.prefill?.sources?.email_used === "af" ? (seeded.email_used ?? "") : "";
     setForm(seeded); setServerErr(null); setTouched(false); setRawOpen(false);
     setEmailOther(false);
     fetch("/api/pos/purchasers").then((r) => r.json()).then((d) => setPeople({ users: d.users ?? [], emails: d.emails ?? [], cashback_sites: d.cashback_sites ?? [], payment_methods: d.payment_methods ?? [], payment_aliases: d.payment_aliases ?? {}, payment_last4: d.payment_last4 ?? {}, velocity_prep: typeof d.velocity_prep === "number" ? d.velocity_prep : null })).catch(() => {});
-  }, [open, prefill, user, initialSupplier]);
+  }, [open, prefill, user, initialSupplier, edit]);
   // Email used default per supplier (Maria 2026-11-01; GET /api/pos/email-default): fills an empty field, or one still holding
   // the previous supplier's default, with a stone marker; a typed or model-read email is left alone.
   const emailDefaultRef = useRef<string>("");
   useEffect(() => {
-    if (!open) return;
+    if (!open || edit) return; // Edit PO: the stored email stays as stored
     const s = form.supplier.trim();
     const t = window.setTimeout(() => {
       fetch(`/api/pos/email-default?supplier=${encodeURIComponent(s)}`).then((r) => r.json()).then((d) => {
@@ -231,15 +248,22 @@ export function NewPoForm({ open, onOpenChange, onCreated, prefill, initialSuppl
       }).catch(() => {});
     }, 250);
     return () => window.clearTimeout(t);
-  }, [open, form.supplier]);
+  }, [open, form.supplier, edit]);
 
   const shipsTo = shipsToEdited && (form.ships_to === "home" || form.ships_to === "velocity") ? form.ships_to : shipsToFromForm(form);
   const check = useMemo(() => checkPoForm(form), [form]);
+  // Edit PO: only a problem the stored PO does not already have blocks Save (an imported PO with a NULL price still saves a change elsewhere).
+  const baseCheck = useMemo(() => (edit ? checkPoForm(edit.form) : null), [edit]);
+  const blocking = useMemo(() => (edit && baseCheck ? editBlockingErrors(edit.form, form, baseCheck, check) : null), [edit, baseCheck, form, check]);
+  const formErrors = baseCheck ? check.errors.filter((e) => !baseCheck.errors.includes(e)) : check.errors;
+  const preexisting = baseCheck ? check.errors.filter((e) => baseCheck.errors.includes(e)) : [];
+  const rowErrors = blocking ? blocking.productErrors : check.productErrors;
+  const canSave = blocking ? blocking.errors.length === 0 : check.ok;
   // Prep default (Maria 2026-11-01, 11c — a Velocity PO saved with prep $0.00): Ships to = Velocity and a blank prep → the Velocity
   // prep rate from settings; Home → 0.00. Stone marker, editable; a typed prep is never touched.
   const prepAutoRef = useRef<string>("");
   useEffect(() => {
-    if (!open || people.velocity_prep == null) return;
+    if (!open || edit || people.velocity_prep == null) return; // Edit PO: a stored prep (blank included) is never filled in
     const want = shipsTo === "velocity" ? people.velocity_prep.toFixed(2) : "0.00";
     const prev = prepAutoRef.current;
     prepAutoRef.current = want;
@@ -248,7 +272,7 @@ export function NewPoForm({ open, onOpenChange, onCreated, prefill, initialSuppl
       const products = f.products.map((p) => { const cur = (p.prep_cost ?? "").trim(); if ((cur !== "" && cur !== prev) || cur === want) return p; changed = true; return { ...p, prep_cost: want }; });
       return changed ? setMark({ ...f, products }, "prep_cost", "af") : f;
     });
-  }, [open, shipsTo, people.velocity_prep]);
+  }, [open, shipsTo, people.velocity_prep, edit]);
   const sources = form.prefill?.sources ?? {};
   const mark = (key: string) => markClass(sources[key]);
   /** A server-side correction's tooltip on an amber field ("qty inferred from subtotal"); gone once the field is edited. */
@@ -333,6 +357,17 @@ export function NewPoForm({ open, onOpenChange, onCreated, prefill, initialSuppl
     const settled = settleMoney({ ...form, weighted_gc_discount_pct: check.weightedGcPct != null ? check.weightedGcPct.toFixed(2) : "" });
     if (!settled.ok) { setServerErr(`A money field can't be calculated: ${settled.error}`); return; }
     setForm(settled.form);
+    if (edit) {
+      if (editBlockingErrors(edit.form, settled.form).errors.length) return;
+      setBusy(true);
+      try {
+        const res = await fetch(`/api/pos/${edit.poId}/form`, { method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ ...settled.form, ships_to: shipsTo }) });
+        const data = await res.json().catch(() => ({}));
+        if (!res.ok) throw new Error(data.message || `HTTP ${res.status}`);
+        edit.onSaved({ changes: Number(data.changes) || 0, warning: data.warning });
+      } catch (e: any) { setServerErr(e.message); } finally { setBusy(false); }
+      return;
+    }
     if (!checkPoForm(settled.form).ok) return;
     setBusy(true);
     try {
@@ -369,10 +404,16 @@ export function NewPoForm({ open, onOpenChange, onCreated, prefill, initialSuppl
   if (!open) return null;
 
   return (
-    <div className="relative flex min-h-[calc(100vh-64px)] flex-col" data-testid="new-po-page">
-      <h1 className="text-xl font-semibold">New PO</h1>
+    <div className="relative flex min-h-[calc(100vh-64px)] flex-col" data-testid={edit ? "edit-po-page" : "new-po-page"}>
+      {edit ? (
+        <div className="flex flex-wrap items-baseline gap-x-3 gap-y-0.5">
+          <h1 className="text-xl font-semibold">Edit PO</h1>
+          <span className="text-sm text-muted-foreground">{edit.form.supplier} · <span className="font-mono">{edit.form.order_id}</span>{edit.closed ? " · Closed" : " · Open"}{edit.imported ? " · sheet import (stored costs kept)" : ""}</span>
+          <span className="text-xs text-muted-foreground" data-testid="edit-po-last-edited">{edit.lastEdit ? `Last edited ${new Date(edit.lastEdit.at).toLocaleString(undefined, { month: "short", day: "numeric", year: "numeric", hour: "numeric", minute: "2-digit" })}${edit.lastEdit.user_name ? ` by ${edit.lastEdit.user_name}` : ""}` : "Not edited since it was created"} · every change is logged in History</span>
+        </div>
+      ) : <h1 className="text-xl font-semibold">New PO</h1>}
 
-      {pf && (
+      {pf && !edit && (
         <div className="mt-1.5 rounded-md px-3 py-1.5 text-xs" style={{ ...hairline, background: "hsl(var(--muted) / 0.4)" }} data-testid="new-po-prefill-banner">
           <div className="flex flex-wrap items-center gap-x-3 gap-y-1">
             <span className="inline-flex items-center gap-1"><Sparkles className="h-3.5 w-3.5 text-amber-600" /> Prefilled from <b>{pf.supplier ?? form.supplier ?? "the capture"}</b>{pf.pages != null ? ` · ${pf.pages} page${pf.pages === 1 ? "" : "s"} captured` : ""}{pf.captured_at ? ` ${new Date(pf.captured_at).toLocaleTimeString()}` : ""}</span>
@@ -417,7 +458,7 @@ export function NewPoForm({ open, onOpenChange, onCreated, prefill, initialSuppl
         <div className="shrink-0 space-y-0.5" style={{ width: 160 }}>
           <Label className="text-[11px] text-muted-foreground">Subscription</Label>
           <div className={`flex h-8 items-center gap-2 text-sm ${mark("subscription")}`}>
-            <input type="checkbox" checked={form.subscription?.present ?? false} onChange={(e) => setForm((f) => clearMark({ ...f, subscription: { present: e.target.checked, frequency_weeks: f.subscription?.frequency_weeks ?? "" } }, "subscription"))} data-testid="input-new-po-subscription" />
+            <input type="checkbox" checked={form.subscription?.present ?? false} disabled={!!edit} title={edit ? "Subscriptions are edited on the Subscriptions page" : undefined} onChange={(e) => setForm((f) => clearMark({ ...f, subscription: { present: e.target.checked, frequency_weeks: f.subscription?.frequency_weeks ?? "" } }, "subscription"))} data-testid="input-new-po-subscription" />
             {form.subscription?.present && <span className="flex items-center gap-1 text-xs">every <Input value={form.subscription.frequency_weeks} onChange={(e) => setForm((f) => ({ ...f, subscription: { present: true, frequency_weeks: e.target.value } }))} inputMode="numeric" className="h-7 w-12 text-xs text-right" data-testid="input-new-po-subscription-weeks" /> wks</span>}
             {!form.subscription?.present && <span className="text-xs text-muted-foreground">No</span>}
           </div>
@@ -494,6 +535,7 @@ export function NewPoForm({ open, onOpenChange, onCreated, prefill, initialSuppl
             </div>
           ))}
           {(form.payments ?? []).some((p) => p.amount.trim() !== "") && <p className="text-[11px] text-muted-foreground">Payments {money(totalPayments)} · order total {money(check.effectiveOrderTotal)}</p>}
+          {edit && <p className="text-[11px] text-muted-foreground" data-testid="edit-po-refunds-note">Refunds per line are edited on the PO's Payments tab.</p>}
         </div>
       </div>
 
@@ -510,7 +552,7 @@ export function NewPoForm({ open, onOpenChange, onCreated, prefill, initialSuppl
             </div>
           </div>
           {boxes.map((box, bi) => {
-            const errRows = box.lines.flatMap((l) => l.copies).filter((i) => touched && check.productErrors[i]);
+            const errRows = box.lines.flatMap((l) => l.copies).filter((i) => touched && rowErrors[i]);
             return (
               <div key={box.key} className="px-2 py-1.5" style={bi > 0 ? { borderTop: "0.5px solid hsl(var(--border))" } : undefined} data-testid={`new-po-box-${bi}`}>
                 <div className={box.bundle ? "rounded-md px-2 py-1.5 ring-1 ring-stone-400/70 dark:ring-stone-500/60" : ""} data-testid={box.bundle ? `new-po-bundle-${bi}` : undefined}>
@@ -542,8 +584,13 @@ export function NewPoForm({ open, onOpenChange, onCreated, prefill, initialSuppl
                     const info = known.get(p.asin.toUpperCase());
                     const guess = p.asin.length === 10 && sources[`products.${i}.asin`] === "model" ? p.asin : null;
                     const manual = slot.some((j) => form.products[j].yield_manual);
+                    // Edit PO: a yield kept from the stored line (no integers, or ones the pack math cannot reproduce) reads "stored yield", not "typed".
+                    const storedYield = manual && !!edit && slot.every((j) => { const q = form.products[j]; const s0 = edit.form.products.find((x) => x.line_item_id != null && x.line_item_id === q.line_item_id); return !!s0 && s0.yield_manual === true && s0.asin_qty_per_product === q.asin_qty_per_product; });
                     const a = check.asins.find((x) => x.asin === p.asin.toUpperCase()) ?? null; // this ASIN row's three costs (§7)
                     const adj = a ? form.cogs_adjustments?.[a.asin] : undefined;
+                    // An imported PO's row shows its STORED Sourcing / Paid (never recomputed); a row new to the PO shows the formula's.
+                    const stored = edit?.imported && a ? edit.storedCosts[a.asin] : undefined;
+                    const sourcingShown = stored ? stored.sourcing_cost : a?.sourcing_cost ?? null, paidShown = stored ? stored.paid_cost : a?.paid_cost ?? null;
                     return (
                       <div key={`${box.key}-${k}`} className="py-0.5" data-testid={`row-new-po-asin-${i}`}>
                         <div className="flex flex-wrap items-start gap-x-2 gap-y-1">
@@ -560,12 +607,12 @@ export function NewPoForm({ open, onOpenChange, onCreated, prefill, initialSuppl
                               </select>}
                           <Input {...cell(A.upp)} value={p.units_per_pack} disabled={p.sold_as === "individual"} onChange={(e) => setMany(slot, "units_per_pack", e.target.value)} onBlur={() => onPackBlur(i)} inputMode="numeric" title="ASIN units / pack" className={`h-8 shrink-0 text-xs text-right ${mark(`asin.${p.asin.toUpperCase()}`)}`} data-testid={`input-new-po-units_per_pack-${i}`} />
                           <div {...cell(A.prep)}><MoneyCalcInput value={p.prep_cost} onChange={(v) => setMany(slot, "prep_cost", v)} placeholder="prep" className={`h-8 text-xs text-right ${mark("prep_cost")}`} data-testid={`input-new-po-prep_cost-${i}`} /></div>
-                          <div {...cell(A.sourcing, "flex h-8 items-center justify-end font-mono text-xs")} title="Col AR: before the gift-card discount, promos applied — what Update COGS in SC sends" data-testid={a ? `new-po-sourcing-${a.asin}` : undefined}>{a?.sourcing_cost ?? "—"}</div>
+                          <div {...cell(A.sourcing, "flex h-8 items-center justify-end font-mono text-xs")} title={stored ? "Stored (sheet import) — never recomputed" : "Col AR: before the gift-card discount, promos applied — what Update COGS in SC sends"} data-testid={a ? `new-po-sourcing-${a.asin}` : undefined}>{sourcingShown ?? "—"}</div>
                           <div {...cell(A.cogs)}>
                             {a ? <MoneyCalcInput value={form.cost_overrides[a.asin] ?? ""} onChange={(v) => setOverride(a.asin, v)} placeholder={a.computed_cost_per_unit ?? "—"} className="h-8 text-right text-xs" data-testid={`input-new-po-cost-${a.asin}`} title={form.cost_overrides[a.asin] ? "typed" : `Col Y: ${a.sourcing_cost ?? "?"} × (1 − GC %)${a.cogs_adjustment ? ` + ${a.cogs_adjustment}` : ""}`} />
                               : <div className="flex h-8 items-center justify-end font-mono text-xs">—</div>}
                           </div>
-                          <div {...cell(A.paid, "flex h-8 items-center justify-end font-mono text-xs")} title="Every discount counted (rewards too)">{a?.paid_cost ?? "—"}</div>
+                          <div {...cell(A.paid, "flex h-8 items-center justify-end font-mono text-xs")} title={stored ? "Stored (sheet import) — never recomputed" : "Every discount counted (rewards too)"} data-testid={a ? `new-po-paid-${a.asin}` : undefined}>{paidShown ?? "—"}</div>
                           <div {...cell(A.adj)}>{a ? <MoneyCalcInput value={adj?.amount ?? ""} onChange={(v) => setAdj(a.asin, "amount", v)} placeholder="0.00" className="h-8 text-right text-xs" data-testid={`input-new-po-adj-${a.asin}`} /> : <span />}</div>
                           <div {...cell(A.reason)}>{a ? <Input value={adj?.reason ?? ""} onChange={(e) => setAdj(a.asin, "reason", e.target.value)} placeholder="reason" className="h-8 text-xs" data-testid={`input-new-po-adj-reason-${a.asin}`} /> : <span />}</div>
                           <Input {...cell(A.notes)} value={p.notes ?? ""} onChange={(e) => setMany(slot, "notes", e.target.value)} placeholder="notes" className="h-8 shrink-0 text-xs" data-testid={`input-new-po-line-notes-${i}`} />
@@ -574,10 +621,11 @@ export function NewPoForm({ open, onOpenChange, onCreated, prefill, initialSuppl
                         {/* The math line: pack math and the cost allocation for this row. */}
                         <div className={`ml-6 mt-0.5 flex flex-wrap gap-x-3 text-[10px] ${frac ? "text-destructive" : "text-muted-foreground"}`} data-testid={`new-po-asin-math-${i}`}>
                           <span>{box.bundle ? `sets = the smallest member's qty × yield = ${anyQty ? units : "—"}` : `${qty} × ${r} ÷ ${u} = ${anyQty ? units : "—"} ASIN units`}</span>
-                          {a?.sourcing_cost && <span>sourcing = Σ(paid price × qty) ÷ {a.qty} = {a.sourcing_cost}</span>}
-                          {a?.computed_cost_per_unit && <span>COGS = {a.sourcing_cost} × (1 − {check.weightedGcPct ?? 0}%){a.cogs_adjustment ? ` + ${a.cogs_adjustment}` : ""} = {a.computed_cost_per_unit}</span>}
+                          {stored && <span data-testid={`edit-po-stored-costs-${i}`}>stored costs (sheet import) — never recomputed</span>}
+                          {!stored && a?.sourcing_cost && <span>sourcing = Σ(paid price × qty) ÷ {a.qty} = {a.sourcing_cost}</span>}
+                          {!stored && a?.computed_cost_per_unit && <span>COGS = {a.sourcing_cost} × (1 − {check.weightedGcPct ?? 0}%){a.cogs_adjustment ? ` + ${a.cogs_adjustment}` : ""} = {a.computed_cost_per_unit}</span>}
                           {frac && <span data-testid={`new-po-fractional-${i}`}>{FRACTIONAL_UNITS_NOTE}</span>}
-                          {manual && <span>typed <button type="button" className="underline" onClick={() => onResetSlot(box.key, k)} title="Back to the pack math">reset</button></span>}
+                          {manual && <span data-testid={`new-po-yield-note-${i}`}>{storedYield ? "stored yield" : "typed"} <button type="button" className="underline" onClick={() => onResetSlot(box.key, k)} title="Back to the pack math">reset</button></span>}
                           {form.pack_updates?.[p.asin] === true && <span>updates ASIN in AF</span>}
                         </div>
                       </div>
@@ -587,7 +635,7 @@ export function NewPoForm({ open, onOpenChange, onCreated, prefill, initialSuppl
                     <button type="button" className="text-primary hover:underline" onClick={() => onAddAsin(box.key)} data-testid={`button-new-po-add-asin-${bi}`}>+ Add ASIN</button>
                     <button type="button" className="text-primary hover:underline" onClick={() => onAddToBundle(box.key)} data-testid={`button-new-po-add-to-bundle-${bi}`}>+ Add product to bundle</button>
                   </div>
-                  {errRows.map((i) => <p key={i} className="ml-6 text-xs text-destructive" data-testid={`new-po-product-error-${i}`}>{form.products[i].asin || form.products[i].product_name || `row ${i + 1}`}: {check.productErrors[i].join(" · ")}</p>)}
+                  {errRows.map((i) => <p key={i} className="ml-6 text-xs text-destructive" data-testid={`new-po-product-error-${i}`}>{form.products[i].asin || form.products[i].product_name || `row ${i + 1}`}: {rowErrors[i].join(" · ")}</p>)}
                 </div>
               </div>
             );
@@ -598,8 +646,9 @@ export function NewPoForm({ open, onOpenChange, onCreated, prefill, initialSuppl
       {/* Warnings + errors */}
       <div className="mt-2 space-y-0.5 pb-2">
         {check.warnings.map((w) => <p key={w} data-testid="new-po-warning" className="flex items-center gap-1.5 text-xs text-amber-700 dark:text-amber-400"><AlertTriangle className="h-3.5 w-3.5" />{w}</p>)}
-        {touched && check.errors.length > 0 && (
-          <ul className="list-disc pl-5 text-xs text-destructive" data-testid="new-po-errors">{check.errors.map((e) => <li key={e}>{e}</li>)}</ul>
+        {preexisting.length > 0 && <p className="flex items-start gap-1.5 text-xs text-amber-700 dark:text-amber-400" data-testid="edit-po-preexisting"><AlertTriangle className="mt-0.5 h-3.5 w-3.5 shrink-0" />Already on the stored PO (saving is still allowed): {preexisting.join(" · ")}</p>}
+        {touched && formErrors.length > 0 && (
+          <ul className="list-disc pl-5 text-xs text-destructive" data-testid="new-po-errors">{formErrors.map((e) => <li key={e}>{e}</li>)}</ul>
         )}
         {serverErr && <p className="text-sm text-destructive" data-testid="new-po-server-error">{serverErr}</p>}
       </div>
@@ -613,7 +662,7 @@ export function NewPoForm({ open, onOpenChange, onCreated, prefill, initialSuppl
           {check.nonCountingPromoAmount > 0 && <div><span className="text-muted-foreground mr-1.5">Added back (rewards)</span><span className="font-mono">{money(check.nonCountingPromoAmount)}</span></div>}
         </div>
         <Button variant="outline" onClick={() => onOpenChange(false)} disabled={busy} data-testid="button-new-po-cancel">Cancel</Button>
-        <Button onClick={save} disabled={busy || (touched && !check.ok)} data-testid="button-new-po-save">{busy ? "Creating…" : "Create PO"}</Button>
+        <Button onClick={save} disabled={busy || (touched && !canSave)} data-testid="button-new-po-save">{edit ? (busy ? "Saving…" : "Save PO") : busy ? "Creating…" : "Create PO"}</Button>
       </div>
       <PackOverrideDialog ask={packAsk} onChoose={answerPack} />
     </div>

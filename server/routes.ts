@@ -24,6 +24,7 @@ import { editPoHeader, editLine, addLine, removeLine, editAsinRow, loadPoHistory
 import { recomputePoCosts } from "./po-costs";
 import { addMoneyRow, editMoneyRow, removeMoneyRow, loadPoMoney } from "./po-money-edit";
 import { createPoFromForm, lookupAsins } from "./po-create";
+import { loadPoForm, savePoForm } from "./po-edit-form";
 import { suggestAsins, asinInfo } from "./asin-suggest";
 import { defaultEmailForSupplier } from "./supplier-defaults";
 import { canonicalPaymentName } from "@shared/po-form";
@@ -4491,6 +4492,25 @@ export async function registerRoutes(
   app.patch("/api/pos/:id", async (req: Request, res: Response) => {
     if (!isDbAvailable()) { res.status(503).json({ message: "Database not available" }); return; }
     await sendEdit(res, () => withPoTx(async (q) => withRecompute(q, await editPoHeader(q, String(req.params.id ?? ""), req.body, uid(req)), uid(req))));
+  });
+  // Edit PO as a page (/pos/:id/edit, Maria 2026-11-04): the stored PO as the New PO form, and the whole form saved back —
+  // one transaction, the existing editors underneath (server/po-edit-form.ts), one History row per changed field.
+  app.get("/api/pos/:id/form", async (req: Request, res: Response) => {
+    if (!isDbAvailable()) { res.status(503).json({ message: "Database not available" }); return; }
+    try {
+      const r = await loadPoForm(poQuery, String(req.params.id ?? ""));
+      if (!r) { res.status(404).json({ message: "PO not found" }); return; }
+      res.json(r);
+    } catch (err: any) { res.status(500).json({ message: err?.message ?? String(err) }); }
+  });
+  app.put("/api/pos/:id/form", async (req: Request, res: Response) => {
+    if (!isDbAvailable()) { res.status(503).json({ message: "Database not available" }); return; }
+    try { res.json(await withPoTx((q) => savePoForm(q, String(req.params.id ?? ""), req.body, uid(req)))); }
+    catch (err: any) {
+      if (err instanceof EditError) { res.status(err.status).json({ message: err.message }); return; }
+      if (err?.code === "23505") { res.status(409).json({ message: "a PO with this supplier and order # already exists" }); return; }
+      res.status(500).json({ message: err?.message ?? String(err) });
+    }
   });
   app.post("/api/pos/:id/lines", async (req: Request, res: Response) => {
     if (!isDbAvailable()) { res.status(503).json({ message: "Database not available" }); return; }

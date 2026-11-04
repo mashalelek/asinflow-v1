@@ -871,8 +871,9 @@ question (`pack-override`, confirm), SellerBoard COGS export
 history (`cogs-update-history`), Bulk Calc's Save / Set confirm / Refresh
 results / Rename / Delete list (`bulk-save-list`, `bulk-set-confirm`
 confirm, `bulk-refresh-results`, `bulk-rename-list`, `bulk-delete-list`
-confirm), the **PO editor** (`po-edit` — a dialog now, no longer a side
-sheet) and its Cancel / Delete PO confirm (`po-danger-confirm`), the
+confirm), the PO's Cancel / Delete PO confirm (`po-danger-confirm`; the
+**PO editor** dialog `po-edit` is gone since 2026-11-04 — Edit PO is the
+page `/pos/:id/edit`, §22 "Editing"), the
 Close / Reopen PO confirm (`po-close-confirm`) and the listing-hygiene
 Release confirm (`release-confirm`). `client/src/components/ui/dialog.test.ts`
 sweeps every `DialogContent` for a `dialogId` and refuses a leftover
@@ -3220,7 +3221,7 @@ that writes it:
 | `is_wholesale`, `is_oa` | Manual edit |
 | `status` (active/parked/dead — replaced `is_active` 2026-09-07, migration 033) | Manual Park/Unpark/Mark-dead/Revive; Sourcing sync writes `parked`+`discontinued` on freshly-inserted discontinued rows only; the prices stage's `invalid_asin` outcome and the catalog-404 signal (DA-2) write `dead` with their reasons |
 | Aura listing cost (external, not an AF column) | Aura cost sync path (§11) — reads `asin_estimates` after an inline PO-sheet read for the selection (decision 9), writes only to Aura |
-| `purchase_orders`, `po_asins`, `po_line_items` — every field, incl. action items, `closed_at` / `closed_by`, `qty_canceled`, `unique_products`, `entry_seq` | **AF** (2026-10-18, patch po-af-owned): the PO module UI — edit drawer, Products / ASIN-row inline edits, New PO form, Cancel / Delete PO, Cancel ASIN, Closed toggle, the auto-close rule. **The Orders sheet is intake only**: Sync POs inserts a PO that is not in AF and not tombstoned (`deleted_pos`) and never writes an existing one — its drift is reported (`sheetDiffers`), not applied. **One exception (Maria 2026-10-29, Option 2): Col AS prep cost.** When a 2026 ASIN row's sheet prep differs from AF, Sync POs applies it to `po_asins.prep_cost` and, when that changes the PO's derived ships_to (any prep > 0 → velocity, else home), `purchase_orders.ships_to` too — a History row per change ("prep_cost (from sheet)", "ships_to (from sheet)"), counted as `prepApplied` / `shipsToApplied` and listed in the result. A ships_to set by hand stays unless a sync changes that PO's prep. No other field is ever written to an existing PO. `closed_by = 'sheet'` stays on history; nothing new writes it |
+| `purchase_orders`, `po_asins`, `po_line_items` — every field, incl. action items, `closed_at` / `closed_by`, `qty_canceled`, `unique_products`, `entry_seq` | **AF** (2026-10-18, patch po-af-owned): the PO module UI — the Edit PO page, Products / ASIN-row inline edits, New PO form, Cancel / Delete PO, Cancel ASIN, Closed toggle, the auto-close rule. **The Orders sheet is intake only**: Sync POs inserts a PO that is not in AF and not tombstoned (`deleted_pos`) and never writes an existing one — its drift is reported (`sheetDiffers`), not applied. **One exception (Maria 2026-10-29, Option 2): Col AS prep cost.** When a 2026 ASIN row's sheet prep differs from AF, Sync POs applies it to `po_asins.prep_cost` and, when that changes the PO's derived ships_to (any prep > 0 → velocity, else home), `purchase_orders.ships_to` too — a History row per change ("prep_cost (from sheet)", "ships_to (from sheet)"), counted as `prepApplied` / `shipsToApplied` and listed in the result. A ships_to set by hand stays unless a sync changes that PO's prep. No other field is ever written to an existing PO. `closed_by = 'sheet'` stays on history; nothing new writes it |
 | `po_edit_log` | Every PO-module writer (one row per changed field, §22 "AF owns POs"); read by the History tab |
 | `deleted_pos` | Delete PO (tombstone); read by Sync POs' intake |
 | `po_asin_shipments.assigned_by`, `velocity_order_number` | Reassign shipment (§22) and the 060 data fix write `'manual'` + the Velocity line identity; component A refreshes a manual row's quantity, never moves it (a hand-split line is compared, not rewritten) |
@@ -6549,12 +6550,38 @@ replaces it. Migration 061 adds `po_edit_log`, `deleted_pos` and
   in ms. Backfilled by `script/backfill-po-entry-seq.ts` (dry by default,
   `--live`, idempotent); set by the intake on insert.
 - **Readers** of PO data use the AF tables (§11 banner).
-- **Editing (§3 of the patch).** PO detail: "Edit PO" drawer — supplier,
-  order # (warning: "order # is how shipments are matched from Velocity;
-  changing it re-matches on the next Sync Shipments"; `_1`-style suffixes
-  are intentional), order date, subtotal, tax, S&H + donations, discount,
-  refund, order total, payment method, weighted GC %, cashback site / %,
-  promo, purchased by, notes; (supplier, order #) stays unique (409).
+- **Editing (§3 of the patch).** **Edit PO is a full page since
+  2026-11-04 (Maria), replacing the centered dialog:** "Edit PO" on the PO
+  detail page navigates to `/pos/:id/edit` (`client/src/pages/po-edit-page.tsx`),
+  the New PO form in edit mode — the same order rows A–D, lines as bought
+  with ↳ ASIN rows, promos, payments, the three costs, the adjustment and
+  the footer (Cancel / **Save PO**), prefilled from `GET /api/pos/:id/form`
+  (`server/po-edit-form.ts`, the converter in `shared/po-edit-form.ts`).
+  Differences from New: no prefill banner; a "Last edited <when> by <who>"
+  line (the newest History row); the defaults never fill a stored value
+  (purchaser, email per supplier, prep from Ships to); Subscription is
+  read-only (the Subscriptions page edits it); refunds per line stay on the
+  detail page's Payments tab (a note says so). Save sends the whole form to
+  `PUT /api/pos/:id/form`: the server rebuilds the stored form, diffs it and
+  runs the difference through the existing editors (header, lines — edit /
+  re-map / add / remove —, ASIN rows, payments, promos) in ONE transaction,
+  so every changed field writes its own History row and a refused step (a
+  line whose ASIN row shipped to FBA, a duplicate order #) keeps nothing;
+  an untouched PO saved writes nothing. Only a problem the stored PO does
+  not already have blocks Save (an imported line without a price still
+  saves a change elsewhere; the old ones show in amber as "Already on the
+  stored PO"). A sheet-imported PO shows its STORED Sourcing / COGS / Paid
+  and keeps them — COGS is written only when its field is changed (cleared
+  = blank, never the formula); a v2 PO's costs follow `recomputePoCosts`
+  once at the end. The pack override ("This PO only" / "Update ASIN in AF")
+  works as on New; the page seeds the picker with the PO's ASINs so opening
+  it never re-picks one (which would reset its pack). The old dialog's
+  free-text Payment method and Promo (sheet text) fields are not on the
+  form (the Payments and Promos blocks replace them). The order # warning
+  ("order # is how shipments are matched from Velocity; changing it
+  re-matches on the next Sync Shipments"; `_1`-style suffixes are
+  intentional) comes back with the save; (supplier, order #) stays unique
+  (409).
   Products tab: inline name, SKU / UPC, price, qty ordered / received /
   canceled / returned (≤ ordered), yield, notes, ASIN re-map, Add product,
   remove. ASIN rows (detail tab and the POs page's nested rows): sold as,
@@ -6614,7 +6641,7 @@ replaces it. Migration 061 adds `po_edit_log`, `deleted_pos` and
   amount / counts flip, an adjustment, a header subtotal / discount / GC %
   or a line price / qty / yield re-runs `recomputePoCosts` for a PO saved
   under the v2 rule; an imported PO (`cost_formula_version` NULL) is never
-  recomputed and its tab says so. The edit drawer also carries Email used
+  recomputed and its tab says so. Edit PO (the page) also carries Email used
   and Cashback status; the Details tab shows the PO's source (Orders sheet /
   New PO form / Capture PO / Subscription renewal).
 - **Edit log.** Every writer — the routes above, action items, Cancel ASIN,
@@ -6822,8 +6849,8 @@ replaces it. Migration 061 adds `po_edit_log`, `deleted_pos` and
   the sheet's X formula varies per order, probe doc) and measures 1,019 /
   1,582 (64.4 %) — the test pins that count so a change is noticed.
 - **Calculator in money fields.** Every cost / money field — New PO header
-  money, product price and prep, cost / unit; the PO edit drawer's money
-  fields; the price, cost / unit and prep cells — accepts an arithmetic
+  money, product price and prep, cost / unit (Edit PO is the same form);
+  the price, cost / unit and prep cells — accepts an arithmetic
   expression (+ − × ÷, parentheses, decimals) and evaluates it on blur /
   Enter to the cent (`shared/money-expr.ts`, a parser, no eval). The
   expression stays as the tooltip; division by zero or an unparseable
@@ -7757,7 +7784,7 @@ quantity, item or status; nothing but tracking numbers leaves AF.
   number in the email" for a placeholder), subject; **Map** the sender
   domain to a supplier (for `unknown_sender`), **Attach** to a PO by order
   #, **dismiss**.
-- **Ships to** (Velocity | Home): PO Details card, the Edit PO drawer
+- **Ships to** (Velocity | Home): PO Details card, the Edit PO page
   (`HEADER_FIELDS.ships_to`), the New PO form (default Velocity).
 - **Review Velocity** chip: shown after the manual items on the POs column
   and PO Details, the open reasons on hover; never offered in the

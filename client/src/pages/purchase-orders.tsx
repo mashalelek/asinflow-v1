@@ -29,7 +29,7 @@ import { loadPoExpanded, savePoExpanded, isPoExpanded, togglePoExpanded, toggleE
 import { fmtQty, PO_ASIN_COLUMNS } from "@/lib/po-qty";
 import { fetchLongSync } from "@/lib/long-sync";
 import { useToast } from "@/hooks/use-toast";
-import { PoHeaderDrawer, PoProductsTable, PoHistory, PoDangerActions } from "@/components/po-edit";
+import { PoProductsTable, PoHistory, PoDangerActions } from "@/components/po-edit";
 import { PoTrackingTab, SyncTrackingButton, UnmatchedTrackingChip } from "@/components/po-tracking";
 import { PoMoneyTab, type PoPayment, type PoPromo, type PoRefund } from "@/components/po-money";
 import { Pencil } from "lucide-react";
@@ -841,7 +841,6 @@ export function PurchaseOrderDetailPlaceholder() {
   const [error, setError] = useState<string | null>(null);
   const [tab, setTab] = useState<"details" | "asins" | "products" | "payments" | "tracking" | "history">("details");
   const [copied, setCopied] = useState(false);
-  const [editOpen, setEditOpen] = useState(false);
   const [version, setVersion] = useState(0); // bumps on every reload so History refetches
 
   const reload = useCallback(() => {
@@ -891,11 +890,10 @@ export function PurchaseOrderDetailPlaceholder() {
         </div>
         <div className="flex items-center gap-2">
           <ActionItemChips items={actionItems} reasons={po.review_velocity_reasons} testId="po-detail-action-items" />
-          <Button variant="outline" size="sm" onClick={() => setEditOpen(true)} data-testid="button-edit-po"><Pencil className="h-3.5 w-3.5 mr-1" /> Edit PO</Button>
+          <Button variant="outline" size="sm" onClick={() => navigate(`/pos/${po.id}/edit`)} data-testid="button-edit-po"><Pencil className="h-3.5 w-3.5 mr-1" /> Edit PO</Button>
           <PoDangerActions poId={po.id} reloadKey={version} onCanceled={reload} onDeleted={() => navigate("/purchase-orders")} />
         </div>
       </div>
-      <PoHeaderDrawer po={po} open={editOpen} onOpenChange={setEditOpen} onSaved={reload} />
 
       {/* Summary strip */}
       <div className="flex gap-6 rounded-md px-4 py-3 text-sm" style={{ border: "0.5px solid hsl(var(--border))" }} data-testid="po-summary-strip">

@@ -88,6 +88,8 @@ export function ambiguousPaymentHint(last4: string, candidates: readonly string[
 }
 
 export interface PoFormPromo {
+  /** po_promos.id of a stored promo (Edit PO, shared/po-edit-form.ts); absent = new. Form-only. */
+  id?: number;
   type: PromoType | "";
   description: string;
   amount: string;   // $ off the order, when stated
@@ -98,6 +100,8 @@ export interface PoFormAdjustment { amount: string; reason: string }
 export const PAYMENT_METHODS = ["card", "gift_card", "store_credit", "paypal", "other"] as const;
 export type PaymentMethod = (typeof PAYMENT_METHODS)[number];
 export interface PoFormPayment {
+  /** po_payments.id of a stored payment (Edit PO); absent = new. Form-only. */
+  id?: number;
   method: PaymentMethod | "";
   nickname: string;
   last4: string;
@@ -139,6 +143,8 @@ export interface PoFormProduct {
   line_id?: string;
   /** The bundle box this line sits in (several products → one ASIN). Form-only; the server ignores it. */
   bundle_id?: string;
+  /** po_line_items.id of a stored line (Edit PO, shared/po-edit-form.ts); absent = a new line. Never copied to a split's new row. */
+  line_item_id?: string;
   sold_as: SoldAs;
   units_per_pack: string;
   prep_cost: string;

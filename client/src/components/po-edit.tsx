@@ -2,8 +2,8 @@
  * AF-owned PO editing UI (patch docs/claude_spec-patch-po-af-owned.md §3).
  *
  * - InlineEdit: click a cell → input; Enter / blur saves, Escape cancels.
- * - PoHeaderDrawer: the header fields (supplier, order #, date, money,
- *   payment, cashback, purchased by, notes) with the order # warning.
+ * - (The header dialog is gone since 2026-11-04: Edit PO is the page
+ *   /pos/:id/edit — client/src/pages/po-edit-page.tsx.)
  * - PoProductsTable: the Products tab, editable (name, SKU, price, the four
  *   quantities, yield, ASIN re-map, notes), add / remove product.
  * - PoHistory: the po_edit_log, newest first.
@@ -12,17 +12,15 @@
  */
 import React, { useEffect, useState } from "react";
 import { effectiveYield, fracToNumber, lineRatio, lineUnitsExact, ratioForUnits } from "@shared/yield";
-import { AlertTriangle, Plus, Trash2, StickyNote } from "lucide-react";
+import { Plus, Trash2, StickyNote } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { trueYield } from "@shared/po-form";
-import { Label } from "@/components/ui/label";
-import { Textarea } from "@/components/ui/textarea";
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription, DialogFooter } from "@/components/ui/dialog";
 import { useToast } from "@/hooks/use-toast";
 import { fmtQty, productQtyFromAsin } from "@/lib/po-qty";
 import type { PoAsinRowData, PoAsinLine } from "@/components/po-asin-rows";
-import { MoneyCalcInput, calcMoney } from "@/components/money-calc-input";
+import { calcMoney } from "@/components/money-calc-input";
 import { RefundProposalDialog, type PoHeaderMoney, type CanceledLine } from "@/components/refund-due-dialog";
 
 export const ORDER_ID_WARNING = "order # is how shipments are matched from Velocity; changing it re-matches on the next Sync Shipments";
@@ -91,120 +89,6 @@ export function SelectEdit({ value, options, onSave, testId }: { value: string; 
   );
 }
 
-// ── Header drawer ────────────────────────────────────────────────────────────
-const HEADER_GROUPS: Array<{ title: string; fields: Array<{ key: string; label: string; type?: "date" | "money" | "pct" | "text" | "area" | "select"; options?: Array<[string, string]> }> }> = [
-  { title: "Order", fields: [{ key: "supplier", label: "Supplier" }, { key: "order_id", label: "Order #" }, { key: "order_date", label: "Order date", type: "date" },
-    // SPEC §26: where it ships — drives the tracking routing rules.
-    { key: "ships_to", label: "Ships to", type: "select", options: [["velocity", "Velocity"], ["home", "Home"]] }] },
-  { title: "Money", fields: [
-    { key: "subtotal", label: "Subtotal", type: "money" }, { key: "tax", label: "Tax", type: "money" }, { key: "sh_donations", label: "S&H + Donations", type: "money" },
-    { key: "discount", label: "Discount", type: "money" }, { key: "refund_amount", label: "Refund amount", type: "money" }, { key: "order_total", label: "Order total", type: "money" },
-  ] },
-  { title: "Payment", fields: [
-    { key: "payment_method", label: "Payment method" }, { key: "weighted_gc_discount_pct", label: "Weighted GC %", type: "pct" },
-    { key: "cashback_site", label: "Cashback site" }, { key: "cashback_pct", label: "Cashback %", type: "pct" },
-    { key: "cashback_status", label: "Cashback status", type: "select", options: [["", "—"], ["pending", "pending"], ["received", "received"], ["denied", "denied"]] },
-    { key: "promo", label: "Promo (sheet text)" },
-  ] },
-  { title: "Meta", fields: [{ key: "purchased_by", label: "Purchased by" }, { key: "email_used", label: "Email used" }, { key: "notes", label: "Notes", type: "area" }] },
-];
-
-/** YYYY-MM-DD for a pg DATE that arrived as an ISO string. */
-export function ymdOf(v: unknown): string {
-  const s = String(v ?? "");
-  const m = /^(\d{4}-\d{2}-\d{2})/.exec(s);
-  if (m && !s.includes("T")) return m[1];
-  const d = new Date(s);
-  return Number.isNaN(d.getTime()) ? "" : `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
-}
-
-/** The fields whose draft differs from the stored PO — only those are sent. */
-export function headerChanges(po: Record<string, any>, draft: Record<string, string>): Record<string, string> {
-  const out: Record<string, string> = {};
-  for (const g of HEADER_GROUPS) for (const f of g.fields) {
-    const stored = f.type === "date" ? ymdOf(po[f.key]) : editText(po[f.key]);
-    if ((draft[f.key] ?? "").trim() !== stored.trim()) out[f.key] = draft[f.key] ?? "";
-  }
-  return out;
-}
-
-export function PoHeaderDrawer({ po, open, onOpenChange, onSaved }: { po: Record<string, any>; open: boolean; onOpenChange: (v: boolean) => void; onSaved: () => void }) {
-  const { toast } = useToast();
-  const [draft, setDraft] = useState<Record<string, string>>({});
-  const [busy, setBusy] = useState(false);
-  const [err, setErr] = useState<string | null>(null);
-  useEffect(() => {
-    if (!open) return;
-    const d: Record<string, string> = {};
-    for (const g of HEADER_GROUPS) for (const f of g.fields) d[f.key] = f.type === "date" ? ymdOf(po[f.key]) : editText(po[f.key]);
-    setDraft(d); setErr(null);
-  }, [open, po]);
-  const changes = headerChanges(po, draft);
-  const orderKeyChanged = "order_id" in changes || "supplier" in changes;
-  const save = async () => {
-    if (Object.keys(changes).length === 0) { onOpenChange(false); return; }
-    setBusy(true); setErr(null);
-    try {
-      const body: Record<string, string> = {};
-      for (const [k, v] of Object.entries(changes)) {
-        const isMoney = HEADER_GROUPS.some((g) => g.fields.some((f) => f.key === k && f.type === "money"));
-        const c = isMoney ? calcMoney(v) : { ok: true as const, text: v, expression: null };
-        if (!c.ok) throw new Error(`${k}: can't calculate (${c.error})`);
-        body[k] = c.text;
-      }
-      const r = await poApi(`/api/pos/${po.id}`, "PATCH", body);
-      toast({ title: `PO updated (${r.changes?.length ?? 0} field${r.changes?.length === 1 ? "" : "s"})`, description: r.warning ?? undefined });
-      onOpenChange(false); onSaved();
-    } catch (e: any) { setErr(e.message); } finally { setBusy(false); }
-  };
-  return (
-    <Dialog open={open} onOpenChange={onOpenChange}>
-      {/* The PO editor on the shared dialog frame (AF-wide dialog rule, 2026-11-01) — no longer a side sheet. */}
-      <DialogContent dialogId="po-edit" className="max-w-[32rem]" data-testid="po-edit-drawer">
-        <DialogHeader>
-          <DialogTitle>Edit PO</DialogTitle>
-          <DialogDescription>{po.supplier} · {po.order_id}. Every change is logged in History.</DialogDescription>
-        </DialogHeader>
-        <div className="space-y-5 py-4">
-          {HEADER_GROUPS.map((g) => (
-            <div key={g.title} className="space-y-2">
-              <div className="text-[11px] font-semibold uppercase tracking-wider text-muted-foreground">{g.title}</div>
-              {g.fields.map((f) => (
-                <div key={f.key} className="grid grid-cols-[9rem_1fr] items-center gap-2">
-                  <Label htmlFor={`po-edit-${f.key}`} className="text-xs text-muted-foreground">{f.label}</Label>
-                  {f.type === "select" ? (
-                    <select id={`po-edit-${f.key}`} value={draft[f.key] ?? ""} onChange={(e) => setDraft({ ...draft, [f.key]: e.target.value })} className="h-8 rounded border bg-background px-2 text-sm" data-testid={`input-po-${f.key}`}>
-                      {(f.options ?? []).map(([v, l]) => <option key={v} value={v}>{l}</option>)}
-                    </select>
-                  ) : f.type === "area" ? (
-                    <Textarea id={`po-edit-${f.key}`} value={draft[f.key] ?? ""} onChange={(e) => setDraft({ ...draft, [f.key]: e.target.value })} rows={3} data-testid={`input-po-${f.key}`} />
-                  ) : f.type === "money" ? (
-                    <MoneyCalcInput id={`po-edit-${f.key}`} value={draft[f.key] ?? ""} onChange={(v) => setDraft((d) => ({ ...d, [f.key]: v }))} className="h-8 text-sm" data-testid={`input-po-${f.key}`} />
-                  ) : (
-                    <Input id={`po-edit-${f.key}`} type={f.type === "date" ? "date" : "text"} inputMode={f.type === "pct" ? "decimal" : undefined}
-                      value={draft[f.key] ?? ""} onChange={(e) => setDraft({ ...draft, [f.key]: e.target.value })} className="h-8 text-sm" data-testid={`input-po-${f.key}`} />
-                  )}
-                </div>
-              ))}
-              {g.title === "Order" && orderKeyChanged && (
-                <p className="flex items-start gap-1.5 rounded-md bg-amber-500/10 px-2 py-1.5 text-xs text-amber-700 dark:text-amber-400" data-testid="po-order-id-warning">
-                  <AlertTriangle className="h-3.5 w-3.5 mt-0.5 shrink-0" /> {ORDER_ID_WARNING[0].toUpperCase() + ORDER_ID_WARNING.slice(1)}.
-                </p>
-              )}
-            </div>
-          ))}
-          {err && <p className="text-sm text-destructive" data-testid="po-edit-error">{err}</p>}
-        </div>
-        <DialogFooter>
-          <Button variant="outline" onClick={() => onOpenChange(false)} disabled={busy}>Cancel</Button>
-          <Button onClick={save} disabled={busy} data-testid="button-po-edit-save">{busy ? "Saving…" : `Save${Object.keys(changes).length > 0 ? ` (${Object.keys(changes).length})` : ""}`}</Button>
-        </DialogFooter>
-      </DialogContent>
-    </Dialog>
-  );
-}
-
-// ── Products tab, editable ───────────────────────────────────────────────────
 function Muted({ v }: { v: React.ReactNode }) { return <span className="text-muted-foreground/50">{v}</span>; }
 function MoneyText({ v }: { v: string | null | undefined }) {
   if (v == null) return <Muted v="—" />;
