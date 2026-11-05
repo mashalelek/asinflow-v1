@@ -135,6 +135,10 @@ export interface SheetRow {
   quantity: string | null;     // AZ — verbatim
   /** AF rows only (loadAfPoRows): the PO's ships_to. A Home PO is never pre-ticked for Velocity (SPEC §11). */
   shipsTo?: "home" | "velocity";
+  // AF rows only (po-af-source, 2026-11-05): po_asins.qty was NULL (the quantity was recomputed from the line's
+  // retailer qty), and the product line's 1-based position on its PO — for the Velocity skip message.
+  asinUnitsMissing?: boolean;
+  lineNumber?: number;
 }
 
 // Trim to string, empty → null. Velocity fields pass through verbatim otherwise.

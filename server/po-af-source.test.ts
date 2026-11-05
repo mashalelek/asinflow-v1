@@ -51,6 +51,18 @@ describe("loadAfPoRows", () => {
   });
 });
 
+describe("loadAfPoRows — stored ASIN units first (Send to Velocity, 2026-11-05)", () => {
+  const caress = { order_id: "200015663718988", order_date: "2026-11-05", supplier: "walmart.com", closed: false, ships_to: "velocity", asin: "B006T0U4R4", asin_name: "Caress", asin_qty: "5.50", cost_per_unit: null, prep_cost: "1.00", sold_as: "multi-pack", units_per_pack: 2, unique_products: null, position: 0, product_name: "Caress 20 oz", qty_ordered: "11.00", asin_qty_per_product: "0.50", retailer_units_per_product: 1, asin_units_per_pack: 2, canceled: false, line_count: 1 };
+  it("the stored ASIN units are what the row carries (5.5 × 2/pack = AZ 11), with the line number", async () => {
+    const { query } = fake([caress]);
+    expect((await loadAfPoRows(query)).rows[0]).toMatchObject({ qty: 5.5, quantity: "11", unitsPerPack: "2", asinUnitsMissing: false, lineNumber: 1 });
+  });
+  it("ASIN units missing → recomputed from the retailer qty × yield, and flagged", async () => {
+    const { query } = fake([{ ...caress, asin_qty: null, qty_ordered: "12.00" }]);
+    expect((await loadAfPoRows(query)).rows[0]).toMatchObject({ qty: 6, quantity: "12", asinUnitsMissing: true });
+  });
+});
+
 describe("lineAsinQty / trueYield (the sheet's U = L × T ÷ S)", () => {
   it("restores 2-dp yields to the fraction typed", () => {
     expect(trueYield(0.33)).toBeCloseTo(1 / 3, 9);

@@ -89,12 +89,18 @@ export async function loadAfPoRows(query: QueryLike): Promise<{ rows: SheetRow[]
       ORDER BY ${NEWEST_PO_ORDER}, pa.asin, l.position`,
   )).rows as any[];
   const rows: SheetRow[] = rs.map((r, i) => {
+    // 2026-11-05: the stored ASIN units are what this PO keeps; only when they are missing is the line's retailer
+    // qty × yield used instead (a one-line row otherwise reads po_asins.qty as is).
+    const asinUnitsMissing = r.asin_qty == null;
     const asinQty = num(r.asin_qty) ?? 0;
     const lines = Number(r.line_count) || 1;
     const bundle = String(r.sold_as) === "bundle" && (num(r.unique_products) ?? 1) > 1;
     const upp = num(r.units_per_pack) ?? 1;
     const ratio = lineRatio(r);
-    const lineQty = lineAsinQty(asinQty, num(r.qty_ordered), ratio ? ratio.retailer / ratio.asinUnits : num(r.asin_qty_per_product), num(r.unique_products) ?? 1, lines, !!ratio);
+    const yieldNum = ratio ? ratio.retailer / ratio.asinUnits : num(r.asin_qty_per_product);
+    const lineQty = asinUnitsMissing && num(r.qty_ordered) != null && yieldNum != null
+      ? Math.round(((num(r.qty_ordered)! * yieldNum) / ((num(r.unique_products) ?? 1) || 1)) * 1e6) / 1e6
+      : lineAsinQty(asinQty, num(r.qty_ordered), yieldNum, num(r.unique_products) ?? 1, lines, !!ratio);
     const status = [r.closed ? "Closed" : null, r.canceled ? "Canceled" : null].filter(Boolean).join(", ") || "Ordered";
     return {
       sheetRow: i + 2,
@@ -119,6 +125,8 @@ export async function loadAfPoRows(query: QueryLike): Promise<{ rows: SheetRow[]
       // AZ: total units — sets × units per bundle for a bundle, packs × units/pack otherwise.
       quantity: String(Math.round((bundle ? asinQty : lineQty) * upp * 100) / 100),
       shipsTo: r.ships_to === "home" ? "home" : "velocity",
+      asinUnitsMissing,
+      lineNumber: (Number(r.position) || 0) + 1,
     };
   });
   return { rows, rawRowsRead: rows.length, blankAsinRows: 0 };

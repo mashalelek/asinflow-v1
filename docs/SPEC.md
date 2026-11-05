@@ -1218,7 +1218,24 @@ itemName}`):
 - `invalid_pack_math` — `sold_as` is `multi-pack` AND (Col AY
   `units_per_pack` is not a positive integer OR Col AZ `quantity` is not
   divisible by it). Velocity enforces divisibility; catch VA typos before
-  they do.
+  they do. **2026-11-05 (Maria; Walmart PO 200015663718988, Caress
+  B006T0U4R4 — 11 singles, 2-packs, ASIN units 5.5 stored: 10 belong to the
+  PO as 5 two-packs, 1 single replaces a unit of 200015557295492):** the
+  quantity comes from the PO's stored ASIN units (`po_asins.qty` × units per
+  pack; the line's retailer qty × yield only when the ASIN units are
+  missing). A quantity that leaves units over is **sent as its whole packs**
+  (`wholePacks`: 11 → 5 packs = 10 units) and listed in the plan's
+  `packRemainders`; the dialog leaves that row **unticked**, in amber, with
+  "5 packs sent · 1 single left over" — Maria ticks it to send. A row with
+  no remainder behaves as before. The skip remains only for units/pack not
+  a whole number, fewer units than one pack, or ASIN units missing AND the
+  retailer qty not dividing — each skip carries `detail`, the exact reason
+  with the PO line ("PO 200015… line 1: ASIN units missing, and 11 ordered ÷
+  2 per pack is not a whole number of packs"), shown under the reason. The
+  quantity audit compares Velocity with the same whole packs, so the
+  10-unit order is not a mismatch against 11. Nothing on the PO changes;
+  the left-over unit's cost and allocation are the Allocate-to-another-PO
+  backlog item.
 
 **Bundles (2026-08-31).** A bundle = the rows sharing `(order, ASIN)` with
 Col S ≥ 2 (unique products per ASIN); Col AX reads `bundle`. Ground truth

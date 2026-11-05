@@ -12,8 +12,8 @@ import type { SheetRow } from "./google-sheets";
 import { loadAfPoRows } from "./po-af-source";
 import { query as defaultQuery } from "./db";
 import {
-  buildVelocityRecords, formatYMD,
-  type VelocityRecord, type VelocitySkip, type VelocityBundleRecord, type BundleFlag,
+  buildVelocityRecords, formatYMD, wholePacks,
+  type VelocityRecord, type VelocitySkip, type VelocityBundleRecord, type BundleFlag, type PackRemainder,
 } from "./velocity-export";
 import { fetchAllKnownOrders, matchKeysForOrder, type KnownVelocityOrder } from "./velocity-api";
 import { recordableBundles, hydrateChildlessBundles, type BundleIdentityRow } from "./velocity-bundle-identity";
@@ -65,6 +65,8 @@ export interface VelocityPlan {
   effectiveFrom: string;      // YMD (creation floor applied to creates only)
   clamped: boolean;
   creates: VelocityRecord[];
+  // 2026-11-05: creates / home creates sent as whole packs with units left over — unticked in the dialog.
+  packRemainders: PackRemainder[];
   // Bundles (SPEC §11, 2026-08-31): dedup by child-derived keys; AY/AZ
   // cross-check mismatches ride along for the review screen.
   bundleCreates: VelocityBundleRecord[];
@@ -90,6 +92,16 @@ export interface VelocityPlan {
     units_per_pack: any; amazon_sku: string | null; item_name: string | null;
     created_at: string | null; shipment_ids: string[]; candidateOrderNumbers: string[];
   }>;
+}
+
+/** The quantity a row asserts to Velocity: AZ, or — a multi-pack whose stored ASIN units leave a remainder — its whole packs, as the create sends it. */
+function auditUnits(row: { quantity: string | null; soldAs: string | null; unitsPerPack: string | null; asinUnitsMissing?: boolean }): number | null {
+  const q = numOrNull(row.quantity);
+  if (q === null || (row.soldAs ?? "").trim().toLowerCase() !== "multi-pack" || row.asinUnitsMissing) return q;
+  const upp = Number((row.unitsPerPack ?? "").toString().trim());
+  if (!Number.isInteger(upp) || upp <= 0) return q;
+  const w = wholePacks(q, upp);
+  return w.leftover > 0 && w.packs >= 1 ? w.units : q;
 }
 
 const normKey = (orderNumber: string, asin: string) =>
@@ -277,7 +289,8 @@ export async function buildVelocityPlan(
         diffs.push({ field: "quantity", sheet_value: derived, velocity_value: velQty });
       }
     } else if (o.lifecycleSource !== "shipment") {
-      const sheetQty = numOrNull(sheetRow.quantity), velQty = numOrNull(o.quantity);
+      // 2026-11-05: a multi-pack row with units left over is sent (and audited) as its whole packs.
+      const sheetQty = auditUnits(sheetRow), velQty = numOrNull(o.quantity);
       if (sheetQty !== null && Number.isInteger(sheetQty) && sheetQty > 0 && sheetQty !== velQty) {
         diffs.push({ field: "quantity", sheet_value: sheetQty, velocity_value: velQty });
       }
@@ -351,6 +364,7 @@ export async function buildVelocityPlan(
     effectiveFrom: formatYMD(build.effectiveFrom),
     clamped: build.clamped,
     creates,
+    packRemainders: build.packRemainders.filter((x) => !matchedVelocityByKey.has(normKey(x.order_number, x.asin))),
     bundleCreates,
     bundleFlags: build.bundleFlags,
     updates,

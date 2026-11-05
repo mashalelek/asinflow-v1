@@ -49,6 +49,13 @@ interface SkipRow {
   row?: { date: string | null; retailer: string | null; quantity: string | null; soldAs: string | null; unitsPerPack: string | null };
   // §11 Part D: only on bundle_unplaced_candidate — the parent(s) holding it.
   unplaced?: UnplacedBundle[];
+  // 2026-11-05: invalid_pack_math — the exact reason with the PO line.
+  detail?: string;
+}
+// A multi-pack create sent as whole packs with units left over (2026-11-05): unticked, the row in amber.
+interface PackRemainder { order_number: string; asin: string; packs: number; units_per_pack: number; leftover: number }
+export function remainderLabel(p: PackRemainder): string {
+  return `${p.packs} pack${p.packs === 1 ? "" : "s"} sent · ${p.leftover} single${p.leftover === 1 ? "" : "s"} left over`;
 }
 interface VelocityBundleItem { item_name: string; quantity: number; order_number: string; retailer: string; date: string }
 interface VelocityBundleRecord {
@@ -60,7 +67,7 @@ interface BundleFlag { orderNumber: string; asin: string; field: string; sheet: 
 
 interface ReviewData {
   from: string; to: string; effectiveFrom: string; clamped: boolean;
-  creates: VelocityRecord[]; bundleCreates?: VelocityBundleRecord[]; bundleFlags?: BundleFlag[]; updates: PlanUpdate[];
+  creates: VelocityRecord[]; packRemainders?: PackRemainder[]; bundleCreates?: VelocityBundleRecord[]; bundleFlags?: BundleFlag[]; updates: PlanUpdate[];
   deleteCandidates: Array<{ order_id: string; order_number: string; asin: string; item_name: string | null; sheet_status: string }>;
   unchanged: number; closedInVelocity: number; unmatchedVelocity: number;
   selfPrepExcluded: number; skips: SkipRow[];
@@ -95,7 +102,7 @@ const SKIP_REASON_LABEL: Record<string, string> = {
   missing_quantity: "quantity missing on sheet",
   unparseable_date: "order date does not parse",
   bundle_unsupported: "bundles not supported",
-  invalid_pack_math: "quantity not divisible by units/pack",
+  invalid_pack_math: "pack math does not work",
 };
 
 // §11 legend_pending expansion: what the offer-add says needs approval.
@@ -189,9 +196,11 @@ export function UploadToVelocityDialog({ open, onOpenChange }: { open: boolean; 
       if (!res.ok) throw new Error(body?.message ?? `HTTP ${res.status}`);
       setData(body as ReviewData);
       // NEW ORDERS pre-ticked; QTY MISMATCHES opt-in (unticked).
-      // NEW ORDERS pre-ticked — bundles included (SPEC §11 Bundles).
+      // NEW ORDERS pre-ticked — bundles included (SPEC §11 Bundles) — except a row sent as whole packs with units
+      // left over (2026-11-05): Maria ticks that one herself.
+      const remainderKeys = new Set(((body.packRemainders ?? []) as PackRemainder[]).map(recKey));
       setSelCreates(new Set([
-        ...(body.creates as VelocityRecord[]).map(recKey),
+        ...(body.creates as VelocityRecord[]).map(recKey).filter((k) => !remainderKeys.has(k)),
         ...(((body.bundleCreates ?? []) as VelocityBundleRecord[])).map(bundleKey),
       ]));
       setSelUpdates(new Set());
@@ -226,6 +235,7 @@ export function UploadToVelocityDialog({ open, onOpenChange }: { open: boolean; 
   }, [open]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const allCreates = useMemo(() => [...(data?.creates ?? []), ...promoted], [data, promoted]);
+  const remainders = useMemo(() => new Map((data?.packRemainders ?? []).map((p) => [recKey(p), p] as const)), [data]);
   const actionableUpdates = useMemo(() => (data?.updates ?? []).filter((u) => u.actionable), [data]);
   const flagOnlyUpdates = useMemo(() => (data?.updates ?? []).filter((u) => !u.actionable), [data]);
   const homeCreates = data?.homeCreates ?? [];
@@ -442,8 +452,9 @@ export function UploadToVelocityDialog({ open, onOpenChange }: { open: boolean; 
                     <tbody>
                       {allCreates.map((r) => {
                         const key = recKey(r);
+                        const rem = remainders.get(key);
                         return (
-                          <tr key={key} className="border-b border-border/50">
+                          <tr key={key} className={`border-b border-border/50 ${rem ? "text-amber-700 dark:text-amber-400" : ""}`} data-testid={rem ? `velocity-remainder-${r.order_number}-${r.asin}` : undefined}>
                             <td className="py-1.5 pr-2">
                               <Checkbox checked={selCreates.has(key)} onCheckedChange={() => toggleCreate(key)} disabled={!!results} />
                             </td>
@@ -454,6 +465,7 @@ export function UploadToVelocityDialog({ open, onOpenChange }: { open: boolean; 
                             <td className="py-1.5 pr-3 text-right">{r.quantity}</td>
                             <td className="py-1.5 pr-3 whitespace-nowrap">
                               {r.sold_as}{r.sold_as === "multi-pack" && r.units_per_pack ? ` ×${r.units_per_pack}` : ""}
+                              {rem && <div className="text-xs">{remainderLabel(rem)}</div>}
                             </td>
                             <td className="py-1.5 pr-3 font-mono text-xs">{r.asin}</td>
                             <td className="py-1.5 pr-3 font-mono text-xs">{r.amazon_sku}</td>
@@ -546,7 +558,7 @@ export function UploadToVelocityDialog({ open, onOpenChange }: { open: boolean; 
                                 <td className="py-1.5 pr-3 max-w-[140px] truncate">{r.retailer}</td>
                                 <td className="py-1.5 pr-3 whitespace-nowrap">{r.order_number}</td>
                                 <td className="py-1.5 pr-3 max-w-[280px] truncate" title={r.item_name}>{r.item_name}</td>
-                                <td className="py-1.5 pr-3 text-right">{r.quantity}</td>
+                                <td className="py-1.5 pr-3 text-right">{r.quantity}{remainders.get(key) && <div className="text-xs text-amber-700 dark:text-amber-400">{remainderLabel(remainders.get(key)!)}</div>}</td>
                                 <td className="py-1.5 pr-3 font-mono text-xs">{r.asin}</td>
                                 <td className="py-1.5 pr-3 text-xs">Ships to Home</td>
                                 <td className="py-1.5">{resultBadge(resultFor("create", key))}</td>
@@ -642,7 +654,7 @@ export function UploadToVelocityDialog({ open, onOpenChange }: { open: boolean; 
                             <td className="py-1.5 pr-3 whitespace-nowrap">{s.orderNumber ?? "—"}</td>
                             <td className="py-1.5 pr-3 max-w-[280px] truncate" title={s.itemName ?? ""}>{s.itemName}</td>
                             <td className="py-1.5 pr-3 font-mono text-xs">{s.asin}</td>
-                            <td className="py-1.5 pr-3 text-muted-foreground">{SKIP_REASON_LABEL[s.reason] ?? s.reason}</td>
+                            <td className="py-1.5 pr-3 text-muted-foreground">{SKIP_REASON_LABEL[s.reason] ?? s.reason}{s.detail && <div className="text-xs">{s.detail}</div>}</td>
                             <td className="py-1.5 text-xs">
                               {/* §11 Part D (2026-09-21): a held bundle group
                                   expands INLINE with its holder(s) — never a

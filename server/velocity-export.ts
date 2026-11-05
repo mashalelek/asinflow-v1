@@ -31,12 +31,14 @@ export type VelocitySkipReason =
   // keys — it blocked three legitimate new orders. Replaced by identity
   // records (§11 Parts A–C) plus the narrow per-parent candidate hold below.
   | "bundle_unplaced_candidate"  // an UNPLACED shipped bundle (no identity record) may be THIS group — same ASIN, same units, sheet date within ±1 day of the Velocity date
-  | "invalid_pack_math";   // multi-pack with bad units_per_pack or qty not divisible by it
+  | "invalid_pack_math";   // multi-pack: units/pack not a whole number, fewer units than one pack, or ASIN units missing and the retailer qty ÷ units/pack not whole (2026-11-05)
 export interface VelocitySkip {
   reason: VelocitySkipReason;
   orderNumber: string | null;
   asin: string;
   itemName: string | null;
+  // 2026-11-05: the exact reason, with the PO line ("PO 200015… line 1: …") — invalid_pack_math.
+  detail?: string;
   // §11 Part D (2026-09-21): populated ONLY for bundle_unplaced_candidate —
   // the unplaced Velocity parent(s) holding this group, for the dialog's
   // inline mapping action.
@@ -79,6 +81,17 @@ export interface VelocityBundleRecord {
   // Distinct child order numbers — the child-derived match keys (× asin).
   orderNumbers: string[];
 }
+// A multi-pack row sent as whole packs with units left over (Maria 2026-11-05: PO 200015663718988 — 11 singles,
+// 2-packs, ASIN units 5.5 stored; 10 belong to it as 5 two-packs, 1 is a replacement for an earlier PO). The record
+// carries the whole packs; the dialog lists the row unticked, in amber: "5 packs sent · 1 single left over".
+export interface PackRemainder { order_number: string; asin: string; packs: number; units_per_pack: number; leftover: number }
+
+/** Multi-pack units as Velocity takes them (it enforces quantity % units_per_pack === 0): the whole packs and what is left over. Pure. */
+export function wholePacks(units: number, unitsPerPack: number): { packs: number; units: number; leftover: number } {
+  const packs = Math.floor(units / unitsPerPack + 1e-9);
+  return { packs, units: packs * unitsPerPack, leftover: Math.round((units - packs * unitsPerPack) * 100) / 100 };
+}
+
 // AY/AZ cross-check mismatch — reported, never blocking (AY/AZ are not inputs).
 export interface BundleFlag {
   orderNumber: string; asin: string;
@@ -98,6 +111,7 @@ export interface VelocityBuildResult {
   homeRecords: VelocityRecord[];
   homeBundles: VelocityBundleRecord[];
   homeSkipped: number;
+  packRemainders: PackRemainder[];
   // Order-date floor (SPEC §11): creation clamp applied inside the builder so
   // every delivery path (CSV export, API upload) inherits it.
   requestedFrom: Date;
@@ -175,7 +189,7 @@ export async function buildVelocityRecords(
   const clamped = effectiveFrom.getTime() > requestedFrom.getTime();
   const rangeBeforeFloor = to.getTime() < floor.getTime();
   if (rangeBeforeFloor) {
-    return { records: [], bundles: [], bundleFlags: [], selfPrepExcluded: 0, skips: [], homeRecords: [], homeBundles: [], homeSkipped: 0, requestedFrom, effectiveFrom, clamped, rangeBeforeFloor };
+    return { records: [], bundles: [], bundleFlags: [], selfPrepExcluded: 0, skips: [], homeRecords: [], homeBundles: [], homeSkipped: 0, packRemainders: [], requestedFrom, effectiveFrom, clamped, rangeBeforeFloor };
   }
 
   // Source = the AF PO tables in the sheet's row shape (po-af-owned §2.4,
@@ -218,6 +232,7 @@ export async function buildVelocityRecords(
   }
 
   const records: VelocityRecord[] = [];
+  const packRemainders: PackRemainder[] = [];
   const bundleGroups = new Map<string, typeof selected>();
   for (const row of selected) {
     const sku = skuMap.get(row.asin);
@@ -239,13 +254,24 @@ export async function buildVelocityRecords(
       skips.push({ reason: "missing_quantity", orderNumber: row.orderNumber, asin: row.asin, itemName: row.itemName, row: { date: row.orderDate ?? null, retailer: row.retailer ?? null, quantity: row.quantity ?? null, soldAs: row.soldAs ?? null, unitsPerPack: row.unitsPerPack ?? null } });
       continue;
     }
+    let quantity: string = row.quantity;
     if (soldAs === "multi-pack") {
       const upp = Number((row.unitsPerPack ?? "").toString().trim());
       const qty = Number((row.quantity ?? "").toString().trim());
-      // Velocity enforces qty % units_per_pack === 0 — catch VA typos before they do.
-      if (!Number.isInteger(upp) || upp <= 0 || !Number.isInteger(qty) || qty % upp !== 0) {
-        skips.push({ reason: "invalid_pack_math", orderNumber: row.orderNumber, asin: row.asin, itemName: row.itemName, row: { date: row.orderDate ?? null, retailer: row.retailer ?? null, quantity: row.quantity ?? null, soldAs: row.soldAs ?? null, unitsPerPack: row.unitsPerPack ?? null } });
-        continue;
+      const where = `PO ${row.orderNumber ?? "?"}${row.lineNumber ? ` line ${row.lineNumber}` : ""}`;
+      const skip = (detail: string) => skips.push({ reason: "invalid_pack_math", orderNumber: row.orderNumber, asin: row.asin, itemName: row.itemName, detail, row: { date: row.orderDate ?? null, retailer: row.retailer ?? null, quantity: row.quantity ?? null, soldAs: row.soldAs ?? null, unitsPerPack: row.unitsPerPack ?? null } });
+      // Velocity enforces qty % units_per_pack === 0. 2026-11-05: the stored ASIN units are what the PO keeps — a
+      // remainder is sent as the whole packs (unticked in the dialog, the left-over units named); a skip only when
+      // units/pack is not a whole number, not even one pack fits, or the ASIN units are missing and the retailer
+      // qty does not divide.
+      if (!Number.isInteger(upp) || upp <= 0) { skip(`${where}: units/pack "${row.unitsPerPack ?? ""}" is not a whole number`); continue; }
+      if (!Number.isFinite(qty)) { skip(`${where}: quantity "${row.quantity}" is not a number`); continue; }
+      const w = wholePacks(qty, upp);
+      if (w.leftover > 0) {
+        if (row.asinUnitsMissing) { skip(`${where}: ASIN units missing, and ${row.qtyOrderedL ?? qty} ordered ÷ ${upp} per pack is not a whole number of packs`); continue; }
+        if (w.packs < 1) { skip(`${where}: ${qty} unit${qty === 1 ? "" : "s"} — less than one ${upp}-pack`); continue; }
+        quantity = String(w.units);
+        packRemainders.push({ order_number: row.orderNumber ?? "", asin: row.asin, packs: w.packs, units_per_pack: upp, leftover: w.leftover });
       }
     }
     records.push({
@@ -257,7 +283,7 @@ export async function buildVelocityRecords(
       color: "",
       brand_sku: "",
       size: "",
-      quantity: row.quantity,          // Col AZ verbatim
+      quantity,                        // Col AZ verbatim — whole packs when units are left over (2026-11-05)
       asin: row.asin,                  // Col H
       amazon_sku: sku,                 // joined primary_sku
       unit_cost: "",
@@ -354,6 +380,7 @@ export async function buildVelocityRecords(
     bundleFlags: bundleFlags.filter((f) => !homeBundleIds.has(`${f.orderNumber}\u0000${f.asin}`)),
     selfPrepExcluded, skips: outSkips,
     homeRecords, homeBundles, homeSkipped: skips.length - outSkips.length,
+    packRemainders,
     requestedFrom, effectiveFrom, clamped, rangeBeforeFloor,
   };
 }
