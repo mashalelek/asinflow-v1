@@ -2717,6 +2717,35 @@ token, × qty ordered → ASIN units); and for a retailer listing the **conversi
 units (ASIN is a 3-pack)" when both pack sizes are known (the ASIN's from `asins.units_per_pack`, else the newest PO
 row's). A fully canceled ASIN row is no purchase. Newest = order date, then entry sequence. Nothing is recomputed.
 
+**Past promos (Capture PO 2.0.3, Maria 2026-11-05).** Each recent purchase shows its PO's promos (`po_promos`):
+"FAIRTHANKS20 · 20% · −$39.60", "Sale −$12.00", or "no promos". A promo's **code** is the token after "with" / "code"
+in its description, else a capitalized token holding a letter and a digit (SAVE10); B1G1 / BOGO are deals, not codes
+(`promoCode`). Under the last email, on any page of the retailer: **Codes used here before** — the supplier's distinct
+codes, most recent first, with the latest use's type and value, the last date and the number of POs; 5 shown, "Show
+all". Sales without a code stay per PO. A code the current capture's promos (or discount line) name is marked
+**applied**, not hidden.
+
+**This PO (Capture PO 2.0.3, Maria 2026-11-05).** Above Last COGS, per matched ASIN, from the current capture — the
+same call with `&po=` (the capture's lines, totals, payment, ship-to street as JSON) and `&line=`, recomputed on every
+capture. **COGS per ASIN unit** per `docs/claude_cogs-rule.md`, through the PO form's own allocation
+(`allocateAsinCosts`, `discountReflectedInLines`; every captured line is the allocation base): line total incl.
+discounts, + its share of tax and shipping, − the coupon / discount, × (1 − the weighted payment %), ÷ ASIN units
+(qty × listing pack ÷ ASIN pack; an unknown pack counts as a single and says so). A card's reward % is its method's
+default (`po_payment_method_reward_pct`, the nickname resolved as on the form); a gift card's % is the supplier's
+newest gift-card-only PO's `weighted_gc_discount_pct`, else named as not known. Labelled **estimate** until Totals
+(the order total) and Payment are both captured and nothing in them is unknown, with what is missing; the change vs
+the last COGS ("$15.84 · −20% vs last"). **Profit $, ROI, Margin per ASIN unit** through `calculateProfit`, the ASIN
+page's function, with its inputs: the stored price by the default price source (`getSelectedPrice` "lowestFba":
+Lowest FBA, then Buy Box, then lowest offer — the ASINs page's toggle lives in that browser's localStorage, so the
+panel uses the default), shown with its age (`asin_estimates.fetched_at`, "Lowest FBA $38.49 · 2h ago"); the stored
+FBA and referral fees; prep from the ship-to (Velocity → the prep setting, Home → $0, not captured → the prep
+setting, said so); storage, inbound shipping and the DG / hazmat surcharge as the ASIN page applies them. ROI =
+profit ÷ COGS, margin = profit ÷ sale price. **Try price**: a what-if sale price, sent as `&sale=` and recomputed by
+the server, kept in the panel's memory only — never saved. No price or no fees → "—" with what is missing; never a
+guess. Several ASINs: a totals card at the bottom (ASIN units, COGS total, profit total — profit only when every line
+is priced). The panel computes nothing itself. The Analyzer's own profit estimate (`analyzer/sidepanel.js`, its
+local fee engine) is a second implementation and is not changed by this.
+
 ### Supplier verification (Capture PO, Maria 2026-11-05)
 
 A **Verify supplier** button in Capture PO's header (any retailer tab; "Re-check" once a check is stored) — **on click

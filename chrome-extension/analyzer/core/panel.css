@@ -185,6 +185,24 @@ input:focus { border-color: var(--focus) !important; }
 .hist-pick { display: block; width: 100%; text-align: left; background: transparent; border: 1px solid var(--outline); border-radius: 6px; padding: 6px 8px; margin-top: 4px; font-size: 12px; color: var(--text); cursor: pointer; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .hist-pick:hover { background: var(--controls); }
 .hist-pick-name { color: var(--text-2); }
+.hist-sub.first { margin-top: 0; }
+.hist-this { display: grid; gap: 3px; padding-bottom: 6px; margin-bottom: 4px; border-bottom: 1px solid var(--outline); }
+.hist-row.note .hist-v { color: var(--text-2); font-size: 11px; }
+.hist-row.strong .hist-v { font-weight: 600; }
+.hist-row.neg .hist-v { color: var(--red); }
+.hist-promo { display: block; color: var(--text-2); font-size: 11px; }
+.hist-promo.none { font-style: italic; }
+.hist-whatif { cursor: text; }
+.hist-whatif .hist-v { display: flex; align-items: baseline; gap: 2px; flex-wrap: wrap; }
+.hist-whatif .hist-promo { display: inline; }
+.hist-sale { width: 72px; font: inherit; font-size: 12px; color: var(--text); background: var(--input); border: 1px solid var(--input-border); border-radius: 4px; padding: 2px 4px; font-variant-numeric: tabular-nums; }
+.hist-sale:focus { outline: none; border-color: var(--focus); }
+.hist-dollar { color: var(--text-2); }
+.hist-codes { display: grid; gap: 3px; margin-bottom: 8px; }
+.hist-codes .hist-row { grid-template-columns: 112px 1fr; }
+.hist-code { overflow: hidden; text-overflow: ellipsis; font-weight: 600; color: var(--text); font-variant-numeric: tabular-nums; }
+.hist-applied { display: inline-block; margin-left: 6px; padding: 0 5px; border-radius: 4px; font-size: 10.5px; background: var(--controls); color: var(--text); border: 1px solid var(--outline); }
+.hist-total { display: grid; gap: 3px; }
 .hist-link { background: none; border: 0; padding: 0; color: var(--text); text-decoration: underline; cursor: pointer; font-size: 11px; }
 
 /* Header actions + supplier verification (2026-11-05). */

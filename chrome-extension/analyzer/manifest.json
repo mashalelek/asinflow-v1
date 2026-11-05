@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "AsinFlow Analyzer",
-  "version": "1.0.2",
+  "version": "1.0.3",
   "description": "Amazon product pages: AsinFlow COGS, sale price, fees, profit, purchase history and Update in AsinFlow.",
   "permissions": [
     "sidePanel",

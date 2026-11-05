@@ -3,7 +3,9 @@
 // so a script can run the same pipeline without registering the app.
 import pool from "./db";
 import type { SubmitAsinRow } from "./offer-add-submit";
-import { settingsSchema, type Settings } from "@shared/schema";
+import type { Settings } from "@shared/schema";
+import { settingsFromRows } from "./profit-settings";
+export { settingsFromRows };
 
 // Shared loader for the offer-add preview + submit endpoints. Single source of
 // truth so preview and submit can't diverge on which DB fields they read.
@@ -54,23 +56,5 @@ export async function loadSubmitRows(asins: string[]): Promise<SubmitAsinRow[]> 
 // Matches the diag script's loadSettings pattern (script/diag-price-resolver-sample.ts).
 export async function loadSettingsForSubmit(): Promise<Settings> {
   const result = await pool.query("SELECT key, value FROM settings");
-  const raw: Record<string, any> = {};
-  for (const r of result.rows) {
-    const n = parseFloat(r.value);
-    raw[r.key] = isNaN(n) ? r.value : n;
-  }
-  const mapped = {
-    inboundShippingCost: raw.inbound_shipping_per_lb,
-    prepCost: raw.prep_cost,
-    storageFee: raw.storage_fee,
-    lowInventorySurcharge: raw.low_inventory_surcharge,
-    hazmatShipSurcharge: raw.hazmat_ship_surcharge,
-    hazmatPrepSurcharge: raw.hazmat_prep_surcharge,
-    minRoiThreshold: raw.min_roi,
-    minMarginThreshold: raw.min_margin,
-  };
-  const cleaned = Object.fromEntries(
-    Object.entries(mapped).filter(([_, v]) => v !== undefined && v !== null && !isNaN(v as number)),
-  );
-  return settingsSchema.parse(cleaned);
+  return settingsFromRows(result.rows);
 }

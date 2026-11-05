@@ -78,7 +78,7 @@ describe("how it was bought, and the listing's conversion", () => {
 });
 
 // A fake QueryLike answering the module's four queries.
-function fakeDb(rows: { asins?: any; po?: any[]; supplierLines?: any[]; email?: any; suppliers?: string[]; aliases?: any[] }) {
+function fakeDb(rows: { asins?: any; po?: any[]; supplierLines?: any[]; email?: any; suppliers?: string[]; aliases?: any[]; promos?: any[] }) {
   const calls: Array<{ sql: string; params?: any[] }> = [];
   const q = async (sql: string, params?: any[]) => {
     calls.push({ sql, params });
@@ -86,6 +86,7 @@ function fakeDb(rows: { asins?: any; po?: any[]; supplierLines?: any[]; email?: 
     if (/FROM po_asins pa JOIN purchase_orders p ON p.id = pa.po_id\s+WHERE pa.asin/.test(sql)) return { rows: rows.po ?? [] };
     if (/SELECT DISTINCT supplier FROM purchase_orders/.test(sql)) return { rows: (rows.suppliers ?? []).map((supplier) => ({ supplier })) };
     if (/FROM supplier_aliases/.test(sql)) return { rows: rows.aliases ?? [] };
+    if (/FROM po_promos/.test(sql)) return { rows: rows.promos ?? [] };
     if (/email_used/.test(sql)) return { rows: rows.email ? [rows.email] : [] };
     if (/SELECT DISTINCT pa.asin/.test(sql)) return { rows: rows.supplierLines ?? [] };
     throw new Error(`unexpected SQL: ${sql.slice(0, 80)}`);
@@ -121,7 +122,7 @@ describe("GET /api/extension/history", () => {
   it("a retailer page: the supplier through the host (alias map), its last email, a confident match's history", async () => {
     const db = fakeDb({ suppliers: ["walmart.com"], email: { email_used: "orders@example.com", order_date: "2026-10-23", order_id: "W9" }, supplierLines: [{ asin: "B000000005", title: "Rolls", product_name: "Rolls, 13 oz", supplier_sku: null }], asins: { title: "Rolls", units_per_pack: 3 }, po: [po("W9", "2026-10-23", 3, 9)] });
     const r = await extensionHistory(db.q, { supplier: "www.walmart.com", name: "Rolls, 13 oz (12-pack)" }, "2026-11-05");
-    expect(r.supplier).toEqual({ host: "www.walmart.com", supplier: "walmart.com", known: true, lastEmail: { email: "orders@example.com", orderDate: "2026-10-23", orderId: "W9" } });
+    expect(r.supplier).toEqual({ host: "www.walmart.com", supplier: "walmart.com", known: true, lastEmail: { email: "orders@example.com", orderDate: "2026-10-23", orderId: "W9" }, codes: [] });
     expect(r.match).toMatchObject({ kind: "confident", by: "name" });
     expect(r.history).toMatchObject({ asin: "B000000005", conversion: "this listing: 12-pack → 4 ASIN units (ASIN is a 3-pack)" });
     expect(db.calls.find((c) => /SELECT DISTINCT pa.asin/.test(c.sql))!.params).toEqual(["walmart.com"]); // the SAME supplier only
