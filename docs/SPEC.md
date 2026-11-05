@@ -7386,9 +7386,10 @@ renames or moves a file, and never deletes one it did not create** (Maria
   sheet-era PO with no file stays "no document", no warning.
 - **"No invoice saved"** (Maria 2026-11-05): a derived PO action item —
   no `po_documents` row, from the day after the order date (US Eastern),
-  on open POs and on AF-created POs (manual / extension / email_renewal)
-  whatever their state; closed sheet-era POs are left out (796 on
-  production have none, expected). Display only — it does not block
+  on POs created in AF only (manual = the New PO form / extension /
+  email_renewal), open or closed. Sheet-era POs never show it (Maria
+  2026-11-05: on the first deploy it showed on 21 open sheet-era POs; a
+  sheet-era PO with no file stays "no document", no warning). Display only — it does not block
   auto-close. Its hover gives the reason: the last failed save for that
   PO (setting `docs.save_failures`, written by each live ingest: a failure
   sets the PO's entry, a saved document clears it, a full pass with no

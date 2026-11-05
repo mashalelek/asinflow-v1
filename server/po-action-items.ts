@@ -58,11 +58,12 @@ export const PACK_SIZE_MISMATCH_EXISTS_SQL = `EXISTS (SELECT 1 FROM po_asins pk 
 /**
  * "No invoice saved" (NO_INVOICE_SAVED) on a PO, alias `p`: no document, the
  * order date before today (US Eastern — the day after the order), and the PO
- * open or created in AF (po-documents.ts AF_CREATED_SOURCES, checked by a test).
+ * created in AF (po-documents.ts AF_CREATED_SOURCES, checked by a test), open or
+ * closed. Sheet-era POs never show it (Maria 2026-11-05).
  */
 export const NO_INVOICE_EXISTS_SQL = (p = "p") => `(NOT EXISTS (SELECT 1 FROM po_documents dx WHERE dx.po_id = ${p}.id)
   AND ${p}.order_date < (NOW() AT TIME ZONE 'America/New_York')::date
-  AND (${p}.closed_at IS NULL OR ${p}.source IN ('manual', 'extension', 'email_renewal')))`;
+  AND ${p}.source IN ('manual', 'extension', 'email_renewal'))`;
 
 /** Open stored items (po_line_action_items, migration 074) of the lines matching `where` (alias l). */
 export const openLineItemsSql = (where: string) =>

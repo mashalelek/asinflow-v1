@@ -32,7 +32,7 @@ describe("No invoice saved", () => {
     expect(normalizeActionItems([NO_INVOICE_SAVED])).toEqual({ ok: true, value: [] });
     expect(NO_INVOICE_EXISTS_SQL("p")).toContain(`IN (${AF_CREATED_SOURCES.map((s) => `'${s}'`).join(", ")})`);
   });
-  it("from the day after the order date, with no document; open POs and AF-created POs; display only (not in the close set)", async (ctx) => {
+  it("from the day after the order date, with no document; AF-created POs only, open or closed — never a sheet-era PO; display only (not in the close set)", async (ctx) => {
     if (!client) return ctx.skip();
     await inTx(async (q) => {
       const yesterday = await po(q, { order_id: "zz-1", days_ago: 1 });
@@ -46,7 +46,9 @@ describe("No invoice saved", () => {
       expect(await items(q, PO_ACTION_ITEMS_SQL, today)).not.toContain(NO_INVOICE_SAVED);
       expect(await items(q, PO_ACTION_ITEMS_SQL, withDoc)).not.toContain(NO_INVOICE_SAVED);
       expect(await items(q, PO_ACTION_ITEMS_SQL, closedSheet)).not.toContain(NO_INVOICE_SAVED);
-      expect(await items(q, PO_ACTION_ITEMS_SQL, openSheet)).toContain(NO_INVOICE_SAVED);
+      expect(await items(q, PO_ACTION_ITEMS_SQL, openSheet)).not.toContain(NO_INVOICE_SAVED);
+      const manual = await po(q, { order_id: "zz-7", days_ago: 2, source: "manual" });
+      expect(await items(q, PO_ACTION_ITEMS_SQL, manual)).toContain(NO_INVOICE_SAVED);
       expect(await items(q, PO_ACTION_ITEMS_SQL, closedAf)).toContain(NO_INVOICE_SAVED);
       expect(await items(q, PO_CLOSE_ACTION_ITEMS_SQL, yesterday)).not.toContain(NO_INVOICE_SAVED);
     });
