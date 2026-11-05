@@ -36,10 +36,10 @@ function fakes() {
 }
 
 describe("PO documents routes", () => {
-  it("registers the four routes", () => {
+  it("registers the five routes", () => {
     const r = createPoDocumentsRouter(async () => ({ rows: [], rowCount: 0 }));
     const routes = (r as any).stack.filter((l: any) => l.route).map((l: any) => `${Object.keys(l.route.methods)[0].toUpperCase()} ${l.route.path}`);
-    expect(routes).toEqual(["GET /api/pos/:id/documents", "GET /api/pos/documents/:docId/download", "POST /api/pos/:id/documents", "DELETE /api/pos/documents/:docId"]);
+    expect(routes).toEqual(["GET /api/pos/:id/documents", "GET /api/pos/:id/documents/zip", "GET /api/pos/documents/:docId/download", "POST /api/pos/:id/documents", "DELETE /api/pos/documents/:docId"]);
   });
 
   it("an uploaded PDF is named _invoice in the PO's month folder, with a History row", async () => {

@@ -5,7 +5,7 @@
 import { useRef, useState } from "react";
 import { Paperclip, Download, ExternalLink, Trash2, Upload } from "lucide-react";
 import { Button } from "@/components/ui/button";
-import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from "@/components/ui/dropdown-menu";
+import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuSeparator, DropdownMenuTrigger } from "@/components/ui/dropdown-menu";
 import {
   AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle,
 } from "@/components/ui/alert-dialog";
@@ -16,6 +16,10 @@ export interface PoDocumentLite { id: number; type: PoDocumentType; file_name: s
 export interface PoDocument extends PoDocumentLite { bytes: number | null; source: "email" | "upload" | "linked_existing"; drive_url: string; created_by_name: string | null }
 
 export const downloadUrl = (id: number) => `/api/pos/documents/${id}/download`;
+/** "Download all" (2026-11-04): every document of the PO in one zip named like its invoice. */
+export const zipUrl = (poId: string) => `/api/pos/${poId}/documents/zip`;
+/** Pure: "Download all" shows when the PO has two or more documents. */
+export const showDownloadAll = (docs: readonly unknown[]): boolean => docs.length >= 2;
 
 /** "Nov 1, 2026" in the viewer's zone. */
 const fmtDay = (iso: string) => new Date(iso).toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric" });
@@ -27,9 +31,9 @@ export function paperclipAction(docs: readonly PoDocumentLite[]): "download" | "
   return docs.length === 0 ? "open_tab" : docs.length === 1 ? "download" : "menu";
 }
 
-function startDownload(id: number) {
+function startDownload(id: number | string) {
   const a = document.createElement("a");
-  a.href = downloadUrl(id); a.download = "";
+  a.href = typeof id === "number" ? downloadUrl(id) : id; a.download = "";
   document.body.appendChild(a); a.click(); a.remove();
 }
 
@@ -39,7 +43,7 @@ function startDownload(id: number) {
  * (several). None: the outline at 40 %, a click opens the Documents tab.
  * The row's own click (open the PO) never fires from here.
  */
-export function DocumentsPaperclip({ docs, orderId, onOpenTab }: { docs: readonly PoDocumentLite[]; orderId: string; onOpenTab: () => void }) {
+export function DocumentsPaperclip({ docs, orderId, poId, onOpenTab }: { docs: readonly PoDocumentLite[]; orderId: string; poId?: string; onOpenTab: () => void }) {
   const action = paperclipAction(docs);
   const has = docs.length > 0;
   const icon = <Paperclip className={has ? "h-3.5 w-3.5 text-foreground/80" : "h-3.5 w-3.5 text-muted-foreground/40"} strokeWidth={has ? 2.25 : 1.5} data-doc={has ? "has" : "none"} />;
@@ -61,6 +65,16 @@ export function DocumentsPaperclip({ docs, orderId, onOpenTab }: { docs: readonl
               <span className="ml-auto pl-3 text-xs text-muted-foreground whitespace-nowrap">{fmtDay(d.document_at)}</span>
             </DropdownMenuItem>
           ))}
+          {poId && showDownloadAll(docs) && (
+            <>
+              <DropdownMenuSeparator />
+              <DropdownMenuItem onSelect={() => startDownload(zipUrl(poId))} data-testid={`paperclip-download-all-${orderId}`}>
+                <Download className="h-3.5 w-3.5 mr-2 shrink-0 text-muted-foreground" />
+                <span>Download all</span>
+                <span className="ml-auto pl-3 text-xs text-muted-foreground whitespace-nowrap">.zip</span>
+              </DropdownMenuItem>
+            </>
+          )}
         </DropdownMenuContent>
       </DropdownMenu>
     );
@@ -120,6 +134,11 @@ export function PoDocumentsTab({ poId, documents, onChanged }: { poId: string; d
           <Upload className="h-3.5 w-3.5 mr-1" /> {busy ? "Uploading…" : "Upload invoice"}
         </Button>
         <span className="text-xs text-muted-foreground">A PDF or an image (converted to PDF), saved to Drive as the PO's invoice.</span>
+        {showDownloadAll(documents) && (
+          <Button asChild variant="outline" size="sm" className="ml-auto">
+            <a href={zipUrl(poId)} download data-testid="button-download-all"><Download className="h-3.5 w-3.5 mr-1" />Download all</a>
+          </Button>
+        )}
       </div>
       {documents.length === 0 ? (
         <div className="text-sm text-muted-foreground py-6" data-testid="po-documents-empty">No documents yet. Order emails are saved here automatically once they match this PO.</div>

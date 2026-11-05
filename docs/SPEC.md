@@ -7078,7 +7078,14 @@ renames or moves a file, and never deletes one it did not create** (Maria
   (`po-document-delete`): an AF file (email / upload) goes to Drive's
   trash with its row; a linked existing file is only unlinked and stays
   in Drive. An upload or a delete writes a History row (entity
-  `document`). Downloads stream through AF
+  `document`). **Download all** (Maria 2026-11-04) — the paperclip menu's
+  last item and a button at the right of the Documents tab's toolbar, both
+  only with 2+ documents: `GET /api/pos/:id/documents/zip`, one zip named
+  like the PO's invoice (the first `invoice` / `invoice_manual`, else the
+  first document) with `.zip` for its extension, each document under its
+  own file name (a repeated name gets " (2)"); stored entries, no
+  compression — PDFs are already compressed (`server/zip-store.ts`, no
+  dependency). Downloads stream through AF
   (`GET /api/pos/documents/:id/download`) — the browser never needs Drive
   access. Routes: `server/po-documents-routes.ts`.
 - **Renderer (`server/pdf-render.ts`):** headless Chromium (puppeteer,

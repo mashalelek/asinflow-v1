@@ -745,7 +745,7 @@ export default function PurchaseOrders() {
                   <td style={poColStyle(colWidths, "units_ordered")} className="px-3 py-2 text-right">{fmtQty(po.units_ordered)}</td>
                   {/* PO documents (SPEC §22): download one, a menu for several, none → the Documents tab. */}
                   <td style={poColStyle(colWidths, "invoice")} className="px-2 py-1.5" onClick={(e) => e.stopPropagation()}>
-                    <DocumentsPaperclip docs={po.documents ?? []} orderId={po.order_id} onOpenTab={() => navigate(`/purchase-orders/${po.id}?tab=documents`)} />
+                    <DocumentsPaperclip docs={po.documents ?? []} orderId={po.order_id} poId={po.id} onOpenTab={() => navigate(`/purchase-orders/${po.id}?tab=documents`)} />
                   </td>
                   {/* Inline note (2026-11-04): the PO's own note; ASIN-row / line notes are edited on the expanded rows. */}
                   <td style={poColStyle(colWidths, "notes")} className="p-0" onClick={(e) => e.stopPropagation()}>

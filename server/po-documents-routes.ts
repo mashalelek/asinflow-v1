@@ -11,6 +11,7 @@
 //
 // An upload or a delete writes a History row (po_edit_log entity 'document').
 import express, { type Router, type Request, type Response } from "express";
+import { zipStore, uniqueNames } from "./zip-store";
 import multer from "multer";
 import { query as defaultQuery } from "./db";
 import { driveClient, ensureMonthFolder, folderFileNames, uploadPdf, downloadFile, trashFile, driveFileUrl } from "./drive-client";
@@ -88,6 +89,18 @@ export async function deleteDocument(query: QueryLike, drive: drive_v3.Drive, do
   return { trashed };
 }
 
+/** Pure: the zip's name — the invoice's file name (the first invoice, else the first document) with .zip for its extension. */
+export function zipNameFor(docs: ReadonlyArray<{ type: string; file_name: string }>): string {
+  const pick = docs.find((d) => d.type === "invoice" || d.type === "invoice_manual") ?? docs[0];
+  const n = String(pick?.file_name || "documents");
+  return n.replace(/\.[A-Za-z0-9]{1,5}$/, "") + ".zip";
+}
+async function streamToBuffer(stream: NodeJS.ReadableStream): Promise<Buffer> {
+  const chunks: Buffer[] = [];
+  for await (const c of stream as any) chunks.push(Buffer.isBuffer(c) ? c : Buffer.from(c));
+  return Buffer.concat(chunks);
+}
+
 export function createPoDocumentsRouter(query: QueryLike = (sql, params) => defaultQuery(sql, params)): Router {
   const router = express.Router();
   const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: MAX_UPLOAD_BYTES } });
@@ -97,6 +110,29 @@ export function createPoDocumentsRouter(query: QueryLike = (sql, params) => defa
     const id = String(req.params.id ?? "");
     if (!isUuid(id)) return res.status(404).json({ message: "PO not found" });
     try { res.json({ documents: await listPoDocuments(query, id) }); } catch (err) { fail(res, err); }
+  });
+
+  // "Download all" (Maria 2026-11-04): every document of the PO in one zip named like its invoice, each under its own name.
+  router.get("/api/pos/:id/documents/zip", async (req: Request, res: Response) => {
+    const id = String(req.params.id ?? "");
+    if (!isUuid(id)) return res.status(404).json({ message: "PO not found" });
+    try {
+      const docs = (await query(`SELECT id, type, file_name, drive_file_id, COALESCE(document_at, created_at) AS document_at FROM po_documents WHERE po_id = $1 ORDER BY COALESCE(document_at, created_at), id`, [id])).rows;
+      if (docs.length === 0) return res.status(404).json({ message: "no documents" });
+      const drive = documentRouteDeps.drive();
+      const names = uniqueNames(docs.map((d: any) => String(d.file_name)));
+      const files = [];
+      for (let i = 0; i < docs.length; i++) {
+        const f = await downloadFile(drive, String(docs[i].drive_file_id));
+        files.push({ name: names[i], data: await streamToBuffer(f.stream), date: new Date(docs[i].document_at) });
+      }
+      const zip = zipStore(files);
+      const name = zipNameFor(docs.map((d: any) => ({ type: d.type, file_name: String(d.file_name) })));
+      res.setHeader("Content-Type", "application/zip");
+      res.setHeader("Content-Length", String(zip.length));
+      res.setHeader("Content-Disposition", `attachment; filename="${name.replace(/[^\x20-\x7e]/g, "_").replace(/"/g, "'")}"; filename*=UTF-8''${encodeURIComponent(name)}`);
+      res.end(zip);
+    } catch (err) { fail(res, err); }
   });
 
   router.get("/api/pos/documents/:docId/download", async (req: Request, res: Response) => {
