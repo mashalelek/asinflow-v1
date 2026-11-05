@@ -4,7 +4,9 @@
 // matches 200015663718988 and goes to its Velocity order, the same pass also adds it to 200015557295492's Velocity
 // order (the bulk tracking PUT — numbers appended, nothing else) and writes a History row on both POs. Until that
 // History row exists, 200015663718988 shows the derived action item below; it resolves by itself once the tracking
-// is added. Nothing here changes a quantity on either PO.
+// is added — or once the to-PO is fully checked in at Velocity (Maria 2026-11-05: the replacement then arrived and
+// the tracking is moot; a fully checked-in order also leaves Velocity's inbound list, so the PUT could not run).
+// Nothing here changes a quantity on either PO.
 import type { QueryLike } from "./scheduler/types";
 
 export interface ReplacementTrackingPair { fromOrderId: string; toOrderId: string; label: string; historyField: string; toHistoryField: string }
@@ -17,11 +19,27 @@ export const REPLACEMENT_TRACKING_PAIRS: readonly ReplacementTrackingPair[] = [{
 }];
 export const REPLACEMENT_TRACKING_LABELS: readonly string[] = REPLACEMENT_TRACKING_PAIRS.map((p) => p.label);
 
-/** SQL (alias `poAlias`): the pair's item while the from-PO has no "tracking also added" History row. One UNION branch per pair. */
+/**
+ * SQL: the to-PO is fully checked in at Velocity — it has ASIN rows, and every one with units ordered has Received
+ * by Velocity (po_asins.received_velocity, ASIN units, written by shipment sync A) at or above them.
+ */
+export function toCheckedInSql(p: ReplacementTrackingPair): string {
+  return `EXISTS (SELECT 1 FROM purchase_orders tp WHERE tp.order_id = '${p.toOrderId}'
+       AND EXISTS (SELECT 1 FROM po_asins ta WHERE ta.po_id = tp.id AND ta.qty > 0)
+       AND NOT EXISTS (SELECT 1 FROM po_asins ta WHERE ta.po_id = tp.id AND ta.qty > 0 AND COALESCE(ta.received_velocity, 0) < ta.qty))`;
+}
+
+/** SQL (alias `poAlias`): the pair's item while the from-PO has no "tracking also added" History row and the to-PO is not fully checked in. One UNION branch per pair. */
 export function replacementTrackingItemsSql(poAlias: string): string {
   return REPLACEMENT_TRACKING_PAIRS.map((p) =>
     `UNION SELECT '${p.label}' WHERE EXISTS (SELECT 1 FROM purchase_orders rp WHERE rp.id = ${poAlias} AND rp.order_id = '${p.fromOrderId}')
-       AND NOT EXISTS (SELECT 1 FROM po_edit_log re WHERE re.po_id = ${poAlias} AND re.field = '${p.historyField}')`).join("\n  ");
+       AND NOT EXISTS (SELECT 1 FROM po_edit_log re WHERE re.po_id = ${poAlias} AND re.field = '${p.historyField}')
+       AND NOT ${toCheckedInSql(p)}`).join("\n  ");
+}
+
+/** Is the to-PO fully checked in at Velocity (the item resolved without a PUT)? */
+export async function replacementCheckedIn(query: QueryLike, pair: ReplacementTrackingPair): Promise<boolean> {
+  return (await query(`SELECT ${toCheckedInSql(pair)} AS done`)).rows[0]?.done === true;
 }
 
 export function pairFor(fromOrderId: string): ReplacementTrackingPair | undefined {

@@ -18,7 +18,7 @@
 // error → push_failed with the error; the other orders still get theirs.
 // The single-PUT echo-merge (buildTrackingPutBody) is kept for the probe
 // script only — the push never uses it.
-import { pairFor, logReplacementTracking, replacementLogged } from "./tracking-replacement-pair";
+import { pairFor, logReplacementTracking, replacementLogged, replacementCheckedIn } from "./tracking-replacement-pair";
 import { fetchAllInboundOrders, fetchAllKnownOrders, appendTrackingBulk, type VelocityInboundOrder } from "./velocity-api";
 import { routeTracking, joinReasons, type ShipsTo } from "./tracking-route-rules";
 import { isPlaceholder } from "./tracking-ingest";
@@ -141,7 +141,7 @@ export function buildTrackingPutBody(current: VelocityInboundOrder, additions: A
 export interface PoPushPlan {
   po_id: string; order_id: string;
   // The one-off replacement pair (tracking-replacement-pair.ts): the other PO's Velocity order(s) these numbers also go to.
-  also?: Array<{ to_order_id: string; velocity_order_id: string | null; already: string[]; to_add: string[]; error?: string }>;
+  also?: Array<{ to_order_id: string; velocity_order_id: string | null; already: string[]; to_add: string[]; error?: string; resolved?: string }>;
   rows: Array<{ id: number; tracking_number: string; decision: "push" | "held" | "review" | "received_by_velocity"; reasons: string[] }>;
   targets: Array<{ velocity_order_id: string; asin: string; already: string[]; to_add: string[] }>;
 }
@@ -245,8 +245,11 @@ export async function pushTracking(opts: { query: QueryLike; deps?: VelocityDeps
     if (pair && toPush.length > 0) {
       plan.also = [];
       const numbers = additions.map((a) => a.tracking_number);
-      const others = inbound.get(pair.toOrderId) ?? [];
-      if (others.length === 0) plan.also.push({ to_order_id: pair.toOrderId, velocity_order_id: null, already: [], to_add: numbers, error: "not an inbound Velocity order" });
+      // Fully checked in at Velocity: the replacement arrived, nothing to add (the item has resolved; 2026-11-05).
+      const checkedIn = await replacementCheckedIn(opts.query, pair);
+      const others = checkedIn ? [] : inbound.get(pair.toOrderId) ?? [];
+      if (checkedIn) plan.also.push({ to_order_id: pair.toOrderId, velocity_order_id: null, already: [], to_add: [], resolved: "fully checked in at Velocity" });
+      else if (others.length === 0) plan.also.push({ to_order_id: pair.toOrderId, velocity_order_id: null, already: [], to_add: numbers, error: "not an inbound Velocity order" });
       for (const t of others) {
         const have = new Set(trackingNumbersOf(t));
         const add = numbers.filter((n) => !have.has(n)), already = numbers.filter((n) => have.has(n));

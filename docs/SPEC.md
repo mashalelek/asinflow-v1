@@ -8199,9 +8199,15 @@ Settings: `tracking.velocity_street` ("805 grandy"),
   200015663718988 (1 replacement single)", derived). Until the from-PO has
   that History row it shows the derived action item **"Tracking also goes
   to 200015557295492 (1 replacement single)"** (amber, blocks auto-close,
-  never set by hand); it resolves by itself once the tracking is added. A
-  failed PUT, or the old order no longer inbound, logs nothing — the item
-  stays and the next pass retries. Dry runs plan it (`plan.also`). No
+  never set by hand); it resolves by itself once the tracking is added,
+  **or once 200015557295492 is fully checked in at Velocity** (Maria
+  2026-11-05: every ASIN row's Received by Velocity at or above its units
+  ordered — the replacement arrived and the tracking is moot; a fully
+  checked-in order also leaves Velocity's inbound list, so the PUT could
+  not run). Then the push sends nothing to it and logs nothing
+  (`plan.also`: "fully checked in at Velocity"). Otherwise a failed PUT,
+  or the old order no longer inbound, logs nothing — the item stays and
+  the next pass retries. Dry runs plan it (`plan.also`). No
   quantity on either PO changes.
 - **One number on several POs** (2026-11-04, migration 086;
   `server/tracking-attach.ts`): a box holding two POs (SupplyHouse

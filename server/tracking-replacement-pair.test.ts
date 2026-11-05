@@ -11,7 +11,7 @@ const NEW = ord({ order_id: "v-new", order_number: "200015663718988" });
 const OLD = ord({ order_id: "12f9f690", order_number: "200015557295492", quantity: 12, unit_status: "partially_received", trackings: [{ carrier: "FedEx", tracking_number: "543155864970", tracking_status: null }] });
 const row = (p: any = {}) => ({ id: 7, po_id: "po-new", carrier: "FEDEX", tracking_number: "888000111222", ship_to_street: "805 grandy", status: "matched", pushed_velocity_ids: null, order_id: "200015663718988", ships_to: "velocity", canceled_or_returned: false, ...p });
 
-function world(o: { rows: any[]; inbound: any[]; logged?: boolean; putFails?: string[] }) {
+function world(o: { rows: any[]; inbound: any[]; logged?: boolean; putFails?: string[]; checkedIn?: boolean }) {
   const puts: Array<{ id: string; numbers: string[] }> = [];
   const history: any[][] = [];
   let logged = !!o.logged;
@@ -21,6 +21,7 @@ function world(o: { rows: any[]; inbound: any[]; logged?: boolean; putFails?: st
     if (sql.startsWith("UPDATE po_tracking")) return { rows: [], rowCount: 1 };
     if (sql.includes("FROM velocity_bundle_identity")) return { rows: [], rowCount: 0 };
     if (sql.trimStart().startsWith("SELECT p.id,") && sql.includes("FROM purchase_orders p WHERE p.id = ANY")) return { rows: [], rowCount: 0 };
+    if (sql.startsWith("SELECT EXISTS (SELECT 1 FROM purchase_orders tp")) return { rows: [{ done: !!o.checkedIn }], rowCount: 1 };
     if (sql.startsWith("SELECT 1 FROM po_edit_log")) return { rows: logged ? [{}] : [], rowCount: logged ? 1 : 0 };
     if (sql.startsWith("SELECT id FROM purchase_orders WHERE order_id")) return { rows: params![0] === "200015557295492" ? [{ id: "po-old" }] : [], rowCount: 1 };
     if (sql.startsWith("INSERT INTO po_edit_log")) { history.push(params!); logged = true; return { rows: [], rowCount: 1 }; }
@@ -65,6 +66,13 @@ describe("pushTracking — the replacement pair", () => {
     const w = world({ rows: [row({ ship_to_street: "65 rivercrest" })], inbound: [NEW, OLD] });
     await pushTracking({ query: w.query as any, deps: w.deps });
     expect(w.puts).toEqual([]); expect(w.history).toEqual([]);
+  });
+  it("200015557295492 fully checked in at Velocity: nothing sent to it, nothing logged, the plan says so; the PO's own push goes ahead", async () => {
+    const w = world({ rows: [row()], inbound: [NEW], checkedIn: true });
+    const r = await pushTracking({ query: w.query as any, deps: w.deps });
+    expect(w.puts).toEqual([{ id: "v-new", numbers: ["888000111222"] }]);
+    expect(w.history).toEqual([]);
+    expect(r.plans[0].also).toEqual([{ to_order_id: "200015557295492", velocity_order_id: null, already: [], to_add: [], resolved: "fully checked in at Velocity" }]);
   });
   it("any other PO is untouched by the pair", async () => {
     const w = world({ rows: [row({ order_id: "200015557295492", po_id: "po-old" })], inbound: [NEW, OLD] });
