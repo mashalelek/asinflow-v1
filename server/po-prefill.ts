@@ -21,15 +21,23 @@ import { loadAliases, aliasKey } from "./supplier-aliases";
 import { defaultEmailForSupplier } from "./supplier-defaults";
 import { promoCountsByDefault, yieldFromPacks, resolvePaymentNickname, defaultRewardPct, ambiguousPaymentHint, type PaymentLists, type PoFormState, type PoFormProduct, type PoFormPrefill, type PrefillSource } from "@shared/po-form";
 import { discountReflectedInLines } from "@shared/po-cost";
+// scrub.js is a plain browser script: under Node's ESM loader it exports nothing and defines globalThis.AfScrub (as in the page).
+import "../chrome-extension/core/scrub.js";
+const { scrubText, scrubField } = (globalThis as unknown as { AfScrub: typeof import("../chrome-extension/core/scrub.js") }).AfScrub;
 
 // ── Input (from the extension, already scrubbed) ─────────────────────────────
+// 2026-11-05: scrubbed again here with the extension's own scrubber, so a build that predates a scrubber fix
+// (Gordon's SECNO_NEW security code) still never reaches the model, the log or capture_page_samples.
+export function scrubPage<P extends { text: string; fields: { label: string; value: string }[] }>(p: P): P {
+  return { ...p, text: scrubText(p.text), fields: p.fields.map((f) => scrubField(f.label, f.value)).filter((f): f is { label: string; value: string } => f != null) };
+}
 export const CapturePageSchema = z.object({
   step: z.enum(["cart", "shipping", "payment", "review", "other"]).default("other"),
   url: z.string().max(2048),
   title: z.string().max(500).default(""),
   text: z.string().max(200_000),
   fields: z.array(z.object({ label: z.string().max(200), value: z.string().max(2000) })).max(500).default([]),
-});
+}).transform(scrubPage);
 export const CaptureSchema = z.object({
   retailerHost: z.string().max(253),
   capturedAt: z.string().optional(),
@@ -59,7 +67,7 @@ export const PrefillSchema = z.object({
   subtotal: money, discount: money, tax: money, shipping: money.describe("shipping + handling + donations"), total: money,
   promos: z.array(z.object({ type: z.enum(["sale", "coupon", "rewards"]), description: z.string(), amount: money, percent: money, confidence: z.enum(["high", "low"]) })),
   payments: z.array(z.object({ method: z.enum(["card", "gift_card", "store_credit", "paypal", "other"]), nickname: z.string().nullable(), last4: z.string().nullable(), amount: money })),
-  shipToStreet: z.string().nullable().describe("street number and name of the delivery address"),
+  shipToStreet: z.string().nullable().describe("street number and name of the delivery (ship-to) address — never a billing / cardholder address"),
   subscription: z.object({ present: z.boolean(), frequencyWeeks: z.number().int().nullable() }),
   purchasedEmail: z.string().nullable(),
   notes: z.array(z.string()).describe("confidence notes: anything unclear or inconsistent on the pages"),
@@ -74,6 +82,7 @@ export const PREFILL_SYSTEM = `You read captured text from a retailer's checkout
 - Payments: one entry per method shown with its amount. Gift cards are method "gift_card"; store credit, rewards balance and similar are "store_credit".
 - subscription.present is true only when the pages show a subscription / autoship for this order; frequencyWeeks in weeks (monthly = 4).
 - Pages are in checkout order and, within a step, in the order captured: when a step appears more than once (the cart re-captured after an edit, a checkout's sub-steps), the later page is the newer one and wins where they differ. The order confirmation is the authority for the order id, the date and the charged total.
+- shipToStreet is the DELIVERY address only: one the pages label ship-to / shipping / delivery (or the selected delivery address). An address labeled billing / billing address / cardholder, or entered beside card fields (name on card, card number, security code, expiry), is the card's billing address — never shipToStreet, even when it is the only address on a page. A later page's address replaces an earlier page's ship-to only when the later page also labels it ship-to / shipping / delivery.
 - orderDate null when the pages show no order date (a delivery estimate is not one) — no note about it; AF defaults the date.
 - Promos: ${PROMO_RULES}`;
 

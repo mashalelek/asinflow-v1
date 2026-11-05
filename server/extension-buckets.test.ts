@@ -97,7 +97,7 @@ describe("buckets: the first real Walmart PO (synthetic cart + confirmation pair
   });
   it("confirmation: the one real address (Velocity), Total from 'Order total' not from 'You saved' (a discount candidate), the order #, the card — and the 'My Items' strip is not products", () => {
     const b = extractBuckets(confirmation);
-    expect(b.shipping).toEqual({ street: "805 Grandy Ave", candidates: ["805 Grandy Ave"], selected: false });
+    expect(b.shipping).toEqual({ street: "805 Grandy Ave", candidates: ["805 Grandy Ave"], selected: false, labeled: true });
     expect(b.totals).toEqual({ subtotal: "$95.64", discount: "$36.12", tax: "$5.74", total: "$101.38" });
     expect(b.order.number).toBe("200012345678902");
     expect(b.payment.cards).toEqual([{ nickname: "Visa", last4: "1111", amount: null }]);
@@ -123,21 +123,21 @@ describe("buckets: the first real Walmart PO (synthetic cart + confirmation pair
 describe("buckets: the SELECTED address, not the first address block", () => {
   it("a review page with a shipping block and a billing block → the shipping street only", () => {
     const s = extractShipping(fixture("walmart-review-two-addresses"));
-    expect(s).toEqual({ street: "805 Grandy Ave", candidates: ["805 Grandy Ave"], selected: false });
+    expect(s).toEqual({ street: "805 Grandy Ave", candidates: ["805 Grandy Ave"], selected: false, labeled: true });
   });
   it("an address picker with two options → the checked radio's option wins (its 'selected:' field), whichever block comes first", () => {
     const page = fixture("michaels-address-picker", { fields: [{ label: "selected: Accounts Payable 65 Rivercrest Dr", value: "Accounts Payable\n65 Rivercrest Dr, Chesapeake, VA 23320" }] });
-    expect(extractShipping(page)).toEqual({ street: "65 Rivercrest Dr", candidates: ["65 Rivercrest Dr"], selected: true });
+    expect(extractShipping(page)).toEqual({ street: "65 Rivercrest Dr", candidates: ["65 Rivercrest Dr"], selected: true, labeled: true });
     expect(describeShipping(extractShipping(page), config)).toEqual(["Home · 65 Rivercrest Dr"]);
     // Nothing checked → the address under the "Choose a shipping address" heading, as on a review page (v1.2.1 scopes text detection to deliver / ship / address headings).
-    expect(extractShipping(fixture("michaels-address-picker"))).toEqual({ street: "805 Grandy Ave", candidates: ["805 Grandy Ave"], selected: false });
+    expect(extractShipping(fixture("michaels-address-picker"))).toEqual({ street: "805 Grandy Ave", candidates: ["805 Grandy Ave"], selected: false, labeled: true });
   });
   it("ambiguous — two selected address options, or two ship-to blocks — shows both and leaves the street blank (the form's Ships to stays empty)", () => {
     const two = extractShipping({ url: "x", text: "Checkout", fields: [{ label: "selected: ship", value: "Coastal Quality Goods\n805 Grandy Ave, Norfolk, VA" }, { label: "selected: pickup", value: "Accounts Payable\n65 Rivercrest Dr, Chesapeake, VA" }] });
-    expect(two).toEqual({ street: null, candidates: ["805 Grandy Ave", "65 Rivercrest Dr"], selected: true });
+    expect(two).toEqual({ street: null, candidates: ["805 Grandy Ave", "65 Rivercrest Dr"], selected: true, labeled: true });
     expect(describeShipping(two, config)).toEqual(["Velocity · 805 Grandy Ave", "Home · 65 Rivercrest Dr"]);
     const text = extractShipping({ url: "x", text: "Ship to\n805 Grandy Ave\nNorfolk\nDeliver to\n12 Elsewhere St\nAnytown" });
-    expect(text).toEqual({ street: null, candidates: ["805 Grandy Ave", "12 Elsewhere St"], selected: false });
+    expect(text).toEqual({ street: null, candidates: ["805 Grandy Ave", "12 Elsewhere St"], selected: false, labeled: true });
     expect(filled(mergeBuckets(null, { shipping: two })).shipping).toBe(true);
   });
   it("a billing-address radio never counts as the ship-to", () => {
@@ -392,7 +392,7 @@ describe("buckets: v1.2.5 — the Shipping bucket from form fields", () => {
   it("street / city / state / ZIP fields → the typed address; the street is matched like any other (Velocity); city, state and ZIP ride along; email, billing and phone fields are ignored", () => {
     const fields = [{ label: "Email address", value: "buyer@example.com" }, { label: "First name", value: "Coastal" }, { label: "Street address", value: "805 Grandy Ave" }, { label: "Apartment, suite, etc.", value: "Unit B" }, { label: "City", value: "Norfolk" }, { label: "State", value: "Virginia" }, { label: "ZIP code", value: "23504" }, { label: "Phone", value: "7575550100" }, { label: "billing_address1", value: "1 Other St" }];
     const s = extractShipping({ url: "x", text, fields });
-    expect(s).toEqual({ street: "805 Grandy Ave", candidates: ["805 Grandy Ave"], selected: false, fromFields: true, city: "Norfolk", state: "Virginia", zip: "23504" });
+    expect(s).toEqual({ street: "805 Grandy Ave", candidates: ["805 Grandy Ave"], selected: false, fromFields: true, city: "Norfolk", state: "Virginia", zip: "23504", labeled: true });
     expect(describeShipping(s, config)).toEqual(["Velocity · 805 Grandy Ave (Norfolk, Virginia 23504)"]);
     expect(filled(extractBuckets({ url: "x", text, fields })).shipping).toBe(true);
     expect(shipToForPrefill({ ...newCapture("www.shagtools.com"), buckets: { ...emptyBuckets(), shipping: s } })).toEqual({ street: "805 Grandy Ave", candidates: ["805 Grandy Ave"] });
@@ -405,8 +405,8 @@ describe("buckets: v1.2.5 — the Shipping bucket from form fields", () => {
   });
   it("a checked address radio still wins over typed fields; the text block is read only when neither exists; the merge keeps the newer", () => {
     const fields = [{ label: "selected: ship", value: "Coastal Quality Goods\n65 Rivercrest Dr, Norfolk, VA 23456" }, { label: "Street address", value: "805 Grandy Ave" }];
-    expect(extractShipping({ url: "x", text, fields })).toEqual({ street: "65 Rivercrest Dr", candidates: ["65 Rivercrest Dr"], selected: true });
-    expect(extractShipping({ url: "x", text: "Shipping address\n805 Grandy Ave\nNorfolk, VA 23504", fields: [{ label: "City", value: "Norfolk" }] })).toEqual({ street: "805 Grandy Ave", candidates: ["805 Grandy Ave"], selected: false });
+    expect(extractShipping({ url: "x", text, fields })).toEqual({ street: "65 Rivercrest Dr", candidates: ["65 Rivercrest Dr"], selected: true, labeled: true });
+    expect(extractShipping({ url: "x", text: "Shipping address\n805 Grandy Ave\nNorfolk, VA 23504", fields: [{ label: "City", value: "Norfolk" }] })).toEqual({ street: "805 Grandy Ave", candidates: ["805 Grandy Ave"], selected: false, labeled: true });
     const m = mergeBuckets(extractBuckets({ url: "x", text: "Cart\nSubtotal $1.00" }), extractBuckets({ url: "x", text, fields: [{ label: "Street address", value: "805 Grandy Ave" }] }));
     expect(m.shipping?.street).toBe("805 Grandy Ave");
   });

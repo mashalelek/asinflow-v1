@@ -2659,14 +2659,14 @@ The one combined extension is split into two, from one repo, sharing `chrome-ext
 `af-client.js` — server URL, `credentials: "include"` fetch, Test connection, `isAmazonUrl`; the options script;
 `scrub.js`; the panel CSS; `extension-routes.json`, the AF routes each extension calls):
 
-- **AsinFlow Capture PO** — `chrome-extension/` (manifest 2.0.0, receipt icon). Everything capture-related: buckets,
+- **AsinFlow Capture PO** — `chrome-extension/` (manifest 2.0.1, receipt icon). Everything capture-related: buckets,
   the AI preview, the structured readers, Open in AF, supplier verification, retailer-page purchase history. It
   stays in the original folder because an unpacked extension's ID comes from its path: the ID, the captures in
   `chrome.storage.local` and the options survive. **Never on Amazon:** no amazon host in `host_permissions`, no
   content script; the panel is disabled on every amazon.* tab (`sidePanel.setOptions` per tab) and a capture there
   is refused. (`optional_host_permissions` stays `https://*/*` — Chrome cannot exclude a host from it — so the code
   gate is the rule.)
-- **AsinFlow Analyzer** — `chrome-extension/analyzer/` (manifest 1.0.0, bar-chart icon, a new unpacked load).
+- **AsinFlow Analyzer** — `chrome-extension/analyzer/` (manifest 1.0.1, bar-chart icon, a new unpacked load).
   Everything on Amazon product pages: product info, COGS / sale price / fees / profit, Update in AsinFlow,
   auto-open, Amazon-page purchase history. `host_permissions` = amazon.com, Seller Central and the AF servers only;
   its panel is off by default and enabled per Amazon tab.
@@ -2937,7 +2937,27 @@ not an Amazon product page the panel shows the capture UI instead of the
   "65 Rivercrest" kept as typed when no suffix is recognised), with city |
   town, state | province | region and zip | postal | postcode riding
   along (`fromFields: true`); the street is matched against the two known
-  addresses exactly as before (`normStreet`), and the panel shows
+  addresses exactly as before (`normStreet`). **2.0.1 (gordonelectricsupply.com,
+  Maria 2026-11-05): a billing address never fills Shipping.** The payment
+  page's "Billing Address:" form (name on card, address line 1, city,
+  state, zip — field labels that never say billing) had replaced the
+  ship-to from the Shipping Information page. Address fields on a page with
+  card fields (name on card, card number, security code, expiry) or a
+  "billing address" / "cardholder" heading are payment-side unless the
+  field itself says ship / shipping / delivery; a billing / cardholder text
+  heading is never read. Each Shipping read carries `labeled` — its source
+  says ship-to / shipping / delivery (a field label, the page title, a
+  "Shipping information" / "Ship to" / "Delivery address" heading, a
+  selected address radio on such a page) — and once Shipping holds a
+  labeled read, a later page replaces it only with another labeled one
+  (`keepShipping`; the AI's street counts as unlabeled). The AI prompt
+  (`PREFILL_SYSTEM`, shared by the preview and Open in AF) says the same:
+  shipToStreet is the delivery address only, never one labeled billing /
+  cardholder or entered beside card fields, and a later page replaces an
+  earlier ship-to only when it labels it too. Fixture:
+  `server/__fixtures__/capture-pages/gordon/` (the production shipping and
+  payment pages, personal data replaced), `server/extension-billing.test.ts`.
+  The panel shows
   "Velocity · 805 Grandy Ave (Norfolk, Virginia 23504)". **v1.2.6 / v1.2.7
   (shagtools.com, Maria 2026-11-03, the first real captures — a WooCommerce
   store): availability lines, the cart table, shipping-method lists, and
@@ -3024,7 +3044,14 @@ not an Amazon product page the panel shows the capture UI instead of the
   Luhn and starts like a card network (3 / 4 / 5 / 6 / 2221–2720), unless an
   order / confirmation / invoice / tracking label sits right before it
   (v1.3.1) → `•••• ` + last 4; a 3–4 digit value whose label says cvv / cvc /
-  security code → removed; an expiry (MM/YY, MM/YYYY) within 40 characters
+  security code → removed (2.0.1, Maria 2026-11-05: a field's label is read
+  with `_ . -` as spaces and the form's own names count — Gordon's payment
+  form sent its security code as `SECNO_NEW`, which passed; now `SECNO`,
+  `csc`, `cvn`, `card_cvv` are security codes, an `EXP.MONTH` / `exp_year`
+  field is dropped, a `CCNO` / card-number field keeps its last 4; and the
+  server scrubs every captured page again with the same `scrub.js` in
+  `CapturePageSchema` — prefill, AI preview, kept samples — so an older
+  extension build cannot pass what a newer scrubber catches); an expiry (MM/YY, MM/YYYY) within 40 characters
   after "exp" / "valid" → removed; a gift-card / e-gift number → last 4
   kept; emails kept. Fixtures: hand-written synthetic checkout texts for
   Walmart, Michaels, Bed Bath & Beyond, Lakeshore and Webstaurant with

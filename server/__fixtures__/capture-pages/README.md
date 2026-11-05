@@ -39,8 +39,9 @@ pasted — synthetic text in the shape she reported: `gordon-cart.txt`
 Total", "Estimated Freight", "Estimated Total"; since 2026-11-05 the
 real cart's values — one line, Lenox 20350GOLD5C × 30 @ $2.89, Sub Total
 $86.70, Estimated Freight $18.52, Estimated Total $105.22 — replacing the
-invented 2-line / $78.31 cart; the layout is still transcribed until her
-production capture becomes a fixture), `acme-checkout.txt` (acmetools.com checkout: the "PPE & SAFETY"
+invented 2-line / $78.31 cart; the cart page itself is still transcribed —
+the server keeps only pages whose Products or Totals stayed empty, and the
+AI filled both on the real cart, so it was not kept), `acme-checkout.txt` (acmetools.com checkout: the "PPE & SAFETY"
 category link, Subtotal $89.70, Code DHDNYC −$10.00, Shipping $6.49,
 Handling $0, Sales Tax $0, Total $86.19, the marketing promo lines; the card
 field is a processor iframe, so no payment text) and `acme-confirmation.txt`
@@ -48,3 +49,16 @@ field is a processor iframe, so no payment text) and `acme-confirmation.txt`
 "Qty 30" in its own column, "$89.70 ($2.66/item) Promo Code −$10.00 Total
 $79.70"; the email is an example.com address). The model's reading of them
 is mocked in `server/capture-preview.test.ts`.
+
+`gordon/` (2026-11-05) is REAL: the two gordonelectricsupply.com pages the
+server kept from Maria's production capture (cart → Shipping Information →
+Checkout, not placed) — `shipping.txt` (the Shipping Information form: the
+ship-to typed into Address Line 1 / City / State / Zip, "Ship-To Name", the
+UPS GROUND $18.52 radio) and `payment.txt` (the Checkout page: "Billing
+Address:" with Name on Card / Address Line 1 / City / State / Zip Code, the
+card type and the masked CCNO). Personal data replaced: the name, email and
+phone are invented, the billing address is an invented street (12 Elsewhere
+St, Springfield, IL), the card's last 4 is 4444, and the security-code and
+expiry fields are gone (the scrubber drops them since 2.0.1). The ship-to is
+the Velocity street. `server/extension-billing.test.ts` reads them in the
+kept-sample layout (`sampleAsFixture`).

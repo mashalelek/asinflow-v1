@@ -125,7 +125,7 @@ and any introduced error must be fixed forward before committing.
 
 ## Tests
 
-`npm test` (vitest). **2,138 tests across 196 files** as of 2026-11-05 — this
+`npm test` (vitest). **2,150 tests across 197 files** as of 2026-11-05 — this
 codebase IS tested; the old "there are no tests" line was years stale.
 
 **A gate report must cover BOTH typecheck commands, labelled separately:**
@@ -133,7 +133,7 @@ codebase IS tested; the old "there are no tests" line was years stale.
 ```
 npm run check        -> 4 baseline TS1252, 0 introduced
 npm run check:tests  -> 4 baseline TS1252, 0 introduced
-npm test             -> 2138/2138
+npm test             -> 2150/2150
 ```
 
 `npm run check` alone is NOT a complete gate. The base `tsconfig.json`
@@ -187,9 +187,9 @@ hand-written with public test card numbers only — never real ones.
 
 **Chrome extensions dev (SPEC §11 "Two extensions", v2.0, 2026-11-05):** two
 extensions from one repo, each loaded unpacked at chrome://extensions —
-**AsinFlow Capture PO** = `chrome-extension/` (2.0.0; the original folder, so
+**AsinFlow Capture PO** = `chrome-extension/` (2.0.1; the original folder, so
 its ID, captures and options survive; never runs on Amazon) and **AsinFlow
-Analyzer** = `chrome-extension/analyzer/` (1.0.0; Amazon product pages and
+Analyzer** = `chrome-extension/analyzer/` (1.0.1; Amazon product pages and
 Seller Central only). They share `chrome-extension/core/` (AF client,
 options script, scrubber, panel CSS, `extension-routes.json`); Chrome loads
 nothing outside an extension's folder, so `analyzer/core/` is a copy —

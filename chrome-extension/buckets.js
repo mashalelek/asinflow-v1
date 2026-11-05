@@ -67,6 +67,15 @@
 // street | address | city | state | zip | postal (billing, email and phone
 // fields excluded; a checked radio still wins), and the street is matched
 // against the two known addresses the same way (normStreet).
+// v1.4.1 (gordonelectricsupply.com, Maria 2026-11-05): a billing address never
+// fills Shipping. The payment page's "Billing Address:" form (name on card,
+// address line 1, city, state, zip — fields that say nothing about billing)
+// replaced the ship-to the Shipping Information page had captured. Address
+// fields on a page that shows card fields (name on card, card number, security
+// code, expiry) or a billing address / cardholder heading are payment-side
+// unless the field itself says ship / shipping / delivery. A Shipping read is
+// `labeled` when its source says ship-to / shipping / delivery; once Shipping
+// holds a labeled read, a later page replaces it only with another labeled one.
 (function (root) {
   "use strict";
 
@@ -162,20 +171,37 @@
 
   // ── Shipping: the SELECTED address, never just the first address block ──
   // v1.2.5: an address typed into form fields (street / city / state / ZIP). Labels are what capture.js labelFor() gives: a <label>, aria-label, placeholder, name or id — so "shipping_address_line1", "Street address", "address1", "zip", "postal_code". Billing / email / phone fields are skipped; a second line, apt / suite / unit never is the street; the value must look like a street ("805 Grandy Ave", or "65 Rivercrest" without a suffix).
-  var ADDR_SKIP = /bill|email|e-mail|phone|tel\b|company|search|name/i;
+  var ADDR_SKIP = /bill|card\s*holder|cardholder|email|e-mail|phone|tel\b|company|search|name/i;
+  /** v1.4.1: a ship-to / shipping / delivery label (a heading, a field's label or name, a page title). */
+  var SHIP_WORD = /shipping|ship[\s_.-]*to|(?:^|[^a-z])ship(?:[^a-z]|$)|deliver/i;
+  /** v1.4.1: card-entry fields — their address fields are the card's billing address. */
+  var CARD_FIELD = /name[\s_.-]*on[\s_.-]*card|card[\s_.-]*holder|cardholder|card[\s_.-]*(?:no|num)|\bcc[\s_.-]*(?:no|num|type)|\bccno|cvv|cvc|security[\s_.-]*code|\bsec[\s_.-]*no|exp(?:iry|iration)?[\s_.-]*(?:date|month|year|mm|yy)/i;
+  var BILLING_HEADING = /\bbilling\s+address\b|\bcard\s*holder\b|\bcardholder\b/i;
+  /** v1.4.1: the page's address fields belong to a card (card fields beside them, or a billing address heading). */
+  function billingForm(page) {
+    var fs = fieldsOf(page).filter(function (f) { return !/^selected:/i.test(String(f.label || "")); });
+    return fs.some(function (f) { return CARD_FIELD.test(String(f.label || "")); }) || BILLING_HEADING.test(String((page && page.text) || ""));
+  }
+  /** v1.4.1: the page itself labels its address as ship-to / shipping / delivery — a non-select field's label, the title, or a heading line. */
+  function pageSaysShipping(page) {
+    if (fieldsOf(page).some(function (f) { var l = String(f.label || ""); return !/^selected:/i.test(l) && SHIP_WORD.test(l); })) return true;
+    if (/\b(?:shipping|delivery|ship[\s-]?to)\b/i.test(String((page && page.title) || ""))) return true;
+    return lines(page && page.text).some(function (l) { return l.length <= 40 && /^(?:shipping|delivery)\s+(?:information|address|details|info)\b|^ship[\s-]?to\b|^deliver(?:y|ing)?\s+to\b/i.test(l); });
+  }
   var ADDR_LINE2 = /line[ _-]?2|address[ _-]?2|addr2|street[ _-]?2|\b2\b|apt|suite|unit|floor|type/i;
   function addressFromFields(page) {
-    var street = null, city = null, state = null, zip = null;
+    var street = null, city = null, state = null, zip = null, billing = billingForm(page);
     fieldsOf(page).forEach(function (f) {
       var lab = String(f.label || ""), val = String(f.value || "").replace(/\s+/g, " ").trim();
       if (!val || /^selected:/i.test(lab) || ADDR_SKIP.test(lab)) return;
+      if (billing && !SHIP_WORD.test(lab)) return; // v1.4.1: the card's billing address
       if (street == null && /street|address|addr/i.test(lab) && !ADDR_LINE2.test(lab) && /^\d{1,6}[A-Za-z]?\s+[A-Za-z]/.test(val)) street = streetIn(val) || val.slice(0, 80);
       else if (city == null && /city|town/i.test(lab)) city = val.slice(0, 60);
       else if (state == null && /state|province|region/i.test(lab)) state = val.slice(0, 40);
       else if (zip == null && /zip|postal|postcode/i.test(lab)) { var z = /\d{5}(?:-\d{4})?/.exec(val); zip = z ? z[0] : val.slice(0, 12); }
     });
     if (!street) return null;
-    return { street: street, candidates: [street], selected: false, fromFields: true, city: city, state: state, zip: zip };
+    return { street: street, candidates: [street], selected: false, fromFields: true, city: city, state: state, zip: zip, labeled: billing || pageSaysShipping(page) };
   }
   function extractShipping(page) {
     var sel = [];
@@ -186,20 +212,20 @@
       if (st) sel.push(st);
     });
     sel = uniq(sel, normStreet);
-    if (sel.length) return { street: sel.length === 1 ? sel[0] : null, candidates: sel, selected: true };
+    if (sel.length) return { street: sel.length === 1 ? sel[0] : null, candidates: sel, selected: true, labeled: pageSaysShipping(page) || selectedFields(page).some(function (f) { return SHIP_WORD.test(String(f.label || "")); }) };
     var typed = addressFromFields(page);
     if (typed) return typed;
-    var L = lines(page.text), cands = [];
+    var L = lines(page.text), cands = [], labeled = false;
     for (var i = 0; i < L.length; i++) {
       var l = L[i];
-      if (!SHIP_HEADING.test(l) || /\bbilling\b/i.test(l)) continue;
+      if (!SHIP_HEADING.test(l) || /\bbilling\b|card\s*holder|cardholder/i.test(l)) continue;
       var st = streetIn(l.replace(SHIP_HEADING, ""));
       for (var j = i + 1; !st && j <= i + 4 && j < L.length; j++) { if (BILLING.test(L[j]) || TOTAL_LINE.test(L[j])) break; st = streetIn(L[j]); }
-      if (st) cands.push(st);
+      if (st) { cands.push(st); if (SHIP_WORD.test(l)) labeled = true; } // a bare "Address" heading is not a ship-to label
     }
     cands = uniq(cands, normStreet);
     if (!cands.length) return null;
-    return { street: cands.length === 1 ? cands[0] : null, candidates: cands, selected: false };
+    return { street: cands.length === 1 ? cands[0] : null, candidates: cands, selected: false, labeled: labeled };
   }
 
   // ── Products: one line per product actually parsed (never a count of "Qty" strings) ──
@@ -517,13 +543,19 @@
     if (existing.price != null && p.price != null && p.qty != null && p.qty > 1 && Math.abs(toNum(p.price) - toNum(existing.price) * p.qty) < 0.011) { p.total = p.price; p.price = existing.price; }
     return p;
   }
+  /** v1.4.1: the newer page's Shipping wins, except that a labeled ship-to (ship-to / shipping / delivery) is replaced only by another labeled one. */
+  function keepShipping(older, newer) {
+    if (!newer) return older || null;
+    if (older && older.labeled && !newer.labeled) return older;
+    return newer;
+  }
   function mergeBuckets(prev, next) {
     var a = prev || emptyBuckets(), b = next || {};
     var prevProducts = a.products || [];
     var incoming = (b.products || []).map(function (p) { var e = prevProducts.filter(function (x) { return productKey(x) === productKey(p); })[0]; return e ? reconcileProduct(e, p) : p; });
     return {
       products: upsert(prevProducts, incoming, productKey),
-      shipping: b.shipping ? b.shipping : (a.shipping || null),
+      shipping: keepShipping(a.shipping, b.shipping),
       payment: {
         cards: upsert((a.payment || {}).cards || [], (b.payment || {}).cards || [], function (c) { return c.last4 || normName(c.nickname); }),
         giftCards: upsert((a.payment || {}).giftCards || [], (b.payment || {}).giftCards || [], function (g) { return g.last4 || g.amount; }),
