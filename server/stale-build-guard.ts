@@ -25,7 +25,7 @@ export const STALE_BUILD_MESSAGE = "AF was updated — reload this page";
 /** Every /api route chrome-extension/ calls (paths relative to /api; ":x" = one path segment). */
 export const EXTENSION_API_ROUTES = [
   "/settings", "/credentials-status", "/import-asin", "/asins/check/:asin",
-  "/pos/prefill", "/pos/capture-preview", "/pos/capture-config",
+  "/pos/prefill", "/pos/capture-preview", "/pos/capture-config", "/extension/history",
 ] as const;
 const routeRe = (r: string) => new RegExp(`^${r.replace(/[.*+?^${}()|[\]\\]/g, "\\$&").replace(/:[a-z]+/gi, "[^/]+")}$`);
 const EXEMPT = [/^\/auth\//, ...EXTENSION_API_ROUTES.map(routeRe)];

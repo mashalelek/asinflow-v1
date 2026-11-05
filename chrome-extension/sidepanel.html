@@ -52,9 +52,17 @@
     </div>
     <div class="capture-caption">AI reads each new page as you capture it · card numbers are masked before anything leaves the browser</div>
     <div id="capture-feedback" class="capture-feedback" style="display:none;"></div>
+    <!-- Purchase history (2026-11-05): AF's past POs from this supplier for the listings in view, no AI -->
+    <div id="capture-history" class="capture-history" style="display:none;">
+      <div class="section-title">Purchase history</div>
+      <div id="history-email" class="hist-email"></div>
+      <div id="history-list"></div>
+    </div>
   </div>
 
   <script src="buckets.js"></script>
+  <script src="core/history-view.js"></script>
+  <script src="capture-history.js"></script>
   <script src="capture-panel.js"></script>
 </body>
 </html>

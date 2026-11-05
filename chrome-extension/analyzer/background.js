@@ -220,6 +220,12 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     return true;
   }
 
+  // Purchase history (2026-11-05, SPEC §11): AF's past POs for this ASIN — GET only, AF data, no AI.
+  if (message.type === "HISTORY") {
+    const asin = String(message.asin || "").toUpperCase();
+    AfCore.afJson(`/api/extension/history?asin=${encodeURIComponent(asin)}`).then(sendResponse).catch((e) => sendResponse({ ok: false, message: String(e?.message || e) }));
+    return true;
+  }
   if (message.type === "CHECK_ASIN") {
     (async () => {
       try {

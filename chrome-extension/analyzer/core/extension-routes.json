@@ -4,12 +4,14 @@
     "/credentials-status",
     "/pos/prefill",
     "/pos/capture-preview",
-    "/pos/capture-config"
+    "/pos/capture-config",
+    "/extension/history"
   ],
   "analyzer": [
     "/settings",
     "/credentials-status",
     "/import-asin",
-    "/asins/check/:asin"
+    "/asins/check/:asin",
+    "/extension/history"
   ]
 }

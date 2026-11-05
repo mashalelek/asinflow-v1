@@ -194,6 +194,18 @@
   const importBtn = document.getElementById("import-btn");
   const importFeedback = document.getElementById("import-feedback");
 
+  // ── Purchase history (2026-11-05): AF's past POs for the page's ASIN ──
+  const historyEl = document.getElementById("analyzer-history"), historyBox = document.getElementById("analyzer-history-box");
+  function loadHistory(asin) {
+    historyEl.style.display = "none";
+    chrome.runtime.sendMessage({ type: "HISTORY", asin }, (r) => {
+      if (chrome.runtime.lastError || displayedAsin !== asin) return;
+      if (!r || !r.ok || !r.data || !r.data.history) return;
+      AfHistory.renderHistory(historyBox, r.data.history, { showSupplier: true });
+      historyEl.style.display = "";
+    });
+  }
+
   // ── Fee Engine Initialization ─────────────────────────────────────────
   async function initFeeEngine() {
     try {
@@ -255,6 +267,7 @@
 
       // Fire the catalog check for the new ASIN
       checkAsinInCatalog(product.asin);
+      loadHistory(product.asin);
     } else if (!product._partial && originalScrapedPrice == null && typeof product.price === "number") {
       // Late-arriving full data after a partial-first payload — seed the price now
       originalScrapedPrice = product.price;

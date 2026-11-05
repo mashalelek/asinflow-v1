@@ -87,6 +87,7 @@ import {
   parseAddedAt,
 } from "./bulk-lists";
 import fs from "fs";
+import { HistoryQuerySchema, extensionHistory } from "./extension-history";
 
 
 // Module-level handle to runAnalyzeCore (defined inside registerRoutes).
@@ -4644,6 +4645,14 @@ export async function registerRoutes(
       const suppliers = (await query(`SELECT DISTINCT lower(supplier) AS s FROM purchase_orders ORDER BY 1`)).rows.map((r: any) => String(r.s));
       res.json({ velocityStreet: String(v("tracking.velocity_street") ?? "805 grandy"), homeStreets: (v("tracking.home_streets") as string[]) ?? ["65 rivercrest"], prepCost: Number(v("prep_cost") ?? 1) || 1, suppliers });
     } catch (err: any) { res.status(500).json({ message: err.message }); }
+  });
+  // Purchase history for the two extensions (SPEC §11 "Purchase history", 2026-11-05): ?asin= (Analyzer) or
+  // ?supplier=<host>&name=&sku=[&pack=][&asin=] (Capture PO). AF data only, no AI.
+  app.get("/api/extension/history", async (req: Request, res: Response) => {
+    if (!isDbAvailable()) { res.status(503).json({ message: "Database not available" }); return; }
+    const q = HistoryQuerySchema.safeParse(req.query);
+    if (!q.success) { res.status(400).json({ message: q.error.issues[0]?.message ?? "bad query" }); return; }
+    try { res.json(await extensionHistory(query, q.data)); } catch (err: any) { res.status(500).json({ message: err.message }); }
   });
   // === Subscriptions (po-ai-prefill §9, SPEC §27) ===
   app.get("/api/subscriptions", async (_req: Request, res: Response) => {

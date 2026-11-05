@@ -113,6 +113,7 @@
     const others = info.others || [];
     alsoEl.style.display = others.length ? "" : "none";
     alsoEl.textContent = others.length ? `Also capturing: ${others.map((o) => `${o.host} (${plural(o.count, "page")})`).join(" · ")}` : "";
+    if (globalThis.AfCaptureHistory) globalThis.AfCaptureHistory.update(info).catch(() => {});
   }
 
   function say(text, kind) { feedback.style.display = ""; feedback.className = `capture-feedback${kind ? " " + kind : ""}`; feedback.textContent = text; }

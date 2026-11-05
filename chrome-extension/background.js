@@ -107,7 +107,27 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
       let host = null; try { host = tab?.url ? new URL(tab.url).hostname : null; } catch { /* about:, chrome: */ }
       // v1.2: captures are per tab; the panel lists the other tabs with a capture in progress.
       const others = tab?.id != null ? AfBuckets.othersCapturing(all, tab.id) : [];
-      sendResponse({ capture: cur || null, tabId: tab?.id ?? null, host, title: tab?.title ?? null, isAmazon: AfCore.isAmazonUrl(tab?.url), others });
+      sendResponse({ capture: cur || null, tabId: tab?.id ?? null, host, url: tab?.url ?? null, title: tab?.title ?? null, isAmazon: AfCore.isAmazonUrl(tab?.url), others });
+    })();
+    return true;
+  }
+  // Purchase history (2026-11-05, SPEC §11): AF's past POs for this supplier / listing — GET only, AF data, no AI.
+  if (message.type === "HISTORY") {
+    AfCore.afJson(`/api/extension/history?${message.query || ""}`).then(sendResponse).catch((e) => sendResponse({ ok: false, message: String(e?.message || e) }));
+    return true;
+  }
+  // The product the page itself names (a retailer product page): schema.org Product, else og:title when og:type is product.
+  // Only once the site's read permission is granted (the first Capture asks for it) — never on Amazon; nothing else read.
+  if (message.type === "PAGE_PRODUCT") {
+    (async () => {
+      try {
+        const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
+        if (!tab?.id || !/^https?:/.test(tab.url || "") || AfCore.isAmazonUrl(tab.url)) { sendResponse(null); return; }
+        if (!(await chrome.permissions.contains({ origins: [new URL(tab.url).origin + "/*"] }))) { sendResponse(null); return; }
+        const [res] = await chrome.scripting.executeScript({ target: { tabId: tab.id }, func: readPageProduct });
+        const p = res?.result;
+        sendResponse(p && p.name ? { name: AfScrub.scrubText(String(p.name)).slice(0, 300), sku: p.sku ? AfScrub.scrubText(String(p.sku)).slice(0, 60) : null } : null);
+      } catch (e) { sendResponse(null); }
     })();
     return true;
   }
@@ -227,3 +247,16 @@ async function dropOrphanCaptures() {
 }
 chrome.runtime.onStartup.addListener(() => { dropOrphanCaptures().catch(() => {}); });
 chrome.runtime.onInstalled.addListener(() => { dropOrphanCaptures().catch(() => {}); });
+
+// Runs in the retailer's page (PAGE_PRODUCT): the product's name and SKU / GTIN only.
+function readPageProduct() {
+  const flat = (x) => (Array.isArray(x) ? x.flatMap(flat) : x && typeof x === "object" ? [x, ...flat(x["@graph"] || [])] : []);
+  for (const s of document.querySelectorAll('script[type="application/ld+json"]')) {
+    let j; try { j = JSON.parse(s.textContent || ""); } catch (e) { continue; }
+    const p = flat(j).find((o) => [].concat(o["@type"] || []).includes("Product"));
+    if (p && p.name) return { name: String(p.name), sku: p.sku || p.gtin13 || p.gtin12 || p.gtin || p.mpn || null };
+  }
+  const og = document.querySelector('meta[property="og:type"]')?.content === "product" ? document.querySelector('meta[property="og:title"]')?.content : null;
+  const name = og || null;
+  return name ? { name, sku: null } : null;
+}

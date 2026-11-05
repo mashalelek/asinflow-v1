@@ -2676,6 +2676,30 @@ The one combined extension is split into two, from one repo, sharing `chrome-ext
 - The stale-page guard exempts exactly the union of both route lists (`EXTENSION_API_ROUTES`);
   `server/stale-build-guard.test.ts` scans both extensions' sources.
 
+### Purchase history in the extensions (Maria 2026-11-05)
+
+`GET /api/extension/history` (`server/extension-history.ts`), AF's PO tables only, no AI. Two forms:
+
+- `?asin=` — **Analyzer**, on an Amazon product page (the ASIN from the URL).
+- `?supplier=<host>&name=…&sku=…[&pack=][&asin=]` — **Capture PO**, on a retailer product / cart page. The host
+  resolves to an AF supplier the way the prefill does (`supplierForHost`: exact domain, `supplier_aliases`, the same
+  registrable domain). Only that supplier's past PO lines are matched: the normalized SKU / UPC first (dashes,
+  spaces, dots, case stripped; compared with `po_line_items.supplier_sku`), then the product name with its pack-size
+  tokens stripped — "(2-pack)", "12-pack", "Set of 4", "Pack of 6", "× 12", "N ct", "N count" — the listing's pack
+  size parsed as its own number. One confident match (one ASIN on the SKU; an exact base name naming one ASIN; or a
+  name score ≥ 0.85 leading the next ASIN by ≥ 0.2) → its history; otherwise the top 3 (score ≥ 0.35) to pick from.
+  The pick is remembered per listing URL (+ the line's name, for a cart) in the extension's `chrome.storage.local`
+  and sent back as `&asin=`. The listings are the captured Products (up to 5), else the product the page names
+  (schema.org Product / `og:title` on a product page, read once the site's permission is granted). On any page of a
+  retailer the panel also shows the **last email used** with that supplier (the newest PO's `email_used`).
+
+Per ASIN: the **last COGS** (`po_asins.cost_per_unit`, per ASIN unit) with its order date and PO #; the **365-day
+average COGS** weighted by ASIN units (`po_asins.qty`); **POs and ASIN units in 365 days**; the 5 most recent
+purchases and **how they were bought** ("6-pack × 2": the line's `retailer_units_per_product`, else its name's pack
+token, × qty ordered → ASIN units); and for a retailer listing the **conversion** "this listing: 12-pack → 4 ASIN
+units (ASIN is a 3-pack)" when both pack sizes are known (the ASIN's from `asins.units_per_pack`, else the newest PO
+row's). A fully canceled ASIN row is no purchase. Newest = order date, then entry sequence. Nothing is recomputed.
+
 ### Chrome extension — Capture PO (patch `docs/claude_spec-patch-po-ai-prefill.md` §4, 2026-10-31; `chrome-extension/` v1.4.0 — structured readers above the AI, a red line for a failed preview, every preview request logged, kept samples, 2026-11-05; v1.3.1 — captures survive navigation, order #s that pass Luhn kept, 2026-11-04; v1.3.0 — the AI preview 2026-11-04; v1.2.3 — panel redesign 2026-11-01, pre-parser fixes from the first real PO the same day, table-row products and promo dedupe from a shagtools.com cart 2026-11-02, plain-text / no-text quantities and the "Copy page text" debug action the same day)
 
 The existing extension (the Amazon side-panel calculator, `content.js` on

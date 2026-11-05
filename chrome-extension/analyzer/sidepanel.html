@@ -132,9 +132,16 @@
       <button id="import-btn" class="import-btn" disabled>Import to AsinFlow</button>
       <div id="import-feedback" class="import-feedback" style="display:none;"></div>
     </div>
+
+    <!-- Purchase history (2026-11-05): AF's past POs for this ASIN, any supplier, no AI -->
+    <div id="analyzer-history" class="analyzer-history" style="display:none;">
+      <div class="section-title">Purchase history</div>
+      <div id="analyzer-history-box" class="hist-box"></div>
+    </div>
   </div>
 
   <script src="core/af-client.js"></script>
+  <script src="core/history-view.js"></script>
   <script src="fee-engine/feeEngine.js"></script>
   <script src="sidepanel.js"></script>
 </body>
