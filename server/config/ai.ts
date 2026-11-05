@@ -21,6 +21,8 @@ export const AI = {
   effort: "low" as const,
   /** $ per million tokens — the ≤ 100K-token rate card (prompts are far smaller). */
   pricePerMTok: { input: 0.1, output: 0.5 },
+  /** Supplier verification (server/supplier-check.ts): the web search tool, at most this many searches per check, at this $ each. */
+  webSearch: { type: "web_search_20250305" as const, maxUses: 5, usdPerSearch: 0.01 },
   /** Settings → AI spend warns when a calendar month (Eastern) passes this (Maria 2026-11-05). */
   monthlyWarnUsd: 20,
 } as const;
@@ -30,9 +32,9 @@ export function aiAvailable(env: NodeJS.ProcessEnv = process.env): boolean {
 }
 export const AI_OFF_MESSAGE = "AI prefill is off: ANTHROPIC_API_KEY is not configured";
 
-/** $ for one call, 5 decimals. */
-export function estimateCost(inputTokens: number, outputTokens: number): number {
-  return Math.round(((inputTokens * AI.pricePerMTok.input + outputTokens * AI.pricePerMTok.output) / 1_000_000) * 1e5) / 1e5;
+/** $ for one call, 5 decimals (web searches, when the call used the tool, at AI.webSearch.usdPerSearch each). */
+export function estimateCost(inputTokens: number, outputTokens: number, webSearches = 0): number {
+  return Math.round(((inputTokens * AI.pricePerMTok.input + outputTokens * AI.pricePerMTok.output) / 1_000_000 + webSearches * AI.webSearch.usdPerSearch) * 1e5) / 1e5;
 }
 
 let client: Anthropic | null = null;

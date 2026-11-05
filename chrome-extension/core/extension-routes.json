@@ -5,7 +5,8 @@
     "/pos/prefill",
     "/pos/capture-preview",
     "/pos/capture-config",
-    "/extension/history"
+    "/extension/history",
+    "/extension/supplier-check"
   ],
   "analyzer": [
     "/settings",

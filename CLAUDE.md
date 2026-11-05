@@ -125,7 +125,7 @@ and any introduced error must be fixed forward before committing.
 
 ## Tests
 
-`npm test` (vitest). **2,127 tests across 195 files** as of 2026-11-05 — this
+`npm test` (vitest). **2,138 tests across 196 files** as of 2026-11-05 — this
 codebase IS tested; the old "there are no tests" line was years stale.
 
 **A gate report must cover BOTH typecheck commands, labelled separately:**
@@ -133,7 +133,7 @@ codebase IS tested; the old "there are no tests" line was years stale.
 ```
 npm run check        -> 4 baseline TS1252, 0 introduced
 npm run check:tests  -> 4 baseline TS1252, 0 introduced
-npm test             -> 2127/2127
+npm test             -> 2138/2138
 ```
 
 `npm run check` alone is NOT a complete gate. The base `tsconfig.json`
@@ -217,7 +217,7 @@ writes one as a fixture.
 backfills, dry run by default, `--live`), `npm run backfill:po-promos` (needs
 `ANTHROPIC_API_KEY`), `tsx script/sourcing-cost-switch-dryrun.ts` (the
 Update COGS in SC → col AR switch report), `npm run po:reconcile-confirmations`
-(`--live`, `--since`). All dry-run by default.
+(`--live`, `--since`), `npm run supplier:check -- --supplier <domain>` (Capture PO's Verify supplier from the shell, `--live` stores it). All dry-run by default.
 
 **Production DB: run scripts with `--prod`; the URL lives in
 `.env.production.local`, never in prompts.** `script/env.ts` (every

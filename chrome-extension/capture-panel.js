@@ -114,6 +114,7 @@
     alsoEl.style.display = others.length ? "" : "none";
     alsoEl.textContent = others.length ? `Also capturing: ${others.map((o) => `${o.host} (${plural(o.count, "page")})`).join(" · ")}` : "";
     if (globalThis.AfCaptureHistory) globalThis.AfCaptureHistory.update(info).catch(() => {});
+    if (globalThis.AfCaptureVerify) globalThis.AfCaptureVerify.update(info).catch(() => {});
   }
 
   function say(text, kind) { feedback.style.display = ""; feedback.className = `capture-feedback${kind ? " " + kind : ""}`; feedback.textContent = text; }
@@ -123,7 +124,7 @@
     const info = await send({ type: "GET_CAPTURE" });
     if (!info) return;
     // An Amazon tab: the panel is switched off there (background.js gatePanel); this shows only if it was already open.
-    if (info.isAmazon) { root.style.display = "none"; amazonState.style.display = ""; return; }
+    if (info.isAmazon) { root.style.display = "none"; amazonState.style.display = ""; if (globalThis.AfCaptureVerify) globalThis.AfCaptureVerify.update(info).catch(() => {}); return; }
     root.style.display = ""; amazonState.style.display = "none";
     render(info);
   }

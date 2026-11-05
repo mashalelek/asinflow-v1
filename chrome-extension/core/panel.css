@@ -186,3 +186,24 @@ input:focus { border-color: var(--focus) !important; }
 .hist-pick:hover { background: var(--controls); }
 .hist-pick-name { color: var(--text-2); }
 .hist-link { background: none; border: 0; padding: 0; color: var(--text); text-decoration: underline; cursor: pointer; font-size: 11px; }
+
+/* Header actions + supplier verification (2026-11-05). */
+.af-header-right { display: flex; align-items: center; gap: 10px; min-width: 0; }
+.af-brand { white-space: nowrap; }
+.af-header.connected .hide-when-connected { display: none; }
+.header-btn { background: transparent; color: var(--header-text); border: 1px solid #57534E; border-radius: 6px; padding: 4px 8px; font-size: 12px; cursor: pointer; white-space: nowrap; }
+.header-btn:hover { background: #44403C; }
+.header-btn:disabled { opacity: 0.6; cursor: default; }
+.verify { background: var(--card); border-radius: 8px; padding: 8px 12px; margin-bottom: 12px; font-size: 12px; }
+.verify-summary { cursor: pointer; color: var(--text); }
+.verify-verdict { font-weight: 600; }
+.verify.looks_legit .verify-verdict { color: var(--green); }
+.verify.mixed .verify-verdict { color: var(--amber); }
+.verify.red_flags .verify-verdict, .verify.error .verify-summary { color: var(--red); }
+.verify-date { color: var(--text-2); }
+.verify-body { margin-top: 8px; display: grid; gap: 6px; }
+.verify-facts { color: var(--text-2); }
+.verify-points { margin: 0; padding-left: 16px; display: grid; gap: 3px; color: var(--text); }
+.verify-sources { display: flex; flex-direction: column; gap: 2px; }
+.verify-sources a { color: var(--text-2); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.verify-caption { font-size: 11px; color: var(--text-2); }

@@ -131,6 +131,15 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     })();
     return true;
   }
+  // Supplier verification (2026-11-05, SPEC §11): the stored check (GET), or the one AI web-search check on click (POST).
+  if (message.type === "SUPPLIER_CHECK_GET" || message.type === "SUPPLIER_CHECK_RUN") {
+    const host = String(message.host || "");
+    const p = message.type === "SUPPLIER_CHECK_GET"
+      ? AfCore.afJson(`/api/extension/supplier-check?supplier=${encodeURIComponent(host)}`)
+      : AfCore.afJson("/api/extension/supplier-check", { method: "POST", body: { supplier: host }, timeoutMs: 120000 });
+    p.then(sendResponse).catch((e) => sendResponse({ ok: false, message: String(e?.message || e) }));
+    return true;
+  }
   if (message.type === "CLEAR_CAPTURE") {
     (async () => {
       const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });

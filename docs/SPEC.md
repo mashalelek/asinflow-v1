@@ -2700,6 +2700,22 @@ token, × qty ordered → ASIN units); and for a retailer listing the **conversi
 units (ASIN is a 3-pack)" when both pack sizes are known (the ASIN's from `asins.units_per_pack`, else the newest PO
 row's). A fully canceled ASIN row is no purchase. Newest = order date, then entry sequence. Nothing is recomputed.
 
+### Supplier verification (Capture PO, Maria 2026-11-05)
+
+A **Verify supplier** button in Capture PO's header (any retailer tab; "Re-check" once a check is stored) — **on click
+only**. One Claude call (`server/supplier-check.ts`, the model in `server/config/ai.ts`, Haiku-class) with the web
+search tool (`AI.webSearch`: `web_search_20250305`, at most 5 searches): is it a legitimate business, is it US-based,
+red flags in reviews (BBB, Trustpilot, Reddit, scam reports), the domain's age if findable. The answer: a verdict
+(**looks legit / mixed / red flags**), 3–5 findings, the source links (the model's, else the search results' pages).
+Stored on the supplier record (migration 093: `suppliers.verified_at`, `verdict`, `findings` = { legitimate, usBased,
+domainAge, points[] }, `sources`; a new supplier gets its row), so a later visit to any page of that retailer shows the
+stored result with its date; a check older than 6 months says "re-check". Logged in `po_prefill_log` as
+`supplier_check` with its cost (tokens + $0.01 per search), in Settings → AI spend. A failed call stores nothing and
+the panel shows why in red. The box says: "An AI assessment from a web search, not a guarantee." While connected the
+header shows the button instead of "Connected" (380 px holds one of them). Routes: `GET /api/extension/supplier-check?
+supplier=<host>` (stored), `POST` the same with `{ supplier }` (503 when AI is off). From the shell: `npm run
+supplier:check -- --supplier <domain> [--prod] [--live]` (dry run: the call and its log row, nothing stored).
+
 ### Chrome extension — Capture PO (patch `docs/claude_spec-patch-po-ai-prefill.md` §4, 2026-10-31; `chrome-extension/` v1.4.0 — structured readers above the AI, a red line for a failed preview, every preview request logged, kept samples, 2026-11-05; v1.3.1 — captures survive navigation, order #s that pass Luhn kept, 2026-11-04; v1.3.0 — the AI preview 2026-11-04; v1.2.3 — panel redesign 2026-11-01, pre-parser fixes from the first real PO the same day, table-row products and promo dedupe from a shagtools.com cart 2026-11-02, plain-text / no-text quantities and the "Copy page text" debug action the same day)
 
 The existing extension (the Amazon side-panel calculator, `content.js` on

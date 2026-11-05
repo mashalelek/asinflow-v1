@@ -13,7 +13,11 @@
       <svg class="af-mark" viewBox="0 0 32 32" width="22" height="22" aria-hidden="true"><rect width="32" height="32" rx="7" fill="#44403C"/><rect x="8" y="5" width="16" height="22" rx="1.5" fill="#F5F5F4"/><rect x="11" y="10" width="10" height="2" rx="0.6" fill="#A8A29E"/><rect x="11" y="14" width="10" height="2" rx="0.6" fill="#A8A29E"/><rect x="11" y="18" width="6" height="2" rx="0.6" fill="#A8A29E"/><rect x="11" y="22" width="10" height="2.4" rx="0.6" fill="#44403C"/></svg>
       <span>AsinFlow <span class="af-product">Capture PO</span></span>
     </div>
-    <span id="status-text" class="af-conn">Checking connection…</span>
+    <div class="af-header-right">
+      <!-- Supplier verification (2026-11-05): on click only — one AI call with web search, stored on the supplier -->
+      <button id="verify-btn" class="header-btn" type="button" style="display:none;">Verify supplier</button>
+      <span id="status-text" class="af-conn">Checking connection…</span>
+    </div>
   </header>
   <!-- v1.2: captures are per tab; the other tabs with a capture in progress -->
   <div id="also-capturing" class="also-line" style="display:none;"></div>
@@ -33,6 +37,10 @@
       </div>
       <span id="capture-new-supplier" class="capture-note" style="display:none;">new supplier — no PO in AF yet</span>
     </div>
+    <details id="verify-box" class="verify" style="display:none;">
+      <summary id="verify-summary" class="verify-summary"></summary>
+      <div id="verify-body" class="verify-body"></div>
+    </details>
     <button id="capture-btn" class="btn btn-primary">Capture this page</button>
     <div class="capture-lines">
       <div id="capture-status" class="capture-status">0 pages captured</div>
@@ -63,6 +71,7 @@
   <script src="buckets.js"></script>
   <script src="core/history-view.js"></script>
   <script src="capture-history.js"></script>
+  <script src="capture-verify.js"></script>
   <script src="capture-panel.js"></script>
 </body>
 </html>

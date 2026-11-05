@@ -31,7 +31,7 @@ import { documentBaseName } from "@shared/po-documents";
 import { listPoDocuments, PO_DOCUMENTS_SQL } from "./po-documents-routes";
 import { canonicalPaymentName } from "@shared/po-form";
 import { applyAsinPackUpdate, parsePack } from "./asin-pack";
-import { CaptureSchema, extractPrefill, enrichPrefill, mergedPagesText, storePrefill, getPrefill, logPrefill } from "./po-prefill";
+import { CaptureSchema, extractPrefill, enrichPrefill, mergedPagesText, storePrefill, getPrefill, logPrefill, supplierForHost } from "./po-prefill";
 import { PreviewRequestSchema, capturePreview } from "./capture-preview";
 import { aiAvailable, AI_OFF_MESSAGE } from "./config/ai";
 import { listSubscriptions, createSubscription, updateSubscription } from "./subscriptions";
@@ -88,6 +88,7 @@ import {
 } from "./bulk-lists";
 import fs from "fs";
 import { HistoryQuerySchema, extensionHistory } from "./extension-history";
+import { storedCheck, runSupplierCheck } from "./supplier-check";
 
 
 // Module-level handle to runAnalyzeCore (defined inside registerRoutes).
@@ -4653,6 +4654,30 @@ export async function registerRoutes(
     const q = HistoryQuerySchema.safeParse(req.query);
     if (!q.success) { res.status(400).json({ message: q.error.issues[0]?.message ?? "bad query" }); return; }
     try { res.json(await extensionHistory(query, q.data)); } catch (err: any) { res.status(500).json({ message: err.message }); }
+  });
+  // Supplier verification (SPEC §11 "Supplier verification", 2026-11-05): GET the stored check for the tab's host;
+  // POST runs the one Claude call with web search (on click only) and stores it on the supplier. An AI assessment.
+  const checkSupplierFor = async (host: string) => {
+    const suppliers = (await query(`SELECT DISTINCT supplier FROM purchase_orders`)).rows.map((r: any) => String(r.supplier));
+    return supplierForHost(host, suppliers, await loadAliases(query));
+  };
+  app.get("/api/extension/supplier-check", async (req: Request, res: Response) => {
+    if (!isDbAvailable()) { res.status(503).json({ message: "Database not available" }); return; }
+    const host = String(req.query.supplier ?? "").trim();
+    if (!host || host.length > 253) { res.status(400).json({ message: "supplier is required" }); return; }
+    try { const sup = await checkSupplierFor(host); res.json({ known: sup.known, aiAvailable: aiAvailable(), ...(await storedCheck(query, sup.supplier)) }); } catch (err: any) { res.status(500).json({ message: err.message }); }
+  });
+  app.post("/api/extension/supplier-check", async (req: Request, res: Response) => {
+    if (!isDbAvailable()) { res.status(503).json({ message: "Database not available" }); return; }
+    if (!aiAvailable()) { res.status(503).json({ message: AI_OFF_MESSAGE }); return; }
+    const host = String(req.body?.supplier ?? "").trim();
+    if (!host || host.length > 253) { res.status(400).json({ message: "supplier is required" }); return; }
+    try {
+      const sup = await checkSupplierFor(host);
+      const r = await runSupplierCheck(query, sup.supplier, uid(req));
+      if (!r.ok) { res.status(502).json({ message: r.message }); return; }
+      res.json({ known: sup.known, aiAvailable: true, cost: r.cost, ...r.check });
+    } catch (err: any) { res.status(500).json({ message: err.message }); }
   });
   // === Subscriptions (po-ai-prefill §9, SPEC §27) ===
   app.get("/api/subscriptions", async (_req: Request, res: Response) => {
