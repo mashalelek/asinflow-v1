@@ -108,7 +108,11 @@ export function createJobsRouter(deps: { query?: QueryLike; nextPassAt?: () => P
         `SELECT id, status, started_at, finished_at, summary, error FROM jobs WHERE trigger = 'scheduled' ORDER BY queued_at DESC LIMIT 1`,
       )).rows[0] ?? null;
       const nextPassAt = (deps as any).nextPassAt ? await (deps as any).nextPassAt() : null;
-      res.json({ enabled, scheduleDefined: !!(deps as any).nextPassAt, nextPassAt, lastScheduled: last });
+      // The red "N steps failed in the last pass" (2026-11-05): the newest FINISHED scheduled pass, until one runs clean.
+      const finished = (await query(
+        `SELECT id, status, finished_at, summary FROM jobs WHERE trigger = 'scheduled' AND status IN ('done', 'failed') ORDER BY finished_at DESC NULLS LAST LIMIT 1`,
+      )).rows[0] ?? null;
+      res.json({ enabled, scheduleDefined: !!(deps as any).nextPassAt, nextPassAt, lastScheduled: last, lastPass: lastPassOf(finished) });
     } catch (err: any) {
       res.status(500).json({ error: "jobs_failed", message: err?.message ?? String(err) });
     }
@@ -159,4 +163,13 @@ export function createJobsRouter(deps: { query?: QueryLike; nextPassAt?: () => P
   });
 
   return router;
+}
+
+/** Pure: the last finished scheduled pass → its failed steps and known-persistent lists (null when there is none). */
+export function lastPassOf(row: { id: number | string; status: string; finished_at: string | Date | null; summary: any } | null) {
+  if (!row) return null;
+  const steps = (row.summary?.failedSteps ?? []) as Array<{ n: number; key: string; name: string; count: number; reason: string }>;
+  // A pass that failed before failedSteps existed still counts as one failed step.
+  const failed = steps.length ? steps : row.status === "failed" ? [{ n: row.summary?.stoppedAt ?? 0, key: "", name: "pass", count: 1, reason: "the pass failed" }] : [];
+  return { jobId: Number(row.id), status: row.status, finishedAt: row.finished_at, failedSteps: failed, persistent: row.summary?.persistent ?? {} };
 }

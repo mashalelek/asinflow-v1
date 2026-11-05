@@ -13,8 +13,9 @@ import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { StageResultsList } from "@/components/stage-results";
 import { ListingHygienePanel, ListingChangesPanel } from "@/components/listing-hygiene-panel";
+import { LastPassBanner } from "@/components/last-pass-banner";
 import {
-  listJobs, getJob, cancelJob, formatDuration, jobDurationMs, groupFlips, groupListingActions, changeCount, failedAsinsFromRuns, componentLabel, jobKindLabel, progressText,
+  listJobs, getJob, cancelJob, failedStepsText, formatDuration, jobDurationMs, groupFlips, groupListingActions, changeCount, failedAsinsFromRuns, componentLabel, jobKindLabel, progressText,
   FOCUS_ASIN_EVENT, type Job, type ComponentRun, type FlipGroups,
 } from "@/lib/jobs-api";
 
@@ -112,6 +113,7 @@ export function JobsDialog({ open, onOpenChange, onRetry, initialJobId }: {
             One row per job, newest first. Scheduled passes and the Refresh button are the same job with different scopes.
           </DialogDescription>
         </DialogHeader>
+        <LastPassBanner onOpenJob={(id) => setExpanded(id)} />
         {error && <p className="text-sm text-destructive" role="alert">{error}</p>}
         {!jobs && !error && <p className="text-xs text-muted-foreground">Loading…</p>}
         {jobs && jobs.length === 0 && <p className="text-xs text-muted-foreground">No jobs yet.</p>}
@@ -132,6 +134,7 @@ export function JobsDialog({ open, onOpenChange, onRetry, initialJobId }: {
                     <span className="w-28">{(j.summary?.asins ?? j.scope_asins?.length ?? (j.scope_asins ? 0 : "all"))} ASINs</span>
                     <span className="w-32 text-muted-foreground">{fmt(j.started_at ?? j.queued_at)}</span>
                     <span className="w-24">{durationOf(j)}</span>
+                    {failedStepsText(j.summary) && <span className="text-destructive whitespace-nowrap shrink-0">{failedStepsText(j.summary)}</span>}
                     {flipCount > 0 && <span className="text-amber-600">{flipCount} change{flipCount === 1 ? "" : "s"}</span>}
                     {j.status === "running" && j.progress?.component != null && (
                       <span className="text-muted-foreground">{componentLabel(j.progress.component)} {progressText(j.progress) || `${j.progress.position ?? 0}/${j.progress.total ?? "?"}`}</span>
@@ -145,6 +148,27 @@ export function JobsDialog({ open, onOpenChange, onRetry, initialJobId }: {
                           Cancel
                         </Button>
                       )}
+                      {(j.summary?.failedSteps ?? []).length > 0 && (
+                        <div className="text-destructive min-w-0" data-testid={`failed-steps-${j.id}`}>
+                          <p className="font-semibold">Failed steps</p>
+                          <ul className="mt-1 space-y-0.5">
+                            {j.summary!.failedSteps!.map((s) => <li key={`${s.n}-${s.key}`} className="[overflow-wrap:anywhere]"><span className="font-medium">{s.n}. {s.name}</span>: {s.reason}</li>)}
+                          </ul>
+                        </div>
+                      )}
+                      {Object.entries(j.summary?.persistent ?? {}).map(([key, p]) => (
+                        <details key={key} className="min-w-0" data-testid={`persistent-${key}`}>
+                          <summary className="cursor-pointer font-semibold">{p.label} <span className="font-normal text-muted-foreground">— the same error 3 passes in a row; not counted as a failure</span></summary>
+                          <ul className="mt-1 space-y-0.5">
+                            {p.asins.map((a) => (
+                              <li key={a.asin} className="[overflow-wrap:anywhere]">
+                                <button type="button" className="font-mono underline-offset-2 hover:underline text-primary" onClick={() => window.dispatchEvent(new CustomEvent(FOCUS_ASIN_EVENT, { detail: { asin: a.asin } }))}>{a.asin}</button>
+                                <span className="text-muted-foreground"> {a.outcome}</span>
+                              </li>
+                            ))}
+                          </ul>
+                        </details>
+                      ))}
                       <details open={flipCount > 0}>
                         <summary className="cursor-pointer font-semibold">Changes</summary>
                         <div className="mt-2 space-y-2">

@@ -2670,6 +2670,31 @@ is set — the runner is always on; only the **schedule** is gated.
   File keep their inline sheet/CSV step; only the onboarding Refresh they
   spawn is a queue job.
 
+#### Step failures (Maria 2026-11-05)
+
+A step that failed is marked failed in its job with the reason; a job never reads "done" with its failures only in the
+outcome details. The sweep that prompted it (production, 14 days to 2026-11-05, 294 jobs, all "done"): 29 PO documents
+failed every render in 23 passes ("Could not find Chrome"); 13 Fees errored in every one of 283 passes (SP-API
+"internal service failure" in bursts, "no fee in response" ≈ 25 ASINs, "client-side error" 2–3 ASINs); 24 Delete dead
+held two manual dry runs for stale inputs; 16 Live offer skipped 2 ASINs as transient.
+
+- **Failed:** after the component's own retries, a whole call failed (an `error:` note on a non-ASIN key, or a failure
+  counter — `error`, `errors`, `failed`, `push_failed`, `chunks_failed`, `transient`, `sc_list_incomplete`,
+  `skip_probe_transient` — larger than the failures its outcomes name), or any ASIN's failure (`error: …`,
+  `skipped_transient`, `skip_probe_transient`) that is not known-persistent. No percentage threshold.
+- **Known-persistent:** the same ASIN with the same outcome in this pass and the two scheduled passes before it (read
+  from the ledger, `refresh_runs`; no table of its own). Listed on the job — "25 ASINs without fees" with the ASINs and
+  their errors — and not counted; an ASIN leaves the list as soon as it succeeds (its streak breaks).
+- **Not failures:** bad data (10 Prices `invalid_asin: …`, 19 Sales' skipped "UNKNOW") and the by-design `skip_*` reasons
+  (22, 24), 14's `incomplete: …`, 20 / 21's `skipped: finances_patch_pending`.
+- **Retry (Fees):** an ASIN whose estimate failed with "internal service failure", another 5xx, throttling or a timeout is
+  asked again once, after the whole step and a 20 s backoff, before it counts (`counts.retried`, `counts.recovered`).
+- **Where it shows:** the job summary (`failedSteps`, `persistent`), the ledger row's outcomes (`_step_failed`,
+  `_persistent`) — never `refresh_runs.error`, which listing hygiene reads as "this data cannot be trusted" — the jobs
+  dialog (the row's "N steps failed", Failed steps, the persistent lists), the completion toast's title, and a red
+  "N steps failed in the last pass" in the jobs dialog and Settings (`GET /api/jobs/scheduler` → `lastPass`) until a
+  scheduled pass runs clean. The job goes on to its next step; a component that throws still fails the job as before.
+
 ### Two extensions (v2.0, Maria 2026-11-05)
 
 The one combined extension is split into two, from one repo, sharing `chrome-extension/core/` (the AF client

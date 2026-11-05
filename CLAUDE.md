@@ -126,7 +126,7 @@ and any introduced error must be fixed forward before committing.
 
 ## Tests
 
-`npm test` (vitest). **2,225 tests across 205 files** as of 2026-11-05 — this
+`npm test` (vitest). **2,238 tests across 207 files** as of 2026-11-05 — this
 codebase IS tested; the old "there are no tests" line was years stale.
 
 **A gate report must cover BOTH typecheck commands, labelled separately:**
@@ -134,7 +134,7 @@ codebase IS tested; the old "there are no tests" line was years stale.
 ```
 npm run check        -> 4 baseline TS1252, 0 introduced
 npm run check:tests  -> 4 baseline TS1252, 0 introduced
-npm test             -> 2225/2225
+npm test             -> 2238/2238
 ```
 
 `npm run check` alone is NOT a complete gate. The base `tsconfig.json`
@@ -441,6 +441,14 @@ leaves the window alone, but the horizon can fall mid-chunk. The
 Dashboard's coverage header says "run backfill:sales" while `sales_orders`
 is empty; afterwards "Orders from <date>" is the normal end state. Done on
 production 2026-11-03 (job #417, from 2024-10-31).**
+
+**Step failures (2026-11-05, `server/scheduler/step-failures.ts`):** a
+step with failures is marked failed in the job (summary `failedSteps`,
+ledger outcome `_step_failed` — never `refresh_runs.error`, which listing
+hygiene reads) and the job goes on; known-persistent ASINs (same error, 3
+scheduled passes in a row) are listed instead of counted. A new component
+reports failures as `error: …` outcomes per ASIN or a counter named in
+`FAILURE_COUNTS` — never only in a free-text note. SPEC §11 "Step failures".
 
 **Verifying a job locally without a login cookie:** `INSERT INTO jobs
 (kind, trigger, target, include_daily, scope_asins[, components])` and

@@ -91,6 +91,10 @@ export interface JobSummary {
   listingActions?: ListingActionChange[];
   /** Component number that failed / was cancelled, if any. */
   stoppedAt?: number;
+  /** Steps that failed (2026-11-05, server/scheduler/step-failures.ts) — the job may still finish; absent = none. */
+  failedSteps?: Array<{ n: number; key: string; name: string; count: number; reason: string }>;
+  /** Known-persistent per-ASIN failures per step ("27 ASINs without fees"), not counted as failures. */
+  persistent?: Record<string, { label: string; asins: Array<{ asin: string; outcome: string }> }>;
 }
 
 export interface JobRow {

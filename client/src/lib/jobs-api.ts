@@ -16,6 +16,25 @@ export interface JobSummary {
   flips: Flip[];
   listingActions?: ListingActionChange[];
   stoppedAt?: number;
+  /** Steps that failed (2026-11-05): the job may still read "done". */
+  failedSteps?: FailedStep[];
+  /** Known-persistent per-ASIN failures per step ("27 ASINs without fees"), not failures. */
+  persistent?: Record<string, PersistentList>;
+}
+
+export interface FailedStep { n: number; key: string; name: string; count: number; reason: string }
+export interface PersistentList { label: string; asins: Array<{ asin: string; outcome: string }> }
+export interface LastPass { jobId: number; status: JobStatus; finishedAt: string | null; failedSteps: FailedStep[]; persistent: Record<string, PersistentList> }
+
+/** "2 steps failed in the last pass" — null when the last pass ran clean (or there is none). */
+export function lastPassText(p: LastPass | null | undefined): string | null {
+  const n = p?.failedSteps?.length ?? 0;
+  return n ? `${n} step${n === 1 ? "" : "s"} failed in the last pass` : null;
+}
+/** "2 steps failed" on a job row; null when none. */
+export function failedStepsText(s: JobSummary | null | undefined): string | null {
+  const n = s?.failedSteps?.length ?? 0;
+  return n ? `${n} step${n === 1 ? "" : "s"} failed` : null;
 }
 
 export interface Job {
@@ -141,8 +160,9 @@ export function completionText(job: Job): { title: string; description: string }
   if (job.status === "failed") return { title: `${who} failed`, description: job.error ?? "unknown error" };
   if (job.status === "cancelled") return { title: `${who} cancelled`, description: `${n.toLocaleString()} ASINs · stopped at ${componentLabel(s?.stoppedAt)}` };
   const flips = changeCount(s);
+  const failed = failedStepsText(s);
   return {
-    title: `${who} done`,
+    title: failed ? `${who} done · ${failed}` : `${who} done`,
     description: `${n.toLocaleString()} ASINs · ${dur}${flips ? ` · ${flips} change${flips === 1 ? "" : "s"}` : ""}`,
   };
 }
@@ -219,6 +239,10 @@ export const isLaneM = (j: Job) => j.trigger !== "scheduled";
 
 export async function getCurrent(fetchFn: typeof fetch = fetch): Promise<CurrentJobs> {
   return parse(await fetchFn("/api/jobs/current", { credentials: "same-origin" }));
+}
+
+export async function getLastPass(fetchFn: typeof fetch = fetch): Promise<LastPass | null> {
+  return (await parse<{ lastPass: LastPass | null }>(await fetchFn("/api/jobs/scheduler"))).lastPass ?? null;
 }
 
 export async function listJobs(limit = 50, fetchFn: typeof fetch = fetch): Promise<Job[]> {

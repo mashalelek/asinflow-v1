@@ -22,6 +22,7 @@ import {
   CancelledError, ComponentError, ONBOARDING_COMPONENTS, SCHEDULED_ONLY_COMPONENTS, explicitlyAuthorized, laneOf, type ComponentContext, type ComponentDef, type ComponentResult, type JobRow, type JobSummary,
   type JobProgress, type Flip, type QueryLike, type Lane,
 } from "./types";
+import { assessStep, stepNotes } from "./step-failures";
 
 export const RUNNER_LOCK_KEY = 7342002;
 /** summary.stoppedAt for a failure in the bulk public pass — not a component number (22–24 are listing hygiene). */
@@ -180,6 +181,7 @@ export async function runJob(
       // A ComponentError carries what the component did before it failed:
       // ledger it and show it in the summary alongside the error.
       const partial: ComponentResult | null = err instanceof ComponentError ? err.partial : null;
+      if (!cancelled) (summary.failedSteps ??= []).push({ n: c.n, key: c.key, name: c.name, count: 1, reason: msg.split("\n")[0].slice(0, 300) });
       await recordComponentRun({
         jobId: job.id, trigger: job.trigger, stage: c.key, scope: ledgerScope,
         requested: asins.length, startedAt, result: noted(partial), error: msg,
@@ -197,9 +199,15 @@ export async function runJob(
       return summary;
     }
 
+    // A step with failures is marked failed with its reason (2026-11-05); the job goes on to the next step.
+    const judged = await assessStep(query, c, job, result);
+    const notes = stepNotes(judged);
+    if (judged.failure) { (summary.failedSteps ??= []).push(judged.failure); log(`job ${job.id} ${c.key} FAILED step: ${judged.failure.reason}`); }
+    if (judged.persistent) (summary.persistent ??= {})[c.key] = judged.persistent;
+    const ledgered = Object.keys(notes).length ? { ...result, outcomes: { ...notes, ...result.outcomes } } : result;
     await recordComponentRun({
       jobId: job.id, trigger: job.trigger, stage: c.key, scope: ledgerScope,
-      requested: asins.length, startedAt, result: noted(result), error: null,
+      requested: asins.length, startedAt, result: noted(ledgered), error: null,
     }, query);
     summary.components[c.key] = result.counts;
     if (result.flips?.length) summary.flips.push(...result.flips);

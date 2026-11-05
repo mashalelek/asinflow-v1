@@ -3,7 +3,7 @@ import { readFileSync } from "fs";
 import { join } from "path";
 import {
   runningLabel, queuedLabel, completionText, groupFlips, failedAsinsFromRuns, formatDuration, jobDurationMs, jobKindLabel,
-  enqueueRefresh, type Job, type ComponentRun,
+  enqueueRefresh, lastPassText, failedStepsText, type Job, type ComponentRun,
 } from "./jobs-api";
 
 // Scheduler patch commit 2 (client). Pure helpers + source checks on the
@@ -154,5 +154,24 @@ describe("scope rule and API shape", () => {
     const pt = order(["margin", "roi", "minProfitUnit"]);
     for (const o of [mc, pt]) { expect(o.every((i) => i > -1)).toBe(true); expect([...o].sort((x, y) => x - y)).toEqual(o); }
     expect(src).not.toMatch(/Replit/);
+  });
+});
+
+describe("failed steps (2026-11-05)", () => {
+  const step = { n: 13, key: "13_fees", name: "FBA fee estimate", count: 1, reason: "1 ASIN: error: There is an internal service failure." };
+  it("'N steps failed in the last pass' until a pass runs clean", () => {
+    expect(lastPassText({ jobId: 1, status: "done", finishedAt: null, failedSteps: [step, { ...step, n: 29 }], persistent: {} })).toBe("2 steps failed in the last pass");
+    expect(lastPassText({ jobId: 1, status: "done", finishedAt: null, failedSteps: [], persistent: {} })).toBeNull();
+    expect(lastPassText(null)).toBeNull();
+  });
+  it("a done job with a failed step says so on its row and in the toast", () => {
+    const job = { id: 5, kind: "refresh", trigger: "scheduled", target: "main", bulk_list_id: null, include_daily: false, scope_asins: null, components: null, params: null, status: "done", progress: { done: [] }, requested_by: null, queued_at: "2026-11-05T20:00:00Z", started_at: "2026-11-05T20:00:00Z", finished_at: "2026-11-05T20:01:00Z", error: null, summary: { asins: 10, durationMs: 60000, components: {}, flips: [], failedSteps: [step] } } as any;
+    expect(failedStepsText(job.summary)).toBe("1 step failed");
+    expect(completionText(job).title).toBe("Scheduled refresh done · 1 step failed");
+    expect(failedStepsText({ ...job.summary, failedSteps: [] })).toBeNull();
+  });
+  it("the banner is in the jobs dialog and Settings", () => {
+    expect(readFileSync(join(__dirname, "../components/jobs-dialog.tsx"), "utf8")).toMatch(/<LastPassBanner/);
+    expect(readFileSync(join(__dirname, "../components/settings-dialog.tsx"), "utf8")).toMatch(/<LastPassBanner \/>/);
   });
 });

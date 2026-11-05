@@ -1,5 +1,6 @@
 import { useState, useEffect } from "react";
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogTrigger } from "@/components/ui/dialog";
+import { LastPassBanner } from "@/components/last-pass-banner";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -78,8 +79,9 @@ export function SettingsDialog({
   const { user } = useAuth();
   const isAdmin = user?.role === "admin";
   const [usersOpen, setUsersOpen] = useState(false);
-  // No scheduler surface here (2026-10-16): the jobs dialog on the ASINs
-  // toolbar clock is the only one.
+  // No scheduler controls here (2026-10-16): the jobs dialog on the ASINs
+  // toolbar clock is the only one. Since 2026-11-05 Settings shows the red
+  // "N steps failed in the last pass" too (LastPassBanner).
 
   useEffect(() => {
     setSettings(loadSettings());
@@ -115,6 +117,7 @@ export function SettingsDialog({
         </DialogHeader>
 
         <div className="space-y-5 pt-2">
+          <LastPassBanner />
           {/* ─── Cost Parameters ─── */}
           <div>
             <h3 className="text-sm font-medium text-muted-foreground mb-3">Cost Parameters</h3>
