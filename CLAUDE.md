@@ -125,7 +125,7 @@ and any introduced error must be fixed forward before committing.
 
 ## Tests
 
-`npm test` (vitest). **2,055 tests across 188 files** as of 2026-11-04 — this
+`npm test` (vitest). **2,077 tests across 192 files** as of 2026-11-04 — this
 codebase IS tested; the old "there are no tests" line was years stale.
 
 **A gate report must cover BOTH typecheck commands, labelled separately:**
@@ -133,7 +133,7 @@ codebase IS tested; the old "there are no tests" line was years stale.
 ```
 npm run check        -> 4 baseline TS1252, 0 introduced
 npm run check:tests  -> 4 baseline TS1252, 0 introduced
-npm test             -> 2055/2055
+npm test             -> 2077/2077
 ```
 
 `npm run check` alone is NOT a complete gate. The base `tsconfig.json`
