@@ -21,6 +21,8 @@ export const AI = {
   effort: "low" as const,
   /** $ per million tokens — the ≤ 100K-token rate card (prompts are far smaller). */
   pricePerMTok: { input: 0.1, output: 0.5 },
+  /** Settings → AI spend warns when a calendar month (Eastern) passes this (Maria 2026-11-05). */
+  monthlyWarnUsd: 20,
 } as const;
 
 export function aiAvailable(env: NodeJS.ProcessEnv = process.env): boolean {

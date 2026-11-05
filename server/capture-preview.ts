@@ -12,9 +12,12 @@
 import { createHash } from "crypto";
 import { z } from "zod/v4";
 import type { QueryLike } from "./scheduler/types";
+import { AI } from "./config/ai";
 import { CapturePageSchema, extractPrefill, logPrefill, type ExtractDeps, type PrefillExtraction } from "./po-prefill";
 
-export const PreviewRequestSchema = z.object({ retailerHost: z.string().max(253), page: CapturePageSchema });
+// v1.4 (2026-11-05): the extension also says what its in-page structured reader (schema.org / Shopify / BigCommerce data) filled.
+export const StructuredSummarySchema = z.object({ platform: z.string().max(40).nullable().default(null), products: z.boolean().default(false), totals: z.boolean().default(false) });
+export const PreviewRequestSchema = z.object({ retailerHost: z.string().max(253), page: CapturePageSchema, structured: StructuredSummarySchema.optional() });
 export type PreviewRequest = z.infer<typeof PreviewRequestSchema>;
 
 /** The panel's bucket shape (chrome-extension/buckets.js emptyBuckets), money as "$1.23". */
@@ -66,7 +69,7 @@ const TTL_MS = 24 * 60 * 60 * 1000, MAX = 500;
 const cache = new Map<string, { buckets: PreviewBuckets; expires: number }>();
 export function _clearPreviewCache(): void { cache.clear(); }
 
-export interface PreviewResult { key: string; buckets: PreviewBuckets | null; cached: boolean; cost_estimate: number; schema_ok: boolean; error: string | null }
+export interface PreviewResult { key: string; buckets: PreviewBuckets | null; cached: boolean; cost_estimate: number; schema_ok: boolean; error: string | null; logId?: number | null; sampled?: string[] }
 
 /** One page → its buckets: from the cache, else one model call (logged). A failed call returns buckets null — the panel keeps the rules. */
 export async function capturePreview(query: QueryLike, req: PreviewRequest, userId: number | null, deps: ExtractDeps = {}, now = Date.now()): Promise<PreviewResult> {
@@ -74,10 +77,56 @@ export async function capturePreview(query: QueryLike, req: PreviewRequest, user
   const hit = cache.get(key);
   if (hit && hit.expires > now) return { key, buckets: hit.buckets, cached: true, cost_estimate: 0, schema_ok: true, error: null };
   const { extraction, usage } = await extractPrefill({ retailerHost: req.retailerHost, pages: [req.page] }, deps);
-  await logPrefill(query, { user_id: userId, kind: "capture_preview", retailer: req.retailerHost, ...usage });
-  if (!extraction) return { key, buckets: null, cached: false, cost_estimate: usage.cost_estimate, schema_ok: false, error: usage.error };
-  const buckets = extractionToBuckets(extraction);
+  const logId = await logPrefill(query, { user_id: userId, kind: "capture_preview", retailer: req.retailerHost, ...usage });
+  const buckets = extraction ? extractionToBuckets(extraction) : null;
+  const sampled = await keepSampleIfEmpty(query, req, key, buckets, userId).catch(() => []);
+  if (!buckets) return { key, buckets: null, cached: false, cost_estimate: usage.cost_estimate, schema_ok: false, error: usage.error, logId, sampled };
   cache.delete(key); cache.set(key, { buckets, expires: now + TTL_MS });
   while (cache.size > MAX) cache.delete(cache.keys().next().value as string);
-  return { key, buckets, cached: false, cost_estimate: usage.cost_estimate, schema_ok: true, error: null };
+  return { key, buckets, cached: false, cost_estimate: usage.cost_estimate, schema_ok: true, error: null, logId, sampled };
+}
+
+/** Pure: which of Products / Totals stayed empty after every layer (the in-page structured reader, then the AI). */
+export function emptyAfterLayers(buckets: PreviewBuckets | null, structured?: { products?: boolean; totals?: boolean }): string[] {
+  const out: string[] = [];
+  if (!structured?.products && !(buckets?.products.length)) out.push("products");
+  if (!structured?.totals && !(buckets?.totals.subtotal || buckets?.totals.total)) out.push("totals");
+  return out;
+}
+export const SAMPLE_RETENTION_DAYS = 30;
+/** A page whose Products or Totals stayed empty: its scrubbed text kept 30 days for test fixtures (migration 092, admin-only). */
+async function keepSampleIfEmpty(query: QueryLike, req: PreviewRequest, key: string, buckets: PreviewBuckets | null, userId: number | null): Promise<string[]> {
+  const missing = emptyAfterLayers(buckets, req.structured);
+  if (!missing.length) return [];
+  await query(`DELETE FROM capture_page_samples WHERE created_at < now() - make_interval(days => $1)`, [SAMPLE_RETENTION_DAYS]);
+  await query(
+    `INSERT INTO capture_page_samples (user_id, retailer, page_key, step, url, title, text, fields, missing, layers) VALUES ($1,$2,$3,$4,$5,$6,$7,$8::jsonb,$9::text[],$10::jsonb) ON CONFLICT (page_key) DO NOTHING`,
+    [userId, req.retailerHost, key, req.page.step, req.page.url, req.page.title, req.page.text, JSON.stringify(req.page.fields ?? []), missing, JSON.stringify({ structured: req.structured ?? null, ai: buckets ? { products: buckets.products.length, totals: Object.keys(buckets.totals) } : null })],
+  );
+  return missing;
+}
+
+/**
+ * Express middleware for POST /api/pos/capture-preview, mounted BEFORE auth: every request the server receives or
+ * rejects leaves one po_prefill_log row — the route's own model-call row gets its status; anything else (401, 400,
+ * 503 AI off, a cache hit, 500) gets a row of its own with cost 0 and the reason in note (migration 092).
+ */
+export function previewRequestLog(query: QueryLike, onError: (m: string) => void = () => {}) {
+  return (req: any, res: any, next: () => void) => {
+    const send = res.json.bind(res);
+    res.json = (body: any) => { res.locals.previewBody = body; return send(body); };
+    res.on("finish", () => {
+      const status = res.statusCode as number, body = res.locals.previewBody ?? {};
+      const logId: number | null = body.logId ?? null;
+      const note = status === 200 ? (body.cached ? "cache hit" : body.buckets ? null : String(body.error ?? "no buckets").slice(0, 300)) : String(body.message ?? body.error ?? `HTTP ${status}`).slice(0, 300);
+      const host = typeof req.body?.retailerHost === "string" ? req.body.retailerHost.slice(0, 253) : null;
+      const userId = req.session?.userId ?? req.user?.id ?? null;
+      const p = logId != null
+        ? query(`UPDATE po_prefill_log SET http_status = $2, note = COALESCE(note, $3) WHERE id = $1`, [logId, status, note])
+        : query(`INSERT INTO po_prefill_log (user_id, kind, retailer, model, input_chars, input_tokens, output_tokens, cost_estimate, duration_ms, schema_ok, error, http_status, note) VALUES ($1,'capture_preview',$2,$7,$3,0,0,0,0,$4,NULL,$5,$6)`,
+            [typeof userId === "number" ? userId : null, host, typeof req.body?.page?.text === "string" ? req.body.page.text.length : 0, status === 200, status, note, AI.model]);
+      Promise.resolve(p).catch((e: any) => onError(`preview request log failed: ${e?.message ?? e}`));
+    });
+    next();
+  };
 }

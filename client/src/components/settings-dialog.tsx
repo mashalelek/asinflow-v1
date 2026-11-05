@@ -12,6 +12,7 @@ import { loadSettings, saveSettings } from "@/lib/settings";
 import { useToast } from "@/hooks/use-toast";
 import { useAuth } from "@/contexts/auth-context";
 import { UsersAdminDialog } from "@/components/users-admin-dialog";
+import { AiSpendSection } from "@/components/ai-spend-section";
 
 /**
  * Display-side state owned by the host page (home / analytics) and surfaced
@@ -242,6 +243,11 @@ export function SettingsDialog({
               ))}
             </div>
           </div>
+
+          <Separator />
+
+          {/* ─── AI spend (2026-11-05): cost by month and kind, a warning past $20 ─── */}
+          <AiSpendSection open={open} />
 
           {/* ─── Users (SPEC §25, admin only) ─── */}
           {isAdmin && (

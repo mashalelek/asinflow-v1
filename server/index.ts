@@ -10,6 +10,9 @@ import { startRunner, setRunnerLogger } from "./scheduler/runner";
 import { log } from "./log";
 import { startSchedule, setScheduleLogger, nextPassAfter } from "./scheduler/schedule";
 import { startBornClosedPoll } from "./born-closed-poll";
+import { previewRequestLog } from "./capture-preview";
+import { createCaptureSamplesRouter } from "./capture-samples";
+import { createAiSpendRouter } from "./ai-spend";
 import { serveStatic } from "./static";
 import { createServer } from "http";
 import pool, { ensureExtensionTables, query } from "./db";
@@ -156,6 +159,8 @@ if (!process.env.VITEST) (async () => {
   if (!process.env.SESSION_SECRET) log("SESSION_SECRET not set — using the insecure dev fallback (never in production)", "auth");
   app.use(createSessionMiddleware({ secret: sessionSecret, isProduction, pool }));
   app.use(createAuthRouter());
+  // Capture PO v1.4 (2026-11-05): every AI-preview request the server receives or rejects — 401 included — is logged.
+  app.use("/api/pos/capture-preview", (req, res, next) => (req.method === "POST" ? previewRequestLog(query, (m) => log(m, "po"))(req, res, next) : next()));
   app.use("/api", requireAuth);
   // Stale-page guard (2026-10-18): mutating /api requests from a tab on an older
   // build are refused with 409 — the server's build id is the entry script of the
@@ -165,6 +170,10 @@ if (!process.env.VITEST) (async () => {
   app.use("/api", staleBuildGuard(serverBuildId));
   // Settings → Users (SPEC §25 commit 3): admin-only, after requireAuth.
   app.use(createAdminUsersRouter());
+  // Capture page samples (migration 092): admin-only, under /api/admin, for test fixtures.
+  app.use(createCaptureSamplesRouter(query));
+  // Settings → AI spend (2026-11-05): read-only, every signed-in user.
+  app.use(createAiSpendRouter(query));
   // Scheduler v1 (SPEC §11 "Refresh job"): enqueue / current / history / cancel.
   // nextPassAt feeds Settings → Scheduler; null while the schedule is off.
   app.use(createJobsRouter({ nextPassAt: async () => (process.env.ENABLE_CRONS === "true" ? nextPassAfter(new Date()).at.toISOString() : null) }));
