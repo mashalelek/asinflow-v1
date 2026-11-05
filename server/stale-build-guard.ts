@@ -7,19 +7,28 @@
 // script its own index.html names; in dev (Vite, no built index) there is
 // none and the guard is off.
 //
-// Exempt: /api/auth/* (login / logout must work from any page) and the
-// Chrome extension's two mutating endpoints, /api/import-asin and
-// /api/pos/prefill (Capture PO, 2026-11-01) — the extension is not an AF
-// page and has no build id. Everything else it calls is a GET. The PO form
-// the capture opens (/pos/new?prefill=<id>) is an AF page and its POST
-// /api/pos carries the page's build id like any other.
+// Exempt: /api/auth/* (login / logout must work from any page) and every
+// route the Chrome extension calls (EXTENSION_API_ROUTES) — the extension is
+// not an AF page and has no build id. 2026-11-05: v1.3's POST
+// /api/pos/capture-preview was not on the old two-route list and every AI
+// preview got 409 (the 2026-11-01 prefill bug again); the list is now one
+// place and stale-build-guard.test.ts fails when the extension's source names
+// an /api route that is not on it. The PO form the capture opens
+// (/pos/new?prefill=<id>) is an AF page and its POST /api/pos carries the
+// page's build id like any other.
 import fs from "fs";
 import path from "path";
 import type { Request, Response, NextFunction } from "express";
 import { BUILD_HEADER, entryScriptFromHtml } from "@shared/build-id";
 
 export const STALE_BUILD_MESSAGE = "AF was updated — reload this page";
-const EXEMPT = [/^\/auth\//, /^\/import-asin$/, /^\/pos\/prefill$/];
+/** Every /api route chrome-extension/ calls (paths relative to /api; ":x" = one path segment). */
+export const EXTENSION_API_ROUTES = [
+  "/settings", "/credentials-status", "/import-asin", "/asins/check/:asin",
+  "/pos/prefill", "/pos/capture-preview", "/pos/capture-config",
+] as const;
+const routeRe = (r: string) => new RegExp(`^${r.replace(/[.*+?^${}()|[\]\\]/g, "\\$&").replace(/:[a-z]+/gi, "[^/]+")}$`);
+const EXEMPT = [/^\/auth\//, ...EXTENSION_API_ROUTES.map(routeRe)];
 const SAFE = new Set(["GET", "HEAD", "OPTIONS"]);
 
 /** The production build id: the entry script dist/public/index.html names. Null in dev. */

@@ -2,7 +2,7 @@ import { describe, it, expect } from "vitest";
 import fs from "fs";
 import os from "os";
 import path from "path";
-import { staleBuildGuard, readServerBuildId, STALE_BUILD_MESSAGE } from "./stale-build-guard";
+import { staleBuildGuard, readServerBuildId, STALE_BUILD_MESSAGE, EXTENSION_API_ROUTES } from "./stale-build-guard";
 import { findRecentSameOnboarding, enqueueOnboardingJob } from "./scheduler/jobs-repo";
 
 const CUR = "/assets/index-NEW12345.js";
@@ -67,5 +67,27 @@ describe("onboarding dedupe (2026-10-18)", () => {
     const fn = src.slice(src.indexOf("async function onboardNewAsins("), src.indexOf("async function insertNewAsinRows("));
     expect(fn.indexOf("findRecentSameOnboarding")).toBeLessThan(fn.indexOf("await insertNewAsinRows("));
     expect(fn).toMatch(/type: "job_duplicate"/);
+  });
+});
+
+describe("stale-page guard: no Chrome extension route is guarded (2026-11-05 — capture-preview got 409 on every page)", () => {
+  // Every "/api/…" the extension's source names (fetches, and the routes its comments describe), a ${…} segment as "x".
+  const dir = path.resolve(__dirname, "../chrome-extension");
+  const called = new Set<string>();
+  for (const f of fs.readdirSync(dir).filter((n) => n.endsWith(".js"))) {
+    for (const m of Array.from(fs.readFileSync(path.join(dir, f), "utf8").matchAll(/\/api(\/[A-Za-z0-9_\-/]*(?:\$\{[^}]*\}[A-Za-z0-9_\-/]*)*)/g))) called.add(m[1].replace(/\$\{[^}]*\}/g, "x").replace(/\/$/, ""));
+  }
+  it("the extension calls the routes on the list — capture-preview among them", () => {
+    expect(Array.from(called).sort()).toEqual(expect.arrayContaining(["/pos/capture-preview", "/pos/prefill", "/import-asin"]));
+    expect(called.size).toBeGreaterThanOrEqual(EXTENSION_API_ROUTES.length - 1);
+  });
+  it("every one of them passes the guard with no build id, for every method", () => {
+    for (const p of Array.from(called)) for (const m of ["POST", "PUT", "PATCH", "DELETE", "GET"]) {
+      expect({ route: p, m, ...call(m, p, undefined) }).toMatchObject({ route: p, m, nexted: true });
+    }
+  });
+  it("an AF page's mutating route is still guarded", () => {
+    expect(call("POST", "/pos/capture-preview-x")).toMatchObject({ status: 409 });
+    expect(call("POST", "/asins/check/B0X/extra")).toMatchObject({ status: 409 });
   });
 });
