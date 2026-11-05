@@ -1,6 +1,6 @@
 import { describe, it, expect, beforeAll, afterAll } from "vitest";
 import pg from "pg";
-import { loadGrid, loadSeries, loadCoverage } from "./dashboard";
+import { loadGrid, loadSeries, loadCoverage, poSpendCtes } from "./dashboard";
 
 // Dashboard SQL (SPEC §28) on the REAL local schema, every test inside a
 // transaction that is ROLLED BACK — nothing it creates survives. Fixtures
@@ -175,6 +175,27 @@ describe("Dashboard series on the real schema (rolled back)", () => {
       expect(g.columns[0].cells.sales.dataFrom).toBe(first);
       // Pending only while sales_orders is empty: rows before the re-backfill's start day stay on the old basis by design.
       expect(cov.rebackfillPending).toBe(cov.ordersFrom == null);
+    });
+  });
+});
+
+// 2026-11-04 (Maria): the two Pyramyd POs "115449859" and "115449859 / 115450009" carry the one order's $255.84 header each (the sheet
+// copied it onto the split row). Spend counts a shared header once; stored values are untouched.
+describe("Dashboard Spend: a split PO's repeated header counts once (rolled back)", () => {
+  it("two sheet-imported POs, same supplier / date / total / order # → $255.84 and 1 PO; a repeat order (other date or other #) and a form-saved PO still count", async (ctx) => {
+    if (!client) return ctx.skip();
+    await inTx(async (q) => {
+      const po = async (oid: string, date: string, total: number, version: number | null = null) =>
+        (await q(`INSERT INTO purchase_orders (order_id, order_date, supplier, order_total, cost_formula_version) VALUES ($1, $2, 'zz-dash.test', $3, $4) RETURNING id`, [oid, date, total, version])).rows[0].id;
+      await po("115449859", "2032-01-10", 255.84);
+      await po("115449859 / 115450009", "2032-01-10", 255.84);
+      const spend = async (from: string, to: string) => (await q(`WITH ${poSpendCtes("$1::date", "$2::date")} SELECT SUM(spend)::float8 AS spend, COUNT(*) FILTER (WHERE NOT fully_canceled AND NOT shared_dup)::int AS n FROM po_spend`, [from, to])).rows[0];
+      expect(await spend("2032-01-10", "2032-01-10")).toEqual({ spend: 255.84, n: 1 });
+      await po("50SBFK7R1T46", "2032-01-11", 104.44); await po("50SBFK7R1T46+1", "2032-03-11", 104.44); // a repeat subscription order: another date
+      await po("200013530050140", "2032-01-12", 51.55); await po("200013228060326", "2032-01-12", 51.55); // two orders, same day and total, no shared #
+      await po("4242001", "2032-01-13", 80); await po("4242001 / 4242002", "2032-01-13", 80, 3); // a form-saved PO is never a sheet copy
+      expect(await spend("2032-01-10", "2032-03-31")).toEqual({ spend: 255.84 + 2 * 104.44 + 2 * 51.55 + 160, n: 7 });
+      expect((await q(`SELECT SUM(order_total)::float8 AS t FROM purchase_orders WHERE supplier = 'zz-dash.test'`)).rows[0].t).toBeCloseTo(2 * 255.84 + 2 * 104.44 + 2 * 51.55 + 160, 2); // stored values unchanged
     });
   });
 });

@@ -14,6 +14,12 @@
 //   sh_donations − discount − refund_amount)| ≤ $0.01) is NOT subtracted;
 //   every other row (manual, email, a due row, a 'sheet' row on a gross-AG
 //   PO) is. Gift-card % is never applied; cashback never counts.
+//   A split PO's repeated header (2026-11-04, the two Pyramyd POs
+//   "115449859" and "115449859 / 115450009", $255.84 each for one $255.84
+//   order): when two sheet-imported POs of one supplier share the order
+//   date, the order total and an order number, the sheet copied the order's
+//   header onto both rows — the later one (by id) adds $0 of order_total,
+//   its own refund rows still count. Stored values unchanged.
 //   Refunds due = Σ rows with status 'due' (any PO, canceled or not).
 //   ASIN units = Σ po_asins.qty − Σ canceled line qty × yield (bundles ÷
 //   unique products, the §22 derivation with per-line COALESCE); fully-
@@ -35,15 +41,25 @@ import { DASHBOARD_ROWS, SERIES_KINDS, type DashboardCell, type DashboardColumn,
 export const HEADER_NETS_REFUND_SQL = `(p.refund_amount IS NOT NULL AND p.refund_amount > 0 AND p.subtotal IS NOT NULL AND p.order_total IS NOT NULL
   AND ABS(p.order_total - (COALESCE(p.subtotal, 0) + COALESCE(p.tax, 0) + COALESCE(p.sh_donations, 0) - COALESCE(p.discount, 0) - p.refund_amount)) <= 0.01)`;
 
+/** Order-number tokens of an order_id: runs of 5+ letters/digits with a digit ("115449859", "50SBFK7R1T46", "CLK-160691" → "160691"). */
+const ORDER_TOKENS = (col: string) => `ARRAY(SELECT m[1] FROM regexp_matches(upper(${col}), '([0-9][0-9A-Z]{4,}|[A-Z]+[0-9][0-9A-Z]{3,})', 'g') m)`;
+/** A sheet-imported PO (`p`) whose header repeats an earlier sibling split PO's: same supplier, order date and order total, a shared order number, both sheet-imported. */
+export const SHARED_HEADER_DUP_SQL = `(p.cost_formula_version IS NULL AND p.order_total IS NOT NULL AND p.order_total > 0 AND EXISTS (
+  SELECT 1 FROM purchase_orders s
+   WHERE s.id < p.id AND s.cost_formula_version IS NULL AND s.supplier = p.supplier
+     AND s.order_date = p.order_date AND s.order_total = p.order_total
+     AND ${ORDER_TOKENS("s.order_id")} && ${ORDER_TOKENS("p.order_id")}))`;
+
 /**
- * The per-PO CTEs over an order_date range: `po` (id, order_date, order_total,
- * header_nets, fully_canceled), `ref` (counted / due refunds per PO) and
- * `po_spend` (id, order_date, fully_canceled, spend, due). `startExpr` /
+ * The per-PO CTEs over an order_date range: `po` (id, order_date, stored_total,
+ * shared_dup, header_nets, fully_canceled), `ref` (counted / due refunds per PO) and
+ * `po_spend` (id, order_date, fully_canceled, shared_dup, spend, due) — a
+ * shared_dup PO adds no order_total and is not a PO of its own in the counts. `startExpr` /
  * `endExpr` are SQL date expressions (parameter placeholders).
  */
 export function poSpendCtes(startExpr: string, endExpr: string): string {
   return `po AS (
-      SELECT p.id, p.order_date, p.order_total, ${HEADER_NETS_REFUND_SQL} AS header_nets,
+      SELECT p.id, p.order_date, p.order_total AS stored_total, ${SHARED_HEADER_DUP_SQL} AS shared_dup, ${HEADER_NETS_REFUND_SQL} AS header_nets,
              (l.n > 0 AND l.canceled = l.n) AS fully_canceled
         FROM purchase_orders p
         LEFT JOIN LATERAL (
@@ -58,8 +74,8 @@ export function poSpendCtes(startExpr: string, endExpr: string): string {
         FROM po_line_refunds r JOIN po ON po.id = r.po_id
        GROUP BY r.po_id
     ), po_spend AS (
-      SELECT po.id, po.order_date, po.fully_canceled,
-             CASE WHEN po.fully_canceled THEN 0 ELSE COALESCE(po.order_total, 0) - COALESCE(ref.counted, 0) END AS spend,
+      SELECT po.id, po.order_date, po.fully_canceled, po.shared_dup,
+             CASE WHEN po.fully_canceled THEN 0 ELSE (CASE WHEN po.shared_dup THEN 0 ELSE COALESCE(po.stored_total, 0) END) - COALESCE(ref.counted, 0) END AS spend,
              COALESCE(ref.due, 0) AS due
         FROM po LEFT JOIN ref ON ref.po_id = po.id
     )`;
@@ -76,7 +92,7 @@ const SPEND_GRID_SQL = `WITH ${poSpendCtes("$1::date", "$2::date")}, units AS (
     )
     SELECT (SELECT COALESCE(SUM(spend), 0) FROM po_spend)::float8 AS spend,
            (SELECT COALESCE(SUM(due), 0) FROM po_spend)::float8 AS refunds_due,
-           (SELECT COUNT(*) FILTER (WHERE NOT fully_canceled) FROM po_spend)::int AS po_count,
+           (SELECT COUNT(*) FILTER (WHERE NOT fully_canceled AND NOT shared_dup) FROM po_spend)::int AS po_count,
            (SELECT COALESCE(SUM(asin_units), 0) FROM units)::float8 AS asin_units,
            (SELECT COALESCE(SUM(CASE WHEN units_per_pack IS NULL THEN asin_units ELSE asin_units * units_per_pack END), 0) FROM units)::float8 AS individual_units,
            (SELECT COUNT(*) FILTER (WHERE units_per_pack IS NULL AND asin_units > 0) FROM units)::int AS missing_pack_size`;
@@ -150,7 +166,7 @@ export async function loadGrid(query: QueryLike, set: RangeSet, custom: Ymd | un
 const MONTHLY_SQL = (trunc: "month" | "week") => `WITH periods AS (
       SELECT generate_series(date_trunc('${trunc}', $1::date), date_trunc('${trunc}', $2::date), '1 ${trunc}')::date AS period
     ), ${poSpendCtes("$1::date", "$2::date")}, sp AS (
-      SELECT date_trunc('${trunc}', order_date)::date AS period, SUM(spend) AS spend, COUNT(*) FILTER (WHERE NOT fully_canceled) AS po_count FROM po_spend GROUP BY 1
+      SELECT date_trunc('${trunc}', order_date)::date AS period, SUM(spend) AS spend, COUNT(*) FILTER (WHERE NOT fully_canceled AND NOT shared_dup) AS po_count FROM po_spend GROUP BY 1
     ), sa AS (
       SELECT date_trunc('${trunc}', sale_date)::date AS period, SUM(revenue) AS sales, SUM(units_sold) AS units FROM sales_daily WHERE sale_date >= $1::date AND sale_date <= $2::date GROUP BY 1
     ), so AS (
@@ -165,7 +181,7 @@ const MONTHLY_SQL = (trunc: "month" | "week") => `WITH periods AS (
 const RUNNING30_SQL = `WITH days AS (
       SELECT generate_series($1::date - 29, $2::date, '1 day')::date AS d
     ), ${poSpendCtes("$1::date - 29", "$2::date")}, spd AS (
-      SELECT order_date AS d, SUM(spend) AS spend, COUNT(*) FILTER (WHERE NOT fully_canceled) AS n FROM po_spend GROUP BY 1
+      SELECT order_date AS d, SUM(spend) AS spend, COUNT(*) FILTER (WHERE NOT fully_canceled AND NOT shared_dup) AS n FROM po_spend GROUP BY 1
     ), sad AS (
       SELECT sale_date AS d, SUM(revenue) AS sales, SUM(units_sold) AS units FROM sales_daily WHERE sale_date >= $1::date - 29 AND sale_date <= $2::date GROUP BY 1
     ), base AS (
