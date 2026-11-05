@@ -7,14 +7,19 @@
 //
 // Capture PO (patch docs/claude_spec-patch-po-ai-prefill.md §4; v1.2 SPEC
 // §11): the panel's "Capture this page" injects scrub.js + capture.js into
-// the active tab and stores the scrubbed result in chrome.storage.session
-// under the tab id (one record per tab — buckets.js applyPage): one page
-// entry per checkout step (the latest capture of a step replaces the
-// previous one) plus the six data buckets, merged newest-wins per field.
+// the active tab and stores the scrubbed result in chrome.storage.local
+// under the tab id (one record per tab — buckets.js applyPage): every
+// capture is its own page (v1.3.1 — nothing is replaced by step or URL)
+// plus the six data buckets, merged newest-wins per field. v1.3.1: local,
+// not session, so a service-worker restart or an extension update loses
+// nothing; navigation, reloads, redirects and SPA route changes in the tab
+// never touch the record.
 // "Open in AF" POSTs the pages (and the selected ship-to) to
 // /api/pos/prefill (one AI call, server side) and opens /pos/new?prefill=<id>
 // in a new tab; the capture is cleared on success, on Clear, or when the
-// tab closes.
+// tab closes — nothing else (a browser restart renumbers the tabs, so the
+// records of tabs that no longer exist go at startup; a prerendered tab
+// that replaces this one takes its record).
 //
 // v1.3 (Maria 2026-11-04): after each capture the page's scrubbed text goes
 // to /api/pos/capture-preview — one small AI extraction that fills the
@@ -27,6 +32,8 @@ importScripts("buckets.js");
 
 const DEFAULT_SERVER_URL = "http://localhost:3000";
 const AF_FETCH = { credentials: "include" };
+// v1.3.1: the capture records (capture:<tabId>) live in chrome.storage.local — they survive a service-worker restart and an extension update.
+const captureStore = chrome.storage.local;
 const SETTINGS_REFRESH_INTERVAL = 5 * 60 * 1000; // 5 minutes
 
 let cachedSettings = null;
@@ -313,9 +320,9 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
         const key = AfBuckets.captureKey(tab.id);
         const host = new URL(tab.url).hostname;
         page.previewKey = await pageKey(host, page);
-        const prev = (await chrome.storage.session.get([key]))[key] || null;
+        const prev = (await captureStore.get([key]))[key] || null;
         const cur = AfBuckets.applyPage(prev, page, host, new Date().toISOString());
-        await chrome.storage.session.set({ [key]: cur });
+        await captureStore.set({ [key]: cur });
         sendResponse({ success: true, capture: cur, step: page.step, chars: page.chars });
         // The AI preview, after answering: the panel shows the rules now and the AI's buckets when they land.
         if (AfBuckets.needsPreview(prev, page.previewKey)) requestPreview(key, host, page);
@@ -326,7 +333,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   if (message.type === "GET_CAPTURE") {
     (async () => {
       const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
-      const all = await chrome.storage.session.get(null);
+      const all = await captureStore.get(null);
       const cur = tab?.id ? all[AfBuckets.captureKey(tab.id)] : null;
       let host = null; try { host = tab?.url ? new URL(tab.url).hostname : null; } catch { /* about:, chrome: */ }
       // v1.2: captures are per tab; the panel lists the other tabs with a capture in progress.
@@ -338,7 +345,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   if (message.type === "CLEAR_CAPTURE") {
     (async () => {
       const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
-      if (tab?.id) await chrome.storage.session.remove([AfBuckets.captureKey(tab.id)]);
+      if (tab?.id) await captureStore.remove([AfBuckets.captureKey(tab.id)]);
       sendResponse({ success: true });
     })();
     return true;
@@ -358,7 +365,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
       try {
         const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
         const key = tab?.id ? AfBuckets.captureKey(tab.id) : null;
-        const cur = key ? (await chrome.storage.session.get([key]))[key] : null;
+        const cur = key ? (await captureStore.get([key]))[key] : null;
         if (!cur || !cur.count) {
           // v1.2.4: never gated — no pages captured → a blank New PO with the supplier prefilled from the tab's hostname, no model call.
           const serverUrl0 = await getServerUrl();
@@ -380,7 +387,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
         if (r.status === 401) { sendResponse({ success: false, message: "Sign in to AsinFlow in a tab first — the extension uses your session" }); return; }
         if (!r.ok) { sendResponse({ success: false, message: data.message || `AsinFlow answered ${r.status}` }); return; }
         await chrome.tabs.create({ url: `${serverUrl}${data.url}` });
-        await chrome.storage.session.remove([key]);
+        await captureStore.remove([key]);
         sendResponse({ success: true, lines: data.lines, warnings: data.warnings || [], schema_ok: data.schema_ok });
       } catch (err) { sendResponse({ success: false, message: /abort|timeout/i.test(err.message) ? "AsinFlow did not answer in time — the capture is kept, try again" : `AsinFlow is unreachable — the capture is kept (${err.message})` }); }
     })();
@@ -413,12 +420,29 @@ async function requestPreview(storeKey, host, page) {
     else if (!data.buckets) error = "AI preview could not read this page";
     else buckets = data.buckets;
   } catch (err) { error = /abort|timeout/i.test(err.message) ? "AI preview timed out" : "AI preview: AsinFlow is unreachable"; }
-  const cur = (await chrome.storage.session.get([storeKey]))[storeKey];
+  const cur = (await captureStore.get([storeKey]))[storeKey];
   if (!cur) return; // cleared or opened meanwhile
-  await chrome.storage.session.set({ [storeKey]: AfBuckets.applyPreview(cur, page.previewKey, buckets, error) });
+  await captureStore.set({ [storeKey]: AfBuckets.applyPreview(cur, page.previewKey, buckets, error) });
 }
 
-chrome.tabs.onRemoved.addListener((tabId) => { chrome.storage.session.remove([AfBuckets.captureKey(tabId)]).catch(() => {}); });
+// v1.3.1: a tab's capture goes only when the tab closes (or Clear / Open in AF above).
+chrome.tabs.onRemoved.addListener((tabId) => { captureStore.remove([AfBuckets.captureKey(tabId)]).catch(() => {}); });
+// A prerendered / instant page swaps in a new tab id for the same tab: the record follows it.
+chrome.tabs.onReplaced.addListener(async (addedTabId, removedTabId) => {
+  const from = AfBuckets.captureKey(removedTabId), to = AfBuckets.captureKey(addedTabId);
+  const cur = (await captureStore.get([from]))[from];
+  if (!cur) return;
+  await captureStore.set({ [to]: cur });
+  await captureStore.remove([from]);
+});
+// Tab ids are not stable across browser restarts: records of tabs that no longer exist go (local storage outlives the session).
+async function dropOrphanCaptures() {
+  const [all, tabs] = await Promise.all([captureStore.get(null), chrome.tabs.query({})]);
+  const stale = AfBuckets.orphanCaptureKeys(all, tabs.map((t) => t.id));
+  if (stale.length) await captureStore.remove(stale);
+}
+chrome.runtime.onStartup.addListener(() => { dropOrphanCaptures().catch(() => {}); });
+chrome.runtime.onInstalled.addListener(() => { dropOrphanCaptures().catch(() => {}); });
 
 // Listen for storage changes (when product data is updated by content script)
 chrome.storage.session.onChanged.addListener((changes) => {

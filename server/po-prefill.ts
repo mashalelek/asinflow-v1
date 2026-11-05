@@ -73,6 +73,7 @@ export const PREFILL_SYSTEM = `You read captured text from a retailer's checkout
 - subtotal / discount / tax / shipping / total are the order-level figures; discount is the order-level discount (positive).
 - Payments: one entry per method shown with its amount. Gift cards are method "gift_card"; store credit, rewards balance and similar are "store_credit".
 - subscription.present is true only when the pages show a subscription / autoship for this order; frequencyWeeks in weeks (monthly = 4).
+- Pages are in checkout order and, within a step, in the order captured: when a step appears more than once (the cart re-captured after an edit, a checkout's sub-steps), the later page is the newer one and wins where they differ. The order confirmation is the authority for the order id, the date and the charged total.
 - orderDate null when the pages show no order date (a delivery estimate is not one) — no note about it; AF defaults the date.
 - Promos: ${PROMO_RULES}`;
 

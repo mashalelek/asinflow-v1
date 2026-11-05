@@ -180,7 +180,7 @@
   chrome.tabs.onActivated.addListener(() => refresh());
   chrome.tabs.onUpdated.addListener((_id, change) => { if (change.status === "complete" || change.url) refresh(); });
   chrome.storage.onChanged.addListener((changes, area) => {
-    if (area === "session") refresh();
+    if (area === "local" || area === "session") refresh(); // v1.3.1: the captures live in local
     if (area === "sync" && changes.debugCapture) { debugCapture = !!changes.debugCapture.newValue; applyDebug(); }
   });
   window.addEventListener("focus", refresh);

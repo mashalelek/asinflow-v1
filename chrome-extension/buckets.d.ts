@@ -8,7 +8,7 @@ export interface BucketTotals { subtotal?: string; discount?: string; tax?: stri
 export interface BucketOrder { number?: string; date?: string; subscription?: { on: boolean; every: string | null }; email?: string }
 export interface Buckets { products: BucketProduct[]; shipping: BucketShipping | null; payment: { cards: BucketCard[]; giftCards: BucketGiftCard[] }; totals: BucketTotals; promos: string[]; order: BucketOrder }
 export type BucketKey = "products" | "shipping" | "payment" | "totals" | "promos" | "order";
-export interface CaptureRecord { host: string; pages: Record<string, CapturePage>; others: CapturePage[]; count: number; updatedAt: string | null; buckets: Buckets; previews?: Record<string, any>; previewPending?: string[]; previewError?: string | null }
+export interface CaptureRecord { host: string; captures?: CapturePage[]; pages?: Record<string, CapturePage>; others?: CapturePage[]; count: number; updatedAt: string | null; buckets: Buckets; previews?: Record<string, any>; previewPending?: string[]; previewError?: string | null }
 export interface ShipConfig { velocityStreet: string; homeStreets: string[]; prepCost?: number; suppliers?: string[] }
 export const BUCKETS: BucketKey[];
 export const LABELS: Record<BucketKey, string>;
@@ -34,6 +34,7 @@ export function applyPage(cur: CaptureRecord | null, page: CapturePage, host: st
 export function pagesForPrefill(cap: CaptureRecord): { step: string | undefined; url: string; title: string | undefined; text: string; fields: { label: string; value: string }[] }[];
 export function shipToForPrefill(cap: CaptureRecord | null): { street: string | null; candidates: string[] } | null;
 export function othersCapturing(store: Record<string, any>, tabId: number): { tabId: number; host: string; count: number }[];
+export function orphanCaptureKeys(store: Record<string, any>, tabIds: number[]): string[];
 export function shipToKind(street: string | null, config: ShipConfig | null): "Velocity" | "Home" | null;
 export function describeShipping(shipping: BucketShipping | null, config: ShipConfig | null): string[];
 /** v1.3: the AI preview of a page laid over its rule-based buckets. */

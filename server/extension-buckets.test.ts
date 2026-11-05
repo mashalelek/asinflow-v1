@@ -1,7 +1,7 @@
 import { describe, it, expect } from "vitest";
 import { readFileSync } from "fs";
 import { resolve } from "path";
-import { extractBuckets, mergeBuckets, emptyBuckets, filled, missing, applyPage, newCapture, captureKey, pagesForPrefill, shipToForPrefill, othersCapturing, describeShipping, extractShipping, extractProducts, extractPromos, debugText, dedupePromos } from "../chrome-extension/buckets.js";
+import { extractBuckets, mergeBuckets, emptyBuckets, filled, missing, applyPage, newCapture, captureKey, pagesForPrefill, shipToForPrefill, othersCapturing, orphanCaptureKeys, describeShipping, extractShipping, extractProducts, extractPromos, debugText, dedupePromos } from "../chrome-extension/buckets.js";
 import { scrubText } from "../chrome-extension/scrub.js";
 
 // Capture PO v1.2 (SPEC §11 "Chrome extension — Capture PO"): six data
@@ -320,9 +320,9 @@ describe("buckets: v1.2.7 — note lines inside a row, the cart table, and bucke
     c = applyPage(c, shagCheckout, "www.shagtools.com", "2026-11-03T20:01:00.000Z");
     expect(c.buckets.totals).toEqual({ subtotal: "$89.30", tax: "$0.00", total: "$89.30" }); // "Enter your address to view shipping options" — no $24.77 kept
     expect(c.buckets.products).toEqual([driftwood10]);
-    // the cart captured again (a different cart now): its step entry and its values are replaced, the checkout's product stays — same order, 2 pages
+    // the cart captured again (a different cart now): kept as a third page (v1.3.1), its values are the newest; the checkout's product stays
     c = applyPage(c, shagCartAlabaster, "www.shagtools.com", "2026-11-03T20:02:00.000Z");
-    expect(c.count).toBe(2);
+    expect(c.count).toBe(3);
     expect(c.buckets.totals).toEqual({ subtotal: "$44.65", shipping: "$22.99", total: "$67.64" });
     expect(c.buckets.products).toEqual([driftwood10, alabaster5]);
     // Clear removes the tab's record; the next capture starts from nothing
@@ -433,19 +433,30 @@ describe("buckets: captures are per tab", () => {
     expect(shipToForPrefill(store["capture:11"])).toEqual({ street: "805 Grandy Ave", candidates: ["805 Grandy Ave"] });
     expect(shipToForPrefill(null)).toBeNull();
   });
-  it("re-capturing a step replaces that page for the prefill AND its values in the buckets (v1.2.7: rebuilt from the pages — the earlier capture's products are gone with its page)", () => {
+  it("re-capturing a step keeps both pages (v1.3.1); the newer one's values win in the buckets and it comes second in the prefill; an identical recapture is not kept twice", () => {
     let c = applyPage(null, walmartCart, "www.walmart.com", now(1));
-    c = applyPage(c, { ...walmartCart, text: "Cart (1 item)\nScotch-Brite Heavy Duty Scrub Sponges, 9 Count\n$5.97\n5\n$29.85\nSubtotal (5 items) $29.85", fields: [] }, "www.walmart.com", now(2));
-    expect(c.count).toBe(1);
-    expect(pagesForPrefill(c)).toHaveLength(1);
-    expect(c.buckets.products.map((p: any) => [p.name.split(" ")[0], p.qty])).toEqual([["Scotch-Brite", 5]]);
+    const edited = { ...walmartCart, text: "Cart (1 item)\nScotch-Brite Heavy Duty Scrub Sponges, 9 Count\n$5.97\n5\n$29.85\nSubtotal (5 items) $29.85", fields: [] };
+    c = applyPage(c, edited, "www.walmart.com", now(2));
+    expect(c.count).toBe(2);
+    expect(pagesForPrefill(c).map((p) => p.text)).toEqual([walmartCart.text, edited.text]);
+    expect(c.buckets.products.find((p: any) => /^Scotch-Brite/.test(p.name))?.qty).toBe(5);
     expect(c.buckets.totals.subtotal).toBe("$29.85");
+    const same = applyPage(c, { ...edited }, "www.walmart.com", now(3));
+    expect(same.count).toBe(2);
+    expect(same.captures?.[1].capturedAt).toBe(now(3));
   });
   it("a record stored before 1.2 (no buckets) is rebuilt from its pages on the next capture", () => {
     const old = { host: "www.walmart.com", pages: { cart: { ...walmartCart, capturedAt: now(1) } }, others: [], count: 1, updatedAt: now(1) } as any;
     const c = applyPage(old, { url: "https://www.walmart.com/checkout/payment", step: "payment", text: "Payment\nVisa ending in 4242" }, "www.walmart.com", now(2));
     expect(c.buckets.products).toHaveLength(3);
     expect(c.buckets.payment.cards[0].last4).toBe("4242");
+  });
+  it("a record stored before 1.3.1 (one page per step + others) keeps all its pages on the next capture", () => {
+    const old = { host: "www.walmart.com", pages: { cart: { ...walmartCart, capturedAt: now(1) }, review: { step: "review", url: "https://www.walmart.com/checkout", title: "Review", text: "Review order", capturedAt: now(3) } }, others: [{ step: "other", url: "https://www.walmart.com/ip/1", title: "x", text: "x", capturedAt: now(2) }], count: 3, updatedAt: now(3) } as any;
+    const c = applyPage(old, { step: "review", url: "https://www.walmart.com/checkout", title: "Review", text: "Review order — payment" }, "www.walmart.com", now(4));
+    expect(c.count).toBe(4);
+    expect(pagesForPrefill(c).map((p) => p.step)).toEqual(["cart", "other", "review", "review"]);
+    expect(c.pages).toBeUndefined();
   });
   it("background.js stores through these functions (one record per tab id)", () => {
     const bg = readFileSync(resolve(__dirname, "../chrome-extension/background.js"), "utf8");
@@ -454,5 +465,59 @@ describe("buckets: captures are per tab", () => {
     expect(bg).toMatch(/AfBuckets\.captureKey\(tab\.id\)/);
     expect(bg).toMatch(/AfBuckets\.othersCapturing\(/);
     expect(bg).toMatch(/AfBuckets\.pagesForPrefill\(/);
+  });
+});
+
+// v1.3.1 (Maria 2026-11-04, URGENT): a Walmart checkout navigated to its confirmation in the same tab and the panel said "1 page captured"
+// after several checkout captures. Cause: one page per guessed step — Walmart's checkout sub-steps (one SPA URL) and its "Thank you" page all
+// guess "review", so each capture replaced the last. Captures now survive navigation, reloads, redirects and SPA route changes; only Clear,
+// a successful Open in AF and closing the tab clear them, and they live in chrome.storage.local so a service-worker restart keeps them.
+describe("buckets v1.3.1: captures survive navigation in the tab", () => {
+  const now = (n: number) => `2026-11-04T18:00:${String(n).padStart(2, "0")}.000Z`;
+  const store: Record<string, any> = {};
+  const put = (tabId: number, page: any, n: number) => { const k = captureKey(tabId); store[k] = applyPage(store[k] ?? null, page, "www.walmart.com", now(n)); return store[k]; };
+  it("capture page A, navigate the same tab to B, capture B → 2 pages", () => {
+    put(7, { ...walmartCart, step: "review", url: "https://www.walmart.com/checkout" }, 1); // A: the checkout (guesses "review", like the confirmation — the case that replaced)
+    const c = put(7, { step: "review", url: "https://www.walmart.com/checkout/thankyou", title: "Thank you", text: "Thanks for your order\n$127.20 | Order #200015468871641\nTotal\t$127.20" }, 2); // B, same tab
+    expect(c.count).toBe(2);
+    expect(pagesForPrefill(c).map((p) => p.url)).toEqual(["https://www.walmart.com/checkout", "https://www.walmart.com/checkout/thankyou"]);
+    expect(c.buckets.products).toHaveLength(3); // the cart's products are still there
+    expect(c.buckets.order.number).toBe("200015468871641");
+  });
+  it("the Walmart case: checkout sub-steps on one URL, then the confirmation — every capture is a page (all guess 'review')", () => {
+    const k = 8, checkout = "https://www.walmart.com/checkout";
+    put(k, { step: "review", url: checkout, title: "Checkout", text: "Shipping address\n805 Grandy Ave" }, 1);
+    put(k, { step: "review", url: checkout, title: "Checkout", text: "Payment method\nWalmart Rewards Card ending in 4242" }, 2);
+    put(k, { step: "review", url: checkout, title: "Checkout", text: "Review your order\nSubtotal $123.52\nTotal $127.20" }, 3);
+    const c = put(k, { step: "review", url: "https://www.walmart.com/checkout/thankyou?pcid=1", title: "Thank you", text: "$127.20 | Order #200015468871641" }, 4);
+    expect(c.count).toBe(4);
+    expect(c.buckets.shipping.street).toBe("805 Grandy Ave");
+    expect(c.buckets.payment.cards[0].last4).toBe("4242");
+    expect(c.buckets.order.number).toBe("200015468871641");
+    expect(c.buckets.totals.total).toBe("$127.20");
+  });
+  it("a tab keeps at most 12 pages (the prefill's limit) — the oldest goes first", () => {
+    let c: any = null;
+    for (let i = 0; i < 14; i++) c = applyPage(c, { step: "other", url: "https://www.walmart.com/ip/" + i, title: "p", text: "page " + i }, "www.walmart.com", now(i));
+    expect(c.count).toBe(12);
+    expect(c.captures[0].text).toBe("page 2");
+  });
+  it("orphanCaptureKeys: after a browser restart the records of tabs that no longer exist go; open tabs' records and other keys stay", () => {
+    expect(orphanCaptureKeys({ "capture:7": {}, "capture:8": {}, currentProduct: {}, serverUrl: "x" }, [8, 9])).toEqual(["capture:7"]);
+  });
+  it("background.js keeps the captures in chrome.storage.local, clears them only on Clear / Open in AF / tab close, follows a replaced tab, drops orphans at startup", () => {
+    const bg = readFileSync(resolve(__dirname, "../chrome-extension/background.js"), "utf8");
+    expect(bg).toMatch(/const captureStore = chrome\.storage\.local;/);
+    expect(bg).not.toMatch(/chrome\.storage\.session\.(get|set|remove)\(\[(key|storeKey|AfBuckets\.captureKey)/);
+    expect(bg.match(/captureStore\.remove\(/g)).toHaveLength(5); // Clear, Open in AF, tab closed, tab replaced (the old id), orphans
+    expect(bg).toMatch(/chrome\.tabs\.onRemoved\.addListener/);
+    expect(bg).toMatch(/chrome\.tabs\.onReplaced\.addListener/);
+    expect(bg).toMatch(/chrome\.runtime\.onStartup\.addListener/);
+    // the one navigation listener (the Amazon calculator's) touches only currentProduct, never a capture record
+    const nav = bg.slice(bg.indexOf("chrome.tabs.onUpdated.addListener"), bg.indexOf("\n});", bg.indexOf("chrome.tabs.onUpdated.addListener")));
+    expect(nav).toMatch(/currentProduct/);
+    expect(nav).not.toMatch(/capture|captureStore/i);
+    const panel = readFileSync(resolve(__dirname, "../chrome-extension/capture-panel.js"), "utf8");
+    expect(panel).toMatch(/area === "local"/);
   });
 });

@@ -1,7 +1,7 @@
 import { describe, it, expect } from "vitest";
 import { readFileSync, readdirSync } from "fs";
 import { resolve } from "path";
-import { luhn, maskCardRuns, removeExpiries, removeCvvs, maskGiftCards, scrubText, scrubField } from "../chrome-extension/scrub.js";
+import { luhn, cardPrefix, maskCardRuns, removeExpiries, removeCvvs, maskGiftCards, scrubText, scrubField } from "../chrome-extension/scrub.js";
 
 // Capture PO §4.3: nothing card-like leaves the browser. The fixtures are
 // hand-written synthetic checkout pages (public test card numbers only).
@@ -22,6 +22,19 @@ describe("scrub.js", () => {
     expect(maskCardRuns("Mastercard 5555-5555-5555-4444")).toBe("Mastercard •••• 4444");
     expect(maskCardRuns("Order number: 123456789012")).toBe("Order number: 123456789012");
     expect(maskCardRuns("Account 1234 5678 90")).toBe("Account 1234 5678 90");
+  });
+  it("v1.3.1: an order # that happens to pass Luhn is not a card — Walmart's 200015468871641 (Maria 2026-11-04) survives; a run is masked only when it starts like a card network (3 / 4 / 5 / 6, 2221–2720) and no order / confirmation / invoice / tracking label sits right before it", () => {
+    expect(luhn("200015468871641")).toBe(true); // why it was masked
+    expect(cardPrefix("200015468871641")).toBe(false);
+    expect(maskCardRuns("$127.20 | Order #200015468871641")).toBe("$127.20 | Order #200015468871641");
+    expect(scrubText("Thanks for your order\n$127.20 | Order #200015468871641")).toContain("Order #200015468871641");
+    expect(maskCardRuns("Order # 4111111111111111")).toBe("Order # 4111111111111111"); // labelled as an order id
+    expect(maskCardRuns("Confirmation number: 5555555555554444")).toBe("Confirmation number: 5555555555554444");
+    // cards still go — with or without a label, every network prefix
+    expect(maskCardRuns("Visa 4111111111111111")).toBe("Visa •••• 1111");
+    expect(maskCardRuns("2221000000000009")).toBe("•••• 0009");
+    expect(maskCardRuns("Paid with 378282246310005")).toBe("Paid with •••• 0005");
+    expect(maskCardRuns("6011111111111117 on file; order #200015468871641")).toBe("•••• 1117 on file; order #200015468871641");
   });
   it("expiries only near exp / valid; CVVs by label; gift cards keep the last 4", () => {
     expect(removeExpiries("Expiration 09/28 · Arrives 11/06")).toBe("Expiration [expiry removed] · Arrives 11/06");

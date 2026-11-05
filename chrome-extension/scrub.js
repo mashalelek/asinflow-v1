@@ -1,8 +1,13 @@
 // Capture PO — scrubbing (AsinFlow Chrome extension; patch
 // docs/claude_spec-patch-po-ai-prefill.md §4.3). Runs INSIDE the page
 // before anything leaves the browser, on every captured text and form value:
-//   - any run of 13–19 digits (spaces / dashes allowed) that passes Luhn →
-//     "•••• " + its last 4 (card numbers; gift cards that are card-like too)
+//   - any run of 13–19 digits (spaces / dashes allowed) that passes Luhn AND
+//     starts like a card (2221–2720, or 3–6: Amex, Visa, Mastercard, Discover,
+//     JCB, Diners, UnionPay, Maestro) → "•••• " + its last 4 (card numbers;
+//     gift cards that are card-like too). Never a run right after an order /
+//     confirmation / invoice / tracking label: 2026-11-04, Walmart order
+//     #200015468871641 passes Luhn (one number in ten does) and was masked,
+//     so neither the panel nor the prefill saw its order #.
 //   - a 3–4 digit value whose label says cvv / cvc / security code → removed
 //   - an expiry (MM/YY, MM/YYYY) within 40 characters of "exp" / "valid" → removed
 //   - a gift-card / e-gift / gift-certificate number (8+ digits, by label or
@@ -25,6 +30,13 @@
   }
 
   var CARD_RUN = /(?<![\d])(?:\d[ -]?){12,18}\d(?![\d])/g;
+  /** The first digits of a card network (ISO/IEC 7812 issuer ranges in use for payment cards). */
+  function cardPrefix(digits) {
+    var f = digits.charAt(0), p4 = Number(digits.slice(0, 4));
+    return f === "3" || f === "4" || f === "5" || f === "6" || (p4 >= 2221 && p4 <= 2720);
+  }
+  // An order / confirmation / invoice / tracking / reference label just before the run: an id, never a card.
+  var ID_LABEL_BEFORE = /\b(?:order|confirmation|invoice|tracking|reference|ref|receipt|transaction)\s*(?:#|number|no\.?|id|num)?\s*[:#]?\s*#?\s*$/i;
   var CVV_LABEL = /\b(cvv2?|cvc2?|cid|security\s*code|card\s*verification)\b/i;
   var EXP_LABEL = /\b(exp(?:iry|iration|ires)?\.?|valid(?:\s*thru|\s*through)?)\b/i;
   var EXPIRY = /\b(0[1-9]|1[0-2])\s*\/\s*(\d{2}|\d{4})\b/g;
@@ -32,9 +44,12 @@
 
   /** Card-number runs → "•••• 1234". Pure. */
   function maskCardRuns(text) {
-    return String(text == null ? "" : text).replace(CARD_RUN, function (m) {
+    var s = String(text == null ? "" : text);
+    return s.replace(CARD_RUN, function (m, offset) {
       var digits = m.replace(/\D/g, "");
-      return luhn(digits) ? "•••• " + digits.slice(-4) : m;
+      if (!luhn(digits) || !cardPrefix(digits)) return m;
+      if (ID_LABEL_BEFORE.test(s.slice(Math.max(0, offset - 30), offset))) return m;
+      return "•••• " + digits.slice(-4);
     });
   }
 
@@ -79,7 +94,7 @@
     return { label: l, value: scrubText(v) };
   }
 
-  var api = { luhn: luhn, maskCardRuns: maskCardRuns, removeExpiries: removeExpiries, removeCvvs: removeCvvs, maskGiftCards: maskGiftCards, scrubText: scrubText, scrubField: scrubField };
+  var api = { luhn: luhn, cardPrefix: cardPrefix, maskCardRuns: maskCardRuns, removeExpiries: removeExpiries, removeCvvs: removeCvvs, maskGiftCards: maskGiftCards, scrubText: scrubText, scrubField: scrubField };
   root.AfScrub = api;
   if (typeof module !== "undefined" && module.exports) module.exports = api;
 })(typeof globalThis !== "undefined" ? globalThis : this);

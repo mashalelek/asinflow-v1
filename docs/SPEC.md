@@ -2653,12 +2653,41 @@ is set — the runner is always on; only the **schedule** is gated.
   File keep their inline sheet/CSV step; only the onboarding Refresh they
   spawn is a queue job.
 
-### Chrome extension — Capture PO (patch `docs/claude_spec-patch-po-ai-prefill.md` §4, 2026-10-31; `chrome-extension/` v1.3.0 — the AI preview 2026-11-04; v1.2.3 — panel redesign 2026-11-01, pre-parser fixes from the first real PO the same day, table-row products and promo dedupe from a shagtools.com cart 2026-11-02, plain-text / no-text quantities and the "Copy page text" debug action the same day)
+### Chrome extension — Capture PO (patch `docs/claude_spec-patch-po-ai-prefill.md` §4, 2026-10-31; `chrome-extension/` v1.3.1 — captures survive navigation, order #s that pass Luhn kept, 2026-11-04; v1.3.0 — the AI preview 2026-11-04; v1.2.3 — panel redesign 2026-11-01, pre-parser fixes from the first real PO the same day, table-row products and promo dedupe from a shagtools.com cart 2026-11-02, plain-text / no-text quantities and the "Copy page text" debug action the same day)
 
 The existing extension (the Amazon side-panel calculator, `content.js` on
 `/dp` pages) gains **Capture PO** in the same side panel: on any tab that is
 not an Amazon product page the panel shows the capture UI instead of the
 "navigate to a product page" state.
+
+- **Captures survive navigation (v1.3.1, Maria 2026-11-04, URGENT).** A
+  Walmart checkout navigated to its confirmation in the same tab and the
+  panel said "1 page captured" after several checkout captures. Cause: the
+  record kept one page per GUESSED step (`capture.js` `stepGuess`), and
+  Walmart's checkout sub-steps (one SPA URL) and its "Thank you" page all
+  guess "review" — each capture replaced the last. Now every capture is its
+  own page (`captures`, oldest first, at most 12 — the prefill's limit,
+  the oldest goes first); only an identical recapture (same URL, text and
+  fields) is not kept twice. Navigation, reloads, redirects and SPA route
+  changes never touch the record; it is cleared ONLY by Clear, a successful
+  Open in AF, or closing the tab. The record lives in
+  **`chrome.storage.local`** (was `session`) under `capture:<tabId>`, so a
+  service-worker restart or an extension update keeps it; a prerendered
+  tab that replaces this one (`tabs.onReplaced`) takes its record; at
+  browser startup the records of tabs that no longer exist go (tab ids are
+  renumbered). A record stored by 1.3.0 (one page per step + others) is
+  read as those pages. The buckets are still rebuilt from all pages oldest
+  first, newest wins per field — so a product removed from a cart that is
+  then re-captured stays in "Found so far" (remove it on the form); the
+  prefill prompt is told that within a step the later page is the newer
+  one and that the confirmation is the authority for order id, date and
+  charged total. **Order #s that pass Luhn:** Walmart's
+  "$127.20 | Order #200015468871641" filled neither Order # nor Total —
+  the 15 digits pass Luhn, so `scrub.js` masked them as a card ("Order
+  #•••• 1641") before the rules or the AI saw them. A Luhn-passing run is
+  now masked only when it also starts like a card network (3, 4, 5, 6 or
+  2221–2720) AND no order / confirmation / invoice / tracking / reference /
+  receipt / transaction label sits right before it.
 
 - **AI preview (v1.3.0, Maria 2026-11-04 — instead of more per-site
   rules).** The trigger pages: a gordonelectricsupply.com cart (Qty input
@@ -2842,11 +2871,12 @@ not an Amazon product page the panel shows the capture UI instead of the
   $22.99): the buckets were merged incrementally per capture, so a value
   from a page since replaced survived. `applyPage` now REBUILDS the buckets
   from the tab's pages (oldest first, newest wins) on every capture, so
-  the latest capture of a step replaces that step's values, and the newest
+  the latest capture's values win (v1.2.7 replaced the step's page; since
+  v1.3.1 every capture is kept, see above), and the newest
   page that shows totals replaces the whole Totals figure — a field it
   lacks is gone, not kept from an older page (a page with no totals at all,
   a product page, leaves the figure alone; Order fields still merge per
-  field). Clear removes the tab's record (`chrome.storage.session`), so the
+  field). Clear removes the tab's record (`chrome.storage.local` since v1.3.1), so the
   next capture starts empty; Clear is per tab — a capture in another tab
   keeps its own record. (4) `shippingAmount`: a plain amount on the
   label's line or the next ("Shipping  $12.00", "Shipping Free", Walmart's
@@ -2864,7 +2894,7 @@ not an Amazon product page the panel shows the capture UI instead of the
   it lands. **Clear**;
   caption "One AI call runs when you open it · card numbers are masked
   before anything leaves the browser". **Per tab:** the record lives under
-  `capture:<tabId>` (`chrome.storage.session`); the panel shows the active
+  `capture:<tabId>` (`chrome.storage.local` since v1.3.1); the panel shows the active
   tab's capture and a thin line under the header lists the other tabs with
   one in progress ("Also capturing: michaels.com (2 pages)"); switching
   tabs switches the panel. **Look:** warm stone per §7 — header `#292524`
@@ -2887,14 +2917,17 @@ not an Amazon product page the panel shows the capture UI instead of the
   `selected: <label>` field (v1.2 — the SELECTED shipping address, payment
   method and subscription choice, not the first block on the page);
   password inputs are never read; never raw HTML, never a screenshot (the
-  screenshot fallback is not in v1). Stored in `chrome.storage.session`
-  under the tab id — one page entry per step (the latest capture of a step
-  replaces the previous one) plus the six buckets; cleared on Clear, on a
-  successful Open in AF, or when the tab closes. A page under ~200 characters of text
+  screenshot fallback is not in v1). Stored in `chrome.storage.local`
+  under the tab id — every capture its own page (v1.3.1; until then one
+  page per step, the latest replacing the previous) plus the six buckets;
+  cleared ONLY on Clear, on a successful Open in AF, or when the tab
+  closes. A page under ~200 characters of text
   gets a hint to capture the review page instead.
 - **Scrubbing (§4.3, `scrub.js`, inside the page before anything leaves the
   browser):** any run of 13–19 digits (spaces / dashes allowed) that passes
-  Luhn → `•••• ` + last 4; a 3–4 digit value whose label says cvv / cvc /
+  Luhn and starts like a card network (3 / 4 / 5 / 6 / 2221–2720), unless an
+  order / confirmation / invoice / tracking label sits right before it
+  (v1.3.1) → `•••• ` + last 4; a 3–4 digit value whose label says cvv / cvc /
   security code → removed; an expiry (MM/YY, MM/YYYY) within 40 characters
   after "exp" / "valid" → removed; a gift-card / e-gift number → last 4
   kept; emails kept. Fixtures: hand-written synthetic checkout texts for

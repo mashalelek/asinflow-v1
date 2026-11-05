@@ -125,7 +125,7 @@ and any introduced error must be fixed forward before committing.
 
 ## Tests
 
-`npm test` (vitest). **2,045 tests across 188 files** as of 2026-11-04 — this
+`npm test` (vitest). **2,055 tests across 188 files** as of 2026-11-04 — this
 codebase IS tested; the old "there are no tests" line was years stale.
 
 **A gate report must cover BOTH typecheck commands, labelled separately:**
@@ -133,7 +133,7 @@ codebase IS tested; the old "there are no tests" line was years stale.
 ```
 npm run check        -> 4 baseline TS1252, 0 introduced
 npm run check:tests  -> 4 baseline TS1252, 0 introduced
-npm test             -> 2045/2045
+npm test             -> 2055/2055
 ```
 
 `npm run check` alone is NOT a complete gate. The base `tsconfig.json`
@@ -185,7 +185,7 @@ the promo backfill (`npm run backfill:po-promos`), every call logged in
 (`chrome-extension/scrub.js`) runs inside the page; its fixtures are
 hand-written with public test card numbers only — never real ones.
 
-**Chrome extension dev (SPEC §11 "Chrome extension — Capture PO", v1.3.0):** load
+**Chrome extension dev (SPEC §11 "Chrome extension — Capture PO", v1.3.1):** load
 `chrome-extension/` unpacked at chrome://extensions; set the server URL on
 its options page (localhost:3000 by default; production
 `https://asinflow-cqg.onrender.com` and the custom domain

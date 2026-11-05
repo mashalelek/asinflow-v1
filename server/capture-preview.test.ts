@@ -20,6 +20,10 @@ const READ: Record<string, PrefillExtraction> = {
     { productName: "Hubbell HBL2621 Twist-Lock Receptacle 30A 250V", retailerSku: "HBLHBL2621", qty: 2, unitsPerPack: 1, unitPrice: 28.4, lineTotal: 56.8, asinGuess: null },
   ], subtotal: 68.36, shipping: 9.95, total: 78.31 },
   "acme-checkout": { ...none, lines: [{ ...lenox, unitPrice: 2.99, lineTotal: 89.7 }], subtotal: 89.7, discount: 10, tax: 0, shipping: 6.49, total: 86.19, promos: [dhdnyc] },
+  "walmart-confirmation": { ...none, orderId: "200015468871641", lines: [
+    { productName: "Great Value Creamy Peanut Butter, 40 oz", retailerSku: null, qty: 12, unitsPerPack: 1, unitPrice: 4.98, lineTotal: 59.76, asinGuess: null },
+    { productName: "Scotch-Brite Heavy Duty Scrub Sponges, 9 Count", retailerSku: null, qty: 8, unitsPerPack: 1, unitPrice: 7.97, lineTotal: 63.76, asinGuess: null },
+  ], subtotal: 123.52, tax: 3.68, total: 127.2, shipToStreet: "805 Grandy Ave" },
   "acme-confirmation": { ...none, orderId: "42838131", lines: [lenox], subtotal: 89.7, discount: 10, tax: 0, shipping: 6.49, total: 86.19, promos: [dhdnyc], purchasedEmail: "Orders@Example.com" },
 };
 
@@ -123,10 +127,12 @@ describe("capture preview: the tab's record (rules at once, the AI when it lands
     const again = applyPage(cap, { ...p }, "www.acmetools.com", "2026-11-04T10:05:00Z");
     expect(again.previewPending).toEqual([]);
     expect(again.buckets.promos).toEqual(["Code DHDNYC −$10.00"]);
-    // A different page (step replaced): its old preview goes, the new one is pending.
+    // A different page of the same step (v1.3.1: kept beside the first, not replacing it): the first page's preview stays, the new one is pending.
     const next = applyPage(again, { ...page("acme-confirmation", "review"), previewKey: "k2" }, "www.acmetools.com", "2026-11-04T10:06:00Z");
-    expect(Object.keys(next.previews ?? {})).toEqual([]);
+    expect(next.count).toBe(2);
+    expect(Object.keys(next.previews ?? {})).toEqual(["k1"]);
     expect(next.previewPending).toEqual(["k2"]);
+    expect(previewStatus(next)).toBe("AI reading…");
     const failed = applyPreview(next, "k2", null, "AI preview is off");
     expect(previewStatus(failed)).toBe("AI preview is off");
     expect(failed.buckets.products.length).toBeGreaterThanOrEqual(0);
@@ -137,5 +143,31 @@ describe("capture preview: the tab's record (rules at once, the AI when it lands
     expect(cap.buckets.order.email).toBe("orders@example.com");
     expect(checkoutEmailForPrefill(cap)).toBe("orders@example.com");
     expect(checkoutEmailForPrefill(applyPage(null, { ...page("gordon-cart"), previewKey: "k4" }, "gordonelectricsupply.com", "2026-11-04T10:00:00Z"))).toBeNull();
+  });
+});
+
+// v1.3.1 (Maria 2026-11-04): a Walmart confirmation — "$127.20 | Order #200015468871641" — filled neither Order # nor Total. The order # passes
+// Luhn, so the scrubber masked it as a card ("Order #•••• 1641") before either the rules or the AI saw it; it no longer does (a 2-prefix and
+// an order label are not a card).
+describe("capture preview: the Walmart confirmation's order # and total", () => {
+  const conf = () => ({ ...page("walmart-confirmation", "review"), url: "https://www.walmart.com/checkout/thankyou" });
+  it("the scrubbed page keeps the order # (it passes Luhn, but it is no card)", () => {
+    expect(conf().text).toContain("$127.20 | Order #200015468871641");
+    expect(conf().text).not.toContain("•••• 1641");
+  });
+  it("the rules read Order # 200015468871641 and Total $127.20; the AI's reading gives the same", () => {
+    const rules = extractBuckets(conf());
+    expect(rules.order.number).toBe("200015468871641");
+    expect(rules.totals.total).toBe("$127.20");
+    const b = overlayPreview(rules, extractionToBuckets(READ["walmart-confirmation"]));
+    expect(b.order.number).toBe("200015468871641");
+    expect(b.totals.total).toBe("$127.20");
+  });
+  it("the server's preview call sees the order # and returns it in the buckets", async () => {
+    const seen: string[] = [], { q } = fakeQuery();
+    const r = await capturePreview(q, PreviewRequestSchema.parse({ retailerHost: "www.walmart.com", page: { ...conf(), url: "https://www.walmart.com/walmart-confirmation" } }), 7, deps(seen));
+    expect(seen[0]).toContain("Order #200015468871641");
+    expect(r.buckets?.order.number).toBe("200015468871641");
+    expect(r.buckets?.totals.total).toBe("$127.20");
   });
 });

@@ -551,11 +551,19 @@
 
   // ── The per-tab capture record (chrome.storage.session, key capture:<tabId>) ──
   function captureKey(tabId) { return "capture:" + tabId; }
-  function newCapture(host) { return { host: host, pages: {}, others: [], count: 0, updatedAt: null, buckets: emptyBuckets(), previews: {}, previewPending: [], previewError: null }; }
+  function newCapture(host) { return { host: host, captures: [], count: 0, updatedAt: null, buckets: emptyBuckets(), previews: {}, previewPending: [], previewError: null }; }
   /** v1.3: does this page still need its AI preview? (false when the record already holds one for its key) */
   function needsPreview(cap, key) { return !!key && !(cap && cap.previews && cap.previews[key]); }
   /** The pages the prefill endpoint receives: one per checkout step (the latest capture of a step) plus up to six "other" pages — as before 1.2. */
-  function pagesOf(cap) { return [].concat(Object.keys((cap && cap.pages) || {}).map(function (k) { return cap.pages[k]; }), (cap && cap.others) || []); }
+  /** v1.3.1: every capture is its own page, oldest first (cap.captures). A record stored before 1.3.1 kept one page per step plus "other" pages (cap.pages / cap.others); it is read as those pages. */
+  function pagesOf(cap) {
+    if (cap && Array.isArray(cap.captures)) return cap.captures;
+    return [].concat(Object.keys((cap && cap.pages) || {}).map(function (k) { return cap.pages[k]; }), (cap && cap.others) || [])
+      .sort(function (p, q) { return String(p.capturedAt || "").localeCompare(String(q.capturedAt || "")); });
+  }
+  /** The most pages one tab keeps (the prefill accepts 12); the oldest goes first. */
+  var MAX_CAPTURES = 12;
+  function samePage(p, q) { return p.url === q.url && p.text === q.text && JSON.stringify(p.fields || []) === JSON.stringify(q.fields || []); }
   /**
    * v1.3: one page's buckets with its AI preview laid over the rules. The AI's products (when it read any), payment
    * (when it read any), totals (when it read a subtotal or total) and promos (whenever it answered — it tells a real
@@ -602,14 +610,14 @@
     var all = pagesOf(cap), read = all.filter(function (p) { return p.previewKey && cap.previews && cap.previews[p.previewKey]; }).length;
     return read ? (read === all.length ? "AI read" : "AI read " + read + " of " + all.length) : null;
   }
-  /** Add one captured page to a tab's capture. Pure: returns the new record. v1.2.7: the buckets are rebuilt from the pages (oldest first, newest wins) on every capture, so re-capturing a step replaces that step's values — nothing from a page since replaced survives. */
+  /** Add one captured page to a tab's capture. Pure: returns the new record. v1.3.1 (Maria 2026-11-04 — a Walmart checkout's sub-steps and its confirmation all guessed "review", so each capture replaced the last and the panel said "1 page captured"): every capture is kept as its own page, whatever its step or URL; only an identical recapture (same URL, text and fields) is not kept twice — it moves to the end. A navigation, reload, redirect or SPA route change drops nothing; Clear, a successful Open in AF and closing the tab are the only things that do (background.js). The buckets are rebuilt from the pages (oldest first, newest wins per field) on every capture. */
   function applyPage(cur, page, host, now) {
     var c = cur ? JSON.parse(JSON.stringify(cur)) : newCapture(host);
     var entry = Object.assign({}, page, { capturedAt: now });
-    if (page.step === "other" || !page.step) c.others = (c.others || []).filter(function (p) { return p.url !== page.url; }).concat([entry]).slice(-6);
-    else { c.pages = c.pages || {}; c.pages[page.step] = entry; }
+    c.captures = pagesOf(c).filter(function (p) { return !samePage(p, entry); }).concat([entry]).slice(-MAX_CAPTURES);
+    delete c.pages; delete c.others;
     c.host = host; c.updatedAt = now;
-    c.count = Object.keys(c.pages || {}).length + (c.others || []).length;
+    c.count = c.captures.length;
     // v1.3: previews of pages no longer in the record go; a page whose preview is already here needs no call.
     var keys = pagesOf(c).map(function (p) { return p.previewKey; }).filter(Boolean);
     c.previews = Object.keys(c.previews || {}).reduce(function (o, k) { if (keys.indexOf(k) >= 0) o[k] = c.previews[k]; return o; }, {});
@@ -638,6 +646,11 @@
     var s = cap && cap.buckets && cap.buckets.shipping;
     if (!s || !(s.street || (s.candidates || []).length)) return null;
     return { street: s.street || null, candidates: s.candidates || [] };
+  }
+  /** v1.3.1: the capture keys whose tab no longer exists (after a browser restart the tab ids are new) — the background removes them at startup. */
+  function orphanCaptureKeys(store, tabIds) {
+    var open = (tabIds || []).map(String);
+    return Object.keys(store || {}).filter(function (k) { return /^capture:/.test(k) && open.indexOf(k.slice(8)) < 0; });
   }
   /** The other tabs with a capture in progress, from the whole session store (key → record). */
   function othersCapturing(store, tabId) {
@@ -668,7 +681,7 @@
     BUCKETS: BUCKETS, LABELS: LABELS, emptyBuckets: emptyBuckets, extractBuckets: extractBuckets, mergeBuckets: mergeBuckets,
     extractProducts: extractProducts, extractShipping: extractShipping, extractPayment: extractPayment, extractTotals: extractTotals, extractPromos: extractPromos, dedupePromos: dedupePromos, extractOrder: extractOrder,
     filled: filled, missing: missing, streetIn: streetIn, normStreet: normStreet, addressFromFields: addressFromFields,
-    captureKey: captureKey, newCapture: newCapture, applyPage: applyPage, overlayPreview: overlayPreview, applyPreview: applyPreview, previewStatus: previewStatus, needsPreview: needsPreview, checkoutEmailForPrefill: checkoutEmailForPrefill, pagesForPrefill: pagesForPrefill, shipToForPrefill: shipToForPrefill, othersCapturing: othersCapturing, debugText: debugText,
+    captureKey: captureKey, newCapture: newCapture, applyPage: applyPage, overlayPreview: overlayPreview, applyPreview: applyPreview, previewStatus: previewStatus, needsPreview: needsPreview, checkoutEmailForPrefill: checkoutEmailForPrefill, pagesForPrefill: pagesForPrefill, shipToForPrefill: shipToForPrefill, othersCapturing: othersCapturing, orphanCaptureKeys: orphanCaptureKeys, debugText: debugText,
     shipToKind: shipToKind, describeShipping: describeShipping,
   };
   root.AfBuckets = api;
