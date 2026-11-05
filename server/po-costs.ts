@@ -28,7 +28,7 @@ export async function recomputePoCosts(query: QueryLike, poId: string, userId: n
   const nonCounting = promos.filter((p) => p.counts_toward_cogs === false && p.amount != null).reduce((t, p) => t + Number(p.amount), 0);
   const rows = (await query(`SELECT id, asin, qty, cost_per_unit, sourcing_cost, paid_cost, cogs_adjustment FROM po_asins WHERE po_id = $1 ORDER BY asin`, [poId])).rows;
   const manual = new Set<string>(
-    (await query(`SELECT DISTINCT entity_id FROM po_edit_log WHERE po_id = $1 AND entity = 'asin' AND field = 'cost_per_unit'`, [poId])).rows.map((r: any) => String(r.entity_id)),
+    (await query(`SELECT DISTINCT entity_id FROM po_edit_log WHERE po_id = $1 AND entity = 'asin' AND field = 'cost_per_unit' AND NOT derived`, [poId])).rows.map((r: any) => String(r.entity_id)),
   );
   const subtotalStored = Number(po.subtotal);
   // The double-discount rule (Maria 2026-11-01; 1¢, 2026-11-04): line totals that already carry the discount → the discount / promos count for nothing.
@@ -55,7 +55,7 @@ export async function recomputePoCosts(query: QueryLike, poId: string, userId: n
     if (changes.length > 0) {
       const cols = changes.map((c) => c.field);
       await write(`UPDATE po_asins SET ${cols.map((c, i) => `${c} = $${i + 2}`).join(", ")} WHERE id = $1`, [pa.id, ...cols.map((c) => next[c])]);
-      if (!opts.dryRun) await logEdits(query, poId, userId, "asin", String(pa.id), changes);
+      if (!opts.dryRun) await logEdits(query, poId, userId, "asin", String(pa.id), changes, { derived: true });  // derived: never read back as a typed cost
       for (const c of changes) plan.push({ entity: "asin", id: String(pa.id), ...c });
       changed += changes.length;
     }

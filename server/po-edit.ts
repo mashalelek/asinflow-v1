@@ -160,9 +160,12 @@ export function changedFields(current: Record<string, unknown>, edits: Record<st
 
 export type EditEntity = "po" | "line" | "asin" | "shipment";
 /** One po_edit_log row per changed field. */
-export async function logEdits(query: QueryLike, poId: string, userId: number | null, entity: EditEntity, entityId: string | null, changes: readonly FieldChange[]): Promise<void> {
+/** opts.derived: a value AF computed (recomputePoCosts), not one a user typed — migration 091. */
+export async function logEdits(query: QueryLike, poId: string, userId: number | null, entity: EditEntity, entityId: string | null, changes: readonly FieldChange[], opts: { derived?: boolean } = {}): Promise<void> {
   for (const c of changes) {
-    await query(`INSERT INTO po_edit_log (po_id, user_id, entity, entity_id, field, old_value, new_value) VALUES ($1, $2, $3, $4, $5, $6, $7)`,
+    if (opts.derived) await query(`INSERT INTO po_edit_log (po_id, user_id, entity, entity_id, field, old_value, new_value, derived) VALUES ($1, $2, $3, $4, $5, $6, $7, true)`,
+      [poId, userId, entity, entityId, c.field, c.old, c.new]);
+    else await query(`INSERT INTO po_edit_log (po_id, user_id, entity, entity_id, field, old_value, new_value) VALUES ($1, $2, $3, $4, $5, $6, $7)`,
       [poId, userId, entity, entityId, c.field, c.old, c.new]);
   }
 }
