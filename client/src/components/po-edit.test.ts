@@ -107,7 +107,7 @@ describe("PO detail — round 2", () => {
       { id: 2, method: "card", nickname: "Walmart card", last4: "0302", amount: "50.00", gift_card_discount_pct: null, needs_review: false, raw_text: null },
     ] as any, [{ id: 7, type: "sale", description: "Now $7.97, was $10.98", amount: null, percent: null, counts_toward_cogs: false } as any]);
     const labels = rows.map((r) => r[0]);
-    expect(labels).toEqual(["Payment 1", "Payment 2", "Weighted GC %", "Cashback Site", "Cashback %", "Promo"]);
+    expect(labels).toEqual(["Payment 1", "Payment 2", "Weighted payment discount %", "Cashback Site", "Cashback %", "Promo"]);
     expect(rows[2][1]).toBe("5%"); // 50 × 10 ÷ 100 — computed from the payments, not the stored 9
     const page = readFileSync(resolve(__dirname, "../pages/purchase-orders.tsx"), "utf8");
     expect(page).toMatch(/<DetailCard title="Payment" rows=\{paymentCardRows\(po, data\.payments \?\? \[\], data\.promos \?\? \[\]\)\} \/>/);

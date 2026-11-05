@@ -28,7 +28,7 @@ import { Label } from "@/components/ui/label";
 import { MoneyCalcInput, calcMoney } from "@/components/money-calc-input";
 import { useAuth } from "@/contexts/auth-context";
 import {
-  checkPoForm, emptyPoForm, emptyProduct, emptyPromo, emptyPayment, shipsToFromForm, yieldFromPacks, promoCountsByDefault, resolvePaymentNickname, ambiguousPaymentHint, PROMO_REFLECTED_NOTE,
+  checkPoForm, emptyPoForm, emptyProduct, emptyPromo, emptyPayment, shipsToFromForm, yieldFromPacks, promoCountsByDefault, resolvePaymentNickname, ambiguousPaymentHint, defaultRewardPct, WEIGHTED_PAYMENT_LABEL, PROMO_REFLECTED_NOTE,
   SOLD_AS_OPTIONS, PROMO_TYPES, PAYMENT_METHODS, CASHBACK_STATUSES,
   type PoFormState, type PoFormProduct, type PoFormPromo, type PoFormPayment, type PoFormPrefill, type PrefillSource,
 } from "@shared/po-form";
@@ -211,7 +211,7 @@ export function NewPoForm({ open, onOpenChange, onCreated, prefill, initialSuppl
   const [touched, setTouched] = useState(false);
   const [shipsToEdited, setShipsToEdited] = useState(false);
   /** The form's lists (GET /api/pos/purchasers, round 2 2026-11-01): purchasers, every email used + the defaults, cashback sites in order, canonical payment names + aliases, the Velocity prep rate. */
-  const [people, setPeople] = useState<{ users: Array<{ id: number; display_name: string }>; emails: string[]; cashback_sites: string[]; payment_methods: string[]; payment_aliases: Record<string, string>; payment_last4: Record<string, string>; velocity_prep: number | null }>({ users: [], emails: [], cashback_sites: [], payment_methods: [], payment_aliases: {}, payment_last4: {}, velocity_prep: null });
+  const [people, setPeople] = useState<{ users: Array<{ id: number; display_name: string }>; emails: string[]; cashback_sites: string[]; payment_methods: string[]; payment_aliases: Record<string, string>; payment_last4: Record<string, string>; payment_reward_pct: Record<string, number>; velocity_prep: number | null }>({ users: [], emails: [], cashback_sites: [], payment_methods: [], payment_aliases: {}, payment_last4: {}, payment_reward_pct: {}, velocity_prep: null });
   const [emailOther, setEmailOther] = useState(false);
   const [packAsk, setPackAsk] = useState<{ asin: string; from: string; to: string } | null>(null);
   const [rawOpen, setRawOpen] = useState(false);
@@ -229,7 +229,7 @@ export function NewPoForm({ open, onOpenChange, onCreated, prefill, initialSuppl
     emailDefaultRef.current = seeded.prefill?.sources?.email_used === "af" ? (seeded.email_used ?? "") : "";
     setForm(seeded); setServerErr(null); setTouched(false); setRawOpen(false);
     setEmailOther(false);
-    fetch("/api/pos/purchasers").then((r) => r.json()).then((d) => setPeople({ users: d.users ?? [], emails: d.emails ?? [], cashback_sites: d.cashback_sites ?? [], payment_methods: d.payment_methods ?? [], payment_aliases: d.payment_aliases ?? {}, payment_last4: d.payment_last4 ?? {}, velocity_prep: typeof d.velocity_prep === "number" ? d.velocity_prep : null })).catch(() => {});
+    fetch("/api/pos/purchasers").then((r) => r.json()).then((d) => setPeople({ users: d.users ?? [], emails: d.emails ?? [], cashback_sites: d.cashback_sites ?? [], payment_methods: d.payment_methods ?? [], payment_aliases: d.payment_aliases ?? {}, payment_last4: d.payment_last4 ?? {}, payment_reward_pct: d.payment_reward_pct ?? {}, velocity_prep: typeof d.velocity_prep === "number" ? d.velocity_prep : null })).catch(() => {});
   }, [open, prefill, user, initialSupplier, edit]);
   // Email used default per supplier (Maria 2026-11-01; GET /api/pos/email-default): fills an empty field, or one still holding
   // the previous supplier's default, with a stone marker; a typed or model-read email is left alone.
@@ -352,12 +352,14 @@ export function NewPoForm({ open, onOpenChange, onCreated, prefill, initialSuppl
     const r = resolvePaymentNickname(p.nickname, p.last4, { methods: people.payment_methods, aliases: people.payment_aliases, last4: people.payment_last4 });
     setPayHint((h) => { const n = { ...h }; if (r.ambiguous.length) n[i] = ambiguousPaymentHint(p.last4, r.ambiguous); else delete n[i]; return n; });
     if (r.ambiguous.length) { if (p.nickname !== "" && !r.ambiguous.includes(p.nickname)) setPay(i, { nickname: "" }); return; }
-    if (r.nickname !== p.nickname) setPay(i, { nickname: r.nickname });
+    // A card's reward % (2026-11-04): its canonical method's default when the row has none (editable; a typed 0 stays).
+    const reward = p.method === "card" && String(p.reward_pct ?? "").trim() === "" ? defaultRewardPct(r.nickname, people.payment_reward_pct) : null;
+    if (r.nickname !== p.nickname || reward != null) setPay(i, { nickname: r.nickname, ...(reward != null ? { reward_pct: reward.toFixed(2) } : {}) });
   };
 
   const save = async () => {
     setTouched(true); setServerErr(null);
-    // Weighted GC % is read-only on the form: the computed value is what gets stored (the server recomputes it too).
+    // The weighted payment discount % is read-only on the form: the computed value is what gets stored (the server recomputes it too).
     const settled = settleMoney({ ...form, weighted_gc_discount_pct: check.weightedGcPct != null ? check.weightedGcPct.toFixed(2) : "" });
     if (!settled.ok) { setServerErr(`A money field can't be calculated: ${settled.error}`); return; }
     setForm(settled.form);
@@ -482,16 +484,16 @@ export function NewPoForm({ open, onOpenChange, onCreated, prefill, initialSuppl
         </div>
       </div>
 
-      {/* Row B — money. Weighted GC % is computed from the Payments block, read-only. */}
+      {/* Row B — money. The weighted payment discount % is computed from the Payments block, read-only. */}
       <div className="mt-1.5 flex flex-wrap items-start gap-x-3 gap-y-1.5" data-testid="new-po-money-fields">
         {field("subtotal", "Subtotal", { px: 120, ph: check.computedSubtotal.toFixed(2), money: true })}
         {field("discount", "Discount", { px: 120, ph: "0.00", money: true })}
         {field("tax", "Tax", { px: 120, ph: "0.00", money: true })}
         {field("sh_donations", "Shipping", { px: 120, ph: "0.00", money: true })}
         {field("order_total", "Order total", { px: 120, ph: check.effectiveOrderTotal.toFixed(2), money: true })}
-        <div className="shrink-0 space-y-0.5" style={{ width: 120 }}>
-          <Label className="text-[11px] text-muted-foreground">Weighted GC %</Label>
-          <div className="flex h-8 items-center rounded border border-input bg-muted/40 px-2 font-mono text-sm" title="Σ(gift-card payment amount × its GC %) ÷ order total — from the Payments block; stored on save" data-testid="new-po-weighted-gc">{check.weightedGcPct != null ? `${check.weightedGcPct}%` : <span className="text-muted-foreground/60">—</span>}</div>
+        <div className="shrink-0 space-y-0.5" style={{ width: 190 }}>
+          <Label className="text-[11px] text-muted-foreground">{WEIGHTED_PAYMENT_LABEL}</Label>
+          <div className="flex h-8 items-center rounded border border-input bg-muted/40 px-2 font-mono text-sm" title="Σ(gift-card amount × its GC % + card amount × its reward %) ÷ order total — from the Payments block; stored on save. Cashback never counts." data-testid="new-po-weighted-gc">{check.weightedGcPct != null ? `${check.weightedGcPct}%` : <span className="text-muted-foreground/60">—</span>}</div>
         </div>
         <div className="shrink-0 space-y-0.5" style={{ width: 180 }}>
           <Label className="text-[11px] text-muted-foreground" htmlFor="new-po-cashback_site">Cashback site</Label>
@@ -543,7 +545,8 @@ export function NewPoForm({ open, onOpenChange, onCreated, prefill, initialSuppl
               <Input value={p.last4} onChange={(e) => setPay(i, { last4: e.target.value.replace(/\D/g, "").slice(0, 4) })} onBlur={() => resolvePay(i)} placeholder="last 4" inputMode="numeric" className="h-8 w-16 font-mono text-xs" data-testid={`input-new-po-payment-last4-${i}`} />
               {(payHint[i] ?? hint(`payments.${i}.nickname`)) && <span className="text-[11px] text-amber-700 dark:text-amber-400" data-testid={`new-po-payment-ambiguous-${i}`}>{payHint[i] ?? hint(`payments.${i}.nickname`)}</span>}
               <MoneyCalcInput value={p.amount} onChange={(v) => setPay(i, { amount: v })} placeholder="$" className="h-8 w-20 text-right text-xs" data-testid={`input-new-po-payment-amount-${i}`} />
-              {p.method === "gift_card" && <label className="flex items-center gap-1 text-xs" title="The gift card's discount % — feeds the weighted GC %">GC % <Input value={p.gift_card_discount_pct} onChange={(e) => setPay(i, { gift_card_discount_pct: e.target.value })} placeholder="GC %" inputMode="decimal" className="h-8 w-14 text-right text-xs" data-testid={`input-new-po-payment-gc-${i}`} /></label>}
+              {p.method === "card" && <label className="flex items-center gap-1 text-xs" title="The card's reward % — its method's default (Walmart card 5 %), editable; feeds the weighted payment discount %">Reward % <Input value={p.reward_pct ?? ""} onChange={(e) => setPay(i, { reward_pct: e.target.value })} placeholder="0" inputMode="decimal" className="h-8 w-14 text-right text-xs" data-testid={`input-new-po-payment-reward-${i}`} /></label>}
+              {p.method === "gift_card" && <label className="flex items-center gap-1 text-xs" title="The gift card's discount % — feeds the weighted payment discount %">GC % <Input value={p.gift_card_discount_pct} onChange={(e) => setPay(i, { gift_card_discount_pct: e.target.value })} placeholder="GC %" inputMode="decimal" className="h-8 w-14 text-right text-xs" data-testid={`input-new-po-payment-gc-${i}`} /></label>}
               <button type="button" onClick={() => setForm((f) => ({ ...f, payments: (f.payments ?? []).filter((_, j) => j !== i) }))} className="text-muted-foreground/60 hover:text-destructive" data-testid={`button-new-po-remove-payment-${i}`}><Trash2 className="h-3.5 w-3.5" /></button>
             </div>
           ))}

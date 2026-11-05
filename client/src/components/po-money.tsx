@@ -16,7 +16,7 @@ import type { PoAsinRowData, PoAsinLine } from "@/components/po-asin-rows";
 import { PAYMENT_METHODS, PROMO_TYPES, CASHBACK_STATUSES } from "@shared/po-form";
 import { MarkReceivedDialog, type DueRefundRow } from "@/components/refund-due-dialog";
 
-export interface PoPayment { id: number; method: string; nickname: string | null; last4: string | null; amount: string | null; gift_card_discount_pct: string | null; needs_review: boolean; raw_text: string | null }
+export interface PoPayment { id: number; method: string; nickname: string | null; last4: string | null; amount: string | null; gift_card_discount_pct: string | null; reward_pct?: string | null; needs_review: boolean; raw_text: string | null }
 export interface PoPromo { id: number; type: string | null; description: string | null; amount: string | null; percent: string | null; counts_toward_cogs: boolean; raw_text: string | null; confidence: string | null; source: string }
 /** status (migration 082): due = the supplier owes it; received = it arrived (Dashboard patch C1). */
 export interface PoRefund { id: number; po_line_item_id: string | null; product_name: string | null; qty: number | string | null; amount: string | null; refunded_at: string | null; method: string | null; nickname: string | null; last4: string | null; note: string | null; needs_split: boolean; source: string; status: "due" | "received" }
@@ -49,7 +49,7 @@ export function PoMoneyTab({ po, asins, payments, promos, refunds, onChanged }: 
           <span className="text-xs text-muted-foreground">{payments.length ? `${money(paid)} of ${money(total)}` : po.payment_method ? `sheet: ${po.payment_method}` : ""}{payments.length && Math.abs(paid - total) > 0.005 ? <span className="ml-2 text-amber-700 dark:text-amber-400">differs from the order total</span> : null}</span>
         </div>
         <table className="w-full border-collapse text-sm rounded-md" style={{ border: "0.5px solid hsl(var(--border))" }}>
-          <thead><tr className="table-header-stone"><th className={th}>Method</th><th className={th}>Nickname</th><th className={th}>Last 4</th><th className={`${th} text-right`}>Amount</th><th className={`${th} text-right`}>GC %</th><th className={th}></th></tr></thead>
+          <thead><tr className="table-header-stone"><th className={th}>Method</th><th className={th}>Nickname</th><th className={th}>Last 4</th><th className={`${th} text-right`}>Amount</th><th className={`${th} text-right`} title="A gift card's discount % or a card's reward % — weighted by amount into the weighted payment discount %">GC / reward %</th><th className={th}></th></tr></thead>
           <tbody>
             {payments.length === 0 && <tr><td colSpan={6} className="px-3 py-2 text-xs text-muted-foreground">No payments recorded.</td></tr>}
             {payments.map((p) => (
@@ -58,7 +58,7 @@ export function PoMoneyTab({ po, asins, payments, promos, refunds, onChanged }: 
                 <td className="px-3 py-1.5"><InlineEdit value={p.nickname} onSave={patch(`/api/pos/payments/${p.id}`, "nickname")} width="w-32" testId={`payment-nickname-${p.id}`}>{p.nickname ?? <Muted v="—" />}</InlineEdit></td>
                 <td className="px-3 py-1.5 font-mono text-xs"><InlineEdit value={p.last4} onSave={patch(`/api/pos/payments/${p.id}`, "last4")} width="w-16" testId={`payment-last4-${p.id}`}>{p.last4 ?? <Muted v="—" />}</InlineEdit></td>
                 <td className="px-3 py-1.5 text-right font-mono"><InlineEdit money value={p.amount} onSave={patch(`/api/pos/payments/${p.id}`, "amount")} align="right" width="w-24" testId={`payment-amount-${p.id}`}>{money(p.amount)}</InlineEdit></td>
-                <td className="px-3 py-1.5 text-right">{p.method === "gift_card" ? <InlineEdit value={p.gift_card_discount_pct} onSave={patch(`/api/pos/payments/${p.id}`, "gift_card_discount_pct")} align="right" width="w-16" testId={`payment-gc-${p.id}`}>{p.gift_card_discount_pct != null ? `${Number(p.gift_card_discount_pct)}%` : <Muted v="—" />}</InlineEdit> : <Muted v="—" />}</td>
+                <td className="px-3 py-1.5 text-right">{p.method === "gift_card" ? <InlineEdit value={p.gift_card_discount_pct} onSave={patch(`/api/pos/payments/${p.id}`, "gift_card_discount_pct")} align="right" width="w-16" testId={`payment-gc-${p.id}`}>{p.gift_card_discount_pct != null ? `${Number(p.gift_card_discount_pct)}%` : <Muted v="—" />}</InlineEdit> : p.method === "card" ? <InlineEdit value={p.reward_pct ?? null} onSave={patch(`/api/pos/payments/${p.id}`, "reward_pct")} align="right" width="w-16" testId={`payment-reward-${p.id}`}>{p.reward_pct != null ? `${Number(p.reward_pct)}%` : <Muted v="—" />}</InlineEdit> : <Muted v="—" />}</td>
                 <td className="px-3 py-1.5 text-right"><button onClick={() => { if (window.confirm("Remove this payment?")) void call(`/api/pos/payments/${p.id}`, "DELETE"); }} className="text-muted-foreground/60 hover:text-destructive" data-testid={`button-remove-payment-${p.id}`}><Trash2 className="h-3.5 w-3.5" /></button></td>
               </tr>
             ))}

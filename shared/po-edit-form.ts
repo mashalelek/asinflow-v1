@@ -79,7 +79,7 @@ export function poToForm(d: StoredPo): PoFormState {
     subscription: { present: po.subscription === true, frequency_weeks: "" },
     products, cost_overrides: {}, cogs_adjustments: {}, pack_updates: {},
     promos: d.promos.map((p): PoFormPromo => ({ id: Number(p.id), type: (["sale", "coupon", "rewards"].includes(String(p.type)) ? p.type : "") as PoFormPromo["type"], description: str(p.description), amount: moneyText(p.amount), percent: numText(p.percent), counts_toward_cogs: p.counts_toward_cogs !== false })),
-    payments: d.payments.map((p): PoFormPayment => ({ id: Number(p.id), method: str(p.method) as PoFormPayment["method"], nickname: str(p.nickname), last4: str(p.last4), amount: moneyText(p.amount), gift_card_discount_pct: numText(p.gift_card_discount_pct) })),
+    payments: d.payments.map((p): PoFormPayment => ({ id: Number(p.id), method: str(p.method) as PoFormPayment["method"], nickname: str(p.nickname), last4: str(p.last4), amount: moneyText(p.amount), gift_card_discount_pct: numText(p.gift_card_discount_pct), reward_pct: numText(p.reward_pct) })),
   };
   for (const a of d.asins) {
     const asin = str(a.asin).toUpperCase();
@@ -227,7 +227,7 @@ export function planPoEdit(stored: PoFormState, next: PoFormState, opts: { impor
     for (const id of Array.from(byId.keys())) if (!kept.has(id)) removes.push(id);
   };
   moneyRows(stored.promos ?? [], next.promos ?? [], ["type", "description", "amount", "percent", "counts_toward_cogs"], plan.promoAdds, plan.promoEdits, plan.promoRemoves);
-  moneyRows(stored.payments ?? [], next.payments ?? [], ["method", "nickname", "last4", "amount", "gift_card_discount_pct"], plan.paymentAdds, plan.paymentEdits, plan.paymentRemoves);
+  moneyRows(stored.payments ?? [], next.payments ?? [], ["method", "nickname", "last4", "amount", "gift_card_discount_pct", "reward_pct"], plan.paymentAdds, plan.paymentEdits, plan.paymentRemoves);
 
   plan.empty = Object.keys(plan.header).length + plan.lineEdits.length + plan.lineAdds.length + plan.lineRemoves.length + plan.asinEdits.length
     + plan.promoAdds.length + plan.promoEdits.length + plan.promoRemoves.length + plan.paymentAdds.length + plan.paymentEdits.length + plan.paymentRemoves.length + plan.packUpdates.length === 0;

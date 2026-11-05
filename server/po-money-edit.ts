@@ -9,7 +9,7 @@
 import type { QueryLike } from "./scheduler/types";
 import { EditError, logEdits, parseEdits, money, pctOrNull, textOrNull, isoDate, decQty, type Parsed } from "./po-edit";
 import { recomputePoCosts } from "./po-costs";
-import { PAYMENT_METHODS, PROMO_TYPES, promoCountsByDefault } from "@shared/po-form";
+import { PAYMENT_METHODS, PROMO_TYPES, promoCountsByDefault, weightedPaymentPct, defaultRewardPct, canonicalPaymentName } from "@shared/po-form";
 import { REFUND_STATUSES } from "@shared/po-refund";
 
 const oneOf = (list: readonly string[], nullable = false) => (v: unknown): Parsed => (v == null || v === "" ? (nullable ? { ok: true, value: null } : { ok: false, error: "is required" }) : (list as readonly string[]).includes(String(v)) ? { ok: true, value: String(v) } : { ok: false, error: `must be one of ${list.join(", ")}` });
@@ -17,7 +17,28 @@ const last4 = (v: unknown): Parsed => (v == null || v === "" ? { ok: true, value
 const bool = (v: unknown): Parsed => (typeof v === "boolean" ? { ok: true, value: v } : v === "true" || v === "false" ? { ok: true, value: v === "true" } : { ok: false, error: "must be true or false" });
 const dateOrNull = (v: unknown): Parsed => (v == null || v === "" ? { ok: true, value: null } : isoDate(v));
 
-export const PAYMENT_FIELDS = { method: oneOf(PAYMENT_METHODS), nickname: textOrNull, last4, amount: money({ nullable: true }), gift_card_discount_pct: pctOrNull, needs_review: bool } as const;
+export const PAYMENT_FIELDS = { method: oneOf(PAYMENT_METHODS), nickname: textOrNull, last4, amount: money({ nullable: true }), gift_card_discount_pct: pctOrNull, reward_pct: pctOrNull, needs_review: bool } as const;
+/** Payment fields that move the weighted payment discount % (2026-11-04). */
+const WEIGHT_FIELDS = ["method", "amount", "gift_card_discount_pct", "reward_pct"];
+
+/**
+ * The weighted payment discount % follows the PO's payments (Maria 2026-11-04): on a form-saved PO
+ * (cost_formula_version set) a payment change re-derives purchase_orders.weighted_gc_discount_pct from
+ * po_payments (weightedPaymentPct over the order total) with a History row, then recomputes the costs.
+ * A sheet-imported PO is never touched (no stored COGS value is recomputed).
+ */
+export async function syncWeightedPaymentPct(query: QueryLike, poId: string, userId: number | null, opts: { dryRun?: boolean } = {}): Promise<{ old: number | null; new: number | null; recomputed: { changed: number; skipped: string | null } | null }> {
+  const po = (await query(`SELECT order_total, weighted_gc_discount_pct, cost_formula_version FROM purchase_orders WHERE id = $1`, [poId])).rows[0];
+  if (!po || po.cost_formula_version == null) return { old: po?.weighted_gc_discount_pct == null ? null : Number(po.weighted_gc_discount_pct), new: null, recomputed: null };
+  const pays = (await query(`SELECT method, amount, gift_card_discount_pct, reward_pct FROM po_payments WHERE po_id = $1 ORDER BY position, id`, [poId])).rows;
+  const next = weightedPaymentPct(pays, Number(po.order_total) || 0);
+  const old = po.weighted_gc_discount_pct == null ? null : Number(po.weighted_gc_discount_pct);
+  if (opts.dryRun || (next ?? null) === (old ?? null)) return { old, new: next, recomputed: null };
+  await query(`UPDATE purchase_orders SET weighted_gc_discount_pct = $2, updated_at = NOW() WHERE id = $1`, [poId, next == null ? null : next.toFixed(2)]);
+  await logEdits(query, poId, userId, "po", poId, [{ field: "weighted_gc_discount_pct", old: old == null ? null : old.toFixed(2), new: next == null ? null : next.toFixed(2) }]);
+  const r = await recomputePoCosts(query, poId, userId);
+  return { old, new: next, recomputed: { changed: r.changed, skipped: r.skipped } };
+}
 export const PROMO_FIELDS = { type: oneOf(PROMO_TYPES, true), description: textOrNull, amount: money({ nullable: true }), percent: pctOrNull, counts_toward_cogs: bool } as const;
 // status (migration 082, Dashboard patch C1): due = the supplier owes it (refunded_at / method NULL until received); received = the money arrived. Default received (every pre-patch row is).
 export const REFUND_FIELDS = { po_line_item_id: textOrNull, qty: decQty({ nullable: true }), amount: money({ nullable: true }), refunded_at: dateOrNull, method: oneOf(PAYMENT_METHODS, true), nickname: textOrNull, last4, note: textOrNull, needs_split: bool, status: oneOf(REFUND_STATUSES) } as const;
@@ -37,7 +58,10 @@ const summary = (table: Table, r: Record<string, any>): string =>
 
 export interface MoneyEditResult { poId: string; id: number; recomputed?: { changed: number; skipped: string | null } }
 
-export async function addMoneyRow(query: QueryLike, table: Table, poId: string, body: unknown, userId: number | null): Promise<MoneyEditResult> {
+/** opts.weightSync false: the caller (the Edit PO page) sets the weighted % from its own form check and recomputes once. */
+export interface MoneyEditOpts { weightSync?: boolean }
+
+export async function addMoneyRow(query: QueryLike, table: Table, poId: string, body: unknown, userId: number | null, opts: MoneyEditOpts = {}): Promise<MoneyEditResult> {
   const spec = table === "po_payments" ? PAYMENT_FIELDS : table === "po_promos" ? PROMO_FIELDS : REFUND_FIELDS;
   const p = parseEdits(spec as any, { ...(table === "po_promos" ? { type: (body as any)?.type ?? null } : {}), ...(body as object) });
   if (!p.ok) throw new EditError(400, p.error);
@@ -46,6 +70,13 @@ export async function addMoneyRow(query: QueryLike, table: Table, poId: string, 
   const e = { ...p.edits } as Record<string, any>;
   if (table === "po_promos" && e.counts_toward_cogs == null) e.counts_toward_cogs = e.type ? promoCountsByDefault(String(e.type)) : true;
   if (table === "po_line_refunds") { if (e.status == null) e.status = "received"; await checkRefundLine(query, poId, e); }
+  // A card payment with no reward % gets its canonical method's default (settings.po_payment_method_reward_pct, 2026-11-04).
+  if (table === "po_payments" && e.method === "card" && e.reward_pct == null && !("reward_pct" in (body as object ?? {}))) {
+    const rows = (await query(`SELECT key, value FROM settings WHERE key = ANY($1::text[])`, [["po_payment_method_aliases", "po_payment_method_reward_pct"]])).rows;
+    const v = (k: string) => rows.find((r: any) => r.key === k)?.value ?? null;
+    const d = defaultRewardPct(canonicalPaymentName(String(e.nickname ?? ""), v("po_payment_method_aliases")), v("po_payment_method_reward_pct"));
+    if (d != null) e.reward_pct = d.toFixed(2);
+  }
   const cols = Object.keys(e);
   const pos = table === "po_line_refunds" ? "" : `, position`;
   const posVal = table === "po_line_refunds" ? "" : `, (SELECT COALESCE(MAX(position), -1) + 1 FROM ${table} WHERE po_id = $1)`;
@@ -60,10 +91,11 @@ export async function addMoneyRow(query: QueryLike, table: Table, poId: string, 
   await logEdits(query, poId, userId, "po", poId, [{ field: `${label[table]} added`, old: null, new: summary(table, row) }]);
   const out: MoneyEditResult = { poId, id: Number(row.id) };
   if (table === "po_promos") { const r = await recomputePoCosts(query, poId, userId); out.recomputed = { changed: r.changed, skipped: r.skipped }; }
+  if (table === "po_payments" && opts.weightSync !== false) { const w = await syncWeightedPaymentPct(query, poId, userId); if (w.recomputed) out.recomputed = w.recomputed; }
   return out;
 }
 
-export async function editMoneyRow(query: QueryLike, table: Table, id: number, body: unknown, userId: number | null): Promise<MoneyEditResult> {
+export async function editMoneyRow(query: QueryLike, table: Table, id: number, body: unknown, userId: number | null, opts: MoneyEditOpts = {}): Promise<MoneyEditResult> {
   const spec = table === "po_payments" ? PAYMENT_FIELDS : table === "po_promos" ? PROMO_FIELDS : REFUND_FIELDS;
   const p = parseEdits(spec as any, body);
   if (!p.ok) throw new EditError(400, p.error);
@@ -76,15 +108,17 @@ export async function editMoneyRow(query: QueryLike, table: Table, id: number, b
   await query(`UPDATE ${table} SET ${changes.map(([k], i) => `${k} = $${i + 2}`).join(", ")} WHERE id = $1`, [id, ...changes.map(([, v]) => v)]);
   await logEdits(query, poId, userId, "po", poId, changes.map(([k, v]) => ({ field: `${label[table]} ${k}`, old: canon(row[k]), new: canon(v) })));
   if (table === "po_promos" && changes.some(([k]) => ["counts_toward_cogs", "amount", "type"].includes(k))) { const r = await recomputePoCosts(query, poId, userId); out.recomputed = { changed: r.changed, skipped: r.skipped }; }
+  if (table === "po_payments" && opts.weightSync !== false && changes.some(([k]) => WEIGHT_FIELDS.includes(k))) { const w = await syncWeightedPaymentPct(query, poId, userId); if (w.recomputed) out.recomputed = w.recomputed; }
   return out;
 }
 
-export async function removeMoneyRow(query: QueryLike, table: Table, id: number, userId: number | null): Promise<MoneyEditResult> {
+export async function removeMoneyRow(query: QueryLike, table: Table, id: number, userId: number | null, opts: MoneyEditOpts = {}): Promise<MoneyEditResult> {
   const { row, poId } = await rowAndPo(query, table, id);
   await query(`DELETE FROM ${table} WHERE id = $1`, [id]);
   await logEdits(query, poId, userId, "po", poId, [{ field: `${label[table]} removed`, old: summary(table, row), new: null }]);
   const out: MoneyEditResult = { poId, id };
   if (table === "po_promos") { const r = await recomputePoCosts(query, poId, userId); out.recomputed = { changed: r.changed, skipped: r.skipped }; }
+  if (table === "po_payments" && opts.weightSync !== false) { const w = await syncWeightedPaymentPct(query, poId, userId); if (w.recomputed) out.recomputed = w.recomputed; }
   return out;
 }
 

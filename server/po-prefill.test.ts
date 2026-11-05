@@ -69,7 +69,7 @@ describe("enrichment (no AI)", () => {
     expect(out.form).toMatchObject({ supplier: "michaels.com", order_id: "8100107959187461", order_date: "2026-10-31", subtotal: "35.94", tax: "2.52", sh_donations: "0.00", order_total: "40.00", ships_to: "velocity", email_used: "orders@coastalqualitygoods.com" });
     expect(out.form.products?.[0]).toMatchObject({ product_name: expect.stringContaining("Liquitex"), price: "5.99", qty_ordered: "6", retailer_units_per_pack: "1", asin: "B08BR4NC22", sold_as: "multi-pack", units_per_pack: "2", asin_qty_per_product: "0.5", prep_cost: "1.00" });
     expect(out.form.promos).toEqual([{ type: "sale", description: "30% on regular priced items", amount: "", percent: "30.00", counts_toward_cogs: true }]);
-    expect(out.form.payments).toEqual([{ method: "card", nickname: "Amex", last4: "1001", amount: "38.46", gift_card_discount_pct: "" }]);
+    expect(out.form.payments).toEqual([{ method: "card", nickname: "Amex", last4: "1001", amount: "38.46", gift_card_discount_pct: "", reward_pct: "" }]); // Amex earns no reward (migration 090)
     expect(out.prefill.sources).toMatchObject({ supplier: "af", order_id: "model", "products.0.price": "model", "products.0.asin": "af", "asin.B08BR4NC22": "af", "promos.0": "model", "payments.0": "model", ships_to: "af" });
     expect(out.prefill.warnings).toEqual(["Payments add up to 38.46, the order total is 40.00"]);
     expect(out.prefill).toMatchObject({ supplier: "michaels.com", pages: 2, captured_at: "2026-10-31T15:00:00Z", raw_text: null });

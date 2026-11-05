@@ -12,7 +12,7 @@
 // to po_promos. A hand-typed cost / unit is logged as such, so a later
 // recompute leaves it alone. One po_edit_log row records the creation.
 import type { QueryLike } from "./scheduler/types";
-import { checkPoForm, shipsToFromForm, canonicalPaymentName, COST_FORMULA_VERSION_SAVED, type PoFormState } from "@shared/po-form";
+import { checkPoForm, shipsToFromForm, canonicalPaymentName, defaultRewardPct, COST_FORMULA_VERSION_SAVED, type PoFormState } from "@shared/po-form";
 import { afEntrySeq } from "./po-entry-seq";
 import { logEdits, EditError } from "./po-edit";
 import { applyAsinPackUpdate, parsePack } from "./asin-pack";
@@ -23,7 +23,22 @@ const moneyOr0 = (s: unknown) => { const v = typeof s === "string" ? s.replace(/
 const moneyOrNull = (s: unknown) => { const v = typeof s === "string" ? s.replace(/[$,\s]/g, "") : ""; return v === "" ? null : v; };
 const pct = (s: unknown) => { const v = typeof s === "string" ? s.replace(/[%\s]/g, "") : ""; return v === "" ? null : v; };
 
-export async function createPoFromForm(query: QueryLike, form: PoFormState, userId: number | null, now: Date = new Date()): Promise<{ poId: string; asins: number; lines: number }> {
+/** A card payment with no reward % typed gets its canonical method's default (settings.po_payment_method_reward_pct, 2026-11-04) — before the check, so the weighted % carries it. */
+export async function withRewardDefaults(query: QueryLike, form: PoFormState): Promise<PoFormState> {
+  const payments = Array.isArray(form.payments) ? form.payments : [];
+  if (!payments.some((p) => p.method === "card" && String(p.reward_pct ?? "").trim() === "")) return form;
+  const rows = (await query(`SELECT key, value FROM settings WHERE key = ANY($1::text[])`, [["po_payment_method_aliases", "po_payment_method_reward_pct"]])).rows;
+  const v = (k: string) => rows.find((r: any) => r.key === k)?.value ?? null;
+  const aliases = v("po_payment_method_aliases") && typeof v("po_payment_method_aliases") === "object" ? v("po_payment_method_aliases") : {};
+  return { ...form, payments: payments.map((p) => {
+    if (p.method !== "card" || String(p.reward_pct ?? "").trim() !== "") return p;
+    const d = defaultRewardPct(canonicalPaymentName(p.nickname, aliases), v("po_payment_method_reward_pct"));
+    return d != null ? { ...p, reward_pct: d.toFixed(2) } : p;
+  }) };
+}
+
+export async function createPoFromForm(query: QueryLike, form0: PoFormState, userId: number | null, now: Date = new Date()): Promise<{ poId: string; asins: number; lines: number }> {
+  const form = await withRewardDefaults(query, form0);
   const check = checkPoForm(form);
   if (!check.ok) {
     const prod = Object.entries(check.productErrors).map(([i, m]) => `product ${Number(i) + 1}: ${m.join("; ")}`);
@@ -88,9 +103,11 @@ export async function createPoFromForm(query: QueryLike, form: PoFormState, user
   const aliases = aliasRow && typeof aliasRow === "object" ? (aliasRow as Record<string, string>) : {};
   for (let i = 0; i < payments.length; i++) {
     const p = payments[i];
+    const nick = canonicalPaymentName(p.nickname, aliases);
+    const reward = p.method === "card" ? pct(p.reward_pct ?? "") : null; // the default is already in (withRewardDefaults)
     await query(
-      `INSERT INTO po_payments (po_id, position, method, nickname, last4, amount, gift_card_discount_pct) VALUES ($1, $2, $3, $4, $5, $6, $7)`,
-      [poId, i, p.method, txt(canonicalPaymentName(p.nickname, aliases)), txt(p.last4), moneyOrNull(p.amount), pct(p.gift_card_discount_pct)],
+      `INSERT INTO po_payments (po_id, position, method, nickname, last4, amount, gift_card_discount_pct, reward_pct) VALUES ($1, $2, $3, $4, $5, $6, $7, $8)`,
+      [poId, i, p.method, txt(nick), txt(p.last4), moneyOrNull(p.amount), pct(p.gift_card_discount_pct), reward],
     );
   }
   await logEdits(query, poId, userId, "po", poId, [{ field: "PO created", old: null, new: `${supplier} ${orderId} — ${check.asins.length} ASIN(s), ${lines} product(s)` }]);

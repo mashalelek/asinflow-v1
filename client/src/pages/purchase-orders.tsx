@@ -35,6 +35,7 @@ import { InlineNoteCell, InlineNoteBox } from "@/components/inline-note";
 import { PoTrackingTab, SyncTrackingButton, UnmatchedTrackingChip } from "@/components/po-tracking";
 import { PoMoneyTab, type PoPayment, type PoPromo, type PoRefund } from "@/components/po-money";
 import { Pencil } from "lucide-react";
+import { weightedPaymentPct, WEIGHTED_PAYMENT_LABEL } from "@shared/po-form";
 import { useColumnWidths, ResizeHandle } from "@/hooks/use-column-widths";
 
 interface PoRow {
@@ -844,10 +845,10 @@ export function paymentCardRows(po: Record<string, any>, payments: PoPayment[], 
   if (payments.length === 0) rows.push(["Payment", <span className="text-muted-foreground/50">—</span>]);
   payments.forEach((p, i) => rows.push([`Payment${payments.length > 1 ? ` ${i + 1}` : ""}`, <span data-testid={`po-payment-card-${p.id}`}>{[method(p.method), p.nickname, p.last4 ? `•••• ${p.last4}` : null].filter(Boolean).join(" · ")}{p.amount != null ? <> · <Money v={p.amount} /></> : null}{p.method === "gift_card" && p.gift_card_discount_pct != null ? ` · GC ${Number(p.gift_card_discount_pct)}%` : ""}</span>]));
   const total = Number(po.order_total);
-  const gc = payments.filter((p) => p.method === "gift_card" && p.amount != null && p.gift_card_discount_pct != null);
-  const weighted = gc.length && total > 0 ? Math.round((gc.reduce((t, p) => t + Number(p.amount) * Number(p.gift_card_discount_pct), 0) / total) * 100) / 100 : null;
+  // Gift-card GC % and card reward % (2026-11-04), weighted by amount.
+  const weighted = weightedPaymentPct(payments, total > 0 ? total : 0);
   const stored = po.weighted_gc_discount_pct == null ? null : parseFloat(po.weighted_gc_discount_pct);
-  rows.push(["Weighted GC %", weighted != null ? `${weighted}%` : stored != null ? `${stored}%` : <span className="text-muted-foreground/50">—</span>]);
+  rows.push([WEIGHTED_PAYMENT_LABEL, weighted != null ? `${weighted}%` : stored != null ? `${stored}%` : <span className="text-muted-foreground/50">—</span>]);
   rows.push(["Cashback Site", <Dash v={po.cashback_site} />]);
   rows.push(["Cashback %", po.cashback_pct == null ? <span className="text-muted-foreground/50">—</span> : `${parseFloat(po.cashback_pct)}%`]);
   if (promos.length === 0) rows.push(["Promo", <span className="text-muted-foreground/50">—</span>]);

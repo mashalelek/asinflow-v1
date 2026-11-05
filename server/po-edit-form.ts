@@ -96,9 +96,10 @@ export async function savePoForm(query: QueryLike, poId: string, next: PoFormSta
   for (const b of plan.promoAdds) await addMoneyRow(query, "po_promos", poId, b, userId);
   for (const e of plan.promoEdits) await editMoneyRow(query, "po_promos", e.id, e.body, userId);
   for (const id of plan.promoRemoves) await removeMoneyRow(query, "po_promos", id, userId);
-  for (const b of plan.paymentAdds) await addMoneyRow(query, "po_payments", poId, b, userId);
-  for (const e of plan.paymentEdits) await editMoneyRow(query, "po_payments", e.id, e.body, userId);
-  for (const id of plan.paymentRemoves) await removeMoneyRow(query, "po_payments", id, userId);
+  // The form's own check set the weighted payment discount % on the header above; the costs recompute once below.
+  for (const b of plan.paymentAdds) await addMoneyRow(query, "po_payments", poId, b, userId, { weightSync: false });
+  for (const e of plan.paymentEdits) await editMoneyRow(query, "po_payments", e.id, e.body, userId, { weightSync: false });
+  for (const id of plan.paymentRemoves) await removeMoneyRow(query, "po_payments", id, userId, { weightSync: false });
   if (costRelevant(plan)) await recomputePoCosts(query, poId, userId);
   // "Update ASIN in AF" (§6.5): the ASIN's pack fields follow this PO (History row; open POs brought along).
   for (const u of plan.packUpdates) await applyAsinPackUpdate(query, u.asin, parsePack({ sold_as: u.sold_as, units_per_pack: u.units_per_pack }), userId, "po_form");

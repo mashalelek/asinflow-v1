@@ -26,7 +26,7 @@ describe("poToForm — the stored PO as the form", () => {
     expect(f.products.map((p) => [p.line_item_id, p.asin, p.retailer_units_per_pack, p.asin_qty_per_product, !!p.yield_manual])).toEqual([["l1", "B0TEST0001", "12", "6", false], ["l2", "B0TEST0002", "1", "0.33", true]]);
     expect(f.products[1]).toMatchObject({ price: "", notes: "dented", sold_as: "individual", units_per_pack: "1" });
     expect(f.promos).toEqual([{ id: 21, type: "rewards", description: "Walmart cash", amount: "2.00", percent: "", counts_toward_cogs: false }]);
-    expect(f.payments).toEqual([{ id: 11, method: "card", nickname: "Amex Gold", last4: "1005", amount: "42.40", gift_card_discount_pct: "" }]);
+    expect(f.payments).toEqual([{ id: 11, method: "card", nickname: "Amex Gold", last4: "1005", amount: "42.40", gift_card_discount_pct: "", reward_pct: "" }]);
     expect(f.cogs_adjustments).toEqual({ B0TEST0002: { amount: "0.50", reason: "labels" } });
   });
   it("an imported PO shows its stored COGS as the field's value; a v2 PO only where it differs from the formula (a typed one)", () => {

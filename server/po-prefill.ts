@@ -19,7 +19,7 @@ import { suggestAsins } from "./asin-suggest";
 import { normalizeStreet } from "./tracking-parse";
 import { loadAliases, aliasKey } from "./supplier-aliases";
 import { defaultEmailForSupplier } from "./supplier-defaults";
-import { promoCountsByDefault, yieldFromPacks, resolvePaymentNickname, ambiguousPaymentHint, type PaymentLists, type PoFormState, type PoFormProduct, type PoFormPrefill, type PrefillSource } from "@shared/po-form";
+import { promoCountsByDefault, yieldFromPacks, resolvePaymentNickname, defaultRewardPct, ambiguousPaymentHint, type PaymentLists, type PoFormState, type PoFormProduct, type PoFormPrefill, type PrefillSource } from "@shared/po-form";
 import { discountReflectedInLines } from "@shared/po-cost";
 
 // ── Input (from the extension, already scrubbed) ─────────────────────────────
@@ -264,7 +264,7 @@ export async function enrichPrefill(query: QueryLike, capture: Capture, x: Prefi
   form.promos = x.promos.map((p, i) => { sources[`promos.${i}`] = "model"; return { type: p.confidence === "high" ? p.type : "", description: p.description, amount: m2(p.amount), percent: m2(p.percent), counts_toward_cogs: promoCountsByDefault(p.type, reflected) }; });
   if (x.promos.some((p) => p.confidence === "low")) warnings.push("A promo's type is uncertain — choose sale, coupon or rewards");
   // Payment nicknames (Maria 2026-11-02): by nickname first (settings.po_payment_method_aliases: "OnePay Cash…" → "Walmart card"), by last 4 second (settings.po_payment_method_last4), and blank with an amber hint when the last 4 alone is ambiguous (Amex Gold / Amex Plus both end in 1005).
-  const payRows = (await query(`SELECT key, value FROM settings WHERE key = ANY($1::text[])`, [["po_payment_methods", "po_payment_method_aliases", "po_payment_method_last4"]])).rows as Array<{ key: string; value: unknown }>;
+  const payRows = (await query(`SELECT key, value FROM settings WHERE key = ANY($1::text[])`, [["po_payment_methods", "po_payment_method_aliases", "po_payment_method_last4", "po_payment_method_reward_pct"]])).rows as Array<{ key: string; value: unknown }>;
   const payVal = (k: string) => payRows.find((r) => r.key === k)?.value;
   const lists: PaymentLists = { methods: Array.isArray(payVal("po_payment_methods")) ? (payVal("po_payment_methods") as string[]) : [], aliases: (payVal("po_payment_method_aliases") ?? {}) as Record<string, string>, last4: (payVal("po_payment_method_last4") ?? {}) as Record<string, string> };
   form.payments = x.payments.map((p, i) => {
@@ -272,7 +272,9 @@ export async function enrichPrefill(query: QueryLike, capture: Capture, x: Prefi
     const last4 = p.last4 && /^\d{4}$/.test(p.last4) ? p.last4 : "";
     const r = resolvePaymentNickname(p.nickname ?? "", last4, lists);
     if (r.ambiguous.length) { hints[`payments.${i}.nickname`] = ambiguousPaymentHint(last4, r.ambiguous); warnings.push(`Payment ${i + 1}: ${ambiguousPaymentHint(last4, r.ambiguous)}`); }
-    return { method: p.method, nickname: r.nickname, last4, amount: m2(p.amount), gift_card_discount_pct: "" };
+    // A card's reward % (2026-11-04): its canonical method's default (Walmart card 5), editable on the form.
+    const reward = p.method === "card" ? defaultRewardPct(r.nickname, payVal("po_payment_method_reward_pct") as Record<string, number> | null) : null;
+    return { method: p.method, nickname: r.nickname, last4, amount: m2(p.amount), gift_card_discount_pct: "", reward_pct: reward != null ? reward.toFixed(2) : "" };
   });
   const paySum = x.payments.reduce((t, p) => t + (p.amount ?? 0), 0);
   if (x.total != null && x.payments.some((p) => p.amount != null) && Math.abs(r2(paySum) - x.total) > 0.01) warnings.push(`Payments add up to ${r2(paySum).toFixed(2)}, the order total is ${x.total.toFixed(2)}`);

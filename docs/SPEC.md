@@ -5867,7 +5867,10 @@ every save and every recompute; a recompute stamps version 3.
   required reason, e.g. "prep materials $3"). Feeds `actual_cogs`
   (`runSheetsSync`), the Aura push (+ prep) and repricing, as before. A
   cost / unit typed by hand on the form wins and is logged as
-  `cost_per_unit` in History.
+  `cost_per_unit` in History. Recompute's own History rows are marked
+  `po_edit_log.derived` (migration 091, 2026-11-04) and never count as typed
+  — before, a recompute that changed COGS froze the row's COGS for every
+  later recompute.
 - **Paid cost** (`po_asins.paid_cost`) = the same allocation with every
   discount counted, × (1 − GC %). Unused today (the sales / profit
   dashboard). Equal to COGS on imported rows.
@@ -6847,12 +6850,27 @@ replaces it. Migration 061 adds `po_edit_log`, `deleted_pos` and
   (labelled "COGS"), Paid cost, Adjustment and Reason sit on the ASIN row
   after Prep; "Lines" and "Pack" are gone from the form; the math line
   under the ASIN row stays (pack math, the sourcing and COGS allocation,
-  "check qty or pack size", typed · reset). **Weighted GC %** =
-  Σ(gift-card payment amount × its discount %) ÷ order total, computed
-  live from the Payments block (each gift-card payment row has a "GC %"
-  field), read-only on the form, stored on save (`checkPoForm.
+  "check qty or pack size", typed · reset). **Weighted payment discount %**
+  (was "Weighted GC %", Maria 2026-11-04; column `weighted_gc_discount_pct`
+  kept) = Σ(gift-card payment amount × its GC % + card payment amount × its
+  reward %) ÷ order total (`weightedPaymentPct`), computed
+  live from the Payments block (a gift-card row has a "GC %" field, a card
+  row a "Reward %" field), read-only on the form, stored on save (`checkPoForm.
   weightedGcPct`; the server stores the same); it feeds COGS per §7.2 —
-  the gift-card discount always counts. **Payment-method aliases**
+  the gift-card discount and the card reward always count; a cashback
+  portal (Cashback site / %) never does. **Card reward % (migration 090):**
+  `po_payments.reward_pct`; each canonical payment method's default lives in
+  `settings.po_payment_method_reward_pct` (seeded `"Walmart card": 5`,
+  every other method none). A card payment with no reward % takes its
+  method's default (through the aliases — "OnePay Cash" and "OnePay
+  CashRewards" are the Walmart card) on blur, on prefill, on save
+  (`withRewardDefaults`) and when added on the Payments tab; it stays
+  editable per PO (0 = this order earned none). On a form-saved PO a
+  payment added / edited / removed on the Payments tab re-derives the header
+  % with a History row and recomputes costs (`syncWeightedPaymentPct`); a
+  sheet-imported PO stores the payment and nothing else changes. AF-created
+  POs paid before 2026-11-04 were brought in by `script/apply-card-rewards.ts`
+  (dry run by default, `--prod`, `--live`; per-PO COGS before → after). **Payment-method aliases**
   (`settings.po_payment_method_aliases`, seeded `"OnePay Cash" = "Walmart
   card"`): one instrument, two names, so history matches — the form's
   nickname picker lists the canonical names (`settings.po_payment_methods`

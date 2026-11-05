@@ -109,8 +109,36 @@ export interface PoFormPayment {
   last4: string;
   amount: string;
   gift_card_discount_pct: string; // gift cards only
+  /** A card's reward % (Maria 2026-11-04): its canonical method's default (Walmart card 5), editable per PO; cards only. */
+  reward_pct?: string;
 }
-export const emptyPayment = (method: PaymentMethod = "card"): PoFormPayment => ({ method, nickname: "", last4: "", amount: "", gift_card_discount_pct: "" });
+export const emptyPayment = (method: PaymentMethod = "card"): PoFormPayment => ({ method, nickname: "", last4: "", amount: "", gift_card_discount_pct: "", reward_pct: "" });
+
+/** The label of purchase_orders.weighted_gc_discount_pct since 2026-11-04 (was "Weighted GC %"). */
+export const WEIGHTED_PAYMENT_LABEL = "Weighted payment discount %";
+/** A canonical method's default reward % (settings.po_payment_method_reward_pct); null when it has none. Pure. */
+export function defaultRewardPct(canonicalName: string, rewards: Record<string, number | string> | null | undefined): number | null {
+  if (!rewards || !canonicalName) return null;
+  const norm = (x: string) => String(x ?? "").toLowerCase().replace(/[^a-z0-9]+/g, "");
+  for (const [k, v] of Object.entries(rewards)) if (norm(k) === norm(canonicalName) && Number(v) > 0) return Number(v);
+  return null;
+}
+/**
+ * The weighted payment discount % (Maria 2026-11-04; the weighted gift-card % since 2026-11-01) = Σ(gift-card amount × its GC %
+ * + card amount × its reward %) ÷ order total, rounded to 2 dp; null when no payment carries both an amount and its %. Cashback
+ * portals never count (they are not payments). Pure.
+ */
+export function weightedPaymentPct(payments: ReadonlyArray<{ method: string | null; amount: string | number | null; gift_card_discount_pct?: string | number | null; reward_pct?: string | number | null }>, orderTotal: number): number | null {
+  let w = 0, any = false;
+  for (const p of payments) {
+    const amt = p.amount == null || String(p.amount).trim() === "" ? NaN : Number(String(p.amount).replace(/[$,]/g, ""));
+    const raw = p.method === "gift_card" ? p.gift_card_discount_pct : p.method === "card" ? p.reward_pct : null;
+    const pc = raw == null || String(raw).trim() === "" ? NaN : Number(String(raw).replace("%", ""));
+    if (!Number.isFinite(amt) || !Number.isFinite(pc)) continue;
+    w += amt * pc; any = true;
+  }
+  return any && orderTotal > 0 ? Math.round((w / orderTotal) * 100) / 100 : null;
+}
 export const CASHBACK_STATUSES = ["pending", "received", "denied"] as const;
 /** Where a prefilled value came from (§6.1 markers): "model" = amber, "af" = stone; absent = typed. */
 export type PrefillSource = "model" | "af";
@@ -294,7 +322,7 @@ export interface PoFormCheck {
   nonCountingPromoAmount: number;
   /** Maria 2026-11-01: Σ line totals already equals the post-discount subtotal (within 1¢) — the discount / promos are informational, nothing reduces a cost. */
   discountReflected: boolean;
-  /** Weighted gift-card % = Σ(gift-card amount × its GC %) ÷ order total, from the Payments block; null when no gift-card payment carries both. */
+  /** Weighted payment discount % (weightedPaymentPct) from the Payments block; null when no gift-card / card payment carries an amount and its %. */
   weightedGcPct: number | null;
   asins: PoFormAsin[];
 }
@@ -310,7 +338,7 @@ export function checkPoForm(f: PoFormState): PoFormCheck {
   for (const [k, label] of [["subtotal", "Subtotal"], ["tax", "Tax"], ["sh_donations", "S&H + Donations"], ["discount", "Discount"], ["refund_amount", "Refund amount"], ["order_total", "Order total"]] as const) {
     const v = moneyNum(f[k]); if (v != null && (Number.isNaN(v) || v < 0)) errors.push(`${label} must be an amount with at most 2 decimals`);
   }
-  for (const [k, label] of [["weighted_gc_discount_pct", "Weighted GC %"], ["cashback_pct", "Cashback %"]] as const) {
+  for (const [k, label] of [["weighted_gc_discount_pct", WEIGHTED_PAYMENT_LABEL], ["cashback_pct", "Cashback %"]] as const) {
     const s = t(f[k]).replace("%", ""); if (s !== "" && (!/^\d+(\.\d{1,4})?$/.test(s) || Number(s) > 100)) errors.push(`${label} must be a percentage between 0 and 100`);
   }
   const products = Array.isArray(f.products) ? f.products : [];
@@ -328,8 +356,8 @@ export function checkPoForm(f: PoFormState): PoFormCheck {
     if (pc !== "" && (!/^\d+(\.\d{1,4})?$/.test(pc) || Number(pc) > 100)) errors.push(`${label}: percent must be between 0 and 100`);
   });
   // §8.2 payments: method, last 4, amount; Σ amount vs the order total is checked after the total is known.
-  // The weighted gift-card % (Maria 2026-11-01) = Σ(gift-card amount × its GC %) ÷ order total — live from this block, read-only on the form.
-  let paymentsSum = 0, paymentsWithAmount = 0, gcWeighted = 0, gcAny = false;
+  // The weighted payment discount % (gift cards 2026-11-01, card rewards 2026-11-04: weightedPaymentPct) — live from this block, read-only on the form.
+  let paymentsSum = 0, paymentsWithAmount = 0;
   (Array.isArray(f.payments) ? f.payments : []).forEach((p, i) => {
     const label = `Payment ${i + 1}${t(p.nickname) ? ` (${t(p.nickname)})` : ""}`;
     if (!(PAYMENT_METHODS as readonly string[]).includes(String(p.method))) errors.push(`${label}: method must be card, gift card, store credit, PayPal or other`);
@@ -339,7 +367,8 @@ export function checkPoForm(f: PoFormState): PoFormCheck {
     else if (amt != null) { paymentsSum += amt; paymentsWithAmount++; }
     const gc = t(p.gift_card_discount_pct ?? "").replace("%", "");
     if (gc !== "" && (!/^\d+(\.\d{1,4})?$/.test(gc) || Number(gc) > 100)) errors.push(`${label}: gift-card discount must be a percentage between 0 and 100`);
-    else if (p.method === "gift_card" && gc !== "" && amt != null && !Number.isNaN(amt)) { gcWeighted += amt * Number(gc); gcAny = true; }
+    const rw = t(p.reward_pct ?? "").replace("%", "");
+    if (rw !== "" && (!/^\d+(\.\d{1,4})?$/.test(rw) || Number(rw) > 100)) errors.push(`${label}: reward must be a percentage between 0 and 100`);
   });
   if (t(f.email_used ?? "") !== "" && !/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(t(f.email_used ?? ""))) errors.push("Email used must be an email address");
   if (t(f.cashback_status ?? "") !== "" && !(CASHBACK_STATUSES as readonly string[]).includes(t(f.cashback_status ?? ""))) errors.push("Cashback status must be pending, received or denied");
@@ -375,7 +404,7 @@ export function checkPoForm(f: PoFormState): PoFormCheck {
   const typedTotal = moneyNum(f.order_total);
   const effectiveOrderTotal = typedTotal != null && !Number.isNaN(typedTotal) ? typedTotal : r2(subtotal + n("tax") + n("sh_donations") - n("discount"));
   if (paymentsWithAmount > 0 && Math.abs(r2(paymentsSum) - r2(effectiveOrderTotal)) > 0.005) warnings.push(`Payments add up to ${r2(paymentsSum).toFixed(2)}, the order total is ${r2(effectiveOrderTotal).toFixed(2)}`);
-  const weightedGcPct = gcAny && effectiveOrderTotal > 0 ? Math.round((gcWeighted / effectiveOrderTotal) * 100) / 100 : null;
+  const weightedGcPct = weightedPaymentPct(Array.isArray(f.payments) ? f.payments : [], effectiveOrderTotal);
   // The reflected rule (Maria 2026-11-01; 1¢, 2026-11-04): Σ line totals already equals the post-discount subtotal → the discount / promos count for nothing.
   const postDiscountSubtotal = r2(effectiveOrderTotal - n("tax") - n("sh_donations"));
   const discountReflected = discountReflectedInLines({ linesSum: computedSubtotal, discount: n("discount"), promoAmounts: r2(promoAmounts), postDiscountSubtotal });
