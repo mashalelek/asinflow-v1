@@ -584,10 +584,57 @@
       order: assignNewer(Object.assign({}, r.order || {}), ai.order || {}),
     };
   }
+  /**
+   * v1.4 (Maria 2026-11-05): the structured reader (platform-map.js — schema.org order data, Shopify's checkout /
+   * cart, BigCommerce's storefront cart / order) is the top layer: its products (when it read any) win, its totals
+   * win per field over the AI's, its promo codes win when it has any, its order fields merge. Pure.
+   */
+  function overlayStructured(b, s) {
+    if (!s || !s.buckets) return b;
+    var x = s.buckets, r = b || emptyBuckets();
+    return {
+      products: (x.products || []).length ? x.products : r.products,
+      shipping: r.shipping, payment: r.payment,
+      totals: x.totals && (x.totals.subtotal || x.totals.total) ? Object.assign({}, r.totals || {}, x.totals) : r.totals,
+      promos: (x.promos || []).length ? x.promos : r.promos,
+      order: assignNewer(Object.assign({}, r.order || {}), x.order || {}),
+    };
+  }
   function pageBuckets(cap, p) {
     var ai = p.previewKey && cap && cap.previews ? cap.previews[p.previewKey] : null;
-    return overlayPreview(extractBuckets(p), ai || null);
+    return overlayStructured(overlayPreview(extractBuckets(p), ai || null), p.structured || null);
   }
+  /** v1.4: which layer filled one page's Products and Totals — the structured source ("Shopify cart data"), "AI", "rules" or null. */
+  function pageLayers(cap, p) {
+    var ai = p.previewKey && cap && cap.previews ? cap.previews[p.previewKey] : null;
+    var rules = extractBuckets(p), st = p.structured || null;
+    var tot = function (t) { return !!(t && (t.subtotal || t.total)); };
+    return {
+      products: st && st.filled && st.filled.products ? st.source : ai && (ai.products || []).length ? "AI" : (rules.products || []).length ? "rules" : null,
+      totals: st && st.filled && st.filled.totals ? st.source : ai && tot(ai.totals) ? "AI" : tot(rules.totals) ? "rules" : null,
+    };
+  }
+  /** v1.4: the record's layers — per bucket, the newest page that filled it (the panel's "Products: AI · Totals: Shopify cart data"). */
+  function layersOf(cap) {
+    var out = { products: null, totals: null };
+    pagesOf(cap).slice().sort(function (p, q) { return String(p.capturedAt || "").localeCompare(String(q.capturedAt || "")); }).forEach(function (p) {
+      var l = pageLayers(cap, p);
+      if (l.products) out.products = l.products;
+      if (l.totals) out.totals = l.totals;
+    });
+    return out;
+  }
+  /** v1.4: the structured reader of one page answered (null: nothing structured) — stored on that page (by its key), rebuild. Pure. */
+  function applyStructured(cur, key, structured) {
+    if (!cur || !key) return cur;
+    var c = JSON.parse(JSON.stringify(cur));
+    c.captures = pagesOf(c).map(function (p) { return p.previewKey === key ? Object.assign({}, p, { structured: structured || null, structuredRead: true }) : p; });
+    delete c.pages; delete c.others;
+    c.buckets = rebuild(c);
+    return c;
+  }
+  /** v1.4: the preview's error for the panel's red line (null when there is none or a newer preview answered). */
+  function previewError(cap) { return cap && cap.count && !(cap.previewPending || []).length && cap.previewError ? cap.previewError : null; }
   function rebuild(cap) {
     return pagesOf(cap).slice().sort(function (p, q) { return String(p.capturedAt || "").localeCompare(String(q.capturedAt || "")); }).reduce(function (b, p) { return mergeBuckets(b, pageBuckets(cap, p)); }, emptyBuckets());
   }
@@ -681,7 +728,7 @@
     BUCKETS: BUCKETS, LABELS: LABELS, emptyBuckets: emptyBuckets, extractBuckets: extractBuckets, mergeBuckets: mergeBuckets,
     extractProducts: extractProducts, extractShipping: extractShipping, extractPayment: extractPayment, extractTotals: extractTotals, extractPromos: extractPromos, dedupePromos: dedupePromos, extractOrder: extractOrder,
     filled: filled, missing: missing, streetIn: streetIn, normStreet: normStreet, addressFromFields: addressFromFields,
-    captureKey: captureKey, newCapture: newCapture, applyPage: applyPage, overlayPreview: overlayPreview, applyPreview: applyPreview, previewStatus: previewStatus, needsPreview: needsPreview, checkoutEmailForPrefill: checkoutEmailForPrefill, pagesForPrefill: pagesForPrefill, shipToForPrefill: shipToForPrefill, othersCapturing: othersCapturing, orphanCaptureKeys: orphanCaptureKeys, debugText: debugText,
+    captureKey: captureKey, newCapture: newCapture, applyPage: applyPage, overlayPreview: overlayPreview, overlayStructured: overlayStructured, applyStructured: applyStructured, pageLayers: pageLayers, layersOf: layersOf, previewError: previewError, applyPreview: applyPreview, previewStatus: previewStatus, needsPreview: needsPreview, checkoutEmailForPrefill: checkoutEmailForPrefill, pagesForPrefill: pagesForPrefill, shipToForPrefill: shipToForPrefill, othersCapturing: othersCapturing, orphanCaptureKeys: orphanCaptureKeys, debugText: debugText,
     shipToKind: shipToKind, describeShipping: describeShipping,
   };
   root.AfBuckets = api;

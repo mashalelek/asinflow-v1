@@ -74,7 +74,8 @@ describe("stale-page guard: no Chrome extension route is guarded (2026-11-05 —
   // Every "/api/…" the extension's source names (fetches, and the routes its comments describe), a ${…} segment as "x".
   const dir = path.resolve(__dirname, "../chrome-extension");
   const called = new Set<string>();
-  for (const f of fs.readdirSync(dir).filter((n) => n.endsWith(".js"))) {
+  // platform.js runs in the retailer's page and reads the RETAILER's own /api (BigCommerce's storefront API), never AF's.
+  for (const f of fs.readdirSync(dir).filter((n) => n.endsWith(".js") && n !== "platform.js")) {
     for (const m of Array.from(fs.readFileSync(path.join(dir, f), "utf8").matchAll(/\/api(\/[A-Za-z0-9_\-/]*(?:\$\{[^}]*\}[A-Za-z0-9_\-/]*)*)/g))) called.add(m[1].replace(/\$\{[^}]*\}/g, "x").replace(/\/$/, ""));
   }
   it("the extension calls the routes on the list — capture-preview among them", () => {

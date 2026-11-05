@@ -72,6 +72,9 @@ button { font: inherit; }
 .capture-lines { margin: 10px 0 14px; }
 .capture-status { font-size: 12px; color: var(--text-2); }
 .capture-missing { font-size: 12px; color: var(--text); margin-top: 2px; }
+/* v1.4: a failed AI preview names its error in red; the layer line says what filled Products / Totals. */
+.capture-error { font-size: 12px; color: var(--red); margin-top: 2px; overflow-wrap: anywhere; }
+.capture-layers { font-size: 11px; color: var(--text-2); margin-top: 2px; }
 .capture-found { border-top: 1px solid var(--hair); padding-top: 12px; margin-bottom: 14px; }
 .buckets { display: flex; flex-direction: column; gap: 6px; }
 .bucket { background: var(--card); border-radius: 8px; padding: 8px 10px; }

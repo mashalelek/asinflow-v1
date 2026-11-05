@@ -125,7 +125,7 @@ and any introduced error must be fixed forward before committing.
 
 ## Tests
 
-`npm test` (vitest). **2,081 tests across 192 files** as of 2026-11-04 — this
+`npm test` (vitest). **2,098 tests across 193 files** as of 2026-11-04 — this
 codebase IS tested; the old "there are no tests" line was years stale.
 
 **A gate report must cover BOTH typecheck commands, labelled separately:**
@@ -133,7 +133,7 @@ codebase IS tested; the old "there are no tests" line was years stale.
 ```
 npm run check        -> 4 baseline TS1252, 0 introduced
 npm run check:tests  -> 4 baseline TS1252, 0 introduced
-npm test             -> 2081/2081
+npm test             -> 2098/2098
 ```
 
 `npm run check` alone is NOT a complete gate. The base `tsconfig.json`
@@ -185,7 +185,7 @@ the promo backfill (`npm run backfill:po-promos`), every call logged in
 (`chrome-extension/scrub.js`) runs inside the page; its fixtures are
 hand-written with public test card numbers only — never real ones.
 
-**Chrome extension dev (SPEC §11 "Chrome extension — Capture PO", v1.3.1):** load
+**Chrome extension dev (SPEC §11 "Chrome extension — Capture PO", v1.4.0):** load
 `chrome-extension/` unpacked at chrome://extensions; set the server URL on
 its options page (localhost:3000 by default; production
 `https://asinflow-cqg.onrender.com` and the custom domain
@@ -197,11 +197,14 @@ Capture PO: Capture this page (grants the site's host permission on first
 use; each capture is also read by a small AI preview, `POST
 /api/pos/capture-preview`, cached per page, logged as `capture_preview`) →
 Open in AF → `/pos/new?prefill=<id>`. No build step: plain scripts
-(`scrub.js`, `capture.js`, `buckets.js` — the six data buckets, tested in `server/extension-buckets.test.ts` — `capture-panel.js`, `background.js`).
+(`scrub.js`, `capture.js`, `platform.js` + `platform-map.js` — the structured reader (v1.4, SPEC §11); every AF route the extension calls is exempt from the stale-page guard (`EXTENSION_API_ROUTES`, enforced by `server/stale-build-guard.test.ts`), `buckets.js` — the six data buckets, tested in `server/extension-buckets.test.ts` — `capture-panel.js`, `background.js`).
 A page the parser missed: tick "Show Copy page text" on the options page,
 capture it, click **Copy page text** in the panel and paste the text (as a
 code block, so the tabs survive) — it becomes a fixture under
-`server/__fixtures__/capture-pages/`.
+`server/__fixtures__/capture-pages/`. Since v1.4 the server also keeps
+any page whose Products or Totals stayed empty after every layer (30 days,
+admin-only): `npm run capture:samples -- --prod` lists them, `--save <id>`
+writes one as a fixture.
 
 **PO patch scripts (2026-10-31):** `npm run backfill:po-model` (migration-075
 backfills, dry run by default, `--live`), `npm run backfill:po-promos` (needs

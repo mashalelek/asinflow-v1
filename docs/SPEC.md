@@ -2653,13 +2653,46 @@ is set — the runner is always on; only the **schedule** is gated.
   File keep their inline sheet/CSV step; only the onboarding Refresh they
   spawn is a queue job.
 
-### Chrome extension — Capture PO (patch `docs/claude_spec-patch-po-ai-prefill.md` §4, 2026-10-31; `chrome-extension/` v1.3.1 — captures survive navigation, order #s that pass Luhn kept, 2026-11-04; v1.3.0 — the AI preview 2026-11-04; v1.2.3 — panel redesign 2026-11-01, pre-parser fixes from the first real PO the same day, table-row products and promo dedupe from a shagtools.com cart 2026-11-02, plain-text / no-text quantities and the "Copy page text" debug action the same day)
+### Chrome extension — Capture PO (patch `docs/claude_spec-patch-po-ai-prefill.md` §4, 2026-10-31; `chrome-extension/` v1.4.0 — structured readers above the AI, a red line for a failed preview, every preview request logged, kept samples, 2026-11-05; v1.3.1 — captures survive navigation, order #s that pass Luhn kept, 2026-11-04; v1.3.0 — the AI preview 2026-11-04; v1.2.3 — panel redesign 2026-11-01, pre-parser fixes from the first real PO the same day, table-row products and promo dedupe from a shagtools.com cart 2026-11-02, plain-text / no-text quantities and the "Copy page text" debug action the same day)
 
 The existing extension (the Amazon side-panel calculator, `content.js` on
 `/dp` pages) gains **Capture PO** in the same side panel: on any tab that is
 not an Amazon product page the panel shows the capture UI instead of the
 "navigate to a product page" state.
 
+- **Extension reliability (v1.4.0, Maria 2026-11-05 — no more per-site
+  fixes).** The AI preview of v1.3.0 never ran on production: the stale-page
+  guard answered its POST with 409 (the panel's grey "AI preview failed
+  (409)"), as it had the prefill's on 11/1. Every route the extension calls is
+  now exempt (`EXTENSION_API_ROUTES`, `server/stale-build-guard.ts`; the test
+  reads every `/api` path `chrome-extension/*.js` names and fails on one that
+  is guarded). **Layers, per captured page:** (c) the rules, at once, as a
+  placeholder; (a) the **structured reader** — `platform.js` in the page's own
+  world (read-only GETs, picked fields only, no payment object) reads
+  schema.org Order JSON-LD, Shopify's checkout object and `/cart.js`, and
+  BigCommerce's storefront cart / checkout / order; `platform-map.js` maps it
+  to the buckets and every string is scrubbed in the worker; its products
+  win, its totals win per field, its codes win; (b) the **AI preview**, on
+  every new page (Haiku-class, one call per page, cached by page key — an
+  unchanged page is never sent again; approved by Maria 2026-11-05: reliability
+  over call count). Magento / WooCommerce / Salesforce Commerce Cloud readers
+  are out (≈ 6 % of POs; SFCC would be per-site). The panel names the layer
+  that filled Products and Totals ("Products: Shopify cart data · Totals: AI")
+  and a failed preview is a **red line** naming the error (status and the
+  server's message). **Every preview request** the server receives or rejects
+  is a `po_prefill_log` row (migration 092: `http_status`, `note` — a cache
+  hit, 401, 400, 503, the model call's own row with its status); a row
+  without tokens costs 0 and is not a call. **Kept samples:** a page whose
+  Products or Totals stayed empty after every layer is kept in
+  `capture_page_samples` (its scrubbed text and fields, 30 days, deleted on the
+  next insert after that; admin-only `/api/admin/capture-samples`; `npm run
+  capture:samples [-- --prod] [--save <id>]` writes it as a fixture under
+  `server/__fixtures__/capture-pages/samples/` — read it for anything personal
+  before committing). **Settings → AI spend:** the calendar month's (Eastern)
+  calls and cost by kind (capture_preview, capture, tracking_fallback,
+  doc_classify, promo_classify, backfill, supplier_check), earlier months as one
+  line, a warning when a month passes `AI.monthlyWarnUsd` ($20,
+  `server/config/ai.ts`); `GET /api/ai-spend`, read-only.
 - **Captures survive navigation (v1.3.1, Maria 2026-11-04, URGENT).** A
   Walmart checkout navigated to its confirmation in the same tab and the
   panel said "1 page captured" after several checkout captures. Cause: the

@@ -36,6 +36,8 @@
     <button id="capture-btn" class="btn btn-primary">Capture this page</button>
     <div class="capture-lines">
       <div id="capture-status" class="capture-status">0 pages captured</div>
+      <div id="capture-error" class="capture-error" style="display:none;"></div>
+      <div id="capture-layers" class="capture-layers" style="display:none;"></div>
       <div id="capture-missing" class="capture-missing"></div>
     </div>
     <div class="capture-found">
@@ -48,7 +50,7 @@
       <!-- v1.2.3 debug (options page → "Show Copy page text"): the captured text + fields, exactly what the parser saw, to the clipboard -->
       <button id="capture-copy-btn" class="btn btn-secondary" style="display:none;" disabled title="Copy the captured text and fields of this tab (debug)">Copy page text</button>
     </div>
-    <div class="capture-caption">One AI call runs when you open it · card numbers are masked before anything leaves the browser</div>
+    <div class="capture-caption">AI reads each new page as you capture it · card numbers are masked before anything leaves the browser</div>
     <div id="capture-feedback" class="capture-feedback" style="display:none;"></div>
   </div>
 

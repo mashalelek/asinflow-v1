@@ -18,6 +18,7 @@
   const root = el("capture-content"), emptyState = el("empty-state"), productContent = el("product-content");
   const retailerEl = el("capture-retailer"), newSupplierEl = el("capture-new-supplier"), orderEl = el("capture-order"), badgeEl = el("capture-shipto-badge");
   const captureBtn = el("capture-btn"), statusEl = el("capture-status"), missingEl = el("capture-missing"), bucketsEl = el("capture-buckets");
+  const errorEl = el("capture-error"), layersEl = el("capture-layers");
   const openBtn = el("capture-open-btn"), clearBtn = el("capture-clear-btn"), copyBtn = el("capture-copy-btn"), feedback = el("capture-feedback"), alsoEl = el("also-capturing");
   let debugCapture = false; // options page: "Show Copy page text" (v1.2.3)
   let config = null; // { velocityStreet, homeStreets, prepCost, suppliers }
@@ -95,8 +96,13 @@
     badgeEl.style.display = kind ? "" : "none"; badgeEl.textContent = kind || "";
     const n = cap ? cap.count : 0;
     // v1.3: the AI preview's state beside the page count ("AI reading…", "AI read", "AI preview is off").
-    const ai = B.previewStatus(cap);
+    // v1.4: an error is its own red line (a 409 in grey went unnoticed for a day); the layer line names what filled Products / Totals.
+    const err = B.previewError(cap), ai = err ? null : B.previewStatus(cap);
     statusEl.textContent = `${plural(n, "page")} captured${ai ? ` · ${ai}` : ""}`;
+    errorEl.style.display = err ? "" : "none"; errorEl.textContent = err || "";
+    const layers = n ? B.layersOf(cap) : { products: null, totals: null };
+    const lt = [layers.products && `Products: ${layers.products}`, layers.totals && `Totals: ${layers.totals}`].filter(Boolean).join(" · ");
+    layersEl.style.display = lt ? "" : "none"; layersEl.textContent = lt;
     const miss = B.missing(b);
     missingEl.textContent = !n ? "Capture the cart, then the review page — any page, any number of times" : miss.length ? `Still missing: ${miss.join(", ")}` : "Everything found";
     openBtn.disabled = false; // never gated (v1.2.4)

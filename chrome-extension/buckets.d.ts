@@ -43,3 +43,8 @@ export function applyPreview(cur: any, key: string, buckets: any, error: string 
 export function previewStatus(cap: any): string | null;
 export function needsPreview(cap: any, key: string | null | undefined): boolean;
 export function checkoutEmailForPrefill(cap: any): string | null;
+export function overlayStructured(b: any, s: any): any;
+export function pageLayers(cap: any, p: any): { products: string | null; totals: string | null };
+export function layersOf(cap: any): { products: string | null; totals: string | null };
+export function previewError(cap: any): string | null;
+export function applyStructured(cur: any, key: string, structured: any): any;

@@ -460,7 +460,7 @@ describe("buckets: captures are per tab", () => {
   });
   it("background.js stores through these functions (one record per tab id)", () => {
     const bg = readFileSync(resolve(__dirname, "../chrome-extension/background.js"), "utf8");
-    expect(bg).toMatch(/importScripts\("buckets\.js"\)/);
+    expect(bg).toMatch(/importScripts\("buckets\.js"[^)]*\)/);
     expect(bg).toMatch(/AfBuckets\.applyPage\(/);
     expect(bg).toMatch(/AfBuckets\.captureKey\(tab\.id\)/);
     expect(bg).toMatch(/AfBuckets\.othersCapturing\(/);

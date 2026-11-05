@@ -28,7 +28,7 @@
 // recaptured unchanged never calls again. "Open in AF" stays the one full
 // prefill call and also sends the checkout email the buckets found.
 
-importScripts("buckets.js");
+importScripts("buckets.js", "scrub.js", "platform-map.js");
 
 const DEFAULT_SERVER_URL = "http://localhost:3000";
 const AF_FETCH = { credentials: "include" };
@@ -324,8 +324,14 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
         const cur = AfBuckets.applyPage(prev, page, host, new Date().toISOString());
         await captureStore.set({ [key]: cur });
         sendResponse({ success: true, capture: cur, step: page.step, chars: page.chars });
-        // The AI preview, after answering: the panel shows the rules now and the AI's buckets when they land.
-        if (AfBuckets.needsPreview(prev, page.previewKey)) requestPreview(key, host, page);
+        // v1.4, after answering: the structured reader (platform data, in the page's own world) lands first, then the
+        // AI preview — the panel shows the rules now and each layer when it lands.
+        (async () => {
+          const structured = await readStructured(tab.id);
+          const now = (await captureStore.get([key]))[key];
+          if (now) await captureStore.set({ [key]: AfBuckets.applyStructured(now, page.previewKey, structured) });
+          if (AfBuckets.needsPreview(prev, page.previewKey)) requestPreview(key, host, page, structured);
+        })().catch(() => { if (AfBuckets.needsPreview(prev, page.previewKey)) requestPreview(key, host, page, null); });
       } catch (err) { sendResponse({ success: false, message: err.message }); }
     })();
     return true;
@@ -403,20 +409,35 @@ async function pageKey(host, page) {
   const digest = await crypto.subtle.digest("SHA-256", data);
   return Array.from(new Uint8Array(digest)).map((b) => b.toString(16).padStart(2, "0")).join("").slice(0, 32);
 }
+/** Every string in the structured reader's buckets through the page scrubber (scrub.js) — a card number never leaves the worker. */
+function scrubDeep(v) {
+  if (typeof v === "string") return AfScrub.scrubText(v);
+  if (Array.isArray(v)) return v.map(scrubDeep);
+  if (v && typeof v === "object") return Object.fromEntries(Object.entries(v).map(([k, x]) => [k, scrubDeep(x)]));
+  return v;
+}
+/** v1.4: the structured reader — platform.js in the page's MAIN world (read-only; picked fields only) → buckets (platform-map.js), scrubbed. Null when the page has nothing structured or the reader could not run. */
+async function readStructured(tabId) {
+  try {
+    const r = await chrome.scripting.executeScript({ target: { tabId }, files: ["platform.js"], world: "MAIN" });
+    const mapped = AfPlatform.toBuckets(r?.[0]?.result || null);
+    return mapped ? scrubDeep(mapped) : null;
+  } catch { return null; }
+}
 /** POST one page to /api/pos/capture-preview and lay the answer over the tab's buckets (re-reading the record — another capture may have landed meanwhile). */
-async function requestPreview(storeKey, host, page) {
+async function requestPreview(storeKey, host, page, structured) {
   let buckets = null, error = null;
   try {
     const serverUrl = await getServerUrl();
     const r = await fetch(`${serverUrl}/api/pos/capture-preview`, {
       ...AF_FETCH, method: "POST", headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ retailerHost: host, page: { step: page.step, url: page.url, title: page.title, text: page.text, fields: page.fields || [] } }),
+      body: JSON.stringify({ retailerHost: host, page: { step: page.step, url: page.url, title: page.title, text: page.text, fields: page.fields || [] }, structured: { platform: structured?.platform ?? null, products: !!structured?.filled?.products, totals: !!structured?.filled?.totals } }),
       signal: AbortSignal.timeout(60000),
     });
     const data = await r.json().catch(() => ({}));
     if (r.status === 401) error = "AI preview: sign in to AsinFlow";
     else if (r.status === 503) error = "AI preview is off";
-    else if (!r.ok) error = `AI preview failed (${r.status})`;
+    else if (!r.ok) error = `AI preview failed (${r.status}${data.message ? `: ${String(data.message).slice(0, 120)}` : ""})`;
     else if (!data.buckets) error = "AI preview could not read this page";
     else buckets = data.buckets;
   } catch (err) { error = /abort|timeout/i.test(err.message) ? "AI preview timed out" : "AI preview: AsinFlow is unreachable"; }
