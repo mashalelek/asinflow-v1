@@ -52,6 +52,21 @@ describe("scrub.js", () => {
     expect(scrubField("Email", "maria@example.com")).toEqual({ label: "Email", value: "maria@example.com" });
     expect(scrubField("Quantity", "6")).toEqual({ label: "Quantity", value: "6" });
   });
+  it("fields named like a form's own ids (Gordon's payment form, 2026-11-05): SECNO_NEW, EXP.MONTH, CCNO, card_cvv", () => {
+    expect(scrubField("SECNO_NEW", "864")).toBeNull();
+    expect(scrubField("card_cvv", "1234")).toBeNull();
+    expect(scrubField("billing-csc", "123")).toBeNull();
+    expect(scrubField("Security Code (?)", "123")).toBeNull();
+    expect(scrubField("EXP.MONTH", "02")).toBeNull();
+    expect(scrubField("exp_year", "2028")).toBeNull();
+    expect(scrubField("CCNO", "5105 1051 0510 5100")).toEqual({ label: "CCNO", value: "•••• 5100" });
+    expect(scrubField("cc_number", "41111111")).toEqual({ label: "cc_number", value: "•••• 1111" });
+    // not card fields
+    expect(scrubField("selected: UPS GROUND", "UPS GROUND    $18.52")).toEqual({ label: "selected: UPS GROUND", value: "UPS GROUND    $18.52" });
+    expect(scrubField("Express shipping qty", "12")).toEqual({ label: "Express shipping qty", value: "12" });
+    expect(scrubField("Zip Code", "97850")).toEqual({ label: "Zip Code", value: "97850" });
+    expect(scrubField("selected: Charge to a new credit card", "Charge to a new credit card")).toEqual({ label: "selected: Charge to a new credit card", value: "Charge to a new credit card" });
+  });
   it.each(fixtures)("%s: no full card number, no CVV, no expiry survives; prices, quantities, addresses and the email do", (_name, text) => {
     const out = scrubText(text);
     for (const n of ["4111 1111 1111 1111", "4111-1111-1111-1111", "5555-5555-5555-4444", "3782 822463 10005", "6011 1111 1111 1117", "6006 4921 1234 5678 9012", "7777 8888 9999 0000 1234"]) expect(out).not.toContain(n);

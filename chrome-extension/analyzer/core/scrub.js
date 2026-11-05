@@ -8,7 +8,12 @@
 //     confirmation / invoice / tracking label: 2026-11-04, Walmart order
 //     #200015468871641 passes Luhn (one number in ten does) and was masked,
 //     so neither the panel nor the prefill saw its order #.
-//   - a 3–4 digit value whose label says cvv / cvc / security code → removed
+//   - a 3–4 digit value whose label says cvv / cvc / security code → removed;
+//     field labels are read with _ . - as spaces, so a form's own names count
+//     ("SECNO_NEW", "card_cvv", "EXP.MONTH", "CCNO" — 2026-11-05, Gordon's
+//     payment form sent its security code through under SECNO_NEW)
+//   - an expiry month / year field (1–2 or 4 digits) → removed; a card-number
+//     field (ccno, card number) with 8+ digits → its last 4 kept
 //   - an expiry (MM/YY, MM/YYYY) within 40 characters of "exp" / "valid" → removed
 //   - a gift-card / e-gift / gift-certificate number (8+ digits, by label or
 //     within 40 characters after such a label) → its last 4 kept
@@ -41,6 +46,11 @@
   var EXP_LABEL = /\b(exp(?:iry|iration|ires)?\.?|valid(?:\s*thru|\s*through)?)\b/i;
   var EXPIRY = /\b(0[1-9]|1[0-2])\s*\/\s*(\d{2}|\d{4})\b/g;
   var GIFT_LABEL = /\b(e-?gift|gift\s*card|gift\s*certificate|egc)\b/i;
+  // Field labels only (a form's name / id as well as its visible label).
+  var CVV_FIELD = /\b(cvv2?|cvc2?|cvn|cv2|csc|cid|sec(?:urity)?\s*(?:no|num(?:ber)?|code|cd)|card\s*verification|verification\s*(?:code|value|number))\b/i;
+  var CARD_NO_FIELD = /\b(cc\s*(?:no|num(?:ber)?)|ccno|card\s*(?:no|num(?:ber)?)|credit\s*card)\b/i;
+  /** A field label with its separators read as spaces ("SECNO_NEW" → "SECNO NEW", "EXP.MONTH" → "EXP MONTH"). */
+  function fieldWords(l) { return String(l).replace(/[_.\-]+/g, " "); }
 
   /** Card-number runs → "•••• 1234". Pure. */
   function maskCardRuns(text) {
@@ -88,9 +98,11 @@
   /** One form field by label + value. Pure. Returns null when the field must not be kept at all. */
   function scrubField(label, value) {
     var l = String(label == null ? "" : label), v = String(value == null ? "" : value);
-    if (CVV_LABEL.test(l) && /^\s*\d{3,4}\s*$/.test(v)) return null;
-    if (EXP_LABEL.test(l) && /^\s*(0?[1-9]|1[0-2])\s*\/?\s*\d{2,4}\s*$/.test(v)) return null;
-    if (GIFT_LABEL.test(l)) { var d = v.replace(/\D/g, ""); if (d.length >= 8) return { label: l, value: "•••• " + d.slice(-4) }; }
+    var w = fieldWords(l);
+    if ((CVV_LABEL.test(w) || CVV_FIELD.test(w)) && /^\s*\d{3,4}\s*$/.test(v)) return null;
+    if (EXP_LABEL.test(w) && /^\s*(?:(0?[1-9]|1[0-2])\s*\/?\s*\d{2,4}|\d{1,2}|\d{4})\s*$/.test(v)) return null;
+    if (CARD_NO_FIELD.test(w)) { var cd = v.replace(/\D/g, ""); if (cd.length >= 8) return { label: l, value: "•••• " + cd.slice(-4) }; }
+    if (GIFT_LABEL.test(w)) { var d = v.replace(/\D/g, ""); if (d.length >= 8) return { label: l, value: "•••• " + d.slice(-4) }; }
     return { label: l, value: scrubText(v) };
   }
 
