@@ -3,6 +3,7 @@
 // ASIN row shows the union of its lines; the PO the union of all its lines.
 // Setting an item on an ASIN writes it to ALL its lines; removing it removes
 // it from all its lines; a product edit touches that line only. Pure.
+import { replacementTrackingItemsSql } from "./tracking-replacement-pair";
 import { AUTO_ACTION_ITEMS, DISPLAY_ACTION_ITEMS, EXTRA_UNITS_SHIPPED, PACK_SIZE_MISMATCH, PACK_SIZE_MISSING, RECEIVING_MISMATCH, REVIEW_VELOCITY } from "./po-status-map";
 
 /** Display-ordered union of several action-item arrays. */
@@ -61,7 +62,8 @@ export const ASIN_ACTION_ITEMS_SQL = `ARRAY(${openLineItemsSql("l.po_asin_id = p
   UNION SELECT '${EXTRA_UNITS_SHIPPED}' WHERE ${extraUnits("pa")}
   UNION SELECT '${PACK_SIZE_MISSING}' WHERE ${packMissing("pa")}
   UNION SELECT '${PACK_SIZE_MISMATCH}' WHERE ${packMismatch("pa")}
-  UNION SELECT '${RECEIVING_MISMATCH}' WHERE ${receivingMismatch("pa")})`;
+  UNION SELECT '${RECEIVING_MISMATCH}' WHERE ${receivingMismatch("pa")}
+  ${replacementTrackingItemsSql("pa.po_id")})`;
 /**
  * "Review Velocity" (SPEC §26) condition: a tracking row of the PO has a
  * review reason and was not cleared by hand. Since PO table v2 the item itself
@@ -72,13 +74,15 @@ export const REVIEW_VELOCITY_EXISTS_SQL = `EXISTS (SELECT 1 FROM po_tracking t W
 export const PO_CLOSE_ACTION_ITEMS_SQL = `ARRAY(${openLineItemsSql("l.po_id = p.id")}
   UNION SELECT '${EXTRA_UNITS_SHIPPED}' WHERE ${EXTRA_UNITS_EXISTS_SQL}
   UNION SELECT '${PACK_SIZE_MISSING}' WHERE ${PACK_SIZE_MISSING_EXISTS_SQL}
-  UNION SELECT '${PACK_SIZE_MISMATCH}' WHERE ${PACK_SIZE_MISMATCH_EXISTS_SQL})`;
+  UNION SELECT '${PACK_SIZE_MISMATCH}' WHERE ${PACK_SIZE_MISMATCH_EXISTS_SQL}
+  ${replacementTrackingItemsSql("p.id")})`;
 /** The PO's displayed items: the close set plus Receiving mismatch. */
 export const PO_ACTION_ITEMS_SQL = `ARRAY(${openLineItemsSql("l.po_id = p.id")}
   UNION SELECT '${EXTRA_UNITS_SHIPPED}' WHERE ${EXTRA_UNITS_EXISTS_SQL}
   UNION SELECT '${PACK_SIZE_MISSING}' WHERE ${PACK_SIZE_MISSING_EXISTS_SQL}
   UNION SELECT '${PACK_SIZE_MISMATCH}' WHERE ${PACK_SIZE_MISMATCH_EXISTS_SQL}
-  UNION SELECT '${RECEIVING_MISMATCH}' WHERE ${RECEIVING_MISMATCH_EXISTS_SQL})`;
+  UNION SELECT '${RECEIVING_MISMATCH}' WHERE ${RECEIVING_MISMATCH_EXISTS_SQL}
+  ${replacementTrackingItemsSql("p.id")})`;
 /** The open review reasons of a PO (alias p), for the Action Items tooltip. */
 export const REVIEW_VELOCITY_REASONS_SQL = `ARRAY(SELECT DISTINCT r FROM po_tracking t, unnest(string_to_array(t.review_reason, '; ')) r
   WHERE t.po_id = p.id AND t.review_reason IS NOT NULL AND t.suppressed_at IS NULL)`;

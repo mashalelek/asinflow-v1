@@ -8108,6 +8108,22 @@ Settings: `tracking.velocity_street` ("805 grandy"),
   original PO's notes gain "Replacement order #<id> (<date>) — <carrier>
   <tracking>" with a History row (`po_edit_log`, entity po, field notes),
   so the POs search finds it by the replacement #.
+- **One-off replacement pair** (Maria 2026-11-05;
+  `server/tracking-replacement-pair.ts` — the general version is the
+  Allocate-to-another-PO backlog item): Walmart PO 200015663718988 carries
+  11 Caress singles, 1 of them a replacement for the single missing from PO
+  200015557295492, checked in under that PO's Velocity order. When a
+  tracking row of 200015663718988 is pushed (routed to Velocity), the same
+  pass also appends its numbers to 200015557295492's inbound Velocity order
+  (the bulk PUT, numbers only) and writes a History row on both POs
+  ("tracking also added to 200015557295492" / "tracking added from
+  200015663718988 (1 replacement single)", derived). Until the from-PO has
+  that History row it shows the derived action item **"Tracking also goes
+  to 200015557295492 (1 replacement single)"** (amber, blocks auto-close,
+  never set by hand); it resolves by itself once the tracking is added. A
+  failed PUT, or the old order no longer inbound, logs nothing — the item
+  stays and the next pass retries. Dry runs plan it (`plan.also`). No
+  quantity on either PO changes.
 - **One number on several POs** (2026-11-04, migration 086;
   `server/tracking-attach.ts`): a box holding two POs (SupplyHouse
   28686630 and 28686630_1) — the queued row goes to the first PO and each

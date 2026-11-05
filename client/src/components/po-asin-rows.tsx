@@ -135,7 +135,9 @@ export function actionChipClass(item: string): string {
 }
 export const chipBase = "inline-block rounded-sm px-1.5 py-0.5 text-[11px] whitespace-nowrap";
 /** Shown (never editable): the auto-managed "Review Velocity" (SPEC §26) and the pack-size items (derived from the ASIN row) after the manual items. */
-export const DISPLAY_ACTION_ITEMS = [...ACTION_ITEM_OPTIONS, EXTRA_UNITS_SHIPPED, "Review Velocity", "Pack size missing", "Pack size mismatch", "Receiving mismatch"];
+export const DISPLAY_ACTION_ITEMS = [...ACTION_ITEM_OPTIONS, EXTRA_UNITS_SHIPPED, "Review Velocity", "Pack size missing", "Pack size mismatch", "Receiving mismatch",
+  // One-off (2026-11-05, server/tracking-replacement-pair.ts): derived, resolves when the tracking is added.
+  "Tracking also goes to 200015557295492 (1 replacement single)"];
 const ordered = (items: readonly string[] | undefined) => DISPLAY_ACTION_ITEMS.filter((o) => (items ?? []).includes(o));
 
 /** Read-only chips (the POs-page column: union over all lines). */

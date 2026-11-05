@@ -74,7 +74,9 @@ export const RECEIVING_MISMATCH = "Receiving mismatch";
  * Blocks auto-close.
  */
 export const EXTRA_UNITS_SHIPPED = "Extra units shipped";
-export const AUTO_ACTION_ITEMS = [EXTRA_UNITS_SHIPPED, REVIEW_VELOCITY, PACK_SIZE_MISSING, PACK_SIZE_MISMATCH, RECEIVING_MISMATCH] as const;
+// The one-off replacement pair's item (server/tracking-replacement-pair.ts, 2026-11-05): derived, never set by hand.
+export const REPLACEMENT_TRACKING_ITEM = "Tracking also goes to 200015557295492 (1 replacement single)";
+export const AUTO_ACTION_ITEMS = [EXTRA_UNITS_SHIPPED, REVIEW_VELOCITY, PACK_SIZE_MISSING, PACK_SIZE_MISMATCH, RECEIVING_MISMATCH, REPLACEMENT_TRACKING_ITEM] as const;
 export const DISPLAY_ACTION_ITEMS: readonly string[] = [...ACTION_ITEMS, ...AUTO_ACTION_ITEMS];
 
 export function isActionItem(s: string): s is ActionItem {
