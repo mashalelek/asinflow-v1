@@ -1007,7 +1007,7 @@ export function PurchaseOrderDetailPlaceholder() {
 
       {tab === "asins" && <PoAsinTable asins={asins} editable onChanged={reload} po={{ id: po.id, subtotal: po.subtotal, discount: po.discount, tax: po.tax }} />}
 
-      {tab === "products" && <PoProductsTable poId={po.id} asins={asins} onChanged={reload} po={{ id: po.id, subtotal: po.subtotal, discount: po.discount, tax: po.tax }} />}
+      {tab === "products" && <PoProductsTable poId={po.id} asins={asins} onChanged={reload} po={{ id: po.id, subtotal: po.subtotal, discount: po.discount, tax: po.tax }} shipsTo={po.ships_to} />}
 
       {tab === "documents" && <PoDocumentsTab poId={po.id} documents={data.documents ?? []} onChanged={reload} />}
 

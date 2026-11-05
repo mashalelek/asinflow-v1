@@ -6193,6 +6193,20 @@ DATE as a JS Date; never string-slice it), bundle set-count check.
 
 ### Canceled / returned / final quantities (migration 030)
 
+**Products → Received on a Velocity PO (Maria 2026-11-05).** For a PO with
+`ships_to = 'velocity'` the Products tab's Received is Velocity's count, not
+`qty_received`: the ASIN row's Received by Velocity (ASIN units) in the
+line's retailer units, × `asin_units_per_pack` ÷ `retailer_units_per_product`
+(the stored yield when the line lacks the two integers) — 200015557295492:
+5.5 × 2 ÷ 1 = 11 of 12. Exact only when the ASIN row has one line; when
+several lines share it they share one Velocity order, so the lines stay blank
+and the total is the ASIN row's (the hover says so). Read only; nothing is
+written, and `qty_received` stays the home PO's own editable count. A
+replacement checked in under the PO raises this number, which is why a
+supplier shortage is the stored defect qty (§22 "Supplier defects"), never
+Ordered − Received (`lineReceivedShown`, `client/src/components/po-edit.tsx`).
+
+
 Decisions resolved 2026-08-22:
 
 - `qty_refunded` was RENAMED `qty_returned` (data preserved — the import

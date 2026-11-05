@@ -140,7 +140,7 @@ describe("Products tab status columns (§4.3)", () => {
   });
   it("the Products tab adds At Prep Center / At CQG Warehouse / Lost-damaged, through the yield for 1:1 lines, dash for bundle components", () => {
     // Since po-af-owned §3 (2026-10-18) the tab is the editable PoProductsTable (components/po-edit.tsx).
-    expect(read("client/src/pages/purchase-orders.tsx")).toMatch(/\{tab === "products" && <PoProductsTable poId=\{po\.id\} asins=\{asins\} onChanged=\{reload\} po=\{\{ id: po\.id, subtotal: po\.subtotal, discount: po\.discount, tax: po\.tax \}\} \/>\}/);
+    expect(read("client/src/pages/purchase-orders.tsx")).toMatch(/\{tab === "products" && <PoProductsTable poId=\{po\.id\} asins=\{asins\} onChanged=\{reload\} po=\{\{ id: po\.id, subtotal: po\.subtotal, discount: po\.discount, tax: po\.tax \}\} shipsTo=\{po\.ships_to\} \/>\}/);
     const tab = read("client/src/components/po-edit.tsx");
     const table = tab.slice(tab.indexOf("export function PoProductsTable"), tab.indexOf("function AddProductRow"));
     for (const h of ["At Prep Center", "At CQG Warehouse", "Lost/damaged by us"]) expect(table).toContain(`<th className={th(true)}>${h}</th>`);

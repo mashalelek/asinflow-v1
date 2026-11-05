@@ -100,7 +100,7 @@ function QtyText({ v }: { v: number | string | null | undefined }) { const t = f
 
 type LineWithParent = PoAsinLine & { parent: PoAsinRowData };
 
-export function PoProductsTable({ poId, asins, onChanged, po }: { poId: string; asins: PoAsinRowData[]; onChanged: () => void; /** The header money the due-refund proposal allocates with (Dashboard patch C1). */ po?: PoHeaderMoney }) {
+export function PoProductsTable({ poId, asins, onChanged, po, shipsTo }: { poId: string; asins: PoAsinRowData[]; onChanged: () => void; /** The header money the due-refund proposal allocates with (Dashboard patch C1). */ po?: PoHeaderMoney; /** 'velocity' → Received is Velocity's count (lineReceivedShown). */ shipsTo?: string | null }) {
   const { toast } = useToast();
   const lines: LineWithParent[] = asins.flatMap((a) => (a.lines ?? []).map((l) => ({ ...l, parent: a })));
   // Cancel qty (C1): raising a line's Canceled proposes a DUE refund row for the added qty; saving the cancel without one is allowed (Skip).
@@ -143,7 +143,12 @@ export function PoProductsTable({ poId, asins, onChanged, po }: { poId: string; 
                   <td className="px-3 py-1.5 text-right"><InlineEdit money value={l.price} onSave={patch(l, "price")} align="right" width="w-20" testId={`price-${l.id}`}><MoneyText v={l.price} /></InlineEdit></td>
                   <td className="px-3 py-1.5 text-right"><MoneyText v={l.item_discount} /></td>
                   <td className="px-3 py-1.5 text-right"><InlineEdit value={l.qty_ordered} onSave={patch(l, "qty_ordered")} align="right" width="w-16" testId={`qty_ordered-${l.id}`}><QtyText v={l.qty_ordered} /></InlineEdit></td>
-                  <td className="px-3 py-1.5 text-right"><InlineEdit value={l.qty_received} onSave={patch(l, "qty_received")} align="right" width="w-16" testId={`qty_received-${l.id}`}><QtyText v={l.qty_received} /></InlineEdit></td>
+                  <td className="px-3 py-1.5 text-right">{(() => {
+                    const rec = lineReceivedShown(l, l.parent, shipsTo);
+                    return rec.fromVelocity
+                      ? <span title={rec.title} data-testid={`qty_received-velocity-${l.id}`}><QtyText v={rec.value} /></span>
+                      : <InlineEdit value={l.qty_received} onSave={patch(l, "qty_received")} align="right" width="w-16" testId={`qty_received-${l.id}`}><QtyText v={l.qty_received} /></InlineEdit>;
+                  })()}</td>
                   <td className="px-3 py-1.5 text-right"><InlineEdit value={l.qty_canceled} onSave={patch(l, "qty_canceled")} align="right" width="w-16" testId={`qty_canceled-${l.id}`}><QtyText v={l.qty_canceled} /></InlineEdit></td>
                   <td className="px-3 py-1.5 text-right"><InlineEdit value={l.qty_returned} onSave={patch(l, "qty_returned")} align="right" width="w-16" testId={`qty_returned-${l.id}`}><QtyText v={l.qty_returned} /></InlineEdit></td>
                   {/* Round 2 (Maria 2026-11-01): "Yield 0.17" was the col-T ratio — the column is the ASIN units this line yields (12 × 1/6 = 2); typing units sets the yield (units ÷ qty). */}
@@ -177,6 +182,29 @@ export function PoProductsTable({ poId, asins, onChanged, po }: { poId: string; 
 /** The line's yield as a number: its exact ratio (migration 080), else its 2-dp yield read as the fraction it stands for. */
 export function lineYield(l: { asin_qty_per_product: number | string | null; retailer_units_per_product?: number | string | null; asin_units_per_pack?: number | string | null }): number {
   return effectiveYield(l, trueYield);
+}
+/**
+ * Products → Received (Maria 2026-11-05). A Velocity PO shows Velocity's count
+ * (the ASIN row's Received by Velocity, ASIN units) in the line's retailer
+ * units: × asin units ÷ retailer units (5.5 × 2 ÷ 1 = 11). Exact only when the
+ * ASIN row has one line; several lines share one Velocity order, so the lines
+ * stay blank and the total is the ASIN row's. A home PO keeps its own count
+ * (the editable qty_received). Read only: nothing is written.
+ */
+export function lineReceivedShown(
+  l: { qty_received: number | string | null; asin_qty_per_product: number | string | null; retailer_units_per_product?: number | string | null; asin_units_per_pack?: number | string | null },
+  parent: { received_velocity: string | number | null; lines?: unknown[] },
+  shipsTo: string | null | undefined,
+): { fromVelocity: boolean; value: number | null; title?: string } {
+  if (shipsTo !== "velocity") return { fromVelocity: false, value: l.qty_received == null ? null : Number(l.qty_received) };
+  const own = l.qty_received != null ? ` · own count ${Number(l.qty_received)}` : "";
+  const rv = parent.received_velocity == null ? null : Number(parent.received_velocity);
+  const n = (parent.lines ?? []).length;
+  if (n > 1) return { fromVelocity: true, value: null, title: `From Velocity: ${rv == null ? "nothing checked in yet" : `${rv} ASIN units`} on the ASIN row — ${n} lines share one Velocity order, so no split per line${own}` };
+  if (rv == null) return { fromVelocity: true, value: null, title: `From Velocity: nothing checked in yet${own}` };
+  const r = Number(l.retailer_units_per_product), a = Number(l.asin_units_per_pack);
+  const value = r > 0 && a > 0 ? Math.round((rv * a / r) * 100) / 100 : Math.round((rv / (lineYield(l) || 1)) * 100) / 100;
+  return { fromVelocity: true, value, title: `From Velocity: ${rv} ASIN units received${r > 0 && a > 0 ? ` × ${a} ÷ ${r}` : ""} = ${value} retailer units${own}` };
 }
 /** The ASIN units a product line yields: qty ordered × its yield, exact when the line carries its ratio. */
 export function lineAsinUnits(l: { qty_ordered: number | string | null; asin_qty_per_product: number | string | null; retailer_units_per_product?: number | string | null; asin_units_per_pack?: number | string | null }): string | null {

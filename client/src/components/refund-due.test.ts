@@ -47,7 +47,7 @@ describe("entry points and dialogs", () => {
     expect(page).toMatch(/data-testid="select-po-refunds"/);
     expect(page).toMatch(/if \(refundsFilter !== "any"\) params\.set\("refunds", refundsFilter\);/);
     expect(page).toMatch(/data-testid=\{`po-refund-due-\$\{po\.order_id\}`\}/);
-    expect(page).toMatch(/<PoProductsTable poId=\{po\.id\} asins=\{asins\} onChanged=\{reload\} po=\{\{ id: po\.id, subtotal: po\.subtotal, discount: po\.discount, tax: po\.tax \}\} \/>/);
+    expect(page).toMatch(/<PoProductsTable poId=\{po\.id\} asins=\{asins\} onChanged=\{reload\} po=\{\{ id: po\.id, subtotal: po\.subtotal, discount: po\.discount, tax: po\.tax \}\} shipsTo=\{po\.ships_to\} \/>/);
     expect(page).toMatch(/<PoAsinRow key=\{a\.id\} a=\{a\} indent editable onChanged=\{load\} po=\{\{ id: po\.id/);
   });
   it("deep link: ?refunds=due&closed=all&from&to is read on mount; garbage falls back", () => {
