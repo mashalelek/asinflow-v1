@@ -7858,6 +7858,28 @@ Settings: `tracking.velocity_street` ("805 grandy"),
   = order_in_text`**; two or more (AF's `_N` pair) stays for review. The
   run's result lists every link (`npm run backfill:tracking -- --stage
   match [--live] [--prod]` prints it).
+- **Carrier notices** (2026-11-04, Maria — the two Zara UPS notices,
+  tracking 1ZV5503JYW00243199, est. 9/22/2026; migration 089). A UPS /
+  FedEx / USPS email (`CARRIER_SENDERS`) is sent "at the request of" the
+  shipper and usually names no order #. The parser reads the **shipper**
+  ("at the request of ZARA DEL AMO FASHION CENTER to notify you", "From:
+  …", FedEx's "Shipper information" block) into `po_tracking.shipper_name`
+  and the carrier's **reference numbers** ("Reference Number 1:
+  212355503949", purchase-order / invoice numbers) into
+  `po_tracking.carrier_refs` — never as a tracking number. A row stored
+  before this gets both from its email on the next match run. The shipper
+  resolves through `supplier_aliases`: an alias equal to the name, else the
+  ONE supplier with an alias (4+ characters) that is a word prefix of it
+  (seed: "zara del amo fashion center" and "zara" → zara.com), else the
+  name match. With an order # the usual rule applies under that supplier;
+  with none, the **candidates** are the supplier's POs ordered 0–30
+  Eastern calendar days before the email, not closed, `ships_to` matching
+  the notice's ship-to street (unknown on either side excludes nothing),
+  not fully shipped (Σ `qty_shipped_supplier` < Σ `qty`). **Exactly one →
+  `matched`, `match_reason = carrier_shipper`**; several → `ambiguous`,
+  the queue panel showing them as the suggestions; none → `no_po`. The
+  email's text naming one PO (`order_in_text`) still wins. A carrier
+  domain is never seeded into the domain map.
 - **Order-#-unique** (2026-10-22): when the sender resolves to **no**
   supplier, the order # is compared digits-only (also without a trailing
   `-N` / `_N`; 5+ digits) against every AF PO; exactly one → `matched`,

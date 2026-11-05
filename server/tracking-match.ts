@@ -49,7 +49,22 @@
 // (tracking-replacement.ts) — attaches to the one supplier PO with that
 // original # (match_reason 'replacement') and notes it on the PO with a
 // History row.
+//
+// 2026-11-04 (Maria — the two Zara UPS notices): a CARRIER's notice (UPS /
+// FedEx / USPS) is sent "at the request of" the shipper ("ZARA DEL AMO
+// FASHION CENTER") and names no order #. The shipper resolves through
+// supplier_aliases — an alias equal to the name, or the one supplier with an
+// alias that is a word prefix of it ("zara") — then the supplier's
+// candidates are its POs ordered 0–30 calendar days (Eastern) before the
+// email, not closed, with a ships_to matching the notice's ship-to street
+// (unknown on either side does not exclude), and not fully shipped (Σ
+// qty_shipped_supplier < Σ qty). Exactly one → matched (match_reason
+// 'carrier_shipper'); several → ambiguous with the candidates, none → no_po.
+// The email's text naming one PO (order_in_text) still wins. A carrier
+// domain is never seeded into the domain map. The shipper and the carrier's
+// reference numbers are stored on the row (shipper_name, carrier_refs).
 import type { QueryLike } from "./scheduler/types";
+import { isCarrierSender, extractShipper, extractCarrierRefs } from "./tracking-parse";
 import { normOrder, baseOrderId, orderIdParts, stripShipmentSuffix, digitForms, posNamedInText, matchOrderId } from "./order-number";
 import { loadAliases, aliasKey } from "./supplier-aliases";
 import { appendPoNote, replacementNote, type ReplacementLookup } from "./tracking-replacement";
@@ -81,7 +96,57 @@ export function resolveSupplier(domain: string | null, map: Record<string, strin
   return { supplier: null, obvious: false };
 }
 
-export interface PoRef { id: string; supplier: string; order_id: string; order_date?: Date | string | null; alt_order_ids?: string | null }
+export interface PoRef { id: string; supplier: string; order_id: string; order_date?: Date | string | null; alt_order_ids?: string | null; ships_to?: string | null; fully_shipped?: boolean; closed?: boolean }
+
+export const CARRIER_WINDOW_DAYS = 30;
+const words = (x: string) => x.toLowerCase().normalize("NFD").replace(/[^a-z0-9 ]/g, " ").split(/\s+/).filter(Boolean);
+/** Pure: the supplier a carrier notice's shipper names — an alias equal to it, else the ONE supplier with an alias (4+ characters) that is a word prefix of it, else the one supplier named by it. */
+export function supplierForShipper(name: string | null | undefined, aliases: ReadonlyMap<string, string>, suppliers: readonly string[]): string | null {
+  const n = String(name ?? "").trim();
+  if (!n) return null;
+  const exact = aliases.get(aliasKey(n));
+  if (exact) return exact;
+  const w = words(n);
+  const hits = new Set<string>();
+  aliases.forEach((sup, alias) => {
+    const aw = words(alias);
+    if (alias.replace(/\s/g, "").length >= 4 && aw.length > 0 && aw.length <= w.length && aw.every((x, i) => w[i] === x)) hits.add(sup);
+  });
+  if (hits.size === 1) return Array.from(hits)[0];
+  if (hits.size > 1) return null;
+  return supplierByName(n, suppliers);
+}
+const etDay = (d: Date | string): string => new Intl.DateTimeFormat("en-CA", { timeZone: "America/New_York", year: "numeric", month: "2-digit", day: "2-digit" }).format(new Date(d));
+const dayNumber = (ymd: string) => Date.UTC(Number(ymd.slice(0, 4)), Number(ymd.slice(5, 7)) - 1, Number(ymd.slice(8, 10))) / 86_400_000;
+/** "805 grandy" → velocity / home from the tracking.* streets; null when unknown. */
+export function shipToKind(street: string | null | undefined, streets: { velocityStreet: string; homeStreets: readonly string[] }): "velocity" | "home" | null {
+  const s = String(street ?? "").toLowerCase().trim();
+  if (!s) return null;
+  if (s.startsWith(streets.velocityStreet.toLowerCase())) return "velocity";
+  if (streets.homeStreets.some((h) => s.startsWith(h.toLowerCase()))) return "home";
+  return null;
+}
+/** Pure: a no-order-# carrier notice's candidate POs (see the 2026-11-04 note above), oldest first. */
+export function carrierCandidates(supplier: string, emailDate: Date | string | null, kind: "velocity" | "home" | null, pos: readonly PoRef[]): PoRef[] {
+  if (!emailDate) return [];
+  const e = dayNumber(etDay(emailDate));
+  return pos.filter((p) => {
+    if (p.supplier !== supplier || p.order_date == null || p.closed || p.fully_shipped) return false;
+    const age = e - dayNumber(String(p.order_date instanceof Date ? etDay(p.order_date) : String(p.order_date).slice(0, 10)));
+    if (age < 0 || age > CARRIER_WINDOW_DAYS) return false;
+    return !kind || !p.ships_to || p.ships_to === kind;
+  }).sort((a, b) => String(a.order_date).localeCompare(String(b.order_date)));
+}
+/** The PO fields the matchers read (order #s, date, ships_to, closed, fully shipped). */
+export const MATCH_POS_SQL = `SELECT p.id, p.supplier, p.order_id, p.order_date, p.alt_order_ids, p.ships_to, (p.closed_at IS NOT NULL) AS closed,
+  COALESCE((SELECT SUM(a.qty_shipped_supplier) FROM po_asins a WHERE a.po_id = p.id), 0) >= NULLIF((SELECT SUM(a.qty) FROM po_asins a WHERE a.po_id = p.id), 0) AS fully_shipped
+  FROM purchase_orders p`;
+export const toPoRef = (x: any): PoRef => ({ id: String(x.id), supplier: String(x.supplier), order_id: String(x.order_id), order_date: x.order_date ?? null, alt_order_ids: x.alt_order_ids ?? null, ships_to: x.ships_to ?? null, closed: !!x.closed, fully_shipped: !!x.fully_shipped });
+export async function loadShipStreets(query: QueryLike): Promise<{ velocityStreet: string; homeStreets: string[] }> {
+  const rows = (await query(`SELECT key, value FROM settings WHERE key = ANY($1::text[])`, [["tracking.velocity_street", "tracking.home_streets"]])).rows;
+  const v = (k: string) => rows.find((r: any) => r.key === k)?.value;
+  return { velocityStreet: String(v("tracking.velocity_street") ?? "805 grandy"), homeStreets: (v("tracking.home_streets") as string[]) ?? ["65 rivercrest"] };
+}
 
 /** Pure: the POs a tracking row's order # names for that supplier. */
 export function findPos(supplier: string, retailerOrderId: string, pos: readonly PoRef[]): PoRef[] {
@@ -94,7 +159,7 @@ export function findPos(supplier: string, retailerOrderId: string, pos: readonly
   return pos.filter((p) => p.supplier === supplier && orderIdParts(matchOrderId(p)).some((x) => want.has(lz(normOrder(x)))));
 }
 
-export type MatchVia = "order_id_unique" | "retailer_name" | "order_in_text" | "replacement";
+export type MatchVia = "order_id_unique" | "retailer_name" | "order_in_text" | "replacement" | "carrier_shipper";
 export type MatchOutcome = { status: "matched"; po_id: string; via?: MatchVia } | { status: "unmatched"; reason: "unknown_sender" | "no_po" | "ambiguous" | "unpaired"; candidates?: string[] };
 
 const NAME_PATTERNS = [/\byour\s+(.{2,40}?)\s+order\b/i, /\border with\s+(.{2,40}?)\s+(?:and|has|is)\b/i];
@@ -140,7 +205,7 @@ export function poNamedInEmail(text: string, emailDate: Date | null, supplier: s
 
 /** Pure: one row's match. */
 export function matchRow(
-  row: { sender_domain: string | null; retailer_order_id: string | null; email_subject?: string | null },
+  row: { sender_domain: string | null; retailer_order_id: string | null; email_subject?: string | null; shipper_name?: string | null; ship_to_kind?: "velocity" | "home" | null; shipped_at?: Date | string | null },
   map: Record<string, string>, suppliers: readonly string[], pos: readonly PoRef[], platforms: readonly string[] = DEFAULT_PLATFORM_SENDERS,
   aliases: ReadonlyMap<string, string> = new Map(),
 ): MatchOutcome & { supplier: string | null; obvious: boolean } {
@@ -150,6 +215,16 @@ export function matchRow(
     const name = retailerNameFromSubject(row.email_subject ?? null);
     const sup = name ? (aliases.get(aliasKey(name)) ?? supplierByName(name, suppliers)) : null;
     if (sup) { s = { supplier: sup, obvious: false }; via = "retailer_name"; }
+  }
+  // A carrier's notice: the supplier from the shipper it names; with no order #, the supplier's candidate POs.
+  if (!s.supplier && isCarrierSender(row.sender_domain) && row.shipper_name) {
+    const sup = supplierForShipper(row.shipper_name, aliases, suppliers);
+    if (sup) { s = { supplier: sup, obvious: false }; via = "carrier_shipper"; }
+  }
+  if (!row.retailer_order_id && via === "carrier_shipper" && s.supplier) {
+    const c = carrierCandidates(s.supplier, row.shipped_at ?? null, row.ship_to_kind ?? null, pos);
+    if (c.length === 1) return { status: "matched", po_id: c[0].id, via, ...s };
+    return { status: "unmatched", reason: c.length ? "ambiguous" : "no_po", ...(c.length ? { candidates: c.map((x) => x.id) } : {}), ...s };
   }
   if (!row.retailer_order_id) return { status: "unmatched", reason: s.supplier ? "unpaired" : "unknown_sender", ...s };
   const hits = s.supplier ? findPos(s.supplier, row.retailer_order_id, pos) : [];
@@ -212,7 +287,7 @@ export interface MatchRunResult {
  */
 export async function matchTrackingRows(query: QueryLike, opts: { dryRun?: boolean; textFor?: EmailTextFor; replacementFor?: ReplacementLookup } = {}): Promise<MatchRunResult> {
   const rows = (await query(
-    `SELECT id, carrier, tracking_number, sender_domain, retailer_order_id, email_subject, gmail_message_id FROM po_tracking
+    `SELECT id, carrier, tracking_number, sender_domain, retailer_order_id, email_subject, gmail_message_id, shipper_name, carrier_refs, ship_to_street, shipped_at FROM po_tracking
       WHERE status = 'unmatched' AND source <> 'manual' AND reassigned_at IS NULL
         AND COALESCE(match_reason, '') NOT IN ('dismissed', 'ai_disabled', 'ai_no_tracking', 'return')`,
   )).rows;
@@ -221,12 +296,26 @@ export async function matchTrackingRows(query: QueryLike, opts: { dryRun?: boole
   const map = await loadDomainMap(query);
   const platforms = await loadPlatformSenders(query);
   const aliases = await loadAliases(query);
-  const pos: PoRef[] = (await query(`SELECT id, supplier, order_id, order_date, alt_order_ids FROM purchase_orders`)).rows.map((x: any) => ({ id: String(x.id), supplier: String(x.supplier), order_id: String(x.order_id), order_date: x.order_date ?? null, alt_order_ids: x.alt_order_ids ?? null }));
+  const pos: PoRef[] = (await query(MATCH_POS_SQL)).rows.map(toPoRef);
   const suppliers = Array.from(new Set(pos.map((p) => p.supplier)));
+  const streets = await loadShipStreets(query);
   for (const row of rows) {
-    let m: ReturnType<typeof matchRow> = matchRow(row, { ...map, ...r.seeded }, suppliers, pos, platforms, aliases);
-    if (m.status === "unmatched" && m.reason !== "ambiguous" && opts.textFor && row.gmail_message_id) {
-      const email = await opts.textFor(String(row.gmail_message_id)).catch(() => null);
+    // A carrier notice stored before its shipper was read (2026-11-04): read it — and the reference numbers — from the email, and keep them.
+    let email: { text: string; date: Date | null } | null | undefined;
+    const readEmail = async () => (email !== undefined ? email : (email = opts.textFor && row.gmail_message_id ? await opts.textFor(String(row.gmail_message_id)).catch(() => null) : null));
+    if (isCarrierSender(row.sender_domain) && !row.shipper_name && opts.textFor && row.gmail_message_id) {
+      const e = await readEmail();
+      if (e) {
+        row.shipper_name = extractShipper(e.text);
+        const refs = extractCarrierRefs(e.text);
+        if (!opts.dryRun && (row.shipper_name || refs.length)) await query(`UPDATE po_tracking SET shipper_name = COALESCE(shipper_name, $2), carrier_refs = COALESCE(carrier_refs, $3::text[]), updated_at = NOW() WHERE id = $1`, [row.id, row.shipper_name, refs.length ? refs : null]);
+      }
+    }
+    const subject = { ...row, ship_to_kind: shipToKind(row.ship_to_street, streets) };
+    let m: ReturnType<typeof matchRow> = matchRow(subject, { ...map, ...r.seeded }, suppliers, pos, platforms, aliases);
+    const carrierAmbiguous = m.status === "unmatched" && m.reason === "ambiguous" && isCarrierSender(row.sender_domain);
+    if (m.status === "unmatched" && (m.reason !== "ambiguous" || carrierAmbiguous) && opts.textFor && row.gmail_message_id) {
+      const email = await readEmail();
       const po = email ? poNamedInEmail(`${row.email_subject ?? ""}\n${email.text}`, email.date, m.supplier, pos) : null;
       if (po) m = { status: "matched", po_id: po.id, via: "order_in_text", supplier: po.supplier, obvious: m.supplier ? m.obvious : false };
     }

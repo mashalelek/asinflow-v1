@@ -32,6 +32,39 @@ export interface ParsedEmail {
   orderIds: string[];
   shipToStreet: string | null;
   shipments: ParsedShipment[];
+  /** A carrier's notice (UPS / FedEx / USPS sender, 2026-11-04): the shipper it was sent for, and the carrier's reference numbers. */
+  shipperName?: string | null;
+  carrierRefs?: string[];
+}
+
+/** Carriers that send notices on a shipper's behalf (registrable domains). */
+export const CARRIER_SENDERS = ["ups.com", "fedex.com", "usps.com"];
+export const isCarrierSender = (domain: string | null | undefined): boolean =>
+  !!domain && CARRIER_SENDERS.includes(domain.toLowerCase().split(".").slice(-2).join("."));
+
+// "This message was sent to you at the request of ZARA DEL AMO FASHION CENTER to notify you…" (UPS), "From: ZARA DEL AMO FASHION CENTER",
+// FedEx's "Shipper information" block (the name on the next line).
+const SHIPPER_PATTERNS = [
+  /\bat the request of\s+(.{2,80}?)\s+to notify\b/i,
+  /^[ \t]*(?:from|shipper|shipped from|sender)[ \t]*:[ \t]*(\S.{1,79}?)[ \t]*$/im,
+  /\bshipper information[ \t]*\n[ \t]*(\S.{1,79}?)[ \t]*$/im,
+];
+/** Pure: the shipper a carrier notice names, or null. */
+export function extractShipper(text: string): string | null {
+  for (const re of SHIPPER_PATTERNS) {
+    const n = re.exec(text)?.[1]?.replace(/\s+/g, " ").replace(/[.,;:]+$/, "").trim();
+    if (n && /[a-z]/i.test(n) && !/@|https?:/i.test(n)) return n;
+  }
+  return null;
+}
+/** Pure: the carrier's reference numbers as printed ("Reference Number 1: 212355503949", "Reference: PO-77", "Purchase order number: 4411"), distinct, in order. */
+export function extractCarrierRefs(text: string): string[] {
+  const out: string[] = [];
+  for (const m of Array.from(text.matchAll(/(?:reference(?:\s*(?:number|no\.?|#))?(?:\s*\d)?|purchase\s+order\s+(?:number|no\.?|#)|invoice\s+(?:number|no\.?|#))\s*:\s*([A-Z0-9][A-Z0-9-]{3,39})\b/gi))) {
+    const v = m[1].toUpperCase();
+    if (!out.includes(v)) out.push(v);
+  }
+  return out;
 }
 
 /** Mailboxes that FORWARD retailer mail into orders@ (patch §1: incl. mpeters.cqg+alias@gmail.com). */
@@ -239,12 +272,15 @@ export function parseTrackingEmail(msg: { subject: string; text: string; fromDom
     : /\bdelivered\b/i.test(msg.subject) ? "delivered"
     : /out for delivery/i.test(msg.subject) ? "out_for_delivery"
     : SHIPPED_WORDS.test(all) ? "shipped" : "other";
+  const senderDomain = unwrapForward(msg.fromDomain, text);
+  const carrier = isCarrierSender(senderDomain);
   return {
     candidate: shipments.length > 0 || SHIPPED_WORDS.test(all),
     kind,
-    senderDomain: unwrapForward(msg.fromDomain, text),
+    senderDomain,
     orderIds,
     shipToStreet: extractShipTo(text),
     shipments,
+    ...(carrier ? { shipperName: extractShipper(text), carrierRefs: extractCarrierRefs(text) } : {}),
   };
 }

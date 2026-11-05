@@ -16,7 +16,8 @@
 //                                       tracking rows that exist NOW; a later row may raise it again (§8)
 import express, { type Router, type Request, type Response } from "express";
 import { query as defaultQuery } from "./db";
-import { matchTrackingRows, setDomainMapEntry, findPos, findPosByOrderDigits, onePoResolver, type PoRef } from "./tracking-match";
+import { matchTrackingRows, setDomainMapEntry, findPos, findPosByOrderDigits, onePoResolver, carrierCandidates, shipToKind, loadShipStreets, MATCH_POS_SQL, toPoRef, type PoRef } from "./tracking-match";
+import { isCarrierSender } from "./tracking-parse";
 import { ingestTracking } from "./tracking-ingest";
 import { reconcileConfirmations } from "./po-confirm-reconcile";
 import { pushTracking } from "./tracking-push";
@@ -27,8 +28,11 @@ import { attachTrackingToPos } from "./tracking-attach";
 import type { QueryLike } from "./scheduler/types";
 import { reconcileReviewVelocity } from "./line-action-items";
 
-/** Pure: the POs a queued row most likely belongs to — the guessed supplier's PO first, then digits-only order # hits; ≤ 3. */
-export function suggestPos(row: { retailer_order_id: string | null; supplier_guess: string | null }, pos: readonly PoRef[]): Array<{ po_id: string; order_id: string; supplier: string }> {
+/** Pure: the POs a queued row most likely belongs to — the guessed supplier's PO first, then digits-only order # hits; ≤ 3. A carrier notice with no order # (2026-11-04): the shipper's supplier's candidate POs (tracking-match carrierCandidates). */
+export function suggestPos(row: { retailer_order_id: string | null; supplier_guess: string | null; sender_domain?: string | null; shipped_at?: Date | string | null; ship_to_kind?: "velocity" | "home" | null }, pos: readonly PoRef[]): Array<{ po_id: string; order_id: string; supplier: string }> {
+  if (!row.retailer_order_id && row.supplier_guess && isCarrierSender(row.sender_domain)) {
+    return carrierCandidates(row.supplier_guess, row.shipped_at ?? null, row.ship_to_kind ?? null, pos).slice(0, 3).map((h) => ({ po_id: h.id, order_id: h.order_id, supplier: h.supplier }));
+  }
   if (!row.retailer_order_id) return [];
   const hits = [...(row.supplier_guess ? findPos(row.supplier_guess, row.retailer_order_id, pos) : []), ...findPosByOrderDigits(row.retailer_order_id, pos)];
   const out: Array<{ po_id: string; order_id: string; supplier: string }> = [];
@@ -88,17 +92,18 @@ export function createTrackingRouter(deps: { query?: QueryLike } = {}): Router {
     try {
       const rows = (await query(
         `SELECT id, carrier, tracking_number, retailer_order_id, sender_domain, supplier_guess, ship_to_street, shipped_at,
-                email_subject, source, match_reason, created_at, gmail_message_id
+                email_subject, source, match_reason, created_at, gmail_message_id, shipper_name, carrier_refs
            FROM po_tracking
           WHERE status = 'unmatched' AND split_of IS NULL AND COALESCE(match_reason, '') NOT IN ('dismissed', 'return')
           ORDER BY shipped_at DESC NULLS LAST, id DESC LIMIT 1000`,
       )).rows;
-      const pos: PoRef[] = rows.some((r: any) => r.retailer_order_id)
-        ? (await query(`SELECT id, supplier, order_id, alt_order_ids FROM purchase_orders`)).rows.map((x: any) => ({ id: String(x.id), supplier: String(x.supplier), order_id: String(x.order_id), alt_order_ids: x.alt_order_ids ?? null }))
+      const pos: PoRef[] = rows.some((r: any) => r.retailer_order_id || (r.supplier_guess && isCarrierSender(r.sender_domain)))
+        ? (await query(MATCH_POS_SQL)).rows.map(toPoRef)
         : [];
+      const streets = await loadShipStreets(query);
       const onePo = rows.some((r: any) => r.match_reason === AI_DISABLED_REASON) ? await onePoResolver(query) : null;
       for (const r of rows as any[]) {
-        r.suggestions = suggestPos(r, pos);
+        r.suggestions = suggestPos({ ...r, ship_to_kind: shipToKind(r.ship_to_street, streets) }, pos);
         r.tab = queueTab(r, onePo);
         r.gmail_url = gmailMessageUrl(r.gmail_message_id);
         delete r.gmail_message_id;

@@ -42,7 +42,7 @@ describe("the matcher attaches a replacement's tracking to the original PO, with
     const writes: Array<{ sql: string; params: any[] }> = [];
     const query = async (sql: string, params?: any[]) => {
       if (sql.includes("FROM po_tracking") && sql.trimStart().startsWith("SELECT")) return { rows: [{ id: 573, carrier: "FEDEX", tracking_number: "517715131849", sender_domain: "walmart.com", retailer_order_id: "2000154-98956485", email_subject: "Your package is delayed", gmail_message_id: "g" }], rowCount: 1 };
-      if (sql.startsWith("SELECT value FROM settings")) return { rows: [], rowCount: 0 };
+      if (sql.startsWith("SELECT value FROM settings") || sql.startsWith("SELECT key, value FROM settings")) return { rows: [], rowCount: 0 };
       if (sql.startsWith("SELECT notes FROM purchase_orders")) return { rows: [{ notes }], rowCount: 1 };
       if (sql.includes("FROM purchase_orders")) return { rows: POS, rowCount: POS.length };
       if (sql.startsWith("SELECT alias, supplier FROM supplier_aliases")) return { rows: [], rowCount: 0 };

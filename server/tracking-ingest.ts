@@ -38,6 +38,9 @@ export interface TrackingRowDraft {
   email_subject: string;
   source: "regex" | "ai";
   match_reason: string | null;
+  /** A carrier notice's shipper and reference numbers (2026-11-04); absent on a retailer's email. */
+  shipper_name?: string | null;
+  carrier_refs?: string[] | null;
 }
 
 /** Queue marker for a return pickup / label email's numbers — never matched or pushed; the cancellations patch consumes them. */
@@ -55,6 +58,7 @@ export function rowsFromEmail(msg: Pick<GmailMessage, "id" | "threadId" | "date"
   const base = {
     sender_domain: p.senderDomain, ship_to_street: p.shipToStreet, shipped_at: msg.date,
     gmail_message_id: msg.id, gmail_thread_id: msg.threadId, email_subject: msg.subject.slice(0, 300),
+    ...(p.shipperName !== undefined || p.carrierRefs !== undefined ? { shipper_name: p.shipperName ?? null, carrier_refs: p.carrierRefs?.length ? p.carrierRefs : null } : {}),
   };
   if (p.shipments.length > 0) {
     return p.shipments.map((s) => ({
@@ -214,15 +218,18 @@ export async function ingestTracking(opts: {
 export async function upsertTrackingRow(query: QueryLike, d: TrackingRowDraft): Promise<"inserted" | "refreshed" | "ignored"> {
   const res = await query(
     `INSERT INTO po_tracking (carrier, tracking_number, retailer_order_id, sender_domain, ship_to_street, shipped_at, items_json,
-                              gmail_message_id, gmail_thread_id, email_subject, source, status, match_reason)
-     VALUES ($1, $2, $3, $4, $5, $6, $7::jsonb, $8, $9, $10, $11, 'unmatched', $12)
+                              gmail_message_id, gmail_thread_id, email_subject, source, status, match_reason, shipper_name, carrier_refs)
+     VALUES ($1, $2, $3, $4, $5, $6, $7::jsonb, $8, $9, $10, $11, 'unmatched', $12, $13, $14::text[])
      ON CONFLICT (carrier, tracking_number) WHERE split_of IS NULL DO UPDATE SET
        gmail_message_id = EXCLUDED.gmail_message_id, gmail_thread_id = EXCLUDED.gmail_thread_id,
-       shipped_at = EXCLUDED.shipped_at, updated_at = NOW()
+       shipped_at = EXCLUDED.shipped_at,
+       shipper_name = COALESCE(EXCLUDED.shipper_name, po_tracking.shipper_name), carrier_refs = COALESCE(EXCLUDED.carrier_refs, po_tracking.carrier_refs),
+       updated_at = NOW()
      WHERE po_tracking.status = 'unmatched'
      RETURNING (xmax = 0) AS inserted`,
     [d.carrier, d.tracking_number, d.retailer_order_id, d.sender_domain, d.ship_to_street, d.shipped_at.toISOString(),
-     d.items_json ? JSON.stringify(d.items_json) : null, d.gmail_message_id, d.gmail_thread_id, d.email_subject, d.source, d.match_reason],
+     d.items_json ? JSON.stringify(d.items_json) : null, d.gmail_message_id, d.gmail_thread_id, d.email_subject, d.source, d.match_reason,
+     d.shipper_name ?? null, d.carrier_refs ?? null],
   );
   if (res.rows.length === 0) return "ignored";
   return res.rows[0].inserted ? "inserted" : "refreshed";

@@ -50,6 +50,7 @@ describe("matchTrackingRows", () => {
     const query = async (sql: string, params?: any[]) => {
       if (sql.includes("FROM po_tracking") && sql.trimStart().startsWith("SELECT")) return { rows, rowCount: rows.length };
       if (sql.startsWith("SELECT value FROM settings")) return { rows: [{ value: map }], rowCount: 1 };
+      if (sql.startsWith("SELECT key, value FROM settings")) return { rows: [], rowCount: 0 };
       if (sql.includes("FROM purchase_orders")) return { rows: POS, rowCount: POS.length };
       if (sql.startsWith("SELECT alias, supplier FROM supplier_aliases")) return { rows: [], rowCount: 0 };
       writes.push({ sql, params: params ?? [] });
@@ -172,6 +173,7 @@ describe("the 81-row queue (2026-11-04): leading zeros, the AF order # named in 
     const query = async (sql: string) => {
       if (sql.includes("FROM po_tracking") && sql.trimStart().startsWith("SELECT")) return { rows, rowCount: rows.length };
       if (sql.startsWith("SELECT value FROM settings")) return { rows: [{ value: {} }], rowCount: 1 };
+      if (sql.startsWith("SELECT key, value FROM settings")) return { rows: [], rowCount: 0 };
       if (sql.includes("FROM purchase_orders")) return { rows: P, rowCount: P.length };
       return { rows: [], rowCount: 0 };
     };
