@@ -1,5 +1,5 @@
 import { describe, it, expect, vi } from "vitest";
-import { CaptureSchema, PrefillSchema, extractPrefill, enrichPrefill, mergedPagesText, supplierForHost, shipsToForStreet, resolveShipTo, todayEt, storePrefill, getPrefill, _clearPrefillCache, PREFILL_TTL_MS, visibleQtys, inferLineQty, QTY_INFERRED_HINT, lineTotalPrice } from "./po-prefill";
+import { CaptureSchema, PrefillSchema, extractPrefill, enrichPrefill, mergedPagesText, supplierForHost, shipsToForStreet, resolveShipTo, todayEt, storePrefill, getPrefill, _clearPrefillCache, PREFILL_TTL_MS, visibleQtys, inferLineQty, QTY_INFERRED_HINT, lineTotalPrice, isRewardsPromo, PROMO_AMOUNT_IMPLIED_HINT } from "./po-prefill";
 
 vi.mock("./log", () => ({ log: () => {} }));
 
@@ -95,6 +95,28 @@ describe("enrichment (no AI)", () => {
     // Pre-discount lines keep the §7.2 default.
     const pre = await enrichPrefill(q, capture, { ...x, discount: 23.35, subtotal: 95.64, total: 72.29 }, null, { id: "", capturedAt: null });
     expect(pre.form.promos?.[0].counts_toward_cogs).toBe(true);
+  });
+  // Maria 2026-11-05, michaels.com 4300109060826629: MEGA30DEAL −$18.00 already in the paint's $4.19; a $10 voucher.
+  it("per promo: the promo already in the line totals defaults off and takes its $ amount; a \"$N voucher\" is rewards (off by default)", async () => {
+    const q = async (sql: string) => (/FROM settings WHERE key = ANY/.test(sql) ? { rows: [{ key: "prep_cost", value: 1 }], rowCount: 1 } : { rows: [], rowCount: 0 });
+    const x = { ...extraction, lines: [
+      { productName: "15 Pack: Caron Simply Soft Solid Yarn", retailerSku: null, qty: 2, unitsPerPack: 15, unitPrice: 64.35, lineTotal: 128.70, asinGuess: null },
+      { productName: "Liquitex BASICS 4oz. Acrylic Paint", retailerSku: null, qty: 10, unitsPerPack: 1, unitPrice: 4.19, lineTotal: 41.90, asinGuess: null },
+    ], subtotal: 188.60, discount: 28, tax: 0, shipping: 0, total: 160.60, payments: [], notes: [], promos: [
+      { type: "sale" as const, description: "30% on regular priced items (code MEGA30DEAL)", amount: null, percent: 30, confidence: "high" as const },
+      { type: "coupon" as const, description: "$10 voucher 3921", amount: 10, percent: null, confidence: "low" as const },
+    ] };
+    const out = await enrichPrefill(q, capture, x, null, { id: "", capturedAt: null });
+    expect(out.form.promos).toEqual([
+      { type: "sale", description: "30% on regular priced items (code MEGA30DEAL)", amount: "18.00", percent: "30.00", counts_toward_cogs: false },
+      { type: "rewards", description: "$10 voucher 3921", amount: "10.00", percent: "", counts_toward_cogs: false },
+    ]);
+    expect(out.prefill.hints?.["promos.0.amount"]).toBe(PROMO_AMOUNT_IMPLIED_HINT);
+    expect((out.prefill.warnings ?? []).join()).not.toMatch(/Lines add up to|promo's type is uncertain/);
+    expect(isRewardsPromo("Rewards balance")).toBe(true);
+    expect(isRewardsPromo("$5 reward voucher")).toBe(true);
+    expect(isRewardsPromo("Rewards members 20% off")).toBe(false);
+    expect(isRewardsPromo("30% off with MEGA30DEAL")).toBe(false);
   });
   // v1.2.1 (Maria 2026-11-01): a confirmation page shows no order date → today on the form, plain marker, no warning.
   it("no order date on the pages → today (America/New_York), no source marker, and the model's note about it is dropped", async () => {

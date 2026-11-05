@@ -343,7 +343,7 @@ export function NewPoForm({ open, onOpenChange, onCreated, prefill, initialSuppl
   };
   const answerPack = (updateAf: boolean) => { if (packAsk) setForm((f) => ({ ...f, pack_updates: { ...(f.pack_updates ?? {}), [packAsk.asin]: updateAf } })); setPackAsk(null); };
 
-  const setPromo = (i: number, patch: Partial<PoFormPromo>) => setForm((f0) => { const f = clearMark(f0, `promos.${i}`); return { ...f, promos: (f.promos ?? []).map((p, j) => (j === i ? { ...p, ...patch, ...(patch.type !== undefined && patch.type !== p.type ? { counts_toward_cogs: promoCountsByDefault(String(patch.type), check.discountReflected) } : {}) } : p)) }; });
+  const setPromo = (i: number, patch: Partial<PoFormPromo>) => setForm((f0) => { const f = clearMark(f0, `promos.${i}`); return { ...f, promos: (f.promos ?? []).map((p, j) => (j === i ? { ...p, ...patch, ...(patch.type !== undefined && patch.type !== p.type ? { counts_toward_cogs: promoCountsByDefault(String(patch.type), check.promoReflected[i] ?? check.discountReflected) } : {}) } : p)) }; });
   const setPay = (i: number, patch: Partial<PoFormPayment>) => setForm((f0) => { const f = clearMark(f0, `payments.${i}`); return { ...f, payments: (f.payments ?? []).map((p, j) => (j === i ? { ...p, ...patch } : p)) }; });
   // The payment picker (Maria 2026-11-02): on blur of the nickname or the last 4, resolve by nickname first, last 4 second — never by a last 4 two methods share (Amex Gold / Amex Plus, 1005): the nickname stays blank and the row shows the amber hint until one is picked.
   const [payHint, setPayHint] = useState<Record<number, string>>({});
@@ -524,10 +524,10 @@ export function NewPoForm({ open, onOpenChange, onCreated, prefill, initialSuppl
                 <option value="">type…</option>{PROMO_TYPES.map((t) => <option key={t} value={t}>{t}</option>)}
               </select>
               <Input value={p.description} onChange={(e) => setPromo(i, { description: e.target.value })} placeholder="15% off with WELCOME15" className="h-8 min-w-[12rem] flex-1 text-xs" data-testid={`input-new-po-promo-desc-${i}`} />
-              <MoneyCalcInput value={p.amount} onChange={(v) => setPromo(i, { amount: v })} placeholder="$" className="h-8 w-20 text-right text-xs" data-testid={`input-new-po-promo-amount-${i}`} />
+              <MoneyCalcInput value={p.amount} onChange={(v) => setPromo(i, { amount: v })} placeholder="$" title={hint(`promos.${i}.amount`)} className="h-8 w-20 text-right text-xs" data-testid={`input-new-po-promo-amount-${i}`} />
               <Input value={p.percent} onChange={(e) => setPromo(i, { percent: e.target.value })} placeholder="%" inputMode="decimal" className="h-8 w-14 text-right text-xs" data-testid={`input-new-po-promo-pct-${i}`} />
               <label className="flex items-center gap-1 text-xs" title="Counts toward COGS"><input type="checkbox" checked={p.counts_toward_cogs} onChange={(e) => setPromo(i, { counts_toward_cogs: e.target.checked })} data-testid={`input-new-po-promo-counts-${i}`} /> COGS</label>
-              {check.discountReflected && <span className="text-[11px] text-muted-foreground" title="Σ price × qty already equals the post-discount subtotal: this promo reduces no cost" data-testid={`new-po-promo-reflected-${i}`}>{PROMO_REFLECTED_NOTE}</span>}
+              {check.promoReflected[i] && <span className="text-[11px] text-muted-foreground" title={check.discountReflected ? "Σ price × qty already equals the post-discount subtotal: this promo reduces no cost" : "The line totals are this promo's amount under the subtotal: it is already in the prices and reduces no cost"} data-testid={`new-po-promo-reflected-${i}`}>{PROMO_REFLECTED_NOTE}</span>}
               <button type="button" onClick={() => setForm((f) => ({ ...f, promos: (f.promos ?? []).filter((_, j) => j !== i) }))} className="text-muted-foreground/60 hover:text-destructive" data-testid={`button-new-po-remove-promo-${i}`}><Trash2 className="h-3.5 w-3.5" /></button>
             </div>
           ))}

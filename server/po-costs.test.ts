@@ -4,12 +4,13 @@ import { recomputePoCosts } from "./po-costs";
 // po-ai-prefill §7 / §8.4: the recompute follows the current rule (v3, 2026-11-04 — tax and
 // shipping in) for POs saved by the form, stamps the version, never touches an imported PO,
 // and keeps a hand-typed COGS.
-function fake(po: Record<string, any>, promos: any[], asins: any[], lines: Record<string, any[]>, manualIds: string[] = []) {
+function fake(po: Record<string, any>, promos: any[], asins: any[], lines: Record<string, any[]>, manualIds: string[] = [], payments: any[] = []) {
   const calls: Array<{ sql: string; params: any[] }> = [];
   const q = async (sql: string, params: any[] = []) => {
     calls.push({ sql, params });
     if (/FROM purchase_orders WHERE id/.test(sql)) return { rows: [po], rowCount: 1 };
     if (/FROM po_promos/.test(sql)) return { rows: promos, rowCount: promos.length };
+    if (/FROM po_payments/.test(sql)) return { rows: payments, rowCount: payments.length };
     if (/FROM po_asins WHERE po_id/.test(sql)) return { rows: asins, rowCount: asins.length };
     if (/FROM po_edit_log/.test(sql)) return { rows: manualIds.map((id) => ({ entity_id: id })), rowCount: manualIds.length };
     if (/FROM po_line_items WHERE po_asin_id/.test(sql)) return { rows: lines[params[0]] ?? [], rowCount: 0 };
@@ -35,6 +36,28 @@ describe("recomputePoCosts", () => {
     const up = f.calls.find((c) => /UPDATE po_asins SET/.test(c.sql) && c.params[0] === "a1")!;
     expect(up.params).toEqual(["a1", "47.82", "47.82", "47.82"]);
     expect(f.calls.find((c) => /UPDATE po_line_items/.test(c.sql))!.params).toEqual(["l1", "7.97"]);
+  });
+  // Maria 2026-11-05, michaels.com 4300109060826629: saved at 6.37 / 3.11 (the $18 in the paint's price subtracted again, GC 12.80 %).
+  it("per promo: only the promo NOT in the line totals is subtracted, at the payments' unrounded GC % (12.795 %) → 7.04 / 3.44", async () => {
+    const mich = { id: "p1", subtotal: "188.60", discount: "28.00", tax: "0.00", sh_donations: "0.00", order_total: "160.60", weighted_gc_discount_pct: "12.80", cost_formula_version: 3 };
+    const rows = [
+      { id: "a1", asin: "B01N3B23JX", qty: "15.00", cost_per_unit: "6.37", sourcing_cost: "7.31", paid_cost: "6.37", cogs_adjustment: null },
+      { id: "a2", asin: "B000RDP7XK", qty: "10.00", cost_per_unit: "3.11", sourcing_cost: "3.57", paid_cost: "3.11", cogs_adjustment: null },
+    ];
+    const ls = { a1: [{ id: "l1", price: "64.350000", qty_ordered: "2.00", line_total: "128.70", adjusted_product_cost: "47.78" }], a2: [{ id: "l2", price: "4.190000", qty_ordered: "10.00", line_total: "41.90", adjusted_product_cost: "3.11" }] };
+    const gc = (amount: string, pct: string) => ({ method: "gift_card", amount, gift_card_discount_pct: pct, reward_pct: null });
+    const pays = [gc("50.00", "13.00"), gc("50.00", "13.00"), gc("44.15", "13.00"), gc("16.45", "11.00")];
+    for (const promo1 of [{ amount: null, counts_toward_cogs: false }, { amount: "18.00", counts_toward_cogs: true }]) {
+      const f = fake(mich, [promo1, { amount: "10.00", counts_toward_cogs: true }], rows, ls, [], pays);
+      const r = await recomputePoCosts(f.q, "p1", 1, { dryRun: true });
+      const cogs = Object.fromEntries(r.plan!.filter((c) => c.field === "cost_per_unit").map((c) => [c.id, c.new]));
+      expect(cogs).toEqual({ a1: "7.04", a2: "3.44" });
+      expect(f.calls.some((c) => /UPDATE|INSERT/.test(c.sql))).toBe(false);
+    }
+    // Pre-discount lines (paint at 5.99): both promos are subtracted.
+    const pre = fake(mich, [{ amount: "18.00", counts_toward_cogs: true }, { amount: "10.00", counts_toward_cogs: true }], rows, { ...ls, a2: [{ id: "l2", price: "5.990000", qty_ordered: "10.00", line_total: "59.90", adjusted_product_cost: null }] }, [], pays);
+    const rp = await recomputePoCosts(pre.q, "p1", 1, { dryRun: true });
+    expect(rp.plan!.filter((c) => c.field === "cost_per_unit").map((c) => c.new)).toEqual(["4.45"]); // a1 stays 6.37
   });
   it("a sheet-imported PO (cost_formula_version NULL) is never recomputed", async () => {
     const f = fake({ ...po, cost_formula_version: null }, [], asins, lines);

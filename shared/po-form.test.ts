@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { checkPoForm, emptyPoForm, emptyProduct, canonicalPaymentName, resolvePaymentNickname, ambiguousPaymentHint, promoCountsByDefault, PROMO_REFLECTED_NOTE, type PoFormState } from "./po-form";
+import { checkPoForm, emptyPoForm, emptyProduct, emptyPayment, weightedPaymentPct, weightedPaymentPctExact, canonicalPaymentName, resolvePaymentNickname, ambiguousPaymentHint, promoCountsByDefault, PROMO_REFLECTED_NOTE, type PoFormState } from "./po-form";
 
 // po-af-owned §4 (2026-10-18): the New PO form's validation and derived rows.
 const base = (over: Partial<PoFormState> = {}): PoFormState => ({
@@ -41,7 +41,12 @@ describe("checkPoForm", () => {
     expect(c.ok).toBe(true);
     expect(c.nonCountingPromoAmount).toBe(5);
     expect(c.asins[0]).toMatchObject({ cost_per_unit: "10.00", sourcing_cost: "10.00", paid_cost: "5.00" });
-    const noAmount = checkPoForm({ ...rewards, promos: [{ type: "rewards", description: "Michaels rewards", amount: "", percent: "", counts_toward_cogs: false }] });
+    // The only promo without an amount takes the discount − the others (2026-11-05): added back, no warning.
+    const implied = checkPoForm({ ...rewards, promos: [{ type: "rewards", description: "Michaels rewards", amount: "", percent: "", counts_toward_cogs: false }] });
+    expect(implied.asins[0].cost_per_unit).toBe("10.00");
+    expect(implied.warnings.join()).not.toMatch(/cannot be added back/);
+    // Two without an amount: neither can be added back — they count, with the warning.
+    const noAmount = checkPoForm({ ...rewards, promos: [{ type: "rewards", description: "Michaels rewards", amount: "", percent: "", counts_toward_cogs: false }, { type: "coupon", description: "SAVE", amount: "", percent: "", counts_toward_cogs: true }] });
     expect(noAmount.asins[0].cost_per_unit).toBe("5.00");
     expect(noAmount.warnings.join()).toMatch(/cannot be added back/);
     expect(checkPoForm({ ...rewards, promos: [{ type: "" as any, description: "", amount: "", percent: "", counts_toward_cogs: true }] }).errors).toContain("Promo 1: type must be sale, coupon or rewards");
@@ -50,6 +55,64 @@ describe("checkPoForm", () => {
     expect(checkPoForm(base({ products: [item], cogs_adjustments: { B0TEST0009: { amount: "3", reason: "" } } })).errors).toContain("B0TEST0009: a COGS adjustment needs a reason");
   });
   // Maria 2026-11-01, PO 200015336732726: the line price 7.97 was already the sale price; "sale $36.12, counts" subtracted it again (29.76 instead of 47.82).
+  // Maria 2026-11-05, michaels.com 4300109060826629: the paint was already $4.19 after MEGA30DEAL −$18.00; the combined $28 was
+  // subtracted from line totals that carried the $18 → 6.37 / 3.11. Correct (docs/claude_cogs-rule.md): 7.04 / 3.44.
+  const michaels = (over: Partial<PoFormState> = {}): PoFormState => base({
+    supplier: "michaels.com", subtotal: "188.60", discount: "28.00", tax: "0", sh_donations: "0", order_total: "160.60",
+    products: [
+      { ...emptyProduct(), product_name: "15 Pack: Caron Simply Soft Solid Yarn", price: "64.35", qty_ordered: "2", retailer_units_per_pack: "15", asin: "B01N3B23JX", sold_as: "multi-pack", units_per_pack: "2", asin_qty_per_product: "7.5" },
+      { ...emptyProduct(), product_name: "Liquitex BASICS 4oz. Acrylic Paint", price: "4.19", qty_ordered: "10", asin: "B000RDP7XK" },
+    ],
+    promos: [
+      { type: "sale", description: "30% on regular priced items (code MEGA30DEAL)", amount: "18.00", percent: "30", counts_toward_cogs: true },
+      { type: "rewards", description: "$10 voucher 3921", amount: "10.00", percent: "", counts_toward_cogs: true },
+    ],
+    payments: [
+      { ...emptyPayment(), method: "gift_card", last4: "1004", amount: "50.00", gift_card_discount_pct: "13" },
+      { ...emptyPayment(), method: "gift_card", last4: "1020", amount: "50.00", gift_card_discount_pct: "13" },
+      { ...emptyPayment(), method: "gift_card", last4: "1038", amount: "44.15", gift_card_discount_pct: "13" },
+      { ...emptyPayment(), method: "gift_card", last4: "0895", amount: "16.45", gift_card_discount_pct: "11" },
+    ],
+    ...over,
+  });
+  it("per-promo rule (Michaels 4300109060826629): the promo already in the line totals is not subtracted again; the voucher counts by line total; the exact GC % → 7.04 / 3.44", () => {
+    const c = checkPoForm(michaels());
+    expect(c.ok).toBe(true);
+    expect(c.computedSubtotal).toBe(170.6);
+    expect(c.discountReflected).toBe(false);
+    expect(c.promoReflected).toEqual([true, false]);
+    expect(c.weightedGcPct).toBe(12.8); // displayed / stored at 2 dp
+    expect(c.asins.map((a) => [a.asin, a.qty, a.cost_per_unit])).toEqual([["B01N3B23JX", 15, "7.04"], ["B000RDP7XK", 10, "3.44"]]);
+    expect(c.warnings.join()).not.toMatch(/cannot be added back|match neither/);
+    // Promo 1's toggle is moot once it is in the prices (the addendum: it must not depend on unticking COGS).
+    const off = michaels({ promos: [{ ...michaels().promos![0], counts_toward_cogs: false }, michaels().promos![1]] });
+    expect(checkPoForm(off).asins.map((a) => a.cost_per_unit)).toEqual(["7.04", "3.44"]);
+    // As captured (2026-11-05): promo 1 with only its 30 % — the amount is implied from the discount, same result, no warning.
+    const pctOnly = checkPoForm(michaels({ promos: [{ ...michaels().promos![0], amount: "", counts_toward_cogs: false }, michaels().promos![1]] }));
+    expect(pctOnly.asins.map((a) => a.cost_per_unit)).toEqual(["7.04", "3.44"]);
+    expect(pctOnly.warnings.join()).not.toMatch(/cannot be added back/);
+    // The voucher toggled off (rewards' default): added back — COGS before the voucher, only the GC %.
+    const voucherOff = michaels({ promos: [michaels().promos![0], { ...michaels().promos![1], counts_toward_cogs: false }] });
+    expect(checkPoForm(voucherOff).asins.map((a) => a.cost_per_unit)).toEqual(["7.48", "3.65"]);
+  });
+  it("per-promo rule: a discount NOT in the line prices is still subtracted; two subsets that fit → \"which promos are already in the prices?\"", () => {
+    // Pre-discount lines: paint at its regular $5.99 → Σ lines = subtotal 188.60, both promos subtracted.
+    const pre = michaels({ products: [michaels().products[0], { ...michaels().products[1], price: "5.99" }] });
+    const c = checkPoForm(pre);
+    expect(c.promoReflected).toEqual([false, false]);
+    // ratio (188.60 − 28) ÷ 188.60 × (1 − 12.795 %): yarn 128.70 ÷ 15 → 6.37 · paint 59.90 ÷ 10 → 4.45
+    expect(c.asins.map((a) => a.cost_per_unit)).toEqual(["6.37", "4.45"]);
+    // Two $9 promos and a $9 gap: either could be the one in the prices — flagged, none treated as reflected.
+    const amb = checkPoForm(base({ subtotal: "100", discount: "18", order_total: "82", products: [{ ...emptyProduct(), price: "91", qty_ordered: "1", asin: "B0TEST0005" }], promos: [
+      { type: "sale", description: "A", amount: "9", percent: "", counts_toward_cogs: true }, { type: "coupon", description: "B", amount: "9", percent: "", counts_toward_cogs: true }] }));
+    expect(amb.promoReflected).toEqual([false, false]);
+    expect(amb.warnings.join()).toMatch(/Which promos are already in the prices\? .*promo 1 or promo 2/);
+  });
+  it("the weighted GC % goes into the math unrounded (12.795 %), shown at 2 dp", () => {
+    const pays = michaels().payments!;
+    expect(weightedPaymentPct(pays, 160.6)).toBe(12.8);
+    expect(weightedPaymentPctExact(pays, 160.6)!).toBeCloseTo(12.79514, 5);
+  });
   it("double-discount rule: when Σ price × qty already equals the post-discount subtotal, the discount / promo is informational — COGS = Sourcing = Paid, nothing added back", () => {
     const line = { ...emptyProduct(), product_name: "Keystone All Natural Chicken, 28 oz Can", price: "7.97", qty_ordered: "12", asin: "B0756KB8N1", sold_as: "multi-pack" as const, units_per_pack: "6", asin_qty_per_product: "0.1667" };
     const po = base({ subtotal: "95.64", discount: "36.12", tax: "0", sh_donations: "0", order_total: "95.64", products: [line], promos: [{ type: "sale", description: "Now $7.97, was $10.98", amount: "36.12", percent: "", counts_toward_cogs: true }] });

@@ -6133,6 +6133,31 @@ every save and every recompute; a recompute stamps version 3.
   the footer's "Added back" never shows on net lines. Also: a
   non-counting promo larger than the header discount is never added back
   above the price paid (the counting discount is clamped at 0).
+- **Per promo (Maria 2026-11-05, michaels.com 4300109060826629).** The
+  paint line was already $4.19 after MEGA30DEAL −$18.00 while the $10
+  voucher was not in any line; the combined $28 was subtracted from line
+  totals carrying the $18 → $6.37 / $3.11 instead of $7.04 / $3.44. When
+  the lines are not fully net, the promos whose amounts close the gap
+  subtotal − Σ line totals (within 1¢; every subset is tried) are already
+  in the prices: they reduce nothing, are never added back and their
+  COGS toggle is moot (the note shows on that promo only); the rest are
+  applied over Σ line totals as usual — a rewards / voucher promo by line
+  total after the line-level discounts, then the GC / card %. Several
+  subsets fit → the form warns "Which promos are already in the prices?"
+  and treats none as reflected. A promo without an amount, when it is the
+  only one, takes the header discount − the others (also in the
+  prefill, with an amber hint), so it no longer "counts until an amount
+  is entered". `reflectedPromos` / `promoCostHeader` in
+  `shared/po-cost.ts`; `checkPoForm.promoReflected`; the recompute and
+  the prefill use the same rule. The **weighted payment %** goes into the
+  math unrounded (`weightedPaymentPctExact`: 12.795 %, not 12.80 %); the
+  2 dp value is what the form shows and `purchase_orders` stores — the
+  recompute re-derives the exact value from `po_payments` when it rounds
+  to the stored one. Prefill: a "$N voucher" / "Rewards" / "points" line
+  without a "%" is rewards (default off — Michaels rewards count only when
+  the toggle is on), and the model gives a promo's $ amount whenever the
+  page shows one beside the % ("30% off … −$18.00" → amount 18, percent
+  30).
 - **Sourcing cost** (`po_asins.sourcing_cost`, col AR) = Σ(line total ×
   AQ ÷ unit price) ÷ ASIN qty — COGS before the gift-card discount. **This is what Update
   COGS in SC submits for an ASIN whose newest non-canceled PO is

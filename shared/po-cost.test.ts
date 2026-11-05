@@ -1,7 +1,7 @@
 import { describe, it, expect } from "vitest";
 import { readFileSync } from "fs";
 import { resolve } from "path";
-import { costPerUnitPrefill, adjustedProductCost, allocateAsinCosts, discountReflectedInLines, lineMoney, COST_FORMULA_VERSION } from "./po-cost";
+import { costPerUnitPrefill, adjustedProductCost, allocateAsinCosts, discountReflectedInLines, lineMoney, COST_FORMULA_VERSION, reflectedPromos, promoCostHeader } from "./po-cost";
 
 // The allocation measured against the imported 2026 cost / unit (sheet Col Y).
 // v1 (price × total ÷ subtotal × (1 − GC)) reproduced 1,166 of 1,582; v2
@@ -71,5 +71,23 @@ describe("cost allocation vs the imported 2026 cost / unit", () => {
     expect(allocateAsinCosts({ subtotal: 10, discount: 0, gcPct: null }, [{ price: 10, qty: 1 }], 1, 3)).toEqual({ sourcing: 10, cogsBeforeAdjustment: 10, cogs: 13, paid: 10 });
     expect(costPerUnitPrefill({ subtotal: 1, discount: 0, gcPct: null }, [{ price: null, qty: 1 }], 1)).toBeNull();
     expect(costPerUnitPrefill({ subtotal: 1, discount: 0, gcPct: null }, [{ price: 1, qty: 1 }], 0)).toBeNull();
+  });
+});
+
+// Maria 2026-11-05 (Michaels 4300109060826629): which promos are already in the line totals, per promo.
+describe("reflectedPromos", () => {
+  const mich = { linesSum: 170.6, subtotal: 188.6, discount: 28, postDiscountSubtotal: 160.6 };
+  it("the one subset closing subtotal − Σ lines within 1¢; an amount-less promo takes discount − the others", () => {
+    expect(reflectedPromos({ ...mich, promoAmounts: [18, 10] })).toMatchObject({ all: false, reflected: [true, false], reflectedAmount: 18, ambiguous: false });
+    expect(reflectedPromos({ ...mich, promoAmounts: [null, 10] })).toMatchObject({ reflected: [true, false], amounts: [18, 10] });
+    expect(reflectedPromos({ ...mich, linesSum: 188.6, promoAmounts: [18, 10] })).toMatchObject({ reflected: [false, false], reflectedAmount: 0 });
+    expect(reflectedPromos({ ...mich, linesSum: 160.6, promoAmounts: [18, 10] })).toMatchObject({ all: true, reflectedAmount: 28 });
+    expect(reflectedPromos({ linesSum: 91, subtotal: 100, discount: 18, postDiscountSubtotal: 82, promoAmounts: [9, 9] })).toMatchObject({ ambiguous: true, reflected: [false, false], fits: [[0], [1]] });
+  });
+  it("promoCostHeader: reflected promos leave the discount and are never added back; the base is Σ line totals", () => {
+    const h = { subtotal: 188.6, discount: 28, gcPct: 12.795 };
+    const r = reflectedPromos({ ...mich, promoAmounts: [18, 10] });
+    expect(promoCostHeader(h, 170.6, [{ counts: false }, { counts: true }], r)).toMatchObject({ subtotal: 170.6, discount: 10, nonCountingPromoAmount: 0 });
+    expect(promoCostHeader(h, 170.6, [{ counts: false }, { counts: false }], r)).toMatchObject({ subtotal: 170.6, discount: 10, nonCountingPromoAmount: 10 });
   });
 });

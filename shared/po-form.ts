@@ -23,7 +23,7 @@
 // per ASIN. Promos (several per PO, §7.2) decide what counts: a promo with
 // counts_toward_cogs = false (rewards, by default) is added back.
 
-import { adjustedProductCost, allocateAsinCosts, discountReflectedInLines, effectiveCostHeader, COST_FORMULA_VERSION, REFLECTED_TOLERANCE, type CostHeader } from "./po-cost";
+import { adjustedProductCost, allocateAsinCosts, reflectedPromos, promoCostHeader, COST_FORMULA_VERSION, REFLECTED_TOLERANCE, type CostHeader } from "./po-cost";
 import { asinUnitsFromLines, fracToNumber, lineRatio, lineUnitsExact, ratioForUnits, ratioYield, type YieldRatio } from "./yield";
 /** Stamped on purchase_orders.cost_formula_version by every form save; NULL = imported, never recomputed. */
 export const COST_FORMULA_VERSION_SAVED = COST_FORMULA_VERSION;
@@ -129,6 +129,11 @@ export function defaultRewardPct(canonicalName: string, rewards: Record<string, 
  * portals never count (they are not payments). Pure.
  */
 export function weightedPaymentPct(payments: ReadonlyArray<{ method: string | null; amount: string | number | null; gift_card_discount_pct?: string | number | null; reward_pct?: string | number | null }>, orderTotal: number): number | null {
+  const x = weightedPaymentPctExact(payments, orderTotal);
+  return x == null ? null : Math.round(x * 100) / 100;
+}
+/** weightedPaymentPct unrounded (Maria 2026-11-05: 12.795 %, not 12.80 %, goes into the cost math; the 2 dp is for display and storage). */
+export function weightedPaymentPctExact(payments: Parameters<typeof weightedPaymentPct>[0], orderTotal: number): number | null {
   let w = 0, any = false;
   for (const p of payments) {
     const amt = p.amount == null || String(p.amount).trim() === "" ? NaN : Number(String(p.amount).replace(/[$,]/g, ""));
@@ -137,7 +142,7 @@ export function weightedPaymentPct(payments: ReadonlyArray<{ method: string | nu
     if (!Number.isFinite(amt) || !Number.isFinite(pc)) continue;
     w += amt * pc; any = true;
   }
-  return any && orderTotal > 0 ? Math.round((w / orderTotal) * 100) / 100 : null;
+  return any && orderTotal > 0 ? w / orderTotal : null;
 }
 export const CASHBACK_STATUSES = ["pending", "received", "denied"] as const;
 /** Where a prefilled value came from (§6.1 markers): "model" = amber, "af" = stone; absent = typed. */
@@ -322,6 +327,8 @@ export interface PoFormCheck {
   nonCountingPromoAmount: number;
   /** Maria 2026-11-01: Σ line totals already equals the post-discount subtotal (within 1¢) — the discount / promos are informational, nothing reduces a cost. */
   discountReflected: boolean;
+  /** Per promo (2026-11-05): its amount is already in the line totals (reflectedPromos) — it reduces no cost, its toggle is moot. */
+  promoReflected: boolean[];
   /** Weighted payment discount % (weightedPaymentPct) from the Payments block; null when no gift-card / card payment carries an amount and its %. */
   weightedGcPct: number | null;
   asins: PoFormAsin[];
@@ -407,20 +414,24 @@ export function checkPoForm(f: PoFormState): PoFormCheck {
   const weightedGcPct = weightedPaymentPct(Array.isArray(f.payments) ? f.payments : [], effectiveOrderTotal);
   // The reflected rule (Maria 2026-11-01; 1¢, 2026-11-04): Σ line totals already equals the post-discount subtotal → the discount / promos count for nothing.
   const postDiscountSubtotal = r2(effectiveOrderTotal - n("tax") - n("sh_donations"));
-  const discountReflected = discountReflectedInLines({ linesSum: computedSubtotal, discount: n("discount"), promoAmounts: r2(promoAmounts), postDiscountSubtotal });
-  if (hasTypedSubtotal && !discountReflected && Math.abs(typedSubtotal! - computedSubtotal) > REFLECTED_TOLERANCE + 1e-9) {
+  // Per promo (2026-11-05): the promos whose amounts close the gap subtotal − Σ line totals are already in the prices.
+  const promoAmt = promoList.map((p) => { const a = moneyNum(p.amount ?? ""); return a == null || Number.isNaN(a) ? null : a; });
+  const refl = reflectedPromos({ linesSum: computedSubtotal, subtotal: hasTypedSubtotal ? typedSubtotal! : null, discount: n("discount"), promoAmounts: promoAmt, postDiscountSubtotal });
+  const discountReflected = refl.all;
+  if (refl.ambiguous) warnings.push(`Which promos are already in the prices? Line totals ${computedSubtotal.toFixed(2)} are ${r2(subtotal - computedSubtotal).toFixed(2)} under the subtotal, and ${refl.fits.map((f) => f.map((i) => `promo ${i + 1}`).join(" + ")).join(" or ")} each fit — every promo is applied until the amounts make it clear`);
+  if (hasTypedSubtotal && !discountReflected && !(refl.reflectedAmount > 0) && Math.abs(typedSubtotal! - computedSubtotal) > REFLECTED_TOLERANCE + 1e-9) {
     const d = n("discount") + promoAmounts;
     warnings.push(d > 0
       ? `Line totals ${computedSubtotal.toFixed(2)} match neither the subtotal ${typedSubtotal!.toFixed(2)} nor the subtotal after discount ${postDiscountSubtotal.toFixed(2)}`
       : `Subtotal ${typedSubtotal!.toFixed(2)} differs from the line totals ${computedSubtotal.toFixed(2)}`);
   }
-  // §7.2 counting pass: a non-counting promo without an amount cannot be added back (moot when the discount is reflected).
+  // §7.2 counting pass: a non-counting promo without an amount cannot be added back (moot when that promo is reflected).
   let nonCountingPromoAmount = 0;
   if (!discountReflected) promoList.forEach((p, i) => {
-    if (p.counts_toward_cogs !== false) return;
+    if (p.counts_toward_cogs !== false || refl.reflected[i]) return;
     const label = `Promo ${i + 1}${t(p.description) ? ` (${t(p.description)})` : ""}`;
-    const amt = moneyNum(p.amount ?? "");
-    if (amt != null && !Number.isNaN(amt)) nonCountingPromoAmount += amt;
+    const amt = refl.amounts[i];
+    if (amt != null) nonCountingPromoAmount += amt;
     else warnings.push(`${label} does not count toward COGS but has no amount, so it cannot be added back — it counts until an amount is entered`);
   });
   nonCountingPromoAmount = r2(nonCountingPromoAmount);
@@ -428,10 +439,12 @@ export function checkPoForm(f: PoFormState): PoFormCheck {
   const cbRaw = t(f.cashback_pct).replace("%", "");
   // Costs: the one formula in shared/po-cost.ts (v3 — tax and shipping in, discount pro rata, rewards added back), allocated over the
   // line totals (the typed subtotal when the lines are pre-discount); the computed GC % beats a typed one.
-  const costHeader: CostHeader = effectiveCostHeader({
-    subtotal: discountReflected ? computedSubtotal : subtotal, discount: n("discount"), gcPct: weightedGcPct ?? (/^\d+(\.\d+)?$/.test(gcRaw) ? Number(gcRaw) : null), nonCountingPromoAmount,
+  // The GC % in the math is unrounded (2026-11-05); weightedGcPct (2 dp) is what the form shows and stores.
+  const exactGcPct = weightedPaymentPctExact(Array.isArray(f.payments) ? f.payments : [], effectiveOrderTotal);
+  const costHeader: CostHeader = promoCostHeader({
+    subtotal, discount: n("discount"), gcPct: exactGcPct ?? (/^\d+(\.\d+)?$/.test(gcRaw) ? Number(gcRaw) : null),
     orderTotal: effectiveOrderTotal, tax: n("tax"), shDonations: n("sh_donations"), cashbackPct: /^\d+(\.\d+)?$/.test(cbRaw) ? Number(cbRaw) : null,
-  }, discountReflected);
+  }, computedSubtotal, promoList.map((p) => ({ counts: p.counts_toward_cogs !== false })), refl);
 
   // Group by ASIN (first appearance order).
   const groups = new Map<string, number[]>();
@@ -487,5 +500,5 @@ export function checkPoForm(f: PoFormState): PoFormCheck {
     });
   }
   const ok = errors.length === 0 && Object.keys(productErrors).length === 0;
-  return { ok, errors, warnings, productErrors, computedSubtotal, effectiveOrderTotal: r2(effectiveOrderTotal), nonCountingPromoAmount, discountReflected, weightedGcPct, asins };
+  return { ok, errors, warnings, productErrors, computedSubtotal, effectiveOrderTotal: r2(effectiveOrderTotal), nonCountingPromoAmount, discountReflected, promoReflected: refl.reflected, weightedGcPct, asins };
 }

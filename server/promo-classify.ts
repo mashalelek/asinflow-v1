@@ -12,10 +12,10 @@ import { structuredBatchCall } from "./ai-batch";
 /** Maria's rules (2026-10-31), verbatim in both prompts. */
 export const PROMO_RULES = `Classify each retailer promotion as exactly one type:
 - "coupon": a code that gives a discount (e.g. "15% off with WELCOME15", "$20 off with THANKYOU428", "B1G1 with BB2604001", "10% off with autoship").
-- "rewards": rewards, points, store credit or a balance earned and applied (e.g. "Rewards", "Rewards balance", "points").
+- "rewards": rewards, points, store credit, a voucher or a balance earned and applied (e.g. "Rewards", "Rewards balance", "points", "$10 voucher 3921", "Reward certificate").
 - "sale": a site-wide or category sale, clearance, B1G1 / BOGO without a code, "N% off <category>" (e.g. "Sale", "60% off Clearance", "25% off flavors", "BOGO").
 - michaels.com exception: Michaels runs site-wide 20–40% sales that require entering a displayed code — classify those as "sale", with the description normalized to "<N>% on regular priced items" (e.g. "30% off with COMEBACK47Z5" at michaels.com → sale, "30% on regular priced items").
-Normalize the description: keep the discount and the code, drop filler. Give "amount" (dollars off) or "percent" when the text states one; leave both null otherwise. Several promos joined by "+" or "," stay ONE entry describing the combination; use the first one's type unless a rewards part is present, then "rewards" only when the whole promo is rewards.
+Normalize the description: keep the discount and the code, drop filler. Give "amount" (dollars off) whenever the text shows a dollar figure for the promo — also when it states a percent beside it ("30% off every regular price purchase with code MEGA30DEAL −$18.00" → amount 18, percent 30); give "percent" when it states one; leave both null otherwise. Several promos joined by "+" or "," stay ONE entry describing the combination; use the first one's type unless a rewards part is present, then "rewards" only when the whole promo is rewards.
 Confidence "high" when the type follows directly from the rules; "low" when the text is ambiguous, empty of a discount, or a bare code.`;
 
 export const PromoClassificationSchema = z.object({

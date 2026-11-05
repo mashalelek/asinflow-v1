@@ -96,6 +96,65 @@ export function effectiveCostHeader(h: CostHeader, reflected: boolean): CostHead
   return reflected ? { ...h, discount: 0, nonCountingPromoAmount: 0 } : h;
 }
 
+/**
+ * The double-discount rule per promo (Maria 2026-11-05, Michaels 4300109060826629: the paint line was already $4.19 after
+ * MEGA30DEAL −$18.00, and the combined $28 was subtracted again → 6.37 / 3.11 instead of 7.04 / 3.44). Which promos are
+ * already in the line totals:
+ *   - all of them when Σ line totals = the post-discount subtotal within 1¢ (discountReflectedInLines, unchanged);
+ *   - else the ONE subset of promos whose amounts close the gap subtotal − Σ line totals within 1¢ — those reduce nothing,
+ *     the rest are applied as usual. Several subsets fit → `ambiguous` and none is treated as reflected (never a guess).
+ * A promo without an amount, when it is the only one and the header discount exceeds the others, is taken at the
+ * difference (`implied`). Pure.
+ */
+export interface PromoReflection {
+  /** Every promo and the discount are already in the line totals. */
+  all: boolean;
+  /** Per promo (input order): already in the line totals. */
+  reflected: boolean[];
+  /** Σ amount of the reflected promos (the header discount when `all`). */
+  reflectedAmount: number;
+  /** Per promo: the amount used — the stored one, else the implied one, else null. */
+  amounts: Array<number | null>;
+  /** More than one subset of promos fits the gap: which promos are already in the prices is Maria's call. */
+  ambiguous: boolean;
+  /** The subsets that fit, as promo indexes (for the ambiguity flag). */
+  fits: number[][];
+}
+const MAX_SUBSET_PROMOS = 12;
+export function reflectedPromos(a: { linesSum: number; subtotal: number | null; discount: number; promoAmounts: ReadonlyArray<number | null>; postDiscountSubtotal: number | null }): PromoReflection {
+  const n = a.promoAmounts.length, discount = a.discount || 0;
+  const amounts = a.promoAmounts.map((x) => (x != null && Number.isFinite(x) ? x : null));
+  const missing = amounts.map((x, i) => (x == null ? i : -1)).filter((i) => i >= 0);
+  const known = amounts.reduce<number>((t, x) => t + (x ?? 0), 0);
+  if (missing.length === 1 && discount - known > REFLECTED_TOLERANCE) amounts[missing[0]] = r2(discount - known);
+  const none: PromoReflection = { all: false, reflected: amounts.map(() => false), reflectedAmount: 0, amounts, ambiguous: false, fits: [] };
+  if (discountReflectedInLines({ linesSum: a.linesSum, discount, promoAmounts: discount > 0 ? 0 : known, postDiscountSubtotal: a.postDiscountSubtotal })) {
+    return { ...none, all: true, reflected: amounts.map(() => true), reflectedAmount: discount > 0 ? discount : known };
+  }
+  const gap = a.subtotal != null && Number.isFinite(a.subtotal) ? a.subtotal - a.linesSum : 0;
+  if (!(gap > REFLECTED_TOLERANCE) || n === 0 || n > MAX_SUBSET_PROMOS) return none;
+  const fits: number[][] = [];
+  for (let mask = 1; mask < 1 << n; mask++) {
+    let sum = 0, ok = true;
+    const idx: number[] = [];
+    for (let i = 0; i < n; i++) if (mask & (1 << i)) { const x = amounts[i]; if (!(x != null && x > 0)) { ok = false; break; } sum += x; idx.push(i); }
+    if (ok && Math.abs(sum - gap) <= REFLECTED_TOLERANCE + 1e-9) fits.push(idx);
+  }
+  if (fits.length !== 1) return { ...none, ambiguous: fits.length > 1, fits };
+  const reflected = amounts.map((_, i) => fits[0].includes(i));
+  return { ...none, reflected, reflectedAmount: r2(fits[0].reduce((t, i) => t + (amounts[i] ?? 0), 0)), fits };
+}
+/**
+ * The cost header with the per-promo rule applied: reflected promos leave the discount and are never added back; the
+ * allocation base is Σ line totals once any promo is in them. `promos[i].counts` is the COGS toggle (rewards default off).
+ */
+export function promoCostHeader(h: CostHeader, linesSum: number, promos: ReadonlyArray<{ counts: boolean }>, r: PromoReflection): CostHeader {
+  if (r.all) return { ...h, subtotal: linesSum, discount: 0, nonCountingPromoAmount: 0 };
+  const nonCounting = r2(promos.reduce((t, p, i) => t + (!r.reflected[i] && p.counts === false ? (r.amounts[i] ?? 0) : 0), 0));
+  if (!(r.reflectedAmount > 0)) return { ...h, nonCountingPromoAmount: nonCounting };
+  return { ...h, subtotal: linesSum, discount: Math.max(0, r2((h.discount || 0) - r.reflectedAmount)), nonCountingPromoAmount: nonCounting };
+}
+
 /** One product's adjusted cost (the sheet's Col X role): unit price × base_counting ÷ L × (1 − GC %), rounded to the cent. */
 export function adjustedProductCost(price: number | null, h: CostHeader): number | null {
   if (price == null || !Number.isFinite(price)) return null;

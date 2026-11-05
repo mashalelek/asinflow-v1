@@ -20,7 +20,7 @@ import { normalizeStreet } from "./tracking-parse";
 import { loadAliases, aliasKey } from "./supplier-aliases";
 import { defaultEmailForSupplier } from "./supplier-defaults";
 import { promoCountsByDefault, yieldFromPacks, resolvePaymentNickname, defaultRewardPct, ambiguousPaymentHint, type PaymentLists, type PoFormState, type PoFormProduct, type PoFormPrefill, type PrefillSource } from "@shared/po-form";
-import { discountReflectedInLines } from "@shared/po-cost";
+import { reflectedPromos } from "@shared/po-cost";
 // scrub.js is a plain browser script: under Node's ESM loader it exports nothing and defines globalThis.AfScrub (as in the page).
 import "../chrome-extension/core/scrub.js";
 const { scrubText, rescrubFields } = (globalThis as unknown as { AfScrub: typeof import("../chrome-extension/core/scrub.js") }).AfScrub;
@@ -74,6 +74,10 @@ export const PrefillSchema = z.object({
   notes: z.array(z.string()).describe("confidence notes: anything unclear or inconsistent on the pages"),
 });
 export type PrefillExtraction = z.infer<typeof PrefillSchema>;
+
+/** A rewards line by its text (2026-11-05): "$10 voucher 3921", "Rewards", "Rewards balance", "points" — never a "% off" line ("Rewards members 20% off" is a coupon). */
+export const isRewardsPromo = (d: string): boolean => /\$\s?\d+(?:\.\d{2})?\s+(?:rewards?\s+)?voucher\b/i.test(d) || (/\brewards?\b|\bpoints\b/i.test(d) && !/%/.test(d));
+export const PROMO_AMOUNT_IMPLIED_HINT = "Amount = discount − the other promos (the page gave only a %)";
 
 export const PREFILL_SYSTEM = `You read captured text from a retailer's checkout pages (cart, shipping, payment, review, order confirmation) and extract the purchase order exactly as the retailer shows it. Rules:
 - Use only what the pages say. Unknown → null. Never invent an order id, price or ASIN.
@@ -267,12 +271,23 @@ export async function enrichPrefill(query: QueryLike, capture: Capture, x: Prefi
   }
   form.products = products;
   if (noAsin.length) warnings.push(noAsin.length === 1 ? `Line ${noAsin[0]}: no ASIN found in AF — pick one` : `Lines ${noAsin.join(", ")}: no ASIN found in AF — pick one`);
-  // The double-discount rule (Maria 2026-11-01; 1¢, 2026-11-04): line totals that already carry the discount → every promo defaults to not counting.
-  const reflected = discountReflectedInLines({ linesSum: r2(linesSum), discount: x.discount ?? 0, promoAmounts: x.promos.reduce((t, p) => t + (p.amount ?? 0), 0), postDiscountSubtotal: x.total == null ? null : r2(x.total - (x.tax ?? 0) - (x.shipping ?? 0)) });
+  // The double-discount rule, per promo (Maria 2026-11-01; 1¢ 2026-11-04; per promo 2026-11-05): a promo already in the line totals defaults to not counting.
+  const refl = reflectedPromos({ linesSum: r2(linesSum), subtotal: x.subtotal, discount: x.discount ?? 0, promoAmounts: x.promos.map((p) => p.amount), postDiscountSubtotal: x.total == null ? null : r2(x.total - (x.tax ?? 0) - (x.shipping ?? 0)) });
+  const reflected = refl.all || refl.reflectedAmount > 0;
   // Totals that still do not reconcile: the lines match neither the subtotal nor (when the lines are net) the subtotal after discount.
   if (x.subtotal != null && x.lines.length > 0 && !reflected && Math.abs(r2(linesSum) - x.subtotal) > 0.01) warnings.push(`Lines add up to ${r2(linesSum).toFixed(2)}, the subtotal is ${x.subtotal.toFixed(2)}`);
-  form.promos = x.promos.map((p, i) => { sources[`promos.${i}`] = "model"; return { type: p.confidence === "high" ? p.type : "", description: p.description, amount: m2(p.amount), percent: m2(p.percent), counts_toward_cogs: promoCountsByDefault(p.type, reflected) }; });
-  if (x.promos.some((p) => p.confidence === "low")) warnings.push("A promo's type is uncertain — choose sale, coupon or rewards");
+  form.promos = x.promos.map((p, i) => {
+    sources[`promos.${i}`] = "model";
+    // A "$10 voucher" / "Rewards" line is rewards whatever the model said (2026-11-05, Michaels): it counts only when the toggle is turned on.
+    const rewards = isRewardsPromo(p.description);
+    const type = rewards ? "rewards" : p.type;
+    // The page's $ amount (2026-11-05): when the model gave only a %, the one amount-less promo takes discount − the others.
+    const amount = p.amount ?? refl.amounts[i];
+    if (p.amount == null && amount != null) hints[`promos.${i}.amount`] = PROMO_AMOUNT_IMPLIED_HINT;
+    return { type: rewards || p.confidence === "high" ? type : "", description: p.description, amount: m2(amount), percent: m2(p.percent), counts_toward_cogs: promoCountsByDefault(type, refl.all || refl.reflected[i]) };
+  });
+  if (refl.ambiguous) warnings.push("Which promos are already in the prices? More than one set of promos matches the gap between the subtotal and the line totals");
+  if (x.promos.some((p) => p.confidence === "low" && !isRewardsPromo(p.description))) warnings.push("A promo's type is uncertain — choose sale, coupon or rewards");
   // Payment nicknames (Maria 2026-11-02): by nickname first (settings.po_payment_method_aliases: "OnePay Cash…" → "Walmart card"), by last 4 second (settings.po_payment_method_last4), and blank with an amber hint when the last 4 alone is ambiguous (Amex Gold / Amex Plus both end in 1005).
   const payRows = (await query(`SELECT key, value FROM settings WHERE key = ANY($1::text[])`, [["po_payment_methods", "po_payment_method_aliases", "po_payment_method_last4", "po_payment_method_reward_pct"]])).rows as Array<{ key: string; value: unknown }>;
   const payVal = (k: string) => payRows.find((r) => r.key === k)?.value;
