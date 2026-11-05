@@ -4301,7 +4301,10 @@ export async function registerRoutes(
       const n = params.length;
       // Notes too (2026-11-04): the PO's, its ASIN rows' and its product
       // lines' — a replacement order # noted on the original PO finds it.
+      // The Supplier field and its alias names too (Maria 2026-11-04): "zara" or "ZARA DEL AMO" finds zara.com's POs.
       conds.push(`(p.order_id ILIKE $${n} OR p.notes ILIKE $${n} OR p.alt_order_ids ILIKE $${n}
+        OR p.supplier ILIKE $${n}
+        OR EXISTS (SELECT 1 FROM supplier_aliases sa WHERE sa.supplier = p.supplier AND sa.alias ILIKE $${n})
         OR EXISTS (SELECT 1 FROM po_asins a WHERE a.po_id = p.id AND (a.asin ILIKE $${n} OR a.notes ILIKE $${n}))
         OR EXISTS (SELECT 1 FROM po_line_items l WHERE l.po_id = p.id AND (l.product_name ILIKE $${n} OR l.notes ILIKE $${n})))`);
     }

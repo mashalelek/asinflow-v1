@@ -10,3 +10,15 @@ describe("POs search covers notes (2026-11-04)", () => {
     expect(q).toMatch(/l\.notes ILIKE/);
   });
 });
+
+describe("POs search covers every order # and the supplier (Maria 2026-11-04)", () => {
+  it("the order #, the alternate order #s, the Supplier field and the supplier's alias names", async () => {
+    const { readFileSync } = await import("fs");
+    const src = readFileSync(new URL("./routes.ts", import.meta.url), "utf8");
+    const q = src.slice(src.indexOf('app.get("/api/pos", async'), src.indexOf("// Action Items filter: any-of"));
+    expect(q).toMatch(/p\.order_id ILIKE/);
+    expect(q).toMatch(/p\.alt_order_ids ILIKE/);
+    expect(q).toMatch(/p\.supplier ILIKE/);
+    expect(q).toMatch(/FROM supplier_aliases sa WHERE sa\.supplier = p\.supplier AND sa\.alias ILIKE/);
+  });
+});
