@@ -2,7 +2,7 @@ import { describe, it, expect } from "vitest";
 import { readFileSync } from "fs";
 import { join } from "path";
 import { poAsinRowsSql } from "./po-queries";
-import { fmtQty, qtyNumber, individualUnits, productQtyFromAsin, PO_ASIN_COLUMNS, VELOCITY_QTY_TITLE } from "../client/src/lib/po-qty";
+import { fmtQty, qtyNumber, individualUnits, productQtyFromAsin, PO_ASIN_COLUMNS, PO_ASIN_DISPLAY_COLUMNS, VELOCITY_QTY_TITLE } from "../client/src/lib/po-qty";
 
 // PO expand-by-ASIN patch (docs/claude_spec-patch-po-expand-by-asin.md).
 // Commit 3: the §4 column model is ONE component for the detail tab and the
@@ -18,6 +18,18 @@ describe("§4 column model", () => {
       "Individual Units Ordered", "Canceled", "Returned", "Shipped by Supplier", "Received by Velocity", "At Prep Center", "At CQG Warehouse",
       "Lost/damaged by us", "Shipped FBA", "Received by Amazon", "Shipment IDs", "Action Items", // row-level Status 2026-10-17
     ]);
+  });
+  it("the table shows every model column once, in the model's order, in 17 display columns (2026-11-05: no clipping from 1024)", () => {
+    expect(PO_ASIN_DISPLAY_COLUMNS.flatMap((c) => [...c.of]).sort()).toEqual(PO_ASIN_COLUMNS.map((c) => c.key).sort());
+    const order = PO_ASIN_COLUMNS.map((c) => c.key as string);
+    const firsts = PO_ASIN_DISPLAY_COLUMNS.map((c) => Math.min(...c.of.map((k) => order.indexOf(k))));
+    expect(firsts).toEqual([...firsts].sort((a, b) => a - b));
+    expect(PO_ASIN_DISPLAY_COLUMNS).toHaveLength(17);
+    const comp = read("client/src/components/po-asin-rows.tsx");
+    // Header words never split; widths fixed, Product takes the rest; the minimum is the sum (1,118 px fits the POs table at 1024).
+    expect(comp).not.toMatch(/break-words/);
+    expect(comp).toMatch(/c\.key === "product" \? undefined : \{ width: COL_WIDTHS\[c\.key\] \}/);
+    expect(comp).not.toMatch(/160rem/);
   });
   it("the detail page renders the shared table and no longer carries Qty (units) or Unreimb. Loss", () => {
     const page = read("client/src/pages/purchase-orders.tsx");

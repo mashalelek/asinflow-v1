@@ -77,12 +77,13 @@ export function InlineEdit({ value, children, onSave, align = "left", width = "w
   );
 }
 
-export function SelectEdit({ value, options, onSave, testId }: { value: string; options: readonly string[]; onSave: (v: string) => Promise<void>; testId: string }) {
+/** `fill`: the select takes its cell's width (a narrow fixed column) instead of its widest option's. */
+export function SelectEdit({ value, options, onSave, testId, fill = false }: { value: string; options: readonly string[]; onSave: (v: string) => Promise<void>; testId: string; fill?: boolean }) {
   const [err, setErr] = useState<string | null>(null);
   return (
-    <span className="inline-flex items-center">
+    <span className={`inline-flex items-center ${fill ? "w-full min-w-0" : ""}`}>
       <select value={value} onClick={(e) => e.stopPropagation()} onChange={async (e) => { setErr(null); try { await onSave(e.target.value); } catch (er: any) { setErr(er.message); } }}
-        className="h-6 rounded border border-input bg-background px-1 text-xs" data-testid={`select-${testId}`} title={err ?? undefined}>
+        className={`h-6 rounded border border-input bg-background ${fill ? "w-full min-w-0 px-0.5 text-[11px]" : "px-1 text-xs"}`} data-testid={`select-${testId}`} title={err ?? undefined}>
         {options.map((o) => <option key={o} value={o}>{o}</option>)}
       </select>
       {err && <span className="ml-1 text-destructive" title={err}>!</span>}

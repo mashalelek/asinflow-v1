@@ -8,8 +8,9 @@ and dialog must meet, and the check that proves it.
 
 1. **No horizontal scroll at ≥ 1280 px** on any page or dialog: the
    document's scroll width equals the viewport width at 1280 and 1440.
-   A table wider than the page (the expanded ASIN rows, 160 rem) scrolls
-   inside its own box; it never widens the page or its parent table.
+   A table wider than its box scrolls inside its own box; it never widens
+   the page or its parent table. The expanded ASIN rows fit the POs table
+   from 1024 (2026-11-05: 17 display columns, 1,118 px minimum).
 2. **Tables use fixed layout with content-sized default widths, never
    auto.** `table-layout: fixed`, a `<colgroup>` and a default width (px)
    for every column, sized to what the column holds — a 60 px ASINs count

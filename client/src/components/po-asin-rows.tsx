@@ -13,7 +13,7 @@ import { Link } from "wouter";
 import { ChevronRight, ChevronDown, AlertTriangle, Plus, X } from "lucide-react";
 import { Tooltip, TooltipTrigger, TooltipContent } from "@/components/ui/tooltip";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
-import { fmtQty, individualUnits, PO_ASIN_COLUMNS, VELOCITY_QTY_TITLE } from "@/lib/po-qty";
+import { fmtQty, individualUnits, PO_ASIN_DISPLAY_COLUMNS, VELOCITY_QTY_TITLE } from "@/lib/po-qty";
 import { InlineEdit, SelectEdit, poApi, ReassignShipment, shipmentBlockText } from "@/components/po-edit";
 import { InlineNoteCell, NoteIcon } from "@/components/inline-note";
 import { DEFECT_ACTION_ITEM, defectSummary } from "@shared/po-defect";
@@ -87,17 +87,26 @@ export interface PoAsinRowData {
   lines?: PoAsinLine[];
 }
 
-const COL_WIDTHS: Record<(typeof PO_ASIN_COLUMNS)[number]["key"], string> = {
-  asin: "7rem", title: "18rem", sku: "11rem", ordered: "4.5rem", cost_per_unit: "5.5rem", total_cost: "6rem", prep: "4.5rem",
-  // Widths hold two-line header labels (2026-11-01: "Individual Units Ordered", "Shipped by Supplier", "Lost/damaged by us" overlapped their neighbours).
-  sold_as: "6rem", units_per_pack: "5rem", individual_units: "7.5rem", canceled: "5rem", returned: "5rem", shipped_supplier: "7rem",
-  received_velocity: "7rem", at_prep: "6rem", at_warehouse: "7rem", lost_damaged_us: "7.5rem", shipped_fba: "5.5rem", received_amazon: "7rem", shipments: "11rem", action_items: "12rem",
+// Widths (px) sized to what each column holds; header labels wrap to two or three lines inside them
+// (2026-11-01: labels overlapped their neighbours). Product takes what is left (fixed layout, no width).
+// 2026-11-05 (Maria: the right-hand columns clipped at 1440, 160 rem): 17 display columns, 1,028 px fixed
+// + lead / note + Product (min 84) = 1,118 px — the nested table fits the POs table at 1024 (1,118 px box) and fills it at 1280 / 1440.
+const COL_WIDTHS: Record<Exclude<(typeof PO_ASIN_DISPLAY_COLUMNS)[number]["key"], "product">, number> = {
+  ordered: 60, cost_per_unit: 64, total_cost: 78, prep: 48, sold_as: 88,
+  canceled: 52, returned: 52, shipped_supplier: 56, received_velocity: 56, at_prep: 48, at_warehouse: 62, lost_damaged_us: 60,
+  shipped_fba: 48, received_amazon: 56, shipments: 68, action_items: 78,
 };
-const LEAD_WIDTH = "2.75rem";
-/** Σ of the fixed widths plus the lead and trailing columns (159.75rem) — the table's minWidth; the table scrolls inside its own overflow box, never the page. */
-export const PO_ASIN_TABLE_MIN_WIDTH = "160rem";
+const LEAD_WIDTH = 32, NOTE_WIDTH = 28;
+/** The fixed widths plus Product's minimum (84 px: the ASIN in full) — below it the table scrolls inside its own box, never the page. */
+export const PO_ASIN_TABLE_MIN_WIDTH = `${Object.values(COL_WIDTHS).reduce((a, b) => a + b, 0) + LEAD_WIDTH + NOTE_WIDTH + 84}px`;
+/** Product, Ordered, Sold As show two model columns each (PO_ASIN_DISPLAY_COLUMNS). */
+const MERGED_TITLES = {
+  product: "ASIN · Amazon SKU, then the title",
+  ordered: "Ordered (ASIN units); below it, Individual Units Ordered = Ordered × Units/Pack",
+  sold_as: "Sold As; below it, Units/Pack",
+} as const;
 /** Header tooltips (Maria 2026-11-02): the two Velocity quantities explain each other. */
-const COL_TITLES: Partial<Record<(typeof PO_ASIN_COLUMNS)[number]["key"], string>> = { received_velocity: VELOCITY_QTY_TITLE, at_prep: VELOCITY_QTY_TITLE };
+const COL_TITLES: Partial<Record<(typeof PO_ASIN_DISPLAY_COLUMNS)[number]["key"], string>> = { ...MERGED_TITLES, received_velocity: VELOCITY_QTY_TITLE, at_prep: VELOCITY_QTY_TITLE };
 
 function Money({ v }: { v: string | null | undefined }) {
   if (v == null) return <span className="text-muted-foreground/50">—</span>;
@@ -330,7 +339,7 @@ function EditableQty({ rowId, col, v, onChanged }: { rowId: string; col: "qty_at
       <input autoFocus value={draft} onChange={(e) => setDraft(e.target.value)} onBlur={save}
         onKeyDown={(e) => { if (e.key === "Enter") save(); if (e.key === "Escape") setEditing(false); }}
         onClick={(e) => e.stopPropagation()}
-        className="h-6 w-16 rounded border border-input bg-background px-1 text-right text-xs" data-testid={`input-${col}-${rowId}`} />
+        className="h-6 w-full max-w-16 rounded border border-input bg-background px-1 text-right text-xs" data-testid={`input-${col}-${rowId}`} />
     );
   }
   return (
@@ -367,7 +376,8 @@ function ShipmentChips({ rowId, asin, shipments, editable, onChanged }: { rowId:
   };
   if (shipments.length === 0 && !editable) return <span className="text-muted-foreground/50">—</span>;
   const unmatched = shipments.some((s) => s.source === "velocity" && s.sc_match !== "matched");
-  const chipText = shipments.length === 0 ? "+ shipment"
+  // "+ add" (2026-11-05): the column is a narrow fixed one; the chip truncates with its full text on hover.
+  const chipText = shipments.length === 0 ? "+ add"
     : shipments.length === 1 ? `${shipmentLabel(shipments[0])} · ${fmtQty(total)}`
     : `${shipments.length} shipments · ${fmtQty(total)}`;
   // Group by Velocity ship date (D1), newest first.
@@ -376,9 +386,10 @@ function ShipmentChips({ rowId, asin, shipments, editable, onChanged }: { rowId:
   return (
     <Popover>
       <PopoverTrigger asChild>
-        <button onClick={(e) => e.stopPropagation()} className="inline-flex items-center gap-1 rounded-sm bg-muted px-1.5 py-0.5 font-mono text-[11px] hover:bg-muted/70" data-testid="po-shipments-chip">
-          {unmatched && <AlertTriangle className="h-3 w-3 text-amber-600" data-testid="po-shipments-unmatched-glyph" />}
-          {chipText}
+        <button onClick={(e) => e.stopPropagation()} className="inline-flex max-w-full items-center gap-1 rounded-sm bg-muted px-1.5 py-0.5 font-mono text-[11px] hover:bg-muted/70" data-testid="po-shipments-chip"
+          title={shipments.length === 0 ? "Add a shipment ID" : chipText}>
+          {unmatched && <AlertTriangle className="h-3 w-3 shrink-0 text-amber-600" data-testid="po-shipments-unmatched-glyph" />}
+          <span className="truncate">{chipText}</span>
         </button>
       </PopoverTrigger>
       <PopoverContent className="w-96 p-2 text-xs space-y-2" align="start" onClick={(e) => e.stopPropagation()}>
@@ -427,19 +438,20 @@ export function PoAsinColGroup() {
   return (
     <colgroup>
       <col style={{ width: LEAD_WIDTH }} />
-      {PO_ASIN_COLUMNS.map((c) => <col key={c.key} style={{ width: COL_WIDTHS[c.key] }} />)}
-      <col style={{ width: "2rem" }} />
+      {PO_ASIN_DISPLAY_COLUMNS.map((c) => <col key={c.key} style={c.key === "product" ? undefined : { width: COL_WIDTHS[c.key] }} />)}
+      <col style={{ width: NOTE_WIDTH }} />
     </colgroup>
   );
 }
 
 export function PoAsinHeaderRow({ sub = false }: { sub?: boolean }) {
   // Header labels wrap to two lines inside their fixed column (never nowrap: the labels overlapped at every width).
-  const base = `px-3 py-2 text-xs font-medium leading-tight align-bottom whitespace-normal ${sub ? "text-muted-foreground" : ""}`;
+  // Words never split (2026-11-05): each column is at least its longest label word at 10.5 px.
+  const base = `px-1 py-2 text-[10.5px] font-medium leading-tight align-bottom whitespace-normal ${sub ? "text-muted-foreground" : ""}`;
   return (
     <tr className={sub ? "bg-muted/40" : "table-header-stone"} data-testid="po-asin-header">
       <th className={base}></th>
-      {PO_ASIN_COLUMNS.map((c) => (
+      {PO_ASIN_DISPLAY_COLUMNS.map((c) => (
         <th key={c.key} className={`${base} ${c.align === "right" ? "text-right" : "text-left"}`} title={COL_TITLES[c.key]}>{c.label}</th>
       ))}
       <th className={base}></th>
@@ -460,46 +472,51 @@ export function PoAsinRow({ a, indent = false, editable = false, onChanged, po }
   return (
     <>
       <tr className={`table-zebra-stone ${indent ? "text-[13px]" : ""}`} style={hairline} data-testid={`row-po-asin-${a.asin}`}>
-        <td className={`px-2 py-1.5 ${pad}`}>
+        <td className={`px-1 py-1.5 ${pad}`}>
           <span className="inline-flex items-center gap-1">
             {multi && (
               <button onClick={() => setOpen((v) => !v)} className="text-muted-foreground" data-testid={`button-expand-${a.asin}`}>
                 {open ? <ChevronDown className="h-3.5 w-3.5" /> : <ChevronRight className="h-3.5 w-3.5" />}
               </button>
             )}
-            {a.thumbnail && <img src={a.thumbnail} alt="" className="h-7 w-7 object-contain rounded-sm" />}
+            {a.thumbnail && <img src={a.thumbnail} alt="" className="h-6 w-6 object-contain rounded-sm" />}
           </span>
         </td>
-        <td className="px-3 py-1.5">
-          <Link href={`/asins?q=${a.asin}`} className="font-mono text-xs text-primary hover:underline" onClick={(e) => e.stopPropagation()}>{a.asin}</Link>
+        {/* Product: ASIN · Amazon SKU over the title (2026-11-05); each truncates with its full text on hover. */}
+        <td className="px-1.5 py-1.5 min-w-0">
+          <div className="flex items-center gap-1.5 min-w-0">
+            <Link href={`/asins?q=${a.asin}`} className="shrink-0 font-mono text-xs text-primary hover:underline" onClick={(e) => e.stopPropagation()}>{a.asin}</Link>
+            {a.sku ? <span className="truncate font-mono text-[11px] text-muted-foreground" title={a.sku}>{a.sku}</span> : (
+              <Tooltip>
+                <TooltipTrigger asChild><AlertTriangle className="h-3.5 w-3.5 shrink-0 text-amber-500" /></TooltipTrigger>
+                <TooltipContent side="top"><p className="text-xs">No SKU — create offer first</p></TooltipContent>
+              </Tooltip>
+            )}
+          </div>
+          <div className="truncate text-xs" title={a.asin_name ?? ""}>{a.asin_name ?? <span className="text-muted-foreground/50">—</span>}</div>
         </td>
-        <td className="px-3 py-1.5 truncate" title={a.asin_name ?? ""}>{a.asin_name ?? <span className="text-muted-foreground/50">—</span>}</td>
-        <td className="px-3 py-1.5">
-          {a.sku ? <span className="font-mono text-xs">{a.sku}</span> : (
-            <Tooltip>
-              <TooltipTrigger asChild><AlertTriangle className="h-3.5 w-3.5 text-amber-500" /></TooltipTrigger>
-              <TooltipContent side="top"><p className="text-xs">No SKU — create offer first</p></TooltipContent>
-            </Tooltip>
-          )}
+        <td className="px-1.5 py-1.5 text-right">
+          <div><QtyCell v={a.qty} /></div>
+          <div className="whitespace-nowrap text-[11px] text-muted-foreground" title="Individual Units Ordered = Ordered × Units/Pack"><QtyCell v={individualUnits(Number(a.qty), a.units_per_pack)} /> indiv.</div>
         </td>
-        <td className="px-3 py-1.5 text-right"><QtyCell v={a.qty} /></td>
-        <td className="px-3 py-1.5 text-right">{editable ? <InlineEdit money value={a.cost_per_unit} onSave={saveAsin("cost_per_unit")} align="right" width="w-20" testId={`cost_per_unit-${a.id}`}><Money v={a.cost_per_unit} /></InlineEdit> : <Money v={a.cost_per_unit} />}</td>
-        <td className="px-3 py-1.5 text-right"><Money v={a.total_cost} /></td>
-        <td className="px-3 py-1.5 text-right">{editable ? <InlineEdit money value={a.prep_cost} onSave={saveAsin("prep_cost")} align="right" width="w-16" testId={`prep_cost-${a.id}`}><Money v={a.prep_cost} /></InlineEdit> : <Money v={a.prep_cost} />}</td>
-        <td className="px-3 py-1.5">{editable ? <SelectEdit value={a.sold_as} options={["individual", "multi-pack", "bundle"]} onSave={saveAsin("sold_as")} testId={`sold_as-${a.id}`} /> : a.sold_as}</td>
-        <td className="px-3 py-1.5 text-right">{editable && a.sold_as !== "individual" ? <InlineEdit value={a.units_per_pack} onSave={saveAsin("units_per_pack")} align="right" width="w-14" testId={`units_per_pack-${a.id}`}>{a.units_per_pack}</InlineEdit> : a.units_per_pack}</td>
-        <td className="px-3 py-1.5 text-right"><QtyCell v={individualUnits(Number(a.qty), a.units_per_pack)} /></td>
-        <td className="px-3 py-1.5 text-right"><QtyCell v={a.qty_canceled_asin} />{editable && (a.lines ?? []).length > 0 && <MarkCanceled a={a} onChanged={onChanged} po={po} />}</td>
-        <td className="px-3 py-1.5 text-right"><QtyCell v={a.qty_returned_asin} /></td>
-        <td className="px-3 py-1.5 text-right">{editable ? <EditableQty rowId={a.id} col="qty_shipped_supplier" v={a.qty_shipped_supplier} onChanged={onChanged} /> : <QtyCell v={a.qty_shipped_supplier} />}</td>
-        <td className="px-3 py-1.5 text-right" title={VELOCITY_QTY_TITLE}><QtyCell v={a.received_velocity} /></td>
-        <td className="px-3 py-1.5 text-right" title={VELOCITY_QTY_TITLE}><QtyCell v={a.qty_at_prep} /></td>
-        <td className="px-3 py-1.5 text-right">{editable ? <EditableQty rowId={a.id} col="qty_at_warehouse" v={a.qty_at_warehouse} onChanged={onChanged} /> : <QtyCell v={a.qty_at_warehouse} />}</td>
-        <td className="px-3 py-1.5 text-right">{editable ? <EditableQty rowId={a.id} col="qty_lost_damaged_us" v={a.qty_lost_damaged_us} onChanged={onChanged} /> : <QtyCell v={a.qty_lost_damaged_us} />}</td>
-        <td className="px-3 py-1.5 text-right"><QtyCell v={a.qty_shipped_fba} /></td>
-        <td className="px-3 py-1.5 text-right"><QtyCell v={a.qty_received_amazon} /></td>
-        <td className="px-3 py-1.5"><ShipmentChips rowId={a.id} asin={a.asin} shipments={a.shipments ?? []} editable={editable} onChanged={onChanged} /></td>
-        <td className="px-3 py-1.5">{editable && lines.length > 0
+        <td className="px-1.5 py-1.5 text-right text-xs">{editable ? <InlineEdit money value={a.cost_per_unit} onSave={saveAsin("cost_per_unit")} align="right" width="w-12" testId={`cost_per_unit-${a.id}`}><Money v={a.cost_per_unit} /></InlineEdit> : <Money v={a.cost_per_unit} />}</td>
+        <td className="px-1.5 py-1.5 text-right text-xs"><Money v={a.total_cost} /></td>
+        <td className="px-1.5 py-1.5 text-right text-xs">{editable ? <InlineEdit money value={a.prep_cost} onSave={saveAsin("prep_cost")} align="right" width="w-10" testId={`prep_cost-${a.id}`}><Money v={a.prep_cost} /></InlineEdit> : <Money v={a.prep_cost} />}</td>
+        <td className="px-1.5 py-1.5">
+          <div>{editable ? <SelectEdit value={a.sold_as} options={["individual", "multi-pack", "bundle"]} onSave={saveAsin("sold_as")} testId={`sold_as-${a.id}`} fill /> : a.sold_as}</div>
+          <div className="flex items-center gap-0.5 text-[11px] text-muted-foreground" title="Units/Pack"><span>×</span>{editable && a.sold_as !== "individual" ? <InlineEdit value={a.units_per_pack} onSave={saveAsin("units_per_pack")} width="w-12" testId={`units_per_pack-${a.id}`}>{a.units_per_pack}</InlineEdit> : a.units_per_pack}</div>
+        </td>
+        <td className="px-1.5 py-1.5 text-right"><div><QtyCell v={a.qty_canceled_asin} /></div>{editable && (a.lines ?? []).length > 0 && <MarkCanceled a={a} onChanged={onChanged} po={po} />}</td>
+        <td className="px-1.5 py-1.5 text-right"><QtyCell v={a.qty_returned_asin} /></td>
+        <td className="px-1.5 py-1.5 text-right">{editable ? <EditableQty rowId={a.id} col="qty_shipped_supplier" v={a.qty_shipped_supplier} onChanged={onChanged} /> : <QtyCell v={a.qty_shipped_supplier} />}</td>
+        <td className="px-1.5 py-1.5 text-right" title={VELOCITY_QTY_TITLE}><QtyCell v={a.received_velocity} /></td>
+        <td className="px-1.5 py-1.5 text-right" title={VELOCITY_QTY_TITLE}><QtyCell v={a.qty_at_prep} /></td>
+        <td className="px-1.5 py-1.5 text-right">{editable ? <EditableQty rowId={a.id} col="qty_at_warehouse" v={a.qty_at_warehouse} onChanged={onChanged} /> : <QtyCell v={a.qty_at_warehouse} />}</td>
+        <td className="px-1.5 py-1.5 text-right">{editable ? <EditableQty rowId={a.id} col="qty_lost_damaged_us" v={a.qty_lost_damaged_us} onChanged={onChanged} /> : <QtyCell v={a.qty_lost_damaged_us} />}</td>
+        <td className="px-1.5 py-1.5 text-right"><QtyCell v={a.qty_shipped_fba} /></td>
+        <td className="px-1.5 py-1.5 text-right"><QtyCell v={a.qty_received_amazon} /></td>
+        <td className="px-1.5 py-1.5"><ShipmentChips rowId={a.id} asin={a.asin} shipments={a.shipments ?? []} editable={editable} onChanged={onChanged} /></td>
+        <td className="px-1.5 py-1.5">{editable && lines.length > 0
           ? <ActionItemsEditor items={a.action_items} titles={extraTitles(a)} url={`/api/pos/asin-rows/${a.id}/action-items`} onSaved={onChanged} testId={`button-action-items-asin-${a.asin}`} lineCount={lines.length} defects={a.defects_open} />
           : <ActionItemChips items={a.action_items} titles={extraTitles(a)} defects={a.defects_open} />}
           {editable && (a.action_items ?? []).includes(EXTRA_UNITS_SHIPPED) && <ClearExtraUnits a={a} onChanged={onChanged} />}</td>
@@ -511,13 +528,13 @@ export function PoAsinRow({ a, indent = false, editable = false, onChanged, po }
       {multi && open && lines.map((l) => (
         <tr key={l.id} style={hairline} data-testid={`row-component-${a.asin}-${l.position}`}>
           <td className="px-2 py-1" />
-          <td className="px-3 py-1 pl-8 text-xs text-muted-foreground" colSpan={2}>{l.product_name ?? "—"}</td>
-          <td className="px-3 py-1 text-muted-foreground/50">—</td>
-          <td className="px-3 py-1 text-right text-xs text-muted-foreground"><QtyCell v={l.qty_ordered} /></td>
-          <td className="px-3 py-1 text-right text-xs text-muted-foreground"><Money v={l.price} /></td>
-          <td className="px-3 py-1 text-right text-xs text-muted-foreground"><Money v={l.adjusted_product_cost} /></td>
-          <td className="px-3 py-1 text-right text-xs text-muted-foreground" colSpan={PO_ASIN_COLUMNS.length - 6 - 1}>{l.qty_canceled != null && l.qty_canceled > 0 ? `canceled ${l.qty_canceled}` : ""}</td>
-          <td className="px-3 py-1">{editable
+          <td className="px-1.5 py-1 pl-6 text-xs text-muted-foreground truncate" title={l.product_name ?? ""}>{l.product_name ?? "—"}</td>
+          <td className="px-1.5 py-1 text-right text-xs text-muted-foreground"><QtyCell v={l.qty_ordered} /></td>
+          <td className="px-1.5 py-1 text-right text-xs text-muted-foreground"><Money v={l.price} /></td>
+          <td className="px-1.5 py-1 text-right text-xs text-muted-foreground"><Money v={l.adjusted_product_cost} /></td>
+          {/* Product, Ordered, Cost/Unit, Total Cost above; Action Items after. */}
+          <td className="px-1.5 py-1 text-right text-xs text-muted-foreground" colSpan={PO_ASIN_DISPLAY_COLUMNS.length - 4 - 1}>{l.qty_canceled != null && l.qty_canceled > 0 ? `canceled ${l.qty_canceled}` : ""}</td>
+          <td className="px-1.5 py-1">{editable
             ? <ActionItemsEditor items={l.action_items} url={`/api/pos/lines/${l.id}/action-items`} onSaved={onChanged} testId={`button-action-items-line-${a.asin}-${l.position}`} defects={a.defects_open?.filter((d) => d.po_line_item_id === l.id)} />
             : <ActionItemChips items={l.action_items} defects={a.defects_open?.filter((d) => d.po_line_item_id === l.id)} />}</td>
           {/* Product-line note, inline (2026-11-04). */}

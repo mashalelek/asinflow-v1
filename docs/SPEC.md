@@ -6322,8 +6322,19 @@ every quantity or shipment change re-runs the auto-close rule. Columns 14
 and 15 share one tooltip, on the header and the cells: "Received by
 Velocity = all units Velocity has ever checked in for this line; At Prep
 Center = of those, still at Velocity." The header wraps to two lines like
-the others; the table scrolls inside its own overflow box (min width
-160rem), never the page.
+the others; the table scrolls inside its own overflow box below its
+minimum width, never the page. **Shown in 17 columns (Maria 2026-11-05:
+at 160 rem the right-hand columns clipped at 1440):** the same 21 values
+in the same order (`PO_ASIN_DISPLAY_COLUMNS` over `PO_ASIN_COLUMNS`,
+`client/src/lib/po-qty.ts`) — **Product** = ASIN · Amazon SKU over the
+title (the ASINs page's pattern, each truncating with its full text on
+hover), Individual Units Ordered under **Ordered** ("12 indiv."),
+Units/Pack under **Sold As** ("× 2", still editable). Fixed px widths
+sized to what each holds, Product takes the rest (min 84 px, the ASIN in
+full); header labels at 10.5 px wrap between words, never inside one.
+Minimum 1,118 px: the expanded table fits the POs table at 1024 and fills
+it at 1280 (1,206 px) and 1440 (1,366 px) with no scroll of its own. The
+empty Shipment IDs chip reads "+ add".
 
 **Products tab** (§4.3): Ordered · Received · Canceled · Returned ·
 **At Prep Center · At CQG Warehouse · Lost/damaged by us** · Final. The
@@ -6879,8 +6890,10 @@ reconstructed (those POs are Closed from the sheet).
   a dragged width wins over its default, and **Reset widths** returns to
   these. Auto layout gave Order ID and Supplier ⅓ of the page each and
   pushed Units Ordered / Invoice / Notes off-screen at 1440. The expanded
-  ASIN rows' table (160 rem) scrolls inside its own box; the POs table
-  never widens with it.
+  ASIN rows' table (min 1,118 px, 2026-11-05) fits inside the POs table;
+  below that it scrolls inside its own box, and the POs table never widens
+  with it. The POs table's own defaults sum to 1,142 px, so between 1024
+  and ~1190 the list scrolls inside its box (never the page).
 - **Notes everywhere (Maria 2026-11-05):** every notes field in AF uses this
   one editor — besides the PO pages: the ASINs, ASIN Analytics and Bulk
   Calc Notes and Promos columns (`asins.notes` / `promo_notes`,

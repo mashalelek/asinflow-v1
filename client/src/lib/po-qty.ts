@@ -65,3 +65,30 @@ export const PO_ASIN_COLUMNS = [
   // write-through to every line. Product rows carry their own.
   { key: "action_items", label: "Action Items", align: "left" },
 ] as const;
+
+/**
+ * How the table shows the §4 model (Maria 2026-11-05: the expanded ASIN table
+ * clipped its right-hand columns at 1440 — 21 columns at 160 rem). Same values,
+ * same order, 17 columns: ASIN · Amazon SKU over the Title in one Product
+ * cell (the ASINs page's pattern), Individual Units Ordered under Ordered,
+ * Units/Pack under Sold As. `of`: the model columns each one shows.
+ */
+export const PO_ASIN_DISPLAY_COLUMNS = [
+  { key: "product", label: "Product", align: "left", of: ["asin", "sku", "title"] },
+  { key: "ordered", label: "Ordered", align: "right", of: ["ordered", "individual_units"] },
+  { key: "cost_per_unit", label: "Cost/Unit", align: "right", of: ["cost_per_unit"] },
+  { key: "total_cost", label: "Total Cost", align: "right", of: ["total_cost"] },
+  { key: "prep", label: "Prep", align: "right", of: ["prep"] },
+  { key: "sold_as", label: "Sold As", align: "left", of: ["sold_as", "units_per_pack"] },
+  { key: "canceled", label: "Canceled", align: "right", of: ["canceled"] },
+  { key: "returned", label: "Returned", align: "right", of: ["returned"] },
+  { key: "shipped_supplier", label: "Shipped by Supplier", align: "right", of: ["shipped_supplier"] },
+  { key: "received_velocity", label: "Received by Velocity", align: "right", of: ["received_velocity"] },
+  { key: "at_prep", label: "At Prep Center", align: "right", of: ["at_prep"] },
+  { key: "at_warehouse", label: "At CQG Warehouse", align: "right", of: ["at_warehouse"] },
+  { key: "lost_damaged_us", label: "Lost / damaged by us", align: "right", of: ["lost_damaged_us"] },
+  { key: "shipped_fba", label: "Shipped FBA", align: "right", of: ["shipped_fba"] },
+  { key: "received_amazon", label: "Received by Amazon", align: "right", of: ["received_amazon"] },
+  { key: "shipments", label: "Shipment IDs", align: "left", of: ["shipments"] },
+  { key: "action_items", label: "Action Items", align: "left", of: ["action_items"] },
+] as const;
