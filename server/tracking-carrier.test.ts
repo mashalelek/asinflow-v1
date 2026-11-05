@@ -126,3 +126,13 @@ describe("carrier notices: matchTrackingRows", () => {
     expect(live.writes.some((w) => /supplier_domain_map|INSERT INTO settings/.test(w.sql))).toBe(false); // ups.com never seeded
   });
 });
+
+describe("carrier window: a PO's order date is its calendar day on any host", () => {
+  it("a pg DATE (local midnight) and a YYYY-MM-DD string read the same day — 30 days before the email is still in", () => {
+    const at = "2026-09-16T16:39:05Z"; // 12:39 ET on 9/16
+    const asText: PoRef = { id: "t", supplier: "zara.com", order_id: "1", order_date: "2026-08-17", ships_to: "velocity" };
+    const asDate: PoRef = { ...asText, id: "d", order_date: new Date(2026, 7, 17) }; // how pg hands a DATE back, in this process's zone
+    expect(carrierCandidates("zara.com", at, "velocity", [asText, asDate]).map((p) => p.id)).toEqual(["t", "d"]);
+    expect(carrierCandidates("zara.com", at, "velocity", [{ ...asText, order_date: "2026-08-16" }])).toEqual([]); // 31 days
+  });
+});

@@ -132,13 +132,19 @@ export function carrierCandidates(supplier: string, emailDate: Date | string | n
   const e = dayNumber(etDay(emailDate));
   return pos.filter((p) => {
     if (p.supplier !== supplier || p.order_date == null || p.closed || p.fully_shipped) return false;
-    const age = e - dayNumber(String(p.order_date instanceof Date ? etDay(p.order_date) : String(p.order_date).slice(0, 10)));
+    const age = e - dayNumber(poDay(p.order_date));
     if (age < 0 || age > CARRIER_WINDOW_DAYS) return false;
     return !kind || !p.ships_to || p.ships_to === kind;
-  }).sort((a, b) => String(a.order_date).localeCompare(String(b.order_date)));
+  }).sort((a, b) => poDay(a.order_date).localeCompare(poDay(b.order_date)));
+}
+/** A PO's order date as YYYY-MM-DD. pg returns a DATE as local midnight of the server's zone (UTC on Render), so a
+ *  Date is read by its local parts — etDay() of it would give the day before on a UTC host. */
+function poDay(d: Date | string | null | undefined): string {
+  if (d instanceof Date) return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
+  return String(d ?? "").slice(0, 10);
 }
 /** The PO fields the matchers read (order #s, date, ships_to, closed, fully shipped). */
-export const MATCH_POS_SQL = `SELECT p.id, p.supplier, p.order_id, p.order_date, p.alt_order_ids, p.ships_to, (p.closed_at IS NOT NULL) AS closed,
+export const MATCH_POS_SQL = `SELECT p.id, p.supplier, p.order_id, p.order_date::text AS order_date, p.alt_order_ids, p.ships_to, (p.closed_at IS NOT NULL) AS closed,
   COALESCE((SELECT SUM(a.qty_shipped_supplier) FROM po_asins a WHERE a.po_id = p.id), 0) >= NULLIF((SELECT SUM(a.qty) FROM po_asins a WHERE a.po_id = p.id), 0) AS fully_shipped
   FROM purchase_orders p`;
 export const toPoRef = (x: any): PoRef => ({ id: String(x.id), supplier: String(x.supplier), order_id: String(x.order_id), order_date: x.order_date ?? null, alt_order_ids: x.alt_order_ids ?? null, ships_to: x.ships_to ?? null, closed: !!x.closed, fully_shipped: !!x.fully_shipped });
