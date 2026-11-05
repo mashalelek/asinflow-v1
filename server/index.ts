@@ -9,6 +9,7 @@ import { requestLogLine } from "./request-log";
 import { startRunner, setRunnerLogger } from "./scheduler/runner";
 import { log } from "./log";
 import { startSchedule, setScheduleLogger, nextPassAfter } from "./scheduler/schedule";
+import { startBornClosedPoll } from "./born-closed-poll";
 import { serveStatic } from "./static";
 import { createServer } from "http";
 import pool, { ensureExtensionTables, query } from "./db";
@@ -203,6 +204,8 @@ if (!process.env.VITEST) (async () => {
   if (process.env.DATABASE_URL && process.env.ENABLE_CRONS === "true" && process.env.SP_API_SELLER_ID) {
     setScheduleLogger((m) => log(m, "schedule"));
     startSchedule();
+    // Born-closed poll (SPEC §18, 2026-11-04): new offers closed within minutes of creation, from the DB — a restart loses nothing.
+    startBornClosedPoll(process.env.SP_API_SELLER_ID, (m) => log(m, "born-closed"));
   } else if (process.env.DATABASE_URL) {
     log("Scheduled crons disabled (ENABLE_CRONS != 'true') — the Refresh button is the operating model", "schedule");
   }

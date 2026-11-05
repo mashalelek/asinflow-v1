@@ -3763,6 +3763,21 @@ the per-row **+** button.
   sees the listing, the nightly component 22 closes it (a zero-stock open
   SKU). The Add to SC preview says "Offers are closed right after they're
   created."
+  - **Born-closed poll (Maria 2026-11-04).** The 22 Add to SC listings of
+    2026-11-04 were submitted 3:19 PM ET and closed 6:37 PM — Amazon had
+    each ~1 minute after submission (`summaries.createdDate`), but the §19
+    ladder's in-process timers (1 / 3 / 10 / 30 / 60 min) never closed them
+    (a timer dies with the process — most likely a restart). Now
+    `server/born-closed-poll.ts` runs every minute from the database:
+    each submission younger than **30 minutes**, not `open_on_create`, not
+    failed, with no live close since it was submitted, is probed
+    (`getListingsItem` through `verifyPending`, which closes on the first
+    probe that sees the listing; a row already `live` is closed directly).
+    Add to SC and Relist alike — any `listing_submissions` row. After 30
+    minutes §19 takes over unchanged (sweep, pill, component 22). Started
+    with the schedule (`ENABLE_CRONS=true`, production only) — a local dev
+    server on a copied database never sends closes. Expected gap: the first
+    tick after Amazon materializes the listing, ~1–2 minutes.
   - **Reopen is done in Seller Central directly by the user** (2026-08-03: the
     in-app reopen action was removed as unnecessary). For reference, the API
     mechanism — should it ever be needed again — is a `patchListingsItem`
