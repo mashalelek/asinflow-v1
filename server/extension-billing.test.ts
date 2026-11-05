@@ -80,10 +80,10 @@ describe("the AI preview / prefill prompt", () => {
   });
 });
 
-describe("the server scrubs the pages again (an extension build before the SECNO_NEW fix)", () => {
+describe("the server scrubs the pages again — the third layer (an extension build before the SECNO_NEW fix)", () => {
   it("a security-code field by a form's own name, an expiry month and a card-number field never pass", () => {
     const p = CapturePageSchema.parse({ url: "x", text: "Security Code 864\nCard 5105 1051 0510 5100", fields: [{ label: "SECNO_NEW", value: "864" }, { label: "EXP.MONTH", value: "02" }, { label: "CCNO", value: "5105105105105100" }, { label: "Zip Code", value: "62701" }] });
-    expect(p.fields).toEqual([{ label: "CCNO", value: "•••• 5100" }, { label: "Zip Code", value: "62701" }]);
+    expect(p.fields).toEqual([{ label: "CCNO", value: "•••• 5100" }, { label: "Zip Code", value: "" }]); // a page with a card field: the payment-form rule empties the rest
     expect(p.text).not.toMatch(/864|5105 1051/);
   });
 });

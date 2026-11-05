@@ -2659,14 +2659,14 @@ The one combined extension is split into two, from one repo, sharing `chrome-ext
 `af-client.js` — server URL, `credentials: "include"` fetch, Test connection, `isAmazonUrl`; the options script;
 `scrub.js`; the panel CSS; `extension-routes.json`, the AF routes each extension calls):
 
-- **AsinFlow Capture PO** — `chrome-extension/` (manifest 2.0.1, receipt icon). Everything capture-related: buckets,
+- **AsinFlow Capture PO** — `chrome-extension/` (manifest 2.0.2, receipt icon). Everything capture-related: buckets,
   the AI preview, the structured readers, Open in AF, supplier verification, retailer-page purchase history. It
   stays in the original folder because an unpacked extension's ID comes from its path: the ID, the captures in
   `chrome.storage.local` and the options survive. **Never on Amazon:** no amazon host in `host_permissions`, no
   content script; the panel is disabled on every amazon.* tab (`sidePanel.setOptions` per tab) and a capture there
   is refused. (`optional_host_permissions` stays `https://*/*` — Chrome cannot exclude a host from it — so the code
   gate is the rule.)
-- **AsinFlow Analyzer** — `chrome-extension/analyzer/` (manifest 1.0.1, bar-chart icon, a new unpacked load).
+- **AsinFlow Analyzer** — `chrome-extension/analyzer/` (manifest 1.0.2, bar-chart icon, a new unpacked load).
   Everything on Amazon product pages: product info, COGS / sale price / fees / profit, Update in AsinFlow,
   auto-open, Amazon-page purchase history. `host_permissions` = amazon.com, Seller Central and the AF servers only;
   its panel is off by default and enabled per Amazon tab.
@@ -3040,7 +3040,30 @@ not an Amazon product page the panel shows the capture UI instead of the
   closes. A page under ~200 characters of text
   gets a hint to capture the review page instead.
 - **Scrubbing (§4.3, `scrub.js`, inside the page before anything leaves the
-  browser):** any run of 13–19 digits (spaces / dashes allowed) that passes
+  browser), three layers since 2.0.2 (Maria 2026-11-05).** (1) **Payment-form
+  values never leave the browser:** `capture.js` finds every card input —
+  autocomplete `cc-*`, a card label by its words or the form's own name
+  (card number, CCNO, CVV / CVC / CSC / SECNO, security code, name on card,
+  cardholder), or a card-number-shaped value (13–19 digits, a network prefix,
+  Luhn) — and in its form (else its fieldset; a card input outside both: every control outside a form / fieldset) every
+  input, select and textarea is sent with its label and an EMPTY value,
+  except what AF stores: the card number's last 4 (`•••• 5100`) and a card /
+  payment-method nickname (a brand such as "Master Card", or a card type /
+  nickname field without digits). A password input is never read, and an
+  autocomplete `cc-csc` / `cc-exp*` / `cc-number` / `cc-name` input is
+  emptied on any page, in any form. Checked radios keep their option's
+  visible text, and the page text keeps every label, so the AI still sees
+  "Master Card ending 9627". A separate shipping form on the same page keeps
+  its values; a one-form checkout whose card fields sit in the page (not a
+  processor iframe) sends its shipping fields empty too — the page text
+  still shows the address. On install / update the extension scrubs the
+  capture records already in `chrome.storage.local` again
+  (`rescrubFields`). (2) The label rules below. (3) The server scrubs every
+  page again on arrival (`scrubPage` in `CapturePageSchema`: prefill, AI
+  preview, kept samples) with `scrubText` + `rescrubFields` — on a page with
+  a card field the same payment-form rule over the fields;
+  `npm run capture:rescrub [-- --prod] [--live]` does it to the kept
+  samples. The label rules: any run of 13–19 digits (spaces / dashes allowed) that passes
   Luhn and starts like a card network (3 / 4 / 5 / 6 / 2221–2720), unless an
   order / confirmation / invoice / tracking label sits right before it
   (v1.3.1) → `•••• ` + last 4; a 3–4 digit value whose label says cvv / cvc /

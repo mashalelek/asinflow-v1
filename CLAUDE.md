@@ -125,7 +125,7 @@ and any introduced error must be fixed forward before committing.
 
 ## Tests
 
-`npm test` (vitest). **2,150 tests across 197 files** as of 2026-11-05 — this
+`npm test` (vitest). **2,159 tests across 198 files** as of 2026-11-05 — this
 codebase IS tested; the old "there are no tests" line was years stale.
 
 **A gate report must cover BOTH typecheck commands, labelled separately:**
@@ -133,7 +133,7 @@ codebase IS tested; the old "there are no tests" line was years stale.
 ```
 npm run check        -> 4 baseline TS1252, 0 introduced
 npm run check:tests  -> 4 baseline TS1252, 0 introduced
-npm test             -> 2150/2150
+npm test             -> 2159/2159
 ```
 
 `npm run check` alone is NOT a complete gate. The base `tsconfig.json`
@@ -184,12 +184,17 @@ the promo backfill (`npm run backfill:po-promos`), every call logged in
 (`server/tracking-ai.test.ts` enforces it). The capture's scrubber
 (`chrome-extension/scrub.js`) runs inside the page; its fixtures are
 hand-written with public test card numbers only — never real ones.
+Since 2.0.2 a payment form's VALUES never leave the browser (only the card's
+last 4 and nickname); the label rules are the second layer and the server's
+re-scrub on arrival (`CapturePageSchema`) the third. `npm run
+capture:rescrub [-- --prod] [--live]` scrubs the kept samples again with the
+current rules (dry run by default, old values masked).
 
 **Chrome extensions dev (SPEC §11 "Two extensions", v2.0, 2026-11-05):** two
 extensions from one repo, each loaded unpacked at chrome://extensions —
-**AsinFlow Capture PO** = `chrome-extension/` (2.0.1; the original folder, so
+**AsinFlow Capture PO** = `chrome-extension/` (2.0.2; the original folder, so
 its ID, captures and options survive; never runs on Amazon) and **AsinFlow
-Analyzer** = `chrome-extension/analyzer/` (1.0.1; Amazon product pages and
+Analyzer** = `chrome-extension/analyzer/` (1.0.2; Amazon product pages and
 Seller Central only). They share `chrome-extension/core/` (AF client,
 options script, scrubber, panel CSS, `extension-routes.json`); Chrome loads
 nothing outside an extension's folder, so `analyzer/core/` is a copy —

@@ -23,13 +23,14 @@ import { promoCountsByDefault, yieldFromPacks, resolvePaymentNickname, defaultRe
 import { discountReflectedInLines } from "@shared/po-cost";
 // scrub.js is a plain browser script: under Node's ESM loader it exports nothing and defines globalThis.AfScrub (as in the page).
 import "../chrome-extension/core/scrub.js";
-const { scrubText, scrubField } = (globalThis as unknown as { AfScrub: typeof import("../chrome-extension/core/scrub.js") }).AfScrub;
+const { scrubText, rescrubFields } = (globalThis as unknown as { AfScrub: typeof import("../chrome-extension/core/scrub.js") }).AfScrub;
 
 // ── Input (from the extension, already scrubbed) ─────────────────────────────
-// 2026-11-05: scrubbed again here with the extension's own scrubber, so a build that predates a scrubber fix
-// (Gordon's SECNO_NEW security code) still never reaches the model, the log or capture_page_samples.
+// 2026-11-05: scrubbed again here with the extension's own scrubber (rescrubFields: the label rules, and on a page
+// with a card field the payment-form rule), so a build that predates a scrubber fix (Gordon's SECNO_NEW security
+// code) still never reaches the model, the log or capture_page_samples — the third layer.
 export function scrubPage<P extends { text: string; fields: { label: string; value: string }[] }>(p: P): P {
-  return { ...p, text: scrubText(p.text), fields: p.fields.map((f) => scrubField(f.label, f.value)).filter((f): f is { label: string; value: string } => f != null) };
+  return { ...p, text: scrubText(p.text), fields: rescrubFields(p.fields) };
 }
 export const CapturePageSchema = z.object({
   step: z.enum(["cart", "shipping", "payment", "review", "other"]).default("other"),

@@ -256,6 +256,23 @@ async function dropOrphanCaptures() {
 }
 chrome.runtime.onStartup.addListener(() => { dropOrphanCaptures().catch(() => {}); });
 chrome.runtime.onInstalled.addListener(() => { dropOrphanCaptures().catch(() => {}); });
+// 2.0.2: on install / update, the capture records already in storage are scrubbed again with this build's rules — a
+// page captured by an older build (Gordon's SECNO_NEW security code, 2026-11-05) keeps no payment-form value.
+async function rescrubStoredCaptures() {
+  const all = await captureStore.get(null), out = {};
+  for (const [k, cap] of Object.entries(all || {})) {
+    if (!k.startsWith("capture:") || !cap) continue;
+    const before = JSON.stringify(cap);
+    const fix = (p) => (p && Array.isArray(p.fields) ? { ...p, fields: AfScrub.rescrubFields(p.fields) } : p);
+    const next = { ...cap };
+    if (Array.isArray(cap.captures)) next.captures = cap.captures.map(fix);
+    if (cap.pages) next.pages = Object.fromEntries(Object.entries(cap.pages).map(([s, p]) => [s, fix(p)]));
+    if (Array.isArray(cap.others)) next.others = cap.others.map(fix);
+    if (JSON.stringify(next) !== before) out[k] = next;
+  }
+  if (Object.keys(out).length) await captureStore.set(out);
+}
+chrome.runtime.onInstalled.addListener(() => { rescrubStoredCaptures().catch(() => {}); });
 
 // Runs in the retailer's page (PAGE_PRODUCT): the product's name and SKU / GTIN only.
 function readPageProduct() {

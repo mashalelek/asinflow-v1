@@ -11,6 +11,14 @@
 // the text of the option it sits in as a "selected: <label>" field (v1.2),
 // so the SELECTED shipping address, payment method and subscription choice
 // reach the buckets and the AI, not the first block on the page.
+// 2.0.2 (Maria 2026-11-05, after Gordon's SECNO_NEW security code went out):
+// payment-form VALUES never leave the browser. A form (else fieldset; else
+// every control outside any form / fieldset) holding a card input — autocomplete cc-*, a card label, or a
+// card-number-shaped value — keeps only the card's last 4 and a card /
+// payment-method nickname; every other input, select and textarea in it is
+// sent with its label and an empty value. A password or cc-csc / cc-exp /
+// cc-number / cc-name input is emptied on any page, in any form. Checked
+// radios still give their option's visible text (page text, which stays).
 (function () {
   "use strict";
   var S = globalThis.AfScrub;
@@ -47,14 +55,40 @@
     return "";
   }
 
+  function rawValue(el) {
+    if (el.tagName === "SELECT") { var o = el.options[el.selectedIndex]; return String(o ? (o.text || o.value) : "").trim(); }
+    return String(el.value == null ? "" : el.value).trim();
+  }
+  /** 2.0.2: the payment forms on the page — the form (else fieldset) of every card input; LOOSE stands for the controls outside any form / fieldset. */
+  var LOOSE = {};
+  function boxOf(el) { return el.closest("form") || el.closest("fieldset") || LOOSE; }
+  function paymentForms(els) {
+    var forms = [];
+    for (var i = 0; i < els.length; i++) {
+      var el = els[i], type = (el.getAttribute("type") || el.tagName).toLowerCase();
+      if (type === "hidden" || type === "submit" || type === "button" || type === "checkbox" || type === "radio") continue;
+      if (!S.isCardInput(labelFor(el), el.getAttribute("autocomplete"), el.tagName === "SELECT" ? "" : rawValue(el))) continue;
+      var box = boxOf(el);
+      if (forms.indexOf(box) < 0) forms.push(box);
+    }
+    return forms;
+  }
   function fields() {
     var out = [];
     var els = document.querySelectorAll("input, select, textarea");
+    var forms = paymentForms(els);
+    var inPaymentForm = function (el) { return forms.indexOf(boxOf(el)) >= 0; };
     for (var i = 0; i < els.length && out.length < 500; i++) {
       var el = els[i];
       var type = (el.getAttribute("type") || el.tagName).toLowerCase();
       if (type === "password" || type === "hidden" || type === "submit" || type === "button" || type === "file" || type === "image") continue;
       if (!visible(el)) continue;
+      if (type !== "checkbox" && type !== "radio" && (S.isSecretInput(type, el.getAttribute("autocomplete")) || inPaymentForm(el))) {
+        var pf = S.paymentFormField(labelFor(el), rawValue(el), el.getAttribute("autocomplete"));
+        var pk = pf.value ? S.scrubField(pf.label, pf.value) : pf;
+        if (pk) out.push(pk);
+        continue;
+      }
       var value;
       if (type === "checkbox" || type === "radio") {
         if (!el.checked) continue;

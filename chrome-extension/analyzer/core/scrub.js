@@ -17,6 +17,15 @@
 //   - an expiry (MM/YY, MM/YYYY) within 40 characters of "exp" / "valid" → removed
 //   - a gift-card / e-gift / gift-certificate number (8+ digits, by label or
 //     within 40 characters after such a label) → its last 4 kept
+//   - 2.0.2 (Maria 2026-11-05): payment-form values never leave the browser.
+//     capture.js asks isCardInput() about every input; inside the form (or
+//     fieldset) of one, paymentFormField() keeps only what AF stores — a card
+//     number's last 4 and a card / payment-method nickname ("Master Card") —
+//     and every other value (name on card, billing address, security code,
+//     expiry, however the form names them) is emptied; labels and page text
+//     stay. isSecretInput(): a password or an autocomplete cc-csc / cc-exp* /
+//     cc-number / cc-name input, on any page, in any form. The label rules
+//     here are the second layer; the server's re-scrub the third.
 //   - email addresses are kept (the form's "email used"); password inputs
 //     are never read by the capture script in the first place.
 // Plain script (no bundler): defines globalThis.AfScrub for capture.js and
@@ -106,7 +115,39 @@
     return { label: l, value: scrubText(v) };
   }
 
-  var api = { luhn: luhn, cardPrefix: cardPrefix, maskCardRuns: maskCardRuns, removeExpiries: removeExpiries, removeCvvs: removeCvvs, maskGiftCards: maskGiftCards, scrubText: scrubText, scrubField: scrubField };
+  // ── 2.0.2: payment forms (the capture script's first layer) ──
+  var CC_AUTOCOMPLETE = /(?:^|\s)cc-[a-z-]+/i;
+  var SECRET_AUTOCOMPLETE = /(?:^|\s)cc-(?:csc|exp(?:-month|-year)?|number|name|given-name|family-name|additional-name)(?:\s|$)/i;
+  var CARD_HINT = /card\s*(?:no|num(?:ber)?)|\bccno\b|\bcc\s*(?:no|num(?:ber)?)\b|\bcvv2?\b|\bcvc2?\b|\bcsc\b|\bcvn\b|security\s*code|\bsec\s*no\b|\bsecno\b|name\s*on\s*card|card\s*holder|cardholder|card\s*verification/i;
+  var CARD_NO_HINT = /card\s*(?:no|num(?:ber)?)|\bccno\b|\bcc\s*(?:no|num(?:ber)?)\b/i;
+  var NICKNAME_LABEL = /\b(?:card\s*type|cc\s*type|card\s*brand|brand|payment\s*(?:method|type)|nickname)\b/i;
+  var CARD_BRAND = /^(?:visa|master\s*card|mastercard|amex|american\s*express|discover|jcb|diners(?:\s*club)?|union\s*pay|maestro|paypal|apple\s*pay|google\s*pay|gift\s*card|store\s*credit)$/i;
+  function digitsOf(v) { return String(v == null ? "" : v).replace(/\D/g, ""); }
+  /** A card-number-shaped value: 13–19 digits with only spaces / dashes between them, a card network's prefix, Luhn-valid. */
+  function cardShaped(value) { var v = String(value == null ? "" : value).trim(), d = digitsOf(v); return /^[\d \-]+$/.test(v) && d.length >= 13 && d.length <= 19 && cardPrefix(d) && luhn(d); }
+  /** An input that marks its form as a payment form: autocomplete cc-*, a card label (by its words or the form's own name), or a card-number-shaped value. Pure. */
+  function isCardInput(label, autocomplete, value) {
+    return CC_AUTOCOMPLETE.test(String(autocomplete || "")) || CARD_HINT.test(fieldWords(label || "")) || cardShaped(value);
+  }
+  /** A password, or an autocomplete cc-csc / cc-exp / cc-number / cc-name input — its value never leaves, on any page. Pure. */
+  function isSecretInput(type, autocomplete) { return String(type || "").toLowerCase() === "password" || SECRET_AUTOCOMPLETE.test(String(autocomplete || "")); }
+  /** A field inside a payment form (or a secret input anywhere): only a card number's last 4 and a card / payment-method nickname keep a value. Pure. */
+  function paymentFormField(label, value, autocomplete) {
+    var l = String(label == null ? "" : label), v = String(value == null ? "" : value).trim(), w = fieldWords(l), ac = String(autocomplete || "");
+    var cardNo = /(?:^|\s)cc-number(?:\s|$)/i.test(ac) || CARD_NO_HINT.test(w) || cardShaped(v);
+    if (cardNo) { var d = digitsOf(v); return { label: l, value: d.length >= 4 && (d.length >= 12 || /•|\*/.test(v)) ? "•••• " + d.slice(-4) : "" }; }
+    if (!SECRET_AUTOCOMPLETE.test(ac) && v.length <= 40 && !/\d/.test(v) && (CARD_BRAND.test(v) || /(?:^|\s)cc-type(?:\s|$)/i.test(ac) || (NICKNAME_LABEL.test(w) && !CARD_HINT.test(w)))) return { label: l, value: v };
+    return { label: l, value: "" };
+  }
+
+  /** Stored fields (no DOM left) scrubbed again: the label rules, and when any field is a card input, the payment-form rule on every field but the checked options. Pure. */
+  function rescrubFields(fields) {
+    var fs = (fields || []).map(function (f) { return scrubField(f && f.label, f && f.value); }).filter(Boolean);
+    var payment = fs.some(function (f) { return !/^selected:/i.test(f.label) && isCardInput(f.label, "", f.value); });
+    return payment ? fs.map(function (f) { return /^selected:/i.test(f.label) ? f : paymentFormField(f.label, f.value, ""); }) : fs;
+  }
+
+  var api = { luhn: luhn, cardPrefix: cardPrefix, maskCardRuns: maskCardRuns, removeExpiries: removeExpiries, removeCvvs: removeCvvs, maskGiftCards: maskGiftCards, scrubText: scrubText, scrubField: scrubField, isCardInput: isCardInput, isSecretInput: isSecretInput, paymentFormField: paymentFormField, cardShaped: cardShaped, rescrubFields: rescrubFields };
   root.AfScrub = api;
   if (typeof module !== "undefined" && module.exports) module.exports = api;
 })(typeof globalThis !== "undefined" ? globalThis : this);
