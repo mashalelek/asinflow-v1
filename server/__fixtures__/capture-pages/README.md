@@ -36,8 +36,11 @@ the v1.2.7 cart-table and rebuild rules are tested against them.
 preview (extension v1.3), TRANSCRIBED from Maria's description of them, not
 pasted — synthetic text in the shape she reported: `gordon-cart.txt`
 (gordonelectricsupply.com: the Qty column first, "ea", "$2.89 / ea", "Sub
-Total", "Estimated Freight", "Estimated Total"; products and totals
-invented), `acme-checkout.txt` (acmetools.com checkout: the "PPE & SAFETY"
+Total", "Estimated Freight", "Estimated Total"; since 2026-11-05 the
+real cart's values — one line, Lenox 20350GOLD5C × 30 @ $2.89, Sub Total
+$86.70, Estimated Freight $18.52, Estimated Total $105.22 — replacing the
+invented 2-line / $78.31 cart; the layout is still transcribed until her
+production capture becomes a fixture), `acme-checkout.txt` (acmetools.com checkout: the "PPE & SAFETY"
 category link, Subtotal $89.70, Code DHDNYC −$10.00, Shipping $6.49,
 Handling $0, Sales Tax $0, Total $86.19, the marketing promo lines; the card
 field is a processor iframe, so no payment text) and `acme-confirmation.txt`

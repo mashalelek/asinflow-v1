@@ -15,10 +15,10 @@ const lenox = { productName: "Lenox Gold Titanium Utility Knife Blades 5-Pack", 
 const dhdnyc = { type: "coupon" as const, description: "Code DHDNYC", amount: 10, percent: null, confidence: "high" as const };
 // What the model reads from each trigger page (mocked).
 const READ: Record<string, PrefillExtraction> = {
+  // The real cart (Maria 2026-11-05): one line, Lenox 20350GOLD5C × 30 @ $2.89 — the synthetic 2-line / $78.31 cart is gone.
   "gordon-cart": { ...none, lines: [
-    { productName: "Leviton 5325-W Duplex Receptacle 15A 125V White", retailerSku: "LEV5325W", qty: 4, unitsPerPack: 1, unitPrice: 2.89, lineTotal: 11.56, asinGuess: null },
-    { productName: "Hubbell HBL2621 Twist-Lock Receptacle 30A 250V", retailerSku: "HBLHBL2621", qty: 2, unitsPerPack: 1, unitPrice: 28.4, lineTotal: 56.8, asinGuess: null },
-  ], subtotal: 68.36, shipping: 9.95, total: 78.31 },
+    { productName: "Lenox 20350GOLD5C Gold Titanium Utility Knife Blades 5-Pack", retailerSku: "20350GOLD5C", qty: 30, unitsPerPack: 1, unitPrice: 2.89, lineTotal: 86.7, asinGuess: null },
+  ], subtotal: 86.7, shipping: 18.52, total: 105.22 },
   "acme-checkout": { ...none, lines: [{ ...lenox, unitPrice: 2.99, lineTotal: 89.7 }], subtotal: 89.7, discount: 10, tax: 0, shipping: 6.49, total: 86.19, promos: [dhdnyc] },
   "walmart-confirmation": { ...none, orderId: "200015468871641", lines: [
     { productName: "Great Value Creamy Peanut Butter, 40 oz", retailerSku: null, qty: 12, unitsPerPack: 1, unitPrice: 4.98, lineTotal: 59.76, asinGuess: null },
@@ -83,8 +83,8 @@ describe("capture preview: the panel's buckets (the three trigger pages)", () =>
   const ai = (name: string) => extractionToBuckets(READ[name]);
   it("gordonelectricsupply.com cart (Qty column first, \"$2.89 / ea\", Sub Total / Estimated Freight / Estimated Total): Products and Totals from the AI", () => {
     const b = overlayPreview(extractBuckets(page("gordon-cart", "cart")), ai("gordon-cart"));
-    expect(b.products.map((p: any) => [p.qty, p.sku, p.price, p.total])).toEqual([[4, "LEV5325W", "$2.89", "$11.56"], [2, "HBLHBL2621", "$28.40", "$56.80"]]);
-    expect(b.totals).toEqual({ subtotal: "$68.36", shipping: "$9.95", total: "$78.31" });
+    expect(b.products.map((p: any) => [p.qty, p.sku, p.price, p.total])).toEqual([[30, "20350GOLD5C", "$2.89", "$86.70"]]);
+    expect(b.totals).toEqual({ subtotal: "$86.70", shipping: "$18.52", total: "$105.22" });
   });
   it("acmetools.com checkout: one product (not the PPE & SAFETY category link), the totals, one promo (DHDNYC); Payment stays empty (processor iframe)", () => {
     const b = overlayPreview(extractBuckets(page("acme-checkout")), ai("acme-checkout"));

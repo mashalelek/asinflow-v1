@@ -1,12 +1,9 @@
 Shopping Cart
 Qty	Item	Price	Total
-4	Leviton 5325-W Duplex Receptacle 15A 125V White
-Item # LEV5325W
-ea	$2.89 / ea	$11.56
-2	Hubbell HBL2621 Twist-Lock Receptacle 30A 250V
-Item # HBLHBL2621
-ea	$28.40 / ea	$56.80
-Sub Total	$68.36
-Estimated Freight	$9.95
-Estimated Total	$78.31
+30	Lenox 20350GOLD5C Gold Titanium Utility Knife Blades 5-Pack
+Item # 20350GOLD5C
+ea	$2.89 / ea	$86.70
+Sub Total	$86.70
+Estimated Freight	$18.52
+Estimated Total	$105.22
 Checkout
