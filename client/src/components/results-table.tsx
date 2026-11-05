@@ -45,7 +45,13 @@ export const DATE_VALUE_COLS = new Set<ColumnId>(["dateAdded", "lastReviewed", "
 import { useTagGroups, useAllTags, compareTagKeys } from "@/lib/use-tag-groups";
 import { submissionCategory } from "@/lib/submissions-api";
 import { TagEditor } from "@/components/tag-editor";
-import { NoteEditor } from "@/components/note-editor";
+import { InlineNoteCell } from "@/components/inline-note";
+
+/** Notes / Promos save (PUT) — a failed save throws, so the shared editor restores the note and shows a toast. */
+async function putNote(url: string, body: Record<string, string | null>): Promise<void> {
+  const r = await fetch(url, { method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
+  if (!r.ok) throw new Error((await r.json().catch(() => ({})))?.message ?? `HTTP ${r.status}`);
+}
 import { useColumnWidths, ResizeHandle } from "@/hooks/use-column-widths";
 
 function getSourcingLabel(r: AsinResult): string {
@@ -312,7 +318,7 @@ interface ResultsTableProps {
   // REPLACE the main-page editors for their columns — the main TagEditor and
   // the main /api/asins promos endpoint are never used on the bulk page.
   promosSaveUrl?: (asin: string) => string;
-  notesSaveUrl?: (asin: string) => string;                 // NoteEditor save target for the Notes cell (§21 bulk: bulk_list_asins.notes, never asins)
+  notesSaveUrl?: (asin: string) => string;                 // the Notes cell's save target for the Notes cell (§21 bulk: bulk_list_asins.notes, never asins)
   reviewedSaveUrl?: (asin: string) => string;              // markReviewed target (§21 bulk: bulk_list_asins.last_reviewed_at, never asins)
   onBulkTagsSave?: (asin: string, csvText: string | null) => Promise<{ tags: string[] }>;
   onBuyLinkSave?: (asin: string, url: string | null) => Promise<{ buyLink: string | null; supplier: string | null }>;
@@ -1036,12 +1042,8 @@ export function ResultsTable({
                     );
                   } else if (colId === "notes" && onResultUpdate) {
                     content = (
-                      <NoteEditor
-                        asin={result.asin}
-                        currentNote={result.notes ?? null}
-                        onNoteChanged={(notes) => onResultUpdate(result.asin, { notes })}
-                        saveUrl={notesSaveUrl ? notesSaveUrl(result.asin) : undefined}
-                      />
+                      <InlineNoteCell value={result.notes ?? null} label="note" showText testId={`asin-notes-${result.asin}`}
+                        onSave={async (notes) => { await putNote(notesSaveUrl ? notesSaveUrl(result.asin) : `/api/asins/${result.asin}/notes`, { notes }); onResultUpdate(result.asin, { notes }); }} />
                     );
                   } else if (colId === "promos" && onResultUpdate) {
                     // §6: Promos is inline-editable with the exact Notes
@@ -1049,15 +1051,8 @@ export function ResultsTable({
                     // never touch promo_notes (§14); sourcing sync writes it
                     // solely on new-ASIN INSERT, so edits are never overwritten.
                     content = (
-                      <NoteEditor
-                        asin={result.asin}
-                        currentNote={result.promoNotes ?? null}
-                        onNoteChanged={(promoNotes) => onResultUpdate(result.asin, { promoNotes })}
-                        saveUrl={promosSaveUrl ? promosSaveUrl(result.asin) : `/api/asins/${result.asin}/promos`}
-                        bodyField="promo_notes"
-                        placeholder="Add promo notes..."
-                        emptyLabel="+ promo"
-                      />
+                      <InlineNoteCell value={result.promoNotes ?? null} label="promo" showText testId={`asin-promos-${result.asin}`}
+                        onSave={async (promoNotes) => { await putNote(promosSaveUrl ? promosSaveUrl(result.asin) : `/api/asins/${result.asin}/promos`, { promo_notes: promoNotes }); onResultUpdate(result.asin, { promoNotes }); }} />
                     );
                   } else if (colId === "supplier" && onBuyLinkSave && onResultUpdate) {
                     // §21 bulk: supplier is DERIVED — the editor edits the
@@ -2284,7 +2279,7 @@ export function renderCell(
 
     case "promos": {
       // Read-only FALLBACK (contexts without an update handler) — with
-      // onResultUpdate present the body loop renders the NoteEditor variant
+      // onResultUpdate present the body loop renders the inline note editor
       // instead (§6 inline edit). Same truncate+tooltip pattern as notes.
       const p = result.promoNotes;
       if (!p) return <span className="text-muted-foreground text-sm">-</span>;

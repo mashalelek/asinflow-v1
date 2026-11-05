@@ -1,7 +1,10 @@
 /**
  * Inline notes (Maria 2026-11-04): one editor for every note on the PO
  * pages — the POs table's Notes cell, the expanded ASIN rows and product
- * lines, the Products tab and the PO Details NOTES box.
+ * lines, the Products tab and the PO Details NOTES box. Since 2026-11-05
+ * every notes field in AF (Maria: "notes everywhere"): the ASINs / Bulk Calc
+ * / ASIN Analytics Notes and Promos columns, Subscriptions, PO refunds — a
+ * column that showed the note's text keeps showing it (showText).
  *
  * Hover the icon shows the full note; a click opens a textarea in place.
  * Enter saves, Shift+Enter is a newline, Esc cancels, blur saves. The
@@ -68,10 +71,12 @@ function useNoteEditor(value: string | null | undefined, onSave: (v: string | nu
 }
 
 /** A table cell's note: the icon, the full note on hover, the textarea in a popover anchored to the cell. */
-export function InlineNoteCell({ value, onSave, testId, label = "note", className = "" }: {
+export function InlineNoteCell({ value, onSave, testId, label = "note", className = "", showText = false, emptyLabel }: {
   value: string | null | undefined; onSave: (v: string | null) => Promise<void>; testId: string; label?: string;
   /** Classes for the click target — pass the cell's padding here and give the td p-0, so the whole cell opens the editor. */
   className?: string;
+  /** The note's first line as truncated text instead of the icon (columns that always showed the text); empty → emptyLabel. */
+  showText?: boolean; emptyLabel?: string;
 }) {
   const ed = useNoteEditor(value, onSave);
   const has = !!ed.shown;
@@ -81,8 +86,10 @@ export function InlineNoteCell({ value, onSave, testId, label = "note", classNam
         <TooltipTrigger asChild>
           <PopoverTrigger asChild>
             <button type="button" onClick={(e) => e.stopPropagation()} aria-label={has ? `Edit ${label}` : `Add ${label}`}
-              className={`flex w-full items-center ${className}`} data-testid={`note-${testId}`}>
-              <NoteIcon has={has} />
+              className={`flex w-full min-w-0 items-center text-left ${className}`} data-testid={`note-${testId}`}>
+              {showText
+                ? (has ? <span className="truncate text-sm text-muted-foreground" data-testid={`note-text-${testId}`}>{ed.shown}</span> : <span className="text-sm text-muted-foreground/50">{emptyLabel ?? `+ ${label}`}</span>)
+                : <NoteIcon has={has} />}
             </button>
           </PopoverTrigger>
         </TooltipTrigger>

@@ -12,6 +12,7 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { useToast } from "@/hooks/use-toast";
 import { InlineEdit, SelectEdit, poApi } from "@/components/po-edit";
+import { InlineNoteCell } from "@/components/inline-note";
 import type { PoAsinRowData, PoAsinLine } from "@/components/po-asin-rows";
 import { PAYMENT_METHODS, PROMO_TYPES, CASHBACK_STATUSES } from "@shared/po-form";
 import { MarkReceivedDialog, type DueRefundRow } from "@/components/refund-due-dialog";
@@ -134,7 +135,7 @@ export function PoMoneyTab({ po, asins, payments, promos, refunds, onChanged }: 
                 </td>
                 <td className="px-3 py-1.5 text-xs"><InlineEdit value={r.refunded_at} onSave={patch(`/api/pos/refunds/${r.id}`, "refunded_at")} width="w-28" testId={`refund-date-${r.id}`}>{r.refunded_at ?? <Muted v="—" />}</InlineEdit></td>
                 <td className="px-3 py-1.5"><SelectEdit value={r.method ?? ""} options={["", ...PAYMENT_METHODS]} onSave={patch(`/api/pos/refunds/${r.id}`, "method")} testId={`refund-method-${r.id}`} /></td>
-                <td className="px-3 py-1.5 text-xs"><InlineEdit value={r.note} onSave={patch(`/api/pos/refunds/${r.id}`, "note")} width="w-56" testId={`refund-note-${r.id}`}><span className="truncate block max-w-[16rem] text-muted-foreground" title={r.note ?? ""}>{r.note ?? "—"}</span></InlineEdit></td>
+                <td className="p-0 text-xs"><InlineNoteCell value={r.note} label="refund note" showText emptyLabel="—" className="px-3 py-1.5 max-w-[16rem]" testId={`refund-note-${r.id}`} onSave={async (v) => { await poApi(`/api/pos/refunds/${r.id}`, "PATCH", { note: v }); onChanged(); }} /></td>
                 <td className="px-3 py-1.5 text-right"><button onClick={() => { if (window.confirm("Remove this refund?")) void call(`/api/pos/refunds/${r.id}`, "DELETE"); }} className="text-muted-foreground/60 hover:text-destructive" data-testid={`button-remove-refund-${r.id}`}><Trash2 className="h-3.5 w-3.5" /></button></td>
               </tr>
             ))}

@@ -14,6 +14,7 @@ import { Input } from "@/components/ui/input";
 import { useToast } from "@/hooks/use-toast";
 import { useColumnWidths, ResizeHandle } from "@/hooks/use-column-widths";
 import { InlineEdit, SelectEdit, poApi } from "@/components/po-edit";
+import { InlineNoteCell } from "@/components/inline-note";
 
 export interface SubscriptionRow {
   id: number; supplier: string; asin: string | null; product_name: string | null; asin_title: string | null; thumbnail: string | null;
@@ -136,7 +137,7 @@ export default function Subscriptions() {
                   <td className={`px-3 py-2 whitespace-nowrap ${n.tone === "overdue" ? "text-destructive" : n.tone === "due" ? "text-amber-700 dark:text-amber-400" : ""}`}><InlineEdit value={r.next_order_date} onSave={patch(r, "next_order_date")} width="w-32" testId={`subscription-next-${r.id}`}>{n.text}</InlineEdit></td>
                   <td className="px-3 py-2"><SelectEdit value={r.status} options={["active", "paused", "canceled"]} onSave={patch(r, "status")} testId={`subscription-status-${r.id}`} /></td>
                   <td className="px-3 py-2 whitespace-nowrap">{r.last_po_id ? <Link href={`/purchase-orders/${r.last_po_id}`} className="font-mono text-xs text-primary hover:underline" data-testid={`link-subscription-po-${r.id}`}>{r.last_order_id}</Link> : <span className="text-muted-foreground/50">—</span>}{r.last_order_date && <span className="ml-1.5 text-xs text-muted-foreground">{r.last_order_date}</span>}</td>
-                  <td className="px-3 py-2"><InlineEdit value={r.notes} onSave={patch(r, "notes")} width="w-56" testId={`subscription-notes-${r.id}`}><span className="truncate block max-w-[18rem] text-xs text-muted-foreground" title={r.notes ?? ""}>{r.notes ?? "—"}</span></InlineEdit></td>
+                  <td className="p-0"><InlineNoteCell value={r.notes} label="note" showText emptyLabel="—" className="px-3 py-2 max-w-[18rem]" testId={`subscription-notes-${r.id}`} onSave={async (v) => { await poApi(`/api/subscriptions/${r.id}`, "PATCH", { notes: v }); load(); }} /></td>
                 </tr>
               );
             })}

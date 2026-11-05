@@ -6672,6 +6672,18 @@ reconstructed (those POs are Closed from the sheet).
   pushed Units Ordered / Invoice / Notes off-screen at 1440. The expanded
   ASIN rows' table (160 rem) scrolls inside its own box; the POs table
   never widens with it.
+- **Notes everywhere (Maria 2026-11-05):** every notes field in AF uses this
+  one editor — besides the PO pages: the ASINs, ASIN Analytics and Bulk
+  Calc Notes and Promos columns (`asins.notes` / `promo_notes`,
+  `bulk_list_asins.notes` / `promo_notes`, the existing PUTs), Subscriptions
+  notes and the PO Payments tab's refund note. Those columns keep showing the
+  note's text (`showText`); the old popup with Cancel / Save
+  (`note-editor.tsx`) is gone, and a failed save now restores the note with a
+  toast (the popup never checked the answer). History: the refund note writes
+  the PO's History row; ASINs, bulk lists and subscriptions have no History.
+  `client/src/components/notes-everywhere.test.ts` keeps any notes field
+  from going back to another editor. Form fields saved with their form (New
+  PO, Edit PO page, add-refund row) stay form inputs.
 - **Inline notes (2026-11-04, `client/src/components/inline-note.tsx`):**
   every note on the PO pages is edited where it shows — the POs table's
   Notes cell (the PO's note), the expanded ASIN rows (the ASIN-row note)
