@@ -191,6 +191,14 @@ re-scrub on arrival (`CapturePageSchema`) the third. `npm run
 capture:rescrub [-- --prod] [--live]` scrubs the kept samples again with the
 current rules (dry run by default, old values masked).
 
+**Analyzer extension: ON HOLD (Maria 2026-11-05).** She still uses SellerAmp;
+operational bottlenecks come first. Do not change, extend or "unify" anything
+in `chrome-extension/analyzer/` — its profit math and fee engine included —
+until she lifts the hold. The only exception: a shared-core change Capture PO
+needs; then `npm run ext:sync-core` keeps the Analyzer's copy in sync and
+nothing more (no Analyzer version bump for core-only syncs unless a test
+requires it). SPEC "Pending, and which patch fills it".
+
 **Chrome extensions dev (SPEC §11 "Two extensions", v2.0, 2026-11-05):** two
 extensions from one repo, each loaded unpacked at chrome://extensions —
 **AsinFlow Capture PO** = `chrome-extension/` (2.0.2; the original folder, so

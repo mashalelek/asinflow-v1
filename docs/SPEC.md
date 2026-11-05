@@ -8834,4 +8834,5 @@ it — one basis everywhere; the Finances patch inherits it.
 | Line resolutions (missing / damaged / wrong from the supplier, refund / replacement / write-off) | built: §22 "Supplier defects" (migration 094); the cancellations patch reuses it |
 | Pack sizes on the 2024–2025 rows ("n rows missing pack size") | Maria's `docs/pack-size-gaps-*.csv` work |
 | The D3 data-error list (AG not netting the refund) and the "no $ amount" list | Maria, over time, through the cancellations emails and the Orders sheet; nothing here depends on them being clean |
+| **Analyzer extension — ON HOLD** (Maria 2026-11-05: still using SellerAmp; operational bottlenecks come first) | nothing until Maria lifts the hold. `chrome-extension/analyzer/` is not changed, extended or "unified", its profit math and fee engine included (its inline profit is a second implementation of `calculateProfit`, left as is). Only exception: a shared-core change Capture PO needs, after which `npm run ext:sync-core` keeps the Analyzer's copy in sync — nothing more |
 
