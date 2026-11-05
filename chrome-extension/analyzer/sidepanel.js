@@ -1,4 +1,4 @@
-// AsinFlow Chrome Extension — Side Panel Calculator
+// AsinFlow Analyzer — side panel calculator (its own extension since 2026-11-05; Amazon pages only)
 
 (function () {
   "use strict";
@@ -229,9 +229,7 @@
   // ── Product Display ───────────────────────────────────────────────────
   function displayProduct(product) {
     if (!product || !product.asin) {
-      // Capture PO (capture-panel.js) owns the panel on non-Amazon tabs: the empty state shows only while it is hidden.
-      const captureRoot = document.getElementById("capture-content");
-      emptyState.style.display = captureRoot && captureRoot.style.display !== "none" ? "none" : "";
+      emptyState.style.display = "";
       productContent.style.display = "none";
       displayedAsin = null;
       return;

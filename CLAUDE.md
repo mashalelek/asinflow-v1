@@ -125,7 +125,7 @@ and any introduced error must be fixed forward before committing.
 
 ## Tests
 
-`npm test` (vitest). **2,101 tests across 194 files** as of 2026-11-04 — this
+`npm test` (vitest). **2,108 tests across 194 files** as of 2026-11-05 — this
 codebase IS tested; the old "there are no tests" line was years stale.
 
 **A gate report must cover BOTH typecheck commands, labelled separately:**
@@ -133,7 +133,7 @@ codebase IS tested; the old "there are no tests" line was years stale.
 ```
 npm run check        -> 4 baseline TS1252, 0 introduced
 npm run check:tests  -> 4 baseline TS1252, 0 introduced
-npm test             -> 2101/2101
+npm test             -> 2108/2108
 ```
 
 `npm run check` alone is NOT a complete gate. The base `tsconfig.json`
@@ -185,9 +185,16 @@ the promo backfill (`npm run backfill:po-promos`), every call logged in
 (`chrome-extension/scrub.js`) runs inside the page; its fixtures are
 hand-written with public test card numbers only — never real ones.
 
-**Chrome extension dev (SPEC §11 "Chrome extension — Capture PO", v1.4.0):** load
-`chrome-extension/` unpacked at chrome://extensions; set the server URL on
-its options page (localhost:3000 by default; production
+**Chrome extensions dev (SPEC §11 "Two extensions", v2.0, 2026-11-05):** two
+extensions from one repo, each loaded unpacked at chrome://extensions —
+**AsinFlow Capture PO** = `chrome-extension/` (2.0.0; the original folder, so
+its ID, captures and options survive; never runs on Amazon) and **AsinFlow
+Analyzer** = `chrome-extension/analyzer/` (1.0.0; Amazon product pages and
+Seller Central only). They share `chrome-extension/core/` (AF client,
+options script, scrubber, panel CSS, `extension-routes.json`); Chrome loads
+nothing outside an extension's folder, so `analyzer/core/` is a copy —
+after editing `core/`, run `npm run ext:sync-core` (`server/extension-split.test.ts`
+fails on a stale copy). Set the server URL on each one's options page (localhost:3000 by default; production
 `https://asinflow-cqg.onrender.com` and the custom domain
 `https://asinflow.coastalqualitygoods.com` are in `host_permissions`; the
 options page requests any other host once); sign in to
@@ -197,7 +204,7 @@ Capture PO: Capture this page (grants the site's host permission on first
 use; each capture is also read by a small AI preview, `POST
 /api/pos/capture-preview`, cached per page, logged as `capture_preview`) →
 Open in AF → `/pos/new?prefill=<id>`. No build step: plain scripts
-(`scrub.js`, `capture.js`, `platform.js` + `platform-map.js` — the structured reader (v1.4, SPEC §11); every AF route the extension calls is exempt from the stale-page guard (`EXTENSION_API_ROUTES`, enforced by `server/stale-build-guard.test.ts`), `buckets.js` — the six data buckets, tested in `server/extension-buckets.test.ts` — `capture-panel.js`, `background.js`).
+(`core/scrub.js`, `capture.js`, `platform.js` + `platform-map.js` — the structured reader (v1.4, SPEC §11); every AF route either extension calls is exempt from the stale-page guard (`EXTENSION_API_ROUTES` = the union of `core/extension-routes.json`, enforced by `server/stale-build-guard.test.ts` over both extensions), `buckets.js` — the six data buckets, tested in `server/extension-buckets.test.ts` — `capture-panel.js`, `background.js`).
 A page the parser missed: tick "Show Copy page text" on the options page,
 capture it, click **Copy page text** in the panel and paste the text (as a
 code block, so the tabs survive) — it becomes a fixture under

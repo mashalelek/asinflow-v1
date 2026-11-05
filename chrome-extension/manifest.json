@@ -1,8 +1,8 @@
 {
   "manifest_version": 3,
-  "name": "AsinFlow",
-  "version": "1.4.0",
-  "description": "FBA Profit Calculator, AsinFlow Import & Capture PO",
+  "name": "AsinFlow Capture PO",
+  "version": "2.0.0",
+  "description": "Capture a retailer checkout or order page into a new AsinFlow PO. Never runs on Amazon (AsinFlow Analyzer does).",
   "permissions": [
     "sidePanel",
     "activeTab",
@@ -11,11 +11,13 @@
     "scripting"
   ],
   "host_permissions": [
-    "https://www.amazon.com/*",
-    "https://amazon.com/*",
     "http://localhost:3000/*",
     "https://asinflow-cqg.onrender.com/*",
     "https://asinflow.coastalqualitygoods.com/*"
+  ],
+  "optional_host_permissions": [
+    "https://*/*",
+    "http://*/*"
   ],
   "side_panel": {
     "default_path": "sidepanel.html"
@@ -23,21 +25,9 @@
   "background": {
     "service_worker": "background.js"
   },
-  "content_scripts": [
-    {
-      "matches": [
-        "https://www.amazon.com/dp/*",
-        "https://www.amazon.com/*/dp/*",
-        "https://www.amazon.com/gp/product/*"
-      ],
-      "js": [
-        "content.js"
-      ],
-      "run_at": "document_idle"
-    }
-  ],
   "options_page": "options.html",
   "action": {
+    "default_title": "AsinFlow Capture PO",
     "default_icon": {
       "16": "icons/icon16.png",
       "48": "icons/icon48.png",
@@ -48,9 +38,5 @@
     "16": "icons/icon16.png",
     "48": "icons/icon48.png",
     "128": "icons/icon128.png"
-  },
-  "optional_host_permissions": [
-    "https://*/*",
-    "http://*/*"
-  ]
+  }
 }

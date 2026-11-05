@@ -1,6 +1,6 @@
-// AsinFlow Chrome Extension — Capture PO side panel (SPEC §11 "Chrome
-// extension — Capture PO", v1.2). Shown whenever the active tab is not an
-// Amazon product page (the calculator keeps those). One "Capture this page"
+// AsinFlow Capture PO — side panel (SPEC §11 "Chrome extension — Capture
+// PO", v1.2; its own extension since 2026-11-05 — never on an Amazon site,
+// AsinFlow Analyzer has those). One "Capture this page"
 // button; "Found so far" is the tab's six data buckets (buckets.js, regex
 // level, no AI — the background merges every capture newest-wins per field);
 // "Open in AF" is NEVER gated (v1.2.4, Maria 2026-11-02 — the buckets are a
@@ -15,7 +15,7 @@
   "use strict";
   const B = globalThis.AfBuckets;
   const el = (id) => document.getElementById(id);
-  const root = el("capture-content"), emptyState = el("empty-state"), productContent = el("product-content");
+  const root = el("capture-content"), amazonState = el("amazon-state"), connEl = el("status-text"), statusBar = el("status-bar");
   const retailerEl = el("capture-retailer"), newSupplierEl = el("capture-new-supplier"), orderEl = el("capture-order"), badgeEl = el("capture-shipto-badge");
   const captureBtn = el("capture-btn"), statusEl = el("capture-status"), missingEl = el("capture-missing"), bucketsEl = el("capture-buckets");
   const errorEl = el("capture-error"), layersEl = el("capture-layers");
@@ -121,9 +121,9 @@
   async function refresh() {
     const info = await send({ type: "GET_CAPTURE" });
     if (!info) return;
-    if (info.isAmazonProduct) { root.style.display = "none"; return; }
-    // Not an Amazon product page: the capture panel takes the empty state's place.
-    root.style.display = ""; emptyState.style.display = "none"; productContent.style.display = "none";
+    // An Amazon tab: the panel is switched off there (background.js gatePanel); this shows only if it was already open.
+    if (info.isAmazon) { root.style.display = "none"; amazonState.style.display = ""; return; }
+    root.style.display = ""; amazonState.style.display = "none";
     render(info);
   }
 
@@ -176,6 +176,9 @@
     const r = await send({ type: "GET_CAPTURE_CONFIG" });
     config = r && r.success ? r.config : null;
     if (r && !r.success && r.status === 401) say("Sign in to AsinFlow in a tab first — the extension uses your session", "error");
+    // The header's connection line (plain text, SPEC §7) — the capture config answering is the connection.
+    statusBar.classList.toggle("connected", !!config);
+    connEl.textContent = config ? "Connected" : r && r.status === 401 ? "Sign in to AsinFlow" : "Offline — check server URL in options";
   }
 
   captureBtn.addEventListener("click", capture);

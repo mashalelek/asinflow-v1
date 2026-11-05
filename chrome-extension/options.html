@@ -3,7 +3,7 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>AsinFlow Extension Settings</title>
+  <title>AsinFlow Capture PO — Options</title>
   <style>
     /* Warm stone (SPEC §7), the side panel's palette. */
     :root { --bg: #F5F4EF; --card: #FFFFFF; --controls: #E7E5E4; --hair: #E7E5E4; --text: #1C1917; --text-2: #78716C; --btn: #44403C; --btn-hover: #292524; --btn-text: #F5F5F4; --outline: #D6D3D1; --input: #FFFFFF; --input-border: #D6D3D1; --focus: #78716C; --green: #15803D; --green-bg: #DCFCE7; --red: #B91C1C; --red-bg: #FEE2E2; }
@@ -34,7 +34,7 @@
   </style>
 </head>
 <body>
-  <h1><svg viewBox="0 0 32 32" width="24" height="24" aria-hidden="true"><rect width="32" height="32" rx="7" fill="#292524"/><rect x="7" y="18" width="4" height="7" rx="1" fill="#A8A29E"/><rect x="14" y="13" width="4" height="12" rx="1" fill="#D6D3D1"/><rect x="21" y="7" width="4" height="18" rx="1" fill="#F5F5F4"/></svg>AsinFlow extension</h1>
+  <h1><svg viewBox="0 0 32 32" width="24" height="24" aria-hidden="true"><rect width="32" height="32" rx="7" fill="#44403C"/><rect x="8" y="5" width="16" height="22" rx="1.5" fill="#F5F5F4"/><rect x="11" y="10" width="10" height="2" rx="0.6" fill="#A8A29E"/><rect x="11" y="14" width="10" height="2" rx="0.6" fill="#A8A29E"/><rect x="11" y="18" width="6" height="2" rx="0.6" fill="#A8A29E"/><rect x="11" y="22" width="10" height="2.4" rx="0.6" fill="#44403C"/></svg>AsinFlow Capture PO</h1>
 
   <div class="card">
     <div class="form-group">
@@ -45,14 +45,7 @@
 
     <div class="form-group">
       <div class="checkbox-group">
-        <input type="checkbox" id="auto-open" checked>
-        <label for="auto-open">Auto-open the side panel on Amazon product pages</label>
-      </div>
-    </div>
-
-    <div class="form-group">
-      <div class="checkbox-group">
-        <input type="checkbox" id="debug-capture">
+        <input type="checkbox" id="debug-capture" data-sync-key="debugCapture">
         <label for="debug-capture">Show "Copy page text" in the Capture PO panel (debug)</label>
       </div>
       <div class="hint">Copies the captured text and form fields of the tab — exactly what the panel parsed — to the clipboard, so a page whose products were missed can be pasted for a parser fix. Card numbers are already masked.</div>
@@ -67,6 +60,7 @@
     <div id="save-result">Saved</div>
   </div>
 
-  <script src="options.js"></script>
+  <script src="core/af-client.js"></script>
+  <script src="core/options.js"></script>
 </body>
 </html>

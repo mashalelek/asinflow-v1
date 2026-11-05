@@ -6,7 +6,7 @@ import { resolve } from "path";
 import { previewKey, extractionToBuckets, capturePreview, _clearPreviewCache, PreviewRequestSchema } from "./capture-preview";
 import type { PrefillExtraction } from "./po-prefill";
 import { extractBuckets, overlayPreview, applyPage, applyPreview, previewStatus, needsPreview, checkoutEmailForPrefill } from "../chrome-extension/buckets.js";
-import { scrubText } from "../chrome-extension/scrub.js";
+import { scrubText } from "../chrome-extension/core/scrub.js";
 
 const FIX = resolve(__dirname, "__fixtures__/capture-pages/ai-preview");
 const page = (name: string, step = "other") => ({ step, url: `https://example.com/${name}`, title: name, text: scrubText(readFileSync(resolve(FIX, `${name}.txt`), "utf8")), fields: [] as Array<{ label: string; value: string }> });

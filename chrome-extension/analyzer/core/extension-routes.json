@@ -1,0 +1,15 @@
+{
+  "_comment": "Every AsinFlow /api route each extension calls (relative to /api; ':x' = one segment). The server's stale-page guard exempts exactly their union (EXTENSION_API_ROUTES in server/stale-build-guard.ts); server/stale-build-guard.test.ts reads both extensions' sources and fails on a call that is not listed.",
+  "capture-po": [
+    "/credentials-status",
+    "/pos/prefill",
+    "/pos/capture-preview",
+    "/pos/capture-config"
+  ],
+  "analyzer": [
+    "/settings",
+    "/credentials-status",
+    "/import-asin",
+    "/asins/check/:asin"
+  ]
+}

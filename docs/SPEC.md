@@ -2653,6 +2653,29 @@ is set — the runner is always on; only the **schedule** is gated.
   File keep their inline sheet/CSV step; only the onboarding Refresh they
   spawn is a queue job.
 
+### Two extensions (v2.0, Maria 2026-11-05)
+
+The one combined extension is split into two, from one repo, sharing `chrome-extension/core/` (the AF client
+`af-client.js` — server URL, `credentials: "include"` fetch, Test connection, `isAmazonUrl`; the options script;
+`scrub.js`; the panel CSS; `extension-routes.json`, the AF routes each extension calls):
+
+- **AsinFlow Capture PO** — `chrome-extension/` (manifest 2.0.0, receipt icon). Everything capture-related: buckets,
+  the AI preview, the structured readers, Open in AF, supplier verification, retailer-page purchase history. It
+  stays in the original folder because an unpacked extension's ID comes from its path: the ID, the captures in
+  `chrome.storage.local` and the options survive. **Never on Amazon:** no amazon host in `host_permissions`, no
+  content script; the panel is disabled on every amazon.* tab (`sidePanel.setOptions` per tab) and a capture there
+  is refused. (`optional_host_permissions` stays `https://*/*` — Chrome cannot exclude a host from it — so the code
+  gate is the rule.)
+- **AsinFlow Analyzer** — `chrome-extension/analyzer/` (manifest 1.0.0, bar-chart icon, a new unpacked load).
+  Everything on Amazon product pages: product info, COGS / sale price / fees / profit, Update in AsinFlow,
+  auto-open, Amazon-page purchase history. `host_permissions` = amazon.com, Seller Central and the AF servers only;
+  its panel is off by default and enabled per Amazon tab.
+- Chrome loads nothing outside an extension's folder, so `analyzer/core/` is a byte-identical copy of `core/`
+  (`npm run ext:sync-core`; `server/extension-split.test.ts` checks it). Options are per extension (sync storage is
+  per extension): the Analyzer's server URL is set once on its own options page.
+- The stale-page guard exempts exactly the union of both route lists (`EXTENSION_API_ROUTES`);
+  `server/stale-build-guard.test.ts` scans both extensions' sources.
+
 ### Chrome extension — Capture PO (patch `docs/claude_spec-patch-po-ai-prefill.md` §4, 2026-10-31; `chrome-extension/` v1.4.0 — structured readers above the AI, a red line for a failed preview, every preview request logged, kept samples, 2026-11-05; v1.3.1 — captures survive navigation, order #s that pass Luhn kept, 2026-11-04; v1.3.0 — the AI preview 2026-11-04; v1.2.3 — panel redesign 2026-11-01, pre-parser fixes from the first real PO the same day, table-row products and promo dedupe from a shagtools.com cart 2026-11-02, plain-text / no-text quantities and the "Copy page text" debug action the same day)
 
 The existing extension (the Amazon side-panel calculator, `content.js` on

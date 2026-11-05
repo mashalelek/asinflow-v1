@@ -2,7 +2,7 @@ import { describe, it, expect } from "vitest";
 import { readFileSync } from "fs";
 import { resolve } from "path";
 import { extractBuckets, mergeBuckets, emptyBuckets, filled, missing, applyPage, newCapture, captureKey, pagesForPrefill, shipToForPrefill, othersCapturing, orphanCaptureKeys, describeShipping, extractShipping, extractProducts, extractPromos, debugText, dedupePromos } from "../chrome-extension/buckets.js";
-import { scrubText } from "../chrome-extension/scrub.js";
+import { scrubText } from "../chrome-extension/core/scrub.js";
 
 // Capture PO v1.2 (SPEC §11 "Chrome extension — Capture PO"): six data
 // buckets, newest value wins per field, nothing dropped; the SELECTED
@@ -277,9 +277,11 @@ describe("buckets: v1.2.3 — product rows with a plain-text quantity or no quan
     expect(panel).toMatch(/chrome\.storage\.sync\.get\(\["debugCapture"\]/);
     expect(panel).not.toMatch(/fetch\(/);
     expect(readFileSync(resolve(__dirname, "../chrome-extension/sidepanel.html"), "utf8")).toMatch(/<button id="capture-copy-btn"[^>]*style="display:none;"/);
-    const options = readFileSync(resolve(__dirname, "../chrome-extension/options.js"), "utf8");
-    expect(options).toMatch(/chrome\.storage\.sync\.set\(\{ serverUrl, autoOpen, debugCapture \}/);
-    expect(readFileSync(resolve(__dirname, "../chrome-extension/options.html"), "utf8")).toMatch(/id="debug-capture"/);
+    // v2.0 (the split): the shared options script saves every data-sync-key checkbox; Capture PO's page carries the debug one.
+    const options = readFileSync(resolve(__dirname, "../chrome-extension/core/options.js"), "utf8");
+    expect(options).toMatch(/input\[type=checkbox\]\[data-sync-key\]/);
+    expect(options).toMatch(/chrome\.storage\.sync\.set\(out/);
+    expect(readFileSync(resolve(__dirname, "../chrome-extension/options.html"), "utf8")).toMatch(/id="debug-capture" data-sync-key="debugCapture"/);
   });
 });
 
@@ -460,7 +462,7 @@ describe("buckets: captures are per tab", () => {
   });
   it("background.js stores through these functions (one record per tab id)", () => {
     const bg = readFileSync(resolve(__dirname, "../chrome-extension/background.js"), "utf8");
-    expect(bg).toMatch(/importScripts\("buckets\.js"[^)]*\)/);
+    expect(bg).toMatch(/importScripts\("core\/af-client\.js", "buckets\.js"[^)]*\)/);
     expect(bg).toMatch(/AfBuckets\.applyPage\(/);
     expect(bg).toMatch(/AfBuckets\.captureKey\(tab\.id\)/);
     expect(bg).toMatch(/AfBuckets\.othersCapturing\(/);
@@ -513,9 +515,9 @@ describe("buckets v1.3.1: captures survive navigation in the tab", () => {
     expect(bg).toMatch(/chrome\.tabs\.onRemoved\.addListener/);
     expect(bg).toMatch(/chrome\.tabs\.onReplaced\.addListener/);
     expect(bg).toMatch(/chrome\.runtime\.onStartup\.addListener/);
-    // the one navigation listener (the Amazon calculator's) touches only currentProduct, never a capture record
-    const nav = bg.slice(bg.indexOf("chrome.tabs.onUpdated.addListener"), bg.indexOf("\n});", bg.indexOf("chrome.tabs.onUpdated.addListener")));
-    expect(nav).toMatch(/currentProduct/);
+    // v2.0: the one navigation listener only gates the panel (off on Amazon), never touches a capture record
+    const nav = bg.slice(bg.indexOf("chrome.tabs.onUpdated.addListener"), bg.indexOf("\n", bg.indexOf("chrome.tabs.onUpdated.addListener")));
+    expect(nav).toMatch(/gatePanel\(/);
     expect(nav).not.toMatch(/capture|captureStore/i);
     const panel = readFileSync(resolve(__dirname, "../chrome-extension/capture-panel.js"), "utf8");
     expect(panel).toMatch(/area === "local"/);

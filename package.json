@@ -37,7 +37,8 @@
     "po:cogs-review": "tsx script/po-cogs-review.ts",
     "po:yield-review": "tsx script/yield-review.ts",
     "backfill:yield-ratio": "tsx script/backfill-yield-ratio.ts",
-    "backfill:amex-split": "tsx script/backfill-amex-split.ts"
+    "backfill:amex-split": "tsx script/backfill-amex-split.ts",
+    "ext:sync-core": "rm -rf chrome-extension/analyzer/core && cp -R chrome-extension/core chrome-extension/analyzer/core"
   },
   "dependencies": {
     "@anthropic-ai/sdk": "^1.3.0",

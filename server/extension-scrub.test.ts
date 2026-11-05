@@ -1,7 +1,7 @@
 import { describe, it, expect } from "vitest";
 import { readFileSync, readdirSync } from "fs";
 import { resolve } from "path";
-import { luhn, cardPrefix, maskCardRuns, removeExpiries, removeCvvs, maskGiftCards, scrubText, scrubField } from "../chrome-extension/scrub.js";
+import { luhn, cardPrefix, maskCardRuns, removeExpiries, removeCvvs, maskGiftCards, scrubText, scrubField } from "../chrome-extension/core/scrub.js";
 
 // Capture PO §4.3: nothing card-like leaves the browser. The fixtures are
 // hand-written synthetic checkout pages (public test card numbers only).

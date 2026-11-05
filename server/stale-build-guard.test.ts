@@ -71,19 +71,37 @@ describe("onboarding dedupe (2026-10-18)", () => {
 });
 
 describe("stale-page guard: no Chrome extension route is guarded (2026-11-05 — capture-preview got 409 on every page)", () => {
-  // Every "/api/…" the extension's source names (fetches, and the routes its comments describe), a ${…} segment as "x".
-  const dir = path.resolve(__dirname, "../chrome-extension");
-  const called = new Set<string>();
-  // platform.js runs in the retailer's page and reads the RETAILER's own /api (BigCommerce's storefront API), never AF's.
-  for (const f of fs.readdirSync(dir).filter((n) => n.endsWith(".js") && n !== "platform.js")) {
-    for (const m of Array.from(fs.readFileSync(path.join(dir, f), "utf8").matchAll(/\/api(\/[A-Za-z0-9_\-/]*(?:\$\{[^}]*\}[A-Za-z0-9_\-/]*)*)/g))) called.add(m[1].replace(/\$\{[^}]*\}/g, "x").replace(/\/$/, ""));
+  // Since v2.0 (2026-11-05) two extensions from one repo: Capture PO at chrome-extension/ (the original folder, so its
+  // ID and storage survive) and Analyzer at chrome-extension/analyzer/. Every "/api/…" either one's source names
+  // (fetches, and the routes its comments describe), a ${…} segment as "x". The analyzer's core/ is a copy of core/.
+  const root = path.resolve(__dirname, "../chrome-extension");
+  const EXT = { "capture-po": { dir: root, skip: ["analyzer"] }, analyzer: { dir: path.join(root, "analyzer"), skip: ["core"] } } as const;
+  const listed: Record<string, string[]> = JSON.parse(fs.readFileSync(path.join(root, "core/extension-routes.json"), "utf8"));
+  function scan(dir: string, skip: readonly string[], out = new Set<string>()): Set<string> {
+    for (const e of fs.readdirSync(dir, { withFileTypes: true })) {
+      if (e.isDirectory()) { if (!skip.includes(e.name)) scan(path.join(dir, e.name), [], out); continue; }
+      // platform.js runs in the retailer's page and reads the RETAILER's own /api (BigCommerce's storefront API), never AF's.
+      if (!e.name.endsWith(".js") || e.name === "platform.js") continue;
+      for (const m of Array.from(fs.readFileSync(path.join(dir, e.name), "utf8").matchAll(/\/api(\/[A-Za-z0-9_\-/]*(?:\$\{[^}]*\}[A-Za-z0-9_\-/]*)*)/g))) out.add(m[1].replace(/\$\{[^}]*\}/g, "x").replace(/\/$/, ""));
+    }
+    return out;
   }
-  it("the extension calls the routes on the list — capture-preview among them", () => {
-    expect(Array.from(called).sort()).toEqual(expect.arrayContaining(["/pos/capture-preview", "/pos/prefill", "/import-asin"]));
-    expect(called.size).toBeGreaterThanOrEqual(EXTENSION_API_ROUTES.length - 1);
+  const called = Object.fromEntries(Object.entries(EXT).map(([k, v]) => [k, Array.from(scan(v.dir, v.skip))])) as Record<keyof typeof EXT, string[]>;
+  const all = Array.from(new Set([...called["capture-po"], ...called.analyzer]));
+  it("each extension calls the routes on its list — capture-preview for Capture PO, import-asin for Analyzer", () => {
+    expect(called["capture-po"]).toEqual(expect.arrayContaining(["/pos/capture-preview", "/pos/prefill"]));
+    expect(called.analyzer).toEqual(expect.arrayContaining(["/import-asin", "/asins/check/x"]));
+    expect(called["capture-po"]).not.toContain("/import-asin");
+    for (const k of Object.keys(EXT) as Array<keyof typeof EXT>) {
+      const re = listed[k].map((r) => new RegExp(`^${r.replace(/:[a-z]+/gi, "[^/]+")}$`));
+      for (const p of called[k]) expect({ ext: k, route: p, listed: re.some((x) => x.test(p)) }).toEqual({ ext: k, route: p, listed: true });
+    }
   });
-  it("every one of them passes the guard with no build id, for every method", () => {
-    for (const p of Array.from(called)) for (const m of ["POST", "PUT", "PATCH", "DELETE", "GET"]) {
+  it("the server's EXTENSION_API_ROUTES is exactly the union of both extensions' lists", () => {
+    expect(Array.from(new Set([...listed["capture-po"], ...listed.analyzer])).sort()).toEqual([...EXTENSION_API_ROUTES].sort());
+  });
+  it("every route either extension calls passes the guard with no build id, for every method", () => {
+    for (const p of all) for (const m of ["POST", "PUT", "PATCH", "DELETE", "GET"]) {
       expect({ route: p, m, ...call(m, p, undefined) }).toMatchObject({ route: p, m, nexted: true });
     }
   });
