@@ -50,7 +50,8 @@ describe("po_line_action_items on the real schema (rolled back)", () => {
       expect(byAsin).toEqual({ B0ZZV2000A: ["See comments"], B0ZZV2000B: ["SHIP"] });
       expect(rows.find((r: any) => r.asin === "B0ZZV2000A").lines.map((l: any) => l.action_items)).toEqual([["See comments"], ["See comments"]]);
       const po = (await q(`SELECT ${PO_ACTION_ITEMS_SQL} AS items FROM purchase_orders p WHERE p.id = $1`, [s.po])).rows[0].items;
-      expect([...po].sort()).toEqual(["SHIP", "See comments"]);
+      // The seeded PO is open, dated in the past, with no document: "No invoice saved" is derived beside the stored items.
+      expect([...po].sort()).toEqual(["No invoice saved", "SHIP", "See comments"]);
       // removing on the ASIN clears every line of it (cleared_by manual), History has one row per line changed
       await writeLineItems(q, s.po, [s.a1, s.a2], [], null);
       expect(await open(q, s.a1)).toEqual([]);

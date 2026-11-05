@@ -76,7 +76,15 @@ export const RECEIVING_MISMATCH = "Receiving mismatch";
 export const EXTRA_UNITS_SHIPPED = "Extra units shipped";
 // The one-off replacement pair's item (server/tracking-replacement-pair.ts, 2026-11-05): derived, never set by hand.
 export const REPLACEMENT_TRACKING_ITEM = "Tracking also goes to 200015557295492 (1 replacement single)";
-export const AUTO_ACTION_ITEMS = [EXTRA_UNITS_SHIPPED, REVIEW_VELOCITY, PACK_SIZE_MISSING, PACK_SIZE_MISMATCH, RECEIVING_MISMATCH, REPLACEMENT_TRACKING_ITEM] as const;
+/**
+ * No invoice saved (Maria 2026-11-05): a PO with no po_documents row from
+ * the day after its order date — open POs, and AF-created POs whatever their
+ * state (796 closed sheet-era POs have none, by design, SPEC §22). Derived;
+ * the hover names the reason when one is known (the last failed save,
+ * settings docs.save_failures). Display only: it does not block auto-close.
+ */
+export const NO_INVOICE_SAVED = "No invoice saved";
+export const AUTO_ACTION_ITEMS = [EXTRA_UNITS_SHIPPED, REVIEW_VELOCITY, PACK_SIZE_MISSING, PACK_SIZE_MISMATCH, RECEIVING_MISMATCH, REPLACEMENT_TRACKING_ITEM, NO_INVOICE_SAVED] as const;
 export const DISPLAY_ACTION_ITEMS: readonly string[] = [...ACTION_ITEMS, ...AUTO_ACTION_ITEMS];
 
 export function isActionItem(s: string): s is ActionItem {

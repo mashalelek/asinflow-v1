@@ -47,7 +47,9 @@ describe("linking existing PDFs", () => {
     expect(matchesExactName("2025-10-01_walmart.com_1234567.pdf", "2025-10-01_walmart.com_123456")).toBe(false);
     expect(typeFromFileName("x_shipped-2.pdf")).toBe("shipped");
     expect(typeFromFileName("x_delivered.pdf")).toBe("delivered");
-    expect(typeFromFileName("x_invoice.pdf")).toBe("order_confirmation");
+    expect(typeFromFileName("x_invoice.pdf")).toBe("invoice");
+    expect(typeFromFileName("x_INVOICE-3.pdf")).toBe("invoice");
+    expect(typeFromFileName("x.pdf")).toBe("order_confirmation");
   });
 
   it("rule 2: same date, the order # as a whole token, any supplier spelling", () => {

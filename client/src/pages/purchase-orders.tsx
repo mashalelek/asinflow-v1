@@ -48,6 +48,8 @@ interface PoRow {
   action_items: string[];
   /** SPEC §26: the open "Review Velocity" reasons (the chip's hover). */
   review_velocity_reasons?: string[] | null;
+  /** Hover text per derived item ("No invoice saved": the reason). */
+  action_item_titles?: Record<string, string>;
   /** PO table v2 §4: per stored item, lines carrying it of the PO's lines, ASINs, auto reasons. */
   action_item_lines?: Record<string, ActionItemLines>;
   /** Open supplier defects (SPEC §22 "Supplier defects") — the chip's qty and $ owed. */
@@ -734,7 +736,7 @@ export default function PurchaseOrders() {
                   </td>
                   <td style={poColStyle(colWidths, "action_items")} className="px-3 py-2" onClick={(e) => e.stopPropagation()}>
                     {/* PO table v2: set on the PO row = set on every product line (confirm when > 1). */}
-                    <ActionItemsEditor items={po.action_items} reasons={po.review_velocity_reasons} lines={po.action_item_lines} defects={po.defects_open}
+                    <ActionItemsEditor items={po.action_items} reasons={po.review_velocity_reasons} titles={po.action_item_titles} lines={po.action_item_lines} defects={po.defects_open}
                       url={`/api/pos/${po.id}/action-items`} onSaved={() => void load()} lineCount={poLineCount(po)} testId={`po-action-items-${po.order_id}`} />
                   </td>
                   <td style={poColStyle(colWidths, "order_date")} className="px-3 py-2 whitespace-nowrap">{fmtDate(po.order_date)}</td>
@@ -933,7 +935,7 @@ export function PurchaseOrderDetailPlaceholder() {
           </div>
         </div>
         <div className="flex items-center gap-2">
-          <ActionItemChips items={actionItems} reasons={po.review_velocity_reasons} testId="po-detail-action-items" defects={po.defects_open} />
+          <ActionItemChips items={actionItems} reasons={po.review_velocity_reasons} titles={po.action_item_titles} testId="po-detail-action-items" defects={po.defects_open} />
           <Button variant="outline" size="sm" onClick={() => navigate(`/pos/${po.id}/edit`)} data-testid="button-edit-po"><Pencil className="h-3.5 w-3.5 mr-1" /> Edit PO</Button>
           <PoDangerActions poId={po.id} reloadKey={version} onCanceled={reload} onDeleted={() => navigate("/purchase-orders")} />
         </div>

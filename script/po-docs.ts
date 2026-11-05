@@ -2,7 +2,9 @@
 // dry run by default — counts only, nothing written to Drive or the
 // database. --link: link existing PDFs under the Invoices root (D1, Maria's
 // rules 2026-11-04) and write the review list (several candidates) to
-// docs/invoice-link-review-<date>.csv. --ingest: render matched order emails
+// docs/invoice-link-review-<date>.csv; --list prints each file it links;
+// a linked file whose stored type disagrees with its name's suffix is
+// retyped (2026-11-05: `_invoice` was linked as a confirmation). --ingest: render matched order emails
 // (confirmation / shipped / delivered) and save them (D2, D4); --since
 // YYYY-MM-DD scans from that date instead of the watermark; --order <#>
 // saves one PO's emails only (2026-11-04); --ai-max N caps the AI fallback
@@ -31,7 +33,8 @@ async function main() {
   if (doLink) {
     const r = await linkExistingDocuments({ query, drive, dryRun: !live });
     console.log(`\nLink existing PDFs: ${r.files} files under the root (${r.pdfs} PDF), ${r.pos} POs, ${r.already_linked} files already linked`);
-    console.log(`  ${live ? "linked" : "would link"} ${r.linked.name + r.linked.loose} files (name ${r.linked.name}, loose ${r.linked.loose}) on ${r.pos_linked} POs · review ${r.review.length}`);
+    console.log(`  ${live ? "linked" : "would link"} ${r.linked.name + r.linked.loose} files (name ${r.linked.name}, loose ${r.linked.loose}) on ${r.pos_linked} POs · review ${r.review.length} · ${live ? "retyped" : "would retype"} ${r.retyped} (type from the name's suffix)`);
+    if (has("--list")) for (const l of r.links) console.log(`    ${l.rule.padEnd(5)} ${l.type.padEnd(18)} ${l.file.name}`);
     console.log("  by order month (POs / POs linked):");
     for (const [m, v] of Object.entries(r.by_month).sort()) console.log(`    ${m}  ${String(v.pos).padStart(4)}  ${String(v.linked).padStart(4)}`);
     const f = path.join(arg("--out") ?? "docs", `invoice-link-review-${new Date().toISOString().slice(0, 10)}.csv`);

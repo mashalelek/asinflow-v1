@@ -2299,7 +2299,7 @@ the ledger stage is the `refresh_runs.stage` key the component writes.
 | 26 | PO tracking push (§26) | daily | Velocity `GET /inbound` + known orders, `GET` / `PUT /inbound/:order_id` | `26_po_tracking_push` | matched tracking rows; **00:00 pass only**, right after 25 |
 | 27 | PO confirmation reconcile (§26 "Confirmation emails", 2026-10-31) | daily | Gmail API (orders@) — no AI | `27_po_confirmations` | order-confirmation mail since the watermark vs AF POs, and §27 renewal POs for unmatched confirmations; **00:00 pass only**, after 26; manual: `POST /api/pos/reconcile-confirmations` |
 | 28 | Subscription alerts (§27, 2026-10-31) | daily | none (AF tables) | `28_subscriptions` | every subscription; "Subscription renews" raised / cleared; **00:00 pass only**, after 27 |
-| 29 | PO documents (§22 "PO documents", 2026-11-04) | hourly | Gmail API (orders@) + Drive API (Invoices root, as Maria) + headless Chromium | `29_po_documents` | order-confirmation / shipped / delivered mail since the watermark, rendered to PDF and saved to Drive; the 00:00 pass also links PDFs saved by hand (D1); **scheduled passes only** (00:00 and hourly), after 28; manual: `npm run po-docs` |
+| 29 | PO documents (§22 "PO documents", 2026-11-04) | hourly | Gmail API (orders@) + Drive API (Invoices root, as Maria) + headless Chromium | `29_po_documents` | order-confirmation / shipped / delivered mail since the watermark, rendered to PDF and saved to Drive; every pass also links PDFs saved by hand (D1; the 00:00 pass only until 2026-11-05); a document not saved fails the component (2026-11-05); **scheduled passes only** (00:00 and hourly), after 28; manual: `npm run po-docs` |
 
 Dependencies the order encodes: 10 before 13 (fees need the fresh price)
 (9 before 15 was retired 2026-10-17 — the inventory snapshot's ordered_qty
@@ -7334,9 +7334,24 @@ renames or moves a file, and never deletes one it did not create** (Maria
   (`2025-07-12_Blains Farm and Fleet_31885729.pdf`) — linked only when
   exactly one file fits and it fits no other PO. Several candidates go to
   `docs/invoice-link-review-<date>.csv` for Maria; nothing else needs
-  review. PDFs only; the type is the name's suffix, else order
-  confirmation. A PO with no file stays "no document" — expected for
-  older POs, no warning. Re-runs link nothing twice.
+  review. PDFs only; the type is the name's suffix (`_shipped`,
+  `_delivered`, `_invoice` → invoice — 2026-11-05; `_invoice` was linked as
+  a confirmation before, and the four rows so linked are retyped by the
+  linker, which sets any linked file's type from its name), else order
+  confirmation. **The link runs in every scheduled pass** (component 29,
+  2026-11-05; the 00:00 pass only before — Maria's six `_invoice` PDFs
+  saved at 13:08 ET on 11/5 would have waited until midnight). A closed
+  sheet-era PO with no file stays "no document", no warning.
+- **"No invoice saved"** (Maria 2026-11-05): a derived PO action item —
+  no `po_documents` row, from the day after the order date (US Eastern),
+  on open POs and on AF-created POs (manual / extension / email_renewal)
+  whatever their state; closed sheet-era POs are left out (796 on
+  production have none, expected). Display only — it does not block
+  auto-close. Its hover gives the reason: the last failed save for that
+  PO (setting `docs.save_failures`, written by each live ingest: a failure
+  sets the PO's entry, a saved document clears it, a full pass with no
+  failure empties it), else "no order email matched in orders@ yet" with
+  the file name that would link. Filterable in Action Items. Re-runs link nothing twice.
 - **Order emails (§26 "PO documents ingest"):** rendered and saved by
   component 29.
 - **"Invoice attached" is derived:** Yes when the PO has a
@@ -8512,8 +8527,19 @@ counts only for a PO created in AF (source manual / extension /
 email_renewal); sheet-era POs get D1 linking only. The first scan starts
 the day before the oldest AF-created PO. A failed render or upload is
 counted and keeps the watermark where it was, so the next pass retries
-(idempotent). The 00:00 pass then runs the D1 link (§22) for PDFs saved
-by hand since.
+(idempotent). Every pass then runs the D1 link (§22) for PDFs saved by
+hand since. **A failure is an error (2026-11-05):** a document not saved,
+or a Gmail / Drive / link failure, fails component 29 with the reason
+(`ComponentError`, counts kept; 29 is the last component, so nothing is
+skipped) — the job shows failed in the jobs dialog. From 2026-11-04 20:48
+UTC every render on Render failed with "Could not find Chrome" while the
+passes finished done: Render restores `node_modules` from its build cache,
+so puppeteer's postinstall (the Chrome download into the project's
+`.cache/puppeteer`) did not run again on later deploys, and the
+checkout's `.cache` starts empty. **The build installs it**
+(`script/build.ts` runs puppeteer's own install script, a no-op when the
+browser is there) and fails when Chrome is still missing, so such a
+deploy stays on the previous instance.
 
 ### `ships_to` from prep cost (2026-10-22)
 

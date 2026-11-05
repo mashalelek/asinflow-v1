@@ -28,10 +28,18 @@ import { z } from "zod/v4";
 import { zodOutputFormat } from "@anthropic-ai/sdk/helpers/zod";
 import { listInvoiceTree, ensureMonthFolder, folderFileNames, uploadPdf, type DriveTree } from "./drive-client";
 import { renderHtmlToPdf } from "./pdf-render";
-import { planLinks, documentBaseName, nextDocumentFileName, orderYmd, type PoDocumentType, type LinkReviewEntry } from "@shared/po-documents";
+import { planLinks, documentBaseName, nextDocumentFileName, orderYmd, typeFromFileName, type PoDocumentType, type LinkReviewEntry, type LinkPlanEntry } from "@shared/po-documents";
 import type { QueryLike } from "./scheduler/types";
 
 export const DOCS_WATERMARK_KEY = "docs.gmail_watermark";
+/**
+ * The last failed save per PO (2026-11-05): { [po_id]: { error, at, type, message_id } }.
+ * The "No invoice saved" item's reason. A live pass sets the PO's entry on a
+ * failure and removes it once the PO has a document saved; a full pass with
+ * no failure clears the map.
+ */
+export const DOCS_FAILURES_KEY = "docs.save_failures";
+export interface DocSaveFailure { error: string; at: string; type: string; message_id: string }
 const OVERLAP_MS = 6 * 3600_000;
 /** PO sources that are "created in AF" (D4). */
 export const AF_CREATED_SOURCES = ["manual", "extension", "email_renewal"] as const;
@@ -39,11 +47,30 @@ export const AF_CREATED_SOURCES = ["manual", "extension", "email_renewal"] as co
 const hasTable = async (query: QueryLike): Promise<boolean> =>
   !!(await query(`SELECT to_regclass('public.po_documents') AS t`)).rows[0]?.t;
 
+export async function readSaveFailures(query: QueryLike): Promise<Record<string, DocSaveFailure>> {
+  return ((await query(`SELECT value FROM settings WHERE key = $1`, [DOCS_FAILURES_KEY])).rows[0]?.value ?? {}) as Record<string, DocSaveFailure>;
+}
+
+/** Live passes only: a failure sets its PO's entry, a saved document clears it; a full pass without failures clears the map. */
+async function recordSaveFailures(query: QueryLike, r: IngestResult, now: Date, fullPass: boolean): Promise<void> {
+  const map = fullPass && r.failed === 0 ? {} : await readSaveFailures(query);
+  for (const i of r.items) delete map[i.po_id];
+  for (const f of r.failures) map[f.po_id] = { error: f.error, at: now.toISOString(), type: f.type, message_id: f.message_id };
+  await query(
+    `INSERT INTO settings (key, value, updated_at) VALUES ($1, $2::jsonb, NOW()) ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value, updated_at = NOW()`,
+    [DOCS_FAILURES_KEY, JSON.stringify(map)],
+  );
+}
+
 // ---- D1: link existing PDFs ----
 
 export interface LinkResult {
   files: number; pdfs: number; pos: number; already_linked: number;
   linked: { name: number; loose: number }; pos_linked: number;
+  /** Linked files whose stored type disagreed with their name (2026-11-05: `_invoice` was linked as a confirmation), set to the name's type. */
+  retyped: number;
+  /** What was (or, in a dry run, would be) linked. */
+  links: LinkPlanEntry[];
   by_month: Record<string, { pos: number; linked: number }>;
   review: LinkReviewEntry[]; dryRun: boolean;
 }
@@ -57,7 +84,7 @@ export async function linkExistingDocuments(opts: { query: QueryLike; drive: dri
   const r: LinkResult = {
     files: tree.files.length, pdfs: tree.files.filter((f) => /\.pdf\s*$/i.test(f.name) || f.mimeType === "application/pdf").length,
     pos: pos.length, already_linked: linkedIds.size, linked: { name: 0, loose: 0 }, pos_linked: new Set(plan.links.map((l) => l.po_id)).size,
-    by_month: {}, review: plan.review, dryRun: !!opts.dryRun,
+    by_month: {}, review: plan.review, dryRun: !!opts.dryRun, retyped: 0, links: plan.links,
   };
   const linkedPos = new Set(plan.links.map((l) => l.po_id));
   for (const p of pos) { const m = orderYmd(p.order_date).slice(0, 7); const e = (r.by_month[m] ??= { pos: 0, linked: 0 }); e.pos++; if (linkedPos.has(String(p.id))) e.linked++; }
@@ -69,7 +96,15 @@ export async function linkExistingDocuments(opts: { query: QueryLike; drive: dri
       [l.po_id, l.type, l.file.id, l.file.name, l.file.size ?? null, l.file.createdTime ?? null],
     );
   }
-  opts.log?.(`documents link: ${r.files} files (${r.pdfs} PDF), ${r.linked.name + r.linked.loose} linked (name ${r.linked.name}, loose ${r.linked.loose}) on ${r.pos_linked} POs, review ${r.review.length}${r.dryRun ? " (dry run)" : ""}`);
+  if (table) {
+    for (const d of (await opts.query(`SELECT id, type, file_name FROM po_documents WHERE source = 'linked_existing'`)).rows) {
+      const t = typeFromFileName(String(d.file_name));
+      if (t === d.type) continue;
+      r.retyped++;
+      if (!opts.dryRun) await opts.query(`UPDATE po_documents SET type = $2 WHERE id = $1`, [d.id, t]);
+    }
+  }
+  opts.log?.(`documents link: ${r.files} files (${r.pdfs} PDF), ${r.linked.name + r.linked.loose} linked (name ${r.linked.name}, loose ${r.linked.loose}) on ${r.pos_linked} POs, review ${r.review.length}, retyped ${r.retyped}${r.dryRun ? " (dry run)" : ""}`);
   return r;
 }
 
@@ -151,7 +186,7 @@ export interface IngestResult {
   /** dry_run: emails the AI would be asked about (a dry run never calls it — every call is logged, and a dry run writes nothing). */
   ai: { calls: number; typed: number; none: number; failed: number; cost: number; skipped_cap: number; dry_run: number; off: boolean };
   by_type: Record<string, number>; by_rule: Record<string, number>; folders_created: string[];
-  since: string | null; until: string; dryRun: boolean; failures: Array<{ message_id: string; error: string }>;
+  since: string | null; until: string; dryRun: boolean; failures: Array<{ message_id: string; po_id: string; supplier: string; order_id: string; type: string; error: string }>;
   /** The documents written (live) or that would be (dry run). */
   items: Array<{ po_id: string; supplier: string; order_id: string; type: PoDocumentType; rule: string; message_id: string; subject: string; file_name?: string; source: string }>;
 }
@@ -272,7 +307,7 @@ export async function ingestDocuments(opts: { query: QueryLike; deps: IngestDeps
       r.items.push({ ...item, file_name: name });
     } catch (err: any) {
       r.failed++;
-      r.failures.push({ message_id: msg.id, error: String(err?.message ?? err).slice(0, 300) });
+      r.failures.push({ message_id: msg.id, po_id: String(po.id), supplier: po.supplier, order_id: po.order_id, type, error: String(err?.message ?? err).slice(0, 300) });
     }
   }
   // A failed render keeps the watermark where it was, so the next pass retries it (idempotent: the rest are skipped as already done).
@@ -283,6 +318,7 @@ export async function ingestDocuments(opts: { query: QueryLike; deps: IngestDeps
       [DOCS_WATERMARK_KEY, JSON.stringify(v)],
     );
   }
+  if (!opts.dryRun) await recordSaveFailures(opts.query, r, now, opts.since === undefined && !opts.onlyPoId);
   opts.log?.(`documents ingest: scanned ${r.scanned} (excluded ${r.excluded}), documents ${r.documents}, matched ${r.matched} (unmatched ${r.unmatched}, ambiguous ${r.ambiguous}), already ${r.already}, sheet-era skipped ${r.sheet_era_skipped}, ${opts.dryRun ? "would write" : "written"} ${r.items.length}${r.failed ? `, failed ${r.failed}` : ""}`);
   return r;
 }

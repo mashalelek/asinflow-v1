@@ -54,11 +54,13 @@ export const monthFolderNames = (ymd: string): string[] => [monthFolderName(ymd)
 /** Lower case, every whitespace character removed, a trailing ".pdf" dropped. */
 export const normName = (s: string): string => s.toLowerCase().replace(/\s+/g, "").replace(/\.pdf$/, "");
 
-/** A linked file is an order confirmation unless its name ends `_shipped` / `_delivered` (before any `-N`). */
+/** A linked file is an order confirmation unless its name ends `_shipped` / `_delivered` / `_invoice` (before any `-N`). */
 export function typeFromFileName(name: string): PoDocumentType {
   const n = normName(name).replace(/-\d+$/, "");
   if (n.endsWith("_shipped")) return "shipped";
   if (n.endsWith("_delivered")) return "delivered";
+  // Maria's own invoice PDFs (2026-11-05: 2026-11-04_walmart.com_200015701166371_invoice.pdf was linked as a confirmation).
+  if (n.endsWith("_invoice")) return "invoice";
   return "order_confirmation";
 }
 
@@ -127,4 +129,13 @@ export function planLinks(pos: readonly PoLite[], files: readonly DriveFileLite[
     else plan.links.push({ po_id: po.id, file: c[0], type: typeFromFileName(c[0].name), rule: "loose" });
   }
   return plan;
+}
+
+/**
+ * The "No invoice saved" item's hover (Maria 2026-11-05): the last failed
+ * save when one is recorded, else what the next pass would link.
+ */
+export function noInvoiceTitle(po: { order_date: Date | string; supplier: string; order_id: string }, failure?: { error: string; at: string } | null): string {
+  if (failure) return `No invoice saved: the last save failed ${failure.at.slice(0, 16).replace("T", " ")} UTC — ${failure.error.split("\n")[0].slice(0, 160)}. The next pass retries.`;
+  return `No invoice saved: no order email matched in orders@ yet. A PDF named ${documentBaseName(po)}.pdf (or _invoice.pdf) under Invoices in Drive is linked on the next pass.`;
 }

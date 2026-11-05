@@ -5,7 +5,7 @@
 // it from all its lines; a product edit touches that line only. Pure.
 import { replacementTrackingItemsSql } from "./tracking-replacement-pair";
 import { defectItemSql, OPEN_DEFECT_ASIN_SQL, OPEN_DEFECT_PO_SQL } from "./po-defect-sql";
-import { AUTO_ACTION_ITEMS, DISPLAY_ACTION_ITEMS, EXTRA_UNITS_SHIPPED, PACK_SIZE_MISMATCH, PACK_SIZE_MISSING, RECEIVING_MISMATCH, REVIEW_VELOCITY } from "./po-status-map";
+import { AUTO_ACTION_ITEMS, DISPLAY_ACTION_ITEMS, EXTRA_UNITS_SHIPPED, NO_INVOICE_SAVED, PACK_SIZE_MISMATCH, PACK_SIZE_MISSING, RECEIVING_MISMATCH, REVIEW_VELOCITY } from "./po-status-map";
 
 /** Display-ordered union of several action-item arrays. */
 export function unionActionItems(lists: ReadonlyArray<readonly string[] | null | undefined>): string[] {
@@ -55,6 +55,15 @@ export const EXTRA_UNITS_EXISTS_SQL = `EXISTS (SELECT 1 FROM po_asins pk WHERE p
 export const PACK_SIZE_MISSING_EXISTS_SQL = `EXISTS (SELECT 1 FROM po_asins pk WHERE pk.po_id = p.id AND ${packMissing("pk")})`;
 export const PACK_SIZE_MISMATCH_EXISTS_SQL = `EXISTS (SELECT 1 FROM po_asins pk WHERE pk.po_id = p.id AND ${packMismatch("pk")})`;
 
+/**
+ * "No invoice saved" (NO_INVOICE_SAVED) on a PO, alias `p`: no document, the
+ * order date before today (US Eastern — the day after the order), and the PO
+ * open or created in AF (po-documents.ts AF_CREATED_SOURCES, checked by a test).
+ */
+export const NO_INVOICE_EXISTS_SQL = (p = "p") => `(NOT EXISTS (SELECT 1 FROM po_documents dx WHERE dx.po_id = ${p}.id)
+  AND ${p}.order_date < (NOW() AT TIME ZONE 'America/New_York')::date
+  AND (${p}.closed_at IS NULL OR ${p}.source IN ('manual', 'extension', 'email_renewal')))`;
+
 /** Open stored items (po_line_action_items, migration 074) of the lines matching `where` (alias l). */
 export const openLineItemsSql = (where: string) =>
   `SELECT ai.item FROM po_line_action_items ai JOIN po_line_items l ON l.id = ai.po_line_item_id WHERE ai.cleared_at IS NULL AND ${where}`;
@@ -79,12 +88,13 @@ export const PO_CLOSE_ACTION_ITEMS_SQL = `ARRAY(${openLineItemsSql("l.po_id = p.
   UNION SELECT '${PACK_SIZE_MISMATCH}' WHERE ${PACK_SIZE_MISMATCH_EXISTS_SQL}
   ${defectItemSql(OPEN_DEFECT_PO_SQL("p"))}
   ${replacementTrackingItemsSql("p.id")})`;
-/** The PO's displayed items: the close set plus Receiving mismatch. */
+/** The PO's displayed items: the close set plus Receiving mismatch and No invoice saved. */
 export const PO_ACTION_ITEMS_SQL = `ARRAY(${openLineItemsSql("l.po_id = p.id")}
   UNION SELECT '${EXTRA_UNITS_SHIPPED}' WHERE ${EXTRA_UNITS_EXISTS_SQL}
   UNION SELECT '${PACK_SIZE_MISSING}' WHERE ${PACK_SIZE_MISSING_EXISTS_SQL}
   UNION SELECT '${PACK_SIZE_MISMATCH}' WHERE ${PACK_SIZE_MISMATCH_EXISTS_SQL}
   UNION SELECT '${RECEIVING_MISMATCH}' WHERE ${RECEIVING_MISMATCH_EXISTS_SQL}
+  UNION SELECT '${NO_INVOICE_SAVED}' WHERE ${NO_INVOICE_EXISTS_SQL("p")}
   ${defectItemSql(OPEN_DEFECT_PO_SQL("p"))}
   ${replacementTrackingItemsSql("p.id")})`;
 /** The open review reasons of a PO (alias p), for the Action Items tooltip. */

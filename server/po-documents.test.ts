@@ -1,5 +1,7 @@
 import { describe, it, expect } from "vitest";
-import { classifyEmail, ingestDocuments, linkExistingDocuments, reviewCsv, DOCS_WATERMARK_KEY } from "./po-documents";
+import { classifyEmail, ingestDocuments, linkExistingDocuments, reviewCsv, DOCS_WATERMARK_KEY, DOCS_FAILURES_KEY } from "./po-documents";
+import { poDocuments, documentsDeps } from "./scheduler/components/29-po-documents";
+import { ComponentError } from "./scheduler/types";
 import { renderableHtml } from "./gmail-client";
 import { INVOICES_ROOT_ID } from "./drive-client";
 import { componentsForJob } from "./scheduler/runner";
@@ -16,6 +18,8 @@ function fakeDb(pos: any[]) {
     if (s.startsWith("SELECT id, order_date, supplier, order_id FROM purchase_orders") || s.startsWith("SELECT p.id, p.supplier")) return { rows: pos, rowCount: pos.length };
     if (s.startsWith("SELECT MIN(order_date)")) { const d = pos.filter((x) => p[0].includes(x.source)).map((x) => x.order_date).sort()[0]; return { rows: [{ d: d ?? null }], rowCount: 1 }; }
     if (s.startsWith("SELECT drive_file_id FROM po_documents")) return { rows: docs, rowCount: docs.length };
+    if (s.startsWith("SELECT id, type, file_name FROM po_documents WHERE source = 'linked_existing'")) { const r = docs.map((d, i) => ({ ...d, id: d.id ?? i })).filter((d) => d.source === "linked_existing"); return { rows: r, rowCount: r.length }; }
+    if (s.startsWith("UPDATE po_documents SET type")) { const d = docs.find((x, i) => (x.id ?? i) === p[0]); if (d) d.type = p[1]; return { rows: [], rowCount: d ? 1 : 0 }; }
     if (s.startsWith("SELECT 1 FROM po_documents WHERE gmail_message_id")) { const r = docs.filter((d) => d.gmail_message_id === p[0] && (p.length < 2 || d.type === p[1])); return { rows: r, rowCount: r.length }; }
     if (s.startsWith("SELECT alias, supplier FROM supplier_aliases")) return { rows: [], rowCount: 0 };
     if (s.startsWith("INSERT INTO po_prefill_log")) { aiLog.push({ kind: p[1], retailer: p[2], schema_ok: p[9], error: p[10] }); return { rows: [{ id: aiLog.length }], rowCount: 1 }; }
@@ -121,6 +125,17 @@ describe("ingestDocuments", () => {
     expect(r.failed).toBe(1);
     expect(db.settings[DOCS_WATERMARK_KEY]).toBeUndefined();
     expect(db.docs).toEqual([]);
+    // The PO's reason for "No invoice saved" (2026-11-05); a later pass that saves it clears the entry.
+    expect(r.failures).toMatchObject([{ po_id: "af1", order_id: "200015000000001", type: "order_confirmation", error: "chrome died" }]);
+    expect(db.settings[DOCS_FAILURES_KEY]).toEqual({ af1: { error: "chrome died", at: now.toISOString(), type: "order_confirmation", message_id: "m1" } });
+    await ingestDocuments({ query: db.query, deps: deps(d.drive), now: new Date("2026-11-04T21:00:00Z") });
+    expect(db.settings[DOCS_FAILURES_KEY]).toEqual({});
+    expect(db.docs).toHaveLength(1);
+  });
+  it("a dry run never touches the failure map", async () => {
+    const db = fakeDb(pos), d = fakeDrive();
+    await ingestDocuments({ query: db.query, deps: { ...deps(d.drive), render: async () => { throw new Error("x"); } }, now, dryRun: true });
+    expect(db.settings[DOCS_FAILURES_KEY]).toBeUndefined();
   });
 });
 
@@ -134,6 +149,22 @@ describe("linkExistingDocuments", () => {
     await linkExistingDocuments({ query: db.query, drive: {} as any, tree });
     expect(db.docs).toMatchObject([{ po_id: "p1", drive_file_id: "f1", source: "linked_existing", type: "order_confirmation" }]);
     expect((await linkExistingDocuments({ query: db.query, drive: {} as any, tree })).linked).toEqual({ name: 0, loose: 0 });
+  });
+  it("an _invoice file links as an invoice; one already linked as a confirmation is retyped, once (2026-11-05)", async () => {
+    const pos = [{ id: "w", order_date: "2026-11-04", supplier: "walmart.com", order_id: "200015701166371" }, { id: "s", order_date: "2026-11-05", supplier: "supplyhouse.com", order_id: "29549674" }];
+    const tree = { folders: [], files: [
+      { id: "f1", name: "2026-11-04_walmart.com_200015701166371_invoice.pdf", mimeType: "application/pdf", size: 10, parentId: "m", path: "Invoices - 2026/Invoices 2026-11" },
+      { id: "f2", name: "2026-11-05_supplyhouse.com_29549674_invoice.pdf", mimeType: "application/pdf", size: 10, parentId: "m", path: "Invoices - 2026/Invoices 2026-11" },
+    ] };
+    const db = fakeDb(pos);
+    db.docs.push({ id: "old", po_id: "w", type: "order_confirmation", drive_file_id: "f1", file_name: tree.files[0].name, source: "linked_existing" });
+    const dry = await linkExistingDocuments({ query: db.query, drive: {} as any, tree, dryRun: true });
+    expect([dry.retyped, dry.links.map((l) => [l.file.id, l.type])]).toEqual([1, [["f2", "invoice"]]]);
+    expect(db.docs[0].type).toBe("order_confirmation");
+    const live = await linkExistingDocuments({ query: db.query, drive: {} as any, tree });
+    expect(live.retyped).toBe(1);
+    expect(db.docs.map((d) => [d.drive_file_id, d.type])).toEqual([["f1", "invoice"], ["f2", "invoice"]]);
+    expect((await linkExistingDocuments({ query: db.query, drive: {} as any, tree })).retyped).toBe(0);
   });
   it("the review CSV lists each candidate", () => {
     const csv = reviewCsv([{ po: { id: "p", order_date: "2025-07-14", supplier: "esslinger.com", order_id: "1236750" }, reason: "several_files", candidates: [{ id: "a", name: "A.pdf", path: "x" }, { id: "b", name: "B.pdf", path: "y" }] }]);
@@ -157,6 +188,42 @@ describe("component 29", () => {
     expect(componentsForJob({ trigger: "scheduled", include_daily: true } as JobRow).map((c) => c.n)).toContain(29);
     expect(componentsForJob({ trigger: "manual", include_daily: true } as JobRow).map((c) => c.n)).not.toContain(29);
     expect(componentsForJob({ trigger: "manual", components: [29] } as JobRow).map((c) => c.n)).toEqual([]);
+  });
+
+  const ctx = (include_daily: boolean) => ({ job: { include_daily } as JobRow, query: (async () => ({ rows: [], rowCount: 0 })) as any, log: () => {} } as any);
+  const okLink = async () => ({ linked: { name: 2, loose: 0 }, review: [] } as any);
+  const ingestResult = (failures: any[]) => ({ scanned: 3, documents: 3, matched: 3, unmatched: 0, ambiguous: 0, already: 0, sheet_era_skipped: 0, items: [], failed: failures.length, failures, folders_created: [], since: null, until: "now" } as any);
+  const withDeps = async (d: Partial<typeof documentsDeps>, fn: () => Promise<void>) => {
+    const saved = { ...documentsDeps };
+    Object.assign(documentsDeps, { gmail: () => ({}) as any, drive: () => ({}) as any }, d);
+    try { await fn(); } finally { Object.assign(documentsDeps, saved); }
+  };
+
+  it("links PDFs saved by hand on every pass, the hourly ones too (2026-11-05)", async () => {
+    let links = 0;
+    await withDeps({ ingest: async () => ingestResult([]), link: async () => { links++; return okLink(); } }, async () => {
+      const r = await poDocuments.run(ctx(false));
+      expect(r.counts.linked_name).toBe(2);
+      await poDocuments.run(ctx(true));
+    });
+    expect(links).toBe(2);
+  });
+  it("a document that was not saved fails the component with the reason and keeps the counts; linking still runs", async () => {
+    let links = 0;
+    const chrome = "Could not find Chrome (ver. 156.0.8078.47). This can occur if either\n 1. you did not perform an installation";
+    await withDeps({ ingest: async () => ingestResult([{ message_id: "m1", po_id: "p", supplier: "acmetools.com", order_id: "42838131", type: "order_confirmation", error: chrome }, { message_id: "m2", po_id: "q", supplier: "walmart.com", order_id: "1", type: "shipped", error: chrome }]), link: async () => { links++; return okLink(); } }, async () => {
+      const err = await poDocuments.run(ctx(false)).catch((e) => e);
+      expect(err).toBeInstanceOf(ComponentError);
+      expect(err.message).toBe("2 documents not saved (Could not find Chrome (ver. 156.0.8078.47). This can occur if either)");
+      expect(err.partial.counts).toMatchObject({ failed: 2, linked_name: 2 });
+      expect(err.partial.outcomes["failed acmetools.com 42838131 order_confirmation m1"]).toBe(chrome);
+    });
+    expect(links).toBe(1);
+  });
+  it("a Gmail failure fails the component too (it was recorded and swallowed before)", async () => {
+    await withDeps({ ingest: async () => { throw new Error("invalid_grant"); }, link: okLink }, async () => {
+      await expect(poDocuments.run(ctx(false))).rejects.toThrow("order emails: invalid_grant");
+    });
   });
 });
 

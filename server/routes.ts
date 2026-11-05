@@ -21,8 +21,8 @@ import { DEFECT_ACTION_ITEM } from "@shared/po-defect";
 import { velocityIneligible, ineligibleText } from "./shipment-match";
 import { readVelocityStartDate } from "./ships-to-backfill";
 import { evaluateAutoClose, setPoClosedManually, parseQtyInput, MANUAL_QTY_COLUMNS, type ManualQtyColumn } from "./po-close";
-import { ACTION_ITEMS, LEGACY_ACTION_ITEMS, DISPLAY_ACTION_ITEMS, REVIEW_VELOCITY, EXTRA_UNITS_SHIPPED, PACK_SIZE_MISSING, PACK_SIZE_MISMATCH, RECEIVING_MISMATCH, normalizeActionItems } from "./po-status-map";
-import { openLineItemsSql, unionActionItems, PO_ACTION_ITEMS_SQL, REVIEW_VELOCITY_REASONS_SQL, PACK_SIZE_MISSING_EXISTS_SQL, PACK_SIZE_MISMATCH_EXISTS_SQL, RECEIVING_MISMATCH_EXISTS_SQL, EXTRA_UNITS_EXISTS_SQL } from "./po-action-items";
+import { ACTION_ITEMS, LEGACY_ACTION_ITEMS, DISPLAY_ACTION_ITEMS, REVIEW_VELOCITY, EXTRA_UNITS_SHIPPED, PACK_SIZE_MISSING, PACK_SIZE_MISMATCH, RECEIVING_MISMATCH, NO_INVOICE_SAVED, normalizeActionItems } from "./po-status-map";
+import { openLineItemsSql, unionActionItems, PO_ACTION_ITEMS_SQL, REVIEW_VELOCITY_REASONS_SQL, PACK_SIZE_MISSING_EXISTS_SQL, PACK_SIZE_MISMATCH_EXISTS_SQL, RECEIVING_MISMATCH_EXISTS_SQL, EXTRA_UNITS_EXISTS_SQL, NO_INVOICE_EXISTS_SQL } from "./po-action-items";
 import { editPoHeader, editLine, addLine, removeLine, editAsinRow, loadPoHistory, logEdits, changedFields, asLogText, EditError, COST_RELEVANT_FIELDS, type EditResult } from "./po-edit";
 import { recomputePoCosts } from "./po-costs";
 import { addMoneyRow, editMoneyRow, removeMoneyRow, loadPoMoney } from "./po-money-edit";
@@ -30,7 +30,8 @@ import { createPoFromForm, lookupAsins } from "./po-create";
 import { loadPoForm, savePoForm } from "./po-edit-form";
 import { suggestAsins, asinInfo } from "./asin-suggest";
 import { defaultEmailForSupplier } from "./supplier-defaults";
-import { documentBaseName } from "@shared/po-documents";
+import { documentBaseName, noInvoiceTitle } from "@shared/po-documents";
+import { readSaveFailures } from "./po-documents";
 import { listPoDocuments, PO_DOCUMENTS_SQL } from "./po-documents-routes";
 import { canonicalPaymentName } from "@shared/po-form";
 import { applyAsinPackUpdate, parsePack } from "./asin-pack";
@@ -4327,6 +4328,7 @@ export async function registerRoutes(
       if (wanted.includes(PACK_SIZE_MISMATCH)) any.push(PACK_SIZE_MISMATCH_EXISTS_SQL);
       if (wanted.includes(RECEIVING_MISMATCH)) any.push(RECEIVING_MISMATCH_EXISTS_SQL);
       if (wanted.includes(EXTRA_UNITS_SHIPPED)) any.push(EXTRA_UNITS_EXISTS_SQL);
+      if (wanted.includes(NO_INVOICE_SAVED)) any.push(NO_INVOICE_EXISTS_SQL("p"));
       // Derived from open supplier defects too (SPEC §22 "Supplier defects"); the stored manual badges still match above.
       if (wanted.includes(DEFECT_ACTION_ITEM)) any.push(OPEN_DEFECT_PO_SQL("p"));
       if (any.length > 0) conds.push(`(${any.join(" OR ")})`);
@@ -4376,6 +4378,7 @@ export async function registerRoutes(
       // Open supplier defects: the chip shows their qty and $ owed (SPEC §22 "Supplier defects").
       const defects = await loadOpenDefectSummaries((sql, params) => query(sql, params), rows.map((r: any) => String(r.id)));
       for (const a of asinRows) a.defects_open = (defects.byAsinRow.get(String(a.id)) ?? []).map(briefOf);
+      const saveFailures = rows.length ? await readSaveFailures((sql, params) => query(sql, params)) : {};
       for (const r of rows) {
         r.defects_open = (defects.byPo.get(String(r.id)) ?? []).map(briefOf);
         r.asins = asinsByPo.get(String(r.id)) ?? [];
@@ -4384,6 +4387,8 @@ export async function registerRoutes(
         // Row-level Status: the PO's Action Items = union over its lines.
         r.action_items = unionActionItems([r.line_action_items]); delete r.line_action_items;
         r.action_item_lines = detail.get(String(r.id)) ?? {};
+        // No invoice saved: the hover carries the reason (the last failed save, else what links it).
+        r.action_item_titles = r.action_items.includes(NO_INVOICE_SAVED) ? { [NO_INVOICE_SAVED]: noInvoiceTitle(r, saveFailures[String(r.id)]) } : {};
       }
       // Filter options for the toolbar: suppliers (distinct across the whole
       // table) + the fixed Action Items list in display order (§6.1).
@@ -4416,6 +4421,8 @@ export async function registerRoutes(
       if (poRes.rows.length === 0) { res.status(404).json({ message: "PO not found" }); return; }
       const po = poRes.rows[0];
       po.action_items = unionActionItems([po.line_action_items]); delete po.line_action_items;
+      po.action_item_titles = po.action_items.includes(NO_INVOICE_SAVED)
+        ? { [NO_INVOICE_SAVED]: noInvoiceTitle(po, (await readSaveFailures((sql, params) => query(sql, params)))[String(po.id)]) } : {};
 
       // §4 column model: the same rows the POs page nests (po-queries.ts) —
       // derived Canceled/Returned, the six stored ASIN quantities, shipments.
