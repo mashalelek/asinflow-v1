@@ -5814,8 +5814,11 @@ every save and every recompute; a recompute stamps version 3.
   handling** (`tax`, `sh_donations`), **minus** coupons, sales and the
   gift-card discount %. **Rewards** are Maria's call per PO (the promo's
   COGS toggle, default off; sale and coupon default on, §7.2). **Cashback
-  never counts.** Open with Maria: `sh_donations` also holds donations,
-  allocated with shipping for now.
+  never counts.** **`sh_donations` is shipping (Maria 2026-11-05):** the
+  one historical donation stays in it and is allocated with shipping as
+  stored; no donations going forward, so the New PO form has a single
+  "Shipping" field (column `sh_donations` kept; the sheet-era PO detail
+  still labels it "S&H + Donations").
 - **Line totals (migration 087).** A product line's money is its total as
   captured (`po_line_items.line_total`) — the prefill keeps it when the
   page's unit price is total ÷ qty to the cent — else price × qty. The

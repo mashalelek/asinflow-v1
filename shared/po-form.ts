@@ -335,7 +335,7 @@ export function checkPoForm(f: PoFormState): PoFormCheck {
   if (!t(f.supplier)) errors.push("Supplier is required");
   if (!t(f.order_id)) errors.push("Order # is required");
   if (!isDate(t(f.order_date))) errors.push("Order date must be a real date (YYYY-MM-DD)");
-  for (const [k, label] of [["subtotal", "Subtotal"], ["tax", "Tax"], ["sh_donations", "S&H + Donations"], ["discount", "Discount"], ["refund_amount", "Refund amount"], ["order_total", "Order total"]] as const) {
+  for (const [k, label] of [["subtotal", "Subtotal"], ["tax", "Tax"], ["sh_donations", "Shipping"], ["discount", "Discount"], ["refund_amount", "Refund amount"], ["order_total", "Order total"]] as const) {
     const v = moneyNum(f[k]); if (v != null && (Number.isNaN(v) || v < 0)) errors.push(`${label} must be an amount with at most 2 decimals`);
   }
   for (const [k, label] of [["weighted_gc_discount_pct", WEIGHTED_PAYMENT_LABEL], ["cashback_pct", "Cashback %"]] as const) {
