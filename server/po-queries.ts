@@ -10,6 +10,7 @@
 // new quantities (cols 13–18) are stored on po_asins as ASIN qty.
 import type { QueryLike } from "./scheduler/types";
 import { ASIN_ACTION_ITEMS_SQL, unionActionItems } from "./po-action-items";
+import { defectItemSql, OPEN_DEFECT_LINE_SQL, DEFECT_UNCOVERED_EXISTS_SQL, DEFECT_UNCOVERED_PO_SQL } from "./po-defect-sql";
 
 /**
  * Derived ASIN-level qty from the lines: NULL if any line's value is NULL.
@@ -71,7 +72,8 @@ export async function loadPoAsinRows(query: QueryLike, poIds: string[]): Promise
   const lines = ids.length === 0 ? [] : (await query(
     `SELECT id, po_asin_id, position, product_name, supplier_sku, price, item_discount, qty_ordered, qty_received, qty_canceled, qty_returned,
             final_qty, asin_qty_per_product, retailer_units_per_product, asin_units_per_pack, adjusted_product_cost, notes,
-            ARRAY(SELECT ai.item FROM po_line_action_items ai WHERE ai.po_line_item_id = po_line_items.id AND ai.cleared_at IS NULL) AS action_items
+            ARRAY(SELECT ai.item FROM po_line_action_items ai WHERE ai.po_line_item_id = po_line_items.id AND ai.cleared_at IS NULL
+                  ${defectItemSql(OPEN_DEFECT_LINE_SQL("po_line_items.id"))}) AS action_items
        FROM po_line_items WHERE po_asin_id = ANY($1::uuid[]) ORDER BY po_asin_id, position, id`, [ids],
   )).rows as any[];
   const linesByAsin = new Map<string, any[]>();
@@ -111,9 +113,10 @@ export function poListOrderBy(sort: unknown, dir: unknown): string {
  */
 export function refundsFilterCond(raw: unknown): string | null {
   const v = String(raw ?? "").trim().toLowerCase();
-  if (v === "due") return `EXISTS (SELECT 1 FROM po_line_refunds r WHERE r.po_id = p.id AND r.status = 'due')`;
-  if (v === "none") return `NOT EXISTS (SELECT 1 FROM po_line_refunds r WHERE r.po_id = p.id)`;
+  // An open supplier defect's $ that no refund row carries yet is due too (SPEC §22 "Supplier defects").
+  if (v === "due") return `(EXISTS (SELECT 1 FROM po_line_refunds r WHERE r.po_id = p.id AND r.status = 'due') OR ${DEFECT_UNCOVERED_EXISTS_SQL("p")})`;
+  if (v === "none") return `(NOT EXISTS (SELECT 1 FROM po_line_refunds r WHERE r.po_id = p.id) AND NOT ${DEFECT_UNCOVERED_EXISTS_SQL("p")})`;
   return null;
 }
-/** The PO's refunds still due (Σ status = 'due'), for the list row's money area. */
-export const REFUND_DUE_SQL = `(SELECT COALESCE(SUM(r.amount), 0)::float8 FROM po_line_refunds r WHERE r.po_id = p.id AND r.status = 'due')`;
+/** The PO's refunds still due (Σ status = 'due' + open supplier defects' uncovered $), for the list row's money area. */
+export const REFUND_DUE_SQL = `((SELECT COALESCE(SUM(r.amount), 0) FROM po_line_refunds r WHERE r.po_id = p.id AND r.status = 'due') + ${DEFECT_UNCOVERED_PO_SQL("p")})::float8`;

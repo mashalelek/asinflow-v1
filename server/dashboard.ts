@@ -20,7 +20,9 @@
 //   date, the order total and an order number, the sheet copied the order's
 //   header onto both rows — the later one (by id) adds $0 of order_total,
 //   its own refund rows still count. Stored values unchanged.
-//   Refunds due = Σ rows with status 'due' (any PO, canceled or not).
+//   Refunds due = Σ rows with status 'due' (any PO, canceled or not) + each open
+//   supplier defect's $ no refund row carries yet (SPEC §22 "Supplier defects"):
+//   a defect linked to its due row adds nothing more.
 //   ASIN units = Σ po_asins.qty − Σ canceled line qty × yield (bundles ÷
 //   unique products, the §22 derivation with per-line COALESCE); fully-
 //   canceled POs 0. Individual units = ASIN units × units_per_pack; a row
@@ -32,6 +34,7 @@ import express, { type Router, type Request, type Response } from "express";
 import { query as defaultQuery } from "./db";
 import type { QueryLike } from "./scheduler/types";
 import { LINE_YIELD_SQL } from "./po-queries";
+import { DEFECT_UNCOVERED_PO_SQL } from "./po-defect-sql";
 import { resolveColumns, parseSet, parseCustom, parseYmd, last12MonthsRange, todayIn, EASTERN, PACIFIC, mondayOf, firstOfMonth, addDays, type RangeSet } from "./dashboard-range";
 import { DASHBOARD_ROWS, SERIES_KINDS, type DashboardCell, type DashboardColumn, type DashboardCoverage, type DashboardGrid, type DashboardRowKey, type DashboardSeries, type SeriesKind, type SeriesPoint, type Ymd } from "@shared/dashboard";
 
@@ -76,7 +79,7 @@ export function poSpendCtes(startExpr: string, endExpr: string): string {
     ), po_spend AS (
       SELECT po.id, po.order_date, po.fully_canceled, po.shared_dup,
              CASE WHEN po.fully_canceled THEN 0 ELSE (CASE WHEN po.shared_dup THEN 0 ELSE COALESCE(po.stored_total, 0) END) - COALESCE(ref.counted, 0) END AS spend,
-             COALESCE(ref.due, 0) AS due
+             COALESCE(ref.due, 0) + ${DEFECT_UNCOVERED_PO_SQL("po")} AS due
         FROM po LEFT JOIN ref ON ref.po_id = po.id
     )`;
 }

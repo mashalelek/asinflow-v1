@@ -15,6 +15,9 @@ import { linkUnmatchedLine } from "./shipment-link";
 import { likeContains, stripShipmentSuffix } from "./order-number";
 import { clearExtraUnits } from "./extra-units";
 import { writeLineItems, loadActionItemLines } from "./line-action-items";
+import { OPEN_DEFECT_PO_SQL } from "./po-defect-sql";
+import { addDefect, editDefect, linkRefund, unlinkRefund, resolveDefect, reopenDefect, removeDefect, loadDefects, loadOpenDefectSummaries, briefOf } from "./po-defects";
+import { DEFECT_ACTION_ITEM } from "@shared/po-defect";
 import { velocityIneligible, ineligibleText } from "./shipment-match";
 import { readVelocityStartDate } from "./ships-to-backfill";
 import { evaluateAutoClose, setPoClosedManually, parseQtyInput, MANUAL_QTY_COLUMNS, type ManualQtyColumn } from "./po-close";
@@ -4324,6 +4327,8 @@ export async function registerRoutes(
       if (wanted.includes(PACK_SIZE_MISMATCH)) any.push(PACK_SIZE_MISMATCH_EXISTS_SQL);
       if (wanted.includes(RECEIVING_MISMATCH)) any.push(RECEIVING_MISMATCH_EXISTS_SQL);
       if (wanted.includes(EXTRA_UNITS_SHIPPED)) any.push(EXTRA_UNITS_EXISTS_SQL);
+      // Derived from open supplier defects too (SPEC §22 "Supplier defects"); the stored manual badges still match above.
+      if (wanted.includes(DEFECT_ACTION_ITEM)) any.push(OPEN_DEFECT_PO_SQL("p"));
       if (any.length > 0) conds.push(`(${any.join(" OR ")})`);
     }
     if (supplier) {
@@ -4368,7 +4373,11 @@ export async function registerRoutes(
       // Per stored item: how many of the PO's lines carry it, on which ASINs,
       // with which auto reasons — the chip's count badge and hover (PO table v2 §5).
       const detail = await loadActionItemLines((sql, params) => query(sql, params), rows.map((r: any) => String(r.id)));
+      // Open supplier defects: the chip shows their qty and $ owed (SPEC §22 "Supplier defects").
+      const defects = await loadOpenDefectSummaries((sql, params) => query(sql, params), rows.map((r: any) => String(r.id)));
+      for (const a of asinRows) a.defects_open = (defects.byAsinRow.get(String(a.id)) ?? []).map(briefOf);
       for (const r of rows) {
+        r.defects_open = (defects.byPo.get(String(r.id)) ?? []).map(briefOf);
         r.asins = asinsByPo.get(String(r.id)) ?? [];
         // PO documents (SPEC §22): "Invoice attached" is derived — a po_documents row exists; the sheet's Rcpt flag is history only.
         r.invoice_attached = r.documents.length > 0;
@@ -4422,7 +4431,9 @@ export async function registerRoutes(
         if (!linesByAsin.has(key)) linesByAsin.set(key, []);
         linesByAsin.get(key)!.push(l);
       }
-      const asins = asinRows.map((a: any) => ({ ...a, lines: linesByAsin.get(String(a.id)) ?? [] }));
+      const openDefects = await loadOpenDefectSummaries((sql, params) => query(sql, params), [id]);
+      po.defects_open = (openDefects.byPo.get(id) ?? []).map(briefOf);
+      const asins = asinRows.map((a: any) => ({ ...a, lines: linesByAsin.get(String(a.id)) ?? [], defects_open: (openDefects.byAsinRow.get(String(a.id)) ?? []).map(briefOf) }));
       const orphanLines = linesByAsin.get("") ?? []; // po_asin_id NULL (SET NULL on delete) — none expected in the frame
       // Capture PO patch §8: payments, promos, refunds (the PO editor's Payments tab).
       const moneyRows = await loadPoMoney((sql, params) => query(sql, params), id);
@@ -4454,6 +4465,7 @@ export async function registerRoutes(
         asins,
         orphanLines,
         ...moneyRows,
+        defects: await loadDefects((sql, params) => query(sql, params), { poId: id }),
       });
     } catch (err: any) {
       res.status(500).json({ message: err.message });
@@ -4556,6 +4568,24 @@ export async function registerRoutes(
     });
   };
   moneyRoutes("payments", "po_payments"); moneyRoutes("promos", "po_promos"); moneyRoutes("refunds", "po_line_refunds");
+  // === Supplier defects (SPEC §22 "Supplier defects", migration 094) ===
+  const defectRoute = (method: "post" | "patch" | "delete", path: string, run: (q: any, req: Request) => Promise<unknown>) =>
+    app[method](path, async (req: Request, res: Response) => {
+      if (!isDbAvailable()) { res.status(503).json({ message: "Database not available" }); return; }
+      await sendGuarded(res, () => withPoTx(async (q) => { const out = await run(q, req); return out; }).then(async (out: any) => {
+        // An open defect blocks auto-close like any action item; resolving one may let the PO close.
+        const po = out?.po_id ?? (await query(`SELECT po_id FROM po_line_defects WHERE id = $1`, [out?.id])).rows[0]?.po_id ?? req.params.id;
+        const close = /^[0-9a-f-]{36}$/i.test(String(po ?? "")) ? await evaluateAutoClose(String(po), poQuery) : null;
+        return { ...out, close };
+      }));
+    });
+  defectRoute("post", "/api/pos/:id/defects", (q, req) => addDefect(q, String(req.params.id ?? ""), req.body ?? {}, uid(req)));
+  defectRoute("patch", "/api/pos/defects/:id", (q, req) => editDefect(q, Number(req.params.id), req.body ?? {}, uid(req)));
+  defectRoute("delete", "/api/pos/defects/:id", (q, req) => removeDefect(q, Number(req.params.id), uid(req)));
+  defectRoute("post", "/api/pos/defects/:id/refunds", (q, req) => linkRefund(q, Number(req.params.id), Number((req.body ?? {}).refund_id), uid(req)));
+  defectRoute("delete", "/api/pos/defects/:id/refunds/:refundId", (q, req) => unlinkRefund(q, Number(req.params.id), Number(req.params.refundId), uid(req)));
+  defectRoute("post", "/api/pos/defects/:id/resolve", (q, req) => resolveDefect(q, Number(req.params.id), req.body ?? {}, uid(req)));
+  defectRoute("post", "/api/pos/defects/:id/reopen", (q, req) => reopenDefect(q, Number(req.params.id), uid(req)));
   // New PO form (po-af-owned §4): the body is shared/po-form.ts's PoFormState.
   app.post("/api/pos", async (req: Request, res: Response) => {
     if (!isDbAvailable()) { res.status(503).json({ message: "Database not available" }); return; }
@@ -4780,7 +4810,7 @@ export async function registerRoutes(
       const close = await evaluateAutoClose(String(pa.po_id), poQuery);
       const [row] = await loadPoAsinRows(poQuery, [String(pa.po_id)]).then((rows) => rows.filter((x: any) => String(x.id) === id));
       res.json({ row, close });
-    } catch (err: any) { res.status(500).json({ message: err.message }); }
+    } catch (err: any) { res.status(err instanceof EditError ? err.status : 500).json({ message: err.message }); }
   });
 
   // "Extra units shipped" cleared by hand — a note is required (Maria 2026-10-29).
@@ -4789,7 +4819,7 @@ export async function registerRoutes(
     try {
       const out = await withPoTx((q) => clearExtraUnits(q, String(req.params.id ?? ""), (req.body ?? {}).note, uid(req)));
       res.status(out.status).json(out.body);
-    } catch (err: any) { res.status(500).json({ message: err.message }); }
+    } catch (err: any) { res.status(err instanceof EditError ? err.status : 500).json({ message: err.message }); }
   });
 
   // PO-level set (PO table v2 §4): the desired union applies to EVERY product
@@ -4807,7 +4837,7 @@ export async function registerRoutes(
       const close = await evaluateAutoClose(id, poQuery);
       const po = (await query(`SELECT ${PO_ACTION_ITEMS_SQL} AS items FROM purchase_orders p WHERE p.id = $1`, [id])).rows[0];
       res.json({ action_items: unionActionItems([po?.items]), lines_changed: changed.length, lines: lines.length, close });
-    } catch (err: any) { res.status(500).json({ message: err.message }); }
+    } catch (err: any) { res.status(err instanceof EditError ? err.status : 500).json({ message: err.message }); }
   });
 
   app.patch("/api/pos/lines/:id/action-items", async (req: Request, res: Response) => {

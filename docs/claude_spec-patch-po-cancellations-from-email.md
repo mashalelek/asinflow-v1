@@ -1,6 +1,7 @@
 # Spec patch — PO cancellations from email (+ net quantities everywhere)
 
 Status: DRAFT 2026-10-23 — decisions D1–D4 answered by Maria 2026-10-23. Absorbs the still-valid parts (§2, §3) of the on-hold Col BA patch (`claude/spec-patch-canceled-qty-col-ba.md`), which is retired by this one. **Amended 2026-11-03 by the Dashboard patch (`docs/claude_spec-patch-analytics-dashboard.md` §2.3 C1, built):** the expected-refund piece of this data model now lives in `po_line_refunds` (`status = 'due'`, migration 082) — §3 and §5 below are amended accordingly; no `po_cancellations.refund_*` columns.
+**Line resolutions (2026-11-05):** the per-line resolution model — a qty, the $ owed, resolved by refund (linked `po_line_refunds` rows), replacement (a PO line) or write-off — is built as SPEC §22 "Supplier defects" (migration 094, `po_line_defects` + `po_line_defect_refunds`); a confirmed cancellation should resolve through it rather than add its own.
 Repo path: `docs/claude_spec-patch-po-cancellations-from-email.md`. Adds SPEC §27 "PO cancellations"; touches §11, §22, §26.
 
 ## 1. Goal

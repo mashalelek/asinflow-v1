@@ -24,7 +24,7 @@ import {
 import { Tooltip, TooltipTrigger, TooltipContent } from "@/components/ui/tooltip";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import { UploadToVelocityDialog } from "@/components/upload-to-velocity-dialog";
-import { PoAsinTable, PoAsinColGroup, PoAsinHeaderRow, PoAsinRow, PO_ASIN_TABLE_MIN_WIDTH, ActionItemChips, ActionItemsEditor, type ActionItemLines, type PoAsinRowData, type PoAsinLine } from "@/components/po-asin-rows";
+import { PoAsinTable, PoAsinColGroup, PoAsinHeaderRow, PoAsinRow, PO_ASIN_TABLE_MIN_WIDTH, ActionItemChips, ActionItemsEditor, type ActionItemLines, type OpenDefectBrief, type PoAsinRowData, type PoAsinLine } from "@/components/po-asin-rows";
 import { loadPoExpanded, savePoExpanded, isPoExpanded, togglePoExpanded, toggleExpandAll, type PoExpandedState } from "@/lib/po-expanded";
 import { fmtQty, PO_ASIN_COLUMNS } from "@/lib/po-qty";
 import { fetchLongSync } from "@/lib/long-sync";
@@ -34,6 +34,7 @@ import { DocumentsPaperclip, PoDocumentsTab, type PoDocumentLite, type PoDocumen
 import { InlineNoteCell, InlineNoteBox } from "@/components/inline-note";
 import { PoTrackingTab, SyncTrackingButton, UnmatchedTrackingChip } from "@/components/po-tracking";
 import { PoMoneyTab, type PoPayment, type PoPromo, type PoRefund } from "@/components/po-money";
+import type { PoDefect } from "@/components/po-defects";
 import { Pencil } from "lucide-react";
 import { weightedPaymentPct, WEIGHTED_PAYMENT_LABEL } from "@shared/po-form";
 import { useColumnWidths, ResizeHandle } from "@/hooks/use-column-widths";
@@ -49,6 +50,8 @@ interface PoRow {
   review_velocity_reasons?: string[] | null;
   /** PO table v2 §4: per stored item, lines carrying it of the PO's lines, ASINs, auto reasons. */
   action_item_lines?: Record<string, ActionItemLines>;
+  /** Open supplier defects (SPEC §22 "Supplier defects") — the chip's qty and $ owed. */
+  defects_open?: OpenDefectBrief[];
   ships_to?: "velocity" | "home";
   order_total: string | null;
   invoice_attached: boolean;
@@ -731,7 +734,7 @@ export default function PurchaseOrders() {
                   </td>
                   <td style={poColStyle(colWidths, "action_items")} className="px-3 py-2" onClick={(e) => e.stopPropagation()}>
                     {/* PO table v2: set on the PO row = set on every product line (confirm when > 1). */}
-                    <ActionItemsEditor items={po.action_items} reasons={po.review_velocity_reasons} lines={po.action_item_lines}
+                    <ActionItemsEditor items={po.action_items} reasons={po.review_velocity_reasons} lines={po.action_item_lines} defects={po.defects_open}
                       url={`/api/pos/${po.id}/action-items`} onSaved={() => void load()} lineCount={poLineCount(po)} testId={`po-action-items-${po.order_id}`} />
                   </td>
                   <td style={poColStyle(colWidths, "order_date")} className="px-3 py-2 whitespace-nowrap">{fmtDate(po.order_date)}</td>
@@ -820,6 +823,7 @@ interface PoDetail {
   payments?: PoPayment[];
   promos?: PoPromo[];
   refunds?: PoRefund[];
+  defects?: PoDefect[];
   /** PO documents (SPEC §22): the Documents tab. */
   documents?: PoDocument[];
 }
@@ -929,7 +933,7 @@ export function PurchaseOrderDetailPlaceholder() {
           </div>
         </div>
         <div className="flex items-center gap-2">
-          <ActionItemChips items={actionItems} reasons={po.review_velocity_reasons} testId="po-detail-action-items" />
+          <ActionItemChips items={actionItems} reasons={po.review_velocity_reasons} testId="po-detail-action-items" defects={po.defects_open} />
           <Button variant="outline" size="sm" onClick={() => navigate(`/pos/${po.id}/edit`)} data-testid="button-edit-po"><Pencil className="h-3.5 w-3.5 mr-1" /> Edit PO</Button>
           <PoDangerActions poId={po.id} reloadKey={version} onCanceled={reload} onDeleted={() => navigate("/purchase-orders")} />
         </div>
@@ -1007,7 +1011,7 @@ export function PurchaseOrderDetailPlaceholder() {
 
       {tab === "documents" && <PoDocumentsTab poId={po.id} documents={data.documents ?? []} onChanged={reload} />}
 
-      {tab === "payments" && <PoMoneyTab po={po} asins={asins} payments={data.payments ?? []} promos={data.promos ?? []} refunds={data.refunds ?? []} onChanged={reload} />}
+      {tab === "payments" && <PoMoneyTab po={po} asins={asins} payments={data.payments ?? []} promos={data.promos ?? []} refunds={data.refunds ?? []} defects={data.defects ?? []} onChanged={reload} />}
 
       {tab === "tracking" && <PoTrackingTab poId={po.id} onChanged={reload} />}
 

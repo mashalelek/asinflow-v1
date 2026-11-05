@@ -5964,6 +5964,71 @@ reads those params once on mount (`readPoPageParams`). The Dashboard's Spend
 subtracts refund rows of any status; its Refunds due row sums the due ones
 (§28).
 
+### Supplier defects (Maria 2026-11-05; migration 094)
+
+A **supplier defect** records units the supplier got wrong on one product
+line: **missing** from the delivery, **damaged**, or the **wrong item**. It is
+the line-resolution model of the cancellations patch
+(`docs/claude_spec-patch-po-cancellations-from-email.md` §3/§5): a per-line
+record whose money rides on `po_line_refunds` rows, so the cancellations
+confirm can reuse it later instead of inventing its own.
+
+`po_line_defects` (one row per defect): `po_line_item_id`, `kind`
+(`missing | damaged | wrong_item`), `qty` (**retailer units of the line,
+stored** — never derived from Ordered − Received, and never written to any
+quantity column), `amount` ($ owed), `opened_at` (date), `note`, `status`
+(`open | resolved`), `resolution` (`refund | replacement | write_off`),
+`replacement_po_line_item_id`, `write_off_reason`, `resolved_at`.
+`po_line_defect_refunds` links a defect to one or more refund rows of the
+same PO.
+
+- **$ owed** defaults to qty × the line's cost per retailer unit: the stored
+  adjusted product cost (col X / formula v3 — discounts, tax and shipping
+  allocated, × (1 − gift-card %); never recomputed on an imported PO); a line
+  without one uses price × (subtotal − discount + tax + shipping) ÷ subtotal
+  (plain price without a subtotal). Editable (`shared/po-defect.ts`
+  `defectAmount`).
+- **Resolved by refund** — derived, never set by hand: a defect whose linked
+  refund rows *received* cover its amount (1¢) resolves; less leaves the rest
+  owed and the defect open; a linked refund marked received, edited, unlinked
+  or removed re-derives it (resolve or reopen), each with a History row.
+- **Resolved by replacement** — the PO line that supplied the replacement
+  units (picked by that PO's order #, the defect's ASIN by default).
+- **Resolved by write-off** — Maria's call, a reason required. **COGS does not
+  change in this build** for any resolution (options listed for Maria
+  2026-11-05; decision pending).
+- **Reopen** undoes a replacement / write-off; **Remove** deletes the defect
+  (its links go with it, the refund rows stay).
+
+**Action item.** "Missing / damaged from supplier" is **derived from open
+defects** on the line, its ASIN row and the PO (the PO, close and ASIN
+unions; it blocks auto-close like before). The chip shows the open qty and $
+owed ("Missing / damaged from supplier 1 · $5.97"); its hover lists each
+defect (ASIN, line, kind, note). The badges stored before 2026-11-05 (sheet
+import and two by hand) **stay as they are** until Maria says which to convert
+(`Claude outputs/missing-damaged-badges-2026-11-05.csv`); a stored one can
+still be removed in the editor. Adding the badge by hand where no defect is
+open is refused ("comes from a supplier defect now"); an editor echoing the
+derived badge adds nothing.
+
+**Refunds due.** The POs list's "refund due $X", the Refunds: due filter and
+the Dashboard's Refunds due add, per open defect, its amount minus every
+linked refund row of any status (≥ 0) — the part no refund row carries yet.
+A defect linked to its due row adds nothing more: no double count. Spend is
+unchanged (it subtracts refund rows, as before).
+
+UI: the Payments tab's **Supplier defects** section (after Refunds) — add
+(line, kind, qty, $ blank = the default, note), link / unlink refunds,
+replacement…, write off…, reopen, remove. API: `POST /api/pos/:id/defects`,
+`PATCH|DELETE /api/pos/defects/:id`, `POST /api/pos/defects/:id/refunds`,
+`DELETE /api/pos/defects/:id/refunds/:refundId`, `POST
+/api/pos/defects/:id/resolve`, `POST /api/pos/defects/:id/reopen`
+(`server/po-defects.ts`). Scripts: `script/add-refund-due.ts` (a refund-due
+row on one line), `script/refund-due-to-defect.ts` (a due row → a defect
+linked to it); both dry run by default, `--prod`, `--live`. First record:
+Walmart 200015557295492 line 1 (Caress B006T0U4R4), missing, 1, $5.97,
+linked to its refund-due row (2026-11-05).
+
 ### Costs (patch `docs/claude_spec-patch-po-ai-prefill.md` §7 as corrected 2026-11-04; formula v3, `shared/po-cost.ts`)
 
 Three costs per ASIN row, for POs created by the New PO form (and the
@@ -8677,6 +8742,7 @@ it — one basis everywhere; the Finances patch inherits it.
 |---|---|
 | Refunds (Sales), Gross profit, Net profit, Est. payout | the Finances API patch (listTransactions): writes `sales_daily.refund_amount` / `units_refunded` / the fee columns; the grid only reads them |
 | Due refunds from supplier emails | `docs/claude_spec-patch-po-cancellations-from-email.md` (writes `po_line_refunds` due rows, §22) |
+| Line resolutions (missing / damaged / wrong from the supplier, refund / replacement / write-off) | built: §22 "Supplier defects" (migration 094); the cancellations patch reuses it |
 | Pack sizes on the 2024–2025 rows ("n rows missing pack size") | Maria's `docs/pack-size-gaps-*.csv` work |
 | The D3 data-error list (AG not netting the refund) and the "no $ amount" list | Maria, over time, through the cancellations emails and the Orders sheet; nothing here depends on them being clean |
 

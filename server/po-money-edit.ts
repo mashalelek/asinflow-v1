@@ -11,6 +11,7 @@ import { EditError, logEdits, parseEdits, money, pctOrNull, textOrNull, isoDate,
 import { recomputePoCosts } from "./po-costs";
 import { PAYMENT_METHODS, PROMO_TYPES, promoCountsByDefault, weightedPaymentPct, defaultRewardPct, canonicalPaymentName } from "@shared/po-form";
 import { REFUND_STATUSES } from "@shared/po-refund";
+import { defectsLinkedTo, syncRefundResolution } from "./po-defects";
 
 const oneOf = (list: readonly string[], nullable = false) => (v: unknown): Parsed => (v == null || v === "" ? (nullable ? { ok: true, value: null } : { ok: false, error: "is required" }) : (list as readonly string[]).includes(String(v)) ? { ok: true, value: String(v) } : { ok: false, error: `must be one of ${list.join(", ")}` });
 const last4 = (v: unknown): Parsed => (v == null || v === "" ? { ok: true, value: null } : /^\d{4}$/.test(String(v).trim()) ? { ok: true, value: String(v).trim() } : { ok: false, error: "must be four digits" });
@@ -107,6 +108,8 @@ export async function editMoneyRow(query: QueryLike, table: Table, id: number, b
   if (table === "po_line_refunds") await checkRefundLine(query, poId, next);
   await query(`UPDATE ${table} SET ${changes.map(([k], i) => `${k} = $${i + 2}`).join(", ")} WHERE id = $1`, [id, ...changes.map(([, v]) => v)]);
   await logEdits(query, poId, userId, "po", poId, changes.map(([k, v]) => ({ field: `${label[table]} ${k}`, old: canon(row[k]), new: canon(v) })));
+  // A linked supplier defect follows its refunds (SPEC §22 "Supplier defects"): marked received / amount changed → resolve or reopen.
+  if (table === "po_line_refunds") await syncRefundResolution(query, await defectsLinkedTo(query, [id]), userId);
   if (table === "po_promos" && changes.some(([k]) => ["counts_toward_cogs", "amount", "type"].includes(k))) { const r = await recomputePoCosts(query, poId, userId); out.recomputed = { changed: r.changed, skipped: r.skipped }; }
   if (table === "po_payments" && opts.weightSync !== false && changes.some(([k]) => WEIGHT_FIELDS.includes(k))) { const w = await syncWeightedPaymentPct(query, poId, userId); if (w.recomputed) out.recomputed = w.recomputed; }
   return out;
@@ -114,7 +117,9 @@ export async function editMoneyRow(query: QueryLike, table: Table, id: number, b
 
 export async function removeMoneyRow(query: QueryLike, table: Table, id: number, userId: number | null, opts: MoneyEditOpts = {}): Promise<MoneyEditResult> {
   const { row, poId } = await rowAndPo(query, table, id);
+  const linkedDefects = table === "po_line_refunds" ? await defectsLinkedTo(query, [id]) : [];
   await query(`DELETE FROM ${table} WHERE id = $1`, [id]);
+  if (linkedDefects.length) await syncRefundResolution(query, linkedDefects, userId);
   await logEdits(query, poId, userId, "po", poId, [{ field: `${label[table]} removed`, old: summary(table, row), new: null }]);
   const out: MoneyEditResult = { poId, id };
   if (table === "po_promos") { const r = await recomputePoCosts(query, poId, userId); out.recomputed = { changed: r.changed, skipped: r.skipped }; }

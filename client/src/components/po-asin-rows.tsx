@@ -16,6 +16,7 @@ import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover
 import { fmtQty, individualUnits, PO_ASIN_COLUMNS, VELOCITY_QTY_TITLE } from "@/lib/po-qty";
 import { InlineEdit, SelectEdit, poApi, ReassignShipment, shipmentBlockText } from "@/components/po-edit";
 import { InlineNoteCell, NoteIcon } from "@/components/inline-note";
+import { DEFECT_ACTION_ITEM, defectSummary } from "@shared/po-defect";
 
 export interface PoAsinShipment {
   id: string;
@@ -52,6 +53,8 @@ export interface PoAsinLine {
 }
 export interface PoAsinRowData {
   id: string;
+  /** Open supplier defects on this ASIN row's lines (SPEC §22 "Supplier defects"). */
+  defects_open?: OpenDefectBrief[];
   po_id: string;
   asin: string;
   asin_name: string | null;
@@ -144,6 +147,17 @@ const ordered = (items: readonly string[] | undefined) => DISPLAY_ACTION_ITEMS.f
 /** `reasons`: the open "Review Velocity" reasons (SPEC §26) — shown on that chip's hover. `titles`: hover text per item (Extra units shipped). */
 /** Per item: how many of the PO's lines carry it (PO table v2 §4 `action_item_lines`). */
 export interface ActionItemLines { lines: number; of: number; asins: string[]; reasons: string[] }
+/** An open supplier defect as the list rows carry it (server/po-defects.ts briefOf, SPEC §22 "Supplier defects"). */
+export interface OpenDefectBrief { id: number; po_line_item_id: string; asin: string | null; line_no: number; kind: string; qty: number; amount: number | null; owed: number | null; note: string | null }
+/** The "Missing / damaged from supplier" chip's qty and $ owed ("1 · $5.97") and its hover — per defect, ASIN line and note. */
+export function defectChipParts(defects: readonly OpenDefectBrief[] | undefined): { suffix: string; title: string } | null {
+  if (!defects?.length) return null;
+  const qty = defects.reduce((t, d) => t + Number(d.qty), 0);
+  const owed = defects.filter((d) => d.owed != null);
+  const suffix = `${Number(qty.toFixed(2))}${owed.length ? ` · $${owed.reduce((t, d) => t + (d.owed ?? 0), 0).toFixed(2)}` : ""}`;
+  const each = defects.map((d) => `${d.asin ?? "?"} line ${d.line_no}: ${defectSummary([d])}${d.note ? ` — ${d.note}` : ""}`);
+  return { suffix, title: `${DEFECT_ACTION_ITEM}: ${defectSummary(defects)}\n${each.join("\n")}` };
+}
 /** Hover for a PO-row chip: which lines carry it, and the auto reasons. */
 export function lineDetailTitle(item: string, d: ActionItemLines | undefined): string | undefined {
   if (!d) return undefined;
@@ -156,8 +170,9 @@ export const MAX_CHIPS = 2;
  * `reasons`: the open "Review Velocity" reasons (SPEC §26) — shown on that chip's hover. `titles`: hover text per item (Extra units shipped).
  * `lines`: per-item line counts — a "·N" badge when fewer than all lines carry it, the lines on hover.
  */
-export function ActionItemChips({ items, testId, reasons, titles, lines }: { items: readonly string[] | undefined; testId?: string; reasons?: readonly string[] | null; titles?: Readonly<Record<string, string>>; lines?: Readonly<Record<string, ActionItemLines>> }) {
+export function ActionItemChips({ items, testId, reasons, titles, lines, defects }: { items: readonly string[] | undefined; testId?: string; reasons?: readonly string[] | null; titles?: Readonly<Record<string, string>>; lines?: Readonly<Record<string, ActionItemLines>>; defects?: readonly OpenDefectBrief[] }) {
   const list = ordered(items);
+  const defect = defectChipParts(defects);
   const shown = list.length > MAX_CHIPS ? list.slice(0, MAX_CHIPS) : list;
   const rest = list.slice(shown.length);
   return (
@@ -165,6 +180,12 @@ export function ActionItemChips({ items, testId, reasons, titles, lines }: { ite
       {list.length === 0 ? <span className="text-muted-foreground/40 text-[11px]">—</span> : shown.map((it) => {
         const d = lines?.[it];
         return (
+          // An open defect's qty and $ owed stay visible; only the label truncates.
+          it === DEFECT_ACTION_ITEM && defect ? (
+            <span key={it} className={`${chipBase} ${actionChipClass(it)} inline-flex max-w-full`} title={defect.title}>
+              <span className="truncate">{it}</span><span className="ml-1 shrink-0 font-medium" data-testid="chip-defect-owed">{defect.suffix}</span>
+            </span>
+          ) :
           <span key={it} className={`${chipBase} ${actionChipClass(it)} max-w-full truncate`} title={titles?.[it] ?? lineDetailTitle(it, d) ?? (it === "Review Velocity" && reasons?.length ? reasons.join(" · ") : it)}>
             {it}{d && d.lines < d.of ? <span className="ml-1 opacity-70" data-testid={`chip-count-${it}`}>·{d.lines}</span> : null}
           </span>
@@ -180,9 +201,9 @@ export function ActionItemChips({ items, testId, reasons, titles, lines }: { ite
  * route (every line of the ASIN) or the product-line route. `lineCount` > 1 →
  * each change asks "Apply to all N lines" before it is saved (PO table v2 §5).
  */
-export function ActionItemsEditor({ items, url, onSaved, testId, titles, lines, lineCount = 1, reasons }: {
+export function ActionItemsEditor({ items, url, onSaved, testId, titles, lines, lineCount = 1, reasons, defects }: {
   items: readonly string[] | undefined; url: string; onSaved?: () => void; testId: string; titles?: Readonly<Record<string, string>>;
-  lines?: Readonly<Record<string, ActionItemLines>>; lineCount?: number; reasons?: readonly string[] | null;
+  lines?: Readonly<Record<string, ActionItemLines>>; lineCount?: number; reasons?: readonly string[] | null; defects?: readonly OpenDefectBrief[];
 }) {
   const [open, setOpen] = useState(false);
   const [draft, setDraft] = useState<Set<string>>(new Set(items ?? []));
@@ -202,7 +223,7 @@ export function ActionItemsEditor({ items, url, onSaved, testId, titles, lines, 
     <Popover open={open} onOpenChange={(v) => { setOpen(v); setPending(null); if (v) setDraft(new Set(items ?? [])); }}>
       <PopoverTrigger asChild>
         <button type="button" onClick={(e) => e.stopPropagation()} className="min-h-[1.25rem] min-w-[3rem] max-w-full text-left" data-testid={testId} title="Edit action items">
-          <ActionItemChips items={items} titles={titles} lines={lines} reasons={reasons} />
+          <ActionItemChips items={items} titles={titles} lines={lines} reasons={reasons} defects={defects} />
         </button>
       </PopoverTrigger>
       <PopoverContent className="w-72 p-2 space-y-1" align="end" onClick={(e) => e.stopPropagation()}>
@@ -477,8 +498,8 @@ export function PoAsinRow({ a, indent = false, editable = false, onChanged, po }
         <td className="px-3 py-1.5 text-right"><QtyCell v={a.qty_received_amazon} /></td>
         <td className="px-3 py-1.5"><ShipmentChips rowId={a.id} asin={a.asin} shipments={a.shipments ?? []} editable={editable} onChanged={onChanged} /></td>
         <td className="px-3 py-1.5">{editable && lines.length > 0
-          ? <ActionItemsEditor items={a.action_items} titles={extraTitles(a)} url={`/api/pos/asin-rows/${a.id}/action-items`} onSaved={onChanged} testId={`button-action-items-asin-${a.asin}`} lineCount={lines.length} />
-          : <ActionItemChips items={a.action_items} titles={extraTitles(a)} />}
+          ? <ActionItemsEditor items={a.action_items} titles={extraTitles(a)} url={`/api/pos/asin-rows/${a.id}/action-items`} onSaved={onChanged} testId={`button-action-items-asin-${a.asin}`} lineCount={lines.length} defects={a.defects_open} />
+          : <ActionItemChips items={a.action_items} titles={extraTitles(a)} defects={a.defects_open} />}
           {editable && (a.action_items ?? []).includes(EXTRA_UNITS_SHIPPED) && <ClearExtraUnits a={a} onChanged={onChanged} />}</td>
         {/* ASIN-row note, inline (2026-11-04); read-only tables show the icon with the note on hover. */}
         <td className={editable ? "p-0" : "px-2 py-1.5"}>{editable
@@ -495,8 +516,8 @@ export function PoAsinRow({ a, indent = false, editable = false, onChanged, po }
           <td className="px-3 py-1 text-right text-xs text-muted-foreground"><Money v={l.adjusted_product_cost} /></td>
           <td className="px-3 py-1 text-right text-xs text-muted-foreground" colSpan={PO_ASIN_COLUMNS.length - 6 - 1}>{l.qty_canceled != null && l.qty_canceled > 0 ? `canceled ${l.qty_canceled}` : ""}</td>
           <td className="px-3 py-1">{editable
-            ? <ActionItemsEditor items={l.action_items} url={`/api/pos/lines/${l.id}/action-items`} onSaved={onChanged} testId={`button-action-items-line-${a.asin}-${l.position}`} />
-            : <ActionItemChips items={l.action_items} />}</td>
+            ? <ActionItemsEditor items={l.action_items} url={`/api/pos/lines/${l.id}/action-items`} onSaved={onChanged} testId={`button-action-items-line-${a.asin}-${l.position}`} defects={a.defects_open?.filter((d) => d.po_line_item_id === l.id)} />
+            : <ActionItemChips items={l.action_items} defects={a.defects_open?.filter((d) => d.po_line_item_id === l.id)} />}</td>
           {/* Product-line note, inline (2026-11-04). */}
           <td className={editable ? "p-0" : "px-2 py-1"}>{editable
             ? <InlineNoteCell value={l.notes} label="line note" className="px-2 py-1" testId={`line-${l.id}`} onSave={async (v) => { await poApi(`/api/pos/lines/${l.id}`, "PATCH", { notes: v }); onChanged?.(); }} />

@@ -27,7 +27,7 @@ export const PENDING_TOOLTIP = "after the Finances API patch";
 
 export const DASHBOARD_ROWS: readonly DashboardRowDef[] = [
   { key: "spend", group: "spend", label: "Spend", format: "money", primary: true, definition: "Σ per PO of order total − refunds (any status); a fully-canceled PO is $0; gift-card % and cashback never count" },
-  { key: "refunds_due", group: "spend", label: "Refunds due", format: "money", definition: "Σ refund rows with status due over the column's POs — click to open those POs" },
+  { key: "refunds_due", group: "spend", label: "Refunds due", format: "money", definition: "Σ refund rows with status due over the column's POs, plus open supplier defects not yet on a refund row — click to open those POs" },
   { key: "asin_units", group: "spend", label: "ASIN units ordered", format: "int", definition: "Σ ASIN qty − canceled ASIN units; a fully-canceled PO counts 0" },
   { key: "individual_units", group: "spend", label: "Individual units ordered", format: "int", definition: "Σ ASIN units × units per pack; a row without a pack size contributes its ASIN units and is counted as missing" },
   { key: "avg_po_value", group: "spend", label: "Avg. PO value", format: "money", definition: "Spend ÷ PO count (fully-canceled POs not counted)" },

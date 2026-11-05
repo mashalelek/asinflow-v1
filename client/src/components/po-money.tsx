@@ -16,6 +16,7 @@ import { InlineNoteCell } from "@/components/inline-note";
 import type { PoAsinRowData, PoAsinLine } from "@/components/po-asin-rows";
 import { PAYMENT_METHODS, PROMO_TYPES, CASHBACK_STATUSES } from "@shared/po-form";
 import { MarkReceivedDialog, type DueRefundRow } from "@/components/refund-due-dialog";
+import { PoDefectsSection, type PoDefect } from "@/components/po-defects";
 
 export interface PoPayment { id: number; method: string; nickname: string | null; last4: string | null; amount: string | null; gift_card_discount_pct: string | null; reward_pct?: string | null; needs_review: boolean; raw_text: string | null }
 export interface PoPromo { id: number; type: string | null; description: string | null; amount: string | null; percent: string | null; counts_toward_cogs: boolean; raw_text: string | null; confidence: string | null; source: string }
@@ -28,7 +29,7 @@ const th = "px-3 py-2 text-xs font-medium whitespace-nowrap text-left";
 const hairline = { borderBottom: "0.5px solid hsl(var(--border))" } as const;
 const Muted = ({ v }: { v: React.ReactNode }) => <span className="text-muted-foreground/50">{v}</span>;
 
-export function PoMoneyTab({ po, asins, payments, promos, refunds, onChanged }: { po: Record<string, any>; asins: Array<PoAsinRowData & { lines?: PoAsinLine[] }>; payments: PoPayment[]; promos: PoPromo[]; refunds: PoRefund[]; onChanged: () => void }) {
+export function PoMoneyTab({ po, asins, payments, promos, refunds, defects = [], onChanged }: { po: Record<string, any>; asins: Array<PoAsinRowData & { lines?: PoAsinLine[] }>; payments: PoPayment[]; promos: PoPromo[]; refunds: PoRefund[]; defects?: PoDefect[]; onChanged: () => void }) {
   const { toast } = useToast();
   const call = async (url: string, method: string, body?: unknown) => { try { const r = await poApi(url, method, body); if (r?.recomputed && !r.recomputed.skipped && r.recomputed.changed > 0) toast({ title: `Costs recomputed (${r.recomputed.changed} change${r.recomputed.changed === 1 ? "" : "s"})` }); onChanged(); } catch (e: any) { toast({ title: "Not saved", description: e.message, variant: "destructive" }); } };
   const patch = (url: string, field: string) => async (v: string) => call(url, "PATCH", { [field]: v });
@@ -153,6 +154,9 @@ export function PoMoneyTab({ po, asins, payments, promos, refunds, onChanged }: 
           <Button size="sm" variant="outline" onClick={() => void call(`/api/pos/${po.id}/refunds`, "POST", { ...newRefund, refunded_at: newRefund.status === "due" ? null : newRefund.refunded_at, po_line_item_id: newRefund.po_line_item_id || null, needs_split: !newRefund.po_line_item_id }).then(() => setNewRefund({ po_line_item_id: "", qty: "", amount: "", refunded_at: "", note: "", status: "received" }))} data-testid="button-add-refund"><Plus className="h-3.5 w-3.5 mr-1" /> Refund</Button>
         </div>
       </section>
+
+      {/* Supplier defects (SPEC §22): the money they are owed rides on the refund rows above */}
+      <PoDefectsSection po={po} asins={asins} refunds={refunds} defects={defects} call={call} />
 
       {/* Costs per ASIN row */}
       <section className="space-y-2" data-testid="po-costs">
