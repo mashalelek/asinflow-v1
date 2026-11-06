@@ -66,7 +66,10 @@ export function TopNav() {
 
       {/* Nav items */}
       {/* 2026-11-01: the menu overflowed ~60 px at 1024 — padding, gaps, the "Soon" tags and the user name tighten below xl. */}
-      <nav className="flex items-center gap-0.5 xl:gap-1 min-w-0">
+      {/* 2026-11-06: with the date picker the nav ran under it at 1024–1440 (Gift Cards / Shipments under the picker's text): the
+          picker's label is compact below 1440, the user name shows from xl, the "Soon" placeholders only where they fit, and the
+          nav clips instead of painting under the controls. */}
+      <nav className="flex items-center gap-0.5 xl:gap-1 min-w-0 overflow-hidden" data-testid="top-nav-items">
         {NAV_ITEMS.map((item) => {
           const isActive = location === item.path || (item.path === "/asins" && location === "/");
           const Icon = item.icon;
@@ -77,11 +80,11 @@ export function TopNav() {
             return (
               <span
                 key={item.path}
-                className="hidden xl:flex items-center gap-1.5 px-2 xl:px-3 py-1.5 rounded text-xs opacity-40 cursor-default select-none whitespace-nowrap"
+                className={`hidden ${showDatePicker ? "min-[1680px]:flex" : "min-[1440px]:flex"} items-center gap-1.5 px-3 py-1.5 rounded text-xs opacity-40 cursor-default select-none whitespace-nowrap`}
               >
                 <Icon className="h-3.5 w-3.5" />
                 {item.label}
-                <span className="hidden xl:inline text-[9px] uppercase tracking-wider opacity-60">Soon</span>
+                <span className="text-[9px] uppercase tracking-wider opacity-60">Soon</span>
               </span>
             );
           }
@@ -90,7 +93,7 @@ export function TopNav() {
             <Link
               key={item.path}
               href={item.path}
-              className={`flex items-center gap-1.5 px-2 xl:px-3 py-1.5 rounded text-xs transition-colors whitespace-nowrap ${
+              className={`flex items-center gap-1.5 px-1.5 xl:px-3 py-1.5 rounded text-xs transition-colors whitespace-nowrap ${
                 isActive
                   ? "font-medium"
                   : "opacity-70 hover:opacity-100"
@@ -144,12 +147,12 @@ export function TopNav() {
               <Button
                 size="sm"
                 variant="ghost"
-                className="text-inherit hover:bg-white/10 gap-1.5 px-2 h-8 text-xs"
+                className="text-inherit hover:bg-white/10 gap-1.5 px-2 h-8 text-xs shrink-0"
                 title={user.email}
                 data-testid="button-user-menu"
               >
                 <UserRound className="h-4 w-4" />
-                <span className="max-w-[6rem] xl:max-w-[12rem] truncate">{user.displayName}</span>
+                <span className="hidden xl:inline max-w-[12rem] truncate">{user.displayName}</span>
               </Button>
             </DropdownMenuTrigger>
             <DropdownMenuContent align="end" className="min-w-[12rem]">

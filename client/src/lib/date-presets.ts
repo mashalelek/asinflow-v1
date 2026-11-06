@@ -212,6 +212,14 @@ export function fmtLongDate(s: string): string {
 }
 
 /** Format the trigger button label as "MMM D, YYYY - MMM D, YYYY", never collapsing equal dates. */
+/** The trigger's compact label below 1440 px (2026-11-06, the nav overlap): "Oct 7 – Nov 5" when both days are in one year, else the full label. */
+export function fmtTriggerLabelShort(start: string, end: string): string {
+  const s = parseISO(start), e = parseISO(end);
+  if (s.getFullYear() !== e.getFullYear()) return fmtTriggerLabel(start, end);
+  const opts: Intl.DateTimeFormatOptions = { month: "short", day: "numeric" };
+  return `${s.toLocaleDateString("en-US", opts)} – ${e.toLocaleDateString("en-US", opts)}`;
+}
+
 export function fmtTriggerLabel(start: string, end: string): string {
   const opts: Intl.DateTimeFormatOptions = { month: "short", day: "numeric", year: "numeric" };
   const s = parseISO(start).toLocaleDateString("en-US", opts);

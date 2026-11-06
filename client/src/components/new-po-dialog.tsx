@@ -18,7 +18,7 @@
  * costs with the allocation; a COGS adjustment with a reason; changing a
  * known ASIN's pack asks "This PO only" (default) or "Update ASIN in AF".
  */
-import React, { useEffect, useMemo, useRef, useState } from "react";
+import React, { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 // (File name kept for history — since 2026-11-01 this is the New PO PAGE, no Dialog.)
 import { Plus, Trash2, AlertTriangle, Sparkles, Database, FileText, ArrowUp } from "lucide-react";
 import { nameMismatchNote } from "@shared/name-match";
@@ -103,6 +103,11 @@ function AsinPicker({ value, product, sku = "", supplier, guess, known, initial,
   const [hi, setHi] = useState(0);
   const [adding, setAdding] = useState(false);
   const timer = useRef<number | undefined>(undefined);
+  const inputRef = useRef<HTMLInputElement>(null);
+  const listRef = useRef<HTMLDivElement>(null);
+  // Placement (2026-11-06): the list opens where it fits between the sticky nav and the sticky footer — upward when there is
+  // more room above — and scrolls inside that room; it never runs under the footer.
+  const [place, setPlace] = useState<{ up: boolean; max: number }>({ up: false, max: 320 });
   const q = value.trim();
   const qUp = q.toUpperCase();
   // Suggestions: history → title → the typed search (server), the model's guess appended; 180 ms after the last keystroke.
@@ -130,6 +135,17 @@ function AsinPicker({ value, product, sku = "", supplier, guess, known, initial,
   const hit = known.get(qUp);
   const shown = useMemo(() => filterSuggestions(opts, q.length >= 2 && !known.has(qUp) ? q : ""), [opts, q, qUp, known]);
   const notInAf = ASIN_RE.test(qUp) && hit != null && !hit.in_af;
+  useLayoutEffect(() => {
+    if (!open || !inputRef.current) return;
+    const r = inputRef.current.getBoundingClientRect();
+    const floor = Math.min(window.innerHeight, document.querySelector('[data-testid="new-po-footer"]')?.getBoundingClientRect().top ?? window.innerHeight);
+    const ceil = Math.max(0, document.querySelector("header")?.getBoundingClientRect().bottom ?? 0);
+    const below = floor - r.bottom - 8, above = r.top - ceil - 8;
+    const want = listRef.current?.scrollHeight ?? 0;
+    const up = want > below && above > below;
+    const next = { up, max: Math.max(96, Math.floor(up ? above : below)) };
+    setPlace((p) => (p.up === next.up && p.max === next.max ? p : next));
+  });
   const pick = (o: AsinInfo) => { onChange(o.asin); onPick(o, o.asin); setOpen(false); };
   const addToAf = async () => {
     setAdding(true);
@@ -148,9 +164,9 @@ function AsinPicker({ value, product, sku = "", supplier, guess, known, initial,
   };
   return (
     <div className={compact ? "relative w-full" : "relative min-w-[11rem]"} data-testid={`asin-picker-${rowIndex}`}>
-      <Input value={value} role="combobox" aria-expanded={open} aria-autocomplete="list" onChange={(e) => { onChange(e.target.value.toUpperCase()); setOpen(true); setHi(0); }} onFocus={() => setOpen(true)} onBlur={() => setOpen(false)} onKeyDown={onKey} placeholder={compact ? "ASIN / title" : "ASIN / title / SKU"} className={`h-8 font-mono text-xs ${mark}`} data-testid={`input-new-po-asin-${rowIndex}`} autoComplete="off" />
+      <Input ref={inputRef} value={value} role="combobox" aria-expanded={open} aria-autocomplete="list" onChange={(e) => { onChange(e.target.value.toUpperCase()); setOpen(true); setHi(0); }} onFocus={() => setOpen(true)} onBlur={() => setOpen(false)} onKeyDown={onKey} placeholder={compact ? "ASIN / title" : "ASIN / title / SKU"} className={`h-8 font-mono text-xs ${mark}`} data-testid={`input-new-po-asin-${rowIndex}`} autoComplete="off" />
       {open && (
-        <div className="absolute left-0 top-full z-50 mt-1 w-[28rem] rounded-md border bg-popover p-1 text-popover-foreground shadow-md" role="listbox" onMouseDown={(e) => e.preventDefault()} data-testid={`asin-suggestions-${rowIndex}`}>
+        <div ref={listRef} className={`absolute left-0 z-50 w-[28rem] overflow-y-auto rounded-md border bg-popover p-1 text-popover-foreground shadow-md ${place.up ? "bottom-full mb-1" : "top-full mt-1"}`} style={{ maxHeight: place.max }} role="listbox" onMouseDown={(e) => e.preventDefault()} data-testid={`asin-suggestions-${rowIndex}`} data-placement={place.up ? "up" : "down"}>
           {shown.length === 0 && !notInAf && <div className="px-2 py-1.5 text-xs text-muted-foreground">{q.length >= 2 ? "No match — keep typing an ASIN, title, SKU or brand" : product.trim() ? "No suggestions yet — type an ASIN, title or SKU" : "Type an ASIN, title or SKU"}</div>}
           {shown.map((o, i) => (
             <button key={o.asin} type="button" role="option" aria-selected={i === hi} className={`flex w-full items-start gap-2 rounded px-2 py-1.5 text-left text-xs hover:bg-muted ${i === hi ? "bg-muted" : ""}`} onMouseEnter={() => setHi(i)} onClick={() => pick(o)} data-testid={`asin-suggestion-${o.asin}`}>
@@ -421,7 +437,8 @@ export function NewPoForm({ open, onOpenChange, onCreated, prefill, initialSuppl
   // A Reg. price column (migration 097) only while a line carries one — a free-item deal (2026-11-06).
   const showReg = form.products.some((p) => String(p.regular_price ?? "").trim() !== "");
   const G_LINE = showReg ? "grid grid-cols-[7.5rem_minmax(12rem,40rem)_5.5rem_5.5rem_4rem_4.5rem_1.75rem] items-start gap-x-2" : "grid grid-cols-[7.5rem_minmax(12rem,40rem)_5.5rem_4rem_4.5rem_1.75rem] items-start gap-x-2";
-  const A = { arrow: 16, asin: 176, qty: 72, sold: 92, upp: 60, prep: 64, sourcing: 72, cogs: 88, paid: 72, adj: 72, reason: 96, notes: 100, rm: 24 } as const;
+  // 2026-11-06: reason / notes 84 and the title from 6.5 rem so the row (and a bundle's, inside its ring) fits on one line at 1280.
+  const A = { arrow: 16, asin: 176, qty: 72, sold: 92, upp: 60, prep: 64, sourcing: 72, cogs: 88, paid: 72, adj: 72, reason: 84, notes: 84, rm: 24 } as const;
   const cell = (w: number, cls = "") => ({ className: `shrink-0 ${cls}`, style: { width: w } });
   const ASIN_LABELS: Array<[string, number | "title", string?]> = [["↳", A.arrow, "text-center"], ["ASIN", A.asin], ["Title", "title"], ["ASIN qty", A.qty, "text-right"], ["Sold as", A.sold], ["Units/pack", A.upp, "text-right"], ["Prep", A.prep, "text-right"], ["Sourcing", A.sourcing, "text-right"], ["COGS", A.cogs, "text-right"], ["Paid", A.paid, "text-right"], ["Adjustment", A.adj, "text-right"], ["Reason", A.reason], ["Notes", A.notes], ["", A.rm]];
   if (!open) return null;
@@ -623,7 +640,7 @@ export function NewPoForm({ open, onOpenChange, onCreated, prefill, initialSuppl
                   })}
                   {/* The ↳ ASIN label row sits between the product row(s) and the group's first ↳ ASIN row (Maria 2026-11-04), one per group. */}
                   <div className="mt-0.5 flex flex-wrap items-center gap-x-2 text-[10px] font-medium text-muted-foreground" data-testid={`new-po-asin-labels-${bi}`}>
-                    {ASIN_LABELS.map(([label, w, cls], n) => w === "title" ? <span key={n} className="min-w-[7.5rem] flex-1">{label}</span> : <span key={n} {...cell(w, cls)}>{label}</span>)}
+                    {ASIN_LABELS.map(([label, w, cls], n) => w === "title" ? <span key={n} className="min-w-[6.5rem] flex-1">{label}</span> : <span key={n} {...cell(w, cls)}>{label}</span>)}
                   </div>
                   {box.slots.map((slot, k) => {
                     const i = slot[0]; const p = form.products[i];
@@ -645,7 +662,7 @@ export function NewPoForm({ open, onOpenChange, onCreated, prefill, initialSuppl
                         <div className="flex flex-wrap items-start gap-x-2 gap-y-1">
                           <span {...cell(A.arrow, "pt-1.5 text-center text-sm leading-none text-muted-foreground")} aria-hidden>↳</span>
                           <div {...cell(A.asin)}><AsinPicker value={p.asin} product={p.product_name} sku={p.supplier_sku} supplier={form.supplier} guess={guess} known={known} initial={form.prefill?.asin_candidates?.[String(i)] as AsinInfo[] | undefined} onPick={onPick(slot)} onChange={(v) => setMany(slot, "asin", v)} rowIndex={i} mark={mark(`products.${i}.asin`)} compact /></div>
-                          <div className="flex h-8 min-w-[7.5rem] flex-1 items-center truncate text-xs text-muted-foreground" title={info?.title ?? ""} data-testid={`new-po-asin-title-${i}`}>
+                          <div className="flex h-8 min-w-[6.5rem] flex-1 items-center truncate text-xs text-muted-foreground" title={info?.title ?? ""} data-testid={`new-po-asin-title-${i}`}>
                             {info?.in_af ? <><Database className="mr-1 h-2.5 w-2.5 shrink-0" /><span className="truncate">{info.title ?? "in AF"}</span></> : p.asin.length === 10 ? <span className="text-amber-600">Not in AF</span> : <span className="opacity-60">title from AF</span>}
                           </div>
                           <Input {...cell(A.qty)} value={anyQty ? String(units) : ""} onChange={(e) => onSlotUnits(box.key, k, e.target.value)} inputMode="decimal" placeholder="ASIN qty" className={`h-8 shrink-0 text-xs text-right ${frac ? "font-semibold text-destructive" : ""}`} title={box.bundle ? `sets: the smallest member's qty × yield = ${units}` : `${qty} × ${r} ÷ ${u} = ${units}`} data-testid={`input-new-po-asin-qty-${i}`} />

@@ -32,7 +32,7 @@ import { cn } from "@/lib/utils";
 import { type DateRange, DEFAULT_ADVANCED } from "@/contexts/date-range-context";
 import {
   computePresetRange, computeAdvancedRange,
-  fmtTriggerLabel, fmtLongDate, fmtISO, parseISO,
+  fmtTriggerLabel, fmtTriggerLabelShort, fmtLongDate, fmtISO, parseISO,
   PRESET_LABEL, UNIT_LABEL,
   type PresetKey, type AdvancedConfig, type AdvancedRef,
   type AdvancedAnchor, type AdvancedOp, type AdvancedUnit,
@@ -110,6 +110,7 @@ export function DataStudioDatePicker({ value, onApply, className }: Props) {
   }, [presetMenuOpen]);
 
   const triggerLabel = useMemo(() => fmtTriggerLabel(value.start, value.end), [value.start, value.end]);
+  const triggerShort = useMemo(() => fmtTriggerLabelShort(value.start, value.end), [value.start, value.end]);
   const stagedPresetLabel = PRESET_LABEL[staged.preset] ?? "Fixed";
   const isAdvanced = staged.preset === "advanced";
 
@@ -134,14 +135,18 @@ export function DataStudioDatePicker({ value, onApply, className }: Props) {
       <PopoverTrigger asChild>
         <button
           className={cn(
-            "h-9 px-3 inline-flex items-center justify-between gap-3 min-w-[260px]",
+            // The full label from 1440 px; below it the compact one, so the nav fits beside it (UI_RULES 1, 4).
+            "h-9 px-3 inline-flex items-center justify-between gap-2 min-[1440px]:gap-3 min-[1440px]:min-w-[260px] whitespace-nowrap",
             "border border-[#44403C] rounded-md bg-transparent text-[#F5F5F4]",
             "hover:bg-[#44403C] transition-colors text-xs font-normal",
             className,
           )}
           aria-label={`Date range: ${triggerLabel}`}
+          title={triggerLabel}
+          data-testid="button-date-range"
         >
-          <span>{triggerLabel}</span>
+          <span className="min-[1440px]:hidden">{triggerShort}</span>
+          <span className="hidden min-[1440px]:inline">{triggerLabel}</span>
           <ChevronDown className="h-3.5 w-3.5 opacity-70 shrink-0" />
         </button>
       </PopoverTrigger>
