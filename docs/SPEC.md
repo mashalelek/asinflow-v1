@@ -2695,6 +2695,32 @@ held two manual dry runs for stale inputs; 16 Live offer skipped 2 ASINs as tran
   "N steps failed in the last pass" in the jobs dialog and Settings (`GET /api/jobs/scheduler` → `lastPass`) until a
   scheduled pass runs clean. The job goes on to its next step; a component that throws still fails the job as before.
 
+#### Fees: promotions, stale fees, missing dimensions (Maria 2026-11-06, migration 095)
+
+- **Fee promotions.** When Amazon's estimate carries a `FeePromotion` on the
+  FBA fee (B00D1QW6SY at $10.99: FBAFees 4.11, promotion 4.11, final 0),
+  `parseFeeResult` keeps the fee **before** the promotion (conservative —
+  promotions end) and records the promotion in
+  `asin_estimates.fba_fee_promotion`. The FBA fee cell says "FBA fee waived
+  by promotion ($X)" on hover ("reduced" when partial). Before this the
+  sanity guard nulled the response ("no fee in response", 25 ASINs every
+  pass). The referral fee is unchanged (its final fee).
+- **A fee that still fails after the retry keeps the last good fee.** A
+  failure never writes a fee: it writes `fee_error` / `fee_error_at`, and
+  the cell shows the fee amber "Stale — last good fee from <fee_fetched_at>;
+  the fetch on <date> failed: <error>" until the next success clears it.
+  `fee_fetched_at` is stamped by every SP-API fee write (component 13 and
+  Analyze); rows not refreshed since the migration show "from before
+  11/6/2026". A weight-estimated fallback still never overwrites a real fee
+  (migration 026 gate).
+- **Missing catalog dimensions.** SP-API's client-side error on an ASIN
+  whose catalog lacks package dimensions / weight (`asins.weight_lb`,
+  `length_in`, `width_in`, `height_in` incomplete) is named
+  `error: no FBA estimate: catalog lacks package dimensions/weight`
+  (B07GG6BNFV, B0F4KNWLL9). Not transient (no retry); known-persistent
+  after 3 passes; their fallback fee says so on hover. The fix is the
+  catalog's dimensions (a Seller Central case / Amazon measurement).
+
 ### Two extensions (v2.0, Maria 2026-11-05)
 
 The one combined extension is split into two, from one repo, sharing `chrome-extension/core/` (the AF client

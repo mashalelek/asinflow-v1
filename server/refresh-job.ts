@@ -105,8 +105,9 @@ export async function runFeesStage(opts: {
     items,
     opts.dryRun ? null : async (asin, fees) => {
       await query(
-        `UPDATE asin_estimates SET fba_fee = $2, referral_fee = $3, fees_estimate_price = $4, fee_source = 'spapi' WHERE asin = $1`,
-        [asin, fees.fbaFulfillmentFee, fees.referralFee, fees.feesEstimatePrice],
+        `UPDATE asin_estimates SET fba_fee = $2, referral_fee = $3, fees_estimate_price = $4, fee_source = 'spapi',
+                fba_fee_promotion = $5, fee_fetched_at = NOW(), fee_error = NULL, fee_error_at = NULL WHERE asin = $1`,
+        [asin, fees.fbaFulfillmentFee, fees.referralFee, fees.feesEstimatePrice, fees.fbaFeePromotion ?? null],
       );
     },
     (current, total) => opts.emit({ type: "stage", stage: "fees", status: "running", current, total }),
@@ -115,8 +116,23 @@ export async function runFeesStage(opts: {
   counts.updated = pass.counts.updated;
   counts.error = pass.counts.error;
   Object.assign(outcomes, pass.outcomes);
+  // Maria 2026-11-06: SP-API's client-side error on an ASIN whose catalog lacks package dimensions / weight is that, by name
+  // (B07GG6BNFV, B0F4KNWLL9 — AFN fails at any price, MFN works); not transient, so the retry leaves it alone.
+  const clientErr = Object.entries(pass.outcomes).filter(([, o]) => CLIENT_SIDE_FEE_ERROR.test(o)).map(([a]) => a);
+  if (clientErr.length) {
+    const dims = (await query(`SELECT asin, weight_lb, length_in, width_in, height_in FROM asins WHERE asin = ANY($1::text[])`, [clientErr])).rows;
+    for (const d of dims) if ([d.weight_lb, d.length_in, d.width_in, d.height_in].some((v) => v == null || !(Number(v) > 0))) outcomes[d.asin] = NO_DIMENSIONS_FEE_ERROR;
+  }
+  // A failure never touches the stored fee: it is recorded beside it, and the fee shows as stale (fee_fetched_at's date) until a success clears it.
+  if (!opts.dryRun) {
+    const failed = Object.entries(outcomes).filter(([, o]) => /^error\b/.test(o));
+    for (const [asin, o] of failed) await query(`UPDATE asin_estimates SET fee_error = $2, fee_error_at = NOW() WHERE asin = $1`, [asin, o.replace(/^error: /, "").slice(0, 300)]);
+  }
   return { counts, outcomes };
 }
+
+export const CLIENT_SIDE_FEE_ERROR = /client-side error|InvalidParameterValue/i;
+export const NO_DIMENSIONS_FEE_ERROR = "error: no FBA estimate: catalog lacks package dimensions/weight";
 
 // ── Pure fees pass (2026-09-09): shared batch-feesEstimate loop with a
 // PLUGGABLE writer — same contract as runPricePass (no DB access of its
@@ -124,7 +140,7 @@ export async function runFeesStage(opts: {
 // skip rule) and owns persistence via the writer.
 export async function runFeesPass(
   items: Array<{ asin: string; price: number; category?: string | null }>,
-  write: ((asin: string, fees: { fbaFulfillmentFee: number | null; referralFee: number | null; feesEstimatePrice: number | null }) => Promise<void>) | null,
+  write: ((asin: string, fees: { fbaFulfillmentFee: number | null; referralFee: number | null; feesEstimatePrice: number | null; fbaFeePromotion?: number | null }) => Promise<void>) | null,
   onProgress?: (current: number, total: number) => void,
   dryRun = false,
 ): Promise<{ counts: { updated: number; error: number }; outcomes: Record<string, string> }> {

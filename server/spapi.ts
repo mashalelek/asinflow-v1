@@ -33,6 +33,10 @@ export interface AsinFeesResult {
   // fbaFulfillmentFee (which sums every non-referral fee) — do not add the
   // two together.
   variableClosingFee?: number | null;
+  // Maria 2026-11-06: what Amazon's fee promotion (FeePromotion) took off the
+  // FBA fee. fbaFulfillmentFee is the fee BEFORE it (conservative); null when
+  // the estimate carried no FBA fee promotion.
+  fbaFeePromotion?: number | null;
 }
 
 export interface AsinCatalogResult {
@@ -342,6 +346,7 @@ export function parseFeeResult(
 
   let referralFee: number | null = null;
   let totalFbaFee: number = 0;
+  let fbaPromotion = 0;
   let variableClosingFee: number | null = null;
 
   log(`Fee breakdown for ${asin} (price=$${price}):`, "fees");
@@ -376,7 +381,15 @@ export function parseFeeResult(
       if (feeType === "VariableClosingFee" && finalFee > 0) {
         variableClosingFee = finalFee;
       }
-      totalFbaFee += finalFee;
+      // A fee promotion (Maria 2026-11-06): the fee before it counts; the
+      // promotion is recorded beside it. B00D1QW6SY $10.99: FBAFees 4.11,
+      // FeePromotion 4.11, FinalFee 0 → 4.11, promotion 4.11.
+      if (promoAmount > 0 && feeAmount > 0) {
+        totalFbaFee += feeAmount;
+        fbaPromotion += Math.min(promoAmount, feeAmount);
+      } else {
+        totalFbaFee += finalFee;
+      }
     }
   }
 
@@ -391,7 +404,8 @@ export function parseFeeResult(
     ? parseFloat(totalFeesEstimate.Amount)
     : null;
   if (totalFromApi != null && referralFee != null) {
-    const expectedFba = totalFromApi - referralFee;
+    // TotalFeesEstimate is after the promotion: add it back before comparing.
+    const expectedFba = totalFromApi - referralFee + fbaPromotion;
     if (Math.abs(expectedFba - totalFbaFee) > 0.01) {
       log(
         `  WARNING: FBA fee mismatch! Sum of non-referral=$${totalFbaFee.toFixed(2)} vs (total-referral)=$${expectedFba.toFixed(2)}. Using total-based value.`,
@@ -444,6 +458,7 @@ export function parseFeeResult(
     feesEstimatePrice: price,
     variableClosingFee,
     feeSource: "spapi",
+    fbaFeePromotion: fbaPromotion > 0 ? Math.round(fbaPromotion * 100) / 100 : null,
   };
 }
 

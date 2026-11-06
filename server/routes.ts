@@ -717,8 +717,8 @@ async function upsertAsinResult(
        asin, estimated_cogs, estimated_cogs_source,
        lowest_fba_price, buy_box_price, buy_box_fulfillment, lowest_price,
        sellers_fba, sellers_fbm, fba_fee, referral_fee, fees_estimate_price, fee_source,
-       bsr, bsr_category, eligibility_status, error, fetched_at
-     ) VALUES ($1,$2,'csv',$3,$4,$5,$6,$7,$8,$9,$10,$11,$16,$12,$13,$14,$15,NOW())
+       bsr, bsr_category, eligibility_status, error, fetched_at, fba_fee_promotion, fee_fetched_at
+     ) VALUES ($1,$2,'csv',$3,$4,$5,$6,$7,$8,$9,$10,$11,$16,$12,$13,$14,$15,NOW(),$17,CASE WHEN $16 = 'spapi' AND $9::numeric IS NOT NULL THEN NOW() END)
      ${insertOnly ? "ON CONFLICT (asin) DO NOTHING" : `ON CONFLICT (asin) DO UPDATE SET
        lowest_fba_price = COALESCE(EXCLUDED.lowest_fba_price, asin_estimates.lowest_fba_price),
        buy_box_price = COALESCE(EXCLUDED.buy_box_price, asin_estimates.buy_box_price),
@@ -734,6 +734,11 @@ async function upsertAsinResult(
                       THEN EXCLUDED.fees_estimate_price ELSE asin_estimates.fees_estimate_price END,
        fee_source = CASE WHEN EXCLUDED.fba_fee IS NOT NULL AND (EXCLUDED.fee_source = 'spapi' OR asin_estimates.fee_source = 'fallback' OR asin_estimates.fba_fee IS NULL)
                       THEN EXCLUDED.fee_source ELSE asin_estimates.fee_source END,
+       -- The fee's promotion / date / last error follow a real SP-API fee only (2026-11-06, migration 095).
+       fba_fee_promotion = CASE WHEN EXCLUDED.fba_fee IS NOT NULL AND EXCLUDED.fee_source = 'spapi' THEN EXCLUDED.fba_fee_promotion ELSE asin_estimates.fba_fee_promotion END,
+       fee_fetched_at = CASE WHEN EXCLUDED.fba_fee IS NOT NULL AND EXCLUDED.fee_source = 'spapi' THEN NOW() ELSE asin_estimates.fee_fetched_at END,
+       fee_error = CASE WHEN EXCLUDED.fba_fee IS NOT NULL AND EXCLUDED.fee_source = 'spapi' THEN NULL ELSE asin_estimates.fee_error END,
+       fee_error_at = CASE WHEN EXCLUDED.fba_fee IS NOT NULL AND EXCLUDED.fee_source = 'spapi' THEN NULL ELSE asin_estimates.fee_error_at END,
        bsr = COALESCE(EXCLUDED.bsr, asin_estimates.bsr),
        bsr_category = COALESCE(EXCLUDED.bsr_category, asin_estimates.bsr_category),
        eligibility_status = EXCLUDED.eligibility_status,
@@ -749,6 +754,7 @@ async function upsertAsinResult(
       result.catalogData.bsrRank, result.catalogData.bsrCategory,
       result.eligibilityData?.status, result.error,
       result.feesData.feeSource ?? null, // $16 — fee provenance, gated with the fee block
+      result.feesData.fbaFeePromotion ?? null, // $17 — the FBA fee promotion (migration 095)
     ]
   );
 
@@ -1163,6 +1169,7 @@ export async function registerRoutes(
           e.lowest_fba_price, e.buy_box_price, e.buy_box_fulfillment, e.lowest_price,
           e.sellers_fba, e.sellers_fbm,
           e.fba_fee, e.referral_fee, e.fees_estimate_price, e.fee_source,
+          e.fba_fee_promotion, e.fee_fetched_at, e.fee_error, e.fee_error_at,
           e.bsr, e.bsr_category, e.eligibility_status, e.error,
           e.fetched_at
         FROM asins a
@@ -1402,6 +1409,10 @@ export async function registerRoutes(
           fbaStock,
           pricesFetchedAt: row.fetched_at ? new Date(row.fetched_at).toISOString() : null,
           feeSource: row.fee_source ?? null,
+          fbaFeePromotion: row.fba_fee_promotion != null ? Number(row.fba_fee_promotion) : null,
+          feeFetchedAt: row.fee_fetched_at ? new Date(row.fee_fetched_at).toISOString() : null,
+          feeError: row.fee_error ?? null,
+          feeErrorAt: row.fee_error_at ? new Date(row.fee_error_at).toISOString() : null,
           lastReviewedAt: row.last_reviewed_at ? new Date(row.last_reviewed_at).toISOString() : null,
           addedAt: row.added_at ? new Date(row.added_at).toISOString() : null,
           category: row.category ?? null,

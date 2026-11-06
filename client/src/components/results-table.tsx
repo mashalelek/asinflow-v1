@@ -1,4 +1,5 @@
 import { useMemo, useState, useRef, useCallback } from "react";
+import { feeNotes } from "@/lib/fee-notes";
 import { createPortal } from "react-dom";
 import { Link } from "wouter";
 import { Tooltip, TooltipContent, TooltipTrigger, TooltipPortal } from "@/components/ui/tooltip";
@@ -2044,35 +2045,19 @@ export function renderCell(
 
     case "fbaFee": {
       const fbaVal = profitData ? fmt(profitData.totalFbaFee) : fmt(result.feesData.fbaFulfillmentFee);
-      // Honest labeling (§14): a weight-estimated fallback fee is visibly
-      // provisional, not presented as a real Amazon fee.
-      if (result.feeSource === "fallback") {
+      // Honest labeling (§14; 2026-11-06 feeNotes): a fallback, non-FBA-price or stale fee is amber; a fee promotion is
+      // named on hover (the fee shown is the one before it).
+      const notes = feeNotes(result);
+      if (notes.lines.length > 0) {
         return (
           <Tooltip>
             <TooltipTrigger asChild>
-              <span className="font-mono text-sm text-amber-500 cursor-help" data-testid={`text-fbaFee-fallback-${result.asin}`}>
-                {fbaVal} <AlertTriangle className="inline h-3 w-3" />
+              <span className={`font-mono text-sm cursor-help ${notes.warn ? "text-amber-500" : "underline decoration-dotted underline-offset-2"}`} data-testid={`text-fbaFee-${notes.kind}-${result.asin}`}>
+                {fbaVal} {notes.warn && <AlertTriangle className="inline h-3 w-3" />}
               </span>
             </TooltipTrigger>
-            <TooltipContent side="top">
-              <p className="text-xs">Estimated from weight — SP-API fee fetch failed; will retry on next analyze</p>
-            </TooltipContent>
-          </Tooltip>
-        );
-      }
-      // Fee computed at a non-FBA price (2026-09-09): the row has no FBA
-      // offer, so the estimate ran at the buy-box/lowest price — same amber
-      // honesty indicator as the Sale Price fallback.
-      if (result.feesData.fbaFulfillmentFee != null && result.pricingData.lowestFbaPrice == null && (result.pricingData.buyBoxPrice != null || result.pricingData.lowestPrice != null)) {
-        return (
-          <Tooltip>
-            <TooltipTrigger asChild>
-              <span className="font-mono text-sm text-amber-500 cursor-help" data-testid={`text-fbaFee-nonfba-${result.asin}`}>
-                {fbaVal} <AlertTriangle className="inline h-3 w-3" />
-              </span>
-            </TooltipTrigger>
-            <TooltipContent side="top">
-              <p className="text-xs">Fee estimated at the buy-box/lowest price — no FBA offer exists</p>
+            <TooltipContent side="top" className="max-w-xs">
+              {notes.lines.map((l, i) => <p key={i} className="text-xs">{l}</p>)}
             </TooltipContent>
           </Tooltip>
         );

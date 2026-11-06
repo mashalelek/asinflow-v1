@@ -59,6 +59,8 @@ export interface FeesData {
   // 'spapi' = real fee response; 'fallback' = weight-based estimateFeeFallback
   // (amber indicator in the UI; self-heals on the next successful real fetch).
   feeSource?: "spapi" | "fallback" | null;
+  /** The FBA fee promotion on the estimate (migration 095); fbaFulfillmentFee is the fee before it. */
+  fbaFeePromotion?: number | null;
 }
 
 export interface CatalogData {
@@ -227,6 +229,13 @@ export interface AsinResult {
   cogsSource?: "po_sheet" | "manual" | null;
   pricesFetchedAt?: string | null;
   feeSource?: "spapi" | "fallback" | null; // stored fee provenance (migration 026); null = legacy/unknown
+  /** Migration 095 (2026-11-06): what Amazon's fee promotion took off the FBA fee (fbaFee is the fee before it). */
+  fbaFeePromotion?: number | null;
+  /** When the stored fee last came from SP-API; null = before migration 095 or never. */
+  feeFetchedAt?: string | null;
+  /** The last fee failure after the step's retry (cleared by a success) — the fee is then stale. */
+  feeError?: string | null;
+  feeErrorAt?: string | null;
   lastReviewedAt?: string | null;
   // §14 parked/dead (2026-09-07). isArchived stays = (status === 'parked')
   // for the existing muted styling; dead rows render their own tag.
