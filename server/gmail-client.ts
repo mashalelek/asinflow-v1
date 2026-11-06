@@ -9,6 +9,7 @@
 // backfill) import this directly.
 import { readFileSync } from "fs";
 import { google, type gmail_v1 } from "googleapis";
+import { extractOrderIds } from "./tracking-parse";
 
 export const GMAIL_SUBJECT = process.env.GMAIL_SUBJECT || "orders@coastalqualitygoods.com";
 export const GMAIL_SCOPE = "https://www.googleapis.com/auth/gmail.readonly";
@@ -88,6 +89,12 @@ function walkParts(p: gmail_v1.Schema$MessagePart | undefined, out: { plain: str
   for (const c of p.parts ?? []) walkParts(c, out);
 }
 
+/** Pure: the HTML's text names an order # the plain part does not. */
+export function htmlAddsOrderIds(subject: string, plain: string, html: string): boolean {
+  const inPlain = new Set(extractOrderIds(subject, plain));
+  return extractOrderIds(subject, html).some((id) => !inPlain.has(id));
+}
+
 /** Pure: a full-format Gmail message → GmailMessage. */
 export function parseGmailMessage(m: gmail_v1.Schema$Message): GmailMessage {
   const headers = m.payload?.headers ?? [];
@@ -99,14 +106,17 @@ export function parseGmailMessage(m: gmail_v1.Schema$Message): GmailMessage {
   walkParts(m.payload, parts);
   // Many retailers' text/plain part is a one-line preview ("Get your tracking
   // details inside" — Macy's); the facts are in the HTML. Plain alone only
-  // when it is substantial.
+  // when it is substantial — and names every order # the HTML does: Michaels'
+  // confirmation has a 2,800-character plain part with every field blank,
+  // the order # only in the HTML (2026-11-06; 2 of 2,027 emails in 14 days).
+  const subject = h("subject");
   const plain = parts.plain.join("\n").trim();
   const html = parts.html.length ? htmlToText(parts.html.join("\n")) : "";
-  const text = plain.length >= 300 || !html ? plain : [plain, html].filter(Boolean).join("\n");
+  const text = !html || (plain.length >= 300 && !htmlAddsOrderIds(subject, plain, html)) ? plain : [plain, html].filter(Boolean).join("\n");
   return {
     id: String(m.id), threadId: m.threadId ?? null,
     date: new Date(Number(m.internalDate ?? 0)),
-    from, fromDomain, subject: h("subject"), text, trackLinks: parts.html.length ? trackAnchors(parts.html.join("\n")) : [], labelIds: m.labelIds ?? [],
+    from, fromDomain, subject, text, trackLinks: parts.html.length ? trackAnchors(parts.html.join("\n")) : [], labelIds: m.labelIds ?? [],
   };
 }
 

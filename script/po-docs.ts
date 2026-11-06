@@ -8,7 +8,10 @@
 // (confirmation / shipped / delivered) and save them (D2, D4); --since
 // YYYY-MM-DD scans from that date instead of the watermark; --order <#>
 // saves one PO's emails only (2026-11-04); --ai-max N caps the AI fallback
-// calls (default 40). The AI types a subject no rule names, only when the
+// calls (default 40). --missing (2026-11-06): every AF-created PO with no
+// document — its order # (and alternates) searched in orders@, the emails
+// found read for that PO only (no window, no watermark); a PO still missing
+// one is listed with what was found. The AI types a subject no rule names, only when the
 // email names exactly one PO; a dry run never calls it (it counts the
 // emails it would ask about). Neither flag = both. --live writes. --prod =
 // production (script/env.ts). Needs GOOGLE_CREDENTIALS_PATH (Gmail + Drive
@@ -17,16 +20,17 @@ import "./env";
 import fs from "fs";
 import path from "path";
 import pool from "../server/db";
-import { gmailClient } from "../server/gmail-client";
+import { gmailClient, listMessageIds } from "../server/gmail-client";
 import { driveClient } from "../server/drive-client";
-import { linkExistingDocuments, ingestDocuments, reviewCsv } from "../server/po-documents";
+import { linkExistingDocuments, ingestDocuments, reviewCsv, AF_CREATED_SOURCES } from "../server/po-documents";
 
 const arg = (k: string) => { const i = process.argv.indexOf(k); return i > 0 ? process.argv[i + 1] : undefined; };
 const has = (k: string) => process.argv.includes(k);
 
 async function main() {
   const live = has("--live");
-  const doLink = has("--link") || !has("--ingest"), doIngest = has("--ingest") || !has("--link");
+  const missing = has("--missing");
+  const doLink = !missing && (has("--link") || !has("--ingest")), doIngest = !missing && (has("--ingest") || !has("--link"));
   const query = (sql: string, params?: any[]) => pool.query(sql, params);
   const drive = driveClient();
   console.log(live ? "LIVE" : "DRY RUN (counts only — nothing written)");
@@ -40,6 +44,29 @@ async function main() {
     const f = path.join(arg("--out") ?? "docs", `invoice-link-review-${new Date().toISOString().slice(0, 10)}.csv`);
     fs.writeFileSync(f, reviewCsv(r.review));
     console.log(`  review list → ${f} (${r.review.length})`);
+  }
+  if (missing) {
+    const gmail = gmailClient();
+    const pos = (await query(
+      `SELECT p.id, p.supplier, p.order_id, p.alt_order_ids, p.order_date, p.source FROM purchase_orders p
+        WHERE p.source = ANY($1::text[]) AND NOT EXISTS (SELECT 1 FROM po_documents d WHERE d.po_id = p.id)
+        ORDER BY p.order_date, p.order_id`, [AF_CREATED_SOURCES],
+    )).rows;
+    console.log(`\nAF-created POs with no document: ${pos.length}`);
+    let found = 0, saved = 0, still = 0;
+    for (const p of pos) {
+      const keys = [p.order_id, ...((p.alt_order_ids ?? []) as string[])].filter((k: string) => k && k.trim().length >= 5);
+      const ids = Array.from(new Set((await Promise.all(keys.map((k: string) => listMessageIds(gmail, `"${k.trim()}"`, 50)))).flat()));
+      if (ids.length) found++;
+      const r = ids.length ? await ingestDocuments({ query, deps: { gmail, drive }, dryRun: !live, ids, onlyPoId: String(p.id) }) : null;
+      const n = r?.items.length ?? 0;
+      saved += n > 0 ? 1 : 0;
+      if (n === 0) still++;
+      const what = r ? `${ids.length} email(s): matched ${r.matched}, unmatched ${r.unmatched}, excluded ${r.excluded}, already ${r.already}, untyped ${r.untyped}${r.failed ? `, FAILED ${r.failed}` : ""}` : "no email names its order #";
+      console.log(`  ${n ? (live ? "saved" : "would save") : "missing   "} ${String(p.source).padEnd(9)} ${p.supplier} ${p.order_id} — ${what}${n ? ` → ${r!.items.map((i) => `${i.type}${i.file_name ? ` ${i.file_name}` : ""}`).join(", ")}` : ""}`);
+      for (const x of r?.failures ?? []) console.log(`      FAILED ${x.message_id}: ${x.error}`);
+    }
+    console.log(`\n  POs with an email naming the order #: ${found} · ${live ? "got a document" : "would get a document"}: ${saved} · still none: ${still}`);
   }
   if (doIngest) {
     const since = arg("--since"), order = arg("--order"), aiMax = arg("--ai-max");

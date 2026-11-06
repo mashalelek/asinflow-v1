@@ -8656,6 +8656,37 @@ Promotions** (`after:<watermark − 6 h>`, watermark `docs.gmail_watermark`;
 2026-11-04: ShagTools' "order has been received", most Zoro and all Yankee
 Candle order mail sit in Promotions — spam and trash are not searched).
 
+**An email that arrives before its PO (2026-11-06, `server/gmail-recheck.ts`).**
+The window alone reads an email once more only inside its overlap (6 h
+here, 24 h for confirmations), so a confirmation that arrived a day before
+Maria entered its PO was never read again. Both passes keep each email
+that named an order (a document type, or any order #) and matched no PO
+on a list — `docs.gmail_unmatched` / `confirm.gmail_unmatched`, `{
+message_id: received }` — and read the list again on every pass for **14
+days**; an email leaves it when it matches (one PO), is excluded, is
+ambiguous (a new PO cannot narrow it) or ages out. **A new PO** (`POST
+/api/pos`, form and Capture PO) reads the list for itself right after it
+is saved, in the background (`server/new-po-recheck.ts`: its confirmation
+saved as a document and compared; only where the passes run,
+`ENABLE_CRONS=true`; a failure is logged and the next pass retries). A
+recheck never decides a subscription renewal (§27) — that is the email's
+first read only. One ingest / reconcile runs at a time per process. The
+ledger rows count `rechecked`. Tracking needs none of this: its unmatched
+rows are stored and re-matched every pass (§26).
+
+**A plain part that leaves out the order # (2026-11-06).** The message
+text is the text/plain part when it is 300+ characters — unless the HTML
+names an order # the plain part does not; then the HTML's text is added.
+Michaels' "We've received your order!" has a 2,800-character plain part
+with every field blank and the order # only in the HTML (2 of 2,027
+orders@ emails in the 14 days to 2026-11-06). Every Gmail reader shares
+this (`parseGmailMessage`).
+
+`npm run po-docs -- --missing [--live] [--prod]`: every AF-created PO with
+no document — its order # (and alternates) searched in orders@, the
+emails found read for that PO only (no window, no watermark); a PO still
+without one is listed with what was found.
+
 **Type by subject** (`server/order-email-classify.ts`, 2026-11-04; rules
 built from a 90-day sample of orders@ across the top 30 suppliers by PO
 count, wording common across retailers): exclusions first — cancel /

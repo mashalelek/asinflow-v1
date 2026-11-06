@@ -35,7 +35,7 @@ export const poDocuments: ComponentDef = {
     try {
       drive = documentsDeps.drive();
       const r = await documentsDeps.ingest({ query: ctx.query, deps: { gmail: documentsDeps.gmail(), drive }, log: ctx.log });
-      Object.assign(counts, { scanned: r.scanned, documents: r.documents, matched: r.matched, unmatched: r.unmatched, ambiguous: r.ambiguous, already: r.already, sheet_era_skipped: r.sheet_era_skipped, written: r.items.length, failed: r.failed });
+      Object.assign(counts, { scanned: r.scanned, rechecked: r.rechecked, documents: r.documents, matched: r.matched, unmatched: r.unmatched, ambiguous: r.ambiguous, already: r.already, sheet_era_skipped: r.sheet_era_skipped, written: r.items.length, failed: r.failed });
       for (const i of r.items) outcomes[`${i.supplier} ${i.order_id} ${i.type}`] = i.file_name ?? "";
       for (const f of r.failures) outcomes[`failed ${f.supplier} ${f.order_id} ${f.type} ${f.message_id}`] = f.error;
       if (r.folders_created.length) outcomes._folders_created = r.folders_created.join(", ");

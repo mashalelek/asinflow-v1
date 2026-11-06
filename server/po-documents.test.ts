@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { classifyEmail, ingestDocuments, linkExistingDocuments, reviewCsv, DOCS_WATERMARK_KEY, DOCS_FAILURES_KEY } from "./po-documents";
+import { classifyEmail, ingestDocuments, linkExistingDocuments, reviewCsv, DOCS_WATERMARK_KEY, DOCS_FAILURES_KEY, DOCS_UNMATCHED_KEY } from "./po-documents";
 import { poDocuments, documentsDeps } from "./scheduler/components/29-po-documents";
 import { ComponentError } from "./scheduler/types";
 import { renderableHtml } from "./gmail-client";
@@ -288,3 +288,48 @@ describe("ingestDocuments — the 2026-11-04 rules (ShagTools PO 4126643)", () =
   });
 });
 
+
+describe("ingestDocuments: an email that arrives before its PO (2026-11-06, Michaels 4300109060826629)", () => {
+  const conf = confirmation("mc", "4300109060826629", "2026-11-05T22:20:02Z");
+  const michaels = { ...conf, from: "Michaels <no-reply@michaels.com>", fromDomain: "michaels.com", subject: "We've received your order!", text: "Order 4300109060826629\nThank you" };
+  const po = { id: "mi1", supplier: "michaels.com", order_id: "4300109060826629", order_date: "2026-11-05", source: "extension", order_total: 188.6 };
+  const deps = (drive: any, window: () => string[]) => ({
+    gmail: {} as any, drive, list: async () => window(), get: async (_g: any, id: string) => ({ mc: michaels } as any)[id],
+    getRenderable: async (_g: any, id: string) => ({ id, html: "<p>x</p>", subject: "", from: "", to: "", date: new Date() }),
+    render: async () => Buffer.from("%PDF-1.4 fake"), ai: null,
+  });
+
+  it("matched no PO → kept on the list; a later pass, the email long out of its window, saves it and takes it off", async () => {
+    const pos: any[] = [];
+    const db = fakeDb(pos), d = fakeDrive();
+    let window = ["mc"];
+    const first = await ingestDocuments({ query: db.query, deps: deps(d.drive, () => window), now: new Date("2026-11-05T22:48:00Z") });
+    expect(first.unmatched).toBe(1);
+    expect(db.settings[DOCS_UNMATCHED_KEY]).toEqual({ mc: "2026-11-05T22:20:02.000Z" });
+    // Two days later: the PO exists, the email is far behind the watermark's 6 h overlap.
+    pos.push(po); window = [];
+    const later = await ingestDocuments({ query: db.query, deps: deps(d.drive, () => window), now: new Date("2026-11-07T10:00:00Z") });
+    expect(later).toMatchObject({ scanned: 1, rechecked: 1, matched: 1 });
+    expect(db.docs).toMatchObject([{ po_id: "mi1", type: "order_confirmation", gmail_message_id: "mc" }]);
+    expect(db.settings[DOCS_UNMATCHED_KEY]).toEqual({});
+  });
+
+  it("a new PO's recheck (onlyStored) reads the list only and leaves the watermark; after 14 days an entry ages out", async () => {
+    const pos: any[] = [po];
+    const db = fakeDb(pos), d = fakeDrive();
+    db.settings[DOCS_UNMATCHED_KEY] = { mc: "2026-11-05T22:20:02.000Z", old: "2026-10-01T00:00:00.000Z" };
+    let listed = 0;
+    const r = await ingestDocuments({ query: db.query, deps: deps(d.drive, () => { listed++; return ["mc"]; }), now: new Date("2026-11-05T22:33:00Z"), onlyStored: true, onlyPoId: "mi1" });
+    expect(listed).toBe(0);
+    expect(r).toMatchObject({ scanned: 1, rechecked: 1, since: null });
+    expect(r.items.map((i) => i.po_id)).toEqual(["mi1"]);
+    expect(db.settings[DOCS_WATERMARK_KEY]).toBeUndefined();
+    expect(db.settings[DOCS_UNMATCHED_KEY]).toEqual({});
+  });
+
+  it("a dry run leaves the list as it was", async () => {
+    const db = fakeDb([]), d = fakeDrive();
+    await ingestDocuments({ query: db.query, deps: deps(d.drive, () => ["mc"]), now: new Date("2026-11-05T22:48:00Z"), dryRun: true });
+    expect(db.settings[DOCS_UNMATCHED_KEY]).toBeUndefined();
+  });
+});

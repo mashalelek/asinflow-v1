@@ -30,6 +30,7 @@ import { listInvoiceTree, ensureMonthFolder, folderFileNames, uploadPdf, type Dr
 import { renderHtmlToPdf } from "./pdf-render";
 import { planLinks, documentBaseName, nextDocumentFileName, orderYmd, typeFromFileName, type PoDocumentType, type LinkReviewEntry, type LinkPlanEntry } from "@shared/po-documents";
 import type { QueryLike } from "./scheduler/types";
+import { readRecheck, writeRecheck, withRecheck, serialized } from "./gmail-recheck";
 
 export const DOCS_WATERMARK_KEY = "docs.gmail_watermark";
 /**
@@ -39,6 +40,8 @@ export const DOCS_WATERMARK_KEY = "docs.gmail_watermark";
  * no failure clears the map.
  */
 export const DOCS_FAILURES_KEY = "docs.save_failures";
+/** Order emails that matched no PO yet, read again on every pass for 14 days (server/gmail-recheck.ts, 2026-11-06). */
+export const DOCS_UNMATCHED_KEY = "docs.gmail_unmatched";
 export interface DocSaveFailure { error: string; at: string; type: string; message_id: string }
 const OVERLAP_MS = 6 * 3600_000;
 /** PO sources that are "created in AF" (D4). */
@@ -179,7 +182,8 @@ const defaultDocAi: DocAiCall = async (subject, text) => {
 type IngestPo = PoFacts & { order_date: Date | string; source: string };
 
 export interface IngestResult {
-  scanned: number; documents: number; matched: number; unmatched: number; ambiguous: number;
+  /** scanned includes `rechecked`: stored emails that matched no PO before, outside this window. */
+  scanned: number; rechecked: number; documents: number; matched: number; unmatched: number; ambiguous: number;
   already: number; sheet_era_skipped: number; rendered: number; failed: number;
   /** Subjects an exclusion stopped; subjects no rule named that the AI did not type (off, over the cap, or "none"). */
   excluded: number; untyped: number;
@@ -213,7 +217,18 @@ async function backfillStart(query: QueryLike): Promise<Date | null> {
   return new Date(x.getTime() - 86_400_000);
 }
 
-export async function ingestDocuments(opts: { query: QueryLike; deps: IngestDeps; now?: Date; since?: Date | null; dryRun?: boolean; maxMessages?: number; aiMaxCalls?: number; onlyPoId?: string; log?: (m: string) => void }): Promise<IngestResult> {
+export interface IngestOpts {
+  query: QueryLike; deps: IngestDeps; now?: Date; since?: Date | null; dryRun?: boolean; maxMessages?: number; aiMaxCalls?: number; onlyPoId?: string; log?: (m: string) => void;
+  /** Read only these messages (the backfill: a Gmail search for a PO's order #) — no window, no watermark. */
+  ids?: string[];
+  /** Read only the stored unmatched emails (a new PO, POST /api/pos) — no window, no watermark. */
+  onlyStored?: boolean;
+}
+
+/** One ingest at a time in this process (a pass and a new PO's recheck). */
+export const ingestDocuments = serialized(ingestDocumentsNow);
+
+async function ingestDocumentsNow(opts: IngestOpts): Promise<IngestResult> {
   const now = opts.now ?? new Date();
   const { deps } = opts;
   const list = deps.list ?? listMessageIds, get = deps.get ?? getMessage, getRenderable = deps.getRenderable ?? getRenderableMessage;
@@ -225,11 +240,15 @@ export async function ingestDocuments(opts: { query: QueryLike; deps: IngestDeps
     : wm.last_scanned_at ? new Date(new Date(wm.last_scanned_at).getTime() - OVERLAP_MS) : await backfillStart(opts.query);
   // Promotions included (2026-11-04): real order mail is filed there; spam and trash are not searched.
   const q = from ? `after:${Math.floor(from.getTime() / 1000)}` : "";
-  const ids = await list(deps.gmail, q, opts.maxMessages ?? 5000);
+  const windowed = !opts.ids && !opts.onlyStored;
+  const stored = await readRecheck(opts.query, DOCS_UNMATCHED_KEY, now);
+  const next = { ...stored }; // what the list holds after this run
+  const window = opts.ids ?? (opts.onlyStored ? [] : await list(deps.gmail, q, opts.maxMessages ?? 5000));
+  const { ids, rechecked } = opts.ids ? { ids: window, rechecked: 0 } : withRecheck(window, stored);
   const r: IngestResult = {
-    scanned: ids.length, documents: 0, matched: 0, unmatched: 0, ambiguous: 0, already: 0, sheet_era_skipped: 0, rendered: 0, failed: 0,
+    scanned: ids.length, rechecked, documents: 0, matched: 0, unmatched: 0, ambiguous: 0, already: 0, sheet_era_skipped: 0, rendered: 0, failed: 0,
     excluded: 0, untyped: 0, ai: { calls: 0, typed: 0, none: 0, failed: 0, cost: 0, skipped_cap: 0, dry_run: 0, off: false },
-    by_type: {}, by_rule: {}, folders_created: [], since: from?.toISOString() ?? null, until: now.toISOString(), dryRun: !!opts.dryRun, failures: [], items: [],
+    by_type: {}, by_rule: {}, folders_created: [], since: windowed ? from?.toISOString() ?? null : null, until: now.toISOString(), dryRun: !!opts.dryRun, failures: [], items: [],
   };
   const pos = (await opts.query(
     `SELECT p.id, p.supplier, p.order_id, p.alt_order_ids, p.order_date, p.source, p.order_total::float AS order_total, 0 AS line_count FROM purchase_orders p`,
@@ -243,17 +262,23 @@ export async function ingestDocuments(opts: { query: QueryLike; deps: IngestDeps
   for (const id of ids) {
     const msg = await get(deps.gmail, id);
     const c = classifyEmail(msg);
-    if (!c) { r.excluded++; continue; }
+    if (!c) { r.excluded++; delete next[id]; continue; }
     let supplier = resolveSupplier(c.senderDomain, domainMap, suppliers, platforms).supplier;
     if (!supplier && c.senderDomain && platforms.includes(registrable(c.senderDomain))) {
       const name = retailerNameFromSubject(msg.subject); // a platform sender: the store its subject names
       supplier = name ? (aliases.get(aliasKey(name)) ?? supplierByName(name, suppliers)) : null;
     }
     const hits = poForEmail(c, msg, pos, supplier);
-    if (hits.length === 0) { if (c.type !== "unknown") { r.documents++; r.unmatched++; } continue; }
-    if (hits.length > 1) { if (c.type !== "unknown") { r.documents++; r.ambiguous++; } continue; }
+    if (hits.length === 0) {
+      if (c.type !== "unknown") { r.documents++; r.unmatched++; }
+      // Kept for the next passes when it names an order — its PO may not be entered yet.
+      if (c.type !== "unknown" || c.orderIds.length > 0) next[id] = msg.date.toISOString(); else delete next[id];
+      continue;
+    }
+    if (hits.length > 1) { if (c.type !== "unknown") { r.documents++; r.ambiguous++; } delete next[id]; continue; } // a new PO cannot narrow it
     const po = hits[0];
     if (opts.onlyPoId && String(po.id) !== opts.onlyPoId) continue; // npm run po-docs -- --order <#>: one PO only
+    delete next[id]; // matched: from here this email is handled (a failed save keeps the watermark, below, and goes back on the list)
     if (msg.date < liveSince && !(AF_CREATED_SOURCES as readonly string[]).includes(po.source)) { if (c.type !== "unknown") { r.documents++; r.matched++; r.sheet_era_skipped++; } continue; }
     let type: EmailDocType, rule: string;
     if (c.type !== "unknown") { type = c.type; rule = c.rule ?? c.type; } else {
@@ -307,18 +332,20 @@ export async function ingestDocuments(opts: { query: QueryLike; deps: IngestDeps
       r.items.push({ ...item, file_name: name });
     } catch (err: any) {
       r.failed++;
+      if (!windowed) next[id] = msg.date.toISOString(); // no watermark to hold it: the list retries it
       r.failures.push({ message_id: msg.id, po_id: String(po.id), supplier: po.supplier, order_id: po.order_id, type, error: String(err?.message ?? err).slice(0, 300) });
     }
   }
   // A failed render keeps the watermark where it was, so the next pass retries it (idempotent: the rest are skipped as already done).
-  if (!opts.dryRun && r.failed === 0) {
+  if (!opts.dryRun) await writeRecheck(opts.query, DOCS_UNMATCHED_KEY, next, now);
+  if (!opts.dryRun && r.failed === 0 && windowed) {
     const v: DocsWatermark = { last_scanned_at: now.toISOString(), live_since: wm.live_since ?? now.toISOString() };
     await opts.query(
       `INSERT INTO settings (key, value, updated_at) VALUES ($1, $2::jsonb, NOW()) ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value, updated_at = NOW()`,
       [DOCS_WATERMARK_KEY, JSON.stringify(v)],
     );
   }
-  if (!opts.dryRun) await recordSaveFailures(opts.query, r, now, opts.since === undefined && !opts.onlyPoId);
-  opts.log?.(`documents ingest: scanned ${r.scanned} (excluded ${r.excluded}), documents ${r.documents}, matched ${r.matched} (unmatched ${r.unmatched}, ambiguous ${r.ambiguous}), already ${r.already}, sheet-era skipped ${r.sheet_era_skipped}, ${opts.dryRun ? "would write" : "written"} ${r.items.length}${r.failed ? `, failed ${r.failed}` : ""}`);
+  if (!opts.dryRun) await recordSaveFailures(opts.query, r, now, windowed && opts.since === undefined && !opts.onlyPoId);
+  opts.log?.(`documents ingest: scanned ${r.scanned}${r.rechecked ? ` (${r.rechecked} rechecked)` : ""} (excluded ${r.excluded}), documents ${r.documents}, matched ${r.matched} (unmatched ${r.unmatched}, ambiguous ${r.ambiguous}), already ${r.already}, sheet-era skipped ${r.sheet_era_skipped}, ${opts.dryRun ? "would write" : "written"} ${r.items.length}${r.failed ? `, failed ${r.failed}` : ""}`);
   return r;
 }

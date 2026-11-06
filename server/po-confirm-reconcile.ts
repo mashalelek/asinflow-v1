@@ -14,9 +14,12 @@ import { afOrderKeys, afOrderBaseKeys, orderKey, orderBaseKey, matchOrderId } fr
 import { insertLineItems } from "./line-action-items";
 import { CONFIRM_ORDER_DETAILS } from "./po-status-map";
 import type { QueryLike } from "./scheduler/types";
+import { readRecheck, writeRecheck, withRecheck, serialized } from "./gmail-recheck";
 
 export const CONFIRM_WATERMARK_KEY = "confirm.gmail_watermark";
 const OVERLAP_MS = 24 * 3600_000;
+/** Confirmations that matched no PO yet, read again on every pass for 14 days (server/gmail-recheck.ts, 2026-11-06). */
+export const CONFIRM_UNMATCHED_KEY = "confirm.gmail_unmatched";
 
 /** Subjects / bodies that are an order confirmation (not a shipping, return or marketing email). Covers the 2026-10-30 probe's formats. */
 const CONFIRM_SUBJECT = /\b(order\s+(?:is\s+)?confirm(?:ed|ation)|confirm(?:ation|ed)\s+(?:of\s+)?(?:your\s+)?order|thanks?\s+(?:you\s+)?for\s+(?:your\s+)?(?:[\w.&'-]+\s+){0,3}?(?:order|purchase|shopping)|we(?:'ve|\s+have)\s+received\s+your\s+order|your\s+order\s+(?:has\s+been\s+)?(?:received|placed)|order\s+received|order\s+placed|order\s+#?\s*[A-Z0-9-]{4,}\s+confirmed)\b/i;
@@ -82,7 +85,8 @@ export function compareConfirmation(p: ParsedConfirmation, po: PoFacts): string[
 /** A confirmation that matched no PO — listed so Maria can see whether a PO is missing from AF (review answer 6, 2026-11-01). */
 export interface UnmatchedConfirmation { message_id: string; date: string | null; supplier: string | null; sender_domain: string | null; order_ids: string[]; total: number | null; subject: string }
 export interface ReconcileResult {
-  scanned: number; confirmations: number; matched: number; agreed: number; differed: number; raised: number; unmatched: number; ambiguous: number; renewals: number;
+  /** scanned includes `rechecked`: stored confirmations that matched no PO before, outside this window. */
+  scanned: number; rechecked: number; confirmations: number; matched: number; agreed: number; differed: number; raised: number; unmatched: number; ambiguous: number; renewals: number;
   since: string | null; until: string; diffs: ConfirmDiff[]; unmatchedList: UnmatchedConfirmation[]; dryRun: boolean;
 }
 export interface ReconcileDeps {
@@ -91,14 +95,27 @@ export interface ReconcileDeps {
   onUnmatched?: (msg: GmailMessage, parsed: ParsedConfirmation, supplier: string | null) => Promise<boolean>;
 }
 
-export async function reconcileConfirmations(opts: { query: QueryLike; deps: ReconcileDeps; now?: Date; since?: Date | null; dryRun?: boolean; maxMessages?: number; log?: (m: string) => void }): Promise<ReconcileResult> {
+export interface ReconcileOpts {
+  query: QueryLike; deps: ReconcileDeps; now?: Date; since?: Date | null; dryRun?: boolean; maxMessages?: number; log?: (m: string) => void;
+  /** A new PO (POST /api/pos): only the stored unmatched confirmations, only for this PO — no window, no watermark, no renewals. */
+  onlyStored?: boolean; onlyPoId?: string;
+}
+
+/** One reconcile at a time in this process (a pass and a new PO's recheck). */
+export const reconcileConfirmations = serialized(reconcileConfirmationsNow);
+
+async function reconcileConfirmationsNow(opts: ReconcileOpts): Promise<ReconcileResult> {
   const now = opts.now ?? new Date();
   const list = opts.deps.list ?? listMessageIds, get = opts.deps.get ?? getMessage;
   const wm = opts.since !== undefined ? opts.since : await readConfirmWatermark(opts.query);
   const from = wm ? new Date(wm.getTime() - OVERLAP_MS) : null;
   const q = `-category:promotions${from ? ` after:${Math.floor(from.getTime() / 1000)}` : ""}`;
-  const ids = await list(opts.deps.gmail, q, opts.maxMessages ?? 5000);
-  const r: ReconcileResult = { scanned: ids.length, confirmations: 0, matched: 0, agreed: 0, differed: 0, raised: 0, unmatched: 0, ambiguous: 0, renewals: 0, since: from?.toISOString() ?? null, until: now.toISOString(), diffs: [], unmatchedList: [], dryRun: !!opts.dryRun };
+  const stored = await readRecheck(opts.query, CONFIRM_UNMATCHED_KEY, now);
+  const next = { ...stored };
+  const window = opts.onlyStored ? [] : await list(opts.deps.gmail, q, opts.maxMessages ?? 5000);
+  const fresh = new Set(window);
+  const { ids, rechecked } = withRecheck(window, stored);
+  const r: ReconcileResult = { scanned: ids.length, rechecked, confirmations: 0, matched: 0, agreed: 0, differed: 0, raised: 0, unmatched: 0, ambiguous: 0, renewals: 0, since: opts.onlyStored ? null : from?.toISOString() ?? null, until: now.toISOString(), diffs: [], unmatchedList: [], dryRun: !!opts.dryRun };
   const pos = (await opts.query(
     `SELECT p.id, p.supplier, p.order_id, p.alt_order_ids, p.order_total::float AS order_total, (SELECT COUNT(*)::int FROM po_line_items l WHERE l.po_id = p.id) AS line_count FROM purchase_orders p`,
   )).rows as PoFacts[];
@@ -107,18 +124,22 @@ export async function reconcileConfirmations(opts: { query: QueryLike; deps: Rec
   for (const id of ids) {
     const msg = await get(opts.deps.gmail, id);
     const p = parseConfirmationEmail(msg);
-    if (!p.isConfirmation) continue;
+    if (!p.isConfirmation) { delete next[id]; continue; }
     r.confirmations++;
     const supplier = resolveSupplier(p.senderDomain, domainMap, suppliers, platforms).supplier;
     const hits = findPoForConfirmation(p, pos, supplier);
     if (hits.length === 0) {
-      if (opts.deps.onUnmatched && !opts.dryRun && (await opts.deps.onUnmatched(msg, p, supplier))) { r.renewals++; continue; }
+      // A renewal is decided on the email's first read only — never from a recheck days later.
+      if (fresh.has(id) && opts.deps.onUnmatched && !opts.dryRun && (await opts.deps.onUnmatched(msg, p, supplier))) { r.renewals++; delete next[id]; continue; }
+      if (p.orderIds.length > 0) next[id] = new Date(msg.date ?? now).toISOString(); // its PO may not be entered yet
       r.unmatched++;
       r.unmatchedList.push({ message_id: msg.id, date: msg.date ? new Date(msg.date).toISOString().slice(0, 10) : null, supplier, sender_domain: p.senderDomain, order_ids: p.orderIds, total: p.total, subject: msg.subject ?? "" });
       continue;
     }
-    if (hits.length > 1) { r.ambiguous++; continue; }
+    if (hits.length > 1) { r.ambiguous++; delete next[id]; continue; }
     const po = hits[0];
+    if (opts.onlyPoId && String(po.id) !== opts.onlyPoId) continue;
+    delete next[id];
     r.matched++;
     const differences = compareConfirmation(p, po);
     if (differences.length === 0) { r.agreed++; continue; }
@@ -129,7 +150,8 @@ export async function reconcileConfirmations(opts: { query: QueryLike; deps: Rec
     for (const l of lines) await insertLineItems(opts.query, String(l.id), [CONFIRM_ORDER_DETAILS], "auto", differences.join("; "));
     r.raised++;
   }
-  if (!opts.dryRun) {
+  if (!opts.dryRun) await writeRecheck(opts.query, CONFIRM_UNMATCHED_KEY, next, now);
+  if (!opts.dryRun && !opts.onlyStored) {
     await opts.query(
       `INSERT INTO settings (key, value, updated_at) VALUES ($1, $2::jsonb, NOW()) ON CONFLICT (key) DO UPDATE SET value = settings.value || EXCLUDED.value, updated_at = NOW()`,
       [CONFIRM_WATERMARK_KEY, JSON.stringify({ last_scanned_at: now.toISOString() })],

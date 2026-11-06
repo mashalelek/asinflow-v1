@@ -31,7 +31,7 @@ export const poConfirmations: ComponentDef = {
           },
         },
       });
-      Object.assign(counts, { scanned: r.scanned, confirmations: r.confirmations, matched: r.matched, agreed: r.agreed, differed: r.differed, raised: r.raised, unmatched: r.unmatched, ambiguous: r.ambiguous, renewals: r.renewals });
+      Object.assign(counts, { scanned: r.scanned, rechecked: r.rechecked, confirmations: r.confirmations, matched: r.matched, agreed: r.agreed, differed: r.differed, raised: r.raised, unmatched: r.unmatched, ambiguous: r.ambiguous, renewals: r.renewals });
       for (const d of r.diffs) outcomes[`${d.supplier} ${d.order_id}`] = d.differences.join("; ");
       outcomes._window = `${r.since ?? "start"}..${r.until}`;
     } catch (err: any) {

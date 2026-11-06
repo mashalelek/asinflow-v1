@@ -27,6 +27,7 @@ import { editPoHeader, editLine, addLine, removeLine, editAsinRow, loadPoHistory
 import { recomputePoCosts } from "./po-costs";
 import { addMoneyRow, editMoneyRow, removeMoneyRow, loadPoMoney } from "./po-money-edit";
 import { createPoFromForm, lookupAsins } from "./po-create";
+import { recheckForNewPo } from "./new-po-recheck";
 import { loadPoForm, savePoForm } from "./po-edit-form";
 import { suggestAsins, asinInfo } from "./asin-suggest";
 import { defaultEmailForSupplier } from "./supplier-defaults";
@@ -4614,6 +4615,8 @@ export async function registerRoutes(
       const entry = prefillId ? getPrefill(prefillId) : null;
       if (entry?.logId != null) await query(`UPDATE po_prefill_log SET po_id = $1 WHERE id = $2`, [r.poId, entry.logId]).catch((e: any) => log(`po_prefill_log link failed: ${e?.message ?? e}`, "po"));
       res.status(201).json(r);
+      // Its confirmation may have arrived before it (2026-11-06): the stored unmatched emails are read again now, in the background.
+      void recheckForNewPo(poQuery, r.poId, (m) => log(m, "po"));
     } catch (err: any) {
       if (err instanceof EditError) { res.status(err.status).json({ message: err.message }); return; }
       if (err?.code === "23505") { res.status(409).json({ message: "a PO with this supplier and order # already exists" }); return; }
