@@ -6039,10 +6039,33 @@ Entry points:
 (`GET /api/pos?refunds=due|none`; `none` = no refund row of any status); a
 quiet "refund due $X" line under the Order Total when the PO has due rows
 (`refund_due` on the list row — text, no chip). The Dashboard's Refunds due
-cell links `/purchase-orders?refunds=due&closed=all&from=…&to=…`; the page
-reads those params once on mount (`readPoPageParams`). The Dashboard's Spend
+cell links `/purchase-orders?refunds=due&closed=all&from=…&to=…`. The Dashboard's Spend
 subtracts refund rows of any status; its Refunds due row sums the due ones
 (§28).
+
+**The list lives in its URL (Maria 2026-11-06, `client/src/lib/po-list-url.ts`).**
+Search, Status, Refunds, Action Items, Supplier, dates, sort and page are
+the query string (`?search= &closed= &refunds= &action= &supplier= &from=
+&to= &sort= &dir= &page=`; defaults left out; `?asin=` still searches an
+ASIN). The page rewrites its URL with `replaceState` (a filter change is
+not a history step) and remembers it in sessionStorage, so opening a PO and
+pressing Back, "← Back to POs", and detail → Edit PO → Save / Cancel → Back
+(Edit PO opened from the detail page goes back a history step) all return
+to the exact list. Scroll is restored once the list renders
+(`client/src/lib/list-scroll.ts`, per page and query). The same applies to
+**ASINs** (`?q= &view= &page=`: the search box, the scorecard filter, the
+page — column filters, sort and toggles were already kept) and **Bulk
+Calc** (`?f=<column filters JSON> &sort= &dir=` — the list was already
+kept), each restoring its table's scroll.
+
+**Dropdown counts (2026-11-06, `server/po-list-filters.ts`).** Each option in
+Status, Refunds, Action Items and Supplier shows how many POs it would
+match given the OTHER active filters ("Pack size missing 41") — the same
+facet conditions as the list with that facet left out, so a count always
+equals the list it leads to. A 0 option stays listed, greyed. The counts
+ride the list response (`counts`: four queries, ~100 ms on 2,494 POs); no
+request per dropdown. The one-off replacement pair's item ("Tracking also
+goes to …") became a real filter condition — the filter ignored it before.
 
 ### Supplier defects (Maria 2026-11-05; migration 094)
 

@@ -35,7 +35,7 @@ describe("wiring", () => {
     expect(routes).toMatch(/app\.post\("\/api\/pos\/asin-rows\/:id\/cancel"[\s\S]*?UPDATE po_line_items SET qty_canceled = qty_ordered WHERE po_asin_id = \$1/);
   });
   it("the list filter and the PO column read the union over lines; auto-close (b) reads lines", () => {
-    expect(routes).toMatch(/EXISTS \(\$\{openLineItemsSql\(`l\.po_id = p\.id AND ai\.item = ANY\(\$\$\{params\.length\}::text\[\]\)`\)\}\)/);
+    expect(readFileSync(join(__dirname, "po-list-filters.ts"), "utf8")).toMatch(/EXISTS \(\$\{openLineItemsSql\(`l\.po_id = p\.id AND ai\.item = \$\{p\.\$\(item\)\}`\)\}\)/); // the list filter, moved 2026-11-06
     expect(routes).toMatch(/r\.action_items = unionActionItems\(\[r\.line_action_items\]\)/);
     expect(read("server/po-close.ts")).toMatch(/\$\{PO_CLOSE_ACTION_ITEMS_SQL\} AS action_items FROM purchase_orders p/); // Receiving mismatch is display-only
   });

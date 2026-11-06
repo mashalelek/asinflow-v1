@@ -12,6 +12,23 @@ import {
 import { Tooltip, TooltipTrigger, TooltipContent } from "@/components/ui/tooltip";
 import { ResultsTable, getRowValue, DATE_VALUE_COLS } from "@/components/results-table";
 import { matchesFilters, IN_DB_SENTINEL, type FilterMap } from "@/components/column-filter";
+import { useListScroll, replaceQuery } from "@/lib/list-scroll";
+
+/** Bulk Calc's URL state (2026-11-06): column filters (?f= JSON) and sort, so Back to /bulk-calc restores them; the list is kept in localStorage. Exported for tests. */
+export function readBulkUrl(search: string): { filters: FilterMap; sort: { col: ColumnId; dir: "asc" | "desc" } | null } {
+  const p = new URLSearchParams(search);
+  let filters: FilterMap = {};
+  try { const f = JSON.parse(p.get("f") ?? "{}"); if (f && typeof f === "object" && !Array.isArray(f)) filters = f; } catch { /* a hand-edited URL: no filters */ }
+  const col = p.get("sort");
+  return { filters, sort: col ? { col: col as ColumnId, dir: p.get("dir") === "asc" ? "asc" : "desc" } : null };
+}
+export function writeBulkUrl(filters: FilterMap, sortCol: ColumnId | null, sortDir: "asc" | "desc"): string {
+  const p = new URLSearchParams();
+  if (Object.keys(filters).length) p.set("f", JSON.stringify(filters));
+  if (sortCol) { p.set("sort", sortCol); p.set("dir", sortDir); }
+  const q = p.toString();
+  return q ? `?${q}` : "";
+}
 import { ColumnManager } from "@/components/column-manager";
 import { ExportButtons } from "@/components/export-buttons";
 import { FileUpload } from "@/components/file-upload";
@@ -171,10 +188,14 @@ export default function BulkCalc() {
   const [pendingBulkSet, setPendingBulkSet] = useState<
     { which: "buy" | "hold"; plan: BulkSetPlan; toPromote: string[] } | null
   >(null);
-  const [sortCol, setSortCol] = useState<ColumnId | null>(null);
+  const [urlAtLoad] = useState(() => readBulkUrl(window.location.search));
+  const [sortCol, setSortCol] = useState<ColumnId | null>(urlAtLoad.sort?.col ?? null);
   // §21 column filters (2026-09-04) — enables the Tags dropdown among others.
-  const [colFilters, setColFilters] = useState<FilterMap>({});
-  const [sortDir, setSortDir] = useState<"asc" | "desc">("desc");
+  const [colFilters, setColFilters] = useState<FilterMap>(urlAtLoad.filters);
+  const [sortDir, setSortDir] = useState<"asc" | "desc">(urlAtLoad.sort?.dir ?? "desc");
+  const bulkQuery = writeBulkUrl(colFilters, sortCol, sortDir);
+  useEffect(() => { replaceQuery("/bulk-calc", bulkQuery); }, [bulkQuery]);
+  useListScroll("bulk-calc", results.length > 0, '[data-list-scroll="results-table"]');
   const [refreshing, setRefreshing] = useState(false);
   const [refreshProgress, setRefreshProgress] = useState<string | null>(null);
   // §21 bulk run results (2026-09-09): per-stage counts + outcomes + rate

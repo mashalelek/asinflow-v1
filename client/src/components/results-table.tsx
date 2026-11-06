@@ -764,7 +764,7 @@ export function ResultsTable({
   // Group band was removed — these are no longer needed
 
   return (
-    <div ref={setScrollEl} className="w-full overflow-auto relative" style={{ maxHeight: "calc(100vh - 280px)" }}>
+    <div ref={setScrollEl} className="w-full overflow-auto relative" style={{ maxHeight: "calc(100vh - 280px)" }} data-list-scroll="results-table">
       <table className="border-collapse text-sm w-full" data-testid="results-table">
         <thead className="sticky top-0 z-20">
           <tr className="table-header-stone">

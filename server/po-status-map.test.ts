@@ -60,7 +60,7 @@ describe("consumers switched (§6.3)", () => {
     const routes = read("server/routes.ts");
     const list = routes.slice(routes.indexOf('app.get("/api/pos"'), routes.indexOf('app.get("/api/pos/:id"'));
     // Row-level Status (2026-10-17): the filter is any-of over the PO's LINE action items.
-    expect(list).toMatch(/ai\.item = ANY\(\$\$\{params\.length\}::text\[\]\)/);
+    expect(read("server/po-list-filters.ts")).toMatch(/openLineItemsSql\(`l\.po_id = p\.id AND ai\.item = \$\{p\.\$\(item\)\}`\)/); // moved 2026-11-06
     expect(list).not.toMatch(/p\.status ILIKE|string_to_array\(status/);
     // The filter options: the stored items + the derived "Review Velocity" (SPEC §26).
     expect(list).toMatch(/actionItems: DISPLAY_ACTION_ITEMS/);

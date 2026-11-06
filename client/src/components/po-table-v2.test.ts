@@ -59,7 +59,9 @@ describe("sortable headers (commit 4)", () => {
   });
   it("the list sends sort/dir and a sort change resets to page 1", () => {
     expect(page).toMatch(/if \(sort\) \{ params\.set\("sort", sort\.key\); params\.set\("dir", sort\.dir\); \}/);
-    expect(page).toMatch(/useEffect\(\(\) => \{ setPage\(1\); \}, \[[^\]]*sortKey\]\)/);
+    // Not on the first render, whose page came from the URL (2026-11-06).
+    expect(page).toMatch(/const filterKey = \[[^\]]*sortKey\]\.join\("\|"\)/);
+    expect(page).toMatch(/if \(lastFilterKey\.current !== filterKey\) \{ lastFilterKey\.current = filterKey; setPage\(1\); \}/);
   });
 });
 

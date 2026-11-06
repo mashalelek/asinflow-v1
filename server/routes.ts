@@ -9,25 +9,24 @@ import { closeAfterCreate } from "./listing-hygiene-run";
 import { verifyPending, resolveSubmissionManual, resolveSubmissionsBulk, dismissFlags, getUnverifiedCount, listNeedsAttention, listInFlight, findRecentPendingIds, countOpenAmong } from "./listing-submissions-repo";
 import { runAuraSyncChain } from "./aura-sync-chain";
 import { probeGatingForAsins } from "./gating-probe";
-import { loadPoAsinRows, normalizeLineQty, poListOrderBy, refundsFilterCond, REFUND_DUE_SQL } from "./po-queries";
+import { loadPoAsinRows, normalizeLineQty, poListOrderBy, REFUND_DUE_SQL } from "./po-queries";
 import { loadAliases, resolveRetailer, setAlias } from "./supplier-aliases";
 import { linkUnmatchedLine } from "./shipment-link";
 import { likeContains, stripShipmentSuffix } from "./order-number";
 import { clearExtraUnits } from "./extra-units";
 import { writeLineItems, loadActionItemLines } from "./line-action-items";
-import { OPEN_DEFECT_PO_SQL } from "./po-defect-sql";
 import { addDefect, editDefect, linkRefund, unlinkRefund, resolveDefect, reopenDefect, removeDefect, loadDefects, loadOpenDefectSummaries, briefOf } from "./po-defects";
-import { DEFECT_ACTION_ITEM } from "@shared/po-defect";
 import { velocityIneligible, ineligibleText } from "./shipment-match";
 import { readVelocityStartDate } from "./ships-to-backfill";
 import { evaluateAutoClose, setPoClosedManually, parseQtyInput, MANUAL_QTY_COLUMNS, type ManualQtyColumn } from "./po-close";
-import { ACTION_ITEMS, LEGACY_ACTION_ITEMS, DISPLAY_ACTION_ITEMS, REVIEW_VELOCITY, EXTRA_UNITS_SHIPPED, PACK_SIZE_MISSING, PACK_SIZE_MISMATCH, RECEIVING_MISMATCH, NO_INVOICE_SAVED, normalizeActionItems } from "./po-status-map";
-import { openLineItemsSql, unionActionItems, PO_ACTION_ITEMS_SQL, REVIEW_VELOCITY_REASONS_SQL, PACK_SIZE_MISSING_EXISTS_SQL, PACK_SIZE_MISMATCH_EXISTS_SQL, RECEIVING_MISMATCH_EXISTS_SQL, EXTRA_UNITS_EXISTS_SQL, NO_INVOICE_EXISTS_SQL } from "./po-action-items";
+import { DISPLAY_ACTION_ITEMS, NO_INVOICE_SAVED, normalizeActionItems } from "./po-status-map";
+import { unionActionItems, PO_ACTION_ITEMS_SQL, REVIEW_VELOCITY_REASONS_SQL } from "./po-action-items";
 import { editPoHeader, editLine, addLine, removeLine, editAsinRow, loadPoHistory, logEdits, changedFields, asLogText, EditError, COST_RELEVANT_FIELDS, type EditResult } from "./po-edit";
 import { recomputePoCosts } from "./po-costs";
 import { addMoneyRow, editMoneyRow, removeMoneyRow, loadPoMoney } from "./po-money-edit";
 import { createPoFromForm, lookupAsins } from "./po-create";
 import { recheckForNewPo } from "./new-po-recheck";
+import { parsePoListFilters, poListWhere, poFacetCounts } from "./po-list-filters";
 import { loadPoForm, savePoForm } from "./po-edit-form";
 import { suggestAsins, asinInfo } from "./asin-suggest";
 import { defaultEmailForSupplier } from "./supplier-defaults";
@@ -4296,66 +4295,13 @@ export async function registerRoutes(
   // (SQL semantics), which the UI renders as an em-dash, never 0.
   app.get("/api/pos", async (req: Request, res: Response) => {
     if (!isDbAvailable()) { res.status(503).json({ message: "Database not available" }); return; }
-    const q = typeof req.query.search === "string" ? req.query.search.trim() : "";
-    // §6.3: the Status token filter became the Action Items filter (any-of).
-    const action = typeof req.query.action === "string" ? req.query.action.trim() : "";
-    const supplier = typeof req.query.supplier === "string" ? req.query.supplier.trim() : "";
-    const from = typeof req.query.from === "string" ? req.query.from.trim() : "";
-    const to = typeof req.query.to === "string" ? req.query.to.trim() : "";
-    // §5 / D3: Status filter = open | closed | all; default view = Open only.
-    const closedRaw = typeof req.query.closed === "string" ? req.query.closed.trim().toLowerCase() : "open";
-    const closed = closedRaw === "closed" ? "closed" : closedRaw === "all" ? "all" : "open";
-    // Dashboard patch §2.4: refunds = due | none (anything else = any).
-    const refundsRaw = typeof req.query.refunds === "string" ? req.query.refunds.trim().toLowerCase() : "";
-    const refunds = refundsRaw === "due" || refundsRaw === "none" ? refundsRaw : "any";
+    // The filters (server/po-list-filters.ts): §5 / D3 Status open | closed | all, default Open; Refunds due | none | any (Dashboard patch §2.4);
+    // §6.3 Action Items any-of; Supplier; dates; search. OR within a multi-select, AND across filters.
+    const filters = parsePoListFilters(req.query as Record<string, unknown>);
+    const { closed, refunds } = filters;
     const page = Math.max(1, parseInt(String(req.query.page ?? "1"), 10) || 1);
     const PAGE_SIZE = 25;
-
-    const conds: string[] = [];
-    const params: any[] = [];
-    const add = (cond: string, val: any) => { params.push(val); conds.push(cond.replace("$?", `$${params.length}`)); };
-    if (q) {
-      params.push(`%${q}%`);
-      const n = params.length;
-      // Notes too (2026-11-04): the PO's, its ASIN rows' and its product
-      // lines' — a replacement order # noted on the original PO finds it.
-      // The Supplier field and its alias names too (Maria 2026-11-04): "zara" or "ZARA DEL AMO" finds zara.com's POs.
-      conds.push(`(p.order_id ILIKE $${n} OR p.notes ILIKE $${n} OR p.alt_order_ids ILIKE $${n}
-        OR p.supplier ILIKE $${n}
-        OR EXISTS (SELECT 1 FROM supplier_aliases sa WHERE sa.supplier = p.supplier AND sa.alias ILIKE $${n})
-        OR EXISTS (SELECT 1 FROM po_asins a WHERE a.po_id = p.id AND (a.asin ILIKE $${n} OR a.notes ILIKE $${n}))
-        OR EXISTS (SELECT 1 FROM po_line_items l WHERE l.po_id = p.id AND (l.product_name ILIKE $${n} OR l.notes ILIKE $${n})))`);
-    }
-    // Action Items filter: any-of, a PO matches when ANY product line has an
-    // open item (po_line_action_items, PO table v2; values never contain
-    // commas). Both facets accept comma-separated multi-selects: OR within a
-    // facet, AND across facets. Old label spellings map to today's.
-    if (action) {
-      const wanted = action.split(",").map((x) => x.trim()).map((x): string => LEGACY_ACTION_ITEMS[x] ?? x);
-      const items = wanted.filter((x) => (ACTION_ITEMS as readonly string[]).includes(x) || x === REVIEW_VELOCITY);
-      const any: string[] = [];
-      if (items.length > 0) { params.push(items); any.push(`EXISTS (${openLineItemsSql(`l.po_id = p.id AND ai.item = ANY($${params.length}::text[])`)})`); }
-      // The pack-size items are derived from po_asins (2026-10-29).
-      if (wanted.includes(PACK_SIZE_MISSING)) any.push(PACK_SIZE_MISSING_EXISTS_SQL);
-      if (wanted.includes(PACK_SIZE_MISMATCH)) any.push(PACK_SIZE_MISMATCH_EXISTS_SQL);
-      if (wanted.includes(RECEIVING_MISMATCH)) any.push(RECEIVING_MISMATCH_EXISTS_SQL);
-      if (wanted.includes(EXTRA_UNITS_SHIPPED)) any.push(EXTRA_UNITS_EXISTS_SQL);
-      if (wanted.includes(NO_INVOICE_SAVED)) any.push(NO_INVOICE_EXISTS_SQL("p"));
-      // Derived from open supplier defects too (SPEC §22 "Supplier defects"); the stored manual badges still match above.
-      if (wanted.includes(DEFECT_ACTION_ITEM)) any.push(OPEN_DEFECT_PO_SQL("p"));
-      if (any.length > 0) conds.push(`(${any.join(" OR ")})`);
-    }
-    if (supplier) {
-      const list = supplier.split(",").map((x) => x.trim()).filter(Boolean);
-      if (list.length > 0) { params.push(list); conds.push(`p.supplier = ANY($${params.length}::text[])`); }
-    }
-    if (from) add(`p.order_date >= $?`, from);
-    if (to) add(`p.order_date <= $?`, to);
-    if (closed === "open") conds.push(`p.closed_at IS NULL`);
-    else if (closed === "closed") conds.push(`p.closed_at IS NOT NULL`);
-    const refundsCond = refundsFilterCond(refunds);
-    if (refundsCond) conds.push(refundsCond);
-    const where = conds.length > 0 ? `WHERE ${conds.join(" AND ")}` : "";
+    const { where, params } = poListWhere(filters);
 
     try {
       const total = (await query(`SELECT COUNT(*)::int AS n FROM purchase_orders p ${where}`, params)).rows[0].n;
@@ -4409,7 +4355,9 @@ export async function registerRoutes(
       const unmatchedCount = (await query(
         `SELECT (SELECT COUNT(*)::int FROM shipment_unmatched WHERE resolved_at IS NULL AND dismissed_at IS NULL) + (SELECT COUNT(*)::int FROM velocity_shipments WHERE sc_match = 'ambiguous') AS n`,
       )).rows[0].n;
-      res.json({ pos: rows, total, page, pageSize: PAGE_SIZE, suppliers, actionItems: DISPLAY_ACTION_ITEMS, closed, refunds, unmatchedCount });
+      // Each dropdown option's count under the other active filters (2026-11-06) — in this response, not a request per dropdown.
+      const counts = await poFacetCounts((sql, params) => query(sql, params), filters);
+      res.json({ pos: rows, total, page, pageSize: PAGE_SIZE, suppliers, actionItems: DISPLAY_ACTION_ITEMS, closed, refunds, unmatchedCount, counts });
     } catch (err: any) {
       res.status(500).json({ message: err.message });
     }

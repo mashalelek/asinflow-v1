@@ -37,6 +37,15 @@ export function replacementTrackingItemsSql(poAlias: string): string {
        AND NOT ${toCheckedInSql(p)}`).join("\n  ");
 }
 
+/** SQL (alias `poAlias`): the PO carries the pair item `label` — the POs list's Action Items filter (2026-11-06). null for no pair's label. */
+export function replacementTrackingCondSql(poAlias: string, label: string): string | null {
+  const p = REPLACEMENT_TRACKING_PAIRS.find((x) => x.label === label);
+  if (!p) return null;
+  return `(${poAlias}.order_id = '${p.fromOrderId}'
+       AND NOT EXISTS (SELECT 1 FROM po_edit_log re WHERE re.po_id = ${poAlias}.id AND re.field = '${p.historyField}')
+       AND NOT ${toCheckedInSql(p)})`;
+}
+
 /** Is the to-PO fully checked in at Velocity (the item resolved without a PUT)? */
 export async function replacementCheckedIn(query: QueryLike, pair: ReplacementTrackingPair): Promise<boolean> {
   return (await query(`SELECT ${toCheckedInSql(pair)} AS done`)).rows[0]?.done === true;

@@ -14,7 +14,8 @@ describe("Edit PO page", () => {
   });
   it("Edit PO on the detail page navigates to /pos/:id/edit; the route renders the New PO form in edit mode; the old dialog is gone, the Cancel / Delete confirms stay", () => {
     const page = readFileSync(resolve(__dirname, "../pages/purchase-orders.tsx"), "utf8");
-    expect(page).toMatch(/onClick=\{\(\) => navigate\(`\/pos\/\$\{po\.id\}\/edit`\)\} data-testid="button-edit-po"/);
+    // From the detail page with state, so Save / Cancel go back a history step (2026-11-06).
+    expect(page).toMatch(/onClick=\{\(\) => navigate\(`\/pos\/\$\{po\.id\}\/edit`, \{ state: \{ fromPoDetail: true \} \}\)\} data-testid="button-edit-po"/);
     expect(page).not.toMatch(/PoHeaderDrawer|editOpen/);
     const app = readFileSync(resolve(__dirname, "../App.tsx"), "utf8");
     expect(app).toMatch(/<Route path="\/pos\/:id\/edit" component=\{PoEditPage\} \/>/);

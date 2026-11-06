@@ -92,11 +92,13 @@ describe("quantity input + routes", () => {
     expect(MANUAL_QTY_COLUMNS).toEqual(["qty_at_warehouse", "qty_lost_damaged_us", "qty_shipped_supplier"]);
   });
   it("the list defaults to Open only (D3) and accepts closed=open|closed|all", () => {
+    // The list's filters moved to po-list-filters.ts (2026-11-06); behaviour in po-list-filters.test.ts.
     const s = readFileSync(join(__dirname, "routes.ts"), "utf8");
     const list = s.slice(s.indexOf('app.get("/api/pos"'), s.indexOf('app.get("/api/pos/:id"'));
-    expect(list).toMatch(/req\.query\.closed === "string" \? req\.query\.closed\.trim\(\)\.toLowerCase\(\) : "open"/);
-    expect(list).toMatch(/if \(closed === "open"\) conds\.push\(`p\.closed_at IS NULL`\)/);
-    expect(list).toMatch(/else if \(closed === "closed"\) conds\.push\(`p\.closed_at IS NOT NULL`\)/);
+    expect(list).toMatch(/const filters = parsePoListFilters\(req\.query/);
+    const f = readFileSync(join(__dirname, "po-list-filters.ts"), "utf8");
+    expect(f).toMatch(/const closedRaw = str\(q\.closed\)\.toLowerCase\(\) \|\| "open"/);
+    expect(f).toMatch(/c === "open" \? `p\.closed_at IS NULL` : c === "closed" \? `p\.closed_at IS NOT NULL` : null/);
   });
   it("every quantity / shipment write re-runs the rule; the manual toggle records the user", () => {
     const s = readFileSync(join(__dirname, "routes.ts"), "utf8");
@@ -110,7 +112,7 @@ describe("quantity input + routes", () => {
   });
   it("the page: col 1 is the Closed toggle with confirm; Open/Closed/All filter defaults to open; nested rows editable", () => {
     const page = readFileSync(join(__dirname, "..", "client", "src", "pages", "purchase-orders.tsx"), "utf8");
-    expect(page).toMatch(/useState<ClosedFilter>\(linked\.closed \?\? "open"\)/); // default Open — the ASINs-page On Order link too: On Order counts open POs only (2026-11-02)
+    expect(page).toMatch(/useState<ClosedFilter>\(linked\.closed\)/); // readPoListUrl defaults it to "open" (lib/po-list-url.ts, 2026-11-06) // default Open — the ASINs-page On Order link too: On Order counts open POs only (2026-11-02)
     expect(page).toMatch(/params\.set\("closed", closedFilter\)/);
     expect(page).toMatch(/<ClosedToggle po=\{po\} onToggled=\{load\} \/>/);
     expect(page).toMatch(/data-testid="button-po-closed-confirm"/);

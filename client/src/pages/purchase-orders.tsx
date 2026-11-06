@@ -10,7 +10,9 @@
  * no row tints; ALL money renders neutral ($0.00 muted) — semantic color is
  * reserved for warnings.
  */
-import React, { useState, useEffect, useCallback } from "react";
+import React, { useState, useEffect, useCallback, useRef } from "react";
+import { readPoListUrl, writePoListUrl, rememberPoList, poListHref } from "@/lib/po-list-url";
+import { useListScroll, replaceQuery } from "@/lib/list-scroll";
 import { useLocation, Link } from "wouter";
 import { Upload, Plus, Search, Copy, Check, ChevronRight, ChevronDown, ChevronsDownUp, ChevronsUpDown, CheckCircle2, Circle, RefreshCw, AlertTriangle, ArrowUp, ArrowDown, ArrowUpDown } from "lucide-react";
 import {
@@ -89,7 +91,16 @@ interface PosResponse {
   refunds?: "any" | "due" | "none";
   /** Shipment reconciliation §5.3: open unmatched Velocity lines + ambiguous SC matches. */
   unmatchedCount?: number;
+  /** Per dropdown option, the POs it would match under the OTHER active filters (server/po-list-filters.ts, 2026-11-06). */
+  counts?: { closed: Record<ClosedFilter, number>; refunds: Record<RefundsFilter, number>; suppliers: Record<string, number>; actionItems: Record<string, number> };
 }
+
+/** A dropdown option's count: right-aligned, tabular; a 0 option stays listed, greyed. */
+function OptionCount({ n }: { n: number | undefined }) {
+  if (n == null) return null;
+  return <span className="ml-auto pl-3 tabular-nums text-muted-foreground" data-count={n}>{n.toLocaleString()}</span>;
+}
+const zeroCls = (n: number | undefined) => (n === 0 ? "text-muted-foreground/50" : "");
 
 type ClosedFilter = "open" | "closed" | "all";
 /** Dashboard patch §2.4: Refunds filter — any / due (a refund row still due) / none (no refund row at all); `?refunds=due` deep-links from the Dashboard's Refunds due cell. */
@@ -155,9 +166,11 @@ function ClosedToggle({ po, onToggled, size = "sm" }: { po: { id: string; order_
 // Searchable multi-select facet — same interaction pattern as the main
 // page's Tags/Supplier filters (type-ahead, select/clear all, checkbox
 // list). OR within a facet; facets AND together server-side.
-function FacetMultiSelect({ label, options, selected, onChange, testId }: {
+function FacetMultiSelect({ label, options, counts, selected, onChange, testId }: {
   label: string;
   options: string[];
+  /** Each option's count under the other filters; absent → none shown. An option missing from a present map is 0. */
+  counts?: Record<string, number>;
   selected: Set<string>;
   onChange: (next: Set<string>) => void;
   testId: string;
@@ -173,7 +186,7 @@ function FacetMultiSelect({ label, options, selected, onChange, testId }: {
           <ChevronDown className="h-3 w-3 ml-1 text-muted-foreground" />
         </Button>
       </PopoverTrigger>
-      <PopoverContent className="w-64 p-2 space-y-2" align="start">
+      <PopoverContent className="w-72 p-2 space-y-2" align="start">
         <Input placeholder="Search..." value={q} onChange={(e) => setQ(e.target.value)} className="h-7 text-xs" autoFocus />
         <div className="flex items-center gap-2 text-[10px] text-muted-foreground">
           <button className="hover:text-foreground" onClick={() => onChange(new Set(options))}>Select all</button>
@@ -183,13 +196,14 @@ function FacetMultiSelect({ label, options, selected, onChange, testId }: {
         </div>
         <div className="max-h-48 overflow-y-auto -mx-1 space-y-0.5">
           {filtered.map((opt) => (
-            <label key={opt} className="flex items-center gap-2 px-2 py-1 rounded hover:bg-muted cursor-pointer text-xs">
+            <label key={opt} className={`flex items-center gap-2 px-2 py-1 rounded hover:bg-muted cursor-pointer text-xs ${zeroCls(counts ? counts[opt] ?? 0 : undefined)}`} data-testid={`${testId}-option`}>
               <input type="checkbox" checked={selected.has(opt)} onChange={() => {
                 const next = new Set(selected);
                 if (next.has(opt)) next.delete(opt); else next.add(opt);
                 onChange(next);
               }} className="h-3 w-3 accent-blue-500" />
               <span className="truncate">{opt}</span>
+              <OptionCount n={counts ? counts[opt] ?? 0 : undefined} />
             </label>
           ))}
           {filtered.length === 0 && <div className="px-2 py-1 text-xs text-muted-foreground">No matches</div>}
@@ -200,6 +214,8 @@ function FacetMultiSelect({ label, options, selected, onChange, testId }: {
 }
 
 const ALL = "__all__";
+const CLOSED_LABEL: Record<ClosedFilter, string> = { open: "Open", closed: "Closed", all: "All" };
+const REFUNDS_LABEL: Record<RefundsFilter, string> = { any: "Refunds: any", due: "Refunds: due", none: "Refunds: none" };
 
 // ── Shipment reconciliation (patch docs/claude_spec-patch-shipment-reconciliation.md §5) ──
 
@@ -531,18 +547,18 @@ export default function PurchaseOrders() {
   // /purchase-orders?asin=B0… opens the list searched on that ASIN, Open POs
   // only — the ones On Order counts (2026-11-02); the Closed filter is a click away.
   // The Dashboard's Refunds due cell links /purchase-orders?refunds=due&closed=all&from=…&to=… (SPEC §28).
-  const linked = (() => { try { return readPoPageParams(window.location.search); } catch { return readPoPageParams(""); } })();
-  const linkedAsin = linked.asin;
-  const [search, setSearch] = useState(linkedAsin);
-  const [debouncedSearch, setDebouncedSearch] = useState(linkedAsin);
-  const [actionSel, setActionSel] = useState<Set<string>>(new Set());
-  const [closedFilter, setClosedFilter] = useState<ClosedFilter>(linked.closed ?? "open"); // D3: default Open only — the ASINs-page On Order link too (open POs are what it counts)
+  // Every filter, the sort and the page live in the URL (2026-11-06, lib/po-list-url.ts): Back to the list restores it exactly.
+  const [linked] = useState(() => readPoListUrl(window.location.search));
+  const [search, setSearch] = useState(linked.search);
+  const [debouncedSearch, setDebouncedSearch] = useState(linked.search);
+  const [actionSel, setActionSel] = useState<Set<string>>(() => new Set(linked.action));
+  const [closedFilter, setClosedFilter] = useState<ClosedFilter>(linked.closed); // D3: default Open only — the ASINs-page On Order link too (open POs are what it counts)
   const [refundsFilter, setRefundsFilter] = useState<RefundsFilter>(linked.refunds);
-  const [supplierSel, setSupplierSel] = useState<Set<string>>(new Set());
+  const [supplierSel, setSupplierSel] = useState<Set<string>>(() => new Set(linked.supplier));
   const [from, setFrom] = useState(linked.from);
   const [to, setTo] = useState(linked.to);
-  const [page, setPage] = useState(1);
-  const [sort, setSort] = useState<PoSort>(null);
+  const [page, setPage] = useState(linked.page);
+  const [sort, setSort] = useState<PoSort>(linked.sort);
   const { colWidths, handleResizeStart, resetWidths } = useColumnWidths(PO_COL_WIDTHS_KEY);
   const [data, setData] = useState<PosResponse | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -562,7 +578,14 @@ export default function PurchaseOrders() {
   const actionKey = Array.from(actionSel).sort().join(",");
   const supplierKey = Array.from(supplierSel).sort().join(",");
   const sortKey = sort ? `${sort.key}:${sort.dir}` : "";
-  useEffect(() => { setPage(1); }, [debouncedSearch, actionKey, supplierKey, from, to, closedFilter, refundsFilter, sortKey]);
+  // A filter or sort change goes back to page 1 — not the first render, whose page came from the URL.
+  const filterKey = [debouncedSearch, actionKey, supplierKey, from, to, closedFilter, refundsFilter, sortKey].join("|");
+  const lastFilterKey = useRef(filterKey);
+  useEffect(() => { if (lastFilterKey.current !== filterKey) { lastFilterKey.current = filterKey; setPage(1); } }, [filterKey]);
+
+  // The URL follows the list (replaceState: a filter change is not a history step); remembered for "← Back to POs".
+  const listQuery = writePoListUrl({ search: debouncedSearch, action: Array.from(actionSel), supplier: Array.from(supplierSel), closed: closedFilter, refunds: refundsFilter, from, to, sort, page });
+  useEffect(() => { replaceQuery("/purchase-orders", listQuery); rememberPoList(listQuery); }, [listQuery]);
 
   const load = useCallback(async () => {
     setError(null);
@@ -586,6 +609,7 @@ export default function PurchaseOrders() {
   }, [debouncedSearch, actionKey, supplierKey, from, to, page, closedFilter, refundsFilter, sort]);
 
   useEffect(() => { load(); }, [load]);
+  useListScroll("pos", data != null); // restored once the first list renders (lib/list-scroll.ts)
 
   // Sync Shipments (§5.2, D3): component A then B as one direct call; both outcomes in the toast.
   const handleSyncShipments = useCallback(async () => {
@@ -654,24 +678,29 @@ export default function PurchaseOrders() {
             placeholder="Search order #, ASIN, product, notes"
             className="h-8 w-[280px] pl-8 text-sm" data-testid="input-po-search" />
         </div>
+        {/* Each option shows its count under the other filters (2026-11-06); the trigger keeps the plain label. */}
         <Select value={closedFilter} onValueChange={(v) => setClosedFilter(v as ClosedFilter)}>
-          <SelectTrigger className="h-8 w-[120px] text-xs" data-testid="select-po-closed"><SelectValue /></SelectTrigger>
-          <SelectContent>
-            <SelectItem value="open">Open</SelectItem>
-            <SelectItem value="closed">Closed</SelectItem>
-            <SelectItem value="all">All</SelectItem>
+          <SelectTrigger className="h-8 w-[120px] text-xs" data-testid="select-po-closed"><SelectValue>{CLOSED_LABEL[closedFilter]}</SelectValue></SelectTrigger>
+          <SelectContent className="min-w-[10rem]">
+            {(["open", "closed", "all"] as const).map((k) => (
+              <SelectItem key={k} value={k} className={zeroCls(data?.counts?.closed[k])} data-testid={`option-po-closed-${k}`}>
+                <span className="flex min-w-[6.5rem] items-center">{CLOSED_LABEL[k]}<OptionCount n={data?.counts?.closed[k]} /></span>
+              </SelectItem>
+            ))}
           </SelectContent>
         </Select>
         <Select value={refundsFilter} onValueChange={(v) => setRefundsFilter(v as RefundsFilter)}>
-          <SelectTrigger className="h-8 w-[140px] text-xs" data-testid="select-po-refunds"><SelectValue /></SelectTrigger>
-          <SelectContent>
-            <SelectItem value="any">Refunds: any</SelectItem>
-            <SelectItem value="due">Refunds: due</SelectItem>
-            <SelectItem value="none">Refunds: none</SelectItem>
+          <SelectTrigger className="h-8 w-[140px] text-xs" data-testid="select-po-refunds"><SelectValue>{REFUNDS_LABEL[refundsFilter]}</SelectValue></SelectTrigger>
+          <SelectContent className="min-w-[11rem]">
+            {(["any", "due", "none"] as const).map((k) => (
+              <SelectItem key={k} value={k} className={zeroCls(data?.counts?.refunds[k])} data-testid={`option-po-refunds-${k}`}>
+                <span className="flex min-w-[8.5rem] items-center">{REFUNDS_LABEL[k]}<OptionCount n={data?.counts?.refunds[k]} /></span>
+              </SelectItem>
+            ))}
           </SelectContent>
         </Select>
-        <FacetMultiSelect label="Action Items" options={data?.actionItems ?? []} selected={actionSel} onChange={setActionSel} testId="select-po-action-items" />
-        <FacetMultiSelect label="Supplier" options={data?.suppliers ?? []} selected={supplierSel} onChange={setSupplierSel} testId="select-po-supplier" />
+        <FacetMultiSelect label="Action Items" options={data?.actionItems ?? []} counts={data?.counts?.actionItems} selected={actionSel} onChange={setActionSel} testId="select-po-action-items" />
+        <FacetMultiSelect label="Supplier" options={data?.suppliers ?? []} counts={data?.counts?.suppliers} selected={supplierSel} onChange={setSupplierSel} testId="select-po-supplier" />
         <input type="date" value={from} onChange={(e) => setFrom(e.target.value)}
           className="h-8 rounded-md border border-input bg-background px-2 text-sm" data-testid="input-po-from" />
         <span className="text-xs text-muted-foreground">to</span>
@@ -900,7 +929,7 @@ export function PurchaseOrderDetailPlaceholder() {
 
   if (error) return (
     <div className="px-6 py-8 space-y-3">
-      <button className="text-sm text-primary hover:underline" onClick={() => navigate("/purchase-orders")}>← Back to POs</button>
+      <button className="text-sm text-primary hover:underline" onClick={() => navigate(poListHref())}>← Back to POs</button>
       <p className="text-sm text-destructive">{error}</p>
     </div>
   );
@@ -921,7 +950,7 @@ export function PurchaseOrderDetailPlaceholder() {
 
   return (
     <div className="px-6 py-4 space-y-4">
-      <button className="text-sm text-primary hover:underline" onClick={() => navigate("/purchase-orders")} data-testid="button-back-to-pos">
+      <button className="text-sm text-primary hover:underline" onClick={() => navigate(poListHref())} data-testid="button-back-to-pos">
         ← Back to POs
       </button>
 
@@ -936,7 +965,7 @@ export function PurchaseOrderDetailPlaceholder() {
         </div>
         <div className="flex items-center gap-2">
           <ActionItemChips items={actionItems} reasons={po.review_velocity_reasons} titles={po.action_item_titles} testId="po-detail-action-items" defects={po.defects_open} />
-          <Button variant="outline" size="sm" onClick={() => navigate(`/pos/${po.id}/edit`)} data-testid="button-edit-po"><Pencil className="h-3.5 w-3.5 mr-1" /> Edit PO</Button>
+          <Button variant="outline" size="sm" onClick={() => navigate(`/pos/${po.id}/edit`, { state: { fromPoDetail: true } })} data-testid="button-edit-po"><Pencil className="h-3.5 w-3.5 mr-1" /> Edit PO</Button>
           <PoDangerActions poId={po.id} reloadKey={version} onCanceled={reload} onDeleted={() => navigate("/purchase-orders")} />
         </div>
       </div>

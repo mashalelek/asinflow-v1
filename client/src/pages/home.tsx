@@ -65,6 +65,23 @@ import { getEstimatedProfit } from "@/lib/profit";
 import { isProfitable, isReplens } from "@shared/profitability";
 import { ActiveFiltersModal } from "@/components/active-filters-modal";
 import { Filter, Loader2 } from "lucide-react";
+import { useListScroll, replaceQuery } from "@/lib/list-scroll";
+
+const ASINS_VIEWS: readonly FilterMode[] = ["all", "profitable", "unprofitable", "replens", "buyList", "onHold"];
+/** The ASINs page's URL state (2026-11-06). Exported for tests. */
+export function readAsinsUrl(search: string): { q: string; view: FilterMode; page: number } {
+  const p = new URLSearchParams(search);
+  const v = p.get("view") as FilterMode | null;
+  return { q: p.get("q") ?? "", view: v && ASINS_VIEWS.includes(v) ? v : "all", page: Math.max(1, parseInt(p.get("page") ?? "1", 10) || 1) };
+}
+export function writeAsinsUrl(s: { q: string; view: FilterMode; page: number }): string {
+  const p = new URLSearchParams();
+  if (s.q) p.set("q", s.q);
+  if (s.view !== "all") p.set("view", s.view);
+  if (s.page > 1) p.set("page", String(s.page));
+  const q = p.toString();
+  return q ? `?${q}` : "";
+}
 
 const DATE_PREFS_KEY = "fba-date-prefs";
 const COL_FILTERS_KEY = "fba-col-filters";
@@ -354,7 +371,10 @@ export default function Home() {
   useEffect(() => { savePriceSource(priceSource); }, [priceSource]);
   const [isAnalyzing, setIsAnalyzing] = useState(false);
   const [credentialsConfigured, setCredentialsConfigured] = useState<boolean | null>(null);
-  const [activeFilter, setActiveFilter] = useState<FilterMode>("all");
+  // Search, the scorecard filter and the page live in the URL (?q= &view= &page=, 2026-11-06) so Back to /asins restores
+  // them; column filters, sort and toggles were already kept (localStorage).
+  const [urlAtLoad] = useState(() => readAsinsUrl(window.location.search));
+  const [activeFilter, setActiveFilter] = useState<FilterMode>(urlAtLoad.view);
   const [buySet, setBuySet] = useState<Set<string>>(loadBuyList);
   const [onHoldSet, setOnHoldSet] = useState<Set<string>>(loadOnHoldList);
   const [selectedSet, setSelectedSet] = useState<Set<string>>(new Set());
@@ -367,7 +387,7 @@ export default function Home() {
   const [sortDir, setSortDir] = useState<"asc" | "desc">(() => {
     try { const s = localStorage.getItem("fba-sort"); if (s) { const p = JSON.parse(s); return p.dir; } } catch {} return "desc";
   });
-  const [searchQuery, setSearchQuery] = useState("");
+  const [searchQuery, setSearchQuery] = useState(urlAtLoad.q);
 
   // §21 pre-filter link target: /asins?q=<ASIN> (the bulk page's in_database
   // icon). Seeds the search box from the ?q= param; inert when absent.
@@ -386,7 +406,7 @@ export default function Home() {
   const [showParked, setShowParked] = useState(loadShowParked);
   const [showDead, setShowDead] = useState(loadShowDead);
   const [filtersModalOpen, setFiltersModalOpen] = useState(false);
-  const [page, setPage] = useState(1);
+  const [page, setPage] = useState(urlAtLoad.page);
   const [pageSize, setPageSize] = useState<number>(() => {
     try { const v = localStorage.getItem("fba-page-size"); return v ? parseInt(v) : 100; } catch { return 100; }
   });
@@ -1538,8 +1558,13 @@ export default function Home() {
   const btnSuffix = (count: number, isSelection: boolean) =>
     count <= 0 ? "" : isSelection ? ` (${count})` : ` ${count}`;
 
-  // Reset to page 1 when any filter/view changes
-  useEffect(() => { setPage(1); }, [searchQuery, selectedSearchAsinsKey, showGated, showMeltable, showParked, showDead, colFilters, activeFilter, filterUncalculated]);
+  // Reset to page 1 when any filter/view changes — not on the first render, whose page came from the URL.
+  const pageResetKey = JSON.stringify([searchQuery, selectedSearchAsinsKey, showGated, showMeltable, showParked, showDead, colFilters, activeFilter, filterUncalculated]);
+  const lastPageResetKey = useRef(pageResetKey);
+  useEffect(() => { if (lastPageResetKey.current !== pageResetKey) { lastPageResetKey.current = pageResetKey; setPage(1); } }, [pageResetKey]);
+  const asinsQuery = writeAsinsUrl({ q: searchQuery, view: activeFilter, page });
+  useEffect(() => { replaceQuery("/asins", asinsQuery); }, [asinsQuery]);
+  useListScroll("asins", listLoad.state === "ready", '[data-list-scroll="results-table"]');
 
   const handleBulkSyncCogs = useCallback(async () => {
     const targetAsins = selectedSet.size > 0

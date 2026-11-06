@@ -35,7 +35,9 @@ export default function PoEditPage() {
       .catch((e) => { if (!cancelled) setError(e.message); });
     return () => { cancelled = true; };
   }, [id]);
-  const back = () => navigate(`/purchase-orders/${id}`);
+  // Opened from the PO's detail page: back is a history step, so Back from the detail page then reaches the POs list
+  // (with its filters, lib/po-list-url.ts) instead of this page again. Opened directly: the detail page.
+  const back = () => { if ((window.history.state as { fromPoDetail?: boolean } | null)?.fromPoDetail) window.history.back(); else navigate(`/purchase-orders/${id}`); };
   if (error) return <div className="px-6 py-8 text-sm text-destructive" data-testid="po-edit-error">{error}</div>;
   if (!load) return <div className="px-6 py-8 text-sm text-muted-foreground" data-testid="po-edit-loading">Loading the PO…</div>;
   const edit: EditPoContext = {
