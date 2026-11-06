@@ -16,6 +16,7 @@ import { defectsLinkedTo, syncRefundResolution } from "./po-defects";
 const oneOf = (list: readonly string[], nullable = false) => (v: unknown): Parsed => (v == null || v === "" ? (nullable ? { ok: true, value: null } : { ok: false, error: "is required" }) : (list as readonly string[]).includes(String(v)) ? { ok: true, value: String(v) } : { ok: false, error: `must be one of ${list.join(", ")}` });
 const last4 = (v: unknown): Parsed => (v == null || v === "" ? { ok: true, value: null } : /^\d{4}$/.test(String(v).trim()) ? { ok: true, value: String(v).trim() } : { ok: false, error: "must be four digits" });
 const bool = (v: unknown): Parsed => (typeof v === "boolean" ? { ok: true, value: v } : v === "true" || v === "false" ? { ok: true, value: v === "true" } : { ok: false, error: "must be true or false" });
+const boolOrNull = (v: unknown): Parsed => (v == null || v === "" ? { ok: true, value: null } : bool(v));
 const dateOrNull = (v: unknown): Parsed => (v == null || v === "" ? { ok: true, value: null } : isoDate(v));
 
 export const PAYMENT_FIELDS = { method: oneOf(PAYMENT_METHODS), nickname: textOrNull, last4, amount: money({ nullable: true }), gift_card_discount_pct: pctOrNull, reward_pct: pctOrNull, needs_review: bool } as const;
@@ -40,7 +41,7 @@ export async function syncWeightedPaymentPct(query: QueryLike, poId: string, use
   const r = await recomputePoCosts(query, poId, userId);
   return { old, new: next, recomputed: { changed: r.changed, skipped: r.skipped } };
 }
-export const PROMO_FIELDS = { type: oneOf(PROMO_TYPES, true), description: textOrNull, amount: money({ nullable: true }), percent: pctOrNull, counts_toward_cogs: bool } as const;
+export const PROMO_FIELDS = { type: oneOf(PROMO_TYPES, true), description: textOrNull, amount: money({ nullable: true }), percent: pctOrNull, counts_toward_cogs: bool, in_line_prices: boolOrNull } as const;
 // status (migration 082, Dashboard patch C1): due = the supplier owes it (refunded_at / method NULL until received); received = the money arrived. Default received (every pre-patch row is).
 export const REFUND_FIELDS = { po_line_item_id: textOrNull, qty: decQty({ nullable: true }), amount: money({ nullable: true }), refunded_at: dateOrNull, method: oneOf(PAYMENT_METHODS, true), nickname: textOrNull, last4, note: textOrNull, needs_split: bool, status: oneOf(REFUND_STATUSES) } as const;
 
@@ -110,7 +111,7 @@ export async function editMoneyRow(query: QueryLike, table: Table, id: number, b
   await logEdits(query, poId, userId, "po", poId, changes.map(([k, v]) => ({ field: `${label[table]} ${k}`, old: canon(row[k]), new: canon(v) })));
   // A linked supplier defect follows its refunds (SPEC §22 "Supplier defects"): marked received / amount changed → resolve or reopen.
   if (table === "po_line_refunds") await syncRefundResolution(query, await defectsLinkedTo(query, [id]), userId);
-  if (table === "po_promos" && changes.some(([k]) => ["counts_toward_cogs", "amount", "type"].includes(k))) { const r = await recomputePoCosts(query, poId, userId); out.recomputed = { changed: r.changed, skipped: r.skipped }; }
+  if (table === "po_promos" && changes.some(([k]) => ["counts_toward_cogs", "amount", "type", "in_line_prices"].includes(k))) { const r = await recomputePoCosts(query, poId, userId); out.recomputed = { changed: r.changed, skipped: r.skipped }; }
   if (table === "po_payments" && opts.weightSync !== false && changes.some(([k]) => WEIGHT_FIELDS.includes(k))) { const w = await syncWeightedPaymentPct(query, poId, userId); if (w.recomputed) out.recomputed = w.recomputed; }
   return out;
 }

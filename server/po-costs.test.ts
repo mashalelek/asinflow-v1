@@ -59,6 +59,18 @@ describe("recomputePoCosts", () => {
     const rp = await recomputePoCosts(pre.q, "p1", 1, { dryRun: true });
     expect(rp.plan!.filter((c) => c.field === "cost_per_unit").map((c) => c.new)).toEqual(["4.45"]); // a1 stays 6.37
   });
+  it("ambiguous promos (2026-11-06): unanswered → not subtracted and flagged; po_promos.in_line_prices decides once answered", async () => {
+    const amb = { id: "p1", subtotal: "100.00", discount: "18.00", tax: "0.00", sh_donations: "0.00", order_total: "82.00", weighted_gc_discount_pct: null, cost_formula_version: 3 };
+    const rows = [{ id: "a1", asin: "B0TEST0005", qty: "1.00", cost_per_unit: "0.00", sourcing_cost: "0.00", paid_cost: "0.00", cogs_adjustment: null }];
+    const ls = { a1: [{ id: "l1", price: "91.000000", qty_ordered: "1.00", line_total: "91.00", adjusted_product_cost: null }] };
+    const run = async (answers: Array<boolean | null>) => {
+      const f = fake(amb, answers.map((a) => ({ amount: "9.00", counts_toward_cogs: true, in_line_prices: a })), rows, ls);
+      const r = await recomputePoCosts(f.q, "p1", 1, { dryRun: true });
+      return { flag: !!r.ambiguousPromos, cogs: r.plan!.find((c) => c.field === "cost_per_unit")?.new };
+    };
+    expect(await run([null, null])).toEqual({ flag: true, cogs: "91" });
+    expect(await run([true, false])).toEqual({ flag: false, cogs: "82" });
+  });
   it("a sheet-imported PO (cost_formula_version NULL) is never recomputed", async () => {
     const f = fake({ ...po, cost_formula_version: null }, [], asins, lines);
     expect(await recomputePoCosts(f.q, "p1", 1)).toEqual({ poId: "p1", skipped: "imported", asinRows: 0, changed: 0 });

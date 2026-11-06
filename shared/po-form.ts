@@ -39,6 +39,8 @@ export type PromoType = (typeof PROMO_TYPES)[number];
 export const promoCountsByDefault = (type: string, discountReflected = false): boolean => !discountReflected && type !== "rewards";
 /** The note beside a promo's COGS toggle when the line prices already carry the discount. */
 export const PROMO_REFLECTED_NOTE = "already reflected in line prices";
+/** The ambiguity question (Maria 2026-11-06): it blocks Create PO / Save until answered — on Edit PO too, even when the stored PO already had it. */
+export const PROMO_IN_PRICES_QUESTION = "Which promos are already in the prices?";
 
 /**
  * Payment-method aliases (settings.po_payment_method_aliases, Maria 2026-11-01): "OnePay Cash" = "Walmart card" —
@@ -97,6 +99,8 @@ export interface PoFormPromo {
   amount: string;   // $ off the order, when stated
   percent: string;  // % off, when stated
   counts_toward_cogs: boolean;
+  /** po_promos.in_line_prices (2026-11-06): Maria's answer to "already in the prices?" — null / absent = AF decides from the amounts. */
+  in_line_prices?: boolean | null;
 }
 export interface PoFormAdjustment { amount: string; reason: string }
 export const PAYMENT_METHODS = ["card", "gift_card", "store_credit", "paypal", "other"] as const;
@@ -329,6 +333,8 @@ export interface PoFormCheck {
   discountReflected: boolean;
   /** Per promo (2026-11-05): its amount is already in the line totals (reflectedPromos) — it reduces no cost, its toggle is moot. */
   promoReflected: boolean[];
+  /** Promos waiting for "already in the prices?" (2026-11-06) — the form shows the question on each; the PO does not save until answered. */
+  promoNeedsAnswer: number[];
   /** Weighted payment discount % (weightedPaymentPct) from the Payments block; null when no gift-card / card payment carries an amount and its %. */
   weightedGcPct: number | null;
   asins: PoFormAsin[];
@@ -416,9 +422,10 @@ export function checkPoForm(f: PoFormState): PoFormCheck {
   const postDiscountSubtotal = r2(effectiveOrderTotal - n("tax") - n("sh_donations"));
   // Per promo (2026-11-05): the promos whose amounts close the gap subtotal − Σ line totals are already in the prices.
   const promoAmt = promoList.map((p) => { const a = moneyNum(p.amount ?? ""); return a == null || Number.isNaN(a) ? null : a; });
-  const refl = reflectedPromos({ linesSum: computedSubtotal, subtotal: hasTypedSubtotal ? typedSubtotal! : null, discount: n("discount"), promoAmounts: promoAmt, postDiscountSubtotal });
+  const refl = reflectedPromos({ linesSum: computedSubtotal, subtotal: hasTypedSubtotal ? typedSubtotal! : null, discount: n("discount"), promoAmounts: promoAmt, postDiscountSubtotal, answers: promoList.map((p) => p.in_line_prices ?? null) });
   const discountReflected = refl.all;
-  if (refl.ambiguous) warnings.push(`Which promos are already in the prices? Line totals ${computedSubtotal.toFixed(2)} are ${r2(subtotal - computedSubtotal).toFixed(2)} under the subtotal, and ${refl.fits.map((f) => f.map((i) => `promo ${i + 1}`).join(" + ")).join(" or ")} each fit — every promo is applied until the amounts make it clear`);
+  // Ambiguous (2026-11-06): the candidates are not subtracted (COGS errs high) and the PO does not save until Maria answers.
+  if (refl.needsAnswer.length) errors.push(`${PROMO_IN_PRICES_QUESTION} Line totals ${computedSubtotal.toFixed(2)} are ${r2(subtotal - computedSubtotal).toFixed(2)} under the subtotal, and ${refl.fits.map((f) => f.map((i) => `promo ${i + 1}`).join(" + ")).join(" or ")} each fit — answer "In prices?" on ${refl.needsAnswer.map((i) => `promo ${i + 1}`).join(", ")}`);
   if (hasTypedSubtotal && !discountReflected && !(refl.reflectedAmount > 0) && Math.abs(typedSubtotal! - computedSubtotal) > REFLECTED_TOLERANCE + 1e-9) {
     const d = n("discount") + promoAmounts;
     warnings.push(d > 0
@@ -500,5 +507,5 @@ export function checkPoForm(f: PoFormState): PoFormCheck {
     });
   }
   const ok = errors.length === 0 && Object.keys(productErrors).length === 0;
-  return { ok, errors, warnings, productErrors, computedSubtotal, effectiveOrderTotal: r2(effectiveOrderTotal), nonCountingPromoAmount, discountReflected, promoReflected: refl.reflected, weightedGcPct, asins };
+  return { ok, errors, warnings, productErrors, computedSubtotal, effectiveOrderTotal: r2(effectiveOrderTotal), nonCountingPromoAmount, discountReflected, promoReflected: refl.reflected, promoNeedsAnswer: refl.needsAnswer, weightedGcPct, asins };
 }

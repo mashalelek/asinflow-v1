@@ -17,7 +17,7 @@
 // No stored COGS / Sourcing / Paid value is recomputed here (CLAUDE.md,
 // Maria 2026-10-31): a cost is written only when its field was changed; a
 // v2 PO's costs follow the server's recomputePoCosts as with every edit.
-import { checkPoForm, emptyPoForm, productRatio, productLineMoney, priceText, yieldFromPacks, SOLD_AS_OPTIONS, type PoFormState, type PoFormProduct, type PoFormPromo, type PoFormPayment, type PoFormCheck, type SoldAs } from "./po-form";
+import { checkPoForm, emptyPoForm, productRatio, productLineMoney, priceText, yieldFromPacks, SOLD_AS_OPTIONS, PROMO_IN_PRICES_QUESTION, type PoFormState, type PoFormProduct, type PoFormPromo, type PoFormPayment, type PoFormCheck, type SoldAs } from "./po-form";
 import { ratioYield } from "./yield";
 
 type Row = Record<string, any>;
@@ -78,7 +78,7 @@ export function poToForm(d: StoredPo): PoFormState {
     email_used: str(po.email_used), alt_order_ids: str(po.alt_order_ids), purchased_by_user_id: po.purchased_by_user_id == null ? "" : String(po.purchased_by_user_id), cashback_status: str(po.cashback_status),
     subscription: { present: po.subscription === true, frequency_weeks: "" },
     products, cost_overrides: {}, cogs_adjustments: {}, pack_updates: {},
-    promos: d.promos.map((p): PoFormPromo => ({ id: Number(p.id), type: (["sale", "coupon", "rewards"].includes(String(p.type)) ? p.type : "") as PoFormPromo["type"], description: str(p.description), amount: moneyText(p.amount), percent: numText(p.percent), counts_toward_cogs: p.counts_toward_cogs !== false })),
+    promos: d.promos.map((p): PoFormPromo => ({ id: Number(p.id), type: (["sale", "coupon", "rewards"].includes(String(p.type)) ? p.type : "") as PoFormPromo["type"], description: str(p.description), amount: moneyText(p.amount), percent: numText(p.percent), counts_toward_cogs: p.counts_toward_cogs !== false, in_line_prices: typeof p.in_line_prices === "boolean" ? p.in_line_prices : null })),
     payments: d.payments.map((p): PoFormPayment => ({ id: Number(p.id), method: str(p.method) as PoFormPayment["method"], nickname: str(p.nickname), last4: str(p.last4), amount: moneyText(p.amount), gift_card_discount_pct: numText(p.gift_card_discount_pct), reward_pct: numText(p.reward_pct) })),
   };
   for (const a of d.asins) {
@@ -106,8 +106,9 @@ export function storedAsinCosts(d: StoredPo): Record<string, { sourcing_cost: st
 
 const rowLabel = (p: PoFormProduct | undefined, i: number) => (p?.asin || p?.product_name || `row ${i + 1}`);
 /** The check's errors the stored PO does not already carry (by message; a product's by its line id). Pure. */
-export function editBlockingErrors(stored: PoFormState, next: PoFormState, sc: PoFormCheck = checkPoForm(stored), nc: PoFormCheck = checkPoForm(next)): { errors: string[]; productErrors: Record<number, string[]> } {
-  const errors = nc.errors.filter((e) => !sc.errors.includes(e));
+export function editBlockingErrors(stored: PoFormState, next: PoFormState, sc: PoFormCheck = checkPoForm(stored), nc: PoFormCheck = checkPoForm(next), opts: { imported?: boolean } = {}): { errors: string[]; productErrors: Record<number, string[]> } {
+  // "Which promos are already in the prices?" always blocks (2026-11-06) — except on a sheet-imported PO, whose costs are never recomputed.
+  const errors = nc.errors.filter((e) => (e.startsWith(PROMO_IN_PRICES_QUESTION) ? !opts.imported : !sc.errors.includes(e)));
   const idx = new Map(stored.products.map((p, i) => [p.line_item_id, i] as const));
   const productErrors: Record<number, string[]> = {};
   for (const [k, msgs] of Object.entries(nc.productErrors)) {
@@ -160,7 +161,7 @@ const RATIO_INPUTS = ["qty_ordered", "retailer_units_per_pack", "units_per_pack"
 /** Stored form vs edited form → the editor calls. `imported`: the PO's costs are the sheet's (a cleared COGS goes blank, never to the formula). */
 export function planPoEdit(stored: PoFormState, next: PoFormState, opts: { imported: boolean }): PoEditPlan {
   const sc = checkPoForm(stored), nc = checkPoForm(next);
-  const plan: PoEditPlan = { errors: editBlockingErrors(stored, next, sc, nc).errors, header: {}, lineEdits: [], lineAdds: [], lineRemoves: [], asinEdits: [], promoAdds: [], promoEdits: [], promoRemoves: [], paymentAdds: [], paymentEdits: [], paymentRemoves: [], packUpdates: [], empty: true };
+  const plan: PoEditPlan = { errors: editBlockingErrors(stored, next, sc, nc, opts).errors, header: {}, lineEdits: [], lineAdds: [], lineRemoves: [], asinEdits: [], promoAdds: [], promoEdits: [], promoRemoves: [], paymentAdds: [], paymentEdits: [], paymentRemoves: [], packUpdates: [], empty: true };
 
   const hs = headerValues(stored, sc), hn = headerValues(next, nc);
   for (const k of EDIT_HEADER_KEYS) if (canonField(k, hs[k]) !== canonField(k, hn[k])) plan.header[k] = hn[k];
@@ -226,7 +227,7 @@ export function planPoEdit(stored: PoFormState, next: PoFormState, opts: { impor
     }
     for (const id of Array.from(byId.keys())) if (!kept.has(id)) removes.push(id);
   };
-  moneyRows(stored.promos ?? [], next.promos ?? [], ["type", "description", "amount", "percent", "counts_toward_cogs"], plan.promoAdds, plan.promoEdits, plan.promoRemoves);
+  moneyRows(stored.promos ?? [], next.promos ?? [], ["type", "description", "amount", "percent", "counts_toward_cogs", "in_line_prices"], plan.promoAdds, plan.promoEdits, plan.promoRemoves);
   moneyRows(stored.payments ?? [], next.payments ?? [], ["method", "nickname", "last4", "amount", "gift_card_discount_pct", "reward_pct"], plan.paymentAdds, plan.paymentEdits, plan.paymentRemoves);
 
   plan.empty = Object.keys(plan.header).length + plan.lineEdits.length + plan.lineAdds.length + plan.lineRemoves.length + plan.asinEdits.length

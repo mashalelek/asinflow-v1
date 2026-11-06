@@ -6169,8 +6169,15 @@ every save and every recompute; a recompute stamps version 3.
   COGS toggle is moot (the note shows on that promo only); the rest are
   applied over Σ line totals as usual — a rewards / voucher promo by line
   total after the line-level discounts, then the GC / card %. Several
-  subsets fit → the form warns "Which promos are already in the prices?"
-  and treats none as reflected. A promo without an amount, when it is the
+  subsets fit (Maria 2026-11-06) → none of the promos in any of them is
+  subtracted (COGS errs high, never low; the row says "not subtracted
+  until answered") and Create PO / Save is **blocked** by "Which promos
+  are already in the prices?" until each has an answer in its "In
+  prices?" select (yes / no → `po_promos.in_line_prices`, migration 096;
+  an answer always wins, also over an unambiguous result; blank = AF
+  decides). On Edit PO the question blocks even when the stored PO
+  already had it — except on a sheet-imported PO, whose costs are never
+  recomputed. The recompute reads the answers too. A promo without an amount, when it is the
   only one, takes the header discount − the others (also in the
   prefill, with an amber hint), so it no longer "counts until an amount
   is entered". `reflectedPromos` / `promoCostHeader` in

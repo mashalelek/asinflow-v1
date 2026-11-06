@@ -93,8 +93,8 @@ export async function createPoFromForm(query: QueryLike, form0: PoFormState, use
   for (let i = 0; i < promos.length; i++) {
     const p = promos[i];
     await query(
-      `INSERT INTO po_promos (po_id, position, type, description, amount, percent, counts_toward_cogs, raw_text, source) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, 'manual')`,
-      [poId, i, p.type || null, txt(p.description), moneyOrNull(p.amount), pct(p.percent), p.counts_toward_cogs !== false, txt(p.description)],
+      `INSERT INTO po_promos (po_id, position, type, description, amount, percent, counts_toward_cogs, raw_text, source, in_line_prices) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, 'manual', $9)`,
+      [poId, i, p.type || null, txt(p.description), moneyOrNull(p.amount), pct(p.percent), p.counts_toward_cogs !== false, txt(p.description), typeof p.in_line_prices === "boolean" ? p.in_line_prices : null],
     );
   }
   const payments = Array.isArray(form.payments) ? form.payments : [];

@@ -25,7 +25,7 @@ describe("poToForm — the stored PO as the form", () => {
     expect(f).toMatchObject({ supplier: "walmart.com", order_id: "200015336732726", order_date: "2026-10-28", subtotal: "40.00", order_total: "42.40", cashback_pct: "5", purchased_by_user_id: "1", ships_to: "velocity" });
     expect(f.products.map((p) => [p.line_item_id, p.asin, p.retailer_units_per_pack, p.asin_qty_per_product, !!p.yield_manual])).toEqual([["l1", "B0TEST0001", "12", "6", false], ["l2", "B0TEST0002", "1", "0.33", true]]);
     expect(f.products[1]).toMatchObject({ price: "", notes: "dented", sold_as: "individual", units_per_pack: "1" });
-    expect(f.promos).toEqual([{ id: 21, type: "rewards", description: "Walmart cash", amount: "2.00", percent: "", counts_toward_cogs: false }]);
+    expect(f.promos).toEqual([{ id: 21, type: "rewards", description: "Walmart cash", amount: "2.00", percent: "", counts_toward_cogs: false, in_line_prices: null }]);
     expect(f.payments).toEqual([{ id: 11, method: "card", nickname: "Amex Gold", last4: "1005", amount: "42.40", gift_card_discount_pct: "", reward_pct: "" }]);
     expect(f.cogs_adjustments).toEqual({ B0TEST0002: { amount: "0.50", reason: "labels" } });
   });
@@ -65,7 +65,7 @@ describe("planPoEdit — the edited form → the editor calls", () => {
     expect(plan.lineEdits).toEqual([{ id: "l1", body: { price: "9.50" } }]);
     expect(plan.asinEdits).toEqual([]);
     expect(plan.paymentRemoves).toEqual([11]);
-    expect(plan.promoAdds).toEqual([{ type: "coupon", description: "SAVE5", amount: "5", percent: "", counts_toward_cogs: true }]);
+    expect(plan.promoAdds).toEqual([{ type: "coupon", description: "SAVE5", amount: "5", percent: "", counts_toward_cogs: true, in_line_prices: "" }]);
     expect(plan.promoEdits).toEqual([]);
   });
   it("a pack change re-sends each of the ASIN's lines' two integers and the row's units / pack; Update ASIN in AF is planned", () => {
@@ -114,6 +114,20 @@ describe("editBlockingErrors — only a problem the stored PO does not already h
     expect(editBlockingErrors(s, n).errors).toEqual([expect.stringMatching(/^B0TEST0001: price must be an amount ≥ 0/)]);
     n.order_id = "";
     expect(editBlockingErrors(s, n).errors[0]).toBe("Order # is required");
+  });
+  it("\"Which promos are already in the prices?\" blocks Save even when the stored PO already had it; the answers are saved per promo (Maria 2026-11-06)", () => {
+    // Lines 20.00 vs subtotal 40.00: two $20 promos, either could be the one in the prices.
+    const amb = stored({ discount: "40.00", order_total: "2.40" });
+    amb.promos = [{ id: 21, type: "sale", description: "A", amount: "20.00", percent: null, counts_toward_cogs: true, in_line_prices: null }, { id: 22, type: "coupon", description: "B", amount: "20.00", percent: null, counts_toward_cogs: true, in_line_prices: null }];
+    const s = poToForm(amb), n = clone(s);
+    expect(s.promos!.map((p) => p.in_line_prices)).toEqual([null, null]);
+    n.notes = "x";
+    expect(editBlockingErrors(s, n).errors).toEqual([expect.stringMatching(/^Which promos are already in the prices\?/)]);
+    n.promos![0].in_line_prices = true; n.promos![1].in_line_prices = false;
+    expect(editBlockingErrors(s, n).errors).toEqual([]);
+    expect(planPoEdit(s, n, { imported: false }).promoEdits).toEqual([{ id: 21, body: { in_line_prices: true } }, { id: 22, body: { in_line_prices: false } }]);
+    const back = clone(n); back.promos![0].in_line_prices = null;
+    expect(planPoEdit(n, back, { imported: false }).promoEdits).toEqual([{ id: 21, body: { in_line_prices: "" } }]);
   });
   it("canonField: money and percentages compare as numbers, text as trimmed text", () => {
     expect(canonField("subtotal", "$1,234.50")).toBe("1234.5");

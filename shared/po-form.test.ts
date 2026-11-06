@@ -102,11 +102,22 @@ describe("checkPoForm", () => {
     expect(c.promoReflected).toEqual([false, false]);
     // ratio (188.60 − 28) ÷ 188.60 × (1 − 12.795 %): yarn 128.70 ÷ 15 → 6.37 · paint 59.90 ÷ 10 → 4.45
     expect(c.asins.map((a) => a.cost_per_unit)).toEqual(["6.37", "4.45"]);
-    // Two $9 promos and a $9 gap: either could be the one in the prices — flagged, none treated as reflected.
-    const amb = checkPoForm(base({ subtotal: "100", discount: "18", order_total: "82", products: [{ ...emptyProduct(), price: "91", qty_ordered: "1", asin: "B0TEST0005" }], promos: [
-      { type: "sale", description: "A", amount: "9", percent: "", counts_toward_cogs: true }, { type: "coupon", description: "B", amount: "9", percent: "", counts_toward_cogs: true }] }));
-    expect(amb.promoReflected).toEqual([false, false]);
-    expect(amb.warnings.join()).toMatch(/Which promos are already in the prices\? .*promo 1 or promo 2/);
+    // Two $9 promos and a $9 gap (Maria 2026-11-06): neither is subtracted (COGS errs high: 91.00, not 82.00) and the PO does
+    // not save until she answers "In prices?" on each; her answers then decide.
+    const ambForm = base({ subtotal: "100", discount: "18", order_total: "82", products: [{ ...emptyProduct(), price: "91", qty_ordered: "1", asin: "B0TEST0005" }], promos: [
+      { type: "sale", description: "A", amount: "9", percent: "", counts_toward_cogs: true }, { type: "coupon", description: "B", amount: "9", percent: "", counts_toward_cogs: true }] });
+    const amb = checkPoForm(ambForm);
+    expect(amb.promoReflected).toEqual([true, true]);
+    expect(amb.promoNeedsAnswer).toEqual([0, 1]);
+    expect(amb.asins[0].cost_per_unit).toBe("91.00");
+    expect(amb.ok).toBe(false);
+    expect(amb.errors.join()).toMatch(/^Which promos are already in the prices\? .*promo 1 or promo 2 each fit — answer "In prices\?" on promo 1, promo 2/);
+    const half = checkPoForm({ ...ambForm, promos: [{ ...ambForm.promos![0], in_line_prices: true }, ambForm.promos![1]] });
+    expect(half.ok).toBe(false);
+    expect(half.promoNeedsAnswer).toEqual([1]);
+    const answered = checkPoForm({ ...ambForm, promos: [{ ...ambForm.promos![0], in_line_prices: true }, { ...ambForm.promos![1], in_line_prices: false }] });
+    expect(answered.ok).toBe(true);
+    expect(answered.asins[0].cost_per_unit).toBe("82.00"); // 91 − the $9 not in the prices
   });
   it("the weighted GC % goes into the math unrounded (12.795 %), shown at 2 dp", () => {
     const pays = michaels().payments!;

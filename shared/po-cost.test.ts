@@ -82,7 +82,13 @@ describe("reflectedPromos", () => {
     expect(reflectedPromos({ ...mich, promoAmounts: [null, 10] })).toMatchObject({ reflected: [true, false], amounts: [18, 10] });
     expect(reflectedPromos({ ...mich, linesSum: 188.6, promoAmounts: [18, 10] })).toMatchObject({ reflected: [false, false], reflectedAmount: 0 });
     expect(reflectedPromos({ ...mich, linesSum: 160.6, promoAmounts: [18, 10] })).toMatchObject({ all: true, reflectedAmount: 28 });
-    expect(reflectedPromos({ linesSum: 91, subtotal: 100, discount: 18, postDiscountSubtotal: 82, promoAmounts: [9, 9] })).toMatchObject({ ambiguous: true, reflected: [false, false], fits: [[0], [1]] });
+    // Ambiguous (2026-11-06): no candidate is subtracted (COGS errs high) and each needs Maria's answer; her answer wins.
+    const amb = { linesSum: 91, subtotal: 100, discount: 18, postDiscountSubtotal: 82, promoAmounts: [9, 9] };
+    expect(reflectedPromos(amb)).toMatchObject({ ambiguous: true, reflected: [true, true], reflectedAmount: 18, fits: [[0], [1]], needsAnswer: [0, 1] });
+    expect(reflectedPromos({ ...amb, answers: [true, null] })).toMatchObject({ reflected: [true, true], needsAnswer: [1] });
+    expect(reflectedPromos({ ...amb, answers: [true, false] })).toMatchObject({ reflected: [true, false], reflectedAmount: 9, needsAnswer: [] });
+    // An answer also overrides an unambiguous result.
+    expect(reflectedPromos({ ...mich, promoAmounts: [18, 10], answers: [false, null] })).toMatchObject({ reflected: [false, false], reflectedAmount: 0 });
   });
   it("promoCostHeader: reflected promos leave the discount and are never added back; the base is Σ line totals", () => {
     const h = { subtotal: 188.6, discount: 28, gcPct: 12.795 };

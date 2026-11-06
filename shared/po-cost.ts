@@ -102,7 +102,9 @@ export function effectiveCostHeader(h: CostHeader, reflected: boolean): CostHead
  * already in the line totals:
  *   - all of them when Σ line totals = the post-discount subtotal within 1¢ (discountReflectedInLines, unchanged);
  *   - else the ONE subset of promos whose amounts close the gap subtotal − Σ line totals within 1¢ — those reduce nothing,
- *     the rest are applied as usual. Several subsets fit → `ambiguous` and none is treated as reflected (never a guess).
+ *     the rest are applied as usual. Several subsets fit → `ambiguous`: every promo in any of them is NOT subtracted
+ *     (COGS errs high, never low — Maria 2026-11-06) and needs her answer (`needsAnswer`; the form blocks Create PO / Save).
+ *   - `answers[i]` (po_promos.in_line_prices) is that answer and always wins: true = in the prices, false = subtract it.
  * A promo without an amount, when it is the only one and the header discount exceeds the others, is taken at the
  * difference (`implied`). Pure.
  */
@@ -119,15 +121,25 @@ export interface PromoReflection {
   ambiguous: boolean;
   /** The subsets that fit, as promo indexes (for the ambiguity flag). */
   fits: number[][];
+  /** Promos Maria must answer "already in the prices?" for before the PO saves (ambiguous, no answer yet). */
+  needsAnswer: number[];
 }
 const MAX_SUBSET_PROMOS = 12;
-export function reflectedPromos(a: { linesSum: number; subtotal: number | null; discount: number; promoAmounts: ReadonlyArray<number | null>; postDiscountSubtotal: number | null }): PromoReflection {
+export function reflectedPromos(a: { linesSum: number; subtotal: number | null; discount: number; promoAmounts: ReadonlyArray<number | null>; postDiscountSubtotal: number | null; answers?: ReadonlyArray<boolean | null | undefined> }): PromoReflection {
+  const auto = autoReflected(a);
+  const ans = a.answers ?? [];
+  if (!ans.some((x) => x != null)) return auto;
+  if (auto.all && ans.every((x) => x == null || x === true)) return auto;
+  const reflected = auto.reflected.map((r, i) => (ans[i] != null ? !!ans[i] : r));
+  return { ...auto, all: false, reflected, reflectedAmount: r2(reflected.reduce((t, x, i) => t + (x ? auto.amounts[i] ?? 0 : 0), 0)), needsAnswer: auto.needsAnswer.filter((i) => ans[i] == null) };
+}
+function autoReflected(a: { linesSum: number; subtotal: number | null; discount: number; promoAmounts: ReadonlyArray<number | null>; postDiscountSubtotal: number | null }): PromoReflection {
   const n = a.promoAmounts.length, discount = a.discount || 0;
   const amounts = a.promoAmounts.map((x) => (x != null && Number.isFinite(x) ? x : null));
   const missing = amounts.map((x, i) => (x == null ? i : -1)).filter((i) => i >= 0);
   const known = amounts.reduce<number>((t, x) => t + (x ?? 0), 0);
   if (missing.length === 1 && discount - known > REFLECTED_TOLERANCE) amounts[missing[0]] = r2(discount - known);
-  const none: PromoReflection = { all: false, reflected: amounts.map(() => false), reflectedAmount: 0, amounts, ambiguous: false, fits: [] };
+  const none: PromoReflection = { all: false, reflected: amounts.map(() => false), reflectedAmount: 0, amounts, ambiguous: false, fits: [], needsAnswer: [] };
   if (discountReflectedInLines({ linesSum: a.linesSum, discount, promoAmounts: discount > 0 ? 0 : known, postDiscountSubtotal: a.postDiscountSubtotal })) {
     return { ...none, all: true, reflected: amounts.map(() => true), reflectedAmount: discount > 0 ? discount : known };
   }
@@ -140,7 +152,13 @@ export function reflectedPromos(a: { linesSum: number; subtotal: number | null; 
     for (let i = 0; i < n; i++) if (mask & (1 << i)) { const x = amounts[i]; if (!(x != null && x > 0)) { ok = false; break; } sum += x; idx.push(i); }
     if (ok && Math.abs(sum - gap) <= REFLECTED_TOLERANCE + 1e-9) fits.push(idx);
   }
-  if (fits.length !== 1) return { ...none, ambiguous: fits.length > 1, fits };
+  if (fits.length === 0) return none;
+  if (fits.length > 1) {
+    // Ambiguous: none of the candidates is subtracted (COGS errs high) until Maria answers.
+    const cand = Array.from(new Set(fits.flat())).sort((x, y) => x - y);
+    const reflected = amounts.map((_, i) => cand.includes(i));
+    return { ...none, reflected, reflectedAmount: r2(cand.reduce((t, i) => t + (amounts[i] ?? 0), 0)), ambiguous: true, fits, needsAnswer: cand };
+  }
   const reflected = amounts.map((_, i) => fits[0].includes(i));
   return { ...none, reflected, reflectedAmount: r2(fits[0].reduce((t, i) => t + (amounts[i] ?? 0), 0)), fits };
 }

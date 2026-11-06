@@ -54,7 +54,7 @@ describe("createPoFromForm", () => {
     const { q, calls } = fake();
     await createPoFromForm(q, { ...form(), cost_overrides: { B0TEST0001: "4.00" }, promos: [{ type: "rewards", description: "Rewards $5", amount: "5", percent: "", counts_toward_cogs: false }] }, 7, new Date(2026, 9, 18));
     const promo = calls.find((c) => /INSERT INTO po_promos/.test(c.sql))!;
-    expect(promo.params).toEqual(["id1", 0, "rewards", "Rewards $5", "5", null, false, "Rewards $5"]);
+    expect(promo.params).toEqual(["id1", 0, "rewards", "Rewards $5", "5", null, false, "Rewards $5", null]); // in_line_prices: AF decides (migration 096)
     const typed = calls.find((c) => /INSERT INTO po_edit_log/.test(c.sql) && c.params[4] === "cost_per_unit")!;
     expect(typed.params).toEqual(["id1", 7, "asin", "id3", "cost_per_unit", "5.44", "4.00"]); // computed 5.44: a $5 rewards promo with no order discount is never added back above the price paid (clamped 2026-11-01; it used to read 5.80)
   });

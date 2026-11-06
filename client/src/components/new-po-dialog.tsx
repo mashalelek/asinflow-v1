@@ -256,7 +256,7 @@ export function NewPoForm({ open, onOpenChange, onCreated, prefill, initialSuppl
   const check = useMemo(() => checkPoForm(form), [form]);
   // Edit PO: only a problem the stored PO does not already have blocks Save (an imported PO with a NULL price still saves a change elsewhere).
   const baseCheck = useMemo(() => (edit ? checkPoForm(edit.form) : null), [edit]);
-  const blocking = useMemo(() => (edit && baseCheck ? editBlockingErrors(edit.form, form, baseCheck, check) : null), [edit, baseCheck, form, check]);
+  const blocking = useMemo(() => (edit && baseCheck ? editBlockingErrors(edit.form, form, baseCheck, check, { imported: edit.imported }) : null), [edit, baseCheck, form, check]);
   const formErrors = baseCheck ? check.errors.filter((e) => !baseCheck.errors.includes(e)) : check.errors;
   const preexisting = baseCheck ? check.errors.filter((e) => baseCheck.errors.includes(e)) : [];
   const rowErrors = blocking ? blocking.productErrors : check.productErrors;
@@ -343,7 +343,7 @@ export function NewPoForm({ open, onOpenChange, onCreated, prefill, initialSuppl
   };
   const answerPack = (updateAf: boolean) => { if (packAsk) setForm((f) => ({ ...f, pack_updates: { ...(f.pack_updates ?? {}), [packAsk.asin]: updateAf } })); setPackAsk(null); };
 
-  const setPromo = (i: number, patch: Partial<PoFormPromo>) => setForm((f0) => { const f = clearMark(f0, `promos.${i}`); return { ...f, promos: (f.promos ?? []).map((p, j) => (j === i ? { ...p, ...patch, ...(patch.type !== undefined && patch.type !== p.type ? { counts_toward_cogs: promoCountsByDefault(String(patch.type), check.promoReflected[i] ?? check.discountReflected) } : {}) } : p)) }; });
+  const setPromo = (i: number, patch: Partial<PoFormPromo>) => setForm((f0) => { const f = clearMark(f0, `promos.${i}`); return { ...f, promos: (f.promos ?? []).map((p, j) => (j === i ? { ...p, ...patch, ...(patch.type !== undefined && patch.type !== p.type ? { counts_toward_cogs: promoCountsByDefault(String(patch.type), check.promoNeedsAnswer.includes(i) ? false : check.promoReflected[i] ?? check.discountReflected) } : {}) } : p)) }; });
   const setPay = (i: number, patch: Partial<PoFormPayment>) => setForm((f0) => { const f = clearMark(f0, `payments.${i}`); return { ...f, payments: (f.payments ?? []).map((p, j) => (j === i ? { ...p, ...patch } : p)) }; });
   // The payment picker (Maria 2026-11-02): on blur of the nickname or the last 4, resolve by nickname first, last 4 second — never by a last 4 two methods share (Amex Gold / Amex Plus, 1005): the nickname stays blank and the row shows the amber hint until one is picked.
   const [payHint, setPayHint] = useState<Record<number, string>>({});
@@ -527,7 +527,16 @@ export function NewPoForm({ open, onOpenChange, onCreated, prefill, initialSuppl
               <MoneyCalcInput value={p.amount} onChange={(v) => setPromo(i, { amount: v })} placeholder="$" title={hint(`promos.${i}.amount`)} className="h-8 w-20 text-right text-xs" data-testid={`input-new-po-promo-amount-${i}`} />
               <Input value={p.percent} onChange={(e) => setPromo(i, { percent: e.target.value })} placeholder="%" inputMode="decimal" className="h-8 w-14 text-right text-xs" data-testid={`input-new-po-promo-pct-${i}`} />
               <label className="flex items-center gap-1 text-xs" title="Counts toward COGS"><input type="checkbox" checked={p.counts_toward_cogs} onChange={(e) => setPromo(i, { counts_toward_cogs: e.target.checked })} data-testid={`input-new-po-promo-counts-${i}`} /> COGS</label>
-              {check.promoReflected[i] && <span className="text-[11px] text-muted-foreground" title={check.discountReflected ? "Σ price × qty already equals the post-discount subtotal: this promo reduces no cost" : "The line totals are this promo's amount under the subtotal: it is already in the prices and reduces no cost"} data-testid={`new-po-promo-reflected-${i}`}>{PROMO_REFLECTED_NOTE}</span>}
+              {!edit?.imported && (check.promoNeedsAnswer.includes(i) || p.in_line_prices != null) && (
+                <label className={`flex items-center gap-1 text-xs ${check.promoNeedsAnswer.includes(i) ? "text-destructive" : ""}`} title="Is this promo already in the line prices? Asked when more than one set of promos matches the gap between the subtotal and the line totals; until answered it is not subtracted.">
+                  In prices?
+                  <select value={p.in_line_prices == null ? "" : p.in_line_prices ? "yes" : "no"} onChange={(e) => setPromo(i, { in_line_prices: e.target.value === "" ? null : e.target.value === "yes" })} className={`${sel} w-16`} data-testid={`select-new-po-promo-in-prices-${i}`}>
+                    <option value="">—</option><option value="yes">yes</option><option value="no">no</option>
+                  </select>
+                </label>
+              )}
+              {check.promoNeedsAnswer.includes(i) && <span className="text-[11px] text-muted-foreground" title="More than one set of promos matches the gap between the subtotal and the line totals: until you answer, this promo is not subtracted (COGS errs high)" data-testid={`new-po-promo-pending-${i}`}>not subtracted until answered</span>}
+              {check.promoReflected[i] && !check.promoNeedsAnswer.includes(i) && <span className="text-[11px] text-muted-foreground" title={check.discountReflected ? "Σ price × qty already equals the post-discount subtotal: this promo reduces no cost" : "The line totals are this promo's amount under the subtotal: it is already in the prices and reduces no cost"} data-testid={`new-po-promo-reflected-${i}`}>{PROMO_REFLECTED_NOTE}</span>}
               <button type="button" onClick={() => setForm((f) => ({ ...f, promos: (f.promos ?? []).filter((_, j) => j !== i) }))} className="text-muted-foreground/60 hover:text-destructive" data-testid={`button-new-po-remove-promo-${i}`}><Trash2 className="h-3.5 w-3.5" /></button>
             </div>
           ))}
