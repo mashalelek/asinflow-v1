@@ -803,6 +803,8 @@ export interface AsinPack {
   reason: string | null; note: string | null;
   /** On any PO — counted first in the needs-review filter (with the Buy List and on hold). */
   hasPo: boolean;
+  /** On an open PO — "Pack size: needs review" shows these and the Buy List / on hold only (2026-11-06). */
+  hasOpenPo?: boolean;
 }
 export type PackStatus = "confirmed" | "needs_review" | "missing";
 export function packStatus(p: AsinPack | null | undefined): PackStatus {

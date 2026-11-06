@@ -30,7 +30,7 @@ import { HYGIENE_CHANGED_EVENT } from "@/components/release-confirm";
 import { refreshPlan, queuedJobIdFromMessage, duplicateJobFromMessage, applyStreamedRow } from "@/lib/upload-flow";
 import { rowsToRefresh, mergeRefreshedRows, RowRefresher, staleRowsDue } from "@/lib/row-refresh";
 import { buildFilterChips, addedHiddenReport, type FilterChipKey } from "@/lib/filter-chips";
-import { confirmableAsins, packFilterMatch, packReviewOrder, PACK_FILTER_LABEL, type PackFilter } from "@/lib/pack-filter";
+import { confirmableAsins, packFilterCounts, packFilterMatch, packReviewOrder, PACK_FILTER_LABEL, type PackFilter } from "@/lib/pack-filter";
 import { confirmedPack, gapsNote } from "@/components/pack-cell";
 import { formatFilterValue } from "@/components/active-filters-modal";
 import { ALL_COLUMNS as ALL_COLUMN_DEFS } from "@shared/schema";
@@ -819,6 +819,7 @@ export default function Home() {
   // Bulk Confirm (2026-11-06): each selected ASIN's suggested pack becomes its pack, with History; its PO gaps fill.
   const confirmPackAsins = useMemo(() => confirmableAsins(results, selectedSet), [results, selectedSet]);
   const [confirmingPacks, setConfirmingPacks] = useState(false);
+  const packCounts = useMemo(() => packFilterCounts(results, { buySet, onHoldSet }), [results, buySet, onHoldSet]);
   const handleConfirmPacks = useCallback(async () => {
     if (confirmPackAsins.length === 0) return;
     setConfirmingPacks(true);
@@ -1499,7 +1500,7 @@ export default function Home() {
     if (!showMeltable) {
       out = out.filter((r) => !r.isMeltable);
     }
-    if (packFilter) out = out.filter((r) => packFilterMatch(r, packFilter));
+    if (packFilter) out = out.filter((r) => packFilterMatch(r, packFilter, { buySet, onHoldSet }));
 // Apply column filters
     if (Object.keys(colFilters).length > 0) {
       out = out.filter((r) =>
@@ -1895,13 +1896,13 @@ export default function Home() {
                   </span>
                 )}
                 <Select value={packFilter || "all"} onValueChange={(v) => setPackFilter(v === "all" ? "" : v as PackFilter)}>
-                  <SelectTrigger className={`h-8 w-44 text-xs ${packFilter ? "border-primary/60" : ""}`} data-testid="select-pack-filter" title="Pack size: confirmed, needs review (bought / planned ASINs first) or missing">
+                  <SelectTrigger className={`h-8 w-80 text-xs ${packFilter ? "border-primary/60" : ""}`} data-testid="select-pack-filter" title="Needs review shows the ASINs on an open PO, the Buy List or on hold; needs review (all) shows every one">
                     <SelectValue />
                   </SelectTrigger>
                   <SelectContent>
                     <SelectItem value="all">Pack size: all</SelectItem>
                     {(Object.keys(PACK_FILTER_LABEL) as Array<keyof typeof PACK_FILTER_LABEL>).map((k) => (
-                      <SelectItem key={k} value={k}>Pack size: {PACK_FILTER_LABEL[k]}</SelectItem>
+                      <SelectItem key={k} value={k}>Pack size: {PACK_FILTER_LABEL[k]} · {packCounts[k]}</SelectItem>
                     ))}
                   </SelectContent>
                 </Select>

@@ -17,7 +17,7 @@ export interface FilterChipState {
   revealedCount?: number;                    // ASINs shown past the filters (item: upload "Show")
   packFilter?: string;                       // "Pack size": "" | "missing" | "needs_review" | "confirmed"
 }
-const PACK_LABEL: Record<string, string> = { missing: "missing", needs_review: "needs review", confirmed: "confirmed" };
+const PACK_LABEL: Record<string, string> = { missing: "missing", needs_review: "needs review (open PO / Buy List)", needs_review_all: "needs review (all)", confirmed: "confirmed" };
 
 const TILE_LABEL: Record<string, string> = { profitable: "Profitable", unprofitable: "Unprofitable", replens: "Replens", buyList: "Buy List", onHold: "On hold" };
 

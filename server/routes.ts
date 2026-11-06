@@ -1188,6 +1188,7 @@ export async function registerRoutes(
           a.primary_sku, a.has_live_offer, a.offer_checked_at, a.current_issues, a.issues_checked_at, a.notes, a.promo_notes, a.supplier_sku, a.lead_source, a.is_meltable, a.is_hazmat, a.is_dangerous_good, a.is_search_suppressed, a.suppression_reasons, a.last_reviewed_at, a.added_at, a.is_wholesale, a.is_oa,
           a.sold_as AS pack_sold_as, a.units_per_pack AS pack_units, a.pack_source, a.pack_suggested_sold_as, a.pack_suggested_units, a.pack_suggestion_source, a.pack_review_reason, a.pack_note,
           EXISTS (SELECT 1 FROM po_asins px WHERE px.asin = a.asin) AS pack_has_po,
+          EXISTS (SELECT 1 FROM po_asins px JOIN purchase_orders ppx ON ppx.id = px.po_id WHERE px.asin = a.asin AND ppx.closed_at IS NULL) AS pack_has_open_po,
           e.cogs, e.cogs_source, e.actual_cogs, e.estimated_cogs, e.estimated_cogs_source, e.prep_override, e.storage_override,
           e.lowest_fba_price, e.buy_box_price, e.buy_box_fulfillment, e.lowest_price,
           e.sellers_fba, e.sellers_fbm,
@@ -1419,7 +1420,7 @@ export async function registerRoutes(
           pack: {
             soldAs: row.pack_sold_as ?? null, units: row.pack_units == null ? null : Number(row.pack_units), source: row.pack_source ?? null,
             suggestedSoldAs: row.pack_suggested_sold_as ?? null, suggestedUnits: row.pack_suggested_units == null ? null : Number(row.pack_suggested_units),
-            suggestionSource: row.pack_suggestion_source ?? null, reason: row.pack_review_reason ?? null, note: row.pack_note ?? null, hasPo: !!row.pack_has_po,
+            suggestionSource: row.pack_suggestion_source ?? null, reason: row.pack_review_reason ?? null, note: row.pack_note ?? null, hasPo: !!row.pack_has_po, hasOpenPo: !!row.pack_has_open_po,
           },
           leadSource: row.lead_source ?? null,
           // parked keeps the old archived styling; dead renders its own tag.

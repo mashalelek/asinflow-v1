@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { confirmableAsins, packFilterMatch, packReviewOrder } from "./pack-filter";
+import { confirmableAsins, packFilterCounts, packFilterMatch, packReviewOrder } from "./pack-filter";
 import type { AsinPack } from "@shared/schema";
 
 const pk = (o: Partial<AsinPack>): AsinPack => ({ soldAs: null, units: null, source: null, suggestedSoldAs: null, suggestedUnits: null, suggestionSource: null, reason: null, note: null, hasPo: false, ...o });
@@ -12,14 +12,21 @@ const bare: { asin: string; pack?: AsinPack } = { asin: "A6" };
 
 describe("pack filter", () => {
   it("matches by status; a conflict with no suggestion still needs review; no pack data is missing", () => {
-    expect([confirmed, review, reviewPo, conflict, missing, bare].filter((r) => packFilterMatch(r, "needs_review")).map((r) => r.asin)).toEqual(["A2", "A3", "A4"]);
+    expect([confirmed, review, reviewPo, conflict, missing, bare].filter((r) => packFilterMatch(r, "needs_review_all")).map((r) => r.asin)).toEqual(["A2", "A3", "A4"]);
     expect([confirmed, review, missing, bare].filter((r) => packFilterMatch(r, "missing")).map((r) => r.asin)).toEqual(["A5", "A6"]);
     expect([confirmed, review].filter((r) => packFilterMatch(r, "")).length).toBe(2);
   });
-  it("needs review puts PO / Buy List / on hold first, keeping each group's order", () => {
+  it("needs review shows only an open PO, the Buy List or on hold; (all) shows every one; the counts follow", () => {
+    const openPo = { asin: "A7", pack: pk({ suggestedSoldAs: "individual", suggestedUnits: 1, reason: "suggestion", hasPo: true, hasOpenPo: true }) };
+    const sets = { buySet: new Set(["A2"]), onHoldSet: new Set(["A4"]) };
+    const rows = [confirmed, review, reviewPo, conflict, missing, openPo];
+    expect(rows.filter((r) => packFilterMatch(r, "needs_review", sets)).map((r) => r.asin)).toEqual(["A2", "A4", "A7"]);
+    expect(packFilterCounts(rows, sets)).toEqual({ needs_review: 3, needs_review_all: 4, missing: 1, confirmed: 1 });
+  });
+  it("needs review (all) puts PO / Buy List / on hold first, keeping each group's order", () => {
     const rows = [review, conflict, reviewPo, missing];
-    expect(packReviewOrder(rows, "needs_review", new Set(["A4"]), new Set()).map((r) => r.asin)).toEqual(["A4", "A3", "A2", "A5"]);
-    expect(packReviewOrder(rows, "needs_review", new Set(), new Set(["A5"])).map((r) => r.asin)).toEqual(["A3", "A5", "A2", "A4"]);
+    expect(packReviewOrder(rows, "needs_review_all", new Set(["A4"]), new Set()).map((r) => r.asin)).toEqual(["A4", "A3", "A2", "A5"]);
+    expect(packReviewOrder(rows, "needs_review_all", new Set(), new Set(["A5"])).map((r) => r.asin)).toEqual(["A3", "A5", "A2", "A4"]);
     expect(packReviewOrder(rows, "confirmed", new Set(["A4"]), new Set())).toBe(rows);
   });
   it("Confirm takes only selected rows with a suggestion", () => {
