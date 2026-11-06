@@ -1,7 +1,7 @@
 import { describe, it, expect } from "vitest";
 import {
   parseEdits, changedFields, asLogText, asinQtyFromLines, shipmentBlockMessage, HEADER_FIELDS, LINE_FIELDS, ASIN_FIELDS,
-  editPoHeader, removeLine, editAsinRow, EditError, ORDER_ID_WARNING, setUnknownAsinPack, linesAtPack,
+  editPoHeader, removeLine, editAsinRow, EditError, ORDER_ID_WARNING, setUnknownAsinPack, linesAtPack, fillAsinPackGaps,
 } from "./po-edit";
 
 // patch docs/claude_spec-patch-po-af-owned.md §3 — AF-owned PO editing.
@@ -168,12 +168,26 @@ describe("setUnknownAsinPack — an ASIN with no pack on record (Maria 2026-11-0
       [/FROM po_line_items WHERE po_asin_id/, (p) => lines[p[0]]],
     ]);
     const r = await setUnknownAsinPack(f.q, "b07n6v47hc", "multi-pack", 3, 7, "src");
-    expect(r).toEqual({ asin: "B07N6V47HC", sold_as: "multi-pack", units_per_pack: 3, openRows: 1, closedRows: 1, closedSkipped: 1, lines: 2 });
+    expect(r).toEqual({ asin: "B07N6V47HC", sold_as: "multi-pack", units_per_pack: 3, openRows: 1, closedRows: 1, closedSkipped: 1, lines: 2, openSkipped: 0,
+      skipped: [{ po_asin_id: "closedBad", po_id: "p3", closed: true, qty: 15, at_pack: null }] });
     expect(f.calls.filter((c) => /^INSERT INTO asin_field_log/.test(c.sql)).map((c) => [c.params[2], c.params[4], c.params[5]])).toEqual([["sold_as", "multi-pack", "po_form"], ["units_per_pack", "3", "po_form"]]);
     expect(f.calls.filter((c) => /^UPDATE po_asins SET sold_as/.test(c.sql)).map((c) => c.params[0])).toEqual(["open1", "closedOk"]);
     expect(f.calls.filter((c) => /^UPDATE po_line_items/.test(c.sql)).map((c) => c.params)).toEqual([["lo", 1, 3], ["lc", 1, 3]]);
     expect(f.calls.some((c) => /SET qty|cost_per_unit|sourcing_cost|paid_cost/.test(c.sql) && /^UPDATE/.test(c.sql))).toBe(false);
     expect(f.calls.find((c) => /FROM po_asins pa JOIN purchase_orders p/.test(c.sql))?.params).toEqual(["B07N6V47HC", "src"]);
+  });
+  it("strict: an open row the pack does not reproduce is listed, not written (the open-PO review, 2026-11-06)", async () => {
+    const lines: Record<string, any[]> = {
+      openOk: [{ id: "l1", qty_ordered: "10", retailer_units_per_product: null, asin_units_per_pack: null, asin_qty_per_product: "1.00" }],
+      openBad: [{ id: "l2", qty_ordered: "10", retailer_units_per_product: 2, asin_units_per_pack: 1, asin_qty_per_product: "2.00" }],
+    };
+    const f = fakeQuery([
+      [/FROM po_asins pa JOIN purchase_orders p/, [{ id: "openOk", po_id: "p1", qty: "10.00", closed: false }, { id: "openBad", po_id: "p2", qty: "10.00", closed: false }]],
+      [/FROM po_line_items WHERE po_asin_id/, (p) => lines[p[0]]],
+    ]);
+    const r = await fillAsinPackGaps(f.q, "B0TEST0001", "individual", 1, 7, undefined, { strict: true });
+    expect(r).toMatchObject({ openRows: 1, openSkipped: 1, skipped: [{ po_asin_id: "openBad", closed: false, qty: 10, at_pack: 20 }] });
+    expect(f.calls.filter((c) => /^UPDATE po_asins SET sold_as/.test(c.sql)).map((c) => c.params[0])).toEqual(["openOk"]);
   });
   it("a record that already has a pack is left alone (the form asks when it differs)", async () => {
     const f = fakeQuery([[/SELECT sold_as, units_per_pack FROM asins/, [{ sold_as: "multi-pack", units_per_pack: 2 }]]]);

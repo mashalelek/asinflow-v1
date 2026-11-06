@@ -12,7 +12,7 @@
 // ASINs table, an upload, a PO entry) is never re-decided. Pack size = manufactured retail packages in one ASIN
 // unit, never the items inside a package.
 import type { QueryLike } from "./scheduler/types";
-import { changedFields, logEdits, linesAtPack, fillAsinPackGaps, CLEAR_PACK_SUGGESTION_SQL, EditError } from "./po-edit";
+import { changedFields, logEdits, linesAtPack, fillAsinPackGaps, CLEAR_PACK_SUGGESTION_SQL, EditError, type PackGapSkip } from "./po-edit";
 import { titlePackSuggestion } from "../shared/pack-parse";
 
 export type SoldAsValue = "individual" | "multi-pack" | "bundle";
@@ -170,7 +170,7 @@ export async function applyPackDecision(query: QueryLike, asin: string, d: PackD
  * Maria sets or confirms an ASIN's pack (the ASINs table, Confirm, an upload): confirmed with her as the source, History,
  * the suggestion cleared, every PO row with no pack filled (open rows always, closed only where it reproduces).
  */
-export async function setAsinPack(query: QueryLike, asin: string, p: PackValue, userId: number | null, source: "manual" | "upload"): Promise<{ asin: string; changed: boolean; gaps: ApplyResult["gaps"] }> {
+export async function setAsinPack(query: QueryLike, asin: string, p: PackValue, userId: number | null, source: "manual" | "upload", opts: { strict?: boolean } = {}): Promise<{ asin: string; changed: boolean; gaps: ApplyResult["gaps"] & { openSkipped?: number; skipped?: PackGapSkip[] } }> {
   const a = asin.toUpperCase();
   if (!["individual", "multi-pack", "bundle"].includes(p.sold_as)) throw new EditError(400, "sold as must be individual, multi-pack or bundle");
   const units = p.sold_as === "individual" ? 1 : Number(p.units);
@@ -182,7 +182,7 @@ export async function setAsinPack(query: QueryLike, asin: string, p: PackValue, 
   for (const c of changes) await query(`INSERT INTO asin_field_log (asin, user_id, field, old_value, new_value, source) VALUES ($1, $2, $3, $4, $5, $6)`, [a, userId, c.field, c.old, c.new, source]);
   // A confirmation with no change still counts: the review is done.
   if (changes.length === 0) await query(`INSERT INTO asin_field_log (asin, user_id, field, old_value, new_value, source) VALUES ($1, $2, 'pack confirmed', NULL, $3, $4)`, [a, userId, packLabel({ sold_as: p.sold_as, units }), source]);
-  const gaps = p.sold_as === "bundle" ? { openRows: 0, closedRows: 0, closedSkipped: 0, lines: 0 } : await fillAsinPackGaps(query, a, p.sold_as, units, userId);
+  const gaps = p.sold_as === "bundle" ? { openRows: 0, closedRows: 0, closedSkipped: 0, lines: 0 } : await fillAsinPackGaps(query, a, p.sold_as, units, userId, undefined, opts);
   return { asin: a, changed: changes.length > 0, gaps };
 }
 

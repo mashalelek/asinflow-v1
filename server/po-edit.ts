@@ -399,7 +399,9 @@ export async function editAsinRow(query: QueryLike, poAsinId: string, body: unkn
   return { poId, changes, close: await evaluateAutoClose(poId, query), ...(packSet ? { asinPackSet: packSet } : {}) };
 }
 
-export interface AsinPackSetResult { asin: string; sold_as: string; units_per_pack: number; openRows: number; closedRows: number; closedSkipped: number; lines: number }
+export interface AsinPackSetResult { asin: string; sold_as: string; units_per_pack: number; openRows: number; closedRows: number; closedSkipped: number; lines: number; openSkipped?: number; skipped?: PackGapSkip[] }
+/** A PO row the pack was not written to because it does not reproduce the row's stored Ordered (strict fill). */
+export interface PackGapSkip { po_asin_id: string; po_id: string; closed: boolean; qty: number; at_pack: number | null }
 
 /**
  * An ASIN with NO pack on record (Maria 2026-11-06): a pack entered on a PO sets the record without asking
@@ -431,9 +433,10 @@ export const CLEAR_PACK_SUGGESTION_SQL = `pack_suggested_sold_as = NULL, pack_su
  * pack integers when Σ ordered × retailer ÷ pack reproduces its stored Ordered within 0.01), a closed row only when
  * it reproduces. Stored quantities and costs never change; History on every row and line.
  */
-export async function fillAsinPackGaps(query: QueryLike, asin: string, soldAs: "individual" | "multi-pack", pack: number, userId: number | null, excludePoAsinId?: string): Promise<Omit<AsinPackSetResult, "asin" | "sold_as" | "units_per_pack">> {
+export async function fillAsinPackGaps(query: QueryLike, asin: string, soldAs: "individual" | "multi-pack", pack: number, userId: number | null, excludePoAsinId?: string, opts: { strict?: boolean } = {}): Promise<Omit<AsinPackSetResult, "asin" | "sold_as" | "units_per_pack">> {
   const a = asin.toUpperCase();
-  const out = { openRows: 0, closedRows: 0, closedSkipped: 0, lines: 0 };
+  // strict (Maria 2026-11-06, the open-PO review): an open row too is written only when the pack reproduces its stored Ordered; the rest are listed.
+  const out = { openRows: 0, closedRows: 0, closedSkipped: 0, lines: 0, openSkipped: 0, skipped: [] as PackGapSkip[] };
   const rows = (await query(
     `SELECT pa.id, pa.po_id, pa.qty, p.closed_at IS NOT NULL AS closed FROM po_asins pa JOIN purchase_orders p ON p.id = pa.po_id
       WHERE pa.asin = $1 AND pa.sold_as IS NULL AND pa.id::text <> $2`, [a, excludePoAsinId ?? ""],
@@ -442,7 +445,11 @@ export async function fillAsinPackGaps(query: QueryLike, asin: string, soldAs: "
     const lines = (await query(`SELECT id, qty_ordered, retailer_units_per_product, asin_units_per_pack, asin_qty_per_product FROM po_line_items WHERE po_asin_id = $1`, [r.id])).rows;
     const fit = linesAtPack(lines, pack);
     const reproduces = fit != null && lines.length > 0 && Math.abs(fit.units - Number(r.qty)) <= 0.01 + 1e-9;
-    if (r.closed && !reproduces) { out.closedSkipped++; continue; }
+    if (!reproduces && (r.closed || opts.strict)) {
+      if (r.closed) out.closedSkipped++; else out.openSkipped++;
+      out.skipped.push({ po_asin_id: String(r.id), po_id: String(r.po_id), closed: !!r.closed, qty: Number(r.qty), at_pack: fit ? fit.units : null });
+      continue;
+    }
     const poId = String(r.po_id);
     await query(`UPDATE po_asins SET sold_as = $2, units_per_pack = $3 WHERE id = $1`, [r.id, soldAs, pack]);
     await logEdits(query, poId, userId, "asin", String(r.id), [{ field: "sold_as (ASIN pack set)", old: null, new: soldAs }, { field: "units_per_pack (ASIN pack set)", old: null, new: String(pack) }]);
