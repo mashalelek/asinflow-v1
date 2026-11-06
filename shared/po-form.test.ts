@@ -1,5 +1,6 @@
 import { describe, it, expect } from "vitest";
-import { checkPoForm, emptyPoForm, emptyProduct, emptyPayment, weightedPaymentPct, weightedPaymentPctExact, canonicalPaymentName, resolvePaymentNickname, ambiguousPaymentHint, promoCountsByDefault, PROMO_REFLECTED_NOTE, type PoFormState } from "./po-form";
+import { copyUnits } from "./po-lines";
+import { followPacks, checkPoForm, emptyPoForm, emptyProduct, emptyPayment, weightedPaymentPct, weightedPaymentPctExact, canonicalPaymentName, resolvePaymentNickname, ambiguousPaymentHint, promoCountsByDefault, PROMO_REFLECTED_NOTE, type PoFormState } from "./po-form";
 
 // po-af-owned §4 (2026-10-18): the New PO form's validation and derived rows.
 const base = (over: Partial<PoFormState> = {}): PoFormState => ({
@@ -237,3 +238,25 @@ describe("checkPoForm", () => {
     expect(checkPoForm(base({ cashback_pct: "150" })).errors).toContain("Cashback % must be a percentage between 0 and 100");
   });
 });
+
+// Michaels 9800109062072825 (Maria 2026-11-06): a pack set by hand wins over a stored yield.
+describe("followPacks", () => {
+  const stored = { ...emptyProduct(), qty_ordered: "60", asin: "B07N6V47HC", retailer_units_per_pack: "1", asin_qty_per_product: "0.33", yield_manual: true, sold_as: "multi-pack" as const, units_per_pack: "3" };
+  it("a stored 0.33 at ×3 becomes 1 retailer unit, yield 1/3 exactly, no longer 'stored yield' (60 → 20 ASIN units)", () => {
+    const p = followPacks(stored, "units_per_pack");
+    expect(p).toMatchObject({ retailer_units_per_pack: "1", yield_manual: false });
+    expect(checkPoForm(base({ products: [{ ...p, product_name: "Red Heart yarn", price: "4.00" }] })).asins[0].qty).toBe(20);
+    expect(copyUnits(p)).toBe(20);
+    expect(copyUnits(stored)).toBe(20); // the field read 60 × 0.33 = 19.8 while the check and the save read 1/3
+  });
+  it("a stored yield that is no rounding of the new pack gives way: the yield is the pack math", () => {
+    const p = followPacks({ ...stored, asin_qty_per_product: "0.50" }, "units_per_pack");
+    expect(p).toMatchObject({ retailer_units_per_pack: "1", yield_manual: false });
+    expect(Number(p.asin_qty_per_product)).toBeCloseTo(1 / 3, 4);
+  });
+  it("a pack not known leaves the row alone; other fields don't touch the yield", () => {
+    expect(followPacks({ ...stored, sold_as: "" }, "units_per_pack")).toMatchObject({ yield_manual: true, asin_qty_per_product: "0.33" });
+    expect(followPacks(stored, "notes")).toBe(stored);
+  });
+});
+

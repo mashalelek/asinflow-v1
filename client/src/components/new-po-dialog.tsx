@@ -33,7 +33,7 @@ import { useAuth } from "@/contexts/auth-context";
 import {
   checkPoForm, emptyPoForm, emptyProduct, emptyPromo, emptyPayment, shipsToFromForm, yieldFromPacks, promoCountsByDefault, resolvePaymentNickname, ambiguousPaymentHint, defaultRewardPct, WEIGHTED_PAYMENT_LABEL, PROMO_REFLECTED_NOTE,
   SOLD_AS_OPTIONS, PROMO_TYPES, PAYMENT_METHODS, CASHBACK_STATUSES,
-  type PoFormState, type PoFormProduct, type PoFormPromo, type PoFormPayment, type PoFormPrefill, type PrefillSource, asinPackSetLabel, asinPackSetNote } from "@shared/po-form";
+  type PoFormState, type PoFormProduct, type PoFormPromo, type PoFormPayment, type PoFormPrefill, type PrefillSource, asinPackSetLabel, asinPackSetNote, followPacks } from "@shared/po-form";
 import { editBlockingErrors } from "@shared/po-edit-form";
 import { groupLines, newLineId, lineQty, slotUnits, setSlotUnits, resetSlotYield, addAsinRow, addProductToBundle, removeAsinRow, removeLine, ensureLineIds, isFractional, FRACTIONAL_UNITS_NOTE, type LineBox } from "@shared/po-lines";
 
@@ -330,18 +330,9 @@ export function NewPoForm({ open, onOpenChange, onCreated, prefill, initialSuppl
       if ((k === "price" || k === "qty_ordered") && next.line_total) next.line_total = "";
       if (k === "sold_as" && v === "individual") next.units_per_pack = "1";
       if (k === "sold_as" && (v === "multi-pack" || v === "bundle") && (next.units_per_pack === "1" || next.units_per_pack === "")) next.units_per_pack = "2";
-      // A stored row whose pack was not known (Edit PO, 2026-11-06): the pack chosen keeps the stored yield — the ASIN
-      // units ordered are the fact — and the retailer units follow it (yield 2 with a 2-pack → 4 retailer units).
-      if (next.pack_keep_yield && next.sold_as !== "" && (k === "sold_as" || k === "units_per_pack")) {
-        if (!next.yield_manual) {
-          const pk = next.sold_as === "individual" ? 1 : Number(next.units_per_pack) || 0, y = Number(next.asin_qty_per_product);
-          if (pk >= 1 && Number.isInteger(y * pk)) next.retailer_units_per_pack = String(y * pk);
-        }
-        return next;
-      }
-      // §6.5 pack math keeps the yield in step until it is typed by hand.
-      if (!next.yield_manual && ["retailer_units_per_pack", "units_per_pack", "sold_as"].includes(String(k))) next.asin_qty_per_product = yieldFromPacks(next.retailer_units_per_pack, next.units_per_pack, next.sold_as);
-      return next;
+      // A pack set by hand (2026-11-06): the yield follows the pack sizes; a stored yield that is a rounding of the new
+      // pack's exact ratio keeps its value, exactly (followPacks, shared/po-form.ts).
+      return followPacks(next, String(k));
     });
     return { ...f, products };
   });

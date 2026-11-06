@@ -7175,7 +7175,21 @@ replaces it. Migration 061 adds `po_edit_log`, `deleted_pos` and
   units / pack follow the new size) write the integers, never a decimal;
   `PATCH /api/pos/lines/:id` no longer accepts `asin_qty_per_product`. A
   line without the integers (a sheet-imported line the backfill could not
-  resolve) reads its stored yield as before. Backfill `npm run
+  resolve) reads its stored yield as before — **unless its row's pack is
+  known and the stored 2-dp yield is a rounding of r ÷ pack** (|y − r ÷ pack|
+  ≤ 0.005: 0.33 → 1/3, 0.67 → 2/3, 0.17 → 1/6; `retailerUnitsAtPack`, Maria
+  2026-11-06, michaels.com 9800109062072825: 60 × 0.33 showed 19.8, not 20):
+  Edit PO loads it as that exact ratio, a pack edit writes the two integers,
+  and the row's ASIN qty field multiplies by the exact ratio, as the check and
+  the save always did. **A pack set by hand wins** (`followPacks`): the yield
+  follows the pack sizes; a stored or typed yield never silently survives a
+  pack change (a stored yield that fits the new pack keeps its value, as
+  integers). Sweep `tsx script/fix-yield-exact.ts [--prod] [--live]`: every
+  such line gets its integers with History, the row's Ordered follows (logged)
+  only where the stored Ordered was the exact value or the 2-dp product; the
+  rest, and lines whose stored yield fits no whole number at the pack, go on
+  `yield-exact-not-matching-<date>.csv` untouched; stored costs are never
+  written (the dry run shows what a per-unit cost would become). Backfill `npm run
   backfill:yield-ratio [-- --prod] [--live]`: a line whose stored yield ×
   the ASIN row's `units_per_pack` is within 0.02 of a whole number ≥ 1 gets
   that ratio (1/15 × 15 = 1 → 1 / 15); every other line goes to

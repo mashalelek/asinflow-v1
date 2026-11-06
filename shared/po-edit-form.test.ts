@@ -37,6 +37,16 @@ describe("a pack not known (2026-11-06)", () => {
   });
 });
 
+describe("a sheet line's rounded yield at a known pack (2026-11-06)", () => {
+  it("0.33 on a multi-pack ×3 row loads as 1 retailer unit, the exact 1/3, not a stored yield; 0.40 at ×3 stays a stored yield", () => {
+    const d = stored();
+    d.asins[1] = { ...d.asins[1], sold_as: "multi-pack", units_per_pack: 3 };
+    expect(poToForm(d).products[1]).toMatchObject({ retailer_units_per_pack: "1", yield_manual: false });
+    d.asins[1].lines![0] = { ...d.asins[1].lines![0], asin_qty_per_product: "0.40" };
+    expect(poToForm(d).products[1]).toMatchObject({ asin_qty_per_product: "0.4", yield_manual: true });
+  });
+});
+
 describe("poToForm — the stored PO as the form", () => {
   it("header, lines with their ids, the yield from the two integers, a NULL-integer line as a typed yield; promos / payments keep their ids", () => {
     const f = poToForm(stored());

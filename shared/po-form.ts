@@ -24,7 +24,7 @@
 // counts_toward_cogs = false (rewards, by default) is added back.
 
 import { adjustedProductCost, allocateAsinCosts, allocationBaseOf, reflectedPromos, promoCostHeader, COST_FORMULA_VERSION, REFLECTED_TOLERANCE, type CostHeader } from "./po-cost";
-import { asinUnitsFromLines, fracToNumber, lineRatio, lineUnitsExact, ratioForUnits, ratioYield, type YieldRatio } from "./yield";
+import { asinUnitsFromLines, fracToNumber, lineRatio, lineUnitsExact, ratioForUnits, ratioYield, type YieldRatio, retailerUnitsAtPack } from "./yield";
 /** Stamped on purchase_orders.cost_formula_version by every form save; NULL = imported, never recomputed. */
 export const COST_FORMULA_VERSION_SAVED = COST_FORMULA_VERSION;
 
@@ -553,4 +553,23 @@ export function asinPackSetNote(r: AsinPackSetNote): string {
   const n = (k: number, one: string) => `${k} ${one}${k === 1 ? "" : "s"}`;
   const filled = [`${n(r.openRows, "open PO row")}`, `${n(r.closedRows, "closed PO row")}`, `${n(r.lines, "line")} given pack integers`];
   return `${r.asin}: ${asinPackSetLabel(r.sold_as, r.units_per_pack)} · filled ${filled.join(", ")}${r.closedSkipped ? ` · ${n(r.closedSkipped, "closed row")} left (pack doesn't reproduce its stored ASIN qty)` : ""}`;
+}
+
+/**
+ * A pack field set by hand on a product row (Maria 2026-11-06): the yield follows the pack sizes — a stored or typed
+ * yield never silently wins over a pack just set. When the row carried a stored yield (or its pack was not known)
+ * and that yield is a sheet rounding of a whole number of retailer units at the new pack, the retailer units become
+ * that number, so the value is kept, exactly (0.33 → ×3 → 1 retailer unit, yield 1/3).
+ */
+export function followPacks(p: PoFormProduct, k: string): PoFormProduct {
+  if (!["retailer_units_per_pack", "units_per_pack", "sold_as"].includes(k) || p.sold_as === "") return p;
+  const next = { ...p };
+  if (k !== "retailer_units_per_pack" && (p.yield_manual || p.pack_keep_yield) && (p.sold_as === "individual" || p.sold_as === "multi-pack")) {
+    const pk = p.sold_as === "individual" ? 1 : Number(p.units_per_pack);
+    const r = Number.isInteger(pk) && pk >= 1 ? retailerUnitsAtPack(p.asin_qty_per_product, pk) : null;
+    if (r != null) next.retailer_units_per_pack = String(r);
+  }
+  next.yield_manual = false;
+  next.asin_qty_per_product = yieldFromPacks(next.retailer_units_per_pack, next.units_per_pack, next.sold_as);
+  return next;
 }

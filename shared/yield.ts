@@ -68,6 +68,18 @@ export function ratioFromStoredYield(y: number | string | null | undefined, asin
   return null;
 }
 
+/**
+ * A stored 2-dp yield read at a known pack (Maria 2026-11-06): the whole retailer units r ≥ 1 whose exact ratio
+ * r ÷ pack the stored yield is a sheet rounding of (|y − r ÷ pack| ≤ 0.005: 0.33 → 1/3, 0.67 → 2/3, 0.17 → 1/6),
+ * else null. The same value, written exactly — not a cost recompute.
+ */
+export function retailerUnitsAtPack(y: number | string | null | undefined, pack: number): number | null {
+  const yn = Number(y);
+  if (!(yn > 0) || !(Number.isInteger(pack) && pack >= 1)) return null;
+  const r = Math.round(yn * pack);
+  return r >= 1 && Math.abs(yn - r / pack) <= 0.005 + 1e-9 ? r : null;
+}
+
 // ── exact arithmetic: fractions over BigInt ──
 export interface Frac { num: bigint; den: bigint }
 /** qty (≤ 2 dp) × retailer ÷ asin as a fraction. */

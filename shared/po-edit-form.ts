@@ -18,7 +18,7 @@
 // Maria 2026-10-31): a cost is written only when its field was changed; a
 // v2 PO's costs follow the server's recomputePoCosts as with every edit.
 import { checkPoForm, emptyPoForm, productRatio, productLineMoney, priceText, yieldFromPacks, SOLD_AS_OPTIONS, PROMO_IN_PRICES_QUESTION, type PoFormState, type PoFormProduct, type PoFormPromo, type PoFormPayment, type PoFormCheck, type SoldAs, type FormSoldAs } from "./po-form";
-import { ratioYield } from "./yield";
+import { ratioYield, retailerUnitsAtPack } from "./yield";
 
 type Row = Record<string, any>;
 export interface StoredPo { po: Row; asins: Array<Row & { lines: Row[] }>; payments: Row[]; promos: Row[] }
@@ -57,7 +57,12 @@ export function poToForm(d: StoredPo): PoFormState {
       if (Number.isInteger(R) && R > 0 && Number.isInteger(U) && U > 0) {
         if ((R * pk) % U === 0) { retailer = String((R * pk) / U); y = yieldFromPacks(retailer, upp, soldAs); }
         else { retailer = String(R); yieldManual = true; y = ratioYield({ retailer: R, asinUnits: U }); }
-      } else { yieldManual = true; y = numText(l.asin_qty_per_product) || "1"; }
+      } else {
+        // No integers (a sheet import): a stored 2-dp yield that is a rounding of r ÷ the known pack reads as that exact ratio (2026-11-06).
+        const r = soldAs === "individual" || soldAs === "multi-pack" ? retailerUnitsAtPack(l.asin_qty_per_product, pk) : null;
+        if (r != null) { retailer = String(r); y = yieldFromPacks(retailer, upp, soldAs); }
+        else { yieldManual = true; y = numText(l.asin_qty_per_product) || "1"; }
+      }
       products.push({
         line_item_id: String(l.id), line_id: `l-${l.id}`, ...(soldAs === "bundle" ? { bundle_id: `b-${a.id}` } : {}),
         // A stored line total (migration 087) shows its price to the cent; a price typed past the cent shows as typed.

@@ -11,7 +11,8 @@
 //     row beneath the group (slot k = the k-th row of every member line).
 // Three shapes on the whiteboard: one product → two ASINs (a split), two
 // products → one ASIN (a bundle), one product → one ASIN (the plain line).
-import { yieldFromPacks, type PoFormProduct } from "./po-form";
+import { yieldFromPacks, productRatio, type PoFormProduct } from "./po-form";
+import { fracToNumber, lineUnitsExact } from "./yield";
 
 export interface LineBox {
   /** bundle_id for a bundle, else the line_id. */
@@ -58,8 +59,8 @@ export function groupLines(products: readonly PoFormProduct[]): LineBox[] {
 export function lineQty(products: readonly PoFormProduct[], copies: readonly number[]): number {
   return r2(copies.reduce((t, i) => t + (Number(products[i]?.qty_ordered) || 0), 0));
 }
-/** ASIN units of one row: qty × yield. */
-export const copyUnits = (p: PoFormProduct): number => r2((Number(p.qty_ordered) || 0) * (Number(p.asin_qty_per_product) || 0));
+/** ASIN units of one row: qty × its exact yield (productRatio — the form check's and the save's own ratio; a 2-dp 0.33 is never multiplied as such: 60 → 20, not 19.8, 2026-11-06). */
+export const copyUnits = (p: PoFormProduct): number => { const q = Number(p.qty_ordered) || 0; return q > 0 ? r2(fracToNumber(lineUnitsExact(q, productRatio(p)))) : 0; };
 /** What an ASIN row shows: a plain line's row = its units; a bundle slot = the sets (the smallest member's units). */
 export function slotUnits(products: readonly PoFormProduct[], slot: readonly number[], bundle: boolean): number {
   const u = slot.map((i) => copyUnits(products[i]));

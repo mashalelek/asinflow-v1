@@ -16,7 +16,7 @@
 import type { QueryLike } from "./scheduler/types";
 import { evaluateAutoClose, type AutoCloseOutcome } from "./po-close";
 import { trueYield } from "./po-af-source";
-import { asinUnitsFromLines, lineRatio, ratioYield, type YieldLine } from "../shared/yield";
+import { asinUnitsFromLines, lineRatio, ratioYield, retailerUnitsAtPack, type YieldLine } from "../shared/yield";
 
 export type Parsed = { ok: true; value: unknown } | { ok: false; error: string };
 type Parser = (v: unknown) => Parsed;
@@ -389,8 +389,10 @@ export async function editAsinRow(query: QueryLike, poAsinId: string, body: unkn
     await logEdits(query, poId, userId, "asin", poAsinId, changes);
     // A pack chosen for a row whose pack was not known keeps each line's stored yield (the ASIN units ordered are the
     // known fact): the line's ASIN units / pack become the pack, its retailer units follow — 2/1 with a 2-pack → 4/2.
-    if (cur.sold_as == null && soldAs != null && soldAs !== "bundle") await keepYieldOnPack(query, poId, poAsinId, soldAs === "individual" ? 1 : Number(upp), userId);
-    if (changes.some((c) => c.field === "sold_as")) await recomputeAsinQty(query, poAsinId, userId);
+    // A line with no pack integers whose stored yield is a rounding of r ÷ the pack takes r / pack exactly (0.33 at ×3 → 1/3).
+    const packChanged = changes.some((c) => c.field === "sold_as" || c.field === "units_per_pack");
+    if (packChanged && soldAs != null && soldAs !== "bundle") await keepYieldOnPack(query, poId, poAsinId, soldAs === "individual" ? 1 : Number(upp), userId, cur.sold_as == null);
+    if (packChanged) await recomputeAsinQty(query, poAsinId, userId);
   }
   const packSet = changes.some((c) => c.field === "sold_as" || c.field === "units_per_pack") && (soldAs === "individual" || soldAs === "multi-pack")
     ? await setUnknownAsinPack(query, String(cur.asin), soldAs, soldAs === "individual" ? 1 : Number(upp), userId, poAsinId) : null;
@@ -450,7 +452,7 @@ export function linesAtPack<L extends { qty_ordered: unknown; retailer_units_per
     const ratio = lineRatio(l as any);
     let r: number;
     if (ratio) { const k = (ratio.retailer * pack) / ratio.asinUnits; if (!Number.isInteger(k)) return null; r = k; }
-    else { const y = Number(l.asin_qty_per_product); if (!(y > 0)) return null; r = Math.round(y * pack); if (r < 1 || Math.abs(y - r / pack) > 0.005 + 1e-9) return null; }
+    else { const k = retailerUnitsAtPack(l.asin_qty_per_product as any, pack); if (k == null) return null; r = k; }
     out.push({ cur: l, retailer: r });
     units += (Number(l.qty_ordered) || 0) * r / pack;
   }
@@ -458,12 +460,20 @@ export function linesAtPack<L extends { qty_ordered: unknown; retailer_units_per
 }
 
 /** The ASIN row's lines take the pack as their ASIN units / pack, the yield unchanged; a line the pack cannot express in whole retailer units is left as it is. */
-async function keepYieldOnPack(query: QueryLike, poId: string, poAsinId: string, pack: number, userId: number | null): Promise<void> {
+async function keepYieldOnPack(query: QueryLike, poId: string, poAsinId: string, pack: number, userId: number | null, scaleRatios: boolean): Promise<void> {
   if (!(Number.isInteger(pack) && pack >= 1)) return;
-  const lines = (await query(`SELECT id, retailer_units_per_product, asin_units_per_pack FROM po_line_items WHERE po_asin_id = $1`, [poAsinId])).rows;
+  const lines = (await query(`SELECT id, retailer_units_per_product, asin_units_per_pack, asin_qty_per_product FROM po_line_items WHERE po_asin_id = $1`, [poAsinId])).rows;
   for (const l of lines) {
     const R = Number(l.retailer_units_per_product), U = Number(l.asin_units_per_pack);
-    if (!(Number.isInteger(R) && R > 0 && Number.isInteger(U) && U > 0) || U === pack || (R * pack) % U !== 0) continue;
+    if (!(Number.isInteger(R) && R > 0 && Number.isInteger(U) && U > 0)) {
+      const r = retailerUnitsAtPack(l.asin_qty_per_product, pack);
+      if (r == null) continue;
+      const exact = { retailer_units_per_product: r, asin_units_per_pack: pack };
+      await query(`UPDATE po_line_items SET retailer_units_per_product = $2, asin_units_per_pack = $3 WHERE id = $1`, [l.id, r, pack]);
+      await logEdits(query, poId, userId, "line", String(l.id), changedFields({ retailer_units_per_product: l.retailer_units_per_product, asin_units_per_pack: l.asin_units_per_pack }, exact));
+      continue;
+    }
+    if (!scaleRatios || U === pack || (R * pack) % U !== 0) continue;
     const next = { retailer_units_per_product: (R * pack) / U, asin_units_per_pack: pack };
     await query(`UPDATE po_line_items SET retailer_units_per_product = $2, asin_units_per_pack = $3 WHERE id = $1`, [l.id, next.retailer_units_per_product, next.asin_units_per_pack]);
     await logEdits(query, poId, userId, "line", String(l.id), changedFields(l, next));
