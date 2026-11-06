@@ -7406,7 +7406,22 @@ replaces it. Migration 061 adds `po_edit_log`, `deleted_pos` and
   every open PO's row to the new size with its lines' yields scaled so the
   units stay, recomputes Ordered and a v2 PO's costs; "Pack size mismatch"
   then shows on any open PO whose Velocity order was created with the old
-  size; closed POs untouched). **ASIN rows** show Sourcing cost, COGS / unit
+  size; closed POs untouched). The question needs a pack on AF's record:
+  one that equals the entered pack shows a grey "ASIN already ×N"; **no pack
+  on record** (Maria 2026-11-06) → no question: the save sets the record
+  (grey "ASIN set to multi-pack ×2 in AF", `setUnknownAsinPack` in
+  `server/po-edit.ts`, from New PO, Edit PO and the ASINs tab) and fills the
+  ASIN's other PO rows with no pack — an open row always (its lines get the
+  pack integers when Σ ordered × retailer ÷ pack reproduces its Ordered within
+  0.01), a closed row only when it reproduces; stored quantities and costs
+  never change; the toast counts the rows and lines filled. **A pack not
+  known** (NULL, 2026-11-06) is never shown as a value: the select reads
+  "— choose —" in amber with "pack size missing", or the title's pack ("title
+  says Pack of 2", `titlePackSuggestion`, `shared/pack-parse.ts`) in amber
+  with a confirm — nothing saves until chosen or confirmed; Individual Units
+  Ordered shows "?". Choosing a pack for such a row keeps each line's yield
+  (2/1 with a 2-pack → 4/2) and writes History; the ASINs tab's multi-pack
+  opens a units field and saves both together. **ASIN rows** show Sourcing cost, COGS / unit
   (override wins), Paid cost and the **COGS adjustment** (amount + required
   reason). **Promos** (type, description, amount / %, *counts toward COGS*
   toggle — rewards off by default) and **Payments** (method, nickname, last

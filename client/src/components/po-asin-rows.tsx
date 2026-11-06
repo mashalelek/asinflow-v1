@@ -14,9 +14,12 @@ import { ChevronRight, ChevronDown, AlertTriangle, Plus, X } from "lucide-react"
 import { Tooltip, TooltipTrigger, TooltipContent } from "@/components/ui/tooltip";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import { fmtQty, individualUnits, PO_ASIN_DISPLAY_COLUMNS, VELOCITY_QTY_TITLE } from "@/lib/po-qty";
-import { InlineEdit, SelectEdit, poApi, ReassignShipment, shipmentBlockText } from "@/components/po-edit";
+import { InlineEdit, poApi, ReassignShipment, shipmentBlockText } from "@/components/po-edit";
 import { InlineNoteCell, NoteIcon } from "@/components/inline-note";
 import { DEFECT_ACTION_ITEM, defectSummary } from "@shared/po-defect";
+import { titlePackSuggestion } from "@shared/pack-parse";
+import { asinPackSetNote } from "@shared/po-form";
+import { useToast } from "@/hooks/use-toast";
 
 export interface PoAsinShipment {
   id: string;
@@ -63,8 +66,9 @@ export interface PoAsinRowData {
   cost_per_unit: string | null;
   total_cost: string | null;
   prep_cost: string | null;
-  sold_as: string;
-  units_per_pack: number;
+  /** NULL = not known ("Pack size missing", 2026-11-06). */
+  sold_as: string | null;
+  units_per_pack: number | null;
   notes: string | null;
   thumbnail: string | null;
   // derived from the lines (NULL = some line untracked)
@@ -459,6 +463,59 @@ export function PoAsinHeaderRow({ sub = false }: { sub?: boolean }) {
   );
 }
 
+/**
+ * Sold as + units / pack on the ASINs tab (2026-11-06). A pack not known shows "— choose —" in amber (never a real
+ * option), or the title's pack as an unconfirmed amber suggestion; individual saves at once (×1), multi-pack opens a
+ * units field and saves both together; the server keeps the lines' yield and logs History.
+ */
+function PackEdit({ a, onChanged }: { a: PoAsinRowData; onChanged?: () => void }) {
+  const unknown = a.sold_as == null;
+  const sug = unknown ? titlePackSuggestion(a.asin_name) : null;
+  const [draft, setDraft] = useState<{ sold_as: string; units: string } | null>(null);
+  const [err, setErr] = useState<string | null>(null);
+  const { toast } = useToast();
+  const save = async (sold_as: string, units?: number) => {
+    setErr(null);
+    try {
+      const r = await poApi(`/api/pos/asin-rows/${a.id}`, "PATCH", sold_as === "individual" ? { sold_as, units_per_pack: 1 } : units != null ? { sold_as, units_per_pack: units } : { sold_as });
+      if (r?.asinPackSet) toast({ title: "Pack size set in AF", description: asinPackSetNote(r.asinPackSet) });
+      setDraft(null); onChanged?.();
+    } catch (e: any) { setErr(e.message); }
+  };
+  const choose = (v: string) => {
+    if (v === "individual" || v === "bundle") return void save(v);
+    if (v === "multi-pack") setDraft({ sold_as: v, units: a.sold_as === "multi-pack" && a.units_per_pack ? String(a.units_per_pack) : sug?.sold_as === "multi-pack" ? String(sug.units_per_pack) : "" });
+  };
+  const shown = draft?.sold_as ?? a.sold_as ?? sug?.sold_as ?? "";
+  const amber = unknown && !draft;
+  return (
+    <div className="space-y-0.5" data-testid={`pack-${a.id}`} data-pack-missing={unknown ? (sug ? "suggested" : "yes") : undefined}>
+      <select value={shown} onClick={(e) => e.stopPropagation()} onChange={(e) => choose(e.target.value)}
+        className={`h-6 w-full min-w-0 rounded border bg-background px-0.5 text-[11px] ${amber ? "border-amber-500 text-amber-700 dark:text-amber-400" : "border-input"}`} data-testid={`select-sold_as-${a.id}`} title={err ?? undefined}>
+        {unknown && !sug && <option value="">— choose —</option>}
+        {["individual", "multi-pack", "bundle"].map((o) => <option key={o} value={o}>{o}</option>)}
+      </select>
+      {draft ? (
+        <div className="flex items-center gap-0.5 text-[11px]">
+          <span>×</span>
+          <input autoFocus value={draft.units} inputMode="numeric" onChange={(e) => setDraft({ ...draft, units: e.target.value })}
+            onKeyDown={(e) => { if (e.key === "Enter") void save(draft.sold_as, Number(draft.units)); if (e.key === "Escape") setDraft(null); }}
+            className="h-5 w-10 rounded border border-input bg-background px-1 text-right" data-testid={`input-units_per_pack-${a.id}`} />
+          <button type="button" className="text-primary hover:underline" onClick={() => void save(draft.sold_as, Number(draft.units))} data-testid={`button-pack-save-${a.id}`}>save</button>
+          <button type="button" className="text-muted-foreground hover:underline" onClick={() => { setDraft(null); setErr(null); }}>cancel</button>
+        </div>
+      ) : unknown ? (
+        <div className="text-[11px] text-amber-700 dark:text-amber-400" data-testid={`pack-missing-${a.id}`}>
+          {sug ? <>title says {sug.text} · <button type="button" className="underline" onClick={() => void save(sug.sold_as, sug.sold_as === "individual" ? undefined : sug.units_per_pack)} data-testid={`button-pack-confirm-${a.id}`}>confirm</button></> : "pack size missing"}
+        </div>
+      ) : (
+        <div className="flex items-center gap-0.5 text-[11px] text-muted-foreground" title="Units/Pack"><span>×</span>{a.sold_as === "multi-pack" ? <InlineEdit value={a.units_per_pack} onSave={async (v) => { await poApi(`/api/pos/asin-rows/${a.id}`, "PATCH", { units_per_pack: v }); onChanged?.(); }} width="w-12" testId={`units_per_pack-${a.id}`}>{a.units_per_pack}</InlineEdit> : a.units_per_pack}</div>
+      )}
+      {err && <div className="text-[11px] text-destructive" data-testid={`pack-error-${a.id}`}>{err}</div>}
+    </div>
+  );
+}
+
 const hairline = { borderBottom: "0.5px solid hsl(var(--border))" } as const;
 
 /** One ASIN row (plus its bundle component lines when expanded). `editable` enables the hand-entered quantities and manual shipments. */
@@ -497,14 +554,16 @@ export function PoAsinRow({ a, indent = false, editable = false, onChanged, po }
         </td>
         <td className="px-1.5 py-1.5 text-right">
           <div><QtyCell v={a.qty} /></div>
-          <div className="whitespace-nowrap text-[11px] text-muted-foreground" title="Individual Units Ordered = Ordered × Units/Pack"><QtyCell v={individualUnits(Number(a.qty), a.units_per_pack)} /> indiv.</div>
+          <div className="whitespace-nowrap text-[11px] text-muted-foreground" title="Individual Units Ordered = Ordered × Units/Pack">{a.units_per_pack == null ? <span data-testid={`indiv-unknown-${a.id}`}>?</span> : <QtyCell v={individualUnits(Number(a.qty), a.units_per_pack)} />} indiv.</div>
         </td>
         <td className="px-1.5 py-1.5 text-right text-xs">{editable ? <InlineEdit money value={a.cost_per_unit} onSave={saveAsin("cost_per_unit")} align="right" width="w-12" testId={`cost_per_unit-${a.id}`}><Money v={a.cost_per_unit} /></InlineEdit> : <Money v={a.cost_per_unit} />}</td>
         <td className="px-1.5 py-1.5 text-right text-xs"><Money v={a.total_cost} /></td>
         <td className="px-1.5 py-1.5 text-right text-xs">{editable ? <InlineEdit money value={a.prep_cost} onSave={saveAsin("prep_cost")} align="right" width="w-10" testId={`prep_cost-${a.id}`}><Money v={a.prep_cost} /></InlineEdit> : <Money v={a.prep_cost} />}</td>
         <td className="px-1.5 py-1.5">
-          <div>{editable ? <SelectEdit value={a.sold_as} options={["individual", "multi-pack", "bundle"]} onSave={saveAsin("sold_as")} testId={`sold_as-${a.id}`} fill /> : a.sold_as}</div>
-          <div className="flex items-center gap-0.5 text-[11px] text-muted-foreground" title="Units/Pack"><span>×</span>{editable && a.sold_as !== "individual" ? <InlineEdit value={a.units_per_pack} onSave={saveAsin("units_per_pack")} width="w-12" testId={`units_per_pack-${a.id}`}>{a.units_per_pack}</InlineEdit> : a.units_per_pack}</div>
+          {editable ? <PackEdit a={a} onChanged={onChanged} /> : <>
+            <div className={a.sold_as == null ? "text-amber-700 dark:text-amber-400" : ""}>{a.sold_as ?? "—"}</div>
+            <div className="text-[11px] text-muted-foreground" title="Units/Pack">×{a.units_per_pack ?? "?"}</div>
+          </>}
         </td>
         <td className="px-1.5 py-1.5 text-right"><div><QtyCell v={a.qty_canceled_asin} /></div>{editable && (a.lines ?? []).length > 0 && <MarkCanceled a={a} onChanged={onChanged} po={po} />}</td>
         <td className="px-1.5 py-1.5 text-right"><QtyCell v={a.qty_returned_asin} /></td>

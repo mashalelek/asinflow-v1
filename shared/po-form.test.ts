@@ -4,7 +4,7 @@ import { checkPoForm, emptyPoForm, emptyProduct, emptyPayment, weightedPaymentPc
 // po-af-owned §4 (2026-10-18): the New PO form's validation and derived rows.
 const base = (over: Partial<PoFormState> = {}): PoFormState => ({
   ...emptyPoForm("2026-10-18"), supplier: "walmart.com", order_id: "zz-200015000000001",
-  products: [{ ...emptyProduct(), product_name: "Pens 12ct", price: "5.44", qty_ordered: "5", asin: "B0TEST0001" }],
+  products: [{ ...emptyProduct(), product_name: "Pens 12ct", price: "5.44", qty_ordered: "5", asin: "B0TEST0001", sold_as: "individual", units_per_pack: "1" }],
   ...over,
 });
 

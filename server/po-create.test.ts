@@ -21,7 +21,7 @@ const form = () => ({
   products: [
     { ...emptyProduct(), product_name: "Epsom Salt Soak", price: "3.00", qty_ordered: "7", asin: "B0GNHTYGPF", sold_as: "bundle" as const, units_per_pack: "2" },
     { ...emptyProduct(), product_name: "Body Wash", price: "4.00", qty_ordered: "7", asin: "B0GNHTYGPF", sold_as: "bundle" as const, units_per_pack: "2" },
-    { ...emptyProduct(), product_name: "Pens", price: "5.44", qty_ordered: "5", asin: "b0test0001" },
+    { ...emptyProduct(), product_name: "Pens", price: "5.44", qty_ordered: "5", asin: "b0test0001", sold_as: "individual" as const, units_per_pack: "1" },
   ],
 });
 

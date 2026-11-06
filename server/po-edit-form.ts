@@ -10,7 +10,7 @@
 // A v2 PO's costs are recomputed once at the end when a cost-relevant field
 // changed (recomputePoCosts leaves an imported PO alone).
 import type { QueryLike } from "./scheduler/types";
-import { editPoHeader, editLine, addLine, removeLine, editAsinRow, EditError, COST_RELEVANT_FIELDS, ORDER_ID_WARNING } from "./po-edit";
+import { editPoHeader, editLine, addLine, removeLine, editAsinRow, EditError, COST_RELEVANT_FIELDS, ORDER_ID_WARNING, type AsinPackSetResult } from "./po-edit";
 import { addMoneyRow, editMoneyRow, removeMoneyRow } from "./po-money-edit";
 import { recomputePoCosts } from "./po-costs";
 import { applyAsinPackUpdate, parsePack } from "./asin-pack";
@@ -58,7 +58,7 @@ export async function loadPoForm(query: QueryLike, poId: string): Promise<PoForm
   };
 }
 
-export interface PoFormSave { poId: string; changes: number; warning?: string; plan: Omit<PoEditPlan, "errors"> }
+export interface PoFormSave { poId: string; changes: number; warning?: string; plan: Omit<PoEditPlan, "errors">; asinPackSets?: AsinPackSetResult[] }
 
 const COST_RELEVANT_ASIN = new Set(["cogs_adjustment"]);
 const costRelevant = (plan: PoEditPlan): boolean =>
@@ -89,9 +89,10 @@ export async function savePoForm(query: QueryLike, poId: string, next: PoFormSta
   }
   for (const b of plan.lineAdds) await addLine(query, poId, b, userId);
   for (const id of plan.lineRemoves) await removeLine(query, id, userId);
+  const asinPackSets: AsinPackSetResult[] = []; // ASINs with no pack on record set from this PO (Maria 2026-11-06)
   for (const e of plan.asinEdits) {
     const row = (await query(`SELECT id FROM po_asins WHERE po_id = $1 AND asin = $2`, [poId, e.asin])).rows[0];
-    if (row) await editAsinRow(query, String(row.id), e.body, userId);
+    if (row) { const r = await editAsinRow(query, String(row.id), e.body, userId); if (r.asinPackSet) asinPackSets.push(r.asinPackSet); }
   }
   for (const b of plan.promoAdds) await addMoneyRow(query, "po_promos", poId, b, userId);
   for (const e of plan.promoEdits) await editMoneyRow(query, "po_promos", e.id, e.body, userId);
@@ -106,5 +107,5 @@ export async function savePoForm(query: QueryLike, poId: string, next: PoFormSta
   await evaluateAutoClose(poId, query);
   const after = Number((await query(`SELECT COUNT(*)::int AS n FROM po_edit_log WHERE po_id = $1`, [poId])).rows[0]?.n ?? 0);
   const { errors: _e, ...rest } = plan;
-  return { poId, changes: after - before, warning, plan: rest };
+  return { poId, changes: after - before, warning, plan: rest, ...(asinPackSets.length ? { asinPackSets } : {}) };
 }

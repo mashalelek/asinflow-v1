@@ -17,7 +17,7 @@
 // No stored COGS / Sourcing / Paid value is recomputed here (CLAUDE.md,
 // Maria 2026-10-31): a cost is written only when its field was changed; a
 // v2 PO's costs follow the server's recomputePoCosts as with every edit.
-import { checkPoForm, emptyPoForm, productRatio, productLineMoney, priceText, yieldFromPacks, SOLD_AS_OPTIONS, PROMO_IN_PRICES_QUESTION, type PoFormState, type PoFormProduct, type PoFormPromo, type PoFormPayment, type PoFormCheck, type SoldAs } from "./po-form";
+import { checkPoForm, emptyPoForm, productRatio, productLineMoney, priceText, yieldFromPacks, SOLD_AS_OPTIONS, PROMO_IN_PRICES_QUESTION, type PoFormState, type PoFormProduct, type PoFormPromo, type PoFormPayment, type PoFormCheck, type SoldAs, type FormSoldAs } from "./po-form";
 import { ratioYield } from "./yield";
 
 type Row = Record<string, any>;
@@ -36,7 +36,8 @@ export function ymdOfStored(v: unknown): string {
   const d = new Date(s);
   return Number.isNaN(d.getTime()) ? "" : `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
 }
-const soldAsOf = (v: unknown): SoldAs => ((SOLD_AS_OPTIONS as readonly string[]).includes(String(v)) ? (String(v) as SoldAs) : "individual");
+// NULL (not known) stays "" — "— choose —" in the form, never individual (Maria 2026-11-06: walmart.com 200014473088890).
+const soldAsOf = (v: unknown): FormSoldAs => ((SOLD_AS_OPTIONS as readonly string[]).includes(String(v)) ? (String(v) as SoldAs) : "");
 
 /** A sheet-imported PO (cost_formula_version NULL): its stored costs are shown as stored and never recomputed. */
 export const isImportedPo = (po: Row): boolean => po.cost_formula_version == null;
@@ -48,8 +49,8 @@ export function poToForm(d: StoredPo): PoFormState {
   const products: PoFormProduct[] = [];
   for (const a of d.asins) {
     const soldAs = soldAsOf(a.sold_as);
-    const upp = soldAs === "individual" ? "1" : str(a.units_per_pack);
-    const pk = soldAs === "individual" ? 1 : Number(upp) || 1;
+    const upp = soldAs === "individual" ? "1" : soldAs === "" ? "" : str(a.units_per_pack);
+    const pk = soldAs === "individual" || soldAs === "" ? 1 : Number(upp) || 1;
     for (const l of a.lines ?? []) {
       const R = Number(l.retailer_units_per_product), U = Number(l.asin_units_per_pack);
       let retailer = "1", yieldManual = false, y: string;
@@ -64,7 +65,7 @@ export function poToForm(d: StoredPo): PoFormState {
         ...(l.line_total != null ? { line_total: moneyText(l.line_total) } : {}),
         ...(l.regular_price != null ? { regular_price: isWholeCents(l.regular_price) ? moneyText(l.regular_price) : numText(l.regular_price) } : {}),
         retailer_units_per_pack: retailer, asin: str(a.asin).toUpperCase(), asin_qty_per_product: y, yield_manual: yieldManual,
-        sold_as: soldAs, units_per_pack: upp, prep_cost: moneyText(a.prep_cost), notes: str(l.notes),
+        sold_as: soldAs, units_per_pack: upp, ...(soldAs === "" ? { pack_keep_yield: true } : {}), prep_cost: moneyText(a.prep_cost), notes: str(l.notes),
       });
     }
   }
@@ -201,9 +202,13 @@ export function planPoEdit(stored: PoFormState, next: PoFormState, opts: { impor
   for (const a of nc.asins) {
     const s = sc.asins.find((x) => x.asin === a.asin);
     const body: Record<string, unknown> = {};
-    const want = { sold_as: a.sold_as, units_per_pack: String(a.units_per_pack), prep_cost: a.prep_cost };
+    // A pack not known goes out as null (a new ASIN row stays "Pack size missing"); choosing one — individual too — is a change.
+    const want = { sold_as: a.sold_as === "" ? null : a.sold_as, units_per_pack: a.units_per_pack == null ? null : String(a.units_per_pack), prep_cost: a.prep_cost };
     if (!s) Object.assign(body, want);
-    else for (const k of ["sold_as", "units_per_pack", "prep_cost"] as const) if (canonField(k, want[k]) !== canonField(k, k === "units_per_pack" ? String(s.units_per_pack) : s[k])) body[k] = want[k];
+    else for (const k of ["sold_as", "units_per_pack", "prep_cost"] as const) {
+      const was = k === "units_per_pack" ? (s.units_per_pack == null ? null : String(s.units_per_pack)) : k === "sold_as" ? (s.sold_as === "" ? null : s.sold_as) : s[k];
+      if ((want[k] == null) !== (was == null) || canonField(k, want[k]) !== canonField(k, was)) body[k] = want[k];
+    }
     const ovN = canonField("cost_per_unit", next.cost_overrides?.[a.asin]), ovS = canonField("cost_per_unit", stored.cost_overrides?.[a.asin]);
     if (!s) { if (ovN !== "") body.cost_per_unit = str(next.cost_overrides[a.asin]); else if (opts.imported && a.computed_cost_per_unit) body.cost_per_unit = a.computed_cost_per_unit; }
     else if (ovN !== ovS) body.cost_per_unit = ovN !== "" ? str(next.cost_overrides[a.asin]) : opts.imported ? "" : a.computed_cost_per_unit ?? "";
@@ -211,7 +216,7 @@ export function planPoEdit(stored: PoFormState, next: PoFormState, opts: { impor
     if (canonField("cogs_adjustment", adjN?.amount) !== canonField("cogs_adjustment", adjS?.amount)) body.cogs_adjustment = str(adjN?.amount);
     if (str(adjN?.reason) !== str(adjS?.reason)) body.cogs_adjustment_reason = str(adjN?.reason);
     if (Object.keys(body).length) plan.asinEdits.push({ asin: a.asin, body, isNew: !s });
-    if (next.pack_updates?.[a.asin] === true) plan.packUpdates.push({ asin: a.asin, sold_as: a.sold_as, units_per_pack: a.units_per_pack });
+    if (next.pack_updates?.[a.asin] === true && a.sold_as !== "" && a.units_per_pack != null) plan.packUpdates.push({ asin: a.asin, sold_as: a.sold_as, units_per_pack: a.units_per_pack });
   }
 
   // Promos and payments, by id.

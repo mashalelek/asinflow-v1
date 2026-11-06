@@ -22,6 +22,8 @@ import React, { useEffect, useLayoutEffect, useMemo, useRef, useState } from "re
 // (File name kept for history — since 2026-11-01 this is the New PO PAGE, no Dialog.)
 import { Plus, Trash2, AlertTriangle, Sparkles, Database, FileText, ArrowUp } from "lucide-react";
 import { nameMismatchNote } from "@shared/name-match";
+import { titlePackSuggestion } from "@shared/pack-parse";
+import { useToast } from "@/hooks/use-toast";
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription, DialogFooter } from "@/components/ui/dialog"; // the pack-override question only
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -31,8 +33,7 @@ import { useAuth } from "@/contexts/auth-context";
 import {
   checkPoForm, emptyPoForm, emptyProduct, emptyPromo, emptyPayment, shipsToFromForm, yieldFromPacks, promoCountsByDefault, resolvePaymentNickname, ambiguousPaymentHint, defaultRewardPct, WEIGHTED_PAYMENT_LABEL, PROMO_REFLECTED_NOTE,
   SOLD_AS_OPTIONS, PROMO_TYPES, PAYMENT_METHODS, CASHBACK_STATUSES,
-  type PoFormState, type PoFormProduct, type PoFormPromo, type PoFormPayment, type PoFormPrefill, type PrefillSource,
-} from "@shared/po-form";
+  type PoFormState, type PoFormProduct, type PoFormPromo, type PoFormPayment, type PoFormPrefill, type PrefillSource, asinPackSetLabel, asinPackSetNote } from "@shared/po-form";
 import { editBlockingErrors } from "@shared/po-edit-form";
 import { groupLines, newLineId, lineQty, slotUnits, setSlotUnits, resetSlotYield, addAsinRow, addProductToBundle, removeAsinRow, removeLine, ensureLineIds, isFractional, FRACTIONAL_UNITS_NOTE, type LineBox } from "@shared/po-lines";
 
@@ -242,6 +243,7 @@ export function NewPoForm({ open, onOpenChange, onCreated, prefill, initialSuppl
   /** The form's lists (GET /api/pos/purchasers, round 2 2026-11-01): purchasers, every email used + the defaults, cashback sites in order, canonical payment names + aliases, the Velocity prep rate. */
   const [people, setPeople] = useState<{ users: Array<{ id: number; display_name: string }>; emails: string[]; cashback_sites: string[]; payment_methods: string[]; payment_aliases: Record<string, string>; payment_last4: Record<string, string>; payment_reward_pct: Record<string, number>; velocity_prep: number | null }>({ users: [], emails: [], cashback_sites: [], payment_methods: [], payment_aliases: {}, payment_last4: {}, payment_reward_pct: {}, velocity_prep: null });
   const [emailOther, setEmailOther] = useState(false);
+  const { toast } = useToast();
   const [packAsk, setPackAsk] = useState<{ asin: string; from: string; to: string } | null>(null);
   const [rawOpen, setRawOpen] = useState(false);
   // Seeded synchronously with the stored PO's ASINs (Edit PO): a picker that finds its ASIN known never re-picks it, so loading never resets a pack.
@@ -327,7 +329,16 @@ export function NewPoForm({ open, onOpenChange, onCreated, prefill, initialSuppl
       // A captured line total holds only for the captured price and qty (2026-11-04); typing either one goes back to price × qty.
       if ((k === "price" || k === "qty_ordered") && next.line_total) next.line_total = "";
       if (k === "sold_as" && v === "individual") next.units_per_pack = "1";
-      if (k === "sold_as" && v !== "individual" && (next.units_per_pack === "1" || next.units_per_pack === "")) next.units_per_pack = "2";
+      if (k === "sold_as" && (v === "multi-pack" || v === "bundle") && (next.units_per_pack === "1" || next.units_per_pack === "")) next.units_per_pack = "2";
+      // A stored row whose pack was not known (Edit PO, 2026-11-06): the pack chosen keeps the stored yield — the ASIN
+      // units ordered are the fact — and the retailer units follow it (yield 2 with a 2-pack → 4 retailer units).
+      if (next.pack_keep_yield && next.sold_as !== "" && (k === "sold_as" || k === "units_per_pack")) {
+        if (!next.yield_manual) {
+          const pk = next.sold_as === "individual" ? 1 : Number(next.units_per_pack) || 0, y = Number(next.asin_qty_per_product);
+          if (pk >= 1 && Number.isInteger(y * pk)) next.retailer_units_per_pack = String(y * pk);
+        }
+        return next;
+      }
       // §6.5 pack math keeps the yield in step until it is typed by hand.
       if (!next.yield_manual && ["retailer_units_per_pack", "units_per_pack", "sold_as"].includes(String(k))) next.asin_qty_per_product = yieldFromPacks(next.retailer_units_per_pack, next.units_per_pack, next.sold_as);
       return next;
@@ -363,7 +374,7 @@ export function NewPoForm({ open, onOpenChange, onCreated, prefill, initialSuppl
   /** §6.5: a pack change on an ASIN AF knows → ask once per ASIN. */
   const onPackBlur = (i: number) => {
     const p = form.products[i]; const info = known.get(p.asin.toUpperCase());
-    if (!info?.in_af || !info.sold_as) return;
+    if (!info?.in_af || !info.sold_as || p.sold_as === "") return;
     const afUpp = info.sold_as === "individual" ? 1 : Number(info.units_per_pack ?? 1);
     const upp = p.sold_as === "individual" ? 1 : Number(p.units_per_pack) || 1;
     if (upp === afUpp && p.sold_as === info.sold_as) { setForm((f) => ({ ...f, pack_updates: { ...(f.pack_updates ?? {}), [p.asin]: false } })); return; }
@@ -401,7 +412,8 @@ export function NewPoForm({ open, onOpenChange, onCreated, prefill, initialSuppl
         const res = await fetch(`/api/pos/${edit.poId}/form`, { method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ ...settled.form, ships_to: shipsTo }) });
         const data = await res.json().catch(() => ({}));
         if (!res.ok) throw new Error(data.message || `HTTP ${res.status}`);
-        edit.onSaved({ changes: Number(data.changes) || 0, warning: data.warning });
+        const packNotes: string[] = (data.asinPackSets ?? []).map(asinPackSetNote);
+        edit.onSaved({ changes: Number(data.changes) || 0, warning: [data.warning, ...packNotes].filter(Boolean).join(" · ") || undefined });
       } catch (e: any) { setServerErr(e.message); } finally { setBusy(false); }
       return;
     }
@@ -411,6 +423,7 @@ export function NewPoForm({ open, onOpenChange, onCreated, prefill, initialSuppl
       const res = await fetch("/api/pos", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ ...settled.form, ships_to: shipsTo }) });
       const data = await res.json().catch(() => ({}));
       if (!res.ok) throw new Error(data.message || `HTTP ${res.status}`);
+      for (const r of data.asinPackSets ?? []) toast({ title: "Pack size set in AF", description: asinPackSetNote(r) });
       onOpenChange(false); onCreated(String(data.poId));
     } catch (e: any) { setServerErr(e.message); } finally { setBusy(false); }
   };
@@ -438,6 +451,7 @@ export function NewPoForm({ open, onOpenChange, onCreated, prefill, initialSuppl
   const showReg = form.products.some((p) => String(p.regular_price ?? "").trim() !== "");
   const G_LINE = showReg ? "grid grid-cols-[7.5rem_minmax(12rem,40rem)_5.5rem_5.5rem_4rem_4.5rem_1.75rem] items-start gap-x-2" : "grid grid-cols-[7.5rem_minmax(12rem,40rem)_5.5rem_4rem_4.5rem_1.75rem] items-start gap-x-2";
   // 2026-11-06: reason / notes 84 and the title from 6.5 rem so the row (and a bundle's, inside its ring) fits on one line at 1280.
+  const PACK_MISSING_CLS = "!border-amber-500 text-amber-700 dark:text-amber-400"; // a pack not known (2026-11-06)
   const A = { arrow: 16, asin: 176, qty: 72, sold: 92, upp: 60, prep: 64, sourcing: 72, cogs: 88, paid: 72, adj: 72, reason: 84, notes: 84, rm: 24 } as const;
   const cell = (w: number, cls = "") => ({ className: `shrink-0 ${cls}`, style: { width: w } });
   const ASIN_LABELS: Array<[string, number | "title", string?]> = [["", A.arrow], ["ASIN", A.asin], ["Title", "title"], ["ASIN qty", A.qty, "text-right"], ["Sold as", A.sold], ["Units/pack", A.upp, "text-right"], ["Prep", A.prep, "text-right"], ["Sourcing", A.sourcing, "text-right"], ["COGS", A.cogs, "text-right"], ["Paid", A.paid, "text-right"], ["Adjustment", A.adj, "text-right"], ["Reason", A.reason], ["Notes", A.notes], ["", A.rm]];
@@ -644,6 +658,7 @@ export function NewPoForm({ open, onOpenChange, onCreated, prefill, initialSuppl
                     const anyQty = slot.some((j) => Number(form.products[j].qty_ordered) > 0);
                     const qty = Number(p.qty_ordered) || 0, r = Number(p.retailer_units_per_pack ?? "1") || 1, u = p.sold_as === "individual" ? 1 : Number(p.units_per_pack) || 1;
                     const info = known.get(p.asin.toUpperCase());
+                    const packSug = p.sold_as === "" && !box.bundle ? titlePackSuggestion(info?.title) : null; // the title's pack, unconfirmed
                     const guess = p.asin.length === 10 && sources[`products.${i}.asin`] === "model" ? p.asin : null;
                     const manual = slot.some((j) => form.products[j].yield_manual);
                     // Edit PO: a yield kept from the stored line (no integers, or ones the pack math cannot reproduce) reads "stored yield", not "typed".
@@ -665,10 +680,12 @@ export function NewPoForm({ open, onOpenChange, onCreated, prefill, initialSuppl
                           <Input {...cell(A.qty)} value={anyQty ? String(units) : ""} onChange={(e) => onSlotUnits(box.key, k, e.target.value)} inputMode="decimal" placeholder="ASIN qty" className={`h-8 shrink-0 text-xs text-right ${frac ? "font-semibold text-destructive" : ""}`} title={box.bundle ? `sets: the smallest member's qty × yield = ${units}` : `${qty} × ${r} ÷ ${u} = ${units}`} data-testid={`input-new-po-asin-qty-${i}`} />
                           {box.bundle
                             ? <div {...cell(A.sold, "flex h-8 items-center text-xs")} data-testid={`select-new-po-sold_as-${i}`}>bundle</div>
-                            : <select value={p.sold_as} onChange={(e) => setMany(slot, "sold_as", e.target.value)} onBlur={() => onPackBlur(i)} className={`${sel} shrink-0 ${mark(`asin.${p.asin.toUpperCase()}`)}`} style={{ width: A.sold }} data-testid={`select-new-po-sold_as-${i}`}>
+                            // Not known (2026-11-06): "— choose —" in amber, or the title's pack shown as an unconfirmed suggestion — saved only once confirmed.
+                            : <select value={p.sold_as || packSug?.sold_as || ""} onChange={(e) => setMany(slot, "sold_as", e.target.value)} onBlur={() => onPackBlur(i)} className={`${sel} shrink-0 ${p.sold_as === "" ? PACK_MISSING_CLS : mark(`asin.${p.asin.toUpperCase()}`)}`} style={{ width: A.sold }} data-testid={`select-new-po-sold_as-${i}`} data-pack-missing={p.sold_as === "" ? (packSug ? "suggested" : "yes") : undefined}>
+                                {p.sold_as === "" && <option value="">— choose —</option>}
                                 {SOLD_AS_OPTIONS.filter((o) => o !== "bundle" || p.sold_as === "bundle").map((o) => <option key={o} value={o}>{o}</option>)}
                               </select>}
-                          <Input {...cell(A.upp)} value={p.units_per_pack} disabled={p.sold_as === "individual"} onChange={(e) => setMany(slot, "units_per_pack", e.target.value)} onBlur={() => onPackBlur(i)} inputMode="numeric" title="ASIN units / pack" className={`h-8 shrink-0 text-xs text-right ${mark(`asin.${p.asin.toUpperCase()}`)}`} data-testid={`input-new-po-units_per_pack-${i}`} />
+                          <Input {...cell(A.upp)} value={p.sold_as === "" ? (packSug ? String(packSug.units_per_pack) : "") : p.units_per_pack} disabled={p.sold_as === "individual" || p.sold_as === ""} onChange={(e) => setMany(slot, "units_per_pack", e.target.value)} onBlur={() => onPackBlur(i)} inputMode="numeric" title="ASIN units / pack" className={`h-8 shrink-0 text-xs text-right ${p.sold_as === "" ? PACK_MISSING_CLS : mark(`asin.${p.asin.toUpperCase()}`)}`} data-testid={`input-new-po-units_per_pack-${i}`} />
                           <div {...cell(A.prep)}><MoneyCalcInput value={p.prep_cost} onChange={(v) => setMany(slot, "prep_cost", v)} placeholder="prep" className={`h-8 text-xs text-right ${mark("prep_cost")}`} data-testid={`input-new-po-prep_cost-${i}`} /></div>
                           <div {...cell(A.sourcing, "flex h-8 items-center justify-end font-mono text-xs")} title={stored ? "Stored (sheet import) — never recomputed" : "Col AR: before the gift-card discount, promos applied — what Update COGS in SC sends"} data-testid={a ? `new-po-sourcing-${a.asin}` : undefined}>{sourcingShown ?? "—"}</div>
                           <div {...cell(A.cogs)}>
@@ -688,8 +705,21 @@ export function NewPoForm({ open, onOpenChange, onCreated, prefill, initialSuppl
                           {!stored && a?.sourcing_cost && <span>sourcing = {showReg ? "the order's cost shared by regular price × qty" : "Σ(paid price × qty)"} ÷ {a.qty} = {a.sourcing_cost}</span>}
                           {!stored && a?.computed_cost_per_unit && <span>COGS = {a.sourcing_cost} × (1 − {check.weightedGcPct ?? 0}%){a.cogs_adjustment ? ` + ${a.cogs_adjustment}` : ""} = {a.computed_cost_per_unit}</span>}
                           {frac && <span data-testid={`new-po-fractional-${i}`}>{FRACTIONAL_UNITS_NOTE}</span>}
+                          {p.sold_as === "" && !box.bundle && (
+                            <span className="text-amber-700 dark:text-amber-400" data-testid={`new-po-pack-missing-${i}`}>
+                              pack size missing{packSug ? <> · title says {packSug.text} <button type="button" className="underline" onClick={() => { setMany(slot, "sold_as", packSug.sold_as); if (packSug.sold_as !== "individual") setMany(slot, "units_per_pack", String(packSug.units_per_pack)); }} data-testid={`button-new-po-pack-confirm-${i}`}>confirm</button></> : " — choose individual or multi-pack"}
+                            </span>
+                          )}
                           {manual && <span data-testid={`new-po-yield-note-${i}`}>{storedYield ? "stored yield" : "typed"} <button type="button" className="underline" onClick={() => onResetSlot(box.key, k)} title="Back to the pack math">reset</button></span>}
                           {form.pack_updates?.[p.asin] === true && <span>updates ASIN in AF</span>}
+                          {/* No pack on AF's record (Maria 2026-11-06): the save sets it, no question asked. */}
+                          {info?.in_af && !info.sold_as && (p.sold_as === "individual" || (p.sold_as === "multi-pack" && Number(p.units_per_pack) >= 2)) && (
+                            <span data-testid={`new-po-pack-set-${i}`}>{asinPackSetLabel(p.sold_as, p.units_per_pack)}</span>
+                          )}
+                          {/* The offer stays hidden when AF's ASIN already has this pack (Maria 2026-11-06): say so quietly, once the pack has been entered. */}
+                          {form.pack_updates?.[p.asin] === false && info?.in_af && info.sold_as && p.sold_as === info.sold_as && (p.sold_as === "individual" ? 1 : Number(p.units_per_pack)) === (info.sold_as === "individual" ? 1 : Number(info.units_per_pack ?? 1)) && (
+                            <span data-testid={`new-po-pack-same-${i}`}>ASIN already ×{info.sold_as === "individual" ? 1 : info.units_per_pack}</span>
+                          )}
                           {(() => { const src = asinSourceLabel(info?.via) ?? (sources[`products.${i}.asin`] ? hint(`products.${i}.asin`) ?? null : null); return src ? <span className={sources[`products.${i}.asin`] === "model" && !asinSourceLabel(info?.via) ? "text-amber-700 dark:text-amber-400" : ""} data-testid={`new-po-asin-source-${i}`}>{src}</span> : null; })()}
                           {(() => { const note = info?.title ? nameMismatchNote(p.product_name, info.title, info.brand) : null; return note ? <span className="text-amber-700 dark:text-amber-400" data-testid={`new-po-asin-mismatch-${i}`}>{note}</span> : null; })()}
                         </div>

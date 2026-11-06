@@ -83,6 +83,8 @@ export const yieldParser: Parser = (v) => {
 };
 export const SOLD_AS = ["individual", "multi-pack", "bundle"] as const;
 export const soldAsParser: Parser = (v) => (SOLD_AS as readonly string[]).includes(String(v)) ? { ok: true, value: String(v) } : { ok: false, error: `must be one of ${SOLD_AS.join(", ")}` };
+/** An ASIN row's sold as: one of SOLD_AS, or null — not known ("Pack size missing"; Edit PO's new ASIN row with no pack chosen, 2026-11-06). */
+export const soldAsOrNullParser: Parser = (v) => (v === null ? { ok: true, value: null } : soldAsParser(v));
 export const asinParser: Parser = (v) => {
   const s = typeof v === "string" ? v.trim().toUpperCase() : "";
   return /^[A-Z0-9]{10}$/.test(s) ? { ok: true, value: s } : { ok: false, error: "must be a 10-character ASIN" };
@@ -115,7 +117,7 @@ export const LINE_FIELDS: Record<string, Parser> = {
 };
 /** §3 ASIN-row fields (the manual quantities, action items and Cancel ASIN keep their routes). */
 export const ASIN_FIELDS: Record<string, Parser> = {
-  sold_as: soldAsParser, units_per_pack: intQty({ nullable: false, min: 1 }), cost_per_unit: money({ nullable: true }), prep_cost: money({ nullable: true }),
+  sold_as: soldAsOrNullParser, units_per_pack: intQty({ nullable: true, min: 1 }), cost_per_unit: money({ nullable: true }), prep_cost: money({ nullable: true }),
   asin_name: textOrNull, notes: textOrNull,
   // Capture PO patch §7 (2026-10-31): the COGS adjustment (a v2 PO recomputes its COGS from it) and the two other costs.
   cogs_adjustment: money({ nullable: true, negative: true }), cogs_adjustment_reason: textOrNull, sourcing_cost: money({ nullable: true }), paid_cost: money({ nullable: true }),
@@ -247,7 +249,7 @@ async function dropAsinRowIfEmpty(query: QueryLike, poAsinId: string, userId: nu
   await logEdits(query, String(pa.po_id), userId, "asin", poAsinId, [{ field: "asin row removed", old: String(pa.asin), new: null }]);
 }
 
-export interface EditResult { poId: string; changes: FieldChange[]; close: AutoCloseOutcome; warning?: string }
+export interface EditResult { poId: string; changes: FieldChange[]; close: AutoCloseOutcome; warning?: string; asinPackSet?: AsinPackSetResult }
 
 /** §3 header edit. supplier / order # stay unique together; changing order # warns (Velocity matching). */
 export async function editPoHeader(query: QueryLike, poId: string, body: unknown, userId: number | null): Promise<EditResult> {
@@ -367,10 +369,17 @@ export async function editAsinRow(query: QueryLike, poAsinId: string, body: unkn
   if (!p.ok) throw new EditError(400, p.error);
   const cur = (await query(`SELECT * FROM po_asins WHERE id = $1`, [poAsinId])).rows[0];
   if (!cur) throw new EditError(404, "ASIN row not found");
-  const soldAs = String(p.edits.sold_as ?? cur.sold_as ?? "individual");
-  if (soldAs === "individual") {
+  // The pack (2026-11-06): NULL = not known, never read as individual. Sold as and units / pack are written together.
+  const soldAs = ("sold_as" in p.edits ? p.edits.sold_as : cur.sold_as) as string | null;
+  const upp = ("units_per_pack" in p.edits ? p.edits.units_per_pack : cur.units_per_pack) as number | null;
+  if (soldAs == null) {
+    if ("units_per_pack" in p.edits && p.edits.units_per_pack != null) throw new EditError(400, "units_per_pack must be empty while sold as is not known");
+    if ("sold_as" in p.edits) p.edits.units_per_pack = null;
+  } else if (soldAs === "individual") {
     if ("units_per_pack" in p.edits && Number(p.edits.units_per_pack) !== 1) throw new EditError(400, "units_per_pack must be 1 for an individual ASIN");
     if (p.edits.sold_as === "individual") p.edits.units_per_pack = 1;
+  } else if (soldAs === "multi-pack" && ("sold_as" in p.edits || "units_per_pack" in p.edits) && !(Number(upp) >= 2)) {
+    throw new EditError(400, "a multi-pack needs units per pack (2 or more)");
   }
   const poId = String(cur.po_id);
   const changes = changedFields(cur, p.edits);
@@ -378,9 +387,87 @@ export async function editAsinRow(query: QueryLike, poAsinId: string, body: unkn
     const cols = changes.map((c) => c.field);
     await query(`UPDATE po_asins SET ${cols.map((c, i) => `${c} = $${i + 2}`).join(", ")} WHERE id = $1`, [poAsinId, ...cols.map((c) => p.edits[c])]);
     await logEdits(query, poId, userId, "asin", poAsinId, changes);
+    // A pack chosen for a row whose pack was not known keeps each line's stored yield (the ASIN units ordered are the
+    // known fact): the line's ASIN units / pack become the pack, its retailer units follow — 2/1 with a 2-pack → 4/2.
+    if (cur.sold_as == null && soldAs != null && soldAs !== "bundle") await keepYieldOnPack(query, poId, poAsinId, soldAs === "individual" ? 1 : Number(upp), userId);
     if (changes.some((c) => c.field === "sold_as")) await recomputeAsinQty(query, poAsinId, userId);
   }
-  return { poId, changes, close: await evaluateAutoClose(poId, query) };
+  const packSet = changes.some((c) => c.field === "sold_as" || c.field === "units_per_pack") && (soldAs === "individual" || soldAs === "multi-pack")
+    ? await setUnknownAsinPack(query, String(cur.asin), soldAs, soldAs === "individual" ? 1 : Number(upp), userId, poAsinId) : null;
+  return { poId, changes, close: await evaluateAutoClose(poId, query), ...(packSet ? { asinPackSet: packSet } : {}) };
+}
+
+export interface AsinPackSetResult { asin: string; sold_as: string; units_per_pack: number; openRows: number; closedRows: number; closedSkipped: number; lines: number }
+
+/**
+ * An ASIN with NO pack on record (Maria 2026-11-06): a pack entered on a PO sets the record without asking
+ * (asin_field_log, source po_form) and fills that ASIN's other PO rows whose pack is not known. Each line's retailer
+ * units come from its stored yield (a line's own integers keep their ratio; a NULL-integer line takes
+ * round(yield × pack) when the stored 2-dp yield is that ratio within 0.005). An open row always takes the pack and
+ * its lines take the integers when Σ ordered × retailer ÷ pack reproduces the row's stored Ordered within 0.01; a
+ * closed row is filled only when it reproduces. Stored quantities and costs are never changed. A record that already
+ * has a pack is left alone (a differing one is the form's "Update ASIN in AF" question). Bundles are not packs.
+ */
+export async function setUnknownAsinPack(query: QueryLike, asin: string, soldAs: "individual" | "multi-pack", pack: number, userId: number | null, sourcePoAsinId?: string): Promise<AsinPackSetResult | null> {
+  const a = asin.toUpperCase();
+  if (!(Number.isInteger(pack) && pack >= 1)) return null;
+  const rec = (await query(`SELECT sold_as, units_per_pack FROM asins WHERE asin = $1`, [a])).rows[0];
+  if (!rec || rec.sold_as != null) return null;
+  await query(`UPDATE asins SET sold_as = $2, units_per_pack = $3 WHERE asin = $1`, [a, soldAs, pack]);
+  for (const c of changedFields({ sold_as: rec.sold_as, units_per_pack: rec.units_per_pack }, { sold_as: soldAs, units_per_pack: pack })) {
+    await query(`INSERT INTO asin_field_log (asin, user_id, field, old_value, new_value, source) VALUES ($1, $2, $3, $4, $5, $6)`, [a, userId, c.field, c.old, c.new, "po_form"]);
+  }
+  const out: AsinPackSetResult = { asin: a, sold_as: soldAs, units_per_pack: pack, openRows: 0, closedRows: 0, closedSkipped: 0, lines: 0 };
+  const rows = (await query(
+    `SELECT pa.id, pa.po_id, pa.qty, p.closed_at IS NOT NULL AS closed FROM po_asins pa JOIN purchase_orders p ON p.id = pa.po_id
+      WHERE pa.asin = $1 AND pa.sold_as IS NULL AND pa.id::text <> $2`, [a, sourcePoAsinId ?? ""],
+  )).rows;
+  for (const r of rows) {
+    const lines = (await query(`SELECT id, qty_ordered, retailer_units_per_product, asin_units_per_pack, asin_qty_per_product FROM po_line_items WHERE po_asin_id = $1`, [r.id])).rows;
+    const fit = linesAtPack(lines, pack);
+    const reproduces = fit != null && lines.length > 0 && Math.abs(fit.units - Number(r.qty)) <= 0.01 + 1e-9;
+    if (r.closed && !reproduces) { out.closedSkipped++; continue; }
+    const poId = String(r.po_id);
+    await query(`UPDATE po_asins SET sold_as = $2, units_per_pack = $3 WHERE id = $1`, [r.id, soldAs, pack]);
+    await logEdits(query, poId, userId, "asin", String(r.id), [{ field: "sold_as (ASIN pack set)", old: null, new: soldAs }, { field: "units_per_pack (ASIN pack set)", old: null, new: String(pack) }]);
+    if (r.closed) out.closedRows++; else out.openRows++;
+    if (!reproduces) continue;
+    for (const l of fit!.lines) {
+      if (Number(l.cur.retailer_units_per_product) === l.retailer && Number(l.cur.asin_units_per_pack) === pack) continue;
+      await query(`UPDATE po_line_items SET retailer_units_per_product = $2, asin_units_per_pack = $3 WHERE id = $1`, [l.cur.id, l.retailer, pack]);
+      await logEdits(query, poId, userId, "line", String(l.cur.id), changedFields(l.cur, { retailer_units_per_product: l.retailer, asin_units_per_pack: pack }).map((c) => ({ ...c, field: `${c.field} (ASIN pack set)` })));
+      out.lines++;
+    }
+  }
+  return out;
+}
+
+/** Each line's retailer units at this pack (its own ratio kept, else its stored yield within 0.005 of r ÷ pack) and Σ ordered × r ÷ pack; null when a line has no such whole number. */
+export function linesAtPack<L extends { qty_ordered: unknown; retailer_units_per_product: unknown; asin_units_per_pack: unknown; asin_qty_per_product: unknown }>(lines: L[], pack: number): { units: number; lines: Array<{ cur: L; retailer: number }> } | null {
+  const out: Array<{ cur: L; retailer: number }> = [];
+  let units = 0;
+  for (const l of lines) {
+    const ratio = lineRatio(l as any);
+    let r: number;
+    if (ratio) { const k = (ratio.retailer * pack) / ratio.asinUnits; if (!Number.isInteger(k)) return null; r = k; }
+    else { const y = Number(l.asin_qty_per_product); if (!(y > 0)) return null; r = Math.round(y * pack); if (r < 1 || Math.abs(y - r / pack) > 0.005 + 1e-9) return null; }
+    out.push({ cur: l, retailer: r });
+    units += (Number(l.qty_ordered) || 0) * r / pack;
+  }
+  return { units: Math.round(units * 100) / 100, lines: out };
+}
+
+/** The ASIN row's lines take the pack as their ASIN units / pack, the yield unchanged; a line the pack cannot express in whole retailer units is left as it is. */
+async function keepYieldOnPack(query: QueryLike, poId: string, poAsinId: string, pack: number, userId: number | null): Promise<void> {
+  if (!(Number.isInteger(pack) && pack >= 1)) return;
+  const lines = (await query(`SELECT id, retailer_units_per_product, asin_units_per_pack FROM po_line_items WHERE po_asin_id = $1`, [poAsinId])).rows;
+  for (const l of lines) {
+    const R = Number(l.retailer_units_per_product), U = Number(l.asin_units_per_pack);
+    if (!(Number.isInteger(R) && R > 0 && Number.isInteger(U) && U > 0) || U === pack || (R * pack) % U !== 0) continue;
+    const next = { retailer_units_per_product: (R * pack) / U, asin_units_per_pack: pack };
+    await query(`UPDATE po_line_items SET retailer_units_per_product = $2, asin_units_per_pack = $3 WHERE id = $1`, [l.id, next.retailer_units_per_product, next.asin_units_per_pack]);
+    await logEdits(query, poId, userId, "line", String(l.id), changedFields(l, next));
+  }
 }
 
 /**

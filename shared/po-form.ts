@@ -33,6 +33,12 @@ export const WHOLE_PACKS_WARNING = "Upload to Velocity will skip this line — V
 
 export const SOLD_AS_OPTIONS = ["individual", "multi-pack", "bundle"] as const;
 export type SoldAs = (typeof SOLD_AS_OPTIONS)[number];
+/**
+ * A form row's pack (2026-11-06): one of SOLD_AS_OPTIONS, or "" — not known (po_asins.sold_as NULL, "Pack size
+ * missing"). "" shows as "— choose —" in amber and is saved as NULL; it is never shown or saved as individual.
+ */
+export type FormSoldAs = SoldAs | "";
+export const PACK_SIZE_MISSING_NOTE = "pack size missing — choose individual or multi-pack";
 export const PROMO_TYPES = ["sale", "coupon", "rewards"] as const;
 export type PromoType = (typeof PROMO_TYPES)[number];
 /** §7.2 default: sale and coupon count toward COGS, rewards does not. A promo already reflected in the line prices (Maria 2026-11-01) defaults off whatever its type. */
@@ -200,8 +206,13 @@ export interface PoFormProduct {
   bundle_id?: string;
   /** po_line_items.id of a stored line (Edit PO, shared/po-edit-form.ts); absent = a new line. Never copied to a split's new row. */
   line_item_id?: string;
-  sold_as: SoldAs;
+  sold_as: FormSoldAs;
   units_per_pack: string;
+  /**
+   * Edit PO: the stored row's pack was not known, so choosing one keeps the line's stored yield (the ASIN units
+   * ordered are the known fact) and derives the retailer units from it — 2/1 with a 2-pack chosen → 4/2. Form-only.
+   */
+  pack_keep_yield?: boolean;
   prep_cost: string;
   /** Unit price before a multi-buy deal (BOGO, B2G2, "free"; migration 097) — the line's allocation weight is then this × qty. "" / absent = none. */
   regular_price?: string;
@@ -258,7 +269,7 @@ export function shipsToFromForm(form: Pick<PoFormState, "products">): "velocity"
   return form.products.some((p) => { const v = Number(String(p.prep_cost ?? "").replace(/[$,\s]/g, "")); return Number.isFinite(v) && v > 0; }) ? "velocity" : "home";
 }
 
-export const emptyProduct = (): PoFormProduct => ({ product_name: "", supplier_sku: "", price: "", qty_ordered: "", retailer_units_per_pack: "1", asin: "", asin_qty_per_product: "1", sold_as: "individual", units_per_pack: "1", prep_cost: "1", notes: "" });
+export const emptyProduct = (): PoFormProduct => ({ product_name: "", supplier_sku: "", price: "", qty_ordered: "", retailer_units_per_pack: "1", asin: "", asin_qty_per_product: "1", sold_as: "", units_per_pack: "", prep_cost: "1", notes: "" }); // pack not known until the ASIN's or Maria's (2026-11-06)
 /** §6.5 pack math: yield = retailer units per pack ÷ ASIN units per pack (so ASIN qty = qty × retailer ÷ ASIN). */
 export function yieldFromPacks(retailerUnitsPerPack: string | undefined, asinUnitsPerPack: string | undefined, soldAs: string): string {
   const r = Number(String(retailerUnitsPerPack ?? "1").trim()) || 1;
@@ -318,8 +329,9 @@ const isDate = (s: string) => { const m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(s); i
 
 export interface PoFormAsin {
   asin: string;
-  sold_as: SoldAs;
-  units_per_pack: number;
+  sold_as: FormSoldAs;
+  /** null while the pack is not known. */
+  units_per_pack: number | null;
   prep_cost: string;
   qty: number;                 // Ordered, ASIN units
   unique_products: number | null;
@@ -412,9 +424,10 @@ export function checkPoForm(f: PoFormState): PoFormCheck {
     if (!/^[A-Z0-9]{10}$/.test(t(p.asin).toUpperCase())) perr(i, "map it to an ASIN (10 characters)");
     const y = t(p.asin_qty_per_product);
     if (!/^\d+(\.\d{1,4})?$/.test(y) || Number(y) <= 0) perr(i, "yield must be a number > 0");
-    if (!(SOLD_AS_OPTIONS as readonly string[]).includes(p.sold_as)) perr(i, "sold as must be individual, multi-pack or bundle");
+    // "" = not known: allowed (saved as NULL → "Pack size missing"), warned per ASIN below.
+    if (p.sold_as !== "" && !(SOLD_AS_OPTIONS as readonly string[]).includes(p.sold_as)) perr(i, "sold as must be individual, multi-pack or bundle");
     const upp = t(p.units_per_pack);
-    if (p.sold_as !== "individual" && (!/^\d+$/.test(upp) || Number(upp) < 2)) perr(i, `units per pack must be a whole number ≥ 2 for a ${p.sold_as}`);
+    if ((p.sold_as === "multi-pack" || p.sold_as === "bundle") && (!/^\d+$/.test(upp) || Number(upp) < 2)) perr(i, `units per pack must be a whole number ≥ 2 for a ${p.sold_as}`);
     const rupp = t(p.retailer_units_per_pack ?? "1");
     if (rupp !== "" && (!/^\d+$/.test(rupp) || Number(rupp) < 1)) perr(i, "retailer units / pack must be a whole number ≥ 1");
     const prep = moneyNum(p.prep_cost); if (prep != null && (Number.isNaN(prep) || prep < 0)) perr(i, "prep must be an amount ≥ 0");
@@ -487,6 +500,7 @@ export function checkPoForm(f: PoFormState): PoFormCheck {
         errors.push(`${asin}: its products disagree on sold as / units per pack / prep`); break;
       }
     }
+    if (first.sold_as === "") warnings.push(`${asin}: ${PACK_SIZE_MISSING_NOTE}`);
     // Exact yield (2026-11-02): each row's ratio (retailer units / product ÷ ASIN units / pack, or a typed unit count as a fraction), summed exactly, rounded once.
     const ratios = idx.map((i) => productRatio(products[i]));
     const yLines = idx.map((i, k) => ({ qty_ordered: Number(t(products[i].qty_ordered)) || 0, retailer_units_per_product: ratios[k].retailer, asin_units_per_pack: ratios[k].asinUnits }));
@@ -520,7 +534,7 @@ export function checkPoForm(f: PoFormState): PoFormCheck {
     const ov = ovRaw === "" ? null : moneyNum(ovRaw);
     if (ov != null && (Number.isNaN(ov) || ov < 0)) errors.push(`${asin}: cost / unit must be an amount ≥ 0`);
     asins.push({
-      asin, sold_as: first.sold_as, units_per_pack: first.sold_as === "individual" ? 1 : Number(t(first.units_per_pack)) || 1,
+      asin, sold_as: first.sold_as, units_per_pack: first.sold_as === "" ? null : first.sold_as === "individual" ? 1 : Number(t(first.units_per_pack)) || 1,
       prep_cost: r2(moneyNum(first.prep_cost) ?? 0).toFixed(2), qty, unique_products: first.sold_as === "bundle" ? idx.length : null,
       cost_per_unit: ov != null && !Number.isNaN(ov) ? ov.toFixed(2) : computed, computed_cost_per_unit: computed,
       sourcing_cost: costs == null ? null : costs.sourcing.toFixed(2), paid_cost: costs == null ? null : costs.paid.toFixed(2),
@@ -530,4 +544,13 @@ export function checkPoForm(f: PoFormState): PoFormCheck {
   }
   const ok = errors.length === 0 && Object.keys(productErrors).length === 0;
   return { ok, errors, warnings, productErrors, computedSubtotal, effectiveOrderTotal: r2(effectiveOrderTotal), nonCountingPromoAmount, discountReflected, promoReflected: refl.reflected, promoAmountsUsed: refl.amounts, promoNeedsAnswer: refl.needsAnswer, weightedGcPct, asins };
+}
+
+/** An ASIN with no pack on record set from a PO (Maria 2026-11-06), as the grey line / toast says it. */
+export interface AsinPackSetNote { asin: string; sold_as: string; units_per_pack: number; openRows: number; closedRows: number; closedSkipped: number; lines: number }
+export function asinPackSetLabel(soldAs: string, unitsPerPack: number | string): string { return `ASIN set to ${soldAs} ×${soldAs === "individual" ? 1 : unitsPerPack} in AF`; }
+export function asinPackSetNote(r: AsinPackSetNote): string {
+  const n = (k: number, one: string) => `${k} ${one}${k === 1 ? "" : "s"}`;
+  const filled = [`${n(r.openRows, "open PO row")}`, `${n(r.closedRows, "closed PO row")}`, `${n(r.lines, "line")} given pack integers`];
+  return `${r.asin}: ${asinPackSetLabel(r.sold_as, r.units_per_pack)} · filled ${filled.join(", ")}${r.closedSkipped ? ` · ${n(r.closedSkipped, "closed row")} left (pack doesn't reproduce its stored ASIN qty)` : ""}`;
 }

@@ -300,7 +300,7 @@ export async function enrichPrefill(query: QueryLike, capture: Capture, x: Prefi
     const qty = inferred ?? l.qty;
     // The line total as captured (2026-11-04, acmetools 42838131: 30 × $79.70 ÷ 30 is not whole cents) carries the cost; the price shows it to the cent.
     const lt = lineTotalPrice(l.lineTotal, qty, l.unitPrice);
-    const p: PoFormProduct = { product_name: l.productName, supplier_sku: l.retailerSku ?? "", price: lt ? lt.price : m2(l.unitPrice), qty_ordered: qty == null ? "" : String(qty), retailer_units_per_pack: rupp, asin: "", asin_qty_per_product: "1", sold_as: "individual", units_per_pack: "1", prep_cost: st.prep, notes: "" };
+    const p: PoFormProduct = { product_name: l.productName, supplier_sku: l.retailerSku ?? "", price: lt ? lt.price : m2(l.unitPrice), qty_ordered: qty == null ? "" : String(qty), retailer_units_per_pack: rupp, asin: "", asin_qty_per_product: "1", sold_as: "", units_per_pack: "", prep_cost: st.prep, notes: "" };
     if (lt) p.line_total = lt.line_total;
     if (l.regularUnitPrice != null && l.regularUnitPrice > 0) p.regular_price = String(l.regularUnitPrice);
     for (const k of ["product_name", "supplier_sku", "price", "qty_ordered"] as const) mark(`products.${i}.${k}`, p[k]);

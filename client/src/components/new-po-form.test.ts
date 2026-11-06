@@ -79,3 +79,17 @@ describe("New PO form — round 2 layout", () => {
     expect(src).toMatch(/const want = shipsTo === "velocity" \? people\.velocity_prep\.toFixed\(2\) : "0\.00";/);
   });
 });
+
+// The "Update ASIN in AF" offer (§6.5) is hidden when AF's ASIN already has the entered pack: a quiet line says so (Maria 2026-11-06).
+describe("New PO form — pack offer", () => {
+  const src = readFileSync(resolve(__dirname, "new-po-dialog.tsx"), "utf8");
+  it("a pack equal to AF's ASIN records 'this PO only' silently and shows 'ASIN already ×N'", () => {
+    expect(src).toMatch(/if \(upp === afUpp && p\.sold_as === info\.sold_as\) \{ setForm\(\(f\) => \(\{ \.\.\.f, pack_updates: \{ \.\.\.\(f\.pack_updates \?\? \{\}\), \[p\.asin\]: false \} \}\)\); return; \}/);
+    expect(src).toMatch(/data-testid=\{`new-po-pack-same-\$\{i\}`\}>ASIN already ×/);
+  });
+  it("an ASIN with no pack on record: a grey 'ASIN set to … in AF', no question; the save's counts go in the toast", () => {
+    expect(src).toMatch(/info\?\.in_af && !info\.sold_as && \(p\.sold_as === "individual" \|\| \(p\.sold_as === "multi-pack" && Number\(p\.units_per_pack\) >= 2\)\)/);
+    expect(src).toMatch(/if \(!info\?\.in_af \|\| !info\.sold_as \|\| p\.sold_as === ""\) return;/);
+    expect(src).toMatch(/\(data\.asinPackSets \?\? \[\]\)\.map\(asinPackSetNote\)/);
+  });
+});

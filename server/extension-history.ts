@@ -40,24 +40,9 @@ export type HistoryQuery = z.infer<typeof HistoryQuerySchema>;
 /** Pure: SKU / UPC as compared — dashes, spaces, dots stripped, case folded. */
 export const normSku = (s: string | null | undefined): string => String(s ?? "").replace(/[-\s.]/g, "").toLowerCase();
 
-// The pack-size tokens a listing name carries: "(2-pack)", "12-pack", "12 pk", "Set of 4", "Pack of 6", "× 12" / "x 12"
-// (a trailing multiplier), "N ct", "N count". Each yields the number; the rest of the name is what is compared.
-const PACK_TOKENS: RegExp[] = [
-  /\(\s*(\d{1,4})\s*[- ]?\s*(?:pack|pk|ct|count)\s*\)/gi,
-  /\b(\d{1,4})\s*[- ]?\s*(?:pack|pk)\b/gi,
-  /\b(?:set|pack|case|box)\s+of\s+(\d{1,4})\b/gi,
-  /\b(\d{1,4})\s*[- ]?\s*(?:ct|count)\b\.?/gi,
-  /(?:^|\s)[×x]\s*(\d{1,4})\s*$/gi,
-];
-/** Pure: a listing / line name → its pack size (the first token's number; null when it names none) and the name without the tokens. */
-export function parsePack(name: string | null | undefined): { pack: number | null; base: string } {
-  let s = String(name ?? ""), pack: number | null = null;
-  for (const re of PACK_TOKENS) {
-    s = s.replace(re, (_m, n) => { if (pack == null && Number(n) >= 1) pack = Number(n); return " "; });
-  }
-  const base = s.toLowerCase().normalize("NFD").replace(/[̀-ͯ]/g, "").replace(/[’']/g, "").replace(/[^a-z0-9]+/g, " ").trim().replace(/\s+/g, " ");
-  return { pack, base };
-}
+// The pack-size tokens a listing name carries: shared/pack-parse.ts (moved 2026-11-06).
+export { parsePack } from "@shared/pack-parse";
+import { parsePack } from "@shared/pack-parse";
 
 /** Pure: two base names' similarity, 0–1 — 1 when equal; otherwise the Dice coefficient of their word sets. */
 export function nameScore(a: string, b: string): number {

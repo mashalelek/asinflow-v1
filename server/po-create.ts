@@ -14,7 +14,7 @@
 import type { QueryLike } from "./scheduler/types";
 import { checkPoForm, shipsToFromForm, canonicalPaymentName, defaultRewardPct, COST_FORMULA_VERSION_SAVED, type PoFormState } from "@shared/po-form";
 import { afEntrySeq } from "./po-entry-seq";
-import { logEdits, EditError } from "./po-edit";
+import { logEdits, EditError, setUnknownAsinPack, type AsinPackSetResult } from "./po-edit";
 import { applyAsinPackUpdate, parsePack } from "./asin-pack";
 import { subscriptionsFromForm } from "./subscriptions";
 
@@ -37,7 +37,7 @@ export async function withRewardDefaults(query: QueryLike, form: PoFormState): P
   }) };
 }
 
-export async function createPoFromForm(query: QueryLike, form0: PoFormState, userId: number | null, now: Date = new Date()): Promise<{ poId: string; asins: number; lines: number }> {
+export async function createPoFromForm(query: QueryLike, form0: PoFormState, userId: number | null, now: Date = new Date()): Promise<{ poId: string; asins: number; lines: number; asinPackSets?: AsinPackSetResult[] }> {
   const form = await withRewardDefaults(query, form0);
   const check = checkPoForm(form);
   if (!check.ok) {
@@ -71,7 +71,8 @@ export async function createPoFromForm(query: QueryLike, form0: PoFormState, use
     const pa = await query(
       `INSERT INTO po_asins (po_id, asin, asin_name, sku, qty, cost_per_unit, prep_cost, sold_as, units_per_pack, unique_products, sourcing_cost, paid_cost, cogs_adjustment, cogs_adjustment_reason)
        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14) RETURNING id`,
-      [poId, a.asin, cat?.title ?? null, cat?.primary_sku ?? null, a.qty, a.cost_per_unit, a.prep_cost, a.sold_as, a.units_per_pack, a.unique_products,
+      // A pack not known (sold as "") is saved as NULL → "Pack size missing", never as individual (2026-11-06).
+      [poId, a.asin, cat?.title ?? null, cat?.primary_sku ?? null, a.qty, a.cost_per_unit, a.prep_cost, a.sold_as || null, a.units_per_pack, a.unique_products,
        a.sourcing_cost, a.paid_cost, a.cogs_adjustment, a.cogs_adjustment_reason],
     );
     const paId = String(pa.rows[0].id);
@@ -115,10 +116,17 @@ export async function createPoFromForm(query: QueryLike, form0: PoFormState, use
   await subscriptionsFromForm(query, poId, form, asinRows);
   // §6.5 "Update ASIN in AF": the chosen ASINs' pack fields follow this PO's rows (History row, open POs brought along).
   for (const a of check.asins) {
-    if (form.pack_updates?.[a.asin] !== true) continue;
+    if (form.pack_updates?.[a.asin] !== true || a.sold_as === "") continue;
     await applyAsinPackUpdate(query, a.asin, parsePack({ sold_as: a.sold_as, units_per_pack: a.units_per_pack }), userId, "po_form");
   }
-  return { poId, asins: check.asins.length, lines };
+  // An ASIN with no pack on record takes this PO's pack without asking (Maria 2026-11-06); its other PO rows with no pack follow.
+  const packSets: AsinPackSetResult[] = [];
+  for (const a of check.asins) {
+    if (a.sold_as !== "individual" && a.sold_as !== "multi-pack") continue;
+    const r = await setUnknownAsinPack(query, a.asin, a.sold_as, a.sold_as === "individual" ? 1 : Number(a.units_per_pack), userId, asinRows.find((x) => x.asin === a.asin)?.id);
+    if (r) packSets.push(r);
+  }
+  return { poId, asins: check.asins.length, lines, ...(packSets.length ? { asinPackSets: packSets } : {}) };
 }
 
 /** ASIN typeahead for the form: catalog ASINs by ASIN or title. */

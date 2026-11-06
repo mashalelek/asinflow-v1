@@ -1,7 +1,7 @@
 import { describe, it, expect } from "vitest";
 import {
   parseEdits, changedFields, asLogText, asinQtyFromLines, shipmentBlockMessage, HEADER_FIELDS, LINE_FIELDS, ASIN_FIELDS,
-  editPoHeader, removeLine, editAsinRow, EditError, ORDER_ID_WARNING,
+  editPoHeader, removeLine, editAsinRow, EditError, ORDER_ID_WARNING, setUnknownAsinPack, linesAtPack,
 } from "./po-edit";
 
 // patch docs/claude_spec-patch-po-af-owned.md §3 — AF-owned PO editing.
@@ -121,6 +121,59 @@ describe("editAsinRow", () => {
     const g = fakeQuery([[/SELECT \* FROM po_asins WHERE id/, [{ ...cur, sold_as: "multi-pack", units_per_pack: 2 }]], [/SELECT id, po_id, qty, sold_as/, []], ...autoCloseRows]);
     const r = await editAsinRow(g.q, "pa1", { sold_as: "individual", cost_per_unit: "4.25" }, 7);
     expect(r.changes.map((c) => `${c.field}:${c.old}->${c.new}`)).toEqual(["sold_as:multi-pack->individual", "cost_per_unit:4->4.25", "units_per_pack:2->1"]);
+  });
+});
+
+describe("editAsinRow — a pack not known (2026-11-06)", () => {
+  const unknown = { id: "pa1", po_id: "po1", sold_as: null, units_per_pack: null, cost_per_unit: "4.00" };
+  it("choosing individual writes sold_as and ×1 with History; the line's yield and integers stay (1/1 stays 1/1)", async () => {
+    const f = fakeQuery([[/SELECT \* FROM po_asins WHERE id/, [unknown]], [/SELECT id, retailer_units_per_product, asin_units_per_pack FROM po_line_items/, [{ id: "l1", retailer_units_per_product: 1, asin_units_per_pack: 1 }]], [/SELECT id, po_id, qty, sold_as/, []], ...autoCloseRows]);
+    const r = await editAsinRow(f.q, "pa1", { sold_as: "individual" }, 7);
+    expect(r.changes.map((c) => `${c.field}:${c.old}->${c.new}`)).toEqual(["sold_as:null->individual", "units_per_pack:null->1"]);
+    expect(f.calls.some((c) => /^UPDATE po_line_items SET retailer_units_per_product/.test(c.sql))).toBe(false);
+  });
+  it("choosing multi-pack ×2 keeps the stored yield: a 2/1 line becomes 4/2, logged on the line", async () => {
+    const f = fakeQuery([[/SELECT \* FROM po_asins WHERE id/, [unknown]], [/SELECT id, retailer_units_per_product, asin_units_per_pack FROM po_line_items/, [{ id: "l1", retailer_units_per_product: 2, asin_units_per_pack: 1 }]], [/SELECT id, po_id, qty, sold_as/, []], ...autoCloseRows]);
+    await editAsinRow(f.q, "pa1", { sold_as: "multi-pack", units_per_pack: "2" }, 7);
+    const upd = f.calls.find((c) => /^UPDATE po_line_items SET retailer_units_per_product/.test(c.sql));
+    expect(upd?.params).toEqual(["l1", 4, 2]);
+  });
+  it("multi-pack without units (or ×1) is refused; nothing written", async () => {
+    const f = fakeQuery([[/SELECT \* FROM po_asins WHERE id/, [unknown]], ...autoCloseRows]);
+    await expect(editAsinRow(f.q, "pa1", { sold_as: "multi-pack" }, 7)).rejects.toMatchObject({ status: 400, message: "a multi-pack needs units per pack (2 or more)" });
+    expect(f.calls.some((c) => /^UPDATE/.test(c.sql))).toBe(false);
+  });
+});
+
+describe("setUnknownAsinPack — an ASIN with no pack on record (Maria 2026-11-06)", () => {
+  it("linesAtPack: a line's own ratio is kept, a 2-dp stored yield within 0.005 of r ÷ pack gives r, else null", () => {
+    expect(linesAtPack([{ qty_ordered: "60", retailer_units_per_product: null, asin_units_per_pack: null, asin_qty_per_product: "0.33" }], 3)).toMatchObject({ units: 20, lines: [{ retailer: 1 }] });
+    expect(linesAtPack([{ qty_ordered: "10", retailer_units_per_product: 2, asin_units_per_pack: 1, asin_qty_per_product: "2" }], 2)).toMatchObject({ units: 20, lines: [{ retailer: 4 }] });
+    expect(linesAtPack([{ qty_ordered: "10", retailer_units_per_product: null, asin_units_per_pack: null, asin_qty_per_product: "0.40" }], 3)).toBeNull();
+  });
+  it("sets the record (asin_field_log), fills the open row and the closed row that reproduces its Ordered; a closed row that doesn't stays; no quantity or cost written", async () => {
+    const lines: Record<string, any[]> = {
+      open1: [{ id: "lo", qty_ordered: "60", retailer_units_per_product: null, asin_units_per_pack: null, asin_qty_per_product: "0.33" }],
+      closedOk: [{ id: "lc", qty_ordered: "30", retailer_units_per_product: null, asin_units_per_pack: null, asin_qty_per_product: "0.33" }],
+      closedBad: [{ id: "lb", qty_ordered: "30", retailer_units_per_product: null, asin_units_per_pack: null, asin_qty_per_product: "0.50" }],
+    };
+    const f = fakeQuery([
+      [/SELECT sold_as, units_per_pack FROM asins/, [{ sold_as: null, units_per_pack: null }]],
+      [/FROM po_asins pa JOIN purchase_orders p/, [{ id: "open1", po_id: "p1", qty: "20.00", closed: false }, { id: "closedOk", po_id: "p2", qty: "10.00", closed: true }, { id: "closedBad", po_id: "p3", qty: "15.00", closed: true }]],
+      [/FROM po_line_items WHERE po_asin_id/, (p) => lines[p[0]]],
+    ]);
+    const r = await setUnknownAsinPack(f.q, "b07n6v47hc", "multi-pack", 3, 7, "src");
+    expect(r).toEqual({ asin: "B07N6V47HC", sold_as: "multi-pack", units_per_pack: 3, openRows: 1, closedRows: 1, closedSkipped: 1, lines: 2 });
+    expect(f.calls.filter((c) => /^INSERT INTO asin_field_log/.test(c.sql)).map((c) => [c.params[2], c.params[4], c.params[5]])).toEqual([["sold_as", "multi-pack", "po_form"], ["units_per_pack", "3", "po_form"]]);
+    expect(f.calls.filter((c) => /^UPDATE po_asins SET sold_as/.test(c.sql)).map((c) => c.params[0])).toEqual(["open1", "closedOk"]);
+    expect(f.calls.filter((c) => /^UPDATE po_line_items/.test(c.sql)).map((c) => c.params)).toEqual([["lo", 1, 3], ["lc", 1, 3]]);
+    expect(f.calls.some((c) => /SET qty|cost_per_unit|sourcing_cost|paid_cost/.test(c.sql) && /^UPDATE/.test(c.sql))).toBe(false);
+    expect(f.calls.find((c) => /FROM po_asins pa JOIN purchase_orders p/.test(c.sql))?.params).toEqual(["B07N6V47HC", "src"]);
+  });
+  it("a record that already has a pack is left alone (the form asks when it differs)", async () => {
+    const f = fakeQuery([[/SELECT sold_as, units_per_pack FROM asins/, [{ sold_as: "multi-pack", units_per_pack: 2 }]]]);
+    expect(await setUnknownAsinPack(f.q, "B07MZSBYM3", "multi-pack", 3, 7)).toBeNull();
+    expect(f.calls.some((c) => /^UPDATE|^INSERT/.test(c.sql))).toBe(false);
   });
 });
 

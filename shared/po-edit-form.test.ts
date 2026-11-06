@@ -19,6 +19,24 @@ const stored = (over: Partial<StoredPo["po"]> = {}): StoredPo => ({
 });
 const clone = (f: PoFormState): PoFormState => JSON.parse(JSON.stringify(f));
 
+describe("a pack not known (2026-11-06)", () => {
+  const nullPack = (): StoredPo => { const d = stored(); d.asins[1] = { ...d.asins[1], sold_as: null, units_per_pack: null }; return d; };
+  it("NULL sold_as becomes \"\" (never individual), units / pack empty, the stored yield kept on a pack choice", () => {
+    const f = poToForm(nullPack());
+    expect(f.products[1]).toMatchObject({ sold_as: "", units_per_pack: "", pack_keep_yield: true });
+  });
+  it("choosing individual is a change: the ASIN row is sent sold_as individual ×1", () => {
+    const s = poToForm(nullPack()), n = clone(s);
+    n.products[1].sold_as = "individual"; n.products[1].units_per_pack = "1";
+    const plan = planPoEdit(s, n, { imported: true });
+    expect(plan.asinEdits).toEqual([{ asin: "B0TEST0002", isNew: false, body: { sold_as: "individual", units_per_pack: "1" } }]);
+  });
+  it("left unknown, nothing is sent", () => {
+    const s = poToForm(nullPack());
+    expect(planPoEdit(s, clone(s), { imported: true }).asinEdits).toEqual([]);
+  });
+});
+
 describe("poToForm — the stored PO as the form", () => {
   it("header, lines with their ids, the yield from the two integers, a NULL-integer line as a typed yield; promos / payments keep their ids", () => {
     const f = poToForm(stored());

@@ -47,7 +47,12 @@ describe("Edit PO page", () => {
     expect(page).toMatch(/\["history", "History"\]/);
     expect(page).toMatch(/<PoHistory poId=\{po\.id\} reloadKey=\{version\} \/>/);
     const rows = readFileSync(resolve(__dirname, "po-asin-rows.tsx"), "utf8");
-    for (const f of ["cost_per_unit", "prep_cost", "sold_as", "units_per_pack"]) expect(rows).toContain(`saveAsin("${f}")`);
+    for (const f of ["cost_per_unit", "prep_cost"]) expect(rows).toContain(`saveAsin("${f}")`);
+    // Sold as + units / pack (2026-11-06): PackEdit — NULL is "— choose —" in amber, multi-pack saves both together, "?" for unknown individual units.
+    expect(rows).toMatch(/<PackEdit a=\{a\} onChanged=\{onChanged\} \/>/);
+    expect(rows).toMatch(/\{unknown && !sug && <option value="">— choose —<\/option>\}/);
+    expect(rows).toMatch(/sold_as === "individual" \? \{ sold_as, units_per_pack: 1 \} : units != null \? \{ sold_as, units_per_pack: units \}/);
+    expect(rows).toMatch(/a\.units_per_pack == null \? <span data-testid=\{`indiv-unknown-\$\{a\.id\}`\}>\?<\/span>/);
   });
 });
 
