@@ -29,6 +29,8 @@ export interface AsinInput {
   notes?: string | null;
   promoNotes?: string | null; // sourcing sheet Col O — written on new-ASIN INSERT only
   supplierSku?: string | null; // supplier's own catalog/item number — INSERT branch only, never re-analyze
+  /** Sold as + pack size from an upload (the ASINs Export round-trip, 2026-11-06): confirmed as Maria's; a value ending "?" never arrives here. */
+  pack?: { sold_as: "individual" | "multi-pack" | "bundle"; units: number } | null;
   // §6 lead source, supplied by the INSERT paths (CSV upload, sourcing sync,
   // bulk promote). §14 user-controlled — no sync ever sets it.
   leadSource?: LeadSource | null;
@@ -219,6 +221,10 @@ export interface AsinResult {
   notes?: string | null;
   promoNotes?: string | null; // promos — user-controlled (§14): manual edit / sourcing sync new-ASIN INSERT only
   supplierSku?: string | null; // supplier's own catalog/item number — user-controlled (§14), never from Amazon
+  /** The ASIN's pack size as a reviewed field (migration 098). */
+  pack?: AsinPack;
+  /** An upload's pack, carried to the row write (never displayed). */
+  uploadPack?: AsinInput["pack"];
   leadSource?: LeadSource | null; // §6 — user-controlled (§14), never written by a sync
   isArchived?: boolean;
   isMeltable?: boolean;
@@ -291,6 +297,8 @@ export interface ColumnMapping {
   tags: string | null;
   notes: string | null;
   supplierSku?: string | null; // supplier's own catalog/item number — never from Amazon
+  soldAs?: string | null;   // "Sold as" (the ASINs Export round-trip, 2026-11-06)
+  packSize?: string | null; // "Pack size"
   // §21 bulk page (2026-09-04). Parsed on both paths; the MAIN path ignores
   // both by design (promos there come only from the sourcing sheet — SPEC §21
   // records the asymmetry).
@@ -654,7 +662,7 @@ export function extractDomain(url: string | null): string | null {
 
 export const DEFAULT_COLUMNS = [
   // Group 1 — Description
-  "product", "category", "brand", "supplier", "buyLink", "supplierSku",
+  "product", "soldAs", "packSize", "category", "brand", "supplier", "buyLink", "supplierSku",
   // Group 2 — Stock
   "stock", "availableFba", "onOrder", "atPrep", "atWarehouse", "fbaStock", "reserved", "sentToFba", "daysLeft",
   // Group 3 — Actuals
@@ -694,6 +702,9 @@ export const COLUMN_GROUPS: { key: ColumnGroup; label: string }[] = [
 export const ALL_COLUMNS: ColumnDef[] = [
   // Group 1 — Description
   { id: "product", label: "Product", defaultVisible: true, align: "left", group: "description" },
+  // The pack as a reviewed catalog field (Maria 2026-11-06): confirmed, or amber while it needs review.
+  { id: "soldAs", label: "Sold as", defaultVisible: true, align: "left", group: "description" },
+  { id: "packSize", label: "Pack size", defaultVisible: true, align: "right", group: "description" },
   { id: "category", label: "Category", defaultVisible: false, align: "left", group: "description" },
   { id: "brand", label: "Brand", defaultVisible: true, align: "left", group: "description" },
   { id: "supplier", label: "Supplier", defaultVisible: true, align: "left", group: "description" },
@@ -780,3 +791,29 @@ export const ALL_COLUMNS: ColumnDef[] = [
 export const users = undefined;
 export type InsertUser = any;
 export type User = any;
+
+/**
+ * An ASIN's pack size (migration 098, Maria 2026-11-06): soldAs / units are the CONFIRMED pack (what PO lines use);
+ * a suggestion or a conflict waits for review beside them. Pack size = manufactured retail packages in one ASIN
+ * unit, never the items inside a package.
+ */
+export interface AsinPack {
+  soldAs: string | null; units: number | null; source: string | null;
+  suggestedSoldAs: string | null; suggestedUnits: number | null; suggestionSource: string | null;
+  reason: string | null; note: string | null;
+  /** On any PO — counted first in the needs-review filter (with the Buy List and on hold). */
+  hasPo: boolean;
+}
+export type PackStatus = "confirmed" | "needs_review" | "missing";
+export function packStatus(p: AsinPack | null | undefined): PackStatus {
+  if (p?.soldAs) return "confirmed";
+  return p?.suggestedSoldAs || p?.reason === "po_conflict" || p?.reason === "po_velocity_conflict" || p?.reason === "velocity_conflict" ? "needs_review" : "missing";
+}
+export const PACK_SOURCE_LABEL: Record<string, string> = {
+  po: "PO lines", velocity: "Velocity", po_velocity: "PO lines and Velocity", manual: "set by you", upload: "upload", po_entry: "entered on a PO",
+  catalog: "Amazon catalog", title: "title", ai: "AI (image)", record: "earlier unreviewed value",
+};
+export const PACK_REASON_LABEL: Record<string, string> = {
+  po_conflict: "PO lines disagree", po_velocity_conflict: "PO lines and Velocity disagree", velocity_conflict: "Velocity values disagree", suggestion: "a suggestion only", nothing: "nothing found",
+};
+

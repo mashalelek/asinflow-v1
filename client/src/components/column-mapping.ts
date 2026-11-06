@@ -80,6 +80,19 @@ export const MAPPING_FIELDS: MappingField[] = [
     required: false,
     matchPatterns: [/supplier\s*_?\s*sku/i, /^sku$/i, /vendor\s*(sku|item)/i, /item\s*(number|no\.?|#)/i, /catalog\s*number/i, /part\s*number/i, /\bmpn\b/i],
   },
+  // Sold as + pack size — the ASINs Export round-trip (2026-11-06); a value ending "?" (unconfirmed) is skipped.
+  {
+    key: "soldAs",
+    label: "Sold as",
+    required: false,
+    matchPatterns: [/^sold\s*_?\s*as$/i],
+  },
+  {
+    key: "packSize",
+    label: "Pack size",
+    required: false,
+    matchPatterns: [/^pack\s*_?\s*size$/i, /^units\s*(per|\/)\s*pack$/i],
+  },
   // §21 bulk fields (2026-09-04): parsed on both paths, consumed only by the
   // bulk list creation (the main path ignores both — SPEC §21 asymmetry note).
   {

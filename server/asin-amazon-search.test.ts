@@ -10,7 +10,7 @@ describe("Amazon catalog search (Maria 2026-11-06)", () => {
   it("parses a searchCatalogItems item: title, brand, size, package quantity, the MAIN image", () => {
     expect(parseCatalogHit({ asin: "b0155ogeuu", summaries: [{ marketplaceId: "ATVPDKIKX0DER", itemName: "Yankee Candle Christmas Eve 22oz Large Jar", brand: "Yankee Candle", size: "Classic Large Jar" }],
       attributes: { item_package_quantity: [{ value: 2 }] }, images: [{ marketplaceId: "ATVPDKIKX0DER", images: [{ variant: "PT01", link: "x" }, { variant: "MAIN", link: "main.jpg" }] }] }))
-      .toEqual({ asin: "B0155OGEUU", title: "Yankee Candle Christmas Eve 22oz Large Jar", brand: "Yankee Candle", image_url: "main.jpg", size: "Classic Large Jar", pack: 2 });
+      .toEqual({ asin: "B0155OGEUU", title: "Yankee Candle Christmas Eve 22oz Large Jar", brand: "Yankee Candle", image_url: "main.jpg", size: "Classic Large Jar", pack: 2, items: null });
     expect(parseCatalogHit({ asin: "bad" })).toBeNull();
   });
   it("keywords = brand + product name, the brand not doubled; never a UPC", () => {

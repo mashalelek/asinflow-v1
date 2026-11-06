@@ -21,6 +21,8 @@ export interface CatalogHit {
   size: string | null;
   /** Item package quantity (a 4-pack is 4). */
   pack: number | null;
+  /** number_of_items — the items inside, never the packages (shown beside a pack suggestion, never one itself). */
+  items?: number | null;
 }
 
 /** Pure: one catalog item (summaries, images, attributes) → a hit. */
@@ -39,6 +41,7 @@ export function parseCatalogHit(it: any): CatalogHit | null {
     image_url: main?.link ?? null,
     size: s.size ?? a.size?.[0]?.value ?? null,
     pack: Number.isFinite(pq) && pq >= 1 ? pq : null,
+    items: (() => { const n = Number(a.number_of_items?.[0]?.value ?? NaN); return Number.isFinite(n) && n >= 1 ? n : null; })(),
   };
 }
 

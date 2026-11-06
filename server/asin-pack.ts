@@ -9,7 +9,7 @@
 // (velocity_units_per_pack ≠ units_per_pack). Closed POs are untouched.
 import type { QueryLike } from "./scheduler/types";
 import { lineRatio, ratioYield } from "../shared/yield";
-import { logEdits, changedFields, recomputeAsinQty, EditError } from "./po-edit";
+import { logEdits, changedFields, recomputeAsinQty, EditError, CLEAR_PACK_SUGGESTION_SQL } from "./po-edit";
 import { recomputePoCosts } from "./po-costs";
 
 export interface PackValue { sold_as: "individual" | "multi-pack" | "bundle"; units_per_pack: number }
@@ -30,7 +30,8 @@ export async function applyAsinPackUpdate(query: QueryLike, asin: string, next: 
   const changes = changedFields({ sold_as: cur.sold_as, units_per_pack: cur.units_per_pack }, { sold_as: next.sold_as, units_per_pack: next.units_per_pack });
   const result: PackUpdateResult = { asin: a, changed: changes.length > 0, openRows: 0, rowsUpdated: 0, posRecosted: 0 };
   if (changes.length === 0) return result;
-  await query(`UPDATE asins SET sold_as = $2, units_per_pack = $3 WHERE asin = $1`, [a, next.sold_as, next.units_per_pack]);
+  // Maria's own choice: confirmed (migration 098), an unreviewed suggestion cleared.
+  await query(`UPDATE asins SET sold_as = $2, units_per_pack = $3, pack_source = 'manual', ${CLEAR_PACK_SUGGESTION_SQL} WHERE asin = $1`, [a, next.sold_as, next.units_per_pack]);
   for (const c of changes) await query(`INSERT INTO asin_field_log (asin, user_id, field, old_value, new_value, source) VALUES ($1, $2, $3, $4, $5, $6)`, [a, userId, c.field, c.old, c.new, source]);
   // Open POs follow.
   const rows = (await query(

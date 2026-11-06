@@ -4,7 +4,7 @@
 const PACK_TOKENS: RegExp[] = [
   /\(\s*(\d{1,4})\s*[- ]?\s*(?:pack|pk|ct|count)\s*\)/gi,
   /\b(\d{1,4})\s*[- ]?\s*(?:pack|pk)\b/gi,
-  /\b(?:set|pack|case|box)\s+of\s+(\d{1,4})\b/gi,
+  /\b(?:set|pack|case|box|lot)\s+of\s+(\d{1,4})\b/gi,
   /\b(\d{1,4})\s*[- ]?\s*(?:ct|count)\b\.?/gi,
   /(?:^|\s)[×x]\s*(\d{1,4})\s*$/gi,
 ];

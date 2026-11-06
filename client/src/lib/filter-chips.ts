@@ -3,7 +3,7 @@
 // visibility toggles (hide gated / hide meltable), which used to hide rows
 // with no sign of it (Maria's saved "hide gated" hid new leads). Pure.
 
-export type FilterChipKey = "tile" | "uncalculated" | "search" | "selection" | "gated" | "meltable" | "reveal" | `col:${string}`;
+export type FilterChipKey = "tile" | "uncalculated" | "search" | "selection" | "gated" | "meltable" | "pack" | "reveal" | `col:${string}`;
 export interface FilterChip { key: FilterChipKey; label: string }
 
 export interface FilterChipState {
@@ -15,7 +15,9 @@ export interface FilterChipState {
   showMeltable: boolean;
   colFilters: Record<string, { colId: string }>;
   revealedCount?: number;                    // ASINs shown past the filters (item: upload "Show")
+  packFilter?: string;                       // "Pack size": "" | "missing" | "needs_review" | "confirmed"
 }
+const PACK_LABEL: Record<string, string> = { missing: "missing", needs_review: "needs review", confirmed: "confirmed" };
 
 const TILE_LABEL: Record<string, string> = { profitable: "Profitable", unprofitable: "Unprofitable", replens: "Replens", buyList: "Buy List", onHold: "On hold" };
 
@@ -27,6 +29,7 @@ export function buildFilterChips(s: FilterChipState, colLabel: (colId: string) =
   else if (s.searchQuery.trim()) out.push({ key: "search", label: `Search: "${s.searchQuery.trim()}"` });
   if (!s.showGated) out.push({ key: "gated", label: "Gated: hidden" });
   if (!s.showMeltable) out.push({ key: "meltable", label: "Meltable: hidden" });
+  if (s.packFilter) out.push({ key: "pack", label: `Pack size: ${PACK_LABEL[s.packFilter] ?? s.packFilter}` });
   for (const colId of Object.keys(s.colFilters)) out.push({ key: `col:${colId}`, label: `${colLabel(colId)}: ${colValue(colId)}` });
   if ((s.revealedCount ?? 0) > 0) out.push({ key: "reveal", label: `${s.revealedCount} added ASIN${s.revealedCount === 1 ? "" : "s"} shown past filters` });
   return out;

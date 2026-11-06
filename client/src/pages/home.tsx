@@ -30,6 +30,8 @@ import { HYGIENE_CHANGED_EVENT } from "@/components/release-confirm";
 import { refreshPlan, queuedJobIdFromMessage, duplicateJobFromMessage, applyStreamedRow } from "@/lib/upload-flow";
 import { rowsToRefresh, mergeRefreshedRows, RowRefresher, staleRowsDue } from "@/lib/row-refresh";
 import { buildFilterChips, addedHiddenReport, type FilterChipKey } from "@/lib/filter-chips";
+import { confirmableAsins, packFilterMatch, packReviewOrder, PACK_FILTER_LABEL, type PackFilter } from "@/lib/pack-filter";
+import { confirmedPack, gapsNote } from "@/components/pack-cell";
 import { formatFilterValue } from "@/components/active-filters-modal";
 import { ALL_COLUMNS as ALL_COLUMN_DEFS } from "@shared/schema";
 import { ToastAction } from "@/components/ui/toast";
@@ -64,7 +66,7 @@ import { VisibilityToggles, loadShowGated, saveShowGated, loadShowMeltable, save
 import { getEstimatedProfit } from "@/lib/profit";
 import { isProfitable, isReplens } from "@shared/profitability";
 import { ActiveFiltersModal } from "@/components/active-filters-modal";
-import { Filter, Loader2 } from "lucide-react";
+import { Check, Filter, Loader2 } from "lucide-react";
 import { useListScroll, replaceQuery } from "@/lib/list-scroll";
 
 const ASINS_VIEWS: readonly FilterMode[] = ["all", "profitable", "unprofitable", "replens", "buyList", "onHold"];
@@ -475,6 +477,8 @@ export default function Home() {
   const [approvedBrands, setApprovedBrands] = useState<ApprovedBrandOption[]>([]);
   const [pricesLastRefreshedAt, setPricesLastRefreshedAt] = useState<string | null>(null);
   const [filterUncalculated, setFilterUncalculated] = useState(false);
+  // "Pack size" filter (2026-11-06): missing / needs review / confirmed; under needs review the bought / planned ASINs first.
+  const [packFilter, setPackFilter] = useState<PackFilter>("");
 
   const [includeInboundShipping, setIncludeInboundShipping] = useState(loadIncludeInbound);
 
@@ -811,6 +815,25 @@ export default function Home() {
       return next;
     });
   }, []);
+
+  // Bulk Confirm (2026-11-06): each selected ASIN's suggested pack becomes its pack, with History; its PO gaps fill.
+  const confirmPackAsins = useMemo(() => confirmableAsins(results, selectedSet), [results, selectedSet]);
+  const [confirmingPacks, setConfirmingPacks] = useState(false);
+  const handleConfirmPacks = useCallback(async () => {
+    if (confirmPackAsins.length === 0) return;
+    setConfirmingPacks(true);
+    try {
+      const res = await fetch("/api/asins/pack-size/confirm", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ asins: confirmPackAsins }) });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) throw new Error(data.message || `HTTP ${res.status}`);
+      const done = new Set(confirmPackAsins);
+      setResults((prev) => prev.map((r) => done.has(r.asin) && r.pack?.suggestedSoldAs ? { ...r, pack: confirmedPack(r.pack, r.pack.suggestedSoldAs, r.pack.suggestedUnits ?? 1) } : r));
+      const note = gapsNote(data.gaps);
+      toast({ title: `Pack confirmed for ${data.confirmed} ASIN${data.confirmed === 1 ? "" : "s"}`, description: [note, data.skipped ? `${data.skipped} skipped (no suggestion)` : ""].filter(Boolean).join(" · ") || undefined });
+    } catch (e: any) {
+      toast({ title: "Confirm failed", description: e.message, variant: "destructive" });
+    } finally { setConfirmingPacks(false); }
+  }, [confirmPackAsins, toast]);
 
   const handleClearSelection = useCallback(() => {
     setSelectedSet(new Set());
@@ -1476,6 +1499,7 @@ export default function Home() {
     if (!showMeltable) {
       out = out.filter((r) => !r.isMeltable);
     }
+    if (packFilter) out = out.filter((r) => packFilterMatch(r, packFilter));
 // Apply column filters
     if (Object.keys(colFilters).length > 0) {
       out = out.filter((r) =>
@@ -1490,7 +1514,7 @@ export default function Home() {
     }
     return out;
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [results, searchQuery, selectedSearchAsinsKey, showGated, showMeltable, priceSource, settings, includeInboundShipping, colFilters, activeFilter, buySet, onHoldSet, filterUncalculated]);
+  }, [results, searchQuery, selectedSearchAsinsKey, showGated, showMeltable, priceSource, settings, includeInboundShipping, colFilters, activeFilter, buySet, onHoldSet, filterUncalculated, packFilter]);
   // ASINs revealed by an added-ASIN report's "Show" pass every filter (they alone).
   const queryFilteredResults = useMemo(() => {
     if (revealAsins.size === 0) return filteredNoReveal;
@@ -1530,8 +1554,8 @@ export default function Home() {
 
   // Sort all filtered results before paginating
   const sortedFilteredResults = useMemo(() => {
-    if (!sortCol) return queryFilteredResults;
-    return [...queryFilteredResults].sort((a, b) => {
+    if (!sortCol) return packReviewOrder(queryFilteredResults, packFilter, buySet, onHoldSet);
+    return packReviewOrder([...queryFilteredResults].sort((a, b) => {
       const va = getRowValue(a, sortCol, priceSource, settings, includeInboundShipping);
       const vb = getRowValue(b, sortCol, priceSource, settings, includeInboundShipping);
       if (va == null && vb == null) return 0;
@@ -1543,8 +1567,8 @@ export default function Home() {
       const sa = String(va).toLowerCase();
       const sb = String(vb).toLowerCase();
       return sortDir === "asc" ? sa.localeCompare(sb) : sb.localeCompare(sa);
-    });
-  }, [queryFilteredResults, sortCol, sortDir, priceSource, settings, includeInboundShipping]);
+    }), packFilter, buySet, onHoldSet);
+  }, [queryFilteredResults, sortCol, sortDir, priceSource, settings, includeInboundShipping, packFilter, buySet, onHoldSet]);
 
   // Keep ref in sync so selection-aware handlers (declared above) can read
   // the latest filtered working set without TDZ.
@@ -1559,7 +1583,7 @@ export default function Home() {
     count <= 0 ? "" : isSelection ? ` (${count})` : ` ${count}`;
 
   // Reset to page 1 when any filter/view changes — not on the first render, whose page came from the URL.
-  const pageResetKey = JSON.stringify([searchQuery, selectedSearchAsinsKey, showGated, showMeltable, showParked, showDead, colFilters, activeFilter, filterUncalculated]);
+  const pageResetKey = JSON.stringify([searchQuery, selectedSearchAsinsKey, showGated, showMeltable, showParked, showDead, colFilters, activeFilter, filterUncalculated, packFilter]);
   const lastPageResetKey = useRef(pageResetKey);
   useEffect(() => { if (lastPageResetKey.current !== pageResetKey) { lastPageResetKey.current = pageResetKey; setPage(1); } }, [pageResetKey]);
   const asinsQuery = writeAsinsUrl({ q: searchQuery, view: activeFilter, page });
@@ -1633,10 +1657,10 @@ export default function Home() {
   // each with its own ×, and Clear All / the pill's ✕ clear every one.
   const colLabelById = useMemo(() => new Map(ALL_COLUMN_DEFS.map((c) => [c.id as string, c.label])), []);
   const filterChips = useMemo(() => buildFilterChips(
-    { activeFilter, filterUncalculated, searchQuery, selectedCount: selectedSearchAsins.size, showGated, showMeltable, colFilters, revealedCount: results.filter((r) => revealAsins.has(r.asin.toUpperCase())).length },
+    { activeFilter, filterUncalculated, searchQuery, selectedCount: selectedSearchAsins.size, showGated, showMeltable, colFilters, revealedCount: results.filter((r) => revealAsins.has(r.asin.toUpperCase())).length, packFilter },
     (id) => colLabelById.get(id) ?? id,
     (id) => (colFilters[id] ? formatFilterValue(colFilters[id]) : ""),
-  ), [activeFilter, filterUncalculated, searchQuery, selectedSearchAsins, showGated, showMeltable, colFilters, colLabelById, revealAsins, results]);
+  ), [activeFilter, filterUncalculated, searchQuery, selectedSearchAsins, showGated, showMeltable, colFilters, colLabelById, revealAsins, results, packFilter]);
   const activeFilterCount = filterChips.length;
   // The panel's own groups already list column filters and search / selection.
   const otherFilterChips = filterChips.filter((c) => !c.key.startsWith("col:") && c.key !== "search" && c.key !== "selection");
@@ -1647,6 +1671,7 @@ export default function Home() {
     else if (key === "selection") { setSelectedSearchAsins(new Set()); setSearchQuery(""); }
     else if (key === "gated") { setShowGated(true); saveShowGated(true); }
     else if (key === "meltable") { setShowMeltable(true); saveShowMeltable(true); }
+    else if (key === "pack") setPackFilter("");
     else if (key === "reveal") setRevealAsins(new Set());
     else if (key.startsWith("col:")) { const id = key.slice(4); setColFilters((prev) => { const next = { ...prev }; delete next[id]; return next; }); }
   }
@@ -1656,6 +1681,7 @@ export default function Home() {
     setActiveFilter("all");
     setShowGated(true); saveShowGated(true);
     setShowMeltable(true); saveShowMeltable(true);
+    setPackFilter("");
   }
 
   const progressPercent = progress
@@ -1867,6 +1893,23 @@ export default function Home() {
                   <span className="text-xs text-muted-foreground whitespace-nowrap">
                     {queryFilteredResults.length} of {results.length} shown
                   </span>
+                )}
+                <Select value={packFilter || "all"} onValueChange={(v) => setPackFilter(v === "all" ? "" : v as PackFilter)}>
+                  <SelectTrigger className={`h-8 w-44 text-xs ${packFilter ? "border-primary/60" : ""}`} data-testid="select-pack-filter" title="Pack size: confirmed, needs review (bought / planned ASINs first) or missing">
+                    <SelectValue />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="all">Pack size: all</SelectItem>
+                    {(Object.keys(PACK_FILTER_LABEL) as Array<keyof typeof PACK_FILTER_LABEL>).map((k) => (
+                      <SelectItem key={k} value={k}>Pack size: {PACK_FILTER_LABEL[k]}</SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+                {confirmPackAsins.length > 0 && (
+                  <Button variant="outline" size="sm" className="h-8 text-xs" onClick={() => void handleConfirmPacks()} disabled={confirmingPacks}
+                    title="Confirm each selected ASIN's suggested pack size (History; fills its PO lines with no pack)" data-testid="button-confirm-packs">
+                    <Check className="h-3 w-3 mr-1" /> Confirm pack ({confirmPackAsins.length})
+                  </Button>
                 )}
                 {/* MERGED Active-filters pill: body opens modal, ✕ clears ALL filters
                     (calls clearAllFilters — same handler the modal's "Clear All" uses).

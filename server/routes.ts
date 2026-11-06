@@ -35,6 +35,7 @@ import { readSaveFailures } from "./po-documents";
 import { listPoDocuments, PO_DOCUMENTS_SQL } from "./po-documents-routes";
 import { canonicalPaymentName } from "@shared/po-form";
 import { applyAsinPackUpdate, parsePack } from "./asin-pack";
+import { setAsinPack, confirmPackSuggestions, parseUploadPack } from "./asin-pack-review";
 import { CaptureSchema, extractPrefill, enrichPrefill, mergedPagesText, storePrefill, getPrefill, logPrefill, supplierForHost } from "./po-prefill";
 import { PreviewRequestSchema, capturePreview } from "./capture-preview";
 import { aiAvailable, AI_OFF_MESSAGE } from "./config/ai";
@@ -209,6 +210,9 @@ const COLUMN_NAME_ALIASES: Record<string, string[]> = {
   // because on a supplier sheet a bare "SKU" column IS the supplier SKU; the
   // mapping modal confirmation is the guard against mis-mapping.
   supplierSku: ["supplier sku", "supplier_sku", "suppliersku", "sku", "item number", "item #", "item no", "vendor sku", "vendor item", "catalog number", "part number", "mpn"],
+  // The ASINs Export round-trip (2026-11-06): its own headers come back as written.
+  soldAs: ["sold as", "sold_as", "soldas"],
+  packSize: ["pack size", "pack_size", "packsize", "units per pack", "units/pack"],
   // §21 bulk fields (2026-09-04). Broad aliases ("date"/"added") are safe
   // because matchColumnName is EXACT on the normalized header, never fuzzy.
   // Parsed on both paths; the main upload path ignores both (promos on the
@@ -304,7 +308,9 @@ function mapRowsToAsins(
     const rowLead = mapping.leadSource && row[mapping.leadSource] !== undefined
       ? normalizeLeadSource(row[mapping.leadSource])
       : null;
-    asins.push({ asin, cogs, buyLink, prepOverride, storageOverride, tags, notes, supplierSku, promoNotes, addedAtRaw,
+    // Sold as + pack size (the Export round-trip): a value ending "?" is an unconfirmed suggestion and is skipped.
+    const pack = mapping.soldAs ? parseUploadPack(row[mapping.soldAs], mapping.packSize ? row[mapping.packSize] : null) : null;
+    asins.push({ asin, cogs, buyLink, prepOverride, storageOverride, tags, notes, supplierSku, promoNotes, addedAtRaw, pack,
                  leadSource: rowLead ?? defaultLeadSource });
   }
 
@@ -346,6 +352,8 @@ function parseFileToAsins(buffer: Buffer, filename: string): AsinInput[] {
     tags: tagsHeader ?? null,
     notes: notesHeader ?? null,
     supplierSku: supplierSkuHeader ?? null,
+    soldAs: headers.find((h) => matchColumnName(h, "soldAs")) ?? null,
+    packSize: headers.find((h) => matchColumnName(h, "packSize")) ?? null,
     promos: headers.find((h) => matchColumnName(h, "promos")) ?? null,
     dateAdded: headers.find((h) => matchColumnName(h, "dateAdded")) ?? null,
   };
@@ -591,6 +599,7 @@ function buildResult(
     // User-controlled (§14): rides through to the asins INSERT branch only —
     // the ON CONFLICT branch never touches it, so re-analyze can't write it.
     supplierSku: input.supplierSku ?? null,
+    uploadPack: input.pack ?? null,
     pricingData, feesData, catalogData,
     eligibilityData,
     error,
@@ -820,6 +829,18 @@ export const mainCatalogSink: AnalyzeSink = {
       // promo_notes: intentionally NO existing-ASIN write — insert-only.
       if (!inserted && inputNotes) {
         await appendNotesForAsin(result.asin, inputNotes);
+      }
+      // An uploaded pack is Maria's: confirmed, History, its PO gaps filled (2026-11-06).
+      if (fromCsvUpload && result.uploadPack) {
+        const client = await (pool as any).connect();
+        try {
+          await client.query("BEGIN");
+          await setAsinPack((sql: string, params?: any[]) => client.query(sql, params), result.asin, result.uploadPack, null, "upload");
+          await client.query("COMMIT");
+        } catch (err: any) {
+          await client.query("ROLLBACK").catch(() => {});
+          log(`Upload pack write error for ${result.asin}: ${err.message}`, "db");
+        } finally { client.release(); }
       }
     }).catch((err: any) => log(`DB upsert error for ${result.asin}: ${err.message}`, "db"));
   },
@@ -1165,6 +1186,8 @@ export async function registerRoutes(
         SELECT
           a.asin, a.title, a.image_url, a.brand, a.category, a.weight_lb, a.buy_link, a.status, a.status_reason,
           a.primary_sku, a.has_live_offer, a.offer_checked_at, a.current_issues, a.issues_checked_at, a.notes, a.promo_notes, a.supplier_sku, a.lead_source, a.is_meltable, a.is_hazmat, a.is_dangerous_good, a.is_search_suppressed, a.suppression_reasons, a.last_reviewed_at, a.added_at, a.is_wholesale, a.is_oa,
+          a.sold_as AS pack_sold_as, a.units_per_pack AS pack_units, a.pack_source, a.pack_suggested_sold_as, a.pack_suggested_units, a.pack_suggestion_source, a.pack_review_reason, a.pack_note,
+          EXISTS (SELECT 1 FROM po_asins px WHERE px.asin = a.asin) AS pack_has_po,
           e.cogs, e.cogs_source, e.actual_cogs, e.estimated_cogs, e.estimated_cogs_source, e.prep_override, e.storage_override,
           e.lowest_fba_price, e.buy_box_price, e.buy_box_fulfillment, e.lowest_price,
           e.sellers_fba, e.sellers_fbm,
@@ -1393,6 +1416,11 @@ export async function registerRoutes(
           notes: row.notes ?? null,
           promoNotes: row.promo_notes ?? null,
           supplierSku: row.supplier_sku ?? null,
+          pack: {
+            soldAs: row.pack_sold_as ?? null, units: row.pack_units == null ? null : Number(row.pack_units), source: row.pack_source ?? null,
+            suggestedSoldAs: row.pack_suggested_sold_as ?? null, suggestedUnits: row.pack_suggested_units == null ? null : Number(row.pack_suggested_units),
+            suggestionSource: row.pack_suggestion_source ?? null, reason: row.pack_review_reason ?? null, note: row.pack_note ?? null, hasPo: !!row.pack_has_po,
+          },
           leadSource: row.lead_source ?? null,
           // parked keeps the old archived styling; dead renders its own tag.
           isArchived: row.status === 'parked',
@@ -4733,6 +4761,18 @@ export async function registerRoutes(
     catch (err: any) { res.status(err instanceof EditError ? err.status : 500).json({ message: err?.message ?? String(err) }); }
   };
   // §6.5 "Update ASIN in AF" from the PO editor (the form applies it on save through createPoFromForm).
+  // The pack as a reviewed field (2026-11-06): set / confirm one ASIN's pack from the ASINs table, or confirm the selected rows' suggestions.
+  app.put("/api/asins/:asin/pack-size", async (req: Request, res: Response) => {
+    if (!isDbAvailable()) { res.status(503).json({ message: "Database not available" }); return; }
+    const b = (req.body ?? {}) as Record<string, unknown>;
+    await sendGuarded(res, () => withPoTx((q) => setAsinPack(q, String(req.params.asin ?? ""), { sold_as: String(b.sold_as ?? "") as any, units: Number(b.units_per_pack ?? 1) }, uid(req), "manual")));
+  });
+  app.post("/api/asins/pack-size/confirm", async (req: Request, res: Response) => {
+    if (!isDbAvailable()) { res.status(503).json({ message: "Database not available" }); return; }
+    const asins = Array.isArray(req.body?.asins) ? (req.body.asins as unknown[]).map(String).filter((a) => /^[A-Z0-9]{10}$/i.test(a)).slice(0, 2000) : [];
+    if (asins.length === 0) { res.status(400).json({ message: "asins is required" }); return; }
+    await sendGuarded(res, () => withPoTx((q) => confirmPackSuggestions(q, asins, uid(req))));
+  });
   app.post("/api/asins/:asin/pack", async (req: Request, res: Response) => {
     if (!isDbAvailable()) { res.status(503).json({ message: "Database not available" }); return; }
     await sendGuarded(res, () => withPoTx((q) => applyAsinPackUpdate(q, String(req.params.asin ?? ""), parsePack(req.body ?? {}), uid(req), "manual")));

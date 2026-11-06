@@ -6594,7 +6594,16 @@ pack size) **and the PO is Open** (Maria 2026-10-29: a closed PO keeps its
 NULL silently); mismatch while a non-bundle row's
 `velocity_units_per_pack` differs from its `units_per_pack`. Both block
 auto-close (and reopen an auto-closed PO) like any action item, and clear
-when the row is fixed. **Receiving mismatch** (2026-10-29) is derived on
+when the row is fixed. **Pack size mismatch also covers a line whose
+stored yield and its row's pack disagree** (Maria 2026-11-06): a line with
+no pack integers (a sheet import) on an individual / multi-pack row whose
+stored 2-dp yield is no rounding of a whole number of retailer units at the
+row's pack (|y − r ÷ pack| > 0.005), or a multi-pack with no pack size. It
+shows on the line, its ASIN row and its PO, the hover giving the note
+("stored 0.50, ×1 gives 1.00"; `yieldMismatchLine` / `yieldMismatchNote`),
+clears by itself once pack and yield agree, and blocks auto-close only on
+an open PO — a closed PO shows it but is never reopened by it (8 closed POs
+on 2026-11-06). **Receiving mismatch** (2026-10-29) is derived on
 any ASIN row where `qty_received_amazon` is known and ≠ `qty_shipped_fba`
 (over or under). It is **display-only**: Received by Amazon is never a
 source of truth — Shipped FBA is the number of record — so it does not
@@ -7205,6 +7214,53 @@ replaces it. Migration 061 adds `po_edit_log`, `deleted_pos` and
   the stored yield.
   Routes: `PATCH /api/pos/:id`, `POST /api/pos/:id/lines`, `PATCH|DELETE
   /api/pos/lines/:id`, `PATCH /api/pos/asin-rows/:id`; one transaction each.
+- **ASIN pack size is a reviewed catalog field (migration 098, Maria
+  2026-11-06).** `asins.sold_as` / `units_per_pack` are the **confirmed**
+  pack — what every PO line uses. Pack size = the manufactured retail
+  packages in one ASIN unit, never the items inside a package (B007MQMT3G
+  "Lot of 6" sachets = 2 bags of 3 → multi-pack ×2). A pack AF proposes but
+  Maria has not reviewed lives beside it (`pack_suggested_sold_as` /
+  `_units`, `pack_suggestion_source`, `pack_review_reason`, `pack_note`), so
+  the status is derived: a value on record = confirmed; else a suggestion or
+  a conflict = needs review; else missing (`packStatus`). **Confirmed without
+  her review only when** (a) her PO lines for the ASIN all agree — lines she
+  set by hand (an AF-created PO, or a row whose pack she edited) or sheet
+  rows whose stored Ordered that pack reproduces within 0.01 — or (b)
+  Velocity's units per pack says it, and (a) and (b) don't contradict each
+  other (`decideFromEvidence`). PO lines that disagree, with each other or
+  with Velocity, need review, the hover listing each PO # / Velocity value.
+  The catalog's `item_package_quantity`, the title ("Pack of 2", "Lot of
+  6") and the AI are **suggestions only**, however confident; with past PO
+  lines only a pack reproducing their stored Ordered is suggested
+  (`suggestPack`); `number_of_items` counts items and is shown, never
+  suggested; no UPC. The AI (Haiku, `server/asin-pack-ai.ts`, logged as
+  `pack_review`) runs only for ASINs with nothing from (a)/(b): the main
+  image + title + catalog attributes; it counts the physical retail
+  packages in the image and, when the title's number differs, proposes the
+  image count and says so ("title says 6, image shows 2 packages"). A pack
+  Maria set herself (the ASINs table, Confirm, an upload, a PO entry,
+  Update ASIN in AF) is never re-decided. **ASINs table:** "Sold as" and
+  "Pack size" right after Product (description group, shown by default),
+  amber with source and reason on hover when it needs review, ✓ to confirm,
+  the pencil to set (`PUT /api/asins/:asin/pack-size`, History, `pack_source
+  = manual`); filter "Pack size: missing / needs review / confirmed" — under
+  needs review / missing the ASINs on any PO, the Buy List or on hold come
+  first; bulk **Confirm pack (N)** for selected rows with a suggestion
+  (`POST /api/asins/pack-size/confirm`). Export carries both columns, an
+  unconfirmed value suffixed "?", and Upload File reads them back (a "?"
+  value is skipped — a round-trip never confirms a suggestion; History
+  source `upload`). **Setting or confirming a pack fills every PO row for
+  the ASIN with no pack** (`fillAsinPackGaps`): open rows directly, closed
+  rows only when it reproduces their stored Ordered within 0.01, quantities
+  and costs never changed. A differing pack entered on an open PO line
+  still asks; an ASIN with no pack on record takes the pack from a PO entry
+  ("ASIN set to multi-pack ×2 in AF", `pack_source = po_entry`). Backfill
+  `npm run backfill:asin-pack [-- --prod] [--catalog] [--ai] [--csv <path>]
+  [--live]`: dry run (one transaction, rolled back) with counts — confirmed
+  by (a)/(b), needs review by reason, unreviewed records moved to a
+  suggestion, PO pack-size gaps closed — `--catalog` reads Amazon's catalog
+  (read only), `--ai` prints the estimated cost on a dry run and calls only
+  with `--live`.
 - **Payments, promos, refunds, costs (Capture PO patch §8, 2026-10-31).** PO
   detail gets a **Payments** tab: payments (method, nickname, last 4,
   amount, GC % for gift cards; Σ vs the order total shown), promos (type,

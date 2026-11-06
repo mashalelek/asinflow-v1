@@ -23,10 +23,11 @@ import {
   LEAD_SOURCES,
   LEAD_SOURCE_COLORS,
   type LeadSource,
+  packStatus,
 } from "@shared/schema";
 
 const DEFAULT_COL_WIDTHS: Partial<Record<ColumnId, number>> = {
-  product: 400, category: 160, brand: 100, supplier: 100,
+  product: 400, soldAs: 100, packSize: 75, category: 160, brand: 100, supplier: 100,
   stock: 75, availableFba: 80, onOrder: 80, atPrep: 75, atWarehouse: 95, fbaStock: 85, reserved: 75, sentToFba: 80, daysLeft: 80,
   cogs: 90, actPrepCost: 85, actUnitsSold: 85, actRefunds: 80, actRefundPct: 80,
   actAvgSalePrice: 100, actRevenue: 95, actProfit: 100, actProfitPerUnit: 90, actRoi: 80, actMargin: 80,
@@ -36,6 +37,7 @@ const DEFAULT_COL_WIDTHS: Partial<Record<ColumnId, number>> = {
   tags: 100, notes: 100, sourcing: 80, meltable: 85, hazmat: 80, dg: 70, suppressed: 90, dateAdded: 95, lastReviewed: 105,
 };
 import { type ColumnConfig } from "@/lib/columns";
+import { PackCell, packShown } from "@/components/pack-cell";
 import { type FilterMode } from "@/components/summary-cards";
 import { ColumnFilterButton, NUMERIC_COLS, type ColFilter, type FilterMap, type MultiSelectOption } from "@/components/column-filter";
 
@@ -452,6 +454,9 @@ function computeRowValue(
     // this same stored value — one field, two accessors, never two writers.
     case "buyLink": return result.buyLink ?? null;
     case "supplierSku": return result.supplierSku ?? null;
+    // The pack (2026-11-06): the confirmed value; a suggestion still to review carries a trailing "?" (an upload skips it).
+    case "soldAs": { const s = packShown(result.pack); return s == null ? null : packStatus(result.pack) === "confirmed" ? s.soldAs : `${s.soldAs}?`; }
+    case "packSize": { const s = packShown(result.pack); return s == null ? null : packStatus(result.pack) === "confirmed" ? s.units : `${s.units}?`; }
     case "leadSource": return result.leadSource ?? null;
     case "cogs": return result.actualCogs ?? null;
     case "estCogs": return result.estimatedCogs ?? null;
@@ -976,7 +981,9 @@ export function ResultsTable({
                   const col = colMap.get(colId)!;
                   const w = colWidths[colId] ?? DEFAULT_COL_WIDTHS[colId];
                   let content;
-                  if (colId === "supplierSku" && onSupplierSkuSave) {
+                  if ((colId === "soldAs" || colId === "packSize") && onResultUpdate) {
+                    content = <PackCell result={result} col={colId} onResultUpdate={onResultUpdate} />;
+                  } else if (colId === "supplierSku" && onSupplierSkuSave) {
                     content = (
                       <SupplierSkuEditor
                         asin={result.asin}
@@ -1852,6 +1859,13 @@ export function renderCell(
       const brand = result.catalogData.brand;
       if (!brand) return <span className="text-muted-foreground text-sm">-</span>;
       return <span className="text-sm" data-testid={`text-brand-${result.asin}`}>{brand}</span>;
+    }
+
+    case "soldAs":
+    case "packSize": {
+      const s = packShown(result.pack);
+      return s == null ? <span className="text-muted-foreground text-sm">-</span>
+        : <span className={`text-sm ${packStatus(result.pack) === "needs_review" ? "text-amber-700 dark:text-amber-400" : ""}`}>{colId === "soldAs" ? s.soldAs : s.units}</span>;
     }
 
     case "supplierSku":

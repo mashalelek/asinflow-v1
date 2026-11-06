@@ -415,14 +415,28 @@ export async function setUnknownAsinPack(query: QueryLike, asin: string, soldAs:
   if (!(Number.isInteger(pack) && pack >= 1)) return null;
   const rec = (await query(`SELECT sold_as, units_per_pack FROM asins WHERE asin = $1`, [a])).rows[0];
   if (!rec || rec.sold_as != null) return null;
-  await query(`UPDATE asins SET sold_as = $2, units_per_pack = $3 WHERE asin = $1`, [a, soldAs, pack]);
+  // A pack entered on a PO is Maria's own: confirmed (source po_entry); an unreviewed suggestion it replaces is cleared.
+  await query(`UPDATE asins SET sold_as = $2, units_per_pack = $3, pack_source = 'po_entry', ${CLEAR_PACK_SUGGESTION_SQL} WHERE asin = $1`, [a, soldAs, pack]);
   for (const c of changedFields({ sold_as: rec.sold_as, units_per_pack: rec.units_per_pack }, { sold_as: soldAs, units_per_pack: pack })) {
     await query(`INSERT INTO asin_field_log (asin, user_id, field, old_value, new_value, source) VALUES ($1, $2, $3, $4, $5, $6)`, [a, userId, c.field, c.old, c.new, "po_form"]);
   }
-  const out: AsinPackSetResult = { asin: a, sold_as: soldAs, units_per_pack: pack, openRows: 0, closedRows: 0, closedSkipped: 0, lines: 0 };
+  return { asin: a, sold_as: soldAs, units_per_pack: pack, ...(await fillAsinPackGaps(query, a, soldAs, pack, userId, sourcePoAsinId)) };
+}
+
+/** The suggestion / review columns an ASIN's confirmed pack clears (migration 098). */
+export const CLEAR_PACK_SUGGESTION_SQL = `pack_suggested_sold_as = NULL, pack_suggested_units = NULL, pack_suggestion_source = NULL, pack_review_reason = NULL, pack_note = NULL`;
+
+/**
+ * An ASIN's confirmed pack fills its PO rows with no pack (Maria 2026-11-06): an open row always (its lines get the
+ * pack integers when Σ ordered × retailer ÷ pack reproduces its stored Ordered within 0.01), a closed row only when
+ * it reproduces. Stored quantities and costs never change; History on every row and line.
+ */
+export async function fillAsinPackGaps(query: QueryLike, asin: string, soldAs: "individual" | "multi-pack", pack: number, userId: number | null, excludePoAsinId?: string): Promise<Omit<AsinPackSetResult, "asin" | "sold_as" | "units_per_pack">> {
+  const a = asin.toUpperCase();
+  const out = { openRows: 0, closedRows: 0, closedSkipped: 0, lines: 0 };
   const rows = (await query(
     `SELECT pa.id, pa.po_id, pa.qty, p.closed_at IS NOT NULL AS closed FROM po_asins pa JOIN purchase_orders p ON p.id = pa.po_id
-      WHERE pa.asin = $1 AND pa.sold_as IS NULL AND pa.id::text <> $2`, [a, sourcePoAsinId ?? ""],
+      WHERE pa.asin = $1 AND pa.sold_as IS NULL AND pa.id::text <> $2`, [a, excludePoAsinId ?? ""],
   )).rows;
   for (const r of rows) {
     const lines = (await query(`SELECT id, qty_ordered, retailer_units_per_product, asin_units_per_pack, asin_qty_per_product FROM po_line_items WHERE po_asin_id = $1`, [r.id])).rows;
