@@ -30,14 +30,15 @@ describe("ASIN picker — a type-ahead, not a dropdown", () => {
 // Cosmetics (Maria 2026-11-04): the ↳ ASIN label row under each product group; Cashback % a numeric field like the money ones.
 describe("New PO form — cosmetics 2026-11-04", () => {
   const src = readFileSync(resolve(__dirname, "new-po-dialog.tsx"), "utf8");
-  it("the ASIN label row renders once per group, after the group's product rows and before its first ↳ ASIN row — not in the table header", () => {
+  it("each ASIN label sits in its field's cell (2026-11-06): on a group's first ↳ ASIN row always, on the others only below 1280 — no separate label row, not in the table header", () => {
     const header = src.slice(src.indexOf('data-testid="new-po-products"'), src.indexOf("{boxes.map((box, bi) =>"));
     expect(header).not.toMatch(/ASIN_LABELS/);
-    const box = src.slice(src.indexOf("{boxes.map((box, bi) =>"));
-    const products = box.indexOf("{box.lines.map((line) =>"), labels = box.indexOf("data-testid={`new-po-asin-labels-${bi}`}"), slots = box.indexOf("{box.slots.map((slot, k) =>");
-    expect(products).toBeGreaterThan(0);
-    expect(labels).toBeGreaterThan(products);
-    expect(slots).toBeGreaterThan(labels);
+    expect(src).not.toMatch(/new-po-asin-labels-/);
+    const slots = src.slice(src.indexOf("{box.slots.map((slot, k) =>"));
+    expect(slots).toMatch(/<LabelledCells labels=\{ASIN_LABELS\} always=\{k === 0\}>/);
+    const cells = src.slice(src.indexOf("function LabelledCells"));
+    expect(cells).toMatch(/\$\{always \? "" : "xl:hidden "\}/);
+    expect(cells).toMatch(/\{label\}<\/span>\s*\{node\}/); // the label directly above its box, in the same cell
   });
   it("Cashback % is a numeric input (type number, decimal keypad, right-aligned) at the 120 px money / percent width", () => {
     expect(src).toMatch(/field\("cashback_pct", "Cashback %", \{ px: 120, ph: "0\.00", pct: true \}\)/);

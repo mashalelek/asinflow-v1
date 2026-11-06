@@ -440,7 +440,7 @@ export function NewPoForm({ open, onOpenChange, onCreated, prefill, initialSuppl
   // 2026-11-06: reason / notes 84 and the title from 6.5 rem so the row (and a bundle's, inside its ring) fits on one line at 1280.
   const A = { arrow: 16, asin: 176, qty: 72, sold: 92, upp: 60, prep: 64, sourcing: 72, cogs: 88, paid: 72, adj: 72, reason: 84, notes: 84, rm: 24 } as const;
   const cell = (w: number, cls = "") => ({ className: `shrink-0 ${cls}`, style: { width: w } });
-  const ASIN_LABELS: Array<[string, number | "title", string?]> = [["↳", A.arrow, "text-center"], ["ASIN", A.asin], ["Title", "title"], ["ASIN qty", A.qty, "text-right"], ["Sold as", A.sold], ["Units/pack", A.upp, "text-right"], ["Prep", A.prep, "text-right"], ["Sourcing", A.sourcing, "text-right"], ["COGS", A.cogs, "text-right"], ["Paid", A.paid, "text-right"], ["Adjustment", A.adj, "text-right"], ["Reason", A.reason], ["Notes", A.notes], ["", A.rm]];
+  const ASIN_LABELS: Array<[string, number | "title", string?]> = [["", A.arrow], ["ASIN", A.asin], ["Title", "title"], ["ASIN qty", A.qty, "text-right"], ["Sold as", A.sold], ["Units/pack", A.upp, "text-right"], ["Prep", A.prep, "text-right"], ["Sourcing", A.sourcing, "text-right"], ["COGS", A.cogs, "text-right"], ["Paid", A.paid, "text-right"], ["Adjustment", A.adj, "text-right"], ["Reason", A.reason], ["Notes", A.notes], ["", A.rm]];
   if (!open) return null;
 
   return (
@@ -638,10 +638,6 @@ export function NewPoForm({ open, onOpenChange, onCreated, prefill, initialSuppl
                       </div>
                     );
                   })}
-                  {/* The ↳ ASIN label row sits between the product row(s) and the group's first ↳ ASIN row (Maria 2026-11-04), one per group. */}
-                  <div className="mt-0.5 flex flex-wrap items-center gap-x-2 text-[10px] font-medium text-muted-foreground" data-testid={`new-po-asin-labels-${bi}`}>
-                    {ASIN_LABELS.map(([label, w, cls], n) => w === "title" ? <span key={n} className="min-w-[6.5rem] flex-1">{label}</span> : <span key={n} {...cell(w, cls)}>{label}</span>)}
-                  </div>
                   {box.slots.map((slot, k) => {
                     const i = slot[0]; const p = form.products[i];
                     const units = slotUnits(form.products, slot, box.bundle); const frac = isFractional(units);
@@ -659,7 +655,8 @@ export function NewPoForm({ open, onOpenChange, onCreated, prefill, initialSuppl
                     const sourcingShown = stored ? stored.sourcing_cost : a?.sourcing_cost ?? null, paidShown = stored ? stored.paid_cost : a?.paid_cost ?? null;
                     return (
                       <div key={`${box.key}-${k}`} className="py-0.5" data-testid={`row-new-po-asin-${i}`}>
-                        <div className="flex flex-wrap items-start gap-x-2 gap-y-1">
+                        {/* Each label sits in its field's cell (2026-11-06), so a row that wraps (below 1280) takes its labels along. */}
+                        <LabelledCells labels={ASIN_LABELS} always={k === 0}>
                           <span {...cell(A.arrow, "pt-1.5 text-center text-sm leading-none text-muted-foreground")} aria-hidden>↳</span>
                           <div {...cell(A.asin)}><AsinPicker value={p.asin} product={p.product_name} sku={p.supplier_sku} supplier={form.supplier} guess={guess} known={known} initial={form.prefill?.asin_candidates?.[String(i)] as AsinInfo[] | undefined} onPick={onPick(slot)} onChange={(v) => setMany(slot, "asin", v)} rowIndex={i} mark={mark(`products.${i}.asin`)} compact /></div>
                           <div className="flex h-8 min-w-[6.5rem] flex-1 items-center truncate text-xs text-muted-foreground" title={info?.title ?? ""} data-testid={`new-po-asin-title-${i}`}>
@@ -683,7 +680,7 @@ export function NewPoForm({ open, onOpenChange, onCreated, prefill, initialSuppl
                           <div {...cell(A.reason)}>{a ? <Input value={adj?.reason ?? ""} onChange={(e) => setAdj(a.asin, "reason", e.target.value)} placeholder="reason" className="h-8 text-xs" data-testid={`input-new-po-adj-reason-${a.asin}`} /> : <span />}</div>
                           <Input {...cell(A.notes)} value={p.notes ?? ""} onChange={(e) => setMany(slot, "notes", e.target.value)} placeholder="notes" className="h-8 shrink-0 text-xs" data-testid={`input-new-po-line-notes-${i}`} />
                           <button type="button" {...cell(A.rm, "mt-2 text-muted-foreground/60 hover:text-destructive disabled:opacity-30")} onClick={() => onRemoveAsin(box.key, k)} disabled={box.slots.length === 1} title="Remove this ASIN row" data-testid={`button-new-po-remove-asin-${i}`}><Trash2 className="h-3.5 w-3.5" /></button>
-                        </div>
+                        </LabelledCells>
                         {/* The math line: pack math and the cost allocation for this row. */}
                         <div className={`ml-6 mt-0.5 flex flex-wrap gap-x-3 text-[10px] ${frac ? "text-destructive" : "text-muted-foreground"}`} data-testid={`new-po-asin-math-${i}`}>
                           <span>{box.bundle ? `sets = the smallest member's qty × yield = ${anyQty ? units : "—"}` : `${qty} × ${r} ÷ ${u} = ${anyQty ? units : "—"} ASIN units`}</span>
@@ -733,6 +730,24 @@ export function NewPoForm({ open, onOpenChange, onCreated, prefill, initialSuppl
         <Button onClick={save} disabled={busy || (touched && !canSave)} data-testid="button-new-po-save">{edit ? (busy ? "Saving…" : "Save PO") : busy ? "Creating…" : "Create PO"}</Button>
       </div>
       <PackOverrideDialog ask={packAsk} onChoose={answerPack} />
+    </div>
+  );
+}
+
+/** A ↳ ASIN row: one cell per field, its label above its box (labels in child order). The labels show on a group's first row
+ *  (`always`) and, on the others, only below 1280 — where the row wraps and the first row's labels no longer sit above it. */
+function LabelledCells({ labels, always, children }: { labels: Array<[string, number | "title", string?]>; always: boolean; children: React.ReactNode }) {
+  return (
+    <div className="flex flex-wrap items-start gap-x-2 gap-y-1">
+      {React.Children.toArray(children).map((node, n) => {
+        const [label, w, cls] = labels[n] ?? ["", 0];
+        return (
+          <div key={n} className={w === "title" ? "flex min-w-[6.5rem] flex-1 flex-col" : "flex shrink-0 flex-col"} style={w === "title" ? undefined : { width: w }}>
+            <span className={`${always ? "" : "xl:hidden "}h-3.5 truncate text-[10px] font-medium leading-[14px] text-muted-foreground ${cls ?? ""}`}>{label}</span>
+            {node}
+          </div>
+        );
+      })}
     </div>
   );
 }
