@@ -2,7 +2,7 @@ import { describe, it, expect } from "vitest";
 import { parsePoSheet, PO_SHEET_HEADER_EXPECT } from "./po-sheet-sync";
 import { COL } from "./po-import-classify";
 import { syncVelocityShipments, velocityPack, type AfAsinRow, type VelocitySyncDeps } from "./shipment-sync-velocity";
-import { ASIN_ACTION_ITEMS_SQL, PO_ACTION_ITEMS_SQL, asinWriteThrough } from "./po-action-items";
+import { ASIN_ACTION_ITEMS_SQL, PO_ACTION_ITEMS_SQL, PO_CLOSE_ACTION_ITEMS_SQL, asinWriteThrough, yieldMismatchLine } from "./po-action-items";
 import { PACK_SIZE_MISMATCH, PACK_SIZE_MISSING, normalizeActionItems } from "./po-status-map";
 import { resetDefaultedPackSize } from "./po-edit";
 
@@ -130,9 +130,16 @@ describe("shipment sync A: pack size", () => {
 describe("Pack size missing / mismatch are derived action items", () => {
   it("the ASIN and PO unions carry both, from po_asins", () => {
     expect(ASIN_ACTION_ITEMS_SQL).toContain(`SELECT '${PACK_SIZE_MISSING}' WHERE (pa.sold_as IS NULL AND EXISTS (SELECT 1 FROM po_line_items lx WHERE lx.po_asin_id = pa.id`);
-    expect(ASIN_ACTION_ITEMS_SQL).toMatch(/'Pack size mismatch' WHERE \(pa\.sold_as IS NOT NULL AND pa\.sold_as <> 'bundle' AND pa\.velocity_units_per_pack IS NOT NULL AND pa\.velocity_units_per_pack <> COALESCE\(pa\.units_per_pack, 1\)\)/);
+    expect(ASIN_ACTION_ITEMS_SQL).toMatch(/'Pack size mismatch' WHERE \(\(pa\.sold_as IS NOT NULL AND pa\.sold_as <> 'bundle' AND pa\.velocity_units_per_pack IS NOT NULL AND pa\.velocity_units_per_pack <> COALESCE\(pa\.units_per_pack, 1\)\)/);
     expect(PO_ACTION_ITEMS_SQL).toContain(`'${PACK_SIZE_MISSING}' WHERE EXISTS (SELECT 1 FROM po_asins pk WHERE pk.po_id = p.id AND (pk.sold_as IS NULL AND EXISTS`);
-    expect(PO_ACTION_ITEMS_SQL).toContain(`'${PACK_SIZE_MISMATCH}' WHERE EXISTS (SELECT 1 FROM po_asins pk WHERE pk.po_id = p.id AND (pk.sold_as IS NOT NULL`);
+    expect(PO_ACTION_ITEMS_SQL).toContain(`'${PACK_SIZE_MISMATCH}' WHERE EXISTS (SELECT 1 FROM po_asins pk WHERE pk.po_id = p.id AND ((pk.sold_as IS NOT NULL`);
+  });
+  it("a line whose stored yield and the pack disagree shows it everywhere but reopens no closed PO (2026-11-06)", () => {
+    const half = `EXISTS (SELECT 1 FROM po_line_items ly WHERE ly.po_asin_id = pa.id AND ${yieldMismatchLine("ly", "pa")})`;
+    expect(ASIN_ACTION_ITEMS_SQL).toContain(half);
+    expect(PO_ACTION_ITEMS_SQL).toContain(yieldMismatchLine("ly", "pk"));
+    const close = PO_CLOSE_ACTION_ITEMS_SQL.slice(PO_CLOSE_ACTION_ITEMS_SQL.indexOf(`'${PACK_SIZE_MISMATCH}'`));
+    expect(close).toContain(`${yieldMismatchLine("ly", "pk")}) AND EXISTS (SELECT 1 FROM purchase_orders py WHERE py.id = pk.po_id AND py.closed_at IS NULL)`);
   });
   it("never stored: the editor's echo is dropped, not refused, and never written to lines", () => {
     expect(normalizeActionItems(["See comments", PACK_SIZE_MISSING, PACK_SIZE_MISMATCH])).toEqual({ ok: true, value: ["See comments"] });

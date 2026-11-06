@@ -48,12 +48,27 @@ const packMissing = (a: string) => `(${a}.sold_as IS NULL AND EXISTS (SELECT 1 F
 /** Received known and different from shipped (NULL received = SC has reported nothing yet: no flag). */
 const receivingMismatch = (a: string) => `(${a}.qty_received_amazon IS NOT NULL AND ${a}.qty_received_amazon <> COALESCE(${a}.qty_shipped_fba, 0))`;
 export const RECEIVING_MISMATCH_EXISTS_SQL = `EXISTS (SELECT 1 FROM po_asins pk WHERE pk.po_id = p.id AND ${receivingMismatch("pk")})`;
-const packMismatch = (a: string) => `(${a}.sold_as IS NOT NULL AND ${a}.sold_as <> 'bundle' AND ${a}.velocity_units_per_pack IS NOT NULL AND ${a}.velocity_units_per_pack <> COALESCE(${a}.units_per_pack, 1))`;
+const packMismatchVelocity = (a: string) => `(${a}.sold_as IS NOT NULL AND ${a}.sold_as <> 'bundle' AND ${a}.velocity_units_per_pack IS NOT NULL AND ${a}.velocity_units_per_pack <> COALESCE(${a}.units_per_pack, 1))`;
+/**
+ * A line (alias l) of row `a` with no pack integers whose stored 2-dp yield fits no whole number of retailer units at
+ * the row's known pack (|y − r ÷ pack| > 0.005), or a multi-pack with no pack size — the SQL twin of yieldMismatchNote
+ * (shared/yield-mismatch.ts, Maria 2026-11-06). Clears by itself once pack and yield agree.
+ */
+export const yieldMismatchLine = (l: string, a: string) => `((${l}.retailer_units_per_product IS NULL OR ${l}.asin_units_per_pack IS NULL) AND ${l}.asin_qty_per_product > 0
+  AND ${a}.sold_as IN ('individual', 'multi-pack')
+  AND NOT COALESCE((SELECT ROUND(${l}.asin_qty_per_product * kk.k) >= 1 AND ABS(${l}.asin_qty_per_product - ROUND(${l}.asin_qty_per_product * kk.k) / kk.k) <= 0.005000001
+       FROM (SELECT (CASE WHEN ${a}.sold_as = 'individual' THEN 1 ELSE NULLIF(${a}.units_per_pack, 0) END)::numeric AS k) kk WHERE kk.k IS NOT NULL), false))`;
+const yieldMismatchRow = (a: string) => `EXISTS (SELECT 1 FROM po_line_items ly WHERE ly.po_asin_id = ${a}.id AND ${yieldMismatchLine("ly", a)})`;
+/** Shown: Velocity's pack differs, or a line's stored yield and the pack disagree. */
+const packMismatch = (a: string) => `(${packMismatchVelocity(a)} OR ${yieldMismatchRow(a)})`;
+/** Blocks auto-close: the yield half only on an open PO — a closed PO shows it but is never reopened by it (Maria 2026-11-06). */
+const packMismatchClose = (a: string) => `(${packMismatchVelocity(a)} OR (${yieldMismatchRow(a)} AND EXISTS (SELECT 1 FROM purchase_orders py WHERE py.id = ${a}.po_id AND py.closed_at IS NULL)))`;
 /** Shipped FBA over Ordered, not cleared by hand at (or above) the current shipped. */
 export const extraUnits = (a: string) => `(COALESCE(${a}.qty_shipped_fba, 0) > ${a}.qty AND (${a}.extra_units_cleared_shipped IS NULL OR ${a}.qty_shipped_fba > ${a}.extra_units_cleared_shipped))`;
 export const EXTRA_UNITS_EXISTS_SQL = `EXISTS (SELECT 1 FROM po_asins pk WHERE pk.po_id = p.id AND ${extraUnits("pk")})`;
 export const PACK_SIZE_MISSING_EXISTS_SQL = `EXISTS (SELECT 1 FROM po_asins pk WHERE pk.po_id = p.id AND ${packMissing("pk")})`;
 export const PACK_SIZE_MISMATCH_EXISTS_SQL = `EXISTS (SELECT 1 FROM po_asins pk WHERE pk.po_id = p.id AND ${packMismatch("pk")})`;
+const PACK_SIZE_MISMATCH_CLOSE_EXISTS_SQL = `EXISTS (SELECT 1 FROM po_asins pk WHERE pk.po_id = p.id AND ${packMismatchClose("pk")})`;
 
 /**
  * "No invoice saved" (NO_INVOICE_SAVED) on a PO, alias `p`: no document, the
@@ -86,7 +101,7 @@ export const REVIEW_VELOCITY_EXISTS_SQL = `EXISTS (SELECT 1 FROM po_tracking t W
 export const PO_CLOSE_ACTION_ITEMS_SQL = `ARRAY(${openLineItemsSql("l.po_id = p.id")}
   UNION SELECT '${EXTRA_UNITS_SHIPPED}' WHERE ${EXTRA_UNITS_EXISTS_SQL}
   UNION SELECT '${PACK_SIZE_MISSING}' WHERE ${PACK_SIZE_MISSING_EXISTS_SQL}
-  UNION SELECT '${PACK_SIZE_MISMATCH}' WHERE ${PACK_SIZE_MISMATCH_EXISTS_SQL}
+  UNION SELECT '${PACK_SIZE_MISMATCH}' WHERE ${PACK_SIZE_MISMATCH_CLOSE_EXISTS_SQL}
   ${defectItemSql(OPEN_DEFECT_PO_SQL("p"))}
   ${replacementTrackingItemsSql("p.id")})`;
 /** The PO's displayed items: the close set plus Receiving mismatch and No invoice saved. */

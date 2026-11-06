@@ -37,6 +37,8 @@ export interface PoAsinLine {
   id: string;
   position: number | null;
   product_name: string | null;
+  /** "stored 0.50, ×1 gives 1.00" — the line's stored yield and the row's pack disagree ("Pack size mismatch", 2026-11-06). */
+  pack_mismatch_note?: string;
   supplier_sku: string | null;
   price: string | null;
   item_discount: string | null;
@@ -88,6 +90,8 @@ export interface PoAsinRowData {
   action_items?: string[];
   /** "Extra units shipped" note — the picker's overshoot confirm or the manual clear (migration 073). */
   extra_units_note?: string | null;
+  /** Each mismatched line's yield note, joined (the row's "Pack size mismatch" hover). */
+  pack_mismatch_note?: string;
   lines?: PoAsinLine[];
 }
 
@@ -139,6 +143,7 @@ export const ACTION_ITEM_OPTIONS = ["Need to return", "Missing / damaged from su
   "Confirm order details", "Subscription renews", "Review renewal PO", "Subscription may be active"];
 // §7: tinted chips only. SHIP indigo; Received - FBM green; Need to return orange; the attention items amber.
 export const EXTRA_UNITS_SHIPPED = "Extra units shipped";
+export const PACK_SIZE_MISMATCH = "Pack size mismatch";
 export function actionChipClass(item: string): string {
   const t = item.toLowerCase();
   // Red so it stands out (Maria 2026-10-29).
@@ -268,7 +273,13 @@ export function ActionItemsEditor({ items, url, onSaved, testId, titles, lines, 
 export function extraUnitsTitle(a: Pick<PoAsinRowData, "qty" | "qty_shipped_fba" | "extra_units_note">): string {
   return `Shipped FBA ${fmtQty(a.qty_shipped_fba ?? 0)} of ${fmtQty(a.qty)} ordered${a.extra_units_note ? ` — ${a.extra_units_note}` : ""}`;
 }
-const extraTitles = (a: PoAsinRowData): Record<string, string> => ({ [EXTRA_UNITS_SHIPPED]: extraUnitsTitle(a) });
+const extraTitles = (a: PoAsinRowData): Record<string, string> => ({ [EXTRA_UNITS_SHIPPED]: extraUnitsTitle(a), ...(a.pack_mismatch_note ? { [PACK_SIZE_MISMATCH]: a.pack_mismatch_note } : {}) });
+/** A PO's hover titles plus "Pack size mismatch" from its rows' yield notes (each row's lines, one per row). */
+export function poActionTitles(titles: Readonly<Record<string, string>> | undefined, asins: readonly { pack_mismatch_note?: string }[] | undefined): Record<string, string> {
+  const notes = (asins ?? []).map((a) => a.pack_mismatch_note).filter(Boolean);
+  return notes.length ? { ...titles, [PACK_SIZE_MISMATCH]: notes.join("\n") } : { ...titles };
+}
+const lineTitles = (l: PoAsinLine): Record<string, string> | undefined => l.pack_mismatch_note ? { [PACK_SIZE_MISMATCH]: l.pack_mismatch_note } : undefined;
 
 /** Clear "Extra units shipped" by hand — the note is required (stored on the row, logged in History). */
 function ClearExtraUnits({ a, onChanged }: { a: PoAsinRowData; onChanged?: () => void }) {
@@ -594,8 +605,8 @@ export function PoAsinRow({ a, indent = false, editable = false, onChanged, po }
           {/* Product, Ordered, Cost/Unit, Total Cost above; Action Items after. */}
           <td className="px-1.5 py-1 text-right text-xs text-muted-foreground" colSpan={PO_ASIN_DISPLAY_COLUMNS.length - 4 - 1}>{l.qty_canceled != null && l.qty_canceled > 0 ? `canceled ${l.qty_canceled}` : ""}</td>
           <td className="px-1.5 py-1">{editable
-            ? <ActionItemsEditor items={l.action_items} url={`/api/pos/lines/${l.id}/action-items`} onSaved={onChanged} testId={`button-action-items-line-${a.asin}-${l.position}`} defects={a.defects_open?.filter((d) => d.po_line_item_id === l.id)} />
-            : <ActionItemChips items={l.action_items} defects={a.defects_open?.filter((d) => d.po_line_item_id === l.id)} />}</td>
+            ? <ActionItemsEditor items={l.action_items} titles={lineTitles(l)} url={`/api/pos/lines/${l.id}/action-items`} onSaved={onChanged} testId={`button-action-items-line-${a.asin}-${l.position}`} defects={a.defects_open?.filter((d) => d.po_line_item_id === l.id)} />
+            : <ActionItemChips items={l.action_items} titles={lineTitles(l)} defects={a.defects_open?.filter((d) => d.po_line_item_id === l.id)} />}</td>
           {/* Product-line note, inline (2026-11-04). */}
           <td className={editable ? "p-0" : "px-2 py-1"}>{editable
             ? <InlineNoteCell value={l.notes} label="line note" className="px-2 py-1" testId={`line-${l.id}`} onSave={async (v) => { await poApi(`/api/pos/lines/${l.id}`, "PATCH", { notes: v }); onChanged?.(); }} />

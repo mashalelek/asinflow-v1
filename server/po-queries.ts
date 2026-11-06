@@ -10,6 +10,8 @@
 // new quantities (cols 13–18) are stored on po_asins as ASIN qty.
 import type { QueryLike } from "./scheduler/types";
 import { ASIN_ACTION_ITEMS_SQL, unionActionItems } from "./po-action-items";
+import { PACK_SIZE_MISMATCH } from "./po-status-map";
+import { yieldMismatchNote } from "@shared/yield-mismatch";
 import { defectItemSql, OPEN_DEFECT_LINE_SQL, DEFECT_UNCOVERED_EXISTS_SQL, DEFECT_UNCOVERED_PO_SQL } from "./po-defect-sql";
 
 /**
@@ -77,8 +79,19 @@ export async function loadPoAsinRows(query: QueryLike, poIds: string[]): Promise
        FROM po_line_items WHERE po_asin_id = ANY($1::uuid[]) ORDER BY po_asin_id, position, id`, [ids],
   )).rows as any[];
   const linesByAsin = new Map<string, any[]>();
-  for (const l of lines) { const k = String(l.po_asin_id); if (!linesByAsin.has(k)) linesByAsin.set(k, []); linesByAsin.get(k)!.push({ ...normalizeLineQty(l), action_items: unionActionItems([l.action_items]) }); }
-  return rows.map((r: any) => ({ ...normalizeAsinRowQty(r), action_items: unionActionItems([r.action_items]), shipments: byAsin.get(String(r.id)) ?? [], lines: linesByAsin.get(String(r.id)) ?? [] }));
+  // "Pack size mismatch" on the line itself when its stored yield and the row's pack disagree, with the note (2026-11-06).
+  const rowPack = new Map(rows.map((r: any) => [String(r.id), r]));
+  for (const l of lines) {
+    const k = String(l.po_asin_id), r = rowPack.get(k);
+    const note = r ? yieldMismatchNote(l, r.sold_as, r.units_per_pack) : null;
+    if (!linesByAsin.has(k)) linesByAsin.set(k, []);
+    linesByAsin.get(k)!.push({ ...normalizeLineQty(l), action_items: unionActionItems([note ? [...(l.action_items ?? []), PACK_SIZE_MISMATCH] : l.action_items]), ...(note ? { pack_mismatch_note: note } : {}) });
+  }
+  return rows.map((r: any) => {
+    const ls = linesByAsin.get(String(r.id)) ?? [];
+    const notes = ls.filter((l: any) => l.pack_mismatch_note).map((l: any) => `${r.asin} ${l.product_name ? `"${String(l.product_name).slice(0, 40)}"` : "line"}: ${l.pack_mismatch_note}`);
+    return { ...normalizeAsinRowQty(r), action_items: unionActionItems([r.action_items]), shipments: byAsin.get(String(r.id)) ?? [], lines: ls, ...(notes.length ? { pack_mismatch_note: notes.join(" · ") } : {}) };
+  });
 }
 
 /**

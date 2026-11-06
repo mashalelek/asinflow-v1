@@ -26,7 +26,7 @@ import {
 import { Tooltip, TooltipTrigger, TooltipContent } from "@/components/ui/tooltip";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import { UploadToVelocityDialog } from "@/components/upload-to-velocity-dialog";
-import { PoAsinTable, PoAsinColGroup, PoAsinHeaderRow, PoAsinRow, PO_ASIN_TABLE_MIN_WIDTH, ActionItemChips, ActionItemsEditor, type ActionItemLines, type OpenDefectBrief, type PoAsinRowData, type PoAsinLine } from "@/components/po-asin-rows";
+import { PoAsinTable, PoAsinColGroup, PoAsinHeaderRow, PoAsinRow, PO_ASIN_TABLE_MIN_WIDTH, ActionItemChips, ActionItemsEditor, poActionTitles, type ActionItemLines, type OpenDefectBrief, type PoAsinRowData, type PoAsinLine } from "@/components/po-asin-rows";
 import { loadPoExpanded, savePoExpanded, isPoExpanded, togglePoExpanded, toggleExpandAll, type PoExpandedState } from "@/lib/po-expanded";
 import { fmtQty, PO_ASIN_DISPLAY_COLUMNS } from "@/lib/po-qty";
 import { fetchLongSync } from "@/lib/long-sync";
@@ -765,7 +765,7 @@ export default function PurchaseOrders() {
                   </td>
                   <td style={poColStyle(colWidths, "action_items")} className="px-3 py-2" onClick={(e) => e.stopPropagation()}>
                     {/* PO table v2: set on the PO row = set on every product line (confirm when > 1). */}
-                    <ActionItemsEditor items={po.action_items} reasons={po.review_velocity_reasons} titles={po.action_item_titles} lines={po.action_item_lines} defects={po.defects_open}
+                    <ActionItemsEditor items={po.action_items} reasons={po.review_velocity_reasons} titles={poActionTitles(po.action_item_titles, po.asins)} lines={po.action_item_lines} defects={po.defects_open}
                       url={`/api/pos/${po.id}/action-items`} onSaved={() => void load()} lineCount={poLineCount(po)} testId={`po-action-items-${po.order_id}`} />
                   </td>
                   <td style={poColStyle(colWidths, "order_date")} className="px-3 py-2 whitespace-nowrap">{fmtDate(po.order_date)}</td>
@@ -964,7 +964,7 @@ export function PurchaseOrderDetailPlaceholder() {
           </div>
         </div>
         <div className="flex items-center gap-2">
-          <ActionItemChips items={actionItems} reasons={po.review_velocity_reasons} titles={po.action_item_titles} testId="po-detail-action-items" defects={po.defects_open} />
+          <ActionItemChips items={actionItems} reasons={po.review_velocity_reasons} titles={poActionTitles(po.action_item_titles, po.asins)} testId="po-detail-action-items" defects={po.defects_open} />
           <Button variant="outline" size="sm" onClick={() => navigate(`/pos/${po.id}/edit`, { state: { fromPoDetail: true } })} data-testid="button-edit-po"><Pencil className="h-3.5 w-3.5 mr-1" /> Edit PO</Button>
           <PoDangerActions poId={po.id} reloadKey={version} onCanceled={reload} onDeleted={() => navigate("/purchase-orders")} />
         </div>
