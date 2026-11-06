@@ -27,7 +27,7 @@ import {
 } from "@shared/schema";
 
 const DEFAULT_COL_WIDTHS: Partial<Record<ColumnId, number>> = {
-  product: 400, soldAs: 100, packSize: 75, category: 160, brand: 100, supplier: 100,
+  product: 400, soldAs: 125, packSize: 75, category: 160, brand: 100, supplier: 100,
   stock: 75, availableFba: 80, onOrder: 80, atPrep: 75, atWarehouse: 95, fbaStock: 85, reserved: 75, sentToFba: 80, daysLeft: 80,
   cogs: 90, actPrepCost: 85, actUnitsSold: 85, actRefunds: 80, actRefundPct: 80,
   actAvgSalePrice: 100, actRevenue: 95, actProfit: 100, actProfitPerUnit: 90, actRoi: 80, actMargin: 80,
