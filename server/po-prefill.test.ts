@@ -2,6 +2,7 @@ import { describe, it, expect, vi } from "vitest";
 import { CaptureSchema, PrefillSchema, extractPrefill, enrichPrefill, mergedPagesText, supplierForHost, shipsToForStreet, resolveShipTo, todayEt, storePrefill, getPrefill, _clearPrefillCache, PREFILL_TTL_MS, visibleQtys, inferLineQty, QTY_INFERRED_HINT, lineTotalPrice, isRewardsPromo, PROMO_AMOUNT_IMPLIED_HINT } from "./po-prefill";
 
 vi.mock("./log", () => ({ log: () => {} }));
+vi.mock("./spapi-auth", () => ({ spApiGet: async () => { throw new Error("no SP-API in tests"); } }));
 
 // po-ai-prefill §5: strict schema, raw-text fallback, enrichment with no AI, the 10-minute key.
 const capture = CaptureSchema.parse({
@@ -13,7 +14,7 @@ const capture = CaptureSchema.parse({
 });
 const extraction = PrefillSchema.parse({
   retailer: "Michaels", orderId: "8100107959187461", orderDate: "2026-10-31",
-  lines: [{ productName: "Liquitex BASICS Acrylic Paint, 4oz., Color: PB29 Blue Gray", retailerSku: "10543981", qty: 6, unitsPerPack: 1, unitPrice: 5.99, lineTotal: 35.94, asinGuess: "B08BR4NC22" }],
+  lines: [{ productName: "Liquitex BASICS Acrylic Paint, 4oz., Color: PB29 Blue Gray", retailerSku: "10543981", qty: 6, unitsPerPack: 1, unitPrice: 5.99, lineTotal: 35.94, regularUnitPrice: null, asinGuess: "B08BR4NC22" }],
   subtotal: 35.94, discount: 0, tax: 2.52, shipping: 0, total: 38.46,
   promos: [{ type: "sale", description: "30% on regular priced items", amount: null, percent: 30, confidence: "high" }],
   payments: [{ method: "card", nickname: "Amex", last4: "1001", amount: 38.46 }],
@@ -77,7 +78,7 @@ describe("enrichment (no AI)", () => {
   // Round 2 (Maria 2026-11-01): a discount already in the line prices → the promo defaults to not counting; nicknames through the alias table.
   it("a promo whose discount the line prices already carry defaults to not counting; a payment nickname is canonical (OnePay Cash → Walmart card)", async () => {
     const q = async (sql: string, params?: any[]) => (/FROM settings WHERE key = ANY/.test(sql) ? { rows: params?.[0]?.includes("po_payment_methods") ? [{ key: "po_payment_methods", value: ["Walmart card", "Amex (1001)", "Amex Gold", "Amex Plus"] }, { key: "po_payment_method_aliases", value: { "OnePay Cash": "Walmart card", "Amex Plus (1005)": "Amex Plus" } }, { key: "po_payment_method_last4", value: { "Amex (1001)": "1001", "Amex Gold": "1005", "Amex Plus": "1005" } }] : [{ key: "prep_cost", value: 1 }], rowCount: 1 } : { rows: [], rowCount: 0 });
-    const x = { ...extraction, lines: [{ productName: "Keystone All Natural Chicken, 28 oz Can", retailerSku: null, qty: 12, unitsPerPack: 1, unitPrice: 7.97, lineTotal: 95.64, asinGuess: null }], subtotal: 95.64, discount: 36.12, tax: 0, shipping: 0, total: 95.64, promos: [{ type: "sale" as const, description: "Now $7.97, was $10.98", amount: 36.12, percent: null, confidence: "high" as const }], payments: [{ method: "card" as const, nickname: "OnePay CashRewards", last4: "0302", amount: 95.64 }], notes: [] };
+    const x = { ...extraction, lines: [{ productName: "Keystone All Natural Chicken, 28 oz Can", retailerSku: null, qty: 12, unitsPerPack: 1, unitPrice: 7.97, lineTotal: 95.64, regularUnitPrice: null, asinGuess: null }], subtotal: 95.64, discount: 36.12, tax: 0, shipping: 0, total: 95.64, promos: [{ type: "sale" as const, description: "Now $7.97, was $10.98", amount: 36.12, percent: null, confidence: "high" as const }], payments: [{ method: "card" as const, nickname: "OnePay CashRewards", last4: "0302", amount: 95.64 }], notes: [] };
     const out = await enrichPrefill(q, capture, x, null, { id: "", capturedAt: null });
     expect(out.form.promos?.[0].counts_toward_cogs).toBe(false);
     expect(out.form.payments?.[0].nickname).toBe("Walmart card");
@@ -100,8 +101,8 @@ describe("enrichment (no AI)", () => {
   it("per promo: the promo already in the line totals defaults off and takes its $ amount; a \"$N voucher\" is rewards (off by default)", async () => {
     const q = async (sql: string) => (/FROM settings WHERE key = ANY/.test(sql) ? { rows: [{ key: "prep_cost", value: 1 }], rowCount: 1 } : { rows: [], rowCount: 0 });
     const x = { ...extraction, lines: [
-      { productName: "15 Pack: Caron Simply Soft Solid Yarn", retailerSku: null, qty: 2, unitsPerPack: 15, unitPrice: 64.35, lineTotal: 128.70, asinGuess: null },
-      { productName: "Liquitex BASICS 4oz. Acrylic Paint", retailerSku: null, qty: 10, unitsPerPack: 1, unitPrice: 4.19, lineTotal: 41.90, asinGuess: null },
+      { productName: "15 Pack: Caron Simply Soft Solid Yarn", retailerSku: null, qty: 2, unitsPerPack: 15, unitPrice: 64.35, lineTotal: 128.70, regularUnitPrice: null, asinGuess: null },
+      { productName: "Liquitex BASICS 4oz. Acrylic Paint", retailerSku: null, qty: 10, unitsPerPack: 1, unitPrice: 4.19, lineTotal: 41.90, regularUnitPrice: null, asinGuess: null },
     ], subtotal: 188.60, discount: 28, tax: 0, shipping: 0, total: 160.60, payments: [], notes: [], promos: [
       { type: "sale" as const, description: "30% on regular priced items (code MEGA30DEAL)", amount: null, percent: 30, confidence: "high" as const },
       { type: "coupon" as const, description: "$10 voucher 3921", amount: 10, percent: null, confidence: "low" as const },
@@ -158,7 +159,7 @@ describe("enrichment (no AI)", () => {
   // Maria 2026-11-01: a Walmart cart line "12 × $7.97 = $95.64" came through as qty 1 (the model read "Multipack Quantity").
   describe("qty cross-check", () => {
     const walmart = CaptureSchema.parse({ retailerHost: "www.walmart.com", pages: [{ step: "cart", url: "https://www.walmart.com/cart", title: "Cart", text: "Cart (1 item)\nGreat Value Peanut Butter 40oz\nMultipack Quantity: 1\n$7.97\n12\nSubtotal (12 items) $95.64", fields: [{ label: "Multipack Quantity", value: "1" }, { label: "Quantity", value: "12" }] }] });
-    const line = { productName: "Great Value Peanut Butter 40oz", retailerSku: "10450114", qty: 1, unitsPerPack: 1, unitPrice: 7.97, lineTotal: 95.64, asinGuess: null };
+    const line = { productName: "Great Value Peanut Butter 40oz", retailerSku: "10450114", qty: 1, unitsPerPack: 1, unitPrice: 7.97, lineTotal: 95.64, regularUnitPrice: null, asinGuess: null };
     const q = async (sql: string) => (/FROM settings WHERE key = ANY/.test(sql) ? { rows: [{ key: "prep_cost", value: 1 }], rowCount: 1 } : { rows: [], rowCount: 0 });
     it("visibleQtys reads form fields, 'Qty 12', '12 × $', '$ × 12' and a bare integer line", () => {
       expect(Array.from(visibleQtys(walmart)).sort((a, b) => a - b)).toEqual([1, 12]);

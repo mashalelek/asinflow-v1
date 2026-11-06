@@ -43,12 +43,17 @@ export interface CostHeader {
   tax?: number;
   /** The supplier's shipping / handling (purchase_orders.sh_donations) — in COGS since v3. */
   shDonations?: number;
+  /**
+   * Free-item deals (2026-11-06, migration 097): Σ allocation weights over the whole PO — each line's regular price × qty,
+   * else its money. Absent = `subtotal` (allocation by line totals, as before).
+   */
+  allocationBase?: number;
   /** Kept for callers that still pass them; never used. */
   orderTotal?: number;
   cashbackPct?: number | null;
 }
 /** One product line: its unit price (full precision) and qty; lineTotal = the line's money as captured (else price × qty). */
-export interface CostLine { price: number | null; qty: number; lineTotal?: number | null }
+export interface CostLine { price: number | null; qty: number; lineTotal?: number | null; /** Unit price before a multi-buy deal (migration 097); the line then weighs regularPrice × qty. */ regularPrice?: number | null }
 export interface AsinCosts {
   /** Col AR: before the gift-card discount, counting promos applied. */
   sourcing: number;
@@ -63,8 +68,11 @@ export interface AsinCosts {
 const r2 = (x: number) => Math.round(x * 100) / 100;
 const fin = (x: number | undefined | null) => (x != null && Number.isFinite(x) ? x : 0);
 const gcFactor = (h: CostHeader) => 1 - (h.gcPct != null && Number.isFinite(h.gcPct) ? h.gcPct / 100 : 0);
-/** base ÷ L: what one dollar of line money costs once discounts, tax and shipping are allocated. */
-const ratio = (h: CostHeader, discount: number) => (h.subtotal > 0 ? (h.subtotal - discount + fin(h.tax) + fin(h.shDonations)) / h.subtotal : 1);
+/** base ÷ W: what one unit of allocation weight costs once discounts, tax and shipping are allocated (W = L without a deal). */
+const ratio = (h: CostHeader, discount: number) => {
+  const w = h.allocationBase != null && h.allocationBase > 0 ? h.allocationBase : h.subtotal;
+  return w > 0 ? (h.subtotal - discount + fin(h.tax) + fin(h.shDonations)) / w : 1;
+};
 // Never below 0: a non-counting promo larger than the header discount cannot raise the cost above the price paid.
 const countingDiscount = (h: CostHeader) => Math.max(0, (h.discount || 0) - (h.nonCountingPromoAmount || 0));
 
@@ -73,6 +81,19 @@ export function lineMoney(l: CostLine): number | null {
   if (l.lineTotal != null && Number.isFinite(l.lineTotal)) return l.lineTotal;
   if (l.price == null || !Number.isFinite(l.price)) return null;
   return l.price * l.qty;
+}
+
+/** A line's allocation weight: regular price × qty under a free-item deal (migration 097), else its money. */
+export function lineWeight(l: CostLine): number | null {
+  if (l.regularPrice != null && Number.isFinite(l.regularPrice) && l.regularPrice > 0) return l.regularPrice * l.qty;
+  return lineMoney(l);
+}
+/** Σ weights when any line carries a regular price — the header's allocationBase; undefined otherwise. */
+export function allocationBaseOf(lines: readonly CostLine[]): number | undefined {
+  if (!lines.some((l) => l.regularPrice != null && Number.isFinite(l.regularPrice) && l.regularPrice > 0)) return undefined;
+  let w = 0;
+  for (const l of lines) { const x = lineWeight(l); if (x == null) return undefined; w += x; }
+  return w > 0 ? w : undefined;
 }
 
 /** Tolerance of the reflected check: 1¢ (Maria 2026-11-04 — line totals vs the pre- / post-discount subtotal). */
@@ -125,7 +146,22 @@ export interface PromoReflection {
   needsAnswer: number[];
 }
 const MAX_SUBSET_PROMOS = 12;
-export function reflectedPromos(a: { linesSum: number; subtotal: number | null; discount: number; promoAmounts: ReadonlyArray<number | null>; postDiscountSubtotal: number | null; answers?: ReadonlyArray<boolean | null | undefined> }): PromoReflection {
+/**
+ * Pure: each promo's $ in its sequence (Maria 2026-11-06). A $ promo takes its amount at its position; a % promo takes
+ * its % of the running total — so $10 then 20% on $100 = 10 + 18 (pays $72), 20% then $10 = 20 + 10 (pays $70), and %
+ * after % multiplies (Yankee: $699.80 × 0.5 × 0.85 = $297.41, never 65% off). Null where a promo has neither.
+ */
+export function sequencedPromoAmounts(base: number, promos: ReadonlyArray<{ amount: number | null; percent: number | null }>): Array<number | null> {
+  let running = Number.isFinite(base) ? base : 0;
+  return promos.map((p) => {
+    const d = p.amount != null && Number.isFinite(p.amount) ? p.amount : p.percent != null && Number.isFinite(p.percent) && p.percent > 0 ? r2(running * p.percent / 100) : null;
+    if (d != null) running = r2(running - d);
+    return d;
+  });
+}
+export function reflectedPromos(a: { linesSum: number; subtotal: number | null; discount: number; promoAmounts: ReadonlyArray<number | null>; postDiscountSubtotal: number | null; answers?: ReadonlyArray<boolean | null | undefined>;
+  /** Per promo its %, and the total the first one applies to (Σ regular price × qty when the lines carry one, else the subtotal): a % promo without a $ amount takes its sequenced amount. */
+  percents?: ReadonlyArray<number | null>; sequenceBase?: number | null }): PromoReflection {
   const auto = autoReflected(a);
   const ans = a.answers ?? [];
   if (!ans.some((x) => x != null)) return auto;
@@ -133,12 +169,18 @@ export function reflectedPromos(a: { linesSum: number; subtotal: number | null; 
   const reflected = auto.reflected.map((r, i) => (ans[i] != null ? !!ans[i] : r));
   return { ...auto, all: false, reflected, reflectedAmount: r2(reflected.reduce((t, x, i) => t + (x ? auto.amounts[i] ?? 0 : 0), 0)), needsAnswer: auto.needsAnswer.filter((i) => ans[i] == null) };
 }
-function autoReflected(a: { linesSum: number; subtotal: number | null; discount: number; promoAmounts: ReadonlyArray<number | null>; postDiscountSubtotal: number | null }): PromoReflection {
+function autoReflected(a: { linesSum: number; subtotal: number | null; discount: number; promoAmounts: ReadonlyArray<number | null>; postDiscountSubtotal: number | null; percents?: ReadonlyArray<number | null>; sequenceBase?: number | null }): PromoReflection {
   const n = a.promoAmounts.length, discount = a.discount || 0;
   const amounts = a.promoAmounts.map((x) => (x != null && Number.isFinite(x) ? x : null));
   const missing = amounts.map((x, i) => (x == null ? i : -1)).filter((i) => i >= 0);
   const known = amounts.reduce<number>((t, x) => t + (x ?? 0), 0);
+  // The page's own $ first: the one amount-less promo takes the discount − the others; else a % promo its sequenced amount.
   if (missing.length === 1 && discount - known > REFLECTED_TOLERANCE) amounts[missing[0]] = r2(discount - known);
+  else if (a.percents && missing.length > 0) {
+    const base = a.sequenceBase != null && a.sequenceBase > 0 ? a.sequenceBase : a.subtotal ?? a.linesSum;
+    const seq = sequencedPromoAmounts(base, amounts.map((x, i) => ({ amount: x, percent: a.percents![i] ?? null })));
+    for (const i of missing) amounts[i] = seq[i];
+  }
   const none: PromoReflection = { all: false, reflected: amounts.map(() => false), reflectedAmount: 0, amounts, ambiguous: false, fits: [], needsAnswer: [] };
   if (discountReflectedInLines({ linesSum: a.linesSum, discount, promoAmounts: discount > 0 ? 0 : known, postDiscountSubtotal: a.postDiscountSubtotal })) {
     return { ...none, all: true, reflected: amounts.map(() => true), reflectedAmount: discount > 0 ? discount : known };
@@ -170,7 +212,11 @@ export function promoCostHeader(h: CostHeader, linesSum: number, promos: Readonl
   if (r.all) return { ...h, subtotal: linesSum, discount: 0, nonCountingPromoAmount: 0 };
   const nonCounting = r2(promos.reduce((t, p, i) => t + (!r.reflected[i] && p.counts === false ? (r.amounts[i] ?? 0) : 0), 0));
   if (!(r.reflectedAmount > 0)) return { ...h, nonCountingPromoAmount: nonCounting };
-  return { ...h, subtotal: linesSum, discount: Math.max(0, r2((h.discount || 0) - r.reflectedAmount)), nonCountingPromoAmount: nonCounting };
+  // A reflected promo leaves the header discount only as far as the discount holds it (2026-11-06, Yankee Candle: the B2G2
+  // $349.90 is in the line prices but was never part of the $52.49 order discount — the coupon still counts).
+  const others = r2(promos.reduce((t, _p, i) => t + (!r.reflected[i] ? r.amounts[i] ?? 0 : 0), 0));
+  const inDiscount = Math.min(r.reflectedAmount, Math.max(0, (h.discount || 0) - others));
+  return { ...h, subtotal: linesSum, discount: Math.max(0, r2((h.discount || 0) - inDiscount)), nonCountingPromoAmount: nonCounting };
 }
 
 /** One product's adjusted cost (the sheet's Col X role): unit price × base_counting ÷ L × (1 − GC %), rounded to the cent. */
@@ -183,7 +229,7 @@ export function adjustedProductCost(price: number | null, h: CostHeader): number
 export function allocateAsinCosts(h: CostHeader, lines: readonly CostLine[], asinQty: number, adjustment = 0): AsinCosts | null {
   if (!(asinQty > 0)) return null;
   let money = 0;
-  for (const l of lines) { const m = lineMoney(l); if (m == null) return null; money += m; }
+  for (const l of lines) { const m = h.allocationBase != null ? lineWeight(l) : lineMoney(l); if (m == null) return null; money += m; }
   const counting = money * ratio(h, countingDiscount(h)), all = money * ratio(h, h.discount || 0);
   const sourcing = r2(counting / asinQty);
   const cogsBeforeAdjustment = r2((counting / asinQty) * gcFactor(h));

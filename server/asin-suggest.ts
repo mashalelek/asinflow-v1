@@ -1,13 +1,18 @@
 // ASIN picker suggestions for the New PO form (patch po-ai-prefill §6.4;
-// ranking 2026-11-04). Order before typing: (1) a normalized part-number hit
-// (the line's SKU / UPC or a model # in its name, inside an ASIN's title or
-// SKUs); (2) ASINs on past PO lines from the same supplier whose product name
-// matches this line's — exact (normalized) first, then a token match;
-// (3) brand + title-word overlap; (4) the model's guess is appended by the
-// client (amber). Typed text searches ASIN, title,
-// SKU and brand. Every suggestion carries AF's title / SKU / pack fields so
-// the form can mark them "from AF" (stone).
+// ranking 2026-11-04; Amazon search 2026-11-06). Order before typing: (1) a
+// normalized part-number hit (the line's SKU / UPC or a model # in its name,
+// inside an ASIN's title or SKUs); (2) ASINs on past PO lines from the same
+// supplier — the same supplier SKU, the same (normalized) product name, then
+// a token match whose distinctive words (scent / color / flavor / model) agree;
+// (3) brand + title-word overlap; (4) with no AF-database match (1–2), an
+// Amazon catalog search (server/asin-amazon-search.ts) merged with (3), and
+// the model's guess only once the catalog confirms it and its title passes the
+// distinctive-word check. Typed text searches ASIN, title, SKU and brand.
+// Every suggestion carries its title, its distinctive-word match and
+// "sold before", so the form can show where it came from and flag a mismatch.
 import type { QueryLike } from "./scheduler/types";
+import { nameMatch, nameMismatchNote } from "@shared/name-match";
+import { amazonKeywords, catalogItem, rankCatalogHits, searchCatalogKeywords, soldBefore, supplierBrand, type AmazonSearchDeps, type CatalogHit } from "./asin-amazon-search";
 
 export interface AsinSuggestion {
   asin: string;
@@ -19,13 +24,24 @@ export interface AsinSuggestion {
   units_per_pack: number | null;
   /** The ASIN exists in AF's catalog (asins). */
   in_af: boolean;
-  via: "part_number" | "history_exact" | "history_tokens" | "title" | "search";
+  via: "part_number" | "history_sku" | "history_exact" | "history_tokens" | "title" | "search" | "amazon" | "model";
   /** Supplier product name the history match came from. */
   matched_name?: string | null;
   /** Newest PO date the history match came from (YYYY-MM-DD). */
   last_ordered?: string | null;
   score: number;
+  /** AF has sold this ASIN (sales_daily units). */
+  sold_before?: boolean;
+  /** Every distinctive word of the product is in the title (name-match.ts). */
+  name_all?: boolean;
+  /** "title says Midnight Jasmine, product is Christmas Eve" — the amber note, null when they agree. */
+  mismatch?: string | null;
+  /** Amazon's size text / package quantity (Amazon search hits). */
+  size?: string | null;
+  pack?: number | null;
 }
+/** The AF-database matches (Maria 2026-11-06: AF first): a part number, or a past PO line from this supplier. */
+export const AF_MATCH_VIAS: ReadonlySet<AsinSuggestion["via"]> = new Set<AsinSuggestion["via"]>(["part_number", "history_sku", "history_exact", "history_tokens"]);
 
 const STOP = new Set(["the", "and", "for", "with", "of", "a", "an", "in", "to", "by", "pack", "pk", "ct", "count", "oz", "fl", "set", "color", "size"]);
 /** Normalized tokens of a product name: lower-case, ®™ and punctuation dropped, stop words and 1-char tokens out. */
@@ -52,6 +68,8 @@ export function rankHistory(product: string, rows: readonly HistoryLine[], minOv
     const exact = toks.join(" ") === targetNorm;
     const score = exact ? 2 : tokenOverlap(target, toks);
     if (!exact && score < minOverlap) continue;
+    // Generic words alone are no match (2026-11-06: "Christmas Eve Original Large Jar Candle" ≠ "Midnight Jasmine Original Large Jar Candle").
+    if (!exact && nameMatch(product, r.product_name).ratio < 0.5) continue;
     const cur = best.get(r.asin);
     if (!cur || score > cur.score || (score === cur.score && String(r.last_ordered ?? "") > String(cur.last_ordered ?? ""))) {
       best.set(r.asin, { via: exact ? "history_exact" : "history_tokens", score, matched_name: r.product_name, last_ordered: r.last_ordered });
@@ -96,7 +114,16 @@ const NORM_SQL = (col: string) => `regexp_replace(lower(COALESCE(${col}, '')), '
  * hit in an ASIN's title or SKUs, (2) past PO lines from this supplier, (3) brand + title-word overlap; the
  * model's guess is appended by the client / prefill. Anything that scores is shown (the picker asks for 3).
  */
-export async function suggestAsins(query: QueryLike, opts: { supplier?: string | null; product?: string | null; sku?: string | null; q?: string | null; limit?: number }): Promise<AsinSuggestion[]> {
+export async function suggestAsins(query: QueryLike, opts: {
+  supplier?: string | null; product?: string | null; sku?: string | null; q?: string | null; limit?: number;
+  /** Search Amazon when AF's database has no match (the picker before typing, the prefill). */
+  amazon?: boolean;
+  /** The model's ASIN guess: a candidate only once the catalog confirms it and its title passes the check. */
+  guess?: string | null;
+  /** The retailer's units per pack (a ranking signal for Amazon hits). */
+  pack?: number | null;
+  deps?: AmazonSearchDeps;
+}): Promise<AsinSuggestion[]> {
   const limit = Math.max(1, Math.min(opts.limit ?? 8, 25));
   const out: AsinSuggestion[] = [];
   const seen = new Set<string>();
@@ -124,7 +151,20 @@ export async function suggestAsins(query: QueryLike, opts: { supplier?: string |
     rows.map((r) => ({ r, score: 3 + titleScore(product, r.title, r.brand) })).sort((a, b) => b.score - a.score || a.r.asin.localeCompare(b.r.asin))
       .slice(0, limit).forEach(({ r, score }) => push(fromCatalog(r.asin, r, "part_number", score)));
   }
-  // 2. History from the same supplier.
+  // 2a. The same supplier SKU on a past line from this supplier (the remembered pick, 2026-11-06).
+  const skuN = normPart(opts.sku);
+  if (supplier && skuN.length >= 3 && out.length < limit) {
+    const rows = (await query(
+      `SELECT pa.asin, MAX(l.product_name) AS product_name, MAX(p.order_date)::text AS last_ordered
+         FROM po_line_items l JOIN po_asins pa ON pa.id = l.po_asin_id JOIN purchase_orders p ON p.id = pa.po_id
+        WHERE p.supplier = $1 AND ${NORM_SQL("l.supplier_sku")} = $2
+        GROUP BY pa.asin ORDER BY MAX(p.order_date) DESC NULLS LAST LIMIT 5`, [supplier, skuN],
+    )).rows as HistoryLine[];
+    const fresh = rows.filter((r) => !seen.has(r.asin));
+    const cat = await catalog(fresh.map((r) => r.asin));
+    for (const r of fresh) push(fromCatalog(r.asin, cat.get(r.asin), "history_sku", 2.5, { matched_name: r.product_name, last_ordered: r.last_ordered }));
+  }
+  // 2b. History from the same supplier: the same name, then a distinctive-word token match.
   if (product && supplier && out.length < limit) {
     const rows = (await query(
       `SELECT pa.asin, l.product_name, MAX(p.order_date)::text AS last_ordered
@@ -144,7 +184,9 @@ export async function suggestAsins(query: QueryLike, opts: { supplier?: string |
         `SELECT ${catalogCols} FROM asins a WHERE a.title ILIKE ANY($1::text[]) LIMIT 300`,
         [toks.map((t) => `%${t}%`)],
       )).rows as CatalogRow[];
-      rows.map((r) => ({ r, score: titleScore(product, r.title, r.brand) })).filter((x) => x.score > 0).sort((a, b) => b.score - a.score || a.r.asin.localeCompare(b.r.asin))
+      // The distinctive-word share ranks first (a title naming the product's scent beats one sharing only "large jar candle").
+      rows.map((r) => ({ r, score: titleScore(product, r.title, r.brand), m: nameMatch(product, r.title, r.brand).ratio })).filter((x) => x.score > 0)
+        .sort((a, b) => b.m - a.m || b.score - a.score || a.r.asin.localeCompare(b.r.asin))
         .slice(0, limit - out.length).forEach(({ r, score }) => push(fromCatalog(r.asin, r, "title", score)));
     }
   }
@@ -161,7 +203,34 @@ export async function suggestAsins(query: QueryLike, opts: { supplier?: string |
     )).rows as CatalogRow[];
     for (const r of rows) push(fromCatalog(r.asin, r, "search", 0));
   }
-  return out.slice(0, limit);
+  // 5. No AF-database match: Amazon's catalog, merged with AF's title matches and ranked together (2026-11-06).
+  let ranked = out;
+  if (product && !q && !out.some((s) => AF_MATCH_VIAS.has(s.via)) && (opts.amazon || opts.guess)) {
+    const brand = await supplierBrand(query, supplier);
+    const hits: CatalogHit[] = opts.amazon ? (await searchCatalogKeywords(amazonKeywords(product, brand), opts.deps)).hits : [];
+    const guess = String(opts.guess ?? "").toUpperCase();
+    const fromModel = /^[A-Z0-9]{10}$/.test(guess) && !hits.some((h) => h.asin === guess) && !seen.has(guess) ? await catalogItem(guess, opts.deps) : null;
+    // The model never supplies an ASIN on its own: its guess counts only when the catalog has it and every distinctive word is in the title.
+    const modelOk = fromModel && nameMatch(product, fromModel.title, brand).all && nameMatch(product, fromModel.title, brand).words.length > 0 ? fromModel : null;
+    const afTitle = out.filter((s) => s.via === "title");
+    const all: CatalogHit[] = [...afTitle.map((s) => ({ asin: s.asin, title: s.title, brand: s.brand, image_url: s.image_url, size: null, pack: s.units_per_pack })), ...hits, ...(modelOk ? [modelOk] : [])];
+    const uniq = Array.from(new Map(all.map((h) => [h.asin, h])).values());
+    const sold = await soldBefore(query, uniq.map((h) => h.asin));
+    const cat = await catalog(uniq.map((h) => h.asin));
+    const order = rankCatalogHits(product, brand, uniq, { pack: opts.pack, soldBefore: sold });
+    ranked = order.map((h) => {
+      const c = cat.get(h.asin), af = afTitle.find((s) => s.asin === h.asin);
+      const via: AsinSuggestion["via"] = af ? "title" : modelOk?.asin === h.asin ? "model" : "amazon";
+      return { ...fromCatalog(h.asin, c, via, h.score), title: c?.title ?? h.title, image_url: c?.image_url ?? h.image_url, brand: c?.brand ?? h.brand, size: h.size, pack: h.pack };
+    });
+    ranked.push(...out.filter((s) => s.via !== "title" && !ranked.some((r) => r.asin === s.asin)));
+  }
+  const res = ranked.slice(0, limit);
+  const sold = await soldBefore(query, res.filter((s) => s.sold_before == null).map((s) => s.asin));
+  return res.map((s) => {
+    const m = product ? nameMatch(product, s.title, s.brand) : null;
+    return { ...s, sold_before: s.sold_before ?? sold.has(s.asin), name_all: m ? m.all && m.words.length > 0 : undefined, mismatch: product ? nameMismatchNote(product, s.title, s.brand) : null };
+  });
 }
 
 /** One ASIN's AF facts for the form (title, SKU, pack fields). */

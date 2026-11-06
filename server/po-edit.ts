@@ -107,6 +107,8 @@ export const HEADER_FIELDS: Record<string, Parser> = {
 export const LINE_FIELDS: Record<string, Parser> = {
   // A unit price takes 6 decimals; line_total = the line's money as captured (migration 087, 2026-11-04), NULL = price × qty.
   product_name: textOrNull, supplier_sku: textOrNull, price: money({ nullable: true, decimals: 6 }), line_total: money({ nullable: true }),
+  // Free-item deals (migration 097, 2026-11-06): the unit price before a multi-buy deal — the line's allocation weight.
+  regular_price: money({ nullable: true, decimals: 6 }),
   qty_ordered: decQty({ positive: true }), qty_received: decQty({ nullable: true }), qty_returned: decQty({ nullable: true }), qty_canceled: decQty({ nullable: true }),
   // Exact yield (migration 080, 2026-11-02): two integers, never a decimal — the derived asin_qty_per_product is written alongside, read-only.
   retailer_units_per_product: intQty({ nullable: false, min: 1 }), asin_units_per_pack: intQty({ nullable: false, min: 1 }), notes: textOrNull, asin: asinParser,
@@ -120,7 +122,7 @@ export const ASIN_FIELDS: Record<string, Parser> = {
 };
 /** Header / line / ASIN-row fields whose change should recompute a v2 PO's costs (routes call recomputePoCosts after the edit). */
 // v3 (2026-11-04): tax and shipping are in COGS; the order total decides whether the line totals already net the discount.
-export const COST_RELEVANT_FIELDS = new Set(["subtotal", "discount", "tax", "sh_donations", "order_total", "weighted_gc_discount_pct", "price", "line_total", "qty_ordered", "retailer_units_per_product", "asin_units_per_pack", "cogs_adjustment"]);
+export const COST_RELEVANT_FIELDS = new Set(["subtotal", "discount", "tax", "sh_donations", "order_total", "weighted_gc_discount_pct", "price", "line_total", "regular_price", "qty_ordered", "retailer_units_per_product", "asin_units_per_pack", "cogs_adjustment"]);
 
 /** Validate a body against a field spec. Unknown keys are an error (a typo never silently does nothing). */
 export function parseEdits(spec: Record<string, Parser>, body: unknown): { ok: true; edits: Record<string, unknown> } | { ok: false; error: string } {
@@ -330,9 +332,9 @@ export async function addLine(query: QueryLike, poId: string, body: unknown, use
   const rowPack = (await query(`SELECT sold_as, units_per_pack FROM po_asins WHERE id = $1`, [paId])).rows[0];
   const ratio = lineRatio({ retailer_units_per_product: e.retailer_units_per_product as number, asin_units_per_pack: (e.asin_units_per_pack as number | undefined) ?? (rowPack?.sold_as === "individual" ? 1 : Number(rowPack?.units_per_pack) || 1) }) ?? { retailer: 1, asinUnits: 1 };
   const ins = await query(
-    `INSERT INTO po_line_items (po_id, po_asin_id, position, product_name, supplier_sku, price, item_discount, qty_ordered, qty_received, qty_returned, qty_canceled, asin_qty_per_product, retailer_units_per_product, asin_units_per_pack, notes, line_total)
-     VALUES ($1, $2, $3, $4, $5, $6, 0, $7, $8, $9, $10, $11, $12, $13, $14, $15) RETURNING id`,
-    [poId, paId, pos, e.product_name ?? null, e.supplier_sku ?? null, e.price ?? null, e.qty_ordered, e.qty_received ?? null, e.qty_returned ?? 0, e.qty_canceled ?? null, ratioYield(ratio), ratio.retailer, ratio.asinUnits, e.notes ?? null, e.line_total ?? null],
+    `INSERT INTO po_line_items (po_id, po_asin_id, position, product_name, supplier_sku, price, item_discount, qty_ordered, qty_received, qty_returned, qty_canceled, asin_qty_per_product, retailer_units_per_product, asin_units_per_pack, notes, line_total, regular_price)
+     VALUES ($1, $2, $3, $4, $5, $6, 0, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16) RETURNING id`,
+    [poId, paId, pos, e.product_name ?? null, e.supplier_sku ?? null, e.price ?? null, e.qty_ordered, e.qty_received ?? null, e.qty_returned ?? 0, e.qty_canceled ?? null, ratioYield(ratio), ratio.retailer, ratio.asinUnits, e.notes ?? null, e.line_total ?? null, e.regular_price ?? null],
   );
   const lineId = String(ins.rows[0].id);
   const changes: FieldChange[] = [{ field: "line added", old: null, new: `${e.product_name ?? "product"} × ${e.qty_ordered} → ${e.asin}` }];

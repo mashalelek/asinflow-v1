@@ -6180,7 +6180,29 @@ every save and every recompute; a recompute stamps version 3.
   recomputed. The recompute reads the answers too. A promo without an amount, when it is the
   only one, takes the header discount − the others (also in the
   prefill, with an amber hint), so it no longer "counts until an amount
-  is entered". `reflectedPromos` / `promoCostHeader` in
+  is entered". **Promo sequence (Maria 2026-11-06):** promos apply in
+  their order (`po_promos.position`; the prefill keeps the page's order,
+  the form's ↑ reorders, Edit PO writes the new positions only when the
+  order changed): a $ promo takes its amount at its place, a % promo its
+  % of the running total — $10 then 20% on $100 pays $72, 20% then $10
+  pays $70; % after % multiplies ($699.80 × 0.5 × 0.85 = $297.41, never
+  65% off). The running total starts at Σ regular price × qty when the
+  lines carry one, else the subtotal. A typed $ always wins, then the
+  discount − the others rule above, then the sequence
+  (`sequencedPromoAmounts`); each amount-less promo shows its computed
+  "= $X" (`checkPoForm.promoAmountsUsed`). **Gift cards are payments,
+  never discounts (2026-11-06):** the order total is the total before
+  them; a captured "Total $0.00" after "Gift Card −$297.41" is $297.41,
+  and a gift card the model folded into the discount or listed as a promo
+  comes out again (`settleGiftCards`, checked against Σ payments).
+  **Free-item deals (2026-11-06, migration 097):** BOGO / "Buy 2, Get 2
+  Free" / "free" / a line at $0 under a deal — each line keeps the price
+  it shows and stores its **regular price** (`po_line_items.regular_price`;
+  the form's Reg. price column, shown when a line has one or via
+  "+ Regular prices"); the order's cost is then shared by regular price ×
+  qty, so free units carry their share (Yankee HFUS09823034326: $297.41 ÷
+  20 = $14.87 per candle before the GC %, $13.62 after 8.39%); the deal
+  is recorded as a sale promo already in the line prices. `reflectedPromos` / `promoCostHeader` in
   `shared/po-cost.ts`; `checkPoForm.promoReflected`; the recompute and
   the prefill use the same rule. The **weighted payment %** goes into the
   math unrounded (`weightedPaymentPctExact`: 12.795 %, not 12.80 %); the
@@ -6261,8 +6283,9 @@ every save and every recompute; a recompute stamps version 3.
   (AF's supplier is the domain; exact → alias → same registrable domain →
   else the hostname, flagged new), `ships_to` / prep from the ship-to
   street through the same settings the tracking router uses (§4.4), ASIN
-  candidates per line (§6.4 — history first, stone; else the model's guess,
-  amber), totals cross-checks (lines vs subtotal, payments vs total) and
+  candidates per line (§6.4 — AF's database first, stone; else an Amazon
+  catalog search, filled only when exactly one result names every
+  distinctive word, amber; the model never supplies an ASIN on its own), totals cross-checks (lines vs subtotal, payments vs total) and
   the model's notes → warnings. **Qty cross-check (Maria 2026-11-01, after
   a Walmart "12 × $7.97 = $95.64" line came through as qty 1):** the prompt
   says qty is the ORDERED quantity (the cart stepper / "Qty" / the
@@ -7316,10 +7339,36 @@ replaces it. Migration 061 adds `po_edit_log`, `deleted_pos` and
   at ≥ 5 characters with ≥ 3 digits) → ASINs on past PO lines from the
   same supplier whose product name matches (exact normalized, then token
   overlap ≥ 0.5, newest first) → brand + title-word overlap (any of the
-  name's longest words; the brand named in the line nudges) → the model's
-  guess (amber), whenever anything scores; typing searches ASIN, title,
-  SKU, brand and the typed text as a normalized part number. The prefill
-  maps a line to the first of those (acmetools 42838131 → B07VH2L2QF). **The picker is a
+  name's longest words; the brand named in the line nudges), whenever
+  anything scores; typing searches ASIN, title, SKU, brand and the typed
+  text as a normalized part number. **AF database first, then Amazon
+  (Maria 2026-11-06, yankeecandle.com HFUS09823034326):** the AF-database
+  matches are the part number, the **same supplier SKU** on a past line
+  from the supplier, and past lines whose name matches — a token match
+  counts only when the product's **distinctive words** (scent / color /
+  flavor / model: not the kind, packaging, size or brand words,
+  `shared/name-match.ts`) agree, so "Christmas Eve Original Large Jar
+  Candle" no longer matches a past "Midnight Jasmine Original Large Jar
+  Candle" (the old mapping to B00184W5LY came from AF's database, 0.50
+  token overlap on generic words, not the model). No AF-database match →
+  **SP-API searchCatalogItems** (`server/asin-amazon-search.ts`, read-only,
+  cached 15 min) with the supplier's brand (the brand of ≥ half its
+  ASINs) + the product name as keywords, never the UPC; the hits and AF's
+  title matches are ranked together by the distinctive-word share, all of
+  them found, the size and kind words ("large jar" over "tumbler"), the
+  pack and "sold before". The picker shows the top 3 with image, title,
+  size / pack, "not in AF" and "sold before"; the prefill fills an ASIN
+  only from AF's database (stone) or when exactly one result names every
+  distinctive word (amber, "Amazon search: the only result…"); otherwise
+  the ASIN is blank, the top 3 are the picker's first list and the
+  warning says "pick one of the suggestions". The model's ASIN guess is
+  looked up in the catalog and counts only when its title names every
+  distinctive word. Each ASIN row says where its ASIN came from (AF
+  database / Amazon search / the model's guess confirmed) and, in amber,
+  when the title contradicts the product ("title says Midnight Jasmine,
+  product is Christmas Eve"). Her pick is remembered by the PO she saves:
+  the next PO from the supplier finds it as a past line (same name or
+  same SKU). **The picker is a
   type-ahead combobox (Maria 2026-11-01), never a bare dropdown:** the
   list narrows as she types (client-side at once, the server search 180 ms
   later), ↑ ↓ move, Enter picks the highlighted suggestion, Escape / Tab

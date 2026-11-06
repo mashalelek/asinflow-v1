@@ -4630,7 +4630,7 @@ export async function registerRoutes(
   app.get("/api/pos/asin-suggest", async (req: Request, res: Response) => {
     if (!isDbAvailable()) { res.status(503).json({ message: "Database not available" }); return; }
     const str = (k: string) => (typeof req.query[k] === "string" ? String(req.query[k]) : "");
-    try { res.json({ rows: await suggestAsins(poQuery, { supplier: str("supplier"), product: str("product"), sku: str("sku"), q: str("q"), limit: Number(str("limit")) || 8 }) }); }
+    try { res.json({ rows: await suggestAsins(poQuery, { supplier: str("supplier"), product: str("product"), sku: str("sku"), q: str("q"), limit: Number(str("limit")) || 8, amazon: str("amazon") === "1", guess: str("guess") || null }) }); }
     catch (err: any) { res.status(500).json({ message: err.message }); }
   });
   // One ASIN's AF facts (title, SKU, pack fields) — "AF knows the ASIN".

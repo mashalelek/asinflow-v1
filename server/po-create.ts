@@ -78,9 +78,9 @@ export async function createPoFromForm(query: QueryLike, form0: PoFormState, use
     asinRows.push({ id: paId, asin: a.asin, asin_name: cat?.title ?? null });
     for (const l of a.lines) {
       await query(
-        `INSERT INTO po_line_items (po_id, po_asin_id, position, product_name, supplier_sku, price, item_discount, qty_ordered, qty_returned, asin_qty_per_product, retailer_units_per_product, asin_units_per_pack, adjusted_product_cost, action_items, notes, line_total)
-         VALUES ($1, $2, $3, $4, $5, $6, 0, $7, 0, $8, $9, $10, $11, '{}'::text[], $12, $13)`,
-        [poId, paId, l.position, l.product_name, l.supplier_sku, l.price, l.qty_ordered, l.asin_qty_per_product, l.retailer_units_per_product, l.asin_units_per_pack, l.adjusted_product_cost, l.notes, l.line_total],
+        `INSERT INTO po_line_items (po_id, po_asin_id, position, product_name, supplier_sku, price, item_discount, qty_ordered, qty_returned, asin_qty_per_product, retailer_units_per_product, asin_units_per_pack, adjusted_product_cost, action_items, notes, line_total, regular_price)
+         VALUES ($1, $2, $3, $4, $5, $6, 0, $7, 0, $8, $9, $10, $11, '{}'::text[], $12, $13, $14)`,
+        [poId, paId, l.position, l.product_name, l.supplier_sku, l.price, l.qty_ordered, l.asin_qty_per_product, l.retailer_units_per_product, l.asin_units_per_pack, l.adjusted_product_cost, l.notes, l.line_total, l.regular_price ?? null],
       );
       lines++;
     }

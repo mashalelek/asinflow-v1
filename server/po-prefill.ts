@@ -15,11 +15,12 @@ import { zodOutputFormat } from "@anthropic-ai/sdk/helpers/zod";
 import type { QueryLike } from "./scheduler/types";
 import { AI, anthropicClient, estimateCost } from "./config/ai";
 import { PROMO_RULES } from "./promo-classify";
-import { suggestAsins } from "./asin-suggest";
+import { suggestAsins, AF_MATCH_VIAS } from "./asin-suggest";
+import type { AmazonSearchDeps } from "./asin-amazon-search";
 import { normalizeStreet } from "./tracking-parse";
 import { loadAliases, aliasKey } from "./supplier-aliases";
 import { defaultEmailForSupplier } from "./supplier-defaults";
-import { promoCountsByDefault, yieldFromPacks, resolvePaymentNickname, defaultRewardPct, ambiguousPaymentHint, type PaymentLists, type PoFormState, type PoFormProduct, type PoFormPrefill, type PrefillSource } from "@shared/po-form";
+import { promoCountsByDefault, yieldFromPacks, resolvePaymentNickname, defaultRewardPct, ambiguousPaymentHint, type PaymentLists, type PoFormState, type PoFormProduct, type PoFormPrefill, type PrefillSource, type PrefillAsinCandidate } from "@shared/po-form";
 import { reflectedPromos } from "@shared/po-cost";
 // scrub.js is a plain browser script: under Node's ESM loader it exports nothing and defines globalThis.AfScrub (as in the page).
 import "../chrome-extension/core/scrub.js";
@@ -62,6 +63,7 @@ export const PrefillSchema = z.object({
     qty: z.number().nullable().describe("the ordered quantity of this line: the cart quantity stepper / 'Qty' / the multiplier in '12 × $7.97' — NEVER a 'Multipack Quantity' or pack count"),
     unitsPerPack: z.number().int().nullable().describe("the retailer's pack, e.g. 12 for a 12-count; 1 when sold singly"),
     unitPrice: money.describe("the price actually paid per item after item-level discounts"),
+    regularUnitPrice: money.describe("the regular price per item BEFORE a multi-buy deal (BOGO, Buy 2 Get 2 Free, 'free'): the struck-through / 'was' price; null when the line is not part of such a deal"),
     lineTotal: money,
     asinGuess: z.string().nullable().describe("10-character Amazon ASIN only when the page shows one"),
   })),
@@ -75,6 +77,35 @@ export const PrefillSchema = z.object({
 });
 export type PrefillExtraction = z.infer<typeof PrefillSchema>;
 
+/** A multi-buy / free-item deal by its text (2026-11-06, Yankee Candle "Buy 2, Get 2 Free"). */
+export const FREE_ITEM_PROMO = /\b(?:bogo|b\d+g\d+|buy\s*\d+\s*,?\s*get\s*\d+|free)\b/i;
+export const FREE_ITEM_NOTE = "Free-item deal: already in the line prices; the order's cost is shared by regular price";
+const GIFT_CARD_TEXT = /\bgift\s*cards?\b|\begift\b/i;
+
+/**
+ * Pure (Maria 2026-11-06, yankeecandle.com HFUS09823034326): gift cards are payments, never discounts. The order total is the
+ * total BEFORE gift cards — subtotal − discount + tax + shipping — never a post-gift-card "Total $0.00". A discount that swallowed
+ * the gift cards (52.49 + 297.41) gives them back; a gift card listed as a promo is dropped. Matched to the payments when each
+ * carries an amount, else to the page total (± the gift cards).
+ */
+export function settleGiftCards<T extends Pick<PrefillExtraction, "subtotal" | "discount" | "tax" | "shipping" | "total" | "payments" | "promos">>(x: T): { x: T; changed: boolean } {
+  const gc = r2(x.payments.filter((p) => p.method === "gift_card").reduce((t, p) => t + (p.amount ?? 0), 0));
+  if (!(gc > 0) || x.subtotal == null) return { x, changed: false };
+  const promos = x.promos.filter((p) => !(GIFT_CARD_TEXT.test(p.description) && p.amount != null && Math.abs(p.amount - gc) <= 0.01));
+  const pre = (d: number) => r2(x.subtotal! - d + (x.tax ?? 0) + (x.shipping ?? 0));
+  const d0 = x.discount ?? 0;
+  const ds = [d0, ...(d0 - gc > -0.005 ? [r2(d0 - gc)] : [])];
+  const paid = x.payments.every((p) => p.amount != null) ? r2(x.payments.reduce((t, p) => t + (p.amount ?? 0), 0)) : null;
+  const targets = paid != null ? [paid] : x.total != null ? [x.total, r2(x.total + gc)] : [];
+  for (const d of ds) for (const t of targets) {
+    if (Math.abs(pre(d) - t) <= 0.01) {
+      const next = { ...x, discount: d, total: pre(d), promos };
+      return { x: next, changed: next.discount !== x.discount || next.total !== x.total || promos.length !== x.promos.length };
+    }
+  }
+  return { x: { ...x, promos }, changed: promos.length !== x.promos.length };
+}
+
 /** A rewards line by its text (2026-11-05): "$10 voucher 3921", "Rewards", "Rewards balance", "points" — never a "% off" line ("Rewards members 20% off" is a coupon). */
 export const isRewardsPromo = (d: string): boolean => /\$\s?\d+(?:\.\d{2})?\s+(?:rewards?\s+)?voucher\b/i.test(d) || (/\brewards?\b|\bpoints\b/i.test(d) && !/%/.test(d));
 export const PROMO_AMOUNT_IMPLIED_HINT = "Amount = discount − the other promos (the page gave only a %)";
@@ -84,6 +115,8 @@ export const PREFILL_SYSTEM = `You read captured text from a retailer's checkout
 - Card and gift-card numbers were masked before you see them ("•••• 1234"): report only the nickname (Visa, Amex, Chase…) and the last 4 digits.
 - unitPrice is the price actually paid per item after any item-level sale or coupon; qty is the ORDERED quantity of the line — the cart's quantity stepper / "Qty" / the multiplier in "12 × $7.97 = $95.64" (12) — never a "Multipack Quantity", pack count or units per pack; unitsPerPack is the retailer's pack (a "12 ct" is 12), 1 when sold singly. qty × unitPrice must equal lineTotal.
 - subtotal / discount / tax / shipping / total are the order-level figures; discount is the order-level discount (positive).
+- Gift cards are PAYMENTS, never a discount or a promo: discount never includes a gift card, and total is the order total BEFORE gift cards are applied (subtotal − discount + tax + shipping) — never the balance due after them (a "Total $0.00" after "Gift Card −$297.41" means total 297.41).
+- A multi-buy deal (BOGO, "Buy 2, Get 2 Free", "free"): each line keeps the price it shows (a free line unitPrice 0, lineTotal 0) and gives regularUnitPrice; list the deal once as a "sale" promo with its dollar amount (the savings shown).
 - Payments: one entry per method shown with its amount. Gift cards are method "gift_card"; store credit, rewards balance and similar are "store_credit".
 - subscription.present is true only when the pages show a subscription / autoship for this order; frequencyWeeks in weeks (monthly = 4).
 - Pages are in checkout order and, within a step, in the order captured: when a step appears more than once (the cart re-captured after an edit, a checkout's sub-steps), the later page is the newer one and wins where they differ. The order confirmation is the authority for the order id, the date and the charged total.
@@ -201,7 +234,19 @@ export function inferLineQty(l: { qty: number | null; unitPrice: number | null; 
 export interface PrefillPayload { form: Partial<PoFormState>; prefill: PoFormPrefill }
 
 /** Turn the extraction into the form's state with markers and warnings. */
-export async function enrichPrefill(query: QueryLike, capture: Capture, x: PrefillExtraction | null, rawText: string | null, meta: { id: string; capturedAt: string | null }): Promise<PrefillPayload> {
+/** Where a prefilled ASIN came from (the amber / stone field's tooltip and the ASIN row's label). */
+export function asinSourceHint(c: Pick<PrefillAsinCandidate, "via" | "matched_name" | "last_ordered">): string {
+  switch (c.via) {
+    case "part_number": return "AF database: part # match";
+    case "history_sku": return `AF database: same supplier SKU${c.last_ordered ? `, last ordered ${c.last_ordered}` : ""}`;
+    case "history_exact": case "history_tokens": return `AF database: past PO line${c.matched_name ? ` "${c.matched_name}"` : ""}${c.last_ordered ? ` (${c.last_ordered})` : ""}`;
+    case "amazon": return "Amazon search: the only result matching every distinctive word — check it";
+    case "model": return "Model's guess, confirmed by Amazon's catalog: the only result matching every distinctive word — check it";
+    default: return "AF database: title match — the only one matching every distinctive word — check it";
+  }
+}
+
+export async function enrichPrefill(query: QueryLike, capture: Capture, x: PrefillExtraction | null, rawText: string | null, meta: { id: string; capturedAt: string | null }, searchDeps?: AmazonSearchDeps): Promise<PrefillPayload> {
   const sources: Record<string, PrefillSource> = {};
   const warnings: string[] = [], notes: string[] = [];
   const suppliers = (await query(`SELECT DISTINCT supplier FROM purchase_orders`)).rows.map((r: any) => String(r.supplier));
@@ -216,6 +261,9 @@ export async function enrichPrefill(query: QueryLike, capture: Capture, x: Prefi
   if (!x) { warnings.unshift("The capture could not be read into the form — the captured text is in the drawer; fill the form from it"); return { form, prefill }; }
 
   const mark = (k: string, v: string | null | undefined, src: PrefillSource = "model") => { if (v != null && String(v) !== "") sources[k] = src; };
+  // Gift cards are payments (2026-11-06): the order total is before them, the discount never holds them.
+  const gcs = settleGiftCards(x);
+  if (gcs.changed) { x = gcs.x; notes.push("Gift cards are payments: the order total is the total before them"); }
   form.order_id = x.orderId ?? ""; mark("order_id", form.order_id);
   if (x.orderDate && /^\d{4}-\d{2}-\d{2}$/.test(x.orderDate)) { form.order_date = x.orderDate; mark("order_date", form.order_date); }
   else form.order_date = todayEt(); // no date on the pages (a confirmation page rarely shows one) → today, plain (typed) marker, no warning (Maria 2026-11-01, v1.2.1)
@@ -244,6 +292,7 @@ export async function enrichPrefill(query: QueryLike, capture: Capture, x: Prefi
   const visible = checkQty ? visibleQtys(capture) : new Set<number>();
   const hints: Record<string, string> = {};
   const noAsin: number[] = [];
+  const asinCandidates: Record<string, PrefillAsinCandidate[]> = {};
   for (let i = 0; i < x.lines.length; i++) {
     const l = x.lines[i];
     const rupp = l.unitsPerPack != null && l.unitsPerPack >= 1 ? String(l.unitsPerPack) : "1";
@@ -253,26 +302,45 @@ export async function enrichPrefill(query: QueryLike, capture: Capture, x: Prefi
     const lt = lineTotalPrice(l.lineTotal, qty, l.unitPrice);
     const p: PoFormProduct = { product_name: l.productName, supplier_sku: l.retailerSku ?? "", price: lt ? lt.price : m2(l.unitPrice), qty_ordered: qty == null ? "" : String(qty), retailer_units_per_pack: rupp, asin: "", asin_qty_per_product: "1", sold_as: "individual", units_per_pack: "1", prep_cost: st.prep, notes: "" };
     if (lt) p.line_total = lt.line_total;
+    if (l.regularUnitPrice != null && l.regularUnitPrice > 0) p.regular_price = String(l.regularUnitPrice);
     for (const k of ["product_name", "supplier_sku", "price", "qty_ordered"] as const) mark(`products.${i}.${k}`, p[k]);
     if (inferred != null) hints[`products.${i}.qty_ordered`] = QTY_INFERRED_HINT;
     if (l.unitsPerPack != null) mark(`products.${i}.retailer_units_per_pack`, rupp);
     if (lt) linesSum += Number(lt.line_total); else if (l.unitPrice != null && qty != null) linesSum += l.unitPrice * qty;
     const guess = l.asinGuess && /^[A-Z0-9]{10}$/i.test(l.asinGuess) ? l.asinGuess.toUpperCase() : null;
-    const cands = await suggestAsins(query, { supplier: sup.supplier, product: l.productName, sku: l.retailerSku, limit: 3 });
-    // Part-number hit → past lines from this supplier → brand + title words (2026-11-04); the model's guess only when nothing scores.
-    const top = cands.find((c) => c.via === "part_number") ?? cands.find((c) => c.via === "history_exact" || c.via === "history_tokens") ?? cands.find((c) => c.via === "title") ?? null;
-    if (top) {
-      p.asin = top.asin; sources[`products.${i}.asin`] = "af";
-      if (top.in_af && top.sold_as) { p.sold_as = top.sold_as as PoFormProduct["sold_as"]; p.units_per_pack = String(top.units_per_pack ?? 1); sources[`asin.${top.asin}`] = "af"; }
-    } else if (guess) { p.asin = guess; sources[`products.${i}.asin`] = "model"; }
-    else noAsin.push(i + 1);
+    // AF's database first (part #, the supplier SKU, past lines from this supplier); none → Amazon's catalog, ranked by the
+    // distinctive words; the model's guess only once the catalog confirms it (Maria 2026-11-06). Filled only from AF's database, or
+    // when exactly one result matches every distinctive word (amber); otherwise blank with the top 3 to pick from.
+    const cands = await suggestAsins(query, { supplier: sup.supplier, product: l.productName, sku: l.retailerSku, limit: 10, amazon: true, guess, pack: l.unitsPerPack, deps: searchDeps });
+    const af = cands.find((c) => AF_MATCH_VIAS.has(c.via)) ?? null;
+    const full = cands.filter((c) => c.name_all === true);
+    const pickOne = af ?? (full.length === 1 ? full[0] : null);
+    asinCandidates[String(i)] = (af ? cands.filter((c) => AF_MATCH_VIAS.has(c.via)) : cands).slice(0, 3);
+    if (pickOne) {
+      p.asin = pickOne.asin; sources[`products.${i}.asin`] = af ? "af" : "model";
+      hints[`products.${i}.asin`] = asinSourceHint(pickOne);
+      if (pickOne.in_af && pickOne.sold_as) { p.sold_as = pickOne.sold_as as PoFormProduct["sold_as"]; p.units_per_pack = String(pickOne.units_per_pack ?? 1); sources[`asin.${pickOne.asin}`] = "af"; }
+    } else noAsin.push(i + 1);
     p.asin_qty_per_product = yieldFromPacks(p.retailer_units_per_pack, p.units_per_pack, p.sold_as);
     products.push(p);
   }
+  // Free-item deals (2026-11-06): regular prices are kept only under a multi-buy deal (a "was" price on a plain sale is not one —
+  // the cheaper line really is cheaper); the deal is a sale promo already in the line prices.
+  const freeDeal = x.promos.some((p) => FREE_ITEM_PROMO.test(p.description)) || x.lines.some((l) => (l.unitPrice ?? 0) === 0 && (l.regularUnitPrice ?? 0) > 0);
+  const dealSavings = r2(x.lines.reduce((t, l) => t + (l.regularUnitPrice != null && l.regularUnitPrice > 0 && l.qty != null ? Math.max(0, l.regularUnitPrice * l.qty - (l.lineTotal ?? (l.unitPrice ?? 0) * l.qty)) : 0), 0));
+  // Under a deal, a line the page shows at full price is its own regular price (its weight is unchanged; the form shows both).
+  products.forEach((p, i) => {
+    if (!freeDeal) { delete p.regular_price; return; }
+    if (!p.regular_price && Number(p.price) > 0) p.regular_price = p.price;
+    if (p.regular_price) mark(`products.${i}.regular_price`, p.regular_price);
+  });
+  if (freeDeal && dealSavings > 0 && !x.promos.some((p) => FREE_ITEM_PROMO.test(p.description))) x = { ...x, promos: [...x.promos, { type: "sale", description: "Free-item deal (lines below their regular price)", amount: dealSavings, percent: null, confidence: "high" }] };
   form.products = products;
-  if (noAsin.length) warnings.push(noAsin.length === 1 ? `Line ${noAsin[0]}: no ASIN found in AF — pick one` : `Lines ${noAsin.join(", ")}: no ASIN found in AF — pick one`);
+  if (noAsin.length) warnings.push(`${noAsin.length === 1 ? `Line ${noAsin[0]}` : `Lines ${noAsin.join(", ")}`}: no ASIN in AF's database — pick one of the suggestions`);
+  prefill.asin_candidates = asinCandidates;
   // The double-discount rule, per promo (Maria 2026-11-01; 1¢ 2026-11-04; per promo 2026-11-05): a promo already in the line totals defaults to not counting.
-  const refl = reflectedPromos({ linesSum: r2(linesSum), subtotal: x.subtotal, discount: x.discount ?? 0, promoAmounts: x.promos.map((p) => p.amount), postDiscountSubtotal: x.total == null ? null : r2(x.total - (x.tax ?? 0) - (x.shipping ?? 0)) });
+  const isDeal = (p: { description: string }) => freeDeal && FREE_ITEM_PROMO.test(p.description);
+  const refl = reflectedPromos({ linesSum: r2(linesSum), subtotal: x.subtotal, discount: x.discount ?? 0, promoAmounts: x.promos.map((p) => (isDeal(p) ? p.amount ?? dealSavings : p.amount)), postDiscountSubtotal: x.total == null ? null : r2(x.total - (x.tax ?? 0) - (x.shipping ?? 0)), answers: x.promos.map((p) => (isDeal(p) ? true : null)) });
   const reflected = refl.all || refl.reflectedAmount > 0;
   // Totals that still do not reconcile: the lines match neither the subtotal nor (when the lines are net) the subtotal after discount.
   if (x.subtotal != null && x.lines.length > 0 && !reflected && Math.abs(r2(linesSum) - x.subtotal) > 0.01) warnings.push(`Lines add up to ${r2(linesSum).toFixed(2)}, the subtotal is ${x.subtotal.toFixed(2)}`);
@@ -282,9 +350,12 @@ export async function enrichPrefill(query: QueryLike, capture: Capture, x: Prefi
     const rewards = isRewardsPromo(p.description);
     const type = rewards ? "rewards" : p.type;
     // The page's $ amount (2026-11-05): when the model gave only a %, the one amount-less promo takes discount − the others.
-    const amount = p.amount ?? refl.amounts[i];
-    if (p.amount == null && amount != null) hints[`promos.${i}.amount`] = PROMO_AMOUNT_IMPLIED_HINT;
-    return { type: rewards || p.confidence === "high" ? type : "", description: p.description, amount: m2(amount), percent: m2(p.percent), counts_toward_cogs: promoCountsByDefault(type, refl.all || refl.reflected[i]) };
+    const deal = isDeal(p);
+    const amount = p.amount ?? (deal ? dealSavings || null : refl.amounts[i]);
+    if (p.amount == null && amount != null && !deal) hints[`promos.${i}.amount`] = PROMO_AMOUNT_IMPLIED_HINT;
+    if (deal) hints[`promos.${i}.amount`] = FREE_ITEM_NOTE;
+    // A free-item deal is a sale already in the line prices (in_line_prices true): it reduces nothing; the regular prices share the cost.
+    return { type: deal ? "sale" : rewards || p.confidence === "high" ? type : "", description: p.description, amount: m2(amount), percent: m2(p.percent), counts_toward_cogs: deal ? false : promoCountsByDefault(type, refl.all || refl.reflected[i]), ...(deal ? { in_line_prices: true } : {}) };
   });
   if (refl.ambiguous) warnings.push("Which promos are already in the prices? More than one set of promos matches the gap between the subtotal and the line totals");
   if (x.promos.some((p) => p.confidence === "low" && !isRewardsPromo(p.description))) warnings.push("A promo's type is uncertain — choose sale, coupon or rewards");

@@ -7,7 +7,7 @@
 // amount or type changes (server/po-costs.ts; an imported PO is never
 // recomputed).
 import type { QueryLike } from "./scheduler/types";
-import { EditError, logEdits, parseEdits, money, pctOrNull, textOrNull, isoDate, decQty, type Parsed } from "./po-edit";
+import { EditError, logEdits, parseEdits, money, pctOrNull, textOrNull, isoDate, decQty, intQty, type Parsed } from "./po-edit";
 import { recomputePoCosts } from "./po-costs";
 import { PAYMENT_METHODS, PROMO_TYPES, promoCountsByDefault, weightedPaymentPct, defaultRewardPct, canonicalPaymentName } from "@shared/po-form";
 import { REFUND_STATUSES } from "@shared/po-refund";
@@ -41,7 +41,7 @@ export async function syncWeightedPaymentPct(query: QueryLike, poId: string, use
   const r = await recomputePoCosts(query, poId, userId);
   return { old, new: next, recomputed: { changed: r.changed, skipped: r.skipped } };
 }
-export const PROMO_FIELDS = { type: oneOf(PROMO_TYPES, true), description: textOrNull, amount: money({ nullable: true }), percent: pctOrNull, counts_toward_cogs: bool, in_line_prices: boolOrNull } as const;
+export const PROMO_FIELDS = { type: oneOf(PROMO_TYPES, true), description: textOrNull, amount: money({ nullable: true }), percent: pctOrNull, counts_toward_cogs: bool, in_line_prices: boolOrNull, position: intQty({ nullable: true }) } as const; // position: the promo's sequence (2026-11-06)
 // status (migration 082, Dashboard patch C1): due = the supplier owes it (refunded_at / method NULL until received); received = the money arrived. Default received (every pre-patch row is).
 export const REFUND_FIELDS = { po_line_item_id: textOrNull, qty: decQty({ nullable: true }), amount: money({ nullable: true }), refunded_at: dateOrNull, method: oneOf(PAYMENT_METHODS, true), nickname: textOrNull, last4, note: textOrNull, needs_split: bool, status: oneOf(REFUND_STATUSES) } as const;
 
@@ -79,9 +79,10 @@ export async function addMoneyRow(query: QueryLike, table: Table, poId: string, 
     const d = defaultRewardPct(canonicalPaymentName(String(e.nickname ?? ""), v("po_payment_method_aliases")), v("po_payment_method_reward_pct"));
     if (d != null) e.reward_pct = d.toFixed(2);
   }
+  if (e.position == null) delete e.position; // a promo placed in sequence by Edit PO carries its own; otherwise appended
   const cols = Object.keys(e);
-  const pos = table === "po_line_refunds" ? "" : `, position`;
-  const posVal = table === "po_line_refunds" ? "" : `, (SELECT COALESCE(MAX(position), -1) + 1 FROM ${table} WHERE po_id = $1)`;
+  const pos = table === "po_line_refunds" || "position" in e ? "" : `, position`;
+  const posVal = table === "po_line_refunds" || "position" in e ? "" : `, (SELECT COALESCE(MAX(position), -1) + 1 FROM ${table} WHERE po_id = $1)`;
   const src = table === "po_promos" ? ", source" : "";
   const srcVal = table === "po_promos" ? ", 'manual'" : table === "po_line_refunds" ? "" : "";
   const refundSrc = table === "po_line_refunds" ? ", source" : "", refundSrcVal = table === "po_line_refunds" ? ", 'manual'" : "";
@@ -111,7 +112,7 @@ export async function editMoneyRow(query: QueryLike, table: Table, id: number, b
   await logEdits(query, poId, userId, "po", poId, changes.map(([k, v]) => ({ field: `${label[table]} ${k}`, old: canon(row[k]), new: canon(v) })));
   // A linked supplier defect follows its refunds (SPEC §22 "Supplier defects"): marked received / amount changed → resolve or reopen.
   if (table === "po_line_refunds") await syncRefundResolution(query, await defectsLinkedTo(query, [id]), userId);
-  if (table === "po_promos" && changes.some(([k]) => ["counts_toward_cogs", "amount", "type", "in_line_prices"].includes(k))) { const r = await recomputePoCosts(query, poId, userId); out.recomputed = { changed: r.changed, skipped: r.skipped }; }
+  if (table === "po_promos" && changes.some(([k]) => ["counts_toward_cogs", "amount", "percent", "type", "in_line_prices", "position"].includes(k))) { const r = await recomputePoCosts(query, poId, userId); out.recomputed = { changed: r.changed, skipped: r.skipped }; }
   if (table === "po_payments" && opts.weightSync !== false && changes.some(([k]) => WEIGHT_FIELDS.includes(k))) { const w = await syncWeightedPaymentPct(query, poId, userId); if (w.recomputed) out.recomputed = w.recomputed; }
   return out;
 }

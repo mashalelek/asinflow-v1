@@ -20,7 +20,8 @@
  */
 import React, { useEffect, useMemo, useRef, useState } from "react";
 // (File name kept for history — since 2026-11-01 this is the New PO PAGE, no Dialog.)
-import { Plus, Trash2, AlertTriangle, Sparkles, Database, FileText } from "lucide-react";
+import { Plus, Trash2, AlertTriangle, Sparkles, Database, FileText, ArrowUp } from "lucide-react";
+import { nameMismatchNote } from "@shared/name-match";
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription, DialogFooter } from "@/components/ui/dialog"; // the pack-override question only
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -45,7 +46,8 @@ export interface PrefillResponse { form: Partial<PoFormState>; prefill: PoFormPr
 export interface AsinInfo {
   asin: string; title: string | null; primary_sku: string | null; image_url: string | null; brand: string | null;
   sold_as: string | null; units_per_pack: number | null; in_af: boolean;
-  via?: "part_number" | "history_exact" | "history_tokens" | "title" | "search" | "model"; matched_name?: string | null; last_ordered?: string | null;
+  via?: "part_number" | "history_sku" | "history_exact" | "history_tokens" | "title" | "search" | "amazon" | "model"; matched_name?: string | null; last_ordered?: string | null;
+  sold_before?: boolean; name_all?: boolean; mismatch?: string | null; size?: string | null; pack?: number | null;
 }
 
 /** §6.1: the ring class for a field's source. */
@@ -72,7 +74,14 @@ export function settleMoney(f: PoFormState): { ok: true; form: PoFormState } | {
 
 // ── ASIN picker (§6.4) — a type-ahead combobox (Maria 2026-11-01: never a bare dropdown) ──
 function viaLabel(v: AsinInfo["via"]): string {
-  return v === "part_number" ? "part # match" : v === "history_exact" ? "bought before (same name)" : v === "history_tokens" ? "bought before (similar name)" : v === "title" ? "title match" : v === "model" ? "model's guess" : "";
+  return v === "part_number" ? "part # match" : v === "history_sku" ? "bought before (same SKU)" : v === "history_exact" ? "bought before (same name)" : v === "history_tokens" ? "bought before (similar name)" : v === "title" ? "title match" : v === "amazon" ? "Amazon search" : v === "model" ? "model's guess, confirmed by Amazon" : "";
+}
+/** Where an ASIN row's ASIN came from (Maria 2026-11-06): AF's database, Amazon's catalog, or the model's guess the catalog confirmed. */
+export function asinSourceLabel(v: AsinInfo["via"]): string | null {
+  if (v === "part_number" || v === "history_sku" || v === "history_exact" || v === "history_tokens" || v === "title") return `from AF database · ${viaLabel(v)}`;
+  if (v === "amazon") return "from Amazon search";
+  if (v === "model") return "from the model's guess, confirmed by Amazon's catalog";
+  return null;
 }
 const ASIN_RE = /^[A-Z0-9]{10}$/;
 /** Pure: the suggestions that match what is typed (ASIN / title / SKU / brand), so the list narrows while the server search is in flight. */
@@ -81,13 +90,15 @@ export function filterSuggestions(opts: readonly AsinInfo[], q: string): AsinInf
   if (!needle) return [...opts];
   return opts.filter((o) => [o.asin, o.title, o.primary_sku, o.brand, o.matched_name].some((s) => String(s ?? "").toLowerCase().includes(needle)));
 }
-function AsinPicker({ value, product, sku = "", supplier, guess, known, onPick, onChange, rowIndex, mark, compact = false }: {
+function AsinPicker({ value, product, sku = "", supplier, guess, known, initial, onPick, onChange, rowIndex, mark, compact = false }: {
   value: string; product: string; sku?: string; supplier: string; guess: string | null; known: Map<string, AsinInfo>;
+  /** The prefill's top suggestions for this line (AF database, else Amazon search) — shown until the picker fetches its own. */
+  initial?: AsinInfo[];
   onPick: (info: AsinInfo | null, asin: string) => void; onChange: (v: string) => void; rowIndex: number; mark: string;
   /** The ASIN row shows the title in its own column: the status line only says "Not in AF — Add to AF". */
   compact?: boolean;
 }) {
-  const [opts, setOpts] = useState<AsinInfo[]>([]);
+  const [opts, setOpts] = useState<AsinInfo[]>(initial ?? []);
   const [open, setOpen] = useState(false);
   const [hi, setHi] = useState(0);
   const [adding, setAdding] = useState(false);
@@ -100,12 +111,12 @@ function AsinPicker({ value, product, sku = "", supplier, guess, known, onPick, 
     if (!open) return;
     timer.current = window.setTimeout(() => {
       const typed = q.length >= 2 && !known.has(qUp) ? q : "";
-      // Before typing: the top 3 of part # → history → title words (2026-11-04).
-      const u = new URLSearchParams({ supplier, product, sku, q: typed, ...(typed ? {} : { limit: "3" }) });
+      // Before typing: the top 3 of AF's database (part # → supplier SKU → past lines), else Amazon's catalog merged with AF's
+      // title matches (2026-11-06). The model's guess is never listed on its own: the server lists it only once the catalog confirms it.
+      const u = new URLSearchParams({ supplier, product, sku, q: typed, ...(typed ? {} : { limit: "3", amazon: "1", ...(guess ? { guess } : {}) }) });
       fetch(`/api/pos/asin-suggest?${u}`).then((r) => r.json()).then((d) => {
         const rows: AsinInfo[] = d.rows ?? [];
-        for (const r of rows) known.set(r.asin, r);
-        if (guess && ASIN_RE.test(guess) && !rows.some((r) => r.asin === guess)) rows.push({ asin: guess, title: null, primary_sku: null, image_url: null, brand: null, sold_as: null, units_per_pack: null, in_af: known.get(guess)?.in_af ?? false, via: "model" });
+        for (const r of rows) if (!known.get(r.asin)?.in_af || r.in_af) known.set(r.asin, r);
         setOpts(rows); setHi(0);
       }).catch(() => setOpts([]));
     }, 180);
@@ -149,8 +160,10 @@ function AsinPicker({ value, product, sku = "", supplier, guess, known, onPick, 
                 {o.via === "model" && <span className="ml-1.5 inline-flex items-center gap-0.5 rounded-sm bg-amber-500/15 px-1 text-[10px] text-amber-700 dark:text-amber-400"><Sparkles className="h-2.5 w-2.5" /> model's guess</span>}
                 {o.via && o.via !== "model" && <span className="ml-1.5 text-[10px] text-muted-foreground">{viaLabel(o.via)}{o.last_ordered ? ` · ${o.last_ordered}` : ""}</span>}
                 {!o.in_af && <span className="ml-1.5 text-[10px] text-amber-700 dark:text-amber-400">not in AF</span>}
+                {o.sold_before && <span className="ml-1.5 text-[10px] text-muted-foreground" data-testid={`asin-suggestion-sold-${o.asin}`}>sold before</span>}
                 <span className="block truncate text-muted-foreground" title={o.title ?? o.matched_name ?? ""}>{o.title ?? o.matched_name ?? "—"}</span>
-                {(o.sold_as || o.primary_sku || o.brand) && <span className="block truncate text-[10px] text-muted-foreground">{[o.brand, o.primary_sku, o.sold_as ? `${o.sold_as}${o.units_per_pack && o.units_per_pack > 1 ? ` × ${o.units_per_pack}` : ""}` : null].filter(Boolean).join(" · ")}</span>}
+                {(o.sold_as || o.primary_sku || o.brand || o.size || o.pack) && <span className="block truncate text-[10px] text-muted-foreground">{[o.brand, o.size, o.pack && o.pack > 1 ? `${o.pack}-pack` : null, o.primary_sku, o.sold_as ? `${o.sold_as}${o.units_per_pack && o.units_per_pack > 1 ? ` × ${o.units_per_pack}` : ""}` : null].filter(Boolean).join(" · ")}</span>}
+                {o.mismatch && <span className="block truncate text-[10px] text-amber-700 dark:text-amber-400" title={o.mismatch}>{o.mismatch}</span>}
               </span>
             </button>
           ))}
@@ -343,6 +356,8 @@ export function NewPoForm({ open, onOpenChange, onCreated, prefill, initialSuppl
   };
   const answerPack = (updateAf: boolean) => { if (packAsk) setForm((f) => ({ ...f, pack_updates: { ...(f.pack_updates ?? {}), [packAsk.asin]: updateAf } })); setPackAsk(null); };
 
+  // Promo sequence (2026-11-06): the form's order is the order they apply in.
+  const movePromoUp = (i: number) => setForm((f0) => { const f = clearMark(clearMark(f0, `promos.${i}`), `promos.${i - 1}`); const ps = [...(f.promos ?? [])]; if (i < 1 || i >= ps.length) return f; [ps[i - 1], ps[i]] = [ps[i], ps[i - 1]]; return { ...f, promos: ps }; });
   const setPromo = (i: number, patch: Partial<PoFormPromo>) => setForm((f0) => { const f = clearMark(f0, `promos.${i}`); return { ...f, promos: (f.promos ?? []).map((p, j) => (j === i ? { ...p, ...patch, ...(patch.type !== undefined && patch.type !== p.type ? { counts_toward_cogs: promoCountsByDefault(String(patch.type), check.promoNeedsAnswer.includes(i) ? false : check.promoReflected[i] ?? check.discountReflected) } : {}) } : p)) }; });
   const setPay = (i: number, patch: Partial<PoFormPayment>) => setForm((f0) => { const f = clearMark(f0, `payments.${i}`); return { ...f, payments: (f.payments ?? []).map((p, j) => (j === i ? { ...p, ...patch } : p)) }; });
   // The payment picker (Maria 2026-11-02): on blur of the nickname or the last 4, resolve by nickname first, last 4 second — never by a last 4 two methods share (Amex Gold / Amex Plus, 1005): the nickname stays blank and the row shows the amber hint until one is picked.
@@ -403,7 +418,9 @@ export function NewPoForm({ open, onOpenChange, onCreated, prefill, initialSuppl
   const emailSelectValue = emailOther || (!emailInList && (form.email_used ?? "").trim() !== "") ? "__other" : (form.email_used ?? "");
   // The line grid (Maria's whiteboard): product row · ↳ ASIN rows beneath. The product name flexes up to ~640 px; the ASIN row's
   // cells keep fixed widths and wrap on a narrow window (no horizontal scroll at any width ≥ 1024).
-  const G_LINE = "grid grid-cols-[7.5rem_minmax(12rem,40rem)_5.5rem_4rem_4.5rem_1.75rem] items-start gap-x-2";
+  // A Reg. price column (migration 097) only while a line carries one — a free-item deal (2026-11-06).
+  const showReg = form.products.some((p) => String(p.regular_price ?? "").trim() !== "");
+  const G_LINE = showReg ? "grid grid-cols-[7.5rem_minmax(12rem,40rem)_5.5rem_5.5rem_4rem_4.5rem_1.75rem] items-start gap-x-2" : "grid grid-cols-[7.5rem_minmax(12rem,40rem)_5.5rem_4rem_4.5rem_1.75rem] items-start gap-x-2";
   const A = { arrow: 16, asin: 176, qty: 72, sold: 92, upp: 60, prep: 64, sourcing: 72, cogs: 88, paid: 72, adj: 72, reason: 96, notes: 100, rm: 24 } as const;
   const cell = (w: number, cls = "") => ({ className: `shrink-0 ${cls}`, style: { width: w } });
   const ASIN_LABELS: Array<[string, number | "title", string?]> = [["↳", A.arrow, "text-center"], ["ASIN", A.asin], ["Title", "title"], ["ASIN qty", A.qty, "text-right"], ["Sold as", A.sold], ["Units/pack", A.upp, "text-right"], ["Prep", A.prep, "text-right"], ["Sourcing", A.sourcing, "text-right"], ["COGS", A.cogs, "text-right"], ["Paid", A.paid, "text-right"], ["Adjustment", A.adj, "text-right"], ["Reason", A.reason], ["Notes", A.notes], ["", A.rm]];
@@ -520,12 +537,15 @@ export function NewPoForm({ open, onOpenChange, onCreated, prefill, initialSuppl
           {(form.promos ?? []).length === 0 && <p className="text-xs text-muted-foreground">None. Sale and coupon count toward COGS; rewards do not (toggle each).</p>}
           {(form.promos ?? []).map((p, i) => (
             <div key={i} className={`flex flex-wrap items-center gap-1.5 rounded px-1 py-0.5 ${mark(`promos.${i}`)}`} data-testid={`row-new-po-promo-${i}`}>
+              <span className="w-4 text-right text-[11px] text-muted-foreground" title="Promos apply in this order: each % to the running total, each $ at its place">{i + 1}</span>
+              <button type="button" onClick={() => movePromoUp(i)} disabled={i === 0} className="text-muted-foreground/70 hover:text-foreground disabled:opacity-30" title="Move up — promos apply in this order" data-testid={`button-new-po-promo-up-${i}`}><ArrowUp className="h-3.5 w-3.5" /></button>
               <select value={p.type} onChange={(e) => setPromo(i, { type: e.target.value as PoFormPromo["type"] })} className={sel} data-testid={`select-new-po-promo-type-${i}`}>
                 <option value="">type…</option>{PROMO_TYPES.map((t) => <option key={t} value={t}>{t}</option>)}
               </select>
               <Input value={p.description} onChange={(e) => setPromo(i, { description: e.target.value })} placeholder="15% off with WELCOME15" className="h-8 min-w-[12rem] flex-1 text-xs" data-testid={`input-new-po-promo-desc-${i}`} />
               <MoneyCalcInput value={p.amount} onChange={(v) => setPromo(i, { amount: v })} placeholder="$" title={hint(`promos.${i}.amount`)} className="h-8 w-20 text-right text-xs" data-testid={`input-new-po-promo-amount-${i}`} />
               <Input value={p.percent} onChange={(e) => setPromo(i, { percent: e.target.value })} placeholder="%" inputMode="decimal" className="h-8 w-14 text-right text-xs" data-testid={`input-new-po-promo-pct-${i}`} />
+              {!String(p.amount ?? "").trim() && check.promoAmountsUsed[i] != null && <span className="font-mono text-[11px] text-muted-foreground" title="This promo's $: its % of the running total after the promos above it (or the discount less the others)" data-testid={`new-po-promo-computed-${i}`}>= {check.promoAmountsUsed[i]!.toFixed(2)}</span>}
               <label className="flex items-center gap-1 text-xs" title="Counts toward COGS"><input type="checkbox" checked={p.counts_toward_cogs} onChange={(e) => setPromo(i, { counts_toward_cogs: e.target.checked })} data-testid={`input-new-po-promo-counts-${i}`} /> COGS</label>
               {!edit?.imported && (check.promoNeedsAnswer.includes(i) || p.in_line_prices != null) && (
                 <label className={`flex items-center gap-1 text-xs ${check.promoNeedsAnswer.includes(i) ? "text-destructive" : ""}`} title="Is this promo already in the line prices? Asked when more than one set of promos matches the gap between the subtotal and the line totals; until answered it is not subtracted.">
@@ -568,12 +588,15 @@ export function NewPoForm({ open, onOpenChange, onCreated, prefill, initialSuppl
       <div className="mt-2 space-y-1" data-testid="new-po-lines">
         <div className="flex items-center justify-between">
           <span className="text-[11px] font-semibold uppercase tracking-wider text-muted-foreground">Lines as bought · ASIN rows beneath</span>
-          <Button size="sm" variant="outline" className="h-7" onClick={addLine} data-testid="button-new-po-add-product"><Plus className="h-3.5 w-3.5 mr-1" /> Add line</Button>
+          <span className="flex items-center gap-2">
+            {!showReg && <Button size="sm" variant="ghost" className="h-7 text-xs" onClick={() => setForm((f) => ({ ...f, products: f.products.map((p) => ({ ...p, regular_price: p.price })) }))} title="A free-item deal (BOGO, Buy 2 Get 2 Free): the cost is shared by each line's regular price, so free units carry their share" data-testid="button-new-po-regular-prices">+ Regular prices</Button>}
+            <Button size="sm" variant="outline" className="h-7" onClick={addLine} data-testid="button-new-po-add-product"><Plus className="h-3.5 w-3.5 mr-1" /> Add line</Button>
+          </span>
         </div>
         <div className="rounded-md" style={hairline} data-testid="new-po-products">
           <div className="rounded-t-md bg-muted/40 px-2 py-1 text-[11px] font-medium text-muted-foreground">
             <div className={G_LINE}>
-              <span>SKU / UPC</span><span>Product name</span><span>Price</span><span className="text-right">Qty</span><span className="text-right" title="The retailer's pack — a 12-count is 12">Units / pack</span><span />
+              <span>SKU / UPC</span><span>Product name</span><span>Price</span>{showReg && <span title="The price before a multi-buy deal (BOGO, Buy 2 Get 2 Free): the order's cost is shared by regular price × qty, so free units carry their share">Reg. price</span>}<span className="text-right">Qty</span><span className="text-right" title="The retailer's pack — a 12-count is 12">Units / pack</span><span />
             </div>
           </div>
           {boxes.map((box, bi) => {
@@ -589,6 +612,7 @@ export function NewPoForm({ open, onOpenChange, onCreated, prefill, initialSuppl
                         <Input value={p.supplier_sku} onChange={(e) => setMany(line.copies, "supplier_sku", e.target.value)} placeholder="SKU / UPC" className={`h-8 text-xs ${mark(`products.${i}.supplier_sku`)}`} data-testid={`input-new-po-supplier_sku-${i}`} />
                         <Input value={p.product_name} onChange={(e) => setMany(line.copies, "product_name", e.target.value)} placeholder="Product name" className={`h-8 text-xs ${mark(`products.${i}.product_name`)}`} data-testid={`input-new-po-product_name-${i}`} />
                         <MoneyCalcInput value={p.price} onChange={(v) => setMany(line.copies, "price", v)} placeholder="price" className={`h-8 text-xs text-right ${mark(`products.${i}.price`)}`} data-testid={`input-new-po-price-${i}`} />
+                        {showReg && <MoneyCalcInput value={p.regular_price ?? ""} onChange={(v) => setMany(line.copies, "regular_price", v)} placeholder="reg." title="Regular price before the deal — blank = the price" className={`h-8 text-xs text-right ${mark(`products.${i}.regular_price`)}`} data-testid={`input-new-po-regular_price-${i}`} />}
                         {split
                           ? <div className="flex h-8 items-center justify-end pr-1 text-xs" title={`Split across ${line.copies.length} ASIN rows — edit each row's ASIN qty`} data-testid={`new-po-qty-sum-${i}`}>{lineQty(form.products, line.copies)}</div>
                           : <Input value={p.qty_ordered} onChange={(e) => setP(i, "qty_ordered", e.target.value)} inputMode="decimal" placeholder="qty" title={hint(`products.${i}.qty_ordered`)} className={`h-8 text-xs text-right ${mark(`products.${i}.qty_ordered`)}`} data-testid={`input-new-po-qty_ordered-${i}`} />}
@@ -620,7 +644,7 @@ export function NewPoForm({ open, onOpenChange, onCreated, prefill, initialSuppl
                       <div key={`${box.key}-${k}`} className="py-0.5" data-testid={`row-new-po-asin-${i}`}>
                         <div className="flex flex-wrap items-start gap-x-2 gap-y-1">
                           <span {...cell(A.arrow, "pt-1.5 text-center text-sm leading-none text-muted-foreground")} aria-hidden>↳</span>
-                          <div {...cell(A.asin)}><AsinPicker value={p.asin} product={p.product_name} sku={p.supplier_sku} supplier={form.supplier} guess={guess} known={known} onPick={onPick(slot)} onChange={(v) => setMany(slot, "asin", v)} rowIndex={i} mark={mark(`products.${i}.asin`)} compact /></div>
+                          <div {...cell(A.asin)}><AsinPicker value={p.asin} product={p.product_name} sku={p.supplier_sku} supplier={form.supplier} guess={guess} known={known} initial={form.prefill?.asin_candidates?.[String(i)] as AsinInfo[] | undefined} onPick={onPick(slot)} onChange={(v) => setMany(slot, "asin", v)} rowIndex={i} mark={mark(`products.${i}.asin`)} compact /></div>
                           <div className="flex h-8 min-w-[7.5rem] flex-1 items-center truncate text-xs text-muted-foreground" title={info?.title ?? ""} data-testid={`new-po-asin-title-${i}`}>
                             {info?.in_af ? <><Database className="mr-1 h-2.5 w-2.5 shrink-0" /><span className="truncate">{info.title ?? "in AF"}</span></> : p.asin.length === 10 ? <span className="text-amber-600">Not in AF</span> : <span className="opacity-60">title from AF</span>}
                           </div>
@@ -647,11 +671,13 @@ export function NewPoForm({ open, onOpenChange, onCreated, prefill, initialSuppl
                         <div className={`ml-6 mt-0.5 flex flex-wrap gap-x-3 text-[10px] ${frac ? "text-destructive" : "text-muted-foreground"}`} data-testid={`new-po-asin-math-${i}`}>
                           <span>{box.bundle ? `sets = the smallest member's qty × yield = ${anyQty ? units : "—"}` : `${qty} × ${r} ÷ ${u} = ${anyQty ? units : "—"} ASIN units`}</span>
                           {stored && <span data-testid={`edit-po-stored-costs-${i}`}>stored costs (sheet import) — never recomputed</span>}
-                          {!stored && a?.sourcing_cost && <span>sourcing = Σ(paid price × qty) ÷ {a.qty} = {a.sourcing_cost}</span>}
+                          {!stored && a?.sourcing_cost && <span>sourcing = {showReg ? "the order's cost shared by regular price × qty" : "Σ(paid price × qty)"} ÷ {a.qty} = {a.sourcing_cost}</span>}
                           {!stored && a?.computed_cost_per_unit && <span>COGS = {a.sourcing_cost} × (1 − {check.weightedGcPct ?? 0}%){a.cogs_adjustment ? ` + ${a.cogs_adjustment}` : ""} = {a.computed_cost_per_unit}</span>}
                           {frac && <span data-testid={`new-po-fractional-${i}`}>{FRACTIONAL_UNITS_NOTE}</span>}
                           {manual && <span data-testid={`new-po-yield-note-${i}`}>{storedYield ? "stored yield" : "typed"} <button type="button" className="underline" onClick={() => onResetSlot(box.key, k)} title="Back to the pack math">reset</button></span>}
                           {form.pack_updates?.[p.asin] === true && <span>updates ASIN in AF</span>}
+                          {(() => { const src = asinSourceLabel(info?.via) ?? (sources[`products.${i}.asin`] ? hint(`products.${i}.asin`) ?? null : null); return src ? <span className={sources[`products.${i}.asin`] === "model" && !asinSourceLabel(info?.via) ? "text-amber-700 dark:text-amber-400" : ""} data-testid={`new-po-asin-source-${i}`}>{src}</span> : null; })()}
+                          {(() => { const note = info?.title ? nameMismatchNote(p.product_name, info.title, info.brand) : null; return note ? <span className="text-amber-700 dark:text-amber-400" data-testid={`new-po-asin-mismatch-${i}`}>{note}</span> : null; })()}
                         </div>
                       </div>
                     );

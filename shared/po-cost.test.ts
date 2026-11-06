@@ -1,7 +1,7 @@
 import { describe, it, expect } from "vitest";
 import { readFileSync } from "fs";
 import { resolve } from "path";
-import { costPerUnitPrefill, adjustedProductCost, allocateAsinCosts, discountReflectedInLines, lineMoney, COST_FORMULA_VERSION, reflectedPromos, promoCostHeader } from "./po-cost";
+import { costPerUnitPrefill, adjustedProductCost, allocateAsinCosts, discountReflectedInLines, lineMoney, COST_FORMULA_VERSION, reflectedPromos, promoCostHeader, sequencedPromoAmounts } from "./po-cost";
 
 // The allocation measured against the imported 2026 cost / unit (sheet Col Y).
 // v1 (price × total ÷ subtotal × (1 − GC)) reproduced 1,166 of 1,582; v2
@@ -95,5 +95,31 @@ describe("reflectedPromos", () => {
     const r = reflectedPromos({ ...mich, promoAmounts: [18, 10] });
     expect(promoCostHeader(h, 170.6, [{ counts: false }, { counts: true }], r)).toMatchObject({ subtotal: 170.6, discount: 10, nonCountingPromoAmount: 0 });
     expect(promoCostHeader(h, 170.6, [{ counts: false }, { counts: false }], r)).toMatchObject({ subtotal: 170.6, discount: 10, nonCountingPromoAmount: 10 });
+  });
+});
+
+describe("promo sequence (Maria 2026-11-06)", () => {
+  it("$ and % stacked: order matters — $10 then 20% on $100 pays $72, 20% then $10 pays $70", () => {
+    const a = sequencedPromoAmounts(100, [{ amount: 10, percent: null }, { amount: null, percent: 20 }]);
+    const b = sequencedPromoAmounts(100, [{ amount: null, percent: 20 }, { amount: 10, percent: null }]);
+    expect(a).toEqual([10, 18]);
+    expect(100 - a[0]! - a[1]!).toBe(72);
+    expect(b).toEqual([20, 10]);
+    expect(100 - b[0]! - b[1]!).toBe(70);
+  });
+  it("% after % multiplies, whatever the order (Yankee: $699.80 × 0.5 × 0.85 = $297.41, never 65% off)", () => {
+    const a = sequencedPromoAmounts(699.8, [{ amount: null, percent: 50 }, { amount: null, percent: 15 }]);
+    const b = sequencedPromoAmounts(699.8, [{ amount: null, percent: 15 }, { amount: null, percent: 50 }]);
+    expect(a).toEqual([349.9, 52.49]);
+    expect(Math.round((699.8 - a[0]! - a[1]!) * 100) / 100).toBe(297.41);
+    expect(Math.round((699.8 - b[0]! - b[1]!) * 100) / 100).toBe(297.41);
+  });
+  it("reflectedPromos: a %-only promo takes its sequenced amount; the page's discount still fills the one amount-less promo first", () => {
+    // Yankee as saved by hand: B2G2 50% (in the prices), WS15F 15%; the lines carry regular prices ($699.80).
+    const r = reflectedPromos({ linesSum: 349.9, subtotal: 349.9, discount: 52.49, promoAmounts: [null, null], postDiscountSubtotal: 297.41, answers: [true, null], percents: [50, 15], sequenceBase: 699.8 });
+    expect(r.amounts).toEqual([349.9, 52.49]);
+    expect(r.reflected).toEqual([true, false]);
+    const one = reflectedPromos({ linesSum: 100, subtotal: 100, discount: 25, promoAmounts: [null], postDiscountSubtotal: null, percents: [20], sequenceBase: 100 });
+    expect(one.amounts).toEqual([25]); // the page's $25 discount, not 20% of $100
   });
 });

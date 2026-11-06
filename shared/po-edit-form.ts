@@ -62,6 +62,7 @@ export function poToForm(d: StoredPo): PoFormState {
         // A stored line total (migration 087) shows its price to the cent; a price typed past the cent shows as typed.
         product_name: str(l.product_name), supplier_sku: str(l.supplier_sku), price: l.line_total != null || isWholeCents(l.price) ? moneyText(l.price) : numText(l.price), qty_ordered: numText(l.qty_ordered),
         ...(l.line_total != null ? { line_total: moneyText(l.line_total) } : {}),
+        ...(l.regular_price != null ? { regular_price: isWholeCents(l.regular_price) ? moneyText(l.regular_price) : numText(l.regular_price) } : {}),
         retailer_units_per_pack: retailer, asin: str(a.asin).toUpperCase(), asin_qty_per_product: y, yield_manual: yieldManual,
         sold_as: soldAs, units_per_pack: upp, prep_cost: moneyText(a.prep_cost), notes: str(l.notes),
       });
@@ -78,7 +79,7 @@ export function poToForm(d: StoredPo): PoFormState {
     email_used: str(po.email_used), alt_order_ids: str(po.alt_order_ids), purchased_by_user_id: po.purchased_by_user_id == null ? "" : String(po.purchased_by_user_id), cashback_status: str(po.cashback_status),
     subscription: { present: po.subscription === true, frequency_weeks: "" },
     products, cost_overrides: {}, cogs_adjustments: {}, pack_updates: {},
-    promos: d.promos.map((p): PoFormPromo => ({ id: Number(p.id), type: (["sale", "coupon", "rewards"].includes(String(p.type)) ? p.type : "") as PoFormPromo["type"], description: str(p.description), amount: moneyText(p.amount), percent: numText(p.percent), counts_toward_cogs: p.counts_toward_cogs !== false, in_line_prices: typeof p.in_line_prices === "boolean" ? p.in_line_prices : null })),
+    promos: d.promos.map((p): PoFormPromo => ({ id: Number(p.id), type: (["sale", "coupon", "rewards"].includes(String(p.type)) ? p.type : "") as PoFormPromo["type"], description: str(p.description), amount: moneyText(p.amount), percent: numText(p.percent), counts_toward_cogs: p.counts_toward_cogs !== false, in_line_prices: typeof p.in_line_prices === "boolean" ? p.in_line_prices : null, ...(p.position != null ? { position: Number(p.position) } : {}) })),
     payments: d.payments.map((p): PoFormPayment => ({ id: Number(p.id), method: str(p.method) as PoFormPayment["method"], nickname: str(p.nickname), last4: str(p.last4), amount: moneyText(p.amount), gift_card_discount_pct: numText(p.gift_card_discount_pct), reward_pct: numText(p.reward_pct) })),
   };
   for (const a of d.asins) {
@@ -184,13 +185,14 @@ export function planPoEdit(stored: PoFormState, next: PoFormState, opts: { impor
         // A dropped line total takes the price as shown (the stored one may carry more decimals than the field).
         if (str(p.line_total) === "" && !("price" in body)) body.price = str(p.price);
       }
+      if (canonField("price", p.regular_price) !== canonField("price", s.regular_price)) body.regular_price = str(p.regular_price);
       if (str(p.asin).toUpperCase() !== str(s.asin).toUpperCase()) body.asin = str(p.asin).toUpperCase();
       const ratioTouched = RATIO_INPUTS.some((k) => canonField(k, p[k]) !== canonField(k, s[k])) || (p.yield_manual === true) !== (s.yield_manual === true);
       if (ratioTouched) { const sr = productRatio(s); if (r.retailer * sr.asinUnits !== sr.retailer * r.asinUnits || r.asinUnits !== sr.asinUnits) { body.retailer_units_per_product = r.retailer; body.asin_units_per_pack = r.asinUnits; } }
       if (Object.keys(body).length) plan.lineEdits.push({ id, body });
     } else {
       const lm = productLineMoney(p);
-      plan.lineAdds.push({ asin: str(p.asin).toUpperCase(), qty_ordered: str(p.qty_ordered), product_name: str(p.product_name), supplier_sku: str(p.supplier_sku), price: lm?.lineTotal != null ? priceText(lm.unit) : str(p.price), ...(lm?.lineTotal != null ? { line_total: lm.lineTotal.toFixed(2) } : {}), notes: str(p.notes), retailer_units_per_product: r.retailer, asin_units_per_pack: r.asinUnits });
+      plan.lineAdds.push({ asin: str(p.asin).toUpperCase(), qty_ordered: str(p.qty_ordered), product_name: str(p.product_name), supplier_sku: str(p.supplier_sku), price: lm?.lineTotal != null ? priceText(lm.unit) : str(p.price), ...(lm?.lineTotal != null ? { line_total: lm.lineTotal.toFixed(2) } : {}), ...(str(p.regular_price) ? { regular_price: str(p.regular_price) } : {}), notes: str(p.notes), retailer_units_per_product: r.retailer, asin_units_per_pack: r.asinUnits });
     }
   }
   for (const id of Array.from(storedById.keys())) if (!seen.has(id)) plan.lineRemoves.push(id);
@@ -227,7 +229,11 @@ export function planPoEdit(stored: PoFormState, next: PoFormState, opts: { impor
     }
     for (const id of Array.from(byId.keys())) if (!kept.has(id)) removes.push(id);
   };
-  moneyRows(stored.promos ?? [], next.promos ?? [], ["type", "description", "amount", "percent", "counts_toward_cogs", "in_line_prices"], plan.promoAdds, plan.promoEdits, plan.promoRemoves);
+  // Promo sequence (2026-11-06): reordered in the form → every promo takes its form position; otherwise positions are left alone.
+  const sPromos = stored.promos ?? [], nPromos = next.promos ?? [];
+  const sIds = new Set(sPromos.map((p) => p.id)), nIds = new Set(nPromos.map((p) => p.id));
+  const reordered = sPromos.filter((p) => p.id != null && nIds.has(p.id)).map((p) => p.id).join() !== nPromos.filter((p) => p.id != null && sIds.has(p.id)).map((p) => p.id).join();
+  moneyRows(sPromos, reordered ? nPromos.map((p, i) => ({ ...p, position: i })) : nPromos, ["type", "description", "amount", "percent", "counts_toward_cogs", "in_line_prices", ...(reordered ? ["position" as const] : [])], plan.promoAdds, plan.promoEdits, plan.promoRemoves);
   moneyRows(stored.payments ?? [], next.payments ?? [], ["method", "nickname", "last4", "amount", "gift_card_discount_pct", "reward_pct"], plan.paymentAdds, plan.paymentEdits, plan.paymentRemoves);
 
   plan.empty = Object.keys(plan.header).length + plan.lineEdits.length + plan.lineAdds.length + plan.lineRemoves.length + plan.asinEdits.length
