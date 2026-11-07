@@ -38,7 +38,7 @@ describe("buildTrackingPutBody — echo-merge", () => {
   });
 });
 
-function world(o: { rows: any[]; inbound: any[]; known?: any[]; putFails?: string[]; identities?: any[] }) {
+function world(o: { rows: any[]; inbound: any[]; known?: any[]; putFails?: string[]; identities?: any[]; links?: any[] }) {
   const updates: any[][] = [];
   const reconciled: string[][] = [];
   // One entry per append call — the bulk endpoint gets ids + numbers, nothing else.
@@ -47,6 +47,7 @@ function world(o: { rows: any[]; inbound: any[]; known?: any[]; putFails?: strin
     if (sql.includes("FROM settings WHERE key = ANY")) return { rows: [{ key: "tracking.velocity_street", value: "805 grandy" }, { key: "tracking.home_streets", value: ["65 rivercrest"] }, { key: "tracking.carrier_map", value: { UPS: "UPS", FEDEX: "FedEx" } }], rowCount: 3 };
     if (sql.includes("FROM po_tracking t JOIN purchase_orders p")) return { rows: o.rows, rowCount: o.rows.length };
     if (sql.startsWith("UPDATE po_tracking")) { updates.push(params!); return { rows: [], rowCount: 1 }; }
+    if (sql.includes("FROM velocity_order_links l")) return { rows: o.links ?? [], rowCount: (o.links ?? []).length };
     if (sql.includes("FROM velocity_bundle_identity")) { const r = (o.identities ?? []).filter((x) => params![0].includes(x.velocity_order_id)); return { rows: r, rowCount: r.length }; }
     // Review Velocity mirror (PO table v2): its condition read; no writes when nothing is open.
     if (sql.trimStart().startsWith("SELECT p.id,") && sql.includes("FROM purchase_orders p WHERE p.id = ANY")) { reconciled.push(params![0]); return { rows: [], rowCount: 0 }; }

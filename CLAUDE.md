@@ -126,7 +126,7 @@ and any introduced error must be fixed forward before committing.
 
 ## Tests
 
-`npm test` (vitest). **2,309 tests across 218 files** as of 2026-11-06 — this
+`npm test` (vitest). **2,365 tests across 226 files** as of 2026-11-07 — this
 codebase IS tested; the old "there are no tests" line was years stale.
 
 **A gate report must cover BOTH typecheck commands, labelled separately:**
@@ -482,7 +482,20 @@ falls through to the base order # and candidate rules. Every rule, and the
 picker's suggestions, skip a PO with `ships_to = 'home'` or an order date
 before `tracking.velocity_start_date` (`velocityIneligible` in
 `server/shipment-match.ts`); the picker's free-text search still lists it,
-with a warning.
+with a warning. **Exception (Maria 2026-11-07): an order # match to a Home
+PO is matched, never skipped**, and flags the PO (Review Velocity "Velocity
+has an order for a Home PO", `purchase_orders.velocity_home_orders`).
+
+**Velocity order links (migration 099):** `velocity_order_links` (Velocity
+order id → PO ASIN row) is asked first by every Velocity matcher after a
+hand pin — Sync Shipments placement, Received by Velocity / At Prep, pack
+size, the Upload plan / dedup / Execute guard, tracking push. Read through
+`loadOrderLinks` / `linkedPairs`, write through `linkVelocityOrder` /
+`unlinkVelocityOrder` (`server/velocity-order-links.ts`, a History row
+each) — never insert rows directly. A new Velocity reader keyed by order #
+must honour links too. Never-shipped orders no rule places are listed in
+`velocity_orders_unplaced` (Unmatched panel, "Velocity orders with no PO").
+SPEC §22 "Velocity order links".
 
 ## No stored COGS / AQ / AR / Y value is ever recomputed (Maria 2026-10-31)
 

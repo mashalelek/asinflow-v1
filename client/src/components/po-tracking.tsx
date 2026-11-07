@@ -88,12 +88,13 @@ function MoveToPo({ row, onMoved }: { row: TrackingRow; onMoved: () => void }) {
 
 export function PoTrackingTab({ poId, onChanged }: { poId: string; onChanged?: () => void }) {
   const [rows, setRows] = useState<TrackingRow[] | null>(null);
+  const [homeReview, setHomeReview] = useState<{ reason: string; orders: string } | null>(null);
   const [err, setErr] = useState<string | null>(null);
   const [carrier, setCarrier] = useState("UPS");
   const [number, setNumber] = useState("");
   const [msg, setMsg] = useState<string | null>(null);
   const load = useCallback(() => {
-    api<{ rows: TrackingRow[] }>(`/api/pos/${poId}/tracking`).then((r) => setRows(r.rows)).catch((e) => setErr(e.message));
+    api<{ rows: TrackingRow[]; home_review?: { reason: string; orders: string } | null }>(`/api/pos/${poId}/tracking`).then((r) => { setRows(r.rows); setHomeReview(r.home_review ?? null); }).catch((e) => setErr(e.message));
   }, [poId]);
   useEffect(() => { load(); }, [load]);
   const changed = () => { load(); onChanged?.(); };
@@ -106,12 +107,13 @@ export function PoTrackingTab({ poId, onChanged }: { poId: string; onChanged?: (
   if (err) return <p className="text-sm text-destructive">{err}</p>;
   if (!rows) return <p className="text-sm text-muted-foreground">Loading…</p>;
   const open = rows.filter((r) => r.review_reason && !r.suppressed_at);
+  const reasons = [...Array.from(new Set(open.map((r) => r.review_reason))), ...(homeReview ? [`${homeReview.reason} (${homeReview.orders})`] : [])];
   return (
     <div className="space-y-3 text-sm" data-testid="po-tracking-tab">
-      {open.length > 0 && (
+      {reasons.length > 0 && (
         <div className="flex items-center gap-2 rounded border border-amber-500/40 bg-amber-500/5 px-3 py-2 text-xs">
           <AlertTriangle className="h-3.5 w-3.5 text-amber-600" />
-          <span>Review Velocity: {Array.from(new Set(open.map((r) => r.review_reason))).join(" · ")}</span>
+          <span data-testid="text-review-velocity-reasons">Review Velocity: {reasons.join(" · ")}</span>
           <Button size="sm" variant="outline" className="h-6 text-xs ml-auto" onClick={() => void clearReview()} data-testid="button-clear-review-velocity">Clear</Button>
         </div>
       )}

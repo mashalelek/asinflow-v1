@@ -8,6 +8,16 @@
 // check-in case (a partial cancel on the sheet vs. a full check-in in
 // Velocity is a per-PO mismatch on that order) — the former ASIN-level
 // aggregate check was removed 2026-07-30 as redundant with it.
+//
+// Order links and sums (2026-11-07, migration 099): a Velocity order linked
+// to a PO ASIN row (velocity_order_links) matches that row whatever its own
+// Order # says (blank included) and marks the row present — no create, skip
+// or pack remainder for it. Every flat Velocity order landing on one row is
+// compared as a SUM against the row's lines (what the creates send, one
+// order per line): PO 71160468's 90 + 30 is 120 against 120, nothing to
+// update or create. A sum that differs proposes a quantity update only when
+// exactly one of the orders is still inbound (it takes the difference);
+// otherwise it is shown flag-only.
 import type { SheetRow } from "./google-sheets";
 import { loadAfPoRows } from "./po-af-source";
 import { query as defaultQuery } from "./db";
@@ -17,6 +27,7 @@ import {
 } from "./velocity-export";
 import { fetchAllKnownOrders, matchKeysForOrder, type KnownVelocityOrder } from "./velocity-api";
 import { recordableBundles, hydrateChildlessBundles, type BundleIdentityRow } from "./velocity-bundle-identity";
+import { loadOrderLinks } from "./velocity-order-links";
 
 type QueryLike = (sql: string, params?: any[]) => Promise<{ rows: any[]; rowCount: number | null }>;
 
@@ -48,6 +59,8 @@ export interface PlanUpdate {
   // no checkbox in the UI, never a PUT target (SPEC §11).
   actionable: boolean;
   diffs: FieldDiff[];
+  /** Several Velocity orders on one PO ASIN row (2026-11-07): every order id summed, and the sum. */
+  summed?: { order_ids: string[]; velocity_total: number | null };
 }
 
 export interface PlanDeleteCandidate {
@@ -194,6 +207,18 @@ export async function buildVelocityPlan(
     if (existingCanceled && !rowCanceled) sheetByKey.set(key, row);
   }
 
+  // Sheet-side units per PO ASIN row: Σ the row's non-canceled lines, as the creates send them (2026-11-07).
+  const rowUnits = new Map<string, number | null>();
+  for (const row of sheetRows) {
+    if (!row.poAsinId || (row.status ?? "").toLowerCase().includes("canceled")) continue;
+    const u = auditUnits(row);
+    const prev = rowUnits.has(row.poAsinId) ? rowUnits.get(row.poAsinId)! : 0;
+    rowUnits.set(row.poAsinId, u === null || prev === null ? null : Math.round((prev + u) * 1e6) / 1e6);
+  }
+  const sheetUnitsFor = (row: (typeof sheetRows)[number]): number | null => (row.poAsinId && rowUnits.has(row.poAsinId) ? rowUnits.get(row.poAsinId)! : auditUnits(row));
+  // Linked orders (migration 099): Velocity order id → the PO ASIN row's key.
+  const linkKey = new Map<string, string>((await loadOrderLinks(query)).map((l) => [l.velocity_order_id, normKey(l.order_id, l.asin)]));
+
   const updates: PlanUpdate[] = [];
   const deleteCandidates: PlanDeleteCandidate[] = [];
   let unchanged = 0, closedInVelocity = 0, unmatchedVelocity = 0;
@@ -227,17 +252,21 @@ export async function buildVelocityPlan(
     }
   }
 
+  // Flat orders on one PO ASIN row, audited together after the loop (2026-11-07).
+  const flatGroups = new Map<string, { sheetRow: (typeof sheetRows)[number]; orderNumber: string; orders: KnownVelocityOrder[] }>();
   for (const o of velocityOrders) {
     const asin = String(o.asin ?? "");
     const isBundle = String(o.sold_as ?? "").toLowerCase() === "bundle";
     // Child-derived match keys (SPEC §11 Bundles): a bundle registers one key
     // per distinct child order_number × parent asin; flat orders keep their
     // (order_number, asin) key. The first key with a sheet hit is the match.
-    const keys = matchKeysForOrder(o);
+    // A linked order's PO ASIN row comes first (migration 099).
+    const keys = matchKeysForOrder(o).map((k) => normKey(k.orderNumber, k.asin));
+    const lk = linkKey.get(String(o.order_id ?? ""));
+    if (lk) keys.unshift(lk);
     let sheetRow: (typeof sheetRows)[number] | undefined;
     let matchedKey: string | null = null;
-    for (const k of keys) {
-      const nk = normKey(k.orderNumber, k.asin);
+    for (const nk of keys) {
       matchedVelocityByKey.set(nk, o);
       if (!sheetRow) {
         const hit = sheetByKey.get(nk);
@@ -288,18 +317,45 @@ export async function buildVelocityPlan(
       if (derived !== undefined && derived !== velQty) {
         diffs.push({ field: "quantity", sheet_value: derived, velocity_value: velQty });
       }
-    } else if (o.lifecycleSource !== "shipment") {
-      // 2026-11-05: a multi-pack row with units left over is sent (and audited) as its whole packs.
-      const sheetQty = auditUnits(sheetRow), velQty = numOrNull(o.quantity);
-      if (sheetQty !== null && Number.isInteger(sheetQty) && sheetQty > 0 && sheetQty !== velQty) {
-        diffs.push({ field: "quantity", sheet_value: sheetQty, velocity_value: velQty });
-      }
+    } else {
+      // Flat: audited with every other order on the same PO ASIN row, below.
+      const gk = sheetRow.poAsinId ?? matchedKey!;
+      const g = flatGroups.get(gk) ?? { sheetRow, orderNumber, orders: [] };
+      g.orders.push(o);
+      flatGroups.set(gk, g);
+      continue;
     }
 
     if (diffs.length === 0) { actionable ? unchanged++ : closedInVelocity++; continue; }
     updates.push({
       order_id: o.order_id, order_number: orderNumber, asin,
       status, item_name: o.item_name ?? null, actionable: actionable && !isBundle, diffs,
+    });
+  }
+
+  // Flat orders per PO ASIN row: the row's units against the SUM of its
+  // Velocity orders. Shipment-derived pseudo-orders carry quantity_shipped,
+  // not the order quantity — never quantity-audited (a group holding one is
+  // not audited). 2026-11-05: a multi-pack row with units left over is sent
+  // (and audited) as its whole packs.
+  for (const g of Array.from(flatGroups.values())) {
+    const counted = () => { for (const o of g.orders) ACTIONABLE_STATUSES.has(String(o.status ?? "").toLowerCase()) ? unchanged++ : closedInVelocity++; };
+    if (g.orders.some((o) => o.lifecycleSource === "shipment")) { counted(); continue; }
+    const sheetQty = sheetUnitsFor(g.sheetRow);
+    const qtys = g.orders.map((o) => numOrNull(o.quantity));
+    const velTotal = qtys.some((q) => q === null) ? null : qtys.reduce<number>((t, q) => t + (q ?? 0), 0);
+    if (sheetQty === null || !Number.isInteger(sheetQty) || sheetQty <= 0 || sheetQty === velTotal) { counted(); continue; }
+    const one = g.orders.length === 1;
+    const live = g.orders.filter((o) => ACTIONABLE_STATUSES.has(String(o.status ?? "").toLowerCase()));
+    const target = one ? g.orders[0] : live.length === 1 ? live[0] : g.orders[0];
+    const others = velTotal === null ? null : velTotal - (numOrNull(target.quantity) ?? 0);
+    const proposed = one ? sheetQty : others === null ? null : sheetQty - others;
+    const actionable = ACTIONABLE_STATUSES.has(String(target.status ?? "").toLowerCase()) && (one || (live.length === 1 && proposed !== null && proposed > 0));
+    updates.push({
+      order_id: target.order_id, order_number: g.orderNumber, asin: String(target.asin ?? ""),
+      status: String(target.status ?? "").toLowerCase(), item_name: target.item_name ?? null, actionable,
+      diffs: [{ field: "quantity", sheet_value: actionable ? proposed : sheetQty, velocity_value: actionable ? numOrNull(target.quantity) : velTotal }],
+      ...(one ? {} : { summed: { order_ids: g.orders.map((o) => o.order_id), velocity_total: velTotal } }),
     });
   }
 

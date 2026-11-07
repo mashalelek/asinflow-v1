@@ -139,6 +139,8 @@ export interface SheetRow {
   // retailer qty), and the product line's 1-based position on its PO — for the Velocity skip message.
   asinUnitsMissing?: boolean;
   lineNumber?: number;
+  /** AF rows only: the PO ASIN row (po_asins.id) the line belongs to — the Upload plan sums a row's lines (2026-11-07). */
+  poAsinId?: string;
 }
 
 // Trim to string, empty → null. Velocity fields pass through verbatim otherwise.

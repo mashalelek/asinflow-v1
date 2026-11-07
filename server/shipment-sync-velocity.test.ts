@@ -32,7 +32,7 @@ const AF: AfAsinRow[] = [
   { id: "a-old", po_id: "p-old", asin: "B0OLDASIN1", units_per_pack: 1, qty_at_prep: "3.00", received_velocity: "3.00", order_id: "OLD1", supplier: "x.com", order_date: "2026-06-01" }, // no Velocity line any more → NULL
 ];
 
-function fakeDb(state: { shipments?: any[]; rows?: any[]; unmatched?: any[]; identity?: any[]; pins?: any[]; colP?: any[]; fbaIds?: any[]; aliases?: any[]; manual?: any[]; af?: AfAsinRow[] }) {
+function fakeDb(state: { shipments?: any[]; rows?: any[]; unmatched?: any[]; identity?: any[]; pins?: any[]; colP?: any[]; fbaIds?: any[]; aliases?: any[]; manual?: any[]; af?: AfAsinRow[]; links?: any[]; home?: any[] }) {
   const writes: Array<{ sql: string; params?: any[] }> = [];
   const query = async (sql: string, params?: any[]) => {
     const s = sql.trim();
@@ -47,6 +47,8 @@ function fakeDb(state: { shipments?: any[]; rows?: any[]; unmatched?: any[]; ide
     if (s.startsWith("SELECT alias, supplier FROM supplier_aliases")) return { rows: state.aliases ?? [], rowCount: 0 };
     if (s.startsWith("SELECT value FROM settings")) return { rows: [], rowCount: 0 };
     if (s.startsWith("SELECT po_asin_id, qty_shipped FROM po_asin_shipments WHERE source = 'manual'")) return { rows: state.manual ?? [], rowCount: 0 };
+    if (s.startsWith("SELECT l.velocity_order_id, l.po_asin_id")) return { rows: state.links ?? [], rowCount: 0 };
+    if (s.startsWith("SELECT id, velocity_home_orders FROM purchase_orders")) return { rows: state.home ?? [], rowCount: 0 };
     writes.push({ sql: s, params }); return { rows: [], rowCount: 1 };
   };
   return { query, connect: async () => ({ query, release: () => { writes.push({ sql: "RELEASE" }); } }), writes };

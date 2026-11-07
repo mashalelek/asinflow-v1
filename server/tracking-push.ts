@@ -18,6 +18,10 @@
 // error → push_failed with the error; the other orders still get theirs.
 // The single-PUT echo-merge (buildTrackingPutBody) is kept for the probe
 // script only — the push never uses it.
+//
+// Order links (migration 099, 2026-11-07): a Velocity order linked to one of
+// the PO's ASIN rows is a target too (same inbound / unit-status rule), and
+// counts as "the PO is in Velocity" whatever its order # says.
 import { pairFor, logReplacementTracking, replacementLogged, replacementCheckedIn } from "./tracking-replacement-pair";
 import { fetchAllInboundOrders, fetchAllKnownOrders, appendTrackingBulk, type VelocityInboundOrder } from "./velocity-api";
 import { routeTracking, joinReasons, type ShipsTo } from "./tracking-route-rules";
@@ -25,6 +29,7 @@ import { isPlaceholder } from "./tracking-ingest";
 import { hydrateChildlessBundles } from "./velocity-bundle-identity";
 import type { QueryLike } from "./scheduler/types";
 import { reconcileReviewVelocity } from "./line-action-items";
+import { loadOrderLinks } from "./velocity-order-links";
 
 export const CARRIER_MAP_KEY = "tracking.carrier_map";
 const INBOUND_UNIT_STATUSES = new Set(["pending", "partially_received"]);
@@ -189,14 +194,25 @@ export async function pushTracking(opts: { query: QueryLike; deps?: VelocityDeps
   if (rows.length === 0) return res;
   // Both reads fail closed: a partial Velocity read would make POs look
   // never-uploaded (the coverage tripwires in velocity-api throw instead).
-  const inbound = indexInbound(await deps.list());
-  const known = await knownOrderNumbersHydrated(await deps.known(), opts.query);
+  const inboundList = await deps.list();
+  const inbound = indexInbound(inboundList);
+  const knownList = await deps.known();
+  const known = await knownOrderNumbersHydrated(knownList, opts.query);
+  // Linked orders (migration 099): PO → its linked Velocity order ids; the inbound targets by order id.
+  const linkedByPo = new Map<string, Set<string>>();
+  for (const l of await loadOrderLinks(opts.query)) { if (!linkedByPo.has(l.po_id)) linkedByPo.set(l.po_id, new Set()); linkedByPo.get(l.po_id)!.add(l.velocity_order_id); }
+  const inboundById = new Map<string, VelocityInboundOrder>();
+  for (const o of inboundList) if (String(o.status ?? "").toLowerCase() === "inbound" && INBOUND_UNIT_STATUSES.has(String(o.unit_status ?? "").toLowerCase())) inboundById.set(String(o.order_id), o);
+  const knownIds = new Set(knownList.map((o) => String(o.order_id ?? "")).filter(Boolean));
   const byPo = new Map<string, RowFacts[]>();
   for (const r of rows) { const l = byPo.get(r.po_id) ?? []; l.push(r); byPo.set(r.po_id, l); }
 
   for (const [poId, list] of Array.from(byPo.entries())) {
     const orderId = String(list[0].order_id).trim();
-    const all = inbound.get(orderId) ?? [];
+    const linkedIds = Array.from(linkedByPo.get(poId) ?? []);
+    const all = [...(inbound.get(orderId) ?? [])];
+    for (const id of linkedIds) { const o = inboundById.get(id); if (o && !all.some((x) => String(x.order_id) === id)) all.push(o); }
+    const knownLinked = linkedIds.some((id) => knownIds.has(id));
     // Bundles are targets like any order: the append reaches the parent and
     // leaves its children, quantities and links alone (probe 2026-10-22).
     const targets = all;
@@ -204,7 +220,7 @@ export async function pushTracking(opts: { query: QueryLike; deps?: VelocityDeps
     const toPush: RowFacts[] = [];
     for (const row of list) {
       const d = routeTracking({
-        velocity: all.length > 0 ? "inbound" : known.has(orderId) ? "known" : "absent", emailStreet: row.ship_to_street, shipsTo: (row.ships_to === "home" ? "home" : "velocity"),
+        velocity: all.length > 0 ? "inbound" : known.has(orderId) || knownLinked ? "known" : "absent", emailStreet: row.ship_to_street, shipsTo: (row.ships_to === "home" ? "home" : "velocity"),
         velocityStreet: settings.velocityStreet, homeStreets: settings.homeStreets, poCanceledOrReturned: row.canceled_or_returned,
       });
       const decision = d.push ? "push" : d.held ? "held" : d.reasons.length ? "review" : "received_by_velocity";

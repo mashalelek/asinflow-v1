@@ -86,7 +86,8 @@ export async function assertAsinRowCancelable(query: QueryLike, poAsinId: string
  * The Velocity Order # of the line a velocity shipment row came from: the
  * row's own velocity_order_number when set; otherwise the shipment detail's
  * line with this ASIN (raw.detail.orders) — the one whose order # is the
- * source PO's when several lines carry the ASIN.
+ * source PO's when several lines carry the ASIN. Lines with no Order # → ""
+ * (a pin on the blank order #, which the sync matches as is).
  */
 export async function velocityOrderNumberFor(query: QueryLike, row: { velocity_shipment_id: string; velocity_order_number: string | null; asin: string; order_id: string }): Promise<string> {
   if (row.velocity_order_number) return row.velocity_order_number;
@@ -95,6 +96,8 @@ export async function velocityOrderNumberFor(query: QueryLike, row: { velocity_s
   const same = lines.filter((l) => String(l?.asin ?? "").trim().toUpperCase() === row.asin.toUpperCase());
   const nums = Array.from(new Set(same.map((l) => String(l?.order_number ?? "").trim()).filter(Boolean)));
   if (nums.length === 1) return nums[0];
+  // Lines with this ASIN but no Order # at all (2026-11-07): the pin keys on the blank order #, as the sync reads it.
+  if (same.length > 0 && nums.length === 0) return "";
   const exact = nums.find((n) => n === row.order_id);
   if (exact) return exact;
   throw new EditError(409, nums.length === 0

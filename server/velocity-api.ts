@@ -70,10 +70,12 @@ export function matchKeysForOrder(
   // (both B0GNHTYGPF parents → one, reporting quantity 2 instead of 20). The
   // synthetic form also cannot collide with any sheet key, which is correct:
   // an unhydrated parent must match no sheet group.
-  if (isBundle) {
-    const oid = String((o as any).order_id ?? "").trim();
-    if (oid !== "") return [{ orderNumber: `__velocity_order_id:${oid}`, asin }];
-  }
+  // 2026-11-07: a flat order with a blank Order # likewise (94cdd620, PO
+  // 71160468) — two blank-number orders of one ASIN collapsed into one union
+  // slot and the second dropped out of the plan, the upload and Execute. Such
+  // an order reaches a PO only through its link (velocity_order_links).
+  const oid = String((o as any).order_id ?? "").trim();
+  if (oid !== "" && (isBundle || String(o.order_number ?? "").trim() === "")) return [{ orderNumber: `__velocity_order_id:${oid}`, asin }];
   return [{ orderNumber: String(o.order_number ?? ""), asin }];
 }
 

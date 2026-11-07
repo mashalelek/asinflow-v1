@@ -27,6 +27,7 @@ import { replacementLookup } from "./tracking-replacement";
 import { attachTrackingToPos } from "./tracking-attach";
 import type { QueryLike } from "./scheduler/types";
 import { reconcileReviewVelocity } from "./line-action-items";
+import { HOME_PO_REVIEW_OPEN_SQL, HOME_PO_REVIEW_REASON } from "./po-action-items";
 
 /** Pure: the POs a queued row most likely belongs to — the guessed supplier's PO first, then digits-only order # hits; ≤ 3. A carrier notice with no order # (2026-11-04): the shipper's supplier's candidate POs (tracking-match carrierCandidates). */
 export function suggestPos(row: { retailer_order_id: string | null; supplier_guess: string | null; sender_domain?: string | null; shipped_at?: Date | string | null; ship_to_kind?: "velocity" | "home" | null }, pos: readonly PoRef[]): Array<{ po_id: string; order_id: string; supplier: string }> {
@@ -186,7 +187,9 @@ export function createTrackingRouter(deps: { query?: QueryLike } = {}): Router {
            FROM po_tracking t LEFT JOIN purchase_orders f ON f.id = t.reassigned_from_po_id
           WHERE t.po_id = $1 ORDER BY t.shipped_at DESC NULLS LAST, t.id DESC`, [poId],
       )).rows;
-      res.json({ rows });
+      // Review Velocity's second source (2026-11-07): a Velocity order on a Home PO.
+      const home = (await query(`SELECT p.velocity_home_orders FROM purchase_orders p WHERE p.id = $1 AND ${HOME_PO_REVIEW_OPEN_SQL}`, [poId])).rows[0];
+      res.json({ rows, home_review: home ? { reason: HOME_PO_REVIEW_REASON, orders: String(home.velocity_home_orders) } : null });
     } catch (err) { fail(res, err); }
   });
 
@@ -240,9 +243,11 @@ export function createTrackingRouter(deps: { query?: QueryLike } = {}): Router {
           WHERE po_id = $1 AND review_reason IS NOT NULL AND suppressed_at IS NULL RETURNING id`,
         [poId],
       );
+      // A Velocity order on a Home PO (2026-11-07) is cleared the same way, until a new order shows up.
+      const home = await query(`UPDATE purchase_orders SET velocity_home_cleared_at = NOW() WHERE id = $1 AND velocity_home_orders IS NOT NULL AND velocity_home_cleared_at IS NULL RETURNING id`, [poId]);
       // Cleared by hand → the Review Velocity line items clear as 'manual'.
       await reconcileReviewVelocity(query, [poId]);
-      res.json({ ok: true, suppressed: r.rows.length });
+      res.json({ ok: true, suppressed: r.rows.length + home.rows.length });
     } catch (err) { fail(res, err); }
   });
 

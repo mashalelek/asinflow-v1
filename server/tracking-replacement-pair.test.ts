@@ -20,6 +20,7 @@ function world(o: { rows: any[]; inbound: any[]; logged?: boolean; putFails?: st
     if (sql.includes("FROM po_tracking t JOIN purchase_orders p")) return { rows: o.rows, rowCount: o.rows.length };
     if (sql.startsWith("UPDATE po_tracking")) return { rows: [], rowCount: 1 };
     if (sql.includes("FROM velocity_bundle_identity")) return { rows: [], rowCount: 0 };
+    if (sql.includes("FROM velocity_order_links l")) return { rows: [], rowCount: 0 };
     if (sql.trimStart().startsWith("SELECT p.id,") && sql.includes("FROM purchase_orders p WHERE p.id = ANY")) return { rows: [], rowCount: 0 };
     if (sql.startsWith("SELECT EXISTS (SELECT 1 FROM purchase_orders tp")) return { rows: [{ done: !!o.checkedIn }], rowCount: 1 };
     if (sql.startsWith("SELECT 1 FROM po_edit_log")) return { rows: logged ? [{}] : [], rowCount: logged ? 1 : 0 };

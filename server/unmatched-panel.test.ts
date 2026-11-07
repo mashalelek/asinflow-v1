@@ -11,9 +11,9 @@ const page = read("client/src/pages/purchase-orders.tsx");
 
 describe("server", () => {
   it("visible = unresolved and not dismissed; the POs badge counts the same set; dismissed come back separately", () => {
-    expect(routes).toMatch(/FROM shipment_unmatched WHERE resolved_at IS NULL AND dismissed_at IS NULL\) \+ \(SELECT COUNT\(\*\)::int FROM velocity_shipments WHERE sc_match = 'ambiguous'\)/);
+    expect(routes).toMatch(/FROM shipment_unmatched WHERE resolved_at IS NULL AND dismissed_at IS NULL\) \+ \(SELECT COUNT\(\*\)::int FROM velocity_shipments WHERE sc_match = 'ambiguous'\)\s+\+ \(SELECT COUNT\(\*\)::int FROM velocity_orders_unplaced WHERE dismissed_at IS NULL\)/);
     expect(routes).toMatch(/u\.candidates, u\.nearest_miss, u\.dismissed_at/);
-    expect(routes).toMatch(/res\.json\(\{ lines, dismissed, ambiguous, count: lines\.length \+ ambiguous\.length \}\)/);
+    expect(routes).toMatch(/res\.json\(\{ lines, dismissed, ambiguous, orders, ordersDismissed, links, count: lines\.length \+ ambiguous\.length \+ orders\.length \}\)/);
     expect(routes).toMatch(/l\.retailer_unmapped = resolveRetailer\(l\.retailer, aliases, suppliers\)\.kind === "unresolved"/);
   });
   it("dismiss stamps dismissed_at, never deletes; aliases from the panel are 'manual' and only to a real supplier; the picker records match_reason", () => {
@@ -27,7 +27,7 @@ describe("server", () => {
 describe("client", () => {
   it("candidate buttons on the row, best first, through the picker's link route; free-text picker kept", () => {
     expect(page).toMatch(/cands\.map\(\(c\) => \([\s\S]{0,400}tryLink\(c\.po_asin_id, c\.order_id\)[\s\S]{0,200}Link to \{candidateLabel\(c\)\}/);
-    expect(page).toMatch(/<LinkPicker line=\{l\} onPick=\{\(r\) => tryLink\(r\.id, r\.order_id\)\} \/>/);
+    expect(page).toMatch(/<LinkPicker id=\{l\.id\} seed=\{l\.order_number \|\| l\.asin \|\| ""\} onPick=\{\(r\) => tryLink\(r\.id, r\.order_id\)\} \/>/);
     expect(page).toMatch(/fetch\(`\/api\/pos\/unmatched\/\$\{lineId\}\/link`/);
   });
   it("nearest miss in Why, Map → supplier for an unmapped retailer, Dismiss selected, Dismissed (N)", () => {

@@ -230,7 +230,12 @@ interface UnmatchedLine { id: string; velocity_shipment_id: string; velocity_ord
   /** Optional note given when the line was dismissed (2026-10-29). */
   dismiss_note?: string | null }
 interface UnmatchedCandidate { po_asin_id: string; order_id: string; supplier: string; asin: string; source?: "col_p" | "candidate"; order_date?: string; days?: number; remaining_units?: number; units?: number }
-interface UnmatchedResponse { lines: UnmatchedLine[]; dismissed: UnmatchedLine[]; ambiguous: Array<{ id: string; shipped_at: string | null; rows: number }>; count: number }
+/** A Velocity order that has not shipped and that no rule placed (2026-11-07, velocity_orders_unplaced). */
+export interface UnplacedOrder { velocity_order_id: string; reason: "no_order" | "po_not_found"; candidates: UnmatchedCandidate[] | null; nearest_miss: string | null; dismissed_at: string | null; dismiss_note?: string | null;
+  velocity_number: string | null; order_number: string | null; retailer: string | null; asin: string | null; item_name: string | null; status: string | null; date: string | null; quantity: string | null; quantity_received: string | null }
+/** A stored link Velocity order → PO ASIN row (velocity_order_links). */
+export interface VelocityOrderLink { velocity_order_id: string; velocity_number: string | null; order_number: string | null; retailer: string | null; asin: string | null; quantity: string | null; source: string; note: string | null; linked_at: string; linked_by: string | null; po_id: string; po_order_id: string; supplier: string }
+interface UnmatchedResponse { lines: UnmatchedLine[]; dismissed: UnmatchedLine[]; ambiguous: Array<{ id: string; shipped_at: string | null; rows: number }>; orders?: UnplacedOrder[]; ordersDismissed?: UnplacedOrder[]; links?: VelocityOrderLink[]; count: number }
 interface PickerRow { id: string; asin: string; asin_name: string | null; qty: number; units_per_pack: number; order_id: string; supplier: string; order_date: string; velocity_warning?: string | null }
 
 /** Toast text for a Sync Shipments result (§5.2). */
@@ -246,8 +251,8 @@ export function syncShipmentsToast(data: any): { title: string; description: str
 }
 
 /** "Link to PO ASIN" picker: search PO ASIN rows by order #, ASIN or supplier. */
-function LinkPicker({ line, onPick }: { line: UnmatchedLine; onPick: (r: PickerRow) => Promise<void> }) {
-  const [q, setQ] = useState(line.order_number || line.asin || "");
+function LinkPicker({ id, seed, onPick }: { id: string; seed: string; onPick: (r: PickerRow) => Promise<void> }) {
+  const [q, setQ] = useState(seed);
   const [rows, setRows] = useState<PickerRow[]>([]);
   const [err, setErr] = useState<string | null>(null);
   useEffect(() => {
@@ -264,10 +269,10 @@ function LinkPicker({ line, onPick }: { line: UnmatchedLine; onPick: (r: PickerR
   return (
     <Popover>
       <PopoverTrigger asChild>
-        <Button variant="outline" size="sm" className="h-7 text-xs" data-testid={`button-link-unmatched-${line.id}`}>Link to PO ASIN</Button>
+        <Button variant="outline" size="sm" className="h-7 text-xs" data-testid={`button-link-unmatched-${id}`}>Link to PO ASIN</Button>
       </PopoverTrigger>
       <PopoverContent className="w-[28rem] p-2 text-xs space-y-1" align="end">
-        <Input value={q} onChange={(e) => setQ(e.target.value)} placeholder="Order #, ASIN or supplier" className="h-7 text-xs" data-testid={`input-link-search-${line.id}`} />
+        <Input value={q} onChange={(e) => setQ(e.target.value)} placeholder="Order #, ASIN or supplier" className="h-7 text-xs" data-testid={`input-link-search-${id}`} />
         <div className="max-h-64 overflow-auto divide-y divide-border/50">
           {rows.map((r) => (
             <button key={r.id} onClick={() => link(r)} className="flex w-full items-center justify-between gap-2 px-1 py-1 text-left hover:bg-muted/60" data-testid={`button-pick-${r.id}`}>
@@ -335,7 +340,7 @@ function UnmatchedPanel({ onChanged, suppliers }: { onChanged: () => void; suppl
     setErr(null); setBusy(true);
     try { await fn(); load(); onChanged(); } catch (e: any) { setErr(e.message); } finally { setBusy(false); }
   };
-  if (!data || (data.count === 0 && (data.dismissed ?? []).length === 0)) return null;
+  if (!data || (data.count === 0 && (data.dismissed ?? []).length === 0 && (data.ordersDismissed ?? []).length === 0 && (data.links ?? []).length === 0)) return null;
   const lines = data.lines;
   const allPicked = lines.length > 0 && lines.every((l) => picked.has(l.id));
   const toggle = (id: string) => setPicked((p) => { const n = new Set(p); if (n.has(id)) n.delete(id); else n.add(id); return n; });
@@ -348,7 +353,7 @@ function UnmatchedPanel({ onChanged, suppliers }: { onChanged: () => void; suppl
     <div className="rounded-md" style={{ border: "0.5px solid hsl(var(--border))" }} data-testid="po-unmatched-panel">
       <button className="flex w-full items-center justify-between px-3 py-2 text-sm" onClick={() => setOpen((o) => !o)} data-testid="button-po-unmatched-toggle">
         <span className="inline-flex items-center gap-2"><AlertTriangle className="h-4 w-4 text-amber-600" /> Unmatched shipments
-          <span className="rounded-full bg-amber-100 px-2 py-0.5 text-xs text-amber-800" data-testid="text-po-unmatched-count">{data.count}</span>
+          {data.count > 0 && <span className="rounded-full bg-amber-100 px-2 py-0.5 text-xs text-amber-800" data-testid="text-po-unmatched-count">{data.count}</span>}
         </span>
         {open ? <ChevronDown className="h-4 w-4" /> : <ChevronRight className="h-4 w-4" />}
       </button>
@@ -378,6 +383,7 @@ function UnmatchedPanel({ onChanged, suppliers }: { onChanged: () => void; suppl
               </div>
             </>
           )}
+          <VelocityOrdersSection orders={data.orders ?? []} dismissed={data.ordersDismissed ?? []} links={data.links ?? []} busy={busy} act={act} />
           {data.ambiguous.length > 0 && (
             <div className="space-y-1">
               <div className="text-muted-foreground">Seller Central match ambiguous (two STA groups with identical SKUs on the same day) — resolve in Velocity / Seller Central, then Sync Shipments again:</div>
@@ -394,6 +400,112 @@ function UnmatchedPanel({ onChanged, suppliers }: { onChanged: () => void; suppl
                   {data.dismissed.map((l) => <div key={l.id} className="font-mono">{l.shipped_at ?? "—"} · {l.order_number || "(none)"} · {l.retailer || "—"} · {l.asin} · {l.quantity_shipped}u · dismissed {String(l.dismissed_at).slice(0, 10)}{l.dismiss_note ? ` — ${l.dismiss_note}` : ""}</div>)}
                 </div>
               )}
+            </div>
+          )}
+        </div>
+      )}
+    </div>
+  );
+}
+
+/** "Velocity orders" text for one order: #8785 · no_poid_at_checkout. */
+export function velocityOrderText(o: { velocity_number: string | null; order_number: string | null }): string {
+  return `${o.velocity_number ? `#${o.velocity_number}` : "Velocity order"} · ${o.order_number || "(no Order #)"}`;
+}
+
+async function postJson(url: string, body: unknown, method = "POST"): Promise<any> {
+  const res = await fetch(url, { method, headers: { "Content-Type": "application/json" }, body: body == null ? undefined : JSON.stringify(body) });
+  const data = await res.json().catch(() => ({}));
+  if (!res.ok) throw new Error(data.message || `HTTP ${res.status}`);
+  return data;
+}
+
+/**
+ * "Velocity orders with no PO" (2026-11-07): orders still at Velocity that no
+ * rule placed — one click when a single PO fits, else the picker; dismiss
+ * hides one while it stays listed. Under it, the linked orders with Unlink.
+ */
+function VelocityOrdersSection({ orders, dismissed, links, busy, act }: {
+  orders: UnplacedOrder[]; dismissed: UnplacedOrder[]; links: VelocityOrderLink[]; busy: boolean; act: (fn: () => Promise<unknown>) => Promise<void>;
+}) {
+  const [showDismissed, setShowDismissed] = useState(false);
+  const [showLinks, setShowLinks] = useState(false);
+  if (orders.length === 0 && dismissed.length === 0 && links.length === 0) return null;
+  const link = (o: UnplacedOrder, poAsinId: string) => act(() => postJson(`/api/velocity-orders/${encodeURIComponent(o.velocity_order_id)}/link`, { po_asin_id: poAsinId }));
+  return (
+    <div className="space-y-1" data-testid="section-velocity-orders">
+      {orders.length > 0 && (
+        <>
+          <div className="text-muted-foreground">Velocity orders with no PO — still at Velocity, not shipped; link one so Received by Velocity and At Prep count it:</div>
+          <div className="overflow-x-auto">
+            <table className="w-full table-fixed">
+              <colgroup><col style={{ width: 150 }} /><col style={{ width: 90 }} /><col style={{ width: 110 }} /><col style={{ width: 110 }} /><col style={{ width: 160 }} /><col style={{ width: 70 }} /><col style={{ width: 170 }} /><col style={{ width: 300 }} /><col /></colgroup>
+              <thead><tr className="text-muted-foreground text-left">
+                <th className="py-1 pr-2">Velocity order</th><th className="py-1 pr-2">Date</th><th className="py-1 pr-2">Retailer</th><th className="py-1 pr-2">ASIN</th><th className="py-1 pr-2">Item</th><th className="py-1 pr-2 text-right" title="Ordered at Velocity · checked in">Qty · in</th><th className="py-1 pr-2">Why</th><th className="py-1">Link</th><th />
+              </tr></thead>
+              <tbody>
+                {orders.map((o) => {
+                  const cands = o.candidates ?? [];
+                  return (
+                    <tr key={o.velocity_order_id} className="align-top" style={{ borderTop: "0.5px solid hsl(var(--border))" }} data-testid={`row-velocity-order-${o.velocity_order_id}`}>
+                      <td className="py-1 pr-2 font-mono" title={`Velocity ${o.status ?? ""}`}>
+                        <div>{o.velocity_number ? `#${o.velocity_number}` : "—"}</div>
+                        <div className="break-all text-muted-foreground">{o.order_number || "(no Order #)"}</div>
+                      </td>
+                      <td className="py-1 pr-2">{o.date ?? "—"}</td>
+                      <td className="py-1 pr-2 truncate" title={o.retailer ?? ""}>{o.retailer || "—"}</td>
+                      <td className="py-1 pr-2 font-mono">{o.asin}</td>
+                      <td className="py-1 pr-2 truncate" title={o.item_name ?? ""}>{o.item_name}</td>
+                      <td className="py-1 pr-2 text-right">{fmtQty(Number(o.quantity ?? 0))} · {fmtQty(Number(o.quantity_received ?? 0))}</td>
+                      <td className="py-1 pr-2 text-muted-foreground" data-testid={`text-velocity-order-why-${o.velocity_order_id}`}>{o.nearest_miss ?? (cands.length > 1 ? `${cands.length} POs fit — pick one` : cands.length === 1 ? "one PO fits" : o.reason === "no_order" ? "no Order # at Velocity" : "Order # not in AF")}</td>
+                      <td className="py-1">
+                        <div className="flex flex-wrap items-center gap-1">
+                          {cands.map((c) => (
+                            <Button key={c.po_asin_id} size="sm" variant="secondary" className="h-6 text-xs font-mono" disabled={busy} title={`${c.supplier} ${c.asin}${c.order_date ? ` · PO ${c.order_date}` : ""}`}
+                              onClick={() => void link(o, c.po_asin_id)} data-testid={`button-link-velocity-order-${o.velocity_order_id}-${c.po_asin_id}`}>
+                              Link to {candidateLabel(c)}
+                            </Button>
+                          ))}
+                          <LinkPicker id={o.velocity_order_id} seed={o.order_number || o.asin || ""} onPick={(r) => link(o, r.id)} />
+                          <Button size="sm" variant="ghost" className="h-6 text-xs" disabled={busy} onClick={() => void act(() => postJson("/api/velocity-orders/dismiss", { ids: [o.velocity_order_id] }))} data-testid={`button-dismiss-velocity-order-${o.velocity_order_id}`}>Dismiss</Button>
+                        </div>
+                      </td>
+                      <td />
+                    </tr>
+                  );
+                })}
+              </tbody>
+            </table>
+          </div>
+        </>
+      )}
+      {dismissed.length > 0 && (
+        <div>
+          <button className="inline-flex items-center gap-1 text-muted-foreground" onClick={() => setShowDismissed((v) => !v)} data-testid="button-velocity-orders-dismissed-toggle">
+            {showDismissed ? <ChevronDown className="h-3 w-3" /> : <ChevronRight className="h-3 w-3" />} Dismissed Velocity orders ({dismissed.length})
+          </button>
+          {showDismissed && (
+            <div className="mt-1 space-y-0.5 text-muted-foreground">
+              {dismissed.map((o) => <div key={o.velocity_order_id} className="font-mono">{velocityOrderText(o)} · {o.retailer || "—"} · {o.asin} · {fmtQty(Number(o.quantity ?? 0))}u · dismissed {String(o.dismissed_at).slice(0, 10)}{o.dismiss_note ? ` — ${o.dismiss_note}` : ""}</div>)}
+            </div>
+          )}
+        </div>
+      )}
+      {links.length > 0 && (
+        <div>
+          <button className="inline-flex items-center gap-1 text-muted-foreground" onClick={() => setShowLinks((v) => !v)} data-testid="button-velocity-links-toggle">
+            {showLinks ? <ChevronDown className="h-3 w-3" /> : <ChevronRight className="h-3 w-3" />} Linked Velocity orders ({links.length})
+          </button>
+          {showLinks && (
+            <div className="mt-1 space-y-0.5" data-testid="list-velocity-links">
+              {links.map((l) => (
+                <div key={l.velocity_order_id} className="flex flex-wrap items-center gap-2" data-testid={`row-velocity-link-${l.velocity_order_id}`}>
+                  <span className="font-mono">{velocityOrderText(l)} · {l.retailer || "—"} · {l.asin} · {l.quantity != null ? `${fmtQty(Number(l.quantity))}u` : "—"}</span>
+                  <span className="text-muted-foreground">→ {l.supplier} {l.po_order_id} · {String(l.linked_at).slice(0, 10)}{l.linked_by ? ` by ${l.linked_by}` : ""} ({l.source})</span>
+                  <Button size="sm" variant="ghost" className="h-6 text-xs" disabled={busy}
+                    onClick={() => void act(() => postJson(`/api/velocity-order-links/${encodeURIComponent(l.velocity_order_id)}`, null, "DELETE"))} data-testid={`button-unlink-velocity-order-${l.velocity_order_id}`}>Unlink</Button>
+                </div>
+              ))}
             </div>
           )}
         </div>
@@ -447,7 +559,7 @@ function UnmatchedRow({ l, suppliers, picked, onPick, busy, act, onLinked }: {
               Link to {candidateLabel(c)}
             </Button>
           ))}
-          <LinkPicker line={l} onPick={(r) => tryLink(r.id, r.order_id)} />
+          <LinkPicker id={l.id} seed={l.order_number || l.asin || ""} onPick={(r) => tryLink(r.id, r.order_id)} />
         </div>
         {pending && (
           <div className="mt-1 space-y-1 rounded border border-red-500/40 bg-red-500/5 p-2" data-testid={`overshoot-${l.id}`}>

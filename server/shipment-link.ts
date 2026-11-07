@@ -10,6 +10,11 @@
 // a test: the route selected v.fba_shipment_ids, a column velocity_shipments
 // never had, and every link failed in production.
 //
+// Order link (2026-11-07, migration 099): the link is also written for the
+// whole Velocity order (velocity_order_links, with a History row), so the
+// order's other shipments, its Received by Velocity / At Prep and the Upload
+// plan follow it. A different-ASIN pick keeps the line link only.
+//
 // Overshoot guard (Maria 2026-10-29): a link that would take the row's
 // Shipped FBA past Ordered is refused with code 'overshoot' until the caller
 // confirms it with a note; the note is stored on the row (extra_units_note,
@@ -18,6 +23,7 @@ import type { QueryLike } from "./scheduler/types";
 import { evaluateAutoClose } from "./po-close";
 import { loadPoAsinRows } from "./po-queries";
 import { logEdits } from "./po-edit";
+import { linkVelocityOrder } from "./velocity-order-links";
 
 export type LinkOutcome =
   | { status: 200; body: { row: any; close: Awaited<ReturnType<typeof evaluateAutoClose>>; qty: number } }
@@ -59,6 +65,7 @@ export async function linkUnmatchedLine(query: QueryLike, unmatchedId: string, p
     [pa.id, u.velocity_shipment_id, matched ? (u.sc_shipment_ids ?? []) : [], u.sc_match ?? "none", qty, u.shipped_at],
   );
   await query(`UPDATE shipment_unmatched SET resolved_at = now(), resolved_po_asin_id = $2, match_reason = 'picker' WHERE id = $1`, [unmatchedId, pa.id]);
+  if (u.velocity_order_id) await linkVelocityOrder(query, { velocityOrderId: String(u.velocity_order_id), poAsinId: String(pa.id), line: u.line ?? {}, source: "picker" }, opts.userId ?? null);
   if (after > ordered + 1e-9) {
     await query(`UPDATE po_asins SET extra_units_note = $2 WHERE id = $1`, [pa.id, note]);
     await logEdits(query, String(pa.po_id), opts.userId ?? null, "asin", String(pa.id), [

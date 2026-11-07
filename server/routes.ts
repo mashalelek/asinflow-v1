@@ -57,6 +57,7 @@ import { syncSuppressionData } from "./suppression-sync";
 import { loadAfAsinCostMap } from "./po-af-source";
 import { buildVelocityRecords, serializeVelocityCsv, parseMDY, formatYMD, todayLocal } from "./velocity-export";
 import { fetchAllKnownOrders, matchKeysForOrder, createBundleOrder, submitBulkCsv, updateInboundOrder } from "./velocity-api";
+import { loadOrderLinks, linkedPairs, linkVelocityOrder, unlinkVelocityOrder } from "./velocity-order-links";
 import { recordableBundles, recordBundleIdentities, mapBundleIdentity, hydrateChildlessBundles } from "./velocity-bundle-identity";
 import { buildVelocityPlan, putBodyFromDiffs, type PlanUpdate } from "./velocity-reconcile";
 import { buildSellerboardCogs, serializeSbCsv } from "./sellerboard-cogs";
@@ -2000,6 +2001,8 @@ export async function registerRoutes(
       const existingKeys = new Set(
         existing.map((o) => dedupKey(String(o.order_number ?? ""), String(o.asin ?? ""))),
       );
+      // A Velocity order linked to a PO ASIN row covers that row (velocity_order_links, 2026-11-07).
+      for (const k of linkedPairs(await loadOrderLinks(query), existing)) existingKeys.add(dedupKey(k.orderNumber, k.asin));
       const toSend = records.filter((r) => !existingKeys.has(dedupKey(r.order_number, r.asin)));
       const alreadyInVelocity = records.length - toSend.length; // intentional tally, like self-prep
 
@@ -2138,6 +2141,9 @@ export async function registerRoutes(
       const liveByKey = new Map(live.map((o) => [
         `${String(o.order_number ?? "").trim()} ${String(o.asin ?? "").trim().toUpperCase()}`, o,
       ]));
+      // A linked Velocity order covers its PO ASIN row (velocity_order_links, 2026-11-07).
+      const liveById = new Map(live.map((o) => [String(o.order_id ?? ""), o]));
+      for (const k of linkedPairs(await loadOrderLinks(query), live)) liveByKey.set(`${k.orderNumber.trim()} ${k.asin}`, liveById.get(k.velocityOrderId)!);
 
       // Creates: drop anything already present, then one bulk CSV.
       const createNow = [];
@@ -2169,6 +2175,7 @@ export async function registerRoutes(
             liveKeysAll.add(`${k.orderNumber.trim()} ${k.asin.trim().toUpperCase()}`);
           }
         }
+        for (const k of linkedPairs(await loadOrderLinks(query), live)) liveKeysAll.add(`${k.orderNumber.trim()} ${k.asin}`);
         for (const b of toBundle) {
           const asin = String(b.asin ?? "");
           const nums: string[] = Array.isArray(b.orderNumbers) ? b.orderNumbers : [];
@@ -4382,7 +4389,8 @@ export async function registerRoutes(
       const suppliers = (await query(`SELECT DISTINCT supplier FROM purchase_orders ORDER BY supplier`)).rows.map((r: any) => r.supplier);
       // Shipment reconciliation §5.3: the Unmatched badge = open Velocity lines + ambiguous Velocity shipments.
       const unmatchedCount = (await query(
-        `SELECT (SELECT COUNT(*)::int FROM shipment_unmatched WHERE resolved_at IS NULL AND dismissed_at IS NULL) + (SELECT COUNT(*)::int FROM velocity_shipments WHERE sc_match = 'ambiguous') AS n`,
+        `SELECT (SELECT COUNT(*)::int FROM shipment_unmatched WHERE resolved_at IS NULL AND dismissed_at IS NULL) + (SELECT COUNT(*)::int FROM velocity_shipments WHERE sc_match = 'ambiguous')
+                + (SELECT COUNT(*)::int FROM velocity_orders_unplaced WHERE dismissed_at IS NULL) AS n`,
       )).rows[0].n;
       // Each dropdown option's count under the other active filters (2026-11-06) — in this response, not a request per dropdown.
       const counts = await poFacetCounts((sql, params) => query(sql, params), filters);
@@ -5042,7 +5050,56 @@ export async function registerRoutes(
         `SELECT v.id, v.shipped_at::text AS shipped_at, (SELECT COUNT(*)::int FROM po_asin_shipments s WHERE s.velocity_shipment_id = v.id) AS rows
            FROM velocity_shipments v WHERE v.sc_match = 'ambiguous' ORDER BY v.shipped_at DESC, v.id`,
       )).rows;
-      res.json({ lines, dismissed, ambiguous, count: lines.length + ambiguous.length });
+      // Velocity orders with no PO (2026-11-07): never shipped, placed nowhere by the last Sync Shipments.
+      const allOrders = (await query(
+        `SELECT u.velocity_order_id, u.reason, u.candidates, u.nearest_miss, u.dismissed_at, u.dismiss_note,
+                u.line->>'id' AS velocity_number, u.line->>'order_number' AS order_number, u.line->>'retailer' AS retailer, u.line->>'asin' AS asin,
+                u.line->>'item_name' AS item_name, u.line->>'status' AS status, u.line->>'date' AS date,
+                (u.line->>'quantity')::numeric AS quantity, (u.line->>'quantity_received')::numeric AS quantity_received
+           FROM velocity_orders_unplaced u ORDER BY u.first_seen_at DESC, u.velocity_order_id`,
+      )).rows;
+      const orders = allOrders.filter((o: any) => !o.dismissed_at);
+      const ordersDismissed = allOrders.filter((o: any) => o.dismissed_at);
+      // Linked Velocity orders (velocity_order_links), newest first — Unlink lives here.
+      const links = (await query(
+        `SELECT l.velocity_order_id, l.velocity_number, l.order_number, l.retailer, l.asin, l.quantity, l.source, l.note, l.linked_at,
+                u.display_name AS linked_by, p.id AS po_id, p.order_id AS po_order_id, p.supplier
+           FROM velocity_order_links l JOIN po_asins pa ON pa.id = l.po_asin_id JOIN purchase_orders p ON p.id = pa.po_id
+           LEFT JOIN users u ON u.id = l.linked_by ORDER BY l.linked_at DESC, l.velocity_order_id`,
+      )).rows;
+      res.json({ lines, dismissed, ambiguous, orders, ordersDismissed, links, count: lines.length + ambiguous.length + orders.length });
+    } catch (err: any) { res.status(500).json({ message: err.message }); }
+  });
+
+  // "Velocity orders with no PO" (2026-11-07): link one order to a PO ASIN row
+  // (one click on its single candidate, or the picker) — velocity_order_links,
+  // a History row; Received by Velocity / At Prep follow on the next Sync Shipments.
+  app.post("/api/velocity-orders/:id/link", async (req: Request, res: Response) => {
+    if (!isDbAvailable()) { res.status(503).json({ message: "Database not available" }); return; }
+    try {
+      const oid = String(req.params.id ?? "");
+      const u = (await query(`SELECT line FROM velocity_orders_unplaced WHERE velocity_order_id = $1`, [oid])).rows[0];
+      if (!u) { res.status(404).json({ message: "that Velocity order is not on the list — run Sync Shipments" }); return; }
+      const out = await withPoTx((q) => linkVelocityOrder(q, { velocityOrderId: oid, poAsinId: String((req.body ?? {}).po_asin_id ?? "").trim(), line: u.line, source: "manual", note: (req.body ?? {}).note }, uid(req)));
+      res.status(out.status).json(out.body);
+    } catch (err: any) { res.status(500).json({ message: err.message }); }
+  });
+  app.post("/api/velocity-orders/dismiss", async (req: Request, res: Response) => {
+    if (!isDbAvailable()) { res.status(503).json({ message: "Database not available" }); return; }
+    const ids = Array.isArray((req.body ?? {}).ids) ? (req.body.ids as unknown[]).map(String).filter(Boolean) : [];
+    if (ids.length === 0) { res.status(400).json({ message: "ids are required" }); return; }
+    const note = String((req.body ?? {}).note ?? "").trim() || null;
+    try {
+      const r = await query(`UPDATE velocity_orders_unplaced SET dismissed_at = now(), dismiss_note = $2 WHERE velocity_order_id = ANY($1::text[]) AND dismissed_at IS NULL`, [ids, note]);
+      res.json({ dismissed: r.rowCount ?? 0 });
+    } catch (err: any) { res.status(500).json({ message: err.message }); }
+  });
+  // Unlink: the link goes (History row stays); the next Sync Shipments places the order by the rules or lists it again.
+  app.delete("/api/velocity-order-links/:id", async (req: Request, res: Response) => {
+    if (!isDbAvailable()) { res.status(503).json({ message: "Database not available" }); return; }
+    try {
+      const out = await withPoTx((q) => unlinkVelocityOrder(q, String(req.params.id ?? ""), uid(req)));
+      res.status(out.status).json(out.body);
     } catch (err: any) { res.status(500).json({ message: err.message }); }
   });
 

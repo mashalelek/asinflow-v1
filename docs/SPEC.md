@@ -1539,6 +1539,19 @@ the upload window):
   `actionable: false` — displayed as a flag (amber, "not editable — order
   already shipped"), no checkbox, never a PUT target. Execute independently
   re-checks live status, so a stale flag can't be forced through.
+
+  **Per PO ASIN row, summed (2026-11-07).** Every flat Velocity order that
+  lands on one PO ASIN row — by order # or through its link
+  (`velocity_order_links`, §22) — is compared as a **sum** against the
+  row's units (Σ its product lines, what the creates send: one order per
+  line). PO 71160468, 90 + 30 against 120: nothing. Before, each order was
+  compared alone against the row's first line, so the plan proposed
+  71160468 90 → 120 (Velocity would then hold 150) and a two-line row
+  flagged both of its orders. A sum that differs proposes an update only
+  when exactly one of the orders is still inbound (it takes the difference,
+  `summed: { order_ids, velocity_total }` on the update); otherwise
+  flag-only. A group holding a shipment-derived pseudo-order is not
+  audited (as a single one never was).
 - **DELETE-CANDIDATE** — matched Velocity order whose sheet row is now
   canceled. The API has **no DELETE endpoint** (POST/GET/PUT only, verified
   2026-07-30; edit/delete is a dashboard feature) — delete-candidates are a
@@ -7021,6 +7034,68 @@ stays as override; an unmapped Velocity retailer gets "Map → supplier"
 selected (N)" (`dismissed_at`; hidden, listed under "Dismissed (N)",
 never deleted). The badge and the POs page count only visible lines.
 
+**Velocity order links (Maria 2026-11-07, migration 099,
+`server/velocity-order-links.ts`):** one stored link per Velocity order —
+`velocity_order_links` (the Velocity `order_id` uuid → `po_asin_id`, who /
+when / source `manual | picker | backfill`, an optional note, and the order
+as typed at Velocity: its own #, order #, retailer, ASIN, quantity, for
+display). Several orders may link to one PO ASIN row; their quantities add
+up (PO 71160468: Velocity order 71160468, 90, and the blank-number order
+#8596 / 94cdd620, 30 = 120). Every Velocity matcher asks the link first:
+- **Sync Shipments (component A):** order of checks — hand pin (migration
+  060), **link**, picker / rule link recorded on `shipment_unmatched`, then
+  the order # rules, Col P, base order #, §4. A linked order's shipped
+  lines go to its row (`linesLinked`); its pack size counts for that row;
+  **Received by Velocity / At Prep** look the link up by Velocity order id,
+  so an order counts whether it is inbound, in inventory or shipped, summed
+  across the row's orders. A partly shipped order (read from the list legs)
+  keeps its newest shipment id, so a hand pin or picker link on its shipped
+  line still counts its units still at Velocity (they were counted nowhere
+  before).
+- **Velocity orders with no PO:** a Velocity order that has **not shipped**
+  and that no rule places is written to `velocity_orders_unplaced` (rewritten
+  each sync; a dismissal stays while it is listed) with its ranked §4
+  candidates or nearest miss. It is the second section of the Unmatched
+  panel: Velocity # / order #, date, retailer, ASIN, item, ordered ·
+  checked in, why; one click "Link to <order #>" when a PO fits, else the
+  picker; Dismiss. It counts in the panel badge and the POs page badge.
+  Below it, "Linked Velocity orders (N)" lists every link with **Unlink**.
+- **Link / unlink** (`POST /api/velocity-orders/:id/link`, `DELETE
+  /api/velocity-order-links/:id`): same ASIN required (a bundle parent
+  excepted); each writes a PO History row (entity `shipment`, field
+  `velocity_order_link`) naming the user and the order as typed at
+  Velocity ("Velocity #8785 no_poid_at_checkout · havalon.com ·
+  B00D79EODK · 3u"); a link to another row moves it (a row on each PO).
+  Unlink returns the order to the rules on the next sync (or to the list).
+- **The shipped-line picker** ("Link to PO ASIN" on a shipped line) also
+  writes the order link (source `picker`), so the order's other shipments
+  and its check-in counts follow; a different-ASIN pick keeps the line link
+  only. **Reassign shipment** keeps its shipment-level hand pin (asked
+  before the link) and can now pin a line Velocity holds with no Order #.
+- **Upload to Velocity** (§11 "Velocity reconciliation"), Upload dedup and
+  Execute's last duplicate guard: a linked order marks its PO ASIN row as
+  present (no create, skip or pack remainder for it); tracking push (§26)
+  sends the PO's tracking to its linked inbound orders too. The merged
+  Velocity order list keys a blank-Order # order by its Velocity order id
+  (two blank-number orders of one ASIN used to collapse into one).
+- **Backfill** (`tsx script/backfill-velocity-order-links.ts [--add <velocity
+  #>=<po_asin_id>]… [--prod] [--live]`, dry run by default; a plan only on
+  a database without migration 099): every `shipment_unmatched` picker link
+  becomes an order link; Col P / base order # / candidate links stay
+  automatic. Velocity #4530 (chewy.com, B002CZLOIS) was deleted in Velocity
+  and is ignored.
+
+**Home POs (Maria 2026-11-07):** an order # match (exact, order-only,
+alias, normalized) to a PO whose `ships_to` is `home` is **matched like any
+other**, never skipped — it used to disappear (the havalon.com PO
+no_poid_at_checkout after the 10/29 prep-based correction: Velocity #8785
+matched nothing). The PO is flagged: `purchase_orders.velocity_home_orders`
+names the Velocity orders (#8785), which raises **Review Velocity**
+"Velocity has an order for a Home PO" (§26) until ships_to is corrected or
+the review is cleared by hand (`velocity_home_cleared_at`; a new Velocity
+order on it reopens it). Base order #, Col P, §4 candidates and the
+picker's suggestions still skip Home POs (2026-10-29).
+
 **Backfill (§6), local 2026-10-17:** 57 Velocity shipments, 822 lines →
 752 placed (19 order-only), 11 `no_order`, 59 `po_not_found` (PrepBusiness
 -era `INSH-…` orders, re-keyed `…_1` POs, free-text order numbers);
@@ -8611,9 +8686,13 @@ When several apply every reason is kept (`review_reason`, "; "-joined).
 v2 (2026-10-29) it is stored** in `po_line_action_items` on every product
 line of the PO (`source = 'auto'`, `reason` = the open review reasons),
 mirrored by `reconcileReviewVelocity` (`server/line-action-items.ts`) after
-the tracking push, Move to PO (old and new PO) and the manual clear: open
-while any of the PO's tracking rows has a `review_reason` and no
-`suppressed_at`, re-reasoned when the reasons change, cleared
+the tracking push, Move to PO (old and new PO), Sync Shipments and the
+manual clear: open while any of the PO's tracking rows has a
+`review_reason` and no `suppressed_at`, **or** (2026-11-07) Sync Shipments
+matched a Velocity order to the PO while its ships_to is `home`
+(`velocity_home_orders` set, not cleared by hand — reason "Velocity has an
+order for a Home PO", §22 "Home POs"; the Tracking tab's banner names the
+Velocity orders and its Clear clears it too), re-reasoned when the reasons change, cleared
 `cleared_by = 'auto'` when the condition goes away or `'manual'` after the
 manual clear. The editors never offer it and drop it if echoed. Because it
 is stored, the POs column, PO Details, the `action=` filter and the

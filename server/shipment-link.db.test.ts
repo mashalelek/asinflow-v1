@@ -85,8 +85,12 @@ describe("Extra units shipped on the real schema (rolled back, 2026-10-29)", () 
       expect(Number(ok.body.row.qty_shipped_fba)).toBe(10);
       expect(ok.body.row.action_items).toContain("Extra units shipped");
       expect(ok.body.row.extra_units_note).toBe("removal order 9/16 for 4");
-      const log = (await q(`SELECT field, new_value FROM po_edit_log WHERE po_id = $1`, [po])).rows;
-      expect(log).toEqual([{ field: "extra_units_shipped", new_value: "10 of 5 ordered (linked ZZ1_1): removal order 9/16 for 4" }]);
+      const log = (await q(`SELECT field, new_value FROM po_edit_log WHERE po_id = $1 ORDER BY id`, [po])).rows;
+      // the picker also links the whole Velocity order (2026-11-07), with its own History row
+      expect(log).toEqual([
+        { field: "velocity_order_link", new_value: "Velocity ZZ1_1 · — · B0ZZTEST02" },
+        { field: "extra_units_shipped", new_value: "10 of 5 ordered (linked ZZ1_1): removal order 9/16 for 4" },
+      ]);
       // the PO-level union carries it and it blocks auto-close
       expect(ok.body.close.closed).toBe(false);
     } finally { await q("ROLLBACK"); }

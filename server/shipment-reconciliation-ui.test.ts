@@ -51,8 +51,9 @@ describe("POs page (§5.1 chip, §5.2 button + toast, §5.3 panel)", () => {
     const page = read("client/src/pages/purchase-orders.tsx");
     expect(page).toMatch(/fetchLongSync\("\/api\/pos\/sync-shipments"\)/);
     expect(page).toMatch(/data-testid="button-sync-shipments"/);
-    expect(page).toMatch(/if \(!data \|\| \(data\.count === 0 && \(data\.dismissed \?\? \[\]\)\.length === 0\)\) return null;/); // PO matching §6: a Dismissed list keeps it
-    expect(page).toMatch(/<LinkPicker line=\{l\} onPick=\{\(r\) => tryLink\(r\.id, r\.order_id\)\} \/>/);
+    // PO matching §6: a Dismissed list keeps it; so do dismissed Velocity orders and linked orders (2026-11-07)
+    expect(page).toMatch(/if \(!data \|\| \(data\.count === 0 && \(data\.dismissed \?\? \[\]\)\.length === 0 && \(data\.ordersDismissed \?\? \[\]\)\.length === 0 && \(data\.links \?\? \[\]\)\.length === 0\)\) return null;/);
+    expect(page).toMatch(/<LinkPicker id=\{l\.id\} seed=\{l\.order_number \|\| l\.asin \|\| ""\} onPick=\{\(r\) => tryLink\(r\.id, r\.order_id\)\} \/>/);
     expect(page).toMatch(/<UnmatchedPanel key=\{unmatchedKey\} onChanged=\{load\} suppliers=\{data\?\.suppliers \?\? \[\]\} \/>/);
   });
   it("syncShipmentsToast: counts for both components; destructive when either failed", async () => {

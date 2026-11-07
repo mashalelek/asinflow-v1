@@ -82,7 +82,7 @@ export function lineAsinQty(asinQty: number, ordered: number | null, yieldT: num
 export async function loadAfPoRows(query: QueryLike): Promise<{ rows: SheetRow[]; rawRowsRead: number; blankAsinRows: number }> {
   const rs = (await query(
     `SELECT p.order_id, p.order_date, p.supplier, p.closed_at IS NOT NULL AS closed, p.ships_to,
-            pa.asin, pa.asin_name, pa.qty AS asin_qty, pa.cost_per_unit, pa.prep_cost, pa.sold_as, pa.units_per_pack, pa.unique_products,
+            pa.id AS po_asin_id, pa.asin, pa.asin_name, pa.qty AS asin_qty, pa.cost_per_unit, pa.prep_cost, pa.sold_as, pa.units_per_pack, pa.unique_products,
             l.position, l.product_name, l.qty_ordered, l.asin_qty_per_product, l.retailer_units_per_product, l.asin_units_per_pack, ${lineCanceled} AS canceled,
             (SELECT COUNT(*)::int FROM po_line_items l2 WHERE l2.po_asin_id = pa.id) AS line_count
        FROM po_line_items l JOIN po_asins pa ON pa.id = l.po_asin_id JOIN purchase_orders p ON p.id = pa.po_id
@@ -127,6 +127,7 @@ export async function loadAfPoRows(query: QueryLike): Promise<{ rows: SheetRow[]
       shipsTo: r.ships_to === "home" ? "home" : "velocity",
       asinUnitsMissing,
       lineNumber: (Number(r.position) || 0) + 1,
+      poAsinId: String(r.po_asin_id),
     };
   });
   return { rows, rawRowsRead: rows.length, blankAsinRows: 0 };

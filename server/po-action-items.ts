@@ -96,7 +96,14 @@ export const ASIN_ACTION_ITEMS_SQL = `ARRAY(${openLineItemsSql("l.po_asin_id = p
  * review reason and was not cleared by hand. Since PO table v2 the item itself
  * is stored on every line (reconcileReviewVelocity mirrors this condition).
  */
-export const REVIEW_VELOCITY_EXISTS_SQL = `EXISTS (SELECT 1 FROM po_tracking t WHERE t.po_id = p.id AND t.review_reason IS NOT NULL AND t.suppressed_at IS NULL)`;
+export const HOME_PO_REVIEW_REASON = "Velocity has an order for a Home PO";
+/**
+ * The second source (2026-11-07, migration 099): Sync Shipments matched a
+ * Velocity order to this PO while its ships_to is 'home'. Open until ships_to
+ * is corrected or it is cleared by hand (velocity_home_cleared_at).
+ */
+export const HOME_PO_REVIEW_OPEN_SQL = `(p.velocity_home_orders IS NOT NULL AND p.ships_to = 'home' AND p.velocity_home_cleared_at IS NULL)`;
+export const REVIEW_VELOCITY_EXISTS_SQL = `(EXISTS (SELECT 1 FROM po_tracking t WHERE t.po_id = p.id AND t.review_reason IS NOT NULL AND t.suppressed_at IS NULL) OR ${HOME_PO_REVIEW_OPEN_SQL})`;
 /** The PO's items that block auto-close: everything except FBA receiving mismatch (received never drives anything). */
 export const PO_CLOSE_ACTION_ITEMS_SQL = `ARRAY(${openLineItemsSql("l.po_id = p.id")}
   UNION SELECT '${EXTRA_UNITS_SHIPPED}' WHERE ${EXTRA_UNITS_EXISTS_SQL}
@@ -115,4 +122,5 @@ export const PO_ACTION_ITEMS_SQL = `ARRAY(${openLineItemsSql("l.po_id = p.id")}
   ${replacementTrackingItemsSql("p.id")})`;
 /** The open review reasons of a PO (alias p), for the Action Items tooltip. */
 export const REVIEW_VELOCITY_REASONS_SQL = `ARRAY(SELECT DISTINCT r FROM po_tracking t, unnest(string_to_array(t.review_reason, '; ')) r
-  WHERE t.po_id = p.id AND t.review_reason IS NOT NULL AND t.suppressed_at IS NULL)`;
+  WHERE t.po_id = p.id AND t.review_reason IS NOT NULL AND t.suppressed_at IS NULL
+  UNION SELECT '${HOME_PO_REVIEW_REASON}' WHERE ${HOME_PO_REVIEW_OPEN_SQL})`;

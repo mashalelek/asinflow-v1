@@ -215,10 +215,13 @@ describe("Velocity eligibility: never a Home PO or one dated before tracking.vel
     expect(r.counts).toMatchObject({ linesMatched: 1, linesMatchedColP: 1, linesPoNotFound: 0 });
     expect(r.ruleLinks[0].poAsinId).toBe("v");
   });
-  it("exact key, base order # and §4 skip an ineligible PO; the panel says why", async () => {
+  it("exact key, base order # and §4 skip an ineligible PO; the panel says why — but an order # match to a Home PO is matched and flagged (2026-11-07)", async () => {
     const home = row({ id: "h", asin: "B1", order_id: "ORD1", supplier: "x.com", order_date: "2026-05-01", qty: 5, ships_to: "home" } as any);
-    const r = await harness([home], [{ line: vline({ order_number: "ORD1", retailer: "x.com", asin: "B1", date: "05/02/2026" }) }], { velocityStart: START }).run(true);
-    expect(r.counts).toMatchObject({ linesMatched: 0, linesPoNotFound: 1 });
+    const r0 = await harness([home], [{ line: vline({ order_number: "ORD1", retailer: "x.com", asin: "B1", date: "05/02/2026" }) }], { velocityStart: START }).run(true);
+    expect(r0.counts).toMatchObject({ linesMatched: 1, linesPoNotFound: 0, homeOrders: 1 });
+    expect(r0.homeOrders).toEqual([{ poId: "p-h", orders: ["ORD1"] }]);
+    const r = await harness([home], [{ line: vline({ order_number: "ORD1_1", retailer: "x.com", asin: "B1", date: "05/02/2026" }) }], { velocityStart: START }).run(true);
+    expect(r.counts).toMatchObject({ linesMatched: 0, linesPoNotFound: 1, homeOrders: 0 });
     expect(r.unmatched[0].miss).toBe("PO ORD1 (x.com) ships to Home, not Velocity — not offered");
     const old = row({ id: "o", asin: "B1", order_id: "ORD1", supplier: "x.com", order_date: "2026-03-01", qty: 5, ships_to: "velocity" } as any);
     const r2 = await harness([old], [{ line: vline({ order_number: "ORD1_1", retailer: "x.com", asin: "B1", date: "03/02/2026" }) }], { velocityStart: START }).run(true);

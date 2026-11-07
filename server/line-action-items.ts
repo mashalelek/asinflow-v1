@@ -7,7 +7,7 @@
 // (Extra units shipped, pack size, FBA receiving mismatch) are never stored.
 import type { QueryLike } from "./scheduler/types";
 import { ACTION_ITEMS, REVIEW_VELOCITY } from "./po-status-map";
-import { asinWriteThrough, REVIEW_VELOCITY_EXISTS_SQL } from "./po-action-items";
+import { asinWriteThrough, REVIEW_VELOCITY_EXISTS_SQL, HOME_PO_REVIEW_REASON, HOME_PO_REVIEW_OPEN_SQL } from "./po-action-items";
 import { EditError, logEdits } from "./po-edit";
 import { DEFECT_ACTION_ITEM } from "@shared/po-defect";
 
@@ -73,10 +73,12 @@ async function withoutDefectEcho(query: QueryLike, lineIds: readonly string[], c
 }
 
 /**
- * Review Velocity (SPEC §26) mirrored from po_tracking onto every line of each
+ * Review Velocity (SPEC §26) mirrored from po_tracking — and, since
+ * 2026-11-07, from a Velocity order on a Home PO — onto every line of each
  * PO: open with the current reasons while the condition holds (a new line, or
  * changed reasons, are brought in line); cleared when it does not — 'manual'
- * when the PO's review rows were cleared by hand (suppressed_at), else 'auto'.
+ * when the PO's review was cleared by hand (suppressed_at /
+ * velocity_home_cleared_at), else 'auto'.
  */
 export async function reconcileReviewVelocity(query: QueryLike, poIds: readonly string[]): Promise<{ set: number; cleared: number }> {
   const ids = Array.from(new Set(poIds.filter(Boolean).map(String)));
@@ -84,9 +86,11 @@ export async function reconcileReviewVelocity(query: QueryLike, poIds: readonly 
   const cond = (await query(
     `SELECT p.id,
             ${REVIEW_VELOCITY_EXISTS_SQL} AS open,
-            (SELECT string_agg(DISTINCT t.review_reason, '; ' ORDER BY t.review_reason) FROM po_tracking t
-              WHERE t.po_id = p.id AND t.review_reason IS NOT NULL AND t.suppressed_at IS NULL) AS reasons,
-            EXISTS (SELECT 1 FROM po_tracking t WHERE t.po_id = p.id AND t.review_reason IS NOT NULL AND t.suppressed_at IS NOT NULL) AS suppressed
+            (SELECT string_agg(DISTINCT r, '; ' ORDER BY r) FROM (
+               SELECT t.review_reason AS r FROM po_tracking t WHERE t.po_id = p.id AND t.review_reason IS NOT NULL AND t.suppressed_at IS NULL
+               UNION SELECT '${HOME_PO_REVIEW_REASON}' WHERE ${HOME_PO_REVIEW_OPEN_SQL}) x) AS reasons,
+            (EXISTS (SELECT 1 FROM po_tracking t WHERE t.po_id = p.id AND t.review_reason IS NOT NULL AND t.suppressed_at IS NOT NULL)
+              OR (p.velocity_home_orders IS NOT NULL AND p.velocity_home_cleared_at IS NOT NULL)) AS suppressed
        FROM purchase_orders p WHERE p.id = ANY($1::uuid[])`, [ids],
   )).rows as Array<{ id: string; open: boolean; reasons: string | null; suppressed: boolean }>;
   let set = 0, cleared = 0;
