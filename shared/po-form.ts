@@ -455,7 +455,7 @@ export function checkPoForm(f: PoFormState): PoFormCheck {
   const postDiscountSubtotal = r2(effectiveOrderTotal - n("tax") - n("sh_donations"));
   // Per promo (2026-11-05): the promos whose amounts close the gap subtotal − Σ line totals are already in the prices.
   const promoAmt = promoList.map((p) => { const a = moneyNum(p.amount ?? ""); return a == null || Number.isNaN(a) ? null : a; });
-  const refl = reflectedPromos({ linesSum: computedSubtotal, subtotal: hasTypedSubtotal ? typedSubtotal! : null, discount: n("discount"), promoAmounts: promoAmt, postDiscountSubtotal, answers: promoList.map((p) => p.in_line_prices ?? null),
+  const refl = reflectedPromos({ linesSum: computedSubtotal, subtotal: hasTypedSubtotal ? typedSubtotal! : null, discount: n("discount"), promoAmounts: promoAmt, postDiscountSubtotal, answers: promoList.map((p) => p.in_line_prices ?? null), kinds: promoList.map((p) => String(p.type ?? "")),
     // Sequence (2026-11-06): a %-only promo takes its % of the running total, starting from Σ regular price × qty when the lines carry one.
     percents: promoList.map((p) => { const v = Number(String(p.percent ?? "").replace(/[%\s]/g, "")); return String(p.percent ?? "").trim() !== "" && Number.isFinite(v) ? v : null; }), sequenceBase: allocationBase ?? subtotal });
   const discountReflected = refl.all;

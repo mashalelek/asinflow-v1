@@ -98,6 +98,29 @@ describe("reflectedPromos", () => {
   });
 });
 
+// Maria 2026-11-07 (Michaels 4600111212062213): regular 114.80, the 30% sale 34.50 in the line prices (80.30), a $20 voucher at the total.
+describe("reflectedPromos — sale / coupon vs rewards", () => {
+  const m = { linesSum: 80.3, subtotal: 114.8, discount: 54.5, postDiscountSubtotal: 60.3, kinds: ["sale", "rewards"] };
+  it("the lines are compared with subtotal − the sale / coupon promos only: the sale is in the prices, the voucher is not", () => {
+    expect(reflectedPromos({ ...m, promoAmounts: [34.5, 20] })).toMatchObject({ all: false, reflected: [true, false], reflectedAmount: 34.5, amounts: [34.5, 20] });
+  });
+  it("a wrong sale amount (42.75 read off the page) is pinned to subtotal − Σ line totals", () => {
+    expect(reflectedPromos({ ...m, promoAmounts: [42.75, 20] })).toMatchObject({ reflected: [true, false], reflectedAmount: 34.5, amounts: [34.5, 20] });
+    // Without a subtotal the discount − the rewards is what the lines carry.
+    expect(reflectedPromos({ ...m, subtotal: null, promoAmounts: [42.75, 20] })).toMatchObject({ reflected: [true, false], reflectedAmount: 34.5, amounts: [42.75, 20] });
+    // Without the types the old rule stands: the wrong amount closes no gap.
+    expect(reflectedPromos({ ...m, kinds: undefined, promoAmounts: [42.75, 20] })).toMatchObject({ reflected: [false, false], reflectedAmount: 0 });
+  });
+  it("regular-price lines: nothing is in the prices; an answer still wins", () => {
+    expect(reflectedPromos({ ...m, linesSum: 114.8, promoAmounts: [42.75, 20] })).toMatchObject({ reflected: [false, false], reflectedAmount: 0, amounts: [42.75, 20] });
+    expect(reflectedPromos({ ...m, promoAmounts: [34.5, 20], answers: [false, null] })).toMatchObject({ reflected: [false, false], reflectedAmount: 0 });
+  });
+  it("promoCostHeader: the sale leaves the discount, the voucher stays in it (not counting)", () => {
+    const r = reflectedPromos({ ...m, promoAmounts: [42.75, 20] });
+    expect(promoCostHeader({ subtotal: 114.8, discount: 54.5, gcPct: 12.04 }, 80.3, [{ counts: true }, { counts: false }], r)).toMatchObject({ subtotal: 80.3, discount: 20, nonCountingPromoAmount: 20 });
+  });
+});
+
 describe("promo sequence (Maria 2026-11-06)", () => {
   it("$ and % stacked: order matters — $10 then 20% on $100 pays $72, 20% then $10 pays $70", () => {
     const a = sequencedPromoAmounts(100, [{ amount: 10, percent: null }, { amount: null, percent: 20 }]);

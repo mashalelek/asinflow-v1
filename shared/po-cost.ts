@@ -160,6 +160,8 @@ export function sequencedPromoAmounts(base: number, promos: ReadonlyArray<{ amou
   });
 }
 export function reflectedPromos(a: { linesSum: number; subtotal: number | null; discount: number; promoAmounts: ReadonlyArray<number | null>; postDiscountSubtotal: number | null; answers?: ReadonlyArray<boolean | null | undefined>;
+  /** Per promo its type (sale / coupon / rewards): a rewards voucher is applied at the total, never in a line price. */
+  kinds?: ReadonlyArray<string | null | undefined>;
   /** Per promo its %, and the total the first one applies to (Σ regular price × qty when the lines carry one, else the subtotal): a % promo without a $ amount takes its sequenced amount. */
   percents?: ReadonlyArray<number | null>; sequenceBase?: number | null }): PromoReflection {
   const auto = autoReflected(a);
@@ -169,7 +171,7 @@ export function reflectedPromos(a: { linesSum: number; subtotal: number | null; 
   const reflected = auto.reflected.map((r, i) => (ans[i] != null ? !!ans[i] : r));
   return { ...auto, all: false, reflected, reflectedAmount: r2(reflected.reduce((t, x, i) => t + (x ? auto.amounts[i] ?? 0 : 0), 0)), needsAnswer: auto.needsAnswer.filter((i) => ans[i] == null) };
 }
-function autoReflected(a: { linesSum: number; subtotal: number | null; discount: number; promoAmounts: ReadonlyArray<number | null>; postDiscountSubtotal: number | null; percents?: ReadonlyArray<number | null>; sequenceBase?: number | null }): PromoReflection {
+function autoReflected(a: { linesSum: number; subtotal: number | null; discount: number; promoAmounts: ReadonlyArray<number | null>; postDiscountSubtotal: number | null; kinds?: ReadonlyArray<string | null | undefined>; percents?: ReadonlyArray<number | null>; sequenceBase?: number | null }): PromoReflection {
   const n = a.promoAmounts.length, discount = a.discount || 0;
   const amounts = a.promoAmounts.map((x) => (x != null && Number.isFinite(x) ? x : null));
   const missing = amounts.map((x, i) => (x == null ? i : -1)).filter((i) => i >= 0);
@@ -182,10 +184,23 @@ function autoReflected(a: { linesSum: number; subtotal: number | null; discount:
     for (const i of missing) amounts[i] = seq[i];
   }
   const none: PromoReflection = { all: false, reflected: amounts.map(() => false), reflectedAmount: 0, amounts, ambiguous: false, fits: [], needsAnswer: [] };
+  const gap = a.subtotal != null && Number.isFinite(a.subtotal) ? a.subtotal - a.linesSum : 0;
+  // Sale / coupon vs rewards (Maria 2026-11-07, Michaels 4600111212062213): the lines can carry only the sale / coupon promos, so
+  // they are compared with subtotal − those promos — Σ line totals = the post-discount subtotal + the rewards (80.30 = 60.30 + 20).
+  // When the subtotal is the regular-price total, the one sale / coupon promo is subtotal − Σ line totals (34.50), whatever was typed.
+  const isRewards = (i: number) => a.kinds?.[i] === "rewards";
+  const others = amounts.map((_, i) => i).filter((i) => !isRewards(i));
+  const pinOne = () => { if (a.kinds && others.length === 1 && gap > REFLECTED_TOLERANCE) amounts[others[0]] = r2(gap); };
+  const rewards = a.kinds ? amounts.reduce<number>((t, x, i) => t + (isRewards(i) ? x ?? NaN : 0), 0) : 0;
   if (discountReflectedInLines({ linesSum: a.linesSum, discount, promoAmounts: discount > 0 ? 0 : known, postDiscountSubtotal: a.postDiscountSubtotal })) {
+    if (!(rewards > 0)) pinOne();
     return { ...none, all: true, reflected: amounts.map(() => true), reflectedAmount: discount > 0 ? discount : known };
   }
-  const gap = a.subtotal != null && Number.isFinite(a.subtotal) ? a.subtotal - a.linesSum : 0;
+  if (rewards > 0 && others.length > 0 && a.postDiscountSubtotal != null && Math.abs(a.linesSum - (a.postDiscountSubtotal + rewards)) <= REFLECTED_TOLERANCE + 1e-9) {
+    pinOne();
+    const inLines = gap > REFLECTED_TOLERANCE ? gap : discount - rewards > REFLECTED_TOLERANCE ? discount - rewards : others.reduce((t, i) => t + (amounts[i] ?? 0), 0);
+    return { ...none, reflected: amounts.map((_, i) => !isRewards(i)), reflectedAmount: r2(inLines), fits: [others] };
+  }
   if (!(gap > REFLECTED_TOLERANCE) || n === 0 || n > MAX_SUBSET_PROMOS) return none;
   const fits: number[][] = [];
   for (let mask = 1; mask < 1 << n; mask++) {
