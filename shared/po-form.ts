@@ -467,6 +467,13 @@ export function checkPoForm(f: PoFormState): PoFormCheck {
       ? `Line totals ${computedSubtotal.toFixed(2)} match neither the subtotal ${typedSubtotal!.toFixed(2)} nor the subtotal after discount ${postDiscountSubtotal.toFixed(2)}`
       : `Subtotal ${typedSubtotal!.toFixed(2)} differs from the line totals ${computedSubtotal.toFixed(2)}`);
   }
+  // The promos against the Discount field (Maria 2026-11-07, Michaels: a prefilled sale of 42.75 beside a 54.50 discount and a $20 voucher).
+  // A promo marked "in prices" that was never part of the discount (a free-item deal) may stand outside it, so either sum fitting is fine.
+  if (promoList.length > 0 && promoAmt.every((x) => x != null) && n("discount") > 0) {
+    const all = r2(promoAmt.reduce<number>((t, x) => t + (x ?? 0), 0));
+    const outside = r2(promoAmt.reduce<number>((t, x, i) => t + (promoList[i].in_line_prices === true ? 0 : x ?? 0), 0));
+    if (Math.abs(all - n("discount")) > REFLECTED_TOLERANCE + 1e-9 && Math.abs(outside - n("discount")) > REFLECTED_TOLERANCE + 1e-9) warnings.push(`Promos add up to ${all.toFixed(2)}, the discount is ${n("discount").toFixed(2)}`);
+  }
   // §7.2 counting pass: a non-counting promo without an amount cannot be added back (moot when that promo is reflected).
   let nonCountingPromoAmount = 0;
   if (!discountReflected) promoList.forEach((p, i) => {

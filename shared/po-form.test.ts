@@ -260,3 +260,29 @@ describe("followPacks", () => {
   });
 });
 
+// Maria 2026-11-07, michaels.com 4600111212062213: regular 10 × 5.99 + 10 × 5.49 = 114.80, the 30% sale 34.50 (lines 4.19 / 3.84 =
+// 80.30), a $20 rewards voucher (COGS off), total 60.30 = card 4.45 + gift cards 5.85 + 50.00 at 13% (weighted 12.04%).
+describe("checkPoForm — Michaels sale + voucher, entered both ways", () => {
+  const prod = (price: string, asin: string, regular?: string) => ({ ...emptyProduct(), product_name: asin, price, qty_ordered: "10", asin, sold_as: "individual" as const, units_per_pack: "1", prep_cost: "1", ...(regular ? { regular_price: regular } : {}) });
+  const form = (lines: [string, string, string?, string?], sale: string): PoFormState => ({ ...emptyPoForm("2026-11-07"), supplier: "michaels.com", order_id: "4600111212062213", subtotal: "114.80", discount: "54.50", order_total: "60.30",
+    products: [prod(lines[0], "B08BR4NC22", lines[2]), prod(lines[1], "B01A5Y5HMG", lines[3])],
+    promos: [{ type: "sale", description: "30% on regular priced items", amount: sale, percent: "30", counts_toward_cogs: true }, { type: "rewards", description: "$20 Rewards Voucher", amount: "20.00", percent: "", counts_toward_cogs: false }],
+    payments: [{ ...emptyPayment(), method: "card", nickname: "card", last4: "1111", amount: "4.45" }, { ...emptyPayment(), method: "gift_card", nickname: "gc", amount: "5.85", gift_card_discount_pct: "13" }, { ...emptyPayment(), method: "gift_card", nickname: "gc", amount: "50.00", gift_card_discount_pct: "13" }] } as PoFormState);
+  const costs = (f: PoFormState) => checkPoForm(f).asins.map((a) => [a.sourcing_cost, a.cost_per_unit, a.paid_cost]);
+  const expected = [["4.19", "3.69", "2.77"], ["3.84", "3.38", "2.54"]];
+  const styles: Array<[string, [string, string, string?, string?]]> = [["regular-price lines", ["5.99", "5.49"]], ["sale-price lines", ["4.19", "3.84"]], ["sale-price lines + regular price", ["4.19", "3.84", "5.99", "5.49"]]];
+  for (const [name, lines] of styles) {
+    it(`${name}: sourcing 4.19 / 3.84, COGS 3.69 / 3.38, Paid 2.77 / 2.54 — sale 34.50 or a misread 42.75`, () => {
+      expect(costs(form(lines, "34.50"))).toEqual(expected);
+      expect(costs(form(lines, "42.75"))).toEqual(expected);
+      const r = checkPoForm(form(lines, "34.50"));
+      expect(r.weightedGcPct).toBe(12.04);
+      expect(r.errors).toEqual([]);
+      expect(r.warnings).toEqual([]);
+      expect(r.promoReflected).toEqual(lines[0] === "4.19" ? [true, false] : [false, false]);
+      // The misread amount is flagged against the Discount field; the old "match neither" warning never fires.
+      expect(checkPoForm(form(lines, "42.75")).warnings).toEqual(["Promos add up to 62.75, the discount is 54.50"]);
+    });
+  }
+});
+
