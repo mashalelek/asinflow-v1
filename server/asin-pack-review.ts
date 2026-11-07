@@ -168,9 +168,10 @@ export async function applyPackDecision(query: QueryLike, asin: string, d: PackD
 
 /**
  * Maria sets or confirms an ASIN's pack (the ASINs table, Confirm, an upload): confirmed with her as the source, History,
- * the suggestion cleared, every PO row with no pack filled (open rows always, closed only where it reproduces).
+ * the suggestion cleared, every PO row with no pack filled STRICTLY by default (Maria 2026-11-06: open rows too only
+ * where the pack reproduces the stored Ordered — a non-fitting row is listed in gaps.skipped, not written).
  */
-export async function setAsinPack(query: QueryLike, asin: string, p: PackValue, userId: number | null, source: "manual" | "upload", opts: { strict?: boolean } = {}): Promise<{ asin: string; changed: boolean; gaps: ApplyResult["gaps"] & { openSkipped?: number; skipped?: PackGapSkip[] } }> {
+export async function setAsinPack(query: QueryLike, asin: string, p: PackValue, userId: number | null, source: "manual" | "upload", opts: { strict?: boolean } = { strict: true }): Promise<{ asin: string; changed: boolean; gaps: ApplyResult["gaps"] & { openSkipped?: number; skipped?: PackGapSkip[] } }> {
   const a = asin.toUpperCase();
   if (!["individual", "multi-pack", "bundle"].includes(p.sold_as)) throw new EditError(400, "sold as must be individual, multi-pack or bundle");
   const units = p.sold_as === "individual" ? 1 : Number(p.units);
@@ -187,12 +188,13 @@ export async function setAsinPack(query: QueryLike, asin: string, p: PackValue, 
 }
 
 /** Bulk Confirm: each selected ASIN's suggestion becomes its pack (one with no suggestion, or already confirmed, is skipped). */
-export async function confirmPackSuggestions(query: QueryLike, asins: string[], userId: number | null): Promise<{ confirmed: number; skipped: number; gaps: ApplyResult["gaps"] }> {
+export async function confirmPackSuggestions(query: QueryLike, asins: string[], userId: number | null): Promise<{ confirmed: number; skipped: number; gaps: ApplyResult["gaps"] & { openSkipped: number; skipped: Array<PackGapSkip & { asin: string }> } }> {
   const rows = (await query(`SELECT asin, pack_suggested_sold_as, pack_suggested_units FROM asins WHERE asin = ANY($1::text[]) AND sold_as IS NULL AND pack_suggested_sold_as IS NOT NULL`, [asins.map((x) => x.toUpperCase())])).rows;
-  const gaps = { openRows: 0, closedRows: 0, closedSkipped: 0, lines: 0 };
+  const gaps = { openRows: 0, closedRows: 0, closedSkipped: 0, lines: 0, openSkipped: 0, skipped: [] as Array<PackGapSkip & { asin: string }> };
   for (const r of rows) {
     const g = (await setAsinPack(query, r.asin, { sold_as: r.pack_suggested_sold_as, units: Number(r.pack_suggested_units) || 1 }, userId, "manual")).gaps;
     gaps.openRows += g.openRows; gaps.closedRows += g.closedRows; gaps.closedSkipped += g.closedSkipped; gaps.lines += g.lines;
+    gaps.openSkipped += g.openSkipped ?? 0; for (const s of g.skipped ?? []) gaps.skipped.push({ ...s, asin: r.asin });
   }
   return { confirmed: rows.length, skipped: asins.length - rows.length, gaps };
 }

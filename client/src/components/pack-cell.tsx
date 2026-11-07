@@ -11,7 +11,7 @@ import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover
 import { useToast } from "@/hooks/use-toast";
 import { packStatus, PACK_REASON_LABEL, PACK_SOURCE_LABEL, type AsinPack, type AsinResult } from "@shared/schema";
 
-type Gaps = { openRows: number; closedRows: number; closedSkipped: number; lines: number };
+type Gaps = { openRows: number; closedRows: number; closedSkipped: number; lines: number; openSkipped?: number; skipped?: Array<{ order_id?: string; closed: boolean; qty: number; at_pack: number | null; asin?: string }> };
 
 /** Pure: the hover text — the status, where the value came from, why it waits for review, the evidence. */
 export function packTitle(p: AsinPack | undefined): string {
@@ -30,8 +30,13 @@ export function packShown(p: AsinPack | undefined): { soldAs: string; units: num
   return null;
 }
 
-export const gapsNote = (g: Gaps): string =>
-  g.openRows + g.closedRows === 0 ? "" : `filled ${g.openRows} open and ${g.closedRows} closed PO row${g.openRows + g.closedRows === 1 ? "" : "s"}${g.closedSkipped ? ` (${g.closedSkipped} closed left: quantities don't fit)` : ""}`;
+/** Pure: the toast text — rows filled, and each row left because the pack does not reproduce its ASIN qty (strict, 2026-11-06). */
+export function gapsNote(g: Gaps): string {
+  const filled = g.openRows + g.closedRows === 0 ? "" : `filled ${g.openRows} open and ${g.closedRows} closed PO row${g.openRows + g.closedRows === 1 ? "" : "s"}`;
+  const left = (g.skipped ?? []).map((s) => `${s.asin ? `${s.asin} ` : ""}${s.order_id ?? "a PO"}${s.closed ? "" : " (open)"}: ASIN qty ${s.qty}, this pack gives ${s.at_pack ?? "no whole number"}`);
+  const leftTxt = left.length ? `not written — the pack doesn't reproduce the stored ASIN qty: ${left.slice(0, 5).join("; ")}${left.length > 5 ? ` +${left.length - 5} more` : ""}` : "";
+  return [filled, leftTxt].filter(Boolean).join(" · ");
+}
 
 export async function savePack(asin: string, soldAs: string, units: number): Promise<{ gaps: Gaps }> {
   const res = await fetch(`/api/asins/${encodeURIComponent(asin)}/pack-size`, { method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ sold_as: soldAs, units_per_pack: units }) });

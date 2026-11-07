@@ -401,7 +401,7 @@ export async function editAsinRow(query: QueryLike, poAsinId: string, body: unkn
 
 export interface AsinPackSetResult { asin: string; sold_as: string; units_per_pack: number; openRows: number; closedRows: number; closedSkipped: number; lines: number; openSkipped?: number; skipped?: PackGapSkip[] }
 /** A PO row the pack was not written to because it does not reproduce the row's stored Ordered (strict fill). */
-export interface PackGapSkip { po_asin_id: string; po_id: string; closed: boolean; qty: number; at_pack: number | null }
+export interface PackGapSkip { po_asin_id: string; po_id: string; order_id?: string; closed: boolean; qty: number; at_pack: number | null }
 
 /**
  * An ASIN with NO pack on record (Maria 2026-11-06): a pack entered on a PO sets the record without asking
@@ -438,7 +438,7 @@ export async function fillAsinPackGaps(query: QueryLike, asin: string, soldAs: "
   // strict (Maria 2026-11-06, the open-PO review): an open row too is written only when the pack reproduces its stored Ordered; the rest are listed.
   const out = { openRows: 0, closedRows: 0, closedSkipped: 0, lines: 0, openSkipped: 0, skipped: [] as PackGapSkip[] };
   const rows = (await query(
-    `SELECT pa.id, pa.po_id, pa.qty, p.closed_at IS NOT NULL AS closed FROM po_asins pa JOIN purchase_orders p ON p.id = pa.po_id
+    `SELECT pa.id, pa.po_id, pa.qty, p.order_id, p.closed_at IS NOT NULL AS closed FROM po_asins pa JOIN purchase_orders p ON p.id = pa.po_id
       WHERE pa.asin = $1 AND pa.sold_as IS NULL AND pa.id::text <> $2`, [a, excludePoAsinId ?? ""],
   )).rows;
   for (const r of rows) {
@@ -447,7 +447,7 @@ export async function fillAsinPackGaps(query: QueryLike, asin: string, soldAs: "
     const reproduces = fit != null && lines.length > 0 && Math.abs(fit.units - Number(r.qty)) <= 0.01 + 1e-9;
     if (!reproduces && (r.closed || opts.strict)) {
       if (r.closed) out.closedSkipped++; else out.openSkipped++;
-      out.skipped.push({ po_asin_id: String(r.id), po_id: String(r.po_id), closed: !!r.closed, qty: Number(r.qty), at_pack: fit ? fit.units : null });
+      out.skipped.push({ po_asin_id: String(r.id), po_id: String(r.po_id), ...(r.order_id != null ? { order_id: String(r.order_id) } : {}), closed: !!r.closed, qty: Number(r.qty), at_pack: fit ? fit.units : null });
       continue;
     }
     const poId = String(r.po_id);
