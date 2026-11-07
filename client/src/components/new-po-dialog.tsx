@@ -31,7 +31,7 @@ import { Label } from "@/components/ui/label";
 import { MoneyCalcInput, calcMoney } from "@/components/money-calc-input";
 import { useAuth } from "@/contexts/auth-context";
 import {
-  checkPoForm, emptyPoForm, emptyProduct, emptyPromo, emptyPayment, shipsToFromForm, yieldFromPacks, promoCountsByDefault, resolvePaymentNickname, ambiguousPaymentHint, defaultRewardPct, WEIGHTED_PAYMENT_LABEL, PROMO_REFLECTED_NOTE,
+  checkPoForm, emptyPoForm, emptyProduct, emptyPromo, emptyPayment, shipsToFromForm, yieldFromPacks, promoCountsByDefault, resolvePaymentNickname, ambiguousPaymentHint, defaultRewardPct, WEIGHTED_PAYMENT_LABEL, PROMO_REFLECTED_NOTE, PROMO_FROM_LINES_NOTE,
   SOLD_AS_OPTIONS, PROMO_TYPES, PAYMENT_METHODS, CASHBACK_STATUSES,
   type PoFormState, type PoFormProduct, type PoFormPromo, type PoFormPayment, type PoFormPrefill, type PrefillSource, asinPackSetLabel, asinPackSetNote, followPacks } from "@shared/po-form";
 import { editBlockingErrors } from "@shared/po-edit-form";
@@ -567,6 +567,7 @@ export function NewPoForm({ open, onOpenChange, onCreated, prefill, initialSuppl
               <Input value={p.description} onChange={(e) => setPromo(i, { description: e.target.value })} placeholder="15% off with WELCOME15" className="h-8 min-w-[12rem] flex-1 text-xs" data-testid={`input-new-po-promo-desc-${i}`} />
               <MoneyCalcInput value={p.amount} onChange={(v) => setPromo(i, { amount: v })} placeholder="$" title={hint(`promos.${i}.amount`)} className="h-8 w-20 text-right text-xs" data-testid={`input-new-po-promo-amount-${i}`} />
               <Input value={p.percent} onChange={(e) => setPromo(i, { percent: e.target.value })} placeholder="%" inputMode="decimal" className="h-8 w-14 text-right text-xs" data-testid={`input-new-po-promo-pct-${i}`} />
+              {String(p.amount ?? "").trim() !== "" && check.promoAmountsUsed[i] != null && Math.abs(Number(String(p.amount).replace(/[$,\s]/g, "")) - check.promoAmountsUsed[i]!) > 0.005 && <span className="font-mono text-[11px] text-amber-700" title={`The costs use ${check.promoAmountsUsed[i]!.toFixed(2)}, not the amount typed: ${PROMO_FROM_LINES_NOTE}`} data-testid={`new-po-promo-used-${i}`}>uses {check.promoAmountsUsed[i]!.toFixed(2)}</span>}
               {!String(p.amount ?? "").trim() && check.promoAmountsUsed[i] != null && <span className="font-mono text-[11px] text-muted-foreground" title="This promo's $: its % of the running total after the promos above it (or the discount less the others)" data-testid={`new-po-promo-computed-${i}`}>= {check.promoAmountsUsed[i]!.toFixed(2)}</span>}
               <label className="flex items-center gap-1 text-xs" title="Counts toward COGS"><input type="checkbox" checked={p.counts_toward_cogs} onChange={(e) => setPromo(i, { counts_toward_cogs: e.target.checked })} data-testid={`input-new-po-promo-counts-${i}`} /> COGS</label>
               {!edit?.imported && (check.promoNeedsAnswer.includes(i) || p.in_line_prices != null) && (

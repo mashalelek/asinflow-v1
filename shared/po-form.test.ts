@@ -1,6 +1,6 @@
 import { describe, it, expect } from "vitest";
 import { copyUnits } from "./po-lines";
-import { followPacks, checkPoForm, emptyPoForm, emptyProduct, emptyPayment, weightedPaymentPct, weightedPaymentPctExact, canonicalPaymentName, resolvePaymentNickname, ambiguousPaymentHint, promoCountsByDefault, PROMO_REFLECTED_NOTE, type PoFormState } from "./po-form";
+import { followPacks, checkPoForm, emptyPoForm, emptyProduct, emptyPayment, weightedPaymentPct, weightedPaymentPctExact, canonicalPaymentName, resolvePaymentNickname, ambiguousPaymentHint, promoCountsByDefault, PROMO_REFLECTED_NOTE, PROMO_FROM_LINES_NOTE, type PoFormState } from "./po-form";
 
 // po-af-owned §4 (2026-10-18): the New PO form's validation and derived rows.
 const base = (over: Partial<PoFormState> = {}): PoFormState => ({
@@ -280,8 +280,16 @@ describe("checkPoForm — Michaels sale + voucher, entered both ways", () => {
       expect(r.errors).toEqual([]);
       expect(r.warnings).toEqual([]);
       expect(r.promoReflected).toEqual(lines[0] === "4.19" ? [true, false] : [false, false]);
-      // The misread amount is flagged against the Discount field; the old "match neither" warning never fires.
-      expect(checkPoForm(form(lines, "42.75")).warnings).toEqual(["Promos add up to 62.75, the discount is 54.50"]);
+      // The typed amount is what is stored (po-create saves p.amount); regular-price lines use it as typed, never 0.
+      const mis = checkPoForm(form(lines, "42.75"));
+      expect(mis.promoAmountsUsed).toEqual(lines[0] === "4.19" ? [34.5, 20] : [42.75, 20]);
+      // Sale-price lines: the override is shown, never silent; the old "match neither" warning never fires.
+      expect(mis.warnings).toEqual([
+        ...(lines[0] === "4.19" ? [`Promo 1 (30% on regular priced items): 34.50 is used, not the 42.75 typed — ${PROMO_FROM_LINES_NOTE}`] : []),
+        "Promos add up to 62.75, the discount is 54.50",
+      ]);
+      // "In prices? no" keeps the typed amount.
+      if (lines[0] === "4.19") expect(checkPoForm({ ...form(lines, "42.75"), promos: (form(lines, "42.75").promos ?? []).map((p, i) => (i === 0 ? { ...p, in_line_prices: false } : p)) }).promoAmountsUsed).toEqual([42.75, 20]);
     });
   }
 });

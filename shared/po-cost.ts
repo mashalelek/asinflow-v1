@@ -169,7 +169,9 @@ export function reflectedPromos(a: { linesSum: number; subtotal: number | null; 
   if (!ans.some((x) => x != null)) return auto;
   if (auto.all && ans.every((x) => x == null || x === true)) return auto;
   const reflected = auto.reflected.map((r, i) => (ans[i] != null ? !!ans[i] : r));
-  return { ...auto, all: false, reflected, reflectedAmount: r2(reflected.reduce((t, x, i) => t + (x ? auto.amounts[i] ?? 0 : 0), 0)), needsAnswer: auto.needsAnswer.filter((i) => ans[i] == null) };
+  // "Not in the prices" keeps the typed amount: subtotal − Σ line totals is a line-price amount (2026-11-07).
+  const amounts = auto.amounts.map((x, i) => (ans[i] === false && a.promoAmounts[i] != null ? a.promoAmounts[i] : x));
+  return { ...auto, all: false, reflected, amounts, reflectedAmount: r2(reflected.reduce((t, x, i) => t + (x ? amounts[i] ?? 0 : 0), 0)), needsAnswer: auto.needsAnswer.filter((i) => ans[i] == null) };
 }
 function autoReflected(a: { linesSum: number; subtotal: number | null; discount: number; promoAmounts: ReadonlyArray<number | null>; postDiscountSubtotal: number | null; kinds?: ReadonlyArray<string | null | undefined>; percents?: ReadonlyArray<number | null>; sequenceBase?: number | null }): PromoReflection {
   const n = a.promoAmounts.length, discount = a.discount || 0;

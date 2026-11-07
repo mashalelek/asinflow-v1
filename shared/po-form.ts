@@ -44,6 +44,8 @@ export type PromoType = (typeof PROMO_TYPES)[number];
 /** §7.2 default: sale and coupon count toward COGS, rewards does not. A promo already reflected in the line prices (Maria 2026-11-01) defaults off whatever its type. */
 export const promoCountsByDefault = (type: string, discountReflected = false): boolean => !discountReflected && type !== "rewards";
 /** The note beside a promo's COGS toggle when the line prices already carry the discount. */
+/** A typed promo amount replaced in the costs (2026-11-07): the line prices carry the sale, so it is subtotal − Σ line totals. */
+export const PROMO_FROM_LINES_NOTE = "subtotal − line totals: the line prices already carry this sale";
 export const PROMO_REFLECTED_NOTE = "already reflected in line prices";
 /** The ambiguity question (Maria 2026-11-06): it blocks Create PO / Save until answered — on Edit PO too, even when the stored PO already had it. */
 export const PROMO_IN_PRICES_QUESTION = "Which promos are already in the prices?";
@@ -467,6 +469,11 @@ export function checkPoForm(f: PoFormState): PoFormCheck {
       ? `Line totals ${computedSubtotal.toFixed(2)} match neither the subtotal ${typedSubtotal!.toFixed(2)} nor the subtotal after discount ${postDiscountSubtotal.toFixed(2)}`
       : `Subtotal ${typedSubtotal!.toFixed(2)} differs from the line totals ${computedSubtotal.toFixed(2)}`);
   }
+  // Never silently (Maria 2026-11-07): a typed amount the costs do not use — a sale in the line prices is subtotal − Σ line totals.
+  promoList.forEach((p, i) => {
+    const typed = promoAmt[i], used = refl.amounts[i];
+    if (typed != null && used != null && Math.abs(typed - used) > 0.005) warnings.push(`Promo ${i + 1}${t(p.description) ? ` (${t(p.description)})` : ""}: ${used.toFixed(2)} is used, not the ${typed.toFixed(2)} typed — ${PROMO_FROM_LINES_NOTE}`);
+  });
   // The promos against the Discount field (Maria 2026-11-07, Michaels: a prefilled sale of 42.75 beside a 54.50 discount and a $20 voucher).
   // A promo marked "in prices" that was never part of the discount (a free-item deal) may stand outside it, so either sum fitting is fine.
   if (promoList.length > 0 && promoAmt.every((x) => x != null) && n("discount") > 0) {
