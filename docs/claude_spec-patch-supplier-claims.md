@@ -24,8 +24,9 @@ another PO" (2026-11-05) and its "until built" workaround: see §3.7.*
   `purchase_orders.alt_order_ids` (migration 086) so emails and tracking
   match there. Nothing about a replacement is ever sent to Velocity as a
   separate order.
-- **Carrier tracking aggregator is added in this patch** (commit 3a, §3.8).
-  Provider picked by Maria after a comparison.
+- **Carrier tracking aggregator is added in this patch** (commit 4, §3.8):
+  **EasyPost** (Maria 2026-11-07). Before it, a **tracking parser fix**
+  (commit 3, §3.9) so shipping emails that today yield no number get one.
 - **Legacy badges are part of the claims flow.** The manual action items
   "Missing / damaged from supplier" and "Confirm refund / replacement"
   convert to claims and leave the action-item list; chips come from claims
@@ -242,23 +243,56 @@ Velocity's view. Instead:
 
 AF reads tracking numbers from emails only and never queries a carrier;
 `po_tracking.status` is AF's own workflow, not the carrier's. This patch
-adds a carrier-tracking aggregator (provider chosen by Maria from a
-comparison of AfterShip / EasyPost / 17track: cost at her volume, carriers
-UPS / USPS / FedEx / OnTrac / LaserShip / Amazon, webhook vs poll).
-- Every open tracking row (inbound and return) is registered; status is
-  stored on `po_tracking`: `carrier_status`, `est_delivery_at`,
-  `last_scan_at`, `delivered_at`, `carrier_checked_at`.
-- Polled in the hourly pass (or webhook, per provider); stops once
-  delivered or 60 days old.
+adds **EasyPost's Tracker API** (Maria 2026-11-07). Why: volume is
+~200–250 packages/month (production, Aug–Oct 2026), almost all UPS / FedEx
+/ USPS plus a little DHL and Amazon, no OnTrac or LaserShip; EasyPost
+covers those, is pay-per-tracker (~$0.01–0.03, no monthly fee), and gives
+status, `est_delivery_date`, timestamped scan history, a return flag and
+`tracker.updated` webhooks. Alternatives compared: 17TRACK, Ship24,
+TrackingMore, AfterShip (all dearer at this volume).
+- Every open tracking row (inbound and return, `is_return` for returns) is
+  registered with `POST /trackers`; status is stored on `po_tracking`:
+  `carrier_status`, `est_delivery_at`, `last_scan_at` (latest
+  `tracking_details[].datetime`), `delivered_at`, `carrier_checked_at`,
+  `easypost_tracker_id`.
+- Updates by webhook (`tracker.updated` → a public endpoint verified with
+  EasyPost's webhook secret); a daily sweep re-reads trackers with no
+  update in 3 days as a backstop. Registration stops once delivered or 60
+  days old. Carriers EasyPost can't track (e.g. GLS) keep no carrier
+  status.
+- `EASYPOST_API_KEY` and the webhook secret are Render env vars; Maria
+  creates the account (stop before signup).
 - Velocity's per-tracking `tracking_status` (already in its GET, unused) is
   a fallback when the aggregator has nothing.
 - Feeds D8 (all delivered + lag), never_received (§3.1), return delivered
   (D7), and the backlog's prep-center performance work later.
 
+### 3.9 Tracking parser fix (new 2026-11-07)
+
+Probe, Aug–Nov 2026: 41 shipping emails became placeholder rows
+(`email:<sender>:<order #>`) with no tracking number. D8 can't fire on a PO
+whose packages have no number, so these are fixed before the aggregator:
+- **Walgreens** (mktx.walgreens.com): read the 12-digit number next to the
+  order # and the carrier the email names (USPS / FedEx).
+- **Follow the tracking link** (as AF already does for Michaels) for Duluth,
+  Ace, Zara, Typology (Klaviyo click-tracker), ui.com (AWS click-tracker),
+  Harbor Freight (parcel-api.versand-status.de), Golden Waffles / Café Mam
+  (Shopify), Lowe's (TPSD…), Summit Racing (Narvar); read number + carrier
+  from the landing page. A link that needs a login or yields nothing stays
+  a placeholder.
+- **GLS** added as a carrier (byrdhair.com via Shopify, 16 digits).
+- A placeholder row is replaced in place when a later email or link gives
+  the number, so it isn't counted twice.
+- Senders with no tracking at all (Sephora, LG, Equal Exchange) and
+  gift-card senders (giftcardoutlets) stay as they are: those POs rely on
+  the "nothing at all after 14 days" rule (§3.1).
+- Fixtures from the probe's rows, scrubbed; backfill over the existing
+  placeholders (dry run → report → live).
+
 ## 4. Data
 
 Existing tables, verified against migrations 028–098. One migration for
-§4.1–4.6, plus a second for §4.7 (aggregator columns) in commit 3a.
+§4.1–4.6, plus a second for §4.7 (aggregator columns) in commit 4.
 
 ### 4.1 `supplier_claims` (renames and widens `po_line_defects`, 094)
 
@@ -320,10 +354,10 @@ dismissed_by, dismissed_at`.
 - `po_edit_log`: entity CHECK gains `claim`.
 - `purchase_orders.alt_order_ids` (086): reship order #s go here; no change.
 
-### 4.7 Aggregator columns (commit 3a)
+### 4.7 Aggregator columns (commit 4)
 
 `po_tracking`: `carrier_status, est_delivery_at, last_scan_at,
-delivered_at, carrier_checked_at` (+ provider id if needed).
+delivered_at, carrier_checked_at, easypost_tracker_id`.
 
 ### 4.8 Migration of existing data (dry run → Maria reviews → live)
 
@@ -441,8 +475,7 @@ delivered_at, carrier_checked_at` (+ provider id if needed).
 
 1. ~~Legacy badges~~ — decided 2026-11-07 (§4.8).
 2. UI (§5) — to be settled with Maria; §5 is a draft until then.
-3. Aggregator provider — comparison given 2026-11-07; waiting on the
-   tracking volume / carrier mix count.
+3. ~~Aggregator provider~~ — EasyPost, decided 2026-11-07 (§3.8).
 
 ## 9. Commits
 
@@ -452,16 +485,19 @@ delivered_at, carrier_checked_at` (+ provider id if needed).
 2. Lifecycle + quantities (§3.5) + money (§3.6, incl. manual override) +
    Claims tab / inbox + chips + Open a claim; retire the two manual action
    items.
-3a. Carrier aggregator (§3.8, migration §4.7): register, poll, store;
-    Velocity `tracking_status` fallback.
-3. Auto-found: missing (D8), never_received (§3.1) as suggestions.
-4. Email: supplier replies, refund/credit confirmations, labels in replies
+3. Tracking parser fix (§3.9) + placeholder backfill (dry run → report →
+   live).
+4. EasyPost aggregator (§3.8, migration §4.7): register, webhook, daily
+   backstop, store; Velocity `tracking_status` fallback.
+5. Auto-found: missing (D8), never_received (§3.1) as suggestions.
+6. Email: supplier replies, refund/credit confirmations, labels in replies
    (regex first per §7, Haiku for free text).
-5. Returns: label → document + tracking (direction = return) + reminders.
-6. Replacements on the original PO (`alt_order_ids`, tracking ↔ claim) +
+7. Returns: label → document + tracking (direction = return) + reminders.
+8. Replacements on the original PO (`alt_order_ids`, tracking ↔ claim) +
    §3.7 dismiss-with-note.
-7. Dashboard lines; SPEC §22/§26/§11, CLAUDE.md; mark the cancellations
+9. Dashboard lines; SPEC §22/§26/§11, CLAUDE.md; mark the cancellations
    patch's §3/§5 superseded.
 
-Stops: after 1's dry run, before 3a's provider signup, and for anything
+Stops: after 1's dry run, after 3's backfill dry run, before 4's EasyPost
+signup (Maria creates the account and sets the env vars), and for anything
 this patch doesn't cover.
