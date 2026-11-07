@@ -109,6 +109,7 @@ export function settleGiftCards<T extends Pick<PrefillExtraction, "subtotal" | "
 /** A rewards line by its text (2026-11-05): "$10 voucher 3921", "Rewards", "Rewards balance", "points" — never a "% off" line ("Rewards members 20% off" is a coupon). */
 export const isRewardsPromo = (d: string): boolean => /\$\s?\d+(?:\.\d{2})?\s+(?:rewards?\s+)?voucher\b/i.test(d) || (/\brewards?\b|\bpoints\b/i.test(d) && !/%/.test(d));
 export const PROMO_AMOUNT_IMPLIED_HINT = "Amount = discount − the other promos (the page gave only a %)";
+export const PROMO_AMOUNT_FROM_LINES_HINT = "Amount = subtotal − line totals: the line prices already carry this sale";
 
 export const PREFILL_SYSTEM = `You read captured text from a retailer's checkout pages (cart, shipping, payment, review, order confirmation) and extract the purchase order exactly as the retailer shows it. Rules:
 - Use only what the pages say. Unknown → null. Never invent an order id, price or ASIN.
@@ -340,7 +341,7 @@ export async function enrichPrefill(query: QueryLike, capture: Capture, x: Prefi
   prefill.asin_candidates = asinCandidates;
   // The double-discount rule, per promo (Maria 2026-11-01; 1¢ 2026-11-04; per promo 2026-11-05): a promo already in the line totals defaults to not counting.
   const isDeal = (p: { description: string }) => freeDeal && FREE_ITEM_PROMO.test(p.description);
-  const refl = reflectedPromos({ linesSum: r2(linesSum), subtotal: x.subtotal, discount: x.discount ?? 0, promoAmounts: x.promos.map((p) => (isDeal(p) ? p.amount ?? dealSavings : p.amount)), postDiscountSubtotal: x.total == null ? null : r2(x.total - (x.tax ?? 0) - (x.shipping ?? 0)), answers: x.promos.map((p) => (isDeal(p) ? true : null)) });
+  const refl = reflectedPromos({ linesSum: r2(linesSum), subtotal: x.subtotal, discount: x.discount ?? 0, promoAmounts: x.promos.map((p) => (isDeal(p) ? p.amount ?? dealSavings : p.amount)), postDiscountSubtotal: x.total == null ? null : r2(x.total - (x.tax ?? 0) - (x.shipping ?? 0)), answers: x.promos.map((p) => (isDeal(p) ? true : null)), kinds: x.promos.map((p) => (isRewardsPromo(p.description) ? "rewards" : p.type)) });
   const reflected = refl.all || refl.reflectedAmount > 0;
   // Totals that still do not reconcile: the lines match neither the subtotal nor (when the lines are net) the subtotal after discount.
   if (x.subtotal != null && x.lines.length > 0 && !reflected && Math.abs(r2(linesSum) - x.subtotal) > 0.01) warnings.push(`Lines add up to ${r2(linesSum).toFixed(2)}, the subtotal is ${x.subtotal.toFixed(2)}`);
@@ -351,8 +352,11 @@ export async function enrichPrefill(query: QueryLike, capture: Capture, x: Prefi
     const type = rewards ? "rewards" : p.type;
     // The page's $ amount (2026-11-05): when the model gave only a %, the one amount-less promo takes discount − the others.
     const deal = isDeal(p);
-    const amount = p.amount ?? (deal ? dealSavings || null : refl.amounts[i]);
+    // A sale already in the line prices (2026-11-07, Michaels: 42.75 read, 34.50 true) is subtotal − Σ line totals (reflectedPromos pins it).
+    const pinned = !deal && p.amount != null && refl.reflected[i] && refl.amounts[i] != null && Math.abs(refl.amounts[i]! - p.amount) > 0.005;
+    const amount = pinned ? refl.amounts[i] : p.amount ?? (deal ? dealSavings || null : refl.amounts[i]);
     if (p.amount == null && amount != null && !deal) hints[`promos.${i}.amount`] = PROMO_AMOUNT_IMPLIED_HINT;
+    if (pinned) hints[`promos.${i}.amount`] = `${PROMO_AMOUNT_FROM_LINES_HINT} (the page read ${p.amount!.toFixed(2)})`;
     if (deal) hints[`promos.${i}.amount`] = FREE_ITEM_NOTE;
     // A free-item deal is a sale already in the line prices (in_line_prices true): it reduces nothing; the regular prices share the cost.
     return { type: deal ? "sale" : rewards || p.confidence === "high" ? type : "", description: p.description, amount: m2(amount), percent: m2(p.percent), counts_toward_cogs: deal ? false : promoCountsByDefault(type, refl.all || refl.reflected[i]), ...(deal ? { in_line_prices: true } : {}) };

@@ -6216,7 +6216,21 @@ every save and every recompute; a recompute stamps version 3.
   recomputed. The recompute reads the answers too. A promo without an amount, when it is the
   only one, takes the header discount − the others (also in the
   prefill, with an amber hint), so it no longer "counts until an amount
-  is entered". **Promo sequence (Maria 2026-11-06):** promos apply in
+  is entered". **Sale / coupon vs rewards (Maria 2026-11-07,
+  michaels.com 4600111212062213):** a rewards voucher is applied at the
+  total, never in a line price, so the lines are also compared with the
+  subtotal − the sale / coupon promos only: Σ line totals = the
+  post-discount subtotal + the rewards (80.30 = 60.30 + $20) → every
+  sale / coupon promo is in the prices, the rewards are not. When the
+  subtotal is the regular-price total, the one sale / coupon promo is
+  subtotal − Σ line totals (114.80 − 80.30 = 34.50) whatever was typed
+  or read (the prefill shows "Amount = subtotal − line totals…" with the
+  amount the page gave). Lines at regular price and lines at sale price
+  give the same costs (4.19 / 3.84, COGS 3.69 / 3.38, Paid 2.77 / 2.54).
+  The form warns "Promos add up to X, the discount is Y" when the promo
+  amounts miss the Discount field by more than 1¢ (either with or
+  without the promos answered "in prices", so a free-item deal outside
+  the discount is not flagged). **Promo sequence (Maria 2026-11-06):** promos apply in
   their order (`po_promos.position`; the prefill keeps the page's order,
   the form's ↑ reorders, Edit PO writes the new positions only when the
   order changed): a $ promo takes its amount at its place, a % promo its

@@ -1,5 +1,5 @@
 import { describe, it, expect, vi } from "vitest";
-import { CaptureSchema, PrefillSchema, extractPrefill, enrichPrefill, mergedPagesText, supplierForHost, shipsToForStreet, resolveShipTo, todayEt, storePrefill, getPrefill, _clearPrefillCache, PREFILL_TTL_MS, visibleQtys, inferLineQty, QTY_INFERRED_HINT, lineTotalPrice, isRewardsPromo, PROMO_AMOUNT_IMPLIED_HINT } from "./po-prefill";
+import { CaptureSchema, PrefillSchema, extractPrefill, enrichPrefill, mergedPagesText, supplierForHost, shipsToForStreet, resolveShipTo, todayEt, storePrefill, getPrefill, _clearPrefillCache, PREFILL_TTL_MS, visibleQtys, inferLineQty, QTY_INFERRED_HINT, lineTotalPrice, isRewardsPromo, PROMO_AMOUNT_IMPLIED_HINT, PROMO_AMOUNT_FROM_LINES_HINT } from "./po-prefill";
 
 vi.mock("./log", () => ({ log: () => {} }));
 vi.mock("./spapi-auth", () => ({ spApiGet: async () => { throw new Error("no SP-API in tests"); } }));
@@ -118,6 +118,21 @@ describe("enrichment (no AI)", () => {
     expect(isRewardsPromo("$5 reward voucher")).toBe(true);
     expect(isRewardsPromo("Rewards members 20% off")).toBe(false);
     expect(isRewardsPromo("30% off with MEGA30DEAL")).toBe(false);
+  });
+  // Maria 2026-11-07, michaels.com 4600111212062213: the page's sale was read as 42.75; the lines (4.19 / 3.84) already carry it → 114.80 − 80.30.
+  it("a sale already in the line prices takes subtotal − Σ line totals, with a hint naming what the page read", async () => {
+    const q = async (sql: string) => (/FROM settings WHERE key = ANY/.test(sql) ? { rows: [{ key: "prep_cost", value: 1 }], rowCount: 1 } : { rows: [], rowCount: 0 });
+    const x = { ...extraction, lines: [
+      { productName: "Liquitex BASICS 4oz. Acrylic Paint", retailerSku: null, qty: 10, unitsPerPack: 1, unitPrice: 4.19, lineTotal: 41.90, regularUnitPrice: 5.99, asinGuess: null },
+      { productName: "Red Heart Super Saver Solid Yarn", retailerSku: null, qty: 10, unitsPerPack: 1, unitPrice: 3.84, lineTotal: 38.40, regularUnitPrice: 5.49, asinGuess: null },
+    ], subtotal: 114.80, discount: 54.50, tax: 0, shipping: 0, total: 60.30, payments: [], notes: [], promos: [
+      { type: "sale" as const, description: "30% on regular priced items", amount: 42.75, percent: 30, confidence: "high" as const },
+      { type: "rewards" as const, description: "$20 Rewards Voucher", amount: 20, percent: null, confidence: "high" as const },
+    ] };
+    const out = await enrichPrefill(q, capture, x, null, { id: "", capturedAt: null });
+    expect(out.form.promos?.map((p) => [p.type, p.amount, p.counts_toward_cogs])).toEqual([["sale", "34.50", false], ["rewards", "20.00", false]]);
+    expect(out.prefill.hints?.["promos.0.amount"]).toBe(`${PROMO_AMOUNT_FROM_LINES_HINT} (the page read 42.75)`);
+    expect((out.prefill.warnings ?? []).join()).not.toMatch(/Lines add up to|match neither/);
   });
   // v1.2.1 (Maria 2026-11-01): a confirmation page shows no order date → today on the form, plain marker, no warning.
   it("no order date on the pages → today (America/New_York), no source marker, and the model's note about it is dropped", async () => {
