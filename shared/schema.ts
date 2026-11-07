@@ -664,7 +664,7 @@ export const DEFAULT_COLUMNS = [
   // Group 1 — Description
   "product", "soldAs", "packSize", "category", "brand", "supplier", "buyLink", "supplierSku",
   // Group 2 — Stock
-  "stock", "availableFba", "onOrder", "atPrep", "atWarehouse", "fbaStock", "reserved", "sentToFba", "daysLeft",
+  "stock", "fbaStock", "availableFba", "reserved", "sentToFba", "atPrep", "atWarehouse", "onOrder", "daysLeft",
   // Group 3 — Actuals
   "cogs", "actPrepCost", "actUnitsSold", "actRefunds", "actRefundPct",
   "actAvgSalePrice", "actRevenue", "actProfit", "actProfitPerUnit", "actRoi", "actMargin",
@@ -713,21 +713,21 @@ export const ALL_COLUMNS: ColumnDef[] = [
   // one stored field, two columns, one writer (BuyLinkEditor).
   { id: "buyLink", label: "Buy Link", defaultVisible: false, align: "left", group: "description" },
   { id: "supplierSku", label: "SKU / UPC", defaultVisible: false, align: "left", group: "description" },
-  // Group 2 — Stock
+  // Group 2 — Stock (order: Maria 2026-11-07)
   { id: "stock", label: "Stock", defaultVisible: true, align: "right", group: "stock" },
-  { id: "availableFba", label: "Available (FBA)", defaultVisible: false, align: "right", group: "stock" },
-  // §6 on-order figures (2026-10-17, patch asins-on-order-from-pos, clean-up
-  // the same day): derived from po_asins, the sheet's "Ordered" is gone (D2 —
-  // one number, one meaning). On Order is shown by default, At Prep hidden.
-  { id: "onOrder", label: "On Order", defaultVisible: true, align: "right", group: "stock" },
-  { id: "atPrep", label: "At Prep", defaultVisible: false, align: "right", group: "stock" },
-  { id: "atWarehouse", label: "At CQG Warehouse", defaultVisible: false, align: "right", group: "stock" },
   // §6 FBA Stock (2026-09-17) = Stock − On Order, computed from the SAME
   // values those two cells render so the identity holds row by row.
   // Default-VISIBLE wherever Stock/On Order are (revised same day).
   { id: "fbaStock", label: "FBA Stock", defaultVisible: true, align: "right", group: "stock" },
+  { id: "availableFba", label: "Available (FBA)", defaultVisible: false, align: "right", group: "stock" },
   { id: "reserved", label: "Reserved", defaultVisible: false, align: "right", group: "stock" },
   { id: "sentToFba", label: "Sent to FBA", defaultVisible: false, align: "right", group: "stock" },
+  { id: "atPrep", label: "At Prep", defaultVisible: false, align: "right", group: "stock" },
+  { id: "atWarehouse", label: "At CQG Warehouse", defaultVisible: false, align: "right", group: "stock" },
+  // §6 on-order figures (2026-10-17, patch asins-on-order-from-pos, clean-up
+  // the same day): derived from po_asins, the sheet's "Ordered" is gone (D2 —
+  // one number, one meaning). On Order is shown by default, At Prep hidden.
+  { id: "onOrder", label: "On Order", defaultVisible: true, align: "right", group: "stock" },
   { id: "daysLeft", label: "Days Left", defaultVisible: true, align: "right", group: "stock" },
   // Group 3 — Actuals
   { id: "cogs", label: "COGS", qualifier: "Actual", defaultVisible: false, align: "right", group: "actuals" },

@@ -3,7 +3,7 @@ import { LayoutGrid, Save, Trash2, Pencil, RotateCcw } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import { Input } from "@/components/ui/input";
-import { type ColumnConfig, saveColumnConfig } from "@/lib/columns";
+import { type ColumnConfig, saveColumnConfig, reorderStock } from "@/lib/columns";
 import type { ColumnId } from "@shared/schema";
 import type { FilterMap } from "./column-filter";
 
@@ -56,7 +56,8 @@ interface ViewPresetsProps {
 function mapPresetToConfig(preset: Preset): ColumnConfig {
   const cfg = preset.config;
   if (cfg.order && cfg.visible) {
-    return { order: cfg.order as ColumnId[], visible: new Set(cfg.visible as ColumnId[]) };
+    // A preset saved before 2026-11-07 keeps the old Stock order; nothing in the UI reorders columns, so always apply it.
+    return { order: reorderStock(cfg.order as ColumnId[]), visible: new Set(cfg.visible as ColumnId[]) };
   }
   if (cfg.columns) {
     const seen = new Set<ColumnId>();
