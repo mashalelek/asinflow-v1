@@ -15,6 +15,8 @@ export interface PoListUrlState {
 
 const ymd = (v: string | null) => (v && /^\d{4}-\d{2}-\d{2}$/.test(v) ? v : "");
 const list = (v: string | null) => (v ?? "").split(",").map((x) => x.trim()).filter(Boolean);
+/** Action Items renamed since (old → new, 2026-11-07): a saved or bookmarked list URL keeps working, and the page rewrites it with the new label. */
+const RENAMED_ACTION_ITEMS: Readonly<Record<string, string>> = { "Receiving mismatch": "FBA receiving mismatch" };
 
 /** Pure: the query string → the list's state. `?asin=B0…` (the ASINs page's On Order link) searches that ASIN. D3: Status defaults to Open. */
 export function readPoListUrl(search: string): PoListUrlState {
@@ -22,7 +24,7 @@ export function readPoListUrl(search: string): PoListUrlState {
   const closed = p.get("closed"), refunds = p.get("refunds"), dir = p.get("dir"), sortKey = p.get("sort")?.trim() ?? "";
   return {
     search: p.get("search")?.trim() ?? p.get("asin")?.trim().toUpperCase() ?? "",
-    action: list(p.get("action")), supplier: list(p.get("supplier")),
+    action: Array.from(new Set(list(p.get("action")).map((a) => RENAMED_ACTION_ITEMS[a] ?? a))), supplier: list(p.get("supplier")),
     closed: closed === "closed" || closed === "all" ? closed : "open",
     refunds: refunds === "due" || refunds === "none" ? refunds : "any",
     from: ymd(p.get("from")), to: ymd(p.get("to")),

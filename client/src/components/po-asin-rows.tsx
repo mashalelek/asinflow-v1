@@ -144,6 +144,9 @@ export const ACTION_ITEM_OPTIONS = ["Need to return", "Missing / damaged from su
 // §7: tinted chips only. SHIP indigo; Received - FBM green; Need to return orange; the attention items amber.
 export const EXTRA_UNITS_SHIPPED = "Extra units shipped";
 export const PACK_SIZE_MISMATCH = "Pack size mismatch";
+/** Derived (2026-10-29; named so 2026-11-07, was "Receiving mismatch"): Received by Amazon ≠ Shipped FBA. Information only. */
+export const FBA_RECEIVING_MISMATCH = "FBA receiving mismatch";
+export const FBA_RECEIVING_MISMATCH_MEANING = "Received by Amazon ≠ Shipped FBA (information only; never blocks auto-close)";
 export function actionChipClass(item: string): string {
   const t = item.toLowerCase();
   // Red so it stands out (Maria 2026-10-29).
@@ -156,7 +159,7 @@ export function actionChipClass(item: string): string {
 }
 export const chipBase = "inline-block rounded-sm px-1.5 py-0.5 text-[11px] whitespace-nowrap";
 /** Shown (never editable): the auto-managed "Review Velocity" (SPEC §26) and the pack-size items (derived from the ASIN row) after the manual items. */
-export const DISPLAY_ACTION_ITEMS = [...ACTION_ITEM_OPTIONS, EXTRA_UNITS_SHIPPED, "Review Velocity", "Pack size missing", "Pack size mismatch", "Receiving mismatch",
+export const DISPLAY_ACTION_ITEMS = [...ACTION_ITEM_OPTIONS, EXTRA_UNITS_SHIPPED, "Review Velocity", "Pack size missing", "Pack size mismatch", FBA_RECEIVING_MISMATCH,
   // One-off (2026-11-05, server/tracking-replacement-pair.ts): derived, resolves when the tracking is added.
   "Tracking also goes to 200015557295492 (1 replacement single)",
   // A PO with no document from the day after its order date (2026-11-05); the hover names the reason.
@@ -184,6 +187,11 @@ export function lineDetailTitle(item: string, d: ActionItemLines | undefined): s
   const where = d.lines === d.of ? `all ${d.of} line${d.of === 1 ? "" : "s"}` : `${d.lines} of ${d.of} lines`;
   return `${item}: ${where} — ${d.asins.join(", ")}${d.reasons.length ? ` · ${d.reasons.join(" · ")}` : ""}`;
 }
+/** The item's meaning first where it has one (FBA receiving mismatch), then the line detail. */
+function withMeaning(item: string, detail: string | undefined): string | undefined {
+  if (item !== FBA_RECEIVING_MISMATCH) return detail;
+  return detail ? `${FBA_RECEIVING_MISMATCH_MEANING}\n${detail}` : FBA_RECEIVING_MISMATCH_MEANING;
+}
 /** At most this many chips show; the rest collapse into "+N" (PO table v2 §5). */
 export const MAX_CHIPS = 2;
 /**
@@ -206,7 +214,7 @@ export function ActionItemChips({ items, testId, reasons, titles, lines, defects
               <span className="truncate">{it}</span><span className="ml-1 shrink-0 font-medium" data-testid="chip-defect-owed">{defect.suffix}</span>
             </span>
           ) :
-          <span key={it} className={`${chipBase} ${actionChipClass(it)} max-w-full truncate`} title={titles?.[it] ?? lineDetailTitle(it, d) ?? (it === "Review Velocity" && reasons?.length ? reasons.join(" · ") : it)}>
+          <span key={it} className={`${chipBase} ${actionChipClass(it)} max-w-full truncate`} title={titles?.[it] ?? withMeaning(it, lineDetailTitle(it, d)) ?? (it === "Review Velocity" && reasons?.length ? reasons.join(" · ") : it)}>
             {it}{d && d.lines < d.of ? <span className="ml-1 opacity-70" data-testid={`chip-count-${it}`}>·{d.lines}</span> : null}
           </span>
         );
@@ -273,7 +281,10 @@ export function ActionItemsEditor({ items, url, onSaved, testId, titles, lines, 
 export function extraUnitsTitle(a: Pick<PoAsinRowData, "qty" | "qty_shipped_fba" | "extra_units_note">): string {
   return `Shipped FBA ${fmtQty(a.qty_shipped_fba ?? 0)} of ${fmtQty(a.qty)} ordered${a.extra_units_note ? ` — ${a.extra_units_note}` : ""}`;
 }
-const extraTitles = (a: PoAsinRowData): Record<string, string> => ({ [EXTRA_UNITS_SHIPPED]: extraUnitsTitle(a), ...(a.pack_mismatch_note ? { [PACK_SIZE_MISMATCH]: a.pack_mismatch_note } : {}) });
+/** Hover for "FBA receiving mismatch" on an ASIN row: the two numbers. */
+export const fbaReceivingTitle = (a: Pick<PoAsinRowData, "qty_shipped_fba" | "qty_received_amazon">): string =>
+  `Received by Amazon ${fmtQty(a.qty_received_amazon ?? 0)} ≠ Shipped FBA ${fmtQty(a.qty_shipped_fba ?? 0)} (information only; never blocks auto-close)`;
+const extraTitles = (a: PoAsinRowData): Record<string, string> => ({ [EXTRA_UNITS_SHIPPED]: extraUnitsTitle(a), [FBA_RECEIVING_MISMATCH]: fbaReceivingTitle(a), ...(a.pack_mismatch_note ? { [PACK_SIZE_MISMATCH]: a.pack_mismatch_note } : {}) });
 /** A PO's hover titles plus "Pack size mismatch" from its rows' yield notes (each row's lines, one per row). */
 export function poActionTitles(titles: Readonly<Record<string, string>> | undefined, asins: readonly { pack_mismatch_note?: string }[] | undefined): Record<string, string> {
   const notes = (asins ?? []).map((a) => a.pack_mismatch_note).filter(Boolean);

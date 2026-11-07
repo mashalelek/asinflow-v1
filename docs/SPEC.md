@@ -6537,12 +6537,14 @@ the current model; the paragraphs below are the history it builds on.**
 - **Labels are sentence case:** Need to return · Missing / damaged from
   supplier · Confirm refund / replacement · ATTN: Velocity · See comments ·
   SHIP · Received - FBM, then the auto items Extra units shipped · Review
-  Velocity · Pack size missing · Pack size mismatch · Receiving mismatch.
-  The old title-case spellings are accepted on input (`LEGACY_ACTION_ITEMS`:
-  the editors, the `action=` filter, sheet intake) and mapped.
+  Velocity · Pack size missing · Pack size mismatch · FBA receiving
+  mismatch. The old title-case spellings are accepted on input
+  (`LEGACY_ACTION_ITEMS`: the editors, the `action=` filter, sheet intake)
+  and mapped; so is the renamed "Receiving mismatch" in a saved `action=`
+  list URL (2026-11-07).
 - **Stored vs derived:** the seven manual items and Review Velocity are
   stored. Extra units shipped (Shipped FBA > Ordered on the ASIN row, red
-  chip), Pack size missing / mismatch and Receiving mismatch stay derived
+  chip), Pack size missing / mismatch and FBA receiving mismatch stay derived
   and are never stored.
 - **Rollup:** a line's items show on its own product row; the ASIN row
   shows the union of its lines (plus the derived items); the PO row shows
@@ -6603,7 +6605,9 @@ shows on the line, its ASIN row and its PO, the hover giving the note
 ("stored 0.50, ×1 gives 1.00"; `yieldMismatchLine` / `yieldMismatchNote`),
 clears by itself once pack and yield agree, and blocks auto-close only on
 an open PO — a closed PO shows it but is never reopened by it (8 closed POs
-on 2026-11-06). **Receiving mismatch** (2026-10-29) is derived on
+on 2026-11-06). **FBA receiving mismatch** (2026-10-29; named so
+2026-11-07, was "Receiving mismatch"; hover: Received by Amazon ≠ Shipped
+FBA) is derived on
 any ASIN row where `qty_received_amazon` is known and ≠ `qty_shipped_fba`
 (over or under). It is **display-only**: Received by Amazon is never a
 source of truth — Shipped FBA is the number of record — so it does not
@@ -6994,7 +6998,7 @@ before Velocity's `shipped_at`.
   0 when matched but not yet received, NULL while unmatched. The rollup
   trigger fills `qty_received_amazon`; the auto-close rule reads Shipped
   FBA only. Received is information only (Maria 2026-10-29): a difference
-  shows as the derived **Receiving mismatch** item and is never corrected
+  shows as the derived **FBA receiving mismatch** item and is never corrected
   into any quantity.
 - SC `QuantityShipped` is never compared or flagged (§4.4): Velocity says
   what left the warehouse, SC what Amazon received; the gap is read off

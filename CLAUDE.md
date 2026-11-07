@@ -542,8 +542,8 @@ against either array. Read through `openLineItemsSql` / the
 `*_ACTION_ITEMS_SQL` unions in `server/po-action-items.ts`, write through
 `writeLineItems` / `insertLineItems` in `server/line-action-items.ts`.
 Review Velocity is stored (mirrored by `reconcileReviewVelocity`); Extra
-units shipped, Pack size missing / mismatch and Receiving mismatch stay
-derived. Labels are sentence case; old spellings map via
+units shipped, Pack size missing / mismatch and FBA receiving mismatch
+(Received by Amazon ≠ Shipped FBA) stay derived. Labels are sentence case; old spellings map via
 `LEGACY_ACTION_ITEMS`. SPEC §22 "Action Items", §26.
 
 ## Velocity API: `offset` is a page index

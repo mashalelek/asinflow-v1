@@ -4,7 +4,7 @@
 // line): items added go onto every line in scope, items removed are cleared on
 // every line in scope (asinWriteThrough decides per line). "Review Velocity"
 // is the one stored auto item, mirrored from po_tracking. The derived items
-// (Extra units shipped, pack size, receiving mismatch) are never stored.
+// (Extra units shipped, pack size, FBA receiving mismatch) are never stored.
 import type { QueryLike } from "./scheduler/types";
 import { ACTION_ITEMS, REVIEW_VELOCITY } from "./po-status-map";
 import { asinWriteThrough, REVIEW_VELOCITY_EXISTS_SQL } from "./po-action-items";

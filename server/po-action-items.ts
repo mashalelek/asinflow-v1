@@ -97,14 +97,14 @@ export const ASIN_ACTION_ITEMS_SQL = `ARRAY(${openLineItemsSql("l.po_asin_id = p
  * is stored on every line (reconcileReviewVelocity mirrors this condition).
  */
 export const REVIEW_VELOCITY_EXISTS_SQL = `EXISTS (SELECT 1 FROM po_tracking t WHERE t.po_id = p.id AND t.review_reason IS NOT NULL AND t.suppressed_at IS NULL)`;
-/** The PO's items that block auto-close: everything except Receiving mismatch (received never drives anything). */
+/** The PO's items that block auto-close: everything except FBA receiving mismatch (received never drives anything). */
 export const PO_CLOSE_ACTION_ITEMS_SQL = `ARRAY(${openLineItemsSql("l.po_id = p.id")}
   UNION SELECT '${EXTRA_UNITS_SHIPPED}' WHERE ${EXTRA_UNITS_EXISTS_SQL}
   UNION SELECT '${PACK_SIZE_MISSING}' WHERE ${PACK_SIZE_MISSING_EXISTS_SQL}
   UNION SELECT '${PACK_SIZE_MISMATCH}' WHERE ${PACK_SIZE_MISMATCH_CLOSE_EXISTS_SQL}
   ${defectItemSql(OPEN_DEFECT_PO_SQL("p"))}
   ${replacementTrackingItemsSql("p.id")})`;
-/** The PO's displayed items: the close set plus Receiving mismatch and No invoice saved. */
+/** The PO's displayed items: the close set plus FBA receiving mismatch and No invoice saved. */
 export const PO_ACTION_ITEMS_SQL = `ARRAY(${openLineItemsSql("l.po_id = p.id")}
   UNION SELECT '${EXTRA_UNITS_SHIPPED}' WHERE ${EXTRA_UNITS_EXISTS_SQL}
   UNION SELECT '${PACK_SIZE_MISSING}' WHERE ${PACK_SIZE_MISSING_EXISTS_SQL}

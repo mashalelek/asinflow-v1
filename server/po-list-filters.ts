@@ -5,7 +5,7 @@
 // never disagrees with the list it leads to. One extra query per facet,
 // in the same request as the list; no round trip per dropdown.
 import type { QueryLike } from "./scheduler/types";
-import { LEGACY_ACTION_ITEMS, ACTION_ITEMS, REVIEW_VELOCITY, DISPLAY_ACTION_ITEMS, PACK_SIZE_MISSING, PACK_SIZE_MISMATCH, RECEIVING_MISMATCH, EXTRA_UNITS_SHIPPED, NO_INVOICE_SAVED } from "./po-status-map";
+import { LEGACY_ACTION_ITEMS, RENAMED_DERIVED_ITEMS, ACTION_ITEMS, REVIEW_VELOCITY, DISPLAY_ACTION_ITEMS, PACK_SIZE_MISSING, PACK_SIZE_MISMATCH, RECEIVING_MISMATCH, EXTRA_UNITS_SHIPPED, NO_INVOICE_SAVED } from "./po-status-map";
 import { openLineItemsSql, PACK_SIZE_MISSING_EXISTS_SQL, PACK_SIZE_MISMATCH_EXISTS_SQL, RECEIVING_MISMATCH_EXISTS_SQL, EXTRA_UNITS_EXISTS_SQL, NO_INVOICE_EXISTS_SQL } from "./po-action-items";
 import { OPEN_DEFECT_PO_SQL } from "./po-defect-sql";
 import { DEFECT_ACTION_ITEM } from "@shared/po-defect";
@@ -28,7 +28,7 @@ export function parsePoListFilters(q: Record<string, unknown>): PoListFilters {
   return {
     search: str(q.search),
     // Old label spellings map to today's.
-    action: list(q.action).map((x): string => LEGACY_ACTION_ITEMS[x] ?? x),
+    action: list(q.action).map((x): string => LEGACY_ACTION_ITEMS[x] ?? RENAMED_DERIVED_ITEMS[x] ?? x),
     supplier: list(q.supplier),
     from: str(q.from), to: str(q.to),
     closed: closedRaw === "closed" ? "closed" : closedRaw === "all" ? "all" : "open",

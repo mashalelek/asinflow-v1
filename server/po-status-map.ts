@@ -59,12 +59,16 @@ export const PACK_SIZE_MISSING = "Pack size missing";
 export const PACK_SIZE_MISMATCH = "Pack size mismatch";
 /**
  * Receiving (2026-10-29): Received by Amazon is information, never a source
- * of truth — Shipped FBA is the number of record. "Receiving mismatch" shows
+ * of truth — Shipped FBA is the number of record. "FBA receiving mismatch"
+ * (named so 2026-11-07, was "Receiving mismatch": Received by Amazon ≠
+ * Shipped FBA) shows
  * on a row whose received (once SC reports any) differs from shipped, over or
  * under, so it can be addressed. Display only: it does NOT block auto-close
  * (PO_CLOSE_ACTION_ITEMS_SQL leaves it out) and nothing derives from it.
  */
-export const RECEIVING_MISMATCH = "Receiving mismatch";
+export const RECEIVING_MISMATCH = "FBA receiving mismatch";
+/** Derived labels renamed since (old → new): a saved list URL with the old label still filters. */
+export const RENAMED_DERIVED_ITEMS: Readonly<Record<string, string>> = { "Receiving mismatch": RECEIVING_MISMATCH };
 /**
  * Extra units shipped (Maria 2026-10-29): Shipped FBA over Ordered on a PO
  * ASIN row — from Sync Shipments or a confirmed manual link. Red chip. Clears
