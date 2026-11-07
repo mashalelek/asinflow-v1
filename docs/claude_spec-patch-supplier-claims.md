@@ -221,7 +221,7 @@ sees them as 6 and 5 because the extra single was checked in under the
 earlier PO. AF keeps the POs true to the transactions and does not model
 Velocity's view. Instead:
 - Any Velocity-vs-AF warning on a PO (qty mismatch, over-received, Extra
-  units shipped, Receiving mismatch) can be **dismissed with a required
+  units shipped, FBA receiving mismatch) can be **dismissed with a required
   note** ("1 single checked in under 200015557295492"). The dismissal is
   stored per PO + warning type + the quantities it was dismissed at
   (`po_warning_dismissals`); it stays dismissed until those quantities
