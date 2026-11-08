@@ -2781,6 +2781,20 @@ token, × qty ordered → ASIN units); and for a retailer listing the **conversi
 units (ASIN is a 3-pack)" when both pack sizes are known (the ASIN's from `asins.units_per_pack`, else the newest PO
 row's). A fully canceled ASIN row is no purchase. Newest = order date, then entry sequence. Nothing is recomputed.
 
+**Capture limits, one product across pages, the page not read (Capture PO 2.0.4, Maria 2026-11-07,
+shop.lospoblanos.com N7CMJ7ZCF).** One 228-character "selected: …" field label rejected the whole capture
+(`/api/pos/prefill` 400) and the AI preview of that page three times, and page 3's answer then wiped the error, so the
+panel said only "AI read 2 of 3". (1) The extension cuts every string to the server's limits before it is stored or
+sent (`clipPage`: URL 2,048, title 500, text 200,000, field label 200 — the "selected:" prefix included — value 2,000,
+500 fields; ship-to street 200 and 6 candidates); a cut field carries `truncated: true`. The server clips the same
+limits before its schema (`clipCapture`, `CAPTURE_LIMITS` — both routes): never a 400 for length; each cut is a
+warning naming the page ("Page 2: field 42's label was 228 characters — cut to 200"), on the New PO form as
+"Capture: …"; more than 12 pages keeps the newest 12, an over-long email is left out. (2) The same product across pages
+is one line: two SKUs decide; with a SKU on one page only, the same name, qty and price (a line total = price × qty
+counts) merge and the SKU comes from whichever page has it; with no SKU on either, the name, as before. (3) Each page
+keeps its own preview error until it is read; the panel's red line names it — "Page 2 (review · /checkouts/…) not
+read: AI preview failed (400: …)", one line per page.
+
 **Past promos (Capture PO 2.0.3, Maria 2026-11-05).** Each recent purchase shows its PO's promos (`po_promos`):
 "FAIRTHANKS20 · 20% · −$39.60", "Sale −$12.00", or "no promos". A promo's **code** is the token after "with" / "code"
 in its description, else a capitalized token holding a letter and a digit (SAVE10); B1G1 / BOGO are deals, not codes

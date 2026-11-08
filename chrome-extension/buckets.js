@@ -525,6 +525,30 @@
   }
 
   function productKey(p) { return p.sku ? "sku:" + String(p.sku).toLowerCase() : "name:" + normName(p.name); }
+  /**
+   * 2.0.4 (Maria 2026-11-07, shop.lospoblanos.com N7CMJ7ZCF: "10 × Lavender Lip Salve · 2400022124…" and "10 × Lavender Lip
+   * Salve" — one item, a SKU on one page only): the same product across pages. Two SKUs decide; else the same name, qty and
+   * price (a confirmation's line total counts as that price × qty). The SKU then comes from whichever page has it.
+   */
+  function sameProduct(a, b) {
+    if (a.sku && b.sku) return String(a.sku).toLowerCase() === String(b.sku).toLowerCase();
+    // Neither has a SKU: the name alone, as before (a cart edited between captures, 12 → 10, is the same line).
+    if (!a.sku && !b.sku) return productKey(a) === productKey(b);
+    if (normName(a.name) !== normName(b.name) || !normName(a.name)) return false;
+    if (a.qty != null && b.qty != null && Number(a.qty) !== Number(b.qty)) return false;
+    var pa = toNum(a.price), pb = toNum(b.price), q = Number(a.qty != null ? a.qty : b.qty) || 1;
+    if (pa == null || pb == null || isNaN(pa) || isNaN(pb)) return true;
+    return Math.abs(pa - pb) < 0.011 || Math.abs(pa - pb * q) < 0.011 || Math.abs(pb - pa * q) < 0.011;
+  }
+  function upsertProducts(list, items) {
+    var out = list.map(function (x) { return Object.assign({}, x); });
+    items.forEach(function (it) {
+      var idx = -1;
+      for (var i = 0; i < out.length; i++) if (sameProduct(out[i], it)) { idx = i; break; }
+      if (idx >= 0) out[idx] = assignNewer(out[idx], reconcileProduct(out[idx], it)); else out.push(Object.assign({}, it));
+    });
+    return out;
+  }
   function assignNewer(into, from) { Object.keys(from).forEach(function (k) { if (from[k] != null && from[k] !== "") into[k] = from[k]; }); return into; }
   function upsert(list, items, key) {
     var out = list.map(function (x) { return Object.assign({}, x); });
@@ -551,10 +575,8 @@
   }
   function mergeBuckets(prev, next) {
     var a = prev || emptyBuckets(), b = next || {};
-    var prevProducts = a.products || [];
-    var incoming = (b.products || []).map(function (p) { var e = prevProducts.filter(function (x) { return productKey(x) === productKey(p); })[0]; return e ? reconcileProduct(e, p) : p; });
     return {
-      products: upsert(prevProducts, incoming, productKey),
+      products: upsertProducts(a.products || [], b.products || []),
       shipping: keepShipping(a.shipping, b.shipping),
       payment: {
         cards: upsert((a.payment || {}).cards || [], (b.payment || {}).cards || [], function (c) { return c.last4 || normName(c.nickname); }),
@@ -583,7 +605,7 @@
 
   // ── The per-tab capture record (chrome.storage.session, key capture:<tabId>) ──
   function captureKey(tabId) { return "capture:" + tabId; }
-  function newCapture(host) { return { host: host, captures: [], count: 0, updatedAt: null, buckets: emptyBuckets(), previews: {}, previewPending: [], previewError: null }; }
+  function newCapture(host) { return { host: host, captures: [], count: 0, updatedAt: null, buckets: emptyBuckets(), previews: {}, previewPending: [], previewError: null, previewErrors: {} }; }
   /** v1.3: does this page still need its AI preview? (false when the record already holds one for its key) */
   function needsPreview(cap, key) { return !!key && !(cap && cap.previews && cap.previews[key]); }
   /** The pages the prefill endpoint receives: one per checkout step (the latest capture of a step) plus up to six "other" pages — as before 1.2. */
@@ -665,8 +687,26 @@
     c.buckets = rebuild(c);
     return c;
   }
-  /** v1.4: the preview's error for the panel's red line (null when there is none or a newer preview answered). */
-  function previewError(cap) { return cap && cap.count && !(cap.previewPending || []).length && cap.previewError ? cap.previewError : null; }
+  /**
+   * 2.0.4 (Los Poblanos: page 2's 400 was wiped by page 3's answer, so the panel said only "AI read 2 of 3"): each page
+   * keeps its own preview error until it is read. The pages not read, oldest first: { n (1-based), step, path, error }.
+   */
+  function previewFailures(cap) {
+    var errs = (cap && cap.previewErrors) || {};
+    return pagesOf(cap).map(function (p, i) {
+      var e = p.previewKey && !(cap.previews && cap.previews[p.previewKey]) ? errs[p.previewKey] : null;
+      var path = ""; try { path = new URL(p.url).pathname; } catch (_) { path = String(p.url || ""); }
+      return e ? { n: i + 1, step: p.step || "other", path: path, error: e } : null;
+    }).filter(Boolean);
+  }
+  function failureText(f) { return "Page " + f.n + " (" + f.step + (f.path && f.path !== "/" ? " · " + f.path : "") + ") not read: " + f.error; }
+  /** v1.4: the preview's error for the panel's red line — 2.0.4: one line per page that failed, naming the page (null while a page is still being read, or when none failed). */
+  function previewError(cap) {
+    if (!cap || !cap.count || (cap.previewPending || []).length) return null;
+    var f = previewFailures(cap);
+    if (f.length) return pagesOf(cap).length === 1 ? f[0].error : f.map(failureText).join("\n");
+    return cap.previewErrors ? null : cap.previewError || null; // a record stored before 2.0.4
+  }
   function rebuild(cap) {
     return pagesOf(cap).slice().sort(function (p, q) { return String(p.capturedAt || "").localeCompare(String(q.capturedAt || "")); }).reduce(function (b, p) { return mergeBuckets(b, pageBuckets(cap, p)); }, emptyBuckets());
   }
@@ -678,6 +718,8 @@
     if (buckets) c.previews[key] = buckets;
     c.previewPending = (c.previewPending || []).filter(function (k) { return k !== key; });
     c.previewError = buckets ? null : (error || "the AI preview failed");
+    c.previewErrors = Object.assign({}, c.previewErrors || {});
+    if (buckets) delete c.previewErrors[key]; else c.previewErrors[key] = error || "the AI preview failed";
     c.buckets = rebuild(c);
     return c;
   }
@@ -685,9 +727,32 @@
   function previewStatus(cap) {
     if (!cap || !cap.count) return null;
     if ((cap.previewPending || []).length) return "AI reading…";
-    if (cap.previewError) return cap.previewError;
+    if (!cap.previewErrors && cap.previewError) return cap.previewError;
+    var failed = previewFailures(cap);
+    if (failed.length) return failed[failed.length - 1].error;
     var all = pagesOf(cap), read = all.filter(function (p) { return p.previewKey && cap.previews && cap.previews[p.previewKey]; }).length;
     return read ? (read === all.length ? "AI read" : "AI read " + read + " of " + all.length) : null;
+  }
+  /**
+   * 2.0.4 (Los Poblanos: a "selected: …" label of 210 characters rejected the whole capture with a 400): the server's
+   * string limits (server/po-prefill.ts CAPTURE_LIMITS — keep the two in step). clipPage cuts every string to its limit
+   * before anything is stored or sent; a cut field carries truncated: true, a cut title / text / url is named in
+   * page.truncated. Pure.
+   */
+  var LIMITS = { url: 2048, title: 500, text: 200000, label: 200, value: 2000, fields: 500 };
+  function clipPage(page) {
+    if (!page) return page;
+    var cut = [], out = Object.assign({}, page);
+    ["url", "title", "text"].forEach(function (k) { var v = String(page[k] == null ? "" : page[k]); if (v.length > LIMITS[k]) { out[k] = v.slice(0, LIMITS[k]); cut.push(k); } });
+    var fs = fieldsOf(page);
+    if (fs.length > LIMITS.fields) cut.push("fields");
+    out.fields = fs.slice(0, LIMITS.fields).map(function (f) {
+      var l = String(f.label == null ? "" : f.label), v = String(f.value == null ? "" : f.value);
+      if (l.length <= LIMITS.label && v.length <= LIMITS.value) return f;
+      return Object.assign({}, f, { label: l.slice(0, LIMITS.label), value: v.slice(0, LIMITS.value), truncated: true });
+    });
+    if (cut.length) out.truncated = (page.truncated || []).concat(cut.filter(function (k) { return (page.truncated || []).indexOf(k) < 0; }));
+    return out;
   }
   /** Add one captured page to a tab's capture. Pure: returns the new record. v1.3.1 (Maria 2026-11-04 — a Walmart checkout's sub-steps and its confirmation all guessed "review", so each capture replaced the last and the panel said "1 page captured"): every capture is kept as its own page, whatever its step or URL; only an identical recapture (same URL, text and fields) is not kept twice — it moves to the end. A navigation, reload, redirect or SPA route change drops nothing; Clear, a successful Open in AF and closing the tab are the only things that do (background.js). The buckets are rebuilt from the pages (oldest first, newest wins per field) on every capture. */
   function applyPage(cur, page, host, now) {
@@ -700,6 +765,7 @@
     // v1.3: previews of pages no longer in the record go; a page whose preview is already here needs no call.
     var keys = pagesOf(c).map(function (p) { return p.previewKey; }).filter(Boolean);
     c.previews = Object.keys(c.previews || {}).reduce(function (o, k) { if (keys.indexOf(k) >= 0) o[k] = c.previews[k]; return o; }, {});
+    c.previewErrors = Object.keys(c.previewErrors || {}).reduce(function (o, k) { if (keys.indexOf(k) >= 0) o[k] = c.previewErrors[k]; return o; }, {});
     if (page.previewKey && !c.previews[page.previewKey] && (c.previewPending || []).indexOf(page.previewKey) < 0) c.previewPending = (c.previewPending || []).concat([page.previewKey]);
     c.previewPending = (c.previewPending || []).filter(function (k) { return keys.indexOf(k) >= 0; });
     c.buckets = rebuild(c);
@@ -717,14 +783,15 @@
     });
     return out.join("\n");
   }
-  function pagesForPrefill(cap) { return pagesOf(cap).map(function (p) { return { step: p.step, url: p.url, title: p.title, text: p.text, fields: p.fields || [] }; }); }
+  function pagesForPrefill(cap) { return pagesOf(cap).map(function (p) { var c = clipPage(p); return { step: c.step, url: c.url, title: c.title, text: c.text, fields: c.fields || [] }; }); }
   /** v1.3: the checkout email the buckets found, for the prefill (beats the supplier default); null when none. */
   function checkoutEmailForPrefill(cap) { var e = cap && cap.buckets && cap.buckets.order && cap.buckets.order.email; return e && EMAIL_RE.test(e) ? e : null; }
   /** The selected ship-to for the prefill payload: null when no page showed an address. */
   function shipToForPrefill(cap) {
     var s = cap && cap.buckets && cap.buckets.shipping;
     if (!s || !(s.street || (s.candidates || []).length)) return null;
-    return { street: s.street || null, candidates: s.candidates || [] };
+    var c = function (x) { return String(x).slice(0, 200); }; // 2.0.4: the server's limits (200 characters, 6 candidates)
+    return { street: s.street ? c(s.street) : null, candidates: (s.candidates || []).slice(0, 6).map(c) };
   }
   /** v1.3.1: the capture keys whose tab no longer exists (after a browser restart the tab ids are new) — the background removes them at startup. */
   function orphanCaptureKeys(store, tabIds) {
@@ -760,7 +827,7 @@
     BUCKETS: BUCKETS, LABELS: LABELS, emptyBuckets: emptyBuckets, extractBuckets: extractBuckets, mergeBuckets: mergeBuckets,
     extractProducts: extractProducts, extractShipping: extractShipping, extractPayment: extractPayment, extractTotals: extractTotals, extractPromos: extractPromos, dedupePromos: dedupePromos, extractOrder: extractOrder,
     filled: filled, missing: missing, streetIn: streetIn, normStreet: normStreet, addressFromFields: addressFromFields,
-    captureKey: captureKey, newCapture: newCapture, applyPage: applyPage, overlayPreview: overlayPreview, overlayStructured: overlayStructured, applyStructured: applyStructured, pageLayers: pageLayers, layersOf: layersOf, previewError: previewError, applyPreview: applyPreview, previewStatus: previewStatus, needsPreview: needsPreview, checkoutEmailForPrefill: checkoutEmailForPrefill, pagesForPrefill: pagesForPrefill, shipToForPrefill: shipToForPrefill, othersCapturing: othersCapturing, orphanCaptureKeys: orphanCaptureKeys, debugText: debugText,
+    captureKey: captureKey, newCapture: newCapture, applyPage: applyPage, overlayPreview: overlayPreview, overlayStructured: overlayStructured, applyStructured: applyStructured, pageLayers: pageLayers, layersOf: layersOf, previewError: previewError, previewFailures: previewFailures, applyPreview: applyPreview, clipPage: clipPage, sameProduct: sameProduct, LIMITS: LIMITS, previewStatus: previewStatus, needsPreview: needsPreview, checkoutEmailForPrefill: checkoutEmailForPrefill, pagesForPrefill: pagesForPrefill, shipToForPrefill: shipToForPrefill, othersCapturing: othersCapturing, orphanCaptureKeys: orphanCaptureKeys, debugText: debugText,
     shipToKind: shipToKind, describeShipping: describeShipping,
   };
   root.AfBuckets = api;

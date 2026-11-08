@@ -8,7 +8,7 @@ export interface BucketTotals { subtotal?: string; discount?: string; tax?: stri
 export interface BucketOrder { number?: string; date?: string; subscription?: { on: boolean; every: string | null }; email?: string }
 export interface Buckets { products: BucketProduct[]; shipping: BucketShipping | null; payment: { cards: BucketCard[]; giftCards: BucketGiftCard[] }; totals: BucketTotals; promos: string[]; order: BucketOrder }
 export type BucketKey = "products" | "shipping" | "payment" | "totals" | "promos" | "order";
-export interface CaptureRecord { host: string; captures?: CapturePage[]; pages?: Record<string, CapturePage>; others?: CapturePage[]; count: number; updatedAt: string | null; buckets: Buckets; previews?: Record<string, any>; previewPending?: string[]; previewError?: string | null }
+export interface CaptureRecord { host: string; captures?: CapturePage[]; pages?: Record<string, CapturePage>; others?: CapturePage[]; count: number; updatedAt: string | null; buckets: Buckets; previews?: Record<string, any>; previewPending?: string[]; previewError?: string | null; previewErrors?: Record<string, string> }
 export interface ShipConfig { velocityStreet: string; homeStreets: string[]; prepCost?: number; suppliers?: string[] }
 export const BUCKETS: BucketKey[];
 export const LABELS: Record<BucketKey, string>;
@@ -48,3 +48,11 @@ export function pageLayers(cap: any, p: any): { products: string | null; totals:
 export function layersOf(cap: any): { products: string | null; totals: string | null };
 export function previewError(cap: any): string | null;
 export function applyStructured(cur: any, key: string, structured: any): any;
+/** 2.0.4: the server's string limits; clipPage cuts a page to them (a cut field says truncated, a cut title / text / url / fields is named in page.truncated). */
+export const LIMITS: { url: number; title: number; text: number; label: number; value: number; fields: number };
+export function clipPage<P extends { url?: string; title?: string; text?: string; fields?: { label: string; value: string }[]; truncated?: string[] }>(page: P): P & { fields: Array<{ label: string; value: string; truncated?: boolean }>; truncated?: string[] };
+/** 2.0.4: the pages the AI preview could not read, oldest first (n is 1-based). */
+export function previewFailures(cap: any): Array<{ n: number; step: string; path: string; error: string }>;
+/** 2.0.4: the same product across pages — two SKUs decide; one SKU: same name, qty and price; none: the name. */
+export function sameProduct(a: any, b: any): boolean;
+

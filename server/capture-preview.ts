@@ -13,10 +13,10 @@ import { createHash } from "crypto";
 import { z } from "zod/v4";
 import type { QueryLike } from "./scheduler/types";
 import { AI } from "./config/ai";
-import { CapturePageSchema, extractPrefill, logPrefill, type ExtractDeps, type PrefillExtraction } from "./po-prefill";
+import { CapturePageSchema, CAPTURE_LIMITS, extractPrefill, logPrefill, type ExtractDeps, type PrefillExtraction } from "./po-prefill";
 
 // v1.4 (2026-11-05): the extension also says what its in-page structured reader (schema.org / Shopify / BigCommerce data) filled.
-export const StructuredSummarySchema = z.object({ platform: z.string().max(40).nullable().default(null), products: z.boolean().default(false), totals: z.boolean().default(false) });
+export const StructuredSummarySchema = z.object({ platform: z.string().max(CAPTURE_LIMITS.platform).nullable().default(null), products: z.boolean().default(false), totals: z.boolean().default(false) });
 export const PreviewRequestSchema = z.object({ retailerHost: z.string().max(253), page: CapturePageSchema, structured: StructuredSummarySchema.optional() });
 export type PreviewRequest = z.infer<typeof PreviewRequestSchema>;
 

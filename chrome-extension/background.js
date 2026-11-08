@@ -78,8 +78,10 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
           sendResponse({ success: false, needsPermission: `${origin}/*`, message: err.message });
           return;
         }
-        const page = results?.[0]?.result;
-        if (!page || page.error) { sendResponse({ success: false, message: page?.error || "Nothing could be read from this page" }); return; }
+        const raw = results?.[0]?.result;
+        if (!raw || raw.error) { sendResponse({ success: false, message: raw?.error || "Nothing could be read from this page" }); return; }
+        // 2.0.4: every string within the server's limits (a cut field says truncated) — one long label never rejects a capture.
+        const page = AfBuckets.clipPage(raw);
         const key = AfBuckets.captureKey(tab.id);
         const host = new URL(tab.url).hostname;
         page.previewKey = await pageKey(host, page);
@@ -223,7 +225,7 @@ async function requestPreview(storeKey, host, page, structured) {
     const serverUrl = await getServerUrl();
     const r = await fetch(`${serverUrl}/api/pos/capture-preview`, {
       ...AF_FETCH, method: "POST", headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ retailerHost: host, page: { step: page.step, url: page.url, title: page.title, text: page.text, fields: page.fields || [] }, structured: { platform: structured?.platform ?? null, products: !!structured?.filled?.products, totals: !!structured?.filled?.totals } }),
+      body: JSON.stringify({ retailerHost: host, page: (({ step, url, title, text, fields }) => ({ step, url, title, text, fields: fields || [] }))(AfBuckets.clipPage(page)), structured: { platform: structured?.platform ?? null, products: !!structured?.filled?.products, totals: !!structured?.filled?.totals } }),
       signal: AbortSignal.timeout(60000),
     });
     const data = await r.json().catch(() => ({}));

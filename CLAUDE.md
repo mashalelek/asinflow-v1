@@ -126,7 +126,7 @@ and any introduced error must be fixed forward before committing.
 
 ## Tests
 
-`npm test` (vitest). **2,365 tests across 226 files** as of 2026-11-07 — this
+`npm test` (vitest). **2,383 tests across 227 files** as of 2026-11-07 — this
 codebase IS tested; the old "there are no tests" line was years stale.
 
 **A gate report must cover BOTH typecheck commands, labelled separately:**
@@ -201,7 +201,7 @@ requires it). SPEC "Pending, and which patch fills it".
 
 **Chrome extensions dev (SPEC §11 "Two extensions", v2.0, 2026-11-05):** two
 extensions from one repo, each loaded unpacked at chrome://extensions —
-**AsinFlow Capture PO** = `chrome-extension/` (2.0.2; the original folder, so
+**AsinFlow Capture PO** = `chrome-extension/` (2.0.4; the original folder, so
 its ID, captures and options survive; never runs on Amazon) and **AsinFlow
 Analyzer** = `chrome-extension/analyzer/` (1.0.2; Amazon product pages and
 Seller Central only). They share `chrome-extension/core/` (AF client,

@@ -19,8 +19,8 @@ const SERVERS = ["http://localhost:3000/*", "https://asinflow-cqg.onrender.com/*
 const isAmazon = (h: string) => /amazon\./i.test(h);
 
 describe("two extensions: names, versions, icons", () => {
-  it("Capture PO 2.0.3 and Analyzer 1.0.3 (x.x.3 = This PO in the purchase history, past promos and codes; x.x.2 = payment-form values never leave the browser; x.x.1 = billing never fills Shipping, the field-name scrubber; 2.0.0 = the split; 1.4.0 = the structured reader above the AI; 1.3.x = the AI preview, captures survive navigation; 1.2.x = the bucket pre-parser)", () => {
-    expect(capture).toMatchObject({ name: "AsinFlow Capture PO", version: "2.0.3", side_panel: { default_path: "sidepanel.html" }, background: { service_worker: "background.js" } });
+  it("Capture PO 2.0.4 and Analyzer 1.0.3 (2.0.4 = captures clipped to the server's limits, one product across pages, the page the AI could not read named; x.x.3 = This PO in the purchase history, past promos and codes; x.x.2 = payment-form values never leave the browser; x.x.1 = billing never fills Shipping, the field-name scrubber; 2.0.0 = the split; 1.4.0 = the structured reader above the AI; 1.3.x = the AI preview, captures survive navigation; 1.2.x = the bucket pre-parser)", () => {
+    expect(capture).toMatchObject({ name: "AsinFlow Capture PO", version: "2.0.4", side_panel: { default_path: "sidepanel.html" }, background: { service_worker: "background.js" } });
     expect(analyzer).toMatchObject({ name: "AsinFlow Analyzer", version: "1.0.3", side_panel: { default_path: "sidepanel.html" }, background: { service_worker: "background.js" } });
     expect(capture.key).toBeUndefined(); // the ID stays the folder's
   });

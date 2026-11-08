@@ -33,22 +33,64 @@ const { scrubText, rescrubFields } = (globalThis as unknown as { AfScrub: typeof
 export function scrubPage<P extends { text: string; fields: { label: string; value: string }[] }>(p: P): P {
   return { ...p, text: scrubText(p.text), fields: rescrubFields(p.fields) };
 }
+/** The capture's limits — chrome-extension/buckets.js LIMITS clips to the same numbers before sending (keep the two in step). */
+export const CAPTURE_LIMITS = { url: 2048, title: 500, text: 200_000, label: 200, value: 2000, fields: 500, pages: 12, host: 253, street: 200, candidates: 6, email: 254, platform: 40 } as const;
+const L = CAPTURE_LIMITS;
 export const CapturePageSchema = z.object({
   step: z.enum(["cart", "shipping", "payment", "review", "other"]).default("other"),
-  url: z.string().max(2048),
-  title: z.string().max(500).default(""),
-  text: z.string().max(200_000),
-  fields: z.array(z.object({ label: z.string().max(200), value: z.string().max(2000) })).max(500).default([]),
+  url: z.string().max(L.url),
+  title: z.string().max(L.title).default(""),
+  text: z.string().max(L.text),
+  fields: z.array(z.object({ label: z.string().max(L.label), value: z.string().max(L.value) })).max(L.fields).default([]),
 }).transform(scrubPage);
 export const CaptureSchema = z.object({
-  retailerHost: z.string().max(253),
+  retailerHost: z.string().max(L.host),
   capturedAt: z.string().optional(),
-  pages: z.array(CapturePageSchema).min(1).max(12),
+  pages: z.array(CapturePageSchema).min(1).max(L.pages),
   // Extension v1.2 (SPEC §11): the SELECTED ship-to the captures showed — the checked address radio's street, or, when the pages are ambiguous (two selected options, two ship-to blocks), the candidates with street null.
-  shipTo: z.object({ street: z.string().max(200).nullable(), candidates: z.array(z.string().max(200)).max(6) }).optional(),
+  shipTo: z.object({ street: z.string().max(L.street).nullable(), candidates: z.array(z.string().max(L.street)).max(L.candidates) }).optional(),
   // v1.3 (2026-11-04): the checkout email the panel found (the AI preview or a filled email field) — beats the supplier default.
-  checkoutEmail: z.string().max(254).optional(),
+  checkoutEmail: z.string().max(L.email).optional(),
 });
+
+/**
+ * 2.0.4 (Maria 2026-11-07, shop.lospoblanos.com N7CMJ7ZCF: one 210-character field label rejected the whole capture
+ * with a 400, and the AI preview of that page three times): every string with a limit is clipped to it BEFORE the schema
+ * runs, and each cut is a warning naming the page — never a 400. An extension built before 2.0.4 clips nothing itself.
+ * Too many pages keeps the newest 12; too many fields the first 500; an over-long email is dropped (it is not one). Pure.
+ */
+export function clipCapture(body: unknown, opts: { pageKey?: "pages" | "page" } = {}): { body: unknown; warnings: string[] } {
+  if (!body || typeof body !== "object") return { body, warnings: [] };
+  const warnings: string[] = [];
+  const b: any = { ...(body as any) };
+  const str = (v: unknown, max: number, what: string): unknown => {
+    if (typeof v !== "string" || v.length <= max) return v;
+    warnings.push(`${what} was ${v.length.toLocaleString("en-US")} characters — cut to ${max.toLocaleString("en-US")}`);
+    return v.slice(0, max);
+  };
+  const page = (p: any, label: string) => {
+    if (!p || typeof p !== "object") return p;
+    const out: any = { ...p, url: str(p.url, L.url, `${label}: the URL`), title: str(p.title, L.title, `${label}: the title`), text: str(p.text, L.text, `${label}: the page text`) };
+    if (Array.isArray(p.fields)) {
+      if (p.fields.length > L.fields) warnings.push(`${label}: ${p.fields.length} fields — the first ${L.fields} kept`);
+      out.fields = p.fields.slice(0, L.fields).map((f: any, i: number) => (f && typeof f === "object" ? { ...f, label: str(f.label, L.label, `${label}: field ${i + 1}'s label`), value: str(f.value, L.value, `${label}: field ${i + 1}'s value`) } : f));
+    }
+    return out;
+  };
+  b.retailerHost = str(b.retailerHost, L.host, "The retailer host");
+  if ((opts.pageKey ?? "pages") === "page") b.page = page(b.page, "The page");
+  else if (Array.isArray(b.pages)) {
+    if (b.pages.length > L.pages) { warnings.push(`${b.pages.length} pages — the newest ${L.pages} kept`); b.pages = b.pages.slice(-L.pages); }
+    b.pages = b.pages.map((p: any, i: number) => page(p, `Page ${i + 1}`));
+  }
+  if (b.shipTo && typeof b.shipTo === "object") {
+    const c = b.shipTo.candidates;
+    b.shipTo = { ...b.shipTo, street: str(b.shipTo.street, L.street, "The ship-to street"), candidates: Array.isArray(c) ? c.slice(0, L.candidates).map((x: unknown, i: number) => str(x, L.street, `Ship-to candidate ${i + 1}`)) : c };
+  }
+  if (typeof b.checkoutEmail === "string" && b.checkoutEmail.length > L.email) { warnings.push("The checkout email was too long to be an email — left out"); delete b.checkoutEmail; }
+  if (b.structured && typeof b.structured === "object" && typeof b.structured.platform === "string") b.structured = { ...b.structured, platform: str(b.structured.platform, L.platform, "The platform name") };
+  return { body: b, warnings };
+}
 export type Capture = z.infer<typeof CaptureSchema>;
 
 // ── Output (the model's strict JSON) ─────────────────────────────────────────

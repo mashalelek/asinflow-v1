@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "AsinFlow Capture PO",
-  "version": "2.0.3",
+  "version": "2.0.4",
   "description": "Capture a retailer checkout or order page into a new AsinFlow PO. Never runs on Amazon (AsinFlow Analyzer does).",
   "permissions": [
     "sidePanel",

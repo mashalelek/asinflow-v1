@@ -93,7 +93,7 @@
       if (type === "checkbox" || type === "radio") {
         if (!el.checked) continue;
         var ctx = selectionContext(el);
-        var sel = S.scrubField("selected: " + labelFor(el), (ctx || (el.value && el.value !== "on" ? el.value : "checked")).slice(0, 600));
+        var sel = S.scrubField(("selected: " + labelFor(el)).slice(0, 200), (ctx || (el.value && el.value !== "on" ? el.value : "checked")).slice(0, 600));
         if (sel) out.push(sel);
         continue;
       }

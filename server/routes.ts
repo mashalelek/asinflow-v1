@@ -36,7 +36,7 @@ import { listPoDocuments, PO_DOCUMENTS_SQL } from "./po-documents-routes";
 import { canonicalPaymentName } from "@shared/po-form";
 import { applyAsinPackUpdate, parsePack } from "./asin-pack";
 import { setAsinPack, confirmPackSuggestions, parseUploadPack } from "./asin-pack-review";
-import { CaptureSchema, extractPrefill, enrichPrefill, mergedPagesText, storePrefill, getPrefill, logPrefill, supplierForHost } from "./po-prefill";
+import { CaptureSchema, clipCapture, extractPrefill, enrichPrefill, mergedPagesText, storePrefill, getPrefill, logPrefill, supplierForHost } from "./po-prefill";
 import { PreviewRequestSchema, capturePreview } from "./capture-preview";
 import { aiAvailable, AI_OFF_MESSAGE } from "./config/ai";
 import { listSubscriptions, createSubscription, updateSubscription } from "./subscriptions";
@@ -4644,13 +4644,16 @@ export async function registerRoutes(
   app.post("/api/pos/prefill", async (req: Request, res: Response) => {
     if (!isDbAvailable()) { res.status(503).json({ message: "Database not available" }); return; }
     if (!aiAvailable()) { res.status(503).json({ message: AI_OFF_MESSAGE }); return; }
-    const parsed = CaptureSchema.safeParse(req.body);
+    // 2.0.4: an over-long string is clipped with a warning, never a 400 (Los Poblanos, 2026-11-07).
+    const clipped = clipCapture(req.body);
+    const parsed = CaptureSchema.safeParse(clipped.body);
     if (!parsed.success) { res.status(400).json({ message: `capture: ${parsed.error.issues.slice(0, 3).map((i) => `${i.path.join(".")}: ${i.message}`).join("; ")}` }); return; }
     const capture = parsed.data;
     try {
       const { extraction, usage } = await extractPrefill(capture);
       const logId = await logPrefill(poQuery, { user_id: uid(req), kind: "capture", retailer: capture.retailerHost, ...usage });
       const payload = await enrichPrefill(poQuery, capture, extraction, extraction ? null : mergedPagesText(capture), { id: "", capturedAt: capture.capturedAt ?? new Date().toISOString() });
+      if (clipped.warnings.length) payload.prefill.warnings = [...(payload.prefill.warnings ?? []), ...clipped.warnings.map((w) => `Capture: ${w}`)];
       const id = storePrefill(payload, logId);
       log(`prefill ${capture.retailerHost}: ${capture.pages.length} page(s), ${usage.input_tokens} in / ${usage.output_tokens} out, ${usage.cost_estimate}, schema ${usage.schema_ok ? "ok" : "FAILED"} → ${id}`, "po");
       res.json({ id, url: `/pos/new?prefill=${id}`, schema_ok: usage.schema_ok, warnings: payload.prefill.warnings ?? [], lines: payload.form.products?.length ?? 0, supplier: payload.prefill.supplier ?? null });
@@ -4660,10 +4663,11 @@ export async function registerRoutes(
   app.post("/api/pos/capture-preview", async (req: Request, res: Response) => {
     if (!isDbAvailable()) { res.status(503).json({ message: "Database not available" }); return; }
     if (!aiAvailable()) { res.status(503).json({ message: AI_OFF_MESSAGE }); return; }
-    const parsed = PreviewRequestSchema.safeParse(req.body);
+    const clipped = clipCapture(req.body, { pageKey: "page" });
+    const parsed = PreviewRequestSchema.safeParse(clipped.body);
     if (!parsed.success) { res.status(400).json({ message: `preview: ${parsed.error.issues.slice(0, 3).map((i) => `${i.path.join(".")}: ${i.message}`).join("; ")}` }); return; }
     try {
-      const r = await capturePreview(poQuery, parsed.data, uid(req));
+      const r = { ...(await capturePreview(poQuery, parsed.data, uid(req))), ...(clipped.warnings.length ? { warnings: clipped.warnings } : {}) };
       if (!r.cached) log(`capture preview ${parsed.data.retailerHost}: ${r.schema_ok ? `${r.buckets?.products.length ?? 0} product(s)` : `FAILED (${r.error})`}, ${r.cost_estimate}`, "po");
       res.json(r);
     } catch (err: any) { res.status(500).json({ message: err?.message ?? String(err) }); }
