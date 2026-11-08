@@ -31,7 +31,7 @@ import { Label } from "@/components/ui/label";
 import { MoneyCalcInput, calcMoney } from "@/components/money-calc-input";
 import { useAuth } from "@/contexts/auth-context";
 import {
-  checkPoForm, emptyPoForm, emptyProduct, emptyPromo, emptyPayment, shipsToFromForm, yieldFromPacks, promoCountsByDefault, resolvePaymentNickname, ambiguousPaymentHint, defaultRewardPct, WEIGHTED_PAYMENT_LABEL, PROMO_REFLECTED_NOTE, PROMO_FROM_LINES_NOTE, SHIPPING_PROMO_NOTE,
+  checkPoForm, emptyPoForm, emptyProduct, emptyPromo, emptyPayment, shipsToFromForm, yieldFromPacks, promoCountsByDefault, resolvePaymentNickname, ambiguousPaymentHint, defaultRewardPct, WEIGHTED_PAYMENT_LABEL, PROMO_REFLECTED_NOTE, PROMO_FROM_LINES_NOTE, SHIPPING_PROMO_NOTE, regularPricesInformative,
   SOLD_AS_OPTIONS, PROMO_TYPES, PAYMENT_METHODS, CASHBACK_STATUSES,
   type PoFormState, type PoFormProduct, type PoFormPromo, type PoFormPayment, type PoFormPrefill, type PrefillSource, asinPackSetLabel, asinPackSetNote, followPacks } from "@shared/po-form";
 import { editBlockingErrors } from "@shared/po-edit-form";
@@ -438,8 +438,10 @@ export function NewPoForm({ open, onOpenChange, onCreated, prefill, initialSuppl
   const emailSelectValue = emailOther || (!emailInList && (form.email_used ?? "").trim() !== "") ? "__other" : (form.email_used ?? "");
   // The line grid (Maria's whiteboard): product row · ↳ ASIN rows beneath. The product name flexes up to ~640 px; the ASIN row's
   // cells keep fixed widths and wrap on a narrow window (no horizontal scroll at any width ≥ 1024).
-  // A Reg. price column (migration 097) only while a line carries one — a free-item deal (2026-11-06).
-  const showReg = form.products.some((p) => String(p.regular_price ?? "").trim() !== "");
+  // A Reg. price column (migration 097) only while it carries information (Maria 2026-11-08): a line whose regular price is not
+  // its price — a proven free-item deal, a sale in the line prices, a regular price the capture read — or opened by hand.
+  const [regOpen, setRegOpen] = useState(false);
+  const showReg = regOpen || regularPricesInformative(form.products);
   const G_LINE = showReg ? "grid grid-cols-[7.5rem_minmax(12rem,40rem)_5.5rem_5.5rem_4rem_4.5rem_1.75rem] items-start gap-x-2" : "grid grid-cols-[7.5rem_minmax(12rem,40rem)_5.5rem_4rem_4.5rem_1.75rem] items-start gap-x-2";
   // 2026-11-06: reason / notes 84 and the title from 6.5 rem so the row (and a bundle's, inside its ring) fits on one line at 1280.
   const PACK_MISSING_CLS = "!border-amber-500 text-amber-700 dark:text-amber-400"; // a pack not known (2026-11-06)
@@ -613,7 +615,7 @@ export function NewPoForm({ open, onOpenChange, onCreated, prefill, initialSuppl
         <div className="flex items-center justify-between">
           <span className="text-[11px] font-semibold uppercase tracking-wider text-muted-foreground">Lines as bought · ASIN rows beneath</span>
           <span className="flex items-center gap-2">
-            {!showReg && <Button size="sm" variant="ghost" className="h-7 text-xs" onClick={() => setForm((f) => ({ ...f, products: f.products.map((p) => ({ ...p, regular_price: p.price })) }))} title="A free-item deal (BOGO, Buy 2 Get 2 Free): the cost is shared by each line's regular price, so free units carry their share" data-testid="button-new-po-regular-prices">+ Regular prices</Button>}
+            {!showReg && <Button size="sm" variant="ghost" className="h-7 text-xs" onClick={() => { setRegOpen(true); setForm((f) => ({ ...f, products: f.products.map((p) => ({ ...p, regular_price: p.price })) })); }} title="A free-item deal (BOGO, Buy 2 Get 2 Free): the cost is shared by each line's regular price, so free units carry their share" data-testid="button-new-po-regular-prices">+ Regular prices</Button>}
             <Button size="sm" variant="outline" className="h-7" onClick={addLine} data-testid="button-new-po-add-product"><Plus className="h-3.5 w-3.5 mr-1" /> Add line</Button>
           </span>
         </div>

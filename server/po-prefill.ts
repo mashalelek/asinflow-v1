@@ -375,9 +375,17 @@ export async function enrichPrefill(query: QueryLike, capture: Capture, x: Prefi
   const freeDeal = x.promos.some((p) => isFreeItemPromo(p.description)) || x.lines.some((l) => (l.unitPrice ?? 0) === 0 && (l.regularUnitPrice ?? 0) > 0);
   const dealSavings = r2(x.lines.reduce((t, l) => t + (l.regularUnitPrice != null && l.regularUnitPrice > 0 && l.qty != null ? Math.max(0, l.regularUnitPrice * l.qty - (l.lineTotal ?? (l.unitPrice ?? 0) * l.qty)) : 0), 0));
   // Under a deal, a line the page shows at full price is its own regular price (its weight is unchanged; the form shows both).
+  // "In prices? yes" is proposed only on evidence (Maria 2026-11-08): the lines are that promo's amount under their regular prices
+  // or under the subtotal — never on the word "free" alone with the gap at 0.
+  const gapToSubtotal = x.subtotal != null ? r2(x.subtotal - linesSum) : 0;
+  const isDeal = (p: { description: string; amount: number | null }) => freeDeal && isFreeItemPromo(p.description)
+    && (p.amount == null ? dealSavings > 0 : (dealSavings > 0 && Math.abs(p.amount - dealSavings) <= 0.01) || (gapToSubtotal > 0.01 && Math.abs(p.amount - gapToSubtotal) <= 0.01));
+  // A line's own price as its regular price only under a deal that passed that check (or a $0 line the page priced): on the word
+  // "free" alone the Reg. price column would carry nothing (Maria 2026-11-08). A regular price the capture read is kept.
+  const dealProven = x.promos.some(isDeal) || x.lines.some((l) => (l.unitPrice ?? 0) === 0 && (l.regularUnitPrice ?? 0) > 0);
   products.forEach((p, i) => {
     if (!freeDeal) { delete p.regular_price; return; }
-    if (!p.regular_price && Number(p.price) > 0) p.regular_price = p.price;
+    if (!p.regular_price && Number(p.price) > 0 && dealProven) p.regular_price = p.price;
     if (p.regular_price) mark(`products.${i}.regular_price`, p.regular_price);
   });
   if (freeDeal && dealSavings > 0 && !x.promos.some((p) => isFreeItemPromo(p.description))) x = { ...x, promos: [...x.promos, { type: "sale", description: "Free-item deal (lines below their regular price)", amount: dealSavings, percent: null, confidence: "high" }] };
@@ -385,11 +393,6 @@ export async function enrichPrefill(query: QueryLike, capture: Capture, x: Prefi
   if (noAsin.length) warnings.push(`${noAsin.length === 1 ? `Line ${noAsin[0]}` : `Lines ${noAsin.join(", ")}`}: no ASIN in AF's database — pick one of the suggestions`);
   prefill.asin_candidates = asinCandidates;
   // The double-discount rule, per promo (Maria 2026-11-01; 1¢ 2026-11-04; per promo 2026-11-05): a promo already in the line totals defaults to not counting.
-  // "In prices? yes" is proposed only on evidence (Maria 2026-11-08): the lines are that promo's amount under their regular prices
-  // or under the subtotal — never on the word "free" alone with the gap at 0.
-  const gapToSubtotal = x.subtotal != null ? r2(x.subtotal - linesSum) : 0;
-  const isDeal = (p: { description: string; amount: number | null }) => freeDeal && isFreeItemPromo(p.description)
-    && (p.amount == null ? dealSavings > 0 : (dealSavings > 0 && Math.abs(p.amount - dealSavings) <= 0.01) || (gapToSubtotal > 0.01 && Math.abs(p.amount - gapToSubtotal) <= 0.01));
   const refl = reflectedPromos({ linesSum: r2(linesSum), subtotal: x.subtotal, discount: x.discount ?? 0, promoAmounts: x.promos.map((p) => (isDeal(p) ? p.amount ?? dealSavings : p.amount)), postDiscountSubtotal: x.total == null ? null : r2(x.total - (x.tax ?? 0) - (x.shipping ?? 0)), answers: x.promos.map((p) => (isDeal(p) ? true : null)), kinds: x.promos.map((p) => (isShippingPromo(p.description) ? "shipping" : isRewardsPromo(p.description) ? "rewards" : p.type)), shipping: x.shipping });
   const reflected = refl.all || refl.reflectedAmount > 0;
   // Totals that still do not reconcile: the lines match neither the subtotal nor (when the lines are net) the subtotal after discount.

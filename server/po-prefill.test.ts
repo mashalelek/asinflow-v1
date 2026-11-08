@@ -1,5 +1,5 @@
 import { describe, it, expect, vi } from "vitest";
-import { checkPoForm } from "@shared/po-form";
+import { checkPoForm, regularPricesInformative } from "@shared/po-form";
 import { CaptureSchema, PrefillSchema, extractPrefill, enrichPrefill, mergedPagesText, supplierForHost, shipsToForStreet, resolveShipTo, todayEt, storePrefill, getPrefill, _clearPrefillCache, PREFILL_TTL_MS, visibleQtys, inferLineQty, QTY_INFERRED_HINT, lineTotalPrice, isRewardsPromo, PROMO_AMOUNT_IMPLIED_HINT, PROMO_AMOUNT_FROM_LINES_HINT, SHIPPING_PROMO_HINT, isFreeItemPromo } from "./po-prefill";
 
 vi.mock("./log", () => ({ log: () => {} }));
@@ -175,6 +175,19 @@ describe("enrichment (no AI)", () => {
     const f = { ...out.form, products: [{ ...out.form.products![0], asin: "B0BHALEY01", sold_as: "individual" as const, units_per_pack: "1", prep_cost: "0" }] } as any;
     const r = checkPoForm(f);
     expect([r.promoReflected, r.discountReflected, r.asins[0]?.cost_per_unit]).toEqual([[false], false, "12.30"]);
+    // No Reg. price column on the word "free" alone (2026-11-08): no line gets its own price as a regular price.
+    expect(out.form.products?.map((p) => p.regular_price ?? null)).toEqual([null]);
+    expect(regularPricesInformative(out.form.products ?? [])).toBe(false);
+    // A regular price the capture read is kept (and shows), the other line stays blank.
+    // (A $5 "free gift" against 19.80 under the regular prices: not proven, so line 1 is not filled with its own price.)
+    const read = await enrichPrefill(q, capture, { ...x, subtotal: 221.48, total: 221.48, promos: [{ ...x.promos[0], amount: 5 }], lines: [x.lines[0], { ...x.lines[0], productName: "Almond Roca 22oz", regularUnitPrice: 14.50 }] }, null, { id: "", capturedAt: null });
+    expect(read.form.products?.map((p) => p.regular_price ?? null)).toEqual([null, "14.5"]);
+    expect(regularPricesInformative(read.form.products ?? [])).toBe(true);
+  });
+  it("regularPricesInformative: a regular price equal to the price carries nothing; blank, $ and commas are read", () => {
+    expect(regularPricesInformative([{ price: "12.30", regular_price: "12.30" }, { price: "5", regular_price: "" }])).toBe(false);
+    expect(regularPricesInformative([{ price: "0", regular_price: "$34.99" }])).toBe(true);
+    expect(regularPricesInformative([{ price: "1,200.00", regular_price: "1200" }])).toBe(false);
   });
   // v1.2.1 (Maria 2026-11-01): a confirmation page shows no order date → today on the form, plain marker, no warning.
   it("no order date on the pages → today (America/New_York), no source marker, and the model's note about it is dropped", async () => {

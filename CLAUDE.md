@@ -126,7 +126,7 @@ and any introduced error must be fixed forward before committing.
 
 ## Tests
 
-`npm test` (vitest). **2,395 tests across 227 files** as of 2026-11-08 — this
+`npm test` (vitest). **2,396 tests across 227 files** as of 2026-11-08 — this
 codebase IS tested; the old "there are no tests" line was years stale.
 
 **A gate report must cover BOTH typecheck commands, labelled separately:**

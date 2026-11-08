@@ -47,6 +47,11 @@ export const promoCountsByDefault = (type: string, discountReflected = false): b
 /** A typed promo amount replaced in the costs (2026-11-07): the line prices carry the sale, so it is subtotal − Σ line totals. */
 export const PROMO_FROM_LINES_NOTE = "subtotal − line totals: the line prices already carry this sale";
 export const PROMO_REFLECTED_NOTE = "already reflected in line prices";
+/** The Reg. price column carries information (Maria 2026-11-08): some line's regular price is given and is not its price. */
+export function regularPricesInformative(products: ReadonlyArray<{ price?: string | null; regular_price?: string | null }>): boolean {
+  const num = (v: string | null | undefined) => { const t = String(v ?? "").replace(/[$,\s]/g, ""); return t === "" ? null : Number(t); };
+  return products.some((p) => { const r = num(p.regular_price); return r != null && Number.isFinite(r) && r !== num(p.price); });
+}
 /** A shipping discount (2026-11-08): what the form says beside it. */
 export const SHIPPING_PROMO_NOTE = "a shipping discount: it comes off the shipping, is never in the line prices and always counts toward COGS";
 /** The ambiguity question (Maria 2026-11-06): it blocks Create PO / Save until answered — on Edit PO too, even when the stored PO already had it. */
