@@ -52,7 +52,7 @@ describe("POs page (§5.1 chip, §5.2 button + toast, §5.3 panel)", () => {
     expect(page).toMatch(/fetchLongSync\("\/api\/pos\/sync-shipments"\)/);
     expect(page).toMatch(/data-testid="button-sync-shipments"/);
     // PO matching §6: a Dismissed list keeps it; so do dismissed Velocity orders and linked orders (2026-11-07)
-    expect(page).toMatch(/if \(!data \|\| \(data\.count === 0 && \(data\.dismissed \?\? \[\]\)\.length === 0 && \(data\.ordersDismissed \?\? \[\]\)\.length === 0 && \(data\.links \?\? \[\]\)\.length === 0\)\) return null;/);
+    expect(page).toMatch(/if \(!data \|\| data\.count === 0\) return null;/); // 2026-11-07: only when something is unmatched
     expect(page).toMatch(/<LinkPicker id=\{l\.id\} seed=\{l\.order_number \|\| l\.asin \|\| ""\} onPick=\{\(r\) => tryLink\(r\.id, r\.order_id\)\} \/>/);
     expect(page).toMatch(/<UnmatchedPanel key=\{unmatchedKey\} onChanged=\{load\} suppliers=\{data\?\.suppliers \?\? \[\]\} \/>/);
   });

@@ -57,7 +57,7 @@ import { syncSuppressionData } from "./suppression-sync";
 import { loadAfAsinCostMap } from "./po-af-source";
 import { buildVelocityRecords, serializeVelocityCsv, parseMDY, formatYMD, todayLocal } from "./velocity-export";
 import { fetchAllKnownOrders, matchKeysForOrder, createBundleOrder, submitBulkCsv, updateInboundOrder } from "./velocity-api";
-import { loadOrderLinks, linkedPairs, linkVelocityOrder, unlinkVelocityOrder } from "./velocity-order-links";
+import { loadOrderLinks, linkedPairs, linkVelocityOrder, unlinkVelocityOrder, listOrderLinks } from "./velocity-order-links";
 import { recordableBundles, recordBundleIdentities, mapBundleIdentity, hydrateChildlessBundles } from "./velocity-bundle-identity";
 import { buildVelocityPlan, putBodyFromDiffs, type PlanUpdate } from "./velocity-reconcile";
 import { buildSellerboardCogs, serializeSbCsv } from "./sellerboard-cogs";
@@ -5060,14 +5060,7 @@ export async function registerRoutes(
       )).rows;
       const orders = allOrders.filter((o: any) => !o.dismissed_at);
       const ordersDismissed = allOrders.filter((o: any) => o.dismissed_at);
-      // Linked Velocity orders (velocity_order_links), newest first — Unlink lives here.
-      const links = (await query(
-        `SELECT l.velocity_order_id, l.velocity_number, l.order_number, l.retailer, l.asin, l.quantity, l.source, l.note, l.linked_at,
-                u.display_name AS linked_by, p.id AS po_id, p.order_id AS po_order_id, p.supplier
-           FROM velocity_order_links l JOIN po_asins pa ON pa.id = l.po_asin_id JOIN purchase_orders p ON p.id = pa.po_id
-           LEFT JOIN users u ON u.id = l.linked_by ORDER BY l.linked_at DESC, l.velocity_order_id`,
-      )).rows;
-      res.json({ lines, dismissed, ambiguous, orders, ordersDismissed, links, count: lines.length + ambiguous.length + orders.length });
+      res.json({ lines, dismissed, ambiguous, orders, ordersDismissed, count: lines.length + ambiguous.length + orders.length });
     } catch (err: any) { res.status(500).json({ message: err.message }); }
   });
 
@@ -5093,6 +5086,13 @@ export async function registerRoutes(
       const r = await query(`UPDATE velocity_orders_unplaced SET dismissed_at = now(), dismiss_note = $2 WHERE velocity_order_id = ANY($1::text[]) AND dismissed_at IS NULL`, [ids, note]);
       res.json({ dismissed: r.rowCount ?? 0 });
     } catch (err: any) { res.status(500).json({ message: err.message }); }
+  });
+  // Linked Velocity orders (2026-11-07): resolved, so not in the Unmatched panel — one PO's on its Tracking tab (?po_id), all from the POs toolbar.
+  app.get("/api/velocity-order-links", async (req: Request, res: Response) => {
+    if (!isDbAvailable()) { res.status(503).json({ message: "Database not available" }); return; }
+    const poId = String(req.query.po_id ?? "").trim();
+    if (poId && !/^[0-9a-f-]{36}$/i.test(poId)) { res.status(400).json({ message: "po_id must be a PO id" }); return; }
+    try { res.json({ links: await listOrderLinks(query, poId || null) }); } catch (err: any) { res.status(500).json({ message: err.message }); }
   });
   // Unlink: the link goes (History row stays); the next Sync Shipments places the order by the rules or lists it again.
   app.delete("/api/velocity-order-links/:id", async (req: Request, res: Response) => {

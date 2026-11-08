@@ -92,3 +92,16 @@ export async function unlinkVelocityOrder(query: QueryLike, velocityOrderId: str
   await logEdits(query, String(l.po_id), userId, "shipment", String(l.po_asin_id), [{ field: "velocity_order_link", old: velocityOrderLabel(l), new: null }]);
   return { status: 200, body: { unlinked: true } };
 }
+
+/** The stored links as the UI lists them (2026-11-07): newest first; one PO's links with `poId` (its Tracking tab), else all (the POs toolbar). */
+export async function listOrderLinks(query: QueryLike, poId?: string | null): Promise<any[]> {
+  return (await query(
+    `SELECT l.velocity_order_id, l.velocity_number, l.order_number, l.retailer, l.asin, l.quantity, l.source, l.note, l.linked_at,
+            u.display_name AS linked_by, p.id AS po_id, p.order_id AS po_order_id, p.supplier
+       FROM velocity_order_links l JOIN po_asins pa ON pa.id = l.po_asin_id JOIN purchase_orders p ON p.id = pa.po_id
+       LEFT JOIN users u ON u.id = l.linked_by
+      WHERE ($1::uuid IS NULL OR p.id = $1::uuid) ORDER BY l.linked_at DESC, l.velocity_order_id`,
+    [poId || null],
+  )).rows;
+}
+

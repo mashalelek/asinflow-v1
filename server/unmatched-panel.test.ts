@@ -13,7 +13,7 @@ describe("server", () => {
   it("visible = unresolved and not dismissed; the POs badge counts the same set; dismissed come back separately", () => {
     expect(routes).toMatch(/FROM shipment_unmatched WHERE resolved_at IS NULL AND dismissed_at IS NULL\) \+ \(SELECT COUNT\(\*\)::int FROM velocity_shipments WHERE sc_match = 'ambiguous'\)\s+\+ \(SELECT COUNT\(\*\)::int FROM velocity_orders_unplaced WHERE dismissed_at IS NULL\)/);
     expect(routes).toMatch(/u\.candidates, u\.nearest_miss, u\.dismissed_at/);
-    expect(routes).toMatch(/res\.json\(\{ lines, dismissed, ambiguous, orders, ordersDismissed, links, count: lines\.length \+ ambiguous\.length \+ orders\.length \}\)/);
+    expect(routes).toMatch(/res\.json\(\{ lines, dismissed, ambiguous, orders, ordersDismissed, count: lines\.length \+ ambiguous\.length \+ orders\.length \}\)/);
     expect(routes).toMatch(/l\.retailer_unmapped = resolveRetailer\(l\.retailer, aliases, suppliers\)\.kind === "unresolved"/);
   });
   it("dismiss stamps dismissed_at, never deletes; aliases from the panel are 'manual' and only to a real supplier; the picker records match_reason", () => {
@@ -25,6 +25,17 @@ describe("server", () => {
 });
 
 describe("client", () => {
+  // Maria 2026-11-07: the panel shows only when something is unmatched; linked Velocity orders are resolved and live on their PO.
+  it("no panel unless something is unmatched; linked orders on the PO's Tracking tab and a quiet toolbar list, never under the warning", () => {
+    expect(page).toMatch(/if \(!data \|\| data\.count === 0\) return null;/);
+    expect(page).not.toMatch(/Linked Velocity orders|showLinks|data\.links/);
+    expect(page).toMatch(/<VelocityLinksButton reloadKey=\{unmatchedKey\} onChanged=\{load\} \/>/);
+    expect(read("client/src/components/po-tracking.tsx")).toMatch(/<PoVelocityLinks poId=\{poId\} onChanged=\{onChanged\} \/>/);
+    const v = read("client/src/components/velocity-links.tsx");
+    expect(v).toMatch(/\/api\/velocity-order-links\$\{poId \? `\?po_id=/);
+    expect(v).not.toMatch(/amber|AlertTriangle|destructive"[^>]*Linked/);
+    expect(routes).toMatch(/app\.get\("\/api\/velocity-order-links"/);
+  });
   it("candidate buttons on the row, best first, through the picker's link route; free-text picker kept", () => {
     expect(page).toMatch(/cands\.map\(\(c\) => \([\s\S]{0,400}tryLink\(c\.po_asin_id, c\.order_id\)[\s\S]{0,200}Link to \{candidateLabel\(c\)\}/);
     expect(page).toMatch(/<LinkPicker id=\{l\.id\} seed=\{l\.order_number \|\| l\.asin \|\| ""\} onPick=\{\(r\) => tryLink\(r\.id, r\.order_id\)\} \/>/);

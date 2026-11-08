@@ -8,6 +8,7 @@ import { RefreshCw, AlertTriangle, ExternalLink, Copy, Check } from "lucide-reac
 import { Button } from "@/components/ui/button";
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle, DialogTable } from "@/components/ui/dialog";
 import { useToast } from "@/hooks/use-toast";
+import { PoVelocityLinks } from "@/components/velocity-links";
 
 export interface TrackingRow {
   id: number; carrier: string; tracking_number: string; retailer_order_id: string | null; shipped_at: string | null;
@@ -117,6 +118,7 @@ export function PoTrackingTab({ poId, onChanged }: { poId: string; onChanged?: (
           <Button size="sm" variant="outline" className="h-6 text-xs ml-auto" onClick={() => void clearReview()} data-testid="button-clear-review-velocity">Clear</Button>
         </div>
       )}
+      <PoVelocityLinks poId={poId} onChanged={onChanged} />
       {rows.length === 0 ? <p className="text-muted-foreground">No tracking for this PO yet.</p> : (
         <DialogTable><table className="w-full text-xs">
           <thead className="text-muted-foreground text-left">

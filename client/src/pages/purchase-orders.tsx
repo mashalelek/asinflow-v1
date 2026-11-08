@@ -35,6 +35,8 @@ import { PoProductsTable, PoHistory, PoDangerActions, poApi } from "@/components
 import { DocumentsPaperclip, PoDocumentsTab, type PoDocumentLite, type PoDocument } from "@/components/po-documents";
 import { InlineNoteCell, InlineNoteBox } from "@/components/inline-note";
 import { PoTrackingTab, SyncTrackingButton, UnmatchedTrackingChip } from "@/components/po-tracking";
+import { VelocityLinksButton, velocityOrderText } from "@/components/velocity-links";
+export { velocityOrderText };
 import { PoMoneyTab, type PoPayment, type PoPromo, type PoRefund } from "@/components/po-money";
 import type { PoDefect } from "@/components/po-defects";
 import { Pencil } from "lucide-react";
@@ -233,9 +235,7 @@ interface UnmatchedCandidate { po_asin_id: string; order_id: string; supplier: s
 /** A Velocity order that has not shipped and that no rule placed (2026-11-07, velocity_orders_unplaced). */
 export interface UnplacedOrder { velocity_order_id: string; reason: "no_order" | "po_not_found"; candidates: UnmatchedCandidate[] | null; nearest_miss: string | null; dismissed_at: string | null; dismiss_note?: string | null;
   velocity_number: string | null; order_number: string | null; retailer: string | null; asin: string | null; item_name: string | null; status: string | null; date: string | null; quantity: string | null; quantity_received: string | null }
-/** A stored link Velocity order → PO ASIN row (velocity_order_links). */
-export interface VelocityOrderLink { velocity_order_id: string; velocity_number: string | null; order_number: string | null; retailer: string | null; asin: string | null; quantity: string | null; source: string; note: string | null; linked_at: string; linked_by: string | null; po_id: string; po_order_id: string; supplier: string }
-interface UnmatchedResponse { lines: UnmatchedLine[]; dismissed: UnmatchedLine[]; ambiguous: Array<{ id: string; shipped_at: string | null; rows: number }>; orders?: UnplacedOrder[]; ordersDismissed?: UnplacedOrder[]; links?: VelocityOrderLink[]; count: number }
+interface UnmatchedResponse { lines: UnmatchedLine[]; dismissed: UnmatchedLine[]; ambiguous: Array<{ id: string; shipped_at: string | null; rows: number }>; orders?: UnplacedOrder[]; ordersDismissed?: UnplacedOrder[]; count: number }
 interface PickerRow { id: string; asin: string; asin_name: string | null; qty: number; units_per_pack: number; order_id: string; supplier: string; order_date: string; velocity_warning?: string | null }
 
 /** Toast text for a Sync Shipments result (§5.2). */
@@ -340,7 +340,7 @@ function UnmatchedPanel({ onChanged, suppliers }: { onChanged: () => void; suppl
     setErr(null); setBusy(true);
     try { await fn(); load(); onChanged(); } catch (e: any) { setErr(e.message); } finally { setBusy(false); }
   };
-  if (!data || (data.count === 0 && (data.dismissed ?? []).length === 0 && (data.ordersDismissed ?? []).length === 0 && (data.links ?? []).length === 0)) return null;
+  if (!data || data.count === 0) return null;
   const lines = data.lines;
   const allPicked = lines.length > 0 && lines.every((l) => picked.has(l.id));
   const toggle = (id: string) => setPicked((p) => { const n = new Set(p); if (n.has(id)) n.delete(id); else n.add(id); return n; });
@@ -383,7 +383,7 @@ function UnmatchedPanel({ onChanged, suppliers }: { onChanged: () => void; suppl
               </div>
             </>
           )}
-          <VelocityOrdersSection orders={data.orders ?? []} dismissed={data.ordersDismissed ?? []} links={data.links ?? []} busy={busy} act={act} />
+          <VelocityOrdersSection orders={data.orders ?? []} dismissed={data.ordersDismissed ?? []} busy={busy} act={act} />
           {data.ambiguous.length > 0 && (
             <div className="space-y-1">
               <div className="text-muted-foreground">Seller Central match ambiguous (two STA groups with identical SKUs on the same day) — resolve in Velocity / Seller Central, then Sync Shipments again:</div>
@@ -408,11 +408,6 @@ function UnmatchedPanel({ onChanged, suppliers }: { onChanged: () => void; suppl
   );
 }
 
-/** "Velocity orders" text for one order: #8785 · no_poid_at_checkout. */
-export function velocityOrderText(o: { velocity_number: string | null; order_number: string | null }): string {
-  return `${o.velocity_number ? `#${o.velocity_number}` : "Velocity order"} · ${o.order_number || "(no Order #)"}`;
-}
-
 async function postJson(url: string, body: unknown, method = "POST"): Promise<any> {
   const res = await fetch(url, { method, headers: { "Content-Type": "application/json" }, body: body == null ? undefined : JSON.stringify(body) });
   const data = await res.json().catch(() => ({}));
@@ -423,14 +418,13 @@ async function postJson(url: string, body: unknown, method = "POST"): Promise<an
 /**
  * "Velocity orders with no PO" (2026-11-07): orders still at Velocity that no
  * rule placed — one click when a single PO fits, else the picker; dismiss
- * hides one while it stays listed. Under it, the linked orders with Unlink.
+ * hides one while it stays listed. Linked orders are not here (resolved): see velocity-links.tsx.
  */
-function VelocityOrdersSection({ orders, dismissed, links, busy, act }: {
-  orders: UnplacedOrder[]; dismissed: UnplacedOrder[]; links: VelocityOrderLink[]; busy: boolean; act: (fn: () => Promise<unknown>) => Promise<void>;
+function VelocityOrdersSection({ orders, dismissed, busy, act }: {
+  orders: UnplacedOrder[]; dismissed: UnplacedOrder[]; busy: boolean; act: (fn: () => Promise<unknown>) => Promise<void>;
 }) {
   const [showDismissed, setShowDismissed] = useState(false);
-  const [showLinks, setShowLinks] = useState(false);
-  if (orders.length === 0 && dismissed.length === 0 && links.length === 0) return null;
+  if (orders.length === 0 && dismissed.length === 0) return null;
   const link = (o: UnplacedOrder, poAsinId: string) => act(() => postJson(`/api/velocity-orders/${encodeURIComponent(o.velocity_order_id)}/link`, { po_asin_id: poAsinId }));
   return (
     <div className="space-y-1" data-testid="section-velocity-orders">
@@ -487,25 +481,6 @@ function VelocityOrdersSection({ orders, dismissed, links, busy, act }: {
           {showDismissed && (
             <div className="mt-1 space-y-0.5 text-muted-foreground">
               {dismissed.map((o) => <div key={o.velocity_order_id} className="font-mono">{velocityOrderText(o)} · {o.retailer || "—"} · {o.asin} · {fmtQty(Number(o.quantity ?? 0))}u · dismissed {String(o.dismissed_at).slice(0, 10)}{o.dismiss_note ? ` — ${o.dismiss_note}` : ""}</div>)}
-            </div>
-          )}
-        </div>
-      )}
-      {links.length > 0 && (
-        <div>
-          <button className="inline-flex items-center gap-1 text-muted-foreground" onClick={() => setShowLinks((v) => !v)} data-testid="button-velocity-links-toggle">
-            {showLinks ? <ChevronDown className="h-3 w-3" /> : <ChevronRight className="h-3 w-3" />} Linked Velocity orders ({links.length})
-          </button>
-          {showLinks && (
-            <div className="mt-1 space-y-0.5" data-testid="list-velocity-links">
-              {links.map((l) => (
-                <div key={l.velocity_order_id} className="flex flex-wrap items-center gap-2" data-testid={`row-velocity-link-${l.velocity_order_id}`}>
-                  <span className="font-mono">{velocityOrderText(l)} · {l.retailer || "—"} · {l.asin} · {l.quantity != null ? `${fmtQty(Number(l.quantity))}u` : "—"}</span>
-                  <span className="text-muted-foreground">→ {l.supplier} {l.po_order_id} · {String(l.linked_at).slice(0, 10)}{l.linked_by ? ` by ${l.linked_by}` : ""} ({l.source})</span>
-                  <Button size="sm" variant="ghost" className="h-6 text-xs" disabled={busy}
-                    onClick={() => void act(() => postJson(`/api/velocity-order-links/${encodeURIComponent(l.velocity_order_id)}`, null, "DELETE"))} data-testid={`button-unlink-velocity-order-${l.velocity_order_id}`}>Unlink</Button>
-                </div>
-              ))}
             </div>
           )}
         </div>
@@ -757,9 +732,9 @@ export default function PurchaseOrders() {
 
   return (
     <div className="px-6 py-4 space-y-4">
-      <div className="flex items-center justify-between">
-        <h1 className="text-2xl font-semibold">Purchase Orders</h1>
-        <div className="flex items-center gap-2">
+      <div className="flex items-start justify-between gap-4">
+        <h1 className="shrink-0 whitespace-nowrap text-2xl font-semibold">Purchase Orders</h1>
+        <div className="flex flex-wrap items-center justify-end gap-2 [&>*]:whitespace-nowrap">
           {/* New PO form (po-af-owned §4) — a full page since 2026-11-01. */}
           <Button variant="default" size="sm" onClick={() => navigate("/pos/new")} data-testid="button-new-po">
             <Plus className="h-4 w-4 mr-1" /> New PO
@@ -777,6 +752,7 @@ export default function PurchaseOrders() {
           {/* PO tracking → Velocity (SPEC §26). */}
           <UnmatchedTrackingChip suppliers={data?.suppliers ?? []} reloadKey={trackingKey} onChanged={load} />
           <SyncTrackingButton onDone={() => { setTrackingKey((k) => k + 1); void load(); }} />
+          <VelocityLinksButton reloadKey={unmatchedKey} onChanged={load} />
         </div>
       </div>
 
