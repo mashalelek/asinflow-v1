@@ -21,7 +21,7 @@ import { normalizeStreet } from "./tracking-parse";
 import { loadAliases, aliasKey } from "./supplier-aliases";
 import { defaultEmailForSupplier } from "./supplier-defaults";
 import { promoCountsByDefault, yieldFromPacks, resolvePaymentNickname, defaultRewardPct, ambiguousPaymentHint, type PaymentLists, type PoFormState, type PoFormProduct, type PoFormPrefill, type PrefillSource, type PrefillAsinCandidate } from "@shared/po-form";
-import { reflectedPromos } from "@shared/po-cost";
+import { reflectedPromos, isShippingPromo } from "@shared/po-cost";
 // scrub.js is a plain browser script: under Node's ESM loader it exports nothing and defines globalThis.AfScrub (as in the page).
 import "../chrome-extension/core/scrub.js";
 const { scrubText, rescrubFields } = (globalThis as unknown as { AfScrub: typeof import("../chrome-extension/core/scrub.js") }).AfScrub;
@@ -121,6 +121,9 @@ export type PrefillExtraction = z.infer<typeof PrefillSchema>;
 
 /** A multi-buy / free-item deal by its text (2026-11-06, Yankee Candle "Buy 2, Get 2 Free"). */
 export const FREE_ITEM_PROMO = /\b(?:bogo|b\d+g\d+|buy\s*\d+\s*,?\s*get\s*\d+|free)\b/i;
+/** "Free FedEx Ground shipping" is not a free-item deal (2026-11-08): a shipping discount never is. */
+export const isFreeItemPromo = (d: string): boolean => FREE_ITEM_PROMO.test(d) && !isShippingPromo(d);
+export const SHIPPING_PROMO_HINT = "Shipping discount: comes off the shipping, never in the line prices, counts toward COGS";
 export const FREE_ITEM_NOTE = "Free-item deal: already in the line prices; the order's cost is shared by regular price";
 const GIFT_CARD_TEXT = /\bgift\s*cards?\b|\begift\b/i;
 
@@ -369,7 +372,7 @@ export async function enrichPrefill(query: QueryLike, capture: Capture, x: Prefi
   }
   // Free-item deals (2026-11-06): regular prices are kept only under a multi-buy deal (a "was" price on a plain sale is not one —
   // the cheaper line really is cheaper); the deal is a sale promo already in the line prices.
-  const freeDeal = x.promos.some((p) => FREE_ITEM_PROMO.test(p.description)) || x.lines.some((l) => (l.unitPrice ?? 0) === 0 && (l.regularUnitPrice ?? 0) > 0);
+  const freeDeal = x.promos.some((p) => isFreeItemPromo(p.description)) || x.lines.some((l) => (l.unitPrice ?? 0) === 0 && (l.regularUnitPrice ?? 0) > 0);
   const dealSavings = r2(x.lines.reduce((t, l) => t + (l.regularUnitPrice != null && l.regularUnitPrice > 0 && l.qty != null ? Math.max(0, l.regularUnitPrice * l.qty - (l.lineTotal ?? (l.unitPrice ?? 0) * l.qty)) : 0), 0));
   // Under a deal, a line the page shows at full price is its own regular price (its weight is unchanged; the form shows both).
   products.forEach((p, i) => {
@@ -377,13 +380,17 @@ export async function enrichPrefill(query: QueryLike, capture: Capture, x: Prefi
     if (!p.regular_price && Number(p.price) > 0) p.regular_price = p.price;
     if (p.regular_price) mark(`products.${i}.regular_price`, p.regular_price);
   });
-  if (freeDeal && dealSavings > 0 && !x.promos.some((p) => FREE_ITEM_PROMO.test(p.description))) x = { ...x, promos: [...x.promos, { type: "sale", description: "Free-item deal (lines below their regular price)", amount: dealSavings, percent: null, confidence: "high" }] };
+  if (freeDeal && dealSavings > 0 && !x.promos.some((p) => isFreeItemPromo(p.description))) x = { ...x, promos: [...x.promos, { type: "sale", description: "Free-item deal (lines below their regular price)", amount: dealSavings, percent: null, confidence: "high" }] };
   form.products = products;
   if (noAsin.length) warnings.push(`${noAsin.length === 1 ? `Line ${noAsin[0]}` : `Lines ${noAsin.join(", ")}`}: no ASIN in AF's database — pick one of the suggestions`);
   prefill.asin_candidates = asinCandidates;
   // The double-discount rule, per promo (Maria 2026-11-01; 1¢ 2026-11-04; per promo 2026-11-05): a promo already in the line totals defaults to not counting.
-  const isDeal = (p: { description: string }) => freeDeal && FREE_ITEM_PROMO.test(p.description);
-  const refl = reflectedPromos({ linesSum: r2(linesSum), subtotal: x.subtotal, discount: x.discount ?? 0, promoAmounts: x.promos.map((p) => (isDeal(p) ? p.amount ?? dealSavings : p.amount)), postDiscountSubtotal: x.total == null ? null : r2(x.total - (x.tax ?? 0) - (x.shipping ?? 0)), answers: x.promos.map((p) => (isDeal(p) ? true : null)), kinds: x.promos.map((p) => (isRewardsPromo(p.description) ? "rewards" : p.type)) });
+  // "In prices? yes" is proposed only on evidence (Maria 2026-11-08): the lines are that promo's amount under their regular prices
+  // or under the subtotal — never on the word "free" alone with the gap at 0.
+  const gapToSubtotal = x.subtotal != null ? r2(x.subtotal - linesSum) : 0;
+  const isDeal = (p: { description: string; amount: number | null }) => freeDeal && isFreeItemPromo(p.description)
+    && (p.amount == null ? dealSavings > 0 : (dealSavings > 0 && Math.abs(p.amount - dealSavings) <= 0.01) || (gapToSubtotal > 0.01 && Math.abs(p.amount - gapToSubtotal) <= 0.01));
+  const refl = reflectedPromos({ linesSum: r2(linesSum), subtotal: x.subtotal, discount: x.discount ?? 0, promoAmounts: x.promos.map((p) => (isDeal(p) ? p.amount ?? dealSavings : p.amount)), postDiscountSubtotal: x.total == null ? null : r2(x.total - (x.tax ?? 0) - (x.shipping ?? 0)), answers: x.promos.map((p) => (isDeal(p) ? true : null)), kinds: x.promos.map((p) => (isShippingPromo(p.description) ? "shipping" : isRewardsPromo(p.description) ? "rewards" : p.type)), shipping: x.shipping });
   const reflected = refl.all || refl.reflectedAmount > 0;
   // Totals that still do not reconcile: the lines match neither the subtotal nor (when the lines are net) the subtotal after discount.
   if (x.subtotal != null && x.lines.length > 0 && !reflected && Math.abs(r2(linesSum) - x.subtotal) > 0.01) warnings.push(`Lines add up to ${r2(linesSum).toFixed(2)}, the subtotal is ${x.subtotal.toFixed(2)}`);
@@ -400,6 +407,8 @@ export async function enrichPrefill(query: QueryLike, capture: Capture, x: Prefi
     if (p.amount == null && amount != null && !deal) hints[`promos.${i}.amount`] = PROMO_AMOUNT_IMPLIED_HINT;
     if (pinned) hints[`promos.${i}.amount`] = `${PROMO_AMOUNT_FROM_LINES_HINT} (the page read ${p.amount!.toFixed(2)})`;
     if (deal) hints[`promos.${i}.amount`] = FREE_ITEM_NOTE;
+    // A shipping discount (2026-11-08, brown-haley.com 04433): a sale, never in the line prices, counting — it comes off the shipping.
+    if (refl.shipping?.[i]) { hints[`promos.${i}.amount`] = SHIPPING_PROMO_HINT; return { type: "sale", description: p.description, amount: m2(amount), percent: m2(p.percent), counts_toward_cogs: true, in_line_prices: false }; }
     // A free-item deal is a sale already in the line prices (in_line_prices true): it reduces nothing; the regular prices share the cost.
     return { type: deal ? "sale" : rewards || p.confidence === "high" ? type : "", description: p.description, amount: m2(amount), percent: m2(p.percent), counts_toward_cogs: deal ? false : promoCountsByDefault(type, refl.all || refl.reflected[i]), ...(deal ? { in_line_prices: true } : {}) };
   });

@@ -1,7 +1,7 @@
 import { describe, it, expect } from "vitest";
 import { readFileSync } from "fs";
 import { resolve } from "path";
-import { costPerUnitPrefill, adjustedProductCost, allocateAsinCosts, discountReflectedInLines, lineMoney, COST_FORMULA_VERSION, reflectedPromos, promoCostHeader, sequencedPromoAmounts } from "./po-cost";
+import { costPerUnitPrefill, adjustedProductCost, allocateAsinCosts, discountReflectedInLines, lineMoney, COST_FORMULA_VERSION, reflectedPromos, promoCostHeader, sequencedPromoAmounts, promoKind, isShippingPromo } from "./po-cost";
 
 // The allocation measured against the imported 2026 cost / unit (sheet Col Y).
 // v1 (price × total ÷ subtotal × (1 − GC)) reproduced 1,166 of 1,582; v2
@@ -144,5 +144,31 @@ describe("promo sequence (Maria 2026-11-06)", () => {
     expect(r.reflected).toEqual([true, false]);
     const one = reflectedPromos({ linesSum: 100, subtotal: 100, discount: 25, promoAmounts: [null], postDiscountSubtotal: null, percents: [20], sequenceBase: 100 });
     expect(one.amounts).toEqual([25]); // the page's $25 discount, not 20% of $100
+  });
+});
+
+// Maria 2026-11-08, brown-haley.com 04433: a shipping discount offsets the Shipping field — never in the line prices, always counts.
+describe("shipping discounts", () => {
+  const base = { linesSum: 332.22, subtotal: 332.22, promoAmounts: [83.06, 30], postDiscountSubtotal: 219.16, kinds: ["sale", "shipping"], shipping: 30 };
+  it("by the text, whatever the type", () => {
+    expect([isShippingPromo("Free FedEx Ground shipping"), isShippingPromo("Free delivery"), isShippingPromo("Buy 2, Get 2 Free"), isShippingPromo("25% off")]).toEqual([true, true, false, false]);
+    expect([isShippingPromo("Shipping discount"), isShippingPromo("$10 off shipping"), isShippingPromo("50% off standard shipping")]).toEqual([true, true, true]);
+    // The shipping-worded promos on production (2026-11-08): only the real shipping discounts.
+    expect(["Free FedEx Ground shipping on orders of $180.00 or more", "Free shipping on orders over $99 with 289166", "20% off $100+ and 30% off $150+, plus free shipping, with CYBER", "$15 coupon code for messed up boxes delivery"].map(isShippingPromo)).toEqual([true, true, false, false]);
+    expect([promoKind("sale", "Free FedEx Ground shipping"), promoKind("rewards", "$20 Rewards Voucher"), promoKind(null, null)]).toEqual(["shipping", "rewards", null]);
+  });
+  it("gap 0: nothing is in the prices; the Discount field held it or not, the header comes out the same", () => {
+    for (const discount of [113.06, 83.06]) {
+      const r = reflectedPromos({ ...base, discount });
+      expect([r.all, r.reflected, r.amounts, r.shipping, r.shippingOffset, r.shippingInDiscount]).toEqual([false, [false, false], [83.06, 30], [false, true], 30, discount === 113.06 ? 30 : 0]);
+      const h = promoCostHeader({ subtotal: 332.22, discount, gcPct: null, tax: 0, shDonations: 30 }, 332.22, [{ counts: true }, { counts: false }], r);
+      expect([h.discount, h.shDonations, h.nonCountingPromoAmount]).toEqual([83.06, 0, 0]);
+      expect(allocateAsinCosts(h, [{ price: null, qty: 9, lineTotal: 110.74 }], 9)?.cogs).toBe(9.23);
+    }
+  });
+  it("an \"In prices? yes\" answer on it is ignored; the sale in the line prices still pins as before", () => {
+    expect(reflectedPromos({ ...base, discount: 113.06, answers: [null, true] }).reflected).toEqual([false, false]);
+    const sale = reflectedPromos({ ...base, linesSum: 249.16, discount: 113.06, postDiscountSubtotal: 219.16 });
+    expect([sale.all, sale.reflected, sale.shipping]).toEqual([true, [true, false], [false, true]]);
   });
 });

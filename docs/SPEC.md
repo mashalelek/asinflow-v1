@@ -6244,7 +6244,23 @@ every save and every recompute; a recompute stamps version 3.
   The form warns "Promos add up to X, the discount is Y" when the promo
   amounts miss the Discount field by more than 1¢ (either with or
   without the promos answered "in prices", so a free-item deal outside
-  the discount is not flagged). **Promo sequence (Maria 2026-11-06):** promos apply in
+  the discount is not flagged). **Shipping discounts (Maria 2026-11-08,
+  brown-haley.com 04433):** a promo whose text is a shipping discount
+  ("Free FedEx Ground shipping…", "shipping credit", "$10 off shipping";
+  not when the same text carries a product % / $ off) offsets the
+  Shipping field, which counts toward COGS — so it is never in the line
+  prices and always counts, whatever its type, "In prices?" answer or
+  COGS toggle (the form flags another setting as ignored). It leaves the
+  in-prices rule: it comes off the Shipping (at most the shipping) and
+  out of the Discount field when the field held it (the promo amounts,
+  else the totals, say which). po_promos.type has no shipping value; the
+  text decides (`promoKind` in shared/po-cost.ts). A promo equal to the
+  shipping without such text is flagged, not guessed. 04433: lines
+  110.74 / 221.48 at regular price, the 25% sale 83.06, shipping 30 − 30
+  → COGS 9.23 / 18.46. The prefill proposes "In prices? yes" only on
+  evidence — the lines are that promo's amount under their regular
+  prices or under the subtotal — never on the word "free" alone (the
+  free-item deal matched "Free … shipping" until this). **Promo sequence (Maria 2026-11-06):** promos apply in
   their order (`po_promos.position`; the prefill keeps the page's order,
   the form's ↑ reorders, Edit PO writes the new positions only when the
   order changed): a $ promo takes its amount at its place, a % promo its

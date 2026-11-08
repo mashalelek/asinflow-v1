@@ -9,7 +9,7 @@
 // Paid cost still follow the rule. Costs come from the line totals
 // (po_line_items.line_total, else price × qty). Every change is logged.
 import type { QueryLike } from "./scheduler/types";
-import { allocateAsinCosts, adjustedProductCost, allocationBaseOf, reflectedPromos, promoCostHeader, lineMoney, COST_FORMULA_VERSION, type CostHeader, type CostLine } from "@shared/po-cost";
+import { allocateAsinCosts, adjustedProductCost, allocationBaseOf, reflectedPromos, promoCostHeader, promoKind, lineMoney, COST_FORMULA_VERSION, type CostHeader, type CostLine } from "@shared/po-cost";
 import { logEdits, changedFields } from "./po-edit";
 import { weightedPaymentPctExact } from "@shared/po-form";
 
@@ -25,7 +25,7 @@ export async function recomputePoCosts(query: QueryLike, poId: string, userId: n
   if (po.cost_formula_version == null) return { poId, skipped: "imported", asinRows: 0, changed: 0 };
   const plan: Array<{ entity: string; id: string; field: string; old: unknown; new: unknown }> = [];
   const write = async (sql: string, params: unknown[]) => { if (!opts.dryRun) await query(sql, params); };
-  const promos = (await query(`SELECT type, amount, percent, counts_toward_cogs, in_line_prices FROM po_promos WHERE po_id = $1 ORDER BY position, id`, [poId])).rows as Array<{ type?: string | null; amount: string | null; percent?: string | null; counts_toward_cogs: boolean; in_line_prices?: boolean | null }>;
+  const promos = (await query(`SELECT type, description, amount, percent, counts_toward_cogs, in_line_prices FROM po_promos WHERE po_id = $1 ORDER BY position, id`, [poId])).rows as Array<{ type?: string | null; description?: string | null; amount: string | null; percent?: string | null; counts_toward_cogs: boolean; in_line_prices?: boolean | null }>;
   const rows = (await query(`SELECT id, asin, qty, cost_per_unit, sourcing_cost, paid_cost, cogs_adjustment FROM po_asins WHERE po_id = $1 ORDER BY asin`, [poId])).rows;
   const manual = new Set<string>(
     (await query(`SELECT DISTINCT entity_id FROM po_edit_log WHERE po_id = $1 AND entity = 'asin' AND field = 'cost_per_unit' AND NOT derived`, [poId])).rows.map((r: any) => String(r.entity_id)),
@@ -36,7 +36,7 @@ export async function recomputePoCosts(query: QueryLike, poId: string, userId: n
   const allLines = (await query(`SELECT price, qty_ordered, line_total, regular_price FROM po_line_items WHERE po_id = $1`, [poId])).rows as Array<{ price: string | null; qty_ordered: string | null; line_total: string | null; regular_price?: string | null }>;
   const linesSum = r2(allLines.reduce((t, l) => t + (lineMoney(costLine(l)) ?? 0), 0));
   const refl = reflectedPromos({
-    linesSum, subtotal: subtotalStored > 0 ? subtotalStored : null, discount: Number(po.discount) || 0, promoAmounts: promos.map((p) => (p.amount == null ? null : Number(p.amount))), answers: promos.map((p) => p.in_line_prices ?? null), kinds: promos.map((p) => p.type ?? null), // a rewards voucher is never in a line price (2026-11-07)
+    linesSum, subtotal: subtotalStored > 0 ? subtotalStored : null, discount: Number(po.discount) || 0, promoAmounts: promos.map((p) => (p.amount == null ? null : Number(p.amount))), answers: promos.map((p) => p.in_line_prices ?? null), kinds: promos.map((p) => promoKind(p.type, p.description)), shipping: Number(po.sh_donations) || 0, // a rewards voucher is never in a line price (2026-11-07); a shipping discount comes off the shipping (2026-11-08)
     percents: promos.map((p) => (p.percent == null ? null : Number(p.percent))), sequenceBase: allocationBaseOf(allLines.map(costLine)) ?? (subtotalStored > 0 ? subtotalStored : linesSum), // in sequence (2026-11-06)
     postDiscountSubtotal: po.order_total == null ? null : r2((Number(po.order_total) || 0) - (Number(po.tax) || 0) - (Number(po.sh_donations) || 0)),
   });

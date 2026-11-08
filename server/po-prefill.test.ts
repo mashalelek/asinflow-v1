@@ -1,5 +1,5 @@
 import { describe, it, expect, vi } from "vitest";
-import { CaptureSchema, PrefillSchema, extractPrefill, enrichPrefill, mergedPagesText, supplierForHost, shipsToForStreet, resolveShipTo, todayEt, storePrefill, getPrefill, _clearPrefillCache, PREFILL_TTL_MS, visibleQtys, inferLineQty, QTY_INFERRED_HINT, lineTotalPrice, isRewardsPromo, PROMO_AMOUNT_IMPLIED_HINT, PROMO_AMOUNT_FROM_LINES_HINT } from "./po-prefill";
+import { CaptureSchema, PrefillSchema, extractPrefill, enrichPrefill, mergedPagesText, supplierForHost, shipsToForStreet, resolveShipTo, todayEt, storePrefill, getPrefill, _clearPrefillCache, PREFILL_TTL_MS, visibleQtys, inferLineQty, QTY_INFERRED_HINT, lineTotalPrice, isRewardsPromo, PROMO_AMOUNT_IMPLIED_HINT, PROMO_AMOUNT_FROM_LINES_HINT, SHIPPING_PROMO_HINT, isFreeItemPromo } from "./po-prefill";
 
 vi.mock("./log", () => ({ log: () => {} }));
 vi.mock("./spapi-auth", () => ({ spApiGet: async () => { throw new Error("no SP-API in tests"); } }));
@@ -133,6 +133,35 @@ describe("enrichment (no AI)", () => {
     expect(out.form.promos?.map((p) => [p.type, p.amount, p.counts_toward_cogs])).toEqual([["sale", "34.50", false], ["rewards", "20.00", false]]);
     expect(out.prefill.hints?.["promos.0.amount"]).toBe(`${PROMO_AMOUNT_FROM_LINES_HINT} (the page read 42.75)`);
     expect((out.prefill.warnings ?? []).join()).not.toMatch(/Lines add up to|match neither/);
+  });
+  // Maria 2026-11-08, brown-haley.com 04433: "Free FedEx Ground shipping" matched the free-item deal ("free") → in the prices, COGS off.
+  it("a free-shipping promo is a counting sale, never in the line prices, and never a free-item deal (the lines keep no regular price)", async () => {
+    const q = async (sql: string) => (/FROM settings WHERE key = ANY/.test(sql) ? { rows: [{ key: "prep_cost", value: 1 }], rowCount: 1 } : { rows: [], rowCount: 0 });
+    for (const discount of [113.06, 83.06]) {
+      const x = { ...extraction, lines: [
+        { productName: "Almond Roca Buttercrunch 10oz", retailerSku: null, qty: 9, unitsPerPack: 1, unitPrice: 12.30, lineTotal: 110.74, regularUnitPrice: null, asinGuess: null },
+        { productName: "Almond Roca Buttercrunch 22oz", retailerSku: null, qty: 9, unitsPerPack: 1, unitPrice: 24.61, lineTotal: 221.48, regularUnitPrice: null, asinGuess: null },
+      ], subtotal: 332.22, discount, tax: 0, shipping: 30, total: 249.16, payments: [], notes: [], promos: [
+        { type: "sale" as const, description: "25% off sitewide sale", amount: 83.06, percent: 25, confidence: "high" as const },
+        { type: "sale" as const, description: "Free FedEx Ground shipping", amount: 30, percent: null, confidence: "high" as const },
+      ] };
+      const out = await enrichPrefill(q, capture, x, null, { id: "", capturedAt: null });
+      expect(out.form.promos).toEqual([
+        { type: "sale", description: "25% off sitewide sale", amount: "83.06", percent: "25.00", counts_toward_cogs: true },
+        { type: "sale", description: "Free FedEx Ground shipping", amount: "30.00", percent: "", counts_toward_cogs: true, in_line_prices: false },
+      ]);
+      expect(out.prefill.hints?.["promos.1.amount"]).toBe(SHIPPING_PROMO_HINT);
+      expect(out.form.products?.map((p) => p.regular_price ?? null)).toEqual([null, null]);
+      expect(out.form.sh_donations).toBe("30.00");
+    }
+    expect([isFreeItemPromo("Free FedEx Ground shipping"), isFreeItemPromo("Buy 2, Get 2 Free"), isFreeItemPromo("BOGO free")]).toEqual([false, true, true]);
+  });
+  it("\"In prices? yes\" only on evidence: a \"free\" promo with the lines at the subtotal (gap 0) and no regular prices is not proposed", async () => {
+    const q = async (sql: string) => (/FROM settings WHERE key = ANY/.test(sql) ? { rows: [{ key: "prep_cost", value: 1 }], rowCount: 1 } : { rows: [], rowCount: 0 });
+    const x = { ...extraction, lines: [{ productName: "Almond Roca Buttercrunch 10oz", retailerSku: null, qty: 9, unitsPerPack: 1, unitPrice: 12.30, lineTotal: 110.74, regularUnitPrice: null, asinGuess: null }],
+      subtotal: 110.74, discount: 15, tax: 0, shipping: 0, total: 95.74, payments: [], notes: [], promos: [{ type: "coupon" as const, description: "Free gift card with $100+ order", amount: 15, percent: null, confidence: "high" as const }] };
+    const out = await enrichPrefill(q, capture, x, null, { id: "", capturedAt: null });
+    expect(out.form.promos).toEqual([{ type: "coupon", description: "Free gift card with $100+ order", amount: "15.00", percent: "", counts_toward_cogs: true }]);
   });
   // v1.2.1 (Maria 2026-11-01): a confirmation page shows no order date → today on the form, plain marker, no warning.
   it("no order date on the pages → today (America/New_York), no source marker, and the model's note about it is dropped", async () => {

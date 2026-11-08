@@ -144,7 +144,23 @@ export interface PromoReflection {
   fits: number[][];
   /** Promos Maria must answer "already in the prices?" for before the PO saves (ambiguous, no answer yet). */
   needsAnswer: number[];
+  /** Per promo: a shipping discount (promoKind "shipping") — never in the line prices, always counts. Absent = none. */
+  shipping?: boolean[];
+  /** Σ shipping discounts taken off the Shipping field (at most the shipping), and the part of them the Discount field held. */
+  shippingOffset?: number;
+  shippingInDiscount?: number;
 }
+/**
+ * A shipping discount by its text (Maria 2026-11-08, brown-haley.com 04433: "Free FedEx Ground shipping" −$30 against
+ * Shipping $30). It offsets the Shipping field — which counts toward COGS — so it is never in the line prices and always
+ * counts, whatever its type, "In prices?" answer or COGS toggle say. po_promos.type has no such value: the text decides.
+ */
+export const SHIPPING_PROMO = /\bfree\s+(?:[\w-]+\s+){0,3}(?:shipping|delivery|freight)\b|\b(?:shipping|delivery|freight)\s+(?:discount|credit|savings|promo|refund|waived)\b|(?:\d+%|\$\s?\d+(?:\.\d{2})?)\s+off\s+(?:[\w-]+\s+){0,2}(?:shipping|delivery|freight)\b/i;
+/** A product % / $ off in the same text ("20% off $100+ … plus free shipping") makes it a product promo, not a shipping one. */
+const PRODUCT_OFF = /(?:\d+%|\$\s?\d+(?:\.\d{2})?)\s*off\b(?!\s+(?:[\w-]+\s+){0,2}(?:shipping|delivery|freight)\b)/i;
+export const isShippingPromo = (description: string | null | undefined): boolean => SHIPPING_PROMO.test(description ?? "") && !PRODUCT_OFF.test(description ?? "");
+/** The kind the reflected rule reads: "shipping" by the text, else the stored type (sale / coupon / rewards). */
+export const promoKind = (type: string | null | undefined, description: string | null | undefined): string | null => (isShippingPromo(description) ? "shipping" : type ?? null);
 const MAX_SUBSET_PROMOS = 12;
 /**
  * Pure: each promo's $ in its sequence (Maria 2026-11-06). A $ promo takes its amount at its position; a % promo takes
@@ -163,7 +179,36 @@ export function reflectedPromos(a: { linesSum: number; subtotal: number | null; 
   /** Per promo its type (sale / coupon / rewards): a rewards voucher is applied at the total, never in a line price. */
   kinds?: ReadonlyArray<string | null | undefined>;
   /** Per promo its %, and the total the first one applies to (Σ regular price × qty when the lines carry one, else the subtotal): a % promo without a $ amount takes its sequenced amount. */
-  percents?: ReadonlyArray<number | null>; sequenceBase?: number | null }): PromoReflection {
+  percents?: ReadonlyArray<number | null>; sequenceBase?: number | null;
+  /** The Shipping field: a shipping discount comes off it (kinds[i] = "shipping"). */
+  shipping?: number | null }): PromoReflection {
+  const ship = a.promoAmounts.map((_, i) => a.kinds?.[i] === "shipping");
+  if (!ship.some(Boolean)) return reflectedOthers(a);
+  // Shipping discounts (2026-11-08) leave the rule: the rest are judged without them, on the Discount field less the part
+  // it held of them, and on a post-discount subtotal whose shipping is net of them (the order total is).
+  const keep = ship.map((s, i) => (s ? -1 : i)).filter((i) => i >= 0);
+  const amt = (i: number) => { const x = a.promoAmounts[i]; return x != null && Number.isFinite(x) ? x : 0; };
+  const shipSum = r2(ship.reduce((t, s, i) => t + (s ? amt(i) : 0), 0));
+  const known = keep.every((i) => a.promoAmounts[i] != null && Number.isFinite(a.promoAmounts[i]!));
+  const othersSum = r2(keep.reduce((t, i) => t + amt(i), 0));
+  const discount = a.discount || 0, near = (x: number, y: number) => Math.abs(x - y) <= REFLECTED_TOLERANCE + 1e-9;
+  const offset = a.shipping != null && Number.isFinite(a.shipping) ? Math.max(0, Math.min(a.shipping, shipSum)) : shipSum;
+  const base = a.subtotal != null && Number.isFinite(a.subtotal) ? a.subtotal : a.linesSum;
+  // Did the Discount field hold it? The promos say so when every amount is known; else the totals: order total − tax − net
+  // shipping = subtotal − the product discount, and the product discount is the Discount field less it when it held it.
+  const inDiscount = !(shipSum > 0) || discount < shipSum - REFLECTED_TOLERANCE ? 0
+    : known && near(othersSum + shipSum, discount) ? shipSum
+    : known && near(othersSum, discount) ? 0
+    : a.postDiscountSubtotal != null && near(base - discount + shipSum, a.postDiscountSubtotal + offset) ? shipSum
+    : 0;
+  const pick = <T,>(xs: ReadonlyArray<T> | undefined) => (xs ? keep.map((i) => xs[i]) : undefined);
+  const r = reflectedOthers({ ...a, discount: r2(discount - inDiscount), promoAmounts: keep.map((i) => a.promoAmounts[i]), answers: pick(a.answers), kinds: pick(a.kinds), percents: pick(a.percents),
+    postDiscountSubtotal: a.postDiscountSubtotal == null ? null : r2(a.postDiscountSubtotal + offset) });
+  const back = <T,>(xs: T[], fill: (i: number) => T) => { const out = a.promoAmounts.map((_, i) => fill(i)); keep.forEach((i, k) => { out[i] = xs[k]; }); return out; };
+  return { ...r, reflected: back(r.reflected, () => false), amounts: back(r.amounts, (i) => (a.promoAmounts[i] != null && Number.isFinite(a.promoAmounts[i]!) ? a.promoAmounts[i] : null)),
+    fits: r.fits.map((f) => f.map((k) => keep[k])), needsAnswer: r.needsAnswer.map((k) => keep[k]), shipping: ship, shippingOffset: r2(offset), shippingInDiscount: inDiscount };
+}
+function reflectedOthers(a: Parameters<typeof reflectedPromos>[0]): PromoReflection {
   const auto = autoReflected(a);
   const ans = a.answers ?? [];
   if (!ans.some((x) => x != null)) return auto;
@@ -225,13 +270,18 @@ function autoReflected(a: { linesSum: number; subtotal: number | null; discount:
  * The cost header with the per-promo rule applied: reflected promos leave the discount and are never added back; the
  * allocation base is Σ line totals once any promo is in them. `promos[i].counts` is the COGS toggle (rewards default off).
  */
-export function promoCostHeader(h: CostHeader, linesSum: number, promos: ReadonlyArray<{ counts: boolean }>, r: PromoReflection): CostHeader {
+export function promoCostHeader(h0: CostHeader, linesSum: number, promos: ReadonlyArray<{ counts: boolean }>, r: PromoReflection): CostHeader {
+  // A shipping discount (2026-11-08) comes off the Shipping field and out of the Discount field as far as it held it; it always counts.
+  const ship = (i: number) => r.shipping?.[i] === true;
+  const h: CostHeader = r.shipping?.some(Boolean)
+    ? { ...h0, discount: Math.max(0, r2((h0.discount || 0) - (r.shippingInDiscount ?? 0))), shDonations: Math.max(0, r2(fin(h0.shDonations) - (r.shippingOffset ?? 0))) }
+    : h0;
   if (r.all) return { ...h, subtotal: linesSum, discount: 0, nonCountingPromoAmount: 0 };
-  const nonCounting = r2(promos.reduce((t, p, i) => t + (!r.reflected[i] && p.counts === false ? (r.amounts[i] ?? 0) : 0), 0));
+  const nonCounting = r2(promos.reduce((t, p, i) => t + (!r.reflected[i] && !ship(i) && p.counts === false ? (r.amounts[i] ?? 0) : 0), 0));
   if (!(r.reflectedAmount > 0)) return { ...h, nonCountingPromoAmount: nonCounting };
   // A reflected promo leaves the header discount only as far as the discount holds it (2026-11-06, Yankee Candle: the B2G2
   // $349.90 is in the line prices but was never part of the $52.49 order discount — the coupon still counts).
-  const others = r2(promos.reduce((t, _p, i) => t + (!r.reflected[i] ? r.amounts[i] ?? 0 : 0), 0));
+  const others = r2(promos.reduce((t, _p, i) => t + (!r.reflected[i] && !ship(i) ? r.amounts[i] ?? 0 : 0), 0));
   const inDiscount = Math.min(r.reflectedAmount, Math.max(0, (h.discount || 0) - others));
   return { ...h, subtotal: linesSum, discount: Math.max(0, r2((h.discount || 0) - inDiscount)), nonCountingPromoAmount: nonCounting };
 }

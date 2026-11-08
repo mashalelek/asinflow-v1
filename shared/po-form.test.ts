@@ -1,6 +1,6 @@
 import { describe, it, expect } from "vitest";
 import { copyUnits } from "./po-lines";
-import { followPacks, checkPoForm, emptyPoForm, emptyProduct, emptyPayment, weightedPaymentPct, weightedPaymentPctExact, canonicalPaymentName, resolvePaymentNickname, ambiguousPaymentHint, promoCountsByDefault, PROMO_REFLECTED_NOTE, PROMO_FROM_LINES_NOTE, type PoFormState } from "./po-form";
+import { followPacks, checkPoForm, emptyPoForm, emptyProduct, emptyPayment, weightedPaymentPct, weightedPaymentPctExact, canonicalPaymentName, resolvePaymentNickname, ambiguousPaymentHint, promoCountsByDefault, PROMO_REFLECTED_NOTE, PROMO_FROM_LINES_NOTE, SHIPPING_PROMO_NOTE, type PoFormState } from "./po-form";
 
 // po-af-owned §4 (2026-10-18): the New PO form's validation and derived rows.
 const base = (over: Partial<PoFormState> = {}): PoFormState => ({
@@ -294,3 +294,38 @@ describe("checkPoForm — Michaels sale + voucher, entered both ways", () => {
   }
 });
 
+
+// Maria 2026-11-08, brown-haley.com 04433: lines 110.74 / 221.48 at regular price (9 ASIN units each), a 25% sale 83.06, Shipping
+// 30.00 and "Free FedEx Ground shipping" −30.00 → paid 249.16. The prefill made the free shipping a free-item deal ("In prices?
+// yes", COGS off), so the 30 shipping counted and its credit did not: costs 279.18 against 249.16.
+describe("checkPoForm — brown-haley free shipping: comes off the shipping, never in the prices, always counts", () => {
+  const prod = (price: string, asin: string) => ({ ...emptyProduct(), product_name: asin, price, qty_ordered: "9", asin, sold_as: "individual" as const, units_per_pack: "1", prep_cost: "0" });
+  const ship = (extra: object = {}) => ({ type: "sale" as const, description: "Free FedEx Ground shipping on orders of $180.00 or more", amount: "30.00", percent: "", counts_toward_cogs: true, ...extra });
+  const form = (discount: string, shipping: string, freeShip: object = {}): PoFormState => ({ ...emptyPoForm("2026-11-08"), supplier: "brown-haley.com", order_id: "04433", subtotal: "332.22", discount, sh_donations: shipping, order_total: "249.16",
+    products: [prod("12.304444", "B0BHALEY01"), prod("24.608889", "B0BHALEY02")],
+    promos: [{ type: "sale", description: "VETERANS DAY 2026: Save 25% on any order", amount: "83.06", percent: "25", counts_toward_cogs: true }, ship(freeShip)] } as PoFormState);
+  const costs = (f: PoFormState) => checkPoForm(f).asins.map((a) => [a.sourcing_cost, a.cost_per_unit, a.paid_cost]);
+  const expected = [["9.23", "9.23", "9.23"], ["18.46", "18.46", "18.46"]];
+  const styles: Array<[string, string, string]> = [["Discount 113.06 holds the free shipping", "113.06", "30.00"], ["Discount 83.06, the free shipping outside it", "83.06", "30.00"], ["Shipping already net (0), Discount 83.06", "83.06", "0"], ["Shipping net, Discount 113.06", "113.06", "0"]];
+  for (const [name, discount, shipping] of styles) {
+    it(`${name}: COGS 9.23 / 18.46, the free shipping never in the prices, no warnings`, () => {
+      const r = checkPoForm(form(discount, shipping));
+      expect(costs(form(discount, shipping))).toEqual(expected);
+      expect([r.promoReflected, r.promoShipping, r.promoNeedsAnswer, r.discountReflected]).toEqual([[false, false], [false, true], [], false]);
+      expect(r.errors).toEqual([]);
+      expect(r.warnings).toEqual([]);
+    });
+  }
+  it("as the prefill left it (\"In prices? yes\", COGS off): the same costs, and the form says the setting is ignored", () => {
+    for (const [, discount, shipping] of styles) expect(costs(form(discount, shipping, { in_line_prices: true, counts_toward_cogs: false }))).toEqual(expected);
+    expect(checkPoForm(form("113.06", "30.00", { in_line_prices: true, counts_toward_cogs: false })).warnings).toEqual([`Promo 2 (Free FedEx Ground shipping on orders of $180.00 or more): ${SHIPPING_PROMO_NOTE} — its "In prices? yes" and COGS off is ignored`]);
+    expect(checkPoForm(form("113.06", "30.00", { counts_toward_cogs: false })).warnings).toEqual([`Promo 2 (Free FedEx Ground shipping on orders of $180.00 or more): ${SHIPPING_PROMO_NOTE} — its COGS off is ignored`]);
+  });
+  it("a promo equal to the shipping without the word: flagged, not guessed", () => {
+    const r = checkPoForm(form("113.06", "30.00", { description: "FREEGROUND" }));
+    expect(r.promoShipping).toEqual([false, false]);
+    // The subtotal after discount a warning names is net of a shipping discount (249.16, not 219.16).
+    expect(checkPoForm({ ...form("113.06", "30.00"), products: [prod("10.00", "B0BHALEY01")] }).warnings).toContain("Line totals 90.00 match neither the subtotal 332.22 nor the subtotal after discount 249.16");
+    expect(r.warnings).toContain(`Promo 2 (FREEGROUND) is the shipping amount (30.00) — if it is a shipping discount, say "shipping" in its description so it comes off the shipping and counts`);
+  });
+});

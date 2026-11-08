@@ -31,7 +31,7 @@ import { Label } from "@/components/ui/label";
 import { MoneyCalcInput, calcMoney } from "@/components/money-calc-input";
 import { useAuth } from "@/contexts/auth-context";
 import {
-  checkPoForm, emptyPoForm, emptyProduct, emptyPromo, emptyPayment, shipsToFromForm, yieldFromPacks, promoCountsByDefault, resolvePaymentNickname, ambiguousPaymentHint, defaultRewardPct, WEIGHTED_PAYMENT_LABEL, PROMO_REFLECTED_NOTE, PROMO_FROM_LINES_NOTE,
+  checkPoForm, emptyPoForm, emptyProduct, emptyPromo, emptyPayment, shipsToFromForm, yieldFromPacks, promoCountsByDefault, resolvePaymentNickname, ambiguousPaymentHint, defaultRewardPct, WEIGHTED_PAYMENT_LABEL, PROMO_REFLECTED_NOTE, PROMO_FROM_LINES_NOTE, SHIPPING_PROMO_NOTE,
   SOLD_AS_OPTIONS, PROMO_TYPES, PAYMENT_METHODS, CASHBACK_STATUSES,
   type PoFormState, type PoFormProduct, type PoFormPromo, type PoFormPayment, type PoFormPrefill, type PrefillSource, asinPackSetLabel, asinPackSetNote, followPacks } from "@shared/po-form";
 import { editBlockingErrors } from "@shared/po-edit-form";
@@ -578,6 +578,7 @@ export function NewPoForm({ open, onOpenChange, onCreated, prefill, initialSuppl
                   </select>
                 </label>
               )}
+              {check.promoShipping[i] && <span className={`text-[11px] ${p.in_line_prices === true || !p.counts_toward_cogs ? "text-amber-700" : "text-muted-foreground"}`} title={`This promo is ${SHIPPING_PROMO_NOTE}${p.in_line_prices === true || !p.counts_toward_cogs ? " — the In prices? / COGS setting here is ignored" : ""}`} data-testid={`new-po-promo-shipping-${i}`}>shipping discount{p.in_line_prices === true || !p.counts_toward_cogs ? " — counts, setting ignored" : ""}</span>}
               {check.promoNeedsAnswer.includes(i) && <span className="text-[11px] text-muted-foreground" title="More than one set of promos matches the gap between the subtotal and the line totals: until you answer, this promo is not subtracted (COGS errs high)" data-testid={`new-po-promo-pending-${i}`}>not subtracted until answered</span>}
               {check.promoReflected[i] && !check.promoNeedsAnswer.includes(i) && <span className="text-[11px] text-muted-foreground" title={check.discountReflected ? "Σ price × qty already equals the post-discount subtotal: this promo reduces no cost" : "The line totals are this promo's amount under the subtotal: it is already in the prices and reduces no cost"} data-testid={`new-po-promo-reflected-${i}`}>{PROMO_REFLECTED_NOTE}</span>}
               <button type="button" onClick={() => setForm((f) => ({ ...f, promos: (f.promos ?? []).filter((_, j) => j !== i) }))} className="text-muted-foreground/60 hover:text-destructive" data-testid={`button-new-po-remove-promo-${i}`}><Trash2 className="h-3.5 w-3.5" /></button>

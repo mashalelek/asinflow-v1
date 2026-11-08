@@ -23,7 +23,7 @@
 // per ASIN. Promos (several per PO, §7.2) decide what counts: a promo with
 // counts_toward_cogs = false (rewards, by default) is added back.
 
-import { adjustedProductCost, allocateAsinCosts, allocationBaseOf, reflectedPromos, promoCostHeader, COST_FORMULA_VERSION, REFLECTED_TOLERANCE, type CostHeader } from "./po-cost";
+import { adjustedProductCost, allocateAsinCosts, allocationBaseOf, reflectedPromos, promoCostHeader, promoKind, COST_FORMULA_VERSION, REFLECTED_TOLERANCE, type CostHeader } from "./po-cost";
 import { asinUnitsFromLines, fracToNumber, lineRatio, lineUnitsExact, ratioForUnits, ratioYield, type YieldRatio, retailerUnitsAtPack } from "./yield";
 /** Stamped on purchase_orders.cost_formula_version by every form save; NULL = imported, never recomputed. */
 export const COST_FORMULA_VERSION_SAVED = COST_FORMULA_VERSION;
@@ -47,6 +47,8 @@ export const promoCountsByDefault = (type: string, discountReflected = false): b
 /** A typed promo amount replaced in the costs (2026-11-07): the line prices carry the sale, so it is subtotal − Σ line totals. */
 export const PROMO_FROM_LINES_NOTE = "subtotal − line totals: the line prices already carry this sale";
 export const PROMO_REFLECTED_NOTE = "already reflected in line prices";
+/** A shipping discount (2026-11-08): what the form says beside it. */
+export const SHIPPING_PROMO_NOTE = "a shipping discount: it comes off the shipping, is never in the line prices and always counts toward COGS";
 /** The ambiguity question (Maria 2026-11-06): it blocks Create PO / Save until answered — on Edit PO too, even when the stored PO already had it. */
 export const PROMO_IN_PRICES_QUESTION = "Which promos are already in the prices?";
 
@@ -362,6 +364,8 @@ export interface PoFormCheck {
   promoReflected: boolean[];
   /** Per promo (2026-11-06): the $ used — typed, else implied by the discount, else its % of the running total in sequence. */
   promoAmountsUsed: Array<number | null>;
+  /** Per promo (2026-11-08): a shipping discount — offsets the Shipping field, never in the line prices, always counts. */
+  promoShipping: boolean[];
   /** Promos waiting for "already in the prices?" (2026-11-06) — the form shows the question on each; the PO does not save until answered. */
   promoNeedsAnswer: number[];
   /** Weighted payment discount % (weightedPaymentPct) from the Payments block; null when no gift-card / card payment carries an amount and its %. */
@@ -457,7 +461,7 @@ export function checkPoForm(f: PoFormState): PoFormCheck {
   const postDiscountSubtotal = r2(effectiveOrderTotal - n("tax") - n("sh_donations"));
   // Per promo (2026-11-05): the promos whose amounts close the gap subtotal − Σ line totals are already in the prices.
   const promoAmt = promoList.map((p) => { const a = moneyNum(p.amount ?? ""); return a == null || Number.isNaN(a) ? null : a; });
-  const refl = reflectedPromos({ linesSum: computedSubtotal, subtotal: hasTypedSubtotal ? typedSubtotal! : null, discount: n("discount"), promoAmounts: promoAmt, postDiscountSubtotal, answers: promoList.map((p) => p.in_line_prices ?? null), kinds: promoList.map((p) => String(p.type ?? "")),
+  const refl = reflectedPromos({ linesSum: computedSubtotal, subtotal: hasTypedSubtotal ? typedSubtotal! : null, discount: n("discount"), promoAmounts: promoAmt, postDiscountSubtotal, answers: promoList.map((p) => p.in_line_prices ?? null), kinds: promoList.map((p) => promoKind(String(p.type ?? ""), p.description)), shipping: n("sh_donations"),
     // Sequence (2026-11-06): a %-only promo takes its % of the running total, starting from Σ regular price × qty when the lines carry one.
     percents: promoList.map((p) => { const v = Number(String(p.percent ?? "").replace(/[%\s]/g, "")); return String(p.percent ?? "").trim() !== "" && Number.isFinite(v) ? v : null; }), sequenceBase: allocationBase ?? subtotal });
   const discountReflected = refl.all;
@@ -466,7 +470,7 @@ export function checkPoForm(f: PoFormState): PoFormCheck {
   if (hasTypedSubtotal && !discountReflected && !(refl.reflectedAmount > 0) && Math.abs(typedSubtotal! - computedSubtotal) > REFLECTED_TOLERANCE + 1e-9) {
     const d = n("discount") + promoAmounts;
     warnings.push(d > 0
-      ? `Line totals ${computedSubtotal.toFixed(2)} match neither the subtotal ${typedSubtotal!.toFixed(2)} nor the subtotal after discount ${postDiscountSubtotal.toFixed(2)}`
+      ? `Line totals ${computedSubtotal.toFixed(2)} match neither the subtotal ${typedSubtotal!.toFixed(2)} nor the subtotal after discount ${r2(postDiscountSubtotal + (refl.shippingOffset ?? 0)).toFixed(2)}`
       : `Subtotal ${typedSubtotal!.toFixed(2)} differs from the line totals ${computedSubtotal.toFixed(2)}`);
   }
   // Never silently (Maria 2026-11-07): a typed amount the costs do not use — a sale in the line prices is subtotal − Σ line totals.
@@ -479,12 +483,22 @@ export function checkPoForm(f: PoFormState): PoFormCheck {
   if (promoList.length > 0 && promoAmt.every((x) => x != null) && n("discount") > 0) {
     const all = r2(promoAmt.reduce<number>((t, x) => t + (x ?? 0), 0));
     const outside = r2(promoAmt.reduce<number>((t, x, i) => t + (promoList[i].in_line_prices === true ? 0 : x ?? 0), 0));
-    if (Math.abs(all - n("discount")) > REFLECTED_TOLERANCE + 1e-9 && Math.abs(outside - n("discount")) > REFLECTED_TOLERANCE + 1e-9) warnings.push(`Promos add up to ${all.toFixed(2)}, the discount is ${n("discount").toFixed(2)}`);
+    // A shipping discount may stand outside the Discount field too (shown against the shipping, 2026-11-08).
+    const noShip = r2(promoAmt.reduce<number>((t, x, i) => t + (refl.shipping?.[i] ? 0 : x ?? 0), 0));
+    if ([all, outside, noShip].every((x) => Math.abs(x - n("discount")) > REFLECTED_TOLERANCE + 1e-9)) warnings.push(`Promos add up to ${all.toFixed(2)}, the discount is ${n("discount").toFixed(2)}`);
   }
+  // Shipping discounts (Maria 2026-11-08, brown-haley.com 04433): never in the line prices, always counted — another setting is flagged and ignored.
+  const promoShipping = promoList.map((_, i) => refl.shipping?.[i] === true);
+  promoList.forEach((p, i) => {
+    const label = `Promo ${i + 1}${t(p.description) ? ` (${t(p.description)})` : ""}`;
+    if (promoShipping[i] && (p.in_line_prices === true || p.counts_toward_cogs === false)) warnings.push(`${label}: ${SHIPPING_PROMO_NOTE} — its ${[p.in_line_prices === true ? '"In prices? yes"' : "", p.counts_toward_cogs === false ? "COGS off" : ""].filter(Boolean).join(" and ")} is ignored`);
+    const a = promoAmt[i];
+    if (!promoShipping[i] && a != null && n("sh_donations") > 0 && Math.abs(a - n("sh_donations")) <= 0.005 && p.type !== "rewards") warnings.push(`${label} is the shipping amount (${a.toFixed(2)}) — if it is a shipping discount, say "shipping" in its description so it comes off the shipping and counts`);
+  });
   // §7.2 counting pass: a non-counting promo without an amount cannot be added back (moot when that promo is reflected).
   let nonCountingPromoAmount = 0;
   if (!discountReflected) promoList.forEach((p, i) => {
-    if (p.counts_toward_cogs !== false || refl.reflected[i]) return;
+    if (p.counts_toward_cogs !== false || refl.reflected[i] || promoShipping[i]) return;
     const label = `Promo ${i + 1}${t(p.description) ? ` (${t(p.description)})` : ""}`;
     const amt = refl.amounts[i];
     if (amt != null) nonCountingPromoAmount += amt;
@@ -557,7 +571,7 @@ export function checkPoForm(f: PoFormState): PoFormCheck {
     });
   }
   const ok = errors.length === 0 && Object.keys(productErrors).length === 0;
-  return { ok, errors, warnings, productErrors, computedSubtotal, effectiveOrderTotal: r2(effectiveOrderTotal), nonCountingPromoAmount, discountReflected, promoReflected: refl.reflected, promoAmountsUsed: refl.amounts, promoNeedsAnswer: refl.needsAnswer, weightedGcPct, asins };
+  return { ok, errors, warnings, productErrors, computedSubtotal, effectiveOrderTotal: r2(effectiveOrderTotal), nonCountingPromoAmount, discountReflected, promoReflected: refl.reflected, promoAmountsUsed: refl.amounts, promoNeedsAnswer: refl.needsAnswer, promoShipping, weightedGcPct, asins };
 }
 
 /** An ASIN with no pack on record set from a PO (Maria 2026-11-06), as the grey line / toast says it. */
