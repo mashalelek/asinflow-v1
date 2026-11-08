@@ -76,6 +76,19 @@ describe("enrichment (no AI)", () => {
     expect(out.prefill.warnings).toEqual(["Payments add up to 38.46, the order total is 40.00"]);
     expect(out.prefill).toMatchObject({ supplier: "michaels.com", pages: 2, captured_at: "2026-10-31T15:00:00Z", raw_text: null });
   });
+  // Maria 2026-11-08: Chase (7927) and Chase Ink (7927) are one card — the settings after the merge (script/merge-payment-method.ts).
+  it("a 7927 card prefills Chase (7927) with no \"Two cards\" hint or warning; Amex 1005 still asks", async () => {
+    const q = async (sql: string, params?: any[]) => (/FROM settings WHERE key = ANY/.test(sql) ? { rows: params?.[0]?.includes("po_payment_methods") ? [{ key: "po_payment_methods", value: ["Gift cards", "Amex (1001)", "Amex Gold", "Amex Plus", "Chase (7927)", "Chase (9647)", "Walmart card"] }, { key: "po_payment_method_aliases", value: { "Amex Plus (1005)": "Amex Plus", "Chase Ink (7927)": "Chase (7927)" } }, { key: "po_payment_method_last4", value: { "Amex (1001)": "1001", "Amex Gold": "1005", "Amex Plus": "1005", "Chase (7927)": "7927", "Chase (9647)": "9647" } }] : [{ key: "prep_cost", value: 1 }], rowCount: 1 } : { rows: [], rowCount: 0 });
+    const x = { ...extraction, lines: [], promos: [], notes: [], subtotal: 73.05, discount: 0, tax: 0, shipping: 0, total: 73.05 };
+    for (const nickname of ["Visa", "Chase Ink", "Chase Ink (7927)", "Chase", null]) {
+      const out = await enrichPrefill(q, capture, { ...x, payments: [{ method: "card" as const, nickname, last4: "7927", amount: 73.05 }] }, null, { id: "", capturedAt: null });
+      expect(out.form.payments?.[0]).toMatchObject({ nickname: "Chase (7927)", last4: "7927" });
+      expect(out.prefill.hints?.["payments.0.nickname"]).toBeUndefined();
+      expect((out.prefill.warnings ?? []).join()).not.toMatch(/Two cards/);
+    }
+    const amex = await enrichPrefill(q, capture, { ...x, payments: [{ method: "card" as const, nickname: "Amex", last4: "1005", amount: 73.05 }] }, null, { id: "", capturedAt: null });
+    expect(amex.prefill.hints?.["payments.0.nickname"]).toBe("Two cards end in 1005 — pick Amex Gold or Amex Plus");
+  });
   // Round 2 (Maria 2026-11-01): a discount already in the line prices → the promo defaults to not counting; nicknames through the alias table.
   it("a promo whose discount the line prices already carry defaults to not counting; a payment nickname is canonical (OnePay Cash → Walmart card)", async () => {
     const q = async (sql: string, params?: any[]) => (/FROM settings WHERE key = ANY/.test(sql) ? { rows: params?.[0]?.includes("po_payment_methods") ? [{ key: "po_payment_methods", value: ["Walmart card", "Amex (1001)", "Amex Gold", "Amex Plus"] }, { key: "po_payment_method_aliases", value: { "OnePay Cash": "Walmart card", "Amex Plus (1005)": "Amex Plus" } }, { key: "po_payment_method_last4", value: { "Amex (1001)": "1001", "Amex Gold": "1005", "Amex Plus": "1005" } }] : [{ key: "prep_cost", value: 1 }], rowCount: 1 } : { rows: [], rowCount: 0 });

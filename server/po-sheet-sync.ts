@@ -96,7 +96,7 @@ export function toCents(dec: string): number {
 }
 const centsToDec = (c: number): string => `${c < 0 ? "-" : ""}${Math.floor(Math.abs(c) / 100)}.${String(Math.abs(c) % 100).padStart(2, "0")}`;
 
-const SEEDED_PAYMENT = new Set(["Gift cards","Amex (1001)","Amex (1005)","Chase (7927)","Chase (9647)","Chase Ink (7927)","Chase (6120)","Citi (9510)","Discover","Webstaurant Visa","Amex (1002)","Walmart card","Citi (9627)"]);
+const SEEDED_PAYMENT = new Set(["Gift cards","Amex (1001)","Amex (1005)","Chase (7927)","Chase (9647)","Chase (6120)","Citi (9510)","Discover","Webstaurant Visa","Amex (1002)","Walmart card","Citi (9627)"]);
 const SEEDED_PAYMENT_BY_LC = new Map(Array.from(SEEDED_PAYMENT).map((v) => [v.toLowerCase(), v]));
 const DEFAULT_EMAIL = "orders@coastalqualitygoods.com";
 
@@ -257,6 +257,7 @@ export function parsePoSheet(header: string[], dataCells: string[][]): ParsedPoS
     let payment: string | null = t(c[COL.paymentMethod]) || null;
     if (payment === "Gift card") payment = "Gift cards";
     if (payment === "Visa 7927") payment = "Chase (7927)";
+    if (payment === "Chase Ink (7927)") payment = "Chase (7927)"; // one card (Maria 2026-11-08)
     if (payment && !payment.includes(":") && !SEEDED_PAYMENT.has(payment)) {
       const seeded = SEEDED_PAYMENT_BY_LC.get(payment.toLowerCase());
       if (seeded) payment = seeded;

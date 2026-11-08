@@ -7508,8 +7508,15 @@ replaces it. Migration 061 adds `po_edit_log`, `deleted_pos` and
   a canonical name), **by last 4 second** (the one method with that last 4;
   a nickname that narrows a shared last 4 — "Gold" → Amex Gold — still
   counts) and **never by a last 4 alone that two methods share** (Amex
-  Gold / Amex Plus, also Chase (7927) / Chase Ink (7927)): the nickname
-  stays blank and the candidates are named. The form's picker runs it on
+  Gold / Amex Plus): the nickname
+  stays blank and the candidates are named. **Chase (7927) and Chase Ink
+  (7927) are one card (Maria 2026-11-08):** merged into "Chase (7927)" by
+  `tsx script/merge-payment-method.ts --from "Chase Ink (7927)" --to
+  "Chase (7927)" [--prod] [--live]` — every reference relabelled with a
+  History row (raw_text kept verbatim), the old name out of the method
+  list, last 4 and reward % maps and kept as an alias; the sheet's "Chase
+  Ink (7927)" maps to Chase on intake. Last 4 7927 resolves to Chase with
+  no prompt. The form's picker runs it on
   blur of the nickname and of the last 4 (`resolvePay`; an amber ring and
   "Two cards end in 1005 — pick Amex Gold or Amex Plus" until one is
   chosen); the prefill does the same and leaves the nickname blank with

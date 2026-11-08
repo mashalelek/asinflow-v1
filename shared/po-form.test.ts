@@ -186,7 +186,7 @@ describe("checkPoForm", () => {
   });
   // Maria 2026-11-02: two Amex cards end in 1005 — Amex Gold and Amex Plus.
   it("resolvePaymentNickname: nickname first (alias or canonical), last 4 second (the one method with it), never a shared last 4 alone — blank + the candidates; a narrowing nickname still resolves", () => {
-    const lists = { methods: ["Gift cards", "Amex (1001)", "Amex Gold", "Amex Plus", "Chase (7927)", "Chase Ink (7927)", "Walmart card"], aliases: { "OnePay Cash": "Walmart card", "Amex (1005) - Gold": "Amex Gold", "Amex Gold (1005)": "Amex Gold", "Amex Plus (1005)": "Amex Plus" }, last4: { "Amex (1001)": "1001", "Amex Gold": "1005", "Amex Plus": "1005", "Chase (7927)": "7927", "Chase Ink (7927)": "7927" } };
+    const lists = { methods: ["Gift cards", "Amex (1001)", "Amex Gold", "Amex Plus", "Chase (7927)", "Walmart card"], aliases: { "OnePay Cash": "Walmart card", "Amex (1005) - Gold": "Amex Gold", "Amex Gold (1005)": "Amex Gold", "Amex Plus (1005)": "Amex Plus", "Chase Ink (7927)": "Chase (7927)" }, last4: { "Amex (1001)": "1001", "Amex Gold": "1005", "Amex Plus": "1005", "Chase (7927)": "7927" } };
     expect(resolvePaymentNickname("Amex Plus", "1005", lists)).toEqual({ nickname: "Amex Plus", ambiguous: [] });
     expect(resolvePaymentNickname("amex gold (1005)", "1005", lists)).toEqual({ nickname: "Amex Gold", ambiguous: [] });
     expect(resolvePaymentNickname("Amex (1005) - Gold", "", lists)).toEqual({ nickname: "Amex Gold", ambiguous: [] });
@@ -196,7 +196,11 @@ describe("checkPoForm", () => {
     expect(resolvePaymentNickname("Amex", "1005", lists)).toEqual({ nickname: "", ambiguous: ["Amex Gold", "Amex Plus"] });
     expect(resolvePaymentNickname("Amex (1005)", "1005", lists)).toEqual({ nickname: "", ambiguous: ["Amex Gold", "Amex Plus"] });
     expect(resolvePaymentNickname("", "1005", lists)).toEqual({ nickname: "", ambiguous: ["Amex Gold", "Amex Plus"] });
-    expect(resolvePaymentNickname("Chase", "7927", lists)).toEqual({ nickname: "", ambiguous: ["Chase (7927)", "Chase Ink (7927)"] });
+    // Maria 2026-11-08: Chase (7927) and Chase Ink (7927) are one card — merged; 7927 resolves to Chase with no prompt.
+    expect(resolvePaymentNickname("Chase", "7927", lists)).toEqual({ nickname: "Chase (7927)", ambiguous: [] });
+    expect(resolvePaymentNickname("Chase Ink (7927)", "7927", lists)).toEqual({ nickname: "Chase (7927)", ambiguous: [] });
+    expect(resolvePaymentNickname("Chase Ink", "7927", lists)).toEqual({ nickname: "Chase (7927)", ambiguous: [] });
+    expect(resolvePaymentNickname("Visa", "7927", lists)).toEqual({ nickname: "Chase (7927)", ambiguous: [] });
     expect(resolvePaymentNickname("OnePay Cash", "", lists)).toEqual({ nickname: "Walmart card", ambiguous: [] });
     expect(resolvePaymentNickname(" Discover ", "4242", lists)).toEqual({ nickname: "Discover", ambiguous: [] }); // unknown: passes through trimmed
     expect(resolvePaymentNickname("Amex", "", { methods: [], aliases: null, last4: null })).toEqual({ nickname: "Amex", ambiguous: [] });
