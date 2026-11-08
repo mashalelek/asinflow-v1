@@ -1,4 +1,5 @@
 import { describe, it, expect, vi } from "vitest";
+import { checkPoForm } from "@shared/po-form";
 import { CaptureSchema, PrefillSchema, extractPrefill, enrichPrefill, mergedPagesText, supplierForHost, shipsToForStreet, resolveShipTo, todayEt, storePrefill, getPrefill, _clearPrefillCache, PREFILL_TTL_MS, visibleQtys, inferLineQty, QTY_INFERRED_HINT, lineTotalPrice, isRewardsPromo, PROMO_AMOUNT_IMPLIED_HINT, PROMO_AMOUNT_FROM_LINES_HINT, SHIPPING_PROMO_HINT, isFreeItemPromo } from "./po-prefill";
 
 vi.mock("./log", () => ({ log: () => {} }));
@@ -162,6 +163,18 @@ describe("enrichment (no AI)", () => {
       subtotal: 110.74, discount: 15, tax: 0, shipping: 0, total: 95.74, payments: [], notes: [], promos: [{ type: "coupon" as const, description: "Free gift card with $100+ order", amount: 15, percent: null, confidence: "high" as const }] };
     const out = await enrichPrefill(q, capture, x, null, { id: "", capturedAt: null });
     expect(out.form.promos).toEqual([{ type: "coupon", description: "Free gift card with $100+ order", amount: "15.00", percent: "", counts_toward_cogs: true }]);
+  });
+  // Maria 2026-11-08: the free-item deal needs the same evidence — "Free gift with purchase" (no gap, no amount effect) is not one.
+  it("\"Free gift with purchase\" with the lines at the subtotal: not a free-item deal — In prices no, COGS on, costs untouched", async () => {
+    const q = async (sql: string) => (/FROM settings WHERE key = ANY/.test(sql) ? { rows: [{ key: "prep_cost", value: 1 }], rowCount: 1 } : { rows: [], rowCount: 0 });
+    const x = { ...extraction, lines: [{ productName: "Almond Roca Buttercrunch 10oz", retailerSku: null, qty: 9, unitsPerPack: 1, unitPrice: 12.30, lineTotal: 110.74, regularUnitPrice: null, asinGuess: null }],
+      subtotal: 110.74, discount: 0, tax: 0, shipping: 0, total: 110.74, payments: [], notes: [], promos: [{ type: "sale" as const, description: "Free gift with purchase", amount: null, percent: null, confidence: "high" as const }] };
+    const out = await enrichPrefill(q, capture, x, null, { id: "", capturedAt: null });
+    expect(out.form.promos).toEqual([{ type: "sale", description: "Free gift with purchase", amount: "", percent: "", counts_toward_cogs: true }]);
+    expect(out.prefill.hints?.["promos.0.amount"]).toBeUndefined(); // not the free-item note
+    const f = { ...out.form, products: [{ ...out.form.products![0], asin: "B0BHALEY01", sold_as: "individual" as const, units_per_pack: "1", prep_cost: "0" }] } as any;
+    const r = checkPoForm(f);
+    expect([r.promoReflected, r.discountReflected, r.asins[0]?.cost_per_unit]).toEqual([[false], false, "12.30"]);
   });
   // v1.2.1 (Maria 2026-11-01): a confirmation page shows no order date → today on the form, plain marker, no warning.
   it("no order date on the pages → today (America/New_York), no source marker, and the model's note about it is dropped", async () => {
