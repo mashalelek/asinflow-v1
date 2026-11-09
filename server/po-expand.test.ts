@@ -36,6 +36,14 @@ describe("§4 column model", () => {
     expect(comp).toMatch(/c\.key === "product" \? undefined : \{ width: COL_WIDTHS\[c\.key\] \}/);
     expect(comp).not.toMatch(/160rem/);
   });
+  it("bundle component lines name their kind (Maria 2026-11-09): 'Product u.' in grey under the line's Ordered, with the Individual count from the line's Product pack", () => {
+    const comp = read("client/src/components/po-asin-rows.tsx");
+    expect(comp).toMatch(/<td className="px-1\.5 py-1 text-right text-xs text-muted-foreground"><ComponentQty l=\{l\} \/><\/td>/);
+    expect(comp).toMatch(/individualFrom\(l\.qty_ordered, l\.retailer_units_per_product\)/);
+    expect(comp).toMatch(/data-testid=\{`component-kind-\$\{l\.id\}`\}>Product u\.<\/div>/);
+    // Cost/Unit and Total Cost on the component line are unchanged.
+    expect(comp).toMatch(/<ComponentQty l=\{l\} \/><\/td>\s*<td className="px-1\.5 py-1 text-right text-xs text-muted-foreground"><Money v=\{l\.price\} \/><\/td>\s*<td className="px-1\.5 py-1 text-right text-xs text-muted-foreground"><Money v=\{l\.adjusted_product_cost\} \/><\/td>/);
+  });
   it("the detail page renders the shared table and no longer carries Qty (units) or Unreimb. Loss", () => {
     const page = read("client/src/pages/purchase-orders.tsx");
     expect(page).toMatch(/<PoAsinTable asins=\{asins\}/);

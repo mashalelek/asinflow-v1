@@ -14,7 +14,7 @@ import { ChevronRight, ChevronDown, AlertTriangle, Plus, X } from "lucide-react"
 import { Tooltip, TooltipTrigger, TooltipContent } from "@/components/ui/tooltip";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import { fmtQty, individualUnits, PO_ASIN_DISPLAY_COLUMNS, VELOCITY_QTY_TITLE } from "@/lib/po-qty";
-import { INDIV_SHORT, PER_ASIN_UNIT, QTY_KIND, individualFrom } from "@shared/quantity-kinds";
+import { INDIV_SHORT, PER_ASIN_UNIT, PER_PRODUCT_UNIT, QTY_KIND, individualFrom } from "@shared/quantity-kinds";
 import { InlineEdit, poApi, ReassignShipment, shipmentBlockText } from "@/components/po-edit";
 import { InlineNoteCell, NoteIcon } from "@/components/inline-note";
 import { DEFECT_ACTION_ITEM, defectSummary } from "@shared/po-defect";
@@ -100,10 +100,10 @@ export interface PoAsinRowData {
 // (2026-11-01: labels overlapped their neighbours). Product takes what is left (fixed layout, no width).
 // 2026-11-05 (Maria: the right-hand columns clipped at 1440, 160 rem): 17 display columns, fixed px + lead / note + Product (min 84).
 // 2026-11-09 (quantity names): each quantity header carries the muted "ASIN units" line, so a quantity column is at least 56 px
-// (the kind line on one line) and wide enough for its label in two lines, never three; 1,046 px fixed + 60 + Product → 126 px for
+// (the kind line on one line) and wide enough for its label in two lines, never three; 1,052 px fixed + 60 + Product → 120 px for
 // Product at 1280 (1,232 px box), 286 px at 1440.
 const COL_WIDTHS: Record<Exclude<(typeof PO_ASIN_DISPLAY_COLUMNS)[number]["key"], "product">, number> = {
-  ordered: 60, cost_per_unit: 60, total_cost: 72, prep: 44, sold_as: 80,
+  ordered: 66, cost_per_unit: 60, total_cost: 72, prep: 44, sold_as: 80,
   canceled: 56, returned: 56, shipped_supplier: 66, received_velocity: 70, at_prep: 56, at_warehouse: 68, lost_damaged_us: 92,
   shipped_fba: 56, received_amazon: 70, shipments: 64, action_items: 76,
 };
@@ -137,6 +137,27 @@ export function IndivLine({ v, perUnit, testId }: { v: string | number | null | 
     <div className="whitespace-nowrap text-[11px] text-muted-foreground" title={`${QTY_KIND.individual} = ${QTY_KIND.asin} × ${PER_ASIN_UNIT}`} data-testid={testId}>
       {n == null ? <span className="text-muted-foreground/50" data-testid={testId ? `${testId}-unknown` : undefined}>—</span> : fmtQty(n)} {INDIV_SHORT}
     </div>
+  );
+}
+
+/**
+ * A bundle component line's Ordered (Maria 2026-11-09): the line counts Product
+ * units while the ASIN row above counts ASIN units, so the cell names its kind
+ * in grey ("Product u.") and shows its own Individual count from the line's
+ * Product pack (qty × Individual units per Product unit; "—" when that is NULL).
+ */
+export function ComponentQty({ l }: { l: { id: string; qty_ordered: number | null; retailer_units_per_product?: number | null } }) {
+  const n = individualFrom(l.qty_ordered, l.retailer_units_per_product);
+  return (
+    <>
+      <QtyCell v={l.qty_ordered} />
+      <div className="whitespace-nowrap text-[10px] text-muted-foreground/70" title={`${QTY_KIND.product} — items as sold on the supplier's site; the ASIN row above counts ${QTY_KIND.asin}`} data-testid={`component-kind-${l.id}`}>Product u.</div>
+      {l.qty_ordered != null && (
+        <div className="whitespace-nowrap text-[11px] text-muted-foreground" title={`${QTY_KIND.individual} = ${QTY_KIND.product} × ${PER_PRODUCT_UNIT}`} data-testid={`component-indiv-${l.id}`}>
+          {n == null ? <span className="text-muted-foreground/50">—</span> : fmtQty(n)} {INDIV_SHORT}
+        </div>
+      )}
+    </>
   );
 }
 
@@ -632,7 +653,7 @@ export function PoAsinRow({ a, indent = false, editable = false, onChanged, po }
         <tr key={l.id} style={hairline} data-testid={`row-component-${a.asin}-${l.position}`}>
           <td className="px-2 py-1" />
           <td className="px-1.5 py-1 pl-6 text-xs text-muted-foreground truncate" title={l.product_name ?? ""}>{l.product_name ?? "—"}</td>
-          <td className="px-1.5 py-1 text-right text-xs text-muted-foreground"><QtyCell v={l.qty_ordered} /></td>
+          <td className="px-1.5 py-1 text-right text-xs text-muted-foreground"><ComponentQty l={l} /></td>
           <td className="px-1.5 py-1 text-right text-xs text-muted-foreground"><Money v={l.price} /></td>
           <td className="px-1.5 py-1 text-right text-xs text-muted-foreground"><Money v={l.adjusted_product_cost} /></td>
           {/* Product, Ordered, Cost/Unit, Total Cost above; Action Items after. */}

@@ -5922,7 +5922,13 @@ sizes show once per row: the ASINs tab's "Sold as · ×N" (Individual units
 per ASIN unit) and the Products tab's **Product pack** column ("single" /
 "multi-pack ×15" — Individual units per Product unit). The PO page's
 summary strip reads "ASIN units ordered 15 · 45 individual"; the Products
-tab's Received (sheet col M) is gone, as from the POs list.
+tab's Received (sheet col M) is gone, as from the POs list. **Bundle
+component lines** (a multi-line ASIN row expanded on the ASINs tab / POs
+list) sit under the ASIN row's "ASIN units · Ordered" header but count
+Product units, so each one's Ordered carries a grey "Product u." label
+under the number and its own Individual count from the line's Product
+pack (qty × Individual units per Product unit; "—" when NULL); Cost/Unit
+and Total Cost on those lines are unchanged (Maria 2026-11-09).
 
 **Kinds by surface:** the ASINs tab, the POs list, the ASINs page's stock
 and sales columns, SC shipments and the Dashboard's "ASIN units ordered"
