@@ -114,9 +114,24 @@ Maria can do on one list with a checkbox.
 - **D15 — An open claim keeps its PO open** (Maria 2026-11-09). Auto-close
   = every unit accounted for **and** no open claim. Expected units reflect
   the claim everywhere while the PO is open.
-- **D16 — Claim qty is entered in Individual units** (Maria 2026-11-09),
-  labeled as such; AF shows Product and ASIN equivalents from the line's
-  pack sizes. Wording per the quantity-names patch.
+- **D17 — Stored base is Individual units** (Maria 2026-11-09). Every PO
+  quantity (ordered, received by Velocity, at prep, at warehouse,
+  lost/damaged, shipped FBA, received by Amazon, claim qty, refund qty) is
+  stored as an integer count of Individual units and converted on display
+  (Product units on the Products tab, ASIN units on the ASINs tab and the
+  ASINs page, with the individual count in pale grey under each number).
+  Decimals then appear only in derived ASIN units and only when real
+  (Caress: 5.5 ASIN units / 11 individual). Rows with no confirmed pack
+  size can't convert: they keep their stored number, flagged "pack size
+  missing" (already blocks auto-close) until Maria confirms the pack.
+- **D16 — Everything Maria types is Individual units** (Maria 2026-11-09):
+  claim qty, refund qty, Shipped by Supplier, At CQG Warehouse,
+  Lost/damaged by us. AF shows the Product and ASIN equivalents beside the
+  field. Ordered on a product line stays Product units; the ASINs tab
+  stays ASIN units. Existing hand-entered values (stored as ASIN or
+  Product units) convert in commit 1 with a dry run of every value;
+  readers (On Order, auto-close, Velocity plan) keep working in ASIN units
+  through the view. Wording per the quantity-names patch.
 
 ## 3. How a claim works
 
@@ -240,9 +255,10 @@ counts under a different PO are an attribution mismatch (§3.8).
   cancel) spreads its qty and $ across the PO's lines in proportion to
   ordered qty for every reader below.
 - **One derived value, one place:** a SQL view / helper
-  `po_line_expected` (line, expected individual / product / ASIN units,
-  Σ canceled, Σ claimed) replaces every read of `qty_canceled` /
-  `qty_returned`: On Order (`PIPELINE_ROWS_SQL`), auto-close, the Velocity
+  `po_line_expected` (line, ordered / expected / received / at prep /
+  shipped in Individual, Product and ASIN units from the stored
+  Individual base (D17), Σ canceled, Σ claimed) replaces every read of
+  `qty_canceled` / `qty_returned` and every per-reader ÷ pack size: On Order (`PIPELINE_ROWS_SQL`), auto-close, the Velocity
   plan (`loadAfPoRows`, net quantities), the PO editor's Canceled /
   Returned columns, the ASIN-row roll-ups. `final_qty` (030) is dropped;
   readers use the view.
@@ -324,7 +340,7 @@ status, `est_delivery_date`, timestamped scans, a return flag and
 
 ## 4. Data
 
-Verified against migrations 028–099.
+Verified against migrations 028–099. Stored base for every quantity: Individual units (D17).
 
 ### 4.1 `supplier_claims` (renames and widens `po_line_defects`, 094)
 
@@ -377,9 +393,23 @@ every net-quantity reader.
 
 ### 4.7 Changes to existing tables
 
+- **Stored base → Individual units (D17):** every quantity column on
+  `po_asins` (qty_ordered, qty_shipped_supplier, qty_at_prep,
+  qty_at_warehouse, qty_lost_damaged_us, qty_shipped_fba,
+  qty_received_amazon, received_velocity) and `po_line_items`
+  (qty_ordered …) is converted in place: stored × its pack size (ASIN pack
+  for ASIN-unit columns, product pack for Product-unit columns), integer
+  result required; a row whose pack size is NULL or whose product isn't a
+  whole number is listed in the dry run and left unconverted with a
+  per-row flag until Maria confirms its pack. Trigger-maintained sums
+  (po_asin_shipments → qty_shipped_fba / qty_received_amazon) switch to
+  individual units. Velocity ingest stops dividing by pack. Every reader
+  goes through the view (§4.6); the dry run proves On Order, auto-close
+  and the Velocity plan give identical numbers before and after for every
+  production PO.
 - `po_line_items`: **drop** `qty_canceled`, `qty_returned`, `final_qty`
-  after conversion (§4.8). The PO editor's Canceled / Returned columns read
-  the view.
+  after conversion (§4.8). The PO page's Canceled / Returned / Final
+  columns go; the PO's Claims card shows them.
 - `po_tracking`: `claim_id`, `direction` (`inbound` \| `return`), EasyPost
   columns (§3.9).
 - `po_documents`: `claim_id`; type `return_label`.
@@ -512,11 +542,13 @@ every net-quantity reader.
 Prerequisite: `claude_spec-patch-quantity-names.md` (labels only).
 
 0. ~~Probe~~ — done 2026-11-07.
-1. Migration §4.1–4.7 + view §4.6; conversions §4.8 (dry run → Maria →
-   live); drop `qty_canceled` / `qty_returned` / `final_qty`; every
-   net-quantity reader on the view; tests that On Order / auto-close /
-   Velocity plan give the same numbers before and after for every
-   production PO (dry run report).
+1. Migration §4.1–4.7 + view §4.6: stored base → Individual units (D17,
+   per-row dry run listing every value before/after and every row that
+   can't convert); conversions §4.8; drop `qty_canceled` / `qty_returned`
+   / `final_qty`; every quantity reader on the view; D16 entry fields in
+   Individual units. Dry run report proves On Order / auto-close / Velocity
+   plan identical before and after for every production PO. Stop for
+   Maria, then live.
 2. Tasks + buckets + paths (§3.2–3.4), outcomes + refunds table (§3.5),
    money incl. override (§3.7), Claims nav tab + claim detail + POs-list
    column + PO page link / card / Open claim (§5), Refunds due / Spend on
