@@ -52,6 +52,7 @@ This app runs on the following stack. This is settled. Do not suggest alternativ
 - `client/src/pages/home.tsx` — Main page with table, filters, scorecards
 - `client/src/components/results-table.tsx` — Table rendering and column logic
 - `shared/schema.ts` — Column definitions, profit calculation, types
+- `server/asin-upsert.ts` — the Analyze / onboarding row writes for one ASIN (asins + asin_estimates upsert, history, CSV COGS, notes append), every statement run against the real schema in `server/asin-upsert.db.test.ts` (rolled back) — a mocked query never parses SQL (the 2026-11-09 `$16` regression)
 - `shared/po-form.ts` / `shared/po-cost.ts` — New PO form state + validation; the ONE cost formula (v2, SPEC §22 "Costs")
 - `server/config/ai.ts` — the one place the Claude model id / tokens / effort / price live (Capture PO, promo backfill)
 - `shared/po-edit-form.ts` / `server/po-edit-form.ts` — Edit PO as a page (`/pos/:id/edit`, `client/src/pages/po-edit-page.tsx`): the stored PO as the New PO form, the edited form diffed into the existing per-field editors (one History row per field, one transaction)
