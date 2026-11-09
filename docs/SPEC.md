@@ -2740,6 +2740,26 @@ held two manual dry runs for stale inputs; 16 Live offer skipped 2 ASINs as tran
   (B07GG6BNFV, B0F4KNWLL9). Not transient (no retry); known-persistent
   after 3 passes; their fallback fee says so on hover. The fix is the
   catalog's dimensions (a Seller Central case / Amazon measurement).
+- **Regression 2026-11-06 → 2026-11-09: no new ASIN got an `asin_estimates`
+  row.** The commit that added `fba_fee_promotion` / `fee_fetched_at` to
+  the Analyze upsert (`upsertAsinResult`, e16daa0) used parameter `$16`
+  twice in one INSERT — as the `fee_source` varchar(10) value and in
+  `CASE WHEN $16 = 'spapi'` — and Postgres rejects such a statement at
+  parse time (42P08 "inconsistent types deduced for parameter $16"). The
+  sink logged the error and went on, so every ASIN onboarded after the
+  deploy (18 ER leads, job #527 on 11/8) had an `asins` row and no
+  estimates row; every component that UPDATEs the estimates table matched
+  0 rows while 10 and 11 reported "updated", and only 8 Gating named the
+  cause ("error: no asin_estimates row"), daily. Fixed 2026-11-09: the
+  parameter is typed once (`$16::text` in both places); the statement is
+  exercised against the real schema in `server/asin-upsert.db.test.ts`
+  (rolled back), the insert is one transaction per ASIN with the failure
+  on the stream, every estimates writer counts `rowCount`, and
+  `npm run backfill:asin-estimates` creates the missing rows (the commits
+  that follow this one, same day). Scan of every other INSERT / UPDATE in
+  `server/` for a parameter used both as a column value and inside an
+  expression: none other conflicts (`po_tracking.status` is text in both
+  uses).
 
 ### Two extensions (v2.0, Maria 2026-11-05)
 
