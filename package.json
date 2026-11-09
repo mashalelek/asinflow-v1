@@ -19,6 +19,7 @@
     "backfill:line-action-items": "tsx script/backfill-line-action-items.ts",
     "backfill:sales": "tsx script/backfill-sales.ts",
     "backfill:asin-pack": "tsx script/asin-pack-review.ts",
+    "backfill:asin-estimates": "tsx script/backfill-asin-estimates.ts",
     "backfill:ledger": "tsx script/backfill-ledger.ts",
     "gmail:check": "tsx script/gmail-check.ts",
     "velocity:tracking-probe": "tsx script/velocity-tracking-probe.ts",

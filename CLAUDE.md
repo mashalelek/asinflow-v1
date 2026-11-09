@@ -127,7 +127,7 @@ and any introduced error must be fixed forward before committing.
 
 ## Tests
 
-`npm test` (vitest). **2,397 tests across 227 files** as of 2026-11-08 — this
+`npm test` (vitest). **2,420 tests across 231 files** as of 2026-11-09 — this
 codebase IS tested; the old "there are no tests" line was years stale.
 
 **A gate report must cover BOTH typecheck commands, labelled separately:**
@@ -227,6 +227,8 @@ code block, so the tabs survive) — it becomes a fixture under
 any page whose Products or Totals stayed empty after every layer (30 days,
 admin-only): `npm run capture:samples -- --prod` lists them, `--save <id>`
 writes one as a fixture.
+
+**ASIN estimates backfill (2026-11-09):** `npm run backfill:asin-estimates [-- --prod] [--live]` — the asins rows with no `asin_estimates` row (the `$16` regression of 2026-11-06, SPEC §11 "Fees"), how each got in, the sheet's COGS for it; `--live` creates the rows through the fixed insert path (one transaction per ASIN) and enqueues ONE manual Refresh job for exactly them. Dry run by default; the report runs even when nothing is missing.
 
 **PO patch scripts (2026-10-31):** `npm run backfill:po-model` (migration-075
 backfills, dry run by default, `--live`), `npm run backfill:po-promos` (needs
