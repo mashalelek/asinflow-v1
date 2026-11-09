@@ -869,7 +869,10 @@ async function runSheetsSync(
       if ((result.rowCount ?? 0) > 0) {
         updated++;
         log(`PO sync ${asin}: cogs=${data.cogs ?? "-"} actual=${actBranch} est=${estBranch} prep=${data.prepCost ?? "-"}`, "sheets");
-      } else skipped++;
+      } else {
+        // A PO'd ASIN with no asin_estimates row (2026-11-09): named, not counted as skipped.
+        errors.push(`${asin}: no asin_estimates row`);
+      }
 
       // Update supplier on asins table if available
       if (data.supplier) {

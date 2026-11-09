@@ -11,6 +11,7 @@
 // empty → yes, otherwise → no. A failed probe writes nothing and moves no
 // stamp (the stored answer stands). gated↔ungated flips feed the completion
 // notification (decision 16).
+import { NO_ESTIMATES_ROW } from "./scheduler/step-failures";
 import { getEligibility as realGetEligibility } from "./spapi";
 import type { QueryLike, Flip } from "./scheduler/types";
 
@@ -50,7 +51,7 @@ export async function probeGatingForAsins(asins: string[], deps: GatingProbeDeps
     const p = await probe(asin);
     if (p.kind !== "ok") { counts.error++; outcomes[asin] = `error: ${p.message}`; return; }
     const r = await deps.query(`UPDATE asin_estimates SET eligibility_status = $2 WHERE asin = $1`, [asin, p.status]);
-    if ((r.rowCount ?? 0) === 0) { counts.missing_row++; outcomes[asin] = "error: no asin_estimates row"; return; }
+    if ((r.rowCount ?? 0) === 0) { counts.missing_row++; outcomes[asin] = NO_ESTIMATES_ROW; return; }
     await deps.query(`UPDATE asins SET gating_checked_at = NOW() WHERE asin = $1`, [asin]);
     counts.updated++;
     statuses[asin] = p.status;

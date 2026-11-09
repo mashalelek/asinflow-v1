@@ -3,6 +3,7 @@
 // asins.category, and one asin_estimates_history row per ASIN per daily
 // pass (the seller/price/BSR trend snapshot Product Info used to write).
 import { getCatalogResults } from "./shared";
+import { NO_ESTIMATES_ROW } from "../step-failures";
 import type { ComponentDef, ComponentContext, ComponentResult } from "../types";
 
 export const bsr: ComponentDef = {
@@ -10,18 +11,20 @@ export const bsr: ComponentDef = {
   call: "rides CALL-2 (salesRanks)",
   async run(ctx: ComponentContext): Promise<ComponentResult> {
     const results = await getCatalogResults(ctx);
-    const counts = { updated: 0, no_rank: 0, inconclusive: 0, history_rows: 0 };
+    const counts = { updated: 0, no_rank: 0, inconclusive: 0, history_rows: 0, error: 0 };
     const outcomes: Record<string, string> = {};
     for (const asin of ctx.scopeAsins) {
       const e = results.get(asin);
       if (e?.kind !== "parsed") { counts.inconclusive++; continue; }
       const { bsrRank, bsrCategory } = e.data;
-      if (bsrRank == null) { counts.no_rank++; outcomes[asin] = "no_rank"; }
-      else counts.updated++;
-      await ctx.query(
+      const w = await ctx.query(
         `UPDATE asin_estimates SET bsr = COALESCE($2, bsr), bsr_category = COALESCE($3, bsr_category) WHERE asin = $1`,
         [asin, bsrRank, bsrCategory],
       );
+      // No estimates row (2026-11-09): a failure by name; no history snapshot of a row that does not exist.
+      if ((w.rowCount ?? 0) === 0) { counts.error++; outcomes[asin] = NO_ESTIMATES_ROW; continue; }
+      if (bsrRank == null) { counts.no_rank++; outcomes[asin] = "no_rank"; }
+      else counts.updated++;
       if (bsrCategory) await ctx.query(`UPDATE asins SET category = $2 WHERE asin = $1`, [asin, bsrCategory]);
       const h = await ctx.query(
         `INSERT INTO asin_estimates_history (asin_id, sellers_fba, sellers_fbm, sale_price, bsr)

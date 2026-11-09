@@ -5,6 +5,7 @@
 // scope now have complete profit inputs — a price, a fee, and a COGS — so
 // the ledger says whether the derived view is computable, and names the
 // missing input for the rest.
+import { NO_ESTIMATES_ROW } from "../step-failures";
 import type { ComponentDef, ComponentContext, ComponentResult } from "../types";
 
 export const profit: ComponentDef = {
@@ -20,6 +21,9 @@ export const profit: ComponentDef = {
     )).rows;
     const counts = { complete: 0, incomplete: 0, missing_row: Math.max(0, ctx.scopeAsins.length - rows.length) };
     const outcomes: Record<string, string> = {};
+    // A scoped ASIN with no estimates row is named (2026-11-09) — hourly, so it never hides behind the daily gating step.
+    const have = new Set(rows.map((r: any) => String(r.asin)));
+    for (const asin of ctx.scopeAsins) if (!have.has(asin)) outcomes[asin] = NO_ESTIMATES_ROW;
     for (const r of rows) {
       const missing = [!r.has_price && "price", !r.has_fee && "fee", !r.has_cogs && "cogs"].filter(Boolean);
       if (missing.length === 0) counts.complete++;

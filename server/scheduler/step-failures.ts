@@ -24,6 +24,12 @@ export interface PersistentList { label: string; asins: Array<{ asin: string; ou
 
 const ASIN_KEY = /^[A-Z0-9]{10}$/;
 export const ASIN_FAILURE = /^(?:error\b|skipped_transient\b|skip_probe_transient\b)/;
+/**
+ * The per-ASIN outcome of every component that writes asin_estimates when its UPDATE matched no row (2026-11-09):
+ * a scoped ASIN with an asins row and no estimates row is a failure the hourly pass names (10, 13, 14, 9), not a
+ * count that looks like success — from 11/6 to 11/9 components 10 and 11 reported "updated" on 18 such ASINs.
+ */
+export const NO_ESTIMATES_ROW = "error: no asin_estimates row";
 export const FAILURE_COUNTS: readonly string[] = ["error", "errors", "failed", "push_failed", "chunks_failed", "transient", "sc_list_incomplete", "skip_probe_transient"];
 /** How many passes in a row (this one included) make an ASIN's failure known-persistent. */
 export const PERSISTENT_PASSES = 3;

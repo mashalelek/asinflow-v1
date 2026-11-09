@@ -2723,6 +2723,13 @@ held two manual dry runs for stale inputs; 16 Live offer skipped 2 ASINs as tran
   (22, 24), 14's `incomplete: …`, 20 / 21's `skipped: finances_patch_pending`.
 - **Retry (Fees):** an ASIN whose estimate failed with "internal service failure", another 5xx, throttling or a timeout is
   asked again once, after the whole step and a 20 s backoff, before it counts (`counts.retried`, `counts.recovered`).
+- **No estimates row (2026-11-09):** every component that writes `asin_estimates` counts `rowCount`, never calls — an
+  UPDATE that matched no row is that ASIN's `error: no asin_estimates row` (`NO_ESTIMATES_ROW`): 10 Prices (the ASIN
+  is also left out of what 11 Sellers and 12 CPT may claim), 13 Fees (a scoped ASIN the table lacks is this error, not
+  `skipped_no_price`, and no `fee_error` is recorded on a row that does not exist), 14 Profit (per ASIN beside
+  `missing_row`, so the hourly pass fails the step), 4 BSR (no history snapshot of a missing row), 9 PO sheet (an
+  `errors` entry, not `skipped`), 8 Gating as before. Until then 10 and 11 reported "updated 18" on the 18 half-created
+  ASINs of the `$16` regression and only the daily gating step named them.
 - **Where it shows:** the job summary (`failedSteps`, `persistent`), the ledger row's outcomes (`_step_failed`,
   `_persistent`) — never `refresh_runs.error`, which listing hygiene reads as "this data cannot be trusted" — the jobs
   dialog (the row's "N steps failed", Failed steps, the persistent lists), the completion toast's title, and a red

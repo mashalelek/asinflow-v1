@@ -25,6 +25,7 @@ import { spApiPost } from "./spapi-auth";
 import { parseOffersPayload, type ParsedOffers } from "./offers-parse";
 import { query } from "./db";
 import { log } from "./log";
+import { NO_ESTIMATES_ROW } from "./scheduler/step-failures";
 
 const MARKETPLACE = "ATVPDKIKX0DER";
 const BATCH_URI = "/batches/products/pricing/v0/itemOffers";
@@ -66,8 +67,8 @@ export interface PriceRefreshResult {
 // clears asin_estimates.error (2026-09-09): a conclusive price answer
 // supersedes any stale per-row error string — the old synthesized
 // "Price unavailable" strings survived price writes and poisoned the UI.
-async function writePrice(asin: string, p: ParsedOffers): Promise<void> {
-  await query(
+async function writePrice(asin: string, p: ParsedOffers): Promise<boolean> {
+  const r = await query(
     `UPDATE asin_estimates SET
        lowest_fba_price = $2,
        buy_box_price = $3,
@@ -81,6 +82,8 @@ async function writePrice(asin: string, p: ParsedOffers): Promise<void> {
      WHERE asin = $1`,
     [asin, p.lowestFbaPrice, p.buyBoxPrice, p.buyBoxFulfillment, p.lowestPrice, p.sellersFba, p.sellersFbm, p.competitivePriceThreshold],
   );
+  // 0 rows = no asin_estimates row for this ASIN (2026-11-09): the caller reports it, never "updated".
+  return (r.rowCount ?? 0) > 0;
 }
 
 interface ItemResult {
@@ -159,7 +162,8 @@ export interface PricePassResult {
 
 export async function runPricePass(
   asins: string[],
-  write: ((asin: string, p: ParsedOffers) => Promise<void>) | null,
+  // A writer may answer `false` = the UPDATE matched no row (no asin_estimates row); `void`/`true` = written.
+  write: ((asin: string, p: ParsedOffers) => Promise<void | boolean>) | null,
   onProgress?: (p: PriceRefreshProgress) => void | Promise<void>,
 ): Promise<PricePassResult> {
   const results = new Map<string, ItemResult>();
@@ -192,11 +196,18 @@ export async function runPricePass(
   const parsed = new Map<string, ParsedOffers>();
   for (const asin of asins) {
     const r = results.get(asin) ?? { outcome: "error" as const, message: "never processed" };
-    counts[r.outcome]++;
     if ((r.outcome === "updated" || r.outcome === "no_offers") && r.parsed) {
+      const wrote = write ? await write(asin, r.parsed) : undefined;
+      if (wrote === false) {
+        // The row to write into does not exist (2026-11-09): a failure named per ASIN; riders 11 / 12 see nothing
+        // landed (not in `parsed`), so they cannot report a seller count or CPT the record does not hold.
+        counts.error++;
+        outcomes[asin] = NO_ESTIMATES_ROW;
+        continue;
+      }
       parsed.set(asin, r.parsed);
-      if (write) await write(asin, r.parsed);
     }
+    counts[r.outcome]++;
     if (r.outcome !== "updated") {
       outcomes[asin] = r.message ? `${r.outcome}: ${r.message}` : r.outcome;
     }

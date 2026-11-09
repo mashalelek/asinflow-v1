@@ -7,6 +7,7 @@
 // stage does NOT abort the others — it is reported failed with its error.
 // Every stage persists a refresh_runs row (migration 032): counts, per-item
 // outcomes, rate-limit stats — "which failed" is a row, not scrollback.
+import { NO_ESTIMATES_ROW } from "./scheduler/step-failures";
 import { query } from "./db";
 import { log } from "./log";
 import { refreshPrices, type PriceRefreshResult } from "./price-sync";
@@ -74,10 +75,10 @@ export async function runFeesStage(opts: {
   const filtered = opts.filter && opts.filter.size > 0;
   const rows = (await query(
     filtered
-      ? `SELECT a.asin, e.lowest_fba_price, e.buy_box_price, e.lowest_price, e.bsr_category
+      ? `SELECT a.asin, e.lowest_fba_price, e.buy_box_price, e.lowest_price, e.bsr_category, (e.asin IS NULL) AS no_row
            FROM asins a LEFT JOIN asin_estimates e ON e.asin = a.asin
           WHERE a.asin = ANY($1::text[]) ORDER BY a.asin`
-      : `SELECT a.asin, e.lowest_fba_price, e.buy_box_price, e.lowest_price, e.bsr_category
+      : `SELECT a.asin, e.lowest_fba_price, e.buy_box_price, e.lowest_price, e.bsr_category, (e.asin IS NULL) AS no_row
            FROM asins a LEFT JOIN asin_estimates e ON e.asin = a.asin
           WHERE a.status IN ('active', 'parked') ORDER BY a.asin`, // cron scope: decision 5, 2026-09-07
     filtered ? [Array.from(opts.filter!)] : undefined,
@@ -88,6 +89,8 @@ export async function runFeesStage(opts: {
   const items: Array<{ asin: string; price: number; category?: string | null }> = [];
   for (const r of rows) {
     const asin: string = r.asin;
+    // No asin_estimates row at all (2026-11-09): a failure by name, not "skipped_no_price".
+    if (r.no_row === true) { counts.error++; outcomes[asin] = NO_ESTIMATES_ROW; continue; }
     const { price, isFallback } = getFeePriceForAsin({
       lowestFbaPrice: r.lowest_fba_price != null ? parseFloat(r.lowest_fba_price) : null,
       buyBoxPrice: r.buy_box_price != null ? parseFloat(r.buy_box_price) : null,
@@ -104,17 +107,18 @@ export async function runFeesStage(opts: {
   const pass = await runFeesPass(
     items,
     opts.dryRun ? null : async (asin, fees) => {
-      await query(
+      const r = await query(
         `UPDATE asin_estimates SET fba_fee = $2, referral_fee = $3, fees_estimate_price = $4, fee_source = 'spapi',
                 fba_fee_promotion = $5, fee_fetched_at = NOW(), fee_error = NULL, fee_error_at = NULL WHERE asin = $1`,
         [asin, fees.fbaFulfillmentFee, fees.referralFee, fees.feesEstimatePrice, fees.fbaFeePromotion ?? null],
       );
+      return (r.rowCount ?? 0) > 0; // 0 rows = no asin_estimates row (2026-11-09)
     },
     (current, total) => opts.emit({ type: "stage", stage: "fees", status: "running", current, total }),
     opts.dryRun,
   );
   counts.updated = pass.counts.updated;
-  counts.error = pass.counts.error;
+  counts.error += pass.counts.error;
   Object.assign(outcomes, pass.outcomes);
   // Maria 2026-11-06: SP-API's client-side error on an ASIN whose catalog lacks package dimensions / weight is that, by name
   // (B07GG6BNFV, B0F4KNWLL9 — AFN fails at any price, MFN works); not transient, so the retry leaves it alone.
@@ -125,7 +129,8 @@ export async function runFeesStage(opts: {
   }
   // A failure never touches the stored fee: it is recorded beside it, and the fee shows as stale (fee_fetched_at's date) until a success clears it.
   if (!opts.dryRun) {
-    const failed = Object.entries(outcomes).filter(([, o]) => /^error\b/.test(o));
+    // (a missing row has nothing to record the error on)
+    const failed = Object.entries(outcomes).filter(([, o]) => /^error\b/.test(o) && o !== NO_ESTIMATES_ROW);
     for (const [asin, o] of failed) await query(`UPDATE asin_estimates SET fee_error = $2, fee_error_at = NOW() WHERE asin = $1`, [asin, o.replace(/^error: /, "").slice(0, 300)]);
   }
   return { counts, outcomes };
@@ -140,7 +145,8 @@ export const NO_DIMENSIONS_FEE_ERROR = "error: no FBA estimate: catalog lacks pa
 // skip rule) and owns persistence via the writer.
 export async function runFeesPass(
   items: Array<{ asin: string; price: number; category?: string | null }>,
-  write: ((asin: string, fees: { fbaFulfillmentFee: number | null; referralFee: number | null; feesEstimatePrice: number | null; fbaFeePromotion?: number | null }) => Promise<void>) | null,
+  // A writer may answer `false` = the UPDATE matched no row (no asin_estimates row); `void`/`true` = written.
+  write: ((asin: string, fees: { fbaFulfillmentFee: number | null; referralFee: number | null; feesEstimatePrice: number | null; fbaFeePromotion?: number | null }) => Promise<void | boolean>) | null,
   onProgress?: (current: number, total: number) => void,
   dryRun = false,
 ): Promise<{ counts: { updated: number; error: number }; outcomes: Record<string, string> }> {
@@ -153,8 +159,9 @@ export async function runFeesPass(
     for (const it of chunk) {
       const entry = batch.get(it.asin);
       if (entry?.kind === "parsed" && entry.fees.fbaFulfillmentFee != null) {
+        const wrote = write ? await write(it.asin, entry.fees) : undefined;
+        if (wrote === false) { counts.error++; outcomes[it.asin] = NO_ESTIMATES_ROW; continue; }
         counts.updated++;
-        if (write) await write(it.asin, entry.fees);
         if (dryRun) outcomes[it.asin] = `would-write fba=${entry.fees.fbaFulfillmentFee} referral=${entry.fees.referralFee} @ $${it.price}`;
       } else {
         counts.error++;
