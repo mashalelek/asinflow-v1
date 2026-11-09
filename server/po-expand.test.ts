@@ -38,11 +38,23 @@ describe("§4 column model", () => {
   });
   it("bundle component lines name their kind (Maria 2026-11-09): 'Product u.' in grey under the line's Ordered, with the Individual count from the line's Product pack", () => {
     const comp = read("client/src/components/po-asin-rows.tsx");
-    expect(comp).toMatch(/<td className="px-1\.5 py-1 text-right text-xs text-muted-foreground"><ComponentQty l=\{l\} \/><\/td>/);
+    expect(comp).toMatch(/<td className="px-1\.5 py-1 text-right text-xs text-muted-foreground"><ComponentQty l=\{l\} a=\{a\} \/><\/td>/);
     expect(comp).toMatch(/individualFrom\(l\.qty_ordered, l\.retailer_units_per_product\)/);
     expect(comp).toMatch(/data-testid=\{`component-kind-\$\{l\.id\}`\}>Product u\.<\/div>/);
+    // The bundle rule (migration 100): the component's units per bundle (amber when proposed) and its leftover, under the Individual count.
+    expect(comp).toMatch(/data-testid=\{`component-per-bundle-\$\{l\.id\}`\} data-proposed=\{comp\.proposed \? "yes" : undefined\}>\{comp\.perBundle\} \/ bundle<\/div>/);
+    expect(comp).toMatch(/comp\.leftover > 0\.005 && <div [^>]*data-testid=\{`component-leftover-\$\{l\.id\}`\}>\{fmtQty\(comp\.leftover\)\} left over<\/div>/);
+    expect(comp).toMatch(/export function bundleComponentOf\(/);
+    const tab = read("client/src/components/po-edit.tsx");
+    expect(tab).toMatch(/testId=\{`units_per_bundle-\$\{l\.id\}`\}/);           // editable on the line, under Product pack
+    expect(tab).toMatch(/\{comp\.perBundle\} per bundle\{comp\.proposed \? " \?" : ""\}/); // amber + "?" while only proposed
+    expect(tab).toMatch(/comp \? <td [^>]*data-testid=\{`asin-units-\$\{l\.id\}`\}><QtyText v=\{comp\.builds\} \/>/); // a component's ASIN units = the bundles it builds
+    const form = read("client/src/components/new-po-dialog.tsx");
+    expect(form).toMatch(/data-testid=\{`input-new-po-units_per_bundle-\$\{i\}`\}/);
+    expect(form).toMatch(/button-new-po-per-bundle-confirm-\$\{i\}`\}>confirm \{c\.perBundle\}<\/button>/);
+    expect(form).not.toMatch(/the smallest member's Product units × yield/);
     // Cost/Unit and Total Cost on the component line are unchanged.
-    expect(comp).toMatch(/<ComponentQty l=\{l\} \/><\/td>\s*<td className="px-1\.5 py-1 text-right text-xs text-muted-foreground"><Money v=\{l\.price\} \/><\/td>\s*<td className="px-1\.5 py-1 text-right text-xs text-muted-foreground"><Money v=\{l\.adjusted_product_cost\} \/><\/td>/);
+    expect(comp).toMatch(/<ComponentQty l=\{l\} a=\{a\} \/><\/td>\s*<td className="px-1\.5 py-1 text-right text-xs text-muted-foreground"><Money v=\{l\.price\} \/><\/td>\s*<td className="px-1\.5 py-1 text-right text-xs text-muted-foreground"><Money v=\{l\.adjusted_product_cost\} \/><\/td>/);
   });
   it("the detail page renders the shared table and no longer carries Qty (units) or Unreimb. Loss", () => {
     const page = read("client/src/pages/purchase-orders.tsx");

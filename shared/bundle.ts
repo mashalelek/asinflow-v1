@@ -22,8 +22,13 @@
 
 export interface BundleLine {
   qty_ordered: number | string | null;
-  /** Individual units per Product unit (the retailer's pack); NULL reads as 1. */
+  /** Individual units per Product unit (the retailer's pack); NULL reads as 1 — or, with no pack and a stored yield, the legacy reading below. */
   retailer_units_per_product?: number | string | null;
+  /**
+   * A line without its pack integers (an unresolved sheet import) keeps its stored yield (migration 080 model): the bundles
+   * it builds = qty × yield, so its Individual units read as qty × yield × its per-bundle count.
+   */
+  asin_qty_per_product?: number | string | null;
   /** Units of this component in one bundle; NULL = not known (an even split is proposed). */
   units_per_bundle?: number | string | null;
   /** The line's unit money (price, or line total ÷ qty); optional — only the cost needs it. */
@@ -79,10 +84,13 @@ export function bundleFromLines(lines: ReadonlyArray<BundleLine>, n: number | st
   const even = evenSplit(N, lines.length);
   const comps = lines.map((l) => {
     const qty = num(l.qty_ordered) ?? 0;
-    const per = posInt(l.retailer_units_per_product) ?? 1;
-    const individual = r2(qty * per);
     const stored = posInt(l.units_per_bundle);
     const perBundle = stored ?? even ?? 1;
+    const packKnown = posInt(l.retailer_units_per_product) != null;
+    const legacyYield = !packKnown && num(l.asin_qty_per_product) != null && Number(l.asin_qty_per_product) > 0 ? Number(l.asin_qty_per_product) : null;
+    // Individual units: qty × the pack; a line with no pack but a stored yield builds qty × yield bundles (the old model's sets).
+    const per = packKnown ? posInt(l.retailer_units_per_product)! : legacyYield != null ? legacyYield * perBundle : 1;
+    const individual = r2(qty * per);
     const unit = l.unit_money != null && Number.isFinite(l.unit_money) ? l.unit_money : null;
     return { individual, perBundle, proposed: stored == null, builds: r2(individual / perBundle), costShare: unit == null ? null : (unit / per) * perBundle };
   });

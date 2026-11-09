@@ -9,9 +9,20 @@
 // Paid cost still follow the rule. Costs come from the line totals
 // (po_line_items.line_total, else price × qty). Every change is logged.
 import type { QueryLike } from "./scheduler/types";
-import { allocateAsinCosts, adjustedProductCost, allocationBaseOf, reflectedPromos, promoCostHeader, promoKind, lineMoney, COST_FORMULA_VERSION, type CostHeader, type CostLine } from "@shared/po-cost";
+import { bundleFromLines } from "@shared/bundle";
+import { allocateAsinCosts, bundleAsinCosts, adjustedProductCost, type BundleCostLine, allocationBaseOf, reflectedPromos, promoCostHeader, promoKind, lineMoney, COST_FORMULA_VERSION, type CostHeader, type CostLine } from "@shared/po-cost";
 import { logEdits, changedFields } from "./po-edit";
 import { weightedPaymentPctExact } from "@shared/po-form";
+
+/** A bundle row's lines as the cost rule reads them: unit money (line total ÷ qty, else price), the real pack, the per-bundle count (stored, else proposed). */
+export function bundleCostLines(lines: ReadonlyArray<{ price: string | null; qty_ordered: string | null; line_total?: string | null; retailer_units_per_product?: number | string | null; units_per_bundle?: number | string | null }>, n: number | string | null): BundleCostLine[] {
+  const b = bundleFromLines(lines.map((l) => ({ qty_ordered: l.qty_ordered, retailer_units_per_product: l.retailer_units_per_product, units_per_bundle: l.units_per_bundle })), n);
+  return lines.map((l, k) => {
+    const qty = Number(l.qty_ordered) || 0;
+    const unitMoney = l.line_total != null && qty > 0 ? Number(l.line_total) / qty : l.price == null ? null : Number(l.price);
+    return { unitMoney, perProduct: Number(l.retailer_units_per_product) >= 1 ? Number(l.retailer_units_per_product) : 1, perBundle: b.components[k]?.perBundle ?? 1 };
+  });
+}
 
 export interface RecomputeResult { poId: string; skipped: "imported" | null; asinRows: number; changed: number; ambiguousPromos?: boolean }
 
@@ -26,7 +37,7 @@ export async function recomputePoCosts(query: QueryLike, poId: string, userId: n
   const plan: Array<{ entity: string; id: string; field: string; old: unknown; new: unknown }> = [];
   const write = async (sql: string, params: unknown[]) => { if (!opts.dryRun) await query(sql, params); };
   const promos = (await query(`SELECT type, description, amount, percent, counts_toward_cogs, in_line_prices FROM po_promos WHERE po_id = $1 ORDER BY position, id`, [poId])).rows as Array<{ type?: string | null; description?: string | null; amount: string | null; percent?: string | null; counts_toward_cogs: boolean; in_line_prices?: boolean | null }>;
-  const rows = (await query(`SELECT id, asin, qty, cost_per_unit, sourcing_cost, paid_cost, cogs_adjustment FROM po_asins WHERE po_id = $1 ORDER BY asin`, [poId])).rows;
+  const rows = (await query(`SELECT id, asin, qty, cost_per_unit, sourcing_cost, paid_cost, cogs_adjustment, sold_as, units_per_pack FROM po_asins WHERE po_id = $1 ORDER BY asin`, [poId])).rows;
   const manual = new Set<string>(
     (await query(`SELECT DISTINCT entity_id FROM po_edit_log WHERE po_id = $1 AND entity = 'asin' AND field = 'cost_per_unit' AND NOT derived`, [poId])).rows.map((r: any) => String(r.entity_id)),
   );
@@ -53,8 +64,11 @@ export async function recomputePoCosts(query: QueryLike, poId: string, userId: n
   }, linesSum, promos.map((p) => ({ counts: p.counts_toward_cogs !== false })), refl);
   let changed = 0;
   for (const pa of rows) {
-    const lines = (await query(`SELECT id, price, qty_ordered, line_total, regular_price, adjusted_product_cost FROM po_line_items WHERE po_asin_id = $1 ORDER BY position`, [pa.id])).rows;
-    const costs = allocateAsinCosts(h, lines.map(costLine), Number(pa.qty), pa.cogs_adjustment == null ? 0 : Number(pa.cogs_adjustment));
+    const lines = (await query(`SELECT id, price, qty_ordered, line_total, regular_price, adjusted_product_cost, retailer_units_per_product, units_per_bundle FROM po_line_items WHERE po_asin_id = $1 ORDER BY position`, [pa.id])).rows;
+    // A bundle (Maria 2026-11-09): Σ component per-Individual cost × its units per bundle (typed, else the even split proposed), then the PO's share — shared/bundle.ts, bundleAsinCosts.
+    const costs = pa.sold_as === "bundle"
+      ? bundleAsinCosts(h, bundleCostLines(lines, pa.units_per_pack), pa.cogs_adjustment == null ? 0 : Number(pa.cogs_adjustment))
+      : allocateAsinCosts(h, lines.map(costLine), Number(pa.qty), pa.cogs_adjustment == null ? 0 : Number(pa.cogs_adjustment));
     if (!costs) continue;
     const next: Record<string, unknown> = { sourcing_cost: costs.sourcing.toFixed(2), paid_cost: costs.paid.toFixed(2) };
     if (!manual.has(String(pa.id))) next.cost_per_unit = costs.cogs.toFixed(2);

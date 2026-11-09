@@ -11,8 +11,9 @@
 //     row beneath the group (slot k = the k-th row of every member line).
 // Three shapes on the whiteboard: one product → two ASINs (a split), two
 // products → one ASIN (a bundle), one product → one ASIN (the plain line).
-import { yieldFromPacks, productRatio, type PoFormProduct } from "./po-form";
+import { yieldFromPacks, productRatio, bundlePackRatio, type PoFormProduct } from "./po-form";
 import { fracToNumber, lineUnitsExact } from "./yield";
+import { bundleFromLines, type BundleResult } from "./bundle";
 
 export interface LineBox {
   /** bundle_id for a bundle, else the line_id. */
@@ -61,11 +62,16 @@ export function lineQty(products: readonly PoFormProduct[], copies: readonly num
 }
 /** ASIN units of one row: qty × its exact yield (productRatio — the form check's and the save's own ratio; a 2-dp 0.33 is never multiplied as such: 60 → 20, not 19.8, 2026-11-06). */
 export const copyUnits = (p: PoFormProduct): number => { const q = Number(p.qty_ordered) || 0; return q > 0 ? r2(fracToNumber(lineUnitsExact(q, productRatio(p)))) : 0; };
-/** What an ASIN row shows: a plain line's row = its units; a bundle slot = the sets (the smallest member's units). */
+/** The bundle rule over a slot's members (shared/bundle.ts): N = the members' units / pack, each member's units per bundle as typed (else the even split). */
+export function slotBundle(products: readonly PoFormProduct[], slot: readonly number[]): BundleResult {
+  const first = products[slot[0]];
+  return bundleFromLines(slot.map((i) => { const p = products[i]; return { qty_ordered: Number(p.qty_ordered) || 0, retailer_units_per_product: bundlePackRatio(p).retailer, units_per_bundle: (p.units_per_bundle ?? "").trim() || null }; }), first ? Number(first.units_per_pack) || null : null);
+}
+/** What an ASIN row shows: a plain line's row = its units; a bundle slot = the bundles its scarcest member builds (the bundle rule, 2026-11-09). */
 export function slotUnits(products: readonly PoFormProduct[], slot: readonly number[], bundle: boolean): number {
-  const u = slot.map((i) => copyUnits(products[i]));
-  if (u.length === 0) return 0;
-  return bundle ? Math.min(...u) : u[0];
+  if (slot.length === 0) return 0;
+  if (bundle) return slotBundle(products, slot).asinUnits;
+  return copyUnits(products[slot[0]]);
 }
 /** A fractional ASIN qty must not pass silently (red text + "check qty or pack size"); saving is still allowed. */
 export const FRACTIONAL_UNITS_NOTE = "check the Product units or the pack size";
@@ -87,6 +93,12 @@ export function setSlotUnits(products: PoFormProduct[], box: LineBox, k: number,
     if (single) {
       const qty = Number(p.qty_ordered) || 0;
       return qty > 0 && u > 0 ? { ...p, yield_manual: true, asin_qty_per_product: String(r4(u / qty)) } : { ...p, yield_manual: true };
+    }
+    if (box.bundle) {
+      // A bundle: each member's Product units = bundles × its units per bundle ÷ its pack (the rule read backwards).
+      const b = slotBundle(products, slot); const c = b.components[slot.indexOf(i)];
+      const pack = bundlePackRatio(p).retailer || 1;
+      return { ...p, qty_ordered: u > 0 && c ? String(r2((u * c.perBundle) / pack)) : "" };
     }
     const y = Number(p.asin_qty_per_product) || 1;
     return { ...p, qty_ordered: u > 0 ? String(r2(u / y)) : "" };

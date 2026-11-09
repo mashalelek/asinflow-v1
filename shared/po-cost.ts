@@ -304,6 +304,28 @@ export function allocateAsinCosts(h: CostHeader, lines: readonly CostLine[], asi
   return { sourcing, cogsBeforeAdjustment, cogs: r2(cogsBeforeAdjustment + adj), paid: r2((all / asinQty) * gcFactor(h)) };
 }
 
+/** One bundle component for the cost rule: the line's unit money, its Individual units per Product unit, its units in one bundle. */
+export interface BundleCostLine { unitMoney: number | null; perProduct: number; perBundle: number }
+/**
+ * The three costs of a BUNDLE row (Maria 2026-11-09, shared/bundle.ts): Cost/Unit = Σ component per-Individual cost ×
+ * its per-bundle count — each component's unit money ÷ its Individual units per Product unit × the units of it in one
+ * bundle — then the PO's tax / shipping / discount share (the same `ratio` every ASIN row gets) and the gift-card
+ * factor. Leftover component units are not in the bundle's cost. Null when a component lacks money.
+ */
+export function bundleAsinCosts(h: CostHeader, comps: readonly BundleCostLine[], adjustment = 0): AsinCosts | null {
+  if (comps.length === 0) return null;
+  let pre = 0;
+  for (const c of comps) {
+    if (c.unitMoney == null || !Number.isFinite(c.unitMoney) || !(c.perProduct >= 1) || !(c.perBundle >= 1)) return null;
+    pre += (c.unitMoney / c.perProduct) * c.perBundle;
+  }
+  const counting = pre * ratio(h, countingDiscount(h)), all = pre * ratio(h, h.discount || 0);
+  const sourcing = r2(counting);
+  const cogsBeforeAdjustment = r2(counting * gcFactor(h));
+  const adj = Number.isFinite(adjustment) ? adjustment : 0;
+  return { sourcing, cogsBeforeAdjustment, cogs: r2(cogsBeforeAdjustment + adj), paid: r2(all * gcFactor(h)) };
+}
+
 /** COGS per ASIN unit before any adjustment (the sheet's Col Y role). Kept for the fixture measurement and older callers. */
 export function costPerUnitPrefill(h: CostHeader, lines: readonly CostLine[], asinQty: number): number | null {
   return allocateAsinCosts(h, lines, asinQty)?.cogsBeforeAdjustment ?? null;

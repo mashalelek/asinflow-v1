@@ -17,7 +17,7 @@
 // No stored COGS / Sourcing / Paid value is recomputed here (CLAUDE.md,
 // Maria 2026-10-31): a cost is written only when its field was changed; a
 // v2 PO's costs follow the server's recomputePoCosts as with every edit.
-import { checkPoForm, emptyPoForm, productRatio, productLineMoney, priceText, yieldFromPacks, SOLD_AS_OPTIONS, PROMO_IN_PRICES_QUESTION, type PoFormState, type PoFormProduct, type PoFormPromo, type PoFormPayment, type PoFormCheck, type SoldAs, type FormSoldAs } from "./po-form";
+import { checkPoForm, emptyPoForm, productRatio, bundlePackRatio, productLineMoney, priceText, yieldFromPacks, SOLD_AS_OPTIONS, PROMO_IN_PRICES_QUESTION, type PoFormState, type PoFormProduct, type PoFormPromo, type PoFormPayment, type PoFormCheck, type SoldAs, type FormSoldAs } from "./po-form";
 import { ratioYield, retailerUnitsAtPack } from "./yield";
 
 type Row = Record<string, any>;
@@ -70,6 +70,7 @@ export function poToForm(d: StoredPo): PoFormState {
         ...(l.line_total != null ? { line_total: moneyText(l.line_total) } : {}),
         ...(l.regular_price != null ? { regular_price: isWholeCents(l.regular_price) ? moneyText(l.regular_price) : numText(l.regular_price) } : {}),
         retailer_units_per_pack: retailer, asin: str(a.asin).toUpperCase(), asin_qty_per_product: y, yield_manual: yieldManual,
+        ...(soldAs === "bundle" ? { units_per_bundle: l.units_per_bundle == null ? "" : String(l.units_per_bundle) } : {}),
         sold_as: soldAs, units_per_pack: upp, ...(soldAs === "" ? { pack_keep_yield: true } : {}), prep_cost: moneyText(a.prep_cost), notes: str(l.notes),
       });
     }
@@ -143,7 +144,7 @@ export interface PoEditPlan {
 
 /** Header fields the form edits, in HEADER_FIELDS order (server/po-edit.ts). */
 export const EDIT_HEADER_KEYS = ["supplier", "order_id", "order_date", "subtotal", "tax", "sh_donations", "discount", "refund_amount", "order_total", "weighted_gc_discount_pct", "cashback_site", "cashback_pct", "purchased_by", "purchased_by_user_id", "notes", "email_used", "cashback_status", "ships_to", "alt_order_ids"] as const;
-const NUMERIC = new Set(["subtotal", "tax", "sh_donations", "discount", "refund_amount", "order_total", "weighted_gc_discount_pct", "cashback_pct", "price", "line_total", "qty_ordered", "amount", "percent", "gift_card_discount_pct", "prep_cost", "cogs_adjustment", "cost_per_unit", "units_per_pack"]);
+const NUMERIC = new Set(["subtotal", "tax", "sh_donations", "discount", "refund_amount", "order_total", "weighted_gc_discount_pct", "cashback_pct", "price", "line_total", "qty_ordered", "amount", "percent", "gift_card_discount_pct", "prep_cost", "cogs_adjustment", "cost_per_unit", "units_per_pack", "units_per_bundle"]);
 /** The comparable text of a form value: trimmed; a number without $ , % and trailing zeros. */
 export function canonField(key: string, v: unknown): string {
   const s = str(v);
@@ -178,7 +179,8 @@ export function planPoEdit(stored: PoFormState, next: PoFormState, opts: { impor
   const seen = new Set<string>();
   for (const p of next.products) {
     const id = p.line_item_id;
-    const r = productRatio(p);
+    // A bundle member's ratio is its real pack over the bundle's ×N (the bundle rule), never a typed-yield encoding.
+    const r = p.bundle_id ? bundlePackRatio(p) : productRatio(p);
     if (id && storedById.has(id) && !seen.has(id)) {
       seen.add(id);
       const s = storedById.get(id)!;
@@ -193,12 +195,14 @@ export function planPoEdit(stored: PoFormState, next: PoFormState, opts: { impor
       }
       if (canonField("price", p.regular_price) !== canonField("price", s.regular_price)) body.regular_price = str(p.regular_price);
       if (str(p.asin).toUpperCase() !== str(s.asin).toUpperCase()) body.asin = str(p.asin).toUpperCase();
+      // Bundle member (migration 100): its units per bundle as typed; cleared → NULL (proposed again).
+      if (canonField("units_per_bundle", p.units_per_bundle) !== canonField("units_per_bundle", s.units_per_bundle)) body.units_per_bundle = str(p.units_per_bundle) === "" ? null : Number(str(p.units_per_bundle));
       const ratioTouched = RATIO_INPUTS.some((k) => canonField(k, p[k]) !== canonField(k, s[k])) || (p.yield_manual === true) !== (s.yield_manual === true);
-      if (ratioTouched) { const sr = productRatio(s); if (r.retailer * sr.asinUnits !== sr.retailer * r.asinUnits || r.asinUnits !== sr.asinUnits) { body.retailer_units_per_product = r.retailer; body.asin_units_per_pack = r.asinUnits; } }
+      if (ratioTouched) { const sr = s.bundle_id ? bundlePackRatio(s) : productRatio(s); if (r.retailer * sr.asinUnits !== sr.retailer * r.asinUnits || r.asinUnits !== sr.asinUnits) { body.retailer_units_per_product = r.retailer; body.asin_units_per_pack = r.asinUnits; } }
       if (Object.keys(body).length) plan.lineEdits.push({ id, body });
     } else {
       const lm = productLineMoney(p);
-      plan.lineAdds.push({ asin: str(p.asin).toUpperCase(), qty_ordered: str(p.qty_ordered), product_name: str(p.product_name), supplier_sku: str(p.supplier_sku), price: lm?.lineTotal != null ? priceText(lm.unit) : str(p.price), ...(lm?.lineTotal != null ? { line_total: lm.lineTotal.toFixed(2) } : {}), ...(str(p.regular_price) ? { regular_price: str(p.regular_price) } : {}), notes: str(p.notes), retailer_units_per_product: r.retailer, asin_units_per_pack: r.asinUnits });
+      plan.lineAdds.push({ asin: str(p.asin).toUpperCase(), qty_ordered: str(p.qty_ordered), product_name: str(p.product_name), supplier_sku: str(p.supplier_sku), price: lm?.lineTotal != null ? priceText(lm.unit) : str(p.price), ...(lm?.lineTotal != null ? { line_total: lm.lineTotal.toFixed(2) } : {}), ...(str(p.regular_price) ? { regular_price: str(p.regular_price) } : {}), notes: str(p.notes), retailer_units_per_product: r.retailer, asin_units_per_pack: r.asinUnits, ...(p.bundle_id && str(p.units_per_bundle) !== "" ? { units_per_bundle: Number(str(p.units_per_bundle)) } : {}) });
     }
   }
   for (const id of Array.from(storedById.keys())) if (!seen.has(id)) plan.lineRemoves.push(id);

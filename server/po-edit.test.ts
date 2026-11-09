@@ -23,6 +23,11 @@ describe("field parsers", () => {
     expect(parseEdits(LINE_FIELDS, { asin_qty_per_product: "0.5" })).toMatchObject({ ok: false });
     expect(parseEdits(LINE_FIELDS, { retailer_units_per_product: "0.5" })).toMatchObject({ ok: false });
     expect(parseEdits(LINE_FIELDS, { asin_units_per_pack: "0" })).toMatchObject({ ok: false });
+    // The bundle rule (migration 100): a component's units per bundle — whole, ≥ 1, or null (not known → proposed).
+    expect(parseEdits(LINE_FIELDS, { units_per_bundle: "2" })).toEqual({ ok: true, edits: { units_per_bundle: 2 } });
+    expect(parseEdits(LINE_FIELDS, { units_per_bundle: null })).toEqual({ ok: true, edits: { units_per_bundle: null } });
+    expect(parseEdits(LINE_FIELDS, { units_per_bundle: "0" })).toMatchObject({ ok: false });
+    expect(parseEdits(LINE_FIELDS, { units_per_bundle: "1.5" })).toMatchObject({ ok: false });
     expect(parseEdits(LINE_FIELDS, { qty_ordered: "2.5", qty_canceled: "0.25" })).toEqual({ ok: true, edits: { qty_ordered: 2.5, qty_canceled: 0.25 } }); // decimals since migration 062
     expect(parseEdits(LINE_FIELDS, { qty_ordered: "2.555" })).toMatchObject({ ok: false });
     expect(parseEdits(LINE_FIELDS, { qty_ordered: "0" })).toMatchObject({ ok: false });
@@ -52,6 +57,18 @@ describe("Ordered (po_asins.qty) recomputed from the lines, as the importer deri
     expect(asinQtyFromLines([{ qty_ordered: 12, asin_qty_per_product: "1" }, { qty_ordered: 12, asin_qty_per_product: "1" }], "bundle")).toEqual({ qty: 12, uniqueProducts: 2 });
     expect(asinQtyFromLines([{ qty_ordered: 1, asin_qty_per_product: "18" }, { qty_ordered: 1, asin_qty_per_product: "18" }, { qty_ordered: 1, asin_qty_per_product: "18" }], "bundle")).toEqual({ qty: 18, uniqueProducts: 3 }); // B019YPFEKM
     expect(asinQtyFromLines([{ qty_ordered: 14, asin_qty_per_product: "1" }, { qty_ordered: 12, asin_qty_per_product: "1" }], "bundle").qty).toBe(12);
+  });
+  it("the bundle rule (Maria 2026-11-09): walmart 200015415094735 — 12 balms (×1) + 2 six-packs (×6) at ×2, 1 + 1 → 12 bundles; a 2:1 bundle; a leftover; the old encoding read as the real pack would double", () => {
+    const walmart = [{ qty_ordered: "12.00", retailer_units_per_product: 1, asin_units_per_pack: 2, units_per_bundle: 1 }, { qty_ordered: "2.00", retailer_units_per_product: 6, asin_units_per_pack: 2, units_per_bundle: 1 }];
+    expect(asinQtyFromLines(walmart, "bundle", 2)).toEqual({ qty: 12, uniqueProducts: 2 });
+    // Without the per-bundle counts the even split is proposed (1 + 1) — same answer.
+    expect(asinQtyFromLines(walmart.map(({ units_per_bundle: _u, ...l }) => l), "bundle", 2).qty).toBe(12);
+    // 2 of A + 1 of B (×3): 20 A + 10 B → 10 bundles.
+    expect(asinQtyFromLines([{ qty_ordered: 20, retailer_units_per_product: 1, units_per_bundle: 2 }, { qty_ordered: 10, retailer_units_per_product: 1, units_per_bundle: 1 }], "bundle", 3).qty).toBe(10);
+    // Leftover: 12 balms + 3 six-packs → 12 bundles (6 oils left over, shown by the UI).
+    expect(asinQtyFromLines([{ qty_ordered: 12, retailer_units_per_product: 1 }, { qty_ordered: 3, retailer_units_per_product: 6 }], "bundle", 2).qty).toBe(12);
+    // The migration-080 model's reading of the same PO: every component ÷ N → 6 (the bug); the rule never divides a component by N.
+    expect(asinQtyFromLines(walmart, "bundle", 2).qty).not.toBe(6);
   });
 });
 

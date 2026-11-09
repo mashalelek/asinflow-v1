@@ -114,6 +114,8 @@ export const LINE_FIELDS: Record<string, Parser> = {
   qty_ordered: decQty({ positive: true }), qty_received: decQty({ nullable: true }), qty_returned: decQty({ nullable: true }), qty_canceled: decQty({ nullable: true }),
   // Exact yield (migration 080, 2026-11-02): two integers, never a decimal — the derived asin_qty_per_product is written alongside, read-only.
   retailer_units_per_product: intQty({ nullable: false, min: 1 }), asin_units_per_pack: intQty({ nullable: false, min: 1 }), notes: textOrNull, asin: asinParser,
+  // The bundle rule (migration 100, Maria 2026-11-09): a component's units in one bundle; NULL = not known (an even split is proposed).
+  units_per_bundle: intQty({ nullable: true, min: 1 }),
 };
 /** §3 ASIN-row fields (the manual quantities, action items and Cancel ASIN keep their routes). */
 export const ASIN_FIELDS: Record<string, Parser> = {
@@ -124,7 +126,7 @@ export const ASIN_FIELDS: Record<string, Parser> = {
 };
 /** Header / line / ASIN-row fields whose change should recompute a v2 PO's costs (routes call recomputePoCosts after the edit). */
 // v3 (2026-11-04): tax and shipping are in COGS; the order total decides whether the line totals already net the discount.
-export const COST_RELEVANT_FIELDS = new Set(["subtotal", "discount", "tax", "sh_donations", "order_total", "weighted_gc_discount_pct", "price", "line_total", "regular_price", "qty_ordered", "retailer_units_per_product", "asin_units_per_pack", "cogs_adjustment"]);
+export const COST_RELEVANT_FIELDS = new Set(["subtotal", "discount", "tax", "sh_donations", "order_total", "weighted_gc_discount_pct", "price", "line_total", "regular_price", "qty_ordered", "retailer_units_per_product", "asin_units_per_pack", "units_per_bundle", "cogs_adjustment"]);
 
 /** Validate a body against a field spec. Unknown keys are an error (a typo never silently does nothing). */
 export function parseEdits(spec: Record<string, Parser>, body: unknown): { ok: true; edits: Record<string, unknown> } | { ok: false; error: string } {
@@ -183,18 +185,19 @@ export class EditError extends Error { constructor(public status: number, messag
  * be built as often as its scarcest component — the minimum (equal to the
  * sheet's N whenever the components agree). S = the bundle's line count.
  */
-export function asinQtyFromLines(lines: ReadonlyArray<YieldLine>, soldAs: string): { qty: number; uniqueProducts: number | null } {
+export function asinQtyFromLines(lines: ReadonlyArray<YieldLine>, soldAs: string, bundleN: number | string | null = null): { qty: number; uniqueProducts: number | null } {
   // Exact since migration 080: a line with its two integers adds qty × retailer ÷ asin as a fraction, rounded once (2 dp, numeric(10,2)); a line without them adds qty × its stored yield read as the fraction it stands for (trueYield), as before.
-  return asinUnitsFromLines(lines, soldAs, trueYield);
+  // A bundle (migration 100, Maria 2026-11-09): the bundle rule — ×N (`bundleN` = po_asins.units_per_pack) Individual units in one bundle, each component's Individual units ÷ its units per bundle, the minimum (shared/bundle.ts).
+  return asinUnitsFromLines(lines, soldAs, trueYield, bundleN);
 }
 
 /** Recompute an ASIN row's Ordered (and a bundle's unique products) from its lines; logs a change. */
 export async function recomputeAsinQty(query: QueryLike, poAsinId: string, userId: number | null): Promise<void> {
-  const pa = (await query(`SELECT id, po_id, qty, sold_as, unique_products FROM po_asins WHERE id = $1`, [poAsinId])).rows[0];
+  const pa = (await query(`SELECT id, po_id, qty, sold_as, unique_products, units_per_pack FROM po_asins WHERE id = $1`, [poAsinId])).rows[0];
   if (!pa) return;
-  const lines = (await query(`SELECT qty_ordered, asin_qty_per_product, retailer_units_per_product, asin_units_per_pack FROM po_line_items WHERE po_asin_id = $1`, [poAsinId])).rows;
+  const lines = (await query(`SELECT qty_ordered, asin_qty_per_product, retailer_units_per_product, asin_units_per_pack, units_per_bundle FROM po_line_items WHERE po_asin_id = $1`, [poAsinId])).rows;
   if (lines.length === 0) return;
-  const next = asinQtyFromLines(lines, String(pa.sold_as ?? "individual"));
+  const next = asinQtyFromLines(lines, String(pa.sold_as ?? "individual"), pa.sold_as === "bundle" ? pa.units_per_pack ?? null : null);
   const changes = changedFields({ qty: pa.qty }, { qty: next.qty });
   const upChange = pa.sold_as === "bundle" ? changedFields({ unique_products: pa.unique_products }, { unique_products: next.uniqueProducts }) : [];
   if (changes.length + upChange.length === 0) return;
@@ -312,7 +315,7 @@ export async function editLine(query: QueryLike, lineId: string, body: unknown, 
     await query(`UPDATE po_line_items SET po_asin_id = $2 WHERE id = $1`, [lineId, target]);
     await recomputeAsinQty(query, target, userId);
     if (oldPa) await dropAsinRowIfEmpty(query, oldPa, userId);
-  } else if (oldPa && changes.some((c) => c.field === "qty_ordered" || c.field === "retailer_units_per_product" || c.field === "asin_units_per_pack")) {
+  } else if (oldPa && changes.some((c) => c.field === "qty_ordered" || c.field === "retailer_units_per_product" || c.field === "asin_units_per_pack" || c.field === "units_per_bundle")) {
     await recomputeAsinQty(query, oldPa, userId);
   }
   return { poId, changes, close: await evaluateAutoClose(poId, query) };

@@ -23,7 +23,8 @@
 // per ASIN. Promos (several per PO, §7.2) decide what counts: a promo with
 // counts_toward_cogs = false (rewards, by default) is added back.
 
-import { adjustedProductCost, allocateAsinCosts, allocationBaseOf, reflectedPromos, promoCostHeader, promoKind, COST_FORMULA_VERSION, REFLECTED_TOLERANCE, type CostHeader } from "./po-cost";
+import { bundleFromLines, bundleSplitMessage } from "./bundle";
+import { adjustedProductCost, allocateAsinCosts, bundleAsinCosts, allocationBaseOf, reflectedPromos, promoCostHeader, promoKind, COST_FORMULA_VERSION, REFLECTED_TOLERANCE, type CostHeader } from "./po-cost";
 import { asinUnitsFromLines, fracToNumber, lineRatio, lineUnitsExact, ratioForUnits, ratioYield, type YieldRatio, retailerUnitsAtPack } from "./yield";
 /** Stamped on purchase_orders.cost_formula_version by every form save; NULL = imported, never recomputed. */
 export const COST_FORMULA_VERSION_SAVED = COST_FORMULA_VERSION;
@@ -213,6 +214,8 @@ export interface PoFormProduct {
   line_id?: string;
   /** The bundle box this line sits in (several products → one ASIN). Form-only; the server ignores it. */
   bundle_id?: string;
+  /** Bundle member: units of this product in one bundle (migration 100). "" = not typed — AF proposes an even split in amber until confirmed. */
+  units_per_bundle?: string;
   /** po_line_items.id of a stored line (Edit PO, shared/po-edit-form.ts); absent = a new line. Never copied to a split's new row. */
   line_item_id?: string;
   sold_as: FormSoldAs;
@@ -304,6 +307,16 @@ export function productRatio(p: PoFormProduct): YieldRatio {
   const units = Math.round(qty * trueYield(Number(typed)) * 100) / 100;
   return ratioForUnits(units, qty, pack.asinUnits) ?? pack;
 }
+/**
+ * A bundle member's pack ratio for the bundle rule: the real pack (Individual units per Product unit, as typed) over the
+ * bundle's ×N — never the typed-yield encoding productRatio can carry (a typed ASIN count on a bundle slot sets the member's
+ * qty, shared/po-lines.ts setSlotUnits, not its yield).
+ */
+export function bundlePackRatio(p: Pick<PoFormProduct, "retailer_units_per_pack" | "units_per_pack">): YieldRatio {
+  const r = Math.round(Number(String(p.retailer_units_per_pack ?? "1").trim())) || 1;
+  const a = Math.round(Number(String(p.units_per_pack ?? "1").trim())) || 1;
+  return { retailer: Math.max(1, r), asinUnits: Math.max(1, a) };
+}
 export const emptyPoForm = (today: string): PoFormState => ({
   supplier: "", order_id: "", order_date: today, subtotal: "", tax: "", sh_donations: "", discount: "", refund_amount: "", order_total: "",
   payment_method: "", weighted_gc_discount_pct: "", cashback_site: "", cashback_pct: "", purchased_by: "", notes: "",
@@ -351,7 +364,7 @@ export interface PoFormAsin {
   cogs_adjustment: string | null;
   cogs_adjustment_reason: string | null;
   /** Exact yield (2026-11-02): the two integers the line stores; asin_qty_per_product is the derived yield (history). */
-  lines: Array<{ index: number; regular_price: string | null; product_name: string | null; supplier_sku: string | null; price: string | null; line_total: string | null; qty_ordered: number; asin_qty_per_product: string; retailer_units_per_product: number; asin_units_per_pack: number; adjusted_product_cost: string | null; position: number; notes: string | null }>;
+  lines: Array<{ index: number; regular_price: string | null; product_name: string | null; supplier_sku: string | null; price: string | null; line_total: string | null; qty_ordered: number; asin_qty_per_product: string; retailer_units_per_product: number; asin_units_per_pack: number; /** Bundle member: its units in one bundle as typed; null = not typed (proposed), or not a bundle. */ units_per_bundle: number | null; adjusted_product_cost: string | null; position: number; notes: string | null }>;
 }
 
 export interface PoFormCheck {
@@ -441,6 +454,8 @@ export function checkPoForm(f: PoFormState): PoFormCheck {
     if ((p.sold_as === "multi-pack" || p.sold_as === "bundle") && (!/^\d+$/.test(upp) || Number(upp) < 2)) perr(i, `Individual units per ASIN unit must be a whole number ≥ 2 for a ${p.sold_as}`);
     const rupp = t(p.retailer_units_per_pack ?? "1");
     if (rupp !== "" && (!/^\d+$/.test(rupp) || Number(rupp) < 1)) perr(i, "Individual units per Product unit must be a whole number ≥ 1");
+    const upb = t(p.units_per_bundle ?? "");
+    if (upb !== "" && (!/^\d+$/.test(upb) || Number(upb) < 1)) perr(i, "units per bundle must be a whole number ≥ 1");
     const prep = moneyNum(p.prep_cost); if (prep != null && (Number.isNaN(prep) || prep < 0)) perr(i, "prep must be an amount ≥ 0");
     const lm = /^\d+(\.\d{1,2})?$/.test(qty) ? productLineMoney(p) : null;
     if (lm) computedSubtotal += lm.total;
@@ -535,16 +550,24 @@ export function checkPoForm(f: PoFormState): PoFormCheck {
     }
     if (first.sold_as === "") warnings.push(`${asin}: ${PACK_SIZE_MISSING_NOTE}`);
     // Exact yield (2026-11-02): each row's ratio (retailer units / product ÷ ASIN units / pack, or a typed unit count as a fraction), summed exactly, rounded once.
-    const ratios = idx.map((i) => productRatio(products[i]));
+    const ratios = idx.map((i) => (first.sold_as === "bundle" ? bundlePackRatio(products[i]) : productRatio(products[i])));
     const yLines = idx.map((i, k) => ({ qty_ordered: Number(t(products[i].qty_ordered)) || 0, retailer_units_per_product: ratios[k].retailer, asin_units_per_pack: ratios[k].asinUnits }));
     const per = yLines.map((l) => fracToNumber(lineUnitsExact(l.qty_ordered, lineRatio(l)!)));
     let qty: number;
-    if (first.sold_as === "bundle") {
+    // The bundle rule (Maria 2026-11-09, shared/bundle.ts): ×N = Individual units in one bundle; each member's units per bundle
+    // (typed, else an even split proposed in amber); ASIN units = the scarcest member's builds; leftovers are shown, never hidden.
+    const bundleN = first.sold_as === "bundle" ? Number(t(first.units_per_pack)) || null : null;
+    const bundle = first.sold_as === "bundle" ? bundleFromLines(idx.map((i, k) => {
+      const p = products[i]; const lm = productLineMoney(p);
+      return { qty_ordered: Number(t(p.qty_ordered)) || 0, retailer_units_per_product: ratios[k].retailer, units_per_bundle: t(p.units_per_bundle ?? "") || null, unit_money: lm?.unit ?? null };
+    }), bundleN) : null;
+    if (bundle) {
       if (idx.length < 2) errors.push(`${asin}: a bundle needs at least two products`);
-      if (new Set(per).size > 1) {
-        errors.push(`${asin}: pack math — every bundle component must give the same number of sets (Product units × yield = ${per.join(", ")})`);
-      }
-      qty = asinUnitsFromLines(yLines, "bundle").qty;
+      const split = bundleSplitMessage(bundle, bundleN);
+      if (split) errors.push(`${asin}: ${split}${bundle.splitKnown ? "" : " — type each product's units per bundle"}`);
+      else if (!bundle.splitKnown) warnings.push(`${asin}: units per bundle proposed as ${bundle.components.map((c) => c.perBundle).join(" + ")} — confirm or type each product's`);
+      bundle.components.forEach((c, k) => { if (c.leftover > 0.005) warnings.push(`${asin}: ${c.leftover} Individual unit${c.leftover === 1 ? "" : "s"} of ${t(products[idx[k]].product_name) || `product ${idx[k] + 1}`} left over after ${bundle.asinUnits} bundles`); });
+      qty = bundle.asinUnits;
     } else {
       qty = asinUnitsFromLines(yLines, first.sold_as).qty;
     }
@@ -554,14 +577,17 @@ export function checkPoForm(f: PoFormState): PoFormCheck {
     const lines = idx.map((i, pos) => {
       const p = products[i]; const lm = productLineMoney(p); const reg = allocationBase != null ? regularOf(p) : null;
       const adj = lm == null ? null : adjustedProductCost(reg ?? lm.unit, costHeader);
-      return { index: i, regular_price: reg == null ? null : priceText(reg), product_name: t(p.product_name) || null, supplier_sku: t(p.supplier_sku) || null, price: lm == null ? null : priceText(lm.unit), line_total: lm?.lineTotal == null ? null : lm.lineTotal.toFixed(2), qty_ordered: Number(t(p.qty_ordered)) || 0, asin_qty_per_product: ratioYield(ratios[pos]), retailer_units_per_product: ratios[pos].retailer, asin_units_per_pack: ratios[pos].asinUnits, adjusted_product_cost: adj == null ? null : adj.toFixed(2), position: pos, notes: t(p.notes ?? "") || null };
+      return { index: i, regular_price: reg == null ? null : priceText(reg), product_name: t(p.product_name) || null, supplier_sku: t(p.supplier_sku) || null, price: lm == null ? null : priceText(lm.unit), line_total: lm?.lineTotal == null ? null : lm.lineTotal.toFixed(2), qty_ordered: Number(t(p.qty_ordered)) || 0, asin_qty_per_product: ratioYield(ratios[pos]), retailer_units_per_product: ratios[pos].retailer, asin_units_per_pack: ratios[pos].asinUnits, units_per_bundle: bundle && t(p.units_per_bundle ?? "") !== "" ? Number(t(p.units_per_bundle)) : null, adjusted_product_cost: adj == null ? null : adj.toFixed(2), position: pos, notes: t(p.notes ?? "") || null };
     });
     const adjRaw = f.cogs_adjustments?.[asin];
     const adjAmt = adjRaw == null || t(adjRaw.amount) === "" ? null : moneyNum(adjRaw.amount);
     if (adjAmt != null && Number.isNaN(adjAmt)) errors.push(`${asin}: COGS adjustment must be an amount with at most 2 decimals`);
     if (adjAmt != null && !Number.isNaN(adjAmt) && adjAmt !== 0 && !t(adjRaw?.reason)) errors.push(`${asin}: a COGS adjustment needs a reason`);
     const adjustment = adjAmt != null && !Number.isNaN(adjAmt) ? adjAmt : 0;
-    const costs = allocateAsinCosts(costHeader, lines.map((l) => ({ price: l.price == null ? null : Number(l.price), qty: l.qty_ordered, lineTotal: l.line_total == null ? null : Number(l.line_total), regularPrice: l.regular_price == null ? null : Number(l.regular_price) })), qty, adjustment);
+    // A bundle's cost (Maria 2026-11-09): Σ component per-Individual cost × its units per bundle, then the PO's share — never Σ line money ÷ qty.
+    const costs = bundle
+      ? bundleAsinCosts(costHeader, lines.map((l, k) => ({ unitMoney: l.line_total != null && l.qty_ordered > 0 ? Number(l.line_total) / l.qty_ordered : l.price == null ? null : Number(l.price), perProduct: ratios[k].retailer, perBundle: bundle.components[k].perBundle })), adjustment)
+      : allocateAsinCosts(costHeader, lines.map((l) => ({ price: l.price == null ? null : Number(l.price), qty: l.qty_ordered, lineTotal: l.line_total == null ? null : Number(l.line_total), regularPrice: l.regular_price == null ? null : Number(l.regular_price) })), qty, adjustment);
     const computed = costs == null ? null : costs.cogs.toFixed(2);
     const ovRaw = t(f.cost_overrides?.[asin] ?? "");
     const ov = ovRaw === "" ? null : moneyNum(ovRaw);

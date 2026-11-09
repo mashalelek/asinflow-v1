@@ -21,7 +21,7 @@ import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription, Di
 import { useToast } from "@/hooks/use-toast";
 import { fmtQty, productQtyFromAsin } from "@/lib/po-qty";
 import { INDIV_SHORT, PER_ASIN_UNIT, PER_PRODUCT_UNIT, QTY_KIND, individualFrom } from "@shared/quantity-kinds";
-import type { PoAsinRowData, PoAsinLine } from "@/components/po-asin-rows";
+import { bundleComponentOf, type PoAsinRowData, type PoAsinLine } from "@/components/po-asin-rows";
 import { calcMoney } from "@/components/money-calc-input";
 import { RefundProposalDialog, type PoHeaderMoney, type CanceledLine } from "@/components/refund-due-dialog";
 
@@ -152,6 +152,8 @@ export function PoProductsTable({ poId, asins, onChanged, po, shipsTo }: { poId:
           <tbody>
             {lines.map((l) => {
               const sole = (l.parent.lines ?? []).length === 1;
+              // The bundle rule (migration 100): this line's units per bundle (typed, else the even split proposed in amber), the bundles it builds, its leftover.
+              const comp = bundleComponentOf(l.parent, l.id);
               return (
                 <tr key={l.id} className="table-zebra-stone" style={hairline} data-testid={`row-product-${l.id}`}>
                   <td className="px-3 py-1.5 max-w-[260px]"><InlineEdit value={l.product_name} onSave={patch(l, "product_name")} width="w-64" testId={`product_name-${l.id}`}><span className="truncate block" title={l.product_name ?? ""}>{l.product_name ?? <Muted v="—" />}</span></InlineEdit></td>
@@ -164,9 +166,18 @@ export function PoProductsTable({ poId, asins, onChanged, po, shipsTo }: { poId:
                     <InlineEdit value={l.retailer_units_per_product == null ? null : String(l.retailer_units_per_product)} onSave={patch(l, "retailer_units_per_product")} width="w-14" testId={`product_pack-${l.id}`} title={PER_PRODUCT_UNIT}>
                       {l.retailer_units_per_product == null ? <span className="text-amber-700 dark:text-amber-400">—</span> : Number(l.retailer_units_per_product) === 1 ? "single" : `multi-pack ×${l.retailer_units_per_product}`}
                     </InlineEdit>
+                    {comp && (
+                      <div className="mt-0.5 text-[11px]">
+                        <InlineEdit value={l.units_per_bundle == null ? null : String(l.units_per_bundle)} onSave={patch(l, "units_per_bundle")} width="w-12" testId={`units_per_bundle-${l.id}`} title={comp.proposed ? "Units of this product in one bundle — proposed (an even split of the bundle's ×N); type it to confirm" : "Units of this product in one bundle"}>
+                          <span className={`whitespace-nowrap ${comp.proposed ? "text-amber-700 dark:text-amber-400" : "text-muted-foreground"}`} data-proposed={comp.proposed ? "yes" : undefined}>{comp.perBundle} per bundle{comp.proposed ? " ?" : ""}</span>
+                        </InlineEdit>
+                      </div>
+                    )}
                   </td>
                   {/* Round 2 (Maria 2026-11-01): "Yield 0.17" was the col-T ratio — the column is the ASIN units this line yields (12 × 1/6 = 2); typing units sets the yield (units ÷ qty). */}
-                  <td className="px-3 py-1.5 text-right"><InlineEdit value={lineAsinUnits(l)} onSave={async (v) => { const q = Number(l.qty_ordered) || 0; if (!(q > 0) || !(Number(v) > 0)) return; const r = ratioForUnits(Number(v), q, l.parent.sold_as === "individual" ? 1 : Number(l.parent.units_per_pack) || 1); if (!r) return; await poApi(`/api/pos/lines/${l.id}`, "PATCH", { retailer_units_per_product: String(r.retailer), asin_units_per_pack: String(r.asinUnits) }); onChanged(); }} align="right" width="w-16" testId={`asin-units-${l.id}`}><QtyText v={lineAsinUnits(l)} /></InlineEdit><Indiv v={lineAsinUnits(l)} per={l.asin_units_per_pack ?? (l.parent.sold_as === "individual" ? 1 : l.parent.units_per_pack)} /></td>
+                  {/* A bundle component's ASIN units = the bundles it builds (its Individual units ÷ its units per bundle); the bundle row takes the scarcest. */}
+                  {comp ? <td className="px-3 py-1.5 text-right" data-testid={`asin-units-${l.id}`}><QtyText v={comp.builds} /><div className="text-[11px] text-muted-foreground whitespace-nowrap">{fmtQty(comp.individual)} {INDIV_SHORT}</div>{comp.leftover > 0.005 && <div className="text-[11px] text-amber-700 dark:text-amber-400 whitespace-nowrap" data-testid={`leftover-${l.id}`}>{fmtQty(comp.leftover)} left over</div>}</td>
+                  : <td className="px-3 py-1.5 text-right"><InlineEdit value={lineAsinUnits(l)} onSave={async (v) => { const q = Number(l.qty_ordered) || 0; if (!(q > 0) || !(Number(v) > 0)) return; const r = ratioForUnits(Number(v), q, l.parent.sold_as === "individual" ? 1 : Number(l.parent.units_per_pack) || 1); if (!r) return; await poApi(`/api/pos/lines/${l.id}`, "PATCH", { retailer_units_per_product: String(r.retailer), asin_units_per_pack: String(r.asinUnits) }); onChanged(); }} align="right" width="w-16" testId={`asin-units-${l.id}`}><QtyText v={lineAsinUnits(l)} /></InlineEdit><Indiv v={lineAsinUnits(l)} per={l.asin_units_per_pack ?? (l.parent.sold_as === "individual" ? 1 : l.parent.units_per_pack)} /></td>}
                   <td className="px-3 py-1.5 text-right"><InlineEdit value={l.qty_canceled} onSave={patch(l, "qty_canceled")} align="right" width="w-16" testId={`qty_canceled-${l.id}`}><QtyText v={l.qty_canceled} /></InlineEdit><Indiv v={l.qty_canceled} per={l.retailer_units_per_product} /></td>
                   <td className="px-3 py-1.5 text-right"><InlineEdit value={l.qty_returned} onSave={patch(l, "qty_returned")} align="right" width="w-16" testId={`qty_returned-${l.id}`}><QtyText v={l.qty_returned} /></InlineEdit><Indiv v={l.qty_returned} per={l.retailer_units_per_product} /></td>
                   {(["qty_at_prep", "qty_at_warehouse", "qty_lost_damaged_us"] as const).map((k) => { const v = sole ? productQtyFromAsin(l.parent[k], lineYield(l)) : null; return <td key={k} className="px-3 py-1.5 text-right"><QtyText v={v} /><Indiv v={v} per={l.retailer_units_per_product} /></td>; })}

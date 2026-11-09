@@ -6023,6 +6023,52 @@ Status is Open / Closed with an auto-close rule; the free-text status
 became multi-select **Action Items**. Pulling the data from SC / Velocity
 is Phase 2 (below).
 
+
+### Bundles (Maria 2026-11-09, walmart 200015415094735 B0GWG5S64Q; migration 100)
+
+A bundle's **×N** (`po_asins.units_per_pack`, sold as bundle) is the **total
+Individual units in one bundle** — the same meaning a multi-pack's ×N has.
+Each component line carries **units of this component per bundle**
+(`po_line_items.units_per_bundle`, integer ≥ 1, editable on the line: the
+New PO / Edit PO form's bundle box, the Products tab under Product pack);
+the components' counts **must sum to N** and the form blocks a save when
+they don't. When AF does not know the split it **proposes an even one**
+(×2 with 2 components → 1 + 1) in amber for Maria to confirm; NULL stays
+NULL until she types or confirms it — a "(6 pack)" in a title never sets
+it. The rule (`shared/bundle.ts`, one pure function):
+
+- a line's Individual units = Product units × Individual units per Product
+  unit (the real pack; NULL reads as 1; a line with no pack but a stored
+  yield reads qty × yield builds, the migration-080 reading);
+- **bundle ASIN units = min over components (Individual units ÷ per-bundle
+  count)**, 2 dp; the bundle row's Individual count = ASIN units × N;
+- **leftovers** (12 balms, 18 oils → 12 bundles, 6 oils left over) are shown
+  on the component line in amber — on the expanded ASIN row, the Products
+  tab and the form — never hidden; they are not in the bundle's cost;
+- **bundle Cost/Unit = Σ (component per-Individual cost × per-bundle count)**
+  — each line's unit money ÷ its real pack × its count — then the PO's
+  tax / shipping / discount share and the gift-card factor exactly as every
+  ASIN row (`bundleAsinCosts` in `shared/po-cost.ts`; `recomputePoCosts`
+  and the form use it for every bundle row): 5.87 + 31.70 ÷ 6 = 11.15,
+  × 140.88 ÷ 133.84 = 11.74.
+
+Before this rule the bundle's ×N was each component line's yield
+denominator (qty × retailer ÷ N, the scarcest component's "sets") and the
+bundle's cost summed the component lines' money ÷ ASIN units regardless
+of their packs — right only when every component is a single and N = the
+component count (200015415094735 read 6 bundles at $37.57 after the oil
+line became 2 six-packs). The yield backfill had also written bundle
+component packs as real pack × N; `npm run fix:bundle-lines -- --convert-packs`
+(dry run by default) converts those lines ÷ N with History rows and
+refuses to commit when any Ordered would change.
+`npm run report:bundle-rows [-- --prod]` lists every bundle row's stored,
+old-model and rule values (`docs/bundle-rows-2026-11-09.csv`). Velocity's
+bundle build reads Col T for a bundle component as the real pack, so
+L × T is the component's Individual units and Σ ÷ sets = N.
+Canceled / Returned at ASIN level still divide by `unique_products`
+(claims commit 1 moves them to the Individual base, D17, by this rule —
+never by × pack size).
+
 ### Tables (migrations 028–029; 056 for the expand-by-ASIN columns; 057 for shipment reconciliation)
 
 - `purchase_orders` — one row per order. `UNIQUE (supplier, order_id)` (order
@@ -6547,6 +6593,9 @@ Decisions resolved 2026-08-22:
   stored yield of each bundle component is its standalone yield (1.00, or
   the pack count), so for `sold_as = 'bundle'` the derived Canceled /
   Returned is Σ(line qty × yield) ÷ `po_asins.unique_products` (Col S).
+  **Still the Canceled / Returned reading on 2026-11-09** (claims commit 1
+  replaces it with the Individual-units base, D17, by the bundle rule in
+  §22 "Bundles"); Ordered and cost no longer use it.
   Fully canceled Kinder's B0G6R55GNQ (2 × 12 × 1.00) derives 12, not 24;
   1 unit of one product in a 3-product bundle derives 1/3. Multi-packs and
   non-bundle multi-listing groups keep the plain sum. One SQL definition,
@@ -7394,8 +7443,9 @@ replaces it. Migration 061 adds `po_edit_log`, `deleted_pos` and
   existing manual quantities, action items and Cancel ASIN. Derived values
   (Ordered, Individual Units, Canceled / Returned at ASIN level, Shipped
   FBA, Received by Amazon, At Prep) stay read-only; Ordered is recomputed
-  from the lines (Σ qty × yield; a bundle's sets = its scarcest component)
-  when a line's qty, yield or ASIN changes. An ASIN row is created from the
+  from the lines (Σ qty × yield; a bundle by the bundle rule below — the
+  scarcest component's builds) when a line's qty, yield, units per bundle
+  or ASIN changes. An ASIN row is created from the
   catalog when a line maps to a new ASIN and removed with its last line.
   **Yield is an exact ratio (migration 080, Maria 2026-11-02):** a line
   stores two integers, `retailer_units_per_product` (the retailer's pack: 1
@@ -7751,8 +7801,8 @@ replaces it. Migration 061 adds `po_edit_log`, `deleted_pos` and
   #) unique; every product mapped to a 10-character ASIN (typeahead `GET
   /api/pos/asin-lookup` over `asins`), whole qty ≥ 1, yield > 0; products
   of one ASIN agree on sold as / units per pack / prep; pack math divisible
-  (Σ qty × yield whole; a bundle's components give the same whole number
-  of sets); live subtotal (Σ price × qty) and order total; a typed subtotal
+  (Σ qty × yield whole; a bundle's components' units per bundle add up to
+  its ×N — the bundle rule below; leftovers warn, never block); live subtotal (Σ price × qty) and order total; a typed subtotal
   that differs warns. `POST /api/pos` creates PO + ASIN rows (title, primary
   SKU from the catalog) + lines, `source = 'manual'`, Open, `entry_seq` =
   now. **Cost / unit** is prefilled per ASIN from price × (order total ÷

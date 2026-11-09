@@ -124,6 +124,12 @@ Maria can do on one list with a checkbox.
   (Caress: 5.5 ASIN units / 11 individual). Rows with no confirmed pack
   size can't convert: they keep their stored number, flagged "pack size
   missing" (already blocks auto-close) until Maria confirms the pack.
+  **Bundle rows (amended 2026-11-09, SPEC §22 "Bundles", migration 100):**
+  the conversion treats a bundle row by the bundle rule, never by × pack
+  size — its Individual count = ASIN units × N (N = the bundle's total
+  Individual units), and a component line's quantities convert by its own
+  pack and its units per bundle (`po_line_items.units_per_bundle`); the
+  ÷ `unique_products` reading of Canceled / Returned goes with this commit.
 - **D16 — Everything Maria types is Individual units** (Maria 2026-11-09):
   claim qty, refund qty, Shipped by Supplier, At CQG Warehouse,
   Lost/damaged by us. AF shows the Product and ASIN equivalents beside the

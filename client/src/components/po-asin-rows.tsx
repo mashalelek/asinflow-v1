@@ -15,6 +15,7 @@ import { Tooltip, TooltipTrigger, TooltipContent } from "@/components/ui/tooltip
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import { fmtQty, individualUnits, PO_ASIN_DISPLAY_COLUMNS, VELOCITY_QTY_TITLE } from "@/lib/po-qty";
 import { INDIV_SHORT, PER_ASIN_UNIT, PER_PRODUCT_UNIT, QTY_KIND, individualFrom } from "@shared/quantity-kinds";
+import { bundleFromLines, type BundleComponent } from "@shared/bundle";
 import { InlineEdit, poApi, ReassignShipment, shipmentBlockText } from "@/components/po-edit";
 import { InlineNoteCell, NoteIcon } from "@/components/inline-note";
 import { DEFECT_ACTION_ITEM, defectSummary } from "@shared/po-defect";
@@ -52,6 +53,8 @@ export interface PoAsinLine {
   /** Exact yield (migration 080): retailer units / product ÷ ASIN units / pack; NULL on an unresolved sheet-imported line. */
   retailer_units_per_product?: number | null;
   asin_units_per_pack?: number | null;
+  /** Bundle component (migration 100): units of this product in one bundle; NULL = not known (an even split is proposed, amber). */
+  units_per_bundle?: number | null;
   adjusted_product_cost: string | null;
   notes: string | null;
   /** Row-level Status: this product's action items. */
@@ -146,8 +149,10 @@ export function IndivLine({ v, perUnit, testId }: { v: string | number | null | 
  * in grey ("Product u.") and shows its own Individual count from the line's
  * Product pack (qty × Individual units per Product unit; "—" when that is NULL).
  */
-export function ComponentQty({ l }: { l: { id: string; qty_ordered: number | null; retailer_units_per_product?: number | null } }) {
+export function ComponentQty({ l, a }: { l: { id: string; qty_ordered: number | null; retailer_units_per_product?: number | null; units_per_bundle?: number | null }; a: Pick<PoAsinRowData, "sold_as" | "units_per_pack" | "lines"> }) {
   const n = individualFrom(l.qty_ordered, l.retailer_units_per_product);
+  // The bundle rule (migration 100, Maria 2026-11-09): this component's units in one bundle (typed, else the even split proposed in amber) and what is left over after the bundles.
+  const comp = bundleComponentOf(a, l.id);
   return (
     <>
       <QtyCell v={l.qty_ordered} />
@@ -157,8 +162,19 @@ export function ComponentQty({ l }: { l: { id: string; qty_ordered: number | nul
           {n == null ? <span className="text-muted-foreground/50">—</span> : fmtQty(n)} {INDIV_SHORT}
         </div>
       )}
+      {/* Compact: the Ordered column is 66 px — "1 / bundle", amber while the count is only proposed (the Products tab says so in words). */}
+      {comp && <div className={`whitespace-nowrap text-[10px] ${comp.proposed ? "text-amber-700 dark:text-amber-400" : "text-muted-foreground/70"}`} title={comp.proposed ? `Units of this product in one bundle: ${comp.perBundle}, PROPOSED (an even split of ×N) — confirm or type it on the Products tab` : `Units of this product in one bundle: ${comp.perBundle}`} data-testid={`component-per-bundle-${l.id}`} data-proposed={comp.proposed ? "yes" : undefined}>{comp.perBundle} / bundle</div>}
+      {comp && comp.leftover > 0.005 && <div className="whitespace-nowrap text-[10px] text-amber-700 dark:text-amber-400" title="Individual units of this product left over after the bundles — shown, never hidden" data-testid={`component-leftover-${l.id}`}>{fmtQty(comp.leftover)} left over</div>}
     </>
   );
+}
+
+/** A bundle row's rule result for one of its lines (null on a non-bundle row or a row with one line). */
+export function bundleComponentOf(a: Pick<PoAsinRowData, "sold_as" | "units_per_pack" | "lines">, lineId: string): BundleComponent | null {
+  const lines = a.lines ?? [];
+  if (a.sold_as !== "bundle" || lines.length < 2) return null;
+  const k = lines.findIndex((x) => x.id === lineId);
+  return k < 0 ? null : bundleFromLines(lines, a.units_per_pack).components[k] ?? null;
 }
 
 /** A quantity cell: NULL → muted em-dash; 0 muted; fractional 2 dp. */
@@ -653,7 +669,7 @@ export function PoAsinRow({ a, indent = false, editable = false, onChanged, po }
         <tr key={l.id} style={hairline} data-testid={`row-component-${a.asin}-${l.position}`}>
           <td className="px-2 py-1" />
           <td className="px-1.5 py-1 pl-6 text-xs text-muted-foreground truncate" title={l.product_name ?? ""}>{l.product_name ?? "—"}</td>
-          <td className="px-1.5 py-1 text-right text-xs text-muted-foreground"><ComponentQty l={l} /></td>
+          <td className="px-1.5 py-1 text-right text-xs text-muted-foreground"><ComponentQty l={l} a={a} /></td>
           <td className="px-1.5 py-1 text-right text-xs text-muted-foreground"><Money v={l.price} /></td>
           <td className="px-1.5 py-1 text-right text-xs text-muted-foreground"><Money v={l.adjusted_product_cost} /></td>
           {/* Product, Ordered, Cost/Unit, Total Cost above; Action Items after. */}

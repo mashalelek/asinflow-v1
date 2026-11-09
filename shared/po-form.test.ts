@@ -221,13 +221,36 @@ describe("checkPoForm", () => {
   it("2-dp yields are read as the fraction they stand for (48 × 0.33 = 16)", () => {
     expect(checkPoForm(base({ products: [{ ...emptyProduct(), price: "1", qty_ordered: "48", asin: "B0TEST0003", asin_qty_per_product: "0.33" }] })).asins[0].qty).toBe(16);
   });
-  it("a bundle needs ≥ 2 products giving the same number of sets; S = its products", () => {
-    const comp = (q: string) => ({ ...emptyProduct(), price: "3", qty_ordered: q, asin: "B0GNHTYGPF", sold_as: "bundle" as const, units_per_pack: "2" });
+  it("the bundle rule (Maria 2026-11-09): ≥ 2 products; ×N = Individual units per bundle; counts proposed evenly (warning) or typed; leftovers warn, never error; S = its products", () => {
+    const comp = (q: string, extra: Partial<ReturnType<typeof emptyProduct>> = {}) => ({ ...emptyProduct(), product_name: `P${q}`, price: "3", qty_ordered: q, asin: "B0GNHTYGPF", sold_as: "bundle" as const, units_per_pack: "2", ...extra });
     const ok = checkPoForm(base({ products: [comp("7"), comp("7")] }));
     expect(ok.ok).toBe(true);
     expect(ok.asins[0]).toMatchObject({ qty: 7, unique_products: 2, sold_as: "bundle" });
-    expect(checkPoForm(base({ products: [comp("7"), comp("8")] })).errors.join()).toMatch(/every bundle component must give the same number of sets/);
+    expect(ok.warnings.join()).toMatch(/units per bundle proposed as 1 \+ 1/);
+    expect(ok.asins[0].lines.map((l) => l.units_per_bundle)).toEqual([null, null]); // proposed, not stored
+    // 7 + 8 singles → 7 bundles and one P8 left over: a warning, the save goes through.
+    const left = checkPoForm(base({ products: [comp("7"), comp("8")] }));
+    expect(left.ok).toBe(true);
+    expect(left.asins[0].qty).toBe(7);
+    expect(left.warnings.join()).toMatch(/1 Individual unit of P8 left over after 7 bundles/);
+    // Typed counts are stored; counts that do not add up to ×N block the save.
+    const typed = checkPoForm(base({ products: [comp("7", { units_per_bundle: "1" }), comp("7", { units_per_bundle: "1" })] }));
+    expect(typed.warnings.join()).not.toMatch(/proposed/);
+    expect(typed.asins[0].lines.map((l) => l.units_per_bundle)).toEqual([1, 1]);
+    expect(checkPoForm(base({ products: [comp("7", { units_per_bundle: "2" }), comp("7", { units_per_bundle: "1" })] })).errors.join()).toMatch(/add up to 3, not ×2/);
+    // ×3 over two products has no even split: the counts must be typed.
+    expect(checkPoForm(base({ products: [comp("7", { units_per_pack: "3" }), comp("7", { units_per_pack: "3" })] })).errors.join()).toMatch(/add up to 2, not ×3 — type each product's units per bundle/);
     expect(checkPoForm(base({ products: [comp("7")] })).errors.join()).toMatch(/a bundle needs at least two products/);
+  });
+  it("walmart 200015415094735 B0GWG5S64Q as the form would save it: 12 balms + 2 six-packs of oil, ×2, 1 + 1 → 12 bundles, COGS 5.87 + 31.70 ÷ 6 = 11.15 (no tax / shipping on the form)", () => {
+    const c = checkPoForm(base({ products: [
+      { ...emptyProduct(), product_name: "Body Balm", price: "5.87", qty_ordered: "12", retailer_units_per_pack: "1", asin: "B0GWG5S64Q", sold_as: "bundle", units_per_pack: "2", units_per_bundle: "1", prep_cost: "1" },
+      { ...emptyProduct(), product_name: "(6 pack) Bath & Body Oil", price: "31.70", qty_ordered: "2", retailer_units_per_pack: "6", asin: "B0GWG5S64Q", sold_as: "bundle", units_per_pack: "2", units_per_bundle: "1", prep_cost: "1" },
+    ] }));
+    expect(c.ok).toBe(true);
+    expect(c.asins[0]).toMatchObject({ qty: 12, unique_products: 2, cost_per_unit: "11.15", sourcing_cost: "11.15" });
+    expect(c.asins[0].lines.map((l) => [l.retailer_units_per_product, l.asin_units_per_pack, l.units_per_bundle])).toEqual([[1, 2, 1], [6, 2, 1]]);
+    expect(c.warnings.join()).not.toMatch(/left over|proposed/);
   });
   it("products of one ASIN must agree on sold as / units per pack / prep; a typed subtotal that differs is only a warning", () => {
     const a = { ...emptyProduct(), price: "2", qty_ordered: "2", asin: "B0TEST0004" };

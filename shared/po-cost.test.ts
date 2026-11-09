@@ -1,7 +1,7 @@
 import { describe, it, expect } from "vitest";
 import { readFileSync } from "fs";
 import { resolve } from "path";
-import { costPerUnitPrefill, adjustedProductCost, allocateAsinCosts, discountReflectedInLines, lineMoney, COST_FORMULA_VERSION, reflectedPromos, promoCostHeader, sequencedPromoAmounts, promoKind, isShippingPromo } from "./po-cost";
+import { costPerUnitPrefill, adjustedProductCost, allocateAsinCosts, bundleAsinCosts, discountReflectedInLines, lineMoney, COST_FORMULA_VERSION, reflectedPromos, promoCostHeader, sequencedPromoAmounts, promoKind, isShippingPromo } from "./po-cost";
 
 // The allocation measured against the imported 2026 cost / unit (sheet Col Y).
 // v1 (price × total ÷ subtotal × (1 − GC)) reproduced 1,166 of 1,582; v2
@@ -170,5 +170,25 @@ describe("shipping discounts", () => {
     expect(reflectedPromos({ ...base, discount: 113.06, answers: [null, true] }).reflected).toEqual([false, false]);
     const sale = reflectedPromos({ ...base, linesSum: 249.16, discount: 113.06, postDiscountSubtotal: 219.16 });
     expect([sale.all, sale.reflected, sale.shipping]).toEqual([true, [true, false], [false, true]]);
+  });
+});
+
+describe("bundleAsinCosts — the bundle rule (Maria 2026-11-09, walmart 200015415094735 B0GWG5S64Q)", () => {
+  const comps = [{ unitMoney: 5.87, perProduct: 1, perBundle: 1 }, { unitMoney: 31.7, perProduct: 6, perBundle: 1 }];
+  it("Σ per-Individual cost × count: 5.87 + 31.70 ÷ 6 = 11.15 with no share; 11.74 with the PO's share (140.88 over 133.84 of lines)", () => {
+    expect(bundleAsinCosts({ subtotal: 133.84, discount: 0, gcPct: null }, comps)).toMatchObject({ sourcing: 11.15, cogs: 11.15, paid: 11.15 });
+    // The sheet header: subtotal 140.88 (tax inside), the line money 133.84 as the allocation base → × 1.0526.
+    expect(bundleAsinCosts({ subtotal: 140.88, discount: 0, gcPct: null, allocationBase: 133.84 }, comps)).toMatchObject({ sourcing: 11.74, cogs: 11.74, paid: 11.74 });
+    // Tax on the form: subtotal 133.84 + tax 7.04 → the same 11.74.
+    expect(bundleAsinCosts({ subtotal: 133.84, discount: 0, gcPct: null, tax: 7.04 }, comps)?.cogs).toBe(11.74);
+  });
+  it("a 2:1 bundle counts the double component twice; the gift-card factor and the adjustment apply; a line without money → null", () => {
+    expect(bundleAsinCosts({ subtotal: 100, discount: 0, gcPct: 10 }, [{ unitMoney: 4, perProduct: 1, perBundle: 2 }, { unitMoney: 7, perProduct: 1, perBundle: 1 }], 0.5)).toEqual({ sourcing: 15, cogsBeforeAdjustment: 13.5, cogs: 14, paid: 13.5 });
+    expect(bundleAsinCosts({ subtotal: 100, discount: 0, gcPct: null }, [{ unitMoney: null, perProduct: 1, perBundle: 1 }, { unitMoney: 7, perProduct: 1, perBundle: 1 }])).toBeNull();
+    expect(bundleAsinCosts({ subtotal: 100, discount: 0, gcPct: null }, [])).toBeNull();
+  });
+  it("leftover component units are not in the bundle's cost: 12 balms + 3 six-packs (18 oils) at 1 + 1 still cost 11.15 per bundle", () => {
+    // The cost takes each component's per-Individual price × its count — the 6 oils left over do not change it (shared/bundle.ts shows them).
+    expect(bundleAsinCosts({ subtotal: 165.54, discount: 0, gcPct: null }, comps)?.cogs).toBe(11.15);
   });
 });

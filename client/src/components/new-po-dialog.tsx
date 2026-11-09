@@ -36,7 +36,7 @@ import {
   SOLD_AS_OPTIONS, PROMO_TYPES, PAYMENT_METHODS, CASHBACK_STATUSES,
   type PoFormState, type PoFormProduct, type PoFormPromo, type PoFormPayment, type PoFormPrefill, type PrefillSource, asinPackSetLabel, asinPackSetNote, followPacks } from "@shared/po-form";
 import { editBlockingErrors } from "@shared/po-edit-form";
-import { groupLines, newLineId, lineQty, slotUnits, setSlotUnits, resetSlotYield, addAsinRow, addProductToBundle, removeAsinRow, removeLine, ensureLineIds, isFractional, FRACTIONAL_UNITS_NOTE, type LineBox } from "@shared/po-lines";
+import { groupLines, newLineId, lineQty, slotUnits, slotBundle, setSlotUnits, resetSlotYield, addAsinRow, addProductToBundle, removeAsinRow, removeLine, ensureLineIds, isFractional, FRACTIONAL_UNITS_NOTE, type LineBox } from "@shared/po-lines";
 
 const todayYmd = () => { const d = new Date(); return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`; };
 const money = (n: number) => `$${n.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
@@ -650,6 +650,23 @@ export function NewPoForm({ open, onOpenChange, onCreated, prefill, initialSuppl
                       </div>
                     );
                   })}
+                  {/* The bundle rule (migration 100, Maria 2026-11-09): each member's units in one bundle — typed, else the even split proposed in amber; the counts sum to ×N. */}
+                  {box.bundle && (() => {
+                    const slot0 = box.slots[0] ?? []; const b = slotBundle(form.products, slot0);
+                    return box.lines.map((line) => {
+                      const i = line.copies[0]; const p = form.products[i]; const c = b.components[slot0.indexOf(i)];
+                      const typed = (p.units_per_bundle ?? "").trim() !== "";
+                      return (
+                        <div key={`pb-${line.line_id}`} className="ml-2 flex flex-wrap items-center gap-x-2 py-0.5 text-[10px] text-muted-foreground" data-testid={`new-po-per-bundle-${i}`}>
+                          <span className="truncate max-w-[16rem]">{p.product_name || "this product"}:</span>
+                          <Input value={p.units_per_bundle ?? ""} onChange={(e) => setMany(line.copies, "units_per_bundle", e.target.value)} inputMode="numeric" placeholder={c ? String(c.perBundle) : "1"} title="Units of this product in one bundle" className={`h-6 w-12 text-xs text-right ${typed ? "" : "border-amber-500/70"}`} data-testid={`input-new-po-units_per_bundle-${i}`} />
+                          <span>per bundle</span>
+                          {!typed && c && <span className="text-amber-700 dark:text-amber-400" data-testid={`new-po-per-bundle-proposed-${i}`}>proposed · <button type="button" className="underline" onClick={() => setMany(line.copies, "units_per_bundle", String(c.perBundle))} data-testid={`button-new-po-per-bundle-confirm-${i}`}>confirm {c.perBundle}</button></span>}
+                          {c && c.leftover > 0.005 && <span className="text-amber-700 dark:text-amber-400" data-testid={`new-po-leftover-${i}`}>{c.leftover} left over after {b.asinUnits} bundles</span>}
+                        </div>
+                      );
+                    });
+                  })()}
                   {box.slots.map((slot, k) => {
                     const i = slot[0]; const p = form.products[i];
                     const units = slotUnits(form.products, slot, box.bundle); const frac = isFractional(units);
@@ -675,7 +692,7 @@ export function NewPoForm({ open, onOpenChange, onCreated, prefill, initialSuppl
                           <div className="flex h-8 min-w-[6.5rem] flex-1 items-center truncate text-xs text-muted-foreground" title={info?.title ?? ""} data-testid={`new-po-asin-title-${i}`}>
                             {info?.in_af ? <><Database className="mr-1 h-2.5 w-2.5 shrink-0" /><span className="truncate">{info.title ?? "in AF"}</span></> : p.asin.length === 10 ? <span className="text-amber-600">Not in AF</span> : <span className="opacity-60">title from AF</span>}
                           </div>
-                          <Input {...cell(A.qty)} value={anyQty ? String(units) : ""} onChange={(e) => onSlotUnits(box.key, k, e.target.value)} inputMode="decimal" placeholder="ASIN units" className={`h-8 shrink-0 text-xs text-right ${frac ? "font-semibold text-destructive" : ""}`} title={box.bundle ? `sets: the smallest member's Product units × yield = ${units}` : `${qty} Product units × ${r} Individual units ÷ ${u} per ASIN unit = ${units} ASIN units`} data-testid={`input-new-po-asin-qty-${i}`} />
+                          <Input {...cell(A.qty)} value={anyQty ? String(units) : ""} onChange={(e) => onSlotUnits(box.key, k, e.target.value)} inputMode="decimal" placeholder="ASIN units" className={`h-8 shrink-0 text-xs text-right ${frac ? "font-semibold text-destructive" : ""}`} title={box.bundle ? `bundles = the scarcest member's Individual units ÷ its units per bundle = ${units} (×${u} Individual units each)` : `${qty} Product units × ${r} Individual units ÷ ${u} per ASIN unit = ${units} ASIN units`} data-testid={`input-new-po-asin-qty-${i}`} />
                           {box.bundle
                             ? <div {...cell(A.sold, "flex h-8 items-center text-xs")} data-testid={`select-new-po-sold_as-${i}`}>bundle</div>
                             // Not known (2026-11-06): "— choose —" in amber, or the title's pack shown as an unconfirmed suggestion — saved only once confirmed.
@@ -698,7 +715,7 @@ export function NewPoForm({ open, onOpenChange, onCreated, prefill, initialSuppl
                         </LabelledCells>
                         {/* The math line: pack math and the cost allocation for this row. */}
                         <div className={`ml-6 mt-0.5 flex flex-wrap gap-x-3 text-[10px] ${frac ? "text-destructive" : "text-muted-foreground"}`} data-testid={`new-po-asin-math-${i}`}>
-                          <span>{box.bundle ? `sets = the smallest member's Product units × yield = ${anyQty ? units : "—"}` : `${qty} Product units × ${r} Individual units ÷ ${u} per ASIN unit = ${anyQty ? units : "—"} ASIN units`}</span>
+                          <span>{box.bundle ? `bundles = min over members (Product units × pack ÷ units per bundle) = ${anyQty ? units : "—"} · ${anyQty ? Math.round(units * u * 100) / 100 : "—"} Individual units (×${u} each)` : `${qty} Product units × ${r} Individual units ÷ ${u} per ASIN unit = ${anyQty ? units : "—"} ASIN units`}</span>
                           {stored && <span data-testid={`edit-po-stored-costs-${i}`}>stored costs (sheet import) — never recomputed</span>}
                           {!stored && a?.sourcing_cost && <span>sourcing = {showReg ? "the order's cost shared by regular price × qty" : "Σ(paid price × qty)"} ÷ {a.qty} = {a.sourcing_cost}</span>}
                           {!stored && a?.computed_cost_per_unit && <span>COGS = {a.sourcing_cost} × (1 − {check.weightedGcPct ?? 0}%){a.cogs_adjustment ? ` + ${a.cogs_adjustment}` : ""} = {a.computed_cost_per_unit}</span>}

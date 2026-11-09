@@ -9,6 +9,8 @@
 // 2.1 where the sheet said 2. A line without the two integers (a
 // sheet-imported line the backfill could not resolve — docs/yield-ratio-
 // gaps-2026-11-02.csv) still reads its stored yield as before (trueYield).
+import { bundleFromLines } from "./bundle";
+
 export interface YieldRatio { retailer: number; asinUnits: number }
 
 const isPosInt = (n: unknown): n is number => typeof n === "number" && Number.isInteger(n) && n >= 1;
@@ -95,22 +97,25 @@ export function fracToNumber(f: Frac, dp = 2): number {
   return Number(q) / Number(scale);
 }
 
-export interface YieldLine { qty_ordered: number | string | null; asin_qty_per_product?: number | string | null; retailer_units_per_product?: number | string | null; asin_units_per_pack?: number | string | null }
+export interface YieldLine { qty_ordered: number | string | null; asin_qty_per_product?: number | string | null; retailer_units_per_product?: number | string | null; asin_units_per_pack?: number | string | null; /** Bundle component: units of this product in one bundle (migration 100). */ units_per_bundle?: number | string | null }
 /**
  * An ASIN row's Ordered from its lines. Every line with a ratio is summed
- * exactly (a bundle: the scarcest component's sets); a line without one adds
- * qty × its stored yield (read through `legacy`, trueYield in the app). Rounded
- * once, 2 dp.
+ * exactly; a line without one adds qty × its stored yield (read through
+ * `legacy`, trueYield in the app). Rounded once, 2 dp. A BUNDLE follows the
+ * bundle rule (shared/bundle.ts, Maria 2026-11-09): ×N = Individual units in
+ * one bundle (`bundleN`, po_asins.units_per_pack), each component's Individual
+ * units (qty × its pack) ÷ its per-bundle count, the minimum over components;
+ * a legacy line without a pack reads its stored yield through `legacy`.
  */
-export function asinUnitsFromLines(lines: ReadonlyArray<YieldLine>, soldAs: string, legacy: (y: number) => number = (y) => y): { qty: number; uniqueProducts: number | null } {
+export function asinUnitsFromLines(lines: ReadonlyArray<YieldLine>, soldAs: string, legacy: (y: number) => number = (y) => y, bundleN: number | string | null = null): { qty: number; uniqueProducts: number | null } {
+  if (soldAs === "bundle") {
+    if (lines.length === 0) return { qty: 0, uniqueProducts: 1 };
+    const b = bundleFromLines(lines.map((l) => ({ ...l, asin_qty_per_product: l.asin_qty_per_product == null || l.asin_qty_per_product === "" ? null : legacy(Number(l.asin_qty_per_product) || 1) })), bundleN);
+    return { qty: b.asinUnits, uniqueProducts: Math.max(lines.length, 1) };
+  }
   const per = lines.map((l) => {
     const qty = Number(l.qty_ordered) || 0, r = lineRatio(l);
     return r ? lineUnitsExact(qty, r) : { num: BigInt(Math.round(qty * legacy(Number(l.asin_qty_per_product ?? 1) || 1) * 1e6)), den: BigInt(1000000) };
   });
-  if (soldAs === "bundle") {
-    if (per.length === 0) return { qty: 0, uniqueProducts: 1 };
-    const min = per.reduce((m, x) => (cmpFrac(x, m) < 0 ? x : m));
-    return { qty: fracToNumber(min), uniqueProducts: Math.max(lines.length, 1) };
-  }
   return { qty: fracToNumber(per.reduce(addFrac, { num: BigInt(0), den: BigInt(1) })), uniqueProducts: null };
 }

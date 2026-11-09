@@ -83,7 +83,7 @@ export async function loadAfPoRows(query: QueryLike): Promise<{ rows: SheetRow[]
   const rs = (await query(
     `SELECT p.order_id, p.order_date, p.supplier, p.closed_at IS NOT NULL AS closed, p.ships_to,
             pa.id AS po_asin_id, pa.asin, pa.asin_name, pa.qty AS asin_qty, pa.cost_per_unit, pa.prep_cost, pa.sold_as, pa.units_per_pack, pa.unique_products,
-            l.position, l.product_name, l.qty_ordered, l.asin_qty_per_product, l.retailer_units_per_product, l.asin_units_per_pack, ${lineCanceled} AS canceled,
+            l.position, l.product_name, l.qty_ordered, l.asin_qty_per_product, l.retailer_units_per_product, l.asin_units_per_pack, l.units_per_bundle, ${lineCanceled} AS canceled,
             (SELECT COUNT(*)::int FROM po_line_items l2 WHERE l2.po_asin_id = pa.id) AS line_count
        FROM po_line_items l JOIN po_asins pa ON pa.id = l.po_asin_id JOIN purchase_orders p ON p.id = pa.po_id
       ORDER BY ${NEWEST_PO_ORDER}, pa.asin, l.position`,
@@ -119,7 +119,9 @@ export async function loadAfPoRows(query: QueryLike): Promise<{ rows: SheetRow[]
       qtyOrderedL: r.qty_ordered == null ? null : String(r.qty_ordered),
       setsN: String(bundle || lines > 1 ? asinQty : lineQty),
       uniqueS: String(num(r.unique_products) ?? 1),
-      yieldT: ratio ? ratioYield(ratio) : r.asin_qty_per_product == null ? null : String(Number(r.asin_qty_per_product)),
+      // Col T: the line's yield — for a BUNDLE component (migration 100) the real pack (Individual units per Product unit), so the Velocity
+      // bundle build's L × T is the component's Individual units (12 balms × 1, 2 six-packs × 6) and Σ ÷ sets = units per bundle (N).
+      yieldT: bundle && ratio ? String(ratio.retailer) : ratio ? ratioYield(ratio) : r.asin_qty_per_product == null ? null : String(Number(r.asin_qty_per_product)),
       soldAs: str(r.sold_as),
       unitsPerPack: String(upp),
       // AZ: total units — sets × units per bundle for a bundle, packs × units/pack otherwise.

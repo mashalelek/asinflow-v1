@@ -527,6 +527,20 @@ surface's kind as the main number with the Individual count in grey under
 it ("—" when the pack size is NULL, never 0). Column names in the
 database do not change; the words in the UI and the docs do.
 
+## Bundles: ×N = Individual units in one bundle; counts per component (migration 100, Maria 2026-11-09)
+
+A bundle's `po_asins.units_per_pack` is the TOTAL Individual units in one
+bundle; each component line carries `po_line_items.units_per_bundle`
+(Σ = N; NULL = AF proposes an even split in amber, never stores it).
+Bundle ASIN units = min over components (line Individual units ÷ count),
+leftovers shown; Cost/Unit = Σ per-Individual cost × count + the PO's
+share — `shared/bundle.ts` + `bundleAsinCosts`, used by the form,
+`recomputeAsinQty` and `recomputePoCosts`. Never derive a bundle's
+quantity or cost from the component lines' yields or Σ line money ÷ qty,
+and never read a bundle component's `retailer_units_per_product` as
+pack × N (the old encoding; `npm run fix:bundle-lines -- --convert-packs`
+converts it). SPEC §22 "Bundles".
+
 ## Line yield is two integers, never a decimal (migration 080, 2026-11-02)
 
 `po_line_items.retailer_units_per_product` ÷ `asin_units_per_pack` is the

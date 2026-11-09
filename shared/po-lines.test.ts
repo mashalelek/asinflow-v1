@@ -25,8 +25,9 @@ describe("line layout", () => {
     ]);
     expect(lineQty(products, boxes[1].lines[0].copies)).toBe(12);
     expect(slotUnits(products, boxes[1].slots[0], false)).toBe(8);
-    expect(slotUnits(products, boxes[2].slots[0], true)).toBe(6); // 12 × 0.5 per member → 6 sets
-    expect(checkPoForm({ ...emptyPoForm("2026-11-01"), supplier: "walmart.com", order_id: "zz-1", products }).asins.map((a) => [a.asin, a.qty])).toEqual([["B0TEST0001", 12], ["B0TEST0002", 8], ["B0TEST0003", 4], ["B0BUNDLE01", 6]]);
+    // The bundle rule (2026-11-09): two singles × 12 in a ×2 bundle (1 + 1 proposed) → 12 bundles, not 6 "sets" (12 × 0.5).
+    expect(slotUnits(products, boxes[2].slots[0], true)).toBe(12);
+    expect(checkPoForm({ ...emptyPoForm("2026-11-01"), supplier: "walmart.com", order_id: "zz-1", products }).asins.map((a) => [a.asin, a.qty])).toEqual([["B0TEST0001", 12], ["B0TEST0002", 8], ["B0TEST0003", 4], ["B0BUNDLE01", 12]]);
   });
   it("typing the ASIN qty: one ASIN row pins the yield; a split sets that row's share; reset returns to the pack math", () => {
     const single = [row({ retailer_units_per_pack: "12", asin_qty_per_product: "12" })];
