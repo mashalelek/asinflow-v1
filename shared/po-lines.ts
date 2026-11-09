@@ -68,7 +68,7 @@ export function slotUnits(products: readonly PoFormProduct[], slot: readonly num
   return bundle ? Math.min(...u) : u[0];
 }
 /** A fractional ASIN qty must not pass silently (red text + "check qty or pack size"); saving is still allowed. */
-export const FRACTIONAL_UNITS_NOTE = "check qty or pack size";
+export const FRACTIONAL_UNITS_NOTE = "check the Product units or the pack size";
 export const isFractional = (units: number): boolean => units > 0 && Math.abs(units - Math.round(units)) > 1e-9;
 
 /**

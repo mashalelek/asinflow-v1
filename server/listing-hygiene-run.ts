@@ -110,7 +110,7 @@ async function deleteRunBlocker(facts: SkuFacts[], query: QueryLike, t: Tally, n
     f.velocityShipmentIds = Array.from(new Set(f.asins.flatMap((a) => inShipments.get(a.toUpperCase())?.shipments ?? [])));
   }
   const shipmentIds = new Set(lines.map((l) => String((l as any).__shipment_id ?? "")).filter(Boolean));
-  t.note("_velocity", `${orders.length} order(s) read, ${onHand.size} ASIN(s) with units on hand; ${lines.length} line(s) in ${shipmentIds.size} unshipped shipment(s), ${inShipments.size} ASIN(s) with units packed`);
+  t.note("_velocity", `${orders.length} order(s) read, ${onHand.size} ASIN(s) with Individual units on hand; ${lines.length} line(s) in ${shipmentIds.size} unshipped shipment(s), ${inShipments.size} ASIN(s) with Individual units packed`);
   return null;
 }
 

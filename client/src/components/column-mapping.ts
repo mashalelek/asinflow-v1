@@ -89,9 +89,9 @@ export const MAPPING_FIELDS: MappingField[] = [
   },
   {
     key: "packSize",
-    label: "Pack size",
+    label: "Individual units per ASIN unit",
     required: false,
-    matchPatterns: [/^pack\s*_?\s*size$/i, /^units\s*(per|\/)\s*pack$/i],
+    matchPatterns: [/^pack\s*_?\s*size$/i, /^units\s*(per|\/)\s*pack$/i, /^individual\s+units\s+per\s+asin\s+unit$/i],
   },
   // §21 bulk fields (2026-09-04): parsed on both paths, consumed only by the
   // bulk list creation (the main path ignores both — SPEC §21 asymmetry note).

@@ -134,7 +134,7 @@ async function checkRefundLine(query: QueryLike, poId: string, e: Record<string,
   if (e.po_line_item_id == null) return;
   const line = (await query(`SELECT qty_ordered FROM po_line_items WHERE id = $1 AND po_id = $2`, [e.po_line_item_id, poId])).rows[0];
   if (!line) throw new EditError(400, "po_line_item_id must be a product line of this PO");
-  if (e.qty != null && line.qty_ordered != null && Number(e.qty) > Number(line.qty_ordered)) throw new EditError(400, `qty (${e.qty}) cannot exceed the line's qty ordered (${line.qty_ordered})`);
+  if (e.qty != null && line.qty_ordered != null && Number(e.qty) > Number(line.qty_ordered)) throw new EditError(400, `qty (${e.qty}) cannot exceed the line's Ordered (${line.qty_ordered} Product units)`);
 }
 
 const canon = (v: unknown): string | null => {

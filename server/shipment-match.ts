@@ -148,5 +148,5 @@ export function nearestMiss<R extends MatchRow>(input: CandidateInput, ki: KeyIn
     return `nearest PO ${n.order_id} (${n.supplier}) is ${Math.abs(d)} days ${d < 0 ? "before" : "after"} the Velocity order`;
   }
   const n = inWindow[0];
-  return `PO ${n.order_id} (${n.supplier}) has ${round2(Math.max(0, remaining(n)))} units left, the line needs ${round2(input.units)}`;
+  return `PO ${n.order_id} (${n.supplier}) has ${round2(Math.max(0, remaining(n)))} Individual units left, the line needs ${round2(input.units)}`;
 }

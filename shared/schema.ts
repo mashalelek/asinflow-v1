@@ -685,6 +685,8 @@ export interface ColumnDef {
   id: ColumnId;
   label: string;
   qualifier?: "Actual" | "Estimated";
+  /** Quantity kind (SPEC §22 "Quantity vocabulary", 2026-11-09): the muted line above the header, joined to the qualifier; CSV headers carry it too. */
+  kind?: "ASIN units";
   defaultVisible: boolean;
   align: "left" | "right";
   group: ColumnGroup;
@@ -704,7 +706,7 @@ export const ALL_COLUMNS: ColumnDef[] = [
   { id: "product", label: "Product", defaultVisible: true, align: "left", group: "description" },
   // The pack as a reviewed catalog field (Maria 2026-11-06): confirmed, or amber while it needs review.
   { id: "soldAs", label: "Sold as", defaultVisible: true, align: "left", group: "description" },
-  { id: "packSize", label: "Pack size", defaultVisible: true, align: "right", group: "description" },
+  { id: "packSize", label: "Individual units per ASIN unit", defaultVisible: true, align: "right", group: "description" },
   { id: "category", label: "Category", defaultVisible: false, align: "left", group: "description" },
   { id: "brand", label: "Brand", defaultVisible: true, align: "left", group: "description" },
   { id: "supplier", label: "Supplier", defaultVisible: true, align: "left", group: "description" },
@@ -714,25 +716,25 @@ export const ALL_COLUMNS: ColumnDef[] = [
   { id: "buyLink", label: "Buy Link", defaultVisible: false, align: "left", group: "description" },
   { id: "supplierSku", label: "SKU / UPC", defaultVisible: false, align: "left", group: "description" },
   // Group 2 — Stock (order: Maria 2026-11-07)
-  { id: "stock", label: "Stock", defaultVisible: true, align: "right", group: "stock" },
+  { id: "stock", label: "Stock", kind: "ASIN units", defaultVisible: true, align: "right", group: "stock" },
   // §6 FBA Stock (2026-09-17) = Stock − On Order, computed from the SAME
   // values those two cells render so the identity holds row by row.
   // Default-VISIBLE wherever Stock/On Order are (revised same day).
-  { id: "fbaStock", label: "FBA Stock", defaultVisible: true, align: "right", group: "stock" },
-  { id: "availableFba", label: "Available (FBA)", defaultVisible: false, align: "right", group: "stock" },
-  { id: "reserved", label: "Reserved", defaultVisible: false, align: "right", group: "stock" },
-  { id: "sentToFba", label: "Sent to FBA", defaultVisible: false, align: "right", group: "stock" },
-  { id: "atPrep", label: "At Prep", defaultVisible: false, align: "right", group: "stock" },
-  { id: "atWarehouse", label: "At CQG Warehouse", defaultVisible: false, align: "right", group: "stock" },
+  { id: "fbaStock", label: "FBA Stock", kind: "ASIN units", defaultVisible: true, align: "right", group: "stock" },
+  { id: "availableFba", label: "Available (FBA)", kind: "ASIN units", defaultVisible: false, align: "right", group: "stock" },
+  { id: "reserved", label: "Reserved", kind: "ASIN units", defaultVisible: false, align: "right", group: "stock" },
+  { id: "sentToFba", label: "Sent to FBA", kind: "ASIN units", defaultVisible: false, align: "right", group: "stock" },
+  { id: "atPrep", label: "At Prep", kind: "ASIN units", defaultVisible: false, align: "right", group: "stock" },
+  { id: "atWarehouse", label: "At CQG Warehouse", kind: "ASIN units", defaultVisible: false, align: "right", group: "stock" },
   // §6 on-order figures (2026-10-17, patch asins-on-order-from-pos, clean-up
   // the same day): derived from po_asins, the sheet's "Ordered" is gone (D2 —
   // one number, one meaning). On Order is shown by default, At Prep hidden.
-  { id: "onOrder", label: "On Order", defaultVisible: true, align: "right", group: "stock" },
+  { id: "onOrder", label: "On Order", kind: "ASIN units", defaultVisible: true, align: "right", group: "stock" },
   { id: "daysLeft", label: "Days Left", defaultVisible: true, align: "right", group: "stock" },
   // Group 3 — Actuals
   { id: "cogs", label: "COGS", qualifier: "Actual", defaultVisible: false, align: "right", group: "actuals" },
   { id: "actPrepCost", label: "Prep Cost", qualifier: "Actual", defaultVisible: false, align: "right", group: "actuals" },
-  { id: "actUnitsSold", label: "Units Sold", qualifier: "Actual", defaultVisible: true, align: "right", group: "actuals" },
+  { id: "actUnitsSold", label: "Units Sold", qualifier: "Actual", kind: "ASIN units", defaultVisible: true, align: "right", group: "actuals" },
   { id: "actRefunds", label: "Refunds", qualifier: "Actual", defaultVisible: true, align: "right", group: "actuals" },
   { id: "actRefundPct", label: "Refund %", qualifier: "Actual", defaultVisible: false, align: "right", group: "actuals" },
   { id: "actAvgSalePrice", label: "Avg. Sale Price", qualifier: "Actual", defaultVisible: false, align: "right", group: "actuals" },

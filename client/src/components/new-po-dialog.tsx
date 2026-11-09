@@ -23,6 +23,7 @@ import React, { useEffect, useLayoutEffect, useMemo, useRef, useState } from "re
 import { Plus, Trash2, AlertTriangle, Sparkles, Database, FileText, ArrowUp } from "lucide-react";
 import { nameMismatchNote } from "@shared/name-match";
 import { titlePackSuggestion } from "@shared/pack-parse";
+import { PER_ASIN_UNIT, PER_PRODUCT_UNIT, QTY_KIND } from "@shared/quantity-kinds";
 import { useToast } from "@/hooks/use-toast";
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription, DialogFooter } from "@/components/ui/dialog"; // the pack-override question only
 import { Button } from "@/components/ui/button";
@@ -204,7 +205,7 @@ function PackOverrideDialog({ ask, onChoose }: { ask: { asin: string; from: stri
       <DialogContent dialogId="pack-override" confirm className="max-w-md" data-testid="pack-override-dialog">
         <DialogHeader>
           <DialogTitle>Pack size changed</DialogTitle>
-          <DialogDescription>{ask ? `${ask.asin}: units / pack changed from AF's ${ask.from} to ${ask.to}. Apply to:` : ""}</DialogDescription>
+          <DialogDescription>{ask ? `${ask.asin}: ${PER_ASIN_UNIT} changed from AF's ${ask.from} to ${ask.to}. Apply to:` : ""}</DialogDescription>
         </DialogHeader>
         <div className="space-y-2 text-sm">
           <label className="flex items-start gap-2"><input type="radio" name="pack-scope" checked={choice === "po"} onChange={() => setChoice("po")} data-testid="pack-override-po-only" /><span><b>This PO only</b> (default) — AF's ASIN keeps {ask?.from}.</span></label>
@@ -442,12 +443,14 @@ export function NewPoForm({ open, onOpenChange, onCreated, prefill, initialSuppl
   // its price — a proven free-item deal, a sale in the line prices, a regular price the capture read — or opened by hand.
   const [regOpen, setRegOpen] = useState(false);
   const showReg = regOpen || regularPricesInformative(form.products);
-  const G_LINE = showReg ? "grid grid-cols-[7.5rem_minmax(12rem,40rem)_5.5rem_5.5rem_4rem_4.5rem_1.75rem] items-start gap-x-2" : "grid grid-cols-[7.5rem_minmax(12rem,40rem)_5.5rem_4rem_4.5rem_1.75rem] items-start gap-x-2";
+  // 2026-11-09 (quantity names): Qty carries its kind line, "Individual units per Product unit" wraps to two lines in 9 rem.
+  const G_LINE = showReg ? "grid grid-cols-[7.5rem_minmax(12rem,40rem)_5.5rem_5.5rem_4.5rem_9rem_1.75rem] items-start gap-x-2" : "grid grid-cols-[7.5rem_minmax(12rem,40rem)_5.5rem_4.5rem_9rem_1.75rem] items-start gap-x-2";
   // 2026-11-06: reason / notes 84 and the title from 6.5 rem so the row (and a bundle's, inside its ring) fits on one line at 1280.
   const PACK_MISSING_CLS = "!border-amber-500 text-amber-700 dark:text-amber-400"; // a pack not known (2026-11-06)
-  const A = { arrow: 16, asin: 176, qty: 72, sold: 92, upp: 60, prep: 64, sourcing: 72, cogs: 88, paid: 72, adj: 72, reason: 84, notes: 84, rm: 24 } as const;
+  // 2026-11-09: upp 142 so "Individual units per ASIN unit" stays on the one-line label row; the money / note cells give back the width so the row still fits at 1280.
+  const A = { arrow: 16, asin: 176, qty: 72, sold: 92, upp: 142, prep: 56, sourcing: 64, cogs: 80, paid: 64, adj: 64, reason: 72, notes: 72, rm: 24 } as const;
   const cell = (w: number, cls = "") => ({ className: `shrink-0 ${cls}`, style: { width: w } });
-  const ASIN_LABELS: Array<[string, number | "title", string?]> = [["", A.arrow], ["ASIN", A.asin], ["Title", "title"], ["ASIN qty", A.qty, "text-right"], ["Sold as", A.sold], ["Units/pack", A.upp, "text-right"], ["Prep", A.prep, "text-right"], ["Sourcing", A.sourcing, "text-right"], ["COGS", A.cogs, "text-right"], ["Paid", A.paid, "text-right"], ["Adjustment", A.adj, "text-right"], ["Reason", A.reason], ["Notes", A.notes], ["", A.rm]];
+  const ASIN_LABELS: Array<[string, number | "title", string?]> = [["", A.arrow], ["ASIN", A.asin], ["Title", "title"], ["ASIN units", A.qty, "text-right"], ["Sold as", A.sold], [PER_ASIN_UNIT, A.upp, "text-right"], ["Prep", A.prep, "text-right"], ["Sourcing", A.sourcing, "text-right"], ["COGS", A.cogs, "text-right"], ["Paid", A.paid, "text-right"], ["Adjustment", A.adj, "text-right"], ["Reason", A.reason], ["Notes", A.notes], ["", A.rm]];
   if (!open) return null;
 
   return (
@@ -622,7 +625,7 @@ export function NewPoForm({ open, onOpenChange, onCreated, prefill, initialSuppl
         <div className="rounded-md" style={hairline} data-testid="new-po-products">
           <div className="rounded-t-md bg-muted/40 px-2 py-1 text-[11px] font-medium text-muted-foreground">
             <div className={G_LINE}>
-              <span>SKU / UPC</span><span>Product name</span><span>Price</span>{showReg && <span title="The price before a multi-buy deal (BOGO, Buy 2 Get 2 Free): the order's cost is shared by regular price × qty, so free units carry their share">Reg. price</span>}<span className="text-right">Qty</span><span className="text-right" title="The retailer's pack — a 12-count is 12">Units / pack</span><span />
+              <span>SKU / UPC</span><span>Product name</span><span>Price</span>{showReg && <span title="The price before a multi-buy deal (BOGO, Buy 2 Get 2 Free): the order's cost is shared by regular price × qty, so free units carry their share">Reg. price</span>}<span className="text-right self-end"><span className="block text-[9px] font-normal opacity-60">{QTY_KIND.product}</span>Qty</span><span className="text-right self-end leading-tight" title="The retailer's pack — a 12-count is 12">{PER_PRODUCT_UNIT}</span><span />
             </div>
           </div>
           {boxes.map((box, bi) => {
@@ -640,7 +643,7 @@ export function NewPoForm({ open, onOpenChange, onCreated, prefill, initialSuppl
                         <MoneyCalcInput value={p.price} onChange={(v) => setMany(line.copies, "price", v)} placeholder="price" className={`h-8 text-xs text-right ${mark(`products.${i}.price`)}`} data-testid={`input-new-po-price-${i}`} />
                         {showReg && <MoneyCalcInput value={p.regular_price ?? ""} onChange={(v) => setMany(line.copies, "regular_price", v)} placeholder="reg." title="Regular price before the deal — blank = the price" className={`h-8 text-xs text-right ${mark(`products.${i}.regular_price`)}`} data-testid={`input-new-po-regular_price-${i}`} />}
                         {split
-                          ? <div className="flex h-8 items-center justify-end pr-1 text-xs" title={`Split across ${line.copies.length} ASIN rows — edit each row's ASIN qty`} data-testid={`new-po-qty-sum-${i}`}>{lineQty(form.products, line.copies)}</div>
+                          ? <div className="flex h-8 items-center justify-end pr-1 text-xs" title={`Split across ${line.copies.length} ASIN rows — edit each row's ASIN units`} data-testid={`new-po-qty-sum-${i}`}>{lineQty(form.products, line.copies)}</div>
                           : <Input value={p.qty_ordered} onChange={(e) => setP(i, "qty_ordered", e.target.value)} inputMode="decimal" placeholder="qty" title={hint(`products.${i}.qty_ordered`)} className={`h-8 text-xs text-right ${mark(`products.${i}.qty_ordered`)}`} data-testid={`input-new-po-qty_ordered-${i}`} />}
                         <Input value={p.retailer_units_per_pack ?? "1"} onChange={(e) => setMany(line.copies, "retailer_units_per_pack", e.target.value)} inputMode="numeric" className={`h-8 text-xs text-right ${mark(`products.${i}.retailer_units_per_pack`)}`} data-testid={`input-new-po-retailer_upp-${i}`} />
                         <button type="button" onClick={() => onRemoveLine(box.key, line.line_id)} disabled={form.products.length === line.copies.length} className="mt-2 text-muted-foreground/60 hover:text-destructive disabled:opacity-30" title="Remove line" data-testid={`button-new-po-remove-${i}`}><Trash2 className="h-3.5 w-3.5" /></button>
@@ -672,7 +675,7 @@ export function NewPoForm({ open, onOpenChange, onCreated, prefill, initialSuppl
                           <div className="flex h-8 min-w-[6.5rem] flex-1 items-center truncate text-xs text-muted-foreground" title={info?.title ?? ""} data-testid={`new-po-asin-title-${i}`}>
                             {info?.in_af ? <><Database className="mr-1 h-2.5 w-2.5 shrink-0" /><span className="truncate">{info.title ?? "in AF"}</span></> : p.asin.length === 10 ? <span className="text-amber-600">Not in AF</span> : <span className="opacity-60">title from AF</span>}
                           </div>
-                          <Input {...cell(A.qty)} value={anyQty ? String(units) : ""} onChange={(e) => onSlotUnits(box.key, k, e.target.value)} inputMode="decimal" placeholder="ASIN qty" className={`h-8 shrink-0 text-xs text-right ${frac ? "font-semibold text-destructive" : ""}`} title={box.bundle ? `sets: the smallest member's qty × yield = ${units}` : `${qty} × ${r} ÷ ${u} = ${units}`} data-testid={`input-new-po-asin-qty-${i}`} />
+                          <Input {...cell(A.qty)} value={anyQty ? String(units) : ""} onChange={(e) => onSlotUnits(box.key, k, e.target.value)} inputMode="decimal" placeholder="ASIN units" className={`h-8 shrink-0 text-xs text-right ${frac ? "font-semibold text-destructive" : ""}`} title={box.bundle ? `sets: the smallest member's Product units × yield = ${units}` : `${qty} Product units × ${r} Individual units ÷ ${u} per ASIN unit = ${units} ASIN units`} data-testid={`input-new-po-asin-qty-${i}`} />
                           {box.bundle
                             ? <div {...cell(A.sold, "flex h-8 items-center text-xs")} data-testid={`select-new-po-sold_as-${i}`}>bundle</div>
                             // Not known (2026-11-06): "— choose —" in amber, or the title's pack shown as an unconfirmed suggestion — saved only once confirmed.
@@ -695,7 +698,7 @@ export function NewPoForm({ open, onOpenChange, onCreated, prefill, initialSuppl
                         </LabelledCells>
                         {/* The math line: pack math and the cost allocation for this row. */}
                         <div className={`ml-6 mt-0.5 flex flex-wrap gap-x-3 text-[10px] ${frac ? "text-destructive" : "text-muted-foreground"}`} data-testid={`new-po-asin-math-${i}`}>
-                          <span>{box.bundle ? `sets = the smallest member's qty × yield = ${anyQty ? units : "—"}` : `${qty} × ${r} ÷ ${u} = ${anyQty ? units : "—"} ASIN units`}</span>
+                          <span>{box.bundle ? `sets = the smallest member's Product units × yield = ${anyQty ? units : "—"}` : `${qty} Product units × ${r} Individual units ÷ ${u} per ASIN unit = ${anyQty ? units : "—"} ASIN units`}</span>
                           {stored && <span data-testid={`edit-po-stored-costs-${i}`}>stored costs (sheet import) — never recomputed</span>}
                           {!stored && a?.sourcing_cost && <span>sourcing = {showReg ? "the order's cost shared by regular price × qty" : "Σ(paid price × qty)"} ÷ {a.qty} = {a.sourcing_cost}</span>}
                           {!stored && a?.computed_cost_per_unit && <span>COGS = {a.sourcing_cost} × (1 − {check.weightedGcPct ?? 0}%){a.cogs_adjustment ? ` + ${a.cogs_adjustment}` : ""} = {a.computed_cost_per_unit}</span>}

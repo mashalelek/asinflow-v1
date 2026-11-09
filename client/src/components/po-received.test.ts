@@ -2,14 +2,14 @@ import { describe, it, expect } from "vitest";
 import { readFileSync } from "node:fs";
 import { lineReceivedShown } from "./po-edit";
 
-// Products → Received from Velocity's count (Maria 2026-11-05): Velocity POs show Velocity's received in retailer units.
+// Products → Received from Velocity's count (Maria 2026-11-05): Velocity POs show Velocity's received in Product units (the column left the Products table 2026-11-09; the conversion stays).
 const line = (o: Record<string, unknown> = {}) => ({ qty_received: null, asin_qty_per_product: null, retailer_units_per_product: 1, asin_units_per_pack: 2, ...o });
 
 describe("lineReceivedShown", () => {
   it("200015557295492: one line, 5.5 two-packs checked in → 11 singles of 12", () => {
     const r = lineReceivedShown(line() as any, { received_velocity: "5.50", lines: [{}] }, "velocity");
     expect(r).toMatchObject({ fromVelocity: true, value: 11 });
-    expect(r.title).toBe("From Velocity: 5.5 ASIN units received × 2 ÷ 1 = 11 retailer units");
+    expect(r.title).toBe("From Velocity: 5.5 ASIN units received × 2 ÷ 1 = 11 Product units");
   });
   it("a bundle-style yield (6 retailer units make 1 ASIN unit) divides the other way", () => {
     expect(lineReceivedShown(line({ retailer_units_per_product: 6, asin_units_per_pack: 1 }) as any, { received_velocity: 3, lines: [{}] }, "velocity").value).toBe(0.5);

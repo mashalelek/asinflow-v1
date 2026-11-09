@@ -307,7 +307,7 @@ describe("runHygiene('delete') — Velocity shipments leg", () => {
     expect(r.outcomes["D-1"]).toBe("skip_pipeline:velocity");
     expect(r.outcomes["D-2"]).toBe("deleted"); // the other ASIN has nothing anywhere
     expect(sc.deletes.map((e) => decodeURIComponent(e.split("/").pop()!))).toEqual(["D-2"]);
-    expect(r.outcomes._velocity).toMatch(/1 line\(s\) in 1 unshipped shipment\(s\), 1 ASIN\(s\) with units packed/);
+    expect(r.outcomes._velocity).toMatch(/1 line\(s\) in 1 unshipped shipment\(s\), 1 ASIN\(s\) with Individual units packed/);
   });
 
   it("the shipments leg failing → zero deletes, every SKU velocity_unavailable", async () => {

@@ -60,13 +60,13 @@ describe("buildVelocityRecords — multi-pack remainders", () => {
     const r = await buildVelocityRecords(...RANGE, { query: q });
     expect(r.records).toEqual([]);
     expect(r.skips).toHaveLength(1);
-    expect(r.skips[0]).toMatchObject({ reason: "invalid_pack_math", orderNumber: "200015663718988", detail: "PO 200015663718988 line 1: ASIN units missing, and 11 ordered ÷ 2 per pack is not a whole number of packs" });
+    expect(r.skips[0]).toMatchObject({ reason: "invalid_pack_math", orderNumber: "200015663718988", detail: "PO 200015663718988 line 1: ASIN units missing, and 11 Product units ordered ÷ 2 Individual units per ASIN unit is not a whole number of packs" });
   });
   it("less than one pack, or units/pack not a whole number → skipped, saying which", async () => {
     poRows = [caress({ quantity: "1" }), caress({ orderNumber: "X-2", unitsPerPack: "2.5" })];
     const r = await buildVelocityRecords(...RANGE, { query: q });
     expect(r.records).toEqual([]);
-    expect(r.skips.map((s) => s.detail)).toEqual(["PO 200015663718988 line 1: 1 unit — less than one 2-pack", 'PO X-2 line 1: units/pack "2.5" is not a whole number']);
+    expect(r.skips.map((s) => s.detail)).toEqual(["PO 200015663718988 line 1: 1 Individual unit — less than one 2-pack", 'PO X-2 line 1: Individual units per ASIN unit "2.5" is not a whole number']);
   });
 });
 
@@ -94,8 +94,8 @@ describe("the dialog", () => {
     expect(src).toMatch(/map\(recKey\)\.filter\(\(k\) => !remainderKeys\.has\(k\)\)/);
     expect(src).toMatch(/text-amber-700 dark:text-amber-400/);
     const { remainderLabel } = await import("../client/src/components/upload-to-velocity-dialog");
-    expect(remainderLabel({ order_number: "x", asin: "y", packs: 5, units_per_pack: 2, leftover: 1 })).toBe("5 packs sent · 1 single left over");
-    expect(remainderLabel({ order_number: "x", asin: "y", packs: 1, units_per_pack: 4, leftover: 3 })).toBe("1 pack sent · 3 singles left over");
+    expect(remainderLabel({ order_number: "x", asin: "y", packs: 5, units_per_pack: 2, leftover: 1 })).toBe("5 packs sent · 1 Individual unit left over");
+    expect(remainderLabel({ order_number: "x", asin: "y", packs: 1, units_per_pack: 4, leftover: 3 })).toBe("1 pack sent · 3 Individual units left over");
   });
   it("shows a skip's exact reason under its label", () => expect(src).toMatch(/\{s\.detail && <div className="text-xs">\{s\.detail\}<\/div>\}/));
 });

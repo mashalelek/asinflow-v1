@@ -429,7 +429,7 @@ export function checkPoForm(f: PoFormState): PoFormCheck {
   let computedSubtotal = 0;
   products.forEach((p, i) => {
     const qty = t(p.qty_ordered);
-    if (!/^\d+(\.\d{1,2})?$/.test(qty) || Number(qty) <= 0) perr(i, "qty must be more than 0 (at most 2 decimals)");
+    if (!/^\d+(\.\d{1,2})?$/.test(qty) || Number(qty) <= 0) perr(i, "Qty (Product units) must be more than 0 (at most 2 decimals)");
     const price = priceNum(p.price);
     if (price == null || Number.isNaN(price) || price < 0) perr(i, "price must be an amount ≥ 0 (at most 6 decimals)");
     if (!/^[A-Z0-9]{10}$/.test(t(p.asin).toUpperCase())) perr(i, "map it to an ASIN (10 characters)");
@@ -438,14 +438,14 @@ export function checkPoForm(f: PoFormState): PoFormCheck {
     // "" = not known: allowed (saved as NULL → "Pack size missing"), warned per ASIN below.
     if (p.sold_as !== "" && !(SOLD_AS_OPTIONS as readonly string[]).includes(p.sold_as)) perr(i, "sold as must be individual, multi-pack or bundle");
     const upp = t(p.units_per_pack);
-    if ((p.sold_as === "multi-pack" || p.sold_as === "bundle") && (!/^\d+$/.test(upp) || Number(upp) < 2)) perr(i, `units per pack must be a whole number ≥ 2 for a ${p.sold_as}`);
+    if ((p.sold_as === "multi-pack" || p.sold_as === "bundle") && (!/^\d+$/.test(upp) || Number(upp) < 2)) perr(i, `Individual units per ASIN unit must be a whole number ≥ 2 for a ${p.sold_as}`);
     const rupp = t(p.retailer_units_per_pack ?? "1");
-    if (rupp !== "" && (!/^\d+$/.test(rupp) || Number(rupp) < 1)) perr(i, "retailer units / pack must be a whole number ≥ 1");
+    if (rupp !== "" && (!/^\d+$/.test(rupp) || Number(rupp) < 1)) perr(i, "Individual units per Product unit must be a whole number ≥ 1");
     const prep = moneyNum(p.prep_cost); if (prep != null && (Number.isNaN(prep) || prep < 0)) perr(i, "prep must be an amount ≥ 0");
     const lm = /^\d+(\.\d{1,2})?$/.test(qty) ? productLineMoney(p) : null;
     if (lm) computedSubtotal += lm.total;
     const ltTyped = moneyNum(p.line_total ?? "");
-    if (ltTyped != null && lm && lm.lineTotal == null) warnings.push(`Product ${i + 1}: line total ${Number.isNaN(ltTyped) ? t(p.line_total ?? "") : ltTyped.toFixed(2)} does not match price × qty — price × qty is used`);
+    if (ltTyped != null && lm && lm.lineTotal == null) warnings.push(`Product ${i + 1}: line total ${Number.isNaN(ltTyped) ? t(p.line_total ?? "") : ltTyped.toFixed(2)} does not match price × Qty (Product units) — price × Qty is used`);
   });
   computedSubtotal = r2(computedSubtotal);
   // Free-item deals (2026-11-06): a line's regular price, when given, is its allocation weight (regular × qty).
@@ -530,7 +530,7 @@ export function checkPoForm(f: PoFormState): PoFormCheck {
     for (const i of idx.slice(1)) {
       const p = products[i];
       if (p.sold_as !== first.sold_as || (first.sold_as !== "individual" && t(p.units_per_pack) !== t(first.units_per_pack)) || r2(moneyNum(p.prep_cost) ?? 0) !== r2(moneyNum(first.prep_cost) ?? 0)) {
-        errors.push(`${asin}: its products disagree on sold as / units per pack / prep`); break;
+        errors.push(`${asin}: its products disagree on sold as / Individual units per ASIN unit / prep`); break;
       }
     }
     if (first.sold_as === "") warnings.push(`${asin}: ${PACK_SIZE_MISSING_NOTE}`);
@@ -542,7 +542,7 @@ export function checkPoForm(f: PoFormState): PoFormCheck {
     if (first.sold_as === "bundle") {
       if (idx.length < 2) errors.push(`${asin}: a bundle needs at least two products`);
       if (new Set(per).size > 1) {
-        errors.push(`${asin}: pack math — every bundle component must give the same number of sets (qty × yield = ${per.join(", ")})`);
+        errors.push(`${asin}: pack math — every bundle component must give the same number of sets (Product units × yield = ${per.join(", ")})`);
       }
       qty = asinUnitsFromLines(yLines, "bundle").qty;
     } else {
@@ -585,7 +585,7 @@ export function asinPackSetLabel(soldAs: string, unitsPerPack: number | string):
 export function asinPackSetNote(r: AsinPackSetNote): string {
   const n = (k: number, one: string) => `${k} ${one}${k === 1 ? "" : "s"}`;
   const filled = [`${n(r.openRows, "open PO row")}`, `${n(r.closedRows, "closed PO row")}`, `${n(r.lines, "line")} given pack integers`];
-  return `${r.asin}: ${asinPackSetLabel(r.sold_as, r.units_per_pack)} · filled ${filled.join(", ")}${r.closedSkipped ? ` · ${n(r.closedSkipped, "closed row")} left (pack doesn't reproduce its stored ASIN qty)` : ""}`;
+  return `${r.asin}: ${asinPackSetLabel(r.sold_as, r.units_per_pack)} · filled ${filled.join(", ")}${r.closedSkipped ? ` · ${n(r.closedSkipped, "closed row")} left (pack doesn't reproduce its stored ASIN units)` : ""}`;
 }
 
 /**

@@ -778,6 +778,13 @@ in the default preset — the user enables them per-need:
 
 ## 7. Visual Design
 
+### Quantity labels
+
+A quantity label always names its kind — *ASIN units*, *Product units* or
+*Individual units* — as a small muted line above the header text (the
+Actual / Estimated pattern of the ASINs table), never in parentheses and
+never below. See §22 "Quantity vocabulary".
+
 ### Palette: warm stone
 
 Light mode:
@@ -5883,6 +5890,53 @@ the date-picker routes.
 
 ## 22. PO Module (Frame)
 
+### Quantity vocabulary (Maria 2026-11-09, `docs/claude_spec-patch-quantity-names.md`)
+
+AF has three quantity kinds and one name each:
+
+| Name | Meaning | Example (Voltage 65705: 1 × 12-jar case, ASIN sold as a 12-pack) |
+|---|---|---|
+| **Individual units** | Physical items; what Velocity counts and uploads | 12 |
+| **Product units** | Items as sold on the supplier's site (a case, a 2-pack, a single) | 1 |
+| **ASIN units** | Sellable units of the Amazon listing | 1 |
+
+Ratios keep their own two names: **Individual units per Product unit**
+(`po_line_items.retailer_units_per_product`) and **Individual units per
+ASIN unit** (`asins.units_per_pack` / `po_asins.units_per_pack`, "the pack
+size"). Never "retailer units", "component units", "quantity", "qty" alone
+or "units" alone in a label, tooltip, warning, export header or this
+document's prose (column names stay as they are). **Every quantity label
+names its kind**: a small muted line ABOVE the header text, exactly like
+the ASINs page's Actual / Estimated group labels (*ASIN units* over
+"Shipped FBA"), never in parentheses, never below. The same header text
+on two tabs with two kinds (At Prep Center on the ASINs tab = ASIN units,
+on the Products tab = Product units) is told apart by that line. Shared
+constants: `shared/quantity-kinds.ts`.
+
+**Display pattern:** every quantity on a PO shows its surface's natural
+kind as the main number with the **Individual count in pale grey under
+it** ("15" over "45 indiv."), on the POs list's expanded rows, the PO
+page's ASINs and Products tabs, computed from today's storage (stored ×
+the pack size; "—" in grey when the pack size is NULL, never 0). Pack
+sizes show once per row: the ASINs tab's "Sold as · ×N" (Individual units
+per ASIN unit) and the Products tab's **Product pack** column ("single" /
+"multi-pack ×15" — Individual units per Product unit). The PO page's
+summary strip reads "ASIN units ordered 15 · 45 individual"; the Products
+tab's Received (sheet col M) is gone, as from the POs list.
+
+**Kinds by surface:** the ASINs tab, the POs list, the ASINs page's stock
+and sales columns, SC shipments and the Dashboard's "ASIN units ordered"
+are ASIN units; the Products tab's Ordered / Canceled / Returned / Final,
+the New PO form's Qty, refund quantities and the quantities parsed from a
+supplier's shipping email are Product units (the email's count is shown
+with its Individual equivalent beside it); every Velocity quantity
+(`quantity`, `quantity_shipped`, `quantity_received`, `quantity_remaining`,
+the Upload to Velocity dialog, the Unmatched panel) is Individual units.
+**Entry rule and stored base** (D16 / D17 of the Supplier claims patch):
+anything Maria types becomes Individual units and every PO quantity is
+stored as Individual units — that migration runs in Supplier claims
+commit 1; this section describes what is stored and shown today.
+
 An in-app purchase-order database replacing the Google Sheets PO tracker —
 eventually. The frame (schema, 2026 importer, list + expanded view) is
 **purely additive**: the sheet remains the source of truth for every
@@ -6513,9 +6567,9 @@ revealing component line items.
 | 1 | ASIN | link |
 | 2 | Title | |
 | 3 | Amazon SKU | |
-| 4 | **Ordered** | `po_asins.qty` — the ASIN (sellable-pack) qty, Σ sheet Col N (P1) |
-| 5–9 | Cost/Unit · Total Cost · Prep · Sold As · Units/Pack | |
-| 10 | **Individual Units Ordered** | Ordered × Units/Pack (D4) |
+| 4 | **Ordered** (*ASIN units*) | `po_asins.qty` — the ASIN units, Σ sheet Col N (P1) |
+| 5–9 | Cost/Unit · Total Cost · Prep · Sold As · Individual units per ASIN unit ("Units/Pack" until 2026-11-09) | |
+| 10 | **Ordered** (*Individual units*; "Individual Units Ordered" until 2026-11-09) | ASIN units × Individual units per ASIN unit (D4) |
 | 11 | Canceled | derived from the lines (above) |
 | 12 | Returned | derived from the lines |
 | 13 | Shipped by Supplier | `qty_shipped_supplier` — hand-entered (supplier tracking numbers now arrive by email, §26; quantities from them are a later step) |
@@ -6527,7 +6581,9 @@ revealing component line items.
 | 19 | Received by Amazon | `qty_received_amazon` = Σ `po_asin_shipments.qty_received` (trigger) |
 | 20 | Shipment IDs | chip "N shipments · qty" → per-shipment list; manual add/remove allowed (source `manual`) |
 
-All quantities are ASIN quantities, `numeric(10,2)`; **NULL = not
+All quantities are ASIN units, `numeric(10,2)`, each header carrying the
+muted *ASIN units* line and each cell its Individual count in grey (the
+"Quantity vocabulary" above); **NULL = not
 tracked** (em-dash, never 0 by default); fractional values are legal
 (7 units of a 6-pack = 1.17) and show 2 dp only when non-integer. There is
 no derived "Received" column (D1): At Prep Center and At CQG Warehouse are

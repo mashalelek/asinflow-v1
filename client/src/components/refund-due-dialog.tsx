@@ -61,7 +61,7 @@ export function RefundProposalDialog({ po, lines, onClose, onSaved }: { po: PoHe
         <DialogHeader>
           <DialogTitle>Refund due for the canceled items?</DialogTitle>
           <DialogDescription>
-            {rows.some((r) => r.allocated) ? "Qty × price less the PO's discount share, plus its tax share — edit any amount before saving." : "Qty × price — the PO has no subtotal to allocate discount or tax from; edit the amount if needed."}
+            {rows.some((r) => r.allocated) ? "Product units × price less the PO's discount share, plus its tax share — edit any amount before saving." : "Product units × price — the PO has no subtotal to allocate discount or tax from; edit the amount if needed."}
             {" "}Skip saves no row; the cancel stays.
           </DialogDescription>
         </DialogHeader>
@@ -108,7 +108,7 @@ export function MarkReceivedDialog({ refund, onClose, onSaved }: { refund: DueRe
       <DialogContent dialogId="refund-mark-received" className="max-w-md" data-testid="refund-mark-received">
         <DialogHeader>
           <DialogTitle>Refund received</DialogTitle>
-          <DialogDescription>{refund?.product_name ?? "PO-level refund"}{refund?.qty != null ? ` · ${refund.qty} unit${Number(refund.qty) === 1 ? "" : "s"}` : ""} — expected {refund?.amount != null ? money(String(refund.amount)) : "—"}. Correct the amount to what arrived.</DialogDescription>
+          <DialogDescription>{refund?.product_name ?? "PO-level refund"}{refund?.qty != null ? ` · ${refund.qty} Product unit${Number(refund.qty) === 1 ? "" : "s"}` : ""} — expected {refund?.amount != null ? money(String(refund.amount)) : "—"}. Correct the amount to what arrived.</DialogDescription>
         </DialogHeader>
         <div className="grid grid-cols-2 gap-3 text-sm">
           <label className="space-y-1"><span className="text-xs text-muted-foreground">Received on</span><input type="date" value={form.refunded_at} onChange={(e) => setForm({ ...form, refunded_at: e.target.value })} className="h-8 w-full rounded-md border border-input bg-background px-2 text-xs" data-testid="input-refund-received-date" /></label>

@@ -18,7 +18,7 @@ This app runs on the following stack. This is settled. Do not suggest alternativ
 
 ### What exists and is working (do NOT rebuild or remove):
 - PostgreSQL persistence — all ASIN data, estimates, sales, inventory, tags, settings stored in DB
-- Schema defined in `docs/SCHEMA.md` — reference this for all table structures
+- Schema: `database/schema_baseline_2026-10-15.sql` plus `database/migrations/` — reference these for all table structures (`docs/SCHEMA.md` never existed in this repo)
 - Google Sheets API integration — the Orders (PO tracker) sheet is **intake only** for new POs (Sync POs inserts a PO not yet in AF and never updates one; 2026-10-18 — **one exception, 2026-10-29: Col AS prep cost**, applied to an existing PO when it differs, with ships_to following; SPEC §14). COGS, cost, prep and supplier come from AF's PO tables (`purchase_orders` / `po_asins` / `po_line_items`, via `server/po-af-source.ts`), not from the sheet
 - SP-API integrations: catalog data, pricing, inventory (`getInventorySummaries`), sales (flat file orders report), listings restrictions, suppression (FYP report)
 - Scheduled refresh passes: 00:00 ET with the daily block, hourly 04–23 ET (`server/scheduler/schedule.ts`, gated by `ENABLE_CRONS=true`; off locally)
@@ -59,7 +59,7 @@ This app runs on the following stack. This is settled. Do not suggest alternativ
 - `server/dashboard.ts` / `server/dashboard-range.ts` / `shared/dashboard.ts` — the Dashboard (SPEC §28): range sets, the Spend · Sales · Profit grid SQL, the chart series; `client/src/pages/dashboard.tsx`, `metric-grid.tsx`, `dashboard-chart.tsx`
 - `server/po-documents.ts` / `server/po-documents-routes.ts` / `server/drive-client.ts` / `server/pdf-render.ts` / `shared/po-documents.ts` — PO documents (SPEC §22 "PO documents", §26, component 29): order emails rendered to PDF in Maria's Drive (type by subject: `server/order-email-classify.ts`, the AI fallback for the rest), existing PDFs linked by name, the paperclip and the Documents tab (`client/src/components/po-documents.tsx`)
 - `server/po-defects.ts` / `shared/po-defect.ts` — Supplier defects (SPEC §22, migration 094): per line missing / damaged / wrong item, $ owed, resolved by refund (linked refund rows) / replacement / write-off; the "Missing / damaged from supplier" badge is derived from open ones
-- `docs/SCHEMA.md` — Database schema documentation
+- `database/schema_baseline_2026-10-15.sql` + `database/migrations/` — the database schema (there is no `docs/SCHEMA.md`)
 - `docs/ROADMAP.md` — Feature roadmap
 
 ### Dev commands:
@@ -506,6 +506,23 @@ item 5). `recomputePoCosts` skips such POs; the formula v2 in
 `shared/po-cost.ts` applies to POs saved by the form / capture only. Rows
 that look wrong go on a review list for Maria
 (`docs/po-cogs-review-2026-10-31.csv`); nothing changes without her say-so.
+
+## Quantity labels always name the kind (Maria 2026-11-09)
+
+Three quantity kinds, one name each (SPEC §22 "Quantity vocabulary",
+`shared/quantity-kinds.ts`): **ASIN units** (sellable units of the
+listing), **Product units** (items as sold on the supplier's site),
+**Individual units** (physical items; what Velocity counts). Ratios:
+**Individual units per Product unit** (`retailer_units_per_product`) and
+**Individual units per ASIN unit** (`units_per_pack`, "the pack size").
+Every quantity header, tooltip, caption, warning, export header and
+Dashboard row names its kind — as a small muted line ABOVE the header
+text (the Actual / Estimated pattern), never in parentheses, never below.
+Never write "retailer units", "component units", "quantity", "qty" alone
+or "units" alone in anything a user reads. A PO quantity shows its
+surface's kind as the main number with the Individual count in grey under
+it ("—" when the pack size is NULL, never 0). Column names in the
+database do not change; the words in the UI and the docs do.
 
 ## Line yield is two integers, never a decimal (migration 080, 2026-11-02)
 

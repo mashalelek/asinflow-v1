@@ -84,7 +84,7 @@ export function ColumnManager({ config, onChange, columns = ALL_COLUMNS, storage
                       data-testid={`checkbox-column-${col.id}`}
                     />
                     <label htmlFor={`col-${col.id}`} className="text-sm cursor-pointer flex-1 select-none">
-                      {col.qualifier ? `${col.qualifier} ${col.label}` : col.label}
+                      {col.qualifier ? `${col.qualifier} ${col.label}` : col.label}{col.kind ? <span className="ml-1 text-[10px] text-muted-foreground">{col.kind}</span> : null}
                     </label>
                   </div>
                 ))}

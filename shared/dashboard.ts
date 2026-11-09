@@ -28,14 +28,14 @@ export const PENDING_TOOLTIP = "after the Finances API patch";
 export const DASHBOARD_ROWS: readonly DashboardRowDef[] = [
   { key: "spend", group: "spend", label: "Spend", format: "money", primary: true, definition: "Σ per PO of order total − refunds (any status); a fully-canceled PO is $0; gift-card % and cashback never count" },
   { key: "refunds_due", group: "spend", label: "Refunds due", format: "money", definition: "Σ refund rows with status due over the column's POs, plus open supplier defects not yet on a refund row — click to open those POs" },
-  { key: "asin_units", group: "spend", label: "ASIN units ordered", format: "int", definition: "Σ ASIN qty − canceled ASIN units; a fully-canceled PO counts 0" },
-  { key: "individual_units", group: "spend", label: "Individual units ordered", format: "int", definition: "Σ ASIN units × units per pack; a row without a pack size contributes its ASIN units and is counted as missing" },
+  { key: "asin_units", group: "spend", label: "ASIN units ordered", format: "int", definition: "Σ ASIN units − canceled ASIN units; a fully-canceled PO counts 0" },
+  { key: "individual_units", group: "spend", label: "Individual units ordered", format: "int", definition: "Σ ASIN units × Individual units per ASIN unit; a row without a pack size contributes its ASIN units and is counted as missing" },
   { key: "avg_po_value", group: "spend", label: "Avg. PO value", format: "money", definition: "Spend ÷ PO count (fully-canceled POs not counted)" },
   { key: "sales", group: "sales", label: "Sales", format: "money", primary: true, definition: "Σ revenue from the orders report (Pacific day)" },
-  { key: "orders_units", group: "sales", label: "Orders / Units", format: "pair", definition: "Distinct Amazon order ids / Σ units sold (SellerBoard's Orders / Units)" },
-  { key: "refunds", group: "sales", label: "Refunds", format: "money", pending: true, definition: "Σ refund amount (units in small text) — Finances API" },
+  { key: "orders_units", group: "sales", label: "Orders / ASIN units", format: "pair", definition: "Distinct Amazon order ids / Σ ASIN units sold (SellerBoard's Orders / Units)" },
+  { key: "refunds", group: "sales", label: "Refunds", format: "money", pending: true, definition: "Σ refund amount (ASIN units in small text) — Finances API" },
   { key: "gross_profit", group: "profit", label: "Gross profit", format: "money", primary: true, pending: true, definition: "Sales − refunds − Amazon fees (referral, FBA, other) − promo / other Amazon charges" },
-  { key: "net_profit", group: "profit", label: "Net profit", format: "money", pending: true, definition: "Gross profit − COGS (actual COGS + prep for the units sold) − indirect expenses" },
+  { key: "net_profit", group: "profit", label: "Net profit", format: "money", pending: true, definition: "Gross profit − COGS (actual COGS + prep for the ASIN units sold) − indirect expenses" },
   { key: "est_payout", group: "profit", label: "Est. payout", format: "money", pending: true, definition: "Sales − refunds − Amazon fees (what Amazon pays out, before COGS)" },
 ];
 

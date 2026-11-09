@@ -14,6 +14,7 @@ import { ChevronRight, ChevronDown, AlertTriangle, Plus, X } from "lucide-react"
 import { Tooltip, TooltipTrigger, TooltipContent } from "@/components/ui/tooltip";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import { fmtQty, individualUnits, PO_ASIN_DISPLAY_COLUMNS, VELOCITY_QTY_TITLE } from "@/lib/po-qty";
+import { INDIV_SHORT, PER_ASIN_UNIT, QTY_KIND, individualFrom } from "@shared/quantity-kinds";
 import { InlineEdit, poApi, ReassignShipment, shipmentBlockText } from "@/components/po-edit";
 import { InlineNoteCell, NoteIcon } from "@/components/inline-note";
 import { DEFECT_ACTION_ITEM, defectSummary } from "@shared/po-defect";
@@ -97,12 +98,14 @@ export interface PoAsinRowData {
 
 // Widths (px) sized to what each column holds; header labels wrap to two or three lines inside them
 // (2026-11-01: labels overlapped their neighbours). Product takes what is left (fixed layout, no width).
-// 2026-11-05 (Maria: the right-hand columns clipped at 1440, 160 rem): 17 display columns, 1,028 px fixed
-// + lead / note + Product (min 84) = 1,118 px — the nested table fits the POs table at 1024 (1,118 px box) and fills it at 1280 / 1440.
+// 2026-11-05 (Maria: the right-hand columns clipped at 1440, 160 rem): 17 display columns, fixed px + lead / note + Product (min 84).
+// 2026-11-09 (quantity names): each quantity header carries the muted "ASIN units" line, so a quantity column is at least 56 px
+// (the kind line on one line) and wide enough for its label in two lines, never three; 1,046 px fixed + 60 + Product → 126 px for
+// Product at 1280 (1,232 px box), 286 px at 1440.
 const COL_WIDTHS: Record<Exclude<(typeof PO_ASIN_DISPLAY_COLUMNS)[number]["key"], "product">, number> = {
-  ordered: 60, cost_per_unit: 64, total_cost: 78, prep: 48, sold_as: 88,
-  canceled: 52, returned: 52, shipped_supplier: 56, received_velocity: 56, at_prep: 48, at_warehouse: 62, lost_damaged_us: 60,
-  shipped_fba: 48, received_amazon: 56, shipments: 68, action_items: 78,
+  ordered: 60, cost_per_unit: 60, total_cost: 72, prep: 44, sold_as: 80,
+  canceled: 56, returned: 56, shipped_supplier: 66, received_velocity: 70, at_prep: 56, at_warehouse: 68, lost_damaged_us: 92,
+  shipped_fba: 56, received_amazon: 70, shipments: 64, action_items: 76,
 };
 const LEAD_WIDTH = 32, NOTE_WIDTH = 28;
 /** The fixed widths plus Product's minimum (84 px: the ASIN in full) — below it the table scrolls inside its own box, never the page. */
@@ -110,8 +113,8 @@ export const PO_ASIN_TABLE_MIN_WIDTH = `${Object.values(COL_WIDTHS).reduce((a, b
 /** Product, Ordered, Sold As show two model columns each (PO_ASIN_DISPLAY_COLUMNS). */
 const MERGED_TITLES = {
   product: "ASIN · Amazon SKU, then the title",
-  ordered: "Ordered (ASIN units); below it, Individual Units Ordered = Ordered × Units/Pack",
-  sold_as: "Sold As; below it, Units/Pack",
+  ordered: "Ordered in ASIN units; under it, the Individual units = ASIN units × Individual units per ASIN unit",
+  sold_as: "Sold as; under it, Individual units per ASIN unit (the pack size)",
 } as const;
 /** Header tooltips (Maria 2026-11-02): the two Velocity quantities explain each other. */
 const COL_TITLES: Partial<Record<(typeof PO_ASIN_DISPLAY_COLUMNS)[number]["key"], string>> = { ...MERGED_TITLES, received_velocity: VELOCITY_QTY_TITLE, at_prep: VELOCITY_QTY_TITLE };
@@ -122,6 +125,21 @@ function Money({ v }: { v: string | null | undefined }) {
   const text = `$${n.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
   return <span className={`font-mono ${n === 0 ? "text-muted-foreground/50" : ""}`}>{text}</span>;
 }
+/**
+ * The grey Individual-units line under a quantity (SPEC §22 "Quantity vocabulary",
+ * 2026-11-09): stored × Individual units per ASIN unit; "—" when the pack size is
+ * NULL, never 0; nothing when the quantity itself is not tracked.
+ */
+export function IndivLine({ v, perUnit, testId }: { v: string | number | null | undefined; perUnit: number | string | null | undefined; testId?: string }) {
+  if (v == null || v === "") return null;
+  const n = individualFrom(v, perUnit);
+  return (
+    <div className="whitespace-nowrap text-[11px] text-muted-foreground" title={`${QTY_KIND.individual} = ${QTY_KIND.asin} × ${PER_ASIN_UNIT}`} data-testid={testId}>
+      {n == null ? <span className="text-muted-foreground/50" data-testid={testId ? `${testId}-unknown` : undefined}>—</span> : fmtQty(n)} {INDIV_SHORT}
+    </div>
+  );
+}
+
 /** A quantity cell: NULL → muted em-dash; 0 muted; fractional 2 dp. */
 export function QtyCell({ v }: { v: string | number | null | undefined }) {
   const t = fmtQty(v);
@@ -146,7 +164,7 @@ export const EXTRA_UNITS_SHIPPED = "Extra units shipped";
 export const PACK_SIZE_MISMATCH = "Pack size mismatch";
 /** Derived (2026-10-29; named so 2026-11-07, was "Receiving mismatch"): Received by Amazon ≠ Shipped FBA. Information only. */
 export const FBA_RECEIVING_MISMATCH = "FBA receiving mismatch";
-export const FBA_RECEIVING_MISMATCH_MEANING = "Received by Amazon ≠ Shipped FBA (information only; never blocks auto-close)";
+export const FBA_RECEIVING_MISMATCH_MEANING = "Received by Amazon ≠ Shipped FBA, in ASIN units (information only; never blocks auto-close)";
 export function actionChipClass(item: string): string {
   const t = item.toLowerCase();
   // Red so it stands out (Maria 2026-10-29).
@@ -279,11 +297,11 @@ export function ActionItemsEditor({ items, url, onSaved, testId, titles, lines, 
 
 /** Hover for "Extra units shipped": shipped vs ordered, then the note. */
 export function extraUnitsTitle(a: Pick<PoAsinRowData, "qty" | "qty_shipped_fba" | "extra_units_note">): string {
-  return `Shipped FBA ${fmtQty(a.qty_shipped_fba ?? 0)} of ${fmtQty(a.qty)} ordered${a.extra_units_note ? ` — ${a.extra_units_note}` : ""}`;
+  return `Shipped FBA ${fmtQty(a.qty_shipped_fba ?? 0)} of ${fmtQty(a.qty)} ordered, in ASIN units${a.extra_units_note ? ` — ${a.extra_units_note}` : ""}`;
 }
 /** Hover for "FBA receiving mismatch" on an ASIN row: the two numbers. */
 export const fbaReceivingTitle = (a: Pick<PoAsinRowData, "qty_shipped_fba" | "qty_received_amazon">): string =>
-  `Received by Amazon ${fmtQty(a.qty_received_amazon ?? 0)} ≠ Shipped FBA ${fmtQty(a.qty_shipped_fba ?? 0)} (information only; never blocks auto-close)`;
+  `Received by Amazon ${fmtQty(a.qty_received_amazon ?? 0)} ≠ Shipped FBA ${fmtQty(a.qty_shipped_fba ?? 0)}, in ASIN units (information only; never blocks auto-close)`;
 const extraTitles = (a: PoAsinRowData): Record<string, string> => ({ [EXTRA_UNITS_SHIPPED]: extraUnitsTitle(a), [FBA_RECEIVING_MISMATCH]: fbaReceivingTitle(a), ...(a.pack_mismatch_note ? { [PACK_SIZE_MISMATCH]: a.pack_mismatch_note } : {}) });
 /** A PO's hover titles plus "Pack size mismatch" from its rows' yield notes (each row's lines, one per row). */
 export function poActionTitles(titles: Readonly<Record<string, string>> | undefined, asins: readonly { pack_mismatch_note?: string }[] | undefined): Record<string, string> {
@@ -309,7 +327,7 @@ function ClearExtraUnits({ a, onChanged }: { a: PoAsinRowData; onChanged?: () =>
       </PopoverTrigger>
       <PopoverContent className="w-80 p-2 space-y-1 text-xs" align="end" onClick={(e) => e.stopPropagation()}>
         <div>{extraUnitsTitle(a)}</div>
-        <textarea value={note} onChange={(e) => setNote(e.target.value)} placeholder="Why the extra units are OK (required)" rows={3}
+        <textarea value={note} onChange={(e) => setNote(e.target.value)} placeholder="Why the extra ASIN units shipped are OK (required)" rows={3}
           className="w-full rounded border border-input bg-background p-1 text-xs" data-testid={`input-clear-extra-units-${a.asin}`} />
         <button type="button" disabled={!note.trim()} onClick={() => void save()} className="rounded bg-primary px-2 py-1 text-primary-foreground disabled:opacity-50" data-testid={`button-confirm-clear-extra-units-${a.asin}`}>Clear with note</button>
         {err && <div className="text-destructive">{err}</div>}
@@ -327,7 +345,7 @@ function MarkCanceled({ a, onChanged, po }: { a: PoAsinRowData; onChanged?: () =
   if (blocked) return <span className="ml-1 text-[10px] text-muted-foreground/40 cursor-not-allowed" title={blocked} data-testid={`button-cancel-asin-${a.asin}-blocked`}>cancel</span>;
   const go = async (e: React.MouseEvent) => {
     e.stopPropagation(); setErr(null);
-    if (!window.confirm(`Mark ${a.asin} canceled? Every product line of this ASIN gets Canceled = Ordered.`)) return;
+    if (!window.confirm(`Mark ${a.asin} canceled? Every product line of this ASIN gets Canceled = Ordered (Product units).`)) return;
     try {
       await patchJson(`/api/pos/asin-rows/${a.id}/cancel`, "POST");
       // The lines as they were before the cancel: the newly canceled qty of each.
@@ -404,8 +422,8 @@ function ShipmentChips({ rowId, asin, shipments, editable, onChanged }: { rowId:
   const unmatched = shipments.some((s) => s.source === "velocity" && s.sc_match !== "matched");
   // "+ add" (2026-11-05): the column is a narrow fixed one; the chip truncates with its full text on hover.
   const chipText = shipments.length === 0 ? "+ add"
-    : shipments.length === 1 ? `${shipmentLabel(shipments[0])} · ${fmtQty(total)}`
-    : `${shipments.length} shipments · ${fmtQty(total)}`;
+    : shipments.length === 1 ? `${shipmentLabel(shipments[0])} · ${fmtQty(total)} ASIN u.`
+    : `${shipments.length} shipments · ${fmtQty(total)} ASIN u.`;
   // Group by Velocity ship date (D1), newest first.
   const groups = new Map<string, PoAsinShipment[]>();
   for (const s of [...shipments].sort((a, b) => String(b.shipped_at ?? "").localeCompare(String(a.shipped_at ?? "")))) { const k = s.shipped_at ?? "no date"; if (!groups.has(k)) groups.set(k, []); groups.get(k)!.push(s); }
@@ -436,8 +454,8 @@ function ShipmentChips({ rowId, asin, shipments, editable, onChanged }: { rowId:
                     ) : (
                       <span className="font-mono break-all">{s.fba_shipment_ids.join(", ")}</span>
                     )}
-                    <div className="text-muted-foreground" title={received == null ? "not yet matched to Seller Central" : `received ${fmtQty(received)} of ${fmtQty(shipped)}`}>
-                      {fmtQty(shipped)} shipped{received == null ? "" : ` · received ${fmtQty(received)} of ${fmtQty(shipped)}`} · {s.source}{s.assigned_by === "manual" ? " · assigned by hand" : ""}
+                    <div className="text-muted-foreground" title={received == null ? "not yet matched to Seller Central" : `received ${fmtQty(received)} of ${fmtQty(shipped)} ASIN units`}>
+                      {fmtQty(shipped)} ASIN u. shipped{received == null ? "" : ` · received ${fmtQty(received)} of ${fmtQty(shipped)}`} · {s.source}{s.assigned_by === "manual" ? " · assigned by hand" : ""}
                     </div>
                     {editable && <ReassignShipment shipment={s} asin={asin} currentRowId={rowId} onDone={() => onChanged?.()} />}
                   </div>
@@ -450,7 +468,7 @@ function ShipmentChips({ rowId, asin, shipments, editable, onChanged }: { rowId:
         {editable && (
           <div className="flex items-center gap-1 pt-1 border-t border-border/50">
             <input value={fba} onChange={(e) => setFba(e.target.value)} placeholder="FBA ids, comma-separated" className="h-6 flex-1 rounded border border-input bg-background px-1 font-mono text-xs" data-testid={`input-shipment-fba-${rowId}`} />
-            <input value={qty} onChange={(e) => setQty(e.target.value)} placeholder="qty" className="h-6 w-14 rounded border border-input bg-background px-1 text-right text-xs" data-testid={`input-shipment-qty-${rowId}`} />
+            <input value={qty} onChange={(e) => setQty(e.target.value)} placeholder="ASIN u." title="ASIN units" className="h-6 w-14 rounded border border-input bg-background px-1 text-right text-xs" data-testid={`input-shipment-qty-${rowId}`} />
             <button onClick={add} className="text-muted-foreground hover:text-foreground" title="Add shipment (manual)" data-testid={`button-add-shipment-${rowId}`}><Plus className="h-3.5 w-3.5" /></button>
           </div>
         )}
@@ -478,7 +496,10 @@ export function PoAsinHeaderRow({ sub = false }: { sub?: boolean }) {
     <tr className={sub ? "bg-muted/40" : "table-header-stone"} data-testid="po-asin-header">
       <th className={base}></th>
       {PO_ASIN_DISPLAY_COLUMNS.map((c) => (
-        <th key={c.key} className={`${base} ${c.align === "right" ? "text-right" : "text-left"}`} title={COL_TITLES[c.key]}>{c.label}</th>
+        <th key={c.key} className={`${base} ${c.align === "right" ? "text-right" : "text-left"}`} title={COL_TITLES[c.key]}>
+          {"kind" in c && c.kind ? <span className="block text-[9px] font-normal opacity-60" data-testid={`po-asin-kind-${c.key}`}>{c.kind}</span> : null}
+          {c.label}
+        </th>
       ))}
       <th className={base}></th>
     </tr>
@@ -531,7 +552,7 @@ function PackEdit({ a, onChanged }: { a: PoAsinRowData; onChanged?: () => void }
           {sug ? <>title says {sug.text} · <button type="button" className="underline" onClick={() => void save(sug.sold_as, sug.sold_as === "individual" ? undefined : sug.units_per_pack)} data-testid={`button-pack-confirm-${a.id}`}>confirm</button></> : "pack size missing"}
         </div>
       ) : (
-        <div className="flex items-center gap-0.5 text-[11px] text-muted-foreground" title="Units/Pack"><span>×</span>{a.sold_as === "multi-pack" ? <InlineEdit value={a.units_per_pack} onSave={async (v) => { await poApi(`/api/pos/asin-rows/${a.id}`, "PATCH", { units_per_pack: v }); onChanged?.(); }} width="w-12" testId={`units_per_pack-${a.id}`}>{a.units_per_pack}</InlineEdit> : a.units_per_pack}</div>
+        <div className="flex items-center gap-0.5 text-[11px] text-muted-foreground" title={PER_ASIN_UNIT}><span>×</span>{a.sold_as === "multi-pack" ? <InlineEdit value={a.units_per_pack} onSave={async (v) => { await poApi(`/api/pos/asin-rows/${a.id}`, "PATCH", { units_per_pack: v }); onChanged?.(); }} width="w-12" testId={`units_per_pack-${a.id}`}>{a.units_per_pack}</InlineEdit> : a.units_per_pack}</div>
       )}
       {err && <div className="text-[11px] text-destructive" data-testid={`pack-error-${a.id}`}>{err}</div>}
     </div>
@@ -576,7 +597,7 @@ export function PoAsinRow({ a, indent = false, editable = false, onChanged, po }
         </td>
         <td className="px-1.5 py-1.5 text-right">
           <div><QtyCell v={a.qty} /></div>
-          <div className="whitespace-nowrap text-[11px] text-muted-foreground" title="Individual Units Ordered = Ordered × Units/Pack">{a.units_per_pack == null ? <span data-testid={`indiv-unknown-${a.id}`}>?</span> : <QtyCell v={individualUnits(Number(a.qty), a.units_per_pack)} />} indiv.</div>
+          <div className="whitespace-nowrap text-[11px] text-muted-foreground" title={`${QTY_KIND.individual} = ${QTY_KIND.asin} × ${PER_ASIN_UNIT}`}>{a.units_per_pack == null ? <span className="text-muted-foreground/50" data-testid={`indiv-unknown-${a.id}`}>—</span> : <QtyCell v={individualUnits(Number(a.qty), a.units_per_pack)} />} {INDIV_SHORT}</div>
         </td>
         <td className="px-1.5 py-1.5 text-right text-xs">{editable ? <InlineEdit money value={a.cost_per_unit} onSave={saveAsin("cost_per_unit")} align="right" width="w-12" testId={`cost_per_unit-${a.id}`}><Money v={a.cost_per_unit} /></InlineEdit> : <Money v={a.cost_per_unit} />}</td>
         <td className="px-1.5 py-1.5 text-right text-xs"><Money v={a.total_cost} /></td>
@@ -584,18 +605,19 @@ export function PoAsinRow({ a, indent = false, editable = false, onChanged, po }
         <td className="px-1.5 py-1.5">
           {editable ? <PackEdit a={a} onChanged={onChanged} /> : <>
             <div className={a.sold_as == null ? "text-amber-700 dark:text-amber-400" : ""}>{a.sold_as ?? "—"}</div>
-            <div className="text-[11px] text-muted-foreground" title="Units/Pack">×{a.units_per_pack ?? "?"}</div>
+            <div className="text-[11px] text-muted-foreground" title={PER_ASIN_UNIT}>×{a.units_per_pack ?? "?"}</div>
           </>}
         </td>
-        <td className="px-1.5 py-1.5 text-right"><div><QtyCell v={a.qty_canceled_asin} /></div>{editable && (a.lines ?? []).length > 0 && <MarkCanceled a={a} onChanged={onChanged} po={po} />}</td>
-        <td className="px-1.5 py-1.5 text-right"><QtyCell v={a.qty_returned_asin} /></td>
-        <td className="px-1.5 py-1.5 text-right">{editable ? <EditableQty rowId={a.id} col="qty_shipped_supplier" v={a.qty_shipped_supplier} onChanged={onChanged} /> : <QtyCell v={a.qty_shipped_supplier} />}</td>
-        <td className="px-1.5 py-1.5 text-right" title={VELOCITY_QTY_TITLE}><QtyCell v={a.received_velocity} /></td>
-        <td className="px-1.5 py-1.5 text-right" title={VELOCITY_QTY_TITLE}><QtyCell v={a.qty_at_prep} /></td>
-        <td className="px-1.5 py-1.5 text-right">{editable ? <EditableQty rowId={a.id} col="qty_at_warehouse" v={a.qty_at_warehouse} onChanged={onChanged} /> : <QtyCell v={a.qty_at_warehouse} />}</td>
-        <td className="px-1.5 py-1.5 text-right">{editable ? <EditableQty rowId={a.id} col="qty_lost_damaged_us" v={a.qty_lost_damaged_us} onChanged={onChanged} /> : <QtyCell v={a.qty_lost_damaged_us} />}</td>
-        <td className="px-1.5 py-1.5 text-right"><QtyCell v={a.qty_shipped_fba} /></td>
-        <td className="px-1.5 py-1.5 text-right"><QtyCell v={a.qty_received_amazon} /></td>
+        {/* Every quantity: the ASIN units as the main number, the Individual units in grey under it (2026-11-09). */}
+        <td className="px-1.5 py-1.5 text-right"><div><QtyCell v={a.qty_canceled_asin} /></div><IndivLine v={a.qty_canceled_asin} perUnit={a.units_per_pack} />{editable && (a.lines ?? []).length > 0 && <MarkCanceled a={a} onChanged={onChanged} po={po} />}</td>
+        <td className="px-1.5 py-1.5 text-right"><QtyCell v={a.qty_returned_asin} /><IndivLine v={a.qty_returned_asin} perUnit={a.units_per_pack} /></td>
+        <td className="px-1.5 py-1.5 text-right">{editable ? <EditableQty rowId={a.id} col="qty_shipped_supplier" v={a.qty_shipped_supplier} onChanged={onChanged} /> : <QtyCell v={a.qty_shipped_supplier} />}<IndivLine v={a.qty_shipped_supplier} perUnit={a.units_per_pack} /></td>
+        <td className="px-1.5 py-1.5 text-right" title={VELOCITY_QTY_TITLE}><QtyCell v={a.received_velocity} /><IndivLine v={a.received_velocity} perUnit={a.units_per_pack} testId={`indiv-received-velocity-${a.id}`} /></td>
+        <td className="px-1.5 py-1.5 text-right" title={VELOCITY_QTY_TITLE}><QtyCell v={a.qty_at_prep} /><IndivLine v={a.qty_at_prep} perUnit={a.units_per_pack} /></td>
+        <td className="px-1.5 py-1.5 text-right">{editable ? <EditableQty rowId={a.id} col="qty_at_warehouse" v={a.qty_at_warehouse} onChanged={onChanged} /> : <QtyCell v={a.qty_at_warehouse} />}<IndivLine v={a.qty_at_warehouse} perUnit={a.units_per_pack} /></td>
+        <td className="px-1.5 py-1.5 text-right">{editable ? <EditableQty rowId={a.id} col="qty_lost_damaged_us" v={a.qty_lost_damaged_us} onChanged={onChanged} /> : <QtyCell v={a.qty_lost_damaged_us} />}<IndivLine v={a.qty_lost_damaged_us} perUnit={a.units_per_pack} /></td>
+        <td className="px-1.5 py-1.5 text-right"><QtyCell v={a.qty_shipped_fba} /><IndivLine v={a.qty_shipped_fba} perUnit={a.units_per_pack} /></td>
+        <td className="px-1.5 py-1.5 text-right"><QtyCell v={a.qty_received_amazon} /><IndivLine v={a.qty_received_amazon} perUnit={a.units_per_pack} /></td>
         <td className="px-1.5 py-1.5"><ShipmentChips rowId={a.id} asin={a.asin} shipments={a.shipments ?? []} editable={editable} onChanged={onChanged} /></td>
         <td className="px-1.5 py-1.5">{editable && lines.length > 0
           ? <ActionItemsEditor items={a.action_items} titles={extraTitles(a)} url={`/api/pos/asin-rows/${a.id}/action-items`} onSaved={onChanged} testId={`button-action-items-asin-${a.asin}`} lineCount={lines.length} defects={a.defects_open} />

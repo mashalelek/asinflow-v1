@@ -65,6 +65,6 @@ describe("line layout", () => {
     expect(isFractional(7.5)).toBe(true);
     expect(isFractional(8)).toBe(false);
     expect(isFractional(0)).toBe(false);
-    expect(FRACTIONAL_UNITS_NOTE).toBe("check qty or pack size");
+    expect(FRACTIONAL_UNITS_NOTE).toBe("check the Product units or the pack size");
   });
 });

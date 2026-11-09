@@ -33,8 +33,8 @@ export function packShown(p: AsinPack | undefined): { soldAs: string; units: num
 /** Pure: the toast text — rows filled, and each row left because the pack does not reproduce its ASIN qty (strict, 2026-11-06). */
 export function gapsNote(g: Gaps): string {
   const filled = g.openRows + g.closedRows === 0 ? "" : `filled ${g.openRows} open and ${g.closedRows} closed PO row${g.openRows + g.closedRows === 1 ? "" : "s"}`;
-  const left = (g.skipped ?? []).map((s) => `${s.asin ? `${s.asin} ` : ""}${s.order_id ?? "a PO"}${s.closed ? "" : " (open)"}: ASIN qty ${s.qty}, this pack gives ${s.at_pack ?? "no whole number"}`);
-  const leftTxt = left.length ? `not written — the pack doesn't reproduce the stored ASIN qty: ${left.slice(0, 5).join("; ")}${left.length > 5 ? ` +${left.length - 5} more` : ""}` : "";
+  const left = (g.skipped ?? []).map((s) => `${s.asin ? `${s.asin} ` : ""}${s.order_id ?? "a PO"}${s.closed ? "" : " (open)"}: ASIN units ${s.qty}, this pack gives ${s.at_pack ?? "no whole number"}`);
+  const leftTxt = left.length ? `not written — the pack doesn't reproduce the stored ASIN units: ${left.slice(0, 5).join("; ")}${left.length > 5 ? ` +${left.length - 5} more` : ""}` : "";
   return [filled, leftTxt].filter(Boolean).join(" · ");
 }
 
@@ -85,13 +85,13 @@ export function PackCell({ result, col, onResultUpdate }: { result: AsinResult; 
       )}
       <Popover open={open} onOpenChange={(v) => { setOpen(v); if (v) { setSoldAs(shown?.soldAs ?? "individual"); setUnits(String(shown?.units ?? 1)); setError(null); } }}>
         <PopoverTrigger asChild>
-          <button className="shrink-0 p-0 text-muted-foreground/40 hover:text-muted-foreground" onClick={(e) => e.stopPropagation()} title="Set pack size" data-testid={`pack-edit-${col}-${result.asin}`}>
+          <button className="shrink-0 p-0 text-muted-foreground/40 hover:text-muted-foreground" onClick={(e) => e.stopPropagation()} title="Set the pack size — Individual units per ASIN unit" data-testid={`pack-edit-${col}-${result.asin}`}>
             <Pencil className="h-2.5 w-2.5" />
           </button>
         </PopoverTrigger>
         <PopoverContent className="w-60 p-3" align="start" sideOffset={4} onClick={(e) => e.stopPropagation()}>
           <div className="space-y-2">
-            <p className="text-xs text-muted-foreground">Pack size = retail packages in one ASIN unit, not the items inside a package.</p>
+            <p className="text-xs text-muted-foreground">Individual units per ASIN unit (the pack size) = retail packages in one ASIN unit; an Individual unit is one retail package, not the items inside it.</p>
             <div className="flex items-center gap-2">
               <select value={soldAs} onChange={(e) => { setSoldAs(e.target.value); if (e.target.value === "individual") setUnits("1"); else if (units === "1") setUnits("2"); }}
                 className="h-8 w-28 rounded border border-border bg-background px-1 text-sm" data-testid={`pack-select-${result.asin}`}>

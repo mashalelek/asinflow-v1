@@ -78,7 +78,7 @@ describe("§4 candidate rule", () => {
   });
   it("none → a nearest-miss sentence (units, date, supplier, ASIN)", async () => {
     const full = row({ id: "f", asin: "B0G674X135", order_id: "F", supplier: "x.com", order_date: "2026-05-15", qty: 3 });
-    expect((await harness([full], [{ line: vline({ order_number: "INSH-1" }) }]).run(true)).unmatched[0].miss).toBe("PO F (x.com) has 3 units left, the line needs 5");
+    expect((await harness([full], [{ line: vline({ order_number: "INSH-1" }) }]).run(true)).unmatched[0].miss).toBe("PO F (x.com) has 3 Individual units left, the line needs 5");
     const old = row({ id: "o", asin: "B0G674X135", order_id: "O", supplier: "x.com", order_date: "2026-01-01" });
     expect((await harness([old], [{ line: vline({ order_number: "INSH-1" }) }]).run(true)).unmatched[0].miss).toBe("nearest PO O (x.com) is 134 days before the Velocity order");
     expect((await harness([old], [{ line: vline({ order_number: "INSH-1", retailer: "Carters" }) }]).run(true)).unmatched[0].miss).toMatch(/^retailer "Carters" is not mapped/);
@@ -91,7 +91,7 @@ describe("§4 candidate rule", () => {
       { line: vline({ order_id: "vo-insh", order_number: "INSH-1" }) },
     ]).run(true);
     expect(r.counts).toMatchObject({ linesMatched: 1, linesMatchedCandidate: 0, linesPoNotFound: 1 });
-    expect(r.unmatched[0].miss).toMatch(/has 0 units left, the line needs 5/);
+    expect(r.unmatched[0].miss).toMatch(/has 0 Individual units left, the line needs 5/);
   });
   it("one Velocity order split over two shipments: one decision, units summed (15 + 3 = 18 fits an 18, not a 15)", async () => {
     const af = [
@@ -126,7 +126,7 @@ describe("Col P on a line WITH an Order # AF lacks must fit the units (dry run 2
     const r = await harness([full], lines, { colP: [colPRow("c9", "CAR118908837", "B0DZ33XH15", "FBA1")], fbaIds: [{ id: SID, sc_shipment_ids: ["FBA1"] }] }).run(true);
     expect(r.counts).toMatchObject({ linesMatched: 1, linesMatchedColP: 0, linesPoNotFound: 1 });
     expect(r.unmatched[0].candidates?.map((c) => [c.order_id, c.source])).toEqual([["CAR118908837", "col_p"]]);
-    expect(r.unmatched[0].miss).toBe("Col P names PO CAR118908837 (carters.com), but it has 0 units left, the line needs 5");
+    expect(r.unmatched[0].miss).toBe("Col P names PO CAR118908837 (carters.com), but it has 0 Individual units left, the line needs 5");
   });
   it("a non-fitting Col P hit is a hint, not a verdict: the line still reaches base and §4 (prod shape 2026-10-29)", async () => {
     const own = row({ id: "c5", asin: "B0DZ33XH15", order_id: "CAR118805142", supplier: "carters.com", order_date: "2026-08-17", qty: 5 });
@@ -169,7 +169,7 @@ describe("§3 exact rules past the legacy keys", () => {
     const shipped = { order_id: "vo-orig", order_number: "CAR118805142", retailer: "carters.com", asin: "B0DZ33XH15", date: "08/17/2026", quantity_shipped: 5 };
     const r = await harness([base], [{ line: vline(shipped) }, { line: vline({ order_id: "vo-1", order_number: "CAR118805142_1", retailer: "carters.com", asin: "B0DZ33XH15", date: "09/08/2026" }) }]).run(true);
     expect(r.counts).toMatchObject({ linesMatched: 1, linesMatchedBaseId: 0, linesPoNotFound: 1 });
-    expect(r.unmatched[0].miss).toBe("base PO CAR118805142 (carters.com) has 0 units left, the line needs 5 — the CAR118805142_1 PO may be missing from AF");
+    expect(r.unmatched[0].miss).toBe("base PO CAR118805142 (carters.com) has 0 Individual units left, the line needs 5 — the CAR118805142_1 PO may be missing from AF");
     const room = await harness([{ ...base, qty: 10 }], [{ line: vline({ order_id: "vo-1", order_number: "CAR118805142_1", retailer: "carters.com", asin: "B0DZ33XH15", date: "09/08/2026" }) }]).run(true);
     expect(room.counts).toMatchObject({ linesMatched: 1, linesMatchedBaseId: 1 });
   });

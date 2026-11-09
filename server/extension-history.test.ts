@@ -148,9 +148,9 @@ describe("the panels' history lines (core/history-view.js)", () => {
     const lines = historyLines(hist, true, 2026);
     expect(lines.map((l) => `${l.k}: ${l.v}`)).toEqual([
       "Last COGS: $9.00 · Oct 23, 2026 · PO W9 · walmart.com",
-      "365 days: avg $8.50 · 2 POs · 16 units",
+      "365 days: avg $8.50 · 2 POs · 16 ASIN units",
       "Pack: this listing: 12-pack → 4 ASIN units (ASIN is a 3-pack)",
-      "Oct 23: 6-pack × 2 → 4 units · $9.00 · walmart.com",
+      "Oct 23: 6-pack × 2 → 4 ASIN units · $9.00 · walmart.com",
     ]);
     expect(historyLines(hist, false, 2026)[0].v).toBe("$9.00 · Oct 23, 2026 · PO W9");
     expect(historyLines(hist, false, 2027)[3].k).toBe("Oct 23 2026");

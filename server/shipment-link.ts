@@ -53,7 +53,7 @@ export async function linkUnmatchedLine(query: QueryLike, unmatchedId: string, p
   if (after > ordered + 1e-9) {
     if (!opts.confirmOvershoot) {
       return { status: 409, body: { code: "overshoot", ordered, shipped_before: before, shipped_after: after,
-        message: `Linking puts Shipped FBA at ${after} of ${ordered} ordered — confirm and add a note` } };
+        message: `Linking puts Shipped FBA at ${after} of ${ordered} ordered ASIN units — confirm and add a note` } };
     }
     if (!note) return { status: 400, body: { message: "a note is required to link past Ordered" } };
   }

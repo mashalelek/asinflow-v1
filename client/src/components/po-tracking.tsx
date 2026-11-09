@@ -20,6 +20,11 @@ export interface TrackingRow {
   qty?: string | number | null; shared_with?: string[] | null;
 }
 
+/** Pure (2026-11-09): "3 Product units of this PO · 36 individual" — the email's quantity is Product units; "—" when the PO's Product pack is not one value. */
+export function trackingQtyText(qty: number, perProductUnit: number | null | undefined): string {
+  const indiv = perProductUnit != null && perProductUnit > 0 ? String(Math.round(qty * perProductUnit * 100) / 100) : "—";
+  return `${qty} Product unit${qty === 1 ? "" : "s"} of this PO · ${indiv} individual`;
+}
 /** Pure: the carrier's public tracking page for a number (null for OTHER). */
 export function carrierTrackingUrl(carrier: string, n: string): string | null {
   const e = encodeURIComponent(n);
@@ -87,7 +92,7 @@ function MoveToPo({ row, onMoved }: { row: TrackingRow; onMoved: () => void }) {
   );
 }
 
-export function PoTrackingTab({ poId, onChanged }: { poId: string; onChanged?: () => void }) {
+export function PoTrackingTab({ poId, onChanged, perProductUnit }: { poId: string; onChanged?: () => void; /** The PO's one Individual units per Product unit (null when the lines disagree) — the Individual equivalent of an email's quantity. */ perProductUnit?: number | null }) {
   const [rows, setRows] = useState<TrackingRow[] | null>(null);
   const [homeReview, setHomeReview] = useState<{ reason: string; orders: string } | null>(null);
   const [err, setErr] = useState<string | null>(null);
@@ -133,7 +138,7 @@ export function PoTrackingTab({ poId, onChanged }: { poId: string; onChanged?: (
                   <td className="pr-2 font-mono">
                     {url ? <a className="text-primary hover:underline inline-flex items-center gap-0.5" href={url} target="_blank" rel="noreferrer">{r.tracking_number}<ExternalLink className="h-3 w-3" /></a> : r.tracking_number}
                     {r.reassigned_from_order_id && <div className="text-[10px] text-muted-foreground">moved from {r.reassigned_from_order_id}</div>}
-                    {(r.qty != null || r.shared_with?.length) ? <div className="text-[10px] text-muted-foreground">{r.qty != null ? `${Number(r.qty)} unit${Number(r.qty) === 1 ? "" : "s"} of this PO` : ""}{r.qty != null && r.shared_with?.length ? " · " : ""}{r.shared_with?.length ? `also on ${r.shared_with.join(", ")}` : ""}</div> : null}
+                    {(r.qty != null || r.shared_with?.length) ? <div className="text-[10px] text-muted-foreground">{r.qty != null ? <span title="Product units, as the supplier's email states them · the Individual equivalent beside it">{trackingQtyText(Number(r.qty), perProductUnit)}</span> : ""}{r.qty != null && r.shared_with?.length ? " · " : ""}{r.shared_with?.length ? `also on ${r.shared_with.join(", ")}` : ""}</div> : null}
                     {r.items_json?.length ? <div className="text-[10px] text-muted-foreground">{r.items_json.map((i) => `${i.qty} × ${i.name}`).join("; ")}</div> : null}
                   </td>
                   <td className="pr-2 font-mono">{r.retailer_order_id ?? "—"}</td>

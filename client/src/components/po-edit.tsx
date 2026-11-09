@@ -20,6 +20,7 @@ import { trueYield } from "@shared/po-form";
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription, DialogFooter } from "@/components/ui/dialog";
 import { useToast } from "@/hooks/use-toast";
 import { fmtQty, productQtyFromAsin } from "@/lib/po-qty";
+import { INDIV_SHORT, PER_ASIN_UNIT, PER_PRODUCT_UNIT, QTY_KIND, individualFrom } from "@shared/quantity-kinds";
 import type { PoAsinRowData, PoAsinLine } from "@/components/po-asin-rows";
 import { calcMoney } from "@/components/money-calc-input";
 import { RefundProposalDialog, type PoHeaderMoney, type CanceledLine } from "@/components/refund-due-dialog";
@@ -119,7 +120,18 @@ export function PoProductsTable({ poId, asins, onChanged, po, shipsTo }: { poId:
     try { await poApi(`/api/pos/lines/${l.id}`, "DELETE"); onChanged(); }
     catch (e: any) { toast({ title: "Not removed", description: e.message, variant: "destructive" }); }
   };
-  const th = (right = false) => `px-3 py-2 text-xs font-medium whitespace-nowrap ${right ? "text-right" : "text-left"}`;
+  // Headers wrap to two lines inside the column (2026-11-09: the kind line above, the label below; "Lost / damaged by us" in two lines, never three).
+  const th = (right = false) => `px-3 py-2 text-xs font-medium whitespace-normal leading-tight align-bottom ${right ? "text-right" : "text-left"}`;
+  // The quantity kind as a muted line above the header text (SPEC §22 "Quantity vocabulary", 2026-11-09) — the ASINs page's Actual / Estimated pattern.
+  const Th = ({ label, kind, right = true, title, minW = "min-w-[5.5rem]" }: { label: string; kind?: string; right?: boolean; title?: string; /** Wide enough for the label in two lines, never three. */ minW?: string }) => (
+    <th className={`${th(right)} ${kind ? minW : ""}`} title={title}>{kind && <span className={`block text-[9px] font-normal opacity-60 ${right ? "ml-auto" : ""} max-w-[7rem]`} data-testid={`products-kind-${label.toLowerCase().replace(/[^a-z]+/g, "-")}`}>{kind}</span>}{label}</th>
+  );
+  // Grey Individual-units line under a Product-units number: × the line's Individual units per Product unit; "—" when that is NULL (an unresolved sheet import).
+  const Indiv = ({ v, per }: { v: number | string | null | undefined; per: number | string | null | undefined }) => {
+    if (v == null || v === "") return null;
+    const n = individualFrom(v, per);
+    return <div className="text-[11px] text-muted-foreground whitespace-nowrap">{n == null ? <span className="text-muted-foreground/50">—</span> : fmtQty(n)} {INDIV_SHORT}</div>;
+  };
   const hairline = { borderBottom: "0.5px solid hsl(var(--border))" } as const;
   return (
     <div className="space-y-3">
@@ -128,10 +140,13 @@ export function PoProductsTable({ poId, asins, onChanged, po, shipsTo }: { poId:
         <table className="w-full border-collapse text-sm" data-testid="po-products-table">
           <thead>
             <tr className="table-header-stone">
-              <th className={th()}>Product Name</th><th className={th()}>SKU / UPC</th><th className={th(true)}>Price</th><th className={th(true)}>Item Discount</th>
-              <th className={th(true)}>Ordered</th><th className={th(true)}>Received</th><th className={th(true)}>Canceled</th><th className={th(true)}>Returned</th>
-              <th className={th(true)} title="ASIN units attributed to this line: qty ordered × yield">ASIN units</th><th className={th(true)}>At Prep Center</th><th className={th(true)}>At CQG Warehouse</th><th className={th(true)}>Lost/damaged by us</th>
-              <th className={th(true)}>Final</th><th className={th()}>ASIN</th><th className={th()}></th>
+              <th className={`${th()} min-w-[10rem]`}>Product Name</th><th className={`${th()} whitespace-nowrap`}>SKU / UPC</th><th className={th(true)}>Price</th><th className={th(true)}>Item Discount</th>
+              {/* 2026-11-09: Received (sheet col M) dropped as on the POs list; Product pack added; every quantity names its kind. Canceled / Returned / Final go with the claims patch (D14). */}
+              <Th label="Ordered" kind={QTY_KIND.product} /><Th label="Product pack" kind={PER_PRODUCT_UNIT} right={false} minW="min-w-[7rem]" title="How the supplier sells it: single, or multi-pack × the Individual units in one Product unit" />
+              <Th label="Ordered" kind={QTY_KIND.asin} title="ASIN units this line yields: Product units × Individual units per Product unit ÷ Individual units per ASIN unit" />
+              <Th label="Canceled" kind={QTY_KIND.product} /><Th label="Returned" kind={QTY_KIND.product} />
+              <Th label="At Prep Center" kind={QTY_KIND.product} /><Th label="At CQG Warehouse" kind={QTY_KIND.product} /><Th label="Lost / damaged by us" kind={QTY_KIND.product} minW="min-w-[7.5rem]" />
+              <Th label="Final" kind={QTY_KIND.product} /><th className={th()}>ASIN</th><th className={th()}></th>
             </tr>
           </thead>
           <tbody>
@@ -139,25 +154,23 @@ export function PoProductsTable({ poId, asins, onChanged, po, shipsTo }: { poId:
               const sole = (l.parent.lines ?? []).length === 1;
               return (
                 <tr key={l.id} className="table-zebra-stone" style={hairline} data-testid={`row-product-${l.id}`}>
-                  <td className="px-3 py-1.5 max-w-[320px]"><InlineEdit value={l.product_name} onSave={patch(l, "product_name")} width="w-64" testId={`product_name-${l.id}`}><span className="truncate block" title={l.product_name ?? ""}>{l.product_name ?? <Muted v="—" />}</span></InlineEdit></td>
+                  <td className="px-3 py-1.5 max-w-[260px]"><InlineEdit value={l.product_name} onSave={patch(l, "product_name")} width="w-64" testId={`product_name-${l.id}`}><span className="truncate block" title={l.product_name ?? ""}>{l.product_name ?? <Muted v="—" />}</span></InlineEdit></td>
                   <td className="px-3 py-1.5 font-mono text-xs"><InlineEdit value={l.supplier_sku} onSave={patch(l, "supplier_sku")} width="w-32" testId={`supplier_sku-${l.id}`}>{l.supplier_sku ?? <Muted v="—" />}</InlineEdit></td>
                   <td className="px-3 py-1.5 text-right"><InlineEdit money value={l.price} onSave={patch(l, "price")} align="right" width="w-20" testId={`price-${l.id}`}><MoneyText v={l.price} /></InlineEdit></td>
                   <td className="px-3 py-1.5 text-right"><MoneyText v={l.item_discount} /></td>
-                  <td className="px-3 py-1.5 text-right"><InlineEdit value={l.qty_ordered} onSave={patch(l, "qty_ordered")} align="right" width="w-16" testId={`qty_ordered-${l.id}`}><QtyText v={l.qty_ordered} /></InlineEdit></td>
-                  <td className="px-3 py-1.5 text-right">{(() => {
-                    const rec = lineReceivedShown(l, l.parent, shipsTo);
-                    return rec.fromVelocity
-                      ? <span title={rec.title} data-testid={`qty_received-velocity-${l.id}`}><QtyText v={rec.value} /></span>
-                      : <InlineEdit value={l.qty_received} onSave={patch(l, "qty_received")} align="right" width="w-16" testId={`qty_received-${l.id}`}><QtyText v={l.qty_received} /></InlineEdit>;
-                  })()}</td>
-                  <td className="px-3 py-1.5 text-right"><InlineEdit value={l.qty_canceled} onSave={patch(l, "qty_canceled")} align="right" width="w-16" testId={`qty_canceled-${l.id}`}><QtyText v={l.qty_canceled} /></InlineEdit></td>
-                  <td className="px-3 py-1.5 text-right"><InlineEdit value={l.qty_returned} onSave={patch(l, "qty_returned")} align="right" width="w-16" testId={`qty_returned-${l.id}`}><QtyText v={l.qty_returned} /></InlineEdit></td>
+                  <td className="px-3 py-1.5 text-right"><InlineEdit value={l.qty_ordered} onSave={patch(l, "qty_ordered")} align="right" width="w-16" testId={`qty_ordered-${l.id}`}><QtyText v={l.qty_ordered} /></InlineEdit><Indiv v={l.qty_ordered} per={l.retailer_units_per_product} /></td>
+                  {/* Product pack (2026-11-09): the line's Individual units per Product unit — "single" or "multi-pack ×N"; editable (the server keeps the yield). */}
+                  <td className="px-3 py-1.5 text-xs">
+                    <InlineEdit value={l.retailer_units_per_product == null ? null : String(l.retailer_units_per_product)} onSave={patch(l, "retailer_units_per_product")} width="w-14" testId={`product_pack-${l.id}`} title={PER_PRODUCT_UNIT}>
+                      {l.retailer_units_per_product == null ? <span className="text-amber-700 dark:text-amber-400">—</span> : Number(l.retailer_units_per_product) === 1 ? "single" : `multi-pack ×${l.retailer_units_per_product}`}
+                    </InlineEdit>
+                  </td>
                   {/* Round 2 (Maria 2026-11-01): "Yield 0.17" was the col-T ratio — the column is the ASIN units this line yields (12 × 1/6 = 2); typing units sets the yield (units ÷ qty). */}
-                  <td className="px-3 py-1.5 text-right"><InlineEdit value={lineAsinUnits(l)} onSave={async (v) => { const q = Number(l.qty_ordered) || 0; if (!(q > 0) || !(Number(v) > 0)) return; const r = ratioForUnits(Number(v), q, l.parent.sold_as === "individual" ? 1 : Number(l.parent.units_per_pack) || 1); if (!r) return; await poApi(`/api/pos/lines/${l.id}`, "PATCH", { retailer_units_per_product: String(r.retailer), asin_units_per_pack: String(r.asinUnits) }); onChanged(); }} align="right" width="w-16" testId={`asin-units-${l.id}`}><QtyText v={lineAsinUnits(l)} /></InlineEdit></td>
-                  <td className="px-3 py-1.5 text-right"><QtyText v={sole ? productQtyFromAsin(l.parent.qty_at_prep, lineYield(l)) : null} /></td>
-                  <td className="px-3 py-1.5 text-right"><QtyText v={sole ? productQtyFromAsin(l.parent.qty_at_warehouse, lineYield(l)) : null} /></td>
-                  <td className="px-3 py-1.5 text-right"><QtyText v={sole ? productQtyFromAsin(l.parent.qty_lost_damaged_us, lineYield(l)) : null} /></td>
-                  <td className="px-3 py-1.5 text-right"><QtyText v={l.final_qty} /></td>
+                  <td className="px-3 py-1.5 text-right"><InlineEdit value={lineAsinUnits(l)} onSave={async (v) => { const q = Number(l.qty_ordered) || 0; if (!(q > 0) || !(Number(v) > 0)) return; const r = ratioForUnits(Number(v), q, l.parent.sold_as === "individual" ? 1 : Number(l.parent.units_per_pack) || 1); if (!r) return; await poApi(`/api/pos/lines/${l.id}`, "PATCH", { retailer_units_per_product: String(r.retailer), asin_units_per_pack: String(r.asinUnits) }); onChanged(); }} align="right" width="w-16" testId={`asin-units-${l.id}`}><QtyText v={lineAsinUnits(l)} /></InlineEdit><Indiv v={lineAsinUnits(l)} per={l.asin_units_per_pack ?? (l.parent.sold_as === "individual" ? 1 : l.parent.units_per_pack)} /></td>
+                  <td className="px-3 py-1.5 text-right"><InlineEdit value={l.qty_canceled} onSave={patch(l, "qty_canceled")} align="right" width="w-16" testId={`qty_canceled-${l.id}`}><QtyText v={l.qty_canceled} /></InlineEdit><Indiv v={l.qty_canceled} per={l.retailer_units_per_product} /></td>
+                  <td className="px-3 py-1.5 text-right"><InlineEdit value={l.qty_returned} onSave={patch(l, "qty_returned")} align="right" width="w-16" testId={`qty_returned-${l.id}`}><QtyText v={l.qty_returned} /></InlineEdit><Indiv v={l.qty_returned} per={l.retailer_units_per_product} /></td>
+                  {(["qty_at_prep", "qty_at_warehouse", "qty_lost_damaged_us"] as const).map((k) => { const v = sole ? productQtyFromAsin(l.parent[k], lineYield(l)) : null; return <td key={k} className="px-3 py-1.5 text-right"><QtyText v={v} /><Indiv v={v} per={l.retailer_units_per_product} /></td>; })}
+                  <td className="px-3 py-1.5 text-right"><QtyText v={l.final_qty} /><Indiv v={l.final_qty} per={l.retailer_units_per_product} /></td>
                   <td className="px-3 py-1.5">
                     <InlineEdit value={l.parent.asin} onSave={patch(l, "asin")} width="w-28" testId={`asin-${l.id}`} title="Re-map this product to another ASIN">
                       <span className="inline-block rounded-sm bg-muted px-1.5 py-0.5 font-mono text-[11px] text-muted-foreground">→ {l.parent.asin}</span>
@@ -185,9 +198,11 @@ export function lineYield(l: { asin_qty_per_product: number | string | null; ret
   return effectiveYield(l, trueYield);
 }
 /**
- * Products → Received (Maria 2026-11-05). A Velocity PO shows Velocity's count
- * (the ASIN row's Received by Velocity, ASIN units) in the line's retailer
- * units: × asin units ÷ retailer units (5.5 × 2 ÷ 1 = 11). Exact only when the
+ * Products → Received (Maria 2026-11-05; the column left the Products table
+ * 2026-11-09, the conversion stays for the claims card). A Velocity PO shows
+ * Velocity's count (the ASIN row's Received by Velocity, ASIN units) in the
+ * line's Product units: × Individual units per ASIN unit ÷ Individual units
+ * per Product unit (5.5 × 2 ÷ 1 = 11). Exact only when the
  * ASIN row has one line; several lines share one Velocity order, so the lines
  * stay blank and the total is the ASIN row's. A home PO keeps its own count
  * (the editable qty_received). Read only: nothing is written.
@@ -205,7 +220,7 @@ export function lineReceivedShown(
   if (rv == null) return { fromVelocity: true, value: null, title: `From Velocity: nothing checked in yet${own}` };
   const r = Number(l.retailer_units_per_product), a = Number(l.asin_units_per_pack);
   const value = r > 0 && a > 0 ? Math.round((rv * a / r) * 100) / 100 : Math.round((rv / (lineYield(l) || 1)) * 100) / 100;
-  return { fromVelocity: true, value, title: `From Velocity: ${rv} ASIN units received${r > 0 && a > 0 ? ` × ${a} ÷ ${r}` : ""} = ${value} retailer units${own}` };
+  return { fromVelocity: true, value, title: `From Velocity: ${rv} ASIN units received${r > 0 && a > 0 ? ` × ${a} ÷ ${r}` : ""} = ${value} Product units${own}` };
 }
 /** The ASIN units a product line yields: qty ordered × its yield, exact when the line carries its ratio. */
 export function lineAsinUnits(l: { qty_ordered: number | string | null; asin_qty_per_product: number | string | null; retailer_units_per_product?: number | string | null; asin_units_per_pack?: number | string | null }): string | null {
@@ -226,13 +241,17 @@ function AddProductRow({ poId, onAdded }: { poId: string; onAdded: () => void })
     const body = Object.fromEntries(Object.entries(d).filter(([k, v]) => !(k === "asin_units_per_pack" && String(v).trim() === "")));
     try { await poApi(`/api/pos/${poId}/lines`, "POST", body); setD(empty); onAdded(); } catch (e: any) { setErr(e.message); } finally { setBusy(false); }
   };
-  const f = (k: keyof typeof empty, ph: string, w: string) => (
-    <Input value={d[k]} onChange={(e) => setD({ ...d, [k]: e.target.value })} placeholder={ph} className={`h-8 text-xs ${w}`} data-testid={`input-add-line-${k}`} />
+  // A quantity field carries its kind as the muted line above it (SPEC §22 "Quantity vocabulary", 2026-11-09).
+  const f = (k: keyof typeof empty, ph: string, w: string, kind?: string, title?: string) => (
+    <label className={`flex flex-col ${w}`} title={title}>
+      <span className="text-[9px] leading-tight text-muted-foreground">{kind ?? "\u00a0"}</span>
+      <Input value={d[k]} onChange={(e) => setD({ ...d, [k]: e.target.value })} placeholder={ph} className="h-8 text-xs" data-testid={`input-add-line-${k}`} />
+    </label>
   );
   return (
-    <div className="flex flex-wrap items-center gap-2" data-testid="po-add-line">
-      {f("product_name", "Product name", "w-64")}{f("supplier_sku", "SKU / UPC", "w-32")}{f("price", "Price", "w-20")}{f("qty_ordered", "Qty", "w-16")}
-      {f("asin", "ASIN", "w-28")}{f("retailer_units_per_product", "Retailer units / product", "w-40")}{f("asin_units_per_pack", "ASIN units / pack", "w-32")}{/* the server derives the yield and the ASIN units from the two integers */}
+    <div className="flex flex-wrap items-end gap-2" data-testid="po-add-line">
+      {f("product_name", "Product name", "w-64")}{f("supplier_sku", "SKU / UPC", "w-32")}{f("price", "Price", "w-20")}{f("qty_ordered", "Qty", "w-16", QTY_KIND.product)}
+      {f("asin", "ASIN", "w-28")}{f("retailer_units_per_product", "Product pack", "w-28", PER_PRODUCT_UNIT, "How the supplier sells it: 1 for a single, 9 for a 9-pack")}{f("asin_units_per_pack", "blank = the ASIN's", "w-36", PER_ASIN_UNIT, "The ASIN's pack size; blank uses the ASIN row's")}{/* the server derives the yield and the ASIN units from the two integers */}
       <Button size="sm" variant="outline" onClick={add} disabled={busy} data-testid="button-add-line"><Plus className="h-3.5 w-3.5 mr-1" /> Add product</Button>
       {err && <span className="text-xs text-destructive" data-testid="add-line-error">{err}</span>}
     </div>
@@ -277,18 +296,18 @@ export function PoHistory({ poId, reloadKey }: { poId: string; reloadKey: unknow
 // ── §5 Cancel PO / Delete PO (po-af-owned §5.1, §5.3, §5.4) ───────────────────
 export interface PoGuardsData { lineCount: number; asinCount: number; atPrepUnits: number; fba: { units: number; fbaIds: string[]; rows: number }; blocked: string | null; supplier: string; orderId: string }
 
-/** §5.1 text, client side (shipment rows on screen): "N units shipped to FBA in <ids>. Reassign the shipment to another PO first." */
+/** §5.1 text, client side (shipment rows on screen): "N ASIN units shipped to FBA in <ids>. Reassign the shipment to another PO first." */
 export function shipmentBlockText(shipments: ReadonlyArray<{ qty_shipped: string | number; fba_shipment_ids?: string[] | null }>): string | null {
   if (shipments.length === 0) return null;
   const units = Math.round(shipments.reduce((t, s) => t + (Number(s.qty_shipped) || 0), 0) * 100) / 100;
   const ids = Array.from(new Set(shipments.flatMap((s) => s.fba_shipment_ids ?? []))).sort();
-  return `${fmtQty(units)} unit${units === 1 ? "" : "s"} shipped to FBA in ${ids.length > 0 ? ids.join(", ") : "a shipment with no FBA id yet"}. Reassign the shipment to another PO first.`;
+  return `${fmtQty(units)} ASIN unit${units === 1 ? "" : "s"} shipped to FBA in ${ids.length > 0 ? ids.join(", ") : "a shipment with no FBA id yet"}. Reassign the shipment to another PO first.`;
 }
 
 /** Delete confirm text (§5.3): names the PO and its products; units still at Velocity when any. */
 export function deleteConfirmText(g: Pick<PoGuardsData, "supplier" | "orderId" | "lineCount" | "asinCount" | "atPrepUnits">): string {
   const base = `Delete PO ${g.supplier} ${g.orderId} with its ${g.lineCount} product${g.lineCount === 1 ? "" : "s"} (${g.asinCount} ASIN${g.asinCount === 1 ? "" : "s"})? Sync POs will not import it again.`;
-  return g.atPrepUnits > 0 ? `${base} ${fmtQty(g.atPrepUnits)} unit${g.atPrepUnits === 1 ? "" : "s"} still at Velocity for this PO.` : base;
+  return g.atPrepUnits > 0 ? `${base} ${fmtQty(g.atPrepUnits)} ASIN unit${g.atPrepUnits === 1 ? "" : "s"} still at Velocity for this PO.` : base;
 }
 
 export function PoDangerActions({ poId, reloadKey, onCanceled, onDeleted }: { poId: string; reloadKey: unknown; onCanceled: () => void; onDeleted: () => void }) {
@@ -320,7 +339,7 @@ export function PoDangerActions({ poId, reloadKey, onCanceled, onDeleted }: { po
           <DialogHeader>
             <DialogTitle>{confirm === "delete" ? "Delete PO?" : "Cancel PO?"}</DialogTitle>
             <DialogDescription data-testid="po-danger-confirm-text">
-              {confirm === "delete" ? deleteConfirmText(g) : `Cancel every product of ${g.supplier} ${g.orderId} (${g.lineCount}): Canceled = Ordered on each. Logged in History.`}
+              {confirm === "delete" ? deleteConfirmText(g) : `Cancel every product of ${g.supplier} ${g.orderId} (${g.lineCount}): Canceled = Ordered (Product units) on each. Logged in History.`}
             </DialogDescription>
           </DialogHeader>
           <DialogFooter>
@@ -373,7 +392,7 @@ export function ReassignShipment({ shipment, asin, currentRowId, onDone }: { shi
       {q.trim().length >= 2 && rows.length === 0 && !target && <div className="text-[11px] text-muted-foreground">No other PO has a {asin} row matching "{q.trim()}".</div>}
       {target && <div className="text-[11px]">→ {target.supplier} <span className="font-mono">{target.order_id}</span></div>}
       <div className="flex items-center gap-1">
-        <span className="text-[10px] text-muted-foreground">units</span>
+        <span className="text-[10px] text-muted-foreground">ASIN units</span>
         <input value={units} onChange={(e) => setUnits(e.target.value)} className="h-6 w-14 rounded border border-input bg-background px-1 text-right text-xs" data-testid={`input-reassign-units-${shipment.id}`} />
         <span className="text-[10px] text-muted-foreground">of {fmtQty(shipment.qty_shipped)}</span>
         <Button size="sm" className="h-6 px-2 text-[11px]" disabled={!target} onClick={go} data-testid={`button-reassign-go-${shipment.id}`}>Move</Button>

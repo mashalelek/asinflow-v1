@@ -252,7 +252,7 @@ export function visibleQtys(c: Pick<Capture, "pages">): Set<number> {
   }
   return out;
 }
-export const QTY_INFERRED_HINT = "qty inferred from subtotal";
+export const QTY_INFERRED_HINT = "Product units inferred from subtotal";
 /**
  * Pure: a captured line total → the form's price (to the cent, for display) and line_total, when the line has a
  * total and a qty and the page's unit price is that total ÷ qty to the cent (79.70 ÷ 30 → "$2.66/item"). The

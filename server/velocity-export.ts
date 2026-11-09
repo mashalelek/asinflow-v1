@@ -264,12 +264,13 @@ export async function buildVelocityRecords(
       // remainder is sent as the whole packs (unticked in the dialog, the left-over units named); a skip only when
       // units/pack is not a whole number, not even one pack fits, or the ASIN units are missing and the retailer
       // qty does not divide.
-      if (!Number.isInteger(upp) || upp <= 0) { skip(`${where}: units/pack "${row.unitsPerPack ?? ""}" is not a whole number`); continue; }
+      if (!Number.isInteger(upp) || upp <= 0) { skip(`${where}: Individual units per ASIN unit "${row.unitsPerPack ?? ""}" is not a whole number`); continue; }
       if (!Number.isFinite(qty)) { skip(`${where}: quantity "${row.quantity}" is not a number`); continue; }
       const w = wholePacks(qty, upp);
       if (w.leftover > 0) {
-        if (row.asinUnitsMissing) { skip(`${where}: ASIN units missing, and ${row.qtyOrderedL ?? qty} ordered ÷ ${upp} per pack is not a whole number of packs`); continue; }
-        if (w.packs < 1) { skip(`${where}: ${qty} unit${qty === 1 ? "" : "s"} — less than one ${upp}-pack`); continue; }
+        // Each branch names its kind (2026-11-09): the line's Ordered is Product units; the sheet's quantity is Individual units.
+        if (row.asinUnitsMissing) { skip(`${where}: ASIN units missing, and ${row.qtyOrderedL != null ? `${row.qtyOrderedL} Product units ordered` : `${qty} Individual units`} ÷ ${upp} Individual units per ASIN unit is not a whole number of packs`); continue; }
+        if (w.packs < 1) { skip(`${where}: ${qty} Individual unit${qty === 1 ? "" : "s"} — less than one ${upp}-pack`); continue; }
         quantity = String(w.units);
         packRemainders.push({ order_number: row.orderNumber ?? "", asin: row.asin, packs: w.packs, units_per_pack: upp, leftover: w.leftover });
       }

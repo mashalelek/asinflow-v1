@@ -44,7 +44,8 @@ const PRODUCT_SUB_COLUMNS: { key: string; label: string; standaloneId?: ColumnId
 // re-imports. "Actual COGS" / "Actual Prep Cost" deliberately are NOT —
 // actual COGS comes from the PO sheet and SellerBoard (§2), never a CSV.
 const colLabelMap = new Map(
-  ALL_COLUMNS.map((c) => [c.id, c.qualifier ? `${c.qualifier} ${c.label}` : c.label]),
+  // The quantity kind rides in the header too ("Actual Units Sold (ASIN units)", 2026-11-09) — the round-trip upload matches on the label.
+  ALL_COLUMNS.map((c) => [c.id, `${c.qualifier ? `${c.qualifier} ` : ""}${c.label}${c.kind ? ` (${c.kind})` : ""}`]),
 );
 
 function buildExportColumns(

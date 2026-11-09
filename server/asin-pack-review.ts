@@ -175,7 +175,7 @@ export async function setAsinPack(query: QueryLike, asin: string, p: PackValue, 
   const a = asin.toUpperCase();
   if (!["individual", "multi-pack", "bundle"].includes(p.sold_as)) throw new EditError(400, "sold as must be individual, multi-pack or bundle");
   const units = p.sold_as === "individual" ? 1 : Number(p.units);
-  if (!Number.isInteger(units) || units < 1 || (p.sold_as === "multi-pack" && units < 2)) throw new EditError(400, p.sold_as === "multi-pack" ? "a multi-pack needs a pack size of 2 or more" : "pack size must be a whole number");
+  if (!Number.isInteger(units) || units < 1 || (p.sold_as === "multi-pack" && units < 2)) throw new EditError(400, p.sold_as === "multi-pack" ? "a multi-pack needs 2 or more Individual units per ASIN unit" : "the pack size (Individual units per ASIN unit) must be a whole number");
   const cur = (await query(`SELECT sold_as, units_per_pack FROM asins WHERE asin = $1`, [a])).rows[0];
   if (!cur) throw new EditError(404, `${a} is not in AF`);
   const changes = changedFields({ sold_as: cur.sold_as ?? null, units_per_pack: cur.units_per_pack == null ? null : Number(cur.units_per_pack) }, { sold_as: p.sold_as, units_per_pack: units });

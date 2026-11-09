@@ -19,7 +19,7 @@ export function parsePack(v: { sold_as?: unknown; units_per_pack?: unknown }): P
   const soldAs = String(v.sold_as ?? "");
   if (!["individual", "multi-pack", "bundle"].includes(soldAs)) throw new EditError(400, "sold_as must be individual, multi-pack or bundle");
   const upp = soldAs === "individual" ? 1 : Number(v.units_per_pack);
-  if (!Number.isInteger(upp) || upp < 1 || (soldAs !== "individual" && upp < 2)) throw new EditError(400, `units_per_pack must be a whole number ≥ 2 for a ${soldAs}`);
+  if (!Number.isInteger(upp) || upp < 1 || (soldAs !== "individual" && upp < 2)) throw new EditError(400, `units_per_pack (Individual units per ASIN unit) must be a whole number ≥ 2 for a ${soldAs}`);
   return { sold_as: soldAs as PackValue["sold_as"], units_per_pack: upp };
 }
 

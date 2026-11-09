@@ -59,7 +59,7 @@ export function cellText(row: DashboardRowDef, cell: DashboardCell): CellText {
       ? { main: `— / ${fmtInt(cell.secondary)}`, small: "orders after the re-backfill", muted: true }
       : { main: `${fmtInt(cell.value)} / ${fmtInt(cell.secondary)}`, small: dataFrom };
     case "sales": return { main: fmtMoney(cell.value), small: dataFrom };
-    case "refunds": return { main: fmtMoney(cell.value), small: cell.secondary != null ? `${fmtInt(cell.secondary)} units` : undefined };
+    case "refunds": return { main: fmtMoney(cell.value), small: cell.secondary != null ? `${fmtInt(cell.secondary)} ASIN units` : undefined };
     default: return { main: row.format === "money" ? fmtMoney(cell.value) : fmtInt(cell.value), muted: cell.value == null };
   }
 }

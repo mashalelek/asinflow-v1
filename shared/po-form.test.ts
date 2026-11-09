@@ -16,7 +16,7 @@ describe("checkPoForm", () => {
     const c = checkPoForm(f);
     expect(c.ok).toBe(false);
     expect(c.errors).toEqual(expect.arrayContaining(["Supplier is required", "Order # is required"]));
-    expect(c.productErrors[0]).toEqual(expect.arrayContaining(["qty must be more than 0 (at most 2 decimals)", "map it to an ASIN (10 characters)"]));
+    expect(c.productErrors[0]).toEqual(expect.arrayContaining(["Qty (Product units) must be more than 0 (at most 2 decimals)", "map it to an ASIN (10 characters)"]));
   });
   it("a valid single-product PO: one ASIN row, Ordered = qty × yield, live totals, cost / unit from price", () => {
     const c = checkPoForm(base());
@@ -161,7 +161,7 @@ describe("checkPoForm", () => {
     // A line total that no longer fits the price (the price was retyped) is ignored with a warning: price × qty.
     const off = checkPoForm({ ...po, products: [{ ...line, price: "2.99" }] });
     expect(off.computedSubtotal).toBe(89.7);
-    expect(off.warnings.join()).toMatch(/line total 79.70 does not match price × qty/);
+    expect(off.warnings.join()).toMatch(/line total 79.70 does not match price × Qty \(Product units\)/);
     // A price typed past the cent is accepted and kept; 7 decimals is not.
     const typed = checkPoForm({ ...po, products: [{ ...line, price: "2.656667", line_total: "" }] });
     expect(typed.asins[0].lines[0]).toMatchObject({ price: "2.656667", line_total: null });
@@ -216,7 +216,7 @@ describe("checkPoForm", () => {
     expect(whole.ok).toBe(true);
     expect(whole.asins[0]).toMatchObject({ qty: 3 });
     expect(whole.warnings.join()).not.toMatch(/whole packs/);
-    expect(checkPoForm(base({ products: [{ ...p, units_per_pack: "1" }] })).productErrors[0]).toContain("units per pack must be a whole number ≥ 2 for a multi-pack");
+    expect(checkPoForm(base({ products: [{ ...p, units_per_pack: "1" }] })).productErrors[0]).toContain("Individual units per ASIN unit must be a whole number ≥ 2 for a multi-pack");
   });
   it("2-dp yields are read as the fraction they stand for (48 × 0.33 = 16)", () => {
     expect(checkPoForm(base({ products: [{ ...emptyProduct(), price: "1", qty_ordered: "48", asin: "B0TEST0003", asin_qty_per_product: "0.33" }] })).asins[0].qty).toBe(16);

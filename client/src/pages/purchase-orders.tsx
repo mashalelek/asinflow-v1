@@ -29,6 +29,7 @@ import { UploadToVelocityDialog } from "@/components/upload-to-velocity-dialog";
 import { PoAsinTable, PoAsinColGroup, PoAsinHeaderRow, PoAsinRow, PO_ASIN_TABLE_MIN_WIDTH, ActionItemChips, ActionItemsEditor, poActionTitles, type ActionItemLines, type OpenDefectBrief, type PoAsinRowData, type PoAsinLine } from "@/components/po-asin-rows";
 import { loadPoExpanded, savePoExpanded, isPoExpanded, togglePoExpanded, toggleExpandAll, type PoExpandedState } from "@/lib/po-expanded";
 import { fmtQty, PO_ASIN_DISPLAY_COLUMNS } from "@/lib/po-qty";
+import { PER_ASIN_UNIT, QTY_KIND } from "@shared/quantity-kinds";
 import { fetchLongSync } from "@/lib/long-sync";
 import { useToast } from "@/hooks/use-toast";
 import { PoProductsTable, PoHistory, PoDangerActions, poApi } from "@/components/po-edit";
@@ -279,7 +280,7 @@ function LinkPicker({ id, seed, onPick }: { id: string; seed: string; onPick: (r
               <span className="font-mono">{r.order_id}</span>
               <span className="text-muted-foreground truncate">{r.supplier}</span>
               <span className="font-mono">{r.asin}</span>
-              <span className="text-muted-foreground">{r.order_date} · {fmtQty(r.qty)}{r.units_per_pack > 1 ? ` × ${r.units_per_pack}` : ""}</span>
+              <span className="text-muted-foreground" title={`Ordered, ASIN units${r.units_per_pack > 1 ? ` × ${r.units_per_pack} ${PER_ASIN_UNIT}` : ""}`}>{r.order_date} · {fmtQty(r.qty)} ASIN u.{r.units_per_pack > 1 ? ` × ${r.units_per_pack}` : ""}</span>
               {r.velocity_warning && <span className="text-amber-500" title={`Not a Velocity PO: ${r.velocity_warning}. Linking is still allowed.`} data-testid={`warn-pick-${r.id}`}>⚠ {r.velocity_warning}</span>}
             </button>
           ))}
@@ -306,9 +307,19 @@ async function linkUnmatched(lineId: string, poAsinId: string, confirmNote?: str
   return {};
 }
 
+/**
+ * Pure (2026-11-09): the PO's one Individual-units-per-Product-unit when every
+ * product line shares it (the Tracking tab's "N Product units · M individual");
+ * null when the lines disagree or any is NULL — then the Individual count shows "—".
+ */
+export function onePerProductUnit(asins: ReadonlyArray<{ lines?: ReadonlyArray<{ retailer_units_per_product?: number | string | null }> }>): number | null {
+  const vals = new Set<number>();
+  for (const a of asins) for (const l of a.lines ?? []) { if (l.retailer_units_per_product == null) return null; vals.add(Number(l.retailer_units_per_product)); }
+  return vals.size === 1 ? Array.from(vals)[0] : null;
+}
 /** Text for a candidate button: order #, then why it ranks where it does. */
 export function candidateLabel(c: UnmatchedCandidate): string {
-  if (c.source === "candidate" && c.days != null) return `${c.order_id} · ${c.days === 0 ? "same day" : `${c.days > 0 ? "+" : ""}${c.days}d`} · ${c.remaining_units} left`;
+  if (c.source === "candidate" && c.days != null) return `${c.order_id} · ${c.days === 0 ? "same day" : `${c.days > 0 ? "+" : ""}${c.days}d`} · ${c.remaining_units} indiv. left`;
   return `${c.order_id} · Col P`;
 }
 
@@ -372,7 +383,7 @@ function UnmatchedPanel({ onChanged, suppliers }: { onChanged: () => void; suppl
                 <table className="w-full min-w-[64rem]">
                   <thead><tr className="text-muted-foreground text-left">
                     <th className="py-1 pr-2"><input type="checkbox" aria-label="Select all" checked={allPicked} onChange={() => setPicked(allPicked ? new Set() : new Set(lines.map((l) => l.id)))} /></th>
-                    <th className="py-1 pr-2">Shipped</th><th className="py-1 pr-2">Order #</th><th className="py-1 pr-2">Retailer</th><th className="py-1 pr-2">ASIN</th><th className="py-1 pr-2">Item</th><th className="py-1 pr-2 text-right">Units</th><th className="py-1 pr-2">Why</th><th className="py-1">Link</th>
+                    <th className="py-1 pr-2">Shipped</th><th className="py-1 pr-2">Order #</th><th className="py-1 pr-2">Retailer</th><th className="py-1 pr-2">ASIN</th><th className="py-1 pr-2">Item</th><th className="py-1 pr-2 text-right align-bottom"><span className="block text-[9px] font-normal opacity-60">{QTY_KIND.individual}</span>Shipped</th><th className="py-1 pr-2">Why</th><th className="py-1">Link</th>
                   </tr></thead>
                   <tbody>
                     {lines.map((l) => (
@@ -435,7 +446,7 @@ function VelocityOrdersSection({ orders, dismissed, busy, act }: {
             <table className="w-full table-fixed">
               <colgroup><col style={{ width: 150 }} /><col style={{ width: 90 }} /><col style={{ width: 110 }} /><col style={{ width: 110 }} /><col style={{ width: 160 }} /><col style={{ width: 70 }} /><col style={{ width: 170 }} /><col style={{ width: 300 }} /><col /></colgroup>
               <thead><tr className="text-muted-foreground text-left">
-                <th className="py-1 pr-2">Velocity order</th><th className="py-1 pr-2">Date</th><th className="py-1 pr-2">Retailer</th><th className="py-1 pr-2">ASIN</th><th className="py-1 pr-2">Item</th><th className="py-1 pr-2 text-right" title="Ordered at Velocity · checked in">Qty · in</th><th className="py-1 pr-2">Why</th><th className="py-1">Link</th><th />
+                <th className="py-1 pr-2">Velocity order</th><th className="py-1 pr-2">Date</th><th className="py-1 pr-2">Retailer</th><th className="py-1 pr-2">ASIN</th><th className="py-1 pr-2">Item</th><th className="py-1 pr-2 text-right align-bottom" title="Ordered at Velocity · checked in, in Individual units"><span className="block text-[9px] font-normal opacity-60">{QTY_KIND.individual}</span>Ordered · in</th><th className="py-1 pr-2">Why</th><th className="py-1">Link</th><th />
               </tr></thead>
               <tbody>
                 {orders.map((o) => {
@@ -524,7 +535,7 @@ function UnmatchedRow({ l, suppliers, picked, onPick, busy, act, onLinked }: {
       </td>
       <td className="py-1 pr-2 font-mono">{l.asin}</td>
       <td className="py-1 pr-2 truncate max-w-[14rem]" title={l.item_name ?? ""}>{l.item_name}</td>
-      <td className="py-1 pr-2 text-right">{l.quantity_shipped}{l.units_per_pack && Number(l.units_per_pack) > 1 ? ` (÷${l.units_per_pack})` : ""}</td>
+      <td className="py-1 pr-2 text-right">{l.quantity_shipped}{l.units_per_pack && Number(l.units_per_pack) > 1 ? <span className="text-muted-foreground" title={`÷ ${l.units_per_pack} ${PER_ASIN_UNIT} = ASIN units`}> (÷{l.units_per_pack})</span> : ""}</td>
       <td className="py-1 pr-2 text-muted-foreground" data-testid={`text-unmatched-why-${l.id}`}>{whyText(l)}</td>
       <td className="py-1">
         <div className="flex flex-wrap items-center gap-1">
@@ -539,7 +550,7 @@ function UnmatchedRow({ l, suppliers, picked, onPick, busy, act, onLinked }: {
         {pending && (
           <div className="mt-1 space-y-1 rounded border border-red-500/40 bg-red-500/5 p-2" data-testid={`overshoot-${l.id}`}>
             <div className="text-red-600 dark:text-red-400">
-              Linking to {pending.label} puts Shipped FBA at {fmtQty(pending.o.shipped_after)} of {fmtQty(pending.o.ordered)} ordered — the row gets "Extra units shipped".
+              Linking to {pending.label} puts Shipped FBA at {fmtQty(pending.o.shipped_after)} of {fmtQty(pending.o.ordered)} ordered ASIN units — the row gets "Extra units shipped".
             </div>
             <textarea value={note} onChange={(e) => setNote(e.target.value)} rows={2} placeholder="Why (required) — stored on the row and in PO History"
               className="w-full rounded border border-input bg-background p-1 text-xs" data-testid={`input-overshoot-note-${l.id}`} />
@@ -563,14 +574,14 @@ export const poLineCount = (po: { asins?: ReadonlyArray<{ lines?: readonly unkno
  * The POs list columns (PO table v2 §4): sort key (the server whitelist,
  * PO_SORT_KEYS in server/po-queries.ts) where the column sorts.
  */
-export const PO_LIST_COLUMNS: ReadonlyArray<{ id: string; label: string; sortKey?: string; align?: "right" }> = [
+export const PO_LIST_COLUMNS: ReadonlyArray<{ id: string; label: string; sortKey?: string; align?: "right"; /** The quantity kind, shown as a muted line above the header (SPEC §22 "Quantity vocabulary"). */ kind?: string }> = [
   { id: "action_items", label: "Action Items", sortKey: "action_items" },
   { id: "order_date", label: "PO Date", sortKey: "order_date" },
   { id: "order_id", label: "Order ID", sortKey: "order_id" },
   { id: "supplier", label: "Supplier", sortKey: "supplier" },
   { id: "order_total", label: "Order Total", sortKey: "order_total", align: "right" },
   { id: "asins", label: "ASINs", sortKey: "asins", align: "right" },
-  { id: "units_ordered", label: "Units Ordered", sortKey: "units_ordered", align: "right" },
+  { id: "units_ordered", label: "Ordered", sortKey: "units_ordered", align: "right", kind: QTY_KIND.asin },
   { id: "invoice", label: "Invoice" },
   { id: "notes", label: "Notes" },
 ];
@@ -602,10 +613,11 @@ export function nextPoSort(cur: PoSort, key: string): PoSort {
   return cur.dir === "asc" ? { key, dir: "desc" } : null;
 }
 
-function SortHeader({ label, sortKey, sort, onSort, className, style, children }: { label: string; sortKey: string; sort: PoSort; onSort: (k: string) => void; className?: string; style?: React.CSSProperties; children?: React.ReactNode }) {
+function SortHeader({ label, kind, sortKey, sort, onSort, className, style, children }: { label: string; /** Quantity kind — the muted line above the label. */ kind?: string; sortKey: string; sort: PoSort; onSort: (k: string) => void; className?: string; style?: React.CSSProperties; children?: React.ReactNode }) {
   const active = sort?.key === sortKey;
   return (
     <th className={className} style={style} aria-sort={active ? (sort!.dir === "asc" ? "ascending" : "descending") : "none"}>
+      {kind && <span className="block text-[9px] font-normal opacity-60" data-testid={`th-po-kind-${sortKey}`}>{kind}</span>}
       <button type="button" onClick={() => onSort(sortKey)} className="inline-flex items-center gap-1 hover:text-foreground" data-testid={`sort-po-${sortKey}`}>
         {label}
         {active ? (sort!.dir === "asc" ? <ArrowUp className="h-3 w-3" /> : <ArrowDown className="h-3 w-3" />) : <ArrowUpDown className="h-3 w-3 opacity-30" />}
@@ -821,7 +833,7 @@ export default function PurchaseOrders() {
                 const style = poColStyle(colWidths, c.id);
                 const handle = <ResizeHandle onMouseDown={(e) => handleResizeStart(e, c.id)} />;
                 return c.sortKey
-                  ? <SortHeader key={c.id} label={c.label} sortKey={c.sortKey} sort={sort} onSort={(k) => setSort((s) => nextPoSort(s, k))} className={cls} style={style}>{handle}</SortHeader>
+                  ? <SortHeader key={c.id} label={c.label} kind={c.kind} sortKey={c.sortKey} sort={sort} onSort={(k) => setSort((s) => nextPoSort(s, k))} className={`${cls} align-bottom`} style={style}>{handle}</SortHeader>
                   : <th key={c.id} className={cls} style={style} data-testid={`th-po-${c.id}`}>{c.label}{handle}</th>;
               })}
               <th aria-hidden />
@@ -936,7 +948,7 @@ type PoAsinDetail = PoAsinRowData & { lines: PoAsinLine[] };
 type PoLine = PoAsinLine;
 interface PoDetail {
   po: Record<string, any> & { invoice_file_name: string };
-  summary: { asin_count: number; units_ordered: number; units_received: number | null; order_total: string | null; cogs_total: string | null };
+  summary: { asin_count: number; units_ordered: number; /** Σ ASIN units × Individual units per ASIN unit over the rows with a pack size (2026-11-09); rows_missing_pack counts the rest. */ individual_units?: number | null; rows_missing_pack?: number; units_received: number | null; order_total: string | null; cogs_total: string | null };
   asins: PoAsinDetail[];
   /** Capture PO patch §8: the Payments tab. */
   payments?: PoPayment[];
@@ -1062,9 +1074,15 @@ export function PurchaseOrderDetailPlaceholder() {
       <div className="flex gap-6 rounded-md px-4 py-3 text-sm" style={{ border: "0.5px solid hsl(var(--border))" }} data-testid="po-summary-strip">
         {[
           ["ASINs", String(summary.asin_count)],
-          ["Units Ordered", fmtQty(summary.units_ordered)],
+          ["ASIN units ordered", fmtQty(summary.units_ordered)],
         ].map(([k, v]) => (
-          <div key={k}><span className="text-muted-foreground mr-1.5">{k}</span><span className="font-medium">{v}</span></div>
+          <div key={k}><span className="text-muted-foreground mr-1.5">{k}</span><span className="font-medium">{v}</span>
+            {k === "ASIN units ordered" && (
+              <span className="text-muted-foreground ml-1.5" data-testid="po-summary-individual" title={(summary.rows_missing_pack ?? 0) > 0 ? `${summary.rows_missing_pack} ASIN row(s) have no pack size — the Individual total is not known` : `${QTY_KIND.individual} = ${QTY_KIND.asin} × ${PER_ASIN_UNIT}`}>
+                · {(summary.rows_missing_pack ?? 0) > 0 || summary.individual_units == null ? <span className="text-muted-foreground/50">—</span> : fmtQty(summary.individual_units)} individual
+              </span>
+            )}
+          </div>
         ))}
         <div><span className="text-muted-foreground mr-1.5">Order Total</span><Money v={summary.order_total} /></div>
         <div><span className="text-muted-foreground mr-1.5">COGS Total</span><Money v={summary.cogs_total} /></div>
@@ -1132,7 +1150,7 @@ export function PurchaseOrderDetailPlaceholder() {
 
       {tab === "payments" && <PoMoneyTab po={po} asins={asins} payments={data.payments ?? []} promos={data.promos ?? []} refunds={data.refunds ?? []} defects={data.defects ?? []} onChanged={reload} />}
 
-      {tab === "tracking" && <PoTrackingTab poId={po.id} onChanged={reload} />}
+      {tab === "tracking" && <PoTrackingTab poId={po.id} onChanged={reload} perProductUnit={onePerProductUnit(asins)} />}
 
       {tab === "history" && <PoHistory poId={po.id} reloadKey={version} />}
     </div>

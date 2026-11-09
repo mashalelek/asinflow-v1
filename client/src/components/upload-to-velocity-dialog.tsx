@@ -39,6 +39,20 @@ interface FieldDiff { field: string; sheet_value: number | null; velocity_value:
 interface PlanUpdate {
   order_id: string; order_number: string; asin: string; status: string;
   item_name: string | null; actionable: boolean; diffs: FieldDiff[];
+  /** The row's Individual units per ASIN unit (the sheet's AY), for the ASIN-units line under each Individual count (2026-11-09). */
+  units_per_pack?: string | number | null;
+}
+/** Pure: the ASIN units behind an Individual count — Individual ÷ Individual units per ASIN unit; null when either is unknown. */
+export function asinEquivalent(indiv: string | number | null | undefined, perUnit: string | number | null | undefined): number | null {
+  if (indiv == null || indiv === "" || perUnit == null || perUnit === "") return null;
+  const n = Number(indiv), p = Number(perUnit);
+  if (!Number.isFinite(n) || !Number.isFinite(p) || p <= 0) return null;
+  return Math.round((n / p) * 100) / 100;
+}
+function AsinEquivalent({ indiv, perUnit }: { indiv: string | number | null | undefined; perUnit: string | number | null | undefined }) {
+  if (indiv == null || indiv === "") return null;
+  const n = asinEquivalent(indiv, perUnit);
+  return <div className="text-[11px] font-normal text-muted-foreground">{n == null ? "—" : n} ASIN u.</div>;
 }
 interface UnplacedBundle {
   velocity_order_id: string; date: string; quantity: number | null;
@@ -55,7 +69,7 @@ interface SkipRow {
 // A multi-pack create sent as whole packs with units left over (2026-11-05): unticked, the row in amber.
 interface PackRemainder { order_number: string; asin: string; packs: number; units_per_pack: number; leftover: number }
 export function remainderLabel(p: PackRemainder): string {
-  return `${p.packs} pack${p.packs === 1 ? "" : "s"} sent · ${p.leftover} single${p.leftover === 1 ? "" : "s"} left over`;
+  return `${p.packs} pack${p.packs === 1 ? "" : "s"} sent · ${p.leftover} Individual unit${p.leftover === 1 ? "" : "s"} left over`;
 }
 interface VelocityBundleItem { item_name: string; quantity: number; order_number: string; retailer: string; date: string }
 interface VelocityBundleRecord {
@@ -442,7 +456,7 @@ export function UploadToVelocityDialog({ open, onOpenChange }: { open: boolean; 
                         <th className="py-1 pr-3">Retailer</th>
                         <th className="py-1 pr-3">Order #</th>
                         <th className="py-1 pr-3">Item</th>
-                        <th className="py-1 pr-3 text-right">Qty</th>
+                        <th className="py-1 pr-3 text-right align-bottom"><span className="block text-[9px] font-normal opacity-60">Individual units</span>Qty</th>
                         <th className="py-1 pr-3">Sold as</th>
                         <th className="py-1 pr-3">ASIN</th>
                         <th className="py-1 pr-3">SKU</th>
@@ -496,7 +510,7 @@ export function UploadToVelocityDialog({ open, onOpenChange }: { open: boolean; 
                                 </td>
                                 <td className="py-1.5 pr-3 whitespace-nowrap">{b.date}</td>
                                 <td className="py-1.5 pr-3 max-w-[280px] truncate" title={b.item_name}>{b.item_name}</td>
-                                <td className="py-1.5 pr-3 text-right whitespace-nowrap">{b.quantity} units</td>
+                                <td className="py-1.5 pr-3 text-right whitespace-nowrap">{b.quantity} Individual units</td>
                                 <td className="py-1.5 pr-3 whitespace-nowrap">bundle ×{b.units_per_pack}</td>
                                 <td className="py-1.5 pr-3 font-mono text-xs">{b.asin}</td>
                                 <td className="py-1.5 pr-3 font-mono text-xs">{b.amazon_sku}</td>
@@ -576,7 +590,7 @@ export function UploadToVelocityDialog({ open, onOpenChange }: { open: boolean; 
                                 <td className="py-1.5 pr-3 max-w-[140px] truncate">{b.bundle_items[0]?.retailer}</td>
                                 <td className="py-1.5 pr-3 whitespace-nowrap">{b.orderNumbers[0]}</td>
                                 <td className="py-1.5 pr-3 max-w-[280px] truncate" title={b.item_name}>{b.item_name}</td>
-                                <td className="py-1.5 pr-3 text-right whitespace-nowrap">{b.quantity} units · bundle ×{b.units_per_pack}</td>
+                                <td className="py-1.5 pr-3 text-right whitespace-nowrap">{b.quantity} Individual units · bundle ×{b.units_per_pack}</td>
                                 <td className="py-1.5 pr-3 font-mono text-xs">{b.asin}</td>
                                 <td className="py-1.5 pr-3 text-xs">Ships to Home</td>
                                 <td className="py-1.5">{resultBadge(resultFor("create_bundle", key))}</td>
@@ -605,8 +619,9 @@ export function UploadToVelocityDialog({ open, onOpenChange }: { open: boolean; 
                         <th className="py-1 pr-3">Order #</th>
                         <th className="py-1 pr-3">Item</th>
                         <th className="py-1 pr-3">ASIN</th>
-                        <th className="py-1 pr-3 text-right">Sheet qty</th>
-                        <th className="py-1 pr-3 text-right">Velocity qty</th>
+                        {/* Both kinds side by side (2026-11-09): Individual units as Velocity counts them, the ASIN units under each when the pack size is known. */}
+                        <th className="py-1 pr-3 text-right align-bottom"><span className="block text-[9px] font-normal opacity-60">Individual units</span>Sheet</th>
+                        <th className="py-1 pr-3 text-right align-bottom"><span className="block text-[9px] font-normal opacity-60">Individual units</span>Velocity</th>
                         <th className="py-1"></th>
                       </tr>
                     </thead>
@@ -623,8 +638,8 @@ export function UploadToVelocityDialog({ open, onOpenChange }: { open: boolean; 
                             <td className="py-1.5 pr-3 whitespace-nowrap">{u.order_number}</td>
                             <td className="py-1.5 pr-3 max-w-[280px] truncate" title={u.item_name ?? ""}>{u.item_name}</td>
                             <td className="py-1.5 pr-3 font-mono text-xs">{u.asin}</td>
-                            <td className="py-1.5 pr-3 text-right font-medium">{qty?.sheet_value ?? "—"}</td>
-                            <td className="py-1.5 pr-3 text-right">{qty?.velocity_value ?? "—"}</td>
+                            <td className="py-1.5 pr-3 text-right font-medium">{qty?.sheet_value ?? "—"}<AsinEquivalent indiv={qty?.sheet_value} perUnit={u.units_per_pack} /></td>
+                            <td className="py-1.5 pr-3 text-right">{qty?.velocity_value ?? "—"}<AsinEquivalent indiv={qty?.velocity_value} perUnit={u.units_per_pack} /></td>
                             <td className="py-1.5 text-xs">
                               {u.actionable
                                 ? resultBadge(resultFor("update", u.order_id))
@@ -685,8 +700,8 @@ export function UploadToVelocityDialog({ open, onOpenChange }: { open: boolean; 
                                         {(s.unplaced ?? []).map((u) => (
                                           <div key={u.velocity_order_id} className="border border-border/60 rounded p-2 space-y-1">
                                             <div className="text-[11px] text-muted-foreground">
-                                              ordered <strong>{u.date}</strong> · {u.quantity} units
-                                              {u.units_per_pack ? ` (packs of ${u.units_per_pack})` : ""}
+                                              ordered <strong>{u.date}</strong> · {u.quantity} Individual units
+                                              {u.units_per_pack ? ` (${u.units_per_pack} per ASIN unit)` : ""}
                                               {u.amazon_sku ? <> · <span className="font-mono">{u.amazon_sku}</span></> : null}
                                               {u.created_at ? ` · entered ${u.created_at}` : ""}
                                             </div>

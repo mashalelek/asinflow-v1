@@ -31,7 +31,7 @@ describe("DashboardChart — marks, series toggles, quiet chrome", () => {
     expect(chart).toMatch(/data-testid=\{`button-\$\{kind\}-table`\}/);
   });
   it("the tooltip lists period, Sales, Spend, POs, units sold and orders; the coverage note and the to-date note", () => {
-    expect(chart).toMatch(/label="Spend"[\s\S]*label="Sales"[\s\S]*label=\{`PO\$\{p\.poCount === 1 \? "" : "s"\}`\}[\s\S]*label="units sold"[\s\S]*label="orders"/);
+    expect(chart).toMatch(/label="Spend"[\s\S]*label="Sales"[\s\S]*label=\{`PO\$\{p\.poCount === 1 \? "" : "s"\}`\}[\s\S]*label="ASIN units sold"[\s\S]*label="orders"/);
     expect(chart).toMatch(/Sales from \$\{fmtRangeLabel\(series\.salesFrom, series\.salesFrom\)\} — earlier periods have no sales data\./);
     expect(chart).toMatch(/The last period is to date\./);
   });

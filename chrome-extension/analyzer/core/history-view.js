@@ -5,7 +5,7 @@
   const MON = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
   function fmtDate(d) { const m = /^(\d{4})-(\d{2})-(\d{2})/.exec(String(d || "")); return m ? `${MON[Number(m[2]) - 1]} ${Number(m[3])}, ${m[1]}` : String(d || ""); }
   const money = (n) => (n == null ? "—" : `$${Number(n).toFixed(2)}`);
-  const units = (n) => `${Math.round(Number(n) * 100) / 100} unit${Number(n) === 1 ? "" : "s"}`;
+  const units = (n) => `${Math.round(Number(n) * 100) / 100} ASIN unit${Number(n) === 1 ? "" : "s"}`;
   /** Pure: one ASIN's history → its text lines ({ k, v } pairs; k is the label). showSupplier: name each PO's supplier (the Analyzer's view spans suppliers); a recent purchase outside thisYear shows its year. */
   function historyLines(h, showSupplier, thisYear) {
     if (!h) return [];

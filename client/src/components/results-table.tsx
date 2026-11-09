@@ -27,9 +27,10 @@ import {
 } from "@shared/schema";
 
 const DEFAULT_COL_WIDTHS: Partial<Record<ColumnId, number>> = {
-  product: 400, soldAs: 125, packSize: 75, category: 160, brand: 100, supplier: 100,
-  stock: 75, availableFba: 80, onOrder: 80, atPrep: 75, atWarehouse: 95, fbaStock: 85, reserved: 75, sentToFba: 80, daysLeft: 80,
-  cogs: 90, actPrepCost: 85, actUnitsSold: 85, actRefunds: 80, actRefundPct: 80,
+  // 2026-11-09 (quantity names): "Individual units per ASIN unit" in two lines; the stock columns carry the "ASIN units" line above the label, Units Sold "Actual · ASIN units".
+  product: 400, soldAs: 125, packSize: 150, category: 160, brand: 100, supplier: 100,
+  stock: 90, availableFba: 95, onOrder: 95, atPrep: 90, atWarehouse: 100, fbaStock: 95, reserved: 90, sentToFba: 95, daysLeft: 80,
+  cogs: 90, actPrepCost: 85, actUnitsSold: 125, actRefunds: 80, actRefundPct: 80,
   actAvgSalePrice: 100, actRevenue: 95, actProfit: 100, actProfitPerUnit: 90, actRoi: 80, actMargin: 80,
   estCogs: 90, salePrice: 95, profit: 90, margin: 80, roi: 80,
   fbaFee: 85, referralFee: 95, inboundShipping: 100, prep: 85, storage: 105, maxCogs: 90,
@@ -880,8 +881,8 @@ export function ResultsTable({
                   data-testid={`header-${colId}`}
                 >
                   <span className="inline-flex items-center gap-1 pr-2 overflow-hidden">
-                    <span className={`flex flex-col leading-tight ${col.qualifier ? "" : "justify-end"}`}>
-                      {col.qualifier && <span className="text-[9px] opacity-60">{col.qualifier}</span>}
+                    <span className={`flex flex-col leading-tight ${col.qualifier || col.kind ? "" : "justify-end"}`}>
+                      {(col.qualifier || col.kind) && <span className="text-[9px] opacity-60">{[col.qualifier, col.kind].filter(Boolean).join(" · ")}</span>}
                       <span>{col.label}</span>
                     </span>
                     {isActive && (sortDir === "asc" ? <ArrowUp className="h-3 w-3" /> : <ArrowDown className="h-3 w-3" />)}
@@ -2175,15 +2176,15 @@ export function renderCell(
               {result.stock?.on_order ?? 0}
             </Link>
           </TooltipTrigger>
-          <TooltipContent side="top" className="text-xs">On Order = Σ open POs since reconciliation start: Ordered − Canceled − Returned − Lost/damaged − Shipped FBA − At Prep − At CQG Warehouse, floored at 0 (a closed PO counts 0; a unit is on order, at prep or at the warehouse, never two) · click for the open POs</TooltipContent>
+          <TooltipContent side="top" className="text-xs">On Order (ASIN units) = Σ open POs since reconciliation start: Ordered − Canceled − Returned − Lost/damaged − Shipped FBA − At Prep − At CQG Warehouse, floored at 0 (a closed PO counts 0; a unit is on order, at prep or at the warehouse, never two) · click for the open POs</TooltipContent>
         </Tooltip>
       );
     case "atPrep":
-      return <Tooltip><TooltipTrigger asChild><span className="font-mono text-sm cursor-help">{result.stock?.at_prep ?? 0}</span></TooltipTrigger><TooltipContent side="top" className="text-xs">At Prep = units at Velocity for this ASIN, across every PO (not in On Order)</TooltipContent></Tooltip>;
+      return <Tooltip><TooltipTrigger asChild><span className="font-mono text-sm cursor-help">{result.stock?.at_prep ?? 0}</span></TooltipTrigger><TooltipContent side="top" className="text-xs">At Prep = ASIN units at Velocity for this ASIN, across every PO (not in On Order)</TooltipContent></Tooltip>;
     case "atWarehouse":
-      return <Tooltip><TooltipTrigger asChild><span className="font-mono text-sm cursor-help">{result.stock?.at_warehouse ?? 0}</span></TooltipTrigger><TooltipContent side="top" className="text-xs">At CQG Warehouse = units at the house for this ASIN, across every PO (not in On Order)</TooltipContent></Tooltip>;
+      return <Tooltip><TooltipTrigger asChild><span className="font-mono text-sm cursor-help">{result.stock?.at_warehouse ?? 0}</span></TooltipTrigger><TooltipContent side="top" className="text-xs">At CQG Warehouse = ASIN units at the house for this ASIN, across every PO (not in On Order)</TooltipContent></Tooltip>;
     case "fbaStock":
-      return <Tooltip><TooltipTrigger asChild><span className="font-mono text-sm cursor-help">{numCell(String(result.fbaStock ?? 0))}</span></TooltipTrigger><TooltipContent side="top" className="text-xs">FBA Stock = Stock − On Order − At Prep − At CQG Warehouse (= Available + Reserved + Sent to FBA)</TooltipContent></Tooltip>;
+      return <Tooltip><TooltipTrigger asChild><span className="font-mono text-sm cursor-help">{numCell(String(result.fbaStock ?? 0))}</span></TooltipTrigger><TooltipContent side="top" className="text-xs">FBA Stock (ASIN units) = Stock − On Order − At Prep − At CQG Warehouse (= Available + Reserved + Sent to FBA)</TooltipContent></Tooltip>;
     case "reserved":
       return numCell(String(result.stock?.reserved ?? 0));
     case "sentToFba":

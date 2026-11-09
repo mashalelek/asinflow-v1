@@ -96,7 +96,7 @@ export function DashboardChart({ kind, series, loading, showSales, showSpend, on
       {table ? (
         <div className="mt-3 max-h-[320px] overflow-auto text-xs">
           <table className="w-full border-collapse tabular-nums">
-            <thead><tr className="text-muted-foreground"><th className="py-1 text-left font-medium">Period</th><th className="py-1 text-right font-medium">Sales</th><th className="py-1 text-right font-medium">Spend</th><th className="py-1 text-right font-medium">POs</th><th className="py-1 text-right font-medium">Units</th><th className="py-1 text-right font-medium">Orders</th></tr></thead>
+            <thead><tr className="text-muted-foreground"><th className="py-1 text-left font-medium">Period</th><th className="py-1 text-right font-medium">Sales</th><th className="py-1 text-right font-medium">Spend</th><th className="py-1 text-right font-medium">POs</th><th className="py-1 text-right font-medium">ASIN units</th><th className="py-1 text-right font-medium">Orders</th></tr></thead>
             <tbody>
               {points.map((p) => (
                 <tr key={p.period} style={{ borderTop: "0.5px solid hsl(var(--border))" }}>
@@ -148,7 +148,7 @@ function ChartTip({ kind, active, payload, colors, showSales, showSpend }: { kin
       {showSpend && <Row swatch={<span className="inline-block h-2.5 w-2.5 rounded-sm" style={{ backgroundColor: colors.spend }} />} value={fmtMoney(p.spend)} label="Spend" />}
       {showSales && <Row swatch={<span className="inline-block h-0.5 w-3 rounded-full" style={{ backgroundColor: colors.sales }} />} value={fmtMoney(p.sales)} label="Sales" />}
       <Row value={fmtInt(p.poCount)} label={`PO${p.poCount === 1 ? "" : "s"}`} />
-      <Row value={fmtInt(p.units)} label="units sold" />
+      <Row value={fmtInt(p.units)} label="ASIN units sold" />
       <Row value={fmtInt(p.orders)} label="orders" />
     </div>
   );

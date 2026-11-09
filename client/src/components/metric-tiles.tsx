@@ -89,7 +89,7 @@ export function MetricTile({ col, index, count, coverage }: { col: DashboardColu
         <Main label="Sales" value={sales.main} testId={t("sales-main")} />
         {sales.small && <div className="-mt-2 text-[11px] text-muted-foreground">{sales.small}</div>}
         <div className="grid grid-cols-2 gap-x-4 gap-y-3">
-          <Sub label="Orders / Units" note={ou.small} testId={t("orders-units")}><span className={`whitespace-nowrap text-[15px] xl:text-base ${ou.muted ? DIM : ""}`}>{ou.main}</span></Sub>
+          <Sub label="Orders / ASIN units" note={ou.small} testId={t("orders-units")}><span className={`whitespace-nowrap text-[15px] xl:text-base ${ou.muted ? DIM : ""}`}>{ou.main}</span></Sub>
           <Sub label="Refunds" testId={t("refunds")} dim>—</Sub>
         </div>
       </section>

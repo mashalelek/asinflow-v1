@@ -549,7 +549,7 @@ export async function syncVelocityShipments(opts: { dryRun: boolean; deps?: Velo
         const left = remainingFor(d.line)(cp.row);
         if (left + 1e-9 >= d.units) { linkLines([d], cp.row, "col_p"); continue; }
         colPHint.set(d.key, { po_asin_id: String(cp.row.id), order_id: cp.row.order_id, supplier: cp.row.supplier, asin: cp.row.asin, source: "col_p" });
-        colPMiss.set(d.key, `Col P names PO ${cp.row.order_id} (${cp.row.supplier}), but it has ${round2(Math.max(0, left))} units left, the line needs ${d.units}`);
+        colPMiss.set(d.key, `Col P names PO ${cp.row.order_id} (${cp.row.supplier}), but it has ${round2(Math.max(0, left))} Individual units left, the line needs ${d.units}`);
       } else if (cp.candidates) d.res = cp;
     }
     rest.push(d);
@@ -573,7 +573,7 @@ export async function syncVelocityShipments(opts: { dryRun: boolean; deps?: Velo
     const base = orderNumber ? baseKeyRows(orderNumber, asin, ret, ctx.ki) : [];
     if (base.length === 1) {
       if (remaining(base[0]) + 1e-9 >= units) { row = base[0]; how = "base_id"; }
-      else miss = miss ?? `base PO ${base[0].order_id} (${base[0].supplier}) has ${round2(Math.max(0, remaining(base[0])))} units left, the line needs ${units} — the ${orderNumber} PO may be missing from AF`;
+      else miss = miss ?? `base PO ${base[0].order_id} (${base[0].supplier}) has ${round2(Math.max(0, remaining(base[0])))} Individual units left, the line needs ${units} — the ${orderNumber} PO may be missing from AF`;
     }
     if (miss == null && orderNumber) {
       // The line's own order # names a PO the eligibility rule excludes — say so.

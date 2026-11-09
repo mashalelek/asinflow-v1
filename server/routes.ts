@@ -213,7 +213,7 @@ const COLUMN_NAME_ALIASES: Record<string, string[]> = {
   supplierSku: ["supplier sku", "supplier_sku", "suppliersku", "sku", "item number", "item #", "item no", "vendor sku", "vendor item", "catalog number", "part number", "mpn"],
   // The ASINs Export round-trip (2026-11-06): its own headers come back as written.
   soldAs: ["sold as", "sold_as", "soldas"],
-  packSize: ["pack size", "pack_size", "packsize", "units per pack", "units/pack"],
+  packSize: ["pack size", "pack_size", "packsize", "units per pack", "units/pack", "individual units per asin unit"],
   // §21 bulk fields (2026-09-04). Broad aliases ("date"/"added") are safe
   // because matchColumnName is EXACT on the normalized header, never fuzzy.
   // Parsed on both paths; the main upload path ignores both (promos on the
@@ -4446,6 +4446,9 @@ export async function registerRoutes(
       // line qty_received — all-NULL stays NULL → em-dash, never 0.
       const num = (v: any) => (v == null ? null : parseFloat(v));
       const unitsOrdered = Math.round(asinRows.reduce((t: number, a: any) => t + (Number(a.qty) || 0), 0) * 100) / 100;
+      // 2026-11-09 (SPEC §22 "Quantity vocabulary"): the strip's "· N individual" = Σ ASIN units × Individual units per ASIN unit; a row with no pack size makes the total unknown (counted, shown "—"), never ×1.
+      const rowsMissingPack = asinRows.filter((a: any) => a.units_per_pack == null && (Number(a.qty) || 0) !== 0).length;
+      const individualUnits = rowsMissingPack > 0 ? null : Math.round(asinRows.reduce((t: number, a: any) => t + (Number(a.qty) || 0) * (Number(a.units_per_pack) || 0), 0) * 100) / 100;
       const recVals = lineRows.map((l: any) => l.qty_received).filter((v: any) => v != null);
       const unitsReceived = recVals.length === 0 ? null : recVals.reduce((t: number, v: any) => t + Number(v), 0);
       const nonNullCosts = asinRows.filter((a: any) => a.total_cost != null);
@@ -4460,6 +4463,8 @@ export async function registerRoutes(
         summary: {
           asin_count: asinRows.length,
           units_ordered: unitsOrdered,
+          individual_units: individualUnits,
+          rows_missing_pack: rowsMissingPack,
           units_received: unitsReceived,
           order_total: po.order_total,
           // All-NULL cost set → null → the strip renders a muted em-dash,

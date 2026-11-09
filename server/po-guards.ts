@@ -57,7 +57,7 @@ export async function deletePo(query: QueryLike, poId: string, userId: number | 
      ON CONFLICT (supplier, order_id) DO UPDATE SET deleted_by = EXCLUDED.deleted_by, deleted_at = now()`,
     [g.supplier, g.orderId, userId],
   );
-  await logEdits(query, poId, userId, "po", poId, [{ field: "PO deleted", old: `${g.supplier} ${g.orderId} — ${g.asinCount} ASIN(s), ${g.lineCount} product(s)${g.atPrepUnits > 0 ? `, ${asLogText(g.atPrepUnits)} still at Velocity` : ""}`, new: null }]);
+  await logEdits(query, poId, userId, "po", poId, [{ field: "PO deleted", old: `${g.supplier} ${g.orderId} — ${g.asinCount} ASIN(s), ${g.lineCount} product(s)${g.atPrepUnits > 0 ? `, ${asLogText(g.atPrepUnits)} ASIN units still at Velocity` : ""}`, new: null }]);
   await query(`DELETE FROM po_line_items WHERE po_id = $1`, [poId]);
   await query(`DELETE FROM purchase_orders WHERE id = $1`, [poId]); // po_asins cascade
   return { deleted: true, supplier: g.supplier, orderId: g.orderId, lines: g.lineCount, asins: g.asinCount, atPrepUnits: g.atPrepUnits };
@@ -121,7 +121,7 @@ export async function reassignShipment(query: QueryLike, shipmentRowId: string, 
   const shipped = Number(src.qty_shipped);
   const units = unitsIn == null || unitsIn === "" ? shipped : Number(unitsIn);
   if (!Number.isFinite(units) || units <= 0 || units > shipped + 1e-9 || Math.abs(units * 100 - Math.round(units * 100)) > 1e-6) {
-    throw new EditError(400, `units must be more than 0 and at most ${asLogText(shipped)} (2 decimals)`);
+    throw new EditError(400, `ASIN units must be more than 0 and at most ${asLogText(shipped)} (2 decimals)`);
   }
   const isVelocity = src.source === "velocity";
   const vOrder = isVelocity ? await velocityOrderNumberFor(query, src) : null;

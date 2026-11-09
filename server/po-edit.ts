@@ -215,10 +215,10 @@ export async function fbaShipmentsOf(query: QueryLike, where: { poId?: string; p
   return { units, fbaIds: Array.from(ids).sort(), rows: rows.length };
 }
 
-/** §5.1 message: "N units shipped to FBA in <FBA ids>. Reassign the shipment to another PO first." */
+/** §5.1 message: "N ASIN units shipped to FBA in <FBA ids>. Reassign the shipment to another PO first." */
 export function shipmentBlockMessage(s: { units: number; fbaIds: string[] }): string {
   const n = Number.isInteger(s.units) ? String(s.units) : s.units.toFixed(2);
-  return `${n} unit${s.units === 1 ? "" : "s"} shipped to FBA in ${s.fbaIds.length > 0 ? s.fbaIds.join(", ") : "a shipment with no FBA id yet"}. Reassign the shipment to another PO first.`;
+  return `${n} ASIN unit${s.units === 1 ? "" : "s"} shipped to FBA in ${s.fbaIds.length > 0 ? s.fbaIds.join(", ") : "a shipment with no FBA id yet"}. Reassign the shipment to another PO first.`;
 }
 
 /** Find or create this PO's ASIN row for `asin` (a line re-map / a new line). New rows take title + primary SKU from the catalog. */
@@ -284,7 +284,7 @@ export async function editLine(query: QueryLike, lineId: string, body: unknown, 
   const ordered = Number(p.edits.qty_ordered ?? cur.qty_ordered ?? 0);
   for (const k of ["qty_canceled", "qty_returned", "qty_received"] as const) {
     const v = k in p.edits ? p.edits[k] : cur[k];
-    if (v != null && Number(v) > ordered) throw new EditError(400, `${k} (${v}) cannot exceed qty ordered (${ordered})`);
+    if (v != null && Number(v) > ordered) throw new EditError(400, `${k} (${v}) cannot exceed the line's Ordered (${ordered} Product units)`);
   }
   // A captured line total holds only for its price and qty: a new price or qty without one goes back to price × qty.
   if (cur.line_total != null && !("line_total" in p.edits) && (("price" in p.edits && changedFields(cur, { price: p.edits.price }).length) || ("qty_ordered" in p.edits && changedFields(cur, { qty_ordered: p.edits.qty_ordered }).length))) p.edits.line_total = null;
@@ -379,7 +379,7 @@ export async function editAsinRow(query: QueryLike, poAsinId: string, body: unkn
     if ("units_per_pack" in p.edits && Number(p.edits.units_per_pack) !== 1) throw new EditError(400, "units_per_pack must be 1 for an individual ASIN");
     if (p.edits.sold_as === "individual") p.edits.units_per_pack = 1;
   } else if (soldAs === "multi-pack" && ("sold_as" in p.edits || "units_per_pack" in p.edits) && !(Number(upp) >= 2)) {
-    throw new EditError(400, "a multi-pack needs units per pack (2 or more)");
+    throw new EditError(400, "a multi-pack needs Individual units per ASIN unit (2 or more)");
   }
   const poId = String(cur.po_id);
   const changes = changedFields(cur, p.edits);

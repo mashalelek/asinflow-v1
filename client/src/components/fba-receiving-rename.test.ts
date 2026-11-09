@@ -17,7 +17,7 @@ describe("FBA receiving mismatch", () => {
   });
 
   it("hover says what it means: Received by Amazon ≠ Shipped FBA", () => {
-    expect(fbaReceivingTitle({ qty_shipped_fba: "15.00", qty_received_amazon: "13.00" })).toBe("Received by Amazon 13 ≠ Shipped FBA 15 (information only; never blocks auto-close)");
+    expect(fbaReceivingTitle({ qty_shipped_fba: "15.00", qty_received_amazon: "13.00" })).toBe("Received by Amazon 13 ≠ Shipped FBA 15, in ASIN units (information only; never blocks auto-close)");
     expect(readFileSync("client/src/components/po-asin-rows.tsx", "utf8")).toMatch(/withMeaning\(it, lineDetailTitle\(it, d\)\)/);
   });
 

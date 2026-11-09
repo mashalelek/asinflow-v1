@@ -73,7 +73,7 @@ describe("New PO form — round 2 layout", () => {
     expect(src).toMatch(/\{PROMO_REFLECTED_NOTE\}/);
   });
   it("the ASIN row carries a label row (ASIN · Title · ASIN qty · Sold as · Units/pack · Prep · Sourcing · COGS · Paid · Adjustment · Reason · Notes) and the three costs; the summary table, Lines and Pack are gone; the math line stays; prep defaults from Ships to", () => {
-    expect(src).toMatch(/\["ASIN", A\.asin\], \["Title", "title"\], \["ASIN qty", A\.qty, "text-right"\], \["Sold as", A\.sold\], \["Units\/pack", A\.upp, "text-right"\], \["Prep", A\.prep, "text-right"\], \["Sourcing", A\.sourcing, "text-right"\], \["COGS", A\.cogs, "text-right"\], \["Paid", A\.paid, "text-right"\], \["Adjustment", A\.adj, "text-right"\], \["Reason", A\.reason\], \["Notes", A\.notes\]/);
+    expect(src).toMatch(/\["ASIN", A\.asin\], \["Title", "title"\], \["ASIN units", A\.qty, "text-right"\], \["Sold as", A\.sold\], \[PER_ASIN_UNIT, A\.upp, "text-right"\], \["Prep", A\.prep, "text-right"\], \["Sourcing", A\.sourcing, "text-right"\], \["COGS", A\.cogs, "text-right"\], \["Paid", A\.paid, "text-right"\], \["Adjustment", A\.adj, "text-right"\], \["Reason", A\.reason\], \["Notes", A\.notes\]/);
     expect(src).not.toMatch(/ASIN rows this PO will create|new-po-asin-summary|COGS \/ unit|<th className=\{th\}>Pack<\/th>/);
     expect(src).toMatch(/data-testid=\{`new-po-asin-math-\$\{i\}`\}/);
     expect(src).toMatch(/const want = shipsTo === "velocity" \? people\.velocity_prep\.toFixed\(2\) : "0\.00";/);

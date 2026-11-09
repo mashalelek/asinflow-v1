@@ -16,7 +16,8 @@ export function velocityOrderText(o: { velocity_number: string | null; order_num
   return `${o.velocity_number ? `#${o.velocity_number}` : "Velocity order"} · ${o.order_number || "(no Order #)"}`;
 }
 
-const units = (q: string | null) => (q == null ? "—" : `${Number(q).toLocaleString("en-US", { maximumFractionDigits: 2 })}u`);
+/** Velocity's quantity is Individual units (SPEC §11). */
+const units = (q: string | null) => (q == null ? "—" : `${Number(q).toLocaleString("en-US", { maximumFractionDigits: 2 })} indiv.`);
 
 function useLinks(poId: string | null, reloadKey?: number) {
   const [links, setLinks] = useState<VelocityOrderLink[] | null>(null);

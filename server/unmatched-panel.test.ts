@@ -52,9 +52,9 @@ describe("client", () => {
   it("candidateLabel: §4 candidates show Δdays and units left; Col P rows say so", async () => {
     const { candidateLabel } = await import("../client/src/pages/purchase-orders");
     expect(candidateLabel({ po_asin_id: "x", order_id: "39836159", supplier: "s", asin: "a", source: "col_p" })).toBe("39836159 · Col P");
-    expect(candidateLabel({ po_asin_id: "x", order_id: "A1", supplier: "s", asin: "a", source: "candidate", days: -9, remaining_units: 2 })).toBe("A1 · -9d · 2 left");
-    expect(candidateLabel({ po_asin_id: "x", order_id: "A1", supplier: "s", asin: "a", source: "candidate", days: 0, remaining_units: 5 })).toBe("A1 · same day · 5 left");
-    expect(candidateLabel({ po_asin_id: "x", order_id: "A1", supplier: "s", asin: "a", source: "candidate", days: 3, remaining_units: 5 })).toBe("A1 · +3d · 5 left");
+    expect(candidateLabel({ po_asin_id: "x", order_id: "A1", supplier: "s", asin: "a", source: "candidate", days: -9, remaining_units: 2 })).toBe("A1 · -9d · 2 indiv. left");
+    expect(candidateLabel({ po_asin_id: "x", order_id: "A1", supplier: "s", asin: "a", source: "candidate", days: 0, remaining_units: 5 })).toBe("A1 · same day · 5 indiv. left");
+    expect(candidateLabel({ po_asin_id: "x", order_id: "A1", supplier: "s", asin: "a", source: "candidate", days: 3, remaining_units: 5 })).toBe("A1 · +3d · 5 indiv. left");
   });
 });
 

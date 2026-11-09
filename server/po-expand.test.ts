@@ -14,9 +14,14 @@ const read = (rel: string) => readFileSync(join(__dirname, "..", rel), "utf8");
 describe("§4 column model", () => {
   it("has the 21 columns in the patch's order and names (Received by Velocity before At Prep Center, 2026-11-02)", () => {
     expect(PO_ASIN_COLUMNS.map((c) => c.label)).toEqual([
-      "ASIN", "Title", "Amazon SKU", "Ordered", "Cost/Unit", "Total Cost", "Prep", "Sold As", "Units/Pack",
-      "Individual Units Ordered", "Canceled", "Returned", "Shipped by Supplier", "Received by Velocity", "At Prep Center", "At CQG Warehouse",
-      "Lost/damaged by us", "Shipped FBA", "Received by Amazon", "Shipment IDs", "Action Items", // row-level Status 2026-10-17
+      "ASIN", "Title", "Amazon SKU", "Ordered", "Cost/Unit", "Total Cost", "Prep", "Sold As", "Individual units per ASIN unit",
+      "Ordered", "Canceled", "Returned", "Shipped by Supplier", "Received by Velocity", "At Prep Center", "At CQG Warehouse",
+      "Lost / damaged by us", "Shipped FBA", "Received by Amazon", "Shipment IDs", "Action Items", // row-level Status 2026-10-17
+    ]);
+    // Quantity vocabulary (2026-11-09): every quantity column names its kind; the two Ordered columns differ by it.
+    expect(PO_ASIN_COLUMNS.filter((c) => "kind" in c).map((c) => `${c.key}:${(c as any).kind}`)).toEqual([
+      "ordered:ASIN units", "individual_units:Individual units", "canceled:ASIN units", "returned:ASIN units", "shipped_supplier:ASIN units",
+      "received_velocity:ASIN units", "at_prep:ASIN units", "at_warehouse:ASIN units", "lost_damaged_us:ASIN units", "shipped_fba:ASIN units", "received_amazon:ASIN units",
     ]);
   });
   it("the table shows every model column once, in the model's order, in 17 display columns (2026-11-05: no clipping from 1024)", () => {
@@ -52,8 +57,8 @@ describe("§4 column model", () => {
     expect(comp).toMatch(/title=\{VELOCITY_QTY_TITLE\}><QtyCell v=\{a\.received_velocity\}/);
     expect(comp).toMatch(/title=\{VELOCITY_QTY_TITLE\}><QtyCell v=\{a\.qty_at_prep\}/);
     expect(comp).toMatch(/received_velocity: VELOCITY_QTY_TITLE, at_prep: VELOCITY_QTY_TITLE/);
-    expect(comp).toMatch(/title=\{COL_TITLES\[c\.key\]\}>\{c\.label\}/);
-    expect(VELOCITY_QTY_TITLE).toBe("Received by Velocity = all units Velocity has ever checked in for this line; At Prep Center = of those, still at Velocity.");
+    expect(comp).toMatch(/title=\{COL_TITLES\[c\.key\]\}>\s*\{"kind" in c && c\.kind \? <span className="block text-\[9px\] font-normal opacity-60"[^>]*>\{c\.kind\}<\/span> : null\}\s*\{c\.label\}/);
+    expect(VELOCITY_QTY_TITLE).toBe("Received by Velocity = every ASIN unit Velocity has ever checked in for this line (Velocity counts Individual units; shown ÷ Individual units per ASIN unit); At Prep Center = of those, the ASIN units still at Velocity.");
     expect(comp).not.toMatch(/minWidth: "140rem"/);
     expect(read("client/src/pages/purchase-orders.tsx")).toMatch(/minWidth: PO_ASIN_TABLE_MIN_WIDTH/);
     // Received by Velocity is a PO-row column only: the ASIN-level pipeline (On Order / At Prep / Stock) never reads it.
@@ -155,11 +160,13 @@ describe("Products tab status columns (§4.3)", () => {
     expect(read("client/src/pages/purchase-orders.tsx")).toMatch(/\{tab === "products" && <PoProductsTable poId=\{po\.id\} asins=\{asins\} onChanged=\{reload\} po=\{\{ id: po\.id, subtotal: po\.subtotal, discount: po\.discount, tax: po\.tax \}\} shipsTo=\{po\.ships_to\} \/>\}/);
     const tab = read("client/src/components/po-edit.tsx");
     const table = tab.slice(tab.indexOf("export function PoProductsTable"), tab.indexOf("function AddProductRow"));
-    for (const h of ["At Prep Center", "At CQG Warehouse", "Lost/damaged by us"]) expect(table).toContain(`<th className={th(true)}>${h}</th>`);
+    // 2026-11-09: each header carries its kind line (Product units here — the ASINs tab has the same words over ASIN units); Received (sheet col M) is gone.
+    for (const h of ["At Prep Center", "At CQG Warehouse", "Lost / damaged by us"]) expect(table).toMatch(new RegExp(`<Th label="${h.replace(/\//g, "\\/")}" kind=\\{QTY_KIND\\.product\\}[^>]*/>`));
+    expect(table).not.toMatch(/qty_received-velocity/);
+    expect(table).toMatch(/<Th label="Product pack" kind=\{PER_PRODUCT_UNIT\}/);
     // lineYield(l): the line's exact ratio (migration 080), else its stored 2-dp yield read as the fraction it stands for.
-    expect(table).toMatch(/sole \? productQtyFromAsin\(l\.parent\.qty_at_prep, lineYield\(l\)\) : null/);
-    expect(table).toMatch(/sole \? productQtyFromAsin\(l\.parent\.qty_at_warehouse, lineYield\(l\)\) : null/);
-    expect(table).toMatch(/sole \? productQtyFromAsin\(l\.parent\.qty_lost_damaged_us, lineYield\(l\)\) : null/);
+    expect(table).toMatch(/sole \? productQtyFromAsin\(l\.parent\[k\], lineYield\(l\)\) : null/);
+    expect(table).toMatch(/\["qty_at_prep", "qty_at_warehouse", "qty_lost_damaged_us"\] as const/);
     expect(table).toMatch(/const sole = \(l\.parent\.lines \?\? \[\]\)\.length === 1;/);
     // shipment columns stay ASIN-level only
     expect(table).not.toMatch(/Shipped FBA|Received by Amazon|Shipment IDs/);

@@ -36,6 +36,13 @@ and dialog must meet, and the check that proves it.
    warnings, tinted text / chips for status, never saturated badge fills;
    money is neutral. An "on / off" state is shown by form (filled vs
    outline icon, weight), not by a new colour.
+5b. **A quantity label names its kind** (SPEC §22 "Quantity vocabulary",
+   2026-11-09): *ASIN units*, *Product units* or *Individual units* as a
+   small muted line above the header text, exactly like Actual /
+   Estimated on the ASINs table — never in parentheses, never below.
+   Under a PO quantity, the Individual count in grey ("45 indiv."; "—"
+   when the pack size is unknown). Never "qty", "units" or "quantity"
+   alone.
 
 ## The browser check
 

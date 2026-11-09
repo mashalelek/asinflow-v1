@@ -20,7 +20,7 @@ describe("guards (§5.1)", () => {
     const f = fakeQuery([[/FROM purchase_orders p WHERE p\.id = \$1/, [poRow]], [/SELECT s\.qty_shipped, s\.fba_shipment_ids/, shipped]]);
     const g = await loadPoGuards(f.q, "po1");
     expect(g).toMatchObject({ lineCount: 3, asinCount: 2, atPrepUnits: 2, fba: { units: 10, fbaIds: ["FBA19A2B3C", "FBA19A2B3D"], rows: 2 } });
-    expect(g.blocked).toBe("10 units shipped to FBA in FBA19A2B3C, FBA19A2B3D. Reassign the shipment to another PO first.");
+    expect(g.blocked).toBe("10 ASIN units shipped to FBA in FBA19A2B3C, FBA19A2B3D. Reassign the shipment to another PO first.");
   });
   it("delete and cancel are refused while an FBA shipment exists — nothing written", async () => {
     for (const run of [deletePo, cancelPo]) {
@@ -39,7 +39,7 @@ describe("delete (§5.3)", () => {
     const w = f.calls.filter((c) => /^(INSERT|DELETE)/.test(c.sql));
     expect(w[0].sql).toMatch(/^INSERT INTO deleted_pos \(supplier, order_id, deleted_by\)/);
     expect(w[0].params).toEqual(["walmart.com", "200015415094735", 7]);
-    expect(w[1].params).toEqual(["po1", 7, "po", "po1", "PO deleted", "walmart.com 200015415094735 — 2 ASIN(s), 3 product(s), 2 still at Velocity", null]);
+    expect(w[1].params).toEqual(["po1", 7, "po", "po1", "PO deleted", "walmart.com 200015415094735 — 2 ASIN(s), 3 product(s), 2 ASIN units still at Velocity", null]);
     expect(w[2].sql).toMatch(/^DELETE FROM po_line_items WHERE po_id = \$1/);
     expect(w[3].sql).toMatch(/^DELETE FROM purchase_orders WHERE id = \$1/);
   });
