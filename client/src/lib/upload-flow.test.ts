@@ -81,3 +81,26 @@ describe("4. the gating icon on upload rows (2026-10-18)", () => {
     expect(applyStreamedRow([], ph)[0].eligibilityData).toEqual({ status: "check" }); // a new row starts unknown
   });
 });
+
+describe("4. an ASIN the server could not create is named, never counted as added (2026-11-09)", () => {
+  it("insert_failed carries the ASIN and the cause; other messages are not failures", async () => {
+    const { insertFailureFromMessage, insertFailuresText } = await import("./upload-flow");
+    expect(insertFailureFromMessage({ type: "insert_failed", data: { asin: "b0gqw2h66z", message: "inconsistent types deduced for parameter $16" } }))
+      .toEqual({ asin: "B0GQW2H66Z", message: "inconsistent types deduced for parameter $16" });
+    expect(insertFailureFromMessage({ type: "result", data: { asin: "B0GQW2H66Z" } })).toBeNull();
+    expect(insertFailureFromMessage({ type: "insert_failed", data: {} })).toBeNull();
+    const six = Array.from({ length: 6 }, (_, i) => ({ asin: `B00000000${i}`, message: "boom" }));
+    const text = insertFailuresText(six);
+    expect(text).toContain("B000000000: boom");
+    expect(text).toContain("and 1 more");
+    expect(text).toContain("nothing was stored for them");
+    expect(insertFailuresText(six.slice(0, 1))).toContain("nothing was stored for it");
+  });
+  it("the page collects insert_failed on the upload stream and the sourcing stream, and toasts them", () => {
+    const home = read("pages/home.tsx");
+    expect(home).toMatch(/const insertFailed = insertFailureFromMessage\(msg\);\s*if \(insertFailed\) insertFailuresRef\.current\.push\(insertFailed\);/);
+    expect(home).toMatch(/uploaded = uploaded\.filter\(\(a\) => !failedSet\.has\(a\)\)/);
+    expect(home).toMatch(/const f = insertFailureFromMessage\(msg\);\s*if \(f\) \{\s*insertFailed\.push\(f\);/);
+    expect((home.match(/insertFailuresText\(/g) ?? []).length).toBe(2);
+  });
+});

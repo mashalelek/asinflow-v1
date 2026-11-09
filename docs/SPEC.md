@@ -2587,6 +2587,20 @@ Three components are ledger-only in this version, by decision:
   exist before anything prices them — holds because the INSERT precedes
   the enqueue. The unledgered post-upload PO-sheet and suppression syncs
   are components 9 and 18 of that job.
+  **One transaction per new ASIN (2026-11-09):** the main sink writes an
+  ASIN's `asins` row, its `asin_estimates` row, the CSV COGS, the notes
+  append (existing row) and the uploaded pack in one transaction, checks
+  both rows exist, and commits — or rolls back and rejects. `writeResult`
+  then puts `{type: "insert_failed", data: {asin, message}}` on the
+  NDJSON stream instead of a `result` row (the ASINs page names them in
+  a red toast: "N ASINs not added — <asin>: <cause> …", and never counts
+  them as added), and `onboardNewAsins` leaves them out of the job (its
+  "not inserted" check). `insertNewAsinRows` / `onboardNewAsins` return
+  the failed list; sales onboarding logs the true count and SC discovery
+  skips its follow-up writes for them. Bulk Calc promote already had its
+  own transaction. Until then the sink logged-and-swallowed, which is how
+  the `$16` regression (see "Fees") left 18 rows half-created for three
+  days.
 - **Bulk Calc Refresh:** enqueues a job with `target: 'bulk'` for the
   list (§21 "Refresh" — the main→bulk copy rule lives there).
 

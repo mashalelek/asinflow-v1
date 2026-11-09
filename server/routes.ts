@@ -612,6 +612,31 @@ function buildResult(
 
 // upsertTagsForAsin + TAG_COLORS moved to server/tags-repo.ts (2026-09-09).
 
+/** The insert-only (onboarding) write for one ASIN: all of its rows in one transaction, or none — rejects with the cause. */
+async function persistNewAsinRows(
+  result: AsinResult,
+  opts: { fromCsvUpload: boolean; inputNotes: string | null; inputPromoNotes: string | null; inputLeadSource?: LeadSource | null },
+): Promise<void> {
+  const client = await (pool as any).connect();
+  const q = (sql: string, params?: any[]) => client.query(sql, params);
+  try {
+    await client.query("BEGIN");
+    if (opts.fromCsvUpload && result.cogs > 0) await upsertCsvCogs(q, result.asin, result.cogs);
+    const { inserted } = await upsertAsinResult(q, result, opts.fromCsvUpload ? opts.inputNotes : null, opts.fromCsvUpload ? opts.inputPromoNotes : null, opts.inputLeadSource ?? null, true);
+    if (!inserted && opts.inputNotes) await appendNotesForAsin(q, result.asin, opts.inputNotes);
+    if (opts.fromCsvUpload && result.uploadPack) await setAsinPack(q, result.asin, result.uploadPack, null, "upload");
+    // The row must exist when we commit — the whole point (2026-11-09).
+    const both = await q(`SELECT (SELECT count(*) FROM asins WHERE asin = $1)::int AS a, (SELECT count(*) FROM asin_estimates WHERE asin = $1)::int AS e`, [result.asin]);
+    if (Number(both.rows[0]?.a) !== 1 || Number(both.rows[0]?.e) !== 1) throw new Error(`rows after insert: asins ${both.rows[0]?.a ?? "?"}, asin_estimates ${both.rows[0]?.e ?? "?"} — expected 1 and 1`);
+    await client.query("COMMIT");
+  } catch (err) {
+    await client.query("ROLLBACK").catch(() => {});
+    throw err;
+  } finally {
+    client.release();
+  }
+}
+
 // Main-catalog persistence sink: the historical writes, verbatim.
 // Fire-and-forget — persistResult launches the promise chain and returns
 // immediately, exactly as the old inline writeResult DB block did. The §21
@@ -621,6 +646,15 @@ function buildResult(
 export const mainCatalogSink: AnalyzeSink = {
   persistResult(result, { fromCsvUpload, inputNotes, inputPromoNotes, inputLeadSource, insertOnly }) {
     if (!isDbAvailable()) return Promise.resolve();
+    // Onboarding (insertOnly, 2026-11-09): a new ASIN's rows are written in ONE
+    // transaction — the asins row, its asin_estimates row, the CSV COGS, the
+    // notes append on an existing row, the uploaded pack — and a failure
+    // REJECTS: nothing exists, the caller (writeResult) puts the error on the
+    // stream for that ASIN and onboardNewAsins keeps it out of the job. Until
+    // 2026-11-09 this path logged-and-swallowed, so the estimates INSERT that
+    // Postgres refused (the $16 regression, e16daa0) left 18 asins rows with
+    // no estimates row and every component matching 0 rows.
+    if (insertOnly === true) return persistNewAsinRows(result, { fromCsvUpload, inputNotes, inputPromoNotes, inputLeadSource });
     // If this is a CSV upload with user-provided COGS, persist estimated_cogs
     // via the dedicated write path BEFORE the analyze UPSERT. This ensures
     // estimated_cogs is set for both new and existing ASINs.
@@ -641,7 +675,7 @@ export const mainCatalogSink: AnalyzeSink = {
       // §6: always passed, not gated on fromCsvUpload — the sourcing sync and
       // bulk promote supply it too, and it is INSERT-branch-only in the SQL.
       const leadSourceForInsert = inputLeadSource;
-      const { inserted } = await upsertAsinResult(query, result, notesForInsert, promoNotesForInsert, leadSourceForInsert, insertOnly === true);
+      const { inserted } = await upsertAsinResult(query, result, notesForInsert, promoNotesForInsert, leadSourceForInsert, false); // insertOnly took the transactional path above
       // Existing-ASIN path: dedup-aware append. Skipped when the row was just
       // inserted (notes already written by the INSERT branch above).
       // promo_notes: intentionally NO existing-ASIN write — insert-only.
@@ -726,10 +760,23 @@ async function writeResult(
   inputLeadSource: LeadSource | null = null,
   // Scheduler v1 onboarding: rows only, no Amazon data (see upsertAsinResult).
   insertOnly = false,
-): Promise<void> {
+): Promise<boolean> {
   allResults.set(asin, result);
-  emit(JSON.stringify({ type: "result", data: isUpdate ? { ...result, _update: true } : result }) + "\n");
-  await sink.persistResult(result, { fromCsvUpload, inputNotes, inputPromoNotes, inputLeadSource, insertOnly });
+  if (!insertOnly) emit(JSON.stringify({ type: "result", data: isUpdate ? { ...result, _update: true } : result }) + "\n");
+  try {
+    await sink.persistResult(result, { fromCsvUpload, inputNotes, inputPromoNotes, inputLeadSource, insertOnly });
+  } catch (err: any) {
+    if (!insertOnly) throw err;
+    // Onboarding (2026-11-09): the transaction rolled back — no asins row, no
+    // estimates row. Named on the stream for THIS ASIN (the page shows it) and
+    // never a `result` row; the caller leaves it out of the refresh job.
+    const message = err?.message ?? String(err);
+    log(`Insert FAILED for ${asin} — no row created: ${message}`, "db");
+    emit(JSON.stringify({ type: "insert_failed", data: { asin, message } }) + "\n");
+    return false;
+  }
+  // Onboarding: the row exists now — only now does the page get it.
+  if (insertOnly) emit(JSON.stringify({ type: "result", data: result }) + "\n");
   // Probe stamps ride here for the same reason tags do: ordered BEHIND the
   // asins INSERT (§14, 2026-10-09). The failure is reported against the
   // probe's own stage via onError — the probe succeeded, but the record does
@@ -743,7 +790,7 @@ async function writeResult(
       stamps.onError(msg);
     }
   }
-  if (!inputTags || inputTags.length === 0) return;
+  if (!inputTags || inputTags.length === 0) return true;
   try {
     await sink.persistTags(asin, inputTags);
   } catch (err: any) {
@@ -751,6 +798,7 @@ async function writeResult(
     log(msg, "db");
     emit(JSON.stringify({ type: "progress", data: { current: 0, total: 0, asin: `⚠ ${msg}` } }) + "\n");
   }
+  return true;
 }
 
 async function runSheetsSync(
@@ -3700,16 +3748,16 @@ export async function registerRoutes(
     // came from the SC account list, not from an upload/sheet/extension.
     trigger: "upload" | "sourcing" | "extension" | "backfill" | "sc_discovery",
     progressPrefix: (i: number) => string | null = () => null,
-  ): Promise<{ jobId: number | null }> {
+  ): Promise<{ jobId: number | null; failed: string[] }> {
     // Dedupe (2026-10-18): exactly this ASIN set was onboarded in the last 10 minutes —
     // refused, not re-run (nothing inserted, no job). The page clears its pending upload.
     const dup = await findRecentSameOnboarding(asins.map((a) => a.asin), (sql, params) => query(sql, params)).catch(() => null);
     if (dup) {
       emit(JSON.stringify({ type: "job_duplicate", data: { jobId: dup.id, status: dup.status, asins: asins.length } }) + "\n");
       log(`Onboarding (${trigger}): refused — the same ${asins.length} ASIN(s) were onboarded as job #${dup.id} (${dup.status}) within ${ONBOARDING_DEDUPE_MINUTES} min`, "refresh");
-      return { jobId: null };
+      return { jobId: null, failed: [] };
     }
-    await insertNewAsinRows(asins, emit, sink, progressPrefix);
+    const { failed } = await insertNewAsinRows(asins, emit, sink, progressPrefix);
     let jobId: number | null = null;
     try {
       // Only rows that actually exist get a job; an ASIN that failed to
@@ -3730,7 +3778,7 @@ export async function registerRoutes(
     } catch (err: any) {
       log(`Onboarding (${trigger}): rows created but the refresh job could not be queued — run Refresh for them: ${err?.message ?? err}`, "refresh");
     }
-    return { jobId };
+    return { jobId, failed };
   }
   // The INSERT half of onboarding: the rows, user-supplied fields only
   // (insertOnly). Shared with the sales component's onboarding (below), which
@@ -3740,8 +3788,9 @@ export async function registerRoutes(
     emit: (chunk: string) => void,
     sink: AnalyzeSink,
     progressPrefix: (i: number) => string | null = () => null,
-  ): Promise<void> {
+  ): Promise<{ failed: string[] }> {
     const allResults = new Map<string, AsinResult>();
+    const failed: string[] = [];
     const blankPricing: AsinResult["pricingData"] = {
       lowestFbaPrice: null, buyBoxPrice: null, buyBoxFulfillment: null, lowestPrice: null,
       avg30DayPrice: null, avg90DayPrice: null, numberOfSellers: null, sellersFba: null, sellersFbm: null,
@@ -3753,8 +3802,10 @@ export async function registerRoutes(
       const prefix = progressPrefix(i);
       emit(JSON.stringify({ type: "progress", data: { current: i + 1, total: asins.length, asin: prefix ? `${prefix} ${input.asin}` : input.asin } }) + "\n");
       const result = buildResult(input, blankPricing, blankCatalog, blankFees, false, { status: "check" });
-      await writeResult(emit, allResults, input.asin, result, false, true, input.notes ?? null, input.promoNotes ?? null, sink, input.tags ?? null, null, input.leadSource ?? null, true);
+      const ok = await writeResult(emit, allResults, input.asin, result, false, true, input.notes ?? null, input.promoNotes ?? null, sink, input.tags ?? null, null, input.leadSource ?? null, true);
+      if (!ok) failed.push(input.asin.toUpperCase());
     }
+    return { failed };
   }
   onboardNewAsinsRef = onboardNewAsins;
 
@@ -3778,8 +3829,9 @@ export async function registerRoutes(
       supplierSku: null,
       addedAtRaw: null,
     } as AsinInput));
-    await insertNewAsinRows(inputs, () => {}, mainCatalogSink);
-    log(`Onboarding (sales): ${asins.length} row(s) created from the orders report: ${asins.slice(0, 20).join(", ")}${asins.length > 20 ? "…" : ""}`, "refresh");
+    const { failed } = await insertNewAsinRows(inputs, () => {}, mainCatalogSink);
+    const created = asins.filter((a) => !failed.includes(a.toUpperCase()));
+    log(`Onboarding (sales): ${created.length} row(s) created from the orders report: ${created.slice(0, 20).join(", ")}${created.length > 20 ? "…" : ""}${failed.length ? ` — ${failed.length} NOT created (insert failed, see the db log): ${failed.join(", ")}` : ""}`, "refresh");
   }
   onboardSalesAsinsRef = onboardSalesAsins;
 
@@ -3814,7 +3866,12 @@ export async function registerRoutes(
     // shape, NOT a value to store. upsertCsvCogs is the only thing that would
     // persist it and it is gated on fromCsvUpload, so estimated_cogs stays
     // NULL and the UI renders $0.00 from nothing — §18 phase c step 2.
-    await onboardNewAsins(inputs, () => {}, mainCatalogSink, "sc_discovery");
+    const onboarded = await onboardNewAsins(inputs, () => {}, mainCatalogSink, "sc_discovery");
+    if (onboarded.failed.length) {
+      log(`Phase c: ${onboarded.failed.length} ASIN(s) NOT created (insert failed, see the db log): ${onboarded.failed.join(", ")}`, "full-scope");
+      rows = rows.filter((r) => !onboarded.failed.includes(r.asin.toUpperCase()));
+      if (rows.length === 0) return;
+    }
 
     // (in_catalog retired 2026-10-15, migration 052 — the discovery latch it
     // set here was read by nothing; has_live_offer below is the fact.)

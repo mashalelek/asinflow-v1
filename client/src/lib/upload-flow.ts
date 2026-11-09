@@ -34,6 +34,23 @@ export function duplicateJobFromMessage(msg: any): { jobId: number; status: stri
   return Number.isInteger(id) && id > 0 ? { jobId: id, status: String(msg?.data?.status ?? "") } : null;
 }
 
+/**
+ * The server could not create this ASIN's rows (2026-11-09: the insert is one transaction per ASIN and a failure
+ * is named on the stream instead of logged away). No `result` row follows for it; the page tells the user.
+ */
+export function insertFailureFromMessage(msg: any): { asin: string; message: string } | null {
+  if (msg?.type !== "insert_failed") return null;
+  const asin = String(msg?.data?.asin ?? "").trim().toUpperCase();
+  if (!asin) return null;
+  return { asin, message: String(msg?.data?.message ?? "insert failed") };
+}
+
+/** One toast line for the ASINs an upload / sync could not create. */
+export function insertFailuresText(failed: ReadonlyArray<{ asin: string; message: string }>): string {
+  const shown = failed.slice(0, 5).map((f) => `${f.asin}: ${f.message}`);
+  return `${shown.join(" · ")}${failed.length > 5 ? ` · and ${failed.length - 5} more` : ""} — nothing was stored for ${failed.length === 1 ? "it" : "them"}; fix the cause and try again.`;
+}
+
 const isEmpty = (v: unknown) => v === null || v === undefined || v === "";
 const isPlainObject = (v: unknown): v is Record<string, unknown> => v != null && typeof v === "object" && !Array.isArray(v);
 

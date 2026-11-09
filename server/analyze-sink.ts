@@ -40,6 +40,14 @@ export interface AnalyzeSink {
        * user-supplied fields only — no Amazon data, no fetched_at stamp, no
        * history row, no catalog-deleted signal. The queued Refresh job
        * fills everything else.
+       *
+       * Since 2026-11-09 the main sink writes this ASIN's rows (asins,
+       * asin_estimates, CSV COGS, notes, uploaded pack) in ONE transaction
+       * and the promise REJECTS when they could not be written — nothing
+       * exists then. writeResult turns the rejection into an `insert_failed`
+       * stream message for that ASIN and no `result` row; onboardNewAsins
+       * leaves it out of the refresh job. (The $16 regression of 2026-11-06
+       * was swallowed here as a log line for three days.)
        */
       insertOnly?: boolean;
     },

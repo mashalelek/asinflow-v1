@@ -27,7 +27,7 @@ import { JobsDialog } from "@/components/jobs-dialog";
 import { useJobs } from "@/hooks/use-jobs";
 import { enqueueRefresh, cancelJob, getJob, runningLabel, queuedLabel, completionText, changeCount, breakerHeldText, FOCUS_ASIN_EVENT, type Job } from "@/lib/jobs-api";
 import { HYGIENE_CHANGED_EVENT } from "@/components/release-confirm";
-import { refreshPlan, queuedJobIdFromMessage, duplicateJobFromMessage, applyStreamedRow } from "@/lib/upload-flow";
+import { refreshPlan, queuedJobIdFromMessage, duplicateJobFromMessage, applyStreamedRow, insertFailureFromMessage, insertFailuresText } from "@/lib/upload-flow";
 import { rowsToRefresh, mergeRefreshedRows, RowRefresher, staleRowsDue } from "@/lib/row-refresh";
 import { buildFilterChips, addedHiddenReport, type FilterChipKey } from "@/lib/filter-chips";
 import { confirmableAsins, packFilterCounts, packFilterMatch, packReviewOrder, PACK_FILTER_LABEL, type PackFilter } from "@/lib/pack-filter";
@@ -367,6 +367,8 @@ export default function Home() {
   const [columnConfig, setColumnConfig] = useState<ColumnConfig>(loadColumnConfig);
   const [asins, setAsins] = useState<AsinInput[]>([]);
   const queuedJobIdsRef = useRef<number[]>([]);
+  // ASINs the server could not create during an upload (insert_failed, 2026-11-09): named in one toast when the stream ends.
+  const insertFailuresRef = useRef<{ asin: string; message: string }[]>([]);
   const [results, setResults] = useState<AsinResult[]>([]);
   // Shared + persisted (2026-09-09): fba-price-source, same key as Bulk Calc.
   const [priceSource, setPriceSource] = useState<PriceSource>(loadPriceSource);
@@ -642,6 +644,10 @@ export default function Home() {
               if (prev.findIndex((r) => r.asin === resultData.asin) < 0) setSavedCount((c) => (c ?? 0) + 1);
               return applyStreamedRow(prev, resultData);
             });
+          } else {
+            // insert_failed (2026-11-09): the server could not create this ASIN's rows — named when the stream ends.
+            const insertFailed = insertFailureFromMessage(msg);
+            if (insertFailed) insertFailuresRef.current.push(insertFailed);
           }
         } catch {}
       }
@@ -656,6 +662,7 @@ export default function Home() {
   // the rows and runs their first Product Info + prices + fees inline.
   const runAnalysis = useCallback(async (asinsToAnalyze: AsinInput[]) => {
     let uploaded: string[] | null = null;
+    insertFailuresRef.current = [];
     setIsAnalyzing(true);
     setProgress({ current: 0, total: asinsToAnalyze.length, asin: "" });
 
@@ -709,6 +716,13 @@ export default function Home() {
         variant: "destructive",
       });
     } finally {
+      // The ASINs whose rows the server could not create (2026-11-09): named, never counted as added.
+      const failed = insertFailuresRef.current;
+      if (failed.length > 0) {
+        const failedSet = new Set(failed.map((f) => f.asin));
+        if (uploaded) uploaded = uploaded.filter((a) => !failedSet.has(a));
+        toast({ title: `${failed.length} ASIN${failed.length === 1 ? "" : "s"} not added`, description: insertFailuresText(failed), variant: "destructive" });
+      }
       setIsAnalyzing(false);
       setProgress(null);
       fetchPriceStatus();
@@ -1135,6 +1149,7 @@ export default function Home() {
       const reader = res.body?.getReader();
       const decoder = new TextDecoder();
       let buffer = "";
+      const insertFailed: { asin: string; message: string }[] = [];
       if (reader) {
         while (true) {
           const { done, value } = await reader.read();
@@ -1146,7 +1161,10 @@ export default function Home() {
             if (!line.trim()) continue;
             try {
               const msg = JSON.parse(line);
-              if (msg.type === "sync_summary") {
+              const f = insertFailureFromMessage(msg);
+              if (f) {
+                insertFailed.push(f);
+              } else if (msg.type === "sync_summary") {
                 plan = msg.data;
                 if (plan && plan.newCount > 0) {
                   setProgress({ current: 0, total: plan.newCount, asin: "Fetching new ASIN data..." });
@@ -1179,6 +1197,8 @@ export default function Home() {
         return `${name}: ${l.inserted} inserted, ${l.alreadyInAf} already in AF${extra ? `, ${extra}` : ""}`;
       }).join(" · ");
       setPendingAdded({ asins: Array.from(addedAsins), title: "Sourcing sheet synced", base: `${f.inserted} inserted, ${f.archivedNew} archived (discontinued), ${f.skippedExisting} already in AF${perSheet ? ` — ${perSheet}` : ""}` });
+      // The leads whose rows could not be created (2026-11-09): their own toast, with the cause.
+      if (insertFailed.length > 0) toast({ title: `${insertFailed.length} lead${insertFailed.length === 1 ? "" : "s"} not added`, description: insertFailuresText(insertFailed), variant: "destructive" });
       await checkRevivalCandidates(); // DA-3
     } catch (err: any) {
       toast({ title: "Sourcing sync failed", description: err.message, variant: "destructive" });
