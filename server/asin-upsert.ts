@@ -45,6 +45,11 @@ export async function upsertAsinResult(
   // Scheduler v1 onboarding (2026-10-15): rows only. Existing rows keep
   // their last_refreshed_at; asin_estimates is INSERT ... DO NOTHING; no
   // history row, no catalog-deleted signal. The queued job does the rest.
+  // Since 2026-11-09 the insert-only row's fetched_at is NULL (not NOW()):
+  // nothing was fetched, so Price Age shows "—" and the Sale Price cell
+  // never reads "No offers" on a row no component has priced yet; every
+  // reader of fetched_at handles NULL (the list, Price Age, the last-
+  // refreshed MAX, the extension's history).
   insertOnly = false,
 ): Promise<{ inserted: boolean }> {
   const supplier = extractDomain(result.buyLink);
@@ -134,7 +139,7 @@ export async function upsertAsinResult(
        lowest_fba_price, buy_box_price, buy_box_fulfillment, lowest_price,
        sellers_fba, sellers_fbm, fba_fee, referral_fee, fees_estimate_price, fee_source,
        bsr, bsr_category, eligibility_status, error, fetched_at, fba_fee_promotion, fee_fetched_at
-     ) VALUES ($1,$2,'csv',$3,$4,$5,$6,$7,$8,$9,$10,$11,$16::text,$12,$13,$14,$15,NOW(),$17,CASE WHEN $16::text = 'spapi' AND $9::numeric IS NOT NULL THEN NOW() END)
+     ) VALUES ($1,$2,'csv',$3,$4,$5,$6,$7,$8,$9,$10,$11,$16::text,$12,$13,$14,$15,${insertOnly ? "NULL" : "NOW()"},$17,CASE WHEN $16::text = 'spapi' AND $9::numeric IS NOT NULL THEN NOW() END)
      ${insertOnly ? "ON CONFLICT (asin) DO NOTHING" : `ON CONFLICT (asin) DO UPDATE SET
        lowest_fba_price = COALESCE(EXCLUDED.lowest_fba_price, asin_estimates.lowest_fba_price),
        buy_box_price = COALESCE(EXCLUDED.buy_box_price, asin_estimates.buy_box_price),

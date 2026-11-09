@@ -3661,7 +3661,11 @@ profit is calculated client-side only):
   `check`, and `check` means "never probed"), error, fetched_at
   — noting that the onboarding INSERT (`insertOnly`, 2026-10-15) fetches
   nothing: the price, fee, catalog and probe columns are written by the
-  Refresh job's components (§11) after the row exists
+  Refresh job's components (§11) after the row exists, and since
+  2026-11-09 its `fetched_at` is NULL rather than NOW() — Price Age "—",
+  never a false "No offers" before the first price pass (every reader of
+  `fetched_at` handles NULL: the list's `pricesFetchedAt`, Price Age, the
+  last-refreshed MAX, the extension's history)
 
 **Analyze MUST NOT write to (user-controlled fields):**
 - `estimated_cogs`, `estimated_cogs_source`

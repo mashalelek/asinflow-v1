@@ -53,9 +53,10 @@ describe("asin-upsert on the real schema (rolled back)", () => {
       expect(r.inserted).toBe(true);
       const a = (await q(`SELECT title, buy_link, supplier, notes, promo_notes, lead_source, last_refreshed_at FROM asins WHERE asin = $1`, [ASIN])).rows[0];
       expect(a).toMatchObject({ title: null, buy_link: "https://www.chewy.com/x/dp/958982?utm=1", supplier: "chewy.com", notes: "VA: check BB", promo_notes: "CardDepot 8.5%", lead_source: "ER" });
-      const e = (await q(`SELECT estimated_cogs, estimated_cogs_source, lowest_fba_price, fba_fee, fee_source, fee_fetched_at, fba_fee_promotion, eligibility_status, error FROM asin_estimates WHERE asin = $1`, [ASIN])).rows;
+      const e = (await q(`SELECT estimated_cogs, estimated_cogs_source, lowest_fba_price, fba_fee, fee_source, fee_fetched_at, fba_fee_promotion, eligibility_status, error, fetched_at FROM asin_estimates WHERE asin = $1`, [ASIN])).rows;
       expect(e).toHaveLength(1);
-      expect(e[0]).toMatchObject({ estimated_cogs: "6.94", estimated_cogs_source: "csv", lowest_fba_price: null, fba_fee: null, fee_source: null, fee_fetched_at: null, fba_fee_promotion: null, eligibility_status: "check", error: null });
+      // fetched_at NULL (2026-11-09): nothing was fetched — Price Age "—", never a false "No offers"
+      expect(e[0]).toMatchObject({ estimated_cogs: "6.94", estimated_cogs_source: "csv", lowest_fba_price: null, fba_fee: null, fee_source: null, fee_fetched_at: null, fba_fee_promotion: null, eligibility_status: "check", error: null, fetched_at: null });
       // no history snapshot on the insert-only path
       expect((await q(`SELECT count(*)::int AS n FROM asin_estimates_history h JOIN asins a ON a.id = h.asin_id WHERE a.asin = $1`, [ASIN])).rows[0].n).toBe(0);
       // the same ASIN again (an upload naming an existing ASIN): nothing on the estimates row changes, last_refreshed_at stays
@@ -78,7 +79,8 @@ describe("asin-upsert on the real schema (rolled back)", () => {
       // populated insert-only (the shape an Upload File row carries)
       const r = await upsertAsinResult(q, full(ASIN2), "note", "promo", "MP", true);
       expect(r.inserted).toBe(true);
-      const e = (await q(`SELECT estimated_cogs, estimated_cogs_source, lowest_fba_price, buy_box_price, buy_box_fulfillment, lowest_price, sellers_fba, sellers_fbm, fba_fee, referral_fee, fees_estimate_price, fee_source, fba_fee_promotion, fee_fetched_at, bsr, bsr_category, eligibility_status FROM asin_estimates WHERE asin = $1`, [ASIN2])).rows[0];
+      const e = (await q(`SELECT estimated_cogs, estimated_cogs_source, lowest_fba_price, buy_box_price, buy_box_fulfillment, lowest_price, sellers_fba, sellers_fbm, fba_fee, referral_fee, fees_estimate_price, fee_source, fba_fee_promotion, fee_fetched_at, bsr, bsr_category, eligibility_status, fetched_at FROM asin_estimates WHERE asin = $1`, [ASIN2])).rows[0];
+      expect(e.fetched_at).toBeNull(); // insert-only, whatever it carries: no component fetched anything yet
       expect(e).toMatchObject({ estimated_cogs: "12.50", estimated_cogs_source: "csv", lowest_fba_price: "10.1", buy_box_price: "10.2", buy_box_fulfillment: "FBA", lowest_price: "9.9", sellers_fba: 2, sellers_fbm: 3, fba_fee: "3.21", referral_fee: "1.5", fees_estimate_price: "10.1", fee_source: "spapi", fba_fee_promotion: "0.50", bsr: 123, bsr_category: "Toys & Games", eligibility_status: "yes" });
       expect(e.fee_fetched_at).not.toBeNull();
       const a = (await q(`SELECT title, brand, image_url, weight_lb, supplier, is_meltable, is_hazmat, is_dangerous_good, supplier_sku FROM asins WHERE asin = $1`, [ASIN2])).rows[0];
@@ -89,8 +91,9 @@ describe("asin-upsert on the real schema (rolled back)", () => {
       again.cogs = 1; again.pricingData.lowestFbaPrice = 11.11; again.feesData.fbaFulfillmentFee = 4.44; (again.feesData as any).fbaFeePromotion = null;
       const r2 = await upsertAsinResult(q, again, null, null, null, false);
       expect(r2.inserted).toBe(false);
-      const e2 = (await q(`SELECT estimated_cogs, lowest_fba_price, fba_fee, fba_fee_promotion, fee_error FROM asin_estimates WHERE asin = $1`, [ASIN2])).rows[0];
+      const e2 = (await q(`SELECT estimated_cogs, lowest_fba_price, fba_fee, fba_fee_promotion, fee_error, fetched_at FROM asin_estimates WHERE asin = $1`, [ASIN2])).rows[0];
       expect(e2).toMatchObject({ estimated_cogs: "12.50", lowest_fba_price: "11.11", fba_fee: "4.44", fba_fee_promotion: null, fee_error: null });
+      expect(e2.fetched_at).not.toBeNull(); // Analyze stamps it
       expect((await q(`SELECT count(*)::int AS n FROM asin_estimates_history h JOIN asins a ON a.id = h.asin_id WHERE a.asin = $1`, [ASIN2])).rows[0].n).toBe(1);
 
       // Analyze with an all-null result on the existing row: nothing blanked (COALESCE), fee block untouched
