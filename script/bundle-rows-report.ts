@@ -34,7 +34,7 @@ const n = (v: unknown): number | null => (v == null || v === "" ? null : Number.
                     'retailer_units_per_product', l.retailer_units_per_product, 'asin_units_per_pack', l.asin_units_per_pack, 'asin_qty_per_product', l.asin_qty_per_product,
                     'ratio_log', (SELECT string_agg(e.field || ' ' || COALESCE(e.old_value, '∅') || '→' || COALESCE(e.new_value, '∅') || ' by ' || COALESCE(u.display_name, 'script') || ' ' || to_char(e.at, 'YYYY-MM-DD'), '; ' ORDER BY e.at)
                                     FROM po_edit_log e LEFT JOIN users u ON u.id = e.user_id WHERE e.entity = 'line' AND e.entity_id = l.id::text AND e.field LIKE 'retailer_units_per_product%'),
-                    'ratio_by_hand', EXISTS (SELECT 1 FROM po_edit_log e WHERE e.entity = 'line' AND e.entity_id = l.id::text AND e.field = 'retailer_units_per_product' AND e.user_id IS NOT NULL)
+                    'ratio_by_hand', EXISTS (SELECT 1 FROM po_edit_log e WHERE e.entity = 'line' AND e.entity_id = l.id::text AND e.field = 'retailer_units_per_product')
                     ${hasUpb ? ", 'units_per_bundle', l.units_per_bundle" : ""}) ORDER BY l.position) FROM po_line_items l WHERE l.po_asin_id = pa.id) AS lines
        FROM po_asins pa JOIN purchase_orders p ON p.id = pa.po_id
       WHERE pa.sold_as = 'bundle'
@@ -55,7 +55,9 @@ const n = (v: unknown): number | null => (v == null || v === "" ? null : Number.
     const todayCost = linesSum != null && Number(r.qty) > 0 ? r2(linesSum / Number(r.qty)) : null;
     // The stored Individual units per Product unit on a bundle component line written by the yield backfill (migration 080 model,
     // "(exact yield)" log rows, no user) carries the bundle's N as a factor: real pack × N over N (yield 1 for a single). A line Maria
-    // typed since (a po_edit_log row with a user) is already the real pack. The rule is applied to the REAL pack.
+    // typed since, or fix:bundle-lines --convert-packs converted (a po_edit_log row with the exact field name — the backfill's rows
+    // say "(exact yield)"), is already the real pack: 2026-11-09 the converted godiva line (18 over ×3) must not be read as 18 ÷ 3 again.
+    // The rule is applied to the REAL pack.
     const realPack = (l: any): { pack: number | null; converted: boolean } => {
       const r = n(l.retailer_units_per_product), a = n(l.asin_units_per_pack);
       if (r == null) return { pack: null, converted: false };

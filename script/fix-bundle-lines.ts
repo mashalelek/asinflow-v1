@@ -7,13 +7,18 @@
 //       line's Individual units per Product unit holds the real pack × the bundle's N (a single balm
 //       stored as "2" on a ×2 bundle, a 5-pack shampoo as "10") — become the real pack (÷ N). Only a
 //       line with asin_units_per_pack = N, retailer_units_per_product a multiple of N (and ≠ 1) and NO
-//       hand edit of that field in po_edit_log is converted; the stored Ordered is recomputed by the
+//       po_edit_log row for that field (a hand edit, or an earlier run of this script — the backfill's rows say
+//       "(exact yield)") and no units per bundle stored is converted — so a second run converts nothing; the stored Ordered is recomputed by the
 //       rule and must come out unchanged (the script says so per row, and refuses --live otherwise).
 //       --review-csv <path> writes one row per converted line for Maria's review (2026-11-09): PO,
 //       supplier, order date, bundle ASIN and its ×N, the component's name, the stored pack integer, the
 //       proposed real pack, the proposed units per bundle (stored, or the even split AF would show in
 //       amber) and what the product title suggests (shared/pack-parse titlePackSuggestion) — she
-//       confirms or corrects each row before the live run.
+//       confirms or corrects each row before the live run. --store-split (Maria confirmed the proposed
+//       even split for every reviewed line, 2026-11-09) also writes each converted line's units per
+//       bundle = N ÷ components where it is still NULL, so the rows stop showing the split in amber.
+//       Both run through editLine, so every change has a History row (po_edit_log); the run prints the
+//       History rows it wrote and each component's ASIN units (Individual ÷ per bundle).
 //   --order <id> --asin <ASIN> --split 1,1 [--cost-per-rule]
 //       The named bundle row's component lines get their units per bundle (position order; the counts
 //       must sum to the row's ×N), Ordered is recomputed by the rule and, with --cost-per-rule, the
@@ -22,12 +27,12 @@
 //       factor — as a hand-entered cost with a History row (a sheet-imported PO's costs are otherwise
 //       never recomputed; this is Maria's explicit say-so for the row named). Auto-close re-runs.
 //
-//   tsx script/fix-bundle-lines.ts --convert-packs [--prod] [--live] [--review-csv docs/bundle-pack-review-<date>.csv]
+//   tsx script/fix-bundle-lines.ts --convert-packs [--store-split] [--prod] [--live] [--review-csv docs/bundle-pack-review-<date>.csv]
 //   tsx script/fix-bundle-lines.ts --order 200015415094735 --asin B0GWG5S64Q --split 1,1 --cost-per-rule [--prod] [--live]
 import "./env";
 import { Pool } from "pg";
 import { editLine, editAsinRow, type EditResult } from "../server/po-edit";
-import { bundleFromLines } from "../shared/bundle";
+import { bundleFromLines, evenSplit } from "../shared/bundle";
 import { bundleAsinCosts } from "../shared/po-cost";
 import { bundleCostLines } from "../server/po-costs";
 import { csv } from "../server/po-model-backfill";
@@ -36,7 +41,7 @@ import { writeFileSync } from "fs";
 
 const arg = (k: string) => { const i = process.argv.indexOf(k); return i >= 0 ? process.argv[i + 1] : undefined; };
 const live = process.argv.includes("--live"), convert = process.argv.includes("--convert-packs"), costPerRule = process.argv.includes("--cost-per-rule");
-const reviewCsv = arg("--review-csv");
+const reviewCsv = arg("--review-csv"), storeSplit = process.argv.includes("--store-split");
 const order = arg("--order"), asin = (arg("--asin") ?? "").toUpperCase(), split = (arg("--split") ?? "").split(",").map((x) => x.trim()).filter(Boolean).map(Number);
 if (!convert && !(order && /^B0[A-Z0-9]{8}$/.test(asin) && split.length >= 2 && split.every((n) => Number.isInteger(n) && n >= 1))) {
   console.error("usage: --convert-packs | --order <order id> --asin <ASIN> --split n,n[,n] [--cost-per-rule]   [--prod] [--live]");
@@ -66,7 +71,8 @@ const r2 = (x: number) => Math.round(x * 100) / 100;
            FROM po_line_items l JOIN po_asins pa ON pa.id = l.po_asin_id JOIN purchase_orders p ON p.id = pa.po_id
           WHERE pa.sold_as = 'bundle' AND l.retailer_units_per_product IS NOT NULL AND l.asin_units_per_pack = pa.units_per_pack
             AND l.retailer_units_per_product <> 1 AND l.retailer_units_per_product % pa.units_per_pack = 0
-            AND NOT EXISTS (SELECT 1 FROM po_edit_log e WHERE e.entity = 'line' AND e.entity_id = l.id::text AND e.field = 'retailer_units_per_product' AND e.user_id IS NOT NULL)
+            AND l.units_per_bundle IS NULL
+            AND NOT EXISTS (SELECT 1 FROM po_edit_log e WHERE e.entity = 'line' AND e.entity_id = l.id::text AND e.field = 'retailer_units_per_product')
           ORDER BY p.order_date DESC, pa.asin, l.position`,
       )).rows;
       console.log(`${cands.length} bundle component line(s) in the migration-080 encoding (real pack × N):`);
@@ -80,9 +86,15 @@ const r2 = (x: number) => Math.round(x * 100) / 100;
           console.log(`  ${c.order_id} ${c.asin} line ${c.position} ${String(c.product_name).slice(0, 40)}: ${c.r} → ${real}`);
           await editLine(query, String(c.id), { retailer_units_per_product: real }, null);
         }
+        if (storeSplit) {
+          const cur = await linesOf(paId), even = evenSplit(Number(before.units_per_pack), cur.length);
+          if (even == null) console.log(`  ${before.order_id} ${before.asin}: ×${before.units_per_pack} over ${cur.length} components has no even split — units per bundle left NULL`);
+          else for (const l of cur) if (l.units_per_bundle == null) { console.log(`  ${before.order_id} ${before.asin} line ${l.position}: units per bundle ∅ → ${even}`); await editLine(query, String(l.id), { units_per_bundle: even }, null); }
+        }
         const after = await rowOf(paId);
         const same = Number(after.qty) === Number(before.qty);
         const lines = await linesOf(paId), b = bundleFromLines(lines, after.units_per_pack);
+        for (let k = 0; k < lines.length; k++) console.log(`     line ${lines[k].position}: ${lines[k].qty_ordered} × ${lines[k].retailer_units_per_product} = ${b.components[k].individual} Individual ÷ ${b.components[k].perBundle} per bundle${b.components[k].proposed ? " (proposed)" : ""} = ${b.components[k].builds} ASIN units${b.components[k].leftover > 0 ? `, ${b.components[k].leftover} left over` : ""}`);
         for (const c of ls) {
           const k = lines.findIndex((l: any) => String(l.id) === String(c.id)), comp = b.components[k];
           const real = Number(c.r) / Number(c.n), t = titlePackSuggestion(c.product_name);
@@ -94,6 +106,8 @@ const r2 = (x: number) => Math.round(x * 100) / 100;
         if (!same) refuse = true;
       }
       if (reviewCsv) { writeFileSync(reviewCsv, csv(review)); console.log(`review CSV: ${reviewCsv} (${review.length - 1} line(s))`); }
+      const hist = (await query(`SELECT field, COUNT(*)::int AS n FROM po_edit_log WHERE entity = 'line' AND at >= transaction_timestamp() AND entity_id = ANY($1) GROUP BY field ORDER BY field`, [cands.map((c) => String(c.id))])).rows;
+      console.log(`History rows this run (po_edit_log, line fields): ${hist.length ? hist.map((h: any) => `${h.field} ${h.n}`).join(", ") : "none"}`);
     }
 
     if (order) {
