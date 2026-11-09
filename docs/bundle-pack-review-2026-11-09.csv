@@ -1,0 +1,28 @@
+order_id,supplier,order_date,bundle_asin,bundle_n,line_position,component_product,stored_pack_integer,proposed_real_pack,proposed_units_per_bundle,per_bundle_source,title_suggests,title_vs_proposed,ordered_before,ordered_after
+509573,godiva.com,Sat Oct 17,B019YPFEKM,3,0,"Dark Chocolate Pearls with Mint, Set of 18",54,18,1,even split (proposed),"18-pack (""Set of 18"")",agrees,18.00,18.00
+509573,godiva.com,Sat Oct 17,B019YPFEKM,3,1,"Dark Chocolate Pearls, Set of 18",54,18,1,even split (proposed),"18-pack (""Set of 18"")",agrees,18.00,18.00
+509573,godiva.com,Sat Oct 17,B019YPFEKM,3,2,"Milk Chocolate Pearls, Set of 18",54,18,1,even split (proposed),"18-pack (""Set of 18"")",agrees,18.00,18.00
+143264,yvesrocherusa.com,Sat Oct 17,B0DWXWHXP1,2,0,Hair Shine Vinegar,2,1,1,even split (proposed),no pack in the title,—,5.00,5.00
+143264,yvesrocherusa.com,Sat Oct 17,B0DWXWHXP1,2,1,5-pack Shine Shampoo,10,5,1,even split (proposed),"5-pack (""5-pack"")",agrees,5.00,5.00
+137736,yvesrocherusa.com,Sat Sep 26,B0DWXWHXP1,2,0,Hair Shine Vinegar,2,1,1,even split (proposed),no pack in the title,—,5.00,5.00
+137736,yvesrocherusa.com,Sat Sep 26,B0DWXWHXP1,2,1,5-pack Shine Shampoo,10,5,1,even split (proposed),"5-pack (""5-pack"")",agrees,5.00,5.00
+137083,yvesrocherusa.com,Thu Sep 24,B0DWXWHXP1,2,0,Hair Shine Vinegar,2,1,1,even split (proposed),no pack in the title,—,5.00,5.00
+137083,yvesrocherusa.com,Thu Sep 24,B0DWXWHXP1,2,1,5-pack Shine Shampoo,10,5,1,even split (proposed),"5-pack (""5-pack"")",agrees,5.00,5.00
+135707,yvesrocherusa.com,Sat Sep 19,B0DKT4NDFZ,2,0,5-pack Shine Conditioner,10,5,1,even split (proposed),"5-pack (""5-pack"")",agrees,5.00,5.00
+135707,yvesrocherusa.com,Sat Sep 19,B0DKT4NDFZ,2,1,5-pack Shine Shampoo,10,5,1,even split (proposed),"5-pack (""5-pack"")",agrees,5.00,5.00
+200015497641702,walmart.com,Sat Sep 19,B0G6R55GNQ,2,0,"Kinder's Veggie Rub and Seasoning with Sea Salt and Herbs, 6.4 oz",2,1,1,even split (proposed),no pack in the title,—,12.00,12.00
+200015497641702,walmart.com,Sat Sep 19,B0G6R55GNQ,2,1,"Kinder's Smoked Onion Seasoning & Rub for Grilling, 7 oz",2,1,1,even split (proposed),no pack in the title,—,12.00,12.00
+200015497641702,walmart.com,Sat Sep 19,B0GWG5S64Q,2,0,"Dr Teal's Restorative Minerals Body Balm with Magnesium, Zinc and Potassium , 2.65 oz",2,1,1,even split (proposed),no pack in the title,—,12.00,12.00
+200015497641702,walmart.com,Sat Sep 19,B0GWG5S64Q,2,1,"Dr Teal's Restorative Minerals Bath & Body Oil with Magnesium, Potassium and Zinc, 8.8 fl oz",2,1,1,even split (proposed),no pack in the title,—,12.00,12.00
+134524,yvesrocherusa.com,Sun Sep 13,B0DKT4NDFZ,2,0,5-pack Shine Conditioner,10,5,1,even split (proposed),"5-pack (""5-pack"")",agrees,5.00,5.00
+134524,yvesrocherusa.com,Sun Sep 13,B0DKT4NDFZ,2,1,5-pack Shine Shampoo,10,5,1,even split (proposed),"5-pack (""5-pack"")",agrees,5.00,5.00
+200015523189765,walmart.com,Mon Aug 31,B0GNHTYGPF,2,0,"Dr Teal's Epsom Salt Magnesium Soak, Gardenia Grace, 3 lbs",2,1,1,even split (proposed),no pack in the title,—,10.00,10.00
+200015523189765,walmart.com,Mon Aug 31,B0GNHTYGPF,2,1,"Dr Teal's Gardenia Grace Foaming Bath with Pure Epsom Salt & Citrus Essential Oils, 34 fl oz",2,1,1,even split (proposed),no pack in the title,—,10.00,10.00
+200015210238647,walmart.com,Sun Aug 30,B0GNHTYGPF,2,0,"Dr Teal's Epsom Salt Magnesium Soak, Gardenia Grace, 3 lbs",2,1,1,even split (proposed),no pack in the title,—,7.00,7.00
+200015210238647,walmart.com,Sun Aug 30,B0GNHTYGPF,2,1,"Dr Teal's Gardenia Grace Foaming Bath with Pure Epsom Salt & Citrus Essential Oils, 34 fl oz",2,1,1,even split (proposed),no pack in the title,—,7.00,7.00
+200015210238647,walmart.com,Sun Aug 30,B0GWG5S64Q,2,0,"Dr Teal's Restorative Minerals Body Balm with Magnesium, Zinc and Potassium , 2.65 oz",2,1,1,even split (proposed),no pack in the title,—,5.00,5.00
+200015210238647,walmart.com,Sun Aug 30,B0GWG5S64Q,2,1,"Dr Teal's Restorative Minerals Bath & Body Oil with Magnesium, Potassium and Zinc, 8.8 fl oz",2,1,1,even split (proposed),no pack in the title,—,5.00,5.00
+130097,yvesrocherusa.com,Sun Aug 16,B0DWXWHXP1,2,0,Hair Shine Vinegar,2,1,1,even split (proposed),no pack in the title,—,5.00,5.00
+130097,yvesrocherusa.com,Sun Aug 16,B0DWXWHXP1,2,1,5-pack Shine Shampoo,10,5,1,even split (proposed),"5-pack (""5-pack"")",agrees,5.00,5.00
+127552,yvesrocherusa.com,Sun Aug 02,B0DKT4NDFZ,2,0,5-pack Shine Conditioner,10,5,1,even split (proposed),"5-pack (""5-pack"")",agrees,5.00,5.00
+127552,yvesrocherusa.com,Sun Aug 02,B0DKT4NDFZ,2,1,5-pack Shine Shampoo,10,5,1,even split (proposed),"5-pack (""5-pack"")",agrees,5.00,5.00
