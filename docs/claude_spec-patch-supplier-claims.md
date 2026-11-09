@@ -2,502 +2,537 @@
 
 *Drafted 2026-11-05 with Maria (whiteboard walkthrough). Amends §22 (PO
 module, incl. the "Supplier defects" section added by e424903 / migration
-094), §26 (email ingestion), §11 (Velocity). Supersedes the data model and
-review list of `docs/claude_spec-patch-po-cancellations-from-email.md`
-(§3, §5); that patch's ingestion (§4), net quantities (§6) and backfill (§8)
-stay valid and feed this one. Also supersedes the backlog's "Allocate to
-another PO" (2026-11-05) and its "until built" workaround: see §3.7.*
+094), §26 (email ingestion), §11 (Velocity). Supersedes the data model,
+review list and net-quantity readers of
+`docs/claude_spec-patch-po-cancellations-from-email.md` (§3, §5, §6); that
+patch's ingestion (§4) and backfill (§8) stay valid and feed this one. Also
+supersedes the backlog's "Allocate to another PO" (2026-11-05) and its
+"until built" workaround: see §3.8. Prerequisite:
+`docs/claude_spec-patch-quantity-names.md` (ASIN / Product / Individual
+units wording), run first.*
 
-> **Status: APPROVED 2026-11-06. Amended 2026-11-07** after the commit 0
-> probe — see §0. Formerly "PO issues" (`claude_spec-patch-po-issues.md`);
-> renamed 2026-11-07: the record is a **claim** everywhere (tables, code,
-> UI, docs). "Issue" is not used for this concept anywhere in AF.
+> **Status: APPROVED 2026-11-06. Amended 2026-11-07 and 2026-11-09**
+> (Maria): tasks + buckets model, Claims nav tab, quantities from claims
+> only, one 5-business-day timer, refunds table. Formerly "PO issues";
+> the record is a **claim** everywhere (tables, code, UI, docs).
 
-## 0. Changes 2026-11-07 (Maria, after the probe)
+## 0. Change log
 
-- **Name:** "claims" everywhere. Tables `supplier_claims`,
-  `supplier_claim_events`, `supplier_claim_tasks`, `supplier_claim_refunds`;
-  `claim_id` on `po_tracking` / `po_documents`; UI "Claims".
-- **D10 replaced — no replacement POs.** A replacement stays on the original
-  PO as part of its claim (§3.4). A reship that comes with its own order #
-  (e.g. Michaels R…) is added to the original PO's existing
-  `purchase_orders.alt_order_ids` (migration 086) so emails and tracking
-  match there. Nothing about a replacement is ever sent to Velocity as a
-  separate order.
-- **Carrier tracking aggregator is added in this patch** (commit 4, §3.8):
-  **EasyPost** (Maria 2026-11-07). Before it, a **tracking parser fix**
-  (commit 3, §3.9) so shipping emails that today yield no number get one.
-- **Legacy badges are part of the claims flow.** The manual action items
-  "Missing / damaged from supplier" and "Confirm refund / replacement"
-  convert to claims and leave the action-item list; chips come from claims
-  (§4.3, §5).
-- **`amount_owed` can be overridden by hand** and then stays as typed
-  (`amount_owed_source`, §3.6).
-- **Michaels 9800109062072825:** the sheet's 11-unit / $32.25 loss is
-  dropped — already refunded by the $36.11 Michaels eGift card (§6).
-- Probe corrections: cols V/W **were** imported (`po_asins.unreimbursed_loss_*`,
-  §4.3); AF has no carrier status today (§3.8); Velocity can't take a qty
-  PUT on fully received orders and has no DELETE (§3.5); Walmart emails
-  the return label PDF (§3.3); fixture facts updated (§6).
+**2026-11-09 (Maria):**
+- **Every manual action is a task** with a checkbox, in one of five
+  groups; a claim's **bucket is derived** from its open tasks and timers
+  (§3.2). Thirteen task kinds (§3.3).
+- **Claims is its own nav tab** for now (nav rearrangement comes later).
+  POs list gets a **Claims** column (count → link); PO page gets a link
+  and a small card; nothing in Action Items (§5).
+- **One timer: 5 business days** everywhere (supplier reply, return
+  delivered without refund, refund to post, Velocity). Replaces every
+  "7 days" (D7).
+- **Quantities come from claims only** (D14): `qty_canceled`,
+  `qty_returned` and `final_qty` are dropped; existing values convert to
+  closed claims. Expected = ordered − Σ claim qty (§3.6).
+- **An open claim keeps its PO open** (D15); expected units still reflect
+  the claim everywhere while the PO is open.
+- **Claim qty is entered in Individual units** (D16); AF shows the Product
+  and ASIN equivalents.
+- **Refunds table per claim** (§3.5): many refunds per claim (Kohl's, two
+  gift cards) and one refund across claims (Michaels). A short refund
+  stays owed until Maria decides; nothing is written off on its own.
+- Review fixes: Refunds due / Spend switch moves to commit 2; Target
+  last-4 refund matching; whole-PO claims spread across lines;
+  cancellation emails land as suggested claims; suggested / dismissed
+  claims never count as owed; Gift Cards cross-reference.
+
+**2026-11-07 (Maria, after the commit 0 probe):**
+- Name: "claims" everywhere. Tables `supplier_claims`,
+  `supplier_claim_tasks`, `supplier_claim_events`, `supplier_claim_refunds`.
+- D10 replaced: no replacement POs; a reship order # becomes an alias on
+  the original PO (`purchase_orders.alt_order_ids`, migration 086).
+- Carrier tracking: **EasyPost** (§3.9), preceded by a tracking parser fix
+  (§3.10).
+- Legacy badges convert to claims (§4.8). `amount_owed` can be set by
+  hand and then stays as typed (§3.7).
+- Michaels 9800109062072825: the sheet's 11-unit / $32.25 loss is dropped,
+  already refunded by the $36.11 eGift card.
+- Probe corrections: cols V/W were imported (`po_asins.unreimbursed_loss_*`);
+  AF has no carrier status; Velocity takes no qty PUT on received orders
+  and has no DELETE; Walmart emails the return label PDF.
 
 ## 1. Why
 
-Today a supplier problem is a badge plus a note. The defect record from
-e424903 added qty and $ owed for one case. Refund-due rows hold the same
-money a second time. Returns, replacements, expired and gated items, and
-orders that never arrive have no record at all. Maria's process (whiteboard,
-2026-11-05) has three branches from a PO: **Received** with a problem,
-**Canceled** (full or partial), **Charged, not received**. All three end in the
-same place: the supplier refunds, replaces, gives credit, or nothing happens
-and it's written off. AF should hold that as one claim per problem, do every
-step it can check itself, and remind Maria of the rest.
+Today a supplier problem is a badge plus a note. Refund-due rows hold the
+same money a second time. Returns, replacements, expired and gated items,
+and orders that never arrive have no record at all. Maria's process
+(whiteboard, 2026-11-05) has three branches from a PO: **Received** with a
+problem, **Canceled** (full or partial), **Charged, not received**. All
+three end in the same place: the supplier refunds, replaces, gives credit,
+or nothing happens and it's written off. AF holds that as one claim per
+problem, does every step it can check itself, and puts every step only
+Maria can do on one list with a checkbox.
 
-## 2. Decisions (Maria 2026-11-05, amended 2026-11-07)
+## 2. Decisions
 
 - **D1 — One record.** A claim carries the $ owed. Refund-due rows stop
-  being a separate notion (§4.3 migrates them).
-- **D2 — Kinds:** `missing` (short count) · `damaged` (damaged or defective,
-  one kind) · `wrong_item` · `expired` (expired or short-dated) ·
-  `never_received` (whole shipment: never shipped, or carrier lost it) ·
-  `cant_sell` (gated / hazmat / restricted, e.g. the Oreos; not the
-  supplier's fault, never counted as a supplier defect) · `canceled` (full
-  or partial, from the cancellations patch).
-- **D3 — One outcome per claim, no mix:** `refund_card` · `gift_card` ·
+  being a separate notion (§4.8).
+- **D2 — Kinds:** `missing` · `damaged` (damaged or defective) ·
+  `wrong_item` · `expired` (expired or short-dated) · `never_received`
+  (whole shipment) · `cant_sell` (gated / hazmat / restricted; never a
+  supplier defect) · `canceled` (full or partial) · `returned` (units sent
+  back for a reason outside the other kinds; mostly sheet-era history).
+- **D3 — One outcome per claim:** `refund_card` · `gift_card` ·
   `store_credit` · `replacement` · `write_off`.
-- **D4 — Refunded items you keep are disposed** ("keep it" refunds
-  included). Wrong items are always returned or tossed. Expired items are
-  returned or disposed. None become stock.
-- **D5 — Returns:** frequent (Walmart especially). 99% of the time Velocity
-  ships them back with a label Maria sends on Discord. The label is saved on
-  the PO and its tracking is followed. Walmart emails the label PDF itself
-  ("Drop off your return at FedEx by …"), so AF saves it from the email.
-- **D6 — Refund has two ticks:** *Confirmed by supplier* (email, automatic
-  or by hand) and *Received* (Maria saw it on the card, gift card or store
-  credit; always her tick). Until Received, the money counts as owed.
-- **D7 — Reminders:** supplier hasn't answered in **7 days**; return
-  delivered to supplier, no refund confirmation in **7 days**.
-- **D8 — Velocity check-in lag:** "missing" is raised only after every
-  tracking number on the PO shows delivered (carrier status, §3.8),
+- **D4 — Refunded items you keep are disposed.** Wrong items are returned
+  or tossed. Expired items are returned or disposed. None become stock.
+- **D5 — Returns:** Velocity ships them back with a label Maria sends on
+  Discord. Walmart emails the label PDF; AF saves it from the email.
+- **D6 — Refund has two ticks:** *Confirmed by supplier* (email, or by
+  hand) and *Received* (Maria saw the money; always her tick, one tick per
+  refund row). Until received in full, the remainder counts as owed.
+- **D7 — One timer: 5 business days** (Maria 2026-11-09). Supplier hasn't
+  answered; return delivered to supplier with no refund confirmation;
+  refund confirmed but not posted; Velocity asked to do something and
+  nothing changed. Every timeout becomes a *Check on it* task.
+- **D8 — Velocity check-in lag:** "missing" is suggested only after every
+  tracking number on the PO shows delivered (carrier status, §3.9),
   **3 business days** have passed since the last delivery, and Velocity's
-  received count is still below what shipped. Compare against
-  shipped-and-delivered qty, never ordered qty.
-- **D9 — Velocity can't take a note via API.** Steps AF can't do (tell
-  Velocity a replacement is coming, send a label, change or delete a
-  received order) are shown as tasks with a done tick.
-- **D10 — Replacements stay on the original PO** (amended 2026-11-07). No
-  `_replacement` POs. A reship order # becomes an alias on the original PO
-  (`alt_order_ids`).
+  received count is below what shipped. Shipped qty per tracking row from
+  the email when stated (`po_tracking.qty`), else all-delivered = ordered −
+  canceled. Compare in **Individual units**; when the figures disagree,
+  show both and the two possible causes (supplier shipped a single instead
+  of the case, or Velocity's pack size is wrong).
+- **D9 — Velocity can't take a note, a qty change on a received order, or
+  a delete via API.** Those are tasks with a done tick.
+- **D10 — Replacements stay on the original PO.** A reship with its own
+  order # goes into `alt_order_ids`.
 - **D11 — Write-off:** per-unit COGS unchanged; the $ goes to a **Supplier
-  write-offs** line in the Cost of goods block (next to SellerBoard's
-  Lost/damaged by Amazon and Disposal of sellable products).
-- **D12 — Velocity return fees:** not in v1 (revisit; rare, only when many
-  returns come back to back).
-- **D13 — Discord:** manual in v1. A read-only bot on Maria's channel needs
-  Velocity's agreement; anything logging in as Maria is out.
+  write-offs** line in the Cost of goods block.
+- **D12 — Velocity return fees:** not in v1.
+- **D13 — Discord:** manual in v1.
+- **D14 — Quantities come from claims** (Maria 2026-11-09). No
+  `qty_canceled` / `qty_returned` columns; expected units = ordered −
+  Σ claim qty (§3.6). Nothing ever edits Ordered.
+- **D15 — An open claim keeps its PO open** (Maria 2026-11-09). Auto-close
+  = every unit accounted for **and** no open claim. Expected units reflect
+  the claim everywhere while the PO is open.
+- **D16 — Claim qty is entered in Individual units** (Maria 2026-11-09),
+  labeled as such; AF shows Product and ASIN equivalents from the line's
+  pack sizes. Wording per the quantity-names patch.
 
-## 3. Lifecycle
-
-```
-found → reported → [return: label → shipped back → delivered to supplier]
-      → resolved (refund | gift card | store credit | replacement | write-off)
-      → refund: confirmed by supplier → received   |   replacement: arrived
-      → closed
-```
-
-`status` on the claim: `suggested` (auto-found, not yet opened) → `open` →
-`reported` → `awaiting_return` (only when a return is needed) →
-`awaiting_resolution` → `resolved` (outcome set) → `closed` (refund received
-/ replacement arrived / written off). `dismissed` = a suggestion Maria
-rejected. Every transition is a `supplier_claim_events` row and a History
-row on the PO with who and when.
+## 3. How a claim works
 
 ### 3.1 Found
 
-| Kind | How it's found |
+| Kind | How |
 |---|---|
-| missing | Auto per D8 (Received by Velocity < shipped & delivered, after the lag), or Maria from Velocity's Discord message |
-| damaged / wrong_item / expired / cant_sell | Maria, from Velocity's Discord message or her own check (home POs) |
-| never_received | Auto, two ways. **With tracking:** not delivered by the carrier's estimated date, or carrier status looks lost (exception / returned to sender / no scan for 7 days / in transit more than 14 days with no scan in the last 3 days) — needs the aggregator (§3.8). **With nothing at all:** no tracking and no shipping email 14 days after the order date — AF data only. Shows as a suggestion: "Looks not received. Open a claim?" Maria confirms. |
-| canceled | Cancellation emails (cancellations patch §4), or by hand |
+| missing | AF suggests per D8, or Maria opens it from a line |
+| damaged / wrong_item / expired / cant_sell | Maria, from Velocity's Discord message or her own check |
+| never_received | AF suggests: **with tracking** — not delivered by the carrier's estimated date, or looks lost (exception / returned to sender / no scan 5 business days / in transit > 14 days with no scan in the last 3); **with nothing** — no tracking and no shipping email 14 days after the order date |
+| canceled | Cancellation emails (cancellations patch §4 ingestion) land directly as **suggested** canceled claims with the email's items, qty and refund amount; or Maria opens one |
 
-Auto-found claims land as **suggested** (one click to open, one to dismiss);
-they never change a PO until Maria opens them.
+Suggested claims never change a PO until Maria opens them. Opening a
+`canceled` claim reduces expected units at once (§3.6).
 
-### 3.2 Reported
+### 3.2 Tasks and buckets
 
-Maria clicks **Contacted supplier** (date, channel: chat / email / phone,
-optional note). The 7-day "no answer" reminder starts.
+Every action only Maria can do is a **task** on the claim (kind, group,
+created_at, due_at, reason, done_at, done_by). A claim's **bucket** is
+derived, never stored:
 
-**Supplier replies from email.** orders@ is already read every pass. A
-message from the supplier's domain (alias map) that matches an open claim
-(order # incl. `alt_order_ids` in subject/body, or the thread of a known
-message) attaches to the claim: "Supplier replied 11/5", one-line Haiku
-summary ("offers a refund of $5.97", "wants it returned, label attached",
-"sending a replacement"), link to the email. AF **suggests** the outcome;
-Maria confirms. A reply resets the 7-day reminder. A label PDF in the reply
-is saved per §3.3. Many supplier conversations happen in other mailboxes
-(mpeters.cqg@, mashalelek@); orders@ sees only part of each thread, so
-Contacted supplier and outcomes stay settable by hand.
+| Bucket | When | Leaves on its own when | Timer (5 business days) → task |
+|---|---|---|---|
+| **Needs attention** | Any open task | The task is ticked | — |
+| **Waiting on supplier** | Reported, no answer; or supplier promised a refund / credit / replacement, no confirmation yet | A reply or refund / credit / replacement email attaches | *Follow up with supplier* |
+| **Waiting on shipment** | Return on its way to the supplier; replacement on its way to Velocity or home | Carrier delivered; Velocity checks the replacement in | Return delivered + 5 bd, no refund confirmation → *Check on it*; replacement looks lost → *Check on it* |
+| **Waiting on refund to post** | Supplier confirmed; not received in full | Received rows cover the full amount | *Check on it* ("refund not posted") |
+| **Waiting on Velocity** | Label sent, return not shipped; dispose asked, count not down; order change asked | Return tracking scans; Velocity count drops; order changes | *Check on it* |
 
-### 3.3 Return (when the supplier wants it back)
+Plus **Closed** (refund received in full, replacement arrived, written off)
+and **Dismissed** (suggestions Maria rejected; a toggle).
 
-- **Label:** arrives in a supplier email (Walmart: PDF attached) or Maria
-  uploads it on the claim. Saved as a PO document `type = return_label`,
-  `claim_id` set, named `YYYY-MM-DD_supplier_POID_return-label.pdf` in the
-  Invoices month folder.
-- **Tracking:** regex first where the carrier format is unambiguous, Haiku
-  reads the label otherwise (fixed schema). Stored as a `po_tracking` row
-  with `direction = return` and `claim_id` (never pushed to Velocity).
-- **Task:** "Send label to Velocity" with a done tick (Discord, by hand).
-- Carrier status per §3.8. Delivered to supplier → 7-day "no refund yet"
-  reminder (D7).
-- Units returned leave expected quantities exactly like a cancel (§3.5).
+Precedence: an open task always wins; otherwise the bucket of the running
+timer. Business days = Mon–Fri, America/New_York.
 
-### 3.4 Resolved
+### 3.3 The thirteen task kinds, in five groups
 
-| Outcome | What AF does |
-|---|---|
-| refund_card / gift_card / store_credit | Amount (prefilled from the supplier email or $ owed). *Confirmed by supplier* ticks itself when a refund/credit email matches (order # + amount within 1¢, or Maria confirms a looser match). *Received* is Maria's tick (D6) and writes the `po_line_refunds` row (status received), linked through `supplier_claim_refunds`. One refund can cover several claims (Michaels: one $36.11 gift card for three cancellations). Gift card / store credit also records the card/credit name (feeds the Gift Cards page when it's built). |
-| replacement | Stays on the original PO (D10). The claim records `replacement_qty`, `replacement_shipped_at`, `replacement_arrived_at`. Same order # → the replacement's tracking matches the PO as usual and is linked to the claim (`po_tracking.claim_id`); it pushes to the original Velocity order like any tracking. New order # → AF adds it to the PO's `alt_order_ids` (Maria confirms), so its emails and tracking land on the original PO. Task "Tell Velocity: replacement on the way". Closes when Velocity's received count on the line covers what was ordered (or Maria ticks Arrived for home POs). |
-| write_off | Reason required. $ → Supplier write-offs (D11). |
+| Group | Task | AF creates it when | Ticking it | Then |
+|---|---|---|---|---|
+| **Decide** | `review_suggestion` | AF suggests a claim | Opens or dismisses | → `contact_supplier` (emailed cancellation: → Waiting on supplier) |
+| | `confirm_outcome` | A supplier reply attaches with a suggested outcome (Maria can set one any time) | Sets outcome | → that path |
+| **Supplier** | `contact_supplier` | A claim is opened | Records date, channel, note | → Waiting on supplier |
+| | `follow_up_supplier` | 5 bd with no reply | Resets the timer | → Waiting on supplier |
+| | `confirm_reship_order` | A tracking / email with a new order # looks like the reship | Adds it to `alt_order_ids` | → Waiting on shipment |
+| **Velocity** | `send_label` | A return label is saved (Velocity PO) | Marks sent | → Waiting on Velocity, then Waiting on shipment when the return scans |
+| | `tell_velocity_replacement` | Outcome = replacement, Velocity PO | Marks told | → Waiting on shipment |
+| | `dispose_units` (or return) | Refund / write-off on damaged / wrong / expired / can't sell with units at Velocity | Marks asked | → Waiting on Velocity; `qty_disposed` set when the count drops |
+| | `update_velocity_order` | Expected qty changed on a fully received order, or an order should be deleted | Marks done | — |
+| **Money and arrivals** | `refund_received` | Supplier confirms (email match or hand tick) | Adds a refund row (method, amount, date) | Full → Closed; short → Waiting on refund to post, "short by $X" |
+| | `replacement_arrived` | Outcome = replacement on a home PO | Marks arrived | → Closed |
+| | `upload_return_label` | Outcome needs a return and no label came by email | Saves label, reads tracking | → `send_label` |
+| **Timed out** | `check_on_it` | Any timer runs out; `reason` names which | Snooze (restarts the timer) or jump to another task | — |
 
-**No "replacement from another PO"** (Maria 2026-11-06): POs stay true to
-the transactions. Units Velocity counts under a different PO are a
-Velocity attribution mismatch (§3.7), not a claim outcome: no cost moves,
-no link.
+Actions that are not tasks: **Set outcome**, **Write off** (reason
+required), **Write off remainder** (a short refund, when Maria decides),
+**Reopen**, **Dismiss warning** (§3.8). Suggestions sit under *Decide*; if
+they pile up, they get their own tab (decision deferred).
 
-**Disposal (D4):** a refunded / written-off `damaged`, `wrong_item` or
-`expired` claim whose units sit at Velocity gets a task "Velocity: dispose
-N units" (or "return" when a label exists). The units leave At Prep Center
-when Velocity's count drops; AF records `qty_disposed` on the claim.
+### 3.4 Paths (the checklist on the claim)
 
-### 3.5 Quantities
+- **Refund / credit:** Found → Reported → *(Return: label → sent to Velocity → shipped → delivered)* → Confirmed by supplier → Received → Closed
+- **Replacement:** Found → Reported → Promised → *(Tell Velocity)* → Shipped → Arrived → Closed
+- **Write-off:** Found → Reported → Written off → *(Dispose)* → Closed
+- **Emailed cancellation:** Found → Confirmed by supplier → Received → Closed (`contact_supplier` appears only if the refund times out)
 
-- A claim's qty reduces the line's **expected** units (On Order, the
-  Velocity upload, auto-close) once its outcome is refund / credit /
-  write-off, the same way `qty_canceled` does (cancellations patch §6).
-  A `canceled` claim writes `po_line_items.qty_canceled`.
-- A replacement keeps the expected units on the original line; nothing
-  drops. If the replacement never arrives and the outcome changes to
-  refund / write-off, the expected units drop then.
-- **Updating Velocity:** for an inbound (not fully received) order, the
-  existing Qty-mismatch opt-in PUT on the next Upload to Velocity plan. For
-  a fully received order, or a delete (fully canceled / never received
-  with nothing checked in), AF shows a task: Velocity's API takes no PUT on
-  received orders and has no DELETE, so Maria does it in Velocity's
-  dashboard. Never automatic.
-- Stored, never derived: the claim qty is never computed from Ordered −
-  Received (Received changes when replacements are checked in under the
-  same Velocity order).
+Steps that don't apply to the path aren't shown.
 
-### 3.6 Money
+### 3.5 Outcomes, refunds, replacements, returns
 
-- **$ owed** = claim qty × the line's **sourcing cost** per retailer unit
-  (what was paid incl. tax and shipping, after coupons/sales, BEFORE the
-  gift-card / card-reward % — the same basis as the Sourcing cost sent to
-  Amazon). never_received / full cancel = the PO total share of the lines.
-- **Manual override:** Maria can type `amount_owed`. `amount_owed_source`
-  = `auto | manual`; once manual, AF never recalculates it (same guard as
-  `cogs_source`), the field shows it was set by hand, and "Reset to auto"
-  brings the calculated value back. Every change is a History row.
-- **Spend** (Dashboard) subtracts: refunds Received, plus open claims whose
-  expected outcome is a refund or credit (amount still owed). A replacement
-  is not money owed.
-- **Refunds due** tile = Σ $ owed on claims not yet Received (and not
-  replacement / write-off).
-- **Cost of goods block** gains two lines, live before the Finances patch:
-  **Supplier write-offs** (write-off claims, dated by write-off date) and
-  **Lost/damaged by us** (the existing PO column × that line's COGS).
-  `cant_sell` write-offs go to Supplier write-offs too but are labeled
-  "can't sell" in the breakdown (not a supplier defect, D2).
-- Customer refunds (Amazon "Refund cost") are a different thing; never
-  called "refund due" in the UI.
+**Refund / credit.** Amount prefilled from the supplier email or $ owed.
+*Confirmed by supplier* ticks itself when a refund / credit email matches:
+order # (incl. `alt_order_ids`) + amount within 1¢; fallback for suppliers
+that print only the last 4 of the order # (Target): supplier + last 4 +
+amount + 30-day window → **suggested** match. Michaels refunds arrive as
+"You received a gift card" (amount + order # in the body).
+*Received* adds a row to the claim's **refunds table** (`po_line_refunds`,
+status received, linked through `supplier_claim_refunds`): method prefilled
+from the PO's payments, amount, date. Many rows per claim (Kohl's
+6739984735: two gift cards, one refunded so far) and one row across
+several claims (Michaels: one $36.11 card for three cancellations;
+ticking Received on one claim offers the PO's other open claims).
+**Remaining = owed − Σ received.** A short refund stays owed (Waiting on
+refund to post, "short by $X") until Maria ticks another refund, contacts
+the supplier, or chooses *Write off remainder*. Gift card / store credit
+rows also record the card / credit name; when the Gift Cards module ships,
+its "credit back to an existing card / new card" flow hooks on this row.
 
-### 3.7 Velocity attribution mismatches (Maria 2026-11-06)
+**Replacement.** Stays on the original PO (D10). The claim records
+`replacement_qty`, `replacement_shipped_at`, `replacement_arrived_at`.
+Same order # → its tracking matches the PO as usual, is linked to the claim
+(`po_tracking.claim_id`) and pushes to the original Velocity order. New
+order # → `confirm_reship_order` adds it to `alt_order_ids`. Closes when
+Velocity's received count on the line covers what was ordered, or Maria
+ticks `replacement_arrived` (home POs).
 
-Occasionally Velocity counts units under a different PO than the one that
-bought them. Caress case: 200015557295492 = 12 bought, 1 missing, refunded
-→ 5.5 ASIN units; 200015663718988 = 11 bought → 5.5 ASIN units. Velocity
-sees them as 6 and 5 because the extra single was checked in under the
-earlier PO. AF keeps the POs true to the transactions and does not model
-Velocity's view. Instead:
-- Any Velocity-vs-AF warning on a PO (qty mismatch, over-received, Extra
-  units shipped, FBA receiving mismatch) can be **dismissed with a required
-  note** ("1 single checked in under 200015557295492"). The dismissal is
-  stored per PO + warning type + the quantities it was dismissed at
-  (`po_warning_dismissals`); it stays dismissed until those quantities
-  change, then comes back. A dismissed warning never blocks auto-close
-  (e.g. 5.5 expected, 6 shipped FBA: "Extra units shipped" dismissed with
-  note → the PO auto-closes).
-- A PO whose units Velocity attributes elsewhere can't auto-close on its
-  own count; Maria closes it by hand (existing Close), and the dismissal
-  note shows on the PO.
-- Tracking for the unit may still need to reach the other PO's Velocity
-  order (the one-off rule from 8e9fbab); no general mechanism in v1.
-- Probe 2026-11-07: no COGS adjustment was made on either Caress PO. On
-  200015663718988 Maria set qty 11 by hand on 11/05 (correct: 11 bought);
-  Velocity order 9822 says 10, fully received → a dismiss-with-note case,
-  not a revert.
+**Return.** Label from the supplier email (Walmart: PDF) or
+`upload_return_label`; saved as a PO document `type = return_label`,
+`claim_id` set, named `YYYY-MM-DD_supplier_POID_return-label.pdf` in the
+Invoices month folder. Tracking # and carrier read by regex where the
+format is unambiguous, Haiku otherwise; stored as `po_tracking` with
+`direction = return`, `claim_id`, registered with EasyPost as a return.
+Units returned leave expected quantities when the claim's outcome is set.
 
-### 3.8 Carrier status (aggregator, new 2026-11-07)
+**Write-off.** Reason required. $ → Supplier write-offs (D11). `cant_sell`
+write-offs are labeled "can't sell" in the breakdown.
 
-AF reads tracking numbers from emails only and never queries a carrier;
-`po_tracking.status` is AF's own workflow, not the carrier's. This patch
-adds **EasyPost's Tracker API** (Maria 2026-11-07). Why: volume is
-~200–250 packages/month (production, Aug–Oct 2026), almost all UPS / FedEx
-/ USPS plus a little DHL and Amazon, no OnTrac or LaserShip; EasyPost
-covers those, is pay-per-tracker (~$0.01–0.03, no monthly fee), and gives
-status, `est_delivery_date`, timestamped scan history, a return flag and
-`tracker.updated` webhooks. Alternatives compared: 17TRACK, Ship24,
-TrackingMore, AfterShip (all dearer at this volume).
-- Every open tracking row (inbound and return, `is_return` for returns) is
-  registered with `POST /trackers`; status is stored on `po_tracking`:
-  `carrier_status`, `est_delivery_at`, `last_scan_at` (latest
-  `tracking_details[].datetime`), `delivered_at`, `carrier_checked_at`,
-  `easypost_tracker_id`.
-- Updates by webhook (`tracker.updated` → a public endpoint verified with
-  EasyPost's webhook secret); a daily sweep re-reads trackers with no
-  update in 3 days as a backstop. Registration stops once delivered or 60
-  days old. Carriers EasyPost can't track (e.g. GLS) keep no carrier
-  status.
-- `EASYPOST_API_KEY` and the webhook secret are Render env vars; Maria
-  creates the account (stop before signup).
-- Velocity's per-tracking `tracking_status` (already in its GET, unused) is
-  a fallback when the aggregator has nothing.
-- Feeds D8 (all delivered + lag), never_received (§3.1), return delivered
-  (D7), and the backlog's prep-center performance work later.
+**No "replacement from another PO"** (Maria 2026-11-06): units Velocity
+counts under a different PO are an attribution mismatch (§3.8).
 
-### 3.9 Tracking parser fix (new 2026-11-07)
+### 3.6 Quantities (D14)
 
-Probe, Aug–Nov 2026: 41 shipping emails became placeholder rows
-(`email:<sender>:<order #>`) with no tracking number. D8 can't fire on a PO
-whose packages have no number, so these are fixed before the aggregator:
-- **Walgreens** (mktx.walgreens.com): read the 12-digit number next to the
-  order # and the carrier the email names (USPS / FedEx).
-- **Follow the tracking link** (as AF already does for Michaels) for Duluth,
-  Ace, Zara, Typology (Klaviyo click-tracker), ui.com (AWS click-tracker),
-  Harbor Freight (parcel-api.versand-status.de), Golden Waffles / Café Mam
-  (Shopify), Lowe's (TPSD…), Summit Racing (Narvar); read number + carrier
-  from the landing page. A link that needs a login or yields nothing stays
-  a placeholder.
-- **GLS** added as a carrier (byrdhair.com via Shopify, 16 digits).
-- A placeholder row is replaced in place when a later email or link gives
-  the number, so it isn't counted twice.
-- Senders with no tracking at all (Sephora, LG, Equal Exchange) and
-  gift-card senders (giftcardoutlets) stay as they are: those POs rely on
-  the "nothing at all after 14 days" rule (§3.1).
-- Fixtures from the probe's rows, scrubbed; backfill over the existing
-  placeholders (dry run → report → live).
+- Stored on the claim: `qty` in **Individual units**; Product and ASIN
+  equivalents derived from the line's pack sizes for display.
+- **Expected units per line** = ordered − Σ qty of its claims that count:
+  a `canceled` claim counts from the moment it is **opened**; every other
+  kind counts once its **outcome** is refund / credit / write-off (a
+  replacement keeps the units expected until it arrives; if it never does
+  and the outcome changes, the units drop then). Suggested and dismissed
+  claims never count.
+- A **whole-PO claim** (`po_line_item_id` NULL: never_received, full
+  cancel) spreads its qty and $ across the PO's lines in proportion to
+  ordered qty for every reader below.
+- **One derived value, one place:** a SQL view / helper
+  `po_line_expected` (line, expected individual / product / ASIN units,
+  Σ canceled, Σ claimed) replaces every read of `qty_canceled` /
+  `qty_returned`: On Order (`PIPELINE_ROWS_SQL`), auto-close, the Velocity
+  plan (`loadAfPoRows`, net quantities), the PO editor's Canceled /
+  Returned columns, the ASIN-row roll-ups. `final_qty` (030) is dropped;
+  readers use the view.
+- **Auto-close** (D15) = expected units all shipped FBA / at prep / at
+  warehouse per the existing rule **and** no open claim on the PO.
+- **Updating Velocity:** inbound (not fully received) order → the existing
+  Qty-mismatch opt-in PUT on the next Upload to Velocity plan; fully
+  received order, or a delete → `update_velocity_order` task (API has
+  neither). Never automatic.
+- Never derived from Received: the claim qty is what Maria or the email
+  said, not Ordered − Received.
+
+### 3.7 Money
+
+- **$ owed** = claim qty (Individual units) × the line's **sourcing cost**
+  per individual unit (paid incl. tax and shipping, after coupons / sales,
+  before the gift-card / card-reward %). Whole-PO claim = the PO total
+  share of the lines.
+- **Manual override:** `amount_owed_source = auto | manual`; once manual,
+  AF never recalculates it (same guard as `cogs_source`); "Reset to auto"
+  brings the calculated value back. History row on every change.
+- **Remaining** = owed − Σ received refund rows (§3.5).
+- **Refunds due** (Dashboard, Spend section) = Σ remaining on open claims
+  whose outcome is unset or refund / credit (suggested / dismissed /
+  replacement / write-off excluded). Click → Claims page, Waiting on
+  refund to post + Waiting on supplier.
+- **Spend** subtracts refunds received plus Refunds due.
+- **Cost of goods block** gains **Supplier write-offs** (write-off claims
+  and written-off remainders, dated by write-off date; "can't sell"
+  labeled) and **Lost/damaged by us** (existing PO column × COGS).
+- Customer refunds (Amazon) are a different thing; never called "refund
+  due".
+
+### 3.8 Velocity attribution mismatches (Maria 2026-11-06)
+
+Caress: 200015557295492 = 12 bought, 1 missing, refunded → 5.5 ASIN units;
+200015663718988 = 11 bought → 5.5. Velocity counts 6 and 5. AF keeps POs
+true to the transactions:
+- Any Velocity-vs-AF warning (qty mismatch, over-received, Extra units
+  shipped, FBA receiving mismatch) can be **dismissed with a required
+  note**; stored per PO + warning type + the quantities at dismissal
+  (`po_warning_dismissals`); comes back if those change. A dismissed
+  warning never blocks auto-close.
+- Such a PO can't auto-close on its own count; Maria closes it by hand,
+  and the note shows on the PO.
+- Probe 2026-11-07: no COGS adjustment exists on either Caress PO; nothing
+  to revert.
+
+### 3.9 Carrier status — EasyPost (Maria 2026-11-07)
+
+AF reads tracking numbers from emails only; `po_tracking.status` is AF's
+workflow. Volume ~200–250 packages / month, nearly all UPS / FedEx / USPS +
+a little DHL and Amazon; EasyPost covers them, pay-per-tracker, with
+status, `est_delivery_date`, timestamped scans, a return flag and
+`tracker.updated` webhooks.
+- Every open tracking row (inbound and return) → `POST /trackers`; stored
+  on `po_tracking`: `carrier_status`, `est_delivery_at`, `last_scan_at`,
+  `delivered_at`, `carrier_checked_at`, `easypost_tracker_id`.
+- Webhook endpoint (public, signature-verified) + a daily sweep of
+  trackers silent for 3 days. Stops once delivered or 60 days old.
+  Carriers EasyPost can't track (GLS) keep no status.
+- Velocity's per-tracking `tracking_status` is the fallback.
+- `EASYPOST_API_KEY` + webhook secret on Render; Maria creates the account
+  (stop before signup).
+
+### 3.10 Tracking parser fix (2026-11-07)
+
+41 shipping emails (Aug–Nov) became placeholder rows with no number:
+- Walgreens: read the 12-digit number + named carrier.
+- Follow the tracking link (as for Michaels) for Duluth, Ace, Zara,
+  Typology (Klaviyo), ui.com (AWS click-tracker), Harbor Freight, Golden
+  Waffles / Café Mam (Shopify), Lowe's, Summit Racing (Narvar). A link that
+  needs a login stays a placeholder.
+- GLS added as a carrier.
+- Placeholders are replaced in place when a number arrives.
+- Sephora, LG, Equal Exchange, giftcardoutlets have nothing to read; those
+  POs rely on the "nothing after 14 days" rule.
+- Backfill over existing placeholders (dry run → report → live).
 
 ## 4. Data
 
-Existing tables, verified against migrations 028–098. One migration for
-§4.1–4.6, plus a second for §4.7 (aggregator columns) in commit 4.
+Verified against migrations 028–099.
 
 ### 4.1 `supplier_claims` (renames and widens `po_line_defects`, 094)
 
 | Column | Notes |
 |---|---|
-| `id` | bigserial, kept |
-| `po_id` | FK purchase_orders, kept |
-| `po_line_item_id` | FK po_line_items; becomes **nullable** (NULL = whole PO: never_received, full cancel) |
-| `kind` | CHECK widened to the seven kinds (D2) |
-| `qty` | retailer units, kept |
-| `amount_owed` | was `amount` |
-| `amount_owed_source` | `auto` \| `manual`, default auto |
-| `status` | CHECK widened (§3) |
-| `outcome` | was `resolution`; CHECK widened (D3) |
-| `outcome_amount`, `outcome_detail` | card / gift card / store credit name |
-| `write_off_reason` | kept, same CHECK |
+| `id`, `po_id` | kept |
+| `po_line_item_id` | **nullable** (NULL = whole PO) |
+| `kind` | the eight kinds (D2) |
+| `qty` | **Individual units**, numeric(10,2) (was retailer units) |
+| `amount_owed`, `amount_owed_source` | was `amount`; `auto` \| `manual` |
+| `status` | `suggested` \| `open` \| `closed` \| `dismissed` only; buckets are derived (§3.2) |
+| `outcome`, `outcome_amount`, `outcome_detail`, `write_off_reason` | was `resolution` |
 | `replacement_qty`, `replacement_shipped_at`, `replacement_arrived_at` | new |
 | `return_required`, `qty_disposed` | new |
-| `found_by` | `auto` \| `maria` \| `email` |
-| `found_at` | was `opened_at` |
-| `reported_at`, `reported_channel`, `last_supplier_reply_at`, `supplier_confirmed_at`, `received_at`, `closed_at` | new (`resolved_at` → `closed_at`) |
+| `found_by` (`auto` \| `maria` \| `email`), `found_at` (was `opened_at`) | |
+| `reported_at`, `reported_channel`, `last_supplier_reply_at`, `supplier_confirmed_at`, `closed_at` | new (`resolved_at` → `closed_at`) |
+| `source_email_id`, `source_items_json` | for emailed cancellations |
 | `note`, `created_by`, `created_at`, `updated_at` | |
-| dropped | `replacement_po_line_item_id` (no replacement POs) |
+| dropped | `replacement_po_line_item_id` |
 
-### 4.2 `supplier_claim_events`
+### 4.2 `supplier_claim_tasks`
 
-`id, claim_id, at, type (found | reported | supplier_reply | label_saved |
-return_shipped | return_delivered | outcome_set | supplier_confirmed |
-received | replacement_shipped | replacement_arrived | task_done |
-amount_overridden | reopened | dismissed), summary, gmail_message_id,
-po_document_id, po_tracking_id, by`. The claim's timeline.
+`id, claim_id, kind (the 13 in §3.3), group (decide | supplier | velocity |
+money | timed_out), qty, reason, created_at, due_at, done_at, done_by,
+snoozed_until`. Open = `done_at` NULL. One open task per kind per claim.
 
-### 4.3 `supplier_claim_tasks`
+### 4.3 `supplier_claim_events`
 
-`id, claim_id, kind (send_label | tell_velocity_replacement | dispose |
-return | update_velocity), qty, created_at, done_at, done_by`. Open = no
-`done_at`.
+`id, claim_id, at, type (found | opened | dismissed | reported |
+supplier_reply | outcome_set | label_saved | return_shipped |
+return_delivered | supplier_confirmed | refund_received |
+replacement_shipped | replacement_arrived | task_done | amount_overridden |
+remainder_written_off | reopened | closed), summary, gmail_message_id,
+po_document_id, po_tracking_id, po_line_refund_id, by`.
 
-### 4.4 `supplier_claim_refunds` (renames `po_line_defect_refunds`, 094)
+### 4.4 `supplier_claim_refunds` (renames `po_line_defect_refunds`)
 
-`claim_id, po_line_refund_id`, PK on both. Many-to-many.
+`claim_id, po_line_refund_id, amount_applied` (PK on the pair). Many-to-many
+both ways; `amount_applied` lets one refund row split across claims.
 
 ### 4.5 `po_warning_dismissals`
 
-`id, po_id, warning_type, quantities_json (as dismissed), note,
-dismissed_by, dismissed_at`.
+`id, po_id, warning_type, quantities_json, note, dismissed_by, dismissed_at`.
 
-### 4.6 Changes to existing tables
+### 4.6 `po_line_expected` (view)
 
-- `po_tracking`: `claim_id` (FK, nullable), `direction` (`inbound` \|
-  `return`, default inbound).
-- `po_documents`: `claim_id` (FK, nullable); type CHECK gains `return_label`.
-- `po_line_refunds`: holds money actually received only; `due` rows convert
-  to claims (§4.8). The `status` column stays for history until a cleanup
-  migration.
-- `po_line_action_items`: after conversion (§4.8), "Missing / damaged from
-  supplier" and "Confirm refund / replacement" leave the CHECK list for new
-  rows; chips for supplier problems come from `supplier_claims`.
-- `po_edit_log`: entity CHECK gains `claim`.
-- `purchase_orders.alt_order_ids` (086): reship order #s go here; no change.
+Per line: ordered (individual / product / ASIN), Σ canceled, Σ claimed
+(counting rule §3.6), expected in all three units. The only source for
+every net-quantity reader.
 
-### 4.7 Aggregator columns (commit 4)
+### 4.7 Changes to existing tables
 
-`po_tracking`: `carrier_status, est_delivery_at, last_scan_at,
-delivered_at, carrier_checked_at, easypost_tracker_id`.
+- `po_line_items`: **drop** `qty_canceled`, `qty_returned`, `final_qty`
+  after conversion (§4.8). The PO editor's Canceled / Returned columns read
+  the view.
+- `po_tracking`: `claim_id`, `direction` (`inbound` \| `return`), EasyPost
+  columns (§3.9).
+- `po_documents`: `claim_id`; type `return_label`.
+- `po_line_refunds`: received money only; `status` column dropped after
+  conversion.
+- `po_line_action_items`: "Missing / damaged from supplier" and "Confirm
+  refund / replacement" leave the list for new rows (old cleared rows keep
+  their text).
+- `po_edit_log`: entity `claim`.
+- `purchase_orders.alt_order_ids`: reship order #s; no change.
 
-### 4.8 Migration of existing data (dry run → Maria reviews → live)
+### 4.8 Conversions (one dry run → Maria reviews → live)
 
-- Defect row → claim 1:1 (Caress 200015557295492: missing, 1, $5.97, open).
-- Refund-due rows (`po_line_refunds.status = 'due'`; today one, the same
-  Caress $5.97) → the claim's `amount_owed`; the due row is removed, never
-  double-counted.
-- **"Confirm refund / replacement"** action items (23, all on open POs) →
-  claims with status `resolved`, waiting on Maria's *Received* tick; kind
-  from the line's note / other action items when obvious, else flagged
-  "kind unclear" for Maria. Then the action item is cleared (`cleared_by =
-  auto`, reason "converted to claim").
-- **"Missing / damaged from supplier"** action items (60, Maria
-  2026-11-07): the 12 on open POs → open claims (kind from the note when
-  obvious, else flagged "kind unclear"); the 48 on closed POs → **closed**
-  claims for history (no outcome guessed; note carried over). Then each
-  action item is cleared (`cleared_by = auto`, reason "converted to
-  claim").
-- **Sheet write-offs** come from AF, not the sheet: `po_asins.unreimbursed_loss_qty`
-  / `_amount` (143 rows, $7,059.23; 140 match sheet cols V/W, three are
-  ASINs spread over several sheet rows where the sheet repeats the value).
-  Each → a closed `write_off` claim (kind `missing` unless the notes say
-  otherwise), dated by the PO's last edit. Plus the one row missing from
-  AF: chewy 1627249988 B08F2JGCXT, 3 / $8.55. **Excluded:** michaels.com
-  9800109062072825 Red Heart (11 / $32.25) — already refunded (§0).
-- `po_cancellations` doesn't exist (never built) → nothing to convert.
+- Defect row → claim 1:1 (Caress 200015557295492: missing, 1, $5.97).
+- Refund-due rows (`status = 'due'`; one, the same $5.97) → the claim's
+  `amount_owed`; due row removed.
+- `qty_canceled > 0` → closed `canceled` claim per line; `qty_returned > 0`
+  → closed `returned` claim; qty converted to Individual units; dated by
+  the PO's last edit; linked to a received refund row on that PO when one
+  exists, else amount unknown + note "sheet-era, refund not tracked".
+  Dry run reports the counts.
+- "Confirm refund / replacement" action items (23, open POs) → open claims
+  with an open `refund_received` task and kind / outcome / amount flagged
+  for Maria.
+- "Missing / damaged from supplier" (60): 12 on open POs → open claims
+  with `contact_supplier`; 48 on closed POs → closed claims for history,
+  note carried over, no outcome guessed. Action items cleared
+  (`cleared_by = auto`, "converted to claim").
+- Sheet write-offs from `po_asins.unreimbursed_loss_qty / _amount` (143
+  rows, $7,059.23; 140 match the sheet) → closed `write_off` claims (kind
+  `missing` unless the notes say otherwise), dated by the PO's last edit;
+  plus chewy 1627249988 B08F2JGCXT 3 / $8.55 (missing from AF).
+  **Excluded:** michaels 9800109062072825 Red Heart 11 / $32.25 (refunded).
+- Day one: ~35 claims in Needs attention (23 + 12). Accepted (Maria).
 
 ## 5. UI
 
-- **POs page → Claims** inbox (replaces the planned Cancellations chip):
-  tabs *Needs me* (suggested, reminders due, outcome to confirm, Received
-  to tick, tasks), *Waiting on supplier*, *Waiting on return /
-  replacement*, *Closed*. Each row: PO, supplier, kind, qty, $ owed,
-  status, last event, next step.
-- **PO page → Claims tab** (replaces Supplier defects on Payments): the
-  claim timeline (§4.2), buttons per step (Contacted supplier · Upload label
-  · Set outcome · Supplier confirmed · Received · Write off · Reopen), tasks
-  with done ticks, $ owed editable with Reset to auto.
-- **Chip** on PO row / ASIN row / line, derived from open claims; hover
-  lists each. Content (next step vs kind + $) — *Maria to decide (§8)*.
-  Quiet colors (UI rule).
-- **Open a claim** from a line's menu (kind, qty prefilled from the gap
-  when AF knows it, note). Replaces the two manual action items.
-- Dashboard: Refunds due, Spend per §3.6; Cost of goods lines per §3.6.
+- **Claims** — a nav tab (position settled with the nav rearrangement
+  later). Bucket tabs with counts: Needs attention · Waiting on supplier ·
+  Waiting on shipment · Waiting on refund to post · Waiting on Velocity ·
+  Closed (+ Dismissed toggle). Needs attention is grouped Decide / Supplier
+  / Velocity / Money and arrivals / Timed out, each task a checkbox.
+  Row: Supplier · PO · Kind · Qty (Individual units) · $ owed / remaining ·
+  Step · Days in bucket · Next action. Default sort: longest waiting.
+  Toolbar: **Open claim** (PO picker), filters supplier / kind / PO.
+- **Claim detail** (row click): header (PO, supplier, kind, qty in all
+  three unit kinds, $ owed with override and Reset to auto); step checklist
+  (§3.4) with ✓ and the current step highlighted; open tasks; refunds table
+  (method · amount · date · remaining); linked emails, labels, tracking;
+  timeline (§4.3). Actions: Set outcome · Write off · Write off remainder ·
+  Reopen.
+- **POs list:** a **Claims** column in the Status group right after Action
+  Items — count of open claims, blank when none; hover lists kind + $;
+  click → Claims page filtered to the PO. Nothing in Action Items. Filter
+  "has open claims".
+- **PO page:** "Claims (N)" link in the header next to the chips; a small
+  Claims card on PO Details (one line per open claim, linked); **Open
+  claim** in a line's menu (kind, qty in Individual units prefilled from
+  the gap when AF knows it, note). No Claims tab on the PO.
+- **Velocity warnings:** Dismiss with note on the chip (§3.8); the note
+  shows on the PO.
+- **Dashboard:** Refunds due (click → Claims), Spend, Supplier write-offs
+  line (§3.7).
+- Quiet chrome rule applies; wording per the quantity-names patch.
 
-## 6. Fixtures (real cases, facts from the 2026-11-07 probe)
+## 6. Fixtures (facts from the 2026-11-07 probe)
 
 - **Caress 200015557295492** — missing 1 of 12, refund expected (Walmart
   chat refused). AF ASIN qty 6.00, received 5.5; Velocity 8127 fully
-  received (12 singles).
+  received.
 - **Caress 200015663718988** — 11 bought, ASIN qty 5.5; Velocity 9822 qty
-  10, fully received. §3.7: dismiss with note, close by hand.
-- **Voltage 65705** — 1 received of a 12-pack; supplier (writes from
-  voltagesupply.com) said 11/2 the remaining 11 jars ship next day; second
-  UPS tracking 11/3 already pushed to the same Velocity order 6778 (1 of 12
-  received). Replacement under the same order # (D10).
-- **Waffle mix — goldenwaffles.com 8307** (10/23, PO note "Expires in a
-  month") — expired, return requested. Velocity 8787: 6 of 18 received;
-  AF shows received 0 / at prep 0 (sync gap to check).
-- **Oreos — walmart.com 200015193721348** (9/10) — cant_sell (gated).
-  Return started 10/31, label PDF attached to the email, refund $47.76 to
-  OnePay. Velocity 5667: 8 singles, status inventory; AF shows 4 shipped
-  FBA (mismatch to check).
-- **petsmart.com 1113689148** (3/31/2026, home PO, sheet import; AF status
-  Closed with `closed_at` empty) — Maria 2026-11-06: fix with this patch.
-  - Bil-Jac B07762PPYF (4-pack): 21 ordered, 15 received; V/W 6 units /
-    $15.46 → write-off.
-  - Rachael Ray B07KWJTLCN (Pack of 2): 5 ordered in AF and the sheet;
-    sheet note "Ordered 20. 5 got canceled. Also, PetSmart shipped 3, 2 of
-    them bigger size instead of 5 smaller size"; 1 received, 0.5 shipped
-    FBA combined at Velocity with another PO's units (§3.7); 2 units still
-    to ship, then the PO closes by hand. Claims proposed in the dry run for
-    Maria (the note and the qty disagree).
-  - Top Fin B0BXBP5GZP: 4/4, fine.
-  - Sheet subtotal $194.10 is $40.47 above the lines' sum.
-- **michaels.com 9800109062072825** (2/16/2026, 120 items, $384.55; AF
-  status Closed with `closed_at` empty) — three partial cancellations
-  (2/18 $9.96, 2/18 $17.85, 2/19 $8.30) refunded as one Michaels eGift card
-  $36.11 (2/19); no separate cancellation emails. Red Heart Cherry Red
-  B07N6V47HC: 60 ordered, 49 received. → canceled claims linked to one
-  refund; the sheet's 11 / $32.25 loss is not converted (§0).
-- **Never received — dkhardware.com DKH-3192308** (6/8): "Delivery issue"
-  6/22, cancellation + "Refund Issued … $77.23" 8/25. AF: closed, 0
-  received, refund 0.
-- **Full cancel — Jellycat 8918590** (9/2): cancelled 9/3, refund $380.00.
-  AF: order total $0, open, no tracking.
+  10, fully received. §3.8: dismiss with note, close by hand.
+- **Voltage 65705** — 1 jar received of a 12-jar case: missing **11
+  Individual units** (0.92 Product unit). Supplier (voltagesupply.com)
+  shipping the remaining 11; second UPS tracking already on Velocity order
+  6778. Replacement, same order # (D10).
+- **goldenwaffles.com 8307** (10/23, "Expires in a month") — expired,
+  return requested. Velocity 8787: 6 of 18 received; AF shows 0 (sync gap
+  to check).
+- **walmart.com 200015193721348** (Oreos, 9/10) — cant_sell. Return
+  started 10/31, label PDF in the email, refund $47.76 to OnePay. Velocity
+  5667: 8 singles in inventory; AF shows 4 shipped FBA (mismatch to check).
+- **petsmart.com 1113689148** (3/31, home PO; AF "Closed" with `closed_at`
+  empty) — Bil-Jac B07762PPYF: 21 ordered, 15 received, V/W 6 / $15.46 →
+  write-off. Rachael Ray B07KWJTLCN: 5 ordered (sheet and AF); note says
+  "Ordered 20. 5 got canceled… shipped 3, 2 of them bigger size" → the dry
+  run proposes canceled + missing + wrong_item for Maria; 0.5 shipped FBA
+  combined at Velocity (§3.8). Top Fin fine. Sheet subtotal $40.47 above
+  the lines.
+- **michaels.com 9800109062072825** (2/16) — three cancellations ($9.96,
+  $17.85, $8.30) refunded as one $36.11 eGift card → three canceled claims,
+  one refund row split by `amount_applied`.
+- **kohls.com 6739984735** (Maria 2026-11-09) — full cancel paid with two
+  gift cards, one refunded → one claim, one refund row, remaining = the
+  other card.
+- **dkhardware.com DKH-3192308** (6/8) — never received; "Delivery issue"
+  6/22, "Refund Issued … $77.23" 8/25. AF: closed, refund 0.
+- **Jellycat 8918590** (9/2) — full cancel 9/3, refund $380.00. AF: total
+  $0, open, no tracking.
 
 ## 7. Email facts (probe, orders@, 90 days)
 
-- **Walmart:** fixed templates, regex reliable. "You're getting a $X
-  refund: [item]" (amount in subject; order # in body with a dash,
-  2000155-50741831); "Canceled: … from delivery" (no amount); "Drop off
-  your return at FedEx by …" (label PDF, refund amount, card last 4);
-  "Return pickup confirmation" (PDF); "We received your return"; "Your
-  replacement is in the works".
-- **Target:** cancel email shows only the order #'s last 4; replacement
-  emails "processing your replacement request" / "replacement item is ready
-  to ship".
-- **Michaels:** refunds and cancellations arrive as "You received a gift
-  card" (amount + order # in body); customer care in "Case Number" threads;
-  reships get their own order # (R…) → `alt_order_ids`.
-- Regex-able refund/cancel senders: Home Depot "Credit Applied to Order
-  WK…", DK Hardware "Refund Issued for Order# DKH-…", Jellycat, Sephora,
-  Supplyhouse, Staples, Blick (oraclecloud.com); Carter's damage claims
-  from carters.narvar.com.
-- Haiku: free-text supplier replies (7 in 90 days: Voltage from
-  voltagesupply.com, Hardware World, Michaels Customer Care, Yankee Candle,
-  First Choice Buying).
-- Noise to exclude: Spoiled Child loyalty "credit", one.app credit-score
-  mail.
-- Full list: `docs/po-issues-probe-supplier-emails-2026-11-07.csv` (probe
-  file names keep their original names).
+- **Walmart:** regex-reliable templates. "You're getting a $X refund:
+  [item]" (amount in subject; order # in body with a dash); "Canceled: …
+  from delivery" (no amount); "Drop off your return at FedEx by …" (label
+  PDF, refund amount, card last 4); "Return pickup confirmation";
+  "We received your return"; "Your replacement is in the works".
+- **Target:** cancel email shows only the order #'s last 4 (§3.5
+  fallback); "processing your replacement request" / "replacement item is
+  ready to ship".
+- **Michaels:** "You received a gift card" (amount + order #); "Case
+  Number" threads; reships R… → `alt_order_ids`.
+- Regex-able: Home Depot "Credit Applied to Order WK…", DK Hardware
+  "Refund Issued for Order# DKH-…", Jellycat, Sephora, Supplyhouse, Staples,
+  Blick (oraclecloud.com); Carter's claims from carters.narvar.com.
+- Haiku: free-text replies (7 / 90 days). Voltage writes from
+  voltagesupply.com → alias. Unknown sender domains that mention an open
+  claim's order # → **suggested** attach, never automatic.
+- Many threads start in mpeters.cqg@ / mashalelek@ (forwarded to orders@):
+  parse forwarded headers (cancellations patch §4).
+- Noise: Spoiled Child loyalty "credit", one.app credit-score mail.
+- `docs/po-issues-probe-supplier-emails-2026-11-07.csv`.
 
-## 8. Open for Maria (before commit 1's live run)
+## 8. Open
 
-1. ~~Legacy badges~~ — decided 2026-11-07 (§4.8).
-2. UI (§5) — to be settled with Maria; §5 is a draft until then.
-3. ~~Aggregator provider~~ — EasyPost, decided 2026-11-07 (§3.8).
+- Suggestions: under *Decide* for now; own tab if they pile up.
 
 ## 9. Commits
 
-0. ~~Probe~~ — done 2026-11-07 (report in this chat; CSVs in docs/).
-1. Migration §4.1–4.6 (renames, new tables, columns); conversions §4.8
-   (dry run → Maria reviews → live).
-2. Lifecycle + quantities (§3.5) + money (§3.6, incl. manual override) +
-   Claims tab / inbox + chips + Open a claim; retire the two manual action
-   items.
-3. Tracking parser fix (§3.9) + placeholder backfill (dry run → report →
-   live).
-4. EasyPost aggregator (§3.8, migration §4.7): register, webhook, daily
-   backstop, store; Velocity `tracking_status` fallback.
-5. Auto-found: missing (D8), never_received (§3.1) as suggestions.
-6. Email: supplier replies, refund/credit confirmations, labels in replies
-   (regex first per §7, Haiku for free text).
-7. Returns: label → document + tracking (direction = return) + reminders.
-8. Replacements on the original PO (`alt_order_ids`, tracking ↔ claim) +
-   §3.7 dismiss-with-note.
-9. Dashboard lines; SPEC §22/§26/§11, CLAUDE.md; mark the cancellations
-   patch's §3/§5 superseded.
+Prerequisite: `claude_spec-patch-quantity-names.md` (labels only).
+
+0. ~~Probe~~ — done 2026-11-07.
+1. Migration §4.1–4.7 + view §4.6; conversions §4.8 (dry run → Maria →
+   live); drop `qty_canceled` / `qty_returned` / `final_qty`; every
+   net-quantity reader on the view; tests that On Order / auto-close /
+   Velocity plan give the same numbers before and after for every
+   production PO (dry run report).
+2. Tasks + buckets + paths (§3.2–3.4), outcomes + refunds table (§3.5),
+   money incl. override (§3.7), Claims nav tab + claim detail + POs-list
+   column + PO page link / card / Open claim (§5), Refunds due / Spend on
+   claims (§3.7), retire the two manual action items.
+3. Tracking parser fix (§3.10) + placeholder backfill.
+4. EasyPost (§3.9): register, webhook, sweep, store; Velocity fallback.
+5. Auto-found: missing (D8), never_received (§3.1) as suggestions;
+   cancellation emails → suggested canceled claims.
+6. Email: supplier replies, refund / credit confirmations (incl. Target
+   fallback), labels in replies (regex first, Haiku for free text).
+7. Returns: label → document + return tracking + Velocity / shipment
+   buckets.
+8. Replacements (`alt_order_ids`, tracking ↔ claim) + §3.8
+   dismiss-with-note.
+9. Supplier write-offs line; SPEC §22 / §26 / §11, CLAUDE.md; mark the
+   cancellations patch's §3 / §5 / §6 superseded.
 
 Stops: after 1's dry run, after 3's backfill dry run, before 4's EasyPost
-signup (Maria creates the account and sets the env vars), and for anything
-this patch doesn't cover.
+signup, and for anything this patch doesn't cover.
