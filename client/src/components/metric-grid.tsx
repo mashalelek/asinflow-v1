@@ -28,9 +28,9 @@ export function fmtRangeLabel(from: string, to: string, currentYear = new Date()
   if (a.y === b.y) return `${MONTHS[a.m - 1]} ${a.d} – ${MONTHS[b.m - 1]} ${b.d}${yr(a.y)}`;
   return `${MONTHS[a.m - 1]} ${a.d}, ${a.y} – ${MONTHS[b.m - 1]} ${b.d}, ${b.y}`;
 }
-/** The Refunds due cell's link (C1): the POs page filtered to POs with refunds due, any status, over the column's Spend range. */
+/** The Refunds due cell's link (SPEC §22 "Supplier claims" §3.7, commit 2): the Claims page, Waiting on refund to post + Waiting on supplier, the column's PO date range carried along. */
 export function refundsDueHref(col: Pick<DashboardColumn, "eastern">): string {
-  return `/purchase-orders?refunds=due&closed=all&from=${col.eastern.from}&to=${col.eastern.to}`;
+  return `/claims?bucket=waiting_refund,waiting_supplier&from=${col.eastern.from}&to=${col.eastern.to}`;
 }
 
 const fmtTime = (iso: string | null) => (iso ? new Date(iso).toLocaleString(undefined, { hour: "numeric", minute: "2-digit" }) : "never");

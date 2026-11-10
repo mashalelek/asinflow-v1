@@ -15,7 +15,7 @@ import { InlineEdit, SelectEdit, poApi } from "@/components/po-edit";
 import { InlineNoteCell } from "@/components/inline-note";
 import type { PoAsinRowData, PoAsinLine } from "@/components/po-asin-rows";
 import { PAYMENT_METHODS, PROMO_TYPES, CASHBACK_STATUSES } from "@shared/po-form";
-import { PoClaimsSection, qtyEquivalents, type PoClaim } from "@/components/po-claims";
+import { qtyEquivalents, type PoClaim } from "@/components/po-claims";
 import { QTY_KIND } from "@shared/quantity-kinds";
 
 export interface PoPayment { id: number; method: string; nickname: string | null; last4: string | null; amount: string | null; gift_card_discount_pct: string | null; reward_pct?: string | null; needs_review: boolean; raw_text: string | null }
@@ -152,8 +152,7 @@ export function PoMoneyTab({ po, asins, payments, promos, refunds, claims = [], 
         </div>
       </section>
 
-      {/* Supplier claims (SPEC §22, migration 101): what the supplier owes; a received refund row above is linked to the claim it settles */}
-      <PoClaimsSection po={po} asins={asins} refunds={refunds} claims={claims} call={call} />
+      {/* Supplier claims live on the Claims page since commit 2 (SPEC §22 §5): the summary line above names what is owed on open claims. */}
 
       {/* Costs per ASIN row */}
       <section className="space-y-2" data-testid="po-costs">

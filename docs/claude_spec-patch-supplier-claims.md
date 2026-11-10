@@ -595,6 +595,34 @@ Prerequisite: `claude_spec-patch-quantity-names.md` (labels only).
    money incl. override (§3.7), Claims nav tab + claim detail + POs-list
    column + PO page link / card / Open claim (§5), Refunds due / Spend on
    claims (§3.7), retire the two manual action items.
+   **Built 2026-11-10 (migration 102 — the event types only).** Notes
+   beyond the text: (a) §3.2's precedence ("an open task always wins")
+   and §3.3's `refund_received` / `replacement_arrived` tasks cannot both
+   hold, or Waiting on refund to post / shipment would never occur — those
+   two are PASSIVE ticks: they never place a claim in Needs attention and
+   are offered as the row's Next action wherever it sits; (b) the timer's
+   anchor for Waiting on supplier is the report date Maria typed
+   (`reported_at`), else the tick; a Follow up / Check on it tick restarts
+   it; a snooze = the tick now + `snoozed_until` 5 business days out, and
+   the sweep waits for it; (c) the sweep runs when the Claims page loads
+   (`GET /api/claims`), not on a schedule — the buckets are current when
+   read; (d) Refund received creates the `po_line_refunds` row itself
+   (`source = 'manual'`, the claim's line and qty when the refund is for
+   one claim, PO-level + `needs_split` when it is shared) and stamps
+   `supplier_confirmed_at`; a short refund stays owed in Waiting on refund
+   to post (event `refund_short`); (e) Write off remainder keeps the
+   refund outcome, sets `write_off_reason` and `outcome_amount` = received
+   — the coverage sync leaves such a closed claim alone, Reopen clears the
+   reason; (f) the Dashboard's Refunds due cell opens
+   `/claims?bucket=waiting_refund,waiting_supplier&from&to` (the PO date
+   range filters the rows); (g) the POs list's "has open claims" is a
+   select (any / has open claims / no open claims, `?claims=`) with facet
+   counts; (h) the Claims nav tab sits after POs; the sidebar component is
+   not in use; (i) "Days in bucket" on Needs attention = days since the
+   oldest open active task; (j) the Velocity-warning dismiss (§3.8) and
+   Supplier write-offs line stay in their commits; (k) migration 102 widens
+   `supplier_claim_events.type` with `timed_out`, `snoozed`, `followed_up`,
+   `checked`, `reship_confirmed`, `refund_short`.
 3. Tracking parser fix (§3.10) + placeholder backfill.
 4. EasyPost (§3.9): register, webhook, sweep, store; Velocity fallback.
 5. Auto-found: missing (D8), never_received (§3.1) as suggestions;

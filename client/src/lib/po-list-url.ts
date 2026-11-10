@@ -8,8 +8,10 @@
 
 export type PoClosed = "open" | "closed" | "all";
 export type PoRefunds = "any" | "due" | "none";
+/** Supplier claims (SPEC §22 §5): any / open ("has open claims") / none. */
+export type PoClaims = "any" | "open" | "none";
 export interface PoListUrlState {
-  search: string; action: string[]; supplier: string[]; closed: PoClosed; refunds: PoRefunds;
+  search: string; action: string[]; supplier: string[]; closed: PoClosed; refunds: PoRefunds; claims: PoClaims;
   from: string; to: string; sort: { key: string; dir: "asc" | "desc" } | null; page: number;
 }
 
@@ -21,12 +23,13 @@ const RENAMED_ACTION_ITEMS: Readonly<Record<string, string>> = { "Receiving mism
 /** Pure: the query string → the list's state. `?asin=B0…` (the ASINs page's On Order link) searches that ASIN. D3: Status defaults to Open. */
 export function readPoListUrl(search: string): PoListUrlState {
   const p = new URLSearchParams(search);
-  const closed = p.get("closed"), refunds = p.get("refunds"), dir = p.get("dir"), sortKey = p.get("sort")?.trim() ?? "";
+  const closed = p.get("closed"), refunds = p.get("refunds"), claims = p.get("claims"), dir = p.get("dir"), sortKey = p.get("sort")?.trim() ?? "";
   return {
     search: p.get("search")?.trim() ?? p.get("asin")?.trim().toUpperCase() ?? "",
     action: Array.from(new Set(list(p.get("action")).map((a) => RENAMED_ACTION_ITEMS[a] ?? a))), supplier: list(p.get("supplier")),
     closed: closed === "closed" || closed === "all" ? closed : "open",
     refunds: refunds === "due" || refunds === "none" ? refunds : "any",
+    claims: claims === "open" || claims === "none" ? claims : "any",
     from: ymd(p.get("from")), to: ymd(p.get("to")),
     sort: sortKey ? { key: sortKey, dir: dir === "desc" ? "desc" : "asc" } : null,
     page: Math.max(1, parseInt(p.get("page") ?? "1", 10) || 1),
@@ -39,6 +42,7 @@ export function writePoListUrl(s: PoListUrlState): string {
   if (s.search) p.set("search", s.search);
   if (s.closed !== "open") p.set("closed", s.closed);
   if (s.refunds !== "any") p.set("refunds", s.refunds);
+  if (s.claims !== "any") p.set("claims", s.claims);
   if (s.action.length) p.set("action", [...s.action].sort().join(","));
   if (s.supplier.length) p.set("supplier", [...s.supplier].sort().join(","));
   if (s.from) p.set("from", s.from);

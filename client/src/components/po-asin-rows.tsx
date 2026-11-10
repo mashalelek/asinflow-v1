@@ -18,6 +18,7 @@ import { bundleFromLines, type BundleComponent } from "@shared/bundle";
 import { InlineEdit, poApi, ReassignShipment, shipmentBlockText } from "@/components/po-edit";
 import { InlineNoteCell, NoteIcon } from "@/components/inline-note";
 import { claimSummary, individualEquivalents } from "@shared/supplier-claim";
+import { OpenClaimButton } from "@/components/po-claims";
 
 /** The PO header money (subtotal / discount / tax) the rows may be handed; kept as a loose shape since the refund-proposal dialog left with migration 101. */
 export interface PoHeaderMoney { id: string; subtotal?: string | number | null; discount?: string | number | null; tax?: string | number | null }
@@ -254,13 +255,17 @@ export interface ActionItemLines { lines: number; of: number; asins: string[]; r
 /** An open supplier claim as the list rows carry it (server/supplier-claims.ts briefOf, SPEC §22 "Supplier claims"). qty in Individual units. */
 export interface OpenClaimBrief { id: number; po_line_item_id: string | null; asin: string | null; line_no: number; kind: string; qty: number; amount_owed: number | null; remaining: number | null; note: string | null; status: string; outcome: string | null; open_tasks: number }
 /**
- * Claims are NOT action items (SPEC §22 "Supplier claims" §5): the rows show a muted "N open claim(s)" note after the chips,
- * with each claim on hover, until the POs list's Claims column and the PO page's card land in commit 2.
+ * Claims are NOT action items (SPEC §22 "Supplier claims" §5, commit 2): the ASIN row / line shows a small "N open" link to the
+ * Claims page beside its Open claim control (LineClaims), never a chip in the Action Items cell.
  */
-export function ClaimsNote({ claims, testId }: { claims: readonly OpenClaimBrief[] | undefined; testId?: string }) {
+export function ClaimsNote({ claims, orderId, testId }: { claims: readonly OpenClaimBrief[] | undefined; /** The PO's order # or id — the Claims page filters on either. */ orderId?: string; testId?: string }) {
   if (!claims?.length) return null;
   const each = claims.map((d) => `${d.asin ?? "whole PO"}${d.po_line_item_id ? ` line ${d.line_no}` : ""}: ${claimSummary([d])}${d.outcome ? ` · ${d.outcome.replace("_", " ")}` : ""}${d.note ? ` — ${d.note}` : ""}`);
-  return <span className="block text-[10px] text-muted-foreground whitespace-nowrap" title={`Open supplier claims (${QTY_KIND.individual}):\n${each.join("\n")}`} data-testid={testId ?? "claims-note"}>{claims.length} open claim{claims.length === 1 ? "" : "s"}</span>;
+  const text = `${claims.length} open claim${claims.length === 1 ? "" : "s"}`;
+  const title = `Open supplier claims (${QTY_KIND.individual}):\n${each.join("\n")}`;
+  return orderId
+    ? <Link href={`/claims?po=${encodeURIComponent(orderId)}`} className="text-[10px] text-amber-700 dark:text-amber-400 whitespace-nowrap hover:underline underline-offset-2" title={title} data-testid={testId ?? "claims-note"} onClick={(e) => e.stopPropagation()}>{text}</Link>
+    : <span className="text-[10px] text-amber-700 dark:text-amber-400 whitespace-nowrap" title={title} data-testid={testId ?? "claims-note"}>{text}</span>;
 }
 /** Hover for a PO-row chip: which lines carry it, and the auto reasons. */
 export function lineDetailTitle(item: string, d: ActionItemLines | undefined): string | undefined {
@@ -279,13 +284,13 @@ export const MAX_CHIPS = 2;
  * `reasons`: the open "Review Velocity" reasons (SPEC §26) — shown on that chip's hover. `titles`: hover text per item (Extra units shipped).
  * `lines`: per-item line counts — a "·N" badge when fewer than all lines carry it, the lines on hover.
  */
-export function ActionItemChips({ items, testId, reasons, titles, lines, claims }: { items: readonly string[] | undefined; testId?: string; reasons?: readonly string[] | null; titles?: Readonly<Record<string, string>>; lines?: Readonly<Record<string, ActionItemLines>>; claims?: readonly OpenClaimBrief[] }) {
+export function ActionItemChips({ items, testId, reasons, titles, lines }: { items: readonly string[] | undefined; testId?: string; reasons?: readonly string[] | null; titles?: Readonly<Record<string, string>>; lines?: Readonly<Record<string, ActionItemLines>> }) {
   const list = ordered(items);
   const shown = list.length > MAX_CHIPS ? list.slice(0, MAX_CHIPS) : list;
   const rest = list.slice(shown.length);
   return (
     <span className="flex flex-wrap items-start gap-0.5" data-testid={testId}>
-      {list.length === 0 && !claims?.length ? <span className="text-muted-foreground/40 text-[11px]">—</span> : shown.map((it) => {
+      {list.length === 0 ? <span className="text-muted-foreground/40 text-[11px]">—</span> : shown.map((it) => {
         const d = lines?.[it];
         return (
           <span key={it} className={`${chipBase} ${actionChipClass(it)} max-w-full truncate`} title={titles?.[it] ?? withMeaning(it, lineDetailTitle(it, d)) ?? (it === "Review Velocity" && reasons?.length ? reasons.join(" · ") : it)}>
@@ -294,7 +299,6 @@ export function ActionItemChips({ items, testId, reasons, titles, lines, claims 
         );
       })}
       {rest.length > 0 && <span className={`${chipBase} bg-muted text-muted-foreground`} title={rest.join(" · ")} data-testid="chip-more">+{rest.length}</span>}
-      <ClaimsNote claims={claims} />
     </span>
   );
 }
@@ -304,9 +308,9 @@ export function ActionItemChips({ items, testId, reasons, titles, lines, claims 
  * route (every line of the ASIN) or the product-line route. `lineCount` > 1 →
  * each change asks "Apply to all N lines" before it is saved (PO table v2 §5).
  */
-export function ActionItemsEditor({ items, url, onSaved, testId, titles, lines, lineCount = 1, reasons, claims }: {
+export function ActionItemsEditor({ items, url, onSaved, testId, titles, lines, lineCount = 1, reasons }: {
   items: readonly string[] | undefined; url: string; onSaved?: () => void; testId: string; titles?: Readonly<Record<string, string>>;
-  lines?: Readonly<Record<string, ActionItemLines>>; lineCount?: number; reasons?: readonly string[] | null; claims?: readonly OpenClaimBrief[];
+  lines?: Readonly<Record<string, ActionItemLines>>; lineCount?: number; reasons?: readonly string[] | null;
 }) {
   const [open, setOpen] = useState(false);
   const [draft, setDraft] = useState<Set<string>>(new Set(items ?? []));
@@ -326,7 +330,7 @@ export function ActionItemsEditor({ items, url, onSaved, testId, titles, lines, 
     <Popover open={open} onOpenChange={(v) => { setOpen(v); setPending(null); if (v) setDraft(new Set(items ?? [])); }}>
       <PopoverTrigger asChild>
         <button type="button" onClick={(e) => e.stopPropagation()} className="min-h-[1.25rem] min-w-[3rem] max-w-full text-left" data-testid={testId} title="Edit action items">
-          <ActionItemChips items={items} titles={titles} lines={lines} reasons={reasons} claims={claims} />
+          <ActionItemChips items={items} titles={titles} lines={lines} reasons={reasons} />
         </button>
       </PopoverTrigger>
       <PopoverContent className="w-72 p-2 space-y-1" align="end" onClick={(e) => e.stopPropagation()}>
@@ -620,6 +624,26 @@ function PackEdit({ a, onChanged }: { a: PoAsinRowData; onChanged?: () => void }
 
 const hairline = { borderBottom: "0.5px solid hsl(var(--border))" } as const;
 
+/**
+ * Supplier claims on a line (SPEC §22 §5): the "N open" link to the Claims page (filtered to the PO) and, when editable, Open
+ * claim — kind, qty in Individual units prefilled from the gap when AF knows it (a one-line row: Expected − Received by
+ * Velocity), note. Never in the Action Items cell.
+ */
+function LineClaims({ a, line, editable, onChanged }: { a: PoAsinRowData; line: PoAsinLine | null; editable: boolean; onChanged?: () => void }) {
+  const claims = line ? (a.claims_open ?? []).filter((d) => d.po_line_item_id === line.id) : a.claims_open ?? [];
+  if (!editable && !claims.length) return null;
+  // The gap in Individual units: a one-line row's Expected − Received by Velocity (when Velocity has checked in fewer).
+  const expected = line?.qty_expected_individual != null ? Number(line.qty_expected_individual) : null;
+  const received = a.received_velocity_individual != null && (a.lines ?? []).length === 1 ? Number(a.received_velocity_individual) : null;
+  const gap = expected != null && received != null && received < expected ? Math.round((expected - received) * 100) / 100 : null;
+  return (
+    <span className="inline-flex items-center gap-1.5" onClick={(e) => e.stopPropagation()}>
+      <ClaimsNote claims={claims} orderId={a.po_id} testId={line ? `claims-note-${line.id}` : `claims-note-${a.asin}`} />
+      {editable && line && <OpenClaimButton poId={a.po_id} line={{ id: line.id, product_name: line.product_name, retailer_units_per_product: line.retailer_units_per_product ?? null, qty_basis: line.qty_basis ?? null, price: line.price, adjusted_product_cost: line.adjusted_product_cost }} asinPack={a.units_per_pack} gap={gap} onOpened={onChanged} />}
+    </span>
+  );
+}
+
 /** One ASIN row (plus its bundle component lines when expanded). `editable` enables the hand-entered quantities and manual shipments. */
 export function PoAsinRow({ a, indent = false, editable = false, onChanged, po }: { a: PoAsinRowData; indent?: boolean; editable?: boolean; onChanged?: () => void; /** The PO header money for the due-refund proposal after "cancel". */ po?: PoHeaderMoney }) {
   const [open, setOpen] = useState(false);
@@ -653,6 +677,8 @@ export function PoAsinRow({ a, indent = false, editable = false, onChanged, po }
             )}
           </div>
           <div className="truncate text-xs" title={a.asin_name ?? ""}>{a.asin_name ?? <span className="text-muted-foreground/50">—</span>}</div>
+          {/* Supplier claims (SPEC §22 §5): Open claim on the row's only line (a multi-line row has it per line below); "N open" → the Claims page. */}
+          <LineClaims a={a} line={!multi && lines.length === 1 ? lines[0] : null} editable={editable} onChanged={onChanged} />
         </td>
         <td className="px-1.5 py-1.5 text-right">
           <div><QtyCell v={a.qty} /></div>
@@ -680,8 +706,8 @@ export function PoAsinRow({ a, indent = false, editable = false, onChanged, po }
         <td className="px-1.5 py-1.5 text-right"><QtyCell v={a.qty_received_amazon} /><IndivLine v={a.qty_received_amazon} perUnit={a.units_per_pack} individual={a.qty_received_amazon_individual} /></td>
         <td className="px-1.5 py-1.5"><ShipmentChips rowId={a.id} asin={a.asin} shipments={a.shipments ?? []} editable={editable} onChanged={onChanged} /></td>
         <td className="px-1.5 py-1.5">{editable && lines.length > 0
-          ? <ActionItemsEditor items={a.action_items} titles={extraTitles(a)} url={`/api/pos/asin-rows/${a.id}/action-items`} onSaved={onChanged} testId={`button-action-items-asin-${a.asin}`} lineCount={lines.length} claims={a.claims_open} />
-          : <ActionItemChips items={a.action_items} titles={extraTitles(a)} claims={a.claims_open} />}
+          ? <ActionItemsEditor items={a.action_items} titles={extraTitles(a)} url={`/api/pos/asin-rows/${a.id}/action-items`} onSaved={onChanged} testId={`button-action-items-asin-${a.asin}`} lineCount={lines.length} />
+          : <ActionItemChips items={a.action_items} titles={extraTitles(a)} />}
           {editable && (a.action_items ?? []).includes(EXTRA_UNITS_SHIPPED) && <ClearExtraUnits a={a} onChanged={onChanged} />}</td>
         {/* ASIN-row note, inline (2026-11-04); read-only tables show the icon with the note on hover. */}
         <td className={editable ? "p-0" : "px-2 py-1.5"}>{editable
@@ -696,10 +722,12 @@ export function PoAsinRow({ a, indent = false, editable = false, onChanged, po }
           <td className="px-1.5 py-1 text-right text-xs text-muted-foreground"><Money v={l.price} /></td>
           <td className="px-1.5 py-1 text-right text-xs text-muted-foreground"><Money v={l.adjusted_product_cost} /></td>
           {/* Product, Ordered, Cost/Unit, Total Cost above; Action Items after. */}
-          <td className="px-1.5 py-1 text-right text-xs text-muted-foreground" colSpan={PO_ASIN_DISPLAY_COLUMNS.length - 4 - 1}>{l.qty_canceled != null && l.qty_canceled > 0 ? `canceled ${l.qty_canceled}` : ""}</td>
+          <td className="px-1.5 py-1 text-right text-xs text-muted-foreground" colSpan={PO_ASIN_DISPLAY_COLUMNS.length - 4 - 1}>
+            <span className="inline-flex items-center gap-2">{l.qty_canceled != null && l.qty_canceled > 0 ? `canceled ${l.qty_canceled}` : ""}
+              <LineClaims a={a} line={l} editable={editable} onChanged={onChanged} /></span></td>
           <td className="px-1.5 py-1">{editable
-            ? <ActionItemsEditor items={l.action_items} titles={lineTitles(l)} url={`/api/pos/lines/${l.id}/action-items`} onSaved={onChanged} testId={`button-action-items-line-${a.asin}-${l.position}`} claims={a.claims_open?.filter((d) => d.po_line_item_id === l.id)} />
-            : <ActionItemChips items={l.action_items} titles={lineTitles(l)} claims={a.claims_open?.filter((d) => d.po_line_item_id === l.id)} />}</td>
+            ? <ActionItemsEditor items={l.action_items} titles={lineTitles(l)} url={`/api/pos/lines/${l.id}/action-items`} onSaved={onChanged} testId={`button-action-items-line-${a.asin}-${l.position}`} />
+            : <ActionItemChips items={l.action_items} titles={lineTitles(l)} />}</td>
           {/* Product-line note, inline (2026-11-04). */}
           <td className={editable ? "p-0" : "px-2 py-1"}>{editable
             ? <InlineNoteCell value={l.notes} label="line note" className="px-2 py-1" testId={`line-${l.id}`} onSave={async (v) => { await poApi(`/api/pos/lines/${l.id}`, "PATCH", { notes: v }); onChanged?.(); }} />

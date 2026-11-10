@@ -15,7 +15,8 @@ import { linkUnmatchedLine } from "./shipment-link";
 import { likeContains, stripShipmentSuffix } from "./order-number";
 import { clearExtraUnits } from "./extra-units";
 import { writeLineItems, loadActionItemLines } from "./line-action-items";
-import { addClaim, editClaim, linkRefund, unlinkRefund, setOutcome, reopenClaim, dismissClaim, removeClaim, loadClaims, loadOpenClaimSummaries, briefOf, doneTask, cancelLines } from "./supplier-claims";
+import { addClaim, editClaim, linkRefund, unlinkRefund, setOutcome, reopenClaim, dismissClaim, removeClaim, loadClaims, loadOpenClaimSummaries, briefOf, doneTask, cancelLines, snoozeTask, confirmSupplier, addRefundReceived, writeOffRemainder } from "./supplier-claims";
+import { loadClaimsPage, bucketCounts, sweepClaimTimers, claimDetail, CLAIM_KIND_FILTERS } from "./claim-buckets";
 import { velocityIneligible, ineligibleText } from "./shipment-match";
 import { readVelocityStartDate } from "./ships-to-backfill";
 import { evaluateAutoClose, setPoClosedManually, parseQtyInput, MANUAL_QTY_COLUMNS, type ManualQtyColumn } from "./po-close";
@@ -4472,7 +4473,32 @@ export async function registerRoutes(
   claimRoute("post", "/api/pos/claims/:id/outcome", (q, req) => setOutcome(q, Number(req.params.id), req.body ?? {}, uid(req)));
   claimRoute("post", "/api/pos/claims/:id/reopen", (q, req) => reopenClaim(q, Number(req.params.id), uid(req)));
   claimRoute("post", "/api/pos/claims/:id/dismiss", (q, req) => dismissClaim(q, Number(req.params.id), uid(req), (req.body ?? {}).reason ?? null));
-  claimRoute("post", "/api/pos/claims/tasks/:id/done", (q, req) => doneTask(q, Number(req.params.id), uid(req)));
+  claimRoute("post", "/api/pos/claims/tasks/:id/done", (q, req) => doneTask(q, Number(req.params.id), uid(req), req.body ?? {}));
+  claimRoute("post", "/api/pos/claims/tasks/:id/snooze", (q, req) => snoozeTask(q, Number(req.params.id), uid(req), Number((req.body ?? {}).business_days ?? 5)));
+  claimRoute("post", "/api/pos/claims/:id/confirm-supplier", (q, req) => confirmSupplier(q, Number(req.params.id), req.body ?? {}, uid(req)));
+  claimRoute("post", "/api/pos/claims/:id/refund-received", (q, req) => addRefundReceived(q, Number(req.params.id), req.body ?? {}, uid(req)));
+  claimRoute("post", "/api/pos/claims/:id/write-off-remainder", (q, req) => writeOffRemainder(q, Number(req.params.id), String((req.body ?? {}).reason ?? ""), uid(req)));
+  // The Claims page (SPEC §22 "Supplier claims" §5, commit 2): every claim with its derived bucket; the timer sweep runs first so
+  // the buckets are current when read. Filters: supplier, kind, po (order # or id).
+  app.get("/api/claims", async (req: Request, res: Response) => {
+    if (!isDbAvailable()) { res.status(503).json({ message: "Database not available" }); return; }
+    try {
+      const swept = await withPoTx((q) => sweepClaimTimers(q, new Date(), uid(req)));
+      const str = (v: unknown) => (typeof v === "string" && v.trim() ? v.trim() : null);
+      const rows = await loadClaimsPage(poQuery, { supplier: str(req.query.supplier), kind: str(req.query.kind), po: str(req.query.po) });
+      const all = await loadClaimsPage(poQuery);
+      const suppliers = Array.from(new Set(all.map((r) => r.supplier))).sort();
+      res.json({ claims: rows, counts: bucketCounts(rows), suppliers, kinds: CLAIM_KIND_FILTERS, swept: swept.length });
+    } catch (err: any) { res.status(500).json({ message: err.message }); }
+  });
+  app.get("/api/claims/:id", async (req: Request, res: Response) => {
+    if (!isDbAvailable()) { res.status(503).json({ message: "Database not available" }); return; }
+    try {
+      const d = await claimDetail(poQuery, Number(req.params.id));
+      if (!d) { res.status(404).json({ message: "claim not found" }); return; }
+      res.json(d);
+    } catch (err: any) { res.status(500).json({ message: err.message }); }
+  });
   // New PO form (po-af-owned §4): the body is shared/po-form.ts's PoFormState.
   app.post("/api/pos", async (req: Request, res: Response) => {
     if (!isDbAvailable()) { res.status(503).json({ message: "Database not available" }); return; }
@@ -5030,7 +5056,7 @@ export async function registerRoutes(
       // (free-text override) but carries the reason as a warning (2026-10-29).
       const start = await readVelocityStartDate(query);
       const rows = (await query(
-        `SELECT pa.id, pa.asin, pa.asin_name, e.ordered_asin AS qty, pa.units_per_pack, p.order_id, p.supplier, p.order_date::text AS order_date, p.ships_to
+        `SELECT pa.id, pa.asin, pa.asin_name, e.ordered_asin AS qty, pa.units_per_pack, p.id AS po_id, p.order_id, p.supplier, p.order_date::text AS order_date, p.ships_to, p.closed_at IS NOT NULL AS closed
            FROM po_asins pa JOIN po_asin_expected e ON e.id = pa.id JOIN purchase_orders p ON p.id = pa.po_id
           WHERE p.order_id ILIKE $1 ESCAPE '\\' OR pa.asin ILIKE $1 ESCAPE '\\' OR p.supplier ILIKE $1 ESCAPE '\\' OR p.order_id ILIKE $3 ESCAPE '\\'
           ORDER BY (p.ships_to = 'home' OR ($2::date IS NOT NULL AND p.order_date < $2::date)), p.order_date DESC, p.order_id, pa.asin, pa.id LIMIT 20`, [likeContains(q), start, likeContains(stripShipmentSuffix(q))],

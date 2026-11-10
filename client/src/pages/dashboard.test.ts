@@ -59,6 +59,7 @@ describe("cell text (pure)", () => {
     expect(fmtRangeLabel("2026-05-19", "2026-06-17", 2026)).toBe("May 19 – Jun 17");
     expect(fmtRangeLabel("2025-12-01", "2025-12-31", 2026)).toBe("Dec 1 – 31, 2025");
     expect(fmtRangeLabel("2025-12-12", "2026-01-10", 2026)).toBe("Dec 12, 2025 – Jan 10, 2026");
-    expect(refundsDueHref({ eastern: { from: "2026-06-01", to: "2026-06-17" } })).toBe("/purchase-orders?refunds=due&closed=all&from=2026-06-01&to=2026-06-17");
+    // Claims commit 2 (§3.7): the cell opens the Claims page — Waiting on refund to post + Waiting on supplier — with the column's PO date range.
+    expect(refundsDueHref({ eastern: { from: "2026-06-01", to: "2026-06-17" } })).toBe("/claims?bucket=waiting_refund,waiting_supplier&from=2026-06-01&to=2026-06-17");
   });
 });

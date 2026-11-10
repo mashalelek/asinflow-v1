@@ -5,7 +5,7 @@ import { readBulkUrl, writeBulkUrl } from "@/pages/bulk-calc";
 
 describe("POs list URL state (2026-11-06)", () => {
   it("every filter, the sort and the page round-trip through the query string", () => {
-    const s = { search: "caress", action: ["SHIP", "Pack size missing"], supplier: ["walmart.com", "target.com"], closed: "all" as const, refunds: "due" as const, from: "2026-01-01", to: "2026-11-06", sort: { key: "order_total", dir: "desc" as const }, page: 3 };
+    const s = { search: "caress", action: ["SHIP", "Pack size missing"], supplier: ["walmart.com", "target.com"], closed: "all" as const, refunds: "due" as const, claims: "open" as const, from: "2026-01-01", to: "2026-11-06", sort: { key: "order_total", dir: "desc" as const }, page: 3 };
     const q = writePoListUrl(s);
     expect(readPoListUrl(q)).toEqual({ ...s, action: ["Pack size missing", "SHIP"], supplier: ["target.com", "walmart.com"] });
   });
@@ -13,7 +13,8 @@ describe("POs list URL state (2026-11-06)", () => {
     expect(writePoListUrl(readPoListUrl(""))).toBe("");
     expect(readPoListUrl("").closed).toBe("open");
     expect(readPoListUrl("?asin=b0bsx").search).toBe("B0BSX");
-    expect(readPoListUrl("?refunds=due&closed=all&from=2026-10-01&to=bad")).toMatchObject({ refunds: "due", closed: "all", from: "2026-10-01", to: "" });
+    expect(readPoListUrl("?refunds=due&closed=all&from=2026-10-01&to=bad")).toMatchObject({ refunds: "due", closed: "all", from: "2026-10-01", to: "", claims: "any" });
+    expect(readPoListUrl("?claims=open").claims).toBe("open"); // "has open claims" (SPEC §22 §5)
   });
 });
 

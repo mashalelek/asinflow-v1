@@ -8,25 +8,31 @@
 //   status suggested | open | closed | dismissed; an OPEN claim keeps its PO open (D15, po-close.ts).
 //   outcome refund_card | gift_card | store_credit — closes by itself when the applied refunds cover the $
 //   owed; replacement — closes when marked arrived; write_off — closes at once, a reason required.
-//   Every manual step is a task (supplier_claim_tasks); commit 1 writes contact_supplier on a new claim and
-//   refund_received when an outcome promises money; the Claims page (commit 2) renders them.
+//   Every manual step is a task (supplier_claim_tasks, §3.3): contact_supplier on a new claim, refund_received when an
+//   outcome promises money, follow_up_supplier / check_on_it from the 5-business-day timer (server/claim-buckets.ts),
+//   enter_quantity on a converted badge. Ticking a task (doneTask) records what the tick means — the report date and
+//   channel, the reship order #, the refund row — and the bucket (derived, shared/claim-bucket.ts) moves on.
 //   Every change is a History row (po_edit_log, entity 'claim') and an event (supplier_claim_events).
 import type { QueryLike } from "./scheduler/types";
 import { EditError, logEdits } from "./po-edit";
-import { CLAIM_KINDS, CLAIM_KIND_LABELS, CLAIM_OUTCOMES, REFUND_OUTCOMES, claimAmount, claimMoney, type ClaimKind, type ClaimOutcome, type ClaimTaskKind, CLAIM_TASK_GROUP } from "@shared/supplier-claim";
+import { addMoneyRow } from "./po-money-edit";
+import { addBusinessDays, BUSINESS_DAYS } from "@shared/claim-bucket";
+import { CLAIM_KINDS, CLAIM_KIND_LABELS, CLAIM_OUTCOMES, CLAIM_TASK_KINDS, REFUND_OUTCOMES, claimAmount, claimMoney, type ClaimKind, type ClaimOutcome, type ClaimTaskKind, CLAIM_TASK_GROUP } from "@shared/supplier-claim";
 
 export { OPEN_CLAIM_ASIN_SQL, OPEN_CLAIM_PO_SQL, OPEN_CLAIM_LINE_SQL, OPEN_CLAIM_COUNT_PO_SQL, REFUNDS_DUE_PO_SQL, REFUNDS_DUE_EXISTS_SQL, CLAIM_REMAINING_SQL } from "./supplier-claim-sql";
 
 export interface ClaimRow {
   id: number; po_id: string; po_line_item_id: string | null; kind: ClaimKind; /** Individual units; NULL = not known yet (a converted badge, a sheet-zeroed line) — counts toward nothing. */ qty: number | null; amount_owed: number | null; amount_owed_source: "auto" | "manual";
   status: "suggested" | "open" | "closed" | "dismissed"; outcome: ClaimOutcome | null; outcome_amount: number | null; outcome_detail: string | null; write_off_reason: string | null;
-  found_at: string; found_by: string; reported_at: string | null; closed_at: string | null; note: string | null;
+  found_at: string; found_by: string; reported_at: string | null; reported_channel: string | null; supplier_confirmed_at: string | null; last_supplier_reply_at: string | null; closed_at: string | null; note: string | null;
   replacement_qty: number | null; replacement_shipped_at: string | null; replacement_arrived_at: string | null; return_required: boolean; qty_disposed: number | null;
+  /** The PO (for the Claims page rows): supplier, order #, date, destination, whether closed, the alternate order #s. */
+  supplier: string; order_id: string; order_date: string; ships_to: string | null; po_closed_at: string | null; alt_order_ids: string | null;
   asin: string | null; product_name: string | null; line_no: number;
   /** The line's packs, for the Product / ASIN equivalents of the Individual qty (NULL when not known). */
   product_pack: number | null; asin_pack: number | null; qty_basis: string | null;
   refunds: Array<{ id: number; amount: number | null; amount_applied: number | null; refunded_at: string | null; method: string | null }>;
-  tasks: Array<{ id: number; kind: ClaimTaskKind; group: string; reason: string | null; created_at: string; due_at: string | null; done_at: string | null }>;
+  tasks: Array<{ id: number; kind: ClaimTaskKind; group: string; reason: string | null; created_at: string; due_at: string | null; done_at: string | null; snoozed_until: string | null }>;
   /** Migration 101's conversion flags (supplier_claim_conversions), e.g. canceled_no_ordered_qty, qty_unknown, kind_unclear; empty for a claim made by hand. */
   conversion_flags: string[];
   owed: number | null; remaining: number | null; received: number;
@@ -40,20 +46,23 @@ const describe = (d: { qty: number | string | null; kind: string; amount_owed: n
 const LINE_NO_SQL = (l: string) => `(SELECT COUNT(*)::int FROM po_line_items s WHERE s.po_asin_id IS NOT DISTINCT FROM ${l}.po_asin_id AND s.po_id = ${l}.po_id
   AND (COALESCE(s.position, 0), s.id) <= (COALESCE(${l}.position, 0), ${l}.id))`;
 
-export async function loadClaims(query: QueryLike, where: { poId?: string; ids?: number[] }): Promise<ClaimRow[]> {
-  const cond = where.ids ? `c.id = ANY($1::bigint[])` : `c.po_id = $1`;
+export async function loadClaims(query: QueryLike, where: { poId?: string; ids?: number[]; /** every claim (the Claims page) */ all?: boolean }): Promise<ClaimRow[]> {
+  const cond = where.all ? `TRUE` : where.ids ? `c.id = ANY($1::bigint[])` : `c.po_id = $1`;
+  const params = where.all ? [] : [where.ids ?? where.poId];
   const rows = (await query(
     `SELECT c.*, c.found_at::text AS found_at, c.reported_at::text AS reported_at, c.closed_at::text AS closed_at,
+            c.supplier_confirmed_at::text AS supplier_confirmed_at, c.last_supplier_reply_at::text AS last_supplier_reply_at,
             c.replacement_shipped_at::text AS replacement_shipped_at, c.replacement_arrived_at::text AS replacement_arrived_at,
+            p.supplier, p.order_id, p.order_date::text AS order_date, p.ships_to, p.closed_at::text AS po_closed_at, p.alt_order_ids,
             pa.asin, l.product_name, CASE WHEN l.id IS NULL THEN 0 ELSE ${LINE_NO_SQL("l")} END AS line_no,
             l.retailer_units_per_product AS product_pack, COALESCE(pa.units_per_pack, l.asin_units_per_pack) AS asin_pack, l.qty_basis,
             COALESCE((SELECT json_agg(json_build_object('id', r.id, 'amount', r.amount, 'amount_applied', x.amount_applied, 'refunded_at', r.refunded_at, 'method', r.method) ORDER BY r.id)
                         FROM supplier_claim_refunds x JOIN po_line_refunds r ON r.id = x.po_line_refund_id WHERE x.claim_id = c.id), '[]') AS refunds,
-            COALESCE((SELECT json_agg(json_build_object('id', t.id, 'kind', t.kind, 'group', t."group", 'reason', t.reason, 'created_at', t.created_at, 'due_at', t.due_at, 'done_at', t.done_at) ORDER BY t.id)
+            COALESCE((SELECT json_agg(json_build_object('id', t.id, 'kind', t.kind, 'group', t."group", 'reason', t.reason, 'created_at', t.created_at, 'due_at', t.due_at, 'done_at', t.done_at, 'snoozed_until', t.snoozed_until) ORDER BY t.id)
                         FROM supplier_claim_tasks t WHERE t.claim_id = c.id), '[]') AS tasks,
             COALESCE((SELECT array_agg(DISTINCT f) FROM supplier_claim_conversions k, unnest(k.flags) f WHERE k.claim_id = c.id), '{}') AS conversion_flags
-       FROM supplier_claims c LEFT JOIN po_line_items l ON l.id = c.po_line_item_id LEFT JOIN po_asins pa ON pa.id = l.po_asin_id
-      WHERE ${cond} ORDER BY c.found_at, c.id`, [where.ids ?? where.poId],
+       FROM supplier_claims c JOIN purchase_orders p ON p.id = c.po_id LEFT JOIN po_line_items l ON l.id = c.po_line_item_id LEFT JOIN po_asins pa ON pa.id = l.po_asin_id
+      WHERE ${cond} ORDER BY c.found_at, c.id`, params,
   )).rows as any[];
   return rows.map((r) => {
     const refunds = (r.refunds ?? []).map((x: any) => ({ id: Number(x.id), amount: num(x.amount), amount_applied: num(x.amount_applied), refunded_at: x.refunded_at ?? null, method: x.method ?? null }));
@@ -117,19 +126,170 @@ const dateOf = (v: unknown, field: string): string => { if (!/^\d{4}-\d{2}-\d{2}
 async function event(query: QueryLike, claimId: number, type: string, summary: string | null, by: number | null, refs: { po_line_refund_id?: number } = {}): Promise<void> {
   await query(`INSERT INTO supplier_claim_events (claim_id, type, summary, by, po_line_refund_id) VALUES ($1, $2, $3, $4, $5)`, [claimId, type, summary, by, refs.po_line_refund_id ?? null]);
 }
+export interface ClaimEvent { id: number; at: string; type: string; summary: string | null; by: number | null; by_name: string | null; po_line_refund_id: number | null; po_document_id: number | null; po_tracking_id: number | null }
+/** The timeline (§4.3), oldest first. */
+export async function loadClaimEvents(query: QueryLike, claimId: number): Promise<ClaimEvent[]> {
+  return ((await query(`SELECT e.id, e.at, e.type, e.summary, e.by, u.display_name AS by_name, e.po_line_refund_id, e.po_document_id, e.po_tracking_id
+                           FROM supplier_claim_events e LEFT JOIN users u ON u.id = e.by WHERE e.claim_id = $1 ORDER BY e.at, e.id`, [claimId])).rows as any[])
+    .map((e) => ({ ...e, id: Number(e.id), at: e.at instanceof Date ? e.at.toISOString() : String(e.at), by: e.by == null ? null : Number(e.by), po_line_refund_id: e.po_line_refund_id == null ? null : Number(e.po_line_refund_id), po_document_id: e.po_document_id == null ? null : Number(e.po_document_id), po_tracking_id: e.po_tracking_id == null ? null : Number(e.po_tracking_id) }));
+}
 /** One open task per kind per claim (the unique index); re-adding an open one is a no-op. */
 export async function addTask(query: QueryLike, claimId: number, kind: ClaimTaskKind, reason: string | null = null, qty: number | null = null): Promise<void> {
   await query(`INSERT INTO supplier_claim_tasks (claim_id, kind, "group", reason, qty) VALUES ($1, $2, $3, $4, $5) ON CONFLICT (claim_id, kind) WHERE done_at IS NULL DO NOTHING`, [claimId, kind, CLAIM_TASK_GROUP[kind], reason, qty]);
 }
-export async function doneTask(query: QueryLike, taskId: number, userId: number | null): Promise<{ id: number; claim_id: number; po_id: string }> {
-  const t = (await query(`SELECT t.id, t.claim_id, t.kind, c.po_id, c.qty FROM supplier_claim_tasks t JOIN supplier_claims c ON c.id = t.claim_id WHERE t.id = $1`, [taskId])).rows[0];
+/** What a tick carries (§3.3 "Ticking it"): the report's date / channel / note, the reship order #, a suggestion's decision. */
+export interface DoneTaskBody { date?: string | null; channel?: string | null; note?: string | null; alt_order_id?: string | null; decision?: "open" | "dismiss" | null; reason?: string | null }
+
+/**
+ * Tick a task. contact_supplier / follow_up_supplier record the report (date, channel, note → reported_at / reported_channel,
+ * event `reported`); confirm_reship_order adds the order # to the PO's alt_order_ids; review_suggestion opens or dismisses
+ * the claim; refund_received must go through addRefundReceived (the refund row IS the tick); replacement_arrived through
+ * setOutcome; enter_quantity through editClaim. Every other kind is a plain tick with its event.
+ */
+export async function doneTask(query: QueryLike, taskId: number, userId: number | null, body: DoneTaskBody = {}): Promise<{ id: number; claim_id: number; po_id: string }> {
+  const t = (await query(`SELECT t.id, t.claim_id, t.kind, t.done_at, c.po_id, c.qty, c.status, c.reported_at FROM supplier_claim_tasks t JOIN supplier_claims c ON c.id = t.claim_id WHERE t.id = $1`, [taskId])).rows[0];
   if (!t) throw new EditError(404, "task not found");
+  const claimId = Number(t.claim_id), poId = String(t.po_id), kind = String(t.kind) as ClaimTaskKind;
+  if (t.done_at) return { id: Number(t.id), claim_id: claimId, po_id: poId };
   // "Enter quantity" is done by typing the quantity on the claim (editClaim closes it), never by a tick.
-  if (t.kind === "enter_quantity" && t.qty == null) throw new EditError(400, "type the claim's quantity (Individual units) — that completes Enter quantity");
+  if (kind === "enter_quantity" && t.qty == null) throw new EditError(400, "type the claim's quantity (Individual units) — that completes Enter quantity");
+  if (kind === "refund_received") throw new EditError(400, "add the refund row (Refund received) — that is the tick");
+  if (kind === "replacement_arrived") { await setOutcome(query, claimId, { outcome: "replacement", arrived: true }, userId); return { id: Number(t.id), claim_id: claimId, po_id: poId }; }
+  if (kind === "review_suggestion") {
+    if (body.decision === "dismiss") { await dismissClaim(query, claimId, userId, body.reason ?? null); return { id: Number(t.id), claim_id: claimId, po_id: poId }; }
+    if (body.decision !== "open") throw new EditError(400, "decision must be open or dismiss");
+    await query(`UPDATE supplier_claims SET status = 'open', updated_at = now() WHERE id = $1 AND status = 'suggested'`, [claimId]);
+    await event(query, claimId, "opened", "suggestion accepted", userId);
+    await addTask(query, claimId, "contact_supplier", "a claim was opened — report it to the supplier");
+  }
   await query(`UPDATE supplier_claim_tasks SET done_at = now(), done_by = $2 WHERE id = $1 AND done_at IS NULL`, [taskId, userId]);
-  await event(query, Number(t.claim_id), "task_done", String(t.kind), userId);
-  await logEdits(query, String(t.po_id), userId, "claim", String(t.claim_id), [{ field: `task ${t.kind}`, old: "open", new: "done" }]);
-  return { id: Number(t.id), claim_id: Number(t.claim_id), po_id: String(t.po_id) };
+  const changes: Array<{ field: string; old: string | null; new: string | null }> = [{ field: `task ${kind}`, old: "open", new: "done" }];
+  if (kind === "contact_supplier" || kind === "follow_up_supplier") {
+    const date = body.date && /^\d{4}-\d{2}-\d{2}$/.test(body.date) ? body.date : new Date().toISOString().slice(0, 10);
+    const channel = String(body.channel ?? "").trim() || null;
+    if (kind === "contact_supplier" || !t.reported_at) {
+      await query(`UPDATE supplier_claims SET reported_at = COALESCE(reported_at, $2::date), reported_channel = COALESCE($3, reported_channel), updated_at = now() WHERE id = $1`, [claimId, date, channel]);
+      changes.push({ field: "claim reported_at", old: t.reported_at ? String(t.reported_at).slice(0, 10) : null, new: date });
+    }
+    const note = String(body.note ?? "").trim() || null;
+    await event(query, claimId, kind === "contact_supplier" ? "reported" : "followed_up", [channel, date, note].filter(Boolean).join(" · ") || null, userId);
+  } else if (kind === "confirm_reship_order") {
+    const alt = String(body.alt_order_id ?? "").trim();
+    if (!alt) throw new EditError(400, "the reship order # is required");
+    const po = (await query(`SELECT alt_order_ids FROM purchase_orders WHERE id = $1`, [poId])).rows[0];
+    const have = String(po?.alt_order_ids ?? "").split(/[\s,;/]+/).filter(Boolean);
+    if (!have.includes(alt)) {
+      const next = [...have, alt].join(", ");
+      await query(`UPDATE purchase_orders SET alt_order_ids = $2, updated_at = now() WHERE id = $1`, [poId, next]);
+      await logEdits(query, poId, userId, "po", poId, [{ field: "alt_order_ids", old: po?.alt_order_ids ?? null, new: next }]);
+    }
+    await event(query, claimId, "reship_confirmed", alt, userId);
+  } else if (kind === "check_on_it") {
+    await event(query, claimId, "checked", body.note?.trim() || "checked — timer restarted", userId);
+  } else {
+    await event(query, claimId, "task_done", `${kind}${body.note?.trim() ? `: ${body.note.trim()}` : ""}`, userId);
+  }
+  await logEdits(query, poId, userId, "claim", String(claimId), changes);
+  return { id: Number(t.id), claim_id: claimId, po_id: poId };
+}
+
+/** Snooze a Check on it / Follow up task: ticked now, and the timer holds until `snoozed_until` (5 business days by default) before the sweep fires again. */
+export async function snoozeTask(query: QueryLike, taskId: number, userId: number | null, businessDays = BUSINESS_DAYS): Promise<{ id: number; claim_id: number; po_id: string; snoozed_until: string }> {
+  const t = (await query(`SELECT t.id, t.claim_id, t.kind, c.po_id FROM supplier_claim_tasks t JOIN supplier_claims c ON c.id = t.claim_id WHERE t.id = $1`, [taskId])).rows[0];
+  if (!t) throw new EditError(404, "task not found");
+  if (t.kind !== "check_on_it" && t.kind !== "follow_up_supplier") throw new EditError(400, "only Check on it / Follow up with supplier can be snoozed");
+  const until = addBusinessDays(new Date(), Math.max(1, Math.min(20, Math.round(businessDays) || BUSINESS_DAYS))).toISOString();
+  await query(`UPDATE supplier_claim_tasks SET done_at = now(), done_by = $2, snoozed_until = $3 WHERE id = $1 AND done_at IS NULL`, [taskId, userId, until]);
+  await event(query, Number(t.claim_id), "snoozed", `until ${until.slice(0, 10)}`, userId);
+  await logEdits(query, String(t.po_id), userId, "claim", String(t.claim_id), [{ field: `task ${t.kind}`, old: "open", new: `snoozed until ${until.slice(0, 10)}` }]);
+  return { id: Number(t.id), claim_id: Number(t.claim_id), po_id: String(t.po_id), snoozed_until: until };
+}
+
+/** Create a task from outside (the timer sweep): the kind must be one of the fourteen. */
+export function isTaskKind(v: unknown): v is ClaimTaskKind { return (CLAIM_TASK_KINDS as readonly string[]).includes(String(v)); }
+
+/**
+ * "Confirmed by supplier" by hand (D6; the email match is commit 6): stamps supplier_confirmed_at, takes the outcome when the
+ * claim has none (a refund / credit by default), and moves the claim to Waiting on refund to post.
+ */
+export async function confirmSupplier(query: QueryLike, id: number, body: { at?: string | null; outcome?: string | null; amount?: number | string | null; detail?: string | null }, userId: number | null): Promise<{ id: number; po_id: string }> {
+  const d = await claimRow(query, id);
+  if (d.status !== "open" && d.status !== "suggested") throw new EditError(400, "only an open claim can be confirmed");
+  const at = body.at && /^\d{4}-\d{2}-\d{2}$/.test(body.at) ? `${body.at}T12:00:00Z` : new Date().toISOString();
+  const outcome = body.outcome ?? d.outcome ?? "refund_card";
+  if (!(REFUND_OUTCOMES as readonly string[]).includes(outcome) && outcome !== "replacement") throw new EditError(400, "confirm a refund / credit or a replacement");
+  if (d.outcome !== outcome || body.amount != null) await setOutcome(query, id, outcome === "replacement" ? { outcome: "replacement" } : { outcome: outcome as "refund_card", amount: body.amount ?? null, detail: body.detail ?? null }, userId);
+  await query(`UPDATE supplier_claims SET supplier_confirmed_at = $2, status = CASE WHEN status = 'suggested' THEN 'open' ELSE status END, updated_at = now() WHERE id = $1`, [id, at]);
+  await query(`UPDATE supplier_claim_tasks SET done_at = now(), done_by = $2 WHERE claim_id = $1 AND done_at IS NULL AND kind IN ('confirm_outcome', 'follow_up_supplier', 'check_on_it')`, [id, userId]);
+  await event(query, id, "supplier_confirmed", `${outcome}${body.detail ? ` — ${String(body.detail).trim()}` : ""}`, userId);
+  await logEdits(query, String(d.po_id), userId, "claim", String(id), [{ field: "claim supplier_confirmed_at", old: d.supplier_confirmed_at ? String(d.supplier_confirmed_at).slice(0, 10) : null, new: at.slice(0, 10) }]);
+  return { id, po_id: String(d.po_id) };
+}
+
+export interface RefundReceivedBody {
+  amount: number | string; method?: string | null; refunded_at?: string | null; nickname?: string | null; last4?: string | null; note?: string | null;
+  /** One refund across several claims (§3.5, Michaels): how much of it each claim takes; this claim's share may be listed or implied (amount − Σ others). */
+  split?: Array<{ claim_id: number; amount: number | string }>;
+}
+/**
+ * "Refund received" (D6, Maria's tick): adds a po_line_refunds row (received money; method prefilled by the UI from the PO's
+ * payments) and links it to this claim — and, with `split`, to the PO's other open claims for their shares. A refund arriving
+ * also stands for the supplier's confirmation. Full → the coverage sync closes the claim; short → the claim stays owed
+ * ("short by $X", Waiting on refund to post) with the refund_received task ticked.
+ */
+export async function addRefundReceived(query: QueryLike, id: number, body: RefundReceivedBody, userId: number | null): Promise<{ id: number; po_id: string; refund_id: number; applied: Array<{ claim_id: number; amount: number }> }> {
+  const d = await claimRow(query, id);
+  if (d.status !== "open") throw new EditError(400, "only an open claim takes a refund");
+  const amount = amountOf(body.amount);
+  if (amount == null || amount <= 0) throw new EditError(400, "the refund amount is required");
+  const poId = String(d.po_id);
+  const others = (body.split ?? []).filter((x) => Number(x.claim_id) !== id).map((x) => ({ claim_id: Number(x.claim_id), amount: amountOf(x.amount) ?? 0 })).filter((x) => x.amount > 0);
+  const mine = (body.split ?? []).find((x) => Number(x.claim_id) === id);
+  const othersSum = Math.round(others.reduce((t, x) => t + x.amount, 0) * 100) / 100;
+  const myShare = mine ? amountOf(mine.amount) ?? 0 : Math.round((amount - othersSum) * 100) / 100;
+  if (myShare < 0 || Math.round((myShare + othersSum) * 100) / 100 > amount + 0.005) throw new EditError(400, `the shares ($${(myShare + othersSum).toFixed(2)}) exceed the refund ($${amount.toFixed(2)})`);
+  for (const o of others) {
+    const oc = (await query(`SELECT po_id, status FROM supplier_claims WHERE id = $1`, [o.claim_id])).rows[0];
+    if (!oc || String(oc.po_id) !== poId) throw new EditError(400, `claim ${o.claim_id} is not a claim of this PO`);
+    if (oc.status !== "open") throw new EditError(400, `claim ${o.claim_id} is not open`);
+  }
+  const single = others.length === 0;
+  const r = await addMoneyRow(query, "po_line_refunds", poId, {
+    po_line_item_id: single ? d.po_line_item_id : null, qty: single && d.qty != null ? String(d.qty) : null, amount: String(amount), refunded_at: body.refunded_at || null,
+    method: body.method || null, nickname: body.nickname || null, last4: body.last4 || null, note: body.note || null, needs_split: !single,
+  }, userId);
+  const applied: Array<{ claim_id: number; amount: number }> = [];
+  const stamp = async (cid: number) => query(`UPDATE supplier_claims SET supplier_confirmed_at = COALESCE(supplier_confirmed_at, now()), updated_at = now() WHERE id = $1`, [cid]);
+  if (myShare > 0) { await linkRefund(query, id, r.id, userId, { sync: false, amountApplied: single ? null : myShare }); applied.push({ claim_id: id, amount: myShare }); }
+  await stamp(id);
+  await query(`UPDATE supplier_claim_tasks SET done_at = now(), done_by = $2 WHERE claim_id = $1 AND done_at IS NULL AND kind = 'refund_received'`, [id, userId]);
+  for (const o of others) {
+    await linkRefund(query, o.claim_id, r.id, userId, { sync: false, amountApplied: o.amount }); applied.push(o);
+    await stamp(o.claim_id);
+    await query(`UPDATE supplier_claim_tasks SET done_at = now(), done_by = $2 WHERE claim_id = $1 AND done_at IS NULL AND kind = 'refund_received'`, [o.claim_id, userId]);
+  }
+  await syncRefundCoverage(query, [id, ...others.map((o) => o.claim_id)], userId);
+  // Short: the claim stays owed and waits for the rest (the timer's Check on it asks after 5 business days).
+  for (const c of await loadClaims(query, { ids: [id, ...others.map((o) => o.claim_id)] })) {
+    if (c.status === "open" && c.remaining != null && c.remaining > 0.005) await event(query, c.id, "refund_short", `short by ${money(c.remaining)}`, userId);
+  }
+  return { id, po_id: poId, refund_id: r.id, applied };
+}
+
+/** Write off what is still owed on a refund / credit claim (§3.5): the claim closes with its outcome, the remainder goes to Supplier write-offs (commit 9 reads it). */
+export async function writeOffRemainder(query: QueryLike, id: number, reason: string, userId: number | null): Promise<{ id: number; po_id: string }> {
+  const d = await claimRow(query, id);
+  const why = String(reason ?? "").trim();
+  if (!why) throw new EditError(400, "a write-off needs a reason");
+  if (d.status !== "open") throw new EditError(400, "only an open claim can have its remainder written off");
+  const [c] = await loadClaims(query, { ids: [id] });
+  if (c.remaining == null || c.remaining <= 0.005) throw new EditError(400, "nothing is owed on this claim");
+  const outcome = d.outcome && (REFUND_OUTCOMES as readonly string[]).includes(d.outcome) ? d.outcome : "refund_card";
+  await query(`UPDATE supplier_claims SET status = 'closed', outcome = $2, write_off_reason = $3, outcome_amount = $4, closed_at = now(), updated_at = now() WHERE id = $1`, [id, outcome, why, c.received]);
+  await query(`UPDATE supplier_claim_tasks SET done_at = now(), done_by = $2 WHERE claim_id = $1 AND done_at IS NULL`, [id, userId]);
+  await logEdits(query, String(d.po_id), userId, "claim", String(id), [{ field: "claim remainder written off", old: money(c.remaining), new: why }]);
+  await event(query, id, "remainder_written_off", `${money(c.remaining)}: ${why}`, userId); await event(query, id, "closed", `${outcome} ${money(c.received)} received, ${money(c.remaining)} written off`, userId);
+  return { id, po_id: String(d.po_id) };
 }
 
 export interface AddClaimBody { po_line_item_id?: string | null; kind: string; qty: number | string; amount_owed?: number | string | null; found_at?: string | null; note?: string | null; refund_ids?: number[]; return_required?: boolean; status?: "open" | "suggested" }
@@ -286,7 +446,8 @@ export async function setOutcome(query: QueryLike, id: number, body: OutcomeBody
 export async function reopenClaim(query: QueryLike, id: number, userId: number | null): Promise<{ id: number; po_id: string }> {
   const d = await claimRow(query, id);
   if (d.status === "open") return { id, po_id: String(d.po_id) };
-  await query(`UPDATE supplier_claims SET status = 'open', closed_at = NULL, replacement_arrived_at = CASE WHEN outcome = 'replacement' THEN NULL ELSE replacement_arrived_at END, updated_at = now() WHERE id = $1`, [id]);
+  await query(`UPDATE supplier_claims SET status = 'open', closed_at = NULL, replacement_arrived_at = CASE WHEN outcome = 'replacement' THEN NULL ELSE replacement_arrived_at END,
+                 write_off_reason = CASE WHEN outcome = 'write_off' THEN write_off_reason ELSE NULL END, updated_at = now() WHERE id = $1`, [id]);
   await logEdits(query, String(d.po_id), userId, "claim", String(id), [{ field: "claim reopened", old: d.status, new: "open" }]);
   await event(query, id, "reopened", d.outcome, userId);
   await syncRefundCoverage(query, [id], userId);
@@ -318,6 +479,8 @@ export async function syncRefundCoverage(query: QueryLike, claimIds: readonly nu
   if (claimIds.length === 0) return { closed, reopened };
   for (const d of await loadClaims(query, { ids: Array.from(new Set(claimIds)) })) {
     if (d.outcome === "replacement" || d.outcome === "write_off" || d.status === "dismissed" || d.status === "suggested") continue;
+    // A refund / credit claim whose remainder was written off (write_off_reason set) stays closed although not fully covered.
+    if (d.status === "closed" && d.write_off_reason) continue;
     const m = claimMoney(d.amount_owed, d.refunds);
     if (d.status === "open" && m.fullyCovered) {
       const outcome = d.outcome ?? (d.refunds[0]?.method === "gift_card" ? "gift_card" : d.refunds[0]?.method === "store_credit" ? "store_credit" : "refund_card");

@@ -8,21 +8,24 @@ import type { QueryLike } from "./scheduler/types";
 import { LEGACY_ACTION_ITEMS, RENAMED_DERIVED_ITEMS, ACTION_ITEMS, REVIEW_VELOCITY, DISPLAY_ACTION_ITEMS, PACK_SIZE_MISSING, PACK_SIZE_MISMATCH, RECEIVING_MISMATCH, EXTRA_UNITS_SHIPPED, NO_INVOICE_SAVED } from "./po-status-map";
 import { openLineItemsSql, PACK_SIZE_MISSING_EXISTS_SQL, PACK_SIZE_MISMATCH_EXISTS_SQL, RECEIVING_MISMATCH_EXISTS_SQL, EXTRA_UNITS_EXISTS_SQL, NO_INVOICE_EXISTS_SQL } from "./po-action-items";
 import { refundsFilterCond } from "./po-queries";
+import { OPEN_CLAIM_PO_SQL } from "./supplier-claim-sql";
 import { replacementTrackingCondSql } from "./tracking-replacement-pair";
 
 export type PoClosedFilter = "open" | "closed" | "all";
 export type PoRefundsFilter = "any" | "due" | "none";
+/** Supplier claims (SPEC §22 §5): any / open (the PO has an open claim) / none (no open claim). */
+export type PoClaimsFilter = "any" | "open" | "none";
 export interface PoListFilters {
-  search: string; action: string[]; supplier: string[]; from: string; to: string; closed: PoClosedFilter; refunds: PoRefundsFilter;
+  search: string; action: string[]; supplier: string[]; from: string; to: string; closed: PoClosedFilter; refunds: PoRefundsFilter; claims: PoClaimsFilter;
 }
-export type PoFacet = "search" | "action" | "supplier" | "dates" | "closed" | "refunds";
+export type PoFacet = "search" | "action" | "supplier" | "dates" | "closed" | "refunds" | "claims";
 
 const str = (v: unknown) => (typeof v === "string" ? v.trim() : "");
 const list = (v: unknown) => str(v).split(",").map((x) => x.trim()).filter(Boolean);
 
 /** The request's query string → filters (D3: Status defaults to Open; Refunds any). */
 export function parsePoListFilters(q: Record<string, unknown>): PoListFilters {
-  const closedRaw = str(q.closed).toLowerCase() || "open", refundsRaw = str(q.refunds).toLowerCase();
+  const closedRaw = str(q.closed).toLowerCase() || "open", refundsRaw = str(q.refunds).toLowerCase(), claimsRaw = str(q.claims).toLowerCase();
   return {
     search: str(q.search),
     // Old label spellings map to today's.
@@ -31,7 +34,12 @@ export function parsePoListFilters(q: Record<string, unknown>): PoListFilters {
     from: str(q.from), to: str(q.to),
     closed: closedRaw === "closed" ? "closed" : closedRaw === "all" ? "all" : "open",
     refunds: refundsRaw === "due" || refundsRaw === "none" ? refundsRaw : "any",
+    claims: claimsRaw === "open" || claimsRaw === "none" ? claimsRaw : "any",
   };
+}
+/** "has open claims" (SPEC §22 §5): open → at least one open claim; none → no open claim. */
+export function claimsFilterCond(c: PoClaimsFilter): string | null {
+  return c === "open" ? OPEN_CLAIM_PO_SQL("p") : c === "none" ? `NOT ${OPEN_CLAIM_PO_SQL("p")}` : null;
 }
 
 /** Collects parameters; `$` hands back the placeholder for one. */
@@ -89,6 +97,7 @@ function conds(f: PoListFilters, p: Params, omit?: PoFacet): string[] {
   }
   if (omit !== "closed") { const c = closedCond(f.closed); if (c) out.push(c); }
   if (omit !== "refunds") { const c = refundsFilterCond(f.refunds); if (c) out.push(c); }
+  if (omit !== "claims") { const c = claimsFilterCond(f.claims); if (c) out.push(c); }
   return out;
 }
 
@@ -103,6 +112,7 @@ export function poListWhere(f: PoListFilters, omit?: PoFacet): { where: string; 
 export interface PoFacetCounts {
   closed: Record<PoClosedFilter, number>;
   refunds: Record<PoRefundsFilter, number>;
+  claims: Record<PoClaimsFilter, number>;
   suppliers: Record<string, number>;
   actionItems: Record<string, number>;
 }
@@ -114,15 +124,17 @@ export async function poFacetCounts(query: QueryLike, f: PoListFilters): Promise
     const sel = select(p); // its parameters first, then the WHERE's
     return (await query(`SELECT ${sel} FROM purchase_orders p ${whereOf(conds(f, p, omit))} ${tail}`, p.values)).rows;
   };
-  const [closed, refunds, suppliers, actions] = await Promise.all([
+  const [closed, refunds, claims, suppliers, actions] = await Promise.all([
     one("closed", () => `COUNT(*) FILTER (WHERE ${closedCond("open")})::int AS open, COUNT(*) FILTER (WHERE ${closedCond("closed")})::int AS closed, COUNT(*)::int AS "all"`),
     one("refunds", () => `COUNT(*) FILTER (WHERE ${refundsFilterCond("due")})::int AS due, COUNT(*) FILTER (WHERE ${refundsFilterCond("none")})::int AS none, COUNT(*)::int AS "any"`),
+    one("claims", () => `COUNT(*) FILTER (WHERE ${claimsFilterCond("open")})::int AS open, COUNT(*) FILTER (WHERE ${claimsFilterCond("none")})::int AS none, COUNT(*)::int AS "any"`),
     one("supplier", () => `p.supplier, COUNT(*)::int AS n`, `GROUP BY p.supplier`),
     one("action", (p) => DISPLAY_ACTION_ITEMS.map((item, i) => { const c = actionItemCond(item, p); return `${c ? `COUNT(*) FILTER (WHERE ${c})` : "0"}::int AS a${i}`; }).join(", ")),
   ]);
   return {
     closed: { open: closed[0].open, closed: closed[0].closed, all: closed[0].all },
     refunds: { any: refunds[0].any, due: refunds[0].due, none: refunds[0].none },
+    claims: { any: claims[0].any, open: claims[0].open, none: claims[0].none },
     suppliers: Object.fromEntries(suppliers.map((r: any) => [r.supplier, r.n])),
     actionItems: Object.fromEntries(DISPLAY_ACTION_ITEMS.map((item, i) => [item, actions[0][`a${i}`]])),
   };

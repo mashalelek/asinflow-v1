@@ -38,6 +38,7 @@ import { InlineNoteCell, InlineNoteBox } from "@/components/inline-note";
 import { PoTrackingTab, SyncTrackingButton, UnmatchedTrackingChip } from "@/components/po-tracking";
 import { VelocityLinksButton, velocityOrderText } from "@/components/velocity-links";
 export { velocityOrderText };
+import { claimSummary } from "@shared/supplier-claim";
 import { PoMoneyTab, type PoPayment, type PoPromo, type PoRefund } from "@/components/po-money";
 import type { PoClaim } from "@/components/po-claims";
 import { Pencil } from "lucide-react";
@@ -96,7 +97,7 @@ interface PosResponse {
   /** Shipment reconciliation §5.3: open unmatched Velocity lines + ambiguous SC matches. */
   unmatchedCount?: number;
   /** Per dropdown option, the POs it would match under the OTHER active filters (server/po-list-filters.ts, 2026-11-06). */
-  counts?: { closed: Record<ClosedFilter, number>; refunds: Record<RefundsFilter, number>; suppliers: Record<string, number>; actionItems: Record<string, number> };
+  counts?: { closed: Record<ClosedFilter, number>; refunds: Record<RefundsFilter, number>; claims?: Record<ClaimsFilter, number>; suppliers: Record<string, number>; actionItems: Record<string, number> };
 }
 
 /** A dropdown option's count: right-aligned, tabular; a 0 option stays listed, greyed. */
@@ -109,6 +110,8 @@ const zeroCls = (n: number | undefined) => (n === 0 ? "text-muted-foreground/50"
 type ClosedFilter = "open" | "closed" | "all";
 /** Dashboard patch §2.4: Refunds filter — any / due (a refund row still due) / none (no refund row at all); `?refunds=due` deep-links from the Dashboard's Refunds due cell. */
 type RefundsFilter = "any" | "due" | "none";
+/** Supplier claims (SPEC §22 §5): "has open claims" — any / open / none. */
+type ClaimsFilter = "any" | "open" | "none";
 /** The POs page's deep-link params (asin, refunds, closed, from, to), read once on mount. Exported for tests. */
 export function readPoPageParams(search: string): { asin: string; refunds: RefundsFilter; closed: ClosedFilter | null; from: string; to: string } {
   const p = new URLSearchParams(search);
@@ -220,6 +223,7 @@ function FacetMultiSelect({ label, options, counts, selected, onChange, testId }
 const ALL = "__all__";
 const CLOSED_LABEL: Record<ClosedFilter, string> = { open: "Open", closed: "Closed", all: "All" };
 const REFUNDS_LABEL: Record<RefundsFilter, string> = { any: "Refunds: any", due: "Refunds: due", none: "Refunds: none" };
+const CLAIMS_LABEL: Record<ClaimsFilter, string> = { any: "Claims: any", open: "Has open claims", none: "No open claims" };
 
 // ── Shipment reconciliation (patch docs/claude_spec-patch-shipment-reconciliation.md §5) ──
 
@@ -577,6 +581,8 @@ export const poLineCount = (po: { asins?: ReadonlyArray<{ lines?: readonly unkno
  */
 export const PO_LIST_COLUMNS: ReadonlyArray<{ id: string; label: string; sortKey?: string; align?: "right"; /** The quantity kind, shown as a muted line above the header (SPEC §22 "Quantity vocabulary"). */ kind?: string }> = [
   { id: "action_items", label: "Action Items", sortKey: "action_items" },
+  // Supplier claims (SPEC §22 §5): the count of open claims, blank when none; hover lists kind + $; click → Claims filtered to the PO. Never an Action Item.
+  { id: "claims", label: "Claims", align: "right" },
   { id: "order_date", label: "PO Date", sortKey: "order_date" },
   { id: "order_id", label: "Order ID", sortKey: "order_id" },
   { id: "supplier", label: "Supplier", sortKey: "supplier" },
@@ -594,8 +600,8 @@ export const PO_COL_WIDTHS_KEY = "af-po-col-widths";
  * Units Ordered / Invoice / Notes off-screen at 1440. Σ + the expand column = 1,142 px, inside 1280.
  */
 export const PO_DEFAULT_COL_WIDTHS: Readonly<Record<string, number>> = {
-  status: 60, action_items: 170, order_date: 100, order_id: 170, supplier: 200, order_total: 110, asins: 60, units_ordered: 110, invoice: 70, notes: 60,
-};
+  status: 60, action_items: 170, claims: 64, order_date: 100, order_id: 170, supplier: 200, order_total: 110, asins: 60, units_ordered: 110, invoice: 70, notes: 60,
+}; // Σ + the expand column = 1,206 px since the Claims column (commit 2), still inside 1280
 /** The chevron ("Expand by ASIN") column — not resizable. */
 export const PO_EXPAND_COL_WIDTH = 32;
 export const PO_COL_IDS = ["status", ...PO_LIST_COLUMNS.map((c) => c.id)] as const;
@@ -640,6 +646,18 @@ function fmtDate(iso: string): string {
   return `${Number(m)}/${Number(d)}/${y}`;
 }
 
+/** The POs list's Claims cell (SPEC §22 §5): the open-claim count, blank when none; the hover lists each claim (kind + $); click → the Claims page filtered to the PO. */
+export function PoClaimsCount({ claims, orderId }: { claims: readonly OpenClaimBrief[] | undefined; orderId: string }) {
+  const [, navigate] = useLocation();
+  if (!claims?.length) return <span data-testid={`po-claims-${orderId}`} />;
+  const title = claims.map((d) => `${d.asin ?? "whole PO"}${d.po_line_item_id ? ` line ${d.line_no}` : ""}: ${claimSummary([d])}${d.outcome ? ` · ${d.outcome.replace("_", " ")}` : ""}`).join("\n");
+  return (
+    <button type="button" onClick={() => navigate(`/claims?po=${encodeURIComponent(orderId)}`)} className="font-mono text-xs text-amber-700 dark:text-amber-400 hover:underline underline-offset-2" title={title} data-testid={`po-claims-${orderId}`}>
+      {claims.length}
+    </button>
+  );
+}
+
 export default function PurchaseOrders() {
   const [, navigate] = useLocation();
   const [velocityOpen, setVelocityOpen] = useState(false);
@@ -654,6 +672,7 @@ export default function PurchaseOrders() {
   const [actionSel, setActionSel] = useState<Set<string>>(() => new Set(linked.action));
   const [closedFilter, setClosedFilter] = useState<ClosedFilter>(linked.closed); // D3: default Open only — the ASINs-page On Order link too (open POs are what it counts)
   const [refundsFilter, setRefundsFilter] = useState<RefundsFilter>(linked.refunds);
+  const [claimsFilter, setClaimsFilter] = useState<ClaimsFilter>(linked.claims);
   const [supplierSel, setSupplierSel] = useState<Set<string>>(() => new Set(linked.supplier));
   const [from, setFrom] = useState(linked.from);
   const [to, setTo] = useState(linked.to);
@@ -679,12 +698,12 @@ export default function PurchaseOrders() {
   const supplierKey = Array.from(supplierSel).sort().join(",");
   const sortKey = sort ? `${sort.key}:${sort.dir}` : "";
   // A filter or sort change goes back to page 1 — not the first render, whose page came from the URL.
-  const filterKey = [debouncedSearch, actionKey, supplierKey, from, to, closedFilter, refundsFilter, sortKey].join("|");
+  const filterKey = [debouncedSearch, actionKey, supplierKey, from, to, closedFilter, refundsFilter, claimsFilter, sortKey].join("|");
   const lastFilterKey = useRef(filterKey);
   useEffect(() => { if (lastFilterKey.current !== filterKey) { lastFilterKey.current = filterKey; setPage(1); } }, [filterKey]);
 
   // The URL follows the list (replaceState: a filter change is not a history step); remembered for "← Back to POs".
-  const listQuery = writePoListUrl({ search: debouncedSearch, action: Array.from(actionSel), supplier: Array.from(supplierSel), closed: closedFilter, refunds: refundsFilter, from, to, sort, page });
+  const listQuery = writePoListUrl({ search: debouncedSearch, action: Array.from(actionSel), supplier: Array.from(supplierSel), closed: closedFilter, refunds: refundsFilter, claims: claimsFilter, from, to, sort, page });
   useEffect(() => { replaceQuery("/purchase-orders", listQuery); rememberPoList(listQuery); }, [listQuery]);
 
   const load = useCallback(async () => {
@@ -694,6 +713,7 @@ export default function PurchaseOrders() {
     if (actionKey) params.set("action", actionKey);
     params.set("closed", closedFilter);
     if (refundsFilter !== "any") params.set("refunds", refundsFilter);
+    if (claimsFilter !== "any") params.set("claims", claimsFilter);
     if (supplierKey) params.set("supplier", supplierKey);
     if (from) params.set("from", from);
     if (to) params.set("to", to);
@@ -706,7 +726,7 @@ export default function PurchaseOrders() {
     } catch (e: any) {
       setError(e.message);
     }
-  }, [debouncedSearch, actionKey, supplierKey, from, to, page, closedFilter, refundsFilter, sort]);
+  }, [debouncedSearch, actionKey, supplierKey, from, to, page, closedFilter, refundsFilter, claimsFilter, sort]);
 
   useEffect(() => { load(); }, [load]);
   useListScroll("pos", data != null); // restored once the first list renders (lib/list-scroll.ts)
@@ -800,6 +820,17 @@ export default function PurchaseOrders() {
             ))}
           </SelectContent>
         </Select>
+        {/* Supplier claims (SPEC §22 §5): "has open claims". */}
+        <Select value={claimsFilter} onValueChange={(v) => setClaimsFilter(v as ClaimsFilter)}>
+          <SelectTrigger className="h-8 w-[150px] text-xs" data-testid="select-po-claims"><SelectValue>{CLAIMS_LABEL[claimsFilter]}</SelectValue></SelectTrigger>
+          <SelectContent className="min-w-[11rem]">
+            {(["any", "open", "none"] as const).map((k) => (
+              <SelectItem key={k} value={k} className={zeroCls(data?.counts?.claims?.[k])} data-testid={`option-po-claims-${k}`}>
+                <span className="flex min-w-[8.5rem] items-center">{CLAIMS_LABEL[k]}<OptionCount n={data?.counts?.claims?.[k]} /></span>
+              </SelectItem>
+            ))}
+          </SelectContent>
+        </Select>
         <FacetMultiSelect label="Action Items" options={data?.actionItems ?? []} counts={data?.counts?.actionItems} selected={actionSel} onChange={setActionSel} testId="select-po-action-items" />
         <FacetMultiSelect label="Supplier" options={data?.suppliers ?? []} counts={data?.counts?.suppliers} selected={supplierSel} onChange={setSupplierSel} testId="select-po-supplier" />
         <input type="date" value={from} onChange={(e) => setFrom(e.target.value)}
@@ -866,8 +897,12 @@ export default function PurchaseOrders() {
                   </td>
                   <td style={poColStyle(colWidths, "action_items")} className="px-3 py-2" onClick={(e) => e.stopPropagation()}>
                     {/* PO table v2: set on the PO row = set on every product line (confirm when > 1). */}
-                    <ActionItemsEditor items={po.action_items} reasons={po.review_velocity_reasons} titles={poActionTitles(po.action_item_titles, po.asins)} lines={po.action_item_lines} claims={po.claims_open}
+                    <ActionItemsEditor items={po.action_items} reasons={po.review_velocity_reasons} titles={poActionTitles(po.action_item_titles, po.asins)} lines={po.action_item_lines}
                       url={`/api/pos/${po.id}/action-items`} onSaved={() => void load()} lineCount={poLineCount(po)} testId={`po-action-items-${po.order_id}`} />
+                  </td>
+                  {/* Claims (SPEC §22 §5): open claims count, blank when none; hover = kind + $; click → the Claims page filtered to this PO. */}
+                  <td style={poColStyle(colWidths, "claims")} className="px-3 py-2 text-right" onClick={(e) => e.stopPropagation()}>
+                    <PoClaimsCount claims={po.claims_open} orderId={po.order_id} />
                   </td>
                   <td style={poColStyle(colWidths, "order_date")} className="px-3 py-2 whitespace-nowrap">{fmtDate(po.order_date)}</td>
                   <td style={poColStyle(colWidths, "order_id")} className="px-3 py-2 font-mono text-xs truncate" title={po.order_id} data-testid={`po-order-id-${po.order_id}`}>{po.order_id}</td>
@@ -892,7 +927,7 @@ export default function PurchaseOrders() {
                 </tr>
                 {open && (
                   <tr data-testid={`row-po-asins-${po.order_id}`}>
-                    <td colSpan={12} className="p-0 pl-6 bg-muted/20">
+                    <td colSpan={13} className="p-0 pl-6 bg-muted/20">
                       {/* Nested rows: same column model as the detail ASINs tab (§3.2, §4);
                           po_asins default order; sorting/filtering stays at PO level. */}
                       {/* The nested table fits the POs table from 1024 (2026-11-05); below its minimum it scrolls in its own box — never the page (docs/UI_RULES.md). */}
@@ -1065,7 +1100,11 @@ export function PurchaseOrderDetailPlaceholder() {
           </div>
         </div>
         <div className="flex items-center gap-2">
-          <ActionItemChips items={actionItems} reasons={po.review_velocity_reasons} titles={poActionTitles(po.action_item_titles, po.asins)} testId="po-detail-action-items" claims={po.claims_open} />
+          <ActionItemChips items={actionItems} reasons={po.review_velocity_reasons} titles={poActionTitles(po.action_item_titles, po.asins)} testId="po-detail-action-items" />
+          {/* Supplier claims (SPEC §22 §5): "Claims (N)" next to the chips — the Claims page filtered to this PO. */}
+          <Link href={`/claims?po=${encodeURIComponent(po.order_id)}`} className={`text-xs whitespace-nowrap underline-offset-2 hover:underline ${(po.claims_open?.length ?? 0) > 0 ? "text-amber-700 dark:text-amber-400" : "text-muted-foreground"}`} data-testid="link-po-claims">
+            Claims ({po.claims_open?.length ?? 0})
+          </Link>
           <Button variant="outline" size="sm" onClick={() => navigate(`/pos/${po.id}/edit`, { state: { fromPoDetail: true } })} data-testid="button-edit-po"><Pencil className="h-3.5 w-3.5 mr-1" /> Edit PO</Button>
           <PoDangerActions poId={po.id} reloadKey={version} onCanceled={reload} onDeleted={() => navigate("/purchase-orders")} />
         </div>
@@ -1135,6 +1174,22 @@ export function PurchaseOrderDetailPlaceholder() {
               </span>
             )],
           ]} />
+          {/* Supplier claims (SPEC §22 §5): one line per open claim, each a link to the claim. */}
+          <div className="rounded-md p-3" style={{ border: "0.5px solid hsl(var(--border))" }} data-testid="po-detail-claims">
+            <div className="flex items-baseline justify-between mb-2">
+              <div className="text-[11px] font-semibold uppercase tracking-wider text-muted-foreground">Claims</div>
+              <Link href={`/claims?po=${encodeURIComponent(po.order_id)}`} className="text-[11px] text-muted-foreground underline-offset-2 hover:underline" data-testid="link-po-claims-card">all claims of this PO</Link>
+            </div>
+            {(po.claims_open?.length ?? 0) === 0
+              ? <div className="text-xs text-muted-foreground/60">No open claims.</div>
+              : <ul className="space-y-1 text-sm">{((po.claims_open ?? []) as OpenClaimBrief[]).map((d) => (
+                  <li key={d.id} className="flex items-baseline justify-between gap-3">
+                    <Link href={`/claims/${d.id}`} className="truncate hover:underline" data-testid={`link-po-claim-${d.id}`} title={d.note ?? ""}>
+                      <span className="font-mono text-xs">{d.asin ?? "whole PO"}</span>{d.po_line_item_id ? <span className="text-muted-foreground text-xs"> line {d.line_no}</span> : null} · {claimSummary([d])}
+                    </Link>
+                    <span className="text-xs text-muted-foreground whitespace-nowrap">{d.outcome ? d.outcome.replace("_", " ") : d.open_tasks > 0 ? `${d.open_tasks} task${d.open_tasks === 1 ? "" : "s"}` : "open"}</span>
+                  </li>))}</ul>}
+          </div>
           {/* Click-to-edit in place (2026-11-04) — no Edit PO round trip. */}
           <div className="rounded-md p-3" style={{ border: "0.5px solid hsl(var(--border))" }} data-testid="po-detail-notes">
             <div className="text-[11px] font-semibold uppercase tracking-wider text-muted-foreground mb-2">Notes</div>

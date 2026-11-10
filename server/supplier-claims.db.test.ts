@@ -2,7 +2,8 @@ import { describe, it, expect, beforeAll, afterAll } from "vitest";
 import pg from "pg";
 import { readFileSync } from "node:fs";
 import { claimAmount, claimCounts, claimMoney, claimSummary, costPerIndividualUnit, individualEquivalents } from "@shared/supplier-claim";
-import { addClaim, editClaim, linkRefund, unlinkRefund, setOutcome, reopenClaim, dismissClaim, removeClaim, loadClaims, loadOpenClaimSummaries, cancelLines, doneTask } from "./supplier-claims";
+import { addClaim, editClaim, linkRefund, unlinkRefund, setOutcome, reopenClaim, dismissClaim, removeClaim, loadClaims, loadOpenClaimSummaries, cancelLines, doneTask, addRefundReceived, confirmSupplier, writeOffRemainder, snoozeTask, loadClaimEvents } from "./supplier-claims";
+import { loadClaimsPage, sweepClaimTimers, claimDetail, bucketCounts } from "./claim-buckets";
 import { addMoneyRow, editMoneyRow, removeMoneyRow } from "./po-money-edit";
 import { evaluateAutoClose } from "./po-close";
 import { loadPoAsinRows, REFUND_DUE_SQL, refundsFilterCond } from "./po-queries";
@@ -132,9 +133,10 @@ describe("supplier claims on the real schema (rolled back)", () => {
       const po2 = (await q(`INSERT INTO purchase_orders (order_id, order_date, supplier) VALUES ('zz-claim-test-2', '2026-10-25', 'zz-test.com') RETURNING id`)).rows[0].id;
       const other = await addMoneyRow(q, "po_line_refunds", po2, { amount: "1.00" }, null);
       await expect(linkRefund(q, id, other.id, null)).rejects.toMatchObject({ status: 400 });
+      // refund_received is never a plain tick (the refund row is the tick, commit 2); the reopen left it as the one open task
       const task = (await loadClaims(q, { poId: s.po }))[0].tasks.find((t) => t.done_at == null)!;
-      await doneTask(q, task.id, null);
-      expect((await loadClaims(q, { poId: s.po }))[0].tasks.find((t) => t.id === task.id)!.done_at).not.toBeNull();
+      expect(task.kind).toBe("refund_received");
+      await expect(doneTask(q, task.id, null)).rejects.toMatchObject({ status: 400 });
     });
   });
 
@@ -211,16 +213,178 @@ describe("supplier claims on the real schema (rolled back)", () => {
   });
 });
 
+describe("claims commit 2 on the real schema (rolled back): tasks, buckets, the timer, refunds across claims, write-off remainder", () => {
+  it("contact_supplier's tick records the report (date, channel) → Waiting on supplier; 5 business days later the sweep creates follow_up_supplier once; snooze holds it", async (ctx) => {
+    if (!client) return ctx.skip();
+    await inTx(async (q) => {
+      const s = await seed(q);
+      const { id } = await addClaim(q, s.po, { po_line_item_id: s.line, kind: "missing", qty: 2, found_at: "2026-10-26" }, null);
+      let [row] = await loadClaimsPage(q, { po: "zz-claim-test" }, new Date("2026-10-27T15:00:00Z"));
+      expect(row).toMatchObject({ bucket: "needs_attention", next_action: "Contact supplier", step: "Reported" });
+      const task = row.tasks.find((t) => t.kind === "contact_supplier")!;
+      await doneTask(q, task.id, null, { date: "2026-10-27", channel: "email", note: "asked for 2 singles" });
+      [row] = await loadClaimsPage(q, { po: "zz-claim-test" }, new Date("2026-10-30T15:00:00Z")); // Fri: 3 business days
+      expect(row).toMatchObject({ bucket: "waiting_supplier", reported_at: "2026-10-27", reported_channel: "email", timed_out: false, step: "Confirmed by supplier", next_action: "waiting for the supplier's answer" });
+      expect(row.bucket_since).toMatch(/^2026-10-27T/);
+      // the sweep covers every claim in the database (the local copy has real ones); this test reads its own
+      const mine = async (at: Date) => (await sweepClaimTimers(q, at)).filter((x) => x.claim_id === id);
+      expect(await mine(new Date("2026-10-30T15:00:00Z"))).toEqual([]);
+      // Tue Nov 3 = 5 business days after Tue Oct 27 → follow_up_supplier, once
+      expect(await mine(new Date("2026-11-03T16:00:00Z"))).toEqual([{ claim_id: id, kind: "follow_up_supplier", reason: expect.stringMatching(/5 business days: no answer from the supplier/) }]);
+      expect(await mine(new Date("2026-11-04T16:00:00Z"))).toEqual([]);
+      [row] = await loadClaimsPage(q, { po: "zz-claim-test" }, new Date("2026-11-04T16:00:00Z"));
+      expect(row.bucket).toBe("needs_attention");
+      expect(bucketCounts([row])).toMatchObject({ needs_attention: 1, waiting_supplier: 0 });
+      // snooze: ticked, the timer holds until the snooze ends, then fires again
+      const fu = row.tasks.find((t) => t.kind === "follow_up_supplier" && !t.done_at)!;
+      const sn = await snoozeTask(q, fu.id, null, 5);
+      [row] = await loadClaimsPage(q, { po: "zz-claim-test" }, new Date());
+      expect(row.bucket).toBe("waiting_supplier");
+      expect(await mine(new Date(Date.parse(sn.snoozed_until) - 60_000))).toEqual([]);
+      expect((await mine(new Date(Date.parse(sn.snoozed_until) + 60_000))).map((x) => x.kind)).toEqual(["follow_up_supplier"]);
+      expect((await loadClaimEvents(q, id)).map((e) => e.type)).toEqual(["opened", "reported", "timed_out", "snoozed", "timed_out"]);
+    });
+  });
+
+  it("Confirmed by supplier (hand tick) → Waiting on refund to post; the timer's check_on_it says 'refund not posted'; the refund closes it", async (ctx) => {
+    if (!client) return ctx.skip();
+    await inTx(async (q) => {
+      const s = await seed(q);
+      const { id } = await addClaim(q, s.po, { po_line_item_id: s.line, kind: "damaged", qty: 1, found_at: "2026-10-26" }, null);
+      const t = (await loadClaims(q, { ids: [id] }))[0].tasks[0];
+      await doneTask(q, t.id, null, { date: "2026-10-26", channel: "chat" });
+      await confirmSupplier(q, id, { at: "2026-10-28", outcome: "gift_card" }, null);
+      let [row] = await loadClaimsPage(q, { po: "zz-claim-test" }, new Date("2026-10-29T15:00:00Z"));
+      expect(row).toMatchObject({ bucket: "waiting_refund", outcome: "gift_card", step: "Received" });
+      expect(row.steps.find((x) => x.key === "confirmed")).toMatchObject({ done: true });
+      // Wed Oct 28 + 5 bd = Wed Nov 4
+      expect((await sweepClaimTimers(q, new Date("2026-11-03T15:00:00Z"))).filter((x) => x.claim_id === id)).toEqual([]);
+      expect((await sweepClaimTimers(q, new Date("2026-11-04T15:00:00Z"))).filter((x) => x.claim_id === id)).toEqual([{ claim_id: id, kind: "check_on_it", reason: "5 business days: refund not posted" }]);
+      // the money arrives (method prefilled by the UI from the payments) → closed, every task done
+      const r = await addRefundReceived(q, id, { amount: 5.97, method: "gift_card", refunded_at: "2026-11-05" }, null);
+      expect(r.applied).toEqual([{ claim_id: id, amount: 5.97 }]);
+      [row] = await loadClaimsPage(q, { po: "zz-claim-test" });
+      expect(row).toMatchObject({ bucket: "closed", status: "closed", outcome: "gift_card", remaining: 0, received: 5.97 });
+      expect(row.tasks.every((x) => x.done_at)).toBe(true);
+      expect(row.steps.every((x) => x.done)).toBe(true);
+      const d = await claimDetail(q, id);
+      expect(d!.po.refunds).toHaveLength(1);
+      expect(d!.events.map((e) => e.type)).toEqual(["opened", "reported", "outcome_set", "supplier_confirmed", "timed_out", "refund_received", "closed"]);
+    });
+  });
+
+  it("one refund across several claims (Michaels): shares applied per claim, a short share stays owed and waits for the refund to post, Write off remainder closes it", async (ctx) => {
+    if (!client) return ctx.skip();
+    await inTx(async (q) => {
+      const s = await seed(q);
+      // emailed cancellations (no Contact supplier step): three canceled claims promised a gift card
+      const a = await addClaim(q, s.po, { po_line_item_id: s.line, kind: "canceled", qty: 2 }, null, { noTask: true });   // $11.94
+      const b = await addClaim(q, s.po, { po_line_item_id: s.line, kind: "canceled", qty: 1 }, null, { noTask: true });   // $5.97
+      const c3 = await addClaim(q, s.po, { po_line_item_id: s.line, kind: "canceled", qty: 1 }, null, { noTask: true });  // $5.97
+      await setOutcome(q, a.id, { outcome: "gift_card" }, null); await setOutcome(q, b.id, { outcome: "gift_card" }, null); await setOutcome(q, c3.id, { outcome: "gift_card" }, null);
+      expect(await due(q, s.po)).toBe(23.88);
+      const det = await claimDetail(q, a.id);
+      expect(det!.other_open_claims.map((o) => o.id).sort()).toEqual([b.id, c3.id].sort());
+      // one $20 card: $8.06 to a (short by $3.88), $5.97 to b (full), the rest ($5.97) to c3 (full)
+      const r = await addRefundReceived(q, a.id, { amount: "20.00", method: "gift_card", refunded_at: "2026-11-06", split: [{ claim_id: b.id, amount: 5.97 }, { claim_id: c3.id, amount: 5.97 }] }, null);
+      expect(r.applied).toEqual([{ claim_id: a.id, amount: 8.06 }, { claim_id: b.id, amount: 5.97 }, { claim_id: c3.id, amount: 5.97 }]);
+      const rows = await loadClaimsPage(q, { po: "zz-claim-test" }, new Date("2026-11-06T20:00:00Z"));
+      const byId = new Map(rows.map((x) => [x.id, x]));
+      expect(byId.get(b.id)).toMatchObject({ status: "closed", remaining: 0 });
+      expect(byId.get(c3.id)).toMatchObject({ status: "closed", remaining: 0 });
+      expect(byId.get(a.id)).toMatchObject({ status: "open", received: 8.06, remaining: 3.88, bucket: "waiting_refund" });
+      expect(byId.get(a.id)!.tasks.every((t) => t.done_at)).toBe(true); // the tick happened; the rest waits for the refund to post
+      expect(await due(q, s.po)).toBe(3.88);
+      expect(Number(await dashDue(q))).toBe(3.88);
+      // one refund row, needs_split, no line; the Michaels card's three claims all point at it
+      const refundRows = (await q(`SELECT id, amount, needs_split, po_line_item_id FROM po_line_refunds WHERE po_id = $1`, [s.po])).rows;
+      expect(refundRows).toHaveLength(1); expect(refundRows[0]).toMatchObject({ amount: "20.00", needs_split: true, po_line_item_id: null });
+      expect((await q(`SELECT COUNT(*)::int AS n FROM supplier_claim_refunds WHERE po_line_refund_id = $1`, [refundRows[0].id])).rows[0].n).toBe(3);
+      // the shares cannot exceed the refund
+      await expect(addRefundReceived(q, a.id, { amount: 1, split: [{ claim_id: b.id, amount: 2 }] }, null)).rejects.toMatchObject({ status: 400 });
+      // Maria lets the $3.88 go: closed with its outcome, the remainder written off, Refunds due $0; the coverage sync leaves it closed
+      await writeOffRemainder(q, a.id, "Michaels keeps the difference", null);
+      const [after] = await loadClaims(q, { ids: [a.id] });
+      expect(after).toMatchObject({ status: "closed", outcome: "gift_card", write_off_reason: "Michaels keeps the difference", outcome_amount: 8.06, remaining: 3.88 });
+      expect(await due(q, s.po)).toBe(0);
+      const { editMoneyRow: edit } = await import("./po-money-edit");
+      await edit(q, "po_line_refunds", refundRows[0].id, { note: "touched" }, null); // a refund edit re-syncs coverage
+      expect((await loadClaims(q, { ids: [a.id] }))[0].status).toBe("closed");
+      await reopenClaim(q, a.id, null);
+      expect((await loadClaims(q, { ids: [a.id] }))[0]).toMatchObject({ status: "open", write_off_reason: null, remaining: 3.88 });
+    });
+  });
+
+  it("review_suggestion: Open accepts (contact_supplier follows), Dismiss dismisses; a refund_received tick without a row is refused; the Claims page filters and the PO's detail header count", async (ctx) => {
+    if (!client) return ctx.skip();
+    await inTx(async (q) => {
+      const s = await seed(q);
+      const sug = await addClaim(q, s.po, { po_line_item_id: s.line, kind: "missing", qty: 1, status: "suggested" }, null, { noTask: true });
+      await q(`INSERT INTO supplier_claim_tasks (claim_id, kind, "group", reason) VALUES ($1, 'review_suggestion', 'decide', 'AF suggests')`, [sug.id]);
+      let [row] = await loadClaimsPage(q, { po: "zz-claim-test" });
+      expect(row).toMatchObject({ status: "suggested", bucket: "needs_attention" });
+      await doneTask(q, row.tasks[0].id, null, { decision: "open" });
+      [row] = await loadClaimsPage(q, { supplier: "zz-test.com" });
+      expect(row.status).toBe("open");
+      expect(row.tasks.filter((t) => !t.done_at).map((t) => t.kind)).toEqual(["contact_supplier"]);
+      await setOutcome(q, sug.id, { outcome: "refund_card" }, null);
+      const rr = (await loadClaims(q, { ids: [sug.id] }))[0].tasks.find((t) => t.kind === "refund_received")!;
+      await expect(doneTask(q, rr.id, null)).rejects.toMatchObject({ status: 400 });
+      expect(await loadClaimsPage(q, { kind: "damaged" })).toEqual([]);
+      expect((await loadClaimsPage(q, { kind: "missing", po: s.po })).length).toBe(1);
+      const sug2 = await addClaim(q, s.po, { po_line_item_id: s.line, kind: "wrong_item", qty: 1, status: "suggested" }, null, { noTask: true });
+      await q(`INSERT INTO supplier_claim_tasks (claim_id, kind, "group") VALUES ($1, 'review_suggestion', 'decide')`, [sug2.id]);
+      await doneTask(q, (await loadClaims(q, { ids: [sug2.id] }))[0].tasks[0].id, null, { decision: "dismiss", reason: "not ours" });
+      expect((await loadClaims(q, { ids: [sug2.id] }))[0].status).toBe("dismissed");
+      expect(bucketCounts(await loadClaimsPage(q, { po: s.po }))).toMatchObject({ needs_attention: 1, dismissed: 1 });
+    });
+  });
+
+  it("Refunds due on the production shape, before and after the switch to claims: $5.97 both ways (the dry-run report's figures; the seeded set: an uncovered $5.97 claim, a reopened claim fully refunded, badge claims with no quantity)", async (ctx) => {
+    // The report the migration was approved on records today's figure and the claims figure.
+    const report = readFileSync("docs/claims-commit1-dryrun-2026-11-09.md", "utf8");
+    const m = /Refunds due[^\n]*today \$([\d.]+)[^\n]*→ after \$([\d.]+)/.exec(report);
+    expect(m, "the dry-run report names Refunds due today → after").not.toBeNull();
+    expect(m![1]).toBe("5.97"); expect(m![2]).toBe("5.97");
+    if (!client) return ctx.skip();
+    await inTx(async (q) => {
+      const s = await seed(q);
+      // the Caress defect: open, $5.97, no refund row
+      await addClaim(q, s.po, { po_line_item_id: s.line, kind: "missing", qty: 1 }, null);
+      // a reopened "Confirm refund" claim whose sheet refund already covers it in full (kohls 6739984735's shape)
+      const k = await addClaim(q, s.po, { po_line_item_id: s.line, kind: "canceled", qty: 2 }, null);
+      await setOutcome(q, k.id, { outcome: "refund_card" }, null);
+      await addRefundReceived(q, k.id, { amount: 11.94, method: "card", refunded_at: "2026-11-01" }, null);
+      await reopenClaim(q, k.id, null); // reopened by the badge conversion (f): refund_received task, $ covered → adds nothing
+      // two badge claims with no quantity and no $ (k)
+      await q(`INSERT INTO supplier_claims (po_id, po_line_item_id, kind, qty, amount_owed, status, found_by) VALUES ($1, $2, 'missing', NULL, NULL, 'open', 'maria'), ($1, $2, 'missing', NULL, NULL, 'closed', 'maria')`, [s.po, s.line]);
+      expect(await due(q, s.po)).toBe(5.97);
+      expect(Number(await dashDue(q))).toBe(5.97);
+      const rows = await loadClaimsPage(q, { po: s.po });
+      expect(rows.filter((r) => r.bucket === "needs_attention" || r.bucket === "waiting_refund" || r.bucket === "waiting_supplier").reduce((t, r) => t + (r.remaining ?? 0), 0)).toBeCloseTo(5.97 + 0, 2);
+    });
+  });
+});
+
 describe("wiring", () => {
-  it("the Payments tab renders the claims section; the ASIN rows carry the open claims; the cancel actions route through claims", () => {
+  it("commit 2 wiring: claims are never in Action Items — the POs list has a Claims column, the PO page a Claims link, card and Open claim per line; the Payments section is gone; the routes exist", () => {
     const rows = readFileSync("client/src/components/po-asin-rows.tsx", "utf8");
-    expect(rows).toMatch(/claims=\{a\.claims_open\}/);
-    expect(rows).toMatch(/claims=\{a\.claims_open\?\.filter\(\(d\) => d\.po_line_item_id === l\.id\)\}/);
+    expect(rows).not.toMatch(/claims=\{a\.claims_open\}/); // not passed into the chips any more
+    expect(rows).toMatch(/<LineClaims a=\{a\} line=\{l\}/);
+    expect(rows).toMatch(/OpenClaimButton/);
     expect(rows).not.toMatch(/RefundProposalDialog/);
-    expect(readFileSync("client/src/pages/purchase-orders.tsx", "utf8")).toMatch(/claims=\{po\.claims_open\}/);
-    expect(readFileSync("client/src/components/po-money.tsx", "utf8")).toMatch(/<PoClaimsSection /);
+    const pos = readFileSync("client/src/pages/purchase-orders.tsx", "utf8");
+    expect(pos).toMatch(/\{ id: "claims", label: "Claims"/);
+    expect(pos).toMatch(/<PoClaimsCount claims=\{po\.claims_open\}/);
+    expect(pos).toMatch(/data-testid="link-po-claims"/);
+    expect(pos).toMatch(/data-testid="po-detail-claims"/);
+    expect(pos).toMatch(/select-po-claims/);
+    expect(readFileSync("client/src/components/po-money.tsx", "utf8")).not.toMatch(/<PoClaimsSection /);
+    expect(readFileSync("client/src/App.tsx", "utf8")).toMatch(/<Route path="\/claims" component=\{Claims\} \/>/);
+    expect(readFileSync("client/src/components/layout/top-nav.tsx", "utf8")).toMatch(/\{ path: "\/purchase-orders"[^\n]*\n[^\n]*\n\s*\{ path: "\/claims", label: "Claims"/);
     const routes = readFileSync("server/routes.ts", "utf8");
-    for (const r of ['"/api/pos/:id/claims"', '"/api/pos/claims/:id"', '"/api/pos/claims/:id/refunds"', '"/api/pos/claims/:id/outcome"', '"/api/pos/claims/:id/reopen"', '"/api/pos/claims/:id/dismiss"', '"/api/pos/claims/tasks/:id/done"']) expect(routes).toContain(r);
+    for (const r of ['"/api/pos/:id/claims"', '"/api/pos/claims/:id"', '"/api/pos/claims/:id/refunds"', '"/api/pos/claims/:id/outcome"', '"/api/pos/claims/:id/reopen"', '"/api/pos/claims/:id/dismiss"', '"/api/pos/claims/tasks/:id/done"',
+      '"/api/pos/claims/tasks/:id/snooze"', '"/api/pos/claims/:id/confirm-supplier"', '"/api/pos/claims/:id/refund-received"', '"/api/pos/claims/:id/write-off-remainder"', '"/api/claims"', '"/api/claims/:id"']) expect(routes).toContain(r);
     expect(routes).not.toMatch(/po_line_defects|\/defects/);
   });
 });

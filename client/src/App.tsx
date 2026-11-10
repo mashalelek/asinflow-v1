@@ -20,6 +20,7 @@ import PurchaseOrders, { PurchaseOrderDetailPlaceholder } from "@/pages/purchase
 import PoNew from "@/pages/po-new";
 import PoEditPage from "@/pages/po-edit-page";
 import Subscriptions from "@/pages/subscriptions";
+import Claims from "@/pages/claims";
 import { CreditCard, TrendingUp, Truck } from "lucide-react";
 
 function Router() {
@@ -40,6 +41,9 @@ function Router() {
         <Route path="/pos/new" component={PoNew} />
         {/* Edit PO as a page (Maria 2026-11-04), replacing the PO editor dialog. */}
         <Route path="/pos/:id/edit" component={PoEditPage} />
+        {/* Supplier claims (SPEC §22 "Supplier claims" §5): the buckets page and a claim's detail. */}
+        <Route path="/claims" component={Claims} />
+        <Route path="/claims/:id" component={Claims} />
         <Route path="/subscriptions" component={Subscriptions} />
         <Route path="/gift-cards">
           <ComingSoon title="Gift Cards" icon={CreditCard} />

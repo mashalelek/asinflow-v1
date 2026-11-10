@@ -1,6 +1,6 @@
 import { useLocation, Link } from "wouter";
 import { useTheme } from "@/components/theme-provider";
-import { Sun, Moon, Package, BarChart3, Calculator, ShoppingCart, CreditCard, TrendingUp, Truck, Settings, LogOut, UserRound, Repeat, LayoutDashboard } from "lucide-react";
+import { Sun, Moon, Package, BarChart3, Calculator, ShoppingCart, CreditCard, TrendingUp, Truck, Settings, LogOut, UserRound, Repeat, LayoutDashboard, ClipboardList } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import {
   DropdownMenu, DropdownMenuTrigger, DropdownMenuContent, DropdownMenuItem, DropdownMenuLabel, DropdownMenuSeparator,
@@ -24,6 +24,8 @@ const NAV_ITEMS: NavItem[] = [
   { path: "/bulk-calc", label: "Bulk Calc", icon: Calculator },
   { path: "/analytics", label: "ASIN Analytics", icon: BarChart3 },
   { path: "/purchase-orders", label: "POs", icon: ShoppingCart },
+  // Supplier claims (SPEC §22 "Supplier claims" §5, commit 2): after POs for now — the position is settled with the nav rearrangement later.
+  { path: "/claims", label: "Claims", icon: ClipboardList },
   { path: "/subscriptions", label: "Subscriptions", icon: Repeat },
   { path: "/gift-cards", label: "Gift Cards", icon: CreditCard, disabled: true },
   { path: "/repricer", label: "Repricer", icon: TrendingUp },

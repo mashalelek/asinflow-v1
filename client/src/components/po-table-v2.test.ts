@@ -56,7 +56,7 @@ describe("sortable headers (commit 4)", () => {
   it("every sortable column is a server-whitelisted key; Invoice and Notes do not sort", () => {
     const keys = PO_LIST_COLUMNS.filter((c) => c.sortKey).map((c) => c.sortKey!).concat("status");
     expect(keys.sort()).toEqual(Object.keys(PO_SORT_KEYS).sort());
-    expect(PO_LIST_COLUMNS.filter((c) => !c.sortKey).map((c) => c.label)).toEqual(["Invoice", "Notes"]);
+    expect(PO_LIST_COLUMNS.filter((c) => !c.sortKey).map((c) => c.label)).toEqual(["Claims", "Invoice", "Notes"]); // Claims (commit 2): a count, never sorted
   });
   it("the list sends sort/dir and a sort change resets to page 1", () => {
     expect(page).toMatch(/if \(sort\) \{ params\.set\("sort", sort\.key\); params\.set\("dir", sort\.dir\); \}/);
@@ -87,12 +87,12 @@ describe("resizable columns (commit 5): one shared mechanism", () => {
     expect(hook).toMatch(/localStorage\.removeItem\(storageKey\)/);
   });
   it("every column has a default width (Maria 2026-11-04); a dragged width wins; the table is fixed at their sum", () => {
-    expect(PO_DEFAULT_COL_WIDTHS).toEqual({ status: 60, action_items: 170, order_date: 100, order_id: 170, supplier: 200, order_total: 110, asins: 60, units_ordered: 110, invoice: 70, notes: 60 });
+    expect(PO_DEFAULT_COL_WIDTHS).toEqual({ status: 60, action_items: 170, claims: 64, order_date: 100, order_id: 170, supplier: 200, order_total: 110, asins: 60, units_ordered: 110, invoice: 70, notes: 60 });
     for (const c of PO_LIST_COLUMNS) expect(PO_DEFAULT_COL_WIDTHS[c.id], c.id).toBeGreaterThan(0);
     expect(poColStyle({}, "action_items")).toEqual({ width: 170, minWidth: 170, maxWidth: 170, overflow: "hidden" });
     expect(poColStyle({ action_items: 220 }, "action_items")).toEqual({ width: 220, minWidth: 220, maxWidth: 220, overflow: "hidden" });
-    expect(poTableWidth({})).toBe(1142); // inside 1280 − the page's 48 px padding
-    expect(poTableWidth({ supplier: 260 })).toBe(1202);
+    expect(poTableWidth({})).toBe(1206); // inside 1280 − the page's 48 px padding (the Claims column added 64, commit 2)
+    expect(poTableWidth({ supplier: 260 })).toBe(1266);
     expect(page).toMatch(/className="border-collapse text-sm table-fixed" style=\{\{ width: poTableWidth\(colWidths\), minWidth: "100%" \}\}/);
     expect(page).toMatch(/<colgroup>/);
     expect(page).toMatch(/onClick=\{resetWidths\} data-testid="button-po-reset-widths">Reset widths</);

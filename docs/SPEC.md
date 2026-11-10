@@ -6245,7 +6245,7 @@ ride the list response (`counts`: four queries, ~100 ms on 2,494 POs); no
 request per dropdown. The one-off replacement pair's item ("Tracking also
 goes to …") became a real filter condition — the filter ignored it before.
 
-### Supplier claims (claims commit 1, Maria 2026-11-09; migration 101; patch `docs/claude_spec-patch-supplier-claims.md`)
+### Supplier claims (claims commits 1–2, Maria 2026-11-09 / 2026-11-10; migrations 101–102; patch `docs/claude_spec-patch-supplier-claims.md`)
 
 A **supplier claim** is the one record for a supplier problem on a PO line (D1): **missing** · **damaged** ·
 **wrong_item** · **expired** · **never_received** · **cant_sell** · **canceled** · **returned** (D2). It replaces
@@ -6272,8 +6272,11 @@ Rules built in commit 1 (`server/supplier-claims.ts`, `shared/supplier-claim.ts`
   Cancel PO and an ASIN row's "cancel" open one canceled claim per line for its units still expected
   (`cancelLines`), with a `refund_received` task.
 - **An open claim keeps its PO open (D15):** auto-close = every unit accounted for AND no blocking action item AND
-  `open_claims = 0` (`server/po-close.ts`). Claims are not action items: the rows show a muted "N open claims" note
-  after the chips until the Claims column / card land in commit 2.
+  `open_claims = 0` (`server/po-close.ts`). Claims are never action items: the POs list has a **Claims** column (the
+  open-claim count, blank when none, kind + $ on hover, click → the Claims page filtered to the PO) in the Status group
+  right after Action Items and a **has open claims** filter (`?claims=open|none`); the PO page a **Claims (N)** link
+  beside the chips, a **Claims** card on PO Details (one line per open claim, each a link) and **claim** on every
+  product line (an "N open" link beside it); nothing in the Action Items cell.
 - **Refund coverage** is derived on every change: an open refund / credit claim whose applied refunds cover its $
   owed closes (outcome from the refund's method when unset); a closed one no longer covered reopens with a
   `refund_received` task "short by $X". Replacement closes when marked arrived; write-off closes at once, reason
@@ -6281,12 +6284,56 @@ Rules built in commit 1 (`server/supplier-claims.ts`, `shared/supplier-claim.ts`
 - **Refunds due** (POs list, filter, Dashboard) = Σ remaining on OPEN claims whose outcome is unset or a refund /
   credit (`REFUNDS_DUE_PO_SQL`); **Spend** subtracts the refunds received plus that figure (§3.7), as the due rows
   did before.
-- **New claims by hand:** the Payments tab's **Supplier claims** section (`client/src/components/po-claims.tsx`):
-  line or whole PO, kind, qty typed in Individual units with the Product / ASIN equivalents beside it (D16), $ blank =
-  auto, note; link / unlink a received refund (amount applied), refund / credit…, replacement… (arrived), write
-  off…, dismiss, reopen, remove, tick a task. API: `POST /api/pos/:id/claims`, `PATCH|DELETE /api/pos/claims/:id`,
-  `POST /api/pos/claims/:id/refunds`, `DELETE …/refunds/:refundId`, `POST …/outcome`, `…/reopen`, `…/dismiss`,
-  `POST /api/pos/claims/tasks/:id/done`.
+- **The Claims page (commit 2, `/claims`, `client/src/pages/claims.tsx`, nav tab after POs for now):** bucket tabs
+  with counts — Needs attention · Waiting on supplier · Waiting on shipment · Waiting on refund to post · Waiting on
+  Velocity · Closed (+ a Dismissed toggle). The **bucket is derived, never stored** (`shared/claim-bucket.ts`,
+  `deriveBucket`): an open task → Needs attention; otherwise the running timer's bucket — a replacement shipped and not
+  arrived → shipment; a refund / credit confirmed by the supplier and not posted in full → refund to post; a return
+  label sent / dispose asked / order change asked with nothing changed → Velocity; everything else once reported (no
+  answer, or an outcome promised but not confirmed) → supplier. **Two tasks are passive** — `refund_received` and
+  `replacement_arrived` are Maria's tick when the money or the units show up, never something to do now: they do not
+  pull a claim into Needs attention (otherwise "Waiting on refund to post" could never occur) and are offered as the
+  row's Next action wherever it sits. Needs attention is grouped Decide / Supplier / Velocity / Money and arrivals /
+  Timed out, each task a checkbox or the control its tick needs (a report's date + channel + note for Contact / Follow
+  up; the reship order # for Confirm reship; Open / Dismiss for a suggestion; Enter quantity is typed; Refund received
+  adds the refund row; Snooze on Check on it / Follow up). Rows: Supplier · PO · Kind · Qty (Individual units, the
+  Product / ASIN equivalents in grey; "qty unknown" / "unknown (sheet zeroed the line)") · $ owed / remaining · Step
+  · Days in bucket · Next action; longest waiting first. Toolbar: **Open claim** (a PO picker over
+  `/api/pos/asin-rows/search`, then the line, kind, qty, $, note), filters supplier / kind / PO; `?bucket=a,b` shows
+  several buckets at once (the Dashboard's Refunds due cell opens Waiting on refund to post + Waiting on supplier with
+  the column's PO date range as `from` / `to`).
+- **The one timer (D7, `sweepClaimTimers` in `server/claim-buckets.ts`):** 5 business days (Mon–Fri, America/New_York;
+  `businessDaysBetween` / `addBusinessDays`) from the bucket's anchor — the report date Maria typed, the supplier's
+  confirmation, the ship date, the Velocity tick — or from the last Follow up / Check on it tick; when it runs out an
+  open claim with no open task gets `follow_up_supplier` (Waiting on supplier) or `check_on_it` with the reason ("5
+  business days: refund not posted"), once (one open per kind per claim), never while a snooze holds (`snoozed_until`).
+  The sweep runs when the Claims page loads (`GET /api/claims`), so the buckets are current when read; it writes a
+  `timed_out` event. Snooze = the task ticked now + `snoozed_until` 5 business days out (`POST
+  /api/pos/claims/tasks/:id/snooze`).
+- **Claim detail (`/claims/:id`, `GET /api/claims/:id`):** header (PO, supplier, kind, qty in the three unit kinds, $
+  owed with the manual override and **Reset to auto** — History row on every change), the **step checklist** (§3.4:
+  refund / credit, replacement, write-off, emailed cancellation; return steps only on a return; the current step
+  marked), the open tasks, the **refunds table** (method · applied · date · remaining) with **Refund received**
+  (D6: a `po_line_refunds` row — method prefilled from the PO's payments, amount prefilled with the remaining, date
+  today — linked through `supplier_claim_refunds` with `amount_applied`; **one refund across several claims**: the
+  PO's other open claims are offered with a share each, the rest stays on this claim; a refund arriving also stamps
+  `supplier_confirmed_at`; full → closed by the coverage sync, short → the claim stays owed in Waiting on refund to
+  post with a `refund_short` event; `POST /api/pos/claims/:id/refund-received`), linked emails / labels / tracking
+  (placeholders until commits 6–7), the timeline (`supplier_claim_events`; types widened in migration 102:
+  `timed_out`, `snoozed`, `followed_up`, `checked`, `reship_confirmed`, `refund_short`). Actions: **Set outcome**
+  (refund to card / gift card / store credit / replacement), **Confirmed by supplier** (by hand, `POST
+  …/confirm-supplier`; the email match is commit 6), **Write off** (reason required), **Write off remainder** (a
+  short refund Maria lets go: the claim closes with its outcome, `write_off_reason` set, `outcome_amount` = received;
+  the coverage sync leaves it closed; `POST …/write-off-remainder`), **Reopen**, **Dismiss**, Remove.
+- **Ticking a task records what the tick means** (`doneTask` with a body): Contact / Follow up → `reported_at` /
+  `reported_channel` (+ `reported` / `followed_up` event); Confirm reship → the order # appended to the PO's
+  `alt_order_ids`; Review suggestion → open (then Contact supplier) or dismiss; Refund received is never a plain tick
+  (400: add the refund row); Replacement arrived → the replacement outcome's arrived; Enter quantity is typed on the
+  claim. API: `POST /api/pos/:id/claims`, `PATCH|DELETE /api/pos/claims/:id`, `POST /api/pos/claims/:id/refunds`,
+  `DELETE …/refunds/:refundId`, `POST …/outcome`, `…/reopen`, `…/dismiss`, `…/confirm-supplier`, `…/refund-received`,
+  `…/write-off-remainder`, `POST /api/pos/claims/tasks/:id/done`, `…/snooze`, `GET /api/claims[?supplier&kind&po]`,
+  `GET /api/claims/:id`. The per-PO Supplier claims section of commit 1 is gone from the Payments tab;
+  `client/src/components/po-claims.tsx` keeps the **Open claim** form the lines and the PO picker share.
 - **A claim with no quantity** (`qty` NULL — a converted badge that carried none, a sheet line the sheet zeroed) counts
   toward nothing: not Expected, not Refunds due, not Spend; its $ owed stays NULL. An **Enter quantity** task (group
   Decide) asks for it; typing the Individual units on the claim completes the task (a tick never does). The Payments tab
