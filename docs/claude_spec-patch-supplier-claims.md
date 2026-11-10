@@ -556,8 +556,10 @@ Prerequisite: `claude_spec-patch-quantity-names.md` (labels only).
    plan identical before and after for every production PO. Stop for
    Maria, then live.
    **Built 2026-11-09 (migration 101, `npm run claims:dryrun -- --prod`,
-   report `docs/claims-commit1-dryrun-2026-11-09.md`); awaiting Maria's
-   review before the deploy.** Implementation notes that go beyond the text
+   report `docs/claims-commit1-dryrun-2026-11-09.md`); LIVE on production
+   2026-11-10 02:23 UTC (591f037). Two ~30 s 502 windows during the
+   Render deploy; set the service's health-check path to /health
+   (backlog).** Implementation notes that go beyond the text
    above: (a) two views, `po_line_expected` (per line) and
    `po_asin_expected` (per ASIN row — the stage quantities live on the
    row), the latter read by On Order / auto-close / the row loader;
