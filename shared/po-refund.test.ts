@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { proposeRefund, REFUND_STATUSES } from "./po-refund";
+import { proposeRefund } from "./po-refund";
 
 // Dashboard patch §2.3 C1: the due-refund proposal for a canceled qty.
 describe("proposeRefund", () => {
@@ -15,5 +15,4 @@ describe("proposeRefund", () => {
     expect(proposeRefund({ qty: 0, price: 10, subtotal: 100 }).amount).toBeNull();
     expect(proposeRefund({ qty: 1, price: 10, subtotal: 10, discount: 50, tax: 0 }).amount).toBe(0);
   });
-  it("the two statuses", () => { expect(REFUND_STATUSES).toEqual(["due", "received"]); });
 });

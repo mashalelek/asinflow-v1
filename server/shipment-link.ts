@@ -1,6 +1,7 @@
 // "Link to PO ASIN" (Unmatched shipments panel, SPEC §26 component A UI): the
 // unmatched Velocity line becomes a Velocity-sourced shipment row on the
-// chosen ASIN row (ASIN qty = units ÷ that row's units_per_pack); the
+// chosen ASIN row (Individual units as Velocity counts them, D17 since
+// migration 101 — the view shows them in ASIN units); the
 // unmatched record is stamped resolved and remembered (resolved_po_asin_id,
 // match_reason 'picker'), so later syncs keep the mapping. The FBA ids come
 // from the Velocity shipment's SC match (velocity_shipments.sc_shipment_ids)
@@ -44,8 +45,9 @@ export async function linkUnmatchedLine(query: QueryLike, unmatchedId: string, p
   if (u.resolved_at) return { status: 409, body: { message: "already resolved" } };
   const pa = (await query(`SELECT id, po_id, units_per_pack, qty, qty_shipped_fba, extra_units_note FROM po_asins WHERE id = $1`, [poAsinId])).rows[0];
   if (!pa) return { status: 404, body: { message: "ASIN row not found" } };
+  // Stored Individual units (a legacy row — pack not known — stores the units as before: ÷ 1).
   const units = Number(u.line?.quantity_shipped ?? 0) || 0;
-  const qty = r2(units / (Number(pa.units_per_pack) || 1));
+  const qty = r2(units);
   const ordered = Number(pa.qty) || 0;
   const before = Number(pa.qty_shipped_fba) || 0;
   const after = r2(before + qty);
@@ -53,7 +55,7 @@ export async function linkUnmatchedLine(query: QueryLike, unmatchedId: string, p
   if (after > ordered + 1e-9) {
     if (!opts.confirmOvershoot) {
       return { status: 409, body: { code: "overshoot", ordered, shipped_before: before, shipped_after: after,
-        message: `Linking puts Shipped FBA at ${after} of ${ordered} ordered ASIN units — confirm and add a note` } };
+        message: `Linking puts Shipped FBA at ${after} of ${ordered} ordered Individual units — confirm and add a note` } };
     }
     if (!note) return { status: 400, body: { message: "a note is required to link past Ordered" } };
   }

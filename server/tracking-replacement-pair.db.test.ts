@@ -35,10 +35,11 @@ describe("the replacement pair's item resolves once 200015557295492 is fully che
       await q(`UPDATE purchase_orders SET order_id = order_id || '-zz-aside' WHERE order_id IN ($1, $2)`, [pair.fromOrderId, pair.toOrderId]);
       const from = await po(q, { order_id: pair.fromOrderId, days_ago: 0 });
       const to = await po(q, { order_id: pair.toOrderId, days_ago: 7 });
-      const row = (await q(`INSERT INTO po_asins (po_id, asin, qty, units_per_pack, sold_as, received_velocity) VALUES ($1, 'B006T0U4R4', 6, 2, 'multi-pack', 5.5) RETURNING id`, [to])).rows[0].id;
+      // Individual units since migration 101: 12 singles ordered for a 2-pack ASIN (6 ASIN units), 11 checked in (5.5).
+      const row = (await q(`INSERT INTO po_asins (po_id, asin, qty, units_per_pack, sold_as, received_velocity) VALUES ($1, 'B006T0U4R4', 12, 2, 'multi-pack', 11) RETURNING id`, [to])).rows[0].id;
       expect(await items(q, PO_ACTION_ITEMS_SQL, from)).toContain(REPLACEMENT_TRACKING_ITEM);
       expect(await replacementCheckedIn(q, pair)).toBe(false);
-      await q(`UPDATE po_asins SET received_velocity = 6 WHERE id = $1`, [row]);
+      await q(`UPDATE po_asins SET received_velocity = 12 WHERE id = $1`, [row]);
       expect(await items(q, PO_ACTION_ITEMS_SQL, from)).not.toContain(REPLACEMENT_TRACKING_ITEM);
       expect(await items(q, PO_CLOSE_ACTION_ITEMS_SQL, from)).not.toContain(REPLACEMENT_TRACKING_ITEM);
       expect(await replacementCheckedIn(q, pair)).toBe(true);

@@ -15,8 +15,9 @@
  */
 export const ACTION_ITEMS = [
   "Need to return",
-  "Missing / damaged from supplier",
-  "Confirm refund / replacement",
+  // "Missing / damaged from supplier" and "Confirm refund / replacement" left the vocabulary with claims commit 1
+  // (migration 101, SPEC §22 "Supplier claims"): a supplier problem is a claim now; the rows that carried them were
+  // converted and cleared ("converted to claim"), old cleared rows keep their text.
   "ATTN: Velocity",
   "See comments",
   "SHIP",            // only meaningful when the PO ships from the house (manual)
@@ -34,10 +35,10 @@ export const SUBSCRIPTION_MAY_BE_ACTIVE = "Subscription may be active";
 /** Pre-2026-10-29 spellings (migrations 056 / 058) → today's label. */
 export const LEGACY_ACTION_ITEMS: Readonly<Record<string, ActionItem>> = {
   "Need to Return": "Need to return",
-  "Missing / Damaged from Supplier": "Missing / damaged from supplier",
-  "Confirm Refund / Replacement": "Confirm refund / replacement",
   "See Comments": "See comments",
 };
+/** Labels retired by claims commit 1 (migration 101): a sheet row or an editor sending one gets no item — it is a claim's business now. */
+export const RETIRED_ACTION_ITEMS: readonly string[] = ["Missing / damaged from supplier", "Missing / Damaged from Supplier", "Confirm refund / replacement", "Confirm Refund / Replacement"];
 export type ActionItem = (typeof ACTION_ITEMS)[number];
 
 /**
@@ -105,6 +106,7 @@ export function normalizeActionItems(input: unknown): { ok: true; value: ActionI
     // Auto items (Review Velocity, the derived ones) are never set from an
     // editor: one that echoes the displayed union may send one — drop it.
     if ((AUTO_ACTION_ITEMS as readonly string[]).includes(s)) continue;
+    if (RETIRED_ACTION_ITEMS.includes(s)) continue; // a claim now (migration 101), never an item
     const v = LEGACY_ACTION_ITEMS[s] ?? s;
     if (!isActionItem(v)) return { ok: false, error: `unknown action item: ${s}` };
     set.add(v);
@@ -128,6 +130,8 @@ export interface SheetStatusMapping {
   shippedFba: boolean;
   /** "Lost / Damaged by Us" (Maria 2026-10-18) → po_asins.qty_lost_damaged_us from Col V. */
   lostDamagedUs: boolean;
+  /** "Missing / damaged from supplier" / "Confirm refund / replacement" (retired by claims commit 1, migration 101): a claim, never an item or a stop. */
+  retired: string[];
   /** Anything else — the caller must STOP and report. */
   unmapped: string[];
   tokens: string[];
@@ -138,11 +142,12 @@ const CANON: Record<string, ActionItem> = Object.fromEntries(ACTION_ITEMS.map((a
 /** Split the sheet cell on commas / newlines, trim, map every token. */
 export function mapSheetStatus(status: string | null | undefined): SheetStatusMapping {
   const tokens = String(status ?? "").split(/[,\n]/).map((t) => t.trim()).filter(Boolean);
-  const m: SheetStatusMapping = { actionItems: [], closed: false, canceled: false, returned: false, received: false, ordered: false, shippedFba: false, lostDamagedUs: false, unmapped: [], tokens };
+  const m: SheetStatusMapping = { actionItems: [], closed: false, canceled: false, returned: false, received: false, ordered: false, shippedFba: false, lostDamagedUs: false, retired: [], unmapped: [], tokens };
   const seen = new Set<ActionItem>();
   for (const t of tokens) {
     const k = t.toLowerCase();
     if (CANON[k]) { if (!seen.has(CANON[k])) { seen.add(CANON[k]); } continue; }
+    if (RETIRED_ACTION_ITEMS.some((r) => r.toLowerCase() === k)) { const canon = k.startsWith("missing") ? "Missing / damaged from supplier" : "Confirm refund / replacement"; if (!m.retired.includes(canon)) m.retired.push(canon); continue; }
     if (k === "closed") { m.closed = true; continue; }
     if (k === "canceled" || k === "cancelled") { m.canceled = true; continue; }
     // "Partial Return" (Maria 2026-10-18) is treated as Returned: the qty comes from Col R where present.

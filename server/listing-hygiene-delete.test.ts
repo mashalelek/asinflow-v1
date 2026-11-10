@@ -90,7 +90,7 @@ function world(o: { ledgerRun?: any; coverage?: any; rows: any[]; breaker?: numb
       if (params?.[0] === "hygiene_ledger_coverage") return { rows: o.coverage === null ? [] : [{ value: o.coverage ?? { from: "2025-04-19", to: "2026-10-18" } }], rowCount: 1 };
       return { rows: [{ value: o.breaker ?? 25 }], rowCount: 1 };
     }
-    if (sql.includes("po_asins")) return { rows: [], rowCount: 0 };
+    if (sql.includes("po_asins") || sql.includes("po_asin_expected")) return { rows: [], rowCount: 0 }; // the On Order pipeline (the view since migration 101)
     if (sql.includes("INSERT INTO listing_actions")) { inserts.push(params!); return { rows: [], rowCount: 1 }; }
     if (sql.includes("a.status = 'dead'")) return { rows: [], rowCount: 0 }; // hygiene scope: no dead ASIN with a listing here
     throw new Error(`unexpected SQL: ${sql.slice(0, 80)}`);
@@ -287,7 +287,7 @@ describe("runHygiene('delete') — Velocity shipments leg", () => {
         if (params?.[0] === "hygiene_ledger_coverage") return { rows: [{ value: { from: "2025-04-19", to: "2026-10-18" } }], rowCount: 1 };
         return { rows: [{ value: 25 }], rowCount: 1 };
       }
-      if (sql.includes("po_asins")) return { rows: [], rowCount: 0 };
+      if (sql.includes("po_asins") || sql.includes("po_asin_expected")) return { rows: [], rowCount: 0 }; // the On Order pipeline (the view since migration 101)
       if (sql.includes("INSERT INTO listing_actions")) { inserts.push(params!); return { rows: [], rowCount: 1 }; }
       if (sql.includes("a.status = 'dead'")) return { rows: [], rowCount: 0 };
       throw new Error(`unexpected SQL: ${sql.slice(0, 80)}`);

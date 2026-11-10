@@ -11,10 +11,11 @@ function fake(po: Record<string, any>, promos: any[], asins: any[], lines: Recor
     if (/FROM purchase_orders WHERE id/.test(sql)) return { rows: [po], rowCount: 1 };
     if (/FROM po_promos/.test(sql)) return { rows: promos, rowCount: promos.length };
     if (/FROM po_payments/.test(sql)) return { rows: payments, rowCount: payments.length };
-    if (/FROM po_asins WHERE po_id/.test(sql)) return { rows: asins, rowCount: asins.length };
+    // The rows and lines come through the views since migration 101 (ASIN units / Product units under the old names).
+    if (/FROM po_asins pa JOIN po_asin_expected e ON e\.id = pa\.id WHERE pa\.po_id/.test(sql)) return { rows: asins, rowCount: asins.length };
     if (/FROM po_edit_log/.test(sql)) return { rows: manualIds.map((id) => ({ entity_id: id })), rowCount: manualIds.length };
-    if (/FROM po_line_items WHERE po_asin_id/.test(sql)) return { rows: lines[params[0]] ?? [], rowCount: 0 };
-    if (/FROM po_line_items WHERE po_id/.test(sql)) return { rows: Object.values(lines).flat(), rowCount: 0 };
+    if (/JOIN po_line_expected le ON le\.line_id = l\.id WHERE l\.po_asin_id/.test(sql)) return { rows: lines[params[0]] ?? [], rowCount: 0 };
+    if (/JOIN po_line_expected le ON le\.line_id = l\.id WHERE l\.po_id/.test(sql)) return { rows: Object.values(lines).flat(), rowCount: 0 };
     return { rows: [], rowCount: 1 };
   };
   return { q, calls };

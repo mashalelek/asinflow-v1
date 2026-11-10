@@ -6245,70 +6245,64 @@ ride the list response (`counts`: four queries, ~100 ms on 2,494 POs); no
 request per dropdown. The one-off replacement pair's item ("Tracking also
 goes to …") became a real filter condition — the filter ignored it before.
 
-### Supplier defects (Maria 2026-11-05; migration 094)
+### Supplier claims (claims commit 1, Maria 2026-11-09; migration 101; patch `docs/claude_spec-patch-supplier-claims.md`)
 
-A **supplier defect** records units the supplier got wrong on one product
-line: **missing** from the delivery, **damaged**, or the **wrong item**. It is
-the line-resolution model of the cancellations patch
-(`docs/claude_spec-patch-po-cancellations-from-email.md` §3/§5): a per-line
-record whose money rides on `po_line_refunds` rows, so the cancellations
-confirm can reuse it later instead of inventing its own.
+A **supplier claim** is the one record for a supplier problem on a PO line (D1): **missing** · **damaged** ·
+**wrong_item** · **expired** · **never_received** · **cant_sell** · **canceled** · **returned** (D2). It replaces
+the supplier defects of migration 094 (`po_line_defects` → `supplier_claims`, every column widened per the patch
+§4.1) and the refund-due rows (a `po_line_refunds` row is money **received**; its `status` column is gone).
 
-`po_line_defects` (one row per defect): `po_line_item_id`, `kind`
-(`missing | damaged | wrong_item`), `qty` (**retailer units of the line,
-stored** — never derived from Ordered − Received, and never written to any
-quantity column), `amount` ($ owed), `opened_at` (date), `note`, `status`
-(`open | resolved`), `resolution` (`refund | replacement | write_off`),
-`replacement_po_line_item_id`, `write_off_reason`, `resolved_at`.
-`po_line_defect_refunds` links a defect to one or more refund rows of the
-same PO.
+`supplier_claims`: `po_id`, `po_line_item_id` (NULL = the whole PO, spread over its lines by ordered units),
+`kind`, `qty` (**Individual units**, D16 / D17 — stored, never derived from Ordered − Received), `amount_owed` +
+`amount_owed_source` (`auto` = qty × the line's sourcing cost per Individual unit, re-derived on a qty change;
+`manual` = as typed, never recalculated; clearing it goes back to auto), `status` (`suggested | open | closed |
+dismissed` — the bucket is derived, §3.2), `outcome` (`refund_card | gift_card | store_credit | replacement |
+write_off`, one per claim, D3) with `outcome_amount` / `outcome_detail` / `write_off_reason`, the replacement
+and return columns, `found_by` / `found_at` / `reported_at` / `supplier_confirmed_at` / `closed_at`, `note`,
+`created_by_user_id`. `supplier_claim_tasks` (the thirteen kinds in five groups, §3.3; open = `done_at IS NULL`,
+one open task per kind per claim), `supplier_claim_events` (the timeline), `supplier_claim_refunds` (claim ↔
+received refund row, `amount_applied` so one refund covers several claims), `po_warning_dismissals` (§3.8),
+`supplier_claim_conversions` (where each converted claim came from and what was assumed — read-only history).
+`po_tracking.claim_id` + `direction`, `po_documents.claim_id` + type `return_label`, `po_edit_log` entity `claim`.
 
-- **$ owed** defaults to qty × the line's cost per retailer unit: the stored
-  adjusted product cost (col X / formula v3 — discounts, tax and shipping
-  allocated, × (1 − gift-card %); never recomputed on an imported PO); a line
-  without one uses price × (subtotal − discount + tax + shipping) ÷ subtotal
-  (plain price without a subtotal). Editable (`shared/po-defect.ts`
-  `defectAmount`).
-- **Resolved by refund** — derived, never set by hand: a defect whose linked
-  refund rows *received* cover its amount (1¢) resolves; less leaves the rest
-  owed and the defect open; a linked refund marked received, edited, unlinked
-  or removed re-derives it (resolve or reopen), each with a History row.
-- **Resolved by replacement** — the PO line that supplied the replacement
-  units (picked by that PO's order #, the defect's ASIN by default).
-- **Resolved by write-off** — Maria's call, a reason required. **COGS does not
-  change in this build** for any resolution (options listed for Maria
-  2026-11-05; decision pending).
-- **Reopen** undoes a replacement / write-off; **Remove** deletes the defect
-  (its links go with it, the refund rows stay).
+Rules built in commit 1 (`server/supplier-claims.ts`, `shared/supplier-claim.ts`):
+- **Counting (D14, §3.6, read precisely):** a claim's units leave Expected when it is **closed** with any outcome
+  but replacement, or **open** and either `canceled` or promised a refund / credit / write-off. Suggested and
+  dismissed claims never count. Expected = ordered − Σ counting claims, in the views (below). Nothing edits Ordered:
+  Cancel PO and an ASIN row's "cancel" open one canceled claim per line for its units still expected
+  (`cancelLines`), with a `refund_received` task.
+- **An open claim keeps its PO open (D15):** auto-close = every unit accounted for AND no blocking action item AND
+  `open_claims = 0` (`server/po-close.ts`). Claims are not action items: the rows show a muted "N open claims" note
+  after the chips until the Claims column / card land in commit 2.
+- **Refund coverage** is derived on every change: an open refund / credit claim whose applied refunds cover its $
+  owed closes (outcome from the refund's method when unset); a closed one no longer covered reopens with a
+  `refund_received` task "short by $X". Replacement closes when marked arrived; write-off closes at once, reason
+  required. Reopen, dismiss, remove as actions.
+- **Refunds due** (POs list, filter, Dashboard) = Σ remaining on OPEN claims whose outcome is unset or a refund /
+  credit (`REFUNDS_DUE_PO_SQL`); **Spend** subtracts the refunds received plus that figure (§3.7), as the due rows
+  did before.
+- **New claims by hand:** the Payments tab's **Supplier claims** section (`client/src/components/po-claims.tsx`):
+  line or whole PO, kind, qty typed in Individual units with the Product / ASIN equivalents beside it (D16), $ blank =
+  auto, note; link / unlink a received refund (amount applied), refund / credit…, replacement… (arrived), write
+  off…, dismiss, reopen, remove, tick a task. API: `POST /api/pos/:id/claims`, `PATCH|DELETE /api/pos/claims/:id`,
+  `POST /api/pos/claims/:id/refunds`, `DELETE …/refunds/:refundId`, `POST …/outcome`, `…/reopen`, `…/dismiss`,
+  `POST /api/pos/claims/tasks/:id/done`.
+- **Retired action items:** "Missing / damaged from supplier" and "Confirm refund / replacement" left the vocabulary
+  (`RETIRED_ACTION_ITEMS`); the stored open ones were converted and cleared ("converted to claim"); a sheet row
+  carrying one opens a claim on the new line instead (never a stop); an editor sending one is ignored.
 
-**Action item.** "Missing / damaged from supplier" is **derived from open
-defects** on the line, its ASIN row and the PO (the PO, close and ASIN
-unions; it blocks auto-close like before). The chip shows the open qty and $
-owed ("Missing / damaged from supplier 1 · $5.97"); its hover lists each
-defect (ASIN, line, kind, note). The badges stored before 2026-11-05 (sheet
-import and two by hand) **stay as they are** until Maria says which to convert
-(`Claude outputs/missing-damaged-badges-2026-11-05.csv`); a stored one can
-still be removed in the editor. Adding the badge by hand where no defect is
-open is refused ("comes from a supplier defect now"); an editor echoing the
-derived badge adds nothing.
+**Conversions (migration 101, §4.8, dry run first):** the defect → the claim; the due refund row → its `amount_owed`
+(due rows removed); `qty_canceled > 0` → a closed `canceled` claim per line, `qty_returned > 0` → a closed
+`returned` claim (Individual units, dated by the PO's last edit, linked to the PO's received refund rows with
+`amount_applied` split by $ owed, outcome from the refund's method; "sheet-era, refund not tracked" when the PO has
+no refund row); "Confirm refund / replacement" items → the line's converted claim reopened (else an open claim, kind
+unclear → missing, qty = the line's ordered units) with a `refund_received` task; "Missing / damaged from supplier"
+→ open claims + `contact_supplier` on open POs, closed claims (no outcome guessed) on closed POs; the sheet's col V /
+W losses → closed `write_off` claims on the row's first line (kind from the notes, the sheet's $ kept as typed; chewy
+1627249988 B08F2JGCXT 3 / $8.55 added; michaels 9800109062072825 B07N6V47HC excluded). Then `qty_canceled` /
+`qty_returned` / `final_qty` and `po_line_refunds.status` are dropped. The dry run (`npm run claims:dryrun -- --prod`)
+applies the file in a rolled-back transaction and writes the CSVs under `docs/claims-*-<date>.csv`.
 
-**Refunds due.** The POs list's "refund due $X", the Refunds: due filter and
-the Dashboard's Refunds due add, per open defect, its amount minus every
-linked refund row of any status (≥ 0) — the part no refund row carries yet.
-A defect linked to its due row adds nothing more: no double count. Spend is
-unchanged (it subtracts refund rows, as before).
-
-UI: the Payments tab's **Supplier defects** section (after Refunds) — add
-(line, kind, qty, $ blank = the default, note), link / unlink refunds,
-replacement…, write off…, reopen, remove. API: `POST /api/pos/:id/defects`,
-`PATCH|DELETE /api/pos/defects/:id`, `POST /api/pos/defects/:id/refunds`,
-`DELETE /api/pos/defects/:id/refunds/:refundId`, `POST
-/api/pos/defects/:id/resolve`, `POST /api/pos/defects/:id/reopen`
-(`server/po-defects.ts`). Scripts: `script/add-refund-due.ts` (a refund-due
-row on one line), `script/refund-due-to-defect.ts` (a due row → a defect
-linked to it); both dry run by default, `--prod`, `--live`. First record:
-Walmart 200015557295492 line 1 (Caress B006T0U4R4), missing, 1, $5.97,
-linked to its refund-due row (2026-11-05).
 
 ### Costs (patch `docs/claude_spec-patch-po-ai-prefill.md` §7 as corrected 2026-11-04; formula v3, `shared/po-cost.ts`)
 
@@ -6557,67 +6551,59 @@ Velocity quantity (`units_per_pack × qty`), invoice file name
 (`YYYY-MM-DD_supplier_orderID`, built from local date components — pg returns
 DATE as a JS Date; never string-slice it), bundle set-count check.
 
-### Canceled / returned / final quantities (migration 030)
+### Quantities are stored in Individual units (D17, claims commit 1, migration 101)
 
-**Products → Received on a Velocity PO (Maria 2026-11-05).** For a PO with
-`ships_to = 'velocity'` the Products tab's Received is Velocity's count, not
-`qty_received`: the ASIN row's Received by Velocity (ASIN units) in the
-line's retailer units, × `asin_units_per_pack` ÷ `retailer_units_per_product`
-(the stored yield when the line lacks the two integers) — 200015557295492:
-5.5 × 2 ÷ 1 = 11 of 12. Exact only when the ASIN row has one line; when
-several lines share it they share one Velocity order, so the lines stay blank
-and the total is the ASIN row's (the hover says so). Read only; nothing is
-written, and `qty_received` stays the home PO's own editable count. A
-replacement checked in under the PO raises this number, which is why a
-supplier shortage is the stored defect qty (§22 "Supplier defects"), never
+Every PO quantity column — `po_asins.qty`, `qty_shipped_supplier`, `qty_at_prep`, `qty_at_warehouse`,
+`qty_lost_damaged_us`, `qty_shipped_fba`, `qty_received_amazon`, `received_velocity`, `unreimbursed_loss_qty`,
+`extra_units_cleared_shipped`; `po_asin_shipments.qty_shipped` / `qty_received`; `po_line_items.qty_ordered` /
+`qty_received`; `po_line_refunds.qty`; `supplier_claims.qty` — holds a count of **Individual units** (the
+physical items Velocity counts). The migration multiplied every stored value in place: the ASIN pack for an ASIN-unit
+column (a bundle row by × N, its total Individual units — SPEC §22 "Bundles"), the line's Product pack
+(`retailer_units_per_product`) for a Product-unit column (a bundle component by its own pack, **never × N**). The
+product had to be a whole number: a 2-dp stored third or sixth within 0.05 of one was rounded (3.33 × 3 → 10,
+1.17 × 6 → 7); anything else, and every row whose pack size was not known, was **left as stored** with
+`po_asins.qty_basis = 'asin_legacy'` / `po_line_items.qty_basis = 'product_legacy'` — the dry run lists each
+(`docs/claims-d17-unconverted-<date>.csv`). A legacy row reads exactly as before (its stored number is its ASIN /
+Product units, the Individual twins are NULL) and converts by itself the moment its pack is known (the
+`BEFORE UPDATE` triggers, a History row `qty_basis`): `qty`, the hand-entered columns, the loss and the manual
+shipment rows × the pack; `qty_at_prep`, `received_velocity` and the Velocity shipment rows were already written as
+units ÷ 1 and stay. An insert with no pack is legacy by construction (`BEFORE INSERT`), a row can claim the
+Individual basis only while its pack is known (CHECK), and a pack cleared on a converted row takes it back to ASIN
+units (`editAsinRow`). Column types did not change (numeric(10,2); decimals appear only in legacy rows and derived
+ASIN units).
+
+**One derived value, one place — the views (§4.6):** `po_line_expected` (per product line) and `po_asin_expected`
+(per ASIN row) carry ordered / received / Σ canceled / Σ returned / Σ claimed / expected and every stage quantity in
+**Individual, Product and ASIN units**, plus `fully_canceled`, `open_claims`, `qty_basis`; a bundle's ASIN units
+= min over components (Individual ÷ units per bundle), its Individual = ASIN units × N. Every reader selects from
+them — On Order (`PIPELINE_ROWS_SQL`), auto-close (`poAsinRowsSql`, which overlays the stored columns with the
+view's ASIN-unit values under the names the API has always used and adds the `*_individual` twins), the Velocity
+plan (`loadAfPoRows`), the PO editor's rows and lines, the Dashboard's units rows, the exports, tracking push,
+sourcing cost, the extension's history. **Nothing divides by a pack size on its own any more**; a new reader joins
+the view. Writers store Individual units: a typed line qty (Product units) × the line's pack (`editLine`,
+`addLine`, `po-create`, the sheet intake, a renewal copy — `server/po-expected.ts` holds the conversions); a pack
+change on a line keeps its Product units; Velocity's units, At Prep and Received by Velocity are written as counted;
+SC's received (ASIN units of the SKU) × the row's pack; the manual quantities, a refund qty and a claim qty are
+**typed in Individual units** (D16) with the Product / ASIN equivalents beside the field. `recomputeAsinQty` reads the
+lines in Product units and stores the row's ASIN units × its pack. `npm run claims:dryrun -- --prod` proved On
+Order per ASIN, the auto-close verdict per PO and the Velocity plan identical before and after on production
+(`docs/claims-proof-<date>.csv`).
+
+**Canceled / Returned** on the ASIN row and the Products tab derive from the claims (D14): Σ `canceled` / Σ
+`returned` claims that count, Product units on the line, ASIN units on the row (a bundle by the bundle rule) — the
+`qty_canceled` / `qty_returned` columns, the GENERATED `final_qty` (migration 030 / 062) and the ÷ `unique_products`
+reading are gone. The Products tab shows **Expected** (ordered − claimed) with the canceled / returned counts under
+it; the claims themselves are on the Payments tab.
+
+**Products → Received on a Velocity PO (Maria 2026-11-05).** For a PO with `ships_to = 'velocity'` the Products
+tab's Received is Velocity's count, not `qty_received`: the ASIN row's Received by Velocity (ASIN units) in the
+line's Product units, × `asin_units_per_pack` ÷ `retailer_units_per_product` (the stored yield when the line lacks
+the two integers) — 200015557295492: 5.5 × 2 ÷ 1 = 11 of 12. Exact only when the ASIN row has one line; when several
+lines share it they share one Velocity order, so the lines stay blank and the total is the ASIN row's (the hover
+says so). Read only; nothing is written, and `qty_received` stays the home PO's own editable count. A replacement
+checked in under the PO raises this number, which is why a supplier shortage is the stored claim qty, never
 Ordered − Received (`lineReceivedShown`, `client/src/components/po-edit.tsx`).
 
-
-Decisions resolved 2026-08-22:
-
-- `qty_refunded` was RENAMED `qty_returned` (data preserved — the import
-  wrote blank Col R as 0, which stands: a blank refund cell means none
-  occurred).
-- `qty_canceled` is NULLable with NO default. **NULL = not tracked.**
-  Since 2026-10-17 (row-level Status) the sheet sync sets
-  `qty_canceled = qty_ordered` on **the line whose own row** says
-  Canceled — never PO-wide; the "Mark canceled" action on an ASIN row
-  sets it on every line of that ASIN. (2026-10-16 to 10-17: the first
-  row's Canceled was applied to every line of the PO.) The entry form writes
-  explicit values (its 0 default lives in the form, not the column).
-- **Canceled / Returned on the ASIN row are DERIVED** (pre-flight decision
-  1): Σ(line qty × `asin_qty_per_product`) over the ASIN's lines, NULL when
-  any contributing line is untracked. No stored copies on `po_asins`; the
-  product level stays the truth.
-- **Bundles divide by N (Maria 2026-10-17, row-level Status P2):** the
-  stored yield of each bundle component is its standalone yield (1.00, or
-  the pack count), so for `sold_as = 'bundle'` the derived Canceled /
-  Returned is Σ(line qty × yield) ÷ `po_asins.unique_products` (Col S).
-  **Still the Canceled / Returned reading on 2026-11-09** (claims commit 1
-  replaces it with the Individual-units base, D17, by the bundle rule in
-  §22 "Bundles"); Ordered and cost no longer use it.
-  Fully canceled Kinder's B0G6R55GNQ (2 × 12 × 1.00) derives 12, not 24;
-  1 unit of one product in a 3-product bundle derives 1/3. Multi-packs and
-  non-bundle multi-listing groups keep the plain sum. One SQL definition,
-  `derivedFromLines` in `server/po-queries.ts`.
-- `final_qty` is GENERATED ALWAYS STORED:
-  `qty_ordered − qty_canceled − qty_returned` — plain arithmetic, **no
-  COALESCE**. NULL propagates by design: historical rows render Final as a
-  muted em-dash ("not tracked"); app-entered rows compute real values.
-  Explicit 0 renders muted, never as an em-dash.
-
-**Cutover exclusion rule** (recorded now, applied at the cutover layer —
-no code implements it yet): a line is excluded from profit calculations
-when `final_qty = 0`, OR when `final_qty IS NULL` (not tracked) AND
-`qty_canceled IS NOT NULL AND qty_canceled >= qty_ordered`. The old
-status-text fallback (`status ILIKE '%canceled%'`) is gone with the
-status column (§6.3, 2026-10-16): the §6.4 backfill wrote
-`qty_canceled = qty_ordered` on every line of a sheet-canceled PO, so the
-generated `final_qty` is 0 there and the first clause covers them.
-Evidence recorded at the switch (local, 1,168 lines): old rule 38 rows,
-new rule 0 before the backfill and 38 after — delta 0, explained entirely
-by `qty_canceled` having been untracked. A partially-canceled line with
-`final_qty > 0` is INCLUDED.
 
 ### Multi-row same-ASIN semantics
 

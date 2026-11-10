@@ -54,8 +54,11 @@ function fakeDb(state: DbState) {
     const s = sql.trim();
     if (s.startsWith("SELECT * FROM purchase_orders")) return { rows: state.pos, rowCount: state.pos.length };
     if (s.startsWith("SELECT pa.*")) return { rows: state.asins, rowCount: state.asins.length };
-    // Lines with their open items from po_line_action_items (PO table v2) — the fixture's action_items stand in.
-    if (s.startsWith("SELECT l.*, ARRAY(SELECT ai.item FROM po_line_action_items ai")) return { rows: state.lines.map((l: any) => ({ ...l, open_action_items: l.action_items ?? [] })), rowCount: state.lines.length };
+    // Lines (through po_line_expected since migration 101: the fixture's Product-unit values stand in for the view's) with their open items.
+    if (s.startsWith("SELECT l.*, le.ordered_product AS qty_ordered")) return { rows: state.lines.map((l: any) => ({ ...l, open_action_items: l.action_items ?? [] })), rowCount: state.lines.length };
+    // The claims a new canceled / returned sheet row opens (addClaim): the line it names, then the claim's own reads.
+    if (s.startsWith("SELECT l.id, l.qty_basis, l.price")) return { rows: [{ id: params?.[0], qty_basis: "product_legacy", price: "10.00", adjusted_product_cost: null, retailer_units_per_product: null, ordered_individual: null, ordered_product: "4", subtotal: null, discount: null, tax: null, sh_donations: null }], rowCount: 1 };
+    if (s.startsWith("SELECT c.*")) return { rows: [], rowCount: 0 };
     if (s.startsWith("SELECT asin, primary_sku")) return { rows: Object.entries(state.skus ?? {}).map(([asin, primary_sku]) => ({ asin, primary_sku })), rowCount: 0 };
     if (s.startsWith("SELECT supplier, order_id FROM deleted_pos")) return { rows: (state as any).tombstones ?? [], rowCount: 0 };
     writes.push({ sql: s, params });
@@ -195,11 +198,13 @@ describe("syncPoSheet — dry run computes the §3.9 counts and writes nothing",
     expect(db.writes).toEqual([]);
   });
 
-  it("\"Shipped FBA\" is a no-op token, not a stop (decision 1, 2026-10-16)", async () => {
+  it("\"Shipped FBA\" is a no-op token, not a stop (decision 1, 2026-10-16); a retired badge (claims, migration 101) is no drift either", async () => {
     const db = fakeDb(state);
     const r = await syncPoSheet({ sheetId: "s", dryRun: true, db, read: read([row({ orderId: "A1", status: "Shipped FBA, Confirm refund / replacement" })]) });
     expect(r.stop).toBeNull();
-    expect(r.diffs.find((d) => d.po === "walmart.com A1")?.changes).toEqual(["B000000001 line 0.action_items: [] → [\"Confirm refund / replacement\"]"]);
+    expect(r.diffs.find((d) => d.po === "walmart.com A1")?.changes ?? []).toEqual([]);
+    const r2 = await syncPoSheet({ sheetId: "s", dryRun: true, db, read: read([row({ orderId: "A1", status: "Shipped FBA, See comments" })]) });
+    expect(r2.diffs.find((d) => d.po === "walmart.com A1")?.changes).toEqual(["B000000001 line 0.action_items: [] → [\"See comments\"]"]);
   });
 
   it("live run (intake-only, af-owned 2026-10-18): inserts new POs like the importer, Open, with entry_seq; never writes an existing PO", async () => {
@@ -220,7 +225,8 @@ describe("syncPoSheet — dry run computes the §3.9 counts and writes nothing",
     expect([newc.params?.[4], newc.params?.[5]]).toEqual([null, null]);
     expect(newc.params?.[22]).toBe(1); // entry_seq: 7 rows, NEWC on the last row → 7 − 6
     const lineInserts = db.writes.filter((w) => w.sql.startsWith("INSERT INTO po_line_items"));
-    expect(lineInserts.find((w) => w.params?.[6] === 0 && w.params?.[11] === 0)).toBeTruthy(); // NEWC: ordered 0, qty_canceled 0 (as-is)
+    expect(lineInserts.find((w) => w.params?.[6] === 0)).toBeTruthy(); // NEWC: ordered 0 (as-is); a canceled row with 0 ordered opens no claim (D14)
+    expect(db.writes.some((w) => w.sql.startsWith("INSERT INTO supplier_claims"))).toBe(false);
     // Existing POs are never written: no UPDATE / DELETE of any PO table. The
     // only DELETE is the Col P signal table's full refresh (not PO data).
     expect(sql.filter((x) => /^(UPDATE|DELETE)/.test(x))).toEqual(["DELETE FROM po_sheet_fba_shipments"]);
@@ -377,14 +383,17 @@ describe("row-level Status: each sheet row's Status maps onto its own line", () 
     expect(ch).toContain("B0H4P226KP line 0.qty_canceled: NULL → 4");
     expect(ch.some((c) => c.startsWith("B0H3XJTQVG line 0.qty_canceled") || c.startsWith("B0HGP5P91F line 0.qty_canceled"))).toBe(false);
   });
-  it("live: new lines carry their own action_items and qty_canceled; ASIN rows carry Col S", async () => {
+  it("live: new lines carry their own action_items; a Canceled row opens a canceled claim for its ordered units (D14); ASIN rows carry Col S", async () => {
     const db = fakeDb({ pos: [], asins: [], lines: [] });
     await syncPoSheet({ sheetId: "s", dryRun: false, db, read: read([
       row({ orderId: "NB", asin: "B0BUNDLE01", S: "2", status: "SHIP" }),
       row({ orderId: "NB", asin: "B0BUNDLE01", S: "2", status: "Canceled" }),
     ]) });
     const li = db.writes.filter((w) => w.sql.startsWith("INSERT INTO po_line_items"));
-    expect(li.map((w) => w.params?.[11])).toEqual([null, 4]);
+    expect(li).toHaveLength(2);
+    expect(li[0].sql).not.toMatch(/qty_canceled|qty_returned/); // claims since migration 101
+    const claims = db.writes.filter((w) => w.sql.startsWith("INSERT INTO supplier_claims"));
+    expect(claims.map((w) => [w.params?.[2], w.params?.[3]])).toEqual([["canceled", 4]]); // the Canceled row's line, its 4 ordered units
     expect(li[0].sql).not.toMatch(/action_items/); // the deprecated column is no longer written
     // the row's items go to po_line_action_items on that line only, source 'sheet'
     const items = db.writes.filter((w) => w.sql.startsWith("INSERT INTO po_line_action_items"));

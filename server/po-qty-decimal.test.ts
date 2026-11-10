@@ -22,7 +22,7 @@ describe("decimal PO quantities", () => {
     expect(intOrNull("2")).toBe(2);
   });
   it("the API returns quantities as numbers, NULL stays NULL", () => {
-    expect(normalizeAsinRowQty({ qty: "2.50", unreimbursed_loss_qty: null })).toEqual({ qty: 2.5, unreimbursed_loss_qty: null });
-    expect(normalizeLineQty({ qty_ordered: "13.50", qty_received: null, qty_returned: "0.00", qty_canceled: null, final_qty: null })).toEqual({ qty_ordered: 13.5, qty_received: null, qty_returned: 0, qty_canceled: null, final_qty: null });
+    expect(normalizeAsinRowQty({ qty: "2.50", unreimbursed_loss_qty: null, qty_individual: "5.00", open_claims: "1" })).toEqual({ qty: 2.5, unreimbursed_loss_qty: null, qty_individual: 5, open_claims: 1 });
+    expect(normalizeLineQty({ qty_ordered: "13.50", qty_received: null, qty_returned: "0.00", qty_canceled: null, qty_expected: "13.50" })).toMatchObject({ qty_ordered: 13.5, qty_received: null, qty_returned: 0, qty_canceled: null, qty_expected: 13.5, qty_ordered_individual: null });
   });
 });

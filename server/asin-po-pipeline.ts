@@ -36,9 +36,8 @@ export interface PipelineRow {
   closed: boolean;
   /** PO order date on/after the reconciliation start (computed in SQL). */
   reconciled: boolean;
-  qty: number | string | null;
-  qty_canceled_asin: number | string | null;
-  qty_returned_asin: number | string | null;
+  /** Ordered − Σ claims that count (po_asin_expected.expected_asin, D14). */
+  qty_expected_asin: number | string | null;
   qty_lost_damaged_us: number | string | null;
   qty_at_prep: number | string | null;
   qty_at_warehouse: number | string | null;
@@ -57,13 +56,14 @@ export interface AsinPipeline {
 const n = (v: number | string | null | undefined): number => (v == null || v === "" ? 0 : typeof v === "number" ? v : parseFloat(v) || 0);
 const r2 = (x: number) => Math.round(x * 100) / 100;
 
-/** Pure: fold po_asins rows into one figure set per ASIN. Exported for tests. */
+/** Pure: fold po_asin_expected rows into one figure set per ASIN. Exported for tests. All quantities ASIN units (the view). */
 export function computePipeline(rows: PipelineRow[]): Map<string, AsinPipeline> {
   const out = new Map<string, AsinPipeline>();
   for (const r of rows) {
     const asin = String(r.asin).trim().toUpperCase();
     const p = out.get(asin) ?? { on_order: 0, at_prep: 0, at_warehouse: 0, open_po_count: 0 };
-    const expected = n(r.qty) - n(r.qty_canceled_asin) - n(r.qty_returned_asin) - n(r.qty_lost_damaged_us);
+    // Expected = ordered − Σ claims that count (the view, D14) − lost / damaged by us.
+    const expected = n(r.qty_expected_asin) - n(r.qty_lost_damaged_us);
     const shipped = n(r.qty_shipped_fba), atPrep = n(r.qty_at_prep), atWarehouse = n(r.qty_at_warehouse);
     // Exclusive stages: what is at Velocity or at the warehouse is no longer on order.
     if (r.reconciled && !r.closed) p.on_order += Math.max(expected - shipped - atPrep - atWarehouse, 0);
@@ -85,38 +85,24 @@ export function envReconStart(raw = process.env.VELOCITY_MIN_ORDER_DATE): string
 // $1 = the env fallback date (or NULL). The start is the earliest stored
 // Velocity shipment (Phase 2's backfill start); with none stored, the env floor.
 //
-// Canceled / Returned per ASIN row come from ONE grouped aggregate over the
-// lines, joined in (2026-10-18). It used to be two correlated subqueries per
-// po_asins row (derivedFromLines), each a sequential scan of po_line_items —
-// 3,850 rows × 2 × 3,927 lines ≈ 30 M row checks, 23–24 s per ASINs-page load
-// on production after the history import. Same values: NULL when the ASIN
-// row has no lines or any line's value is NULL (untracked); otherwise
-// Σ(qty × yield), ÷ unique products for a bundle.
-const DIVISOR = `(CASE WHEN pa.sold_as = 'bundle' AND COALESCE(pa.unique_products, 0) > 1 THEN pa.unique_products ELSE 1 END)`;
+// Since migration 101 (claims commit 1) the rows come from po_asin_expected:
+// expected = ordered − Σ claims that count (canceled, returned, refunded,
+// written off — D14, §3.6; a bundle by the bundle rule), every stage in ASIN
+// units from the stored Individual base (D17). The 2026-10-18 performance
+// rule still holds — one grouped pass over the lines inside the view, never
+// a correlated subquery per ASIN row.
 export const PIPELINE_ROWS_SQL = `
-  WITH ln AS (
-    SELECT l.po_asin_id,
-           COUNT(*) AS n,
-           COUNT(*) FILTER (WHERE l.qty_canceled IS NULL) AS canceled_untracked,
-           SUM(l.qty_canceled * ${LINE_YIELD_SQL}) AS canceled_sum,
-           COUNT(*) FILTER (WHERE l.qty_returned IS NULL) AS returned_untracked,
-           SUM(l.qty_returned * ${LINE_YIELD_SQL}) AS returned_sum
-      FROM po_line_items l
-     GROUP BY l.po_asin_id
-  )
-  SELECT pa.asin, (p.closed_at IS NOT NULL) AS closed,
+  SELECT e.asin, (p.closed_at IS NOT NULL) AS closed,
          (p.order_date >= COALESCE((SELECT MIN(shipped_at) FROM velocity_shipments), $1::date, DATE '9999-12-31')) AS reconciled,
-         pa.qty, pa.qty_lost_damaged_us, pa.qty_at_prep, pa.qty_at_warehouse, pa.qty_shipped_fba, pa.qty_received_amazon,
-         CASE WHEN COALESCE(ln.n, 0) = 0 OR ln.canceled_untracked > 0 THEN NULL ELSE ln.canceled_sum / ${DIVISOR} END AS qty_canceled_asin,
-         CASE WHEN COALESCE(ln.n, 0) = 0 OR ln.returned_untracked > 0 THEN NULL ELSE ln.returned_sum / ${DIVISOR} END AS qty_returned_asin
-    FROM po_asins pa JOIN purchase_orders p ON p.id = pa.po_id
-    LEFT JOIN ln ON ln.po_asin_id = pa.id`;
+         e.expected_asin AS qty_expected_asin, e.lost_damaged_us_asin AS qty_lost_damaged_us, e.at_prep_asin AS qty_at_prep, e.at_warehouse_asin AS qty_at_warehouse,
+         e.shipped_fba_asin AS qty_shipped_fba, e.received_amazon_asin AS qty_received_amazon
+    FROM po_asin_expected e JOIN purchase_orders p ON p.id = e.po_id`;
 
 /** All ASINs (asins = undefined) or a subset. Missing ASINs are simply absent from the map (no PO rows). */
 export async function loadAsinPipeline(query: QueryLike, asins?: string[]): Promise<Map<string, AsinPipeline>> {
   const start = envReconStart();
   const rows = asins
-    ? (await query(`${PIPELINE_ROWS_SQL} WHERE pa.asin = ANY($2::text[])`, [start, asins.map((a) => a.trim().toUpperCase())])).rows
+    ? (await query(`${PIPELINE_ROWS_SQL} WHERE e.asin = ANY($2::text[])`, [start, asins.map((a) => a.trim().toUpperCase())])).rows
     : (await query(PIPELINE_ROWS_SQL, [start])).rows;
   return computePipeline(rows as PipelineRow[]);
 }

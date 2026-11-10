@@ -28,7 +28,8 @@ describe("field parsers", () => {
     expect(parseEdits(LINE_FIELDS, { units_per_bundle: null })).toEqual({ ok: true, edits: { units_per_bundle: null } });
     expect(parseEdits(LINE_FIELDS, { units_per_bundle: "0" })).toMatchObject({ ok: false });
     expect(parseEdits(LINE_FIELDS, { units_per_bundle: "1.5" })).toMatchObject({ ok: false });
-    expect(parseEdits(LINE_FIELDS, { qty_ordered: "2.5", qty_canceled: "0.25" })).toEqual({ ok: true, edits: { qty_ordered: 2.5, qty_canceled: 0.25 } }); // decimals since migration 062
+    expect(parseEdits(LINE_FIELDS, { qty_ordered: "2.5" })).toEqual({ ok: true, edits: { qty_ordered: 2.5 } }); // decimals since migration 062
+    expect(parseEdits(LINE_FIELDS, { qty_canceled: "1" })).toMatchObject({ ok: false }); // a claim since migration 101 (D14)
     expect(parseEdits(LINE_FIELDS, { qty_ordered: "2.555" })).toMatchObject({ ok: false });
     expect(parseEdits(LINE_FIELDS, { qty_ordered: "0" })).toMatchObject({ ok: false });
     expect(parseEdits(LINE_FIELDS, { asin: "B0SHORT" })).toMatchObject({ ok: false });
@@ -74,8 +75,8 @@ describe("Ordered (po_asins.qty) recomputed from the lines, as the importer deri
 
 describe("§5.1 block message", () => {
   it("names the units and FBA ids", () => {
-    expect(shipmentBlockMessage({ units: 9, fbaIds: ["FBA19A2B3C", "FBA19A2B3D"] })).toBe("9 ASIN units shipped to FBA in FBA19A2B3C, FBA19A2B3D. Reassign the shipment to another PO first.");
-    expect(shipmentBlockMessage({ units: 1, fbaIds: [] })).toBe("1 ASIN unit shipped to FBA in a shipment with no FBA id yet. Reassign the shipment to another PO first.");
+    expect(shipmentBlockMessage({ units: 9, fbaIds: ["FBA19A2B3C", "FBA19A2B3D"] })).toBe("9 Individual units shipped to FBA in FBA19A2B3C, FBA19A2B3D. Reassign the shipment to another PO first.");
+    expect(shipmentBlockMessage({ units: 1, fbaIds: [] })).toBe("1 Individual unit shipped to FBA in a shipment with no FBA id yet. Reassign the shipment to another PO first.");
   });
 });
 
@@ -125,7 +126,7 @@ describe("removeLine", () => {
     const err = await removeLine(f.q, "l1", 7).catch((e) => e);
     expect(err).toBeInstanceOf(EditError);
     expect(err.status).toBe(409);
-    expect(err.message).toBe("B0TEST0001: 9 ASIN units shipped to FBA in FBA19A2B3C. Reassign the shipment to another PO first.");
+    expect(err.message).toBe("B0TEST0001: 9 Individual units shipped to FBA in FBA19A2B3C. Reassign the shipment to another PO first.");
     expect(f.calls.some((c) => /^DELETE/.test(c.sql))).toBe(false);
   });
 });
@@ -195,8 +196,9 @@ describe("setUnknownAsinPack — an ASIN with no pack on record (Maria 2026-11-0
   });
   it("strict: an open row the pack does not reproduce is listed, not written (the open-PO review, 2026-11-06)", async () => {
     const lines: Record<string, any[]> = {
-      openOk: [{ id: "l1", qty_ordered: "10", retailer_units_per_product: null, asin_units_per_pack: null, asin_qty_per_product: "1.00" }],
-      openBad: [{ id: "l2", qty_ordered: "10", retailer_units_per_product: 2, asin_units_per_pack: 1, asin_qty_per_product: "2.00" }],
+      openOk: [{ id: "l1", qty_ordered: "10", qty_basis: "product_legacy", retailer_units_per_product: null, asin_units_per_pack: null, asin_qty_per_product: "1.00" }],
+      // stored Individual units (migration 101): 10 Product units × the pack 2 = 20
+      openBad: [{ id: "l2", qty_ordered: "20", qty_basis: "individual", retailer_units_per_product: 2, asin_units_per_pack: 1, asin_qty_per_product: "2.00" }],
     };
     const f = fakeQuery([
       [/FROM po_asins pa JOIN purchase_orders p/, [{ id: "openOk", po_id: "p1", qty: "10.00", closed: false }, { id: "openBad", po_id: "p2", qty: "10.00", closed: false }]],
@@ -213,14 +215,3 @@ describe("setUnknownAsinPack — an ASIN with no pack on record (Maria 2026-11-0
   });
 });
 
-describe("editLine cancel guard (§5.1)", () => {
-  it("raising qty canceled on a product whose ASIN row has an FBA shipment is refused; nothing written", async () => {
-    const f = fakeQuery([
-      [/FROM po_line_items l LEFT JOIN po_asins pa/, [{ id: "l1", po_id: "po1", po_asin_id: "pa1", asin: "B0TEST0001", qty_ordered: 9, qty_canceled: null }]],
-      [/SELECT s\.qty_shipped, s\.fba_shipment_ids FROM po_asin_shipments/, [{ qty_shipped: "4", fba_shipment_ids: ["FBA19A2B3C"] }]],
-    ]);
-    const { editLine } = await import("./po-edit");
-    await expect(editLine(f.q, "l1", { qty_canceled: "9" }, 7)).rejects.toMatchObject({ status: 409, message: "B0TEST0001: 4 ASIN units shipped to FBA in FBA19A2B3C. Reassign the shipment to another PO first." });
-    expect(f.calls.some((c) => /^UPDATE|INSERT INTO po_edit_log/.test(c.sql))).toBe(false);
-  });
-});

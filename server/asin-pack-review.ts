@@ -110,14 +110,15 @@ export async function loadPackEvidence(query: QueryLike, asins?: string[]): Prom
        FROM asins a ${filter}`, asins ? [asins.map((x) => x.toUpperCase())] : [],
   )).rows;
   const rows = (await query(
-    `SELECT pa.id, pa.asin, pa.sold_as, pa.units_per_pack, pa.qty, pa.velocity_units_per_pack, p.order_id, p.supplier, p.order_date, p.closed_at IS NOT NULL AS closed,
+    `SELECT pa.id, pa.asin, pa.sold_as, pa.units_per_pack, e.ordered_asin AS qty, pa.velocity_units_per_pack, p.order_id, p.supplier, p.order_date, p.closed_at IS NOT NULL AS closed,
             (p.cost_formula_version IS NOT NULL OR EXISTS (SELECT 1 FROM po_edit_log e WHERE e.entity = 'asin' AND e.entity_id = pa.id::text AND e.user_id IS NOT NULL
                AND e.field IN ('sold_as', 'units_per_pack') AND NOT COALESCE(e.derived, false))) AS hand
-       FROM po_asins pa JOIN purchase_orders p ON p.id = pa.po_id ${asins ? `WHERE pa.asin = ANY($1::text[])` : ""}`, asins ? [asins.map((x) => x.toUpperCase())] : [],
+       FROM po_asins pa JOIN po_asin_expected e ON e.id = pa.id JOIN purchase_orders p ON p.id = pa.po_id ${asins ? `WHERE pa.asin = ANY($1::text[])` : ""}`, asins ? [asins.map((x) => x.toUpperCase())] : [],
   )).rows;
+  // Product units for the pack arithmetic (the view, D17).
   const lines = (await query(
-    `SELECT l.po_asin_id, l.qty_ordered, l.retailer_units_per_product, l.asin_units_per_pack, l.asin_qty_per_product
-       FROM po_line_items l JOIN po_asins pa ON pa.id = l.po_asin_id ${asins ? `WHERE pa.asin = ANY($1::text[])` : ""}`, asins ? [asins.map((x) => x.toUpperCase())] : [],
+    `SELECT l.po_asin_id, le.ordered_product AS qty_ordered, l.retailer_units_per_product, l.asin_units_per_pack, l.asin_qty_per_product
+       FROM po_line_items l JOIN po_line_expected le ON le.line_id = l.id JOIN po_asins pa ON pa.id = l.po_asin_id ${asins ? `WHERE pa.asin = ANY($1::text[])` : ""}`, asins ? [asins.map((x) => x.toUpperCase())] : [],
   )).rows;
   const linesBy = new Map<string, PackLine[]>();
   for (const l of lines) { const k = String(l.po_asin_id); const a = linesBy.get(k) ?? []; a.push(l); linesBy.set(k, a); }

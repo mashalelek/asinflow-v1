@@ -38,6 +38,7 @@
     "po-docs": "tsx script/po-docs.ts",
     "report:bundle-rows": "tsx script/bundle-rows-report.ts",
     "fix:bundle-lines": "tsx script/fix-bundle-lines.ts",
+    "claims:dryrun": "tsx script/claims-commit1-dryrun.ts",
     "migrate:po-status": "tsx script/migrate-po-status.ts",
     "db:push": "drizzle-kit push",
     "po:cogs-review": "tsx script/po-cogs-review.ts",

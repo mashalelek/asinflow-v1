@@ -24,6 +24,7 @@
 // Fail-closed: an SP-API read error propagates before BEGIN.
 import pool from "./db";
 import type { QueryLike } from "./scheduler/types";
+import { asinRowFactor } from "./po-expected";
 import { spApiGet } from "./spapi-auth";
 import { round2 } from "./shipment-sync-velocity";
 
@@ -203,7 +204,8 @@ export async function syncScShipments(opts: { dryRun: boolean; deps?: ScSyncDeps
 
   // ── Received allocation + row diff ─────────────────────────────────────────
   const rows = (await db.query(
-    `SELECT s.id, s.po_asin_id, s.velocity_shipment_id, s.qty_shipped, s.qty_received, s.fba_shipment_ids, s.sc_match, pa.asin, pa.po_id, p.order_date::text AS order_date, p.order_id
+    `SELECT s.id, s.po_asin_id, s.velocity_shipment_id, s.qty_shipped, s.qty_received, s.fba_shipment_ids, s.sc_match, pa.asin, pa.po_id, p.order_date::text AS order_date, p.order_id,
+            pa.qty_basis, pa.units_per_pack
        FROM po_asin_shipments s JOIN po_asins pa ON pa.id = s.po_asin_id JOIN purchase_orders p ON p.id = pa.po_id
       WHERE s.source = 'velocity'`,
   )).rows as any[];
@@ -227,11 +229,14 @@ export async function syncScShipments(opts: { dryRun: boolean; deps?: ScSyncDeps
       }
       const byAsin = new Map<string, any[]>(); for (const r of vRows) { const a = String(r.asin).toUpperCase(); if (!byAsin.has(a)) byAsin.set(a, []); byAsin.get(a)!.push(r); }
       for (const [asin, ars] of Array.from(byAsin.entries())) {
+        // SC counts the SKU's sellable units = ASIN units; the rows store Individual units (D17, migration 101). Allocate in ASIN
+        // units (each row's shipped ÷ its pack), store each row's share × its pack. A legacy row (pack not known) is ÷ 1 both ways.
         const total = recvByAsin.get(asin) ?? 0;
-        const alloc = allocateReceived(ars.map((r) => ({ id: String(r.id), qty_shipped: Number(r.qty_shipped), order_date: String(r.order_date), order_id: String(r.order_id) })), total);
-        const shippedSum = ars.reduce((a, r) => a + Number(r.qty_shipped), 0);
-        for (const r of ars) { const got = alloc.get(String(r.id)) ?? 0; recvByRow.set(String(r.id), got); if (got > Number(r.qty_shipped) + 1e-9) counts.overReceivedRows++; }
-        if (result.samples.length < 10 && ars.length > 1) result.samples.push(`${String(m.v.id).slice(0, 8)} ${m.v.shipped_at ?? "?"} · ${asin}: SC received ${total} of ${shippedSum} → ${ars.sort((a, b) => (a.order_date < b.order_date ? -1 : 1)).map((r) => `${r.order_id} ${alloc.get(String(r.id)) ?? 0}/${Number(r.qty_shipped)}`).join(", ")} (oldest PO first)`);
+        const factor = (r: any) => asinRowFactor(r);
+        const alloc = allocateReceived(ars.map((r) => ({ id: String(r.id), qty_shipped: Number(r.qty_shipped) / factor(r), order_date: String(r.order_date), order_id: String(r.order_id) })), total);
+        const shippedSum = ars.reduce((a, r) => a + Number(r.qty_shipped) / factor(r), 0);
+        for (const r of ars) { const gotAsin = alloc.get(String(r.id)) ?? 0; const got = Math.round(gotAsin * factor(r) * 100) / 100; recvByRow.set(String(r.id), got); if (got > Number(r.qty_shipped) + 1e-9) counts.overReceivedRows++; }
+        if (result.samples.length < 10 && ars.length > 1) result.samples.push(`${String(m.v.id).slice(0, 8)} ${m.v.shipped_at ?? "?"} · ${asin}: SC received ${total} of ${shippedSum} ASIN units → ${ars.sort((a, b) => (a.order_date < b.order_date ? -1 : 1)).map((r) => `${r.order_id} ${alloc.get(String(r.id)) ?? 0}/${Number(r.qty_shipped) / factor(r)}`).join(", ")} (oldest PO first)`);
       }
     } else for (const r of vRows) recvByRow.set(String(r.id), null);
     for (const r of vRows) {

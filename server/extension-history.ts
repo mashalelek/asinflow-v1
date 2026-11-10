@@ -104,16 +104,17 @@ export interface AsinHistory {
   recent: Array<{ orderDate: string; orderId: string; supplier: string; how: string; asinUnits: number | null; cogs: number | null; promos: PromoShown[] }>;
   conversion: string | null;
 }
-const lineCanceled = `(l.qty_canceled IS NOT NULL AND l.qty_canceled >= COALESCE(l.qty_ordered, 0))`;
+/** A line fully canceled by its claims (po_line_expected, migration 101). */
+const lineCanceled = `COALESCE((SELECT le.fully_canceled FROM po_line_expected le WHERE le.line_id = l.id), false)`;
 const notCanceled = `NOT COALESCE((SELECT bool_and(${lineCanceled}) FROM po_line_items l WHERE l.po_asin_id = pa.id), false)`;
 const n = (v: unknown): number | null => (v == null || v === "" || !Number.isFinite(Number(v)) ? null : Number(v));
 
 export async function asinHistory(query: QueryLike, asin: string, listingPack: number | null = null, today?: string): Promise<AsinHistory> {
   const meta = (await query(`SELECT title, units_per_pack FROM asins WHERE asin = $1`, [asin])).rows[0] as any;
   const rows = (await query(
-    `SELECT p.id AS po_id, p.order_id, p.order_date::text AS order_date, p.supplier, pa.qty, pa.cost_per_unit, pa.asin_name, pa.units_per_pack,
+    `SELECT p.id AS po_id, p.order_id, p.order_date::text AS order_date, p.supplier, (SELECT e.ordered_asin FROM po_asin_expected e WHERE e.id = pa.id) AS qty, pa.cost_per_unit, pa.asin_name, pa.units_per_pack,
             (p.order_date >= COALESCE($2::date, (now() AT TIME ZONE 'America/New_York')::date) - 365) AS in365,
-            (SELECT json_agg(json_build_object('ru', l.retailer_units_per_product, 'name', l.product_name, 'qty', l.qty_ordered) ORDER BY l.position) FROM po_line_items l WHERE l.po_asin_id = pa.id AND NOT ${lineCanceled}) AS lines
+            (SELECT json_agg(json_build_object('ru', l.retailer_units_per_product, 'name', l.product_name, 'qty', (SELECT le.ordered_product FROM po_line_expected le WHERE le.line_id = l.id)) ORDER BY l.position) FROM po_line_items l WHERE l.po_asin_id = pa.id AND NOT ${lineCanceled}) AS lines
        FROM po_asins pa JOIN purchase_orders p ON p.id = pa.po_id
       WHERE pa.asin = $1 AND ${notCanceled}
       ORDER BY ${NEWEST_PO_ORDER}`,

@@ -1,0 +1,6 @@
+reader,key,field,before,after,context
+auto_close,44506497-9a12-4674-9124-d24d9fedf451,verdict,false,true,michaels.com 4800110175975417: items before [] after [] open claims 0
+auto_close,7867d2e1-c78b-442c-8584-ccf11d3dbb07,verdict,false,true,walmart.com 200015088519560: items before [] after [] open claims 0
+auto_close,7e6969d5-8f22-4322-9a94-2918e43e5dc3,verdict,false,true,firstchoicebuying.com 13166: items before [Missing / damaged from supplier] after [] open claims 0
+auto_close,d5a51a12-f459-44d9-9eb3-cd8fe8d0daf0,verdict,false,true,target.com 102003592413875: items before [] after [] open claims 0
+auto_close,f54167e9-d3c0-4610-b6c6-e7792042f195,verdict,false,true,us.store.bambulab.com us750452803197317121: items before [Missing / damaged from supplier] after [] open claims 0

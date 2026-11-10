@@ -6,9 +6,12 @@ import { computePipeline, loadAsinPipeline, envReconStart, PIPELINE_ROWS_SQL, ty
 // PO with no shipment rows, one open PO partly shipped, one over-received
 // row — plus the Equal Exchange and Twilight rows from the reconciliation.
 
-const row = (o: Partial<PipelineRow> & { asin: string }): PipelineRow => ({
-  closed: false, reconciled: true, qty: 0, qty_canceled_asin: null, qty_returned_asin: null, qty_lost_damaged_us: null, qty_at_prep: null, qty_at_warehouse: null, qty_shipped_fba: null, qty_received_amazon: null, ...o,
-});
+// Since migration 101 the rows come from po_asin_expected: `qty_expected_asin` = ordered − Σ claims that count (D14); the tests'
+// `qty` is that figure (no claims), ASIN units throughout.
+const row = (o: Partial<Omit<PipelineRow, "qty_expected_asin">> & { asin: string; qty?: number | string | null; qty_expected_asin?: number | string | null }): PipelineRow => {
+  const { qty, ...rest } = o;
+  return { closed: false, reconciled: true, qty_expected_asin: qty ?? 0, qty_lost_damaged_us: null, qty_at_prep: null, qty_at_warehouse: null, qty_shipped_fba: null, qty_received_amazon: null, ...rest };
+};
 
 describe("computePipeline", () => {
   it("PO dated before the reconciliation start (no shipment data): contributes 0 to On Order, open or closed (§2.4)", () => {
@@ -43,12 +46,13 @@ describe("computePipeline", () => {
     const p = computePipeline([row({ asin: "B004WZ4CLW", closed: true, qty: 10, qty_shipped_fba: "10.00", qty_received_amazon: "0.00" })]).get("B004WZ4CLW")!;
     expect(p).toEqual({ on_order: 0, at_prep: 0, at_warehouse: 0, open_po_count: 0 });
   });
-  it("over-received row: nothing on order; canceled / returned / lost reduce Expected; NULLs read 0", () => {
+  it("over-received row: nothing on order; the claims (in Expected, D14) and lost reduce it; NULLs read 0", () => {
     const p = computePipeline([
       row({ asin: "B01AWK114G", qty: 16, qty_shipped_fba: "16.00", qty_received_amazon: "17.00" }),
-      row({ asin: "B01AWK114G", qty: 20, qty_canceled_asin: "5", qty_returned_asin: "1", qty_lost_damaged_us: "2", qty_shipped_fba: "4.00", qty_received_amazon: null }),
+      // 20 ordered, 5 canceled + 1 returned as claims → the view's Expected is 14; lost 2 comes off here
+      row({ asin: "B01AWK114G", qty_expected_asin: "14", qty_lost_damaged_us: "2", qty_shipped_fba: "4.00", qty_received_amazon: null }),
     ]).get("B01AWK114G")!;
-    // second row: expected 20 − 5 − 1 − 2 = 12; on order 12 − 4 = 8
+    // second row: expected 14 − 2 = 12; on order 12 − 4 = 8
     expect(p).toEqual({ on_order: 8, at_prep: 0, at_warehouse: 0, open_po_count: 2 });
   });
   it("an unreconciled OPEN row (shipped NULL) counts its expected less what is at prep as On Order; fractions survive to 2 dp; ASINs normalise", () => {
@@ -65,28 +69,25 @@ describe("loadAsinPipeline", () => {
     const m = await loadAsinPipeline(query, ["b004wz4clw"]);
     expect(m.get("B004WZ4CLW")?.on_order).toBe(0);
     expect(calls[0].sql).toContain(PIPELINE_ROWS_SQL);
-    expect(calls[0].sql).toMatch(/WHERE pa\.asin = ANY\(\$2::text\[\]\)$/);
+    expect(calls[0].sql).toMatch(/WHERE e\.asin = ANY\(\$2::text\[\]\)$/);
     expect(calls[0].params?.[1]).toEqual(["B004WZ4CLW"]);
     await loadAsinPipeline(query);
     expect(calls[1].params).toHaveLength(1);
     expect(PIPELINE_ROWS_SQL).toMatch(/\(p\.closed_at IS NOT NULL\) AS closed/);
-    expect(PIPELINE_ROWS_SQL).toMatch(/pa\.qty_at_prep, pa\.qty_at_warehouse, pa\.qty_shipped_fba/);
+    expect(PIPELINE_ROWS_SQL).toMatch(/e\.at_prep_asin AS qty_at_prep, e\.at_warehouse_asin AS qty_at_warehouse/);
     expect(PIPELINE_ROWS_SQL).toMatch(/p\.order_date >= COALESCE\(\(SELECT MIN\(shipped_at\) FROM velocity_shipments\), \$1::date, DATE '9999-12-31'\)\) AS reconciled/);
     expect(envReconStart("7/30/2026")).toBe("2026-07-30");
     expect(envReconStart("")).toBeNull();
-    expect(PIPELINE_ROWS_SQL).toMatch(/FILTER \(WHERE l\.qty_canceled IS NULL\)/);
+    expect(PIPELINE_ROWS_SQL).toMatch(/e\.expected_asin AS qty_expected_asin/);
   });
 });
 
-describe("pipeline query shape (performance, 2026-10-18)", () => {
-  it("Canceled / Returned come from one grouped aggregate joined in — no per-row subquery over po_line_items", () => {
-    expect(PIPELINE_ROWS_SQL).toMatch(/WITH ln AS \(\s*SELECT l\.po_asin_id,/);
-    expect(PIPELINE_ROWS_SQL).toMatch(/GROUP BY l\.po_asin_id/);
-    expect(PIPELINE_ROWS_SQL).toMatch(/LEFT JOIN ln ON ln\.po_asin_id = pa\.id/);
-    expect(PIPELINE_ROWS_SQL).not.toMatch(/WHERE l\.po_asin_id = pa\.id/);
-    // same NULL rule: no lines, or any untracked line → NULL; bundles ÷ unique products
-    expect(PIPELINE_ROWS_SQL).toMatch(/CASE WHEN COALESCE\(ln\.n, 0\) = 0 OR ln\.canceled_untracked > 0 THEN NULL ELSE ln\.canceled_sum \/ \(CASE WHEN pa\.sold_as = 'bundle' AND COALESCE\(pa\.unique_products, 0\) > 1 THEN pa\.unique_products ELSE 1 END\) END AS qty_canceled_asin/);
-    expect(PIPELINE_ROWS_SQL).toMatch(/ln\.returned_sum \/ \(CASE WHEN pa\.sold_as = 'bundle'/);
+describe("pipeline query shape (performance, 2026-10-18; the view since migration 101)", () => {
+  it("every quantity comes from po_asin_expected (one grouped pass inside the view) — no per-row subquery over po_line_items, no pack arithmetic here", () => {
+    expect(PIPELINE_ROWS_SQL).toMatch(/FROM po_asin_expected e JOIN purchase_orders p ON p\.id = e\.po_id/);
+    expect(PIPELINE_ROWS_SQL).not.toMatch(/po_line_items/);
+    expect(PIPELINE_ROWS_SQL).not.toMatch(/units_per_pack|unique_products|qty_canceled|qty_returned/);
+    for (const c of ["e.lost_damaged_us_asin AS qty_lost_damaged_us", "e.at_prep_asin AS qty_at_prep", "e.at_warehouse_asin AS qty_at_warehouse", "e.shipped_fba_asin AS qty_shipped_fba", "e.received_amazon_asin AS qty_received_amazon"]) expect(PIPELINE_ROWS_SQL).toContain(c);
   });
   it("migration 063 indexes po_line_items(po_asin_id)", async () => {
     const { readFileSync } = await import("fs");

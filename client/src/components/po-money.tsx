@@ -15,13 +15,13 @@ import { InlineEdit, SelectEdit, poApi } from "@/components/po-edit";
 import { InlineNoteCell } from "@/components/inline-note";
 import type { PoAsinRowData, PoAsinLine } from "@/components/po-asin-rows";
 import { PAYMENT_METHODS, PROMO_TYPES, CASHBACK_STATUSES } from "@shared/po-form";
-import { MarkReceivedDialog, type DueRefundRow } from "@/components/refund-due-dialog";
-import { PoDefectsSection, type PoDefect } from "@/components/po-defects";
+import { PoClaimsSection, qtyEquivalents, type PoClaim } from "@/components/po-claims";
+import { QTY_KIND } from "@shared/quantity-kinds";
 
 export interface PoPayment { id: number; method: string; nickname: string | null; last4: string | null; amount: string | null; gift_card_discount_pct: string | null; reward_pct?: string | null; needs_review: boolean; raw_text: string | null }
 export interface PoPromo { id: number; type: string | null; description: string | null; amount: string | null; percent: string | null; counts_toward_cogs: boolean; raw_text: string | null; confidence: string | null; source: string }
-/** status (migration 082): due = the supplier owes it; received = it arrived (Dashboard patch C1). */
-export interface PoRefund { id: number; po_line_item_id: string | null; product_name: string | null; qty: number | string | null; amount: string | null; refunded_at: string | null; method: string | null; nickname: string | null; last4: string | null; note: string | null; needs_split: boolean; source: string; status: "due" | "received" }
+/** A refund row is money RECEIVED (migration 101 dropped `status`; what is owed lives on the claims). qty in Individual units (D16). */
+export interface PoRefund { id: number; po_line_item_id: string | null; product_name: string | null; qty: number | string | null; amount: string | null; refunded_at: string | null; method: string | null; nickname: string | null; last4: string | null; note: string | null; needs_split: boolean; source: string }
 
 const money = (v: string | number | null | undefined) => (v == null || v === "" ? "—" : `$${Number(v).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`);
 const sum = (rows: Array<{ amount: string | null }>) => rows.reduce((t, r) => t + (Number(r.amount) || 0), 0);
@@ -29,16 +29,16 @@ const th = "px-3 py-2 text-xs font-medium whitespace-nowrap text-left";
 const hairline = { borderBottom: "0.5px solid hsl(var(--border))" } as const;
 const Muted = ({ v }: { v: React.ReactNode }) => <span className="text-muted-foreground/50">{v}</span>;
 
-export function PoMoneyTab({ po, asins, payments, promos, refunds, defects = [], onChanged }: { po: Record<string, any>; asins: Array<PoAsinRowData & { lines?: PoAsinLine[] }>; payments: PoPayment[]; promos: PoPromo[]; refunds: PoRefund[]; defects?: PoDefect[]; onChanged: () => void }) {
+export function PoMoneyTab({ po, asins, payments, promos, refunds, claims = [], onChanged }: { po: Record<string, any>; asins: Array<PoAsinRowData & { lines?: PoAsinLine[] }>; payments: PoPayment[]; promos: PoPromo[]; refunds: PoRefund[]; claims?: PoClaim[]; onChanged: () => void }) {
   const { toast } = useToast();
   const call = async (url: string, method: string, body?: unknown) => { try { const r = await poApi(url, method, body); if (r?.recomputed && !r.recomputed.skipped && r.recomputed.changed > 0) toast({ title: `Costs recomputed (${r.recomputed.changed} change${r.recomputed.changed === 1 ? "" : "s"})` }); onChanged(); } catch (e: any) { toast({ title: "Not saved", description: e.message, variant: "destructive" }); } };
   const patch = (url: string, field: string) => async (v: string) => call(url, "PATCH", { [field]: v });
   const [newPay, setNewPay] = useState({ method: "card", nickname: "", last4: "", amount: "" });
   const [newPromo, setNewPromo] = useState({ type: "coupon", description: "", amount: "", percent: "" });
   const lines = asins.flatMap((a) => (a.lines ?? []).map((l) => ({ ...l, asin: a.asin })));
-  const [newRefund, setNewRefund] = useState({ po_line_item_id: "", qty: "", amount: "", refunded_at: "", note: "", status: "received" as "due" | "received" });
-  const [receiving, setReceiving] = useState<DueRefundRow | null>(null);
-  const due = refunds.filter((r) => r.status === "due"), received = refunds.filter((r) => r.status !== "due");
+  const [newRefund, setNewRefund] = useState({ po_line_item_id: "", qty: "", amount: "", refunded_at: "", note: "" });
+  const refundLine = lines.find((l) => String(l.id) === newRefund.po_line_item_id);
+  const owedOpen = claims.filter((c) => c.status === "open").reduce((t, c) => t + (c.remaining ?? 0), 0);
   const total = Number(po.order_total) || 0, paid = sum(payments);
   const imported = po.cost_formula_version == null;
 
@@ -110,13 +110,12 @@ export function PoMoneyTab({ po, asins, payments, promos, refunds, defects = [],
       <section className="space-y-2" data-testid="po-refunds">
         <div className="flex items-baseline justify-between">
           <h3 className="text-[11px] font-semibold uppercase tracking-wider text-muted-foreground">Refunds</h3>
-          <span className="text-xs text-muted-foreground" data-testid="po-refunds-summary">{[received.length ? `${money(sum(received))} received` : null, due.length ? `${money(sum(due))} due` : null].filter(Boolean).join(" · ") || (Number(po.refund_amount) > 0 ? `sheet refund amount ${money(po.refund_amount)}` : "")}</span>
+          <span className="text-xs text-muted-foreground" data-testid="po-refunds-summary">{[refunds.length ? `${money(sum(refunds))} received` : null, owedOpen > 0.005 ? `${money(owedOpen)} owed on open claims` : null].filter(Boolean).join(" · ") || (Number(po.refund_amount) > 0 ? `sheet refund amount ${money(po.refund_amount)}` : "")}</span>
         </div>
-        <MarkReceivedDialog refund={receiving} onClose={() => setReceiving(null)} onSaved={onChanged} />
         <table className="w-full border-collapse text-sm" style={{ border: "0.5px solid hsl(var(--border))" }}>
-          <thead><tr className="table-header-stone"><th className={th}>Line</th><th className={`${th} text-right align-bottom`} title="Refund quantity in Product units (entered as Individual units after the claims patch)"><span className="block text-[9px] font-normal opacity-60">Product units</span>Qty</th><th className={`${th} text-right`}>Amount</th><th className={th}>Status</th><th className={th}>Date</th><th className={th}>Method</th><th className={th}>Note</th><th className={th}></th></tr></thead>
+          <thead><tr className="table-header-stone"><th className={th}>Line</th><th className={`${th} text-right align-bottom`} title="Refund quantity in Individual units (D16)"><span className="block text-[9px] font-normal opacity-60">{QTY_KIND.individual}</span>Qty</th><th className={`${th} text-right`}>Amount</th><th className={th}>Date</th><th className={th}>Method</th><th className={th}>Note</th><th className={th}></th></tr></thead>
           <tbody>
-            {refunds.length === 0 && <tr><td colSpan={8} className="px-3 py-2 text-xs text-muted-foreground">No refunds.</td></tr>}
+            {refunds.length === 0 && <tr><td colSpan={7} className="px-3 py-2 text-xs text-muted-foreground">No refunds received.</td></tr>}
             {refunds.map((r) => (
               <tr key={r.id} className="table-zebra-stone" style={hairline} data-testid={`row-refund-${r.id}`}>
                 <td className="px-3 py-1.5 text-xs">
@@ -127,13 +126,9 @@ export function PoMoneyTab({ po, asins, payments, promos, refunds, defects = [],
                     </select>
                   )}
                 </td>
-                <td className="px-3 py-1.5 text-right"><InlineEdit value={r.qty} onSave={patch(`/api/pos/refunds/${r.id}`, "qty")} align="right" width="w-14" testId={`refund-qty-${r.id}`}>{r.qty ?? <Muted v="—" />}</InlineEdit></td>
+                <td className="px-3 py-1.5 text-right"><InlineEdit value={r.qty} onSave={patch(`/api/pos/refunds/${r.id}`, "qty")} align="right" width="w-14" testId={`refund-qty-${r.id}`} title={QTY_KIND.individual}>{r.qty ?? <Muted v="—" />}</InlineEdit>
+                  {r.qty != null && r.po_line_item_id && (() => { const l = lines.find((x) => String(x.id) === String(r.po_line_item_id)); const t = l ? qtyEquivalents(Number(r.qty), l.retailer_units_per_product, asins.find((a) => a.asin === l.asin)?.units_per_pack) : ""; return t ? <div className="text-[10px] text-muted-foreground whitespace-nowrap">{t}</div> : null; })()}</td>
                 <td className="px-3 py-1.5 text-right font-mono"><InlineEdit money value={r.amount} onSave={patch(`/api/pos/refunds/${r.id}`, "amount")} align="right" width="w-20" testId={`refund-amount-${r.id}`}>{money(r.amount)}</InlineEdit></td>
-                <td className="px-3 py-1.5 text-xs whitespace-nowrap" data-testid={`refund-status-${r.id}`}>
-                  {r.status === "due"
-                    ? <>due <button onClick={() => setReceiving(r)} className="ml-1.5 text-[10px] underline-offset-2 hover:underline text-muted-foreground hover:text-foreground" data-testid={`button-refund-mark-received-${r.id}`}>Mark received</button></>
-                    : <span className="text-muted-foreground">received</span>}
-                </td>
                 <td className="px-3 py-1.5 text-xs"><InlineEdit value={r.refunded_at} onSave={patch(`/api/pos/refunds/${r.id}`, "refunded_at")} width="w-28" testId={`refund-date-${r.id}`}>{r.refunded_at ?? <Muted v="—" />}</InlineEdit></td>
                 <td className="px-3 py-1.5"><SelectEdit value={r.method ?? ""} options={["", ...PAYMENT_METHODS]} onSave={patch(`/api/pos/refunds/${r.id}`, "method")} testId={`refund-method-${r.id}`} /></td>
                 <td className="p-0 text-xs"><InlineNoteCell value={r.note} label="refund note" showText emptyLabel="—" className="px-3 py-1.5 max-w-[16rem]" testId={`refund-note-${r.id}`} onSave={async (v) => { await poApi(`/api/pos/refunds/${r.id}`, "PATCH", { note: v }); onChanged(); }} /></td>
@@ -146,17 +141,19 @@ export function PoMoneyTab({ po, asins, payments, promos, refunds, defects = [],
           <select value={newRefund.po_line_item_id} onChange={(e) => setNewRefund({ ...newRefund, po_line_item_id: e.target.value })} className="h-8 max-w-[20rem] rounded border border-input bg-background px-1 text-xs" data-testid="select-add-refund-line">
             <option value="">PO-level (split later)</option>{lines.map((l) => <option key={l.id} value={l.id}>{l.product_name ?? l.id} ({l.asin})</option>)}
           </select>
-          <Input value={newRefund.qty} onChange={(e) => setNewRefund({ ...newRefund, qty: e.target.value })} placeholder="qty" title="Product units" className="h-8 w-14 text-right text-xs" data-testid="input-add-refund-qty" />
+          {/* D16: the refund qty is typed in Individual units; the Product / ASIN equivalents show beside it. */}
+          <label className="flex flex-col"><span className="text-[9px] leading-tight text-muted-foreground">{QTY_KIND.individual}</span>
+            <Input value={newRefund.qty} onChange={(e) => setNewRefund({ ...newRefund, qty: e.target.value })} placeholder="qty" title={QTY_KIND.individual} className="h-8 w-14 text-right text-xs" data-testid="input-add-refund-qty" /></label>
+          <span className="text-[10px] text-muted-foreground min-w-[6rem]" data-testid="add-refund-equivalents">{refundLine && Number(newRefund.qty) > 0 ? qtyEquivalents(Number(newRefund.qty), refundLine.retailer_units_per_product, asins.find((a) => a.asin === refundLine.asin)?.units_per_pack) : ""}</span>
           <Input value={newRefund.amount} onChange={(e) => setNewRefund({ ...newRefund, amount: e.target.value })} placeholder="$" className="h-8 w-20 text-right text-xs" data-testid="input-add-refund-amount" />
-          <select value={newRefund.status} onChange={(e) => setNewRefund({ ...newRefund, status: e.target.value as "due" | "received" })} className="h-8 rounded border border-input bg-background px-1 text-xs" title="due = the supplier owes it; received = it arrived" data-testid="select-add-refund-status"><option value="received">received</option><option value="due">due</option></select>
-          {newRefund.status === "received" && <input type="date" value={newRefund.refunded_at} onChange={(e) => setNewRefund({ ...newRefund, refunded_at: e.target.value })} className="h-8 rounded-md border border-input bg-background px-2 text-xs" data-testid="input-add-refund-date" />}
+          <input type="date" value={newRefund.refunded_at} onChange={(e) => setNewRefund({ ...newRefund, refunded_at: e.target.value })} className="h-8 rounded-md border border-input bg-background px-2 text-xs" data-testid="input-add-refund-date" />
           <Input value={newRefund.note} onChange={(e) => setNewRefund({ ...newRefund, note: e.target.value })} placeholder="note" className="h-8 w-40 text-xs" data-testid="input-add-refund-note" />
-          <Button size="sm" variant="outline" onClick={() => void call(`/api/pos/${po.id}/refunds`, "POST", { ...newRefund, refunded_at: newRefund.status === "due" ? null : newRefund.refunded_at, po_line_item_id: newRefund.po_line_item_id || null, needs_split: !newRefund.po_line_item_id }).then(() => setNewRefund({ po_line_item_id: "", qty: "", amount: "", refunded_at: "", note: "", status: "received" }))} data-testid="button-add-refund"><Plus className="h-3.5 w-3.5 mr-1" /> Refund</Button>
+          <Button size="sm" variant="outline" onClick={() => void call(`/api/pos/${po.id}/refunds`, "POST", { ...newRefund, refunded_at: newRefund.refunded_at || null, po_line_item_id: newRefund.po_line_item_id || null, needs_split: !newRefund.po_line_item_id }).then(() => setNewRefund({ po_line_item_id: "", qty: "", amount: "", refunded_at: "", note: "" }))} data-testid="button-add-refund"><Plus className="h-3.5 w-3.5 mr-1" /> Refund</Button>
         </div>
       </section>
 
-      {/* Supplier defects (SPEC §22): the money they are owed rides on the refund rows above */}
-      <PoDefectsSection po={po} asins={asins} refunds={refunds} defects={defects} call={call} />
+      {/* Supplier claims (SPEC §22, migration 101): what the supplier owes; a received refund row above is linked to the claim it settles */}
+      <PoClaimsSection po={po} asins={asins} refunds={refunds} claims={claims} call={call} />
 
       {/* Costs per ASIN row */}
       <section className="space-y-2" data-testid="po-costs">

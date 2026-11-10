@@ -32,12 +32,14 @@ describe("wiring", () => {
     // PO table v2 §4: the PO-level set applies to every product line
     expect(routes).toMatch(/app\.patch\("\/api\/pos\/:id\/action-items"[\s\S]*?SELECT id FROM po_line_items WHERE po_id = \$1[\s\S]*?writeLineItems\(q, id, lines, v\.value, uid\(req\)\)/);
     expect(routes).not.toMatch(/UPDATE purchase_orders SET action_items/);
-    expect(routes).toMatch(/app\.post\("\/api\/pos\/asin-rows\/:id\/cancel"[\s\S]*?UPDATE po_line_items SET qty_canceled = qty_ordered WHERE po_asin_id = \$1/);
+    // D14 (migration 101): "Mark canceled" opens a canceled claim per line instead of writing qty_canceled.
+    expect(routes).toMatch(/app\.post\("\/api\/pos\/asin-rows\/:id\/cancel"[\s\S]*?cancelLines\(q, String\(pa\.po_id\), lineIds, uid\(req\)/);
+    expect(routes).not.toMatch(/SET qty_canceled/);
   });
   it("the list filter and the PO column read the union over lines; auto-close (b) reads lines", () => {
     expect(readFileSync(join(__dirname, "po-list-filters.ts"), "utf8")).toMatch(/EXISTS \(\$\{openLineItemsSql\(`l\.po_id = p\.id AND ai\.item = \$\{p\.\$\(item\)\}`\)\}\)/); // the list filter, moved 2026-11-06
     expect(routes).toMatch(/r\.action_items = unionActionItems\(\[r\.line_action_items\]\)/);
-    expect(read("server/po-close.ts")).toMatch(/\$\{PO_CLOSE_ACTION_ITEMS_SQL\} AS action_items FROM purchase_orders p/); // Receiving mismatch is display-only
+    expect(read("server/po-close.ts")).toMatch(/\$\{PO_CLOSE_ACTION_ITEMS_SQL\} AS action_items, \$\{OPEN_CLAIM_COUNT_PO_SQL\("p"\)\} AS open_claims FROM purchase_orders p/); // Receiving mismatch is display-only; an open claim blocks (D15)
   });
   it("UI: ASIN rows edit with write-through, product rows edit their own line, the PO row edits all lines (PO table v2)", () => {
     const c = read("client/src/components/po-asin-rows.tsx");

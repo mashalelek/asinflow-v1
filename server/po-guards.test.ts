@@ -1,5 +1,8 @@
-import { describe, it, expect } from "vitest";
+import { describe, it, expect, vi } from "vitest";
+// Cancel PO opens canceled claims (D14, migration 101) — the claims module is covered on the real schema in supplier-claims.db.test.ts.
+vi.mock("./supplier-claims", () => ({ cancelLines: vi.fn(async (_q: unknown, _po: string, lineIds: string[]) => lineIds.map((id, i) => ({ id: i + 1, line_id: id, qty: [5, 2][i] ?? 1 }))) }));
 import { loadPoGuards, deletePo, cancelPo, reassignShipment, velocityOrderNumberFor } from "./po-guards";
+import { cancelLines } from "./supplier-claims";
 
 // patch docs/claude_spec-patch-po-af-owned.md §5 — delete / cancel guards, Reassign shipment.
 function fakeQuery(script: Array<[RegExp, any[] | ((p: any[]) => any[])]>) {
@@ -20,7 +23,7 @@ describe("guards (§5.1)", () => {
     const f = fakeQuery([[/FROM purchase_orders p WHERE p\.id = \$1/, [poRow]], [/SELECT s\.qty_shipped, s\.fba_shipment_ids/, shipped]]);
     const g = await loadPoGuards(f.q, "po1");
     expect(g).toMatchObject({ lineCount: 3, asinCount: 2, atPrepUnits: 2, fba: { units: 10, fbaIds: ["FBA19A2B3C", "FBA19A2B3D"], rows: 2 } });
-    expect(g.blocked).toBe("10 ASIN units shipped to FBA in FBA19A2B3C, FBA19A2B3D. Reassign the shipment to another PO first.");
+    expect(g.blocked).toBe("10 Individual units shipped to FBA in FBA19A2B3C, FBA19A2B3D. Reassign the shipment to another PO first.");
   });
   it("delete and cancel are refused while an FBA shipment exists — nothing written", async () => {
     for (const run of [deletePo, cancelPo]) {
@@ -39,18 +42,20 @@ describe("delete (§5.3)", () => {
     const w = f.calls.filter((c) => /^(INSERT|DELETE)/.test(c.sql));
     expect(w[0].sql).toMatch(/^INSERT INTO deleted_pos \(supplier, order_id, deleted_by\)/);
     expect(w[0].params).toEqual(["walmart.com", "200015415094735", 7]);
-    expect(w[1].params).toEqual(["po1", 7, "po", "po1", "PO deleted", "walmart.com 200015415094735 — 2 ASIN(s), 3 product(s), 2 ASIN units still at Velocity", null]);
+    expect(w[1].params).toEqual(["po1", 7, "po", "po1", "PO deleted", "walmart.com 200015415094735 — 2 ASIN(s), 3 product(s), 2 Individual units still at Velocity", null]);
     expect(w[2].sql).toMatch(/^DELETE FROM po_line_items WHERE po_id = \$1/);
     expect(w[3].sql).toMatch(/^DELETE FROM purchase_orders WHERE id = \$1/);
   });
 });
 
-describe("cancel PO (§5.4)", () => {
-  it("every line qty_canceled = qty_ordered, each logged, auto-close re-run", async () => {
-    const f = fakeQuery([[/FROM purchase_orders p WHERE p\.id = \$1/, [poRow]], [/^UPDATE po_line_items SET qty_canceled = qty_ordered WHERE po_id/, [{ id: "l1", qty_ordered: 5 }, { id: "l2", qty_ordered: 2 }]], ...close]);
+describe("cancel PO (§5.4; D14 since migration 101)", () => {
+  it("an open canceled claim per line for its expected units (cancelLines), one PO History row, auto-close re-run; Ordered never written", async () => {
+    const f = fakeQuery([[/FROM purchase_orders p WHERE p\.id = \$1/, [poRow]], [/^SELECT id FROM po_line_items WHERE po_id = \$1/, [{ id: "l1" }, { id: "l2" }]], ...close]);
     const r = await cancelPo(f.q, "po1", 7);
-    expect(r.linesCanceled).toBe(2);
-    expect(f.calls.filter((c) => /INSERT INTO po_edit_log/.test(c.sql)).map((c) => [c.params[3], c.params[4], c.params[6]])).toEqual([["l1", "qty_canceled", "5"], ["l2", "qty_canceled", "2"], ["po1", "PO canceled", "2 product(s)"]]);
+    expect(r).toMatchObject({ linesCanceled: 2, claims: [1, 2] });
+    expect(vi.mocked(cancelLines)).toHaveBeenCalledWith(f.q, "po1", ["l1", "l2"], 7, "Cancel PO");
+    expect(f.calls.filter((c) => /INSERT INTO po_edit_log/.test(c.sql)).map((c) => [c.params[3], c.params[4], c.params[6]])).toEqual([["po1", "PO canceled", "2 product(s) — canceled claims #1, #2"]]);
+    expect(f.calls.some((c) => /UPDATE po_line_items/.test(c.sql))).toBe(false);
   });
 });
 

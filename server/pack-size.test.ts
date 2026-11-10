@@ -85,20 +85,20 @@ describe("shipment sync A: pack size", () => {
     expect(h.writes.some((w) => w.sql.startsWith("UPDATE po_asins SET sold_as"))).toBe(false);
   });
 
-  it("AF multi-pack ×2 agreeing with Velocity: ÷ 2, no flag", async () => {
+  it("AF multi-pack ×2 agreeing with Velocity: no flag; the units are stored as Velocity counts them", async () => {
     const h = harness([afRow({ id: "anchor", asin: "B00XWY0UEM", order_id: "126768935", sold_as: "multi-pack", units_per_pack: 2, velocity_units_per_pack: 2 })],
       [vline({ order_id: "c54ae2b5", order_number: "126768935", asin: "B00XWY0UEM", sold_as: "multi-pack", upp: 2, shipped: 40 })]);
     const r = await syncVelocityShipments({ dryRun: false, deps: h.deps, db: h.db as any });
     expect(r.counts).toMatchObject({ packMismatch: 0, packVelocitySet: 0 });
-    expect(shipInsert(h.writes, "anchor")).toBe(20);
+    expect(shipInsert(h.writes, "anchor")).toBe(40); // Individual units since migration 101 — the view shows 40 ÷ 2 = 20 ASIN units
   });
 
-  it("sold_as NULL: filled from Velocity (edit-logged, user NULL) and the ÷ uses the filled value", async () => {
+  it("sold_as NULL: filled from Velocity (edit-logged, user NULL); the units are stored as Velocity counts them", async () => {
     const h = harness([afRow({ id: "anchor", asin: "B00XWY0UEM", order_id: "126768935", sold_as: null, units_per_pack: null })],
       [vline({ order_id: "c54ae2b5", order_number: "126768935", asin: "B00XWY0UEM", sold_as: "multi-pack", upp: 2, shipped: 40 })]);
     const r = await syncVelocityShipments({ dryRun: false, deps: h.deps, db: h.db as any });
     expect(r.counts).toMatchObject({ packFilled: 1, packMissing: 0, packMismatch: 0 });
-    expect(shipInsert(h.writes, "anchor")).toBe(20);
+    expect(shipInsert(h.writes, "anchor")).toBe(40); // Individual units (D17); the filled pack is what the view divides by
     const fill = h.writes.find((w) => w.sql.startsWith("UPDATE po_asins SET sold_as"))!;
     expect(fill.sql).toMatch(/WHERE id = \$1 AND sold_as IS NULL/);
     expect(fill.params).toEqual(["anchor", "multi-pack", 2]);
@@ -129,7 +129,7 @@ describe("shipment sync A: pack size", () => {
 // ── derived action items ──────────────────────────────────────────────────────
 describe("Pack size missing / mismatch are derived action items", () => {
   it("the ASIN and PO unions carry both, from po_asins", () => {
-    expect(ASIN_ACTION_ITEMS_SQL).toContain(`SELECT '${PACK_SIZE_MISSING}' WHERE (pa.sold_as IS NULL AND EXISTS (SELECT 1 FROM po_line_items lx WHERE lx.po_asin_id = pa.id`);
+    expect(ASIN_ACTION_ITEMS_SQL).toContain(`SELECT '${PACK_SIZE_MISSING}' WHERE (pa.sold_as IS NULL AND EXISTS (SELECT 1 FROM po_line_expected lx WHERE lx.po_asin_id = pa.id`);
     expect(ASIN_ACTION_ITEMS_SQL).toMatch(/'Pack size mismatch' WHERE \(\(pa\.sold_as IS NOT NULL AND pa\.sold_as <> 'bundle' AND pa\.velocity_units_per_pack IS NOT NULL AND pa\.velocity_units_per_pack <> COALESCE\(pa\.units_per_pack, 1\)\)/);
     expect(PO_ACTION_ITEMS_SQL).toContain(`'${PACK_SIZE_MISSING}' WHERE EXISTS (SELECT 1 FROM po_asins pk WHERE pk.po_id = p.id AND (pk.sold_as IS NULL AND EXISTS`);
     expect(PO_ACTION_ITEMS_SQL).toContain(`'${PACK_SIZE_MISMATCH}' WHERE EXISTS (SELECT 1 FROM po_asins pk WHERE pk.po_id = p.id AND ((pk.sold_as IS NOT NULL`);

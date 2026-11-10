@@ -13,6 +13,8 @@ describe("mapSheetStatus", () => {
     const p5 = ["Closed", "Ordered", "SHIP", "Canceled", "See comments", "Missing / damaged from supplier", "ATTN: Velocity",
       "Received Partial", "Received", "Received - FBM", "Returned", "Confirm refund / replacement"];
     for (const t of p5) expect(mapSheetStatus(t).unmapped, t).toEqual([]);
+    // The two supplier-problem badges are claims since migration 101: mapped to `retired`, never an item, never a stop.
+    expect(mapSheetStatus("Missing / Damaged from Supplier, Confirm refund / replacement")).toMatchObject({ actionItems: [], retired: ["Missing / damaged from supplier", "Confirm refund / replacement"], unmapped: [] });
   });
   it("\"Lost / Damaged by Us\" and \"Partial Return\" are mapped, never a stop (Maria 2026-10-18, all years)", () => {
     expect(mapSheetStatus("Closed, Lost / Damaged by Us")).toMatchObject({ closed: true, lostDamagedUs: true, unmapped: [] });
@@ -20,7 +22,7 @@ describe("mapSheetStatus", () => {
   });
   it("\"Shipped FBA\" (appeared 2026-10-16, fleetfarm MW7400517) maps to nothing — never an action item, never a stop", () => {
     const m = mapSheetStatus("Shipped FBA, Confirm refund / replacement");
-    expect(m).toMatchObject({ shippedFba: true, unmapped: [], actionItems: ["Confirm refund / replacement"], closed: false });
+    expect(m).toMatchObject({ shippedFba: true, unmapped: [], actionItems: [], retired: ["Confirm refund / replacement"], closed: false });
   });
   it("splits on commas, keeps action items in display order, dedupes", () => {
     const m = mapSheetStatus("See comments, ATTN: Velocity, see comments");
@@ -51,7 +53,8 @@ describe("normalizeActionItems", () => {
     expect(normalizeActionItems([])).toEqual({ ok: true, value: [] });
     expect(normalizeActionItems(["Lost"]).ok).toBe(false);
     expect(normalizeActionItems("SHIP").ok).toBe(false);
-    expect(ACTION_ITEMS).toHaveLength(11); // 7 + Confirm order details, Subscription renews, Review renewal PO (Capture PO patch, 2026-10-31) + Subscription may be active (2026-11-01)
+    expect(ACTION_ITEMS).toHaveLength(9); // 5 + Confirm order details, Subscription renews, Review renewal PO (Capture PO patch, 2026-10-31) + Subscription may be active (2026-11-01); Missing / damaged + Confirm refund retired (claims, migration 101)
+    expect(normalizeActionItems(["Missing / damaged from supplier", "SHIP"])).toEqual({ ok: true, value: ["SHIP"] }); // a retired label is dropped, never an error
   });
 });
 

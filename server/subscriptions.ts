@@ -12,6 +12,7 @@
 // pause / cancel, not an action item on a months-old PO); the item clears by
 // itself when a renewal PO is created or the subscription is paused / canceled.
 import type { QueryLike } from "./scheduler/types";
+import { storedQtyForLine } from "./po-expected";
 import { EditError, logEdits, parseEdits, isoDate, intQty, textOrNull, asinParser, requiredText, type Parsed } from "./po-edit";
 import { insertLineItems } from "./line-action-items";
 import { SUBSCRIPTION_RENEWS, REVIEW_RENEWAL_PO, SUBSCRIPTION_MAY_BE_ACTIVE } from "./po-status-map";
@@ -194,8 +195,9 @@ export async function tryRenewalFromEmail(query: QueryLike, supplier: string | n
     const idMap = new Map<string, string>();
     for (const r of rows) {
       const pa = await query(
-        `INSERT INTO po_asins (po_id, asin, asin_name, sku, qty, cost_per_unit, prep_cost, sold_as, units_per_pack, unique_products, sourcing_cost, paid_cost) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12) RETURNING id`,
-        [newPoId, r.asin, r.asin_name, r.sku, r.qty, r.cost_per_unit, r.prep_cost, r.sold_as, r.units_per_pack, r.unique_products, r.sourcing_cost, r.paid_cost],
+        `INSERT INTO po_asins (po_id, asin, asin_name, sku, qty, cost_per_unit, prep_cost, sold_as, units_per_pack, unique_products, sourcing_cost, paid_cost, qty_basis) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13) RETURNING id`,
+        // The stored quantity is copied in its own basis (Individual units since migration 101, or the legacy ASIN units).
+        [newPoId, r.asin, r.asin_name, r.sku, r.qty, r.cost_per_unit, r.prep_cost, r.sold_as, r.units_per_pack, r.unique_products, r.sourcing_cost, r.paid_cost, r.qty_basis ?? "individual"],
       );
       idMap.set(String(r.id), String(pa.rows[0].id));
     }
@@ -203,8 +205,9 @@ export async function tryRenewalFromEmail(query: QueryLike, supplier: string | n
     for (const l of lines) {
       const near = l.product_name ? qtyPriceNear(email.text, String(l.product_name)) : { qty: null, price: null };
       const li = await query(
-        `INSERT INTO po_line_items (po_id, po_asin_id, position, product_name, supplier_sku, price, item_discount, qty_ordered, qty_returned, asin_qty_per_product, adjusted_product_cost, action_items, retailer_units_per_product, asin_units_per_pack) VALUES ($1,$2,$3,$4,$5,$6,0,$7,0,$8,$9,'{}'::text[],$10,$11) RETURNING id`,
-        [newPoId, l.po_asin_id ? idMap.get(String(l.po_asin_id)) ?? null : null, l.position, l.product_name, l.supplier_sku, near.price != null ? near.price.toFixed(2) : l.price, near.qty ?? l.qty_ordered, l.asin_qty_per_product, l.adjusted_product_cost, l.retailer_units_per_product ?? null, l.asin_units_per_pack ?? null],
+        `INSERT INTO po_line_items (po_id, po_asin_id, position, product_name, supplier_sku, price, item_discount, qty_ordered, asin_qty_per_product, adjusted_product_cost, action_items, retailer_units_per_product, asin_units_per_pack, qty_basis) VALUES ($1,$2,$3,$4,$5,$6,0,$7,$8,$9,'{}'::text[],$10,$11,$12) RETURNING id`,
+        // The email's qty is Product units → stored × the line's pack (D17); without one the stored value is copied in its basis.
+        [newPoId, l.po_asin_id ? idMap.get(String(l.po_asin_id)) ?? null : null, l.position, l.product_name, l.supplier_sku, near.price != null ? near.price.toFixed(2) : l.price, near.qty != null ? storedQtyForLine(near.qty, l) : l.qty_ordered, l.asin_qty_per_product, l.adjusted_product_cost, l.retailer_units_per_product ?? null, l.asin_units_per_pack ?? null, l.qty_basis ?? "individual"],
       );
       newLineIds.push(String(li.rows[0].id));
     }

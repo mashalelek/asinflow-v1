@@ -25,7 +25,7 @@ describe("Sync Shipments route (§5.2, D3)", () => {
     expect(routes.slice(routes.indexOf('app.post("/api/pos/unmatched/:id/link"'), routes.indexOf("// === Bulk Profit Calculator"))).toMatch(/withPoTx\(\(q\) => linkUnmatchedLine\(q, String\(req\.params\.id \?\? ""\), String\(b\.po_asin_id \?\? ""\)\.trim\(\), \{ confirmOvershoot: b\.confirm_overshoot === true, note: b\.note, userId: uid\(req\) \}\)\)/);
     const link = readFileSync(join(__dirname, "shipment-link.ts"), "utf8"); // the action itself (2026-10-29); run against the real schema in shipment-link.db.test.ts
     expect(link).toMatch(/UPDATE shipment_unmatched SET resolved_at = now\(\), resolved_po_asin_id = \$2/);
-    expect(link).toMatch(/units \/ \(Number\(pa\.units_per_pack\) \|\| 1\)/);
+    expect(link).toMatch(/const qty = r2\(units\);/); // Individual units stored as Velocity counts them (migration 101)
     expect(link).toMatch(/evaluateAutoClose\(String\(pa\.po_id\), query\)/);
   });
   it("manual rows use manual:<uuid> and an FBA id array; only manual rows can be deleted", () => {

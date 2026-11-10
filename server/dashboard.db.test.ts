@@ -20,8 +20,8 @@ const NOW = new Date("2031-06-18T15:00:00Z");
 const ASIN = "B0ZZDASH01";
 
 /**
- * A: today, $100, 10 units × pack 2.                 B: yesterday, $50, FULLY canceled, a due refund $20 (→ Spend $0, due $20).
- * C: Monday (this week), $200, 10 units, NO pack size, line 1 of 2 partially canceled (2 of 6) with a due refund $30 (→ $170, 8 ASIN units).
+ * A: today, $100, 10 units × pack 2.                 B: yesterday, $50, FULLY canceled (an open canceled claim), $20 owed (→ Spend $0, due $20).
+ * C: Monday (this week), $200, 10 units, NO pack size, line 1 of 2 partially canceled (2 of 6, an open canceled claim) with $30 owed (→ $170, 8 ASIN units).
  * D: 06-01 (MTD), $80, a received manual refund $10 (→ $70).   E: 05-20 (the 30-day edge), sheet-imported header already NET of its $10 refund + a 'sheet' row $10 (→ $60, not $50).
  * F: 05-19 (last month, outside 30 days), $40.          G: 04-30, $999 (custom only).
  */
@@ -31,18 +31,29 @@ async function seed(q: Q) {
     const vals = [oid, date, "zz-dash.test", total, ...Object.values(extra)];
     return (await q(`INSERT INTO purchase_orders (${cols.join(", ")}) VALUES (${cols.map((_, i) => `$${i + 1}`).join(", ")}) RETURNING id`, vals)).rows[0].id as string;
   };
-  const asinRow = async (poId: string, qty: number, upp: number | null, soldAs = "individual") =>
-    (await q(`INSERT INTO po_asins (po_id, asin, qty, units_per_pack, sold_as) VALUES ($1, $2, $3, $4, $5) RETURNING id`, [poId, ASIN, qty, upp, soldAs])).rows[0].id as string;
-  const line = async (poId: string, paId: string, pos: number, ordered: number, canceled: number | null, price = 10) =>
-    (await q(`INSERT INTO po_line_items (po_id, po_asin_id, position, product_name, qty_ordered, qty_canceled, price, asin_qty_per_product) VALUES ($1, $2, $3, 'zz', $4, $5, $6, 1) RETURNING id`, [poId, paId, pos, ordered, canceled, price])).rows[0].id as string;
-  const refund = (poId: string, lineId: string | null, amount: number, status: "due" | "received", source = "manual") =>
-    q(`INSERT INTO po_line_refunds (po_id, po_line_item_id, amount, status, source) VALUES ($1, $2, $3, $4, $5)`, [poId, lineId, amount, status, source]);
+  // Since migration 101 (D14 / D17): quantities are stored in Individual units (the ASIN units × the pack; a row with no pack
+  // keeps ASIN units as asin_legacy), a canceled qty is an OPEN canceled claim carrying the $ owed, a refund row is money received.
+  const asinRow = async (poId: string, asinUnits: number, upp: number | null, soldAs: string | null = "individual") =>
+    (await q(`INSERT INTO po_asins (po_id, asin, qty, units_per_pack, sold_as, qty_basis) VALUES ($1, $2, $3, $4, $5, $6) RETURNING id`, [poId, ASIN, upp == null ? asinUnits : asinUnits * upp, upp, upp == null ? null : soldAs, upp == null ? "asin_legacy" : "individual"])).rows[0].id as string;
+  const line = async (poId: string, paId: string, pos: number, ordered: number, canceled: number | null, price = 10, pack: number | null = 1) => {
+    const id = (await q(`INSERT INTO po_line_items (po_id, po_asin_id, position, product_name, qty_ordered, price, asin_qty_per_product, retailer_units_per_product, asin_units_per_pack, qty_basis) VALUES ($1, $2, $3, 'zz', $4, $5, 1, $6, $7, $8) RETURNING id`,
+      [poId, paId, pos, ordered, price, pack, pack, pack == null ? "product_legacy" : "individual"])).rows[0].id as string;
+    if (canceled != null && canceled > 0) await q(`INSERT INTO supplier_claims (po_id, po_line_item_id, kind, qty, amount_owed, amount_owed_source, status, found_by) VALUES ($1, $2, 'canceled', $3, $4, 'manual', 'open', 'maria')`, [poId, id, canceled, canceled * price]);
+    return id;
+  };
+  const owed = async (poId: string, lineId: string | null, amount: number) => { // what the supplier still owes: a claim's amount (a due row before migration 101)
+    const c = (await q(`SELECT id FROM supplier_claims WHERE po_id = $1 AND po_line_item_id IS NOT DISTINCT FROM $2 ORDER BY id LIMIT 1`, [poId, lineId])).rows[0];
+    if (c) await q(`UPDATE supplier_claims SET amount_owed = $2 WHERE id = $1`, [c.id, amount]);
+    else await q(`INSERT INTO supplier_claims (po_id, po_line_item_id, kind, qty, amount_owed, amount_owed_source, status, found_by) VALUES ($1, $2, 'missing', 1, $3, 'manual', 'open', 'maria')`, [poId, lineId, amount]);
+  };
+  const refund = (poId: string, lineId: string | null, amount: number, source = "manual") =>
+    q(`INSERT INTO po_line_refunds (po_id, po_line_item_id, amount, source) VALUES ($1, $2, $3, $4)`, [poId, lineId, amount, source]);
 
-  const A = await po("zz-A", "2031-06-18", 100); const a = await asinRow(A, 10, 2); await line(A, a, 0, 10, null);
-  const B = await po("zz-B", "2031-06-17", 50); const b = await asinRow(B, 5, 1); const b1 = await line(B, b, 0, 5, 5); await refund(B, b1, 20, "due");
-  const C = await po("zz-C", "2031-06-16", 200); const c = await asinRow(C, 10, null); const c1 = await line(C, c, 0, 6, 2); await line(C, c, 1, 4, null); await refund(C, c1, 30, "due");
-  const D = await po("zz-D", "2031-06-01", 80); const d = await asinRow(D, 4, 1); const d1 = await line(D, d, 0, 4, null); await refund(D, d1, 10, "received");
-  const E = await po("zz-E", "2031-05-20", 60, { subtotal: 70, tax: 0, sh_donations: 0, discount: 0, refund_amount: 10, source: "sheet_import" }); const e = await asinRow(E, 1, 3); const e1 = await line(E, e, 0, 1, null); await refund(E, e1, 10, "received", "sheet");
+  const A = await po("zz-A", "2031-06-18", 100); const a = await asinRow(A, 10, 2); await line(A, a, 0, 10, null, 10, 2);
+  const B = await po("zz-B", "2031-06-17", 50); const b = await asinRow(B, 5, 1); const b1 = await line(B, b, 0, 5, 5); await owed(B, b1, 20);
+  const C = await po("zz-C", "2031-06-16", 200); const c = await asinRow(C, 10, null); const c1 = await line(C, c, 0, 6, 2, 10, null); await line(C, c, 1, 4, null, 10, null); await owed(C, c1, 30);
+  const D = await po("zz-D", "2031-06-01", 80); const d = await asinRow(D, 4, 1); const d1 = await line(D, d, 0, 4, null); await refund(D, d1, 10);
+  const E = await po("zz-E", "2031-05-20", 60, { subtotal: 70, tax: 0, sh_donations: 0, discount: 0, refund_amount: 10, source: "sheet_import" }); const e = await asinRow(E, 1, 3); const e1 = await line(E, e, 0, 1, null, 10, 3); await refund(E, e1, 10, "sheet");
   const F = await po("zz-F", "2031-05-19", 40); const f = await asinRow(F, 2, 1); await line(F, f, 0, 2, null);
   const G = await po("zz-G", "2031-04-30", 999); const g = await asinRow(G, 1, 1); await line(G, g, 0, 1, null);
 
@@ -125,12 +136,13 @@ describe("Dashboard grid on the real schema (rolled back)", () => {
     await inTx(async (q) => {
       const ins = async (oid: string, header: Record<string, any>) => (await q(`INSERT INTO purchase_orders (order_id, order_date, supplier, source, subtotal, tax, sh_donations, discount, refund_amount, order_total) VALUES ($1, '2031-09-10', 'zz-dash.test', 'sheet_import', $2, $3, $4, $5, $6, $7) RETURNING id`, [oid, header.subtotal, header.tax, header.sh, header.discount, header.refund, header.total])).rows[0].id;
       const gross = await ins("zz-gross", { subtotal: 100, tax: 5, sh: 0, discount: 0, refund: 30, total: 105 }); // AG = AB + AC (refund not netted)
-      await q(`INSERT INTO po_line_refunds (po_id, amount, status, source) VALUES ($1, 30, 'received', 'sheet')`, [gross]);
+      await q(`INSERT INTO po_line_refunds (po_id, amount, source) VALUES ($1, 30, 'sheet')`, [gross]);
       const net = await ins("zz-net", { subtotal: 100, tax: 5, sh: 0, discount: 0, refund: 30, total: 75 }); // AG nets it
-      await q(`INSERT INTO po_line_refunds (po_id, amount, status, source) VALUES ($1, 30, 'received', 'sheet')`, [net]);
-      await q(`INSERT INTO po_line_refunds (po_id, amount, status, source) VALUES ($1, 5, 'due', 'manual')`, [net]); // a later due row still counts
+      await q(`INSERT INTO po_line_refunds (po_id, amount, source) VALUES ($1, 30, 'sheet')`, [net]);
+      // $5 still owed on an open claim (a "due" row before migration 101): counted in Refunds due, not in Spend until it is received
+      await q(`INSERT INTO supplier_claims (po_id, kind, qty, amount_owed, amount_owed_source, status, found_by) VALUES ($1, 'missing', 1, 5, 'manual', 'open', 'maria')`, [net]);
       const g = await loadGrid(q, 4, { from: "2031-09-10", to: "2031-09-10" }, NOW);
-      expect(g.columns[0].cells.spend.value).toBe(75 + 70); // gross: 105 − 30; net: 75 − 5 (not − 30 again)
+      expect(g.columns[0].cells.spend.value).toBe(75 + 70); // gross: 105 − 30; net: 75 − 5 owed on the open claim (the sheet refund not subtracted again)
       expect(g.columns[0].cells.refunds_due.value).toBe(5);
     });
   });

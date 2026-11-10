@@ -22,7 +22,7 @@ describe("loadAfAsinCostMap", () => {
     expect(r.rowsRead).toBe(42);
     expect(calls[0].sql).toMatch(/DISTINCT ON \(pa\.asin\)/);
     expect(calls[0].sql).toMatch(/ORDER BY pa\.asin, p\.order_date DESC, p\.entry_seq DESC NULLS LAST, p\.created_at DESC/);
-    expect(calls[0].sql).toMatch(/bool_and\(\(l\.qty_canceled IS NOT NULL AND l\.qty_canceled >= COALESCE\(l\.qty_ordered, 0\)\)\)/);
+    expect(calls[0].sql).toMatch(/bool_and\(le\.fully_canceled\) FROM po_line_expected le WHERE le\.po_asin_id = pa\.id/); // canceled by its claims (migration 101)
     expect(calls[0].params).toEqual([["B076692G4N"]]);
     await loadAfAsinCostMap(query);
     expect(calls[2].params).toEqual([]);

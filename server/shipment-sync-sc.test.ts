@@ -94,7 +94,7 @@ describe("syncScShipments", () => {
     expect(r.counts).toMatchObject({ velocityShipments: 3, scShipmentsListed: 9, scShipmentsVelocity: 8, scShipmentsItemsFetched: 8, matched: 2, matchedByMinute: 2, matchedByOverlap: 0, ambiguous: 0, unmatched: 1, rowsFbaIdsUpdated: 5, rowsReceivedUpdated: 5, rowsUnchanged: 0, overReceivedRows: 1 });
     expect(r.unmatchedShipments).toEqual([{ shipment: V3, shippedAt: "2026-09-01" }]);
     expect(r.samples[0]).toBe(`73917fcd 2026-10-15 → 5 SC shipment(s) FBA19T7TWVK4, FBA19T7XBNZC, FBA19T7Y1DV1, FBA19T7ZQ9JQ, FBA19T81WCMB by minute (Δ 3 min)`);
-    expect(r.samples).toContainEqual(`73917fcd 2026-10-15 · 0349125937: SC received 7 of 10 → 102003840691113 7/9, 102003843107733 0/1 (oldest PO first)`);
+    expect(r.samples).toContainEqual(`73917fcd 2026-10-15 · 0349125937: SC received 7 of 10 ASIN units → 102003840691113 7/9, 102003843107733 0/1 (oldest PO first)`);
     expect(r.samples).toContainEqual(`97c1d401 2026-10-15 → 1 SC shipment(s) FBA19T84285M by minute (Δ 5 min)`);
   });
 

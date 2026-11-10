@@ -62,7 +62,7 @@ describe("resolveByColP", () => {
 
 describe("shipment sync A places the Heath line through Col P", () => {
   const SID = "7a440336-df6a-4df2-aa2c-795719087322";
-  it("no Order #, shipment FBA ids in Col P for one row → a velocity row at 60 ÷ 3 = 20, counted col_p", async () => {
+  it("no Order #, shipment FBA ids in Col P for one row → a velocity row of 60 Individual units (20 ASIN units in the view), counted col_p", async () => {
     const writes: Array<{ sql: string; params?: any[] }> = [];
     const query = async (sql: string, params?: any[]) => {
       const s = sql.trim();
@@ -79,7 +79,7 @@ describe("shipment sync A places the Heath line through Col P", () => {
     const r = await syncVelocityShipments({ dryRun: false, deps, db: { query, connect: async () => ({ query, release: () => {} }) } as any });
     expect(r.counts).toMatchObject({ linesMatched: 1, linesMatchedColP: 1, linesNoOrder: 0, linesColPAmbiguous: 0 });
     const ins = writes.find((w) => w.sql.startsWith("INSERT INTO po_asin_shipments"));
-    expect(ins?.params?.slice(0, 3)).toEqual(["heath", SID, 20]);
+    expect(ins?.params?.slice(0, 3)).toEqual(["heath", SID, 60]); // Individual units since migration 101 (the view shows 60 ÷ 3 = 20 ASIN units)
     expect(writes.some((w) => w.sql.startsWith("INSERT INTO shipment_unmatched"))).toBe(false);
   });
 });
@@ -110,7 +110,7 @@ describe("Received by Amazon is information only", () => {
     expect(PO_ACTION_ITEMS_SQL).toContain("px.id = pk.po_id AND px.closed_at IS NULL");
     expect(PO_CLOSE_ACTION_ITEMS_SQL).toContain("px.id = pk.po_id AND px.closed_at IS NULL");
   });
-  it("Pack size missing needs a live line: ordered > 0, not fully canceled, final qty not 0", () => {
-    expect(ASIN_ACTION_ITEMS_SQL).toMatch(/COALESCE\(lx\.qty_ordered, 0\) > 0 AND COALESCE\(lx\.qty_canceled, 0\) < lx\.qty_ordered AND \(lx\.final_qty IS NULL OR lx\.final_qty > 0\)/);
+  it("Pack size missing needs a live line: ordered > 0, not fully canceled, units still expected (po_line_expected since migration 101)", () => {
+    expect(ASIN_ACTION_ITEMS_SQL).toMatch(/FROM po_line_expected lx WHERE lx\.po_asin_id = pa\.id\s+AND COALESCE\(lx\.ordered_product, 0\) > 0 AND NOT lx\.fully_canceled AND COALESCE\(lx\.expected_product, 0\) > 0/);
   });
 });

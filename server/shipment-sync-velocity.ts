@@ -1,4 +1,8 @@
 // Component A — Velocity → po_asin_shipments / qty_at_prep / shipment_unmatched
+//
+// Since migration 101 (claims commit 1, D17) every quantity this component writes — shipment rows, qty_at_prep,
+// received_velocity — is INDIVIDUAL units, exactly what Velocity counts; nothing is divided by a pack size here any
+// more (po_asin_expected shows the ASIN units). The pack comparison below (velocity_units_per_pack) is unchanged.
 // (patch docs/claude_spec-patch-shipment-reconciliation.md §3; evidence
 // docs/phase2-probe-2026-10-17.md).
 //
@@ -169,6 +173,8 @@ export function etDate(ts: string | Date | null | undefined): string | null {
 
 export interface AfAsinRow {
   id: string; po_id: string; asin: string; units_per_pack: number | null; qty_at_prep: string | null; order_id: string; supplier: string; order_date: string;
+  /** individual | asin_legacy (migration 101): how qty is stored; capacityUnits reads it. */
+  qty_basis?: string | null;
   /** Received by Velocity (2026-11-02): the stored cumulative count; undefined reads as NULL. */
   received_velocity?: string | null;
   /** Ordered ASIN qty (the §3 b / §4 units-fit capacity). */
@@ -293,7 +299,7 @@ export async function syncVelocityShipments(opts: { dryRun: boolean; deps?: Velo
   // ── AF state ───────────────────────────────────────────────────────────────
   const afRows = (await db.query(
     `SELECT pa.id, pa.po_id, pa.asin, pa.units_per_pack, pa.qty_at_prep, p.order_id, p.supplier, p.order_date::text AS order_date,
-            pa.sold_as, pa.velocity_units_per_pack, pa.qty, p.ships_to, pa.received_velocity
+            pa.sold_as, pa.velocity_units_per_pack, pa.qty, pa.qty_basis, p.ships_to, pa.received_velocity
        FROM po_asins pa JOIN purchase_orders p ON p.id = pa.po_id`,
   )).rows as AfAsinRow[];
   // Every rule matches only Velocity-eligible POs (not Home, not before
@@ -502,7 +508,7 @@ export async function syncVelocityShipments(opts: { dryRun: boolean; deps?: Velo
       const plan = rowPlans.get(rk) ?? { poAsinId: String(res.row.id), shipmentId: s.shipment_id, units: 0, upp: Number(res.row.units_per_pack) || 1, shippedAt, lines: [] };
       plan.units += units; plan.lines.push(`${res.row.supplier} ${res.row.order_id} ${res.row.asin} ${units}u`);
       rowPlans.set(rk, plan);
-      if (samples.length < 10) samples.push(`${s.shipment_id.slice(0, 8)} ${shippedAt ?? "?"} · ${res.row.supplier} ${res.row.order_id} ${res.row.asin}: ${units} units ÷ ${plan.upp} → ${round2(units / plan.upp)}${res.how !== "exact" ? ` (${res.how})` : ""}`);
+      if (samples.length < 10) samples.push(`${s.shipment_id.slice(0, 8)} ${shippedAt ?? "?"} · ${res.row.supplier} ${res.row.order_id} ${res.row.asin}: ${units} Individual units${res.how !== "exact" ? ` (${res.how})` : ""}`);
     }
   }
 
@@ -512,9 +518,10 @@ export async function syncVelocityShipments(opts: { dryRun: boolean; deps?: Velo
   const placedUnits = new Map<string, number>();
   const addPlaced = (rowId: string, u: number) => placedUnits.set(rowId, (placedUnits.get(rowId) ?? 0) + u);
   for (const plan of Array.from(rowPlans.values())) addPlaced(plan.poAsinId, plan.units);
-  for (const m of Array.from(manualLines.values())) for (const r of m.rows) addPlaced(r.poAsinId, r.qty * (Number(afById.get(r.poAsinId)?.units_per_pack) || 1));
+  // Shipment rows store Individual units since migration 101 (D17): what is placed is what they hold.
+  for (const m of Array.from(manualLines.values())) for (const r of m.rows) addPlaced(r.poAsinId, r.qty);
   for (const r of (await db.query(`SELECT po_asin_id, qty_shipped FROM po_asin_shipments WHERE source = 'manual'`)).rows as any[]) {
-    const row = afById.get(String(r.po_asin_id)); if (row) addPlaced(String(r.po_asin_id), Number(r.qty_shipped) * (Number(row.units_per_pack) || 1));
+    const row = afById.get(String(r.po_asin_id)); if (row) addPlaced(String(r.po_asin_id), Number(r.qty_shipped));
   }
   const byVelocityDate = (a: Deferred, b: Deferred) => String(velocityDate(a.line) ?? "9999").localeCompare(String(velocityDate(b.line) ?? "9999")) || String(a.line.order_id ?? "").localeCompare(String(b.line.order_id ?? "")) || a.key.localeCompare(b.key);
   const remainingFor = (line: VelocityInboundOrder) => { const upp = velocityPack(line)?.upp ?? null; return (row: AfAsinRow) => capacityUnits(row, upp) - (placedUnits.get(String(row.id)) ?? 0); };
@@ -529,7 +536,7 @@ export async function syncVelocityShipments(opts: { dryRun: boolean; deps?: Velo
       rowPlans.set(rk, plan);
       linkPlans.push({ key: d.key, shipmentId: d.shipmentId, orderId: String(d.line.order_id ?? ""), line: d.line, reason: d.res.reason, poAsinId: String(row.id), poId: String(row.po_id), how, units: d.units });
       noteRuleLink({ shipment_id: d.shipmentId }, d.shippedAt, d.line, row, how, d.units, !!d.prior && !d.prior.resolved_at);
-      if (samples.length < 10) samples.push(`${d.shipmentId.slice(0, 8)} ${d.shippedAt ?? "?"} · ${row.supplier} ${row.order_id} ${row.asin}: ${d.units} units ÷ ${plan.upp} → ${round2(d.units / plan.upp)} (${how})`);
+      if (samples.length < 10) samples.push(`${d.shipmentId.slice(0, 8)} ${d.shippedAt ?? "?"} · ${row.supplier} ${row.order_id} ${row.asin}: ${d.units} Individual units (${how})`);
     }
   };
   // Col P for a line WITH an Order # AF lacks (INSH-era, _N): the sheet row
@@ -604,7 +611,8 @@ export async function syncVelocityShipments(opts: { dryRun: boolean; deps?: Velo
   type RowOp = { kind: "insert" | "update"; plan: RowPlan; qty: number; id?: string };
   const rowOps: RowOp[] = [];
   for (const [rk, plan] of Array.from(rowPlans.entries())) {
-    const qty = round2(plan.units / plan.upp);
+    // Stored as Individual units (D17): no ÷ pack any more — the view shows the ASIN units.
+    const qty = round2(plan.units);
     const ex = existingByKey.get(rk);
     if (ex && ex.assigned_by === "manual") { counts.manualRowsKept++; continue; } // a hand assignment is never overwritten by derivation
     if (!ex) { rowOps.push({ kind: "insert", plan, qty }); counts.rowsInserted++; touched.add(afById.get(plan.poAsinId)!.po_id); continue; }
@@ -616,14 +624,14 @@ export async function syncVelocityShipments(opts: { dryRun: boolean; deps?: Velo
     if (m.rows.length === 1) {
       const r = m.rows[0];
       const upp = Number(afById.get(r.poAsinId)!.units_per_pack) || 1;
-      const qty = round2(m.units / upp);
+      const qty = round2(m.units);
       if (Math.abs(r.qty - qty) > 1e-9 || String(r.shippedAt ?? "") !== String(m.shippedAt ?? "")) {
         rowOps.push({ kind: "update", plan: { poAsinId: r.poAsinId, shipmentId: "", units: m.units, upp, shippedAt: m.shippedAt, lines: [m.label] }, qty, id: r.id });
         counts.rowsUpdated++; touched.add(afById.get(r.poAsinId)!.po_id);
       } else counts.rowsUnchanged++;
       continue;
     }
-    const heldUnits = m.rows.reduce((t, r) => t + r.qty * (Number(afById.get(r.poAsinId)!.units_per_pack) || 1), 0);
+    const heldUnits = m.rows.reduce((t, r) => t + r.qty, 0);
     if (Math.abs(heldUnits - m.units) > 1e-6) {
       counts.manualSplitDrift++;
       if (samples.length < 10) samples.push(`${m.label}: split by hand over ${m.rows.length} rows holding ${round2(heldUnits)} units; Velocity now says ${m.units} — not rewritten`);
@@ -672,7 +680,7 @@ export async function syncVelocityShipments(opts: { dryRun: boolean; deps?: Velo
   const atPrepOps: Array<{ id: string; poId: string; value: number | null }> = [];
   for (const r of afRows) {
     const has = remainingByAsinRow.has(String(r.id));
-    const next = has ? round2(remainingByAsinRow.get(String(r.id))! / (Number(r.units_per_pack) || 1)) : null;
+    const next = has ? round2(remainingByAsinRow.get(String(r.id))!) : null; // Individual units (D17)
     const cur = r.qty_at_prep == null ? null : Number(r.qty_at_prep);
     const same = (cur == null && next == null) || (cur != null && next != null && Math.abs(cur - next) < 1e-9);
     if (same) { counts.atPrepUnchanged++; continue; }
@@ -683,7 +691,7 @@ export async function syncVelocityShipments(opts: { dryRun: boolean; deps?: Velo
   const receivedOps: VelocitySyncResult["receivedVelocityOps"] = [];
   for (const r of afRows) {
     const has = receivedByAsinRow.has(String(r.id));
-    const next = has ? round2(receivedByAsinRow.get(String(r.id))! / (Number(r.units_per_pack) || 1)) : null;
+    const next = has ? round2(receivedByAsinRow.get(String(r.id))!) : null; // Individual units (D17)
     const cur = r.received_velocity == null ? null : Number(r.received_velocity);
     const same = (cur == null && next == null) || (cur != null && next != null && Math.abs(cur - next) < 1e-9);
     if (same) { counts.receivedVelocityUnchanged++; continue; }

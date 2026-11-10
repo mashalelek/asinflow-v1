@@ -4,7 +4,6 @@
 // Setting an item on an ASIN writes it to ALL its lines; removing it removes
 // it from all its lines; a product edit touches that line only. Pure.
 import { replacementTrackingItemsSql } from "./tracking-replacement-pair";
-import { defectItemSql, OPEN_DEFECT_ASIN_SQL, OPEN_DEFECT_PO_SQL } from "./po-defect-sql";
 import { AUTO_ACTION_ITEMS, DISPLAY_ACTION_ITEMS, EXTRA_UNITS_SHIPPED, NO_INVOICE_SAVED, PACK_SIZE_MISMATCH, PACK_SIZE_MISSING, RECEIVING_MISMATCH, REVIEW_VELOCITY } from "./po-status-map";
 
 /** Display-ordered union of several action-item arrays. */
@@ -38,12 +37,12 @@ export function asinWriteThrough(lines: Array<{ id: string; action_items: readon
 
 /**
  * Pack-size conditions on an ASIN row, alias `a` (see PACK_SIZE_MISSING / PACK_SIZE_MISMATCH).
- * Missing fires only while the row has a live line — ordered > 0, not fully
- * canceled, final qty not 0 (2026-10-29): a 0-qty or canceled line needs no pack size —
+ * Missing fires only while the row has a live line — ordered > 0 with units still expected
+ * (po_line_expected since migration 101: a 0-qty, canceled or fully claimed line needs no pack size) —
  * and only on an Open PO: a closed PO keeps its NULL silently (Maria 2026-10-29).
  */
-const packMissing = (a: string) => `(${a}.sold_as IS NULL AND EXISTS (SELECT 1 FROM po_line_items lx WHERE lx.po_asin_id = ${a}.id
-  AND COALESCE(lx.qty_ordered, 0) > 0 AND COALESCE(lx.qty_canceled, 0) < lx.qty_ordered AND (lx.final_qty IS NULL OR lx.final_qty > 0))
+const packMissing = (a: string) => `(${a}.sold_as IS NULL AND EXISTS (SELECT 1 FROM po_line_expected lx WHERE lx.po_asin_id = ${a}.id
+  AND COALESCE(lx.ordered_product, 0) > 0 AND NOT lx.fully_canceled AND COALESCE(lx.expected_product, 0) > 0)
   AND EXISTS (SELECT 1 FROM purchase_orders px WHERE px.id = ${a}.po_id AND px.closed_at IS NULL))`;
 /** Received known and different from shipped (NULL received = SC has reported nothing yet: no flag). */
 const receivingMismatch = (a: string) => `(${a}.qty_received_amazon IS NOT NULL AND ${a}.qty_received_amazon <> COALESCE(${a}.qty_shipped_fba, 0))`;
@@ -68,7 +67,7 @@ export const extraUnits = (a: string) => `(COALESCE(${a}.qty_shipped_fba, 0) > $
 export const EXTRA_UNITS_EXISTS_SQL = `EXISTS (SELECT 1 FROM po_asins pk WHERE pk.po_id = p.id AND ${extraUnits("pk")})`;
 export const PACK_SIZE_MISSING_EXISTS_SQL = `EXISTS (SELECT 1 FROM po_asins pk WHERE pk.po_id = p.id AND ${packMissing("pk")})`;
 export const PACK_SIZE_MISMATCH_EXISTS_SQL = `EXISTS (SELECT 1 FROM po_asins pk WHERE pk.po_id = p.id AND ${packMismatch("pk")})`;
-const PACK_SIZE_MISMATCH_CLOSE_EXISTS_SQL = `EXISTS (SELECT 1 FROM po_asins pk WHERE pk.po_id = p.id AND ${packMismatchClose("pk")})`;
+export const PACK_SIZE_MISMATCH_CLOSE_EXISTS_SQL = `EXISTS (SELECT 1 FROM po_asins pk WHERE pk.po_id = p.id AND ${packMismatchClose("pk")})`;
 
 /**
  * "No invoice saved" (NO_INVOICE_SAVED) on a PO, alias `p`: no document, the
@@ -89,7 +88,6 @@ export const ASIN_ACTION_ITEMS_SQL = `ARRAY(${openLineItemsSql("l.po_asin_id = p
   UNION SELECT '${PACK_SIZE_MISSING}' WHERE ${packMissing("pa")}
   UNION SELECT '${PACK_SIZE_MISMATCH}' WHERE ${packMismatch("pa")}
   UNION SELECT '${RECEIVING_MISMATCH}' WHERE ${receivingMismatch("pa")}
-  ${defectItemSql(OPEN_DEFECT_ASIN_SQL("pa"))}
   ${replacementTrackingItemsSql("pa.po_id")})`;
 /**
  * "Review Velocity" (SPEC §26) condition: a tracking row of the PO has a
@@ -104,12 +102,11 @@ export const HOME_PO_REVIEW_REASON = "Velocity has an order for a Home PO";
  */
 export const HOME_PO_REVIEW_OPEN_SQL = `(p.velocity_home_orders IS NOT NULL AND p.ships_to = 'home' AND p.velocity_home_cleared_at IS NULL)`;
 export const REVIEW_VELOCITY_EXISTS_SQL = `(EXISTS (SELECT 1 FROM po_tracking t WHERE t.po_id = p.id AND t.review_reason IS NOT NULL AND t.suppressed_at IS NULL) OR ${HOME_PO_REVIEW_OPEN_SQL})`;
-/** The PO's items that block auto-close: everything except FBA receiving mismatch (received never drives anything). */
+/** The PO's items that block auto-close: everything except FBA receiving mismatch (received never drives anything). An OPEN claim blocks too, but as its own rule (D15, po-close.ts), not as an item. */
 export const PO_CLOSE_ACTION_ITEMS_SQL = `ARRAY(${openLineItemsSql("l.po_id = p.id")}
   UNION SELECT '${EXTRA_UNITS_SHIPPED}' WHERE ${EXTRA_UNITS_EXISTS_SQL}
   UNION SELECT '${PACK_SIZE_MISSING}' WHERE ${PACK_SIZE_MISSING_EXISTS_SQL}
   UNION SELECT '${PACK_SIZE_MISMATCH}' WHERE ${PACK_SIZE_MISMATCH_CLOSE_EXISTS_SQL}
-  ${defectItemSql(OPEN_DEFECT_PO_SQL("p"))}
   ${replacementTrackingItemsSql("p.id")})`;
 /** The PO's displayed items: the close set plus FBA receiving mismatch and No invoice saved. */
 export const PO_ACTION_ITEMS_SQL = `ARRAY(${openLineItemsSql("l.po_id = p.id")}
@@ -118,7 +115,6 @@ export const PO_ACTION_ITEMS_SQL = `ARRAY(${openLineItemsSql("l.po_id = p.id")}
   UNION SELECT '${PACK_SIZE_MISMATCH}' WHERE ${PACK_SIZE_MISMATCH_EXISTS_SQL}
   UNION SELECT '${RECEIVING_MISMATCH}' WHERE ${RECEIVING_MISMATCH_EXISTS_SQL}
   UNION SELECT '${NO_INVOICE_SAVED}' WHERE ${NO_INVOICE_EXISTS_SQL("p")}
-  ${defectItemSql(OPEN_DEFECT_PO_SQL("p"))}
   ${replacementTrackingItemsSql("p.id")})`;
 /** The open review reasons of a PO (alias p), for the Action Items tooltip. */
 export const REVIEW_VELOCITY_REASONS_SQL = `ARRAY(SELECT DISTINCT r FROM po_tracking t, unnest(string_to_array(t.review_reason, '; ')) r

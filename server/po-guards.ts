@@ -18,6 +18,7 @@
 import type { QueryLike } from "./scheduler/types";
 import { evaluateAutoClose, type AutoCloseOutcome } from "./po-close";
 import { fbaShipmentsOf, shipmentBlockMessage, logEdits, asLogText, EditError } from "./po-edit";
+import { cancelLines } from "./supplier-claims";
 
 export interface PoGuards {
   poId: string;
@@ -26,7 +27,7 @@ export interface PoGuards {
   lineCount: number;
   asinCount: number;
   fba: { units: number; fbaIds: string[]; rows: number };
-  /** Σ qty_at_prep (ASIN units) — still at Velocity. */
+  /** Σ qty_at_prep (Individual units since migration 101) — still at Velocity. */
   atPrepUnits: number;
   /** null = allowed; otherwise the §5.1 message. */
   blocked: string | null;
@@ -57,20 +58,23 @@ export async function deletePo(query: QueryLike, poId: string, userId: number | 
      ON CONFLICT (supplier, order_id) DO UPDATE SET deleted_by = EXCLUDED.deleted_by, deleted_at = now()`,
     [g.supplier, g.orderId, userId],
   );
-  await logEdits(query, poId, userId, "po", poId, [{ field: "PO deleted", old: `${g.supplier} ${g.orderId} — ${g.asinCount} ASIN(s), ${g.lineCount} product(s)${g.atPrepUnits > 0 ? `, ${asLogText(g.atPrepUnits)} ASIN units still at Velocity` : ""}`, new: null }]);
+  await logEdits(query, poId, userId, "po", poId, [{ field: "PO deleted", old: `${g.supplier} ${g.orderId} — ${g.asinCount} ASIN(s), ${g.lineCount} product(s)${g.atPrepUnits > 0 ? `, ${asLogText(g.atPrepUnits)} Individual units still at Velocity` : ""}`, new: null }]);
   await query(`DELETE FROM po_line_items WHERE po_id = $1`, [poId]);
   await query(`DELETE FROM purchase_orders WHERE id = $1`, [poId]); // po_asins cascade
   return { deleted: true, supplier: g.supplier, orderId: g.orderId, lines: g.lineCount, asins: g.asinCount, atPrepUnits: g.atPrepUnits };
 }
 
-/** §5.4 Cancel PO: every line canceled for its full ordered quantity. Refused while any FBA shipment exists. */
-export async function cancelPo(query: QueryLike, poId: string, userId: number | null): Promise<{ linesCanceled: number; close: AutoCloseOutcome }> {
+/**
+ * §5.4 Cancel PO (D14 since migration 101): one open canceled claim per line for its units still expected — nothing edits
+ * Ordered; the claims keep the PO open until the refunds post (D15). Refused while any FBA shipment exists.
+ */
+export async function cancelPo(query: QueryLike, poId: string, userId: number | null): Promise<{ linesCanceled: number; claims: number[]; close: AutoCloseOutcome }> {
   const g = await loadPoGuards(query, poId);
   if (g.blocked) throw new EditError(409, g.blocked);
-  const r = await query(`UPDATE po_line_items SET qty_canceled = qty_ordered WHERE po_id = $1 AND qty_ordered IS NOT NULL AND qty_canceled IS DISTINCT FROM qty_ordered RETURNING id, qty_ordered`, [poId]);
-  for (const l of r.rows) await logEdits(query, poId, userId, "line", String(l.id), [{ field: "qty_canceled", old: null, new: asLogText(l.qty_ordered) }]);
-  if ((r.rowCount ?? 0) > 0) await logEdits(query, poId, userId, "po", poId, [{ field: "PO canceled", old: null, new: `${r.rowCount} product(s)` }]);
-  return { linesCanceled: r.rowCount ?? 0, close: await evaluateAutoClose(poId, query) };
+  const lineIds = (await query(`SELECT id FROM po_line_items WHERE po_id = $1 ORDER BY po_asin_id, position, id`, [poId])).rows.map((l: any) => String(l.id));
+  const made = await cancelLines(query, poId, lineIds, userId, "Cancel PO");
+  if (made.length > 0) await logEdits(query, poId, userId, "po", poId, [{ field: "PO canceled", old: null, new: `${made.length} product(s) — canceled claims ${made.map((m) => `#${m.id}`).join(", ")}` }]);
+  return { linesCanceled: made.length, claims: made.map((m) => m.id), close: await evaluateAutoClose(poId, query) };
 }
 
 /** §5.1 guard for Cancel ASIN / a line cancel: the ASIN row must carry no FBA shipment. */
@@ -107,7 +111,7 @@ export async function velocityOrderNumberFor(query: QueryLike, row: { velocity_s
 
 const r2 = (x: number) => Math.round(x * 100) / 100;
 
-/** §5.2 Reassign `units` (ASIN units, ≤ shipped; default all) of a shipment row onto another PO's ASIN row with the same ASIN. */
+/** §5.2 Reassign `units` (Individual units since migration 101, ≤ shipped; default all) of a shipment row onto another PO's ASIN row with the same ASIN. */
 export async function reassignShipment(query: QueryLike, shipmentRowId: string, targetPoAsinId: string, unitsIn: unknown, userId: number | null): Promise<{ moved: number; from: { poId: string; orderId: string }; to: { poId: string; orderId: string }; close: { from: AutoCloseOutcome; to: AutoCloseOutcome } }> {
   const src = (await query(
     `SELECT s.*, pa.asin, pa.po_id, p.order_id, p.supplier FROM po_asin_shipments s JOIN po_asins pa ON pa.id = s.po_asin_id JOIN purchase_orders p ON p.id = pa.po_id WHERE s.id = $1`,
@@ -121,7 +125,7 @@ export async function reassignShipment(query: QueryLike, shipmentRowId: string, 
   const shipped = Number(src.qty_shipped);
   const units = unitsIn == null || unitsIn === "" ? shipped : Number(unitsIn);
   if (!Number.isFinite(units) || units <= 0 || units > shipped + 1e-9 || Math.abs(units * 100 - Math.round(units * 100)) > 1e-6) {
-    throw new EditError(400, `ASIN units must be more than 0 and at most ${asLogText(shipped)} (2 decimals)`);
+    throw new EditError(400, `Individual units must be more than 0 and at most ${asLogText(shipped)} (2 decimals)`);
   }
   const isVelocity = src.source === "velocity";
   const vOrder = isVelocity ? await velocityOrderNumberFor(query, src) : null;

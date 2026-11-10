@@ -6,36 +6,41 @@ import type { QueryLike } from "./scheduler/types";
 
 // Patch §5 (D2, D3): Closed is col 1; auto-close when every unit is
 // accounted for AND no action items; auto never reopens a PO closed by hand
-// or by the sheet backfill; a user can close/reopen with confirm.
+// or by the sheet backfill; a user can close/reopen with confirm. Since
+// migration 101 (D14 / D15): Expected comes from the view (ordered − Σ claims
+// that count) and an OPEN claim keeps the PO open.
 
-const row = (o: Partial<Parameters<typeof allUnitsAccounted>[0][number]> = {}) => ({ qty: 10, qty_canceled_asin: null, qty_returned_asin: null, qty_lost_damaged_us: null, qty_shipped_fba: null, ...o });
+const row = (o: Partial<Parameters<typeof allUnitsAccounted>[0][number]> = {}) => ({ qty_expected_asin: 10, qty_lost_damaged_us: null, qty_shipped_fba: null, ...o });
 
 describe("auto-close verdict", () => {
-  it("(a): every row shipped >= ordered − canceled − returned − lost, with at least one shipped unit", () => {
+  it("(a): every row shipped >= expected (ordered − claims) − lost, with at least one shipped unit", () => {
     expect(allUnitsAccounted([row({ qty_shipped_fba: "10" })])).toBe(true);
     expect(allUnitsAccounted([row({ qty_shipped_fba: "9" })])).toBe(false);
-    expect(allUnitsAccounted([row({ qty_shipped_fba: "7", qty_canceled_asin: "2", qty_returned_asin: "1" })])).toBe(true);
+    // 10 ordered, 2 canceled + 1 returned as claims → the view's Expected is 7
+    expect(allUnitsAccounted([row({ qty_shipped_fba: "7", qty_expected_asin: "7" })])).toBe(true);
     expect(allUnitsAccounted([row({ qty_shipped_fba: "8", qty_lost_damaged_us: "2" })])).toBe(true);
-    expect(allUnitsAccounted([row({ qty_shipped_fba: "10" }), row({ qty: 3, qty_shipped_fba: "2" })])).toBe(false);
+    expect(allUnitsAccounted([row({ qty_shipped_fba: "10" }), row({ qty_expected_asin: 3, qty_shipped_fba: "2" })])).toBe(false);
     // NULLs read as 0: a never-shipped PO is not "accounted for"
     expect(allUnitsAccounted([row()])).toBe(false);
-    // a fully-canceled PO with nothing shipped: due is 0 but nothing shipped → stays open (needs ≥ 1 shipped unit)
-    expect(allUnitsAccounted([row({ qty_canceled_asin: "10" })])).toBe(false);
+    // a fully-canceled PO with nothing shipped: expected is 0 but nothing shipped → stays open (needs ≥ 1 shipped unit)
+    expect(allUnitsAccounted([row({ qty_expected_asin: "0" })])).toBe(false);
     expect(allUnitsAccounted([])).toBe(false);
   });
-  it("(b): any open action item keeps the PO Open", () => {
+  it("(b): any open action item keeps the PO Open; (c) so does an open claim (D15)", () => {
     expect(autoCloseVerdict([row({ qty_shipped_fba: "10" })], [])).toBe(true);
     expect(autoCloseVerdict([row({ qty_shipped_fba: "10" })], ["See Comments"])).toBe(false);
+    expect(autoCloseVerdict([row({ qty_shipped_fba: "10" })], [], 1)).toBe(false);
+    expect(autoCloseVerdict([row({ qty_shipped_fba: "10" })], [], 0)).toBe(true);
   });
 });
 
-function fakePo(state: { closed_at: Date | null; closed_by: string | null; action_items: string[] }, rows: any[]) {
+function fakePo(state: { closed_at: Date | null; closed_by: string | null; action_items: string[]; open_claims?: number }, rows: any[]) {
   const writes: string[] = [];
   const query: QueryLike = async (sql, params) => {
     const s = sql.replace(/\s+/g, " ").trim();
     // Row-level Status (2026-10-17): (b) reads the union of the PO's line action items.
-    // PO_ACTION_ITEMS_SQL (the line union + the derived "Review Velocity", SPEC §26).
-    if (s.startsWith("SELECT p.closed_at, p.closed_by, ARRAY(SELECT ai.item FROM po_line_action_items ai JOIN po_line_items l ON l.id = ai.po_line_item_id WHERE ai.cleared_at IS NULL AND l.po_id = p.id") && s.includes("AS action_items FROM purchase_orders p")) return { rows: [state], rowCount: 1 };
+    // PO_ACTION_ITEMS_SQL (the line union + the derived "Review Velocity", SPEC §26); (c) the open-claim count (D15, migration 101).
+    if (s.startsWith("SELECT p.closed_at, p.closed_by, ARRAY(SELECT ai.item FROM po_line_action_items ai JOIN po_line_items l ON l.id = ai.po_line_item_id WHERE ai.cleared_at IS NULL AND l.po_id = p.id") && s.includes("AS action_items,") && s.includes("AS open_claims FROM purchase_orders p")) return { rows: [{ open_claims: 0, ...state }], rowCount: 1 };
     if (s.startsWith("SELECT pa.*")) return { rows, rowCount: rows.length };
     if (s.startsWith("UPDATE purchase_orders SET closed_at = NOW(), closed_by = 'auto'")) { writes.push("close:auto"); state.closed_at = new Date(); state.closed_by = "auto"; return { rows: [], rowCount: 1 }; }
     if (s.startsWith("UPDATE purchase_orders SET closed_at = NULL, closed_by = NULL") && s.includes("closed_by = 'auto'")) { writes.push("reopen:auto"); state.closed_at = null; state.closed_by = null; return { rows: [], rowCount: 1 }; }

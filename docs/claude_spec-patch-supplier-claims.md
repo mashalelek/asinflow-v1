@@ -555,6 +555,33 @@ Prerequisite: `claude_spec-patch-quantity-names.md` (labels only).
    Individual units. Dry run report proves On Order / auto-close / Velocity
    plan identical before and after for every production PO. Stop for
    Maria, then live.
+   **Built 2026-11-09 (migration 101, `npm run claims:dryrun -- --prod`,
+   report `docs/claims-commit1-dryrun-2026-11-09.md`); awaiting Maria's
+   review before the deploy.** Implementation notes that go beyond the text
+   above: (a) two views, `po_line_expected` (per line) and
+   `po_asin_expected` (per ASIN row — the stage quantities live on the
+   row), the latter read by On Order / auto-close / the row loader;
+   (b) a row or line whose pack was not known, or whose value × pack is not
+   a whole number (tolerance 0.05 for a 2-dp third / sixth), keeps its old
+   basis with `qty_basis = asin_legacy / product_legacy` and converts by
+   trigger when the pack arrives — `qty_at_prep`, `received_velocity` and
+   Velocity shipment rows on such a row were already Individual (units ÷ 1);
+   (c) the counting rule §3.6 read precisely: closed with any outcome but
+   replacement, or open and canceled / promised refund · credit · write-off;
+   (d) `created_by` is `created_by_user_id` (the codebase's convention; a
+   test forbids the Replit-era `created_by`); (e) `supplier_claim_conversions`
+   records each converted claim's source and flags (`kind_unclear`,
+   `qty_assumed_ordered`, `refund_not_tracked`, `legacy_units`, …); (f) a
+   converted canceled claim whose line also carried "Confirm refund /
+   replacement" is reopened with the `refund_received` task rather than
+   duplicated; (g) the col V / W write-offs land on the row's first line
+   (flagged when the row has several); (h) Spend subtracts what is still owed
+   on open refund / credit claims (as the due rows did) — the full Refunds
+   due / Spend review stays in commit 2; (i) the sheet intake maps the two
+   retired badges on a NEW row to a claim (never a stop); (j) the per-PO
+   Supplier claims section (Payments tab) replaces the defects section until
+   the Claims page; claims are not action items — a muted "N open claims"
+   note shows after the chips.
 2. Tasks + buckets + paths (§3.2–3.4), outcomes + refunds table (§3.5),
    money incl. override (§3.7), Claims nav tab + claim detail + POs-list
    column + PO page link / card / Open claim (§5), Refunds due / Spend on

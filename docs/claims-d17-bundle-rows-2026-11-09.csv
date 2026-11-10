@@ -1,0 +1,143 @@
+order_id,supplier,asin,bundle_N,kind,line_position,product,product_pack,units_per_bundle,column,before,after,view_asin_units,view_individual
+137736,yvesrocherusa.com,B0DWXWHXP1,2,bundle row,,,,,qty,5.00,10.00,5.00,10.00
+137736,yvesrocherusa.com,B0DWXWHXP1,2,bundle row,,,,,qty_at_prep,0.00,0.00,5.00,10.00
+137736,yvesrocherusa.com,B0DWXWHXP1,2,bundle row,,,,,qty_shipped_fba,5.00,10.00,5.00,10.00
+137736,yvesrocherusa.com,B0DWXWHXP1,2,bundle row,,,,,qty_received_amazon,5.00,10.00,5.00,10.00
+137736,yvesrocherusa.com,B0DWXWHXP1,2,bundle row,,,,,received_velocity,5.00,10.00,5.00,10.00
+137736,yvesrocherusa.com,B0DWXWHXP1,2,bundle row,,,,,unreimbursed_loss_qty,0.00,0.00,5.00,10.00
+200015210238647,walmart.com,B0GWG5S64Q,2,bundle row,,,,,qty,5.00,10.00,5.00,10.00
+200015210238647,walmart.com,B0GWG5S64Q,2,bundle row,,,,,qty_at_prep,0.00,0.00,5.00,10.00
+200015210238647,walmart.com,B0GWG5S64Q,2,bundle row,,,,,qty_shipped_fba,5.00,10.00,5.00,10.00
+200015210238647,walmart.com,B0GWG5S64Q,2,bundle row,,,,,qty_received_amazon,5.00,10.00,5.00,10.00
+200015210238647,walmart.com,B0GWG5S64Q,2,bundle row,,,,,received_velocity,5.00,10.00,5.00,10.00
+200015210238647,walmart.com,B0GWG5S64Q,2,bundle row,,,,,unreimbursed_loss_qty,0.00,0.00,5.00,10.00
+200015210238647,walmart.com,B0GNHTYGPF,2,bundle row,,,,,qty,7.00,14.00,7.00,14.00
+200015210238647,walmart.com,B0GNHTYGPF,2,bundle row,,,,,qty_at_prep,0.00,0.00,7.00,14.00
+200015210238647,walmart.com,B0GNHTYGPF,2,bundle row,,,,,qty_shipped_fba,7.00,14.00,7.00,14.00
+200015210238647,walmart.com,B0GNHTYGPF,2,bundle row,,,,,qty_received_amazon,7.00,14.00,7.00,14.00
+200015210238647,walmart.com,B0GNHTYGPF,2,bundle row,,,,,received_velocity,7.00,14.00,7.00,14.00
+200015210238647,walmart.com,B0GNHTYGPF,2,bundle row,,,,,unreimbursed_loss_qty,0.00,0.00,7.00,14.00
+200015523189765,walmart.com,B0GNHTYGPF,2,bundle row,,,,,qty,10.00,20.00,10.00,20.00
+200015523189765,walmart.com,B0GNHTYGPF,2,bundle row,,,,,qty_at_prep,0.00,0.00,10.00,20.00
+200015523189765,walmart.com,B0GNHTYGPF,2,bundle row,,,,,qty_shipped_fba,10.00,20.00,10.00,20.00
+200015523189765,walmart.com,B0GNHTYGPF,2,bundle row,,,,,qty_received_amazon,10.00,20.00,10.00,20.00
+200015523189765,walmart.com,B0GNHTYGPF,2,bundle row,,,,,received_velocity,10.00,20.00,10.00,20.00
+200015523189765,walmart.com,B0GNHTYGPF,2,bundle row,,,,,unreimbursed_loss_qty,0.00,0.00,10.00,20.00
+134524,yvesrocherusa.com,B0DKT4NDFZ,2,bundle row,,,,,qty,5.00,10.00,5.00,10.00
+134524,yvesrocherusa.com,B0DKT4NDFZ,2,bundle row,,,,,qty_at_prep,0.00,0.00,5.00,10.00
+134524,yvesrocherusa.com,B0DKT4NDFZ,2,bundle row,,,,,qty_shipped_fba,5.00,10.00,5.00,10.00
+134524,yvesrocherusa.com,B0DKT4NDFZ,2,bundle row,,,,,qty_received_amazon,5.00,10.00,5.00,10.00
+134524,yvesrocherusa.com,B0DKT4NDFZ,2,bundle row,,,,,received_velocity,5.00,10.00,5.00,10.00
+134524,yvesrocherusa.com,B0DKT4NDFZ,2,bundle row,,,,,unreimbursed_loss_qty,0.00,0.00,5.00,10.00
+135707,yvesrocherusa.com,B0DKT4NDFZ,2,bundle row,,,,,qty,5.00,10.00,5.00,10.00
+135707,yvesrocherusa.com,B0DKT4NDFZ,2,bundle row,,,,,qty_at_prep,0.00,0.00,5.00,10.00
+135707,yvesrocherusa.com,B0DKT4NDFZ,2,bundle row,,,,,qty_shipped_fba,5.00,10.00,5.00,10.00
+135707,yvesrocherusa.com,B0DKT4NDFZ,2,bundle row,,,,,qty_received_amazon,4.00,8.00,5.00,10.00
+135707,yvesrocherusa.com,B0DKT4NDFZ,2,bundle row,,,,,received_velocity,5.00,10.00,5.00,10.00
+135707,yvesrocherusa.com,B0DKT4NDFZ,2,bundle row,,,,,unreimbursed_loss_qty,0.00,0.00,5.00,10.00
+137083,yvesrocherusa.com,B0DWXWHXP1,2,bundle row,,,,,qty,5.00,10.00,5.00,10.00
+137083,yvesrocherusa.com,B0DWXWHXP1,2,bundle row,,,,,qty_at_prep,0.00,0.00,5.00,10.00
+137083,yvesrocherusa.com,B0DWXWHXP1,2,bundle row,,,,,qty_shipped_fba,5.00,10.00,5.00,10.00
+137083,yvesrocherusa.com,B0DWXWHXP1,2,bundle row,,,,,qty_received_amazon,5.00,10.00,5.00,10.00
+137083,yvesrocherusa.com,B0DWXWHXP1,2,bundle row,,,,,received_velocity,5.00,10.00,5.00,10.00
+137083,yvesrocherusa.com,B0DWXWHXP1,2,bundle row,,,,,unreimbursed_loss_qty,0.00,0.00,5.00,10.00
+127552,yvesrocherusa.com,B0DKT4NDFZ,2,bundle row,,,,,qty,5.00,10.00,5.00,10.00
+127552,yvesrocherusa.com,B0DKT4NDFZ,2,bundle row,,,,,qty_at_prep,0.00,0.00,5.00,10.00
+127552,yvesrocherusa.com,B0DKT4NDFZ,2,bundle row,,,,,qty_shipped_fba,5.00,10.00,5.00,10.00
+127552,yvesrocherusa.com,B0DKT4NDFZ,2,bundle row,,,,,qty_received_amazon,6.00,12.00,5.00,10.00
+127552,yvesrocherusa.com,B0DKT4NDFZ,2,bundle row,,,,,received_velocity,5.00,10.00,5.00,10.00
+127552,yvesrocherusa.com,B0DKT4NDFZ,2,bundle row,,,,,unreimbursed_loss_qty,0.00,0.00,5.00,10.00
+130097,yvesrocherusa.com,B0DWXWHXP1,2,bundle row,,,,,qty,5.00,10.00,5.00,10.00
+130097,yvesrocherusa.com,B0DWXWHXP1,2,bundle row,,,,,qty_at_prep,0.00,0.00,5.00,10.00
+130097,yvesrocherusa.com,B0DWXWHXP1,2,bundle row,,,,,qty_shipped_fba,5.00,10.00,5.00,10.00
+130097,yvesrocherusa.com,B0DWXWHXP1,2,bundle row,,,,,qty_received_amazon,5.00,10.00,5.00,10.00
+130097,yvesrocherusa.com,B0DWXWHXP1,2,bundle row,,,,,received_velocity,5.00,10.00,5.00,10.00
+130097,yvesrocherusa.com,B0DWXWHXP1,2,bundle row,,,,,unreimbursed_loss_qty,0.00,0.00,5.00,10.00
+143264,yvesrocherusa.com,B0DWXWHXP1,2,bundle row,,,,,qty,5.00,10.00,5.00,10.00
+143264,yvesrocherusa.com,B0DWXWHXP1,2,bundle row,,,,,qty_at_prep,0.00,0.00,5.00,10.00
+143264,yvesrocherusa.com,B0DWXWHXP1,2,bundle row,,,,,qty_shipped_fba,5.00,10.00,5.00,10.00
+143264,yvesrocherusa.com,B0DWXWHXP1,2,bundle row,,,,,qty_received_amazon,3.00,6.00,5.00,10.00
+143264,yvesrocherusa.com,B0DWXWHXP1,2,bundle row,,,,,received_velocity,5.00,10.00,5.00,10.00
+143264,yvesrocherusa.com,B0DWXWHXP1,2,bundle row,,,,,unreimbursed_loss_qty,0.00,0.00,5.00,10.00
+509573,godiva.com,B019YPFEKM,3,bundle row,,,,,qty,18.00,54.00,18.00,54.00
+509573,godiva.com,B019YPFEKM,3,bundle row,,,,,qty_at_prep,3.00,9.00,18.00,54.00
+509573,godiva.com,B019YPFEKM,3,bundle row,,,,,qty_shipped_fba,15.00,45.00,18.00,54.00
+509573,godiva.com,B019YPFEKM,3,bundle row,,,,,qty_received_amazon,3.00,9.00,18.00,54.00
+509573,godiva.com,B019YPFEKM,3,bundle row,,,,,received_velocity,18.00,54.00,18.00,54.00
+509573,godiva.com,B019YPFEKM,3,bundle row,,,,,unreimbursed_loss_qty,0.00,0.00,18.00,54.00
+200015497641702,walmart.com,B0G6R55GNQ,2,bundle row,,,,,qty,12.00,24.00,12.00,24.00
+200015497641702,walmart.com,B0G6R55GNQ,2,bundle row,,,,,qty_at_prep,0.00,0.00,12.00,24.00
+200015497641702,walmart.com,B0G6R55GNQ,2,bundle row,,,,,qty_shipped_fba,8.00,16.00,12.00,24.00
+200015497641702,walmart.com,B0G6R55GNQ,2,bundle row,,,,,qty_received_amazon,5.00,10.00,12.00,24.00
+200015497641702,walmart.com,B0G6R55GNQ,2,bundle row,,,,,received_velocity,8.00,16.00,12.00,24.00
+200015497641702,walmart.com,B0G6R55GNQ,2,bundle row,,,,,unreimbursed_loss_qty,0.00,0.00,12.00,24.00
+200015415094735,walmart.com,B0GWG5S64Q,2,bundle row,,,,,qty,12.00,24.00,12.00,24.00
+200015415094735,walmart.com,B0GWG5S64Q,2,bundle row,,,,,qty_at_prep,2.00,4.00,12.00,24.00
+200015415094735,walmart.com,B0GWG5S64Q,2,bundle row,,,,,qty_shipped_fba,12.00,24.00,12.00,24.00
+200015415094735,walmart.com,B0GWG5S64Q,2,bundle row,,,,,qty_received_amazon,6.00,12.00,12.00,24.00
+200015415094735,walmart.com,B0GWG5S64Q,2,bundle row,,,,,received_velocity,12.00,24.00,12.00,24.00
+200015415094735,walmart.com,B0GWG5S64Q,2,bundle row,,,,,unreimbursed_loss_qty,0.00,0.00,12.00,24.00
+200015497641702,walmart.com,B0GWG5S64Q,2,bundle row,,,,,qty,12.00,24.00,12.00,24.00
+200015497641702,walmart.com,B0GWG5S64Q,2,bundle row,,,,,qty_at_prep,0.00,0.00,12.00,24.00
+200015497641702,walmart.com,B0GWG5S64Q,2,bundle row,,,,,qty_shipped_fba,10.00,20.00,12.00,24.00
+200015497641702,walmart.com,B0GWG5S64Q,2,bundle row,,,,,qty_received_amazon,5.00,10.00,12.00,24.00
+200015497641702,walmart.com,B0GWG5S64Q,2,bundle row,,,,,received_velocity,10.00,20.00,12.00,24.00
+200015497641702,walmart.com,B0GWG5S64Q,2,bundle row,,,,,unreimbursed_loss_qty,0.00,0.00,12.00,24.00
+200015415094735,walmart.com,B0GWG5S64Q,2,component line,0,"Dr Teal's Restorative Minerals Body Balm with Magnesium, Zin",1,1,qty_ordered,12.00,12.00,12.00,12.00
+200015415094735,walmart.com,B0GWG5S64Q,2,component line,0,"Dr Teal's Restorative Minerals Body Balm with Magnesium, Zin",1,1,qty_returned,0.00,0.00,12.00,12.00
+200015415094735,walmart.com,B0GWG5S64Q,2,component line,1,(6 pack) Dr Teal's Restorative Minerals Bath & Body Oil with,6,1,qty_ordered,2.00,12.00,12.00,12.00
+200015415094735,walmart.com,B0GWG5S64Q,2,component line,1,(6 pack) Dr Teal's Restorative Minerals Bath & Body Oil with,6,1,qty_returned,0.00,0.00,12.00,12.00
+200015497641702,walmart.com,B0GWG5S64Q,2,component line,0,"Dr Teal's Restorative Minerals Body Balm with Magnesium, Zin",1,1,qty_ordered,12.00,12.00,12.00,12.00
+200015497641702,walmart.com,B0GWG5S64Q,2,component line,0,"Dr Teal's Restorative Minerals Body Balm with Magnesium, Zin",1,1,qty_returned,0.00,0.00,12.00,12.00
+200015497641702,walmart.com,B0GWG5S64Q,2,component line,1,Dr Teal's Restorative Minerals Bath & Body Oil with Magnesiu,1,1,qty_ordered,12.00,12.00,12.00,12.00
+200015497641702,walmart.com,B0GWG5S64Q,2,component line,1,Dr Teal's Restorative Minerals Bath & Body Oil with Magnesiu,1,1,qty_returned,0.00,0.00,12.00,12.00
+134524,yvesrocherusa.com,B0DKT4NDFZ,2,component line,0,5-pack Shine Conditioner,5,1,qty_ordered,1.00,5.00,5.00,5.00
+134524,yvesrocherusa.com,B0DKT4NDFZ,2,component line,0,5-pack Shine Conditioner,5,1,qty_returned,0.00,0.00,5.00,5.00
+134524,yvesrocherusa.com,B0DKT4NDFZ,2,component line,1,5-pack Shine Shampoo,5,1,qty_ordered,1.00,5.00,5.00,5.00
+134524,yvesrocherusa.com,B0DKT4NDFZ,2,component line,1,5-pack Shine Shampoo,5,1,qty_returned,0.00,0.00,5.00,5.00
+509573,godiva.com,B019YPFEKM,3,component line,0,"Dark Chocolate Pearls with Mint, Set of 18",18,1,qty_ordered,1.00,18.00,18.00,18.00
+509573,godiva.com,B019YPFEKM,3,component line,0,"Dark Chocolate Pearls with Mint, Set of 18",18,1,qty_returned,0.00,0.00,18.00,18.00
+509573,godiva.com,B019YPFEKM,3,component line,1,"Dark Chocolate Pearls, Set of 18",18,1,qty_ordered,1.00,18.00,18.00,18.00
+509573,godiva.com,B019YPFEKM,3,component line,1,"Dark Chocolate Pearls, Set of 18",18,1,qty_returned,0.00,0.00,18.00,18.00
+509573,godiva.com,B019YPFEKM,3,component line,2,"Milk Chocolate Pearls, Set of 18",18,1,qty_ordered,1.00,18.00,18.00,18.00
+509573,godiva.com,B019YPFEKM,3,component line,2,"Milk Chocolate Pearls, Set of 18",18,1,qty_returned,0.00,0.00,18.00,18.00
+143264,yvesrocherusa.com,B0DWXWHXP1,2,component line,0,Hair Shine Vinegar,1,1,qty_ordered,5.00,5.00,5.00,5.00
+143264,yvesrocherusa.com,B0DWXWHXP1,2,component line,0,Hair Shine Vinegar,1,1,qty_returned,0.00,0.00,5.00,5.00
+143264,yvesrocherusa.com,B0DWXWHXP1,2,component line,1,5-pack Shine Shampoo,5,1,qty_ordered,1.00,5.00,5.00,5.00
+143264,yvesrocherusa.com,B0DWXWHXP1,2,component line,1,5-pack Shine Shampoo,5,1,qty_returned,0.00,0.00,5.00,5.00
+137736,yvesrocherusa.com,B0DWXWHXP1,2,component line,0,Hair Shine Vinegar,1,1,qty_ordered,5.00,5.00,5.00,5.00
+137736,yvesrocherusa.com,B0DWXWHXP1,2,component line,0,Hair Shine Vinegar,1,1,qty_returned,0.00,0.00,5.00,5.00
+137736,yvesrocherusa.com,B0DWXWHXP1,2,component line,1,5-pack Shine Shampoo,5,1,qty_ordered,1.00,5.00,5.00,5.00
+137736,yvesrocherusa.com,B0DWXWHXP1,2,component line,1,5-pack Shine Shampoo,5,1,qty_returned,0.00,0.00,5.00,5.00
+137083,yvesrocherusa.com,B0DWXWHXP1,2,component line,0,Hair Shine Vinegar,1,1,qty_ordered,5.00,5.00,5.00,5.00
+137083,yvesrocherusa.com,B0DWXWHXP1,2,component line,0,Hair Shine Vinegar,1,1,qty_returned,0.00,0.00,5.00,5.00
+137083,yvesrocherusa.com,B0DWXWHXP1,2,component line,1,5-pack Shine Shampoo,5,1,qty_ordered,1.00,5.00,5.00,5.00
+137083,yvesrocherusa.com,B0DWXWHXP1,2,component line,1,5-pack Shine Shampoo,5,1,qty_returned,0.00,0.00,5.00,5.00
+135707,yvesrocherusa.com,B0DKT4NDFZ,2,component line,0,5-pack Shine Conditioner,5,1,qty_ordered,1.00,5.00,5.00,5.00
+135707,yvesrocherusa.com,B0DKT4NDFZ,2,component line,0,5-pack Shine Conditioner,5,1,qty_returned,0.00,0.00,5.00,5.00
+135707,yvesrocherusa.com,B0DKT4NDFZ,2,component line,1,5-pack Shine Shampoo,5,1,qty_ordered,1.00,5.00,5.00,5.00
+135707,yvesrocherusa.com,B0DKT4NDFZ,2,component line,1,5-pack Shine Shampoo,5,1,qty_returned,0.00,0.00,5.00,5.00
+200015497641702,walmart.com,B0G6R55GNQ,2,component line,0,"Kinder's Veggie Rub and Seasoning with Sea Salt and Herbs, 6",1,1,qty_ordered,12.00,12.00,12.00,12.00
+200015497641702,walmart.com,B0G6R55GNQ,2,component line,0,"Kinder's Veggie Rub and Seasoning with Sea Salt and Herbs, 6",1,1,qty_returned,0.00,0.00,12.00,12.00
+200015497641702,walmart.com,B0G6R55GNQ,2,component line,1,"Kinder's Smoked Onion Seasoning & Rub for Grilling, 7 oz",1,1,qty_ordered,12.00,12.00,12.00,12.00
+200015497641702,walmart.com,B0G6R55GNQ,2,component line,1,"Kinder's Smoked Onion Seasoning & Rub for Grilling, 7 oz",1,1,qty_returned,0.00,0.00,12.00,12.00
+200015523189765,walmart.com,B0GNHTYGPF,2,component line,0,"Dr Teal's Epsom Salt Magnesium Soak, Gardenia Grace, 3 lbs",1,1,qty_ordered,10.00,10.00,10.00,10.00
+200015523189765,walmart.com,B0GNHTYGPF,2,component line,0,"Dr Teal's Epsom Salt Magnesium Soak, Gardenia Grace, 3 lbs",1,1,qty_returned,0.00,0.00,10.00,10.00
+200015523189765,walmart.com,B0GNHTYGPF,2,component line,1,Dr Teal's Gardenia Grace Foaming Bath with Pure Epsom Salt &,1,1,qty_ordered,10.00,10.00,10.00,10.00
+200015523189765,walmart.com,B0GNHTYGPF,2,component line,1,Dr Teal's Gardenia Grace Foaming Bath with Pure Epsom Salt &,1,1,qty_returned,0.00,0.00,10.00,10.00
+200015210238647,walmart.com,B0GNHTYGPF,2,component line,0,"Dr Teal's Epsom Salt Magnesium Soak, Gardenia Grace, 3 lbs",1,1,qty_ordered,7.00,7.00,7.00,7.00
+200015210238647,walmart.com,B0GNHTYGPF,2,component line,0,"Dr Teal's Epsom Salt Magnesium Soak, Gardenia Grace, 3 lbs",1,1,qty_returned,0.00,0.00,7.00,7.00
+200015210238647,walmart.com,B0GNHTYGPF,2,component line,1,Dr Teal's Gardenia Grace Foaming Bath with Pure Epsom Salt &,1,1,qty_ordered,7.00,7.00,7.00,7.00
+200015210238647,walmart.com,B0GNHTYGPF,2,component line,1,Dr Teal's Gardenia Grace Foaming Bath with Pure Epsom Salt &,1,1,qty_returned,0.00,0.00,7.00,7.00
+200015210238647,walmart.com,B0GWG5S64Q,2,component line,0,"Dr Teal's Restorative Minerals Body Balm with Magnesium, Zin",1,1,qty_ordered,5.00,5.00,5.00,5.00
+200015210238647,walmart.com,B0GWG5S64Q,2,component line,0,"Dr Teal's Restorative Minerals Body Balm with Magnesium, Zin",1,1,qty_returned,0.00,0.00,5.00,5.00
+200015210238647,walmart.com,B0GWG5S64Q,2,component line,1,Dr Teal's Restorative Minerals Bath & Body Oil with Magnesiu,1,1,qty_ordered,5.00,5.00,5.00,5.00
+200015210238647,walmart.com,B0GWG5S64Q,2,component line,1,Dr Teal's Restorative Minerals Bath & Body Oil with Magnesiu,1,1,qty_returned,0.00,0.00,5.00,5.00
+130097,yvesrocherusa.com,B0DWXWHXP1,2,component line,0,Hair Shine Vinegar,1,1,qty_ordered,5.00,5.00,5.00,5.00
+130097,yvesrocherusa.com,B0DWXWHXP1,2,component line,0,Hair Shine Vinegar,1,1,qty_returned,0.00,0.00,5.00,5.00
+130097,yvesrocherusa.com,B0DWXWHXP1,2,component line,1,5-pack Shine Shampoo,5,1,qty_ordered,1.00,5.00,5.00,5.00
+130097,yvesrocherusa.com,B0DWXWHXP1,2,component line,1,5-pack Shine Shampoo,5,1,qty_returned,0.00,0.00,5.00,5.00
+127552,yvesrocherusa.com,B0DKT4NDFZ,2,component line,0,5-pack Shine Conditioner,5,1,qty_ordered,1.00,5.00,5.00,5.00
+127552,yvesrocherusa.com,B0DKT4NDFZ,2,component line,0,5-pack Shine Conditioner,5,1,qty_returned,0.00,0.00,5.00,5.00
+127552,yvesrocherusa.com,B0DKT4NDFZ,2,component line,1,5-pack Shine Shampoo,5,1,qty_ordered,1.00,5.00,5.00,5.00
+127552,yvesrocherusa.com,B0DKT4NDFZ,2,component line,1,5-pack Shine Shampoo,5,1,qty_returned,0.00,0.00,5.00,5.00

@@ -7,7 +7,6 @@
  * up: the POs page shows the header once, under the first expanded PO, and
  * every later expanded PO's rows align with it.
  */
-import { RefundProposalDialog, type PoHeaderMoney, type CanceledLine } from "@/components/refund-due-dialog";
 import React, { useState } from "react";
 import { Link } from "wouter";
 import { ChevronRight, ChevronDown, AlertTriangle, Plus, X } from "lucide-react";
@@ -18,7 +17,10 @@ import { INDIV_SHORT, PER_ASIN_UNIT, PER_PRODUCT_UNIT, QTY_KIND, individualFrom 
 import { bundleFromLines, type BundleComponent } from "@shared/bundle";
 import { InlineEdit, poApi, ReassignShipment, shipmentBlockText } from "@/components/po-edit";
 import { InlineNoteCell, NoteIcon } from "@/components/inline-note";
-import { DEFECT_ACTION_ITEM, defectSummary } from "@shared/po-defect";
+import { claimSummary, individualEquivalents } from "@shared/supplier-claim";
+
+/** The PO header money (subtotal / discount / tax) the rows may be handed; kept as a loose shape since the refund-proposal dialog left with migration 101. */
+export interface PoHeaderMoney { id: string; subtotal?: string | number | null; discount?: string | number | null; tax?: string | number | null }
 import { titlePackSuggestion } from "@shared/pack-parse";
 import { asinPackSetNote } from "@shared/po-form";
 import { useToast } from "@/hooks/use-toast";
@@ -44,11 +46,18 @@ export interface PoAsinLine {
   supplier_sku: string | null;
   price: string | null;
   item_discount: string | null;
+  /** Product units (the view, D17); the Individual twin beside it (NULL on a product_legacy line). */
   qty_ordered: number | null;
   qty_received: number | null;
-  qty_canceled: number | null;
-  qty_returned: number | null;
-  final_qty: number | null;
+  qty_ordered_individual?: number | null;
+  qty_received_individual?: number | null;
+  /** Σ canceled / returned claims on the line, Product units (D14); Expected = Ordered − Σ claims that count. */
+  qty_canceled?: number | null;
+  qty_returned?: number | null;
+  qty_expected?: number | null;
+  qty_expected_individual?: number | null;
+  /** individual (default) | product_legacy — the pack was not known at migration 101. */
+  qty_basis?: string | null;
   asin_qty_per_product: string | null;
   /** Exact yield (migration 080): retailer units / product ÷ ASIN units / pack; NULL on an unresolved sheet-imported line. */
   retailer_units_per_product?: number | null;
@@ -62,8 +71,24 @@ export interface PoAsinLine {
 }
 export interface PoAsinRowData {
   id: string;
-  /** Open supplier defects on this ASIN row's lines (SPEC §22 "Supplier defects"). */
-  defects_open?: OpenDefectBrief[];
+  /** Open supplier claims on this ASIN row's lines (SPEC §22 "Supplier claims", migration 101). */
+  claims_open?: OpenClaimBrief[];
+  open_claims?: number;
+  /** individual (default) | asin_legacy — the pack was not known at migration 101; the Individual twins are NULL then. */
+  qty_basis?: string | null;
+  /** Σ Individual units ordered (NULL on a legacy row). */
+  qty_individual?: number | null;
+  qty_shipped_supplier_individual?: string | null;
+  received_velocity_individual?: string | null;
+  qty_at_prep_individual?: string | null;
+  qty_at_warehouse_individual?: string | null;
+  qty_lost_damaged_us_individual?: string | null;
+  qty_shipped_fba_individual?: string | null;
+  qty_received_amazon_individual?: string | null;
+  qty_canceled_individual?: string | null;
+  qty_returned_individual?: string | null;
+  /** Ordered − Σ claims that count, ASIN units (po_asin_expected). */
+  qty_expected_asin?: string | null;
   po_id: string;
   asin: string;
   asin_name: string | null;
@@ -77,7 +102,7 @@ export interface PoAsinRowData {
   units_per_pack: number | null;
   notes: string | null;
   thumbnail: string | null;
-  // derived from the lines (NULL = some line untracked)
+  // Σ canceled / returned claims on the lines, ASIN units (D14; a bundle by the bundle rule)
   qty_canceled_asin: string | null;
   qty_returned_asin: string | null;
   // stored ASIN quantities (NULL = not tracked)
@@ -133,9 +158,9 @@ function Money({ v }: { v: string | null | undefined }) {
  * 2026-11-09): stored × Individual units per ASIN unit; "—" when the pack size is
  * NULL, never 0; nothing when the quantity itself is not tracked.
  */
-export function IndivLine({ v, perUnit, testId }: { v: string | number | null | undefined; perUnit: number | string | null | undefined; testId?: string }) {
+export function IndivLine({ v, perUnit, individual, testId }: { v: string | number | null | undefined; perUnit: number | string | null | undefined; /** The stored Individual units (D17) when the API carries them; else × the pack. */ individual?: string | number | null; testId?: string }) {
   if (v == null || v === "") return null;
-  const n = individualFrom(v, perUnit);
+  const n = individual != null && individual !== "" ? Number(individual) : individualFrom(v, perUnit);
   return (
     <div className="whitespace-nowrap text-[11px] text-muted-foreground" title={`${QTY_KIND.individual} = ${QTY_KIND.asin} × ${PER_ASIN_UNIT}`} data-testid={testId}>
       {n == null ? <span className="text-muted-foreground/50" data-testid={testId ? `${testId}-unknown` : undefined}>—</span> : fmtQty(n)} {INDIV_SHORT}
@@ -149,8 +174,8 @@ export function IndivLine({ v, perUnit, testId }: { v: string | number | null | 
  * in grey ("Product u.") and shows its own Individual count from the line's
  * Product pack (qty × Individual units per Product unit; "—" when that is NULL).
  */
-export function ComponentQty({ l, a }: { l: { id: string; qty_ordered: number | null; retailer_units_per_product?: number | null; units_per_bundle?: number | null }; a: Pick<PoAsinRowData, "sold_as" | "units_per_pack" | "lines"> }) {
-  const n = individualFrom(l.qty_ordered, l.retailer_units_per_product);
+export function ComponentQty({ l, a }: { l: { id: string; qty_ordered: number | null; qty_ordered_individual?: number | null; retailer_units_per_product?: number | null; units_per_bundle?: number | null }; a: Pick<PoAsinRowData, "sold_as" | "units_per_pack" | "lines"> }) {
+  const n = l.qty_ordered_individual ?? individualFrom(l.qty_ordered, l.retailer_units_per_product);
   // The bundle rule (migration 100, Maria 2026-11-09): this component's units in one bundle (typed, else the even split proposed in amber) and what is left over after the bundles.
   const comp = bundleComponentOf(a, l.id);
   return (
@@ -193,7 +218,8 @@ async function patchJson(url: string, method: string, body?: unknown): Promise<a
 
 // ── Action Items (row-level Status, patch row-level-status §2.1) ─────────────
 // Sentence case (Maria 2026-10-29) — the server stores these exact labels (po_line_action_items, migration 074).
-export const ACTION_ITEM_OPTIONS = ["Need to return", "Missing / damaged from supplier", "Confirm refund / replacement", "ATTN: Velocity", "See comments", "SHIP", "Received - FBM",
+// "Missing / damaged from supplier" and "Confirm refund / replacement" left with claims commit 1 (migration 101): those are claims now.
+export const ACTION_ITEM_OPTIONS = ["Need to return", "ATTN: Velocity", "See comments", "SHIP", "Received - FBM",
   // Capture PO patch (2026-10-31): set by the system (confirmation-email reconcile, subscriptions), cleared by hand.
   "Confirm order details", "Subscription renews", "Review renewal PO", "Subscription may be active"];
 // §7: tinted chips only. SHIP indigo; Received - FBM green; Need to return orange; the attention items amber.
@@ -225,16 +251,16 @@ const ordered = (items: readonly string[] | undefined) => DISPLAY_ACTION_ITEMS.f
 /** `reasons`: the open "Review Velocity" reasons (SPEC §26) — shown on that chip's hover. `titles`: hover text per item (Extra units shipped). */
 /** Per item: how many of the PO's lines carry it (PO table v2 §4 `action_item_lines`). */
 export interface ActionItemLines { lines: number; of: number; asins: string[]; reasons: string[] }
-/** An open supplier defect as the list rows carry it (server/po-defects.ts briefOf, SPEC §22 "Supplier defects"). */
-export interface OpenDefectBrief { id: number; po_line_item_id: string; asin: string | null; line_no: number; kind: string; qty: number; amount: number | null; owed: number | null; note: string | null }
-/** The "Missing / damaged from supplier" chip's qty and $ owed ("1 · $5.97") and its hover — per defect, ASIN line and note. */
-export function defectChipParts(defects: readonly OpenDefectBrief[] | undefined): { suffix: string; title: string } | null {
-  if (!defects?.length) return null;
-  const qty = defects.reduce((t, d) => t + Number(d.qty), 0);
-  const owed = defects.filter((d) => d.owed != null);
-  const suffix = `${Number(qty.toFixed(2))}${owed.length ? ` · $${owed.reduce((t, d) => t + (d.owed ?? 0), 0).toFixed(2)}` : ""}`;
-  const each = defects.map((d) => `${d.asin ?? "?"} line ${d.line_no}: ${defectSummary([d])}${d.note ? ` — ${d.note}` : ""}`);
-  return { suffix, title: `${DEFECT_ACTION_ITEM}: ${defectSummary(defects)}\n${each.join("\n")}` };
+/** An open supplier claim as the list rows carry it (server/supplier-claims.ts briefOf, SPEC §22 "Supplier claims"). qty in Individual units. */
+export interface OpenClaimBrief { id: number; po_line_item_id: string | null; asin: string | null; line_no: number; kind: string; qty: number; amount_owed: number | null; remaining: number | null; note: string | null; status: string; outcome: string | null; open_tasks: number }
+/**
+ * Claims are NOT action items (SPEC §22 "Supplier claims" §5): the rows show a muted "N open claim(s)" note after the chips,
+ * with each claim on hover, until the POs list's Claims column and the PO page's card land in commit 2.
+ */
+export function ClaimsNote({ claims, testId }: { claims: readonly OpenClaimBrief[] | undefined; testId?: string }) {
+  if (!claims?.length) return null;
+  const each = claims.map((d) => `${d.asin ?? "whole PO"}${d.po_line_item_id ? ` line ${d.line_no}` : ""}: ${claimSummary([d])}${d.outcome ? ` · ${d.outcome.replace("_", " ")}` : ""}${d.note ? ` — ${d.note}` : ""}`);
+  return <span className="block text-[10px] text-muted-foreground whitespace-nowrap" title={`Open supplier claims (${QTY_KIND.individual}):\n${each.join("\n")}`} data-testid={testId ?? "claims-note"}>{claims.length} open claim{claims.length === 1 ? "" : "s"}</span>;
 }
 /** Hover for a PO-row chip: which lines carry it, and the auto reasons. */
 export function lineDetailTitle(item: string, d: ActionItemLines | undefined): string | undefined {
@@ -253,28 +279,22 @@ export const MAX_CHIPS = 2;
  * `reasons`: the open "Review Velocity" reasons (SPEC §26) — shown on that chip's hover. `titles`: hover text per item (Extra units shipped).
  * `lines`: per-item line counts — a "·N" badge when fewer than all lines carry it, the lines on hover.
  */
-export function ActionItemChips({ items, testId, reasons, titles, lines, defects }: { items: readonly string[] | undefined; testId?: string; reasons?: readonly string[] | null; titles?: Readonly<Record<string, string>>; lines?: Readonly<Record<string, ActionItemLines>>; defects?: readonly OpenDefectBrief[] }) {
+export function ActionItemChips({ items, testId, reasons, titles, lines, claims }: { items: readonly string[] | undefined; testId?: string; reasons?: readonly string[] | null; titles?: Readonly<Record<string, string>>; lines?: Readonly<Record<string, ActionItemLines>>; claims?: readonly OpenClaimBrief[] }) {
   const list = ordered(items);
-  const defect = defectChipParts(defects);
   const shown = list.length > MAX_CHIPS ? list.slice(0, MAX_CHIPS) : list;
   const rest = list.slice(shown.length);
   return (
     <span className="flex flex-wrap items-start gap-0.5" data-testid={testId}>
-      {list.length === 0 ? <span className="text-muted-foreground/40 text-[11px]">—</span> : shown.map((it) => {
+      {list.length === 0 && !claims?.length ? <span className="text-muted-foreground/40 text-[11px]">—</span> : shown.map((it) => {
         const d = lines?.[it];
         return (
-          // An open defect's qty and $ owed stay visible; only the label truncates.
-          it === DEFECT_ACTION_ITEM && defect ? (
-            <span key={it} className={`${chipBase} ${actionChipClass(it)} inline-flex max-w-full`} title={defect.title}>
-              <span className="truncate">{it}</span><span className="ml-1 shrink-0 font-medium" data-testid="chip-defect-owed">{defect.suffix}</span>
-            </span>
-          ) :
           <span key={it} className={`${chipBase} ${actionChipClass(it)} max-w-full truncate`} title={titles?.[it] ?? withMeaning(it, lineDetailTitle(it, d)) ?? (it === "Review Velocity" && reasons?.length ? reasons.join(" · ") : it)}>
             {it}{d && d.lines < d.of ? <span className="ml-1 opacity-70" data-testid={`chip-count-${it}`}>·{d.lines}</span> : null}
           </span>
         );
       })}
       {rest.length > 0 && <span className={`${chipBase} bg-muted text-muted-foreground`} title={rest.join(" · ")} data-testid="chip-more">+{rest.length}</span>}
+      <ClaimsNote claims={claims} />
     </span>
   );
 }
@@ -284,9 +304,9 @@ export function ActionItemChips({ items, testId, reasons, titles, lines, defects
  * route (every line of the ASIN) or the product-line route. `lineCount` > 1 →
  * each change asks "Apply to all N lines" before it is saved (PO table v2 §5).
  */
-export function ActionItemsEditor({ items, url, onSaved, testId, titles, lines, lineCount = 1, reasons, defects }: {
+export function ActionItemsEditor({ items, url, onSaved, testId, titles, lines, lineCount = 1, reasons, claims }: {
   items: readonly string[] | undefined; url: string; onSaved?: () => void; testId: string; titles?: Readonly<Record<string, string>>;
-  lines?: Readonly<Record<string, ActionItemLines>>; lineCount?: number; reasons?: readonly string[] | null; defects?: readonly OpenDefectBrief[];
+  lines?: Readonly<Record<string, ActionItemLines>>; lineCount?: number; reasons?: readonly string[] | null; claims?: readonly OpenClaimBrief[];
 }) {
   const [open, setOpen] = useState(false);
   const [draft, setDraft] = useState<Set<string>>(new Set(items ?? []));
@@ -306,7 +326,7 @@ export function ActionItemsEditor({ items, url, onSaved, testId, titles, lines, 
     <Popover open={open} onOpenChange={(v) => { setOpen(v); setPending(null); if (v) setDraft(new Set(items ?? [])); }}>
       <PopoverTrigger asChild>
         <button type="button" onClick={(e) => e.stopPropagation()} className="min-h-[1.25rem] min-w-[3rem] max-w-full text-left" data-testid={testId} title="Edit action items">
-          <ActionItemChips items={items} titles={titles} lines={lines} reasons={reasons} defects={defects} />
+          <ActionItemChips items={items} titles={titles} lines={lines} reasons={reasons} claims={claims} />
         </button>
       </PopoverTrigger>
       <PopoverContent className="w-72 p-2 space-y-1" align="end" onClick={(e) => e.stopPropagation()}>
@@ -373,58 +393,60 @@ function ClearExtraUnits({ a, onChanged }: { a: PoAsinRowData; onChanged?: () =>
   );
 }
 
-/** "Mark canceled" (§2.2): every line of the ASIN gets qty_canceled = qty_ordered — then one DUE refund row per newly canceled line is proposed (Dashboard patch C1; Skip allowed). */
-function MarkCanceled({ a, onChanged, po }: { a: PoAsinRowData; onChanged?: () => void; po?: PoHeaderMoney }) {
+/** "Mark canceled" (§2.2; D14 since migration 101): every line of the ASIN gets an OPEN canceled claim for its units still expected — the claim carries the $ owed, nothing edits Ordered. */
+function MarkCanceled({ a, onChanged }: { a: PoAsinRowData; onChanged?: () => void; po?: PoHeaderMoney }) {
   const [err, setErr] = useState<string | null>(null);
-  const [proposal, setProposal] = useState<CanceledLine[]>([]);
   // §5.1: no cancel while this ASIN row has units shipped to FBA.
   const blocked = shipmentBlockText(a.shipments ?? []);
   if (blocked) return <span className="ml-1 text-[10px] text-muted-foreground/40 cursor-not-allowed" title={blocked} data-testid={`button-cancel-asin-${a.asin}-blocked`}>cancel</span>;
   const go = async (e: React.MouseEvent) => {
     e.stopPropagation(); setErr(null);
-    if (!window.confirm(`Mark ${a.asin} canceled? Every product line of this ASIN gets Canceled = Ordered (Product units).`)) return;
-    try {
-      await patchJson(`/api/pos/asin-rows/${a.id}/cancel`, "POST");
-      // The lines as they were before the cancel: the newly canceled qty of each.
-      setProposal((a.lines ?? []).map((l) => ({ lineId: l.id, productName: l.product_name, qty: (Number(l.qty_ordered) || 0) - (Number(l.qty_canceled) || 0), price: l.price })).filter((l) => l.qty > 0));
-      onChanged?.();
-    } catch (er: any) { setErr(er.message); }
+    if (!window.confirm(`Mark ${a.asin} canceled? Every product line of this ASIN gets an open canceled claim for its units still expected (the $ owed is on the claim; tick "Refund received" when it posts).`)) return;
+    try { await patchJson(`/api/pos/asin-rows/${a.id}/cancel`, "POST"); onChanged?.(); }
+    catch (er: any) { setErr(er.message); }
   };
-  return (
-    <>
-      <button onClick={go} className="ml-1 text-[10px] text-muted-foreground hover:text-destructive" title={err ?? "Mark this ASIN canceled"} data-testid={`button-cancel-asin-${a.asin}`}>cancel</button>
-      <RefundProposalDialog po={po ?? { id: a.po_id }} lines={proposal} onClose={() => setProposal([])} onSaved={() => onChanged?.()} />
-    </>
-  );
+  return <button onClick={go} className="ml-1 text-[10px] text-muted-foreground hover:text-destructive" title={err ?? "Mark this ASIN canceled (an open canceled claim per line)"} data-testid={`button-cancel-asin-${a.asin}`}>cancel</button>;
 }
 
 /**
- * A hand-entered quantity cell (At CQG Warehouse, Lost/damaged by us,
- * Shipped by Supplier): click to edit, Enter/blur saves, Escape cancels,
- * empty = not tracked (NULL). The server re-runs the auto-close rule.
+ * A hand-entered quantity cell (At CQG Warehouse, Lost/damaged by us, Shipped
+ * by Supplier): click to edit, Enter/blur saves, Escape cancels, empty = not
+ * tracked (NULL). Typed and stored in INDIVIDUAL units (D16 / D17, migration
+ * 101) — the field is labelled, the Product / ASIN equivalents show beside it
+ * as you type — while the cell keeps showing the ASIN units. A legacy row (pack
+ * not known) still takes ASIN units and says so. The server re-runs auto-close.
  */
-function EditableQty({ rowId, col, v, onChanged }: { rowId: string; col: "qty_at_warehouse" | "qty_lost_damaged_us" | "qty_shipped_supplier"; v: string | null; onChanged?: () => void }) {
+function EditableQty({ rowId, col, v, individual, a, onChanged }: { rowId: string; col: "qty_at_warehouse" | "qty_lost_damaged_us" | "qty_shipped_supplier"; v: string | null; individual?: string | number | null; a: Pick<PoAsinRowData, "qty_basis" | "units_per_pack" | "lines">; onChanged?: () => void }) {
   const [editing, setEditing] = useState(false);
   const [draft, setDraft] = useState("");
   const [err, setErr] = useState<string | null>(null);
-  const start = () => { setDraft(v == null ? "" : fmtQty(v)); setErr(null); setEditing(true); };
+  const legacy = a.qty_basis === "asin_legacy";
+  const stored = legacy ? v : individual ?? (v == null ? null : individualFrom(v, a.units_per_pack));
+  const productPack = (a.lines ?? []).length === 1 ? a.lines![0].retailer_units_per_product : null;
+  const start = () => { setDraft(stored == null ? "" : fmtQty(stored)); setErr(null); setEditing(true); };
   const save = async () => {
     setEditing(false);
     const next = draft.trim() === "" ? null : draft.trim();
-    if ((next ?? "") === (v == null ? "" : fmtQty(v))) return;
+    if ((next ?? "") === (stored == null ? "" : fmtQty(stored))) return;
     try { await patchJson(`/api/pos/asin-rows/${rowId}/quantities`, "PATCH", { [col]: next }); onChanged?.(); }
     catch (e: any) { setErr(e.message); }
   };
   if (editing) {
+    const n = Number(draft);
+    const eq = legacy || !(n >= 0) || draft.trim() === "" ? null : individualEquivalents(n, productPack, a.units_per_pack);
     return (
-      <input autoFocus value={draft} onChange={(e) => setDraft(e.target.value)} onBlur={save}
-        onKeyDown={(e) => { if (e.key === "Enter") save(); if (e.key === "Escape") setEditing(false); }}
-        onClick={(e) => e.stopPropagation()}
-        className="h-6 w-full max-w-16 rounded border border-input bg-background px-1 text-right text-xs" data-testid={`input-${col}-${rowId}`} />
+      <span className="block text-right" data-testid={`editing-${col}-${rowId}`}>
+        <span className="block text-[9px] leading-tight text-muted-foreground" data-testid={`kind-${col}-${rowId}`}>{legacy ? `${QTY_KIND.asin} (pack not known)` : QTY_KIND.individual}</span>
+        <input autoFocus value={draft} onChange={(e) => setDraft(e.target.value)} onBlur={save}
+          onKeyDown={(e) => { if (e.key === "Enter") save(); if (e.key === "Escape") setEditing(false); }}
+          onClick={(e) => e.stopPropagation()}
+          className="h-6 w-full max-w-16 rounded border border-input bg-background px-1 text-right text-xs" data-testid={`input-${col}-${rowId}`} />
+        {eq && (eq.product != null || eq.asin != null) && <span className="block text-[10px] text-muted-foreground whitespace-nowrap" data-testid={`equiv-${col}-${rowId}`}>{[eq.product != null ? `${fmtQty(eq.product)} Product u.` : null, eq.asin != null ? `${fmtQty(eq.asin)} ASIN u.` : null].filter(Boolean).join(" · ")}</span>}
+      </span>
     );
   }
   return (
-    <button type="button" onClick={(e) => { e.stopPropagation(); start(); }} className="w-full text-right hover:underline decoration-dotted" title={err ?? "Click to edit"} data-testid={`button-edit-${col}-${rowId}`}>
+    <button type="button" onClick={(e) => { e.stopPropagation(); start(); }} className="w-full text-right hover:underline decoration-dotted" title={err ?? (legacy ? "Click to edit (ASIN units — the pack size is not known)" : `Click to edit — typed in ${QTY_KIND.individual}`)} data-testid={`button-edit-${col}-${rowId}`}>
       <QtyCell v={v} />{err && <span className="ml-1 text-destructive">!</span>}
     </button>
   );
@@ -634,7 +656,7 @@ export function PoAsinRow({ a, indent = false, editable = false, onChanged, po }
         </td>
         <td className="px-1.5 py-1.5 text-right">
           <div><QtyCell v={a.qty} /></div>
-          <div className="whitespace-nowrap text-[11px] text-muted-foreground" title={`${QTY_KIND.individual} = ${QTY_KIND.asin} × ${PER_ASIN_UNIT}`}>{a.units_per_pack == null ? <span className="text-muted-foreground/50" data-testid={`indiv-unknown-${a.id}`}>—</span> : <QtyCell v={individualUnits(Number(a.qty), a.units_per_pack)} />} {INDIV_SHORT}</div>
+          <div className="whitespace-nowrap text-[11px] text-muted-foreground" title={`${QTY_KIND.individual} = ${QTY_KIND.asin} × ${PER_ASIN_UNIT}`}>{a.qty_individual == null && a.units_per_pack == null ? <span className="text-muted-foreground/50" data-testid={`indiv-unknown-${a.id}`}>—</span> : <QtyCell v={a.qty_individual ?? individualUnits(Number(a.qty), a.units_per_pack ?? 1)} />} {INDIV_SHORT}</div>
         </td>
         <td className="px-1.5 py-1.5 text-right text-xs">{editable ? <InlineEdit money value={a.cost_per_unit} onSave={saveAsin("cost_per_unit")} align="right" width="w-12" testId={`cost_per_unit-${a.id}`}><Money v={a.cost_per_unit} /></InlineEdit> : <Money v={a.cost_per_unit} />}</td>
         <td className="px-1.5 py-1.5 text-right text-xs"><Money v={a.total_cost} /></td>
@@ -646,19 +668,20 @@ export function PoAsinRow({ a, indent = false, editable = false, onChanged, po }
           </>}
         </td>
         {/* Every quantity: the ASIN units as the main number, the Individual units in grey under it (2026-11-09). */}
-        <td className="px-1.5 py-1.5 text-right"><div><QtyCell v={a.qty_canceled_asin} /></div><IndivLine v={a.qty_canceled_asin} perUnit={a.units_per_pack} />{editable && (a.lines ?? []).length > 0 && <MarkCanceled a={a} onChanged={onChanged} po={po} />}</td>
-        <td className="px-1.5 py-1.5 text-right"><QtyCell v={a.qty_returned_asin} /><IndivLine v={a.qty_returned_asin} perUnit={a.units_per_pack} /></td>
-        <td className="px-1.5 py-1.5 text-right">{editable ? <EditableQty rowId={a.id} col="qty_shipped_supplier" v={a.qty_shipped_supplier} onChanged={onChanged} /> : <QtyCell v={a.qty_shipped_supplier} />}<IndivLine v={a.qty_shipped_supplier} perUnit={a.units_per_pack} /></td>
-        <td className="px-1.5 py-1.5 text-right" title={VELOCITY_QTY_TITLE}><QtyCell v={a.received_velocity} /><IndivLine v={a.received_velocity} perUnit={a.units_per_pack} testId={`indiv-received-velocity-${a.id}`} /></td>
-        <td className="px-1.5 py-1.5 text-right" title={VELOCITY_QTY_TITLE}><QtyCell v={a.qty_at_prep} /><IndivLine v={a.qty_at_prep} perUnit={a.units_per_pack} /></td>
-        <td className="px-1.5 py-1.5 text-right">{editable ? <EditableQty rowId={a.id} col="qty_at_warehouse" v={a.qty_at_warehouse} onChanged={onChanged} /> : <QtyCell v={a.qty_at_warehouse} />}<IndivLine v={a.qty_at_warehouse} perUnit={a.units_per_pack} /></td>
-        <td className="px-1.5 py-1.5 text-right">{editable ? <EditableQty rowId={a.id} col="qty_lost_damaged_us" v={a.qty_lost_damaged_us} onChanged={onChanged} /> : <QtyCell v={a.qty_lost_damaged_us} />}<IndivLine v={a.qty_lost_damaged_us} perUnit={a.units_per_pack} /></td>
-        <td className="px-1.5 py-1.5 text-right"><QtyCell v={a.qty_shipped_fba} /><IndivLine v={a.qty_shipped_fba} perUnit={a.units_per_pack} /></td>
-        <td className="px-1.5 py-1.5 text-right"><QtyCell v={a.qty_received_amazon} /><IndivLine v={a.qty_received_amazon} perUnit={a.units_per_pack} /></td>
+        {/* The grey Individual line reads the stored Individual units straight from the API (D17) where the row has them. */}
+        <td className="px-1.5 py-1.5 text-right"><div><QtyCell v={a.qty_canceled_asin} /></div><IndivLine v={a.qty_canceled_asin} perUnit={a.units_per_pack} individual={a.qty_canceled_individual} />{editable && (a.lines ?? []).length > 0 && <MarkCanceled a={a} onChanged={onChanged} po={po} />}</td>
+        <td className="px-1.5 py-1.5 text-right"><QtyCell v={a.qty_returned_asin} /><IndivLine v={a.qty_returned_asin} perUnit={a.units_per_pack} individual={a.qty_returned_individual} /></td>
+        <td className="px-1.5 py-1.5 text-right">{editable ? <EditableQty rowId={a.id} col="qty_shipped_supplier" v={a.qty_shipped_supplier} individual={a.qty_shipped_supplier_individual} a={a} onChanged={onChanged} /> : <QtyCell v={a.qty_shipped_supplier} />}<IndivLine v={a.qty_shipped_supplier} perUnit={a.units_per_pack} individual={a.qty_shipped_supplier_individual} /></td>
+        <td className="px-1.5 py-1.5 text-right" title={VELOCITY_QTY_TITLE}><QtyCell v={a.received_velocity} /><IndivLine v={a.received_velocity} perUnit={a.units_per_pack} individual={a.received_velocity_individual} testId={`indiv-received-velocity-${a.id}`} /></td>
+        <td className="px-1.5 py-1.5 text-right" title={VELOCITY_QTY_TITLE}><QtyCell v={a.qty_at_prep} /><IndivLine v={a.qty_at_prep} perUnit={a.units_per_pack} individual={a.qty_at_prep_individual} /></td>
+        <td className="px-1.5 py-1.5 text-right">{editable ? <EditableQty rowId={a.id} col="qty_at_warehouse" v={a.qty_at_warehouse} individual={a.qty_at_warehouse_individual} a={a} onChanged={onChanged} /> : <QtyCell v={a.qty_at_warehouse} />}<IndivLine v={a.qty_at_warehouse} perUnit={a.units_per_pack} individual={a.qty_at_warehouse_individual} /></td>
+        <td className="px-1.5 py-1.5 text-right">{editable ? <EditableQty rowId={a.id} col="qty_lost_damaged_us" v={a.qty_lost_damaged_us} individual={a.qty_lost_damaged_us_individual} a={a} onChanged={onChanged} /> : <QtyCell v={a.qty_lost_damaged_us} />}<IndivLine v={a.qty_lost_damaged_us} perUnit={a.units_per_pack} individual={a.qty_lost_damaged_us_individual} /></td>
+        <td className="px-1.5 py-1.5 text-right"><QtyCell v={a.qty_shipped_fba} /><IndivLine v={a.qty_shipped_fba} perUnit={a.units_per_pack} individual={a.qty_shipped_fba_individual} /></td>
+        <td className="px-1.5 py-1.5 text-right"><QtyCell v={a.qty_received_amazon} /><IndivLine v={a.qty_received_amazon} perUnit={a.units_per_pack} individual={a.qty_received_amazon_individual} /></td>
         <td className="px-1.5 py-1.5"><ShipmentChips rowId={a.id} asin={a.asin} shipments={a.shipments ?? []} editable={editable} onChanged={onChanged} /></td>
         <td className="px-1.5 py-1.5">{editable && lines.length > 0
-          ? <ActionItemsEditor items={a.action_items} titles={extraTitles(a)} url={`/api/pos/asin-rows/${a.id}/action-items`} onSaved={onChanged} testId={`button-action-items-asin-${a.asin}`} lineCount={lines.length} defects={a.defects_open} />
-          : <ActionItemChips items={a.action_items} titles={extraTitles(a)} defects={a.defects_open} />}
+          ? <ActionItemsEditor items={a.action_items} titles={extraTitles(a)} url={`/api/pos/asin-rows/${a.id}/action-items`} onSaved={onChanged} testId={`button-action-items-asin-${a.asin}`} lineCount={lines.length} claims={a.claims_open} />
+          : <ActionItemChips items={a.action_items} titles={extraTitles(a)} claims={a.claims_open} />}
           {editable && (a.action_items ?? []).includes(EXTRA_UNITS_SHIPPED) && <ClearExtraUnits a={a} onChanged={onChanged} />}</td>
         {/* ASIN-row note, inline (2026-11-04); read-only tables show the icon with the note on hover. */}
         <td className={editable ? "p-0" : "px-2 py-1.5"}>{editable
@@ -675,8 +698,8 @@ export function PoAsinRow({ a, indent = false, editable = false, onChanged, po }
           {/* Product, Ordered, Cost/Unit, Total Cost above; Action Items after. */}
           <td className="px-1.5 py-1 text-right text-xs text-muted-foreground" colSpan={PO_ASIN_DISPLAY_COLUMNS.length - 4 - 1}>{l.qty_canceled != null && l.qty_canceled > 0 ? `canceled ${l.qty_canceled}` : ""}</td>
           <td className="px-1.5 py-1">{editable
-            ? <ActionItemsEditor items={l.action_items} titles={lineTitles(l)} url={`/api/pos/lines/${l.id}/action-items`} onSaved={onChanged} testId={`button-action-items-line-${a.asin}-${l.position}`} defects={a.defects_open?.filter((d) => d.po_line_item_id === l.id)} />
-            : <ActionItemChips items={l.action_items} titles={lineTitles(l)} defects={a.defects_open?.filter((d) => d.po_line_item_id === l.id)} />}</td>
+            ? <ActionItemsEditor items={l.action_items} titles={lineTitles(l)} url={`/api/pos/lines/${l.id}/action-items`} onSaved={onChanged} testId={`button-action-items-line-${a.asin}-${l.position}`} claims={a.claims_open?.filter((d) => d.po_line_item_id === l.id)} />
+            : <ActionItemChips items={l.action_items} titles={lineTitles(l)} claims={a.claims_open?.filter((d) => d.po_line_item_id === l.id)} />}</td>
           {/* Product-line note, inline (2026-11-04). */}
           <td className={editable ? "p-0" : "px-2 py-1"}>{editable
             ? <InlineNoteCell value={l.notes} label="line note" className="px-2 py-1" testId={`line-${l.id}`} onSave={async (v) => { await poApi(`/api/pos/lines/${l.id}`, "PATCH", { notes: v }); onChanged?.(); }} />

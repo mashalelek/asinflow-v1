@@ -20,10 +20,11 @@ type Q = (sql: string, params?: any[]) => Promise<any>;
 async function seed(q: Q, costFormulaVersion: number | null) {
   const po = (await q(`INSERT INTO purchase_orders (order_id, order_date, supplier, subtotal, tax, sh_donations, discount, refund_amount, order_total, cost_formula_version, ships_to, notes)
     VALUES ('zz-edit-form', '2026-10-28', 'zz-test.com', 29.00, 0, 0, 0, 0, 29.00, $1, 'velocity', NULL) RETURNING id`, [costFormulaVersion])).rows[0].id as string;
-  const a = (await q(`INSERT INTO po_asins (po_id, asin, qty, cost_per_unit, sourcing_cost, paid_cost, prep_cost, sold_as, units_per_pack) VALUES ($1, 'B0ZZEDIT0A', 12, 7.77, 6.66, 5.55, 1.00, 'multi-pack', 2) RETURNING id`, [po])).rows[0].id as string;
+  // Stored in Individual units (migration 101): A = 12 ASIN units of 2-packs = 24, its line 2 × 12ct = 24; B = 3 singles; B's line has no integers → product_legacy, 3 Product units.
+  const a = (await q(`INSERT INTO po_asins (po_id, asin, qty, cost_per_unit, sourcing_cost, paid_cost, prep_cost, sold_as, units_per_pack) VALUES ($1, 'B0ZZEDIT0A', 24, 7.77, 6.66, 5.55, 1.00, 'multi-pack', 2) RETURNING id`, [po])).rows[0].id as string;
   const b = (await q(`INSERT INTO po_asins (po_id, asin, qty, cost_per_unit, prep_cost, sold_as, units_per_pack) VALUES ($1, 'B0ZZEDIT0B', 3, 3.00, 1.00, 'individual', 1) RETURNING id`, [po])).rows[0].id as string;
-  const l1 = (await q(`INSERT INTO po_line_items (po_id, po_asin_id, position, product_name, price, qty_ordered, asin_qty_per_product, retailer_units_per_product, asin_units_per_pack) VALUES ($1, $2, 0, 'zz tea 12ct', 10.00, 2, 6, 12, 2) RETURNING id`, [po, a])).rows[0].id as string;
-  const l2 = (await q(`INSERT INTO po_line_items (po_id, po_asin_id, position, product_name, price, qty_ordered, asin_qty_per_product) VALUES ($1, $2, 1, 'zz soap', 3.00, 3, 1) RETURNING id`, [po, b])).rows[0].id as string;
+  const l1 = (await q(`INSERT INTO po_line_items (po_id, po_asin_id, position, product_name, price, qty_ordered, asin_qty_per_product, retailer_units_per_product, asin_units_per_pack) VALUES ($1, $2, 0, 'zz tea 12ct', 10.00, 24, 6, 12, 2) RETURNING id`, [po, a])).rows[0].id as string;
+  const l2 = (await q(`INSERT INTO po_line_items (po_id, po_asin_id, position, product_name, price, qty_ordered, asin_qty_per_product, qty_basis) VALUES ($1, $2, 1, 'zz soap', 3.00, 3, 1, 'product_legacy') RETURNING id`, [po, b])).rows[0].id as string;
   const pay = (await q(`INSERT INTO po_payments (po_id, position, method, nickname, amount) VALUES ($1, 0, 'card', 'zz card', 29.00) RETURNING id`, [po])).rows[0].id as number;
   await q(`INSERT INTO po_promos (po_id, position, type, description, amount, counts_toward_cogs, source) VALUES ($1, 0, 'rewards', 'zz cash', 1.00, false, 'manual')`, [po]);
   return { po, a, b, l1, l2, pay: Number(pay) };
@@ -83,7 +84,7 @@ describe("Edit PO — load and save on the real schema (rolled back)", () => {
       f.products = f.products.filter((p) => p.line_item_id !== s.l2);
       await savePoForm(q as any, s.po, f, null);
       const a = (await q(`SELECT qty, cost_per_unit, sourcing_cost FROM po_asins WHERE id = $1`, [s.a])).rows[0];
-      expect(Number(a.qty)).toBe(6);
+      expect(Number(a.qty)).toBe(12); // 1 × 12ct = 12 Individual units stored (6 ASIN units of 2-packs)
       expect(Number(a.sourcing_cost)).toBeCloseTo(10 / 6, 2);
       expect((await q(`SELECT count(*)::int AS n FROM po_asins WHERE id = $1`, [s.b])).rows[0].n).toBe(0);
     });

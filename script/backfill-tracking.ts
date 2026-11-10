@@ -80,8 +80,7 @@ async function main(): Promise<void> {
     `SELECT p.id, p.supplier, p.order_id, p.order_date::text AS order_date,
             CASE WHEN (SELECT MAX(a.prep_cost) FROM po_asins a WHERE a.po_id = p.id) > 0 THEN 'velocity' ELSE 'home' END AS ships_to,
             (EXISTS (SELECT 1 FROM po_line_items l WHERE l.po_id = p.id)
-              AND NOT EXISTS (SELECT 1 FROM po_line_items l WHERE l.po_id = p.id
-                               AND COALESCE(l.qty_canceled, 0) + COALESCE(l.qty_returned, 0) < COALESCE(l.qty_ordered, 0))) AS canceled_or_returned
+              AND NOT EXISTS (SELECT 1 FROM po_line_expected le WHERE le.po_id = p.id AND COALESCE(le.expected_product, 0) > 0)) AS canceled_or_returned
        FROM purchase_orders p`,
   )).rows.map((r: any) => ({ ...r, id: String(r.id), order_id: String(r.order_id), canceled_or_returned: r.canceled_or_returned === true }));
   const inScope = pos.filter((p) => inbound.has(String(p.order_id).trim()));

@@ -13,10 +13,17 @@
 // an ASIN row's Ordered (po_asins.qty) is recomputed from its lines exactly
 // as the importer derives it (Σ qty ordered × yield; a bundle's sets = its
 // scarcest component) whenever a line's qty, yield or ASIN mapping changes.
+//
+// Units (migration 101, D16 / D17): a line's qty_ordered / qty_received are
+// typed and served in PRODUCT units and STORED in Individual units (× the
+// line's Product pack); an ASIN row's qty is stored in Individual units (its
+// ASIN units × the pack). A legacy line / row (pack not known) stores its
+// basis as before; server/po-expected.ts holds the two conversions.
 import type { QueryLike } from "./scheduler/types";
 import { evaluateAutoClose, type AutoCloseOutcome } from "./po-close";
 import { trueYield } from "./po-af-source";
 import { asinUnitsFromLines, lineRatio, ratioYield, retailerUnitsAtPack, type YieldLine } from "../shared/yield";
+import { lineFactor, productUnitsOf, storedQtyForAsinRow, storedQtyForLine } from "./po-expected";
 
 export type Parsed = { ok: true; value: unknown } | { ok: false; error: string };
 type Parser = (v: unknown) => Parsed;
@@ -111,7 +118,8 @@ export const LINE_FIELDS: Record<string, Parser> = {
   product_name: textOrNull, supplier_sku: textOrNull, price: money({ nullable: true, decimals: 6 }), line_total: money({ nullable: true }),
   // Free-item deals (migration 097, 2026-11-06): the unit price before a multi-buy deal — the line's allocation weight.
   regular_price: money({ nullable: true, decimals: 6 }),
-  qty_ordered: decQty({ positive: true }), qty_received: decQty({ nullable: true }), qty_returned: decQty({ nullable: true }), qty_canceled: decQty({ nullable: true }),
+  // Product units in (the Products tab), Individual units stored (editLine converts). Canceled / Returned are claims since migration 101 (D14).
+  qty_ordered: decQty({ positive: true }), qty_received: decQty({ nullable: true }),
   // Exact yield (migration 080, 2026-11-02): two integers, never a decimal — the derived asin_qty_per_product is written alongside, read-only.
   retailer_units_per_product: intQty({ nullable: false, min: 1 }), asin_units_per_pack: intQty({ nullable: false, min: 1 }), notes: textOrNull, asin: asinParser,
   // The bundle rule (migration 100, Maria 2026-11-09): a component's units in one bundle; NULL = not known (an even split is proposed).
@@ -164,7 +172,7 @@ export function changedFields(current: Record<string, unknown>, edits: Record<st
   return out;
 }
 
-export type EditEntity = "po" | "line" | "asin" | "shipment";
+export type EditEntity = "po" | "line" | "asin" | "shipment" | "document" | "claim";
 /** One po_edit_log row per changed field. */
 /** opts.derived: a value AF computed (recomputePoCosts), not one a user typed — migration 091. */
 export async function logEdits(query: QueryLike, poId: string, userId: number | null, entity: EditEntity, entityId: string | null, changes: readonly FieldChange[], opts: { derived?: boolean } = {}): Promise<void> {
@@ -191,18 +199,24 @@ export function asinQtyFromLines(lines: ReadonlyArray<YieldLine>, soldAs: string
   return asinUnitsFromLines(lines, soldAs, trueYield, bundleN);
 }
 
-/** Recompute an ASIN row's Ordered (and a bundle's unique products) from its lines; logs a change. */
+/**
+ * Recompute an ASIN row's Ordered (and a bundle's unique products) from its lines; logs a change. The lines are read
+ * in Product units (their stored Individual units ÷ pack), the result (ASIN units) is stored × the row's pack (D17) —
+ * a legacy row (pack not known) stores ASIN units as before.
+ */
 export async function recomputeAsinQty(query: QueryLike, poAsinId: string, userId: number | null): Promise<void> {
-  const pa = (await query(`SELECT id, po_id, qty, sold_as, unique_products, units_per_pack FROM po_asins WHERE id = $1`, [poAsinId])).rows[0];
+  const pa = (await query(`SELECT id, po_id, qty, sold_as, unique_products, units_per_pack, qty_basis FROM po_asins WHERE id = $1`, [poAsinId])).rows[0];
   if (!pa) return;
-  const lines = (await query(`SELECT qty_ordered, asin_qty_per_product, retailer_units_per_product, asin_units_per_pack, units_per_bundle FROM po_line_items WHERE po_asin_id = $1`, [poAsinId])).rows;
-  if (lines.length === 0) return;
+  const stored = (await query(`SELECT qty_ordered, qty_basis, asin_qty_per_product, retailer_units_per_product, asin_units_per_pack, units_per_bundle FROM po_line_items WHERE po_asin_id = $1`, [poAsinId])).rows;
+  if (stored.length === 0) return;
+  const lines = stored.map((l: any) => ({ ...l, qty_ordered: productUnitsOf(l.qty_ordered, l) }));
   const next = asinQtyFromLines(lines, String(pa.sold_as ?? "individual"), pa.sold_as === "bundle" ? pa.units_per_pack ?? null : null);
-  const changes = changedFields({ qty: pa.qty }, { qty: next.qty });
+  const nextStored = storedQtyForAsinRow(next.qty, pa);
+  const changes = changedFields({ qty: pa.qty }, { qty: nextStored });
   const upChange = pa.sold_as === "bundle" ? changedFields({ unique_products: pa.unique_products }, { unique_products: next.uniqueProducts }) : [];
   if (changes.length + upChange.length === 0) return;
-  await query(`UPDATE po_asins SET qty = $2, unique_products = CASE WHEN sold_as = 'bundle' THEN $3 ELSE unique_products END WHERE id = $1`, [poAsinId, next.qty, next.uniqueProducts]);
-  await logEdits(query, String(pa.po_id), userId, "asin", poAsinId, [...changes, ...upChange]);
+  await query(`UPDATE po_asins SET qty = $2, unique_products = CASE WHEN sold_as = 'bundle' THEN $3 ELSE unique_products END WHERE id = $1`, [poAsinId, nextStored, next.uniqueProducts]);
+  await logEdits(query, String(pa.po_id), userId, "asin", poAsinId, [...changes.map((c) => ({ ...c, field: pa.qty_basis === "asin_legacy" ? "qty (ASIN units)" : "qty (Individual units)" })), ...upChange]);
 }
 
 /** FBA shipments on a PO / ASIN row (§5.1): shipment rows, units, distinct FBA ids. */
@@ -218,10 +232,10 @@ export async function fbaShipmentsOf(query: QueryLike, where: { poId?: string; p
   return { units, fbaIds: Array.from(ids).sort(), rows: rows.length };
 }
 
-/** §5.1 message: "N ASIN units shipped to FBA in <FBA ids>. Reassign the shipment to another PO first." */
+/** §5.1 message: "N Individual units shipped to FBA in <FBA ids>. Reassign the shipment to another PO first." (Individual units since migration 101.) */
 export function shipmentBlockMessage(s: { units: number; fbaIds: string[] }): string {
   const n = Number.isInteger(s.units) ? String(s.units) : s.units.toFixed(2);
-  return `${n} ASIN unit${s.units === 1 ? "" : "s"} shipped to FBA in ${s.fbaIds.length > 0 ? s.fbaIds.join(", ") : "a shipment with no FBA id yet"}. Reassign the shipment to another PO first.`;
+  return `${n} Individual unit${s.units === 1 ? "" : "s"} shipped to FBA in ${s.fbaIds.length > 0 ? s.fbaIds.join(", ") : "a shipment with no FBA id yet"}. Reassign the shipment to another PO first.`;
 }
 
 /** Find or create this PO's ASIN row for `asin` (a line re-map / a new line). New rows take title + primary SKU from the catalog. */
@@ -231,8 +245,8 @@ export async function ensureAsinRow(query: QueryLike, poId: string, asin: string
   const cat = (await query(`SELECT title, primary_sku FROM asins WHERE asin = $1`, [asin])).rows[0];
   const soldAs = defaults.sold_as ?? "individual";
   const ins = await query(
-    `INSERT INTO po_asins (po_id, asin, asin_name, sku, qty, cost_per_unit, prep_cost, sold_as, units_per_pack, unique_products)
-     VALUES ($1, $2, $3, $4, 0, $5, $6, $7, $8, $9) RETURNING id`,
+    `INSERT INTO po_asins (po_id, asin, asin_name, sku, qty, cost_per_unit, prep_cost, sold_as, units_per_pack, unique_products, qty_basis)
+     VALUES ($1, $2, $3, $4, 0, $5, $6, $7, $8, $9, 'individual') RETURNING id`,
     [poId, asin, cat?.title ?? null, cat?.primary_sku ?? null, defaults.cost_per_unit ?? null, defaults.prep_cost ?? "0", soldAs, soldAs === "individual" ? 1 : (defaults.units_per_pack ?? 1), soldAs === "bundle" ? 1 : null],
   );
   const id = String(ins.rows[0].id);
@@ -284,19 +298,19 @@ export async function editLine(query: QueryLike, lineId: string, body: unknown, 
   const cur = (await query(`SELECT l.*, pa.asin FROM po_line_items l LEFT JOIN po_asins pa ON pa.id = l.po_asin_id WHERE l.id = $1`, [lineId])).rows[0];
   if (!cur) throw new EditError(404, "product line not found");
   const poId = String(cur.po_id);
-  const ordered = Number(p.edits.qty_ordered ?? cur.qty_ordered ?? 0);
-  for (const k of ["qty_canceled", "qty_returned", "qty_received"] as const) {
-    const v = k in p.edits ? p.edits[k] : cur[k];
-    if (v != null && Number(v) > ordered) throw new EditError(400, `${k} (${v}) cannot exceed the line's Ordered (${ordered} Product units)`);
-  }
+  // Product units in, Individual units stored (D17): the typed qty × the line's Product pack AFTER this edit; a pack change alone
+  // keeps the Product units ("12 ordered" stays 12 whether singles or six-packs) and re-stores them at the new pack.
+  const nextPack = { qty_basis: cur.qty_basis, retailer_units_per_product: ("retailer_units_per_product" in p.edits ? p.edits.retailer_units_per_product : cur.retailer_units_per_product) as number | null };
+  const curProduct = { ordered: productUnitsOf(cur.qty_ordered, cur), received: productUnitsOf(cur.qty_received, cur) };
+  const orderedProduct = "qty_ordered" in p.edits ? Number(p.edits.qty_ordered) : curProduct.ordered ?? 0;
+  const receivedProduct = "qty_received" in p.edits ? (p.edits.qty_received == null ? null : Number(p.edits.qty_received)) : curProduct.received;
+  if (receivedProduct != null && receivedProduct > orderedProduct + 1e-9) throw new EditError(400, `qty_received (${receivedProduct}) cannot exceed the line's Ordered (${orderedProduct} Product units)`);
+  const packChanged = "retailer_units_per_product" in p.edits && lineFactor(nextPack) !== lineFactor(cur);
+  if ("qty_ordered" in p.edits || packChanged) p.edits.qty_ordered = storedQtyForLine(orderedProduct, nextPack);
+  if ("qty_received" in p.edits || (packChanged && cur.qty_received != null)) p.edits.qty_received = receivedProduct == null ? null : storedQtyForLine(receivedProduct, nextPack);
   // A captured line total holds only for its price and qty: a new price or qty without one goes back to price × qty.
   if (cur.line_total != null && !("line_total" in p.edits) && (("price" in p.edits && changedFields(cur, { price: p.edits.price }).length) || ("qty_ordered" in p.edits && changedFields(cur, { qty_ordered: p.edits.qty_ordered }).length))) p.edits.line_total = null;
   const changes = changedFields(cur, p.edits);
-  // §5.1: no cancel on a product whose ASIN row has units shipped to FBA.
-  if (cur.po_asin_id != null && changes.some((c) => c.field === "qty_canceled" && Number(c.new ?? 0) > Number(c.old ?? 0))) {
-    const ship = await fbaShipmentsOf(query, { poAsinId: String(cur.po_asin_id) });
-    if (ship.rows > 0) throw new EditError(409, `${cur.asin}: ${shipmentBlockMessage(ship)}`);
-  }
   const remap = changes.find((c) => c.field === "asin");
   const cols = changes.map((c) => c.field).filter((f) => f !== "asin");
   const vals: unknown[] = cols.map((c) => p.edits[c]);
@@ -336,10 +350,12 @@ export async function addLine(query: QueryLike, poId: string, body: unknown, use
   const e = p.edits;
   const rowPack = (await query(`SELECT sold_as, units_per_pack FROM po_asins WHERE id = $1`, [paId])).rows[0];
   const ratio = lineRatio({ retailer_units_per_product: e.retailer_units_per_product as number, asin_units_per_pack: (e.asin_units_per_pack as number | undefined) ?? (rowPack?.sold_as === "individual" ? 1 : Number(rowPack?.units_per_pack) || 1) }) ?? { retailer: 1, asinUnits: 1 };
+  // Stored in Individual units (D17): the typed Product units × the Product pack (ratio.retailer, ≥ 1 — never a legacy line here).
+  const basis = { qty_basis: "individual", retailer_units_per_product: ratio.retailer };
   const ins = await query(
-    `INSERT INTO po_line_items (po_id, po_asin_id, position, product_name, supplier_sku, price, item_discount, qty_ordered, qty_received, qty_returned, qty_canceled, asin_qty_per_product, retailer_units_per_product, asin_units_per_pack, notes, line_total, regular_price)
-     VALUES ($1, $2, $3, $4, $5, $6, 0, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16) RETURNING id`,
-    [poId, paId, pos, e.product_name ?? null, e.supplier_sku ?? null, e.price ?? null, e.qty_ordered, e.qty_received ?? null, e.qty_returned ?? 0, e.qty_canceled ?? null, ratioYield(ratio), ratio.retailer, ratio.asinUnits, e.notes ?? null, e.line_total ?? null, e.regular_price ?? null],
+    `INSERT INTO po_line_items (po_id, po_asin_id, position, product_name, supplier_sku, price, item_discount, qty_ordered, qty_received, asin_qty_per_product, retailer_units_per_product, asin_units_per_pack, notes, line_total, regular_price, units_per_bundle, qty_basis)
+     VALUES ($1, $2, $3, $4, $5, $6, 0, $7, $8, $9, $10, $11, $12, $13, $14, $15, 'individual') RETURNING id`,
+    [poId, paId, pos, e.product_name ?? null, e.supplier_sku ?? null, e.price ?? null, storedQtyForLine(Number(e.qty_ordered), basis), e.qty_received == null ? null : storedQtyForLine(Number(e.qty_received), basis), ratioYield(ratio), ratio.retailer, ratio.asinUnits, e.notes ?? null, e.line_total ?? null, e.regular_price ?? null, e.units_per_bundle ?? null],
   );
   const lineId = String(ins.rows[0].id);
   const changes: FieldChange[] = [{ field: "line added", old: null, new: `${e.product_name ?? "product"} × ${e.qty_ordered} → ${e.asin}` }];
@@ -385,6 +401,14 @@ export async function editAsinRow(query: QueryLike, poAsinId: string, body: unkn
     throw new EditError(400, "a multi-pack needs Individual units per ASIN unit (2 or more)");
   }
   const poId = String(cur.po_id);
+  // The pack cleared on a row stored in Individual units (D17): its quantities go back to ASIN units (÷ the old pack) and the row
+  // is asin_legacy until a pack is known again — the mirror of the migration's trigger, so the basis check always holds.
+  if (soldAs == null && cur.qty_basis === "individual" && cur.units_per_pack != null) {
+    const f = Number(cur.units_per_pack) || 1;
+    for (const c of ["qty", "qty_shipped_supplier", "qty_at_warehouse", "qty_lost_damaged_us", "unreimbursed_loss_qty", "extra_units_cleared_shipped"] as const) if (cur[c] != null) p.edits[c] = Math.round((Number(cur[c]) / f) * 100) / 100;
+    p.edits.qty_basis = "asin_legacy";
+    await query(`UPDATE po_asin_shipments SET qty_shipped = ROUND(qty_shipped / $2, 2), qty_received = ROUND(qty_received / $2, 2), updated_at = now() WHERE po_asin_id = $1 AND source = 'manual'`, [poAsinId, f]);
+  }
   const changes = changedFields(cur, p.edits);
   if (changes.length > 0) {
     const cols = changes.map((c) => c.field);
@@ -445,7 +469,9 @@ export async function fillAsinPackGaps(query: QueryLike, asin: string, soldAs: "
       WHERE pa.asin = $1 AND pa.sold_as IS NULL AND pa.id::text <> $2`, [a, excludePoAsinId ?? ""],
   )).rows;
   for (const r of rows) {
-    const lines = (await query(`SELECT id, qty_ordered, retailer_units_per_product, asin_units_per_pack, asin_qty_per_product FROM po_line_items WHERE po_asin_id = $1`, [r.id])).rows;
+    // Product units for the pack arithmetic (a converted line stores Individual units, D17); r.qty is a legacy row's ASIN units.
+    const lines = (await query(`SELECT id, qty_ordered, qty_basis, retailer_units_per_product, asin_units_per_pack, asin_qty_per_product FROM po_line_items WHERE po_asin_id = $1`, [r.id])).rows
+      .map((l: any) => ({ ...l, qty_ordered: productUnitsOf(l.qty_ordered, l) }));
     const fit = linesAtPack(lines, pack);
     const reproduces = fit != null && lines.length > 0 && Math.abs(fit.units - Number(r.qty)) <= 0.01 + 1e-9;
     if (!reproduces && (r.closed || opts.strict)) {

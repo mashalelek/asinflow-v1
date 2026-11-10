@@ -40,9 +40,10 @@ describe("createPoFromForm", () => {
     expect(po.params[15]).toBe(now.getTime());
     const pas = calls.filter((c) => /^INSERT INTO po_asins/.test(c.sql)).map((c) => c.params);
     // … then the three costs (Sourcing, Paid) and the adjustment (none here).
+    // qty is stored in Individual units (D17, migration 101): the bundle's 7 ASIN units × N 2 = 14; the individual 5 × 1 = 5; qty_basis individual.
     expect(pas).toEqual([
-      ["id1", "B0GNHTYGPF", "Catalog title", "SKU-1", 7, "7.00", "1.00", "bundle", 2, 2, "7.00", "7.00", null, null],
-      ["id1", "B0TEST0001", "Catalog title", "SKU-1", 5, "5.44", "1.00", "individual", 1, null, "5.44", "5.44", null, null],
+      ["id1", "B0GNHTYGPF", "Catalog title", "SKU-1", 14, "7.00", "1.00", "bundle", 2, 2, "7.00", "7.00", null, null, "individual"],
+      ["id1", "B0TEST0001", "Catalog title", "SKU-1", 5, "5.44", "1.00", "individual", 1, null, "5.44", "5.44", null, null, "individual"],
     ]);
     const lines = calls.filter((c) => /^INSERT INTO po_line_items/.test(c.sql)).map((c) => [c.params[1], c.params[2], c.params[3], c.params[6]]);
     expect(lines).toEqual([["id2", 0, "Epsom Salt Soak", 7], ["id2", 1, "Body Wash", 7], ["id3", 0, "Pens", 5]]);

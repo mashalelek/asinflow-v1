@@ -63,7 +63,7 @@ describe("§4 column model", () => {
     const comp = read("client/src/components/po-asin-rows.tsx");
     expect(comp).not.toMatch(/unreimbursed/i);
     // Individual Units Ordered = Ordered × Units/Pack (P1)
-    expect(comp).toMatch(/individualUnits\(Number\(a\.qty\), a\.units_per_pack\)/);
+    expect(comp).toMatch(/a\.qty_individual \?\? individualUnits\(Number\(a\.qty\), a\.units_per_pack \?\? 1\)/); // the stored Individual units (migration 101), × the pack as the fallback
     // fixed widths so separate instances align under one header
     expect(comp).toMatch(/table-fixed/);
     expect(comp).toMatch(/<colgroup>/);
@@ -78,7 +78,7 @@ describe("§4 column model", () => {
     expect(comp).toMatch(/title=\{VELOCITY_QTY_TITLE\}><QtyCell v=\{a\.qty_at_prep\}/);
     expect(comp).toMatch(/received_velocity: VELOCITY_QTY_TITLE, at_prep: VELOCITY_QTY_TITLE/);
     expect(comp).toMatch(/title=\{COL_TITLES\[c\.key\]\}>\s*\{"kind" in c && c\.kind \? <span className="block text-\[9px\] font-normal opacity-60"[^>]*>\{c\.kind\}<\/span> : null\}\s*\{c\.label\}/);
-    expect(VELOCITY_QTY_TITLE).toBe("Received by Velocity = every ASIN unit Velocity has ever checked in for this line (Velocity counts Individual units; shown ÷ Individual units per ASIN unit); At Prep Center = of those, the ASIN units still at Velocity.");
+    expect(VELOCITY_QTY_TITLE).toBe("Received by Velocity = every unit Velocity has ever checked in for this line (Velocity counts Individual units, stored as such since migration 101; shown in ASIN units with the Individual count under it); At Prep Center = of those, the units still at Velocity.");
     expect(comp).not.toMatch(/minWidth: "140rem"/);
     expect(read("client/src/pages/purchase-orders.tsx")).toMatch(/minWidth: PO_ASIN_TABLE_MIN_WIDTH/);
     // Received by Velocity is a PO-row column only: the ASIN-level pipeline (On Order / At Prep / Stock) never reads it.
@@ -104,17 +104,16 @@ describe("quantity semantics (§4.1)", () => {
   });
 });
 
-describe("derived Canceled / Returned (pre-flight decision 1)", () => {
-  it("the ASIN row sums line qty × yield and is NULL when any line is untracked", () => {
+describe("Canceled / Returned on the ASIN row come from the claims (D14, migration 101)", () => {
+  it("the shared row SELECT overlays the view's ASIN-unit figures under the old names, with the Individual twins and the open-claim count", () => {
     const sql = poAsinRowsSql("pa.po_id = $1").replace(/\s+/g, " ");
-    for (const col of ["qty_canceled", "qty_returned"]) {
-      expect(sql).toContain(`COUNT(*) FILTER (WHERE l.${col} IS NULL) > 0 THEN NULL`);
-      expect(sql).toContain(`SUM(l.${col} * COALESCE(l.retailer_units_per_product::numeric / l.asin_units_per_pack, l.asin_qty_per_product, 1))`); // the exact ratio when the line has one (migration 080)
-    }
-    expect(sql).toMatch(/AS qty_canceled_asin/);
-    expect(sql).toMatch(/AS qty_returned_asin/);
-    // no stored copies on po_asins are read for these
-    expect(sql).not.toMatch(/pa\.qty_canceled|pa\.qty_returned/);
+    expect(sql).toContain("JOIN po_asin_expected e ON e.id = pa.id");
+    expect(sql).toContain("e.canceled_asin AS qty_canceled_asin");
+    expect(sql).toContain("e.returned_asin AS qty_returned_asin");
+    expect(sql).toContain("e.ordered_asin AS qty");
+    expect(sql).toContain("e.ordered_individual AS qty_individual");
+    expect(sql).toContain("e.open_claims AS open_claims");
+    expect(sql).not.toMatch(/qty_canceled \*|unique_products ELSE 1/);
   });
   it("the detail route uses the shared loader (one query shape for both surfaces)", () => {
     const routes = read("server/routes.ts");

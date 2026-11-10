@@ -1,6 +1,7 @@
-// PO quantity formatting (patch §4.1): quantities are ASIN (sellable-pack)
-// counts, numeric(10,2); NULL = not tracked; fractional values are legal
-// (7 units of a 6-pack = 1.17) and show 2 decimals ONLY when non-integer.
+// PO quantity formatting (patch §4.1): the API serves ASIN (sellable-pack)
+// counts from the stored Individual base (migration 101, D17), numeric(10,2);
+// NULL = not tracked; fractional ASIN values are legal (7 units of a 6-pack =
+// 1.17) and show 2 decimals ONLY when non-integer.
 import { PER_ASIN_UNIT, QTY_KIND } from "@shared/quantity-kinds";
 
 export function qtyNumber(v: string | number | null | undefined): number | null {
@@ -37,7 +38,7 @@ export function individualUnits(qty: number | string, unitsPerPack: number): num
 }
 
 /** Tooltip on Received by Velocity and At Prep Center (Maria 2026-11-02). */
-export const VELOCITY_QTY_TITLE = "Received by Velocity = every ASIN unit Velocity has ever checked in for this line (Velocity counts Individual units; shown ÷ Individual units per ASIN unit); At Prep Center = of those, the ASIN units still at Velocity.";
+export const VELOCITY_QTY_TITLE = "Received by Velocity = every unit Velocity has ever checked in for this line (Velocity counts Individual units, stored as such since migration 101; shown in ASIN units with the Individual count under it); At Prep Center = of those, the units still at Velocity.";
 
 /** §4 column model — order and names, shared by the nested rows and the detail ASINs tab. `kind`: the quantity kind shown as the muted line above the header (SPEC §22 "Quantity vocabulary"). */
 export const PO_ASIN_COLUMNS = [

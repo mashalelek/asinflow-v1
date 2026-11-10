@@ -192,7 +192,7 @@ export async function buildSourcingCost(
       `SELECT a.asin, e.actual_cogs, e.cogs_source,
               (SELECT CASE WHEN ${PATCH_FORWARD_PO_SQL} THEN pa.sourcing_cost END FROM po_asins pa JOIN purchase_orders p ON p.id = pa.po_id
                 WHERE pa.asin = a.asin
-                  AND NOT COALESCE((SELECT bool_and(l.qty_canceled IS NOT NULL AND l.qty_canceled >= COALESCE(l.qty_ordered, 0)) FROM po_line_items l WHERE l.po_asin_id = pa.id), false)
+                  AND NOT COALESCE((SELECT bool_and(le.fully_canceled) FROM po_line_expected le WHERE le.po_asin_id = pa.id), false)
                 ORDER BY ${NEWEST_PO_ORDER} LIMIT 1) AS sourcing_cost
          FROM asins a
          LEFT JOIN asin_estimates e ON e.asin = a.asin

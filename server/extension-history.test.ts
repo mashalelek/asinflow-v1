@@ -102,7 +102,7 @@ describe("one ASIN's history (stored values, read)", () => {
     expect(h).toMatchObject({ asin: "B000000005", title: "Rolls 3-pack", asinPack: 3, last: { cogs: 10, orderDate: "2026-10-20", orderId: "A3" }, avg365: 8.5, pos365: 2, units365: 16, conversion: "this listing: 12-pack → 4 ASIN units (ASIN is a 3-pack)" });
     expect(h.recent.map((r) => [r.orderId, r.how, r.asinUnits])).toEqual([["A3", "6-pack × 2", 4], ["A2", "6-pack × 2", 12], ["A1", "6-pack × 2", 100]]);
     const sql = db.calls.find((c) => /WHERE pa.asin/.test(c.sql))!;
-    expect(sql.sql).toMatch(/NOT COALESCE\(\(SELECT bool_and\(\(l\.qty_canceled IS NOT NULL AND l\.qty_canceled >= COALESCE\(l\.qty_ordered, 0\)\)\)/); // a fully canceled row is no purchase
+    expect(sql.sql).toMatch(/NOT COALESCE\(\(SELECT bool_and\(COALESCE\(\(SELECT le\.fully_canceled FROM po_line_expected le WHERE le\.line_id = l\.id\), false\)\)/); // a fully canceled row (by its claims) is no purchase
     expect(sql.sql).toMatch(/ORDER BY p\.order_date DESC, p\.entry_seq DESC/);
     expect(sql.params).toEqual(["B000000005", "2026-11-05"]);
   });

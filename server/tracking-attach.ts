@@ -45,7 +45,7 @@ export async function attachTrackingToPos(query: QueryLike, rowId: number, poIds
   for (const id of poIds) {
     const p = (await query(
       `SELECT p.id, p.supplier, p.order_id,
-              COALESCE((SELECT SUM(l.qty_ordered) FROM po_line_items l WHERE l.po_id = p.id), 0)::float
+              COALESCE((SELECT SUM(le.ordered_product) FROM po_line_expected le WHERE le.po_id = p.id), 0)::float
                 - COALESCE((SELECT SUM(t.qty) FROM po_tracking t WHERE t.po_id = p.id AND t.qty IS NOT NULL AND t.id <> $2 AND COALESCE(t.split_of, 0) <> $2), 0)::float AS capacity
          FROM purchase_orders p WHERE p.id = $1`, [id, rowId],
     )).rows[0];

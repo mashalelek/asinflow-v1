@@ -17,7 +17,10 @@ import { orderKey, orderBaseKey, afOrderKeys, afOrderBaseKeys } from "./order-nu
 import type { RetailerResolution } from "./supplier-aliases";
 
 /** The AF row fields the rules read (a subset of sync A's AfAsinRow). */
-export interface MatchRow { id: string; asin: string; order_id: string; supplier: string; order_date: string; qty?: number | string | null; units_per_pack: number | null }
+export interface MatchRow { id: string; asin: string; order_id: string; supplier: string; order_date: string; qty?: number | string | null; units_per_pack: number | null
+  /** individual (default) | asin_legacy — how `qty` is stored (migration 101). */
+  qty_basis?: string | null;
+}
 
 export interface MatchCandidate {
   po_asin_id: string; order_id: string; supplier: string; asin: string;
@@ -93,7 +96,9 @@ export function velocityDate(line: { date?: unknown; created_at?: unknown }): st
 export const dayDiff = (a: string, b: string): number => Math.round((Date.parse(`${a.slice(0, 10)}T00:00:00Z`) - Date.parse(`${b.slice(0, 10)}T00:00:00Z`)) / 86_400_000);
 
 /** A row's ordered component units: ASIN qty × AF pack (Velocity's pack when AF's is NULL, else 1). */
-export const capacityUnits = (row: MatchRow, fallbackUpp: number | null): number => (Number(row.qty) || 0) * (Number(row.units_per_pack) || fallbackUpp || 1);
+/** The row's ordered units in Velocity's (Individual) units: the stored qty since migration 101 (D17); a legacy row's ASIN units × the pack. */
+export const capacityUnits = (row: MatchRow, fallbackUpp: number | null): number =>
+  row.qty_basis === "asin_legacy" ? (Number(row.qty) || 0) * (Number(row.units_per_pack) || fallbackUpp || 1) : (Number(row.qty) || 0);
 
 export interface CandidateInput { asin: string; retailer: RetailerResolution; units: number; vDate: string | null; orderNumber: string }
 

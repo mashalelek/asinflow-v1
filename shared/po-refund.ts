@@ -39,5 +39,4 @@ export function proposeRefund(i: RefundProposalInput): RefundProposal {
   return { amount: round2(lineValue * (1 - discountRatio) + taxShare), lineValue: round2(lineValue), discountRatio, taxShare: round2(taxShare), allocated: true };
 }
 
-export const REFUND_STATUSES = ["due", "received"] as const;
-export type RefundStatus = (typeof REFUND_STATUSES)[number];
+// REFUND_STATUSES ("due" | "received") left with migration 101: a refund row is money received; what is owed lives on the claims (SPEC §22 "Supplier claims").

@@ -37,14 +37,15 @@ export async function recomputePoCosts(query: QueryLike, poId: string, userId: n
   const plan: Array<{ entity: string; id: string; field: string; old: unknown; new: unknown }> = [];
   const write = async (sql: string, params: unknown[]) => { if (!opts.dryRun) await query(sql, params); };
   const promos = (await query(`SELECT type, description, amount, percent, counts_toward_cogs, in_line_prices FROM po_promos WHERE po_id = $1 ORDER BY position, id`, [poId])).rows as Array<{ type?: string | null; description?: string | null; amount: string | null; percent?: string | null; counts_toward_cogs: boolean; in_line_prices?: boolean | null }>;
-  const rows = (await query(`SELECT id, asin, qty, cost_per_unit, sourcing_cost, paid_cost, cogs_adjustment, sold_as, units_per_pack FROM po_asins WHERE po_id = $1 ORDER BY asin`, [poId])).rows;
+  // ASIN units for the per-unit cost (the view, D17): a cost per ASIN unit divides the row's money by its ASIN units, never by Individual units.
+  const rows = (await query(`SELECT pa.id, pa.asin, e.ordered_asin AS qty, pa.cost_per_unit, pa.sourcing_cost, pa.paid_cost, pa.cogs_adjustment, pa.sold_as, pa.units_per_pack FROM po_asins pa JOIN po_asin_expected e ON e.id = pa.id WHERE pa.po_id = $1 ORDER BY pa.asin`, [poId])).rows;
   const manual = new Set<string>(
     (await query(`SELECT DISTINCT entity_id FROM po_edit_log WHERE po_id = $1 AND entity = 'asin' AND field = 'cost_per_unit' AND NOT derived`, [poId])).rows.map((r: any) => String(r.entity_id)),
   );
   const subtotalStored = Number(po.subtotal);
   // The double-discount rule, per promo (Maria 2026-11-01; 1¢ 2026-11-04; per promo 2026-11-05): the promos already in the
   // line totals count for nothing, the rest apply as usual (reflectedPromos).
-  const allLines = (await query(`SELECT price, qty_ordered, line_total, regular_price FROM po_line_items WHERE po_id = $1`, [poId])).rows as Array<{ price: string | null; qty_ordered: string | null; line_total: string | null; regular_price?: string | null }>;
+  const allLines = (await query(`SELECT l.price, le.ordered_product AS qty_ordered, l.line_total, l.regular_price FROM po_line_items l JOIN po_line_expected le ON le.line_id = l.id WHERE l.po_id = $1`, [poId])).rows as Array<{ price: string | null; qty_ordered: string | null; line_total: string | null; regular_price?: string | null }>;
   const linesSum = r2(allLines.reduce((t, l) => t + (lineMoney(costLine(l)) ?? 0), 0));
   const refl = reflectedPromos({
     linesSum, subtotal: subtotalStored > 0 ? subtotalStored : null, discount: Number(po.discount) || 0, promoAmounts: promos.map((p) => (p.amount == null ? null : Number(p.amount))), answers: promos.map((p) => p.in_line_prices ?? null), kinds: promos.map((p) => promoKind(p.type, p.description)), shipping: Number(po.sh_donations) || 0, // a rewards voucher is never in a line price (2026-11-07); a shipping discount comes off the shipping (2026-11-08)
@@ -64,7 +65,7 @@ export async function recomputePoCosts(query: QueryLike, poId: string, userId: n
   }, linesSum, promos.map((p) => ({ counts: p.counts_toward_cogs !== false })), refl);
   let changed = 0;
   for (const pa of rows) {
-    const lines = (await query(`SELECT id, price, qty_ordered, line_total, regular_price, adjusted_product_cost, retailer_units_per_product, units_per_bundle FROM po_line_items WHERE po_asin_id = $1 ORDER BY position`, [pa.id])).rows;
+    const lines = (await query(`SELECT l.id, l.price, le.ordered_product AS qty_ordered, l.line_total, l.regular_price, l.adjusted_product_cost, l.retailer_units_per_product, l.units_per_bundle FROM po_line_items l JOIN po_line_expected le ON le.line_id = l.id WHERE l.po_asin_id = $1 ORDER BY l.position`, [pa.id])).rows;
     // A bundle (Maria 2026-11-09): Σ component per-Individual cost × its units per bundle (typed, else the even split proposed), then the PO's share — shared/bundle.ts, bundleAsinCosts.
     const costs = pa.sold_as === "bundle"
       ? bundleAsinCosts(h, bundleCostLines(lines, pa.units_per_pack), pa.cogs_adjustment == null ? 0 : Number(pa.cogs_adjustment))

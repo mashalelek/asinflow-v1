@@ -8,8 +8,7 @@
 import type { QueryLike } from "./scheduler/types";
 import { ACTION_ITEMS, REVIEW_VELOCITY } from "./po-status-map";
 import { asinWriteThrough, REVIEW_VELOCITY_EXISTS_SQL, HOME_PO_REVIEW_REASON, HOME_PO_REVIEW_OPEN_SQL } from "./po-action-items";
-import { EditError, logEdits } from "./po-edit";
-import { DEFECT_ACTION_ITEM } from "@shared/po-defect";
+import { logEdits } from "./po-edit";
 
 const MANUAL = ACTION_ITEMS as readonly string[];
 
@@ -42,7 +41,6 @@ export async function insertLineItems(query: QueryLike, lineId: string, items: r
  */
 export async function writeLineItems(query: QueryLike, poId: string, lineIds: readonly string[], desired: readonly string[], userId: number | null): Promise<string[]> {
   const current = await loadOpenManualItems(query, lineIds);
-  desired = await withoutDefectEcho(query, lineIds, current, desired);
   const plan = asinWriteThrough(Array.from(current.entries()).map(([id, items]) => ({ id, action_items: items })), desired);
   for (const [lineId, after] of Array.from(plan.entries())) {
     const before = current.get(lineId) ?? [];
@@ -55,21 +53,6 @@ export async function writeLineItems(query: QueryLike, poId: string, lineIds: re
     await logEdits(query, poId, userId, "line", lineId, [{ field: "action_items", old: before.join(", ") || null, new: after.join(", ") || null }]);
   }
   return Array.from(plan.keys());
-}
-
-/**
- * "Missing / damaged from supplier" comes from open supplier defects (SPEC §22
- * "Supplier defects", 2026-11-05); the badges stored before then stay until
- * removed. An editor echoing the derived badge (a line in scope has an open
- * defect) adds nothing; adding it by hand where no defect is open is refused.
- * Removing a stored one works as before.
- */
-async function withoutDefectEcho(query: QueryLike, lineIds: readonly string[], current: Map<string, string[]>, desired: readonly string[]): Promise<readonly string[]> {
-  if (!desired.includes(DEFECT_ACTION_ITEM)) return desired;
-  if (Array.from(current.values()).some((items) => items.includes(DEFECT_ACTION_ITEM))) return desired;
-  const open = lineIds.length > 0 && (await query(`SELECT 1 FROM po_line_defects WHERE po_line_item_id = ANY($1::uuid[]) AND status = 'open' LIMIT 1`, [lineIds])).rows.length > 0;
-  if (open) return desired.filter((x) => x !== DEFECT_ACTION_ITEM);
-  throw new EditError(400, `"${DEFECT_ACTION_ITEM}" comes from a supplier defect now — add one under Supplier defects on the Payments tab`);
 }
 
 /**

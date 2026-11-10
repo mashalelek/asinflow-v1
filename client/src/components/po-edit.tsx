@@ -4,8 +4,10 @@
  * - InlineEdit: click a cell → input; Enter / blur saves, Escape cancels.
  * - (The header dialog is gone since 2026-11-04: Edit PO is the page
  *   /pos/:id/edit — client/src/pages/po-edit-page.tsx.)
- * - PoProductsTable: the Products tab, editable (name, SKU, price, the four
- *   quantities, yield, ASIN re-map, notes), add / remove product.
+ * - PoProductsTable: the Products tab, editable (name, SKU, price, Ordered in
+ *   Product units, the Product pack, yield, ASIN re-map, notes), add / remove
+ *   product. Canceled / Returned / Final left with claims commit 1 (migration
+ *   101, D14): the PO's claims hold them (the Payments tab's Supplier claims).
  * - PoHistory: the po_edit_log, newest first.
  * Every save hits the server, which logs the change and re-runs auto-close;
  * the caller reloads the PO afterwards.
@@ -21,9 +23,8 @@ import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription, Di
 import { useToast } from "@/hooks/use-toast";
 import { fmtQty, productQtyFromAsin } from "@/lib/po-qty";
 import { INDIV_SHORT, PER_ASIN_UNIT, PER_PRODUCT_UNIT, QTY_KIND, individualFrom } from "@shared/quantity-kinds";
-import { bundleComponentOf, type PoAsinRowData, type PoAsinLine } from "@/components/po-asin-rows";
+import { bundleComponentOf, type PoAsinRowData, type PoAsinLine, type PoHeaderMoney } from "@/components/po-asin-rows";
 import { calcMoney } from "@/components/money-calc-input";
-import { RefundProposalDialog, type PoHeaderMoney, type CanceledLine } from "@/components/refund-due-dialog";
 
 export const ORDER_ID_WARNING = "order # is how shipments are matched from Velocity; changing it re-matches on the next Sync Shipments";
 
@@ -102,17 +103,11 @@ function QtyText({ v }: { v: number | string | null | undefined }) { const t = f
 
 type LineWithParent = PoAsinLine & { parent: PoAsinRowData };
 
-export function PoProductsTable({ poId, asins, onChanged, po, shipsTo }: { poId: string; asins: PoAsinRowData[]; onChanged: () => void; /** The header money the due-refund proposal allocates with (Dashboard patch C1). */ po?: PoHeaderMoney; /** 'velocity' → Received is Velocity's count (lineReceivedShown). */ shipsTo?: string | null }) {
+export function PoProductsTable({ poId, asins, onChanged, shipsTo }: { poId: string; asins: PoAsinRowData[]; onChanged: () => void; /** Kept for the callers; the due-refund proposal left with migration 101. */ po?: PoHeaderMoney; /** 'velocity' → Received is Velocity's count (lineReceivedShown). */ shipsTo?: string | null }) {
   const { toast } = useToast();
   const lines: LineWithParent[] = asins.flatMap((a) => (a.lines ?? []).map((l) => ({ ...l, parent: a })));
-  // Cancel qty (C1): raising a line's Canceled proposes a DUE refund row for the added qty; saving the cancel without one is allowed (Skip).
-  const [proposal, setProposal] = useState<CanceledLine[]>([]);
   const patch = (l: LineWithParent, field: string) => async (v: string) => {
     await poApi(`/api/pos/lines/${l.id}`, "PATCH", { [field]: v });
-    if (field === "qty_canceled") {
-      const added = (Number(v) || 0) - (Number(l.qty_canceled) || 0);
-      if (added > 0) setProposal([{ lineId: l.id, productName: l.product_name, qty: added, price: l.price }]);
-    }
     onChanged();
   };
   const remove = async (l: LineWithParent) => {
@@ -127,26 +122,25 @@ export function PoProductsTable({ poId, asins, onChanged, po, shipsTo }: { poId:
     <th className={`${th(right)} ${kind ? minW : ""}`} title={title}>{kind && <span className={`block text-[9px] font-normal opacity-60 ${right ? "ml-auto" : ""} max-w-[7rem]`} data-testid={`products-kind-${label.toLowerCase().replace(/[^a-z]+/g, "-")}`}>{kind}</span>}{label}</th>
   );
   // Grey Individual-units line under a Product-units number: × the line's Individual units per Product unit; "—" when that is NULL (an unresolved sheet import).
-  const Indiv = ({ v, per }: { v: number | string | null | undefined; per: number | string | null | undefined }) => {
+  const Indiv = ({ v, per, individual }: { v: number | string | null | undefined; per: number | string | null | undefined; /** The stored Individual units (D17) when the API carries them. */ individual?: number | string | null }) => {
     if (v == null || v === "") return null;
-    const n = individualFrom(v, per);
+    const n = individual != null && individual !== "" ? Number(individual) : individualFrom(v, per);
     return <div className="text-[11px] text-muted-foreground whitespace-nowrap">{n == null ? <span className="text-muted-foreground/50">—</span> : fmtQty(n)} {INDIV_SHORT}</div>;
   };
   const hairline = { borderBottom: "0.5px solid hsl(var(--border))" } as const;
   return (
     <div className="space-y-3">
-      <RefundProposalDialog po={po ?? { id: poId }} lines={proposal} onClose={() => setProposal([])} onSaved={onChanged} />
       <div className="w-full overflow-auto rounded-md" style={{ border: "0.5px solid hsl(var(--border))" }}>
         <table className="w-full border-collapse text-sm" data-testid="po-products-table">
           <thead>
             <tr className="table-header-stone">
               <th className={`${th()} min-w-[10rem]`}>Product Name</th><th className={`${th()} whitespace-nowrap`}>SKU / UPC</th><th className={th(true)}>Price</th><th className={th(true)}>Item Discount</th>
-              {/* 2026-11-09: Received (sheet col M) dropped as on the POs list; Product pack added; every quantity names its kind. Canceled / Returned / Final go with the claims patch (D14). */}
+              {/* 2026-11-09: Received (sheet col M) dropped as on the POs list; Product pack added; every quantity names its kind. Canceled / Returned / Final left with claims commit 1 (migration 101, D14): the PO's claims hold them. */}
               <Th label="Ordered" kind={QTY_KIND.product} /><Th label="Product pack" kind={PER_PRODUCT_UNIT} right={false} minW="min-w-[7rem]" title="How the supplier sells it: single, or multi-pack × the Individual units in one Product unit" />
               <Th label="Ordered" kind={QTY_KIND.asin} title="ASIN units this line yields: Product units × Individual units per Product unit ÷ Individual units per ASIN unit" />
-              <Th label="Canceled" kind={QTY_KIND.product} /><Th label="Returned" kind={QTY_KIND.product} />
+              <Th label="Expected" kind={QTY_KIND.product} title="Ordered − the units claimed (canceled, returned, refunded, written off — the PO's supplier claims)" />
               <Th label="At Prep Center" kind={QTY_KIND.product} /><Th label="At CQG Warehouse" kind={QTY_KIND.product} /><Th label="Lost / damaged by us" kind={QTY_KIND.product} minW="min-w-[7.5rem]" />
-              <Th label="Final" kind={QTY_KIND.product} /><th className={th()}>ASIN</th><th className={th()}></th>
+              <th className={th()}>ASIN</th><th className={th()}></th>
             </tr>
           </thead>
           <tbody>
@@ -160,7 +154,7 @@ export function PoProductsTable({ poId, asins, onChanged, po, shipsTo }: { poId:
                   <td className="px-3 py-1.5 font-mono text-xs"><InlineEdit value={l.supplier_sku} onSave={patch(l, "supplier_sku")} width="w-32" testId={`supplier_sku-${l.id}`}>{l.supplier_sku ?? <Muted v="—" />}</InlineEdit></td>
                   <td className="px-3 py-1.5 text-right"><InlineEdit money value={l.price} onSave={patch(l, "price")} align="right" width="w-20" testId={`price-${l.id}`}><MoneyText v={l.price} /></InlineEdit></td>
                   <td className="px-3 py-1.5 text-right"><MoneyText v={l.item_discount} /></td>
-                  <td className="px-3 py-1.5 text-right"><InlineEdit value={l.qty_ordered} onSave={patch(l, "qty_ordered")} align="right" width="w-16" testId={`qty_ordered-${l.id}`}><QtyText v={l.qty_ordered} /></InlineEdit><Indiv v={l.qty_ordered} per={l.retailer_units_per_product} /></td>
+                  <td className="px-3 py-1.5 text-right"><InlineEdit value={l.qty_ordered} onSave={patch(l, "qty_ordered")} align="right" width="w-16" testId={`qty_ordered-${l.id}`}><QtyText v={l.qty_ordered} /></InlineEdit><Indiv v={l.qty_ordered} per={l.retailer_units_per_product} individual={l.qty_ordered_individual} /></td>
                   {/* Product pack (2026-11-09): the line's Individual units per Product unit — "single" or "multi-pack ×N"; editable (the server keeps the yield). */}
                   <td className="px-3 py-1.5 text-xs">
                     <InlineEdit value={l.retailer_units_per_product == null ? null : String(l.retailer_units_per_product)} onSave={patch(l, "retailer_units_per_product")} width="w-14" testId={`product_pack-${l.id}`} title={PER_PRODUCT_UNIT}>
@@ -178,10 +172,9 @@ export function PoProductsTable({ poId, asins, onChanged, po, shipsTo }: { poId:
                   {/* A bundle component's ASIN units = the bundles it builds (its Individual units ÷ its units per bundle); the bundle row takes the scarcest. */}
                   {comp ? <td className="px-3 py-1.5 text-right" data-testid={`asin-units-${l.id}`}><QtyText v={comp.builds} /><div className="text-[11px] text-muted-foreground whitespace-nowrap">{fmtQty(comp.individual)} {INDIV_SHORT}</div>{comp.leftover > 0.005 && <div className="text-[11px] text-amber-700 dark:text-amber-400 whitespace-nowrap" data-testid={`leftover-${l.id}`}>{fmtQty(comp.leftover)} left over</div>}</td>
                   : <td className="px-3 py-1.5 text-right"><InlineEdit value={lineAsinUnits(l)} onSave={async (v) => { const q = Number(l.qty_ordered) || 0; if (!(q > 0) || !(Number(v) > 0)) return; const r = ratioForUnits(Number(v), q, l.parent.sold_as === "individual" ? 1 : Number(l.parent.units_per_pack) || 1); if (!r) return; await poApi(`/api/pos/lines/${l.id}`, "PATCH", { retailer_units_per_product: String(r.retailer), asin_units_per_pack: String(r.asinUnits) }); onChanged(); }} align="right" width="w-16" testId={`asin-units-${l.id}`}><QtyText v={lineAsinUnits(l)} /></InlineEdit><Indiv v={lineAsinUnits(l)} per={l.asin_units_per_pack ?? (l.parent.sold_as === "individual" ? 1 : l.parent.units_per_pack)} /></td>}
-                  <td className="px-3 py-1.5 text-right"><InlineEdit value={l.qty_canceled} onSave={patch(l, "qty_canceled")} align="right" width="w-16" testId={`qty_canceled-${l.id}`}><QtyText v={l.qty_canceled} /></InlineEdit><Indiv v={l.qty_canceled} per={l.retailer_units_per_product} /></td>
-                  <td className="px-3 py-1.5 text-right"><InlineEdit value={l.qty_returned} onSave={patch(l, "qty_returned")} align="right" width="w-16" testId={`qty_returned-${l.id}`}><QtyText v={l.qty_returned} /></InlineEdit><Indiv v={l.qty_returned} per={l.retailer_units_per_product} /></td>
+                  {/* Expected = Ordered − Σ claims that count (po_line_expected, D14); the claims themselves are on the Payments tab. */}
+                  <td className="px-3 py-1.5 text-right" data-testid={`qty_expected-${l.id}`}><QtyText v={l.qty_expected} /><Indiv v={l.qty_expected} per={l.retailer_units_per_product} individual={l.qty_expected_individual} />{(Number(l.qty_canceled) || 0) > 0 && <div className="text-[10px] text-muted-foreground whitespace-nowrap">{fmtQty(l.qty_canceled)} canceled</div>}{(Number(l.qty_returned) || 0) > 0 && <div className="text-[10px] text-muted-foreground whitespace-nowrap">{fmtQty(l.qty_returned)} returned</div>}</td>
                   {(["qty_at_prep", "qty_at_warehouse", "qty_lost_damaged_us"] as const).map((k) => { const v = sole ? productQtyFromAsin(l.parent[k], lineYield(l)) : null; return <td key={k} className="px-3 py-1.5 text-right"><QtyText v={v} /><Indiv v={v} per={l.retailer_units_per_product} /></td>; })}
-                  <td className="px-3 py-1.5 text-right"><QtyText v={l.final_qty} /><Indiv v={l.final_qty} per={l.retailer_units_per_product} /></td>
                   <td className="px-3 py-1.5">
                     <InlineEdit value={l.parent.asin} onSave={patch(l, "asin")} width="w-28" testId={`asin-${l.id}`} title="Re-map this product to another ASIN">
                       <span className="inline-block rounded-sm bg-muted px-1.5 py-0.5 font-mono text-[11px] text-muted-foreground">→ {l.parent.asin}</span>
@@ -307,18 +300,18 @@ export function PoHistory({ poId, reloadKey }: { poId: string; reloadKey: unknow
 // ── §5 Cancel PO / Delete PO (po-af-owned §5.1, §5.3, §5.4) ───────────────────
 export interface PoGuardsData { lineCount: number; asinCount: number; atPrepUnits: number; fba: { units: number; fbaIds: string[]; rows: number }; blocked: string | null; supplier: string; orderId: string }
 
-/** §5.1 text, client side (shipment rows on screen): "N ASIN units shipped to FBA in <ids>. Reassign the shipment to another PO first." */
+/** §5.1 text, client side (shipment rows on screen; Individual units since migration 101): "N Individual units shipped to FBA in <ids>. Reassign the shipment to another PO first." */
 export function shipmentBlockText(shipments: ReadonlyArray<{ qty_shipped: string | number; fba_shipment_ids?: string[] | null }>): string | null {
   if (shipments.length === 0) return null;
   const units = Math.round(shipments.reduce((t, s) => t + (Number(s.qty_shipped) || 0), 0) * 100) / 100;
   const ids = Array.from(new Set(shipments.flatMap((s) => s.fba_shipment_ids ?? []))).sort();
-  return `${fmtQty(units)} ASIN unit${units === 1 ? "" : "s"} shipped to FBA in ${ids.length > 0 ? ids.join(", ") : "a shipment with no FBA id yet"}. Reassign the shipment to another PO first.`;
+  return `${fmtQty(units)} Individual unit${units === 1 ? "" : "s"} shipped to FBA in ${ids.length > 0 ? ids.join(", ") : "a shipment with no FBA id yet"}. Reassign the shipment to another PO first.`;
 }
 
-/** Delete confirm text (§5.3): names the PO and its products; units still at Velocity when any. */
+/** Delete confirm text (§5.3): names the PO and its products; units still at Velocity when any (Individual units). */
 export function deleteConfirmText(g: Pick<PoGuardsData, "supplier" | "orderId" | "lineCount" | "asinCount" | "atPrepUnits">): string {
   const base = `Delete PO ${g.supplier} ${g.orderId} with its ${g.lineCount} product${g.lineCount === 1 ? "" : "s"} (${g.asinCount} ASIN${g.asinCount === 1 ? "" : "s"})? Sync POs will not import it again.`;
-  return g.atPrepUnits > 0 ? `${base} ${fmtQty(g.atPrepUnits)} ASIN unit${g.atPrepUnits === 1 ? "" : "s"} still at Velocity for this PO.` : base;
+  return g.atPrepUnits > 0 ? `${base} ${fmtQty(g.atPrepUnits)} Individual unit${g.atPrepUnits === 1 ? "" : "s"} still at Velocity for this PO.` : base;
 }
 
 export function PoDangerActions({ poId, reloadKey, onCanceled, onDeleted }: { poId: string; reloadKey: unknown; onCanceled: () => void; onDeleted: () => void }) {
@@ -350,7 +343,7 @@ export function PoDangerActions({ poId, reloadKey, onCanceled, onDeleted }: { po
           <DialogHeader>
             <DialogTitle>{confirm === "delete" ? "Delete PO?" : "Cancel PO?"}</DialogTitle>
             <DialogDescription data-testid="po-danger-confirm-text">
-              {confirm === "delete" ? deleteConfirmText(g) : `Cancel every product of ${g.supplier} ${g.orderId} (${g.lineCount}): Canceled = Ordered (Product units) on each. Logged in History.`}
+              {confirm === "delete" ? deleteConfirmText(g) : `Cancel every product of ${g.supplier} ${g.orderId} (${g.lineCount}): an open canceled claim per product for its units still expected — the $ owed is on each claim; tick "Refund received" when it posts. Ordered stays. Logged in History.`}
             </DialogDescription>
           </DialogHeader>
           <DialogFooter>
@@ -403,7 +396,7 @@ export function ReassignShipment({ shipment, asin, currentRowId, onDone }: { shi
       {q.trim().length >= 2 && rows.length === 0 && !target && <div className="text-[11px] text-muted-foreground">No other PO has a {asin} row matching "{q.trim()}".</div>}
       {target && <div className="text-[11px]">→ {target.supplier} <span className="font-mono">{target.order_id}</span></div>}
       <div className="flex items-center gap-1">
-        <span className="text-[10px] text-muted-foreground">ASIN units</span>
+        <span className="text-[10px] text-muted-foreground">{QTY_KIND.individual}</span>
         <input value={units} onChange={(e) => setUnits(e.target.value)} className="h-6 w-14 rounded border border-input bg-background px-1 text-right text-xs" data-testid={`input-reassign-units-${shipment.id}`} />
         <span className="text-[10px] text-muted-foreground">of {fmtQty(shipment.qty_shipped)}</span>
         <Button size="sm" className="h-6 px-2 text-[11px]" disabled={!target} onClick={go} data-testid={`button-reassign-go-${shipment.id}`}>Move</Button>

@@ -9,13 +9,13 @@ import { closeAfterCreate } from "./listing-hygiene-run";
 import { verifyPending, resolveSubmissionManual, resolveSubmissionsBulk, dismissFlags, getUnverifiedCount, listNeedsAttention, listInFlight, findRecentPendingIds, countOpenAmong } from "./listing-submissions-repo";
 import { runAuraSyncChain } from "./aura-sync-chain";
 import { probeGatingForAsins } from "./gating-probe";
-import { loadPoAsinRows, normalizeLineQty, poListOrderBy, REFUND_DUE_SQL } from "./po-queries";
+import { loadPoAsinRows, normalizeLineQty, poListOrderBy, REFUND_DUE_SQL, PO_LINES_SQL } from "./po-queries";
 import { loadAliases, resolveRetailer, setAlias } from "./supplier-aliases";
 import { linkUnmatchedLine } from "./shipment-link";
 import { likeContains, stripShipmentSuffix } from "./order-number";
 import { clearExtraUnits } from "./extra-units";
 import { writeLineItems, loadActionItemLines } from "./line-action-items";
-import { addDefect, editDefect, linkRefund, unlinkRefund, resolveDefect, reopenDefect, removeDefect, loadDefects, loadOpenDefectSummaries, briefOf } from "./po-defects";
+import { addClaim, editClaim, linkRefund, unlinkRefund, setOutcome, reopenClaim, dismissClaim, removeClaim, loadClaims, loadOpenClaimSummaries, briefOf, doneTask, cancelLines } from "./supplier-claims";
 import { velocityIneligible, ineligibleText } from "./shipment-match";
 import { readVelocityStartDate } from "./ships-to-backfill";
 import { evaluateAutoClose, setPoClosedManually, parseQtyInput, MANUAL_QTY_COLUMNS, type ManualQtyColumn } from "./po-close";
@@ -4224,8 +4224,9 @@ export async function registerRoutes(
                 cardinality(${PO_ACTION_ITEMS_SQL}) AS action_item_count,
                 ${REVIEW_VELOCITY_REASONS_SQL} AS review_velocity_reasons,
                 (SELECT COUNT(*)::int FROM po_asins a WHERE a.po_id = p.id) AS asin_count,
-                (SELECT COALESCE(SUM(a.qty), 0)::float8 FROM po_asins a WHERE a.po_id = p.id) AS units_ordered,
-                (SELECT SUM(l.qty_received)::float8 FROM po_line_items l WHERE l.po_id = p.id) AS units_received,
+                (SELECT COALESCE(SUM(e.ordered_asin), 0)::float8 FROM po_asin_expected e WHERE e.po_id = p.id) AS units_ordered,
+                (SELECT SUM(le.received_product)::float8 FROM po_line_expected le WHERE le.po_id = p.id) AS units_received,
+                (SELECT COUNT(*)::int FROM supplier_claims c WHERE c.po_id = p.id AND c.status = 'open') AS open_claims,
                 ${REFUND_DUE_SQL} AS refund_due,
                 (p.notes IS NOT NULL
                   OR EXISTS (SELECT 1 FROM po_asins a WHERE a.po_id = p.id AND a.notes IS NOT NULL)
@@ -4246,12 +4247,12 @@ export async function registerRoutes(
       // Per stored item: how many of the PO's lines carry it, on which ASINs,
       // with which auto reasons — the chip's count badge and hover (PO table v2 §5).
       const detail = await loadActionItemLines((sql, params) => query(sql, params), rows.map((r: any) => String(r.id)));
-      // Open supplier defects: the chip shows their qty and $ owed (SPEC §22 "Supplier defects").
-      const defects = await loadOpenDefectSummaries((sql, params) => query(sql, params), rows.map((r: any) => String(r.id)));
-      for (const a of asinRows) a.defects_open = (defects.byAsinRow.get(String(a.id)) ?? []).map(briefOf);
+      // Open supplier claims (SPEC §22 "Supplier claims"): the rows carry them for the chip / the Claims column (commit 2).
+      const claims = await loadOpenClaimSummaries((sql, params) => query(sql, params), rows.map((r: any) => String(r.id)));
+      for (const a of asinRows) a.claims_open = (claims.byAsinRow.get(String(a.id)) ?? []).map(briefOf);
       const saveFailures = rows.length ? await readSaveFailures((sql, params) => query(sql, params)) : {};
       for (const r of rows) {
-        r.defects_open = (defects.byPo.get(String(r.id)) ?? []).map(briefOf);
+        r.claims_open = (claims.byPo.get(String(r.id)) ?? []).map(briefOf);
         r.asins = asinsByPo.get(String(r.id)) ?? [];
         // PO documents (SPEC §22): "Invoice attached" is derived — a po_documents row exists; the sheet's Rcpt flag is history only.
         r.invoice_attached = r.documents.length > 0;
@@ -4302,19 +4303,17 @@ export async function registerRoutes(
       // derived Canceled/Returned, the six stored ASIN quantities, shipments.
       const asinRows = await loadPoAsinRows((sql, params) => query(sql, params), [id]);
 
-      const lineRows = (await query(
-        `SELECT * FROM po_line_items WHERE po_id = $1 ORDER BY po_asin_id, position, id`,
-        [id],
-      )).rows.map((l: any) => normalizeLineQty(l)); // numeric(10,2) → numbers (migration 062)
+      // Lines in Product units with their Individual / ASIN twins (po_line_expected, D17).
+      const lineRows = (await query(PO_LINES_SQL(`l.po_id = $1`), [id])).rows.map((l: any) => normalizeLineQty(l));
       const linesByAsin = new Map<string, any[]>();
       for (const l of lineRows) {
         const key = String(l.po_asin_id ?? "");
         if (!linesByAsin.has(key)) linesByAsin.set(key, []);
         linesByAsin.get(key)!.push(l);
       }
-      const openDefects = await loadOpenDefectSummaries((sql, params) => query(sql, params), [id]);
-      po.defects_open = (openDefects.byPo.get(id) ?? []).map(briefOf);
-      const asins = asinRows.map((a: any) => ({ ...a, lines: linesByAsin.get(String(a.id)) ?? [], defects_open: (openDefects.byAsinRow.get(String(a.id)) ?? []).map(briefOf) }));
+      const openClaims = await loadOpenClaimSummaries((sql, params) => query(sql, params), [id]);
+      po.claims_open = (openClaims.byPo.get(id) ?? []).map(briefOf);
+      const asins = asinRows.map((a: any) => ({ ...a, lines: linesByAsin.get(String(a.id)) ?? [], claims_open: (openClaims.byAsinRow.get(String(a.id)) ?? []).map(briefOf) }));
       const orphanLines = linesByAsin.get("") ?? []; // po_asin_id NULL (SET NULL on delete) — none expected in the frame
       // Capture PO patch §8: payments, promos, refunds (the PO editor's Payments tab).
       const moneyRows = await loadPoMoney((sql, params) => query(sql, params), id);
@@ -4323,9 +4322,9 @@ export async function registerRoutes(
       // line qty_received — all-NULL stays NULL → em-dash, never 0.
       const num = (v: any) => (v == null ? null : parseFloat(v));
       const unitsOrdered = Math.round(asinRows.reduce((t: number, a: any) => t + (Number(a.qty) || 0), 0) * 100) / 100;
-      // 2026-11-09 (SPEC §22 "Quantity vocabulary"): the strip's "· N individual" = Σ ASIN units × Individual units per ASIN unit; a row with no pack size makes the total unknown (counted, shown "—"), never ×1.
-      const rowsMissingPack = asinRows.filter((a: any) => a.units_per_pack == null && (Number(a.qty) || 0) !== 0).length;
-      const individualUnits = rowsMissingPack > 0 ? null : Math.round(asinRows.reduce((t: number, a: any) => t + (Number(a.qty) || 0) * (Number(a.units_per_pack) || 0), 0) * 100) / 100;
+      // 2026-11-09 (SPEC §22 "Quantity vocabulary"): the strip's "· N individual" = Σ the rows' stored Individual units (D17); a row with no pack size makes the total unknown (counted, shown "—"), never ×1.
+      const rowsMissingPack = asinRows.filter((a: any) => a.qty_individual == null && (Number(a.qty) || 0) !== 0).length;
+      const individualUnits = rowsMissingPack > 0 ? null : Math.round(asinRows.reduce((t: number, a: any) => t + (Number(a.qty_individual) || 0), 0) * 100) / 100;
       const recVals = lineRows.map((l: any) => l.qty_received).filter((v: any) => v != null);
       const unitsReceived = recVals.length === 0 ? null : recVals.reduce((t: number, v: any) => t + Number(v), 0);
       const nonNullCosts = asinRows.filter((a: any) => a.total_cost != null);
@@ -4351,7 +4350,7 @@ export async function registerRoutes(
         asins,
         orphanLines,
         ...moneyRows,
-        defects: await loadDefects((sql, params) => query(sql, params), { poId: id }),
+        claims: await loadClaims((sql, params) => query(sql, params), { poId: id }),
       });
     } catch (err: any) {
       res.status(500).json({ message: err.message });
@@ -4454,24 +4453,26 @@ export async function registerRoutes(
     });
   };
   moneyRoutes("payments", "po_payments"); moneyRoutes("promos", "po_promos"); moneyRoutes("refunds", "po_line_refunds");
-  // === Supplier defects (SPEC §22 "Supplier defects", migration 094) ===
-  const defectRoute = (method: "post" | "patch" | "delete", path: string, run: (q: any, req: Request) => Promise<unknown>) =>
+  // === Supplier claims (SPEC §22 "Supplier claims", migration 101; was defects, 094) ===
+  const claimRoute = (method: "post" | "patch" | "delete", path: string, run: (q: any, req: Request) => Promise<{ po_id?: string } & Record<string, unknown>>) =>
     app[method](path, async (req: Request, res: Response) => {
       if (!isDbAvailable()) { res.status(503).json({ message: "Database not available" }); return; }
       await sendGuarded(res, () => withPoTx(async (q) => { const out = await run(q, req); return out; }).then(async (out: any) => {
-        // An open defect blocks auto-close like any action item; resolving one may let the PO close.
-        const po = out?.po_id ?? (await query(`SELECT po_id FROM po_line_defects WHERE id = $1`, [out?.id])).rows[0]?.po_id ?? req.params.id;
+        // An open claim keeps its PO open (D15); closing / dismissing one may let the PO close.
+        const po = out?.po_id ?? req.params.id;
         const close = /^[0-9a-f-]{36}$/i.test(String(po ?? "")) ? await evaluateAutoClose(String(po), poQuery) : null;
         return { ...out, close };
       }));
     });
-  defectRoute("post", "/api/pos/:id/defects", (q, req) => addDefect(q, String(req.params.id ?? ""), req.body ?? {}, uid(req)));
-  defectRoute("patch", "/api/pos/defects/:id", (q, req) => editDefect(q, Number(req.params.id), req.body ?? {}, uid(req)));
-  defectRoute("delete", "/api/pos/defects/:id", (q, req) => removeDefect(q, Number(req.params.id), uid(req)));
-  defectRoute("post", "/api/pos/defects/:id/refunds", (q, req) => linkRefund(q, Number(req.params.id), Number((req.body ?? {}).refund_id), uid(req)));
-  defectRoute("delete", "/api/pos/defects/:id/refunds/:refundId", (q, req) => unlinkRefund(q, Number(req.params.id), Number(req.params.refundId), uid(req)));
-  defectRoute("post", "/api/pos/defects/:id/resolve", (q, req) => resolveDefect(q, Number(req.params.id), req.body ?? {}, uid(req)));
-  defectRoute("post", "/api/pos/defects/:id/reopen", (q, req) => reopenDefect(q, Number(req.params.id), uid(req)));
+  claimRoute("post", "/api/pos/:id/claims", (q, req) => addClaim(q, String(req.params.id ?? ""), req.body ?? {}, uid(req)));
+  claimRoute("patch", "/api/pos/claims/:id", (q, req) => editClaim(q, Number(req.params.id), req.body ?? {}, uid(req)));
+  claimRoute("delete", "/api/pos/claims/:id", (q, req) => removeClaim(q, Number(req.params.id), uid(req)));
+  claimRoute("post", "/api/pos/claims/:id/refunds", (q, req) => linkRefund(q, Number(req.params.id), Number((req.body ?? {}).refund_id), uid(req), { amountApplied: (req.body ?? {}).amount_applied }));
+  claimRoute("delete", "/api/pos/claims/:id/refunds/:refundId", (q, req) => unlinkRefund(q, Number(req.params.id), Number(req.params.refundId), uid(req)));
+  claimRoute("post", "/api/pos/claims/:id/outcome", (q, req) => setOutcome(q, Number(req.params.id), req.body ?? {}, uid(req)));
+  claimRoute("post", "/api/pos/claims/:id/reopen", (q, req) => reopenClaim(q, Number(req.params.id), uid(req)));
+  claimRoute("post", "/api/pos/claims/:id/dismiss", (q, req) => dismissClaim(q, Number(req.params.id), uid(req), (req.body ?? {}).reason ?? null));
+  claimRoute("post", "/api/pos/claims/tasks/:id/done", (q, req) => doneTask(q, Number(req.params.id), uid(req)));
   // New PO form (po-af-owned §4): the body is shared/po-form.ts's PoFormState.
   app.post("/api/pos", async (req: Request, res: Response) => {
     if (!isDbAvailable()) { res.status(503).json({ message: "Database not available" }); return; }
@@ -4758,22 +4759,23 @@ export async function registerRoutes(
     } catch (err: any) { res.status(500).json({ message: err.message }); }
   });
 
-  // "Mark canceled" on an ASIN row (§2.2): every line mapped to the ASIN gets
-  // qty_canceled = qty_ordered; the ASIN's Canceled re-derives (÷ N for a
-  // bundle). AF-owned (po-af-owned §2.1): Sync POs never touches it again.
-  // Refused while the row has units shipped to FBA (§5.1).
+  // "Mark canceled" on an ASIN row (§2.2; D14 since migration 101): every line mapped to the ASIN gets an OPEN canceled
+  // claim for its units still expected — nothing edits Ordered; the ASIN's Canceled derives from the claims (a bundle by the
+  // bundle rule). AF-owned (po-af-owned §2.1): Sync POs never touches it again. Refused while the row has units shipped to FBA (§5.1).
   app.post("/api/pos/asin-rows/:id/cancel", async (req: Request, res: Response) => {
     if (!isDbAvailable()) { res.status(503).json({ message: "Database not available" }); return; }
     const id = String(req.params.id ?? "");
     try {
-      const pa = (await query(`SELECT po_id FROM po_asins WHERE id = $1`, [id])).rows[0];
+      const pa = (await query(`SELECT po_id, asin FROM po_asins WHERE id = $1`, [id])).rows[0];
       if (!pa) { res.status(404).json({ message: "ASIN row not found" }); return; }
       try { await assertAsinRowCancelable(poQuery, id); } catch (e: any) { res.status(e instanceof EditError ? e.status : 500).json({ message: e.message }); return; } // §5.1
-      const r = await query(`UPDATE po_line_items SET qty_canceled = qty_ordered WHERE po_asin_id = $1 AND qty_ordered IS NOT NULL AND qty_canceled IS DISTINCT FROM qty_ordered RETURNING id, qty_ordered`, [id]);
-      for (const l of r.rows) await logEdits(poQuery, String(pa.po_id), uid(req), "line", String(l.id), [{ field: "qty_canceled", old: null, new: asLogText(l.qty_ordered) }]);
+      const made = await withPoTx(async (q) => {
+        const lineIds = (await q(`SELECT id FROM po_line_items WHERE po_asin_id = $1 ORDER BY position, id`, [id])).rows.map((l: any) => String(l.id));
+        return cancelLines(q, String(pa.po_id), lineIds, uid(req), `Mark canceled (${pa.asin})`);
+      });
       const close = await evaluateAutoClose(String(pa.po_id), poQuery);
       const [row] = await loadPoAsinRows(poQuery, [String(pa.po_id)]).then((rows) => rows.filter((x: any) => String(x.id) === id));
-      res.json({ row, close, linesCanceled: r.rowCount ?? 0 });
+      res.json({ row, close, linesCanceled: made.length, claims: made.map((m) => m.id) });
     } catch (err: any) { res.status(500).json({ message: err.message }); }
   });
 
@@ -4793,7 +4795,8 @@ export async function registerRoutes(
     } catch (err: any) { res.status(500).json({ message: err.message }); }
   });
 
-  // Manual quantity edits on an ASIN row: At CQG Warehouse, Lost/damaged by us, Shipped by Supplier.
+  // Manual quantity edits on an ASIN row: At CQG Warehouse, Lost/damaged by us, Shipped by Supplier — typed and stored in
+  // INDIVIDUAL units (D16 / D17, migration 101; a legacy row with no pack size keeps ASIN units); the view shows the ASIN units.
   app.patch("/api/pos/asin-rows/:id/quantities", async (req: Request, res: Response) => {
     if (!isDbAvailable()) { res.status(503).json({ message: "Database not available" }); return; }
     const id = String(req.params.id ?? "");

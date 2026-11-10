@@ -31,7 +31,11 @@
 import pool from "./db";
 import { getSheetValues } from "./sheet-read";
 import { COL, t, classifyRows } from "./po-import-classify";
-import { mapSheetStatus, ACTION_ITEMS, type ActionItem } from "./po-status-map";
+import { mapSheetStatus, ACTION_ITEMS, RETIRED_ACTION_ITEMS, type ActionItem } from "./po-status-map";
+import { storedQtyForAsinRow, storedQtyForLine } from "./po-expected";
+import { ratioFromStoredYield } from "../shared/yield";
+import { addClaim, addTask } from "./supplier-claims";
+import type { QueryLike } from "./scheduler/types";
 import { sheetEntrySeqByKey } from "./po-entry-seq";
 import { insertLineItems } from "./line-action-items";
 import { shipsToFromPrep } from "./ships-to-backfill";
@@ -116,6 +120,8 @@ export interface SheetLine {
   // product, so its Status cell maps onto THIS line only.
   statusCell: string;
   actionItems: ActionItem[];
+  /** "Missing / damaged from supplier" / "Confirm refund / replacement" on the row (retired items, migration 101): a claim on the new line. */
+  retiredItems?: string[];
   /** Row says Canceled → this line's qty_canceled = qty_ordered. */
   canceled: boolean;
   /** Row says Returned (the qty itself comes from Col R when the sheet carries one). */
@@ -375,7 +381,7 @@ export function parsePoSheet(header: string[], dataCells: string[][]): ParsedPoS
           qtyReturned: qtyOrNull(r.cells[COL.qtyReturned]) ?? 0,
           asinQtyPerProduct: t(r.cells[COL.asinQtyPerProduct]) === "" ? "1" : t(r.cells[COL.asinQtyPerProduct]),
           adjustedProductCost: money(r.cells, COL.adjProductCost),
-          statusCell, actionItems: st.actionItems, canceled: st.canceled, returned: st.returned,
+          statusCell, actionItems: st.actionItems, retiredItems: st.retired, canceled: st.canceled, returned: st.returned,
           qtyReturnedBlank: t(r.cells[COL.qtyReturned]) === "",
           fbaShipments: parseColP(r.cells[COL.fbaShipmentIds]),
         }; }),
@@ -563,13 +569,15 @@ export async function syncPoSheet(opts: { sheetId: string; dryRun: boolean; db?:
   // Current AF state.
   const dbPos = (await db.query(`SELECT * FROM purchase_orders`)).rows;
   const dbPoByKey = new Map<string, any>(dbPos.map((r) => [poKey(r.supplier, r.order_id), r]));
-  const dbAsins = (await db.query(`SELECT pa.*, (SELECT COUNT(*)::int FROM po_asin_shipments s WHERE s.po_asin_id = pa.id) AS shipment_rows FROM po_asins pa`)).rows;
+  // The drift compare reads the sheet's units: ASIN units for a row (po_asin_expected), Product units for a line (po_line_expected) — D17.
+  const dbAsins = (await db.query(`SELECT pa.*, e.ordered_asin AS qty, e.loss_asin AS unreimbursed_loss_qty, e.lost_damaged_us_asin AS qty_lost_damaged_us, (SELECT COUNT(*)::int FROM po_asin_shipments s WHERE s.po_asin_id = pa.id) AS shipment_rows FROM po_asins pa JOIN po_asin_expected e ON e.id = pa.id`)).rows;
   const dbAsinsByPo = new Map<string, any[]>();
   for (const a of dbAsins) { if (!dbAsinsByPo.has(a.po_id)) dbAsinsByPo.set(a.po_id, []); dbAsinsByPo.get(a.po_id)!.push(a); }
   // Action items for the drift compare come from po_line_action_items (open, manual vocabulary).
   const dbLines = (await db.query(
-    `SELECT l.*, ARRAY(SELECT ai.item FROM po_line_action_items ai WHERE ai.po_line_item_id = l.id AND ai.cleared_at IS NULL AND ai.item = ANY($1::text[])) AS open_action_items
-       FROM po_line_items l ORDER BY l.po_asin_id, l.position`, [ACTION_ITEMS],
+    `SELECT l.*, le.ordered_product AS qty_ordered, le.received_product AS qty_received, le.canceled_product AS qty_canceled, le.returned_product AS qty_returned,
+            ARRAY(SELECT ai.item FROM po_line_action_items ai WHERE ai.po_line_item_id = l.id AND ai.cleared_at IS NULL AND ai.item = ANY($1::text[])) AS open_action_items
+       FROM po_line_items l JOIN po_line_expected le ON le.line_id = l.id ORDER BY l.po_asin_id, l.position`, [ACTION_ITEMS],
   )).rows.map((r: any) => ({ ...r, action_items: ACTION_ITEMS.filter((a) => (r.open_action_items ?? []).includes(a)) }));
   const dbLinesByAsinId = new Map<string, any[]>();
   for (const l of dbLines) { const k = String(l.po_asin_id); if (!dbLinesByAsinId.has(k)) dbLinesByAsinId.set(k, []); dbLinesByAsinId.get(k)!.push(l); }
@@ -807,24 +815,56 @@ export function maxSheetPrep(po: SheetPo): number | null {
   return v.length ? Math.max(...v) : null;
 }
 
+/**
+ * A new sheet PO's ASIN row, stored in Individual units (D17, migration 101): the sheet's ASIN units (Col N, V × yield, loss) ×
+ * the pack when Col AX names one; a row with no pack keeps ASIN units as asin_legacy until the pack is known.
+ */
 async function insertPoAsin(client: Q, poId: string, a: SheetPoAsin, po: SheetPo, sku: string | null): Promise<void> {
+  const basis = { qty_basis: a.soldAs ? "individual" : "asin_legacy", units_per_pack: a.unitsPerPack };
   const pa = await client.query(
-    `INSERT INTO po_asins (po_id, asin, asin_name, sku, qty, cost_per_unit, prep_cost, sold_as, units_per_pack, unreimbursed_loss_qty, unreimbursed_loss_amount, unique_products, qty_lost_damaged_us)
-     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13) RETURNING id`,
-    [poId, a.asin, a.asinName, sku, a.qty, a.costPerUnit, a.prep, a.soldAs, a.unitsPerPack, a.lossQty, a.lossAmount, a.uniqueProducts, a.lostDamagedUs],
+    `INSERT INTO po_asins (po_id, asin, asin_name, sku, qty, cost_per_unit, prep_cost, sold_as, units_per_pack, unreimbursed_loss_qty, unreimbursed_loss_amount, unique_products, qty_lost_damaged_us, qty_basis)
+     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14) RETURNING id`,
+    [poId, a.asin, a.asinName, sku, storedQtyForAsinRow(Number(a.qty) || 0, basis), a.costPerUnit, a.prep, a.soldAs, a.unitsPerPack, storedQtyForAsinRow(a.lossQty ?? 0, basis), a.lossAmount, a.uniqueProducts,
+     a.lostDamagedUs == null ? null : storedQtyForAsinRow(a.lostDamagedUs, basis), basis.qty_basis],
   );
-  for (const l of a.lines) await insertLine(client, poId, pa.rows[0].id, l, po);
+  for (const l of a.lines) await insertLine(client, poId, pa.rows[0].id, l, po, a);
 }
 
-async function insertLine(client: Q, poId: string, poAsinId: string | null, l: SheetLine, po: SheetPo): Promise<void> {
-  // final_qty is GENERATED — never inserted. item_discount stays 0 as the importer wrote it.
-  // The row's action items go to po_line_action_items (PO table v2, source 'sheet');
+/**
+ * A new sheet PO's product line (D17): Product units × the Product pack when the sheet's yield and the row's pack give one
+ * (ratioFromStoredYield — the yield backfill's rule), else product_legacy as stored. Canceled / Returned rows become claims
+ * (D14): a canceled claim per canceled line (closed when the PO arrives Closed, open otherwise), a closed returned claim for
+ * a Col R qty — the same Σ the old qty_canceled / qty_returned columns carried.
+ */
+async function insertLine(client: Q, poId: string, poAsinId: string | null, l: SheetLine, po: SheetPo, a: SheetPoAsin): Promise<void> {
+  // item_discount stays 0 as the importer wrote it. The row's action items go to po_line_action_items (PO table v2, source 'sheet');
   // the deprecated po_line_items.action_items column is left empty.
+  const ratio = a.soldAs === "individual" || a.soldAs === "multi-pack" ? ratioFromStoredYield(l.asinQtyPerProduct, a.unitsPerPack) : null;
+  const basis = { qty_basis: ratio ? "individual" : "product_legacy", retailer_units_per_product: ratio?.retailer ?? null };
   const ins = await client.query(
-    `INSERT INTO po_line_items (po_id, po_asin_id, position, product_name, supplier_sku, price, item_discount, qty_ordered, qty_received, qty_returned, asin_qty_per_product, adjusted_product_cost, qty_canceled)
-     VALUES ($1,$2,$3,$4,$5,$6,0,$7,$8,$9,$10,$11,$12) RETURNING id`,
-    [poId, poAsinId, l.position, l.productName, l.supplierSku, l.price, l.qtyOrdered, l.qtyReceived, l.qtyReturned, l.asinQtyPerProduct, l.adjustedProductCost, l.canceled ? l.qtyOrdered : null],
+    `INSERT INTO po_line_items (po_id, po_asin_id, position, product_name, supplier_sku, price, item_discount, qty_ordered, qty_received, asin_qty_per_product, adjusted_product_cost, retailer_units_per_product, asin_units_per_pack, qty_basis)
+     VALUES ($1,$2,$3,$4,$5,$6,0,$7,$8,$9,$10,$11,$12,$13) RETURNING id`,
+    [poId, poAsinId, l.position, l.productName, l.supplierSku, l.price, storedQtyForLine(l.qtyOrdered, basis), storedQtyForLine(l.qtyReceived, basis), l.asinQtyPerProduct, l.adjustedProductCost, ratio?.retailer ?? null, ratio?.asinUnits ?? null, basis.qty_basis],
   );
   const lineId = ins.rows?.[0]?.id;
-  if (lineId != null) await insertLineItems((sql, params) => client.query(sql, params), String(lineId), l.actionItems, "sheet");
+  if (lineId == null) return;
+  const q: QueryLike = (sql, params) => client.query(sql, params) as any;
+  await insertLineItems(q, String(lineId), l.actionItems.filter((x) => !RETIRED_ACTION_ITEMS.includes(x)), "sheet");
+  // The two retired badges on a new sheet row open a claim instead (as the migration converted the stored ones): qty = the line's
+  // ordered units, flagged in the note; "Confirm refund / replacement" carries the refund_received task.
+  for (const badge of l.retiredItems ?? []) {
+    const ordered = storedQtyForLine(l.qtyOrdered, basis);
+    if (!(ordered != null && ordered > 0)) continue;
+    const c = await addClaim(q, poId, { po_line_item_id: String(lineId), kind: "missing", qty: ordered, found_at: po.orderDate, note: `sheet badge "${badge}" — kind unclear; qty set to the line's ordered units, confirm` }, null, { noTask: badge === "Confirm refund / replacement" });
+    if (badge === "Confirm refund / replacement") await addTask(q, c.id, "refund_received", "sheet badge: confirm the kind, the outcome and the $ owed, then tick when the refund posts");
+  }
+  // Sheet quantities in the line's stored basis: the canceled qty = the ordered qty; Col R as read.
+  if (l.canceled && (l.qtyOrdered ?? 0) > 0) {
+    const c = await addClaim(q, poId, { po_line_item_id: String(lineId), kind: "canceled", qty: storedQtyForLine(l.qtyOrdered, basis)!, found_at: po.orderDate, note: "sheet: Canceled" }, null, { noTask: true });
+    if (po.closed || po.historical) await client.query(`UPDATE supplier_claims SET status = 'closed', closed_at = now(), note = note || ' (PO closed on the sheet)' WHERE id = $1`, [c.id]);
+  }
+  if ((l.qtyReturned ?? 0) > 0) {
+    const c = await addClaim(q, poId, { po_line_item_id: String(lineId), kind: "returned", qty: storedQtyForLine(l.qtyReturned, basis)!, found_at: po.orderDate, note: "sheet: Returned (Col R)" }, null, { noTask: true });
+    await client.query(`UPDATE supplier_claims SET status = 'closed', closed_at = now() WHERE id = $1`, [c.id]);
+  }
 }

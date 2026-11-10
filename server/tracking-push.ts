@@ -168,8 +168,7 @@ async function loadRows(query: QueryLike, poId?: string): Promise<RowFacts[]> {
     `SELECT t.id, t.po_id, t.carrier, t.tracking_number, t.ship_to_street, t.status, t.pushed_velocity_ids,
             p.order_id, p.ships_to,
             (EXISTS (SELECT 1 FROM po_line_items l WHERE l.po_id = p.id)
-              AND NOT EXISTS (SELECT 1 FROM po_line_items l WHERE l.po_id = p.id
-                               AND COALESCE(l.qty_canceled, 0) + COALESCE(l.qty_returned, 0) < COALESCE(l.qty_ordered, 0))) AS canceled_or_returned
+              AND NOT EXISTS (SELECT 1 FROM po_line_expected le WHERE le.po_id = p.id AND COALESCE(le.expected_product, 0) > 0)) AS canceled_or_returned
        FROM po_tracking t JOIN purchase_orders p ON p.id = t.po_id
       WHERE t.status IN ('matched', 'pushed', 'push_failed', 'held') AND t.tracking_number NOT LIKE 'email:%'
         ${poId ? "AND t.po_id = $1" : ""}

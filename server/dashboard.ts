@@ -34,7 +34,7 @@ import express, { type Router, type Request, type Response } from "express";
 import { query as defaultQuery } from "./db";
 import type { QueryLike } from "./scheduler/types";
 import { LINE_YIELD_SQL } from "./po-queries";
-import { DEFECT_UNCOVERED_PO_SQL } from "./po-defect-sql";
+import { REFUNDS_DUE_PO_SQL } from "./supplier-claim-sql";
 import { resolveColumns, parseSet, parseCustom, parseYmd, last12MonthsRange, todayIn, EASTERN, PACIFIC, mondayOf, firstOfMonth, addDays, type RangeSet } from "./dashboard-range";
 import { DASHBOARD_ROWS, SERIES_KINDS, type DashboardCell, type DashboardColumn, type DashboardCoverage, type DashboardGrid, type DashboardRowKey, type DashboardSeries, type SeriesKind, type SeriesPoint, type Ymd } from "@shared/dashboard";
 
@@ -67,31 +67,29 @@ export function poSpendCtes(startExpr: string, endExpr: string): string {
         FROM purchase_orders p
         LEFT JOIN LATERAL (
           SELECT COUNT(*) AS n,
-                 COUNT(*) FILTER (WHERE li.qty_canceled IS NOT NULL AND li.qty_ordered IS NOT NULL AND li.qty_canceled >= li.qty_ordered) AS canceled
-            FROM po_line_items li WHERE li.po_id = p.id) l ON true
+                 COUNT(*) FILTER (WHERE li.fully_canceled) AS canceled
+            FROM po_line_expected li WHERE li.po_id = p.id) l ON true
        WHERE p.order_date >= ${startExpr} AND p.order_date <= ${endExpr}
     ), ref AS (
       SELECT r.po_id,
-             COALESCE(SUM(r.amount) FILTER (WHERE NOT (r.source = 'sheet' AND po.header_nets)), 0) AS counted,
-             COALESCE(SUM(r.amount) FILTER (WHERE r.status = 'due'), 0) AS due
+             COALESCE(SUM(r.amount) FILTER (WHERE NOT (r.source = 'sheet' AND po.header_nets)), 0) AS counted
         FROM po_line_refunds r JOIN po ON po.id = r.po_id
        GROUP BY r.po_id
     ), po_spend AS (
       SELECT po.id, po.order_date, po.fully_canceled, po.shared_dup,
-             CASE WHEN po.fully_canceled THEN 0 ELSE (CASE WHEN po.shared_dup THEN 0 ELSE COALESCE(po.stored_total, 0) END) - COALESCE(ref.counted, 0) END AS spend,
-             COALESCE(ref.due, 0) + ${DEFECT_UNCOVERED_PO_SQL("po")} AS due
+             -- §3.7: Spend subtracts the refunds received plus what is still owed on open claims (the due rows before migration 101)
+             CASE WHEN po.fully_canceled THEN 0 ELSE (CASE WHEN po.shared_dup THEN 0 ELSE COALESCE(po.stored_total, 0) END) - COALESCE(ref.counted, 0) - ${REFUNDS_DUE_PO_SQL("po")} END AS spend,
+             ${REFUNDS_DUE_PO_SQL("po")} AS due
         FROM po LEFT JOIN ref ON ref.po_id = po.id
     )`;
 }
 
-/** Canceled ASIN units of one po_asins row (`pa`), per-line COALESCE, bundles ÷ unique products. */
-const CANCELED_ASIN_UNITS_SQL = `COALESCE((SELECT SUM(COALESCE(l.qty_canceled, 0) * ${LINE_YIELD_SQL}) FROM po_line_items l WHERE l.po_asin_id = pa.id), 0)
-  / (CASE WHEN pa.sold_as = 'bundle' AND COALESCE(pa.unique_products, 0) > 1 THEN pa.unique_products ELSE 1 END)`;
-
+// Units rows (SPEC §28): ASIN units ordered less the units canceled by claims (po_asin_expected, migration 101 — a bundle by the
+// bundle rule); Individual = × the pack, unknown while a row has no pack size (counted in missing_pack_size).
 const SPEND_GRID_SQL = `WITH ${poSpendCtes("$1::date", "$2::date")}, units AS (
-      SELECT pa.id, pa.units_per_pack,
-             CASE WHEN po.fully_canceled THEN 0 ELSE GREATEST(COALESCE(pa.qty, 0) - ${CANCELED_ASIN_UNITS_SQL}, 0) END AS asin_units
-        FROM po_asins pa JOIN po ON po.id = pa.po_id
+      SELECT e.id, e.units_per_pack,
+             CASE WHEN po.fully_canceled THEN 0 ELSE GREATEST(COALESCE(e.ordered_asin, 0) - COALESCE(e.canceled_asin, 0), 0) END AS asin_units
+        FROM po_asin_expected e JOIN po ON po.id = e.po_id
     )
     SELECT (SELECT COALESCE(SUM(spend), 0) FROM po_spend)::float8 AS spend,
            (SELECT COALESCE(SUM(due), 0) FROM po_spend)::float8 AS refunds_due,

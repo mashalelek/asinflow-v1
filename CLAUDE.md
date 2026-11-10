@@ -59,7 +59,8 @@ This app runs on the following stack. This is settled. Do not suggest alternativ
 - `server/po-prefill.ts` — `/api/pos/prefill`: capture → one Haiku call → form prefill + markers; `chrome-extension/` is the capture side
 - `server/dashboard.ts` / `server/dashboard-range.ts` / `shared/dashboard.ts` — the Dashboard (SPEC §28): range sets, the Spend · Sales · Profit grid SQL, the chart series; `client/src/pages/dashboard.tsx`, `metric-grid.tsx`, `dashboard-chart.tsx`
 - `server/po-documents.ts` / `server/po-documents-routes.ts` / `server/drive-client.ts` / `server/pdf-render.ts` / `shared/po-documents.ts` — PO documents (SPEC §22 "PO documents", §26, component 29): order emails rendered to PDF in Maria's Drive (type by subject: `server/order-email-classify.ts`, the AI fallback for the rest), existing PDFs linked by name, the paperclip and the Documents tab (`client/src/components/po-documents.tsx`)
-- `server/po-defects.ts` / `shared/po-defect.ts` — Supplier defects (SPEC §22, migration 094): per line missing / damaged / wrong item, $ owed, resolved by refund (linked refund rows) / replacement / write-off; the "Missing / damaged from supplier" badge is derived from open ones
+- `server/supplier-claims.ts` / `shared/supplier-claim.ts` / `server/supplier-claim-sql.ts` — Supplier claims (SPEC §22 "Supplier claims", migration 101; was defects, 094): one record per supplier problem on a line (8 kinds), qty in Individual units, $ owed auto / manual, refunds applied, tasks, outcomes; an OPEN claim keeps its PO open (D15); Cancel PO / "cancel" open canceled claims (D14). `client/src/components/po-claims.tsx` is the per-PO section until the Claims page (commit 2)
+- `server/po-expected.ts` + the views `po_line_expected` / `po_asin_expected` (migration 101) — every PO quantity in Individual / Product / ASIN units from the stored Individual base (D17); every net-quantity reader selects from them
 - `database/schema_baseline_2026-10-15.sql` + `database/migrations/` — the database schema (there is no `docs/SCHEMA.md`)
 - `docs/ROADMAP.md` — Feature roadmap
 
@@ -526,6 +527,24 @@ or "units" alone in anything a user reads. A PO quantity shows its
 surface's kind as the main number with the Individual count in grey under
 it ("—" when the pack size is NULL, never 0). Column names in the
 database do not change; the words in the UI and the docs do.
+
+## PO quantities are stored in Individual units (D17, claims commit 1, migration 101)
+
+Every quantity column on `po_asins`, `po_asin_shipments`, `po_line_items`, `po_line_refunds` and
+`supplier_claims` holds **Individual units** (what Velocity counts). Readers never divide by a pack size:
+they select ASIN / Product / Individual figures from the views `po_asin_expected` and `po_line_expected`
+(`server/po-expected.ts` names the columns; `poAsinRowsSql` overlays them under the API's old names, so
+`qty`, `qty_shipped_fba`, … on an API row are still ASIN units and `qty_individual`, … the stored twins).
+Writers convert on the way in: a line qty typed in Product units × `retailer_units_per_product`
+(`storedQtyForLine`), a row's ASIN units × `units_per_pack` (`storedQtyForAsinRow`; a bundle × N), Velocity's
+units and SC's received as counted / × the pack; the hand-entered quantities, a refund qty and a claim qty are
+typed in Individual units (D16). A row or line whose pack was not known is `qty_basis = asin_legacy /
+product_legacy`: its stored number is still ASIN / Product units, the Individual twins are NULL, and it converts
+by itself (triggers, History row) when the pack arrives. A raw INSERT with no pack is legacy by construction; a
+test or script that seeds a converted row writes Individual units. Canceled / Returned / Final columns are gone:
+a canceled or returned quantity is a claim (D14), Expected = ordered − Σ claims that count (SPEC §22 "Quantities
+are stored in Individual units", "Supplier claims"). Migration 101 is applied by the runner; its dry run is
+`npm run claims:dryrun -- --prod` (rolled back; CSVs under `docs/claims-*-<date>.csv`).
 
 ## Bundles: ×N = Individual units in one bundle; counts per component (migration 100, Maria 2026-11-09)
 

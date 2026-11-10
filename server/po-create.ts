@@ -16,6 +16,7 @@ import { checkPoForm, shipsToFromForm, canonicalPaymentName, defaultRewardPct, C
 import { afEntrySeq } from "./po-entry-seq";
 import { logEdits, EditError, setUnknownAsinPack, type AsinPackSetResult } from "./po-edit";
 import { applyAsinPackUpdate, parsePack } from "./asin-pack";
+import { storedQtyForAsinRow, storedQtyForLine } from "./po-expected";
 import { subscriptionsFromForm } from "./subscriptions";
 
 const txt = (s: unknown) => { const v = typeof s === "string" ? s.trim() : ""; return v === "" ? null : v; };
@@ -69,19 +70,21 @@ export async function createPoFromForm(query: QueryLike, form0: PoFormState, use
   for (const a of check.asins) {
     const cat = (await query(`SELECT title, primary_sku FROM asins WHERE asin = $1`, [a.asin])).rows[0];
     const pa = await query(
-      `INSERT INTO po_asins (po_id, asin, asin_name, sku, qty, cost_per_unit, prep_cost, sold_as, units_per_pack, unique_products, sourcing_cost, paid_cost, cogs_adjustment, cogs_adjustment_reason)
-       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14) RETURNING id`,
+      `INSERT INTO po_asins (po_id, asin, asin_name, sku, qty, cost_per_unit, prep_cost, sold_as, units_per_pack, unique_products, sourcing_cost, paid_cost, cogs_adjustment, cogs_adjustment_reason, qty_basis)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15) RETURNING id`,
       // A pack not known (sold as "") is saved as NULL → "Pack size missing", never as individual (2026-11-06).
-      [poId, a.asin, cat?.title ?? null, cat?.primary_sku ?? null, a.qty, a.cost_per_unit, a.prep_cost, a.sold_as || null, a.units_per_pack, a.unique_products,
-       a.sourcing_cost, a.paid_cost, a.cogs_adjustment, a.cogs_adjustment_reason],
+      // Stored in Individual units (D17, migration 101): the form's ASIN units × the pack; a row with no pack keeps ASIN units (asin_legacy) until it is known.
+      [poId, a.asin, cat?.title ?? null, cat?.primary_sku ?? null, storedQtyForAsinRow(Number(a.qty) || 0, { qty_basis: a.sold_as ? "individual" : "asin_legacy", units_per_pack: a.units_per_pack }), a.cost_per_unit, a.prep_cost, a.sold_as || null, a.units_per_pack, a.unique_products,
+       a.sourcing_cost, a.paid_cost, a.cogs_adjustment, a.cogs_adjustment_reason, a.sold_as ? "individual" : "asin_legacy"],
     );
     const paId = String(pa.rows[0].id);
     asinRows.push({ id: paId, asin: a.asin, asin_name: cat?.title ?? null });
     for (const l of a.lines) {
       await query(
-        `INSERT INTO po_line_items (po_id, po_asin_id, position, product_name, supplier_sku, price, item_discount, qty_ordered, qty_returned, asin_qty_per_product, retailer_units_per_product, asin_units_per_pack, adjusted_product_cost, action_items, notes, line_total, regular_price, units_per_bundle)
-         VALUES ($1, $2, $3, $4, $5, $6, 0, $7, 0, $8, $9, $10, $11, '{}'::text[], $12, $13, $14, $15)`,
-        [poId, paId, l.position, l.product_name, l.supplier_sku, l.price, l.qty_ordered, l.asin_qty_per_product, l.retailer_units_per_product, l.asin_units_per_pack, l.adjusted_product_cost, l.notes, l.line_total, l.regular_price ?? null, l.units_per_bundle ?? null],
+        `INSERT INTO po_line_items (po_id, po_asin_id, position, product_name, supplier_sku, price, item_discount, qty_ordered, asin_qty_per_product, retailer_units_per_product, asin_units_per_pack, adjusted_product_cost, action_items, notes, line_total, regular_price, units_per_bundle, qty_basis)
+         VALUES ($1, $2, $3, $4, $5, $6, 0, $7, $8, $9, $10, $11, '{}'::text[], $12, $13, $14, $15, 'individual')`,
+        // The line's Product units × its Product pack = the stored Individual units (D17).
+        [poId, paId, l.position, l.product_name, l.supplier_sku, l.price, storedQtyForLine(Number(l.qty_ordered) || 0, { qty_basis: "individual", retailer_units_per_product: l.retailer_units_per_product }), l.asin_qty_per_product, l.retailer_units_per_product, l.asin_units_per_pack, l.adjusted_product_cost, l.notes, l.line_total, l.regular_price ?? null, l.units_per_bundle ?? null],
       );
       lines++;
     }

@@ -84,16 +84,17 @@ describe("helpers", () => {
 });
 
 describe("syncVelocityShipments", () => {
-  it("dry run: the probed shipment places 6 of 8 lines, converts units to packs, computes qty_at_prep per D6, writes nothing", async () => {
+  it("dry run: the probed shipment places 6 of 8 lines in Individual units, computes qty_at_prep per D6, writes nothing", async () => {
     const db = fakeDb({});
     const r = await syncVelocityShipments({ dryRun: true, deps: deps(), db });
     expect(r.wrote).toBe(false);
     expect(db.writes).toEqual([]);
     expect(r.counts).toMatchObject({ shipments: 1, shipmentsFetched: 1, lines: 8, linesMatched: 6, linesMatchedOrderOnly: 1, linesNoOrder: 1, linesPoNotFound: 1, rowsInserted: 6, rowsUpdated: 0, rowsUnchanged: 0, unmatchedNew: 2 });
-    expect(r.samples[0]).toBe("73917fcd 2026-10-15 · shop.equalexchange.coop SHOP533384 B004WZ4CLW: 60 units ÷ 6 → 10");
-    expect(r.samples[1]).toBe("73917fcd 2026-10-15 · target.com 102003843107733 0349125937: 1 units ÷ 1 → 1");
-    expect(r.samples[2]).toBe("73917fcd 2026-10-15 · target.com 102003840691113 0349125937: 9 units ÷ 1 → 9");
-    expect(r.samples[5]).toMatch(/opentip\.com 6461301 B011SESMB0: 10 units ÷ 1 → 10 \(order_only\)/);
+    // Individual units stored as Velocity counts them (migration 101, D17); the view shows 60 ÷ 6 = 10 ASIN units.
+    expect(r.samples[0]).toBe("73917fcd 2026-10-15 · shop.equalexchange.coop SHOP533384 B004WZ4CLW: 60 Individual units");
+    expect(r.samples[1]).toBe("73917fcd 2026-10-15 · target.com 102003843107733 0349125937: 1 Individual units");
+    expect(r.samples[2]).toBe("73917fcd 2026-10-15 · target.com 102003840691113 0349125937: 9 Individual units");
+    expect(r.samples[5]).toMatch(/opentip\.com 6461301 B011SESMB0: 10 Individual units \(order_only\)/);
     expect(r.unmatched.map((u) => u.reason).sort()).toEqual(["no_order", "po_not_found"]); // units pass: oldest Velocity order first
     // qty_at_prep: inbound/inventory lines win (a-gr1 5 → 2); a shipped-out order reads 0; an ASIN row with no Velocity line goes NULL.
     expect(r.counts).toMatchObject({ atPrepSet: 6, atPrepCleared: 1, atPrepUnchanged: 0 });
@@ -101,12 +102,12 @@ describe("syncVelocityShipments", () => {
     // 6-pack reads 60 → 10 even though it is fully shipped (At Prep 0); the partially received Golden Rewards order
     // reads 3 of its 12; a row with no Velocity line goes NULL.
     expect(r.counts).toMatchObject({ receivedVelocitySet: 6, receivedVelocityCleared: 1, receivedVelocityUnchanged: 0 });
-    expect(Object.fromEntries(r.receivedVelocityOps.map((o) => [o.id, o.to]))).toEqual({ "a-eql": 10, "a-tw1": 3, "a-tw2": 9, "a-gr1": 3, "a-gr2": 9, "a-ot1": 10, "a-old": null });
+    expect(Object.fromEntries(r.receivedVelocityOps.map((o) => [o.id, o.to]))).toEqual({ "a-eql": 60, "a-tw1": 3, "a-tw2": 9, "a-gr1": 3, "a-gr2": 9, "a-ot1": 10, "a-old": null }); // Individual units (migration 101): 60 for the 6-pack row
     expect(r.receivedVelocityOps.find((o) => o.id === "a-old")).toMatchObject({ poId: "p-old", orderId: "OLD1", supplier: "x.com", asin: "B0OLDASIN1", from: 3, to: null });
     expect(r.touchedPoIds.sort()).toEqual(["p-eql", "p-gr1", "p-gr2", "p-old", "p-ot1", "p-tw1", "p-tw2"]);
   });
 
-  it("live run: one transaction — velocity_shipments upsert, rows in ASIN qty, unmatched rows, resolved stamps, qty_at_prep; never fba ids / received / sc_match", async () => {
+  it("live run: one transaction — velocity_shipments upsert, rows in Individual units, unmatched rows, resolved stamps, qty_at_prep; never fba ids / received / sc_match", async () => {
     const db = fakeDb({ unmatched: [{ id: "u-old", velocity_shipment_id: SID, velocity_order_id: "73b5d8a5", reason: "po_not_found", resolved_at: null, resolved_po_asin_id: null }] });
     const r = await syncVelocityShipments({ dryRun: false, deps: deps(), db });
     expect(r.wrote).toBe(true);
@@ -116,7 +117,7 @@ describe("syncVelocityShipments", () => {
     const vs = db.writes.find((w) => w.sql.startsWith("INSERT INTO velocity_shipments"))!;
     expect(vs.params?.slice(0, 4)).toEqual([SID, "2026-10-15", new Date("2026-10-15T18:03:37Z"), "shipped"]);
     const ins = db.writes.filter((w) => w.sql.startsWith("INSERT INTO po_asin_shipments"));
-    expect(ins.map((w) => [w.params?.[0], w.params?.[2]])).toEqual([["a-eql", 10], ["a-tw1", 1], ["a-tw2", 9], ["a-gr1", 1], ["a-gr2", 4], ["a-ot1", 10]]);
+    expect(ins.map((w) => [w.params?.[0], w.params?.[2]])).toEqual([["a-eql", 60], ["a-tw1", 1], ["a-tw2", 9], ["a-gr1", 1], ["a-gr2", 4], ["a-ot1", 10]]); // Individual units (60 for the 6-pack row)
     expect(ins.every((w) => w.params?.[1] === SID && w.params?.[3] === "2026-10-15")).toBe(true);
     const un = db.writes.filter((w) => w.sql.startsWith("INSERT INTO shipment_unmatched"));
     expect(un.map((w) => [w.params?.[1], w.params?.[3]]).sort()).toEqual([["bundle01", "no_order"], ["deadbeef", "po_not_found"]]);
@@ -125,7 +126,7 @@ describe("syncVelocityShipments", () => {
     const prep = db.writes.filter((w) => w.sql.startsWith("UPDATE po_asins SET qty_at_prep"));
     expect(Object.fromEntries(prep.map((w) => [w.params?.[0], w.params?.[1]]))).toEqual({ "a-eql": 0, "a-tw1": 2, "a-tw2": 0, "a-gr1": 2, "a-gr2": 0, "a-ot1": 0, "a-old": null });
     const recv = db.writes.filter((w) => w.sql.startsWith("UPDATE po_asins SET received_velocity"));
-    expect(Object.fromEntries(recv.map((w) => [w.params?.[0], w.params?.[1]]))).toEqual({ "a-eql": 10, "a-tw1": 3, "a-tw2": 9, "a-gr1": 3, "a-gr2": 9, "a-ot1": 10, "a-old": null });
+    expect(Object.fromEntries(recv.map((w) => [w.params?.[0], w.params?.[1]]))).toEqual({ "a-eql": 60, "a-tw1": 3, "a-tw2": 9, "a-gr1": 3, "a-gr2": 9, "a-ot1": 10, "a-old": null }); // Individual units (migration 101): 60 for the 6-pack row
     for (const w of db.writes) expect(w.sql).not.toMatch(/fba_shipment_ids|sc_match|qty_received|qty_at_warehouse|qty_lost_damaged_us|qty_shipped_supplier/);
   });
 
@@ -135,7 +136,7 @@ describe("syncVelocityShipments", () => {
     const list = await d.listShipments();
     const db = fakeDb({
       shipments: [{ id: SID, status: "shipped", shipped_at_ts: new Date("2026-10-15T18:03:37Z"), raw: { list: list[0], detail: { orders: SHIPMENT_LINES } } }],
-      rows: [["a-eql", 10], ["a-tw1", 1], ["a-tw2", 9], ["a-gr1", 1], ["a-gr2", 4], ["a-ot1", 10]].map(([id, q], i) => ({ id: `r${i}`, po_asin_id: id, velocity_shipment_id: SID, qty_shipped: String(q), shipped_at: "2026-10-15" })),
+      rows: [["a-eql", 60], ["a-tw1", 1], ["a-tw2", 9], ["a-gr1", 1], ["a-gr2", 4], ["a-ot1", 10]].map(([id, q], i) => ({ id: `r${i}`, po_asin_id: id, velocity_shipment_id: SID, qty_shipped: String(q), shipped_at: "2026-10-15" })),
       unmatched: [{ id: "u1", velocity_shipment_id: SID, velocity_order_id: "deadbeef", reason: "po_not_found", resolved_at: null, resolved_po_asin_id: null }, { id: "u2", velocity_shipment_id: SID, velocity_order_id: "bundle01", reason: "no_order", resolved_at: null, resolved_po_asin_id: null }],
     });
     const r = await syncVelocityShipments({ dryRun: true, deps: d, db });
@@ -148,7 +149,7 @@ describe("syncVelocityShipments", () => {
     const r = await syncVelocityShipments({ dryRun: true, deps: deps(), db });
     expect(r.counts.linesMatched).toBe(7);
     expect(r.unmatched.map((u) => u.orderId)).toEqual(["bundle01"]);
-    expect(r.samples.find((s) => s.includes("x.com OLD1 B0OLDASIN1"))).toMatch(/5 units ÷ 1 → 5 \(picker\)/);
+    expect(r.samples.find((s) => s.includes("x.com OLD1 B0OLDASIN1"))).toMatch(/5 Individual units \(picker\)/);
   });
 
   it("a child-less bundle parent resolves through velocity_bundle_identity (child order numbers, no retailer → order-only)", async () => {
@@ -156,7 +157,7 @@ describe("syncVelocityShipments", () => {
     const d = deps({ getShipment: async () => ({ orders: [{ ...SHIPMENT_LINES[6], asin: "B004WZ4CLW", quantity_shipped: 12 }] }) });
     const r = await syncVelocityShipments({ dryRun: true, deps: d, db });
     expect(r.counts).toMatchObject({ lines: 1, linesMatched: 1, linesMatchedOrderOnly: 1, linesNoOrder: 0 });
-    expect(r.samples[0]).toMatch(/SHOP533384 B004WZ4CLW: 12 units ÷ 6 → 2 \(order_only\)/);
+    expect(r.samples[0]).toMatch(/SHOP533384 B004WZ4CLW: 12 Individual units \(order_only\)/);
   });
 
   it("a manually assigned line stays on its pinned row even when another PO now matches its Order # exactly (leadersrpmshop.com 10548557_10507736, 2026-10-18)", async () => {

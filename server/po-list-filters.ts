@@ -7,8 +7,6 @@
 import type { QueryLike } from "./scheduler/types";
 import { LEGACY_ACTION_ITEMS, RENAMED_DERIVED_ITEMS, ACTION_ITEMS, REVIEW_VELOCITY, DISPLAY_ACTION_ITEMS, PACK_SIZE_MISSING, PACK_SIZE_MISMATCH, RECEIVING_MISMATCH, EXTRA_UNITS_SHIPPED, NO_INVOICE_SAVED } from "./po-status-map";
 import { openLineItemsSql, PACK_SIZE_MISSING_EXISTS_SQL, PACK_SIZE_MISMATCH_EXISTS_SQL, RECEIVING_MISMATCH_EXISTS_SQL, EXTRA_UNITS_EXISTS_SQL, NO_INVOICE_EXISTS_SQL } from "./po-action-items";
-import { OPEN_DEFECT_PO_SQL } from "./po-defect-sql";
-import { DEFECT_ACTION_ITEM } from "@shared/po-defect";
 import { refundsFilterCond } from "./po-queries";
 import { replacementTrackingCondSql } from "./tracking-replacement-pair";
 
@@ -56,8 +54,6 @@ function actionItemCond(item: string, p: Params): string | null {
   if (item === RECEIVING_MISMATCH) any.push(RECEIVING_MISMATCH_EXISTS_SQL);
   if (item === EXTRA_UNITS_SHIPPED) any.push(EXTRA_UNITS_EXISTS_SQL);
   if (item === NO_INVOICE_SAVED) any.push(NO_INVOICE_EXISTS_SQL("p"));
-  // Derived from open supplier defects too (SPEC §22 "Supplier defects"); the stored manual badges still match above.
-  if (item === DEFECT_ACTION_ITEM) any.push(OPEN_DEFECT_PO_SQL("p"));
   const pair = replacementTrackingCondSql("p", item); // the one-off replacement pair's item — until 2026-11-06 the filter ignored it
   if (pair) any.push(pair);
   return any.length ? `(${any.join(" OR ")})` : null;

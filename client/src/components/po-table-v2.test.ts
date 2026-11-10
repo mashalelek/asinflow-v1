@@ -12,8 +12,9 @@ const page = readFileSync(join(__dirname, "..", "pages", "purchase-orders.tsx"),
 
 describe("labels", () => {
   it("sentence case, Extra units shipped right after the manual items", () => {
-    expect(ACTION_ITEM_OPTIONS).toEqual(["Need to return", "Missing / damaged from supplier", "Confirm refund / replacement", "ATTN: Velocity", "See comments", "SHIP", "Received - FBM", "Confirm order details", "Subscription renews", "Review renewal PO", "Subscription may be active"]);
-    expect(DISPLAY_ACTION_ITEMS.slice(11, 13)).toEqual(["Extra units shipped", "Review Velocity"]);
+    // "Missing / damaged from supplier" and "Confirm refund / replacement" are claims since migration 101, no longer items.
+    expect(ACTION_ITEM_OPTIONS).toEqual(["Need to return", "ATTN: Velocity", "See comments", "SHIP", "Received - FBM", "Confirm order details", "Subscription renews", "Review renewal PO", "Subscription may be active"]);
+    expect(DISPLAY_ACTION_ITEMS.slice(9, 11)).toEqual(["Extra units shipped", "Review Velocity"]);
   });
 });
 

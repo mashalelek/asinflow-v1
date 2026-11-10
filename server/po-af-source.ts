@@ -9,6 +9,9 @@
 // "Newest" = order_date DESC, entry_seq DESC (po-entry-seq.ts), the same
 // order the newest-first sheet had. A product line or ASIN row is
 // "canceled" when every line is canceled for its full ordered quantity.
+// Since migration 101 (claims commit 1, D17) the quantities come from the two
+// views (po_asin_expected / po_line_expected): ASIN units for the row, Product
+// units for the line, "canceled" = the line is fully canceled by its claims.
 // Imports nothing that boots Express (no ./index) — scripts may use it.
 import type { QueryLike } from "./scheduler/types";
 import { lineRatio, ratioYield } from "../shared/yield";
@@ -23,7 +26,6 @@ const mdy = (d: unknown): string | null => {
   const m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(s);
   return m ? `${Number(m[2])}/${Number(m[3])}/${m[1]}` : null;
 };
-const lineCanceled = `(l.qty_canceled IS NOT NULL AND l.qty_canceled >= COALESCE(l.qty_ordered, 0))`;
 
 /**
  * Per ASIN: the newest ASIN row whose lines are not all canceled → cost/unit,
@@ -35,7 +37,7 @@ export async function loadAfAsinCostMap(query: QueryLike, asins?: readonly strin
   const rows = (await query(
     `SELECT DISTINCT ON (pa.asin) pa.asin, pa.cost_per_unit, pa.prep_cost, p.supplier
        FROM po_asins pa JOIN purchase_orders p ON p.id = pa.po_id
-      WHERE NOT COALESCE((SELECT bool_and(${lineCanceled}) FROM po_line_items l WHERE l.po_asin_id = pa.id), false) ${filter}
+      WHERE NOT COALESCE((SELECT bool_and(le.fully_canceled) FROM po_line_expected le WHERE le.po_asin_id = pa.id), false) ${filter}
       ORDER BY pa.asin, ${NEWEST_PO_ORDER}`,
     asins && asins.length > 0 ? [asins.map((a) => a.toUpperCase())] : [],
   )).rows as any[];
@@ -82,10 +84,10 @@ export function lineAsinQty(asinQty: number, ordered: number | null, yieldT: num
 export async function loadAfPoRows(query: QueryLike): Promise<{ rows: SheetRow[]; rawRowsRead: number; blankAsinRows: number }> {
   const rs = (await query(
     `SELECT p.order_id, p.order_date, p.supplier, p.closed_at IS NOT NULL AS closed, p.ships_to,
-            pa.id AS po_asin_id, pa.asin, pa.asin_name, pa.qty AS asin_qty, pa.cost_per_unit, pa.prep_cost, pa.sold_as, pa.units_per_pack, pa.unique_products,
-            l.position, l.product_name, l.qty_ordered, l.asin_qty_per_product, l.retailer_units_per_product, l.asin_units_per_pack, l.units_per_bundle, ${lineCanceled} AS canceled,
+            pa.id AS po_asin_id, pa.asin, pa.asin_name, e.ordered_asin AS asin_qty, pa.cost_per_unit, pa.prep_cost, pa.sold_as, pa.units_per_pack, pa.unique_products,
+            l.position, l.product_name, le.ordered_product AS qty_ordered, l.asin_qty_per_product, l.retailer_units_per_product, l.asin_units_per_pack, l.units_per_bundle, le.fully_canceled AS canceled,
             (SELECT COUNT(*)::int FROM po_line_items l2 WHERE l2.po_asin_id = pa.id) AS line_count
-       FROM po_line_items l JOIN po_asins pa ON pa.id = l.po_asin_id JOIN purchase_orders p ON p.id = pa.po_id
+       FROM po_line_items l JOIN po_line_expected le ON le.line_id = l.id JOIN po_asins pa ON pa.id = l.po_asin_id JOIN po_asin_expected e ON e.id = pa.id JOIN purchase_orders p ON p.id = pa.po_id
       ORDER BY ${NEWEST_PO_ORDER}, pa.asin, l.position`,
   )).rows as any[];
   const rows: SheetRow[] = rs.map((r, i) => {

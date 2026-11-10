@@ -1,0 +1,354 @@
+// Supplier claims (SPEC §22 "Supplier claims", docs/claude_spec-patch-supplier-claims.md, migration 101;
+// commit 1). One record per supplier problem on a PO line — missing, damaged, wrong item, expired, never
+// received, can't sell, canceled, returned — carrying the $ owed (D1). Replaces server/po-defects.ts (094).
+//
+//   qty is INDIVIDUAL units (D16 / D17), stored, never derived from Ordered − Received.
+//   $ owed = qty × the line's sourcing cost per Individual unit while amount_owed_source = 'auto'; a typed
+//   amount is 'manual' and never recalculated (§3.7). remaining = owed − Σ refunds applied.
+//   status suggested | open | closed | dismissed; an OPEN claim keeps its PO open (D15, po-close.ts).
+//   outcome refund_card | gift_card | store_credit — closes by itself when the applied refunds cover the $
+//   owed; replacement — closes when marked arrived; write_off — closes at once, a reason required.
+//   Every manual step is a task (supplier_claim_tasks); commit 1 writes contact_supplier on a new claim and
+//   refund_received when an outcome promises money; the Claims page (commit 2) renders them.
+//   Every change is a History row (po_edit_log, entity 'claim') and an event (supplier_claim_events).
+import type { QueryLike } from "./scheduler/types";
+import { EditError, logEdits } from "./po-edit";
+import { CLAIM_KINDS, CLAIM_KIND_LABELS, CLAIM_OUTCOMES, REFUND_OUTCOMES, claimAmount, claimMoney, type ClaimKind, type ClaimOutcome, type ClaimTaskKind, CLAIM_TASK_GROUP } from "@shared/supplier-claim";
+
+export { OPEN_CLAIM_ASIN_SQL, OPEN_CLAIM_PO_SQL, OPEN_CLAIM_LINE_SQL, OPEN_CLAIM_COUNT_PO_SQL, REFUNDS_DUE_PO_SQL, REFUNDS_DUE_EXISTS_SQL, CLAIM_REMAINING_SQL } from "./supplier-claim-sql";
+
+export interface ClaimRow {
+  id: number; po_id: string; po_line_item_id: string | null; kind: ClaimKind; qty: number; amount_owed: number | null; amount_owed_source: "auto" | "manual";
+  status: "suggested" | "open" | "closed" | "dismissed"; outcome: ClaimOutcome | null; outcome_amount: number | null; outcome_detail: string | null; write_off_reason: string | null;
+  found_at: string; found_by: string; reported_at: string | null; closed_at: string | null; note: string | null;
+  replacement_qty: number | null; replacement_shipped_at: string | null; replacement_arrived_at: string | null; return_required: boolean; qty_disposed: number | null;
+  asin: string | null; product_name: string | null; line_no: number;
+  /** The line's packs, for the Product / ASIN equivalents of the Individual qty (NULL when not known). */
+  product_pack: number | null; asin_pack: number | null; qty_basis: string | null;
+  refunds: Array<{ id: number; amount: number | null; amount_applied: number | null; refunded_at: string | null; method: string | null }>;
+  tasks: Array<{ id: number; kind: ClaimTaskKind; group: string; reason: string | null; created_at: string; due_at: string | null; done_at: string | null }>;
+  owed: number | null; remaining: number | null; received: number;
+}
+
+const num = (v: unknown) => (v == null ? null : Number(v));
+const money = (v: number | null) => (v == null ? "—" : `$${v.toFixed(2)}`);
+const describe = (d: { qty: number | string; kind: string; amount_owed: number | string | null }) => `${Number(d.qty)} ${CLAIM_KIND_LABELS[d.kind as ClaimKind] ?? d.kind} × ${money(num(d.amount_owed))}`;
+
+/** The line's 1-based number within its ASIN row (position order) — how the UI and the scripts name a line. */
+const LINE_NO_SQL = (l: string) => `(SELECT COUNT(*)::int FROM po_line_items s WHERE s.po_asin_id IS NOT DISTINCT FROM ${l}.po_asin_id AND s.po_id = ${l}.po_id
+  AND (COALESCE(s.position, 0), s.id) <= (COALESCE(${l}.position, 0), ${l}.id))`;
+
+export async function loadClaims(query: QueryLike, where: { poId?: string; ids?: number[] }): Promise<ClaimRow[]> {
+  const cond = where.ids ? `c.id = ANY($1::bigint[])` : `c.po_id = $1`;
+  const rows = (await query(
+    `SELECT c.*, c.found_at::text AS found_at, c.reported_at::text AS reported_at, c.closed_at::text AS closed_at,
+            c.replacement_shipped_at::text AS replacement_shipped_at, c.replacement_arrived_at::text AS replacement_arrived_at,
+            pa.asin, l.product_name, CASE WHEN l.id IS NULL THEN 0 ELSE ${LINE_NO_SQL("l")} END AS line_no,
+            l.retailer_units_per_product AS product_pack, COALESCE(pa.units_per_pack, l.asin_units_per_pack) AS asin_pack, l.qty_basis,
+            COALESCE((SELECT json_agg(json_build_object('id', r.id, 'amount', r.amount, 'amount_applied', x.amount_applied, 'refunded_at', r.refunded_at, 'method', r.method) ORDER BY r.id)
+                        FROM supplier_claim_refunds x JOIN po_line_refunds r ON r.id = x.po_line_refund_id WHERE x.claim_id = c.id), '[]') AS refunds,
+            COALESCE((SELECT json_agg(json_build_object('id', t.id, 'kind', t.kind, 'group', t."group", 'reason', t.reason, 'created_at', t.created_at, 'due_at', t.due_at, 'done_at', t.done_at) ORDER BY t.id)
+                        FROM supplier_claim_tasks t WHERE t.claim_id = c.id), '[]') AS tasks
+       FROM supplier_claims c LEFT JOIN po_line_items l ON l.id = c.po_line_item_id LEFT JOIN po_asins pa ON pa.id = l.po_asin_id
+      WHERE ${cond} ORDER BY c.found_at, c.id`, [where.ids ?? where.poId],
+  )).rows as any[];
+  return rows.map((r) => {
+    const refunds = (r.refunds ?? []).map((x: any) => ({ id: Number(x.id), amount: num(x.amount), amount_applied: num(x.amount_applied), refunded_at: x.refunded_at ?? null, method: x.method ?? null }));
+    const m = claimMoney(r.amount_owed, refunds);
+    return { ...r, id: Number(r.id), qty: Number(r.qty), amount_owed: num(r.amount_owed), outcome_amount: num(r.outcome_amount), replacement_qty: num(r.replacement_qty), qty_disposed: num(r.qty_disposed),
+      product_pack: num(r.product_pack), asin_pack: num(r.asin_pack), line_no: Number(r.line_no), refunds, tasks: (r.tasks ?? []).map((t: any) => ({ ...t, id: Number(t.id) })),
+      owed: m.owed, remaining: m.remaining, received: m.received };
+  });
+}
+
+/** The chip / hover form of open claims: what the list rows carry. */
+export interface OpenClaimBrief { id: number; po_line_item_id: string | null; asin: string | null; line_no: number; kind: string; qty: number; amount_owed: number | null; remaining: number | null; note: string | null; status: string; outcome: string | null; open_tasks: number }
+export const briefOf = (d: ClaimRow): OpenClaimBrief => ({ id: d.id, po_line_item_id: d.po_line_item_id, asin: d.asin, line_no: d.line_no, kind: d.kind, qty: d.qty, amount_owed: d.amount_owed, remaining: d.remaining, note: d.note, status: d.status, outcome: d.outcome, open_tasks: d.tasks.filter((t) => t.done_at == null).length });
+
+/** Per ASIN row / per PO: the open claims (the chip text / hover; the POs list's Claims column in commit 2). */
+export async function loadOpenClaimSummaries(query: QueryLike, poIds: readonly string[]): Promise<{ byPo: Map<string, ClaimRow[]>; byAsinRow: Map<string, ClaimRow[]> }> {
+  const byPo = new Map<string, ClaimRow[]>(), byAsinRow = new Map<string, ClaimRow[]>();
+  if (poIds.length === 0) return { byPo, byAsinRow };
+  const ids = (await query(`SELECT id FROM supplier_claims WHERE po_id = ANY($1::uuid[]) AND status = 'open'`, [poIds])).rows.map((r: any) => Number(r.id));
+  if (ids.length === 0) return { byPo, byAsinRow };
+  const rows = await loadClaims(query, { ids });
+  const lineIds = rows.map((r) => r.po_line_item_id).filter((x): x is string => x != null);
+  const asinRow = new Map<string, string>(lineIds.length ? ((await query(`SELECT id, po_asin_id FROM po_line_items WHERE id = ANY($1::uuid[])`, [lineIds])).rows as any[]).map((r) => [String(r.id), String(r.po_asin_id)]) : []);
+  for (const r of rows) {
+    const k = String(r.po_id); if (!byPo.has(k)) byPo.set(k, []); byPo.get(k)!.push(r);
+    const a = r.po_line_item_id ? asinRow.get(String(r.po_line_item_id)) : null; if (a) { if (!byAsinRow.has(a)) byAsinRow.set(a, []); byAsinRow.get(a)!.push(r); }
+  }
+  return { byPo, byAsinRow };
+}
+
+async function lineOf(query: QueryLike, poId: string, lineId: string) {
+  const l = (await query(
+    `SELECT l.id, l.qty_basis, l.price, l.adjusted_product_cost, l.retailer_units_per_product, le.ordered_individual, le.ordered_product, p.subtotal, p.discount, p.tax, p.sh_donations
+       FROM po_line_items l JOIN po_line_expected le ON le.line_id = l.id JOIN purchase_orders p ON p.id = l.po_id WHERE l.id = $1 AND l.po_id = $2`, [lineId, poId])).rows[0];
+  if (!l) throw new EditError(400, "po_line_item_id must be a product line of this PO");
+  return l;
+}
+/** The line's auto $ owed for a qty (Individual units; a legacy line's qty is Product units, so its pack is 1 there). */
+function autoAmount(line: any, qty: number): number | null {
+  return claimAmount({ qty, productPack: line.qty_basis === "product_legacy" ? 1 : line.retailer_units_per_product, adjustedProductCost: line.adjusted_product_cost, price: line.price, subtotal: line.subtotal, discount: line.discount, tax: line.tax, shipping: line.sh_donations });
+}
+
+const qtyOf = (v: unknown): number => {
+  const q = Number(v);
+  if (!Number.isFinite(q) || q <= 0 || Math.round(q * 100) !== q * 100) throw new EditError(400, "qty must be a positive number (Individual units, up to 2 decimals)");
+  return q;
+};
+const amountOf = (v: unknown): number | null => {
+  if (v == null || v === "") return null;
+  const a = Number(v);
+  if (!Number.isFinite(a) || a < 0) throw new EditError(400, "amount must be a non-negative number");
+  return Math.round(a * 100) / 100;
+};
+const kindOf = (v: unknown): ClaimKind => {
+  const k = String(v ?? "").trim().replace(/[ -]/g, "_") as ClaimKind;
+  if (!(CLAIM_KINDS as readonly string[]).includes(k)) throw new EditError(400, `kind must be one of ${CLAIM_KINDS.join(", ")}`);
+  return k;
+};
+const dateOf = (v: unknown, field: string): string => { if (!/^\d{4}-\d{2}-\d{2}$/.test(String(v))) throw new EditError(400, `${field} must be YYYY-MM-DD`); return String(v); };
+
+async function event(query: QueryLike, claimId: number, type: string, summary: string | null, by: number | null, refs: { po_line_refund_id?: number } = {}): Promise<void> {
+  await query(`INSERT INTO supplier_claim_events (claim_id, type, summary, by, po_line_refund_id) VALUES ($1, $2, $3, $4, $5)`, [claimId, type, summary, by, refs.po_line_refund_id ?? null]);
+}
+/** One open task per kind per claim (the unique index); re-adding an open one is a no-op. */
+export async function addTask(query: QueryLike, claimId: number, kind: ClaimTaskKind, reason: string | null = null, qty: number | null = null): Promise<void> {
+  await query(`INSERT INTO supplier_claim_tasks (claim_id, kind, "group", reason, qty) VALUES ($1, $2, $3, $4, $5) ON CONFLICT (claim_id, kind) WHERE done_at IS NULL DO NOTHING`, [claimId, kind, CLAIM_TASK_GROUP[kind], reason, qty]);
+}
+export async function doneTask(query: QueryLike, taskId: number, userId: number | null): Promise<{ id: number; claim_id: number; po_id: string }> {
+  const t = (await query(`SELECT t.id, t.claim_id, t.kind, c.po_id FROM supplier_claim_tasks t JOIN supplier_claims c ON c.id = t.claim_id WHERE t.id = $1`, [taskId])).rows[0];
+  if (!t) throw new EditError(404, "task not found");
+  await query(`UPDATE supplier_claim_tasks SET done_at = now(), done_by = $2 WHERE id = $1 AND done_at IS NULL`, [taskId, userId]);
+  await event(query, Number(t.claim_id), "task_done", String(t.kind), userId);
+  await logEdits(query, String(t.po_id), userId, "claim", String(t.claim_id), [{ field: `task ${t.kind}`, old: "open", new: "done" }]);
+  return { id: Number(t.id), claim_id: Number(t.claim_id), po_id: String(t.po_id) };
+}
+
+export interface AddClaimBody { po_line_item_id?: string | null; kind: string; qty: number | string; amount_owed?: number | string | null; found_at?: string | null; note?: string | null; refund_ids?: number[]; return_required?: boolean; status?: "open" | "suggested" }
+
+/**
+ * Open a claim. qty in Individual units (on a product_legacy line: the line's stored Product units — the pack is not known).
+ * amount_owed omitted → auto (qty × the line's cost per Individual unit); a whole-PO claim (no line) needs the amount typed.
+ * A new open claim gets a contact_supplier task (§3.3).
+ */
+export async function addClaim(query: QueryLike, poId: string, body: AddClaimBody, userId: number | null, opts: { noTask?: boolean } = {}): Promise<{ id: number; po_id: string }> {
+  const lineId = body?.po_line_item_id == null || body.po_line_item_id === "" ? null : String(body.po_line_item_id);
+  const line = lineId ? await lineOf(query, poId, lineId) : null;
+  if (!line && !(await query(`SELECT 1 FROM purchase_orders WHERE id = $1`, [poId])).rows[0]) throw new EditError(404, "PO not found");
+  const kind = kindOf(body.kind), qty = qtyOf(body.qty);
+  if (line) {
+    const ordered = line.qty_basis === "product_legacy" ? Number(line.ordered_product) : Number(line.ordered_individual);
+    if (Number.isFinite(ordered) && ordered > 0 && qty > ordered + 1e-9) throw new EditError(400, `qty (${qty}) cannot exceed the line's Ordered (${ordered} ${line.qty_basis === "product_legacy" ? "Product" : "Individual"} units)`);
+  }
+  const manual = body.amount_owed !== undefined && body.amount_owed !== null && body.amount_owed !== "";
+  const amount = manual ? amountOf(body.amount_owed) : line ? autoAmount(line, qty) : null;
+  const found = body.found_at && /^\d{4}-\d{2}-\d{2}$/.test(body.found_at) ? body.found_at : null;
+  const status = body.status === "suggested" ? "suggested" : "open";
+  const row = (await query(
+    `INSERT INTO supplier_claims (po_id, po_line_item_id, kind, qty, amount_owed, amount_owed_source, found_at, note, status, found_by, return_required, created_by_user_id)
+     VALUES ($1, $2, $3, $4, $5, $6, COALESCE($7::date, CURRENT_DATE), $8, $9, 'maria', $10, $11) RETURNING id`,
+    [poId, line?.id ?? null, kind, qty, amount, manual ? "manual" : "auto", found, body.note?.trim() || null, status, body.return_required === true, userId])).rows[0];
+  const id = Number(row.id);
+  await logEdits(query, poId, userId, "claim", String(id), [{ field: "claim opened", old: null, new: `${describe({ qty, kind, amount_owed: amount })}${line ? "" : " (whole PO)"}${body.note?.trim() ? ` — ${body.note.trim()}` : ""}` }]);
+  await event(query, id, status === "open" ? "opened" : "found", describe({ qty, kind, amount_owed: amount }), userId);
+  for (const rid of body.refund_ids ?? []) await linkRefund(query, id, Number(rid), userId, { sync: false });
+  if (status === "open" && !opts.noTask) await addTask(query, id, "contact_supplier", "a claim was opened — report it to the supplier");
+  await syncRefundCoverage(query, [id], userId);
+  return { id, po_id: poId };
+}
+
+async function claimRow(query: QueryLike, id: number) {
+  const d = (await query(`SELECT * FROM supplier_claims WHERE id = $1`, [id])).rows[0];
+  if (!d) throw new EditError(404, "claim not found");
+  return d;
+}
+
+/** Edit qty / amount_owed (→ manual; "" → back to auto) / kind / note / found_at / return_required / reported_at. A qty change re-derives an auto amount. */
+export async function editClaim(query: QueryLike, id: number, body: Record<string, unknown>, userId: number | null): Promise<{ id: number; po_id: string }> {
+  const d = await claimRow(query, id);
+  const edits: Record<string, unknown> = {};
+  const line = d.po_line_item_id ? await lineOf(query, String(d.po_id), String(d.po_line_item_id)) : null;
+  if ("qty" in body) {
+    const q = qtyOf(body.qty);
+    if (line) {
+      const ordered = line.qty_basis === "product_legacy" ? Number(line.ordered_product) : Number(line.ordered_individual);
+      if (Number.isFinite(ordered) && ordered > 0 && q > ordered + 1e-9) throw new EditError(400, `qty (${q}) cannot exceed the line's Ordered (${ordered} ${line.qty_basis === "product_legacy" ? "Product" : "Individual"} units)`);
+    }
+    edits.qty = q;
+    if (d.amount_owed_source === "auto" && line && !("amount_owed" in body)) edits.amount_owed = autoAmount(line, q);
+  }
+  if ("amount_owed" in body) {
+    if (body.amount_owed == null || body.amount_owed === "") { edits.amount_owed_source = "auto"; edits.amount_owed = line ? autoAmount(line, Number(edits.qty ?? d.qty)) : null; }
+    else { edits.amount_owed = amountOf(body.amount_owed); edits.amount_owed_source = "manual"; }
+  }
+  if ("kind" in body) edits.kind = kindOf(body.kind);
+  if ("note" in body) edits.note = String(body.note ?? "").trim() || null;
+  if ("found_at" in body) edits.found_at = dateOf(body.found_at, "found_at");
+  if ("reported_at" in body) edits.reported_at = body.reported_at == null || body.reported_at === "" ? null : dateOf(body.reported_at, "reported_at");
+  if ("reported_channel" in body) edits.reported_channel = String(body.reported_channel ?? "").trim() || null;
+  if ("return_required" in body) edits.return_required = body.return_required === true || body.return_required === "true";
+  const cur = { ...d, found_at: d.found_at instanceof Date ? d.found_at.toISOString().slice(0, 10) : d.found_at, reported_at: d.reported_at instanceof Date ? d.reported_at.toISOString().slice(0, 10) : d.reported_at };
+  const canon = (k: string, v: unknown) => (v == null ? "" : k === "qty" || k === "amount_owed" ? String(Number(v)) : String(v));
+  const changes = Object.entries(edits).filter(([k, v]) => canon(k, cur[k]) !== canon(k, v));
+  if (changes.length === 0) return { id, po_id: String(d.po_id) };
+  await query(`UPDATE supplier_claims SET ${changes.map(([k], i) => `${k} = $${i + 2}`).join(", ")}, updated_at = now() WHERE id = $1`, [id, ...changes.map(([, v]) => v)]);
+  await logEdits(query, String(d.po_id), userId, "claim", String(id), changes.map(([k, v]) => ({ field: `claim ${k}`, old: cur[k] == null ? null : canon(k, cur[k]), new: v == null ? null : canon(k, v) })));
+  if (changes.some(([k]) => k === "amount_owed" && edits.amount_owed_source === "manual")) await event(query, id, "amount_overridden", money(num(edits.amount_owed)), userId);
+  if (changes.some(([k]) => k === "reported_at")) await event(query, id, "reported", String(edits.reported_channel ?? d.reported_channel ?? ""), userId);
+  await syncRefundCoverage(query, [id], userId);
+  return { id, po_id: String(d.po_id) };
+}
+
+/** Link a received refund row of the same PO; amount_applied = how much of it this claim takes (NULL = the whole row). */
+export async function linkRefund(query: QueryLike, id: number, refundId: number, userId: number | null, opts: { sync?: boolean; amountApplied?: number | null } = {}): Promise<{ id: number; po_id: string }> {
+  const d = await claimRow(query, id);
+  const r = (await query(`SELECT id, po_id, amount, method FROM po_line_refunds WHERE id = $1`, [refundId])).rows[0];
+  if (!r || String(r.po_id) !== String(d.po_id)) throw new EditError(400, "the refund must be a refund row of this PO");
+  const applied = opts.amountApplied === undefined ? null : amountOf(opts.amountApplied);
+  const ins = await query(`INSERT INTO supplier_claim_refunds (claim_id, po_line_refund_id, amount_applied) VALUES ($1, $2, $3) ON CONFLICT (claim_id, po_line_refund_id) DO UPDATE SET amount_applied = EXCLUDED.amount_applied`, [id, refundId, applied]);
+  if ((ins.rowCount ?? 0) > 0) {
+    await logEdits(query, String(d.po_id), userId, "claim", String(id), [{ field: "refund linked", old: null, new: `${money(num(applied ?? r.amount))}${applied != null ? ` of ${money(num(r.amount))}` : ""} (${r.method ?? "refund"})` }]);
+    await event(query, id, "refund_received", money(num(applied ?? r.amount)), userId, { po_line_refund_id: Number(r.id) });
+  }
+  if (opts.sync !== false) await syncRefundCoverage(query, [id], userId);
+  return { id, po_id: String(d.po_id) };
+}
+
+export async function unlinkRefund(query: QueryLike, id: number, refundId: number, userId: number | null): Promise<{ id: number; po_id: string }> {
+  const d = await claimRow(query, id);
+  const r = (await query(`SELECT amount FROM po_line_refunds WHERE id = $1`, [refundId])).rows[0];
+  const del = await query(`DELETE FROM supplier_claim_refunds WHERE claim_id = $1 AND po_line_refund_id = $2`, [id, refundId]);
+  if ((del.rowCount ?? 0) > 0) await logEdits(query, String(d.po_id), userId, "claim", String(id), [{ field: "refund unlinked", old: r ? money(num(r.amount)) : String(refundId), new: null }]);
+  await syncRefundCoverage(query, [id], userId);
+  return { id, po_id: String(d.po_id) };
+}
+
+export type OutcomeBody = { outcome: "refund_card" | "gift_card" | "store_credit"; amount?: number | string | null; detail?: string | null }
+  | { outcome: "replacement"; qty?: number | string | null; arrived?: boolean; shipped_at?: string | null; arrived_at?: string | null }
+  | { outcome: "write_off"; reason: string };
+
+/**
+ * Set the outcome (D3, one per claim). Refund / credit: stays open with a refund_received task until the applied refunds cover
+ * the $ owed; replacement: open until `arrived` (then closed); write_off: closed at once, reason required.
+ */
+export async function setOutcome(query: QueryLike, id: number, body: OutcomeBody, userId: number | null): Promise<{ id: number; po_id: string }> {
+  const d = await claimRow(query, id);
+  if (d.status === "dismissed") throw new EditError(400, "a dismissed claim has no outcome — reopen it first");
+  const outcome = String((body as any)?.outcome ?? "");
+  if (!(CLAIM_OUTCOMES as readonly string[]).includes(outcome)) throw new EditError(400, `outcome must be one of ${CLAIM_OUTCOMES.join(", ")}`);
+  const poId = String(d.po_id);
+  if (outcome === "write_off") {
+    const reason = String((body as any).reason ?? "").trim();
+    if (!reason) throw new EditError(400, "a write-off needs a reason");
+    await query(`UPDATE supplier_claims SET status = 'closed', outcome = 'write_off', write_off_reason = $2, outcome_amount = amount_owed, closed_at = now(), updated_at = now() WHERE id = $1`, [id, reason]);
+    await query(`UPDATE supplier_claim_tasks SET done_at = now(), done_by = $2 WHERE claim_id = $1 AND done_at IS NULL`, [id, userId]);
+    await logEdits(query, poId, userId, "claim", String(id), [{ field: "claim outcome", old: d.outcome, new: `write-off: ${reason}` }]);
+    await event(query, id, "outcome_set", `write_off: ${reason}`, userId); await event(query, id, "closed", "written off", userId);
+    return { id, po_id: poId };
+  }
+  if (outcome === "replacement") {
+    const b = body as Extract<OutcomeBody, { outcome: "replacement" }>;
+    const rq = b.qty == null || b.qty === "" ? null : qtyOf(b.qty);
+    const shipped = b.shipped_at ? dateOf(b.shipped_at, "shipped_at") : null, arrived = b.arrived_at ? dateOf(b.arrived_at, "arrived_at") : b.arrived ? new Date().toISOString().slice(0, 10) : null;
+    await query(`UPDATE supplier_claims SET outcome = 'replacement', replacement_qty = COALESCE($2, replacement_qty, qty), replacement_shipped_at = COALESCE($3::date, replacement_shipped_at), replacement_arrived_at = COALESCE($4::date, replacement_arrived_at),
+                   status = CASE WHEN $4::date IS NOT NULL THEN 'closed' ELSE 'open' END, closed_at = CASE WHEN $4::date IS NOT NULL THEN now() ELSE NULL END, updated_at = now() WHERE id = $1`, [id, rq, shipped, arrived]);
+    await logEdits(query, poId, userId, "claim", String(id), [{ field: "claim outcome", old: d.outcome, new: `replacement${arrived ? " (arrived)" : ""}` }]);
+    await event(query, id, "outcome_set", "replacement", userId);
+    if (arrived) { await query(`UPDATE supplier_claim_tasks SET done_at = now(), done_by = $2 WHERE claim_id = $1 AND done_at IS NULL`, [id, userId]); await event(query, id, "replacement_arrived", null, userId); await event(query, id, "closed", "replacement arrived", userId); }
+    else await addTask(query, id, "replacement_arrived", "tick when the replacement units arrive");
+    return { id, po_id: poId };
+  }
+  const b = body as Extract<OutcomeBody, { outcome: "refund_card" | "gift_card" | "store_credit" }>;
+  const amt = b.amount == null || b.amount === "" ? null : amountOf(b.amount);
+  await query(`UPDATE supplier_claims SET outcome = $2, outcome_amount = COALESCE($3, outcome_amount), outcome_detail = COALESCE($4, outcome_detail), status = CASE WHEN status = 'suggested' THEN 'open' ELSE status END, updated_at = now() WHERE id = $1`,
+    [id, outcome, amt, b.detail == null ? null : String(b.detail).trim() || null]);
+  await logEdits(query, poId, userId, "claim", String(id), [{ field: "claim outcome", old: d.outcome, new: `${outcome}${amt != null ? ` ${money(amt)}` : ""}` }]);
+  await event(query, id, "outcome_set", outcome, userId);
+  await addTask(query, id, "refund_received", "tick when the money arrives (add the refund row)");
+  await syncRefundCoverage(query, [id], userId);
+  return { id, po_id: poId };
+}
+
+/** Reopen a closed claim (any outcome) or un-dismiss one. */
+export async function reopenClaim(query: QueryLike, id: number, userId: number | null): Promise<{ id: number; po_id: string }> {
+  const d = await claimRow(query, id);
+  if (d.status === "open") return { id, po_id: String(d.po_id) };
+  await query(`UPDATE supplier_claims SET status = 'open', closed_at = NULL, replacement_arrived_at = CASE WHEN outcome = 'replacement' THEN NULL ELSE replacement_arrived_at END, updated_at = now() WHERE id = $1`, [id]);
+  await logEdits(query, String(d.po_id), userId, "claim", String(id), [{ field: "claim reopened", old: d.status, new: "open" }]);
+  await event(query, id, "reopened", d.outcome, userId);
+  await syncRefundCoverage(query, [id], userId);
+  return { id, po_id: String(d.po_id) };
+}
+/** Dismiss a suggestion (or an open claim Maria rejects): never counts, never blocks. */
+export async function dismissClaim(query: QueryLike, id: number, userId: number | null, reason: string | null = null): Promise<{ id: number; po_id: string }> {
+  const d = await claimRow(query, id);
+  await query(`UPDATE supplier_claims SET status = 'dismissed', closed_at = now(), updated_at = now() WHERE id = $1`, [id]);
+  await query(`UPDATE supplier_claim_tasks SET done_at = now(), done_by = $2 WHERE claim_id = $1 AND done_at IS NULL`, [id, userId]);
+  await logEdits(query, String(d.po_id), userId, "claim", String(id), [{ field: "claim dismissed", old: d.status, new: reason ?? "dismissed" }]);
+  await event(query, id, "dismissed", reason, userId);
+  return { id, po_id: String(d.po_id) };
+}
+export async function removeClaim(query: QueryLike, id: number, userId: number | null): Promise<{ id: number; po_id: string }> {
+  const d = await claimRow(query, id);
+  await query(`DELETE FROM supplier_claims WHERE id = $1`, [id]);
+  await logEdits(query, String(d.po_id), userId, "claim", String(id), [{ field: "claim removed", old: describe(d), new: null }]);
+  return { id, po_id: String(d.po_id) };
+}
+
+/**
+ * Refund coverage, derived on every change (link, unlink, a refund row edited or removed, the amount owed changed): an OPEN claim
+ * whose outcome is unset or a refund / credit and whose applied refunds cover the $ owed closes (outcome from the refund's method
+ * when unset); a CLOSED refund / credit claim no longer covered reopens. Replacement / write-off are left alone.
+ */
+export async function syncRefundCoverage(query: QueryLike, claimIds: readonly number[], userId: number | null): Promise<{ closed: number; reopened: number }> {
+  let closed = 0, reopened = 0;
+  if (claimIds.length === 0) return { closed, reopened };
+  for (const d of await loadClaims(query, { ids: Array.from(new Set(claimIds)) })) {
+    if (d.outcome === "replacement" || d.outcome === "write_off" || d.status === "dismissed" || d.status === "suggested") continue;
+    const m = claimMoney(d.amount_owed, d.refunds);
+    if (d.status === "open" && m.fullyCovered) {
+      const outcome = d.outcome ?? (d.refunds[0]?.method === "gift_card" ? "gift_card" : d.refunds[0]?.method === "store_credit" ? "store_credit" : "refund_card");
+      await query(`UPDATE supplier_claims SET status = 'closed', outcome = $2, outcome_amount = $3, closed_at = now(), updated_at = now() WHERE id = $1`, [d.id, outcome, m.received]);
+      await query(`UPDATE supplier_claim_tasks SET done_at = now(), done_by = $2 WHERE claim_id = $1 AND done_at IS NULL AND kind IN ('refund_received', 'contact_supplier', 'follow_up_supplier', 'check_on_it')`, [d.id, userId]);
+      await logEdits(query, d.po_id, userId, "claim", String(d.id), [{ field: "claim closed", old: "open", new: `${outcome}: ${money(m.received)} received` }]);
+      await event(query, d.id, "closed", `${outcome} ${money(m.received)} received`, userId);
+      closed++;
+    } else if (d.status === "closed" && d.outcome != null && (REFUND_OUTCOMES as readonly string[]).includes(d.outcome) && !m.fullyCovered) {
+      await query(`UPDATE supplier_claims SET status = 'open', closed_at = NULL, updated_at = now() WHERE id = $1`, [d.id]);
+      await addTask(query, d.id, "refund_received", `short by ${money(m.remaining)}`);
+      await logEdits(query, d.po_id, userId, "claim", String(d.id), [{ field: "claim reopened", old: d.outcome, new: `open: ${money(m.remaining)} still owed` }]);
+      await event(query, d.id, "reopened", `short by ${money(m.remaining)}`, userId);
+      reopened++;
+    }
+  }
+  return { closed, reopened };
+}
+
+/** The claims linked to these refund rows (call before a refund row is deleted — the link cascades away). */
+export async function claimsLinkedTo(query: QueryLike, refundIds: readonly number[]): Promise<number[]> {
+  if (refundIds.length === 0) return [];
+  return (await query(`SELECT DISTINCT claim_id FROM supplier_claim_refunds WHERE po_line_refund_id = ANY($1::bigint[])`, [refundIds])).rows.map((r: any) => Number(r.claim_id));
+}
+
+/**
+ * Cancel lines (Cancel PO / an ASIN row's "cancel", D14): one OPEN canceled claim per line for its remaining expected units
+ * (Individual; a legacy line's Product units), with a refund_received task — nothing edits Ordered. Lines with nothing left
+ * expected are skipped. Returns the claims created.
+ */
+export async function cancelLines(query: QueryLike, poId: string, lineIds: readonly string[], userId: number | null, note: string): Promise<Array<{ id: number; line_id: string; qty: number }>> {
+  if (lineIds.length === 0) return [];
+  const lines = (await query(
+    `SELECT le.line_id, le.qty_basis, le.expected_individual, le.expected_product FROM po_line_expected le WHERE le.po_id = $1 AND le.line_id = ANY($2::uuid[])`, [poId, lineIds])).rows;
+  const out: Array<{ id: number; line_id: string; qty: number }> = [];
+  for (const l of lines) {
+    const qty = Number(l.qty_basis === "product_legacy" ? l.expected_product : l.expected_individual) || 0;
+    if (!(qty > 0)) continue;
+    const { id } = await addClaim(query, poId, { po_line_item_id: String(l.line_id), kind: "canceled", qty, note }, userId, { noTask: true });
+    await addTask(query, id, "refund_received", "canceled — tick when the refund posts (add the refund row)");
+    out.push({ id, line_id: String(l.line_id), qty });
+  }
+  return out;
+}

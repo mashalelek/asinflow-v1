@@ -78,10 +78,10 @@ describe("§5 delete / cancel / reassign UI", () => {
     const { shipmentBlockText, deleteConfirmText } = await import("./po-edit");
     expect(shipmentBlockText([])).toBeNull();
     expect(shipmentBlockText([{ qty_shipped: "9.00", fba_shipment_ids: ["FBA19GQG1TDR"] }, { qty_shipped: "1", fba_shipment_ids: ["FBA19GQHT7BL", "FBA19GQG1TDR"] }]))
-      .toBe("10 ASIN units shipped to FBA in FBA19GQG1TDR, FBA19GQHT7BL. Reassign the shipment to another PO first.");
+      .toBe("10 Individual units shipped to FBA in FBA19GQG1TDR, FBA19GQHT7BL. Reassign the shipment to another PO first.");
     expect(deleteConfirmText({ supplier: "walmart.com", orderId: "200015415094735", lineCount: 2, asinCount: 1, atPrepUnits: 0 }))
       .toBe("Delete PO walmart.com 200015415094735 with its 2 products (1 ASIN)? Sync POs will not import it again.");
-    expect(deleteConfirmText({ supplier: "walmart.com", orderId: "1", lineCount: 1, asinCount: 1, atPrepUnits: 2 })).toMatch(/ 2 ASIN units still at Velocity for this PO\.$/);
+    expect(deleteConfirmText({ supplier: "walmart.com", orderId: "1", lineCount: 1, asinCount: 1, atPrepUnits: 2 })).toMatch(/ 2 Individual units still at Velocity for this PO\.$/);
   });
   it("PO detail carries Cancel PO / Delete PO (disabled with the message when blocked); ASIN rows disable cancel when shipped; shipments offer Reassign", () => {
     const page = readFileSync(resolve(__dirname, "../pages/purchase-orders.tsx"), "utf8");

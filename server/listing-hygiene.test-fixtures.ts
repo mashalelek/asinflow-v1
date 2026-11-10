@@ -43,7 +43,7 @@ export function fakeQuery(w: World) {
     if (sql.includes("INSERT INTO listing_actions")) { inserts.push(params!); return { rows: [], rowCount: 1 }; }
     if (sql.includes("FROM listing_actions") && sql.includes("status = 'held'")) return { rows: w.held ?? [], rowCount: (w.held ?? []).length };
     if (sql.includes("UPDATE listing_actions")) { updates.push(params!); return { rows: [], rowCount: 1 }; }
-    if (sql.includes("po_asins")) return { rows: [], rowCount: 0 };
+    if (sql.includes("po_asins") || sql.includes("po_asin_expected")) return { rows: [], rowCount: 0 }; // the On Order pipeline (the view since migration 101)
     throw new Error(`unexpected SQL: ${sql.slice(0, 80)}`);
   };
   return { query, inserts, updates };

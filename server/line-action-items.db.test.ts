@@ -78,7 +78,7 @@ describe("po_line_action_items on the real schema (rolled back)", () => {
       expect((await evaluateAutoClose(s.po, q as any)).closed).toBe(false);
       await writeLineItems(q, s.po, [s.b1], [], null);
       expect(await evaluateAutoClose(s.po, q as any)).toMatchObject({ closed: true, changed: "closed" });
-      await insertLineItems(q, s.a2, ["Missing / damaged from supplier"], "manual");
+      await insertLineItems(q, s.a2, ["SHIP"], "manual"); // ("Missing / damaged from supplier" is a claim since migration 101, no longer an item)
       expect(await evaluateAutoClose(s.po, q as any)).toMatchObject({ closed: false, changed: "reopened" });
     });
   });
