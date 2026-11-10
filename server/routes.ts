@@ -5030,8 +5030,8 @@ export async function registerRoutes(
       // (free-text override) but carries the reason as a warning (2026-10-29).
       const start = await readVelocityStartDate(query);
       const rows = (await query(
-        `SELECT pa.id, pa.asin, pa.asin_name, pa.qty, pa.units_per_pack, p.order_id, p.supplier, p.order_date::text AS order_date, p.ships_to
-           FROM po_asins pa JOIN purchase_orders p ON p.id = pa.po_id
+        `SELECT pa.id, pa.asin, pa.asin_name, e.ordered_asin AS qty, pa.units_per_pack, p.order_id, p.supplier, p.order_date::text AS order_date, p.ships_to
+           FROM po_asins pa JOIN po_asin_expected e ON e.id = pa.id JOIN purchase_orders p ON p.id = pa.po_id
           WHERE p.order_id ILIKE $1 ESCAPE '\\' OR pa.asin ILIKE $1 ESCAPE '\\' OR p.supplier ILIKE $1 ESCAPE '\\' OR p.order_id ILIKE $3 ESCAPE '\\'
           ORDER BY (p.ships_to = 'home' OR ($2::date IS NOT NULL AND p.order_date < $2::date)), p.order_date DESC, p.order_id, pa.asin, pa.id LIMIT 20`, [likeContains(q), start, likeContains(stripShipmentSuffix(q))],
       )).rows;

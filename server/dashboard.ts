@@ -87,16 +87,18 @@ export function poSpendCtes(startExpr: string, endExpr: string): string {
 // Units rows (SPEC §28): ASIN units ordered less the units canceled by claims (po_asin_expected, migration 101 — a bundle by the
 // bundle rule); Individual = × the pack, unknown while a row has no pack size (counted in missing_pack_size).
 const SPEND_GRID_SQL = `WITH ${poSpendCtes("$1::date", "$2::date")}, units AS (
-      SELECT e.id, e.units_per_pack,
-             CASE WHEN po.fully_canceled THEN 0 ELSE GREATEST(COALESCE(e.ordered_asin, 0) - COALESCE(e.canceled_asin, 0), 0) END AS asin_units
+      SELECT e.id,
+             CASE WHEN po.fully_canceled THEN 0 ELSE GREATEST(COALESCE(e.ordered_asin, 0) - COALESCE(e.canceled_asin, 0), 0) END AS asin_units,
+             -- the stored Individual units (NULL on a legacy row = pack not known)
+             CASE WHEN po.fully_canceled THEN 0 WHEN e.ordered_individual IS NULL THEN NULL ELSE GREATEST(e.ordered_individual - COALESCE(e.canceled_individual, 0), 0) END AS individual_units
         FROM po_asin_expected e JOIN po ON po.id = e.po_id
     )
     SELECT (SELECT COALESCE(SUM(spend), 0) FROM po_spend)::float8 AS spend,
            (SELECT COALESCE(SUM(due), 0) FROM po_spend)::float8 AS refunds_due,
            (SELECT COUNT(*) FILTER (WHERE NOT fully_canceled AND NOT shared_dup) FROM po_spend)::int AS po_count,
            (SELECT COALESCE(SUM(asin_units), 0) FROM units)::float8 AS asin_units,
-           (SELECT COALESCE(SUM(CASE WHEN units_per_pack IS NULL THEN asin_units ELSE asin_units * units_per_pack END), 0) FROM units)::float8 AS individual_units,
-           (SELECT COUNT(*) FILTER (WHERE units_per_pack IS NULL AND asin_units > 0) FROM units)::int AS missing_pack_size`;
+           (SELECT COALESCE(SUM(COALESCE(individual_units, asin_units)), 0) FROM units)::float8 AS individual_units,
+           (SELECT COUNT(*) FILTER (WHERE individual_units IS NULL AND asin_units > 0) FROM units)::int AS missing_pack_size`;
 
 const SALES_GRID_SQL = `SELECT COALESCE(SUM(revenue), 0)::float8 AS sales, COALESCE(SUM(units_sold), 0)::int AS units
     FROM sales_daily WHERE sale_date >= $1::date AND sale_date <= $2::date`;

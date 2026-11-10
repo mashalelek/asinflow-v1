@@ -55,7 +55,10 @@ ALTER TABLE supplier_claims RENAME COLUMN resolution TO outcome;
 ALTER TABLE supplier_claims RENAME COLUMN opened_at TO found_at;
 ALTER TABLE supplier_claims RENAME COLUMN resolved_at TO closed_at;
 ALTER TABLE supplier_claims DROP CONSTRAINT po_line_defects_qty_check;
-ALTER TABLE supplier_claims ADD CONSTRAINT supplier_claims_qty_check CHECK (qty >= 0); -- 0 only for a sheet line canceled with no ordered qty (0 / 0): the marker survives as a 0-unit canceled claim
+-- qty NULL = not known yet (Maria 2026-11-09): a converted badge with no quantity, or a sheet line zeroed by the sheet. Such a claim counts
+-- toward nothing (Expected, Refunds due, Spend) until the quantity is entered; the "Enter quantity" task asks for it.
+ALTER TABLE supplier_claims ALTER COLUMN qty DROP NOT NULL;
+ALTER TABLE supplier_claims ADD CONSTRAINT supplier_claims_qty_check CHECK (qty IS NULL OR qty > 0);
 ALTER TABLE supplier_claims RENAME CONSTRAINT po_line_defects_amount_check TO supplier_claims_amount_owed_check;
 ALTER TABLE supplier_claims RENAME CONSTRAINT po_line_defects_po_id_fkey TO supplier_claims_po_id_fkey;
 ALTER TABLE supplier_claims RENAME CONSTRAINT po_line_defects_po_line_item_id_fkey TO supplier_claims_po_line_item_id_fkey;
@@ -96,7 +99,7 @@ COMMENT ON COLUMN supplier_claims.amount_owed IS '$ the supplier owes: qty × th
 CREATE TABLE supplier_claim_tasks (
   id            bigserial PRIMARY KEY,
   claim_id      bigint NOT NULL REFERENCES supplier_claims(id) ON DELETE CASCADE,
-  kind          text NOT NULL CHECK (kind IN ('review_suggestion', 'confirm_outcome', 'contact_supplier', 'follow_up_supplier', 'confirm_reship_order',
+  kind          text NOT NULL CHECK (kind IN ('review_suggestion', 'confirm_outcome', 'enter_quantity', 'contact_supplier', 'follow_up_supplier', 'confirm_reship_order',
                                              'send_label', 'tell_velocity_replacement', 'dispose_units', 'update_velocity_order',
                                              'refund_received', 'replacement_arrived', 'upload_return_label', 'check_on_it')),
   "group"       text NOT NULL CHECK ("group" IN ('decide', 'supplier', 'velocity', 'money', 'timed_out')),
@@ -348,19 +351,19 @@ DELETE FROM po_line_refunds WHERE status = 'due';
 --    converted line (the line's basis otherwise, flagged); dated by the PO's last edit; $ owed = qty × cost per Individual.
 WITH ins AS (
   INSERT INTO supplier_claims (po_id, po_line_item_id, kind, qty, amount_owed, amount_owed_source, found_at, status, closed_at, found_by, note, created_at)
-  SELECT l.po_id, l.id, 'canceled', l.qty_canceled,
-         CASE WHEN po_line_cost_per_individual(l.id) IS NULL THEN NULL ELSE ROUND(l.qty_canceled * po_line_cost_per_individual(l.id) * CASE WHEN l.qty_basis = 'individual' THEN 1 ELSE GREATEST(COALESCE(l.retailer_units_per_product, 1), 1) END, 2) END,
+  SELECT l.po_id, l.id, 'canceled', NULLIF(l.qty_canceled, 0),
+         CASE WHEN po_line_cost_per_individual(l.id) IS NULL OR l.qty_canceled = 0 THEN NULL ELSE ROUND(l.qty_canceled * po_line_cost_per_individual(l.id) * CASE WHEN l.qty_basis = 'individual' THEN 1 ELSE GREATEST(COALESCE(l.retailer_units_per_product, 1), 1) END, 2) END,
          'auto', po_last_edit_date(l.po_id), 'closed', po_last_edit_date(l.po_id)::timestamptz, 'maria',
-         CASE WHEN EXISTS (SELECT 1 FROM po_line_refunds r WHERE r.po_id = l.po_id) THEN NULL ELSE 'sheet-era, refund not tracked' END,
+         CASE WHEN l.qty_canceled = 0 THEN 'sheet zeroed the line — quantity unknown' WHEN EXISTS (SELECT 1 FROM po_line_refunds r WHERE r.po_id = l.po_id) THEN NULL ELSE 'sheet-era, refund not tracked' END,
          now()
     FROM po_line_items l WHERE COALESCE(l.qty_canceled, 0) > 0
-       -- a sheet line canceled with no ordered qty (0 / 0, canceledNoOrderedQty): the canceled marker survives as a 0-unit claim
+       -- a sheet line canceled with no ordered qty (0 / 0, canceledNoOrderedQty): the canceled marker survives as a claim with qty NULL — "unknown (sheet zeroed the line)"
        OR (l.qty_canceled IS NOT NULL AND COALESCE(l.qty_ordered, 0) = 0)
   RETURNING id, po_line_item_id, qty, note
 )
 INSERT INTO supplier_claim_conversions (claim_id, source, source_id, old_value, flags)
-SELECT i.id, 'qty_canceled', i.po_line_item_id::text, i.qty::text,
-       ARRAY(SELECT f FROM unnest(ARRAY[CASE WHEN l.qty_basis <> 'individual' THEN 'legacy_units' END, CASE WHEN i.note IS NOT NULL THEN 'refund_not_tracked' END, CASE WHEN i.qty = 0 THEN 'canceled_no_ordered_qty' END]) f WHERE f IS NOT NULL)
+SELECT i.id, 'qty_canceled', i.po_line_item_id::text, COALESCE(i.qty::text, '0 / 0'),
+       ARRAY(SELECT f FROM unnest(ARRAY[CASE WHEN l.qty_basis <> 'individual' THEN 'legacy_units' END, CASE WHEN i.note = 'sheet-era, refund not tracked' THEN 'refund_not_tracked' END, CASE WHEN i.qty IS NULL THEN 'canceled_no_ordered_qty' END]) f WHERE f IS NOT NULL)
   FROM ins i JOIN po_line_items l ON l.id = i.po_line_item_id;
 WITH ins AS (
   INSERT INTO supplier_claims (po_id, po_line_item_id, kind, qty, amount_owed, amount_owed_source, found_at, status, closed_at, found_by, note, created_at)
@@ -397,7 +400,8 @@ UPDATE supplier_claims c SET outcome = sub.outcome, outcome_amount = sub.applied
  WHERE sub.claim_id = c.id;
 
 -- 4. "Confirm refund / replacement" (open items): the line's converted claim reopens with a refund_received task; a line without one
---    gets an open claim (kind unclear → missing, qty = the line's ordered units, flagged) with the same task.
+--    gets an open claim with NO quantity and no $ (Maria 2026-11-09: never default qty to the line's ordered units) — kind unclear →
+--    missing, an "Enter quantity" task (group decide) and the refund_received task; it counts toward nothing until the qty is typed.
 WITH items AS (
   SELECT ai.id AS item_id, ai.po_line_item_id, l.po_id, l.qty_ordered, l.qty_basis, ai.reason, ai.set_at
     FROM po_line_action_items ai JOIN po_line_items l ON l.id = ai.po_line_item_id
@@ -410,8 +414,8 @@ WITH items AS (
   RETURNING c.id, c.po_line_item_id
 ), created AS (
   INSERT INTO supplier_claims (po_id, po_line_item_id, kind, qty, amount_owed, amount_owed_source, found_at, status, found_by, note, created_at)
-  SELECT i.po_id, i.po_line_item_id, 'missing', GREATEST(COALESCE(i.qty_ordered, 1), 0.01), NULL, 'auto', i.set_at::date, 'open', 'maria',
-         'Confirm refund / replacement' || COALESCE(': ' || i.reason, '') || ' — kind unclear; qty set to the line''s ordered units, confirm', i.set_at
+  SELECT i.po_id, i.po_line_item_id, 'missing', NULL, NULL, 'auto', i.set_at::date, 'open', 'maria',
+         'Confirm refund / replacement' || COALESCE(': ' || i.reason, '') || ' — kind unclear; quantity not known (the badge carried none)', i.set_at
     FROM items i WHERE NOT EXISTS (SELECT 1 FROM reopened r WHERE r.po_line_item_id = i.po_line_item_id)
   RETURNING id, po_line_item_id, qty
 ), conv AS (
@@ -419,15 +423,25 @@ WITH items AS (
   SELECT r.id, 'confirm_refund_item', i.item_id::text, 'reopened converted claim', ARRAY['kind_unclear', 'outcome_unclear', 'amount_unclear']
     FROM reopened r JOIN items i ON i.po_line_item_id = r.po_line_item_id
   UNION ALL
-  SELECT c.id, 'confirm_refund_item', i.item_id::text, 'Confirm refund / replacement', ARRAY['kind_unclear', 'outcome_unclear', 'amount_unclear', 'qty_assumed_ordered']
+  SELECT c.id, 'confirm_refund_item', i.item_id::text, 'Confirm refund / replacement', ARRAY['kind_unclear', 'outcome_unclear', 'amount_unclear', 'qty_unknown']
     FROM created c JOIN items i ON i.po_line_item_id = c.po_line_item_id
   RETURNING claim_id
+), tasks AS (
+  INSERT INTO supplier_claim_tasks (claim_id, kind, "group", reason)
+  SELECT claim_id, 'refund_received', 'money', 'converted from "Confirm refund / replacement": confirm the kind, the outcome and the $ owed, then tick when the refund posts' FROM conv
+  RETURNING claim_id
 )
+-- (the rows `created` inserts are not visible to a plain FROM supplier_claims in the same statement — read the CTEs themselves)
 INSERT INTO supplier_claim_tasks (claim_id, kind, "group", reason)
-SELECT claim_id, 'refund_received', 'money', 'converted from "Confirm refund / replacement": confirm the kind, the outcome and the $ owed, then tick when the refund posts' FROM conv;
+SELECT c.id, 'enter_quantity', 'decide', 'the badge carried no quantity — type the Individual units; the claim counts toward nothing until then'
+  FROM created c WHERE c.qty IS NULL
+UNION ALL
+SELECT r.id, 'enter_quantity', 'decide', 'the sheet zeroed this line — type the Individual units; the claim counts toward nothing until then'
+  FROM reopened r JOIN supplier_claims sc ON sc.id = r.id WHERE sc.qty IS NULL;
 
--- 5. "Missing / damaged from supplier" (open items): on an open PO → an open missing claim + contact_supplier task; on a closed PO → a
---    closed claim for history, no outcome guessed. qty = the line's ordered units (the badge carried none), flagged; the note carried over.
+-- 5. "Missing / damaged from supplier" (open items): on an open PO → an open missing claim with NO quantity and no $ (an "Enter quantity"
+--    task + contact_supplier); on a closed PO → a closed claim for history, qty NULL, no outcome guessed. The badge carried no quantity —
+--    never defaulted to the line's ordered units (Maria 2026-11-09); the note carried over.
 WITH items AS (
   SELECT ai.id AS item_id, ai.po_line_item_id, l.po_id, l.qty_ordered, ai.reason, ai.set_at, (p.closed_at IS NOT NULL) AS po_closed, p.closed_at
     FROM po_line_action_items ai JOIN po_line_items l ON l.id = ai.po_line_item_id JOIN purchase_orders p ON p.id = l.po_id
@@ -435,19 +449,23 @@ WITH items AS (
      AND NOT EXISTS (SELECT 1 FROM supplier_claims c JOIN supplier_claim_conversions k ON k.claim_id = c.id WHERE c.po_line_item_id = ai.po_line_item_id AND k.source = 'defect')
 ), created AS (
   INSERT INTO supplier_claims (po_id, po_line_item_id, kind, qty, amount_owed, amount_owed_source, found_at, status, closed_at, found_by, note, created_at)
-  SELECT i.po_id, i.po_line_item_id, 'missing', GREATEST(COALESCE(i.qty_ordered, 1), 0.01), NULL, 'auto', i.set_at::date,
+  SELECT i.po_id, i.po_line_item_id, 'missing', NULL, NULL, 'auto', i.set_at::date,
          CASE WHEN i.po_closed THEN 'closed' ELSE 'open' END, CASE WHEN i.po_closed THEN COALESCE(i.closed_at, i.set_at) END, 'maria',
-         'Missing / damaged from supplier' || COALESCE(': ' || i.reason, '') || ' — qty set to the line''s ordered units, confirm', i.set_at
+         'Missing / damaged from supplier' || COALESCE(': ' || i.reason, '') || ' — kind unclear; quantity not known (the badge carried none)', i.set_at
     FROM items i
   RETURNING id, po_line_item_id, status
 ), conv AS (
   INSERT INTO supplier_claim_conversions (claim_id, source, source_id, old_value, flags)
-  SELECT c.id, 'missing_damaged_item', i.item_id::text, 'Missing / damaged from supplier', ARRAY['kind_unclear', 'qty_assumed_ordered'] || CASE WHEN c.status = 'closed' THEN ARRAY['history_no_outcome'] ELSE '{}'::text[] END
+  SELECT c.id, 'missing_damaged_item', i.item_id::text, 'Missing / damaged from supplier', ARRAY['kind_unclear', 'qty_unknown'] || CASE WHEN c.status = 'closed' THEN ARRAY['history_no_outcome'] ELSE '{}'::text[] END
     FROM created c JOIN items i ON i.po_line_item_id = c.po_line_item_id
+  RETURNING claim_id
+), tasks AS (
+  INSERT INTO supplier_claim_tasks (claim_id, kind, "group", reason)
+  SELECT c.id, 'contact_supplier', 'supplier', 'converted from "Missing / damaged from supplier": confirm what and how many, then report it' FROM created c WHERE c.status = 'open'
   RETURNING claim_id
 )
 INSERT INTO supplier_claim_tasks (claim_id, kind, "group", reason)
-SELECT c.id, 'contact_supplier', 'supplier', 'converted from "Missing / damaged from supplier": confirm what and how many, then report it' FROM created c WHERE c.status = 'open';
+SELECT c.id, 'enter_quantity', 'decide', 'the badge carried no quantity — type the Individual units; the claim counts toward nothing until then' FROM created c WHERE c.status = 'open';
 
 -- 6. Sheet write-offs: po_asins.unreimbursed_loss_qty / _amount (cols V / W) → a closed write_off claim on the row's first line,
 --    kind from the row's notes (damaged / wrong / expired words), dated by the PO's last edit; the amount is the sheet's, kept as typed.
@@ -507,7 +525,7 @@ ALTER TABLE po_line_action_items ADD CONSTRAINT po_line_action_items_item_check 
   cleared_at IS NOT NULL OR item IN ('Need to return', 'ATTN: Velocity', 'See comments', 'SHIP', 'Received - FBM', 'Review Velocity',
                                      'Confirm order details', 'Subscription renews', 'Review renewal PO', 'Subscription may be active'));
 INSERT INTO po_edit_log (po_id, user_id, entity, entity_id, field, old_value, new_value, derived)
-SELECT c.po_id, NULL, 'claim', c.id::text, 'claim converted', k.source, c.kind || ' ' || c.qty || ' · ' || c.status || COALESCE(' · $' || c.amount_owed::text, ''), true
+SELECT c.po_id, NULL, 'claim', c.id::text, 'claim converted', k.source, c.kind || ' ' || COALESCE(c.qty::text, 'qty unknown') || ' · ' || c.status || COALESCE(' · $' || c.amount_owed::text, ''), true
   FROM supplier_claims c JOIN supplier_claim_conversions k ON k.claim_id = c.id;
 
 -- ───────────────────────────── D2. drops ─────────────────────────────

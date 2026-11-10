@@ -171,6 +171,28 @@ describe("supplier claims on the real schema (rolled back)", () => {
     });
   });
 
+  it("a converted badge claim with no quantity (Maria 2026-11-09): counts toward nothing — Expected, Refunds due, Spend — until the quantity is typed, which completes Enter quantity", async (ctx) => {
+    if (!client) return ctx.skip();
+    await inTx(async (q) => {
+      const s = await seed(q);
+      const id = Number((await q(`INSERT INTO supplier_claims (po_id, po_line_item_id, kind, qty, amount_owed, status, found_by, note) VALUES ($1, $2, 'missing', NULL, NULL, 'open', 'maria', 'converted badge') RETURNING id`, [s.po, s.line])).rows[0].id);
+      await q(`INSERT INTO supplier_claim_tasks (claim_id, kind, "group", reason) VALUES ($1, 'enter_quantity', 'decide', 'badge carried no qty')`, [id]);
+      await setOutcome(q, id, { outcome: "refund_card" }, null); // even a promised refund adds nothing while qty / $ are unknown
+      expect(await view(q, s.pa)).toMatchObject({ expected_asin: "6.00", claimed_asin: "0.00", open_claims: 1 });
+      expect(await due(q, s.po)).toBe(0);
+      const [d] = await loadClaims(q, { poId: s.po });
+      expect(d).toMatchObject({ qty: null, amount_owed: null, remaining: null });
+      const task = d.tasks.find((t) => t.kind === "enter_quantity")!;
+      await expect(doneTask(q, task.id, null)).rejects.toMatchObject({ status: 400 });
+      await editClaim(q, id, { qty: 2 }, null); // 2 Individual units → auto $ 11.94, the task closes, Expected drops
+      const [after] = await loadClaims(q, { poId: s.po });
+      expect(after).toMatchObject({ qty: 2, amount_owed: 11.94, remaining: 11.94 });
+      expect(after.tasks.find((t) => t.kind === "enter_quantity")!.done_at).not.toBeNull();
+      expect(await view(q, s.pa)).toMatchObject({ expected_asin: "5.00", claimed_asin: "1.00" });
+      expect(await due(q, s.po)).toBe(11.94);
+    });
+  });
+
   it("Cancel PO / cancel lines (D14): an open canceled claim per line for its expected units, Ordered untouched, Expected drops, the PO stays open", async (ctx) => {
     if (!client) return ctx.skip();
     await inTx(async (q) => {

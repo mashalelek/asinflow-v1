@@ -25,16 +25,16 @@ export const CLAIM_OUTCOME_LABELS: Readonly<Record<ClaimOutcome, string>> = { re
 export const REFUND_OUTCOMES: readonly ClaimOutcome[] = ["refund_card", "gift_card", "store_credit"];
 export const CLAIM_STATUSES = ["suggested", "open", "closed", "dismissed"] as const;
 export type ClaimStatus = (typeof CLAIM_STATUSES)[number];
-export const CLAIM_TASK_KINDS = ["review_suggestion", "confirm_outcome", "contact_supplier", "follow_up_supplier", "confirm_reship_order",
+export const CLAIM_TASK_KINDS = ["review_suggestion", "confirm_outcome", "enter_quantity", "contact_supplier", "follow_up_supplier", "confirm_reship_order",
   "send_label", "tell_velocity_replacement", "dispose_units", "update_velocity_order", "refund_received", "replacement_arrived", "upload_return_label", "check_on_it"] as const;
 export type ClaimTaskKind = (typeof CLAIM_TASK_KINDS)[number];
 export const CLAIM_TASK_GROUP: Readonly<Record<ClaimTaskKind, "decide" | "supplier" | "velocity" | "money" | "timed_out">> = {
-  review_suggestion: "decide", confirm_outcome: "decide", contact_supplier: "supplier", follow_up_supplier: "supplier", confirm_reship_order: "supplier",
+  review_suggestion: "decide", confirm_outcome: "decide", enter_quantity: "decide", contact_supplier: "supplier", follow_up_supplier: "supplier", confirm_reship_order: "supplier",
   send_label: "velocity", tell_velocity_replacement: "velocity", dispose_units: "velocity", update_velocity_order: "velocity",
   refund_received: "money", replacement_arrived: "money", upload_return_label: "money", check_on_it: "timed_out",
 };
 export const CLAIM_TASK_LABELS: Readonly<Record<ClaimTaskKind, string>> = {
-  review_suggestion: "Review suggestion", confirm_outcome: "Confirm outcome", contact_supplier: "Contact supplier", follow_up_supplier: "Follow up with supplier",
+  review_suggestion: "Review suggestion", confirm_outcome: "Confirm outcome", enter_quantity: "Enter quantity", contact_supplier: "Contact supplier", follow_up_supplier: "Follow up with supplier",
   confirm_reship_order: "Confirm reship order #", send_label: "Send return label to Velocity", tell_velocity_replacement: "Tell Velocity a replacement is coming",
   dispose_units: "Ask Velocity to dispose / return", update_velocity_order: "Update the Velocity order", refund_received: "Refund received",
   replacement_arrived: "Replacement arrived", upload_return_label: "Upload return label", check_on_it: "Check on it",
@@ -101,12 +101,15 @@ export function claimCounts(c: CountingClaim): boolean {
 export const CLAIM_COUNTS_SQL = (c: string) => `((${c}.status = 'closed' AND ${c}.outcome IS DISTINCT FROM 'replacement')
   OR (${c}.status = 'open' AND (${c}.kind = 'canceled' OR ${c}.outcome IN ('refund_card', 'gift_card', 'store_credit', 'write_off'))))`;
 
-/** "1 missing · $5.97 owed" — the chip / list summary of a set of open claims (qty in Individual units). */
-export function claimSummary(rows: ReadonlyArray<{ qty: number | string; kind: string; remaining: number | null }>): string {
+/** A claim whose quantity is not known yet (a converted badge, a sheet-zeroed line): counts toward nothing until it is typed. */
+export const QTY_UNKNOWN_LABEL = "qty unknown";
+export const SHEET_ZEROED_LABEL = "unknown (sheet zeroed the line)";
+/** "1 missing · $5.97 owed" — the chip / list summary of a set of open claims (qty in Individual units; "? missing" while not known). */
+export function claimSummary(rows: ReadonlyArray<{ qty: number | string | null; kind: string; remaining: number | null }>): string {
   if (rows.length === 0) return "";
-  const byKind = new Map<string, number>();
-  for (const r of rows) byKind.set(r.kind, (byKind.get(r.kind) ?? 0) + Number(r.qty));
-  const parts = Array.from(byKind.entries()).map(([k, q]) => `${Number(q.toFixed(2))} ${CLAIM_KIND_LABELS[k as ClaimKind] ?? k}`);
+  const byKind = new Map<string, { q: number; unknown: number }>();
+  for (const r of rows) { const v = byKind.get(r.kind) ?? { q: 0, unknown: 0 }; if (r.qty == null) v.unknown++; else v.q += Number(r.qty); byKind.set(r.kind, v); }
+  const parts = Array.from(byKind.entries()).map(([k, v]) => `${v.q > 0 ? Number(v.q.toFixed(2)) : ""}${v.q > 0 && v.unknown ? " + " : ""}${v.unknown ? "?" : ""} ${CLAIM_KIND_LABELS[k as ClaimKind] ?? k}`.trim());
   const owedRows = rows.filter((r) => r.remaining != null);
   const owed = owedRows.length ? round2(owedRows.reduce((t, r) => t + (r.remaining ?? 0), 0)) : null;
   return `${parts.join(", ")}${owed != null ? ` · $${owed.toFixed(2)} owed` : ""}`;

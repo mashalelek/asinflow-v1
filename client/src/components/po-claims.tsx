@@ -20,14 +20,15 @@ import type { PoAsinRowData, PoAsinLine } from "@/components/po-asin-rows";
 import type { PoRefund } from "@/components/po-money";
 import { fmtQty } from "@/lib/po-qty";
 import { INDIV_SHORT, QTY_KIND } from "@shared/quantity-kinds";
-import { CLAIM_KINDS, CLAIM_KIND_LABELS, CLAIM_OUTCOME_LABELS, CLAIM_TASK_LABELS, claimAmount, individualEquivalents, type ClaimKind, type ClaimOutcome, type ClaimTaskKind } from "@shared/supplier-claim";
+import { CLAIM_KINDS, CLAIM_KIND_LABELS, CLAIM_OUTCOME_LABELS, CLAIM_TASK_LABELS, QTY_UNKNOWN_LABEL, SHEET_ZEROED_LABEL, claimAmount, individualEquivalents, type ClaimKind, type ClaimOutcome, type ClaimTaskKind } from "@shared/supplier-claim";
 
 export interface PoClaim {
-  id: number; po_line_item_id: string | null; kind: ClaimKind; qty: number; amount_owed: number | null; amount_owed_source: "auto" | "manual"; found_at: string; note: string | null;
+  id: number; po_line_item_id: string | null; kind: ClaimKind; /** Individual units; null = not known yet (counts toward nothing). */ qty: number | null; amount_owed: number | null; amount_owed_source: "auto" | "manual"; found_at: string; note: string | null;
   status: "suggested" | "open" | "closed" | "dismissed"; outcome: ClaimOutcome | null; outcome_amount: number | null; write_off_reason: string | null; closed_at: string | null;
   asin: string | null; product_name: string | null; line_no: number; product_pack: number | null; asin_pack: number | null; qty_basis: string | null;
   refunds: Array<{ id: number; amount: number | null; amount_applied: number | null; refunded_at: string | null; method: string | null }>;
   tasks: Array<{ id: number; kind: ClaimTaskKind; group: string; reason: string | null; done_at: string | null }>;
+  conversion_flags?: string[];
   owed: number | null; remaining: number | null; received: number;
 }
 
@@ -84,8 +85,10 @@ export function PoClaimsSection({ po, asins, refunds, claims, call }: {
                 <td className="px-3 py-1.5 text-xs">{d.po_line_item_id ? <><span className="font-mono">{d.asin}</span> line {d.line_no}<div className="text-muted-foreground truncate max-w-[14rem]" title={d.product_name ?? ""}>{d.product_name}</div></> : <span className="text-muted-foreground">whole PO</span>}</td>
                 <td className="px-3 py-1.5 text-xs"><select value={d.kind} onChange={(e) => void patch(d.id, "kind")(e.target.value)} className="h-6 rounded border border-input bg-background px-1 text-xs" data-testid={`select-claim-kind-${d.id}`}>
                   {CLAIM_KINDS.map((k) => <option key={k} value={k}>{CLAIM_KIND_LABELS[k]}</option>)}</select></td>
-                <td className="px-3 py-1.5 text-right"><InlineEdit value={String(d.qty)} onSave={patch(d.id, "qty")} align="right" width="w-14" testId={`claim-qty-${d.id}`} title={d.qty_basis === "product_legacy" ? "Product units (the line's pack is not known)" : QTY_KIND.individual}>{fmtQty(d.qty)}</InlineEdit>
-                  <div className="text-[10px] text-muted-foreground whitespace-nowrap" data-testid={`claim-qty-equiv-${d.id}`}>{d.qty_basis === "product_legacy" ? "Product u. (pack not known)" : qtyEquivalents(d.qty, d.product_pack, d.asin_pack) || `${INDIV_SHORT}`}</div></td>
+                {/* qty NULL = not known yet (a converted badge: "Enter quantity"; a sheet-zeroed line: unknown) — counts toward nothing until typed */}
+                <td className="px-3 py-1.5 text-right"><InlineEdit value={d.qty == null ? null : String(d.qty)} onSave={patch(d.id, "qty")} align="right" width="w-14" testId={`claim-qty-${d.id}`} title={d.qty == null ? "Not known — type the Individual units" : d.qty_basis === "product_legacy" ? "Product units (the line's pack is not known)" : QTY_KIND.individual}>
+                  {d.qty == null ? <span className="text-amber-700 dark:text-amber-400 whitespace-nowrap text-xs" data-testid={`claim-qty-unknown-${d.id}`}>{(d.conversion_flags ?? []).includes("canceled_no_ordered_qty") ? SHEET_ZEROED_LABEL : QTY_UNKNOWN_LABEL}</span> : fmtQty(d.qty)}</InlineEdit>
+                  {d.qty != null && <div className="text-[10px] text-muted-foreground whitespace-nowrap" data-testid={`claim-qty-equiv-${d.id}`}>{d.qty_basis === "product_legacy" ? "Product u. (pack not known)" : qtyEquivalents(d.qty, d.product_pack, d.asin_pack) || `${INDIV_SHORT}`}</div>}</td>
                 <td className="px-3 py-1.5 text-right font-mono"><InlineEdit money value={d.amount_owed == null ? null : String(d.amount_owed)} onSave={patch(d.id, "amount_owed")} align="right" width="w-20" testId={`claim-amount-${d.id}`} title={d.amount_owed_source === "manual" ? "Typed — AF never recalculates it; clear to go back to auto" : "Auto: qty × the line's cost per Individual unit"}>{money(d.amount_owed)}</InlineEdit>
                   {d.amount_owed_source === "manual" && <div className="text-[10px] text-muted-foreground">manual</div>}
                   {d.status === "open" && d.received > 0 && <div className="text-[10px] text-muted-foreground">{money(d.remaining)} remaining</div>}</td>
@@ -95,7 +98,9 @@ export function PoClaimsSection({ po, asins, refunds, claims, call }: {
                   <span className={d.status === "open" ? "text-amber-700 dark:text-amber-400" : ""}>{statusText(d)}</span>
                   {d.tasks.filter((t) => t.done_at == null).map((t) => (
                     <div key={t.id} className="text-[10px]" data-testid={`claim-task-${d.id}-${t.kind}`} title={t.reason ?? ""}>
-                      <label className="inline-flex items-center gap-1 cursor-pointer"><input type="checkbox" onChange={() => void call(`/api/pos/claims/tasks/${t.id}/done`, "POST")} data-testid={`checkbox-claim-task-${t.id}`} />{CLAIM_TASK_LABELS[t.kind] ?? t.kind}</label>
+                      {t.kind === "enter_quantity"
+                        ? <span className="text-amber-700 dark:text-amber-400">Enter quantity ← type it in Qty</span>
+                        : <label className="inline-flex items-center gap-1 cursor-pointer"><input type="checkbox" onChange={() => void call(`/api/pos/claims/tasks/${t.id}/done`, "POST")} data-testid={`checkbox-claim-task-${t.id}`} />{CLAIM_TASK_LABELS[t.kind] ?? t.kind}</label>}
                     </div>
                   ))}
                   {d.refunds.map((r) => (

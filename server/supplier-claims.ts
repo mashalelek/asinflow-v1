@@ -18,7 +18,7 @@ import { CLAIM_KINDS, CLAIM_KIND_LABELS, CLAIM_OUTCOMES, REFUND_OUTCOMES, claimA
 export { OPEN_CLAIM_ASIN_SQL, OPEN_CLAIM_PO_SQL, OPEN_CLAIM_LINE_SQL, OPEN_CLAIM_COUNT_PO_SQL, REFUNDS_DUE_PO_SQL, REFUNDS_DUE_EXISTS_SQL, CLAIM_REMAINING_SQL } from "./supplier-claim-sql";
 
 export interface ClaimRow {
-  id: number; po_id: string; po_line_item_id: string | null; kind: ClaimKind; qty: number; amount_owed: number | null; amount_owed_source: "auto" | "manual";
+  id: number; po_id: string; po_line_item_id: string | null; kind: ClaimKind; /** Individual units; NULL = not known yet (a converted badge, a sheet-zeroed line) — counts toward nothing. */ qty: number | null; amount_owed: number | null; amount_owed_source: "auto" | "manual";
   status: "suggested" | "open" | "closed" | "dismissed"; outcome: ClaimOutcome | null; outcome_amount: number | null; outcome_detail: string | null; write_off_reason: string | null;
   found_at: string; found_by: string; reported_at: string | null; closed_at: string | null; note: string | null;
   replacement_qty: number | null; replacement_shipped_at: string | null; replacement_arrived_at: string | null; return_required: boolean; qty_disposed: number | null;
@@ -27,12 +27,14 @@ export interface ClaimRow {
   product_pack: number | null; asin_pack: number | null; qty_basis: string | null;
   refunds: Array<{ id: number; amount: number | null; amount_applied: number | null; refunded_at: string | null; method: string | null }>;
   tasks: Array<{ id: number; kind: ClaimTaskKind; group: string; reason: string | null; created_at: string; due_at: string | null; done_at: string | null }>;
+  /** Migration 101's conversion flags (supplier_claim_conversions), e.g. canceled_no_ordered_qty, qty_unknown, kind_unclear; empty for a claim made by hand. */
+  conversion_flags: string[];
   owed: number | null; remaining: number | null; received: number;
 }
 
 const num = (v: unknown) => (v == null ? null : Number(v));
 const money = (v: number | null) => (v == null ? "—" : `$${v.toFixed(2)}`);
-const describe = (d: { qty: number | string; kind: string; amount_owed: number | string | null }) => `${Number(d.qty)} ${CLAIM_KIND_LABELS[d.kind as ClaimKind] ?? d.kind} × ${money(num(d.amount_owed))}`;
+const describe = (d: { qty: number | string | null; kind: string; amount_owed: number | string | null }) => `${d.qty == null ? "? " : `${Number(d.qty)} `}${CLAIM_KIND_LABELS[d.kind as ClaimKind] ?? d.kind} × ${money(num(d.amount_owed))}`;
 
 /** The line's 1-based number within its ASIN row (position order) — how the UI and the scripts name a line. */
 const LINE_NO_SQL = (l: string) => `(SELECT COUNT(*)::int FROM po_line_items s WHERE s.po_asin_id IS NOT DISTINCT FROM ${l}.po_asin_id AND s.po_id = ${l}.po_id
@@ -48,21 +50,22 @@ export async function loadClaims(query: QueryLike, where: { poId?: string; ids?:
             COALESCE((SELECT json_agg(json_build_object('id', r.id, 'amount', r.amount, 'amount_applied', x.amount_applied, 'refunded_at', r.refunded_at, 'method', r.method) ORDER BY r.id)
                         FROM supplier_claim_refunds x JOIN po_line_refunds r ON r.id = x.po_line_refund_id WHERE x.claim_id = c.id), '[]') AS refunds,
             COALESCE((SELECT json_agg(json_build_object('id', t.id, 'kind', t.kind, 'group', t."group", 'reason', t.reason, 'created_at', t.created_at, 'due_at', t.due_at, 'done_at', t.done_at) ORDER BY t.id)
-                        FROM supplier_claim_tasks t WHERE t.claim_id = c.id), '[]') AS tasks
+                        FROM supplier_claim_tasks t WHERE t.claim_id = c.id), '[]') AS tasks,
+            COALESCE((SELECT array_agg(DISTINCT f) FROM supplier_claim_conversions k, unnest(k.flags) f WHERE k.claim_id = c.id), '{}') AS conversion_flags
        FROM supplier_claims c LEFT JOIN po_line_items l ON l.id = c.po_line_item_id LEFT JOIN po_asins pa ON pa.id = l.po_asin_id
       WHERE ${cond} ORDER BY c.found_at, c.id`, [where.ids ?? where.poId],
   )).rows as any[];
   return rows.map((r) => {
     const refunds = (r.refunds ?? []).map((x: any) => ({ id: Number(x.id), amount: num(x.amount), amount_applied: num(x.amount_applied), refunded_at: x.refunded_at ?? null, method: x.method ?? null }));
     const m = claimMoney(r.amount_owed, refunds);
-    return { ...r, id: Number(r.id), qty: Number(r.qty), amount_owed: num(r.amount_owed), outcome_amount: num(r.outcome_amount), replacement_qty: num(r.replacement_qty), qty_disposed: num(r.qty_disposed),
+    return { ...r, id: Number(r.id), qty: num(r.qty), amount_owed: num(r.amount_owed), conversion_flags: r.conversion_flags ?? [], outcome_amount: num(r.outcome_amount), replacement_qty: num(r.replacement_qty), qty_disposed: num(r.qty_disposed),
       product_pack: num(r.product_pack), asin_pack: num(r.asin_pack), line_no: Number(r.line_no), refunds, tasks: (r.tasks ?? []).map((t: any) => ({ ...t, id: Number(t.id) })),
       owed: m.owed, remaining: m.remaining, received: m.received };
   });
 }
 
 /** The chip / hover form of open claims: what the list rows carry. */
-export interface OpenClaimBrief { id: number; po_line_item_id: string | null; asin: string | null; line_no: number; kind: string; qty: number; amount_owed: number | null; remaining: number | null; note: string | null; status: string; outcome: string | null; open_tasks: number }
+export interface OpenClaimBrief { id: number; po_line_item_id: string | null; asin: string | null; line_no: number; kind: string; qty: number | null; amount_owed: number | null; remaining: number | null; note: string | null; status: string; outcome: string | null; open_tasks: number }
 export const briefOf = (d: ClaimRow): OpenClaimBrief => ({ id: d.id, po_line_item_id: d.po_line_item_id, asin: d.asin, line_no: d.line_no, kind: d.kind, qty: d.qty, amount_owed: d.amount_owed, remaining: d.remaining, note: d.note, status: d.status, outcome: d.outcome, open_tasks: d.tasks.filter((t) => t.done_at == null).length });
 
 /** Per ASIN row / per PO: the open claims (the chip text / hover; the POs list's Claims column in commit 2). */
@@ -119,8 +122,10 @@ export async function addTask(query: QueryLike, claimId: number, kind: ClaimTask
   await query(`INSERT INTO supplier_claim_tasks (claim_id, kind, "group", reason, qty) VALUES ($1, $2, $3, $4, $5) ON CONFLICT (claim_id, kind) WHERE done_at IS NULL DO NOTHING`, [claimId, kind, CLAIM_TASK_GROUP[kind], reason, qty]);
 }
 export async function doneTask(query: QueryLike, taskId: number, userId: number | null): Promise<{ id: number; claim_id: number; po_id: string }> {
-  const t = (await query(`SELECT t.id, t.claim_id, t.kind, c.po_id FROM supplier_claim_tasks t JOIN supplier_claims c ON c.id = t.claim_id WHERE t.id = $1`, [taskId])).rows[0];
+  const t = (await query(`SELECT t.id, t.claim_id, t.kind, c.po_id, c.qty FROM supplier_claim_tasks t JOIN supplier_claims c ON c.id = t.claim_id WHERE t.id = $1`, [taskId])).rows[0];
   if (!t) throw new EditError(404, "task not found");
+  // "Enter quantity" is done by typing the quantity on the claim (editClaim closes it), never by a tick.
+  if (t.kind === "enter_quantity" && t.qty == null) throw new EditError(400, "type the claim's quantity (Individual units) — that completes Enter quantity");
   await query(`UPDATE supplier_claim_tasks SET done_at = now(), done_by = $2 WHERE id = $1 AND done_at IS NULL`, [taskId, userId]);
   await event(query, Number(t.claim_id), "task_done", String(t.kind), userId);
   await logEdits(query, String(t.po_id), userId, "claim", String(t.claim_id), [{ field: `task ${t.kind}`, old: "open", new: "done" }]);
@@ -179,6 +184,11 @@ export async function editClaim(query: QueryLike, id: number, body: Record<strin
     }
     edits.qty = q;
     if (d.amount_owed_source === "auto" && line && !("amount_owed" in body)) edits.amount_owed = autoAmount(line, q);
+    // A quantity typed on a claim that had none completes its "Enter quantity" task.
+    if (d.qty == null) {
+      await query(`UPDATE supplier_claim_tasks SET done_at = now(), done_by = $2 WHERE claim_id = $1 AND kind = 'enter_quantity' AND done_at IS NULL`, [id, userId]);
+      await event(query, id, "task_done", "enter_quantity", userId);
+    }
   }
   if ("amount_owed" in body) {
     if (body.amount_owed == null || body.amount_owed === "") { edits.amount_owed_source = "auto"; edits.amount_owed = line ? autoAmount(line, Number(edits.qty ?? d.qty)) : null; }

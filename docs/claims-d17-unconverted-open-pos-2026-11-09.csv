@@ -1,0 +1,10 @@
+kind,order_id,supplier,order_date,asin,line_position,product,sold_as,pack,stored_qty (its own units),shipped_fba,at_prep,received_velocity,why
+asin row,50SFH7418A23+1,spoiledchild.com,2026-08-09,NA,,,,,3.00,,,,pack size not known (sold_as NULL) — converts by itself once the pack is set
+asin row,467231369-001,officedepot.com,2026-05-06,B00RJ4VRFM,,,multi-pack,,35.00,,,,pack size not known (sold_as NULL) — converts by itself once the pack is set
+asin row,1113633269,petsmart.com,2026-03-30,B08QMDXLB1,,,,,10.00,,,,pack size not known (sold_as NULL) — converts by itself once the pack is set
+asin row,03130,brown-haley.com,2026-03-20,B009YCUYH4,,,,,16.00,,,,pack size not known (sold_as NULL) — converts by itself once the pack is set
+asin row,200014535912609,walmart.com,2026-03-09,B0FPF1CGQF,,,,,3.00,,,,pack size not known (sold_as NULL) — converts by itself once the pack is set
+asin row,941837264,iherb.com,2026-02-12,B003UKHGU4,,,,,10.00,,,,pack size not known (sold_as NULL) — converts by itself once the pack is set
+line,1113633269,petsmart.com,2026-03-30,B08QMDXLB1,0,Sheba® Bistro Perfect Portions Adult Wet Cat Food - 2.64 Oz.,,,60.00,,,,Product pack not known (yield 0.17) — converts by itself once the line's pack is typed
+line,1113633269,petsmart.com,2026-03-30,B08QMDXLB1,1,Sheba® Bistro Perfect Portions Adult Wet Cat Food - 2.64 Oz.,,,60.00,,,,Product pack not known (yield 0.17) — converts by itself once the line's pack is typed
+line,200014535912609,walmart.com,2026-03-09,B0FPF1CGQF,1,"Mini Brands Fill the Fridge S1 Blindbox Capsule, Collectible",,,9.00,,,,Product pack not known (yield 0.33) — converts by itself once the line's pack is typed

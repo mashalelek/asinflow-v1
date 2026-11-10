@@ -25,7 +25,7 @@ import { oldLoadAsinPipeline, oldAutoCloseVerdicts, oldLoadAfPoRows } from "../s
 import { envReconStart, loadAsinPipeline } from "../server/asin-po-pipeline";
 import { autoCloseVerdict, type PoCloseRow } from "../server/po-close";
 import { PO_CLOSE_ACTION_ITEMS_SQL } from "../server/po-action-items";
-import { OPEN_CLAIM_COUNT_PO_SQL } from "../server/supplier-claim-sql";
+import { OPEN_CLAIM_COUNT_PO_SQL, REFUNDS_DUE_PO_SQL } from "../server/supplier-claim-sql";
 import { loadAfPoRows } from "../server/po-af-source";
 import { comparePipelines, compareVerdicts, comparePlans, compareRows, planByKey, type Diff, type PlanLike } from "../server/claims-proof";
 import { parseMDY, todayLocal } from "../server/velocity-export";
@@ -60,6 +60,8 @@ const fmt = (v: unknown) => (v == null ? "" : typeof v === "number" ? String(r2(
     const itemsBefore = (await q(`SELECT ai.item, (p.closed_at IS NOT NULL) AS po_closed, COUNT(*)::int AS n FROM po_line_action_items ai JOIN po_line_items l ON l.id = ai.po_line_item_id JOIN purchase_orders p ON p.id = l.po_id WHERE ai.cleared_at IS NULL AND ai.item IN ('Confirm refund / replacement', 'Missing / damaged from supplier') GROUP BY 1, 2`)).rows as any[];
     const lossBefore = (await q(`SELECT COUNT(*)::int AS rows, COALESCE(SUM(unreimbursed_loss_amount), 0)::float8 AS amt FROM po_asins WHERE COALESCE(unreimbursed_loss_qty, 0) > 0 OR COALESCE(unreimbursed_loss_amount, 0) > 0`)).rows[0];
     log(`Before: ${asinsBefore.length} ASIN rows, ${linesBefore.length} lines, ${shipsBefore.length} shipment rows, ${refundsBefore.length} refund rows (${refundsBefore.filter((r) => r.status === "due").length} due), ${defectsBefore.length} defect(s); open items: ${itemsBefore.map((i) => `${i.item} ${i.po_closed ? "closed" : "open"} PO ×${i.n}`).join(", ") || "none"}; sheet losses ${lossBefore.rows} rows $${r2(lossBefore.amt)}`);
+    const dueBefore = Number((await q(`SELECT (SELECT COALESCE(SUM(r.amount), 0) FROM po_line_refunds r WHERE r.status = 'due')
+      + (SELECT COALESCE(SUM(GREATEST(0, COALESCE(d.amount, 0) - COALESCE((SELECT SUM(r2.amount) FROM po_line_defect_refunds x JOIN po_line_refunds r2 ON r2.id = x.po_line_refund_id WHERE x.defect_id = d.id), 0))), 0) FROM po_line_defects d WHERE d.status = 'open') AS due`)).rows[0].due);
     const oldPipe = await oldLoadAsinPipeline(q as any, start);
     const oldClose = await oldAutoCloseVerdicts(q as any);
     const oldRows = await oldLoadAfPoRows(q as any);
@@ -95,6 +97,15 @@ const fmt = (v: unknown) => (v == null ? "" : typeof v === "number" ? String(r2(
          JOIN purchase_orders p ON p.id = c.po_id LEFT JOIN po_line_items l ON l.id = c.po_line_item_id LEFT JOIN po_asins pa ON pa.id = l.po_asin_id
         ORDER BY k.source, p.order_date DESC, c.id`)).rows as any[];
     const basisCounts = (await q(`SELECT 'asin rows' AS t, qty_basis, COUNT(*)::int AS n FROM po_asins GROUP BY 1, 2 UNION ALL SELECT 'lines', qty_basis, COUNT(*)::int FROM po_line_items GROUP BY 1, 2 ORDER BY 1, 2`)).rows as any[];
+    const dueAfter = Number((await q(`SELECT COALESCE(SUM(${REFUNDS_DUE_PO_SQL("p")}), 0) AS due FROM purchase_orders p`)).rows[0].due);
+    // legacy rows / lines on OPEN POs (the ones Maria will meet): listed separately
+    const legacyOpenRows = (await q(`SELECT p.order_id, p.supplier, p.order_date::text AS order_date, pa.asin, pa.sold_as, pa.units_per_pack, pa.qty, pa.qty_shipped_fba, pa.qty_at_prep, pa.received_velocity
+        FROM po_asins pa JOIN purchase_orders p ON p.id = pa.po_id WHERE pa.qty_basis = 'asin_legacy' AND p.closed_at IS NULL ORDER BY p.order_date DESC, p.order_id, pa.asin`)).rows as any[];
+    const legacyOpenLines = (await q(`SELECT p.order_id, p.supplier, p.order_date::text AS order_date, pa.asin, l.position, l.product_name, l.qty_ordered, l.asin_qty_per_product, pa.sold_as AS row_sold_as, pa.units_per_pack AS row_pack
+        FROM po_line_items l JOIN purchase_orders p ON p.id = l.po_id LEFT JOIN po_asins pa ON pa.id = l.po_asin_id WHERE l.qty_basis = 'product_legacy' AND p.closed_at IS NULL ORDER BY p.order_date DESC, p.order_id, pa.asin, l.position`)).rows as any[];
+    writeFileSync(out("d17-unconverted-open-pos") + ".csv", csv([["kind", "order_id", "supplier", "order_date", "asin", "line_position", "product", "sold_as", "pack", "stored_qty (its own units)", "shipped_fba", "at_prep", "received_velocity", "why"],
+      ...legacyOpenRows.map((r) => ["asin row", r.order_id, r.supplier, r.order_date, r.asin, "", "", r.sold_as ?? "", r.units_per_pack ?? "", fmt(r.qty), fmt(r.qty_shipped_fba), fmt(r.qty_at_prep), fmt(r.received_velocity), "pack size not known (sold_as NULL) — converts by itself once the pack is set"]),
+      ...legacyOpenLines.map((r) => ["line", r.order_id, r.supplier, r.order_date, r.asin ?? "", r.position, String(r.product_name ?? "").slice(0, 60), r.row_sold_as ?? "", r.row_pack ?? "", fmt(r.qty_ordered), "", "", "", `Product pack not known (yield ${r.asin_qty_per_product ?? "∅"}) — converts by itself once the line's pack is typed`])]));
 
     // ── D17 CSVs ───────────────────────────────────────────────────────────
     const rowCols = ["qty", "qty_shipped_supplier", "qty_at_prep", "qty_at_warehouse", "qty_lost_damaged_us", "qty_shipped_fba", "qty_received_amazon", "received_velocity", "unreimbursed_loss_qty", "extra_units_cleared_shipped"];
@@ -147,6 +158,11 @@ const fmt = (v: unknown) => (v == null ? "" : typeof v === "number" ? String(r2(
     writeFileSync(out("d17-bundle-rows") + ".csv", csv(bundleRows));
     writeFileSync(out("d17-unconverted") + ".csv", csv(unconverted));
     log(`D17: ASIN rows ${convRows} converted / ${legacyRows} left in ASIN units (${nonIntRows} with a known pack but a value that does not convert); lines ${convLines} converted / ${legacyLines} left in Product units (${nonIntLines} with a known pack); basis after: ${basisCounts.map((b) => `${b.t} ${b.qty_basis} ${b.n}`).join(", ")}; ${bundleRows.length - 1} bundle values listed separately.`);
+    log(`D17 on OPEN POs: ${legacyOpenRows.length} legacy ASIN row(s) on ${new Set(legacyOpenRows.map((r) => r.order_id)).size} open PO(s) and ${legacyOpenLines.length} legacy line(s) on ${new Set(legacyOpenLines.map((r) => r.order_id)).size} open PO(s) — ${out("d17-unconverted-open-pos")}.csv (the rest are on closed POs).`);
+    // an example of a history column that kept its fraction (× pack, 2 dp) on a row that otherwise converted
+    const frac = asinsBefore.find((b) => { const a = asinsAfter.get(String(b.id)); return a?.qty_basis === "individual" && b.unreimbursed_loss_qty != null && Number(b.unreimbursed_loss_qty) % 1 !== 0; });
+    if (frac) { const a = asinsAfter.get(String(frac.id)); log(`Fraction kept, example: ${frac.supplier} ${frac.order_id} ${frac.asin} (${frac.sold_as} × ${frac.units_per_pack}) — before: Ordered ${fmt(frac.qty)} ASIN units, sheet loss ${fmt(frac.unreimbursed_loss_qty)} ASIN units; after: Ordered ${fmt(a.qty)} Individual units, loss ${fmt(a.unreimbursed_loss_qty)} Individual units (the row converts, the loss keeps its fraction × ${frac.units_per_pack}).`); }
+    log(`Refunds due (POs list / Dashboard): today $${r2(dueBefore)} (the due refund rows + open defect $ no refund row carries) → after $${r2(dueAfter)} (Σ remaining on open claims whose outcome is unset or a refund / credit; a claim with no quantity or no $ adds nothing).`);
 
     // ── proof ──────────────────────────────────────────────────────────────
     const pipeDiffs = comparePipelines(oldPipe as any, newPipe as any);
@@ -166,6 +182,7 @@ const fmt = (v: unknown) => (v == null ? "" : typeof v === "number" ? String(r2(
 
     // ── conversions ────────────────────────────────────────────────────────
     const units = (c: any) => {
+      if (c.qty == null) { const label = (c.flags ?? []).includes("canceled_no_ordered_qty") ? "unknown (sheet zeroed the line)" : "unknown — Enter quantity"; return [label, "", ""]; }
       const legacy = c.line_basis === "product_legacy"; const ind = legacy ? null : Number(c.qty); const prod = legacy ? Number(c.qty) : c.product_pack ? Number(c.qty) / Number(c.product_pack) : null; const asin = legacy ? null : c.asin_pack ? Number(c.qty) / Number(c.asin_pack) : null;
       return [fmt(ind), fmt(prod), fmt(asin)];
     };
@@ -177,12 +194,18 @@ const fmt = (v: unknown) => (v == null ? "" : typeof v === "number" ? String(r2(
     writeFileSync(out("conversions") + ".csv", csv(convCsv));
     const bySource = new Map<string, { n: number; open: number; owed: number }>();
     for (const c of claims) { const k = c.source ?? "(existing)"; const v = bySource.get(k) ?? { n: 0, open: 0, owed: 0 }; v.n++; if (c.status === "open") v.open++; v.owed += Number(c.amount_owed ?? 0); bySource.set(k, v); }
-    log(`Conversions: ${claims.length} claim(s) — ${[...bySource.entries()].map(([k, v]) => `${k}: ${v.n} (${v.open} open, $${r2(v.owed)} owed)`).join("; ")}; kind unclear on ${claims.filter((c) => (c.flags ?? []).includes("kind_unclear")).length}, qty assumed = ordered on ${claims.filter((c) => (c.flags ?? []).includes("qty_assumed_ordered")).length}, legacy units on ${claims.filter((c) => (c.flags ?? []).includes("legacy_units")).length}.`);
+    log(`Conversions: ${claims.length} claim(s) — ${[...bySource.entries()].map(([k, v]) => `${k}: ${v.n} (${v.open} open, $${r2(v.owed)} owed)`).join("; ")}; kind unclear on ${claims.filter((c) => (c.flags ?? []).includes("kind_unclear")).length}, quantity not known on ${claims.filter((c) => c.qty == null).length} (${claims.filter((c) => (c.flags ?? []).includes("canceled_no_ordered_qty")).length} sheet-zeroed lines, ${claims.filter((c) => (c.flags ?? []).includes("qty_unknown")).length} badges awaiting Enter quantity), legacy units on ${claims.filter((c) => (c.flags ?? []).includes("legacy_units")).length}.`);
     const attention = claims.filter((c) => c.status === "open" && c.open_tasks);
     const attCsv: unknown[][] = [["order_id", "supplier", "asin", "line_position", "product", "kind", "qty_individual", "amount_owed", "outcome", "open_tasks", "source", "flags", "note"]];
     for (const c of attention) attCsv.push([c.order_id, c.supplier, c.asin ?? "(whole PO)", c.position ?? "", String(c.product_name ?? "").slice(0, 60), c.kind, units(c)[0], fmt(c.amount_owed), c.outcome ?? "", c.open_tasks, c.source ?? "", (c.flags ?? []).join(" "), String(c.note ?? "").slice(0, 160)]);
     writeFileSync(out("needs-attention") + ".csv", csv(attCsv));
-    log(`Needs attention on day one: ${attention.length} open claim(s) with an open task (${attention.filter((c) => c.open_tasks?.includes("refund_received")).length} refund_received, ${attention.filter((c) => c.open_tasks?.includes("contact_supplier")).length} contact_supplier).`);
+    log(`Needs attention on day one: ${attention.length} open claim(s) with an open task (${attention.filter((c) => c.open_tasks?.includes("enter_quantity")).length} enter_quantity, ${attention.filter((c) => c.open_tasks?.includes("refund_received")).length} refund_received, ${attention.filter((c) => c.open_tasks?.includes("contact_supplier")).length} contact_supplier).`);
+    report.push("", "## Reading the proof", "",
+      "On Order, the Velocity plan and its input rows are identical before and after. The auto-close verdicts that flip are POs the sheet already closed (`closed_by = 'sheet'`): before, a retired badge (\"Confirm refund / replacement\", \"Missing / damaged from supplier\") or a col V / W loss kept the rule from being true; after, the badge is a claim (not an item) and the loss is a closed write-off claim that counts, so the rule becomes true — on a PO that is closed already, which changes nothing. Auto never reopens a sheet-closed PO and never re-closes one.",
+      "", "## How a row's basis is tracked", "",
+      "`po_asins.qty_basis` and `po_line_items.qty_basis` say what the stored numbers are: `individual` = Individual units (every row whose pack was known converted at the migration, and every row written by AF since); `asin_legacy` / `product_legacy` = the pack was not known, so the stored numbers are still the ASIN units / Product units they always were. A CHECK forbids `individual` on a row with no pack; a BEFORE INSERT trigger makes a pack-less insert legacy; a BEFORE UPDATE trigger converts a legacy row the moment its pack arrives (× pack, History row `qty_basis`), and clearing a pack converts it back. The views read `qty_basis` per row: a legacy row's ASIN / Product figures are its stored numbers, its Individual figures are NULL (shown as \"—\"), so a reader never needs to know which basis a row is in. The POs page shows such rows with the amber \"pack size missing\" and no Individual count.",
+      "", "## Why the history columns keep a fraction", "",
+      "The quantities that drive On Order and auto-close (ordered, shipped by supplier, at prep, at warehouse, received by Velocity, the shipment rows) had to convert to a whole number of Individual units, and all did. Three history columns can hold a fraction of a pack in the sheet's data: the col V / W loss (`unreimbursed_loss_qty`), Lost / damaged by us and a line's received / canceled / returned (now claim quantities). Holding a whole row in its old basis because its sheet loss says 0.17 of a pack would have kept Ordered, Shipped and At Prep un-converted on rows that are otherwise fine — six ASIN rows and two lines on the first dry run. So those columns convert × the pack and keep their fraction at 2 dp; the example row above shows one. They never feed Expected or auto-close.");
     const dropped = (await q(`SELECT COUNT(*)::int AS n FROM information_schema.columns WHERE table_name = 'po_line_items' AND column_name IN ('qty_canceled', 'qty_returned', 'final_qty')`)).rows[0].n;
     const refundStatus = (await q(`SELECT COUNT(*)::int AS n FROM information_schema.columns WHERE table_name = 'po_line_refunds' AND column_name = 'status'`)).rows[0].n;
     log(`After the migration: po_line_items.qty_canceled / qty_returned / final_qty present: ${dropped}; po_line_refunds.status present: ${refundStatus}; tables: ${(await q(`SELECT string_agg(table_name, ', ' ORDER BY table_name) AS t FROM information_schema.tables WHERE table_name IN ('supplier_claims', 'supplier_claim_tasks', 'supplier_claim_events', 'supplier_claim_refunds', 'supplier_claim_conversions', 'po_warning_dismissals')`)).rows[0].t}.`);

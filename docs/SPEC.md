@@ -6287,6 +6287,10 @@ Rules built in commit 1 (`server/supplier-claims.ts`, `shared/supplier-claim.ts`
   off…, dismiss, reopen, remove, tick a task. API: `POST /api/pos/:id/claims`, `PATCH|DELETE /api/pos/claims/:id`,
   `POST /api/pos/claims/:id/refunds`, `DELETE …/refunds/:refundId`, `POST …/outcome`, `…/reopen`, `…/dismiss`,
   `POST /api/pos/claims/tasks/:id/done`.
+- **A claim with no quantity** (`qty` NULL — a converted badge that carried none, a sheet line the sheet zeroed) counts
+  toward nothing: not Expected, not Refunds due, not Spend; its $ owed stays NULL. An **Enter quantity** task (group
+  Decide) asks for it; typing the Individual units on the claim completes the task (a tick never does). The Payments tab
+  shows "qty unknown", or "unknown (sheet zeroed the line)" for the 0 / 0 sheet lines (Maria 2026-11-09).
 - **Retired action items:** "Missing / damaged from supplier" and "Confirm refund / replacement" left the vocabulary
   (`RETIRED_ACTION_ITEMS`); the stored open ones were converted and cleared ("converted to claim"); a sheet row
   carrying one opens a claim on the new line instead (never a stop); an editor sending one is ignored.
@@ -6296,8 +6300,10 @@ Rules built in commit 1 (`server/supplier-claims.ts`, `shared/supplier-claim.ts`
 `returned` claim (Individual units, dated by the PO's last edit, linked to the PO's received refund rows with
 `amount_applied` split by $ owed, outcome from the refund's method; "sheet-era, refund not tracked" when the PO has
 no refund row); "Confirm refund / replacement" items → the line's converted claim reopened (else an open claim, kind
-unclear → missing, qty = the line's ordered units) with a `refund_received` task; "Missing / damaged from supplier"
-→ open claims + `contact_supplier` on open POs, closed claims (no outcome guessed) on closed POs; the sheet's col V /
+unclear → missing, **no quantity, no $**, an `enter_quantity` task) with a `refund_received` task; "Missing / damaged
+from supplier" → open claims (no quantity, `enter_quantity` + `contact_supplier`) on open POs, closed claims (no
+quantity, no outcome guessed) on closed POs; a 0 / 0 sheet line → a closed canceled claim with qty NULL
+("unknown (sheet zeroed the line)") so it still reads as canceled; the sheet's col V /
 W losses → closed `write_off` claims on the row's first line (kind from the notes, the sheet's $ kept as typed; chewy
 1627249988 B08F2JGCXT 3 / $8.55 added; michaels 9800109062072825 B07N6V47HC excluded). Then `qty_canceled` /
 `qty_returned` / `final_qty` and `po_line_refunds.status` are dropped. The dry run (`npm run claims:dryrun -- --prod`)

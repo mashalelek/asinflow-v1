@@ -581,7 +581,14 @@ Prerequisite: `claude_spec-patch-quantity-names.md` (labels only).
    retired badges on a NEW row to a claim (never a stop); (j) the per-PO
    Supplier claims section (Payments tab) replaces the defects section until
    the Claims page; claims are not action items — a muted "N open claims"
-   note shows after the chips.
+   note shows after the chips; (k) Maria 2026-11-09: a converted badge claim
+   gets NO quantity and no $ (`qty` NULL, an `enter_quantity` task, group
+   Decide — the fourteenth task kind) and counts toward nothing until the
+   quantity is typed on the claim (which completes the task); a 0 / 0 sheet
+   line's canceled claim has qty NULL and reads "unknown (sheet zeroed the
+   line)"; (l) `server/quantity-readers.lint.test.ts` fails when server code
+   outside its allowlist selects a stored quantity column directly or does
+   pack arithmetic itself.
 2. Tasks + buckets + paths (§3.2–3.4), outcomes + refunds table (§3.5),
    money incl. override (§3.7), Claims nav tab + claim detail + POs-list
    column + PO page link / card / Open claim (§5), Refunds due / Spend on
