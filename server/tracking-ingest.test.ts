@@ -60,3 +60,60 @@ describe("ingestTracking", () => {
     expect(r.drafts?.[0]).toMatchObject({ retailer_order_id: "4800990541", ship_to_street: "805 grandy", sender_domain: "notify.macys.com", items_json: [expect.objectContaining({ qty: 10 })] });
   });
 });
+
+// ── Claims patch §3.10 (2026-11-11): a placeholder is replaced in place when a number arrives for its order ──
+describe("placeholders replaced in place (dropResolvedPlaceholders / dropPlaceholdersFor)", () => {
+  const PH = [
+    { id: 50, sender_domain: "beauty.sephora.com", retailer_order_id: "839122002407", match_reason: "ai_no_tracking", gmail_message_id: "a", shipped_at: "2026-10-19" },
+    { id: 214, sender_domain: "summitracing.narvar.com", retailer_order_id: "2392393-20261004", match_reason: "ai_disabled", gmail_message_id: "b", shipped_at: "2026-10-05" },
+    { id: 428, sender_domain: "zara.com", retailer_order_id: "54452653087", match_reason: "dismissed", gmail_message_id: "c", shipped_at: "2026-09-16" },
+    { id: 7, sender_domain: "typology.com", retailer_order_id: "1283797", match_reason: "ai_disabled", gmail_message_id: "d", shipped_at: "2026-10-21" },
+  ];
+  const REAL = [
+    { id: 900, sender_domain: "sephora.com", retailer_order_id: "839122002407", carrier: "FEDEX", tracking_number: "539377361530" },
+    { id: 901, sender_domain: "summitracing.com", retailer_order_id: "2392393", carrier: "UPS", tracking_number: "1Z1XW7200306058478" },
+    { id: 902, sender_domain: "mail.zara.com", retailer_order_id: "54452653087", carrier: "GLS", tracking_number: "56830412345" },
+    { id: 903, sender_domain: "typology.com", retailer_order_id: "9999999", carrier: "UPS", tracking_number: "1Z999AA10123456784" },
+  ];
+  const fake = () => {
+    const deletes: any[][] = [];
+    const query = async (sql: string, params?: any[]) => {
+      if (sql.includes("tracking_number LIKE 'email:%'")) return { rows: PH, rowCount: PH.length };
+      if (sql.includes("tracking_number NOT LIKE 'email:%'")) return { rows: REAL, rowCount: REAL.length };
+      if (sql.startsWith("DELETE")) { deletes.push(params ?? []); return { rows: [], rowCount: 1 }; }
+      return { rows: [], rowCount: 0 };
+    };
+    return { query, deletes };
+  };
+  it("same registrable sender domain + order base key: Sephora (subdomain), Summit (ship-date suffix), a dismissed one too; a different order never", async () => {
+    const { dropResolvedPlaceholders } = await import("./tracking-ingest");
+    const f = fake();
+    const r = await dropResolvedPlaceholders(f.query as any);
+    expect(r.map((x) => [x.id, x.by_id, x.carrier, x.tracking_number])).toEqual([[50, 900, "FEDEX", "539377361530"], [214, 901, "UPS", "1Z1XW7200306058478"], [428, 902, "GLS", "56830412345"]]);
+    expect(f.deletes).toEqual([[[50, 214, 428]]]);
+  });
+  it("a dry run lists and deletes nothing; dropPlaceholdersFor drops the one order's placeholder(s)", async () => {
+    const { dropResolvedPlaceholders, dropPlaceholdersFor } = await import("./tracking-ingest");
+    const f = fake();
+    expect((await dropResolvedPlaceholders(f.query as any, { dryRun: true })).length).toBe(3);
+    expect(f.deletes).toEqual([]);
+    expect(await dropPlaceholdersFor(f.query as any, "sephora.com", "839122002407")).toEqual([50]);
+    expect(await dropPlaceholdersFor(f.query as any, "summitracing.com", "2392393")).toEqual([214]);
+    expect(await dropPlaceholdersFor(f.query as any, "typology.com", "1111111")).toEqual([]);
+    expect(await dropPlaceholdersFor(f.query as any, "typology.com", null)).toEqual([]);
+    expect(f.deletes).toEqual([[[50]], [[214]]]);
+  });
+});
+
+describe("sameSender (2026-11-11)", () => {
+  it("equal registrable domains; a Narvar sender named after the retailer; never two unrelated retailers", async () => {
+    const { sameSender } = await import("./tracking-ingest");
+    expect(sameSender("beauty.sephora.com", "sephora.com")).toBe(true);
+    expect(sameSender("summitracing.narvar.com", "summitracing.com")).toBe(true);
+    expect(sameSender("summitracing.com", "summitracing.narvar.com")).toBe(true);
+    expect(sameSender("dickssportinggoods.narvar.com", "summitracing.com")).toBe(false);
+    expect(sameSender("t.shopifyemail.com", "cafemam.com")).toBe(false);
+    expect(sameSender("ui.com", "store.ui.com")).toBe(true);
+    expect(sameSender("ui.com", "x.ui.narvar.com")).toBe(false); // "ui" is too short a name to vouch for a host
+  });
+});

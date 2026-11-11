@@ -16,7 +16,9 @@
 import type { gmail_v1 } from "googleapis";
 import { listMessageIds, getMessage, type GmailMessage } from "./gmail-client";
 import { parseTrackingEmail, type ParsedEmail } from "./tracking-parse";
-import { extractorFor, extractLinkTracking, extractGenericLinkTracking, type FetchLike } from "./tracking-links";
+import { extractorFor, extractLinkTracking, extractGenericLinkTracking, ruleAnchors, type FetchLike } from "./tracking-links";
+import { registrable } from "./tracking-match";
+import { orderBaseKey } from "./order-number";
 import { AI_DISABLED_REASON, aiFallbackAvailable, resolvePlaceholdersWithAi, type TrackingAiCall, type AiPlaceholderResult } from "./tracking-ai";
 import { onePoResolver } from "./tracking-match";
 import type { QueryLike } from "./scheduler/types";
@@ -82,6 +84,8 @@ export interface IngestResult {
   link_resolved: number;
   /** Earlier placeholders re-read and resolved through a tracking link. */
   placeholders_resolved?: number;
+  /** Earlier placeholders dropped because a real row for the same order exists (2026-11-11). */
+  placeholders_replaced?: number;
   /** The AI fallback over the placeholders that name one AF PO (absent when AI is off). */
   ai?: AiPlaceholderResult;
   since: string | null; until: string;
@@ -118,20 +122,56 @@ export const wouldQueuePlaceholder = (subject: string, p: ParsedEmail): boolean 
  * follow (tracking-links.ts: any "track" link whose redirect chain reaches a
  * carrier URL; 2026-10-22).
  */
-export async function withLinkTracking(msg: Pick<GmailMessage, "text"> & Partial<Pick<GmailMessage, "subject" | "trackLinks">>, p: ParsedEmail, fetchFn?: FetchLike): Promise<ParsedEmail> {
+export async function withLinkTracking(msg: Pick<GmailMessage, "text"> & Partial<Pick<GmailMessage, "subject" | "trackLinks" | "links">>, p: ParsedEmail, fetchFn?: FetchLike): Promise<ParsedEmail> {
   if (p.shipments.length > 0) return p;
   let found = extractorFor(p.senderDomain) ? await extractLinkTracking(msg.text, p.senderDomain, fetchFn) : [];
-  if (found.length === 0 && wouldQueuePlaceholder(msg.subject ?? "", p)) found = await extractGenericLinkTracking(msg.text, p.orderIds, fetchFn, msg.trackLinks ?? []);
+  if (found.length === 0 && wouldQueuePlaceholder(msg.subject ?? "", p)) found = await extractGenericLinkTracking(msg.text, p.orderIds, fetchFn, msg.trackLinks ?? [], ruleAnchors(p.senderDomain, msg.links ?? []));
   return found.length ? { ...p, shipments: found.map((f) => ({ ...f, items: [] })) } : p;
 }
 
 /** Placeholders older than this are not re-read by the routine ingest (the backfill's --stage links reads all). */
 export const PLACEHOLDER_RECHECK_DAYS = 30;
 
-/** Drop an order's "email:" placeholder once a real number exists for it (it was a queue entry, not history). */
-async function dropPlaceholder(query: QueryLike, domain: string | null, orderId: string | null): Promise<void> {
-  if (!orderId) return;
-  await query(`DELETE FROM po_tracking WHERE tracking_number = $1 AND status = 'unmatched'`, [placeholderTracking(domain, orderId)]);
+/** The open placeholders (any match_reason — a dismissed one is still a queue entry a real number replaces). */
+async function openPlaceholders(query: QueryLike): Promise<Array<{ id: number; sender_domain: string | null; retailer_order_id: string | null; match_reason: string | null; gmail_message_id: string; shipped_at: string | null }>> {
+  return (await query(`SELECT id, sender_domain, retailer_order_id, match_reason, gmail_message_id, shipped_at FROM po_tracking WHERE tracking_number LIKE 'email:%' AND status = 'unmatched'`)).rows
+    .map((r: any) => ({ ...r, id: Number(r.id) }));
+}
+/** The same sender: equal registrable domains (beauty.sephora.com = sephora.com), or one's name is a label of the other's host (summitracing.narvar.com = summitracing.com — Narvar sends on the retailer's behalf). */
+export const sameSender = (a: string, b: string): boolean => {
+  const ra = registrable(a), rb = registrable(b);
+  if (ra === rb) return true;
+  const na = ra.split(".")[0], nb = rb.split(".")[0];
+  return (na.length >= 4 && b.toLowerCase().split(".").includes(na)) || (nb.length >= 4 && a.toLowerCase().split(".").includes(nb));
+};
+/** The same shipment: the same sender and the order's base key (2392393-20261004 = 2392393). */
+const sameOrder = (a: { sender_domain: string | null; retailer_order_id: string | null }, domain: string | null, orderId: string | null): boolean =>
+  !!a.retailer_order_id && !!orderId && !!a.sender_domain && !!domain && sameSender(a.sender_domain, domain) && orderBaseKey(a.retailer_order_id) === orderBaseKey(orderId);
+
+/**
+ * Drop an order's "email:" placeholder(s) once a real number exists for it — a queue entry, not history (2026-11-11:
+ * by registrable sender domain + order base key, so a later email from another subdomain, or printing the order #
+ * without its ship-date suffix, replaces the placeholder in place). Returns the ids dropped.
+ */
+export async function dropPlaceholdersFor(query: QueryLike, domain: string | null, orderId: string | null, opts: { dryRun?: boolean } = {}): Promise<number[]> {
+  if (!orderId) return [];
+  const ids = (await openPlaceholders(query)).filter((p) => sameOrder(p, domain, orderId)).map((p) => p.id);
+  if (ids.length && !opts.dryRun) await query(`DELETE FROM po_tracking WHERE id = ANY($1::bigint[]) AND status = 'unmatched'`, [ids]);
+  return ids;
+}
+export interface ReplacedPlaceholder { id: number; sender_domain: string | null; retailer_order_id: string | null; by_id: number; carrier: string; tracking_number: string }
+/** Every open placeholder whose order already has a real row (a later email, a link, the AI) — dropped (replaced in place). */
+export async function dropResolvedPlaceholders(query: QueryLike, opts: { dryRun?: boolean } = {}): Promise<ReplacedPlaceholder[]> {
+  const ph = await openPlaceholders(query);
+  if (ph.length === 0) return [];
+  const real = (await query(`SELECT id, sender_domain, retailer_order_id, carrier, tracking_number FROM po_tracking WHERE tracking_number NOT LIKE 'email:%' AND split_of IS NULL AND retailer_order_id IS NOT NULL`)).rows;
+  const out: ReplacedPlaceholder[] = [];
+  for (const p of ph) {
+    const r = real.find((x: any) => sameOrder(p, x.sender_domain, x.retailer_order_id));
+    if (r) out.push({ id: p.id, sender_domain: p.sender_domain, retailer_order_id: p.retailer_order_id, by_id: Number(r.id), carrier: String(r.carrier), tracking_number: String(r.tracking_number) });
+  }
+  if (out.length && !opts.dryRun) await query(`DELETE FROM po_tracking WHERE id = ANY($1::bigint[]) AND status = 'unmatched'`, [out.map((x) => x.id)]);
+  return out;
 }
 
 /**
@@ -143,10 +183,8 @@ async function dropPlaceholder(query: QueryLike, domain: string | null, orderId:
 export async function resolveLinkPlaceholders(query: QueryLike, deps: IngestDeps, opts: { dryRun?: boolean; allAges?: boolean; now?: Date } = {}): Promise<{ placeholders: number; resolved: number; rows: number }> {
   const get = deps.get ?? getMessage;
   const floor = (opts.now ?? new Date()).getTime() - PLACEHOLDER_RECHECK_DAYS * 86400_000;
-  const ph = (await query(
-    `SELECT id, gmail_message_id, sender_domain, retailer_order_id, shipped_at FROM po_tracking
-      WHERE tracking_number LIKE 'email:%' AND status = 'unmatched'`,
-  )).rows.filter((r: any) => extractorFor(r.sender_domain) || opts.allAges || (r.shipped_at && new Date(r.shipped_at).getTime() >= floor));
+  // a dismissed placeholder is Maria's call — not re-read (a real number arriving still replaces it, dropResolvedPlaceholders)
+  const ph = (await openPlaceholders(query)).filter((r) => r.match_reason !== "dismissed" && (extractorFor(r.sender_domain) || opts.allAges || (r.shipped_at && new Date(r.shipped_at).getTime() >= floor)));
   const out = { placeholders: ph.length, resolved: 0, rows: 0 };
   for (const r of ph) {
     const msg = await get(deps.gmail, String(r.gmail_message_id));
@@ -156,7 +194,7 @@ export async function resolveLinkPlaceholders(query: QueryLike, deps: IngestDeps
     out.resolved++; out.rows += drafts.length;
     if (opts.dryRun) continue;
     for (const d of drafts) await upsertTrackingRow(query, d);
-    await dropPlaceholder(query, r.sender_domain, r.retailer_order_id);
+    await dropPlaceholdersFor(query, r.sender_domain, r.retailer_order_id);
   }
   return out;
 }
@@ -190,7 +228,6 @@ export async function ingestTracking(opts: {
     r.candidates++;
     const p = await withLinkTracking(msg, parsed, opts.deps.fetch);
     if (p !== parsed) r.link_resolved++;
-    if (p !== parsed && !opts.dryRun) await dropPlaceholder(opts.query, p.senderDomain, p.orderIds.length === 1 ? p.orderIds[0] : null);
     for (const d of rowsFromEmail(msg, p)) {
       drafts.push(d);
       r.rows++;
@@ -198,9 +235,12 @@ export async function ingestTracking(opts: {
       if (opts.dryRun) continue;
       const w = await upsertTrackingRow(opts.query, d);
       if (w === "inserted") r.inserted++; else if (w === "refreshed") r.refreshed++; else r.ignored_repeats++;
+      // a real number replaces the order's placeholder in place (the same email's link, or a later email)
+      if (!isPlaceholder(d.tracking_number) && d.retailer_order_id) await dropPlaceholdersFor(opts.query, d.sender_domain, d.retailer_order_id);
     }
   }
   r.placeholders_resolved = (await resolveLinkPlaceholders(opts.query, opts.deps, { dryRun: opts.dryRun })).resolved;
+  r.placeholders_replaced = (await dropResolvedPlaceholders(opts.query, { dryRun: opts.dryRun })).length;
   r.ai = await aiPlaceholders(opts.query, opts.deps, { dryRun: opts.dryRun });
   if (!opts.dryRun) {
     await opts.query(

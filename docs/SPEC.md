@@ -8704,6 +8704,57 @@ Settings: `tracking.velocity_street` ("805 grandy"),
   track link at all (Sephora, LG, gift-card outlet, Lowe's…), the rest
   land on a retailer order page that needs a login or JavaScript (Shopify
   stores, Walgreens, Ace, Zara, Ubiquiti, Duluth's dead links).
+- **Tracking parser fix (claims patch §3.10, 2026-11-11)** — what the 41
+  placeholders of Aug–Nov taught, each rule from a real email
+  (`server/__fixtures__/tracking-emails/*`, scrubbed):
+  - **schema.org ParcelDelivery markup** (`parcelDeliveries` in
+    `tracking-parse.ts`, read from the raw HTML by `gmail-client.ts` onto
+    `GmailMessage.parcelDeliveries`): parcelLab's notices (Harbor Freight
+    "Your Shipment is heading your way shortly") print the number only in a
+    hidden microdata block — carrier name, `trackingNumber`, `trackingUrl`;
+    the JSON-LD form is read too. When the text prints nothing, these are
+    the shipments (carrier by name, else by the tracking URL's host, else
+    by shape; never an order #).
+  - **GET when HEAD gives no Location** (`followToFinal`): Duluth's
+    `link.duluthtrading.com/q/…`, Klaviyo's `ctrk.klclick.com`, Shopify's
+    `/_t/c/v3/` answer 404 or 200 to HEAD and redirect only a GET — the
+    body is cancelled, never read. Duluth's "Track Order" now lands on
+    `dlhip.omni.manh.com/…/tracking.html?trackingId=1Z…&carrierCode=ups`.
+  - **Per-domain anchor rules** (`ANCHOR_RULES`, `ruleAnchors`;
+    `GmailMessage.links` = every anchor href, ≤ 80): Summit Racing's
+    Narvar notice links its tracking page from "View Up-to-Date Order
+    Details" (no "track" in text or href), so for a `*.narvar.com` sender
+    every `cta.narvar.com/f/a/` anchor is followed (≤ 20) until one carries
+    `tracking_numbers=`.
+  - **GLS** is a carrier (Zara's US parcels): the word GLS before an
+    8–20-digit number; in every carrier list (routes, AI prompt, client).
+  - **A placeholder is replaced in place** (`dropPlaceholdersFor`,
+    `dropResolvedPlaceholders`, run by every ingest): when a real row for
+    the same shipment exists — the same sender (`sameSender`: equal
+    registrable domains, or a Narvar sender named after the retailer) and
+    the same order base key (`stripShipmentSuffix` also drops a trailing
+    `-YYYYMMDD`: Summit's `2392393-20261004` = `2392393`) — the placeholder
+    goes, whatever its `match_reason` (a dismissed one too; it was a queue
+    entry). A dismissed placeholder is never re-read.
+  - **A link that needs a login stays a placeholder** — Shopify order
+    pages (Café Mam, Golden Waffles, Equal Exchange), Klaviyo → the
+    Typology account page, Zara's order page; Ace and Lowe's are
+    bot-blocked (403), Zara's tracking page says "not available" for old
+    orders, Ubiquiti's order page is scripted. Walgreens' "adjusted and has
+    shipped" names the carrier but its shipped list is empty (every item
+    canceled); Lowe's names FDXGND and prints nothing; LG, gift-card
+    outlet, Global Test Supply carry no link at all. These rely on the
+    "nothing after 14 days" rule.
+  - **Backfill:** `npm run backfill:tracking -- --stage placeholders
+    [--prod] [--live]` — every open placeholder: replaced by an existing
+    row / resolved now (carrier + number) / stays (where each candidate
+    link ends — `followDiagnostic` + `linkOutcome` — and the carrier the
+    email names) / dismissed; the dry run writes
+    `docs/tracking-placeholders-dry-run-<date>.csv`. Production dry run
+    2026-11-11 over the 41: **14 replaced** by a later email's row (Sephora
+    7, Equal Exchange 2, Café Mam 2, Harbor Freight 1, Summit 1, WorldPantry
+    1 — dismissed), **2 resolved now** (Duluth WEB35620800 → UPS, Summit
+    412645 → UPS through Narvar), **23 stay**, **2 dismissed** (Duluth, Zara).
 - **No tracking in a shipped email** and no extractor: one placeholder row
   per (sender domain, order #) — carrier OTHER, `tracking_number =
   email:<domain>:<order#>`, `match_reason = ai_disabled` (until the AI

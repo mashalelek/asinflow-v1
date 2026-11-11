@@ -11,6 +11,14 @@
 //   [--live] --stage ai     the tracking AI fallback over every ai_disabled placeholder
 //                           naming one AF PO (dry run: counts, no model call), then
 //                           re-match; --ai-max N caps the calls (default 25; 2026-11-04)
+//   [--live] --stage placeholders   claims patch §3.10 (2026-11-11): every open
+//                           "email:" placeholder — first those a real row for the same
+//                           order already replaces (dropped), then each remaining one
+//                           re-read through the fixed parser (schema.org ParcelDelivery
+//                           markup, anchor rules, GET-only click trackers): resolved →
+//                           rows + placeholder dropped, else the reason it stays (where
+//                           its links end). Dismissed ones are listed, never re-read.
+//                           Dry run writes docs/tracking-placeholders-<date>.csv.
 //
 // 1. GET /inbound → the order numbers with unit_status pending /
 //    partially_received → their AF POs → the oldest order date among them.
@@ -30,7 +38,10 @@ import "./env";
 import pool from "../server/db";
 import { gmailClient, listMessageIds, getMessage, emailTextFor } from "../server/gmail-client";
 import { parseTrackingEmail } from "../server/tracking-parse";
-import { rowsFromEmail, withLinkTracking, ingestTracking, isPlaceholder, resolveLinkPlaceholders, aiPlaceholders, type TrackingRowDraft } from "../server/tracking-ingest";
+import { rowsFromEmail, withLinkTracking, ingestTracking, isPlaceholder, resolveLinkPlaceholders, aiPlaceholders, dropResolvedPlaceholders, dropPlaceholdersFor, upsertTrackingRow, type TrackingRowDraft } from "../server/tracking-ingest";
+import { extractorFor, trackingLinks, genericTrackingLinks, ruleAnchors, followDiagnostic, linkOutcome } from "../server/tracking-links";
+import { carrierFromName } from "../server/tracking-parse";
+import { writeFileSync } from "fs";
 import { matchRow, loadDomainMap, matchTrackingRows, type PoRef } from "../server/tracking-match";
 import { replacementLookup } from "../server/tracking-replacement";
 import { routeTracking, joinReasons } from "../server/tracking-route-rules";
@@ -40,10 +51,65 @@ import type { QueryLike } from "../server/scheduler/types";
 
 const live = process.argv.includes("--live");
 const stageArg = (() => { const i = process.argv.indexOf("--stage"); return i >= 0 ? process.argv[i + 1] : "all"; })();
-if (!["all", "ingest", "push", "links", "match", "ai"].includes(stageArg)) throw new Error("--stage must be ingest, push, links, match, ai or all");
+if (!["all", "ingest", "push", "links", "match", "ai", "placeholders"].includes(stageArg)) throw new Error("--stage must be ingest, push, links, match, ai, placeholders or all");
 const query: QueryLike = (sql, params) => pool.query(sql, params) as any;
 
+/** A carrier the email names in prose ("being delivered by FedEx", "Shipping Method FDXGND"). */
+function carrierNamed(text: string): string | null {
+  const m = /\b(?:delivered by|shipped (?:via|with|by)|carrier|shipping method)\b[\s:]*([A-Za-z][A-Za-z ]{1,20})/i.exec(text);
+  return carrierFromName(m?.[1] ?? null) ?? (/\bFDXG|FDXGND|FDX\b/.test(text) ? "FEDEX" : null);
+}
+
+async function placeholdersStage(): Promise<void> {
+  const gmail = gmailClient();
+  const csv: string[] = ["id,sender_domain,order,shipped_at,match_reason,outcome,carrier,tracking_number,detail"];
+  const q = (v: unknown) => `"${String(v ?? "").replace(/"/g, '""')}"`;
+  // 1. already answered by a later email / link / the AI: a real row for the same order
+  const replaced = await dropResolvedPlaceholders(query, { dryRun: !live });
+  const all = (await query(`SELECT id, sender_domain, retailer_order_id, match_reason, gmail_message_id, shipped_at::date::text AS shipped_at, email_subject FROM po_tracking WHERE tracking_number LIKE 'email:%' AND status = 'unmatched' ORDER BY sender_domain, id`)).rows;
+  const replacedIds = new Set(replaced.map((r) => r.id));
+  for (const r of replaced) {
+    const row = all.find((x: any) => Number(x.id) === r.id);
+    csv.push([r.id, r.sender_domain, r.retailer_order_id, row?.shipped_at, row?.match_reason, "replaced", r.carrier, r.tracking_number, `real row #${r.by_id} already holds the number`].map(q).join(","));
+  }
+  let resolved = 0, stay = 0, dismissed = 0, rows = 0;
+  for (const r of all) {
+    const id = Number(r.id);
+    if (replacedIds.has(id)) continue;
+    if (r.match_reason === "dismissed") { dismissed++; csv.push([id, r.sender_domain, r.retailer_order_id, r.shipped_at, r.match_reason, "dismissed", "", "", "dismissed by hand — not re-read"].map(q).join(",")); continue; }
+    // 2. re-read through the fixed parser and link follow
+    const msg = await getMessage(gmail, String(r.gmail_message_id));
+    const parsed = parseTrackingEmail(msg);
+    const p = await withLinkTracking(msg, parsed);
+    const drafts = rowsFromEmail(msg, p).filter((d) => !isPlaceholder(d.tracking_number));
+    if (drafts.length) {
+      resolved++; rows += drafts.length;
+      for (const d of drafts) csv.push([id, r.sender_domain, r.retailer_order_id, r.shipped_at, r.match_reason, "resolved", d.carrier, d.tracking_number, parsed.shipments.length ? "from the email's markup (schema.org ParcelDelivery)" : "from a tracking link"].map(q).join(","));
+      if (live) { for (const d of drafts) await upsertTrackingRow(query, d); await dropPlaceholdersFor(query, r.sender_domain, r.retailer_order_id); }
+      continue;
+    }
+    // 3. stays: why — where its candidate links end, and the carrier it names
+    stay++;
+    const ex = extractorFor(p.senderDomain);
+    const candidates = ex ? trackingLinks(msg.text, ex) : genericTrackingLinks(msg.text, msg.trackLinks ?? [], ruleAnchors(p.senderDomain, msg.links ?? []));
+    const ends: string[] = [];
+    for (const u of candidates.slice(0, 4)) ends.push(linkOutcome(await followDiagnostic(u)));
+    const named = carrierNamed(msg.text);
+    const detail = [candidates.length === 0 ? "no tracking link in the email" : `${candidates.length} link(s): ${Array.from(new Set(ends)).join("; ")}`, named ? `names ${named}, prints no number` : "names no carrier"].join(" · ");
+    csv.push([id, r.sender_domain, r.retailer_order_id, r.shipped_at, r.match_reason, "stays", "", "", detail].map(q).join(","));
+  }
+  const m = live ? await matchTrackingRows(query, { textFor: emailTextFor(gmailClient()), replacementFor: replacementLookup(gmailClient()) }) : null;
+  const date = new Date().toISOString().slice(0, 10);
+  const file = `docs/tracking-placeholders-${live ? "live" : "dry-run"}-${date}.csv`;
+  writeFileSync(file, csv.join("\n") + "\n");
+  console.log(`${live ? "LIVE" : "DRY RUN"} — placeholders ${all.length}: replaced by an existing row ${replaced.length} · resolved now ${resolved} (${rows} rows) · stay ${stay} · dismissed ${dismissed}${m ? ` · re-match matched ${m.matched} ${JSON.stringify(m.unmatched)}` : ""}`);
+  for (const line of csv.slice(1)) console.log("  " + line);
+  console.log(`report: ${file}`);
+  await pool.end();
+}
+
 async function main(): Promise<void> {
+  if (stageArg === "placeholders") { await placeholdersStage(); return; }
   if (stageArg === "match") {
     const m = await matchTrackingRows(query, { dryRun: !live, textFor: emailTextFor(gmailClient()), replacementFor: replacementLookup(gmailClient()) });
     console.log(`${live ? "LIVE" : "DRY RUN"} — ${JSON.stringify({ ...m, links: undefined })}`);

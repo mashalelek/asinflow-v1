@@ -34,13 +34,13 @@ export function aiFallbackAvailable(env: NodeJS.ProcessEnv = process.env): boole
   return aiAvailable(env);
 }
 
-const CARRIERS = ["UPS", "FEDEX", "USPS", "DHL", "AMAZON", "ONTRAC", "LASERSHIP", "OTHER"] as const;
+const CARRIERS = ["UPS", "FEDEX", "USPS", "DHL", "AMAZON", "ONTRAC", "LASERSHIP", "GLS", "OTHER"] as const;
 const AiTrackingSchema = z.object({
   shipments: z.array(z.object({ carrier: z.enum(CARRIERS), tracking_number: z.string() })),
   track_link: z.string().nullable(),
 });
 export const AI_TRACKING_SYSTEM = `You read one shipping email a retailer sent about an order. Return:
-- shipments: every carrier tracking number printed in the email, with its carrier (UPS, FEDEX, USPS, DHL, AMAZON, ONTRAC, LASERSHIP, else OTHER). Copy each number exactly as printed. Never return an order number, invoice number, reference number, SKU, phone number or ZIP code. Return [] when the email prints none.
+- shipments: every carrier tracking number printed in the email, with its carrier (UPS, FEDEX, USPS, DHL, AMAZON, ONTRAC, LASERSHIP, GLS, else OTHER). Copy each number exactly as printed. Never return an order number, invoice number, reference number, SKU, phone number or ZIP code. Return [] when the email prints none.
 - track_link: when no number is printed, the exact URL of the email's "track your order / track package" link, copied from the email; else null.`;
 
 export type TrackingAiCall = (subject: string, text: string) => Promise<{ shipments: Array<{ carrier: string; tracking_number: string }>; track_link: string | null; input_tokens: number; output_tokens: number }>;

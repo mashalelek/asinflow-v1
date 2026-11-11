@@ -172,7 +172,7 @@ export function createTrackingRouter(deps: { query?: QueryLike } = {}): Router {
   });
 
   const isUuid = (v: string) => /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(v);
-  const CARRIERS = new Set(["UPS", "FEDEX", "USPS", "DHL", "AMAZON", "ONTRAC", "LASERSHIP", "OTHER"]);
+  const CARRIERS = new Set(["UPS", "FEDEX", "USPS", "DHL", "AMAZON", "ONTRAC", "LASERSHIP", "GLS", "OTHER"]);
 
   router.get("/api/pos/:id/tracking", async (req: Request, res: Response) => {
     const poId = String(req.params.id ?? "");
@@ -197,7 +197,7 @@ export function createTrackingRouter(deps: { query?: QueryLike } = {}): Router {
     const poId = String(req.params.id ?? "");
     const carrier = String(req.body?.carrier ?? "").trim().toUpperCase();
     const tn = String(req.body?.tracking_number ?? "").trim().toUpperCase().replace(/\s+/g, "");
-    if (!isUuid(poId) || !CARRIERS.has(carrier) || !/^[0-9A-Z]{8,34}$/.test(tn)) { res.status(400).json({ error: "invalid_input", message: "carrier must be one of UPS FEDEX USPS DHL AMAZON ONTRAC LASERSHIP OTHER; tracking 8–34 letters / digits" }); return; }
+    if (!isUuid(poId) || !CARRIERS.has(carrier) || !/^[0-9A-Z]{8,34}$/.test(tn)) { res.status(400).json({ error: "invalid_input", message: "carrier must be one of UPS FEDEX USPS DHL AMAZON ONTRAC LASERSHIP GLS OTHER; tracking 8–34 letters / digits" }); return; }
     try {
       const po = (await query(`SELECT id, supplier, order_id FROM purchase_orders WHERE id = $1`, [poId])).rows[0];
       if (!po) { res.status(404).json({ error: "po_not_found" }); return; }

@@ -7,7 +7,9 @@
 // baseOrderId: AF's "_N" (a second PO for one retailer order, D4) removed.
 // stripShipmentSuffix: a retailer's trailing -N / _N shipment or re-key
 // suffix of 1–2 digits removed (WorldPantry 70633076-1, Velocity
-// CAR118805142_1).
+// CAR118805142_1), or a trailing -YYYYMMDD ship-date suffix (Summit
+// Racing's Narvar notice prints 2392393-20261004 for order 2392393;
+// 2026-11-11).
 // orderIdParts: an AF order_id holding two ids ("115449859 / 115450009")
 // yields both, each without its "_N".
 
@@ -18,7 +20,7 @@ export const stripOrderPrefix = (s: string): string => s.replace(PREFIX, "").rep
 export const normOrder = (s: string): string => stripOrderPrefix(s).toUpperCase().replace(/[^A-Z0-9]/g, "");
 /** D4: AF's "_N" suffix (a second PO for one retailer order) matches on the base id. */
 export const baseOrderId = (orderId: string): string => orderId.trim().replace(/_\d+$/, "");
-export const stripShipmentSuffix = (s: string): string => s.trim().replace(/[-_]\d{1,2}$/, "");
+export const stripShipmentSuffix = (s: string): string => s.trim().replace(/[-_](?:\d{1,2}|20\d{6})$/, "");
 /** Every id an AF order_id field holds ("115449859 / 115450009" → both). */
 export const orderIdParts = (orderId: string): string[] => orderId.split(/\s*[/,]\s*/).map(baseOrderId).filter(Boolean);
 

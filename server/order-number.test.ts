@@ -80,3 +80,14 @@ describe("posNamedInText (2026-11-04)", () => {
     expect(posNamedInText("x1150000098595", pos, "supplier")).toEqual([]);
   });
 });
+
+describe("a trailing -YYYYMMDD ship-date suffix is a shipment suffix (Summit Racing's Narvar notice, 2026-11-11)", () => {
+  it("2392393-20261004 and 2392393 share the base key; a 1–2 digit suffix still does; other suffixes do not", async () => {
+    const { orderBaseKey, stripShipmentSuffix } = await import("./order-number");
+    expect(stripShipmentSuffix("2392393-20261004")).toBe("2392393");
+    expect(orderBaseKey("2392393-20261004")).toBe(orderBaseKey("0412645-20260910").length ? "2392393" : "");
+    expect(orderBaseKey("412645-20260910")).toBe("412645");
+    expect(orderBaseKey("70633076-1")).toBe("70633076");
+    expect(orderBaseKey("2392393-31372115")).toBe("239239331372115");
+  });
+});

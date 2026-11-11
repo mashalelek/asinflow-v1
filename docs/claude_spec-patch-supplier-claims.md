@@ -344,6 +344,32 @@ status, `est_delivery_date`, timestamped scans, a return flag and
   POs rely on the "nothing after 14 days" rule.
 - Backfill over existing placeholders (dry run → report → live).
 
+   **Built 2026-11-11 (commit 3; no migration).** What the 41 emails
+   actually hold, against the text above: (a) Walgreens' three "adjusted
+   and has shipped" emails print no number at all — every item was
+   canceled (shipped list empty, $0.00); the carrier word is there, so the
+   existing "named carrier + 12 digits" rule would read a number if one
+   were printed; nothing to fix, a fixture proves the placeholder; (b)
+   Harbor Freight's number is schema.org ParcelDelivery microdata
+   (parcelLab), not a link — read from the raw HTML; (c) Duluth's click
+   tracker answers 404 to HEAD and redirects only a GET — the follow now
+   retries as GET (body never read); (d) Summit Racing's Narvar notice
+   links its tracking page from "View Up-to-Date Order Details" — a
+   per-domain anchor rule follows every `cta.narvar.com` anchor; (e) Ace
+   (403 bot challenge), Lowe's (403; the email names FDXGND and prints
+   nothing — "TPSD…" is the item's model #), Zara ("tracking not
+   available" for these old orders; the order page needs a login),
+   Typology (Klaviyo → account page), Shopify stores (Golden Waffles, Café
+   Mam, Equal Exchange: order status needs a login), ui.com (scripted order
+   page) stay placeholders — no landing page had to be read for any
+   resolvable case, so the body is still never read; (f) GLS added;
+   (g) a placeholder is replaced in place by any real row for the same
+   sender + order base key (a `-YYYYMMDD` suffix stripped; a Narvar sender
+   = its retailer) — 14 of the 41 were already answered by a later email.
+   Production dry run: 14 replaced · 2 resolved now (Duluth, Summit — UPS)
+   · 23 stay · 2 dismissed; `docs/tracking-placeholders-dry-run-2026-11-11.csv`.
+   Live run waits for Maria.
+
 ## 4. Data
 
 Verified against migrations 028–099. Stored base for every quantity: Individual units (D17).

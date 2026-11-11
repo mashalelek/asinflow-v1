@@ -17,7 +17,8 @@
 //   - Michaels' "Your Order Has Shipped" carries only its own 33-digit
 //     shipment ids, no carrier tracking — nothing is extracted (→ AI / queue).
 
-export type Carrier = "UPS" | "FEDEX" | "USPS" | "DHL" | "AMAZON" | "ONTRAC" | "LASERSHIP" | "OTHER";
+export type Carrier = "UPS" | "FEDEX" | "USPS" | "DHL" | "AMAZON" | "ONTRAC" | "LASERSHIP" | "GLS" | "OTHER";
+export const CARRIERS: readonly Carrier[] = ["UPS", "FEDEX", "USPS", "DHL", "AMAZON", "ONTRAC", "LASERSHIP", "GLS", "OTHER"];
 
 export interface ParsedShipment { carrier: Carrier; trackingNumber: string; items: Array<{ name: string; qty: number }> }
 
@@ -137,7 +138,14 @@ export function extractOrderIds(subject: string, text: string): string[] {
 const CARRIER_WORD: Array<[RegExp, Carrier]> = [
   [/\bfed\s?ex\b/i, "FEDEX"], [/\bups\b/i, "UPS"], [/\busps\b|postal service/i, "USPS"], [/\bdhl\b/i, "DHL"],
   [/\bontrac\b/i, "ONTRAC"], [/\blaser\s?ship\b/i, "LASERSHIP"], [/\bamazon\s+logistics\b/i, "AMAZON"],
+  [/\bgls\b/i, "GLS"], // Zara's US parcels (claims patch §3.10, 2026-11-11)
 ];
+/** A carrier named in prose or markup ("UPS", "FedEx Ground", "United Parcel Service" is not read) → Carrier, else null. */
+export function carrierFromName(name: string | null | undefined): Carrier | null {
+  if (!name) return null;
+  for (const [re, c] of CARRIER_WORD) if (re.test(name)) return c;
+  return null;
+}
 const carrierFromContext = (ctx: string): Carrier | null => {
   let best: { c: Carrier; at: number } | null = null;
   for (const [re, c] of CARRIER_WORD) {
@@ -172,6 +180,7 @@ function classify(token: string, ctxCarrier: Carrier | null, hasLabel: boolean):
   if (ctxCarrier === "DHL" && n >= 10 && n <= 11) return "DHL";
   if (ctxCarrier === "UPS" && n >= 9 && n <= 34) return "UPS"; // UPS Mail Innovations / SurePost ride USPS-shaped numbers
   if (ctxCarrier === "FEDEX" && [12, 15, 20, 22, 34].includes(n)) return "FEDEX";
+  if (ctxCarrier === "GLS" && n >= 8 && n <= 20) return "GLS";
   if (ctxCarrier) return [10, 12, 15, 20, 22, 26, 30, 34].includes(n) ? ctxCarrier : null;
   if (n >= 20 && n <= 22 && token.startsWith("9")) return "USPS";
   if ([12, 15, 20, 22, 34].includes(n)) return "FEDEX";
@@ -259,7 +268,59 @@ function unwrapForward(fromDomain: string | null, text: string): string | null {
   return m ? m[1].toLowerCase() : fromDomain;
 }
 
-export function parseTrackingEmail(msg: { subject: string; text: string; fromDomain: string | null }): ParsedEmail {
+// ── schema.org ParcelDelivery (2026-11-11, claims patch §3.10) ─────────────
+// parcelLab's shipping notices (Harbor Freight "Your Shipment is heading your
+// way shortly") carry the number only as hidden microdata: a display:none
+// <div itemtype="http://schema.org/ParcelDelivery"> with the carrier's name,
+// <meta itemprop="trackingNumber" content="1Z…"> and the trackingUrl —
+// htmlToText drops it all. Google's shipping markup; some senders use the
+// JSON-LD form instead. Read from the raw HTML (gmail-client.ts), pure.
+export interface ParcelDelivery { carrier: string | null; trackingNumber: string; trackingUrl: string | null }
+
+const unesc = (s: string) => s.replace(/&amp;/gi, "&").replace(/&quot;/gi, "\"").replace(/&#39;/g, "'");
+const propContent = (block: string, prop: string): string | null => {
+  const m = new RegExp(`<[^>]*\\bitemprop\\s*=\\s*["']${prop}["'][^>]*\\b(?:content|href)\\s*=\\s*["']([^"']+)["']`, "i").exec(block)
+    ?? new RegExp(`<[^>]*\\b(?:content|href)\\s*=\\s*["']([^"']+)["'][^>]*\\bitemprop\\s*=\\s*["']${prop}["']`, "i").exec(block)
+    ?? new RegExp(`<([a-z]+)[^>]*\\bitemprop\\s*=\\s*["']${prop}["'][^>]*>([^<]{1,200})<`, "i").exec(block);
+  const v = m ? (m.length === 3 ? m[2] : m[1]) : null;
+  return v ? unesc(v).trim() : null;
+};
+/** Pure: every ParcelDelivery the HTML marks up (microdata, then JSON-LD), distinct by number. */
+export function parcelDeliveries(html: string): ParcelDelivery[] {
+  const out: ParcelDelivery[] = [];
+  const add = (carrier: string | null, number: string | null, url: string | null) => {
+    const n = number?.trim().toUpperCase() ?? "";
+    if (!/^[0-9A-Z]{8,34}$/.test(n) || out.some((x) => x.trackingNumber === n)) return;
+    out.push({ carrier: carrier?.trim() || null, trackingNumber: n, trackingUrl: url });
+  };
+  // microdata: each ParcelDelivery block runs to the next one (or 6,000 characters)
+  const starts = Array.from(html.matchAll(/itemtype\s*=\s*["']https?:\/\/schema\.org\/ParcelDelivery["']/gi)).map((m) => m.index!);
+  starts.forEach((at, i) => {
+    const block = html.slice(at, Math.min(starts[i + 1] ?? html.length, at + 6000));
+    const carrierBlock = /itemprop\s*=\s*["']carrier["'][\s\S]{0,600}/i.exec(block)?.[0] ?? "";
+    add(propContent(carrierBlock, "name"), propContent(block, "trackingNumber"), propContent(block, "trackingUrl"));
+  });
+  // JSON-LD
+  for (const m of Array.from(html.matchAll(/<script[^>]*type\s*=\s*["']application\/ld\+json["'][^>]*>([\s\S]*?)<\/script>/gi))) {
+    let data: unknown;
+    try { data = JSON.parse(m[1].trim()); } catch { continue; }
+    const walk = (v: unknown): void => {
+      if (Array.isArray(v)) { v.forEach(walk); return; }
+      if (!v || typeof v !== "object") return;
+      const o = v as Record<string, unknown>;
+      const t = o["@type"];
+      if (t === "ParcelDelivery" || (Array.isArray(t) && t.includes("ParcelDelivery"))) {
+        const c = o.carrier as Record<string, unknown> | string | undefined;
+        add(typeof c === "string" ? c : (c?.name as string | undefined) ?? null, o.trackingNumber as string | undefined ?? null, (o.trackingUrl as string | undefined) ?? null);
+      }
+      for (const k of Object.keys(o)) walk(o[k]);
+    };
+    walk(data);
+  }
+  return out;
+}
+
+export function parseTrackingEmail(msg: { subject: string; text: string; fromDomain: string | null; parcelDeliveries?: ParcelDelivery[] | null }): ParsedEmail {
   const text = msg.text.replace(/&#x([0-9a-f]+);/gi, (_, h) => String.fromCharCode(parseInt(h, 16)));
   const all = `${msg.subject}\n${text}`;
   const orderIds = extractOrderIds(msg.subject, text);
@@ -268,6 +329,16 @@ export function parseTrackingEmail(msg: { subject: string; text: string; fromDom
     carrier: f.carrier, trackingNumber: f.trackingNumber,
     items: extractItems(text.slice(f.at, i + 1 < found.length ? found[i + 1].at : undefined)),
   }));
+  // The markup's ParcelDelivery when the text printed nothing (parcelLab / Harbor Freight): carrier by its name,
+  // else by the tracking URL's host, else by the number's shape.
+  if (shipments.length === 0) {
+    const orders = new Set(orderIds.map(norm));
+    for (const p of msg.parcelDeliveries ?? []) {
+      if (orders.has(norm(p.trackingNumber))) continue;
+      const fromUrl = p.trackingUrl ? carrierFromHost(p.trackingUrl) : null;
+      shipments.push({ carrier: carrierFromName(p.carrier) ?? fromUrl ?? carrierForNumber(p.trackingNumber), trackingNumber: p.trackingNumber, items: [] });
+    }
+  }
   const kind: ParsedEmail["kind"] = isReturnEmail(msg.subject, text) ? "return"
     : /\bdelivered\b/i.test(msg.subject) ? "delivered"
     : /out for delivery/i.test(msg.subject) ? "out_for_delivery"

@@ -9,7 +9,7 @@
 // backfill) import this directly.
 import { readFileSync } from "fs";
 import { google, type gmail_v1 } from "googleapis";
-import { extractOrderIds } from "./tracking-parse";
+import { extractOrderIds, parcelDeliveries, type ParcelDelivery } from "./tracking-parse";
 
 export const GMAIL_SUBJECT = process.env.GMAIL_SUBJECT || "orders@coastalqualitygoods.com";
 export const GMAIL_SCOPE = "https://www.googleapis.com/auth/gmail.readonly";
@@ -37,6 +37,10 @@ export interface GmailMessage {
   text: string;
   /** HTML anchors that say "track" (anchor text first, then href) — htmlToText drops hrefs (2026-10-22). */
   trackLinks?: string[];
+  /** Every http(s) anchor href, in order, de-duplicated, at most MAX_ANCHORS — the per-domain anchor rules read them (2026-11-11). */
+  links?: string[];
+  /** schema.org ParcelDelivery markup in the HTML (parcelLab / Harbor Freight print the number only there; 2026-11-11). */
+  parcelDeliveries?: ParcelDelivery[];
   labelIds: string[];
 }
 
@@ -69,6 +73,16 @@ export function htmlToText(html: string): string {
     .trim();
 }
 
+export const MAX_ANCHORS = 80;
+/** Pure: every http(s) anchor href in the HTML, in order, de-duplicated, capped. */
+export function anchorHrefs(html: string): string[] {
+  const out: string[] = [];
+  for (const m of Array.from(html.matchAll(/<a\b[^>]*?\bhref\s*=\s*(["'])(https?:\/\/[^"']+)\1/gi))) {
+    const href = m[2].replace(/&amp;/gi, "&");
+    if (!out.includes(href)) { out.push(href); if (out.length >= MAX_ANCHORS) break; }
+  }
+  return out;
+}
 /** Pure: hrefs of the HTML's anchors whose text — then whose URL — says "track", de-duplicated, in order. */
 export function trackAnchors(html: string): string[] {
   const byText: string[] = [], byHref: string[] = [];
@@ -116,7 +130,11 @@ export function parseGmailMessage(m: gmail_v1.Schema$Message): GmailMessage {
   return {
     id: String(m.id), threadId: m.threadId ?? null,
     date: new Date(Number(m.internalDate ?? 0)),
-    from, fromDomain, subject, text, trackLinks: parts.html.length ? trackAnchors(parts.html.join("\n")) : [], labelIds: m.labelIds ?? [],
+    from, fromDomain, subject, text,
+    trackLinks: parts.html.length ? trackAnchors(parts.html.join("\n")) : [],
+    links: parts.html.length ? anchorHrefs(parts.html.join("\n")) : [],
+    parcelDeliveries: parts.html.length ? parcelDeliveries(parts.html.join("\n")) : [],
+    labelIds: m.labelIds ?? [],
   };
 }
 

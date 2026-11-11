@@ -132,3 +132,55 @@ describe("a UPS reference number is never a tracking number (2026-11-04)", () =>
     expect(extractTracking(text, []).map((x) => x.trackingNumber)).toEqual(["1ZV5503JYW00243199"]);
   });
 });
+
+// ── Claims patch §3.10 (2026-11-11): the placeholder senders ────────────────
+describe("tracking parser fix (claims patch §3.10, 2026-11-11)", () => {
+  it("schema.org ParcelDelivery microdata (parcelLab / Harbor Freight): the number and the carrier's name, hidden from the text", async () => {
+    const { parcelDeliveries, parseTrackingEmail: parse2 } = await import("./tracking-parse");
+    const m = fx("harborfreight-parcellab-microdata");
+    const pd = parcelDeliveries(m.html);
+    expect(pd).toEqual([{ carrier: "UPS", trackingNumber: "1ZH0263W1410374676", trackingUrl: expect.stringContaining("track-order/243111366?number=1ZH0263W1410374676&s=SCRUBBED") }]);
+    // the text alone prints nothing — the markup fills the shipment; the order # is the subject-less body's
+    expect(parse2(m).shipments).toEqual([]);
+    const p = parse2({ ...m, parcelDeliveries: pd });
+    expect(p.orderIds).toEqual(["243111366"]);
+    expect(p.shipments).toEqual([{ carrier: "UPS", trackingNumber: "1ZH0263W1410374676", items: [] }]);
+    expect(p.candidate).toBe(true);
+  });
+  it("JSON-LD ParcelDelivery; carrier by name, else by the tracking URL's host, else by shape; an order # is never taken", async () => {
+    const { parcelDeliveries, parseTrackingEmail: parse2 } = await import("./tracking-parse");
+    const html = `<script type="application/ld+json">{"@context":"http://schema.org","@type":"ParcelDelivery","trackingNumber":"9400110200830123456789","carrier":{"@type":"Organization","name":"United States Postal Service USPS"},"partOfOrder":{"@type":"Order","orderNumber":"5001"}}</script>
+      <div itemscope itemtype="http://schema.org/ParcelDelivery"><meta itemprop="trackingNumber" content="394837261504"><link itemprop="trackingUrl" href="https://www.fedex.com/fedextrack/?trknbr=394837261504"></div>
+      <div itemscope itemtype="http://schema.org/ParcelDelivery"><meta itemprop="trackingNumber" content="5001"></div>`;
+    // microdata first, then JSON-LD; the third block's "number" is the order # — an 8–34 character token, kept here, dropped by the parser below
+    expect(parcelDeliveries(html)).toEqual([
+      { carrier: null, trackingNumber: "394837261504", trackingUrl: "https://www.fedex.com/fedextrack/?trknbr=394837261504" },
+      { carrier: "United States Postal Service USPS", trackingNumber: "9400110200830123456789", trackingUrl: null },
+    ]);
+    const p = parse2({ subject: "Your order 5001 has shipped", text: "Order #5001 shipped.", fromDomain: "x.com", parcelDeliveries: [...parcelDeliveries(html), { carrier: null, trackingNumber: "5001", trackingUrl: null }, { carrier: null, trackingNumber: "1Z999AA10123456784", trackingUrl: null }] });
+    expect(p.shipments.map((s) => `${s.carrier}:${s.trackingNumber}`)).toEqual(["FEDEX:394837261504", "USPS:9400110200830123456789", "UPS:1Z999AA10123456784"]);
+  });
+  it("GLS is a carrier: a number after the word GLS; carrierFromName", async () => {
+    const { carrierFromName } = await import("./tracking-parse");
+    expect(extractTracking("Your parcel ships with GLS. Tracking number: 56830412345", [])).toEqual([expect.objectContaining({ carrier: "GLS", trackingNumber: "56830412345" })]);
+    expect(carrierFromName("GLS US")).toBe("GLS");
+    expect(carrierFromName("FedEx Ground")).toBe("FEDEX");
+    expect(carrierFromName("Acme Couriers")).toBeNull();
+  });
+  it("Walgreens 'adjusted and has shipped': FedEx named, the shipped list empty (every item canceled) — no number, a placeholder", () => {
+    const m = fx("walgreens-adjusted-all-canceled");
+    const p = parseTrackingEmail(m);
+    expect(p).toMatchObject({ candidate: true, kind: "shipped", orderIds: ["326702397598"], shipments: [] });
+    expect(rowsFromEmail({ id: "w", threadId: null, date: new Date(m.date), subject: m.subject }, p)).toEqual([expect.objectContaining({ tracking_number: "email:mktx.walgreens.com:326702397598", match_reason: "ai_disabled" })]);
+  });
+  it("Lowe's: 'Shipping Method FDXGND' names FedEx Ground, no number, no tracking link — a placeholder; the order # is the 18-digit one", () => {
+    const m = fx("lowes-fdxgnd-no-link");
+    const p = parseTrackingEmail(m);
+    expect(p).toMatchObject({ candidate: true, kind: "shipped", orderIds: ["411012372371447335"], shipments: [] });
+    expect(m.trackLinks).toEqual([]);
+  });
+  it("Summit Racing through Narvar: the text prints the order # with its ship-date suffix and no number", () => {
+    const p = parseTrackingEmail(fx("summit-narvar-anchors"));
+    expect(p).toMatchObject({ candidate: true, kind: "shipped", orderIds: ["3403404-20261004"], shipments: [] });
+  });
+});

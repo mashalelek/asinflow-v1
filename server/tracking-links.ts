@@ -6,10 +6,12 @@
 // 3500109099878917; USPS 9200190288079111507345 on another shipment).
 //
 // Mechanism: find the extractor's links after its label, follow the redirect
-// chain WITHOUT rendering — HEAD with redirect:"manual" (GET if HEAD is
-// refused; the body is never read), Location by Location, ≤ 5 hops — until a
-// URL matches the final pattern; take the parameter; the carrier comes from
-// the number's shape. Nothing is sent but the click-tracker request itself.
+// chain WITHOUT rendering — HEAD with redirect:"manual" (GET when HEAD gives
+// no Location: refused, or a click tracker that answers 404 / 200 to HEAD and
+// redirects only a GET — Duluth, Klaviyo, Shopify, 2026-11-11; the body is
+// never read), Location by Location, ≤ 5 hops — until a URL matches the
+// final pattern; take the parameter; the carrier comes from the number's
+// shape. Nothing is sent but the click-tracker request itself.
 import { carrierForNumber, extractTracking, type Carrier } from "./tracking-parse";
 
 export interface LinkExtractor {
@@ -50,16 +52,63 @@ export async function followToFinal(url: string, final: RegExp | ((u: string) =>
   let cur = url;
   for (let hop = 0; hop <= MAX_HOPS; hop++) {
     if (ok(cur)) return cur;
-    let r = await fetchFn(cur, { method: "HEAD", redirect: "manual" });
-    if (r.status === 405 || r.status === 403 || r.status === 501) {
-      r = await fetchFn(cur, { method: "GET", redirect: "manual" });
-      await r.body?.cancel?.().catch(() => {});
-    }
+    const r = await hopOnce(cur, fetchFn);
     const loc = r.headers.get("location");
     if (!loc || r.status < 300 || r.status >= 400) return null;
     cur = new URL(loc.replace(/&amp;/g, "&"), cur).toString();
   }
   return ok(cur) ? cur : null;
+}
+
+/** One hop: HEAD, then GET (body cancelled, never read) when HEAD did not redirect — many click trackers only redirect a GET. */
+async function hopOnce(url: string, fetchFn: FetchLike) {
+  let r = await fetchFn(url, { method: "HEAD", redirect: "manual" });
+  if (!(r.status >= 300 && r.status < 400 && r.headers.get("location"))) {
+    r = await fetchFn(url, { method: "GET", redirect: "manual" });
+    await r.body?.cancel?.().catch(() => {});
+  }
+  return r;
+}
+
+/** Where a link ends (the backfill report's "why it stays a placeholder"): the last URL and its status. */
+export async function followDiagnostic(url: string, fetchFn: FetchLike = fetch as any): Promise<{ final: string; status: number; hops: number }> {
+  let cur = url; let status = 0;
+  for (let i = 0; i <= MAX_HOPS; i++) {
+    let r: Awaited<ReturnType<FetchLike>>;
+    try { r = await hopOnce(cur, fetchFn); } catch { return { final: cur, status: -1, hops: i }; }
+    status = r.status;
+    const loc = r.headers.get("location");
+    if (!loc || r.status < 300 || r.status >= 400) return { final: cur, status, hops: i };
+    cur = new URL(loc.replace(/&amp;/g, "&"), cur).toString();
+  }
+  return { final: cur, status, hops: MAX_HOPS + 1 };
+}
+/** Pure: the reason a followed link yielded no number, from where it ended. */
+export function linkOutcome(d: { final: string; status: number }): string {
+  let host = d.final; try { host = new URL(d.final).host; } catch { /* keep */ }
+  if (d.status === -1) return `${host}: request failed`;
+  if (/tracking-not-available/i.test(d.final)) return `${host}: tracking page says not available`;
+  if (/log[io]n|sign-?in|login_required|\/account\/|\/authenticate|\/callback\?/i.test(d.final)) return `${host}: needs a login`;
+  if (d.status === 403 || d.status === 503 || d.status === 429) return `${host}: blocked (${d.status})`;
+  if (d.status >= 400) return `${host}: ${d.status}`;
+  return `${host}: page carries no number in its URL`;
+}
+
+// ── Per-domain anchor rules (2026-11-11, claims patch §3.10) ────────────────
+// Some senders' tracking anchor says nothing like "track" ("View Up-to-Date
+// Order Details" — Summit Racing through Narvar's CTA click tracker), so
+// trackAnchors misses it. For these senders every anchor matching the rule
+// is a candidate (the message's `links`), capped per rule.
+export interface AnchorRule { domain: string; href: RegExp; max: number }
+export const ANCHOR_RULES: readonly AnchorRule[] = [
+  { domain: "narvar.com", href: /^https?:\/\/cta\.narvar\.com\/f\/a\//i, max: 20 },
+];
+/** The sender's rule links among the message's anchors (none for a sender without a rule). */
+export function ruleAnchors(senderDomain: string | null, links: readonly string[]): string[] {
+  if (!senderDomain) return [];
+  const reg = senderDomain.toLowerCase().split(".").slice(-2).join(".");
+  const rule = ANCHOR_RULES.find((r) => r.domain === reg);
+  return rule ? links.filter((u) => rule.href.test(u)).slice(0, rule.max) : [];
 }
 
 /** The links an extractor follows in one email, de-duplicated, in order. */
@@ -105,8 +154,8 @@ const GENERIC_LABEL = /\btrack(?:ing)?\b[^\n]{0,40}/gi;
 const ANY_URL = /https?:\/\/[^\s)>"'\]]+/gi;
 export const GENERIC_MAX_LINKS = 6;
 
-/** The candidate tracking links in an email, in order, de-duplicated: the HTML's "track" anchors, then the text's. */
-export function genericTrackingLinks(text: string, anchors: readonly string[] = []): string[] {
+/** The candidate tracking links in an email, in order, de-duplicated: the HTML's "track" anchors, then the text's (≤ GENERIC_MAX_LINKS), then the sender's rule anchors (their own cap). */
+export function genericTrackingLinks(text: string, anchors: readonly string[] = [], ruleLinks: readonly string[] = []): string[] {
   const out: string[] = [];
   const push = (u: string) => { const c = u.replace(/&amp;/g, "&"); if (!out.includes(c) && out.length < GENERIC_MAX_LINKS) out.push(c); };
   for (const a of anchors) push(a);
@@ -117,6 +166,7 @@ export function genericTrackingLinks(text: string, anchors: readonly string[] = 
     if (hit && hit.index <= LINK_WINDOW) push(hit[0]);
   }
   for (const m of Array.from(text.matchAll(ANY_URL))) if (/track/i.test(m[0])) push(m[0]);
+  for (const u of ruleLinks) { const c = u.replace(/&amp;/g, "&"); if (!out.includes(c)) out.push(c); }
   return out;
 }
 
@@ -127,9 +177,9 @@ const numbersInUrl = (u: string, orderIds: string[]) => {
 };
 
 /** Tracking numbers behind any sender's tracking links. */
-export async function extractGenericLinkTracking(text: string, orderIds: string[], fetchFn: FetchLike = fetch as any, anchors: readonly string[] = []): Promise<Array<{ carrier: Carrier; trackingNumber: string }>> {
+export async function extractGenericLinkTracking(text: string, orderIds: string[], fetchFn: FetchLike = fetch as any, anchors: readonly string[] = [], ruleLinks: readonly string[] = []): Promise<Array<{ carrier: Carrier; trackingNumber: string }>> {
   const out: Array<{ carrier: Carrier; trackingNumber: string }> = [];
-  for (const link of genericTrackingLinks(text, anchors)) {
+  for (const link of genericTrackingLinks(text, anchors, ruleLinks)) {
     let finalUrl: string | null = null;
     try { finalUrl = await followToFinal(link, (u) => numbersInUrl(u, orderIds).length > 0, fetchFn); } catch { finalUrl = null; }
     if (!finalUrl) continue;

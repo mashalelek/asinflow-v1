@@ -35,6 +35,7 @@ export function carrierTrackingUrl(carrier: string, n: string): string | null {
     case "DHL": return `https://www.dhl.com/us-en/home/tracking.html?tracking-id=${e}`;
     case "AMAZON": return `https://track.amazon.com/tracking/${e}`;
     case "ONTRAC": case "LASERSHIP": return `https://www.ontrac.com/tracking/?number=${e}`;
+    case "GLS": return `https://www.gls-us.com/tracking?trackingNumber=${e}`;
     default: return null;
   }
 }
@@ -159,7 +160,7 @@ export function PoTrackingTab({ poId, onChanged, perProductUnit }: { poId: strin
       <div className="flex items-center gap-2 text-xs" data-testid="add-tracking">
         <span className="text-muted-foreground">Add tracking</span>
         <select className="h-7 rounded border px-1" value={carrier} onChange={(e) => setCarrier(e.target.value)}>
-          {["UPS", "FEDEX", "USPS", "DHL", "AMAZON", "ONTRAC", "LASERSHIP", "OTHER"].map((c) => <option key={c}>{c}</option>)}
+          {["UPS", "FEDEX", "USPS", "DHL", "AMAZON", "ONTRAC", "LASERSHIP", "GLS", "OTHER"].map((c) => <option key={c}>{c}</option>)}
         </select>
         <input className="h-7 w-56 rounded border px-2 font-mono" placeholder="tracking number" value={number} onChange={(e) => setNumber(e.target.value)} />
         <Button size="sm" className="h-7 text-xs" disabled={!number.trim()} onClick={() => void add()}>Add</Button>

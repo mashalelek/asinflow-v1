@@ -173,7 +173,11 @@ queue as `ai_disabled`; with it, each pass reads the placeholders that name
 one AF PO (`server/tracking-ai.ts`, ≤ 25 Haiku calls, logged as
 `tracking_fallback`; `npm run backfill:tracking -- --stage ai [--live]`).
 A replacement order's tracking attaches to the original PO with a note
-(`server/tracking-replacement.ts`); `tsx script/attach-tracking.ts` is the
+(`server/tracking-replacement.ts`); `npm run backfill:tracking -- --stage
+placeholders [--prod] [--live]` re-reads every open "email:" placeholder
+through the parser (schema.org ParcelDelivery markup, anchor rules,
+GET-only click trackers) and drops those a later real row already
+answers (SPEC §26 "Tracking parser fix", 2026-11-11; dry run by default); `tsx script/attach-tracking.ts` is the
 queue's Attach / Dismiss from the shell (dry run by default). `npm run velocity:tracking-probe -- --order <id>
 --carrier <c> --tracking <n[,n]> [--live]` — read-only without `--live`.
 Velocity's PUT takes `trackingNumbers` as plain strings (probe 2026-10-21).
