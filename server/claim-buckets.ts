@@ -41,8 +41,11 @@ export function bucketCounts(rows: ReadonlyArray<{ bucket: ClaimBucket }>): Reco
 }
 
 /**
- * The timer sweep: for every open claim with no open task whose timer ran out, create the timeout task (once — one open per
- * kind per claim; a snooze holds it). Returns the tasks created.
+ * The timer sweep: for every open claim with NO open task (Maria 2026-11-11: any open task — a Needs attention task or a
+ * passive tick — holds the timer, so a claim never gets a Follow up / Check on it on top of one) whose timer ran out,
+ * create the timeout task with the reason (once; a snooze holds it). Runs in every scheduled pass (component 30,
+ * `30_claim_timers`, so the POs list's Claims column and the Dashboard never lag) and when the Claims page loads
+ * (`GET /api/claims`). Returns the tasks created.
  */
 export async function sweepClaimTimers(query: QueryLike, now = new Date(), userId: number | null = null): Promise<Array<{ claim_id: number; kind: string; reason: string }>> {
   const created: Array<{ claim_id: number; kind: string; reason: string }> = [];

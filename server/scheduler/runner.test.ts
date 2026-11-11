@@ -20,9 +20,10 @@ import { ASIN_CHECKPOINT_EVERY, ComponentError } from "./types";
 setRunnerLogger(() => {});
 
 describe("the component sequence is fixed", () => {
-  // 1–21 (scheduler v1) + the listing-hygiene components (SPEC §11, 2026-10-19) + PO tracking 25–26 + the confirmation reconcile 27 (2026-10-31).
-  const SEQUENCE = Array.from({ length: 29 }, (_, i) => i + 1);
-  it("the components, numbered in array order, daily block = 2..8 + 22–24 (listing hygiene) + 25–28 (PO tracking, confirmations, subscriptions), hourly otherwise (29 PO documents is hourly)", () => {
+  // 1–21 (scheduler v1) + the listing-hygiene components (SPEC §11, 2026-10-19) + PO tracking 25–26 + the confirmation reconcile 27 (2026-10-31)
+  // + subscriptions 28 + PO documents 29 (2026-11-04) + claim timers 30 (2026-11-11).
+  const SEQUENCE = Array.from({ length: 30 }, (_, i) => i + 1);
+  it("the components, numbered in array order, daily block = 2..8 + 22–24 (listing hygiene) + 25–28 (PO tracking, confirmations, subscriptions), hourly otherwise (29 PO documents and 30 claim timers are hourly)", () => {
     expect(COMPONENTS.map((c) => c.n)).toEqual(SEQUENCE);
     expect(COMPONENTS.filter((c) => c.tier === "daily").map((c) => c.n)).toEqual([2, 3, 4, 5, 6, 7, 8, 22, 23, 24, 25, 26, 27, 28]);
     expect(COMPONENTS[0].key).toBe("01_sc_discovery");

@@ -2320,6 +2320,7 @@ the ledger stage is the `refresh_runs.stage` key the component writes.
 | 27 | PO confirmation reconcile (§26 "Confirmation emails", 2026-10-31) | daily | Gmail API (orders@) — no AI | `27_po_confirmations` | order-confirmation mail since the watermark vs AF POs, and §27 renewal POs for unmatched confirmations; **00:00 pass only**, after 26; manual: `POST /api/pos/reconcile-confirmations` |
 | 28 | Subscription alerts (§27, 2026-10-31) | daily | none (AF tables) | `28_subscriptions` | every subscription; "Subscription renews" raised / cleared; **00:00 pass only**, after 27 |
 | 29 | PO documents (§22 "PO documents", 2026-11-04) | hourly | Gmail API (orders@) + Drive API (Invoices root, as Maria) + headless Chromium | `29_po_documents` | order-confirmation / shipped / delivered mail since the watermark, rendered to PDF and saved to Drive; every pass also links PDFs saved by hand (D1; the 00:00 pass only until 2026-11-05); a document not saved fails the component (2026-11-05); **scheduled passes only** (00:00 and hourly), after 28; manual: `npm run po-docs` |
+| 30 | Claim timers (§22 "Supplier claims" D7, 2026-11-11) | hourly | none (AF tables) | `30_claim_timers` | `sweepClaimTimers`: every open claim with no open task whose 5-business-day timer ran out gets `follow_up_supplier` / `check_on_it` with the reason, once — so the POs list's Claims column and the Dashboard never lag behind the Claims page (whose load runs the same sweep); **scheduled passes only**, after 29 |
 
 Dependencies the order encodes: 10 before 13 (fees need the fresh price)
 (9 before 15 was retired 2026-10-17 — the inventory snapshot's ordered_qty
@@ -6304,12 +6305,16 @@ Rules built in commit 1 (`server/supplier-claims.ts`, `shared/supplier-claim.ts`
   the column's PO date range as `from` / `to`).
 - **The one timer (D7, `sweepClaimTimers` in `server/claim-buckets.ts`):** 5 business days (Mon–Fri, America/New_York;
   `businessDaysBetween` / `addBusinessDays`) from the bucket's anchor — the report date Maria typed, the supplier's
-  confirmation, the ship date, the Velocity tick — or from the last Follow up / Check on it tick; when it runs out an
-  open claim with no open task gets `follow_up_supplier` (Waiting on supplier) or `check_on_it` with the reason ("5
-  business days: refund not posted"), once (one open per kind per claim), never while a snooze holds (`snoozed_until`).
-  The sweep runs when the Claims page loads (`GET /api/claims`), so the buckets are current when read; it writes a
-  `timed_out` event. Snooze = the task ticked now + `snoozed_until` 5 business days out (`POST
-  /api/pos/claims/tasks/:id/snooze`).
+  confirmation, the ship date, the Velocity tick — or from the last tick; when it runs out the claim gets
+  `follow_up_supplier` (Waiting on supplier) or `check_on_it` with the reason ("5 business days: refund not posted"),
+  once, never while a snooze holds (`snoozed_until`). **The timer runs only while the claim has NO open task (Maria
+  2026-11-11):** a claim in Needs attention never gets a Follow up / Check on it on top, and an open passive tick
+  (Refund received, Replacement arrived) holds it too — so a confirmed refund with its Refund received tick open sits in
+  Waiting on refund to post without a timer until the refund posts; the timer restarts when the open task is ticked
+  (any tick; the Contact supplier tick counts from the report date typed on it). The sweep runs in every scheduled
+  pass (component 30, `30_claim_timers`, §11) and when the Claims page loads (`GET /api/claims`), so the Claims page,
+  the POs list's Claims column and the Dashboard agree; it writes a `timed_out` event. Snooze = the task ticked now +
+  `snoozed_until` 5 business days out (`POST /api/pos/claims/tasks/:id/snooze`).
 - **Claim detail (`/claims/:id`, `GET /api/claims/:id`):** header (PO, supplier, kind, qty in the three unit kinds, $
   owed with the manual override and **Reset to auto** — History row on every change), the **step checklist** (§3.4:
   refund / credit, replacement, write-off, emailed cancellation; return steps only on a return; the current step

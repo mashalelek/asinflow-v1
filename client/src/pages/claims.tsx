@@ -513,6 +513,7 @@ function ClaimDetailPage({ id }: { id: number }) {
             {openTasks.length === 0 ? <div className="text-xs text-muted-foreground">{c.status === "open" ? c.next_action || "none" : "none"}</div>
               : <div className="space-y-1.5 text-xs" data-testid="claim-open-tasks">{openTasks.map((t) => <div key={t.id}><TaskControl claim={c} task={t} refresh={() => void load()} onRefundReceived={() => setRefund(true)} /></div>)}</div>}
             {c.status === "open" && c.due_at && <div className="text-[10px] text-muted-foreground mt-1">timer: {c.timed_out ? "ran out" : `runs out ${fmtDate(c.due_at)}`} (5 business days)</div>}
+            {c.status === "open" && !c.due_at && c.tasks.some((t) => !t.done_at) && <div className="text-[10px] text-muted-foreground mt-1">timer: held while a task is open; restarts when it is ticked</div>}
           </div>
           <div>
             <div className="text-[11px] font-semibold uppercase tracking-wider text-muted-foreground mb-1">Linked</div>

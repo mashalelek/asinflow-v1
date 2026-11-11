@@ -49,9 +49,9 @@ export interface BucketClaim {
 
 export interface BucketResult {
   bucket: ClaimBucket;
-  /** When this bucket started (the timer's anchor, or the last Follow up / Check on it tick) — null for Needs attention / closed / dismissed. */
+  /** When this bucket started (the timer's anchor, or the last tick) — for Needs attention the oldest open task; null for closed / dismissed without a date. */
   since: string | null;
-  /** The running timer's deadline (since + 5 business days), null when no timer runs. */
+  /** The running timer's deadline (since + 5 business days); null when no timer runs — Needs attention, closed, dismissed, or an open task holds it (Maria 2026-11-11). */
   due: string | null;
   /** True when the timer has run out and no timeout task is open yet — the sweep creates one. */
   timedOut: boolean;
@@ -114,7 +114,11 @@ export function daysSince(since: string | null, now: Date): number | null {
  * Waiting on shipment — a replacement shipped and not arrived, or a return on its way (commit 7 adds the return tracking;
  * until then `send_label` ticked stands for the return at Velocity); Waiting on Velocity — a Velocity task ticked and
  * nothing changed yet (label sent, dispose asked, order change asked); Waiting on supplier — everything else once reported
- * (no reply yet, or an outcome promised but not confirmed). The timer restarts at the last Follow up / Check on it tick.
+ * (no reply yet, or an outcome promised but not confirmed).
+ *
+ * The timer (Maria 2026-11-11): it runs only while the claim has NO open task — a claim in Needs attention never gets a
+ * Follow up / Check on it on top, and an open passive tick (Refund received, Replacement arrived) holds it too; it
+ * restarts when the open task is ticked (any tick; the Contact supplier tick counts from the report date typed on it).
  */
 export function deriveBucket(c: BucketClaim, now: Date): BucketResult {
   const none: BucketResult = { bucket: "needs_attention", since: null, due: null, timedOut: false, timeout: null };
@@ -149,10 +153,13 @@ export function deriveBucket(c: BucketClaim, now: Date): BucketResult {
     // the report date Maria typed (reported_at), else the tick itself
     bucket = "waiting_supplier"; anchor = c.reported_at ?? doneAt(c, "contact_supplier") ?? c.found_at; reason = "no answer from the supplier";
   }
-  // The timer restarts at the last Follow up / Check on it tick (a snooze is such a tick).
-  const restart = latest(doneAt(c, "follow_up_supplier"), doneAt(c, "check_on_it"));
+  // Every tick restarts the timer (a snooze is such a tick) — except Contact supplier, whose typed report date
+  // (reported_at) is the anchor itself; without a typed date its tick is the anchor through doneAt above.
+  const restart = latest(...c.tasks.filter((t) => t.done_at && t.kind !== "contact_supplier").map((t) => t.done_at));
   // normalized to an ISO instant (a date-only anchor such as reported_at reads as noon UTC)
   const since = new Date(ts(latest(anchor, restart) ?? c.found_at) ?? Date.now()).toISOString();
+  // An open task of any kind holds the timer: no deadline, nothing for the sweep to create.
+  if (c.tasks.some((t) => !t.done_at)) return { bucket, since, due: null, timedOut: false, timeout: null };
   const dueDate = addBusinessDays(since, BUSINESS_DAYS);
   const snoozed = c.tasks.filter((t) => t.snoozed_until && ts(t.snoozed_until)! > now.getTime()).length > 0;
   const timedOut = !snoozed && now.getTime() >= dueDate.getTime();
