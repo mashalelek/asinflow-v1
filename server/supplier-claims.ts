@@ -8,8 +8,8 @@
 //   status suggested | open | closed | dismissed; an OPEN claim keeps its PO open (D15, po-close.ts).
 //   outcome refund_card | gift_card | store_credit — closes by itself when the applied refunds cover the $
 //   owed; replacement — closes when marked arrived; write_off — closes at once, a reason required.
-//   Every manual step is a task (supplier_claim_tasks, §3.3): contact_supplier on a new claim, refund_received when an
-//   outcome promises money, follow_up_supplier / check_on_it from the 5-business-day timer (server/claim-buckets.ts),
+//   Every manual step is a task (supplier_claim_tasks, §3.3): contact_supplier on a new claim, refund_received when the
+//   supplier confirms a refund / credit (D6's second tick — not at Set outcome, Maria 2026-11-11), follow_up_supplier / check_on_it from the 5-business-day timer (server/claim-buckets.ts),
 //   enter_quantity on a converted badge. Ticking a task (doneTask) records what the tick means — the report date and
 //   channel, the reship order #, the refund row — and the bucket (derived, shared/claim-bucket.ts) moves on.
 //   Every change is a History row (po_edit_log, entity 'claim') and an event (supplier_claim_events).
@@ -221,6 +221,8 @@ export async function confirmSupplier(query: QueryLike, id: number, body: { at?:
   if (d.outcome !== outcome || body.amount != null) await setOutcome(query, id, outcome === "replacement" ? { outcome: "replacement" } : { outcome: outcome as "refund_card", amount: body.amount ?? null, detail: body.detail ?? null }, userId);
   await query(`UPDATE supplier_claims SET supplier_confirmed_at = $2, status = CASE WHEN status = 'suggested' THEN 'open' ELSE status END, updated_at = now() WHERE id = $1`, [id, at]);
   await query(`UPDATE supplier_claim_tasks SET done_at = now(), done_by = $2 WHERE claim_id = $1 AND done_at IS NULL AND kind IN ('confirm_outcome', 'follow_up_supplier', 'check_on_it')`, [id, userId]);
+  // D6's second tick (Maria 2026-11-11): the Refund received tick opens here, once the supplier has confirmed — never at Set outcome.
+  if ((REFUND_OUTCOMES as readonly string[]).includes(outcome)) await addTask(query, id, "refund_received", "tick when the money arrives (add the refund row)");
   await event(query, id, "supplier_confirmed", `${outcome}${body.detail ? ` — ${String(body.detail).trim()}` : ""}`, userId);
   await logEdits(query, String(d.po_id), userId, "claim", String(id), [{ field: "claim supplier_confirmed_at", old: d.supplier_confirmed_at ? String(d.supplier_confirmed_at).slice(0, 10) : null, new: at.slice(0, 10) }]);
   return { id, po_id: String(d.po_id) };
@@ -401,8 +403,9 @@ export type OutcomeBody = { outcome: "refund_card" | "gift_card" | "store_credit
   | { outcome: "write_off"; reason: string };
 
 /**
- * Set the outcome (D3, one per claim). Refund / credit: stays open with a refund_received task until the applied refunds cover
- * the $ owed; replacement: open until `arrived` (then closed); write_off: closed at once, reason required.
+ * Set the outcome (D3, one per claim). Refund / credit: stays open (Waiting on supplier until Confirmed by supplier, which opens
+ * the refund_received tick — D6's two ticks) until the applied refunds cover the $ owed; replacement: open until `arrived` (then
+ * closed); write_off: closed at once, reason required.
  */
 export async function setOutcome(query: QueryLike, id: number, body: OutcomeBody, userId: number | null): Promise<{ id: number; po_id: string }> {
   const d = await claimRow(query, id);
@@ -437,7 +440,6 @@ export async function setOutcome(query: QueryLike, id: number, body: OutcomeBody
     [id, outcome, amt, b.detail == null ? null : String(b.detail).trim() || null]);
   await logEdits(query, poId, userId, "claim", String(id), [{ field: "claim outcome", old: d.outcome, new: `${outcome}${amt != null ? ` ${money(amt)}` : ""}` }]);
   await event(query, id, "outcome_set", outcome, userId);
-  await addTask(query, id, "refund_received", "tick when the money arrives (add the refund row)");
   await syncRefundCoverage(query, [id], userId);
   return { id, po_id: poId };
 }

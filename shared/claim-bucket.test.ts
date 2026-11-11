@@ -51,13 +51,16 @@ describe("bucket derivation (§3.2): an open task wins, else the running timer",
     const snoozed = base({ reported_at: "2026-10-20", tasks: [done("contact_supplier", "2026-10-20T15:00:00Z"), done("check_on_it", "2026-10-26T15:00:00Z", { snoozed_until: "2026-11-20T15:00:00Z" })] });
     expect(deriveBucket(snoozed, NOW).timedOut).toBe(false);
   });
-  it("the timer runs only while the claim has NO open task (Maria 2026-11-11): an open tick of any kind holds it, and any tick restarts it", () => {
+  it("the timer runs only while the claim has no open Needs attention task (Maria 2026-11-11); a passive tick never holds it; any tick restarts it", () => {
     // reported Oct 20, long overdue — but an Enter quantity task is open: Needs attention, no timer, nothing for the sweep
     const held = base({ reported_at: "2026-10-20", tasks: [done("contact_supplier", "2026-10-20T15:00:00Z"), open("enter_quantity")] });
     expect(deriveBucket(held, NOW)).toMatchObject({ bucket: "needs_attention", due: null, timedOut: false, timeout: null });
-    // the same claim with an open PASSIVE tick: its timer bucket, still no timer
+    // the same claim confirmed with its PASSIVE Refund received tick open: Waiting on refund to post, the timer runs → Check on it
     const passive = base({ reported_at: "2026-10-20", outcome: "refund_card", supplier_confirmed_at: "2026-10-22T15:00:00Z", tasks: [done("contact_supplier", "2026-10-20T15:00:00Z"), open("refund_received")] });
-    expect(deriveBucket(passive, NOW)).toMatchObject({ bucket: "waiting_refund", since: "2026-10-22T15:00:00.000Z", due: null, timedOut: false, timeout: null });
+    expect(deriveBucket(passive, NOW)).toMatchObject({ bucket: "waiting_refund", since: "2026-10-22T15:00:00.000Z", due: "2026-10-29T15:00:00.000Z", timedOut: true, timeout: { kind: "check_on_it", reason: "5 business days: refund not posted" } });
+    // Set outcome = refund, not confirmed, no tick yet (D6: the Refund received tick opens at Confirmed by supplier): Waiting on supplier → Follow up
+    const promised = base({ reported_at: "2026-10-20", outcome: "refund_card", tasks: [done("contact_supplier", "2026-10-20T15:00:00Z")] });
+    expect(deriveBucket(promised, NOW)).toMatchObject({ bucket: "waiting_supplier", timedOut: true, timeout: { kind: "follow_up_supplier", reason: "5 business days: refund promised, no confirmation" } });
     // ticked (Enter quantity done Nov 9) → the timer restarts from the tick, not from the Oct 20 report
     const ticked = base({ reported_at: "2026-10-20", tasks: [done("contact_supplier", "2026-10-20T15:00:00Z"), done("enter_quantity", "2026-11-09T15:00:00Z")] });
     expect(deriveBucket(ticked, NOW)).toMatchObject({ bucket: "waiting_supplier", since: "2026-11-09T15:00:00.000Z", due: "2026-11-16T15:00:00.000Z", timedOut: false });
@@ -109,7 +112,7 @@ describe("the checklist (§3.4) and Next action", () => {
   });
   it("passive tasks (refund_received, replacement_arrived) never make Needs attention: the claim waits in its timer bucket and offers the tick as Next action", () => {
     const c = base({ outcome: "refund_card", reported_at: "2026-11-03", supplier_confirmed_at: "2026-11-05T15:00:00Z", tasks: [done("contact_supplier", "2026-11-03T15:00:00Z"), open("refund_received")] });
-    expect(deriveBucket(c, NOW)).toMatchObject({ bucket: "waiting_refund", since: "2026-11-05T15:00:00.000Z", due: null });
+    expect(deriveBucket(c, NOW)).toMatchObject({ bucket: "waiting_refund", since: "2026-11-05T15:00:00.000Z", due: "2026-11-12T15:00:00.000Z" });
     expect(nextAction(c, deriveBucket(c, NOW))).toBe("Refund received");
     const r = base({ outcome: "replacement", reported_at: "2026-11-03", replacement_shipped_at: "2026-11-05", tasks: [done("contact_supplier", "2026-11-03T15:00:00Z"), open("replacement_arrived")] });
     expect(deriveBucket(r, NOW).bucket).toBe("waiting_shipment");

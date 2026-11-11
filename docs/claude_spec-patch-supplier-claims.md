@@ -604,13 +604,16 @@ Prerequisite: `claude_spec-patch-quantity-names.md` (labels only).
    anchor for Waiting on supplier is the report date Maria typed
    (`reported_at`), else the tick; a snooze = the tick now +
    `snoozed_until` 5 business days out, and the sweep waits for it;
-   **Maria 2026-11-11: the timer runs only while the claim has NO open
-   task** — an open task of any kind (a Needs attention task or a passive
-   tick) holds it, so a claim never gets a Follow up / Check on it on top
-   of one, and it restarts when the open task is ticked (any tick; the
-   Contact supplier tick counts from its typed report date); a confirmed
-   refund therefore waits without a timer while its Refund received tick
-   is open; (c) the sweep runs in every scheduled pass (component 30,
+   **Maria 2026-11-11: the timer runs only while the claim has no open
+   Needs attention task** — a claim never gets a Follow up / Check on it
+   on top of one; the two passive ticks never hold it; it restarts when
+   the open task is ticked (any tick; the Contact supplier tick counts
+   from its typed report date). **Same day, D6's two ticks:** the Refund
+   received tick opens at Confirmed by supplier, not at Set outcome —
+   Set outcome = refund → Waiting on supplier (timer → Follow up),
+   Confirmed → Waiting on refund to post with the tick (timer → Check on
+   it "refund not posted"); migration 103 removed the ticks 101 had opened
+   on unconfirmed badge claims (16 on production); (c) the sweep runs in every scheduled pass (component 30,
    `30_claim_timers`, hourly tier, scheduled passes only — the POs list's
    Claims column and the Dashboard never lag) and when the Claims page
    loads (`GET /api/claims`); (d) Refund received creates the `po_line_refunds` row itself

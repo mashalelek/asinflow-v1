@@ -6307,11 +6307,14 @@ Rules built in commit 1 (`server/supplier-claims.ts`, `shared/supplier-claim.ts`
   `businessDaysBetween` / `addBusinessDays`) from the bucket's anchor — the report date Maria typed, the supplier's
   confirmation, the ship date, the Velocity tick — or from the last tick; when it runs out the claim gets
   `follow_up_supplier` (Waiting on supplier) or `check_on_it` with the reason ("5 business days: refund not posted"),
-  once, never while a snooze holds (`snoozed_until`). **The timer runs only while the claim has NO open task (Maria
-  2026-11-11):** a claim in Needs attention never gets a Follow up / Check on it on top, and an open passive tick
-  (Refund received, Replacement arrived) holds it too — so a confirmed refund with its Refund received tick open sits in
-  Waiting on refund to post without a timer until the refund posts; the timer restarts when the open task is ticked
-  (any tick; the Contact supplier tick counts from the report date typed on it). The sweep runs in every scheduled
+  once, never while a snooze holds (`snoozed_until`). **The timer runs only while the claim has no open Needs attention
+  task (Maria 2026-11-11):** a claim in Needs attention never gets a Follow up / Check on it on top; the two passive
+  ticks never hold it. **The Refund received tick opens at Confirmed by supplier (D6's two ticks), not at Set
+  outcome** (same day; migration 103 removed the ticks 101 had opened on unconfirmed badge claims; a canceled claim
+  keeps its tick, the cancellation being the supplier's word): Set outcome = refund → Waiting on supplier, timer →
+  Follow up "refund promised, no confirmation"; Confirmed by supplier → Waiting on refund to post with the passive
+  tick, timer → Check on it "refund not posted". The timer restarts when the open task is ticked (any tick; the
+  Contact supplier tick counts from the report date typed on it). The sweep runs in every scheduled
   pass (component 30, `30_claim_timers`, §11) and when the Claims page loads (`GET /api/claims`), so the Claims page,
   the POs list's Claims column and the Dashboard agree; it writes a `timed_out` event. Snooze = the task ticked now +
   `snoozed_until` 5 business days out (`POST /api/pos/claims/tasks/:id/snooze`).

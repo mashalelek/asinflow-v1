@@ -28,7 +28,7 @@ export const TASK_GROUPS = ["decide", "supplier", "velocity", "money", "timed_ou
 export type TaskGroup = (typeof TASK_GROUPS)[number];
 export const TASK_GROUP_LABELS: Readonly<Record<TaskGroup, string>> = { decide: "Decide", supplier: "Supplier", velocity: "Velocity", money: "Money and arrivals", timed_out: "Timed out" };
 
-/** Ticks that wait for the world (the refund posting, the replacement arriving): shown as the Next action, never Needs attention. */
+/** Ticks that wait for the world (the refund posting, the replacement arriving): shown as the Next action, never Needs attention, and they never hold the timer (Maria 2026-11-11). */
 export const PASSIVE_TASK_KINDS: ReadonlySet<string> = new Set(["refund_received", "replacement_arrived"]);
 export const isActiveTask = (t: { kind: string; done_at: string | null }): boolean => !t.done_at && !PASSIVE_TASK_KINDS.has(t.kind);
 export const BUSINESS_DAYS = 5;
@@ -51,7 +51,7 @@ export interface BucketResult {
   bucket: ClaimBucket;
   /** When this bucket started (the timer's anchor, or the last tick) — for Needs attention the oldest open task; null for closed / dismissed without a date. */
   since: string | null;
-  /** The running timer's deadline (since + 5 business days); null when no timer runs — Needs attention, closed, dismissed, or an open task holds it (Maria 2026-11-11). */
+  /** The running timer's deadline (since + 5 business days); null when no timer runs — Needs attention (an open task holds it), closed, dismissed. */
   due: string | null;
   /** True when the timer has run out and no timeout task is open yet — the sweep creates one. */
   timedOut: boolean;
@@ -116,9 +116,10 @@ export function daysSince(since: string | null, now: Date): number | null {
  * nothing changed yet (label sent, dispose asked, order change asked); Waiting on supplier — everything else once reported
  * (no reply yet, or an outcome promised but not confirmed).
  *
- * The timer (Maria 2026-11-11): it runs only while the claim has NO open task — a claim in Needs attention never gets a
- * Follow up / Check on it on top, and an open passive tick (Refund received, Replacement arrived) holds it too; it
- * restarts when the open task is ticked (any tick; the Contact supplier tick counts from the report date typed on it).
+ * The timer (Maria 2026-11-11): it runs only while the claim has no open Needs attention task — a claim in Needs attention
+ * never gets a Follow up / Check on it on top; the two passive ticks (Refund received, Replacement arrived) never hold it,
+ * so a confirmed refund times out into Check on it "refund not posted". It restarts when the open task is ticked (any
+ * tick; the Contact supplier tick counts from the report date typed on it).
  */
 export function deriveBucket(c: BucketClaim, now: Date): BucketResult {
   const none: BucketResult = { bucket: "needs_attention", since: null, due: null, timedOut: false, timeout: null };
@@ -158,8 +159,6 @@ export function deriveBucket(c: BucketClaim, now: Date): BucketResult {
   const restart = latest(...c.tasks.filter((t) => t.done_at && t.kind !== "contact_supplier").map((t) => t.done_at));
   // normalized to an ISO instant (a date-only anchor such as reported_at reads as noon UTC)
   const since = new Date(ts(latest(anchor, restart) ?? c.found_at) ?? Date.now()).toISOString();
-  // An open task of any kind holds the timer: no deadline, nothing for the sweep to create.
-  if (c.tasks.some((t) => !t.done_at)) return { bucket, since, due: null, timedOut: false, timeout: null };
   const dueDate = addBusinessDays(since, BUSINESS_DAYS);
   const snoozed = c.tasks.filter((t) => t.snoozed_until && ts(t.snoozed_until)! > now.getTime()).length > 0;
   const timedOut = !snoozed && now.getTime() >= dueDate.getTime();
@@ -210,7 +209,7 @@ export function nextAction(c: BucketClaim, b: BucketResult): string {
   const open = c.tasks.filter((t) => !t.done_at);
   if (open.length) return open.map((t) => CLAIM_TASK_LABELS[t.kind as ClaimTaskKind] ?? t.kind).join(" · ");
   switch (b.bucket) {
-    case "waiting_supplier": return "waiting for the supplier's answer";
+    case "waiting_supplier": return c.outcome && !c.supplier_confirmed_at ? "waiting for the supplier's confirmation" : "waiting for the supplier's answer";
     case "waiting_shipment": return "waiting for the carrier";
     case "waiting_refund": return "waiting for the refund to post";
     case "waiting_velocity": return "waiting for Velocity";

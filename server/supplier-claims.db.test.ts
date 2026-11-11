@@ -246,7 +246,27 @@ describe("claims commit 2 on the real schema (rolled back): tasks, buckets, the 
     });
   });
 
-  it("Confirmed by supplier (hand tick) → Waiting on refund to post; the open Refund received tick holds the timer (Maria 2026-11-11) — no check_on_it; the refund closes it", async (ctx) => {
+  it("Set outcome = refund (D6, Maria 2026-11-11): no Refund received tick yet → Waiting on supplier; the timer's follow_up_supplier says 'refund promised, no confirmation'", async (ctx) => {
+    if (!client) return ctx.skip();
+    await inTx(async (q) => {
+      const s = await seed(q);
+      const { id } = await addClaim(q, s.po, { po_line_item_id: s.line, kind: "damaged", qty: 1, found_at: "2026-10-26" }, null);
+      const t = (await loadClaims(q, { ids: [id] }))[0].tasks[0];
+      await doneTask(q, t.id, null, { date: "2026-10-26", channel: "chat" });
+      await setOutcome(q, id, { outcome: "refund_card" }, null);
+      let [row] = await loadClaimsPage(q, { po: "zz-claim-test" }, new Date("2026-10-29T15:00:00Z"));
+      expect(row).toMatchObject({ bucket: "waiting_supplier", outcome: "refund_card", step: "Confirmed by supplier", timed_out: false });
+      expect(row.tasks.filter((x) => !x.done_at)).toEqual([]);
+      expect(row.next_action).toBe("waiting for the supplier's confirmation");
+      // Mon Oct 26 + 5 bd = Mon Nov 2
+      expect((await sweepClaimTimers(q, new Date("2026-10-30T15:00:00Z"))).filter((x) => x.claim_id === id)).toEqual([]);
+      expect((await sweepClaimTimers(q, new Date("2026-11-02T16:00:00Z"))).filter((x) => x.claim_id === id)).toEqual([{ claim_id: id, kind: "follow_up_supplier", reason: "5 business days: refund promised, no confirmation" }]);
+      [row] = await loadClaimsPage(q, { po: "zz-claim-test" }, new Date("2026-11-02T16:00:00Z"));
+      expect(row.bucket).toBe("needs_attention");
+    });
+  });
+
+  it("Confirmed by supplier (hand tick) → Waiting on refund to post with the passive Refund received tick; the timer's check_on_it says 'refund not posted'; the refund closes it", async (ctx) => {
     if (!client) return ctx.skip();
     await inTx(async (q) => {
       const s = await seed(q);
@@ -255,12 +275,12 @@ describe("claims commit 2 on the real schema (rolled back): tasks, buckets, the 
       await doneTask(q, t.id, null, { date: "2026-10-26", channel: "chat" });
       await confirmSupplier(q, id, { at: "2026-10-28", outcome: "gift_card" }, null);
       let [row] = await loadClaimsPage(q, { po: "zz-claim-test" }, new Date("2026-10-29T15:00:00Z"));
-      expect(row).toMatchObject({ bucket: "waiting_refund", outcome: "gift_card", step: "Received", due_at: null, timed_out: false });
+      expect(row).toMatchObject({ bucket: "waiting_refund", outcome: "gift_card", step: "Received", timed_out: false, next_action: "Refund received" });
       expect(row.steps.find((x) => x.key === "confirmed")).toMatchObject({ done: true });
       expect(row.tasks.filter((x) => !x.done_at).map((x) => x.kind)).toEqual(["refund_received"]);
-      // Wed Oct 28 + 5 bd = Wed Nov 4 — but the open Refund received tick holds the timer: the sweep creates nothing, then or ever
-      expect((await sweepClaimTimers(q, new Date("2026-11-04T15:00:00Z"))).filter((x) => x.claim_id === id)).toEqual([]);
-      expect((await sweepClaimTimers(q, new Date("2027-01-04T15:00:00Z"))).filter((x) => x.claim_id === id)).toEqual([]);
+      // Wed Oct 28 + 5 bd = Wed Nov 4; the passive tick never holds the timer
+      expect((await sweepClaimTimers(q, new Date("2026-11-03T15:00:00Z"))).filter((x) => x.claim_id === id)).toEqual([]);
+      expect((await sweepClaimTimers(q, new Date("2026-11-04T15:00:00Z"))).filter((x) => x.claim_id === id)).toEqual([{ claim_id: id, kind: "check_on_it", reason: "5 business days: refund not posted" }]);
       // the money arrives (method prefilled by the UI from the payments) → closed, every task done
       const r = await addRefundReceived(q, id, { amount: 5.97, method: "gift_card", refunded_at: "2026-11-05" }, null);
       expect(r.applied).toEqual([{ claim_id: id, amount: 5.97 }]);
@@ -270,7 +290,7 @@ describe("claims commit 2 on the real schema (rolled back): tasks, buckets, the 
       expect(row.steps.every((x) => x.done)).toBe(true);
       const d = await claimDetail(q, id);
       expect(d!.po.refunds).toHaveLength(1);
-      expect(d!.events.map((e) => e.type)).toEqual(["opened", "reported", "outcome_set", "supplier_confirmed", "refund_received", "closed"]);
+      expect(d!.events.map((e) => e.type)).toEqual(["opened", "reported", "outcome_set", "supplier_confirmed", "timed_out", "refund_received", "closed"]);
     });
   });
 
@@ -328,7 +348,7 @@ describe("claims commit 2 on the real schema (rolled back): tasks, buckets, the 
       [row] = await loadClaimsPage(q, { supplier: "zz-test.com" });
       expect(row.status).toBe("open");
       expect(row.tasks.filter((t) => !t.done_at).map((t) => t.kind)).toEqual(["contact_supplier"]);
-      await setOutcome(q, sug.id, { outcome: "refund_card" }, null);
+      await confirmSupplier(q, sug.id, { outcome: "refund_card" }, null); // D6: the tick opens at the confirmation
       const rr = (await loadClaims(q, { ids: [sug.id] }))[0].tasks.find((t) => t.kind === "refund_received")!;
       await expect(doneTask(q, rr.id, null)).rejects.toMatchObject({ status: 400 });
       expect(await loadClaimsPage(q, { kind: "damaged" })).toEqual([]);
