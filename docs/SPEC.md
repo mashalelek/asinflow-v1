@@ -8741,8 +8741,10 @@ Settings: `tracking.velocity_street` ("805 grandy"),
     Typology account page, Zara's order page; Ace and Lowe's are
     bot-blocked (403), Zara's tracking page says "not available" for old
     orders, Ubiquiti's order page is scripted. Walgreens' "adjusted and has
-    shipped" names the carrier but its shipped list is empty (every item
-    canceled); Lowe's names FDXGND and prints nothing; LG, gift-card
+    shipped" names the carrier and lists the one canceled line (out of
+    stock) but prints nothing under "Shipped" — the rest of the order did
+    ship; the three were dismissed by hand 2026-11-11 and their canceled
+    lines become claims in commit 5; Lowe's names FDXGND and prints nothing; LG, gift-card
     outlet, Global Test Supply carry no link at all. These rely on the
     "nothing after 14 days" rule.
   - **Backfill:** `npm run backfill:tracking -- --stage placeholders
@@ -8755,6 +8757,11 @@ Settings: `tracking.velocity_street` ("805 grandy"),
     7, Equal Exchange 2, Café Mam 2, Harbor Freight 1, Summit 1, WorldPantry
     1 — dismissed), **2 resolved now** (Duluth WEB35620800 → UPS, Summit
     412645 → UPS through Narvar), **23 stay**, **2 dismissed** (Duluth, Zara).
+    Live run 2026-11-11 on 2e07e21: the same 14 · 2 · 23 · 2 — Duluth's
+    row matched its PO, Summit's number was already on a matched row (the
+    placeholder went, no row added); Duluth needed a second idempotent
+    pass (its click tracker did not redirect the first time);
+    `docs/tracking-placeholders-live-2026-11-12.csv`.
 - **No tracking in a shipped email** and no extractor: one placeholder row
   per (sender domain, order #) — carrier OTHER, `tracking_number =
   email:<domain>:<order#>`, `match_reason = ai_disabled` (until the AI

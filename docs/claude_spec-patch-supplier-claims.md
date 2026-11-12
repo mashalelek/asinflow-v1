@@ -346,10 +346,20 @@ status, `est_delivery_date`, timestamped scans, a return flag and
 
    **Built 2026-11-11 (commit 3; no migration).** What the 41 emails
    actually hold, against the text above: (a) Walgreens' three "adjusted
-   and has shipped" emails print no number at all — every item was
-   canceled (shipped list empty, $0.00); the carrier word is there, so the
-   existing "named carrier + 12 digits" rule would read a number if one
-   were printed; nothing to fix, a fixture proves the placeholder; (b)
+   and has shipped" emails print no number at all: each lists ONE canceled
+   line (out of stock, $0.00) and a "Shipped" heading with no items and no
+   number under it — the rest of the order did ship (Velocity received
+   4 / 1 / 2 ASIN units on the three POs). The carrier word is there
+   (FedEx / USPS), so the existing "named carrier + 12 digits" rule would
+   read a number if one were printed; the nine anchors are the template's
+   click-tracker links, identical across the three. Nothing to fix; a
+   fixture proves the placeholder. The three were dismissed by hand
+   2026-11-11 (reason "no tracking number in the email: 1 line canceled
+   (out of stock), the rest shipped"); commit 5 picks them up as canceled
+   claims — Liz Claiborne 1.0 fl oz qty 1 on 215691286487 (2026-09-13),
+   Folgers 8 oz qty 5 on 215651271261 and qty 1 on 215651297215 (both
+   2026-09-04; AF's lines hold the combined net quantities, see the PO
+   notes); none has a claim or a refund yet; (b)
    Harbor Freight's number is schema.org ParcelDelivery microdata
    (parcelLab), not a link — read from the raw HTML; (c) Duluth's click
    tracker answers 404 to HEAD and redirects only a GET — the follow now
@@ -368,7 +378,13 @@ status, `est_delivery_date`, timestamped scans, a return flag and
    = its retailer) — 14 of the 41 were already answered by a later email.
    Production dry run: 14 replaced · 2 resolved now (Duluth, Summit — UPS)
    · 23 stay · 2 dismissed; `docs/tracking-placeholders-dry-run-2026-11-11.csv`.
-   Live run waits for Maria.
+   Live run 2026-11-11 (Render on 2e07e21): 14 replaced · 2 resolved
+   (Duluth WEB35620800 → UPS, matched to its PO; Summit 412645 → the UPS
+   number an existing matched row already held, so the placeholder went
+   and no row was added) · 23 stay · 2 dismissed;
+   `docs/tracking-placeholders-live-2026-11-12.csv` (UTC date). Duluth's
+   click tracker did not redirect on the first pass and resolved on a
+   second, idempotent pass — a transient miss, not a parser gap.
 
 ## 4. Data
 
