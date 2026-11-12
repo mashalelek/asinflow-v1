@@ -19,7 +19,10 @@ export const carrierTracking: ComponentDef = {
     const r = await carrierTrackingDeps.register(ctx.query, new Date());
     const counts: Record<string, number> = { registered: r.registered, rows_updated: r.rows_updated, errors: r.errors };
     for (const [k, v] of Object.entries(r.skipped)) counts[`skipped_${k}`] = v;
-    if (r.registered || r.errors) ctx.log(`carrier tracking (${mode}): ${r.registered} tracker(s) registered, ${r.errors} error(s)`);
-    return { counts, outcomes: r.outcomes };
+    if (r.registered || r.errors) ctx.log(`carrier tracking (${mode}): ${r.registered} tracker(s) registered, ${r.errors} error(s)${r.rate_limited ? " — EasyPost rate-limited the account, the rest waits for the next pass" : ""}${r.no_carrier_account.length ? ` — no carrier account on EasyPost for ${r.no_carrier_account.join(", ")}` : ""}`);
+    const outcomes = { ...r.outcomes };
+    if (r.no_carrier_account.length) outcomes._no_carrier_account = `EasyPost has no carrier account for ${r.no_carrier_account.join(", ")}: add it under Carrier Accounts; those rows wait`;
+    if (r.rate_limited) outcomes._rate_limited = "EasyPost answered 429; the pass stopped, the remaining rows register next hour";
+    return { counts, outcomes };
   },
 };

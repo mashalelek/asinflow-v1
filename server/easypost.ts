@@ -28,8 +28,12 @@ const BASE_URL = "https://api.easypost.com/v2";
 export const MAX_AGE_DAYS = 60;
 /** The sweep re-reads a tracker AF has not heard about for this long. */
 export const SILENT_DAYS = 3;
-/** Trackers created per hourly pass at most (day one on production is ~370 rows; after that a handful). */
-export const REGISTER_CAP = 400;
+/** Trackers created per hourly pass at most: the backlog (227 on production, 2026-11-12) spreads over a few passes instead of one burst. */
+export const REGISTER_CAP = 60;
+/** Pause between POSTs — the first production pass fired 227 in 25 s and EasyPost rate-limited the account after 7. */
+export const REGISTER_PAUSE_MS = 750;
+/** Test seam. */
+export const easypostDeps = { sleep: (ms: number) => new Promise<void>((r) => setTimeout(r, ms)) };
 
 /** AF carrier → EasyPost carrier string (Tracker.carrier). Absent = EasyPost does not track it for AF. */
 export const EASYPOST_CARRIERS: Readonly<Record<string, string>> = { UPS: "UPS", USPS: "USPS", FEDEX: "FedEx", DHL: "DHLExpress", AMAZON: "AmazonMws" };
@@ -138,20 +142,32 @@ const CANDIDATES_SQL = `SELECT t.id, t.carrier, t.tracking_number, t.direction, 
                          WHERE t.tracking_number NOT LIKE 'email:%' AND t.delivered_at IS NULL AND t.split_of IS NULL
                          ORDER BY COALESCE(t.shipped_at, t.created_at) DESC, t.id`;
 
-export interface RegisterResult { registered: number; rows_updated: number; errors: number; skipped: Record<string, number>; outcomes: Record<string, string> }
+export interface RegisterResult {
+  registered: number; rows_updated: number; errors: number; skipped: Record<string, number>; outcomes: Record<string, string>;
+  /** EasyPost answered 429: the pass stopped there; the rest waits for the next hour. */
+  rate_limited: boolean;
+  /** Carriers EasyPost refused with CREDENTIALS_NOT_FOUND (no carrier account on the EasyPost account) — skipped for the rest of the pass. */
+  no_carrier_account: string[];
+}
 
 /** Component 31: register every candidate row on an open PO (one tracker per distinct carrier + number), applying the POST's answer at once. */
 export async function registerTrackers(query: QueryLike, now = new Date(), fetchFn: EasypostFetch = realEasypostFetch, cap = REGISTER_CAP): Promise<RegisterResult> {
-  const r: RegisterResult = { registered: 0, rows_updated: 0, errors: 0, skipped: {}, outcomes: {} };
+  const r: RegisterResult = { registered: 0, rows_updated: 0, errors: 0, skipped: {}, outcomes: {}, rate_limited: false, no_carrier_account: [] };
   const rows = (await query(CANDIDATES_SQL)).rows as TrackingCandidate[];
   const seen = new Set<string>();
+  const skip = (k: string) => { r.skipped[k] = (r.skipped[k] ?? 0) + 1; };
+  let calls = 0;
   for (const row of rows) {
     const a = trackerAction(row, now, "register");
-    if (a !== "register") { r.skipped[a.replace("skip:", "")] = (r.skipped[a.replace("skip:", "")] ?? 0) + 1; continue; }
+    if (a !== "register") { skip(a.replace("skip:", "")); continue; }
     const key = `${row.carrier.toUpperCase()} ${row.tracking_number.toUpperCase()}`;
     if (seen.has(key)) continue;
     seen.add(key);
-    if (r.registered + r.errors >= cap) { r.skipped.over_cap = (r.skipped.over_cap ?? 0) + 1; continue; }
+    if (r.rate_limited) { skip("rate_limited"); continue; }
+    if (r.no_carrier_account.includes(row.carrier.toUpperCase())) { skip(`no_carrier_account_${row.carrier.toLowerCase()}`); continue; }
+    if (calls >= cap) { skip("over_cap"); continue; }
+    if (calls > 0) await easypostDeps.sleep(REGISTER_PAUSE_MS);
+    calls++;
     try {
       const t = await createTracker(fetchFn, { tracking_code: row.tracking_number, carrier: easypostCarrier(row.carrier)!, is_return: row.direction === "return" });
       const u = trackerUpdate(t);
@@ -161,6 +177,10 @@ export async function registerTrackers(query: QueryLike, now = new Date(), fetch
     } catch (e: any) {
       r.errors++;
       r.outcomes[key] = `error: ${e?.message ?? e}`;
+      // 429: EasyPost rate-limited the account — stop here, the rest waits for the next pass (nothing is lost: unregistered rows stay candidates).
+      if (e instanceof EasypostError && e.status === 429) r.rate_limited = true;
+      // CREDENTIALS_NOT_FOUND: this carrier needs a carrier account on the EasyPost account (FedEx, 2026-11-12) — one error line, the carrier's other rows wait.
+      if (e instanceof EasypostError && e.code === "CREDENTIALS_NOT_FOUND") r.no_carrier_account.push(row.carrier.toUpperCase());
     }
   }
   return r;

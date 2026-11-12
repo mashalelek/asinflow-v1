@@ -8,8 +8,9 @@ import { join } from "node:path";
 import {
   trackerUpdate, trackerAction, registerTrackers, sweepTrackers, applyCarrierUpdate, recordVelocityTrackingStatus, poDeliveryState,
   easypostSignature, verifyEasypostSignature, createEasypostWebhookRouter, easypostCarrier, EASYPOST_CARRIERS, MAX_AGE_DAYS, SILENT_DAYS,
-  type EasypostFetch, type EasypostTracker,
+  easypostDeps, REGISTER_PAUSE_MS, type EasypostFetch, type EasypostTracker,
 } from "./easypost";
+easypostDeps.sleep = async () => {};
 import { carrierStatusText, isTerminalStatus } from "@shared/carrier-status";
 import { COMPONENTS } from "./scheduler/components";
 import { SCHEDULED_ONLY_COMPONENTS, explicitlyAuthorized } from "./scheduler/types";
@@ -129,10 +130,30 @@ describe("registration", () => {
     expect(trackerAction(row({ shipped_at: "2026-07-01T00:00:00Z" }), NOW, "register")).toBe("register");
     expect(trackerAction(row({ easypost_tracker_id: "trk_1" }), NOW, "register")).toBe("skip:registered");
   });
-  it("the cap: at most REGISTER_CAP new trackers per pass, the rest counted over_cap", async () => {
+  it("the cap: at most REGISTER_CAP calls per pass, the rest counted over_cap; a pause between POSTs", async () => {
     const rows = [row({ id: 1 }), row({ id: 2, tracking_number: "EZ1000000001" }), row({ id: 3, tracking_number: "EZ3000000003" })];
-    const r = await registerTrackers(fakeQuery(rows), NOW, fakeEasypost(), 2);
-    expect(r).toMatchObject({ registered: 2, skipped: { over_cap: 1 } });
+    const pauses: number[] = []; const real = easypostDeps.sleep; easypostDeps.sleep = async (ms) => { pauses.push(ms); };
+    try {
+      const r = await registerTrackers(fakeQuery(rows), NOW, fakeEasypost(), 2);
+      expect(r).toMatchObject({ registered: 2, skipped: { over_cap: 1 } });
+      expect(pauses).toEqual([REGISTER_PAUSE_MS]); // one pause between the two calls, none before the first
+    } finally { easypostDeps.sleep = real; }
+  });
+  it("a 429 stops the pass (the rest counted rate_limited, candidates again next hour); CREDENTIALS_NOT_FOUND skips that carrier for the rest of the pass — the first production pass, 2026-11-12", async () => {
+    const calls: any[] = [];
+    const fetchFn: EasypostFetch = async (path, init) => {
+      const code = JSON.parse(init.body!).tracker;
+      calls.push(code);
+      if (code.carrier === "FedEx") return { status: 404, json: async () => ({ error: { code: "CREDENTIALS_NOT_FOUND", message: "Credentials not found for the specified carrier" } }) };
+      if (calls.length >= 3) return { status: 429, json: async () => ({ error: { code: "RATE_LIMITED", message: "Your account has been temporarily rate-limited" } }) };
+      return { status: 201, json: async () => fx("tracker-in_transit") };
+    };
+    const rows = [row({ id: 1, carrier: "FEDEX", tracking_number: "384578744445" }), row({ id: 2, carrier: "FEDEX", tracking_number: "384546890989" }), row({ id: 3, carrier: "UPS", tracking_number: "1Z1" }), row({ id: 4, carrier: "UPS", tracking_number: "1Z2" }), row({ id: 5, carrier: "USPS", tracking_number: "9400" }), row({ id: 6, carrier: "FEDEX", tracking_number: "384500000000" })];
+    const r = await registerTrackers(fakeQuery(rows), NOW, fetchFn);
+    expect(calls.map((c) => c.tracking_code)).toEqual(["384578744445", "1Z1", "1Z2"]);
+    expect(r).toMatchObject({ registered: 1, errors: 2, rate_limited: true, no_carrier_account: ["FEDEX"], skipped: { no_carrier_account_fedex: 1, rate_limited: 2 } }); // the last FedEx row is counted rate_limited: the pass had already stopped
+    expect(r.outcomes["FEDEX 384578744445"]).toContain("CREDENTIALS_NOT_FOUND");
+    expect(r.outcomes["UPS 1Z2"]).toContain("HTTP 429");
   });
 });
 

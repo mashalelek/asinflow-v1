@@ -9311,7 +9311,12 @@ is. `server/easypost.ts` is the only module that talks to
   at once, the id stored on every row carrying the number. GLS / OnTrac /
   LaserShip / OTHER are skipped and counted; a row already delivered is
   never registered (`easypost_registered_at` stamps the first answer). At
-  most 400 new trackers per pass. Without a key the component logs "EASYPOST_API_KEY not set —
+  most 60 POSTs per pass, 750 ms apart; a 429 stops the pass (the rest
+  waits for the next hour) and a `CREDENTIALS_NOT_FOUND` answer skips that
+  carrier for the rest of the pass — the first production pass
+  (2026-11-12, 227 in 25 s) was rate-limited after 7 POSTs, and FedEx
+  needs a carrier account on the EasyPost account (Carrier Accounts →
+  FedEx) before its numbers track. Without a key the component logs "EASYPOST_API_KEY not set —
   skipped".
 - **Webhook:** `POST /webhooks/easypost` — public (mounted before the
   session middleware, outside `/api`, so neither requireAuth nor the

@@ -341,7 +341,9 @@ status, `est_delivery_date`, timestamped scans, a return flag and
    OPEN POs only, any age (Maria 2026-11-12 — the "60 days" became "60
    days after registration", the sweep's stop; `easypost_registered_at`),
    delivered stop, GLS / OnTrac / LaserShip / OTHER skipped with the
-   reason, ≤ 400 per pass; (c) the webhook is `POST /webhooks/easypost`,
+   reason, ≤ 60 POSTs per pass 750 ms apart, a 429 stops the pass, a
+   CREDENTIALS_NOT_FOUND carrier is skipped for the pass (first production
+   pass 2026-11-12: rate-limited after 7, FedEx has no carrier account yet); (c) the webhook is `POST /webhooks/easypost`,
    mounted before the session middleware and outside `/api`
    (`X-Hmac-Signature: hmac-sha256-hex=…` over the NFKD raw body, constant
    time; 401 unsigned / wrong / no secret; 500 on a store failure so
