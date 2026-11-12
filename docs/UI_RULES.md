@@ -4,6 +4,15 @@ Required reading before any UI change (Maria 2026-11-04). The visual
 design system itself is SPEC §7; these are the rules every page, table
 and dialog must meet, and the check that proves it.
 
+## The mockup wins
+
+**When a mockup exists for a screen, it is the spec for layout, wording AND
+look. Use its stylesheet; do not restyle to match the rest of AF or the
+quiet-chrome rule. Prove it with a side-by-side screenshot in the report. If
+the mockup conflicts with another UI rule, the mockup wins and the conflict is
+noted, not resolved by changing the screen.** (Maria 2026-11-12; the Claims
+pages: `docs/mockups/claims-*-2026-11-12.html` → `client/src/pages/claims.css`.)
+
 ## Layout
 
 1. **No horizontal scroll at ≥ 1280 px** on any page or dialog: the

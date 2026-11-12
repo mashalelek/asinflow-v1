@@ -1,0 +1,62 @@
+/*
+ * The Claims pages' stylesheet (Maria 2026-11-12): the two mockups' <style> blocks, docs/mockups/claims-list-2026-11-12.html
+ * and claim-detail-2026-11-12.html, verbatim and scoped to `.cl` (the pages' wrapper; the dialogs and menus they open carry
+ * the class too). The mockup is the spec for the look as well as the layout: this file does not restyle to AF's palette
+ * (docs/UI_RULES.md, "When a mockup exists"). The nav bar above stays AF's.
+ */
+.cl{margin:0;background:#181716;color:#e6e3dc;font-family:Inter,system-ui,sans-serif;font-size:13px;min-height:calc(100vh - 48px)}
+.cl a{color:#7fb0e8;text-decoration:none}.cl a:hover{color:#a8c9f0}
+.cl .num{font-family:"JetBrains Mono",monospace}
+.cl .mut{color:#8f8b82}.cl .amb{color:#d8b56a}
+.cl h1{margin:0;font-size:22px;font-weight:600}
+/* list */
+.cl .tab{padding:10px 14px;border-bottom:2px solid transparent;color:#a39f96;cursor:pointer;background:none;border-top:0;border-left:0;border-right:0;font:inherit}
+.cl .tab.on{color:#e6e3dc;border-color:#d8b56a}
+.cl .tab b{font-weight:500;color:#e6e3dc}
+.cl .row{display:grid;grid-template-columns:28px 150px 180px 130px 110px 120px 1fr 90px 180px;gap:12px;align-items:center;padding:10px 12px;border-top:1px solid #2a2824}
+.cl .row:hover{background:#1f1e1b}
+.cl .hd{color:#8f8b82;font-size:11px;text-transform:uppercase;letter-spacing:.04em;padding:8px 12px;display:grid;grid-template-columns:28px 150px 180px 130px 110px 120px 1fr 90px 180px;gap:12px}
+.cl .grp{display:flex;align-items:center;gap:10px;padding:18px 12px 8px;color:#d8b56a;font-weight:500}
+.cl .grp span{color:#8f8b82;font-weight:400}
+.cl .chk{width:16px;height:16px;border:1px solid #5a564f;border-radius:4px;background:#1b1a18}
+/* buttons, fields */
+.cl .btn{display:inline-flex;align-items:center;height:30px;padding:0 12px;border:1px solid #3a3733;border-radius:6px;background:#22211e;color:#e6e3dc;font:inherit;cursor:pointer}
+.cl .btn.p{background:#2f6fb8;border-color:#2f6fb8;color:#fff}
+.cl .btn:disabled{opacity:.5;cursor:default}
+.cl input.f,.cl select.f,.cl textarea.f{border:1px solid #3a3733;border-radius:6px;background:#1b1a18;color:#e6e3dc;padding:6px 10px;font:inherit}
+.cl input.f,.cl select.f{height:30px;padding:0 10px}
+/* the list mockup spells the same field rule in its own order */
+.cl input.f{height:30px;border:1px solid #3a3733;border-radius:6px;background:#1b1a18;color:#e6e3dc;padding:0 10px;font:inherit}
+/* detail */
+.cl .card{background:#1f1e1b;border:1px solid #2a2824;border-radius:8px;padding:16px}
+.cl .kv{display:grid;grid-template-columns:130px 1fr;gap:8px 12px;align-items:center}
+.cl .kv .v{text-align:right}
+.cl .ed{color:#6f6b63;font-size:11px;margin-left:6px;cursor:pointer;background:none;border:0;padding:0;font-family:inherit}
+.cl .ed:hover{color:#e6e3dc}
+.cl .tl{display:grid;grid-template-columns:86px 18px 1fr;gap:0 12px}
+.cl .tl .d{color:#8f8b82;font-size:12px;padding-top:2px}
+.cl .tl .dot{width:10px;height:10px;border-radius:50%;background:#3a3733;margin:5px 0 0 4px}
+.cl .tl .dot.on{background:#d8b56a}
+.cl .tl .dot.ok{background:#5aa37a}
+.cl .tl .e{padding-bottom:18px;border-left:1px solid #2a2824;margin-left:-11px;padding-left:19px;min-width:0}
+.cl .tl .e:last-child{border-left-color:transparent}
+.cl .tl .t{font-weight:500}
+.cl .tl .n{color:#a39f96;margin-top:2px}
+.cl .step{display:flex;align-items:center;gap:10px;padding:6px 0;color:#a39f96}
+.cl .step.ok{color:#e6e3dc}.cl .step.on{color:#e6e3dc;font-weight:500}
+.cl .step .m{width:16px;height:16px;border-radius:50%;border:1px solid #5a564f;display:inline-flex;align-items:center;justify-content:center;font-size:10px;flex:none}
+.cl .step.ok .m{background:#5aa37a;border-color:#5aa37a;color:#0f1a14}
+.cl .step.on .m{border-color:#d8b56a;color:#d8b56a}
+/* the mockup's card title ("CLAIM", "STEPS", …) and its link-styled actions, as one class each */
+.cl .ct{color:#8f8b82;font-size:11px;text-transform:uppercase;letter-spacing:.04em;margin-bottom:10px}
+.cl .ct .mut{text-transform:none;letter-spacing:0}
+.cl .lnk{background:none;border:0;padding:0;font:inherit;color:#7fb0e8;cursor:pointer;text-align:left}.cl .lnk:hover{color:#a8c9f0}
+.cl .lnk:disabled{color:#8f8b82;cursor:default}
+.cl .lnk.mut{color:#8f8b82}.cl .lnk.mut:hover{color:#e6e3dc}
+.cl .lnk.red{color:#c97b6a}
+.cl .step button{background:none;border:0;padding:0;font:inherit;color:inherit;cursor:pointer;text-align:left}
+.cl .step button:disabled{cursor:default}
+/* AF's in-place editors inside the pages (InlineEdit, the note box) take the mockup's field look */
+.cl input:not(.f):not([type=checkbox]),.cl textarea:not(.f){border:1px solid #3a3733;border-radius:6px;background:#1b1a18;color:#e6e3dc;font:inherit}
+.cl input[type=date]{color-scheme:dark}
+.cl select:not(.f){border:1px solid #3a3733;border-radius:6px;background:#1b1a18;color:#e6e3dc;font:inherit;height:30px;padding:0 10px}

@@ -1,6 +1,6 @@
 import { describe, it, expect } from "vitest";
 import { readFileSync } from "node:fs";
-import { readClaimsUrl, writeClaimsUrl, rowsForView, groupNeedsAttention, matchesFilter, qtyText, prefillMethod, productText, CLAIM_COLUMNS, CLAIMS_TABLE_WIDTH, type ClaimRowApi } from "./claims";
+import { readClaimsUrl, writeClaimsUrl, rowsForView, groupNeedsAttention, matchesFilter, qtyText, prefillMethod, productText, CLAIM_COLUMNS, CLAIMS_TABLE_WIDTH, CLAIMS_GRID, type ClaimRowApi } from "./claims";
 
 // The Claims page (SPEC §22 "Supplier claims" §5 amended 2026-11-12, commit 2b): URL state, the filter box, the view's rows, the Needs attention groups, the labels, the table.
 const row = (over: Partial<ClaimRowApi>): ClaimRowApi => ({
@@ -49,15 +49,33 @@ describe("Needs attention groups, labels, the method prefill, the table", () => 
     expect(prefillMethod([{ method: "gift_card" }, { method: "card" }])).toBe("gift_card");
     expect(prefillMethod([])).toBe("card");
   });
-  it("the table is fixed layout with content-sized widths that fit 1280 (docs/UI_RULES.md); the mockup's nine columns; the Qty header names its kind", () => {
+  it("the list is the mockup's grid (28 · 150 · 180 · 130 · 110 · 120 · 1fr · 90 · 180, 12 px gaps) and fits 1280; the mockup's nine columns; the Qty header's kind is its title (the mockup shows a bare \"Qty\" — docs/UI_RULES.md \"When a mockup exists\")", () => {
     expect(CLAIMS_TABLE_WIDTH).toBeLessThanOrEqual(1280 - 48);
-    expect(CLAIM_COLUMNS.map((c) => c.label)).toEqual(["Supplier · PO", "Product", "Kind", "Qty", "Owed / left", "Step", "Waiting", "Do"]);
+    expect(CLAIMS_GRID).toBe("28px 150px 180px 130px 110px 120px 1fr 90px 180px");
+    expect(CLAIM_COLUMNS.map((c) => c.label)).toEqual(["", "Supplier · PO", "Product", "Kind", "Qty", "Owed / left", "Step", "Waiting", "Do"]);
     expect(CLAIM_COLUMNS.find((c) => c.id === "qty")!.kind).toBe("Individual units");
     const page = readFileSync("client/src/pages/claims.tsx", "utf8");
-    expect(page).toMatch(/table-fixed" style=\{\{ width: CLAIMS_TABLE_WIDTH, minWidth: "100%" \}\}/);
-    expect(page).toMatch(/<colgroup>\{CLAIM_COLUMNS\.map/);
+    const css = readFileSync("client/src/pages/claims.css", "utf8");
+    // the stylesheet is the mockups' <style> blocks, scoped to .cl; the page wraps both views in it
+    for (const f of ["docs/mockups/claims-list-2026-11-12.html", "docs/mockups/claim-detail-2026-11-12.html"]) {
+      const style = /<style>([\s\S]*?)<\/style>/.exec(readFileSync(f, "utf8"))![1];
+      for (const rule of style.split("\n").map((l) => l.trim()).filter(Boolean)) {
+        if (rule.startsWith("body{")) continue; // → .cl{…}
+        for (const one of rule.split("}").filter(Boolean)) { const [sel, body] = one.split("{"); expect(css, one).toContain(`.cl ${sel.trim().split(",").join(",.cl ")}{${body}`); }
+      }
+    }
+    expect(css).toContain(".cl{margin:0;background:#181716;color:#e6e3dc;font-family:Inter,system-ui,sans-serif;font-size:13px");
+    expect(page).toContain('import "./claims.css"');
+    expect(page).toContain('<div className="cl" style={{ display: "flex", flexDirection: "column" }} data-testid="claims-page">');
+    expect(page).toContain('<div className="cl" data-testid="claim-detail">');
+    expect(page).toMatch(/className="hd" data-testid="claims-table"/);
+    expect(page).toMatch(/className="row" style=\{\{ cursor: "pointer" \}\}/);
+    expect(readFileSync("client/index.html", "utf8")).toContain("https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600&family=JetBrains+Mono:wght@400;500&display=swap");
     // the detail's three columns and its action buttons; nothing says "waiting" before the report (the words come from shared/claim-ui.ts)
-    expect(page).toContain('gridTemplateColumns: "340px minmax(0, 1fr) 360px"');
+    expect(page).toContain('gridTemplateColumns: "340px minmax(0, 1fr) 360px", gap: 16');
+    expect(page).toContain('className="tl"');
+    expect(page).toContain("Set outcome ▾");
+    expect(page).toContain("More ▾");
     for (const id of ["button-claim-contacted", "button-claim-replied", "button-claim-set-outcome", "button-claim-more", "button-claim-refund-received", "claim-next", "claim-more", "button-event-edit-", "button-event-remove-", "button-event-remove-confirm-"]) expect(page).toContain(id);
     // Remove this entry (Maria 2026-11-12) is a DELETE of the entry; the client's removable list is the server's
     expect(page).toContain('call(`/api/pos/claims/events/${e.id}`, "DELETE")');

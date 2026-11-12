@@ -83,6 +83,13 @@ This app runs on the following stack. This is settled. Do not suggest alternativ
 
 ## UI changes: read `docs/UI_RULES.md` first
 
+**When a mockup exists for a screen, it is the spec for layout, wording AND
+look. Use its stylesheet; do not restyle to match the rest of AF or the
+quiet-chrome rule. Prove it with a side-by-side screenshot in the report. If
+the mockup conflicts with another UI rule, the mockup wins and the conflict is
+noted, not resolved by changing the screen.** (Maria 2026-11-12; the Claims
+pages: `docs/mockups/claims-*-2026-11-12.html` → `client/src/pages/claims.css`.)
+
 **Required read before any UI change.** No horizontal scroll at ≥ 1280 on
 any page or dialog; tables use fixed layout with content-sized default
 widths, never auto; fields fixed width, rows wrap; labels never overlap;
