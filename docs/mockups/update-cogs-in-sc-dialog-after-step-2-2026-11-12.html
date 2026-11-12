@@ -1,0 +1,82 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Update COGS in SC — after step 2</title>
+
+</head>
+<body>
+
+
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600&amp;family=JetBrains+Mono:wght@400;500&amp;display=swap">
+<style>
+body{margin:0;background:#181716;color:#e6e3dc;font-family:Inter,system-ui,sans-serif;font-size:13px}
+a{color:#7fb0e8;text-decoration:none}a:hover{color:#a8c9f0}
+.btn{display:inline-flex;align-items:center;height:30px;padding:0 12px;border:1px solid #3a3733;border-radius:6px;background:#22211e;color:#e6e3dc;font:inherit;cursor:pointer}
+.btn.p{background:#2f6fb8;border-color:#2f6fb8;color:#fff}
+.mut{color:#8f8b82}
+.num{font-family:"JetBrains Mono",monospace}
+.stp{display:grid;grid-template-columns:28px 1fr;gap:14px;align-items:start}
+.n{width:24px;height:24px;border-radius:50%;border:1px solid #5a564f;display:flex;align-items:center;justify-content:center;font-size:12px;color:#d8b56a}
+.n.ok{background:#5aa37a;border-color:#5aa37a;color:#0f1a14}
+.rep{margin-top:10px;border:1px solid #2a2824;border-radius:6px;background:#1b1a18;padding:12px 14px;display:flex;flex-direction:column;gap:8px}
+.rep .w{border:1px solid #8a6b2a;background:#2a2316;border-radius:6px;padding:8px 10px;color:#e6e3dc}
+details summary{cursor:pointer;color:#a39f96}
+details summary:hover{color:#e6e3dc}
+</style>
+
+<div style="width:560px;height:700px;box-sizing:border-box;padding:20px;display:flex;align-items:flex-start;justify-content:center;background:rgba(0,0,0,.45)">
+  <div style="width:520px;background:#1f1e1b;border:1px solid #2a2824;border-radius:8px;padding:20px;box-sizing:border-box;display:flex;flex-direction:column;gap:16px">
+    <div style="display:flex;align-items:center;justify-content:space-between">
+      <h2 style="margin:0;font-size:16px;font-weight:600">Update COGS in Seller Central</h2>
+      <button class="btn" aria-label="Close" style="width:30px;padding:0;justify-content:center">×</button>
+    </div>
+
+    <div class="stp">
+      <span class="n ok">✓</span>
+      <div style="display:flex;align-items:center;gap:8px;min-height:24px">
+        <span style="font-weight:500">Download Amazon's template</span>
+        <span class="mut">· done</span>
+      </div>
+    </div>
+
+    <div class="stp">
+      <span class="n ok">✓</span>
+      <div>
+        <div style="display:flex;align-items:center;gap:8px;min-height:24px">
+          <span style="font-weight:500">Upload Amazon's template to AsinFlow</span>
+          <span class="mut">· done</span>
+        </div>
+        <div class="mut" style="margin-top:2px"><span class="num" style="color:#e6e3dc">amzn-sourcing-cost-2026-10-13_2026-11-11.xlsx</span> has been updated and downloaded</div>
+        <details style="margin-top:6px">
+          <summary>Report · <span class="num">99</span> costs written · <span class="num">88</span> ASINs</summary>
+          <div class="rep">
+            <div class="mut">Purchased 2026-10-13..2026-11-11: 124 ASINs, 124 with a PO cost. Workbook: 1669 rows / 1551 ASINs over 1 sheet.</div>
+            <div class="mut">PO rows — read 4041 · blank ASIN 0 · canceled 112 · bad date 0 · out of range 3780 · included 149</div>
+            <div class="mut">Skipped — no estimates row 0 · not PO-sourced 0 · bad cost 0 · not in workbook 27 · already approved 5 · would lower approval 8</div>
+            <details><summary>Costs written — 88 ASINs</summary></details>
+            <details><summary>Would lower approval — 8 ASINs</summary></details>
+            <details><summary>Not in Amazon's workbook — 27 ASINs</summary></details>
+            <details><summary>Already approved at this cost — 4 ASINs</summary></details>
+          </div>
+        </details>
+      </div>
+    </div>
+
+    <div class="stp">
+      <span class="n">3</span>
+      <div>
+        <div style="font-weight:500">Upload COGS to Seller Central</div>
+        <div class="mut" style="margin:4px 0 8px">Upload <span class="num" style="color:#e6e3dc">amzn-sourcing-cost-2026-10-13_2026-11-11.xlsx</span> under Sourcing Cost Bulk Update.</div>
+        <a class="btn p" href="https://sellercentral.amazon.com/inventory-reimbursement/sourcing-cost-bulk-update" target="_blank" rel="noopener">Open Seller Central ↗</a>
+      </div>
+    </div>
+
+    <div style="display:flex;justify-content:flex-end;gap:8px;padding-top:6px;border-top:1px solid #2a2824">
+      <button class="btn">Done</button>
+    </div>
+  </div>
+</div>
+
+</body>
+</html>

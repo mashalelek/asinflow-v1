@@ -1,0 +1,68 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Update COGS in SC</title>
+
+</head>
+<body>
+
+
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600&amp;family=JetBrains+Mono:wght@400;500&amp;display=swap">
+<style>
+body{margin:0;background:#181716;color:#e6e3dc;font-family:Inter,system-ui,sans-serif;font-size:13px}
+a{color:#7fb0e8;text-decoration:none}a:hover{color:#a8c9f0}
+.btn{display:inline-flex;align-items:center;height:30px;padding:0 12px;border:1px solid #3a3733;border-radius:6px;background:#22211e;color:#e6e3dc;font:inherit;cursor:pointer}
+.btn.p{background:#2f6fb8;border-color:#2f6fb8;color:#fff}
+.mut{color:#8f8b82}
+.num{font-family:"JetBrains Mono",monospace}
+.stp{display:grid;grid-template-columns:28px 1fr;gap:14px;align-items:start}
+.n{width:24px;height:24px;border-radius:50%;border:1px solid #5a564f;display:flex;align-items:center;justify-content:center;font-size:12px;color:#d8b56a}
+</style>
+
+<div style="width:560px;height:520px;box-sizing:border-box;padding:20px;display:flex;align-items:center;justify-content:center;background:rgba(0,0,0,.45)">
+  <div style="width:520px;background:#1f1e1b;border:1px solid #2a2824;border-radius:8px;padding:20px;box-sizing:border-box;display:flex;flex-direction:column;gap:18px">
+    <div style="display:flex;align-items:center;justify-content:space-between">
+      <h2 style="margin:0;font-size:16px;font-weight:600">Update COGS in Seller Central</h2>
+      <button class="btn" aria-label="Close" style="width:30px;padding:0;justify-content:center">×</button>
+    </div>
+
+    <div class="stp">
+      <span class="n">1</span>
+      <div>
+        <div style="font-weight:500">Download Amazon's template</div>
+        <div class="mut" style="margin:4px 0 8px">Opens Seller Central's sourcing-cost bulk update page in a new tab. Download the template there, then come back.</div>
+        <a class="btn" href="https://sellercentral.amazon.com/inventory-reimbursement/sourcing-cost-bulk-update" target="_blank" rel="noopener">Open Seller Central ↗</a>
+      </div>
+    </div>
+
+    <div class="stp">
+      <span class="n">2</span>
+      <div>
+        <div style="font-weight:500">Upload Amazon's template to AsinFlow</div>
+        <div class="mut" style="margin:4px 0 8px">Choose the template file. AF fills in the Sourcing cost for the <span class="num" style="color:#e6e3dc">142</span> selected ASINs and gives you the file to upload back to Amazon.</div>
+        <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap">
+          <label class="btn" for="f">Choose file</label>
+          <input id="f" type="file" style="position:absolute;width:1px;height:1px;opacity:0">
+          <span class="mut">no file chosen</span>
+        </div>
+      </div>
+    </div>
+
+    <div class="stp" style="opacity:.55">
+      <span class="n" style="color:#8f8b82">3</span>
+      <div>
+        <div style="font-weight:500">Upload COGS to Seller Central</div>
+        <div class="mut" style="margin-top:4px">After step 2: upload the filled file under Sourcing Cost Bulk Update.</div>
+      </div>
+    </div>
+
+    <div style="display:flex;justify-content:flex-end;gap:8px;padding-top:6px;border-top:1px solid #2a2824">
+      <button class="btn">Cancel</button>
+      <button class="btn p">Fill template</button>
+    </div>
+  </div>
+</div>
+
+</body>
+</html>
