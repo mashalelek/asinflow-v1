@@ -23,6 +23,7 @@ export const carrierTracking: ComponentDef = {
     const outcomes = { ...r.outcomes };
     if (r.no_carrier_account.length) outcomes._no_carrier_account = `EasyPost has no carrier account for ${r.no_carrier_account.join(", ")}: add it under Carrier Accounts; those rows wait`;
     if (r.rate_limited) outcomes._rate_limited = "EasyPost answered 429; the pass stopped, the remaining rows register next hour";
+    if (Object.keys(r.carrier_used).length) outcomes._carrier_used = Object.entries(r.carrier_used).map(([k, v]) => `${k} → ${v}`).join(", ");
     return { counts, outcomes };
   },
 };

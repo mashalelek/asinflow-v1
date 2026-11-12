@@ -9304,8 +9304,14 @@ is. `server/easypost.ts` is the only module that talks to
   inbound / return row with a real number on an **open PO** (`closed_at IS
   NULL`, any age — a closed PO's rows are never registered; Maria
   2026-11-12), not yet delivered, whose carrier EasyPost tracks for
-  AF (UPS, USPS, FedEx → `FedEx`, DHL → `DHLExpress`, Amazon →
-  `AmazonMws`) → `POST /v2/trackers {tracking_code, carrier, is_return}`.
+  AF (`EASYPOST_CARRIER_OPTIONS`: UPS, USPS, FedEx → `FedExDefault` then
+  auto-detect, DHL → auto-detect then `DHLExpress`, Amazon → `AmazonMws`
+  then auto-detect; a `CREDENTIALS_NOT_FOUND` / `CARRIER_CODE_MISMATCH`
+  answer moves to the next option and the one that worked is kept for the
+  pass — Maria's account has EasyPost's managed FedEx, "FedEx Wallet",
+  which is `FedExDefault`; `FedEx` means a user-owned FedEx account and
+  was refused on every row 2026-11-12) → `POST /v2/trackers
+  {tracking_code, carrier?, is_return}`.
   Idempotent: a re-POST of the same code returns the same tracker
   (recorded); one POST per distinct carrier + number, the answer applied
   at once, the id stored on every row carrying the number. GLS / OnTrac /
@@ -9313,10 +9319,9 @@ is. `server/easypost.ts` is the only module that talks to
   never registered (`easypost_registered_at` stamps the first answer). At
   most 60 POSTs per pass, 750 ms apart; a 429 stops the pass (the rest
   waits for the next hour) and a `CREDENTIALS_NOT_FOUND` answer skips that
-  carrier for the rest of the pass — the first production pass
-  (2026-11-12, 227 in 25 s) was rate-limited after 7 POSTs, and FedEx
-  needs a carrier account on the EasyPost account (Carrier Accounts →
-  FedEx) before its numbers track. Without a key the component logs "EASYPOST_API_KEY not set —
+  carrier for the rest of the pass once every option was refused — the
+  first production pass (2026-11-12, 227 in 25 s) was rate-limited after
+  7 POSTs. Without a key the component logs "EASYPOST_API_KEY not set —
   skipped".
 - **Webhook:** `POST /webhooks/easypost` — public (mounted before the
   session middleware, outside `/api`, so neither requireAuth nor the

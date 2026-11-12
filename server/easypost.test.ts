@@ -8,7 +8,7 @@ import { join } from "node:path";
 import {
   trackerUpdate, trackerAction, registerTrackers, sweepTrackers, applyCarrierUpdate, recordVelocityTrackingStatus, poDeliveryState,
   easypostSignature, verifyEasypostSignature, createEasypostWebhookRouter, easypostCarrier, EASYPOST_CARRIERS, MAX_AGE_DAYS, SILENT_DAYS,
-  easypostDeps, REGISTER_PAUSE_MS, type EasypostFetch, type EasypostTracker,
+  easypostDeps, REGISTER_PAUSE_MS, EASYPOST_CARRIER_OPTIONS, type EasypostFetch, type EasypostTracker,
 } from "./easypost";
 easypostDeps.sleep = async () => {};
 import { carrierStatusText, isTerminalStatus } from "@shared/carrier-status";
@@ -86,8 +86,10 @@ describe("status mapping (recorded trackers)", () => {
 describe("registration", () => {
   const row = (o: Partial<any>) => ({ id: 1, carrier: "USPS", tracking_number: "EZ2000000002", direction: "inbound", delivered_at: null, easypost_tracker_id: null, easypost_registered_at: null, carrier_checked_at: null, ...o });
   it("the carriers EasyPost tracks for AF; GLS / OnTrac / LaserShip / OTHER are not", () => {
-    expect(EASYPOST_CARRIERS).toEqual({ UPS: "UPS", USPS: "USPS", FEDEX: "FedEx", DHL: "DHLExpress", AMAZON: "AmazonMws" });
-    expect(easypostCarrier("fedex")).toBe("FedEx");
+    // FedEx: the managed "FedEx Wallet" account is `FedExDefault` (`FedEx` = a user-owned account → CREDENTIALS_NOT_FOUND, 2026-11-12); DHL: auto-detect first.
+    expect(EASYPOST_CARRIER_OPTIONS).toEqual({ UPS: ["UPS"], USPS: ["USPS"], FEDEX: ["FedExDefault", null], DHL: [null, "DHLExpress"], AMAZON: ["AmazonMws", null] });
+    expect(EASYPOST_CARRIERS).toEqual({ UPS: "UPS", USPS: "USPS", FEDEX: "FedExDefault", DHL: "auto", AMAZON: "AmazonMws" });
+    expect(easypostCarrier("fedex")).toBe("FedExDefault");
     for (const c of ["GLS", "ONTRAC", "LASERSHIP", "OTHER"]) expect(easypostCarrier(c)).toBeNull();
   });
   it("POST /trackers with carrier + tracking_code (+ is_return for a return); the answer is applied to every row with the number; the id stored", async () => {
@@ -139,21 +141,40 @@ describe("registration", () => {
       expect(pauses).toEqual([REGISTER_PAUSE_MS]); // one pause between the two calls, none before the first
     } finally { easypostDeps.sleep = real; }
   });
-  it("a 429 stops the pass (the rest counted rate_limited, candidates again next hour); CREDENTIALS_NOT_FOUND skips that carrier for the rest of the pass — the first production pass, 2026-11-12", async () => {
+  it("a 429 stops the pass (the rest counted rate_limited, candidates again next hour); a carrier refused on every option is skipped for the rest of the pass — the first production pass, 2026-11-12", async () => {
     const calls: any[] = [];
     const fetchFn: EasypostFetch = async (path, init) => {
       const code = JSON.parse(init.body!).tracker;
       calls.push(code);
-      if (code.carrier === "FedEx") return { status: 404, json: async () => ({ error: { code: "CREDENTIALS_NOT_FOUND", message: "Credentials not found for the specified carrier" } }) };
-      if (calls.length >= 3) return { status: 429, json: async () => ({ error: { code: "RATE_LIMITED", message: "Your account has been temporarily rate-limited" } }) };
+      if (code.tracking_code.startsWith("3845")) return { status: 404, json: async () => ({ error: { code: "CREDENTIALS_NOT_FOUND", message: "Credentials not found for the specified carrier" } }) };
+      if (calls.length >= 4) return { status: 429, json: async () => ({ error: { code: "RATE_LIMITED", message: "Your account has been temporarily rate-limited" } }) };
       return { status: 201, json: async () => fx("tracker-in_transit") };
     };
     const rows = [row({ id: 1, carrier: "FEDEX", tracking_number: "384578744445" }), row({ id: 2, carrier: "FEDEX", tracking_number: "384546890989" }), row({ id: 3, carrier: "UPS", tracking_number: "1Z1" }), row({ id: 4, carrier: "UPS", tracking_number: "1Z2" }), row({ id: 5, carrier: "USPS", tracking_number: "9400" }), row({ id: 6, carrier: "FEDEX", tracking_number: "384500000000" })];
     const r = await registerTrackers(fakeQuery(rows), NOW, fetchFn);
-    expect(calls.map((c) => c.tracking_code)).toEqual(["384578744445", "1Z1", "1Z2"]);
+    // FedEx: FedExDefault refused, then auto refused → the carrier is out for the pass; UPS 1Z1 ok; 1Z2 → 429 → stop.
+    expect(calls.map((c) => [c.tracking_code, c.carrier ?? "auto"])).toEqual([["384578744445", "FedExDefault"], ["384578744445", "auto"], ["1Z1", "UPS"], ["1Z2", "UPS"]]);
     expect(r).toMatchObject({ registered: 1, errors: 2, rate_limited: true, no_carrier_account: ["FEDEX"], skipped: { no_carrier_account_fedex: 1, rate_limited: 2 } }); // the last FedEx row is counted rate_limited: the pass had already stopped
     expect(r.outcomes["FEDEX 384578744445"]).toContain("CREDENTIALS_NOT_FOUND");
+    expect(r.outcomes["FEDEX 384578744445"]).toContain("after FedExDefault: CREDENTIALS_NOT_FOUND");
     expect(r.outcomes["UPS 1Z2"]).toContain("HTTP 429");
+  });
+  it("carrier options: FedEx falls back from FedExDefault to auto-detect on CREDENTIALS_NOT_FOUND and keeps the working option for the pass; DHL is auto-detect first; a CARRIER_CODE_MISMATCH advances too", async () => {
+    const calls: any[] = [];
+    const fetchFn: EasypostFetch = async (path, init) => {
+      const t = JSON.parse(init.body!).tracker; calls.push([t.tracking_code, t.carrier ?? "auto"]);
+      if (t.carrier === "FedExDefault") return { status: 404, json: async () => ({ error: { code: "CREDENTIALS_NOT_FOUND", message: "no creds" } }) };
+      if (t.tracking_code === "9261" && !t.carrier) return { status: 422, json: async () => ({ error: { code: "TRACKER.CARRIER_CODE_MISMATCH", message: "mismatch" } }) };
+      return { status: 201, json: async () => ({ ...fx("tracker-in_transit"), carrier: t.carrier ?? "FedExDefault" }) };
+    };
+    const rows = [row({ id: 1, carrier: "FEDEX", tracking_number: "3845A" }), row({ id: 2, carrier: "FEDEX", tracking_number: "3845B" }), row({ id: 3, carrier: "DHL", tracking_number: "9261" }), row({ id: 4, carrier: "DHL", tracking_number: "9262" })];
+    const r = await registerTrackers(fakeQuery(rows), NOW, fetchFn);
+    expect(calls).toEqual([["3845A", "FedExDefault"], ["3845A", "auto"], ["3845B", "auto"], ["9261", "auto"], ["9261", "DHLExpress"], ["9262", "DHLExpress"]]);
+    expect(r).toMatchObject({ registered: 4, errors: 0, no_carrier_account: [], carrier_used: { FEDEX: "auto (FedExDefault)", DHL: "DHLExpress" } });
+    expect(r.outcomes["FEDEX 3845A"]).toContain("(as auto after FedExDefault: CREDENTIALS_NOT_FOUND)");
+    expect(r.outcomes["FEDEX 3845B"]).not.toContain("after");
+    // A POST without a carrier omits the key entirely (EasyPost auto-detects); with one it is sent.
+    expect(JSON.parse(JSON.stringify({ tracker: { tracking_code: "x", is_return: false } }))).not.toHaveProperty("tracker.carrier");
   });
 });
 

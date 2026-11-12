@@ -35,9 +35,21 @@ export const REGISTER_PAUSE_MS = 750;
 /** Test seam. */
 export const easypostDeps = { sleep: (ms: number) => new Promise<void>((r) => setTimeout(r, ms)) };
 
-/** AF carrier → EasyPost carrier string (Tracker.carrier). Absent = EasyPost does not track it for AF. */
-export const EASYPOST_CARRIERS: Readonly<Record<string, string>> = { UPS: "UPS", USPS: "USPS", FEDEX: "FedEx", DHL: "DHLExpress", AMAZON: "AmazonMws" };
+/**
+ * AF carrier → the EasyPost carrier strings to try, in order (null = omit `carrier`, EasyPost auto-detects). A POST that
+ * answers CREDENTIALS_NOT_FOUND or CARRIER_CODE_MISMATCH moves to the next option, and the option that worked is kept
+ * for the rest of the pass. Absent = EasyPost does not track it for AF.
+ *   FedEx: Maria's account has EasyPost's managed FedEx ("FedEx Wallet"), not her own FedEx account — `FedEx` is the
+ *   user-owned account and answered CREDENTIALS_NOT_FOUND on every row (2026-11-12); `FedExDefault` is the managed one.
+ *   DHL: AF's DHL rows are DHL eCommerce numbers as often as Express (one CARRIER_CODE_MISMATCH 2026-11-12) — auto-detect.
+ */
+export const EASYPOST_CARRIER_OPTIONS: Readonly<Record<string, ReadonlyArray<string | null>>> = {
+  UPS: ["UPS"], USPS: ["USPS"], FEDEX: ["FedExDefault", null], DHL: [null, "DHLExpress"], AMAZON: ["AmazonMws", null],
+};
+/** The carriers EasyPost tracks for AF, with the first option each (the tests pin them). */
+export const EASYPOST_CARRIERS: Readonly<Record<string, string>> = Object.fromEntries(Object.entries(EASYPOST_CARRIER_OPTIONS).map(([k, v]) => [k, v[0] ?? "auto"]));
 export const easypostCarrier = (afCarrier: string): string | null => EASYPOST_CARRIERS[String(afCarrier ?? "").toUpperCase()] ?? null;
+const RETRY_NEXT_OPTION = new Set(["CREDENTIALS_NOT_FOUND", "TRACKER.CARRIER_CODE_MISMATCH"]);
 
 export function easypostKey(): string | null {
   return process.env.EASYPOST_API_KEY || process.env.EASYPOST_TEST_API_KEY || null;
@@ -78,8 +90,8 @@ async function call(fetchFn: EasypostFetch, path: string, init: { method: "GET" 
   return body;
 }
 
-export const createTracker = (fetchFn: EasypostFetch, t: { tracking_code: string; carrier: string; is_return: boolean }): Promise<EasypostTracker> =>
-  call(fetchFn, "/trackers", { method: "POST", body: JSON.stringify({ tracker: t }) });
+export const createTracker = (fetchFn: EasypostFetch, t: { tracking_code: string; carrier: string | null; is_return: boolean }): Promise<EasypostTracker> =>
+  call(fetchFn, "/trackers", { method: "POST", body: JSON.stringify({ tracker: t.carrier ? t : { tracking_code: t.tracking_code, is_return: t.is_return } }) });
 export const getTracker = (fetchFn: EasypostFetch, id: string): Promise<EasypostTracker> => call(fetchFn, `/trackers/${encodeURIComponent(id)}`, { method: "GET" });
 
 // ── Pure: what a tracker says, in AF's columns ───────────────────────────────
@@ -146,16 +158,20 @@ export interface RegisterResult {
   registered: number; rows_updated: number; errors: number; skipped: Record<string, number>; outcomes: Record<string, string>;
   /** EasyPost answered 429: the pass stopped there; the rest waits for the next hour. */
   rate_limited: boolean;
-  /** Carriers EasyPost refused with CREDENTIALS_NOT_FOUND (no carrier account on the EasyPost account) — skipped for the rest of the pass. */
+  /** Carriers EasyPost refused on every option (CREDENTIALS_NOT_FOUND / CARRIER_CODE_MISMATCH) — skipped for the rest of the pass. */
   no_carrier_account: string[];
+  /** The EasyPost carrier string that worked per AF carrier this pass ("auto" = omitted). */
+  carrier_used: Record<string, string>;
 }
 
 /** Component 31: register every candidate row on an open PO (one tracker per distinct carrier + number), applying the POST's answer at once. */
 export async function registerTrackers(query: QueryLike, now = new Date(), fetchFn: EasypostFetch = realEasypostFetch, cap = REGISTER_CAP): Promise<RegisterResult> {
-  const r: RegisterResult = { registered: 0, rows_updated: 0, errors: 0, skipped: {}, outcomes: {}, rate_limited: false, no_carrier_account: [] };
+  const r: RegisterResult = { registered: 0, rows_updated: 0, errors: 0, skipped: {}, outcomes: {}, rate_limited: false, no_carrier_account: [], carrier_used: {} };
   const rows = (await query(CANDIDATES_SQL)).rows as TrackingCandidate[];
   const seen = new Set<string>();
   const skip = (k: string) => { r.skipped[k] = (r.skipped[k] ?? 0) + 1; };
+  /** Which option of EASYPOST_CARRIER_OPTIONS each AF carrier is on this pass (advances on a refused option). */
+  const optionIndex: Record<string, number> = {};
   let calls = 0;
   for (const row of rows) {
     const a = trackerAction(row, now, "register");
@@ -166,21 +182,33 @@ export async function registerTrackers(query: QueryLike, now = new Date(), fetch
     if (r.rate_limited) { skip("rate_limited"); continue; }
     if (r.no_carrier_account.includes(row.carrier.toUpperCase())) { skip(`no_carrier_account_${row.carrier.toLowerCase()}`); continue; }
     if (calls >= cap) { skip("over_cap"); continue; }
-    if (calls > 0) await easypostDeps.sleep(REGISTER_PAUSE_MS);
-    calls++;
-    try {
-      const t = await createTracker(fetchFn, { tracking_code: row.tracking_number, carrier: easypostCarrier(row.carrier)!, is_return: row.direction === "return" });
-      const u = trackerUpdate(t);
-      r.rows_updated += await applyCarrierUpdate(query, u);
-      r.registered++;
-      r.outcomes[key] = `${u.easypost_tracker_id} ${u.carrier_status}${u.est_delivery_at ? ` eta ${u.est_delivery_at.slice(0, 10)}` : ""}`;
-    } catch (e: any) {
-      r.errors++;
-      r.outcomes[key] = `error: ${e?.message ?? e}`;
-      // 429: EasyPost rate-limited the account — stop here, the rest waits for the next pass (nothing is lost: unregistered rows stay candidates).
-      if (e instanceof EasypostError && e.status === 429) r.rate_limited = true;
-      // CREDENTIALS_NOT_FOUND: this carrier needs a carrier account on the EasyPost account (FedEx, 2026-11-12) — one error line, the carrier's other rows wait.
-      if (e instanceof EasypostError && e.code === "CREDENTIALS_NOT_FOUND") r.no_carrier_account.push(row.carrier.toUpperCase());
+    const af = row.carrier.toUpperCase();
+    const options = EASYPOST_CARRIER_OPTIONS[af] ?? [];
+    const tried: string[] = [];
+    // The options in order; a refused option advances the carrier for the rest of the pass, so one probe per option per pass.
+    for (let i = optionIndex[af] ?? 0; i < options.length; i++) {
+      if (calls > 0) await easypostDeps.sleep(REGISTER_PAUSE_MS);
+      calls++;
+      const carrier = options[i];
+      try {
+        const t = await createTracker(fetchFn, { tracking_code: row.tracking_number, carrier, is_return: row.direction === "return" });
+        const u = trackerUpdate(t);
+        r.rows_updated += await applyCarrierUpdate(query, u);
+        r.registered++;
+        optionIndex[af] = i; r.carrier_used[af] = carrier ?? `auto (${t.carrier ?? "?"})`;
+        r.outcomes[key] = `${u.easypost_tracker_id} ${u.carrier_status}${u.est_delivery_at ? ` eta ${u.est_delivery_at.slice(0, 10)}` : ""}${tried.length ? ` (as ${carrier ?? "auto"} after ${tried.join(", ")})` : ""}`;
+        break;
+      } catch (e: any) {
+        const code = e instanceof EasypostError ? e.code : null;
+        // 429: EasyPost rate-limited the account — stop here, the rest waits for the next pass (nothing is lost: unregistered rows stay candidates).
+        if (e instanceof EasypostError && e.status === 429) { r.rate_limited = true; r.errors++; r.outcomes[key] = `error: ${e.message}`; break; }
+        if (code && RETRY_NEXT_OPTION.has(code) && i + 1 < options.length) { tried.push(`${carrier ?? "auto"}: ${code}`); optionIndex[af] = i + 1; continue; }
+        r.errors++;
+        r.outcomes[key] = `error: ${e?.message ?? e}${tried.length ? ` (after ${tried.join("; ")})` : ""}`;
+        // Every option refused: this carrier needs a carrier account on the EasyPost account — one error line, the carrier's other rows wait.
+        if (code && RETRY_NEXT_OPTION.has(code)) r.no_carrier_account.push(af);
+        break;
+      }
     }
   }
   return r;

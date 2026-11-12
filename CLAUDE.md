@@ -185,7 +185,7 @@ Velocity's PUT takes `trackingNumbers` as plain strings (probe 2026-10-21).
 **Carrier status — EasyPost (SPEC §26 "Carrier status — EasyPost", claims patch §3.9, migration 104, 2026-11-11):**
 `server/easypost.ts` is the ONLY module that calls `api.easypost.com`. Component 31 (hourly) registers every
 inbound / return row on an OPEN PO (`closed_at IS NULL`, any age; closed POs never) EasyPost can track (UPS / USPS /
-FedEx / DHL / Amazon; GLS and the rest skipped, Velocity's `tracking_status` is their fallback) — idempotent, one
+FedEx as `FedExDefault` — the managed "FedEx Wallet", never `FedEx` / DHL auto-detect / Amazon; `EASYPOST_CARRIER_OPTIONS`; GLS and the rest skipped, Velocity's `tracking_status` is their fallback) — idempotent, one
 tracker per number, never once delivered; the sweep stops 60 days after registration;
 `POST /webhooks/easypost` (public, outside `/api`, HMAC-signed with `EASYPOST_WEBHOOK_SECRET`, 401 otherwise)
 stores `tracker.updated`; component 32 (daily) re-reads trackers silent for 3 days. `EASYPOST_API_KEY` is the
