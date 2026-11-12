@@ -271,7 +271,7 @@ export function PoHistory({ poId, reloadKey }: { poId: string; reloadKey: unknow
   }, [poId, reloadKey]);
   if (err) return <p className="text-sm text-destructive">{err}</p>;
   if (!rows) return <p className="text-sm text-muted-foreground">Loading…</p>;
-  if (rows.length === 0) return <p className="text-sm text-muted-foreground" data-testid="po-history-empty">No edits yet. Changes made in AF are listed here.</p>;
+  if (rows.length === 0) return <p className="text-sm text-muted-foreground" data-testid="po-history-empty">No edits yet.</p>;
   const hairline = { borderBottom: "0.5px solid hsl(var(--border))" } as const;
   const what = (r: any) => r.entity === "po" ? "PO" : r.entity === "asin" ? `ASIN ${r.entity_label ?? ""}` : r.entity === "line" ? `Product ${r.entity_label ?? ""}` : "Shipment";
   return (
@@ -329,15 +329,16 @@ export function PoDangerActions({ poId, reloadKey, onCanceled, onDeleted }: { po
     } catch (e: any) { toast({ title: confirm === "delete" ? "Not deleted" : "Not canceled", description: e.message, variant: "destructive" }); setConfirm(null); }
     finally { setBusy(false); }
   };
+  // §5.1 (Maria 2026-11-12): the block ("N Individual units shipped to FBA … Reassign the shipment first") is shown only
+  // when the button is clicked and refused — never as standing text beside the buttons.
+  const guard = (what: "cancel" | "delete") => {
+    if (g.blocked) { toast({ title: what === "delete" ? "Not deleted" : "Not canceled", description: g.blocked, variant: "destructive" }); return; }
+    setConfirm(what);
+  };
   return (
     <span className="inline-flex items-center gap-2">
-      <span title={g.blocked ?? "Cancel every product of this PO"}>
-        <Button variant="outline" size="sm" disabled={!!g.blocked} onClick={() => setConfirm("cancel")} data-testid="button-cancel-po">Cancel PO</Button>
-      </span>
-      <span title={g.blocked ?? "Delete this PO"}>
-        <Button variant="outline" size="sm" disabled={!!g.blocked} onClick={() => setConfirm("delete")} className="text-destructive hover:text-destructive" data-testid="button-delete-po"><Trash2 className="h-3.5 w-3.5 mr-1" /> Delete PO</Button>
-      </span>
-      {g.blocked && <span className="max-w-[28rem] text-xs text-amber-700 dark:text-amber-400" data-testid="po-blocked-message">{g.blocked}</span>}
+      <Button variant="outline" size="sm" title="Cancel every product of this PO" onClick={() => guard("cancel")} data-testid="button-cancel-po">Cancel PO</Button>
+      <Button variant="outline" size="sm" title="Delete this PO" onClick={() => guard("delete")} className="text-destructive hover:text-destructive" data-testid="button-delete-po"><Trash2 className="h-3.5 w-3.5 mr-1" /> Delete PO</Button>
       <Dialog open={confirm != null} onOpenChange={(v) => { if (!v) setConfirm(null); }}>
         <DialogContent dialogId="po-danger-confirm" confirm className="max-w-xl" data-testid="po-danger-confirm">
           <DialogHeader>

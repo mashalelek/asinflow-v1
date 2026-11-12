@@ -30,6 +30,7 @@ import { OpenClaimForm, qtyEquivalents } from "@/components/po-claims";
 import { useToast } from "@/hooks/use-toast";
 import { replaceQuery } from "@/lib/list-scroll";
 import { fmtQty } from "@/lib/po-qty";
+import { useColumnWidths, ResizeHandle } from "@/hooks/use-column-widths";
 import { QTY_KIND } from "@shared/quantity-kinds";
 import { CLAIM_BUCKET_LABELS, CLAIM_BUCKET_TABS, TASK_GROUPS, TASK_GROUP_LABELS, type ClaimBucket, type ClaimStep, type TaskGroup } from "@shared/claim-bucket";
 import { GROUP_HINTS, type PrimaryAction, type UiStep, type StepHandler } from "@shared/claim-ui";
@@ -55,7 +56,7 @@ interface ClaimsResponse { claims: ClaimRowApi[]; counts: Record<ClaimBucket, nu
 interface ClaimDetailApi {
   claim: ClaimRowApi;
   po: { id: string; order_id: string; supplier: string; order_date: string; ships_to: string | null; closed_at: string | null; alt_order_ids: string | null; payments: Array<{ id: number; method: string; nickname: string | null; last4: string | null; amount: string | null }>; refunds: Array<{ id: number; amount: string | null; method: string | null; refunded_at: string | null; note: string | null; po_line_item_id: string | null }> };
-  other_open_claims: Array<{ id: number; kind: string; asin: string | null; line_no: number; qty: number | null; remaining: number | null }>;
+  other_open_claims: Array<{ id: number; kind: string; asin: string | null; line_no: number; qty: number | null; amount_owed: number | null; outcome: string | null; remaining: number | null }>;
   events: Array<{ id: number; at: string; type: string; summary: string | null; by_name: string | null }>;
   linked: {
     documents: Array<{ id: number; type: string; file_name: string; drive_file_id: string | null }>;
@@ -100,9 +101,18 @@ export function rowsForView(rows: readonly ClaimRowApi[], s: ClaimsUrlState): Cl
   if (set.has("closed") && s.dismissed) set.add("dismissed");
   return rows.filter((r) => set.has(r.bucket) && matchesFilter(r, s.q) && (!s.kind || r.kind === s.kind) && (!s.from || r.order_date >= s.from) && (!s.to || r.order_date <= s.to));
 }
+/** A suggestion that carries figures (status suggested, a quantity). */
+const suggestionWithFigures = (r: Pick<ClaimRowApi, "status" | "qty">) => r.status === "suggested" && r.qty != null;
+/** A converted badge claim still waiting on its quantity (open, no qty, enter_quantity open). */
+const waitingOnQuantity = (r: Pick<ClaimRowApi, "status" | "qty" | "tasks">) => r.status === "open" && r.qty == null && r.tasks.some((t) => t.kind === "enter_quantity" && !t.done_at);
+/** Decide's order (Maria 2026-11-12): suggestions with figures first, then the rest, the converted claims waiting on a quantity last; the server's order (longest waiting first) within each. */
+export function decideOrder(rows: readonly ClaimRowApi[]): ClaimRowApi[] {
+  const tier = (r: ClaimRowApi) => (suggestionWithFigures(r) ? 0 : waitingOnQuantity(r) ? 2 : 1);
+  return rows.map((r, i) => ({ r, i })).sort((a, b) => tier(a.r) - tier(b.r) || a.i - b.i).map((x) => x.r);
+}
 /** Needs attention grouped by the server's group (the primary action's task group; an unreported claim → Supplier). */
 export function groupNeedsAttention(rows: readonly ClaimRowApi[]): Array<{ group: TaskGroup; rows: ClaimRowApi[] }> {
-  return TASK_GROUPS.map((group) => ({ group, rows: rows.filter((r) => r.group === group) })).filter((g) => g.rows.length > 0);
+  return TASK_GROUPS.map((group) => { const g = rows.filter((r) => r.group === group); return { group, rows: group === "decide" ? decideOrder(g) : g }; }).filter((g) => g.rows.length > 0);
 }
 export const money = (v: number | string | null | undefined) => (v == null || v === "" ? "—" : `$${Number(v).toFixed(2)}`);
 const fmtDate = (iso: string | null | undefined) => { if (!iso) return "—"; const [y, m, d] = iso.slice(0, 10).split("-"); return `${Number(m)}/${Number(d)}/${y}`; };
@@ -121,22 +131,28 @@ export function productText(c: Pick<ClaimRowApi, "po_line_item_id" | "product_na
   return { main: c.product_name ?? c.asin ?? "line", sub: c.asin ?? "" };
 }
 
-// ── Columns: the mockup's grid (28 · 150 · 180 · 130 · 110 · 120 · 1fr · 90 · 180, 12 px gaps) ────────────────────────
+// ── Columns: the mockup's grid, widened Product (Maria 2026-11-12): 28 · 140 · 240 · 120 · 100 · 110 · 1fr · 70 · 180, 12 px gaps ──
+// Resizable (the PO table's use-column-widths hook; widths per browser under CLAIMS_COL_WIDTHS_KEY); Step takes the rest.
 
 export const CLAIM_COLUMNS: ReadonlyArray<{ id: string; label: string; width: number | "1fr"; kind?: string }> = [
   { id: "chk", label: "", width: 28 },
-  { id: "supplier", label: "Supplier · PO", width: 150 },
-  { id: "product", label: "Product", width: 180 },
-  { id: "kind", label: "Kind", width: 130 },
-  { id: "qty", label: "Qty", width: 110, kind: QTY_KIND.individual },
-  { id: "owed", label: "Owed / left", width: 120 },
+  { id: "supplier", label: "Supplier · PO", width: 140 },
+  { id: "product", label: "Product", width: 240 },
+  { id: "kind", label: "Kind", width: 120 },
+  { id: "qty", label: "Qty", width: 100, kind: QTY_KIND.individual },
+  { id: "owed", label: "Owed / left", width: 110 },
   { id: "step", label: "Step", width: "1fr" },
-  { id: "waiting", label: "Waiting", width: 90 },
+  { id: "waiting", label: "Waiting", width: 70 },
   { id: "do", label: "Do", width: 180 },
 ];
+export const CLAIMS_COL_WIDTHS_KEY = "claims-col-widths";
 /** The fixed columns plus the gaps (the mockup's `.row` / `.hd`): 1,084 px, leaving the Step column ≥ 148 px at 1280 (page padding 24). */
 export const CLAIMS_TABLE_WIDTH = CLAIM_COLUMNS.reduce((t, c) => t + (c.width === "1fr" ? 0 : c.width), 0) + (CLAIM_COLUMNS.length - 1) * 12;
-export const CLAIMS_GRID = CLAIM_COLUMNS.map((c) => (c.width === "1fr" ? "1fr" : `${c.width}px`)).join(" ");
+/** The grid template: the saved widths over the defaults; Step is always the rest. */
+export const claimsGrid = (widths: Record<string, number> = {}): string => CLAIM_COLUMNS.map((c) => (c.width === "1fr" ? "1fr" : `${widths[c.id] ?? c.width}px`)).join(" ");
+export const CLAIMS_GRID = claimsGrid();
+/** Which columns carry a resize handle: every fixed-width one but the checkbox. */
+export const resizableClaimColumn = (c: { id: string; width: number | "1fr" }) => c.width !== "1fr" && c.id !== "chk";
 
 const CHANNELS = ["email", "chat", "phone", "form", "other"];
 const fieldRow = { display: "flex", gap: 8, flexWrap: "wrap", alignItems: "center" } as const;
@@ -220,6 +236,8 @@ function RefundReceivedForm({ claim, payments, others, onDone, onCancel }: { cla
   const first = payments[0];
   const [f, setF] = useState({ amount: claim.remaining != null ? claim.remaining.toFixed(2) : "", method: prefillMethod(payments), refunded_at: new Date().toISOString().slice(0, 10), nickname: first?.nickname ?? "", last4: first?.last4 ?? "", note: "" });
   const [split, setSplit] = useState<Record<number, string>>({});
+  // "Split across other claims on this PO" is collapsed by default (Maria 2026-11-12); the server lists only the split targets (isSplitTarget).
+  const [splitOpen, setSplitOpen] = useState(false);
   const othersSum = Object.values(split).reduce((t, v) => t + (Number(v) || 0), 0);
   const mine = Math.round(((Number(f.amount) || 0) - othersSum) * 100) / 100;
   const submit = async () => {
@@ -244,12 +262,15 @@ function RefundReceivedForm({ claim, payments, others, onDone, onCancel }: { cla
       </div>
       {others.length > 0 && (
         <div style={{ marginTop: 8 }} data-testid="refund-split">
-          <div className="mut">One refund for several claims? Give the PO's other open claims their share; the rest ({money(mine)}) stays on this one.</div>
-          {others.map((o) => (
-            <label key={o.id} style={{ ...fieldRow, marginTop: 4 }}>
-              <span style={{ width: 260, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{o.asin ?? "whole PO"}{o.line_no ? ` line ${o.line_no}` : ""} · {o.qty ?? "?"} {CLAIM_KIND_LABELS[o.kind as ClaimKind] ?? o.kind} · {money(o.remaining)} owed</span>
+          <button type="button" className="lnk mut" aria-expanded={splitOpen} onClick={() => setSplitOpen((v) => !v)} data-testid="button-refund-split-toggle">Split across other claims on this PO {splitOpen ? "▾" : "▸"}</button>
+          {splitOpen && others.map((o) => (
+            <label key={o.id} style={{ ...fieldRow, marginTop: 4 }} data-testid={`refund-split-row-${o.id}`}>
+              <span style={{ width: 320, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }} title={`${o.asin ?? "whole PO"}${o.line_no ? ` line ${o.line_no}` : ""}`}>
+                {CLAIM_KIND_LABELS[o.kind as ClaimKind] ?? o.kind} · {fmtQty(o.qty)} <span className="mut">Individual units</span> · {money(o.amount_owed)} owed{o.remaining != null && o.amount_owed != null && Math.abs(o.remaining - o.amount_owed) > 0.005 ? <span className="mut"> ({money(o.remaining)} left)</span> : null}
+              </span>
               <input className="f num" value={split[o.id] ?? ""} onChange={(e) => setSplit({ ...split, [o.id]: e.target.value })} placeholder="$" style={{ width: 90, textAlign: "right" }} data-testid={`input-split-${o.id}`} />
             </label>))}
+          {splitOpen && othersSum > 0 && <div className="mut" style={{ marginTop: 4 }}>{money(mine)} stays on this claim.</div>}
         </div>)}
       <div style={{ ...fieldRow, marginTop: 10 }}>
         <button type="button" className="btn p" disabled={!(Number(f.amount) > 0) || mine < 0} onClick={() => void submit()} data-testid="button-refund-save">Refund received</button>
@@ -310,6 +331,7 @@ function ClaimsList() {
   }, [data, s.q, s.kind, s.from, s.to]);
   const needsAttention = s.bucket.length === 1 && s.bucket[0] === "needs_attention";
   const groups = useMemo(() => (needsAttention ? groupNeedsAttention(rows) : []), [rows, needsAttention]);
+  const { colWidths, handleResizeStart, resetWidths } = useColumnWidths(CLAIMS_COL_WIDTHS_KEY);
 
   return (
     <div className="cl" style={{ display: "flex", flexDirection: "column" }} data-testid="claims-page">
@@ -332,14 +354,19 @@ function ClaimsList() {
         {s.bucket.includes("closed") && (
           <label className="mut" style={{ marginLeft: "auto", display: "inline-flex", alignItems: "center", gap: 6, paddingBottom: 10 }}><input type="checkbox" checked={s.dismissed} onChange={(e) => setS({ ...s, dismissed: e.target.checked })} data-testid="checkbox-claims-dismissed" /> show dismissed</label>)}
         {s.bucket.length > 1 && <span className="mut" style={{ marginLeft: "auto", paddingBottom: 10 }} data-testid="claims-combined">Refunds due: {s.bucket.map((b) => CLAIM_BUCKET_LABELS[b]).join(" + ")}</span>}
+        {Object.keys(colWidths).length > 0 && <button type="button" className="lnk mut" style={{ marginLeft: 12, paddingBottom: 10 }} onClick={resetWidths} data-testid="button-claims-reset-widths">Reset widths</button>}
       </div>
 
-      <div style={{ padding: "4px 12px 24px" }}>
+      <div style={{ padding: "4px 12px 24px", "--claims-grid": claimsGrid(colWidths) } as React.CSSProperties}>
         {error && <div style={{ color: "#c97b6a", padding: 12 }} data-testid="text-claims-error">{error}</div>}
         {!data && !error && <div className="mut" style={{ padding: 12 }}>Loading…</div>}
         {data && (
           <div className="hd" data-testid="claims-table">
-            {CLAIM_COLUMNS.map((c) => <span key={c.id} data-testid={`th-claims-${c.id}`}>{c.kind && <span className="kind-line">{c.kind}</span>}{c.label}</span>)}
+            {CLAIM_COLUMNS.map((c) => (
+              <span key={c.id} data-testid={`th-claims-${c.id}`} data-resize-col={resizableClaimColumn(c) ? c.id : undefined} style={{ position: "relative" }}>
+                {c.kind && <span className="kind-line">{c.kind}</span>}{c.label}
+                {resizableClaimColumn(c) && <ResizeHandle onMouseDown={(e) => handleResizeStart(e, c.id)} />}
+              </span>))}
           </div>)}
         {data && needsAttention && (
           <div data-testid="claims-needs-attention">
@@ -527,10 +554,31 @@ function TimelineEntry({ e, call, current }: { e: ClaimDetailApi["events"][numbe
               {REMOVABLE_EVENTS.includes(e.type) && (removing
                 ? <span className="mut" style={{ fontSize: 11, marginLeft: 6 }}>remove this entry and undo what it records? <button type="button" className="lnk red" style={{ fontSize: 11 }} onClick={() => void call(`/api/pos/claims/events/${e.id}`, "DELETE").then(() => setRemoving(false))} data-testid={`button-event-remove-confirm-${e.id}`}>Remove</button> <button type="button" className="ed" onClick={() => setRemoving(false)}>cancel</button></span>
                 : <button type="button" className="ed" onClick={() => setRemoving(true)} data-testid={`button-event-remove-${e.id}`}>remove</button>)}</div>
-            {(e.summary || e.by_name) && <div className="n" style={{ overflowWrap: "anywhere" }}>{e.summary}{e.by_name ? ` · ${e.by_name}` : ""}</div>}
+            {(e.summary || e.by_name) && <TimelineNote id={e.id} text={`${e.summary ?? ""}${e.by_name ? ` · ${e.by_name}` : ""}`} />}
           </>)}
       </div>
     </React.Fragment>
+  );
+}
+
+/** Past this many lines an entry's note is clamped with "more". */
+export const NOTE_CLAMP_LINES = 3;
+/**
+ * An entry's note in the entry column (Maria 2026-11-12: a 300-character summary used to render in the dot column one
+ * character per line — the mockup's `.n` step-circle rule, width 24 px, caught the timeline's `.tl .n`; claims.css
+ * now resets it). Long notes wrap; past 3 lines they are clamped with "more" / "less" — measured, not guessed.
+ */
+function TimelineNote({ id, text }: { id: number; text: string }) {
+  const [expanded, setExpanded] = useState(false);
+  const [clamped, setClamped] = useState(false);
+  const ref = React.useRef<HTMLDivElement>(null);
+  useEffect(() => { const el = ref.current; if (!el) return; setClamped(el.scrollHeight > el.clientHeight + 1); }, [text, expanded]);
+  const clamp: React.CSSProperties = expanded ? {} : { display: "-webkit-box", WebkitLineClamp: NOTE_CLAMP_LINES, WebkitBoxOrient: "vertical", overflow: "hidden" };
+  return (
+    <div className="n" data-testid={`event-note-${id}`}>
+      <div ref={ref} style={{ overflowWrap: "anywhere", whiteSpace: "pre-wrap", ...clamp }}>{text}</div>
+      {(clamped || expanded) && <button type="button" className="lnk mut" style={{ fontSize: 11 }} onClick={() => setExpanded((v) => !v)} data-testid={`button-event-note-more-${id}`}>{expanded ? "less" : "more"}</button>}
+    </div>
   );
 }
 
@@ -550,8 +598,11 @@ function ClaimDetailPage({ id }: { id: number }) {
   if (error) return <div className="cl" style={{ padding: "14px 24px" }}><Link href="/claims">← Claims</Link><p style={{ color: "#c97b6a", marginTop: 12 }}>{error}</p></div>;
   if (!d) return <div className="cl mut" style={{ padding: "14px 24px" }}>Loading…</div>;
   const c = d.claim;
-  const emailed = c.kind === "canceled" && c.found_by === "email";
+  // a canceled claim (any source) has no Report step; Contacted supplier appears only once its refund timed out (paths, Maria 2026-11-12)
+  const canceled = c.kind === "canceled";
+  const emailed = canceled;
   const open = c.status === "open";
+  const contactable = open && (!canceled || c.timed_out || c.tasks.some((t) => t.kind === "contact_supplier" && !t.done_at && /^\d+ business days: /.test(t.reason ?? "")));
   const openStep = (s: UiStep) => {
     const h: StepHandler = s.handler;
     if (h.type === "none") { toast({ title: "Not yet", description: h.why }); return; }
@@ -587,7 +638,7 @@ function ClaimDetailPage({ id }: { id: number }) {
           </div>
         </div>
         <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }} data-testid="claim-actions">
-          {open && !emailed && <button type="button" className={c.reported_at ? "btn" : "btn p"} onClick={() => setSlot({ kind: "contact" })} data-testid="button-claim-contacted">Contacted supplier</button>}
+          {contactable && <button type="button" className={c.reported_at ? "btn" : "btn p"} onClick={() => setSlot({ kind: "contact" })} data-testid="button-claim-contacted">Contacted supplier</button>}
           {open && <button type="button" className={c.reported_at && c.action.kind === "none" ? "btn p" : "btn"} onClick={() => setSlot({ kind: "reply" })} data-testid="button-claim-replied">Supplier replied</button>}
           {open && (
             <DropdownMenu>
@@ -638,7 +689,6 @@ function ClaimDetailPage({ id }: { id: number }) {
               <span className={`v${c.reported_at ? "" : " mut"}`} data-testid="claim-reported">{c.reported_at ? <>{fmtMD(c.reported_at)}{c.reported_channel ? ` · ${c.reported_channel}` : ""}<button type="button" className="ed" onClick={() => setSlot({ kind: "contact" })}>edit</button></> : emailed ? "not needed (emailed cancellation)" : "— not yet"}</span>
               {c.status === "closed" && <><span className="mut">Closed</span><span className="v">{fmtMD(c.closed_at)}</span></>}
             </div>
-            {c.conversion_flags.length > 0 && <div className="mut" style={{ marginTop: 8, fontSize: 11 }}>converted from the sheet era: {c.conversion_flags.join(", ")}</div>}
             <div style={{ ...sectionLine, color: "#a39f96" }}><InlineNoteBox value={c.note} label="note" testId="claim-note" onSave={async (v) => call(`/api/pos/claims/${c.id}`, "PATCH", { note: v })} /></div>
           </div>
 
@@ -651,7 +701,6 @@ function ClaimDetailPage({ id }: { id: number }) {
                   <button type="button" disabled={s.handler.type === "none" || (!open && c.status !== "suggested")} onClick={() => openStep(s)} title={s.handler.type === "none" ? s.handler.why : "set or change"} data-testid={`button-step-${s.key}`}>{s.current && s.todo ? s.todo : s.label}{s.at ? <span className="mut"> {fmtMD(s.at)}</span> : null}</button>
                 </div>))}
             </div>
-            <div className="mut" style={{ marginTop: 8 }}>Steps change with the outcome: a return adds label → sent → shipped → delivered; a replacement adds promised → shipped → arrived.</div>
           </div>
 
           <div className="card" data-testid="claim-linked">
@@ -691,7 +740,6 @@ function ClaimDetailPage({ id }: { id: number }) {
             </div>
             {open && <div style={{ marginTop: 10, display: "flex", gap: 8, flexWrap: "wrap" }}><button type="button" className="btn" onClick={() => setSlot({ kind: "refund" })} data-testid="button-claim-refund-received">+ Refund received</button>
               {c.remaining != null && c.remaining > 0 && c.received > 0 && <button type="button" className="btn" onClick={() => setSlot({ kind: "remainder" })} data-testid="button-claim-write-off-remainder">Write off remainder</button>}</div>}
-            <div className="mut" style={{ marginTop: 8 }}>Several refunds can land on one claim (two gift cards); one refund can cover several claims on the same PO.</div>
           </div>
 
           <div className="card" data-testid="claim-next">

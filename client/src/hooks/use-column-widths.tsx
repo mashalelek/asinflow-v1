@@ -29,7 +29,8 @@ export function useColumnWidths(storageKey: string, minWidth = 50) {
   const handleResizeStart = useCallback((e: React.MouseEvent, colId: string) => {
     e.preventDefault();
     e.stopPropagation();
-    const th = (e.target as HTMLElement).closest("th");
+    // A <th> of a table, or any grid header cell marked data-resize-col (the Claims list, 2026-11-12).
+    const th = (e.target as HTMLElement).closest("th, [data-resize-col]");
     if (!th) return;
     const startW = th.getBoundingClientRect().width;
     resizeRef.current = { colId, startX: e.clientX, startW };
@@ -38,8 +39,11 @@ export function useColumnWidths(storageKey: string, minWidth = 50) {
       if (!resizeRef.current) return;
       const delta = ev.clientX - resizeRef.current.startX;
       const newW = Math.max(minWidth, resizeRef.current.startW + delta);
+      // The column id is read NOW: the state updater runs later (React batches moves), and when the mouse is released
+      // before that render the ref is already null — the page crashed on a fast drag (browser check 2026-11-12).
+      const { colId: movedId } = resizeRef.current;
       setColWidths((prev) => {
-        const next = { ...prev, [resizeRef.current!.colId]: newW };
+        const next = { ...prev, [movedId]: newW };
         saveWidths(next);
         return next;
       });

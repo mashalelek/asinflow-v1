@@ -4,7 +4,7 @@ import { describe, it, expect } from "vitest";
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import {
-  missingSuggestion, neverReceivedSuggestion, lostRule, deliveredAt, isNewSuggestion, suggestClaim, sweepSuggestions,
+  missingSuggestion, neverReceivedSuggestion, lostRule, deliveredAt, isNewSuggestion, suggestClaim, sweepSuggestions, supersedeConvertedOnLine, sweepSupersededConverted, CONVERTED_BADGE_SQL, SUPERSEDED_REASON,
   MISSING_ROWS_SQL, PO_STATE_SQL, TRACKING_STATE_SQL, MISSING_AFTER_BUSINESS_DAYS, LOST_AFTER_BUSINESS_DAYS, IN_TRANSIT_MAX_DAYS, NOTHING_AFTER_DAYS,
   type AsinRowState, type TrackingState, type PoState,
 } from "./claim-suggestions";
@@ -58,6 +58,9 @@ describe("missing (D8)", () => {
     expect(isNewSuggestion(s, [{ po_id: PO, po_line_item_id: LINE, kind: "missing", status: "suggested", suggestion_key: "missing:a1:12:8" }])).toBe("already_suggested");
     expect(isNewSuggestion(s, [{ po_id: PO, po_line_item_id: LINE, kind: "missing", status: "closed", suggestion_key: null }])).toBe("created");
     expect(isNewSuggestion(s, [{ po_id: PO, po_line_item_id: null, kind: "never_received", status: "open", suggestion_key: null }])).toBe("created");
+    // a converted badge claim (migration 101, qty NULL, enter_quantity open) of the same kind on the line never blocks — it is superseded instead (Maria 2026-11-12)
+    expect(isNewSuggestion(s, [{ po_id: PO, po_line_item_id: LINE, kind: "missing", status: "open", suggestion_key: null, converted_badge: true }])).toBe("created");
+    expect(isNewSuggestion(s, [{ po_id: PO, po_line_item_id: LINE, kind: "missing", status: "open", suggestion_key: null, converted_badge: false }])).toBe("already_suggested");
   });
 });
 
@@ -122,7 +125,12 @@ describe("the writer and the sweep", () => {
     expect(r).toEqual({ created: true, id: 77, why: "created" });
     const ins = writes.find((w) => /^INSERT INTO supplier_claims /.test(w.sql))!;
     expect(ins.sql).toContain("'suggested', $7, $8, $9, $10");
-    expect(ins.params).toEqual([PO, LINE, "missing", 2, 11.94, null, "auto", null, null, "missing:a1:12:10"]);
+    expect(ins.params).toEqual([PO, LINE, "missing", 2, 11.94, null, "auto", null, null, "missing:a1:12:10", null]);
+    // a canceled suggestion is supplier-confirmed at creation on the email's date (paths, Maria 2026-11-12)
+    expect(ins.sql).toContain("suggestion_key, supplier_confirmed_at)");
+    writes.length = 0;
+    await suggestClaim(query, { ...s, kind: "canceled", key: "c1", confirmed_at: "2026-10-27T14:00:00.000Z" });
+    expect(writes.find((w) => /^INSERT INTO supplier_claims /.test(w.sql))!.params[10]).toBe("2026-10-27T14:00:00.000Z");
     expect(writes.find((w) => /INSERT INTO supplier_claim_events/.test(w.sql))!.params.slice(0, 2)).toEqual([77, "found"]);
     const task = writes.find((w) => /INSERT INTO supplier_claim_tasks/.test(w.sql))!;
     expect(task.params.slice(0, 2)).toEqual([77, "review_suggestion"]);
@@ -133,6 +141,62 @@ describe("the writer and the sweep", () => {
     await suggestClaim(query, { ...s, qty: null, key: "k2" });
     expect(writes.filter((w) => /INSERT INTO supplier_claim_tasks/.test(w.sql)).map((w) => w.params[1])).toEqual(["review_suggestion", "enter_quantity"]);
     expect(await suggestClaim(query, s, { existing: [{ po_id: PO, po_line_item_id: LINE, kind: "missing", status: "dismissed", suggestion_key: s.key }] })).toMatchObject({ created: false, why: "same_key" });
+  });
+  it("a suggestion on a line supersedes the converted badge claims there — a whole-PO suggestion those on every line of the PO: dismissed 'superseded by found claim' with a History row and an event; the ids come back on the outcome; a dry run only lists", async () => {
+    const writes: Array<{ sql: string; params: any[] }> = [];
+    const query = async (sql: string, params?: any[]) => {
+      writes.push({ sql: sql.replace(/\s+/g, " ").trim(), params: params ?? [] });
+      if (/^SELECT po_id, po_line_item_id/.test(sql)) return { rows: [], rowCount: 0 };
+      if (/information_schema\.columns/.test(sql)) return { rows: [{ "?column?": 1 }], rowCount: 1 };
+      if (/^SELECT l\.qty_basis/.test(sql)) return { rows: [{ qty_basis: "individual", price: 5.97, adjusted_product_cost: 5.97, retailer_units_per_product: 1, subtotal: 71.64, discount: 0, tax: 0, sh_donations: 0 }], rowCount: 1 };
+      if (/^INSERT INTO supplier_claims /.test(sql)) return { rows: [{ id: 77 }], rowCount: 1 };
+      if (/^SELECT c\.id FROM supplier_claims c WHERE c\.po_id = \$1 AND \(\$2::uuid IS NULL OR c\.po_line_item_id = \$2\)/.test(sql)) return { rows: params![1] == null ? [{ id: 3099 }, { id: 3106 }] : [{ id: 3099 }, { id: 77 }], rowCount: 2 };
+      if (/^SELECT \* FROM supplier_claims WHERE id = \$1/.test(sql)) return { rows: [{ id: params![0], po_id: PO, status: "open", outcome: null }], rowCount: 1 };
+      return { rows: [], rowCount: 1 };
+    };
+    expect(CONVERTED_BADGE_SQL).toContain("c.status = 'open' AND c.qty IS NULL");
+    expect(CONVERTED_BADGE_SQL).toContain("supplier_claim_conversions");
+    expect(CONVERTED_BADGE_SQL).toContain("t.kind = 'enter_quantity' AND t.done_at IS NULL");
+    const s = missingSuggestion(asinRow(), [tracking()], NOW)!;
+    const r = await suggestClaim(query, s);
+    expect(r).toEqual({ created: true, id: 77, why: "created", superseded: [3099] }); // never its own id
+    const dismiss = writes.find((w) => /^UPDATE supplier_claims SET status = 'dismissed'/.test(w.sql))!;
+    expect(dismiss.params).toEqual([3099]);
+    expect(writes.filter((w) => /^UPDATE supplier_claims SET status = 'dismissed'/.test(w.sql))).toHaveLength(1);
+    const history = writes.find((w) => /po_edit_log/.test(w.sql) && w.params.some((p) => p === "claim dismissed" || (typeof p === "string" && p.includes("claim dismissed"))))!;
+    expect(history).toBeTruthy();
+    expect(JSON.stringify(history.params)).toContain(SUPERSEDED_REASON);
+    const ev = writes.find((w) => /INSERT INTO supplier_claim_events/.test(w.sql) && w.params[1] === "dismissed")!;
+    expect(ev.params.slice(0, 3)).toEqual([3099, "dismissed", SUPERSEDED_REASON]);
+    // whole-PO: every converted badge claim on the PO
+    writes.length = 0;
+    expect(await supersedeConvertedOnLine(query, PO, null)).toEqual([3099, 3106]);
+    expect(writes.filter((w) => /^UPDATE supplier_claims SET status = 'dismissed'/.test(w.sql)).map((w) => w.params[0])).toEqual([3099, 3106]);
+    // dry run lists, writes nothing
+    writes.length = 0;
+    expect(await supersedeConvertedOnLine(query, PO, LINE, { dryRun: true })).toEqual([3099, 77]);
+    expect(writes.filter((w) => /^UPDATE/.test(w.sql))).toHaveLength(0);
+  });
+  it("sweepSupersededConverted: every converted badge claim whose line carries a suggestion (any status) is dismissed; a dry run lists them", async () => {
+    const writes: string[] = [];
+    const query = async (sql: string, params?: any[]) => {
+      if (/JOIN LATERAL/.test(sql)) {
+        expect(sql).toContain("(s.po_line_item_id = c.po_line_item_id OR s.po_line_item_id IS NULL)");
+        expect(sql).toContain("s.suggestion_key IS NOT NULL");
+        expect(sql).toContain("c.po_line_item_id IS NOT NULL");
+        return { rows: [{ claim_id: "3099", po_id: PO, order_id: "200015497641702", supplier: "walmart.com", po_line_item_id: LINE, product_name: "Balm", kind: "missing", suggestion_id: "4001", suggestion_kind: "canceled", suggestion_status: "suggested" }], rowCount: 1 };
+      }
+      if (/^SELECT \* FROM supplier_claims WHERE id = \$1/.test(sql)) return { rows: [{ id: params![0], po_id: PO, status: "open", outcome: null }], rowCount: 1 };
+      writes.push(sql.replace(/\s+/g, " ").trim()); return { rows: [], rowCount: 1 };
+    };
+    const dry = await sweepSupersededConverted(query, { dryRun: true });
+    expect(dry.rows.length).toBe(1);
+    expect(dry.rows.map((r) => [r.claim_id, r.suggestion_id])).toEqual([[3099, 4001]]);
+    expect(dry.dismissed).toBe(0);
+    expect(writes.filter((w) => /^UPDATE/.test(w))).toHaveLength(0);
+    const live = await sweepSupersededConverted(query);
+    expect(live.dismissed).toBe(1);
+    expect(writes.some((w) => /^UPDATE supplier_claims SET status = 'dismissed'/.test(w))).toBe(true);
   });
   it("sweepSuggestions reads the views only (open POs, Velocity POs for missing), groups by rule, and a dry run creates nothing", async () => {
     for (const sql of [MISSING_ROWS_SQL, PO_STATE_SQL, TRACKING_STATE_SQL]) {

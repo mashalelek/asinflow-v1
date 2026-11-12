@@ -75,3 +75,8 @@
 .cl.cl-dialog>button.absolute{display:none}
 .cl.cl-dialog>div{padding:0!important}
 .cl.cl-dialog [data-testid^="dialog-resize-"]{display:none}
+/* Resizable columns (2026-11-12): the page sets --claims-grid from the saved widths; the defaults widen Product (28 140 240 120 100 110 1fr 70 180). */
+.cl .hd,.cl .row{grid-template-columns:var(--claims-grid,28px 140px 240px 120px 100px 110px 1fr 70px 180px)}
+
+/* Timeline notes (2026-11-12): the mockup's step-circle rule `.cl .n` (width 24px) also hit `.tl .n` — a long summary fell into the dot column one character per line. The note is a block in the entry column. */
+.cl .tl .n{width:auto;height:auto;border:0;border-radius:0;display:block;font-size:inherit;color:#a39f96}

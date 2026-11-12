@@ -46,7 +46,9 @@ describe("bucket derivation (§3.2): an open task wins, else the running timer",
     expect(claimSteps(base({ reported_at: "2026-11-02" })).find((s) => s.key === "reported")).toMatchObject({ label: "Reported", done: true });
     // a promised outcome does not start it either; an emailed cancellation needs no report
     expect(deriveBucket(base({ reported_at: null, tasks: [], outcome: "refund_card" }), NOW).bucket).toBe("needs_attention");
-    expect(deriveBucket(base({ reported_at: null, tasks: [], kind: "canceled", found_by: "email" }), NOW).bucket).toBe("waiting_supplier");
+    // a canceled claim (any source) is confirmed on its cancel date — its found date when none is stored — and waits for the refund (paths, Maria 2026-11-12)
+    expect(deriveBucket(base({ reported_at: null, tasks: [], kind: "canceled", found_by: "email" }), NOW)).toMatchObject({ bucket: "waiting_refund", since: "2026-11-02T12:00:00.000Z" });
+    expect(deriveBucket(base({ reported_at: null, tasks: [], kind: "canceled" }), NOW).bucket).toBe("waiting_refund");
     // the Contact supplier tick without a typed date still counts as reported
     expect(deriveBucket(base({ reported_at: null, tasks: [done("contact_supplier", "2026-11-02T15:00:00Z")] }), NOW).bucket).toBe("waiting_supplier");
   });

@@ -15,6 +15,7 @@
 //   Every change is a History row (po_edit_log, entity 'claim') and an event (supplier_claim_events).
 import type { QueryLike } from "./scheduler/types";
 import { EditError, logEdits } from "./po-edit";
+import { isReported } from "@shared/claim-bucket";
 import { addMoneyRow } from "./po-money-edit";
 import { addBusinessDays, BUSINESS_DAYS } from "@shared/claim-bucket";
 import { CLAIM_KINDS, CLAIM_KIND_LABELS, CLAIM_OUTCOMES, CLAIM_TASK_KINDS, REFUND_OUTCOMES, claimAmount, claimMoney, type ClaimKind, type ClaimOutcome, type ClaimTaskKind, CLAIM_TASK_GROUP } from "@shared/supplier-claim";
@@ -164,7 +165,10 @@ export async function doneTask(query: QueryLike, taskId: number, userId: number 
     if (body.decision !== "open") throw new EditError(400, "decision must be open or dismiss");
     await query(`UPDATE supplier_claims SET status = 'open', updated_at = now() WHERE id = $1 AND status = 'suggested'`, [claimId]);
     await event(query, claimId, "opened", "suggestion accepted", userId);
-    await addTask(query, claimId, "contact_supplier", "a claim was opened — report it to the supplier");
+    // a canceled claim is confirmed already (its cancel date): the passive Refund received tick, never a report prompt (paths, Maria 2026-11-12)
+    const opened = (await query(`SELECT kind FROM supplier_claims WHERE id = $1`, [claimId])).rows[0];
+    if (opened?.kind === "canceled") await addTask(query, claimId, "refund_received", "canceled — tick when the refund posts (add the refund row)");
+    else await addContactTaskIfUnreported(query, claimId, "a claim was opened — report it to the supplier");
   }
   await query(`UPDATE supplier_claim_tasks SET done_at = now(), done_by = $2 WHERE id = $1 AND done_at IS NULL`, [taskId, userId]);
   const changes: Array<{ field: string; old: string | null; new: string | null }> = [{ field: `task ${kind}`, old: "open", new: "done" }];
@@ -335,7 +339,7 @@ export async function removeEvent(query: QueryLike, eventId: number, userId: num
       if (!(r.rowCount ?? 0)) {
         const u = await query(`UPDATE supplier_claim_tasks SET done_at = NULL, done_by = NULL WHERE id = (SELECT id FROM supplier_claim_tasks WHERE claim_id = $1 AND kind = 'contact_supplier' AND done_at IS NOT NULL ORDER BY done_at DESC, id DESC LIMIT 1)
                                AND NOT EXISTS (SELECT 1 FROM supplier_claim_tasks o WHERE o.claim_id = $1 AND o.kind = 'contact_supplier' AND o.done_at IS NULL)`, [claimId]);
-        if (!(u.rowCount ?? 0) && d.status === "open") await addTask(query, claimId, "contact_supplier", "report the claim to the supplier — the timer starts from the report date");
+        if (!(u.rowCount ?? 0) && d.status === "open") await addContactTaskIfUnreported(query, claimId, "report the claim to the supplier — the timer starts from the report date");
       }
     }
   } else if (type === "supplier_reply") {
@@ -553,16 +557,45 @@ export async function addClaim(query: QueryLike, poId: string, body: AddClaimBod
   const found = body.found_at && /^\d{4}-\d{2}-\d{2}$/.test(body.found_at) ? body.found_at : null;
   const status = body.status === "suggested" ? "suggested" : "open";
   const row = (await query(
-    `INSERT INTO supplier_claims (po_id, po_line_item_id, kind, qty, amount_owed, amount_owed_source, found_at, note, status, found_by, return_required, created_by_user_id)
-     VALUES ($1, $2, $3, $4, $5, $6, COALESCE($7::date, CURRENT_DATE), $8, $9, 'maria', $10, $11) RETURNING id`,
+    `INSERT INTO supplier_claims (po_id, po_line_item_id, kind, qty, amount_owed, amount_owed_source, found_at, note, status, found_by, return_required, created_by_user_id, supplier_confirmed_at)
+     VALUES ($1, $2, $3, $4, $5, $6, COALESCE($7::date, CURRENT_DATE), $8, $9, 'maria', $10, $11,
+             CASE WHEN $3 = 'canceled' THEN COALESCE($7::date, CURRENT_DATE)::timestamp + interval '12 hours' END) RETURNING id`,
     [poId, line?.id ?? null, kind, qty, amount, manual ? "manual" : "auto", found, body.note?.trim() || null, status, body.return_required === true, userId])).rows[0];
   const id = Number(row.id);
+  // a canceled claim (Cancel PO, a line's cancel, Open claim with kind canceled) is supplier-confirmed on the cancel date and
+  // supersedes any open suggestion on the PO or its line (paths, Maria 2026-11-12)
+  if (kind === "canceled" && status === "open") await supersedeSuggestionsByCancel(query, poId, line?.id ? String(line.id) : null, userId, id);
   await logEdits(query, poId, userId, "claim", String(id), [{ field: "claim opened", old: null, new: `${describe({ qty, kind, amount_owed: amount })}${line ? "" : " (whole PO)"}${body.note?.trim() ? ` — ${body.note.trim()}` : ""}` }]);
   await event(query, id, status === "open" ? "opened" : "found", describe({ qty, kind, amount_owed: amount }), userId);
   for (const rid of body.refund_ids ?? []) await linkRefund(query, id, Number(rid), userId, { sync: false });
-  if (status === "open" && !opts.noTask) await addTask(query, id, "contact_supplier", "a claim was opened — report it to the supplier");
+  if (status === "open" && !opts.noTask) {
+    if (kind === "canceled") await addTask(query, id, "refund_received", "canceled — tick when the refund posts (add the refund row)");
+    else await addContactTaskIfUnreported(query, id, "a claim was opened — report it to the supplier");
+  }
   await syncRefundCoverage(query, [id], userId);
   return { id, po_id: poId };
+}
+
+/** Cancel PO / a line's cancel / Open claim with kind canceled dismisses the open suggestions on that PO (whole-PO ones) and on the line, "superseded by cancel" (Maria 2026-11-12). */
+export async function supersedeSuggestionsByCancel(query: QueryLike, poId: string, lineId: string | null, userId: number | null, except: number | null = null): Promise<number[]> {
+  const ids = (await query(`SELECT id FROM supplier_claims WHERE po_id = $1 AND status = 'suggested' AND (po_line_item_id IS NULL OR po_line_item_id = $2) AND id IS DISTINCT FROM $3 ORDER BY id`, [poId, lineId, except])).rows.map((r: any) => Number(r.id));
+  for (const id of ids) await dismissClaim(query, id, userId, "superseded by cancel");
+  return ids;
+}
+
+/**
+ * A contact_supplier task only for a claim not yet reported (one derivation, Maria 2026-11-12): an emailed cancellation,
+ * a typed report date or the supplier's confirmation already stand for the report — opening the Walmart cancellation
+ * suggestion (#3355, confirmed 9/23) added one and the list read "Report to supplier" while the detail read Received.
+ * Never a second open one.
+ */
+export async function addContactTaskIfUnreported(query: QueryLike, claimId: number, reason: string): Promise<boolean> {
+  const d = (await query(`SELECT kind, found_by, reported_at, supplier_confirmed_at FROM supplier_claims WHERE id = $1`, [claimId])).rows[0];
+  if (d && isReported({ ...d, tasks: [] })) return false;
+  const open = (await query(`SELECT 1 FROM supplier_claim_tasks WHERE claim_id = $1 AND kind = 'contact_supplier' AND done_at IS NULL LIMIT 1`, [claimId])).rows;
+  if (open.length) return false;
+  await addTask(query, claimId, "contact_supplier", reason);
+  return true;
 }
 
 async function claimRow(query: QueryLike, id: number) {

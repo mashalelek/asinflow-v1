@@ -55,8 +55,8 @@ export interface BucketResult {
   due: string | null;
   /** True when the timer has run out and no timeout task is open yet — the sweep creates one. */
   timedOut: boolean;
-  /** The task the sweep creates when the timer runs out, with its reason. */
-  timeout: { kind: "follow_up_supplier" | "check_on_it"; reason: string } | null;
+  /** The task the sweep creates when the timer runs out, with its reason (contact_supplier: a canceled claim whose refund did not post — the only way a canceled claim ever gets one). */
+  timeout: { kind: "follow_up_supplier" | "check_on_it" | "contact_supplier"; reason: string } | null;
 }
 
 const ts = (v: string | null | undefined): number | null => { if (!v) return null; const t = Date.parse(v.length === 10 ? `${v}T12:00:00Z` : v); return Number.isFinite(t) ? t : null; };
@@ -64,6 +64,15 @@ const latest = (...vs: Array<string | null | undefined>): string | null => vs.fi
 const doneAt = (c: BucketClaim, kind: string): string | null => latest(...c.tasks.filter((t) => t.kind === kind && t.done_at).map((t) => t.done_at));
 const hasOpen = (c: BucketClaim, kind: string): boolean => c.tasks.some((t) => t.kind === kind && !t.done_at);
 export const REFUND_OUTCOME_SET: ReadonlySet<string> = new Set(["refund_card", "gift_card", "store_credit"]);
+/** The reason the timer sweep writes on the task it creates ("5 business days: …"): such a task is a timeout, not a report prompt. */
+export const TIMEOUT_REASON_RE = /^\d+ business days: /;
+/**
+ * When the supplier confirmed (Maria 2026-11-12, paths): a canceled claim from ANY source — a cancellation email, Cancel PO,
+ * a line's cancel, Open claim with kind canceled — is confirmed at creation, on the cancel date; a canceled claim stored
+ * without one (before this rule) reads its found date.
+ */
+export const supplierConfirmedAt = (c: Pick<BucketClaim, "kind" | "supplier_confirmed_at" | "found_at">): string | null =>
+  c.supplier_confirmed_at ?? (c.kind === "canceled" ? c.found_at : null);
 
 // ── Business days (America/New_York) ────────────────────────────────────────
 
@@ -121,13 +130,16 @@ export function daysSince(since: string | null, now: Date): number | null {
  * so a confirmed refund times out into Check on it "refund not posted". It restarts when the open task is ticked (any
  * tick; the Contact supplier tick counts from the report date typed on it).
  */
+/** Ticks that never restart the timer: the report (its date is the anchor) and Open claim on a suggestion. */
+export const NO_RESTART_TASK_KINDS: ReadonlySet<string> = new Set(["contact_supplier", "review_suggestion"]);
 export function deriveBucket(c: BucketClaim, now: Date): BucketResult {
   const none: BucketResult = { bucket: "needs_attention", since: null, due: null, timedOut: false, timeout: null };
   if (c.status === "dismissed") return { ...none, bucket: "dismissed" };
   if (c.status === "closed") return { ...none, bucket: "closed", since: c.closed_at };
+  const tasks = effectiveTasks(c);
   // Needs attention: "since" = the oldest open task (what has been waiting for a hand the longest), the found date for a bare suggestion
-  if (c.status === "suggested" || c.tasks.some(isActiveTask)) {
-    const oldest = c.tasks.filter(isActiveTask).map((t) => t.created_at).filter((x): x is string => !!x).sort()[0] ?? c.found_at;
+  if (c.status === "suggested" || tasks.some(isActiveTask)) {
+    const oldest = tasks.filter(isActiveTask).map((t) => t.created_at).filter((x): x is string => !!x).sort()[0] ?? c.found_at;
     return { ...none, since: new Date(ts(oldest) ?? Date.now()).toISOString() };
   }
 
@@ -136,8 +148,9 @@ export function deriveBucket(c: BucketClaim, now: Date): BucketResult {
   const labelSent = doneAt(c, "send_label"), disposeAsked = doneAt(c, "dispose_units"), orderChangeAsked = doneAt(c, "update_velocity_order"), toldVelocity = doneAt(c, "tell_velocity_replacement");
   if (outcome === "replacement" && c.replacement_shipped_at && !c.replacement_arrived_at) {
     bucket = "waiting_shipment"; anchor = c.replacement_shipped_at; reason = "replacement shipped, not arrived";
-  } else if (REFUND_OUTCOME_SET.has(outcome ?? "") && c.supplier_confirmed_at && (c.remaining == null || c.remaining > 0)) {
-    bucket = "waiting_refund"; anchor = c.supplier_confirmed_at; reason = c.received && c.received > 0 ? "refund not posted in full" : "refund not posted";
+  } else if ((REFUND_OUTCOME_SET.has(outcome ?? "") || (c.kind === "canceled" && outcome == null)) && supplierConfirmedAt(c) && (c.remaining == null || c.remaining > 0)) {
+    // a canceled claim is confirmed on its cancel date and waits for the refund from there (paths, Maria 2026-11-12)
+    bucket = "waiting_refund"; anchor = supplierConfirmedAt(c); reason = c.received && c.received > 0 ? "refund not posted in full" : "refund not posted";
   } else if (labelSent && c.return_required) {
     bucket = "waiting_velocity"; anchor = labelSent; reason = "return label sent, return not shipped";
   } else if (disposeAsked && c.qty_disposed == null) {
@@ -159,17 +172,23 @@ export function deriveBucket(c: BucketClaim, now: Date): BucketResult {
   // Needs attention, whether or not its contact_supplier task exists (a converted claim may lack it).
   if (bucket === "waiting_supplier" && !isReported(c)) return { ...none, since: new Date(ts(c.found_at) ?? Date.now()).toISOString() };
   // Every tick restarts the timer (a snooze is such a tick) — except Contact supplier, whose typed report date
-  // (reported_at) is the anchor itself; without a typed date its tick is the anchor through doneAt above. A supplier
+  // (reported_at) is the anchor itself; without a typed date its tick is the anchor through doneAt above, and except
+  // Open claim on a suggestion (review_suggestion), which makes the claim and is no wait (Maria 2026-11-12: the Walmart
+  // cancellation opened 11/12 keeps its timer from the 9/23 confirmation). A supplier
   // reply (last_supplier_reply_at, the Supplier replied form) restarts it too (§5 amended 2026-11-12).
-  const restart = latest(...c.tasks.filter((t) => t.done_at && t.kind !== "contact_supplier").map((t) => t.done_at), bucket === "waiting_supplier" ? c.last_supplier_reply_at ?? null : null);
+  // (the timeout-created Contact supplier tick — a canceled claim whose refund did not post — does restart it: there the confirmation is the anchor, not the report)
+  const restart = latest(...c.tasks.filter((t) => t.done_at && (!NO_RESTART_TASK_KINDS.has(t.kind) || (t.kind === "contact_supplier" && TIMEOUT_REASON_RE.test(t.reason ?? "")))).map((t) => t.done_at), bucket === "waiting_supplier" ? c.last_supplier_reply_at ?? null : null);
   // normalized to an ISO instant (a date-only anchor such as reported_at reads as noon UTC)
   const since = new Date(ts(latest(anchor, restart) ?? c.found_at) ?? Date.now()).toISOString();
   const dueDate = addBusinessDays(since, BUSINESS_DAYS);
   const snoozed = c.tasks.filter((t) => t.snoozed_until && ts(t.snoozed_until)! > now.getTime()).length > 0;
   const timedOut = !snoozed && now.getTime() >= dueDate.getTime();
+  // a canceled claim's refund timing out is the one moment it gets a contact_supplier task (§3.4 "contact_supplier appears only if the refund times out")
   const timeout = bucket === "waiting_supplier"
     ? { kind: "follow_up_supplier" as const, reason: `${BUSINESS_DAYS} business days: ${reason}` }
-    : { kind: "check_on_it" as const, reason: `${BUSINESS_DAYS} business days: ${reason}` };
+    : c.kind === "canceled" && bucket === "waiting_refund"
+      ? { kind: "contact_supplier" as const, reason: `${BUSINESS_DAYS} business days: ${reason}` }
+      : { kind: "check_on_it" as const, reason: `${BUSINESS_DAYS} business days: ${reason}` };
   return { bucket, since, due: dueDate.toISOString(), timedOut, timeout };
 }
 
@@ -180,14 +199,15 @@ export interface ClaimStep { key: string; label: string; done: boolean; at: stri
 /** The path's checklist with ✓ per step and the current one. */
 export function claimSteps(c: BucketClaim): ClaimStep[] {
   const outcome = c.outcome ?? null;
-  const emailed = c.kind === "canceled" && c.found_by === "email";
+  // a canceled claim from any source (§3.4, Maria 2026-11-12): Found → Confirmed by supplier (the cancel date) → Received → Closed, no Report step
+  const canceled = c.kind === "canceled";
   const closed = c.status === "closed";
   const reportedAt = c.reported_at ?? doneAt(c, "contact_supplier");
   const promisedAt = outcome ? doneAt(c, "confirm_outcome") ?? c.supplier_confirmed_at ?? reportedAt : null;
   const steps: Array<Omit<ClaimStep, "current">> = [{ key: "found", label: "Found", done: true, at: c.found_at }];
-  if (!emailed) steps.push({ key: "reported", label: reportedAt || closed ? "Reported" : "Report", done: !!reportedAt || closed, at: reportedAt, todo: "Report to supplier" });
+  if (!canceled) steps.push({ key: "reported", label: reportedAt || closed ? "Reported" : "Report", done: !!reportedAt || closed, at: reportedAt, todo: "Report to supplier" });
   // "Supplier answers · outcome" (mockup 2026-11-12): done once the supplier replied or the outcome is known; before the rest of the path
-  if (!emailed && outcome !== "write_off" && outcome !== "replacement") steps.push({ key: "answered", label: outcome ? `Supplier answered · ${outcome.replace("_", " ")}` : "Supplier answers · outcome", done: !!outcome || !!c.last_supplier_reply_at || closed, at: c.last_supplier_reply_at ?? (outcome ? doneAt(c, "confirm_outcome") ?? c.supplier_confirmed_at : null), todo: "Supplier's answer" });
+  if (!canceled && outcome !== "write_off" && outcome !== "replacement") steps.push({ key: "answered", label: outcome ? `Supplier answered · ${outcome.replace("_", " ")}` : "Supplier answers · outcome", done: !!outcome || !!c.last_supplier_reply_at || closed, at: c.last_supplier_reply_at ?? (outcome ? doneAt(c, "confirm_outcome") ?? c.supplier_confirmed_at : null), todo: "Supplier's answer" });
   if (outcome === "replacement") {
     steps.push({ key: "promised", label: "Promised", done: true, at: promisedAt });
     if (c.ships_to !== "home") steps.push({ key: "tell_velocity", label: "Tell Velocity", done: !!doneAt(c, "tell_velocity_replacement") || !!c.replacement_shipped_at || closed, at: doneAt(c, "tell_velocity_replacement") });
@@ -200,10 +220,12 @@ export function claimSteps(c: BucketClaim): ClaimStep[] {
     if (c.return_required) {
       steps.push({ key: "label", label: "Label", done: !!doneAt(c, "upload_return_label") || !!doneAt(c, "send_label"), at: doneAt(c, "upload_return_label") });
       steps.push({ key: "label_sent", label: "Sent to Velocity", done: !!doneAt(c, "send_label"), at: doneAt(c, "send_label") });
-      steps.push({ key: "return_shipped", label: "Shipped", done: false, at: null });   // commit 7: the return's tracking
-      steps.push({ key: "return_delivered", label: "Delivered", done: false, at: null });
+      // commit 7 brings the return's own tracking; until then the supplier's confirmation (or the close) says the return got there
+      const returnThere = !!supplierConfirmedAt(c) || closed;
+      steps.push({ key: "return_shipped", label: "Shipped", done: returnThere, at: null });
+      steps.push({ key: "return_delivered", label: "Delivered", done: returnThere, at: null });
     }
-    steps.push({ key: "confirmed", label: "Confirmed by supplier", done: !!c.supplier_confirmed_at || (closed && outcome != null), at: c.supplier_confirmed_at });
+    steps.push({ key: "confirmed", label: "Confirmed by supplier", done: !!supplierConfirmedAt(c) || (closed && outcome != null), at: supplierConfirmedAt(c) });
     steps.push({ key: "received", label: "Received", done: c.remaining != null && c.remaining <= 0.005 && (c.received ?? 0) > 0 || (closed && outcome != null && outcome !== "write_off"), at: closed ? c.closed_at : null });
   }
   steps.push({ key: "closed", label: "Closed", done: closed, at: c.closed_at });
@@ -211,15 +233,28 @@ export function claimSteps(c: BucketClaim): ClaimStep[] {
   return steps.map((s) => { const current = !s.done && !currentSet && c.status !== "dismissed"; if (current) currentSet = true; return { ...s, current }; });
 }
 
-/** Reported = a typed report date, a Contact supplier tick, or the supplier's confirmation; an emailed cancellation needs no report. */
+/** Reported = a typed report date, a Contact supplier tick, or the supplier's confirmation; a canceled claim (any source) needs no report — the cancellation is the supplier's word. */
 export function isReported(c: Pick<BucketClaim, "reported_at" | "supplier_confirmed_at" | "kind" | "found_by" | "tasks">): boolean {
-  if (c.kind === "canceled" && c.found_by === "email") return true;
+  if (c.kind === "canceled") return true;
   return !!c.reported_at || !!c.supplier_confirmed_at || !!doneAt(c as BucketClaim, "contact_supplier");
+}
+
+/**
+ * The tasks that drive state — ONE derivation for the list and the detail (Maria 2026-11-12): an open contact_supplier
+ * task on a claim already reported (an emailed cancellation, a typed report date, the supplier's confirmation, an earlier
+ * Contacted tick) is moot and ignored everywhere — bucket, Step, Next action, the Do button, the timer. Before this the
+ * list read the task ("Report to supplier / Contacted supplier") while the detail's steps skipped it (Confirmed 9/23 →
+ * Received): claim #3355, the Walmart cancellation opened from its email.
+ */
+export function effectiveTasks<T extends { kind: string; done_at: string | null; reason?: string | null }>(c: Pick<BucketClaim, "reported_at" | "supplier_confirmed_at" | "kind" | "found_by"> & { tasks: ReadonlyArray<T> }): T[] {
+  if (!isReported({ ...c, tasks: c.tasks as any })) return [...c.tasks];
+  // a timeout-created contact task (a canceled claim's refund not posted) is real; a report prompt on a reported claim is not
+  return c.tasks.filter((t) => !(t.kind === "contact_supplier" && !t.done_at && !TIMEOUT_REASON_RE.test(t.reason ?? "")));
 }
 
 /** The row's "Next action": the open task, else what the timer waits for. */
 export function nextAction(c: BucketClaim, b: BucketResult): string {
-  const open = c.tasks.filter((t) => !t.done_at);
+  const open = effectiveTasks(c).filter((t) => !t.done_at);
   if (open.length) return open.map((t) => CLAIM_TASK_LABELS[t.kind as ClaimTaskKind] ?? t.kind).join(" · ");
   if (b.bucket === "needs_attention" && c.status === "open" && !isReported(c)) return "Contact supplier";
   switch (b.bucket) {

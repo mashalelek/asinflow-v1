@@ -1,6 +1,6 @@
 import { describe, it, expect } from "vitest";
 import { readFileSync } from "node:fs";
-import { readClaimsUrl, writeClaimsUrl, rowsForView, groupNeedsAttention, matchesFilter, qtyText, prefillMethod, productText, CLAIM_COLUMNS, CLAIMS_TABLE_WIDTH, CLAIMS_GRID, type ClaimRowApi } from "./claims";
+import { readClaimsUrl, writeClaimsUrl, rowsForView, groupNeedsAttention, decideOrder, matchesFilter, qtyText, prefillMethod, productText, CLAIM_COLUMNS, CLAIMS_TABLE_WIDTH, CLAIMS_GRID, claimsGrid, resizableClaimColumn, CLAIMS_COL_WIDTHS_KEY, NOTE_CLAMP_LINES, type ClaimRowApi } from "./claims";
 
 // The Claims page (SPEC §22 "Supplier claims" §5 amended 2026-11-12, commit 2b): URL state, the filter box, the view's rows, the Needs attention groups, the labels, the table.
 const row = (over: Partial<ClaimRowApi>): ClaimRowApi => ({
@@ -40,6 +40,20 @@ describe("Needs attention groups, labels, the method prefill, the table", () => 
     const rows = [row({ id: 1, group: "decide" }), row({ id: 2, group: "timed_out" }), row({ id: 3, group: null }), row({ id: 4, group: "decide" })];
     expect(groupNeedsAttention(rows).map((x) => [x.group, x.rows.map((r) => r.id)])).toEqual([["decide", [1, 4]], ["timed_out", [2]]]);
   });
+  it("Decide's order (Maria 2026-11-12): suggestions with figures first, then the rest, the converted claims still waiting on a quantity last — the server's order kept within each", () => {
+    const enterQty = { id: 9, kind: "enter_quantity" as const, group: "decide", reason: null, created_at: "2026-11-10", due_at: null, done_at: null, snoozed_until: null };
+    const rows = [
+      row({ id: 1, group: "decide", status: "open", qty: null, tasks: [enterQty] }),                       // converted, waiting on a quantity
+      row({ id: 2, group: "decide", status: "suggested", qty: 4 }),                                        // suggestion with figures
+      row({ id: 3, group: "decide", status: "open", qty: 2 }),                                             // an outcome to confirm
+      row({ id: 4, group: "decide", status: "suggested", qty: null, tasks: [enterQty] }),                  // a suggestion without figures
+      row({ id: 5, group: "decide", status: "suggested", qty: 1 }),
+      row({ id: 6, group: "decide", status: "open", qty: null, tasks: [{ ...enterQty, done_at: "2026-11-11" }] }), // its quantity task done → not waiting
+      row({ id: 7, group: "supplier" }),
+    ];
+    expect(decideOrder(rows.filter((r) => r.group === "decide")).map((r) => r.id)).toEqual([2, 5, 3, 4, 6, 1]);
+    expect(groupNeedsAttention(rows).map((x) => [x.group, x.rows.map((r) => r.id)])).toEqual([["decide", [2, 5, 3, 4, 6, 1]], ["supplier", [7]]]);
+  });
   it("qty text, the product cell and the refund method prefill", () => {
     expect(qtyText({ qty: 5.5, conversion_flags: [] })).toBe("5.50");
     expect(qtyText({ qty: null, conversion_flags: ["qty_unknown"] })).toBe("qty unknown");
@@ -49,9 +63,16 @@ describe("Needs attention groups, labels, the method prefill, the table", () => 
     expect(prefillMethod([{ method: "gift_card" }, { method: "card" }])).toBe("gift_card");
     expect(prefillMethod([])).toBe("card");
   });
-  it("the list is the mockup's grid (28 · 150 · 180 · 130 · 110 · 120 · 1fr · 90 · 180, 12 px gaps) and fits 1280; the mockup's nine columns; the Qty header names its kind on the muted line above (the quantity-names rule wins there, Maria 2026-11-12)", () => {
+  it("the list is the mockup's grid with Product widened (28 · 140 · 240 · 120 · 100 · 110 · 1fr · 70 · 180, 12 px gaps) and fits 1280; the mockup's nine columns; the Qty header names its kind on the muted line above (the quantity-names rule wins there, Maria 2026-11-12); columns resizable through the PO table's hook, Step takes the rest", () => {
     expect(CLAIMS_TABLE_WIDTH).toBeLessThanOrEqual(1280 - 48);
-    expect(CLAIMS_GRID).toBe("28px 150px 180px 130px 110px 120px 1fr 90px 180px");
+    expect(CLAIMS_TABLE_WIDTH).toBe(1084);
+    expect(CLAIMS_GRID).toBe("28px 140px 240px 120px 100px 110px 1fr 70px 180px");
+    expect(CLAIM_COLUMNS.find((c) => c.id === "product")!.width).toBe(240);
+    expect(claimsGrid({ product: 320, waiting: 80 })).toBe("28px 140px 320px 120px 100px 110px 1fr 80px 180px");
+    expect(CLAIM_COLUMNS.filter(resizableClaimColumn).map((c) => c.id)).toEqual(["supplier", "product", "kind", "qty", "owed", "waiting", "do"]);
+    expect(CLAIMS_COL_WIDTHS_KEY).toBe("claims-col-widths");
+    const hook = readFileSync("client/src/hooks/use-column-widths.tsx", "utf8");
+    expect(hook).toContain('closest("th, [data-resize-col]")');
     expect(CLAIM_COLUMNS.map((c) => c.label)).toEqual(["", "Supplier · PO", "Product", "Kind", "Qty", "Owed / left", "Step", "Waiting", "Do"]);
     expect(CLAIM_COLUMNS.find((c) => c.id === "qty")!.kind).toBe("Individual units");
     const page = readFileSync("client/src/pages/claims.tsx", "utf8");
@@ -66,6 +87,27 @@ describe("Needs attention groups, labels, the method prefill, the table", () => 
     }
     expect(css).toContain(".cl{margin:0;background:#181716;color:#e6e3dc;font-family:Inter,system-ui,sans-serif;font-size:13px");
     expect(page).toContain('import "./claims.css"');
+    expect(page).toContain("useColumnWidths(CLAIMS_COL_WIDTHS_KEY)");
+    expect(page).toContain('"--claims-grid": claimsGrid(colWidths)');
+    expect(page).toMatch(/data-resize-col=\{resizableClaimColumn\(c\) \? c\.id : undefined\}/);
+    expect(page).toMatch(/\{resizableClaimColumn\(c\) && <ResizeHandle onMouseDown=\{\(e\) => handleResizeStart\(e, c\.id\)\} \/>\}/);
+    expect(page).toMatch(/onClick=\{resetWidths\} data-testid="button-claims-reset-widths">Reset widths</);
+    expect(css).toContain(".cl .hd,.cl .row{grid-template-columns:var(--claims-grid,28px 140px 240px 120px 100px 110px 1fr 70px 180px)}");
+    // the timeline note sits in the entry column, wraps, clamps past 3 lines with "more" (Maria 2026-11-12: a 300-character summary fell into the dot column)
+    expect(css).toContain(".cl .tl .n{width:auto;height:auto;border:0;border-radius:0;display:block;font-size:inherit;color:#a39f96}");
+    expect(page).toContain("<TimelineNote id={e.id} text={`${e.summary ?? \"\"}${e.by_name ? ` · ${e.by_name}` : \"\"}`} />");
+    expect(page).toContain('WebkitLineClamp: NOTE_CLAMP_LINES, WebkitBoxOrient: "vertical", overflow: "hidden" }');
+    expect(page).toContain("setClamped(el.scrollHeight > el.clientHeight + 1)");
+    expect(page).toContain('{expanded ? "less" : "more"}</button>');
+    expect(NOTE_CLAMP_LINES).toBe(3);
+    // Refund received: the split section collapsed by default, rows kind · qty · owed with the amount field; the targets come filtered from the server
+    expect(page).toContain('data-testid="button-refund-split-toggle">Split across other claims on this PO {splitOpen ? "▾" : "▸"}</button>');
+    expect(page).toContain("const [splitOpen, setSplitOpen] = useState(false);");
+    expect(page).toMatch(/\{splitOpen && others\.map\(\(o\) => \(/);
+    expect(page).toContain("{CLAIM_KIND_LABELS[o.kind as ClaimKind] ?? o.kind} · {fmtQty(o.qty)} <span className=\"mut\">Individual units</span> · {money(o.amount_owed)} owed");
+    expect(page).not.toContain("One refund for several claims?");
+    // no always-visible explanations of backend state on the detail (Maria 2026-11-12)
+    for (const gone of ["Steps change with the outcome", "Several refunds can land on one claim", "converted from the sheet era"]) expect(page).not.toContain(gone);
     expect(page).toContain('<div className="cl" style={{ display: "flex", flexDirection: "column" }} data-testid="claims-page">');
     expect(page).toContain('<div className="cl" data-testid="claim-detail">');
     expect(page).toMatch(/className="hd" data-testid="claims-table"/);

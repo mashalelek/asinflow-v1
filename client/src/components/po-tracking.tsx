@@ -294,7 +294,6 @@ export function UnmatchedTrackingChip({ suppliers, reloadKey, onChanged }: { sup
                 className={`-mb-px border-b-2 px-2 py-1 ${tab === k ? "border-foreground font-medium text-foreground" : "border-transparent text-muted-foreground hover:text-foreground"}`} data-testid={`tab-unmatched-${k}`}>{label}</button>
             ))}
           </div>
-          {tab === "no_number" && <p className="text-xs text-muted-foreground">The email prints no tracking number (the AI read it), or its order # names no single AF PO. Not counted in the badge.</p>}
           <div className="flex items-center gap-2 text-xs">
             <Button size="sm" variant="outline" className="h-7 text-xs" disabled={picked.size === 0 || busy} onClick={() => void dismissPicked()} data-testid="button-dismiss-selected">
               Dismiss selected ({picked.size})

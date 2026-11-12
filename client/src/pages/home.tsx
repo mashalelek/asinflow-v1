@@ -2057,7 +2057,7 @@ export default function Home() {
               Upload a CSV/XLSX to get started
             </h2>
             <p className="text-sm text-muted-foreground/70 mt-1 max-w-md">
-              Click "Upload File" above to import ASINs with COGS data, then click "Product Info" to fetch catalog data from Amazon SP-API.
+              Click Upload File above to import ASINs with their COGS.
             </p>
           </div>
         )}
@@ -2214,8 +2214,7 @@ export default function Home() {
           <DialogHeader>
             <DialogTitle>COGS update history</DialogTitle>
             <DialogDescription>
-              Files generated, newest first. This records what AsinFlow produced — Seller Central
-              gives no upload receipt, so it cannot confirm what Amazon accepted.
+              Files generated, newest first.
             </DialogDescription>
           </DialogHeader>
           {scHistory === null ? (

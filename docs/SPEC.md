@@ -6297,7 +6297,11 @@ Rules built in commit 1 (`server/supplier-claims.ts`, `shared/supplier-claim.ts`
   row's Next action wherever it sits. Needs attention is grouped Decide / Supplier / Velocity / Money and arrivals /
   Timed out, each task a checkbox or the control its tick needs (a report's date + channel + note for Contact / Follow
   up; the reship order # for Confirm reship; Open / Dismiss for a suggestion; Enter quantity is typed; Refund received
-  adds the refund row; Snooze on Check on it / Follow up). Rows: Supplier · PO · Kind · Qty (Individual units, the
+  adds the refund row; Snooze on Check on it / Follow up). Decide's order (Maria 2026-11-12): suggestions with figures
+  first, then the rest, the converted claims still waiting on a quantity last (`decideOrder`). The list's columns are
+  resizable through the PO table's `use-column-widths` hook (widths per browser under `claims-col-widths`, Reset
+  widths beside the tabs; the grid reads `--claims-grid`), Product 240 px by default so names read, Step takes the
+  rest. Rows: Supplier · PO · Kind · Qty (Individual units, the
   Product / ASIN equivalents in grey; "qty unknown" / "unknown (sheet zeroed the line)") · $ owed / remaining · Step
   · Days in bucket · Next action; longest waiting first. Toolbar: **Open claim** (a PO picker over
   `/api/pos/asin-rows/search`, then the line, kind, qty, $, note), filters supplier / kind / PO; `?bucket=a,b` shows
@@ -6354,12 +6358,55 @@ Rules built in commit 1 (`server/supplier-claims.ts`, `shared/supplier-claim.ts`
   count; the rows carry `sentence`, `action`, `group`, `ui_steps`, `next`, `ordered` ("2 of 24") and `days_open`.
   The claim-detail API's Linked adds the PO's inbound tracking with its carrier status, the Velocity order links of
   the claim's ASIN row and the PO's received Individual units. Every change writes an event and a History row.
+- **One derivation for the list and the detail (Maria 2026-11-12):** both come from `rowOf` in
+  `server/claim-buckets.ts`, and the tasks that drive state are `effectiveTasks` — an open `contact_supplier` task
+  on a claim already reported (an emailed cancellation, a typed report date, the supplier's confirmation, an earlier
+  Contacted tick) is moot everywhere (bucket, Step, Next action, the Do button, the timer); the server no longer
+  creates one on such a claim (`addContactTaskIfUnreported`: opening a suggestion, a hand-opened claim, clearing a
+  report). Opening a suggestion (the `review_suggestion` tick) never restarts the timer — the Walmart cancellation
+  #3355 opened 11/12 keeps its timer from the 9/23 confirmation: Waiting on refund to post, Step "Refund confirmed
+  9/23 · check the card" (the waiting-on-refund sentence: what was confirmed, when, where to look), Next action
+  Refund received, overdue → Check on it. `npm run claims:list-detail-check -- --prod` is the read-only check that
+  every claim derives the same both ways (430 claims, 0 differences, 2026-11-12). The detail's timeline note sits in
+  the entry column (claims.css resets the mockup's `.n` step-circle width that caught `.tl .n`), wraps, and past 3
+  lines is clamped with "more" / "less". The Refund received form's "Split across other claims on this PO ▸" is
+  collapsed by default and lists only the split targets (`isSplitTarget`: open, a quantity, outcome unset or a refund
+  / credit — never a converted empty claim), each row kind · qty · owed with the amount field. No always-visible
+  explanation of backend state on the pages: the PO page's "N Individual units shipped to FBA … Reassign the shipment
+  first" is a toast only when Delete PO / Cancel PO is clicked and refused; the detail's "Steps change with the
+  outcome…", "Several refunds can land…" and "converted from the sheet era: flags" lines are gone.
+- **A canceled claim from ANY source is supplier-confirmed at creation (paths §3.4, Maria 2026-11-12):** a cancellation
+  email (the email's date, `Suggestion.confirmed_at`), Cancel PO, a line's cancel and Open claim with kind canceled (the
+  cancel / found date) all store `supplier_confirmed_at`; a canceled claim stored without one reads its found date
+  (`supplierConfirmedAt`). Its path is Found → Confirmed by supplier (cancel date) → Received → Closed — no Report step,
+  `isReported` is true, no `contact_supplier` task is ever created for it (opening its suggestion or a hand-opened one
+  gets the passive `refund_received` tick instead); bucket Waiting on refund to post with the timer from the cancel
+  date, outcome or not; when the refund does not post in 5 business days the sweep's timeout task is `contact_supplier`
+  ("5 business days: refund not posted") — the one moment a canceled claim shows Contact supplier (Needs attention ›
+  Supplier, Contacted supplier + Snooze; the detail's Contacted supplier button appears only then), and that tick
+  restarts the timer. Cancel PO / a line's cancel / Open claim with kind canceled creates ONE canceled claim per line
+  and dismisses every open suggestion on the PO (whole-PO ones) and on the line, "superseded by cancel"
+  (`supersedeSuggestionsByCancel`). detailedimage.com 2260599 was put right by `tsx script/fix-po-2260599-canceled.ts
+  --prod --live` (one canceled claim #3370, 7 Individual units, $85.53, confirmed 2026-10-19; the never_received
+  suggestion #3342 dismissed "superseded by cancel"). `shared/claim-paths.test.ts` walks every §3.4 path from creation
+  to Closed — missing → refund / replacement, damaged and cant_sell → return → refund, expired → return → write-off,
+  never_received → refund / write-off, canceled (email) → refund, canceled (Cancel PO) → refund — asserting Steps,
+  bucket, Next action and the timer at every stage; until commit 7 brings the return's tracking, the return's Shipped
+  / Delivered steps read done once the supplier confirms the refund (or the claim closes).
 - **Auto-found claims (commit 5, 2026-11-12; `server/claim-suggestions.ts`, `server/cancellation-emails.ts`,
   migration 106):** AF SUGGESTS claims — status `suggested`, `found_by` auto / email, a `review_suggestion` task
   carrying the figures and the reason under Needs attention → Decide (Open / Dismiss), an `enter_quantity` task
   when the quantity is not known; nothing changes a PO until Maria opens one. `suggestion_key` is the dedupe: the
   same key is never suggested twice, a dismissed suggestion comes back only when its figures change; one open
-  suggestion per kind per line. Runs in component 30 every hourly pass. Three finders:
+  suggestion per kind per line. Runs in component 30 every hourly pass. **A converted badge claim is superseded
+  (Maria 2026-11-12):** a migration-101 conversion still waiting on its quantity (open, qty NULL, `enter_quantity`
+  open, a `supplier_claim_conversions` row) never blocks a suggestion on its line and is dismissed "superseded by
+  found claim" (a History row and a `dismissed` event, `supersedeConvertedOnLine`) when one lands there — a whole-PO
+  suggestion supersedes the converted claims on every line of its PO; converted claims with no suggestion stay. The
+  one-time sweep `npm run claims:supersede-converted -- --prod --live` did it for the existing ones (10 on production
+  2026-11-12: #3099, #3101, #3106 on their lines, then #2975, #2976, #2977, #2981, #3107, #3110, #3127 under whole-PO
+  suggestions) and deleted the 11 stray open `contact_supplier` tasks on claims already reported (`deleteStrayContactTasks`;
+  timeout-created ones, reason "N business days: …", stay). Three finders:
   - **missing (D8):** per ASIN row of an open Velocity PO — every inbound tracking row delivered (EasyPost's
     `delivered_at`, else Velocity's `tracking_status` "Delivered" for rows EasyPost does not track), ≥ 3 business
     days since the latest delivery, Received by Velocity < shipped. Shipped (Individual units) = Σ the emails'

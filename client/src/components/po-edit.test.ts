@@ -83,12 +83,16 @@ describe("§5 delete / cancel / reassign UI", () => {
       .toBe("Delete PO walmart.com 200015415094735 with its 2 products (1 ASIN)? Sync POs will not import it again.");
     expect(deleteConfirmText({ supplier: "walmart.com", orderId: "1", lineCount: 1, asinCount: 1, atPrepUnits: 2 })).toMatch(/ 2 Individual units still at Velocity for this PO\.$/);
   });
-  it("PO detail carries Cancel PO / Delete PO (disabled with the message when blocked); ASIN rows disable cancel when shipped; shipments offer Reassign", () => {
+  it("PO detail carries Cancel PO / Delete PO (the block shown only when clicked and refused, never beside the buttons — Maria 2026-11-12); ASIN rows disable cancel when shipped; shipments offer Reassign", () => {
     const page = readFileSync(resolve(__dirname, "../pages/purchase-orders.tsx"), "utf8");
     expect(page).toMatch(/<PoDangerActions poId=\{po\.id\} reloadKey=\{version\} onCanceled=\{reload\} onDeleted=\{\(\) => navigate\("\/purchase-orders"\)\} \/>/);
     const src = readFileSync(resolve(__dirname, "po-edit.tsx"), "utf8");
-    expect(src).toMatch(/disabled=\{!!g\.blocked\} onClick=\{\(\) => setConfirm\("delete"\)\}/);
-    expect(src).toMatch(/disabled=\{!!g\.blocked\} onClick=\{\(\) => setConfirm\("cancel"\)\}/);
+    expect(src).toMatch(/onClick=\{\(\) => guard\("delete"\)\}/);
+    expect(src).toMatch(/onClick=\{\(\) => guard\("cancel"\)\}/);
+    expect(src).toMatch(/if \(g\.blocked\) \{ toast\(\{ title: what === "delete" \? "Not deleted" : "Not canceled", description: g\.blocked, variant: "destructive" \}\); return; \}/);
+    expect(src).not.toContain("po-blocked-message");
+    expect(src).not.toMatch(/disabled=\{!!g\.blocked\}/);
+    expect(src).toContain('data-testid="po-history-empty">No edits yet.</p>');
     const rows = readFileSync(resolve(__dirname, "po-asin-rows.tsx"), "utf8");
     expect(rows).toMatch(/const blocked = shipmentBlockText\(a\.shipments \?\? \[\]\);/);
     expect(rows).toMatch(/\{editable && <ReassignShipment shipment=\{s\} asin=\{asin\} currentRowId=\{rowId\}/);

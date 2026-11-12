@@ -6,7 +6,7 @@
 //   claimDetail — one claim with its PO (payments for the method prefill, refunds, alt order #s), the other open claims
 //     of the PO (a refund split), the timeline.
 import type { QueryLike } from "./scheduler/types";
-import { CLAIM_KINDS } from "@shared/supplier-claim";
+import { CLAIM_KINDS, REFUND_OUTCOMES } from "@shared/supplier-claim";
 import { claimSteps, daysSince, deriveBucket, nextAction, type BucketResult, type ClaimBucket, type ClaimStep } from "@shared/claim-bucket";
 import { stateSentence, primaryAction, needsAttentionGroup, stepActions, whatHappensNext, type PrimaryAction, type UiStep } from "@shared/claim-ui";
 import { addTask, loadClaimEvents, loadClaims, type ClaimEvent, type ClaimRow } from "./supplier-claims";
@@ -75,8 +75,8 @@ export async function sweepClaimTimers(query: QueryLike, now = new Date(), userI
 export interface ClaimDetail {
   claim: ClaimPageRow;
   po: { id: string; order_id: string; supplier: string; order_date: string; ships_to: string | null; closed_at: string | null; alt_order_ids: string | null; payments: Array<{ id: number; method: string; nickname: string | null; last4: string | null; amount: string | null }>; refunds: Array<{ id: number; amount: string | null; method: string | null; refunded_at: string | null; note: string | null; po_line_item_id: string | null }> };
-  /** The PO's other OPEN claims — the targets of a refund split. */
-  other_open_claims: Array<{ id: number; kind: string; asin: string | null; line_no: number; qty: number | null; remaining: number | null }>;
+  /** The PO's other open claims a refund can be split across (isSplitTarget). */
+  other_open_claims: Array<{ id: number; kind: string; asin: string | null; line_no: number; qty: number | null; amount_owed: number | null; outcome: string | null; remaining: number | null }>;
   events: ClaimEvent[];
   /** Placeholders until commits 6–7 (emails, labels, return tracking): what this claim has linked today. */
   linked: {
@@ -96,7 +96,7 @@ export async function claimDetail(query: QueryLike, id: number, now = new Date()
   const po = (await query(`SELECT id, order_id, supplier, order_date::text AS order_date, ships_to, closed_at::text AS closed_at, alt_order_ids FROM purchase_orders WHERE id = $1`, [c.po_id])).rows[0];
   const payments = (await query(`SELECT id, method, nickname, last4, amount FROM po_payments WHERE po_id = $1 ORDER BY position, id`, [c.po_id])).rows.map((p: any) => ({ ...p, id: Number(p.id) }));
   const refunds = (await query(`SELECT id, amount, method, refunded_at::text AS refunded_at, note, po_line_item_id FROM po_line_refunds WHERE po_id = $1 ORDER BY refunded_at NULLS LAST, id`, [c.po_id])).rows.map((r: any) => ({ ...r, id: Number(r.id) }));
-  const others = (await loadClaims(query, { poId: String(c.po_id) })).filter((o) => o.id !== id && o.status === "open").map((o) => ({ id: o.id, kind: o.kind, asin: o.asin, line_no: o.line_no, qty: o.qty, remaining: o.remaining }));
+  const others = (await loadClaims(query, { poId: String(c.po_id) })).filter((o) => o.id !== id && isSplitTarget(o)).map((o) => ({ id: o.id, kind: o.kind, asin: o.asin, line_no: o.line_no, qty: o.qty, amount_owed: o.amount_owed, outcome: o.outcome, remaining: o.remaining }));
   const documents = (await query(`SELECT id, type, file_name, drive_file_id FROM po_documents WHERE claim_id = $1 ORDER BY id`, [id])).rows.map((d: any) => ({ ...d, id: Number(d.id) }));
   const tracking = (await query(`SELECT id, carrier, tracking_number, direction, status, carrier_status, delivered_at::text AS delivered_at FROM po_tracking WHERE claim_id = $1 ORDER BY id`, [id])).rows.map((t: any) => ({ ...t, id: Number(t.id) }));
   const poTracking = (await query(`SELECT id, carrier, tracking_number, carrier_status, delivered_at::text AS delivered_at FROM po_tracking WHERE po_id = $1 AND direction = 'inbound' AND tracking_number NOT LIKE 'email:%' ORDER BY id`, [c.po_id])).rows.map((t: any) => ({ ...t, id: Number(t.id) }));
@@ -108,3 +108,7 @@ export async function claimDetail(query: QueryLike, id: number, now = new Date()
 }
 
 export const CLAIM_KIND_FILTERS: readonly string[] = CLAIM_KINDS;
+
+/** A refund-split target (Maria 2026-11-12): an open claim with a quantity whose outcome is a refund / credit or not set yet — never a converted empty claim, never a replacement / write-off. */
+export const isSplitTarget = (o: { status: string; qty: number | null; outcome: string | null }): boolean =>
+  o.status === "open" && o.qty != null && (o.outcome == null || (REFUND_OUTCOMES as readonly string[]).includes(o.outcome));

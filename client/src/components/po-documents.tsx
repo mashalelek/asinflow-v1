@@ -141,7 +141,7 @@ export function PoDocumentsTab({ poId, documents, onChanged }: { poId: string; d
         )}
       </div>
       {documents.length === 0 ? (
-        <div className="text-sm text-muted-foreground py-6" data-testid="po-documents-empty">No documents yet. Order emails are saved here automatically once they match this PO.</div>
+        <div className="text-sm text-muted-foreground py-6" data-testid="po-documents-empty">No documents yet.</div>
       ) : (
         <div className="rounded-md overflow-hidden" style={{ border: "0.5px solid hsl(var(--border))" }}>
           <table className="border-collapse text-sm table-fixed w-full">

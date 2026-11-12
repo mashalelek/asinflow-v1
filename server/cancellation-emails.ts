@@ -338,7 +338,8 @@ export function matchCancellation(p: CancellationParse, f: EmailFacts, supplier:
 /** Pure: the suggested claims one matched cancellation becomes (one per matched item line, else one whole-PO claim). */
 export function cancellationSuggestions(p: CancellationParse, f: EmailFacts, po: PoRef, poLines: readonly PoLine[], gmailMessageId: string): Suggestion[] {
   const note = `${f.subject} (${f.date.toISOString().slice(0, 10)}${p.source === "ai" ? ", read by AI" : ""})`;
-  const base = { po_id: po.id, order_id: po.order_id, supplier: po.supplier, kind: "canceled" as const, found_by: "email" as const, source_email_id: gmailMessageId, source_items_json: p.items, note, rule: `email:${p.retailer}:${p.scope ?? "unknown"}${p.source === "ai" ? ":ai" : ""}` };
+  // the email's date is the cancel date: the supplier's confirmation at creation (paths, Maria 2026-11-12)
+  const base = { po_id: po.id, order_id: po.order_id, supplier: po.supplier, kind: "canceled" as const, found_by: "email" as const, confirmed_at: f.date.toISOString(), source_email_id: gmailMessageId, source_items_json: p.items, note, rule: `email:${p.retailer}:${p.scope ?? "unknown"}${p.source === "ai" ? ":ai" : ""}` };
   const head = `Canceled per the ${p.retailer} email of ${f.date.toISOString().slice(0, 10)}${p.reason ? ` (${p.reason})` : ""}`;
   const refund = p.refundAmount != null ? ` Refund stated: $${p.refundAmount.toFixed(2)}${p.refundMethod ? ` (${p.refundMethod})` : ""}.` : "";
   const out: Suggestion[] = [];

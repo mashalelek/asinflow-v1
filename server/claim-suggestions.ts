@@ -17,7 +17,7 @@
 // back only when its figures change. Every quantity is read from the views (po_asin_expected / po_line_expected).
 import { claimAmount } from "@shared/supplier-claim";
 import { businessDaysBetween } from "@shared/claim-bucket";
-import { addTask } from "./supplier-claims";
+import { addTask, dismissClaim } from "./supplier-claims";
 import type { QueryLike } from "./scheduler/types";
 
 /** D8: business days since the latest delivery before "missing" is suggested. */
@@ -44,6 +44,8 @@ export interface Suggestion {
   reason: string;
   key: string;
   found_by: "auto" | "email";
+  /** A canceled suggestion: the cancel date (the email's date) — the supplier's confirmation at creation (paths, Maria 2026-11-12). */
+  confirmed_at?: string | null;
   source_email_id?: string | null;
   source_items_json?: unknown;
   note?: string | null;
@@ -51,13 +53,18 @@ export interface Suggestion {
   rule: string;
 }
 
-export interface SuggestOutcome { created: boolean; id: number | null; why: "created" | "same_key" | "already_suggested" | "dry_run" }
+export interface SuggestOutcome { created: boolean; id: number | null; why: "created" | "same_key" | "already_suggested" | "dry_run"; /** Converted badge claims on the same line dismissed "superseded by found claim" (Maria 2026-11-12). */ superseded?: number[] }
 
 const num = (v: unknown): number => (v == null ? 0 : Number(v));
 const DAY_MS = 86_400_000;
 const daysBetween = (from: string | Date, to: Date): number => (to.getTime() - new Date(from).getTime()) / DAY_MS;
 
-export type ExistingClaim = { po_id: string; po_line_item_id: string | null; kind: string; status: string; suggestion_key: string | null };
+export type ExistingClaim = { po_id: string; po_line_item_id: string | null; kind: string; status: string; suggestion_key: string | null; /** A migration-101 badge conversion still waiting on its quantity (open, qty NULL, enter_quantity open): never blocks a suggestion, is superseded by one. */ converted_badge?: boolean };
+/** SQL (alias `c` = supplier_claims): a converted badge claim — open, no quantity, its enter_quantity task still open, a supplier_claim_conversions row behind it. */
+export const CONVERTED_BADGE_SQL = `(c.status = 'open' AND c.qty IS NULL
+    AND EXISTS (SELECT 1 FROM supplier_claim_conversions k WHERE k.claim_id = c.id)
+    AND EXISTS (SELECT 1 FROM supplier_claim_tasks t WHERE t.claim_id = c.id AND t.kind = 'enter_quantity' AND t.done_at IS NULL))`;
+export const SUPERSEDED_REASON = "superseded by found claim";
 let hasKeyColumn: boolean | null = null;
 /** Before migration 106 is applied (a dry run against production from a newer checkout) the key column is read as NULL. */
 async function keyColumn(query: QueryLike): Promise<string> {
@@ -67,14 +74,63 @@ async function keyColumn(query: QueryLike): Promise<string> {
 /** The claims already on the PO (any status) that decide whether a suggestion is new. */
 export async function existingClaims(query: QueryLike, poIds: readonly string[]): Promise<ExistingClaim[]> {
   if (!poIds.length) return [];
-  return (await query(`SELECT po_id, po_line_item_id, kind, status, ${await keyColumn(query)} FROM supplier_claims WHERE po_id = ANY($1::uuid[])`, [poIds])).rows;
+  return (await query(`SELECT po_id, po_line_item_id, kind, status, ${await keyColumn(query)}, ${CONVERTED_BADGE_SQL} AS converted_badge FROM supplier_claims c WHERE po_id = ANY($1::uuid[])`, [poIds])).rows;
 }
 
-/** Pure: is this suggestion new — no claim with the same key, and no open / suggested claim of the kind on the same line (or the whole PO)? */
-export function isNewSuggestion(s: Pick<Suggestion, "po_id" | "po_line_item_id" | "kind" | "key">, existing: ReadonlyArray<{ po_id: string; po_line_item_id: string | null; kind: string; status: string; suggestion_key: string | null }>): SuggestOutcome["why"] {
+/** Pure: is this suggestion new — no claim with the same key, and no open / suggested claim of the kind on the same line (or the whole PO)? A converted badge claim never blocks (it is superseded instead). */
+export function isNewSuggestion(s: Pick<Suggestion, "po_id" | "po_line_item_id" | "kind" | "key">, existing: ReadonlyArray<ExistingClaim>): SuggestOutcome["why"] {
   if (existing.some((c) => c.suggestion_key === s.key)) return "same_key";
-  if (existing.some((c) => c.po_id === s.po_id && c.kind === s.kind && (c.status === "open" || c.status === "suggested") && (c.po_line_item_id ?? null) === (s.po_line_item_id ?? null))) return "already_suggested";
+  if (existing.some((c) => !c.converted_badge && c.po_id === s.po_id && c.kind === s.kind && (c.status === "open" || c.status === "suggested") && (c.po_line_item_id ?? null) === (s.po_line_item_id ?? null))) return "already_suggested";
   return "created";
+}
+
+/**
+ * Converted badge claims (migration 101: open, qty NULL, enter_quantity open) are superseded when a finder suggests on their
+ * line — or anywhere on their PO when the suggestion is a whole-PO one (Maria 2026-11-12): dismissed with the reason
+ * "superseded by found claim" — a History row and a `dismissed` event each, through dismissClaim. Returns the ids dismissed
+ * (dry run: the ids it would).
+ */
+export async function supersedeConvertedOnLine(query: QueryLike, poId: string, lineId: string | null, opts: { dryRun?: boolean; except?: number | null } = {}): Promise<number[]> {
+  const ids = (await query(`SELECT c.id FROM supplier_claims c WHERE c.po_id = $1 AND ($2::uuid IS NULL OR c.po_line_item_id = $2) AND ${CONVERTED_BADGE_SQL} ORDER BY c.id`, [poId, lineId])).rows
+    .map((r: any) => Number(r.id)).filter((id: number) => id !== (opts.except ?? null));
+  if (!opts.dryRun) for (const id of ids) await dismissClaim(query, id, null, SUPERSEDED_REASON);
+  return ids;
+}
+
+/**
+ * Stray report prompts (Maria 2026-11-12): open contact_supplier tasks on claims already reported — a canceled claim (any
+ * source), a typed report date, the supplier's confirmation, an earlier Contacted tick — that the timer sweep did not create
+ * (its reason starts "N business days:"). The derivation already ignores them; this removes the rows. Dry run lists them.
+ */
+export async function deleteStrayContactTasks(query: QueryLike, opts: { dryRun?: boolean } = {}): Promise<Array<{ task_id: number; claim_id: number; kind: string; found_by: string }>> {
+  const rows = (await query(
+    `SELECT t.id AS task_id, c.id AS claim_id, c.kind, c.found_by FROM supplier_claim_tasks t JOIN supplier_claims c ON c.id = t.claim_id
+      WHERE t.kind = 'contact_supplier' AND t.done_at IS NULL AND COALESCE(t.reason, '') !~ '^[0-9]+ business days: '
+        AND (c.kind = 'canceled' OR c.reported_at IS NOT NULL OR c.supplier_confirmed_at IS NOT NULL
+             OR EXISTS (SELECT 1 FROM supplier_claim_tasks d WHERE d.claim_id = c.id AND d.kind = 'contact_supplier' AND d.done_at IS NOT NULL))
+      ORDER BY c.id, t.id`)).rows.map((r: any) => ({ task_id: Number(r.task_id), claim_id: Number(r.claim_id), kind: String(r.kind), found_by: String(r.found_by) }));
+  if (!opts.dryRun && rows.length) await query(`DELETE FROM supplier_claim_tasks WHERE id = ANY($1::bigint[])`, [rows.map((r) => r.task_id)]);
+  return rows;
+}
+
+export interface SupersededRow { claim_id: number; po_id: string; order_id: string; supplier: string; po_line_item_id: string; product_name: string | null; kind: string; suggestion_id: number; suggestion_kind: string; suggestion_status: string }
+/**
+ * The one-time sweep (Maria 2026-11-12): every converted badge claim whose line — or whose PO, through a whole-PO
+ * suggestion — already carries a finder's suggestion (any status — the finder had figures there) is dismissed
+ * "superseded by found claim". Dry run lists them.
+ */
+export async function sweepSupersededConverted(query: QueryLike, opts: { dryRun?: boolean } = {}): Promise<{ rows: SupersededRow[]; dismissed: number }> {
+  const rows = (await query(
+    `SELECT c.id AS claim_id, c.po_id, p.order_id, p.supplier, c.po_line_item_id, l.product_name, c.kind,
+            s.id AS suggestion_id, s.kind AS suggestion_kind, s.status AS suggestion_status
+       FROM supplier_claims c JOIN purchase_orders p ON p.id = c.po_id LEFT JOIN po_line_items l ON l.id = c.po_line_item_id
+       JOIN LATERAL (SELECT s.id, s.kind, s.status FROM supplier_claims s WHERE s.po_id = c.po_id AND (s.po_line_item_id = c.po_line_item_id OR s.po_line_item_id IS NULL)
+                       AND s.id <> c.id AND s.suggestion_key IS NOT NULL ORDER BY (s.po_line_item_id IS NULL), s.id LIMIT 1) s ON true
+      WHERE c.po_line_item_id IS NOT NULL AND ${CONVERTED_BADGE_SQL} ORDER BY p.order_date, c.id`)).rows
+    .map((r: any) => ({ ...r, claim_id: Number(r.claim_id), suggestion_id: Number(r.suggestion_id) })) as SupersededRow[];
+  let dismissed = 0;
+  if (!opts.dryRun) for (const r of rows) { await dismissClaim(query, r.claim_id, null, SUPERSEDED_REASON); dismissed++; }
+  return { rows, dismissed };
 }
 
 /**
@@ -94,14 +150,16 @@ export async function suggestClaim(query: QueryLike, s: Suggestion, opts: { dryR
     if (l) amount = claimAmount({ qty: s.qty, productPack: l.qty_basis === "product_legacy" ? 1 : l.retailer_units_per_product, adjustedProductCost: l.adjusted_product_cost, price: l.price, subtotal: l.subtotal, discount: l.discount, tax: l.tax, shipping: l.sh_donations });
   }
   const row = (await query(
-    `INSERT INTO supplier_claims (po_id, po_line_item_id, kind, qty, amount_owed, amount_owed_source, found_at, note, status, found_by, source_email_id, source_items_json, suggestion_key)
-     VALUES ($1, $2, $3, $4, $5, 'auto', CURRENT_DATE, $6, 'suggested', $7, $8, $9, $10) RETURNING id`,
-    [s.po_id, s.po_line_item_id, s.kind, s.qty, amount, s.note ?? null, s.found_by, s.source_email_id ?? null, s.source_items_json == null ? null : JSON.stringify(s.source_items_json), s.key])).rows[0];
+    `INSERT INTO supplier_claims (po_id, po_line_item_id, kind, qty, amount_owed, amount_owed_source, found_at, note, status, found_by, source_email_id, source_items_json, suggestion_key, supplier_confirmed_at)
+     VALUES ($1, $2, $3, $4, $5, 'auto', CURRENT_DATE, $6, 'suggested', $7, $8, $9, $10, $11) RETURNING id`,
+    [s.po_id, s.po_line_item_id, s.kind, s.qty, amount, s.note ?? null, s.found_by, s.source_email_id ?? null, s.source_items_json == null ? null : JSON.stringify(s.source_items_json), s.key, s.kind === "canceled" ? s.confirmed_at ?? null : null])).rows[0];
   const id = Number(row.id);
   await query(`INSERT INTO supplier_claim_events (claim_id, type, summary, by) VALUES ($1, $2, $3, NULL)`, [id, "found", s.reason.slice(0, 500)]);
   await addTask(query, id, "review_suggestion", s.reason);
   if (s.qty == null) await addTask(query, id, "enter_quantity", "the quantity is not known yet — type it in Individual units");
-  return { created: true, id, why: "created" };
+  // The finder's figures replace a migration-101 badge conversion on the same line (Maria 2026-11-12).
+  const superseded = await supersedeConvertedOnLine(query, s.po_id, s.po_line_item_id, { except: id });
+  return { created: true, id, why: "created", ...(superseded.length ? { superseded } : {}) };
 }
 
 // ── The tracking rows a PO's delivery state rests on ─────────────────────────

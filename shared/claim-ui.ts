@@ -7,7 +7,7 @@
 //   stepActions     — the Steps list per path, every step with the handler that sets or changes it.
 //   whatHappensNext — the detail's "What happens next" box: now · then · then.
 import { CLAIM_KIND_LABELS, CLAIM_OUTCOME_LABELS, CLAIM_TASK_LABELS, type ClaimTaskKind } from "./supplier-claim";
-import { BUSINESS_DAYS, claimSteps, isReported, PASSIVE_TASK_KINDS, isActiveTask, type BucketClaim, type BucketResult, type ClaimStep } from "./claim-bucket";
+import { BUSINESS_DAYS, claimSteps, isReported, effectiveTasks, supplierConfirmedAt, TIMEOUT_REASON_RE, PASSIVE_TASK_KINDS, isActiveTask, type BucketClaim, type BucketResult, type ClaimStep } from "./claim-bucket";
 
 export interface UiTask { id: number; kind: ClaimTaskKind | string; reason?: string | null; done_at: string | null; created_at?: string; snoozed_until?: string | null }
 /** What the sentences read beyond BucketClaim. */
@@ -26,7 +26,8 @@ export interface UiClaim extends BucketClaim {
 
 export const fmtMD = (iso: string | null | undefined): string => { if (!iso) return "?"; const [, m, d] = iso.slice(0, 10).split("-"); return `${Number(m)}/${Number(d)}`; };
 export const fmtMoney = (v: number | null | undefined): string => (v == null ? "—" : `$${v.toFixed(2)}`);
-const openTasks = (c: UiClaim) => c.tasks.filter((t) => !t.done_at);
+// effectiveTasks: an open contact_supplier task on a reported claim is ignored — the same set the bucket reads (one derivation, Maria 2026-11-12).
+const openTasks = (c: UiClaim) => effectiveTasks(c).filter((t) => !t.done_at);
 const openOf = (c: UiClaim, kind: string) => openTasks(c).find((t) => t.kind === kind) ?? null;
 const doneAt = (c: UiClaim, kind: string): string | null => c.tasks.filter((t) => t.kind === kind && t.done_at).map((t) => t.done_at!).sort().pop() ?? null;
 const emailed = (c: UiClaim) => c.kind === "canceled" && c.found_by === "email";
@@ -47,7 +48,7 @@ export function stateSentence(c: UiClaim, b: BucketResult): string {
     switch (first.kind) {
       case "confirm_outcome": return first.reason ?? "Supplier replied · confirm the outcome";
       case "enter_quantity": return "Quantity not known yet · type the Individual units";
-      case "contact_supplier": return "Report to supplier";
+      case "contact_supplier": return TIMEOUT_REASON_RE.test(first.reason ?? "") ? `${capital(first.reason!.replace(TIMEOUT_REASON_RE, ""))} in ${BUSINESS_DAYS} business days · contact the supplier` : "Report to supplier";
       case "follow_up_supplier": return `${reportedText(c)} · no answer in ${BUSINESS_DAYS} business days`;
       case "confirm_reship_order": return first.reason ?? "A reship order # arrived · confirm it";
       case "send_label": return "Return label saved · send it to Velocity";
@@ -60,18 +61,21 @@ export function stateSentence(c: UiClaim, b: BucketResult): string {
     }
   }
   switch (b.bucket) {
-    case "waiting_refund": return `Confirmed ${fmtMD(c.supplier_confirmed_at)} · ${outcomeWord(c) ?? "refund"} not posted${short(c)}`;
+    // "Refund confirmed 9/23 · check the card" (Maria 2026-11-12): what was confirmed, when, and where to look
+    case "waiting_refund": return `${refundWord(c)} confirmed ${fmtMD(supplierConfirmedAt(c))} · check the ${refundWhere(c)}${short(c)}`;
     case "waiting_shipment": return c.replacement_shipped_at ? `Replacement shipped ${fmtMD(c.replacement_shipped_at)} · not arrived` : "Return on its way to the supplier";
     case "waiting_velocity": return doneAt(c, "send_label") ? `Label sent ${fmtMD(doneAt(c, "send_label"))} · return not shipped yet` : doneAt(c, "dispose_units") ? "Velocity asked to dispose · count not down yet" : "Velocity asked · nothing changed yet";
     case "waiting_supplier": {
       const reply = c.last_supplier_reply_at ? `Supplier replied ${fmtMD(c.last_supplier_reply_at)}` : null;
       if (c.outcome && !c.supplier_confirmed_at) return `${reply ?? reportedText(c)} · ${outcomeWord(c)} promised · no confirmation yet`;
-      return emailed(c) ? `Canceled per the supplier's email ${fmtMD(c.found_at)} · no refund seen yet` : `${reply ?? reportedText(c)} · no answer yet`;
+      return emailed(c) ? `Canceled per the supplier's email ${fmtMD(c.found_at)} · no refund seen yet` : c.kind === "canceled" ? `Canceled ${fmtMD(c.found_at)} · no refund seen yet` : `${reply ?? reportedText(c)} · no answer yet`;
     }
     default: return openTasks(c).map((t) => CLAIM_TASK_LABELS[t.kind as ClaimTaskKind] ?? t.kind).join(" · ") || reportedText(c);
   }
 }
 const capital = (s: string) => s.charAt(0).toUpperCase() + s.slice(1);
+const refundWord = (c: UiClaim) => (c.outcome === "gift_card" ? "Gift card" : c.outcome === "store_credit" ? "Store credit" : "Refund");
+const refundWhere = (c: UiClaim) => (c.outcome === "gift_card" ? "gift card" : c.outcome === "store_credit" ? "account" : "card");
 
 export interface PrimaryAction {
   /** What the button does: tick this task (`task`), the Contacted supplier form (`contact`), go to the detail (`detail`), the refund form (`refund`), nothing (`none`). */
@@ -93,7 +97,7 @@ export function primaryAction(c: UiClaim, b: BucketResult): PrimaryAction {
   if ((t = by("review_suggestion"))) return { kind: "task", label: "Open claim", taskId: t.id, taskKind: t.kind, secondary: "dismiss" };
   if ((t = by("confirm_outcome"))) return { kind: "detail", label: "Confirm outcome", taskId: t.id, taskKind: t.kind, secondary: null };
   if ((t = by("enter_quantity"))) return { kind: "detail", label: "Enter quantity", taskId: t.id, taskKind: t.kind, secondary: null, needs: "qty" };
-  if ((t = by("contact_supplier")) || (c.status === "open" && !isReported(c))) return { kind: "contact", label: "Contacted supplier", taskId: t?.id, taskKind: "contact_supplier", secondary: null };
+  if ((t = by("contact_supplier")) || (c.status === "open" && !isReported(c))) return { kind: "contact", label: "Contacted supplier", taskId: t?.id, taskKind: "contact_supplier", secondary: t && TIMEOUT_REASON_RE.test(t.reason ?? "") ? "snooze" : null };
   if ((t = by("follow_up_supplier"))) return { kind: "contact", label: "Followed up", taskId: t.id, taskKind: t.kind, secondary: "snooze" };
   if ((t = by("confirm_reship_order"))) return { kind: "detail", label: "Add order #", taskId: t.id, taskKind: t.kind, secondary: null, needs: "order_id" };
   if ((t = by("upload_return_label"))) return { kind: "detail", label: "Upload label", taskId: t.id, taskKind: t.kind, secondary: null };
@@ -178,7 +182,7 @@ export function whatHappensNext(c: UiClaim, b: BucketResult): Array<{ when: "Now
   switch (b.bucket) {
     case "needs_attention": return [{ when: "Now", text: `in Needs attention until ${openTasks(c).filter((t) => isActiveTask(t as any)).map((t) => (CLAIM_TASK_LABELS[t.kind as ClaimTaskKind] ?? t.kind).toLowerCase()).join(", ") || "the task"} is done` }, { when: "Then", text: paths }];
     case "waiting_supplier": return [{ when: "Now", text: `Waiting on supplier${timer} · Follow up after ${BUSINESS_DAYS} business days with no reply` }, { when: "Then", text: c.outcome ? `the supplier confirms the ${outcomeWord(c)} → ${c.outcome === "replacement" ? "Shipped → Arrived" : "Waiting on refund to post → Received"}` : paths }];
-    case "waiting_refund": return [{ when: "Now", text: `Waiting on refund to post${timer} · Check on it after ${BUSINESS_DAYS} business days` }, { when: "Then", text: "the refund posts → + Refund received closes the claim; short → Write off remainder or wait for the rest" }];
+    case "waiting_refund": return [{ when: "Now", text: `Waiting on refund to post${timer} · ${c.kind === "canceled" ? "Contact supplier" : "Check on it"} after ${BUSINESS_DAYS} business days` }, { when: "Then", text: "the refund posts → + Refund received closes the claim; short → Write off remainder or wait for the rest" }];
     case "waiting_shipment": return [{ when: "Now", text: `Waiting on shipment${timer} · Check on it if the carrier goes quiet` }, { when: "Then", text: c.outcome === "replacement" ? "the replacement arrives → Arrived closes the claim" : "the return is delivered → the supplier confirms the refund" }];
     case "waiting_velocity": return [{ when: "Now", text: `Waiting on Velocity${timer} · Check on it after ${BUSINESS_DAYS} business days` }, { when: "Then", text: "Velocity acts → the next step on the path" }];
     default: return [{ when: "Now", text: paths }];
