@@ -476,3 +476,31 @@ describe("Sourcing cost is sent only for patch-forward POs", () => {
     expect(summary.sourcingFromAr).toBe(0);
   });
 });
+
+// Fill-on-choose (the 3-step dialog, Maria 2026-11-12) runs exactly today's logic: the same request, the same selection,
+// the same Sourcing cost, the same output. This pins the output for a fixture template: the filled cells and the summary
+// recorded under server/__fixtures__/sourcing-cost/ before the dialog change (WRITE_SC_FIXTURE=1 rewrites them on purpose).
+describe("fixture template → the recorded output", () => {
+  it("the filled workbook and the summary match the recorded fixture", async () => {
+    const fs = await import("node:fs");
+    const dir = "server/__fixtures__/sourcing-cost";
+    sheetRows = [poRow("B001", "8/12/2026"), poRow("B002", "8/13/2026"), poRow("B003", "8/14/2026"), poRow("B004", "8/15/2026"), poRow("B005", "8/16/2026"), poRow("B006", "7/01/2026"), poRow("B007", "8/20/2026", "canceled")];
+    rawRowsRead = 7;
+    const rows: Array<[string, string, number, number, string]> = [
+      ["B001", "X001", 1.51, 1.51, "AMAZON"], ["B002", "X002", 2.0, 2.0, "SELLER"], ["B002", "X003", 2.0, 2.0, "SELLER"], ["B003", "X004", 9.0, 9.0, "SELLER"], ["B004", "X005", 3.0, 3.0, "AMAZON"], ["B009", "X009", 5.0, 5.0, "AMAZON"],
+    ];
+    const template = `${dir}/template.xlsx`;
+    if (process.env.WRITE_SC_FIXTURE || !fs.existsSync(template)) fs.writeFileSync(template, makeWorkbook(rows));
+    const { buffer, summary, details } = await buildSourcingCost(fs.readFileSync(template), FROM, TO, mkQuery({
+      B001: { actual_cogs: "4.96", cogs_source: "po_sheet" }, B002: { actual_cogs: "2.49", cogs_source: "po_sheet" }, B003: { actual_cogs: "7.50", cogs_source: "po_sheet" },
+      B004: { actual_cogs: "3.00", cogs_source: "po_sheet" }, B005: { actual_cogs: "1.00", cogs_source: "csv" },
+    }));
+    const got = { cells: readBack(buffer), summary, details };
+    const expected = `${dir}/expected.json`;
+    if (process.env.WRITE_SC_FIXTURE || !fs.existsSync(expected)) fs.writeFileSync(expected, JSON.stringify(got, null, 2) + "\n");
+    expect(got).toEqual(JSON.parse(fs.readFileSync(expected, "utf8")));
+    // the shape the dialog's report reads is the route's: costs written, ASINs, the skipped counts, the lists
+    expect(summary.rowsWritten).toBe(4); expect(summary.asinsWritten).toBe(3);
+    expect(summary.skips).toMatchObject({ alreadyApproved: 0, wouldLowerApproved: 1, notPoSourced: 1, notInWorkbook: 0, excludedByStatus: 1, excludedOutOfRange: 1 }); // B004 at Amazon's own approved 3.00 is written (a SELLER match would be already-approved)
+  });
+});

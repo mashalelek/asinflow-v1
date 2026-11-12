@@ -1,0 +1,142 @@
+{
+  "cells": [
+    {
+      "Asin": "B001",
+      "Fnsku": "X001",
+      "Amazon Estimated Cost": 1.51,
+      "Latest Approved Cost": 1.51,
+      "Source of Latest Approved Cost": "AMAZON",
+      "Currency": "USD",
+      "Date of Last Updated Cost": "2026-07-11T13:42:31.279540911Z",
+      "Seller New Cost": 4.96
+    },
+    {
+      "Asin": "B002",
+      "Fnsku": "X002",
+      "Amazon Estimated Cost": 2,
+      "Latest Approved Cost": 2,
+      "Source of Latest Approved Cost": "SELLER",
+      "Currency": "USD",
+      "Date of Last Updated Cost": "2026-07-11T13:42:31.279540911Z",
+      "Seller New Cost": 2.49
+    },
+    {
+      "Asin": "B002",
+      "Fnsku": "X003",
+      "Amazon Estimated Cost": 2,
+      "Latest Approved Cost": 2,
+      "Source of Latest Approved Cost": "SELLER",
+      "Currency": "USD",
+      "Date of Last Updated Cost": "2026-07-11T13:42:31.279540911Z",
+      "Seller New Cost": 2.49
+    },
+    {
+      "Asin": "B003",
+      "Fnsku": "X004",
+      "Amazon Estimated Cost": 9,
+      "Latest Approved Cost": 9,
+      "Source of Latest Approved Cost": "SELLER",
+      "Currency": "USD",
+      "Date of Last Updated Cost": "2026-07-11T13:42:31.279540911Z",
+      "Seller New Cost": ""
+    },
+    {
+      "Asin": "B004",
+      "Fnsku": "X005",
+      "Amazon Estimated Cost": 3,
+      "Latest Approved Cost": 3,
+      "Source of Latest Approved Cost": "AMAZON",
+      "Currency": "USD",
+      "Date of Last Updated Cost": "2026-07-11T13:42:31.279540911Z",
+      "Seller New Cost": 3
+    },
+    {
+      "Asin": "B009",
+      "Fnsku": "X009",
+      "Amazon Estimated Cost": 5,
+      "Latest Approved Cost": 5,
+      "Source of Latest Approved Cost": "AMAZON",
+      "Currency": "USD",
+      "Date of Last Updated Cost": "2026-07-11T13:42:31.279540911Z",
+      "Seller New Cost": ""
+    }
+  ],
+  "summary": {
+    "rawRowsRead": 7,
+    "blankAsinRows": 0,
+    "includedRows": 5,
+    "purchasedAsins": 5,
+    "asinsWithPoCogs": 4,
+    "sourcingFromAr": 0,
+    "sourcingFallback": 4,
+    "sheetsScanned": 1,
+    "workbookRowsRead": 6,
+    "workbookAsins": 5,
+    "asinsWritten": 3,
+    "rowsWritten": 4,
+    "skips": {
+      "excludedByStatus": 1,
+      "badOrMissingDate": 0,
+      "excludedOutOfRange": 1,
+      "noCogsRow": 0,
+      "notPoSourced": 1,
+      "badCost": 0,
+      "notInWorkbook": 0,
+      "alreadyApproved": 0,
+      "wouldLowerApproved": 1
+    }
+  },
+  "details": {
+    "noCogsRowAsins": [],
+    "notPoSourcedAsins": [
+      {
+        "asin": "B005",
+        "source": "csv"
+      }
+    ],
+    "badCostAsins": [],
+    "notInWorkbookAsins": [],
+    "alreadyApprovedAsins": [],
+    "wouldLowerAsins": [
+      {
+        "asin": "B003",
+        "approved": 9,
+        "cost": 7.5,
+        "source": "SELLER"
+      }
+    ],
+    "written": [
+      {
+        "asin": "B001",
+        "fnskus": [
+          "X001"
+        ],
+        "cost": 4.96,
+        "wasApproved": 1.51,
+        "source": "AMAZON",
+        "basis": "actual_cogs"
+      },
+      {
+        "asin": "B002",
+        "fnskus": [
+          "X002",
+          "X003"
+        ],
+        "cost": 2.49,
+        "wasApproved": 2,
+        "source": "SELLER",
+        "basis": "actual_cogs"
+      },
+      {
+        "asin": "B004",
+        "fnskus": [
+          "X005"
+        ],
+        "cost": 3,
+        "wasApproved": 3,
+        "source": "AMAZON",
+        "basis": "actual_cogs"
+      }
+    ]
+  }
+}
