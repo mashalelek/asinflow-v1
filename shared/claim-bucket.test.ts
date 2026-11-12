@@ -137,16 +137,19 @@ describe("the checklist (§3.4) and Next action", () => {
   it("refund path: Found → Reported → Confirmed by supplier → Received → Closed, the current step highlighted", () => {
     const c = base({ reported_at: "2026-11-03", tasks: [done("contact_supplier", "2026-11-03T15:00:00Z")] });
     const s = claimSteps(c);
-    expect(s.map((x) => [x.label, x.done, x.current])).toEqual([["Found", true, false], ["Reported", true, false], ["Confirmed by supplier", false, true], ["Received", false, false], ["Closed", false, false]]);
+    expect(s.map((x) => [x.label, x.done, x.current])).toEqual([["Found", true, false], ["Reported", true, false], ["Supplier answers · outcome", false, true], ["Confirmed by supplier", false, false], ["Received", false, false], ["Closed", false, false]]);
+    // a reply or an outcome ticks "Supplier answers"; a refund outcome names it
+    expect(claimSteps(base({ reported_at: "2026-11-03", last_supplier_reply_at: "2026-11-04T15:00:00Z" })).find((x) => x.key === "answered")).toMatchObject({ done: true, at: "2026-11-04T15:00:00Z", current: false });
+    expect(claimSteps(base({ reported_at: "2026-11-03", outcome: "gift_card" })).find((x) => x.key === "answered")).toMatchObject({ label: "Supplier answered · gift card", done: true });
     const closed = claimSteps(base({ status: "closed", outcome: "refund_card", closed_at: "2026-11-09T10:00:00Z", supplier_confirmed_at: "2026-11-06T10:00:00Z", remaining: 0, received: 5.97 }));
     expect(closed.every((x) => x.done)).toBe(true);
   });
   it("return steps show only on a return; replacement and write-off paths; an emailed cancellation skips Reported", () => {
-    expect(claimSteps(base({ return_required: true })).map((x) => x.label)).toEqual(["Found", "Report", "Label", "Sent to Velocity", "Shipped", "Delivered", "Confirmed by supplier", "Received", "Closed"]);
+    expect(claimSteps(base({ return_required: true })).map((x) => x.label)).toEqual(["Found", "Report", "Supplier answers · outcome", "Label", "Sent to Velocity", "Shipped", "Delivered", "Confirmed by supplier", "Received", "Closed"]);
     expect(claimSteps(base({ outcome: "replacement", reported_at: "2026-11-03" })).map((x) => x.label)).toEqual(["Found", "Reported", "Promised", "Tell Velocity", "Shipped", "Arrived", "Closed"]);
     expect(claimSteps(base({ outcome: "replacement", reported_at: "2026-11-03", ships_to: "home" })).map((x) => x.label)).toEqual(["Found", "Reported", "Promised", "Shipped", "Arrived", "Closed"]);
     expect(claimSteps(base({ outcome: "write_off", status: "closed", closed_at: "2026-11-09", tasks: [open("dispose_units")] })).map((x) => x.label)).toEqual(["Found", "Reported", "Written off", "Dispose", "Closed"]);
-    expect(claimSteps(base({ kind: "canceled", found_by: "email" })).map((x) => x.label)).toEqual(["Found", "Confirmed by supplier", "Received", "Closed"]);
+    expect(claimSteps(base({ kind: "canceled", found_by: "email" })).map((x) => x.label)).toEqual(["Found", "Confirmed by supplier", "Received", "Closed"]); // an emailed cancellation needs no report and no answer
   });
   it("passive tasks (refund_received, replacement_arrived) never make Needs attention: the claim waits in its timer bucket and offers the tick as Next action", () => {
     const c = base({ outcome: "refund_card", reported_at: "2026-11-03", supplier_confirmed_at: "2026-11-05T15:00:00Z", tasks: [done("contact_supplier", "2026-11-03T15:00:00Z"), open("refund_received")] });

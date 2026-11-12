@@ -6330,6 +6330,30 @@ Rules built in commit 1 (`server/supplier-claims.ts`, `shared/supplier-claim.ts`
   date. Migration 105 gave every unreported open claim its `contact_supplier` task (the never_received claim
   "no_poid_at_checkout" had none and showed Waiting on supplier) and removed the Follow ups the old timer had
   created on unreported claims (3 on production).
+- **The two pages, rebuilt against the mockups (commit 2b, 2026-11-12; §5 amended: `docs/mockups/claims-list-2026-11-12.html`,
+  `claim-detail-2026-11-12.html` win over the prose).** The words come from `shared/claim-ui.ts` (pure, tested):
+  `stateSentence` — the row's Step and the header's state, ONE plain sentence (a suggestion's figures and its two
+  causes; "Report to supplier"; "Reported 11/5 by chat · no answer in 5 business days"; "Confirmed 10/28 · gift card
+  not posted · short by $42.00"; never "waiting" before the report); `primaryAction` — the Do column's ONE button per
+  task (Open claim + Dismiss, Contacted supplier, Followed up + Snooze, Confirm outcome, Sent label, Asked, Refund
+  received, Check on it + Snooze …) and the Needs attention group it files under; `stepActions` — every step of
+  every path with its handler (found → the found date; report → the Contacted supplier form; supplier answers →
+  the Supplier replied form; confirmed; received → + Refund received; closed → write off; a replacement's promised
+  / tell Velocity / shipped / arrived; a return's label / sent, its shipped / delivered waiting for commit 7);
+  `whatHappensNext` — now · then · then. New server actions: **Supplier replied** (`recordReply`, `POST
+  /api/pos/claims/:id/replied`: date / how / summary; `last_supplier_reply_at` restarts the timer, a
+  `supplier_reply` event, an open Follow up / Check on it closes; with an outcome → setOutcome, without → a
+  `confirm_outcome` task quoting the reply, Needs attention › Decide), **clear the outcome** (`clearOutcome`,
+  `…/clear-outcome`: outcome, its amounts, the replacement dates and the supplier's confirmation back to NULL, the
+  passive ticks removed), **edit a timeline entry** (`editEvent`, `PATCH /api/pos/claims/events/:id`: summary and /
+  or date; a dated fact's event moves the fact — reported → `reported_at`, supplier_reply →
+  `last_supplier_reply_at`, supplier_confirmed → `supplier_confirmed_at`, found → `found_at`), **merge into another
+  claim of the PO** (`mergeClaims`, `…/merge {into}`: refunds and timeline move, quantities add up, an auto $ owed
+  re-derives, the source is dismissed "merged into #N"); `editClaim` also takes `last_supplier_reply_at` /
+  `supplier_confirmed_at` (blank clears). The list's header reads Refunds due (the Dashboard's definition) · open
+  count; the rows carry `sentence`, `action`, `group`, `ui_steps`, `next`, `ordered` ("2 of 24") and `days_open`.
+  The claim-detail API's Linked adds the PO's inbound tracking with its carrier status, the Velocity order links of
+  the claim's ASIN row and the PO's received Individual units. Every change writes an event and a History row.
 - **Claim detail (`/claims/:id`, `GET /api/claims/:id`):** header (PO, supplier, kind, qty in the three unit kinds, $
   owed with the manual override and **Reset to auto** — History row on every change), the **step checklist** (§3.4:
   refund / credit, replacement, write-off, emailed cancellation; return steps only on a return; the current step

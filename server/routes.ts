@@ -15,8 +15,8 @@ import { linkUnmatchedLine } from "./shipment-link";
 import { likeContains, stripShipmentSuffix } from "./order-number";
 import { clearExtraUnits } from "./extra-units";
 import { writeLineItems, loadActionItemLines } from "./line-action-items";
-import { addClaim, editClaim, linkRefund, unlinkRefund, setOutcome, reopenClaim, dismissClaim, removeClaim, loadClaims, loadOpenClaimSummaries, briefOf, doneTask, cancelLines, snoozeTask, confirmSupplier, addRefundReceived, writeOffRemainder, recordContact } from "./supplier-claims";
-import { loadClaimsPage, bucketCounts, sweepClaimTimers, claimDetail, CLAIM_KIND_FILTERS } from "./claim-buckets";
+import { addClaim, editClaim, linkRefund, unlinkRefund, setOutcome, reopenClaim, dismissClaim, removeClaim, loadClaims, loadOpenClaimSummaries, briefOf, doneTask, cancelLines, snoozeTask, confirmSupplier, addRefundReceived, writeOffRemainder, recordContact, recordReply, clearOutcome, editEvent, mergeClaims } from "./supplier-claims";
+import { loadClaimsPage, bucketCounts, sweepClaimTimers, claimDetail, CLAIM_KIND_FILTERS, refundsDueTotal } from "./claim-buckets";
 import { velocityIneligible, ineligibleText } from "./shipment-match";
 import { readVelocityStartDate } from "./ships-to-backfill";
 import { evaluateAutoClose, setPoClosedManually, parseQtyInput, MANUAL_QTY_COLUMNS, type ManualQtyColumn } from "./po-close";
@@ -4478,6 +4478,11 @@ export async function registerRoutes(
   claimRoute("post", "/api/pos/claims/:id/confirm-supplier", (q, req) => confirmSupplier(q, Number(req.params.id), req.body ?? {}, uid(req)));
   // Contacted supplier (Maria 2026-11-12): {date, channel, note} — reported_at / reported_channel, the Reported step, the timer from that date.
   claimRoute("post", "/api/pos/claims/:id/contacted", (q, req) => recordContact(q, Number(req.params.id), req.body ?? {}, uid(req)));
+  // Commit 2b (§5 amended 2026-11-12): Supplier replied, clear the outcome, edit a timeline entry, merge into another claim of the PO.
+  claimRoute("post", "/api/pos/claims/:id/replied", (q, req) => recordReply(q, Number(req.params.id), req.body ?? {}, uid(req)));
+  claimRoute("post", "/api/pos/claims/:id/clear-outcome", (q, req) => clearOutcome(q, Number(req.params.id), (req.body ?? {}).reason ?? null, uid(req)));
+  claimRoute("patch", "/api/pos/claims/events/:id", (q, req) => editEvent(q, Number(req.params.id), req.body ?? {}, uid(req)));
+  claimRoute("post", "/api/pos/claims/:id/merge", (q, req) => mergeClaims(q, Number(req.params.id), Number((req.body ?? {}).into), uid(req)));
   claimRoute("post", "/api/pos/claims/:id/refund-received", (q, req) => addRefundReceived(q, Number(req.params.id), req.body ?? {}, uid(req)));
   claimRoute("post", "/api/pos/claims/:id/write-off-remainder", (q, req) => writeOffRemainder(q, Number(req.params.id), String((req.body ?? {}).reason ?? ""), uid(req)));
   // The Claims page (SPEC §22 "Supplier claims" §5, commit 2): every claim with its derived bucket; the timer sweep runs first so
@@ -4490,7 +4495,7 @@ export async function registerRoutes(
       const rows = await loadClaimsPage(poQuery, { supplier: str(req.query.supplier), kind: str(req.query.kind), po: str(req.query.po) });
       const all = await loadClaimsPage(poQuery);
       const suppliers = Array.from(new Set(all.map((r) => r.supplier))).sort();
-      res.json({ claims: rows, counts: bucketCounts(rows), suppliers, kinds: CLAIM_KIND_FILTERS, swept: swept.length });
+      res.json({ claims: rows, counts: bucketCounts(rows), suppliers, kinds: CLAIM_KIND_FILTERS, swept: swept.length, header: refundsDueTotal(all) });
     } catch (err: any) { res.status(500).json({ message: err.message }); }
   });
   app.get("/api/claims/:id", async (req: Request, res: Response) => {

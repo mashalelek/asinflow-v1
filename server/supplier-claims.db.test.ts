@@ -2,7 +2,7 @@ import { describe, it, expect, beforeAll, afterAll } from "vitest";
 import pg from "pg";
 import { readFileSync } from "node:fs";
 import { claimAmount, claimCounts, claimMoney, claimSummary, costPerIndividualUnit, individualEquivalents } from "@shared/supplier-claim";
-import { addClaim, editClaim, linkRefund, unlinkRefund, setOutcome, reopenClaim, dismissClaim, removeClaim, loadClaims, loadOpenClaimSummaries, cancelLines, doneTask, addRefundReceived, confirmSupplier, writeOffRemainder, snoozeTask, loadClaimEvents } from "./supplier-claims";
+import { addClaim, editClaim, linkRefund, unlinkRefund, setOutcome, reopenClaim, dismissClaim, removeClaim, loadClaims, loadOpenClaimSummaries, cancelLines, doneTask, addRefundReceived, confirmSupplier, writeOffRemainder, snoozeTask, loadClaimEvents, recordReply, clearOutcome, editEvent, mergeClaims, recordContact } from "./supplier-claims";
 import { loadClaimsPage, sweepClaimTimers, claimDetail, bucketCounts } from "./claim-buckets";
 import { addMoneyRow, editMoneyRow, removeMoneyRow } from "./po-money-edit";
 import { evaluateAutoClose } from "./po-close";
@@ -224,7 +224,7 @@ describe("claims commit 2 on the real schema (rolled back): tasks, buckets, the 
       const task = row.tasks.find((t) => t.kind === "contact_supplier")!;
       await doneTask(q, task.id, null, { date: "2026-10-27", channel: "email", note: "asked for 2 singles" });
       [row] = await loadClaimsPage(q, { po: "zz-claim-test" }, new Date("2026-10-30T15:00:00Z")); // Fri: 3 business days
-      expect(row).toMatchObject({ bucket: "waiting_supplier", reported_at: "2026-10-27", reported_channel: "email", timed_out: false, step: "Confirmed by supplier", next_action: "waiting for the supplier's answer" });
+      expect(row).toMatchObject({ bucket: "waiting_supplier", reported_at: "2026-10-27", reported_channel: "email", timed_out: false, step: "Supplier's answer", next_action: "waiting for the supplier's answer" });
       expect(row.bucket_since).toMatch(/^2026-10-27T/);
       // the sweep covers every claim in the database (the local copy has real ones); this test reads its own
       const mine = async (at: Date) => (await sweepClaimTimers(q, at)).filter((x) => x.claim_id === id);
@@ -407,5 +407,96 @@ describe("wiring", () => {
     for (const r of ['"/api/pos/:id/claims"', '"/api/pos/claims/:id"', '"/api/pos/claims/:id/refunds"', '"/api/pos/claims/:id/outcome"', '"/api/pos/claims/:id/reopen"', '"/api/pos/claims/:id/dismiss"', '"/api/pos/claims/tasks/:id/done"',
       '"/api/pos/claims/tasks/:id/snooze"', '"/api/pos/claims/:id/confirm-supplier"', '"/api/pos/claims/:id/refund-received"', '"/api/pos/claims/:id/write-off-remainder"', '"/api/claims"', '"/api/claims/:id"']) expect(routes).toContain(r);
     expect(routes).not.toMatch(/po_line_defects|\/defects/);
+  });
+});
+
+describe("commit 2b (§5 amended 2026-11-12): Supplier replied, clear the outcome, edit a timeline entry, merge — on the real schema (rolled back)", () => {
+  it("Contacted supplier → Supplier replied (no outcome → Decide: confirm outcome; the timer restarts from the reply) → a reply that tells the outcome sets it; every change leaves an event and a History row", async (ctx) => {
+    if (!client) return ctx.skip();
+    await inTx(async (q) => {
+      const s = await seed(q);
+      const { id } = await addClaim(q, s.po, { po_line_item_id: s.line, kind: "missing", qty: 2 }, null);
+      await recordContact(q, id, { date: "2026-11-03", channel: "email", note: "asked about the 2 missing" }, null);
+      let [row] = await loadClaimsPage(q, { po: s.po }, new Date("2026-11-05T15:00:00Z"));
+      expect(row).toMatchObject({ reported_at: "2026-11-03", bucket: "waiting_supplier", sentence: "Reported 11/3 by email · no answer yet" });
+      // the supplier replies without saying what they will do → Decide (confirm_outcome), the sentence quotes the reply
+      await recordReply(q, id, { date: "2026-11-06", channel: "chat", summary: "remaining 2 ship out tomorrow" }, null);
+      [row] = await loadClaimsPage(q, { po: s.po }, new Date("2026-11-06T20:00:00Z"));
+      expect(row.last_supplier_reply_at).toMatch(/^2026-11-06/);
+      expect(row.bucket).toBe("needs_attention");
+      expect(row.tasks.filter((t) => !t.done_at).map((t) => t.kind)).toEqual(["confirm_outcome"]);
+      expect(row.sentence).toBe('Supplier replied 11/6: "remaining 2 ship out tomorrow" → outcome?');
+      expect(row.action).toMatchObject({ kind: "detail", label: "Confirm outcome" });
+      expect(row.group).toBe("decide");
+      // a second reply tells the outcome: replacement → the confirm task closes, the outcome is set, the steps change
+      await recordReply(q, id, { date: "2026-11-07", channel: "email", summary: "shipping a replacement", outcome: "replacement" }, null);
+      [row] = await loadClaimsPage(q, { po: s.po }, new Date("2026-11-09T15:00:00Z"));
+      expect(row).toMatchObject({ outcome: "replacement", bucket: "waiting_supplier" });
+      expect(row.tasks.filter((t) => !t.done_at).map((t) => t.kind)).toEqual(["replacement_arrived"]);
+      expect(row.ui_steps.map((x) => x.key)).toEqual(["found", "reported", "promised", "tell_velocity", "shipped", "arrived", "closed"]);
+      const ev = (await loadClaimEvents(q, id)).map((e) => e.type);
+      expect(ev).toEqual(["opened", "reported", "supplier_reply", "supplier_reply", "outcome_set"]);
+      const h = await history(q, s.po);
+      expect(h.map((x: any) => x.field)).toEqual(expect.arrayContaining(["claim reported_at", "supplier replied", "claim outcome"]));
+      // clear the outcome: back to "not known yet", the passive tick removed, event + History row; the reply still anchors the timer
+      await clearOutcome(q, id, "set while testing", null);
+      [row] = await loadClaimsPage(q, { po: s.po }, new Date("2026-11-09T15:00:00Z"));
+      expect(row).toMatchObject({ outcome: null, status: "open", bucket: "waiting_supplier" });
+      expect(row.tasks.filter((t) => !t.done_at)).toHaveLength(0);
+      // the timer runs from the latest of the reply (11/7) and the tick that closed the confirm task (now, in this rolled-back run)
+      expect(new Date(row.bucket_since!).getTime()).toBeGreaterThanOrEqual(Date.parse("2026-11-07T12:00:00Z"));
+      expect((await loadClaimEvents(q, id)).pop()).toMatchObject({ type: "outcome_set", summary: "outcome cleared — was replacement · set while testing" });
+      expect((await history(q, s.po)).pop()).toMatchObject({ field: "claim outcome", new_value: "cleared: set while testing" });
+    });
+  });
+  it("editEvent: a reported entry's date moves reported_at (the timer with it), a reply's date moves last_supplier_reply_at, a summary edit is a History row", async (ctx) => {
+    if (!client) return ctx.skip();
+    await inTx(async (q) => {
+      const s = await seed(q);
+      const { id } = await addClaim(q, s.po, { po_line_item_id: s.line, kind: "missing", qty: 2 }, null);
+      await recordContact(q, id, { date: "2026-11-03", channel: "email" }, null);
+      const reported = (await loadClaimEvents(q, id)).find((e) => e.type === "reported")!;
+      await editEvent(q, reported.id, { at: "2026-11-01", summary: "email · 2026-11-01 · typo fixed" }, null);
+      let [row] = await loadClaimsPage(q, { po: s.po }, new Date("2026-11-05T15:00:00Z"));
+      expect(row.reported_at).toBe("2026-11-01");
+      expect(row.bucket_since).toBe("2026-11-01T12:00:00.000Z");
+      expect((await loadClaimEvents(q, id)).find((e) => e.id === reported.id)).toMatchObject({ summary: "email · 2026-11-01 · typo fixed" });
+      await recordReply(q, id, { date: "2026-11-06", channel: "chat", summary: "looking" }, null);
+      const reply = (await loadClaimEvents(q, id)).find((e) => e.type === "supplier_reply")!;
+      await editEvent(q, reply.id, { at: "2026-11-04" }, null);
+      [row] = await loadClaimsPage(q, { po: s.po }, new Date("2026-11-05T15:00:00Z"));
+      expect(row.last_supplier_reply_at).toMatch(/^2026-11-04/);
+      expect((await history(q, s.po)).map((x: any) => x.field)).toEqual(expect.arrayContaining(["timeline reported", "timeline reported date", "timeline supplier_reply date"]));
+      await expect(editEvent(q, reply.id, { at: "11/04/2026" }, null)).rejects.toThrow(/YYYY-MM-DD/);
+    });
+  });
+  it("mergeClaims: the source's refunds and timeline move, the quantities add up, the auto $ owed re-derives, the source is dismissed as merged; a different PO or a dismissed claim is refused", async (ctx) => {
+    if (!client) return ctx.skip();
+    await inTx(async (q) => {
+      const s = await seed(q);
+      const a = await addClaim(q, s.po, { po_line_item_id: s.line, kind: "missing", qty: 1 }, null);
+      const b = await addClaim(q, s.po, { po_line_item_id: s.line, kind: "missing", qty: 2, note: "second count" }, null);
+      await setOutcome(q, b.id, { outcome: "refund_card" }, null);
+      await confirmSupplier(q, b.id, { at: "2026-11-05" }, null);
+      await addRefundReceived(q, b.id, { amount: 5, method: "card", refunded_at: "2026-11-06" }, null);
+      const r = await mergeClaims(q, b.id, a.id, null);
+      expect(r).toEqual({ id: a.id, po_id: s.po, merged_from: b.id });
+      const rows = await loadClaims(q, { poId: s.po });
+      const target = rows.find((x) => x.id === a.id)!, source = rows.find((x) => x.id === b.id)!;
+      expect(target).toMatchObject({ qty: 3, amount_owed: 17.91, amount_owed_source: "auto", received: 5, remaining: 12.91, status: "open" });
+      expect(target.refunds).toHaveLength(1);
+      expect(source).toMatchObject({ status: "dismissed", qty: 2 });
+      expect(source.refunds).toHaveLength(0);
+      expect(source.note).toContain(`merged into claim #${a.id}`);
+      const ev = (await loadClaimEvents(q, a.id)).map((e) => e.type);
+      expect(ev).toContain("supplier_confirmed");
+      expect(ev).toContain("refund_received");
+      expect(ev[ev.length - 1]).toBe("converted");
+      expect((await loadClaimEvents(q, b.id)).map((e) => e.type)).toEqual(["dismissed"]);
+      await expect(mergeClaims(q, a.id, b.id, null)).rejects.toThrow(/dismissed/);
+      const other = (await q(`INSERT INTO purchase_orders (order_id, order_date, supplier, subtotal, order_total) VALUES ('zz-claim-test-2', '2026-10-18', 'zz-test.com', 1, 1) RETURNING id`)).rows[0].id;
+      const c = await addClaim(q, other, { kind: "never_received", qty: 1, amount_owed: 1 }, null);
+      await expect(mergeClaims(q, c.id, a.id, null)).rejects.toThrow(/same PO/);
+    });
   });
 });

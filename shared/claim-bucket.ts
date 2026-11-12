@@ -159,8 +159,9 @@ export function deriveBucket(c: BucketClaim, now: Date): BucketResult {
   // Needs attention, whether or not its contact_supplier task exists (a converted claim may lack it).
   if (bucket === "waiting_supplier" && !isReported(c)) return { ...none, since: new Date(ts(c.found_at) ?? Date.now()).toISOString() };
   // Every tick restarts the timer (a snooze is such a tick) — except Contact supplier, whose typed report date
-  // (reported_at) is the anchor itself; without a typed date its tick is the anchor through doneAt above.
-  const restart = latest(...c.tasks.filter((t) => t.done_at && t.kind !== "contact_supplier").map((t) => t.done_at));
+  // (reported_at) is the anchor itself; without a typed date its tick is the anchor through doneAt above. A supplier
+  // reply (last_supplier_reply_at, the Supplier replied form) restarts it too (§5 amended 2026-11-12).
+  const restart = latest(...c.tasks.filter((t) => t.done_at && t.kind !== "contact_supplier").map((t) => t.done_at), bucket === "waiting_supplier" ? c.last_supplier_reply_at ?? null : null);
   // normalized to an ISO instant (a date-only anchor such as reported_at reads as noon UTC)
   const since = new Date(ts(latest(anchor, restart) ?? c.found_at) ?? Date.now()).toISOString();
   const dueDate = addBusinessDays(since, BUSINESS_DAYS);
@@ -185,6 +186,8 @@ export function claimSteps(c: BucketClaim): ClaimStep[] {
   const promisedAt = outcome ? doneAt(c, "confirm_outcome") ?? c.supplier_confirmed_at ?? reportedAt : null;
   const steps: Array<Omit<ClaimStep, "current">> = [{ key: "found", label: "Found", done: true, at: c.found_at }];
   if (!emailed) steps.push({ key: "reported", label: reportedAt || closed ? "Reported" : "Report", done: !!reportedAt || closed, at: reportedAt, todo: "Report to supplier" });
+  // "Supplier answers · outcome" (mockup 2026-11-12): done once the supplier replied or the outcome is known; before the rest of the path
+  if (!emailed && outcome !== "write_off" && outcome !== "replacement") steps.push({ key: "answered", label: outcome ? `Supplier answered · ${outcome.replace("_", " ")}` : "Supplier answers · outcome", done: !!outcome || !!c.last_supplier_reply_at || closed, at: c.last_supplier_reply_at ?? (outcome ? doneAt(c, "confirm_outcome") ?? c.supplier_confirmed_at : null), todo: "Supplier's answer" });
   if (outcome === "replacement") {
     steps.push({ key: "promised", label: "Promised", done: true, at: promisedAt });
     if (c.ships_to !== "home") steps.push({ key: "tell_velocity", label: "Tell Velocity", done: !!doneAt(c, "tell_velocity_replacement") || !!c.replacement_shipped_at || closed, at: doneAt(c, "tell_velocity_replacement") });
