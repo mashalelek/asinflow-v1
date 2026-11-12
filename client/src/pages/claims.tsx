@@ -16,8 +16,8 @@
  * Rules: no outcome is needed to proceed; nothing says "waiting" before reported_at; every change writes an event and a
  * History row (the server does). The LOOK is the mockups' too (Maria 2026-11-12, docs/UI_RULES.md "When a mockup
  * exists"): claims.css is their <style> blocks scoped to `.cl`; the list is the mockup's `.hd` / `.row` grid, not AF's
- * fixed-layout table, and the Qty header is the mockup's bare "Qty" (the Individual-units kind is its title) — both
- * conflicts with the older rules noted, not resolved.
+ * fixed-layout table (the conflict with the older rule noted, not resolved); the Qty header carries the muted
+ * "Individual units" line above it — there the quantity-names rule wins (Maria 2026-11-12, the mockup omitted it).
  */
 import React, { useCallback, useEffect, useMemo, useState } from "react";
 import { Link, useLocation, useParams } from "wouter";
@@ -339,7 +339,7 @@ function ClaimsList() {
         {!data && !error && <div className="mut" style={{ padding: 12 }}>Loading…</div>}
         {data && (
           <div className="hd" data-testid="claims-table">
-            {CLAIM_COLUMNS.map((c) => <span key={c.id} title={c.kind} data-testid={`th-claims-${c.id}`}>{c.label}</span>)}
+            {CLAIM_COLUMNS.map((c) => <span key={c.id} data-testid={`th-claims-${c.id}`}>{c.kind && <span className="kind-line">{c.kind}</span>}{c.label}</span>)}
           </div>)}
         {data && needsAttention && (
           <div data-testid="claims-needs-attention">

@@ -49,7 +49,7 @@ describe("Needs attention groups, labels, the method prefill, the table", () => 
     expect(prefillMethod([{ method: "gift_card" }, { method: "card" }])).toBe("gift_card");
     expect(prefillMethod([])).toBe("card");
   });
-  it("the list is the mockup's grid (28 · 150 · 180 · 130 · 110 · 120 · 1fr · 90 · 180, 12 px gaps) and fits 1280; the mockup's nine columns; the Qty header's kind is its title (the mockup shows a bare \"Qty\" — docs/UI_RULES.md \"When a mockup exists\")", () => {
+  it("the list is the mockup's grid (28 · 150 · 180 · 130 · 110 · 120 · 1fr · 90 · 180, 12 px gaps) and fits 1280; the mockup's nine columns; the Qty header names its kind on the muted line above (the quantity-names rule wins there, Maria 2026-11-12)", () => {
     expect(CLAIMS_TABLE_WIDTH).toBeLessThanOrEqual(1280 - 48);
     expect(CLAIMS_GRID).toBe("28px 150px 180px 130px 110px 120px 1fr 90px 180px");
     expect(CLAIM_COLUMNS.map((c) => c.label)).toEqual(["", "Supplier · PO", "Product", "Kind", "Qty", "Owed / left", "Step", "Waiting", "Do"]);
@@ -69,6 +69,8 @@ describe("Needs attention groups, labels, the method prefill, the table", () => 
     expect(page).toContain('<div className="cl" style={{ display: "flex", flexDirection: "column" }} data-testid="claims-page">');
     expect(page).toContain('<div className="cl" data-testid="claim-detail">');
     expect(page).toMatch(/className="hd" data-testid="claims-table"/);
+    expect(page).toContain('{c.kind && <span className="kind-line">{c.kind}</span>}{c.label}');
+    expect(css).toContain(".cl .hd .kind-line{display:block;font-size:9px;text-transform:none;letter-spacing:0;color:#6f6b63;line-height:1.2}");
     expect(page).toMatch(/className="row" style=\{\{ cursor: "pointer" \}\}/);
     expect(readFileSync("client/index.html", "utf8")).toContain("https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600&family=JetBrains+Mono:wght@400;500&display=swap");
     // the detail's three columns and its action buttons; nothing says "waiting" before the report (the words come from shared/claim-ui.ts)

@@ -88,7 +88,10 @@ look. Use its stylesheet; do not restyle to match the rest of AF or the
 quiet-chrome rule. Prove it with a side-by-side screenshot in the report. If
 the mockup conflicts with another UI rule, the mockup wins and the conflict is
 noted, not resolved by changing the screen.** (Maria 2026-11-12; the Claims
-pages: `docs/mockups/claims-*-2026-11-12.html` → `client/src/pages/claims.css`.)
+pages: `docs/mockups/claims-*-2026-11-12.html` → `client/src/pages/claims.css`.
+One exception Maria made the same day: a quantity header always carries its
+kind line, even where the mockup omitted it — the quantity-names rule wins
+there.)
 
 **Required read before any UI change.** No horizontal scroll at ≥ 1280 on
 any page or dialog; tables use fixed layout with content-sized default

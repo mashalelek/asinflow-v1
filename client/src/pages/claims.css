@@ -47,6 +47,8 @@
 .cl .step .m{width:16px;height:16px;border-radius:50%;border:1px solid #5a564f;display:inline-flex;align-items:center;justify-content:center;font-size:10px;flex:none}
 .cl .step.ok .m{background:#5aa37a;border-color:#5aa37a;color:#0f1a14}
 .cl .step.on .m{border-color:#d8b56a;color:#d8b56a}
+/* the quantity-names rule's kind line above a quantity header (Maria 2026-11-12: it wins over the mockup's bare "Qty") */
+.cl .hd .kind-line{display:block;font-size:9px;text-transform:none;letter-spacing:0;color:#6f6b63;line-height:1.2}
 /* the mockup's card title ("CLAIM", "STEPS", …) and its link-styled actions, as one class each */
 .cl .ct{color:#8f8b82;font-size:11px;text-transform:uppercase;letter-spacing:.04em;margin-bottom:10px}
 .cl .ct .mut{text-transform:none;letter-spacing:0}
