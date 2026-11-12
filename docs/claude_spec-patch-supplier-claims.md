@@ -153,6 +153,34 @@ Maria can do on one list with a checkbox.
 Suggested claims never change a PO until Maria opens them. Opening a
 `canceled` claim reduces expected units at once (§3.6).
 
+   **Built 2026-11-12 (commit 5; migration 105 `suggestion_key`; not
+   pushed).** `server/claim-suggestions.ts` (missing per D8, never_received
+   (a) / (b), the one writer `suggestClaim`) and
+   `server/cancellation-emails.ts` (classifier, forwarded headers, 18
+   retailer parsers + a generic fallback, Haiku for free text from a known
+   supplier, matching, the per-line / whole-PO claims), both run by
+   component 30 every hourly pass; `npm run claims:suggest` is the dry run
+   / backfill. Deviations and findings: (a) never_received (b) applies to
+   orders since 2026-07-29 only — before the tracking window "no shipping
+   email" is meaningless (the first local run flagged 70 pre-July POs);
+   (b) the AI is asked only for a candidate from a KNOWN supplier (sender
+   → domain map / aliases) — otherwise gift-card deliveries and newsletters
+   that mention "cancellation" would be read for nothing; (c) a negated or
+   future "canceled" ("cannot be canceled", "will be cancelled",
+   "canceled your subscription") is not a candidate; (d) Walgreens'
+   "adjusted and has shipped" is both a shipping email and a cancellation
+   (its Canceled section, ~3K characters in); the combined Folgers order
+   (email 5, line 3) is suggested with the quantity unknown and the figures
+   in the reason; (e) a Michaels gift-card notice becomes a canceled
+   suggestion with the credit as the amount and the quantity unknown; (f)
+   BigBadToyStore prints no order # — matched by the item's words to the
+   one open PO of the supplier; (g) Target prints the full order # in the
+   body of the "ending in 3365" email, the last-4 rule is the fallback.
+   Production dry run 2026-11-12: 20 missing · 10 never_received (3 lost
+   in transit, 7 nothing after the order) · 28 canceled from 38 candidate
+   emails (11 without a PO in AF, 3 for Haiku);
+   `docs/claim-suggestions-dry-run-2026-11-12.csv`.
+
 ### 3.2 Tasks and buckets
 
 Every action only Maria can do is a **task** on the claim (kind, group,
@@ -710,6 +738,7 @@ Prerequisite: `claude_spec-patch-quantity-names.md` (labels only).
 3. Tracking parser fix (§3.10) + placeholder backfill.
 4. EasyPost (§3.9): register, webhook, sweep, store; Velocity fallback.
 5. Auto-found: missing (D8), never_received (§3.1) as suggestions;
+   *(built 2026-11-12, see §3.1 "Built" — dry run on production, live waits for Maria)*
    cancellation emails → suggested canceled claims.
 6. Email: supplier replies, refund / credit confirmations (incl. Target
    fallback), labels in replies (regex first, Haiku for free text).

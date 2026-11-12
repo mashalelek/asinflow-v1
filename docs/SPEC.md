@@ -2320,7 +2320,7 @@ the ledger stage is the `refresh_runs.stage` key the component writes.
 | 27 | PO confirmation reconcile (§26 "Confirmation emails", 2026-10-31) | daily | Gmail API (orders@) — no AI | `27_po_confirmations` | order-confirmation mail since the watermark vs AF POs, and §27 renewal POs for unmatched confirmations; **00:00 pass only**, after 26; manual: `POST /api/pos/reconcile-confirmations` |
 | 28 | Subscription alerts (§27, 2026-10-31) | daily | none (AF tables) | `28_subscriptions` | every subscription; "Subscription renews" raised / cleared; **00:00 pass only**, after 27 |
 | 29 | PO documents (§22 "PO documents", 2026-11-04) | hourly | Gmail API (orders@) + Drive API (Invoices root, as Maria) + headless Chromium | `29_po_documents` | order-confirmation / shipped / delivered mail since the watermark, rendered to PDF and saved to Drive; every pass also links PDFs saved by hand (D1; the 00:00 pass only until 2026-11-05); a document not saved fails the component (2026-11-05); **scheduled passes only** (00:00 and hourly), after 28; manual: `npm run po-docs` |
-| 30 | Claim timers (§22 "Supplier claims" D7, 2026-11-11) | hourly | none (AF tables) | `30_claim_timers` | `sweepClaimTimers`: every open claim with no open task whose 5-business-day timer ran out gets `follow_up_supplier` / `check_on_it` with the reason, once — so the POs list's Claims column and the Dashboard never lag behind the Claims page (whose load runs the same sweep); **scheduled passes only**, after 29 |
+| 30 | Claim timers + auto-found claims (§22 "Supplier claims" D7 / D8 / §3.1, 2026-11-11 / 2026-11-12) | hourly | AF tables · Gmail list/get (cancellation emails) · Haiku for free text | `30_claim_timers` | `sweepClaimTimers`: every open claim with no open task whose 5-business-day timer ran out gets `follow_up_supplier` / `check_on_it` with the reason, once — so the POs list's Claims column and the Dashboard never lag behind the Claims page (whose load runs the same sweep); then `sweepSuggestions` (missing per D8, never_received) and `ingestCancellations` (cancellation emails since the watermark → suggested canceled claims) — **suggestions only**, nothing changes a PO until Maria opens one; **scheduled passes only**, after 29 |
 
 Dependencies the order encodes: 10 before 13 (fees need the fresh price)
 (9 before 15 was retired 2026-10-17 — the inventory snapshot's ordered_qty
@@ -6318,6 +6318,49 @@ Rules built in commit 1 (`server/supplier-claims.ts`, `shared/supplier-claim.ts`
   pass (component 30, `30_claim_timers`, §11) and when the Claims page loads (`GET /api/claims`), so the Claims page,
   the POs list's Claims column and the Dashboard agree; it writes a `timed_out` event. Snooze = the task ticked now +
   `snoozed_until` 5 business days out (`POST /api/pos/claims/tasks/:id/snooze`).
+- **Auto-found claims (commit 5, 2026-11-12; `server/claim-suggestions.ts`, `server/cancellation-emails.ts`,
+  migration 105):** AF SUGGESTS claims — status `suggested`, `found_by` auto / email, a `review_suggestion` task
+  carrying the figures and the reason under Needs attention → Decide (Open / Dismiss), an `enter_quantity` task
+  when the quantity is not known; nothing changes a PO until Maria opens one. `suggestion_key` is the dedupe: the
+  same key is never suggested twice, a dismissed suggestion comes back only when its figures change; one open
+  suggestion per kind per line. Runs in component 30 every hourly pass. Three finders:
+  - **missing (D8):** per ASIN row of an open Velocity PO — every inbound tracking row delivered (EasyPost's
+    `delivered_at`, else Velocity's `tracking_status` "Delivered" for rows EasyPost does not track), ≥ 3 business
+    days since the latest delivery, Received by Velocity < shipped. Shipped (Individual units) = Σ the emails'
+    stated `po_tracking.qty` (Product units × the product pack) when the PO has one ASIN row and every delivered
+    row states a qty, else ordered − canceled. The text shows both figures and the two causes (the supplier shipped
+    a single instead of the case / Velocity's pack size is wrong). Key = row + shipped + received.
+  - **never_received:** (a) with tracking — an inbound row with a carrier exception / returned to sender, an ETA
+    passed 5 business days ago, no scan for 5 business days, or in transit > 14 days with no scan in the last 3
+    (the only rule for a row with no carrier data: FedEx before its account, GLS); every row flagged → a whole-PO
+    claim (line NULL, qty = expected, $ = the order total), some → the one line, else a whole-PO claim naming the
+    numbers (qty unknown). (b) with nothing — no `po_tracking` row of any kind (a placeholder is a shipping email)
+    and nothing received 14 days after the order date, orders since 2026-07-29 only (before that no shipping email
+    was read). Text "Looks not received. Open a claim?".
+  - **canceled from email** (the cancellations patch's §4 classifier and retailer parsers, its `po_cancellations`
+    table superseded): a candidate carries cancellation language in its subject or body head and is not a
+    subscription / membership cancel, a delayed notice (D4), a declined-payment notice or a threat ("will be
+    cancelled"); a forwarded email's sender, date and subject come from the forwarded header block. Parsers
+    (fixtures under `server/__fixtures__/cancellation-emails/`, scrubbed): Walmart ("Canceled: …", items + Qty,
+    "started a refund of $X" + Walmart Cash), Target (the full order # when printed, else the last 4 → the one
+    Target PO of the last 60 days), Sephora, Bath & Body Works, BigBadToyStore (no order #: the one open PO whose
+    line shares the item's words), Oracle "Order Cancellation Summary" (SKU + qty), SupplyHouse, DK Hardware,
+    Jellycat, the Shopify "Refunded Items" template, Urban Outfitters, Macy's, Staples, Fleet Farm, Walgreens
+    "adjusted and has shipped" (its Canceled section), Michaels' gift card (the credit amount, qty unknown),
+    Kohl's, Tennessee Valley Bicycles; a generic fallback; **Haiku** for a candidate the parsers cannot complete
+    from a known supplier (one call per email, ≤ 25 per pass, `po_prefill_log` kind `cancellation`, recorded
+    answers in the suite; never on a dry run). Match = supplier (sender domain → domain map → aliases; a platform
+    sender by the order # alone) + normalised order #; exactly one PO or listed with the reason. One claim per
+    placed item line (qty = the email's Product units × the line's Individual units per Product unit; NULL when it
+    exceeds Ordered — the combined Walgreens orders — or the pack is unknown), else one whole-PO claim with the items
+    in `source_items_json`; `source_email_id` on the claim; the refund amount when stated. An email already behind a
+    claim is never read twice; watermark `claims.cancellation_watermark`.
+  - **Dry run / backfill:** `npm run claims:suggest -- [--prod] [--from 2026-07-29] [--live]` — every suggestion
+    the three finders would make (PO, line, kind, figures, reason, source email), counts by kind and by rule,
+    `docs/claim-suggestions-{dry-run|live}-<date>.csv`. Production dry run 2026-11-12: **20 missing · 10
+    never_received** (3 lost in transit, 7 nothing after the order) · **28 canceled** from 38 candidate emails (28
+    matched; 11 emails without a PO in AF — Walmart full cancels of orders never imported, Sephora / Bath & Body
+    Works / Only Natural Pet / Fenty / Ole Henriksen full cancels; 3 would go to Haiku). Live run waits for Maria.
 - **Claim detail (`/claims/:id`, `GET /api/claims/:id`):** header (PO, supplier, kind, qty in the three unit kinds, $
   owed with the manual override and **Reset to auto** — History row on every change), the **step checklist** (§3.4:
   refund / credit, replacement, write-off, emailed cancellation; return steps only on a return; the current step
