@@ -15,7 +15,7 @@ import { linkUnmatchedLine } from "./shipment-link";
 import { likeContains, stripShipmentSuffix } from "./order-number";
 import { clearExtraUnits } from "./extra-units";
 import { writeLineItems, loadActionItemLines } from "./line-action-items";
-import { addClaim, editClaim, linkRefund, unlinkRefund, setOutcome, reopenClaim, dismissClaim, removeClaim, loadClaims, loadOpenClaimSummaries, briefOf, doneTask, cancelLines, snoozeTask, confirmSupplier, addRefundReceived, writeOffRemainder, recordContact, recordReply, clearOutcome, editEvent, mergeClaims } from "./supplier-claims";
+import { addClaim, editClaim, linkRefund, unlinkRefund, setOutcome, reopenClaim, dismissClaim, removeClaim, loadClaims, loadOpenClaimSummaries, briefOf, doneTask, cancelLines, snoozeTask, confirmSupplier, addRefundReceived, writeOffRemainder, recordContact, recordReply, clearOutcome, editEvent, removeEvent, mergeClaims } from "./supplier-claims";
 import { loadClaimsPage, bucketCounts, sweepClaimTimers, claimDetail, CLAIM_KIND_FILTERS, refundsDueTotal } from "./claim-buckets";
 import { velocityIneligible, ineligibleText } from "./shipment-match";
 import { readVelocityStartDate } from "./ships-to-backfill";
@@ -4482,6 +4482,7 @@ export async function registerRoutes(
   claimRoute("post", "/api/pos/claims/:id/replied", (q, req) => recordReply(q, Number(req.params.id), req.body ?? {}, uid(req)));
   claimRoute("post", "/api/pos/claims/:id/clear-outcome", (q, req) => clearOutcome(q, Number(req.params.id), (req.body ?? {}).reason ?? null, uid(req)));
   claimRoute("patch", "/api/pos/claims/events/:id", (q, req) => editEvent(q, Number(req.params.id), req.body ?? {}, uid(req)));
+  claimRoute("delete", "/api/pos/claims/events/:id", (q, req) => removeEvent(q, Number(req.params.id), uid(req)));
   claimRoute("post", "/api/pos/claims/:id/merge", (q, req) => mergeClaims(q, Number(req.params.id), Number((req.body ?? {}).into), uid(req)));
   claimRoute("post", "/api/pos/claims/:id/refund-received", (q, req) => addRefundReceived(q, Number(req.params.id), req.body ?? {}, uid(req)));
   claimRoute("post", "/api/pos/claims/:id/write-off-remainder", (q, req) => writeOffRemainder(q, Number(req.params.id), String((req.body ?? {}).reason ?? ""), uid(req)));

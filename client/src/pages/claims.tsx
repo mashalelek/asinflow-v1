@@ -517,9 +517,12 @@ const EVENT_TITLES: Record<string, string> = {
   replacement_arrived: "Replacement arrived", task_done: "Task done", amount_overridden: "$ owed overridden", remainder_written_off: "Remainder written off", reopened: "Reopened", closed: "Closed",
   converted: "Converted", timed_out: "Timed out", snoozed: "Snoozed", followed_up: "Followed up", checked: "Checked on it", reship_confirmed: "Reship order # confirmed", refund_short: "Refund short",
 };
-/** One timeline entry, editable in place (summary and date). */
+/** The entries "Remove this entry" undoes (the server's REMOVABLE_EVENT_TYPES): the fact each records goes with it. */
+const REMOVABLE_EVENTS = ["reported", "followed_up", "checked", "supplier_reply", "supplier_confirmed", "refund_received", "outcome_set", "task_done", "timed_out"];
+/** One timeline entry, editable in place (summary and date) and removable (the fact it records is undone with it). */
 function TimelineEntry({ e, call }: { e: ClaimDetailApi["events"][number]; call: (url: string, method: string, body?: unknown) => Promise<void> }) {
   const [editing, setEditing] = useState(false);
+  const [removing, setRemoving] = useState(false);
   const [f, setF] = useState({ at: e.at.slice(0, 10), summary: e.summary ?? "" });
   const title = EVENT_TITLES[e.type] ?? e.type.replace(/_/g, " ");
   const on = ["reported", "supplier_reply", "outcome_set", "timed_out", "followed_up", "checked"].includes(e.type);
@@ -538,7 +541,10 @@ function TimelineEntry({ e, call }: { e: ClaimDetailApi["events"][number]; call:
           </div>
         ) : (
           <>
-            <div className="text-xs font-medium">{title} <button type="button" onClick={() => setEditing(true)} className={`${link} ml-1`} data-testid={`button-event-edit-${e.id}`}>edit</button></div>
+            <div className="text-xs font-medium">{title} <button type="button" onClick={() => setEditing(true)} className={`${link} ml-1`} data-testid={`button-event-edit-${e.id}`}>edit</button>
+              {REMOVABLE_EVENTS.includes(e.type) && (removing
+                ? <span className="ml-2 text-[11px] text-muted-foreground">remove this entry and undo what it records? <button type="button" onClick={() => void call(`/api/pos/claims/events/${e.id}`, "DELETE").then(() => setRemoving(false))} className="text-destructive hover:underline underline-offset-2 ml-1" data-testid={`button-event-remove-confirm-${e.id}`}>Remove</button> <button type="button" onClick={() => setRemoving(false)} className={`${link} ml-1`}>cancel</button></span>
+                : <button type="button" onClick={() => setRemoving(true)} className={`${link} ml-2`} data-testid={`button-event-remove-${e.id}`}>remove</button>)}</div>
             {(e.summary || e.by_name) && <div className="text-[11px] text-muted-foreground break-words">{e.summary}{e.by_name ? ` · ${e.by_name}` : ""}</div>}
           </>)}
       </div>

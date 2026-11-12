@@ -285,6 +285,114 @@ export async function editEvent(query: QueryLike, eventId: number, body: { at?: 
   return { id: eventId, claim_id: Number(e.claim_id), po_id: String(e.po_id) };
 }
 
+/** The timeline entries "Remove this entry" undoes (Maria 2026-11-12): the fact each one records goes with it. */
+export const REMOVABLE_EVENT_TYPES = ["reported", "followed_up", "checked", "supplier_reply", "supplier_confirmed", "refund_received", "outcome_set", "task_done", "timed_out"] as const;
+
+/**
+ * Remove a timeline entry and undo the fact it set (Maria 2026-11-12). `reported` → reported_at / reported_channel cleared
+ * (or back to the earliest remaining report) and the Contacted tick re-opened; `supplier_reply` → last_supplier_reply_at back
+ * to the latest remaining reply (or cleared), the Confirm outcome task the reply opened removed and the tasks the reply
+ * closed re-opened; `supplier_confirmed` → supplier_confirmed_at cleared, the Refund received tick it opened removed;
+ * `refund_received` → the refund row unlinked, and deleted when nothing else links to it; the claim it closed opens again
+ * and its Refund received tick re-opens (the Closed / Refund short entries of that refund go with it); `outcome_set` → the
+ * outcome back to the latest remaining one or "not known yet" (a written-off claim reopens) — refused while a confirmation
+ * stands, since a confirmation is of an outcome; `followed_up` / `checked` / `task_done` → the tick re-opened; `timed_out`
+ * → the task it created removed while still open. The timer is derived from the facts, so it re-derives by itself. One
+ * History row on the claim, no event (the timeline is back to what it was).
+ */
+export async function removeEvent(query: QueryLike, eventId: number, userId: number | null): Promise<{ id: number; claim_id: number; po_id: string }> {
+  const e = (await query(`SELECT e.id, e.claim_id, e.type, e.summary, e.at, e.at::text AS at_text, e.po_line_refund_id, c.po_id FROM supplier_claim_events e JOIN supplier_claims c ON c.id = e.claim_id WHERE e.id = $1`, [eventId])).rows[0];
+  if (!e) throw new EditError(404, "timeline entry not found");
+  // at_text keeps the microseconds (a JS Date drops them): the tasks this entry's action ticked share its timestamp exactly
+  const claimId = Number(e.claim_id), poId = String(e.po_id), type = String(e.type), at: string = e.at instanceof Date ? e.at.toISOString() : String(e.at), atText = String(e.at_text);
+  if (!(REMOVABLE_EVENT_TYPES as readonly string[]).includes(type)) throw new EditError(400, "this entry records the claim's own state — change it on the claim (More, the outcome, the fields), not by removing the entry");
+  const d = await claimRow(query, claimId);
+  if (d.status === "dismissed") throw new EditError(400, "reopen the claim first");
+  // the tasks this entry's action ticked share its timestamp (now() is one value per transaction): re-open them
+  const untick = (kinds: readonly string[]) => query(`UPDATE supplier_claim_tasks SET done_at = NULL, done_by = NULL WHERE claim_id = $1 AND done_at = $2::timestamptz AND kind = ANY($3::text[])
+        AND NOT EXISTS (SELECT 1 FROM supplier_claim_tasks o WHERE o.claim_id = $1 AND o.kind = supplier_claim_tasks.kind AND o.done_at IS NULL)`, [claimId, atText, kinds]);
+  const remaining = async (t: string) => (await query(`SELECT id, at, summary FROM supplier_claim_events WHERE claim_id = $1 AND type = $2 AND id <> $3 ORDER BY at, id`, [claimId, t, eventId])).rows as Array<{ id: number; at: Date | string; summary: string | null }>;
+  const stamp = (v: Date | string) => (v instanceof Date ? v.toISOString() : String(v));
+  // a report's / reply's own date is in its summary ("email · 2026-11-03 · note"); the entry's time is when it was typed
+  const dateOfEntry = (x: { at: Date | string; summary: string | null }) => /\b(\d{4}-\d{2}-\d{2})\b/.exec(String(x.summary ?? ""))?.[1] ?? stamp(x.at).slice(0, 10);
+  const changes: Array<{ field: string; old: string | null; new: string | null }> = [{ field: `timeline ${type} removed`, old: `${at.slice(0, 10)}${e.summary ? ` · ${e.summary}` : ""}`, new: null }];
+  if (type === "outcome_set" && d.supplier_confirmed_at) throw new EditError(400, "remove the Confirmed by supplier entry first — a confirmation is of an outcome");
+  if (type === "outcome_set" && /^outcome cleared/.test(String(e.summary ?? ""))) throw new EditError(400, "a cleared outcome is not undone by removing the note — set the outcome again");
+  await query(`DELETE FROM supplier_claim_events WHERE id = $1`, [eventId]);
+  if (type === "reported") {
+    const rest = await remaining("reported");
+    const first = rest[0] ? dateOfEntry(rest[0]) : null;
+    await query(`UPDATE supplier_claims SET reported_at = $2::date, reported_channel = CASE WHEN $2::date IS NULL THEN NULL ELSE reported_channel END, updated_at = now() WHERE id = $1`, [claimId, first]);
+    changes.push({ field: "claim reported_at", old: d.reported_at ? String(d.reported_at).slice(0, 10) : null, new: first });
+    if (!first) {
+      const r = await untick(["contact_supplier"]);
+      if (!(r.rowCount ?? 0)) {
+        const u = await query(`UPDATE supplier_claim_tasks SET done_at = NULL, done_by = NULL WHERE id = (SELECT id FROM supplier_claim_tasks WHERE claim_id = $1 AND kind = 'contact_supplier' AND done_at IS NOT NULL ORDER BY done_at DESC, id DESC LIMIT 1)
+                               AND NOT EXISTS (SELECT 1 FROM supplier_claim_tasks o WHERE o.claim_id = $1 AND o.kind = 'contact_supplier' AND o.done_at IS NULL)`, [claimId]);
+        if (!(u.rowCount ?? 0) && d.status === "open") await addTask(query, claimId, "contact_supplier", "report the claim to the supplier — the timer starts from the report date");
+      }
+    }
+  } else if (type === "supplier_reply") {
+    const rest = await remaining("supplier_reply");
+    const last = rest.length ? `${dateOfEntry(rest[rest.length - 1])}T12:00:00Z` : null;
+    await query(`UPDATE supplier_claims SET last_supplier_reply_at = $2::timestamptz, updated_at = now() WHERE id = $1`, [claimId, last]);
+    changes.push({ field: "supplier replied", old: d.last_supplier_reply_at ? String(d.last_supplier_reply_at).slice(0, 10) : null, new: last ? last.slice(0, 10) : null });
+    const own = dateOfEntry({ at: e.at, summary: e.summary });
+    const replyMd = `${Number(own.slice(5, 7))}/${Number(own.slice(8, 10))}`;
+    await query(`DELETE FROM supplier_claim_tasks WHERE claim_id = $1 AND kind = 'confirm_outcome' AND done_at IS NULL AND reason LIKE $2`, [claimId, `Supplier replied ${replyMd}%`]);
+    await untick(["follow_up_supplier", "check_on_it", "confirm_outcome"]);
+  } else if (type === "supplier_confirmed") {
+    const rest = await remaining("supplier_confirmed");
+    const last = rest.length ? stamp(rest[rest.length - 1].at) : null;
+    await query(`UPDATE supplier_claims SET supplier_confirmed_at = $2::timestamptz, updated_at = now() WHERE id = $1`, [claimId, last]);
+    changes.push({ field: "claim supplier_confirmed_at", old: d.supplier_confirmed_at ? String(d.supplier_confirmed_at).slice(0, 10) : null, new: last ? last.slice(0, 10) : null });
+    if (!last) await query(`DELETE FROM supplier_claim_tasks WHERE claim_id = $1 AND kind = 'refund_received' AND done_at IS NULL`, [claimId]);
+    await untick(["follow_up_supplier", "check_on_it", "confirm_outcome"]);
+  } else if (type === "refund_received") {
+    const refundId = e.po_line_refund_id == null ? null : Number(e.po_line_refund_id);
+    if (refundId != null) {
+      const r = (await query(`SELECT amount, method FROM po_line_refunds WHERE id = $1`, [refundId])).rows[0];
+      await query(`DELETE FROM supplier_claim_refunds WHERE claim_id = $1 AND po_line_refund_id = $2`, [claimId, refundId]);
+      const others = await claimsLinkedTo(query, [refundId]);
+      changes.push({ field: "refund unlinked", old: r ? money(num(r.amount)) : String(refundId), new: null });
+      if (others.length === 0 && r) {
+        await query(`DELETE FROM po_line_refunds WHERE id = $1`, [refundId]);
+        await logEdits(query, poId, userId, "po", poId, [{ field: "refund removed", old: `${money(num(r.amount))} (${r.method ?? "refund"}) — the claim's Refund received entry was removed`, new: null }]);
+      }
+    }
+    // the entries that refund wrote after itself (Closed, Refund short) go with it; the claim it closed is open again
+    await query(`DELETE FROM supplier_claim_events WHERE claim_id = $1 AND type IN ('closed', 'refund_short') AND at >= $2::timestamptz`, [claimId, at]);
+    if (d.status === "closed" && !d.write_off_reason && d.outcome !== "replacement") {
+      await query(`UPDATE supplier_claims SET status = 'open', closed_at = NULL, updated_at = now() WHERE id = $1`, [claimId]);
+      changes.push({ field: "claim reopened", old: "closed", new: "open: the refund was removed" });
+    }
+    // a refund arriving stood for the confirmation when there was none: without the refund, no confirmation
+    if (d.supplier_confirmed_at && (await remaining("supplier_confirmed")).length === 0) {
+      await query(`UPDATE supplier_claims SET supplier_confirmed_at = NULL, updated_at = now() WHERE id = $1`, [claimId]);
+      changes.push({ field: "claim supplier_confirmed_at", old: String(d.supplier_confirmed_at).slice(0, 10), new: null });
+    } else {
+      const u = await untick(["refund_received"]);
+      if (!(u.rowCount ?? 0) && d.outcome && (REFUND_OUTCOMES as readonly string[]).includes(String(d.outcome))) await addTask(query, claimId, "refund_received", "tick when the money arrives (add the refund row)");
+    }
+    await syncRefundCoverage(query, [claimId], userId);
+  } else if (type === "outcome_set") {
+    const rest = (await remaining("outcome_set")).map((x) => String(x.summary ?? "").split(/[:\s]/)[0]);
+    const prev = rest.length ? rest[rest.length - 1] : null;
+    const outcome = prev && (CLAIM_OUTCOMES as readonly string[]).includes(prev) && prev !== "write_off" ? prev : null;
+    await query(`UPDATE supplier_claims SET outcome = $2, outcome_amount = NULL, outcome_detail = NULL, replacement_qty = NULL, replacement_shipped_at = NULL, replacement_arrived_at = NULL, write_off_reason = NULL,
+                   status = CASE WHEN status = 'closed' THEN 'open' ELSE status END, closed_at = CASE WHEN status = 'closed' THEN NULL ELSE closed_at END, updated_at = now() WHERE id = $1`, [claimId, outcome]);
+    await query(`DELETE FROM supplier_claim_tasks WHERE claim_id = $1 AND done_at IS NULL AND kind IN ('refund_received', 'replacement_arrived')`, [claimId]);
+    await query(`DELETE FROM supplier_claim_events WHERE claim_id = $1 AND type = 'closed' AND at >= $2::timestamptz`, [claimId, at]);
+    if (outcome === "replacement") await addTask(query, claimId, "replacement_arrived", "tick when the replacement units arrive");
+    changes.push({ field: "claim outcome", old: d.outcome, new: outcome });
+  } else if (type === "followed_up") await untick(["follow_up_supplier"]);
+  else if (type === "checked") await untick(["check_on_it"]);
+  else if (type === "task_done") await untick([String(e.summary ?? "").split(":")[0].trim()]);
+  else if (type === "timed_out") await query(`DELETE FROM supplier_claim_tasks WHERE claim_id = $1 AND done_at IS NULL AND kind IN ('follow_up_supplier', 'check_on_it') AND reason = $2`, [claimId, e.summary ?? ""]);
+  await logEdits(query, poId, userId, "claim", String(claimId), changes);
+  return { id: eventId, claim_id: claimId, po_id: poId };
+}
+
 /**
  * Merge a claim into another claim of the same PO (§5 More): the source's refunds and timeline move to the target, the
  * quantities add up when both are known (a manual $ owed adds up too; an auto one re-derives), the source is dismissed

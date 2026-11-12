@@ -58,6 +58,11 @@ describe("Needs attention groups, labels, the method prefill, the table", () => 
     expect(page).toMatch(/<colgroup>\{CLAIM_COLUMNS\.map/);
     // the detail's three columns and its action buttons; nothing says "waiting" before the report (the words come from shared/claim-ui.ts)
     expect(page).toContain('gridTemplateColumns: "340px minmax(0, 1fr) 360px"');
-    for (const id of ["button-claim-contacted", "button-claim-replied", "button-claim-set-outcome", "button-claim-more", "button-claim-refund-received", "claim-next", "claim-more"]) expect(page).toContain(id);
+    for (const id of ["button-claim-contacted", "button-claim-replied", "button-claim-set-outcome", "button-claim-more", "button-claim-refund-received", "claim-next", "claim-more", "button-event-edit-", "button-event-remove-", "button-event-remove-confirm-"]) expect(page).toContain(id);
+    // Remove this entry (Maria 2026-11-12) is a DELETE of the entry; the client's removable list is the server's
+    expect(page).toContain('call(`/api/pos/claims/events/${e.id}`, "DELETE")');
+    const server = readFileSync("server/supplier-claims.ts", "utf8");
+    const m = /REMOVABLE_EVENT_TYPES = \[([^\]]+)\]/.exec(server)!;
+    expect(page).toContain(`const REMOVABLE_EVENTS = [${m[1]}];`);
   });
 });

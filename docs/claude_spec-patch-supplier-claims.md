@@ -561,7 +561,11 @@ refunds) stays as built; commit 2b rebuilds the two pages against them.
   label → sent → shipped → delivered; a replacement adds promised →
   shipped → arrived); **Linked** (PO, Velocity order, emails, tracking,
   documents). **Middle:** the **Timeline**, newest first, every entry
-  editable in place; inline forms for Contacted supplier (date / how /
+  editable in place and removable — **Remove this entry** (Maria
+  2026-11-12) removes the contact / reply / confirmation / refund it
+  records and undoes the fact it set (date cleared, confirmation dropped,
+  refund row unlinked and deleted, ticks re-opened, timer re-derived),
+  with a History row and no new entry; inline forms for Contacted supplier (date / how /
   note) and Supplier replied (date / how / summary; sets the outcome when
   the reply tells it); each contact or reply is its own entry; the timer
   restarts from the latest. **Right:** the Refunds table with **+ Refund

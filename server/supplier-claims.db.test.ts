@@ -2,7 +2,7 @@ import { describe, it, expect, beforeAll, afterAll } from "vitest";
 import pg from "pg";
 import { readFileSync } from "node:fs";
 import { claimAmount, claimCounts, claimMoney, claimSummary, costPerIndividualUnit, individualEquivalents } from "@shared/supplier-claim";
-import { addClaim, editClaim, linkRefund, unlinkRefund, setOutcome, reopenClaim, dismissClaim, removeClaim, loadClaims, loadOpenClaimSummaries, cancelLines, doneTask, addRefundReceived, confirmSupplier, writeOffRemainder, snoozeTask, loadClaimEvents, recordReply, clearOutcome, editEvent, mergeClaims, recordContact } from "./supplier-claims";
+import { addClaim, editClaim, linkRefund, unlinkRefund, setOutcome, reopenClaim, dismissClaim, removeClaim, loadClaims, loadOpenClaimSummaries, cancelLines, doneTask, addRefundReceived, confirmSupplier, writeOffRemainder, snoozeTask, loadClaimEvents, recordReply, clearOutcome, editEvent, removeEvent, mergeClaims, recordContact } from "./supplier-claims";
 import { loadClaimsPage, sweepClaimTimers, claimDetail, bucketCounts } from "./claim-buckets";
 import { addMoneyRow, editMoneyRow, removeMoneyRow } from "./po-money-edit";
 import { evaluateAutoClose } from "./po-close";
@@ -468,6 +468,85 @@ describe("commit 2b (§5 amended 2026-11-12): Supplier replied, clear the outcom
       expect(row.last_supplier_reply_at).toMatch(/^2026-11-04/);
       expect((await history(q, s.po)).map((x: any) => x.field)).toEqual(expect.arrayContaining(["timeline reported", "timeline reported date", "timeline supplier_reply date"]));
       await expect(editEvent(q, reply.id, { at: "11/04/2026" }, null)).rejects.toThrow(/YYYY-MM-DD/);
+    });
+  });
+  it("removeEvent (Maria 2026-11-12): Contacted → Supplier replied (refund) → Confirmed → Refund received, then Remove this entry on each, back to the report alone; the fact each entry set goes with it, one History row each, no new entry; the claim's own entries are refused", async (ctx) => {
+    if (!client) return ctx.skip();
+    await inTx(async (q) => {
+      const s = await seed(q);
+      const { id } = await addClaim(q, s.po, { po_line_item_id: s.line, kind: "missing", qty: 2 }, null);
+      await recordContact(q, id, { date: "2026-11-12", channel: "email" }, null);
+      await recordReply(q, id, { date: "2026-11-12", channel: "email", summary: "refunding the 2", outcome: "refund_card" }, null);
+      await confirmSupplier(q, id, { at: "2026-11-12" }, null);
+      const { refund_id } = await addRefundReceived(q, id, { amount: 11.94, method: "card", refunded_at: "2026-11-12" }, null);
+      const types = async () => (await loadClaimEvents(q, id)).map((e) => e.type);
+      const find = async (t: string) => (await loadClaimEvents(q, id)).filter((e) => e.type === t).pop()!;
+      let [row] = await loadClaimsPage(q, { po: s.po }, new Date("2026-11-12T20:00:00Z"));
+      expect(row).toMatchObject({ status: "closed", outcome: "refund_card", bucket: "closed" });
+      expect(await types()).toEqual(["opened", "reported", "supplier_reply", "outcome_set", "supplier_confirmed", "refund_received", "closed"]);
+      const before = (await history(q, s.po)).length;
+      // 1. the refund: row unlinked and deleted, the claim open again, the Closed entry gone, the Refund received tick open again (the confirmation stands)
+      await removeEvent(q, (await find("refund_received")).id, null);
+      [row] = await loadClaimsPage(q, { po: s.po }, new Date("2026-11-12T20:00:00Z"));
+      expect(row).toMatchObject({ status: "open", outcome: "refund_card", received: 0, remaining: 11.94, bucket: "waiting_refund" });
+      expect(row.supplier_confirmed_at).toMatch(/^2026-11-12/);
+      expect(row.tasks.filter((t) => !t.done_at).map((t) => t.kind)).toEqual(["refund_received"]);
+      expect((await q(`SELECT count(*)::int AS n FROM po_line_refunds WHERE id = $1`, [refund_id])).rows[0].n).toBe(0);
+      expect(await types()).toEqual(["opened", "reported", "supplier_reply", "outcome_set", "supplier_confirmed"]);
+      // 2. the confirmation: supplier_confirmed_at cleared, the Refund received tick removed; the outcome stands
+      await removeEvent(q, (await find("supplier_confirmed")).id, null);
+      [row] = await loadClaimsPage(q, { po: s.po }, new Date("2026-11-12T20:00:00Z"));
+      expect(row).toMatchObject({ supplier_confirmed_at: null, outcome: "refund_card", bucket: "waiting_supplier" });
+      expect(row.tasks.filter((t) => !t.done_at)).toHaveLength(0);
+      // 3. the outcome: not known yet
+      await expect(removeEvent(q, (await find("supplier_reply")).id, null)).resolves.toBeTruthy();
+      [row] = await loadClaimsPage(q, { po: s.po }, new Date("2026-11-12T20:00:00Z"));
+      expect(row.last_supplier_reply_at).toBeNull();
+      await removeEvent(q, (await find("outcome_set")).id, null);
+      [row] = await loadClaimsPage(q, { po: s.po }, new Date("2026-11-12T20:00:00Z"));
+      expect(row).toMatchObject({ outcome: null, outcome_amount: null, reported_at: "2026-11-12", reported_channel: "email", status: "open", bucket: "waiting_supplier", sentence: "Reported 11/12 by email · no answer yet" });
+      expect(row.bucket_since).toBe("2026-11-12T12:00:00.000Z");
+      expect(await types()).toEqual(["opened", "reported"]);
+      const h = await history(q, s.po);
+      expect(h.slice(before).map((x: any) => x.field)).toEqual(["timeline refund_received removed", "refund unlinked", "claim reopened", "timeline supplier_confirmed removed", "claim supplier_confirmed_at", "timeline supplier_reply removed", "supplier replied", "timeline outcome_set removed", "claim outcome"]);
+      // 4. the report itself: unreported again — Report to supplier, the Contacted tick open, no timer
+      await removeEvent(q, (await find("reported")).id, null);
+      [row] = await loadClaimsPage(q, { po: s.po }, new Date("2026-11-12T20:00:00Z"));
+      expect(row).toMatchObject({ reported_at: null, reported_channel: null, bucket: "needs_attention", sentence: "Report to supplier" });
+      expect(row.tasks.filter((t) => !t.done_at).map((t) => t.kind)).toEqual(["contact_supplier"]);
+      expect(await types()).toEqual(["opened"]);
+      await expect(removeEvent(q, (await find("opened")).id, null)).rejects.toThrow(/claim's own state/);
+    });
+  });
+  it("removeEvent: a confirmed outcome is removed confirmation first; removing a reply re-opens the Confirm outcome task it closed and drops the one it opened; a written-off outcome removed reopens the claim", async (ctx) => {
+    if (!client) return ctx.skip();
+    await inTx(async (q) => {
+      const s = await seed(q);
+      const { id } = await addClaim(q, s.po, { po_line_item_id: s.line, kind: "missing", qty: 2 }, null);
+      await recordContact(q, id, { date: "2026-11-03", channel: "email" }, null);
+      await recordReply(q, id, { date: "2026-11-06", channel: "chat", summary: "looking into it" }, null);
+      await recordReply(q, id, { date: "2026-11-07", channel: "chat", summary: "refund coming", outcome: "refund_card" }, null);
+      await confirmSupplier(q, id, { at: "2026-11-08" }, null);
+      const ev = async (t: string) => (await loadClaimEvents(q, id)).filter((e) => e.type === t);
+      await expect(removeEvent(q, (await ev("outcome_set"))[0].id, null)).rejects.toThrow(/Confirmed by supplier entry first/);
+      await removeEvent(q, (await ev("supplier_confirmed"))[0].id, null);
+      await removeEvent(q, (await ev("outcome_set"))[0].id, null);
+      // the second reply closed the Confirm outcome task of the first: removing it re-opens that task, the first reply anchors the timer
+      await removeEvent(q, (await ev("supplier_reply"))[1].id, null);
+      let [row] = await loadClaimsPage(q, { po: s.po }, new Date("2026-11-09T15:00:00Z"));
+      expect(row.last_supplier_reply_at).toMatch(/^2026-11-06/);
+      expect(row.tasks.filter((t) => !t.done_at).map((t) => [t.kind, t.reason])).toEqual([["confirm_outcome", 'Supplier replied 11/6: "looking into it" → outcome?']]);
+      await removeEvent(q, (await ev("supplier_reply"))[0].id, null);
+      [row] = await loadClaimsPage(q, { po: s.po }, new Date("2026-11-09T15:00:00Z"));
+      expect(row).toMatchObject({ last_supplier_reply_at: null, outcome: null, bucket: "waiting_supplier", bucket_since: "2026-11-03T12:00:00.000Z" });
+      expect(row.tasks.filter((t) => !t.done_at)).toHaveLength(0);
+      // a write-off: closed → removing its entry reopens the claim with no outcome
+      await setOutcome(q, id, { outcome: "write_off", reason: "not worth it" }, null);
+      await removeEvent(q, (await ev("outcome_set"))[0].id, null);
+      [row] = await loadClaimsPage(q, { po: s.po }, new Date("2026-11-09T15:00:00Z"));
+      expect(row).toMatchObject({ status: "open", outcome: null, write_off_reason: null, closed_at: null });
+      expect((await loadClaimEvents(q, id)).map((e) => e.type)).toEqual(["opened", "reported"]);
+      await expect(removeEvent(q, 0, null)).rejects.toThrow(/not found/);
     });
   });
   it("mergeClaims: the source's refunds and timeline move, the quantities add up, the auto $ owed re-derives, the source is dismissed as merged; a different PO or a dismissed claim is refused", async (ctx) => {
