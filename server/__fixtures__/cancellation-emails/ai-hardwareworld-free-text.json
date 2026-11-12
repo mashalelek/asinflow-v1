@@ -1,0 +1,18 @@
+{
+ "fixture": "hardwareworld-free-text",
+ "model": "claude-haiku-5-5",
+ "recorded_at": "2026-11-12T17:06:31.414Z",
+ "usage": {
+  "input_tokens": 1753,
+  "output_tokens": 60
+ },
+ "answer": {
+  "is_cancellation": false,
+  "order_id": "8ZZT9",
+  "scope": null,
+  "items": [],
+  "refund_amount": null,
+  "refund_method": null,
+  "reason": null
+ }
+}

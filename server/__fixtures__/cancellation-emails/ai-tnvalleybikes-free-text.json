@@ -1,0 +1,23 @@
+{
+ "fixture": "tnvalleybikes-free-text",
+ "model": "claude-haiku-5-5",
+ "recorded_at": "2026-11-12T17:06:29.541Z",
+ "usage": {
+  "input_tokens": 1153,
+  "output_tokens": 370
+ },
+ "answer": {
+  "is_cancellation": true,
+  "order_id": null,
+  "scope": "full",
+  "items": [
+   {
+    "name": "SRAM Stealthamajig brake hose fitting parts",
+    "qty": null
+   }
+  ],
+  "refund_amount": null,
+  "refund_method": null,
+  "reason": "Website created an incorrect price; retailer cannot complete the order"
+ }
+}

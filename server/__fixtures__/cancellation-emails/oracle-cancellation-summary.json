@@ -1,0 +1,7 @@
+{
+ "subject": "Order Cancellation - Order #: 62573525",
+ "from": "\"Dick Blick (orders@dickblick.com)\" <no-reply-omni@retail.us-ashburn-1.ocs.oraclecloud.com>",
+ "fromDomain": "retail.us-ashburn-1.ocs.oraclecloud.com",
+ "date": "2026-10-09T16:53:23.000Z",
+ "text": "Dear Test,\nOrder is Cancelled\nOrder Cancellation Summary\nOrder #:\n62573525 - 1\nOrder Date: \n10/09/26\nItem/SKU \nQuantity\n879732147\n10\nCRETACOLR ARTST PWDR CHAR POWDER 175G\nPurchasing Information\nShip To: \nSold To: \nCustomer #: 4313032 \n. ATTN: Test Buyer\nTest Buyer\n805 GRANDY AVENUE\n1 Test St\nLA GRANDE, OR 97850 US\nTestville, SC 29999 US"
+}

@@ -25,6 +25,7 @@
     "velocity:tracking-probe": "tsx script/velocity-tracking-probe.ts",
     "backfill:tracking": "tsx script/backfill-tracking.ts",
     "easypost:count": "tsx script/easypost-cost-guard.ts",
+    "claims:suggest": "tsx script/claims-suggest.ts",
     "capture:samples": "tsx script/capture-samples.ts",
     "capture:rescrub": "tsx script/capture-rescrub.ts",
     "supplier:check": "tsx script/supplier-check.ts",

@@ -1,0 +1,7 @@
+{
+ "subject": "Declined Payment Notice - Action Required",
+ "from": "BigBadToyStore <service@bigbadtoystore.com>",
+ "fromDomain": "bigbadtoystore.com",
+ "date": "2026-10-12T14:35:00.000Z",
+ "text": "Hello,\nWe were unable to process payment for order #46744667. Questions? Our\nCustomer Support team is available to assist you via email, phone, and live\nchat Monday through Friday 7:00AM to 9:00PM (CST).\nThank you!\nBBTS Customer Service\nservice@bigbadtoystore.com <mailto:service@bigbadtoystore.com>\nPhone: 1-888-980-2287"
+}
