@@ -516,6 +516,14 @@ describe("commit 2b (§5 amended 2026-11-12): Supplier replied, clear the outcom
       expect(row.tasks.filter((t) => !t.done_at).map((t) => t.kind)).toEqual(["contact_supplier"]);
       expect(await types()).toEqual(["opened"]);
       await expect(removeEvent(q, (await find("opened")).id, null)).rejects.toThrow(/claim's own state/);
+      // a second report on a reported claim: removing its entry keeps the first report's date and drops the tick it added
+      await recordContact(q, id, { date: "2026-11-10", channel: "email" }, null);
+      await recordContact(q, id, { date: "2026-11-11", channel: "chat", note: "again" }, null);
+      expect((await q(`SELECT count(*)::int AS n FROM supplier_claim_tasks WHERE claim_id = $1 AND kind = 'contact_supplier'`, [id])).rows[0].n).toBe(2);
+      await removeEvent(q, (await find("reported")).id, null);
+      [row] = await loadClaimsPage(q, { po: s.po }, new Date("2026-11-12T20:00:00Z"));
+      expect(row).toMatchObject({ reported_at: "2026-11-10", reported_channel: "email", bucket: "waiting_supplier" });
+      expect((await q(`SELECT count(*)::int AS n FROM supplier_claim_tasks WHERE claim_id = $1 AND kind = 'contact_supplier'`, [id])).rows[0].n).toBe(1);
     });
   });
   it("removeEvent: a confirmed outcome is removed confirmation first; removing a reply re-opens the Confirm outcome task it closed and drops the one it opened; a written-off outcome removed reopens the claim", async (ctx) => {

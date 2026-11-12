@@ -322,8 +322,14 @@ export async function removeEvent(query: QueryLike, eventId: number, userId: num
   if (type === "reported") {
     const rest = await remaining("reported");
     const first = rest[0] ? dateOfEntry(rest[0]) : null;
-    await query(`UPDATE supplier_claims SET reported_at = $2::date, reported_channel = CASE WHEN $2::date IS NULL THEN NULL ELSE reported_channel END, updated_at = now() WHERE id = $1`, [claimId, first]);
+    // the remaining first report's channel is its summary's first part ("email · 2026-11-03 · note"); none → the channel stays
+    const head = rest[0] ? String(rest[0].summary ?? "").split(" · ")[0].trim() : "";
+    const channel = !first ? null : head && !/^\d{4}-\d{2}-\d{2}$/.test(head) ? head : d.reported_channel;
+    await query(`UPDATE supplier_claims SET reported_at = $2::date, reported_channel = $3, updated_at = now() WHERE id = $1`, [claimId, first, channel]);
     changes.push({ field: "claim reported_at", old: d.reported_at ? String(d.reported_at).slice(0, 10) : null, new: first });
+    // a second report's Contacted tick (recordContact adds one per report) goes with its entry; the last report's tick re-opens
+    if (first) await query(`DELETE FROM supplier_claim_tasks WHERE id = (SELECT id FROM supplier_claim_tasks WHERE claim_id = $1 AND kind = 'contact_supplier' AND done_at = $2::timestamptz ORDER BY id DESC LIMIT 1)
+                              AND EXISTS (SELECT 1 FROM supplier_claim_tasks o WHERE o.claim_id = $1 AND o.kind = 'contact_supplier' AND o.done_at IS NOT NULL AND o.id <> supplier_claim_tasks.id)`, [claimId, atText]);
     if (!first) {
       const r = await untick(["contact_supplier"]);
       if (!(r.rowCount ?? 0)) {
