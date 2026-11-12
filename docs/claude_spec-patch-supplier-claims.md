@@ -330,6 +330,34 @@ status, `est_delivery_date`, timestamped scans, a return flag and
 - `EASYPOST_API_KEY` + webhook secret on Render; Maria creates the account
   (stop before signup).
 
+   **Built 2026-11-11 (commit 4; migration 104; against the TEST key, not
+   pushed).** (a) columns as listed plus `velocity_tracking_status` — the
+   push pass records Velocity's per-tracking status from the inbound
+   orders it already lists, so the fallback is a stored column the Tracking
+   tab reads, not a Velocity call per page; (b) registration is component
+   31 (hourly): one POST per distinct carrier + number (a re-POST returns
+   the same tracker — recorded), `is_return` for return rows, the POST's
+   answer applied at once, the id on every row with the number; rows on
+   OPEN POs only, any age (Maria 2026-11-12 — the "60 days" became "60
+   days after registration", the sweep's stop; `easypost_registered_at`),
+   delivered stop, GLS / OnTrac / LaserShip / OTHER skipped with the
+   reason, ≤ 400 per pass; (c) the webhook is `POST /webhooks/easypost`,
+   mounted before the session middleware and outside `/api`
+   (`X-Hmac-Signature: hmac-sha256-hex=…` over the NFKD raw body, constant
+   time; 401 unsigned / wrong / no secret; 500 on a store failure so
+   EasyPost retries); (d) the sweep is component 32 (daily, trackers silent
+   3 days); (e) the Tracking tab's Carrier status column + `poDeliveryState()`
+   for commit 5; (f) tests on recorded test-key responses
+   (`server/__fixtures__/easypost/`); (g) cost guard `npm run
+   easypost:count -- --prod`: 227 trackers on day one (open POs, oldest
+   shipment 2026-07-31), ~167 / month.
+   Render needs `EASYPOST_API_KEY` and `EASYPOST_WEBHOOK_SECRET`; the
+   webhook URL is `https://asinflow-cqg.onrender.com/webhooks/easypost`.
+   Note: EasyPost answered an `is_return` POST for a code already
+   registered inbound with the inbound tracker (same id, `is_return`
+   false) — a return that reuses the outbound number keeps the inbound
+   tracker; commit 7 (returns) should expect that.
+
 ### 3.10 Tracking parser fix (2026-11-07)
 
 41 shipping emails (Aug–Nov) became placeholder rows with no number:

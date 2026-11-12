@@ -9,6 +9,7 @@ import { Button } from "@/components/ui/button";
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle, DialogTable } from "@/components/ui/dialog";
 import { useToast } from "@/hooks/use-toast";
 import { PoVelocityLinks } from "@/components/velocity-links";
+import { carrierStatusText } from "@shared/carrier-status";
 
 export interface TrackingRow {
   id: number; carrier: string; tracking_number: string; retailer_order_id: string | null; shipped_at: string | null;
@@ -18,6 +19,8 @@ export interface TrackingRow {
   reassigned_from_order_id?: string | null;
   /** 2026-11-04 (migration 086): this PO's units in the shipment, when the email states them; shared_with = the other PO(s) on the same number. */
   qty?: string | number | null; shared_with?: string[] | null;
+  /** Carrier status (SPEC §26 "Carrier status — EasyPost", 2026-11-11): EasyPost's words, Velocity's as the fallback. */
+  carrier_status?: string | null; est_delivery_at?: string | null; last_scan_at?: string | null; delivered_at?: string | null; carrier_checked_at?: string | null; velocity_tracking_status?: string | null; easypost_tracker_id?: string | null;
 }
 
 /** Pure (2026-11-09): "3 Product units of this PO · 36 individual" — the email's quantity is Product units; "—" when the PO's Product pack is not one value. */
@@ -126,9 +129,11 @@ export function PoTrackingTab({ poId, onChanged, perProductUnit }: { poId: strin
       )}
       <PoVelocityLinks poId={poId} onChanged={onChanged} />
       {rows.length === 0 ? <p className="text-muted-foreground">No tracking for this PO yet.</p> : (
-        <DialogTable><table className="w-full text-xs">
+        <DialogTable><table className="w-full table-fixed text-xs">
+          {/* Fixed layout (UI_RULES): the Tracking # column takes what is left; a long item line truncates with a title. */}
+          <colgroup><col className="w-16" /><col /><col className="w-32" /><col className="w-20" /><col className="w-24" /><col className="w-24" /><col className="w-36" /><col className="w-28" /><col className="w-14" /></colgroup>
           <thead className="text-muted-foreground text-left">
-            <tr><th className="py-1 pr-2">Carrier</th><th className="pr-2">Tracking #</th><th className="pr-2">Order # (email)</th><th className="pr-2">Shipped</th><th className="pr-2">Ship-to</th><th className="pr-2">Status</th><th className="pr-2">Velocity</th><th /></tr>
+            <tr><th className="py-1 pr-2">Carrier</th><th className="pr-2">Tracking #</th><th className="pr-2">Order # (email)</th><th className="pr-2">Shipped</th><th className="pr-2">Ship-to</th><th className="pr-2">Status</th><th className="pr-2">Carrier status</th><th className="pr-2">Velocity</th><th /></tr>
           </thead>
           <tbody>
             {rows.map((r) => {
@@ -140,15 +145,16 @@ export function PoTrackingTab({ poId, onChanged, perProductUnit }: { poId: strin
                     {url ? <a className="text-primary hover:underline inline-flex items-center gap-0.5" href={url} target="_blank" rel="noreferrer">{r.tracking_number}<ExternalLink className="h-3 w-3" /></a> : r.tracking_number}
                     {r.reassigned_from_order_id && <div className="text-[10px] text-muted-foreground">moved from {r.reassigned_from_order_id}</div>}
                     {(r.qty != null || r.shared_with?.length) ? <div className="text-[10px] text-muted-foreground">{r.qty != null ? <span title="Product units, as the supplier's email states them · the Individual equivalent beside it">{trackingQtyText(Number(r.qty), perProductUnit)}</span> : ""}{r.qty != null && r.shared_with?.length ? " · " : ""}{r.shared_with?.length ? `also on ${r.shared_with.join(", ")}` : ""}</div> : null}
-                    {r.items_json?.length ? <div className="text-[10px] text-muted-foreground">{r.items_json.map((i) => `${i.qty} × ${i.name}`).join("; ")}</div> : null}
+                    {r.items_json?.length ? <div className="text-[10px] text-muted-foreground truncate" title={r.items_json.map((i) => `${i.qty} × ${i.name}`).join("; ")}>{r.items_json.map((i) => `${i.qty} × ${i.name}`).join("; ")}</div> : null}
                   </td>
-                  <td className="pr-2 font-mono">{r.retailer_order_id ?? "—"}</td>
+                  <td className="pr-2 font-mono break-all">{r.retailer_order_id ?? "—"}</td>
                   <td className="pr-2">{fmt(r.shipped_at)}</td>
                   <td className="pr-2">{r.ship_to_street ?? "—"}</td>
                   <td className="pr-2">
                     <span className={`rounded px-1.5 py-0.5 ${STATUS_CLASS[r.status] ?? ""}`}>{r.status}</span>
                     {r.review_reason && <div className={`text-[10px] ${r.suppressed_at ? "text-muted-foreground line-through" : "text-amber-700 dark:text-amber-400"}`}>{r.review_reason}</div>}
                   </td>
+                  <td className="pr-2"><CarrierStatusCell row={r} /></td>
                   <td className="pr-2">{r.pushed_at ? <span title={(r.pushed_velocity_ids ?? []).join(", ")}>{fmt(r.pushed_at)} · {(r.pushed_velocity_ids ?? []).length} order(s)</span> : "—"}</td>
                   <td><MoveToPo row={r} onMoved={changed} /></td>
                 </tr>
@@ -166,6 +172,21 @@ export function PoTrackingTab({ poId, onChanged, perProductUnit }: { poId: strin
         <Button size="sm" className="h-7 text-xs" disabled={!number.trim()} onClick={() => void add()}>Add</Button>
         {msg && <span className="text-destructive">{msg}</span>}
       </div>
+    </div>
+  );
+}
+
+/** The carrier's word on the row: EasyPost's status (ETA while undelivered, the delivery time once delivered, the last scan), else Velocity's tracking status, else "—". */
+export function CarrierStatusCell({ row }: { row: Pick<TrackingRow, "carrier_status" | "est_delivery_at" | "last_scan_at" | "delivered_at" | "velocity_tracking_status"> }) {
+  const s = carrierStatusText(row);
+  if (!s) return <span className="text-muted-foreground">—</span>;
+  const delivered = row.carrier_status === "delivered";
+  return (
+    <div data-testid="carrier-status" title={s.source === "velocity" ? "Velocity's tracking status — EasyPost does not track this carrier" : "EasyPost"}>
+      <span className={delivered ? "text-emerald-700 dark:text-emerald-400" : s.source === "velocity" ? "text-muted-foreground" : ""}>{s.text}</span>
+      {delivered && row.delivered_at ? <div className="text-[10px] text-muted-foreground">delivered {fmt(row.delivered_at ?? null)}</div> : null}
+      {!delivered && row.est_delivery_at ? <div className="text-[10px] text-muted-foreground">ETA {fmt(row.est_delivery_at ?? null)}</div> : null}
+      {row.last_scan_at ? <div className="text-[10px] text-muted-foreground">last scan {fmt(row.last_scan_at ?? null)}</div> : null}
     </div>
   );
 }

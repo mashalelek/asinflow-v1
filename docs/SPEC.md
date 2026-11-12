@@ -8286,6 +8286,8 @@ platform's values always win.
 | `DRIVE_SUBJECT` | no | The Drive user AF writes PO documents as (§22 "PO documents"); default `maria@coastalqualitygoods.com`. Same service-account key as Gmail / Sheets (`GOOGLE_CREDENTIALS_PATH`), scope `drive` by domain-wide delegation. |
 | `DRIVE_INVOICES_ROOT_ID` | no | The Invoices root folder (D1); default `1oBeUBKnmpjfcxcwD_w-hCAPLCd-Bbm13`. AF only ever touches files under it. |
 | `SESSION_SECRET` | yes | Signs the `af.sid` session cookie (§25). **Required in production: the server refuses to start without it.** Generate with `openssl rand -hex 32`. Locally it must be in `.env` too, because `npm start` sets `NODE_ENV=production` itself; `npm run dev` falls back to a logged, insecure dev value. Add it to Render **before** the first auth commit deploys. |
+| `EASYPOST_API_KEY` | yes | EasyPost production key — carrier status on every tracking row (§26 "Carrier status — EasyPost"). Unset → components 31 / 32 skip with a note; locally `EASYPOST_TEST_API_KEY` is the fallback (test codes only). |
+| `EASYPOST_WEBHOOK_SECRET` | yes | The secret EasyPost shows when the `tracker.updated` webhook is created; `POST /webhooks/easypost` rejects every event whose HMAC does not match. Unset → every event is 401. |
 
 `APP_PASSWORD` is gone (auth v1, 2026-10-14): `POST /api/verify-password`
 was removed with it. Login is §25.
@@ -9278,6 +9280,79 @@ the local `VELOCITY_MIN_ORDER_DATE = 7/30/2026` flags 269 pre-cutoff
 POs, a May 1 cutoff 75.
 
 ---
+
+### Carrier status — EasyPost (claims patch §3.9, commit 4, migration 104, built 2026-11-11)
+
+AF reads tracking numbers from emails; `po_tracking.status` is AF's
+workflow (unmatched / matched / pushed …). EasyPost says where the parcel
+is. `server/easypost.ts` is the only module that talks to
+`api.easypost.com` (the test enforces it).
+
+- **Columns (migration 104):** `carrier_status` (EasyPost's tracker
+  status: pre_transit, in_transit, out_for_delivery, delivered,
+  available_for_pickup, return_to_sender, failure, cancelled, error,
+  unknown), `est_delivery_at`, `last_scan_at` (the latest
+  `tracking_details` datetime), `delivered_at` (the delivery scan's time
+  once delivered; never cleared), `carrier_checked_at` (the last time AF
+  heard from EasyPost about the row), `easypost_tracker_id` (`trk_…`; the
+  same number on several rows — split rows, two POs — shares one tracker),
+  `velocity_tracking_status` (Velocity's per-tracking status, recorded by
+  the push pass from the inbound orders it already lists — the fallback
+  the readers show when EasyPost has nothing: GLS, OnTrac, LaserShip,
+  OTHER).
+- **Registration (component 31, hourly, `registerTrackers`):** every
+  inbound / return row with a real number on an **open PO** (`closed_at IS
+  NULL`, any age — a closed PO's rows are never registered; Maria
+  2026-11-12), not yet delivered, whose carrier EasyPost tracks for
+  AF (UPS, USPS, FedEx → `FedEx`, DHL → `DHLExpress`, Amazon →
+  `AmazonMws`) → `POST /v2/trackers {tracking_code, carrier, is_return}`.
+  Idempotent: a re-POST of the same code returns the same tracker
+  (recorded); one POST per distinct carrier + number, the answer applied
+  at once, the id stored on every row carrying the number. GLS / OnTrac /
+  LaserShip / OTHER are skipped and counted; a row already delivered is
+  never registered (`easypost_registered_at` stamps the first answer). At
+  most 400 new trackers per pass. Without a key the component logs "EASYPOST_API_KEY not set —
+  skipped".
+- **Webhook:** `POST /webhooks/easypost` — public (mounted before the
+  session middleware, outside `/api`, so neither requireAuth nor the
+  stale-page guard sees it), and every event must carry EasyPost's
+  signature: `X-Hmac-Signature: hmac-sha256-hex=<HMAC-SHA256 of the
+  NFKD-normalised raw body with EASYPOST_WEBHOOK_SECRET>`, compared in
+  constant time. Unsigned, wrong secret, no secret configured → 401 and
+  nothing stored. A signed `tracker.updated` → `applyCarrierUpdate`
+  (status, ETA, latest scan, `delivered_at` when delivered, on every row
+  with the tracker id); other event types are acknowledged and ignored; a
+  store failure answers 500 so EasyPost retries.
+- **Sweep (component 32, daily, `sweepTrackers`):** the backstop for a
+  missed webhook — every registered, undelivered tracker on an open PO AF
+  has not heard about for 3 days is re-read (`GET /v2/trackers/:id`).
+  Stops once delivered or 60 days after registration.
+- **Readers:** the PO's Tracking tab gains a **Carrier status** column
+  (`CarrierStatusCell`: EasyPost's words via `shared/carrier-status.ts`,
+  the ETA while undelivered, the delivery time once delivered, the last
+  scan; Velocity's status in grey when EasyPost has nothing; "—" when
+  neither). `poDeliveryState(query, poId)` — inbound real-number rows,
+  delivered count, `all_delivered`, `latest_delivered_at`,
+  `next_est_delivery_at` — is what D8 (missing) and §3.1 (never_received)
+  read in commit 5.
+- **Keys (Render):** `EASYPOST_API_KEY` (the production key; locally
+  `EASYPOST_TEST_API_KEY` is the fallback — a test key accepts only
+  EasyPost's `EZ…` test codes) and `EASYPOST_WEBHOOK_SECRET` (the secret
+  EasyPost shows when the webhook is created). Webhook URL:
+  `https://asinflow-cqg.onrender.com/webhooks/easypost`.
+- **Cost guard:** `npm run easypost:count [-- --prod]` — the trackers the
+  first pass would create (one per distinct undelivered number on an open
+  PO, any age, by carrier with the oldest shipment date; the skipped ones
+  named) and the mean of the last three full months as the rate.
+  Production 2026-11-12 (before the key): **227 on day one** (FedEx 107,
+  UPS 90, USPS 26, Amazon 3, DHL 1; oldest 2026-07-31; 0 skipped) and
+  **~167 / month** (Aug 93, Sep 222, Oct 185). Many of the 227 are long
+  delivered — EasyPost answers "delivered" on the POST and the row stops
+  there — but each is one tracker on the bill.
+- **Tests** (`server/easypost.test.ts`): every EasyPost answer is a
+  recorded test-key response under `server/__fixtures__/easypost/` (one
+  tracker per status, a return, a re-POST, the invalid-code error); the
+  suite never calls EasyPost.
 
 ## 27. Subscriptions
 

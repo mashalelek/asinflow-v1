@@ -35,6 +35,8 @@ import { poConfirmations } from "./27-po-confirmations";
 import { subscriptionAlerts } from "./28-subscriptions";
 import { poDocuments } from "./29-po-documents";
 import { claimTimers } from "./30-claim-timers";
+import { carrierTracking } from "./31-carrier-tracking";
+import { carrierSweep } from "./32-carrier-sweep";
 import type { ComponentDef } from "../types";
 
 export const COMPONENTS: readonly ComponentDef[] = Object.freeze([
@@ -46,6 +48,8 @@ export const COMPONENTS: readonly ComponentDef[] = Object.freeze([
   poConfirmations, subscriptionAlerts,
   poDocuments,
   claimTimers,
+  carrierTracking,
+  carrierSweep,
 ]);
 
 // The order is a fact, not a convention: fail loudly at import if it drifts.

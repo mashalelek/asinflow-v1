@@ -182,6 +182,7 @@ export function createTrackingRouter(deps: { query?: QueryLike } = {}): Router {
         `SELECT t.id, t.carrier, t.tracking_number, t.retailer_order_id, t.shipped_at, t.ship_to_street, t.status, t.review_reason,
                 t.push_error, t.pushed_at, t.pushed_velocity_ids, t.source, t.items_json, t.suppressed_at, t.reassigned_at,
                 f.order_id AS reassigned_from_order_id, t.qty,
+                t.carrier_status, t.est_delivery_at, t.last_scan_at, t.delivered_at, t.carrier_checked_at, t.velocity_tracking_status, t.easypost_tracker_id,
                 (SELECT array_agg(o.order_id ORDER BY o.order_id) FROM po_tracking s JOIN purchase_orders o ON o.id = s.po_id
                   WHERE s.id <> t.id AND s.po_id <> t.po_id AND (s.id = t.split_of OR s.split_of = COALESCE(t.split_of, t.id))) AS shared_with
            FROM po_tracking t LEFT JOIN purchase_orders f ON f.id = t.reassigned_from_po_id

@@ -5,6 +5,7 @@ import { createJobsRouter } from "./scheduler/routes";
 import { createDashboardRouter } from "./dashboard";
 import { createListingHygieneRouter } from "./listing-hygiene-routes";
 import { createTrackingRouter } from "./tracking-routes";
+import { createEasypostWebhookRouter } from "./easypost";
 import { requestLogLine } from "./request-log";
 import { startRunner, setRunnerLogger } from "./scheduler/runner";
 import { log } from "./log";
@@ -156,6 +157,8 @@ if (!process.env.VITEST) (async () => {
   // session → the three unauthenticated auth routes → requireAuth on every
   // other /api route → the app's routes → static (the SPA shell is served
   // regardless; the client shows the login page on a 401 from /api/auth/me).
+  // EasyPost webhook (SPEC §26 "Carrier status", 2026-11-11): public, outside /api, signature-verified in the router.
+  app.use(createEasypostWebhookRouter({ query, log: (m) => log(m, "easypost") }));
   if (!process.env.SESSION_SECRET) log("SESSION_SECRET not set — using the insecure dev fallback (never in production)", "auth");
   app.use(createSessionMiddleware({ secret: sessionSecret, isProduction, pool }));
   app.use(createAuthRouter());

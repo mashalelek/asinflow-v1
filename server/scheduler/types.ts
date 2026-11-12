@@ -39,7 +39,7 @@ export const ONBOARDING_COMPONENTS: readonly number[] = [2, 3, 4, 5, 6, 7, 8, 10
  * or 24 with `params.listing_hygiene`; the ledger backfill → 23 with
  * `params.ledger_window`).
  */
-export const SCHEDULED_ONLY_COMPONENTS: readonly number[] = [22, 23, 24, 25, 26, 27, 28, 29, 30];
+export const SCHEDULED_ONLY_COMPONENTS: readonly number[] = [22, 23, 24, 25, 26, 27, 28, 29, 30, 31, 32];
 export function explicitlyAuthorized(n: number, params: Record<string, any> | null | undefined): boolean {
   if (n === 23) return params?.ledger_window != null;
   if (n === 22) return params?.listing_hygiene?.action === "close";
@@ -47,7 +47,8 @@ export function explicitlyAuthorized(n: number, params: Record<string, any> | nu
   // PO tracking has no job entry point — Sync tracking is a direct call. Same for the
   // confirmation reconcile (27) and the subscription pass (28): their manual triggers are routes.
   // PO documents (29): `npm run po-docs`, a direct call. Claim timers (30): the Claims page load runs the same sweep.
-  if (n === 25 || n === 26 || n === 27 || n === 28 || n === 29 || n === 30) return false;
+  // Carrier tracking (31) / sweep (32): EasyPost's webhook is the other entry; nothing manual.
+  if (n >= 25 && n <= 32) return false;
   return true;
 }
 export type JobTarget = "main" | "bulk";

@@ -26,6 +26,7 @@ import { pairFor, logReplacementTracking, replacementLogged, replacementCheckedI
 import { fetchAllInboundOrders, fetchAllKnownOrders, appendTrackingBulk, type VelocityInboundOrder } from "./velocity-api";
 import { routeTracking, joinReasons, type ShipsTo } from "./tracking-route-rules";
 import { isPlaceholder } from "./tracking-ingest";
+import { recordVelocityTrackingStatus } from "./easypost";
 import { hydrateChildlessBundles } from "./velocity-bundle-identity";
 import type { QueryLike } from "./scheduler/types";
 import { reconcileReviewVelocity } from "./line-action-items";
@@ -194,6 +195,8 @@ export async function pushTracking(opts: { query: QueryLike; deps?: VelocityDeps
   // Both reads fail closed: a partial Velocity read would make POs look
   // never-uploaded (the coverage tripwires in velocity-api throw instead).
   const inboundList = await deps.list();
+  // Velocity's per-tracking status is the readers' fallback when EasyPost has nothing (SPEC §26 "Carrier status").
+  if (!opts.dryRun) await recordVelocityTrackingStatus(opts.query, inboundList).catch((e: any) => opts.log?.(`velocity tracking status not recorded: ${e?.message ?? e}`));
   const inbound = indexInbound(inboundList);
   const knownList = await deps.known();
   const known = await knownOrderNumbersHydrated(knownList, opts.query);
