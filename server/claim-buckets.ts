@@ -20,7 +20,7 @@ const rowOf = (c: ClaimRow, now: Date): ClaimPageRow => {
   const b: BucketResult = deriveBucket(c, now);
   const steps = claimSteps(c);
   const current = steps.find((s) => s.current);
-  const step = c.status === "closed" ? "Closed" : c.status === "dismissed" ? "Dismissed" : current?.label ?? "";
+  const step = c.status === "closed" ? "Closed" : c.status === "dismissed" ? "Dismissed" : current?.todo ?? current?.label ?? "";
   return { ...c, bucket: b.bucket, bucket_since: b.since, due_at: b.due, timed_out: b.timedOut, days_in_bucket: daysSince(b.since, now), steps, step, next_action: nextAction(c, b) };
 };
 

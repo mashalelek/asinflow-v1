@@ -154,6 +154,10 @@ export function deriveBucket(c: BucketClaim, now: Date): BucketResult {
     // the report date Maria typed (reported_at), else the tick itself
     bucket = "waiting_supplier"; anchor = c.reported_at ?? doneAt(c, "contact_supplier") ?? c.found_at; reason = "no answer from the supplier";
   }
+  // The timer never starts before the supplier was contacted (Maria 2026-11-12): an unreported claim — no report date,
+  // no Contact supplier tick, no confirmation, not an emailed cancellation — waits for the Contacted supplier action in
+  // Needs attention, whether or not its contact_supplier task exists (a converted claim may lack it).
+  if (bucket === "waiting_supplier" && !isReported(c)) return { ...none, since: new Date(ts(c.found_at) ?? Date.now()).toISOString() };
   // Every tick restarts the timer (a snooze is such a tick) — except Contact supplier, whose typed report date
   // (reported_at) is the anchor itself; without a typed date its tick is the anchor through doneAt above.
   const restart = latest(...c.tasks.filter((t) => t.done_at && t.kind !== "contact_supplier").map((t) => t.done_at));
@@ -170,7 +174,7 @@ export function deriveBucket(c: BucketClaim, now: Date): BucketResult {
 
 // ── Steps (§3.4) ─────────────────────────────────────────────────────────────
 
-export interface ClaimStep { key: string; label: string; done: boolean; at: string | null; current: boolean }
+export interface ClaimStep { key: string; label: string; done: boolean; at: string | null; current: boolean; /** The row's Step text while this step is current ("Report to supplier"). */ todo?: string }
 
 /** The path's checklist with ✓ per step and the current one. */
 export function claimSteps(c: BucketClaim): ClaimStep[] {
@@ -180,7 +184,7 @@ export function claimSteps(c: BucketClaim): ClaimStep[] {
   const reportedAt = c.reported_at ?? doneAt(c, "contact_supplier");
   const promisedAt = outcome ? doneAt(c, "confirm_outcome") ?? c.supplier_confirmed_at ?? reportedAt : null;
   const steps: Array<Omit<ClaimStep, "current">> = [{ key: "found", label: "Found", done: true, at: c.found_at }];
-  if (!emailed) steps.push({ key: "reported", label: "Reported", done: !!reportedAt || closed, at: reportedAt });
+  if (!emailed) steps.push({ key: "reported", label: reportedAt || closed ? "Reported" : "Report", done: !!reportedAt || closed, at: reportedAt, todo: "Report to supplier" });
   if (outcome === "replacement") {
     steps.push({ key: "promised", label: "Promised", done: true, at: promisedAt });
     if (c.ships_to !== "home") steps.push({ key: "tell_velocity", label: "Tell Velocity", done: !!doneAt(c, "tell_velocity_replacement") || !!c.replacement_shipped_at || closed, at: doneAt(c, "tell_velocity_replacement") });
@@ -204,10 +208,17 @@ export function claimSteps(c: BucketClaim): ClaimStep[] {
   return steps.map((s) => { const current = !s.done && !currentSet && c.status !== "dismissed"; if (current) currentSet = true; return { ...s, current }; });
 }
 
+/** Reported = a typed report date, a Contact supplier tick, or the supplier's confirmation; an emailed cancellation needs no report. */
+export function isReported(c: Pick<BucketClaim, "reported_at" | "supplier_confirmed_at" | "kind" | "found_by" | "tasks">): boolean {
+  if (c.kind === "canceled" && c.found_by === "email") return true;
+  return !!c.reported_at || !!c.supplier_confirmed_at || !!doneAt(c as BucketClaim, "contact_supplier");
+}
+
 /** The row's "Next action": the open task, else what the timer waits for. */
 export function nextAction(c: BucketClaim, b: BucketResult): string {
   const open = c.tasks.filter((t) => !t.done_at);
   if (open.length) return open.map((t) => CLAIM_TASK_LABELS[t.kind as ClaimTaskKind] ?? t.kind).join(" · ");
+  if (b.bucket === "needs_attention" && c.status === "open" && !isReported(c)) return "Contact supplier";
   switch (b.bucket) {
     case "waiting_supplier": return c.outcome && !c.supplier_confirmed_at ? "waiting for the supplier's confirmation" : "waiting for the supplier's answer";
     case "waiting_shipment": return "waiting for the carrier";

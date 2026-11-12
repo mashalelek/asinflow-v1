@@ -6318,6 +6318,18 @@ Rules built in commit 1 (`server/supplier-claims.ts`, `shared/supplier-claim.ts`
   pass (component 30, `30_claim_timers`, §11) and when the Claims page loads (`GET /api/claims`), so the Claims page,
   the POs list's Claims column and the Dashboard agree; it writes a `timed_out` event. Snooze = the task ticked now +
   `snoozed_until` 5 business days out (`POST /api/pos/claims/tasks/:id/snooze`).
+  **The timer never starts before the supplier was contacted (Maria 2026-11-12, migration 105):** an open claim with
+  no report date, no Contact supplier tick and no supplier confirmation (an emailed cancellation needs no report) is
+  Needs attention whatever its tasks — its Step reads "Report to supplier" (the Steps list shows "Report" as the
+  current step, "Reported" once done), its Next action "Contact supplier", and nothing on it says "waiting"
+  (`isReported` in `shared/claim-bucket.ts`; the invariant test: no claim is in a Waiting bucket without the date
+  that bucket waits from). **Contacted supplier** on the claim (a button, and the current Report step itself; date
+  default today, channel, note → `POST /api/pos/claims/:id/contacted`, `recordContact`) records the report through
+  the claim's `contact_supplier` task — created on the spot when a converted claim has none — so `reported_at` /
+  `reported_channel` are set, the Reported step ticks, the `reported` event is written and the timer starts from that
+  date. Migration 105 gave every unreported open claim its `contact_supplier` task (the never_received claim
+  "no_poid_at_checkout" had none and showed Waiting on supplier) and removed the Follow ups the old timer had
+  created on unreported claims (3 on production).
 - **Claim detail (`/claims/:id`, `GET /api/claims/:id`):** header (PO, supplier, kind, qty in the three unit kinds, $
   owed with the manual override and **Reset to auto** — History row on every change), the **step checklist** (§3.4:
   refund / credit, replacement, write-off, emailed cancellation; return steps only on a return; the current step

@@ -417,7 +417,8 @@ function ClaimDetailPage({ id }: { id: number }) {
   const [d, setD] = useState<ClaimDetailApi | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [refund, setRefund] = useState(false);
-  const [acting, setActing] = useState<{ kind: "outcome" | "write_off" | "remainder" | "dismiss" | "confirm"; text: string; outcome: string } | null>(null);
+  const [acting, setActing] = useState<{ kind: "outcome" | "write_off" | "remainder" | "dismiss" | "confirm" | "contacted"; text: string; outcome: string; date?: string; channel?: string } | null>(null);
+  const openContacted = () => setActing({ kind: "contacted", text: "", outcome: "", date: new Date().toISOString().slice(0, 10), channel: "email" });
   const load = useCallback(async () => {
     try { const r = await fetch(`/api/claims/${id}`); if (!r.ok) throw new Error((await r.json().catch(() => ({}))).message || `HTTP ${r.status}`); setD(await r.json()); setError(null); }
     catch (e: any) { setError(e.message); }
@@ -441,6 +442,7 @@ function ClaimDetailPage({ id }: { id: number }) {
           <p className="text-sm text-muted-foreground">{c.supplier} · PO dated {fmtDate(c.order_date)} · {c.asin ?? "whole PO"}{c.po_line_item_id ? ` line ${c.line_no}` : ""}{c.product_name ? ` — ${c.product_name}` : ""} · {CLAIM_BUCKET_LABELS[c.bucket]}{c.days_in_bucket != null && c.status === "open" ? ` for ${c.days_in_bucket} day${c.days_in_bucket === 1 ? "" : "s"}` : ""}</p>
         </div>
         <div className="flex flex-wrap items-center gap-2" data-testid="claim-actions">
+          {c.status === "open" && !c.reported_at && !(c.kind === "canceled" && c.found_by === "email") && <Button size="sm" variant="outline" onClick={openContacted} data-testid="button-claim-contacted">Contacted supplier</Button>}
           {c.status === "open" && !c.outcome && <Button size="sm" variant="outline" onClick={() => setActing({ kind: "outcome", text: "", outcome: "refund_card" })} data-testid="button-claim-set-outcome">Set outcome</Button>}
           {c.status === "open" && c.outcome && c.outcome !== "write_off" && !c.supplier_confirmed_at && <Button size="sm" variant="outline" onClick={() => setActing({ kind: "confirm", text: "", outcome: c.outcome! })} data-testid="button-claim-confirm">Confirmed by supplier</Button>}
           {c.status === "open" && <Button size="sm" variant="outline" onClick={() => setActing({ kind: "write_off", text: "", outcome: "" })} data-testid="button-claim-write-off">Write off</Button>}
@@ -463,6 +465,13 @@ function ClaimDetailPage({ id }: { id: number }) {
             <span className="text-muted-foreground">The supplier confirmed the {CLAIM_OUTCOME_LABELS[acting.outcome as ClaimOutcome]} (by hand — the email match is a later commit)</span>
             <Input value={acting.text} onChange={(e) => setActing({ ...acting, text: e.target.value })} placeholder="detail (optional)" className="h-7 w-56 text-xs" data-testid="input-claim-confirm-detail" />
             <Button size="sm" variant="outline" className="h-7" onClick={() => void call(`/api/pos/claims/${c.id}/confirm-supplier`, "POST", { detail: acting.text.trim() || null }).then(() => setActing(null))} data-testid="button-claim-confirm-save">Confirmed</Button></>}
+          {acting.kind === "contacted" && <>
+            <span className="text-muted-foreground">Contacted supplier</span>
+            <input type="date" value={acting.date} onChange={(e) => setActing({ ...acting, date: e.target.value })} className="h-7 rounded border border-input bg-background px-1 text-xs" data-testid="input-claim-contacted-date" />
+            <select value={acting.channel} onChange={(e) => setActing({ ...acting, channel: e.target.value })} className="h-7 rounded border border-input bg-background px-1 text-xs" data-testid="select-claim-contacted-channel">
+              {["email", "chat", "phone", "form", "other"].map((ch) => <option key={ch} value={ch}>{ch}</option>)}</select>
+            <Input value={acting.text} onChange={(e) => setActing({ ...acting, text: e.target.value })} placeholder="note" className="h-7 w-48 text-xs" data-testid="input-claim-contacted-note" />
+            <Button size="sm" variant="outline" className="h-7" onClick={() => void call(`/api/pos/claims/${c.id}/contacted`, "POST", { date: acting.date, channel: acting.channel, note: acting.text.trim() || null }).then(() => setActing(null))} data-testid="button-claim-contacted-save">Reported</Button></>}
           {(acting.kind === "write_off" || acting.kind === "remainder") && <>
             <span className="text-muted-foreground">{acting.kind === "remainder" ? `Write off the ${money(c.remaining)} still owed — reason` : "Write-off reason"}</span>
             <Input autoFocus value={acting.text} onChange={(e) => setActing({ ...acting, text: e.target.value })} className="h-7 w-72 text-xs" data-testid={`input-claim-${acting.kind}-reason`} />
@@ -504,7 +513,9 @@ function ClaimDetailPage({ id }: { id: number }) {
             <ol className="space-y-0.5" data-testid="claim-steps">
               {c.steps.map((s) => (
                 <li key={s.key} className={`flex items-center gap-2 text-xs ${s.current ? "font-medium" : s.done ? "" : "text-muted-foreground"}`} data-testid={`step-${s.key}`} data-done={s.done} data-current={s.current}>
-                  <span className={`inline-block w-3.5 text-center ${s.done ? "" : "opacity-40"}`}>{s.done ? "✓" : s.current ? "›" : "·"}</span>{s.label}{s.at ? <span className="text-[10px] text-muted-foreground">{fmtDate(s.at)}</span> : null}
+                  <span className={`inline-block w-3.5 text-center ${s.done ? "" : "opacity-40"}`}>{s.done ? "✓" : s.current ? "›" : "·"}</span>
+                  {s.key === "reported" && s.current && c.status === "open" ? <button type="button" onClick={openContacted} className={link} title="Record the supplier contact" data-testid="button-step-report">{s.label}</button> : s.label}
+                  {s.at ? <span className="text-[10px] text-muted-foreground">{fmtDate(s.at)}</span> : null}
                 </li>))}
             </ol>
           </div>
@@ -513,7 +524,8 @@ function ClaimDetailPage({ id }: { id: number }) {
             {openTasks.length === 0 ? <div className="text-xs text-muted-foreground">{c.status === "open" ? c.next_action || "none" : "none"}</div>
               : <div className="space-y-1.5 text-xs" data-testid="claim-open-tasks">{openTasks.map((t) => <div key={t.id}><TaskControl claim={c} task={t} refresh={() => void load()} onRefundReceived={() => setRefund(true)} /></div>)}</div>}
             {c.status === "open" && c.due_at && <div className="text-[10px] text-muted-foreground mt-1">timer: {c.timed_out ? "ran out" : `runs out ${fmtDate(c.due_at)}`} (5 business days)</div>}
-            {c.status === "open" && !c.due_at && c.tasks.some(isActiveTask) && <div className="text-[10px] text-muted-foreground mt-1">timer: held while a task is open; restarts when it is ticked</div>}
+            {c.status === "open" && !c.due_at && !c.reported_at && !(c.kind === "canceled" && c.found_by === "email") && <div className="text-[10px] text-muted-foreground mt-1">timer: starts from the report date</div>}
+            {c.status === "open" && !c.due_at && (c.reported_at || (c.kind === "canceled" && c.found_by === "email")) && c.tasks.some(isActiveTask) && <div className="text-[10px] text-muted-foreground mt-1">timer: held while a task is open; restarts when it is ticked</div>}
           </div>
           <div>
             <div className="text-[11px] font-semibold uppercase tracking-wider text-muted-foreground mb-1">Linked</div>

@@ -36,6 +36,44 @@ describe("bucket derivation (§3.2): an open task wins, else the running timer",
     expect(deriveBucket(base({ status: "closed", closed_at: "2026-11-05T10:00:00Z" }), NOW)).toMatchObject({ bucket: "closed", since: "2026-11-05T10:00:00Z", timedOut: false });
     expect(deriveBucket(base({ status: "dismissed" }), NOW).bucket).toBe("dismissed");
   });
+  it("the timer never starts before the supplier was contacted (Maria 2026-11-12): an unreported open claim is Needs attention even with no task; the row says Report to supplier / Contact supplier", () => {
+    const bare = base({ reported_at: null, tasks: [] });
+    const b = deriveBucket(bare, NOW);
+    expect(b).toMatchObject({ bucket: "needs_attention", due: null, timedOut: false, timeout: null });
+    expect(nextAction(bare, b)).toBe("Contact supplier");
+    const steps = claimSteps(bare);
+    expect(steps.find((s) => s.key === "reported")).toMatchObject({ label: "Report", current: true, done: false, todo: "Report to supplier" });
+    expect(claimSteps(base({ reported_at: "2026-11-02" })).find((s) => s.key === "reported")).toMatchObject({ label: "Reported", done: true });
+    // a promised outcome does not start it either; an emailed cancellation needs no report
+    expect(deriveBucket(base({ reported_at: null, tasks: [], outcome: "refund_card" }), NOW).bucket).toBe("needs_attention");
+    expect(deriveBucket(base({ reported_at: null, tasks: [], kind: "canceled", found_by: "email" }), NOW).bucket).toBe("waiting_supplier");
+    // the Contact supplier tick without a typed date still counts as reported
+    expect(deriveBucket(base({ reported_at: null, tasks: [done("contact_supplier", "2026-11-02T15:00:00Z")] }), NOW).bucket).toBe("waiting_supplier");
+  });
+  it("invariant: no claim is in a Waiting bucket without the date that bucket waits from; a claim with none of them is always Needs attention", () => {
+    const outcomes = [null, "refund_card", "gift_card", "store_credit", "replacement", "write_off"];
+    const flags = [{}, { return_required: true }, { qty_disposed: null }, { remaining: 10 }, { remaining: 0, received: 10 }];
+    for (const outcome of outcomes) for (const f of flags) for (const kind of ["missing", "never_received", "damaged"]) {
+      const c = base({ kind, outcome, reported_at: null, supplier_confirmed_at: null, replacement_shipped_at: null, replacement_arrived_at: null, closed_at: null, tasks: [], ...f });
+      const b = deriveBucket(c, NOW);
+      expect(b.bucket, JSON.stringify({ outcome, f, kind })).toBe("needs_attention");
+      expect(b.due).toBeNull();
+    }
+    // and whenever a Waiting bucket is derived, `since` is one of the claim's own dates / ticks
+    const dated = [
+      base({ reported_at: "2026-11-02", tasks: [] }),
+      base({ reported_at: null, tasks: [done("contact_supplier", "2026-11-02T15:00:00Z")] }),
+      base({ outcome: "refund_card", supplier_confirmed_at: "2026-11-03T10:00:00Z", remaining: 5, tasks: [] }),
+      base({ outcome: "replacement", reported_at: "2026-11-02", replacement_shipped_at: "2026-11-04", tasks: [] }),
+      base({ return_required: true, reported_at: "2026-11-02", tasks: [done("send_label", "2026-11-05T10:00:00Z")] }),
+    ];
+    for (const c of dated) {
+      const b = deriveBucket(c, NOW);
+      expect(b.bucket).toMatch(/^waiting_/);
+      const own = [c.reported_at ? new Date(c.reported_at + "T12:00:00Z").toISOString() : null, c.supplier_confirmed_at, c.replacement_shipped_at ? new Date(c.replacement_shipped_at + "T12:00:00Z").toISOString() : null, ...c.tasks.map((t) => t.done_at)].filter(Boolean).map((x) => new Date(x!).toISOString());
+      expect(own, b.bucket).toContain(b.since);
+    }
+  });
   it("reported, no answer → Waiting on supplier from the report; 5 business days later follow_up_supplier is due", () => {
     const reportedMon = base({ reported_at: "2026-11-02", tasks: [done("contact_supplier", "2026-11-02T15:00:00Z")] });
     const b = deriveBucket(reportedMon, new Date("2026-11-06T15:00:00Z")); // Fri: 4 business days
@@ -104,7 +142,7 @@ describe("the checklist (§3.4) and Next action", () => {
     expect(closed.every((x) => x.done)).toBe(true);
   });
   it("return steps show only on a return; replacement and write-off paths; an emailed cancellation skips Reported", () => {
-    expect(claimSteps(base({ return_required: true })).map((x) => x.label)).toEqual(["Found", "Reported", "Label", "Sent to Velocity", "Shipped", "Delivered", "Confirmed by supplier", "Received", "Closed"]);
+    expect(claimSteps(base({ return_required: true })).map((x) => x.label)).toEqual(["Found", "Report", "Label", "Sent to Velocity", "Shipped", "Delivered", "Confirmed by supplier", "Received", "Closed"]);
     expect(claimSteps(base({ outcome: "replacement", reported_at: "2026-11-03" })).map((x) => x.label)).toEqual(["Found", "Reported", "Promised", "Tell Velocity", "Shipped", "Arrived", "Closed"]);
     expect(claimSteps(base({ outcome: "replacement", reported_at: "2026-11-03", ships_to: "home" })).map((x) => x.label)).toEqual(["Found", "Reported", "Promised", "Shipped", "Arrived", "Closed"]);
     expect(claimSteps(base({ outcome: "write_off", status: "closed", closed_at: "2026-11-09", tasks: [open("dispose_units")] })).map((x) => x.label)).toEqual(["Found", "Reported", "Written off", "Dispose", "Closed"]);

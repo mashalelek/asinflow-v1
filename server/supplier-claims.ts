@@ -193,6 +193,23 @@ export async function doneTask(query: QueryLike, taskId: number, userId: number 
   return { id: Number(t.id), claim_id: claimId, po_id: poId };
 }
 
+/**
+ * "Contacted supplier" on a claim (Maria 2026-11-12): records the report (date, channel, note → reported_at /
+ * reported_channel, event `reported`) through the claim's contact_supplier task — created on the spot when the claim
+ * has none (a converted claim) — so the Reported step ticks and the timer starts from that date (shared/claim-bucket.ts).
+ */
+export async function recordContact(query: QueryLike, id: number, body: DoneTaskBody, userId: number | null): Promise<{ id: number; po_id: string }> {
+  const d = await claimRow(query, id);
+  if (d.status !== "open") throw new EditError(400, "only an open claim can be reported");
+  let t = (await query(`SELECT id FROM supplier_claim_tasks WHERE claim_id = $1 AND kind = 'contact_supplier' AND done_at IS NULL LIMIT 1`, [id])).rows[0];
+  if (!t) {
+    await addTask(query, id, "contact_supplier", "report the claim to the supplier — the timer starts from the report date");
+    t = (await query(`SELECT id FROM supplier_claim_tasks WHERE claim_id = $1 AND kind = 'contact_supplier' AND done_at IS NULL LIMIT 1`, [id])).rows[0];
+  }
+  await doneTask(query, Number(t.id), userId, body);
+  return { id, po_id: String(d.po_id) };
+}
+
 /** Snooze a Check on it / Follow up task: ticked now, and the timer holds until `snoozed_until` (5 business days by default) before the sweep fires again. */
 export async function snoozeTask(query: QueryLike, taskId: number, userId: number | null, businessDays = BUSINESS_DAYS): Promise<{ id: number; claim_id: number; po_id: string; snoozed_until: string }> {
   const t = (await query(`SELECT t.id, t.claim_id, t.kind, c.po_id FROM supplier_claim_tasks t JOIN supplier_claims c ON c.id = t.claim_id WHERE t.id = $1`, [taskId])).rows[0];

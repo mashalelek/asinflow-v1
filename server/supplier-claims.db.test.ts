@@ -220,7 +220,7 @@ describe("claims commit 2 on the real schema (rolled back): tasks, buckets, the 
       const s = await seed(q);
       const { id } = await addClaim(q, s.po, { po_line_item_id: s.line, kind: "missing", qty: 2, found_at: "2026-10-26" }, null);
       let [row] = await loadClaimsPage(q, { po: "zz-claim-test" }, new Date("2026-10-27T15:00:00Z"));
-      expect(row).toMatchObject({ bucket: "needs_attention", next_action: "Contact supplier", step: "Reported" });
+      expect(row).toMatchObject({ bucket: "needs_attention", next_action: "Contact supplier", step: "Report to supplier" });
       const task = row.tasks.find((t) => t.kind === "contact_supplier")!;
       await doneTask(q, task.id, null, { date: "2026-10-27", channel: "email", note: "asked for 2 singles" });
       [row] = await loadClaimsPage(q, { po: "zz-claim-test" }, new Date("2026-10-30T15:00:00Z")); // Fri: 3 business days

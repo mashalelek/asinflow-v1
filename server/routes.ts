@@ -15,7 +15,7 @@ import { linkUnmatchedLine } from "./shipment-link";
 import { likeContains, stripShipmentSuffix } from "./order-number";
 import { clearExtraUnits } from "./extra-units";
 import { writeLineItems, loadActionItemLines } from "./line-action-items";
-import { addClaim, editClaim, linkRefund, unlinkRefund, setOutcome, reopenClaim, dismissClaim, removeClaim, loadClaims, loadOpenClaimSummaries, briefOf, doneTask, cancelLines, snoozeTask, confirmSupplier, addRefundReceived, writeOffRemainder } from "./supplier-claims";
+import { addClaim, editClaim, linkRefund, unlinkRefund, setOutcome, reopenClaim, dismissClaim, removeClaim, loadClaims, loadOpenClaimSummaries, briefOf, doneTask, cancelLines, snoozeTask, confirmSupplier, addRefundReceived, writeOffRemainder, recordContact } from "./supplier-claims";
 import { loadClaimsPage, bucketCounts, sweepClaimTimers, claimDetail, CLAIM_KIND_FILTERS } from "./claim-buckets";
 import { velocityIneligible, ineligibleText } from "./shipment-match";
 import { readVelocityStartDate } from "./ships-to-backfill";
@@ -4476,6 +4476,8 @@ export async function registerRoutes(
   claimRoute("post", "/api/pos/claims/tasks/:id/done", (q, req) => doneTask(q, Number(req.params.id), uid(req), req.body ?? {}));
   claimRoute("post", "/api/pos/claims/tasks/:id/snooze", (q, req) => snoozeTask(q, Number(req.params.id), uid(req), Number((req.body ?? {}).business_days ?? 5)));
   claimRoute("post", "/api/pos/claims/:id/confirm-supplier", (q, req) => confirmSupplier(q, Number(req.params.id), req.body ?? {}, uid(req)));
+  // Contacted supplier (Maria 2026-11-12): {date, channel, note} — reported_at / reported_channel, the Reported step, the timer from that date.
+  claimRoute("post", "/api/pos/claims/:id/contacted", (q, req) => recordContact(q, Number(req.params.id), req.body ?? {}, uid(req)));
   claimRoute("post", "/api/pos/claims/:id/refund-received", (q, req) => addRefundReceived(q, Number(req.params.id), req.body ?? {}, uid(req)));
   claimRoute("post", "/api/pos/claims/:id/write-off-remainder", (q, req) => writeOffRemainder(q, Number(req.params.id), String((req.body ?? {}).reason ?? ""), uid(req)));
   // The Claims page (SPEC §22 "Supplier claims" §5, commit 2): every claim with its derived bucket; the timer sweep runs first so
