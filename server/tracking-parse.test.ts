@@ -167,8 +167,8 @@ describe("tracking parser fix (claims patch §3.10, 2026-11-11)", () => {
     expect(carrierFromName("FedEx Ground")).toBe("FEDEX");
     expect(carrierFromName("Acme Couriers")).toBeNull();
   });
-  it("Walgreens 'adjusted and has shipped': FedEx named, the shipped list empty (every item canceled) — no number, a placeholder", () => {
-    const m = fx("walgreens-adjusted-all-canceled");
+  it("Walgreens 'adjusted and has shipped': FedEx named, one line canceled (out of stock), nothing printed under Shipped — no number, a placeholder", () => {
+    const m = fx("walgreens-adjusted-one-canceled");
     const p = parseTrackingEmail(m);
     expect(p).toMatchObject({ candidate: true, kind: "shipped", orderIds: ["326702397598"], shipments: [] });
     expect(rowsFromEmail({ id: "w", threadId: null, date: new Date(m.date), subject: m.subject }, p)).toEqual([expect.objectContaining({ tracking_number: "email:mktx.walgreens.com:326702397598", match_reason: "ai_disabled" })]);
