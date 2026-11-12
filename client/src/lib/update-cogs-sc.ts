@@ -7,7 +7,7 @@
  *      the selected date range) and downloads the result; done shows "<filename> has been updated and downloaded" and
  *      the closed Report dropdown.
  *   3. Upload COGS to Seller Central — the same link; clicking it marks the step done.
- * The state lives in the ASINs page for the session: closing and reopening keeps it until a new file is chosen.
+ * The state lives in the ASINs page for the session: closing and reopening keeps it; a new file chosen resets step 2 only.
  */
 
 export const SC_BULK_UPDATE_URL = "https://sellercentral.amazon.com/inventory-reimbursement/sourcing-cost-bulk-update";
@@ -32,13 +32,13 @@ export type ScDialogAction = { type: "opened_template" } | { type: "filled"; fil
 
 export const SC_DIALOG_INITIAL: ScDialogState = { templateOpened: false, fill: null, uploaded: false };
 
-/** Each step completes on its own, in any order; a new file chosen starts the cycle over (step 2 completes again when its fill lands). */
+/** Each step completes on its own, in any order; a new file chosen resets step 2 only (steps 1 and 3 keep their ✓, Maria 2026-11-12) and step 2 completes again when its fill lands. */
 export function scDialogReduce(s: ScDialogState, a: ScDialogAction): ScDialogState {
   switch (a.type) {
     case "opened_template": return { ...s, templateOpened: true };
     case "filled": return { ...s, fill: a.fill };
     case "opened_upload": return { ...s, uploaded: true };
-    case "new_file": return { ...SC_DIALOG_INITIAL };
+    case "new_file": return { ...s, fill: null };
   }
 }
 

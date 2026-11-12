@@ -29,10 +29,11 @@ describe("the three steps complete independently, in any order", () => {
     ];
     for (const o of orders) { const end = o.reduce(scDialogReduce, SC_DIALOG_INITIAL); expect(end).toEqual({ templateOpened: true, fill, uploaded: true }); }
   });
-  it("a new file chosen starts over; the state is a plain value the page keeps across close / reopen", () => {
+  it("a new file chosen resets step 2 only — steps 1 and 3 keep their ✓ (Maria 2026-11-12); the state is a plain value the page keeps across close / reopen", () => {
     const done: ScDialogState = { templateOpened: true, fill, uploaded: true };
-    expect(scDialogReduce(done, { type: "new_file" })).toEqual(SC_DIALOG_INITIAL);
-    expect(scDialogReduce(scDialogReduce(done, { type: "new_file" }), { type: "filled", fill })).toEqual({ templateOpened: false, fill, uploaded: false });
+    expect(scDialogReduce(done, { type: "new_file" })).toEqual({ templateOpened: true, fill: null, uploaded: true });
+    expect(scDialogReduce(scDialogReduce(done, { type: "new_file" }), { type: "filled", fill })).toEqual(done);
+    expect(scDialogReduce(SC_DIALOG_INITIAL, { type: "new_file" })).toEqual(SC_DIALOG_INITIAL);
     // reopen = the same state object rendered again: nothing in the reducer depends on the dialog being open
     expect(JSON.parse(JSON.stringify(done))).toEqual(done);
   });
