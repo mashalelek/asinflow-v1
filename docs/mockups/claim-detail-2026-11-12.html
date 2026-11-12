@@ -1,0 +1,176 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Claim detail — havalon</title>
+
+</head>
+<body>
+
+
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600&amp;family=JetBrains+Mono:wght@400;500&amp;display=swap">
+<style>
+body{margin:0;background:#181716;color:#e6e3dc;font-family:Inter,system-ui,sans-serif;font-size:13px}
+a{color:#7fb0e8;text-decoration:none}a:hover{color:#a8c9f0}
+.num{font-family:"JetBrains Mono",monospace}
+.mut{color:#8f8b82}.amb{color:#d8b56a}
+.btn{display:inline-flex;align-items:center;height:30px;padding:0 12px;border:1px solid #3a3733;border-radius:6px;background:#22211e;color:#e6e3dc;font:inherit;cursor:pointer}
+.btn.p{background:#2f6fb8;border-color:#2f6fb8;color:#fff}
+.card{background:#1f1e1b;border:1px solid #2a2824;border-radius:8px;padding:16px}
+.kv{display:grid;grid-template-columns:130px 1fr;gap:8px 12px;align-items:center}
+.kv .v{text-align:right}
+.ed{color:#6f6b63;font-size:11px;margin-left:6px;cursor:pointer}
+.ed:hover{color:#e6e3dc}
+.tl{display:grid;grid-template-columns:86px 18px 1fr;gap:0 12px}
+.tl .d{color:#8f8b82;font-size:12px;padding-top:2px}
+.tl .dot{width:10px;height:10px;border-radius:50%;background:#3a3733;margin:5px 0 0 4px}
+.tl .dot.on{background:#d8b56a}
+.tl .dot.ok{background:#5aa37a}
+.tl .e{padding-bottom:18px;border-left:1px solid #2a2824;margin-left:-11px;padding-left:19px}
+.tl .e:last-child{border-left-color:transparent}
+.tl .t{font-weight:500}
+.tl .n{color:#a39f96;margin-top:2px}
+input.f,select.f,textarea.f{border:1px solid #3a3733;border-radius:6px;background:#1b1a18;color:#e6e3dc;padding:6px 10px;font:inherit}
+input.f,select.f{height:30px;padding:0 10px}
+.step{display:flex;align-items:center;gap:10px;padding:6px 0;color:#a39f96}
+.step.ok{color:#e6e3dc}.step.on{color:#e6e3dc;font-weight:500}
+.step .m{width:16px;height:16px;border-radius:50%;border:1px solid #5a564f;display:inline-flex;align-items:center;justify-content:center;font-size:10px}
+.step.ok .m{background:#5aa37a;border-color:#5aa37a;color:#0f1a14}
+.step.on .m{border-color:#d8b56a;color:#d8b56a}
+</style>
+
+<div style="min-height:1180px;max-width:1440px">
+  <div style="padding:14px 24px 0"><a href="Main.dc.html">← Claims</a></div>
+
+  <div style="display:flex;align-items:flex-start;gap:16px;flex-wrap:wrap;padding:12px 24px 0">
+    <div style="flex:1;min-width:360px">
+      <h1 style="margin:0;font-size:22px;font-weight:600">Never received · havalon.com <span class="num" style="font-weight:400;font-size:16px;color:#a39f96">no_poid_at_checkout</span></h1>
+      <div class="mut" style="margin-top:6px">PO 10/23/2026 · 60XT Stainless Steel Blades, Box of 100 · B00D79EODK · 3 Individual units <span style="margin:0 6px">·</span> <span class="amb">Report to supplier</span> — open 20 days</div>
+    </div>
+    <div style="display:flex;gap:8px;flex-wrap:wrap">
+      <button class="btn p">Contacted supplier</button>
+      <button class="btn">Supplier replied</button>
+      <button class="btn">Set outcome ▾</button>
+      <button class="btn">More ▾</button>
+    </div>
+  </div>
+
+  <div style="display:grid;grid-template-columns:340px minmax(0,1fr) 360px;gap:16px;padding:16px 24px 24px;align-items:start">
+
+    <div style="display:flex;flex-direction:column;gap:16px">
+      <div class="card">
+        <div class="mut" style="font-size:11px;text-transform:uppercase;letter-spacing:.04em;margin-bottom:10px">Claim <span class="ed">edit</span></div>
+        <div class="kv">
+          <span class="mut">Kind</span><span class="v">never received</span>
+          <span class="mut">Qty</span><span class="v num">3 <span class="mut">Individual · 3 Product · 3 ASIN</span></span>
+          <span class="mut">$ owed</span><span class="v num">$179.97 <span class="mut">auto</span> <span class="ed">override</span></span>
+          <span class="mut">Received</span><span class="v num">$0.00</span>
+          <span class="mut">Remaining</span><span class="v num amb">$179.97</span>
+          <span class="mut">Outcome</span><span class="v mut">not known yet</span>
+          <span class="mut">Return needed</span><span class="v mut">no</span>
+          <span class="mut">Found</span><span class="v">11/7 · Maria</span>
+          <span class="mut">Reported</span><span class="v mut">— not yet</span>
+        </div>
+        <div style="margin-top:12px;padding-top:12px;border-top:1px solid #2a2824;color:#a39f96">Charged $179.97 on CapitalOne ••6830; nothing arrived, no confirmation email, no order # from havalon at checkout. Velocity inbound #8785 waiting.</div>
+      </div>
+
+      <div class="card">
+        <div class="mut" style="font-size:11px;text-transform:uppercase;letter-spacing:.04em;margin-bottom:8px">Steps <span class="mut" style="text-transform:none;letter-spacing:0">· click any to set or change</span></div>
+        <div class="step ok"><span class="m">✓</span>Found <span class="mut">11/7</span></div>
+        <div class="step on"><span class="m">›</span>Report to supplier</div>
+        <div class="step"><span class="m"></span>Supplier answers · outcome</div>
+        <div class="step"><span class="m"></span>Confirmed by supplier</div>
+        <div class="step"><span class="m"></span>Received</div>
+        <div class="step"><span class="m"></span>Closed</div>
+        <div class="mut" style="margin-top:8px">Steps change with the outcome: a return adds label → sent → shipped → delivered; a replacement adds promised → shipped → arrived.</div>
+      </div>
+
+      <div class="card">
+        <div class="mut" style="font-size:11px;text-transform:uppercase;letter-spacing:.04em;margin-bottom:8px">Linked</div>
+        <div class="kv" style="grid-template-columns:90px 1fr">
+          <span class="mut">PO</span><span><a href="#" class="num">no_poid_at_checkout</a> · open · 0 received</span>
+          <span class="mut">Velocity</span><span>inbound #8785 · 3 units · nothing received</span>
+          <span class="mut">Emails</span><span class="mut">none matched yet · <a href="#">attach one</a></span>
+          <span class="mut">Tracking</span><span class="mut">none</span>
+          <span class="mut">Documents</span><span class="mut">none · <a href="#">upload label</a></span>
+        </div>
+      </div>
+    </div>
+
+    <div class="card" style="padding:0">
+      <div style="padding:14px 16px;border-bottom:1px solid #2a2824;display:flex;align-items:center;gap:12px">
+        <span class="mut" style="font-size:11px;text-transform:uppercase;letter-spacing:.04em">Timeline</span>
+        <span class="mut">newest first · every entry editable</span>
+      </div>
+
+      <div style="padding:14px 16px;border-bottom:1px solid #2a2824;background:#1b1a18">
+        <div style="font-weight:500;margin-bottom:10px">Contacted supplier</div>
+        <div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center">
+          <label class="mut" for="d">Date</label><input class="f" id="d" value="11/12/2026" style="width:120px">
+          <label class="mut" for="c">How</label>
+          <select class="f" id="c"><option>email</option><option>chat</option><option>phone</option></select>
+          <input class="f" aria-label="Note" placeholder="they responded quickly – looking into it" style="flex:1;min-width:220px">
+          <button class="btn p">Save</button><a href="#" class="mut">cancel</a>
+        </div>
+        <div class="mut" style="margin-top:8px">Starts the 5-business-day timer. Each later message is its own entry — add as many as it takes.</div>
+      </div>
+
+      <div style="padding:16px">
+        <div class="tl">
+          <div class="d">11/12 12:38</div><div class="dot on"></div>
+          <div class="e"><div class="t">Outcome cleared <span class="ed">edit</span></div><div class="n">was "replacement", set while testing · the supplier hasn't answered yet · Maria</div></div>
+
+          <div class="d">11/12 12:20</div><div class="dot ok"></div>
+          <div class="e"><div class="t">Quantity entered: 3 Individual units <span class="ed">edit</span></div><div class="n">$ owed recalculated to $179.97 · Maria</div></div>
+
+          <div class="d">11/12 12:17</div><div class="dot ok"></div>
+          <div class="e"><div class="t">Kind set: never received <span class="ed">edit</span></div><div class="n">was "unclear" from the sheet badge · Maria</div></div>
+
+          <div class="d">11/10</div><div class="dot"></div>
+          <div class="e"><div class="t">Converted from the sheet's "Confirm refund / replacement" badge</div><div class="n">no quantity, kind or amount on the badge · migration 101</div></div>
+
+          <div class="d">11/7</div><div class="dot"></div>
+          <div class="e"><div class="t">Found <span class="ed">edit</span></div><div class="n">PO note: "Doesn't provide PO ID at checkout and no email confirmation. Not sure if it went through." · Maria</div></div>
+
+          <div class="d">10/23</div><div class="dot"></div>
+          <div class="e"><div class="t">PO placed · 3 × $59.99</div><div class="n">Velocity inbound #8785 created</div></div>
+        </div>
+      </div>
+    </div>
+
+    <div style="display:flex;flex-direction:column;gap:16px">
+      <div class="card">
+        <div class="mut" style="font-size:11px;text-transform:uppercase;letter-spacing:.04em;margin-bottom:10px">Refunds</div>
+        <div class="kv" style="grid-template-columns:1fr auto auto">
+          <span class="mut">Method</span><span class="mut">Applied</span><span class="mut">Date</span>
+          <span class="mut" style="grid-column:1/4;padding:6px 0">none yet</span>
+          <span style="border-top:1px solid #2a2824;padding-top:8px">Remaining</span><span class="num amb" style="border-top:1px solid #2a2824;padding-top:8px">$179.97</span><span style="border-top:1px solid #2a2824"></span>
+        </div>
+        <div style="margin-top:10px;display:flex;gap:8px"><button class="btn">+ Refund received</button><button class="btn">Write off remainder</button></div>
+        <div class="mut" style="margin-top:8px">Several refunds can land on one claim (two gift cards); one refund can cover several claims on the same PO.</div>
+      </div>
+
+      <div class="card">
+        <div class="mut" style="font-size:11px;text-transform:uppercase;letter-spacing:.04em;margin-bottom:10px">What happens next</div>
+        <div style="display:flex;flex-direction:column;gap:8px">
+          <div><span class="amb">Now</span> · in <b>Needs attention › Supplier</b> until you record the contact</div>
+          <div><span class="mut">Then</span> · Waiting on supplier · Follow up after 5 business days with no reply</div>
+          <div><span class="mut">Then</span> · the supplier's answer sets the outcome: refund → Confirmed → Received; replacement → Promised → Shipped → Arrived; nothing → Write off</div>
+        </div>
+      </div>
+
+      <div class="card">
+        <div class="mut" style="font-size:11px;text-transform:uppercase;letter-spacing:.04em;margin-bottom:10px">More</div>
+        <div style="display:flex;flex-direction:column;gap:6px">
+          <a href="#">Dismiss this claim</a>
+          <a href="#">Reopen (closed claims)</a>
+          <a href="#">Merge into another claim on this PO</a>
+          <a href="#" style="color:#c97b6a">Remove</a>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+
+</body>
+</html>

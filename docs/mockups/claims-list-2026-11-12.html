@@ -1,0 +1,168 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Claims — Needs attention</title>
+
+</head>
+<body>
+
+
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600&amp;family=JetBrains+Mono:wght@400;500&amp;display=swap">
+<style>
+body{margin:0;background:#181716;color:#e6e3dc;font-family:Inter,system-ui,sans-serif;font-size:13px}
+a{color:#7fb0e8;text-decoration:none}a:hover{color:#a8c9f0}
+.num{font-family:"JetBrains Mono",monospace}
+.tab{padding:10px 14px;border-bottom:2px solid transparent;color:#a39f96;cursor:pointer}
+.tab.on{color:#e6e3dc;border-color:#d8b56a}
+.tab b{font-weight:500;color:#e6e3dc}
+.row{display:grid;grid-template-columns:28px 150px 180px 130px 110px 120px 1fr 90px 180px;gap:12px;align-items:center;padding:10px 12px;border-top:1px solid #2a2824}
+.row:hover{background:#1f1e1b}
+.hd{color:#8f8b82;font-size:11px;text-transform:uppercase;letter-spacing:.04em;padding:8px 12px;display:grid;grid-template-columns:28px 150px 180px 130px 110px 120px 1fr 90px 180px;gap:12px}
+.grp{display:flex;align-items:center;gap:10px;padding:18px 12px 8px;color:#d8b56a;font-weight:500}
+.grp span{color:#8f8b82;font-weight:400}
+.btn{display:inline-flex;align-items:center;height:30px;padding:0 12px;border:1px solid #3a3733;border-radius:6px;background:#22211e;color:#e6e3dc;font:inherit;cursor:pointer}
+.btn.p{background:#2f6fb8;border-color:#2f6fb8;color:#fff}
+.mut{color:#8f8b82}
+.amb{color:#d8b56a}
+.chk{width:16px;height:16px;border:1px solid #5a564f;border-radius:4px;background:#1b1a18}
+input.f{height:30px;border:1px solid #3a3733;border-radius:6px;background:#1b1a18;color:#e6e3dc;padding:0 10px;font:inherit}
+</style>
+
+<div style="min-height:1040px;display:flex;flex-direction:column">
+  <div style="display:flex;align-items:center;gap:22px;padding:12px 24px;border-bottom:1px solid #2a2824;color:#a39f96">
+    <span style="color:#e6e3dc;font-weight:600">AsinFlow</span><span>Dashboard</span><span>ASINs</span><span>Bulk Calc</span><span>ASIN Analytics</span><span>POs</span><span style="color:#e6e3dc;border-bottom:2px solid #d8b56a;padding-bottom:2px">Claims</span><span>Subscriptions</span><span>Repricer</span>
+  </div>
+  <div style="padding:20px 24px 0;display:flex;align-items:center;gap:16px;flex-wrap:wrap">
+    <h1 style="margin:0;font-size:22px;font-weight:600">Claims</h1>
+    <span class="mut">Refunds due <b class="num" style="color:#e6e3dc;font-weight:500">$1,214.52</b> · 36 open</span>
+    <span style="flex:1"></span>
+    <input class="f" aria-label="Filter claims" placeholder="Supplier, PO, ASIN…" style="width:220px">
+    <select class="f" aria-label="Kind"><option>All kinds</option></select>
+    <button class="btn p">+ Open claim</button>
+  </div>
+  <div style="display:flex;gap:4px;padding:12px 24px 0;border-bottom:1px solid #2a2824;flex-wrap:wrap">
+    <div class="tab on">Needs attention <b>14</b></div>
+    <div class="tab">Waiting on supplier <b>9</b></div>
+    <div class="tab">Waiting on shipment <b>3</b></div>
+    <div class="tab">Waiting on refund to post <b>6</b></div>
+    <div class="tab">Waiting on Velocity <b>4</b></div>
+    <div class="tab">Closed <b>341</b></div>
+  </div>
+
+  <div style="padding:4px 12px 24px">
+    <div class="hd"><span></span><span>Supplier · PO</span><span>Product</span><span>Kind</span><span>Qty</span><span>Owed / left</span><span>Step</span><span>Waiting</span><span>Do</span></div>
+
+    <div class="grp">Decide <span>· 4 · suggestions and outcomes to confirm</span></div>
+    <div class="row">
+      <span class="chk" aria-hidden="true"></span>
+      <span>walmart.com<br><a href="#" class="num">200015563551762</a></span>
+      <span>Caress Body Wash 2-pk<br><span class="mut">B006T0U4R4</span></span>
+      <span>missing <span class="amb">· suggested</span></span>
+      <span class="num">2 <span class="mut">of 24</span></span>
+      <span class="num mut">—</span>
+      <span>All 3 packages delivered 11/5 · Velocity received 22 of 24. Supplier shipped singles instead of a case, or Velocity's pack size is wrong?</span>
+      <span class="num mut">4 d</span>
+      <span><button class="btn">Open claim</button> <a href="#" class="mut" style="margin-left:8px">Dismiss</a></span>
+    </div>
+    <div class="row">
+      <span class="chk" aria-hidden="true"></span>
+      <span>walgreens.com<br><a href="#" class="num">215651271261</a></span>
+      <span>Folgers Instant 8 oz<br><span class="mut">B000FDBYSE</span></span>
+      <span>canceled <span class="amb">· from email</span></span>
+      <span class="num amb">? <span class="mut">email says 5, line has 3</span></span>
+      <span class="num mut">—</span>
+      <span>Cancellation email 9/4 · 1 line out of stock · no refund amount stated</span>
+      <span class="num mut">69 d</span>
+      <span><button class="btn">Open claim</button> <a href="#" class="mut" style="margin-left:8px">Dismiss</a></span>
+    </div>
+    <div class="row">
+      <span class="chk" aria-hidden="true"></span>
+      <span>voltagesupply.com<br><a href="#" class="num">65705</a></span>
+      <span>Vinegar jars, 12-jar case<br><span class="mut">B0C9F1Y7PQ</span></span>
+      <span>missing</span>
+      <span class="num">11 <span class="mut">of 12</span></span>
+      <span class="num">$37.85</span>
+      <span>Supplier replied 11/2: "remaining 11 jars ship out tomorrow" → <span class="amb">replacement?</span></span>
+      <span class="num mut">10 d</span>
+      <span><button class="btn p">Confirm outcome</button></span>
+    </div>
+
+    <div class="grp">Supplier <span>· 5 · contact or follow up</span></div>
+    <div class="row">
+      <span class="chk" aria-hidden="true"></span>
+      <span>havalon.com<br><a href="#" class="num">no_poid_at_checkout</a></span>
+      <span>60XT Stainless Steel Blades, Box of 100<br><span class="mut">B00D79EODK</span></span>
+      <span>never received</span>
+      <span class="num">3</span>
+      <span class="num">$179.97</span>
+      <span>Report to supplier</span>
+      <span class="num mut">20 d</span>
+      <span><button class="btn p">Contacted supplier</button></span>
+    </div>
+    <div class="row">
+      <span class="chk" aria-hidden="true"></span>
+      <span>walmart.com<br><a href="#" class="num">200015557295492</a></span>
+      <span>Caress Body Wash 2-pk<br><span class="mut">B006T0U4R4</span></span>
+      <span>missing</span>
+      <span class="num">1 <span class="mut">of 12</span></span>
+      <span class="num">$5.97</span>
+      <span>Reported 11/5 by chat · no answer in 5 business days</span>
+      <span class="num amb">7 d</span>
+      <span><button class="btn">Followed up</button> <a href="#" class="mut" style="margin-left:8px">Snooze</a></span>
+    </div>
+
+    <div class="grp">Velocity <span>· 2 · one Discord message</span></div>
+    <div class="row">
+      <span class="chk" aria-hidden="true"></span>
+      <span>walmart.com<br><a href="#" class="num">200015193721348</a></span>
+      <span>Oreos (gated)<br><span class="mut">B07Q4RXG2Z</span></span>
+      <span>can't sell</span>
+      <span class="num">8</span>
+      <span class="num">$47.76</span>
+      <span>Return label saved 10/31 (Walmart email) · send it to Velocity</span>
+      <span class="num mut">12 d</span>
+      <span><button class="btn">Sent label</button></span>
+    </div>
+    <div class="row">
+      <span class="chk" aria-hidden="true"></span>
+      <span>goldenwaffles.com<br><a href="#" class="num">8307</a></span>
+      <span>Waffle mix<br><span class="mut">B0BNW2Q8TT</span></span>
+      <span>expired</span>
+      <span class="num">18</span>
+      <span class="num">$61.20</span>
+      <span>Refunded · ask Velocity to dispose 18 units</span>
+      <span class="num mut">3 d</span>
+      <span><button class="btn">Asked</button></span>
+    </div>
+
+    <div class="grp">Money and arrivals <span>· 2 · check the card</span></div>
+    <div class="row">
+      <span class="chk" aria-hidden="true"></span>
+      <span>kohls.com<br><a href="#" class="num">6739984735</a></span>
+      <span>Whole order canceled<br><span class="mut">2 lines</span></span>
+      <span>canceled</span>
+      <span class="num">6</span>
+      <span class="num">$84.00 <span class="amb">· $42.00 left</span></span>
+      <span>Confirmed 10/28 · 1 of 2 gift cards refunded · short by $42.00</span>
+      <span class="num amb">11 d</span>
+      <span><button class="btn">Refund received</button></span>
+    </div>
+
+    <div class="grp">Timed out <span>· 1</span></div>
+    <div class="row">
+      <span class="chk" aria-hidden="true"></span>
+      <span>michaels.com<br><a href="#" class="num">R4600111200931</a></span>
+      <span>Red Heart yarn, Cherry Red<br><span class="mut">B07N6V47HC</span></span>
+      <span>missing</span>
+      <span class="num">11</span>
+      <span class="num">$32.25</span>
+      <span>Replacement shipped 10/29 · UPS: no scan for 5 business days</span>
+      <span class="num amb">14 d</span>
+      <span><button class="btn">Check on it</button> <a href="#" class="mut" style="margin-left:8px">Snooze</a></span>
+    </div>
+  </div>
+</div>
+
+</body>
+</html>

@@ -527,20 +527,50 @@ every net-quantity reader.
 
 ## 5. UI
 
-- **Claims** — a nav tab (position settled with the nav rearrangement
-  later). Bucket tabs with counts: Needs attention · Waiting on supplier ·
-  Waiting on shipment · Waiting on refund to post · Waiting on Velocity ·
-  Closed (+ Dismissed toggle). Needs attention is grouped Decide / Supplier
-  / Velocity / Money and arrivals / Timed out, each task a checkbox.
-  Row: Supplier · PO · Kind · Qty (Individual units) · $ owed / remaining ·
-  Step · Days in bucket · Next action. Default sort: longest waiting.
-  Toolbar: **Open claim** (PO picker), filters supplier / kind / PO.
-- **Claim detail** (row click): header (PO, supplier, kind, qty in all
-  three unit kinds, $ owed with override and Reset to auto); step checklist
-  (§3.4) with ✓ and the current step highlighted; open tasks; refunds table
-  (method · amount · date · remaining); linked emails, labels, tracking;
-  timeline (§4.3). Actions: Set outcome · Write off · Write off remainder ·
-  Reopen.
+**Amended 2026-11-12 (Maria): the two mockups are the UI —
+`docs/mockups/claims-list-2026-11-12.html` and
+`docs/mockups/claim-detail-2026-11-12.html`. Where a mockup and this prose
+differ, the mockup wins.** The server side (claims, tasks, buckets, timers,
+refunds) stays as built; commit 2b rebuilds the two pages against them.
+
+- **Claims** (list) — header: title, **Refunds due $X · N open**, a filter
+  box (supplier, PO, ASIN…), a kind select, **+ Open claim** (PO picker).
+  Bucket tabs with counts: Needs attention · Waiting on supplier · Waiting
+  on shipment · Waiting on refund to post · Waiting on Velocity · Closed
+  (+ Dismissed toggle). Needs attention is grouped Decide / Supplier /
+  Velocity / Money and arrivals / Timed out, each group headed with its
+  count and a short hint. Row: Supplier · PO · Product (name, ASIN) ·
+  Kind (with "· suggested" / "· from email") · Qty (Individual units, "of
+  N" ordered; "?" with the email's figure when unknown) · Owed / left ·
+  **Step — one plain sentence of what is going on** (a suggestion's
+  figures and its two possible causes; "Report to supplier"; "Reported
+  11/5 by chat · no answer in 5 business days"; "Confirmed 10/28 · 1 of 2
+  gift cards refunded · short by $42.00"; …) · Waiting (days) · **Do: ONE
+  primary button for the task** (Open claim · Contacted supplier ·
+  Followed up · Confirm outcome · Sent label · Asked · Refund received ·
+  Check on it …) plus Dismiss / Snooze links where they apply. Default
+  sort: longest waiting.
+- **Claim detail** — header: kind · supplier · order #, then PO date ·
+  product · ASIN · qty · the state sentence · days open; action buttons
+  **Contacted supplier · Supplier replied · Set outcome ▾ · More ▾**.
+  Three columns. **Left:** the Claim facts, each editable in place (kind,
+  qty, $ owed with override and auto, received, remaining, Outcome — "not
+  known yet" until set, clearable — return needed, found, reported, the
+  note); the **Steps** list where every step is clickable to set or change
+  its date / data, and the list changes with the outcome (a return adds
+  label → sent → shipped → delivered; a replacement adds promised →
+  shipped → arrived); **Linked** (PO, Velocity order, emails, tracking,
+  documents). **Middle:** the **Timeline**, newest first, every entry
+  editable in place; inline forms for Contacted supplier (date / how /
+  note) and Supplier replied (date / how / summary; sets the outcome when
+  the reply tells it); each contact or reply is its own entry; the timer
+  restarts from the latest. **Right:** the Refunds table with **+ Refund
+  received** and **Write off remainder**; a **What happens next** box (the
+  current bucket, the timer, the possible paths); **More** (Dismiss,
+  Reopen, Merge into another claim on this PO, Remove).
+- Rules: no outcome is required to proceed; nothing on the page says
+  "waiting" before `reported_at`; every change writes an event and a
+  History row; quiet chrome and the quantity-names wording apply.
 - **POs list:** a **Claims** column in the Status group right after Action
   Items — count of open claims, blank when none; hover lists kind + $;
   click → Claims page filtered to the PO. Nothing in Action Items. Filter
