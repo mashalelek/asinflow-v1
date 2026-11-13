@@ -1,0 +1,131 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Claims list — rows that come from emails</title>
+</head>
+<body>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600&amp;family=JetBrains+Mono:wght@400;500&amp;display=swap">
+<style>
+body{margin:0;background:#181716;color:#e6e3dc;font-family:Inter,system-ui,sans-serif;font-size:13px}
+a{color:#7fb0e8;text-decoration:none}a:hover{color:#a8c9f0}
+.num{font-family:"JetBrains Mono",monospace}
+.tab{padding:10px 14px;border-bottom:2px solid transparent;color:#a39f96;cursor:pointer}
+.tab.on{color:#e6e3dc;border-color:#d8b56a}
+.tab b{font-weight:500;color:#e6e3dc}
+.row{display:grid;grid-template-columns:28px 150px 180px 130px 110px 120px 1fr 90px 180px;gap:12px;align-items:center;padding:10px 12px;border-top:1px solid #2a2824}
+.row:hover{background:#1f1e1b}
+.hd{color:#8f8b82;font-size:11px;text-transform:uppercase;letter-spacing:.04em;padding:8px 12px;display:grid;grid-template-columns:28px 150px 180px 130px 110px 120px 1fr 90px 180px;gap:12px}
+.grp{display:flex;align-items:center;gap:10px;padding:18px 12px 8px;color:#d8b56a;font-weight:500}
+.grp span{color:#8f8b82;font-weight:400}
+.btn{display:inline-flex;align-items:center;height:30px;padding:0 12px;border:1px solid #3a3733;border-radius:6px;background:#22211e;color:#e6e3dc;font:inherit;cursor:pointer}
+.btn.p{background:#2f6fb8;border-color:#2f6fb8;color:#fff}
+.mut{color:#8f8b82}
+.amb{color:#d8b56a}
+.chk{width:16px;height:16px;border:1px solid #5a564f;border-radius:4px;background:#1b1a18}
+input.f{height:30px;border:1px solid #3a3733;border-radius:6px;background:#1b1a18;color:#e6e3dc;padding:0 10px;font:inherit}
+</style>
+<div style="min-height:800px;display:flex;flex-direction:column">
+  <div style="padding:20px 24px 0;display:flex;align-items:center;gap:16px;flex-wrap:wrap">
+    <h1 style="margin:0;font-size:22px;font-weight:600">Claims</h1>
+    <span class="mut">Refunds due <b class="num" style="color:#e6e3dc;font-weight:500">$1,214.52</b> · 36 open</span>
+    <span style="flex:1"></span>
+    <input class="f" aria-label="Filter claims" placeholder="Claim #, PO, ASIN, SKU, product, supplier" style="width:280px">
+    <button class="btn p">+ Open claim</button>
+  </div>
+  <div style="display:flex;gap:4px;padding:12px 24px 0;border-bottom:1px solid #2a2824;flex-wrap:wrap">
+    <div class="tab on">Needs attention <b>14</b></div>
+    <div class="tab">Waiting on supplier <b>9</b></div>
+    <div class="tab">Waiting on shipment <b>3</b></div>
+    <div class="tab">Waiting on refund to post <b>6</b></div>
+    <div class="tab">Waiting on Velocity <b>4</b></div>
+    <div class="tab">Closed <b>341</b></div>
+    <div class="tab">Dismissed <b>12</b></div>
+  </div>
+
+  <div style="padding:4px 12px 24px">
+    <div class="hd"><span></span><span>Supplier · PO</span><span>Product</span><span>Kind</span><span>Qty</span><span>Owed / left</span><span>Step</span><span>Waiting</span><span>Do</span></div>
+
+    <div class="grp">Decide <span>· 3 · emails AF wasn't sure about, and outcomes to confirm</span></div>
+
+    <div class="row">
+      <span class="chk" aria-hidden="true"></span>
+      <span><span class="mut num">#3402</span> target.com<br><a href="#" class="num">102003897224402</a></span>
+      <span>Dove Body Wash 3-pk<br><span class="mut">B07FKR2Y5L</span></span>
+      <span>damaged</span>
+      <span class="num">2 <span class="mut">of 6</span></span>
+      <span class="num">$19.98</span>
+      <span>Email 11/12 may be this claim's refund: "order ending in 4402" · $19.98 · <a href="#">open email</a></span>
+      <span class="num mut">1 d</span>
+      <span><button class="btn p">Attach</button> <a href="#" class="mut" style="margin-left:8px">Not this claim</a></span>
+    </div>
+
+    <div class="row">
+      <span class="chk" aria-hidden="true"></span>
+      <span><span class="mut num">#3287</span> voltagesupply.com<br><a href="#" class="num">65705</a></span>
+      <span>Vinegar jars, 12-jar case<br><span class="mut">B0C9F1Y7PQ</span></span>
+      <span>missing</span>
+      <span class="num">11 <span class="mut">of 12</span></span>
+      <span class="num">$37.85</span>
+      <span>Supplier replied 11/2: "remaining 11 jars ship out tomorrow" → <span class="amb">replacement?</span> · <a href="#">open email</a></span>
+      <span class="num mut">10 d</span>
+      <span><button class="btn p">Confirm outcome</button></span>
+    </div>
+
+    <div class="row">
+      <span class="chk" aria-hidden="true"></span>
+      <span>walmart.com<br><a href="#" class="num">200015499010377</a></span>
+      <span>Kinder's Smoked Onion 7 oz<br><span class="mut">B0FYHJQ798</span></span>
+      <span>refund <span class="amb">· from email</span></span>
+      <span class="num amb">? <span class="mut">email names 1 item</span></span>
+      <span class="num">$9.94</span>
+      <span>"You're getting a $9.94 refund" 11/11 · no claim on this PO yet · <a href="#">open email</a></span>
+      <span class="num mut">2 d</span>
+      <span><button class="btn">Open claim</button> <a href="#" class="mut" style="margin-left:8px">Dismiss</a></span>
+    </div>
+
+    <div class="grp">Supplier <span>· 2 · replies to read</span></div>
+
+    <div class="row">
+      <span class="chk" aria-hidden="true"></span>
+      <span><span class="mut num">#3344</span> michaels.com<br><a href="#" class="num">9800114400217731</a></span>
+      <span>Red Heart Super Saver, Cherry Red<br><span class="mut">B07N6V47HC</span></span>
+      <span>missing</span>
+      <span class="num">3 <span class="mut">of 12</span></span>
+      <span class="num">$14.37</span>
+      <span>Supplier replied 11/12: "We have opened case 08841127 and will get back to you." · <a href="#">open email</a></span>
+      <span class="num mut">1 d</span>
+      <span><button class="btn p">Keep waiting</button> <a href="#" class="mut" style="margin-left:8px">Set outcome</a></span>
+    </div>
+
+    <div class="row">
+      <span class="chk" aria-hidden="true"></span>
+      <span><span class="mut num">#3120</span> dkhardware.com<br><a href="#" class="num">DKH-3192308</a></span>
+      <span>Cabinet hinges, 10-pk<br><span class="mut">B08L5M9XQ2</span></span>
+      <span>never received <span class="mut">· closed</span></span>
+      <span class="num">4</span>
+      <span class="num mut">$0.00 left</span>
+      <span>New email on a closed claim 11/13: "We were unable to process your refund to the original card." · <a href="#">open email</a></span>
+      <span class="num mut">0 d</span>
+      <span><button class="btn p">Reopen</button> <a href="#" class="mut" style="margin-left:8px">Nothing to do</a></span>
+    </div>
+
+    <div class="grp" style="color:#a39f96">On the Waiting on refund to post tab <span>· what a matched refund email does by itself</span></div>
+
+    <div class="row">
+      <span class="chk" aria-hidden="true"></span>
+      <span><span class="mut num">#3120</span> dkhardware.com<br><a href="#" class="num">DKH-3192308</a></span>
+      <span>Cabinet hinges, 10-pk<br><span class="mut">B08L5M9XQ2</span></span>
+      <span>never received</span>
+      <span class="num">4</span>
+      <span class="num">$77.23</span>
+      <span>Supplier confirmed $77.23 refund 11/12 <span class="mut">· from email</span> · waiting for it to post</span>
+      <span class="num mut">1 d</span>
+      <span><button class="btn">Refund received</button></span>
+    </div>
+
+    <div class="mut" style="padding:18px 12px 0;max-width:900px">A matched refund email never shows here: it moves the claim straight to Waiting on refund to post. Every supplier reply does show here until you have read it. Feedback requests and "your case is resolved" notices on a closed claim are attached quietly.</div>
+  </div>
+</div>
+</body>
+</html>

@@ -123,7 +123,7 @@ describe("Needs attention groups, labels, the method prefill, the table", () => 
     expect(css).toContain(".cl .hd,.cl .row{grid-template-columns:var(--claims-grid,28px 140px 240px 120px 100px 110px 1fr 70px 180px)}");
     // the timeline note sits in the entry column, wraps, clamps past 3 lines with "more" (Maria 2026-11-12: a 300-character summary fell into the dot column)
     expect(css).toContain(".cl .tl .n{width:auto;height:auto;border:0;border-radius:0;display:block;font-size:inherit;color:#a39f96}");
-    expect(page).toContain("<TimelineNote id={e.id} text={`${e.summary ?? \"\"}${e.by_name ? ` · ${e.by_name}` : \"\"}`} />");
+    expect(page).toContain("<TimelineNote id={e.id} text={`${note}${e.by_name ? ` · ${e.by_name}` : \"\"}`} email={e.gmail_message_id ? { id: e.gmail_message_id, mailbox: e.mailbox ?? \"\" } : null} />");
     expect(page).toContain('WebkitLineClamp: NOTE_CLAMP_LINES, WebkitBoxOrient: "vertical", overflow: "hidden" }');
     expect(page).toContain("setClamped(el.scrollHeight > el.clientHeight + 1)");
     expect(page).toContain('{expanded ? "less" : "more"}</button>');

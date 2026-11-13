@@ -1,0 +1,15 @@
+{
+ "id": "fx-noise-cancel-wins",
+ "mailbox": "orders@coastalqualitygoods.com",
+ "threadId": null,
+ "direction": "in",
+ "forwarded": false,
+ "to": "orders@coastalqualitygoods.com",
+ "toDomain": "coastalqualitygoods.com",
+ "attachments": [],
+ "from": "zz Test <help@zz-test.com>",
+ "fromDomain": "zz-test.com",
+ "date": "2026-11-07T12:00:00.000Z",
+ "subject": "Canceled: delivery of zz lotion +11 items",
+ "text": "We canceled these items and you won't be charged. A refund of $4.00 for the delivery fee will be issued."
+}

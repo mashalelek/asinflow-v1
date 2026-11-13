@@ -33,16 +33,16 @@ import { fmtQty } from "@/lib/po-qty";
 import { useColumnWidths, ResizeHandle } from "@/hooks/use-column-widths";
 import { QTY_KIND } from "@shared/quantity-kinds";
 import { CLAIM_BUCKET_LABELS, CLAIM_BUCKET_TABS, TASK_GROUPS, TASK_GROUP_LABELS, type ClaimBucket, type ClaimStep, type TaskGroup } from "@shared/claim-bucket";
-import { GROUP_HINTS, type PrimaryAction, type UiStep, type StepHandler } from "@shared/claim-ui";
+import { groupHint, type PrimaryAction, type UiStep, type StepHandler } from "@shared/claim-ui";
 import { CLAIM_KINDS, CLAIM_KIND_LABELS, CLAIM_OUTCOMES, CLAIM_OUTCOME_LABELS, QTY_UNKNOWN_LABEL, SHEET_ZEROED_LABEL, type ClaimKind, type ClaimOutcome, type ClaimTaskKind } from "@shared/supplier-claim";
 import { PAYMENT_METHODS } from "@shared/po-form";
 
 // ── Types (the API's ClaimPageRow / ClaimDetail) ─────────────────────────────
 
-export interface ClaimTask { id: number; kind: ClaimTaskKind; group: string; reason: string | null; created_at: string; due_at: string | null; done_at: string | null; snoozed_until: string | null }
+export interface ClaimTask { id: number; kind: ClaimTaskKind; group: string; reason: string | null; created_at: string; due_at: string | null; done_at: string | null; snoozed_until: string | null; /** An email-made task (commit 6): the email behind it and the facts its decision needs. */ gmail_message_id?: string | null; mailbox?: string | null; payload?: Record<string, any> | null }
 export interface ClaimRowApi {
   id: number; po_id: string; po_line_item_id: string | null; kind: ClaimKind; qty: number | null; amount_owed: number | null; amount_owed_source: "auto" | "manual";
-  status: "suggested" | "open" | "closed" | "dismissed"; outcome: ClaimOutcome | null; outcome_amount: number | null; outcome_detail: string | null; write_off_reason: string | null;
+  status: "suggested" | "open" | "closed" | "dismissed"; outcome: ClaimOutcome | null; outcome_amount: number | null; outcome_detail: string | null; write_off_reason: string | null; email_confirmed?: boolean; email_replied?: boolean;
   found_at: string; found_by: string; reported_at: string | null; reported_channel: string | null; supplier_confirmed_at: string | null; last_supplier_reply_at: string | null; closed_at: string | null; note: string | null;
   replacement_qty: number | null; replacement_shipped_at: string | null; replacement_arrived_at: string | null; return_required: boolean; qty_disposed: number | null;
   supplier: string; order_id: string; order_date: string; ships_to: string | null; po_closed_at: string | null; alt_order_ids: string | null;
@@ -57,7 +57,7 @@ interface ClaimDetailApi {
   claim: ClaimRowApi;
   po: { id: string; order_id: string; supplier: string; order_date: string; ships_to: string | null; closed_at: string | null; alt_order_ids: string | null; payments: Array<{ id: number; method: string; nickname: string | null; last4: string | null; amount: string | null }>; refunds: Array<{ id: number; amount: string | null; method: string | null; refunded_at: string | null; note: string | null; po_line_item_id: string | null }> };
   other_open_claims: Array<{ id: number; kind: string; asin: string | null; line_no: number; qty: number | null; amount_owed: number | null; outcome: string | null; remaining: number | null }>;
-  events: Array<{ id: number; at: string; type: string; summary: string | null; by_name: string | null }>;
+  events: Array<{ id: number; at: string; type: string; summary: string | null; by_name: string | null; gmail_message_id?: string | null; mailbox?: string | null }>;
   linked: {
     documents: Array<{ id: number; type: string; file_name: string; drive_file_id: string | null }>;
     tracking: Array<{ id: number; carrier: string | null; tracking_number: string | null; direction: string | null; status: string | null }>;
@@ -123,6 +123,18 @@ export function qtyText(c: Pick<ClaimRowApi, "qty" | "conversion_flags">): strin
 }
 /** The default method for a new refund row: the PO's first payment's method (§3.5). */
 export function prefillMethod(payments: ReadonlyArray<{ method: string }>): string { return payments[0]?.method ?? "card"; }
+/** A refund / credit email on a PO with no claim (commit 6, row 5): a suggested canceled claim whose note starts "refund · from email". */
+export const isRefundSuggestion = (c: Pick<ClaimRowApi, "status" | "found_by" | "note">) => c.status === "suggested" && c.found_by === "email" && /^refund · from email/.test(c.note ?? "");
+/** "email names 1 item" — the items the refund email lists (source_items_json.items). */
+export const emailItemsText = (c: Pick<ClaimRowApi, "source_items_json">) => { const n = Number((c.source_items_json as any)?.items ?? 0); return n > 0 ? `email names ${n} item${n === 1 ? "" : "s"}` : "not stated"; };
+/** The email behind an entry or a task, as a page in a new tab. */
+export const emailUrl = (e: { id: string; mailbox: string }) => `/api/claims/emails/${encodeURIComponent(e.mailbox)}/${encodeURIComponent(e.id)}`;
+/** The row's sentence; a trailing "→ replacement?" (an outcome the reply states, row 4) reads amber as in the mockup. */
+function Sentence({ text }: { text: string }) {
+  const m = /^(.*?)(\s→\s)([a-z -]+\?)$/.exec(text);
+  if (!m) return <>{text}</>;
+  return <>{m[1]}{m[2]}<span className="amb">{m[3]}</span></>;
+}
 /** The product cell: the name (or "Whole order" for a whole-PO claim) over the ASIN. */
 export function productText(c: Pick<ClaimRowApi, "po_line_item_id" | "product_name" | "asin" | "kind">): { main: string; sub: string } {
   if (!c.po_line_item_id) return { main: c.kind === "canceled" ? "Whole order" : "Whole PO", sub: "all lines" };
@@ -232,7 +244,7 @@ function TextForm({ label, placeholder, button, onSave, onCancel, danger }: { la
 function RefundReceivedForm({ claim, payments, others, onDone, onCancel }: { claim: ClaimRowApi; payments: ReadonlyArray<{ method: string; nickname: string | null; last4: string | null }>; others: ClaimDetailApi["other_open_claims"]; onDone: () => void; onCancel: () => void }) {
   const { toast } = useToast();
   const first = payments[0];
-  const [f, setF] = useState({ amount: claim.remaining != null ? claim.remaining.toFixed(2) : "", method: prefillMethod(payments), refunded_at: new Date().toISOString().slice(0, 10), nickname: first?.nickname ?? "", last4: first?.last4 ?? "", note: "" });
+  const [f, setF] = useState({ amount: claim.email_confirmed && claim.outcome_amount != null ? claim.outcome_amount.toFixed(2) : claim.remaining != null ? claim.remaining.toFixed(2) : "", method: prefillMethod(payments), refunded_at: new Date().toISOString().slice(0, 10), nickname: first?.nickname ?? "", last4: first?.last4 ?? "", note: "" });
   const [split, setSplit] = useState<Record<number, string>>({});
   // "Split across other claims on this PO" is collapsed by default (Maria 2026-11-12); the server lists only the split targets (isSplitTarget).
   const [splitOpen, setSplitOpen] = useState(false);
@@ -292,7 +304,7 @@ function DoCell({ claim, refresh, onRefund }: { claim: ClaimRowApi; refresh: () 
   if (form === "contact") {
     return <ContactForm label={a.label} onCancel={() => setForm(null)} onSave={async (f) => { await call(a.taskKind === "follow_up_supplier" && a.taskId ? `/api/pos/claims/tasks/${a.taskId}/done` : `/api/pos/claims/${claim.id}/contacted`, f); setForm(null); }} />;
   }
-  const primary = a.kind === "task" && a.taskId ? () => void call(`/api/pos/claims/tasks/${a.taskId}/done`, a.taskKind === "review_suggestion" ? { decision: "open" } : {})
+  const primary = a.kind === "task" && a.taskId ? () => void call(`/api/pos/claims/tasks/${a.taskId}/done`, a.taskKind === "review_suggestion" ? { decision: "open" } : a.decision ? { decision: a.decision } : {})
     : a.kind === "contact" ? () => setForm("contact")
     : a.kind === "refund" ? () => onRefund(claim)
     : a.kind === "reopen" ? () => void call(`/api/pos/claims/${claim.id}/reopen`)
@@ -302,6 +314,9 @@ function DoCell({ claim, refresh, onRefund }: { claim: ClaimRowApi; refresh: () 
       <button type="button" className={a.kind === "detail" || a.taskKind === "review_suggestion" ? "btn" : "btn p"} onClick={primary} data-testid={`button-do-${claim.id}`}>{a.label}</button>
       {a.secondary === "dismiss" && a.taskId && <button type="button" className="lnk mut" style={{ marginLeft: 8 }} onClick={() => void call(`/api/pos/claims/tasks/${a.taskId}/done`, { decision: "dismiss" })} data-testid={`button-dismiss-${claim.id}`}>Dismiss</button>}
       {a.secondary === "snooze" && a.taskId && <button type="button" className="lnk mut" style={{ marginLeft: 8 }} onClick={() => void call(`/api/pos/claims/tasks/${a.taskId}/snooze`, { business_days: 5 })} title="Ask again in 5 business days" data-testid={`button-snooze-${claim.id}`}>Snooze</button>}
+      {a.secondary === "not_this" && a.taskId && <button type="button" className="lnk mut" style={{ marginLeft: 8 }} onClick={() => void call(`/api/pos/claims/tasks/${a.taskId}/done`, { decision: "not_this" })} data-testid={`button-not-this-${claim.id}`}>Not this claim</button>}
+      {a.secondary === "nothing" && a.taskId && <button type="button" className="lnk mut" style={{ marginLeft: 8 }} onClick={() => void call(`/api/pos/claims/tasks/${a.taskId}/done`, { decision: "nothing" })} data-testid={`button-nothing-${claim.id}`}>Nothing to do</button>}
+      {a.secondary === "set_outcome" && <button type="button" className="lnk mut" style={{ marginLeft: 8 }} onClick={() => navigate(`/claims/${claim.id}`)} data-testid={`button-set-outcome-${claim.id}`}>Set outcome</button>}
     </span>
   );
 }
@@ -370,11 +385,12 @@ function ClaimsList() {
             {groups.length === 0 && <div className="mut" style={{ padding: 12 }}>Nothing needs a hand.</div>}
             {groups.map((g) => (
               <section key={g.group} data-testid={`claims-group-${g.group}`}>
-                <div className="grp">{TASK_GROUP_LABELS[g.group]} <span>· {g.rows.length}{GROUP_HINTS[g.group] ? ` · ${GROUP_HINTS[g.group]}` : ""}</span></div>
+                <div className="grp">{TASK_GROUP_LABELS[g.group]} <span>· {g.rows.length}{groupHint(g.group, g.rows) ? ` · ${groupHint(g.group, g.rows)}` : ""}</span></div>
                 <ClaimRows rows={g.rows} onRow={(c) => navigate(`/claims/${c.id}`)} refresh={() => void load()} onRefund={setRefundFor} />
               </section>))}
           </div>)}
         {data && !needsAttention && <ClaimRows rows={rows} onRow={(c) => navigate(`/claims/${c.id}`)} refresh={() => void load()} onRefund={setRefundFor} />}
+        {data && needsAttention && <div className="mut" style={{ padding: "18px 12px 0", maxWidth: 900 }} data-testid="claims-emails-note">A matched refund email never shows here: it moves the claim straight to Waiting on refund to post. Every supplier reply does show here until you have read it. Feedback requests and "your case is resolved" notices on a closed claim are attached quietly.</div>}
       </div>
 
       {refundFor && (
@@ -410,13 +426,13 @@ function ClaimRows({ rows, onRow, refresh, onRefund }: { rows: ClaimRowApi[]; on
             <span className="chk" aria-hidden="true" />
             <span style={{ minWidth: 0 }} onClick={(e) => e.stopPropagation()}><span style={{ display: "block", ...ell }} title={`claim #${c.id} · ${c.supplier}`}><span className="mut num" data-testid={`claim-number-${c.id}`}>#{c.id}</span> {c.supplier}</span><Link href={`/purchase-orders/${c.po_id}`} className="num" style={{ display: "block", ...ell }} title={c.order_id}>{c.order_id}</Link></span>
             <span style={{ minWidth: 0 }}><span style={{ display: "block", ...ell }} title={p.main}>{p.main}</span><span className="mut" style={{ display: "block", ...ell }} title={p.sub}>{p.sub}</span></span>
-            <span>{CLAIM_KIND_LABELS[c.kind]}{c.status === "suggested" ? <span className="amb"> · {c.found_by === "email" ? "from email" : "suggested"}</span> : null}{c.outcome && c.status !== "suggested" ? <><br /><span className="mut">{CLAIM_OUTCOME_LABELS[c.outcome]}</span></> : null}</span>
+            <span>{isRefundSuggestion(c) ? "refund" : CLAIM_KIND_LABELS[c.kind]}{c.status === "suggested" ? <span className="amb"> · {c.found_by === "email" ? "from email" : "suggested"}</span> : null}{c.status === "closed" && c.bucket === "needs_attention" ? <span className="mut"> · closed</span> : null}{c.outcome && c.status !== "suggested" && c.status !== "closed" ? <><br /><span className="mut">{CLAIM_OUTCOME_LABELS[c.outcome]}</span></> : null}</span>
             <span className={`num${c.qty == null ? " amb" : ""}`} data-testid={`claim-qty-${c.id}`}>
               {c.qty == null ? "?" : fmtQty(c.qty)}{c.qty != null && c.ordered != null ? <span className="mut"> of {fmtQty(c.ordered)}</span> : null}
-              {c.qty == null && <span className="mut"> {qtyText(c) === QTY_UNKNOWN_LABEL ? "not known yet" : qtyText(c)}</span>}
+              {c.qty == null && <span className="mut"> {isRefundSuggestion(c) ? emailItemsText(c) : qtyText(c) === QTY_UNKNOWN_LABEL ? "not known yet" : qtyText(c)}</span>}
             </span>
-            <span className={`num${c.amount_owed == null ? " mut" : ""}`}>{money(c.amount_owed)}{c.status === "open" && c.remaining != null && c.remaining > 0.005 && c.received > 0 ? <span className="amb"> · {money(c.remaining)} left</span> : null}</span>
-            <span title={c.sentence}>{c.sentence}</span>
+            <span className={`num${c.amount_owed == null || c.status === "closed" ? " mut" : ""}`}>{c.status === "closed" ? `${money(c.remaining ?? 0)} left` : money(c.amount_owed)}{c.status === "open" && c.remaining != null && c.remaining > 0.005 && c.received > 0 ? <span className="amb"> · {money(c.remaining)} left</span> : null}</span>
+            <span title={c.sentence}><Sentence text={c.sentence} />{c.action.email ? <> · <a href={emailUrl(c.action.email)} target="_blank" rel="noreferrer" onClick={(e) => e.stopPropagation()} data-testid={`link-open-email-${c.id}`}>open email</a></> : null}</span>
             <span className={`num ${c.timed_out ? "amb" : "mut"}`} title={c.bucket_since ? `since ${fmtDate(c.bucket_since)}${c.due_at ? ` · timer runs out ${fmtDate(c.due_at)}` : ""}` : ""}>{c.days_in_bucket != null ? `${c.days_in_bucket} d` : "—"}</span>
             <span onClick={(e) => e.stopPropagation()}><DoCell claim={c} refresh={refresh} onRefund={onRefund} /></span>
           </div>);
@@ -524,15 +540,18 @@ const EVENT_TITLES: Record<string, string> = {
   return_shipped: "Return shipped", return_delivered: "Return delivered", supplier_confirmed: "Confirmed by supplier", refund_received: "Refund received", replacement_shipped: "Replacement shipped",
   replacement_arrived: "Replacement arrived", task_done: "Task done", amount_overridden: "$ owed overridden", remainder_written_off: "Remainder written off", reopened: "Reopened", closed: "Closed",
   converted: "Converted", timed_out: "Timed out", snoozed: "Snoozed", followed_up: "Followed up", checked: "Checked on it", reship_confirmed: "Reship order # confirmed", refund_short: "Refund short",
+  email_attached: "Email attached", email_review: "An email may belong to this claim", email_dismissed: "Not this claim",
 };
 /** The entries "Remove this entry" undoes (the server's REMOVABLE_EVENT_TYPES): the fact each records goes with it. */
-const REMOVABLE_EVENTS = ["reported", "followed_up", "checked", "supplier_reply", "supplier_confirmed", "refund_received", "outcome_set", "task_done", "timed_out"];
+const REMOVABLE_EVENTS = ["reported", "followed_up", "checked", "supplier_reply", "supplier_confirmed", "refund_received", "outcome_set", "task_done", "timed_out", "email_attached", "email_review", "email_dismissed", "label_saved"];
 /** One timeline entry (the mockup's `.tl` cells: date · dot · entry), editable in place (summary and date) and removable (the fact it records is undone with it). */
 function TimelineEntry({ e, call, current }: { e: ClaimDetailApi["events"][number]; call: (url: string, method: string, body?: unknown) => Promise<void>; current: boolean }) {
   const [editing, setEditing] = useState(false);
   const [removing, setRemoving] = useState(false);
   const [f, setF] = useState({ at: e.at.slice(0, 10), summary: e.summary ?? "" });
-  const title = EVENT_TITLES[e.type] ?? e.type.replace(/_/g, " ");
+  const amountLead = e.type === "supplier_confirmed" && e.gmail_message_id ? /^(\$[\d,.]+) · /.exec(e.summary ?? "") : null;
+  const title = `${EVENT_TITLES[e.type] ?? e.type.replace(/_/g, " ")}${amountLead ? ` · ${amountLead[1]}` : ""}`;
+  const note = amountLead ? (e.summary ?? "").slice(amountLead[0].length) : e.summary ?? "";
   const ok = ["refund_received", "supplier_confirmed", "closed", "replacement_arrived", "task_done", "reported", "supplier_reply", "followed_up", "checked", "reship_confirmed"].includes(e.type);
   return (
     <React.Fragment>
@@ -547,11 +566,11 @@ function TimelineEntry({ e, call, current }: { e: ClaimDetailApi["events"][numbe
           </div>
         ) : (
           <>
-            <div className="t">{title}<button type="button" className="ed" onClick={() => setEditing(true)} data-testid={`button-event-edit-${e.id}`}>edit</button>
+            <div className="t">{title}{e.gmail_message_id ? <span className="mut" style={{ fontWeight: 400 }}> · from email</span> : null}<button type="button" className="ed" onClick={() => setEditing(true)} data-testid={`button-event-edit-${e.id}`}>edit</button>
               {REMOVABLE_EVENTS.includes(e.type) && (removing
                 ? <span className="mut" style={{ fontSize: 11, marginLeft: 6 }}>remove this entry and undo what it records? <button type="button" className="lnk red" style={{ fontSize: 11 }} onClick={() => void call(`/api/pos/claims/events/${e.id}`, "DELETE").then(() => setRemoving(false))} data-testid={`button-event-remove-confirm-${e.id}`}>Remove</button> <button type="button" className="ed" onClick={() => setRemoving(false)}>cancel</button></span>
                 : <button type="button" className="ed" onClick={() => setRemoving(true)} data-testid={`button-event-remove-${e.id}`}>remove</button>)}</div>
-            {(e.summary || e.by_name) && <TimelineNote id={e.id} text={`${e.summary ?? ""}${e.by_name ? ` · ${e.by_name}` : ""}`} />}
+            {(e.summary || e.by_name || e.gmail_message_id) && <TimelineNote id={e.id} text={`${note}${e.by_name ? ` · ${e.by_name}` : ""}`} email={e.gmail_message_id ? { id: e.gmail_message_id, mailbox: e.mailbox ?? "" } : null} />}
           </>)}
       </div>
     </React.Fragment>
@@ -565,7 +584,7 @@ export const NOTE_CLAMP_LINES = 3;
  * character per line — the mockup's `.n` step-circle rule, width 24 px, caught the timeline's `.tl .n`; claims.css
  * now resets it). Long notes wrap; past 3 lines they are clamped with "more" / "less" — measured, not guessed.
  */
-function TimelineNote({ id, text }: { id: number; text: string }) {
+function TimelineNote({ id, text, email }: { id: number; text: string; email?: { id: string; mailbox: string } | null }) {
   const [expanded, setExpanded] = useState(false);
   const [clamped, setClamped] = useState(false);
   const ref = React.useRef<HTMLDivElement>(null);
@@ -573,7 +592,7 @@ function TimelineNote({ id, text }: { id: number; text: string }) {
   const clamp: React.CSSProperties = expanded ? {} : { display: "-webkit-box", WebkitLineClamp: NOTE_CLAMP_LINES, WebkitBoxOrient: "vertical", overflow: "hidden" };
   return (
     <div className="n" data-testid={`event-note-${id}`}>
-      <div ref={ref} style={{ overflowWrap: "anywhere", whiteSpace: "pre-wrap", ...clamp }}>{text}</div>
+      <div ref={ref} style={{ overflowWrap: "anywhere", whiteSpace: "pre-wrap", ...clamp }}>{text}{email ? <>{text ? " · " : ""}<a href={emailUrl(email)} target="_blank" rel="noreferrer" data-testid={`link-event-open-email-${id}`}>open email</a></> : null}</div>
       {(clamped || expanded) && <button type="button" className="lnk mut" style={{ fontSize: 11 }} onClick={() => setExpanded((v) => !v)} data-testid={`button-event-note-more-${id}`}>{expanded ? "less" : "more"}</button>}
     </div>
   );
@@ -620,6 +639,10 @@ function ClaimDetailPage({ id }: { id: number }) {
   };
   const canMerge = d.other_open_claims.length > 0;
   const events = [...d.events].sort((a, b) => b.at.localeCompare(a.at) || b.id - a.id);
+  // Linked › Emails: every email on the timeline (newest first); the banner: an open review_email_match task (rows 2 / 7)
+  const emails = events.filter((e) => e.gmail_message_id && e.type !== "email_review" && e.type !== "email_dismissed");
+  const timeline = events.filter((e) => e.type !== "email_review"); // the pending "may belong" entry is the banner above the timeline
+  const pendingEmail = c.tasks.find((t) => t.kind === "review_email_match" && !t.done_at) ?? null;
   const sectionLine = { borderTop: "1px solid #2a2824", paddingTop: 12, marginTop: 12 } as const;
   return (
     <div className="cl" data-testid="claim-detail">
@@ -677,7 +700,7 @@ function ClaimDetailPage({ id }: { id: number }) {
               <span className="mut">Received</span><span className="v num">{money(c.received)}</span>
               <span className="mut">Remaining</span><span className={`v num${c.remaining != null && c.remaining > 0 && open ? " amb" : ""}`} data-testid="claim-remaining">{money(c.remaining)}</span>
               <span className="mut">Outcome</span>
-              <span className={`v${c.outcome ? "" : " mut"}`} data-testid="claim-outcome">{c.outcome ? <>{CLAIM_OUTCOME_LABELS[c.outcome]}{c.outcome_amount != null ? <span className="num"> {money(c.outcome_amount)}</span> : ""}{open && <button type="button" className="ed" onClick={() => void call(`/api/pos/claims/${c.id}/clear-outcome`, "POST", {})} data-testid="button-claim-clear-outcome">clear</button>}</> : "not known yet"}</span>
+              <span className={`v${c.outcome ? "" : " mut"}`} data-testid="claim-outcome">{c.outcome ? <>{CLAIM_OUTCOME_LABELS[c.outcome]}{c.outcome_amount != null ? <span className="num"> {money(c.outcome_amount)}</span> : ""}{c.email_confirmed ? <span className="mut"> · from email</span> : null}{open && <button type="button" className="ed" onClick={() => void call(`/api/pos/claims/${c.id}/clear-outcome`, "POST", {})} data-testid="button-claim-clear-outcome">clear</button>}</> : "not known yet"}</span>
               <span className="mut">Return needed</span>
               <span className={`v${c.return_required ? "" : " mut"}`}><label style={{ display: "inline-flex", alignItems: "center", gap: 6 }}><input type="checkbox" checked={c.return_required} disabled={!open} onChange={(e) => void call(`/api/pos/claims/${c.id}`, "PATCH", { return_required: e.target.checked })} data-testid="checkbox-claim-return" />{c.return_required ? "yes" : "no"}</label></span>
               <span className="mut">Found</span>
@@ -695,7 +718,7 @@ function ClaimDetailPage({ id }: { id: number }) {
               {c.ui_steps.map((s) => (
                 <div key={s.key} className={`step${s.done ? " ok" : s.current ? " on" : ""}`} data-testid={`step-${s.key}`} data-done={s.done} data-current={s.current} data-handler={s.handler.type}>
                   <span className="m">{s.done ? "✓" : s.current ? "›" : ""}</span>
-                  <button type="button" disabled={s.handler.type === "none" || (!open && c.status !== "suggested")} onClick={() => openStep(s)} title={s.handler.type === "none" ? s.handler.why : "set or change"} data-testid={`button-step-${s.key}`}>{s.current && s.todo ? s.todo : s.label}{s.at ? <span className="mut"> {fmtMD(s.at)}</span> : null}</button>
+                  <button type="button" disabled={s.handler.type === "none" || (!open && c.status !== "suggested")} onClick={() => openStep(s)} title={s.handler.type === "none" ? s.handler.why : "set or change"} data-testid={`button-step-${s.key}`}>{s.current && s.todo ? s.todo : s.label}{s.at ? <span className="mut"> {fmtMD(s.at)}{(s.key === "confirmed" && c.email_confirmed) || (s.key === "answered" && c.email_replied) ? " · from email" : ""}</span> : null}</button>
                 </div>))}
             </div>
           </div>
@@ -705,7 +728,7 @@ function ClaimDetailPage({ id }: { id: number }) {
             <div className="kv" style={{ gridTemplateColumns: "90px 1fr" }}>
               <span className="mut">PO</span><span style={{ minWidth: 0, ...ell }}><Link href={`/purchase-orders/${c.po_id}`} className="num">{c.order_id}</Link> · {d.po.closed_at ? "closed" : "open"}{d.linked.po_received_individual != null ? ` · ${fmtQty(d.linked.po_received_individual)} received` : ""}</span>
               <span className="mut">Velocity</span><span className={d.linked.velocity.length ? "" : "mut"} style={{ minWidth: 0, ...ell }}>{d.linked.velocity.length ? d.linked.velocity.map((v) => `inbound #${v.velocity_order_id} (${v.asin})`).join(", ") : "no order linked"}</span>
-              <span className="mut">Emails</span><span className="mut">none matched yet</span>
+              <span className="mut">Emails</span><span className={emails.length ? "" : "mut"} style={{ minWidth: 0 }} data-testid="claim-linked-emails">{emails.length ? emails.map((e) => <div key={e.id} style={ell}><a href={emailUrl({ id: e.gmail_message_id!, mailbox: e.mailbox ?? "" })} target="_blank" rel="noreferrer">{fmtMD(e.at)} {emailSubject(e.summary)}</a></div>) : "none matched yet"}</span>
               <span className="mut">Tracking</span><span className={d.linked.po_tracking.length ? "" : "mut"} style={{ minWidth: 0 }}>{d.linked.po_tracking.length ? d.linked.po_tracking.map((t) => <div key={t.id} className="num" style={ell} title={`${t.carrier} ${t.tracking_number}`}>{t.carrier} {t.tracking_number} <span className="mut" style={{ fontFamily: "Inter,system-ui,sans-serif" }}>{t.delivered_at ? `delivered ${fmtMD(t.delivered_at)}` : t.carrier_status?.replace(/_/g, " ") ?? ""}</span></div>) : "none"}</span>
               <span className="mut">Documents</span><span className={d.linked.documents.length ? "" : "mut"} style={{ minWidth: 0, ...ell }}>{d.linked.documents.length ? d.linked.documents.map((x) => x.file_name).join(", ") : "none"}</span>
               {c.alt_order_ids && <><span className="mut">Alt order #s</span><span className="num" style={ell}>{c.alt_order_ids}</span></>}
@@ -716,10 +739,20 @@ function ClaimDetailPage({ id }: { id: number }) {
         {/* Middle: the timeline with the inline form band */}
         <div className="card" style={{ padding: 0, minWidth: 0 }} data-testid="claim-timeline-card">
           <div style={{ padding: "14px 16px", borderBottom: "1px solid #2a2824", display: "flex", alignItems: "center", gap: 12 }}><span className="ct" style={{ marginBottom: 0 }}>Timeline</span><span className="mut">newest first · every entry editable</span></div>
+          {pendingEmail && (
+            <div style={{ padding: "14px 16px", borderBottom: "1px solid #2a2824", background: "#1b1a18" }} data-testid="claim-email-banner">
+              <div style={{ fontWeight: 500, marginBottom: 6 }}>An email may belong to this claim</div>
+              <div style={{ color: "#a39f96", marginBottom: 10 }}>{fmtMD(String(pendingEmail.payload?.date ?? pendingEmail.created_at))} · {String(pendingEmail.payload?.from ?? "")} · {emailSubject(String(pendingEmail.payload?.subject ?? ""))}{pendingEmail.payload?.amount != null ? <> · <span className="num" style={{ color: "#e6e3dc" }}>{money(Number(pendingEmail.payload.amount))}</span></> : null} · {pendingEmail.payload?.last4 ? `"order ending in ${pendingEmail.payload.last4}"` : "no order # in the email"}{pendingEmail.gmail_message_id ? <> · <a href={emailUrl({ id: pendingEmail.gmail_message_id, mailbox: pendingEmail.mailbox ?? "" })} target="_blank" rel="noreferrer" data-testid="link-banner-open-email">open email</a></> : null}</div>
+              <div style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" }}>
+                <button type="button" className="btn p" onClick={() => void call(`/api/pos/claims/tasks/${pendingEmail.id}/done`, "POST", { decision: "attach" })} data-testid="button-banner-attach">Attach</button>
+                <button type="button" className="btn" onClick={() => void call(`/api/pos/claims/tasks/${pendingEmail.id}/done`, "POST", { decision: "not_this" })} data-testid="button-banner-not-this">Not this claim</button>
+                <span className="mut">{pendingEmail.payload?.kind === "refund" ? "Attach confirms the refund on this claim. Nothing else changes until you say so." : "Attach adds it to the timeline as a supplier reply. Nothing else changes until you say so."}</span>
+              </div>
+            </div>)}
           {slot && <div style={{ padding: "14px 16px", borderBottom: "1px solid #2a2824", background: "#1b1a18" }} data-testid="claim-slot"><SlotForm slot={slot} d={d} call={call} close={() => setSlot(null)} reload={() => void load()} /></div>}
           <div style={{ padding: 16 }} data-testid="claim-timeline">
             <div className="tl">
-              {events.map((e, i) => <TimelineEntry key={e.id} e={e} call={call} current={i === 0 && open} />)}
+              {timeline.map((e, i) => <TimelineEntry key={e.id} e={e} call={call} current={i === 0 && open} />)}
               <div className="d num">{fmtMD(c.order_date)}</div><div className="dot" /><div className="e"><div className="t">PO placed <span className="mut" style={{ fontWeight: 400 }}>· {c.supplier}</span></div></div>
             </div>
           </div>
@@ -731,12 +764,13 @@ function ClaimDetailPage({ id }: { id: number }) {
             {cardTitle("Refunds")}
             <div className="kv" style={{ gridTemplateColumns: "1fr auto auto" }} data-testid="claim-refunds">
               <span className="mut">Method</span><span className="mut">Applied</span><span className="mut">Date</span>
-              {c.refunds.length === 0 && <span className="mut" style={{ gridColumn: "1 / 4", padding: "6px 0" }}>none yet</span>}
+              {c.refunds.length === 0 && <span className="mut" style={{ gridColumn: "1 / 4", padding: "6px 0" }}>{c.email_confirmed && c.supplier_confirmed_at ? `none received yet · supplier confirmed ${money(c.outcome_amount ?? c.remaining)} on ${fmtMD(c.supplier_confirmed_at)}` : "none yet"}</span>}
               {c.refunds.map((r) => <React.Fragment key={r.id}><span data-testid={`claim-refund-${r.id}`} style={ell}>{(r.method ?? "refund").replace("_", " ")}</span><span className="num">{money(r.amount_applied ?? r.amount)}</span><span className="num">{fmtMD(r.refunded_at)}</span></React.Fragment>)}
               <span style={{ borderTop: "1px solid #2a2824", paddingTop: 8 }}>Remaining</span><span className={`num${c.remaining != null && c.remaining > 0 && open ? " amb" : ""}`} style={{ borderTop: "1px solid #2a2824", paddingTop: 8 }}>{money(c.remaining)}</span><span style={{ borderTop: "1px solid #2a2824" }} />
             </div>
             {open && <div style={{ marginTop: 10, display: "flex", gap: 8, flexWrap: "wrap" }}><button type="button" className="btn" onClick={() => setSlot({ kind: "refund" })} data-testid="button-claim-refund-received">+ Refund received</button>
               {c.remaining != null && c.remaining > 0 && c.received > 0 && <button type="button" className="btn" onClick={() => setSlot({ kind: "remainder" })} data-testid="button-claim-write-off-remainder">Write off remainder</button>}</div>}
+            {open && c.email_confirmed && c.refunds.length === 0 && c.outcome_amount != null && <div className="mut" style={{ marginTop: 8 }} data-testid="claim-refund-prefill">Prefilled from the email: {money(c.outcome_amount)} to {(c.outcome_detail ?? "card").replace(/ · from email$/, "")}. You tick it when you see the money.</div>}
           </div>
 
           <div className="card" data-testid="claim-next">
@@ -767,3 +801,6 @@ export default function Claims() {
   const id = params.id ? Number(params.id) : null;
   return id && Number.isFinite(id) ? <ClaimDetailPage id={id} /> : <ClaimsList />;
 }
+
+/** The subject an email-made entry quotes ("…" inside the summary), else the summary itself. */
+function emailSubject(summary: string | null | undefined): string { const m = /"([^"]+)"/.exec(summary ?? ""); return m ? m[1] : (summary ?? ""); }

@@ -1,0 +1,22 @@
+{
+ "id": "fx-row6-return-label",
+ "mailbox": "orders@coastalqualitygoods.com",
+ "threadId": null,
+ "direction": "in",
+ "forwarded": false,
+ "to": "orders@coastalqualitygoods.com",
+ "toDomain": "coastalqualitygoods.com",
+ "attachments": [
+  {
+   "filename": "return-label.pdf",
+   "mimeType": "application/pdf",
+   "attachmentId": "att-1",
+   "size": 2048
+  }
+ ],
+ "from": "zz Test <help@zz-test.com>",
+ "fromDomain": "zz-test.com",
+ "date": "2026-11-10T12:00:00.000Z",
+ "subject": "Drop off your return at FedEx by Mon, Nov 30",
+ "text": "Your return for order ZZ4471188 is ready.\nPrint the attached label and drop the package at FedEx by Nov 30.\nRefund amount $5.97 to card ending in 6830."
+}

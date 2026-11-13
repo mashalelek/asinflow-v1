@@ -1,0 +1,15 @@
+{
+ "id": "fx-row8-feedback-quiet",
+ "mailbox": "orders@coastalqualitygoods.com",
+ "threadId": null,
+ "direction": "in",
+ "forwarded": false,
+ "to": "orders@coastalqualitygoods.com",
+ "toDomain": "coastalqualitygoods.com",
+ "attachments": [],
+ "from": "zz Test <noreply@zz-test.com>",
+ "fromDomain": "zz-test.com",
+ "date": "2026-11-13T11:00:00.000Z",
+ "subject": "How did we do? Rate your order ZZ4471188",
+ "text": "Tell us about your experience with order ZZ4471188. Take the survey."
+}

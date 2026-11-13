@@ -1,0 +1,15 @@
+{
+ "id": "fx-row9-maria-to-supplier",
+ "mailbox": "orders@coastalqualitygoods.com",
+ "threadId": "thr-1",
+ "direction": "sent",
+ "forwarded": false,
+ "to": "zz Test Support <support@zz-test.com>",
+ "toDomain": "zz-test.com",
+ "attachments": [],
+ "from": "Coastal Quality Goods <orders@coastalqualitygoods.com>",
+ "fromDomain": "coastalqualitygoods.com",
+ "date": "2026-11-11T16:20:00.000Z",
+ "subject": "Order ZZ4471188 \u2014 1 unit missing",
+ "text": "Hello,\nOrder ZZ4471188 arrived with 1 unit missing (UPS shows the box was light). Can you send the missing unit or refund it?\nThanks,\nMaria"
+}

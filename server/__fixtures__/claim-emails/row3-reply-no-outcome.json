@@ -1,0 +1,15 @@
+{
+ "id": "fx-row3-reply-no-outcome",
+ "mailbox": "orders@coastalqualitygoods.com",
+ "threadId": "thr-1",
+ "direction": "in",
+ "forwarded": false,
+ "to": "orders@coastalqualitygoods.com",
+ "toDomain": "coastalqualitygoods.com",
+ "attachments": [],
+ "from": "zz Test Support <support@zz-test.com>",
+ "fromDomain": "zz-test.com",
+ "date": "2026-11-12T09:15:00.000Z",
+ "subject": "Re: Order ZZ4471188 \u2014 1 unit missing",
+ "text": "Hello,\nWe have opened case 08841127 and will get back to you.\nBest,\nzz Test Support\n\nOn Nov 11 wrote:\n> Order ZZ4471188 arrived with 1 unit missing."
+}

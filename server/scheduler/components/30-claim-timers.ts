@@ -14,10 +14,12 @@ import { sweepClaimTimers } from "../../claim-buckets";
 import { sweepSuggestions } from "../../claim-suggestions";
 import { ingestCancellations } from "../../cancellation-emails";
 import { gmailClient } from "../../gmail-client";
+import { ingestClaimEmails } from "../../claim-emails";
+import { driveClient } from "../../drive-client";
 import type { ComponentDef, ComponentContext, ComponentResult } from "../types";
 
 /** Test seam. */
-export const claimTimerDeps = { sweep: sweepClaimTimers, suggest: sweepSuggestions, cancellations: ingestCancellations, gmail: gmailClient };
+export const claimTimerDeps = { sweep: sweepClaimTimers, suggest: sweepSuggestions, cancellations: ingestCancellations, gmail: gmailClient, emails: ingestClaimEmails, drive: driveClient };
 
 export const claimTimers: ComponentDef = {
   n: 30, key: "30_claim_timers", name: "Claim timers", tier: "hourly", kind: "account",
@@ -44,6 +46,18 @@ export const claimTimers: ComponentDef = {
       counts.cancellation_errors = 1;
     }
     if (s.created || emails) ctx.log(`claim suggestions: ${s.created} from tracking / Velocity, ${emails} from cancellation emails`);
+    // Supplier emails (commit 6, §3.11): refund / credit confirmations, replies, labels, Maria's own emails — the rows of the table.
+    try {
+      let drive: ReturnType<typeof driveClient> | null = null;
+      try { drive = claimTimerDeps.drive(); } catch { drive = null; }
+      const m = await claimTimerDeps.emails({ query: ctx.query, deps: { gmailFor: (mb) => claimTimerDeps.gmail(mb), drive }, now, log: ctx.log });
+      counts.claim_emails_scanned = m.scanned; counts.claim_emails_applied = m.applied; counts.claim_email_ai_calls = m.ai_calls;
+      for (const r of m.rows) if (r.applied && !/^already|^nothing/.test(r.applied)) outcomes[`email row ${r.row} ${r.gmail_message_id}`] = `${r.applied}`.slice(0, 200);
+      if (m.applied) ctx.log(`claim emails: ${m.applied} applied of ${m.scanned} scanned (${Object.entries(m.counts).map(([k, v]) => `row ${k}: ${v}`).join(", ")})`);
+    } catch (e: any) {
+      outcomes._claim_emails = `error: ${e?.message ?? e}`;
+      counts.claim_email_errors = 1;
+    }
     return { counts, outcomes };
   },
 };

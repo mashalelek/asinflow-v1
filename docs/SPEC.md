@@ -6253,6 +6253,24 @@ goes to …") became a real filter condition — the filter ignored it before.
 
 ### Supplier claims (claims commits 1–2, Maria 2026-11-09 / 2026-11-10; migrations 101–102; patch `docs/claude_spec-patch-supplier-claims.md`)
 
+> **Supplier emails (commit 6, 2026-11-13, patch §3.11 — the acceptance table is the spec; the mockups
+> `docs/mockups/claims-list-emails-2026-11-13.html` / `claim-detail-emails-2026-11-13.html` are the UI):**
+> `server/claim-emails.ts` reads the watched mailboxes (orders@ received + Sent, maria@ Sent) in component 30 after the
+> commit 5 finders and in `npm run claims:emails` (row 10, dry run by default). Rows: 1 an exact refund / credit email
+> confirms the open claim by itself (a suggested one opens first) — outcome, `supplier_confirmed_at`, the refund row
+> prefilled (`outcome_amount` / `outcome_detail`), no task, Received stays Maria's tick; 2 / 7 not sure → `review_email_match`
+> (Attach / Not this claim; row 7 = an unknown sender naming the order #, with the detail's banner); 3 a reply with no
+> outcome → `read_reply` (Keep waiting / Set outcome; Haiku reads free text from a known supplier or an attached thread,
+> recorded in tests); 4 a reply stating an outcome → `confirm_outcome` ("→ replacement?"); 5 a refund on a PO with no
+> claim, or a supplier reply on one, → a suggested claim; 6 a return label → a `return_label` document on the claim;
+> 8 an email on a closed / dismissed claim → `closed_claim_email` (Reopen / Nothing to do; feedback, case-resolved and
+> return-progress notices attach quietly); 9 Maria's own email to the supplier → Contacted supplier · from email.
+> Every email-made entry and task carries "from email" and **open email** (`GET /api/claims/emails/:mailbox/:id`);
+> Remove undoes what it set. An email is applied once (events / tasks / `source_email_id` by gmail id); Not this claim /
+> Nothing to do leave an `email_dismissed` entry so it is never proposed to that claim again. Short order #s count in
+> a reply's subject after "Order" from the supplier's own domain; cancellation wording goes to commit 5; order
+> confirmations and gift-card wording are never refunds (patch §3.11 notes 1–5).
+
 A **supplier claim** is the one record for a supplier problem on a PO line (D1): **missing** · **damaged** ·
 **wrong_item** · **expired** · **never_received** · **cant_sell** · **canceled** · **returned** (D2). It replaces
 the supplier defects of migration 094 (`po_line_defects` → `supplier_claims`, every column widened per the patch

@@ -1,0 +1,15 @@
+{
+ "id": "fx-row2-target-last4",
+ "mailbox": "orders@coastalqualitygoods.com",
+ "threadId": null,
+ "direction": "in",
+ "forwarded": false,
+ "to": "orders@coastalqualitygoods.com",
+ "toDomain": "coastalqualitygoods.com",
+ "attachments": [],
+ "from": "Target <orders@oe.target.com>",
+ "fromDomain": "oe.target.com",
+ "date": "2026-11-12T15:10:00.000Z",
+ "subject": "We've refunded your order ending in 1188",
+ "text": "Your refund of $19.98 for your order ending in 1188 has been processed to your original form of payment.\nAllow 5-7 business days for it to post."
+}

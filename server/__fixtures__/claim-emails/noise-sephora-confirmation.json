@@ -1,0 +1,15 @@
+{
+ "id": "fx-noise-sephora-confirmation",
+ "mailbox": "orders@coastalqualitygoods.com",
+ "threadId": null,
+ "direction": "in",
+ "forwarded": false,
+ "to": "orders@coastalqualitygoods.com",
+ "toDomain": "coastalqualitygoods.com",
+ "attachments": [],
+ "from": "Sephora <beauty@beauty.sephora.com>",
+ "fromDomain": "beauty.sephora.com",
+ "date": "2026-11-09T12:00:00.000Z",
+ "subject": "Your Sephora order: #841323025171",
+ "text": "Thanks for your order!\nPaid with gift card $8.00\nOrder total $8.00"
+}

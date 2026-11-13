@@ -18,6 +18,15 @@ units wording), run first.*
 
 ## 0. Change log
 
+**2026-11-13 (Maria) — commit 6, supplier emails (§3.11):** acceptance
+table and mockups approved. Every supplier reply lands in Needs attention
+until read; an exact-match refund email sets the outcome and confirms by
+itself; an email on a closed claim asks for review (feedback requests and
+"case resolved" notices excepted); Maria's own email to a supplier records
+Contacted supplier. Three task kinds added (`read_reply`,
+`review_email_match`, `closed_claim_email`). v2, not built: AI drafts the
+emails to suppliers, sent only after Maria approves each one.
+
 **2026-11-09 (Maria):**
 - **Every manual action is a task** with a checkbox, in one of five
   groups; a claim's **bucket is derived** from its open tasks and timers
@@ -446,6 +455,112 @@ status, `est_delivery_date`, timestamped scans, a return flag and
    click tracker did not redirect on the first pass and resolved on a
    second, idempotent pass — a transient miss, not a parser gap.
 
+### 3.11 Supplier emails (commit 6; Maria 2026-11-13)
+
+**The mockups are the UI:** `docs/mockups/claims-list-emails-2026-11-13.html`
+and `docs/mockups/claim-detail-emails-2026-11-13.html` (the two approved
+Claims pages, same stylesheet, with the email-driven rows, entries and the
+one banner). Where a mockup and this text differ, the mockup wins.
+
+**Acceptance table** (approved; it is the test, filled in in the report):
+
+| # | Email arrives | AF does by itself | Maria sees | Maria does |
+|---|---|---|---|---|
+| 1 | Refund / credit confirmation; order # (incl. `alt_order_ids`) and amount within 1¢ match an open claim | Sets outcome = refund (card / gift card / credit per the email), stamps `supplier_confirmed_at`, prefills the refund row (method, amount) | Claim in **Waiting on refund to post**; timeline "Confirmed by supplier · $X · from email" with **open email** | Nothing until the money shows; then **Refund received** (always her tick) |
+| 2 | Same, but not sure: Target "order ending in NNNN", amount differs, no order # | Nothing | **Needs attention › Decide**: "Email M/D may be this claim's refund: … · $X · open email" | **Attach** (then row 1 applies) or **Not this claim** |
+| 3 | Supplier reply on an open claim, no outcome stated | Attaches it with a one-line summary; `last_supplier_reply_at` | **Needs attention › Supplier**: "Supplier replied M/D: "…" · open email" | **Keep waiting** (→ Waiting on supplier, timer restarts from the reply) or **Set outcome** |
+| 4 | Reply that states an outcome (reship / refund promised / can't help) | Same as 3 + suggests the outcome | **Needs attention › Decide**: "Supplier replied M/D: "…" → replacement?" | **Confirm outcome** (or pick another) |
+| 5 | Refund email for a PO with no claim | Suggested claim with the email's amount and items, quantity "?" when not stated | **Needs attention › Decide**: "refund · from email · no claim on this PO yet" | **Open claim** or **Dismiss** |
+| 6 | Return label attached (Walmart PDF) or linked | Saves the PDF as a PO document `return_label` with `claim_id` | Timeline "Return label received · from email"; Linked › Documents | Nothing yet (sending it to Velocity is commit 7) |
+| 7 | Unknown sender mentioning an open claim's order # | Nothing | Banner on the claim: "An email may belong to this claim" + a Decide row | **Attach** or **Not this claim** |
+| 8 | Email on a closed or dismissed claim | Attaches it to the timeline. Feedback / survey requests and "your case is resolved / closed" notices: attached quietly, no task | Everything else: **Needs attention**: "New email on a closed claim M/D: "…"" | **Reopen** or **Nothing to do** |
+| 9 | Maria's own email to a supplier (sent from, or forwarded through, the watched mailboxes) about an order with an open claim | Records Contacted supplier (date, channel email, first line as the note), completes `contact_supplier` / `follow_up_supplier`, starts the timer | Timeline "Contacted supplier · from email"; claim in Waiting on supplier | Nothing. No open claim on that order → nothing happens |
+| 10 | Backfill, last 90 days | Dry run: every email, the claim it would attach to, what it would set; nothing written | The report (CSV + counts per row above) | Approves; then live |
+
+Rules:
+- **Received is always Maria's tick** (D6). AF never sets an outcome on
+  its own except row 1 (the supplier's own refund / credit email, exact
+  match).
+- Every email-made entry carries "from email" and **open email**, and is
+  editable and removable like any other entry (Remove undoes what it set).
+- An email attaches to one claim. Several open claims on the PO: the one
+  whose items / amount the email names; otherwise row 2 / 7 (not sure).
+- Matching: order # incl. `alt_order_ids`; sender → supplier through the
+  domain map / aliases (commit 5); Target last-4 + supplier + amount +
+  30-day window is "not sure"; forwarded headers parsed (§7). Regex for
+  the known templates (§7), Haiku only for free text from a known
+  supplier or a thread already attached to a claim.
+- Noise never becomes a task: marketing, loyalty "credit", shipping
+  notices (the tracking parser's), order confirmations.
+- Three task kinds join §3.3: `read_reply` (Supplier; row 3),
+  `review_email_match` (Decide; rows 2, 7), `closed_claim_email` (Decide;
+  row 8). All three are active tasks (they place the claim in Needs
+  attention); ticking one never changes money or quantities by itself.
+  `confirm_outcome` (row 4) replaces `read_reply` when the reply states an
+  outcome: one row per reply, never two.
+- Keep waiting restarts the 5-business-day timer from the reply's date.
+- **v2 (not in this patch):** AI drafts the emails to suppliers (report,
+  follow-up, reply) from the claim's facts; Maria approves each before it
+  sends. Needs this commit's thread reading first. Outbound email stays
+  on hold until then.
+
+**Notes from the dry run (Maria 2026-11-13, approved; built in commit 6):**
+1. **Short order numbers.** The matcher never takes an order # under 6
+   characters from free text (too easy to hit by chance). In a reply from
+   the supplier's own domain a short id in the SUBJECT after "Order"
+   counts (`poByShortSubjectId`: Voltage 65705, Hardware World 8CMT9,
+   Golden Waffles 8307). The alias voltagesupply.com →
+   voltagecoffeesupply.com is built in (`SUPPLIER_EMAIL_ALIASES`; the
+   settings domain map still wins). A Michaels case thread, which carries
+   no order #, matches through the thread Maria's own email started
+   (`threadPoMap`: a thread takes the one PO any message of it names).
+2. **An exact refund / credit email on a SUGGESTED claim** (row 1's rules:
+   order # incl. alternates + amount within 1¢) opens the claim and applies
+   row 1 — timeline "Opened from the supplier's refund email", then
+   "Confirmed by supplier · $X · from email". Anything less than exact
+   stays row 2 (the suggestion stays suggested; Attach opens it).
+3. **A supplier reply on a PO with no claim** becomes a suggested claim
+   under Decide: "Supplier email on a PO with no claim · M/D: "…" · open
+   email", Open claim / Dismiss (kind missing until Maria changes it,
+   quantity ?). Maria's own outgoing email on a PO with no claim still
+   does nothing.
+4. **Refund detection** ignores order confirmations and gift-card
+   purchase / payment wording — "Your Sephora order:", "Thank you for your
+   order", "Got it! Your order … confirmation", "e-gift card has been sent"
+   and the like are never a refund, whatever the body says (`ORDER_NOISE`;
+   the dry run's 5 false hits). Cancellation wording takes precedence over
+   refund wording: commit 5's finder owns those emails.
+5. **Row 9 watches the Sent folders of orders@ and maria@.** The service
+   account's delegation reads both (`WATCHED_MAILBOXES`); mpeters.cqg@ is
+   not a Workspace user and mashalelek@ is gmail.com, so neither is
+   readable. A forward from a Sent folder is read as the forwarded email
+   (incoming); only a genuine email to a supplier is row 9.
+
+**Built (commit 6, 2026-11-13):** `server/claim-emails.ts` (classify →
+plan → apply, the ingest), migration 112 (the three task kinds,
+`supplier_claim_tasks.gmail_message_id / mailbox / payload`,
+`supplier_claim_events.mailbox`, event types `email_attached` /
+`email_review` / `email_dismissed`, `po_prefill_log` kind `claim_email`),
+`GET /api/claims/emails/:mailbox/:id` (open email: the message rendered as
+a page), component 30 runs the ingest after the commit 5 finders (hourly;
+a watermark per mailbox, 6 h overlap, an email on a claim is never applied
+twice), `npm run claims:emails -- [--prod] [--days N] [--live]` is row 10.
+Row 1's prefilled refund row = `outcome_amount` / `outcome_detail` ("card
+••6830 · from email"); Refund received prefills from them. The decisions
+go through the task tick (`POST /api/pos/claims/tasks/:id/done` with
+`decision`: attach / not_this, keep, reopen / nothing). Keep waiting ticks
+the task with the reply's date, so the timer restarts from the reply.
+Remove on an email-made entry undoes what it set (`REMOVABLE_EVENT_TYPES`:
+a `supplier_confirmed` from email clears the confirmation and the Refund
+received tick; a `supplier_reply` from email re-opens what it closed and
+removes its read_reply / confirm_outcome task; `email_review` removes its
+task; `label_saved` detaches the document from the claim, the file stays).
+Tests: `server/claim-emails.test.ts` (classify / match on the scrubbed
+fixtures under `server/__fixtures__/claim-emails/`, recorded Haiku answers)
+and `server/claim-emails.db.test.ts` (every table row end to end on the
+real schema, rolled back, the printed table is the report's; plus two open
+claims on one PO, a duplicate email, an email on a dismissed claim).
+
 ## 4. Data
 
 Verified against migrations 028–099. Stored base for every quantity: Individual units (D17).
@@ -774,8 +889,10 @@ Prerequisite: `claude_spec-patch-quantity-names.md` (labels only).
 5. Auto-found: missing (D8), never_received (§3.1) as suggestions;
    *(built 2026-11-12, see §3.1 "Built" — dry run on production, live waits for Maria)*
    cancellation emails → suggested canceled claims.
-6. Email: supplier replies, refund / credit confirmations (incl. Target
+6. Email (§3.11, acceptance table + mockups approved 2026-11-13): supplier replies, refund / credit confirmations (incl. Target
    fallback), labels in replies (regex first, Haiku for free text).
+   **Built 2026-11-13 (§3.11 "Built"; migration 112). Dry run of the last 90 days before the live backfill (row 10);
+   live waits for Maria.**
 7. Returns: label → document + return tracking + Velocity / shipment
    buckets.
 8. Replacements (`alt_order_ids`, tracking ↔ claim) + §3.8

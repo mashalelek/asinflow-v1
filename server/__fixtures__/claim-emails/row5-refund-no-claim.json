@@ -1,0 +1,15 @@
+{
+ "id": "fx-row5-refund-no-claim",
+ "mailbox": "orders@coastalqualitygoods.com",
+ "threadId": null,
+ "direction": "in",
+ "forwarded": false,
+ "to": "orders@coastalqualitygoods.com",
+ "toDomain": "coastalqualitygoods.com",
+ "attachments": [],
+ "from": "zz Test <help@zz-test.com>",
+ "fromDomain": "zz-test.com",
+ "date": "2026-11-11T18:40:00.000Z",
+ "subject": "You're getting a $9.94 refund: [zz onion seasoning 7 oz]",
+ "text": "We've issued a refund of $9.94 for your order.\nOrder# ZZ4471199\nzz onion seasoning 7 oz \u00b7 Qty 1\nRefund to card ending in 6830"
+}

@@ -35,7 +35,11 @@ export interface ClaimRow {
   /** The line's packs, for the Product / ASIN equivalents of the Individual qty (NULL when not known). */
   product_pack: number | null; asin_pack: number | null; qty_basis: string | null;
   refunds: Array<{ id: number; amount: number | null; amount_applied: number | null; refunded_at: string | null; method: string | null }>;
-  tasks: Array<{ id: number; kind: ClaimTaskKind; group: string; reason: string | null; created_at: string; due_at: string | null; done_at: string | null; snoozed_until: string | null }>;
+  tasks: Array<{ id: number; kind: ClaimTaskKind; group: string; reason: string | null; created_at: string; due_at: string | null; done_at: string | null; snoozed_until: string | null; /** An email-made task (claims commit 6): the email behind it and the facts its decision needs. */ gmail_message_id?: string | null; mailbox?: string | null; payload?: Record<string, unknown> | null }>;
+  /** The supplier's confirmation came from a refund / credit email (commit 6, row 1): the row reads "· from email". */
+  email_confirmed?: boolean;
+  /** A supplier reply came from an email (commit 6, rows 3 / 4): the "Supplier answers" step reads "· from email". */
+  email_replied?: boolean;
   /** Migration 101's conversion flags (supplier_claim_conversions), e.g. canceled_no_ordered_qty, qty_unknown, kind_unclear; empty for a claim made by hand. */
   conversion_flags: string[];
   /** The reason typed on Dismiss (the latest `dismissed` event's summary); null when none was typed or the claim is not dismissed. */
@@ -64,10 +68,12 @@ export async function loadClaims(query: QueryLike, where: { poId?: string; ids?:
             CASE WHEN l.qty_basis = 'product_legacy' THEN le.ordered_product ELSE le.ordered_individual END AS ordered,
             COALESCE((SELECT json_agg(json_build_object('id', r.id, 'amount', r.amount, 'amount_applied', x.amount_applied, 'refunded_at', r.refunded_at, 'method', r.method) ORDER BY r.id)
                         FROM supplier_claim_refunds x JOIN po_line_refunds r ON r.id = x.po_line_refund_id WHERE x.claim_id = c.id), '[]') AS refunds,
-            COALESCE((SELECT json_agg(json_build_object('id', t.id, 'kind', t.kind, 'group', t."group", 'reason', t.reason, 'created_at', t.created_at, 'due_at', t.due_at, 'done_at', t.done_at, 'snoozed_until', t.snoozed_until) ORDER BY t.id)
+            COALESCE((SELECT json_agg(json_build_object('id', t.id, 'kind', t.kind, 'group', t."group", 'reason', t.reason, 'created_at', t.created_at, 'due_at', t.due_at, 'done_at', t.done_at, 'snoozed_until', t.snoozed_until, 'gmail_message_id', t.gmail_message_id, 'mailbox', t.mailbox, 'payload', t.payload) ORDER BY t.id)
                         FROM supplier_claim_tasks t WHERE t.claim_id = c.id), '[]') AS tasks,
             COALESCE((SELECT array_agg(DISTINCT f) FROM supplier_claim_conversions k, unnest(k.flags) f WHERE k.claim_id = c.id), '{}') AS conversion_flags,
-            CASE WHEN c.status = 'dismissed' THEN (SELECT e.summary FROM supplier_claim_events e WHERE e.claim_id = c.id AND e.type = 'dismissed' ORDER BY e.id DESC LIMIT 1) END AS dismiss_reason
+            CASE WHEN c.status = 'dismissed' THEN (SELECT e.summary FROM supplier_claim_events e WHERE e.claim_id = c.id AND e.type = 'dismissed' ORDER BY e.id DESC LIMIT 1) END AS dismiss_reason,
+            EXISTS (SELECT 1 FROM supplier_claim_events e WHERE e.claim_id = c.id AND e.type = 'supplier_confirmed' AND e.gmail_message_id IS NOT NULL) AS email_confirmed,
+            EXISTS (SELECT 1 FROM supplier_claim_events e WHERE e.claim_id = c.id AND e.type = 'supplier_reply' AND e.gmail_message_id IS NOT NULL) AS email_replied
        FROM supplier_claims c JOIN purchase_orders p ON p.id = c.po_id LEFT JOIN po_line_items l ON l.id = c.po_line_item_id LEFT JOIN po_asins pa ON pa.id = l.po_asin_id
             LEFT JOIN po_line_expected le ON le.line_id = l.id
       WHERE ${cond} ORDER BY c.found_at, c.id`, params,
@@ -134,10 +140,18 @@ const dateOf = (v: unknown, field: string): string => { if (!/^\d{4}-\d{2}-\d{2}
 async function event(query: QueryLike, claimId: number, type: string, summary: string | null, by: number | null, refs: { po_line_refund_id?: number } = {}): Promise<void> {
   await query(`INSERT INTO supplier_claim_events (claim_id, type, summary, by, po_line_refund_id) VALUES ($1, $2, $3, $4, $5)`, [claimId, type, summary, by, refs.po_line_refund_id ?? null]);
 }
-export interface ClaimEvent { id: number; at: string; type: string; summary: string | null; by: number | null; by_name: string | null; po_line_refund_id: number | null; po_document_id: number | null; po_tracking_id: number | null }
+/** An event on the timeline (claim-emails.ts writes the "Opened from the supplier's refund email" entry through it). */
+export async function logClaimEvent(query: QueryLike, claimId: number, type: string, summary: string | null, by: number | null): Promise<void> { await event(query, claimId, type, summary, by); }
+const quoteSubject = (s: string) => `"${s.length > 90 ? `${s.slice(0, 87)}…` : s}"`;
+/** The latest event of a type on a claim gets the email (gmail id, mailbox) and, when given, a new summary — "from email" on the timeline. */
+export async function stampEventEmail(query: QueryLike, claimId: number, type: string, email: { id: string; mailbox: string }, summary?: string | null): Promise<void> {
+  await query(`UPDATE supplier_claim_events SET gmail_message_id = $3, mailbox = $4${summary !== undefined ? ", summary = $5" : ""} WHERE id = (SELECT id FROM supplier_claim_events WHERE claim_id = $1 AND type = $2 ORDER BY id DESC LIMIT 1)`,
+    summary !== undefined ? [claimId, type, email.id, email.mailbox, summary] : [claimId, type, email.id, email.mailbox]);
+}
+export interface ClaimEvent { gmail_message_id?: string | null; mailbox?: string | null; id: number; at: string; type: string; summary: string | null; by: number | null; by_name: string | null; po_line_refund_id: number | null; po_document_id: number | null; po_tracking_id: number | null }
 /** The timeline (§4.3), oldest first. */
 export async function loadClaimEvents(query: QueryLike, claimId: number): Promise<ClaimEvent[]> {
-  return ((await query(`SELECT e.id, e.at, e.type, e.summary, e.by, u.display_name AS by_name, e.po_line_refund_id, e.po_document_id, e.po_tracking_id
+  return ((await query(`SELECT e.id, e.at, e.type, e.summary, e.by, u.display_name AS by_name, e.po_line_refund_id, e.po_document_id, e.po_tracking_id, e.gmail_message_id, e.mailbox
                            FROM supplier_claim_events e LEFT JOIN users u ON u.id = e.by WHERE e.claim_id = $1 ORDER BY e.at, e.id`, [claimId])).rows as any[])
     .map((e) => ({ ...e, id: Number(e.id), at: e.at instanceof Date ? e.at.toISOString() : String(e.at), by: e.by == null ? null : Number(e.by), po_line_refund_id: e.po_line_refund_id == null ? null : Number(e.po_line_refund_id), po_document_id: e.po_document_id == null ? null : Number(e.po_document_id), po_tracking_id: e.po_tracking_id == null ? null : Number(e.po_tracking_id) }));
 }
@@ -146,7 +160,7 @@ export async function addTask(query: QueryLike, claimId: number, kind: ClaimTask
   await query(`INSERT INTO supplier_claim_tasks (claim_id, kind, "group", reason, qty) VALUES ($1, $2, $3, $4, $5) ON CONFLICT (claim_id, kind) WHERE done_at IS NULL DO NOTHING`, [claimId, kind, CLAIM_TASK_GROUP[kind], reason, qty]);
 }
 /** What a tick carries (§3.3 "Ticking it"): the report's date / channel / note, the reship order #, a suggestion's decision. */
-export interface DoneTaskBody { date?: string | null; channel?: string | null; note?: string | null; alt_order_id?: string | null; decision?: "open" | "dismiss" | null; reason?: string | null }
+export interface DoneTaskBody { date?: string | null; channel?: string | null; note?: string | null; alt_order_id?: string | null; /** review_suggestion: open / dismiss; review_email_match: attach / not_this; closed_claim_email: reopen / nothing (commit 6). */ decision?: "open" | "dismiss" | "attach" | "not_this" | "reopen" | "nothing" | null; reason?: string | null }
 
 /**
  * Tick a task. contact_supplier / follow_up_supplier record the report (date, channel, note → reported_at / reported_channel,
@@ -155,7 +169,7 @@ export interface DoneTaskBody { date?: string | null; channel?: string | null; n
  * setOutcome; enter_quantity through editClaim. Every other kind is a plain tick with its event.
  */
 export async function doneTask(query: QueryLike, taskId: number, userId: number | null, body: DoneTaskBody = {}): Promise<{ id: number; claim_id: number; po_id: string }> {
-  const t = (await query(`SELECT t.id, t.claim_id, t.kind, t.done_at, c.po_id, c.qty, c.status, c.reported_at FROM supplier_claim_tasks t JOIN supplier_claims c ON c.id = t.claim_id WHERE t.id = $1`, [taskId])).rows[0];
+  const t = (await query(`SELECT t.id, t.claim_id, t.kind, t.done_at, t.gmail_message_id, t.mailbox, t.payload, c.po_id, c.qty, c.status, c.reported_at, c.last_supplier_reply_at FROM supplier_claim_tasks t JOIN supplier_claims c ON c.id = t.claim_id WHERE t.id = $1`, [taskId])).rows[0];
   if (!t) throw new EditError(404, "task not found");
   const claimId = Number(t.claim_id), poId = String(t.po_id), kind = String(t.kind) as ClaimTaskKind;
   if (t.done_at) return { id: Number(t.id), claim_id: claimId, po_id: poId };
@@ -163,6 +177,22 @@ export async function doneTask(query: QueryLike, taskId: number, userId: number 
   if (kind === "enter_quantity" && t.qty == null) throw new EditError(400, "type the claim's quantity (Individual units) — that completes Enter quantity");
   if (kind === "refund_received") throw new EditError(400, "add the refund row (Refund received) — that is the tick");
   if (kind === "replacement_arrived") { await setOutcome(query, claimId, { outcome: "replacement", arrived: true }, userId); return { id: Number(t.id), claim_id: claimId, po_id: poId }; }
+  // Email-made tasks (commit 6, §3.11): the decision is the tick.
+  if (kind === "review_email_match") {
+    const dec = body.decision === "attach" ? "attach" : body.decision === "not_this" ? "not_this" : null;
+    if (!dec) throw new EditError(400, "decision must be attach or not_this");
+    await decideEmailMatch(query, { id: Number(t.id), claim_id: claimId, gmail_message_id: t.gmail_message_id ?? null, mailbox: t.mailbox ?? null, payload: t.payload ?? null }, dec, userId);
+  } else if (kind === "closed_claim_email") {
+    const dec = body.decision === "reopen" ? "reopen" : body.decision === "nothing" ? "nothing" : null;
+    if (!dec) throw new EditError(400, "decision must be reopen or nothing");
+    await decideClosedClaimEmail(query, { id: Number(t.id), claim_id: claimId, gmail_message_id: t.gmail_message_id ?? null, mailbox: t.mailbox ?? null, payload: t.payload ?? null }, dec, userId);
+  } else if (kind === "read_reply") {
+    // Keep waiting: the timer restarts from the reply's date (§3.11), so the tick carries that date
+    await query(`UPDATE supplier_claim_tasks SET done_at = COALESCE($3::timestamptz, now()), done_by = $2 WHERE id = $1 AND done_at IS NULL`, [taskId, userId, t.last_supplier_reply_at ?? null]);
+    await event(query, claimId, "task_done", `read_reply: keep waiting${body.note?.trim() ? ` — ${body.note.trim()}` : ""}`, userId);
+    await logEdits(query, poId, userId, "claim", String(claimId), [{ field: "task read_reply", old: "open", new: "done: keep waiting" }]);
+    return { id: Number(t.id), claim_id: claimId, po_id: poId };
+  }
   if (kind === "review_suggestion") {
     if (body.decision === "dismiss") { await dismissClaim(query, claimId, userId, body.reason ?? null); return { id: Number(t.id), claim_id: claimId, po_id: poId }; }
     if (body.decision !== "open") throw new EditError(400, "decision must be open or dismiss");
@@ -228,7 +258,14 @@ export async function recordContact(query: QueryLike, id: number, body: DoneTask
  * the summary (Needs attention › Decide, "Supplier replied 11/2: … → outcome?").
  */
 export interface ReplyBody { date?: string | null; channel?: string | null; summary?: string | null; outcome?: string | null; amount?: number | string | null; detail?: string | null }
-export async function recordReply(query: QueryLike, id: number, body: ReplyBody, userId: number | null): Promise<{ id: number; po_id: string }> {
+export interface ReplyOpts {
+  /** The task the reply opens when it states no outcome (commit 6): read_reply (a reply to read — rows 3, 7's attach) or confirm_outcome (the hand form's default); "none" for neither. */
+  task?: "read_reply" | "confirm_outcome" | "none";
+  /** Row 4: the outcome the email states, shown on the confirm_outcome task ("→ replacement?") — never set by itself (Received is always Maria's tick). */
+  suggestedOutcome?: string | null;
+  suggestedAmount?: number | null;
+}
+export async function recordReply(query: QueryLike, id: number, body: ReplyBody, userId: number | null, opts: ReplyOpts = {}): Promise<{ id: number; po_id: string }> {
   const d = await claimRow(query, id);
   if (d.status !== "open" && d.status !== "suggested") throw new EditError(400, "only an open claim can take a supplier reply");
   const date = body.date && /^\d{4}-\d{2}-\d{2}$/.test(body.date) ? body.date : new Date().toISOString().slice(0, 10);
@@ -236,7 +273,7 @@ export async function recordReply(query: QueryLike, id: number, body: ReplyBody,
   const summary = String(body.summary ?? "").trim() || null;
   const at = `${date}T12:00:00Z`;
   await query(`UPDATE supplier_claims SET last_supplier_reply_at = $2, status = CASE WHEN status = 'suggested' THEN 'open' ELSE status END, updated_at = now() WHERE id = $1`, [id, at]);
-  await query(`UPDATE supplier_claim_tasks SET done_at = now(), done_by = $2 WHERE claim_id = $1 AND done_at IS NULL AND kind IN ('follow_up_supplier', 'check_on_it', 'confirm_outcome')`, [id, userId]);
+  await query(`UPDATE supplier_claim_tasks SET done_at = now(), done_by = $2 WHERE claim_id = $1 AND done_at IS NULL AND kind IN ('follow_up_supplier', 'check_on_it', 'confirm_outcome', 'read_reply')`, [id, userId]);
   await event(query, id, "supplier_reply", [channel, date, summary].filter(Boolean).join(" · ") || null, userId);
   await logEdits(query, String(d.po_id), userId, "claim", String(id), [{ field: "supplier replied", old: d.last_supplier_reply_at ? String(d.last_supplier_reply_at).slice(0, 10) : null, new: `${date}${channel ? ` · ${channel}` : ""}${summary ? ` · ${summary}` : ""}` }]);
   const outcome = String(body.outcome ?? "").trim();
@@ -244,11 +281,58 @@ export async function recordReply(query: QueryLike, id: number, body: ReplyBody,
     if (outcome === "write_off") await setOutcome(query, id, { outcome: "write_off", reason: summary ?? "the supplier declined" }, userId);
     else if (outcome === "replacement") await setOutcome(query, id, { outcome: "replacement" }, userId);
     else await setOutcome(query, id, { outcome: outcome as "refund_card", amount: body.amount ?? null, detail: body.detail ?? null }, userId);
-  } else if (!d.outcome) {
+  } else if (!d.outcome && opts.task !== "none") {
     const md = `${Number(date.slice(5, 7))}/${Number(date.slice(8, 10))}`;
-    await addTask(query, id, "confirm_outcome", `Supplier replied ${md}${summary ? `: "${summary}"` : ""} → outcome?`);
+    const task = opts.task ?? "confirm_outcome";
+    const label = opts.suggestedOutcome === "write_off" ? "write-off" : opts.suggestedOutcome?.replace("_", " ") ?? null;
+    if (task === "read_reply") await addTask(query, id, "read_reply", `Supplier replied ${md}${summary ? `: "${summary}"` : ""}`);
+    else await addTask(query, id, "confirm_outcome", `Supplier replied ${md}${summary ? `: "${summary}"` : ""} → ${label ? `${label}?` : "outcome?"}`);
   }
   return { id, po_id: String(d.po_id) };
+}
+
+// ── The decisions on an email task (claims commit 6, §3.11 rows 2 / 7 / 8) ──
+export interface EmailTaskRow { id: number; claim_id: number; gmail_message_id: string | null; mailbox: string | null; payload: any }
+/**
+ * Attach (rows 2, 7): a refund candidate → row 1 on this claim (a suggested claim opens first — Maria 2026-11-13); a reply →
+ * Supplier replied from email (read_reply). Not this claim → an email_dismissed entry, so the email is never proposed to this
+ * claim again (it may still belong to another).
+ */
+export async function decideEmailMatch(query: QueryLike, task: EmailTaskRow, decision: "attach" | "not_this", userId: number | null): Promise<void> {
+  const pl = task.payload ?? {};
+  const email = { id: String(task.gmail_message_id ?? ""), mailbox: String(task.mailbox ?? "") };
+  const subject = quoteSubject(String(pl.subject ?? ""));
+  await query(`DELETE FROM supplier_claim_events WHERE claim_id = $1 AND type = 'email_review' AND gmail_message_id IS NOT DISTINCT FROM $2`, [task.claim_id, email.id || null]);
+  if (decision === "not_this") {
+    await query(`INSERT INTO supplier_claim_events (claim_id, type, summary, by, gmail_message_id, mailbox) VALUES ($1, 'email_dismissed', $2, $3, $4, $5)`, [task.claim_id, `Not this claim · ${subject}`, userId, email.id || null, email.mailbox || null]);
+    return;
+  }
+  const c = (await query(`SELECT status FROM supplier_claims WHERE id = $1`, [task.claim_id])).rows[0];
+  if (pl.kind === "refund" && pl.amount != null) {
+    const method = String(pl.method ?? "refund_card");
+    if (c?.status === "suggested") {
+      await query(`UPDATE supplier_claims SET status = 'open', updated_at = now() WHERE id = $1 AND status = 'suggested'`, [task.claim_id]);
+      await query(`UPDATE supplier_claim_tasks SET done_at = now(), done_by = $2 WHERE claim_id = $1 AND kind = 'review_suggestion' AND done_at IS NULL`, [task.claim_id, userId]);
+      await event(query, task.claim_id, "opened", "Opened from the supplier's refund email", userId);
+    }
+    await confirmSupplier(query, task.claim_id, { at: pl.date ?? null, outcome: method, amount: pl.amount, detail: `${method === "gift_card" ? "gift card" : method === "store_credit" ? "store credit" : "card"} · from email` }, userId);
+    await stampEventEmail(query, task.claim_id, "supplier_confirmed", email, `$${Number(pl.amount).toFixed(2)} · ${subject} · attached by hand`);
+    return;
+  }
+  await recordReply(query, task.claim_id, { date: pl.date ?? null, channel: "email", summary: pl.summary ?? String(pl.subject ?? "") }, userId, { task: "read_reply" });
+  await stampEventEmail(query, task.claim_id, "supplier_reply", email, `${quoteSubject(String(pl.summary ?? pl.subject ?? ""))} · attached by hand`);
+}
+/** Reopen / Nothing to do (row 8). */
+export async function decideClosedClaimEmail(query: QueryLike, task: EmailTaskRow, decision: "reopen" | "nothing", userId: number | null): Promise<void> {
+  const pl = task.payload ?? {};
+  const subject = quoteSubject(String(pl.subject ?? ""));
+  await query(`DELETE FROM supplier_claim_events WHERE claim_id = $1 AND type = 'email_review' AND gmail_message_id IS NOT DISTINCT FROM $2`, [task.claim_id, task.gmail_message_id]);
+  if (decision === "nothing") {
+    await query(`INSERT INTO supplier_claim_events (claim_id, type, summary, by, gmail_message_id, mailbox) VALUES ($1, 'email_dismissed', $2, $3, $4, $5)`, [task.claim_id, `Nothing to do · ${subject}`, userId, task.gmail_message_id, task.mailbox]);
+    return;
+  }
+  await reopenClaim(query, task.claim_id, userId);
+  await query(`INSERT INTO supplier_claim_events (claim_id, type, summary, by, gmail_message_id, mailbox) VALUES ($1, 'email_attached', $2, $3, $4, $5)`, [task.claim_id, `${subject} · reopened from the email`, userId, task.gmail_message_id, task.mailbox]);
 }
 
 /** Clear the outcome (§5: "not known yet" until set, clearable): back to open with no outcome and no confirmation (a confirmation is of an outcome), the passive ticks it opened removed, event + History row. */
@@ -293,7 +377,7 @@ export async function editEvent(query: QueryLike, eventId: number, body: { at?: 
 }
 
 /** The timeline entries "Remove this entry" undoes (Maria 2026-11-12): the fact each one records goes with it. */
-export const REMOVABLE_EVENT_TYPES = ["reported", "followed_up", "checked", "supplier_reply", "supplier_confirmed", "refund_received", "outcome_set", "task_done", "timed_out"] as const;
+export const REMOVABLE_EVENT_TYPES = ["reported", "followed_up", "checked", "supplier_reply", "supplier_confirmed", "refund_received", "outcome_set", "task_done", "timed_out", "email_attached", "email_review", "email_dismissed", "label_saved"] as const;
 
 /**
  * Remove a timeline entry and undo the fact it set (Maria 2026-11-12). `reported` → reported_at / reported_channel cleared
@@ -308,7 +392,7 @@ export const REMOVABLE_EVENT_TYPES = ["reported", "followed_up", "checked", "sup
  * History row on the claim, no event (the timeline is back to what it was).
  */
 export async function removeEvent(query: QueryLike, eventId: number, userId: number | null): Promise<{ id: number; claim_id: number; po_id: string }> {
-  const e = (await query(`SELECT e.id, e.claim_id, e.type, e.summary, e.at, e.at::text AS at_text, e.po_line_refund_id, c.po_id FROM supplier_claim_events e JOIN supplier_claims c ON c.id = e.claim_id WHERE e.id = $1`, [eventId])).rows[0];
+  const e = (await query(`SELECT e.id, e.claim_id, e.type, e.summary, e.at, e.at::text AS at_text, e.po_line_refund_id, e.po_document_id, e.gmail_message_id, c.po_id FROM supplier_claim_events e JOIN supplier_claims c ON c.id = e.claim_id WHERE e.id = $1`, [eventId])).rows[0];
   if (!e) throw new EditError(404, "timeline entry not found");
   // at_text keeps the microseconds (a JS Date drops them): the tasks this entry's action ticked share its timestamp exactly
   const claimId = Number(e.claim_id), poId = String(e.po_id), type = String(e.type), at: string = e.at instanceof Date ? e.at.toISOString() : String(e.at), atText = String(e.at_text);
@@ -352,8 +436,8 @@ export async function removeEvent(query: QueryLike, eventId: number, userId: num
     changes.push({ field: "supplier replied", old: d.last_supplier_reply_at ? String(d.last_supplier_reply_at).slice(0, 10) : null, new: last ? last.slice(0, 10) : null });
     const own = dateOfEntry({ at: e.at, summary: e.summary });
     const replyMd = `${Number(own.slice(5, 7))}/${Number(own.slice(8, 10))}`;
-    await query(`DELETE FROM supplier_claim_tasks WHERE claim_id = $1 AND kind = 'confirm_outcome' AND done_at IS NULL AND reason LIKE $2`, [claimId, `Supplier replied ${replyMd}%`]);
-    await untick(["follow_up_supplier", "check_on_it", "confirm_outcome"]);
+    await query(`DELETE FROM supplier_claim_tasks WHERE claim_id = $1 AND kind IN ('confirm_outcome', 'read_reply') AND done_at IS NULL AND reason LIKE $2`, [claimId, `Supplier replied ${replyMd}%`]);
+    await untick(["follow_up_supplier", "check_on_it", "confirm_outcome", "read_reply"]);
   } else if (type === "supplier_confirmed") {
     const rest = await remaining("supplier_confirmed");
     const last = rest.length ? stamp(rest[rest.length - 1].at) : null;
@@ -398,6 +482,14 @@ export async function removeEvent(query: QueryLike, eventId: number, userId: num
     await query(`DELETE FROM supplier_claim_events WHERE claim_id = $1 AND type = 'closed' AND at >= $2::timestamptz`, [claimId, at]);
     if (outcome === "replacement") await addTask(query, claimId, "replacement_arrived", "tick when the replacement units arrive");
     changes.push({ field: "claim outcome", old: d.outcome, new: outcome });
+  } else if (type === "email_review") {
+    // the pending "may belong to this claim" entry: its task goes with it (nothing was set yet)
+    await query(`DELETE FROM supplier_claim_tasks WHERE claim_id = $1 AND done_at IS NULL AND kind IN ('review_email_match', 'closed_claim_email') AND gmail_message_id IS NOT DISTINCT FROM $2`, [claimId, e.gmail_message_id ?? null]);
+  } else if (type === "label_saved") {
+    // the document stays in Drive and on the PO (AF never deletes a file by undoing a note); it just leaves the claim
+    await query(`UPDATE po_documents SET claim_id = NULL WHERE id = $2 AND claim_id = $1`, [claimId, e.po_document_id ?? null]);
+  } else if (type === "email_attached" || type === "email_dismissed") {
+    // nothing else was set; a dismissed email may be proposed again on the next pass
   } else if (type === "followed_up") await untick(["follow_up_supplier"]);
   else if (type === "checked") await untick(["check_on_it"]);
   else if (type === "task_done") await untick([String(e.summary ?? "").split(":")[0].trim()]);
@@ -706,6 +798,7 @@ export async function setOutcome(query: QueryLike, id: number, body: OutcomeBody
     const shipped = b.shipped_at ? dateOf(b.shipped_at, "shipped_at") : null, arrived = b.arrived_at ? dateOf(b.arrived_at, "arrived_at") : b.arrived ? new Date().toISOString().slice(0, 10) : null;
     await query(`UPDATE supplier_claims SET outcome = 'replacement', replacement_qty = COALESCE($2, replacement_qty, qty), replacement_shipped_at = COALESCE($3::date, replacement_shipped_at), replacement_arrived_at = COALESCE($4::date, replacement_arrived_at),
                    status = CASE WHEN $4::date IS NOT NULL THEN 'closed' ELSE 'open' END, closed_at = CASE WHEN $4::date IS NOT NULL THEN now() ELSE NULL END, updated_at = now() WHERE id = $1`, [id, rq, shipped, arrived]);
+    await query(`UPDATE supplier_claim_tasks SET done_at = now(), done_by = $2 WHERE claim_id = $1 AND done_at IS NULL AND kind IN ('confirm_outcome', 'read_reply')`, [id, userId]);
     await logEdits(query, poId, userId, "claim", String(id), [{ field: "claim outcome", old: d.outcome, new: `replacement${arrived ? " (arrived)" : ""}` }]);
     await event(query, id, "outcome_set", "replacement", userId);
     if (arrived) { await query(`UPDATE supplier_claim_tasks SET done_at = now(), done_by = $2 WHERE claim_id = $1 AND done_at IS NULL`, [id, userId]); await event(query, id, "replacement_arrived", null, userId); await event(query, id, "closed", "replacement arrived", userId); }
@@ -716,6 +809,7 @@ export async function setOutcome(query: QueryLike, id: number, body: OutcomeBody
   const amt = b.amount == null || b.amount === "" ? null : amountOf(b.amount);
   await query(`UPDATE supplier_claims SET outcome = $2, outcome_amount = COALESCE($3, outcome_amount), outcome_detail = COALESCE($4, outcome_detail), status = CASE WHEN status = 'suggested' THEN 'open' ELSE status END, updated_at = now() WHERE id = $1`,
     [id, outcome, amt, b.detail == null ? null : String(b.detail).trim() || null]);
+  await query(`UPDATE supplier_claim_tasks SET done_at = now(), done_by = $2 WHERE claim_id = $1 AND done_at IS NULL AND kind IN ('confirm_outcome', 'read_reply')`, [id, userId]);
   await logEdits(query, poId, userId, "claim", String(id), [{ field: "claim outcome", old: d.outcome, new: `${outcome}${amt != null ? ` ${money(amt)}` : ""}` }]);
   await event(query, id, "outcome_set", outcome, userId);
   await syncRefundCoverage(query, [id], userId);

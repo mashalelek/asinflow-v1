@@ -26,6 +26,7 @@
     "backfill:tracking": "tsx script/backfill-tracking.ts",
     "easypost:count": "tsx script/easypost-cost-guard.ts",
     "claims:suggest": "tsx script/claims-suggest.ts",
+    "claims:emails": "tsx script/claims-emails.ts",
     "claims:supersede-converted": "tsx script/claims-supersede-converted.ts",
     "claims:list-detail-check": "tsx script/claims-list-detail-check.ts",
     "capture:samples": "tsx script/capture-samples.ts",

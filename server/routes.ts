@@ -30,6 +30,8 @@ import { recheckForNewPo } from "./new-po-recheck";
 import { parsePoListFilters, poListWhere, poFacetCounts } from "./po-list-filters";
 import { loadPoForm, savePoForm } from "./po-edit-form";
 import { syncVelocityAfterOrderIdRename } from "./po-rename-velocity";
+import { WATCHED_MAILBOXES } from "./claim-emails";
+import { gmailClient, getRenderableMessage } from "./gmail-client";
 import { suggestAsins, asinInfo } from "./asin-suggest";
 import { defaultEmailForSupplier } from "./supplier-defaults";
 import { documentBaseName, noInvoiceTitle } from "@shared/po-documents";
@@ -4421,6 +4423,18 @@ export async function registerRoutes(
       const suppliers = Array.from(new Set(all.map((r) => r.supplier))).sort();
       res.json({ claims: rows, counts: bucketCounts(rows), suppliers, kinds: CLAIM_KIND_FILTERS, swept: swept.length, header: refundsDueTotal(all) });
     } catch (err: any) { res.status(500).json({ message: err.message }); }
+  });
+  // "open email" (claims commit 6): the email behind a timeline entry / a task, rendered as a page in a new tab. Only the watched mailboxes.
+  app.get("/api/claims/emails/:mailbox/:id", async (req: Request, res: Response) => {
+    const mailbox = String(req.params.mailbox ?? "");
+    if (!WATCHED_MAILBOXES().some((m) => m.mailbox === mailbox)) { res.status(404).json({ message: "not a watched mailbox" }); return; }
+    if (!/^[A-Za-z0-9_-]{6,}$/.test(String(req.params.id ?? ""))) { res.status(400).json({ message: "bad message id" }); return; }
+    try {
+      const m = await getRenderableMessage(gmailClient(mailbox), String(req.params.id));
+      res.setHeader("Content-Type", "text/html; charset=utf-8");
+      res.setHeader("Content-Security-Policy", "default-src 'none'; img-src data: https:; style-src 'unsafe-inline'");
+      res.send(m.html);
+    } catch (err: any) { res.status(502).json({ message: `could not read the email: ${err?.message ?? err}` }); }
   });
   app.get("/api/claims/:id", async (req: Request, res: Response) => {
     if (!isDbAvailable()) { res.status(503).json({ message: "Database not available" }); return; }

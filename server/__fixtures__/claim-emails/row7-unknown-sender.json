@@ -1,0 +1,15 @@
+{
+ "id": "fx-row7-unknown-sender",
+ "mailbox": "orders@coastalqualitygoods.com",
+ "threadId": null,
+ "direction": "in",
+ "forwarded": false,
+ "to": "orders@coastalqualitygoods.com",
+ "toDomain": "coastalqualitygoods.com",
+ "attachments": [],
+ "from": "notices@random-mailer.example",
+ "fromDomain": "random-mailer.example",
+ "date": "2026-11-13T08:00:00.000Z",
+ "subject": "Your store credit",
+ "text": "A store credit of $12.00 has been added for your purchase ZZ4471188.\nThis is an automated message."
+}

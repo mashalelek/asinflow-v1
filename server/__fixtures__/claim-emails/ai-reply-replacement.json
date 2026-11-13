@@ -1,0 +1,14 @@
+{
+ "fixture": "row4-reply-replacement",
+ "model": "claude-haiku-5-5",
+ "recorded_at": "2026-11-13T20:00:00.000Z",
+ "usage": {
+  "input_tokens": 420,
+  "output_tokens": 40
+ },
+ "answer": {
+  "summary": "The remaining 1 unit ships out tomorrow as a replacement at no charge.",
+  "outcome": "replacement",
+  "amount": null
+ }
+}

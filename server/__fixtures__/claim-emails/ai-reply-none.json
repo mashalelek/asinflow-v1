@@ -1,0 +1,14 @@
+{
+ "fixture": "row3-reply-no-outcome",
+ "model": "claude-haiku-5-5",
+ "recorded_at": "2026-11-13T20:00:00.000Z",
+ "usage": {
+  "input_tokens": 400,
+  "output_tokens": 30
+ },
+ "answer": {
+  "summary": "We have opened case 08841127 and will get back to you.",
+  "outcome": "none",
+  "amount": null
+ }
+}

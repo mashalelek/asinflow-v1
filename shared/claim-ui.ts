@@ -9,10 +9,12 @@
 import { CLAIM_KIND_LABELS, CLAIM_OUTCOME_LABELS, CLAIM_TASK_LABELS, type ClaimTaskKind } from "./supplier-claim";
 import { BUSINESS_DAYS, claimSteps, isReported, effectiveTasks, supplierConfirmedAt, TIMEOUT_REASON_RE, PASSIVE_TASK_KINDS, isActiveTask, type BucketClaim, type BucketResult, type ClaimStep } from "./claim-bucket";
 
-export interface UiTask { id: number; kind: ClaimTaskKind | string; reason?: string | null; done_at: string | null; created_at?: string; snoozed_until?: string | null }
+export interface UiTask { id: number; kind: ClaimTaskKind | string; reason?: string | null; done_at: string | null; created_at?: string; snoozed_until?: string | null; /** An email-made task (commit 6): the email behind it. */ gmail_message_id?: string | null; mailbox?: string | null; payload?: Record<string, unknown> | null }
 /** What the sentences read beyond BucketClaim. */
 export interface UiClaim extends BucketClaim {
   id?: number;
+  /** The supplier's confirmation came from a refund / credit email (commit 6, row 1). */
+  email_confirmed?: boolean;
   reported_channel?: string | null;
   outcome_amount?: number | null;
   owed?: number | null;
@@ -40,6 +42,9 @@ const reportedText = (c: UiClaim) => `Reported ${fmtMD(c.reported_at ?? doneAt(c
 
 /** Pure: ONE sentence for the row's Step / the header. */
 export function stateSentence(c: UiClaim, b: BucketResult): string {
+  // an email task's sentence (commit 6, the mockups' Step text) comes first: on a closed, dismissed or unreported claim alike
+  const emailTask = openTasks(c).find((t) => t.kind === "review_email_match" || t.kind === "closed_claim_email" || t.kind === "read_reply");
+  if (emailTask) return emailTask.reason ?? CLAIM_TASK_LABELS[emailTask.kind as ClaimTaskKind];
   // the Dismissed tab's Step: why (the typed reason, else the claim's note) — Maria 2026-11-12
   if (c.status === "dismissed") return `Dismissed${c.dismiss_reason ? ` · ${c.dismiss_reason}` : c.note ? ` · ${c.note}` : ""}`;
   // a written-off claim with Velocity still to act reads its task / its wait, not "Closed" (its bucket says so)
@@ -52,6 +57,8 @@ export function stateSentence(c: UiClaim, b: BucketResult): string {
   if (first) {
     switch (first.kind) {
       case "confirm_outcome": return first.reason ?? "Supplier replied · confirm the outcome";
+      // the three email tasks carry their sentence (the mockups' Step text); the row adds "· open email"
+      case "read_reply": case "review_email_match": case "closed_claim_email": return first.reason ?? CLAIM_TASK_LABELS[first.kind as ClaimTaskKind];
       case "enter_quantity": return "Quantity not known yet · type the Individual units";
       case "contact_supplier": return TIMEOUT_REASON_RE.test(first.reason ?? "") ? `${capital(first.reason!.replace(TIMEOUT_REASON_RE, ""))} in ${BUSINESS_DAYS} business days · contact the supplier` : "Report to supplier";
       case "follow_up_supplier": return `${reportedText(c)} · no answer in ${BUSINESS_DAYS} business days`;
@@ -67,7 +74,10 @@ export function stateSentence(c: UiClaim, b: BucketResult): string {
   }
   switch (b.bucket) {
     // "Refund confirmed 9/23 · check the card" (Maria 2026-11-12): what was confirmed, when, and where to look
-    case "waiting_refund": return `${refundWord(c)} confirmed ${fmtMD(supplierConfirmedAt(c))} · check the ${refundWhere(c)}${short(c)}`;
+    // a refund / credit the supplier's own email confirmed (commit 6, row 1 — the list mockup): "Supplier confirmed $77.23 refund 11/12 · from email · waiting for it to post"
+    case "waiting_refund": return c.email_confirmed
+      ? `Supplier confirmed ${c.outcome_amount != null ? `$${c.outcome_amount.toFixed(2)} ` : ""}${refundWord(c).toLowerCase()} ${fmtMD(supplierConfirmedAt(c))} · from email · waiting for it to post${short(c)}`
+      : `${refundWord(c)} confirmed ${fmtMD(supplierConfirmedAt(c))} · check the ${refundWhere(c)}${short(c)}`;
     case "waiting_shipment": return c.replacement_shipped_at ? `Replacement shipped ${fmtMD(c.replacement_shipped_at)} · not arrived` : "Return on its way to the supplier";
     // dispose asked wins over an older label (a written-off claim whose return never moved, Maria 2026-11-12)
     case "waiting_velocity": return doneAt(c, "dispose_units") && c.qty_disposed == null ? "Velocity asked to dispose · count not down yet" : doneAt(c, "send_label") ? `Label sent ${fmtMD(doneAt(c, "send_label"))} · return not shipped yet` : "Velocity asked · nothing changed yet";
@@ -89,20 +99,33 @@ export interface PrimaryAction {
   label: string;
   taskId?: number;
   taskKind?: string;
-  /** The second control beside the button. */
-  secondary: "dismiss" | "snooze" | null;
+  /** The second control beside the button (commit 6: Not this claim / Set outcome / Nothing to do beside the email tasks' buttons). */
+  secondary: "dismiss" | "snooze" | "not_this" | "set_outcome" | "nothing" | null;
+  /** The decision the tick sends (review_email_match: attach; closed_claim_email: reopen; read_reply: keep). */
+  decision?: "attach" | "reopen" | "keep";
+  /** The email the row's sentence links to ("open email"), from the task behind the action. */
+  email?: { id: string; mailbox: string } | null;
   /** The tick needs this control before it can be saved. */
   needs?: "order_id" | "qty" | null;
 }
+/** The email behind an email-made task (the row's "open email"). */
+export const emailOf = (t: UiTask | undefined | null): { id: string; mailbox: string } | null => (t?.gmail_message_id ? { id: t.gmail_message_id, mailbox: t.mailbox ?? "" } : null);
 /** Pure: the row's Do column. */
 export function primaryAction(c: UiClaim, b: BucketResult): PrimaryAction {
+  // an email on a closed / dismissed claim (commit 6, row 8) asks before the closed / dismissed defaults
+  const closedEmail = c.tasks.find((t) => t.kind === "closed_claim_email" && !t.done_at);
+  if (closedEmail) return { kind: "task", label: "Reopen", taskId: closedEmail.id, taskKind: closedEmail.kind, secondary: "nothing", decision: "reopen", email: emailOf(closedEmail) };
   if (b.bucket === "dismissed") return { kind: "reopen", label: "Reopen", secondary: null };
   if (b.bucket === "closed") return { kind: "none", label: "", secondary: null };
   const open = openTasks(c);
   const by = (k: string) => open.find((t) => t.kind === k);
   let t: UiTask | undefined;
   if ((t = by("review_suggestion"))) return { kind: "task", label: "Open claim", taskId: t.id, taskKind: t.kind, secondary: "dismiss" };
-  if ((t = by("confirm_outcome"))) return { kind: "detail", label: "Confirm outcome", taskId: t.id, taskKind: t.kind, secondary: null };
+  // supplier emails (commit 6, §3.11 — the mockups' Do column): Attach / Not this claim, Keep waiting / Set outcome, Reopen / Nothing to do
+  if ((t = by("review_email_match"))) return { kind: "task", label: "Attach", taskId: t.id, taskKind: t.kind, secondary: "not_this", decision: "attach", email: emailOf(t) };
+  if ((t = by("closed_claim_email"))) return { kind: "task", label: "Reopen", taskId: t.id, taskKind: t.kind, secondary: "nothing", decision: "reopen", email: emailOf(t) };
+  if ((t = by("read_reply"))) return { kind: "task", label: "Keep waiting", taskId: t.id, taskKind: t.kind, secondary: "set_outcome", decision: "keep", email: emailOf(t) };
+  if ((t = by("confirm_outcome"))) return { kind: "detail", label: "Confirm outcome", taskId: t.id, taskKind: t.kind, secondary: null, email: emailOf(t) };
   if ((t = by("enter_quantity"))) return { kind: "detail", label: "Enter quantity", taskId: t.id, taskKind: t.kind, secondary: null, needs: "qty" };
   if ((t = by("contact_supplier")) || (c.status === "open" && !isReported(c))) return { kind: "contact", label: "Contacted supplier", taskId: t?.id, taskKind: "contact_supplier", secondary: t && TIMEOUT_REASON_RE.test(t.reason ?? "") ? "snooze" : null };
   if ((t = by("follow_up_supplier"))) return { kind: "contact", label: "Followed up", taskId: t.id, taskKind: t.kind, secondary: "snooze" };
@@ -126,12 +149,19 @@ export function needsAttentionGroup(c: UiClaim): "decide" | "supplier" | "veloci
   if (!k && a.kind === "contact") return "supplier";
   if (!k) return null;
   if (k === "check_on_it") return "timed_out";
-  if (k === "review_suggestion" || k === "confirm_outcome" || k === "enter_quantity") return "decide";
-  if (k === "contact_supplier" || k === "follow_up_supplier" || k === "confirm_reship_order") return "supplier";
+  if (k === "review_suggestion" || k === "confirm_outcome" || k === "enter_quantity" || k === "review_email_match" || k === "closed_claim_email") return "decide";
+  if (k === "contact_supplier" || k === "follow_up_supplier" || k === "confirm_reship_order" || k === "read_reply") return "supplier";
   if (k === "send_label" || k === "tell_velocity_replacement" || k === "dispose_units" || k === "update_velocity_order") return "velocity";
   return "money";
 }
 export const GROUP_HINTS: Readonly<Record<string, string>> = { decide: "suggestions and outcomes to confirm", supplier: "contact or follow up", velocity: "one Discord message", money: "check the card", timed_out: "" };
+/** The group's hint with email rows in it (the list mockup 2026-11-13): Decide "emails AF wasn't sure about, and outcomes to confirm", Supplier "replies to read". */
+export function groupHint(group: string, rows: ReadonlyArray<{ action: { taskKind?: string } }>): string {
+  const kinds = new Set(rows.map((r) => r.action.taskKind));
+  if (group === "decide" && (kinds.has("review_email_match") || kinds.has("closed_claim_email"))) return "emails AF wasn't sure about, and outcomes to confirm";
+  if (group === "supplier" && kinds.has("read_reply")) return "replies to read";
+  return GROUP_HINTS[group] ?? "";
+}
 
 // ── Steps with handlers ───────────────────────────────────────────────────────
 export type StepHandler =
@@ -189,7 +219,7 @@ export function whatHappensNext(c: UiClaim, b: BucketResult): Array<{ when: "Now
   switch (b.bucket) {
     case "needs_attention": return [{ when: "Now", text: `in Needs attention until ${openTasks(c).filter((t) => isActiveTask(t as any)).map((t) => (CLAIM_TASK_LABELS[t.kind as ClaimTaskKind] ?? t.kind).toLowerCase()).join(", ") || "the task"} is done` }, { when: "Then", text: paths }];
     case "waiting_supplier": return [{ when: "Now", text: `Waiting on supplier${timer} · Follow up after ${BUSINESS_DAYS} business days with no reply` }, { when: "Then", text: c.outcome ? `the supplier confirms the ${outcomeWord(c)} → ${c.outcome === "replacement" ? "Shipped → Arrived" : "Waiting on refund to post → Received"}` : paths }];
-    case "waiting_refund": return [{ when: "Now", text: `Waiting on refund to post${timer} · ${c.kind === "canceled" ? "Contact supplier" : "Check on it"} after ${BUSINESS_DAYS} business days` }, { when: "Then", text: "the refund posts → + Refund received closes the claim; short → Write off remainder or wait for the rest" }];
+    case "waiting_refund": return [{ when: "Now", text: `Waiting on refund to post${c.email_confirmed ? " — AF moved it here when the refund email matched" : ""}${timer} · ${c.kind === "canceled" ? "Contact supplier" : "Check on it"} after ${BUSINESS_DAYS} business days` }, { when: "Then", text: "the refund posts → + Refund received closes the claim; short → Write off remainder or wait for the rest" }];
     case "waiting_shipment": return [{ when: "Now", text: `Waiting on shipment${timer} · Check on it if the carrier goes quiet` }, { when: "Then", text: c.outcome === "replacement" ? "the replacement arrives → Arrived closes the claim" : "the return is delivered → the supplier confirms the refund" }];
     case "waiting_velocity": return [{ when: "Now", text: `Waiting on Velocity${timer} · Check on it after ${BUSINESS_DAYS} business days` }, { when: "Then", text: "Velocity acts → the next step on the path" }];
     default: return [{ when: "Now", text: paths }];

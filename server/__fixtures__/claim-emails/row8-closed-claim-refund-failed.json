@@ -1,0 +1,15 @@
+{
+ "id": "fx-row8-closed-claim-refund-failed",
+ "mailbox": "orders@coastalqualitygoods.com",
+ "threadId": null,
+ "direction": "in",
+ "forwarded": false,
+ "to": "orders@coastalqualitygoods.com",
+ "toDomain": "coastalqualitygoods.com",
+ "attachments": [],
+ "from": "zz Test Support <support@zz-test.com>",
+ "fromDomain": "zz-test.com",
+ "date": "2026-11-13T10:00:00.000Z",
+ "subject": "Re: Order ZZ4471188 \u2014 refund",
+ "text": "We were unable to process your refund to the original card. Please send a card ending in 4 digits we can use."
+}

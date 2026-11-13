@@ -1,0 +1,15 @@
+{
+ "id": "fx-row4-reply-replacement",
+ "mailbox": "orders@coastalqualitygoods.com",
+ "threadId": "thr-1",
+ "direction": "in",
+ "forwarded": false,
+ "to": "orders@coastalqualitygoods.com",
+ "toDomain": "coastalqualitygoods.com",
+ "attachments": [],
+ "from": "zz Test Support <support@zz-test.com>",
+ "fromDomain": "zz-test.com",
+ "date": "2026-11-12T09:30:00.000Z",
+ "subject": "Re: Order ZZ4471188 \u2014 1 unit missing",
+ "text": "Hello,\nThe remaining 1 unit ships out tomorrow as a replacement at no charge.\nBest,\nzz Test Support"
+}

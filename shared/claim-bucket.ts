@@ -136,6 +136,9 @@ export const VELOCITY_CLOSE_TASKS: ReadonlySet<string> = new Set(["dispose_units
 export const NO_RESTART_TASK_KINDS: ReadonlySet<string> = new Set(["contact_supplier", "review_suggestion"]);
 export function deriveBucket(c: BucketClaim, now: Date): BucketResult {
   const none: BucketResult = { bucket: "needs_attention", since: null, due: null, timedOut: false, timeout: null };
+  // an email on a closed / dismissed claim (commit 6, §3.11 row 8): its open closed_claim_email task is Needs attention › Decide
+  const emailOnClosed = c.tasks.filter((t) => !t.done_at && t.kind === "closed_claim_email");
+  if (emailOnClosed.length && (c.status === "closed" || c.status === "dismissed")) return { ...none, since: new Date(ts(emailOnClosed.map((t) => t.created_at).filter((x): x is string => !!x).sort()[0] ?? c.closed_at) ?? Date.now()).toISOString() };
   if (c.status === "dismissed") return { ...none, bucket: "dismissed" };
   const tasks = effectiveTasks(c);
   if (c.status === "closed") {

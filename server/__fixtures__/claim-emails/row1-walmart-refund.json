@@ -1,0 +1,15 @@
+{
+ "id": "fx-row1-walmart-refund",
+ "mailbox": "orders@coastalqualitygoods.com",
+ "threadId": null,
+ "direction": "in",
+ "forwarded": false,
+ "to": "orders@coastalqualitygoods.com",
+ "toDomain": "coastalqualitygoods.com",
+ "attachments": [],
+ "from": "zz Test <help@zz-test.com>",
+ "fromDomain": "zz-test.com",
+ "date": "2026-11-12T14:02:00.000Z",
+ "subject": "You're getting a $5.97 refund: [zz soap, 2 Count]",
+ "text": "Hi there,\nWe've issued a refund of $5.97 for your order.\nOrder# ZZ4471188\nzz soap, 2 Count \u00b7 Qty 1\nRefund to card ending in 6830\nThanks for shopping with us."
+}

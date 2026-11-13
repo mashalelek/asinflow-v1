@@ -50,6 +50,8 @@ describe("primaryAction — ONE button per row, Dismiss / Snooze where they appl
       review_suggestion: ["Open claim", "dismiss"], confirm_outcome: ["Confirm outcome", null], enter_quantity: ["Enter quantity", null], contact_supplier: ["Contacted supplier", null],
       follow_up_supplier: ["Followed up", "snooze"], confirm_reship_order: ["Add order #", null], send_label: ["Sent label", null], tell_velocity_replacement: ["Told Velocity", null],
       dispose_units: ["Asked", null], update_velocity_order: ["Updated", null], refund_received: ["Refund received", null], replacement_arrived: ["Arrived", null], upload_return_label: ["Upload label", null], check_on_it: ["Check on it", "snooze"],
+      // supplier emails (commit 6, §3.11): Attach / Not this claim, Keep waiting / Set outcome, Reopen / Nothing to do
+      read_reply: ["Keep waiting", "set_outcome"], review_email_match: ["Attach", "not_this"], closed_claim_email: ["Reopen", "nothing"],
     };
     for (const k of CLAIM_TASK_KINDS) {
       // a contact_supplier task only means something on an unreported claim (one derivation, Maria 2026-11-12)
