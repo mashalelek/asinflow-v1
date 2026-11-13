@@ -22,13 +22,14 @@ import { readVelocityStartDate } from "./ships-to-backfill";
 import { evaluateAutoClose, setPoClosedManually, parseQtyInput, MANUAL_QTY_COLUMNS, type ManualQtyColumn } from "./po-close";
 import { DISPLAY_ACTION_ITEMS, NO_INVOICE_SAVED, normalizeActionItems } from "./po-status-map";
 import { unionActionItems, PO_ACTION_ITEMS_SQL, REVIEW_VELOCITY_REASONS_SQL } from "./po-action-items";
-import { editPoHeader, editLine, addLine, removeLine, editAsinRow, loadPoHistory, logEdits, changedFields, asLogText, EditError, COST_RELEVANT_FIELDS, type EditResult } from "./po-edit";
+import { editPoHeader, editLine, addLine, removeLine, editAsinRow, loadPoHistory, logEdits, changedFields, asLogText, EditError, COST_RELEVANT_FIELDS, ORDER_ID_WARNING, type EditResult } from "./po-edit";
 import { recomputePoCosts } from "./po-costs";
 import { addMoneyRow, editMoneyRow, removeMoneyRow, loadPoMoney } from "./po-money-edit";
 import { createPoFromForm, lookupAsins } from "./po-create";
 import { recheckForNewPo } from "./new-po-recheck";
 import { parsePoListFilters, poListWhere, poFacetCounts } from "./po-list-filters";
 import { loadPoForm, savePoForm } from "./po-edit-form";
+import { syncVelocityAfterOrderIdRename } from "./po-rename-velocity";
 import { suggestAsins, asinInfo } from "./asin-suggest";
 import { defaultEmailForSupplier } from "./supplier-defaults";
 import { documentBaseName, noInvoiceTitle } from "@shared/po-documents";
@@ -4294,8 +4295,26 @@ export async function registerRoutes(
   };
   app.patch("/api/pos/:id", async (req: Request, res: Response) => {
     if (!isDbAvailable()) { res.status(503).json({ message: "Database not available" }); return; }
-    await sendEdit(res, () => withCostSync("edit PO", String(req.params.id ?? ""), () => withPoTx(async (q) => withRecompute(q, await editPoHeader(q, String(req.params.id ?? ""), req.body, uid(req)), uid(req)))));
+    await sendEdit(res, () => withCostSync("edit PO", String(req.params.id ?? ""), () => withPoTx(async (q) => withRecompute(q, await editPoHeader(q, String(req.params.id ?? ""), req.body, uid(req)), uid(req))))
+      .then(async (r) => {
+        const oc = r.changes.find((c) => c.field === "order_id");
+        if (oc) r.warning = await velocityAfterRename(r.poId, String(oc.old ?? ""), String(oc.new ?? ""), uid(req), r.warning);
+        return r;
+      }));
   });
+  // Order # renamed (2026-11-13, server/po-rename-velocity.ts): after the PO transaction committed, the Velocity order
+  // under the old number is renamed (inbound) or linked (shipped); the warning says what happened. Never fails the save.
+  const velocityAfterRename = async (poId: string, oldId: string, newId: string, userId: number | null, prior?: string): Promise<string> => {
+    const keep = prior && prior !== ORDER_ID_WARNING ? [prior] : [];
+    if (!process.env.VELOCITY_API_KEY) return [...keep, ORDER_ID_WARNING].join(" · ");
+    try {
+      const r = await syncVelocityAfterOrderIdRename(query, { poId, oldOrderId: oldId, newOrderId: newId }, userId);
+      return [...keep, r.warning].filter(Boolean).join(" · ");
+    } catch (err: any) {
+      log(`PO ${poId} order # ${oldId} → ${newId}: Velocity sync failed: ${err?.message ?? err}`, "po");
+      return [...keep, `Velocity not updated (${err?.message ?? err}); link by hand`].join(" · ");
+    }
+  };
   // Edit PO as a page (/pos/:id/edit, Maria 2026-11-04): the stored PO as the New PO form, and the whole form saved back —
   // one transaction, the existing editors underneath (server/po-edit-form.ts), one History row per changed field.
   app.get("/api/pos/:id/form", async (req: Request, res: Response) => {
@@ -4308,7 +4327,11 @@ export async function registerRoutes(
   });
   app.put("/api/pos/:id/form", async (req: Request, res: Response) => {
     if (!isDbAvailable()) { res.status(503).json({ message: "Database not available" }); return; }
-    try { res.json(await withCostSync("save PO form", String(req.params.id ?? ""), () => withPoTx((q) => savePoForm(q, String(req.params.id ?? ""), req.body, uid(req))))); }
+    try {
+      const r = await withCostSync("save PO form", String(req.params.id ?? ""), () => withPoTx((q) => savePoForm(q, String(req.params.id ?? ""), req.body, uid(req))));
+      if (r.orderIdChange) r.warning = await velocityAfterRename(r.poId, r.orderIdChange.old, r.orderIdChange.new, uid(req), r.warning);
+      res.json(r);
+    }
     catch (err: any) {
       if (err instanceof EditError) { res.status(err.status).json({ message: err.message }); return; }
       if (err?.code === "23505") { res.status(409).json({ message: "a PO with this supplier and order # already exists" }); return; }

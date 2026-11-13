@@ -183,6 +183,14 @@ describe("Upload to Velocity plan — links and sums", () => {
     const p = await buildVelocityPlan(...RANGE, { query: q([]) as any });
     expect(p.updates).toEqual([expect.objectContaining({ order_id: "v-90", actionable: true, diffs: [{ field: "quantity", sheet_value: 120, velocity_value: 90 }] })]);
   });
+  it("a PO's alternate order # answers for the row (order # renamed after upload, 2026-11-13): the Velocity order under the old number is matched, no create", async () => {
+    poRows = [sheet({ orderNumber: "SPIN-1744653", altOrderIds: ["X7W12GQQ5"] })];
+    velocity = [order({ order_id: "v-old", order_number: "X7W12GQQ5", quantity: 120 })];
+    const p = await buildVelocityPlan(...RANGE, { query: q([]) as any });
+    expect(p.creates).toEqual([]);
+    expect(p.updates).toEqual([]);
+    expect(p.unchanged).toBe(1);
+  });
   it("a linked order alone marks the row present: no create for it", async () => {
     poRows = [sheet()];
     velocity = [order({ order_id: "94cdd620", order_number: "", quantity: 120 })];

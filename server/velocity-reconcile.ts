@@ -199,12 +199,16 @@ export async function buildVelocityPlan(
   const sheetByKey = new Map<string, (typeof sheetRows)[number]>();
   for (const row of sheetRows) {
     if (!row.orderNumber || !row.asin) continue;
-    const key = normKey(row.orderNumber, row.asin);
-    const existing = sheetByKey.get(key);
-    if (!existing) { sheetByKey.set(key, row); continue; }
-    const existingCanceled = (existing.status ?? "").toLowerCase().includes("canceled");
-    const rowCanceled = (row.status ?? "").toLowerCase().includes("canceled");
-    if (existingCanceled && !rowCanceled) sheetByKey.set(key, row);
+    // The row answers under its order # and under the PO's alternate order #s (an order # renamed after upload,
+    // 2026-11-13): a Velocity order still under the old number is this row's, never a second create.
+    for (const num of [row.orderNumber, ...(row.altOrderIds ?? [])]) {
+      const key = normKey(num, row.asin);
+      const existing = sheetByKey.get(key);
+      if (!existing) { sheetByKey.set(key, row); continue; }
+      const existingCanceled = (existing.status ?? "").toLowerCase().includes("canceled");
+      const rowCanceled = (row.status ?? "").toLowerCase().includes("canceled");
+      if (existingCanceled && !rowCanceled) sheetByKey.set(key, row);
+    }
   }
 
   // Sheet-side units per PO ASIN row: Σ the row's non-canceled lines, as the creates send them (2026-11-07).
@@ -275,6 +279,8 @@ export async function buildVelocityPlan(
     }
     const orderNumber = matchedKey != null ? String(sheetRow!.orderNumber ?? "") : String(o.order_number ?? "");
     if (!sheetRow) { unmatchedVelocity++; continue; }
+    // Matched through an alternate order # (or a link): the row's own key is covered too, so no create for it.
+    if (sheetRow.orderNumber) matchedVelocityByKey.set(normKey(sheetRow.orderNumber, asin), o);
 
     const status = String(o.status ?? "").toLowerCase();
     const actionable = ACTIONABLE_STATUSES.has(status);

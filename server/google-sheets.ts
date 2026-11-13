@@ -141,6 +141,8 @@ export interface SheetRow {
   lineNumber?: number;
   /** AF rows only: the PO ASIN row (po_asins.id) the line belongs to — the Upload plan sums a row's lines (2026-11-07). */
   poAsinId?: string;
+  /** AF rows only: the PO's alternate order #s (purchase_orders.alt_order_ids) — a Velocity order under one of them is this row's (an order # renamed after upload, 2026-11-13). */
+  altOrderIds?: string[];
 }
 
 // Trim to string, empty → null. Velocity fields pass through verbatim otherwise.

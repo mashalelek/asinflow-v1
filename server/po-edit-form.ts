@@ -58,7 +58,7 @@ export async function loadPoForm(query: QueryLike, poId: string): Promise<PoForm
   };
 }
 
-export interface PoFormSave { poId: string; changes: number; warning?: string; plan: Omit<PoEditPlan, "errors">; asinPackSets?: AsinPackSetResult[] }
+export interface PoFormSave { poId: string; changes: number; warning?: string; plan: Omit<PoEditPlan, "errors">; asinPackSets?: AsinPackSetResult[]; /** The order # changed (the route syncs Velocity after the commit, 2026-11-13). */ orderIdChange?: { old: string; new: string } }
 
 const COST_RELEVANT_ASIN = new Set(["cogs_adjustment"]);
 const costRelevant = (plan: PoEditPlan): boolean =>
@@ -77,9 +77,11 @@ export async function savePoForm(query: QueryLike, poId: string, next: PoFormSta
   if (plan.errors.length) throw new EditError(400, plan.errors.join(" · "));
   const before = Number((await query(`SELECT COUNT(*)::int AS n FROM po_edit_log WHERE po_id = $1`, [poId])).rows[0]?.n ?? 0);
   let warning: string | undefined;
+  let orderIdChange: PoFormSave["orderIdChange"];
   if (Object.keys(plan.header).length) {
     const r = await editPoHeader(query, poId, plan.header, userId);
-    if (r.changes.some((c) => c.field === "order_id")) warning = ORDER_ID_WARNING;
+    const oc = r.changes.find((c) => c.field === "order_id");
+    if (oc) { warning = ORDER_ID_WARNING; orderIdChange = { old: String(oc.old ?? ""), new: String(oc.new ?? "") }; }
   }
   // Lines: edits (a re-map creates / drops ASIN rows), then adds, then removals — an ASIN keeps its row when a removed line is replaced.
   for (const e of plan.lineEdits) {
@@ -107,5 +109,5 @@ export async function savePoForm(query: QueryLike, poId: string, next: PoFormSta
   await evaluateAutoClose(poId, query);
   const after = Number((await query(`SELECT COUNT(*)::int AS n FROM po_edit_log WHERE po_id = $1`, [poId])).rows[0]?.n ?? 0);
   const { errors: _e, ...rest } = plan;
-  return { poId, changes: after - before, warning, plan: rest, ...(asinPackSets.length ? { asinPackSets } : {}) };
+  return { poId, changes: after - before, warning, plan: rest, ...(asinPackSets.length ? { asinPackSets } : {}), ...(orderIdChange ? { orderIdChange } : {}) };
 }

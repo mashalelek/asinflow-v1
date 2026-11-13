@@ -7644,6 +7644,19 @@ the New PO form are the intakes, and since 2026-11-13 nothing reads the sheet. M
   form (the Payments and Promos blocks replace them). The order # warning
   ("order # is how shipments are matched from Velocity; changing it
   re-matches on the next Sync Shipments"; `_1`-style suffixes are
+
+**Order # renamed after Upload to Velocity (Maria 2026-11-13, `server/po-rename-velocity.ts`; yarnspirations
+X7W12GQQ5 → SPIN-1744653 had produced a second Velocity order).** After the PO transaction commits, the Velocity
+orders under the OLD number for the PO's ASINs are found (`fetchAllKnownOrders`): an `inbound` one gets its
+`orderNumber` PUT to the new number (the full-replace PUT, current fields echoed as execute does; History row
+`velocity_order_number`) — the save answers "Velocity order #N renamed to <new>"; one past inbound, or one whose PUT
+failed, is linked to the PO ASIN row instead (`velocity_order_links`) — "linked to Velocity order #N (already
+shipped)"; the old number is kept on the PO as an alternate order # (`alt_order_ids`; a number with no digit, a
+placeholder, is not). The Upload plan matches a row under its alternates too, so an order left under the old number
+is never a second create. **Guard:** a SHARED old number — another AF PO has it, now or as an alternate, or more
+than one Velocity order of the same ASIN sits under it — renames and links nothing in Velocity; the rename in AF
+stands and the save answers "Velocity not updated: old order # is shared by N orders, link by hand." Velocity
+unreachable: the rename stands, the warning says so. Nothing here ever fails the save.
   intentional) comes back with the save; (supplier, order #) stays unique
   (409).
   Products tab: inline name, SKU / UPC, price, qty ordered / received /

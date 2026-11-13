@@ -509,6 +509,14 @@ Ordered before `--live` (the 2026-10-29 dry run caught two). Order-#
 handling lives in `server/order-number.ts`; retailer → supplier in
 `server/supplier-aliases.ts` — don't add a third copy.
 
+An order # renamed after Upload to Velocity follows into Velocity
+(`server/po-rename-velocity.ts`, 2026-11-13): the inbound order under the
+old number is PUT the new number, a shipped one is linked, the old number
+becomes an alternate order # — unless the old number is shared (another PO
+has it, or several Velocity orders of one ASIN sit under it): then nothing
+in Velocity is touched and the save says "link by hand". The Upload plan
+matches a row under its alternates, so a rename never uploads a second order.
+
 (Col P, the sheet's FBA-id signal, was retired 2026-11-13 with the Orders
 sheet; a line it placed resolves through its recorded link.) Every rule, and the
 picker's suggestions, skip a PO with `ships_to = 'home'` or an order date
