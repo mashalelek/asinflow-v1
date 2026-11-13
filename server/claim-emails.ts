@@ -109,7 +109,7 @@ export interface Classified {
 const money = (s: string | null | undefined): number | null => { const m = /\$\s?([\d,]+\.\d{2})/.exec(s ?? ""); return m ? Number(m[1].replace(/,/g, "")) : null; };
 const LAST4 = /\border (?:ending|that ends) in (\d{4})\b/i;
 /** Subjects of order / shipping / account notices — never a refund, whatever the body says (the 5 false hits of the dry run). */
-const ORDER_NOISE = /(?:delayed|delivery order|your order(?: is| has|:|!| will| confirm)|your [a-z'’]+ order(?::|!| has| is| confirm)|thanks? (?:you )?for (?:your|ordering|placing)|we received your order|order confirm|got it!|shipped|out for delivery|delivered|review your order|substitution|preparing|is now complete|invoice|arriving|on its way|ready to ship|sign in|password|statement|receipt|welcome|newsletter|\bsale\b|% off|\bdeal\b|e-?gift card has been sent|received a [a-z &]+ e-?gift card|removal request|payment didn'?t|loyalty|rewards|points|your account|thanks for your purchase)/i;
+const ORDER_NOISE = /(?:\border\b[^\n]{0,40}\bconfirmed\b|delayed|delivery order|your order(?: is| has|:|!| will| confirm)|your [a-z'’]+ order(?::|!| has| is| confirm)|thanks? (?:you )?for (?:your|ordering|placing)|we received your order|order confirm|got it!|shipped|out for delivery|delivered|review your order|substitution|preparing|is now complete|invoice|arriving|on its way|ready to ship|sign in|password|statement|receipt|welcome|newsletter|\bsale\b|% off|\bdeal\b|e-?gift card has been sent|received a [a-z &]+ e-?gift card|removal request|payment didn'?t|loyalty|rewards|points|your account|thanks for your purchase)/i;
 const TEMPLATES: Array<[RegExp, EmailFamily, string]> = [
   [/you'?re getting a \$[\d,.]+ refund/i, "refund_credit", "walmart refund"],
   [/refund issued for order/i, "refund_credit", "dkhardware refund"],
@@ -500,7 +500,7 @@ export interface ClaimEmailReportRow {
   gmail_message_id: string; mailbox: string; direction: string; date: string; sender: string; to: string; subject: string;
   family: string; template: string; row: string; label: string; po: string | null; claim_id: number | null; claim_status: string | null; amount: number | null; sets: string; why: string; needs_ai: boolean; applied: string | null;
 }
-export interface ClaimEmailReport { scanned: number; rows: ClaimEmailReportRow[]; counts: Record<string, number>; ai_calls: number; ai_skipped: number; cost: number; applied: number }
+export interface ClaimEmailReport { scanned: number; rows: ClaimEmailReportRow[]; counts: Record<string, number>; ai_calls: number; ai_skipped: number; cost: number; applied: number; /** Mailboxes the hourly pass left alone: no watermark yet (requireWatermark). */ skipped_mailboxes: string[] }
 const SEARCH_TERMS = `(refund OR refunded OR credit OR "gift card" OR return OR replacement OR reship OR case OR claim OR feedback OR resolved OR survey OR "Re:" OR "RE:")`;
 
 export async function readEmailWatermark(query: QueryLike): Promise<Record<string, string>> {
@@ -535,15 +535,20 @@ export function threadPoMap(emails: ReadonlyArray<ClaimEmail>, pos: readonly PoR
   return out;
 }
 
-export async function ingestClaimEmails(opts: { query: QueryLike; deps: ClaimEmailDeps; now?: Date; since?: Date | null; dryRun?: boolean; maxMessages?: number; log?: (m: string) => void; mailboxes?: ReadonlyArray<{ mailbox: string; received: boolean; sent: boolean }> }): Promise<ClaimEmailReport> {
+export async function ingestClaimEmails(opts: { query: QueryLike; deps: ClaimEmailDeps; now?: Date; since?: Date | null; dryRun?: boolean; maxMessages?: number; log?: (m: string) => void; mailboxes?: ReadonlyArray<{ mailbox: string; received: boolean; sent: boolean }>;
+  /** The hourly pass (component 30): a mailbox with no watermark yet is skipped — the first live backfill (row 10, Maria's approval) sets it; the pass never reads a mailbox's whole history on its own. */
+  requireWatermark?: boolean }): Promise<ClaimEmailReport> {
   const { query } = opts;
   const now = opts.now ?? new Date();
   const list = opts.deps.list ?? listMessageIds;
   const get = opts.deps.get ?? (async (g: gmail_v1.Gmail, id: string) => (await g.users.messages.get({ userId: "me", id, format: "full" })).data);
   const marks = await readEmailWatermark(query);
-  const r: ClaimEmailReport = { scanned: 0, rows: [], counts: {}, ai_calls: 0, ai_skipped: 0, cost: 0, applied: 0 };
+  const r: ClaimEmailReport = { scanned: 0, rows: [], counts: {}, ai_calls: 0, ai_skipped: 0, cost: 0, applied: 0, skipped_mailboxes: [] };
   const emails: ClaimEmail[] = [];
+  const read: Array<{ mailbox: string; received: boolean; sent: boolean }> = [];
   for (const mb of opts.mailboxes ?? WATCHED_MAILBOXES()) {
+    if (opts.requireWatermark && !marks[mb.mailbox]) { r.skipped_mailboxes.push(mb.mailbox); opts.log?.(`claim emails: ${mb.mailbox} has no watermark yet — waiting for the first live backfill (npm run claims:emails -- --live)`); continue; }
+    read.push(mb);
     const since = opts.since !== undefined ? opts.since : marks[mb.mailbox] ? new Date(marks[mb.mailbox]) : null;
     const from = since ? new Date(since.getTime() - OVERLAP_MS) : null;
     const after = from ? ` after:${Math.floor(from.getTime() / 1000)}` : "";
@@ -599,9 +604,9 @@ export async function ingestClaimEmails(opts: { query: QueryLike; deps: ClaimEma
     }
     if (p.row !== "noise" || opts.dryRun) r.rows.push({ gmail_message_id: e.id, mailbox: e.mailbox, direction: e.direction, date: ymdOf(e.date), sender: e.fromDomain ?? e.from, to: e.to, subject: e.subject.slice(0, 120), family: cls.family, template: cls.template, row: rowKey, label: p.label, po: p.po ? `${p.po.supplier} ${p.po.order_id}` : null, claim_id: p.claim?.id ?? null, claim_status: p.claim?.status ?? null, amount: p.amount, sets: p.sets, why: p.why, needs_ai: p.needsAi, applied });
   }
-  if (!opts.dryRun) {
+  if (!opts.dryRun && read.length) {
     const next = { ...marks };
-    for (const mb of opts.mailboxes ?? WATCHED_MAILBOXES()) next[mb.mailbox] = now.toISOString();
+    for (const mb of read) next[mb.mailbox] = now.toISOString();
     await query(`INSERT INTO settings (key, value, updated_at) VALUES ($1, $2::jsonb, NOW()) ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value, updated_at = NOW()`, [EMAIL_WATERMARK_KEY, JSON.stringify(next)]);
   }
   return r;

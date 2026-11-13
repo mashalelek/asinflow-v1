@@ -544,7 +544,9 @@ plan → apply, the ingest), migration 112 (the three task kinds,
 `GET /api/claims/emails/:mailbox/:id` (open email: the message rendered as
 a page), component 30 runs the ingest after the commit 5 finders (hourly;
 a watermark per mailbox, 6 h overlap, an email on a claim is never applied
-twice), `npm run claims:emails -- [--prod] [--days N] [--live]` is row 10.
+twice; **a mailbox with no watermark yet is left alone — the first live
+backfill sets it, so the pass never reads a mailbox's history without
+Maria's approval**), `npm run claims:emails -- [--prod] [--days N] [--live]` is row 10.
 Row 1's prefilled refund row = `outcome_amount` / `outcome_detail` ("card
 ••6830 · from email"); Refund received prefills from them. The decisions
 go through the task tick (`POST /api/pos/claims/tasks/:id/done` with

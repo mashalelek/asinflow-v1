@@ -50,7 +50,9 @@ export const claimTimers: ComponentDef = {
     try {
       let drive: ReturnType<typeof driveClient> | null = null;
       try { drive = claimTimerDeps.drive(); } catch { drive = null; }
-      const m = await claimTimerDeps.emails({ query: ctx.query, deps: { gmailFor: (mb) => claimTimerDeps.gmail(mb), drive }, now, log: ctx.log });
+      // requireWatermark: until the first live backfill (row 10, Maria's approval) sets a mailbox's watermark, the pass leaves it alone
+      const m = await claimTimerDeps.emails({ query: ctx.query, deps: { gmailFor: (mb) => claimTimerDeps.gmail(mb), drive }, now, log: ctx.log, requireWatermark: true });
+      if (m.skipped_mailboxes.length) counts.claim_emails_waiting_for_backfill = m.skipped_mailboxes.length;
       counts.claim_emails_scanned = m.scanned; counts.claim_emails_applied = m.applied; counts.claim_email_ai_calls = m.ai_calls;
       for (const r of m.rows) if (r.applied && !/^already|^nothing/.test(r.applied)) outcomes[`email row ${r.row} ${r.gmail_message_id}`] = `${r.applied}`.slice(0, 200);
       if (m.applied) ctx.log(`claim emails: ${m.applied} applied of ${m.scanned} scanned (${Object.entries(m.counts).map(([k, v]) => `row ${k}: ${v}`).join(", ")})`);

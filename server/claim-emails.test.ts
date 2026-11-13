@@ -4,7 +4,7 @@
 import { describe, it, expect } from "vitest";
 import { readFileSync, readdirSync } from "node:fs";
 import { join } from "node:path";
-import { classifyClaimEmail, planClaimEmail, applyAiReply, poByShortSubjectId, statedOutcome, firstLine, threadPoMap, attachmentsOf, type ClaimEmail, type MatchContext, type ClaimRef } from "./claim-emails";
+import { classifyClaimEmail, planClaimEmail, applyAiReply, poByShortSubjectId, statedOutcome, firstLine, threadPoMap, attachmentsOf, ingestClaimEmails, type ClaimEmail, type MatchContext, type ClaimRef } from "./claim-emails";
 import type { PoRef } from "./tracking-match";
 
 const DIR = join(__dirname, "__fixtures__", "claim-emails");
@@ -45,6 +45,9 @@ describe("classify (§7 templates; noise never becomes a task)", () => {
   });
   it("order confirmations with gift-card wording are noise (the dry run's 5 false hits); cancellation wording wins over refund wording (commit 5's)", () => {
     expect(classifyClaimEmail(fx("noise-sephora-confirmation")).family).toBe("noise");
+    // "Order #… confirmed!" (Walgreens, Bath & Body Works, Frends — the 2026-11-13 dry run) is a confirmation whatever the body says
+    expect(classifyClaimEmail({ ...fx("noise-sephora-confirmation"), subject: "Order #215651271261 confirmed! Stay tuned for more updates", text: "We will refund $6.39 if an item is out of stock." }).family).toBe("noise");
+    expect(classifyClaimEmail({ ...fx("noise-sephora-confirmation"), subject: "your order (00474312974433) has been confirmed.", text: "Refund of $32.47 applies if canceled." }).family).toBe("noise");
     expect(classifyClaimEmail(fx("noise-cancel-wins")).family).toBe("cancel");
     expect(plan("noise-cancel-wins").row).toBe("commit5");
   });
@@ -118,5 +121,17 @@ describe("the §3.11 rows (pure match)", () => {
     const map = threadPoMap([fx("row9-maria-to-supplier"), reply], [PO1, PO2]);
     expect(map.get("orders@coastalqualitygoods.com:thr-1")).toEqual(PO1);
     expect(planClaimEmail(reply, classifyClaimEmail(reply), ctx({ threadPo: map }))).toMatchObject({ row: 3, why: "the thread names the PO" });
+  });
+});
+
+describe("the hourly pass never reads a mailbox's whole history on its own", () => {
+  it("requireWatermark: a mailbox with no watermark is skipped (the first live backfill sets it); with a watermark the pass reads from it", async () => {
+    const listed: string[] = [];
+    const q = async (sql: string) => (/FROM settings WHERE key = \$1/.test(sql) ? { rows: [{ value: { "orders@coastalqualitygoods.com": "2026-11-13T18:00:00.000Z" } }], rowCount: 1 } : { rows: [], rowCount: 0 });
+    const deps = { gmailFor: () => ({}) as any, list: async (_g: any, query: string) => { listed.push(query); return []; }, get: async () => ({}) as any };
+    const r = await ingestClaimEmails({ query: q as any, deps, requireWatermark: true, dryRun: true, mailboxes: [{ mailbox: "orders@coastalqualitygoods.com", received: true, sent: true }, { mailbox: "maria@coastalqualitygoods.com", received: false, sent: true }] });
+    expect(r.skipped_mailboxes).toEqual(["maria@coastalqualitygoods.com"]);
+    expect(listed.every((x) => /after:\d+/.test(x))).toBe(true); // orders@ read from its watermark (6 h overlap), never from the beginning
+    expect(listed.length).toBe(2);
   });
 });
