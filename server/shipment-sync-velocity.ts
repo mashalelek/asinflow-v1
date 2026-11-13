@@ -23,18 +23,17 @@
 // logged in po_edit_log (user NULL) — and otherwise stays NULL, which is
 // the derived "Pack size missing" item.
 //
-// Col P (2026-10-29): a line with no usable Order # whose Velocity shipment
-// went out under FBA ids that the Orders sheet's Col P lists for exactly one
-// PO ASIN row of that ASIN is placed there (how = "col_p"); several → it
-// stays unmatched with the candidates recorded for the picker. The FBA ids
-// are the ones component B stored on velocity_shipments.sc_shipment_ids, so
-// a shipment B has not matched yet resolves on the next run.
+// Col P (2026-10-29 → 2026-11-13, Orders-sheet retirement commit 3): the sheet's
+// FBA-shipment-id signal is gone with the sheet (po_sheet_fba_shipments dropped,
+// migration 110). A line it once placed resolves through its recorded link —
+// shipment_unmatched (match_reason col_p, read as a picker link) or a Velocity
+// order link (migration 099); the Col P-hidden dry run of 2026-11-13 placed every
+// line without it.
 //
 // PO matching (patch docs/claude_spec-patch-po-matching.md, amended
 // 2026-10-29): past the legacy keys a line resolves through the retailer
 // alias (supplier_aliases) and the normalized order # (§3 a, in the main
-// pass), then Col P — now for every failing line, po_not_found included —
-// then, once every other line's placement is known, the base order # with
+// pass), then, once every other line's placement is known, the base order # with
 // units fit (§3 b) and the candidate rule (§4, shipment-match.ts). A §3 b /
 // §4 link is recorded on shipment_unmatched exactly like a picker link
 // (resolved_po_asin_id, match_reason), so later runs keep it. A line that
@@ -58,8 +57,8 @@
 // 'home' is no longer skipped — the order is matched like any other, and the
 // PO's purchase_orders.velocity_home_orders names the Velocity orders, which
 // raises Review Velocity "Velocity has an order for a Home PO" until ships_to
-// is corrected or it is cleared by hand. Base order #, Col P and the §4
-// candidate rule still skip Home POs.
+// is corrected or it is cleared by hand. Base order # and the §4 candidate
+// rule still skip Home POs.
 //
 // Not written here (component B owns them): fba_shipment_ids, sc_match,
 // qty_received. Not written at all: the manual quantity columns.
@@ -103,8 +102,6 @@ export interface VelocitySyncCounts {
   linesMatchedOrderOnly: number;// resolved on (Order #, ASIN) alone — retailer spelling differed
   linesPinned: number;          // kept on a manually assigned row (assigned_by = 'manual'), never re-resolved
   linesNoOrder: number;         // no usable Order # (bundle parent without a single child order, blank)
-  linesMatchedColP: number;     // no Order #, placed through Col P (one candidate)
-  linesColPAmbiguous: number;   // no Order #, Col P names several candidate rows — left unmatched with them
   linesPoNotFound: number;      // Order # present but no (Order #, retailer, ASIN) in AF
   linesMatchedAlias: number;    // the retailer resolved through supplier_aliases (§3.1)
   linesMatchedNormalized: number; // full normalized order # + ASIN (§3 a)
@@ -144,7 +141,7 @@ export interface VelocitySyncResult {
   /** First 10 pack-size fills / mismatches, human-readable. */
   packSamples: string[];
   unmatched: Array<{ shipment: string; shippedAt: string | null; orderId: string; orderNumber: string; retailer: string; asin: string; units: number; reason: "no_order" | "po_not_found"; note?: string; candidates?: MatchCandidate[]; miss?: string | null; vDate?: string | null }>;
-  /** Every line placed by a rule past the legacy keys this run (alias / normalized / col_p / base_id / candidate), for the backfill report. */
+  /** Every line placed by a rule past the legacy keys this run (alias / normalized / base_id / candidate), for the backfill report. */
   ruleLinks: Array<{ shipment: string; shippedAt: string | null; orderId: string; orderNumber: string; retailer: string; asin: string; units: number; how: string; poAsinId: string; poOrderId: string; supplier: string; poDate: string; vDate: string | null; days: number | null; wasUnmatched: boolean }>;
   /** Every po_asins.received_velocity change this run (set or cleared), for the backfill's per-PO report. */
   receivedVelocityOps: Array<{ id: string; poId: string; orderId: string; supplier: string; asin: string; from: number | null; to: number | null }>;
@@ -210,28 +207,8 @@ export function buildAfIndex(rows: AfAsinRow[]): AfIndex {
 }
 
 export type Resolution =
-  | { ok: true; row: AfAsinRow; how: "exact" | "order_only" | "picker" | "pinned" | "linked" | "col_p" | "alias" | "normalized" | "base_id" | "candidate" }
+  | { ok: true; row: AfAsinRow; how: "exact" | "order_only" | "picker" | "pinned" | "linked" | "alias" | "normalized" | "base_id" | "candidate" }
   | { ok: false; reason: "no_order" | "po_not_found"; note?: string; orderNumber: string; retailer: string; candidates?: MatchCandidate[] };
-
-export interface ColPCandidate { po_asin_id: string; order_id: string; supplier: string; asin: string }
-
-/**
- * Col P fallback for a line the keys could not place (no Order #, or an
- * Order # AF does not have — INSH-era rows; 2026-10-29 amendment): the PO
- * ASIN rows (same ASIN) whose sheet Col P names any FBA id of the line's
- * Velocity shipment. One → placed; several → unmatched with the
- * candidates; none → the original failure.
- */
-export function resolveByColP(res: Resolution, line: VelocityInboundOrder, fbaIds: readonly string[], colP: Map<string, ColPCandidate[]>, afById: Map<string, AfAsinRow>): Resolution {
-  if (res.ok || fbaIds.length === 0) return res;
-  const asin = String(line.asin ?? "").trim().toUpperCase();
-  const byId = new Map<string, ColPCandidate>();
-  for (const f of fbaIds) for (const c of colP.get(f) ?? []) if (c.asin === asin && afById.has(c.po_asin_id)) byId.set(c.po_asin_id, c);
-  const cands = Array.from(byId.values());
-  if (cands.length === 1) return { ok: true, row: afById.get(cands[0].po_asin_id)!, how: "col_p" };
-  if (cands.length > 1) return { ...res, note: `Col P names ${cands.length} PO ASIN rows`, candidates: cands.map((c) => ({ ...c, source: "col_p" as const })) };
-  return res;
-}
 
 /**
  * (Order #, retailer, ASIN) → po_asins row. A bundle parent (order_number
@@ -315,7 +292,6 @@ export async function syncVelocityShipments(opts: { dryRun: boolean; deps?: Velo
   const unmatchedRows = (await db.query(`SELECT id, velocity_shipment_id, velocity_order_id, reason, resolved_at, resolved_po_asin_id, match_reason FROM shipment_unmatched`)).rows;
   const unmatchedByKey = new Map<string, any>(unmatchedRows.map((r: any) => [`${r.velocity_shipment_id}\u0000${r.velocity_order_id}`, r]));
   const afById = new Map<string, AfAsinRow>(afRows.map((r) => [String(r.id), r]));
-  const matchById = new Map<string, AfAsinRow>(matchRows.map((r) => [String(r.id), r]));
   const kiAll = buildKeyIndex(afRows);
   // §3 / §4 context: normalized-key index, retailer aliases (+ a backfill's proposed seeds), AF suppliers.
   const aliases = new Map<string, string>(await loadAliases(db.query.bind(db)));
@@ -330,28 +306,10 @@ export async function syncVelocityShipments(opts: { dryRun: boolean; deps?: Velo
   /** A line recorded as linked (picker, or a §3 b / §4 link from an earlier run). */
   const priorLink = (prior: any): Resolution | null => {
     if (!prior?.resolved_po_asin_id || !afById.has(String(prior.resolved_po_asin_id))) return null;
-    const how = prior.match_reason === "candidate_unique" ? "candidate" : prior.match_reason === "base_id" ? "base_id" : prior.match_reason === "col_p" ? "col_p" : "picker";
+    // match_reason col_p (the retired sheet signal, 50 rows on production) is a recorded link like a picker's.
+    const how = prior.match_reason === "candidate_unique" ? "candidate" : prior.match_reason === "base_id" ? "base_id" : "picker";
     return { ok: true, row: afById.get(String(prior.resolved_po_asin_id))!, how };
   };
-  // Col P: FBA id → candidate PO ASIN rows; Velocity shipment → its FBA ids (component B's match).
-  const colP = new Map<string, ColPCandidate[]>();
-  for (const r of (await db.query(
-    `SELECT DISTINCT c.fba_shipment_id, pa.id AS po_asin_id, p.order_id, p.supplier, pa.asin
-       FROM po_sheet_fba_shipments c
-       JOIN purchase_orders p ON lower(p.supplier) = lower(c.supplier) AND p.order_id = c.order_id
-       JOIN po_asins pa ON pa.po_id = p.id AND pa.asin = c.asin`,
-  )).rows as any[]) {
-    const k = String(r.fba_shipment_id);
-    if (!colP.has(k)) colP.set(k, []);
-    colP.get(k)!.push({ po_asin_id: String(r.po_asin_id), order_id: String(r.order_id), supplier: String(r.supplier), asin: String(r.asin) });
-  }
-  const fbaIdsByShipment = new Map<string, string[]>(
-    (await db.query(`SELECT id, sc_shipment_ids FROM velocity_shipments WHERE sc_shipment_ids IS NOT NULL`)).rows.map((r: any) => [String(r.id), (r.sc_shipment_ids ?? []).map(String)]),
-  );
-  // Col P in the main pass: no-Order # lines only (as approved 2026-10-29); a
-  // line with an Order # AF lacks gets Col P in the units pass, with fit.
-  const withColP = (res: Resolution, line: VelocityInboundOrder, shipmentId: string | null): Resolution =>
-    shipmentId && !res.ok && res.reason === "no_order" ? resolveByColP(res, line, fbaIdsByShipment.get(shipmentId) ?? [], colP, matchById) : res;
   // Manual assignments (assigned_by = 'manual', 2026-10-18; Reassign
   // shipment, af-owned §5.2): a Velocity line (shipment, Velocity Order #,
   // ASIN) pinned to one or more PO ASIN rows stays there — never moved or
@@ -385,7 +343,7 @@ export async function syncVelocityShipments(opts: { dryRun: boolean; deps?: Velo
 
   // ── Resolve every shipment line ────────────────────────────────────────────
   const counts: VelocitySyncCounts = {
-    shipments: shipments.length, shipmentsFetched: fetchedIds.size, lines: 0, linesMatched: 0, linesMatchedOrderOnly: 0, linesPinned: 0, linesNoOrder: 0, linesMatchedColP: 0, linesColPAmbiguous: 0, linesPoNotFound: 0,
+    shipments: shipments.length, shipmentsFetched: fetchedIds.size, lines: 0, linesMatched: 0, linesMatchedOrderOnly: 0, linesPinned: 0, linesNoOrder: 0, linesPoNotFound: 0,
     linesMatchedAlias: 0, linesMatchedNormalized: 0, linesMatchedBaseId: 0, linesMatchedCandidate: 0, linesCandidateAmbiguous: 0,
     linesLinked: 0, homeOrders: 0, unplacedOrders: 0,
     rowsInserted: 0, rowsUpdated: 0, rowsUnchanged: 0, manualRowsKept: 0, manualSplitDrift: 0, unmatchedNew: 0, unmatchedResolved: 0, atPrepSet: 0, atPrepCleared: 0, atPrepUnchanged: 0, receivedVelocitySet: 0, receivedVelocityCleared: 0, receivedVelocityUnchanged: 0,
@@ -406,7 +364,7 @@ export async function syncVelocityShipments(opts: { dryRun: boolean; deps?: Velo
     const pin = (shipmentId ? pinned(shipmentId, line) : null) ?? linked(line);
     if (pin) return pin;
     const prior = shipmentId ? unmatchedByKey.get(`${shipmentId}\u0000${String(line.order_id ?? "")}`) : undefined;
-    return priorLink(prior) ?? withColP(resolveLine(line, idx, childrenByOrderId, ctx), line, shipmentId);
+    return priorLink(prior) ?? resolveLine(line, idx, childrenByOrderId, ctx);
   };
   const packsByRow = new Map<string, Map<string, { soldAs: "individual" | "multi-pack"; upp: number }>>();
   const notePack = (line: VelocityInboundOrder, shipmentId: string | null) => {
@@ -453,8 +411,8 @@ export async function syncVelocityShipments(opts: { dryRun: boolean; deps?: Velo
   // Lines the main pass could not place: settled after it, once every other placement is known (§3 b, §4).
   type Deferred = { key: string; shipmentId: string; shippedAt: string | null; line: VelocityInboundOrder; res: Extract<Resolution, { ok: false }>; prior: any; units: number };
   const deferred: Deferred[] = [];
-  // Units-pass links (Col P with fit, §3 b, §4), recorded on shipment_unmatched like a picker link.
-  const linkPlans: Array<{ key: string; shipmentId: string; orderId: string; line: any; reason: "no_order" | "po_not_found"; poAsinId: string; poId: string; how: "col_p" | "base_id" | "candidate"; units: number }> = [];
+  // Units-pass links (§3 b, §4), recorded on shipment_unmatched like a picker link.
+  const linkPlans: Array<{ key: string; shipmentId: string; orderId: string; line: any; reason: "no_order" | "po_not_found"; poAsinId: string; poId: string; how: "base_id" | "candidate"; units: number }> = [];
   const noteRuleLink = (s: { shipment_id: string }, shippedAt: string | null, line: VelocityInboundOrder, row: AfAsinRow, how: string, units: number, wasUnmatched: boolean) => {
     const vDate = velocityDate(line);
     ruleLinks.push({ shipment: s.shipment_id, shippedAt, orderId: String(line.order_id ?? ""), orderNumber: String(line.order_number ?? ""), retailer: String(line.retailer ?? ""), asin: String(line.asin ?? ""), units, how,
@@ -492,17 +450,16 @@ export async function syncVelocityShipments(opts: { dryRun: boolean; deps?: Velo
         manualLines.set(pk, m);
         continue;
       }
-      const res: Resolution = linked(line) ?? priorLink(prior) ?? withColP(resolveLine(line, idx, childrenByOrderId, ctx), line, s.shipment_id);
+      const res: Resolution = linked(line) ?? priorLink(prior) ?? resolveLine(line, idx, childrenByOrderId, ctx);
       const units = num(line.quantity_shipped);
       if (!res.ok) { deferred.push({ key, shipmentId: s.shipment_id, shippedAt, line, res, prior, units }); continue; }
       counts.linesMatched++;
       if (res.how === "order_only") counts.linesMatchedOrderOnly++;
       if (res.how === "linked") counts.linesLinked++;
       noteHome(res.row, line);
-      if (res.how === "col_p") counts.linesMatchedColP++;
       if (res.how === "alias") counts.linesMatchedAlias++;
       if (res.how === "normalized") counts.linesMatchedNormalized++;
-      if (res.how === "alias" || res.how === "normalized" || res.how === "col_p") noteRuleLink(s, shippedAt, line, res.row, res.how, units, !!prior && !prior.resolved_at);
+      if (res.how === "alias" || res.how === "normalized") noteRuleLink(s, shippedAt, line, res.row, res.how, units, !!prior && !prior.resolved_at);
       if (prior && !prior.resolved_at) resolvedNow.set(String(prior.id), res.how);
       const rk = `${res.row.id}\u0000${s.shipment_id}`;
       const plan = rowPlans.get(rk) ?? { poAsinId: String(res.row.id), shipmentId: s.shipment_id, units: 0, upp: Number(res.row.units_per_pack) || 1, shippedAt, lines: [] };
@@ -525,11 +482,11 @@ export async function syncVelocityShipments(opts: { dryRun: boolean; deps?: Velo
   }
   const byVelocityDate = (a: Deferred, b: Deferred) => String(velocityDate(a.line) ?? "9999").localeCompare(String(velocityDate(b.line) ?? "9999")) || String(a.line.order_id ?? "").localeCompare(String(b.line.order_id ?? "")) || a.key.localeCompare(b.key);
   const remainingFor = (line: VelocityInboundOrder) => { const upp = velocityPack(line)?.upp ?? null; return (row: AfAsinRow) => capacityUnits(row, upp) - (placedUnits.get(String(row.id)) ?? 0); };
-  const linkLines = (lines: Deferred[], row: AfAsinRow, how: "col_p" | "base_id" | "candidate") => {
+  const linkLines = (lines: Deferred[], row: AfAsinRow, how: "base_id" | "candidate") => {
     addPlaced(String(row.id), lines.reduce((t, d) => t + d.units, 0));
     for (const d of lines) {
       counts.linesMatched++;
-      if (how === "col_p") counts.linesMatchedColP++; else if (how === "base_id") counts.linesMatchedBaseId++; else counts.linesMatchedCandidate++;
+      if (how === "base_id") counts.linesMatchedBaseId++; else counts.linesMatchedCandidate++;
       const rk = `${row.id}\u0000${d.shipmentId}`;
       const plan = rowPlans.get(rk) ?? { poAsinId: String(row.id), shipmentId: d.shipmentId, units: 0, upp: Number(row.units_per_pack) || 1, shippedAt: d.shippedAt, lines: [] };
       plan.units += d.units; plan.lines.push(`${row.supplier} ${row.order_id} ${row.asin} ${d.units}u (${how})`);
@@ -539,28 +496,7 @@ export async function syncVelocityShipments(opts: { dryRun: boolean; deps?: Velo
       if (samples.length < 10) samples.push(`${d.shipmentId.slice(0, 8)} ${d.shippedAt ?? "?"} · ${row.supplier} ${row.order_id} ${row.asin}: ${d.units} Individual units (${how})`);
     }
   };
-  // Col P for a line WITH an Order # AF lacks (INSH-era, _N): the sheet row
-  // must also fit the units — the line's own order # disagrees with the sheet,
-  // so Col P alone could place it past Ordered (CAR118805142_1 onto a fully
-  // shipped CAR118908837, 2026-10-29). Per line: one row that fits → placed;
-  // one that doesn't → a hint only: the line still falls through to the base
-  // order # and §4 rules, and the hint is shown only if they place nothing
-  // (Maria 2026-10-29: "Col P is a hint, not a verdict"); several → candidates.
-  const colPMiss = new Map<string, string>();
-  const colPHint = new Map<string, MatchCandidate>();
-  const rest: Deferred[] = [];
-  for (const d of [...deferred].sort(byVelocityDate)) {
-    if (d.res.reason === "po_not_found") {
-      const cp = resolveByColP(d.res, d.line, fbaIdsByShipment.get(d.shipmentId) ?? [], colP, matchById);
-      if (cp.ok) {
-        const left = remainingFor(d.line)(cp.row);
-        if (left + 1e-9 >= d.units) { linkLines([d], cp.row, "col_p"); continue; }
-        colPHint.set(d.key, { po_asin_id: String(cp.row.id), order_id: cp.row.order_id, supplier: cp.row.supplier, asin: cp.row.asin, source: "col_p" });
-        colPMiss.set(d.key, `Col P names PO ${cp.row.order_id} (${cp.row.supplier}), but it has ${round2(Math.max(0, left))} Individual units left, the line needs ${d.units}`);
-      } else if (cp.candidates) d.res = cp;
-    }
-    rest.push(d);
-  }
+  const rest: Deferred[] = [...deferred].sort(byVelocityDate);
   // One decision per Velocity order: its split shipments go to one row.
   const groups = new Map<string, Deferred[]>();
   for (const d of rest) { const g = String(d.line.order_id ?? "") || d.key; if (!groups.has(g)) groups.set(g, []); groups.get(g)!.push(d); }
@@ -572,10 +508,8 @@ export async function syncVelocityShipments(opts: { dryRun: boolean; deps?: Velo
     const ret: RetailerResolution = resolveRetailer(first.res.retailer, ctx.aliases, ctx.suppliers);
     const orderNumber = first.res.orderNumber;
     let row: AfAsinRow | null = null; let how: "base_id" | "candidate" | null = null;
-    const colPCands = new Map<string, MatchCandidate>();
-    for (const d of g) for (const c of d.res.candidates ?? []) colPCands.set(c.po_asin_id, c);
-    let cands: MatchCandidate[] = Array.from(colPCands.values());
-    let miss: string | null = g.map((d) => colPMiss.get(d.key)).find(Boolean) ?? null;
+    let cands: MatchCandidate[] = [];
+    let miss: string | null = null;
     // §3 b: base order #, exactly one row, units fit.
     const base = orderNumber ? baseKeyRows(orderNumber, asin, ret, ctx.ki) : [];
     if (base.length === 1) {
@@ -588,20 +522,17 @@ export async function syncVelocityShipments(opts: { dryRun: boolean; deps?: Velo
       const why = hit ? velocityIneligible(hit, velocityStart) : null;
       if (hit && why) miss = `PO ${hit.order_id} (${hit.supplier}) ${ineligibleText(why, velocityStart)} — not offered`;
     }
-    // §4: candidates, unless Col P named several rows (those stay for review).
-    // A non-fitting Col P hint does not count — it never blocks §4.
-    if (!row && cands.length === 0) {
+    // §4: candidates.
+    if (!row) {
       const ranked = rankCandidates({ asin, retailer: ret, units, vDate: velocityDate(first.line), orderNumber }, ctx.ki, remaining);
       if (ranked.candidates.length === 1) { row = ranked.candidates[0].row; how = "candidate"; }
       else if (ranked.candidates.length > 1) { cands = ranked.candidates.slice(0, 5).map(({ row: _r, ...c }) => c); counts.linesCandidateAmbiguous += g.length; }
       else miss = miss ?? ranked.miss;
     }
     if (row && how) { linkLines(g, row, how); continue; }
-    for (const d of g) { const h = colPHint.get(d.key); if (h && !cands.some((c) => c.po_asin_id === h.po_asin_id)) cands = [...cands, h]; }
     if (cands.length === 0 && miss == null) miss = nearestMiss({ asin, retailer: ret, units, vDate: velocityDate(first.line), orderNumber }, ctx.ki, remaining);
     for (const d of g) {
       if (d.res.reason === "no_order") counts.linesNoOrder++; else counts.linesPoNotFound++;
-      if (cands.some((c) => c.source === "col_p")) counts.linesColPAmbiguous++;
       unmatchedPlans.set(d.key, { shipmentId: d.shipmentId, orderId: String(d.line.order_id ?? ""), line: d.line, reason: d.res.reason, candidates: cands.length > 0 ? cands : null, miss });
       unmatched.push({ shipment: d.shipmentId, shippedAt: d.shippedAt, orderId: String(d.line.order_id ?? ""), orderNumber: d.res.orderNumber, retailer: d.res.retailer, asin: String(d.line.asin ?? ""), units: d.units, reason: d.res.reason, note: d.res.note, candidates: cands.length > 0 ? cands : undefined, miss, vDate: velocityDate(d.line) });
     }
@@ -659,7 +590,7 @@ export async function syncVelocityShipments(opts: { dryRun: boolean; deps?: Velo
     const sid = String((line as any).__shipment_id ?? "");
     const prior = sid ? unmatchedByKey.get(`${sid}\u0000${String(line.order_id ?? "")}`) : undefined;
     const res: Resolution = (sid ? pinned(sid, line) : null) ?? linked(line)
-      ?? priorLink(prior) ?? withColP(resolveLine(line, idx, childrenByOrderId, ctx), line, sid || null);
+      ?? priorLink(prior) ?? resolveLine(line, idx, childrenByOrderId, ctx);
     if (!res.ok) {
       // Never shipped and placed nowhere: "Velocity orders with no PO" (a shipped line is on the shipment list already).
       if (!sid) {

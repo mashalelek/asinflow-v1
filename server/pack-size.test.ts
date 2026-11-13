@@ -1,6 +1,4 @@
 import { describe, it, expect } from "vitest";
-import { parsePoSheet, PO_SHEET_HEADER_EXPECT } from "./po-sheet-sync";
-import { COL } from "./po-import-classify";
 import { syncVelocityShipments, velocityPack, type AfAsinRow, type VelocitySyncDeps } from "./shipment-sync-velocity";
 import { ASIN_ACTION_ITEMS_SQL, PO_ACTION_ITEMS_SQL, PO_CLOSE_ACTION_ITEMS_SQL, asinWriteThrough, yieldMismatchLine } from "./po-action-items";
 import { PACK_SIZE_MISMATCH, PACK_SIZE_MISSING, normalizeActionItems } from "./po-status-map";
@@ -11,32 +9,6 @@ import { resetDefaultedPackSize } from "./po-edit";
 // Velocity's 46 component units by 1 — 46 "shipped" against 24 ordered, on
 // 33 lines across 25 POs. Blank is now "not filled in"; the divisor stays
 // AF's, but a disagreement is flagged, never silent.
-
-// ── intake ────────────────────────────────────────────────────────────────────
-const HEADER: string[] = Array(52).fill("");
-for (const [idx, caption] of PO_SHEET_HEADER_EXPECT) HEADER[idx] = caption;
-function row(o: { orderId: string; date: string; asin: string; soldAs?: string; upp?: string }): string[] {
-  const c: string[] = Array(52).fill("");
-  c[COL.orderId] = o.orderId; c[COL.orderDate] = o.date; c[COL.status] = "Ordered"; c[COL.supplier] = "webstaurantstore.com";
-  c[COL.productName] = "Bowl"; c[COL.asin] = o.asin; c[COL.qtyOrdered] = "2"; c[COL.asinQtyTotal] = "24"; c[COL.uniqueProductsPerAsin] = "1";
-  c[COL.asinQtyPerProduct] = "12"; c[COL.adjCogs] = "$2.33"; c[COL.adjProductCost] = "$27.99"; c[COL.price] = "$27.99";
-  c[COL.subtotal] = "$55.98"; c[COL.orderTotal] = "$55.98"; c[COL.soldAs] = o.soldAs ?? ""; c[COL.unitsPerPack] = o.upp ?? "";
-  return c;
-}
-const asinOf = (cells: string[][]) => parsePoSheet(HEADER, cells).pos[0].poAsins[0];
-
-describe("sheet intake: a blank Col AX is not filled in, never individual", () => {
-  it("2026 row, blank sold_as → sold_as and units_per_pack NULL", () => {
-    expect(asinOf([row({ orderId: "126768935", date: "6/9/2026", asin: "B00XWY0UEM" })])).toMatchObject({ soldAs: null, unitsPerPack: null });
-  });
-  it("2026 row, filled → verbatim (multi-pack ×2; individual ×1)", () => {
-    expect(asinOf([row({ orderId: "1", date: "6/9/2026", asin: "B00XWY0UEM", soldAs: "multi-pack", upp: "2" })])).toMatchObject({ soldAs: "multi-pack", unitsPerPack: 2 });
-    expect(asinOf([row({ orderId: "2", date: "6/9/2026", asin: "B00XWY0UEM", soldAs: "individual" })])).toMatchObject({ soldAs: "individual", unitsPerPack: 1 });
-  });
-  it("pre-2026 row, blank → the history reading is unchanged (individual)", () => {
-    expect(asinOf([row({ orderId: "3", date: "6/9/2025", asin: "B00XWY0UEM" })])).toMatchObject({ soldAs: "individual", unitsPerPack: 1 });
-  });
-});
 
 // ── shipment sync A ───────────────────────────────────────────────────────────
 const SID = "42462946-5947-4918-b1f0-10463d5c391a";

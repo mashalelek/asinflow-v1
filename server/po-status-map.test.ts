@@ -73,14 +73,7 @@ describe("consumers switched (§6.3)", () => {
     expect(block).toMatch(/normalizeActionItems\(/);
     expect((block.match(/await evaluateAutoClose\(/g) ?? []).length).toBe(9); // PO + ASIN + product action items, ASIN cancel, quantities, shipments ×2, Sync Shipments, supplier defects (the unmatched link: shipment-link.ts)
   });
-  it("the importer writes action_items / closed_at / qty_canceled and never the status column", () => {
-    const imp = read("script/import-po-2026.ts");
-    expect(imp).toMatch(/mapSheetStatus\(/);
-    expect(imp).toMatch(/INSERT INTO purchase_orders \(order_id, order_date, supplier, action_items, closed_at, closed_by,/);
-    expect(imp).not.toMatch(/INSERT INTO purchase_orders \([^)]*\bstatus\b/);
-    expect(imp).toMatch(/p\.canceledFromSheet \? l\.qtyOrdered : null/);
-    expect(imp).toMatch(/unmapped token\(s\)/);
-  });
+  // The one-time importer (script/import-po-2026.ts) left with the Orders sheet (2026-11-13); its rows are history.
   it("the one-time value migration is dry-run by default and stops on an unmapped value", () => {
     const s = read("script/migrate-po-status.ts");
     expect(s).toMatch(/const LIVE = process\.argv\.includes\("--live"\)/);

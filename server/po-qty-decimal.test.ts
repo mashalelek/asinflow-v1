@@ -1,6 +1,5 @@
 import { describe, it, expect } from "vitest";
 import { readFileSync } from "fs";
-import { qtyOrNull, intOrNull } from "./po-sheet-sync";
 import { normalizeAsinRowQty, normalizeLineQty } from "./po-queries";
 
 // Migration 062 (2026-10-18): every PO quantity is numeric(10,2).
@@ -12,14 +11,6 @@ describe("decimal PO quantities", () => {
     expect(sql).toMatch(/ALTER COLUMN unreimbursed_loss_qty TYPE numeric\(10,2\)/);
     expect(sql).toMatch(/ADD COLUMN final_qty numeric\(10,2\) GENERATED ALWAYS AS \(\(qty_ordered - qty_canceled\) - qty_returned\) STORED/);
     expect(sql).not.toMatch(/\bBEGIN\b|\bCOMMIT\b/);
-  });
-  it("the intake keeps a quantity cell's decimals (2 places); counts stay whole", () => {
-    expect(qtyOrNull("13.5")).toBe(13.5);
-    expect(qtyOrNull("1.333333333")).toBe(1.33);
-    expect(qtyOrNull("1,200")).toBe(1200);
-    expect(qtyOrNull("")).toBeNull();
-    expect(() => qtyOrNull("abc")).toThrow(/unparseable quantity/);
-    expect(intOrNull("2")).toBe(2);
   });
   it("the API returns quantities as numbers, NULL stays NULL", () => {
     expect(normalizeAsinRowQty({ qty: "2.50", unreimbursed_loss_qty: null, qty_individual: "5.00", open_claims: "1" })).toEqual({ qty: 2.5, unreimbursed_loss_qty: null, qty_individual: 5, open_claims: 1 });

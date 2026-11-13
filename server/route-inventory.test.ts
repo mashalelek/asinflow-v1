@@ -110,7 +110,6 @@ const EXPECTED_ROUTES = [
   "POST /api/parse-mapped",
   "POST /api/prices/refresh",
   "POST /api/sales/sync",
-  "POST /api/sheets/sync",
   "POST /api/sku-legend/approve",
   "POST /api/submissions/:id/resolve",
   "POST /api/submissions/dismiss-flags",

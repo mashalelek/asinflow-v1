@@ -24,7 +24,7 @@ export interface MatchRow { id: string; asin: string; order_id: string; supplier
 
 export interface MatchCandidate {
   po_asin_id: string; order_id: string; supplier: string; asin: string;
-  source: "col_p" | "candidate";
+  source: "candidate"; // stored rows from before 2026-11-13 may still carry "col_p" (the retired sheet signal)
   order_date?: string; days?: number; remaining_units?: number; units?: number;
 }
 

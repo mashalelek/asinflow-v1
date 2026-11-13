@@ -40,7 +40,7 @@ import { ToastAction } from "@/components/ui/toast";
 import { loadBuyList, saveBuyList, loadOnHoldList, saveOnHoldList } from "@/lib/buy-hold";
 import { planBulkSetToggle, bulkToggleLabel, applyBulkPlan } from "@/lib/bulk-buy-hold";
 import { fetchLongSync } from "@/lib/long-sync";
-import { Sun, Moon, BarChart3, Zap, AlertTriangle, X, Search, RefreshCw, Archive, Sheet, Database, ShoppingCart, DollarSign, FileSpreadsheet, Upload, Plus, ScanSearch, History } from "lucide-react";
+import { Sun, Moon, BarChart3, Zap, AlertTriangle, X, Search, RefreshCw, Archive, Database, ShoppingCart, DollarSign, FileSpreadsheet, Upload, Plus, ScanSearch, History } from "lucide-react";
 import { Checkbox } from "@/components/ui/checkbox";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import {
@@ -400,7 +400,6 @@ export default function Home() {
   const [revealAsins, setRevealAsins] = useState<Set<string>>(new Set());
   const [pendingAdded, setPendingAdded] = useState<{ asins: string[]; title: string; base: string } | null>(null);
   const addedWatchRef = useRef<{ asins: string[]; hidden: number; recheck: boolean } | null>(null);
-  const [isSyncing, setIsSyncing] = useState(false);
   // Scheduler v1 (SPEC §11 "Refresh job", 2026-10-15): ONE Refresh button
   // enqueues a job; the jobs dialog is the history and the per-component
   // report. Product Info / Prices & Stock and their dialogs are gone.
@@ -855,30 +854,6 @@ export default function Home() {
       ? Array.from(selectedSet)
       : sortedFilteredResultsRef.current.map((r) => r.asin);
   }, [selectedSet]);
-
-  const handleSyncSheet = useCallback(async () => {
-    const ws = currentWorkingSet();
-    if (ws.length === 0) return;
-    setIsSyncing(true);
-    try {
-      const data = await fetchLongSync("/api/sheets/sync", { asins: ws });
-      // Two outcomes (patch po-sheet-sync §4): the whole-sheet PO sync first,
-      // then the per-ASIN COGS/ordered-qty sync for the working set.
-      const po = data.poSync;
-      const poLine = !po ? "POs: not run"
-        : "error" in po ? `POs: FAILED — ${po.error}`
-        : po.stop ? `POs: STOPPED, nothing written — ${po.stop}`
-        : `POs: +${po.counts.inserted} new${po.counts.prepApplied ? `, prep from the sheet applied on ${po.counts.prepApplied} ASIN row(s)${po.counts.shipsToApplied ? ` (Ships to changed on ${po.counts.shipsToApplied} PO(s))` : ""}` : ""}${po.counts.sheetDiffers ? `, ${po.counts.sheetDiffers} existing differ from the sheet (AF owns them — not applied)` : ""}${po.counts.tombstoned ? `, ${po.counts.tombstoned} deleted in AF (not re-imported)` : ""}${po.counts.skippedBadCells ? `, ${po.counts.skippedBadCells} skipped (bad cell)` : ""}`;
-      const asinLine = `ASINs: updated ${data.updated}, skipped ${data.skipped}${data.cleared ? `, cleared ${data.cleared} stale on-order ASIN units` : ""}`;
-      const poFailed = !po || "error" in po || Boolean(po.stop);
-      toast({ title: poFailed ? "Synced ASINs; PO sync did not complete" : "Synced POs and ASINs", description: `${poLine}. ${asinLine}`, variant: poFailed ? "destructive" : undefined });
-      await fetchAsins(startDate, endDate, showParked, showDead);
-    } catch (err: any) {
-      toast({ title: "Sync failed", description: err.message, variant: "destructive" });
-    } finally {
-      setIsSyncing(false);
-    }
-  }, [toast, currentWorkingSet, fetchAsins, startDate, endDate, showParked, showDead]);
 
   // ── Scheduler v1 (SPEC §11 "Refresh job", 2026-10-15) ────────────────────
   // Job-finish row refresh (performance, 2026-10-18): a finished job reloads
@@ -1700,7 +1675,7 @@ export default function Home() {
               sync pair + push-out buttons in the spec's exact order; RIGHT =
               Upload | Export | status actions. */}
           <div className="flex items-center justify-between gap-2 flex-wrap">
-            {/* LEFT — Add to SC | Product Info | Prices & Stock | Sync Sourcing | Sync POs | Push to Aura | Export SB COGS | Update COGS in SC */}
+            {/* LEFT — Add to SC | Product Info | Prices & Stock | Sync Sourcing | Push to Aura | Export SB COGS | Update COGS in SC */}
             <div className="flex items-center gap-2 flex-wrap">
               <Button
                 variant="outline"
@@ -1762,10 +1737,6 @@ export default function Home() {
               <Button variant="outline" size="sm" onClick={handleSyncSourcing} disabled={isSyncingSourcing || isAnalyzing} className="h-8 text-xs">
                 <FileSpreadsheet className="h-3.5 w-3.5 mr-1.5" />
                 {isSyncingSourcing ? "Syncing..." : "Sync Sourcing"}
-              </Button>
-              <Button variant="outline" size="sm" onClick={handleSyncSheet} disabled={isSyncing || isAnalyzing} className="h-8 text-xs">
-                <Sheet className="h-3.5 w-3.5 mr-1.5" />
-                {isSyncing ? "Syncing..." : `Sync POs${btnSuffix(workingSetCount, workingSetIsSelection)}`}
               </Button>
               <Button variant="outline" size="sm" onClick={handlePushAura} disabled={isPushingAura || isAnalyzing} className="h-8 text-xs">
                 <DollarSign className="h-3.5 w-3.5 mr-1.5" />

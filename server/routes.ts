@@ -42,7 +42,6 @@ import { PreviewRequestSchema, capturePreview } from "./capture-preview";
 import { aiAvailable, AI_OFF_MESSAGE } from "./config/ai";
 import { listSubscriptions, createSubscription, updateSubscription } from "./subscriptions";
 import { loadPoGuards, deletePo, cancelPo, assertAsinRowCancelable, reassignShipment } from "./po-guards";
-import { syncPoSheet, type PoSyncResult } from "./po-sheet-sync";
 import { syncVelocityShipments, type VelocitySyncResult } from "./shipment-sync-velocity";
 import { syncScShipments, type ScSyncResult } from "./shipment-sync-sc";
 import { loadAsinPipeline, EMPTY_PIPELINE } from "./asin-po-pipeline";
@@ -1626,45 +1625,6 @@ export async function registerRoutes(
         return await syncSalesData(startDate, endDate, filter);
       } catch (err: any) {
         log(`Sales sync error: ${err.message}`, "sales-sync");
-        throw err;
-      }
-    });
-  });
-
-  // Sync POs (patch docs/claude_spec-patch-po-sheet-sync.md §4, 2026-10-16):
-  // the Orders-sheet → PO-module sync runs FIRST over the whole sheet, then
-  // the existing per-ASIN COGS/ordered-qty sync for the working set. If the
-  // PO sync fails the per-ASIN sync still runs and the result carries both
-  // outcomes (`poSync.error`). `?dryRun=true` runs only the PO sync's plan
-  // and writes nothing at all. Inline, off the queue (rule C).
-  app.post("/api/sheets/sync", async (req: Request, res: Response) => {
-    if (!isDbAvailable()) { res.status(503).json({ message: "Database not available" }); return; }
-    const credPath = process.env.GOOGLE_CREDENTIALS_PATH;
-    if (!credPath || !fs.existsSync(credPath)) {
-      res.status(400).json({ message: "Google credentials file not found" });
-      return;
-    }
-    const sheetId = process.env.GOOGLE_SHEET_ID;
-    if (!sheetId) { res.status(400).json({ message: "GOOGLE_SHEET_ID not configured" }); return; }
-    const dryRun = String(req.query.dryRun ?? "") === "true";
-    const { asins } = (req.body ?? {}) as { asins?: string[] };
-    const filter = asins && asins.length > 0 ? new Set(asins) : undefined;
-    await respondLongSync(res, async () => {
-      let poSync: PoSyncResult | { error: string };
-      try {
-        poSync = await syncPoSheet({ sheetId, dryRun });
-        const c = poSync.counts;
-        log(`PO sync ${dryRun ? "DRY RUN" : poSync.wrote ? "live" : "STOPPED"}: sheet ${c.sheetPos}, insert ${c.inserted}, update ${c.updated}, unchanged ${c.unchanged}, lines deleted ${c.linesDeleted}, po_asins deleted ${c.poAsinsDeleted}, kept(shipments) ${c.poAsinsKeptWithShipments}, canceled kept ${c.canceledKeptOrderedQty}, canceled 0/0 ${c.canceledNoOrderedQty}, in AF not in sheet ${c.posInAfNotInSheet}, unmapped ${c.unmappedTokens}${poSync.stop ? ` — STOP: ${poSync.stop}` : ""}`, "sheets");
-      } catch (err: any) {
-        log(`PO sync error: ${err.message}`, "sheets");
-        poSync = { error: err?.message ?? String(err) };
-      }
-      if (dryRun) return { dryRun: true, updated: 0, skipped: 0, errors: [], cleared: 0, clearedAsins: [], poSync };
-      try {
-        const asinSync = await syncAsinCosts(filter);
-        return { ...asinSync, poSync };
-      } catch (err: any) {
-        log(`Sheets sync error: ${err.message}`, "sheets");
         throw err;
       }
     });
