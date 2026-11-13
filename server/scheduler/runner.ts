@@ -23,6 +23,7 @@ import {
   type JobProgress, type Flip, type QueryLike, type Lane,
 } from "./types";
 import { assessStep, stepNotes } from "./step-failures";
+import { runInDbLane } from "../db-lane";
 
 export const RUNNER_LOCK_KEY = 7342002;
 /** summary.stoppedAt for a failure in the bulk public pass — not a component number (22–24 are listing hygiene). */
@@ -34,8 +35,13 @@ let runnerLog: Logger = (m, s = "scheduler") => console.log(`[${s}] ${m}`);
 export function setRunnerLogger(fn: Logger): void { runnerLog = fn; }
 const log = (m: string) => runnerLog(m, "scheduler");
 
+/** The pool the runner needs: `connect` for the claim / lock client, `query` for the belt (server/db.ts's lane-routed default export). */
+export interface RunnerPool {
+  query: (text: string, params?: any[]) => Promise<{ rows: any[]; rowCount: number | null }>;
+  connect: () => Promise<{ query: (text: string, params?: any[]) => Promise<{ rows: any[]; rowCount: number | null }>; release: (err?: Error | boolean) => void }>;
+}
 export interface RunnerDeps {
-  pool: pg.Pool;
+  pool: RunnerPool;
   sellerId: string;
   /**
    * Functions the routes layer owns and components need, placed in every
@@ -263,7 +269,7 @@ export function startRunner(deps: RunnerDeps): RunnerHandle {
   let stopped = false;
   runnerActive = true;
   let current: Promise<void> = Promise.resolve();
-  let lockClient: pg.PoolClient | null = null;
+  let lockClient: Awaited<ReturnType<RunnerPool["connect"]>> | null = null;
 
   const sleep = (ms: number) => new Promise<void>((r) => setTimeout(r, ms));
 
@@ -300,7 +306,9 @@ export function startRunner(deps: RunnerDeps): RunnerHandle {
       }
       if (!job) { await sleep(pollMs); continue; }
       try {
-        await runJob(job, { query: (sql, params) => deps.pool.query(sql, params), sellerId: deps.sellerId, components: deps.components, now: deps.now, inject: deps.inject });
+        // The job lane (server/db-lane.ts, 2026-11-13): every query the job makes, through any module, goes to the
+        // job pool with its own statement limit — never the web pool's 15 s, never a web request's connection.
+        await runInDbLane("job", () => runJob(job, { query: (sql, params) => deps.pool.query(sql, params), sellerId: deps.sellerId, components: deps.components, now: deps.now, inject: deps.inject }));
       } catch (err: any) {
         // runJob finishes the job itself in every expected path; this is the
         // belt for an unexpected throw (e.g. a progress write failing).

@@ -104,19 +104,22 @@ export interface AsinHistory {
   recent: Array<{ orderDate: string; orderId: string; supplier: string; how: string; asinUnits: number | null; cogs: number | null; promos: PromoShown[] }>;
   conversion: string | null;
 }
-/** A line fully canceled by its claims (po_line_expected, migration 101). */
-const lineCanceled = `COALESCE((SELECT le.fully_canceled FROM po_line_expected le WHERE le.line_id = l.id), false)`;
-const notCanceled = `NOT COALESCE((SELECT bool_and(${lineCanceled}) FROM po_line_items l WHERE l.po_asin_id = pa.id), false)`;
+// Canceled lines / rows read the views JOINed on their key (po_line_expected.fully_canceled per line,
+// po_asin_expected.fully_canceled = every line canceled, per row) — never a correlated `(SELECT … FROM po_line_expected
+// WHERE line_id = l.id)` per line: that shape built the whole view per line and ran 43 s – 3.5 min for walmart.com's
+// 1,066 lines, filled the pool and took production down (2026-11-12/13, migration 107).
 const n = (v: unknown): number | null => (v == null || v === "" || !Number.isFinite(Number(v)) ? null : Number(v));
 
 export async function asinHistory(query: QueryLike, asin: string, listingPack: number | null = null, today?: string): Promise<AsinHistory> {
   const meta = (await query(`SELECT title, units_per_pack FROM asins WHERE asin = $1`, [asin])).rows[0] as any;
   const rows = (await query(
-    `SELECT p.id AS po_id, p.order_id, p.order_date::text AS order_date, p.supplier, (SELECT e.ordered_asin FROM po_asin_expected e WHERE e.id = pa.id) AS qty, pa.cost_per_unit, pa.asin_name, pa.units_per_pack,
+    `SELECT p.id AS po_id, p.order_id, p.order_date::text AS order_date, p.supplier, e.ordered_asin AS qty, pa.cost_per_unit, pa.asin_name, pa.units_per_pack,
             (p.order_date >= COALESCE($2::date, (now() AT TIME ZONE 'America/New_York')::date) - 365) AS in365,
-            (SELECT json_agg(json_build_object('ru', l.retailer_units_per_product, 'name', l.product_name, 'qty', (SELECT le.ordered_product FROM po_line_expected le WHERE le.line_id = l.id)) ORDER BY l.position) FROM po_line_items l WHERE l.po_asin_id = pa.id AND NOT ${lineCanceled}) AS lines
+            (SELECT json_agg(json_build_object('ru', l.retailer_units_per_product, 'name', l.product_name, 'qty', le.ordered_product) ORDER BY l.position)
+               FROM po_line_items l JOIN po_line_expected le ON le.line_id = l.id WHERE l.po_asin_id = pa.id AND NOT le.fully_canceled) AS lines
        FROM po_asins pa JOIN purchase_orders p ON p.id = pa.po_id
-      WHERE pa.asin = $1 AND ${notCanceled}
+       JOIN LATERAL (SELECT e.ordered_asin, e.fully_canceled FROM po_asin_expected e WHERE e.id = pa.id) e ON true
+      WHERE pa.asin = $1 AND NOT e.fully_canceled
       ORDER BY ${NEWEST_PO_ORDER}`,
     [asin, today ?? null],
   )).rows as any[];
@@ -173,8 +176,8 @@ export async function extensionHistory(query: QueryLike, q: HistoryQuery, today?
   if (!sup.known || (!q.name && !q.sku)) return { supplier, listing, match: { kind: "none", by: null, choices: [] }, history: null };
   const lines = (await query(
     `SELECT DISTINCT pa.asin, COALESCE(a.title, pa.asin_name) AS title, l.product_name, l.supplier_sku
-       FROM po_line_items l JOIN po_asins pa ON pa.id = l.po_asin_id JOIN purchase_orders p ON p.id = pa.po_id LEFT JOIN asins a ON a.asin = pa.asin
-      WHERE p.supplier = $1 AND NOT ${lineCanceled}`, [sup.supplier])).rows as any[];
+       FROM po_line_items l JOIN po_line_expected le ON le.line_id = l.id JOIN po_asins pa ON pa.id = l.po_asin_id JOIN purchase_orders p ON p.id = pa.po_id LEFT JOIN asins a ON a.asin = pa.asin
+      WHERE p.supplier = $1 AND NOT le.fully_canceled`, [sup.supplier])).rows as any[];
   const m = matchListing(lines, { name: q.name, sku: q.sku });
   if (m.confident) return withThisPo({ supplier, listing, match: { kind: "confident", by: m.confident.by, choices: [m.confident] }, history: await asinHistory(query, m.confident.asin, pack, today) });
   return { supplier, listing, match: { kind: m.choices.length ? "choices" : "none", by: m.choices[0]?.by ?? null, choices: m.choices }, history: null };

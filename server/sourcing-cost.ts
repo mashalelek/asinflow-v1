@@ -191,8 +191,8 @@ export async function buildSourcingCost(
     const { rows: costRows } = await q(
       `SELECT a.asin, e.actual_cogs, e.cogs_source,
               (SELECT CASE WHEN ${PATCH_FORWARD_PO_SQL} THEN pa.sourcing_cost END FROM po_asins pa JOIN purchase_orders p ON p.id = pa.po_id
-                WHERE pa.asin = a.asin
-                  AND NOT COALESCE((SELECT bool_and(le.fully_canceled) FROM po_line_expected le WHERE le.po_asin_id = pa.id), false)
+                 JOIN LATERAL (SELECT x.fully_canceled FROM po_asin_expected x WHERE x.id = pa.id) x ON true
+                WHERE pa.asin = a.asin AND NOT x.fully_canceled
                 ORDER BY ${NEWEST_PO_ORDER} LIMIT 1) AS sourcing_cost
          FROM asins a
          LEFT JOIN asin_estimates e ON e.asin = a.asin

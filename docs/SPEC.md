@@ -6775,7 +6775,27 @@ them — On Order (`PIPELINE_ROWS_SQL`), auto-close (`poAsinRowsSql`, which over
 view's ASIN-unit values under the names the API has always used and adds the `*_individual` twins), the Velocity
 plan (`loadAfPoRows`), the PO editor's rows and lines, the Dashboard's units rows, the exports, tracking push,
 sourcing cost, the extension's history. **Nothing divides by a pack size on its own any more**; a new reader joins
-the view. Writers store Individual units: a typed line qty (Product units) × the line's pack (`editLine`,
+the view.
+
+**The views are per-row cheap (migration 107, 2026-11-13).** The migration-101 definition built the whole view
+before any WHERE (a CTE referenced twice is materialized: every line, a COUNT(*) each), so a correlated
+`(SELECT fully_canceled FROM po_line_expected WHERE line_id = l.id)` cost 100–700 ms PER LINE on production;
+Capture PO's history lookup ran it once per PO line of the supplier (walmart.com: 1,066 → 43 s – 3.5 min per call,
+up to six calls per capture), the web pool filled, `/health` timed out and Render restarted the instance (23:49 UTC
+11/12, 01:14 and 01:20 UTC 11/13; the Postgres log named the query). `po_line_expected` is now one flat SELECT over
+`po_line_items` with two LATERAL lookups per line (the PO's lines: the row's line count + the PO's Individual
+total; the PO's counting claims: the line's own and the whole-PO ones), nothing grouped or materialized, so the
+planner pulls it into the caller and `line_id = $1` / `po_asin_id = $1` / `po_id = $1` reach the indexes (0.1 ms);
+`po_asin_expected` keeps its grouped line sums, keyed by `(po_asin_id, po_id)` so a `po_id = $1` reaches
+`idx_po_lines_po` inside the group. Same columns, same values (both EXCEPT ALL directions empty over every line and
+row on production). **A reader joins the view on its key or reads it in a LATERAL / correlated subquery with the
+key inside** (`JOIN po_line_expected le ON le.line_id = l.id`, `JOIN LATERAL (SELECT … FROM po_asin_expected e
+WHERE e.id = pa.id) e ON true`) — a plain `JOIN po_asin_expected e ON e.id = pa.id` under a filter on another
+column (`pa.asin = $1`) evaluates the whole view (the planner cannot parameterize a grouped subquery). A whole-view
+read costs two index reads per line (~0.4 s on the 0.1-CPU Basic instance, against 0.3 s before); the per-row
+readers (the POs list, the Dashboard, the sweep, the PO page, the extension) were the ones paying 0.1–0.7 s per
+row. The extension's history, `loadAfAsinCostMap` and the sourcing-cost lookup read `po_asin_expected.fully_canceled`
+(every line canceled) in a LATERAL by row instead of `bool_and` over a per-line subquery. Writers store Individual units: a typed line qty (Product units) × the line's pack (`editLine`,
 `addLine`, `po-create`, the sheet intake, a renewal copy — `server/po-expected.ts` holds the conversions); a pack
 change on a line keeps its Product units; Velocity's units, At Prep and Received by Velocity are written as counted;
 SC's received (ASIN units of the SKU) × the row's pack; the manual quantities, a refund qty and a claim qty are
@@ -8387,7 +8407,33 @@ now satisfies.
 | Install | Render's default `npm install` | Every package the build imports is in `dependencies` (tsx, vite, esbuild, typescript, @vitejs/plugin-react, autoprefixer, tailwindcss, postcss, @tailwindcss/typography, the Replit runtime-error plugin), so a production-only install still builds. Verified with `npm ci --omit=dev && npm run build` in a clean copy. |
 | Build | `npm run build` | `tsx script/build.ts`: Vite builds the client into `dist/public`, esbuild bundles the server into `dist/index.cjs` with `NODE_ENV` baked in as `production`. `dist/` is gitignored and never committed. |
 | Start | `npm start` | `NODE_ENV=production node dist/index.cjs`. The script sets `NODE_ENV` itself; do **not** set `NODE_ENV` in the Render environment. |
-| Health check | `GET /health` | Unauthenticated. `200 {"ok":true,"commit":"<7 chars of RENDER_GIT_COMMIT, null locally>"}` only when `SELECT 1 FROM asins LIMIT 1` succeeds; `503 {"ok":false}` otherwise, with the pg error written to the server log only. `commit` is how a deploy is confirmed from outside (2026-11-01: a server-only commit leaves the client bundle hash unchanged). Registered before the SPA catch-all, which answers 200 for any unknown path and would otherwise mask a dead database. |
+| Health check | `GET /health` | Unauthenticated. `200 {"ok":true,"commit":"<7 chars of RENDER_GIT_COMMIT, null locally>"}` only when `SELECT 1` on the health pool's own connection succeeds within 2 s (since 2026-11-13 — before, `SELECT 1 FROM asins LIMIT 1` on the shared pool, which hung behind slow queries); `503 {"ok":false}` otherwise, with the pg error written to the server log only. `commit` is how a deploy is confirmed from outside (2026-11-01: a server-only commit leaves the client bundle hash unchanged). Registered before the SPA catch-all, which answers 200 for any unknown path and would otherwise mask a dead database. |
+
+### Database pools, `/health`, boot (2026-11-13 — the 502s of 11/12–11/13)
+
+Three `pg.Pool`s over the one `DATABASE_URL` (`server/db.ts`); `query` and the default export route by lane
+(`server/db-lane.ts`, AsyncLocalStorage) so no call site names a pool:
+
+| Pool | Who | Limits | Why |
+|---|---|---|---|
+| web | every request handler (the default lane) | `statement_timeout` 15 s, pg's default 10 connections | a slow query fails ITS request (57014 "canceling statement due to statement timeout") instead of holding a connection until the pool is empty |
+| job | the scheduler's lanes — `startRunner` wraps `runJob` in `runInDbLane("job")`, so every query a job makes through any module lands here | `statement_timeout` 10 min, 6 connections | a pass keeps its own, longer limit and never competes with the web pool for a connection |
+| health | `GET /health` only | 1 connection; 2 s to connect, run and read | `/health` answers 503 within 2 s when the database is down or the web pool is stuck; it never waits on the web pool, so slow requests cannot make Render restart the instance |
+
+Migrations run on `createMigrationPool()` — one connection, no statement limit, ended after boot. An idle client's
+error (the server dropped it) is logged, never thrown (an unhandled pool `'error'` event ends the process).
+
+**Boot resilience (`server/boot-retry.ts`):** when Postgres refuses connections while the server starts (its
+restart, "service temporarily unavailable", too many connections — node `ECONNREFUSED` / `ECONNRESET` /
+`ETIMEDOUT`, Postgres class 08, `57P03`, `53300`, …) the migration step retries with backoff 2 s, 4 s, 8 s, 16 s,
+32 s, 58 s (two minutes in all) before exit 1, each attempt logged under `[boot]`. A failing MIGRATION
+(`MigrationError`) still exits at once — that posture is unchanged.
+
+**What took production down (Postgres log 11/13 01:14 and 01:20 UTC; the same at 23:49 UTC 11/12):** the Capture PO
+history lookup's per-line view subquery (SPEC §22 "The views are per-row cheap", migration 107) ran 43 s – 3.5 min
+per call on walmart.com, up to six calls per capture; the ASINs page's "days in stock" seq-scanned 1.3M
+`inventory_snapshots` rows (6–70 s; migration 108's partial index + the distinct-days rewrite). Both captures
+(23:46–23:47 and 01:11–01:19 UTC) preceded the restarts by one to three minutes.
 
 ### Environment variables
 

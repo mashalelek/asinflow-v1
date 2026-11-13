@@ -16,7 +16,8 @@ import { createCaptureSamplesRouter } from "./capture-samples";
 import { createAiSpendRouter } from "./ai-spend";
 import { serveStatic } from "./static";
 import { createServer } from "http";
-import pool, { ensureExtensionTables, query } from "./db";
+import pool, { ensureExtensionTables, healthCheck, createMigrationPool, poolForLane, query } from "./db";
+import { withBootRetry } from "./boot-retry";
 import { createSessionMiddleware, createAuthRouter, requireAuth, setAuthLogger } from "./auth";
 import { staleBuildGuard, readServerBuildId } from "./stale-build-guard";
 import { createAdminUsersRouter } from "./admin-users";
@@ -114,14 +115,21 @@ if (!process.env.VITEST) (async () => {
     // the files on disk. Fail closed — a failed migration exits before
     // listen, so Render's health check fails the deploy and keeps the
     // previous instance up (same posture as a missing SESSION_SECRET).
+    // Its own one-connection pool with no statement limit (server/db.ts), ended once done. A database that
+    // refuses connections while we start (its restart, "service temporarily unavailable", too many
+    // connections) is retried with backoff for two minutes (server/boot-retry.ts, 2026-11-13) — a crash loop
+    // never helped; a failing MIGRATION still exits at once.
     setMigrateLogger(log);
+    const migrationPool = createMigrationPool();
     try {
-      await runMigrations(pool);
+      await withBootRetry("migrations", () => runMigrations(migrationPool), { log: (m) => log(m, "boot") });
     } catch (err: any) {
       const msg = err instanceof MigrationError ? err.message : `migration runner failed: ${err?.message ?? err}`;
       log(msg, "migrate");
       console.error(msg);
       process.exit(1);
+    } finally {
+      await migrationPool.end().catch(() => {});
     }
     try {
       await ensureExtensionTables();
@@ -136,7 +144,10 @@ if (!process.env.VITEST) (async () => {
   // Health check for the hosting platform (SPEC "Deployment"). Unauthenticated.
   // Registered BEFORE the static catch-all: /{*path} serves index.html for any
   // unknown route with a 200, which would mask a dead database. 200 only when
-  // a trivial read of the main table succeeds; 503 with a FIXED body otherwise.
+  // a trivial read succeeds; 503 with a FIXED body otherwise. The read uses the
+  // health pool's own connection with a 2 s limit (server/db.ts, 2026-11-13):
+  // it never queues behind the web pool, so slow requests cannot make /health
+  // hang and Render restart the instance — it answers 503 within 2 s instead.
   // The pg error goes to the server log only — it can carry the database host,
   // and this route is public.
   // `commit` = the deployed git commit (Render sets RENDER_GIT_COMMIT; absent
@@ -145,7 +156,7 @@ if (!process.env.VITEST) (async () => {
   const commit = (process.env.RENDER_GIT_COMMIT ?? "").slice(0, 7) || null;
   app.get("/health", async (_req: Request, res: Response) => {
     try {
-      await query("SELECT 1 FROM asins LIMIT 1");
+      await healthCheck();
       res.json({ ok: true, commit });
     } catch (err: any) {
       log(`health check failed: ${err?.message ?? err}`, "health");
@@ -160,7 +171,7 @@ if (!process.env.VITEST) (async () => {
   // EasyPost webhook (SPEC §26 "Carrier status", 2026-11-11): public, outside /api, signature-verified in the router.
   app.use(createEasypostWebhookRouter({ query, log: (m) => log(m, "easypost") }));
   if (!process.env.SESSION_SECRET) log("SESSION_SECRET not set — using the insecure dev fallback (never in production)", "auth");
-  app.use(createSessionMiddleware({ secret: sessionSecret, isProduction, pool }));
+  app.use(createSessionMiddleware({ secret: sessionSecret, isProduction, pool: poolForLane("web") })); // the session store wants a pg.Pool: the web one
   app.use(createAuthRouter());
   // Capture PO v1.4 (2026-11-05): every AI-preview request the server receives or rejects — 401 included — is logged.
   app.use("/api/pos/capture-preview", (req, res, next) => (req.method === "POST" ? previewRequestLog(query, (m) => log(m, "po"))(req, res, next) : next()));

@@ -83,7 +83,7 @@ function fakeDb(rows: { asins?: any; po?: any[]; supplierLines?: any[]; email?: 
   const q = async (sql: string, params?: any[]) => {
     calls.push({ sql, params });
     if (/FROM asins WHERE asin/.test(sql)) return { rows: rows.asins ? [rows.asins] : [] };
-    if (/FROM po_asins pa JOIN purchase_orders p ON p.id = pa.po_id\s+WHERE pa.asin/.test(sql)) return { rows: rows.po ?? [] };
+    if (/FROM po_asins pa JOIN purchase_orders p ON p.id = pa.po_id\s+JOIN LATERAL \(SELECT e\.ordered_asin, e\.fully_canceled FROM po_asin_expected e WHERE e\.id = pa\.id\) e ON true\s+WHERE pa\.asin/.test(sql)) return { rows: rows.po ?? [] };
     if (/SELECT DISTINCT supplier FROM purchase_orders/.test(sql)) return { rows: (rows.suppliers ?? []).map((supplier) => ({ supplier })) };
     if (/FROM supplier_aliases/.test(sql)) return { rows: rows.aliases ?? [] };
     if (/FROM po_promos/.test(sql)) return { rows: rows.promos ?? [] };
@@ -102,7 +102,9 @@ describe("one ASIN's history (stored values, read)", () => {
     expect(h).toMatchObject({ asin: "B000000005", title: "Rolls 3-pack", asinPack: 3, last: { cogs: 10, orderDate: "2026-10-20", orderId: "A3" }, avg365: 8.5, pos365: 2, units365: 16, conversion: "this listing: 12-pack → 4 ASIN units (ASIN is a 3-pack)" });
     expect(h.recent.map((r) => [r.orderId, r.how, r.asinUnits])).toEqual([["A3", "6-pack × 2", 4], ["A2", "6-pack × 2", 12], ["A1", "6-pack × 2", 100]]);
     const sql = db.calls.find((c) => /WHERE pa.asin/.test(c.sql))!;
-    expect(sql.sql).toMatch(/NOT COALESCE\(\(SELECT bool_and\(COALESCE\(\(SELECT le\.fully_canceled FROM po_line_expected le WHERE le\.line_id = l\.id\), false\)\)/); // a fully canceled row (by its claims) is no purchase
+    expect(sql.sql).toMatch(/WHERE pa\.asin = \$1 AND NOT e\.fully_canceled/); // a fully canceled row (by its claims, po_asin_expected JOINed on the row — migration 107, never a per-line subquery) is skipped; the line list reads NOT le.fully_canceled the same way
+    expect(sql.sql).toMatch(/JOIN po_line_expected le ON le\.line_id = l\.id WHERE l\.po_asin_id = pa\.id AND NOT le\.fully_canceled/);
+    expect(sql.sql).not.toMatch(/\(SELECT [^)]*FROM po_line_expected le WHERE le\.line_id/); // a fully canceled row (by its claims) is no purchase
     expect(sql.sql).toMatch(/ORDER BY p\.order_date DESC, p\.entry_seq DESC/);
     expect(sql.params).toEqual(["B000000005", "2026-11-05"]);
   });

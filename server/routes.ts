@@ -1102,11 +1102,16 @@ export async function registerRoutes(
         `, withSubset([startDate, endDate])).catch(() => ({ rows: [] as any[] }));
         for (const row of salesResult.rows) salesMap.set(row.asin, row);
 
+        // Days in stock = distinct snapshot days with FBA stock. The distinct (asin, day) pairs are hashed first
+        // from the in-stock partial index (migration 108) — COUNT(DISTINCT DATE(…)) over the raw rows sorted 130k
+        // rows to disk and seq-scanned 1.3M snapshots, 6–70 s per ASINs page load on production (2026-11-13).
         const disResult = await query(`
-          SELECT a.asin, COUNT(DISTINCT DATE(i.snapshot_at)) AS days_in_stock
-          FROM inventory_snapshots i
-          JOIN asins a ON a.id = i.asin_id
-          WHERE i.snapshot_at >= $1::date AND i.snapshot_at <= ($2::date + 1) AND i.available_fba > 0${onlyA(3)}
+          SELECT a.asin, COUNT(*)::int AS days_in_stock
+          FROM (SELECT DISTINCT i.asin_id, DATE(i.snapshot_at) AS day
+                  FROM inventory_snapshots i
+                 WHERE i.snapshot_at >= $1::date AND i.snapshot_at <= ($2::date + 1) AND i.available_fba > 0) d
+          JOIN asins a ON a.id = d.asin_id
+          WHERE TRUE${onlyA(3)}
           GROUP BY a.asin
         `, withSubset([startDate, endDate])).catch(() => ({ rows: [] as any[] }));
         for (const row of disResult.rows) daysInStockMap.set(row.asin, parseInt(row.days_in_stock) || 0);

@@ -221,7 +221,7 @@ describe("migrationStatus (read-only)", () => {
 describe("wiring", () => {
   it("index.ts runs migrations before ensureExtensionTables and exits on failure; migrate.ts never imports ./index", () => {
     const src = fs.readFileSync(path.join(__dirname, "index.ts"), "utf8");
-    const a = src.indexOf("await runMigrations(pool)");
+    const a = src.indexOf("await withBootRetry(\"migrations\", () => runMigrations(migrationPool)"); // its own pool, boot retry (2026-11-13)
     const b = src.indexOf("await ensureExtensionTables()");
     expect(a).toBeGreaterThan(-1);
     expect(b).toBeGreaterThan(a);

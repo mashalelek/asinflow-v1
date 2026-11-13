@@ -37,7 +37,8 @@ export async function loadAfAsinCostMap(query: QueryLike, asins?: readonly strin
   const rows = (await query(
     `SELECT DISTINCT ON (pa.asin) pa.asin, pa.cost_per_unit, pa.prep_cost, p.supplier
        FROM po_asins pa JOIN purchase_orders p ON p.id = pa.po_id
-      WHERE NOT COALESCE((SELECT bool_and(le.fully_canceled) FROM po_line_expected le WHERE le.po_asin_id = pa.id), false) ${filter}
+       JOIN LATERAL (SELECT e.fully_canceled FROM po_asin_expected e WHERE e.id = pa.id) e ON true
+      WHERE NOT e.fully_canceled ${filter}
       ORDER BY pa.asin, ${NEWEST_PO_ORDER}`,
     asins && asins.length > 0 ? [asins.map((a) => a.toUpperCase())] : [],
   )).rows as any[];
