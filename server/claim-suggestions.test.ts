@@ -57,6 +57,10 @@ describe("missing (D8)", () => {
     expect(isNewSuggestion(s, [{ po_id: PO, po_line_item_id: LINE, kind: "missing", status: "dismissed", suggestion_key: "missing:a1:12:8" }])).toBe("created");
     expect(isNewSuggestion(s, [{ po_id: PO, po_line_item_id: LINE, kind: "missing", status: "suggested", suggestion_key: "missing:a1:12:8" }])).toBe("already_suggested");
     expect(isNewSuggestion(s, [{ po_id: PO, po_line_item_id: LINE, kind: "missing", status: "closed", suggestion_key: null }])).toBe("created");
+    // a CLOSED canceled claim on the line blocks a canceled suggestion (bathandbodyworks 00474317701906, 2026-11-13: Cancel PO → refund → closed, then the email suggested it again)
+    const canceled = { ...s, kind: "canceled" as const, key: "canceled:x:10" };
+    expect(isNewSuggestion(canceled, [{ po_id: PO, po_line_item_id: LINE, kind: "canceled", status: "closed", suggestion_key: null }])).toBe("already_suggested");
+    expect(isNewSuggestion(canceled, [{ po_id: PO, po_line_item_id: LINE, kind: "canceled", status: "dismissed", suggestion_key: null }])).toBe("created");
     expect(isNewSuggestion(s, [{ po_id: PO, po_line_item_id: null, kind: "never_received", status: "open", suggestion_key: null }])).toBe("created");
     // a converted badge claim (migration 101, qty NULL, enter_quantity open) of the same kind on the line never blocks — it is superseded instead (Maria 2026-11-12)
     expect(isNewSuggestion(s, [{ po_id: PO, po_line_item_id: LINE, kind: "missing", status: "open", suggestion_key: null, converted_badge: true }])).toBe("created");

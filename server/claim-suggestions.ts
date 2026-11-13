@@ -77,10 +77,16 @@ export async function existingClaims(query: QueryLike, poIds: readonly string[])
   return (await query(`SELECT po_id, po_line_item_id, kind, status, ${await keyColumn(query)}, ${CONVERTED_BADGE_SQL} AS converted_badge FROM supplier_claims c WHERE po_id = ANY($1::uuid[])`, [poIds])).rows;
 }
 
-/** Pure: is this suggestion new — no claim with the same key, and no open / suggested claim of the kind on the same line (or the whole PO)? A converted badge claim never blocks (it is superseded instead). */
+/**
+ * Pure: is this suggestion new — no claim with the same key, and no open / suggested claim of the kind on the same
+ * line (or the whole PO)? A converted badge claim never blocks (it is superseded instead). A CLOSED canceled claim
+ * blocks a canceled suggestion too (2026-11-13: Cancel PO's claim refunded and closed within the hour, then the
+ * cancellation email suggested the same cancellation again on bathandbodyworks 00474317701906).
+ */
 export function isNewSuggestion(s: Pick<Suggestion, "po_id" | "po_line_item_id" | "kind" | "key">, existing: ReadonlyArray<ExistingClaim>): SuggestOutcome["why"] {
   if (existing.some((c) => c.suggestion_key === s.key)) return "same_key";
-  if (existing.some((c) => !c.converted_badge && c.po_id === s.po_id && c.kind === s.kind && (c.status === "open" || c.status === "suggested") && (c.po_line_item_id ?? null) === (s.po_line_item_id ?? null))) return "already_suggested";
+  const blocks = (status: string) => status === "open" || status === "suggested" || (s.kind === "canceled" && status === "closed");
+  if (existing.some((c) => !c.converted_badge && c.po_id === s.po_id && c.kind === s.kind && blocks(c.status) && (c.po_line_item_id ?? null) === (s.po_line_item_id ?? null))) return "already_suggested";
   return "created";
 }
 

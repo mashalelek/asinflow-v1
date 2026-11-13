@@ -22,9 +22,21 @@ describe("auto-close verdict", () => {
     expect(allUnitsAccounted([row({ qty_shipped_fba: "10" }), row({ qty_expected_asin: 3, qty_shipped_fba: "2" })])).toBe(false);
     // NULLs read as 0: a never-shipped PO is not "accounted for"
     expect(allUnitsAccounted([row()])).toBe(false);
-    // a fully-canceled PO with nothing shipped: expected is 0 but nothing shipped → stays open (needs ≥ 1 shipped unit)
-    expect(allUnitsAccounted([row({ qty_expected_asin: "0" })])).toBe(false);
     expect(allUnitsAccounted([])).toBe(false);
+  });
+  it("(a) 2026-11-13: nothing due and nothing shipped is accounted for when units were ordered — a fully canceled PO, or one whose every unit is a claim that counts", () => {
+    // bathandbodyworks 00474317701906: 10 ordered, 10 canceled (claim closed), 0 shipped → closes (reads Canceled)
+    expect(allUnitsAccounted([row({ qty: 10, qty_expected_asin: "0" })])).toBe(true);
+    // yankeecandle HFUS09001835764: 90 ordered, 90 missing (claims closed), 0 shipped → closes (reads Closed)
+    expect(allUnitsAccounted([row({ qty: "90", qty_expected_asin: "0" })])).toBe(true);
+    // lost by us covers the rest
+    expect(allUnitsAccounted([row({ qty: 10, qty_expected_asin: "2", qty_lost_damaged_us: "2" })])).toBe(true);
+    // two rows, one canceled and one still due → open; one canceled and one shipped → closes as before
+    expect(allUnitsAccounted([row({ qty: 10, qty_expected_asin: "0" }), row({ qty: 5, qty_expected_asin: "5" })])).toBe(false);
+    expect(allUnitsAccounted([row({ qty: 10, qty_expected_asin: "0" }), row({ qty: 5, qty_expected_asin: "5", qty_shipped_fba: "5" })])).toBe(true);
+    // rows that ordered nothing (the sheet era's canceled 0/0 rows: jellycat 8918590, supplyhouse 29050884) account for nothing
+    expect(allUnitsAccounted([row({ qty: 0, qty_expected_asin: "0" })])).toBe(false);
+    expect(allUnitsAccounted([row({ qty: null, qty_expected_asin: "0" })])).toBe(false);
   });
   it("(b): any open action item keeps the PO Open; (c) so does an open claim (D15)", () => {
     expect(autoCloseVerdict([row({ qty_shipped_fba: "10" })], [])).toBe(true);
@@ -105,10 +117,16 @@ describe("quantity input + routes", () => {
     expect(f).toMatch(/const closedRaw = str\(q\.closed\)\.toLowerCase\(\) \|\| "open"/);
     expect(f).toMatch(/c === "open" \? `p\.closed_at IS NULL` : c === "closed" \? `p\.closed_at IS NOT NULL` : null/);
   });
+  it("a refund row added / edited / removed re-runs the rule (a refund closes the claim that kept the PO open, 2026-11-13)", () => {
+    const s = readFileSync(join(__dirname, "routes.ts"), "utf8");
+    const block = s.slice(s.indexOf("const moneyRoutes = "), s.indexOf("// === Supplier claims"));
+    expect((block.match(/\.then\(withRefundClose\)/g) ?? []).length).toBe(3);
+    expect(block).toMatch(/table === "po_line_refunds" \? \{ \.\.\.out, close: await evaluateAutoClose\(out\.poId, poQuery\) \} : out/);
+  });
   it("every quantity / shipment write re-runs the rule; the manual toggle records the user", () => {
     const s = readFileSync(join(__dirname, "routes.ts"), "utf8");
     const block = s.slice(s.indexOf("// === PO status + quantities"), s.indexOf("// === Bulk Profit Calculator"));
-    expect((block.match(/await evaluateAutoClose\(/g) ?? []).length).toBe(9); // PO + ASIN + product action items, ASIN cancel, quantities, shipment add, shipment delete, Sync Shipments, supplier defects (one shared helper)
+    expect((block.match(/await evaluateAutoClose\(/g) ?? []).length).toBe(10); // refund rows (withRefundClose, 2026-11-13), PO + ASIN + product action items, ASIN cancel, quantities, shipment add, shipment delete, Sync Shipments, supplier defects (one shared helper)
     expect(readFileSync(join(__dirname, "shipment-link.ts"), "utf8")).toMatch(/await evaluateAutoClose\(String\(pa\.po_id\), query\)/); // unmatched link (shipment-link.ts since 2026-10-29)
     expect(block).toMatch(/setPoClosedManually\(id, closed, req\.session\?\.userId \?\? null/);
     expect(block).toMatch(/VALUES \(\$1, 'manual:' \|\| uuid_generate_v4\(\)::text, \$2::text\[\], \$3, \$4, \$5, 'manual', 'none'\)/); // shipment-reconciliation §2: manual rows keyed manual:<uuid>
@@ -119,7 +137,7 @@ describe("quantity input + routes", () => {
     const page = readFileSync(join(__dirname, "..", "client", "src", "pages", "purchase-orders.tsx"), "utf8");
     expect(page).toMatch(/useState<ClosedFilter>\(linked\.closed\)/); // readPoListUrl defaults it to "open" (lib/po-list-url.ts, 2026-11-06) // default Open — the ASINs-page On Order link too: On Order counts open POs only (2026-11-02)
     expect(page).toMatch(/params\.set\("closed", closedFilter\)/);
-    expect(page).toMatch(/<ClosedToggle po=\{po\} onToggled=\{load\} \/>/);
+    expect(page).toMatch(/<ClosedToggle po=\{po\} onToggled=\{load\} canceled=\{poStatusLabel\(/);
     expect(page).toMatch(/data-testid="button-po-closed-confirm"/);
     expect(page).toMatch(/<PoAsinRow key=\{a\.id\} a=\{a\} indent editable onChanged=\{load\} po=\{\{ id: po\.id/);
     expect(page).toMatch(/<PoAsinTable asins=\{asins\} editable onChanged=\{reload\} po=\{\{ id: po\.id/);

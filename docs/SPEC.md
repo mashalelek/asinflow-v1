@@ -6278,7 +6278,9 @@ Rules built in commit 1 (`server/supplier-claims.ts`, `shared/supplier-claim.ts`
   Cancel PO and an ASIN row's "cancel" open one canceled claim per line for its units still expected
   (`cancelLines`), with a `refund_received` task.
 - **An open claim keeps its PO open (D15):** auto-close = every unit accounted for AND no blocking action item AND
-  `open_claims = 0` (`server/po-close.ts`). Claims are never action items: the POs list has a **Claims** column (the
+  `open_claims = 0` (`server/po-close.ts`); every claim route and every refund-row route re-runs the rule in its request,
+  and a fully canceled PO with nothing shipped closes once its last claim closes (2026-11-13, reads Canceled). A CLOSED
+  canceled claim on a line blocks a later canceled suggestion for it (`isNewSuggestion`). Claims are never action items: the POs list has a **Claims** column (the
   open-claim count, blank when none, kind + $ on hover, click → the Claims page filtered to the PO) in the Status group
   right after Action Items and a **has open claims** filter (`?claims=open|none`); the PO page a **Claims (N)** link
   beside the chips, a **Claims** card on PO Details (one line per open claim, each a link) and **claim** on every
@@ -6935,9 +6937,19 @@ ASIN-level only.
   quantity edit, shipment change and action-items change: close with
   `closed_by = 'auto'` when BOTH (a) every `po_asins` row has Shipped FBA
   ≥ Ordered − Canceled − Returned − Lost/damaged by us (NULLs read as 0)
-  and at least one row has Shipped FBA > 0, and (b) **no product line of
+  and every unit is accounted for — at least one row has Shipped FBA > 0,
+  or (**2026-11-13**, Maria: bathandbodyworks 00474317701906 stayed Open at
+  0 expected / 10 canceled / claim closed) units were ordered and nothing is
+  due any more, every ordered unit covered by a claim that counts or lost by
+  us — so a fully canceled PO with nothing shipped closes; rows that ordered
+  nothing account for nothing — and (b) **no product line of
   the PO carries an action item** (row-level Status, 2026-10-17; was the
-  PO-level array). Auto never reopens a PO closed by hand or by the sheet backfill;
+  PO-level array). **Status word (`shared/po-status.ts`):** Open; Closed;
+  **Canceled** when closed and every ASIN row is fully canceled (the list's
+  toggle title and the PO page header; nothing stored, `closed_by` stays
+  `auto`). The rule also runs when a refund row is added / edited / removed
+  (`withRefundClose` in `server/routes.ts`): a refund closes the claim that
+  kept the PO open, in the same request. Auto never reopens a PO closed by hand or by the sheet backfill;
   an auto-closed PO reopens when (a) or (b) stops holding; a manual
   reopen stays Open until the rule next becomes true after a change.
 - Filter Open / Closed / All; **default Open only** (D3). The backfill

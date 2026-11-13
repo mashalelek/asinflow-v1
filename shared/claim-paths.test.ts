@@ -4,6 +4,8 @@
 import { describe, it, expect, afterAll } from "vitest";
 import { claimSteps, deriveBucket, nextAction, type BucketClaim } from "./claim-bucket";
 import { stateSentence, primaryAction, type UiClaim } from "./claim-ui";
+import { poStatusLabel } from "./po-status";
+import { autoCloseVerdict } from "../server/po-close";
 
 const NOW = new Date("2026-11-05T15:00:00Z");   // Thu Nov 5, 10:00 ET — timers running
 const LATER = new Date("2026-11-12T15:00:00Z"); // Thu Nov 12 — the Nov 3 / Nov 4 timers have run out
@@ -167,6 +169,16 @@ describe("§3.4 paths, creation → Closed", () => {
       { stage: "the sweep's Contact supplier", c: contact, now: LATER, want: { current: "received", bucket: "needs_attention", next: "Refund received · Contact supplier", due: null, action: "Contacted supplier" } },
       { stage: "refund posted 11/12", c: closed, now: LATER, want: { current: null, bucket: "closed", next: "" } },
     ]);
+    // The PO (Maria 2026-11-13, bathandbodyworks 00474317701906): Cancel PO leaves 7 ordered / 0 expected / nothing shipped. While the
+    // claim is open the PO stays Open (D15); the refund that closes the claim closes the PO in the same request — no further
+    // click — and a fully canceled PO reads Canceled, not Closed.
+    const rows = [{ qty: 7, qty_expected_asin: 0, qty_lost_damaged_us: null, qty_shipped_fba: null, fully_canceled: true }];
+    expect(autoCloseVerdict(rows, [], 1)).toBe(false);
+    expect(poStatusLabel({ closed_at: null }, rows)).toBe("Open");
+    expect(autoCloseVerdict(rows, [], 0)).toBe(true);
+    expect(poStatusLabel({ closed_at: "2026-11-12T12:00:00Z" }, rows)).toBe("Canceled");
+    expect(poStatusLabel({ closed_at: "2026-11-12T12:00:00Z" }, [{ fully_canceled: false }])).toBe("Closed");
+    TABLE.push("| canceled (Cancel PO) → refund | PO after the refund | — | PO Canceled (auto-closed in the refund's request) | — | — |");
   });
   // a canceled claim stored before this rule (no confirmation stored) reads its found date as the cancel date
   it("a canceled claim without a stored confirmation reads its found date", () => {

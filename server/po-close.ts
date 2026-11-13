@@ -6,13 +6,19 @@
 // Auto-close rule (D2; D15 since migration 101): close when ALL hold —
 //   (a) every po_asins row has Shipped FBA >= Expected − Lost/damaged by us
 //       (Expected = Ordered − Σ claims that count, po_asin_expected; NULLs
-//       read as 0) AND at least one row has Shipped FBA > 0 (every unit
-//       accounted for), compared in ASIN units from the view,
+//       read as 0) AND every unit is accounted for: at least one row has
+//       Shipped FBA > 0, OR (2026-11-13, Maria: bathandbodyworks 00474317701906)
+//       units were ordered and nothing is due any more — every ordered unit
+//       is covered by a claim that counts (canceled, returned, written off…)
+//       or lost by us, so a fully canceled PO with nothing shipped closes
+//       too (it then reads Canceled, shared/po-status.ts); compared in ASIN
+//       units from the view,
 //   (b) no line of the PO carries an action item (row-level Status
 //       2026-10-17; purchase_orders.action_items is no longer read), and
 //   (c) the PO has no OPEN supplier claim (D15, Maria 2026-11-09).
-// Evaluated whenever a qty column is edited, a shipment row changes, or
-// action_items changes. Auto never reopens a PO closed by hand or by the
+// Evaluated whenever a qty column is edited, a shipment row changes,
+// action_items changes, a claim changes, or a refund row is added / edited /
+// removed (a refund can close the claim that kept the PO open, 2026-11-13). Auto never reopens a PO closed by hand or by the
 // sheet backfill; a PO auto-closed is reopened automatically when (a) or (b)
 // stops holding. Manually unchecking Closed makes it Open and it stays Open
 // until the rule next becomes true after a change.
@@ -26,21 +32,25 @@ export interface PoCloseRow {
   qty_expected_asin: number | string | null;
   qty_lost_damaged_us: number | string | null;
   qty_shipped_fba: number | string | null;
+  /** Ordered ASIN units (the API row's `qty`); a row that ordered nothing accounts for nothing. */
+  qty?: number | string | null;
 }
 
 const num = (v: number | string | null | undefined): number => (v == null ? 0 : typeof v === "number" ? v : parseFloat(v) || 0);
 
-/** (a) alone: every unit accounted for, with at least one shipped unit. */
+/** (a) alone: every unit accounted for — shipped, or (nothing due at all) covered by claims that count / lost by us. */
 export function allUnitsAccounted(rows: PoCloseRow[]): boolean {
   if (rows.length === 0) return false;
-  let anyShipped = false;
+  let anyShipped = false, anyOrdered = false, totalDue = 0;
   for (const r of rows) {
     const shipped = num(r.qty_shipped_fba);
     const due = num(r.qty_expected_asin) - num(r.qty_lost_damaged_us);
     if (shipped < due) return false;
     if (shipped > 0) anyShipped = true;
+    if (num(r.qty) > 0) anyOrdered = true;
+    totalDue += due;
   }
-  return anyShipped;
+  return anyShipped || (anyOrdered && totalDue <= 0);
 }
 
 /** (a) AND (b) AND (c). */

@@ -39,6 +39,7 @@ import { PoTrackingTab, SyncTrackingButton, UnmatchedTrackingChip } from "@/comp
 import { VelocityLinksButton, velocityOrderText } from "@/components/velocity-links";
 export { velocityOrderText };
 import { claimSummary } from "@shared/supplier-claim";
+import { poStatusLabel } from "@shared/po-status";
 import { PoMoneyTab, type PoPayment, type PoPromo, type PoRefund } from "@/components/po-money";
 import type { PoClaim } from "@/components/po-claims";
 import { Pencil } from "lucide-react";
@@ -126,7 +127,7 @@ export function readPoPageParams(search: string): { asin: string; refunds: Refun
 }
 
 /** §5 col 1: green check when Closed, open-order outline when Open. Click toggles with confirm. */
-function ClosedToggle({ po, onToggled, size = "sm" }: { po: { id: string; order_id: string; closed_at: string | null; closed_by: string | null }; onToggled: () => void; size?: "sm" | "lg" }) {
+function ClosedToggle({ po, onToggled, size = "sm", canceled = false }: { po: { id: string; order_id: string; closed_at: string | null; closed_by: string | null }; onToggled: () => void; size?: "sm" | "lg"; /** Every ASIN row fully canceled (shared/po-status.ts): the closed PO reads Canceled. */ canceled?: boolean }) {
   const [open, setOpen] = useState(false);
   const [busy, setBusy] = useState(false);
   const isClosed = po.closed_at != null;
@@ -141,7 +142,7 @@ function ClosedToggle({ po, onToggled, size = "sm" }: { po: { id: string; order_
   const icon = isClosed
     ? <CheckCircle2 className={`${size === "lg" ? "h-5 w-5" : "h-4 w-4"} text-green-600`} />
     : <Circle className={`${size === "lg" ? "h-5 w-5" : "h-4 w-4"} text-muted-foreground`} />;
-  const who = po.closed_by === "auto" ? "closed automatically" : po.closed_by === "sheet" ? "closed (from the Orders sheet)" : po.closed_by === "import" ? "Imported (history)" : "closed by hand";
+  const who = (canceled ? "Canceled — every unit canceled; " : "") + (po.closed_by === "auto" ? "closed automatically" : po.closed_by === "sheet" ? "closed (from the Orders sheet)" : po.closed_by === "import" ? "Imported (history)" : "closed by hand");
   return (
     <>
       <button type="button" onClick={(e) => { e.stopPropagation(); setOpen(true); }} title={isClosed ? who : "Open"}
@@ -885,7 +886,7 @@ export default function PurchaseOrders() {
                   onClick={() => navigate(`/purchase-orders/${po.id}`)} data-testid={`row-po-${po.order_id}`}>
                   {/* §5 col 1: Open / Closed */}
                   <td style={poColStyle(colWidths, "status")} className="px-2 py-2" onClick={(e) => e.stopPropagation()}>
-                    <ClosedToggle po={po} onToggled={load} />
+                    <ClosedToggle po={po} onToggled={load} canceled={poStatusLabel(po, po.asins as Array<{ fully_canceled?: boolean | null }>) === "Canceled"} />
                   </td>
                   {/* §3.1: the chevron is the ONLY expand target; the rest of the row still opens the PO. */}
                   <td className="px-2 py-2" onClick={(e) => e.stopPropagation()}>
@@ -1093,10 +1094,10 @@ export function PurchaseOrderDetailPlaceholder() {
       {/* Header */}
       <div className="flex items-end justify-between flex-wrap gap-2">
         <div className="flex items-start gap-3">
-          <div className="pt-1.5"><ClosedToggle po={{ id: po.id, order_id: po.order_id, closed_at: po.closed_at ?? null, closed_by: po.closed_by ?? null }} onToggled={reload} size="lg" /></div>
+          <div className="pt-1.5"><ClosedToggle po={{ id: po.id, order_id: po.order_id, closed_at: po.closed_at ?? null, closed_by: po.closed_by ?? null }} onToggled={reload} size="lg" canceled={poStatusLabel({ closed_at: po.closed_at ?? null }, po.asins ?? []) === "Canceled"} /></div>
           <div>
             <h1 className="text-2xl font-semibold font-mono" data-testid="text-po-order-id">{po.order_id}</h1>
-            <p className="text-sm text-muted-foreground">{po.supplier} · {fmtDate(String(po.order_date))} · {po.closed_at ? "Closed" : "Open"}</p>
+            <p className="text-sm text-muted-foreground" data-testid="text-po-status">{po.supplier} · {fmtDate(String(po.order_date))} · {poStatusLabel({ closed_at: po.closed_at ?? null }, po.asins ?? [])}</p>
           </div>
         </div>
         <div className="flex items-center gap-2">

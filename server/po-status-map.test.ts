@@ -71,7 +71,7 @@ describe("consumers switched (§6.3)", () => {
     expect(block).toMatch(/app\.patch\("\/api\/pos\/asin-rows\/:id\/action-items"/);
     expect(block).toMatch(/app\.patch\("\/api\/pos\/lines\/:id\/action-items"/);
     expect(block).toMatch(/normalizeActionItems\(/);
-    expect((block.match(/await evaluateAutoClose\(/g) ?? []).length).toBe(9); // PO + ASIN + product action items, ASIN cancel, quantities, shipments ×2, Sync Shipments, supplier defects (the unmatched link: shipment-link.ts)
+    expect((block.match(/await evaluateAutoClose\(/g) ?? []).length).toBe(10); // refund rows (2026-11-13), PO + ASIN + product action items, ASIN cancel, quantities, shipments ×2, Sync Shipments, supplier defects (the unmatched link: shipment-link.ts)
   });
   // The one-time importer (script/import-po-2026.ts) left with the Orders sheet (2026-11-13); its rows are history.
   it("the one-time value migration is dry-run by default and stops on an unmapped value", () => {

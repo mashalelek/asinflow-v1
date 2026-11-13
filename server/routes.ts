@@ -19,12 +19,12 @@ import { addClaim, editClaim, linkRefund, unlinkRefund, setOutcome, reopenClaim,
 import { loadClaimsPage, bucketCounts, sweepClaimTimers, claimDetail, CLAIM_KIND_FILTERS, refundsDueTotal } from "./claim-buckets";
 import { velocityIneligible, ineligibleText } from "./shipment-match";
 import { readVelocityStartDate } from "./ships-to-backfill";
-import { evaluateAutoClose, setPoClosedManually, parseQtyInput, MANUAL_QTY_COLUMNS, type ManualQtyColumn } from "./po-close";
+import { evaluateAutoClose, setPoClosedManually, parseQtyInput, MANUAL_QTY_COLUMNS, type ManualQtyColumn, type AutoCloseOutcome } from "./po-close";
 import { DISPLAY_ACTION_ITEMS, NO_INVOICE_SAVED, normalizeActionItems } from "./po-status-map";
 import { unionActionItems, PO_ACTION_ITEMS_SQL, REVIEW_VELOCITY_REASONS_SQL } from "./po-action-items";
 import { editPoHeader, editLine, addLine, removeLine, editAsinRow, loadPoHistory, logEdits, changedFields, asLogText, EditError, COST_RELEVANT_FIELDS, ORDER_ID_WARNING, type EditResult } from "./po-edit";
 import { recomputePoCosts } from "./po-costs";
-import { addMoneyRow, editMoneyRow, removeMoneyRow, loadPoMoney } from "./po-money-edit";
+import { addMoneyRow, editMoneyRow, removeMoneyRow, loadPoMoney, type MoneyEditResult } from "./po-money-edit";
 import { createPoFromForm, lookupAsins } from "./po-create";
 import { recheckForNewPo } from "./new-po-recheck";
 import { parsePoListFilters, poListWhere, poFacetCounts } from "./po-list-filters";
@@ -4358,16 +4358,20 @@ export async function registerRoutes(
   const moneyRoutes = (plural: "payments" | "promos" | "refunds", table: "po_payments" | "po_promos" | "po_line_refunds") => {
     app.post(`/api/pos/:id/${plural}`, async (req: Request, res: Response) => {
       if (!isDbAvailable()) { res.status(503).json({ message: "Database not available" }); return; }
-      await sendGuarded(res, () => withCostSync(`add ${plural}`, String(req.params.id ?? ""), () => withPoTx((q) => addMoneyRow(q, table, String(req.params.id ?? ""), req.body, uid(req)))));
+      await sendGuarded(res, () => withCostSync(`add ${plural}`, String(req.params.id ?? ""), () => withPoTx((q) => addMoneyRow(q, table, String(req.params.id ?? ""), req.body, uid(req)))).then(withRefundClose));
     });
     app.patch(`/api/pos/${plural}/:id`, async (req: Request, res: Response) => {
       if (!isDbAvailable()) { res.status(503).json({ message: "Database not available" }); return; }
-      await sendGuarded(res, () => withPoTx((q) => editMoneyRow(q, table, Number(req.params.id), req.body, uid(req))));
+      await sendGuarded(res, () => withPoTx((q) => editMoneyRow(q, table, Number(req.params.id), req.body, uid(req))).then(withRefundClose));
     });
     app.delete(`/api/pos/${plural}/:id`, async (req: Request, res: Response) => {
       if (!isDbAvailable()) { res.status(503).json({ message: "Database not available" }); return; }
-      await sendGuarded(res, () => withCostSync(`remove ${plural}`, () => poIdOfMoneyRow(table, Number(req.params.id)), () => withPoTx((q) => removeMoneyRow(q, table, Number(req.params.id), uid(req)))));
+      await sendGuarded(res, () => withCostSync(`remove ${plural}`, () => poIdOfMoneyRow(table, Number(req.params.id)), () => withPoTx((q) => removeMoneyRow(q, table, Number(req.params.id), uid(req)))).then(withRefundClose));
     });
+    // A refund row can close (or reopen) the claim it is linked to, and an open claim is what keeps the PO open (D15):
+    // the rule runs in the same request (2026-11-13 — bathandbodyworks 00474317701906 stayed Open after its refund).
+    const withRefundClose = async (out: MoneyEditResult): Promise<MoneyEditResult & { close?: AutoCloseOutcome }> =>
+      table === "po_line_refunds" ? { ...out, close: await evaluateAutoClose(out.poId, poQuery) } : out;
   };
   moneyRoutes("payments", "po_payments"); moneyRoutes("promos", "po_promos"); moneyRoutes("refunds", "po_line_refunds");
   // === Supplier claims (SPEC §22 "Supplier claims", migration 101; was defects, 094) ===
