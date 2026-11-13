@@ -19,7 +19,7 @@
 // imported from the Orders sheet, or saved by the pre-patch form — keeps
 // sending what it sent before: actual_cogs (col Y). Both are counted
 // (sourcingFromAr / sourcingFallback). ONLY where asin_estimates.cogs_source
-// = 'po_sheet'. Sourcing cost sets Amazon's reimbursement valuation
+// = 'af_po'. Sourcing cost sets Amazon's reimbursement valuation
 // for lost/damaged units and is gated on invoice review, so only a cost with
 // a PO behind it is defensible. estimated_cogs and manual/csv-sourced
 // actuals are never submitted — an ASIN without a PO cost is skipped and
@@ -59,7 +59,7 @@ export interface ScSummary {
   includedRows: number;         // in-range purchase rows
   purchasedAsins: number;       // distinct ASINs from includedRows
   // ── DB (cost resolution) ──
-  asinsWithPoCogs: number;      // purchased ASINs carrying a usable po_sheet cost
+  asinsWithPoCogs: number;      // purchased ASINs carrying a usable af_po cost
   sourcingFromAr: number;       // of those, cost = the newest PO row's sourcing_cost (newest PO is patch-forward)
   sourcingFallback: number;     // of those, cost = actual_cogs (newest PO imported / pre-patch, or no sourcing_cost yet)
   // ── Workbook (write) ──
@@ -73,8 +73,8 @@ export interface ScSummary {
     badOrMissingDate: number;   // Col C missing / unparseable (non-canceled)
     excludedOutOfRange: number; // Col C parsed but outside [from, to]
     noCogsRow: number;          // purchased ASIN with no asin_estimates row at all
-    notPoSourced: number;       // actual_cogs present but cogs_source != 'po_sheet'
-    badCost: number;            // po_sheet-sourced but null / non-finite / <= 0
+    notPoSourced: number;       // actual_cogs present but cogs_source != 'af_po'
+    badCost: number;            // af_po-sourced but null / non-finite / <= 0
     notInWorkbook: number;      // has a PO cost, but Amazon doesn't list the ASIN
     alreadyApproved: number;    // rows skipped: Amazon already approved this exact cost
     wouldLowerApproved: number; // rows skipped: our cost is BELOW the current approval
@@ -177,7 +177,7 @@ export async function buildSourcingCost(
     purchased.add(row.asin.trim().toUpperCase());
   }
 
-  // ── 2. Resolve cost: po_sheet-sourced only; the newest PO row's sourcing_cost when that PO is patch-forward, else actual_cogs ──
+  // ── 2. Resolve cost: af_po-sourced only; the newest PO row's sourcing_cost when that PO is patch-forward, else actual_cogs ──
   const asinList = Array.from(purchased);
   const costByAsin = new Map<string, number>();
   const basisByAsin = new Map<string, "sourcing_cost" | "actual_cogs">();
@@ -206,7 +206,7 @@ export async function buildSourcingCost(
       if (!hit || (hit.cogs == null && hit.source == null)) {
         skips.noCogsRow++; details.noCogsRowAsins.push(asin); continue;
       }
-      if (hit.source !== "po_sheet") {
+      if (hit.source !== "af_po") {
         skips.notPoSourced++; details.notPoSourcedAsins.push({ asin, source: hit.source }); continue;
       }
       // Sourcing cost when the newest PO is patch-forward and carries one; else actual_cogs, as before the switch.

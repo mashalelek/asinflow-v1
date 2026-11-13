@@ -1,6 +1,6 @@
 // Orders-sheet → PO module sync (patch docs/claude_spec-patch-po-sheet-sync.md,
 // 2026-10-16). Repeatable: the ASINs-page Sync POs button runs this first,
-// then the per-ASIN COGS/ordered-qty sync (`runSheetsSync`).
+// then the per-ASIN COGS/ordered-qty sync (`syncAsinCostsFromPos`, server/asin-po-costs.ts).
 //
 // "Sheet wins for now" (D2): every field the sheet carries is overwritten
 // from the sheet — header fields, line fields, and the Status cell mapped

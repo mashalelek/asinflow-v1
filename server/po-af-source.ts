@@ -2,7 +2,7 @@
 // (patch docs/claude_spec-patch-po-af-owned.md §2.4, 2026-10-18). The sheet
 // is intake-only now; these readers no longer touch it:
 //   - loadAfAsinCostMap  — the per-ASIN cost / prep / supplier map the sheet
-//     COGS half (runSheetsSync), the COGS reset / sync-from-PO routes and the
+//     COGS half (syncAsinCostsFromPos), the COGS reset / sync-from-PO routes and the
 //     onboarding supplier fallback used (SheetAsinData shape).
 //   - loadAfPoRows       — sheet-shaped rows (SheetRow) for Upload to Velocity
 //     (CSV + plan), Export SB COGS and the sourcing-cost export.

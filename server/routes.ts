@@ -56,6 +56,7 @@ import { syncInventory } from "./inventory-sync";
 import { syncSalesData } from "./sales-sync";
 import { syncSuppressionData } from "./suppression-sync";
 import { loadAfAsinCostMap } from "./po-af-source";
+import { syncAsinCostsFromPos, syncAsinCostsAfterPoWrite, poAsinList } from "./asin-po-costs";
 import { buildVelocityRecords, serializeVelocityCsv, parseMDY, formatYMD, todayLocal } from "./velocity-export";
 import { fetchAllKnownOrders, matchKeysForOrder, createBundleOrder, submitBulkCsv, updateInboundOrder } from "./velocity-api";
 import { loadOrderLinks, linkedPairs, linkVelocityOrder, unlinkVelocityOrder, listOrderLinks } from "./velocity-order-links";
@@ -802,104 +803,15 @@ async function writeResult(
   return true;
 }
 
-async function runSheetsSync(
-  asinFilter?: ReadonlySet<string>,
-): Promise<{ updated: number; skipped: number; errors: string[]; cleared: number; clearedAsins: string[] }> {
-  // Source = the AF PO tables (patch po-af-owned §2.4, 2026-10-18): the
-  // newest non-canceled ASIN row per ASIN (order_date, then entry_seq). The
-  // Orders sheet is intake-only and is no longer read here.
-  const { data: sheetData, rowsRead: rawRowsRead } = await loadAfAsinCostMap(query as any, asinFilter && asinFilter.size > 0 ? Array.from(asinFilter) : undefined);
-  let updated = 0;
-  let skipped = 0;
-  const errors: string[] = [];
-
-  for (const [asin, data] of Array.from(sheetData.entries())) {
-    if (asinFilter && asinFilter.size > 0 && !asinFilter.has(asin)) {
-      skipped++;
-      continue;
-    }
-    try {
-      const setClauses: string[] = [];
-      const values: any[] = [];
-      let idx = 1;
-      // Per-ASIN branch trace (2026-08-11): the csv-freeze diagnosis had to
-      // reconstruct these decisions from DB side-effects — log them instead.
-      let actBranch = "no-cogs";
-      let estBranch = "no-cogs";
-      if (data.cogs != null) {
-        // ALWAYS overwrite actual_cogs from PO — §2, enforced 2026-08-30.
-        // actual_cogs is PO-sync-only; the old cogs_source='manual' guard let
-        // a phantom marker (manual + NULL value) block this write forever
-        // (B0G4XGFX1Z). Manual-override semantics live on estimated_cogs ONLY.
-        setClauses.push(`cogs = $${idx++}`, `cogs_source = $${idx++}`, `actual_cogs = $${idx++}`);
-        values.push(data.cogs, "po_sheet", data.cogs);
-        actBranch = "written";
-      }
-      // Est. COGS auto-sync (§2, corrected 2026-08-11): overwrite with the PO
-      // value (source → 'po_sheet') UNLESS the source is 'manual'. csv/imported
-      // yield to PO — CSV seeds pre-purchase estimates, a PO row is ground
-      // truth. The old po_sheet/NULL-only check silently froze csv rows.
-      if (data.cogs != null) {
-        const estCheck = await query(`SELECT estimated_cogs_source FROM asin_estimates WHERE asin = $1`, [asin]);
-        const estSource = estCheck?.rows?.[0]?.estimated_cogs_source;
-        if (estSource !== "manual") {
-          setClauses.push(`estimated_cogs = $${idx++}`, `estimated_cogs_source = $${idx++}`);
-          values.push(data.cogs, "po_sheet");
-          estBranch = `written(was:${estSource ?? "null"})`;
-        } else {
-          estBranch = "skipped:manual";
-        }
-      }
-      // Prep cost from PO sheet (Col AS)
-      if (data.prepCost != null) {
-        setClauses.push(`prep_override = $${idx++}`);
-        values.push(data.prepCost);
-      }
-      // ordered_qty is NOT written any more (patch asins-on-order-from-pos
-      // §3.4, 2026-10-17): the ASINs page derives On Order / Pipeline from
-      // the PO tables. The column stays in place, unread, until a cleanup
-      // migration drops it. A row the sheet gives no cost or prep for has
-      // nothing left to write.
-      if (setClauses.length === 0) { skipped++; continue; }
-      values.push(asin);
-
-      const result = await query(
-        `UPDATE asin_estimates SET ${setClauses.join(", ")} WHERE asin = $${idx}`,
-        values
-      );
-      if ((result.rowCount ?? 0) > 0) {
-        updated++;
-        log(`PO sync ${asin}: cogs=${data.cogs ?? "-"} actual=${actBranch} est=${estBranch} prep=${data.prepCost ?? "-"}`, "sheets");
-      } else {
-        // A PO'd ASIN with no asin_estimates row (2026-11-09): named, not counted as skipped.
-        errors.push(`${asin}: no asin_estimates row`);
-      }
-
-      // Update supplier on asins table if available
-      if (data.supplier) {
-        await query(`UPDATE asins SET supplier = COALESCE(supplier, $2) WHERE asin = $1`, [asin, data.supplier]);
-      }
-    } catch (err: any) {
-      errors.push(`${asin}: ${err.message}`);
-    }
-  }
-
-  // The ordered_qty clearing pass (SPEC §11, 2026-08-23) is gone with the
-  // column's last writer (2026-10-17): nothing reads asin_estimates.
-  // ordered_qty any more. `cleared` / `clearedAsins` stay in the result
-  // shape for the callers (toast, component 9 ledger) and are always 0.
-  // rawRowsRead keeps its fail-closed meaning for the read itself.
-  if (rawRowsRead === 0) log(`PO sync: rawRowsRead=0 — no PO rows in AF (nothing written)`, "sheets");
-  const clearedAsins: string[] = [];
-  return { updated, skipped, errors, cleared: clearedAsins.length, clearedAsins };
-}
+// Actual COGS from AF's POs: server/asin-po-costs.ts (moved there 2026-11-13, Orders-sheet retirement commit 1).
+const syncAsinCosts = (asinFilter?: ReadonlySet<string>) => syncAsinCostsFromPos(query, asinFilter);
 
 // Getter so the Aura sync chain (a separate module) can invoke the exact same
-// PO sync the /api/sheets/sync route uses — one shared implementation, no
-// divergence. Mirrors getRunAnalyzeCore; leaves runSheetsSync itself untouched
-// and avoids a routes ↔ aura-sync-chain import cycle at module-load time.
-export function getRunSheetsSync() {
-  return runSheetsSync;
+// cost sync the Sync POs route uses — one shared implementation, no
+// divergence. Mirrors getRunAnalyzeCore and avoids a routes ↔ aura-sync-chain
+// import cycle at module-load time.
+export function getSyncAsinCostsFromPos() {
+  return syncAsinCosts;
 }
 
 /** ASINs list: latest inventory snapshot per ASIN (LATERAL + LIMIT 1 on idx_inventory_latest). Exported for tests. */
@@ -1309,7 +1221,7 @@ export async function registerRoutes(
           isDangerousGood: row.is_dangerous_good ?? null,
           isSearchSuppressed: row.is_search_suppressed ?? false,
           suppressionReasons: row.suppression_reasons ?? [],
-          cogsSource: (row.cogs_source as "po_sheet" | "manual" | null) ?? null,
+          cogsSource: (row.cogs_source as "af_po" | "manual" | null) ?? null,
           fbaStock,
           pricesFetchedAt: row.fetched_at ? new Date(row.fetched_at).toISOString() : null,
           feeSource: row.fee_source ?? null,
@@ -1476,7 +1388,7 @@ export async function registerRoutes(
 
       // ── Upsert asin_estimates ───────────────────────────────────────────
       // The production `cogs_source` column has a CHECK constraint that
-      // restricts values to ('po_sheet', 'csv', 'manual'), so the extension
+      // restricts values to ('af_po', 'manual'), so the extension
       // writes as 'manual'. We also can't rely on a unique constraint
       // existing for ON CONFLICT, so we use an explicit
       // SELECT → UPDATE-or-INSERT pattern.
@@ -1749,7 +1661,7 @@ export async function registerRoutes(
       }
       if (dryRun) return { dryRun: true, updated: 0, skipped: 0, errors: [], cleared: 0, clearedAsins: [], poSync };
       try {
-        const asinSync = await runSheetsSync(filter);
+        const asinSync = await syncAsinCosts(filter);
         return { ...asinSync, poSync };
       } catch (err: any) {
         log(`Sheets sync error: ${err.message}`, "sheets");
@@ -2224,7 +2136,7 @@ export async function registerRoutes(
   // fill-in-place transform on Amazon's own workbook: upload the file from
   // "Bulk Update" on the Manage Your Sourcing Cost page, get it back with
   // "Seller New Cost" populated for every ASIN purchased in the selected range.
-  // Cost = actual_cogs, po_sheet-sourced only. Returns JSON
+  // Cost = actual_cogs, af_po-sourced only. Returns JSON
   // { filename, xlsxBase64, summary } so the client builds the download AND
   // shows the accounting; full detail is logged server-side.
   app.post("/api/export/sourcing-cost", upload.single("file"), async (req: Request, res: Response) => {
@@ -3947,11 +3859,11 @@ export async function registerRoutes(
     ).catch((err: any) => log(`Phase c: synthetic-COGS clear failed: ${err?.message ?? err}`, "full-scope"));
 
     // COGS: ASINs with Orders-sheet rows get the real PO sync, scoped to
-    // them, so actual_cogs / cogs_source='po_sheet' / prep_override land the
+    // them, so actual_cogs / cogs_source='af_po' / prep_override land the
     // same way they do for any PO'd ASIN. No Orders rows → COGS stays NULL.
-    const poAsins = rows.filter((r) => r.cogsSource === "po_sheet").map((r) => r.asin);
+    const poAsins = rows.filter((r) => r.cogsSource === "af_po").map((r) => r.asin);
     if (poAsins.length > 0) {
-      await runSheetsSync(new Set(poAsins))
+      await syncAsinCosts(new Set(poAsins))
         .catch((err: any) => log(`Phase c: scoped PO sync failed: ${err?.message ?? err}`, "full-scope"));
     }
 
@@ -4142,10 +4054,10 @@ export async function registerRoutes(
       const entry = sheetData.get(asin);
       if (entry?.cogs != null) {
         await query(
-          `UPDATE asin_estimates SET cogs = $2, actual_cogs = $2, cogs_source = 'po_sheet' WHERE asin = $1`,
+          `UPDATE asin_estimates SET cogs = $2, actual_cogs = $2, cogs_source = 'af_po' WHERE asin = $1`,
           [asin, entry.cogs],
         );
-        res.json({ cogs: entry.cogs, actualCogs: entry.cogs, cogsSource: "po_sheet" });
+        res.json({ cogs: entry.cogs, actualCogs: entry.cogs, cogsSource: "af_po" });
       } else {
         res.json({ cogs: null, cogsSource: null });
       }
@@ -4166,10 +4078,10 @@ export async function registerRoutes(
         res.json({ synced: false, message: "No PO data found for this ASIN" }); return;
       }
       await query(
-        `UPDATE asin_estimates SET estimated_cogs = $2, estimated_cogs_source = 'po_sheet' WHERE asin = $1`,
+        `UPDATE asin_estimates SET estimated_cogs = $2, estimated_cogs_source = 'af_po' WHERE asin = $1`,
         [asin, entry.cogs],
       );
-      res.json({ synced: true, estimatedCogs: entry.cogs, estimatedCogsSource: "po_sheet" });
+      res.json({ synced: true, estimatedCogs: entry.cogs, estimatedCogsSource: "af_po" });
     } catch (err: any) {
       res.status(500).json({ message: err.message });
     }
@@ -4189,12 +4101,12 @@ export async function registerRoutes(
       for (const asin of asinList) {
         const entry = sheetData.get(asin);
         if (entry?.cogs == null) { skipped++; continue; }
-        // Only overwrite manual/csv sources — po_sheet is already in sync
+        // Only overwrite manual/csv sources — af_po is already in sync
         const estCheck = await query(`SELECT estimated_cogs_source FROM asin_estimates WHERE asin = $1`, [asin]);
         const src = estCheck?.rows?.[0]?.estimated_cogs_source;
-        if (src === "po_sheet") { continue; } // already synced
+        if (src === "af_po") { continue; } // already synced
         await query(
-          `UPDATE asin_estimates SET estimated_cogs = $2, estimated_cogs_source = 'po_sheet' WHERE asin = $1`,
+          `UPDATE asin_estimates SET estimated_cogs = $2, estimated_cogs_source = 'af_po' WHERE asin = $1`,
           [asin, entry.cogs],
         );
         synced++;
@@ -4383,6 +4295,22 @@ export async function registerRoutes(
       throw err;
     } finally { client.release(); }
   }
+  // Actual COGS on PO save (Orders-sheet retirement commit 1, 2026-11-13): once a PO write has committed, the
+  // ASINs on the PO before AND after the write (a line moved to another ASIN names both) get the scoped cost sync
+  // onboarding phase c runs — Actual COGS / Est. COGS / prep follow the newest non-canceled PO at once. The sync
+  // never fails the save: it logs, and component 9 writes the same thing on the next hourly pass.
+  const poIdOfLine = async (lineId: string) => (await query(`SELECT po_id FROM po_line_items WHERE id = $1`, [lineId])).rows[0]?.po_id ?? null;
+  const poIdOfAsinRow = async (rowId: string) => (await query(`SELECT po_id FROM po_asins WHERE id = $1`, [rowId])).rows[0]?.po_id ?? null;
+  const poIdOfMoneyRow = async (table: string, id: number) => (await query(`SELECT po_id FROM ${table} WHERE id = $1`, [id])).rows[0]?.po_id ?? null;
+  async function withCostSync<T>(what: string, poIdBefore: string | null | (() => Promise<string | null>), run: () => Promise<T>, poIdAfter?: (out: T) => string | null): Promise<T> {
+    const idBefore = typeof poIdBefore === "function" ? await poIdBefore().catch(() => null) : poIdBefore;
+    const before = await poAsinList(query, idBefore).catch(() => [] as string[]);
+    const out = await run();
+    const idAfter = poIdAfter ? poIdAfter(out) : idBefore;
+    const after = await poAsinList(query, idAfter).catch(() => [] as string[]);
+    await syncAsinCostsAfterPoWrite(query, [...before, ...after], what);
+    return out;
+  }
   const sendEdit = async (res: Response, run: () => Promise<EditResult>) => {
     try {
       const r = await run();
@@ -4406,7 +4334,7 @@ export async function registerRoutes(
   };
   app.patch("/api/pos/:id", async (req: Request, res: Response) => {
     if (!isDbAvailable()) { res.status(503).json({ message: "Database not available" }); return; }
-    await sendEdit(res, () => withPoTx(async (q) => withRecompute(q, await editPoHeader(q, String(req.params.id ?? ""), req.body, uid(req)), uid(req))));
+    await sendEdit(res, () => withCostSync("edit PO", String(req.params.id ?? ""), () => withPoTx(async (q) => withRecompute(q, await editPoHeader(q, String(req.params.id ?? ""), req.body, uid(req)), uid(req)))));
   });
   // Edit PO as a page (/pos/:id/edit, Maria 2026-11-04): the stored PO as the New PO form, and the whole form saved back —
   // one transaction, the existing editors underneath (server/po-edit-form.ts), one History row per changed field.
@@ -4420,7 +4348,7 @@ export async function registerRoutes(
   });
   app.put("/api/pos/:id/form", async (req: Request, res: Response) => {
     if (!isDbAvailable()) { res.status(503).json({ message: "Database not available" }); return; }
-    try { res.json(await withPoTx((q) => savePoForm(q, String(req.params.id ?? ""), req.body, uid(req)))); }
+    try { res.json(await withCostSync("save PO form", String(req.params.id ?? ""), () => withPoTx((q) => savePoForm(q, String(req.params.id ?? ""), req.body, uid(req))))); }
     catch (err: any) {
       if (err instanceof EditError) { res.status(err.status).json({ message: err.message }); return; }
       if (err?.code === "23505") { res.status(409).json({ message: "a PO with this supplier and order # already exists" }); return; }
@@ -4429,25 +4357,25 @@ export async function registerRoutes(
   });
   app.post("/api/pos/:id/lines", async (req: Request, res: Response) => {
     if (!isDbAvailable()) { res.status(503).json({ message: "Database not available" }); return; }
-    await sendEdit(res, () => withPoTx((q) => addLine(q, String(req.params.id ?? ""), req.body, uid(req))));
+    await sendEdit(res, () => withCostSync("add line", String(req.params.id ?? ""), () => withPoTx((q) => addLine(q, String(req.params.id ?? ""), req.body, uid(req)))));
   });
   app.patch("/api/pos/lines/:id", async (req: Request, res: Response) => {
     if (!isDbAvailable()) { res.status(503).json({ message: "Database not available" }); return; }
-    await sendEdit(res, () => withPoTx(async (q) => withRecompute(q, await editLine(q, String(req.params.id ?? ""), req.body, uid(req)), uid(req))));
+    await sendEdit(res, () => withCostSync("edit line", () => poIdOfLine(String(req.params.id ?? "")), () => withPoTx(async (q) => withRecompute(q, await editLine(q, String(req.params.id ?? ""), req.body, uid(req)), uid(req)))));
   });
   app.delete("/api/pos/lines/:id", async (req: Request, res: Response) => {
     if (!isDbAvailable()) { res.status(503).json({ message: "Database not available" }); return; }
-    await sendEdit(res, () => withPoTx((q) => removeLine(q, String(req.params.id ?? ""), uid(req))));
+    await sendEdit(res, () => withCostSync("remove line", () => poIdOfLine(String(req.params.id ?? "")), () => withPoTx((q) => removeLine(q, String(req.params.id ?? ""), uid(req)))));
   });
   app.patch("/api/pos/asin-rows/:id", async (req: Request, res: Response) => {
     if (!isDbAvailable()) { res.status(503).json({ message: "Database not available" }); return; }
-    await sendEdit(res, () => withPoTx(async (q) => withRecompute(q, await editAsinRow(q, String(req.params.id ?? ""), req.body, uid(req)), uid(req))));
+    await sendEdit(res, () => withCostSync("edit ASIN row", () => poIdOfAsinRow(String(req.params.id ?? "")), () => withPoTx(async (q) => withRecompute(q, await editAsinRow(q, String(req.params.id ?? ""), req.body, uid(req)), uid(req)))));
   });
   // === Payments, promos, refunds per line (po-ai-prefill §8, commit 8) ===
   const moneyRoutes = (plural: "payments" | "promos" | "refunds", table: "po_payments" | "po_promos" | "po_line_refunds") => {
     app.post(`/api/pos/:id/${plural}`, async (req: Request, res: Response) => {
       if (!isDbAvailable()) { res.status(503).json({ message: "Database not available" }); return; }
-      await sendGuarded(res, () => withPoTx((q) => addMoneyRow(q, table, String(req.params.id ?? ""), req.body, uid(req))));
+      await sendGuarded(res, () => withCostSync(`add ${plural}`, String(req.params.id ?? ""), () => withPoTx((q) => addMoneyRow(q, table, String(req.params.id ?? ""), req.body, uid(req)))));
     });
     app.patch(`/api/pos/${plural}/:id`, async (req: Request, res: Response) => {
       if (!isDbAvailable()) { res.status(503).json({ message: "Database not available" }); return; }
@@ -4455,7 +4383,7 @@ export async function registerRoutes(
     });
     app.delete(`/api/pos/${plural}/:id`, async (req: Request, res: Response) => {
       if (!isDbAvailable()) { res.status(503).json({ message: "Database not available" }); return; }
-      await sendGuarded(res, () => withPoTx((q) => removeMoneyRow(q, table, Number(req.params.id), uid(req))));
+      await sendGuarded(res, () => withCostSync(`remove ${plural}`, () => poIdOfMoneyRow(table, Number(req.params.id)), () => withPoTx((q) => removeMoneyRow(q, table, Number(req.params.id), uid(req)))));
     });
   };
   moneyRoutes("payments", "po_payments"); moneyRoutes("promos", "po_promos"); moneyRoutes("refunds", "po_line_refunds");
@@ -4466,7 +4394,10 @@ export async function registerRoutes(
       await sendGuarded(res, () => withPoTx(async (q) => { const out = await run(q, req); return out; }).then(async (out: any) => {
         // An open claim keeps its PO open (D15); closing / dismissing one may let the PO close.
         const po = out?.po_id ?? req.params.id;
-        const close = /^[0-9a-f-]{36}$/i.test(String(po ?? "")) ? await evaluateAutoClose(String(po), poQuery) : null;
+        const isPo = /^[0-9a-f-]{36}$/i.test(String(po ?? ""));
+        const close = isPo ? await evaluateAutoClose(String(po), poQuery) : null;
+        // A canceled claim (or its edit / dismissal / removal) changes which PO is the ASIN's newest non-canceled one.
+        if (isPo) await syncAsinCostsAfterPoWrite(query, await poAsinList(query, String(po)).catch(() => []), "claim change");
         return { ...out, close };
       }));
     });
@@ -4516,7 +4447,7 @@ export async function registerRoutes(
   app.post("/api/pos", async (req: Request, res: Response) => {
     if (!isDbAvailable()) { res.status(503).json({ message: "Database not available" }); return; }
     try {
-      const r = await withPoTx((q) => createPoFromForm(q, req.body, uid(req)));
+      const r = await withCostSync("create PO", null, () => withPoTx((q) => createPoFromForm(q, req.body, uid(req))), (out) => out.poId);
       // Capture PO (§5): the prefill's log row gets the PO it became.
       const prefillId = typeof req.body?.prefill?.id === "string" ? req.body.prefill.id : null;
       const entry = prefillId ? getPrefill(prefillId) : null;
@@ -4714,11 +4645,11 @@ export async function registerRoutes(
   });
   app.delete("/api/pos/:id", async (req: Request, res: Response) => {
     if (!isDbAvailable()) { res.status(503).json({ message: "Database not available" }); return; }
-    await sendGuarded(res, () => withPoTx((q) => deletePo(q, String(req.params.id ?? ""), uid(req))));
+    await sendGuarded(res, () => withCostSync("delete PO", String(req.params.id ?? ""), () => withPoTx((q) => deletePo(q, String(req.params.id ?? ""), uid(req)))));
   });
   app.post("/api/pos/:id/cancel", async (req: Request, res: Response) => {
     if (!isDbAvailable()) { res.status(503).json({ message: "Database not available" }); return; }
-    await sendGuarded(res, () => withPoTx((q) => cancelPo(q, String(req.params.id ?? ""), uid(req))));
+    await sendGuarded(res, () => withCostSync("cancel PO", String(req.params.id ?? ""), () => withPoTx((q) => cancelPo(q, String(req.params.id ?? ""), uid(req)))));
   });
   app.post("/api/pos/shipments/:id/reassign", async (req: Request, res: Response) => {
     if (!isDbAvailable()) { res.status(503).json({ message: "Database not available" }); return; }
@@ -4808,10 +4739,10 @@ export async function registerRoutes(
       const pa = (await query(`SELECT po_id, asin FROM po_asins WHERE id = $1`, [id])).rows[0];
       if (!pa) { res.status(404).json({ message: "ASIN row not found" }); return; }
       try { await assertAsinRowCancelable(poQuery, id); } catch (e: any) { res.status(e instanceof EditError ? e.status : 500).json({ message: e.message }); return; } // §5.1
-      const made = await withPoTx(async (q) => {
+      const made = await withCostSync("cancel ASIN row", String(pa.po_id), () => withPoTx(async (q) => {
         const lineIds = (await q(`SELECT id FROM po_line_items WHERE po_asin_id = $1 ORDER BY position, id`, [id])).rows.map((l: any) => String(l.id));
         return cancelLines(q, String(pa.po_id), lineIds, uid(req), `Mark canceled (${pa.asin})`);
-      });
+      }));
       const close = await evaluateAutoClose(String(pa.po_id), poQuery);
       const [row] = await loadPoAsinRows(poQuery, [String(pa.po_id)]).then((rows) => rows.filter((x: any) => String(x.id) === id));
       res.json({ row, close, linesCanceled: made.length, claims: made.map((m) => m.id) });

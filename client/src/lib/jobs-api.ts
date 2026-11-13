@@ -74,7 +74,7 @@ export interface ComponentRun {
 // ── Component names, for labels. Keys match server/scheduler/components. ──
 export const COMPONENT_LABELS: Record<number, string> = {
   1: "SC discovery", 2: "catalog", 3: "catalog-deleted", 4: "BSR", 5: "meltable", 6: "dangerous good",
-  7: "hazmat", 8: "gating", 9: "PO sheet", 10: "prices", 11: "sellers", 12: "CPT", 13: "fees",
+  7: "hazmat", 8: "gating", 9: "PO costs", 10: "prices", 11: "sellers", 12: "CPT", 13: "fees",
   14: "profit", 15: "inventory", 16: "listings", 17: "primary SKU", 18: "suppressions",
   19: "sales", 20: "refunds", 21: "actual fees",
   22: "close OOS listings", 23: "inventory ledger", 24: "delete dead listings",

@@ -113,8 +113,8 @@ export async function fetchAllAccountListings(
 export interface OnboardResolution {
   asin: string;
   skus: string[];
-  /** 'po_sheet' when the ASIN has Orders-sheet rows; 'none' otherwise. */
-  cogsSource: "po_sheet" | "none";
+  /** 'af_po' when the ASIN has Orders-sheet rows; 'none' otherwise. */
+  cogsSource: "af_po" | "none";
   buyLink: string | null;
   supplier: string | null;
   /** Which precedence arm supplied the buy link (§18 phase c step 3). */
@@ -163,7 +163,7 @@ export function resolveOnboardData(
       return {
         asin,
         skus: skusByAsin.get(asin) ?? [],
-        cogsSource: ordersSuppliers.has(asin) ? "po_sheet" : "none",
+        cogsSource: ordersSuppliers.has(asin) ? "af_po" : "none",
         buyLink: master,
         supplier: extractDomain(master) || null,
         buyLinkSource: "master",
@@ -174,7 +174,7 @@ export function resolveOnboardData(
       return {
         asin,
         skus: skusByAsin.get(asin) ?? [],
-        cogsSource: "po_sheet",
+        cogsSource: "af_po",
         buyLink: `https://${domain}`,
         supplier: domain,
         buyLinkSource: "orders",
@@ -185,7 +185,7 @@ export function resolveOnboardData(
       skus: skusByAsin.get(asin) ?? [],
       // An ASIN can have Orders rows (so PO COGS applies) while its supplier
       // cell is blank — the two are resolved independently.
-      cogsSource: ordersSuppliers.has(asin) ? "po_sheet" : "none",
+      cogsSource: ordersSuppliers.has(asin) ? "af_po" : "none",
       buyLink: null,
       supplier: null,
       buyLinkSource: "none",

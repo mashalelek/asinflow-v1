@@ -195,7 +195,7 @@ export interface AsinResult {
   asin: string;
   cogs: number; // deprecated — use estimatedCogs / actualCogs
   estimatedCogs: number | null;
-  estimatedCogsSource?: "manual" | "po_sheet" | "csv" | null;
+  estimatedCogsSource?: "manual" | "af_po" | "csv" | null;
   actualCogs: number | null;
   buyLink: string | null;
   prepOverride: number | null;
@@ -232,7 +232,7 @@ export interface AsinResult {
   isDangerousGood?: boolean | null; // DG transport class (attributes.hazmat); null = unchecked
   isSearchSuppressed?: boolean;
   suppressionReasons?: string[];
-  cogsSource?: "po_sheet" | "manual" | null;
+  cogsSource?: "af_po" | "manual" | null;
   pricesFetchedAt?: string | null;
   feeSource?: "spapi" | "fallback" | null; // stored fee provenance (migration 026); null = legacy/unknown
   /** Migration 095 (2026-11-06): what Amazon's fee promotion took off the FBA fee (fbaFee is the fee before it). */

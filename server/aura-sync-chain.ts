@@ -3,7 +3,7 @@
 // Aura button, so they can never diverge.
 //
 // HARD DEPENDENCY: the Aura push runs ONLY after a successful PO sheet read
-// for the same selection. The read is runSheetsSync (component 9's logic,
+// for the same selection. The read is syncAsinCostsFromPos (component 9's logic,
 // scoped) run INLINE here — a Google Sheet read + COGS upsert, no SP-API, so
 // it is not refresh work and does not go on the queue (Maria, 2026-10-16:
 // manual actions never wait on the scheduled pass). If the read fails, we
@@ -11,7 +11,7 @@
 // worse than not pushing.
 
 import { pushAuraCosts } from "./aura-cost-sync";
-import { getRunSheetsSync } from "./routes";
+import { getSyncAsinCostsFromPos } from "./routes";
 import { log } from "./log";
 
 export interface PoSheetReadResult {
@@ -35,14 +35,14 @@ export interface AuraSyncChainSummary {
 export interface AuraSyncChainOptions {
   /** The selection; undefined = the full sheet and every Aura-mapped SKU. */
   asinFilter?: Set<string>;
-  /** Injected for tests; the default is runSheetsSync (the /api/sheets/sync implementation) scoped to the selection. */
+  /** Injected for tests; the default is syncAsinCostsFromPos (server/asin-po-costs.ts, AF PO tables) scoped to the selection. */
   readPoSheet?: (filter: Set<string> | undefined) => Promise<PoSheetReadResult>;
   push?: typeof pushAuraCosts;
 }
 
-/** Default PO sheet read: runSheetsSync inline, scoped to the selection (undefined = full sheet). */
+/** Default cost read: syncAsinCostsFromPos inline, scoped to the selection (undefined = every PO'd ASIN). */
 export async function readPoSheetInline(filter: Set<string> | undefined): Promise<PoSheetReadResult> {
-  const r = await getRunSheetsSync()(filter);
+  const r = await getSyncAsinCostsFromPos()(filter);
   return { updated: r.updated, skipped: r.skipped, errors: r.errors.length, cleared: r.cleared };
 }
 

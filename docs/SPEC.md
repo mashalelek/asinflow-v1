@@ -86,7 +86,7 @@ purposes and have separate ownership.
 - "What would this ASIN earn at current price assumptions, at this expected
   cost."
 - Source labels (`estimated_cogs_source`): `manual`, `csv`, `imported`
-  (Chrome extension), `po_sheet`.
+  (Chrome extension), `af_po`.
 - Written by: CSV upload, manual inline edit, Chrome extension import, and
   PO sync (any source except `manual` — see "PO sync behavior").
 - Inline-editable in the UI via the CogsEditor popup.
@@ -95,8 +95,8 @@ purposes and have separate ownership.
 - Backward-looking. Used to compute Actual Profit / Margin / ROI from past
   sales.
 - "What did the units I sold actually cost."
-- Source labels (`cogs_source`): `po_sheet`, `csv`, `manual`.
-- Written by: PO sync only (`po_sheet`) — the sole writer, enforced
+- Source labels (`cogs_source`): `af_po`, `csv`, `manual`.
+- Written by: PO sync only (`af_po`) — the sole writer, enforced
   (2026-08-30). The dormant API path (`PUT /api/asins/:asin/cogs` with an
   `actual_cogs` body param, source `'manual'`) is REMOVED — the param is
   ignored; the route's `estimated_cogs` handling is unchanged. `cogs_source
@@ -116,13 +116,13 @@ purposes and have separate ownership.
 When the PO sync job runs for an ASIN that has a matching PO row:
 
 - Always overwrites `actual_cogs` with the latest PO value. Sets
-  `cogs_source = 'po_sheet'`.
+  `cogs_source = 'af_po'`.
 - For `estimated_cogs` (rule corrected 2026-08-11): **overwrite with the
-  latest PO value and set source `'po_sheet'` — unless
+  latest PO value and set source `'af_po'` — unless
   `estimated_cogs_source = 'manual'`**, which is left alone (manual override
   sticks, unchanged semantics). `csv`/`imported` YIELD to PO: those sources
   seed pre-purchase estimates, and a PO row is ground truth for what the
-  units cost. (The prior rule — update only `po_sheet`/NULL — silently froze
+  units cost. (The prior rule — update only `af_po`/NULL — silently froze
   `csv`-seeded rows against PO updates: 83 rows had drifted ~$268 total by
   2026-08-10, incl. two stuck at $0.00. The first sync after this change
   heals that population as a side effect; no repair script.)
@@ -1038,7 +1038,7 @@ YYYY-MM-DD_SupplierName_OrderID
 >
 > | Reader | Now reads |
 > |---|---|
-> | Per-ASIN COGS / prep / supplier (`runSheetsSync` — Sync POs' second half, Push to Aura, component 9), Reset COGS, Sync Est. COGS from PO (single + bulk), the onboarding supplier fallback | `loadAfAsinCostMap`: per ASIN, the **newest non-canceled ASIN row** — `ORDER BY order_date DESC, entry_seq DESC` (`NEWEST_PO_ORDER`, `server/po-entry-seq.ts`); an ASIN row is canceled when every line has `qty_canceled ≥ qty_ordered`. cost = `po_asins.cost_per_unit`, prep = `prep_cost` (NULL → 0), supplier = the PO's |
+> | Per-ASIN COGS / prep / supplier (`syncAsinCostsFromPos` — Sync POs' second half, Push to Aura, component 9), Reset COGS, Sync Est. COGS from PO (single + bulk), the onboarding supplier fallback | `loadAfAsinCostMap`: per ASIN, the **newest non-canceled ASIN row** — `ORDER BY order_date DESC, entry_seq DESC` (`NEWEST_PO_ORDER`, `server/po-entry-seq.ts`); an ASIN row is canceled when every line has `qty_canceled ≥ qty_ordered`. cost = `po_asins.cost_per_unit`, prep = `prep_cost` (NULL → 0), supplier = the PO's |
 > | Upload to Velocity (CSV, plan, execute), Export SB COGS, the sourcing-cost export | `loadAfPoRows`: one sheet-shaped row per product line, newest first. Col D ← "Closed" when the PO is closed, "Canceled" when the line is fully canceled; Col U ← qty ordered × yield ÷ unique products (2-dp yields restored to the fraction typed; on a one-product S=1 row the stored integer ASIN qty wins unless the product is the half / third / quarter / sixth it was rounded from); Col AZ ← units (bundle: sets × units per bundle; otherwise U × units / pack); AX / AY / S / T / L / N / Y / AS from the ASIN row and line |
 >
 > Same outputs as the sheet for unchanged data, verified per reader with a
@@ -1114,7 +1114,7 @@ now in Col AS exclusively. Any `actual_cogs` values in the DB from older PO
 syncs are "dirty" until the next sync overwrites them with clean Col Y data.
 
 **Ordered-qty clearing pass (2026-08-23 → retired 2026-10-17).** While
-`runSheetsSync` wrote `asin_estimates.ordered_qty`, a vanished ASIN (rows
+`syncAsinCostsFromPos` wrote `asin_estimates.ordered_qty`, a vanished ASIN (rows
 corrected in the sheet) kept its last-written quantity forever, so a
 clearing pass zeroed every non-zero `ordered_qty` with no rows in the
 current read — all of them on full-catalog runs, in-filter only on scoped
@@ -1849,8 +1849,8 @@ button **"Export SB COGS"** opens the template file picker.
 
 > **"Purchased in the window" comes from the AF PO tables since 2026-10-18**
 > (`loadAfPoRows`, §11 "Google Sheets PO tracker" banner); the cost source is
-> unchanged (`actual_cogs` with `cogs_source = 'po_sheet'`, written by
-> `runSheetsSync` from the AF tables).
+> unchanged (`actual_cogs` with `cogs_source = 'af_po'`, written by
+> `syncAsinCostsFromPos` from the AF tables).
 
 **There is no API.** Verified Aug 19, 2026 against the SP-API model list and the
 Feeds API feed-type list: no endpoint, no feed, nothing on the roadmap. Sourcing
@@ -1878,7 +1878,7 @@ Amazon's workbook (`Part_1`..`Part_N` sheets, one row per **ASIN + FNSKU**):
 Columns are located **by header text, never by index**. A missing `Asin` or
 `Seller New Cost` header throws rather than writing into the wrong column.
 
-**Cost source: `actual_cogs`, and only where `cogs_source = 'po_sheet'`.**
+**Cost source: `actual_cogs`, and only where `cogs_source = 'af_po'`.**
 Sourcing cost sets Amazon's reimbursement valuation for lost/damaged units and
 is gated on invoice review, so only a cost with a PO behind it is defensible.
 `estimated_cogs` is never submitted. Neither is a `manual`- or `csv`-sourced
@@ -2299,7 +2299,7 @@ the ledger stage is the `refresh_runs.stage` key the component writes.
 | 6 | Dangerous good | daily | rides CALL-2 | `06_dangerous_good` | " |
 | 7 | Hazmat | daily | CALL-3 inbound eligibility, per ASIN | `07_hazmat` | " |
 | 8 | Eligibility / gating | daily | CALL-4 Listings Restrictions, per ASIN | `08_gating` | " |
-| 9 | Actual COGS from PO sheet | hourly | CALL-5 Orders sheet | `09_po_sheet` | full sheet |
+| 9 | Actual COGS from AF POs (the backstop since 2026-11-13: every PO write syncs its own ASINs first) | hourly | AF PO tables | `09_po_sheet` (key kept) | every PO'd ASIN |
 | 10 | Competitive prices | hourly | CALL-6 itemOffers batch | `10_prices` | active+parked |
 | 11 | Seller count | hourly | rides CALL-6 | `11_sellers` | " |
 | 12 | CPT (`asin_estimates.competitive_price_threshold`, migration 052 — decision 12) | hourly | rides CALL-6 | `12_cpt` | " |
@@ -2609,7 +2609,7 @@ Three components are ledger-only in this version, by decision:
 
 `server/scheduler/runner.ts`, started from `server/index.ts` after the
 migrations and `registerRoutes` (it needs the injected
-`onboardScDiscoveries` and `runSheetsSync`), whenever `SP_API_SELLER_ID`
+`onboardScDiscoveries` and `syncAsinCostsFromPos`), whenever `SP_API_SELLER_ID`
 is set — the runner is always on; only the **schedule** is gated.
 
 - **Two lanes, one loop each** (Maria, 2026-10-16: manual actions never
@@ -2690,7 +2690,7 @@ is set — the runner is always on; only the **schedule** is gated.
   wait behind a running pass. Confirmed necessary by the 2026-10-16 test
   (§18): `putListingsItem` accepts a gated ASIN. **Push to Aura**
   (decision 9) reads the PO sheet for its selection first and then pushes
-  the same selection — **inline** (2026-10-16): `runSheetsSync` scoped to
+  the same selection — **inline** (2026-10-16): `syncAsinCostsFromPos` scoped to
   the selection, a Google Sheet read + COGS upsert with no SP-API call, is
   not refresh work and never waits on the scheduled pass; no jobs row. The
   full chain (`POST /api/sync/aura`) is the same function without a
@@ -2699,7 +2699,7 @@ is set — the runner is always on; only the **schedule** is gated.
 
   **Rule (Maria, 2026-10-16): manual actions never wait on the scheduled
   pass. Only SP-API refresh work goes on the queue.** Sync POs (the PO
-  sheet sync of §22 followed by `runSheetsSync`, 2026-10-16), Export SB
+  sheet sync of §22 followed by `syncAsinCostsFromPos`, 2026-10-16), Export SB
   COGS, Update COGS in SC, Push to Aura, Verify now, Recheck now,
   Park/Unpark/Mark dead/Revive stay direct calls. Sync Sourcing and Upload
   File keep their inline sheet/CSV step; only the onboarding Refresh they
@@ -3321,7 +3321,7 @@ The stage code moved; its rules did not. Still true, now per component:
   pass (ALL statuses incl. dead, SKU'd and no-SKU alike), one per-ASIN
   outcome for every ASIN probed (§18 A2); its onboards go through
   `onboardNewAsins` with trigger `sc_discovery`.
-- **PO sheet (9)** is `runSheetsSync` — full sheet on a scheduled pass,
+- **PO sheet (9)** is `syncAsinCostsFromPos` — full sheet on a scheduled pass,
   filtered to the job's ASINs on a scoped job (the clearing pass stays
   inside the filter).
 
@@ -3585,7 +3585,7 @@ that writes it:
 | Catalog data (title, brand, category, dimensions, weight, image), BSR + category, `is_meltable`, `is_dangerous_good`, `is_catalog_deleted` | components 2–6 (daily block); the onboarding INSERT seeds nothing Amazon-side |
 | `is_hazmat`, `hazmat_checked_at` | component 7 — successful probe only |
 | `eligibility_status`, `gating_checked_at` | `probeGatingForAsins` (`server/gating-probe.ts`) — successful probe only; called by component 8 and, inline, by the Add to SC preview (decision 9) |
-| `actual_cogs`, `cogs_source='po_sheet'`, `prep_override` | `runSheetsSync` — component 9 on a scheduled pass; Sync POs (after the PO intake, §22) and Push to Aura call it inline (decision 9, off the queue 2026-10-16). **Reads the AF PO tables since 2026-10-18** (newest non-canceled ASIN row, §11 banner); the `po_sheet` source label is kept. `asin_estimates.ordered_qty` is no longer written (2026-10-17) and awaits a cleanup migration |
+| `actual_cogs`, `cogs_source='af_po'`, `prep_override` | `syncAsinCostsFromPos` (`server/asin-po-costs.ts`; was `syncAsinCostsFromPos`) — after every PO write for the PO's ASINs (`withCostSync`, 2026-11-13), component 9 on a scheduled pass; Sync POs (after the PO intake, §22) and Push to Aura call it inline (decision 9, off the queue 2026-10-16). **Reads the AF PO tables since 2026-10-18** (newest non-canceled ASIN row, §11 banner); the `af_po` source label is kept. `asin_estimates.ordered_qty` is no longer written (2026-10-17) and awaits a cleanup migration |
 | On Order, At Prep (ASINs page, history modal, `inventory_snapshots.ordered_qty`) | **Derived from the PO tables** by `server/asin-po-pipeline.ts` at read time — never synced from the sheet, never stored on `asins` / `asin_estimates` (§6, 2026-10-17) |
 | Inventory snapshot, `asin_skus` recording | component 15 |
 | `sku_fba_inventory` (every FBA bucket per SKU, `last_nonzero_at`) | component 15 only (2026-10-18) |
@@ -5066,7 +5066,7 @@ sequential phases over one NDJSON progress stream
      probe, which the next reconcile supplies.
   2. **COGS:** if the ASIN has rows in the Orders sheet (the PO mirror), the
      existing PO sync runs **scoped to that ASIN**, so `actual_cogs` /
-     `cogs_source='po_sheet'` / `prep_override` land as for any PO'd ASIN. No
+     `cogs_source='af_po'` / `prep_override` land as for any PO'd ASIN. No
      Orders rows → COGS stays **NULL**. No synthetic zero is stored; the UI
      already renders `$0.00` from nothing.
   3. **Buy link / supplier**, first match wins:
@@ -5083,7 +5083,7 @@ sequential phases over one NDJSON progress stream
   4. Tag **`SC import`**; `added_at = NOW()`; `estimated_cogs` untouched.
   5. **Results dialog:** the onboarded ASINs appear under the listings stage
      carrying their detail in the outcome string —
-     `onboarded · SKUs <…> · COGS po_sheet|none · link master|orders|none`.
+     `onboarded · SKUs <…> · COGS af_po|none · link master|orders|none`.
      Kept in the outcome rather than a parallel field so the jobs dialog
      renders it through the existing per-ASIN outcome list. Retry failed
      covers `error:` outcomes here too.
@@ -5698,7 +5698,7 @@ catalog with ASINs and no costs is the normal starting case here.
 ### COGS divergence is expected
 
 The same ASIN may show a different Estimated COGS here than on the main page.
-This page reads only the uploaded CSV or manual entry, never `po_sheet` data.
+This page reads only the uploaded CSV or manual entry, never `af_po` data.
 That is the isolation working, not a sync bug.
 
 ### Columns
@@ -6650,7 +6650,7 @@ every save and every recompute; a recompute stamps version 3.
 - **COGS** (`po_asins.cost_per_unit`, col Y) = Sourcing × (1 − weighted
   gift-card %) **+ the per-ASIN adjustment** (`cogs_adjustment` with a
   required reason, e.g. "prep materials $3"). Feeds `actual_cogs`
-  (`runSheetsSync`), the Aura push (+ prep) and repricing, as before. A
+  (`syncAsinCostsFromPos`), the Aura push (+ prep) and repricing, as before. A
   cost / unit typed by hand on the form wins and is logged as
   `cost_per_unit` in History. Recompute's own History rows are marked
   `po_edit_log.derived` (migration 091, 2026-11-04) and never count as typed
@@ -7109,7 +7109,7 @@ path. Do not extend the script.
 
 `syncPoSheet({ sheetId, dryRun })` — called by `POST /api/sheets/sync`
 (the ASINs-page **Sync POs** button) ahead of the per-ASIN COGS sync
-(§11 `runSheetsSync`); the two run sequentially and the toast reports
+(§11 `syncAsinCostsFromPos`); the two run sequentially and the toast reports
 both. If the PO sync throws, the per-ASIN sync still runs and the result
 carries `poSync.error`. Inline, never a job (rule C). `?dryRun=true`
 returns the plan with nothing written.
@@ -8188,7 +8188,7 @@ renames or moves a file, and never deletes one it did not create** (Maria
 | `settings.po_*` lookup lists | Migrations (seed/append) + entry form (layer 1) |
 
 The PO module writes nothing outside its own tables. `asin_estimates`
-(`actual_cogs`, `prep_override`) is written by `runSheetsSync`, which reads
+(`actual_cogs`, `prep_override`) is written by `syncAsinCostsFromPos`, which reads
 the AF PO tables since 2026-10-18 (§11 banner).
 
 The ASINs page's On Order / At Prep columns read

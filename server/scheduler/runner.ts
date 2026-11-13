@@ -46,7 +46,7 @@ export interface RunnerDeps {
   /**
    * Functions the routes layer owns and components need, placed in every
    * job's cache under their names: `onboardScDiscoveries` (component 1)
-   * and `runSheetsSync` (component 9). Injected so this module never
+   * and `syncAsinCostsFromPos` (component 9). Injected so this module never
    * imports routes.ts.
    */
   inject?: Record<string, unknown>;

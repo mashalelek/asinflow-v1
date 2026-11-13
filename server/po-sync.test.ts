@@ -1,8 +1,8 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
 
 // Pins the §2 PO-sync estimated_cogs rule (corrected 2026-08-11): the PO
-// value overwrites (source → 'po_sheet') for ANY source except 'manual' —
-// csv/imported yield to PO; manual sticks. The old po_sheet/NULL-only check
+// value overwrites (source → 'af_po') for ANY source except 'manual' —
+// csv/imported yield to PO; manual sticks. The old af_po/NULL-only check
 // silently froze csv-seeded rows (83 drifted rows, diagnosed 2026-08-10).
 //
 // server/index.ts is mocked (importing it boots Express — same rationale as
@@ -59,7 +59,8 @@ vi.mock("./google-sheets", () => ({
   fetchSheetRows: async () => [],
 }));
 
-import { getRunSheetsSync } from "./routes";
+import { getSyncAsinCostsFromPos } from "./routes";
+const getRunSheetsSync = getSyncAsinCostsFromPos; // the function under test kept its old name here (renamed 2026-11-13)
 
 beforeEach(() => {
   updates.length = 0;
@@ -84,18 +85,18 @@ describe("runSheetsSync reads the AF PO tables (po-af-owned §2.4)", () => {
 });
 
 describe("runSheetsSync estimated_cogs rule (§2, corrected 2026-08-11)", () => {
-  it("csv-source row + PO value → estimated_cogs overwritten, source 'po_sheet'", async () => {
-    sourcesByAsin = { CSVASIN0001: { est: "csv", act: "po_sheet" } };
+  it("csv-source row + PO value → estimated_cogs overwritten, source 'af_po'", async () => {
+    sourcesByAsin = { CSVASIN0001: { est: "csv", act: "af_po" } };
     await getRunSheetsSync()(new Set(["CSVASIN0001"]));
     const u = updates.find((x) => x.params[x.params.length - 1] === "CSVASIN0001")!;
     expect(u.sql).toContain("estimated_cogs =");
     expect(u.sql).toContain("estimated_cogs_source =");
     expect(u.params).toContain(12.64);
-    expect(u.params).toContain("po_sheet");
+    expect(u.params).toContain("af_po");
   });
 
   it("manual-source row → estimate untouched (actuals still sync)", async () => {
-    sourcesByAsin = { MANASIN0001: { est: "manual", act: "po_sheet" } };
+    sourcesByAsin = { MANASIN0001: { est: "manual", act: "af_po" } };
     await getRunSheetsSync()(new Set(["MANASIN0001"]));
     const u = updates.find((x) => x.params[x.params.length - 1] === "MANASIN0001")!;
     expect(u.sql).not.toContain("estimated_cogs =");
@@ -108,7 +109,7 @@ describe("runSheetsSync estimated_cogs rule (§2, corrected 2026-08-11)", () => 
     await getRunSheetsSync()(new Set(["NULASIN0001"]));
     const u = updates.find((x) => x.params[x.params.length - 1] === "NULASIN0001")!;
     expect(u.sql).toContain("estimated_cogs =");
-    expect(u.params).toContain("po_sheet");
+    expect(u.params).toContain("af_po");
   });
 });
 

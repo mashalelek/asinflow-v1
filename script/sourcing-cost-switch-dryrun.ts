@@ -1,7 +1,7 @@
 // Update COGS in SC → Sourcing cost switch: the production dry run Maria asked
 // for before the switch is pushed (patch po-ai-prefill §7.1, amendment 4,
 // 2026-10-31; scoped 2026-11-01). Read-only. For every ASIN the export would
-// submit for the window (purchased in range, cogs_source = po_sheet, a usable
+// submit for the window (purchased in range, cogs_source = af_po, a usable
 // cost): the cost before the switch (actual_cogs = col Y) vs after, the count
 // whose submitted cost changes, and the min / median / max delta.
 //
@@ -60,7 +60,7 @@ async function main() {
   const out: Array<{ asin: string; before: number; after: number; delta: number; basis: string; po: string }> = [];
   let notPoSourced = 0, badCost = 0, patchForward = 0, noSourcing = 0;
   for (const r of cost) {
-    if (r.cogs_source !== "po_sheet") { notPoSourced++; continue; }
+    if (r.cogs_source !== "af_po") { notPoSourced++; continue; }
     const before = Number(r.actual_cogs);
     const useSourcing = r.patch_forward === true && r.sourcing_cost != null && r.sourcing_cost > 0;
     const after = useSourcing ? Number(r.sourcing_cost) : before;
@@ -73,7 +73,7 @@ async function main() {
   const median = deltas.length ? (deltas.length % 2 ? deltas[(deltas.length - 1) / 2] : (deltas[deltas.length / 2 - 1] + deltas[deltas.length / 2]) / 2) : 0;
   const pctOf = (x: typeof changed[number]) => (x.before > 0 ? Math.round((x.delta / x.before) * 1000) / 10 : null);
   console.log(`Update COGS in SC switch dry run against ${DB_TARGET} · window ${fromArg} … ${toArg}${has075 ? "" : " · migration 075 not applied here (no patch-forward PO can exist)"}`);
-  console.log(`  ASINs purchased in the window: ${asins.length}; po_sheet-sourced with a cost: ${out.length} (not po_sheet ${notPoSourced}, no usable cost ${badCost})`);
+  console.log(`  ASINs purchased in the window: ${asins.length}; af_po-sourced with a cost: ${out.length} (not af_po ${notPoSourced}, no usable cost ${badCost})`);
   console.log(`  newest PO is patch-forward (v2 form / extension / email_renewal): ${patchForward} ASIN(s), of which ${noSourcing} without a sourcing_cost → actual_cogs; every other ASIN sends actual_cogs as today`);
   console.log(`  submitted cost CHANGES on ${changed.length} ASIN(s): delta min ${deltas[0] ?? 0} · median ${median} · max ${deltas[deltas.length - 1] ?? 0} (after − before, $ per unit); unchanged ${out.length - changed.length}`);
   for (const x of changed.slice(0, 15)) console.log(`    ${x.asin}  ${x.before} → ${x.after}  (${x.delta >= 0 ? "+" : ""}${x.delta}, ${pctOf(x)}%)  ${x.po}`);

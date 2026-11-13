@@ -186,7 +186,7 @@ describe("resolveOnboardData — buy-link precedence (§18 phase c step 3)", () 
     // Orders rows present but the supplier cell is blank: PO COGS still
     // applies, the buy link does not resolve.
     const [r] = resolveOnboardData(["B001"], skus, new Map(), new Map([["B001", null]]));
-    expect(r.cogsSource).toBe("po_sheet");
+    expect(r.cogsSource).toBe("af_po");
     expect(r.buyLinkSource).toBe("none");
   });
 
@@ -268,8 +268,8 @@ describe("phase c wiring", () => {
     const s = code("routes.ts");
     const i = s.indexOf("async function onboardScDiscoveries");
     const fn = s.slice(i, i + 4000);
-    expect(fn).toMatch(/cogsSource === "po_sheet"/);
-    expect(fn).toMatch(/runSheetsSync\(new Set\(poAsins\)\)/);
+    expect(fn).toMatch(/cogsSource === "af_po"/);
+    expect(fn).toMatch(/syncAsinCosts\(new Set\(poAsins\)\)/);
   });
 
   it("onlyPhaseC skips the per-ASIN phases entirely", () => {
@@ -299,7 +299,7 @@ describe("phase c wiring", () => {
     expect(fn).toMatch(/SET estimated_cogs = NULL, estimated_cogs_source = NULL/);
     expect(fn).toMatch(/AND estimated_cogs = 0 AND estimated_cogs_source = 'csv'/);
     // and it must precede the PO sync, or a PO'd ASIN loses its real COGS
-    expect(fn.indexOf("estimated_cogs = NULL")).toBeLessThan(fn.indexOf("runSheetsSync"));
+    expect(fn.indexOf("estimated_cogs = NULL")).toBeLessThan(fn.indexOf("syncAsinCosts("));
   });
 
   it("the standalone pass endpoint persists a refresh_runs row (A2)", () => {

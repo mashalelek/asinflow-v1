@@ -2,7 +2,7 @@
 // editor does it (editAsinRow). Maria 2026-11-02: PO 6433257 (opentip.com) B07J9QQDSS
 // was imported with the single-unit price (2.61); the ASIN is a 2-pack, so its COGS is
 // 5.22 like the two earlier opentip POs. The ASINs page's COGS follows at the next
-// pass (component 9, runSheetsSync: newest non-canceled PO row per ASIN).
+// pass (component 9, syncAsinCostsFromPos: newest non-canceled PO row per ASIN).
 //   tsx script/fix-po-cost.ts --order 6433257 --asin B07J9QQDSS --cost 5.22 [--prod] [--live]
 // `--sourcing <amount>` / `--paid <amount>` set the row's sourcing cost / paid cost the same
 // way (any combination of the three; Maria 2026-11-02: align 6433257's to 5.22 too).

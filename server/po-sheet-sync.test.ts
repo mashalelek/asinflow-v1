@@ -316,12 +316,12 @@ describe("syncPoSheet — dry run computes the §3.9 counts and writes nothing",
 // ── §4 button wiring ──────────────────────────────────────────────────────────
 describe("Sync POs button (§4): PO sync first, then the per-ASIN sync; both outcomes reported", () => {
   const read = (rel: string) => readFileSync(join(__dirname, "..", rel), "utf8");
-  it("the route runs syncPoSheet before runSheetsSync, survives a PO-sync failure, and ?dryRun=true writes nothing", () => {
+  it("the route runs syncPoSheet before syncAsinCosts, survives a PO-sync failure, and ?dryRun=true writes nothing", () => {
     const routes = read("server/routes.ts");
     const start = routes.indexOf('app.post("/api/sheets/sync"');
     const body = routes.slice(start, routes.indexOf("app.post(", start + 10));
     const po = body.indexOf("await syncPoSheet({ sheetId, dryRun })");
-    const asin = body.indexOf("await runSheetsSync(filter)");
+    const asin = body.indexOf("await syncAsinCosts(filter)");
     expect(po).toBeGreaterThan(0);
     expect(asin).toBeGreaterThan(po);
     expect(body).toMatch(/poSync = \{ error: err\?\.message \?\? String\(err\) \}/);

@@ -3,7 +3,7 @@ import * as XLSX from "xlsx";
 
 // Pins the Amazon sourcing-cost export contract: we fill exactly one column
 // ("Seller New Cost") of Amazon's own workbook, only for ASINs purchased in the
-// selected window, only from po_sheet-sourced actual_cogs, and never resubmit a
+// selected window, only from af_po-sourced actual_cogs, and never resubmit a
 // cost Amazon already approved from us.
 //
 // server/index.ts is mocked (importing it boots Express). ./db and
@@ -85,7 +85,7 @@ describe("buildSourcingCost", () => {
     const wb = makeWorkbook([["B001", "X001", 1.51, 1.51, "AMAZON"]]);
 
     const { buffer, summary } = await buildSourcingCost(wb, FROM, TO, mkQuery({
-      B001: { actual_cogs: "4.96", cogs_source: "po_sheet" },
+      B001: { actual_cogs: "4.96", cogs_source: "af_po" },
     }));
 
     const out = readBack(buffer);
@@ -115,7 +115,7 @@ describe("buildSourcingCost", () => {
     ]);
 
     const { buffer, summary } = await buildSourcingCost(wb, FROM, TO, mkQuery({
-      B001: { actual_cogs: 4.96, cogs_source: "po_sheet" },
+      B001: { actual_cogs: 4.96, cogs_source: "af_po" },
     }));
 
     expect(readBack(buffer).map((r) => r["Seller New Cost"])).toEqual([4.96, 4.96, 4.96]);
@@ -129,7 +129,7 @@ describe("buildSourcingCost", () => {
     const wb = makeWorkbook([["B001", "X001", 3.34, 4.96, "SELLER"]]);
 
     const { buffer, summary } = await buildSourcingCost(wb, FROM, TO, mkQuery({
-      B001: { actual_cogs: 4.96, cogs_source: "po_sheet" },
+      B001: { actual_cogs: 4.96, cogs_source: "af_po" },
     }));
 
     expect(readBack(buffer)[0]["Seller New Cost"]).toBe("");
@@ -143,7 +143,7 @@ describe("buildSourcingCost", () => {
     const wb = makeWorkbook([["B001", "X001", 4.96, 4.96, "AMAZON"]]);
 
     const { buffer, summary } = await buildSourcingCost(wb, FROM, TO, mkQuery({
-      B001: { actual_cogs: 4.96, cogs_source: "po_sheet" },
+      B001: { actual_cogs: 4.96, cogs_source: "af_po" },
     }));
 
     expect(readBack(buffer)[0]["Seller New Cost"]).toBe(4.96);
@@ -156,13 +156,13 @@ describe("buildSourcingCost", () => {
     const wb = makeWorkbook([["B001", "X001", 3.34, 4.96, "SELLER"]]);
 
     const { buffer } = await buildSourcingCost(wb, FROM, TO, mkQuery({
-      B001: { actual_cogs: 5.25, cogs_source: "po_sheet" },
+      B001: { actual_cogs: 5.25, cogs_source: "af_po" },
     }));
 
     expect(readBack(buffer)[0]["Seller New Cost"]).toBe(5.25);
   });
 
-  it("refuses any cost that is not po_sheet-sourced, and names it", async () => {
+  it("refuses any cost that is not af_po-sourced, and names it", async () => {
     sheetRows = [poRow("B001", "8/12/2026"), poRow("B002", "8/13/2026"), poRow("B003", "8/14/2026")];
     rawRowsRead = 3;
     const wb = makeWorkbook([
@@ -172,7 +172,7 @@ describe("buildSourcingCost", () => {
     ]);
 
     const { buffer, summary, details } = await buildSourcingCost(wb, FROM, TO, mkQuery({
-      B001: { actual_cogs: 4.96, cogs_source: "po_sheet" },
+      B001: { actual_cogs: 4.96, cogs_source: "af_po" },
       B002: { actual_cogs: 7.10, cogs_source: "manual" },
       B003: { actual_cogs: 2.00, cogs_source: "csv" },
     }));
@@ -193,8 +193,8 @@ describe("buildSourcingCost", () => {
     ]);
 
     const { summary, details } = await buildSourcingCost(wb, FROM, TO, mkQuery({
-      B002: { actual_cogs: null, cogs_source: "po_sheet" },
-      B003: { actual_cogs: 0, cogs_source: "po_sheet" },
+      B002: { actual_cogs: null, cogs_source: "af_po" },
+      B003: { actual_cogs: 0, cogs_source: "af_po" },
     }));
 
     expect(summary.skips.noCogsRow).toBe(1);
@@ -222,7 +222,7 @@ describe("buildSourcingCost", () => {
       ["B005", "X005", 1, 1, "AMAZON"],
     ]);
     const costs = Object.fromEntries(
-      ["B001", "B002", "B003", "B004", "B005"].map((a) => [a, { actual_cogs: 3, cogs_source: "po_sheet" }]),
+      ["B001", "B002", "B003", "B004", "B005"].map((a) => [a, { actual_cogs: 3, cogs_source: "af_po" }]),
     );
 
     const { buffer, summary } = await buildSourcingCost(wb, FROM, TO, mkQuery(costs));
@@ -246,8 +246,8 @@ describe("buildSourcingCost", () => {
     rawRowsRead = 2;
     const wb = makeWorkbook([["B001", "X001", 1, 1, "AMAZON"], ["B002", "X002", 1, 1, "AMAZON"]]);
     const { summary } = await buildSourcingCost(wb, FROM, TO, mkQuery({
-      B001: { actual_cogs: 3, cogs_source: "po_sheet" },
-      B002: { actual_cogs: 4, cogs_source: "po_sheet" },
+      B001: { actual_cogs: 3, cogs_source: "af_po" },
+      B002: { actual_cogs: 4, cogs_source: "af_po" },
     }));
     expect(summary.skips.excludedOutOfRange).toBe(0);
     expect(summary.purchasedAsins).toBe(2);
@@ -259,8 +259,8 @@ describe("buildSourcingCost", () => {
     const wb = makeWorkbook([["B001", "X001", 1, 1, "AMAZON"]]);
 
     const { summary, details } = await buildSourcingCost(wb, FROM, TO, mkQuery({
-      B001: { actual_cogs: 4.96, cogs_source: "po_sheet" },
-      B999: { actual_cogs: 8.00, cogs_source: "po_sheet" },
+      B001: { actual_cogs: 4.96, cogs_source: "af_po" },
+      B999: { actual_cogs: 8.00, cogs_source: "af_po" },
     }));
 
     expect(summary.skips.notInWorkbook).toBe(1);
@@ -279,8 +279,8 @@ describe("buildSourcingCost", () => {
     const buf = XLSX.write(wb, { bookType: "xlsx", type: "buffer" }) as Buffer;
 
     const { buffer, summary } = await buildSourcingCost(buf, FROM, TO, mkQuery({
-      B001: { actual_cogs: 4.96, cogs_source: "po_sheet" },
-      B002: { actual_cogs: 7.25, cogs_source: "po_sheet" },
+      B001: { actual_cogs: 4.96, cogs_source: "af_po" },
+      B002: { actual_cogs: 7.25, cogs_source: "af_po" },
     }));
 
     expect(summary.sheetsScanned).toBe(2);
@@ -316,7 +316,7 @@ describe("buildSourcingCost", () => {
     const buf = XLSX.write(wb, { bookType: "xlsx", type: "buffer" }) as Buffer;
 
     const { buffer } = await buildSourcingCost(buf, FROM, TO, mkQuery({
-      B001: { actual_cogs: 4.96, cogs_source: "po_sheet" },
+      B001: { actual_cogs: 4.96, cogs_source: "af_po" },
     }));
     const out = readBack(buffer);
     expect(out[0]["Seller New Cost"]).toBe(4.96);
@@ -336,8 +336,8 @@ describe("buildSourcingCost", () => {
     ]);
 
     const { buffer, summary, details } = await buildSourcingCost(wb, FROM, TO, mkQuery({
-      B001: { actual_cogs: 2.80, cogs_source: "po_sheet" },
-      B002: { actual_cogs: 2.80, cogs_source: "po_sheet" },
+      B001: { actual_cogs: 2.80, cogs_source: "af_po" },
+      B002: { actual_cogs: 2.80, cogs_source: "af_po" },
     }));
 
     expect(readBack(buffer).map((r) => r["Seller New Cost"])).toEqual(["", ""]);
@@ -354,7 +354,7 @@ describe("buildSourcingCost", () => {
     rawRowsRead = 1;
     const wb = makeWorkbook([["B001", "X001", 3.00, 4.00, "SELLER"]]);
     const { buffer, summary } = await buildSourcingCost(wb, FROM, TO, mkQuery({
-      B001: { actual_cogs: 4.01, cogs_source: "po_sheet" },
+      B001: { actual_cogs: 4.01, cogs_source: "af_po" },
     }));
     expect(readBack(buffer)[0]["Seller New Cost"]).toBe(4.01);
     expect(summary.skips.wouldLowerApproved).toBe(0);
@@ -365,7 +365,7 @@ describe("buildSourcingCost", () => {
     rawRowsRead = 1;
     const wb = makeWorkbook([["B001", "X001", 3.00, 4.96, "SELLER"]]);
     const { summary } = await buildSourcingCost(wb, FROM, TO, mkQuery({
-      B001: { actual_cogs: 4.96, cogs_source: "po_sheet" },
+      B001: { actual_cogs: 4.96, cogs_source: "af_po" },
     }));
     expect(summary.skips.alreadyApproved).toBe(1);
     expect(summary.skips.wouldLowerApproved).toBe(0);
@@ -381,7 +381,7 @@ describe("buildSourcingCost", () => {
     const buf = XLSX.write(wb, { bookType: "xlsx", type: "buffer" }) as Buffer;
 
     const { buffer, summary } = await buildSourcingCost(buf, FROM, TO, mkQuery({
-      B001: { actual_cogs: 1.25, cogs_source: "po_sheet" },
+      B001: { actual_cogs: 1.25, cogs_source: "af_po" },
     }));
     expect(readBack(buffer)[0]["Seller New Cost"]).toBe(1.25);
     expect(summary.skips.wouldLowerApproved).toBe(0);
@@ -397,7 +397,7 @@ describe("buildSourcingCost", () => {
       ["B001", "X002", 3.00, 2.00, "AMAZON"],
     ]);
     const { buffer, summary } = await buildSourcingCost(wb, FROM, TO, mkQuery({
-      B001: { actual_cogs: 5.00, cogs_source: "po_sheet" },
+      B001: { actual_cogs: 5.00, cogs_source: "af_po" },
     }));
     expect(readBack(buffer).map((r) => r["Seller New Cost"])).toEqual(["", 5]);
     expect(summary.skips.wouldLowerApproved).toBe(1);
@@ -409,7 +409,7 @@ describe("buildSourcingCost", () => {
     rawRowsRead = 1;
     const wb = makeWorkbook([["B001", "X001", 1, 1, "AMAZON"]]);
     const { buffer } = await buildSourcingCost(wb, FROM, TO, mkQuery({
-      B001: { actual_cogs: "4.955", cogs_source: "po_sheet" },
+      B001: { actual_cogs: "4.955", cogs_source: "af_po" },
     }));
     expect(readBack(buffer)[0]["Seller New Cost"]).toBe(4.96);
   });
@@ -448,8 +448,8 @@ describe("Sourcing cost (col AR) is what gets submitted", () => {
     rawRowsRead = 2;
     const wb = makeWorkbook([["B001", "X001", 1, 1, "AMAZON"], ["B002", "X002", 1, 1, "AMAZON"]]);
     const { buffer, summary, details } = await buildSourcingCost(wb, FROM, TO, mkQuery2({
-      B001: { actual_cogs: "4.96", cogs_source: "po_sheet", sourcing_cost: "5.33" },
-      B002: { actual_cogs: "7.00", cogs_source: "po_sheet" },
+      B001: { actual_cogs: "4.96", cogs_source: "af_po", sourcing_cost: "5.33" },
+      B002: { actual_cogs: "7.00", cogs_source: "af_po" },
     }));
     expect(readBack(buffer).map((r) => r["Seller New Cost"])).toEqual([5.33, 7]);
     expect(summary.sourcingFromAr).toBe(1);
@@ -467,7 +467,7 @@ describe("Sourcing cost is sent only for patch-forward POs", () => {
     sheetRows = [poRow("B001", "8/12/2026")];
     rawRowsRead = 1;
     const seen: string[] = [];
-    const q = async (sql: string, params?: any[]) => { seen.push(sql); return { rows: (params?.[0] ?? []).map((asin: string) => ({ asin, actual_cogs: "4.96", cogs_source: "po_sheet", sourcing_cost: null })) }; };
+    const q = async (sql: string, params?: any[]) => { seen.push(sql); return { rows: (params?.[0] ?? []).map((asin: string) => ({ asin, actual_cogs: "4.96", cogs_source: "af_po", sourcing_cost: null })) }; };
     const { summary } = await buildSourcingCost(makeWorkbook([["B001", "X001", 1, 1, "AMAZON"]]), FROM, TO, q);
     const costSql = seen.find((s) => /sourcing_cost/.test(s))!;
     expect(costSql).toContain("CASE WHEN (p.cost_formula_version IS NOT NULL OR p.source IN ('extension', 'email_renewal')) THEN pa.sourcing_cost END");
@@ -492,8 +492,8 @@ describe("fixture template → the recorded output", () => {
     const template = `${dir}/template.xlsx`;
     if (process.env.WRITE_SC_FIXTURE || !fs.existsSync(template)) fs.writeFileSync(template, makeWorkbook(rows));
     const { buffer, summary, details } = await buildSourcingCost(fs.readFileSync(template), FROM, TO, mkQuery({
-      B001: { actual_cogs: "4.96", cogs_source: "po_sheet" }, B002: { actual_cogs: "2.49", cogs_source: "po_sheet" }, B003: { actual_cogs: "7.50", cogs_source: "po_sheet" },
-      B004: { actual_cogs: "3.00", cogs_source: "po_sheet" }, B005: { actual_cogs: "1.00", cogs_source: "csv" },
+      B001: { actual_cogs: "4.96", cogs_source: "af_po" }, B002: { actual_cogs: "2.49", cogs_source: "af_po" }, B003: { actual_cogs: "7.50", cogs_source: "af_po" },
+      B004: { actual_cogs: "3.00", cogs_source: "af_po" }, B005: { actual_cogs: "1.00", cogs_source: "csv" },
     }));
     const got = { cells: readBack(buffer), summary, details };
     const expected = `${dir}/expected.json`;

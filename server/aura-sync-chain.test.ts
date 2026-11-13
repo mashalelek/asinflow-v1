@@ -4,7 +4,7 @@ import { join } from "path";
 
 // Decision 9 (2026-10-13): Push to Aura reads the PO sheet for its selection
 // FIRST, then pushes the same selection. Same hard dependency the full chain
-// has. INLINE since 2026-10-16: the read is runSheetsSync scoped to the
+// has. INLINE since 2026-10-16: the read is syncAsinCostsFromPos scoped to the
 // selection — a sheet read + COGS upsert, not SP-API refresh work — with no
 // jobs row, so Push to Aura never waits on the scheduled pass.
 
@@ -13,7 +13,7 @@ vi.mock("./aura-cost-sync", () => ({ pushAuraCosts: vi.fn() }));
 
 const sheetCalls: any[] = [];
 vi.mock("./routes", () => ({
-  getRunSheetsSync: () => async (filter: any) => { sheetCalls.push(filter ? Array.from(filter) : null); return { updated: 3, skipped: 10, cleared: 1, errors: [], clearedAsins: [] }; },
+  getSyncAsinCostsFromPos: () => async (filter: any) => { sheetCalls.push(filter ? Array.from(filter) : null); return { updated: 3, skipped: 10, cleared: 1, errors: [], clearedAsins: [] }; },
 }));
 
 import { runAuraSyncChain, readPoSheetInline } from "./aura-sync-chain";
@@ -51,7 +51,7 @@ describe("runAuraSyncChain", () => {
     expect(push).not.toHaveBeenCalled();
   });
 
-  it("the default PO read is runSheetsSync INLINE, scoped to the selection — no job, no wait", async () => {
+  it("the default PO read is syncAsinCostsFromPos INLINE, scoped to the selection — no job, no wait", async () => {
     sheetCalls.length = 0;
     const r = await readPoSheetInline(new Set(["B7"]));
     expect(sheetCalls).toEqual([["B7"]]);
@@ -64,6 +64,6 @@ describe("runAuraSyncChain", () => {
   it("the chain touches no job: no enqueue, no await-job, no components list", () => {
     const s = readFileSync(join(__dirname, "aura-sync-chain.ts"), "utf8");
     expect(s).not.toMatch(/runJobAndWait|enqueueJob|components: \[9\]|await-job/);
-    expect(s).toMatch(/getRunSheetsSync\(\)\(filter\)/);
+    expect(s).toMatch(/getSyncAsinCostsFromPos\(\)\(filter\)/);
   });
 });
