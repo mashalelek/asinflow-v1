@@ -61,7 +61,7 @@ export function bucketCounts(rows: ReadonlyArray<{ bucket: ClaimBucket }>): Reco
 export async function sweepClaimTimers(query: QueryLike, now = new Date(), userId: number | null = null): Promise<Array<{ claim_id: number; kind: string; reason: string }>> {
   const created: Array<{ claim_id: number; kind: string; reason: string }> = [];
   for (const c of await loadClaims(query, { all: true })) {
-    if (c.status !== "open") continue;
+    if (c.status !== "open" && c.status !== "closed") continue; // a written-off claim waiting on Velocity's dispose times out too (Maria 2026-11-12)
     const b = deriveBucket(c, now);
     if (!b.timedOut || !b.timeout) continue;
     if (c.tasks.some((t) => t.kind === b.timeout!.kind && !t.done_at)) continue;

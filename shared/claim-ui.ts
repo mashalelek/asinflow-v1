@@ -38,7 +38,8 @@ const reportedText = (c: UiClaim) => `Reported ${fmtMD(c.reported_at ?? doneAt(c
 /** Pure: ONE sentence for the row's Step / the header. */
 export function stateSentence(c: UiClaim, b: BucketResult): string {
   if (c.status === "dismissed") return "Dismissed";
-  if (c.status === "closed") return `Closed ${fmtMD(c.closed_at)}${outcomeWord(c) ? ` · ${outcomeWord(c)}` : ""}${c.write_off_reason ? ` · ${c.write_off_reason}` : ""}`;
+  // a written-off claim with Velocity still to act reads its task / its wait, not "Closed" (its bucket says so)
+  if (c.status === "closed" && b.bucket === "closed") return `Closed ${fmtMD(c.closed_at)}${outcomeWord(c) ? ` · ${outcomeWord(c)}` : ""}${c.write_off_reason ? ` · ${c.write_off_reason}` : ""}`;
   const sug = openOf(c, "review_suggestion");
   if (c.status === "suggested" || sug) return sug?.reason ?? "Suggested — open or dismiss";
   if (!isReported(c)) return "Report to supplier";
@@ -64,7 +65,8 @@ export function stateSentence(c: UiClaim, b: BucketResult): string {
     // "Refund confirmed 9/23 · check the card" (Maria 2026-11-12): what was confirmed, when, and where to look
     case "waiting_refund": return `${refundWord(c)} confirmed ${fmtMD(supplierConfirmedAt(c))} · check the ${refundWhere(c)}${short(c)}`;
     case "waiting_shipment": return c.replacement_shipped_at ? `Replacement shipped ${fmtMD(c.replacement_shipped_at)} · not arrived` : "Return on its way to the supplier";
-    case "waiting_velocity": return doneAt(c, "send_label") ? `Label sent ${fmtMD(doneAt(c, "send_label"))} · return not shipped yet` : doneAt(c, "dispose_units") ? "Velocity asked to dispose · count not down yet" : "Velocity asked · nothing changed yet";
+    // dispose asked wins over an older label (a written-off claim whose return never moved, Maria 2026-11-12)
+    case "waiting_velocity": return doneAt(c, "dispose_units") && c.qty_disposed == null ? "Velocity asked to dispose · count not down yet" : doneAt(c, "send_label") ? `Label sent ${fmtMD(doneAt(c, "send_label"))} · return not shipped yet` : "Velocity asked · nothing changed yet";
     case "waiting_supplier": {
       const reply = c.last_supplier_reply_at ? `Supplier replied ${fmtMD(c.last_supplier_reply_at)}` : null;
       if (c.outcome && !c.supplier_confirmed_at) return `${reply ?? reportedText(c)} · ${outcomeWord(c)} promised · no confirmation yet`;
@@ -90,7 +92,7 @@ export interface PrimaryAction {
 }
 /** Pure: the row's Do column. */
 export function primaryAction(c: UiClaim, b: BucketResult): PrimaryAction {
-  if (c.status === "closed" || c.status === "dismissed") return { kind: "none", label: "", secondary: null };
+  if (b.bucket === "closed" || b.bucket === "dismissed") return { kind: "none", label: "", secondary: null };
   const open = openTasks(c);
   const by = (k: string) => open.find((t) => t.kind === k);
   let t: UiTask | undefined;
@@ -173,7 +175,7 @@ export function stepActions(c: UiClaim): UiStep[] {
 
 /** Pure: the "What happens next" box — now · then · then. */
 export function whatHappensNext(c: UiClaim, b: BucketResult): Array<{ when: "Now" | "Then"; text: string }> {
-  if (c.status === "closed") return [{ when: "Now", text: `Closed ${fmtMD(c.closed_at)}${outcomeWord(c) ? ` · ${outcomeWord(c)}` : ""}. Reopen from More if something changes.` }];
+  if (c.status === "closed" && b.bucket === "closed") return [{ when: "Now", text: `Closed ${fmtMD(c.closed_at)}${outcomeWord(c) ? ` · ${outcomeWord(c)}` : ""}. Reopen from More if something changes.` }];
   if (c.status === "dismissed") return [{ when: "Now", text: "Dismissed. Reopen from More to take it up again." }];
   const paths = "the supplier's answer sets the outcome: refund → Confirmed → Received; replacement → Promised → Shipped → Arrived; nothing → Write off";
   if (c.status === "suggested") return [{ when: "Now", text: "in Needs attention › Decide until you open or dismiss the suggestion" }, { when: "Then", text: "Report to supplier · the timer starts from the report date" }, { when: "Then", text: paths }];

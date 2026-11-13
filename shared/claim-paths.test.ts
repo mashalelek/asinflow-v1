@@ -101,14 +101,19 @@ describe("§3.4 paths, creation → Closed", () => {
     const sent = base({ ...label, tasks: [...reported.tasks, done("upload_return_label", "2026-11-04T16:00:00Z"), done("send_label", "2026-11-04T18:00:00Z")] });
     const checkOnIt = base({ ...sent, tasks: [...sent.tasks, open("check_on_it", "2026-11-12T15:00:00Z", "5 business days: return label sent, return not shipped")] });
     const writtenOff = base({ ...sent, status: "closed", outcome: "write_off", closed_at: "2026-11-13T12:00:00Z", remaining: 5.97, tasks: [...sent.tasks, done("check_on_it", "2026-11-13T12:00:00Z"), open("dispose_units", "2026-11-13T12:00:00Z")] });
-    const disposed = base({ ...writtenOff, qty_disposed: 1, tasks: [...sent.tasks, done("check_on_it", "2026-11-13T12:00:00Z"), done("dispose_units", "2026-11-14T12:00:00Z")] });
+    const asked = base({ ...writtenOff, tasks: [...sent.tasks, done("check_on_it", "2026-11-13T12:00:00Z"), done("dispose_units", "2026-11-16T15:00:00Z")] });
+    const disposed = base({ ...asked, qty_disposed: 1 });
     walk("expired → return → write-off", [
       { stage: "reported 11/3", c: reported, want: { current: "answered", bucket: "waiting_supplier", next: "waiting for the supplier's answer", due: "2026-11-10T12:00:00.000Z" } },
       { stage: "supplier wants it back · upload the label", c: label, want: { current: "label", bucket: "needs_attention", next: "Upload return label", due: null } },
       { stage: "label sent 11/4, return never moves", c: sent, now: LATER, want: { current: "return_shipped", bucket: "waiting_velocity", next: "waiting for Velocity", timedOut: true, timeout: "check_on_it" } },
       { stage: "the sweep's Check on it", c: checkOnIt, now: LATER, want: { current: "return_shipped", bucket: "needs_attention", next: "Check on it", due: null, action: "Check on it" } },
-      { stage: "written off 11/13 · Velocity asked to dispose", c: writtenOff, now: LATER, want: { current: "dispose", bucket: "closed", next: "Ask Velocity to dispose / return", sentence: "Closed 11/13 · write-off" } },
-      { stage: "disposed 11/14", c: disposed, now: LATER, want: { current: null, bucket: "closed", next: "" } },
+      // written off + Velocity still to act is not Closed (Maria 2026-11-12): the open dispose task → Needs attention › Velocity
+      { stage: "written off 11/13 · dispose task open", c: writtenOff, now: LATER, want: { current: "dispose", bucket: "needs_attention", next: "Ask Velocity to dispose / return", due: null, sentence: "write-off · ask Velocity to dispose 1 units", action: "Asked" } },
+      // dispose asked 11/16, count not down → Waiting on Velocity, timer from the ask
+      { stage: "Velocity asked to dispose 11/16", c: asked, now: new Date("2026-11-17T15:00:00Z"), want: { current: "dispose", bucket: "waiting_velocity", next: "waiting for Velocity", since: "2026-11-16T15:00:00.000Z", due: "2026-11-23T15:00:00.000Z", timedOut: false, sentence: "Velocity asked to dispose · count not down yet" } },
+      { stage: "11/24: count still not down", c: asked, now: new Date("2026-11-24T15:00:00Z"), want: { current: "dispose", bucket: "waiting_velocity", next: "waiting for Velocity", timedOut: true, timeout: "check_on_it" } },
+      { stage: "Velocity's count down (1 disposed)", c: disposed, now: new Date("2026-11-24T15:00:00Z"), want: { current: null, bucket: "closed", next: "", sentence: "Closed 11/13 · write-off" } },
     ]);
   });
   it("never_received → refund", () => {

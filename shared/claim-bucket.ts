@@ -130,13 +130,29 @@ export function daysSince(since: string | null, now: Date): number | null {
  * so a confirmed refund times out into Check on it "refund not posted". It restarts when the open task is ticked (any
  * tick; the Contact supplier tick counts from the report date typed on it).
  */
+/** Velocity tasks that keep a written-off claim out of Closed while open (dispose, the return label). */
+export const VELOCITY_CLOSE_TASKS: ReadonlySet<string> = new Set(["dispose_units", "send_label", "upload_return_label"]);
 /** Ticks that never restart the timer: the report (its date is the anchor) and Open claim on a suggestion. */
 export const NO_RESTART_TASK_KINDS: ReadonlySet<string> = new Set(["contact_supplier", "review_suggestion"]);
 export function deriveBucket(c: BucketClaim, now: Date): BucketResult {
   const none: BucketResult = { bucket: "needs_attention", since: null, due: null, timedOut: false, timeout: null };
   if (c.status === "dismissed") return { ...none, bucket: "dismissed" };
-  if (c.status === "closed") return { ...none, bucket: "closed", since: c.closed_at };
   const tasks = effectiveTasks(c);
+  if (c.status === "closed") {
+    // A written-off claim with Velocity still to act is not Closed (Maria 2026-11-12): an open dispose / return task →
+    // Needs attention › Velocity; dispose asked and the count not down → Waiting on Velocity with the timer from the ask;
+    // Closed once Velocity's count drops (qty_disposed) or Maria ticks it.
+    const velocityOpen = tasks.filter((t) => !t.done_at && VELOCITY_CLOSE_TASKS.has(t.kind));
+    if (velocityOpen.length) return { ...none, since: new Date(ts(velocityOpen.map((t) => t.created_at).filter((x): x is string => !!x).sort()[0] ?? c.closed_at) ?? Date.now()).toISOString() };
+    const asked = doneAt(c, "dispose_units");
+    if (asked && c.qty_disposed == null) {
+      const since = new Date(ts(asked)!).toISOString();
+      const dueDate = addBusinessDays(since, BUSINESS_DAYS);
+      const snoozed = c.tasks.some((t) => t.snoozed_until && ts(t.snoozed_until)! > now.getTime());
+      return { bucket: "waiting_velocity", since, due: dueDate.toISOString(), timedOut: !snoozed && now.getTime() >= dueDate.getTime(), timeout: { kind: "check_on_it", reason: `${BUSINESS_DAYS} business days: dispose asked, count not down` } };
+    }
+    return { ...none, bucket: "closed", since: c.closed_at };
+  }
   // Needs attention: "since" = the oldest open task (what has been waiting for a hand the longest), the found date for a bare suggestion
   if (c.status === "suggested" || tasks.some(isActiveTask)) {
     const oldest = tasks.filter(isActiveTask).map((t) => t.created_at).filter((x): x is string => !!x).sort()[0] ?? c.found_at;
@@ -216,6 +232,11 @@ export function claimSteps(c: BucketClaim): ClaimStep[] {
   } else if (outcome === "write_off") {
     steps.push({ key: "written_off", label: "Written off", done: true, at: c.closed_at });
     if (c.tasks.some((t) => t.kind === "dispose_units")) steps.push({ key: "dispose", label: "Dispose", done: !!doneAt(c, "dispose_units") && c.qty_disposed != null, at: doneAt(c, "dispose_units") });
+    // Closed only once Velocity's part is done (Maria 2026-11-12)
+    const disposePending = c.tasks.some((t) => t.kind === "dispose_units") && c.qty_disposed == null;
+    steps.push({ key: "closed", label: "Closed", done: closed && !disposePending, at: disposePending ? null : c.closed_at });
+    let set = false;
+    return steps.map((s) => { const current = !s.done && !set && c.status !== "dismissed"; if (current) set = true; return { ...s, current }; });
   } else {
     if (c.return_required) {
       steps.push({ key: "label", label: "Label", done: !!doneAt(c, "upload_return_label") || !!doneAt(c, "send_label"), at: doneAt(c, "upload_return_label") });

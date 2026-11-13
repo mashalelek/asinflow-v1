@@ -6391,8 +6391,13 @@ Rules built in commit 1 (`server/supplier-claims.ts`, `shared/supplier-claim.ts`
   suggestion #3342 dismissed "superseded by cancel"). `shared/claim-paths.test.ts` walks every §3.4 path from creation
   to Closed — missing → refund / replacement, damaged and cant_sell → return → refund, expired → return → write-off,
   never_received → refund / write-off, canceled (email) → refund, canceled (Cancel PO) → refund — asserting Steps,
-  bucket, Next action and the timer at every stage; until commit 7 brings the return's tracking, the return's Shipped
-  / Delivered steps read done once the supplier confirms the refund (or the claim closes).
+  bucket, Next action and the timer at every stage. **TEMPORARY until commit 7:** the return's Shipped / Delivered
+  steps auto-tick when the supplier confirms the refund (or the claim closes) because no return tracking exists yet;
+  commit 7 replaces that with the return's own tracking (label → sent → shipped → delivered from the carrier).
+  **A written-off claim with Velocity still to act is not Closed (Maria 2026-11-12):** an open dispose / return task
+  keeps it in Needs attention › Velocity; dispose asked and Velocity's count not down → Waiting on Velocity with the
+  timer from the ask (Check on it when it runs out — the sweep looks at closed claims too); Closed once the count
+  drops (`qty_disposed`) or Maria ticks it. The Closed step stays open until then.
 - **Auto-found claims (commit 5, 2026-11-12; `server/claim-suggestions.ts`, `server/cancellation-emails.ts`,
   migration 106):** AF SUGGESTS claims — status `suggested`, `found_by` auto / email, a `review_suggestion` task
   carrying the figures and the reason under Needs attention → Decide (Open / Dismiss), an `enter_quantity` task
