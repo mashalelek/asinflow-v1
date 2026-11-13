@@ -6,7 +6,7 @@ import { readClaimsUrl, writeClaimsUrl, rowsForView, groupNeedsAttention, decide
 const row = (over: Partial<ClaimRowApi>): ClaimRowApi => ({
   id: 1, po_id: "p", po_line_item_id: "l", kind: "missing", qty: 2, amount_owed: 10, amount_owed_source: "auto", status: "open", outcome: null, outcome_amount: null, outcome_detail: null, write_off_reason: null,
   found_at: "2026-11-01", found_by: "maria", reported_at: null, reported_channel: null, supplier_confirmed_at: null, last_supplier_reply_at: null, closed_at: null, note: null, replacement_qty: null, replacement_shipped_at: null, replacement_arrived_at: null, return_required: false, qty_disposed: null,
-  supplier: "walmart.com", order_id: "1", order_date: "2026-10-05", ships_to: "velocity", po_closed_at: null, alt_order_ids: null, asin: "B0", product_name: null, line_no: 1, ordered: 24, product_pack: 1, asin_pack: 2, qty_basis: "individual",
+  supplier: "walmart.com", order_id: "1", order_date: "2026-10-05", ships_to: "velocity", po_closed_at: null, alt_order_ids: null, asin: "B0", product_name: null, supplier_sku: null, line_no: 1, ordered: 24, product_pack: 1, asin_pack: 2, qty_basis: "individual",
   refunds: [], tasks: [], conversion_flags: [], owed: 10, remaining: 10, received: 0, bucket: "waiting_supplier", bucket_since: null, due_at: null, timed_out: false, days_in_bucket: 3, days_open: 11, steps: [], step: "", next_action: "",
   sentence: "", action: { kind: "none", label: "", secondary: null }, group: null, ui_steps: [], next: [], ...over,
 } as ClaimRowApi);
@@ -40,6 +40,26 @@ describe("Claims page URL state", () => {
     expect(page).toContain('a.kind === "reopen" ? () => void call(`/api/pos/claims/${claim.id}/reopen`)');
     expect(matchesFilter(row({ asin: "B07N6V47HC" }), "b07n6")).toBe(true);
     expect(matchesFilter(row({}), "")).toBe(true);
+  });
+  it("the filter box finds a claim by its # (with or without #), PO order #, alternate order #, ASIN, supplier SKU, product name and supplier — on every tab, Closed and Dismissed included (Maria 2026-11-13)", () => {
+    const c = row({ id: 3111, order_id: "200015497641702", alt_order_ids: "2000154-47705454", asin: "B0GWG5S64Q", supplier_sku: "WM-DRT-OIL", product_name: "Dr Teal's Restorative Minerals Bath & Body Oil", supplier: "walmart.com" });
+    for (const q of ["#3111", "3111", " #3111 ", "200015497641702", "47705454", "b0gwg5s64q", "wm-drt-oil", "body oil", "walmart"]) expect(matchesFilter(c, q), q).toBe(true);
+    for (const q of ["#3112", "3112", "michaels", "B0GNHTYGPF", "XYZ"]) expect(matchesFilter(c, q), q).toBe(false);
+    expect(matchesFilter(row({ supplier_sku: null, alt_order_ids: null, product_name: null, asin: null }), "oil")).toBe(false);
+    const rows = [row({ id: 3111, bucket: "closed", supplier_sku: "WM-DRT-OIL" }), row({ id: 3099, bucket: "dismissed" }), row({ id: 7, bucket: "needs_attention" })];
+    for (const bucket of ["closed", "dismissed", "needs_attention"] as const) {
+      const want = rows.filter((r) => r.bucket === bucket).map((r) => r.id);
+      expect(rowsForView(rows, readClaimsUrl(`?bucket=${bucket}&q=%23${want[0]}`)).map((r) => r.id)).toEqual(want);
+    }
+    expect(rowsForView(rows, readClaimsUrl("?bucket=closed&q=wm-drt")).map((r) => r.id)).toEqual([3111]);
+    expect(rowsForView(rows, readClaimsUrl("?bucket=dismissed&q=3111")).map((r) => r.id)).toEqual([]); // the claim is on Closed, not Dismissed
+    // the row and the detail header carry the muted claim #
+    const page = readFileSync("client/src/pages/claims.tsx", "utf8");
+    expect(page).toContain('<span className="mut num" data-testid={`claim-number-${c.id}`}>#{c.id}</span> {c.supplier}</span>'); // the number first, so a long supplier truncates and the number never does
+    expect(page).toContain('data-testid="claim-number">#{c.id}</span></h1>');
+    expect(page).toContain('placeholder="Claim #, PO, ASIN, SKU, product, supplier"');
+    // the server hands the SKU to the row
+    expect(readFileSync("server/supplier-claims.ts", "utf8")).toContain("pa.asin, l.product_name, l.supplier_sku,");
   });
 });
 

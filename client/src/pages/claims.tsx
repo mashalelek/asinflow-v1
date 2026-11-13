@@ -46,7 +46,7 @@ export interface ClaimRowApi {
   found_at: string; found_by: string; reported_at: string | null; reported_channel: string | null; supplier_confirmed_at: string | null; last_supplier_reply_at: string | null; closed_at: string | null; note: string | null;
   replacement_qty: number | null; replacement_shipped_at: string | null; replacement_arrived_at: string | null; return_required: boolean; qty_disposed: number | null;
   supplier: string; order_id: string; order_date: string; ships_to: string | null; po_closed_at: string | null; alt_order_ids: string | null;
-  asin: string | null; product_name: string | null; line_no: number; ordered: number | null; product_pack: number | null; asin_pack: number | null; qty_basis: string | null;
+  asin: string | null; product_name: string | null; supplier_sku: string | null; line_no: number; ordered: number | null; product_pack: number | null; asin_pack: number | null; qty_basis: string | null;
   refunds: Array<{ id: number; amount: number | null; amount_applied: number | null; refunded_at: string | null; method: string | null }>;
   tasks: ClaimTask[]; conversion_flags: string[]; dismiss_reason: string | null; owed: number | null; remaining: number | null; received: number; source_items_json?: unknown;
   bucket: ClaimBucket; bucket_since: string | null; due_at: string | null; timed_out: boolean; days_in_bucket: number | null; days_open: number | null;
@@ -88,11 +88,11 @@ export function writeClaimsUrl(s: ClaimsUrlState): string {
   const q = p.toString();
   return q ? `?${q}` : "";
 }
-/** The filter box: supplier, order # (or an alternate), ASIN or product name, case-insensitive. */
-export function matchesFilter(c: Pick<ClaimRowApi, "supplier" | "order_id" | "alt_order_ids" | "asin" | "product_name">, q: string): boolean {
-  const t = q.trim().toLowerCase();
+/** The filter box (Maria 2026-11-13): claim # (with or without "#"), PO order # or an alternate, ASIN, supplier SKU, product name, supplier — case-insensitive, on every tab (the rows of all tabs are filtered, Closed and Dismissed included). */
+export function matchesFilter(c: Pick<ClaimRowApi, "id" | "supplier" | "order_id" | "alt_order_ids" | "asin" | "supplier_sku" | "product_name">, q: string): boolean {
+  const t = q.trim().toLowerCase().replace(/^#/, "");
   if (!t) return true;
-  return [c.supplier, c.order_id, c.alt_order_ids ?? "", c.asin ?? "", c.product_name ?? ""].some((v) => v.toLowerCase().includes(t));
+  return [String(c.id), c.supplier, c.order_id, c.alt_order_ids ?? "", c.asin ?? "", c.supplier_sku ?? "", c.product_name ?? ""].some((v) => v.toLowerCase().includes(t));
 }
 /** The rows of a tab set: the filter, the kind, the PO date range (the Dashboard link); Dismissed is a tab of its own. */
 export function rowsForView(rows: readonly ClaimRowApi[], s: ClaimsUrlState): ClaimRowApi[] {
@@ -338,7 +338,7 @@ function ClaimsList() {
         <h1>Claims</h1>
         {data && <span className="mut" data-testid="claims-header">Refunds due <b className="num" style={{ color: "#e6e3dc", fontWeight: 500 }}>{money(data.header?.due)}</b> · {data.header?.open ?? 0} open</span>}
         <span style={{ flex: 1 }} />
-        <input className="f" value={s.q} onChange={(e) => setS({ ...s, q: e.target.value })} placeholder="Supplier, PO, ASIN…" aria-label="Filter claims" style={{ width: 220 }} data-testid="input-claims-filter" />
+        <input className="f" value={s.q} onChange={(e) => setS({ ...s, q: e.target.value })} placeholder="Claim #, PO, ASIN, SKU, product, supplier" aria-label="Filter claims" style={{ width: 260 }} data-testid="input-claims-filter" />
         <select className="f" value={s.kind} onChange={(e) => setS({ ...s, kind: e.target.value })} aria-label="Kind" data-testid="select-claims-kind">
           <option value="">All kinds</option>{CLAIM_KINDS.map((k) => <option key={k} value={k}>{CLAIM_KIND_LABELS[k]}</option>)}</select>
         <button type="button" className="btn p" onClick={() => setOpening(true)} data-testid="button-open-claim">+ Open claim</button>
@@ -408,7 +408,7 @@ function ClaimRows({ rows, onRow, refresh, onRefund }: { rows: ClaimRowApi[]; on
         return (
           <div key={c.id} className="row" style={{ cursor: "pointer" }} onClick={() => onRow(c)} data-testid={`row-claim-${c.id}`}>
             <span className="chk" aria-hidden="true" />
-            <span style={{ minWidth: 0 }} onClick={(e) => e.stopPropagation()}><span style={{ display: "block", ...ell }} title={c.supplier}>{c.supplier}</span><Link href={`/purchase-orders/${c.po_id}`} className="num" style={{ display: "block", ...ell }} title={c.order_id}>{c.order_id}</Link></span>
+            <span style={{ minWidth: 0 }} onClick={(e) => e.stopPropagation()}><span style={{ display: "block", ...ell }} title={`claim #${c.id} · ${c.supplier}`}><span className="mut num" data-testid={`claim-number-${c.id}`}>#{c.id}</span> {c.supplier}</span><Link href={`/purchase-orders/${c.po_id}`} className="num" style={{ display: "block", ...ell }} title={c.order_id}>{c.order_id}</Link></span>
             <span style={{ minWidth: 0 }}><span style={{ display: "block", ...ell }} title={p.main}>{p.main}</span><span className="mut" style={{ display: "block", ...ell }} title={p.sub}>{p.sub}</span></span>
             <span>{CLAIM_KIND_LABELS[c.kind]}{c.status === "suggested" ? <span className="amb"> · {c.found_by === "email" ? "from email" : "suggested"}</span> : null}{c.outcome && c.status !== "suggested" ? <><br /><span className="mut">{CLAIM_OUTCOME_LABELS[c.outcome]}</span></> : null}</span>
             <span className={`num${c.qty == null ? " amb" : ""}`} data-testid={`claim-qty-${c.id}`}>
@@ -628,7 +628,7 @@ function ClaimDetailPage({ id }: { id: number }) {
       {/* Header */}
       <div style={{ display: "flex", alignItems: "flex-start", gap: 16, flexWrap: "wrap", padding: "12px 24px 0" }}>
         <div style={{ flex: 1, minWidth: 360 }}>
-          <h1 data-testid="text-claim-title">{CLAIM_KIND_LABELS[c.kind]} · {c.supplier} <Link href={`/purchase-orders/${c.po_id}`} className="num" style={{ fontWeight: 400, fontSize: 16, color: "#a39f96" }}>{c.order_id}</Link></h1>
+          <h1 data-testid="text-claim-title">{CLAIM_KIND_LABELS[c.kind]} · {c.supplier} <Link href={`/purchase-orders/${c.po_id}`} className="num" style={{ fontWeight: 400, fontSize: 16, color: "#a39f96" }}>{c.order_id}</Link> <span className="mut num" style={{ fontWeight: 400, fontSize: 16 }} data-testid="claim-number">#{c.id}</span></h1>
           <div className="mut" style={{ marginTop: 6 }} data-testid="claim-subtitle">
             PO {fmtDate(c.order_date)} · {productText(c).main}{c.asin ? <> · <span className="num">{c.asin}</span></> : null} · {c.qty == null ? "quantity not known yet" : `${fmtQty(c.qty)} ${c.qty_basis === "product_legacy" ? "Product" : "Individual"} units`}
             <span style={{ margin: "0 6px" }}>·</span><span className={open && !c.reported_at && !emailed ? "amb" : ""} data-testid="claim-state">{c.sentence}</span>{c.days_open != null ? <> — open {c.days_open} days</> : null}

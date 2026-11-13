@@ -29,7 +29,7 @@ export interface ClaimRow {
   replacement_qty: number | null; replacement_shipped_at: string | null; replacement_arrived_at: string | null; return_required: boolean; qty_disposed: number | null;
   /** The PO (for the Claims page rows): supplier, order #, date, destination, whether closed, the alternate order #s. */
   supplier: string; order_id: string; order_date: string; ships_to: string | null; po_closed_at: string | null; alt_order_ids: string | null;
-  asin: string | null; product_name: string | null; line_no: number;
+  asin: string | null; product_name: string | null; supplier_sku: string | null; line_no: number;
   /** The line's Ordered in the claim's unit (Individual; a legacy line's Product units) — the row's "2 of 24"; null for a whole-PO claim. */
   ordered: number | null;
   /** The line's packs, for the Product / ASIN equivalents of the Individual qty (NULL when not known). */
@@ -59,7 +59,7 @@ export async function loadClaims(query: QueryLike, where: { poId?: string; ids?:
             c.supplier_confirmed_at::text AS supplier_confirmed_at, c.last_supplier_reply_at::text AS last_supplier_reply_at,
             c.replacement_shipped_at::text AS replacement_shipped_at, c.replacement_arrived_at::text AS replacement_arrived_at,
             p.supplier, p.order_id, p.order_date::text AS order_date, p.ships_to, p.closed_at::text AS po_closed_at, p.alt_order_ids,
-            pa.asin, l.product_name, CASE WHEN l.id IS NULL THEN 0 ELSE ${LINE_NO_SQL("l")} END AS line_no,
+            pa.asin, l.product_name, l.supplier_sku, CASE WHEN l.id IS NULL THEN 0 ELSE ${LINE_NO_SQL("l")} END AS line_no,
             l.retailer_units_per_product AS product_pack, COALESCE(pa.units_per_pack, l.asin_units_per_pack) AS asin_pack, l.qty_basis,
             CASE WHEN l.qty_basis = 'product_legacy' THEN le.ordered_product ELSE le.ordered_individual END AS ordered,
             COALESCE((SELECT json_agg(json_build_object('id', r.id, 'amount', r.amount, 'amount_applied', x.amount_applied, 'refunded_at', r.refunded_at, 'method', r.method) ORDER BY r.id)

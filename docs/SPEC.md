@@ -6484,6 +6484,8 @@ Rules built in commit 1 (`server/supplier-claims.ts`, `shared/supplier-claim.ts`
   (`RETIRED_ACTION_ITEMS`); the stored open ones were converted and cleared ("converted to claim"); a sheet row
   carrying one opens a claim on the new line instead (never a stop); an editor sending one is ignored.
 
+**Claims page search (Maria 2026-11-13):** the filter box matches the claim # (with or without `#`), the PO order # or an alternate order #, the ASIN, the supplier SKU (the line's `supplier_sku`, now on every list row), the product name and the supplier — case-insensitive, on every tab, Closed and Dismissed included (the rows of all tabs are filtered client-side; the tab counts follow the search). The claim # shows muted on the list row, first in the Supplier · PO cell (`#3111 walmart.com`, so a long supplier truncates and the number never does), and in the detail header after the order # (`200015497641702 #3111`). `matchesFilter` in `client/src/pages/claims.tsx`.
+
 **Conversions (migration 101, §4.8, dry run first):** the defect → the claim; the due refund row → its `amount_owed`
 (due rows removed); `qty_canceled > 0` → a closed `canceled` claim per line, `qty_returned > 0` → a closed
 `returned` claim (Individual units, dated by the PO's last edit, linked to the PO's received refund rows with
