@@ -22,10 +22,11 @@ describe("loadAfAsinCostMap", () => {
     expect(r.rowsRead).toBe(42);
     expect(calls[0].sql).toMatch(/DISTINCT ON \(pa\.asin\)/);
     expect(calls[0].sql).toMatch(/ORDER BY pa\.asin, p\.order_date DESC, p\.entry_seq DESC NULLS LAST, p\.created_at DESC/);
-    expect(calls[0].sql).toMatch(/JOIN LATERAL \(SELECT e\.fully_canceled FROM po_asin_expected e WHERE e\.id = pa\.id\) e ON true\s+WHERE NOT e\.fully_canceled/); // canceled by its claims (migration 101; the row's view JOINed, migration 107)
+    expect(calls[0].sql).toMatch(/WHERE NOT \(SELECT e\.fully_canceled FROM po_asin_expected e WHERE e\.id = pa\.id\) AND pa\.asin = ANY/); // canceled by its claims (migration 101) — per row for a subset (migration 107)
     expect(calls[0].params).toEqual([["B076692G4N"]]);
     await loadAfAsinCostMap(query);
     expect(calls[2].params).toEqual([]);
+    expect(calls[2].sql).toMatch(/JOIN po_asin_expected e ON e\.id = pa\.id\s+WHERE NOT e\.fully_canceled/); // the whole map: one hash over the view
     expect(calls[2].sql).not.toMatch(/ANY\(\$1/);
   });
 });

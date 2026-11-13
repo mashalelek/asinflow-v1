@@ -6788,14 +6788,17 @@ total; the PO's counting claims: the line's own and the whole-PO ones), nothing 
 planner pulls it into the caller and `line_id = $1` / `po_asin_id = $1` / `po_id = $1` reach the indexes (0.1 ms);
 `po_asin_expected` keeps its grouped line sums, keyed by `(po_asin_id, po_id)` so a `po_id = $1` reaches
 `idx_po_lines_po` inside the group. Same columns, same values (both EXCEPT ALL directions empty over every line and
-row on production). **A reader joins the view on its key or reads it in a LATERAL / correlated subquery with the
-key inside** (`JOIN po_line_expected le ON le.line_id = l.id`, `JOIN LATERAL (SELECT … FROM po_asin_expected e
-WHERE e.id = pa.id) e ON true`) — a plain `JOIN po_asin_expected e ON e.id = pa.id` under a filter on another
-column (`pa.asin = $1`) evaluates the whole view (the planner cannot parameterize a grouped subquery). A whole-view
+row on production). **A reader joins `po_line_expected` on its key, and reads `po_asin_expected` for a few rows in a correlated
+scalar subquery with the row's id inside** (`JOIN po_line_expected le ON le.line_id = l.id`; `(SELECT
+e.fully_canceled FROM po_asin_expected e WHERE e.id = pa.id)`, `WHERE e.po_id = p.id` in a subquery) — a plain
+`JOIN po_asin_expected e ON e.id = pa.id` under a filter on another column (`pa.asin = $1`), and a LATERAL too
+(the planner pulls it up into that join), evaluate the whole view (a grouped subquery cannot be parameterized);
+the whole-map readers (`loadAfAsinCostMap` with no subset, On Order) JOIN it on purpose, one hash. A whole-view
 read costs two index reads per line (~0.4 s on the 0.1-CPU Basic instance, against 0.3 s before); the per-row
 readers (the POs list, the Dashboard, the sweep, the PO page, the extension) were the ones paying 0.1–0.7 s per
-row. The extension's history, `loadAfAsinCostMap` and the sourcing-cost lookup read `po_asin_expected.fully_canceled`
-(every line canceled) in a LATERAL by row instead of `bool_and` over a per-line subquery. Writers store Individual units: a typed line qty (Product units) × the line's pack (`editLine`,
+row. The extension's history, `loadAfAsinCostMap` (with a subset) and the sourcing-cost lookup read
+`po_asin_expected.fully_canceled` (every line canceled) in that correlated subquery instead of `bool_and` over a
+per-line subquery. Writers store Individual units: a typed line qty (Product units) × the line's pack (`editLine`,
 `addLine`, `po-create`, the sheet intake, a renewal copy — `server/po-expected.ts` holds the conversions); a pack
 change on a line keeps its Product units; Velocity's units, At Prep and Received by Velocity are written as counted;
 SC's received (ASIN units of the SKU) × the row's pack; the manual quantities, a refund qty and a claim qty are

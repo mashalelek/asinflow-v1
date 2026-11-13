@@ -34,11 +34,16 @@ const mdy = (d: unknown): string | null => {
  */
 export async function loadAfAsinCostMap(query: QueryLike, asins?: readonly string[]): Promise<{ data: Map<string, SheetAsinData>; rowsRead: number }> {
   const filter = asins && asins.length > 0 ? `AND pa.asin = ANY($1::text[])` : "";
+  // "every line canceled" from po_asin_expected (migration 107): for a few ASINs a correlated subquery per row (the
+  // planner keeps it per row — 1.5 ms); for the whole map a JOIN, one hash over the view (0.45 s on production
+  // against 1.2 s per row). A LATERAL would be pulled up into the join either way.
+  const notCanceled = filter
+    ? `NOT (SELECT e.fully_canceled FROM po_asin_expected e WHERE e.id = pa.id)`
+    : `NOT e.fully_canceled`;
   const rows = (await query(
     `SELECT DISTINCT ON (pa.asin) pa.asin, pa.cost_per_unit, pa.prep_cost, p.supplier
-       FROM po_asins pa JOIN purchase_orders p ON p.id = pa.po_id
-       JOIN LATERAL (SELECT e.fully_canceled FROM po_asin_expected e WHERE e.id = pa.id) e ON true
-      WHERE NOT e.fully_canceled ${filter}
+       FROM po_asins pa JOIN purchase_orders p ON p.id = pa.po_id${filter ? "" : " JOIN po_asin_expected e ON e.id = pa.id"}
+      WHERE ${notCanceled} ${filter}
       ORDER BY pa.asin, ${NEWEST_PO_ORDER}`,
     asins && asins.length > 0 ? [asins.map((a) => a.toUpperCase())] : [],
   )).rows as any[];

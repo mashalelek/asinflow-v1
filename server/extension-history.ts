@@ -104,22 +104,22 @@ export interface AsinHistory {
   recent: Array<{ orderDate: string; orderId: string; supplier: string; how: string; asinUnits: number | null; cogs: number | null; promos: PromoShown[] }>;
   conversion: string | null;
 }
-// Canceled lines / rows read the views JOINed on their key (po_line_expected.fully_canceled per line,
-// po_asin_expected.fully_canceled = every line canceled, per row) — never a correlated `(SELECT … FROM po_line_expected
-// WHERE line_id = l.id)` per line: that shape built the whole view per line and ran 43 s – 3.5 min for walmart.com's
-// 1,066 lines, filled the pool and took production down (2026-11-12/13, migration 107).
+// Canceled lines / rows read the views (migration 107): a line JOINs po_line_expected on line_id; a row reads
+// po_asin_expected (fully_canceled = every line canceled) in a correlated scalar subquery with the row's id inside —
+// the one shape the planner keeps per row (a JOIN or a LATERAL on the grouped ASIN view is pulled up into a plain
+// join and evaluates the whole view: 0.4 s on production per call). Before 107 the per-line subquery built the
+// whole view per line and ran 43 s – 3.5 min for walmart.com's 1,066 lines, filled the pool and took production down.
 const n = (v: unknown): number | null => (v == null || v === "" || !Number.isFinite(Number(v)) ? null : Number(v));
 
 export async function asinHistory(query: QueryLike, asin: string, listingPack: number | null = null, today?: string): Promise<AsinHistory> {
   const meta = (await query(`SELECT title, units_per_pack FROM asins WHERE asin = $1`, [asin])).rows[0] as any;
   const rows = (await query(
-    `SELECT p.id AS po_id, p.order_id, p.order_date::text AS order_date, p.supplier, e.ordered_asin AS qty, pa.cost_per_unit, pa.asin_name, pa.units_per_pack,
+    `SELECT p.id AS po_id, p.order_id, p.order_date::text AS order_date, p.supplier, (SELECT e.ordered_asin FROM po_asin_expected e WHERE e.id = pa.id) AS qty, pa.cost_per_unit, pa.asin_name, pa.units_per_pack,
             (p.order_date >= COALESCE($2::date, (now() AT TIME ZONE 'America/New_York')::date) - 365) AS in365,
             (SELECT json_agg(json_build_object('ru', l.retailer_units_per_product, 'name', l.product_name, 'qty', le.ordered_product) ORDER BY l.position)
                FROM po_line_items l JOIN po_line_expected le ON le.line_id = l.id WHERE l.po_asin_id = pa.id AND NOT le.fully_canceled) AS lines
        FROM po_asins pa JOIN purchase_orders p ON p.id = pa.po_id
-       JOIN LATERAL (SELECT e.ordered_asin, e.fully_canceled FROM po_asin_expected e WHERE e.id = pa.id) e ON true
-      WHERE pa.asin = $1 AND NOT e.fully_canceled
+      WHERE pa.asin = $1 AND NOT (SELECT e.fully_canceled FROM po_asin_expected e WHERE e.id = pa.id)
       ORDER BY ${NEWEST_PO_ORDER}`,
     [asin, today ?? null],
   )).rows as any[];
