@@ -166,6 +166,13 @@ describe("Dashboard series on the real schema (rolled back)", () => {
         ["2031-06-02", 0, 0, false], ["2031-06-09", 0, 50, false], ["2031-06-16", 270, 40, true],
       ]);
       const r = await loadSeries(q, "running30", { from: "2031-06-17", to: "2031-06-18" }, NOW);
+      // The window's orders come from per-day DISTINCT counts (2026-11-13): equal to a DISTINCT over the whole window as long as no
+      // order spans two sale days — true by construction (one purchase date per order); asserted here against the raw definition.
+      for (const p of r.points) {
+        const raw = (await q(`SELECT COUNT(DISTINCT amazon_order_id)::int AS n FROM sales_orders WHERE sale_date >= $1::date - 29 AND sale_date <= $1::date`, [p.period])).rows[0].n;
+        expect(p.orders, `running30 orders on ${p.period}`).toBe(raw);
+      }
+      expect((await q(`SELECT COUNT(*)::int AS n FROM (SELECT amazon_order_id FROM sales_orders GROUP BY 1 HAVING COUNT(DISTINCT sale_date) > 1) x`)).rows[0].n).toBe(0);
       expect(r.points).toEqual([
         { period: "2031-06-17", spend: 340, sales: 67, poCount: 4, units: 7, orders: 4, partial: false }, // [05-19, 06-17]: B(0)+C+D+E+F; sales 10+50+7
         { period: "2031-06-18", spend: 400, sales: 97, poCount: 4, units: 9, orders: 5, partial: true },  // [05-20, 06-18]: F drops out, A comes in

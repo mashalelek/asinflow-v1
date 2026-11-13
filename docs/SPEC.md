@@ -9631,6 +9631,16 @@ unknown frequencies are NULL for Maria.
 
 ## 28. Dashboard
 
+> **Query shapes (2026-11-13, production "canceling statement due to statement timeout" on the charts):** the
+> running-30 series counts orders per sale day (`COUNT(DISTINCT amazon_order_id)` grouped by `sale_date`) and sums the
+> window like Sales / Spend — exact because an order has one purchase date, so every row of an order shares its
+> `sale_date` (`server/dashboard.db.test.ts` asserts it against the raw whole-window DISTINCT); the old per-day
+> subquery sorted ~1,500 rows 348 times (10 s idle, 17 s under load, against the 15 s web limit). The grid's Spend runs
+> ONE statement per range set (`spendGridSql(columns)`: the PO / refund / units CTEs over the set's widest range, every
+> column a FILTERed aggregate), because the join to `po_asin_expected` evaluates the whole view (~0.6 s, any range) —
+> four statements became one. Same cells and points before and after (12-month comparison on production, 0
+> differences). Production after: running30 ~1 s, grid set 1 ~1 s, monthly / weekly ~0.8 s.
+
 Patch `docs/claude_spec-patch-analytics-dashboard.md` (APPROVED 2026-11-02
 v4, built 2026-11-03; probe `docs/dashboard-probe-2026-11-03.md`). Nav tab
 **Dashboard** in the slot Analytics held (the old page is **ASIN

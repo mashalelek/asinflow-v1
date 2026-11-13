@@ -86,19 +86,30 @@ export function poSpendCtes(startExpr: string, endExpr: string): string {
 
 // Units rows (SPEC §28): ASIN units ordered less the units canceled by claims (po_asin_expected, migration 101 — a bundle by the
 // bundle rule); Individual = × the pack, unknown while a row has no pack size (counted in missing_pack_size).
-const SPEND_GRID_SQL = `WITH ${poSpendCtes("$1::date", "$2::date")}, units AS (
-      SELECT e.id,
+//
+// ONE statement per range set (2026-11-13, the production timeout): the join to po_asin_expected evaluates the whole
+// view (~0.6 s on production, whatever the range — its aggregate CTEs take no date filter), so the CTEs run once over
+// the set's widest range and every column is a FILTERed aggregate over them ($3/$4, $5/$6, … = each column's from/to).
+export function spendGridSql(columns: number): string {
+  const col = (i: number) => {
+    const f = `$${3 + 2 * i}::date`, t = `$${4 + 2 * i}::date`;
+    const inRange = `WHERE order_date >= ${f} AND order_date <= ${t}`;
+    return `(SELECT COALESCE(SUM(spend), 0) FROM po_spend ${inRange})::float8 AS spend_${i},
+           (SELECT COALESCE(SUM(due), 0) FROM po_spend ${inRange})::float8 AS refunds_due_${i},
+           (SELECT COUNT(*) FILTER (WHERE NOT fully_canceled AND NOT shared_dup) FROM po_spend ${inRange})::int AS po_count_${i},
+           (SELECT COALESCE(SUM(asin_units), 0) FROM units ${inRange})::float8 AS asin_units_${i},
+           (SELECT COALESCE(SUM(COALESCE(individual_units, asin_units)), 0) FROM units ${inRange})::float8 AS individual_units_${i},
+           (SELECT COUNT(*) FILTER (WHERE individual_units IS NULL AND asin_units > 0) FROM units ${inRange})::int AS missing_pack_size_${i}`;
+  };
+  return `WITH ${poSpendCtes("$1::date", "$2::date")}, units AS (
+      SELECT e.id, po.order_date,
              CASE WHEN po.fully_canceled THEN 0 ELSE GREATEST(COALESCE(e.ordered_asin, 0) - COALESCE(e.canceled_asin, 0), 0) END AS asin_units,
              -- the stored Individual units (NULL on a legacy row = pack not known)
              CASE WHEN po.fully_canceled THEN 0 WHEN e.ordered_individual IS NULL THEN NULL ELSE GREATEST(e.ordered_individual - COALESCE(e.canceled_individual, 0), 0) END AS individual_units
         FROM po_asin_expected e JOIN po ON po.id = e.po_id
     )
-    SELECT (SELECT COALESCE(SUM(spend), 0) FROM po_spend)::float8 AS spend,
-           (SELECT COALESCE(SUM(due), 0) FROM po_spend)::float8 AS refunds_due,
-           (SELECT COUNT(*) FILTER (WHERE NOT fully_canceled AND NOT shared_dup) FROM po_spend)::int AS po_count,
-           (SELECT COALESCE(SUM(asin_units), 0) FROM units)::float8 AS asin_units,
-           (SELECT COALESCE(SUM(COALESCE(individual_units, asin_units)), 0) FROM units)::float8 AS individual_units,
-           (SELECT COUNT(*) FILTER (WHERE individual_units IS NULL AND asin_units > 0) FROM units)::int AS missing_pack_size`;
+    SELECT ${Array.from({ length: columns }, (_, i) => col(i)).join(",\n           ")}`;
+}
 
 const SALES_GRID_SQL = `SELECT COALESCE(SUM(revenue), 0)::float8 AS sales, COALESCE(SUM(units_sold), 0)::int AS units
     FROM sales_daily WHERE sale_date >= $1::date AND sale_date <= $2::date`;
@@ -137,8 +148,12 @@ export async function loadGrid(query: QueryLike, set: RangeSet, custom: Ymd | un
   const columns = resolveColumns(set, now, custom);
   const coverage = await loadCoverage(query);
   const out: DashboardColumn[] = [];
-  for (const c of columns) {
-    const sp = (await query(SPEND_GRID_SQL, [c.eastern.from, c.eastern.to])).rows[0] ?? {};
+  // Spend for every column in one statement over the set's widest Eastern range.
+  const minFrom = columns.map((c) => c.eastern.from).sort()[0], maxTo = columns.map((c) => c.eastern.to).sort().slice(-1)[0];
+  const spendRow = (await query(spendGridSql(columns.length), [minFrom, maxTo, ...columns.flatMap((c) => [c.eastern.from, c.eastern.to])])).rows[0] ?? {};
+  for (let i = 0; i < columns.length; i++) {
+    const c = columns[i];
+    const sp = { spend: spendRow[`spend_${i}`], refunds_due: spendRow[`refunds_due_${i}`], po_count: spendRow[`po_count_${i}`], asin_units: spendRow[`asin_units_${i}`], individual_units: spendRow[`individual_units_${i}`], missing_pack_size: spendRow[`missing_pack_size_${i}`] };
     const sa = (await query(SALES_GRID_SQL, [c.pacific.from, c.pacific.to])).rows[0] ?? {};
     const so = (await query(ORDERS_GRID_SQL, [c.pacific.from, c.pacific.to])).rows[0] ?? {};
     const poCount = num(sp.po_count);
@@ -180,22 +195,30 @@ const MONTHLY_SQL = (trunc: "month" | "week") => `WITH periods AS (
       FROM periods pr LEFT JOIN sp ON sp.period = pr.period LEFT JOIN sa ON sa.period = pr.period LEFT JOIN so ON so.period = pr.period
      ORDER BY pr.period`;
 
-/** 30-day running sums per day: generate_series + a 29-PRECEDING window over 0-filled days; the series starts 29 days early so the first day's window is complete. */
+/**
+ * 30-day running sums per day: generate_series + a 29-PRECEDING window over 0-filled days; the series starts 29 days
+ * early so the first day's window is complete. Orders (2026-11-13, the production timeout: the old per-day
+ * `COUNT(DISTINCT amazon_order_id)` subquery sorted ~1,500 rows 348 times, 10 s): the DISTINCT count per sale day, summed
+ * over the window like the other series — exact because an Amazon order has ONE purchase date, so `sales_orders` holds
+ * every (order, ASIN) row of an order on the same `sale_date` (the orders report's purchase date in US Pacific, SPEC
+ * §28; the DB test asserts the two definitions agree).
+ */
 const RUNNING30_SQL = `WITH days AS (
       SELECT generate_series($1::date - 29, $2::date, '1 day')::date AS d
     ), ${poSpendCtes("$1::date - 29", "$2::date")}, spd AS (
       SELECT order_date AS d, SUM(spend) AS spend, COUNT(*) FILTER (WHERE NOT fully_canceled AND NOT shared_dup) AS n FROM po_spend GROUP BY 1
     ), sad AS (
       SELECT sale_date AS d, SUM(revenue) AS sales, SUM(units_sold) AS units FROM sales_daily WHERE sale_date >= $1::date - 29 AND sale_date <= $2::date GROUP BY 1
+    ), sod AS (
+      SELECT sale_date AS d, COUNT(DISTINCT amazon_order_id) AS orders FROM sales_orders WHERE sale_date >= $1::date - 29 AND sale_date <= $2::date GROUP BY 1
     ), base AS (
-      SELECT days.d, COALESCE(sad.sales, 0) AS sales, COALESCE(sad.units, 0) AS units, COALESCE(spd.spend, 0) AS spend, COALESCE(spd.n, 0) AS n
-        FROM days LEFT JOIN sad ON sad.d = days.d LEFT JOIN spd ON spd.d = days.d
+      SELECT days.d, COALESCE(sad.sales, 0) AS sales, COALESCE(sad.units, 0) AS units, COALESCE(sod.orders, 0) AS orders, COALESCE(spd.spend, 0) AS spend, COALESCE(spd.n, 0) AS n
+        FROM days LEFT JOIN sad ON sad.d = days.d LEFT JOIN sod ON sod.d = days.d LEFT JOIN spd ON spd.d = days.d
     ), win AS (
-      SELECT d, SUM(sales) OVER w AS sales, SUM(units) OVER w AS units, SUM(spend) OVER w AS spend, SUM(n) OVER w AS po_count
+      SELECT d, SUM(sales) OVER w AS sales, SUM(units) OVER w AS units, SUM(orders) OVER w AS orders, SUM(spend) OVER w AS spend, SUM(n) OVER w AS po_count
         FROM base WINDOW w AS (ORDER BY d ROWS BETWEEN 29 PRECEDING AND CURRENT ROW)
     )
-    SELECT w.d::text AS period, w.sales::float8 AS sales, w.spend::float8 AS spend, w.po_count::int AS po_count, w.units::int AS units,
-           (SELECT COUNT(DISTINCT so.amazon_order_id) FROM sales_orders so WHERE so.sale_date >= w.d - 29 AND so.sale_date <= w.d)::int AS orders
+    SELECT w.d::text AS period, w.sales::float8 AS sales, w.spend::float8 AS spend, w.po_count::int AS po_count, w.units::int AS units, w.orders::int AS orders
       FROM win w WHERE w.d >= $1::date ORDER BY w.d`;
 
 /** The last day of a period (for the coverage cut). */
