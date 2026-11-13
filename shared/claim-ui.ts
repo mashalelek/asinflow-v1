@@ -22,6 +22,9 @@ export interface UiClaim extends BucketClaim {
   tasks: ReadonlyArray<UiTask>;
   write_off_reason?: string | null;
   source_items_json?: unknown;
+  /** The reason typed on Dismiss; the claim's note stands in when none was typed. */
+  dismiss_reason?: string | null;
+  note?: string | null;
 }
 
 export const fmtMD = (iso: string | null | undefined): string => { if (!iso) return "?"; const [, m, d] = iso.slice(0, 10).split("-"); return `${Number(m)}/${Number(d)}`; };
@@ -37,7 +40,8 @@ const reportedText = (c: UiClaim) => `Reported ${fmtMD(c.reported_at ?? doneAt(c
 
 /** Pure: ONE sentence for the row's Step / the header. */
 export function stateSentence(c: UiClaim, b: BucketResult): string {
-  if (c.status === "dismissed") return "Dismissed";
+  // the Dismissed tab's Step: why (the typed reason, else the claim's note) — Maria 2026-11-12
+  if (c.status === "dismissed") return `Dismissed${c.dismiss_reason ? ` · ${c.dismiss_reason}` : c.note ? ` · ${c.note}` : ""}`;
   // a written-off claim with Velocity still to act reads its task / its wait, not "Closed" (its bucket says so)
   if (c.status === "closed" && b.bucket === "closed") return `Closed ${fmtMD(c.closed_at)}${outcomeWord(c) ? ` · ${outcomeWord(c)}` : ""}${c.write_off_reason ? ` · ${c.write_off_reason}` : ""}`;
   const sug = openOf(c, "review_suggestion");
@@ -80,8 +84,8 @@ const refundWord = (c: UiClaim) => (c.outcome === "gift_card" ? "Gift card" : c.
 const refundWhere = (c: UiClaim) => (c.outcome === "gift_card" ? "gift card" : c.outcome === "store_credit" ? "account" : "card");
 
 export interface PrimaryAction {
-  /** What the button does: tick this task (`task`), the Contacted supplier form (`contact`), go to the detail (`detail`), the refund form (`refund`), nothing (`none`). */
-  kind: "task" | "contact" | "detail" | "refund" | "none";
+  /** What the button does: tick this task (`task`), the Contacted supplier form (`contact`), go to the detail (`detail`), the refund form (`refund`), reopen a dismissed claim (`reopen`), nothing (`none`). */
+  kind: "task" | "contact" | "detail" | "refund" | "reopen" | "none";
   label: string;
   taskId?: number;
   taskKind?: string;
@@ -92,7 +96,8 @@ export interface PrimaryAction {
 }
 /** Pure: the row's Do column. */
 export function primaryAction(c: UiClaim, b: BucketResult): PrimaryAction {
-  if (b.bucket === "closed" || b.bucket === "dismissed") return { kind: "none", label: "", secondary: null };
+  if (b.bucket === "dismissed") return { kind: "reopen", label: "Reopen", secondary: null };
+  if (b.bucket === "closed") return { kind: "none", label: "", secondary: null };
   const open = openTasks(c);
   const by = (k: string) => open.find((t) => t.kind === k);
   let t: UiTask | undefined;

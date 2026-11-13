@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { addBusinessDays, businessDaysBetween, claimSteps, daysSince, deriveBucket, nextAction, type BucketClaim } from "./claim-bucket";
+import { addBusinessDays, businessDaysBetween, claimSteps, daysSince, deriveBucket, nextAction, CLAIM_BUCKET_TABS, type BucketClaim } from "./claim-bucket";
 
 // Supplier claims commit 2 (SPEC §22 "Supplier claims" §3.2–3.4): buckets, the one 5-business-day timer, the checklist.
 const base = (over: Partial<BucketClaim> = {}): BucketClaim => ({
@@ -35,6 +35,7 @@ describe("bucket derivation (§3.2): an open task wins, else the running timer",
     expect(deriveBucket(base({ status: "suggested", tasks: [open("review_suggestion")] }), NOW).bucket).toBe("needs_attention");
     expect(deriveBucket(base({ status: "closed", closed_at: "2026-11-05T10:00:00Z" }), NOW)).toMatchObject({ bucket: "closed", since: "2026-11-05T10:00:00Z", timedOut: false });
     expect(deriveBucket(base({ status: "dismissed" }), NOW).bucket).toBe("dismissed");
+    expect(CLAIM_BUCKET_TABS).toEqual(["needs_attention", "waiting_supplier", "waiting_shipment", "waiting_refund", "waiting_velocity", "closed", "dismissed"]);
   });
   it("the timer never starts before the supplier was contacted (Maria 2026-11-12): an unreported open claim is Needs attention even with no task; the row says Report to supplier / Contact supplier", () => {
     const bare = base({ reported_at: null, tasks: [] });

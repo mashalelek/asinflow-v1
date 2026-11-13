@@ -12,8 +12,11 @@ const row = (over: Partial<ClaimRowApi>): ClaimRowApi => ({
 } as ClaimRowApi);
 
 describe("Claims page URL state", () => {
-  it("round-trips bucket(s), the filter box, kind, the PO date range and the dismissed toggle; the default is the bare URL; old po= / supplier= links still read", () => {
-    const s = { bucket: ["waiting_refund", "waiting_supplier"] as const, q: "michaels.com", kind: "canceled", from: "2026-06-01", to: "2026-06-17", dismissed: true };
+  it("round-trips bucket(s), the filter box, kind and the PO date range; the default is the bare URL; old po= / supplier= / dismissed=1 links still read", () => {
+    const s = { bucket: ["waiting_refund", "waiting_supplier"] as const, q: "michaels.com", kind: "canceled", from: "2026-06-01", to: "2026-06-17" };
+    expect(readClaimsUrl("?bucket=closed&dismissed=1").bucket).toEqual(["closed"]);
+    expect(readClaimsUrl("?dismissed=1").bucket).toEqual(["dismissed"]);
+    expect(readClaimsUrl("?bucket=dismissed").bucket).toEqual(["dismissed"]);
     expect(readClaimsUrl(writeClaimsUrl({ ...s, bucket: [...s.bucket] }))).toEqual({ ...s, bucket: [...s.bucket] });
     expect(writeClaimsUrl(readClaimsUrl(""))).toBe("");
     expect(readClaimsUrl("").bucket).toEqual(["needs_attention"]);
@@ -22,14 +25,19 @@ describe("Claims page URL state", () => {
     // the Dashboard's Refunds due link (metric-grid refundsDueHref)
     expect(readClaimsUrl("?bucket=waiting_refund,waiting_supplier&from=2026-06-01&to=2026-06-17")).toMatchObject({ bucket: ["waiting_refund", "waiting_supplier"], from: "2026-06-01", to: "2026-06-17" });
   });
-  it("rowsForView: the tab's buckets, the filter box (supplier / PO / alternate / ASIN / product), the kind, the PO date range; dismissed only on Closed with the toggle", () => {
+  it("rowsForView: the tab's buckets, the filter box (supplier / PO / alternate / ASIN / product), the kind, the PO date range; Dismissed is its own tab (Maria 2026-11-12)", () => {
     const rows = [row({ id: 1, bucket: "waiting_refund" }), row({ id: 2, bucket: "waiting_supplier", order_date: "2026-01-01", supplier: "michaels.com", product_name: "Red Heart yarn", alt_order_ids: "R4600" }), row({ id: 3, bucket: "closed" }), row({ id: 4, bucket: "dismissed" })];
     expect(rowsForView(rows, readClaimsUrl("?bucket=waiting_refund,waiting_supplier")).map((r) => r.id)).toEqual([1, 2]);
     expect(rowsForView(rows, readClaimsUrl("?bucket=waiting_refund,waiting_supplier&from=2026-06-01&to=2026-11-10")).map((r) => r.id)).toEqual([1]);
     expect(rowsForView(rows, readClaimsUrl("?bucket=waiting_refund,waiting_supplier&q=yarn")).map((r) => r.id)).toEqual([2]);
     expect(rowsForView(rows, readClaimsUrl("?bucket=waiting_refund,waiting_supplier&q=r4600")).map((r) => r.id)).toEqual([2]);
     expect(rowsForView(rows, readClaimsUrl("?bucket=closed")).map((r) => r.id)).toEqual([3]);
-    expect(rowsForView(rows, readClaimsUrl("?bucket=closed&dismissed=1")).map((r) => r.id)).toEqual([3, 4]);
+    expect(rowsForView(rows, readClaimsUrl("?bucket=dismissed")).map((r) => r.id)).toEqual([4]);
+    expect(rowsForView(rows, readClaimsUrl("?bucket=dismissed&q=michaels")).map((r) => r.id)).toEqual([]);
+    expect(rowsForView([...rows, row({ id: 5, bucket: "dismissed", order_id: "6426282", supplier: "opentip.com" })], readClaimsUrl("?bucket=dismissed&q=6426282")).map((r) => r.id)).toEqual([5]);
+    const page = readFileSync("client/src/pages/claims.tsx", "utf8");
+    expect(page).not.toContain("show dismissed");
+    expect(page).toContain('a.kind === "reopen" ? () => void call(`/api/pos/claims/${claim.id}/reopen`)');
     expect(matchesFilter(row({ asin: "B07N6V47HC" }), "b07n6")).toBe(true);
     expect(matchesFilter(row({}), "")).toBe(true);
   });

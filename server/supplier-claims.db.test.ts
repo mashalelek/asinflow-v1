@@ -356,7 +356,8 @@ describe("claims commit 2 on the real schema (rolled back): tasks, buckets, the 
       const sug2 = await addClaim(q, s.po, { po_line_item_id: s.line, kind: "wrong_item", qty: 1, status: "suggested" }, null, { noTask: true });
       await q(`INSERT INTO supplier_claim_tasks (claim_id, kind, "group") VALUES ($1, 'review_suggestion', 'decide')`, [sug2.id]);
       await doneTask(q, (await loadClaims(q, { ids: [sug2.id] }))[0].tasks[0].id, null, { decision: "dismiss", reason: "not ours" });
-      expect((await loadClaims(q, { ids: [sug2.id] }))[0].status).toBe("dismissed");
+      expect((await loadClaims(q, { ids: [sug2.id] }))[0]).toMatchObject({ status: "dismissed", dismiss_reason: "not ours" }); // the Dismissed tab's Step (Maria 2026-11-12)
+      expect((await loadClaimsPage(q, { po: s.po })).find((r) => r.id === sug2.id)).toMatchObject({ bucket: "dismissed", sentence: "Dismissed · not ours", action: { kind: "reopen", label: "Reopen" } });
       // the confirmed claim's leftover contact_supplier task is moot (one derivation, Maria 2026-11-12): Waiting on refund to post, not Needs attention
       expect(bucketCounts(await loadClaimsPage(q, { po: s.po }))).toMatchObject({ needs_attention: 0, waiting_refund: 1, dismissed: 1 });
     });

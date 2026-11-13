@@ -22,8 +22,8 @@ export const CLAIM_BUCKET_LABELS: Readonly<Record<ClaimBucket, string>> = {
   needs_attention: "Needs attention", waiting_supplier: "Waiting on supplier", waiting_shipment: "Waiting on shipment",
   waiting_refund: "Waiting on refund to post", waiting_velocity: "Waiting on Velocity", closed: "Closed", dismissed: "Dismissed",
 };
-/** The tabs in order (Dismissed is a toggle on Closed, §5). */
-export const CLAIM_BUCKET_TABS: readonly ClaimBucket[] = ["needs_attention", "waiting_supplier", "waiting_shipment", "waiting_refund", "waiting_velocity", "closed"];
+/** The tabs in order — Dismissed is its own tab after Closed (Maria 2026-11-12: the toggle hid dismissed claims from every tab). */
+export const CLAIM_BUCKET_TABS: readonly ClaimBucket[] = ["needs_attention", "waiting_supplier", "waiting_shipment", "waiting_refund", "waiting_velocity", "closed", "dismissed"];
 export const TASK_GROUPS = ["decide", "supplier", "velocity", "money", "timed_out"] as const;
 export type TaskGroup = (typeof TASK_GROUPS)[number];
 export const TASK_GROUP_LABELS: Readonly<Record<TaskGroup, string>> = { decide: "Decide", supplier: "Supplier", velocity: "Velocity", money: "Money and arrivals", timed_out: "Timed out" };

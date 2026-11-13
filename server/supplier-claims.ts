@@ -38,6 +38,8 @@ export interface ClaimRow {
   tasks: Array<{ id: number; kind: ClaimTaskKind; group: string; reason: string | null; created_at: string; due_at: string | null; done_at: string | null; snoozed_until: string | null }>;
   /** Migration 101's conversion flags (supplier_claim_conversions), e.g. canceled_no_ordered_qty, qty_unknown, kind_unclear; empty for a claim made by hand. */
   conversion_flags: string[];
+  /** The reason typed on Dismiss (the latest `dismissed` event's summary); null when none was typed or the claim is not dismissed. */
+  dismiss_reason: string | null;
   owed: number | null; remaining: number | null; received: number;
 }
 
@@ -64,7 +66,8 @@ export async function loadClaims(query: QueryLike, where: { poId?: string; ids?:
                         FROM supplier_claim_refunds x JOIN po_line_refunds r ON r.id = x.po_line_refund_id WHERE x.claim_id = c.id), '[]') AS refunds,
             COALESCE((SELECT json_agg(json_build_object('id', t.id, 'kind', t.kind, 'group', t."group", 'reason', t.reason, 'created_at', t.created_at, 'due_at', t.due_at, 'done_at', t.done_at, 'snoozed_until', t.snoozed_until) ORDER BY t.id)
                         FROM supplier_claim_tasks t WHERE t.claim_id = c.id), '[]') AS tasks,
-            COALESCE((SELECT array_agg(DISTINCT f) FROM supplier_claim_conversions k, unnest(k.flags) f WHERE k.claim_id = c.id), '{}') AS conversion_flags
+            COALESCE((SELECT array_agg(DISTINCT f) FROM supplier_claim_conversions k, unnest(k.flags) f WHERE k.claim_id = c.id), '{}') AS conversion_flags,
+            CASE WHEN c.status = 'dismissed' THEN (SELECT e.summary FROM supplier_claim_events e WHERE e.claim_id = c.id AND e.type = 'dismissed' ORDER BY e.id DESC LIMIT 1) END AS dismiss_reason
        FROM supplier_claims c JOIN purchase_orders p ON p.id = c.po_id LEFT JOIN po_line_items l ON l.id = c.po_line_item_id LEFT JOIN po_asins pa ON pa.id = l.po_asin_id
             LEFT JOIN po_line_expected le ON le.line_id = l.id
       WHERE ${cond} ORDER BY c.found_at, c.id`, params,

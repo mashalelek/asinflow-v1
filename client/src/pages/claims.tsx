@@ -48,7 +48,7 @@ export interface ClaimRowApi {
   supplier: string; order_id: string; order_date: string; ships_to: string | null; po_closed_at: string | null; alt_order_ids: string | null;
   asin: string | null; product_name: string | null; line_no: number; ordered: number | null; product_pack: number | null; asin_pack: number | null; qty_basis: string | null;
   refunds: Array<{ id: number; amount: number | null; amount_applied: number | null; refunded_at: string | null; method: string | null }>;
-  tasks: ClaimTask[]; conversion_flags: string[]; owed: number | null; remaining: number | null; received: number; source_items_json?: unknown;
+  tasks: ClaimTask[]; conversion_flags: string[]; dismiss_reason: string | null; owed: number | null; remaining: number | null; received: number; source_items_json?: unknown;
   bucket: ClaimBucket; bucket_since: string | null; due_at: string | null; timed_out: boolean; days_in_bucket: number | null; days_open: number | null;
   steps: ClaimStep[]; step: string; next_action: string; sentence: string; action: PrimaryAction; group: TaskGroup | null; ui_steps: UiStep[]; next: Array<{ when: "Now" | "Then"; text: string }>;
 }
@@ -69,14 +69,14 @@ interface ClaimDetailApi {
 
 // ── Pure helpers (exported for the tests) ────────────────────────────────────
 
-export interface ClaimsUrlState { bucket: ClaimBucket[]; q: string; kind: string; from: string; to: string; dismissed: boolean }
-const isBucket = (v: string): v is ClaimBucket => (CLAIM_BUCKET_TABS as readonly string[]).includes(v) || v === "dismissed";
-/** ?bucket=a,b (several = a combined view, the Dashboard's Refunds due), q (supplier / PO / ASIN; `po=` and `supplier=` still read), kind, from / to (PO date), dismissed=1. */
+export interface ClaimsUrlState { bucket: ClaimBucket[]; q: string; kind: string; from: string; to: string }
+const isBucket = (v: string): v is ClaimBucket => (CLAIM_BUCKET_TABS as readonly string[]).includes(v);
+/** ?bucket=a,b (several = a combined view, the Dashboard's Refunds due), q (supplier / PO / ASIN; `po=` and `supplier=` still read), kind, from / to (PO date); an old `dismissed=1` link opens the Dismissed tab. */
 export function readClaimsUrl(search: string): ClaimsUrlState {
   const p = new URLSearchParams(search);
   const ymd = (v: string | null) => (v && /^\d{4}-\d{2}-\d{2}$/.test(v) ? v : "");
   const buckets = (p.get("bucket") ?? "").split(",").map((x) => x.trim()).filter(isBucket);
-  return { bucket: buckets.length ? buckets : ["needs_attention"], q: (p.get("q") ?? p.get("po") ?? p.get("supplier") ?? "").trim(), kind: p.get("kind")?.trim() ?? "", from: ymd(p.get("from")), to: ymd(p.get("to")), dismissed: p.get("dismissed") === "1" };
+  return { bucket: buckets.length ? buckets : p.get("dismissed") === "1" ? ["dismissed"] : ["needs_attention"], q: (p.get("q") ?? p.get("po") ?? p.get("supplier") ?? "").trim(), kind: p.get("kind")?.trim() ?? "", from: ymd(p.get("from")), to: ymd(p.get("to")) };
 }
 export function writeClaimsUrl(s: ClaimsUrlState): string {
   const p = new URLSearchParams();
@@ -85,7 +85,6 @@ export function writeClaimsUrl(s: ClaimsUrlState): string {
   if (s.kind) p.set("kind", s.kind);
   if (s.from) p.set("from", s.from);
   if (s.to) p.set("to", s.to);
-  if (s.dismissed) p.set("dismissed", "1");
   const q = p.toString();
   return q ? `?${q}` : "";
 }
@@ -95,10 +94,9 @@ export function matchesFilter(c: Pick<ClaimRowApi, "supplier" | "order_id" | "al
   if (!t) return true;
   return [c.supplier, c.order_id, c.alt_order_ids ?? "", c.asin ?? "", c.product_name ?? ""].some((v) => v.toLowerCase().includes(t));
 }
-/** The rows of a tab set: the filter, the kind, the PO date range (the Dashboard link); dismissed only on Closed with the toggle. */
+/** The rows of a tab set: the filter, the kind, the PO date range (the Dashboard link); Dismissed is a tab of its own. */
 export function rowsForView(rows: readonly ClaimRowApi[], s: ClaimsUrlState): ClaimRowApi[] {
   const set = new Set<string>(s.bucket);
-  if (set.has("closed") && s.dismissed) set.add("dismissed");
   return rows.filter((r) => set.has(r.bucket) && matchesFilter(r, s.q) && (!s.kind || r.kind === s.kind) && (!s.from || r.order_date >= s.from) && (!s.to || r.order_date <= s.to));
 }
 /** A suggestion that carries figures (status suggested, a quantity). */
@@ -297,6 +295,7 @@ function DoCell({ claim, refresh, onRefund }: { claim: ClaimRowApi; refresh: () 
   const primary = a.kind === "task" && a.taskId ? () => void call(`/api/pos/claims/tasks/${a.taskId}/done`, a.taskKind === "review_suggestion" ? { decision: "open" } : {})
     : a.kind === "contact" ? () => setForm("contact")
     : a.kind === "refund" ? () => onRefund(claim)
+    : a.kind === "reopen" ? () => void call(`/api/pos/claims/${claim.id}/reopen`)
     : () => navigate(`/claims/${claim.id}`);
   return (
     <span data-testid={`do-${claim.id}`}>
@@ -351,8 +350,6 @@ function ClaimsList() {
           <button key={b} type="button" className={`tab${s.bucket.includes(b) ? " on" : ""}`} onClick={() => setS({ ...s, bucket: [b] })} data-testid={`tab-claims-${b}`}>
             {CLAIM_BUCKET_LABELS[b]} <b data-testid={`count-claims-${b}`}>{counts[b] ?? 0}</b>
           </button>))}
-        {s.bucket.includes("closed") && (
-          <label className="mut" style={{ marginLeft: "auto", display: "inline-flex", alignItems: "center", gap: 6, paddingBottom: 10 }}><input type="checkbox" checked={s.dismissed} onChange={(e) => setS({ ...s, dismissed: e.target.checked })} data-testid="checkbox-claims-dismissed" /> show dismissed</label>)}
         {s.bucket.length > 1 && <span className="mut" style={{ marginLeft: "auto", paddingBottom: 10 }} data-testid="claims-combined">Refunds due: {s.bucket.map((b) => CLAIM_BUCKET_LABELS[b]).join(" + ")}</span>}
         {Object.keys(colWidths).length > 0 && <button type="button" className="lnk mut" style={{ marginLeft: 12, paddingBottom: 10 }} onClick={resetWidths} data-testid="button-claims-reset-widths">Reset widths</button>}
       </div>

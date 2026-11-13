@@ -6287,7 +6287,10 @@ Rules built in commit 1 (`server/supplier-claims.ts`, `shared/supplier-claim.ts`
   did before.
 - **The Claims page (commit 2, `/claims`, `client/src/pages/claims.tsx`, nav tab after POs for now):** bucket tabs
   with counts — Needs attention · Waiting on supplier · Waiting on shipment · Waiting on refund to post · Waiting on
-  Velocity · Closed (+ a Dismissed toggle). The **bucket is derived, never stored** (`shared/claim-bucket.ts`,
+  Velocity · Closed · Dismissed (its own tab with a count since 2026-11-12 — the old "show dismissed" toggle hid a
+  dismissed claim from every tab; the Step column shows the typed dismissal reason, else the claim's note, and Do is
+  Reopen; a PO # search counts its dismissed claims there; an old `dismissed=1` link opens the tab). The **bucket is
+  derived, never stored** (`shared/claim-bucket.ts`,
   `deriveBucket`): an open task → Needs attention; otherwise the running timer's bucket — a replacement shipped and not
   arrived → shipment; a refund / credit confirmed by the supplier and not posted in full → refund to post; a return
   label sent / dispose asked / order change asked with nothing changed → Velocity; everything else once reported (no

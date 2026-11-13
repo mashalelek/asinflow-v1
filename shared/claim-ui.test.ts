@@ -36,6 +36,10 @@ describe("stateSentence — one plain sentence, never 'waiting' before the repor
     expect(sentence(base({ reported_at: "2026-11-05", outcome: "write_off", tasks: [open("dispose_units")], qty: 18 }))).toBe("write-off · ask Velocity to dispose 18 units");
     expect(sentence(base({ status: "closed", closed_at: "2026-11-09", outcome: "refund_card" }))).toBe("Closed 11/9 · refund to card");
     expect(sentence(base({ status: "dismissed" }))).toBe("Dismissed");
+    // the Dismissed tab's Step carries why (Maria 2026-11-12): the typed reason, else the claim's note
+    expect(sentence(base({ status: "dismissed", dismiss_reason: "not ours" }))).toBe("Dismissed · not ours");
+    expect(sentence(base({ status: "dismissed", note: "The 3 missing units were shipped under the wrong ASIN (B0778NYDKT)" }))).toBe("Dismissed · The 3 missing units were shipped under the wrong ASIN (B0778NYDKT)");
+    expect(action(base({ status: "dismissed" }))).toMatchObject({ kind: "reopen", label: "Reopen" });
     expect(sentence(base({ kind: "canceled", found_by: "email", found_at: "2026-09-04" }))).toBe("Refund confirmed 9/4 · check the card"); // a canceled claim is confirmed on its cancel date (paths, Maria 2026-11-12)
   });
 });
