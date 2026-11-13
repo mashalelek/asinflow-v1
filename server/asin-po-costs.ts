@@ -3,7 +3,10 @@
 // date). The rule: an ASIN's Actual COGS, Est. COGS (unless manual) and prep override follow the cost per unit / prep
 // on its newest NON-CANCELED PO ASIN row — newest by ORDER DATE, then entry sequence, then created_at (NEWEST_PO_ORDER;
 // a backdated PO entered later does not win; a canceled latest PO falls back to the one before it) — with
-// cogs_source = 'af_po' (migration 109; was 'af_po'). An ASIN whose every PO is canceled keeps its last value.
+// cogs_source = 'af_po' (migration 109; was the sheet-era label). An ASIN whose EVERY PO ASIN row is fully canceled has no
+// Actual COGS (Maria 2026-11-13, the 32-ASIN dry run docs/actual-cogs-clear-dry-run-2026-11-13.csv): actual_cogs,
+// cogs, cogs_source and prep_override are cleared (`cleared` / `clearedAsins` in the result); Est. COGS is an estimate
+// and stays as it is. Un-canceling (the claim removed) restores the value on the next sync, like any other PO write.
 //
 // Runs: after every PO write, scoped to the PO's ASINs (syncAsinCostsAfterPoWrite — the request's own sync, logged and
 // never failing the save); component 9 on every hourly pass over the whole map (the backstop); onboarding phase c for
@@ -103,14 +106,47 @@ export async function syncAsinCostsFromPos(
     }
   }
 
-  // The ordered_qty clearing pass (SPEC §11, 2026-08-23) is gone with the
-  // column's last writer (2026-10-17): nothing reads asin_estimates.
-  // ordered_qty any more. `cleared` / `clearedAsins` stay in the result
-  // shape for the callers (toast, component 9 ledger) and are always 0.
   // rawRowsRead keeps its fail-closed meaning for the read itself.
   if (rawRowsRead === 0) log(`PO costs: rawRowsRead=0 — no PO rows in AF (nothing written)`, "sheets");
-  const clearedAsins: string[] = [];
+  // The clearing pass (2026-11-13; the old ordered_qty clearing left with its column's last writer, 2026-10-17): an
+  // ASIN with a stored Actual COGS whose every PO ASIN row is fully canceled is not in the map above (the map holds
+  // non-canceled rows only), so it would keep the canceled PO's cost forever. Clear it. Same shapes as
+  // loadAfAsinCostMap: a correlated subquery per row for a few ASINs, one JOIN over the view for the whole map.
+  let clearedAsins: string[] = [];
+  try {
+    clearedAsins = await clearCostsOfFullyCanceledAsins(query, asinFilter && asinFilter.size > 0 ? Array.from(asinFilter) : undefined);
+    for (const a of clearedAsins) log(`PO costs ${a}: Actual COGS cleared — every PO row canceled`, "sheets");
+  } catch (err: any) {
+    errors.push(`_clear: ${err.message}`);
+  }
   return { updated, skipped, errors, cleared: clearedAsins.length, clearedAsins };
+}
+
+/**
+ * Actual COGS, its legacy twin `cogs`, the source label and the prep override go when the ASIN has PO ASIN rows and
+ * every one of them is fully canceled (its PO canceled, or canceled claims covering every line). Returns the ASINs
+ * cleared. An ASIN with no PO row at all is never touched (a CSV / manual value is not the PO rule's to clear).
+ */
+export async function clearCostsOfFullyCanceledAsins(query: QueryFn, asins?: readonly string[]): Promise<string[]> {
+  const filter = asins && asins.length > 0;
+  const canceled = filter
+    ? `(SELECT e.fully_canceled FROM po_asin_expected e WHERE e.id = pa.id)`
+    : `e.fully_canceled`;
+  const rows = (await query(
+    `WITH r AS (
+       SELECT pa.asin, bool_and(${canceled}) AS all_canceled
+         FROM po_asins pa${filter ? "" : " JOIN po_asin_expected e ON e.id = pa.id"}
+        ${filter ? "WHERE pa.asin = ANY($1::text[])" : ""}
+        GROUP BY pa.asin)
+     UPDATE asin_estimates ae
+        SET actual_cogs = NULL, cogs = NULL, cogs_source = NULL, prep_override = NULL
+       FROM r
+      WHERE r.asin = ae.asin AND r.all_canceled
+        AND (ae.actual_cogs IS NOT NULL OR ae.cogs_source = '${AF_PO_COGS_SOURCE}')
+      RETURNING ae.asin`,
+    filter ? [asins!.map((a) => a.toUpperCase())] : [],
+  )).rows as Array<{ asin: string }>;
+  return rows.map((r) => String(r.asin)).sort();
 }
 
 

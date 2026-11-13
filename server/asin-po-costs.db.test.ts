@@ -102,6 +102,63 @@ describe("Actual COGS follows the newest non-canceled PO (real schema, rolled ba
     });
   });
 
+  // Clearing (Maria 2026-11-13): a canceled claim covering the line's ordered Individual units (D14) cancels the row.
+  const cancelLine = (q: Q, po: string, line: string) => q(
+    `INSERT INTO supplier_claims (po_id, po_line_item_id, kind, qty, status, found_by, found_at, supplier_confirmed_at)
+     VALUES ($1, $2, 'canceled', 12, 'open', 'maria', CURRENT_DATE, now()) RETURNING id`, [po, line]).then((r: any) => String(r.rows[0].id));
+
+  it("cancel the only PO: Actual COGS, cogs, the source and the prep override are cleared; Est. COGS stays", async (ctx) => {
+    if (!client) return ctx.skip();
+    await inTx(async (q) => {
+      const s = await seedPo(q, "zz-po-1", "2026-11-01", 5.5, 1);
+      await syncAsinCostsFromPos(q, new Set([ASIN]), noLog);
+      expect(await est(q)).toMatchObject({ actual: 5.5, source: AF_PO_COGS_SOURCE, prep: 1 });
+      await cancelLine(q, s.po, s.line);
+      const r = await syncAsinCostsFromPos(q, new Set([ASIN]), noLog);
+      expect([r.updated, r.cleared, r.clearedAsins, r.errors]).toEqual([0, 1, [ASIN], []]);
+      const e = await est(q);
+      expect(e).toMatchObject({ actual: null, source: null, prep: null, est: 5.5, estSource: AF_PO_COGS_SOURCE });
+      expect(e!.cogs).toBe(0); // Number(null): the legacy column is NULL too
+      expect((await q(`SELECT cogs FROM asin_estimates WHERE asin = $1`, [ASIN])).rows[0].cogs).toBeNull();
+      // Idempotent: a second pass clears nothing and reports nothing.
+      expect((await syncAsinCostsFromPos(q, new Set([ASIN]), noLog)).cleared).toBe(0);
+    });
+  });
+
+  it("uncancel (the claim removed): the value comes back on the next sync", async (ctx) => {
+    if (!client) return ctx.skip();
+    await inTx(async (q) => {
+      const s = await seedPo(q, "zz-po-1", "2026-11-01", 5.5, 1);
+      await syncAsinCostsFromPos(q, new Set([ASIN]), noLog);
+      const claim = await cancelLine(q, s.po, s.line);
+      await syncAsinCostsFromPos(q, new Set([ASIN]), noLog);
+      expect(await est(q)).toMatchObject({ actual: null, source: null, prep: null });
+      await q(`DELETE FROM supplier_claims WHERE id = $1`, [claim]);
+      const r = await syncAsinCostsFromPos(q, new Set([ASIN]), noLog);
+      expect([r.updated, r.cleared]).toEqual([1, 0]);
+      expect(await est(q)).toMatchObject({ actual: 5.5, source: AF_PO_COGS_SOURCE, prep: 1 });
+    });
+  });
+
+  it("cancel one of two POs: nothing is cleared, the ASIN falls back to the other PO's cost", async (ctx) => {
+    if (!client) return ctx.skip();
+    await inTx(async (q) => {
+      const older = await seedPo(q, "zz-po-1", "2026-11-01", 5.5, 1);
+      const newer = await seedPo(q, "zz-po-2", "2026-11-10", 7.75, 2);
+      await syncAsinCostsFromPos(q, new Set([ASIN]), noLog);
+      expect(await est(q)).toMatchObject({ actual: 7.75, prep: 2 });
+      await cancelLine(q, newer.po, newer.line);
+      let r = await syncAsinCostsFromPos(q, new Set([ASIN]), noLog);
+      expect([r.cleared, (await est(q))!.actual]).toEqual([0, 5.5]);
+      await cancelLine(q, older.po, older.line);
+      r = await syncAsinCostsFromPos(q, new Set([ASIN]), noLog);
+      expect([r.cleared, (await est(q))!.actual]).toEqual([1, null]);
+      // The unfiltered (whole-map, JOIN) shape clears the same row.
+      await q(`UPDATE asin_estimates SET actual_cogs = 5.5, cogs_source = 'af_po' WHERE asin = $1`, [ASIN]);
+      expect((await syncAsinCostsFromPos(q, undefined, noLog)).clearedAsins).toContain(ASIN);
+    });
+  });
+
   it("the after-write sync never throws: a failing query is logged and answers null", async () => {
     const logged: string[] = [];
     const boom: Q = async () => { throw new Error("connection lost"); };

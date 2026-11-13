@@ -15,7 +15,7 @@ export const poSheet: ComponentDef = {
     const filter = ctx.job.scope_asins ? new Set(ctx.scopeAsins) : undefined;
     const r = await run(filter);
     const outcomes: Record<string, string> = {};
-    for (const a of r.clearedAsins) outcomes[a] = "ordered_qty cleared (no sheet rows)";
+    for (const a of r.clearedAsins) outcomes[a] = "Actual COGS cleared (every PO row canceled)";
     for (const e of r.errors) outcomes[e.split(":")[0] || "_sheet"] = `error: ${e}`;
     return { counts: { updated: r.updated, skipped: r.skipped, cleared: r.cleared, errors: r.errors.length }, outcomes };
   },

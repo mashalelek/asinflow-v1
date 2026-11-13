@@ -2373,7 +2373,8 @@ export function renderCell(
     }
 
     case "actProfit": {
-      if (!result.actuals || result.actuals.units_sold === 0 || result.actualCogs == null) return numCell(fmt(0));
+      if (!result.actuals || result.actuals.units_sold === 0) return numCell(fmt(0));
+      if (result.actualCogs == null) return numCell("—"); // no Actual COGS (every PO row canceled, or no PO yet): not $0
       const units = result.actuals.units_sold;
       const rev = result.actuals.revenue;
       const prep2 = getEffectivePrep(result, settings);
@@ -2399,7 +2400,8 @@ export function renderCell(
     }
 
     case "actProfitPerUnit": {
-      if (!result.actuals || result.actuals.units_sold === 0 || result.actualCogs == null) return numCell(fmt(0));
+      if (!result.actuals || result.actuals.units_sold === 0) return numCell(fmt(0));
+      if (result.actualCogs == null) return numCell("—"); // no Actual COGS (every PO row canceled, or no PO yet): not $0
       const units = result.actuals.units_sold;
       const rev = result.actuals.revenue;
       const prep2 = getEffectivePrep(result, settings);
@@ -2424,7 +2426,8 @@ export function renderCell(
     }
 
     case "actMargin": {
-      if (!result.actuals || result.actuals.units_sold === 0 || result.actualCogs == null) return numCell("0.0%");
+      if (!result.actuals || result.actuals.units_sold === 0) return numCell("0.0%");
+      if (result.actualCogs == null) return numCell("—"); // no Actual COGS: not 0%
       const units = result.actuals.units_sold;
       const rev = result.actuals.revenue;
       const prep2 = getEffectivePrep(result, settings);
@@ -2449,7 +2452,8 @@ export function renderCell(
     }
 
     case "actRoi": {
-      if (!result.actuals || result.actuals.units_sold === 0 || result.actualCogs == null) return numCell("0.0%");
+      if (!result.actuals || result.actuals.units_sold === 0) return numCell("0.0%");
+      if (result.actualCogs == null) return numCell("—"); // no Actual COGS: not 0%
       const units = result.actuals.units_sold;
       const rev = result.actuals.revenue;
       const prep2 = getEffectivePrep(result, settings);
