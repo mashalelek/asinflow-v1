@@ -1,6 +1,6 @@
 // SellerBoard COGS export (interim bandage until the Actuals audit). Pushes YTD
 // PO landed costs into SellerBoard as per-PO cost periods. Read-only: no DB, no
-// SC. Inputs = the Orders Google Sheet (via fetchSheetRows) + an uploaded SB
+// SC. Inputs = AF's PO rows in the sheet's row shape (loadAfPoRows) + an uploaded SB
 // products template xlsx (sheet "TDSheet", columns ASIN/SKU). See SPEC §11.
 import * as XLSX from "xlsx";
 import type { SheetRow } from "./google-sheets";
@@ -186,7 +186,7 @@ export async function buildSellerboardCogs(
     // Exclude ONLY canceled. Closed POs are completed purchases — exactly the
     // batch history SB needs — so "closed" IS included (matches the sheet
     // client's COGS canonical-row rule). NOTE: this DELIBERATELY differs from
-    // the ordered-qty sync's status rule (google-sheets.ts fetchSheetData),
+    // the old ordered-qty sync's status rule (the sheet era),
     // which excludes closed AND canceled because it counts qty still on order.
     if (status.includes("canceled")) { skips.excludedByStatus++; continue; }
 
@@ -226,7 +226,7 @@ export async function buildSellerboardCogs(
     const costCents = Math.round(cost * 100);
     const dateStr = formatMDYNoPad(dt);
     // Normalize the join key the same way as the template side (trim came from
-    // fetchSheetRows; uppercase here) so ASIN case can never fake a not-in-SB.
+    // loadAfPoRows; uppercase here) so ASIN case can never fake a not-in-SB.
     const asinKey = row.asin.toUpperCase();
     if (!Number.isInteger(qty)) fracAsins.add(asinKey);
     const ref: PeriodRowRef = { sheetRow: row.sheetRow, asin: asinKey, date: row.orderDate ?? "", rawQty, cost };

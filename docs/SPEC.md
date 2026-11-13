@@ -1033,10 +1033,11 @@ YYYY-MM-DD_SupplierName_OrderID
 > **History-only since 2026-11-13** (patch `docs/claude_spec-patch-orders-sheet-retirement.md`, commit 3): **no code path reads the Orders sheet.**
 > Sync POs — the intake and the prep-drift apply (`server/po-sheet-sync.ts`, `POST /api/sheets/sync`, the button,
 > `script/sync-pos.ts`) — and the Col P signal (`po_sheet_fba_shipments`, dropped by migration 110) are deleted; the
-> 2,496 `source = 'sheet_import'` POs are history (last insert 2026-10-24, order date 2026-10-23). `GOOGLE_SHEET_ID`,
-> `server/sheet-read.ts` and `server/google-sheets.ts` (whose `SheetRow` is still the row shape `po-af-source.ts`
-> builds from AF) stay, unreferenced, as the D8 safety net until the share is removed; the settings key
-> `google_sheet_id` was never read and is gone. The Sourcing sheet (`SOURCING_SHEET_ID`) and the ER leads sheet are
+> 2,496 `source = 'sheet_import'` POs are history (last insert 2026-10-24, order date 2026-10-23). **AF has no access
+> to the Orders sheet (D8 unplug, Maria 2026-11-13): the service account's share on it is removed, `GOOGLE_SHEET_ID` is
+> deleted from the environment, `server/sheet-read.ts` is gone; `server/google-sheets.ts` holds only the row shapes
+> (`SheetRow`, `SheetAsinData`) that `po-af-source.ts` builds from AF.** The settings key `google_sheet_id` was never
+> read and is gone. The service account itself stays: the Sourcing sheet, the ER leads sheet, Gmail and Drive use it. The Sourcing sheet (`SOURCING_SHEET_ID`) and the ER leads sheet are
 > different spreadsheets and are still read. **Intake-only 2026-10-18 → 2026-11-13** (patch
 > `docs/claude_spec-patch-po-af-owned.md`, §22 "AF owns POs"): every former reader had already moved to the AF PO
 > tables through `server/po-af-source.ts`:
@@ -1155,8 +1156,7 @@ the fields each AF value stands in for), before that `fetchSheetRows` —
 delivered by
 `GET /api/export/velocity-upload?from=&to=` (both params optional, `M/D/YYYY`,
 default = today; `&dryRun=1` returns counts + skip detail as JSON instead of the
-file). Gated by DB + Google credentials + `GOOGLE_SHEET_ID`, like the other
-sheet integrations.
+file). Gated by the DB only (the rows come from AF's PO tables).
 
 **Order-date creation floor.** `VELOCITY_MIN_ORDER_DATE` (env, `M/D/YYYY`,
 currently `7/30/2026`): orders dated before it must never be **created** in
@@ -1744,10 +1744,9 @@ Flow:
 > AF's own actuals are trusted.
 
 Read-only against AF — **no DB reads/writes, no SC, no cron.** Inputs: the Orders
-sheet (`fetchSheetRows`) + an uploaded SB products template xlsx. Built by
+rows from AF's PO tables (`loadAfPoRows`) + an uploaded SB products template xlsx. Built by
 `server/sellerboard-cogs.ts` (`buildSellerboardCogs(templateBuffer)`), delivered
-by `POST /api/export/sellerboard-cogs` (multipart `file` upload). Gated by Google
-credentials + `GOOGLE_SHEET_ID`.
+by `POST /api/export/sellerboard-cogs` (multipart `file` upload). Gated by the DB only.
 
 **Step 1 — ASIN → SKU map from the template** (sheet `TDSheet`, columns `ASIN`,
 `SKU`): one entry per (ASIN, SKU) row; ASIN normalized **trim + uppercase** (to
@@ -8498,7 +8497,6 @@ platform's values always win.
 | `SP_API_REFRESH_TOKEN` | yes | LWA refresh token. |
 | `SP_API_SELLER_ID` | no | Seller id for Listings, restrictions, submissions and the full-scope pass. |
 | `GOOGLE_CREDENTIALS_PATH` | no (points at a secret) | Path to the service-account JSON. On Render this is a **secret file** (`google-credentials.json` uploaded in the service's Secret Files) and the variable holds that file's mount path. Gates every Sheets route. |
-| `GOOGLE_SHEET_ID` | no | Orders / PO tracker sheet. |
 | `SOURCING_SHEET_ID` | no | Sourcing leads sheet. |
 | `ER_LEADS_SHEET_ID` | no | "SAS Leads Sheet \| ER" — the second Sync Sourcing source (tab `Leads`). Unset → the ER leg is skipped with a warning. |
 | `ER_LEADS_MIN_DATE` | no | ER leg date floor, `YYYY-MM-DD`; default `2026-10-20`. A fixed floor, not a high-water mark. |

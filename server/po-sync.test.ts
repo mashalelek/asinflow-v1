@@ -53,11 +53,6 @@ const afCalls: Array<string[] | undefined> = [];
 vi.mock("./po-af-source", () => ({
   loadAfAsinCostMap: async (_q: unknown, asins?: string[]) => { afCalls.push(asins); return { data: sheetOverride ?? sheetEntries(), rowsRead: rawRowsRead }; },
 }));
-vi.mock("./google-sheets", () => ({
-  fetchSheetData: async () => { throw new Error("the Orders sheet must not be read"); },
-  fetchSheetDataWithMeta: async () => { throw new Error("the Orders sheet must not be read"); },
-  fetchSheetRows: async () => [],
-}));
 
 import { getSyncAsinCostsFromPos } from "./routes";
 const getRunSheetsSync = getSyncAsinCostsFromPos; // the function under test kept its old name here (renamed 2026-11-13)
@@ -71,16 +66,15 @@ beforeEach(() => {
 });
 
 describe("runSheetsSync reads the AF PO tables (po-af-owned §2.4)", () => {
-  it("works with no GOOGLE_SHEET_ID and passes the ASIN filter to the AF reader", async () => {
-    const saved = process.env.GOOGLE_SHEET_ID; delete process.env.GOOGLE_SHEET_ID;
-    try {
+  it("reads the AF PO tables and passes the ASIN filter to the AF reader (the Orders sheet is gone, D8 2026-11-13)", async () => {
+    {
       sourcesByAsin = { CSVASIN0001: { est: "csv", act: null } };
       const r = await getRunSheetsSync()(new Set(["CSVASIN0001"]));
       expect(r.updated).toBe(1);
       expect(afCalls).toEqual([["CSVASIN0001"]]);
       await getRunSheetsSync()();
       expect(afCalls[1]).toBeUndefined();
-    } finally { if (saved !== undefined) process.env.GOOGLE_SHEET_ID = saved; }
+    }
   });
 });
 

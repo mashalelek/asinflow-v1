@@ -20,9 +20,6 @@ let blankAsinRows = 0;
 vi.mock("./po-af-source", () => ({
   loadAfPoRows: async () => ({ rows: sheetRows, rawRowsRead, blankAsinRows }),
 }));
-vi.mock("./google-sheets", () => ({
-  fetchSheetRowsWithMeta: async () => { throw new Error("the Orders sheet must not be read"); },
-}));
 
 import { buildSourcingCost, sourcingCostFilename, parseYMDLocal } from "./sourcing-cost";
 
@@ -75,7 +72,6 @@ beforeEach(() => {
   sheetRows = [];
   rawRowsRead = 0;
   blankAsinRows = 0;
-  delete process.env.GOOGLE_SHEET_ID; // not needed any more (po-af-owned §2.4)
 });
 
 describe("buildSourcingCost", () => {

@@ -9,7 +9,7 @@ proven first.*
 
 > **Status: DONE 2026-11-13.** Probe 2026-11-13 (read-only); commit 1 `6234fde`; the Actual COGS clearing `a278169`;
 > commit 3 `456acf5` (migration 110); commit 4 = the docs. Commit 2 was not needed (D2 amended, D3 already true).
-> Still open, one separate step: the D8 unplug (remove the share, delete the sheet config). The Missing Orders tab is dropped (Maria 2026-11-13): not a to-do.
+> Nothing open. The D8 unplug is done (Maria approved 2026-11-13): the share on the Orders sheet removed, `GOOGLE_SHEET_ID` deleted, the sheet client gone. The Missing Orders tab is dropped (Maria 2026-11-13): not a to-do.
 
 ## 1. Decisions (Maria 2026-11-12)
 
@@ -43,10 +43,14 @@ proven first.*
   whose cost does not change is not rewritten to a different value).
 - **D7 — Missing Orders tab: dropped (Maria 2026-11-13).** Not imported, not read, not a to-do. Dead
   Pile and the other tabs: out of scope.
-- **D8 — Read access stays.** The service account keeps its read scope on
-  the sheet until everything is tested; the full unplug (remove the share,
-  delete the sheet config) is a later, separate step. No code path reads
-  the sheet after this patch; the access is only a safety net.
+- **D8 — Read access stays** (2026-11-12) → **unplugged 2026-11-13 (Maria
+  approved):** the service account's share on the Orders sheet is removed by
+  Maria, `GOOGLE_SHEET_ID` is deleted from Render and the local `.env`,
+  `server/sheet-read.ts` is deleted and `server/google-sheets.ts` keeps only
+  the row shapes. The service account, `GOOGLE_CREDENTIALS_PATH`,
+  `SOURCING_SHEET_ID`, `ER_LEADS_SHEET_ID`, `GMAIL_SUBJECT` and
+  `DRIVE_SUBJECT` stay — the Sourcing sheet, the ER leads sheet, Gmail and
+  Drive are different integrations on the same key.
 - Not in this patch: the P1 refund-classification cleanup
   (`order_total_nets_refund`) stays on the to-do; Col AU invoice names for
   sheet-era POs are not written back.
