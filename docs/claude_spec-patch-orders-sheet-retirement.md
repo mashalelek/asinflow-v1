@@ -9,7 +9,7 @@ proven first.*
 
 > **Status: DONE 2026-11-13.** Probe 2026-11-13 (read-only); commit 1 `6234fde`; the Actual COGS clearing `a278169`;
 > commit 3 `456acf5` (migration 110); commit 4 = the docs. Commit 2 was not needed (D2 amended, D3 already true).
-> Still open, separate steps: the D8 unplug (remove the share, delete the sheet config), the Missing Orders tab (D7).
+> Still open, one separate step: the D8 unplug (remove the share, delete the sheet config). The Missing Orders tab is dropped (Maria 2026-11-13): not a to-do.
 
 ## 1. Decisions (Maria 2026-11-12)
 
@@ -41,7 +41,7 @@ proven first.*
   same scoped sync runs in the request after every PO write; the hourly
   component is kept as the backstop. Historical COGS stay frozen (a PO
   whose cost does not change is not rewritten to a different value).
-- **D7 — Missing Orders tab: untouched.** Not imported, not read. Dead
+- **D7 — Missing Orders tab: dropped (Maria 2026-11-13).** Not imported, not read, not a to-do. Dead
   Pile and the other tabs: out of scope.
 - **D8 — Read access stays.** The service account keeps its read scope on
   the sheet until everything is tested; the full unplug (remove the share,

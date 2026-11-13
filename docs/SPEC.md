@@ -8259,7 +8259,7 @@ the first consumer of the PO module outside the POs page.
 3. Invoice file upload (indicator → stored file)
 4. POs-by-ASIN cross-PO view
 5. Cutover — **readers repointed 2026-10-18** ("AF owns POs"); still open:
-   **Orders-sheet retirement — DONE 2026-11-13** (`docs/claude_spec-patch-orders-sheet-retirement.md`: Sync POs intake, the prep-drift apply, Col P and the dead `google_sheet_id` key removed; Push to Aura and component 9 had read AF since 2026-10-18; Export SB COGS keeps its dated per-PO periods (D2 amended); the §11 mirror was `GOOGLE_SHEET_ID` itself; read access stays as the D8 safety net); still open: import the Missing Orders tab (untouched, D7); drop `purchase_orders.payment_method` / `promo` once the backfills are
+   **Orders-sheet retirement — DONE 2026-11-13** (`docs/claude_spec-patch-orders-sheet-retirement.md`: Sync POs intake, the prep-drift apply, Col P and the dead `google_sheet_id` key removed; Push to Aura and component 9 had read AF since 2026-10-18; Export SB COGS keeps its dated per-PO periods (D2 amended); the §11 mirror was `GOOGLE_SHEET_ID` itself; read access stays as the D8 safety net; the Missing Orders tab is dropped, not a to-do — Maria 2026-11-13); still open: drop `purchase_orders.payment_method` / `promo` once the backfills are
    verified); POs sub-nav
 6. Later: gift-card ledger, ~~subscription alerts~~ (§27, 2026-10-31),
    Velocity bundles, %-type product discounts, §15 FIFO/lots, pre-2026
