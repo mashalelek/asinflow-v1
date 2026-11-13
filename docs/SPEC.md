@@ -963,7 +963,7 @@ pair (route paths did NOT change; they are not user-facing):
 |---|---|---|---|
 | 1–2 | **Refresh (N)** | Product Info + Prices & Stock | one button, one job, all 21 components (§11 "Refresh job", 2026-10-15); N = working-set size; shows the running component and a Cancel; the history clock opens the jobs dialog |
 | 3 | **Sync Sourcing** | — | unchanged |
-| 4 | **Sync POs** | Sync PO | plural |
+| 4 | ~~Sync POs~~ | Sync PO | removed 2026-11-13 (Orders-sheet retirement commit 3, `docs/claude_spec-patch-orders-sheet-retirement.md`) |
 | 5 | **Push to Aura** | — | unchanged |
 | 6 | **Export SB COGS** | — | unchanged |
 | 7 | **Update COGS in SC** | Export Sourcing Cost | its history clock stays beside it. **Since 2026-11-01 it submits the Sourcing cost (COGS before the gift-card discount, promos applied; §22 "Costs") for an ASIN whose newest non-canceled PO was created by the Capture PO patch — cost formula v2 (the form), source `extension` or `email_renewal` (`PATCH_FORWARD_PO_SQL`); every other ASIN keeps sending `actual_cogs` as before (Maria 2026-11-01: a sheet-imported PO's col AR is never submitted)** |
@@ -1030,15 +1030,20 @@ YYYY-MM-DD_SupplierName_OrderID
 
 ### Google Sheets PO tracker
 
-> **Intake-only since 2026-10-18** (patch `docs/claude_spec-patch-po-af-owned.md`, §22 "AF owns POs").
-> The only reader left is Sync POs' intake (`server/po-sheet-sync.ts`): it
-> inserts sheet POs that are not in AF and not tombstoned, and never writes
-> an existing one. Every former reader of this sheet now reads the AF PO
+> **History-only since 2026-11-13** (patch `docs/claude_spec-patch-orders-sheet-retirement.md`, commit 3): **no code path reads the Orders sheet.**
+> Sync POs — the intake and the prep-drift apply (`server/po-sheet-sync.ts`, `POST /api/sheets/sync`, the button,
+> `script/sync-pos.ts`) — and the Col P signal (`po_sheet_fba_shipments`, dropped by migration 110) are deleted; the
+> 2,496 `source = 'sheet_import'` POs are history (last insert 2026-10-24, order date 2026-10-23). `GOOGLE_SHEET_ID`,
+> `server/sheet-read.ts` and `server/google-sheets.ts` (whose `SheetRow` is still the row shape `po-af-source.ts`
+> builds from AF) stay, unreferenced, as the D8 safety net until the share is removed; the settings key
+> `google_sheet_id` was never read and is gone. The Sourcing sheet (`SOURCING_SHEET_ID`) and the ER leads sheet are
+> different spreadsheets and are still read. **Intake-only 2026-10-18 → 2026-11-13** (patch
+> `docs/claude_spec-patch-po-af-owned.md`, §22 "AF owns POs"): every former reader had already moved to the AF PO
 > tables through `server/po-af-source.ts`:
 >
 > | Reader | Now reads |
 > |---|---|
-> | Per-ASIN COGS / prep / supplier (`syncAsinCostsFromPos` — Sync POs' second half, Push to Aura, component 9), Reset COGS, Sync Est. COGS from PO (single + bulk), the onboarding supplier fallback | `loadAfAsinCostMap`: per ASIN, the **newest non-canceled ASIN row** — `ORDER BY order_date DESC, entry_seq DESC` (`NEWEST_PO_ORDER`, `server/po-entry-seq.ts`); an ASIN row is canceled when every line has `qty_canceled ≥ qty_ordered`. cost = `po_asins.cost_per_unit`, prep = `prep_cost` (NULL → 0), supplier = the PO's |
+> | Per-ASIN COGS / prep / supplier (`syncAsinCostsFromPos` — after every PO write, Push to Aura, component 9), Reset COGS, Sync Est. COGS from PO (single + bulk), the onboarding supplier fallback | `loadAfAsinCostMap`: per ASIN, the **newest non-canceled ASIN row** — `ORDER BY order_date DESC, entry_seq DESC` (`NEWEST_PO_ORDER`, `server/po-entry-seq.ts`); an ASIN row is canceled when every line has `qty_canceled ≥ qty_ordered`. cost = `po_asins.cost_per_unit`, prep = `prep_cost` (NULL → 0), supplier = the PO's |
 > | Upload to Velocity (CSV, plan, execute), Export SB COGS, the sourcing-cost export | `loadAfPoRows`: one sheet-shaped row per product line, newest first. Col D ← "Closed" when the PO is closed, "Canceled" when the line is fully canceled; Col U ← qty ordered × yield ÷ unique products (2-dp yields restored to the fraction typed; on a one-product S=1 row the stored integer ASIN qty wins unless the product is the half / third / quarter / sixth it was rounded from); Col AZ ← units (bundle: sets × units per bundle; otherwise U × units / pack); AX / AY / S / T / L / N / Y / AS from the ASIN row and line |
 >
 > Same outputs as the sheet for unchanged data, verified per reader with a
@@ -1049,8 +1054,8 @@ YYYY-MM-DD_SupplierName_OrderID
 > same-day tie the sheet broke by row order (imported POs: the sheet's
 > order, higher row = newer; AF-created POs: creation time) — the 751-ASIN
 > pre-2026 cost check reads 751 / 751 with it. No route that used to read
-> the sheet is gated on `GOOGLE_SHEET_ID` any more; `POST /api/sheets/sync`
-> (the intake) keeps its gate.
+> the sheet is gated on `GOOGLE_SHEET_ID` any more (`POST /api/sheets/sync`,
+> the intake, kept its gate until it was removed on 2026-11-13).
 >
 > The rest of this subsection describes the sheet-era readers and is kept
 > as the record of what the AF rows reproduce.
@@ -1061,7 +1066,9 @@ YYYY-MM-DD_SupplierName_OrderID
 - **Range:** `A2:AZ` (widened for the Velocity export fields in Cols AX–AZ; prep
   cost remains Col AS)
 
-**Architecture — the sheet AF reads is a MIRROR, not the real Orders file.**
+**Retired 2026-11-13.** The mirror below ("AsinFlow - Purchase Orders", the `IMPORTRANGE` copy `GOOGLE_SHEET_ID` points at) IS the "§11 PO mirror sheet" of the retirement patch — the one spreadsheet AF ever read, not a second one. Nothing reads it now; the two paragraphs are history.
+
+**Architecture — the sheet AF read was a MIRROR, not the real Orders file.**
 `GOOGLE_SHEET_ID` points at **"AsinFlow - Purchase Orders"** (tab `Sheet1`), a
 mirror spreadsheet populated by an `IMPORTRANGE` formula pulling from Maria's
 real Orders file. The real file is **intentionally NOT shared** with the service
@@ -2698,8 +2705,7 @@ is set — the runner is always on; only the **schedule** is gated.
   that run a subset of the sequence — the sales history backfill uses it.
 
   **Rule (Maria, 2026-10-16): manual actions never wait on the scheduled
-  pass. Only SP-API refresh work goes on the queue.** Sync POs (the PO
-  sheet sync of §22 followed by `syncAsinCostsFromPos`, 2026-10-16), Export SB
+  pass. Only SP-API refresh work goes on the queue.** Export SB
   COGS, Update COGS in SC, Push to Aura, Verify now, Recheck now,
   Park/Unpark/Mark dead/Revive stay direct calls. Sync Sourcing and Upload
   File keep their inline sheet/CSV step; only the onboarding Refresh they
@@ -3554,11 +3560,10 @@ matching patch).
 
 A Velocity line is matched only to a Velocity-eligible PO: not
 `ships_to = 'home'`, not dated before `tracking.velocity_start_date`. That
-holds for every rule (keys, alias, normalized, Col P, base order #,
-candidate) and for the picker's suggestions; the picker's free-text search
-still lists such a PO, marked with the reason, and linking it stays allowed.
-A Col P hit that fails the units fit is a hint only — the line still goes
-through the base order # and candidate rules (Maria 2026-10-29).
+holds for every rule (keys, alias, normalized, base order #, candidate) and
+for the picker's suggestions; the picker's free-text search still lists such
+a PO, marked with the reason, and linking it stays allowed. (Col P, the
+sheet's FBA-id signal, was retired 2026-11-13 with the Orders sheet.)
 
 ### Source of truth
 
@@ -3608,7 +3613,7 @@ that writes it:
 | Aura listing cost (external, not an AF column) | Aura cost sync path (§11) — reads `asin_estimates` after an inline PO-sheet read for the selection (decision 9), writes only to Aura |
 | `purchase_orders`, `po_asins`, `po_line_items` — every field, incl. action items, `closed_at` / `closed_by`, `qty_canceled`, `unique_products`, `entry_seq` | **AF** (2026-10-18, patch po-af-owned): the PO module UI — the Edit PO page, Products / ASIN-row inline edits, New PO form, Cancel / Delete PO, Cancel ASIN, Closed toggle, the auto-close rule. **The Orders sheet is intake only**: Sync POs inserts a PO that is not in AF and not tombstoned (`deleted_pos`) and never writes an existing one — its drift is reported (`sheetDiffers`), not applied. **One exception (Maria 2026-10-29, Option 2): Col AS prep cost.** When a 2026 ASIN row's sheet prep differs from AF, Sync POs applies it to `po_asins.prep_cost` and, when that changes the PO's derived ships_to (any prep > 0 → velocity, else home), `purchase_orders.ships_to` too — a History row per change ("prep_cost (from sheet)", "ships_to (from sheet)"), counted as `prepApplied` / `shipsToApplied` and listed in the result. A ships_to set by hand stays unless a sync changes that PO's prep. No other field is ever written to an existing PO. `closed_by = 'sheet'` stays on history; nothing new writes it |
 | `po_edit_log` | Every PO-module writer (one row per changed field, §22 "AF owns POs"); read by the History tab |
-| `deleted_pos` | Delete PO (tombstone); read by Sync POs' intake |
+| `deleted_pos` | Delete PO (tombstone); was read by Sync POs' intake until 2026-11-13 |
 | `po_asin_shipments.assigned_by`, `velocity_order_number` | Reassign shipment (§22) and the 060 data fix write `'manual'` + the Velocity line identity; component A refreshes a manual row's quantity, never moves it (a hand-split line is compared, not rewritten) |
 | `po_asins.qty_at_prep`, `received_velocity`; `po_asin_shipments` (`source = 'velocity'`: row, `qty_shipped`, `shipped_at`); `velocity_shipments`; `shipment_unmatched` | **Shipment sync, component A** (`server/shipment-sync-velocity.ts`, Sync Shipments button, 2026-10-17) — never the sheet sync, never the UI except the Unmatched picker |
 | `po_asin_shipments.fba_shipment_ids`, `sc_match`, `qty_received`; `velocity_shipments.sc_shipment_ids` / `sc_match`; `sc_inbound_shipments`, `sc_inbound_items` | **Shipment sync, component B** (`server/shipment-sync-sc.ts`) |
@@ -5064,10 +5069,10 @@ sequential phases over one NDJSON progress stream
      a verdict, not a guess: the ASIN came from an A1-filtered account list.
      `has_buyable_offer` stays unwritten here; BUYABLE comes from a per-SKU
      probe, which the next reconcile supplies.
-  2. **COGS:** if the ASIN has rows in the Orders sheet (the PO mirror), the
-     existing PO sync runs **scoped to that ASIN**, so `actual_cogs` /
+  2. **COGS:** if the ASIN has PO ASIN rows in AF, the PO cost sync
+     (`syncAsinCostsFromPos`) runs **scoped to that ASIN**, so `actual_cogs` /
      `cogs_source='af_po'` / `prep_override` land as for any PO'd ASIN. No
-     Orders rows → COGS stays **NULL**. No synthetic zero is stored; the UI
+     PO rows → COGS stays **NULL**. No synthetic zero is stored; the UI
      already renders `$0.00` from nothing.
   3. **Buy link / supplier**, first match wins:
      a. **Master sheet** (`SOURCING_SHEET_ID`) ASINs tab **col N** (Buy Link,
@@ -5075,7 +5080,7 @@ sequential phases over one NDJSON progress stream
         same helper the Buy Link column edit uses. A **targeted read** of the
         tab, deliberately NOT the insert-only sourcing sync, which would try
         to create rows of its own.
-     b. Else **Orders sheet col E** (supplier, a bare domain like
+     b. Else the newest PO's supplier in AF (was Orders sheet col E; a bare domain like
         `macys.com`) → `supplier` = the domain, `buy_link` = `https://` +
         domain, after trimming, lowercasing, and stripping any leading
         `http(s)://` or `www.`.
@@ -5996,7 +6001,7 @@ existing integration (PO sync → `actual_cogs`/`prep_override`, Velocity
 export, SB COGS export, sourcing-cost export). Nothing repoints to these
 tables until the cutover layer, and each repoint gets its own dry-run.
 
-**Sheet sync patch (2026-10-16, `docs/claude_spec-patch-po-sheet-sync.md`,
+**Sheet sync patch (2026-10-16 — history: Sync POs was removed 2026-11-13; `docs/claude_spec-patch-po-sheet-sync.md`,
 pre-flight `docs/po-sheet-sync-preflight-2026-10-16.md`).** The one-time
 importer became a repeatable sync: the ASINs-page **Sync POs** button now
 syncs the whole Orders sheet into these tables (new POs inserted, existing
@@ -6119,7 +6124,7 @@ Maria). The entry form must preserve order; never sort these lists.
 Everything the Orders sheet still carried that AF lacked, so the sheet can be
 retired. Money stays in dollars (no `_cents` twins — Maria 2026-10-31);
 NULL = not recorded, never 0 on import. Schema only; the data backfills run
-from `npm run backfill:po-model` (dry run by default, `--live` after the
+from `npm run backfill:po-model` (removed 2026-11-13 with the sheet scripts; the backfills ran 2026-10-31 / 11-01; dry run by default, `--live` after the
 production dry run is reviewed; idempotent — rows already present are
 skipped). **No stored COGS / AQ / AR / Y value is ever recomputed.**
 
@@ -7098,16 +7103,15 @@ The importer is a frozen one-off as of 2026-10-16 (it ran once, 773 POs);
 its assembly is ported verbatim into the sync below, which is the live
 path. Do not extend the script.
 
-### Sync from the Orders sheet (`server/po-sheet-sync.ts`, 2026-10-16)
+### Sync from the Orders sheet (`server/po-sheet-sync.ts`, 2026-10-16 — REMOVED 2026-11-13)
 
-> **Intake-only since 2026-10-18** (§22 "AF owns POs"): Sync POs inserts
-> every sheet PO not in AF and not tombstoned — the Insert, Canceled-POs
-> (new-PO half), history and fail-closed rules below still apply to that
-> insert — and **never writes an existing PO**. The Update, Deletes and
-> auto-close-interaction bullets below describe the sheet-wins era and no
-> longer run; the drift they would have applied is counted
-> (`counts.sheetDiffers`, listed with kind `drift`) and reported in the
-> toast as "M existing differ from the sheet (AF owns them — not applied)".
+> **Removed 2026-11-13** (retirement commit 3): the module, `POST /api/sheets/sync`, the ASINs-page button and
+> `script/sync-pos.ts` are deleted; nothing reads the sheet. On production the intake last inserted a PO on 2026-10-24
+> (order date 2026-10-23) and the prep-drift apply changed one row ever (havalon.com `no_poid_at_checkout`
+> B00D79EODK, prep 0.00 → 1.00, 2026-11-12). Everything below is the record of how the intake worked:
+> intake-only from 2026-10-18 (§22 "AF owns POs") — it inserted every sheet PO not in AF and not tombstoned and never
+> wrote an existing one (the Update / Deletes / auto-close bullets are the earlier sheet-wins era; drift was counted
+> as `counts.sheetDiffers`, never applied).
 
 `syncPoSheet({ sheetId, dryRun })` — called by `POST /api/sheets/sync`
 (the ASINs-page **Sync POs** button) ahead of the per-ASIN COGS sync
@@ -7123,7 +7127,7 @@ returns the plan with nothing written.
 - **Insert:** a PO not in AF is inserted exactly as the importer did
   (`source = 'sheet_import'`, Amazon SKU from `asins.primary_sku` at
   insert time, `item_discount = 0`).
-- **Col P (2026-10-29):** every live run also replaces
+- **Col P (2026-10-29; retired 2026-11-13, migration 110 drops the table):** every live run also replaced
   `po_sheet_fba_shipments` (per supplier, order, ASIN, row position, FBA
   id, qty) from Col P in one multi-row insert (column arrays through
   `unnest`) — a shipment-matching signal for §26 component A,
@@ -7296,7 +7300,7 @@ before Velocity's `shipped_at`.
   while Velocity had them as multi-packs — Velocity's component units ÷ 1
   linked e.g. 46 "shipped" against 24 ordered (PO 126768935, Anchor
   Hocking 2-pack).
-- **Col P (2026-10-29).** Sync POs reads the Orders sheet's Col P (FBA
+- **Col P (2026-10-29 — retired 2026-11-13, migration 110; a line it placed resolves through its recorded link, and the Col P-hidden dry run of 2026-11-13 placed 1072/1072 lines).** Sync POs read the Orders sheet's Col P (FBA
   Shipment ID, "FBA19H4BCJP4 (4), FBA19H4BK2W6 (4)"; `[ ]` notes stripped,
   ids inside them ignored; bare id → qty NULL) into
   `po_sheet_fba_shipments` (migration 071), a full replace on every live
@@ -7330,11 +7334,11 @@ before Velocity's `shipped_at`.
   supplier) on the exact key (`alias`); the **normalized** order #
   (`server/order-number.ts`: a free-text prefix such as "Confirmation #"
   dropped, uppercase, `[A-Z0-9]` only; each id of a two-id AF order_id)
-  + ASIN, exactly one row (`normalized`); Col P for a no-Order # line.
+  + ASIN, exactly one row (`normalized`).
   *Units pass*, once every other placement is known, oldest Velocity
   order first, one decision per Velocity order (split shipments sum):
-  Col P for a line whose Order # AF lacks — the row must also **fit** the
-  units (ASIN qty × pack − units already placed ≥ the line's units); the
+  (Col P, retired 2026-11-13, came first here.) Every rule must **fit** the
+  units (ASIN qty × pack − units already placed ≥ the line's units): the
   **base** order # (without `_N` / `-N`, 1–2 digits) + ASIN, exactly one
   row that fits (`base_id`); the **candidate rule** — same ASIN, supplier
   via alias (any when blank, none when unresolved), PO date within ±30
@@ -7343,16 +7347,16 @@ before Velocity's `shipped_at`.
   **Nothing is ever placed past Ordered by these rules** (the production
   dry run caught Col P alone placing CAR118805142_1 at 10 of 5). Every
   units-pass link is recorded like a picker link
-  (`shipment_unmatched.resolved_po_asin_id`, `match_reason` col_p /
-  base_id / candidate_unique) plus one `po_edit_log` row (entity
+  (`shipment_unmatched.resolved_po_asin_id`, `match_reason`
+  base_id / candidate_unique; `col_p` on rows from before 2026-11-13, read as a recorded link) plus one `po_edit_log` row (entity
   `shipment`, field `link`, user NULL), so later runs keep it.
 - Not resolvable → `shipment_unmatched` (`no_order` | `po_not_found`), one
-  row per line, updated on re-sync, with its ranked `candidates` (Col P
-  rows, or the candidate rule's top 5 with Δdays and units left) or a
+  row per line, updated on re-sync, with its ranked `candidates` (the
+  candidate rule's top 5 with Δdays and units left) or a
   `nearest_miss` sentence (the order # is in AF without this ASIN / no AF
   PO has the ASIN / the retailer is not mapped / only other suppliers /
   nearest PO N days away / PO X has R units left / base PO fully shipped
-  / the Col P row has no room); stamped `resolved_at` (with `match_reason`)
+  ); stamped `resolved_at` (with `match_reason`)
   when it later resolves by rule or through the picker
   (`resolved_po_asin_id` is honoured by every later run).
 - **One-time backfill** (`npm run backfill:shipment-matching`, dry run by
@@ -7433,7 +7437,7 @@ hidden when empty): only `no_order` / `po_not_found` lines no rule could
 place, and the exact-tie `ambiguous` case. Nothing else lands there by
 design (Maria 2026-10-17: the point of the patch is to remove manual
 reconciliation). PO matching (2026-10-29): each line shows its ranked
-candidates as one-click "Link to <order #>" buttons (Col P, or "Δd · N
+candidates as one-click "Link to <order #>" buttons ("Δd · N
 left"), else its nearest miss; the free-text "Link to PO ASIN" picker
 stays as override; an unmapped Velocity retailer gets "Map → supplier"
 (`POST /api/supplier-aliases`, source `manual`); ticked lines → "Dismiss
@@ -7450,7 +7454,7 @@ up (PO 71160468: Velocity order 71160468, 90, and the blank-number order
 #8596 / 94cdd620, 30 = 120). Every Velocity matcher asks the link first:
 - **Sync Shipments (component A):** order of checks — hand pin (migration
   060), **link**, picker / rule link recorded on `shipment_unmatched`, then
-  the order # rules, Col P, base order #, §4. A linked order's shipped
+  the order # rules, base order #, §4. A linked order's shipped
   lines go to its row (`linesLinked`); its pack size counts for that row;
   **Received by Velocity / At Prep** look the link up by Velocity order id,
   so an order counts whether it is inbound, in inventory or shipped, summed
@@ -7487,7 +7491,7 @@ up (PO 71160468: Velocity order 71160468, 90, and the blank-number order
 - **Backfill** (`tsx script/backfill-velocity-order-links.ts [--add <velocity
   #>=<po_asin_id>]… [--prod] [--live]`, dry run by default; a plan only on
   a database without migration 099): every `shipment_unmatched` picker link
-  becomes an order link; Col P / base order # / candidate links stay
+  becomes an order link; base order # / candidate links stay
   automatic. Velocity #4530 (chewy.com, B002CZLOIS) was deleted in Velocity
   and is ignored.
 
@@ -7499,7 +7503,7 @@ matched nothing). The PO is flagged: `purchase_orders.velocity_home_orders`
 names the Velocity orders (#8785), which raises **Review Velocity**
 "Velocity has an order for a Home PO" (§26) until ships_to is corrected or
 the review is cleared by hand (`velocity_home_cleared_at`; a new Velocity
-order on it reopens it). Base order #, Col P, §4 candidates and the
+order on it reopens it). Base order #, §4 candidates and the
 picker's suggestions still skip Home POs (2026-10-29).
 
 **Backfill (§6), local 2026-10-17:** 57 Velocity shipments, 822 lines →
@@ -7597,9 +7601,9 @@ reconstructed (those POs are Closed from the sheet).
 
 ### AF owns POs (patch `docs/claude_spec-patch-po-af-owned.md`, 2026-10-18)
 
-AF is the system of record for every PO once it exists; the Orders sheet
-only supplies new POs (Sync POs' intake, above) until the AI-prefill intake
-replaces it. Migration 061 adds `po_edit_log`, `deleted_pos` and
+AF is the system of record for every PO once it exists. The Orders sheet
+supplied new POs (Sync POs' intake, above) until 2026-10-23; Capture PO and
+the New PO form are the intakes, and since 2026-11-13 nothing reads the sheet. Migration 061 adds `po_edit_log`, `deleted_pos` and
 `purchase_orders.entry_seq`.
 
 - **"Newest" PO** everywhere = `order_date DESC, entry_seq DESC NULLS
@@ -8171,12 +8175,12 @@ renames or moves a file, and never deletes one it did not create** (Maria
 
 | Field | Owner |
 |---|---|
-| `purchase_orders` / `po_asins` / `po_line_items` (every field) | **AF** (2026-10-18, "AF owns POs" above) — the PO module UI and the auto-close rule. The Orders sheet only inserts POs that are not in AF and not tombstoned; it never writes an existing one (drift counted, not applied) |
+| `purchase_orders` / `po_asins` / `po_line_items` (every field) | **AF** (2026-10-18, "AF owns POs" above) — the PO module UI and the auto-close rule. The Orders sheet is history (its intake ran until 2026-10-23, removed 2026-11-13) |
 | `po_line_items.action_items`, `qty_canceled`; `purchase_orders.closed_at`, `closed_by` | **AF**: the ASIN / product Action Items editors, Cancel ASIN / Cancel PO / the product qty-canceled cell, the Closed toggle, the auto-close rule. The intake sets them once, on insert, from the row-level Status mapping. `closed_by = 'sheet'` remains on history only. `purchase_orders.action_items` is deprecated, written by nothing. **Since PO table v2 (2026-10-29, migration 074) the items live in `po_line_action_items`; `po_line_items.action_items` is dead too** |
 | **`po_asins.qty_at_prep`** | **Shipment sync (component A)** — Σ Velocity `quantity_remaining` ÷ units_per_pack; NULL when no Velocity line references the key (D6). Overwritten every Sync Shipments; not hand-editable. |
 | **`po_asins.received_velocity`** | **Shipment sync (component A)** — Σ Velocity `quantity_received` ÷ units_per_pack, the cumulative check-in count (Received by Velocity, 2026-11-02); NULL when no Velocity line references the key. Overwritten every Sync Shipments; not hand-editable. |
 | **`po_asins.qty_shipped_supplier`, `qty_at_warehouse`, `qty_lost_damaged_us`** | **AF-owned**: the inline quantity editor today; email tracking (§26) records tracking numbers, not quantities, so far. Never the importer, never a sync. |
-| **`purchase_orders.ships_to`**, **`po_tracking`** | **AF-owned** (§26): Ships to on the PO / New PO form; set from Col AS prep by Sync POs on insert, and moved by it when Col AS prep changes on an existing PO (the §14 prep exception, 2026-10-29); tracking rows from the Gmail ingest, the Tracking tab (add, Move to PO…) and the unmatched queue. |
+| **`purchase_orders.ships_to`**, **`po_tracking`** | **AF-owned** (§26): Ships to on the PO / New PO form; (the sheet-era rule — set from Col AS prep by Sync POs on insert and moved when Col AS changed, the §14 prep exception — ended 2026-11-13); tracking rows from the Gmail ingest, the Tracking tab (add, Move to PO…) and the unmatched queue. |
 | **`po_asins.qty_shipped_fba`, `qty_received_amazon`** | **Trigger-maintained** from `po_asin_shipments` — Shipped FBA from Velocity rows (component A), Received by Amazon from the SC allocation (component B); manual rows add to both. |
 | `po_asin_shipments` (`source = 'velocity'`), `velocity_shipments`, `sc_inbound_*` | **Shipment sync-owned**: component A writes the row and `qty_shipped` / `shipped_at`; component B writes `fba_shipment_ids`, `sc_match`, `qty_received`. Hand edits only through the Unmatched picker. A `po_asins` row with shipment rows survives leaving the sheet. |
 | `po_asin_shipments` (`source = 'manual'`) | AF-owned: hand-entered rows from the Shipment IDs chip (home-shipped POs); the only rows the chip can delete. |
@@ -8212,11 +8216,7 @@ the first consumer of the PO module outside the POs page.
 3. Invoice file upload (indicator → stored file)
 4. POs-by-ASIN cross-PO view
 5. Cutover — **readers repointed 2026-10-18** ("AF owns POs"); still open:
-   **Orders-sheet retirement** (the follow-on patch, po-ai-prefill §10: Sync
-   POs intake, the prep-drift apply, Push to Aura's PO-sheet read, the
-   hourly PO-sheet COGS component, Export SB COGS, Col P as the matcher's
-   backup signal, the §11 PO mirror sheet; import the Missing Orders tab;
-   drop `purchase_orders.payment_method` / `promo` once the backfills are
+   **Orders-sheet retirement — DONE 2026-11-13** (`docs/claude_spec-patch-orders-sheet-retirement.md`: Sync POs intake, the prep-drift apply, Col P and the dead `google_sheet_id` key removed; Push to Aura and component 9 had read AF since 2026-10-18; Export SB COGS keeps its dated per-PO periods (D2 amended); the §11 mirror was `GOOGLE_SHEET_ID` itself; read access stays as the D8 safety net); still open: import the Missing Orders tab (untouched, D7); drop `purchase_orders.payment_method` / `promo` once the backfills are
    verified); POs sub-nav
 6. Later: gift-card ledger, ~~subscription alerts~~ (§27, 2026-10-31),
    Velocity bundles, %-type product discounts, §15 FIFO/lots, pre-2026
@@ -9456,10 +9456,10 @@ it to 4/7 would have offered 35 extra creates (Apr 7 – Jul 28 POs Velocity
 never had) and 141 skips (production, 2026-10-22), so it is not moved. The New PO form derives its
 Ships to default the same way (`shipsToFromForm`: any product with prep >
 0 → Velocity), editable; the server uses the rule when the form sends none.
-**Sync POs intake (2026-10-29)** sets it on insert by the same rule from
-Col AS (`maxSheetPrep`); it used to fall to the column default 'velocity'.
-When Col AS later changes on an existing PO, Sync POs applies the prep and
-ships_to follows (§14 ownership exception).
+The Sync POs intake (2026-10-29 → 2026-11-13, removed) set it on insert by
+the same rule from Col AS and moved it when Col AS prep changed on an existing
+PO (the §14 exception; applied once on production). Since 2026-11-13 prep and
+ships_to are set on the PO in AF only.
 Local data 2026-10-22: prep > 0 starts in April 2026 (75 April POs), so
 the local `VELOCITY_MIN_ORDER_DATE = 7/30/2026` flags 269 pre-cutoff
 POs, a May 1 cutoff 75.

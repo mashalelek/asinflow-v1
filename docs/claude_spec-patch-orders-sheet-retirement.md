@@ -7,9 +7,9 @@ the AF form are the two intakes. This patch removes every remaining AF
 read of the sheet, one at a time, each with its AF-side replacement
 proven first.*
 
-> **Status: DRAFT 2026-11-12, for Maria's approval.** Probe (commit 0) can
-> run read-only in a second Claude Code session while claims commit 5 is
-> in flight.
+> **Status: DONE 2026-11-13.** Probe 2026-11-13 (read-only); commit 1 `6234fde`; the Actual COGS clearing `a278169`;
+> commit 3 `456acf5` (migration 110); commit 4 = the docs. Commit 2 was not needed (D2 amended, D3 already true).
+> Still open, separate steps: the D8 unplug (remove the share, delete the sheet config), the Missing Orders tab (D7).
 
 ## 1. Decisions (Maria 2026-11-12)
 
@@ -17,14 +17,17 @@ proven first.*
   and the prep-drift apply (the one sheet-owned field after intake; its
   whole record is two changes, one of them wrong). Prep and ships_to are
   set on the PO in AF only.
-- **D2 — Export SB COGS = ASIN Actual COGS + prep, from AF. Period.** Not
-  what the export reads from the sheet today; that is irrelevant. Same two
-  fields Push to Aura already sends (`actual_cogs + prep_override`).
-- **D3 — Push to Aura reads AF only** (its PO-sheet read for the selection
-  goes).
+- **D2 — AMENDED 2026-11-13: Export SB COGS is unchanged.** The probe showed it has read AF's PO tables
+  (`loadAfPoRows`) since 2026-10-18 and emits SellerBoard's dated per-PO cost periods for 2026 (`cogs + prep` per PO
+  row, same-day merges, the fractional-pack collapse) — not one value per ASIN. Its latest period equals
+  `actual_cogs + prep_override` for 868 of 888 ASINs; the 18 differences are the collapse / merge rules and two
+  newest-PO rows with 0 expected units (`docs/orders-sheet-probe-sb-cogs-diff-2026-11-13.csv`). It keeps its periods.
+- **D3 — Push to Aura reads AF only** — already true: its "PO sheet read" has been `syncAsinCostsFromPos` over AF's
+  PO tables since 2026-10-18 (probe 2026-11-13); only the comments said sheet.
 - **D4 — Col P backup signal dropped** from the shipment matcher: Velocity
   order links (migration 099) cover the no-order-# case.
-- **D5 — §11 PO mirror sheet dropped.**
+- **D5 — §11 PO mirror sheet dropped.** The probe found the mirror IS `GOOGLE_SHEET_ID` (the `IMPORTRANGE` copy
+  "AsinFlow - Purchase Orders"), not a second spreadsheet: it went with `readPoSheet` in commit 3.
 - **D6 — RESOLVED 2026-11-13: the hourly component stays, as the backstop;
   it reads AF, not the sheet.** The probe showed that `asin_estimates.
   actual_cogs` has exactly two writers — `runSheetsSync` (component 9 every
@@ -52,14 +55,14 @@ proven first.*
 
 | Reader | Today | After |
 |---|---|---|
-| Sync POs intake (ASINs toolbar + scheduled) | inserts new sheet POs; reads Col BA at intake | removed; button gone |
-| Prep-drift apply (Option 2, 2026-10-29) | copies a changed Col AS onto existing POs | removed |
+| Sync POs intake (ASINs toolbar only — it was never scheduled) | inserted new sheet POs (last on production 2026-10-24, order date 2026-10-23); read `A1:AZ1` + `A2:AZ` — **no Col BA read ever existed** (the range ends at AZ) | removed (commit 3) |
+| Prep-drift apply (Option 2, 2026-10-29) | copied a changed Col AS onto existing POs — one row ever on production (havalon.com B00D79EODK, 2026-11-12) | removed (commit 3) |
 | Hourly COGS component (9) | has read AF's PO tables since 2026-10-18 (probe, 2026-11-13) | kept as the backstop (D6); renamed "Actual COGS from AF POs", key `09_po_sheet` kept for the ledger |
-| Export SB COGS | sheet column(s) | AF: ASIN Actual COGS + prep |
-| Push to Aura | reads the PO sheet for the selection | AF only |
-| Col P matcher signal (`po_sheet_fba_shipments`, 071) | backup for Velocity lines with no order # | removed; table dropped after a last check that no unmatched line still needs it |
-| §11 PO mirror sheet | IMPORTRANGE mirror | removed from code and docs |
-| Anything else the probe finds (settings keys, scripts, tests reading the sheet fixture) | | listed, then removed |
+| Export SB COGS | AF's PO rows (`loadAfPoRows`) since 2026-10-18 | unchanged (D2 amended) |
+| Push to Aura | AF (`syncAsinCostsFromPos`) since 2026-10-18 | unchanged (D3 already true) |
+| Col P matcher signal (`po_sheet_fba_shipments`, 071) | backup for Velocity lines with no order #; 50 recorded `col_p` links, two lines placed only by it today | removed, table dropped (migration 110) after the two lines got Velocity order links and the Col P-hidden dry run placed 1072/1072 |
+| §11 PO mirror sheet | `GOOGLE_SHEET_ID` itself (the IMPORTRANGE copy) | gone with `readPoSheet`; documented as history in §11 |
+| Anything else the probe finds | the never-read settings key `google_sheet_id`; ten one-off scripts (`sync-pos`, `diag-orders-for-aura`, `po-cogs-review`, `backfill-po-model`, `import-po-2026`, `backfill-pack-size`, `reimport-po-fractional-qty`, `verify-sheet-rows`, `verify-velocity-export`, `backfill-po-entry-seq`); tests mocked the sheet (no fixture file) | key deleted by migration 110; scripts, `server/po-sheet-sync.ts`, `po-import-classify.ts`, `po-cogs-review.ts` and their tests deleted (commit 3) |
 
 ## 3. Commits
 
@@ -91,13 +94,17 @@ proven first.*
    the real schema, rolled back: create, edit cost (a manual Est. COGS
    stays), cancel the latest PO (falls back to the previous PO's cost), a
    backdated PO does not win; the route wiring is asserted by label.
-2. Export SB COGS from AF (D2); the before/after CSV from the probe
-   re-run; Push to Aura from AF (D3).
-3. Sync POs off: intake, prep drift, button, scheduler entries; Col P
-   signal off; mirror sheet off; sheet settings keys and the sheet client
-   left in place but unreferenced (D8).
-4. SPEC §11 / §14 / §22 / §26, CLAUDE.md: the sheet is history-only; the
-   "sheet is intake" wording goes.
+2. ~~Export SB COGS from AF (D2); Push to Aura from AF (D3).~~ Not needed (D2 amended, D3 already true). In its
+   place, 2026-11-13 (`a278169`): **Actual COGS cleared when every PO ASIN row for the ASIN is fully canceled**
+   (`clearCostsOfFullyCanceledAsins`, the 32-ASIN dry run `docs/actual-cogs-clear-dry-run-2026-11-13.csv`), in the
+   after-save sync and the hourly backstop; Est. COGS stays; every reader handles the null.
+3. **Done 2026-11-13 (`456acf5`).** Sync POs off: intake, prep drift, button, `POST /api/sheets/sync`,
+   `script/sync-pos.ts` (there were no scheduler entries); Col P signal off, `po_sheet_fba_shipments` dropped
+   (migration 110); the dead `google_sheet_id` settings key deleted; the ten sheet scripts and their tests removed;
+   `GOOGLE_SHEET_ID` and the sheet client (`server/sheet-read.ts`, `server/google-sheets.ts`) left in place,
+   unreferenced (D8).
+4. **Done 2026-11-13.** SPEC §11 / §14 / §22 / §26, CLAUDE.md: the sheet is history-only; the "sheet is intake"
+   wording is gone.
 
 Stops: after 0 (done), and for anything the probe finds that this patch
 doesn't cover (1's dry run was not needed: the rule already used order

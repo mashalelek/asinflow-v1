@@ -19,10 +19,10 @@ This app runs on the following stack. This is settled. Do not suggest alternativ
 ### What exists and is working (do NOT rebuild or remove):
 - PostgreSQL persistence — all ASIN data, estimates, sales, inventory, tags, settings stored in DB
 - Schema: `database/schema_baseline_2026-10-15.sql` plus `database/migrations/` — reference these for all table structures (`docs/SCHEMA.md` never existed in this repo)
-- Google Sheets API integration — the Orders (PO tracker) sheet is **intake only** for new POs (Sync POs inserts a PO not yet in AF and never updates one; 2026-10-18 — **one exception, 2026-10-29: Col AS prep cost**, applied to an existing PO when it differs, with ships_to following; SPEC §14). COGS, cost, prep and supplier come from AF's PO tables (`purchase_orders` / `po_asins` / `po_line_items`, via `server/po-af-source.ts`), not from the sheet
+- Google Sheets API integration — the Orders (PO tracker) sheet is **history only since 2026-11-13** (`docs/claude_spec-patch-orders-sheet-retirement.md`): no code path reads it; Sync POs, the prep-drift apply and the Col P signal are gone; `GOOGLE_SHEET_ID`, `server/sheet-read.ts` and `server/google-sheets.ts` stay unreferenced as the D8 safety net. The Sourcing sheet and the ER leads sheet are different spreadsheets and are still read. COGS, cost, prep and supplier come from AF's PO tables (`purchase_orders` / `po_asins` / `po_line_items`, via `server/po-af-source.ts`)
 - SP-API integrations: catalog data, pricing, inventory (`getInventorySummaries`), sales (flat file orders report), listings restrictions, suppression (FYP report)
 - Scheduled refresh passes: 00:00 ET with the daily block, hourly 04–23 ET (`server/scheduler/schedule.ts`, gated by `ENABLE_CRONS=true`; off locally)
-- Toolbar buttons: Upload File, Analyze, Sync PO, Sync Inventory, Sync Sales
+- Toolbar buttons: Upload File, Analyze, Sync Inventory, Sync Sales (Sync POs removed 2026-11-13)
 - Date range selector with presets
 - Three view presets: Full View, Replenishment, Sourcing
 - Combined Product cell with image, ASIN, SKU, title, icons (SAS, Keepa, meltable, hazmat, suppressed, catalog status)
@@ -72,7 +72,7 @@ This app runs on the following stack. This is settled. Do not suggest alternativ
 - `psql asinflow` — connect to the local database
 
 ### COGS priority:
-1. AF's PO tables — the newest non-canceled PO ASIN row's cost / unit, prep and supplier (`syncAsinCostsFromPos` in `server/asin-po-costs.ts` reading `loadAfAsinCostMap`; newest = order date, then entry sequence, then created_at) → `cogs_source = 'af_po'` (migration 109, was `po_sheet`). **Since 2026-11-13 every PO write — create, edit, lines, money rows, cancel, any claim change — runs that sync for the PO's ASINs in the same request after the transaction commits (`withCostSync` in `server/routes.ts`; a failure is logged, never fails the save); component 9 is the hourly backstop.** The Google Sheet is intake for new POs only; AF owns every PO after it exists (SPEC §11 banner, §14, §22 "AF owns POs").
+1. AF's PO tables — the newest non-canceled PO ASIN row's cost / unit, prep and supplier (`syncAsinCostsFromPos` in `server/asin-po-costs.ts` reading `loadAfAsinCostMap`; newest = order date, then entry sequence, then created_at) → `cogs_source = 'af_po'` (migration 109, was `po_sheet`). **Since 2026-11-13 every PO write — create, edit, lines, money rows, cancel, any claim change — runs that sync for the PO's ASINs in the same request after the transaction commits (`withCostSync` in `server/routes.ts`; a failure is logged, never fails the save); component 9 is the hourly backstop.** The Orders sheet is history since 2026-11-13; AF owns every PO (SPEC §11 banner, §14, §22 "AF owns POs"). **An ASIN whose every PO ASIN row is fully canceled has its Actual COGS, `cogs`, `cogs_source` and prep override cleared by the same sync (2026-11-13, `clearCostsOfFullyCanceledAsins`); Est. COGS stays.**
 2. CSV upload → `cogs_source = 'csv'`
 3. Manual entry → `cogs_source = 'manual'`
 
@@ -442,7 +442,7 @@ goes on the queue.** Add to SC checks gating live INLINE through
 `server/gating-probe.ts` — the same writer component 8 uses — with no jobs
 row (decision 9, confirmed by test: `putListingsItem` accepts a gated
 ASIN). Push to Aura runs the cost half inline (`syncAsinCostsFromPos`, scoped — it
-reads AF's PO tables since 2026-10-18, not the sheet) then pushes. Sync POs, Export SB COGS, Update COGS in SC, Verify now,
+reads AF's PO tables since 2026-10-18, not the sheet) then pushes. Export SB COGS, Update COGS in SC, Verify now,
 Recheck now, Park/Unpark/Mark dead/Revive stay direct calls; Sync Sourcing
 and Upload File keep their inline sheet/CSV step and only the onboarding
 Refresh they spawn is a job. `jobs.components` (migration 053) remains for
@@ -501,16 +501,16 @@ to open one batch does not carry to the next.
 Shipment sync A and the tracking matcher auto-link only when exactly one
 PO fits; several → a review row with ranked candidates, none → a review row
 with the reason (SPEC §14, §26). Any rule that places Velocity units on a
-PO ASIN row without an exact order-# key — Col P on a line whose Order #
-AF lacks, the base order #, the candidate rule — must pass the units fit
+PO ASIN row without an exact order-# key — the base order #, the candidate
+rule — must pass the units fit
 (ordered × pack − units already placed ≥ the line's units). A new matching
 rule is dry-run on production and its link list checked for Shipped >
 Ordered before `--live` (the 2026-10-29 dry run caught two). Order-#
 handling lives in `server/order-number.ts`; retailer → supplier in
 `server/supplier-aliases.ts` — don't add a third copy.
 
-A Col P hit that fails the fit is a hint, not a verdict: the line still
-falls through to the base order # and candidate rules. Every rule, and the
+(Col P, the sheet's FBA-id signal, was retired 2026-11-13 with the Orders
+sheet; a line it placed resolves through its recorded link.) Every rule, and the
 picker's suggestions, skip a PO with `ships_to = 'home'` or an order date
 before `tracking.velocity_start_date` (`velocityIneligible` in
 `server/shipment-match.ts`); the picker's free-text search still lists it,
