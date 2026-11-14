@@ -32,7 +32,7 @@ describe("stateSentence — one plain sentence, never 'waiting' before the repor
     expect(sentence(base({ reported_at: "2026-11-05", outcome: "gift_card", supplier_confirmed_at: "2026-10-28T12:00:00Z", remaining: 42, received: 42 }))).toBe("Gift card confirmed 10/28 · check the gift card · short by $42.00");
     expect(sentence(base({ reported_at: "2026-11-05", outcome: "refund_card", supplier_confirmed_at: "2026-10-28T12:00:00Z" }))).toBe("Refund confirmed 10/28 · check the card");
     expect(sentence(base({ reported_at: "2026-11-05", outcome: "replacement", replacement_shipped_at: "2026-10-29" }))).toBe("Replacement shipped 10/29 · not arrived");
-    expect(sentence(base({ reported_at: "2026-11-05", return_required: true, tasks: [done("send_label", "2026-11-10T12:00:00Z")] }))).toBe("Label sent 11/10 · return not shipped yet");
+    expect(sentence(base({ reported_at: "2026-11-05", return_required: true, tasks: [done("send_label", "2026-11-10T12:00:00Z")] }))).toBe("Label sent 11/10 · waiting for the first carrier scan");
     expect(sentence(base({ reported_at: "2026-11-05", outcome: "write_off", tasks: [open("dispose_units")], qty: 18 }))).toBe("write-off · ask Velocity to dispose 18 units");
     expect(sentence(base({ status: "closed", closed_at: "2026-11-09", outcome: "refund_card" }))).toBe("Closed 11/9 · refund to card");
     expect(sentence(base({ status: "dismissed" }))).toBe("Dismissed");
@@ -49,9 +49,11 @@ describe("primaryAction — ONE button per row, Dismiss / Snooze where they appl
     const want: Record<string, [string, string | null]> = {
       review_suggestion: ["Open claim", "dismiss"], confirm_outcome: ["Confirm outcome", null], enter_quantity: ["Enter quantity", null], contact_supplier: ["Contacted supplier", null],
       follow_up_supplier: ["Followed up", "snooze"], confirm_reship_order: ["Add order #", null], send_label: ["Sent label", null], tell_velocity_replacement: ["Told Velocity", null],
-      dispose_units: ["Asked", null], update_velocity_order: ["Updated", null], refund_received: ["Refund received", null], replacement_arrived: ["Arrived", null], upload_return_label: ["Upload label", null], check_on_it: ["Check on it", "snooze"],
+      dispose_units: ["Asked", null], update_velocity_order: ["Updated", null], refund_received: ["Refund received", null], replacement_arrived: ["Arrived", null], upload_return_label: ["Upload label", "no_label"], check_on_it: ["Check on it", "snooze"],
       // supplier emails (commit 6, §3.11): Attach / Not this claim, Keep waiting / Set outcome, Reopen / Nothing to do
       read_reply: ["Keep waiting", "set_outcome"], review_email_match: ["Attach", "not_this"], closed_claim_email: ["Reopen", "nothing"],
+      // returns (commit 7, §3.12 row 2): a home PO's return
+      drop_off_return: ["Dropped off", null],
     };
     for (const k of CLAIM_TASK_KINDS) {
       // a contact_supplier task only means something on an unreported claim (one derivation, Maria 2026-11-12)
@@ -85,13 +87,15 @@ describe("stepActions — every step of every path has a handler", () => {
     expect(handlers(base({ outcome: "replacement", reported_at: "2026-11-05", ships_to: "home" })).map((x) => x[0])).not.toContain("tell_velocity");
     expect(stepActions(base({ outcome: "replacement" })).find((s) => s.key === "tell_velocity")!.handler).toEqual({ type: "task", task: "tell_velocity_replacement" });
   });
-  it("return path adds label · sent · shipped · delivered (the last two wait for commit 7); write-off path; emailed cancellation", () => {
-    expect(handlers(base({ return_required: true }))).toEqual([["found", "edit_found"], ["reported", "contact"], ["answered", "reply"], ["label", "task"], ["label_sent", "task"], ["return_shipped", "none"], ["return_delivered", "none"], ["confirmed", "confirm"], ["received", "refund"], ["closed", "write_off"]]);
+  it("return path adds label · sent · shipped · delivered, each settable by hand (commit 7); write-off path; emailed cancellation", () => {
+    expect(handlers(base({ return_required: true }))).toEqual([["found", "edit_found"], ["reported", "contact"], ["answered", "reply"], ["label", "return_label"], ["label_sent", "task_dated"], ["return_shipped", "return_date"], ["return_delivered", "return_date"], ["confirmed", "confirm"], ["received", "refund"], ["closed", "write_off"]]);
+    // a home PO's second step is Dropped off (drop_off_return)
+    expect(stepActions(base({ return_required: true, ships_to: "home" })).find((s) => s.key === "label_sent")).toMatchObject({ label: "Dropped off", handler: { type: "task_dated", task: "drop_off_return" } });
     expect(handlers(base({ outcome: "write_off", status: "closed", closed_at: "2026-11-09", tasks: [open("dispose_units")] }))).toEqual([["found", "edit_found"], ["reported", "contact"], ["written_off", "write_off"], ["dispose", "task"], ["closed", "write_off"]]);
     expect(handlers(base({ kind: "canceled", found_by: "email" }))).toEqual([["found", "edit_found"], ["confirmed", "confirm"], ["received", "refund"], ["closed", "write_off"]]);
-    // every step everywhere carries a handler type, and only the two commit-7 steps are "none"
+    // every step everywhere carries a handler, none is "none" any more (commit 7 gave the return steps theirs)
     for (const c of [base(), base({ outcome: "replacement" }), base({ return_required: true }), base({ outcome: "write_off" }), base({ kind: "canceled", found_by: "email" })]) {
-      for (const s of stepActions(c)) { expect(s.handler.type).toBeTruthy(); if (s.handler.type === "none") expect(["return_shipped", "return_delivered"]).toContain(s.key); }
+      for (const s of stepActions(c)) expect(s.handler.type, s.key).not.toBe("none");
     }
   });
 });

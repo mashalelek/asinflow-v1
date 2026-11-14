@@ -1,0 +1,118 @@
+{
+  "id": "trk_zzreuse0002",
+  "object": "Tracker",
+  "mode": "test",
+  "tracking_code": "1Z999ZZ90312114999",
+  "status": "in_transit",
+  "status_detail": "",
+  "created_at": "2026-11-10T16:00:00Z",
+  "updated_at": "2026-11-12T18:00:00Z",
+  "signed_by": null,
+  "weight": null,
+  "est_delivery_date": "2026-11-16T00:00:00Z",
+  "shipment_id": null,
+  "carrier": "UPS",
+  "tracking_details": [
+    {
+      "object": "TrackingDetail",
+      "message": "Order processed",
+      "description": "",
+      "status": "pre_transit",
+      "status_detail": "",
+      "datetime": "2026-10-01T12:00:00Z",
+      "source": "FedEx",
+      "carrier_code": "",
+      "tracking_location": {
+        "object": "TrackingLocation",
+        "city": null,
+        "state": null,
+        "country": null,
+        "zip": null
+      }
+    },
+    {
+      "object": "TrackingDetail",
+      "message": "Departed",
+      "description": "",
+      "status": "in_transit",
+      "status_detail": "",
+      "datetime": "2026-10-02T08:00:00Z",
+      "source": "FedEx",
+      "carrier_code": "",
+      "tracking_location": {
+        "object": "TrackingLocation",
+        "city": "HOUSTON",
+        "state": "TX",
+        "country": "US",
+        "zip": null
+      }
+    },
+    {
+      "object": "TrackingDetail",
+      "message": "Delivered",
+      "description": "",
+      "status": "delivered",
+      "status_detail": "",
+      "datetime": "2026-10-04T15:30:00Z",
+      "source": "FedEx",
+      "carrier_code": "",
+      "tracking_location": {
+        "object": "TrackingLocation",
+        "city": "LA GRANDE",
+        "state": "OR",
+        "country": "US",
+        "zip": null
+      }
+    },
+    {
+      "object": "TrackingDetail",
+      "message": "Picked up",
+      "description": "",
+      "status": "in_transit",
+      "status_detail": "",
+      "datetime": "2026-11-12T18:00:00Z",
+      "source": "FedEx",
+      "carrier_code": "",
+      "tracking_location": {
+        "object": "TrackingLocation",
+        "city": "LA GRANDE",
+        "state": "OR",
+        "country": "US",
+        "zip": null
+      }
+    }
+  ],
+  "carrier_detail": {
+    "object": "CarrierDetail",
+    "service": "First-Class Package Service",
+    "container_type": null,
+    "est_delivery_date_local": null,
+    "est_delivery_time_local": null,
+    "origin_location": "HOUSTON TX, 77001",
+    "origin_tracking_location": {
+      "object": "TrackingLocation",
+      "city": "NORTH HOUSTON",
+      "state": "TX",
+      "country": null,
+      "zip": "77315"
+    },
+    "destination_location": "CHARLESTON SC, 29401",
+    "destination_tracking_location": null,
+    "guaranteed_delivery_date": null,
+    "alternate_identifier": null,
+    "initial_delivery_attempt": null
+  },
+  "delivery_evidence": [],
+  "finalized": true,
+  "is_return": false,
+  "public_url": "https://track.easypost.com/zz",
+  "fees": [
+    {
+      "object": "Fee",
+      "type": "TrackerFee",
+      "amount": "0.02000",
+      "charged": false,
+      "refunded": false
+    }
+  ]
+}

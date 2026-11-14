@@ -206,8 +206,10 @@ describe("§3.11 rows, end to end (real schema, rolled back)", () => {
       const ev = d.events.find((x) => x.type === "label_saved")!;
       expect(ev).toMatchObject({ gmail_message_id: "fx-row6-return-label", summary: expect.stringContaining("Return label received · from email") });
       const r = await row(q, id);
-      expect(r.tasks.filter((t) => !t.done_at).map((t) => t.kind)).toEqual(["contact_supplier"]); // nothing new to do
-      line("6", `"${e.subject}"`, r, "nothing (commit 7 sends it)", "document return_label on the claim");
+      // commit 7 (§3.12 row 1): the label starts the return — the return-by date read from the email, Send label to Velocity opened
+      expect(r.tasks.filter((t) => !t.done_at).map((t) => t.kind)).toEqual(["contact_supplier", "send_label"]);
+      expect(r.return_by).toBe("2026-11-30");
+      line("6", `"${e.subject}"`, r, "Sent label (commit 7)", "document return_label on the claim · return by 11/30 · send_label");
     });
   });
   it("row 7: an unknown sender naming an open claim's order # → the banner + a Decide row; Attach adds it as a supplier reply", async (ctx) => {

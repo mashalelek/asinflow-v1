@@ -172,6 +172,7 @@ async function loadRows(query: QueryLike, poId?: string): Promise<RowFacts[]> {
               AND NOT EXISTS (SELECT 1 FROM po_line_expected le WHERE le.po_id = p.id AND COALESCE(le.expected_product, 0) > 0)) AS canceled_or_returned
        FROM po_tracking t JOIN purchase_orders p ON p.id = t.po_id
       WHERE t.status IN ('matched', 'pushed', 'push_failed', 'held') AND t.tracking_number NOT LIKE 'email:%'
+        AND t.direction = 'inbound' -- a return's tracking (claims commit 7) is never pushed to Velocity: nothing there writes to Velocity
         ${poId ? "AND t.po_id = $1" : ""}
       ORDER BY t.po_id, t.id`,
     poId ? [poId] : [],

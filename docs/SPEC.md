@@ -6270,6 +6270,44 @@ goes to …") became a real filter condition — the filter ignored it before.
 > a reply's subject after "Order" from the supplier's own domain; cancellation wording goes to commit 5; order
 > confirmations and gift-card wording are never refunds (patch §3.11 notes 1–5).
 
+> **Returns (commit 7, 2026-11-13, patch §3.12 — the acceptance table rows 1–12 are the spec and the test; the mockups
+> `docs/mockups/claims-list-returns-2026-11-13.html` / `claim-detail-returns-2026-11-13.html` are the UI; migration 113):**
+> `server/claim-returns.ts`. A return label by email (§3.11 row 6 saves the PDF) starts the return on the claim —
+> `return_required`, the tracking # / carrier and the return-by date read by regex (every Walmart template of the 90-day
+> probe: "FEDEX tracking number …", "Return by Mon, Nov 30"; Haiku reads an uploaded PDF only when nothing was typed,
+> logged `claim_return_label`), a `po_tracking` row `direction = return` with `claim_id` (the ingest's parked copy of the
+> number, `match_reason 'return'`, is adopted; a number the inbound leg carries gets a second row — the unique key is
+> carrier + number + direction), registered with EasyPost `is_return` by component 31, and the next hand's task:
+> `send_label` (Velocity PO, Needs attention › Velocity: "Return label saved M/D · from email · send it to Velocity ·
+> return by M/D" + **label** / **copy message**) or `drop_off_return` (home PO, Money and arrivals: "… ships from home ·
+> drop off by M/D"). No label yet → `upload_return_label` ("A return is needed · no label yet": **Upload label** = PDF /
+> image to the Invoices month folder, or **No label** = `return_no_label`, tracking typed or none). Sent label /
+> Dropped off (dated ticks) → Waiting on Velocity / Waiting on shipment "waiting for the first carrier scan". Every
+> EasyPost write (registration, webhook, sweep) runs `applyReturnTracker`: only the scans ON OR AFTER THE LABEL'S DAY
+> count (the §3.9 reuse case: the inbound leg's delivery never does) — the first movement scan ticks **Shipped**
+> (`return_shipped_at`, source `tracking`, entry "FedEx … picked up in Florence, SC · due M/D · from tracking", Waiting on
+> shipment "Return shipped M/D · FedEx in transit · due M/D · from tracking", timer from the last scan), the delivery
+> ticks **Delivered** (Waiting on supplier "Return delivered M/D · from tracking · waiting for the refund confirmation"),
+> a carrier exception opens Check on it with the reason. Stalls (label sent / dropped off / in transit / delivered, 5
+> business days) are Check on it in every bucket, never Follow up: "Label sent to Velocity M/D · no carrier scan in 5
+> business days". Row 9: the return-by date 3 calendar days away or past and not shipped → Check on it "return by M/D ·
+> N days left" once per date (`return_by_warned`), spoken before the Send label task. Row 10 (no tracking): Walmart's
+> "Return pickup confirmation" → Shipped from email (the pickup date; a scan corrects it), "We received your return" →
+> Delivered from email, a pickup reminder fills a blank return-by date; otherwise Shipped / Delivered by hand in Steps.
+> Precedence on every return date: **manual** (Steps / the Return card, `POST /api/pos/claims/:id/return`) is never
+> overwritten by tracking, tracking never by a later email, email by a later email. The Return card (detail, between
+> Steps and Linked, while `return_required`): ships from, units, return by + source, the label (download), the
+> tracking (carrier page), the carrier's word (status · place · due), **Download label**, **Copy message for Velocity**
+> (clipboard only — "Please ship back N units of <product> (<ASIN>) from order <order #> using the attached label. It has
+> to go out by <date>."; AF sends nothing, D13), the edit (return by, tracking #). Row 11: `return_required` off removes
+> the return steps, the card and its open tasks. Row 12: the commit-2b auto-tick (Shipped / Delivered at confirmation)
+> is gone; the claims it had ticked keep their dates with source `confirmation` ("set at confirmation, before tracking";
+> 0 on production 2026-11-13). The Velocity push never reads a return row (`direction = 'inbound'`); nothing here writes
+> to Velocity. Tests: `shared/claim-paths.test.ts` (the return path), `server/claim-returns.test.ts` (the readings),
+> `server/claim-returns.db.test.ts` (the 12 rows + the reuse / hand-set / overdue cases, real schema, rolled back) on the
+> scrubbed email fixtures `server/__fixtures__/claim-emails/ret*.json` and the return tracker fixtures
+> `server/__fixtures__/easypost/tracker-return-*.json` / `tracker-reuse-*.json` (modeled on the recorded test-key shape).
+
 A **supplier claim** is the one record for a supplier problem on a PO line (D1): **missing** · **damaged** ·
 **wrong_item** · **expired** · **never_received** · **cant_sell** · **canceled** · **returned** (D2). It replaces
 the supplier defects of migration 094 (`po_line_defects` → `supplier_claims`, every column widened per the patch

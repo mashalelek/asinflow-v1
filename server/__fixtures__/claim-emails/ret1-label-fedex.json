@@ -1,0 +1,22 @@
+{
+ "mailbox": "orders@coastalqualitygoods.com",
+ "threadId": null,
+ "direction": "in",
+ "forwarded": false,
+ "to": "orders@coastalqualitygoods.com",
+ "toDomain": "coastalqualitygoods.com",
+ "from": "zz Test <help@zz-test.com>",
+ "fromDomain": "zz-test.com",
+ "id": "fx-ret1-label-fedex",
+ "attachments": [
+  {
+   "filename": "return-label.pdf",
+   "mimeType": "application/pdf",
+   "attachmentId": "att-1",
+   "size": 2048
+  }
+ ],
+ "date": "2026-11-10T15:34:35.000Z",
+ "subject": "Drop off your return at FedEx by Mon, Nov 30",
+ "text": "Return Initiated: [zz soap, 2 Count]\nOrder number: ZZ4471188\nBring your item to a FedEx Office to complete your return\nPlease drop off your item at an eligible FedEx Office location by Mon, Nov 30 to complete your return.\nWe will issue your refund once you drop off the item with the carrier.\nReturn Instructions\nRepackage the items.\nPrint and attach the prepaid label at the end of this email.\nDrop off at an eligible FedEx location.\n1 item to return\nFEDEX tracking number 528889999001\nReturn by Mon, Nov 30\nzz soap, 2 Count\nQty: 8\nReturn item to initiate refund\nZZCARD ending in 6830\n$5.97\nOnce the refund is issued it can take up to 7 days to post the funds back to your card."
+}

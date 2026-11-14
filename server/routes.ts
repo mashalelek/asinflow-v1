@@ -17,6 +17,8 @@ import { clearExtraUnits } from "./extra-units";
 import { writeLineItems, loadActionItemLines } from "./line-action-items";
 import { addClaim, editClaim, linkRefund, unlinkRefund, setOutcome, reopenClaim, dismissClaim, removeClaim, loadClaims, loadOpenClaimSummaries, briefOf, doneTask, cancelLines, snoozeTask, confirmSupplier, addRefundReceived, writeOffRemainder, recordContact, recordReply, clearOutcome, editEvent, removeEvent, mergeClaims } from "./supplier-claims";
 import { loadClaimsPage, bucketCounts, sweepClaimTimers, claimDetail, CLAIM_KIND_FILTERS, refundsDueTotal } from "./claim-buckets";
+import { setReturnFacts, noLabel, uploadReturnLabel } from "./claim-returns";
+import { documentRouteDeps } from "./po-documents-routes";
 import { velocityIneligible, ineligibleText } from "./shipment-match";
 import { readVelocityStartDate } from "./ships-to-backfill";
 import { evaluateAutoClose, setPoClosedManually, parseQtyInput, MANUAL_QTY_COLUMNS, type ManualQtyColumn, type AutoCloseOutcome } from "./po-close";
@@ -4411,6 +4413,18 @@ export async function registerRoutes(
   claimRoute("post", "/api/pos/claims/:id/merge", (q, req) => mergeClaims(q, Number(req.params.id), Number((req.body ?? {}).into), uid(req)));
   claimRoute("post", "/api/pos/claims/:id/refund-received", (q, req) => addRefundReceived(q, Number(req.params.id), req.body ?? {}, uid(req)));
   claimRoute("post", "/api/pos/claims/:id/write-off-remainder", (q, req) => writeOffRemainder(q, Number(req.params.id), String((req.body ?? {}).reason ?? ""), uid(req)));
+  // Returns (claims commit 7, §3.12): the Return card / Steps by hand (return by, Sent / Dropped off, Shipped, Delivered, the tracking #), No label, Upload label.
+  claimRoute("post", "/api/pos/claims/:id/return", (q, req) => setReturnFacts(q, Number(req.params.id), req.body ?? {}, uid(req)));
+  claimRoute("post", "/api/pos/claims/:id/no-label", (q, req) => noLabel(q, Number(req.params.id), req.body ?? {}, uid(req)).then((r) => ({ ...r, po_id: undefined })));
+  app.post("/api/pos/claims/:id/return-label", (req: Request, res: Response, next) => {
+    upload.single("file")(req, res, (err: any) => { if (err) return res.status(err.code === "LIMIT_FILE_SIZE" ? 413 : 400).json({ message: err.code === "LIMIT_FILE_SIZE" ? "The file is over 10 MB" : String(err.message ?? err) }); next(); });
+  }, async (req: Request, res: Response) => {
+    if (!isDbAvailable()) { res.status(503).json({ message: "Database not available" }); return; }
+    const file = (req as any).file as { buffer: Buffer; mimetype: string; originalname: string } | undefined;
+    if (!file) { res.status(400).json({ message: "No file" }); return; }
+    const b = req.body ?? {};
+    await sendGuarded(res, () => withPoTx((q) => uploadReturnLabel(q, documentRouteDeps.drive(), Number(req.params.id), file, { carrier: b.carrier ?? null, tracking_number: b.tracking_number ?? null, return_by: b.return_by ?? null }, uid(req), { imageToPdf: documentRouteDeps.imageToPdf })));
+  });
   // The Claims page (SPEC §22 "Supplier claims" §5, commit 2): every claim with its derived bucket; the timer sweep runs first so
   // the buckets are current when read. Filters: supplier, kind, po (order # or id).
   app.get("/api/claims", async (req: Request, res: Response) => {

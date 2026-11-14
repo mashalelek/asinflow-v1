@@ -1,0 +1,22 @@
+{
+ "mailbox": "orders@coastalqualitygoods.com",
+ "threadId": null,
+ "direction": "in",
+ "forwarded": false,
+ "to": "orders@coastalqualitygoods.com",
+ "toDomain": "coastalqualitygoods.com",
+ "from": "zz Test <help@zz-test.com>",
+ "fromDomain": "zz-test.com",
+ "id": "fx-ret10-pickup",
+ "attachments": [
+  {
+   "filename": "return-label.pdf",
+   "mimeType": "application/pdf",
+   "attachmentId": "att-1",
+   "size": 2048
+  }
+ ],
+ "date": "2026-11-10T21:36:02.000Z",
+ "subject": "Return pickup confirmation: Thu, Nov 12",
+ "text": "Pickup scheduled between 9am \u2013 7pm.\nYour return pickup is scheduled\nHi Maria,\nTo confirm, the return pickup you requested is scheduled for Thu, Nov 12 between 9am \u2013 7pm .\nRepackage the items.\nPrint and attach the prepaid label at the end of this email.\nFedEx will stop by during the scheduled window to pick up.\nRefund overview\nPending item return\nZZCARD ending in 9510\n$5.97\nOrder number ZZ4471188\nScheduled pickup\nFedEx tracking number 798199999003\nzz soap, 2 Count\nQty: 1\n$5.97"
+}

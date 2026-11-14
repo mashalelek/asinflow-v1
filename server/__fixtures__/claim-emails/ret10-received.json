@@ -1,0 +1,15 @@
+{
+ "mailbox": "orders@coastalqualitygoods.com",
+ "threadId": null,
+ "direction": "in",
+ "forwarded": false,
+ "to": "orders@coastalqualitygoods.com",
+ "toDomain": "coastalqualitygoods.com",
+ "from": "zz Test <help@zz-test.com>",
+ "fromDomain": "zz-test.com",
+ "id": "fx-ret10-received",
+ "attachments": [],
+ "date": "2026-11-16T23:59:03.000Z",
+ "subject": "We received your return",
+ "text": "We received your return\nHello Maria,\nGood news \u2013 we received your return. Your refund is on its way.\nOriginal order number ZZ4471188\nzz soap, 2 Count\nQty: 1\n$5.97"
+}

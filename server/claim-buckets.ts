@@ -10,12 +10,13 @@ import { CLAIM_KINDS, REFUND_OUTCOMES } from "@shared/supplier-claim";
 import { claimSteps, daysSince, deriveBucket, nextAction, type BucketResult, type ClaimBucket, type ClaimStep } from "@shared/claim-bucket";
 import { stateSentence, primaryAction, needsAttentionGroup, stepActions, whatHappensNext, type PrimaryAction, type UiStep } from "@shared/claim-ui";
 import { addTask, loadClaimEvents, loadClaims, type ClaimEvent, type ClaimRow } from "./supplier-claims";
+import { sweepReturnByWarnings } from "./claim-returns";
 
 export interface ClaimPageRow extends ClaimRow {
   bucket: ClaimBucket; bucket_since: string | null; due_at: string | null; timed_out: boolean; days_in_bucket: number | null;
   steps: ClaimStep[]; step: string; next_action: string;
   /** §5 amended 2026-11-12 (the mockups): the one-sentence state, the Do column's primary button, the Needs attention group, the steps with handlers, what happens next. */
-  sentence: string; action: PrimaryAction; group: string | null; ui_steps: UiStep[]; next: Array<{ when: "Now" | "Then"; text: string }>; days_open: number | null;
+  sentence: string; action: PrimaryAction; group: string | null; ui_steps: UiStep[]; next: Array<{ when: "Now" | "Then" | "Or" | "If it stalls"; text: string }>; days_open: number | null;
 }
 export interface ClaimsPageFilters { supplier?: string | null; kind?: string | null; po?: string | null }
 
@@ -69,6 +70,8 @@ export async function sweepClaimTimers(query: QueryLike, now = new Date(), userI
     await query(`INSERT INTO supplier_claim_events (claim_id, type, summary, by) VALUES ($1, 'timed_out', $2, $3)`, [c.id, b.timeout.reason, userId]);
     created.push({ claim_id: c.id, kind: b.timeout.kind, reason: b.timeout.reason });
   }
+  // §3.12 row 9: the return-by date 3 calendar days away (or past) and the return not shipped → Check on it, once per date
+  for (const w of await sweepReturnByWarnings(query, now, userId)) created.push(w);
   return created;
 }
 
@@ -81,7 +84,7 @@ export interface ClaimDetail {
   /** Placeholders until commits 6–7 (emails, labels, return tracking): what this claim has linked today. */
   linked: {
     documents: Array<{ id: number; type: string; file_name: string; drive_file_id: string | null }>;
-    tracking: Array<{ id: number; carrier: string | null; tracking_number: string | null; direction: string | null; status: string | null; carrier_status?: string | null; delivered_at?: string | null }>;
+    tracking: Array<{ id: number; carrier: string | null; tracking_number: string | null; direction: string | null; status: string | null; carrier_status?: string | null; delivered_at?: string | null; est_delivery_at?: string | null; last_scan_at?: string | null; last_scan_location?: string | null }>;
     /** The PO's inbound tracking (not only the claim's own rows) and the Velocity order(s) of the claim's ASIN row (§5 Linked). */
     po_tracking: Array<{ id: number; carrier: string | null; tracking_number: string | null; carrier_status: string | null; delivered_at: string | null }>;
     velocity: Array<{ velocity_order_id: string; asin: string }>;
@@ -98,7 +101,7 @@ export async function claimDetail(query: QueryLike, id: number, now = new Date()
   const refunds = (await query(`SELECT id, amount, method, refunded_at::text AS refunded_at, note, po_line_item_id FROM po_line_refunds WHERE po_id = $1 ORDER BY refunded_at NULLS LAST, id`, [c.po_id])).rows.map((r: any) => ({ ...r, id: Number(r.id) }));
   const others = (await loadClaims(query, { poId: String(c.po_id) })).filter((o) => o.id !== id && isSplitTarget(o)).map((o) => ({ id: o.id, kind: o.kind, asin: o.asin, line_no: o.line_no, qty: o.qty, amount_owed: o.amount_owed, outcome: o.outcome, remaining: o.remaining }));
   const documents = (await query(`SELECT id, type, file_name, drive_file_id FROM po_documents WHERE claim_id = $1 ORDER BY id`, [id])).rows.map((d: any) => ({ ...d, id: Number(d.id) }));
-  const tracking = (await query(`SELECT id, carrier, tracking_number, direction, status, carrier_status, delivered_at::text AS delivered_at FROM po_tracking WHERE claim_id = $1 ORDER BY id`, [id])).rows.map((t: any) => ({ ...t, id: Number(t.id) }));
+  const tracking = (await query(`SELECT id, carrier, tracking_number, direction, status, carrier_status, delivered_at::text AS delivered_at, est_delivery_at::text AS est_delivery_at, last_scan_at::text AS last_scan_at, last_scan_location FROM po_tracking WHERE claim_id = $1 ORDER BY id`, [id])).rows.map((t: any) => ({ ...t, id: Number(t.id) }));
   const poTracking = (await query(`SELECT id, carrier, tracking_number, carrier_status, delivered_at::text AS delivered_at FROM po_tracking WHERE po_id = $1 AND direction = 'inbound' AND tracking_number NOT LIKE 'email:%' ORDER BY id`, [c.po_id])).rows.map((t: any) => ({ ...t, id: Number(t.id) }));
   const velocity = c.po_line_item_id
     ? (await query(`SELECT v.velocity_order_id, pa.asin FROM velocity_order_links v JOIN po_asins pa ON pa.id = v.po_asin_id JOIN po_line_items l ON l.po_asin_id = pa.id WHERE l.id = $1`, [c.po_line_item_id])).rows

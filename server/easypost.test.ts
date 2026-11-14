@@ -40,6 +40,8 @@ function fakeEasypost(calls: Array<{ method: string; path: string; body?: any }>
 function fakeQuery(rows: any[], writes: Array<{ sql: string; params: any[] }> = []) {
   return async (sql: string, params?: any[]) => {
     if (/^\s*SELECT t\.id, t\.carrier, t\.tracking_number, t\.direction/.test(sql)) return { rows, rowCount: rows.length };
+    // the return sync's read (claims commit 7: the return rows carrying the tracker) — no return rows here
+    if (/^\s*SELECT/.test(sql)) return { rows: [], rowCount: 0 };
     writes.push({ sql: sql.replace(/\s+/g, " ").trim(), params: params ?? [] });
     const code = String(params?.[5] ?? "");
     const n = rows.filter((r) => String(r.tracking_number).toUpperCase() === code || r.easypost_tracker_id === params?.[0]).length;
@@ -226,7 +228,8 @@ describe("the webhook", () => {
   });
   it("a signed tracker.updated stores the status on every row with the tracker id; unsigned, wrong-secret and no-secret events are 401 and store nothing", async () => {
     const writes: any[] = [];
-    const query = async (sql: string, params?: any[]) => { writes.push({ sql, params }); return { rows: [], rowCount: 2 }; };
+    // the return sync's read (commit 7) is not a write
+    const query = async (sql: string, params?: any[]) => { if (/^\s*SELECT/.test(sql)) return { rows: [], rowCount: 0 }; writes.push({ sql, params }); return { rows: [], rowCount: 2 }; };
     const s = await serve(query, SECRET);
     try {
       const body = event(fx("tracker-delivered"));

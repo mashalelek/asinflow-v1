@@ -41,6 +41,8 @@ import { posNamedInText, orderTokens, normOrder, orderIdParts, matchOrderId } fr
 import { suggestClaim, existingClaims, type Suggestion } from "./claim-suggestions";
 import { addTask, confirmSupplier, doneTask, recordContact, recordReply, logClaimEvent, stampEventEmail } from "./supplier-claims";
 import { ensureMonthFolder, uploadPdf } from "./drive-client";
+import { attachReturnLabel, readReturnEmail, type ReturnEmailReading } from "./claim-returns";
+import { mdOf as mdIso } from "@shared/claim-bucket";
 import { logEdits } from "./po-edit";
 import type { QueryLike } from "./scheduler/types";
 
@@ -162,6 +164,8 @@ export function firstLine(text: string): string {
 export interface ClaimRef {
   id: number; po_id: string; po_line_item_id: string | null; kind: string; status: string; outcome: string | null;
   amount_owed: number | null; remaining: number | null; reported_at: string | null; supplier_confirmed_at: string | null; source_email_id: string | null;
+  /** A return on the claim (commit 7): a label / pickup / received email lands on it first. */
+  return_required?: boolean;
 }
 export interface MatchContext {
   pos: readonly PoRef[]; claims: readonly ClaimRef[]; suppliers: readonly string[];
@@ -190,6 +194,8 @@ export interface EmailPlan {
   needsAi: boolean;
   quiet: boolean;
   labelPdf: EmailAttachment | null;
+  /** A return email's reading (commit 7, §3.12): the kind, the tracking #, the return-by / pickup date. */
+  ret?: ReturnEmailReading | null;
 }
 
 const SHORT_ID_IN_SUBJECT = /\border\s*(?:#|no\.?|number)?\s*:?\s*([A-Za-z0-9][A-Za-z0-9-]{3,})/i;
@@ -274,14 +280,26 @@ export function planClaimEmail(e: ClaimEmail, cls: Classified, ctx: MatchContext
     return { ...base, label: sup.supplier ? "refund / credit, PO not found" : "refund / credit from an unknown sender", why: how || (sup.supplier ? "no order # named" : "unknown sender, no order #") };
   }
 
-  // Return label / progress: rows 6, 8.
+  // Return label / progress: rows 6, 8 — and the return itself (commit 7, §3.12 rows 1 / 2 / 3 / 10): the label starts the
+  // return on the claim (tracking #, carrier, return-by read by regex), a scheduled pickup / "we received your return" set
+  // Shipped / Delivered from email, a pickup reminder fills the return-by date.
   if (cls.family === "return_label" || cls.family === "return_other") {
     if (!po) return { ...base, label: `${cls.family === "return_label" ? "return label" : "return progress"}, no PO`, why: how || "no order # named" };
-    const open = openOn(ctx, po.id), closed = closedOn(ctx, po.id);
-    const target = open[0] ?? closed[0] ?? null;
-    if (!target) return { ...base, po, label: `${cls.family === "return_label" ? "return label" : "return progress"}, PO without a claim`, why: how, sets: "nothing (a return claim is commit 7)" };
-    if (cls.family === "return_label" && target.status === "open") return { ...base, row: 6, po, claim: target, label: "return label / pickup", why: how, sets: cls.labelPdf ? `return_label document "${cls.labelPdf.filename}" on #${target.id} + "Return label received · from email"` : `"Return label received · from email" on #${target.id} (no PDF attached — linked)` };
-    return { ...base, row: 8, po, claim: target, quiet: true, label: `${cls.template.replace("subject: ", "")} on #${target.id} (${target.status}) — quiet`, why: how, sets: `timeline entry on #${target.id}, no task` };
+    const open = notDismissed(ctx, e.id, openOn(ctx, po.id)), closed = closedOn(ctx, po.id);
+    // the claim already on a return path first, else the PO's first open claim
+    const target = open.find((c) => c.return_required) ?? open[0] ?? closed[0] ?? null;
+    if (!target) return { ...base, po, label: `${cls.family === "return_label" ? "return label" : "return progress"}, PO without a claim`, why: how, sets: "nothing (no claim on the PO)" };
+    const ret = readReturnEmail({ subject: e.subject, text: e.text, date: e.date });
+    const read = [ret.trackingNumber ? `${ret.carrier ?? "?"} ${ret.trackingNumber}` : "no tracking #", ret.returnBy ? `return by ${mdIso(ret.returnBy)}` : "no return-by date", ret.pickupDate ? `pickup ${mdIso(ret.pickupDate)}` : null].filter(Boolean).join(", ");
+    if (target.status === "open" && (ret.kind === "label" || ret.kind === "pickup" || ret.kind === "store")) {
+      return { ...base, row: 6, po, claim: target, ret, label: ret.kind === "store" ? "store return (no label)" : ret.kind === "pickup" ? "return pickup scheduled" : "return label", why: `${how}; ${read}`,
+        sets: `${cls.labelPdf ? `return_label document "${cls.labelPdf.filename}" on #${target.id}` : ret.kind === "store" ? `No label on #${target.id}` : `"Return label received · from email" on #${target.id} (no PDF attached)`} · return_required${ret.trackingNumber ? ` · return tracking ${ret.carrier ?? ""} ${ret.trackingNumber} (EasyPost)` : ""}${ret.returnBy ? ` · return by ${mdIso(ret.returnBy)}` : ""}${ret.pickupDate ? ` · Shipped ${mdIso(ret.pickupDate)} from email (the first scan corrects it)` : ""} · ${po.ships_to === "home" ? "drop_off_return" : "send_label"}` };
+    }
+    if (target.status === "open" && target.return_required && (ret.kind === "received" || ret.kind === "reminder")) {
+      return { ...base, row: 6, po, claim: target, ret, label: ret.kind === "received" ? "return received by the supplier" : "return pickup reminder", why: `${how}; ${read}`,
+        sets: ret.kind === "received" ? `Delivered ${md} · from email on #${target.id} (a hand-set or tracking date stands)` : `return by ${ret.returnBy ? mdIso(ret.returnBy) : "?"} on #${target.id} when none is set · attached quietly` };
+    }
+    return { ...base, row: 8, po, claim: target, quiet: true, ret, label: `${cls.template.replace("subject: ", "")} on #${target.id} (${target.status}) — quiet`, why: how, sets: `timeline entry on #${target.id}, no task` };
   }
 
   // Feedback / case resolved: attached quietly to the claim (open or closed), row 8's quiet kinds.
@@ -426,7 +444,26 @@ export async function applyEmailPlan(query: QueryLike, e: ClaimEmail, p: EmailPl
     }
     case 6: {
       const c = p.claim!;
-      let docId: number | null = null, what = "linked";
+      const ret = p.ret ?? readReturnEmail({ subject: e.subject, text: e.text, date: e.date });
+      const email = { id: e.id, mailbox: e.mailbox, subject: e.subject };
+      // row 10: "we received your return" → Delivered from email (never over a hand-set or tracking date); a pickup reminder fills the return-by date
+      if (ret.kind === "received" || ret.kind === "reminder") {
+        const cur = (await query(`SELECT return_delivered_at, return_delivered_source, return_by::text AS return_by, return_by_source FROM supplier_claims WHERE id = $1`, [c.id])).rows[0];
+        if (ret.kind === "received" && cur && (cur.return_delivered_at == null || cur.return_delivered_source === "email")) {
+          await query(`UPDATE supplier_claims SET return_delivered_at = $2::timestamptz, return_delivered_source = 'email', updated_at = now() WHERE id = $1`, [c.id, e.date.toISOString()]);
+          await query(`INSERT INTO supplier_claim_events (claim_id, at, type, summary, by, gmail_message_id, mailbox) VALUES ($1, $2::timestamptz, 'return_delivered', $3, NULL, $4, $5)`, [c.id, e.date.toISOString(), `${subject} · from email`, e.id, e.mailbox]);
+          await logEdits(query, c.po_id, null, "claim", String(c.id), [{ field: "claim return_delivered_at", old: cur.return_delivered_at ? new Date(cur.return_delivered_at).toISOString().slice(0, 10) : null, new: `${when} (email)` }]);
+          return { row: 6, claim_id: c.id, what: `return delivered ${md} from email on #${c.id}` };
+        }
+        if (ret.kind === "reminder" && ret.returnBy && cur && cur.return_by_source !== "manual" && cur.return_by !== ret.returnBy) {
+          await query(`UPDATE supplier_claims SET return_by = $2::date, return_by_source = 'email', return_by_warned = NULL, updated_at = now() WHERE id = $1`, [c.id, ret.returnBy]);
+          await logEdits(query, c.po_id, null, "claim", String(c.id), [{ field: "claim return_by", old: cur.return_by, new: ret.returnBy }]);
+        }
+        await query(`INSERT INTO supplier_claim_events (claim_id, type, summary, by, gmail_message_id, mailbox) VALUES ($1, 'email_attached', $2, NULL, $3, $4)`, [c.id, `${subject} · ${md} · from email${ret.returnBy && ret.kind === "reminder" ? ` · return by ${mdIso(ret.returnBy)}` : ""}`, e.id, e.mailbox]);
+        return { row: 6, claim_id: c.id, what: `${ret.kind === "received" ? "return received (a hand-set / tracking date stands)" : "pickup reminder"} attached to #${c.id}` };
+      }
+      // rows 1 / 2 / 3: the label (its PDF saved as a return_label document), the tracking # and the return-by date, the return started on the claim
+      let docId: number | null = null, what = "label linked";
       const save = deps.saveLabel ?? (deps.drive ? async (name: string, pdf: Buffer, ymd: string) => uploadPdf(deps.drive!, (await ensureMonthFolder(deps.drive!, ymd)).id, name, pdf) : null);
       if (p.labelPdf && save && (deps.attachment || deps.gmail)) {
         const bytes = deps.attachment ? await deps.attachment(e, p.labelPdf) : await fetchAttachment(deps.gmail!, e.id, p.labelPdf);
@@ -437,8 +474,9 @@ export async function applyEmailPlan(query: QueryLike, e: ClaimEmail, p: EmailPl
           docId = Number(row.id); what = `return_label document ${name}`;
         }
       }
-      await query(`INSERT INTO supplier_claim_events (claim_id, type, summary, by, gmail_message_id, mailbox, po_document_id) VALUES ($1, $2, $3, NULL, $4, $5, $6)`, [c.id, docId ? "label_saved" : "email_attached", `Return label received · from email · ${subject}${docId ? "" : " (no PDF attached)"}`, e.id, e.mailbox, docId]);
-      return { row: 6, claim_id: c.id, what: `${what} on #${c.id}` };
+      const labelSource = docId ? "email" : ret.kind === "store" || !ret.trackingNumber ? "none" : "email";
+      const a = await attachReturnLabel(query, c.id, { labelSource, labelAt: e.date.toISOString(), docId, carrier: ret.carrier, trackingNumber: ret.trackingNumber, returnBy: ret.returnBy, returnBySource: "email", pickupDate: ret.pickupDate, email, trackingSource: "regex", note: ret.kind === "store" ? "store return" : null }, null);
+      return { row: 6, claim_id: c.id, what: `${what} on #${c.id}${a.tracking_id ? ` · return tracking ${ret.carrier ?? ""} ${ret.trackingNumber}` : ""}${a.return_by ? ` · return by ${mdIso(a.return_by)}` : ""}${a.task ? ` · ${a.task}` : ""}` };
     }
     case 8: {
       const c = p.claim!;
@@ -513,7 +551,7 @@ export async function loadMatchContext(query: QueryLike): Promise<Omit<MatchCont
   const platforms = (settings.find((s: any) => s.key === PLATFORM_SENDERS_KEY)?.value as string[] | undefined) ?? DEFAULT_PLATFORM_SENDERS;
   const pos: PoRef[] = (await query(`SELECT p.id, p.supplier, p.order_id, p.order_date::text AS order_date, p.alt_order_ids, p.ships_to, (p.closed_at IS NOT NULL) AS closed FROM purchase_orders p`)).rows
     .map((x: any) => ({ id: String(x.id), supplier: String(x.supplier), order_id: String(x.order_id), order_date: x.order_date, alt_order_ids: x.alt_order_ids, ships_to: x.ships_to, closed: x.closed }));
-  const claims: ClaimRef[] = (await query(`SELECT c.id, c.po_id, c.po_line_item_id, c.kind, c.status, c.outcome, c.amount_owed, c.reported_at::text AS reported_at, c.supplier_confirmed_at::text AS supplier_confirmed_at, c.source_email_id,
+  const claims: ClaimRef[] = (await query(`SELECT c.id, c.po_id, c.po_line_item_id, c.kind, c.status, c.outcome, c.amount_owed, c.reported_at::text AS reported_at, c.supplier_confirmed_at::text AS supplier_confirmed_at, c.source_email_id, c.return_required,
       GREATEST(0, COALESCE(c.amount_owed, 0) - COALESCE((SELECT SUM(COALESCE(x.amount_applied, r.amount)) FROM supplier_claim_refunds x JOIN po_line_refunds r ON r.id = x.po_line_refund_id WHERE x.claim_id = c.id), 0)) AS remaining
     FROM supplier_claims c`)).rows.map((c: any) => ({ ...c, id: Number(c.id), po_id: String(c.po_id), po_line_item_id: c.po_line_item_id == null ? null : String(c.po_line_item_id), amount_owed: c.amount_owed == null ? null : Number(c.amount_owed), remaining: c.amount_owed == null ? null : Number(c.remaining) }));
   const seen = new Set<string>();
@@ -597,7 +635,7 @@ export async function ingestClaimEmails(opts: { query: QueryLike; deps: ClaimEma
         // the context follows the writes within the pass: a claim opened / suggested / confirmed changes the next email's row
         if (a.claim_id != null) {
           (ctx.seen as Set<string>).add(e.id);
-          const fresh = (await query(`SELECT id, po_id, po_line_item_id, kind, status, outcome, amount_owed, reported_at::text AS reported_at, supplier_confirmed_at::text AS supplier_confirmed_at, source_email_id FROM supplier_claims WHERE id = $1`, [a.claim_id])).rows[0];
+          const fresh = (await query(`SELECT id, po_id, po_line_item_id, kind, status, outcome, amount_owed, reported_at::text AS reported_at, supplier_confirmed_at::text AS supplier_confirmed_at, source_email_id, return_required FROM supplier_claims WHERE id = $1`, [a.claim_id])).rows[0];
           if (fresh) { const i = ctx.claims.findIndex((c) => c.id === Number(fresh.id)); const ref: ClaimRef = { ...fresh, id: Number(fresh.id), po_id: String(fresh.po_id), amount_owed: fresh.amount_owed == null ? null : Number(fresh.amount_owed), remaining: fresh.amount_owed == null ? null : Number(fresh.amount_owed) }; if (i >= 0) (ctx.claims as ClaimRef[])[i] = ref; else (ctx.claims as ClaimRef[]).push(ref); }
         }
       } catch (err: any) { applied = `error: ${err?.message ?? err}`; opts.log?.(`claim email ${e.id} (${p.row}): ${err?.message ?? err}`); }

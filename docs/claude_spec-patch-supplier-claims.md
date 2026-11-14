@@ -18,6 +18,12 @@ units wording), run first.*
 
 ## 0. Change log
 
+**2026-11-13 (Maria) — commit 7, returns (§3.12):** acceptance table and
+mockups approved. The return's own tracking ticks Shipped and Delivered
+(replaces the temporary auto-tick); a Return card on the claim; "Copy
+message for Velocity"; home POs get Dropped off; a return-by date read
+from the label email warns 3 days before it passes.
+
 **2026-11-13 (Maria) — commit 6, supplier emails (§3.11):** acceptance
 table and mockups approved. Every supplier reply lands in Needs attention
 until read; an exact-match refund email sets the outcome and confirms by
@@ -563,6 +569,89 @@ and `server/claim-emails.db.test.ts` (every table row end to end on the
 real schema, rolled back, the printed table is the report's; plus two open
 claims on one PO, a duplicate email, an email on a dismissed claim).
 
+### 3.12 Returns (commit 7; Maria 2026-11-13)
+
+**The mockups are the UI:** `docs/mockups/claims-list-returns-2026-11-13.html`
+and `docs/mockups/claim-detail-returns-2026-11-13.html` (the two approved
+Claims pages, same stylesheet; new: the Return card in the detail's left
+column, the return rows and their wording). Where a mockup and this text
+differ, the mockup wins.
+
+**Acceptance table** (approved; it is the test, filled in in the report):
+
+| # | What happens | AF does by itself | Maria sees | Maria does |
+|---|---|---|---|---|
+| 1 | Label arrives by email (§3.11 row 6 saves it), Velocity PO | Reads tracking #, carrier and the return-by date from the label / email; `po_tracking` row `direction = return`, `claim_id`; registers it with EasyPost; `return_required` = yes | **Needs attention › Velocity**: "Return label saved M/D · from email · send it to Velocity · return by M/D" + **label** and **copy message** links | Sends it on Discord, clicks **Sent label** |
+| 2 | Same, home PO (ships to home) | Same | **Money and arrivals**: "Return label saved M/D · ships from home · drop off by M/D" + **label** | Drops it off, clicks **Dropped off** |
+| 3 | A return is needed, no label came | Nothing | "A return is needed · no label yet" | **Upload label** (PDF / image; AF reads the tracking) or **No label** (store return, carrier pickup, tracking typed by hand or none) |
+| 4 | Sent label / Dropped off ticked | Waits for the carrier | Waiting on Velocity (home PO: Waiting on shipment): "Label sent M/D · waiting for the first carrier scan" | Nothing |
+| 5 | Carrier's first scan on the return tracking | Ticks **Shipped**, event `return_shipped` "from tracking" | Waiting on shipment: "Return shipped M/D · FedEx in transit · due M/D · from tracking" | Nothing |
+| 6 | Carrier delivered | Ticks **Delivered**, event `return_delivered` | Waiting on supplier: "Return delivered M/D · from tracking · waiting for the refund confirmation" | Nothing |
+| 7 | Refund email | §3.11 row 1 | Waiting on refund to post | **Refund received** |
+| 8 | Stalls 5 business days: label sent and no scan; in transit and no scan; delivered and no refund confirmation; or the carrier reports an exception / return to sender | `check_on_it` with the reason | **Timed out** row naming it | **Check on it** or Snooze |
+| 9 | Return-by date is 3 calendar days away (or past) and the return has not shipped | `check_on_it`, reason "return by M/D · N days left" | Amber "Return by M/D · 3 days left · label saved M/D, not shipped yet" | Chases Velocity or ships it |
+| 10 | No tracking (store return, pickup) | Walmart "Return pickup confirmation" → Shipped, "We received your return" → Delivered, both "from email", when they arrive | Steps show the dates with their source | Otherwise sets Shipped / Delivered by hand in Steps |
+| 11 | Supplier says keep it | `return_required` = no; the return steps and the Return card go | `dispose_units` as today | **Asked** (existing) |
+| 12 | Claims ticked by the temporary auto-tick (commit 2b) | Keep their dates, labeled "set at confirmation, before tracking"; nothing re-opens | No change | Nothing |
+
+Rules:
+- **The Return card** (detail, left column, between Steps and Linked;
+  shown while `return_required`): Ships from (Velocity / home), Units
+  (Individual), Return by (+ source), Label (the document), Tracking,
+  Carrier status; buttons **Download label** and **Copy message for
+  Velocity**; editable in place like the Claim card.
+- **Copy message for Velocity** copies plain text to the clipboard:
+  "Please ship back N units of <product> (<ASIN>) from order <order #>
+  using the attached label. It has to go out by <return-by date>."
+  AF sends nothing (D13: Discord stays manual).
+- **Steps** on a return path: Label → Sent to Velocity (home: Dropped off)
+  → Shipped → Delivered, each clickable to set or change its date; a date
+  set by hand is never overwritten by tracking, and a tracking date never
+  by a later email.
+- New task kind `drop_off_return` (group Money and arrivals; home POs,
+  row 2). `send_label` and `upload_return_label` as built. **No label**
+  completes `upload_return_label` with `return_no_label` = true.
+- Return-by date: `supplier_claims.return_by` (date), read from the label
+  email ("by Nov 30") or typed; the row 9 warning fires once per date.
+- EasyPost answers an `is_return` POST for a number already registered
+  inbound with the inbound tracker (§3.9 note): the return row reuses that
+  tracker and reads only scans dated after the label.
+- The temporary "Shipped / Delivered tick themselves at confirmation"
+  (commit 2b) is removed for new claims; Confirmed by supplier no longer
+  implies the return arrived.
+- Units returned leave expected quantities when the outcome is set (§3.6,
+  unchanged). Nothing here writes to Velocity.
+
+   **Built 2026-11-13 (commit 7; migration 113).** Step 1 (read-only, production):
+   ONE claim carried any return data — #3356 (walmart 200015497641702, a
+   canceled claim, `return_required` off) with the return_label document
+   commit 6 saved from the 10/02 "Return pickup confirmation" (FedEx
+   798190555249; the 10/07 "We received your return" names a replacement
+   order); it is untouched — the card and the steps show only while
+   `return_required`. NO production claim had the commit-2b auto-tick
+   (`return_required` + a confirmation): row 12's statement updates 0 rows.
+   The 15 return emails of the last 90 days (orders@) are all Walmart but
+   one Tractor Supply "Your return is complete": "Drop off your return at
+   FedEx by …" (5; "FEDEX tracking number NNNNNNNNNNNN" in the body, the
+   return-by date in the subject and the body — one QR-code variant prints no
+   number until FedEx prints the label), "Return pickup confirmation: …" (5;
+   the number, the pickup date, no return-by), "Drop off your return in-store
+   by …" (3; a store return: a Return Code, no label, no tracking), a pickup
+   reminder ("Return by …"), "We received your return". Every one reads by
+   regex; Haiku is needed for none (`readReturnEmail`). The tracking ingest
+   had already parked every one of those numbers as an unmatched
+   `match_reason 'return'` row — `upsertReturnTracking` adopts that row.
+   Interpretation noted: a pickup confirmation arrives BEFORE the pickup, so
+   row 10's Shipped-from-email is dated by the scheduled pickup date, and the
+   carrier's first scan corrects it (tracking over email). Rows and the
+   mockups verbatim otherwise: `server/claim-returns.ts`, the Return card and
+   the row wording in `client/src/pages/claims.tsx`, the words in
+   `shared/claim-ui.ts`, the bucket / steps in `shared/claim-bucket.ts`;
+   `server/claim-returns.db.test.ts` is the table (one test per row, plus the
+   reuse of the inbound number, a hand-set date followed by a scan, a
+   return-by date already past). The Velocity push now reads inbound rows
+   only. Render needs nothing new.
+
 ## 4. Data
 
 Verified against migrations 028–099. Stored base for every quantity: Individual units (D17).
@@ -895,7 +984,7 @@ Prerequisite: `claude_spec-patch-quantity-names.md` (labels only).
    fallback), labels in replies (regex first, Haiku for free text).
    **Built 2026-11-13 (§3.11 "Built"; migration 112). Dry run of the last 90 days before the live backfill (row 10);
    live waits for Maria.**
-7. Returns: label → document + return tracking + Velocity / shipment
+7. Returns (§3.12, acceptance table + mockups approved 2026-11-13): label → document + return tracking + Velocity / shipment
    buckets.
 8. Replacements (`alt_order_ids`, tracking ↔ claim) + §3.8
    dismiss-with-note.

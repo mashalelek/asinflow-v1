@@ -27,6 +27,12 @@ export interface ClaimRow {
   status: "suggested" | "open" | "closed" | "dismissed"; outcome: ClaimOutcome | null; outcome_amount: number | null; outcome_detail: string | null; write_off_reason: string | null;
   found_at: string; found_by: string; reported_at: string | null; reported_channel: string | null; supplier_confirmed_at: string | null; last_supplier_reply_at: string | null; closed_at: string | null; note: string | null;
   replacement_qty: number | null; replacement_shipped_at: string | null; replacement_arrived_at: string | null; return_required: boolean; qty_disposed: number | null;
+  /** The return (claims commit 7, §3.12, migration 113): the label (its document, date, source — 'email' | 'upload'; No label), the return-by date and its
+   *  source, Shipped / Delivered with their source ('tracking' | 'email' | 'manual' | 'confirmation'), and the return's tracking row. */
+  return_label_doc_id: number | null; return_label_at: string | null; return_label_source: string | null; return_no_label: boolean;
+  return_by: string | null; return_by_source: string | null;
+  return_shipped_at: string | null; return_shipped_source: string | null; return_delivered_at: string | null; return_delivered_source: string | null;
+  return_tracking: { id: number; carrier: string | null; tracking_number: string | null; carrier_status: string | null; est_delivery_at: string | null; last_scan_at: string | null; last_scan_location: string | null; delivered_at: string | null; velocity_tracking_status: string | null } | null;
   /** The PO (for the Claims page rows): supplier, order #, date, destination, whether closed, the alternate order #s. */
   supplier: string; order_id: string; order_date: string; ships_to: string | null; po_closed_at: string | null; alt_order_ids: string | null;
   asin: string | null; product_name: string | null; supplier_sku: string | null; line_no: number;
@@ -62,6 +68,14 @@ export async function loadClaims(query: QueryLike, where: { poId?: string; ids?:
     `SELECT c.*, c.found_at::text AS found_at, c.reported_at::text AS reported_at, c.closed_at::text AS closed_at,
             c.supplier_confirmed_at::text AS supplier_confirmed_at, c.last_supplier_reply_at::text AS last_supplier_reply_at,
             c.replacement_shipped_at::text AS replacement_shipped_at, c.replacement_arrived_at::text AS replacement_arrived_at,
+            c.return_by::text AS return_by, c.return_shipped_at::text AS return_shipped_at, c.return_delivered_at::text AS return_delivered_at,
+            (SELECT d.id FROM po_documents d WHERE d.claim_id = c.id AND d.type = 'return_label' ORDER BY d.id LIMIT 1) AS return_label_doc_id,
+            (SELECT d.document_at::text FROM po_documents d WHERE d.claim_id = c.id AND d.type = 'return_label' ORDER BY d.id LIMIT 1) AS return_label_at,
+            (SELECT d.source FROM po_documents d WHERE d.claim_id = c.id AND d.type = 'return_label' ORDER BY d.id LIMIT 1) AS return_label_source,
+            (SELECT json_build_object('id', t.id, 'carrier', t.carrier, 'tracking_number', t.tracking_number, 'carrier_status', t.carrier_status,
+                                      'est_delivery_at', to_char(t.est_delivery_at AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS"Z"'), 'last_scan_at', to_char(t.last_scan_at AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS"Z"'),
+                                      'last_scan_location', t.last_scan_location, 'delivered_at', to_char(t.delivered_at AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS"Z"'), 'velocity_tracking_status', t.velocity_tracking_status)
+               FROM po_tracking t WHERE t.claim_id = c.id AND t.direction = 'return' ORDER BY t.id DESC LIMIT 1) AS return_tracking,
             p.supplier, p.order_id, p.order_date::text AS order_date, p.ships_to, p.closed_at::text AS po_closed_at, p.alt_order_ids,
             pa.asin, l.product_name, l.supplier_sku, CASE WHEN l.id IS NULL THEN 0 ELSE ${LINE_NO_SQL("l")} END AS line_no,
             l.retailer_units_per_product AS product_pack, COALESCE(pa.units_per_pack, l.asin_units_per_pack) AS asin_pack, l.qty_basis,
@@ -83,6 +97,8 @@ export async function loadClaims(query: QueryLike, where: { poId?: string; ids?:
     const m = claimMoney(r.amount_owed, refunds);
     return { ...r, id: Number(r.id), qty: num(r.qty), amount_owed: num(r.amount_owed), conversion_flags: r.conversion_flags ?? [], outcome_amount: num(r.outcome_amount), replacement_qty: num(r.replacement_qty), qty_disposed: num(r.qty_disposed),
       product_pack: num(r.product_pack), asin_pack: num(r.asin_pack), ordered: num(r.ordered), line_no: Number(r.line_no), refunds, tasks: (r.tasks ?? []).map((t: any) => ({ ...t, id: Number(t.id) })),
+      return_label_doc_id: r.return_label_doc_id == null ? null : Number(r.return_label_doc_id), return_label_at: r.return_label_at ?? null, return_label_source: r.return_label_source ?? null, return_no_label: r.return_no_label === true,
+      return_tracking: r.return_tracking ? { ...r.return_tracking, id: Number(r.return_tracking.id) } : null,
       owed: m.owed, remaining: m.remaining, received: m.received };
   });
 }
@@ -227,6 +243,11 @@ export async function doneTask(query: QueryLike, taskId: number, userId: number 
     await event(query, claimId, "reship_confirmed", alt, userId);
   } else if (kind === "check_on_it") {
     await event(query, claimId, "checked", body.note?.trim() || "checked — timer restarted", userId);
+  } else if (kind === "send_label" || kind === "drop_off_return") {
+    // §3.12: the tick carries its date (Steps: "click any to set or change"); the return then waits for the carrier's first scan
+    const date = body.date && /^\d{4}-\d{2}-\d{2}$/.test(body.date) ? body.date : null;
+    if (date) await query(`UPDATE supplier_claim_tasks SET done_at = $2::timestamptz WHERE id = $1`, [taskId, `${date}T12:00:00Z`]);
+    await event(query, claimId, "task_done", `${kind}: ${kind === "send_label" ? "sent to Velocity" : "dropped off"}${date ? ` ${Number(date.slice(5, 7))}/${Number(date.slice(8, 10))}` : ""}${body.channel ? ` · ${body.channel}` : ""}${body.note?.trim() ? ` · ${body.note.trim()}` : ""}`, userId);
   } else {
     await event(query, claimId, "task_done", `${kind}${body.note?.trim() ? `: ${body.note.trim()}` : ""}`, userId);
   }
@@ -377,7 +398,7 @@ export async function editEvent(query: QueryLike, eventId: number, body: { at?: 
 }
 
 /** The timeline entries "Remove this entry" undoes (Maria 2026-11-12): the fact each one records goes with it. */
-export const REMOVABLE_EVENT_TYPES = ["reported", "followed_up", "checked", "supplier_reply", "supplier_confirmed", "refund_received", "outcome_set", "task_done", "timed_out", "email_attached", "email_review", "email_dismissed", "label_saved"] as const;
+export const REMOVABLE_EVENT_TYPES = ["reported", "followed_up", "checked", "supplier_reply", "supplier_confirmed", "refund_received", "outcome_set", "task_done", "timed_out", "email_attached", "email_review", "email_dismissed", "label_saved", "return_shipped", "return_delivered"] as const;
 
 /**
  * Remove a timeline entry and undo the fact it set (Maria 2026-11-12). `reported` → reported_at / reported_channel cleared
@@ -488,6 +509,11 @@ export async function removeEvent(query: QueryLike, eventId: number, userId: num
   } else if (type === "label_saved") {
     // the document stays in Drive and on the PO (AF never deletes a file by undoing a note); it just leaves the claim
     await query(`UPDATE po_documents SET claim_id = NULL WHERE id = $2 AND claim_id = $1`, [claimId, e.po_document_id ?? null]);
+  } else if (type === "return_shipped" || type === "return_delivered") {
+    // the return date it set goes with it (§3.12 Steps: set or change); a tracking scan sets it again on the next carrier event
+    const col = type === "return_shipped" ? "return_shipped_at" : "return_delivered_at";
+    await query(`UPDATE supplier_claims SET ${col} = NULL, ${col.replace("_at", "_source")} = NULL, updated_at = now() WHERE id = $1`, [claimId]);
+    changes.push({ field: `claim ${col}`, old: String((d as any)[col] ?? "").slice(0, 10) || null, new: null });
   } else if (type === "email_attached" || type === "email_dismissed") {
     // nothing else was set; a dismissed email may be proposed again on the next pass
   } else if (type === "followed_up") await untick(["follow_up_supplier"]);
@@ -667,6 +693,8 @@ export async function addClaim(query: QueryLike, poId: string, body: AddClaimBod
     if (kind === "canceled") await addTask(query, id, "refund_received", "canceled — tick when the refund posts (add the refund row)");
     else await addContactTaskIfUnreported(query, id, "a claim was opened — report it to the supplier");
   }
+  // a return needed with no label yet (§3.12 row 3): Upload label waits in Money and arrivals until the label comes or No label is ticked
+  if (status === "open" && body.return_required === true && !opts.noTask) await addTask(query, id, "upload_return_label", "a return is needed — upload the label, or No label");
   await syncRefundCoverage(query, [id], userId);
   return { id, po_id: poId };
 }
@@ -729,7 +757,13 @@ export async function editClaim(query: QueryLike, id: number, body: Record<strin
   if ("reported_channel" in body) edits.reported_channel = String(body.reported_channel ?? "").trim() || null;
   if ("last_supplier_reply_at" in body) edits.last_supplier_reply_at = body.last_supplier_reply_at == null || body.last_supplier_reply_at === "" ? null : `${dateOf(body.last_supplier_reply_at, "last_supplier_reply_at")}T12:00:00Z`;
   if ("supplier_confirmed_at" in body) edits.supplier_confirmed_at = body.supplier_confirmed_at == null || body.supplier_confirmed_at === "" ? null : `${dateOf(body.supplier_confirmed_at, "supplier_confirmed_at")}T12:00:00Z`;
-  if ("return_required" in body) edits.return_required = body.return_required === true || body.return_required === "true";
+  if ("return_required" in body) {
+    edits.return_required = body.return_required === true || body.return_required === "true";
+    // row 11 (the supplier says keep it): the return steps and the Return card go — its open tasks with them (nothing else changes)
+    if (!edits.return_required && d.return_required) await query(`DELETE FROM supplier_claim_tasks WHERE claim_id = $1 AND done_at IS NULL AND kind IN ('send_label', 'drop_off_return', 'upload_return_label')`, [id]);
+    // a return needed from now on, no label yet (row 3): Upload label
+    if (edits.return_required && !d.return_required && d.status === "open" && !(await query(`SELECT 1 FROM po_documents WHERE claim_id = $1 AND type = 'return_label'`, [id])).rows.length && !(await query(`SELECT 1 FROM supplier_claim_tasks WHERE claim_id = $1 AND kind = 'upload_return_label'`, [id])).rows.length) await addTask(query, id, "upload_return_label", "a return is needed — upload the label, or No label");
+  }
   const iso = (v: unknown) => (v instanceof Date ? v.toISOString() : v);
   const cur = { ...d, found_at: d.found_at instanceof Date ? d.found_at.toISOString().slice(0, 10) : d.found_at, reported_at: d.reported_at instanceof Date ? d.reported_at.toISOString().slice(0, 10) : d.reported_at,
     last_supplier_reply_at: iso(d.last_supplier_reply_at), supplier_confirmed_at: iso(d.supplier_confirmed_at) };

@@ -205,7 +205,7 @@ export function createTrackingRouter(deps: { query?: QueryLike } = {}): Router {
       const r = await query(
         `INSERT INTO po_tracking (po_id, carrier, tracking_number, retailer_order_id, supplier_guess, shipped_at, gmail_message_id, source, status)
          VALUES ($1, $2, $3, $4, $5, NOW(), 'manual', 'manual', 'matched')
-         ON CONFLICT (carrier, tracking_number) WHERE split_of IS NULL DO NOTHING RETURNING id`,
+         ON CONFLICT (carrier, tracking_number, direction) WHERE split_of IS NULL DO NOTHING RETURNING id`,
         [poId, carrier, tn, po.order_id, po.supplier],
       );
       if (r.rows.length === 0) { res.status(409).json({ error: "exists", message: `${carrier} ${tn} is already recorded — use Move to PO… on it` }); return; }

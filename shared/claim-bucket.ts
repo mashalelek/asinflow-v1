@@ -39,6 +39,14 @@ export interface BucketClaim {
   status: string; kind: string; outcome: ClaimOutcome | string | null;
   found_at: string; found_by?: string | null; reported_at: string | null; supplier_confirmed_at: string | null; last_supplier_reply_at?: string | null;
   closed_at: string | null; return_required?: boolean;
+  /** The return (claims commit 7, §3.12): the label (a return_label document's date and source, or No label), the return-by date, and the
+   *  Shipped / Delivered dates with their source ('tracking' | 'email' | 'manual' | 'confirmation' — row 12's kept auto-tick). */
+  return_label_at?: string | null; return_label_source?: string | null; return_no_label?: boolean;
+  return_by?: string | null; return_by_source?: string | null;
+  return_shipped_at?: string | null; return_shipped_source?: string | null;
+  return_delivered_at?: string | null; return_delivered_source?: string | null;
+  /** The return's tracking row (direction = return) when one exists: the carrier's word for the Return card and the sentences. */
+  return_tracking?: { id?: number; carrier: string | null; tracking_number: string | null; carrier_status: string | null; est_delivery_at: string | null; last_scan_at: string | null; last_scan_location?: string | null; delivered_at: string | null } | null;
   replacement_shipped_at: string | null; replacement_arrived_at: string | null; qty_disposed: number | null;
   /** owed − Σ applied; null when the $ is not known. */
   remaining: number | null; received?: number; qty?: number | null;
@@ -59,6 +67,8 @@ export interface BucketResult {
   timeout: { kind: "follow_up_supplier" | "check_on_it" | "contact_supplier"; reason: string } | null;
 }
 
+/** "11/30" of an ISO date / instant (UTC calendar day of a date-only value). */
+export const mdOf = (iso: string | null | undefined): string => { if (!iso) return "?"; const [, m, d] = iso.slice(0, 10).split("-"); return `${Number(m)}/${Number(d)}`; };
 const ts = (v: string | null | undefined): number | null => { if (!v) return null; const t = Date.parse(v.length === 10 ? `${v}T12:00:00Z` : v); return Number.isFinite(t) ? t : null; };
 const latest = (...vs: Array<string | null | undefined>): string | null => vs.filter((v): v is string => !!v && ts(v) != null).sort((a, b) => ts(a)! - ts(b)!).pop() ?? null;
 const doneAt = (c: BucketClaim, kind: string): string | null => latest(...c.tasks.filter((t) => t.kind === kind && t.done_at).map((t) => t.done_at));
@@ -131,7 +141,15 @@ export function daysSince(since: string | null, now: Date): number | null {
  * tick; the Contact supplier tick counts from the report date typed on it).
  */
 /** Velocity tasks that keep a written-off claim out of Closed while open (dispose, the return label). */
-export const VELOCITY_CLOSE_TASKS: ReadonlySet<string> = new Set(["dispose_units", "send_label", "upload_return_label"]);
+export const VELOCITY_CLOSE_TASKS: ReadonlySet<string> = new Set(["dispose_units", "send_label", "upload_return_label", "drop_off_return"]);
+/** The return's Label step date: the saved label, else the Upload label tick (a return with no label reads its No label tick). */
+export const returnLabelAt = (c: BucketClaim): string | null => c.return_label_at ?? doneAt(c, "upload_return_label");
+/** When the return left Maria's hands: Sent to Velocity (send_label) on a Velocity PO, Dropped off (drop_off_return) on a home PO — whichever was ticked. */
+export const returnSentAt = (c: BucketClaim): string | null => latest(doneAt(c, "send_label"), doneAt(c, "drop_off_return"));
+/** A return on its way: return needed and not delivered yet. */
+export const returnPending = (c: BucketClaim): boolean => !!c.return_required && !c.return_delivered_at;
+/** The timeout reasons of a return (§3.12 row 8): they always make a Check on it, in every bucket. */
+const RETURN_REASON_RE = /^(?:label sent to Velocity|dropped off|return shipped|return delivered)\b/;
 /** Ticks that never restart the timer: the report (its date is the anchor) and Open claim on a suggestion. */
 export const NO_RESTART_TASK_KINDS: ReadonlySet<string> = new Set(["contact_supplier", "review_suggestion"]);
 export function deriveBucket(c: BucketClaim, now: Date): BucketResult {
@@ -164,14 +182,22 @@ export function deriveBucket(c: BucketClaim, now: Date): BucketResult {
 
   const outcome = c.outcome ?? null;
   let bucket: ClaimBucket; let anchor: string | null; let reason: string;
-  const labelSent = doneAt(c, "send_label"), disposeAsked = doneAt(c, "dispose_units"), orderChangeAsked = doneAt(c, "update_velocity_order"), toldVelocity = doneAt(c, "tell_velocity_replacement");
+  const disposeAsked = doneAt(c, "dispose_units"), orderChangeAsked = doneAt(c, "update_velocity_order"), toldVelocity = doneAt(c, "tell_velocity_replacement");
+  const sentAt = returnSentAt(c), home = c.ships_to === "home";
   if (outcome === "replacement" && c.replacement_shipped_at && !c.replacement_arrived_at) {
     bucket = "waiting_shipment"; anchor = c.replacement_shipped_at; reason = "replacement shipped, not arrived";
+  } else if (returnPending(c) && c.return_shipped_at) {
+    // §3.12 rows 5 / 8: the carrier has the return — Waiting on shipment from the first scan, the timer restarts on every scan
+    bucket = "waiting_shipment"; anchor = latest(c.return_shipped_at, c.return_tracking?.last_scan_at ?? null); reason = `return shipped ${mdOf(c.return_shipped_at)} · no new carrier scan`;
+  } else if (returnPending(c) && sentAt) {
+    // rows 4 / 8: the label is with Velocity (Waiting on Velocity) or the parcel dropped off (home PO: Waiting on shipment) — waiting for the first scan
+    bucket = home ? "waiting_shipment" : "waiting_velocity"; anchor = sentAt; reason = home ? `dropped off ${mdOf(sentAt)} · no carrier scan` : `label sent to Velocity ${mdOf(sentAt)} · no carrier scan`;
+  } else if (c.return_required && c.return_delivered_at && !supplierConfirmedAt(c) && (c.remaining == null || c.remaining > 0)) {
+    // rows 6 / 8: delivered to the supplier — Waiting on supplier for the refund confirmation (its stall is a Check on it, row 8)
+    bucket = "waiting_supplier"; anchor = c.return_delivered_at; reason = `return delivered ${mdOf(c.return_delivered_at)} · no refund confirmation`;
   } else if ((REFUND_OUTCOME_SET.has(outcome ?? "") || (c.kind === "canceled" && outcome == null)) && supplierConfirmedAt(c) && (c.remaining == null || c.remaining > 0)) {
     // a canceled claim is confirmed on its cancel date and waits for the refund from there (paths, Maria 2026-11-12)
     bucket = "waiting_refund"; anchor = supplierConfirmedAt(c); reason = c.received && c.received > 0 ? "refund not posted in full" : "refund not posted";
-  } else if (labelSent && c.return_required) {
-    bucket = "waiting_velocity"; anchor = labelSent; reason = "return label sent, return not shipped";
   } else if (disposeAsked && c.qty_disposed == null) {
     bucket = "waiting_velocity"; anchor = disposeAsked; reason = "dispose asked, count not down";
   } else if (orderChangeAsked && !c.reported_at) {
@@ -189,7 +215,7 @@ export function deriveBucket(c: BucketClaim, now: Date): BucketResult {
   // The timer never starts before the supplier was contacted (Maria 2026-11-12): an unreported claim — no report date,
   // no Contact supplier tick, no confirmation, not an emailed cancellation — waits for the Contacted supplier action in
   // Needs attention, whether or not its contact_supplier task exists (a converted claim may lack it).
-  if (bucket === "waiting_supplier" && !isReported(c)) return { ...none, since: new Date(ts(c.found_at) ?? Date.now()).toISOString() };
+  if (bucket === "waiting_supplier" && !isReported(c) && !RETURN_REASON_RE.test(reason)) return { ...none, since: new Date(ts(c.found_at) ?? Date.now()).toISOString() };
   // Every tick restarts the timer (a snooze is such a tick) — except Contact supplier, whose typed report date
   // (reported_at) is the anchor itself; without a typed date its tick is the anchor through doneAt above, and except
   // Open claim on a suggestion (review_suggestion), which makes the claim and is no wait (Maria 2026-11-12: the Walmart
@@ -203,7 +229,7 @@ export function deriveBucket(c: BucketClaim, now: Date): BucketResult {
   const snoozed = c.tasks.filter((t) => t.snoozed_until && ts(t.snoozed_until)! > now.getTime()).length > 0;
   const timedOut = !snoozed && now.getTime() >= dueDate.getTime();
   // a canceled claim's refund timing out is the one moment it gets a contact_supplier task (§3.4 "contact_supplier appears only if the refund times out")
-  const timeout = bucket === "waiting_supplier"
+  const timeout = bucket === "waiting_supplier" && !RETURN_REASON_RE.test(reason)
     ? { kind: "follow_up_supplier" as const, reason: `${BUSINESS_DAYS} business days: ${reason}` }
     : c.kind === "canceled" && bucket === "waiting_refund"
       ? { kind: "contact_supplier" as const, reason: `${BUSINESS_DAYS} business days: ${reason}` }
@@ -213,7 +239,8 @@ export function deriveBucket(c: BucketClaim, now: Date): BucketResult {
 
 // ── Steps (§3.4) ─────────────────────────────────────────────────────────────
 
-export interface ClaimStep { key: string; label: string; done: boolean; at: string | null; current: boolean; /** The row's Step text while this step is current ("Report to supplier"). */ todo?: string }
+export interface ClaimStep { key: string; label: string; done: boolean; at: string | null; current: boolean; /** The row's Step text while this step is current ("Report to supplier"). */ todo?: string;
+  /** Where the date came from (the return steps, §3.12): 'email' | 'tracking' | 'manual' | 'upload' | 'confirmation' ("set at confirmation, before tracking"). */ source?: string | null }
 
 /** The path's checklist with ✓ per step and the current one. */
 export function claimSteps(c: BucketClaim): ClaimStep[] {
@@ -242,12 +269,14 @@ export function claimSteps(c: BucketClaim): ClaimStep[] {
     return steps.map((s) => { const current = !s.done && !set && c.status !== "dismissed"; if (current) set = true; return { ...s, current }; });
   } else {
     if (c.return_required) {
-      steps.push({ key: "label", label: "Label", done: !!doneAt(c, "upload_return_label") || !!doneAt(c, "send_label"), at: doneAt(c, "upload_return_label") });
-      steps.push({ key: "label_sent", label: "Sent to Velocity", done: !!doneAt(c, "send_label"), at: doneAt(c, "send_label") });
-      // commit 7 brings the return's own tracking; until then the supplier's confirmation (or the close) says the return got there
-      const returnThere = !!supplierConfirmedAt(c) || closed;
-      steps.push({ key: "return_shipped", label: "Shipped", done: returnThere, at: null });
-      steps.push({ key: "return_delivered", label: "Delivered", done: returnThere, at: null });
+      // §3.12: Label → Sent to Velocity (home: Dropped off) → Shipped → Delivered, each with its date and source; the
+      // commit-2b auto-tick is gone — Confirmed by supplier no longer implies the return arrived (row 12 keeps the old dates, labeled)
+      const labelAt = returnLabelAt(c), home = c.ships_to === "home";
+      const sentAt = home ? doneAt(c, "drop_off_return") ?? doneAt(c, "send_label") : doneAt(c, "send_label") ?? doneAt(c, "drop_off_return");
+      steps.push({ key: "label", label: c.return_no_label ? "No label" : "Label", done: !!labelAt || !!c.return_no_label || closed, at: labelAt, source: labelAt ? c.return_label_source ?? null : null, todo: "Upload the label" });
+      steps.push({ key: "label_sent", label: home ? "Dropped off" : "Sent to Velocity", done: !!sentAt || !!c.return_shipped_at || closed, at: sentAt });
+      steps.push({ key: "return_shipped", label: "Shipped", done: !!c.return_shipped_at || closed, at: c.return_shipped_at ?? null, source: c.return_shipped_at ? c.return_shipped_source ?? null : null });
+      steps.push({ key: "return_delivered", label: "Delivered", done: !!c.return_delivered_at || closed, at: c.return_delivered_at ?? null, source: c.return_delivered_at ? c.return_delivered_source ?? null : null });
     }
     steps.push({ key: "confirmed", label: "Confirmed by supplier", done: !!supplierConfirmedAt(c) || (closed && outcome != null), at: supplierConfirmedAt(c) });
     steps.push({ key: "received", label: "Received", done: c.remaining != null && c.remaining <= 0.005 && (c.received ?? 0) > 0 || (closed && outcome != null && outcome !== "write_off"), at: closed ? c.closed_at : null });

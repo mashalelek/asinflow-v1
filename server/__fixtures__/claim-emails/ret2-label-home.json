@@ -1,0 +1,22 @@
+{
+ "mailbox": "orders@coastalqualitygoods.com",
+ "threadId": null,
+ "direction": "in",
+ "forwarded": false,
+ "to": "orders@coastalqualitygoods.com",
+ "toDomain": "coastalqualitygoods.com",
+ "from": "zz Test <help@zz-test.com>",
+ "fromDomain": "zz-test.com",
+ "id": "fx-ret2-label-home",
+ "attachments": [
+  {
+   "filename": "return-label.pdf",
+   "mimeType": "application/pdf",
+   "attachmentId": "att-1",
+   "size": 2048
+  }
+ ],
+ "date": "2026-11-12T14:00:00.000Z",
+ "subject": "Drop off your return at FedEx by Fri, Nov 20",
+ "text": "Return Initiated: [zz dog food 6 lb]\nOrder number: ZZ4471199\nPlease drop off your item at an eligible FedEx Office location by Fri, Nov 20 to complete your return.\n1 item to return\nFEDEX tracking number 528889999002\nReturn by Fri, Nov 20\nzz dog food 6 lb\nQty: 2\n$23.98"
+}

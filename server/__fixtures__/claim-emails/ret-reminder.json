@@ -1,0 +1,15 @@
+{
+ "mailbox": "orders@coastalqualitygoods.com",
+ "threadId": null,
+ "direction": "in",
+ "forwarded": false,
+ "to": "orders@coastalqualitygoods.com",
+ "toDomain": "coastalqualitygoods.com",
+ "from": "zz Test <help@zz-test.com>",
+ "fromDomain": "zz-test.com",
+ "id": "fx-ret-reminder",
+ "attachments": [],
+ "date": "2026-11-11T02:01:05.000Z",
+ "subject": "Reminder: Your return will be picked up tomorrow",
+ "text": "A driver will stop by for your return between 9am and 7pm\nOrder number: ZZ4471188\nYour return pickup is tomorrow\nAs a reminder, the return pickup you requested is scheduled for Thu, Nov 12 between 9am-7pm .\nReturn items\nReturn by Thu, Dec 10\nzz soap, 2 Count\nQty: 11\n$61.27"
+}

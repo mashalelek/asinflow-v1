@@ -83,16 +83,22 @@ describe("§3.4 paths, creation → Closed", () => {
     const label = base({ ...reported, outcome: "refund_card", return_required: true, tasks: [...reported.tasks, done("confirm_outcome", "2026-11-04T15:00:00Z"), open("upload_return_label", "2026-11-04T15:00:00Z")] });
     const uploaded = base({ ...label, tasks: [...reported.tasks, done("confirm_outcome", "2026-11-04T15:00:00Z"), done("upload_return_label", "2026-11-04T16:00:00Z"), open("send_label", "2026-11-04T16:00:00Z")] });
     const sent = base({ ...uploaded, tasks: [...reported.tasks, done("confirm_outcome", "2026-11-04T15:00:00Z"), done("upload_return_label", "2026-11-04T16:00:00Z"), done("send_label", "2026-11-04T18:00:00Z")] });
-    const confirmed = base({ ...sent, supplier_confirmed_at: "2026-11-09T12:00:00Z", tasks: [...sent.tasks, open("refund_received", "2026-11-09T12:00:00Z")] });
-    const closed = base({ ...confirmed, status: "closed", closed_at: "2026-11-11T12:00:00Z", received: 5.97, remaining: 0, tasks: [...sent.tasks, done("refund_received", "2026-11-11T12:00:00Z")] });
+    // commit 7 (§3.12): the carrier's scans move the return on — Shipped (first scan), Delivered — then the refund email confirms
+    const tracking = { carrier: "FEDEX", tracking_number: "528889999001", carrier_status: "in_transit", est_delivery_at: "2026-11-10T00:00:00Z", last_scan_at: "2026-11-06T03:12:00Z", last_scan_location: "Memphis, TN", delivered_at: null };
+    const shipped = base({ ...sent, return_shipped_at: "2026-11-05T16:40:00Z", return_shipped_source: "tracking", return_tracking: tracking });
+    const delivered = base({ ...shipped, return_delivered_at: "2026-11-10T14:02:00Z", return_delivered_source: "tracking", return_tracking: { ...tracking, carrier_status: "delivered", delivered_at: "2026-11-10T14:02:00Z" } });
+    const confirmed = base({ ...delivered, supplier_confirmed_at: "2026-11-12T12:00:00Z", tasks: [...sent.tasks, open("refund_received", "2026-11-12T12:00:00Z")] });
+    const closed = base({ ...confirmed, status: "closed", closed_at: "2026-11-13T12:00:00Z", received: 5.97, remaining: 0, tasks: [...sent.tasks, done("refund_received", "2026-11-13T12:00:00Z")] });
     walk(`${kind} → return → refund`, [
       { stage: "reported 11/3", c: reported, want: { current: "answered", bucket: "waiting_supplier", next: "waiting for the supplier's answer", due: "2026-11-10T12:00:00.000Z" } },
-      { stage: "supplier wants it back · upload the label", c: label, want: { current: "label", bucket: "needs_attention", next: "Upload return label", due: null, action: "Upload label" } },
+      { stage: "supplier wants it back · upload the label", c: label, want: { current: "label", bucket: "needs_attention", next: "Upload return label", due: null, sentence: "A return is needed · no label yet", action: "Upload label" } },
       { stage: "label uploaded · send it to Velocity", c: uploaded, want: { current: "label_sent", bucket: "needs_attention", next: "Send return label to Velocity", due: null, action: "Sent label" } },
-      { stage: "label sent to Velocity 11/4", c: sent, want: { current: "return_shipped", bucket: "waiting_velocity", next: "waiting for Velocity", since: "2026-11-04T18:00:00.000Z", due: "2026-11-11T18:00:00.000Z", sentence: "Label sent 11/4 · return not shipped yet" } },
-      { stage: "11/12: return not shipped in 5 business days", c: sent, now: LATER, want: { current: "return_shipped", bucket: "waiting_velocity", next: "waiting for Velocity", timedOut: true, timeout: "check_on_it" } },
-      { stage: "supplier confirmed the refund 11/9 (the return got there)", c: confirmed, now: LATER, want: { current: "received", bucket: "waiting_refund", next: "Refund received", since: "2026-11-09T12:00:00.000Z", due: "2026-11-16T12:00:00.000Z", action: "Refund received" } },
-      { stage: "refund posted 11/11", c: closed, now: LATER, want: { current: null, bucket: "closed", next: "" } },
+      { stage: "label sent to Velocity 11/4", c: sent, want: { current: "return_shipped", bucket: "waiting_velocity", next: "waiting for Velocity", since: "2026-11-04T18:00:00.000Z", due: "2026-11-11T18:00:00.000Z", sentence: "Label sent 11/4 · waiting for the first carrier scan" } },
+      { stage: "11/12: no carrier scan in 5 business days", c: sent, now: LATER, want: { current: "return_shipped", bucket: "waiting_velocity", next: "waiting for Velocity", timedOut: true, timeout: "check_on_it" } },
+      { stage: "first scan 11/5 · from tracking", c: shipped, now: new Date("2026-11-06T15:00:00Z"), want: { current: "return_delivered", bucket: "waiting_shipment", next: "waiting for the carrier", since: "2026-11-06T03:12:00.000Z", due: "2026-11-13T03:12:00.000Z", sentence: "Return shipped 11/5 · FedEx in transit · due 11/10 · from tracking" } },
+      { stage: "delivered 11/10 · from tracking", c: delivered, now: new Date("2026-11-11T15:00:00Z"), want: { current: "confirmed", bucket: "waiting_supplier", next: "waiting for the supplier's confirmation", since: "2026-11-10T14:02:00.000Z", due: "2026-11-17T14:02:00.000Z", timeout: "check_on_it", sentence: "Return delivered 11/10 · from tracking · waiting for the refund confirmation" } },
+      { stage: "supplier confirmed the refund 11/12", c: confirmed, now: LATER, want: { current: "received", bucket: "waiting_refund", next: "Refund received", since: "2026-11-12T12:00:00.000Z", due: "2026-11-19T12:00:00.000Z", action: "Refund received" } },
+      { stage: "refund posted 11/13", c: closed, now: LATER, want: { current: null, bucket: "closed", next: "" } },
     ]);
   };
   it("damaged → return → refund", () => returnPath("damaged"));

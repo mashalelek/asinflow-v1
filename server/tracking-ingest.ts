@@ -260,7 +260,7 @@ export async function upsertTrackingRow(query: QueryLike, d: TrackingRowDraft): 
     `INSERT INTO po_tracking (carrier, tracking_number, retailer_order_id, sender_domain, ship_to_street, shipped_at, items_json,
                               gmail_message_id, gmail_thread_id, email_subject, source, status, match_reason, shipper_name, carrier_refs)
      VALUES ($1, $2, $3, $4, $5, $6, $7::jsonb, $8, $9, $10, $11, 'unmatched', $12, $13, $14::text[])
-     ON CONFLICT (carrier, tracking_number) WHERE split_of IS NULL DO UPDATE SET
+     ON CONFLICT (carrier, tracking_number, direction) WHERE split_of IS NULL DO UPDATE SET
        gmail_message_id = EXCLUDED.gmail_message_id, gmail_thread_id = EXCLUDED.gmail_thread_id,
        shipped_at = EXCLUDED.shipped_at,
        shipper_name = COALESCE(EXCLUDED.shipper_name, po_tracking.shipper_name), carrier_refs = COALESCE(EXCLUDED.carrier_refs, po_tracking.carrier_refs),

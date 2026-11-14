@@ -1,0 +1,15 @@
+{
+ "mailbox": "orders@coastalqualitygoods.com",
+ "threadId": null,
+ "direction": "in",
+ "forwarded": false,
+ "to": "orders@coastalqualitygoods.com",
+ "toDomain": "coastalqualitygoods.com",
+ "from": "zz Test <help@zz-test.com>",
+ "fromDomain": "zz-test.com",
+ "id": "fx-ret3-store-no-label",
+ "attachments": [],
+ "date": "2026-11-10T19:41:03.000Z",
+ "subject": "Drop off your return in-store by Fri, Nov 20",
+ "text": "Return Initiated: [zz soap, 2 Count]\nOrder number: ZZ4471188\nBring your item to any zz store to complete your return\nPlease drop off your item at a zz store by Fri, Nov 20 to complete your return.\nBring items to customer service. No repackaging or printed label required.\nShow the return barcode on your phone.\nReturn Code: 0516d1gc\n1 item to return\nReturn by Fri, Nov 20\nzz soap, 2 Count\nQty: 15\n$47.40"
+}

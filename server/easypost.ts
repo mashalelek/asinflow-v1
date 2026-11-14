@@ -22,6 +22,7 @@ import { createHmac, timingSafeEqual } from "node:crypto";
 import { Router, type Request, type Response } from "express";
 import type { QueryLike } from "./scheduler/types";
 import { EASYPOST_STATUSES, type EasypostStatus } from "@shared/carrier-status";
+import { applyReturnTracker } from "./claim-returns";
 
 const BASE_URL = "https://api.easypost.com/v2";
 /** The sweep stops this long after registration (§3.9; Maria 2026-11-12: the rule is open POs, not shipment age). */
@@ -135,17 +136,24 @@ export function trackerAction(row: TrackingCandidate, now: Date, pass: "register
 }
 
 // ── Store ────────────────────────────────────────────────────────────────────
-/** Every row carrying the number (any PO, split rows) takes the tracker's state; the id is stored where it was missing. */
-export async function applyCarrierUpdate(query: QueryLike, u: CarrierUpdate): Promise<number> {
+/**
+ * Every inbound row carrying the number (any PO, split rows) takes the tracker's state; the id is stored where it was missing.
+ * A RETURN row (claims commit 7) reads only the scans after its label — with the tracker given, applyReturnTracker writes those
+ * rows and moves the claim's Shipped / Delivered (claim-returns.ts); a return may share the inbound number (§3.9), so the
+ * generic write never touches direction = 'return'.
+ */
+export async function applyCarrierUpdate(query: QueryLike, u: CarrierUpdate, tracker?: EasypostTracker): Promise<number> {
   const r = await query(
     `UPDATE po_tracking SET easypost_tracker_id = $1, carrier_status = $2, est_delivery_at = $3, last_scan_at = $4,
             delivered_at = COALESCE(delivered_at, $5::timestamptz), carrier_checked_at = NOW(), updated_at = NOW(),
             easypost_registered_at = COALESCE(easypost_registered_at, NOW())
-      WHERE tracking_number NOT LIKE 'email:%'
+      WHERE tracking_number NOT LIKE 'email:%' AND direction <> 'return'
         AND (easypost_tracker_id = $1 OR (easypost_tracker_id IS NULL AND upper(tracking_number) = $6))`,
     [u.easypost_tracker_id, u.carrier_status, u.est_delivery_at, u.last_scan_at, u.delivered_at, u.tracking_code],
   );
-  return r.rowCount ?? 0;
+  let n = r.rowCount ?? 0;
+  if (tracker) n += (await applyReturnTracker(query, tracker)).rows;
+  return n;
 }
 
 /** Rows on OPEN POs only (closed_at IS NULL): a closed PO's rows are never registered or swept; unmatched queue rows have no PO. */
@@ -193,7 +201,7 @@ export async function registerTrackers(query: QueryLike, now = new Date(), fetch
       try {
         const t = await createTracker(fetchFn, { tracking_code: row.tracking_number, carrier, is_return: row.direction === "return" });
         const u = trackerUpdate(t);
-        r.rows_updated += await applyCarrierUpdate(query, u);
+        r.rows_updated += await applyCarrierUpdate(query, u, t);
         r.registered++;
         optionIndex[af] = i; r.carrier_used[af] = carrier ?? `auto (${t.carrier ?? "?"})`;
         r.outcomes[key] = `${u.easypost_tracker_id} ${u.carrier_status}${u.est_delivery_at ? ` eta ${u.est_delivery_at.slice(0, 10)}` : ""}${tried.length ? ` (as ${carrier ?? "auto"} after ${tried.join(", ")})` : ""}`;
@@ -228,8 +236,9 @@ export async function sweepTrackers(query: QueryLike, now = new Date(), fetchFn:
     if (seen.has(id)) continue;
     seen.add(id);
     try {
-      const u = trackerUpdate(await getTracker(fetchFn, id));
-      r.rows_updated += await applyCarrierUpdate(query, u);
+      const t = await getTracker(fetchFn, id);
+      const u = trackerUpdate(t);
+      r.rows_updated += await applyCarrierUpdate(query, u, t);
       r.checked++;
       r.outcomes[`${row.carrier} ${row.tracking_number}`] = `${u.carrier_status}${u.last_scan_at ? ` last scan ${u.last_scan_at.slice(0, 10)}` : ""}`;
     } catch (e: any) {
@@ -313,7 +322,7 @@ export function createEasypostWebhookRouter(deps: WebhookDeps): Router {
     if (event.description !== "tracker.updated" || !event.result?.id) { res.json({ ok: true, ignored: event.description ?? null }); return; }
     try {
       const u = trackerUpdate(event.result as EasypostTracker);
-      const rows = await applyCarrierUpdate(deps.query, u);
+      const rows = await applyCarrierUpdate(deps.query, u, event.result as EasypostTracker);
       deps.log?.(`easypost webhook: ${u.tracking_code} ${u.carrier_status} → ${rows} row(s)`);
       res.json({ ok: true, rows });
     } catch (e: any) {
