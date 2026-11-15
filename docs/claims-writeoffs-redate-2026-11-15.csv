@@ -1,0 +1,144 @@
+claim_id,supplier,order_id,kind,amount,closed_on_now,found_on_now,order_date,tile_now,tile_after,source,action
+3296,vitacost.com,321001210,missing,1.78,2026-10-21,2026-10-21,2025-01-09,30 days,,sheet_loss,re-date
+3294,vitacost.com,321010529,missing,61.99,2026-10-21,2026-10-21,2025-01-12,30 days,,sheet_loss,re-date
+3313,staples.com,9927540461,missing,18.50,2026-11-08,2026-11-08,2025-01-12,MTD + 30 days,,sheet_loss,re-date
+3293,staples.com,9927643241,missing,33.96,2026-11-05,2026-11-05,2025-01-15,MTD + 30 days,,sheet_loss,re-date
+3295,staples.com,9927627827,missing,17.76,2026-11-08,2026-11-08,2025-01-15,MTD + 30 days,,sheet_loss,re-date
+3292,webstaurantstore.com,106732837,missing,92.28,2026-10-21,2026-10-21,2025-01-19,30 days,,sheet_loss,re-date
+3290,webstaurantstore.com,106859778,missing,47.19,2026-10-21,2026-10-21,2025-01-22,30 days,,sheet_loss,re-date
+3291,webstaurantstore.com,106859778,missing,65.88,2026-10-21,2026-10-21,2025-01-22,30 days,,sheet_loss,re-date
+3288,target.com,102002359295917,missing,5.66,2026-10-21,2026-10-21,2025-01-26,30 days,,sheet_loss,re-date
+3289,target.com,102002361283116,missing,5.39,2026-10-21,2026-10-21,2025-01-26,30 days,,sheet_loss,re-date
+3287,webstaurantstore.com,107057980,missing,11.94,2026-10-21,2026-10-21,2025-01-28,30 days,,sheet_loss,re-date
+3286,webstaurantstore.com,107223560,missing,86.79,2026-10-21,2026-10-21,2025-02-02,30 days,,sheet_loss,re-date
+3179,menards.com,58835918,missing,5.57,2026-10-21,2026-10-21,2025-02-03,30 days,,sheet_loss,re-date
+3284,webstaurantstore.com,107477238,missing,3.86,2026-10-21,2026-10-21,2025-02-09,30 days,,sheet_loss,re-date
+3285,harryanddavid.com,W01005933884926,missing,69.49,2026-10-21,2026-10-21,2025-02-09,30 days,,sheet_loss,re-date
+3283,officesupply.com,6355384,missing,56.90,2026-10-21,2026-10-21,2025-02-13,30 days,,sheet_loss,re-date
+3315,chewy.com,1627249988,missing,8.55,2026-10-21,2026-10-21,2025-02-15,30 days,,sheet_loss_added,re-date
+3312,webstaurantstore.com,107950428,missing,1.74,2026-11-05,2026-11-05,2025-02-22,MTD + 30 days,,sheet_loss,re-date
+3281,staples.com,9928493134,missing,17.76,2026-11-08,2026-11-08,2025-02-24,MTD + 30 days,,sheet_loss,re-date
+3280,joann.com,10127365463,missing,15.15,2026-10-21,2026-10-21,2025-02-25,30 days,,sheet_loss,re-date
+3259,walgreens.com,212754851288,missing,3.00,2026-10-21,2026-10-21,2025-03-08,30 days,,sheet_loss,re-date
+3262,menards.com,59610170,missing,2.01,2026-10-21,2026-10-21,2025-03-08,30 days,,sheet_loss,re-date
+3255,michaels.com,9700109259255417,missing,5.05,2026-10-21,2026-10-21,2025-03-18,30 days,,sheet_loss,re-date
+3254,michaels.com,5700108240092793,missing,51.58,2026-11-05,2026-11-05,2025-03-25,MTD + 30 days,,sheet_loss,re-date
+3252,target.com,102002477741906,missing,6.90,2026-10-28,2026-10-28,2025-04-01,30 days,,sheet_loss,re-date
+3253,target.com,102002452894884,missing,6.77,2026-10-28,2026-10-28,2025-04-01,30 days,,sheet_loss,re-date
+3245,zoro.com,WB3799614447,missing,31.92,2026-11-07,2026-11-07,2025-04-06,MTD + 30 days,,sheet_loss,re-date
+3244,gamenerdz.com,1895637,missing,13.95,2026-10-21,2026-10-21,2025-04-09,30 days,,sheet_loss,re-date
+3243,officesupply.com,6449633,missing,85.65,2026-10-21,2026-10-21,2025-04-16,30 days,,sheet_loss,re-date
+3242,walmart.com,200013183856780,missing,8.40,2026-10-21,2026-10-21,2025-04-23,30 days,,sheet_loss,re-date
+3241,target.com,102002504509397,missing,1.92,2026-10-21,2026-10-21,2025-04-25,30 days,,sheet_loss,re-date
+3240,chewy.com,1669438072,missing,8.09,2026-10-21,2026-10-21,2025-05-02,30 days,,sheet_loss,re-date
+3239,jacklinks.com,1000199565,missing,105.33,2026-10-21,2026-10-21,2025-05-04,30 days,,sheet_loss,re-date
+3238,chewy.com,1671011075,missing,41.51,2026-10-28,2026-10-28,2025-05-05,30 days,,sheet_loss,re-date
+3237,officesupply.com,6487575,missing,51.77,2026-10-21,2026-10-21,2025-05-12,30 days,,sheet_loss,re-date
+3236,walgreens.com,213056229999,missing,9.40,2026-10-21,2026-10-21,2025-05-13,30 days,,sheet_loss,re-date
+3234,spoiledchild.com,501004301939,missing,38.38,2026-10-21,2026-10-21,2025-05-14,30 days,,sheet_loss,re-date
+3235,walmart.com,200013157400735,missing,31.20,2026-11-05,2026-11-05,2025-05-14,MTD + 30 days,,sheet_loss,re-date
+3233,michaels.com,3200107622229369,missing,34.72,2026-10-21,2026-10-21,2025-05-18,30 days,,sheet_loss,re-date
+3311,target.com,912002579192786,missing,3.78,2026-10-21,2026-10-21,2025-05-27,30 days,,sheet_loss,re-date
+3232,vitacost.com,31724292,missing,79.36,2026-10-21,2026-10-21,2025-05-28,30 days,,sheet_loss,re-date
+3231,iherb.com,936693817,missing,6.77,2026-10-21,2026-10-21,2025-05-31,30 days,,sheet_loss,re-date
+3230,logitechg.com,US01569377,missing,14.43,2026-10-21,2026-10-21,2025-06-09,30 days,,sheet_loss,re-date
+3229,kohls.com,6640864375,missing,89.75,2026-10-21,2026-10-21,2025-06-10,30 days,,sheet_loss,re-date
+3228,vitacost.com,918366021,missing,2.04,2026-11-05,2026-11-05,2025-06-11,MTD + 30 days,,sheet_loss,re-date
+3310,walmart.com,200013396929928,missing,26.40,2026-10-21,2026-10-21,2025-06-11,30 days,,sheet_loss,re-date
+3225,shop.smucker.com,Order 10248198 / Confirmation #N2GC1N4HT,missing,11.84,2026-10-21,2026-10-21,2025-06-12,30 days,,sheet_loss,re-date
+3226,webstaurantstore.com,112348638,missing,6.98,2026-11-05,2026-11-05,2025-06-12,MTD + 30 days,,sheet_loss,re-date
+3227,target.com,102002641711259,missing,5.67,2026-11-08,2026-11-08,2025-06-12,MTD + 30 days,,sheet_loss,re-date
+3224,shop.smucker.com,Order 10248776 / Confirmation #GRKFEPQ5H,missing,14.80,2026-10-21,2026-10-21,2025-06-18,30 days,,sheet_loss,re-date
+3223,walmart.com,200013462303996,missing,39.60,2026-10-21,2026-10-21,2025-06-20,30 days,,sheet_loss,re-date
+3309,walmart.com,200013468054051,missing,25.21,2026-10-21,2026-10-21,2025-06-22,30 days,,sheet_loss,re-date
+3222,supplycenterusa.com,Order #9083922 / Confirmation #7UIZ2AC10,missing,58.50,2026-10-28,2026-10-28,2025-06-24,30 days,,sheet_loss,re-date
+3221,vitacost.com,616116178,missing,15.21,2026-10-21,2026-10-21,2025-07-02,30 days,,sheet_loss,re-date
+3220,vitacost.com,918425936,missing,47.52,2026-10-21,2026-10-21,2025-07-03,30 days,,sheet_loss,re-date
+3308,walmart.com,200013315650106,missing,3.49,2026-10-28,2026-10-28,2025-07-04,30 days,,sheet_loss,re-date
+3219,vitacost.com,616129615,missing,44.72,2026-10-21,2026-10-21,2025-07-09,30 days,,sheet_loss,re-date
+3304,walmart.com,200013162573166,missing,2.48,2026-10-21,2026-10-21,2025-07-11,30 days,,sheet_loss,re-date
+3217,supplyonline.com,S5486520,missing,10.93,2026-11-08,2026-11-08,2025-07-12,MTD + 30 days,,sheet_loss,re-date
+3218,walmart.com,200013320456201,missing,9.92,2026-10-28,2026-10-28,2025-07-12,30 days,,sheet_loss,re-date
+3216,walmart.com,200013249497825,missing,9.92,2026-10-28,2026-10-28,2025-07-15,30 days,,sheet_loss,re-date
+3215,tractive.com,6000319502,missing,42.75,2026-10-21,2026-10-21,2025-07-16,30 days,,sheet_loss,re-date
+3303,walmart.com,200013398020861,missing,3.08,2026-10-28,2026-10-28,2025-07-17,30 days,,sheet_loss,re-date
+3214,walmart.com,200013361914235,missing,3.94,2026-10-21,2026-10-21,2025-07-18,30 days,,sheet_loss,re-date
+3302,walmart.com,200013317672058,missing,5.98,2026-10-28,2026-10-28,2025-07-18,30 days,,sheet_loss,re-date
+3212,walmart.com,200013463977666,missing,6.94,2026-11-05,2026-11-05,2025-07-19,MTD + 30 days,,sheet_loss,re-date
+3213,walmart.com,200013463977666,missing,43.34,2026-11-05,2026-11-05,2025-07-19,MTD + 30 days,,sheet_loss,re-date
+3211,sodastream.com,Order #4779067 / Confirmation #AXXWLZD5G,missing,119.95,2026-11-05,2026-11-05,2025-07-20,MTD + 30 days,,sheet_loss,re-date
+3210,zoro.com,WB7772856621,missing,207.56,2026-11-05,2026-11-05,2025-07-23,MTD + 30 days,,sheet_loss,re-date
+3208,sodastream.com,Order #4798277 / Confirmation #CZ8RD0PUK,missing,59.90,2026-10-21,2026-10-21,2025-07-27,30 days,,sheet_loss,re-date
+3209,target.com,102002728537042,missing,60.70,2026-10-28,2026-10-28,2025-07-27,30 days,,sheet_loss,re-date
+3207,vitacost.com,616170745,missing,168.79,2026-10-21,2026-10-21,2025-07-31,30 days,,sheet_loss,re-date
+3206,zoro.com,WB2355966518,missing,75.32,2026-11-07,2026-11-07,2025-08-01,MTD + 30 days,,sheet_loss,re-date
+3205,samsclub.com,10328008755,missing,106.89,2026-10-21,2026-10-21,2025-08-05,30 days,,sheet_loss,re-date
+3176,vitacost.com,616196968,missing,6.78,2026-10-21,2026-10-21,2025-08-07,30 days,,sheet_loss,re-date
+3204,vitacost.com,616196913,missing,69.22,2026-10-21,2026-10-21,2025-08-07,30 days,,sheet_loss,re-date
+3203,webstaurantstore.com,115211186,missing,30.50,2026-10-21,2026-10-21,2025-08-21,30 days,,sheet_loss,re-date
+3201,michaels.com,9000108802652025,missing,10.12,2026-11-05,2026-11-05,2025-08-28,MTD + 30 days,,sheet_loss,re-date
+3202,michaels.com,9000108802652025,missing,1.76,2026-11-05,2026-11-05,2025-08-28,MTD + 30 days,,sheet_loss,re-date
+3200,tractorsupply.com,1195347203,missing,92.60,2026-11-02,2026-11-02,2025-08-29,MTD + 30 days,,sheet_loss,re-date
+3199,yankeecandle.com,HFUS07934892504,missing,60.35,2026-10-21,2026-10-21,2025-09-10,30 days,,sheet_loss,re-date
+3197,vitacost.com,31984180,missing,143.95,2026-11-05,2026-11-05,2025-09-20,MTD + 30 days,,sheet_loss,re-date
+3198,vitacost.com,31984180,missing,15.16,2026-11-05,2026-11-05,2025-09-20,MTD + 30 days,,sheet_loss,re-date
+3305,walmart.com,200013743707256,missing,1.82,2026-11-05,2026-11-05,2025-09-21,MTD + 30 days,,sheet_loss,re-date
+3196,yankeecandle.com,HFUS07997675922,missing,150.47,2026-10-21,2026-10-21,2025-09-26,30 days,,sheet_loss,re-date
+3195,walmart.com,200013581852562,missing,55.30,2026-10-21,2026-10-21,2025-09-28,30 days,,sheet_loss,re-date
+3194,gamersroll.com,2000044731,missing,159.90,2026-11-02,2026-11-02,2025-09-30,MTD + 30 days,,sheet_loss,re-date
+3193,staples.com,9984531641,missing,180.34,2026-11-05,2026-11-05,2025-10-01,MTD + 30 days,,sheet_loss,re-date
+3299,drmartypets.com,ORD-127599386,missing,33.66,2026-11-05,2026-11-05,2025-10-06,MTD + 30 days,,sheet_loss,re-date
+3192,officesupply.com,6730917,missing,6.77,2026-11-05,2026-11-05,2025-10-25,MTD + 30 days,,sheet_loss,re-date
+3190,walmart.com,200014027440473,missing,5.80,2026-11-05,2026-11-05,2025-10-29,MTD + 30 days,,sheet_loss,re-date
+3191,orthout.com,Order #15577 / Confirmation #GD11M3WG5,missing,21.99,2026-11-05,2026-11-05,2025-11-07,MTD + 30 days,,sheet_loss,re-date
+3301,webstaurantstore.com,118906066,missing,1.44,2026-10-21,2026-10-21,2025-11-20,30 days,,sheet_loss,re-date
+3189,walmart.com,200014053652567,missing,58.15,2026-11-05,2026-11-05,2025-11-24,MTD + 30 days,,sheet_loss,re-date
+3300,ghirardelli.com,2000867966,missing,84.97,2026-10-28,2026-10-28,2025-12-04,30 days,,sheet_loss,re-date
+3188,walmart.com,200013928861152,missing,14.05,2026-10-28,2026-10-28,2025-12-13,30 days,,sheet_loss,re-date
+3186,shop.hersheys.com,100930535,missing,2.67,2026-11-05,2026-11-05,2025-12-14,MTD + 30 days,,sheet_loss,re-date
+3187,walgreens.com,214155789642,missing,4.08,2026-10-21,2026-10-21,2025-12-14,30 days,,sheet_loss,re-date
+3183,redwingshoes.com,H0109743900,missing,136.34,2026-11-05,2026-11-05,2025-12-21,MTD + 30 days,,sheet_loss,re-date
+3185,macys.com,4701350258,missing,222.50,2026-11-05,2026-11-05,2025-12-21,MTD + 30 days,,sheet_loss,re-date
+3184,macys.com,4702364947,missing,163.17,2026-11-05,2026-11-05,2025-12-22,MTD + 30 days,,sheet_loss,re-date
+3182,shforestrysupplies.com,2000042207,missing,7.99,2026-10-28,2026-10-28,2025-12-23,30 days,,sheet_loss,re-date
+3181,macys.com,4706522351,missing,14.83,2026-11-05,2026-11-05,2025-12-31,MTD + 30 days,,sheet_loss,re-date
+3282,macys.com,4707927703,missing,28.48,2026-11-05,2026-11-05,2026-01-03,MTD + 30 days,,sheet_loss,re-date
+3279,macys.com,4708094576,missing,20.47,2026-10-28,2026-10-28,2026-01-04,30 days,,sheet_loss,re-date
+3278,petsmart.com,1110627344,missing,12.94,2026-11-05,2026-11-05,2026-01-24,MTD + 30 days,,sheet_loss,re-date
+3276,michaels.com,2000108690096633,missing,10.81,2026-11-05,2026-11-05,2026-01-25,MTD + 30 days,,sheet_loss,re-date
+3277,michaels.com,9500108624658937,missing,2.51,2026-11-05,2026-11-05,2026-01-25,MTD + 30 days,,sheet_loss,re-date
+3314,michaels.com,8200111238767097,missing,2.60,2026-10-28,2026-10-28,2026-01-31,30 days,,sheet_loss,re-date
+3275,walmart.com,200014094985166,missing,88.26,2026-11-05,2026-11-05,2026-02-06,MTD + 30 days,,sheet_loss,re-date
+3273,michaels.com,9200110892036601,missing,2.78,2026-11-05,2026-11-05,2026-02-07,MTD + 30 days,,sheet_loss,re-date
+3274,yankeecandle.com,HFUS08896206761,missing,1059.30,2026-10-28,2026-10-28,2026-02-07,30 days,,sheet_loss,re-date
+3272,petsmart.com,1111261457,missing,3.22,2026-11-05,2026-11-05,2026-02-08,MTD + 30 days,,sheet_loss,re-date
+3270,petsmart.com,1111298134,missing,6.23,2026-11-05,2026-11-05,2026-02-09,MTD + 30 days,,sheet_loss,re-date
+3271,walmart.com,200014419201190,missing,88.26,2026-11-05,2026-11-05,2026-02-09,MTD + 30 days,,sheet_loss,re-date
+3269,yankeecandle.com,HFUS08909344440,missing,222.60,2026-10-28,2026-10-28,2026-02-11,30 days,,sheet_loss,re-date
+3267,walmart.com,200014358792751,missing,26.00,2026-11-05,2026-11-05,2026-02-17,MTD + 30 days,,sheet_loss,re-date
+3268,carters.com,CAR115583841,missing,28.74,2026-11-05,2026-11-05,2026-02-18,MTD + 30 days,,sheet_loss,re-date
+3265,shop.tetleyusa.com,69170725,missing,73.02,2026-11-05,2026-11-05,2026-02-27,MTD + 30 days,,sheet_loss,re-date
+3266,shop.tetleyusa.com,69170725,missing,18.26,2026-11-05,2026-11-05,2026-02-27,MTD + 30 days,,sheet_loss,re-date
+3263,walmart.com,200014367888369,missing,9.24,2026-11-05,2026-11-05,2026-03-01,MTD + 30 days,,sheet_loss,re-date
+3264,yami.com,2026030150193,missing,121.71,2026-11-02,2026-11-02,2026-03-01,MTD + 30 days,,sheet_loss,re-date
+3261,ryanspet.com,000140331,missing,62.94,2026-11-05,2026-11-05,2026-03-03,MTD + 30 days,,sheet_loss,re-date
+3260,corelle.com,W0382215,missing,15.45,2026-11-08,2026-11-08,2026-03-04,MTD + 30 days,,sheet_loss,re-date
+3256,petsmart.com,1112652627,missing,15.81,2026-11-05,2026-11-05,2026-03-08,MTD + 30 days,,sheet_loss,re-date
+3257,yankeecandle.com,HFUS09001835764,missing,148.41,2026-11-05,2026-11-05,2026-03-08,MTD + 30 days,,sheet_loss,re-date
+3258,yankeecandle.com,HFUS09001835764,missing,185.51,2026-11-05,2026-11-05,2026-03-08,MTD + 30 days,,sheet_loss,re-date
+3307,afa-motors.com,AFA11177,missing,115.20,2026-11-05,2026-11-05,2026-03-11,MTD + 30 days,,sheet_loss,re-date
+3306,walmart.com,200014485054000,missing,13.87,2026-11-05,2026-11-05,2026-03-18,MTD + 30 days,,sheet_loss,re-date
+3251,walgreens.com,214815868572,missing,38.30,2026-11-05,2026-11-05,2026-03-20,MTD + 30 days,,sheet_loss,re-date
+3249,sandandfoghome.com,185285,missing,90.95,2026-10-28,2026-10-28,2026-03-25,30 days,,sheet_loss,re-date
+3250,petsmart.com,1113460210,missing,4.08,2026-11-05,2026-11-05,2026-03-26,MTD + 30 days,,sheet_loss,re-date
+3297,petsmart.com,1113689148,missing,15.46,2026-11-05,2026-11-05,2026-03-31,MTD + 30 days,,sheet_loss,re-date
+3248,walmart.com,200014502060841,missing,17.65,2026-11-05,2026-11-05,2026-04-01,MTD + 30 days,,sheet_loss,re-date
+3247,walmart.com,200014410518207,missing,50.00,2026-10-28,2026-10-28,2026-04-03,30 days,,sheet_loss,re-date
+3246,walmart.com,200014571944610,missing,13.87,2026-10-28,2026-10-28,2026-04-16,30 days,,sheet_loss,re-date
+3298,walmart.com,200014774750097,missing,12.68,2026-11-01,2026-11-01,2026-05-12,MTD + 30 days,,sheet_loss,re-date
+3177,sodastream.com,5545026,missing,5.60,2026-11-05,2026-11-05,2026-05-14,MTD + 30 days,,sheet_loss,re-date
+3173,michaels.com,4800110175975417,missing,16.57,2026-11-01,2026-11-01,2026-06-22,MTD + 30 days,,sheet_loss,re-date
+3175,target.com,102003592413875,missing,14.39,2026-10-16,2026-10-16,2026-07-12,,,sheet_loss,re-date
+3178,ryanspet.com,000182847,missing,7.12,2026-10-16,2026-10-16,2026-08-28,,,sheet_loss,re-date
+3180,drinkarizona.com,AZT181138,missing,3.83,2026-10-17,2026-10-17,2026-08-31,30 days,,sheet_loss,re-date
+3174,walmart.com,200015088519560,missing,5.58,2026-10-16,2026-10-16,2026-09-08,,,sheet_loss,re-date

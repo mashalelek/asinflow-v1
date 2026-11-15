@@ -17,3 +17,8 @@ export const CLAIM_REMAINING_SQL = (c: string) => `GREATEST(0, COALESCE(${c}.amo
 export const REFUNDS_DUE_CLAIM_COND = (c: string) => `(${c}.status = 'open' AND (${c}.outcome IS NULL OR ${c}.outcome IN ('refund_card', 'gift_card', 'store_credit')))`;
 export const REFUNDS_DUE_PO_SQL = (p: string) => `(SELECT COALESCE(SUM(${CLAIM_REMAINING_SQL("c")}), 0) FROM supplier_claims c WHERE c.po_id = ${p}.id AND ${REFUNDS_DUE_CLAIM_COND("c")})`;
 export const REFUNDS_DUE_EXISTS_SQL = (p: string) => `EXISTS (SELECT 1 FROM supplier_claims c WHERE c.po_id = ${p}.id AND ${REFUNDS_DUE_CLAIM_COND("c")} AND ${CLAIM_REMAINING_SQL("c")} > 0)`;
+
+/** A closed claim with a write-off on it (§3.14 rows 1 / 4): Write off (outcome write_off) or Write off remainder (a refund outcome with a reason); reopening clears status, so the claim leaves. */
+export const WRITTEN_OFF_CLAIM_COND = (c: string) => `(${c}.status = 'closed' AND ${c}.write_off_reason IS NOT NULL)`;
+/** The write-off's day in Eastern (the Dashboard's Spend calendar), from closed_at. */
+export const WRITTEN_OFF_ON_SQL = (c: string) => `(${c}.closed_at AT TIME ZONE 'America/New_York')::date`;

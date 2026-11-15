@@ -1,6 +1,8 @@
 import { describe, it, expect, beforeAll, afterAll } from "vitest";
 import pg from "pg";
 import { loadGrid, loadSeries, loadCoverage, poSpendCtes } from "./dashboard";
+import { loadClaimsPage } from "./claim-buckets";
+import { parsePoListFilters, poListWhere } from "./po-list-filters";
 
 // Dashboard SQL (SPEC §28) on the REAL local schema, every test inside a
 // transaction that is ROLLED BACK — nothing it creates survives. Fixtures
@@ -215,6 +217,79 @@ describe("Dashboard Spend: a split PO's repeated header counts once (rolled back
       await po("4242001", "2032-01-13", 80); await po("4242001 / 4242002", "2032-01-13", 80, 3); // a form-saved PO is never a sheet copy
       expect(await spend("2032-01-10", "2032-03-31")).toEqual({ spend: 255.84 + 2 * 104.44 + 2 * 51.55 + 160, n: 7 });
       expect((await q(`SELECT SUM(order_total)::float8 AS t FROM purchase_orders WHERE supplier = 'zz-dash.test'`)).rows[0].t).toBeCloseTo(2 * 255.84 + 2 * 104.44 + 2 * 51.55 + 160, 2); // stored values unchanged
+    });
+  });
+});
+
+// Claims commit 9 (§3.14, 2026-11-15): Supplier write-offs and Lost / damaged by us — one test per acceptance row, on the real schema.
+describe("Dashboard: Supplier write-offs and Lost / damaged by us (§3.14, rolled back)", () => {
+  const NY = (ymd: string) => `('${ymd} 12:00')::timestamp AT TIME ZONE 'America/New_York'`;
+  async function fixtures(q: Q) {
+    const po = async (oid: string, date: string, total: number) => (await q(`INSERT INTO purchase_orders (order_id, order_date, supplier, order_total) VALUES ($1, $2, 'zz-dash.test', $3) RETURNING id`, [oid, date, total])).rows[0].id as string;
+    const row = async (poId: string, upp: number, qtyInd: number, cost: number, lost: number, componentsOnly = false) =>
+      (await q(`INSERT INTO po_asins (po_id, asin, qty, units_per_pack, sold_as, qty_basis, cost_per_unit, qty_lost_damaged_us, components_only) VALUES ($1, $2, $3, $4, 'individual', 'individual', $5, $6, $7) RETURNING id`, [poId, ASIN, qtyInd, upp, cost, lost, componentsOnly])).rows[0].id as string;
+    const line = async (poId: string, paId: string) => (await q(`INSERT INTO po_line_items (po_id, po_asin_id, position, product_name, qty_ordered, price, retailer_units_per_product, asin_units_per_pack, qty_basis) VALUES ($1, $2, 0, 'zz', 10, 10, 1, 1, 'individual') RETURNING id`, [poId, paId])).rows[0].id as string;
+    return { po, row, line };
+  }
+  /** A claim insert with closed_at as an Eastern-noon literal (the other values are parameters). */
+  async function insertClaim(q: Q, poId: string, lineId: string, f: { kind: string; status: string; outcome: string | null; write_off_reason: string | null; amount_owed: number; closed_on: string | null }) {
+    return (await q(`INSERT INTO supplier_claims (po_id, po_line_item_id, amount_owed_source, found_by, qty, kind, status, outcome, write_off_reason, amount_owed, outcome_amount, found_at, closed_at)
+                     VALUES ($1, $2, 'manual', 'maria', 1, $3, $4, $5, $6, $7, $7, '2031-06-01', ${f.closed_on ? NY(f.closed_on) : "NULL"}) RETURNING id`, [poId, lineId, f.kind, f.status, f.outcome, f.write_off_reason, f.amount_owed])).rows[0].id as number;
+  }
+  it("rows 1, 2, 4, 7, 8: Write off and Write off remainder count on the write-off day (the remainder only), split by kind; a reopened or refund-only closed claim adds nothing; $0 outside; Spend unchanged", async (ctx) => {
+    if (!client) return ctx.skip();
+    await inTx(async (q) => {
+      const f = await fixtures(q);
+      const W = await f.po("zz-W", "2031-06-18", 100); const w = await f.row(W, 1, 10, 10, 0); const wl = await f.line(W, w);
+      const refundId = (await q(`INSERT INTO po_line_refunds (po_id, po_line_item_id, amount, source) VALUES ($1, $2, 10.02, 'manual') RETURNING id`, [W, wl])).rows[0].id;
+      const before = await loadGrid(q, 1, undefined, NOW);
+      expect(before.columns[0].cells.spend.value).toBe(89.98); // the received refund is subtracted, as always
+      expect(before.columns[0].cells.write_offs).toEqual({ value: 0, claimCount: 0, byKind: {} }); // row 7: nothing in the range
+      // row 1: Write off (the whole $ owed) today; Write off remainder (owed 30 − 10.02 applied = 19.98) on Monday
+      await insertClaim(q, W, wl, { kind: "missing", status: "closed", outcome: "write_off", write_off_reason: "the supplier declined", amount_owed: 38.42, closed_on: "2031-06-18" });
+      const k2 = await insertClaim(q, W, wl, { kind: "cant_sell", status: "closed", outcome: "refund_card", write_off_reason: "short — let it go", amount_owed: 30, closed_on: "2031-06-16" });
+      await q(`INSERT INTO supplier_claim_refunds (claim_id, po_line_refund_id, amount_applied) VALUES ($1, $2, 10.02)`, [k2, refundId]);
+      // adds nothing: a closed claim fully refunded (no write-off), a reopened write-off (status open), a write-off dated last month
+      await insertClaim(q, W, wl, { kind: "damaged", status: "closed", outcome: "refund_card", write_off_reason: null, amount_owed: 5, closed_on: "2031-06-18" });
+      await insertClaim(q, W, wl, { kind: "expired", status: "open", outcome: "write_off", write_off_reason: "reopened — row 4", amount_owed: 7, closed_on: null });
+      await insertClaim(q, W, wl, { kind: "missing", status: "closed", outcome: "write_off", write_off_reason: "old", amount_owed: 9, closed_on: "2031-05-02" });
+      const g = await loadGrid(q, 1, undefined, NOW);
+      const [today, week, mtd, d30] = g.columns;
+      expect(today.cells.write_offs).toEqual({ value: 38.42, claimCount: 1, byKind: { missing: 38.42 } });
+      expect(week.cells.write_offs).toEqual({ value: 58.4, claimCount: 2, byKind: { missing: 38.42, cant_sell: 19.98 } }); // row 2: the hover split
+      expect(mtd.cells.write_offs).toEqual(week.cells.write_offs);
+      expect(d30.cells.write_offs).toEqual(week.cells.write_offs); // 05-02 is outside 30 days
+      expect((await loadGrid(q, 2, undefined, NOW)).columns[3].cells.write_offs).toEqual({ value: 9, claimCount: 1, byKind: { missing: 9 } }); // Last month
+      expect((await loadGrid(q, 4, { from: "2031-06-16", to: "2031-06-18" }, NOW)).columns[0].cells.write_offs).toMatchObject({ value: 58.4, claimCount: 2 }); // the Custom tile, same rows
+      // row 8: Spend is what it was before the write-offs existed
+      for (const c of g.columns) expect(c.cells.spend.value, c.key).toBe(before.columns.find((b) => b.key === c.key)!.cells.spend.value);
+      // row 3: the linked list (Claims › Closed, the write-off dates) sums to the cell
+      const listed = (await loadClaimsPage(q, { supplier: "zz-dash.test" }, NOW)).filter((r) => r.bucket === "closed" && r.written_off_on != null && r.written_off_on >= week.eastern.from && r.written_off_on <= week.eastern.to);
+      expect(listed.map((r) => [r.kind, r.written_off_on, r.written_off])).toEqual([["cant_sell", "2031-06-16", 19.98], ["missing", "2031-06-18", 38.42]]);
+      expect(listed.reduce((t, r) => t + (r.written_off ?? 0), 0)).toBeCloseTo(week.cells.write_offs.value!, 2);
+      // the reopened and the refund-only closed claims carry no write-off date
+      const all = await loadClaimsPage(q, { supplier: "zz-dash.test" }, NOW);
+      expect(all.filter((r) => r.written_off_on == null).map((r) => r.kind).sort()).toEqual(["damaged", "expired"]);
+    });
+  });
+  it("rows 5, 6, 7, 8: Lost / damaged by us = lost ASIN units × the row's cost per unit on the PO's order date (a components-only row per Individual unit), '· N ASIN units'; the POs link lists exactly those POs; $0 outside; Spend unchanged", async (ctx) => {
+    if (!client) return ctx.skip();
+    await inTx(async (q) => {
+      const f = await fixtures(q);
+      const L1 = await f.po("zz-L1", "2031-06-17", 69.4); const r1 = await f.row(L1, 2, 20, 6.94, 6); await f.line(L1, r1); // 6 Individual = 3 ASIN units lost × $6.94
+      const L2 = await f.po("zz-L2", "2031-06-16", 50); const r2 = await f.row(L2, 5, 25, 2, 5, true); await f.line(L2, r2); // components only: 5 Individual × $2.00 per Individual unit
+      const L3 = await f.po("zz-L3", "2031-06-16", 30); const r3 = await f.row(L3, 1, 3, 10, 0); await f.line(L3, r3); // nothing lost
+      const g = await loadGrid(q, 1, undefined, NOW);
+      const [today, week] = g.columns;
+      expect(today.cells.lost_damaged).toEqual({ value: 0, secondary: 0, poCount: 0 }); // row 7
+      expect(week.cells.lost_damaged).toEqual({ value: 30.82, secondary: 4, poCount: 2 });
+      expect((await loadGrid(q, 2, undefined, NOW)).columns[1].cells.lost_damaged).toEqual({ value: 20.82, secondary: 3, poCount: 1 }); // Yesterday: L1 only
+      expect(week.cells.spend.value).toBe(69.4 + 50 + 30); // row 8: never subtracted
+      expect(week.cells.asin_units.value).toBe(10 + 5 + 3); // ordered units unchanged by a loss
+      // row 6: /purchase-orders?lost=1&closed=all&from&to → L1 and L2, not L3
+      const w = poListWhere(parsePoListFilters({ lost: "1", closed: "all", from: week.eastern.from, to: week.eastern.to, supplier: "zz-dash.test" }));
+      const ids = (await q(`SELECT p.order_id FROM purchase_orders p ${w.where} ORDER BY p.order_id`, w.params)).rows.map((r: any) => r.order_id);
+      expect(ids).toEqual(["zz-L1", "zz-L2"]);
     });
   });
 });

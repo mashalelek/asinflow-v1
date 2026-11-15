@@ -5,9 +5,14 @@ import { readBulkUrl, writeBulkUrl } from "@/pages/bulk-calc";
 
 describe("POs list URL state (2026-11-06)", () => {
   it("every filter, the sort and the page round-trip through the query string", () => {
-    const s = { search: "caress", action: ["SHIP", "Pack size missing"], supplier: ["walmart.com", "target.com"], closed: "all" as const, refunds: "due" as const, claims: "open" as const, from: "2026-01-01", to: "2026-11-06", sort: { key: "order_total", dir: "desc" as const }, page: 3 };
+    const s = { search: "caress", action: ["SHIP", "Pack size missing"], supplier: ["walmart.com", "target.com"], closed: "all" as const, refunds: "due" as const, claims: "open" as const, from: "2026-01-01", to: "2026-11-06", sort: { key: "order_total", dir: "desc" as const }, page: 3, lost: false };
     const q = writePoListUrl(s);
     expect(readPoListUrl(q)).toEqual({ ...s, action: ["Pack size missing", "SHIP"], supplier: ["target.com", "walmart.com"] });
+  });
+  it("?lost=1 (the Dashboard's Lost / damaged by us link, claims commit 9) round-trips and is left out when off", () => {
+    expect(readPoListUrl("?lost=1&closed=all&from=2026-11-01&to=2026-11-14")).toMatchObject({ lost: true, closed: "all", from: "2026-11-01", to: "2026-11-14" });
+    expect(writePoListUrl({ ...readPoListUrl(""), lost: true })).toBe("?lost=1");
+    expect(readPoListUrl("?lost=0").lost).toBe(false);
   });
   it("the default list is the bare URL; D3 Status defaults to Open; ?asin= (the On Order link) searches the ASIN", () => {
     expect(writePoListUrl(readPoListUrl(""))).toBe("");

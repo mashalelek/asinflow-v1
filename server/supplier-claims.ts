@@ -14,6 +14,7 @@
 //   channel, the reship order #, the refund row — and the bucket (derived, shared/claim-bucket.ts) moves on.
 //   Every change is a History row (po_edit_log, entity 'claim') and an event (supplier_claim_events).
 import type { QueryLike } from "./scheduler/types";
+import { WRITTEN_OFF_ON_SQL } from "./supplier-claim-sql";
 import { EditError, logEdits } from "./po-edit";
 import { isReported } from "@shared/claim-bucket";
 import { addMoneyRow } from "./po-money-edit";
@@ -57,6 +58,8 @@ export interface ClaimRow {
   /** The reason typed on Dismiss (the latest `dismissed` event's summary); null when none was typed or the claim is not dismissed. */
   dismiss_reason: string | null;
   owed: number | null; remaining: number | null; received: number;
+  /** Claims commit 9 (§3.14): a closed claim with a write-off (Write off / Write off remainder) — its Eastern write-off day and the $ written off (what the refunds left); null otherwise. */
+  written_off_on: string | null; written_off: number | null;
 }
 
 const num = (v: unknown) => (v == null ? null : Number(v));
@@ -71,7 +74,7 @@ export async function loadClaims(query: QueryLike, where: { poId?: string; ids?:
   const cond = where.all ? `TRUE` : where.ids ? `c.id = ANY($1::bigint[])` : `c.po_id = $1`;
   const params = where.all ? [] : [where.ids ?? where.poId];
   const rows = (await query(
-    `SELECT c.*, c.found_at::text AS found_at, c.reported_at::text AS reported_at, c.closed_at::text AS closed_at,
+    `SELECT c.*, c.found_at::text AS found_at, c.reported_at::text AS reported_at, c.closed_at::text AS closed_at, ${WRITTEN_OFF_ON_SQL("c")}::text AS written_off_on,
             c.supplier_confirmed_at::text AS supplier_confirmed_at, c.last_supplier_reply_at::text AS last_supplier_reply_at,
             c.replacement_shipped_at::text AS replacement_shipped_at, c.replacement_arrived_at::text AS replacement_arrived_at,
             c.return_by::text AS return_by, c.return_shipped_at::text AS return_shipped_at, c.return_delivered_at::text AS return_delivered_at,
@@ -115,7 +118,8 @@ export async function loadClaims(query: QueryLike, where: { poId?: string; ids?:
       replacement_tracking: r.replacement_tracking ? { ...r.replacement_tracking, id: Number(r.replacement_tracking.id) } : null,
       replacement_short_qty: num(r.replacement_short_qty), line_received_individual: num(r.line_received_individual), line_ordered_individual: num(r.line_ordered_individual),
       other_numbers: (r.other_numbers ?? []).map((n: any) => ({ ...n, id: Number(n.id), claim_id: n.claim_id == null ? null : Number(n.claim_id) })),
-      owed: m.owed, remaining: m.remaining, received: m.received };
+      owed: m.owed, remaining: m.remaining, received: m.received,
+      written_off_on: r.status === "closed" && r.write_off_reason ? r.written_off_on ?? null : null, written_off: r.status === "closed" && r.write_off_reason ? m.remaining : null };
   });
 }
 

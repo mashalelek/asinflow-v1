@@ -2,6 +2,8 @@ import { describe, it, expect } from "vitest";
 import { readFileSync } from "fs";
 import { resolve } from "path";
 import { bandVar } from "./metric-tiles";
+import { cellText, writeOffsHref, lostDamagedHref } from "./metric-grid";
+import { DASHBOARD_ROWS } from "@shared/dashboard";
 
 // Dashboard tiles (patch docs/claude_spec-patch-dashboard-tiles.md §1.3, §1.5):
 // one card per range column with a band by position, three hairline sections,
@@ -56,5 +58,29 @@ describe("card anatomy", () => {
     expect(tiles).toMatch(/<Sub label="Avg\. PO value"[\s\S]*?· \{avg\.small\}/);
     expect(tiles).toMatch(/<Sub label="ASIN units ordered"/);
     expect(tiles).toMatch(/<Sub label="Individual units ordered" note=\{ind\.small\}/);
+  });
+  // Claims commit 9 (§3.14, mockup docs/mockups/dashboard-writeoffs-2026-11-15.html): two cells under the four, in the same 2-column grid.
+  it("Supplier write-offs and Lost / damaged by us: a link with '· N claims' / '· N ASIN units' and the hover split when > 0, a dim '$0.00' with no link when empty (rows 2, 3, 6, 7)", () => {
+    expect(tiles).toMatch(/<Sub label="Supplier write-offs" testId=\{t\("write-offs"\)\} dim=\{wo\.muted\}[\s\S]*?<Link href=\{writeOffsHref\(col\)\} className=\{LINK\} title=\{wo\.tooltip\}[\s\S]*?· \{wo\.small\}/);
+    expect(tiles).toMatch(/<Sub label="Lost \/ damaged by us" testId=\{t\("lost-damaged"\)\} dim=\{ld\.muted\}[\s\S]*?<Link href=\{lostDamagedHref\(col\)\} className=\{LINK\} title=\{ld\.tooltip\}[\s\S]*?· \{ld\.small\}/);
+    expect(tiles).toMatch(/\{wo\.muted\s*\?\s*<span>\{wo\.main\}<\/span>/);
+    expect(tiles).toMatch(/\{ld\.muted\s*\?\s*<span>\{ld\.main\}<\/span>/);
+    // the two cells sit inside the SPEND grid, after Individual units — still one 2-column grid in SPEND
+    expect(tiles.indexOf('label="Supplier write-offs"')).toBeGreaterThan(tiles.indexOf('label="Individual units ordered"'));
+    expect(tiles.indexOf('label="Lost / damaged by us"')).toBeLessThan(tiles.indexOf("{/* SALES"));
+    // the cell texts (metric-grid): "$58.40 · 3 claims" with the split "missing $38.42 · can't sell $19.98" on hover; "$20.82 · 3 ASIN units"; "$0.00" muted
+    const wo = cellText(DASHBOARD_ROWS.find((r) => r.key === "write_offs")!, { value: 58.4, claimCount: 3, byKind: { missing: 38.42, cant_sell: 19.98 } });
+    expect(wo).toEqual({ main: "$58.40", small: "3 claims", tooltip: "missing $38.42 · can't sell $19.98" });
+    expect(cellText(DASHBOARD_ROWS.find((r) => r.key === "write_offs")!, { value: 12.5, claimCount: 1, byKind: { damaged: 12.5 } })).toEqual({ main: "$12.50", small: "1 claim", tooltip: "damaged $12.50" });
+    expect(cellText(DASHBOARD_ROWS.find((r) => r.key === "write_offs")!, { value: 0, claimCount: 0, byKind: {} })).toEqual({ main: "$0.00", muted: true });
+    const ld = cellText(DASHBOARD_ROWS.find((r) => r.key === "lost_damaged")!, { value: 20.82, secondary: 3, poCount: 2 });
+    expect(ld).toEqual({ main: "$20.82", small: "3 ASIN units", tooltip: "on 2 POs" });
+    expect(cellText(DASHBOARD_ROWS.find((r) => r.key === "lost_damaged")!, { value: 0, secondary: 0, poCount: 0 })).toEqual({ main: "$0.00", muted: true });
+    // the links: Claims › Closed filtered to the write-off dates; POs filtered to rows with lost / damaged units in the order dates, open and closed
+    const col = { eastern: { from: "2026-11-01", to: "2026-11-14" } };
+    expect(writeOffsHref(col)).toBe("/claims?bucket=closed&written_off_from=2026-11-01&written_off_to=2026-11-14");
+    expect(lostDamagedHref(col)).toBe("/purchase-orders?lost=1&closed=all&from=2026-11-01&to=2026-11-14");
+    // the mockup's wording for the lost cell was "· 3 units"; Maria 2026-11-15: the kind is named — "· 3 ASIN units" (the quantity-names rule)
+    expect(readFileSync(resolve(__dirname, "../../../docs/mockups/dashboard-writeoffs-2026-11-15.html"), "utf8")).toContain("· 3 ASIN units");
   });
 });

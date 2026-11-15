@@ -28,13 +28,19 @@
 //   canceled POs 0. Individual units = ASIN units × units_per_pack; a row
 //   with NULL units_per_pack contributes its ASIN units and is COUNTED as
 //   missing — never ×1 silently (2026-11-01 rule).
+//   Supplier write-offs (claims commit 9, §3.14, 2026-11-15) = Σ what was written off on CLOSED claims — Write off
+//   (the whole $ owed) or Write off remainder (owed − refunds applied; one expression, CLAIM_REMAINING_SQL) — dated by
+//   the write-off's Eastern day (closed_at); a reopened claim leaves. Split by kind for the hover. Never in Spend.
+//   Lost / damaged by us = Σ over ASIN rows of the Lost/damaged ASIN units × the row's cost per unit (a
+//   components-only row: Individual units × its per-Individual cost), dated by the PO's order date (AF does not
+//   record when a unit was lost). "· N ASIN units". Never in Spend.
 // SALES — sales_daily (+ sales_orders) by the Pacific sale_date.
 // PROFIT — placeholders until the Finances API patch (null, pending).
 import express, { type Router, type Request, type Response } from "express";
 import { query as defaultQuery } from "./db";
 import type { QueryLike } from "./scheduler/types";
 import { LINE_YIELD_SQL } from "./po-queries";
-import { REFUNDS_DUE_PO_SQL } from "./supplier-claim-sql";
+import { REFUNDS_DUE_PO_SQL, CLAIM_REMAINING_SQL, WRITTEN_OFF_CLAIM_COND, WRITTEN_OFF_ON_SQL } from "./supplier-claim-sql";
 import { resolveColumns, parseSet, parseCustom, parseYmd, last12MonthsRange, todayIn, EASTERN, PACIFIC, mondayOf, firstOfMonth, addDays, type RangeSet } from "./dashboard-range";
 import { DASHBOARD_ROWS, SERIES_KINDS, type DashboardCell, type DashboardColumn, type DashboardCoverage, type DashboardGrid, type DashboardRowKey, type DashboardSeries, type SeriesKind, type SeriesPoint, type Ymd } from "@shared/dashboard";
 
@@ -99,14 +105,27 @@ export function spendGridSql(columns: number): string {
            (SELECT COUNT(*) FILTER (WHERE NOT fully_canceled AND NOT shared_dup) FROM po_spend ${inRange})::int AS po_count_${i},
            (SELECT COALESCE(SUM(asin_units), 0) FROM units ${inRange})::float8 AS asin_units_${i},
            (SELECT COALESCE(SUM(COALESCE(individual_units, asin_units)), 0) FROM units ${inRange})::float8 AS individual_units_${i},
-           (SELECT COUNT(*) FILTER (WHERE individual_units IS NULL AND asin_units > 0) FROM units ${inRange})::int AS missing_pack_size_${i}`;
+           (SELECT COUNT(*) FILTER (WHERE individual_units IS NULL AND asin_units > 0) FROM units ${inRange})::int AS missing_pack_size_${i},
+           (SELECT COALESCE(SUM(amount), 0) FROM write_offs WHERE written_off_on >= ${f} AND written_off_on <= ${t})::float8 AS write_offs_${i},
+           (SELECT COUNT(*) FROM write_offs WHERE written_off_on >= ${f} AND written_off_on <= ${t})::int AS write_off_claims_${i},
+           (SELECT COALESCE(json_object_agg(kind, amt ORDER BY amt DESC), '{}'::json) FROM (SELECT kind, SUM(amount)::float8 AS amt FROM write_offs WHERE written_off_on >= ${f} AND written_off_on <= ${t} GROUP BY kind) k) AS write_offs_by_kind_${i},
+           (SELECT COALESCE(SUM(lost_amount), 0) FROM units ${inRange})::float8 AS lost_${i},
+           (SELECT COALESCE(SUM(lost_asin), 0) FROM units ${inRange})::float8 AS lost_units_${i},
+           (SELECT COUNT(DISTINCT po_id) FILTER (WHERE lost_asin > 0) FROM units ${inRange})::int AS lost_pos_${i}`;
   };
   return `WITH ${poSpendCtes("$1::date", "$2::date")}, units AS (
-      SELECT e.id, po.order_date,
+      SELECT e.id, e.po_id, po.order_date,
              CASE WHEN po.fully_canceled THEN 0 ELSE GREATEST(COALESCE(e.ordered_asin, 0) - COALESCE(e.canceled_asin, 0), 0) END AS asin_units,
              -- the stored Individual units (NULL on a legacy row = pack not known)
-             CASE WHEN po.fully_canceled THEN 0 WHEN e.ordered_individual IS NULL THEN NULL ELSE GREATEST(e.ordered_individual - COALESCE(e.canceled_individual, 0), 0) END AS individual_units
-        FROM po_asin_expected e JOIN po ON po.id = e.po_id
+             CASE WHEN po.fully_canceled THEN 0 WHEN e.ordered_individual IS NULL THEN NULL ELSE GREATEST(e.ordered_individual - COALESCE(e.canceled_individual, 0), 0) END AS individual_units,
+             -- Lost / damaged by us (§3.14 row 5): the row's lost ASIN units × its cost per unit; a components-only row is costed per Individual unit
+             COALESCE(e.lost_damaged_us_asin, 0) AS lost_asin,
+             CASE WHEN pa.components_only THEN COALESCE(e.lost_damaged_us_individual, 0) ELSE COALESCE(e.lost_damaged_us_asin, 0) END * COALESCE(pa.cost_per_unit, 0) AS lost_amount
+        FROM po_asin_expected e JOIN po ON po.id = e.po_id JOIN po_asins pa ON pa.id = e.id
+    ), write_offs AS (
+      -- §3.14 rows 1 / 4: closed claims with a write-off (the whole $ owed or the remainder), by the write-off's Eastern day
+      SELECT c.id, c.kind, ${WRITTEN_OFF_ON_SQL("c")} AS written_off_on, ${CLAIM_REMAINING_SQL("c")} AS amount
+        FROM supplier_claims c WHERE ${WRITTEN_OFF_CLAIM_COND("c")} AND ${WRITTEN_OFF_ON_SQL("c")} >= $1::date AND ${WRITTEN_OFF_ON_SQL("c")} <= $2::date
     )
     SELECT ${Array.from({ length: columns }, (_, i) => col(i)).join(",\n           ")}`;
 }
@@ -124,6 +143,13 @@ const COVERAGE_SQL = `SELECT (SELECT MIN(sale_date)::text FROM sales_daily) AS e
 
 const round2 = (v: number) => Math.round(v * 100) / 100;
 const num = (v: unknown) => (v == null ? 0 : Number(v));
+/** The write-offs' split by kind (json_object_agg, largest first) → rounded, zero kinds dropped. */
+function byKindOf(v: unknown): Record<string, number> {
+  const o = (typeof v === "string" ? JSON.parse(v) : v) ?? {};
+  const out: Record<string, number> = {};
+  for (const [k, a] of Object.entries(o as Record<string, unknown>)) { const n = round2(num(a)); if (n !== 0) out[k] = n; }
+  return out;
+}
 
 export async function loadCoverage(query: QueryLike): Promise<DashboardCoverage> {
   const r = (await query(COVERAGE_SQL)).rows[0] ?? {};
@@ -153,7 +179,8 @@ export async function loadGrid(query: QueryLike, set: RangeSet, custom: Ymd | un
   const spendRow = (await query(spendGridSql(columns.length), [minFrom, maxTo, ...columns.flatMap((c) => [c.eastern.from, c.eastern.to])])).rows[0] ?? {};
   for (let i = 0; i < columns.length; i++) {
     const c = columns[i];
-    const sp = { spend: spendRow[`spend_${i}`], refunds_due: spendRow[`refunds_due_${i}`], po_count: spendRow[`po_count_${i}`], asin_units: spendRow[`asin_units_${i}`], individual_units: spendRow[`individual_units_${i}`], missing_pack_size: spendRow[`missing_pack_size_${i}`] };
+    const sp = { spend: spendRow[`spend_${i}`], refunds_due: spendRow[`refunds_due_${i}`], po_count: spendRow[`po_count_${i}`], asin_units: spendRow[`asin_units_${i}`], individual_units: spendRow[`individual_units_${i}`], missing_pack_size: spendRow[`missing_pack_size_${i}`],
+      write_offs: spendRow[`write_offs_${i}`], write_off_claims: spendRow[`write_off_claims_${i}`], write_offs_by_kind: spendRow[`write_offs_by_kind_${i}`], lost: spendRow[`lost_${i}`], lost_units: spendRow[`lost_units_${i}`], lost_pos: spendRow[`lost_pos_${i}`] };
     const sa = (await query(SALES_GRID_SQL, [c.pacific.from, c.pacific.to])).rows[0] ?? {};
     const so = (await query(ORDERS_GRID_SQL, [c.pacific.from, c.pacific.to])).rows[0] ?? {};
     const poCount = num(sp.po_count);
@@ -167,6 +194,8 @@ export async function loadGrid(query: QueryLike, set: RangeSet, custom: Ymd | un
       asin_units: { value: round2(num(sp.asin_units)) },
       individual_units: { value: round2(num(sp.individual_units)), missingPackSize: num(sp.missing_pack_size) },
       avg_po_value: { value: poCount > 0 ? round2(spend / poCount) : null, poCount },
+      write_offs: { value: round2(num(sp.write_offs)), claimCount: num(sp.write_off_claims), byKind: byKindOf(sp.write_offs_by_kind) },
+      lost_damaged: { value: round2(num(sp.lost)), secondary: round2(num(sp.lost_units)), poCount: num(sp.lost_pos) },
       sales: { value: round2(num(sa.sales)), dataFrom },
       orders_units: { value: coverage.ordersFrom == null ? null : num(so.orders), secondary: num(sa.units), dataFrom: ordersFrom },
       refunds: { ...pending, secondary: null },

@@ -5,7 +5,7 @@
 
 export type DashboardGroup = "spend" | "sales" | "profit";
 export type DashboardRowKey =
-  | "spend" | "refunds_due" | "asin_units" | "individual_units" | "avg_po_value"
+  | "spend" | "refunds_due" | "asin_units" | "individual_units" | "avg_po_value" | "write_offs" | "lost_damaged"
   | "sales" | "orders_units" | "refunds"
   | "gross_profit" | "net_profit" | "est_payout";
 
@@ -31,6 +31,8 @@ export const DASHBOARD_ROWS: readonly DashboardRowDef[] = [
   { key: "asin_units", group: "spend", label: "ASIN units ordered", format: "int", definition: "Σ ASIN units − canceled ASIN units; a fully-canceled PO counts 0" },
   { key: "individual_units", group: "spend", label: "Individual units ordered", format: "int", definition: "Σ ASIN units × Individual units per ASIN unit; a row without a pack size contributes its ASIN units and is counted as missing" },
   { key: "avg_po_value", group: "spend", label: "Avg. PO value", format: "money", definition: "Spend ÷ PO count (fully-canceled POs not counted)" },
+  { key: "write_offs", group: "spend", label: "Supplier write-offs", format: "money", definition: "Σ written off on closed supplier claims (Write off: the $ owed; Write off remainder: what the refunds left) whose write-off date is in the range; a reopened claim leaves; never in Spend — click to open Claims › Closed, those write-offs" },
+  { key: "lost_damaged", group: "spend", label: "Lost / damaged by us", format: "money", definition: "Σ Lost/damaged by us ASIN units × the row's cost per unit on POs ordered in the range (AF does not record when a unit was lost); never in Spend — click to open the POs with lost / damaged units" },
   { key: "sales", group: "sales", label: "Sales", format: "money", primary: true, definition: "Σ revenue from the orders report (Pacific day)" },
   { key: "orders_units", group: "sales", label: "Orders / ASIN units", format: "pair", definition: "Distinct Amazon order ids / Σ ASIN units sold (SellerBoard's Orders / Units)" },
   { key: "refunds", group: "sales", label: "Refunds", format: "money", pending: true, definition: "Σ refund amount (ASIN units in small text) — Finances API" },
@@ -52,8 +54,11 @@ export interface DashboardCell {
   missingPackSize?: number;
   /** Sales cells: the range starts before the earliest sale_date — data from this day only. */
   dataFrom?: string | null;
-  /** Orders / Units: the units (value = orders). */
+  /** Orders / Units: the units (value = orders); Lost / damaged by us: the ASIN units (value = $). */
   secondary?: number | null;
+  /** Supplier write-offs: the claims counted and the split by kind for the hover ("missing $38.42 · can't sell $19.98"). */
+  claimCount?: number;
+  byKind?: Record<string, number>;
 }
 
 export interface DashboardColumn {

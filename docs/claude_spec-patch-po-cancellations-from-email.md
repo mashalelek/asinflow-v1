@@ -3,6 +3,7 @@
 Status: DRAFT 2026-10-23 — decisions D1–D4 answered by Maria 2026-10-23. Absorbs the still-valid parts (§2, §3) of the on-hold Col BA patch (`claude/spec-patch-canceled-qty-col-ba.md`), which is retired by this one. **Amended 2026-11-03 by the Dashboard patch (`docs/claude_spec-patch-analytics-dashboard.md` §2.3 C1, built):** the expected-refund piece of this data model now lives in `po_line_refunds` (`status = 'due'`, migration 082) — §3 and §5 below are amended accordingly; no `po_cancellations.refund_*` columns.
 **Line resolutions (2026-11-05):** the per-line resolution model — a qty, the $ owed, resolved by refund (linked `po_line_refunds` rows), replacement (a PO line) or write-off — is built as SPEC §22 "Supplier defects" (migration 094, `po_line_defects` + `po_line_defect_refunds`); a confirmed cancellation should resolve through it rather than add its own.
 Repo path: `docs/claude_spec-patch-po-cancellations-from-email.md`. Adds SPEC §27 "PO cancellations"; touches §11, §22, §26.
+**SUPERSEDED 2026-11-15 (supplier claims patch, `docs/claude_spec-patch-supplier-claims.md`, commits 1–9 built):** §3 (data model), §5 (review list and confirm flow) and §6 (net quantities everywhere) are superseded — a cancellation is a **canceled supplier claim** (`supplier_claims`, kind `canceled`, D14), suggested from a cancellation email by `server/cancellation-emails.ts` (claims commit 5, this patch's §4 ingestion kept its shape) and reviewed on the Claims page's Needs attention › Decide, never on a review list of its own; net quantities come from the views `po_line_expected` / `po_asin_expected` (D17, migration 101). §4 ingestion and §8 backfill stay valid as history of how the emails are read.
 
 ## 1. Goal
 
@@ -18,7 +19,7 @@ Once a cancel is on the line, every reader must use the **net** quantity: On Ord
 - **D4 — "Delayed" emails are ignored.**
 - From the Col BA patch, adopted as decided here: blank BA at intake → `qty_canceled` NULL (not tracked), as today; On Order / auto-close use per-line COALESCE (a tracked cancel always counts, an untracked line counts 0); Status "Canceled" with a smaller BA → BA wins.
 
-## 3. Data model
+## 3. Data model — SUPERSEDED 2026-11-15 (supplier claims patch §4: `supplier_claims`, kind `canceled`)
 
 Migration NNN:
 
@@ -70,7 +71,7 @@ Settings: `cancellations.sender_rules` is not a setting — retailer parsers are
 - Line proposal: if the PO has one product line, or exactly one line whose product name shares ≥ 2 distinctive tokens with the email item name, set `po_line_item_id` and `qty_proposed` = email qty (full scope → `qty_ordered`). Otherwise leave both NULL; Maria picks in the list.
 - Returns: rows the §26 tracking parser marks `return` are mirrored here as `kind = 'return'` (same review flow; confirm writes `qty_returned` instead).
 
-## 5. Review list and confirm flow
+## 5. Review list and confirm flow — SUPERSEDED 2026-11-15 (the Claims page, Needs attention › Decide; supplier claims patch §3.1 / §5)
 
 POs page toolbar chip **Cancellations (N)** (pending_review + unmatched). Each row: PO (link), supplier, email date, scope/reason, items as printed, proposed line + qty, refund amount/method from the email, link to the email. Actions:
 
@@ -81,7 +82,7 @@ POs page toolbar chip **Cancellations (N)** (pending_review + unmatched). Each r
 
 The PO's Cancellations tab (expanded view) lists its rows, confirmed and pending, with refund state.
 
-## 6. Net quantities everywhere (from the Col BA patch §2–§3, unchanged in substance)
+## 6. Net quantities everywhere — SUPERSEDED 2026-11-15 (the views `po_line_expected` / `po_asin_expected`, D17 / migration 101)
 
 1. **Upload to Velocity sends net quantities.** In `loadAfPoRows`, every quantity term nets the line's cancel: `net_ordered = qty_ordered − COALESCE(qty_canceled, 0)`; ASIN qty, sets and Col-AZ-equivalent `quantity` derived from the net values. Fully canceled lines stay excluded / delete-candidates as today. A partial cancel → smaller `quantity`: new orders CREATE at net; existing inbound orders show under Qty mismatches as opt-in PUTs (never pre-ticked); shipped orders flag-only. Net not divisible by `units_per_pack` → `invalid_pack_math`.
 2. **On Order and auto-close count every tracked line.** `PIPELINE_ROWS_SQL` and the `po-close` aggregate sum `COALESCE(qty_canceled, 0) × yield` per line; the "any line untracked → NULL" clause is dropped for these two consumers. The PO page's displayed Canceled column keeps the §22 display rule (em-dash when any line is untracked).

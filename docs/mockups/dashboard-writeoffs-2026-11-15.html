@@ -1,0 +1,101 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Dashboard tile — write-offs and lost units</title>
+</head>
+<body>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Noto+Sans:wght@400;600;700&amp;display=swap">
+<style>
+body{margin:0}
+a{color:#93c5fd}a:hover{color:#bfdbfe}
+</style>
+<div style="width: 820px; height: 640px; box-sizing: border-box; padding: 24px; background: #1C1917; color: #FAFAF9; font-family: 'Noto Sans', system-ui, sans-serif; display: flex; flex-direction: column; gap: 16px;">
+
+  <div style="display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 16px;">
+
+    <div style="background: #292524; border: 1px solid rgba(168,162,158,0.22); border-radius: 10px; overflow: hidden; display: flex; flex-direction: column; min-width: 0;">
+      <div style="padding: 14px 18px 12px; background: #45666E; display: flex; flex-direction: column; gap: 2px;">
+        <div style="font-size: 16px; font-weight: 700; color: #fafaf9;">MTD</div>
+        <div style="font-size: 12px; color: #e7e5e4;">Nov 1 – 14</div>
+      </div>
+      <div style="padding: 14px 18px 16px; display: flex; flex-direction: column; gap: 12px;">
+        <div style="font-size: 11px; letter-spacing: 0.08em; font-weight: 700; color: #A8A29E;">SPEND</div>
+        <div style="display: flex; flex-direction: column; gap: 2px;">
+          <div style="font-size: 13px; color: #A8A29E;">Spend</div>
+          <div style="font-size: 28px; font-weight: 700; letter-spacing: -0.01em; line-height: 1.15;">$9,412.60</div>
+        </div>
+        <div style="display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px 16px;">
+          <div style="display: flex; flex-direction: column; gap: 2px;">
+            <div style="font-size: 12px; color: #A8A29E;">Refunds due</div>
+            <a href="#refunds-due" style="font-size: 16px; font-weight: 600; text-decoration: none;">$312.48</a>
+          </div>
+          <div style="display: flex; flex-direction: column; gap: 2px;">
+            <div style="font-size: 12px; color: #A8A29E;">Avg. PO value</div>
+            <div style="font-size: 16px; font-weight: 600;">$196.10 <span style="font-size: 12px; font-weight: 400; color: #A8A29E;">· 48 POs</span></div>
+          </div>
+          <div style="display: flex; flex-direction: column; gap: 2px;">
+            <div style="font-size: 12px; color: #A8A29E;">ASIN units ordered</div>
+            <div style="font-size: 16px; font-weight: 600;">611</div>
+          </div>
+          <div style="display: flex; flex-direction: column; gap: 2px;">
+            <div style="font-size: 12px; color: #A8A29E;">Individual units ordered</div>
+            <div style="font-size: 16px; font-weight: 600;">1,034</div>
+          </div>
+          <div style="display: flex; flex-direction: column; gap: 2px;">
+            <div style="font-size: 12px; color: #A8A29E;">Supplier write-offs</div>
+            <a href="#write-offs" style="font-size: 16px; font-weight: 600; text-decoration: none;">$58.40 <span style="font-size: 12px; font-weight: 400; color: #A8A29E;">· 3 claims</span></a>
+          </div>
+          <div style="display: flex; flex-direction: column; gap: 2px;">
+            <div style="font-size: 12px; color: #A8A29E;">Lost / damaged by us</div>
+            <a href="#lost" style="font-size: 16px; font-weight: 600; text-decoration: none;">$20.82 <span style="font-size: 12px; font-weight: 400; color: #A8A29E;">· 3 ASIN units</span></a>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <div style="background: #292524; border: 1px solid rgba(168,162,158,0.22); border-radius: 10px; overflow: hidden; display: flex; flex-direction: column; min-width: 0;">
+      <div style="padding: 14px 18px 12px; background: #3A4F68; display: flex; flex-direction: column; gap: 2px;">
+        <div style="font-size: 16px; font-weight: 700; color: #fafaf9;">Today</div>
+        <div style="font-size: 12px; color: #e7e5e4;">Nov 14</div>
+      </div>
+      <div style="padding: 14px 18px 16px; display: flex; flex-direction: column; gap: 12px;">
+        <div style="font-size: 11px; letter-spacing: 0.08em; font-weight: 700; color: #A8A29E;">SPEND</div>
+        <div style="display: flex; flex-direction: column; gap: 2px;">
+          <div style="font-size: 13px; color: #A8A29E;">Spend</div>
+          <div style="font-size: 28px; font-weight: 700; letter-spacing: -0.01em; line-height: 1.15;">$141.90</div>
+        </div>
+        <div style="display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px 16px;">
+          <div style="display: flex; flex-direction: column; gap: 2px;">
+            <div style="font-size: 12px; color: #A8A29E;">Refunds due</div>
+            <a href="#refunds-due" style="font-size: 16px; font-weight: 600; text-decoration: none;">$0.00</a>
+          </div>
+          <div style="display: flex; flex-direction: column; gap: 2px;">
+            <div style="font-size: 12px; color: #A8A29E;">Avg. PO value</div>
+            <div style="font-size: 16px; font-weight: 600;">$70.95 <span style="font-size: 12px; font-weight: 400; color: #A8A29E;">· 2 POs</span></div>
+          </div>
+          <div style="display: flex; flex-direction: column; gap: 2px;">
+            <div style="font-size: 12px; color: #A8A29E;">ASIN units ordered</div>
+            <div style="font-size: 16px; font-weight: 600;">15</div>
+          </div>
+          <div style="display: flex; flex-direction: column; gap: 2px;">
+            <div style="font-size: 12px; color: #A8A29E;">Individual units ordered</div>
+            <div style="font-size: 16px; font-weight: 600;">30</div>
+          </div>
+          <div style="display: flex; flex-direction: column; gap: 2px;">
+            <div style="font-size: 12px; color: #A8A29E;">Supplier write-offs</div>
+            <div style="font-size: 16px; font-weight: 600; color: #78716C;">$0.00</div>
+          </div>
+          <div style="display: flex; flex-direction: column; gap: 2px;">
+            <div style="font-size: 12px; color: #A8A29E;">Lost / damaged by us</div>
+            <div style="font-size: 16px; font-weight: 600; color: #78716C;">$0.00</div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <div style="font-size: 13px; color: #A8A29E; max-width: 760px; line-height: 1.5;">Two cells added under the four you have. Hovering Supplier write-offs shows the split, for example "missing $38.42 · can't sell $19.98". Neither number changes Spend: the money was spent either way. The SALES and PROFIT sections below are unchanged and not drawn here.</div>
+</div>
+</body>
+</html>

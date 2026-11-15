@@ -14,6 +14,13 @@ describe("POs list filters (2026-11-06)", () => {
     expect(poListWhere(f).where).toMatch(/supplier_claims c WHERE c\.po_id = p\.id AND c\.status = 'open'/);
     expect(poListWhere({ ...f, claims: "none" }).where).toMatch(/NOT EXISTS \(SELECT 1 FROM supplier_claims/);
   });
+  it("lost=1 (claims commit 9, the Dashboard's Lost / damaged by us link): POs with a row carrying lost / damaged units, read through the view; off by default", () => {
+    expect(parsePoListFilters({}).lost).toBe(false);
+    expect(parsePoListFilters({ lost: "1" }).lost).toBe(true);
+    expect(poListWhere(f).where).not.toMatch(/lost_damaged_us_asin/);
+    expect(poListWhere({ ...f, lost: true }).where).toMatch(/EXISTS \(SELECT 1 FROM po_asin_expected e WHERE e\.po_id = p\.id AND COALESCE\(e\.lost_damaged_us_asin, 0\) > 0\)/);
+    expect(poListWhere({ ...f, lost: true }, "lost").where).toBe(poListWhere(f).where);
+  });
   it("the WHERE uses every placeholder it passes, in order; leaving a facet out drops exactly its condition", () => {
     const all = poListWhere(f);
     expect(placeholders(all.where)).toEqual(all.params.map((_, i) => i + 1));

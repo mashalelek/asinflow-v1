@@ -13,6 +13,8 @@ export type PoClaims = "any" | "open" | "none";
 export interface PoListUrlState {
   search: string; action: string[]; supplier: string[]; closed: PoClosed; refunds: PoRefunds; claims: PoClaims;
   from: string; to: string; sort: { key: string; dir: "asc" | "desc" } | null; page: number;
+  /** Claims commit 9 (§3.14 row 6): `?lost=1` — POs with a row carrying Lost / damaged by us units (the Dashboard's link). */
+  lost: boolean;
 }
 
 const ymd = (v: string | null) => (v && /^\d{4}-\d{2}-\d{2}$/.test(v) ? v : "");
@@ -33,6 +35,7 @@ export function readPoListUrl(search: string): PoListUrlState {
     from: ymd(p.get("from")), to: ymd(p.get("to")),
     sort: sortKey ? { key: sortKey, dir: dir === "desc" ? "desc" : "asc" } : null,
     page: Math.max(1, parseInt(p.get("page") ?? "1", 10) || 1),
+    lost: p.get("lost") === "1",
   };
 }
 
@@ -49,6 +52,7 @@ export function writePoListUrl(s: PoListUrlState): string {
   if (s.to) p.set("to", s.to);
   if (s.sort) { p.set("sort", s.sort.key); p.set("dir", s.sort.dir); }
   if (s.page > 1) p.set("page", String(s.page));
+  if (s.lost) p.set("lost", "1");
   const q = p.toString();
   return q ? `?${q}` : "";
 }

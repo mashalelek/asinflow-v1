@@ -13,7 +13,7 @@ const row = (over: Partial<ClaimRowApi>): ClaimRowApi => ({
 
 describe("Claims page URL state", () => {
   it("round-trips bucket(s), the filter box, kind and the PO date range; the default is the bare URL; old po= / supplier= / dismissed=1 links still read", () => {
-    const s = { bucket: ["waiting_refund", "waiting_supplier"] as const, q: "michaels.com", kind: "canceled", from: "2026-06-01", to: "2026-06-17" };
+    const s = { bucket: ["waiting_refund", "waiting_supplier"] as const, q: "michaels.com", kind: "canceled", from: "2026-06-01", to: "2026-06-17", woFrom: "", woTo: "" };
     expect(readClaimsUrl("?bucket=closed&dismissed=1").bucket).toEqual(["closed"]);
     expect(readClaimsUrl("?dismissed=1").bucket).toEqual(["dismissed"]);
     expect(readClaimsUrl("?bucket=dismissed").bucket).toEqual(["dismissed"]);
@@ -24,6 +24,25 @@ describe("Claims page URL state", () => {
     expect(readClaimsUrl("?po=9500110801616249").q).toBe("9500110801616249");
     // the Dashboard's Refunds due link (metric-grid refundsDueHref)
     expect(readClaimsUrl("?bucket=waiting_refund,waiting_supplier&from=2026-06-01&to=2026-06-17")).toMatchObject({ bucket: ["waiting_refund", "waiting_supplier"], from: "2026-06-01", to: "2026-06-17" });
+    // the Dashboard's Supplier write-offs link (claims commit 9, §3.14 row 3; metric-grid writeOffsHref): Closed, the write-off date range
+    expect(readClaimsUrl("?bucket=closed&written_off_from=2026-11-01&written_off_to=2026-11-14")).toMatchObject({ bucket: ["closed"], woFrom: "2026-11-01", woTo: "2026-11-14", from: "", to: "" });
+    expect(writeClaimsUrl({ ...readClaimsUrl(""), bucket: ["closed"], woFrom: "2026-11-01", woTo: "2026-11-14" })).toBe("?bucket=closed&written_off_from=2026-11-01&written_off_to=2026-11-14");
+  });
+  it("the write-off date range (§3.14 row 3) keeps only closed claims written off inside it — a closed claim without a write-off, or one written off on another day, is out; the counts follow the same rule", () => {
+    const rows = [
+      row({ id: 1, bucket: "closed", status: "closed", outcome: "write_off", write_off_reason: "declined", written_off_on: "2026-11-05", written_off: 12.5 }),
+      row({ id: 2, bucket: "closed", status: "closed", outcome: "refund_card", write_off_reason: "short, let it go", written_off_on: "2026-11-14", written_off: 3 }), // Write off remainder
+      row({ id: 3, bucket: "closed", status: "closed", outcome: "refund_card", written_off_on: null, written_off: null }), // closed, fully refunded — no write-off
+      row({ id: 4, bucket: "closed", status: "closed", outcome: "write_off", write_off_reason: "x", written_off_on: "2026-10-21", written_off: 9 }), // outside the range
+      row({ id: 5, bucket: "needs_attention", status: "open", outcome: "write_off", write_off_reason: "x", written_off_on: null, written_off: null }), // reopened: leaves (row 4)
+    ];
+    const s = readClaimsUrl("?bucket=closed&written_off_from=2026-11-01&written_off_to=2026-11-14");
+    expect(rowsForView(rows, s).map((r) => r.id)).toEqual([1, 2]);
+    expect(rowsForView(rows, s).reduce((t, r) => t + (r.written_off ?? 0), 0)).toBe(15.5);
+    expect(rowsForView(rows, readClaimsUrl("?bucket=closed")).map((r) => r.id)).toEqual([1, 2, 3, 4]);
+    const page = readFileSync("client/src/pages/claims.tsx", "utf8");
+    expect(page).toContain('data-testid="claims-writeoff-range">Written off {s.woFrom || "…"} to {s.woTo || "…"}');
+    expect(page).toMatch(/for \(const r of data\?\.claims \?\? \[\]\) if \(matchesView\(r, s\)\)/); // the tab counts use the same filter as the rows
   });
   it("rowsForView: the tab's buckets, the filter box (supplier / PO / alternate / ASIN / product), the kind, the PO date range; Dismissed is its own tab (Maria 2026-11-12)", () => {
     const rows = [row({ id: 1, bucket: "waiting_refund" }), row({ id: 2, bucket: "waiting_supplier", order_date: "2026-01-01", supplier: "michaels.com", product_name: "Red Heart yarn", alt_order_ids: "R4600" }), row({ id: 3, bucket: "closed" }), row({ id: 4, bucket: "dismissed" })];

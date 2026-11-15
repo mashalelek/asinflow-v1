@@ -16,8 +16,10 @@ export type PoRefundsFilter = "any" | "due" | "none";
 export type PoClaimsFilter = "any" | "open" | "none";
 export interface PoListFilters {
   search: string; action: string[]; supplier: string[]; from: string; to: string; closed: PoClosedFilter; refunds: PoRefundsFilter; claims: PoClaimsFilter;
+  /** Claims commit 9 (§3.14 row 6, `?lost=1`): POs with an ASIN row carrying Lost / damaged by us units — the Dashboard's link; no dropdown. */
+  lost: boolean;
 }
-export type PoFacet = "search" | "action" | "supplier" | "dates" | "closed" | "refunds" | "claims";
+export type PoFacet = "search" | "action" | "supplier" | "dates" | "closed" | "refunds" | "claims" | "lost";
 
 const str = (v: unknown) => (typeof v === "string" ? v.trim() : "");
 const list = (v: unknown) => str(v).split(",").map((x) => x.trim()).filter(Boolean);
@@ -34,8 +36,11 @@ export function parsePoListFilters(q: Record<string, unknown>): PoListFilters {
     closed: closedRaw === "closed" ? "closed" : closedRaw === "all" ? "all" : "open",
     refunds: refundsRaw === "due" || refundsRaw === "none" ? refundsRaw : "any",
     claims: claimsRaw === "open" || claimsRaw === "none" ? claimsRaw : "any",
+    lost: str(q.lost) === "1" || str(q.lost).toLowerCase() === "true",
   };
 }
+/** A PO with lost / damaged units on a row (through the view — the one source for a quantity, SPEC §22). */
+export const LOST_DAMAGED_PO_SQL = (p: string) => `EXISTS (SELECT 1 FROM po_asin_expected e WHERE e.po_id = ${p}.id AND COALESCE(e.lost_damaged_us_asin, 0) > 0)`;
 /** "has open claims" (SPEC §22 §5): open → at least one open claim; none → no open claim. */
 export function claimsFilterCond(c: PoClaimsFilter): string | null {
   return c === "open" ? OPEN_CLAIM_PO_SQL("p") : c === "none" ? `NOT ${OPEN_CLAIM_PO_SQL("p")}` : null;
@@ -103,6 +108,7 @@ function conds(f: PoListFilters, p: Params, omit?: PoFacet): string[] {
   if (omit !== "closed") { const c = closedCond(f.closed); if (c) out.push(c); }
   if (omit !== "refunds") { const c = refundsFilterCond(f.refunds); if (c) out.push(c); }
   if (omit !== "claims") { const c = claimsFilterCond(f.claims); if (c) out.push(c); }
+  if (omit !== "lost" && f.lost) out.push(LOST_DAMAGED_PO_SQL("p"));
   return out;
 }
 

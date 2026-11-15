@@ -679,6 +679,7 @@ export default function PurchaseOrders() {
   const [supplierSel, setSupplierSel] = useState<Set<string>>(() => new Set(linked.supplier));
   const [from, setFrom] = useState(linked.from);
   const [to, setTo] = useState(linked.to);
+  const [lost, setLost] = useState(linked.lost); // the Dashboard's Lost / damaged by us link (claims commit 9): rows with lost / damaged units
   const [page, setPage] = useState(linked.page);
   const [sort, setSort] = useState<PoSort>(linked.sort);
   const { colWidths, handleResizeStart, resetWidths } = useColumnWidths(PO_COL_WIDTHS_KEY);
@@ -701,12 +702,12 @@ export default function PurchaseOrders() {
   const supplierKey = Array.from(supplierSel).sort().join(",");
   const sortKey = sort ? `${sort.key}:${sort.dir}` : "";
   // A filter or sort change goes back to page 1 — not the first render, whose page came from the URL.
-  const filterKey = [debouncedSearch, actionKey, supplierKey, from, to, closedFilter, refundsFilter, claimsFilter, sortKey].join("|");
+  const filterKey = [debouncedSearch, actionKey, supplierKey, from, to, lost, closedFilter, refundsFilter, claimsFilter, sortKey].join("|");
   const lastFilterKey = useRef(filterKey);
   useEffect(() => { if (lastFilterKey.current !== filterKey) { lastFilterKey.current = filterKey; setPage(1); } }, [filterKey]);
 
   // The URL follows the list (replaceState: a filter change is not a history step); remembered for "← Back to POs".
-  const listQuery = writePoListUrl({ search: debouncedSearch, action: Array.from(actionSel), supplier: Array.from(supplierSel), closed: closedFilter, refunds: refundsFilter, claims: claimsFilter, from, to, sort, page });
+  const listQuery = writePoListUrl({ search: debouncedSearch, action: Array.from(actionSel), supplier: Array.from(supplierSel), closed: closedFilter, refunds: refundsFilter, claims: claimsFilter, from, to, sort, page, lost });
   useEffect(() => { replaceQuery("/purchase-orders", listQuery); rememberPoList(listQuery); }, [listQuery]);
 
   const load = useCallback(async () => {
@@ -720,6 +721,7 @@ export default function PurchaseOrders() {
     if (supplierKey) params.set("supplier", supplierKey);
     if (from) params.set("from", from);
     if (to) params.set("to", to);
+    if (lost) params.set("lost", "1");
     if (sort) { params.set("sort", sort.key); params.set("dir", sort.dir); }
     params.set("page", String(page));
     try {
@@ -729,7 +731,7 @@ export default function PurchaseOrders() {
     } catch (e: any) {
       setError(e.message);
     }
-  }, [debouncedSearch, actionKey, supplierKey, from, to, page, closedFilter, refundsFilter, claimsFilter, sort]);
+  }, [debouncedSearch, actionKey, supplierKey, from, to, lost, page, closedFilter, refundsFilter, claimsFilter, sort]);
 
   useEffect(() => { load(); }, [load]);
   useListScroll("pos", data != null); // restored once the first list renders (lib/list-scroll.ts)
@@ -841,6 +843,9 @@ export default function PurchaseOrders() {
         <span className="text-xs text-muted-foreground">to</span>
         <input type="date" value={to} onChange={(e) => setTo(e.target.value)}
           className="h-8 rounded-md border border-input bg-background px-2 text-sm" data-testid="input-po-to" />
+        {lost && (
+          <Button variant="ghost" size="sm" className="h-8 text-xs text-muted-foreground" onClick={() => setLost(false)} title="From the Dashboard's Lost / damaged by us cell: only POs with a row carrying lost / damaged units. Click to clear." data-testid="button-po-lost-filter">Lost / damaged units · clear</Button>
+        )}
         {Object.keys(colWidths).length > 0 && (
           <Button variant="ghost" size="sm" className="h-8 text-xs text-muted-foreground" onClick={resetWidths} data-testid="button-po-reset-widths">Reset widths</Button>
         )}

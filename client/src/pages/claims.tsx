@@ -50,7 +50,7 @@ export interface ClaimTask { id: number; kind: ClaimTaskKind; group: string; rea
 export interface ClaimRowApi {
   id: number; po_id: string; po_line_item_id: string | null; kind: ClaimKind; qty: number | null; amount_owed: number | null; amount_owed_source: "auto" | "manual";
   status: "suggested" | "open" | "closed" | "dismissed"; outcome: ClaimOutcome | null; outcome_amount: number | null; outcome_detail: string | null; write_off_reason: string | null; email_confirmed?: boolean; email_replied?: boolean;
-  found_at: string; found_by: string; reported_at: string | null; reported_channel: string | null; supplier_confirmed_at: string | null; last_supplier_reply_at: string | null; closed_at: string | null; note: string | null;
+  found_at: string; found_by: string; reported_at: string | null; reported_channel: string | null; supplier_confirmed_at: string | null; last_supplier_reply_at: string | null; closed_at: string | null; note: string | null; written_off_on?: string | null; written_off?: number | null;
   replacement_qty: number | null; replacement_shipped_at: string | null; replacement_arrived_at: string | null; return_required: boolean; qty_disposed: number | null;
   /** The return (commit 7): the label document, the return-by date, Shipped / Delivered with their source, the return's tracking row. */
   return_label_doc_id: number | null; return_label_at: string | null; return_label_source: string | null; return_no_label: boolean;
@@ -86,14 +86,14 @@ interface ClaimDetailApi {
 
 // ── Pure helpers (exported for the tests) ────────────────────────────────────
 
-export interface ClaimsUrlState { bucket: ClaimBucket[]; q: string; kind: string; from: string; to: string }
+export interface ClaimsUrlState { bucket: ClaimBucket[]; q: string; kind: string; from: string; to: string; /** Claims commit 9 (§3.14 row 3): the write-off date range the Dashboard's Supplier write-offs cell links — only closed claims with a write-off dated inside it. */ woFrom: string; woTo: string }
 const isBucket = (v: string): v is ClaimBucket => (CLAIM_BUCKET_TABS as readonly string[]).includes(v);
-/** ?bucket=a,b (several = a combined view, the Dashboard's Refunds due), q (supplier / PO / ASIN; `po=` and `supplier=` still read), kind, from / to (PO date); an old `dismissed=1` link opens the Dismissed tab. */
+/** ?bucket=a,b (several = a combined view, the Dashboard's Refunds due), q (supplier / PO / ASIN; `po=` and `supplier=` still read), kind, from / to (PO date), written_off_from / written_off_to (the write-off date, the Dashboard's Supplier write-offs link); an old `dismissed=1` link opens the Dismissed tab. */
 export function readClaimsUrl(search: string): ClaimsUrlState {
   const p = new URLSearchParams(search);
   const ymd = (v: string | null) => (v && /^\d{4}-\d{2}-\d{2}$/.test(v) ? v : "");
   const buckets = (p.get("bucket") ?? "").split(",").map((x) => x.trim()).filter(isBucket);
-  return { bucket: buckets.length ? buckets : p.get("dismissed") === "1" ? ["dismissed"] : ["needs_attention"], q: (p.get("q") ?? p.get("po") ?? p.get("supplier") ?? "").trim(), kind: p.get("kind")?.trim() ?? "", from: ymd(p.get("from")), to: ymd(p.get("to")) };
+  return { bucket: buckets.length ? buckets : p.get("dismissed") === "1" ? ["dismissed"] : ["needs_attention"], q: (p.get("q") ?? p.get("po") ?? p.get("supplier") ?? "").trim(), kind: p.get("kind")?.trim() ?? "", from: ymd(p.get("from")), to: ymd(p.get("to")), woFrom: ymd(p.get("written_off_from")), woTo: ymd(p.get("written_off_to")) };
 }
 export function writeClaimsUrl(s: ClaimsUrlState): string {
   const p = new URLSearchParams();
@@ -102,6 +102,8 @@ export function writeClaimsUrl(s: ClaimsUrlState): string {
   if (s.kind) p.set("kind", s.kind);
   if (s.from) p.set("from", s.from);
   if (s.to) p.set("to", s.to);
+  if (s.woFrom) p.set("written_off_from", s.woFrom);
+  if (s.woTo) p.set("written_off_to", s.woTo);
   const q = p.toString();
   return q ? `?${q}` : "";
 }
@@ -119,10 +121,16 @@ export function searchMatchHint(c: Pick<ClaimRowApi, "order_id" | "other_numbers
   const n = (c.other_numbers ?? []).find((x) => x.number.toLowerCase().includes(t));
   return n ? `matched: ${OTHER_NUMBER_WORDS[n.kind] ?? n.kind} ${n.number}` : null;
 }
-/** The rows of a tab set: the filter, the kind, the PO date range (the Dashboard link); Dismissed is a tab of its own. */
+/** The tab-independent filters: the filter box, the kind, the PO date range, the write-off date range (a claim with no write-off never matches one). */
+export function matchesView(r: ClaimRowApi, s: ClaimsUrlState): boolean {
+  if (!matchesFilter(r, s.q) || (s.kind && r.kind !== s.kind) || (s.from && r.order_date < s.from) || (s.to && r.order_date > s.to)) return false;
+  if (s.woFrom || s.woTo) { if (!r.written_off_on) return false; if (s.woFrom && r.written_off_on < s.woFrom) return false; if (s.woTo && r.written_off_on > s.woTo) return false; }
+  return true;
+}
+/** The rows of a tab set: the filters above on the tab's bucket(s); Dismissed is a tab of its own. */
 export function rowsForView(rows: readonly ClaimRowApi[], s: ClaimsUrlState): ClaimRowApi[] {
   const set = new Set<string>(s.bucket);
-  return rows.filter((r) => set.has(r.bucket) && matchesFilter(r, s.q) && (!s.kind || r.kind === s.kind) && (!s.from || r.order_date >= s.from) && (!s.to || r.order_date <= s.to));
+  return rows.filter((r) => set.has(r.bucket) && matchesView(r, s));
 }
 /** A suggestion that carries figures (status suggested, a quantity). */
 const suggestionWithFigures = (r: Pick<ClaimRowApi, "status" | "qty">) => r.status === "suggested" && r.qty != null;
@@ -382,9 +390,9 @@ function ClaimsList() {
   const rows = useMemo(() => (data ? rowsForView(data.claims, s) : []), [data, s]);
   const counts = useMemo(() => {
     const c: Record<string, number> = {};
-    for (const r of data?.claims ?? []) if (matchesFilter(r, s.q) && (!s.kind || r.kind === s.kind) && (!s.from || r.order_date >= s.from) && (!s.to || r.order_date <= s.to)) c[r.bucket] = (c[r.bucket] ?? 0) + 1;
+    for (const r of data?.claims ?? []) if (matchesView(r, s)) c[r.bucket] = (c[r.bucket] ?? 0) + 1;
     return c;
-  }, [data, s.q, s.kind, s.from, s.to]);
+  }, [data, s.q, s.kind, s.from, s.to, s.woFrom, s.woTo]);
   const needsAttention = s.bucket.length === 1 && s.bucket[0] === "needs_attention";
   const groups = useMemo(() => (needsAttention ? groupNeedsAttention(rows) : []), [rows, needsAttention]);
   const { colWidths, handleResizeStart, resetWidths } = useColumnWidths(CLAIMS_COL_WIDTHS_KEY);
@@ -401,6 +409,7 @@ function ClaimsList() {
         <button type="button" className="btn p" onClick={() => setOpening(true)} data-testid="button-open-claim">+ Open claim</button>
       </div>
       {(s.from || s.to) && <div className="mut" style={{ padding: "8px 24px 0" }} data-testid="claims-date-range">POs dated {s.from || "…"} to {s.to || "…"} <button type="button" className="lnk mut" onClick={() => setS({ ...s, from: "", to: "" })}>clear</button></div>}
+      {(s.woFrom || s.woTo) && <div className="mut" style={{ padding: "8px 24px 0" }} data-testid="claims-writeoff-range">Written off {s.woFrom || "…"} to {s.woTo || "…"} <button type="button" className="lnk mut" onClick={() => setS({ ...s, woFrom: "", woTo: "" })}>clear</button></div>}
 
       <div style={{ display: "flex", gap: 4, padding: "12px 24px 0", borderBottom: "1px solid #2a2824", flexWrap: "wrap", alignItems: "flex-end" }} data-testid="claims-tabs">
         {CLAIM_BUCKET_TABS.map((b) => (

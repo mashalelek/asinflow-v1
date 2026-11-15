@@ -6,6 +6,7 @@
  * (client/src/components/metric-tiles.tsx, tiles patch 2026-11-04).
  */
 import { PENDING_TOOLTIP, type DashboardCell, type DashboardColumn, type DashboardCoverage, type DashboardRowDef } from "@shared/dashboard";
+import { CLAIM_KIND_LABELS, type ClaimKind } from "@shared/supplier-claim";
 
 const MONTHS = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
 
@@ -31,6 +32,18 @@ export function fmtRangeLabel(from: string, to: string, currentYear = new Date()
 /** The Refunds due cell's link (SPEC §22 "Supplier claims" §3.7, commit 2): the Claims page, Waiting on refund to post + Waiting on supplier, the column's PO date range carried along. */
 export function refundsDueHref(col: Pick<DashboardColumn, "eastern">): string {
   return `/claims?bucket=waiting_refund,waiting_supplier&from=${col.eastern.from}&to=${col.eastern.to}`;
+}
+/** Supplier write-offs (claims commit 9, §3.14 row 3): Claims › Closed, the write-offs whose write-off date is in the column's range. */
+export function writeOffsHref(col: Pick<DashboardColumn, "eastern">): string {
+  return `/claims?bucket=closed&written_off_from=${col.eastern.from}&written_off_to=${col.eastern.to}`;
+}
+/** Lost / damaged by us (§3.14 row 6): the POs list, rows with lost / damaged units, ordered in the column's range, open and closed. */
+export function lostDamagedHref(col: Pick<DashboardColumn, "eastern">): string {
+  return `/purchase-orders?lost=1&closed=all&from=${col.eastern.from}&to=${col.eastern.to}`;
+}
+/** The hover split of the write-offs by kind: "missing $38.42 · can't sell $19.98" (largest first, as the API orders it); "" with none. */
+export function writeOffsSplit(byKind: Record<string, number> | undefined): string {
+  return Object.entries(byKind ?? {}).map(([k, v]) => `${CLAIM_KIND_LABELS[k as ClaimKind] ?? k} ${fmtMoney(v)}`).join(" · ");
 }
 
 const fmtTime = (iso: string | null) => (iso ? new Date(iso).toLocaleString(undefined, { hour: "numeric", minute: "2-digit" }) : "never");
@@ -60,6 +73,14 @@ export function cellText(row: DashboardRowDef, cell: DashboardCell): CellText {
       : { main: `${fmtInt(cell.value)} / ${fmtInt(cell.secondary)}`, small: dataFrom };
     case "sales": return { main: fmtMoney(cell.value), small: dataFrom };
     case "refunds": return { main: fmtMoney(cell.value), small: cell.secondary != null ? `${fmtInt(cell.secondary)} ASIN units` : undefined };
+    // §3.14: "$58.40 · 3 claims", the split by kind on hover; "$0.00" dim with nothing in the range (row 7)
+    case "write_offs": return (cell.value ?? 0) > 0
+      ? { main: fmtMoney(cell.value), small: `${cell.claimCount ?? 0} claim${cell.claimCount === 1 ? "" : "s"}`, tooltip: writeOffsSplit(cell.byKind) || undefined }
+      : { main: fmtMoney(0), muted: true };
+    // "$20.82 · 3 ASIN units" (Maria 2026-11-15: the kind is named, where the mockup wrote "units"); the POs counted on hover
+    case "lost_damaged": return (cell.value ?? 0) > 0 || (cell.secondary ?? 0) > 0
+      ? { main: fmtMoney(cell.value), small: `${fmtInt(cell.secondary)} ASIN units`, tooltip: cell.poCount ? `on ${cell.poCount} PO${cell.poCount === 1 ? "" : "s"}` : undefined }
+      : { main: fmtMoney(0), muted: true };
     default: return { main: row.format === "money" ? fmtMoney(cell.value) : fmtInt(cell.value), muted: cell.value == null };
   }
 }

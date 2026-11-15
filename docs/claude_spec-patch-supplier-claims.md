@@ -11,12 +11,29 @@ supersedes the backlog's "Allocate to another PO" (2026-11-05) and its
 `docs/claude_spec-patch-quantity-names.md` (ASIN / Product / Individual
 units wording), run first.*
 
-> **Status: APPROVED 2026-11-06. Amended 2026-11-07 and 2026-11-09**
-> (Maria): tasks + buckets model, Claims nav tab, quantities from claims
-> only, one 5-business-day timer, refunds table. Formerly "PO issues";
-> the record is a **claim** everywhere (tables, code, UI, docs).
+> **Status: DONE 2026-11-15 — all nine commits built, gated and pushed**
+> (1 `ea3afe1` + `591f037` migration 101 D17, live 2026-11-10 · 2 `7014887` the
+> Claims page, 2b `6dcd5cf` the mockup rebuild · 3 the tracking parser fix
+> (SPEC §26 "Tracking parser fix", 2026-11-11) · 4 `f0d0336` EasyPost ·
+> 5 `59542b8` / `384fa60` auto-found claims · 6 `38d3bfe` + `a76f03c` supplier
+> emails · 7 `fabab9a` returns · 8 `92b15fd` replacements + dismiss with note
+> · 9 Dashboard cells, this commit). Approved 2026-11-06, amended 2026-11-07
+> and 2026-11-09 (Maria): tasks + buckets model, Claims nav tab, quantities
+> from claims only, one 5-business-day timer, refunds table. Formerly "PO
+> issues"; the record is a **claim** everywhere (tables, code, UI, docs).
+> SPEC §22 "Supplier claims" is the living text; this patch is history.
 
 ## 0. Change log
+
+**2026-11-15 (Maria) — commit 9, Dashboard (§3.14):** acceptance table
+and mockup approved; built the same day (see §3.14 "Built"). Maria's three
+answers: the 143 sheet-era write-offs re-dated to their PO's order date
+(dry run CSV, then live — done on production); "· N ASIN units" beside
+Lost / damaged by us (the mockup's wording updated); the write-off date
+range added to the Claims URL and list for the tile's link, nothing else
+on the Claims page. The Dashboard has tiles, not a "Cost of goods block"
+(§3.7 / D11 predate them): Supplier write-offs and Lost / damaged by us
+are two cells in each tile's SPEND section. Neither changes Spend.
 
 **2026-11-14 (Maria) — commit 8, replacements + dismiss with note
 (§3.13):** acceptance tables and mockups approved. A reship never gets a
@@ -783,6 +800,51 @@ Rules:
    label it). Nothing on production changes bucket or open / closed state on
    deploy.
 
+### 3.14 Dashboard: write-offs and lost units (commit 9; Maria 2026-11-15)
+
+**The mockup is the UI:** `docs/mockups/dashboard-writeoffs-2026-11-15.html`
+(the approved Dashboard tile, `docs/dashboard-tiles-mockup-2026-11-04.dc.html`,
+same styles; new: two cells in the SPEND section's 2-column grid, under
+the four existing ones). Replaces "the Cost of goods block gains…" in
+§3.7 and D11: that block does not exist.
+
+| # | What happens | Maria sees |
+|---|---|---|
+| 1 | A claim is written off (Write off, or Write off remainder) | **Supplier write-offs** rises by that amount in every tile whose dates include the write-off date, "· N claims" beside it |
+| 2 | Hover | The split by kind, e.g. "missing $38.42 · can't sell $19.98" |
+| 3 | Click | Claims › Closed, filtered to the write-offs in that tile's dates |
+| 4 | A written-off claim is reopened | The amount leaves the tile |
+| 5 | A PO row has units under Lost/damaged by us | **Lost / damaged by us** = those units × the row's cost per unit, "· N units", in tiles whose dates include the PO's order date |
+| 6 | Click | POs, filtered to rows with lost / damaged units in those dates |
+| 7 | Nothing in the range | "$0.00" dim; the cell stays |
+| 8 | Spend | Unchanged by either number |
+
+- Dating: a write-off counts on its write-off date; lost / damaged on the
+  PO's order date (AF does not record when a unit was lost).
+- The sheet-era write-offs converted in commit 1 (143 rows, about
+  $7,059, dated by the PO's last edit): the build shows what every tile
+  would read first; if they land in recent tiles they are re-dated to
+  the PO's order date, after Maria's OK.
+- Same eight rows on the Custom range tile.
+
+**Built 2026-11-15.** Step 1 (read-only, production): all 143 sheet-era
+write-offs ($7,035.53, every one kind "missing", no AF-made write-off yet)
+sat in the current tiles (MTD $3,142.67 · 64, 30 days $7,008.44 · 140) — the
+stop condition; Maria OK'd the re-date. `npm run claims:redate-writeoffs --
+--prod` wrote `docs/claims-writeoffs-redate-2026-11-15.csv`, `--live` set
+`closed_at` (noon Eastern) and `found_at` to the PO's order date with one
+History row per claim; a second dry run reads 143 already on their order
+date, 0 in any current tile. Then the two cells (`server/dashboard.ts`:
+a `write_offs` CTE beside `units`, `lost_asin` / `lost_amount` on the units
+rows; `shared/dashboard.ts` rows `write_offs` / `lost_damaged`;
+`client/src/components/metric-tiles.tsx` + `metric-grid.tsx`), the Claims
+URL / list filter `written_off_from` / `written_off_to` (the row carries
+`written_off_on` / `written_off`), the POs list `?lost=1`
+(`LOST_DAMAGED_PO_SQL`). Production set-1 statement: 606 ms server-side
+(761 ms before). Tests: one per row in `server/dashboard.db.test.ts`
+(rolled back) plus the page / URL / filter tests. SPEC §28 "The grid data",
+§22, §11, §26; CLAUDE.md.
+
 ## 4. Data
 
 Verified against migrations 028–099. Stored base for every quantity: Individual units (D17).
@@ -1119,8 +1181,8 @@ Prerequisite: `claude_spec-patch-quantity-names.md` (labels only).
    buckets.
 8. Replacements + dismiss with note (§3.13, acceptance tables + mockups approved 2026-11-14) (`alt_order_ids`, tracking ↔ claim) + §3.8
    dismiss-with-note.
-9. Supplier write-offs line; SPEC §22 / §26 / §11, CLAUDE.md; mark the
-   cancellations patch's §3 / §5 / §6 superseded.
+9. Dashboard cells (§3.14, acceptance table + mockup approved 2026-11-15): Supplier write-offs line; SPEC §22 / §26 / §11, CLAUDE.md; mark the
+   cancellations patch's §3 / §5 / §6 superseded. **Built 2026-11-15 — the patch is complete.**
 
 Stops: after 1's dry run, after 3's backfill dry run, before 4's EasyPost
 signup, and for anything this patch doesn't cover.

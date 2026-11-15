@@ -2326,7 +2326,7 @@ the ledger stage is the `refresh_runs.stage` key the component writes.
 | 27 | PO confirmation reconcile (§26 "Confirmation emails", 2026-10-31) | daily | Gmail API (orders@) — no AI | `27_po_confirmations` | order-confirmation mail since the watermark vs AF POs, and §27 renewal POs for unmatched confirmations; **00:00 pass only**, after 26; manual: `POST /api/pos/reconcile-confirmations` |
 | 28 | Subscription alerts (§27, 2026-10-31) | daily | none (AF tables) | `28_subscriptions` | every subscription; "Subscription renews" raised / cleared; **00:00 pass only**, after 27 |
 | 29 | PO documents (§22 "PO documents", 2026-11-04) | hourly | Gmail API (orders@) + Drive API (Invoices root, as Maria) + headless Chromium | `29_po_documents` | order-confirmation / shipped / delivered mail since the watermark, rendered to PDF and saved to Drive; every pass also links PDFs saved by hand (D1; the 00:00 pass only until 2026-11-05); a document not saved fails the component (2026-11-05); **scheduled passes only** (00:00 and hourly), after 28; manual: `npm run po-docs` |
-| 30 | Claim timers + auto-found claims (§22 "Supplier claims" D7 / D8 / §3.1, 2026-11-11 / 2026-11-12) | hourly | AF tables · Gmail list/get (cancellation emails) · Haiku for free text | `30_claim_timers` | `sweepClaimTimers`: every open claim with no open task whose 5-business-day timer ran out gets `follow_up_supplier` / `check_on_it` with the reason, once — so the POs list's Claims column and the Dashboard never lag behind the Claims page (whose load runs the same sweep); then `sweepSuggestions` (missing per D8, never_received) and `ingestCancellations` (cancellation emails since the watermark → suggested canceled claims) — **suggestions only**, nothing changes a PO until Maria opens one; **scheduled passes only**, after 29 |
+| 30 | Claim timers + auto-found claims (§22 "Supplier claims" D7 / D8 / §3.1, 2026-11-11 / 2026-11-12) | hourly | AF tables · Gmail list/get (cancellation emails) · Haiku for free text | `30_claim_timers` | `sweepClaimTimers`: every open claim with no open task whose 5-business-day timer ran out gets `follow_up_supplier` / `check_on_it` with the reason, once — so the POs list's Claims column and the Dashboard never lag behind the Claims page (whose load runs the same sweep); then `sweepReplacements` (commit 8, §3.13 rows 3–6: the PO's new tracking tied to the claim, a reship proposed under a new order #, arrived on Velocity's count, a home delivery noted), `sweepSuggestions` (missing per D8, never_received) and `ingestCancellations` (cancellation emails since the watermark → suggested canceled claims) — **suggestions only**, nothing changes a PO until Maria opens one — then `ingestClaimEmails` (commit 6, §3.11: the watched mailboxes' refund / credit confirmations, replies, return labels (commit 7) and Maria's own emails applied to their claims; a mailbox with no watermark is left alone until its first live backfill); the Dashboard's write-off cells (commit 9) read the claims this pass maintains; **scheduled passes only**, after 29 |
 
 Dependencies the order encodes: 10 before 13 (fees need the fresh price)
 (9 before 15 was retired 2026-10-17 — the inventory snapshot's ordered_qty
@@ -6408,6 +6408,19 @@ goes to …") became a real filter condition — the filter ignored it before.
 > dismissals (0 on production). Tests: `server/claim-replacements.db.test.ts` (both tables end to end, the nine places, the
 > Upload plan / push rules, return / undo of a dismissal; real schema, rolled back), the shared path / sentence tests.
 
+> **Dashboard cells (commit 9 — the last, 2026-11-15, patch §3.14 — its eight-row table is the spec and the test; mockup
+> `docs/mockups/dashboard-writeoffs-2026-11-15.html`):** two cells in every tile's SPEND section (Custom too), under the four
+> existing ones — **Supplier write-offs** (Σ written off on closed claims by the write-off's Eastern day, "· N claims", the
+> split by kind on hover, → Claims › Closed filtered by `written_off_from` / `written_off_to`) and **Lost / damaged by us**
+> (lost ASIN units × the row's cost per unit by the PO's order date, "· N ASIN units", → POs `?lost=1`); "$0.00" dim with
+> nothing in the range; neither changes Spend. One statement per range set (the write-offs are a CTE beside `units`;
+> production set 1 executes in ~0.6 s). The 143 sheet-era write-offs were re-dated to their PO's order date first
+> (`npm run claims:redate-writeoffs`, History rows). Definitions in §28 "The grid data"; tests
+> `server/dashboard.db.test.ts` (one per row, rolled back: a reopened write-off leaves, the remainder counts only the
+> remainder, the linked list sums to the cell), `client/src/components/metric-tiles.test.ts`, `client/src/pages/claims.test.ts`,
+> `client/src/lib/po-list-url.test.ts`, `server/po-list-filters.test.ts`. **The supplier claims patch is complete:
+> commits 1–9 built and pushed.**
+
 A **supplier claim** is the one record for a supplier problem on a PO line (D1): **missing** · **damaged** ·
 **wrong_item** · **expired** · **never_received** · **cant_sell** · **canceled** · **returned** (D2). It replaces
 the supplier defects of migration 094 (`po_line_defects` → `supplier_claims`, every column widened per the patch
@@ -6447,6 +6460,10 @@ Rules built in commit 1 (`server/supplier-claims.ts`, `shared/supplier-claim.ts`
 - **Refunds due** (POs list, filter, Dashboard) = Σ remaining on OPEN claims whose outcome is unset or a refund /
   credit (`REFUNDS_DUE_PO_SQL`); **Spend** subtracts the refunds received plus that figure (§3.7), as the due rows
   did before.
+- **Supplier write-offs** (Dashboard, commit 9) = Σ what was written off on CLOSED claims — Write off or Write off
+  remainder, `CLAIM_REMAINING_SQL` where `WRITTEN_OFF_CLAIM_COND` — on the write-off's Eastern day (`closed_at`);
+  the claim row carries `written_off_on` / `written_off` and the Claims page filters on them. **Lost / damaged by us**
+  = lost ASIN units × the row's cost per unit on the PO's order date. Neither is in Spend (§28).
 - **The Claims page (commit 2, `/claims`, `client/src/pages/claims.tsx`, nav tab after POs for now):** bucket tabs
   with counts — Needs attention · Waiting on supplier · Waiting on shipment · Waiting on refund to post · Waiting on
   Velocity · Closed · Dismissed (its own tab with a count since 2026-11-12 — the old "show dismissed" toggle hid a
@@ -9002,6 +9019,15 @@ inbound orders so Velocity can check POs in accurately. Tracking only
 matters while the PO is in Velocity's Inbound (`unit_status` pending /
 partially_received).
 
+> **Since the supplier claims patch (commits 6–9, 2026-11-13 → 2026-11-15):** the same Gmail reader also feeds the
+> claims — `server/claim-emails.ts` (§22 "Supplier claims", commit 6: refund / credit confirmations, replies, return
+> labels; the watched mailboxes orders@ received + Sent and maria@ Sent), `server/claim-returns.ts` (commit 7: a label
+> email starts the return, its own `po_tracking` row `direction = return` + `claim_id` — the inbound push never reads
+> it) and `server/claim-replacements.ts` (commit 8: a reship's tracking goes on the ORIGINAL Velocity order, its order #
+> on the original PO as a labeled other number; the §3.13 tables are the spec). The write-offs those claims end in
+> are the Dashboard's Supplier write-offs cell (commit 9, §28). Nothing in this section changed its shape for them;
+> the one-off "replacement pair" chip of 2026-11-11 is gone (no one-off chips, Maria 2026-11-14).
+
 ### Data (migration 066)
 
 `po_tracking` — one row per `(carrier, tracking_number)` (UNIQUE): `po_id`
@@ -9866,9 +9892,15 @@ a **header band** by column position (`--dash-band-1…5` under `:root` and
 #5E7E7B · #66847A`; Custom takes band-1 — the only colour on the page;
 range name 16 px / 700 `#FAFAF9`, dates 12 px `#E7E5E4`), then three
 hairline-separated sections padded 14 18 16: **SPEND** (11 px / 700 /
-.08em label → Spend 28 px / 700 → a 2 × 2 grid: Refunds due (an underlined
+.08em label → Spend 28 px / 700 → a 2-column grid: Refunds due (an underlined
 link when > 0), Avg. PO value "· N POs", ASIN units ordered, Individual
-units ordered with the missing-pack-size note), **SALES** (Sales 28 px →
+units ordered with the missing-pack-size note, then — claims commit 9,
+2026-11-15, mockup `docs/mockups/dashboard-writeoffs-2026-11-15.html` —
+**Supplier write-offs** "$58.40 · 3 claims" (a link; the split by kind on
+hover, "missing $38.42 · can't sell $19.98") and **Lost / damaged by us**
+"$20.82 · 3 ASIN units" (a link; the kind is named, Maria 2026-11-15 —
+the mockup's "units" was changed to match), each a dim "$0.00" with no
+link and no small text when the range has nothing), **SALES** (Sales 28 px →
 Orders / Units · Refunds as a dim "—" with the "after the Finances API
 patch" tooltip), **PROFIT** (the label row carries "after the Finances API
 patch" on the right → Gross profit as a dim 28 px "—" → Net profit · Est.
@@ -9895,6 +9927,8 @@ only supplies numbers.
 | ASIN units ordered | Σ `po_asins.qty` − canceled ASIN units (Σ lines `COALESCE(qty_canceled, 0) × yield`, bundles ÷ unique products — the §22 derivation with per-line COALESCE); fully-canceled POs → 0 |
 | Individual units ordered | Σ ASIN units × `units_per_pack`; a row with NULL `units_per_pack` contributes its ASIN units and the cell says "n rows missing pack size" — **never ×1 silently** (2026-11-01 rule; 3,022 of 3,906 rows on production at the probe) |
 | Avg. PO value | Spend ÷ PO count, "—" at 0 POs, the count in small text; fully-canceled POs not counted |
+| Supplier write-offs | **Claims commit 9 (patch §3.14, 2026-11-15).** Σ written off on CLOSED supplier claims — **Write off** (the whole $ owed) or **Write off remainder** (owed − the refunds applied) — one expression, `CLAIM_REMAINING_SQL` over `WRITTEN_OFF_CLAIM_COND` (`status = 'closed' AND write_off_reason IS NOT NULL`), dated by the write-off's **Eastern day** (`closed_at`, `WRITTEN_OFF_ON_SQL`). "· N claims"; the hover is the split by kind (`byKind`, largest first). A **reopened** claim leaves (status open). **Never in Spend** (the money was spent either way). **Clickable** → `/claims?bucket=closed&written_off_from=…&written_off_to=…` (Claims › Closed, only the claims written off inside the range; the list and the tab counts filter on `written_off_on`, "Written off … to … · clear"). The 143 sheet-era write-offs (migration 101, dated by the PO's last edit) were **re-dated to their PO's order date** on production 2026-11-15 (`npm run claims:redate-writeoffs -- --prod --live`, `closed_at` = noon Eastern on the order date, `found_at` = the date, one History row per claim; `docs/claims-writeoffs-redate-2026-11-15.csv`), so none of them reads in a current tile |
+| Lost / damaged by us | Σ over ASIN rows of the row's Lost/damaged by us **ASIN units** (`po_asin_expected.lost_damaged_us_asin`) × its `cost_per_unit` (a components-only row: Individual units × its per-Individual cost), on POs **ordered** in the range — AF does not record when a unit was lost, so the PO's order date is the date. "· N ASIN units" (the quantity-names rule); the hover says on how many POs. **Never in Spend.** **Clickable** → `/purchase-orders?lost=1&closed=all&from=…&to=…` (the POs with a row carrying lost / damaged units, `LOST_DAMAGED_PO_SQL`, a "Lost / damaged units · clear" chip on the list) |
 
 **SALES** (`sales_daily` + `sales_orders`, by the Pacific `sale_date`):
 

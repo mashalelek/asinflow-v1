@@ -11,7 +11,7 @@
  */
 import { Link } from "wouter";
 import { DASHBOARD_ROWS, PENDING_TOOLTIP, type DashboardColumn, type DashboardGrid, type DashboardRowKey } from "@shared/dashboard";
-import { cellText, coverageTooltip, fmtRangeLabel, refundsDueHref } from "@/components/metric-grid";
+import { cellText, coverageTooltip, fmtRangeLabel, refundsDueHref, writeOffsHref, lostDamagedHref } from "@/components/metric-grid";
 
 /** The band variable for a column: by position, the 5th for set 3's last column; a lone Custom column takes the first. */
 export function bandVar(index: number, count: number): string {
@@ -34,11 +34,11 @@ function Main({ label, value, dim, testId }: { label: string; value: string; dim
     </div>
   );
 }
-function Sub({ label, children, note, testId, dim }: { label: string; children: React.ReactNode; note?: string; testId: string; dim?: boolean }) {
+function Sub({ label, children, note, testId, dim, title }: { label: string; children: React.ReactNode; note?: string; testId: string; dim?: boolean; /** The hover text; a dim cell without one reads the Finances-patch note. */ title?: string }) {
   return (
     <div className="flex flex-col gap-0.5 min-w-0">
       <div className={SUB_LABEL}>{label}</div>
-      <div className={`${SUB_VALUE} ${dim ? DIM : ""}`} data-testid={testId} title={dim ? PENDING_TOOLTIP : undefined}>{children}</div>
+      <div className={`${SUB_VALUE} ${dim ? DIM : ""}`} data-testid={testId} title={title ?? (dim ? PENDING_TOOLTIP : undefined)}>{children}</div>
       {note && <div className="text-[11px] text-muted-foreground">{note}</div>}
     </div>
   );
@@ -51,6 +51,9 @@ export function MetricTile({ col, index, count, coverage }: { col: DashboardColu
   const avg = cellText(row("avg_po_value"), c.avg_po_value);
   const asin = cellText(row("asin_units"), c.asin_units);
   const ind = cellText(row("individual_units"), c.individual_units);
+  const wo = cellText(row("write_offs"), c.write_offs);
+  const ld = cellText(row("lost_damaged"), c.lost_damaged);
+  const LINK = "underline underline-offset-4 decoration-border hover:decoration-foreground";
   const sales = cellText(row("sales"), c.sales);
   const ou = cellText(row("orders_units"), c.orders_units);
   const sameDates = col.eastern.from === col.pacific.from && col.eastern.to === col.pacific.to;
@@ -73,7 +76,7 @@ export function MetricTile({ col, index, count, coverage }: { col: DashboardColu
         <div className="grid grid-cols-2 gap-x-4 gap-y-3">
           <Sub label="Refunds due" testId={t("refunds-due")}>
             {(c.refunds_due.value ?? 0) > 0
-              ? <Link href={refundsDueHref(col)} className="underline underline-offset-4 decoration-border hover:decoration-foreground" data-testid={`link-refunds-due-${col.key}`}>{due.main}</Link>
+              ? <Link href={refundsDueHref(col)} className={LINK} data-testid={`link-refunds-due-${col.key}`}>{due.main}</Link>
               : <span>{due.main}</span>}
           </Sub>
           <Sub label="Avg. PO value" testId={t("avg-po")}>
@@ -81,6 +84,18 @@ export function MetricTile({ col, index, count, coverage }: { col: DashboardColu
           </Sub>
           <Sub label="ASIN units ordered" testId={t("asin-units")}>{asin.main}</Sub>
           <Sub label="Individual units ordered" note={ind.small} testId={t("individual-units")}>{ind.main}</Sub>
+          {/* Claims commit 9 (§3.14, mockup dashboard-writeoffs-2026-11-15): two cells under the four — a link with "· N claims" / "· N ASIN units" when there is
+              something in the range, the split by kind on hover; "$0.00" dim (no link, no small text) when there is nothing. Neither changes Spend. */}
+          <Sub label="Supplier write-offs" testId={t("write-offs")} dim={wo.muted} title={wo.muted ? "no write-offs dated in this range" : undefined}>
+            {wo.muted
+              ? <span>{wo.main}</span>
+              : <Link href={writeOffsHref(col)} className={LINK} title={wo.tooltip} data-testid={`link-write-offs-${col.key}`}>{wo.main} <span className="text-xs font-normal text-muted-foreground whitespace-nowrap">· {wo.small}</span></Link>}
+          </Sub>
+          <Sub label="Lost / damaged by us" testId={t("lost-damaged")} dim={ld.muted} title={ld.muted ? "no lost / damaged units on POs ordered in this range" : undefined}>
+            {ld.muted
+              ? <span>{ld.main}</span>
+              : <Link href={lostDamagedHref(col)} className={LINK} title={ld.tooltip} data-testid={`link-lost-damaged-${col.key}`}>{ld.main} <span className="text-xs font-normal text-muted-foreground whitespace-nowrap">· {ld.small}</span></Link>}
+          </Sub>
         </div>
       </section>
       {/* SALES — the coverage line is this label's tooltip (tiles patch §1.2). */}
