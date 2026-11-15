@@ -35,7 +35,8 @@ describe("New PO form — cosmetics 2026-11-04", () => {
     expect(header).not.toMatch(/ASIN_LABELS/);
     expect(src).not.toMatch(/new-po-asin-labels-/);
     const slots = src.slice(src.indexOf("{box.slots.map((slot, k) =>"));
-    expect(slots).toMatch(/<LabelledCells labels=\{ASIN_LABELS\} always=\{k === 0\}>/);
+    expect(slots).toMatch(/<LabelledCells labels=\{rowLabels\} always=\{k === 0\}>/);
+    expect(slots).toMatch(/const rowLabels = compOnly \? ASIN_LABELS\.map\(.*\) : ASIN_LABELS;/); // the same labels; a components-only row (migration 116) names its quantity cell Individual units
     const cells = src.slice(src.indexOf("function LabelledCells"));
     expect(cells).toMatch(/\$\{always \? "" : "xl:hidden "\}/);
     expect(cells).toMatch(/\{label\}<\/span>\s*\{node\}/); // the label directly above its box, in the same cell

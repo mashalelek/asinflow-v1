@@ -30,7 +30,7 @@ export const LINE_YIELD_SQL = `COALESCE(l.retailer_units_per_product::numeric / 
  * items, never written to a line; it goes when the row gets its ASIN. unionActionItems de-duplicates and orders.
  */
 export function poAsinRowsSql(where: string): string {
-  return `SELECT pa.*, (e.ordered_asin * pa.cost_per_unit) AS total_cost,
+  return `SELECT pa.*, (CASE WHEN pa.components_only THEN e.ordered_individual ELSE e.ordered_asin END * pa.cost_per_unit) AS total_cost,
                  a.image_url AS thumbnail,
                  ${ASIN_ROW_VIEW_SELECT("e")},
                  (${ASIN_ACTION_ITEMS_SQL} || CASE WHEN ${NO_ASIN_SQL("pa.asin")} THEN ARRAY['${CONFIRM_ORDER_DETAILS}']::text[] ELSE '{}'::text[] END) AS action_items

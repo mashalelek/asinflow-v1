@@ -34,12 +34,15 @@ export interface PoCloseRow {
   qty_shipped_fba: number | string | null;
   /** Ordered ASIN units (the API row's `qty`); a row that ordered nothing accounts for nothing. */
   qty?: number | string | null;
+  /** Components only (migration 116): outside the rule — it neither blocks nor drives the close; a PO of only such rows closes by hand. */
+  components_only?: boolean | null;
 }
 
 const num = (v: number | string | null | undefined): number => (v == null ? 0 : typeof v === "number" ? v : parseFloat(v) || 0);
 
 /** (a) alone: every unit accounted for — shipped, or (nothing due at all) covered by claims that count / lost by us. */
-export function allUnitsAccounted(rows: PoCloseRow[]): boolean {
+export function allUnitsAccounted(allRows: PoCloseRow[]): boolean {
+  const rows = allRows.filter((r) => r.components_only !== true);
   if (rows.length === 0) return false;
   let anyShipped = false, anyOrdered = false, totalDue = 0;
   for (const r of rows) {

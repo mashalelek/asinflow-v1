@@ -61,7 +61,7 @@ describe("client", () => {
 describe("picker suggestions and Velocity eligibility (Maria 2026-10-29)", () => {
   it("search lists eligible POs first; a Home or pre-start PO stays listed with the reason as a warning", () => {
     expect(routes).toMatch(/ORDER BY \(p\.ships_to = 'home' OR \(\$2::date IS NOT NULL AND p\.order_date < \$2::date\)\), p\.order_date DESC/);
-    expect(routes).toMatch(/r\.velocity_warning = why \? ineligibleText\(why, start\) : null/);
+    expect(routes).toMatch(/r\.velocity_warning = r\.components_only \? "Components only — not a Velocity order" : why \? ineligibleText\(why, start\) : null/); // a components-only row (migration 116) says so
     expect(page).toMatch(/r\.velocity_warning && <span className="text-amber-500"/);
   });
 });

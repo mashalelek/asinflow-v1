@@ -70,12 +70,13 @@ export async function createPoFromForm(query: QueryLike, form0: PoFormState, use
   for (const a of check.asins) {
     const cat = (await query(`SELECT title, primary_sku FROM asins WHERE asin = $1`, [a.asin])).rows[0];
     const pa = await query(
-      `INSERT INTO po_asins (po_id, asin, asin_name, sku, qty, cost_per_unit, prep_cost, sold_as, units_per_pack, unique_products, sourcing_cost, paid_cost, cogs_adjustment, cogs_adjustment_reason, qty_basis)
-       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15) RETURNING id`,
+      `INSERT INTO po_asins (po_id, asin, asin_name, sku, qty, cost_per_unit, prep_cost, sold_as, units_per_pack, unique_products, sourcing_cost, paid_cost, cogs_adjustment, cogs_adjustment_reason, qty_basis, components_only)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16) RETURNING id`,
       // A pack not known (sold as "") is saved as NULL → "Pack size missing", never as individual (2026-11-06).
       // Stored in Individual units (D17, migration 101): the form's ASIN units × the pack; a row with no pack keeps ASIN units (asin_legacy) until it is known.
-      [poId, a.asin, cat?.title ?? null, cat?.primary_sku ?? null, storedQtyForAsinRow(Number(a.qty) || 0, { qty_basis: a.sold_as ? "individual" : "asin_legacy", units_per_pack: a.units_per_pack }), a.cost_per_unit, a.prep_cost, a.sold_as || null, a.units_per_pack, a.unique_products,
-       a.sourcing_cost, a.paid_cost, a.cogs_adjustment, a.cogs_adjustment_reason, a.sold_as ? "individual" : "asin_legacy"],
+      // A components-only row (migration 116) stores Σ its lines' Individual units as the form summed them.
+      [poId, a.asin, cat?.title ?? null, cat?.primary_sku ?? null, a.components_only ? a.individual_units : storedQtyForAsinRow(Number(a.qty) || 0, { qty_basis: a.sold_as ? "individual" : "asin_legacy", units_per_pack: a.units_per_pack }), a.cost_per_unit, a.prep_cost, a.sold_as || null, a.units_per_pack, a.unique_products,
+       a.sourcing_cost, a.paid_cost, a.cogs_adjustment, a.cogs_adjustment_reason, a.sold_as ? "individual" : "asin_legacy", a.components_only === true],
     );
     const paId = String(pa.rows[0].id);
     asinRows.push({ id: paId, asin: a.asin, asin_name: cat?.title ?? null });

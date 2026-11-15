@@ -60,7 +60,7 @@ export async function loadPoForm(query: QueryLike, poId: string): Promise<PoForm
 
 export interface PoFormSave { poId: string; changes: number; warning?: string; plan: Omit<PoEditPlan, "errors">; asinPackSets?: AsinPackSetResult[]; /** The order # changed (the route syncs Velocity after the commit, 2026-11-13). */ orderIdChange?: { old: string; new: string } }
 
-const COST_RELEVANT_ASIN = new Set(["cogs_adjustment"]);
+const COST_RELEVANT_ASIN = new Set(["cogs_adjustment", "components_only"]); // components_only: the cost basis changes (migration 116)
 const costRelevant = (plan: PoEditPlan): boolean =>
   Object.keys(plan.header).some((k) => COST_RELEVANT_FIELDS.has(k))
   || plan.lineEdits.some((e) => Object.keys(e.body).some((k) => COST_RELEVANT_FIELDS.has(k) || k === "asin"))

@@ -147,7 +147,7 @@ export async function clearCostsOfFullyCanceledAsins(query: QueryFn, asins?: rea
     `WITH r AS (
        SELECT pa.asin, bool_and(${canceled}) AS all_canceled
          FROM po_asins pa${filter ? "" : " JOIN po_asin_expected e ON e.id = pa.id"}
-        WHERE ${IS_ASIN_SQL("pa.asin")}${filter ? " AND pa.asin = ANY($1::text[])" : ""}
+        WHERE ${IS_ASIN_SQL("pa.asin")} AND NOT pa.components_only${filter ? " AND pa.asin = ANY($1::text[])" : ""}
         GROUP BY pa.asin)
      UPDATE asin_estimates ae
         SET actual_cogs = NULL, cogs = NULL, cogs_source = NULL, prep_override = NULL

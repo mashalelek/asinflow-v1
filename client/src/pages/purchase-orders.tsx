@@ -1022,7 +1022,7 @@ function OtherNumbers({ poId, numbers, onChanged }: { poId: string; numbers: Oth
 }
 interface PoDetail {
   po: Record<string, any> & { invoice_file_name: string };
-  summary: { asin_count: number; units_ordered: number; /** Σ ASIN units × Individual units per ASIN unit over the rows with a pack size (2026-11-09); rows_missing_pack counts the rest. */ individual_units?: number | null; rows_missing_pack?: number; units_received: number | null; order_total: string | null; cogs_total: string | null };
+  summary: { asin_count: number; units_ordered: number; /** Σ ASIN units × Individual units per ASIN unit over the rows with a pack size (2026-11-09); rows_missing_pack counts the rest. */ individual_units?: number | null; rows_missing_pack?: number; /** Σ Individual units of the components-only rows (migration 116) — outside the ASIN-units total. */ components_only_individual_units?: number; units_received: number | null; order_total: string | null; cogs_total: string | null };
   asins: PoAsinDetail[];
   /** Capture PO patch §8: the Payments tab. */
   payments?: PoPayment[];
@@ -1161,6 +1161,9 @@ export function PurchaseOrderDetailPlaceholder() {
               <span className="text-muted-foreground ml-1.5" data-testid="po-summary-individual" title={(summary.rows_missing_pack ?? 0) > 0 ? `${summary.rows_missing_pack} ASIN row(s) have no pack size — the Individual total is not known` : `${QTY_KIND.individual} = ${QTY_KIND.asin} × ${PER_ASIN_UNIT}`}>
                 · {(summary.rows_missing_pack ?? 0) > 0 || summary.individual_units == null ? <span className="text-muted-foreground/50">—</span> : fmtQty(summary.individual_units)} individual
               </span>
+            )}
+            {k === "ASIN units ordered" && (summary.components_only_individual_units ?? 0) > 0 && (
+              <span className="text-muted-foreground ml-1.5" data-testid="po-summary-components-only" title="Components only — not a Velocity order, not in COGS, not On Order">· {fmtQty(summary.components_only_individual_units)} Individual units components only</span>
             )}
           </div>
         ))}

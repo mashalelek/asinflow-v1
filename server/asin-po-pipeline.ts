@@ -96,7 +96,8 @@ export const PIPELINE_ROWS_SQL = `
          (p.order_date >= COALESCE((SELECT MIN(shipped_at) FROM velocity_shipments), $1::date, DATE '9999-12-31')) AS reconciled,
          e.expected_asin AS qty_expected_asin, e.lost_damaged_us_asin AS qty_lost_damaged_us, e.at_prep_asin AS qty_at_prep, e.at_warehouse_asin AS qty_at_warehouse,
          e.shipped_fba_asin AS qty_shipped_fba, e.received_amazon_asin AS qty_received_amazon
-    FROM po_asin_expected e JOIN purchase_orders p ON p.id = e.po_id`;
+    FROM po_asin_expected e JOIN purchase_orders p ON p.id = e.po_id
+    JOIN po_asins pa ON pa.id = e.id AND NOT pa.components_only`; // a components-only row (migration 116) is never On Order
 
 /** All ASINs (asins = undefined) or a subset. Missing ASINs are simply absent from the map (no PO rows). */
 export async function loadAsinPipeline(query: QueryLike, asins?: string[]): Promise<Map<string, AsinPipeline>> {

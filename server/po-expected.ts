@@ -81,6 +81,13 @@ export function lineFactor(line: LineBasis): number {
   const r = num(line.retailer_units_per_product);
   return r != null && r >= 1 ? r : 1;
 }
+/**
+ * A components-only row (migration 116) stores Σ its lines' Individual units — a converted line as stored, a legacy
+ * line's Product units × its Individual units per Product unit (NULL reads as 1). 2 dp.
+ */
+export function storedQtyForComponentsOnlyRow(lines: ReadonlyArray<{ qty_ordered: number | string | null | undefined } & LineBasis>): number {
+  return r2(lines.reduce((s, l) => { const q = num(l.qty_ordered) ?? 0; const r = num(l.retailer_units_per_product); return s + (l.qty_basis === "product_legacy" ? q * (r != null && r >= 1 ? r : 1) : q); }, 0));
+}
 /** ASIN units (what the form / a sheet / a Velocity ÷ gave) → the value to store on this row. */
 export function storedQtyForAsinRow(asinUnits: number | null, row: AsinRowBasis): number | null {
   return asinUnits == null ? null : r2(asinUnits * asinRowFactor(row));

@@ -601,6 +601,18 @@ and never read a bundle component's `retailer_units_per_product` as
 pack × N (the old encoding; `npm run fix:bundle-lines -- --convert-packs`
 converts it). SPEC §22 "Bundles".
 
+**Components only (Maria 2026-11-15, migration 116, `po_asins.components_only`,
+SPEC §22 "Bundles" → "Components only"):** a per-ASIN-row checkbox on New PO /
+Edit PO / Capture PO ("Components only — not a Velocity order, not in COGS", off
+by default, no chip). On: the row is left out of `loadAfPoRows` (Upload to
+Velocity, Export SB COGS, Update COGS in SC), `loadAfAsinCostMap` /
+`clearCostsOfFullyCanceledAsins` (COGS), `PIPELINE_ROWS_SQL` (On Order) and
+`allUnitsAccounted` (auto-close — a PO of only such rows closes by hand); a PO
+whose every row is components only has no tracking pushed. Stored qty = Σ the
+lines' Individual units (`storedQtyForComponentsOnlyRow`), shown as Individual
+units only, cost per Individual unit, one product on a bundle ASIN allowed.
+Spend, claims, refunds and tracking in AF work as usual.
+
 ## Line yield is two integers, never a decimal (migration 080, 2026-11-02)
 
 `po_line_items.retailer_units_per_product` ÷ `asin_units_per_pack` is the

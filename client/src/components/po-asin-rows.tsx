@@ -80,6 +80,8 @@ export interface PoAsinRowData {
   qty_basis?: string | null;
   /** Σ Individual units ordered (NULL on a legacy row). */
   qty_individual?: number | null;
+  /** Components only (migration 116): the row shows its Individual units only; its cost is per Individual unit. */
+  components_only?: boolean | null;
   qty_shipped_supplier_individual?: string | null;
   received_velocity_individual?: string | null;
   qty_at_prep_individual?: string | null;
@@ -697,12 +699,21 @@ export function PoAsinRow({ a, indent = false, editable = false, onChanged, po }
           <div className="truncate text-xs" title={a.asin_name ?? ""}>{a.asin_name ?? <span className="text-muted-foreground/50">—</span>}</div>
           {/* Supplier claims (SPEC §22 §5): Open claim on the row's only line (a multi-line row has it per line below); "N open" → the Claims page. */}
           <LineClaims a={a} line={!multi && lines.length === 1 ? lines[0] : null} editable={editable} onChanged={onChanged} />
+          {a.components_only && <div className="text-[11px] text-muted-foreground" title="Not a Velocity order, not in COGS, not On Order, outside the auto-close rule; Spend, claims, refunds and tracking as usual" data-testid={`components-only-note-${a.id}`}>components only — not a Velocity order, not in COGS</div>}
         </td>
         <td className="px-1.5 py-1.5 text-right">
-          <div><QtyCell v={a.qty} /></div>
-          <div className="whitespace-nowrap text-[11px] text-muted-foreground" title={`${QTY_KIND.individual} = ${QTY_KIND.asin} × ${PER_ASIN_UNIT}`}>{a.qty_individual == null && a.units_per_pack == null ? <span className="text-muted-foreground/50" data-testid={`indiv-unknown-${a.id}`}>—</span> : <QtyCell v={a.qty_individual ?? individualUnits(Number(a.qty), a.units_per_pack ?? 1)} />} {INDIV_SHORT}</div>
+          {a.components_only ? <>
+            {/* Components only (Maria 2026-11-15): the Individual units only — no ASIN-units figure. */}
+            <div className="text-[9px] leading-tight text-muted-foreground" data-testid={`components-only-kind-${a.id}`}>{QTY_KIND.individual}</div>
+            <div data-testid={`components-only-qty-${a.id}`} title="Components only — not a Velocity order, not in COGS, not On Order"><QtyCell v={a.qty_individual} /></div>
+          </> : <>
+            <div><QtyCell v={a.qty} /></div>
+            <div className="whitespace-nowrap text-[11px] text-muted-foreground" title={`${QTY_KIND.individual} = ${QTY_KIND.asin} × ${PER_ASIN_UNIT}`}>{a.qty_individual == null && a.units_per_pack == null ? <span className="text-muted-foreground/50" data-testid={`indiv-unknown-${a.id}`}>—</span> : <QtyCell v={a.qty_individual ?? individualUnits(Number(a.qty), a.units_per_pack ?? 1)} />} {INDIV_SHORT}</div>
+          </>}
         </td>
-        <td className="px-1.5 py-1.5 text-right text-xs">{editable ? <InlineEdit money value={a.cost_per_unit} onSave={saveAsin("cost_per_unit")} align="right" width="w-12" testId={`cost_per_unit-${a.id}`}><Money v={a.cost_per_unit} /></InlineEdit> : <Money v={a.cost_per_unit} />}</td>
+        <td className="px-1.5 py-1.5 text-right text-xs">
+          {a.components_only && <div className="text-[9px] leading-tight text-muted-foreground" data-testid={`components-only-cost-kind-${a.id}`}>per Individual unit</div>}
+          {editable ? <InlineEdit money value={a.cost_per_unit} onSave={saveAsin("cost_per_unit")} align="right" width="w-12" testId={`cost_per_unit-${a.id}`}><Money v={a.cost_per_unit} /></InlineEdit> : <Money v={a.cost_per_unit} />}</td>
         <td className="px-1.5 py-1.5 text-right text-xs"><Money v={a.total_cost} /></td>
         <td className="px-1.5 py-1.5 text-right text-xs">{editable ? <InlineEdit money value={a.prep_cost} onSave={saveAsin("prep_cost")} align="right" width="w-10" testId={`prep_cost-${a.id}`}><Money v={a.prep_cost} /></InlineEdit> : <Money v={a.prep_cost} />}</td>
         <td className="px-1.5 py-1.5">

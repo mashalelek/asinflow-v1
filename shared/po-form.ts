@@ -269,6 +269,12 @@ export interface PoFormState {
   subscription?: { present: boolean; frequency_weeks: string };
   /** §6.5 pack override: ASIN → true = "Update ASIN in AF" (false / absent = this PO only). */
   pack_updates?: Record<string, boolean>;
+  /**
+   * "Components only — not a Velocity order, not in COGS" (Maria 2026-11-15, migration 116): ASIN → true. The row is a
+   * purchase record: never uploaded to Velocity, never in COGS / On Order / the auto-close rule; its Ordered is Σ its
+   * lines' Individual units (no ASIN-units figure, no whole-packs warning) and one product on a bundle ASIN is allowed.
+   */
+  components_only?: Record<string, boolean>;
   /** §6.1: where the prefilled values came from; absent on a hand-typed form. */
   prefill?: PoFormPrefill;
 }
@@ -322,7 +328,7 @@ export const emptyPoForm = (today: string): PoFormState => ({
   supplier: "", order_id: "", order_date: today, subtotal: "", tax: "", sh_donations: "", discount: "", refund_amount: "", order_total: "",
   payment_method: "", weighted_gc_discount_pct: "", cashback_site: "", cashback_pct: "", purchased_by: "", notes: "",
   products: [emptyProduct()], cost_overrides: {}, promos: [], cogs_adjustments: {}, payments: [], email_used: "", purchased_by_user_id: "", cashback_status: "",
-  subscription: { present: false, frequency_weeks: "" }, pack_updates: {},
+  subscription: { present: false, frequency_weeks: "" }, pack_updates: {}, components_only: {},
 });
 
 const t = (s: unknown) => (typeof s === "string" ? s.trim() : s == null ? "" : String(s).trim());
@@ -364,6 +370,10 @@ export interface PoFormAsin {
   paid_cost: string | null;
   cogs_adjustment: string | null;
   cogs_adjustment_reason: string | null;
+  /** Components only (migration 116): the row's Ordered is `individual_units`, stored as is; `qty` is only that ÷ the pack (never shown). */
+  components_only: boolean;
+  /** Σ the lines' Individual units (Product units × Individual units per Product unit), 2 dp. */
+  individual_units: number;
   /** Exact yield (2026-11-02): the two integers the line stores; asin_qty_per_product is the derived yield (history). */
   lines: Array<{ index: number; regular_price: string | null; product_name: string | null; supplier_sku: string | null; price: string | null; line_total: string | null; qty_ordered: number; asin_qty_per_product: string; retailer_units_per_product: number; asin_units_per_pack: number; /** Bundle member: its units in one bundle as typed; null = not typed (proposed), or not a bundle. */ units_per_bundle: number | null; adjusted_product_cost: string | null; position: number; notes: string | null }>;
 }
@@ -560,7 +570,10 @@ export function checkPoForm(f: PoFormState): PoFormCheck {
     // The bundle rule (Maria 2026-11-09, shared/bundle.ts): ×N = Individual units in one bundle; each member's units per bundle
     // (typed, else an even split proposed in amber); ASIN units = the scarcest member's builds; leftovers are shown, never hidden.
     const bundleN = first.sold_as === "bundle" ? Number(t(first.units_per_pack)) || null : null;
-    const bundle = first.sold_as === "bundle" ? bundleFromLines(idx.map((i, k) => {
+    // Components only (Maria 2026-11-15): no bundle math, no whole-packs warning — the row is Σ its lines' Individual units.
+    const compOnly = f.components_only?.[asin] === true;
+    const individualUnits = r2(idx.reduce((s, i, k) => s + (Number(t(products[i].qty_ordered)) || 0) * ratios[k].retailer, 0));
+    const bundle = first.sold_as === "bundle" && !compOnly ? bundleFromLines(idx.map((i, k) => {
       const p = products[i]; const lm = productLineMoney(p);
       return { qty_ordered: Number(t(p.qty_ordered)) || 0, retailer_units_per_product: ratios[k].retailer, units_per_bundle: t(p.units_per_bundle ?? "") || null, unit_money: lm?.unit ?? null };
     }), bundleN) : null;
@@ -571,12 +584,14 @@ export function checkPoForm(f: PoFormState): PoFormCheck {
       else if (!bundle.splitKnown) warnings.push(`${asin}: units per bundle proposed as ${bundle.components.map((c) => c.perBundle).join(" + ")} — confirm or type each product's`);
       bundle.components.forEach((c, k) => { if (c.leftover > 0.005) warnings.push(`${asin}: ${c.leftover} Individual unit${c.leftover === 1 ? "" : "s"} of ${t(products[idx[k]].product_name) || `product ${idx[k] + 1}`} left over after ${bundle.asinUnits} bundles`); });
       qty = bundle.asinUnits;
+    } else if (compOnly) {
+      qty = individualUnits / (first.sold_as === "individual" || first.sold_as === "" ? 1 : Number(t(first.units_per_pack)) || 1);
     } else {
       qty = asinUnitsFromLines(yLines, first.sold_as).qty;
     }
     // A non-whole number of ASIN units is allowed (2026-10-18, Maria) — Velocity is the only consumer that refuses it.
-    if (qty > 0 && Math.abs(qty - Math.round(qty)) > 1e-9) warnings.push(`${asin}: ${qty} ASIN units — ${WHOLE_PACKS_WARNING}`);
-    if (!(qty > 0) && !idx.some((i) => productErrors[i])) errors.push(`${asin}: Ordered works out to 0 ASIN units`);
+    if (!compOnly && qty > 0 && Math.abs(qty - Math.round(qty)) > 1e-9) warnings.push(`${asin}: ${qty} ASIN units — ${WHOLE_PACKS_WARNING}`);
+    if (compOnly ? !(individualUnits > 0) && !idx.some((i) => productErrors[i]) : !(qty > 0) && !idx.some((i) => productErrors[i])) errors.push(`${asin}: Ordered works out to 0 ${compOnly ? "Individual" : "ASIN"} units`);
     const lines = idx.map((i, pos) => {
       const p = products[i]; const lm = productLineMoney(p); const reg = allocationBase != null ? regularOf(p) : null;
       const adj = lm == null ? null : adjustedProductCost(reg ?? lm.unit, costHeader);
@@ -588,7 +603,10 @@ export function checkPoForm(f: PoFormState): PoFormCheck {
     if (adjAmt != null && !Number.isNaN(adjAmt) && adjAmt !== 0 && !t(adjRaw?.reason)) errors.push(`${asin}: a COGS adjustment needs a reason`);
     const adjustment = adjAmt != null && !Number.isNaN(adjAmt) ? adjAmt : 0;
     // A bundle's cost (Maria 2026-11-09): Σ component per-Individual cost × its units per bundle, then the PO's share — never Σ line money ÷ qty.
-    const costs = bundle
+    // A components-only row's cost is per Individual unit (its only well-defined unit; it is never an ASIN's COGS).
+    const costs = compOnly
+      ? allocateAsinCosts(costHeader, lines.map((l) => ({ price: l.price == null ? null : Number(l.price), qty: l.qty_ordered, lineTotal: l.line_total == null ? null : Number(l.line_total), regularPrice: l.regular_price == null ? null : Number(l.regular_price) })), individualUnits, adjustment)
+      : bundle
       ? bundleAsinCosts(costHeader, lines.map((l, k) => ({ unitMoney: l.line_total != null && l.qty_ordered > 0 ? Number(l.line_total) / l.qty_ordered : l.price == null ? null : Number(l.price), perProduct: ratios[k].retailer, perBundle: bundle.components[k].perBundle })), adjustment)
       : allocateAsinCosts(costHeader, lines.map((l) => ({ price: l.price == null ? null : Number(l.price), qty: l.qty_ordered, lineTotal: l.line_total == null ? null : Number(l.line_total), regularPrice: l.regular_price == null ? null : Number(l.regular_price) })), qty, adjustment);
     const computed = costs == null ? null : costs.cogs.toFixed(2);
@@ -601,6 +619,7 @@ export function checkPoForm(f: PoFormState): PoFormCheck {
       cost_per_unit: ov != null && !Number.isNaN(ov) ? ov.toFixed(2) : computed, computed_cost_per_unit: computed,
       sourcing_cost: costs == null ? null : costs.sourcing.toFixed(2), paid_cost: costs == null ? null : costs.paid.toFixed(2),
       cogs_adjustment: adjustment !== 0 ? adjustment.toFixed(2) : null, cogs_adjustment_reason: adjustment !== 0 ? t(adjRaw?.reason) || null : null,
+      components_only: compOnly, individual_units: individualUnits,
       lines,
     });
   }

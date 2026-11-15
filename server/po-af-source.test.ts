@@ -22,11 +22,11 @@ describe("loadAfAsinCostMap", () => {
     expect(r.rowsRead).toBe(42);
     expect(calls[0].sql).toMatch(/DISTINCT ON \(pa\.asin\)/);
     expect(calls[0].sql).toMatch(/ORDER BY pa\.asin, p\.order_date DESC, p\.entry_seq DESC NULLS LAST, p\.created_at DESC/);
-    expect(calls[0].sql).toMatch(/WHERE NOT \(SELECT e\.fully_canceled FROM po_asin_expected e WHERE e\.id = pa\.id\) AND pa\.asin ~ '\^\(B0\[A-Z0-9\]\{8\}\|\[0-9\]\{9\}\[0-9X\]\)\$' AND pa\.asin = ANY/); // canceled by its claims (migration 101) — per row for a subset (migration 107); a row with no ASIN yet is never read (shared/asin.ts, 2026-11-14)
+    expect(calls[0].sql).toMatch(/WHERE NOT \(SELECT e\.fully_canceled FROM po_asin_expected e WHERE e\.id = pa\.id\) AND NOT pa\.components_only AND pa\.asin ~ '\^\(B0\[A-Z0-9\]\{8\}\|\[0-9\]\{9\}\[0-9X\]\)\$' AND pa\.asin = ANY/); // canceled by its claims (migration 101), components only (116) — per row for a subset (migration 107); a row with no ASIN yet is never read (shared/asin.ts, 2026-11-14)
     expect(calls[0].params).toEqual([["B076692G4N"]]);
     await loadAfAsinCostMap(query);
     expect(calls[2].params).toEqual([]);
-    expect(calls[2].sql).toMatch(/JOIN po_asin_expected e ON e\.id = pa\.id\s+WHERE NOT e\.fully_canceled AND pa\.asin ~ '/); // the whole map: one hash over the view
+    expect(calls[2].sql).toMatch(/JOIN po_asin_expected e ON e\.id = pa\.id\s+WHERE NOT e\.fully_canceled AND NOT pa\.components_only AND pa\.asin ~ '/); // the whole map: one hash over the view; a components-only row (116) never in it
     expect(calls[2].sql).not.toMatch(/ANY\(\$1/);
   });
 });

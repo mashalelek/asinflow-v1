@@ -6074,6 +6074,48 @@ Canceled / Returned at ASIN level still divide by `unique_products`
 (claims commit 1 moves them to the Individual base, D17, by this rule —
 never by × pack size).
 
+**Components only (Maria 2026-11-15, walmart 200015730948075 B0GWG5S64Q;
+migration 116, `po_asins.components_only`).** A PO row that buys components
+for a bundle whose other parts are already at Velocity (5 Dr Teal's balms
+to pair with loose oils) is a **purchase record and nothing else**. The
+checkbox on the ASIN row of New PO / Edit PO / Capture PO — "Components
+only — not a Velocity order, not in COGS", off by default, a per-ASIN map
+`components_only` on the form, a boolean field of the ASIN-row editor, no
+chip — means, when on:
+
+- **never a Velocity order:** `loadAfPoRows` (`server/po-af-source.ts`)
+  leaves the row out, so Upload to Velocity has no create, no update and
+  no "will skip" warning for it, and so do Export SB COGS and Update COGS
+  in SC (both read the same rows); the PO picker says "Components only —
+  not a Velocity order"; a PO whose EVERY row is components only has no
+  tracking pushed (`tracking-push.ts loadRows`); a mixed PO's tracking is
+  pushed as before;
+- **never in COGS:** `loadAfAsinCostMap` and `clearCostsOfFullyCanceledAsins`
+  skip it, so neither the save-time sync nor the hourly backstop
+  (component 9) sets or clears the ASIN's Actual / Est. COGS from it — the
+  ASIN's newest OTHER row still rules;
+- **not On Order** (`PIPELINE_ROWS_SQL`), and **outside the auto-close
+  rule**: `allUnitsAccounted` drops it, so it neither blocks a close for
+  "units not shipped" nor drives one — a mixed PO closes on its other
+  rows as before; a PO of only components-only rows never auto-closes and
+  is **closed by hand** (the rule is about Shipped FBA covering Expected,
+  which such a row never has; a "delivered" close would be a second rule
+  keyed on tracking, so it is not one);
+- **Spend, claims, refunds, tracking in AF as usual** (Spend reads the
+  order total; the row is in `po_asin_expected` like any other);
+- **quantities:** the stored qty is **Σ its lines' Individual units**
+  (`storedQtyForComponentsOnlyRow`; the view's ASIN-units figure is only
+  that ÷ the pack and is never shown), the form and the PO page show the
+  Individual units with their kind line and no whole-packs / fractional
+  warning, **one product on a bundle ASIN row is allowed** (the bundle
+  rule, the split and leftover checks do not run), and the row's
+  Cost/Unit is **per Individual unit** (labelled so: Σ line money over
+  Σ Individual units plus the PO's share, `recomputePoCosts` and the form).
+
+Toggling it on Edit PO recomputes the stored qty and the cost with History
+rows. Tests: `shared/po-form.test.ts`, `server/po-components-only.db.test.ts`
+(every bullet on the real schema, rolled back).
+
 ### Tables (migrations 028–029; 056 for the expand-by-ASIN columns; 057 for shipment reconciliation)
 
 - `purchase_orders` — one row per order. `UNIQUE (supplier, order_id)` (order

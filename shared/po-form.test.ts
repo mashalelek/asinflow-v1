@@ -250,6 +250,25 @@ describe("checkPoForm", () => {
     expect(checkPoForm(base({ products: [comp("7", { units_per_pack: "3" }), comp("7", { units_per_pack: "3" })] })).errors.join()).toMatch(/add up to 2, not ×3 — type each product's units per bundle/);
     expect(checkPoForm(base({ products: [comp("7")] })).errors.join()).toMatch(/a bundle needs at least two products/);
   });
+  it("components only (Maria 2026-11-15, migration 116): one product on a bundle ASIN is allowed, no bundle / split / leftover / whole-packs words, Ordered = Σ the lines' Individual units, the cost per Individual unit", () => {
+    const comp = (q: string, extra: Partial<ReturnType<typeof emptyProduct>> = {}) => ({ ...emptyProduct(), product_name: `P${q}`, price: "3", qty_ordered: q, asin: "B0GWG5S64Q", sold_as: "bundle" as const, units_per_pack: "8", ...extra });
+    // 5 balms (singles) for an ×8 bundle: 5 Individual units, 5 ÷ 8 ASIN units — fractional, and no warning about it.
+    const r = checkPoForm(base({ products: [comp("5")], components_only: { B0GWG5S64Q: true } }));
+    expect(r.ok).toBe(true);
+    expect(r.errors).toEqual([]);
+    expect(r.warnings.join()).not.toMatch(/bundle|proposed|left over|whole packs|ASIN units/);
+    expect(r.asins[0]).toMatchObject({ components_only: true, individual_units: 5, qty: 0.625, unique_products: 1, sold_as: "bundle", units_per_pack: 8, cost_per_unit: "3.00", sourcing_cost: "3.00" });
+    // A 2-pack line: 3 × 2 = 6 Individual units; the cost is per Individual unit (6.00 ÷ 2).
+    const two = checkPoForm(base({ products: [comp("3", { price: "6", retailer_units_per_pack: "2" })], components_only: { B0GWG5S64Q: true } }));
+    expect(two.asins[0]).toMatchObject({ components_only: true, individual_units: 6, cost_per_unit: "3.00" });
+    // Off (the default): the bundle rule as before.
+    expect(checkPoForm(base({ products: [comp("5")] })).errors.join()).toMatch(/a bundle needs at least two products/);
+    expect(checkPoForm(base({ products: [comp("5")], components_only: { B0GWG5S64Q: false } })).asins[0]).toMatchObject({ components_only: false });
+    // Nothing ordered is still an error, in the row's own units.
+    const zero = checkPoForm(base({ products: [comp("0")], components_only: { B0GWG5S64Q: true } }));
+    expect(zero.ok).toBe(false);
+    expect(Object.values(zero.productErrors).flat().join()).toMatch(/qty/i);
+  });
   it("walmart 200015415094735 B0GWG5S64Q as the form would save it: 12 balms + 2 six-packs of oil, ×2, 1 + 1 → 12 bundles, COGS 5.87 + 31.70 ÷ 6 = 11.15 (no tax / shipping on the form)", () => {
     const c = checkPoForm(base({ products: [
       { ...emptyProduct(), product_name: "Body Balm", price: "5.87", qty_ordered: "12", retailer_units_per_pack: "1", asin: "B0GWG5S64Q", sold_as: "bundle", units_per_pack: "2", units_per_bundle: "1", prep_cost: "1" },

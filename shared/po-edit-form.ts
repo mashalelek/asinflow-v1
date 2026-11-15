@@ -85,13 +85,14 @@ export function poToForm(d: StoredPo): PoFormState {
     ships_to: po.ships_to === "home" ? "home" : "velocity",
     email_used: str(po.email_used), alt_order_ids: str(po.alt_order_ids), purchased_by_user_id: po.purchased_by_user_id == null ? "" : String(po.purchased_by_user_id), cashback_status: str(po.cashback_status),
     subscription: { present: po.subscription === true, frequency_weeks: "" },
-    products, cost_overrides: {}, cogs_adjustments: {}, pack_updates: {},
+    products, cost_overrides: {}, cogs_adjustments: {}, pack_updates: {}, components_only: {},
     promos: d.promos.map((p): PoFormPromo => ({ id: Number(p.id), type: (["sale", "coupon", "rewards"].includes(String(p.type)) ? p.type : "") as PoFormPromo["type"], description: str(p.description), amount: moneyText(p.amount), percent: numText(p.percent), counts_toward_cogs: p.counts_toward_cogs !== false, in_line_prices: typeof p.in_line_prices === "boolean" ? p.in_line_prices : null, ...(p.position != null ? { position: Number(p.position) } : {}) })),
     payments: d.payments.map((p): PoFormPayment => ({ id: Number(p.id), method: str(p.method) as PoFormPayment["method"], nickname: str(p.nickname), last4: str(p.last4), amount: moneyText(p.amount), gift_card_discount_pct: numText(p.gift_card_discount_pct), reward_pct: numText(p.reward_pct) })),
   };
   for (const a of d.asins) {
     const asin = str(a.asin).toUpperCase();
     if (a.cogs_adjustment != null) form.cogs_adjustments![asin] = { amount: moneyText(a.cogs_adjustment), reason: str(a.cogs_adjustment_reason) };
+    if (a.components_only === true) form.components_only![asin] = true; // migration 116
   }
   // COGS: an imported PO shows its stored cost / unit as the field's value (never the formula's); a v2 PO only where it differs from the formula (a typed one).
   const computed = isImportedPo(po) ? null : checkPoForm(form);
@@ -224,6 +225,9 @@ export function planPoEdit(stored: PoFormState, next: PoFormState, opts: { impor
     const adjN = next.cogs_adjustments?.[a.asin], adjS = stored.cogs_adjustments?.[a.asin];
     if (canonField("cogs_adjustment", adjN?.amount) !== canonField("cogs_adjustment", adjS?.amount)) body.cogs_adjustment = str(adjN?.amount);
     if (str(adjN?.reason) !== str(adjS?.reason)) body.cogs_adjustment_reason = str(adjN?.reason);
+    // Components only (migration 116): the checkbox as a field; a new row carries it only when on.
+    const coN = next.components_only?.[a.asin] === true, coS = stored.components_only?.[a.asin] === true;
+    if (!s ? coN : coN !== coS) body.components_only = coN;
     if (Object.keys(body).length) plan.asinEdits.push({ asin: a.asin, body, isNew: !s });
     if (next.pack_updates?.[a.asin] === true && a.sold_as !== "" && a.units_per_pack != null) plan.packUpdates.push({ asin: a.asin, sold_as: a.sold_as, units_per_pack: a.units_per_pack });
   }

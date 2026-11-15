@@ -4111,7 +4111,7 @@ export async function registerRoutes(
                 cardinality(${PO_ACTION_ITEMS_SQL}) AS action_item_count,
                 ${REVIEW_VELOCITY_REASONS_SQL} AS review_velocity_reasons,
                 (SELECT COUNT(*)::int FROM po_asins a WHERE a.po_id = p.id) AS asin_count,
-                (SELECT COALESCE(SUM(e.ordered_asin), 0)::float8 FROM po_asin_expected e WHERE e.po_id = p.id) AS units_ordered,
+                (SELECT COALESCE(SUM(e.ordered_asin), 0)::float8 FROM po_asin_expected e JOIN po_asins ca ON ca.id = e.id WHERE e.po_id = p.id AND NOT ca.components_only) AS units_ordered,
                 (SELECT SUM(le.received_product)::float8 FROM po_line_expected le WHERE le.po_id = p.id) AS units_received,
                 (SELECT COUNT(*)::int FROM supplier_claims c WHERE c.po_id = p.id AND c.status = 'open') AS open_claims,
                 ${REFUND_DUE_SQL} AS refund_due,
@@ -4209,7 +4209,9 @@ export async function registerRoutes(
       // Summary rollups (computed, never stored). units_received: SUM over
       // line qty_received — all-NULL stays NULL → em-dash, never 0.
       const num = (v: any) => (v == null ? null : parseFloat(v));
-      const unitsOrdered = Math.round(asinRows.reduce((t: number, a: any) => t + (Number(a.qty) || 0), 0) * 100) / 100;
+      // A components-only row (migration 116) has no ASIN-units figure: its Individual units are shown beside the strip's total instead.
+      const unitsOrdered = Math.round(asinRows.reduce((t: number, a: any) => t + (a.components_only ? 0 : Number(a.qty) || 0), 0) * 100) / 100;
+      const componentsOnlyIndividual = Math.round(asinRows.reduce((t: number, a: any) => t + (a.components_only ? Number(a.qty_individual) || 0 : 0), 0) * 100) / 100;
       // 2026-11-09 (SPEC §22 "Quantity vocabulary"): the strip's "· N individual" = Σ the rows' stored Individual units (D17); a row with no pack size makes the total unknown (counted, shown "—"), never ×1.
       const rowsMissingPack = asinRows.filter((a: any) => a.qty_individual == null && (Number(a.qty) || 0) !== 0).length;
       const individualUnits = rowsMissingPack > 0 ? null : Math.round(asinRows.reduce((t: number, a: any) => t + (Number(a.qty_individual) || 0), 0) * 100) / 100;
@@ -4231,6 +4233,7 @@ export async function registerRoutes(
           asin_count: asinRows.length,
           units_ordered: unitsOrdered,
           individual_units: individualUnits,
+          components_only_individual_units: componentsOnlyIndividual,
           rows_missing_pack: rowsMissingPack,
           units_received: unitsReceived,
           order_total: po.order_total,
@@ -5046,12 +5049,12 @@ export async function registerRoutes(
       // (free-text override) but carries the reason as a warning (2026-10-29).
       const start = await readVelocityStartDate(query);
       const rows = (await query(
-        `SELECT pa.id, pa.asin, pa.asin_name, e.ordered_asin AS qty, pa.units_per_pack, p.id AS po_id, p.order_id, p.supplier, p.order_date::text AS order_date, p.ships_to, p.closed_at IS NOT NULL AS closed
+        `SELECT pa.id, pa.asin, pa.asin_name, e.ordered_asin AS qty, pa.units_per_pack, pa.components_only, p.id AS po_id, p.order_id, p.supplier, p.order_date::text AS order_date, p.ships_to, p.closed_at IS NOT NULL AS closed
            FROM po_asins pa JOIN po_asin_expected e ON e.id = pa.id JOIN purchase_orders p ON p.id = pa.po_id
           WHERE p.order_id ILIKE $1 ESCAPE '\\' OR pa.asin ILIKE $1 ESCAPE '\\' OR p.supplier ILIKE $1 ESCAPE '\\' OR p.order_id ILIKE $3 ESCAPE '\\'
           ORDER BY (p.ships_to = 'home' OR ($2::date IS NOT NULL AND p.order_date < $2::date)), p.order_date DESC, p.order_id, pa.asin, pa.id LIMIT 20`, [likeContains(q), start, likeContains(stripShipmentSuffix(q))],
       )).rows;
-      for (const r of rows) { const why = velocityIneligible(r, start); r.velocity_warning = why ? ineligibleText(why, start) : null; }
+      for (const r of rows) { const why = velocityIneligible(r, start); r.velocity_warning = r.components_only ? "Components only — not a Velocity order" : why ? ineligibleText(why, start) : null; }
       res.json({ rows });
     } catch (err: any) { res.status(500).json({ message: err.message }); }
   });

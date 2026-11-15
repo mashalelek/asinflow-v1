@@ -29,7 +29,7 @@ const mdy = (d: unknown): string | null => {
 };
 
 /**
- * Per ASIN: the newest ASIN row whose lines are not all canceled → cost/unit,
+ * Per ASIN: the newest ASIN row whose lines are not all canceled (and that is not components only, migration 116) → cost/unit,
  * prep (NULL = not recorded → 0, the sheet reader's "blank prep = $0" rule),
  * supplier. orderedQty is 0 (On Order comes from asin-po-pipeline.ts). A row whose `asin` is not an ASIN ("no ASIN yet",
  * shared/asin.ts, 2026-11-14) is not in the map: nothing per-ASIN can be written for it, and it is not an error.
@@ -45,7 +45,7 @@ export async function loadAfAsinCostMap(query: QueryLike, asins?: readonly strin
   const rows = (await query(
     `SELECT DISTINCT ON (pa.asin) pa.asin, pa.cost_per_unit, pa.prep_cost, p.supplier
        FROM po_asins pa JOIN purchase_orders p ON p.id = pa.po_id${filter ? "" : " JOIN po_asin_expected e ON e.id = pa.id"}
-      WHERE ${notCanceled} AND ${IS_ASIN_SQL("pa.asin")} ${filter}
+      WHERE ${notCanceled} AND NOT pa.components_only AND ${IS_ASIN_SQL("pa.asin")} ${filter}
       ORDER BY pa.asin, ${NEWEST_PO_ORDER}`,
     asins && asins.length > 0 ? [asins.map((a) => a.toUpperCase())] : [],
   )).rows as any[];
@@ -87,7 +87,8 @@ export function lineAsinQty(asinQty: number, ordered: number | null, yieldT: num
  * is fully canceled; U qty ← lineAsinQty (qty ordered × yield ÷ S, the
  * sheet's formula); AZ quantity ← units (bundle: sets × units per bundle,
  * the sheet's N × AY; otherwise U × units/pack); AX / AY /
- * S / T from the ASIN row and line. rawRowsRead = lines read.
+ * S / T from the ASIN row and line. rawRowsRead = lines read. A components-only row (migration 116) is left out:
+ * the Velocity plan (create, match, the skip warnings), Export SB COGS and Update COGS in SC all read this.
  */
 export async function loadAfPoRows(query: QueryLike): Promise<{ rows: SheetRow[]; rawRowsRead: number; blankAsinRows: number }> {
   const rs = (await query(
@@ -96,6 +97,7 @@ export async function loadAfPoRows(query: QueryLike): Promise<{ rows: SheetRow[]
             l.position, l.product_name, le.ordered_product AS qty_ordered, l.asin_qty_per_product, l.retailer_units_per_product, l.asin_units_per_pack, l.units_per_bundle, le.fully_canceled AS canceled,
             (SELECT COUNT(*)::int FROM po_line_items l2 WHERE l2.po_asin_id = pa.id) AS line_count
        FROM po_line_items l JOIN po_line_expected le ON le.line_id = l.id JOIN po_asins pa ON pa.id = l.po_asin_id JOIN po_asin_expected e ON e.id = pa.id JOIN purchase_orders p ON p.id = pa.po_id
+      WHERE NOT pa.components_only -- a components-only row (migration 116) is no Velocity order and in no COGS export: not a row here
       ORDER BY ${NEWEST_PO_ORDER}, pa.asin, l.position`,
   )).rows as any[];
   const rows: SheetRow[] = rs.map((r, i) => {

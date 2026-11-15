@@ -24,7 +24,7 @@ import { ASIN_SHAPE_MESSAGE, asinPlaceholderMessage, isAsinPlaceholder, isValidA
 import { evaluateAutoClose, type AutoCloseOutcome } from "./po-close";
 import { trueYield } from "./po-af-source";
 import { asinUnitsFromLines, lineRatio, ratioYield, retailerUnitsAtPack, type YieldLine } from "../shared/yield";
-import { lineFactor, productUnitsOf, storedQtyForAsinRow, storedQtyForLine } from "./po-expected";
+import { lineFactor, productUnitsOf, storedQtyForAsinRow, storedQtyForComponentsOnlyRow, storedQtyForLine } from "./po-expected";
 
 export type Parsed = { ok: true; value: unknown } | { ok: false; error: string };
 type Parser = (v: unknown) => Parsed;
@@ -93,6 +93,7 @@ export const SOLD_AS = ["individual", "multi-pack", "bundle"] as const;
 export const soldAsParser: Parser = (v) => (SOLD_AS as readonly string[]).includes(String(v)) ? { ok: true, value: String(v) } : { ok: false, error: `must be one of ${SOLD_AS.join(", ")}` };
 /** An ASIN row's sold as: one of SOLD_AS, or null — not known ("Pack size missing"; Edit PO's new ASIN row with no pack chosen, 2026-11-06). */
 export const soldAsOrNullParser: Parser = (v) => (v === null ? { ok: true, value: null } : soldAsParser(v));
+export const boolParser: Parser = (v) => (typeof v === "boolean" ? { ok: true, value: v } : { ok: false, error: "must be true or false" });
 export const asinParser: Parser = (v) => {
   const s = typeof v === "string" ? v.trim().toUpperCase() : "";
   // No ASIN yet (shared/asin.ts, 2026-11-14): placeholder text is refused by name; the shape is B0… or an ISBN-10.
@@ -134,6 +135,8 @@ export const ASIN_FIELDS: Record<string, Parser> = {
   asin_name: textOrNull, notes: textOrNull,
   // Capture PO patch §7 (2026-10-31): the COGS adjustment (a v2 PO recomputes its COGS from it) and the two other costs.
   cogs_adjustment: money({ nullable: true, negative: true }), cogs_adjustment_reason: textOrNull, sourcing_cost: money({ nullable: true }), paid_cost: money({ nullable: true }),
+  // Components only (Maria 2026-11-15, migration 116): the row's stored qty follows (Σ Individual units ↔ ASIN units × pack) and its cost is per Individual unit.
+  components_only: boolParser,
 };
 /** Header / line / ASIN-row fields whose change should recompute a v2 PO's costs (routes call recomputePoCosts after the edit). */
 // v3 (2026-11-04): tax and shipping are in COGS; the order total decides whether the line totals already net the discount.
@@ -208,13 +211,16 @@ export function asinQtyFromLines(lines: ReadonlyArray<YieldLine>, soldAs: string
  * a legacy row (pack not known) stores ASIN units as before.
  */
 export async function recomputeAsinQty(query: QueryLike, poAsinId: string, userId: number | null): Promise<void> {
-  const pa = (await query(`SELECT id, po_id, qty, sold_as, unique_products, units_per_pack, qty_basis FROM po_asins WHERE id = $1`, [poAsinId])).rows[0];
+  const pa = (await query(`SELECT id, po_id, qty, sold_as, unique_products, units_per_pack, qty_basis, components_only FROM po_asins WHERE id = $1`, [poAsinId])).rows[0];
   if (!pa) return;
   const stored = (await query(`SELECT qty_ordered, qty_basis, asin_qty_per_product, retailer_units_per_product, asin_units_per_pack, units_per_bundle FROM po_line_items WHERE po_asin_id = $1`, [poAsinId])).rows;
   if (stored.length === 0) return;
   const lines = stored.map((l: any) => ({ ...l, qty_ordered: productUnitsOf(l.qty_ordered, l) }));
-  const next = asinQtyFromLines(lines, String(pa.sold_as ?? "individual"), pa.sold_as === "bundle" ? pa.units_per_pack ?? null : null);
-  const nextStored = storedQtyForAsinRow(next.qty, pa);
+  // Components only (migration 116): Σ the lines' Individual units as stored — no bundle rule, no pack math.
+  const next = pa.components_only === true
+    ? { qty: 0, uniqueProducts: pa.sold_as === "bundle" ? Math.max(stored.length, 1) : null }
+    : asinQtyFromLines(lines, String(pa.sold_as ?? "individual"), pa.sold_as === "bundle" ? pa.units_per_pack ?? null : null);
+  const nextStored = pa.components_only === true ? storedQtyForComponentsOnlyRow(stored) : storedQtyForAsinRow(next.qty, pa);
   const changes = changedFields({ qty: pa.qty }, { qty: nextStored });
   const upChange = pa.sold_as === "bundle" ? changedFields({ unique_products: pa.unique_products }, { unique_products: next.uniqueProducts }) : [];
   if (changes.length + upChange.length === 0) return;
@@ -424,7 +430,8 @@ export async function editAsinRow(query: QueryLike, poAsinId: string, body: unkn
     // A line with no pack integers whose stored yield is a rounding of r ÷ the pack takes r / pack exactly (0.33 at ×3 → 1/3).
     const packChanged = changes.some((c) => c.field === "sold_as" || c.field === "units_per_pack");
     if (packChanged && soldAs != null && soldAs !== "bundle") await keepYieldOnPack(query, poId, poAsinId, soldAs === "individual" ? 1 : Number(upp), userId, cur.sold_as == null);
-    if (packChanged) await recomputeAsinQty(query, poAsinId, userId);
+    // Components only toggled: the stored qty changes basis (Σ Individual units ↔ the pack math) — recomputed with a History row.
+    if (packChanged || changes.some((c) => c.field === "components_only")) await recomputeAsinQty(query, poAsinId, userId);
   }
   const packSet = changes.some((c) => c.field === "sold_as" || c.field === "units_per_pack") && (soldAs === "individual" || soldAs === "multi-pack")
     ? await setUnknownAsinPack(query, String(cur.asin), soldAs, soldAs === "individual" ? 1 : Number(upp), userId, poAsinId) : null;

@@ -38,7 +38,7 @@ export async function recomputePoCosts(query: QueryLike, poId: string, userId: n
   const write = async (sql: string, params: unknown[]) => { if (!opts.dryRun) await query(sql, params); };
   const promos = (await query(`SELECT type, description, amount, percent, counts_toward_cogs, in_line_prices FROM po_promos WHERE po_id = $1 ORDER BY position, id`, [poId])).rows as Array<{ type?: string | null; description?: string | null; amount: string | null; percent?: string | null; counts_toward_cogs: boolean; in_line_prices?: boolean | null }>;
   // ASIN units for the per-unit cost (the view, D17): a cost per ASIN unit divides the row's money by its ASIN units, never by Individual units.
-  const rows = (await query(`SELECT pa.id, pa.asin, e.ordered_asin AS qty, pa.cost_per_unit, pa.sourcing_cost, pa.paid_cost, pa.cogs_adjustment, pa.sold_as, pa.units_per_pack FROM po_asins pa JOIN po_asin_expected e ON e.id = pa.id WHERE pa.po_id = $1 ORDER BY pa.asin`, [poId])).rows;
+  const rows = (await query(`SELECT pa.id, pa.asin, e.ordered_asin AS qty, e.ordered_individual AS qty_individual, pa.cost_per_unit, pa.sourcing_cost, pa.paid_cost, pa.cogs_adjustment, pa.sold_as, pa.units_per_pack, pa.components_only FROM po_asins pa JOIN po_asin_expected e ON e.id = pa.id WHERE pa.po_id = $1 ORDER BY pa.asin`, [poId])).rows;
   const manual = new Set<string>(
     (await query(`SELECT DISTINCT entity_id FROM po_edit_log WHERE po_id = $1 AND entity = 'asin' AND field = 'cost_per_unit' AND NOT derived`, [poId])).rows.map((r: any) => String(r.entity_id)),
   );
@@ -67,7 +67,10 @@ export async function recomputePoCosts(query: QueryLike, poId: string, userId: n
   for (const pa of rows) {
     const lines = (await query(`SELECT l.id, l.price, le.ordered_product AS qty_ordered, l.line_total, l.regular_price, l.adjusted_product_cost, l.retailer_units_per_product, l.units_per_bundle FROM po_line_items l JOIN po_line_expected le ON le.line_id = l.id WHERE l.po_asin_id = $1 ORDER BY l.position`, [pa.id])).rows;
     // A bundle (Maria 2026-11-09): Σ component per-Individual cost × its units per bundle (typed, else the even split proposed), then the PO's share — shared/bundle.ts, bundleAsinCosts.
-    const costs = pa.sold_as === "bundle"
+    // A components-only row (migration 116): per Individual unit — Σ its lines' money over Σ their Individual units, the PO's share as every row.
+    const costs = pa.components_only === true
+      ? allocateAsinCosts(h, lines.map(costLine), Number(pa.qty_individual), pa.cogs_adjustment == null ? 0 : Number(pa.cogs_adjustment))
+      : pa.sold_as === "bundle"
       ? bundleAsinCosts(h, bundleCostLines(lines, pa.units_per_pack), pa.cogs_adjustment == null ? 0 : Number(pa.cogs_adjustment))
       : allocateAsinCosts(h, lines.map(costLine), Number(pa.qty), pa.cogs_adjustment == null ? 0 : Number(pa.cogs_adjustment));
     if (!costs) continue;

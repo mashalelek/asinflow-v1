@@ -170,6 +170,7 @@ async function loadRows(query: QueryLike, poId?: string): Promise<RowFacts[]> {
        FROM po_tracking t JOIN purchase_orders p ON p.id = t.po_id
       WHERE t.status IN ('matched', 'pushed', 'push_failed', 'held') AND t.tracking_number NOT LIKE 'email:%'
         AND t.direction = 'inbound' -- a return's tracking (claims commit 7) is never pushed to Velocity: nothing there writes to Velocity
+        AND NOT COALESCE((SELECT bool_and(pa.components_only) FROM po_asins pa WHERE pa.po_id = p.id), false) -- every row components only (migration 116): no Velocity order to push to
         ${poId ? "AND t.po_id = $1" : ""}
       ORDER BY t.po_id, t.id`,
     poId ? [poId] : [],

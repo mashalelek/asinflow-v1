@@ -24,7 +24,7 @@ import { cleanAsinInput } from "@shared/asin";
 import { Plus, Trash2, AlertTriangle, Sparkles, Database, FileText, ArrowUp } from "lucide-react";
 import { nameMismatchNote } from "@shared/name-match";
 import { titlePackSuggestion } from "@shared/pack-parse";
-import { PER_ASIN_UNIT, PER_PRODUCT_UNIT, QTY_KIND } from "@shared/quantity-kinds";
+import { INDIV_SHORT, PER_ASIN_UNIT, PER_PRODUCT_UNIT, QTY_KIND } from "@shared/quantity-kinds";
 import { useToast } from "@/hooks/use-toast";
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription, DialogFooter } from "@/components/ui/dialog"; // the pack-override question only
 import { Button } from "@/components/ui/button";
@@ -350,6 +350,8 @@ export function NewPoForm({ open, onOpenChange, onCreated, prefill, initialSuppl
   const onRemoveAsin = (key: string, k: number) => withBox(key, (ps, b) => removeAsinRow(ps, b, k));
   const onRemoveLine = (key: string, lineId: string) => withBox(key, (ps, b) => removeLine(ps, b, lineId));
   const setOverride = (asin: string, v: string) => setForm((f) => ({ ...f, cost_overrides: { ...f.cost_overrides, [asin]: v } }));
+  // "Components only" (Maria 2026-11-15, migration 116): per ASIN, off by default — a purchase record, never a Velocity order, never in COGS.
+  const setComponentsOnly = (asin: string, v: boolean) => setForm((f) => ({ ...f, components_only: { ...(f.components_only ?? {}), [asin]: v } }));
   const setAdj = (asin: string, k: "amount" | "reason", v: string) => setForm((f) => ({ ...f, cogs_adjustments: { ...(f.cogs_adjustments ?? {}), [asin]: { amount: "", reason: "", ...(f.cogs_adjustments?.[asin] ?? {}), [k]: v } } }));
 
   /** An ASIN chosen for a slot's rows: AF's title / pack fields win (stone); the pack override question comes later, on a change. */
@@ -449,7 +451,7 @@ export function NewPoForm({ open, onOpenChange, onCreated, prefill, initialSuppl
   // 2026-11-06: reason / notes 84 and the title from 6.5 rem so the row (and a bundle's, inside its ring) fits on one line at 1280.
   const PACK_MISSING_CLS = "!border-amber-500 text-amber-700 dark:text-amber-400"; // a pack not known (2026-11-06)
   // 2026-11-09: upp 142 so "Individual units per ASIN unit" stays on the one-line label row; the money / note cells give back the width so the row still fits at 1280.
-  const A = { arrow: 16, asin: 176, qty: 72, sold: 92, upp: 142, prep: 56, sourcing: 64, cogs: 80, paid: 64, adj: 64, reason: 72, notes: 72, rm: 24 } as const;
+  const A = { arrow: 16, asin: 176, qty: 72, /** a components-only row's Individual units cell: wide enough for its kind label */ qtyIndividual: 100, sold: 92, upp: 142, prep: 56, sourcing: 64, cogs: 80, paid: 64, adj: 64, reason: 72, notes: 72, rm: 24 } as const;
   const cell = (w: number, cls = "") => ({ className: `shrink-0 ${cls}`, style: { width: w } });
   const ASIN_LABELS: Array<[string, number | "title", string?]> = [["", A.arrow], ["ASIN", A.asin], ["Title", "title"], ["ASIN units", A.qty, "text-right"], ["Sold as", A.sold], [PER_ASIN_UNIT, A.upp, "text-right"], ["Prep", A.prep, "text-right"], ["Sourcing", A.sourcing, "text-right"], ["COGS", A.cogs, "text-right"], ["Paid", A.paid, "text-right"], ["Adjustment", A.adj, "text-right"], ["Reason", A.reason], ["Notes", A.notes], ["", A.rm]];
   if (!open) return null;
@@ -653,6 +655,8 @@ export function NewPoForm({ open, onOpenChange, onCreated, prefill, initialSuppl
                   {/* The bundle rule (migration 100, Maria 2026-11-09): each member's units in one bundle — typed, else the even split proposed in amber; the counts sum to ×N. */}
                   {box.bundle && (() => {
                     const slot0 = box.slots[0] ?? []; const b = slotBundle(form.products, slot0);
+                    // Components only (migration 116): no bundle math, so no per-bundle counts to confirm.
+                    const p0 = form.products[slot0[0]]; if (p0 && p0.asin.length === 10 && form.components_only?.[p0.asin.toUpperCase()] === true) return null;
                     return box.lines.map((line) => {
                       const i = line.copies[0]; const p = form.products[i]; const c = b.components[slot0.indexOf(i)];
                       const typed = (p.units_per_bundle ?? "").trim() !== "";
@@ -669,7 +673,8 @@ export function NewPoForm({ open, onOpenChange, onCreated, prefill, initialSuppl
                   })()}
                   {box.slots.map((slot, k) => {
                     const i = slot[0]; const p = form.products[i];
-                    const units = slotUnits(form.products, slot, box.bundle); const frac = isFractional(units);
+                    const compOnly = p.asin.length === 10 && form.components_only?.[p.asin.toUpperCase()] === true;
+                    const units = slotUnits(form.products, slot, box.bundle); const frac = !compOnly && isFractional(units);
                     const anyQty = slot.some((j) => Number(form.products[j].qty_ordered) > 0);
                     const qty = Number(p.qty_ordered) || 0, r = Number(p.retailer_units_per_pack ?? "1") || 1, u = p.sold_as === "individual" ? 1 : Number(p.units_per_pack) || 1;
                     const info = known.get(p.asin.toUpperCase());
@@ -683,16 +688,21 @@ export function NewPoForm({ open, onOpenChange, onCreated, prefill, initialSuppl
                     // An imported PO's row shows its STORED Sourcing / Paid (never recomputed); a row new to the PO shows the formula's.
                     const stored = edit?.imported && a ? edit.storedCosts[a.asin] : undefined;
                     const sourcingShown = stored ? stored.sourcing_cost : a?.sourcing_cost ?? null, paidShown = stored ? stored.paid_cost : a?.paid_cost ?? null;
+                    // The row's labels: ASIN_LABELS, with the quantity cell named for its kind on a components-only row (Individual units, a wider cell).
+                    const rowLabels = compOnly ? ASIN_LABELS.map((l) => (l[0] === "ASIN units" ? [QTY_KIND.individual, A.qtyIndividual, l[2]] as (typeof ASIN_LABELS)[number] : l)) : ASIN_LABELS;
                     return (
                       <div key={`${box.key}-${k}`} className="py-0.5" data-testid={`row-new-po-asin-${i}`}>
                         {/* Each label sits in its field's cell (2026-11-06), so a row that wraps (below 1280) takes its labels along. */}
-                        <LabelledCells labels={ASIN_LABELS} always={k === 0}>
+                        <LabelledCells labels={rowLabels} always={k === 0}>
                           <span {...cell(A.arrow, "pt-1.5 text-center text-sm leading-none text-muted-foreground")} aria-hidden>↳</span>
                           <div {...cell(A.asin)}><AsinPicker value={p.asin} product={p.product_name} sku={p.supplier_sku} supplier={form.supplier} guess={guess} known={known} initial={form.prefill?.asin_candidates?.[String(i)] as AsinInfo[] | undefined} onPick={onPick(slot)} onChange={(v) => setMany(slot, "asin", v)} rowIndex={i} mark={mark(`products.${i}.asin`)} compact /></div>
                           <div className="flex h-8 min-w-[6.5rem] flex-1 items-center truncate text-xs text-muted-foreground" title={info?.title ?? ""} data-testid={`new-po-asin-title-${i}`}>
                             {info?.in_af ? <><Database className="mr-1 h-2.5 w-2.5 shrink-0" /><span className="truncate">{info.title ?? "in AF"}</span></> : p.asin.length === 10 ? <span className="text-amber-600">Not in AF</span> : <span className="opacity-60">title from AF</span>}
                           </div>
-                          <Input {...cell(A.qty)} value={anyQty ? String(units) : ""} onChange={(e) => onSlotUnits(box.key, k, e.target.value)} inputMode="decimal" placeholder="ASIN units" className={`h-8 shrink-0 text-xs text-right ${frac ? "font-semibold text-destructive" : ""}`} title={box.bundle ? `bundles = the scarcest member's Individual units ÷ its units per bundle = ${units} (×${u} Individual units each)` : `${qty} Product units × ${r} Individual units ÷ ${u} per ASIN unit = ${units} ASIN units`} data-testid={`input-new-po-asin-qty-${i}`} />
+                          {compOnly
+                            // Components only: the row shows its Individual units only (no ASIN-units figure, no whole-packs warning).
+                            ? <div {...cell(A.qtyIndividual, "flex h-8 items-center justify-end gap-1 font-mono text-xs")} title={`${QTY_KIND.individual} — components only: Σ Product units × ${PER_PRODUCT_UNIT}`} data-testid={`new-po-asin-individual-${i}`}>{a ? a.individual_units : "—"} <span className="font-sans text-[10px] text-muted-foreground">{INDIV_SHORT}</span></div>
+                            : <Input {...cell(A.qty)} value={anyQty ? String(units) : ""} onChange={(e) => onSlotUnits(box.key, k, e.target.value)} inputMode="decimal" placeholder="ASIN units" className={`h-8 shrink-0 text-xs text-right ${frac ? "font-semibold text-destructive" : ""}`} title={box.bundle ? `bundles = the scarcest member's Individual units ÷ its units per bundle = ${units} (×${u} Individual units each)` : `${qty} Product units × ${r} Individual units ÷ ${u} per ASIN unit = ${units} ASIN units`} data-testid={`input-new-po-asin-qty-${i}`} />}
                           {box.bundle
                             ? <div {...cell(A.sold, "flex h-8 items-center text-xs")} data-testid={`select-new-po-sold_as-${i}`}>bundle</div>
                             // Not known (2026-11-06): "— choose —" in amber, or the title's pack shown as an unconfirmed suggestion — saved only once confirmed.
@@ -715,11 +725,18 @@ export function NewPoForm({ open, onOpenChange, onCreated, prefill, initialSuppl
                         </LabelledCells>
                         {/* The math line: pack math and the cost allocation for this row. */}
                         <div className={`ml-6 mt-0.5 flex flex-wrap gap-x-3 text-[10px] ${frac ? "text-destructive" : "text-muted-foreground"}`} data-testid={`new-po-asin-math-${i}`}>
-                          <span>{box.bundle ? `bundles = min over members (Product units × pack ÷ units per bundle) = ${anyQty ? units : "—"} · ${anyQty ? Math.round(units * u * 100) / 100 : "—"} Individual units (×${u} each)` : `${qty} Product units × ${r} Individual units ÷ ${u} per ASIN unit = ${anyQty ? units : "—"} ASIN units`}</span>
+                          <span>{compOnly ? `${a ? a.individual_units : "—"} Individual units — components only: not a Velocity order, not in COGS, not On Order; cost per Individual unit` : box.bundle ? `bundles = min over members (Product units × pack ÷ units per bundle) = ${anyQty ? units : "—"} · ${anyQty ? Math.round(units * u * 100) / 100 : "—"} Individual units (×${u} each)` : `${qty} Product units × ${r} Individual units ÷ ${u} per ASIN unit = ${anyQty ? units : "—"} ASIN units`}</span>
                           {stored && <span data-testid={`edit-po-stored-costs-${i}`}>stored costs (sheet import) — never recomputed</span>}
-                          {!stored && a?.sourcing_cost && <span>sourcing = {showReg ? "the order's cost shared by regular price × qty" : "Σ(paid price × qty)"} ÷ {a.qty} = {a.sourcing_cost}</span>}
+                          {!stored && a?.sourcing_cost && <span>sourcing = {showReg ? "the order's cost shared by regular price × qty" : "Σ(paid price × qty)"} ÷ {compOnly ? `${a.individual_units} Individual units` : a.qty} = {a.sourcing_cost}</span>}
                           {!stored && a?.computed_cost_per_unit && <span>COGS = {a.sourcing_cost} × (1 − {check.weightedGcPct ?? 0}%){a.cogs_adjustment ? ` + ${a.cogs_adjustment}` : ""} = {a.computed_cost_per_unit}</span>}
                           {frac && <span data-testid={`new-po-fractional-${i}`}>{FRACTIONAL_UNITS_NOTE}</span>}
+                          {/* Components only (Maria 2026-11-15): a purchase record and nothing else — one product on a bundle ASIN is allowed with it on. */}
+                          {p.asin.length === 10 && k === 0 && (
+                            <label className="inline-flex cursor-pointer items-center gap-1 text-muted-foreground" title="Not uploaded to Velocity, never sets the ASIN's COGS, not On Order, outside the auto-close rule; Spend, claims, refunds and tracking as usual">
+                              <input type="checkbox" className="h-3 w-3" checked={compOnly} onChange={(e) => setComponentsOnly(p.asin.toUpperCase(), e.target.checked)} data-testid={`checkbox-new-po-components-only-${i}`} />
+                              Components only — not a Velocity order, not in COGS
+                            </label>
+                          )}
                           {p.sold_as === "" && !box.bundle && (
                             <span className="text-amber-700 dark:text-amber-400" data-testid={`new-po-pack-missing-${i}`}>
                               pack size missing{packSug ? <> · title says {packSug.text} <button type="button" className="underline" onClick={() => { setMany(slot, "sold_as", packSug.sold_as); if (packSug.sold_as !== "individual") setMany(slot, "units_per_pack", String(packSug.units_per_pack)); }} data-testid={`button-new-po-pack-confirm-${i}`}>confirm</button></> : " — choose individual or multi-pack"}
@@ -768,7 +785,7 @@ export function NewPoForm({ open, onOpenChange, onCreated, prefill, initialSuppl
         <div className="flex flex-1 flex-wrap items-center gap-x-6 gap-y-1 text-sm" data-testid="new-po-totals">
           <div><span className="text-muted-foreground mr-1.5">Subtotal (Σ line totals)</span><span className="font-mono">{money(check.computedSubtotal)}</span></div>
           <div><span className="text-muted-foreground mr-1.5">Order total</span><span className="font-mono">{money(check.effectiveOrderTotal)}</span></div>
-          <div><span className="text-muted-foreground mr-1.5">ASIN units</span><span>{check.asins.reduce((t, a) => t + a.qty, 0)}</span></div>
+          <div><span className="text-muted-foreground mr-1.5">ASIN units</span><span>{check.asins.reduce((t, a) => t + (a.components_only ? 0 : a.qty), 0)}</span>{check.asins.some((a) => a.components_only) && <span className="ml-1.5 text-muted-foreground" data-testid="new-po-footer-components-only">· {check.asins.reduce((t, a) => t + (a.components_only ? a.individual_units : 0), 0)} Individual units components only</span>}</div>
           {check.nonCountingPromoAmount > 0 && <div><span className="text-muted-foreground mr-1.5">Added back (rewards)</span><span className="font-mono">{money(check.nonCountingPromoAmount)}</span></div>}
         </div>
         <Button variant="outline" onClick={() => onOpenChange(false)} disabled={busy} data-testid="button-new-po-cancel">Cancel</Button>
